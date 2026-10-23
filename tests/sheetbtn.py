@@ -108,10 +108,18 @@ with os88ui.boot(ROOT + "/build/os8088-360.img", apps=APPS,
     cancel("sh_idlg_btrec")
     gone1 = rd("sh_idlg_win")
 
+    # FORMAT > NUMBER IS THE *LIST* ENGINE IN THIS FORK, not the radio one.
+    # This row came from upstream in the 2026-10-14 merge and read
+    # sh_fdlg_win, which is upstream's shape; here sh_docmd_format's AL=0 arm
+    # calls sh_ldlg_open_r (81.55's list of Excel codes, 81.100 names it "the
+    # list (Format Number)"). The dialog was opening perfectly well and the
+    # row was reading a word that stays 0. The SUBJECT is unchanged - two
+    # different engines sharing one window slot, and whose button record is
+    # first on the list - because Goto is still the input engine.
     pick(*NUMBER)
-    k2 = rd("sh_fdlg_win")
-    cancel("sh_fdlg_btrec")
-    gone2 = rd("sh_fdlg_win")
+    k2 = rd("sh_ldlg_win")
+    cancel("sh_ldlg_btrec")
+    gone2 = rd("sh_ldlg_win")
 
     pick(*GOTO)
     k3 = rd("sh_idlg_win")
@@ -126,7 +134,7 @@ with os88ui.boot(ROOT + "/build/os8088-360.img", apps=APPS,
     cancel("sh_idlg_btrec")
     after = rd("sh_idlg_win")
 
-    names = {S["sh_idlg_btrec"]: "Goto's", S["sh_fdlg_btrec"]: "Format's"}
+    names = {S["sh_idlg_btrec"]: "Goto's", S["sh_ldlg_btrec"]: "Format's"}
     res = [
         ("Goto opened, then closed", k1 != 0 and gone1 == 0, "win %04x -> %04x" % (k1, gone1)),
         ("Format opened, then closed", k2 != 0 and gone2 == 0, "win %04x -> %04x" % (k2, gone2)),

@@ -72,7 +72,7 @@ No APP_SMALL arm is in this set.
   recipe; `mra_derive` builds the pressed and greyed faces in the claim.
   Generators (`tools/os88midi.py`, `tools/os88midart.py`) mirror every
   decoder and refuse a stream that does not read back.
-- **chart** (SPEC.md 82.15). Callbacks save only what their contract owes;
+- **chart** (SPEC.md 82.19). Callbacks save only what their contract owes;
   SYLK and DIF share one line scanner; BIFF checks a record's length once;
   one `Chart` string; the `_NOKEEP` region form. Checked by a host
   differential (the old and new builds side by side on an emulated 8086 over

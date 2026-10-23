@@ -6393,13 +6393,50 @@ $(DOSNETSTAMP): | $(BUILD)
 # Four other rules had the same hole and were fixed with this one.
 $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
                     apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
-                    apps/os88chart.inc apps/os88fp.inc apps/os88dec.inc | $(BUILD)
+                    apps/os88chart.inc apps/os88chartbss.inc \
+                    apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
 	@echo "sheet:  $(call FILESIZE,$@) bytes"
 
 
-$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	$(OS88PKGB) $(BUILD)/sheet.bin -o $@
+# SHEET carries the chart module OUT (82.16): os88ovl.py cuts .modc off the
+# end at the image size the header already records, leaving the resident half
+# for os88pkg.py and CHART.OVL beside it.
+#
+# PACKED, both halves (SPEC.md 20.13.5, 73.14.1, 81.113). The trimmed package
+# goes through $(OS88PKGB) on the last line below, and CHART.OVL and MACRO.OVL
+# ship from $(CC_OVLZ) - CC_OVLZ_RULE further down packs them, as it does
+# SCRIBE.OVL - because ch_ovneed reads with OSAPI_FILE_READ, which expands a
+# packed file into a claim sized from the UNPACKED cut. The raw cuts written
+# here are what the CH_OVKB and SH_M2KB checks below hold, and no disk names
+# them (tests/unit/t_pkgzrules.py).
+#
+# ...AND THE CLAIM IS CHECKED HERE TOO, in upstream's SCRIBE shape. ch_ovneed
+# reads CH_OVKB*1024 bytes into a claim of that size, and a module that
+# outgrew it would load TRUNCATED and fail only when a verb past the cut was
+# called. tools/os88ovlchk.py's CLAIMS table already holds CHART.OVL to
+# CH_OVKB and its row is in the fast tier, so a full `make` was never blind
+# to it; this is for `make build/sheet.o88` on its own, which runs no tier.
+$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	python3 tools/os88ovl.py $(BUILD)/sheet.bin -o $(BUILD)/CHART.OVL \
+		--trim $(BUILD)/sheet.trim.bin --second $(BUILD)/MACRO.OVL
+	@ovkb=$$(sed -n 's/^CH_OVKB *equ *\([0-9]*\).*/\1/p' apps/os88chartovl.inc); \
+	 have=$$(wc -c < $(BUILD)/CHART.OVL); cap=$$((ovkb * 1024)); \
+	 if [ $$have -gt $$cap ]; then \
+	   echo "CHART.OVL is $$have bytes; CH_OVKB reserves $$cap - raise it" >&2; \
+	   exit 1; fi; \
+	 echo "CHART.OVL: $$have of $$cap bytes claimed (CH_OVKB=$$ovkb)"
+	@m2kb=$$(sed -n 's/^SH_M2KB *equ *\([0-9]*\).*/\1/p' apps/sheet/sheet.asm); \
+	 have=$$(wc -c < $(BUILD)/MACRO.OVL); cap=$$((m2kb * 1024)); \
+	 if [ $$have -gt $$cap ]; then \
+	   echo "MACRO.OVL is $$have bytes; SH_M2KB reserves $$cap - raise it" >&2; \
+	   exit 1; fi; \
+	 echo "MACRO.OVL: $$have of $$cap bytes claimed (SH_M2KB=$$m2kb); the rest is the text files' tail (81.91.1)"
+	$(OS88PKGB) $(BUILD)/sheet.trim.bin -o $@
+
+$(BUILD)/CHART.OVL: $(BUILD)/sheet.o88 ;
+$(BUILD)/MACRO.OVL: $(BUILD)/sheet.o88 ;
+
 
 # FPTEST: the self-test for apps/os88fp.inc, the software IEEE-754 double.
 # Deliberately NOT on any disk - it is a developer tool, and the 360KB apps
@@ -8574,13 +8611,18 @@ $(BUILD)/filler.o88: $(BUILD)/filler.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/filler.bin -o $@
 
 # FOUR packages, and each has a job: PAINT opens first and takes the top of the
-# ceiling, SHEET opens under it and is the package whose REGION has to move,
+# ceiling, NOTEPAD opens under it and is the package whose REGION has to move,
 # FILLER opens under that and takes the arena down, and closing PAINT is what
-# leaves a hole above SHEET for the descending pass to pack it into.
-$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/sheet.o88 \
+# leaves a hole above NOTEPAD for the descending pass to pack it into. NOTEPAD
+# and not SHEET, which was the subject until its region stopped being declared
+# (tests/movable.txt says why), and not CALC either: the row's last assertion
+# compares the repaint pixel for pixel, and Calculator's dithered History rule
+# came back one pixel out of phase after the move (flagged at PR #289's review
+# as a 1bpp grey question of its own) - plain text cannot.
+$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/notepad.o88 \
                          $(BUILD)/paint.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/filler.o88 \
-		$(BUILD)/paint.o88 $(BUILD)/sheet.o88
+		$(BUILD)/paint.o88 $(BUILD)/notepad.o88
 
 # ...and the NEGATIVE arm's, for tests/regpin.py
 # (docs/plans/HEAP-UNPIN-PLAN.md 10.1). The same three plus PINME, which is the
@@ -8595,10 +8637,10 @@ $(BUILD)/pinme.bin: tests/pinme/pinme.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/pinme.o88: $(BUILD)/pinme.bin tools/os88pkg.py | $(BUILD)
 	python3 tools/os88pkg.py $< -o $@
 
-$(BUILD)/regpin360.img: $(BUILD)/filler.o88 $(BUILD)/sheet.o88 \
+$(BUILD)/regpin360.img: $(BUILD)/filler.o88 $(BUILD)/calc.o88 \
                         $(BUILD)/paint.o88 $(BUILD)/pinme.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/filler.o88 \
-		$(BUILD)/pinme.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88
+		$(BUILD)/pinme.o88 $(BUILD)/paint.o88 $(BUILD)/calc.o88
 
 # PTSTEST - the differential gate for SPEC.md 5.6.9's gfx_points: the same
 # coordinate set drawn through the new slot and through OSAPI_GFX_PIXEL, into
@@ -8980,6 +9022,14 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88dis
 #    precedent (SPEC.md 61, 68.5, and 73.12 names the disk and the machine):
 #    its own floppy, all four geometries, built only when asked for.
 include apps/cc/Makefile.inc
+
+# SHEET'S TWO MODULES, PACKED - and the call sits HERE rather than beside
+# sheet.o88's recipe above because CC_OVLZ_RULE is defined by the include on
+# the line before this one. A `$(call)` on an undefined macro expands to
+# NOTHING and emits no rule, silently, so the packed copies would simply not
+# exist and t_pkgzrules would report the unpacked cut instead.
+$(eval $(call CC_OVLZ_RULE,CHART.OVL))
+$(eval $(call CC_OVLZ_RULE,MACRO.OVL))
 
 # The one thing the default build says about C, and it says it only when there
 # is something to say. A guard nobody types is a guard that does not run
@@ -13180,7 +13230,8 @@ budget-check: $(BUILD)/kernel.bin small emu
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/thewire.o88 $(BUILD)/wirechat.o88 \
              $(BUILD)/tracker.o88 \
-             $(BUILD)/audio.o88 $(BUILD)/mixer.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88 \
+             $(BUILD)/audio.o88 $(BUILD)/mixer.o88 $(BUILD)/sheet.o88 $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
+             $(BUILD)/video.o88 \
              $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88
 # Mixer requires SOUND.DRV, which kern_small does not load (SPEC.md 34.15).
 # RLAPPLY (SPEC.md 103.6.5) is an omission by SCOPE rather than size: chipset
@@ -14650,7 +14701,8 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/chart.o88 $(BUILD)/fractal.o88 $(BUILD)/mixer.o88 \
               $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
-              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
+              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 \
+              $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL $(BUILD)/telnet.o88 \
               $(BUILD)/wirechat.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
@@ -15187,6 +15239,7 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
 #     network360.img beside Telnet and the Browser.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
+                    $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
                     $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
                     $(BUILD)/wirechat.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
@@ -15251,6 +15304,15 @@ APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
                  APPS:$(BUILD)/pixel.o88 \
                  GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
+# ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
+# the single largest thing on the disk, bigger than SHEET and CHART.OVL
+# together. SHEET's two modules put this disk at 714 of 713, and the PLAYER
+# stays while the MOVIE goes: SPEC.md 24.4's own shape one geometry up -
+# BEVERLY.MOD rides a media disk of its own at 360KB for exactly this reason -
+# and 24.6.1's rule that being curated onto a disk is a decision WITH A DATE ON
+# IT (2026-10-20) and never a property of the file. 101 clusters recovered
+# against the 1 needed, which is room for the next thing as well.
+APPSARGS720 := $(filter-out MEDIA:apps/video/os8088.v88,$(APPSARGS720))
 APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
                $(MIDISONGARGS720) $(APPDATAFOLDER)
 
@@ -15390,21 +15452,27 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
 # fourth that is none of them is the row this disk would drop first.
 #
 # PIXEL rides here too (SPEC.md 106.7): the 360KB machine's home for it, off
-# apps360.img by the dated decision at APPS_TOOLS_360, with LAKE.JPG in
-# MEDIA/ as its one sample (24.6.2) - the picture its File dialog opens on,
-# and the gallery's smallest (18KB, greyscale): VACATION.JPG would have been
-# 85 of this disk's 181 free clusters.
+# apps360.img by the dated decision at APPS_TOOLS_360. LAKE.JPG rode MEDIA/
+# beside it as its one sample (24.6.2) - the gallery's smallest, 18KB - until
+# 2026-10-22, when the owner took it OFF THIS DISK ALONE (24.6.1's dated
+# decision): Sheet's two modules had filled the disk to 354 of 354 clusters,
+# so a save to it failed, and the picture was the 18 clusters that gave room
+# back without dropping a program. PIXEL.O88 stays. OFFICE_DATA still names
+# the picture, so MEDIA_EXTRA keeps it on the everything set and the live
+# media, and `make pixeldisk` carries the whole gallery.
 OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
                $(BUILD)/fontview.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88 \
+               $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
                $(BUILD)/texpad.o88 $(BUILD)/word.o88 $(BUILD)/pixel.o88
 #
 # SYSTEM/FONTS RIDES HERE AT 360KB (SPEC.md 24.3.1.5): the 360KB system disk
 # gave the faces up for the Desk Clock, and this is the disk whose programs set
 # type in them. ty_gofonts finds them here because it falls back to the
 # program's own volume when the system disk has no SYSTEM/FONTS.
-OFFICE360 := $(OFFICE_PKGS) $(OFFICE_DATA) $(FACES) $(FACELIC)
+OFFICE360_DATA := $(filter-out %/LAKE.JPG,$(OFFICE_DATA))
+OFFICE360 := $(OFFICE_PKGS) $(OFFICE360_DATA) $(FACES) $(FACELIC)
 OFFICEARGS360 := $(OFFICE_PKGS) \
-                 $(addprefix MEDIA:,$(OFFICE_DATA)) \
+                 $(addprefix MEDIA:,$(OFFICE360_DATA)) \
                  $(FACESARG) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -16248,6 +16316,7 @@ imager:
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
+              $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
               $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
               $(BUILD)/wirechat.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))

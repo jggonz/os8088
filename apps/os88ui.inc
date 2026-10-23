@@ -3070,6 +3070,13 @@ OS88UI_ADANGER equ 3            ; Cancel / Proceed - and the ORDER is the whole
                                 ; OS88UI_AYESNO cannot say this and neither can
                                 ; a caller rewording the question: the default
                                 ; is a property of the SET
+%ifdef OS88UI_AEXTRA             ; two more, for a package that asks - SHEET's
+                                ; (4 and 5 AFTER upstream's ADANGER took 3: both
+                                ; trees appended at 3 in one round - UPSTREAM.md's
+                                ; two-names-one-number case, caught at the merge)
+OS88UI_ASTEP   equ 4            ; macro Single Step: Step / Halt / Continue
+OS88UI_AOKCAN  equ 5            ; ALERT(message, 1): OK / Cancel
+%endif
 OS88UI_ACANCEL equ 0FFh         ; ...and the answer for a DISMISSED alert
 OS88UI_AMAX    equ 34           ; the message, in characters (it is CLIPPED by
                                 ; the window, not refused - keep it short)
@@ -3151,6 +3158,10 @@ os88ui_asets:
     dw 2, os88ui_as_yes,  os88ui_as_no,  0
     dw 3, os88ui_as_save, os88ui_as_disc, os88ui_as_can
     dw 2, os88ui_as_can,  os88ui_as_proc, 0
+%ifdef OS88UI_AEXTRA
+    dw 3, os88ui_as_step, os88ui_as_halt, os88ui_as_cont
+    dw 2, os88ui_as_ok,   os88ui_as_can,  0
+%endif
 os88ui_as_ok:   db 'OK', 0
 os88ui_as_yes:  db 'Yes', 0
 os88ui_as_no:   db 'No', 0
@@ -3159,6 +3170,11 @@ os88ui_as_disc: db 'Discard', 0
 os88ui_as_can:  db 'Cancel', 0
 os88ui_as_proc: db 'Proceed', 0  ; SEVEN characters, which is what OS88UI_ABW
                                  ; holds - 'Continue' would not fit the row
+%ifdef OS88UI_AEXTRA
+os88ui_as_step: db 'Step', 0
+os88ui_as_halt: db 'Halt', 0
+os88ui_as_cont: db 'Continue', 0
+%endif
 
 ; -----------------------------------------------------------------------------
 ; os88ui_ask - raise the alert (see the header)

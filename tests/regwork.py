@@ -135,14 +135,14 @@ def main():
         # two holes, PINME below them, the filler LAST as the asker
         p1_seg, p1 = open_named("PAINT.O88", 6, (8, 22))
         raise_disk()
-        sh_seg, sh = open_named("SHEET.O88", 8, (8, 60))
+        ca_seg, ca = open_named("CALC.O88", 8, (8, 60))
         raise_disk()
         p2_seg, p2 = open_named("PAINT.O88", 6, (8, 98))
         raise_disk()
         pm_seg, pm = open_named("PINME.O88", 5, (8, 136))
-        print("paint1 %04x   sheet %04x   paint2 %04x   pinme %04x"
-              % (p1_seg, sh_seg, p2_seg, pm_seg))
-        if not (p1_seg > sh_seg > p2_seg > pm_seg):
+        print("paint1 %04x   calc %04x   paint2 %04x   pinme %04x"
+              % (p1_seg, ca_seg, p2_seg, pm_seg))
+        if not (p1_seg > ca_seg > p2_seg > pm_seg):
             print("FAIL: the regions are not stacked in open order")
             return 1
 

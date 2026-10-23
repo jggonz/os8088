@@ -934,7 +934,7 @@ kernel that takes it too** (§9.11.2.1): only an emulator can boot it, so the
 argument is the knob's, and kern_big and kern_small stay on ten. `KSIG_OFF` moves one memory sector
 down with it in both places that type it (5632 → 5120), so the canary stays on
 FILE sector 21 at either length; the shipped literal is still what comes first
-on each line and what `t_canary` compares. It was taken for §39.28: the `VC`
+on each line and what `t_canary` compares. It was taken for §39.30: the `VC`
 key costs the overlay 10 bytes on every build, and `BOOTMARK=1`'s overlay had
 6 — the give below could not grow to cover it without losing the
 `BOOTMARK=1 DISKAL=1` pairing it already balances. The shipped images are
@@ -2555,7 +2555,7 @@ than only when a record was read — so a machine with **no `SYSTEM.CFG`** appli
 that nothing has deserialised into. `drv_cfg` is `.bss` and nothing zeroed
 `.bss`, so those bytes were the previous session's on a warm restart and the
 machine's power-on RAM on a cold one (`drv_init` zeroes the struct now, for
-§39.28's `VC` byte). It has been carried by two accidents:
+§39.30's `VC` byte). It has been carried by two accidents:
 `CFG_VID` = 0 is `VID_VGA`, which `vid_switch` refuses on the adapters the
 target machine has, and the two arrangement bytes are range-checked before they
 are stored. Neither is a reason — the refusal is `vid_switch`'s job and this
@@ -9643,6 +9643,18 @@ so nothing advances a pointer between rows either. 92 covers the widest line any
 adapter can show — Hercules at 720 px is 90 bytes — plus the one byte a glyph at
 the right-hand end spills into, rounded to even. A caller composing a narrower
 band simply uses fewer bytes of each row.
+
+**A package may set it smaller**, with `%define TY_BAND_STRIDE n` before the
+include (and `TY_BAND_ROWS` for the height). Both are macros of their own
+names, so `TY_STRIDE` and `TY_BROWS` stay `equ`s that any line can name,
+including lines above the include, as `tests/facetest` has. An odd stride is
+a build error: the unrolled compose stores words.
+
+**The override is a promise.** Nothing in the compose bounds the pen. The
+default relies on no screen being wider than 90 bytes; a smaller stride
+relies on the caller ending every run before (n − 1) × 8 pixels. SHEET's
+cells, at most 320 px, are the case it exists for: a stride of 42 takes the
+bss from 1,933 bytes to 1,133 (§81.102.1).
 
 **What this costs against the face it replaces**, and both halves are true:
 against `font_run` at an unaligned x — which is what every proportional pen
@@ -29974,9 +29986,11 @@ in ETHER, RAMPAGE and The Wire.
 
 ### 13.16 The IN-WINDOW MENU — the fifth shared element (`OS88UI_MENU`)
 
-**PARTIAL, and deliberately: the GEOMETRY has moved and nothing else has yet.**
-`docs/plans/UI-MENU-ELEMENT.md` is the costing and the wave plan; this section
-is the contract for what exists.
+**Complete for Word: all three waves have landed** (§13.16.2–§13.16.4 are
+the geometry, the drawing and the gesture), and Word is its one user.
+`docs/plans/UI-MENU-ELEMENT.md` is the costing and the wave plan; this
+section is the contract for what exists. **Sheet has not converted, and
+§81.109.1 is why**, measured on 2026-09-25.
 
 The kernel's bar is the desktop's and `MENU_APPMAX` is five titles, so a
 package whose menus outgrow that — or which is imitating a program that put
@@ -34236,11 +34250,16 @@ base.** They were 16-bit, which is what the rest of this paragraph is about;
 §18.7.5 carries a high word beside them on `kern_big` and moves the ceiling
 to FAT16's own, just under 2GB. That is the whole of what "partitions" means to os8088:
 `dsk_clus2lba`, `dsk_read_chain`'s run coalescer, `dsk_dirw_next` and
-`dskw_flush` are the floppy's code and are untouched by capacity. It caps a
-volume at 65,535 sectors — 31.99MB — which is exactly what BPB rule 8 already
-refused to go past, and exactly the DOS 3.3 partition limit the target
-machines ran. More capacity is **more partitions**, each its own volume and
-its own drive letter.
+`dskw_flush` are the floppy's code and are untouched by capacity.
+
+**The next two sentences used to read "it caps a volume at 65,535 sectors —
+31.99MB … more capacity is more partitions", directly after the sentence
+that says the ceiling moved**, and both halves sat here for a cycle. The
+32MB cap is `kern_small`'s now and only its: BPB rule 8 refuses a `TotSec16`
+of 0 there, so that build still stops at 65,535 sectors — which is exactly
+the DOS 3.3 partition limit the target machines ran. On `kern_big` and
+`kern_dos` more capacity is **either** a bigger volume **or** more
+partitions, each its own drive letter, up to §52.2's four primaries.
 
 It also makes an invariant free: with `TotSec16` a word, `dsk_clus2lba`'s
 16-bit `(cluster-2) × spc` cannot overflow, because the product is bounded by
@@ -42253,7 +42272,11 @@ program never needs a disk list edited:
   folder holds its overlay and its documents. `APPS\`, `GAMES\` and `MEDIA\`
   are *collections* of independent programs and are split only when one
   outgrows a whole floppy, between same-stem groups (a `GAMES\X.O88` keeps
-  any `X.*` data file beside it). Any other folder bigger than a floppy is
+  any `X.*` data file beside it). A module that shares a program but not its
+  stem is named in the tool's `COMPANIONS` and joins that program's group:
+  `CHART.OVL` and `MACRO.OVL` go with `SHEET.O88`, which reads both out of
+  the folder it was launched from (§82.16), and `CHART.OVL`'s own stem would
+  have put it with `CHART.O88`. Any other folder bigger than a floppy is
   refused by name: it needs a decision, not a bigger set.
 - **Placement is first fit in payload order**, so the set is a function of the
   payload alone. It is not stable against growth — a folder early in the order
@@ -46635,6 +46658,28 @@ any whose LZB file no longer takes fewer 1KB clusters - a package's next edit
 can carry it across a boundary with every build step green - and any listed
 name whose shipped file is not LZB at all. `--candidates` prints the LZ4
 packages LZB would save a cluster for, as information.
+
+**IT CAUGHT THE 2026-10-20 MERGE PUTTING TWO OF THEM BACK ON LZ4**, and the
+shape of that is worth keeping. `LZBPKGS` arrived from upstream naming `sheet`
+and `chart`; this fork's rules for those two are its OWN - SHEET packs
+`sheet.trim.bin`, the resident half left after `os88ovl.py` cuts CHART.OVL and
+MACRO.OVL out (§82.16) - so the auto-merge took the LIST and left both rules
+saying `$(OS88PKG)`. Nothing failed to build. The files shipped LZ4 and the
+360KB disks quietly paid **5 clusters for SHEET** (41,107 → 36,065 bytes) and
+**1 for CHART**, which is the saving this whole section exists to take.
+
+**The stamp could not see it**, and that is a limit of the mechanism rather
+than a defect in it: `PKGZBSTAMP` is keyed on a cksum of `LZBPKGS`, so it
+rebuilds when the LIST moves. Here the list was right and the RULES were
+wrong, so an existing tree kept its LZ4 files until they were removed by hand.
+A list this gate reads and rules it cannot are two statements of the same
+fact, and only one of them is checked.
+
+`t_lzbclust` also had to be taught SHEET's shape: it re-packs `build/<name>.bin`
+as its LZ4 control, and for SHEET that is the 122KB whole assembly rather than
+the 52KB the package carries - `os88pkg` refuses it outright with *"image size
+field != actual file size"*, which reads like a packing defect and is the gate
+holding the wrong file. It prefers `<name>.trim.bin` where one exists.
 
 The second of this section's two numbers has been TAKEN rather than predicted,
 on ArtfulType, on MartyPC's 4.77 MHz 5150 off a 360KB floppy, from
@@ -54381,7 +54426,7 @@ everything on it and gain nothing from three.
 
 | disk | at the root | `MEDIA/` |
 |---|---|---|
-| `office360` | ArtfulType, Calculator, Chart, Font Viewer, Paint, Sheet, TeXPad, Word | `PAPER.TEX`, `GUIDE.TEX`, `SALES.SLK`, `WRITING.MD`, `WELCOME.DOC`, `SAMPLE.BMP` |
+| `office360` | ArtfulType, Calculator, Chart, Font Viewer, Paint, PiXEL, Sheet, TeXPad, Word | `PAPER.TEX`, `GUIDE.TEX`, `SALES.SLK`, `WRITING.MD`, `WELCOME.DOC`, `SAMPLE.BMP` (no `LAKE.JPG` since 2026-10-22, §24.6.1) |
 | `network360` | Browser, FTPD, Telnet, The Wire (+ `SYSTEM/DOS/OS88NET.COM`) | `BROWSER.HTM` |
 | `games360` | every package in the apps disk's `GAMES/` | — |
 | `emu360` | RealDMG | `GBDEMO.GB` |
@@ -54493,6 +54538,15 @@ row to read is the Makefile's `APPS_TOOLS_360`, not a list here — a package
 list in prose goes stale the next time anything ships, and the enforcement is
 `os88disk.py` refusing an image that does not fit.
 
+**`office360.img` is curated the same way, and it ran out on 2026-10-22.**
+SHEET's two modules (§82.16, §81.94) took it to 354 of 354 clusters, so a save
+to it failed. The owner took **`LAKE.JPG` off that disk alone** — PiXEL's one
+sample there (§106.7), 18 clusters — rather than a program: `PIXEL.O88` stays,
+and the picture is still on the everything set and the live media (by way of
+`MEDIA_EXTRA`) and in every `make pixeldisk` gallery. The Makefile's
+`OFFICE360_DATA` is the row to read, and the decision is remade the next time
+this disk runs out.
+
 #### 24.6.2 One sample document per application
 
 Every application on a category disk opens its File dialog on something.
@@ -54594,6 +54648,29 @@ the office one. Ten clusters is what it happens to cost; it is not why.
 
 Every other geometry carries the full list, and `make smallapps` is
 untouched.
+
+#### 24.6.3.1 …and its overlay had to follow it there
+
+`office360.img` carried `SHEET.O88` and `CHART.O88` and **not `CHART.OVL`**,
+from the day the disk was created until 2026-09-19. The Makefile's own comment
+elsewhere calls a SHEET without its module *"chartless"*, which was true when
+§82.16.3 first split it and had not been true for a long time: the module has
+since absorbed every file format (§82.16.9), five function families (§81.62),
+the macro engine (§81.63), the database commands (§81.71) and **every dialog
+engine** (§81.71.5.1, §81.71.6, §81.74.2).
+
+So on the one 360KB disk built to carry the spreadsheet, the spreadsheet could
+**not open or save a file and could not open a single dialog** — and the
+sample `SALES.SLK` §24.6.2 puts beside it was unopenable by either program
+that reads it.
+
+It fits and always did: 184 of 354 clusters before, 43 needed, 227 after.
+
+**The lesson is the one §24.5's omission list keeps teaching.** The word
+"chartless" recorded a *judgement* whose ground moved underneath it, and
+nothing re-read it when it did. A second file that a package cannot run
+without is part of that package, not an accessory to it — which is exactly
+what the `WORD.OVL` comment two lines above says, and it was right there.
 
 #### 24.6.4 Delivery
 
@@ -66770,7 +66847,7 @@ button and stops. The page has no state line left at all.
 
 One check box, **"Force Color"**, to the RIGHT of the Set Primary button and
 on its row: glyph at pane x 110, y 75 (centred on the button's 18 rows), label
-at x 128, ending at 215 inside `CP_PRGT`'s 221. It is §39.28's setting, and
+at x 128, ending at 215 inside `CP_PRGT`'s 221. It is §39.30's setting, and
 the page is its home because the page is the one about what the screen is
 driven as. It cannot go on its own row: on a VGA beside a Hercules the page
 holds three adapter rows, the button, the desktop line and its label and the
@@ -66786,16 +66863,16 @@ cannot disagree. Not hidden, at the owner's ask: a control that exists in this
 build and is unavailable on this machine is greyed, which is what the panel's
 other controls for absent hardware do. A VGA BIOS that happens to have
 recorded COLOUR this boot does not grey it — the verdict is per POWER-ON
-(§39.28), so the next boot can differ, and the setting is for that one.
+(§39.30), so the next boot can differ, and the setting is for that one.
 
 It is control id 5 (the rows are 0, Set Primary 1, the desktop radios 2..4),
 and like every check box in the panel it FIRES ON THE RELEASE (§13.8.3). The
-tick is bit 0 of `CFG_VGC` and the click stores 0 or 1 (§39.28), so a `VC`
+tick is bit 0 of `CFG_VGC` and the click stores 0 or 1 (§39.30), so a `VC`
 record holding any other value shows clear and the first click ticks it. The
 label is lettered by `cp_vid_paint` and the glyph by `cp_vid_ctls`, the
 Date/Time page's split, so a press edge redraws the glyph and not the words.
 The caption — "Switches now, and is kept" — is true of the tick; the un-tick
-is the one exception, §39.28 says why, and it is not spent a line of a page
+is the one exception, §39.30 says why, and it is not spent a line of a page
 that has none to spare.
 
 ### 31.13 Dock page — where the strip stands, and whether it hides
@@ -77075,7 +77152,1310 @@ only ever REUSE it in place (docs/plans/MONO-RECLAIM-PLAN.md §3); `kern_small`
 carries no hole at all, because the bytes stopped existing at assembly time.
 **Only one of the two has anything to spend, and it is not the small one.**
 
-### 39.28 Force Color — a VGA BIOS that decided "monochrome" at power-on (`kern_big` only)
+### 39.28 `tests/vbeprobe` — asking the machine, not the datasheet
+
+Whether os8088 could ever run above 640x480 is a question about a *particular
+BIOS on a particular card*, and no amount of reading settles it: cards that
+advertise VESA routinely implement the packed 256-colour modes and skip the
+16-colour planar ones entirely. `tests/vbeprobe` asks the machine. It lives in
+`tests/` with fontbench, typebench and netbench, for the same reason they do
+(§24, the "benchmarks are not in `apps/`" rule): it ships on no disk, `all`
+builds none of it, and it answers one question once.
+
+```
+make vbeprobe && make test TESTAPPS=build/vbeprobe.img
+```
+
+R re-probes, S writes `VBEPROBE.TXT` beside the package so the report can be
+read off the floppy on the host rather than off the glass.
+
+**`make vbeprobe` builds two disks, and the second is the one for real
+hardware.** `build/vbeprobe.img` is a plain B: disk, which is what an
+emulator wants and what netbench's disks are. But the machine this probe
+exists for is a laptop with ONE floppy drive, where "boot the system disk,
+then insert the probe disk" is not a procedure that can be followed — so
+`build/vbeprobeboot.img` is the whole system disk with `VBEPROBE.O88` added
+at its root: one floppy, one boot, and S writes the report back to the same
+disk. It is a full bootable image, so it carries the build number (§14.2)
+and goes stale on the next commit like every other one.
+
+**It sets no mode.** `INT 10h AX=4F00h` and `AX=4F01h` are pure queries that
+fill a buffer and return. `AX=4F02h` is deliberately absent and must stay
+absent: os8088 owns the display (§39.6), and a package that switched the mode
+behind the window manager would take the desktop with it.
+
+**What it is looking for is `0104h`, and the reason is the pixel format, not
+the resolution.** The renderer is four-bit planar throughout — mode 12h's
+format, planes selected by the Sequencer's map mask at one address. `0104h`
+(1024x768x16) is that same shape one size up, so every primitive keeps its
+format. The 256-colour modes are PACKED: not an extension of this renderer
+but a second one.
+
+**And the aperture lines up, which is what makes `0104h` interesting rather
+than merely bigger.** 1024 pixels is 128 bytes a row a plane, and a 64KB
+window holds exactly 512 of those — so a bank boundary falls BETWEEN rows and
+never inside one, and `gfx_rowbase` (§39.3.1) stays the single place that
+would have to learn about banks. 800x600 is the *harder* mode, not the
+easier one: 100 bytes a row divides 65536 into 655.36, so a row there
+straddles a boundary and every primitive has to care.
+
+The report gives window granularity and size per mode because that is what
+the banking would cost: 64KB granularity with a 64KB window is the simple
+case, 4KB granularity is a different sum.
+
+**The verdict is computed from every mode in the list, not from the printed
+rows.** `VP_MAXM` caps the rows so a long list cannot page the answer off the
+screen, and a report that hits the cap says so — but the `0104h` test runs
+before the cap, because a BIOS that lists it at position 65 would otherwise
+be reported as not having it at all. Both halves are proven by mutation:
+with `VP_MAXM` cut to 4 under QEMU, `0104h` prints no row and the verdict
+still finds it.
+
+Measured under QEMU's `std` VGA, 2026-10-03 — VBE 3.0, 16MB, and `0104h`
+present with attribute bit 0 set:
+
+```
+mode   width height bpp mdl gran wsize attr
+0102     800    600   4   3   64    64 003B
+0104    1024    768   4   3   64    64 003B
+0105    1024    768   8   4   64    64 00BB
+```
+
+`mdl` 3 is planar and 4 is packed, so the pair at 1024x768 is exactly the
+choice described above. This settles nothing about real hardware — it
+establishes only that the probe reads a VBE correctly.
+
+#### 39.28.1 The answer from the Satellite 4025CDT — `0104h` is there
+
+Run on the machine the question was about (NeoMagic, 2026-10-03), photographed
+off the screen — `docs/photos/vbeprobe-satellite-4025cdt.jpg`, which is the
+provenance docs/FIELD-MACHINES.md asks every field result to carry. **VBE 2.0,
+2MB, 31 report lines of 31 — the list is complete and nothing was truncated.**
+
+```
+mode   width height bpp mdl gran wsize attr
+0102     800    600   4   3   64    64 001F
+0104    1024    768   4   3   64    64 001F
+0105    1024    768   8   4   64    64 009F
+0106    1280   1024   4   3   64    64 001F
+0118    1024    768  24   6   64    64 009A
+```
+
+`0104h` is present and hardware-supported, at 64KB granularity with a 64KB
+window — the simple banking case, not the 4KB one.
+
+**And its attributes are better than the emulator's, which is the part a
+QEMU-only run would have got wrong.** `001F` against QEMU's `003B` differs in
+bit 5, and bit 5 is *VGA compatible* inverted: QEMU's std VGA says `0104h` is
+NOT VGA-compatible, the NeoMagic says it is. Bit 6 is clear on both, so the
+VGA-compatible *windowed* memory mode is available. Together that means the
+ordinary VGA registers — the Sequencer map mask the renderer already drives
+(§39.3) — are the interface in this mode, rather than a VBE-specific path.
+Bit 7 is clear: no linear framebuffer, which costs nothing, because an 8086
+could not address one anyway.
+
+**The `attr` bit-0 test is doing real work rather than being a formality.**
+Under QEMU every listed mode had it set. Here the 24bpp modes and the 15/16bpp
+modes at 1280x1024 come back `009A` — **listed by the BIOS and not supported
+by the card**. A probe that reported presence alone would have called those
+available.
+
+**`0104h` is also the only planar mode on this machine whose rows do not
+straddle a bank**, which is the §39.28 argument confirmed against the real
+list rather than assumed:
+
+| mode | bytes/row/plane | rows per 64KB | |
+|---|---:|---:|---|
+| 12h 640x480 | 80 | 819.20 | straddles — but the whole plane is 38,400 bytes, so it never banks at all |
+| `0102` 800x600 | 100 | 655.36 | straddles |
+| **`0104` 1024x768** | **128** | **512.00** | **exact** |
+| `0106` 1280x1024 | 160 | 409.60 | straddles |
+
+`0106h` is supported too and is the tempting one — it is bigger and it is
+planar — but it has 800x600's defect, so taking it would mean teaching every
+primitive about a boundary inside a row instead of teaching `gfx_rowbase`
+(§39.3.1) alone about banks. 1024x768 is not merely the biggest safe mode; on
+this hardware it is the *only* one.
+
+A plane there is 98,304 bytes, so the framebuffer spans two banks and a
+fraction — one switch for most of a full-screen pass. The card has 2MB and
+the mode needs 384KB across four planes, so memory is not a constraint.
+
+**What this does NOT establish.** That the mode can be *set* and drawn on. The
+probe deliberately never calls `AX=4F02h` (see above), so everything here is
+the BIOS's own description of itself. A card whose BIOS advertises a mode it
+mis-programs is a known failure class, and the next step is a throwaway that
+sets the mode, writes a recognisable pattern through the map mask, and is
+shot with a camera — not a change to os8088.
+
+### 39.28.2 `tests/vbeset` — setting it, and drawing in it
+
+§39.28.1 is the BIOS describing itself. A BIOS that advertises a mode it
+mis-programs is a known failure class, so the next question is whether
+`0104h` can be **set**, and whether os8088's own renderer works once it is.
+`tests/vbeset` writes pixels.
+
+```
+make vbeset     -> build/vbeset.img, a bootable 1.44MB floppy
+```
+
+**It is a boot disk and not a package, and the rule is binding.** §53.7
+forbids an `int 10h` mode set outside `fsx_mode` — *"the kernel must know what
+it is restoring from"* — and §53.6 step 1 **skips** the restoring mode set when
+`fsx_mode` was never called. A package that set `0104h` behind the bracket's
+back would leave the machine in 1024x768 with the kernel's renderer writing
+mode-12h geometry into it and no path home. `fsx_mode` has no VBE id (they
+stop at 8), and adding one is a kernel change that must not be made on the
+strength of a BIOS describing itself. So it boots the machine itself and owns
+everything: nothing to restore, no kernel to strand. It is bootdiag's shape
+(§2.9.10) and reuses bootdiag's own paranoid loader unchanged.
+
+**Nothing is assumed.** The stride, window segment, granularity and window
+size are read from `AX=4F01h` and used; the bank arithmetic and every
+coordinate in the pattern are derived from them. A machine reporting a stride
+that is not 128 gets a pattern laid out for the stride it reported.
+
+**The pattern exercises kernel/vga12.inc's paths, with its register
+sequences** — because "does VBE work" is not the question and "does *this
+renderer* work in this mode" is: 16 colour bars through Set/Reset (GC0/GC1); a
+1px frame and a diagonal through single-pixel Bit Mask writes with a
+latch-loading read, at both ends of a byte; three bank lines at the rows
+either side of a granule boundary; a second bar set drawn past that boundary;
+a comb of 1px columns; and three XOR blocks (fill 7, XOR once, XOR twice)
+through the ALU function GC3 = 18h, where the first and third must match and
+the middle must not.
+
+**It does not depend on the photograph.** Every probe point is read back
+through Read Map Select (GC4) — vga12.inc's own plane-read path — and compared
+with what was written, and the verdict prints per-probe PASS/FAIL in text
+mode. A photograph then confirms the *display*, which readback cannot see.
+
+#### 39.28.2.1 Two arms, and the control is not optional
+
+`1` sets VBE `0104h`; **`2` sets plain VGA 12h and runs the identical code**.
+A test that has only ever been seen to fail cannot tell a card that cannot do
+the mode from a bug in the code asking it to, and this one did fail first:
+under QEMU every probe read zero and the screen stayed black. The control is
+what makes that reading worth anything. It is `make bootdiag`'s principle —
+*the pair is the experiment, and neither disk alone is* — inside one image.
+
+**A raw-memory probe separates the two failures that look identical from
+outside.** Before any drawing, with Set/Reset off, write mode 0 and the Map
+Mask open on all four planes, one byte is written and read back per plane:
+all four holding it means the window *is* the framebuffer and any pattern
+failure is in the GC path; anything else means the memory is not there and
+nothing built on it could have worked.
+
+Measured under QEMU's `std` VGA, 2026-10-03:
+
+| arm | raw write at (8,400) | probes |
+|---|---|---|
+| VBE `0104h` | wrote A5, read back `00 00 00 00` | **0 of 13** |
+| control, mode 12h | wrote A5, read back `A5 A5 A5 A5` | **10 of 10** |
+
+So the code is right and QEMU's `0104h` window is not CPU-addressable at
+`A000` — **which is exactly what QEMU's own attribute word said**: its
+`003B` has bit 5 set, meaning *not* VGA compatible. The emulator is consistent
+with itself, and this is the one machine property §39.28.1 found the Satellite
+reporting differently (`001F`, bit 5 clear). **QEMU therefore cannot answer
+this question, and the run is not evidence against the Satellite.**
+
+#### 39.28.2.2 The defect the comb caught
+
+The control did not pass first time: it came back **8 of 10**, missing only
+the two comb probes, while the screendump plainly showed the comb drawn
+correctly. The read path had
+
+```nasm
+    mov ax, cx
+    mov cl, 3           ; destroys the low byte of CX - which IS x
+    shr ax, cl
+    mov [vs_bytex], ax
+    mov ax, cx          ; reads the wrecked x
+```
+
+so the bit index came out 4 for every pixel on the screen: it read the
+**neighbouring** pixel. Eight of the ten probes sit inside solid blocks where
+the neighbour is the same colour, so they passed while testing nothing. Only
+the comb — 1px columns alternating with 1px gaps — is fine-grained enough for
+a one-pixel error to change the answer, and it is in the pattern for that
+reason. **A probe in a solid region cannot detect an off-by-one in
+addressing**, which is this project's "a values-only gate is blind to the
+chrome" (§81.98) one layer down.
+
+#### 39.28.2.3 The answer from the Satellite — it sets, and it draws
+
+Run on the NeoMagic, 2026-10-03. Photographs in `docs/photos/`:
+`vbeset-satellite-0104h.jpg` and `vbeset-satellite-control-12h.jpg`.
+
+**`AX=4F02h` set `0104h`, and the pattern came out at 1024x768.** The whole
+panel is the picture — the control arm's 640x480 sits letterboxed in the
+middle of the same screen, which is the two arms telling each other apart at a
+glance. Every item is present: both bar sets, the three XOR blocks with the
+first and third matching and the middle one different, the comb, a frame on
+all four edges and a diagonal that is straight corner to corner.
+
+**The bank boundary is where the arithmetic put it.** The frame gives the
+picture's extent in the photograph and the bank line is the one isolated
+bright band inside it, so its position is measurable without trusting a
+colour:
+
+| | |
+|---|---|
+| bank line, measured in the photograph | **66.6% – 67.4%** of the way down |
+| row 512 of 768, predicted | **66.7%** |
+
+That is §39.28's central claim — 128 bytes a row, 512 rows to a 64KB granule,
+the boundary falling *between* rows and never inside one — confirmed on the
+hardware rather than derived from a datasheet. Content is drawn on both sides
+of it, so the window switch carries drawing and not merely addressing.
+
+**And the readback is clean: 13 of 13**
+(`docs/photos/vbeset-satellite-verdict.jpg`), with the raw plane write
+reading back `A5 A5 A5 A5`. The control arm on the same machine reads 10 of
+10. Every probe point held exactly what was written, which between them is:
+
+| probe | covers |
+|---|---|
+| `(352,32)` = 5, `(608,32)` = 9 | all four planes through Set/Reset |
+| `(210,110)` = 7, `(310,110)` = 8, `(410,110)` = 7 | the XOR ALU — filled, XORed once, XORed twice |
+| `(500,511)` = 14, **`(500,512)` = 12**, `(500,513)` = 10 | the rows either side of the granule boundary, so the **bank switch** |
+| `(352,620)` = 5 | a fill drawn *past* the boundary |
+| `(100,710)` = 15, `(101,710)` = 1 | the comb — 1px precision, the probe that caught §39.28.2.2 |
+| `(0,767)` = 15, `(1023,767)` = 15 | the frame, and the **last address in the framebuffer** |
+
+So `0104h` on this machine is **verified, not merely demonstrated**: the mode
+sets, the window banks, and Set/Reset, the Bit Mask and the XOR ALU — the
+three register paths kernel/vga12.inc is built on — all behave as they do in
+mode 12h.
+
+**On the palette, this narrows the question rather than answering it.** The
+probe at `(310,110)` expecting colour 8 passed, so the *plane* values are
+right everywhere; anything that looks wrong on the panel is therefore the DAC
+or the display and not the drawing. (Colour 8 does read as nearly black
+against the ground in the photograph, where the control's reads as a mid
+grey.) Readback cannot see a DAC, so whether `0104h` arrives with mode 12h's
+palette loaded needs its own instrument — and the test has one now.
+
+#### 39.28.2.4 The palette is read, not photographed
+
+**Two attempts to answer the palette question from the photographs failed,
+and the second failure is why the test grew a palette readback instead.** The
+panel is TN, so its colour shifts with height; the control arm's picture is
+letterboxed mid-panel while the VBE arm's fills the screen, so the same colour
+is photographed at two different viewing angles. Normalising each bar row
+against *its own* colour 0 and colour 15 cancels that correctly — but only if
+the picture's rectangle is located in the photo first, and **the room behind
+the laptop is brighter than the frame**. Both attempts latched onto the room,
+the second returning a picture five pixels wide. A photograph of a lit LCD is
+not a colorimeter and no amount of normalising makes it one.
+
+The hardware is readable, so `vs_pal` reads it: colour → Attribute Controller
+palette register → DAC entry → six-bit RGB, which is the whole chain. Both
+arms print it, so they compare directly and neither is a camera.
+
+Reading the AC has one trap worth recording: writing an index with **bit 5
+clear** is what makes 3C1h readable, and it also disconnects the palette from
+the screen — leaving it so blanks the display. The `20h` write at the end puts
+it back, and the 3DAh read before each index resets the shared address/data
+flip-flop, which has no other way to be put in a known state.
+
+Verified against a known-good reference first — the control arm under QEMU
+returns exactly the canonical mode 12h palette, **entry 6 → AC `14` = `2A1500`,
+brown**, which is the diagnostic entry: a palette that was never programmed
+leaves 6 → AC `06` = `2A2A00`, dark yellow.
+
+```
+ 0 00=000000  1 01=00002A  2 02=002A00  3 03=002A2A
+ 4 04=2A0000  5 05=2A002A  6 14=2A1500  7 07=2A2A2A
+ 8 38=151515  9 39=15153F  A 3A=153F15  B 3B=153F3F
+ C 3C=3F1515  D 3D=3F153F  E 3E=3F3F15  F 3F=3F3F3F
+```
+
+The `0104h` reading from the Satellite is outstanding.
+
+### 39.29 VBE 1024x768x16 — `VBE.DRV` and the banked planar geometry
+
+§39.28 asked whether a bigger PLANAR mode exists, and §39.28.2.3 answered it on
+the iron: mode `0104h` sets, draws, and os8088's own three register paths —
+Set/Reset, the Bit Mask and the XOR ALU — behave in it exactly as in mode 12h,
+readback 13 of 13 including the rows either side of the bank boundary. This
+section is what the system does with that.
+
+**It is one kernel, not a build.** The probe is `int 10h AX=4F00h`, which is
+8086 code, so there is a resident question an XT can ask and a 286 or 386 with
+a VESA card can act on — which is exactly `XMEM.DRV`'s situation (§41.12.1) and
+exactly not `kern_emu`'s, whose probe is 386-only (§9.11.7). The rule those two
+settle between them: *a resident sniff is legitimate iff the target machine can
+execute the probe and do something with the answer.*
+
+#### 39.29.1 The arithmetic that shapes everything
+
+A 1024-wide 4bpp plane is **128 bytes a row**, and `65536 / 128 = 512` exactly.
+So:
+
+- a row never straddles a 64KB window;
+- the plane is 98,304 bytes — two windows and a fraction;
+- **the 16-bit carry out of `DI` *is* the bank crossing**, and nothing else has
+  to detect it.
+
+```nasm
+    add di, [vid_stride]
+    jnc  .same                  ; 511 times out of 512
+    call vbe_bank_next          ; ...and exactly on the boundary
+.same:
+```
+
+On mode 12h that `jnc` can never be taken — the largest `DI` is `479 x 80 =
+38,320` — so **one body is correct on both adapters**, which is what keeps this
+out of a second renderer.
+
+**`gfx_rowbase`'s contract changes, and this is the load-bearing edit.** It
+returns `AX` = a 16-bit offset and `gfx_rowbase_calc` discards the high word of
+its multiply on the written ground that *"DX is always 0 (86*90 at worst)"*.
+At stride 128 that holds to row 511 and fails at 512 — the same line as the
+bank boundary, necessarily, both being `65536 / stride`. In this mode it
+therefore means *"select the window, return the offset within it"*, and the
+`vid_rowtab` fast path is switched off (`[vid_rowmax] = 0`) because a table of
+16-bit offsets cannot describe row 512 at all. `vid_ctx_act` already switches
+that table off for a display of another kind (§39.12), so the mechanism exists.
+
+**The existing `vid_bmask`/`vid_bshift` bank cannot express this** and must not
+be stretched to try. That one is the CGA/Hercules *interleave* — `(y & bmask) *
+0x2000` **inside one segment**, with the LOW bits as the bank — and its own
+`%error` at `viddet.inc:1492` already records that it stops working once a bank
+holds more rows than its window. VBE needs the HIGH bits as the bank and a
+side-effecting window write. Two formulas, named apart.
+
+#### 39.29.2 `VBE.DRV` — the cold half, and only the cold half
+
+`XMEM.DRV`'s shape exactly (§41.12): `DRVC_OVL`, **no `drv_tab` row**, no
+publication slot, no `SYSTEM.CFG` bit, no Drivers-page tick. A machine either
+offers `0104h` or it does not; a tick box would only ever be a way to break a
+working machine. `kernel/vbe.inc` carries the sixteen-byte `DRVR_`-shaped
+record outside `drv_tab`, the dispatch, and the load/free pair.
+
+**There is no boot sniff, and that is the one place this departs from
+`XMEM.DRV`.** `xm_sniff` exists because a package can ask for extended memory
+at any moment with no disk in the drive, so the answer has to already be known
+— and `int 15h AH=88h` is free to ask. VBE's probe is not free: `AX=4F00h`
+fills 512 bytes and `AX=4F01h` 256, and a kernel that reserved either would be
+spending resident RAM on a question one page in the system asks. It does not
+have to: the only consumer is Control Panel's Display page, which lives in
+`CTRL.DRV` and is itself read from the system disk when the user opens it, so
+**the disk is already required at the only moment the question is ever asked**
+— §2.8's own qualifying test, one layer out.
+
+**It does not reach the image through `drv_call`, and that is a measurement.**
+`drv_call` range-checks `BX` against `drv_tab` and refuses a row outside it, so
+using it needs a third name on the `.stray` whitelist (§41.12.5) — and that
+whitelist is in `.cold`, which had **one byte** of its rung left. Six bytes
+there crossed it: **+512 bytes of every machine's RAM** for a feature an 8088
+can detect and could never usefully run. `xm_dsp` already far-calls the
+header directly for its service verbs (§41.12.2); doing the same for `ATTACH`
+as well costs about fifteen bytes of `.text`, where there was room, and the
+rung stays uncrossed. What `drv_call` was doing is replicated by hand and
+named: `DS` = the image, `ES` = `KERNEL_SEG`, a zero `DRVR_SEG` refused rather
+than far-called, and the compaction nest held across the call (§66.6.3) so the
+image's own claim cannot move under it.
+
+It owns the probe, the mode set, the palette, the geometry handoff and the
+window-switch body. It does **not** own drawing.
+
+**The renderer cannot be loadable, and that is settled rather than judged:**
+
+1. `gfx_*` bodies are **API slots**, and an `OSAPI_SLOT` names a `KERNEL_SEG`
+   offset (§41.12's own words), so they cannot be `.cold` — let alone a file.
+2. The renderer is called **from inside `mod_need`'s own load**: `fpg_busy`
+   draws for every sector read (`disk.inc:1171`, *"EVERY SECTOR IN THE MACHINE
+   PASSES HERE"*). A renderer module would be drawn with by its own loader.
+3. The **mouse ISR** draws the cursor through `int 13h` (§7.4), where
+   `mod_need` is unreachable.
+
+§79.2 refuses the module route for drawing code outright, on the separate
+ground that a module's data must live in the kernel's `.text`. So the split is
+not a preference: **the once-per-mode work is a file and the per-pixel work is
+resident**, and the window switch — at most once per multi-row operation,
+because 128 divides 65536 — reaches the file through a published service cell,
+which is `drv_svc_call`'s "a near read plus one far call".
+
+#### 39.29.2.1 The renderer's stride had to move FIRST, and the plan said otherwise
+
+The staging said 1024x512 "needs no change to any hot loop", because rows
+0..511 are one window and nothing has to bank. **That was wrong, and it
+conflated two separate things.** Avoiding the bank boundary avoids *banking*;
+it does not change the fact that **1024 pixels is 128 bytes a row**, whatever
+rows you use.
+
+`gfx_rowbase` was already right — it goes through `mul word [cs:vid_stride]`.
+But eighteen sites carried the stride as the assembly-time `ROW_BYTES` (80):
+eleven in `vga12.inc`, two in `font.inc` (one of them `font_char`'s open-coded
+`y * 80`, the only row base in the kernel that bypasses `gfx_rowbase`
+entirely), one in `mouse.inc`'s cursor draw and three `icons.inc` right-edge
+clips. Every multi-row primitive therefore stepped 80 bytes down a 128-byte
+row and skewed.
+
+**It shipped and the Satellite showed it**: the desktop came up correct at
+640x480 and the Display page offered the row, and selecting it drew a
+horizontally smeared screen with the text still legible and each row further
+out of place than the last. §39.3's note that *"the planar bodies in vga12.inc
+are simply unreachable on mono, so they keep their assembly-time `ROW_BYTES`"*
+is exactly the assumption a fifth kind breaks — the bodies are reachable now.
+
+The conversion is nearly free in bytes, which is why it was worth doing in one
+pass rather than per-primitive: `add di, imm16` and `add di, [mem16]` are both
+four bytes on an 8086, so the fetch floor that dominates this machine
+(PERFORMANCE.md Part 2) charges the same for either.
+
+**AND THE STRIDE MUST BE READ `cs:`-RELATIVE, WHICH IS WHERE THE FIRST
+CONVERSION WENT WRONG.** `ROW_BYTES` was an immediate and touched no memory;
+`[vid_stride]` is a DS-relative read, and **DS is not `KERNEL_SEG` in the two
+routines that matter most**. `vga_save_vram` switches it to `VGA_SEG` for its
+`movsb`, so a plain read fetched *pixels* and used them as the row step;
+`vga_restore_vram` has DS pointing at the save-under claim, one line below a
+comment that already says **"CS: IS MANDATORY - DS is the BUFFER in here"**.
+
+The result was reported off the Satellite as corruption trailing the cursor —
+and then, correctly, as *"not just the cursor, it's also the windows"*, which is
+the symptom naming the cause: the cursor, every menu drop and every window
+save-under go through that one pair. `gfx_rowbase_calc` documents the rule
+already: every parameter it reads is `cs:`, because `sw_xfer` runs with DS set
+to the framebuffer or to a claim.
+
+**`cs:` goes on those two sites and nowhere else, and the narrowness is the
+point.** A blanket `cs:` passes the gate below, but it is only accidentally
+right: `CS` is `KERNEL_SEG` in `.text` and is **`COLD_SEG` in cold code and the
+blob's segment in an overlay**, so a site that later moves section would break
+silently. `DS` is `KERNEL_SEG` everywhere by §2.6 *except* where a routine
+loads it itself, and exactly two do — `vga_save_vram` (`mov ds, VGA_SEG`) and
+`vga_restore_vram` (`push es / pop ds`, which LOADS it rather than restoring
+it). So the plain form is correct by construction at the other twenty-eight
+sites, and the override is correct by construction at these two.
+
+**`icons.inc` is the one that nearly shipped broken a second way.** Its three
+clips sit between `mov al, <plane mask>` and `out dx, al`, so fetching the
+limit into AX destroyed the mask and would have corrupted every icon on every
+adapter. The limit is read around a `push`/`pop` — `pop` sets no flag, so the
+compare survives it.
+
+#### 39.29.3 What the mode costs the machine that cannot use it
+
+Reported the way docs/KERNEL-MEMORY.md requires — per-section bytes and the
+accrued figure, never "crossed no rung".
+
+| | |
+|---|---|
+| resident, `kern_big` | the row + dispatch + load pair, the fifth `vid_tab` row and the kind's arms — **`.text` +312, `.ovl` +12, `.cold` +0 measured, no rung crossed** (accrued image 172/512 -> 484/512). Stage 2's `jnc` at 13 row-advance sites and `gfx_rowbase`'s second formula are not in that figure, and **28 bytes of the rung remain**, so they will cross it |
+| resident, `kern_small` | **nothing**: it cannot load a `.DRV` of any kind (§51.0), so the sniff and the row are `%ifdef OS88_DRIVERS` |
+| per row, on mode 12h | 2 bytes and one `jnc` - **TAKEN, and measured at 22 cycles** (PERFORMANCE.md Set 161) |
+
+**That last figure was to be MEASURED on a 4.77MHz 8088 and recorded in
+PERFORMANCE.md, not asserted here. It has been, and it reads badly**: 22
+cycles a row advance executed, which is **11-25% on every rect primitive**
+because `vga_solid_rect` walks up to three of its four `VBROW` arms over every
+row. The estimate above said nine clocks because it said *not-taken*, and the
+sense is backwards - `jnc %%same` jumps over the `call`, so it is taken 511
+times out of 512, and a taken Jcc on an 8088 is 16 clocks plus a prefetch
+flush against the not-taken 4. So the loops get the banked twins selected once
+per operation (arm B of the plan's table, bytes instead of time), or §39.29.10's
+revision finishes the job and the per-row test goes away altogether.
+
+##### 39.29.3.1 The BYTE half, measured — and why the image size is not it
+
+`NOVBEROW=1` compiles the bank test out of `VBROW`/`VBROWR`/`VBROWCS` and
+leaves a bare `add`. It is the A/B this section asks for, and the only thing
+keeping the un-banked row advance assembling.
+
+**The site count is 22, not the thirteen first planned** — `vga12.inc` 19,
+and one each in `font.inc`, `icons.inc` and `mouse.inc`. Assembled in
+isolation, 22 instances cost **201 bytes with the test and 91 without: 110
+bytes, 5 a site** (`jnc` 2, `call` 3).
+
+**The whole-kernel size is NOT that figure and must not be quoted as it.**
+`kernel.bin` measures **512 bytes LARGER** with the test compiled OUT — the
+wrong direction and four times the magnitude, because padding and rung
+alignment swamp a 110-byte change. An A/B taken off an image size would have
+reported a saving that does not exist, with a sign that says the change does
+the opposite of what it does. Per-section figures, as docs/KERNEL-MEMORY.md
+requires, or nothing.
+
+**The TIME half is measured now** and it is PERFORMANCE.md Set 161: **22
+cycles per row advance executed**, 11-25% on every rect primitive, up to 24.8%
+on `GFX_VLINE 128px`. The instrument that was missing is
+`tools/gfxbenchread.py`, and the gap this section used to name was mis-stated
+as well as open: `tests/gfxbench` does **not** publish through §57's registry
+— benchlib keeps the whole report in the package's own bss (`bl_arena`,
+`bl_idx`, `bl_nrow`) and writes it to a file with `bl_save` — so the reader
+reads 74 rows out by symbol, and cross-checks them against the saved file read
+back with `os88flush`. The two readers agreed row for row on both arms. The
+`NOVBEROW=1` arm is built with `os88build.tree`, so `build/` is left alone and
+the control is the shipped kernel.
+
+What still stands from the paragraph this replaces: the harness has no way to
+call a kernel routine, and boot-to-desktop cycles do not substitute (the two
+arms differ in sector count, and an `int 13h` is ~400 ms against a per-row cost
+in microseconds). What makes the measurement work without either is that
+gfxbench's rows ARE the primitives, timed inside the guest by the PIT.
+
+#### 39.29.4 What the fifth kind touched, and what it silently broke
+
+`VID_VBE` is kind 4, and `vidsel.inc`'s `%error` exists to make that expensive.
+Each predicate it names was checked rather than assumed, and **all three were
+already right**: `vid_blank` only asks "is this the mono card" by comparing
+against `VID_HERC`; `thm_set`'s `dec ah / cmp ah, 2 / jae` maps VBE to 3, which
+is colour; and `vid_avail_test`'s range follows `VID_KIND_MAX` itself. A mode
+that is four-plane colour and not Hercules needs no arm in any of them, and the
+guard's wording now says *that* rather than "a fifth kind".
+
+**What it did break was four tables indexed by `[vid_kind]` with no bound**, and
+the build was clean for all four — which is the same silence one layer out:
+
+| | |
+|---|---|
+| `fsx_capstab` (`fsx.inc`) | four rows; kind 4 read **past the end** |
+| `app_about_vid` (`apps.inc`) | four pointers; same |
+| `cp_vidnam` (`ctrl.inc`) | four names; the Display row had nothing to draw |
+| `wm.inc`'s kind→planes | **not out of range but WRONG**: VBE fell to the 1bpp arm, so every save-under `wm_fit` sized was a quarter of the bytes it needed |
+
+The last is the dangerous one, because it would have corrupted memory rather
+than faulted. A sixth kind gets the same sweep.
+
+#### 39.29.5 The probe's placement, which took three attempts
+
+Asking "can this card do `0104h`" means reading a file, and that constrains
+*where* far more than it looks:
+
+1. **Not from a paint path.** The first version called it from `cp_vid_slot`,
+   which resolves a Display row while the Control Panel is drawing — under the
+   gfx lock. The progress widget every sector lights (§7.4) cannot draw while
+   the lock is held by us, so the page came up blank with the disk light stuck
+   on.
+2. **Not from the settings block in `drv_boot_x`.** That block sits below a
+   `jc .load` taken on every disk with no `SYSTEM.CFG` — which is every shipped
+   floppy but `kern_emu`'s. It ran on no stock machine at all, and the only
+   symptom was a Display page one row short. `[vbe_known]` read `0` out of the
+   guest, which is what said so; guessing had already produced two wrong fixes.
+3. **Above the settings read, right after the mount.** The volume is there, the
+   splash owns the screen, and reading a driver image is what the routine is
+   about to do anyway.
+
+**`LOADED IS NOT ATTACHED`** is the other defect this cost: `drv_load_at` does
+the mount, the claim, the read and `drv_check` and *stops*, so the probe inside
+the image had never run. The kernel was asking a freshly-loaded overlay for a
+geometry it had not measured, getting zeros, and lighting nothing.
+
+#### 39.29.6 The window is proved before the mode is kept
+
+A BIOS can set the mode and still not put the framebuffer where a real-mode CPU
+can reach it, and then every primitive writes into nothing: a black screen with
+no way back, which is not a refusal a user can act on. **QEMU is exactly that
+machine** — `003B` has bit 5 set for *not* VGA compatible, and `tests/vbeset`'s
+raw probe reads `00 00 00 00` at `A000` there against `A5 A5 A5 A5` in mode 12h.
+
+So `VBV_SET` asks the same one-byte question `vbeset` does, after the mode set
+and before the palette. A card that cannot answer gets mode 12h put back by the
+overlay, and `vid_setmode`'s arm then sets `[vid_kind]` to `VID_VGA` and re-runs
+`vid_apply` so the kernel agrees with the card again.
+
+**The refusal is recovered from in `vid_setmode` and not reported upwards**,
+because by then `vid_switch` has already published the 1024-wide geometry — a
+failure returned from here would leave every primitive addressing a mode the
+card is not in.
+
+**But the recovery is the second line of defence, not the first.** `VBV_PROVE`
+asks the same question at BOOT, behind the loading screen, before the mode is
+ever offered: it sets `0104h`, writes and reads one byte through the window,
+and puts mode 12h back whatever the answer. Only then is `VID_A_VBE` lit. So a
+card that lists the mode and cannot map it never grows a Display row, which is
+§47's *grey a fact, never a guess* with the fact **measured** rather than taken
+from the BIOS's own mode list — and the user never meets a row that has to be
+recovered from. `[spl_busy]` is held across it for `vid_setmode`'s own reason
+(§15.3.8.3).
+
+Verified on QEMU both ways, because a path only ever seen to fail proves
+nothing: stock, `[vid_avail]` reads `0x05` — VGA and CGA, no VBE row, desktop
+unaffected by the boot-time mode set and restore. With the window compare
+mutated to pass, it reads `0x15` and the row appears. The chain is live.
+
+#### 39.29.8 86Box is the development machine, and QEMU cannot be
+
+QEMU's VBE is **Bochs's**, and it advertises `0104h` with `003B` — bit 5 set,
+*not VGA compatible* — then fails to map the window at `A000`. So it can
+exercise a refusal and nothing else. Every VM in this tree runs `oti067`, an
+Oak SVGA whose ROMs contain **no VESA BIOS at all**, which is why this never
+came up before.
+
+**86Box models real cards with their real ROMs**, and a Trident TGUI9440
+answers exactly as the Satellite's NeoMagic does — measured, not assumed:
+
+| | Satellite (NeoMagic) | 86Box `tgui9440_vlb` | QEMU (Bochs) |
+|---|---|---|---|
+| `attr` | `001F` | **`001F`** | `003B` |
+| VGA compatible | yes | **yes** | **NO** |
+| raw plane write | `A5 A5 A5 A5` | **`A5 A5 A5 A5`** | `00 00 00 00` |
+| readback | 13 of 13 | **13 of 13** | 0 of 13 |
+
+It also answers §39.28.2.4's palette question on that card: entry 6 → AC `14`
+= `2A1500`, brown — mode 12h's palette exactly.
+
+So `make vbesetbox` is the loop this feature is developed in, and the Satellite
+is for final confirmation rather than for every question. Three things make it
+work and each cost a wrong answer first:
+
+- **`QT_QPA_PLATFORM=offscreen`.** 86Box is Qt with no headless mode of its
+  own. Screen capture is not an alternative here: this host is Wayland, and an
+  `x11grab` of the whole root comes back black because XWayland does not
+  composite into it.
+- **The transcript goes to a SECTOR, not the screen.** `vbeset` tees every
+  character it prints into a buffer and writes it to LBA 100; `make vbeset`
+  builds a second image with `-DAUTORUN` that takes the VBE arm with no
+  keypress, since there is no way to send one. **Every exit path saves** — the
+  first version only wrote after a *successful* run, so a refusal, which is
+  the answer most worth having, halted with an empty sector.
+- **The CMOS must be seeded.** `vm/*/nvr` is gitignored, and an AT-class BIOS
+  with a cleared CMOS stops in SETUP waiting for a keypress that cannot be
+  sent. The floppy sat untouched through a three-minute run saying nothing
+  about why; CLAUDE.md's `RESET=` note already records this one.
+
+#### 39.29.8.1 Stage 1 confirmed on the Satellite, and what it cost to get there
+
+**A 1024x512 desktop draws correctly on the NeoMagic** (2026-10-04): menu bar
+across the full width, window chrome, text, the dock, the drive icon, and the
+unused rows below 512 dark - with no corruption as the pointer, menus and
+windows move. `VBE.DRV`, the fifth adapter kind, the patched `vid_tab` row and
+the live stride are all working on real hardware.
+
+**It took four field round trips, and no gate in this tree caught any of the
+three defects.** That is worth recording as plainly as the result:
+
+| reported | actually | why nothing here saw it |
+|---|---|---|
+| "garbled display on boot" | boot was fine; only the VBE *mode* was garbled | I fixed the wrong thing first. The photographs said so and I had read the sentence too quickly |
+| the mode drew smeared | 18 sites carried the stride as the assembly-time `ROW_BYTES` | QEMU cannot enter the mode; mode 12h reads 80 either way, so every test passed |
+| "not just the cursor, it's also the windows" | the stride read was DS-relative where DS is `VGA_SEG` or a save-under claim | same: invisible without entering the mode, and it is a *register discipline* fault, not a value fault |
+
+The second and third are the same root cause one layer apart — converting a
+compile-time constant into a live variable changes **what segment the read
+goes through**, and §39.3's note that the planar bodies may keep their
+assembly-time `ROW_BYTES` *because they are unreachable on mono* is exactly the
+assumption a fifth kind retires.
+
+**The 86Box loop (§39.29.8) cannot catch this class either**, for the same
+reason it is useful: it has no screen. A pixel-level save-under gate - compare
+a region saved and restored against the pixels under it, at both strides - is
+what would have, and it is the thing to build before stage 2 touches these
+routines again.
+
+#### 39.29.10 Banking to the full 768 rows
+
+Rows 0..511 are one 64KB window and need nothing; rows 512..767 need the window
+moved. Three facts make that far cheaper than the staging plan assumed, and all
+three were found by reading the code rather than by designing around it:
+
+**1. `gfx_rowbase_calc` already computes the bank.** Its body ends in
+`mul word [cs:vid_stride]`, which leaves `DX:AX` — and on a linear surface
+**`DX` is the 64KB bank and `AX` is the offset within it**, exactly. Verified
+at y = 0, 347, 511, 512, 600 and 767 at stride 128. The code discards `DX`
+today on the written ground that it is always 0, which is true of every mode
+but this one. So the base half is `or dx, dx` / `jz` / `call` in **one
+routine**, and mode 12h pays four clocks on a 362-clock path.
+
+**2. The 16-bit carry out of `DI` IS the bank crossing.** 128 divides 65536, so
+`add di, [vid_stride]` wraps to zero precisely when row 512 begins — and wraps
+to the *correct* in-window offset, because the wrap is the same arithmetic. A
+row advance becomes `jnc` past a call. On mode 12h the carry can never happen
+(the largest `DI` is `479 x 80 = 38,320`), so one body is correct on both and
+the XT pays two bytes and a not-taken jump per row.
+
+**3. The window is moved through VBE's own `WinFuncPtr`, not `int 10h`.** A far
+address that writes the card's registers directly: no BIOS entry, so it is safe
+from the mouse ISR, and no dispatcher, so it is not worth a call into the
+overlay. `vbe_bank` early-outs on a compare, which is what nearly every
+primitive hits.
+
+**THE BANK IS SELECTED WHENEVER THE MODE HAS ONE, INCLUDING BANK 0**, and
+getting that wrong is the one mistake this design invites. The first build
+gated the select on `or dx, dx / jz` — reading *"bank 0"* as *"nothing to
+do"*. Nothing to do leaves whatever window the **last** primitive finished
+with: a desktop fill spans rows 0..767 and ends on bank 1, so the menu bar
+then asked for row 0, skipped the select, and drew into bank 1. The whole
+chrome appeared 512 rows down the panel. The test is *"is this mode banked"*,
+and `vbe_bank`'s own compare is what keeps it cheap — it returns immediately
+when the window is already right, which is nearly every call.
+
+**And anything that bypasses `gfx_rowbase` bypasses the select with it.**
+`font_char` computes its row base inline — the only one in the kernel that
+does — and its `mul dx` carried the comment *"DX clobbered, product fits"*,
+true while a planar surface was 480 rows of 80 and false at 768 of 128, where
+the product is 98,176 and **DX is the bank**. Every glyph went to whichever
+window happened to be mapped. `gfx_pt_rmax`'s four inline copies of the *fast*
+path are safe by a different route: they compare against `[vid_rowmax]`, which
+is 0 here, so they always fall through to `gfx_rowbase_calc`.
+
+**`vid_rowtab` is switched off in this mode.** Its entries are 16-bit
+*bank-0* offsets and the fast path returns one without selecting a window, so
+`[vid_rowmax]` is 0 here and every row goes through `gfx_rowbase_calc`.
+`vid_ctx_act` already switches the table off for a display of another kind
+(§39.12), so the mechanism and its cost are both known.
+
+**Cost, as docs/KERNEL-MEMORY.md requires it reported.** Stage 2 is `.text`
++106 on top of stage 1's 422 (528 in all for §39.29), `.cold` +0, and crosses
+no further rung — 324 bytes of the image rung remain. What the XT pays for a
+mode it cannot run is the `cmp byte [cs:vid_kind], VID_VBE` in
+`gfx_rowbase_calc` and a `jnc` it never takes, per row, at the fifteen
+advances `VBROW` now covers. **It is a `cmp` against the kind and not an
+`or dx, dx`**: a zero `DX` is the *wanted* bank 0, not "no banking to do", and
+treating the two as the same leaves whatever window the previous primitive
+ended on mapped — which put the menu bar 512 rows down the first time this
+was flashed.
+
+**What this does NOT make work is `gfx_scroll`.** `vgas_lincopy` moves a region
+through the VGA latches with source and destination both in VRAM, stepping by
+the stride — and across a bank boundary the two ends are in *different windows*
+at the same instant, which one window cannot express and the latch path cannot
+survive. Its own comment already says it assumes one bank. A scroll that
+straddles is refused here and the caller repaints instead; VBE's window B is
+the eventual answer and is not pass 1.
+
+#### 39.29.10.1 `vbe_bank` addresses its own state through CS
+
+**Every byte `vbe_bank`, `vbe_bank_next` and `vbe_bank_reset` touch carries a
+`cs:` override, and that is a correctness requirement rather than a style.**
+The bank select is reached from inside three row loops that have *given DS
+away*:
+
+| caller | what DS holds in there |
+|---|---|
+| `vga12.inc`'s plane-major blit (`VBROWR di, bp`) | the caller's plane rows |
+| `vga_save_vram` (`VBROWCS si`) | `VGA_SEG` |
+| `vga_restore_vram` (`VBROWCS di`) | the save-under claim |
+
+So a plain DS read in the bank select reads whatever *those* routines pointed
+at, and all three of its accesses are catastrophic rather than merely wrong:
+
+- `cmp al, [vbe_cbank]` compares the wanted bank against **a pixel**. When the
+  pixel happens to equal `AL` the routine takes its early-out and the window is
+  never moved.
+- `mov [vbe_cbank], al` **writes a byte into the framebuffer**.
+- `call far [vbe_geom + VBG_WFN]` **fetches a far pointer out of video memory
+  and calls it**.
+
+It shipped that way and the field reported exactly the pair of symptoms those
+two outcomes predict: *the desktop went black on the mode switch* (the wild far
+call) and *dragging a window past row 512 left a staircase of save-under
+debris* (the compare that matched a pixel). `CS` is `KERNEL_SEG` throughout
+`.text`, so the override is correct at every call site and costs one byte each.
+
+**This is §39.29.10's `[vid_stride]` defect one level down, and it is the third
+time the class has been paid for in this feature.** The rule it generalises
+to: *anything a drawing inner loop can call must address its own state through
+CS, because the inner loops are precisely where DS is not ours.* A routine's
+own call sites are not a survey to be redone per change — `gfx_rowbase_calc`
+already documents this for the stride, and `vbe_bank` now does for the bank.
+
+#### 39.29.10.2 A primitive that walks its rect twice must re-home the window
+
+**`gfx_rect_setup` selects the bank once — for the first row of the first
+walk.** `VBROW` then steps the window forward as that walk crosses row 512. A
+primitive that then walks the *same* rect again restarts its pointer at
+`[gfx_roff]`, which is a **bank-0 offset**, while the window is still wherever
+the previous walk ended. Everything the second walk touches lands 512 rows
+away.
+
+Six primitives do this, in two shapes:
+
+| | shape |
+|---|---|
+| `vga_solid_rect`, `gfx_fill_gray_raw`, `gfx_fill_pat_raw` | left edge column, then right edge column, then the interior — **three** walks |
+| `vga_save_vram`, `vga_restore_vram`, the plane-major blit | once per **plane** — four walks |
+
+`vbe_home` puts the window back on the bank `gfx_rowbase_calc` last homed on
+(`[vbe_hbank]`, recorded where that bank is computed), and the `VBHOME` macro
+is what the walkers call between walks. The first walk needs none: it inherits
+the setup's bank, and in all three edge-column routines that walk is
+unconditional. The plane loops take it at the top of the loop, so plane 0 pays
+one compare.
+
+**It is gated on `VID_VBE` and that gate is load-bearing.** With no banked mode
+`[vbe_geom]` is zero, so an unconditional `vbe_bank` here would far-call
+`0000:0000` on every machine that has never seen a VESA BIOS.
+
+**What the field saw**, with the mode switch itself already correct: solid
+light-grey blocks left wherever a window had been dragged — the *interior* of a
+fill landing in the wrong window while its edge columns landed in the right one
+— and the dragged window's own text drawn **twice, 512 rows apart**, which is
+three of four planes being saved from the wrong bank. The staircase shape is
+the drag's successive positions accumulating.
+
+`ico_pass` and `cur_draw` are **not** in this set, and the distinction is the
+rule: they write every plane *inside* the row, so each makes a single walk.
+What matters is not how many planes a primitive touches but how many times it
+returns to `[gfx_roff]`.
+
+#### 39.29.10.3 Re-home the window BEFORE arming the registers
+
+**`VBHOME` can far-call the card's VESA BIOS, so it must never sit between a
+register write and the walk that depends on it.** §39.29.10.2 placed it
+immediately *after* the `out dx, ax` that arms the plane select — `GC4` Read
+Map Select in `vga_save_vram`, `SEQ2` Map Mask in `vga_restore_vram`, `GC8`
+Bit Mask in the three edge-column fills. A BIOS window routine that touches
+the Sequencer or Graphics Controller index ports eats the register just
+programmed, and the walk then reads or writes nothing.
+
+The field reported it as **the display going black on the switch to VBE**.
+
+All eight sites now re-home first and arm second, which is the right order on
+its own terms: **the window is a property of the rect, the registers are a
+property of the walk.** `gfx_blitp`'s `.fpl` already had it this way, which is
+why the plane-major blit was the one shape that did not have to change.
+
+**Why it was the SWITCH and not the boot**, and this is the part worth keeping:
+booting straight into the mode has no window open, so `vga_save_vram` never
+runs and the defect cannot appear. `make vbebox` (§39.29.8.2) boots *into* the
+mode by `SYSTEM.CFG`, so it rendered a correct desktop on the broken build. The
+cards differ too — 86Box's Trident keeps its bank register at `3C4` index
+`0x0E`, where the field machine is a NeoMagic — so a register this one leaves
+alone is not a register that one leaves alone.
+
+**`vbe_bank` also preserves `SI`, `DI`, `ES` and `DS` across the BIOS call**
+now, where it saved only `AX`/`BX`/`CX`/`DX`. The four row loops that reach it
+hold live pointers in exactly those registers: `DI` is a save-under buffer in
+`vga_save_vram` and `SI` the source in `vga_restore_vram`. VBE says
+`WinFuncPtr` preserves what it does not return; eight bytes buys the question
+outright rather than trusting a laptop BIOS to mean it.
+
+#### 39.29.4.1 The fifth table was in the PACKAGE's segment
+
+§39.29.4 swept the kernel for tables indexed by `[vid_kind]` with no bound and
+found four. It missed a fifth, and the reason it missed it is the lesson: **the
+table that `VID_VBE` runs off is not the kernel's.**
+
+`wm_pref_take` reads a window's preferred-size table (`OSAPI_WM_PREFER`,
+§11.100.1) at `kind * 4`. `OS88_PREFER` builds **three** `(w, h)` pairs —
+`VID_VGA`, `VID_HERC`, `VID_CGA`, twelve bytes — and the routine already
+clamped `VID_EGA` to `VID_VGA` with a comment saying why. `VID_VBE` is 4, and
+it was not clamped, so it read `si+16`: **four bytes past the end of a table in
+the package's own image.**
+
+Measured on `build/taskmgr.bin`, whose table is
+`(232,284) (232,284) (464,284)`:
+
+| | |
+|---|---|
+| bytes at `si+16` | `53 56 c6 06` — `push bx / push si / mov byte [...],1` |
+| read as a size | **W = 11491, H = 35073** |
+
+`wm_fit` then clamped 11491 down to the display band, which is what made it
+present as a **full-width title bar with its caption centred on the screen**,
+sitting over the window beside it, while the application's own content was
+drawn where the application expected it. `wm_bar_span` reads `W_X` and `W_W`
+and nothing else, so nothing downstream could have caught it.
+
+Both now take `VID_VGA`'s row, for the same reason EGA does: each is VGA's
+planar path at another size, and a package cannot supply a fourth or fifth pair
+without an ABI break.
+
+**Two more predicates were missed the same way and are fixed here.**
+`cp_thm_colgrey` greyed the Theme page's Color option on the one adapter with
+the most colour, and `vid_dual_ok` would have allowed a two-display desktop in
+a banked mode. A third, `thm`'s depth test in `vga12.inc`, is correct **by
+luck**: `dec ah / cmp ah, 2 / jae` maps `VID_VBE` to 3, which passes. Luck is
+not a reason to leave it unremarked.
+
+#### 39.29.10.4 The carry is only the crossing if the add is the WHOLE step
+
+§39.29.10's design rests on one sentence: *the 16-bit carry out of
+`add di, [vid_stride]` **is** the bank crossing.* That is true, and it is true
+only when **the entire row advance is that one add**. Where a `rep` has already
+moved the pointer, the carry is computed on a different number than the one the
+rule is about.
+
+Three of the four shapes are correct, and the arithmetic says why:
+
+| | advance | carry computed on | correct? |
+|---|---|---|---|
+| the three edge-column fills | `rep` by `bx`, then `add dx` where `dx = stride - bx` | `start + bx + (stride - bx)` = `start + stride` | **yes** |
+| the plane-major blit | `rep` by `n`, then `add bp` where `bp = stride - n` | `start + n + (stride - n)` = `start + stride` | **yes** |
+| `.lcol` / `.rcol` / `cur_draw` / `font_char` | no `rep` before the add | `start + stride` | **yes** |
+| **`vga_save_vram` / `vga_restore_vram`** | `rep` by `bp`, then add the **FULL** stride, then `sub bp` | `start + bp + stride` | **NO** |
+
+The pair adds the whole stride on top of an already-advanced pointer and
+subtracts the span afterwards, so its test fires when
+`start + bp + stride > 65535` while the real crossing is at
+`start + stride > 65535`. **They differ by `bp`** — the window's own bytes per
+row — so the window is banked up to a row early, and which row depends on the
+window's `x` and width. It is the save-under pair, which is every window drag
+and every menu.
+
+The fix is free: **subtract back to the row's own base before the step**, so
+the add is the whole step and the rule holds again. No instruction was added;
+two were reordered.
+
+**The general rule, which is the thing to carry forward:** a row walk may
+advance the pointer in as many pieces as it likes, but the piece that carries
+must be the one that completes `start + stride`. Adding the full stride to a
+partially-advanced pointer and correcting afterwards is the one arrangement
+that breaks it, and it reads as correct because the pointer ends up right —
+only the FLAG is wrong.
+
+#### 39.29.10.5 The per-row test is gone: cut the rect at the boundary instead
+
+**The per-row bank test was measured and it was unaffordable.** `VBROW`'s
+`jnc` past the bank call is **TAKEN 511 times out of 512** — it is the
+no-crossing case that jumps — and a taken Jcc on an 8088 is 16 clocks *plus a
+prefetch-queue flush* against the not-taken 4. §39.29.3 estimated nine clocks
+a row by calling it a *not-taken* `jnc`; the real figure is **22 cycles per row
+advance executed**, and `vga_solid_rect` walks up to three of its arms over
+every row, so a 64×64 fill paid 4,135 cycles of it. **11 to 25% on every rect
+primitive in the system** (PERFORMANCE.md Set 161), paid by every machine
+including the ones with no VESA card at all.
+
+So the boundary is cut **once per primitive** instead of tested once per row.
+`vbe_cut_run` splits a rect that straddles a bank into one rect per bank and
+runs the body once per piece, each piece a whole rect in its own right:
+`gfx_rect_setup`'s existing `gfx_rowbase` call then selects that piece's bank,
+which is also its *only* bank, so no walker can cross a window inside its own
+loop.
+
+**IT IS `gfx_disp_run`'s SHAPE WITH A DIFFERENT LINE** (§39.14.7), and that is
+not a coincidence: a display seam and a bank boundary are the same problem — a
+rect whose halves need different state — so the same answer serves. The
+difference is that a seam belongs to the DESKTOP and a bank to the
+FRAMEBUFFER, which is why this hook sits one level lower, below `GFXDISP`,
+where the coordinates are already the display's own.
+
+| | |
+|---|---|
+| what a mode 12h machine pays | `cmp dx, [vbe_cutrow]` and a **not-taken** `jae`, once per primitive — about 17 clocks against `gfx_fill`'s 2,405-cycle floor |
+| what it pays per row | **nothing** |
+| `[vbe_cutrow]` | the first row of bank 1, or **0xFFFF** on every mode but 0104h. One unsigned compare therefore answers *"this surface is not banked"* and *"this rect does not straddle"* at once, with no kind test in it. Published by `vid_apply`, the one funnel every mode application goes through |
+| resident cost | `.text` **+104** with §39.29.10.6's `gfx_blitp` test (+96 without), `.bss` +0, `.cold` +0, no rung crossed — nine `jnc`+`call` pairs and six `vbe_home` calls removed, against three arms, three tests, `vbe_cut_run` and `vid_apply`'s publish |
+| what it BOUGHT, measured | every rect primitive **10 to 19% faster than the kernel that shipped** — `GFX_FILL 64x64` -19.45%, `GFX_VLINE 128px` -19.42%, `GFX_XOR_RECT 256x128` -16.40%, `GFX_FRAME 64x64` -15.21% (PERFORMANCE.md Set 162). Four rows beat even the `NOVBEROW=1` no-test floor, because `VBHOME` had no knob and so was paid by BOTH of Set 161's arms. A small rect is 1.6-2.7% above that floor and break-even against the shipped kernel: six bytes at the 8088's fetch floor, once |
+
+**The three hooks are on `vga_solid_rect`, `gfx_fill_gray_raw` and
+`gfx_fill_pat_raw`, and the first one's placement is the load-bearing
+choice.** `vga_solid_rect` is where all three routes into the shared body
+meet: `gfx_fill_raw` falls into it, `gfx_xor_fill_raw` arrives through
+`vga_xor_fill_vram`, and **`menu.inc` enters `vga_xor_fill_vram` directly**.
+A hook on the four `_raw` entries instead would have left that third route
+uncut while the body's row advances had already given up their test — the
+exact shape of a defect that appears only when a menu is open.
+
+Both of the others sit **below** the 1bpp jump, so a mono machine pays
+nothing at all.
+
+**`VBSTEP`/`VBSTEPR` are the row advance inside a cut rect** — a bare `add`,
+named so that it cannot quietly become one. `grep VBSTEP` is the list of
+everything the cut is load-bearing for, and a body that loses its `VBCUT` must
+change them back to `VBROW` in the same edit.
+
+**The re-entry label must be a LOCAL label**, and this cost a build. The first
+version had the macro emit `<name>_vbody:` — an ordinary global — in the
+middle of `vga_solid_rect`, which reset NASM's previous-non-local-label: every
+`.arm`, `.lcol`, `.rcol` and `.done` in the routine silently became
+`<name>_vbody.…`, and the build failed with `symbol vga_solid_rect.arm not
+defined` followed by thirty `label changed during code generation` errors
+naming `kernel_text_end` and the blob. **Not one of them points at the macro.**
+
+#### 39.29.10.6 What the cut does NOT cover, and why
+
+A piece is handed to the body as **a whole rect**, so a body needs no notion of
+being a half: it re-enters at its own top, clips, sets up and draws. That is
+what makes the hook three lines to apply — and it is also exactly what bounds
+where it can be applied. **A primitive whose output position depends on more
+than the rect cannot be cut this way**, because the second piece would restart
+that other position from the beginning:
+
+| | what else positions it | still on `VBROW` |
+|---|---|---|
+| `vga_save_vram` / `vga_restore_vram` | the save-under BUFFER offset, which is cumulative across the rect | yes |
+| `font_char` | 8 rows, and the glyph row index | yes |
+| `ico_pass` | up to 32 rows, and the icon row index | yes |
+| `cur_draw` | the cursor's own mask row — and it runs in the mouse ISR | yes |
+
+Their measured share is smaller by the same arithmetic that made the rect
+primitives' large: a fixed 8, 12 or 32-row shape pays 22 cycles a row over a
+few rows (`FONT_CHAR` measured **+3.3%**), where a rect pays it over up to 128
+rows times three walks.
+
+**`gfx_blitp` WAS on that list at +10.3% and is not any more**, and it took a
+different answer from the three rect primitives. Its per-row test was only
+ever in the **plane-major fast path**, whose own account says it holds the
+block's first framebuffer byte and steps by `[vid_stride]` *"every planar
+surface being ONE bank"* — so the fix is to make that true again rather than
+to patch around it: a block that would cross a boundary is sent to the
+general `.row` path, which calls `gfx_rowbase` for every row and therefore
+homes the window for every row. Two compares and an add, once per blit, both
+falling through on every mode but 0104h. `GFX_BLITP 64x64` went **13,770 →
+12,379 µs, -10.1%, and 0.9% BELOW the `NOVBEROW=1` no-test floor** —
+`VBHOME`'s four plane-loop calls again. This is what §39.29.10 always
+intended for it, and what it already does for `gfx_scroll`.
+
+**What that costs the machine that HAS the mode is named rather than hidden**:
+a block straddling row 512 draws at the general path's ~2,600 cycles a row
+instead of the fast path's ~125, and so does any block wholly in bank 1, the
+test being two compares against the one boundary rather than a division into
+banks. On a mode 12h machine it costs nothing at all, which is the trade this
+pass was taken for.
+
+**AND ITS ROUTING IS ONLY HALF GATED, which is worth stating because the
+obvious gate does not work.** The mode 12h direction is proved by
+MEASUREMENT: the fast path is 12,379 µs where the general path would be
+~35,000, so the compares demonstrably fall through. The *other* direction — a
+crossing block really reaching `.row` — is not gated here.
+`tests/vbeident.py` grew a Paint frame to do it and the mutation refused the
+claim: Paint opens with a packed canvas, asks §5.4.3.2's probe during a
+repaint, converts only if told yes, and blits planar from the repaint after
+that, so one open and one settle never reach the routine. Forcing it would
+need the conversion and a second repaint driven, which is
+`tests/paintpack.py`'s territory, and the direction it would prove only
+matters in a mode no emulator here can enter (§39.29.8).
+
+`VBHOME` survives for exactly those four: a primitive that walks its rect once
+per plane restarts at a bank-0 offset, which is §39.29.10.2's case and is
+untouched here. The six `VBHOME` calls inside the three CUT bodies are gone,
+because within one piece the window never moves.
+
+#### 39.29.8.2 `make vbebox` — 86Box with a display, and the picture
+
+**86Box is the only emulator in this tree that can enter `0104h` at all**, and
+until now it could only be started, waited on, and read off a disk sector
+(§39.29.8). That is enough for `tests/vbeset`, which writes text, and no use at
+all for a DESKTOP — so every VBE rendering defect was found by photographing a
+laptop. **Five field round trips for one feature.**
+
+`QT_QPA_PLATFORM=offscreen` is 86Box's only headless mode and it has no screen
+to read. An `x11grab` of this host's root is black, because the session is
+Wayland and XWayland does not composite into it. **Neither of those is a
+statement about X**: `tools/os88box.py` gives 86Box an X server *of its own* —
+`Xvfb` on a private display — and then the screen is reachable.
+
+Two ways, and both are used:
+
+- **86Box's own screenshot** (`Ctrl+F11`, sent with `xdotool`), which writes a
+  PNG of the **emulated framebuffer** into `vm/<name>/screenshots/`. That is
+  the one to want: the guest's own pixels, no window chrome, no scaling.
+- an `xwd` of the 86Box window as the fallback, so a run where the hotkey does
+  not land says something is wrong rather than nothing.
+
+**And it makes INPUT possible for the first time.** `xdotool` types and clicks
+into a real X window, so a machine that could only be watched can now be
+driven.
+
+**The disk is what selects the mode, because 86Box takes no scripted input at
+the moment the choice is made.** `build/vbeos.img` is `ethertest`'s shape one
+setting along: a `SYSTEM.CFG` whose `VM` record already names `VID_VBE`, so the
+machine reaches a 1024×768 desktop with no Control Panel click. A machine with
+no VESA BIOS refuses it and boots VGA, which is `drv_boot`'s own rule.
+
+**What it does and does not discriminate.** It proved §39.29.10.2's fix renders
+a correct 1024×768 desktop, and it is the reason that stopped being a guess.
+It did **not** reproduce §39.29.10.3's black screen, and the two reasons are
+worth keeping: this boots *into* the mode, where no window exists and so
+`vga_save_vram` never runs; and 86Box's card is a **Trident**, whose bank
+register is at `3C4` index `0x0E`, while the field machine is a **NeoMagic**.
+A gate that passes here is necessary and not sufficient — the Satellite is
+still the authority on anything touching the card's own BIOS.
+
+#### 39.29.11 Display 0's context was never recaptured on a mode switch
+
+**The ghost had nothing to do with banking.** `vid_ctx` holds a per-display
+copy of the nine live geometry words (§39.12), and `vid_ctx_capture` is the
+only thing that refreshes it. It is called from exactly one place:
+`vid_disp_init`'s `.single` arm. On a machine with a **single adapter**
+`vid_dual_ok` refuses, `[vid_ndisp]` is 1, and the routine returns at `.jout`
+**before reaching that arm** — so display 0's record kept whatever geometry was
+captured at boot, for the life of the machine.
+
+`wm_dmg_bands` asks `vid_ctx_rect` for each display's rect and clamps the
+damage band to it. With the context stuck at 640×480 every damage band was
+clamped to **row 479**.
+
+**Why it survived every adapter this project already had:** a stale context is
+only harmful when it is *too small*. 640×480 → 640×200 leaves a context too
+LARGE, which clamps nothing. **VBE 1024×768 is the first mode in this OS wider
+and taller than the boot mode.**
+
+That single number explains every observation, and the bisect is what produced
+it (`VBEDIAG=1`, §39.29.12):
+
+| case | predicted by a 479 clamp | observed |
+|---|---|---|
+| VGA 640×480 | correct | clean |
+| VBE, window moved 290→490 | erases to 479, ~10 rows left | a ~10-row strip |
+| VBE, window moved 680→742 | nothing erased | the whole strip |
+| VBE, moved across row 512 (470→670) | only 470–479 erased | the whole window |
+| `wm_paint_all` (theme swap, screen saver) | does not use the band | clears it |
+| the same rect refilled **unclipped** | does not use the band | clears it |
+
+**The routine documents the hazard two paragraphs above the defect.** The
+comment at the refusal explains that returning early would leave "display 0's
+`vid_ctx` describing the card we have just switched away from" — and fixes it
+for the `ndisp = 2` case, stopping one machine short of the commonest one.
+`.jout` is only "unchanged" on the **boot** path; after a `vid_switch`,
+`vid_apply` has already run and the live geometry has moved under it.
+
+The fix is one call on the single-display path. **It is not a VBE fix**: any
+future mode larger than the boot mode would have met the same clamp.
+
+#### 39.29.12 `VBEDIAG=1` — move a window across the boundary with no mouse
+
+`make VBEDIAG=1`. Fourteen seconds after the desktop settles the kernel opens a
+window of its own, drags it **down** across row 512, drags it back **up**, and
+stops. Nothing is clicked and nothing is typed.
+
+**It is a knob for this tree's own recorded reason**, one device along from
+`STKDIAG` and `BOOTMARK`: the operator's click lands inside the thing being
+measured, or cannot be sent at all. **86Box takes no scripted input** — no QMP,
+no socket — and its pointer capture **warps the cursor back to the centre after
+every motion event**, forwarding the warp's own delta, so an XTEST relative
+move and the warp cancel exactly. `tools/os88box.py` measured it: the host
+pointer reads the same coordinate after every move, and the guest arrow stays
+in a ~70px box around where it started (§39.29.8.2).
+
+**What it is aimed at, and why the aim is narrow.** The field reports a window
+that MOVES leaving its old image behind, and two observations bound it:
+
+| | clears the ghost? |
+|---|---|
+| a **full** repaint — swapping themes, the screen saver | **yes** |
+| a window **drag**, and the refit a mode switch runs | **no** |
+
+Those are two different repaints. `wm_paint_all` redraws the whole desktop;
+`ui_drag`'s commit calls `wm_dmg_vacate` → `wm_dmg_union` → `wm_paint_dmg`,
+which redraws only the damage and reaches the dither through an **armed clip
+region** (`wm_dmg_gray`). So the suspect is the damage path, not the renderer —
+and the knob drives **exactly those three calls in that order**, with the
+window's own rect. A reproduction built on `wm_paint_all` would prove nothing,
+because that is the arm already known to work.
+
+**It runs on the field machine too**, and that is not incidental: 86Box's
+Trident has shown a clean 1024×768 desktop through every build in which the
+Satellite's NeoMagic was broken. The same floppy asks the same question of the
+card that actually shows the defect.
+
+It draws no numbers. Where the window **is**, and whether a second copy of it
+is left where it **was**, is the whole reading.
+
+#### 39.29.6.1 The refusal is gated, and QEMU is what gates it
+
+`tests/vberefuse.py`, **3 checks**, and it is the only VBE coverage that runs
+anywhere but the Satellite.
+
+**QEMU is the machine this row wants, and that is the point rather than a
+limitation.** Its Bochs BIOS answers `AX=4F01h` for `0104h` and lists the mode
+as present; the window it reports at `A000` is not CPU-addressable. So QEMU is
+a **BIOS that lies**, which is exactly the case §39.29.6 exists for, and it is
+free to anyone with the repo.
+
+1 REFUSED `VID_A_VBE` is clear in `[vid_avail]` after boot · 2 MODE 12h the
+desktop is still `VID_VGA` at 640×480, which is what "puts mode 12h again" has
+to leave behind · 3 ALIVE the BIOS tick counter moved between two reads.
+
+**Check 3 is liveness and it is not decoration**: 1 and 2 both assert
+zero-ish values, and a kernel that died inside the probe — which sets a mode,
+writes through a window and sets another — would give the same two answers.
+Its first version counted visible windows and asserted at least one, which
+reported 0 on a perfectly healthy machine: **a bare desktop has no windows**,
+the Disk window opening on a double-click.
+
+**Mutation**: `clc` after `VBV_PROVE`, so the BIOS is trusted and the proof
+skipped. Check 1 alone fails, with `[vid_avail] = 0x15`. Checks 2 and 3 still
+pass, correctly — the mode is advertised, not entered.
+
+**Nothing to click.** The probe runs at boot (§39.29.5's third placement), so
+the row reads a decision already taken.
+
+#### 39.29.9 Acceptance
+
+- Mode 12h output must be **byte-identical** before and after, since one body
+  now serves both. This is the classic failure of a change like this and it is
+  what catches a `jnc` written at twelve sites instead of thirteen.
+  **MET** — `tests/vbeident.py --ref`, three settled frames at 307,200 pixels
+  each, 0 differing; and the gate is proved sensitive by a one-bit poke of
+  `gfx_lmtab[0]` moving 97 and 117 of them.
+- The banking gate is **mutation-tested**: force the window to the wrong bank
+  and the gate must fail. A banking test that passes while banking is broken is
+  the defect class §39.28.2.2 already records against this very feature.
+  **MET, both halves.** The CUT: skipping one row at the boundary inside
+  `vbe_cut_run` reddens `tests/vbeident.py --cutrow 200` with a bounding box
+  of exactly the poked row. The BANK SELECT: §39.29.9.2, on 86Box, because
+  mode 12h has no window to move and so nothing for that mutation to act on.
+- **The banked mode itself is now exercised** (§39.29.9.1), which it was not
+  when this list was written.
+- **QEMU cannot test any of this.** Its `0104h` window is not CPU-addressable
+  at `A000` — `tests/vbeset`'s raw probe reads `00 00 00 00` there against
+  `A5 A5 A5 A5` in mode 12h — exactly as its own attribute word (`003B`, bit 5
+  set) advertises. Every stage is verified on the Satellite 4025CDT
+  (docs/FIELD-MACHINES.md) and photographed.
+##### 39.29.9.1 The cut, in the mode it exists for: 86Box, 1024x768
+
+`make vbebox` and `make VBEDIAG=1 build/vbeos.img` + `tools/os88box.py`, run
+2026-10-18 against the kernel §39.29.10.5 landed in. **86Box's Trident is the
+only card in this tree that enters `0104h`**, so until this the straddle cut
+had only ever been exercised by poking `[vbe_cutrow]` on mode 12h — a test
+that proves the cut is pixel-neutral and says nothing about the bank.
+
+Three readings, and the third is the one that carries:
+
+1. **A correct 1024x768 desktop.** Chrome at the TOP, the floppy icon in its
+   corner, and the dither unbroken through row 512. The desktop fill spans
+   rows 0..767, so it is a rect the cut SPLITS: this picture is the cut's
+   output in the banked mode. It is also the negative of §39.29.10's own
+   failure — *"the whole chrome appeared 512 rows down the panel"* — which is
+   what a bank left mapped from the previous primitive looks like.
+2. **A window drawn WHOLE across the boundary.** `VBEDIAG=1`'s window lands at
+   470..670 by construction (§39.29.12), and the photograph shows title bar,
+   frame, content, shadow and both corner boxes drawn once, in one piece, with
+   no tear at 512 and no half of it 512 rows away.
+3. **The screen after the round trip is BYTE-IDENTICAL to the screen before
+   it.** The window is dragged down across the boundary and back up; the
+   framebuffer PNG before the drag and the one after it have the same
+   SHA-256. No ghost at the vacated rect — §39.29.11's defect staying fixed —
+   and no residue anywhere else, at whole-screen resolution.
+
+**What it still does not answer** is §39.29.8.2's standing limit, unchanged:
+86Box's card is a **Trident** and the field machine a **NeoMagic**, whose bank
+register is elsewhere, so anything touching the card's own BIOS is the
+Satellite's to confirm. This boots INTO the mode, so `vga_save_vram` — which
+keeps its per-row test (§39.29.10.6) — runs only for the menu drop and the
+window drag, not for a mode switch with windows already up.
+
+##### 39.29.9.2 ...and the bank select, mutated: the chrome 512 rows down
+
+**The reading in §39.29.9.1 would be worth nothing if the window never had to
+move.** A card that mapped all 98,304 bytes at `A000` — or an emulator that
+modelled one — would render that desktop correctly with the bank select
+doing nothing at all, and every VBE figure taken here would be vacuous. That
+is §39.28.2.2's defect class and it is the reason this list asks for the
+mutation rather than the picture.
+
+So `vbe_bank` was broken on purpose, in the one place that separates the two:
+
+```nasm
+    mov [cs:vbe_cbank], al
+    xor al, 1                   ; the CACHE records the bank we meant; the
+                                ; WINDOW is set to the other one
+```
+
+The cache keeps the value the kernel believes, so every early-out still
+behaves and nothing refuses; only the hardware window is wrong. **The
+desktop comes up with the menu bar, the clock and the floppy icon 512 rows
+down the panel, a black band where the real window was never written, and
+dither above and below** — which is, to the pixel, the failure §39.29.10
+already records from the Satellite in its own words: *"the whole chrome
+appeared 512 rows down the panel"*.
+
+Reverting and re-running reproduces §39.29.9.1's picture with **0 differing
+pixels** outside the clock's field, so the three runs are an A/B/A and not
+two photographs that happen to differ.
+
+It is a ONE-OFF edit and deliberately not a knob: the arm it would keep
+assembling is a kernel that cannot draw, and the only machines that can run
+it are 86Box and the Satellite. The two lines above are the whole of it, kept
+here so the next person repeats the experiment instead of re-deriving it.
+
+### 39.30 Force Color — a VGA BIOS that decided "monochrome" at power-on (`kern_big` only)
 
 **A VGA BIOS decides colour or monochrome ONCE, at POST, and never asks
 again.** It drives a fixed level onto the red and blue outputs and reads the
@@ -95126,7 +96506,7 @@ the wrong settings. Every value now travels with a key that says what it is.
         db  data[len]
 ```
 
-`VC` is §39.28's Force Color, one byte at ver 1 on `kern_big`, applied by
+`VC` is §39.30's Force Color, one byte at ver 1 on `kern_big`, applied by
 the boot overlay and read by nothing resident. `FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
 drives' overrides and the read bound, one record so the page costs one key
 entry and one header. `DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
@@ -112177,11 +113557,16 @@ bytes shorter for a region and 4 for a worker, clobbering AX, the flags and
 matches `OS88_REGION_MOVABLE(_NOKEEP)` and `OS88_WORKER_RESTARTABLE(_NOKEEP)`
 alike - with the base names alone, `\b` after them misses the suffixed
 forms, since `_` is a word character, and the break-it-on-purpose run reads
-eight failures across six packages.
+eight failures across six packages. A hand-rolled call counts only in the
+REGION's shape, `DX = CS` with a proc in `AX`: the same slot declares every
+data claim, and a bare `call OSAPI_MEM_MOVABLE` once read SHEET's five claim
+declarations as the region it had stopped declaring.
 
 **Two shapes genuinely cannot take the bare form.** A package that has
 **stamped its own segment** somewhere the kernel does not know about —
-`apps/scribe`, into the vector table of a hand-rolled pre-parts `.ovl` module —
+`apps/scribe`, into the vector table of a hand-rolled pre-parts `.ovl` module,
+and `apps/sheet` today, whose `ch_ovbind` does the same to `CHART.OVL` and which
+is exempt in `tests/movable.txt` rather than declared (§82.16.9) —
 and a **re-homed** program (§20.12.10), whose loader named its assets by
 absolute segment and whose assets are *inside its own carve*, so they move with
 it. For those a bare `ret` is **silent corruption** rather than a missed
@@ -133026,6 +134411,17 @@ bar, the reference box and formula bar above the grid, the "Ready" status line
 below it, and the dialogs, are meant to be that program rather than something
 like it.
 
+**SHEET IS AT VERSION 2.1**, and the number is the package's own: `SH_VER` in
+`sheet.asm`, on the About card's third line, which was empty. It is **not**
+the system's — os8088's own About box carries `os8088 1.0` (§14.2), a
+different number with a different meaning, and `tools/os88sym.py` searches
+the kernel image for that exact string, so the two must not be confused. The
+number is the roadmap's rather than a count of releases: the stages that
+carried this package to an Excel 2.1d imitation are the ones numbered below —
+1.x the grid and the file formats, 2.0 the macro language, 3.0 the user
+interface, 4.x the arithmetic. It is named once so the card and this section
+cannot drift.
+
 **The value model is an IEEE-754 double**, computed in software by
 `apps/os88fp.inc` (§84). A cell holds 3.5, `=1/3` is 0.3333333333, and
 `AVERAGE(1,2)` is 1.5. It was a signed 16-bit integer until stage 4.0, which is
@@ -133075,8 +134471,10 @@ default, and clearing the last bit removes the record again.
 
 ### 81.2 Seven claims, and what each is for
 
-`MEM_OWNER_MAX` is 8 (§29 and `kernel/memory.inc`) and Sheet holds **seven** —
-its own region plus six:
+`MEM_OWNER_MAX` is 8 (§29 and `kernel/memory.inc`) and Sheet holds **eight —
+all of them.** Its own region, the six below, and `CHART.OVL`'s claim, which
+§82.16 added after this section was written and which this table did not
+count:
 
 | claim | size | holds |
 |---|---|---|
@@ -133086,6 +134484,18 @@ its own region plus six:
 | `sh_bordseg`  | 4KB  | the border table (5-byte records) |
 | `sh_noteseg`  | 4KB  | the note table (6-byte records) |
 | `sh_chartseg` | 19KB | the live chart window's offscreen canvas (§82) |
+| `ch_ovseg`    | 8KB  | `CHART.OVL`, claimed at start-up with the rest (§82.16.3) |
+
+**So SHEET is at the per-owner ceiling and cannot take another claim.** This is
+still true after §82.16.9: that move bought image, not claims, and it is now
+the ONLY ceiling SHEET is against — 8,121 bytes spare, 0 of 8 claims spare. It
+binds on a different resource from the byte budget and is reached the same
+way: one at a time, each defensible. A
+feature that wants a buffer of its own — the matrix family's working array is
+the obvious one — has to take it out of an existing claim or displace one.
+`ch_ovneed`'s CF is deliberately not read, so a machine that cannot spare the
+8KB still runs the spreadsheet with seven; that is the only configuration in
+which a ninth is available, and it is the one with no charts.
 
 **The text arena is append-only and never compacted.** Re-editing a formula
 appends a new copy and orphans the old one; notes share the arena and behave
@@ -133131,6 +134541,22 @@ of those recursion points, cell depth included, against one shared budget
 folds); past it the parse refuses with `#VALUE!` instead of running SP off the
 stack's floor into `.lowbss`, the same refusal shape too-deep cell recursion
 already has.
+
+**A level is not a size, so the stack is tested in BYTES first.** Measured on
+a 5150 (task 0's water, 0xCC fill): a `(` is 12 bytes, a resident call 55, a
+CHART.OVL door call (`LEN`, `TEXT`, ...) 72, a cold cell 51 to 90, and a
+pending operator up to 44 more that charges nothing - so `=SUM(B2)` five
+cells deep, ten units of twelve, ran task 0 into its canary and
+`sch_stkdie`. `sh_eval_cell` keeps `[sh_pstk0]`, SP at the SHALLOWEST fresh
+evaluation (118 bytes below the top on the paint path), and both it and
+`sh_pnest_enter` refuse - a nested cell as too deep, a recursion point with
+`#VALUE!` - once SP is more than `SH_PSTK_MAX` = 206 bytes below that: a
+check at 324, plus the deepest one-function tail after it (`PROPER`, 132),
+plus IRQ0's 48 on whatever stack it lands, is the 512. It is §26.10.3's
+`LNK_SPMIN` idea inside a package, which cannot name `STK0_BOT`. Three
+nested text functions fit and a fourth refuses; a cold chain of plain
+references refuses at its sixth cell, a chain of `SUM`s at its fourth.
+`SH_PNEST_MAX` stays as the grammar's own cap.
 
 **A range folds by walking the RECORD ARRAY, not the rectangle.** The array
 is sorted by (packed row, col) — §81.1 — so `sh_foldrange` binary-searches the
@@ -133191,7 +134617,7 @@ permutation: it stages an `origidx[]` and rewrites each item by its own shift.
 `+5` carries bold, underline, alignment and number format in one byte
 (`SH_FMT_*`). **Its numeric value IS the BIFF XF index** that the writer emits,
 which is why there are 64 of them — six used bits (the reader's
-`SH_BIFF_XF_CAP` is 128, the border XFs of §81.22.3 sitting after them). **The two spare bits
+`SH_BIFF_XF_CAP` is 128, the border XFs a file Excel wrote sitting after them; this fork writes none of its own (§81.117)). **The two spare bits
 are not spare.** Putting anything else there would silently change every XF in
 every file this app writes. The value-model tag that a later stage needs
 therefore goes in a **new byte**, never in bits 6-7.
@@ -133219,9 +134645,11 @@ inserting a menu — as Formula was inserted at index 2 — a contained change
 rather than a search across the file.
 
 **Exit is not in Sheet's File menu**: the OS menu owns closing a package.
-**Print... is a stub** that says so in the status bar, because there is no
-print backend anywhere in this OS; an item that opened a dialog which could not
-print would be worse than one that is honest.
+**There is no Print... item** (decided 2026-09-04). It used to be one that
+said "Printing is not supported." in the status bar. There is no print backend
+anywhere in this OS, so the entry is absent rather than present-and-refusing;
+SCRIBE's four print items went the same way at the same time. WORD's are left
+as they are.
 
 ### 81.6 Dialogs — and the window slot they must free
 
@@ -133310,7 +134738,9 @@ dropping cells.
 
 Five commands — `GOTO`, `RETURN`, `SET.VALUE`, `SELECT`, `ALERT` — read from a
 macro sheet and executed with a step ceiling (`SH_MACRO_MAXSTEPS` = 5000) so a
-runaway macro ends rather than hangs the machine. `ALERT` uses `os88ui_ask`
+runaway macro ends rather than hangs the machine. **§81.63 replaced this**:
+twenty macro functions that act when evaluated, loops, INPUT, and a Run
+dialog. `ALERT` uses `os88ui_ask`
 from `apps/os88ui.inc`, a per-package include: there is deliberately **no
 kernel alert primitive**, and §75.3 states why a windowed dialog with buttons
 does not belong in a budget the whole machine pays for.
@@ -133531,6 +134961,249 @@ Two bugs, both of which reported **"Loaded"** over an empty grid:
    end became zero and the record walk finished before its first record — while
    still reporting success, because nothing had failed.
 
+
+#### 81.10.8 Defined names survive a round trip, in both formats
+
+**They did not, in any format, and the file was never the problem.**
+`sh_wr_names` has written SYLK `NN` records since stage 4.6 so that CHART
+could find a named range (§82.15). Nothing ever read one back: `sh_parseslk`
+handled `C` and `F` records and no others, and `sh_nnames` was not among the
+counters a load reset. A name therefore survived being saved, did not survive
+being loaded, and quietly outlived the document it belonged to — the next
+sheet opened inherited the last one's names, still pointing at cells that were
+no longer there.
+
+Three things closed it:
+
+**BIFF gets a `DEFINEDNAME` record, and its opcode is `0218H`.** Not `0018H`.
+`0018H` is BIFF2's number, and BIFF5 and BIFF8 took it back; BIFF3 and BIFF4 —
+the two versions this app writes — use `0218H` (excelfileformat 5.33). This is
+the same shape of trap as `FONT` (§81.10.6) and the newer one to fall into,
+because nearly all prose about "the BIFF NAME record" is written from BIFF8.
+Getting it wrong produces a file no reader complains about: an unknown opcode
+is skipped by its length and the names are simply absent. `docs/BIFF-NOTES.md`
+tabulates the body.
+
+The token array is one **`tAreaR` (25H)** and a six-byte cell-range address,
+so `sz` is always 7. `tAreaR` and not `tAreaN`: excelfileformat section 3.9.11
+says a defined name in BIFF2-BIFF4 uses `tAreaN`, the *relative* form, but
+*"if all components of the cell range address are absolute, a tArea token is
+used instead"* — and a name here is always absolute, the same rule
+`sh_wr_names` states for SYLK. Reference class and not the value class 45H the
+cell formulas use: the name **is** the range, not a value read out of one.
+
+Where it goes in the stream is **not documented for BIFF3/4** —
+excelfileformat's sections 4.2.3 and 4.10.1 both read `2do`, the same gap
+§81.10.2 hit over the function index table. It follows the BIFF5 worksheet
+stream that document does give: the link table after the globals, before the
+cell records. In the §81.10.5 workbook the records go in the **globals**
+substream, because a name here is instance-wide and belongs to no one sheet.
+
+**SYLK gets the reader it was missing.** `sh_parsenrec` takes the fields in
+any order, as the `C` record's parser does, because another program's SYLK
+writer is not obliged to emit them in ours. `NN` is the one record type in
+this format whose name is *two* letters, so its `;` is at offset 2 — the
+one-letter test above it is exactly why these records were written for a
+release and never read. **Both corners are checked against the grid** before
+`sh_name_def`: a near corner past it would reach formulas and Go To as a row
+that packs into another sheet's key.
+
+**A load resets the table.** `sh_nnames` joins `sh_ncells`, `sh_txtlen`,
+`sh_nbord` and `sh_nnote` in all three readers and in File > New. DIF carries
+no names at all, so a DIF load leaves none — which is still a *replacement*,
+not an inheritance.
+
+Corners are **normalised on the way out** and range-checked on the way in. The
+table stores what the dialog gave it, because `sh_foldrange` normalises when it
+walks; a file has no walker, and BIFF's first/last are not "wherever you
+dragged from". Coming back, a name longer than `SH_NAME_MAX` or a rectangle
+outside the grid is **dropped rather than clipped** — a clipped name silently
+binds different data the next time it is looked up.
+
+Verified by writing the same in-memory sheet to both formats and decoding both
+on the host: `NN;NSALES;ER1C1:R6C1` and `0218H … 25 00 00 05 00 00 00`, which
+are the same A1:A6 in each format's own convention. Then `=SUM(SALES)` = 145
+after loading each file back, and `#NAME?` after loading a file with no names
+— which is what proves the first two were reading the file rather than
+remembering.
+
+#### 81.10.9 Six function numbers were wrong, and nothing could see it
+
+`sh_rpn_fid` is copied by hand from section 3.11 of the file-format document, and six
+of its entries were not what that table says: **UPPER and LOWER were each other's**
+(113 and 112), **INDEX was 65** — DATE's number; it is 29 — **PMT was 43**, which
+is DMIN, and **RATE and MIRR had slid one place** onto PMT's 59 and RATE's 60
+(they are 60 and 61). Every one is the failure this section's opening warns
+about: not a broken file, a file Excel opens happily and computes *something
+else* from, silently. `=PMT(…)` from SHEET reached Excel as a database minimum.
+
+**Invisible from inside, by construction.** SHEET wrote function numbers and
+never read one back, so no round trip through SHEET could disagree with it; the
+host library read FORMULA records for their cached result and skipped the
+tokens exactly as SHEET did. The error surfaced only when the table was checked
+against the document mechanically, which was done because the formula decoder
+(§81.10.10) needed the table to be right in the *other* direction — decoding
+Excel's PMT through it would have produced RATE.
+
+**The guard is the second reader.** `tools/os88sheetfmt.py` now carries
+`BIFF_FUNCS`, all 224 BIFF2–4 functions generated from revision 1.42's tables
+(footnote digits the PDF glues to names, `TRUNC11`, stripped by hand — `LOG10`
+and `ATAN2` really end in digits), and its `--selfcheck` — the fast-tier
+`sheetfmtlib` row, so every `make` — holds `sh_functab`/`sh_rpn_fid`/`sh_rpn_fvar`
+to it. Mutation-tested: UPPER put back to 112 fails the build naming LOWER.
+
+One entry it tolerates by name, not silence: `FIXED` is 2/2 in BIFF3 and 2–3
+from BIFF4, and SHEET's single table writes it as `tFuncVar` — right for a
+workbook, a variable-count token for a fixed function in a BIFF3 file.
+
+The same library now decodes a FORMULA record's tokens back to text
+(`decode_rpn`), which is §81.10.10's reference implementation, and reads
+`KODAK.BIF`'s ten formulas — written by SHEET in the emulator — back as
+`=ROUND(D2/B2*100,1)`, `=SUM(B2:B4)` and the rest.
+
+#### 81.10.10 Formulas come back as formulas
+
+**Until this, a Save in Normal format and a reopen turned every formula into a
+number.** The writer has emitted real token arrays since §81.10.2; the reader
+took each FORMULA record's cached result and stepped over the tokens, on the
+stated grounds that decoding them meant guessing at function numbers from a
+section marked *2do*. That was true of the document it was written against and
+not of revision 1.42, which the writer had been using the whole time.
+
+`sh_biff_dcrpn` turns the token array back into formula text, and the reader
+hands it to `sh_setformula` exactly as the SYLK reader does with a `;E` field.
+It follows `tools/os88sheetfmt.py`'s `decode_rpn` token for token, and its
+policy is the whole design: **anything it cannot read, it refuses, and the cell
+keeps the cached value** — which is what the reader did with every formula
+before, so an unknown token costs a formula its liveness and never its number.
+
+| reads | as |
+|---|---|
+| `+ - * / ^ &`, the six comparisons, unary minus, `tParen` | themselves |
+| unary plus | nothing — it is the identity |
+| `tInt`, `tNum` | decimal; fifteen significant digits for a double, which is what Excel shows and enough to give back any constant a person typed |
+| `tRef`, `tArea` | `A1`, `$A$1`, `A1:B2` — bit 15 of the row word set means the row is relative, bit 14 the column (section 3.3.3 of the document), so `$` goes where a bit is *clear* |
+| `tStr` | quoted, a quote inside doubled |
+| `tBool` | `TRUE()` / `FALSE()` — they are functions in SHEET |
+| `tErr` | the error's name, through `sh_biff_b2e` and `sh_errname` |
+| `tFunc`, `tFuncVar` | `NAME(a,b)` — the index looked up in `sh_rpn_fid`, the writer's own table, so a disagreement is one table wrong, and §81.10.9's check holds it to the document |
+| `tAttr` volatile, IF, skip, space | nothing: control tokens with no text |
+| `tAttrSum` | `SUM(x)` |
+
+**Refused**: `tPercent` (SHEET's parser has no `%`), names, missing arguments,
+`tAttrChoose` (the document says its jump table has *nc* entries and
+Microsoft's BIFF8 specification *nc+1*, and a decoder that guessed wrong would
+read CHOOSE's arguments as tokens), a function SHEET does not have, an index past
+255 or with BIFF4's macro-command bit, array and shared formulas, and any text
+past `SH_EDITMAX` — SHEET cannot hold a longer formula.
+
+**A `tFunc` token carries no argument count**; the count is a property of the
+function. So `sh_rpn_fargc` joins `sh_rpn_fid` and `sh_rpn_fvar`, a fourth table
+in `sh_functab`'s order under the same length assertion — **generated** from the
+document through `BIFF_FUNCS`, not typed, and checked against it by `--selfcheck`.
+The function index is one byte in BIFF3 and two in BIFF4, so the reader records
+the record's own opcode (`0206H` or `0406H`) on the way in.
+
+**The text is built in place, not on a stack of strings.** RPN pushes operands
+in order, so the fragments on the stack are adjacent in the buffer and every
+operator only *inserts* characters: a binary operator at its right operand's
+start, a minus or `(` at the top fragment's, a call's commas at each argument's
+start and its name at the first's. Every insert lands at or after the start of
+the lowest fragment being merged, and all of those merge at once, so the stack
+holds starts and nothing else, and no start is ever made stale. RPN with
+explicit `tParen` needs no precedence of its own: a parenthesis the author wrote
+is a token, and one they did not was not needed by the grammar that made the
+tokens.
+
+It lives in `CHART.OVL` beside the reader, and pushed the module past its claim:
+`CH_OVKB` 20 → **22**, which is heap and not package image. Resident +111 bytes
+(the table) and +7 of bss. The buffer and fragment stack are the writer's
+scratch, `sh_rwsrc` and `sh_rpn_buf`: several readers borrow them, and none runs
+between the decode and the `sh_setformula` that copies the text out.
+
+**What it costs a large file** is the formula arena, 8 KB. A BIFF read used to
+store numbers only; now each formula's text goes there, and when it is full
+`sh_setformula` refuses — and that cell, like any refused decode, keeps its
+value.
+
+**Verified by `tests/sheetdec.py`, 74 checks.** Arm A is SHEET's own round
+trip: a SYLK file of formulas opened, saved as Normal, the file decoded *on the
+host* by `decode_rpn` — which is what checks the writer, and through
+`BIFF_FUNCS` every function number it wrote — then reopened by SHEET, saved as
+SYLK, and each formula's text and SHEET's own value read back. Every formula was
+authored with a wrong cached value, so a right one means the decoded text was
+parsed and evaluated. Arm B is two files the host writes the way Excel does —
+BIFF3, and a BIFF4 worksheet, where the function index is a word — carrying the
+tokens SHEET's writer never emits (strings, `&`, `TRUE`, an error constant,
+unary plus, IF with its `tAttrIf`/`tAttrSkip`, `tAttrSum`, `tAttrVolatile`) and
+five it must refuse, each of which comes back as its cached value. Mutated so
+the decoder refuses everything, 41 checks fail — every formula that should have
+come back.
+
+**It found three things on the way that were not the decoder:**
+
+- **`IF` lost a text branch.** `sh_pif` parses both branches and banks the
+  *then* value with `sh_vpush` — eight bytes — but a text value's type is in
+  `sh_curtype` and its characters in `sh_sacc`, and the else-parse overwrites
+  both. `=IF(A1>1,"big","small")` answered "small" for every `A1`. It banks the
+  type beside the value now, and a text value's characters on the string stack
+  the way `&` banks its left operand; the unused bank is dropped, or every
+  string after it would shift by one.
+- **The host library read SYLK quotes wrong.** SHEET's writer doubles a quote
+  inside a `K"…"` value and its reader treats a single one as the end of the
+  field; `os88sheetfmt.py` did neither, so it read `a"bc` as `a""bc` and its
+  writer could cut a value short. It follows the same rule as SHEET now.
+- **A formula whose result was TEXT was saved as its value**, because
+  `sh_biff_formula` wrote no STRING record. Pinned by the gate at first; §81.10.11
+  closes it.
+
+And one it confirms rather than finds: **SHEET's comparisons and `TRUE()` answer
+1**, where Excel answers a logical. The gate accepts it and says so; it is an
+evaluator parity gap, not a file-format one.
+
+#### 81.10.11 Text and error results, both ways
+
+With §81.10.10 a formula came back from Normal format as a formula — unless its
+result was **text**. `sh_biff_cells` tested "the result is text" before "the
+cell has a formula", so `=UPPER(A5)` went out as a LABEL holding `ABC`, and
+since the reader now brings back whatever FORMULA records it finds, that was
+the one kind of formula a round trip still turned into a value.
+
+**Writer.** A text result is a FORMULA record now: result bytes `00H`, four
+unused, `FFFFH` (5.50 of the document), then the **STRING** record that must
+follow it — `0207H`, a 16-bit length and the bytes (5.102). One detail decided
+the shape: for a text-result cell `sh_wrec_toff` used to be *replaced* by the
+result's offset (§81.22.1 keeps a text result in `SH_C_VAL` because `SH_C_FOFF`
+holds the formula), which was harmless while such a cell could only become a
+label — and would have tokenised `ABC` instead of `UPPER(A5)`. The result text
+has its own word, `sh_wrec_roff`, and `toff` always names the formula. Room is
+checked for both records before the first is written, or the cell goes out as
+its value alone.
+
+**The same code had the error-number bug §81.38 had, in both directions.**
+`.errresult` wrote a cached error's code as `sh_wrec_aux` — ERROR.TYPE's
+numbering, `#DIV/0!` as 02H — into a field whose values are the file's (07H).
+The reader's fallback read the byte back the same raw way, so SHEET's own files
+agreed perfectly and Excel's did not: an Excel `#DIV/0!` arrived as ERROR.TYPE 7,
+which is `#N/A`. Both go through `sh_biff_e2b`/`sh_biff_b2e` now.
+
+**Reader.** When a formula cannot be decoded its cached result is used, and
+that result was stored as a double whatever it was — so a cached string, whose
+eight bytes are the marker above, became a NaN, and a cached logical the same.
+Byte 0 decides now: an error through `sh_biff_b2e`; a logical as the logical,
+as a BOOLERR reads (§81.51 — it was 1/0 until SHEET had the type); and **text waits** — the
+row, column and XF are banked (`sh_dc_prow`/`pcol`/`pxf`) and the STRING record
+that follows completes the cell the way a LABEL is stored. Any other record
+ends the wait, so a STRING can only ever land on the formula directly before it.
+
+The host library reads STRING records too, so the gate can check the cached
+result a file carries as well as its text: `tests/sheetdec.py`, **84 checks**
+(`=UPPER(A5)`, `=LOWER(A6)` and `=1/0` back in SHEET's own round trip; a refused
+formula cached as text, as an Excel error and as a logical in each of the two
+Excel-style files). Three mutations — no STRING record, the writer's error code
+raw, the reader's raw — each fail exactly their own checks. Module +314 bytes
+(`CHART.OVL` 21,148 of 22,528), resident unchanged, bss +9.
+
 ### 81.11 Text cells
 
 Until stage 4.5 `sh_commit` branched twice — `'='` made a formula, everything
@@ -133655,7 +135328,7 @@ One `sh_repaint` runs after the whole fill rather than per cell, because a
 repaint is priced in primitive calls (PERFORMANCE.md).
 
 A plain source copies by what it IS: a number as the full eight-byte double
-(`sh_setvald` — `sh_setval` is the integer wrapper and would fill 3.5 as 3),
+(`sh_setvald` — an integer store would fill 3.5 as 3),
 a label as its text through `sh_settext`. This is the same stage-4.0 defect
 class §81.18 records as found and fixed in Copy — a word read at `SH_C_VAL`,
 and no case for a label at all, which filled every heading as the number 0.
@@ -133721,18 +135394,30 @@ other, and `MAX_WIN` is 12.
 The rule above left one door open: the file dialog takes whatever name is
 typed, and the extension is what decides. Picking *Normal* and typing
 `T.XLS` wrote **SYLK** into a file called `T.XLS` — `.XLS` was not one of
-the three extensions, so it fell to the default — and the percent format and
-the borders the user had just set were gone on reopening, because SYLK as
-written then carried neither (§81.22.3).
+the writer's extensions, so it fell to the default — while the reader took
+`.XLS` as BIFF (§81.52), so the workbook could not be opened again in-OS.
 
-Two changes close it. **`.XLS` IS Normal**: `sh_namefmt` maps both `.BIF`
-and `.XLS` to the BIFF writer and reader, since `.XLS` is what every real
-Excel file of the period is called and what a person picking Normal types;
-Sheet also declares it as a fourth association. And **the choice is
-remembered** in `sh_wantfmt`: when the typed name implies a different
-format, `sh_ondlg` rewrites its extension to the chosen one, so `T.TXT` after
-Normal becomes `T.BIF` rather than a SYLK file. `sh_namefmt` is now the one
-rule — the writer, the reader and the dialog's preselection all ask it.
+**`.XLS` IS Normal**, in all three places that ask: `shm_dowrite` sends it
+to the BIFF writer, `shm_doread` to the BIFF reader, and the File Format
+dialog opens on *Normal* for it, since `.XLS` is what every real Excel file
+of the period is called and what a person picking Normal types. Sheet also
+declares it as a fourth association, so a double-click on one opens Sheet.
+Each of the three is its own `sh_nameends` test; `main`'s single
+`sh_namefmt` rule is not in this fork.
+
+**The choice is NOT remembered here.** `main` keeps it in `sh_wantfmt` and
+has `sh_ondlg` rewrite a typed extension that disagrees; this fork has
+neither, so the extension typed into the file dialog is still what decides —
+*Normal* then `T.TXT` writes text.
+
+**Percent survives SYLK**: the `F` record's c1 is SYLK's own `%` code for
+it, and the reader maps `%` back. **So do borders and notes**: `main`'s
+`sh_sylk_extras` is ported into `CHART.OVL` beside the writer — an
+`F;Xc;Yr;S<LRTBS>` record per bordered cell and a `C;Xc;Yr;A<text>` per note,
+skipped when the save is truncated — and the reader's `F` and `C` parsers
+take the `;S` and `;A` fields back, borders through `SH_BT_KEEP` so the
+protection and table bits are never the file's, notes through `sh_nt_set`
+(§81.119's door).
 
 ### 81.16 A formula must not wear the last cell it referenced
 
@@ -133800,15 +135485,18 @@ repaint.
 #### 81.17.2 Border applies to the SELECTION too
 
 Border was the fourth command written before blocks existed: it read and wrote
-the anchor cell alone, so *Outline* on `C4:E6` framed `C4`. `sh_bdlg_walk` does
-both halves over the block. **Each edge box means that side of the BLOCK** —
-Left is the left edge of the cells in its first column, Top the top edge of its
-first row — so Outline, which is all four, draws one frame round the block, and
-Shade means every cell. A cell's *mask* is the bits the dialog governs there
-(Shade, plus each block side it lies on); an inner edge set earlier is outside
-every mask and is kept. The dialog opens on what the block already has: an edge
-box is ticked when every cell on that side carries it. A single cell is a 1x1
-block whose four sides are its own, so the old behaviour is the special case.
+the anchor cell alone, so *Outline* on `C4:E6` framed `C4`. `sh_bdlg_walk`,
+`main`'s and ported into `CHART.OVL`, does both halves over the block. **Each
+edge box means that side of the BLOCK** — Left is the left edge of the cells
+in its first column, Top the top edge of its first row — so Outline, which is
+all four, draws one frame round the block, and Shade means every cell. A
+cell's *mask* is the bits the dialog governs there (Shade, plus each block side
+it lies on); an inner edge set earlier is outside every mask and is kept, and
+so are `SH_BT_KEEP`'s protection and table bits (§81.46, §81.114.7), which no
+mask holds. The dialog opens on what the block already has: an edge box is
+ticked when every cell on that side carries it. A single cell is a 1x1 block
+whose four sides are its own, so the old behaviour is the special case. The
+walk keeps its bounds in a stack frame and costs no bss.
 
 **Left and top are drawn one pixel IN.** A cell's gridlines are its own first
 column and row, so a left or top edge drawn there landed on the gridline and
@@ -133899,7 +135587,9 @@ representation — `sh_cell_totext` out, `sh_commit` back, the same pair the
 block clipboard uses (§81.18). A formula is shifted by its own row delta, so a
 row that moves three down takes its `=B1*2` with it as `=B4*2`.
 
-**A label or an error value in the key column sits the sort out.** The scan
+**A label or an error value in the key column sits the sort out.** (No
+longer: §81.61 sorts every constant in Excel's order. What follows is why it
+had sat out.) The scan
 stages a key cell's eight value bytes, and a label keeps a numeric zero under
 its text (§81.11) — staging it through the value path wrote the number 0 over
 the word it held. It is skipped instead: its row never enters `rows[]`, so the
@@ -133999,8 +135689,8 @@ without the encoding every error came back as the perfectly ordinary zero
 underneath it. An error whose formula could not be tokenised takes a
 **BOOLERR** record (0205H) instead, whose value byte is the same code and whose
 flag byte says error rather than boolean. The reader accepts both, and reads a
-BOOLERR with the flag clear as the number 0 or 1, since there is no BOOL type
-here yet.
+BOOLERR with the flag clear as the logical (§81.51; it was the number 0 or 1
+while there was no logical type).
 
 **SYLK** writes the name into the `K` field, bare: `;K#DIV/0!`. No number
 begins with `#` and SYLK has no type field, so the leading character is the
@@ -134061,139 +135751,7988 @@ overrun corrupts a value; this one corrupts an *address*, and the next large
 it is worth knowing that bss adjacency can arrange it without anyone loading a
 segment register wrongly at all.
 
-### 81.22 A saved file said what the sheet did not
+### 81.22 A formula may answer with TEXT
 
-Two ways a file SHEET wrote disagreed with the sheet it came from, each
-invisible from inside because SHEET read its own files back the same way.
+Cells have held labels since stage 4.5; *formulas* could not produce one.
+`=B4`, where B4 holds `hello`, read as **0** — not because the reference failed
+but because the evaluator's only result was `sh_acc`, eight bytes of double,
+and a string has nowhere to go in it. That blocks the whole text category:
+`LEFT`, `UPPER`, `CONCATENATE` and the other eighteen have no way to hand back
+what they computed.
 
-#### 81.22.1 A Save recalculates first
+**The result is a pair, and `sh_curtype` says which half is live.** `sh_acc`
+holds a number; `sh_sacc` — `SH_STR_MAX + 1` bytes of DS scratch — holds a
+string; `sh_curtype` is `SH_T_NUM` or `SH_T_TEXT` accordingly. That is not a
+new convention, it is the one already in use: `sh_chktext` reads `sh_curtype`
+to decide whether arithmetic on this operand is a `#VALUE!`, `sh_pfactor` sets
+it to `SH_T_NUM` for a literal, and `sh_pfunc` sets it at every exit. The last
+operation to complete owns it, so at `sh_eval_cell`'s writeback it describes
+the whole expression.
+
+`SH_STR_MAX` is **64**. A cell displays at most `SH_CW_MAXCH` = 40 characters,
+so 64 is headroom for an intermediate concatenation rather than a limit anyone
+meets in a cell. Excel's own limit is 255 and this is not that; a result past
+64 is **truncated, not refused**, because half a label is legible and an error
+in its place is not.
+
+#### 81.22.1 Where a text result is stored, and why not in `SH_C_FOFF`
+
+`SH_C_FOFF` is already two things: a **label's** arena offset for a plain text
+cell, and a **formula's** arena offset for a formula cell, told apart by the
+`HASFORMULA` flag. A formula that *returns* text needs both at once, so the
+result cannot go there.
+
+It goes in **`SH_C_VAL`**, the eight-byte value union — its first word is the
+result string's arena offset. A text cell's number is meaningless by
+definition, which is what makes the union a union; this is the first thing to
+actually use it as one.
+
+**Deciding the type comes before caching the number**, and that ordering is
+load-bearing. `sh_eval_cell`'s writeback used to open with `sh_acc_to_cellval`,
+which writes eight bytes over `SH_C_VAL` - the union the slot offset lives in.
+So every pass wiped the slot, `sh_str_store` found `VAL` zero, claimed another
+65 bytes, and the arena was dry inside a hundred repaints; after that every
+text formula fell silently back to the number underneath it, which is `0`. Each
+branch caches for itself now, and the text branch does not cache at all,
+because a text result has no meaningful double to keep.
+
+**The slot is allocated once per cell and rewritten in place.** The arena is a
+bump allocator that never frees — `sh_setformula`'s own header says so, and an
+edit is "append new, abandon old" everywhere else in this file. That is fine at
+one allocation per *edit* and fatal at one per *repaint*: a text formula
+recalculates on every paint, and 8KB would be gone in seconds of sitting
+there. So the first text result claims `SH_STR_MAX + 1` bytes, keeps the offset
+in `SH_C_VAL`, and every later result overwrites that slot. A cell that stops
+returning text keeps its slot; the waste is bounded by the number of cells that
+have ever returned one.
+
+#### 81.22.2 `&`, and the level it binds at
+
+Excel's concatenation operator is `&`, and it binds **looser than `+`** and
+**tighter than a comparison** — so `="a" & "b" = "ab"` is a comparison of two
+concatenations, not a concatenation of a comparison. `sh_pconcat` is that
+level, inserted between `sh_pcmp` and `sh_pexpr`, with `sh_pconcatcont` joining
+the continuation chain `sh_prange` walks when a range turns out to be an
+ordinary expression that merely began with a cell reference.
+
+Two things it did **not** need, both worth recording because both were expected
+to bite:
+
+- **The charset gate already admits `&`.** Stage 4.5 replaced the allow-list
+  with a printable-ASCII range, and the comment above it lists the six
+  characters that each had to be discovered the hard way — `=`, the operators,
+  `<>`, `!` and `"`, `.`, `$`, `^` — every one of them a case where "the parser
+  handled the character perfectly and the character never reached it". That
+  gate is why this one is free.
+- **A writer that emits a label must take it from the result.** The SYLK and
+  BIFF writers read a label's characters from `SH_C_FOFF`, which for a text
+  *result* is the formula - so they wrote the expression where the answer
+  belonged. Both take the offset from `SH_C_VAL` now when the cell has a
+  formula and its type is text. The DIF writer needed no change: it goes
+  through `sh_getcell2`, which already publishes the result offset.
+
+- **The reference rewriters already treat `"..."` as opaque.** `sh_formula_reidx`
+  copies anything inside double quotes byte-for-byte and never scans it, so a
+  string literal containing something shaped like `A1` does not get renumbered
+  by an Insert Row.
+
+### 81.23 Reference-typed arguments
+
+Every argument in Sheet's evaluator was **folded to a value before the
+function saw it**. `sh_prange` reads a range, folds each occupied cell through
+`sh_foldvalue`, and hands the accumulator on; a single cell goes through
+`sh_getcell2` and then the same fold. By the time a function ran there was no
+reference left to ask about, and three consequences followed from that one
+fact:
+
+- an **empty cell and a cell holding 0 both arrived as `0`**, so `ISBLANK`
+  could not be written;
+- a **label arrived as the zero underneath it**, so `ISTEXT` could not either;
+- an **error in an argument had already spread into `sh_evalerr`**, so
+  `ISERROR` would have been an error itself rather than an answer about one.
+
+That is why the comment above `sh_pspecial` listed `ISBLANK`, `ISNUMBER` and
+`ISNA` as deliberately absent for three stages. A version of any of them that
+returned a plausible constant would have been worse than its absence.
+
+**`sh_pargref` is the probe, and it is strict on purpose.** It asks whether an
+argument is a reference *and nothing else*: `sh_pcellref`, optionally a `:`
+and a second one, and then the argument must **end** — the next character has
+to be `,` or `)`. `ISNUMBER(A1+1)` is a question about the sum, not about A1,
+and without that terminator test it would have been answered about A1. On
+failure `SI` is restored exactly as `sh_pcellref` leaves it and the caller
+parses an ordinary expression instead, so the strictness costs nothing: an
+argument that is not a reference still gets evaluated, it just gets classified
+by its value's tag rather than by a cell's.
+
+**`sh_pargclass` is the argument, classified rather than folded.** It publishes
+four things — `sh_argtype` (the `SH_T_*` the argument *is*, `SH_T_BLANK` for a
+cell that does not exist), `sh_argaux` (its error code), `sh_argisref`, and
+`sh_acc` (its value, for the callers that still want a number). An area is
+classified by its **top-left corner**, which is what a 1×1 use of one would
+intersect to anyway.
+
+#### 81.23.1 An argument's error is the function's answer, not the sheet's
+
+`sh_getcell2` copies a referenced cell's error code into `sh_evalerr`, and that
+spreading is correct and wanted: it is what puts one `#DIV/0!` at the bottom of
+a column that contains one. It is exactly wrong here. `ISERROR(1/0)` must be
+`TRUE`, not `#DIV/0!`.
+
+So `sh_pargclass` **banks `sh_evalerr` across the argument and puts it back**,
+and reports what the argument raised through `sh_argtype`/`sh_argaux` instead.
+The banking lives in `sh_pargclass` and not in `sh_getcell2` precisely because
+every *other* caller wants the spread. An error the argument raised also
+**outranks the tag it left behind**: `1/0` leaves `sh_acc` holding zero and
+`sh_curtype` saying `SH_T_NUM`, and it is an error value, so the error is
+checked last and wins.
+
+#### 81.23.2 Arithmetic now says its result is a number
+
+Making a mid-expression tag answerable exposed something that had been true and
+unobservable: **the arithmetic operators never set `sh_curtype`**. `=A1*2`
+left behind whatever tag the last operand carried. Nothing could see it,
+because `sh_eval_cell`'s writeback normalises a non-text result to `SH_T_NUM`
+before storing it, and no function had ever been able to ask.
+
+`sh_pargclass` can ask. Every operator that produces a number — `+ - * /`, the
+power loop, the comparisons, and the divide-by-zero path — now publishes
+`SH_T_NUM`, so `ISNUMBER(A1*2)` is `TRUE` where A1 is blank, instead of
+inheriting `SH_T_BLANK` from A1 and answering `FALSE`.
+
+#### 81.23.3 The twelve functions, and the one with a `.` in its name
+
+`ISBLANK ISNUMBER ISTEXT ISLOGICAL ISERROR ISERR ISNA ISREF NA TYPE N
+ERROR.TYPE` — ids 25..36, appended to `sh_functab` in the usual way, and
+routed out of `sh_pfunc` **before** the id-12 test that sends the rest to
+`sh_pspecial`.
+
+- **`ISERR` is `ISERROR` minus `#N/A`**, which is the only reason both exist.
+- **`ISLOGICAL` is `FALSE` for everything**, because nothing in this evaluator
+  produces an `SH_T_BOOL` yet. That is the honest answer rather than a
+  placeholder one, and it becomes right by itself the day comparisons return a
+  real boolean.
+- **`ERROR.TYPE` is a copy.** The `SH_ERR_*` codes *are* Excel's own
+  `ERROR.TYPE` numbers 1..7 — they were numbered that way when error values
+  landed, precisely so that this function would be one `mov`.
+- **`N` cannot leave by the integer path** the rest of these use: it passes a
+  number through unchanged, fraction and all, so it returns `sh_acc` as it
+  stands. `N` of an error re-raises that error.
+
+`ERROR.TYPE` is the first name in the language with a `.` in it. `sh_pident`
+takes one **only after a letter**, so a leading `.` is still the start of a
+number (`.5`) and a cell reference still cannot contain one — and it does
+**not** go through the uppercase fold, because `'.' AND 0xDF` is `0x0E` and
+would have put a control character in the middle of the name. The charset gate
+needed no change: stage 4.5 had already replaced its allow-list with a
+printable-ASCII range.
+
+BIFF writes these through `sh_rpn_fid` with their real `ftab` indices — 129,
+128, 127, 198, 3, 126, 2, 105, 10, 86, 131. **`ERROR.TYPE` is `ftab` 261,
+which does not fit the byte table**, so its entry is `0xFF` and the formula
+declines; `sh_rpn_func` cannot lex the `.` either, so it declines twice over
+and the cell goes out as its cached value.
+
+#### 81.23.4 Three tables indexed by the same number
+
+`sh_functab`, `sh_rpn_fid` and `sh_rpn_fvar` are all indexed by the id
+`sh_funcid` returns, which *is* a position in `sh_functab`. Nothing checked
+they were the same length. Appending a function and forgetting one of the other
+two reads whatever byte follows that table and writes **that** as the BIFF
+function index — a wrong number in a saved file, no crash and no message.
+
+Four `TIMES` lines after `sh_functab` make it a build error instead, the same
+idiom `OS88_BSS`'s literal uses (§81.21). Read the **line number** to see which
+table is short. Proven to bite by deleting one `sh_rpn_fid` entry: `TIMES value
+-1 is negative`.
+
+### 81.24 The text functions
+
+Fourteen of Excel 2.1's twenty-one text functions: `LEN LEFT RIGHT MID UPPER
+LOWER PROPER TRIM REPT CHAR CODE EXACT T VALUE`, ids 37..50. The seven that
+search or format (`FIND SEARCH SUBSTITUTE REPLACE TEXT DOLLAR FIXED`) are the
+next pass.
+
+The whole category was blocked on two separate things, and both had to land
+first: a formula could not **return** a string at all until §81.22, and a
+function could not **keep** an argument as a string across the next one until
+the bank below.
+
+**These are the first functions in this file whose answer may be either half
+of the result pair.** `sh_ptext` sets `sh_curtype` itself and `sh_pfunc`
+routes it to `.done` rather than `.typed` — `.typed` exists to stamp
+`SH_T_NUM` on a fold's result, and stamping it here would turn every `UPPER`
+into the zero underneath its string.
+
+#### 81.24.1 The string stack, and why it is not the machine stack
+
+A text function with more than one string argument has to hold the first while
+the second is parsed, and parsing the second can reach any text function
+again — every one of which writes `sh_sacc`. A second fixed buffer does not
+fix it either: in `=FIND(A1, LEFT(A2,3))` the inner `LEFT` would overwrite the
+outer `FIND`'s banked needle. The bank has to be per-frame.
+
+**The machine stack is the wrong place for it.** §20.6 rule 6 gives a task 384
+bytes and says in as many words: no deep recursion, no big stack buffers.
+Banking 65 bytes per argument per frame there, under `SH_EVAL_MAXDEPTH` = 6
+levels of `sh_eval_cell` recursion, is exactly the buffer that rule forbids —
+and unlike `sh_vpush`'s eight bytes it is not a rounding error against 384.
+
+So the bank is bss: `sh_sstk`, `SH_SSTK_N` = 6 slots of `SH_STR_MAX + 1`.
+`sh_spush` banks `sh_sacc`, `sh_sslot` addresses one by depth from the top,
+`sh_srestore` puts the top back and drops it. **Running out is a `#VALUE!`,
+not a silent overwrite**, and a read below the bottom returns the empty string
+rather than whatever bss lies there. `sh_eval_cell` resets the depth to zero
+whenever a *fresh* evaluation starts, so an error path that returned early
+cannot leak a level into the next formula.
+
+**Every function that takes a second argument banks its string before parsing
+it.** `=LEFT(A1, LEN("ab"))` destroyed A1's text between reading it and
+cutting it, because `LEN` writes `sh_sacc` on its way to a number.
+
+#### 81.24.2 What each one actually does
+
+Where Excel's rule is not the obvious one, this follows Excel:
+
+- **`TRIM` collapses internal runs**, not just the ends — that is the half of
+  it people forget and the half that makes it worth having.
+- **`PROPER` starts a new word at anything that is not a letter**, digits and
+  punctuation alike, so `"hELLO bIG wORLD"` is `"Hello Big World"`.
+- **`MID`'s start is 1-based and a start below 1 is `#VALUE!`**, not a clamp.
+  A start *past the end* is the empty string, which is not an error.
+- **`RIGHT(t, n)` with `n` past the length gives the whole string**, again not
+  an error; a *negative* count is `#VALUE!` in both `LEFT` and `RIGHT`.
+- **`EXACT` is case-sensitive**, which is the whole difference between it and
+  `=`.
+- **`CODE("")` is `#VALUE!`** and `CHAR` outside 1..255 likewise.
+- **`T` passes text through and answers the empty string for everything
+  else**, so it sees its argument *before* `sh_str_want` would convert it —
+  which is why it is dispatched ahead of the shared argument parse, as `CHAR`
+  is for taking a number.
+- **`LEN` of a number is the length of the text it displays as**, `LEN(12.5)`
+  = 4, because `sh_str_want` has already produced exactly that text.
+- **`REPT` clips at `SH_STR_MAX`**, and the count is clamped to it first:
+  each round adds at least one character, so `REPT("x",30000)` is 64 rounds
+  and not 30,000.
+
+#### 81.24.3 In files
+
+SYLK keeps everything — the expression in `;E` and the string result in `;K`,
+quoted. A round-trip of all fourteen comes back byte-identical.
+
+**BIFF writes a text-valued formula as a `LABEL`, not as a `FORMULA` with a
+string result.** That follows from §81.22.2's rule that a writer emitting a
+label takes the characters from the result; the consequence, which is worth
+stating rather than discovering, is that **the formula itself does not survive
+a BIFF round-trip when its answer is text** — the value does. A numeric one
+(`LEN`, `MID`, `EXACT`) still goes out as a real `FORMULA` with its `ftab`
+index, and any formula holding a string *literal* declines to RPN and goes out
+as its cached value, because `sh_rpn_factor` has no token for one.
+
+### 81.25 The seven that search and format
+
+`FIND SEARCH SUBSTITUTE REPLACE TEXT DOLLAR FIXED`, ids 51..57, completing
+Excel 2.1's text category at twenty-one.
+
+- **`FIND` and `SEARCH` are one scan.** They differ only in whether the
+  compare folds case, which is the whole of the difference in Excel too.
+  Neither takes wildcards; Excel's `SEARCH` does, and saying so is better
+  than a `?` that silently matches itself. Not found is `#VALUE!`, which is
+  what makes `ISERROR` the standard way to ask whether it was there at all
+  (§81.23).
+- **`sh_strfind` keeps its two bases in bss.** The inner compare needs `SI`
+  and `DI`, the outer scan needs a third pointer, and the 8086 addresses
+  memory through four registers of which one is `BP` — which belongs to `SS`
+  here (§20.1).
+- **An empty needle never matches.** `sh_matchat` refuses one on purpose:
+  `SUBSTITUTE` walks the text one character at a time and advances by the
+  needle's length on a hit, so an empty needle that matched would advance by
+  nothing. `SUBSTITUTE(t,"",n)` returns `t`.
+- **`SUBSTITUTE` banks three strings at once** — text, old and new — which is
+  what sets `SH_SSTK_N`'s floor (§81.24.1). Its fourth argument picks one
+  occurrence; absent, it replaces all.
+- **`REPLACE`'s start is 1-based** and below 1 is `#VALUE!`, matching `MID`.
+
+#### 81.25.1 Turning a number into text
+
+`fp_ftoa` counts **significant** digits and trims trailing zeros, which is
+right for General and wrong for money — `1.5` to two places has to be `"1.50"`.
+So `sh_numdp` rounds first, with the same `fp_round` that `ROUND()` uses, and
+pads the places back on afterwards.
+
+A value big or small enough that `fp_ftoa` reaches for **scientific notation**
+is passed through exactly as it came. Padding a mantissa and grouping an
+exponent would both be nonsense, and this is the one honest answer.
+
+**`DOLLAR` formats the magnitude and parenthesises it**: `-1234.567` is
+`"($1,234.57)"`, which is Excel's own rendering and not a minus sign. `TEXT`'s
+`$` goes *after* a leading `-`, so `TEXT(-x,"$#,##0.00")` is `"-$1,234,567.89"`
+— the two functions genuinely disagree, and both match Excel.
+
+**`TEXT` reads four things out of a format code**: a `$`, a `,` for grouping,
+the `0`/`#` placeholders either side of the `.`, and a trailing `%`. `0`
+before the point forces a digit (so `"00000"` on 42 is `"00042"`); `#` never
+does. A code with **no placeholder at all** — `"General"`, or anything this
+does not understand — falls back to General, which is the one answer that is
+never misleading. This is a real subset and not the whole of Excel's format
+language: no date codes, no sections, no literal text runs.
+
+#### 81.25.2 A separator routine that had quietly gone wrong
+
+`sh_comma_ins` inserted **exactly one** thousands separator and found its
+position by counting digits to the NUL. Its own comment explained why that
+was enough: *"a 16-bit value never needs more than one — max 5 digits."*
+
+That was true when it was written and stopped being true at **stage 4.0**,
+when every value became a double. Counting to the NUL makes the fraction part
+of the run, so `1234.5` in the Comma format drew as `"123,4.5"`, and one
+separator is not enough for `1234567`, which drew as `"1234,567"`. Nothing in
+the app could produce a number that large or that precise when the routine was
+written, so nothing had ever shown it.
+
+`sh_group3` replaces it: as many separators as the integer part needs, placed
+**right to left** so each insertion can ignore the ones already made — they
+are all to its right. `sh_comma_ins` is deleted rather than left beside it.
+`sh_numfmt`'s Comma format goes through the new one, so the fix reaches the
+grid and not only `FIXED`/`DOLLAR`/`TEXT`.
+
+#### 81.25.3 Nothing on the stack between `sh_vpush` and `sh_binop_pre`
+
+The pair banks a value **in the caller's frame**, below the return address:
+`sh_vpush` pops the return address, pushes four words, and pushes it back.
+Anything pushed between the two is therefore what `sh_binop_pre` pops as the
+value. `DOLLAR`/`FIXED` need their flags and digit count across exactly that
+gap, so those go to bss (`sh_fmt_fl`, `sh_fmt_cx`, `sh_fmt_ph`) for the one
+instruction it takes. `stkbalance` cannot see this class of error — the stack
+is balanced either way; only the *contents* are wrong.
+
+### 81.26 `#REF!` and `#NULL!` — the two errors nothing could raise
+
+`SH_ERR_NULL` and `SH_ERR_REF` sat in the table from the day error values
+landed with nothing able to set either. The names printed; no code path
+produced one.
+
+#### 81.26.1 `#REF!`: a reference whose cell is gone
+
+The reference rewriters **clamped**, and clamping is the wrong shape of
+answer. Delete Row 3 with `=A3` somewhere left the index alone, so the formula
+quietly started naming whatever slid up into row 3 — a different number, with
+nothing to show for it. Copy `=A1` one column left clamped to column A and
+read as `=A1` again. In both cases the sheet went on computing confidently
+with data the user never named.
+
+Excel's answer is `#REF!`, and the whole value of it is that it **cannot be
+mistaken for a working reference** the way a clamped one can. Three sites now
+produce it:
+
+- `sh_reidx_shift` reports **CF=1** when a *delete* lands exactly on the pivot
+  (the cell is gone), and when an *insert* pushes a reference past the last
+  row or column (it has moved off the sheet). `sh_reidx_apply` then emits
+  `#REF!` in place of the reference text.
+- `sh_copy_shift` reports CF=1 when a paste displacement takes an index
+  negative or past the edge. `sh_copy_cellpart` **defers** the decision to its
+  emit step, because `SI` still has to advance past the whole reference either
+  way — hence the `sh_cp_dead` flag rather than an early exit.
+- `sh_rw_emitref` writes the literal, reading the **same** `sh_errtab` string
+  `sh_errname` prints.
+
+**An insert that clamps is also a dead reference**, and the old code said so
+in a comment while doing the opposite: *"the cell it names is genuinely gone;
+naming the last real row is the same closest sane fallback."* It is not a
+fallback anyone can see. Both cases are `#REF!` now.
+
+#### 81.26.2 Error values are literals
+
+A rewriter that writes `#REF!` into a formula needs a parser that can read it
+back. `sh_perrlit` handles a `#` in `sh_pfactor`, matching against `sh_errtab`
+— the same table `sh_errname` prints and `sh_errcode` reads, so the spelling
+written and the spelling recognised cannot drift. No name is a prefix of
+another, so first match wins.
+
+Typing `=#N/A` therefore works too, which is what Excel does and the reason
+`NA()` is not the only way to get one. A `#` followed by anything else is
+`#NAME?` — what an unknown word already gets — and `SI` steps over the `#` so
+the parse still makes progress.
+
+#### 81.26.3 `#NULL!` needs the intersection operator
+
+`#NULL!` has exactly one producer in Excel: an **empty intersection**. Without
+the operator there was nothing to raise it with, so the operator is what this
+adds. Excel's three reference operators are `:` (range), `,` (union) and a
+**space** (intersection); `sh_prange` now reads the third.
+
+`sh_pintersect` reduces the running rectangle to its intersection with the
+range that follows — the later start and the earlier end on each axis, both
+rectangles normalised first so `B5:A1` intersects the same as `A1:B5`. Empty
+is `#NULL!` and nothing is folded. It **loops**, so `A1:C9 A1:B9 B1:B5` works,
+and the caller detects "the space was not an operator after all" by comparing
+`SI` before and against after, which is the only way to tell that apart from a
+successful intersection that consumed nothing else.
+
+`sh_normrange` is split out of `sh_foldrange` so both can rely on the corners
+being in top-left/bottom-right order before any edge is compared.
+
+The second rectangle gets **four words of its own** (`sh_ix1col`…): it cannot
+borrow `sh_r1col`, which is the running result being reduced — the same
+lesson as §81.23's `sh_pargref`, one increment later.
+
+`SH_ERR_NULL` is `ERROR.TYPE` 1, so `=ERROR.TYPE(SUM(A1:A2 A4:A5))` answers 1.
+
+### 81.27 The Sort key picker
+
+§81.19 recorded a limit rather than a design: *"The key column is the one the
+selection is anchored in… there is no key picker in the Sort dialog, so a key
+that is not an edge of the range cannot be expressed."* Sorting `A:C` by `B`
+was unreachable, because anchoring a drag in `B` cannot cover `A`.
+
+**Excel 2.1's Sort dialog takes its keys as cell references typed into
+fields**, and `sh_idlg_*` — the single-line input engine stage 3.0c built for
+Goto / Row Height / Column Width / Define Name / Find — is exactly that. Sort
+becomes `SH_ID_SORT`, prompt `1st Key:`, prefilled with the anchor so pressing
+Enter gives the old behaviour.
+
+**Two dialogs in sequence, not one.** The key needs a text field; the order
+needs radios; no engine here has both. Asking twice is what File > Save As...
+already does — the format radio first, then the file dialog — so this follows
+the app's own idiom rather than growing a third engine. The order dialog is
+the existing `SH_FDK_SORT` radio, opened from inside the key dialog's apply.
+Eight consecutive cycles all opened, so the pair leaks no window slot (§81.15).
+
+**A key outside the selection is refused, not clamped.** Outside it the sort
+would reorder a column the carry does not move, which breaks exactly the
+correspondence §81.19 exists to keep — and a clamp answers a different
+question silently, which is the failure mode §81.26.1 was written about. The
+status bar says so. A single-column selection sorts by itself whatever was
+typed.
+
+#### 81.27.1 Two things the key and the anchor had been sharing
+
+Both were `sh_selcol`, and both looked correct until they stopped being the
+same column:
+
+- **`sh_sort_carry`'s column span** was read out of the same register as the
+  key. With the key at `B` the span became `B..C`, so sorting `A:C` by `B`
+  left column `A` exactly where it was — every other column moved and one did
+  not, which is worse than not sorting. The span is the selection's;
+  the key is `sh_sort_keycol`.
+- **The formula write-back** committed to `sh_selcol` while the value
+  write-back committed to the key, so a sorted *formula* cell would have
+  landed in the anchor's column. No test reached it, because the sheet under
+  test held no formulas in a non-anchor key column — it would have appeared
+  as a formula silently moving one column left.
+
+Found by running it: the first sort of `A:C` by `B` moved `B` and `C` and left
+`A` untouched, in the screenshot, immediately.
+
+### 81.28 Date serials
+
+A date is a **number**: days since the epoch, with the time of day in the
+fraction. That is Excel's model and it is the reason dates arithmetic at all —
+tomorrow is `+1`, an interval is a subtraction, and a date sorts because it is
+a number that happens to be *shown* as a date.
+
+Eleven functions: `DATE DAY MONTH YEAR WEEKDAY TIME HOUR MINUTE SECOND
+DATEVALUE TIMEVALUE`, ids 58..68.
+
+#### 81.28.1 Serial 60 is 29 February 1900, a day that never existed
+
+1900 was not a leap year. Lotus 1-2-3 thought it was, Excel copied the mistake
+so the two could exchange files, and every version since has kept it for the
+same reason.
+
+**Reproducing the bug is the correct behaviour here.** Getting it "right"
+would put every date in a shared file one day out from what Excel shows —
+a worse bug than the one being reproduced, and a silent one. So serial 1 is
+1 January 1900, serial 59 is 28 February, serial **60 is the phantom day**,
+and 61 is 1 March. `sh_ser_to_ymd` special-cases 60 rather than contorting the
+walk, because the day is not in any real calendar to be found by walking one.
+
+One divergence, recorded rather than fixed: `DATE(1900,2,29)` answers **61**
+here and 60 in Excel. The rollover that makes `DATE(1990,13,1)` mean January
+1991 also makes 29 February 1900 mean 1 March, and special-casing the phantom
+day on the way *in* would cost more than a date nobody enters is worth.
+
+The range is what an **unsigned word** holds — serial 65535 is 5 June 2079 —
+which is almost exactly Excel 2.1's own limit of 31 December 2078.
+
+#### 81.28.2 An unsigned word, because the signed one stops in 1989
+
+`fp_a2i` is signed and clamps at 32767. As a date serial that is **24
+September 1989**, so every date this app will ever be asked about is past it
+and the signed conversion is not usable for serials at all. `sh_acc_toudw`
+takes the top bit off by hand, converts the remainder, and adds it back
+unsigned; `sh_acc_fromudw` goes the other way through `fp_u64_to_a`.
+
+**`fp_cmpab` sets SIGNED flags**, which is what it is for — it answers −1/0/1
+in `AX` and sets the flags from that. Writing `jb` after it, as if it were an
+unsigned magnitude compare, means the branch is never taken: every serial past
+32767 fell down the clamping path and `HOUR`, `MINUTE` and `SECOND` all
+answered 0. `sh_pcmp` had used `jl`/`jg` correctly since stage 4.0; this is the
+one place that did not.
+
+#### 81.28.3 Seconds-of-day do not fit either
+
+86,399 is past 65,535, so there is no single number for "the time of day in
+seconds" to hand back. `sh_dt_hms` therefore returns **minutes since midnight**
+(0..1439) and the seconds within that minute (0..59), split off the *same*
+rounded value so the two can never disagree about which second it is.
+
+The rounding still happens in the seconds domain, in floating point where it
+fits. A time built as h/m/s is not exact in binary, and truncating a
+`TIME(10,30,0)` that came back as 10:29:59.9999 would show 10:29:59.
+
+#### 81.28.4 `NOW()` is absent, and cannot be written here
+
+It is the twelfth function of the category and the only one that is not
+arithmetic. **No kernel call publishes the calendar date.** The kernel has it —
+it draws `Aug 28 2026` in the menu bar every second — but the only clocks a
+package can read are `OSAPI_GET_TICKS` and `OSAPI_BOOT_TICKS`, and both count
+since boot. A `NOW()` built on those would answer with the uptime, which is
+not the time and would be believed.
+
+It needs **one new API slot** publishing what the clock already reads. That is
+a kernel change with its own review and its own SPEC amendment, not something
+to approximate inside a package — the same judgement §75.3 records for the
+alert box, where a kernel primitive was added, measured, and reverted.
+
+`DATEVALUE` takes the numeric forms only (`8/28/2026`, `28-8-2026` — the
+separator carries no meaning), not `28-Aug-2026`. A month *name* is a
+different parse, and a half-supported one that quietly returned `#VALUE!` for
+the spelled form would be worse than a documented limit.
+
+### 81.29 A name binds a RANGE
+
+Stage 3.0c wrote the scope of a defined name down rather than leaving it to
+be discovered: *"a name binds ONE CELL, not a range… A range needs the
+reference-typed argument the value model still does not have (the same thing
+blocking VLOOKUP and the array functions)."*
+
+That argument landed in §81.23, so the reason expired and the record grew the
+second corner it had been waiting for. `SH_NAME_REC` is name + NUL + **two**
+coordinate pairs; `Formula > Define Name...` binds whatever the selection is,
+which for a single cell is a 1×1 rectangle. **Nothing that worked before
+behaves differently** — `=Total` still reads one cell, because a one-cell name
+is the same thing with both corners equal.
+
+**A name is a range argument wherever a range would go.** `sh_pnamerange` runs
+ahead of `sh_pcellref` in `sh_prange`, so `=SUM(SALES)` folds the block. It is
+strict about being the *whole* argument for the same reason `sh_pargref` is
+(§81.23): a `,` or the `)` must follow, so `=SUM(Sales+1)` stays an expression
+about Sales rather than a fold over it. A name followed by `(` is declined
+outright — that parenthesis is the only thing separating `SUM` from a cell
+called `SUM`, and `sh_pfunc` still needs to see it.
+
+A one-cell name resolves to a 1×1 rectangle and folds to the same single value
+the expression path already gave it, so nothing takes a different route to a
+different answer.
+
+Still **instance-wide, not per sheet**: that needs a sheet field in the record
+plus a rule for what an unqualified name means from another sheet, and it
+would be worse guessed at.
+
+#### 81.29.1 The names go in the file
+
+A name that only this app knows is a fact the file does not carry: a saved
+sheet would hold the data but not what any of it was called, and nothing else
+could find the range.
+
+SYLK has a record for exactly this. `NN;N<name>;E<ref>` goes out straight
+after the `ID` line, one per name, with the reference in **R1C1** because that
+is the notation every `;E` field in the file already uses — one convention,
+not two — and absolute, because a name is a fixed place rather than an offset
+from wherever it is read.
+
+```
+ID;PWXL;N;E
+NN;NSALES;ER1C1:R4C1
+C;X1;Y1;K10
+```
+
+This is what lets Chart chart a named range (§82.15). DIF has no equivalent
+record and BIFF's `NAME` (0x0018) carries its reference as an RPN token
+stream, which is a bigger piece of work than the SYLK line and is not done.
+
+**A crossed pop, caught by the gate rather than by running it.** `sh_wr_names`
+pushed `ax, bx, cx, si` and popped `si, bx, cx, ax` — the depth is right, so
+nothing faults and nothing asserts; the routine simply returns with BX and CX
+swapped, into a caller entitled to keep a pointer in one of them. `asmrules`
+names that shape directly.
+
+### 81.30 A chart is of the SELECTION
+
+`Data > Chart Column...` froze the anchor's column and charted **all** of it,
+and that was the wrong primitive sitting next to the right one. Sheet is the
+half of this pair that *has* a selection: chart.o88 needed named ranges
+(§82.15) precisely because a file does not carry what was selected, while this
+command was throwing away an answer already in `sh_selrow`/`sh_selrow2`.
+
+It charts the selection's rectangle now — leftmost column for series one,
+whichever way the drag went, bounded by the selected rows. **A single cell
+still means the whole column**, the same rule Sort states (§81.19) and for the
+same reason: one cell is not a range, and the menu item still says Column.
+
+The scan gained two words (`sh_chart_r1`/`sh_chart_r2`) and one bounds test.
+The live-update hook in `sh_repaint` re-reads the *frozen* span, so editing a
+charted cell still updates the chart and moving the selection does not
+silently retarget it — which is the property §82's freeze existed to protect.
+
+#### 81.30.1 `Goto` a name selects the whole rectangle
+
+`sh_select` collapses the selection to one cell, so a name resolved through it
+would have selected only its corner — and then `Chart Column...` would have
+charted one cell's worth. `Goto` tries `sh_name_lookup` before `sh_pcellref`
+and puts the far corner back afterwards.
+
+That is what closes the loop: **`Goto SALES` then `Chart Column...` charts
+SALES**, without a name picker in the chart command at all. Chart needs one
+because it opens a file; Sheet needs only the selection it already had.
+
+### 81.31 The lookup family — ROWS, COLUMNS, AREAS, INDEX
+
+The first four of Excel's lookup category, and the first functions in this app
+whose **answer may be a reference's contents** rather than a computation.
+
+They are ids 69 and up, and the router tests for them **first** — the chain in
+`sh_pfunc` is descending, and 69 is also ≥ 58, so a test placed after the date
+functions' would never be reached. They dispatch to `.done` and **not**
+`.typed`, for exactly the reason `sh_ptext` does: `.typed` stamps `SH_T_NUM` on
+a call's result so that `=SUM(A1:A9)*2` cannot inherit a TEXT tag from the last
+cell a fold touched, and an `INDEX` onto a label has to come back as the label.
+Stamping a number over it would answer with the zero underneath — the bug
+§81.23 exists to have ended.
+
+**Every one of them opens with `sh_pargref`**, which is strict about "a
+reference and nothing else" on purpose: `ROWS(A1:B9)` is a question about the
+rectangle and `ROWS(A1+1)` is not a question at all. Anything else is
+`#VALUE!`.
+
+- **`ROWS`** and **`COLUMNS`** are the rectangle's height and width. A single
+  cell lands in both of `sh_pargref`'s corners, so `ROWS(A1)` is 1 with no
+  special case.
+- **`AREAS`** is **1 for every reference this grammar can express**, and that
+  is the truth rather than a stub: Excel answers more than 1 only for a union
+  — `(A1:A9,C1:C9)` — and there is no union operator here.
+- **`INDEX(ref, n)`** and **`INDEX(ref, row, col)`**. The one-subscript form
+  indexes along whichever way the reference runs, so `INDEX(A1:A9,3)` and
+  `INDEX(A1:I1,3)` both mean "the third one"; a rectangle given one subscript
+  takes it as the row, as Excel does. A subscript of zero or less is
+  `#VALUE!`; one past the rectangle is **`#REF!`**, which is what naming no
+  cell is. An empty cell inside the rectangle answers **0**, so the zero is
+  written before the read and `sh_getcell2` overwrites it only when there is
+  something to read.
+
+Adding these meant four tables, not one: the name, `sh_functab`, the BIFF ftab
+index (`ROWS` 76, `COLUMNS` 77, `AREAS` 75, `INDEX` 65 — Excel's own table, the
+one `CHOOSE` 100 and `ROW` 8 already came from) and the fixed/variable arity
+byte. The four `TIMES` assertions above `sh_functab` are what makes forgetting
+one a build error rather than a wrong number in a saved file.
+
+**Verified live** (`screenshots/sheet-lookup-rows-columns-areas-index.png`),
+over `A1:A3` = 10/20/30 with `HELLO` in A5:
+
+| | |
+|---|---|
+| `=ROWS(A1:A3)` | 3 |
+| `=COLUMNS(A1:C1)` | 3 |
+| `=AREAS(A1:A3)` | 1 |
+| `=INDEX(A1:A3,2)` | 20 |
+| `=INDEX(A1:A3,5)` | `#REF!` |
+| `=INDEX(A1:A5,5)` | `HELLO`, left-aligned — **text survived the call** |
+| `=INDEX(A1:C3,3,1)` | 30 |
+
+`MATCH`, `VLOOKUP`, `HLOOKUP` and `LOOKUP` are the rest of the category and are
+not here yet: those four need a value **comparison** across mixed numbers and
+text, where these four need only addressing. `sh_streq` answers equality and
+nothing orders text yet, which is what an approximate match on a sorted column
+needs.
+
+### 81.32 MATCH, VLOOKUP and HLOOKUP — the searching half
+
+§81.31's four only had to *address*; these three have to **compare**, and one
+comparison engine serves all of them. Every one walks a single row or column
+matching a key against each cell, and they differ only in what they do with
+the position they find: `MATCH` answers it, `VLOOKUP` and `HLOOKUP` step from
+it to a cell in another column or row.
+
+**Match type 0 is exact and anything else is approximate.** Type 1 — the
+default, and what `VLOOKUP` and `HLOOKUP` always do — keeps the *last* cell
+still at or below the key, which is the largest one not over it when the
+vector ascends; type −1 keeps the last still at or above. Excel says the vector
+must be sorted; an unsorted one gets an answer this makes no promise about
+rather than an error, which is Excel's behaviour too.
+
+**`[sh_lk_mt]` is the match type and `[sh_lk_idx]` is not.** They were one
+field for one build, and `VLOOKUP` — whose third argument is a *column number*
+— then read that column number as a match type: `VLOOKUP(x,r,2)` did an exact
+match and `VLOOKUP(x,r,0)` an approximate one, both silently. Two fields now.
+
+**A blank, an error, or a cell of the other type is never a candidate.** Excel
+ignores text while looking for a number and the reverse, and that is what lets
+a lookup table carry a header row without the search finding it. Text compares
+**case-insensitively**, because Excel's lookups do — `MATCH("ccc",…)` finds
+`CCC`, and `EXACT` is the function that does not.
+
+`#N/A` is what "no match" is; `#REF!` is what a column outside the range is.
+The two are different questions and answering either with `#VALUE!` would say
+the arguments were wrong when they were not.
+
+#### 81.32.1 The scan recurses, so everything it needs is banked
+
+`sh_getcell2` runs a whole evaluation for any formula cell it lands on — which
+is exactly why §81.23's corners are `sh_arg1col`/`sh_arg1row` and not
+`sh_r1col`/`sh_r1row`. The key, the reference's four corners, the index and the
+best-so-far are all banked in `sh_lk_*` before the walk starts.
+
+That leaves one case the banking cannot cover: a search reached *from inside a
+searched range* would overwrite the outer search's key. The key is 65 bytes and
+a task stack is **384** (§20.6 rule 6), so banking it per nesting level is not
+available. `[sh_lk_busy]` **refuses** the inner search instead — a stated limit
+rather than a silently wrong answer (§47), and liftable later by moving the key
+into a claim.
+
+#### 81.32.2 `rep movsw` wrote the key into another segment
+
+The key's eight bytes were banked with `rep movsw`, which writes **ES:DI** —
+and `ES` in this app is a cell or text claim far more often than it is the
+package. So the key landed somewhere else and every numeric comparison missed.
+
+**The failure was beautifully specific**: `MATCH("ccc",B1:B4,0)` found its row
+and `MATCH(30,A1:A4,0)` said `#N/A`, because the *text* path banks its key with
+a plain DS byte loop and only the numeric path used the string instruction.
+Four functions failing and one working is what said "segment", not "logic".
+
+#### 81.32.3 Verified
+
+Over `A1:A4` = 10/20/30/40 with `AAA`–`DDD` beside them
+(`screenshots/sheet-lookup-match.png`), and a horizontal table in rows 13–14
+(`screenshots/sheet-lookup-hlookup.png`):
+
+| | |
+|---|---|
+| `=MATCH(30,A1:A4,0)` | 3 |
+| `=MATCH(25,A1:A4,1)` | 2 — the largest not over 25 |
+| `=MATCH(99,A1:A4,0)` | `#N/A` |
+| `=MATCH("ccc",B1:B4,0)` | 3 — a text key, case-insensitively |
+| `=MATCH(40,A13:D13,0)` | 4 — the same walk sideways |
+| `=VLOOKUP(30,A1:B4,2)` | `CCC` |
+| `=VLOOKUP(25,A1:B4,2)` | `BBB` — approximate |
+| `=VLOOKUP(30,A1:B4,5)` | `#REF!` |
+| `=HLOOKUP(30,A13:D14,2)` | `YYY` |
+| `=HLOOKUP(25,A13:D14,2)` | `XXX` |
+
+`LOOKUP` is the one left in the category. Its vector form is `MATCH` followed
+by a fetch from a *second* reference, so it wants one more set of banked
+corners and is a small addition to this rather than a new mechanism.
+
+
+### 81.33 LOOKUP, and the lookup category closes
+
+Excel gives `LOOKUP` two forms and this has both:
+
+- **`LOOKUP(key, vector, result)`** — match along `vector`, answer with the
+  element of `result` at the same **position**. The two need not be the same
+  shape or even the same length.
+- **`LOOKUP(key, array)`** — search the array's first row or column, whichever
+  is longer, and answer from its **last** one.
+
+Which way the first reference runs is decided by shape: **wider than tall
+searches its row, anything else its column.** That makes a single cell a column
+of one and a square array a set of columns, both as Excel has them.
+
+It is **always approximate** — there is no match-type argument — so the key
+finds the largest entry not over it, and a key below every entry is `#N/A`.
+
+**A result vector shorter than the position found is `#N/A`**, not a clamp. The
+position is real and there is simply no element to answer with; clamping would
+hand back a different row's value and say nothing.
+
+`sh_plklookup` is entered from `sh_plksearch` with the key and the first
+reference already banked, and shares its exits — so the whole of `LOOKUP` is
+the walk it already had plus a second set of corners. That is what made it the
+right function to finish the category with rather than a new mechanism.
+
+**Verified live** (`screenshots/sheet-lookup-lookup.png`), over `A1:A4` =
+10/20/30/40 with `AAA`–`DDD` in B:
+
+| | |
+|---|---|
+| `=LOOKUP(30,A1:A4,B1:B4)` | `CCC` — the vector form |
+| `=LOOKUP(25,A1:A4,B1:B4)` | `BBB` — approximate |
+| `=LOOKUP(30,A1:B4)` | `CCC` — the array form, answering from the last column |
+| `=LOOKUP(5,A1:A4,B1:B4)` | `#N/A` — below every entry |
+| `=LOOKUP(30,A1:A4,B1:B2)` | `#N/A` — the result vector is too short |
+
+**The category is complete**: `ROWS`, `COLUMNS`, `AREAS`, `INDEX`, `MATCH`,
+`VLOOKUP`, `HLOOKUP`, `LOOKUP`. Sheet knows **77** of Excel 2.1d's ~120
+(its 131 less the 11 database functions deferred until a database app exists).
+What remains is three groups, and each is gated on one thing rather than on
+effort: the **statistical** rest needs nothing new; **trigonometry and the
+logarithms** need a transcendental layer `apps/os88fp.inc` does not have
+(add, subtract, multiply, divide, square root, floor, round and truncate is
+all of it today); the **financial** thirteen need real `pow` from that same
+layer; and the **matrix and array** functions need array formulas, which is an
+evaluation-model change rather than a function.
+
+
+### 81.34 VAR, VARP, STDEV, STDEVP — the statistical category closes
+
+The manual's own list settles what was left: the statistical category is
+`AVERAGE`, `COUNT`, `COUNTA`, `GROWTH`, `LINEST`, `LOGEST`, `MAX`, `MIN`,
+`STDEV`, `STDEVP`, `SUM`, `TREND`, `VAR`, `VARP`. Six were already here and
+four of the rest are **array** functions — a gap in the evaluation model
+rather than in the function library — which leaves exactly these four. *Excel 2.1d does have the population forms* —
+checked in `LIBRARY/documentation/excel_man/Microsoft Excel Functions and
+Macros.pdf` rather than assumed, because `STDEVP` and `VARP` read like later
+additions and are not.
+
+**They are folds, so they rejoin the fold path rather than getting one of
+their own.** `sh_pfunc` sends ids 77 and up straight to `.fold`; `sh_prange`
+walks their arguments exactly as `SUM`'s, and only `sh_foldvalue` and
+`sh_funcfinish` know the difference.
+
+`variance = (Σx² − (Σx)²/n) / d`, with `d` = *n* for the population forms and
+*n−1* for the sample ones; the standard deviations are its square root, which
+`fp_sqrt` already provided. **One pass** — which is what the fold machinery
+gives, and what Excel 2.1 itself did. Its accuracy comes with it: subtracting
+two large nearly-equal numbers loses digits when the mean is far from zero. The
+two-pass form is better and is not available here, because this parser folds as
+it **parses** and cannot walk the range twice.
+
+`VAR` or `STDEV` of a single value is **`#DIV/0!`**, which is Excel's own
+answer — *n−1* is zero and a sample of one has no spread.
+
+#### 81.34.1 One variance fold at a time
+
+`sh_pacc2` — the sum of squares — is a single accumulator beside `sh_pacc`, so
+a variance fold inside another variance fold's arguments would share it.
+`[sh_stbusy]` refuses the inner one (§47), the same shape §81.32.1's
+`[sh_lk_busy]` takes and for the same reason: a task stack is 384 bytes
+(§20.6 rule 6) and banking another eight per nesting level is not free.
+
+**The flag is banked by `sh_pfunc`, not cleared by `sh_funcfinish`.** Clearing
+it at the end of the arithmetic covers the path where the arithmetic runs; an
+argument list that fails to parse never reaches it, and the flag would have
+stayed set for the rest of the session with every later `VAR` refusing. Pushing
+it with `sh_pfid` and the accumulator covers every exit, including the ones
+that error.
+
+#### 81.34.2 Verified
+
+Over the textbook set `2,4,4,4,5,5,7,9` in `A1:A8`
+(`screenshots/sheet-statistical-var-stdev.png`), against Python's
+`statistics` module:
+
+| | Sheet | reference |
+|---|---|---|
+| `=VAR(A1:A8)` | 4.57142 | 4.571428571428571 |
+| `=VARP(A1:A8)` | 4 | 4 |
+| `=STDEV(A1:A8)` | 2.13808 | 2.138090 |
+| `=STDEVP(A1:A8)` | 2 | 2 |
+| `=VAR(A1)` | `#DIV/0!` | — |
+| `=AVERAGE(A1:A8)` | 5 | 5 |
+
+**Sheet knows 81 of Excel 2.1d's ~120**, and two of the four remaining groups
+are now the same blocker: trigonometry, the logarithms and the financial
+thirteen all wait on a transcendental layer `apps/os88fp.inc` does not have.
+The matrix and array functions wait on array formulas.
+
+
+### 81.35 LN, LOG10, EXP, PI and LOG — the logarithms arrive
+
+Blocked on one thing and one thing only: `apps/os88fp.inc` had no logarithm
+(§84.10 is the layer that fixed it). The value model has been IEEE-754 double
+since stage 4.0, so nothing else stood in the way.
+
+`LN` and `EXP` are one call each. **`LOG10` and `LOG(number, base)` are a ratio
+of two logarithms**, and the order they are taken in is load-bearing:
+
+**The RAW values are banked, not their logarithms.** `fp_ln` owns `fp_e0`
+through `fp_e3` as its own scratch, so an intermediate parked there does not
+survive the second call. `LOG10(1000)` came back **0** and `LOG(100)` came back
+**0.04825** — the second dividing by a `ln(10)` computed over the wreckage of
+the first. `sh_tr0`/`sh_tr1` are Sheet's own and outlive it, and parking the
+*arguments* rather than their logs there also means nothing of value crosses
+the `sh_pcmp` that parses the base.
+
+A logarithm of zero or a negative is **`#NUM!`**, the answer `SQRT` already
+gives for the same kind of question.
+
+#### 81.35.1 A function name may end in digits
+
+`LOG10` is the first name in this app that does, and it did not work: `sh_pident`
+collects letters (and the `.` that `ERROR.TYPE` needs) and stops at a digit, so
+`LOG10(1000)` lexed as the **column** `LOG` and the **row** `10` and went down
+the cell-reference path. It answered 0 and said nothing.
+
+Excel's own rule settles it: letters then digits then `(` is a **function**;
+letters then digits then anything else is a **cell**. So the digits are looked
+past without being consumed, and only a `(` beyond them pulls them into the
+name. `A1` and `$A$1` reach the reference path untouched — which is what
+`=A1+A1` answering 14 in the verification below is there to prove, and not a
+throwaway.
+
+**The two formula rewriters take the same rule.** `sh_reidx_cellpart`
+(Insert/Delete Row/Column) and `sh_copy_cellpart` (Copy, Fill) scan past a
+digit run before treating it as a row, and a `(` beyond it sends the whole
+name out verbatim. Without it every shift rewrote `LOG10(` as `LOG11(`, `LOF10(`
+or `#REF!(`, and `ATAN2(` the same way, and stored the result.
+
+#### 81.35.2 Verified
+
+`screenshots/sheet-logarithms.png`, with 7 in A1:
+
+| | |
+|---|---|
+| `=LN(2)` | 0.69314 |
+| `=LOG10(1000)` | 3 |
+| `=EXP(1)` | 2.71828 |
+| `=PI()` | 3.14159 |
+| `=LOG(8,2)` | 3 |
+| `=LOG(100)` | 2 — the base defaults to ten |
+| `=LN(-1)` | `#NUM!` |
+| `=LOG10(0.001)` | −3 |
+| `=EXP(LN(5))` | 5 — a round trip through both series |
+| `=A1+A1` | 14 — the lexer change did not cost the reference path |
+
+
+### 81.36 The trigonometric seven
+
+`SIN`, `COS`, `TAN`, `ASIN`, `ACOS`, `ATAN` and `ATAN2`, on §84.11's layer. With
+them Sheet knows **93** of Excel 2.1d's ~120, and the trigonometric category is
+complete.
+
+`ASIN(x) = atan(x / √(1−x²))` and `ACOS(x) = π/2 − ASIN(x)`. The domain is
+`[-1, 1]`; at either end the square root is zero and the quotient has no value,
+so `±π/2` is written directly rather than divided for. Outside it, `#NUM!`.
+`TAN` at a pole is `#DIV/0!`, which is what a tangent's pole *is*. `SIN` and
+`COS` past a word of quadrants are `#NUM!` too, on `fp_sin`'s CF (§84.11).
+
+**`ATAN2(x_number, y_number)` takes x first**, which is the reverse of C's
+`atan2(y, x)` and the one thing about this function everybody gets wrong. It is
+Excel's order, checked in the manual.
+
+#### 81.36.1 Three bugs, and all three were about a register or a slot
+
+**`SI` stopped being the formula.** Every constant here is loaded with
+`mov si, <addr>` for `fp_unpack_*`, so the moment one runs, `SI` is no longer
+the parse pointer. `PI()/6` answered **3.14159**: `.store` went looking for the
+closing parenthesis *inside the constant table*, never saw the `/`, and the
+whole trailing expression was lost. `[sh_trsi]` banks the pointer the moment
+parsing ends and `.store` restores it. `SIN` and `TAN` were never wrong — only
+`PI()` followed by an operator was, which is why `=SIN(0.5236)` passed while
+`=SIN(PI()/6)` did not.
+
+**`sh_acc_store` over a fresh parse.** `ATAN2` called it straight after
+`sh_pcmp`, which stores **A** into `sh_acc` — but `sh_pcmp` leaves its answer
+in `sh_acc` and says nothing about `A`. The parsed argument was overwritten
+with whatever the last arithmetic had left in the accumulator, and
+`ATAN2(-1,1)` came back 0.78539.
+
+**The quadrant read the wrong number's sign.** The rule turns on the sign of
+*y*, and the atan result is parked in `sh_tr1` — which is where y was. Testing
+it there tested the answer instead, and `ATAN2(-1,1)` became −3.9269 where
+2.35619 was wanted. The sign is taken into `CL` before anything overwrites it.
+
+#### 81.36.2 Verified
+
+`screenshots/sheet-trigonometry.png`:
+
+| | |
+|---|---|
+| `=SIN(PI()/6)` | 0.5 |
+| `=COS(0)` | 1 |
+| `=TAN(PI()/4)` | 1 |
+| `=ASIN(0.5)` | 0.52359 |
+| `=ACOS(0.5)` | 1.04719 |
+| `=ATAN(1)` | 0.78539 |
+| `=ATAN2(1,1)` | 0.78539 |
+| `=ATAN2(-1,1)` | 2.35619 |
+| `=ATAN2(-1,-1)` | −2.3561 |
+| `=ATAN2(0,1)` | 1.57079 |
+| `=ASIN(2)` | `#NUM!` |
+
+
+### 81.37 The financial functions, part one
+
+`SLN`, `SYD`, `PMT`, `PV`, `FV` and `NPV` — six of the manual's thirteen, on
+`fp_pow` from §84.10. Sheet knows **99** of Excel 2.1d's ~120.
+
+They differ from everything above in **taking several arguments with the
+trailing ones optional**, so they share one parser. `sh_pfargs` fills
+`sh_fnarg[]`, zeroing all five slots first, and says how many arrived; a
+missing argument is therefore **zero**, which is Excel's rule for every one of
+them.
+
+**One identity gives three of them.** With `r` the rate, `n` the periods and
+`t` the type (0 = paid at a period's end, 1 = its beginning):
+
+```
+pv·(1+r)^n  +  pmt·(1+t·r)·((1+r)^n − 1)/r  +  fv  =  0
+```
+
+`sh_fnt` holds `(1+r)^n` and `sh_fnu` that factor, and `PMT`, `PV` and `FV`
+each rearrange for the one they want. **`r = 0` is its own case**, where the
+factor is simply `n` — the limit — and the general form divides by zero.
+
+#### 81.37.1 DI held the id and was also a destination
+
+`PV` answered **FV's** number. `DI` carried the function id from the top of
+`sh_pfin`, and `.annuity` uses `DI` as `fp_pack_a`'s destination half a dozen
+times — so by the dispatch at `.havef`, `cmp di, 96` was comparing a pointer
+to `sh_fnt`. Both fell through to `FV`. The id lives in `[sh_fnid]` now.
+
+This is the **third** time in this session a register has been asked to be both
+an identifier and a working pointer — §81.35's `sh_trcopy` took `BX` for the
+same reason, and §81.36's `SI` stopped being the formula. The pattern is worth
+naming: in a routine long enough to call the float layer, nothing survives in a
+register unless the file says it does.
+
+#### 81.37.2 Verified
+
+`screenshots/sheet-financial.png`, against the same formulas evaluated in
+Python:
+
+| | Sheet | reference |
+|---|---|---|
+| `=SLN(10000,1000,5)` | 1800 | 1800 |
+| `=SYD(10000,1000,5,1)` | 3000 | 3000 |
+| `=SYD(10000,1000,5,5)` | 600 | 600 |
+| `=PMT(0.01,60,-20000)` | 444.888 | 444.888954 |
+| `=PV(0.01,60,-500)` | 22477.5 | 22477.519203 |
+| `=FV(0.01,60,-500)` | 40834.8 | 40834.834928 |
+| `=FV(0,10,-100)` | 1000 | 1000 — the zero-rate case |
+| `=NPV(0.1,100,200,300)` | 481.592 | 481.592787 |
+| `=PMT(0.01,60,-20000,0,1)` | 440.484 | 440.4841 — paid at the start |
+
+#### 81.37.3 NPER and DDB
+
+`NPER` is one more rearrangement of the same identity:
+`ln((A − fv)/(A + pv)) / ln(1+r)` with `A = pmt·(1+t·r)/r`, and `r = 0` again
+its own case at `−(pv + fv)/pmt`. **A logarithm of a negative** there means the
+payments never retire the balance — the debt grows — and `#NUM!` is Excel's
+answer for it.
+
+`DDB` is walked **one period at a time**, because that is what it *is*: each
+period takes twice the straight-line fraction of what is **left**, and the walk
+stops taking anything once the book value reaches salvage. The answer is the
+amount taken in `period` alone, not the total. Excel 2.1's `DDB` has no factor
+argument — that arrived later — so the factor is 2.
+
+Verified (`screenshots/sheet-financial-nper-ddb.png`):
+`=NPER(0.01,-500,20000)` 51.3375 (51.337552), `=NPER(0,-100,1000)` 10,
+`=DDB(10000,1000,5,1)` 4000, `=DDB(…,2)` 2400, and `=DDB(…,5)` **296** — the
+period where the salvage clip bites, and the one worth having a case for.
+
+The argument store is **six** slots now, because `IPMT`, `PPMT` and `RATE` take
+that many.
+
+#### 81.37.4 IPMT and PPMT, and the refactor that made them cheap
+
+The interest in one period is **the balance still owed before it, times the
+rate** — and that balance is the same annuity evaluated at a *smaller period
+count*. So the inline block inside `.annuity` became `sh_fnfac`, which takes
+its `n` in `sh_fnnp` and its type in `sh_fnty` rather than reading arguments 1
+and 4. `PPMT` is then simply `PMT − IPMT`: every payment is one or the other.
+
+**The type is not always argument 4.** `PMT`, `PV` and `FV` put it there;
+`IPMT` and `PPMT` at 5. `sh_fnsetty` takes the index from the caller instead of
+the helper assuming one — the alternative being a helper that is right for
+three functions and quietly wrong for two.
+
+With a type of 1 the **first period has no interest at all**: the payment is
+made before any has accrued, and Excel answers 0.
+
+Verified (`screenshots/sheet-financial-ipmt-ppmt.png`), on a 20,000 loan at 1%
+over 60 periods:
+
+| | Sheet | reference |
+|---|---|---|
+| `=IPMT(0.01,1,60,20000)` | −200 | −200 |
+| `=IPMT(0.01,2,60,20000)` | −197.55 | −197.551110 |
+| `=IPMT(0.01,60,60,20000)` | −4.4048 | −4.404841 |
+| `=PPMT(0.01,1,60,20000)` | −244.88 | −244.888954 |
+| `=PPMT(0.01,60,60,20000)` | −440.48 | −440.484113 |
+| `=IPMT(0.01,1,60,20000,0,1)` | 0 | 0 — paid before interest accrues |
+| `=PMT(0.01,60,20000)` | −444.88 | −444.888954 |
+
+The last row is there on purpose: **IPMT + PPMT = PMT** in every row above it,
+which is a consistency the three formulas cannot satisfy by accident. And the
+five values from §81.37.2 were re-checked after the refactor and are unchanged.
+
+#### 81.37.5 RATE, and the first function here that iterates
+
+There is no closed form for `r` in §81.37's identity, so `RATE` is solved by
+the **secant** method: two points, a straight line through them, and its root
+as the next point.
+
+**Secant and not Newton**, and not for speed. Newton wants the derivative of
+that identity, which is a page of algebra that would then have to agree with
+`sh_fnfac` about every one of its own edge cases — the zero rate, the type
+factor, the power. The secant method needs only the function, so there is one
+definition of the annuity in this file and not two that can drift apart.
+
+This meant `sh_fnfac` stopping at last from reading the rate out of argument 0:
+it takes it from `sh_fnr` now, because **a root-finder's whole job is to vary
+it**. Every other caller fills that slot from its own argument first.
+
+**It can fail, which nothing before it could.** Forty iterations; either a
+small enough residual or a flat secant ends it, and running out answers
+`#NUM!` — Excel's own reply, and the reason `guess` is an argument at all: a
+caller who knows roughly where the root lies can put the search there.
+
+Verified (`screenshots/sheet-financial-rate.png`), against bisection on the
+same residual:
+
+| | Sheet | reference |
+|---|---|---|
+| `=RATE(60,-500,20000)` | 0.01439 | 0.01439478 |
+| `=RATE(10,-100,800)` | 0.04277 | 0.04277498 |
+| `=RATE(60,-444.888954,20000)` | 0.01000 | 0.01 — **it inverts `PMT`** |
+| `=RATE(10,100,800)` | `#NUM!` | no root: `pmt` and `pv` share a sign |
+
+The third row is the one that matters: `PMT(0.01,60,20000)` is −444.888954, so
+feeding that back to `RATE` must return the 0.01 it came from. The fourth is
+the failure path doing its job rather than returning a plausible number.
+
+#### 81.37.6 IRR, MIRR, and a range that is never collected
+
+These two take their cash flows as a **range**, so they parse a reference
+first and then whatever scalars follow. The corners are banked in `sh_ir*`
+because `sh_getcell2` runs a whole evaluation for any formula cell the walk
+lands on — §81.32.1's reason, one category later.
+
+**The values are never collected.** A range can be any size, so instead of
+copying it into an array the walk re-reads the cells each time it is needed.
+`IRR`'s secant loop therefore reads the range up to forty times, which on a
+4.77 MHz 8088 is worth knowing before putting `IRR` over a long column. The
+alternative is a fixed capacity, and a spreadsheet function with a silent
+capacity is worse than a slow one.
+
+**The position advances for every number, taken or not.** `sh_irwalk`'s modes
+select which values contribute — all, only negatives, only positives, the last
+two for `MIRR` — but `i` is where a flow sits in the *series*, not among the
+ones being summed. A walk that skipped the exponent would discount the fourth
+year as if it were the second.
+
+`MIRR` is **closed form** despite its reputation: two discounted sums and one
+root, `(−pos·(1+rrate)^n / (neg·(1+frate)))^(1/(n−1)) − 1`. Only `IRR`
+iterates.
+
+#### 81.37.7 POWER was integer-only, and only MIRR was ever going to notice
+
+`POWER` parsed both arguments as **16-bit integers** and multiplied with
+`imul` — a stage 3.0d routine that nothing upgraded when the value model became
+a double. `POWER(1.12, 6)` truncated its base to 1 and answered **1**. The `^`
+operator was the same, with a comment reading *"a fractional power needs
+logarithms, which this file does not have"* — true when written and false since
+§84.10.
+
+It went unnoticed because the only thing exercising either was whole-number
+powers, where truncating the base changes nothing. `MIRR` asking for
+`(1.12)^6` is what finally showed it. Both go through `fp_pow` now, and `2^0.5`
+is 1.41421 rather than 1.
+
+**And `fp_pow`'s own fractional path was broken the same way `LOG10` had been**:
+it parked the exponent in `fp_e1` across a call to `fp_ln`, which **owns**
+`fp_e0`–`fp_e3`. Every fractional power returned 1 while the whole-number path
+beside it was right and hid it. The exponent goes on the stack now.
+
+**The real failure was in the testing.** §84.10 built `fp_pow` and added twelve
+`fptest` cases — for `ln` and `exp`, and **none for `pow`**. A routine with no
+case is a routine with no evidence, which is §61.7's lesson arriving again in a
+different file. `fptest` has seven `pow` rows now, carried in the record's spare
+`digits` word as an exponent in tenths so that 0.5, 6 and −2 all fit without
+widening every other row. **53 cases, all passing, soft and 8087.**
+
+#### 81.37.8 Verified, and the category closes
+
+`screenshots/sheet-financial-irr-mirr.png`, over the flows
+−70000, 12000, 15000, 18000, 21000, 26000:
+
+| | Sheet | reference |
+|---|---|---|
+| `=IRR(A1:A6)` | 0.08663 | 0.08663095 |
+| `=MIRR(A1:A6,0.1,0.12)` | 0.09867 | 0.09866911 — **corrected**, see below |
+| `=IRR(A1:A6,0.5)` | 0.08663 | converges from a distant guess |
+| `=IRR(A2:A6)` | `#NUM!` | all positive: no root exists |
+| `=NPV(0.08663095,12000,…,26000)` | 69999.9 | 70000 — **the outflow** |
+| `=POWER(2,0.5)` / `=2^0.5` | 1.41421 | 1.4142135 |
+
+**The MIRR row above said 0.10263 for both columns until `tests/sheetfin.py`,
+and both were wrong.** `sh_irwalk` discounts from period **zero** — IRR's
+convention, and right for IRR — so each walk is `(1+r)·NPV`. MIRR was written
+from Excel's statement of it, which uses `NPV` and so discounts from period
+**one**: `(−NPV(rr, pos)·(1+rr)^n / (NPV(fr, neg)·(1+fr)))^(1/(n−1)) − 1`.
+Applied to the walks, that carries one factor of `(1+rr)/(1+fr)` too many —
+1.12/1.10 here, which is exactly 0.10264 against 0.09867. In the walk's own
+terms it is `(−walk_pos·(1+rr)^(n−1) / walk_neg)^(1/(n−1)) − 1`, which is also
+what MIRR *means*: positives carried forward to the last period over negatives
+brought back to the first. The Python that produced the reference column made
+the same substitution, so SHEET and its check agreed perfectly — §81.38's
+lesson about a writer and a reader sharing a misunderstanding, arriving from a
+direction that section did not cover. The gate now carries Microsoft's own
+documented example (`−120000, 39000, 30000, 21000, 37000, 46000` at 10%/12%,
+published as **12.61%**) as the one expectation in it that no arithmetic here
+produced.
+
+The `NPV` row is the cross-check: discounting the inflows at the rate `IRR`
+returned must give back the initial outflow, which is what an internal rate of
+return *means*.
+
+**All thirteen financial functions are in.** Sheet knows **106** of Excel
+2.1d's ~120; what remains is the matrix and array family, which needs array
+formulas — an evaluation-model change rather than a function.
+
+
+### 81.38 A second opinion about the file formats (`tools/os88sheetfmt.py`)
+
+SHEET writes three formats — BIFF (what Excel and this app both call
+"Normal"; BIFF3 records, which is what the writer emits — this said BIFF2
+until §81.52 found the reader could not even read that), SYLK and DIF — and until now **nothing outside SHEET had ever read
+one**. The suite's only SHEET row was `stkbalance`, a static check. A file was
+declared good because SHEET could open it again.
+
+That is the weakest possible evidence about a file format, and the reason is
+worth stating plainly: **a writer and a reader that share a misunderstanding
+agree with each other perfectly.** The round trip passes, the numbers come
+back, and the file is one that no other program on earth can open. `os88flush`
+makes exactly this argument about the FAT12 driver and gets the disk back out
+of the emulator to settle it; this is the same argument about the three
+formats a spreadsheet exists to interchange with.
+
+`tools/os88sheetfmt.py` is the outside opinion. **Nothing in it was written by
+reading `apps/sheet/sheet.asm`.** It comes from the published grammars:
+
+- **SYLK and DIF** from Jeff Walden's *File Formats for Popular PC Software: A
+  Programmer's Reference* — the same book that corrected SHEET's own DIF
+  value-indicator line when the writer was built, and which is more precise
+  than any web summary about it. Records, the `;X`/`;Y` sticky coordinates,
+  the doubled-semicolon escape, DIF's `BOT`/`EOD` and its five value
+  indicators.
+- **BIFF2** from the OpenOffice.org *Microsoft Excel File Format* document:
+  record ids `0001H` BLANK, `0002H` INTEGER, `0003H` NUMBER, `0004H` LABEL,
+  `0005H` BOOLERR, `0006H` FORMULA, `0009H` BOF, `000AH` EOF; the BIFF2 cell
+  header of row(2), column(2), cell attributes(3); and the §2.4 error codes.
+
+**It writes SYLK as well as reading it**, and that is the half that makes the
+gate non-vacuous. The test hands SHEET a file the HOST authored, so a defect
+in SHEET's reader cannot be cancelled out by the matching defect in its
+writer — which is precisely what a save-then-load round trip is least able to
+see.
+
+**Numbers compare with a tolerance and formulas compare by their result.** The
+three formats do not agree about how a double is spelled: BIFF stores the
+bits, SYLK and DIF store a decimal rendering. And DIF cannot carry an
+expression at all, so a cross-format comparison that demanded one would only
+ever have been testing SYLK.
+
+`--selfcheck` is a `fast` row. It proves only that the library parses what it
+writes — it says nothing about SHEET, and the docstring says so. Both halves
+were mutation-tested: removing the `;;` escape and moving SYLK's origin by one
+each fail it.
+
+
+#### 81.38.2 A formula whose result is TEXT did not survive a reload
+
+Found by driving the three applications end to end rather than by a file
+comparison, and it needed that: **the file on disk was never wrong.**
+
+SHEET writes a formula cell as `;E` then `;K` — the expression, then its
+cached result:
+
+```
+C;X2;Y11;ESTDEV(R[-7]C:R[-4]C[2]);K1216.105442     numeric ;K
+C;X2;Y14;EVLOOKUP("SU",...,2);K"Mulcahy"           quoted  ;K
+```
+
+Both records are correct SYLK. On the way back in, a numeric `;K` goes to
+`.knum` and lands in `SH_TDVAL`; a **quoted** `;K` went to `.kt`, which copied
+it into `SH_TEXPR` — *the buffer the `;E` had just been parsed into*. The
+formula was overwritten by its own cached answer, and the cell loaded as
+`=Mulcahy`, which is `#NAME?`.
+
+The comment above that loop said `SH_TEXPR` was "the same buffer `;E` uses,
+and never at the same time: **a label has no formula**". That is true of a
+label and false of a formula whose *result* is a label. §81.22 made formulas
+able to answer with text long after this loop was written, and nothing came
+back to re-read the premise.
+
+**The bug had already been found once, in the branch immediately below.**
+`.kerr` carries the identical correction for error values — *"a FORMULA cell
+writes both `;E` and `;K`, `;E` comes first, and parsing the `;K` into `;E`'s
+buffer overwrote the formula"* — and fixed only that case. `.apply` even
+states the right rule already: *"a `;E` field wins over `;K`"*. It simply never
+got the chance, because the buffer was gone before it ran.
+
+The quoted text now lands in `sh_rwsrc`, where the error name already goes, and
+`.noterr_c` reads it from there. **Zero bytes** — the same instructions with a
+different label. Every text-returning function was affected: `UPPER`, `LOWER`,
+`PROPER`, `TRIM`, `LEFT`, `RIGHT`, `MID`, `REPT`, `TEXT`, `DOLLAR`, `FIXED`,
+`T`, `SUBSTITUTE`, `REPLACE`, and the lookups whenever they find a label.
+
+**Why no gate caught it.** §81.38's round trip compares the *file*, and the file
+was right; `--selfcheck` compares the library with itself. What this needed was
+a workbook written by the program, closed, and opened again by the program —
+which is what an application test does and a format test does not.
+
+
+#### 81.38.3 The application test: one document, three programs
+
+The run 81.38.2 came out of. A quarter's report produced **by** SHEET, CHART
+and SCRIBE rather than about them, driven through MartyPC on
+`os8088_xt_vga` — CGA's 200 lines show four rows of a spreadsheet, which is
+not enough to work in.
+
+| step | what it exercised | result |
+|---|---|---|
+| Host writes `XQ3.SLK`, association opens it | SYLK reader, `.SLK` claim | 4 divisions × 3 months |
+| Formulas typed into the running program | parser, entry path | — |
+| Edit ▸ Fill Down / Fill Right | reference adjustment | identical relative R1C1 down all four rows |
+| `STDEV VAR MAX VLOOKUP UPPER DATE NPV PMT LN` | 9 categories | every digit matched the host |
+| File ▸ Save, reopen | SYLK writer + reader | **found §81.38.2** |
+| Data ▸ Chart Column, Gallery | the rasterizer | Column drawn, gallery switches |
+| Data ▸ Export Chart as BMP | BMP writer | 240×160, 4bpp, valid header |
+| SCRIBE Insert ▸ Picture | `SCRIBE.OVL`'s decoder | chart on the page |
+| SCRIBE File ▸ Save | RTF writer | `\pict` payload **byte-identical to the BMP** |
+
+**The arithmetic is worth its own line.** `VAR` 1478912.447, `STDEV`
+1216.105442, `NPV` 32108.07102, `PMT` 830.3577453, `LN` 1.146477805, `DATE`
+46295 — all computed by `apps/os88fp.inc`'s software double and all equal to
+Python's to the last digit printed.
+
+**One thing worth knowing, and one retraction.**
+
+`Data ▸ Chart Column` puts the chart window in front, so **the next click on
+SHEET's own menu bar is spent raising SHEET** and the command does not run —
+the status bar still shows the previous message. That is click-to-focus meeting
+§81.5's *in-window* menu bar rather than a defect: a background window's menu
+is not reachable until the window is, and the Macintosh this OS is shaped after
+never has the problem because its menu bar belongs to the screen. It is still a
+trap worth naming, because from the user's side a menu item did nothing and
+said nothing, and it cost two runs here before it was recognised.
+
+**RETRACTED: "CHART opened the workbook and drew nothing, silently."** That
+sentence stood in this section and was wrong. CHART had opened `CHART.O88` —
+the application's own binary — because the click that was supposed to land on
+`XQ3.SLK` landed on the row above it. Given the real workbook it titles the
+window `XQ3.SLK` and draws the chart, with the axis at **1478900**: the `VAR`
+cell, 1,478,912, which is genuinely the largest number in column B and dwarfs
+the revenue figures beside it. `ct_ondlg` toasts `No numeric data found.` when
+`ct_valcnt` is zero and its header already documents the empty-canvas render,
+so the no-data path was never actually exercised — a transient toast several
+seconds before the screenshot would not have survived to be seen either way.
+
+The lesson is the session's own, turned around: **a claim that a program failed
+silently is exactly as much a claim as a claim that it worked**, and this one
+went into the specification on a single screenshot without being checked. It
+cost one run to disprove.
+
+**What only this could find.** §81.38's gate compares the file, and the file
+was right every time. §81.38.2 needed a workbook written by the program,
+closed, and opened again by the program — which is what using an application
+is, and what no unit gate in this tree does.
+
+
+#### 81.38.1 What it found on its first run
+
+Two defects, and **both are the same shape**: SHEET's writer and SHEET's
+reader made the identical mistake, so they cancelled and the round trip
+passed. Neither could have been found from inside.
+
+**1. SYLK's semicolon escape did not exist here, in either direction.** SYLK
+reserves `;` as its field separator and escapes a literal one by doubling it
+— Walden: *"Any field containing the reserved semicolon character must have
+two of them."* SHEET's writer doubled an embedded **quote** and not a
+semicolon, and its reader un-doubled a quote and not a semicolon. So a label
+`a;b` was written as `K"a;b"`, which any conforming reader splits into a `K"a`
+field and a stray `b"` — **the text silently truncated at the semicolon, in a
+file that still parses**. Coming the other way, a conforming file's `a;;b`
+loaded as the four characters `a;;b`.
+
+The round trip was perfect throughout, because the file SHEET wrote was
+exactly the file SHEET expected to read.
+
+**2. The BIFF error code was the wrong numbering.** `SH_C_AUX` holds Excel's
+`ERROR.TYPE` numbers, 1..7. A BIFF `BOOLERR` record does not use those: it
+uses the format's own codes — `00H` `#NULL!`, `07H` `#DIV/0!`, `0FH`
+`#VALUE!`, `17H` `#REF!`, `1DH` `#NAME?`, `24H` `#NUM!`, `2AH` `#N/A`. **Two
+numberings for the same seven errors.** A `#DIV/0!` went out as `02H`, which
+the format does not define, and came back as `02H` and was read as
+`ERROR.TYPE` 2, which is `#DIV/0!` again.
+
+`sh_biff_e2b`/`sh_biff_b2e` convert now. The cost was 68 bytes, and SHEET has
+133 left.
+
+**The comment is the part worth keeping.** Three places in `sheet.asm` said,
+in different words, that the code "travels with no translation" because it is
+already "Excel's own ERROR.TYPE number". Every clause of that is true except
+the conclusion: both numberings really are Excel's, they really do describe
+the same seven errors, and `SH_C_AUX` really does hold one of them. A claim
+assembled entirely out of true statements is the kind that survives review —
+which makes it the same failure as §82.16's phantom Makefile rule, in a
+different file and with a wrong byte at the end of it instead of a wrong
+boundary.
+
+Neither defect is exotic and neither needed a clever test. They needed **one
+reader that had not been written by the same hand as the writer.**
+
+
+### 81.39 What SHEET still lacks, measured (2026-10-18)
+
+> **Re-measured 2026-10-18 for §81.114's completion**, and TWO rows were
+> stale: Data, which still named `Table` as missing, and Options, which
+> still named `Workspace` — §81.106 had built that one, and the row's own
+> count of 6 already included it, so the row disagreed with itself. Both
+> were found by grepping the finished feature's name through every
+> blocked/missing list, which is the habit §81.114.11 records. **The table
+> is now: nothing missing anywhere except printing and what is struck as
+> MDI.**
+>
+> **Re-measured 2026-10-16, and the Macro row was not stale — it was
+> INVENTED.** It read "Macro | 4 | ~6 | Start Recorder, Resume". `Start
+> Recorder` shipped in §81.107, so that half was merely out of date. The
+> other half never existed: **Excel 2.1d's Macro menu has FIVE items** —
+> Record…, Run…, Start Recorder, Set Recorder, Relative Record — and the
+> capture this section names as its authority
+> (`LIBRARY/documentation/screenshots/excel/menu_macro.png`) shows exactly
+> those five with no Resume among them. `Macro Resume command` appears
+> nowhere in the Reference Guide, which names the other five; and `PAUSE()`,
+> the function §81.74.1 says Resume resumes, appears nowhere in *Microsoft
+> Excel Functions and Macros* — what suspends a macro there is
+> `WAIT(serial_number)`, an `ALERT`/`INPUT` dialog, or the ESC interrupt's
+> **Halt / Step / Continue**. `PAUSE`/`Resume` are a LATER Excel's macro
+> language, imported into a 2.1d inventory by mistake.
+>
+> So SHEET's Macro menu is complete and has been. The lesson is §81.39's own
+> and it is now four for four: **a gap in this table is not evidence that
+> the gap exists.** An inventory written from memory of the product invents
+> requirements as readily as it forgets closed ones, and a phantom costs
+> more than a stale row - it sends someone to build something the reference
+> does not have. The only menu command still genuinely missing anywhere
+> below was `Data ▸ Table`, and **it is built** (§81.114, five stages):
+> **nothing in this inventory is missing now**, printing (no OS backend) and
+> MDI (struck on purpose) aside.
+>
+> **Re-measured 2026-09-22**, after the macro language was finished: every
+> name in Excel 2.x's macro vocabulary is now built or declined with its
+> reason (§81.83-§81.97, §81.93 is the declined list). §81.39.3 and §81.39.4
+> said otherwise in three places and are corrected below; the menu table in
+> §81.39.2 was re-counted against `sh_i_*` and is unchanged.
+>
+> **Re-measured 2026-09-11**, over the 2026-09-03 count this section first
+> held. Closed since: `NOW RAND CLEAN ISNONTEXT INDIRECT` (§81.42 on), Paste
+> Special and Paste Link (§81.45), cell protection (§81.46), the logical value
+> (§81.51), comparisons by type (§81.53), Excel 2.1's own BIFF2 files (§81.52)
+> and a label running on into empty cells (§81.54). Every inventory in this
+> tree has gone stale within days of being written - quote a count only after
+> re-making it.
+>
+> **Function count updated 2026-09-17**: the eleven database functions closed
+> (§81.65), following a cross-era survey of VisiCalc, Lotus 1-2-3, SuperCalc
+> 5, Quattro Pro and Multiplan that found database functions were the one
+> family every DOS-era competitor but Multiplan shipped the identical way,
+> where array formulas turned out to be more of an Excel design bet (§81.65's
+> own header has the finding). CELL closed the same day (§81.66) - the
+> cheapest of the three original gaps, needing no enabler.
+>
+> **Data menu re-measured 2026-09-18**: `Set Database` and `Set Criteria`
+> closed in §81.69. They were left out of §81.65 as a convenience rather than
+> a requirement - the functions work without them - which is still true, and
+> is why they were a day's work rather than a family's.
+
+Counted, not recalled — the functions against `Microsoft Excel Functions and
+Macros.pdf`'s worksheet-function directory and SHEET's own table
+(`tools/os88sheetfmt.py --selfcheck` reports the count); the menus against
+the real Excel 2.1 captures in `LIBRARY/documentation/screenshots/excel/` and SHEET's `sh_i_*` tables.
+Neither reference is in this repository: naming them is provenance, not a
+path anyone can open here.
+
+#### 81.39.1 Functions — 131 of ~131
+
+**None missing.** The database family (§81.65's 11), `CELL` (§81.66), and
+all eight array/matrix functions including the regression family (§81.67's
+`LINEST LOGEST TREND GROWTH`, closed the same day as the rest of §81.67)
+closed 2026-09-17.
+
+`POWER` is in SHEET and not in the 2.1d directory — a later addition,
+harmless.
+
+#### 81.39.2 Menu commands, against the captures
+
+| menu | SHEET | Excel 2.1d | missing |
+|---|---|---|---|
+| Formula | 7 | 7 | **none** |
+| Edit | 11 | 12 | none — Undo and Redo since §81.57. **Repeat is DROPPED** (the owner's decision, 2026-09-22) **and its greyed `Can't Repeat` row REMOVED** (§81.99), so SHEET's Edit is Excel's less its second row - the one deliberate difference from the capture |
+| Format | 8 | 8 | **none** — Justify closed in §81.81 |
+| File | 5 | 11 | Page Setup, Printer Setup, Print (printing, out of scope) — `Delete` closed in §81.79. **Struck as MDI** (2026-09-22): Links and Save Workspace, which exist to reach and to re-open OTHER documents, and Close, which came off this list 2026-09-20 as `Exit`'s case one step on |
+| Window | 0 | 5 + the window list | **the whole menu is struck as MDI**: New Window, Show Info, Arrange All, Hide, Unhide and the list of open windows all manage document windows, and SHEET has one. So is the Control menu's document half - Maximize, Restore and Close of a DOCUMENT window (§81.93's MDI group has the macro side) |
+| Options | 6 | 10 | Set Print Area/Titles/Page Break (printing, out of scope) — **and `Workspace` came off this list in §81.106**, which built its check-box dialog. THE ROW CONTRADICTED ITSELF for that whole time: the count of 6 already included Workspace while the missing column still named it. Third stale row in this table, after `Calculate Now` and `Resume`. **Short Menus DROPPED** (the owner's decision, 2026-09-22) — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
+| Data | 13, 9 shared | 10 | **none** — `Table` closed in §81.114 (five stages, 2026-10-18); Parse in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69) |
+| Macro | 5 | **5** | **none** — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74) and `Start Recorder` in §81.107. **`Resume` IS NOT AN EXCEL 2.1d COMMAND AT ALL** — see the note below; this row carried it as missing work for its whole life |
+
+`Exit` is absent from File deliberately — the OS menu owns it (§12.2) — and
+**`Close` is absent for the same reason one step on**: Excel's Close ends a
+DOCUMENT because Excel is MDI, while this app has one document per instance
+and the window's own close box already ends both, so the item would be a
+second name for the close box and would express no distinction this app has.
+What would make it meaningful is MDI, which §81.75 records as the one thing
+the 1.8 look leaves out on purpose. SHEET's
+Data menu carries three items Excel does not have at all (Chart Column, Chart
+Gallery, Export Chart as BMP): in Excel charting is a separate document type,
+and §82 is this tree's answer to that.
+
+#### 81.39.3 Behaviour, not commands
+
+- **Number formats: all twenty-one built-ins since §81.55**, which closed
+  what was the largest gap here. Custom codes are drawn (TEXT() takes any)
+  but the Format Number dialog offers only the list, and SYLK carries only
+  four.
+- **Row heights are per row since §81.60**, column widths per column since
+  §81.56, **hiding either is §81.73** — a height or width of 0, which also
+  turned the viewport's visible-to-real mapping from arithmetic into a table —
+  and **dragging a heading to resize is §81.73.2**. The pair is closed.
+- **Undo is one level, as Excel 2.1's is** (§81.57); Repeat is dropped (dropped by the owner, 2026-09-22).
+- **No printing at all** — and not SHEET's fault: there is no print backend
+  anywhere in this OS. Seven of the missing File/Options commands are
+  downstream of that one absence.
+- **The macro language is finished** (docs/plans/SHEET-MACRO-PLAN.md,
+  waves 0-5): subroutines (§81.84), references as values (§81.85), control
+  and information (§81.86, §81.87), the command equivalents (§81.88-§81.90),
+  text files (§81.91), ON.KEY and ON.TIME (§81.92), custom menus (§81.95),
+  DIALOG.BOX (§81.96), and a macro sheet that saves and reopens as one, with
+  its formulas, through BIFF (§81.83, §81.97). What is not built is DECLINED
+  with a reason in §81.93 - 72 names, 22 of them MDI and SEND.KEYS among
+  the rest - or blocked on a SHEET command that does not exist yet (13,
+  `TABLE` the one a later command would bring). Five names
+  a 2026-09-22 sweep of the book found in neither list are listed there as
+  not yet decided. **The recorder is complete**: `Start Recorder` shipped in
+  §81.107 and `Resume` is not an Excel 2.1d command at all (the note at the
+  top of this section) - this sentence carried the phantom in a second place
+  until 2026-10-16.
+- **No Short/Full menus toggle**, and none is coming: dropped (dropped by the owner, 2026-09-22). Freeze Panes is done (§81.70).
+- **Smaller, each listed where it was found — all three closed:** Sort puts
+  a blank key cell last in both directions since §81.80, a centred or
+  right-aligned label runs on into its neighbours since §81.76, and a
+  formatted empty cell keeps its format through BIFF since §81.77. Fill's error constant, SYLK's `;` inside a
+  formula and Sort's labels, logicals and errors were closed by §81.61.
+
+#### 81.39.4 The enablers, in dependency order
+
+Almost everything above hangs off six pieces of work:
+
+1. ~~A number-format table~~ — **done in §81.55**: the border table's sixth
+   byte, Excel's 21 codes and one engine for the grid and TEXT().
+2. ~~Array formulas~~ — **turned out not to gate anything**: §81.67 found
+   every one of the 8 functions can answer its own top-left element without
+   multi-cell entry, matching Excel's own non-CSE behaviour, so all 8 are
+   done or in progress without it. `Data ▸ Table` was the one thing left
+   that is genuinely a multi-cell feature rather than an array-returning
+   function, and **§81.114 built it** without array formulas either: a
+   result cell holds a stored value that the table engine recomputes, which
+   is what Excel's own `tTbl` describes.
+3. ~~A database + criteria area~~ — **done in §81.65** (the 11 functions),
+   §81.69 (`Data ▸ Set Database`/`Set Criteria`) and **§81.71, which spent
+   it**: `Data ▸ Find`, `Extract`, `Delete` and `Form` added no matching
+   logic at all, and what they cost instead was ROOM — the package had ~46
+   bytes of headroom, so two dialogs moved into `CHART.OVL` to pay for the
+   sixth (§81.71.5.1). **One** Data command is left - `Table`, since Parse
+   (§81.82) and Series (§81.72) closed - and it is not downstream of this
+   one.
+4. ~~**Per-row geometry** → row heights, and `Justify`~~ — **both done**
+   (§81.60 and §81.81; per-column widths are §81.56's). Justify turned out
+   not to need row geometry at all: it moves TEXT between rows that already
+   exist, and the Reference Guide's answer to "it does not fit" is more rows
+   selected, not taller ones.
+5. ~~An undo record~~ — **done in §81.57** (Repeat dropped, 2026-09-22).
+6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
+
+Beside them: ~~**a macro recorder and a real macro language**~~ — **done**
+(§81.74's recorder, §81.83-§81.97's language), leaving the recorder's Start
+Recorder and Resume. The cheap remainder, needing none of them, is **all
+closed**: `CELL` (§81.66), `MDETERM` (§81.67), Calculate Now (§81.78), and a
+right-aligned label running on to its left (§81.76).
+
+
+### 81.40 CSV and tab-delimited text
+
+Excel 2.0's Reference Guide, page 273, "Supported file formats (open/save)":
+`.XLS/.XLC/.XLM/.XLW`, `.TXT`, `.CSV`, `.SLK`, `.WKS`, `.WK1`, `.DIF`,
+`.DBF` (dBase II) and `.DBF` (dBase III). **Nine.** SHEET had three, and
+§81.39 counted only functions and menus, so it missed the format gap
+entirely.
+
+These are two of the six missing, and **one writer and one reader** serve
+both: the only difference between CSV and tab-delimited text is the byte in
+`[sh_sepch]`. Lotus `.WKS`/`.WK1` are deliberately skipped.
+
+**Quoting is CSV's rule, not DIF's.** A field carrying the delimiter, a quote,
+a CR or an LF is wrapped in quotes with its own quotes doubled — the same
+convention SYLK uses for `;` (§81.38.1). `sh_dowrite_dif` *drops* an embedded
+quote instead, and that is right for DIF, which has no escape at all; CSV has
+one, so a label with a comma in it survives.
+
+**Neither format has a type field**, so three things follow and all three are
+the format's limit rather than the app's:
+
+- On the way out, an **error** goes as its own spelling (`#DIV/0!`) and a
+  **logical** as `TRUE`/`FALSE`; on the way back an error is TEXT and a
+  logical is the logical again, by its spelling (§81.51). The file is
+  still right — there is nowhere in CSV to say "this is an error".
+- On the way in, the **field's spelling decides**. `fp_atof` reports CF=1 when
+  there was no number at all and leaves SI where it stopped, so the position
+  is checked as well as the carry: `12abc` is text, not 12.
+- An **empty field stays blank** rather than becoming zero, which is why the
+  delimiters are still counted for it.
+
+`Save As` grew the two entries Excel has for them — the list is now *Normal,
+SYLK, DIF, CSV, Text*, in Excel's own words and order.
+
+**What it cost, and why the overlay was worth doing first:** 815 bytes of new
+format code, and **10 bytes of resident image** — the dispatch and the two
+extension strings. Everything else went into the module. Before §82.16.9 this
+feature would not have fitted at all: SHEET had 133 bytes.
+
+`tests/sheetfmt.py` covers five formats now: 10 checks, the host authoring the
+input and reading every output.
+
+
+### 81.41 dBASE III `.DBF`
+
+Excel 2.0 listed `.DBF` twice in its open/save table, and its Save As help says
+what for: *"For transferring the database range to dBASE II"* / *"…to dBASE
+III"*. dBASE was the era's database and this was the wire between them, so a
+2.1d spreadsheet without it is missing the thing the format existed for.
+
+**dBASE III only** (version byte `03H`). dBASE II's header is a different shape
+and is neither written nor read; a II file is refused *by its version byte*
+rather than misread, because a wrong guess about a fixed-width format produces
+a sheet full of plausible rubbish instead of an error.
+
+**Row 0 is the field names** — Excel's own database-range convention, where the
+range's first row names the fields — and the records are rows 1..n. A blank
+header cell falls back to the column's letter, since dBASE has no nameless
+field.
+
+**Two passes are unavoidable.** The header states the record length and each
+field's width, and a dBASE field is one fixed width and one type *for the whole
+file*, so the widest row has to be known before a byte of header goes out.
+`sh_dbf_scan` decides each column: `N` only if every record in it is numeric,
+with the width and decimal count taken from the widest rendering; otherwise
+`C`, sized to the longest text. `N` is written right-justified and `C`
+left-justified, which is dBASE's own rule and what makes a numeric column line
+up in every reader.
+
+On the way back, **the declared type decides, not the spelling**: a `C` field
+holding `007` is text, because dBASE said it is character data and guessing
+would silently turn a part number into the number 7. A deleted record — flag
+byte `2Ah` — is skipped.
+
+**A `C` field is bounded by the buffer it passes through, at both ends.** A
+label goes out as at most `SH_NUMBUF_MAX` = 40 characters (`sh_dbf_cellstr`
+renders into `sh_numbuf`, and past it lie the claims' segment words), and a
+field comes back as at most `SH_EDITMAX` = 63 (`sh_dbf_getfield` stops
+storing at `sh_rwsrc`'s room), while the record pointer still advances by
+the width the file declared, up to 255.
+
+**The header's date stamp is zero, and that is a bug rather than a
+limitation.** dBASE III keeps the last-update YY/MM/DD in bytes 1..3. This
+section claimed the OS "exposes no date to a package" and that `NOW` therefore
+needed a kernel slot. **Both were false**, and the evidence was in the kernel
+all along: `clk_rtc_read` gets the date and time from the **BIOS**, `int 0x1a`
+with `AH=04h` and `AH=02h`, and a package may make that call exactly as freely
+— MISSILE, CYCLONE and PAINT already use `int 0x16`, TASKMGR `int 0x12`. There
+is no rule against it and there is precedent for it.
+
+The claim came from grepping `os88api.inc` for an `OSAPI_*` date slot, finding
+none, and concluding the capability did not exist. **A missing API is not a
+missing capability**, and the distance between those two is a BIOS call this
+tree already makes in four places. §81.42 fixes both the stamp and the
+function.
+
+**Cost:** 1,535 bytes in the module, **43 bytes of resident image**. `CH_OVKB`
+went 16 → 20 to keep the tail comfortable.
+
+`Save As` now offers *Normal, SYLK, DIF, CSV, Text, DBF 3* — Excel's own label
+for the last. `tests/sheetfmt.py` covers all six: **12 checks**.
+
+#### 81.41.1 The pitch that was right by luck
+
+Adding the sixth entry made the gate save a `.TXT` while believing it had
+chosen DBF, and report that the file was never written.
+
+The radio glyphs sit at **55, 71, 87, 103, 119, 135 — a pitch of 16.** The
+test's table said 59/73/87, a pitch of **14**, which lands inside the correct
+row for the first three entries and has drifted a full row by the sixth. It
+had been right for as long as the dialog had three items in it.
+
+The standing rule is about not reusing a remembered pull-down offset. It
+applies to a **pitch** exactly as much, and for the same reason: a stepped
+number that agrees with reality at the cases you tested is not evidence about
+the case you did not. The table is measured now and says so.
+
+
+### 81.42 `NOW()`, and a missing API mistaken for a missing capability
+
+107 functions.
+
+**The claim that blocked this was in the tree for a week and was wrong.**
+`sh_pdate`'s own header said `NOW()` "cannot be written: no kernel call
+publishes the calendar date… the only clocks a package can read are
+`OSAPI_GET_TICKS` and `OSAPI_BOOT_TICKS`, both of which count since boot… It
+needs one new API slot, and that is a kernel change with its own review."
+
+Every sentence about the OSAPI table is true. **The conclusion does not
+follow**, because the OSAPI table is not the only way out of a package. The
+kernel does not read the clock through its own API either: `clk_rtc_read` calls
+the **BIOS** — `int 0x1a`, `AH=04h` for the date and `AH=02h` for the time —
+and a package may make the identical call. MISSILE, CYCLONE and PAINT already
+use `int 0x16`; TASKMGR uses `int 0x12`. There is no rule against it and there
+is precedent for it four files away.
+
+**A missing API is not a missing capability.** The claim came from grepping
+`os88api.inc`, finding no date slot, and stopping — and it then travelled into
+§81.39, §81.41 and a recommendation to spend a kernel ABI slot on it. The
+distance between "the SDK does not publish it" and "the machine cannot do it"
+was one `int`.
+
+**Reading it the way the kernel does, poison and all.** `CX`/`DX` are set to
+`0xFFFF` before each call and checked after, because a BIOS without the service
+can return with CF clear having touched nothing — the sentinel is the only
+thing that catches that, and `clk_rtc_read` makes the same check for the same
+reason. Every BCD field is validated before it is believed: a clock reporting
+hour `0x99` is not an hour.
+
+**No clock gives `#N/A`**, which a sheet can test with `ISNA`. It does **not**
+give the uptime dressed as a date — that much of the old comment was right, and
+is why it refused to fake one.
+
+`NOW()` is the serial date plus the fraction of the day: exactly `DATE()`'s
+number plus `TIME()`'s fraction, and it reuses both (`sh_ymd_to_ser`,
+`sh_hms_to_acc`).
+
+**The dBASE III header stamp is fixed by the same call.** §81.41 wrote zeros
+into the last-update YY/MM/DD and said the OS had no date to offer. It has;
+`sh_bios_ymd` is shared by both, reached from the module through the vector
+table since the writer lives there.
+
+`RAND` remains the other volatile function, and it needs a PRNG rather than a
+clock.
+
+
+#### 81.42.1 Two bugs a machine with a clock would have found, and this one could not
+
+MartyPC's 5150 has **no RTC** — the kernel says so itself, `clk_rtc = 0`, and
+the date in its menu bar is `CLK_DEF_*` rather than a reading. So `NOW()`
+correctly answered `#N/A` there, and that verified only the refusal path. The
+success path had never executed.
+
+Feeding known BCD in place of the BIOS reply — century `20`, year `26`, month
+`09`, day `03`, `14:37:09` — found **two defects in one run**:
+
+- **`mul` writes `DX`, and `DX` held the month and day.** Computing
+  `century * 100` destroyed them, so the month read back as zero and the
+  function bailed to `#N/A` *on a machine whose clock was fine*. The kernel's
+  own `clk_rtc_read` reads `DH`/`DL` before it does that arithmetic; this
+  restructured it and did not.
+- **`sh_acc_fromudw` goes through `fp_u64_to_a` and clobbers `A`.** The
+  fraction of the day was parked there and gone by the time the add ran, so
+  both operands were the day count and `NOW()` answered **exactly twice the
+  serial** — 92536 for a date whose serial is 46268. A doubling is the kind of
+  wrong answer that looks like a units error and is really a register lifetime.
+
+Both are invisible without a clock, and neither is visible from reading the
+code — the first because `mul`'s second output is easy to forget, the second
+because the accumulator's lifetime is a property of a helper three thousand
+lines away.
+
+Verified after the fixes: `NOW()` 46268.6 against `DATE(2026,9,3)`'s 46268 in
+the cell beside it, `YEAR` 2026, `MONTH` 9, `DAY` 3, `HOUR` 14.
+
+**The stub is not in the tree.** It was applied, run, and reverted, and the
+committed code makes the real `int 0x1a` calls. On the test machines available
+here `NOW()` returns `#N/A`, which is correct for a PC with no real-time clock
+— the AT introduced it, and this is a 5150.
+
+### 81.43 `ISNONTEXT`, `CLEAN`, `RAND` — and three bugs the assembler could not see
+
+110 functions.
+
+Three cheap ones, taken because each reuses a router that already exists rather
+than opening a new capability:
+
+- **`ISNONTEXT`** joins the INFORMATION group, whose argument stays a
+  *reference* instead of being folded to a value — which is the whole reason
+  `ISBLANK`/`ISNUMBER` are still absent (§81's list) and why this one is not.
+  It answers `TRUE` for a number and for a blank, `FALSE` for a label.
+- **`CLEAN`** joins the TEXT group: every byte below `0x20` dropped, the rest
+  kept in place. It is a loop over `sh_sacc` and nothing else.
+- **`RAND`** is nullary like `NOW`, and is the volatile function §81.42 left
+  open. A 32-bit LCG, `seed = seed * 25173 + 13849`, seeded on first use from
+  `int 0x1a` `AH=00h` — the tick counter, which every PC has, unlike the RTC
+  §81.42.1 could not find. The value is the **high** word over 65536: an LCG's
+  low bits have short periods and its high bits do not, so taking the bottom
+  half of the state would have produced a visibly cyclic "random". Not a
+  generator to hold a key with; a generator to fill a column with.
+
+**All three shipped assembling cleanly, and all three were wrong in the
+emulator.** None of the three faults is visible in the diff that introduced it.
+
+**`jae` is a claim about ids that do not exist yet.** `sh_ptext` opened with
+`cmp di, 55 / jae .numfmt3` — TEXT, DOLLAR and FIXED take a *number* first,
+and they were ids 55, 56, 57, the last three assigned. The compare says "55 and
+up", the comment says "TEXT/DOLLAR/FIXED", and while 57 was the highest id in
+the file those were the same sentence. `CLEAN` took **108**. It went down the
+number-formatting path, and every string handed to it came back **`"0.00"`** —
+a plausible-looking value, no error, no warning. It is now bounded at both
+ends. *A one-sided compare against an id space that is still being handed out
+is a statement about every id not yet allocated.*
+
+**`sh_acc_int` writes `A`, for the second time in two sections.** `RAND` loaded
+the state's high word into `A`, then built the divisor with `sh_acc_int` — and
+`sh_acc_int` calls `fp_i2a`, which writes **`A`**. Both operands were 256 and
+`RAND()` returned a constant `1`. This is §81.42.1's second bug *verbatim*, in
+code written the same day by someone who had just documented it: the
+accumulator's lifetime is not visible at the call site, and the habit of
+reading `sh_acc_*` as "scratch" survives knowing better. The divisor is now
+built **first**; `B` is then loaded once and divided by twice, because
+`fpx_div` and `fps_div` both stage from memory and write back `A` alone.
+
+**The nullary close-paren, and a comment that was never true.** `.fold` steps
+over its `')'` at `.argsdone`. `.donow` and `.dorand` never reach `.fold` — they
+jumped straight to `.typed`, under a comment reading *"the `')'` is skipped by
+the common tail"*. **`.typed` does not touch `SI` at all.** `SI` was left
+sitting on the `')'`, the expression parser read that as the end of the
+formula, and
+
+    =RAND()*1000
+
+silently answered `RAND()`. No error; a number in the right range; the multiply
+simply gone. **`=NOW()+1` had done the same thing since `NOW` landed**, and
+§81.42 did not catch it because every test written for `NOW` called it bare.
+The two now share a `.nullary` tail that requires the `')'` and errors without
+it.
+
+That is the third time in two sections (§81.39, §81.42, here) that **an
+assertion in a comment, never checked, was the thing that made a defect
+unthinkable**. The pattern is not carelessness about facts; it is that a
+comment describing what *ought* to happen is indistinguishable, on the page,
+from one describing what does.
+
+**Verified, with the negative case constructed on purpose.** `CLEAN` was tested
+against a string authored on the host with a `0x01` in the middle of it —
+`LEN(A3)` is 5 and `LEN(CLEAN(A3))` is 4, so a `CLEAN` that did nothing would
+read 5 and fail. `ISNONTEXT` answers 0 for `'plain text'` and 1 for `42`.
+`RAND()*1000` gives 710.128, 245.681, 775.299 — three distinct values, all in
+range, and the multiply applied.
+
+`NOW` was re-verified through the §81.42.1 stub, because the paren fix touches
+its parse: with the BIOS reply forced to 1990-03-15 06:00:00, `NOW()` is
+**32947.25** — the serial for that date plus a quarter day — `INT(NOW())` is
+32947, `NOW()*2` is 65894.5, and `NOW()-NOW()` is **0**, which before the fix
+answered 32947.25. The stub was reverted; the committed code makes the real
+call.
+
+#### 81.43.1 Why a cell says `#N/A` while the menu bar shows a date
+
+On every machine in `tools/martypc/configs` — all of them 5150- or XT-class,
+none with an RTC — the kernel falls back to `CLK_DEF_*`, **4 July 2026,
+00:00:00**, and the menu bar shows that plus the uptime. `NOW()` on the same
+screen answers `#N/A`. Two different answers to "what time is it", eighteen
+pixels apart.
+
+This is deliberate and it is the right way round. A spreadsheet's dates are
+*arithmetic*: `=TODAY()-B1` on a fabricated date silently produces a wrong age,
+carried into a total, printed, and believed. A menu bar's date is a *label* —
+wrong there, it is read and dismissed. `#N/A` is the answer a sheet can test
+for; a made-up serial is not.
+
+It also cannot be made to agree without a kernel change. §81.42 established
+there is no OSAPI slot that reads the wall clock, and there is likewise none
+that publishes `clk_tier` or `CLK_DEF_*` — `clk_dbg_tier` is a debug byte, not
+an interface. SHEET could only match the menu bar by hardcoding a copy of the
+kernel's fallback constant in an app, which is precisely the kind of duplicate
+that goes stale silently. **If the two should agree, the fix is an API slot,
+not a second copy of the constant** — and that is an upstream change with its
+own review, not something to smuggle in beside a text function.
+
+### 81.44 `INDIRECT`, and the flag that says a formula is volatile
+
+111 functions.
+
+**`INDIRECT`** takes a reference *spelled as text* and reads what it names.
+It is a TEXT-group function whose answer is a value, so it reuses
+`sh_pstrarg` to get its argument and then hands `sh_sacc` to `sh_pcellref` —
+the same routine that reads a reference out of a formula. `SI` is banked
+across that call because the routine advances it and the formula's own cursor
+is live. A string that is not a single reference — `"A1:B2"`, `"ZZ"`, `"A1 "` —
+is refused with `#REF!` rather than half-read.
+
+It falls out that `INDIRECT` onto a label returns the label: `sh_getcell2`
+loads a text cell into `sh_sacc` and sets `sh_curtype`, and the handler leaves
+both alone.
+
+#### 81.44.1 The indices were checked, not remembered
+
+Four functions were added across §81.43 and this section, and each needs a
+**BIFF ftab index** to be writable at all. The copy of the OpenOffice.org
+*Documentation of the Microsoft Excel File Format* in `docs/` is the **2002
+revision, whose excelfileformat 3.11 reads "2do"** — §81.10.2 already records that, and it is
+why the indices in `sh_rpn_fid` were sourced from revision 1.42 instead.
+
+Revision 1.42 is still published at the address the document itself prints,
+`http://sc.openoffice.org/excelfileformat.pdf`, and one `curl` settled all
+four against **excelfileformat 3.11.1, Built-In Sheet Functions in BIFF2** — which is also
+the answer to "does Excel 2.1 have this at all", since that is the table's
+whole subject:
+
+| ftab | function | min | max | notes |
+|---|---|---|---|---|
+| 63 | `RAND` | 0 | 0 | volatile |
+| 148 | `INDIRECT` | 1 | 2 | volatile; `tFuncVar` |
+| 162 | `CLEAN` | 1 | 1 | |
+| 163 | `MDETERM` | 1 | 1 | parameter class **A** (array) |
+| 190 | `ISNONTEXT` | 1 | 1 | |
+
+*Absent is not unobtainable.* The right revision was one request away, and
+the alternative was four indices carried on recall into a binary file format
+where a wrong one is not an error any reader reports — it is a different
+function, silently.
+
+#### 81.44.2 A volatile function has to say so in the file
+
+That same table has a **Volatile** column, and its legend is a requirement,
+not a note: a volatile function "causes the *Recalculate always* flag to be
+set" in the `FORMULA` record. excelfileformat 5.50 puts that flag at offset 14, bit 0.
+
+`sh_biff_formula` wrote `xor ax, ax` there — **neither recalc bit, for every
+record ever written**. That was harmless while every function this app emitted
+was pure, and stopped being harmless the moment `NOW` landed and again when
+`RAND` did. A `=NOW()` saved by SHEET and opened in Excel shows the value
+SHEET cached at save time, forever: the tokens are right, the result is right
+for the instant it was written, and nothing ever asks for it again.
+
+`sh_rpn_func` now raises `sh_rpn_vol` when it emits ftab 63, 74 or 148 — the
+three volatile functions this app has, out of the five in the table (`OFFSET`
+and `CELL` are the others, and it has neither). Compared inline rather than
+through a fourth table parallel to `sh_rpn_fid`: three entries do not earn 110
+bytes, and a near call from there to a resident helper is what §82.16 rule 1
+forbids.
+
+**The check is in the round-trip gate, and it was mutation-tested.**
+`tests/sheetfmt.py` gained a formulas column — two ordinary formulas and one
+`RAND()` — and reads the option flags straight out of the BIFF stream it
+already saves. With the fix: 15 checks pass. With `xor ax, ax` put back and
+nothing else changed: **exactly one fails**, and it is the right one, naming
+the cell and the flag. The `=B2+1` control is what stops "set the bit
+always" from passing — a blanket *recalculate everything* would satisfy the
+volatile case and is not the fix.
+
+`RAND` rather than `NOW` for the volatile cell, because `NOW` answers `#N/A`
+on every machine in `tools/martypc/configs` (§81.43.1) and a test should not
+depend on that. Its value cannot be pinned, so the gate accepts *any* number
+in `[0,1)` there — the cell is present for its `FORMULA` record, not its
+result.
+
+#### 81.44.3 Dialog coordinates belong to a MACHINE, not to a dialog
+
+An ad-hoc script for this work copied the gate's `File > Save As` coordinates
+verbatim and saved nothing. The coordinates were right; the **machine** was
+not. `tests/sheetfmt.py` runs on `os8088_5150_cga_gla` and the script ran on
+`os8088_xt_vga`, where the window sits lower and the menu bar with it.
+
+The standing rule was "never reuse a remembered pull-down offset" (§81.41).
+It is narrower than the failure: **a calibrated coordinate is valid for one
+machine's geometry**, and copying it to another adapter is the same mistake as
+copying it across a dialog that gained a row. The gate keeps its own
+constants, which is why it kept working.
+
+### 81.45 Paste Special, Paste Link, and reading the menu instead of remembering it
+
+Excel 2.1d's Edit menu has twelve items. SHEET's had nine. The three missing
+ones are **Can't Repeat**, **Paste Special...** and **Paste Link** (Can't
+Repeat left again in §81.99, by the owner's decision), and the
+first thing this change did was open the real Excel 2.1d capture of that menu
+(`menu_edit_full.png`, in the out-of-tree reference material — see above) and
+the Reference Guide's own picture of it on p.117, rather than write the order
+down from memory:
+
+    Can't Undo / Can't Repeat / Cut / Copy / Paste / Clear... /
+    Paste Special... / Paste Link / Delete... / Insert... /
+    Fill Right / Fill Down
+
+**Paste Special and Paste Link come after `Clear...`**, not after `Paste`,
+which is where they would have gone from recall. Format's own menu was read
+the same way and puts **Cell Protection...** between Border and Row Height —
+that one is not built (§81.45.3).
+
+#### 81.45.1 An orphaned dispatch index that renumbering would have armed
+
+`sh_docmd_edit` ended with `cmp al, 9 / je .sort`, left behind when Sort moved
+to the Data menu. With nine items the kernel never sends index 9, so it was
+unreachable, harmless, and invisible.
+
+Adding three items makes index 9 **`Insert...`**. The orphan would have turned
+Insert into Sort — silently, on a menu item nobody had touched, in a build
+whose diff is "three new menu entries". It was deleted with the renumber.
+
+*Dead code in a table indexed by position is not inert.* It is waiting for the
+table to grow.
+
+#### 81.45.2 What the five modes mean, and the one walker they share
+
+Paste already walks the clipboard's tab-separated block and calls
+`sh_paste_cell` per cell with `(sh_pb_x, sh_pb_y)` set. Every mode reuses that
+walker, so the *shape* of the paste always comes from the clipboard text and
+only what happens per cell changes:
+
+| mode | contents | properties |
+|---|---|---|
+| All | the source text, references shifted | format, border, note |
+| Formulas | the source text, references shifted | — |
+| Values | the source cell's **value** | — |
+| Formats | — | format, border |
+| Notes | — | note |
+| Paste Link | `=<the source cell>` | — |
+
+`sh_ps_src` is the whole trick: the source cell for a block position is
+`sh_clip_col + sh_pb_x, sh_clip_row + sh_pb_y` — the reference shift's own
+arithmetic, run the other way.
+
+**Values is not "paste and then strip the `=`".** It reads the source cell and
+takes `sh_cellnum`'s decimal or the label's characters — `sh_cell_totext`'s
+`.notformula` branch reached unconditionally. That is the entire difference
+between the two routines and the reason it is not a flag on the existing one:
+`sh_cell_totext` exists to reproduce what the user typed, and this exists to
+discard it.
+
+**Paste Link writes A1 text and hands it to `sh_commit`**, so the result is an
+ordinary formula naming one cell. Every later Insert, Delete, Sort and Copy
+rewrites it through §81.28's machinery, which already knows how. A1 style
+unconditionally, even with the reference box set to R1C1: that is a display
+setting (§81.31) and this text goes to a parser that reads A1 and nothing else.
+
+**Plain Paste is now `All`**, which is what Excel's Paste does — it used to
+carry contents alone. A source without a record contributes nothing rather
+than writing a default over what is already there: *paste formats from an empty
+cell is not "clear the formats"*.
+
+Paste Special and Paste Link both require this instance's own copy area
+(`sh_clip_valid`) — an external clipboard is text with no cells behind it.
+Excel greys both items when there is no copy area; this engine has no dynamic
+enable, so it says so in the status bar instead.
+
+**Verified in the emulator, each with its negative case:**
+
+- Paste Link: `D1` holds `=A2+1` (43), Paste Link into `F3` — the cell reads 43
+  and the **formula bar reads `=D1`**. A Formulas paste would have read
+  `=C3+1`.
+- Values: the same `D1` pasted into `F1` — the cell reads 43 and the formula
+  bar reads **`43`**, not a formula.
+- Formats: `D3` = 1234.5 formatted Currency, `G3` = 7 plain. After Paste
+  Special Formats, `G3` reads **`$7`** — its own value, the source's format.
+  The before-shot has it reading `7`, which is what makes the check mean
+  something.
+
+Bold was the first discriminator tried for Formats and was abandoned: at
+640x480 a bold glyph and a plain one are two pixels apart and I could not
+honestly call it either way. **A test whose result you have to squint at has
+already failed.** Currency changes the *text*.
+
+#### 81.45.4 An address is not a cell: the clipboard had no sheet
+
+`sh_findcell`, `sh_bt_get` and `sh_nt_get` all pack **`sh_cursheet`** into the
+row word. `sh_ps_src` returns an *address* — `sh_clip_col + sh_pb_x`,
+`sh_clip_row + sh_pb_y` — and the clipboard recorded a column, a row and a
+valid flag, and **not which sheet the block came from**.
+
+So copy on Sheet1, switch to Sheet2, Paste Special ▸ Formats, and the formats
+were read from **Sheet2's own cell at that address**. Same for Notes, and for
+Values, whose source read goes through `sh_findcell` too. Plain Paste was never
+affected: its contents come from the system clipboard's text.
+
+`sh_clip_sheet` is banked at Copy time now, and `sh_ps_srcsheet` /
+`sh_ps_mysheet` step into it and back. The reads happen entirely inside that
+window and the writes entirely outside it, because the destination is the
+current sheet and only the source is elsewhere.
+
+**Paste Link had the matching bug and a different shape.** It emitted `=D1`,
+which on Sheet2 names Sheet2's D1 — a link to the wrong cell rather than a
+missing format. It writes `=Sheet1!D1` when the sheets differ, using the
+`SheetN!` prefix `sh_psheetpfx` already parses, and the same `=D1` as before
+when they do not.
+
+**Proved, and the first attempt at proving it failed usefully.** Sheet1 D1 = 11
+formatted Currency and copied; Sheet2 D1 = 99 plain as a decoy at the same
+address; Paste Special ▸ Formats onto Sheet2 D3 = 77:
+
+| | D3 shows |
+|---|---|
+| with the fix | `$77` — Currency, from Sheet1 |
+| without | `77` — plain, from Sheet2's decoy |
+
+The first mutation removed the *enter* and left the *leave*, which restored
+`sh_cursheet` from a slot nothing had filled and moved the user's own sheet
+under them mid-paste. That is not the bug under test, so the mutation was
+redone keeping the pair balanced and disabling only the impersonation — but it
+is a real hazard, and it is now written into the pair's header as two rules:
+every enter needs its leave, and the two callers must never nest.
+
+#### 81.45.3 What is deliberately not here
+
+- **The Operation group** (None/Add/Subtract/Multiply/Divide) and the
+  **Skip Blanks** and **Transpose** check boxes. The real dialog (Reference
+  Guide p.236) has all three. This engine paints one radio column and an
+  OK/Cancel; two groups plus check boxes is the Border dialog's engine, which
+  is not shared. Absent rather than faked.
+- **Repeat.** "Can't Repeat" is a `MENU_DIS` item beside "Can't Undo", which is
+  what Excel shows most of the time and is honest about what the app does.
+  **Dropped by the owner, 2026-09-22**, and the row removed (§81.99).
+  Real Repeat needs a command-replay model — the macro language is the nearest
+  thing and it records commands, not their arguments.
+- **Cell Protection**, and with it Options > Protect Document. `SH_C_FLAGS`
+  has bits 2-7 free, but several sites write that byte as a *word* together
+  with the format, and one clears it outright when a formula becomes a value —
+  so a Locked bit would survive some edits and not others. It needs that audit
+  and an enforcement point in `sh_commit`, and without Protect Document the
+  dialog would set bits nothing reads. The menu item is not added until the
+  feature is, which is the rule §81's Formula-menu note already states.
+
+### 81.46 Cell protection, in the spare bits of a byte that was already there
+
+Format > **Cell Protection...** and Options > **Protect Document**. Excel's
+model, and the reason the two are useless apart: a *Locked* cell on an
+unprotected document is an ordinary cell. Every cell starts locked and nobody
+notices until the document is protected, at which point the cells you
+deliberately *unlocked* are the ones that still take input.
+
+#### 81.46.1 Where the bits went, and why not the obvious place
+
+The obvious place is `SH_C_FLAGS`, which has bits 2-7 free. **It is the wrong
+place.** Several sites write that byte as a *word* together with the format,
+and both `sh_setvald` and `sh_settext` clear it outright — so a
+Locked bit would survive some edits and vanish on others, which is worse than
+not having one. Finding that out cost one `grep` and is the only reason this
+section is not an audit of twenty-three write sites.
+
+It went into the **border table's** byte instead. That byte uses bits 0-4;
+every reader of it either tests a single bit or masks with `0x1F`, so bits 5-7
+were genuinely free, and the table is *already* a sparse "no record = the
+default" store keyed by cell — which is exactly the shape protection wants,
+because almost every cell has the default.
+
+**The sense is inverted on purpose.** `SH_PROT_UNLOCK` (bit 5) means *not*
+locked; `SH_PROT_HIDDEN` (bit 6) means hide the formula. Storing "Locked"
+would have made the absence of a record mean *unlocked* — the opposite of
+Excel, and the opposite of safe. Storing the exception means an untouched
+sheet is entirely locked, exactly as a new Excel sheet is, at a cost of zero
+bytes and no record widening.
+
+The two dialogs are now each other's mirror: `sh_bdlg_apply` masks with
+`SH_PROT_MASK` before OR-ing its border bits in, and Cell Protection masks
+with its complement. Clearing every border no longer removes the record if the
+cell is also unlocked or hidden, and vice versa — the record goes only when
+the whole byte is zero. **Verified by setting a border, then changing the
+protection, and checking the border is still drawn**; before the mask it was
+a plain store and the second write erased the first.
+
+#### 81.46.2 Two guards, because there are two funnels — and there were three
+
+`sh_commit` is the one place that decides what a cell becomes, so a guard in
+front of it covers typing, all six paste modes, Fill Right and Fill Down at
+once.
+
+It does not cover everything. **Cut clears through `sh_clearcell` directly**,
+and Paste Special's **Formats and Notes write the tables directly** — neither
+goes anywhere near `sh_commit`. Both got their own guard. So did three
+commands that write their cells through `sh_setvald`/`sh_settext`/
+`sh_clearcell` themselves, each asked about the cells it **can write** before
+it writes any: **Data ▸ Sort** (the occupied rows it permutes across the
+block's columns, on a protected document only, with `sh_prot_clr` set because
+a sort *drops* a table it touches, §81.114.9 — its key column used to be
+written whole before the carry's own `sh_commit` refused, shearing every row
+under a *sort full* message), **Format ▸ Justify** (the left column, the only
+one it writes) and **Data ▸ Parse** (the column and the fields to its right,
+across the selection's rows). Insert and Delete
+refuse for the *whole document* rather than per cell, because a row that moves
+carries locked cells it never named.
+
+`sh_prot_blocked` scans **the whole selection**, not the anchor. The first
+version asked about one corner, which would have let a Cut take every locked
+cell beside an unlocked one. `sh_commit`'s selection is 1x1 by the time it
+runs, so it costs one lookup there.
+
+**Hidden is entirely a formula-bar property.** The grid shows a cell's
+*result*; the bar is the only place a formula is ever shown as itself. So
+hiding one is four lines in `sh_drawbar` and nothing anywhere else.
+
+**A refusal has to repaint.** Cut's guard jumped straight to the exit, which
+skipped the redraw — so the command did nothing *and said nothing*, and the
+message `sh_prot_blocked` had just set was never painted. The Clear path had
+the same shape. Both now go through a `.refused` label that repaints.
+
+**Verified with the discriminating pair.** On one protected document: `D1`
+locked and hidden refuses both a typed value and a Cut, keeps its 43, and
+shows an empty formula bar with the status line reading *"Locked cell on a
+protected document."*; `D2`, explicitly unlocked, accepts `7` in the same
+breath. Either half alone proves nothing — a refusal that refuses everything
+is just a broken app, and an acceptance that accepts everything is no guard at
+all. Ordinary Cut on an unprotected document was re-checked afterwards,
+because the refusal path had been restructured around it.
+
+#### 81.46.3 No password, and no ellipsis promising one
+
+Excel's Protect Document dialog takes a password. This is a plain toggle whose
+label flips to **Unprotect Document**, the way Gridlines and Formulas above it
+already do, and it deliberately carries **no `...`** — an ellipsis is a promise
+of a dialog.
+
+Protection without a password still does the thing protection is mostly for:
+stopping an accidental edit to a cell that should not take one. A password
+would need a field, storage, and a comparison, and stored in a `.XLS` it is
+famously worth very little. When there is a password it belongs with a real
+Protect Document dialog and with saving the state to file — neither of which
+this does yet, so **protection is not persisted**: a saved and reopened
+document comes back unprotected, with its per-cell bits gone too, since the
+border table is not written to any of the six formats either.
+
+The dialog itself is **four radio buttons** — Locked / Unlocked / Locked,
+Hidden / Unlocked, Hidden — where Excel has two independent check boxes. That
+is the same compression the Font dialog already applies to Bold and Underline,
+on the same engine, so the app is at least consistent with itself; the Border
+dialog is the one that draws check boxes and it is hard-wired to borders.
+
+### 81.47 Borders and protection reach the file, at last
+
+Until this section, **Format > Border did not survive a save.** Not to SYLK,
+DIF, CSV, TXT or DBF — those five have no notion of one and the loss is the
+format's — but not to **BIFF either**, which does. The border table simply
+never reached any writer. The same was about to be true of §81.46's cell
+protection, which shares its byte.
+
+That is the worst kind of gap: silent, in the app's *own* format, on work the
+user did deliberately.
+
+#### 81.47.1 One XF per pair, not one per cell
+
+A cell's format byte **is** its BIFF XF index — that pairing is why there are
+exactly 64 XF records (§81.10.2) and it is worth keeping. Borders cannot join
+it: 64 format values times 128 border-and-protection values is 8,192 XFs.
+
+So the 64 stay, and **extra XFs are written after them, one per distinct
+(format byte, border byte) pair the document actually uses**. `sh_xfp_scan`
+walks the cell array before the globals are emitted and collects the pairs;
+`sh_biff_ixfe` gives each cell its index — its format byte, or 64+k when it
+also has a border-table record. Almost no cell has one, so almost every file
+still carries exactly 64.
+
+The scan covers **all sheets**, not the one being written. A BIFF4 workbook
+has one globals section and several sheet substreams, so the pair table has to
+cover every cell that will be emitted; for a single-sheet BIFF3 stream that
+costs at worst a few XF records nothing points at, at 16 bytes each, which is
+cheaper than a second code path.
+
+`SH_XFP_CAP` is 64 pairs. Past it a bordered cell keeps its plain XF and loses
+its border — **never someone else's XF**, which is the failure mode worth
+ruling out explicitly.
+
+#### 81.47.2 The fields, and the one that could not be checked
+
+- **`XF_BORDER_34`** (offset 8, four bytes): line styles at bits 2-0 top, 10-8
+  left, 18-16 bottom, 26-24 right. Style 1 is "thin", which is the only line
+  this app draws; the five-bit colour field above each style stays 0, which is
+  black in the default palette. On the way back in, **any** non-zero style is
+  that edge — a file from a program that draws double or dashed borders reads
+  back as this app's one kind of line rather than as no line.
+- **`XF_TYPE_PROT`** (offset 2, low bits): bit 0 locked, bit 1 hidden. This
+  app stores the *exception* (§81.46.1), so the two are inverted on the way
+  through.
+- **`XF_AREA_34`** (offset 6): the Shade bit becomes a background pattern.
+  **The bit layout is documented and was followed; the choice of pattern 02H
+  was not checkable** — excelfileformat's table of pattern samples is a set of
+  images in the PDF, so "02H is 50% grey" is convention here, not something
+  verified. What the round trip depends on is only that the pattern is
+  non-zero. 01H was avoided deliberately: that one *is* documented, as
+  **solid**, and solid black is a black box where this app draws a dither.
+
+**Every XF this writer ever emitted said the cell was unlocked.** The
+`XF_TYPE_PROT` byte was written as zero, which means "not locked" — the
+opposite of what a new sheet means, in every BIFF file this app has produced.
+The base 64 now set bit 0.
+
+#### 81.47.3 A reader that would have invented borders
+
+`sh_biff_applyfmt` guarded its XF lookup against `SH_BIFF_XF_CAP` and not
+against how many XFs the file actually had. The three tracking tables are not
+cleared between loads — only the counts are — so a file with fewer XF records
+than the previously-loaded one read **the previous file's bytes**.
+
+For a format byte that is a wrong alignment nobody would chase. For a border
+it is worse in kind: cells that never had one would acquire it, from a file
+opened earlier in the same session. The lookup is bounded by `sh_biff_nxf` as
+well now. This was a pre-existing bug that only became dangerous because
+something sharper started riding in the same table.
+
+#### 81.47.4 Verified at both ends, and gated
+
+The **writer** was read back on the host, record by record: 66 XF records for
+a sheet with one bordered cell and one unlocked cell — 64 base plus exactly
+two — where XF 64 carries `TLBR` edges with locked set, XF 65 carries locked
+clear with no edges, and the three cells name 64, 65 and **0** respectively.
+The third is the control: a cell nobody formatted still names a base XF, so
+the pairing is not being applied blanket.
+
+The **reader** was the same file opened back into SHEET by association: the
+border is drawn, and on a protected document the cell that was saved locked
+refuses a typed value while the one saved unlocked accepts it — both states
+recovered from the file rather than from anything left in memory.
+
+`tests/sheetfmt.py` now carries it permanently. It marks **A1 unlocked**
+before the Save As loop — A1 is the selected cell on load, so it needs no cell
+click, and protection travels through the identical pair-table machinery a
+border does. Three checks: that a 65th XF exists, that A1 names an XF at 64 or
+above with the locked bit clear, and that an untouched cell names a base XF
+with the locked bit **set**. 18 checks pass.
+
+Mutation-tested by making `sh_biff_ixfe` always return the plain format byte:
+**exactly one fails**, and it is the middle one — "A1 names XF 0, whose
+XF_TYPE_PROT is 1". The other two survive, correctly: the extra XF is still
+written, only the cell's pointer to it is broken. A mutation that fails
+everything proves less than one that fails the right thing.
+
+Every `sh_fdlg_*` dialog is one fixed size centred on the screen whatever its row
+count, so the gate drove Cell Protection with the radio and OK coordinates it
+had already calibrated for the file-format dialog. That is the *opposite* of
+§81.44.3's trap and worth stating for the same reason: **coordinates are
+reusable exactly as far as the thing that determines them is shared** — here
+the dialog geometry, there the machine.
+
+#### 81.47.8 The gate grew the arm that would have caught it
+
+`tests/sheetfmt.py` puts two cells on **Sheet 2** and saves Normal once more,
+last, so nothing above it changes: SHEET writes a BIFF4 workbook the moment a
+second grid is in use, and `read_biff_book` can now read one. Three checks —
+that two sheets come back, that the first is still the authored one, and that
+the second carries its own cells.
+
+No cell click is needed, for the reason the protection step needs none:
+switching sheets leaves a cell selected and typing goes to it.
+
+**A note on why this could not run at first, since the first answer was
+wrong.** After the upstream merge every launch died as *"martypc_headless
+never published a debug port"*. I concluded the harness required a capability
+the tree could not build, because no file in `tools/martypc/patches/` mentions
+`MARTYPC_DEBUG_PORTFILE`. It does not — but `tools/martypc/debug_server.rs`
+does, and **#147 updated that file and `os88marty.py` in the same commit**.
+They were consistent all along; the binary in `build/` was from before it and
+had simply never been rebuilt. `tools/martypc/build.sh` fixes it in one run.
+
+*"No patch mentions it" was a search, not a conclusion.* The accommodation I
+briefly added to `os88marty.py` — ask for a concrete port when the binary
+cannot publish one — was reverted: it papers over a stale build, and it would
+mask the case the file exists to catch, a debug server bound where nobody can
+find it.
+
+**Mutation-tested against §81.47.6 itself.** Reverting that fix — the workbook
+looking every cell up against the *active* sheet — fails the suite in exactly
+one place. It is not one of the three new checks that fires but the older
+protection one: A1 was marked unlocked on Sheet 1, the save now happens while
+Sheet 2 is active, and the extra XF that carries the unlock is looked up on the
+wrong grid and lost. The arm and the existing check are one regression test
+between them, and neither half would do it alone.
+
+**The arm's first run found a defect in the checks rather than the app.**
+`cell_xfs` keyed cells by `(row, col)`, which is right for one stream and
+silently wrong for a workbook: Sheet 2's A1 is *also* `(0, 0)`, so it
+overwrote Sheet 1's and the protection check read the wrong cell's XF.
+`recalc_flags` had the identical latent flaw and was fixed with it. Both key by
+substream now, and `_first_sheet` finds the one holding cells rather than
+assuming an index — a workbook opens with a GLOBALS substream that has none.
+
+*Changing the shape of the artifact a test reads is a good way to find out
+what the test was really keyed on.*
+
+#### 81.47.7 The host reader could not open a workbook, which is why 81.47.6 lasted
+
+`tools/os88sheetfmt.py` accepted BIFF2 and BIFF3 and stopped at the first
+`EOF`. A BIFF4 workbook opens `0409H` and its first `EOF` ends the **globals**
+substream, so the reader saw a valid stream with no cells in it — and rejected
+`0409H` outright anyway, as *"not a BIFF stream"*.
+
+So every multi-sheet file SHEET has ever written was **unreadable by the only
+independent implementation this project has**, and `tests/sheetfmt.py` — whose
+whole design is that the host authors the input so a writer and reader cannot
+cancel out — could only ever reach the single-sheet path. §81.47.6's bug lived
+in exactly that blind spot, and was found by hand-writing a parser for one run
+rather than by any gate.
+
+The walk now handles substreams: `_biff_walk` returns one entry per sheet and a
+plain stream is the same thing with the directory left out, which is the honest
+way round — the workbook is the general case. `read_biff` still answers with
+the first sheet's cells, because every caller predates the workbook and asks
+about one grid; `read_biff_book` is the one that can see the rest.
+
+**`apps/sheet/KODAK.BIF` is the fixture, and it is a real artifact** — three
+sheets made in the emulator by hand (`docs/KODAK-EXAMPLE.md`), carrying both
+record kinds because sheet 3's `1.42` cannot be an `RK` and goes out as an
+IEEE-754 `NUMBER`. The self-check asserts three named sheets of 25, 6 and 6
+cells and those three fractions verbatim.
+
+Two things the fixture caught immediately: `SHEETHDR`'s name count is at offset
+**4**, not 5 — read one byte late, every sheet is named `heetN` and nothing
+fails — and a reader that cannot open the file must **say so** rather than let
+a `FormatError` escape as a traceback, which is what a gate owes.
+
+#### 81.47.6 The border table answers for ONE sheet, and a workbook writes all of them
+
+`sh_bt_findcell` packs the row word with **`sh_cursheet`** — the border table
+has no other notion of which sheet a record belongs to. Both routines §81.47
+added called it while walking cells that were **not** on the current sheet:
+`sh_xfp_scan` crosses every sheet by design, and a BIFF4 workbook write emits
+one sheet substream after another with only `sh_wsheet` moving.
+
+So a bordered cell on any sheet but the active one was looked up against the
+active sheet instead. Usually that address has no record, and **the border was
+silently dropped**; where the active sheet did have one, the wrong border was
+written.
+
+The fix is the idiom `sh_rowcol_op` already uses and its comment already names
+— *impersonate this record's own sheet* — banked and restored around the walk
+in both places. The BIFF **reader** never had this bug: it moves `sh_cursheet`
+per `SHEETHDR` substream and puts the user's sheet back at the end. Writer and
+reader were asymmetric, and only the writer was new.
+
+**The first test of this was vacuous, and the A/B is what said so.** It set a
+border on sheet 2, saved, and found the extra XF present with the fix — and
+*still present* with the fix removed. The reason is the whole bug: the test
+left the user **on sheet 2**, so `sh_cursheet` already pointed at the sheet
+being asked about and the broken lookup was accidentally right. Switching back
+to sheet 1 before saving is the entire difference between a test that proves
+something and one that cannot fail:
+
+| border on sheet 2, saved from | XF records | edges |
+|---|---|---|
+| sheet 2 (active) — either build | 65 | `TLBR` |
+| sheet 1, **without** the fix | 64 | none — lost |
+| sheet 1, **with** the fix | 65 | `TLBR` |
+
+*A test that exercises the feature is not the same as a test that exercises the
+bug.* The single-sheet gate could never have caught this, and neither could a
+multi-sheet one that saves from the sheet it just formatted.
+
+#### 81.47.5 What still does not travel
+
+The border table is written to **BIFF only**. SYLK has formatting records this
+app does not emit, and DIF, CSV, TXT and DBF have nowhere to put one. A sheet
+saved as SYLK still loses its borders, and that is now a *format* limit rather
+than an app one — but it is a real one, and Save As does not say so.
+
+### 81.48 A Save recalculates first
 
 **Evaluation is lazy.** `sh_eval_cell` runs when a cell is *read*, memoized
 against `sh_pass`, and a repaint reads only what is on the glass. That is the
-right shape for a display and the wrong one for a file, because two of the three
-writers never ask: the SYLK and BIFF writers read a cell's value with
-`sh_cellval_to_acc_si`, the **stored** double, while DIF reads through
-`sh_getcell2`, which evaluates. So a formula off-screen since it was loaded, or
-since a cell it names changed, was saved with whatever it last held — after a
-load, the zero `sh_setformula` leaves. Ten formulas `=A1*1` … `=A1*10` on a
-5150, opened and saved as SYLK: the four on the glass came back right and the
-six below them came back **0**.
+right shape for a display — nothing off-screen needs a value until something
+asks for one — and it was the wrong one for a file, because two of the six
+writers never ask. The SYLK and BIFF writers read a cell's value with
+`sh_cellval_to_acc_si`, the **stored** double; DIF and the two text formats read
+through `sh_getcell2`, which evaluates.
 
-`sh_dowrite` now calls `sh_recalc_all`, which walks every record and calls
-`sh_eval_cell` on each formula. It decides nothing: the pass stamp already knows
-what is stale, in both modes — automatic advances `sh_pass` on every repaint, so
-anything not recomputed since recomputes; manual does not, so only a cell never
-computed (stamped `0xFFFF`) runs. **Every sheet is evaluated as itself**, the
-`sh_rowcol_op` impersonation, because `sh_findcell` packs `[sh_cursheet]` into
-every reference. 64 bytes.
+So a formula that had been off-screen since it was loaded, or since a cell it
+names changed, was saved with whatever it last held. After a load that is the
+zero `sh_setformula` leaves behind — and since §81.10's reader keeps a BIFF
+FORMULA record's cached result and not its tokens, a Save in Normal format made
+that zero permanent. `tests/sheetfin.py` found it on its first run: the four
+formulas on the glass came back right, and the twenty-two below them came back
+0.
 
-What it costs is time at Save for a sheet whose formulas were not computed at
-paint, and nothing on the glass says so — which is also why a harness that waits
-for the *screen* to settle reads the floppy before the file exists.
+**`sh_dowrite` calls `sh_recalc_all` before it hands over to the module**, which
+walks every record and calls `sh_eval_cell` on each formula. It decides nothing
+itself: the pass stamp already knows what is stale, and does the right thing in
+both modes. Automatic advances `sh_pass` on every repaint, so anything not
+recomputed since is stale and recomputes; manual does not, so only a cell never
+computed at all — `sh_setformula` stamps those `0xFFFF`, a value `sh_pass`
+cannot reach — runs, which keeps manual meaning what it says. **Every sheet is
+evaluated as itself**, `sh_rowcol_op`'s impersonation: `sh_findcell` packs
+`[sh_cursheet]` into every reference, so a Sheet 2 formula evaluated as Sheet 1
+reads Sheet 1's cells. 64 resident bytes.
 
-#### 81.22.2 Error codes in the file's own numbering
+**What it costs is time, and nothing on the glass says so.** A sheet of
+iterating functions — `RATE`, `IRR` — is computed at Save if it was not at
+paint. The harness met it first: `os88marty.settle` waits for the *screen* to
+stop changing, a computation draws nothing, and the gate read the floppy
+before the file existed. It waits for the file now.
 
-`SH_C_AUX` holds an error as `ERROR.TYPE` numbers it, 1–7. The file does not:
-BIFF's error byte, in a `BOOLERR` and in a `FORMULA` result alike, is 00H
-`#NULL!`, 07H `#DIV/0!`, 0FH `#VALUE!`, 17H `#REF!`, 1DH `#NAME?`, 24H `#NUM!`,
-2AH `#N/A`. The writer put the internal number into that byte and the reader
-took it back out the same way — so SHEET's own files round-tripped perfectly,
-which is exactly what hid it, and `docs/BIFF-NOTES.md` recorded the gap and
-the four places a fix had to go. Measured before: an error constant and
-`=1/0` saved as Normal carried **02H**, not a code the format has; Excel's
-`#DIV/0!` (07H), as a constant and as a formula's cached result, opened as
-`#N/A`.
+### 81.49 CHOOSE returns the value it picked
 
-`sh_biff_errtab` holds the seven codes in `ERROR.TYPE` order; `sh_biff_e2b`
-converts on the way out (`.aserr`, `.errresult`) and `sh_biff_b2e` on the way
-in (`.isboolerr`, `.isformula`). An internal code outside 1–7 is written as
-`#VALUE!`, and a file's code the table does not hold reads as `#VALUE!`, since
-it is still an error and that is the honest one to show. 75 bytes.
+**CHOOSE was an integer function.** It sat in `sh_pspecial` beside MOD and FACT,
+took every value through `sh_parg` as a word and handed its answer back through
+`sh_acc_int` — so `=CHOOSE(2,1.5,2.5)` answered **2**, any fractional cell it
+picked lost its fraction, a text value came back as **0**, and an index past the
+list answered 0 where Excel answers `#VALUE!`. Excel's CHOOSE returns the value
+it picked, whatever it is.
 
-Both measured with a host-side reader that shares no code with SHEET (the one
-this project's fork uses as its second opinion, `tools/os88sheetfmt.py` there),
-before and after, on this tree's build under MartyPC.
+`sh_pchoose` is its own routine now, reached from `sh_pfunc` the way IF is and
+returning through `.done` rather than `.typed`, so a chosen text stays text. The
+values before the chosen one are parsed and dropped, and their raise of the
+sticky error does not stand (§81.20); the chosen one is parsed and **left where
+the parser put it** — value, type and, for text, `sh_sacc`; the ones after it
+are **stepped over** by `sh_skipargs`, not evaluated. That needs no banking at
+all, so a CHOOSE nested in another's arguments is safe, and it is Excel's own
+behaviour: an error in an argument CHOOSE did not pick is never raised. An
+index outside `1..n` is `#VALUE!`.
 
-#### 81.22.3 What each format carries: formats, borders and notes
+**`sh_skipargs` counted the parentheses inside a quoted string.** It is what
+CHOOSE steps over its tail with, and what every refusal path already used — an
+unknown function, a financial function refused inside another's arguments — so
+the `)` in `=1+ISERROR(FOO("a)"))*10` closed `FOO` early and the formula lost the
+rest. It skips a quoted string whole now, the rule `sh_paren_ok` already kept at
+entry; a doubled quote closes and reopens, which comes out right.
 
-A Normal save lost the borders and every save lost the notes; SYLK lost
-Percent. What each format now carries, as far as the format itself can:
+Against the unfixed binary `tests/sheeteval.py` fails **ten of sixteen** —
+`2` for 2.5, `3` for 3.25, `0` for every text choice and for both
+out-of-range indices — and passes all seventeen of its checks with this. With
+the quote handling taken back out, `=1+ISERROR(FOO("a)"))*10` fails and
+`=CHOOSE(1,"a","b)")` does **not**: the bad skip leaves `")` behind and the
+parser stops quietly at stray characters, so only a formula that continues
+after the skip can tell a right one from a wrong one. That quiet stop is its
+own question, answered in §81.50. Resident +50 bytes.
 
-| | Normal (`.BIF`/`.XLS`) | SYLK | DIF |
+### 81.50 The whole formula, and the spaces in it
+
+**The parse stopped quietly at the first character it could not use.**
+`sh_eval_cell` called `sh_pcmp` and took whatever it had by then as the answer,
+so `=1+2 3` answered **3**, `=(1+2)3` answered **3**, and `=50%` answered
+**50** — plausible numbers, which is the worst kind of wrong. A typed NUMBER has
+never had this problem: `sh_commit` refuses any text `fp_atof` does not consume
+to the end (`3.5kg` is a label, not 3.5). A formula now answers to the same
+rule: after the top-level parse, anything left over is **`#VALUE!`**, unless an
+error was already raised, which stands.
+
+**That made spacing a question, because the evaluator does not step over a
+space between tokens and never did.** `=A1 * ( A2 - 1 )` answered **2** — `A1`,
+then a stop at the space — and `= 1 + 2` answered `#VALUE!`, `=SUM (A1:A3)`
+`#NAME?`. Teaching every level of the parser and every argument comma about
+spaces would be a dozen sites. Excel 2.1 answers it more simply: it saves BIFF2,
+and BIFF2 has no token that could keep a space (`tAttrSpace` is BIFF3 on,
+section 3.10 of the document), so **Excel 2.1 drops spaces when it stores a
+formula** and `=1 + 2` comes back `=1+2`. `sh_setformula`, which every formula
+passes through — typed, pasted, read from any of the file formats, rewritten by
+Insert or Copy — does the same on its copy into the arena:
+
+| The gap | What happens to it |
+| --- | --- |
+| inside a quoted string | kept, every space of it (`" a  + "`); a doubled quote closes and reopens, which comes out right |
+| after an operator, `(`, `,` or `:`, or at the start | dropped |
+| before one of those, or at the end | dropped |
+| between two operands — `1+2 3`, `A1 B1` | **one space kept** |
+
+The last row is deliberate, and for two reasons. Inside a function's range
+argument that space is Excel's **intersection operator** — `=SUM(A1:C3 B2:B5)`,
+which `sh_prange` implements (§81.26.3) — and closing it up would destroy it.
+Anywhere else it is not spacing but a mistake, and closing it up would turn
+`=1+2 3` into `=1+23` — **24**, a new plausible wrong answer in place of the
+old one. Kept, it is left over after the parse and the formula is `#VALUE!`. `sh_fsep` holds the byte set; the length
+check before the copy counts the raw text, which this can only shorten.
+
+**Where this still differs from Excel.** Excel refuses such an entry with *Error
+in formula* and leaves the cell as it was; SHEET stores it and shows
+`#VALUE!` the moment it recalculates. Refusing at entry needs a parse at commit
+time, and the only parse that does not evaluate is the RPN encoder, which lives
+in `CHART.OVL` — an overlay load on every formula typed, for a case whose answer
+is already visible. The cell is never silently wrong either way.
+
+`tests/sheeteval.py` holds nine checks for this and the previous binary fails
+all nine — the three quiet stops, the four spaced formulas (`=A1 * ( A2 - 1 )`
+the one that answered a number), and the two formulas it reads back to check
+what was **stored**; two more hold the intersection space the squeeze keeps,
+which the previous binary passes as well. Each half fails its own checks when
+taken out: the left-over test three, the squeeze six, a squeeze that drops
+every space four (`=1+2 3` answers 24, and both intersections are lost). A squeeze that ignores quotes passed the first version
+of the string case, `" a "&"b "`, because each of its spaces sits between two
+operands and is kept anyway; `" a  + "` has a double space and an operator,
+and fails it. Resident +95 bytes.
+
+### 81.51 The logical value
+
+**SHEET had a tag for a logical, `SH_T_BOOL`, and nothing ever produced one.**
+`=1<2` answered the number **1**, and so did AND, OR, NOT, TRUE(), the IS
+family and EXACT; ISLOGICAL was FALSE for everything, which its own comment
+called "the honest answer, not a placeholder one". Excel answers **TRUE**, and
+says so everywhere a value shows — the cell, the formula bar, a concatenation,
+the file.
+
+**A logical is the double 1.0 or 0.0, tagged `SH_T_BOOL`.** Everything that
+only wants a number — arithmetic, IF's test, a chart — reads it unchanged, so
+`=(1<2)+1` is 2 and `=-(1<2)` is −1 with no change to either operator (both
+already stamp their result a number). What had to learn it:
+
+| Where | Now |
+| --- | --- |
+| comparisons | answer `SH_T_BOOL` |
+| NOT, AND, OR, TRUE, FALSE, ISBLANK…ISREF, ISNONTEXT, EXACT | `sh_pfunc`'s `.done` tags the result by the function's id (`sh_fnlogical`), whatever its own routine left — NOT set no type at all |
+| `=TRUE`, `=FALSE` | the bare constant, as in Excel; it was `#NAME?`. `TRUE()` still works |
+| the writeback | stores the tag, and **publishes** it to the caller |
+| the grid | draws `TRUE` / `FALSE`, which no number format touches |
+| `&`, LEN and the text family | `sh_str_want` gives the name: `="x"&TRUE` is `xTRUE` |
+| typed entry | `TRUE` or `FALSE`, in any case, is the logical, not a label (`sh_setlabel`) |
+| the formula bar, Copy, Paste, Find | through `sh_cellnum`, the name |
+| Fill Right/Down | a logical constant stays one (`sh_setbool`); Sort orders it after text since §81.61 (it sat the sort out, as a label did) |
+| folds over a **reference** | step over it like a label, Excel's rule: `SUM(A1:A4)` ignores a TRUE in A4, COUNT does not count it, COUNTA does, AND and OR use it |
+| folds over a **typed** argument | count it as its number: `SUM(TRUE,1)` is 2 |
+| MATCH and the lookups | a logical key finds only a logical, a number key never one |
+
+**General alignment centres a logical — and an error**, Excel's third General
+rule beside numbers right and labels left (`sh_justify_c`). An error sat right,
+"like the number it replaces"; it is centred now for the same reason.
+
+**The files.** Every format keeps its own word for it, and nothing looser:
+
+| Format | Writes | Reads |
+| --- | --- | --- |
+| BIFF | a BOOLERR with the flag clear; a formula's cached result as byte 0 = 1 | both, as the logical — they were the number 1 |
+| DIF | `0,1` and the `TRUE` indicator, `0,0` and `FALSE` | the TRUE and FALSE indicators — they left the cell **blank** |
+| SYLK | `K"TRUE"`, quoted, as Walden requires | a quoted TRUE or FALSE as the logical |
+| CSV / text | `TRUE` / `FALSE` | a field so spelled, any case, as the logical — Excel's reading |
+| dBASE | `TRUE` / `FALSE` in a character column | an **L** field: T or Y, F or N, either case; `?` (not yet known) as a blank |
+
+SYLK is the one that cannot be exact. Walden: *"Logical values "TRUE" and
+"FALSE" must also be quoted"* — exactly as the text `"TRUE"` is — so a quoted
+TRUE is read by its spelling, the rule typing already keeps, and a label that
+said TRUE comes back a logical. The format has no way to say otherwise.
+`tBool` decodes to the bare `TRUE` Excel shows, and the encoder writes a bare
+`TRUE` as `tBool`, `TRUE()` as the function.
+
+**Two defects the new cases found on the way:**
+
+- **A fold left the type of the last cell it read standing.** `.fold` went to
+  `.done`, not `.typed`, so the result kept whatever `sh_getcell2` had loaded
+  last — and a SUM whose range **ended on a label** stored that label's text
+  as its answer: `=SUM(A1:A5)` showed `lbl`. It goes through `.typed` now,
+  which is what every other numeric exit already did.
+- **The writeback stored the tag and published a number.** After caching
+  a numeric result it set `sh_curtype` to `SH_T_NUM` for its caller, so the
+  cell's own record said logical and the caller heard number. A file (written
+  from the record) was right and the grid (painted from the published type)
+  said `1`. Nothing in the file gates could see it; a screenshot did, and
+  `TYPE(D100)` — a comparison below every case, so that a case is what
+  evaluates it first — now holds it.
+
+**Where this still differs from Excel.** Comparisons did not look at types,
+so `=TRUE=1` was TRUE here and FALSE in Excel — §81.53 closed that. Sort leaves a
+logical constant out rather than placing it after text, and a chart plots one as 1
+or 0.
+
+**Evidence.** `tests/sheeteval.py` holds 30 checks for this; 23 of the first
+28 fail against the previous binary (the five that pass were right by
+accident, or read back the same through SYLK's quoted TRUE). Mutations: the
+fold exit taken back out fails four, reference-stepping three, the typed-
+argument rule one, the lookup rule one, SYLK's reader three, and the
+published number `TYPE(D100)`. `tests/sheetbool.py` is new: the host authors
+a DIF, CSV, dBASE and BIFF3 file holding logicals, SHEET opens each and saves
+Normal, and the BOOLERRs say what it kept — **23 checks, 10 failing** against
+the previous binary, one group per reader. `tests/sheetfmt.py` now holds BIFF
+and DIF to a logical where it took either; the previous binary fails both
+and taking out the DIF writer's branch fails DIF. `tests/sheetdec.py` has
+`=TRUE` and `=AND(A1>A2,TRUE)` in SHEET's own round trip, and a refused
+formula's cached logical kept as one: 88 checks. Resident +433 bytes,
+`CHART.OVL` +344, three vectors (`sh_setbool`, `sh_setlabel`,
+`sh_boolname`; `SH_NVEC` 52) and 12 bytes of bss.
+
+### 81.52 Excel 2.1's own files: BIFF2
+
+**A worksheet saved by Excel 2.1 opened empty.** Excel 2.1 saves BIFF2, and
+SHEET's reader took BIFF3 and BIFF4: every BIFF2 cell record — `0002H`
+INTEGER, `0003H` NUMBER, `0004H` LABEL, `0005H` BOOLERR, `0006H` FORMULA,
+`0007H` STRING — fell through to the generic skip, and the status bar said
+*Loaded* over a blank grid. An `.XLS` name, Excel's own, was not even sent to
+the BIFF reader: anything not `.DIF`/`.BIF`/`.CSV`/`.TXT`/`.DBF` was read as
+SYLK. For an app whose standard is Excel 2.1d, that is the one file it most
+needs to open.
+
+**A BIFF2 cell is a BIFF3 one with three attribute bytes where the XF index
+goes** (section 2.5.13 of the document). So `.b2cell` rewrites each record in
+place into BIFF3's shape and hands it to the handler that already exists:
+
+| Record | The rewrite |
+| --- | --- |
+| NUMBER, BOOLERR, FORMULA | row, column and a synthetic XF index move up one byte, which puts the value where BIFF3 keeps it; SI+1 and DX−1 leave `.skip`'s SI+DX where it was |
+| INTEGER | the same, and `.isrk` turns its **unsigned** word into the RK integer it would have been, `(v << 2) | 2` — 40000 is not −25536 |
+| LABEL | no move: its one-byte length becomes BIFF3's word in the two bytes the attributes vacate |
+| STRING | no cell header at all: one byte *back*, onto the already-read record length, for the length's second byte |
+
+The attribute bytes go to XF slot `SH_B2_XF` (`sh_b2_attr`) — number format
+and font from byte 1, alignment, the four borders and shading from byte 2,
+locked and hidden from byte 0 — which is the three bytes `.isxf` decodes a
+BIFF3 XF into, so `sh_biff_applyfmt` formats the cell unchanged. BIFF2's
+`0031H` FONT has BIFF3's options word at the same offset and goes to
+`.isfont`. The FORMULA record carries **one** byte of flags and one of
+`cce` where BIFF3 has words, and a `tAttr` token's data is a byte, not a word
+(section 3.10), so `sh_biff_dcrpn` and `sh_dc_attr` take `sh_dc_ver` 0 —
+the high byte of `0006H` — to mean BIFF2. The cell ids are BIFF2's only after
+a BIFF2 BOF (`0009H`) has set `sh_b2`, because BIFF5 reuses `0006H` and
+`0007H` for other shapes.
+
+**The format index is the built-in id.** A BIFF2 cell names a FORMAT record
+by position, and Excel 2.1 writes the 21 built-ins first in the built-in order
+(`General`, `0`, `0.00`, `#,##0`, …), so the position *is* the id
+`sh_biff_numfmt_from_id` already maps — the same four it maps for BIFF3, with
+anything else General.
+
+**Not read, and why:** BLANK (a formatted empty cell — a format here lives on
+a cell that holds something), COLWIDTH (one width for the whole sheet),
+`0018H` NAME (BIFF2's shape; BIFF3's `0218H` is read), and a custom FORMAT
+string. A formula the decoder refuses keeps its cached value, as in BIFF3:
+the corpus's are `tSheet` (a reference into another file) and `tExp` (an
+array formula).
+
+**The fold defect Excel's own file found.** `sh_foldrange` keeps a range's
+columns in `sh_r1col`/`sh_r2col`, and a formula cell *inside* the range may
+fold a range of its own through the same two words. EXPENSES.XLS's C55 is
+`=SUM(D55:I55)` over six column totals; evaluated before them, it ran D55's
+`SUM(D6:D54)`, came back scanning column D alone, and answered **82,113.70**
+where Excel's file says **475,304.15**. A total of totals to the left of, or
+above, what it totals is ordinary, and this was silently wrong for every one.
+The two words are banked around each cell's evaluation now (4 bytes of stack
+per nesting level); the lookups meet the same shape by refusing a nested
+search (§47), which was already written down beside them.
+
+**The corpus.** Excel 2.1d's release disks, which the user keeps beside the
+repository, carry 33 sample worksheets on the LIBRARY disk, compressed by
+COMPRESS.EXE's early `SZ` LZSS format. They are Microsoft's and are never
+copied into the tree: `tests/sheetxl2.py` extracts and decodes three of them
+into `build/` at run time. The host library reads BIFF2 formulas now too
+(`decode_rpn`), and across all 33 files decodes 314 of 323; the other nine are
+the `tSheet` and `tExp` above.
+
+**Evidence.** `tests/sheetxl2.py`, 29 checks. Arm A is a BIFF2 file the host
+authors — every cell record, an INTEGER past 32767, SUM through the three-byte
+`tAttrSum`, IF through `tAttrIf`/`tAttrSkip` with a BIFF2 STRING, a refused
+formula keeping its cached error and its cached text, and each attribute —
+saved as SYLK for the values and formulas and as Normal for the XF each cell
+names. Arm B is EXPENSES (351 cells), SAMPLES1 (232) and PAYROLL (47), every
+cell compared with what the host reads in Excel's file: text, number, and for
+a formula the same expression and Excel's own cached value, recomputed.
+Against the previous binary 21 of the 29 fail (the eight that pass are the
+files being opened and saved at all); `tAttr` taken back to four bytes fails
+four. Arm B is skipped, with a notice, where the archive is absent.
+`tests/sheeteval.py`'s `=SUM(D101:E101)` over two SUMs below every case
+answers 12.25 without the banking and 21.25 with it. `CHART.OVL` +380 bytes,
+resident +21, two bytes of bss.
+
+### 81.53 Comparisons compare by type
+
+**Two texts compared as the zeros underneath them.** `sh_pcmpcont` banked the
+left operand's *number*, parsed the right, and called `fp_cmpab` — nothing
+else. A text's number is 0, so `="a"="b"` was **TRUE**, `="b">"a"` FALSE, and
+every `=IF(A1="yes",…)` took its first branch whatever A1 said; `="a"="A"`
+and `=A5="lbl"` were right only because 0 equals 0. It is the commonest
+test a spreadsheet makes of text, and it could not fail.
+
+Excel's rule, which the operator now keeps (the left's type, and its text on
+the string stack, banked across the right's parse):
+
+- **text against text** is compared case-insensitively — `sh_lkstrcmp`, the
+  lookups' own, which is the same rule MATCH keeps;
+- **across types** every number is below every text, which is below FALSE,
+  which is below TRUE (`sh_cmprank`): `=1<"a"` and `=TRUE>1` are TRUE,
+  `="10"=10` and `=TRUE=1` FALSE;
+- **a blank** is 0 to a number, `""` to a text and FALSE to a logical — it
+  takes the other side's type;
+- an error on either side stands, as for any operator.
+
+**The right operand is parsed at the `&` level**, as the left always was: it
+was `sh_pexpr`, so `="ab"="a"&"b"` compared `"ab"` with `"a"` and left `&"b"`
+over — #VALUE! since §81.50, a wrong answer before it. **And the operator is
+left-associative**, as Excel's is: `=1<2<3` is `(1<2)<3`, a TRUE against 3,
+which is FALSE. It stopped after one comparison.
+
+**`&` had the same flaw as §81.51's writeback, one level down.** It banked its
+left operand in `sh_sacc2`, a single buffer, and a `&` inside its right
+operand banked there too: `="a"&("b"&"c")` was `bbc`. The left goes on the
+string stack now, as IF's and every text function's second argument already
+did, and `sh_sacc2` holds only the right while the left comes back — one
+buffer instead of two, 65 bytes of bss returned.
+
+`tests/sheeteval.py` holds 22 cases for this; the previous binary fails
+eight of the first twenty (the others were right by accident, as above).
+Mutations: text compared as numbers fails two, the ranking three, the right
+operand back at `sh_pexpr` one, a blank not taking the other side's type
+one. Resident +68 bytes, bss −65.
+
+### 81.54 A long label runs on into the empty cells beside it
+
+**Every label was clipped to its own cell.** Excel draws a label wider than its
+column across the *empty* cells to its right, and stops at the first one that
+holds anything; SHEET cut it at seven letters. It was the most visible
+difference left once §81.52 opened Excel 2.1d's own worksheets — `1st Qua`,
+`Ladies'`, headings nobody could read.
+
+`sh_text_to_numbuf`'s comment put it off as a draw-order change: the
+neighbours' occupancy would have to be known before a cell was drawn. It is
+not one. **Each empty cell draws its own slice of whatever runs into it**
+(`sh_spill`), and the only label that can is the **nearest cell to its left in
+the row** — any further one is stopped by it — which is the record just before
+the empty cell's insertion point, the table being sorted by row and column.
+So it costs one `sh_findcell` per empty cell and depends on no order: a ranged
+repaint of one empty cell draws the same slice a full one does, and a label
+that is edited is followed by the full repaint every commit already pays.
+
+- A formula's **text result** runs on, from its result slot, not its formula
+  text (§81.22.1).
+- Only a **General or left-aligned** label ran on, and §81.76 is the other two
+  directions.
+- The label's bold and underline go with it; the empty cell's own shading
+  stays its own.
+- With **formulas on show** nothing runs on — every cell shows its formula.
+- The vertical gridline between the cells is still drawn through the text.
+  None of the Excel 2.1 screenshots on hand has a label long enough to say
+  whether Excel draws it there.
+
+`tests/sheetspill.py` reads it off the glass: SHEET opens a SYLK the host
+wrote, the host finds the grid by its own lines in the 1bpp framebuffer, and
+counts ink inside each cell. Twelve checks — a 24-character label reaching D1
+and not E1, one stopped by a number in B2, a two-letter one reaching nothing,
+and `=REPT("ab",10)` reaching E4, which only its 20-character *result* can:
+the formula's 13 characters would stop in D4. The previous binary fails the
+five that should carry text, and spilling the formula text instead of the
+result fails E4. (The first version of the test found ink in B3 and B4 on the
+unchanged binary: the pointer, left where the file was double-clicked. It is
+moved off the window now.) Resident +199 bytes.
+
+### 81.76 A label runs on the way its ALIGNMENT points
+
+§81.54 drew a long label across the empty cells to its **right** and said so
+about the rest: *"a centred or right-aligned one runs the other way in Excel
+and is still clipped here."* This is the other way.
+
+**Which direction is not a preference, it is where the characters are.** A
+label wider than its column has to hang off somewhere, and its alignment says
+where: a General or left-aligned one hangs off to the **right**, a
+right-aligned one to the **left**, and a **centred** one **both ways at once**
+— that last is geometry rather than a guess, since centring a string wider
+than its box leaves half the excess on each side.
+
+#### 81.76.1 One rule, and the two halves that have to share it
+
+`sh_lpad` answers *how far does this label hang off the LEFT of its own cell*
+— zero when it fits, the whole excess right-aligned, half of it centred — and
+**two callers have to agree on it**: `sh_text_to_numbuf`, which draws the
+label's own cell, and `sh_spill`, which draws every empty cell beside it.
+
+That sharing is the whole design, and it is what the first build got wrong.
+`sh_text_to_numbuf` had always copied a label's **first n characters**, which
+is correct for a left-aligned one and for nothing else; the neighbours drew
+slices from the new model. So a centred `Centred label!!` drew `Centred` in
+its own cell and the slice from character 11 in the next, and the glass read
+**`CentCentredel!!`** — two windows of one string, each right on its own
+terms. The ink checks passed, because there was ink in every cell they named.
+
+#### 81.76.2 Two candidates, and why the first is only a guess
+
+An empty cell has exactly two labels that can reach it — the **nearest record
+to its left** and the **nearest to its right**; anything further is stopped by
+one of them. Both are one step from the insertion point the cell's own
+`sh_getcell2` has already found: the record *before* it and the record *at*
+it. The left one is tried first, so a cell reached from both sides takes the
+left label.
+
+**A candidate that is a label but does not REACH is not an answer**, and
+taking it as one was the second defect: in a row holding a short label on the
+left and a centred one on the right, the short one was accepted as the left
+candidate, measured, found too narrow to reach — and the search stopped there,
+so the centred label's left half was never drawn. `.fail` falls through to the
+right candidate instead of returning.
+
+#### 81.76.3 The slice is justified TOWARD the label
+
+One rule covers every case and is why none of this needs padding arithmetic: a
+**fully covered** cell holds exactly its own width either way, so it fills edge
+to edge; a **partly covered** one — the last cell the text reaches — hugs the
+side the text is coming from, which is where the characters actually are. So
+`sh_spill` calls `sh_ljust` for a label on the left and `sh_rjust` for one on
+the right, and a centred label's two ends come out right with no third case.
+
+#### 81.76.4 Cost and evidence
+
+**+346 bytes resident and 17 of bss**, the bss because the routine has to hold
+the candidate's column, text offset, format and alignment across two width
+walks and a `strlen`, and an 8086 has not the registers. The work per empty
+cell is one extra record compare — the right-hand candidate — and a `strlen`
+only once a candidate is found, which is why an empty row costs nothing.
+
+`tests/sheetspill.py` goes from 12 checks to **19**. `write_sylk` grew an
+`align` argument to author them, since alignment is the thing this test has to
+state and the Alignment dialog cannot be reached from the host. Both new
+labels are **fifteen characters in a column seven wide**, so the excess is
+eight and every expectation is computed rather than eyeballed: `G2`
+right-aligned reaches `F2` fully and `E2` by one character, and does **not**
+hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
+and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
+window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
+row would have been off the glass, where the failure reads as "no grid".
+
+### 81.114 `Data ▸ Table` — the last missing menu command
+
+§81.39's inventory had exactly one menu command left that Excel 2.1d has and
+this app does not, printing (no OS backend) and MDI (struck on purpose) aside.
+This is it, and it unblocks **one** declined macro name, `TABLE` (§81.93) -
+this said "13 declined macro names, `TABLE` among them", which counted that
+section's whole "blocked on a SHEET feature" list as though this feature
+unblocked all of it. **Built in five stages**, §81.114.1 to §81.114.11. `docs/plans/SHEET-TABLE-PLAN.md` carries the full reading of the
+Reference Guide and of the file format, and the staging; this section is what
+is built.
+
+**Where it goes in the menu came off the capture**, not from memory:
+`LIBRARY/documentation/screenshots/excel/menu_data_full.png` shows `Table...`
+between `Series...` and `Parse...`, so it went in at index 8 and Parse and
+this app's three chart items each moved down one — exactly as §81.82 moved
+them when Parse went in.
+
+#### 81.114.1 Two dialogs, because Excel's one has two fields
+
+Excel asks for the Row Input Cell and the Column Input Cell in a single
+dialog. **No engine here has two fields**, so they are asked one after the
+other — the shape §81.72's Series already uses for its type and its step, and
+§81.74's recorder for its name. The second opens from the first's `OK`, with
+a plain near call inside `CHART.OVL`, the way `.doseries` opens its own.
+
+**Either field may be left EMPTY, and that is not a refusal.** It is how a
+one-input table says which kind it is: Excel spells the same distinction as
+the comma's side in `{=TABLE($D$9,)}` versus `{=TABLE(,$E$8)}`. An empty
+field stores `SH_TBL_NONE`, and only the second half decides whether the pair
+makes sense — refusing in the first half would reject a legal one-input
+table. `SH_TBL_NONE` is `0FFFFh` and not zero, because row 0 column 0 is cell
+A1, a perfectly ordinary input cell. **A cell that is GIVEN must be on the
+sheet**, as Go To asks (column below `SH_COLS`, row below `SH_ROWS`), or the
+command refuses: `A0` parses as row `0FFFFh`, which is `SH_TBL_NONE` itself,
+and a row past `SH_ROWS` packed into the next sheet's key and wrote there.
+
+#### 81.114.2 Which of the three shapes, decided and not guessed
+
+The selection is the whole rectangle **including** the formulas and the input
+values — Excel's own words are "select the range of cells containing the row
+and column of values and the formula" — so the interior that gets filled is
+one row and one column smaller than what the user selected. A selection with
+no interior is refused.
+
+Which shape it is comes from **which input cells were given**, never from
+guessing at the data:
+
+| given | shape |
+|---|---|
+| both | two-input: one formula in the corner, the column of values below it feeding the COLUMN input cell and the row right of it feeding the ROW one |
+| column only | formulas across the top row, values down the left column |
+| row only | formulas down the left column, values across the top row |
+| neither | refused — nothing says what to substitute |
+
+#### 81.114.3 The pass stamp is what makes it a table and not one number
+
+`sh_eval_cell` memoizes per repaint pass, so the evaluation needs
+`inc word [sh_pass]` in front of it — the same `inc` `Calculate Now` spends
+(§81.78) — and another after the inputs are put back, so that nothing keeps
+a value computed against a substitution.
+
+**What removing it actually costs is ONE CELL, not the table**, and the
+difference matters because this section first said otherwise. Taking the
+stamp out leaves **the first result of each table** reading the formula's
+unsubstituted answer and the other six correct: the pass moves on its own
+after that first evaluation. The claim here was "the table fills with one
+number repeated", `tests/sheettable.py` was given a check that asked whether
+the four results DIFFER on the strength of it, and **that check passed on
+its own mutation** — 0, 14, 18 and 19 being four distinct values. The check
+now names the two cells that really move; the story was wrong and the gate
+inherited it.
+
+#### 81.114.6 Two defects, and neither was found by reading the code
+
+Both were in the engine, both survived three readings that concluded it was
+correct, and both were found by driving it.
+
+**A stale `xchg si, di` in the banking helper.** `mov si, di` had already
+taken the record and `pop di` the slot, so the exchange — left from an
+earlier arrangement of the routine — reversed them and `rep movsb` wrote
+twenty bytes of the CELL segment over the package's own data segment at a
+record offset. The symptom was a **blank window**, which is what a package
+scribbling on itself looks like; it also made the next selection appear not
+to take, which read as a second, unrelated harness fault.
+
+**The destination row held in `DX` across `sh_getcell2`.** That routine's
+contract is *"out: CF=1 occupied + DX = value"* — `DX` is an **output**. So
+the substitution handed `sh_setvald` the value as a row: every write went to
+row 4 for an input of 4, the input cell was never written, and the table
+filled with the formula's original answer. The tell was a stray `3` sitting
+in cell A4 in a photograph, skimmed past twice. It is the same family as
+§81.17's `sh_findcell` not preserving `DI` — a documented output register
+eating a caller's live input — and what finally isolated it was disabling
+the restore to ask one bit: does the input cell keep the last substitution?
+It did not, so the write had never happened.
+
+#### 81.114.4 The input cells are banked WHOLE, and put back
+
+An input cell is an ordinary cell of the user's sheet: it may hold a formula
+or a label, and `sh_setvald` over one would leave a value where a formula
+was. So each is banked as its **whole 20-byte record** with a present flag,
+and restored after every result cell.
+
+Restoring is not tidiness. Every later result reads the input cell, so
+leaving the last substitution in it would make the table depend on the order
+it was filled.
+
+**Two of this paragraph's claims were false when it was written**, and both
+are in §81.114.7's evidence now:
+
+- *"an absent input cell banks as absent and is deleted again"* — it was
+  banked as absent and then **nothing happened**. `sh_table_subst` creates
+  the cell to substitute into, and unbanking a slot whose present flag was 0
+  returned at once, so the last input value stayed in a cell the user never
+  filled, looking like data. A worked example out of the Reference Guide
+  always gives its input cells a value, which is why neither the guide nor
+  `tests/sheettable.py`'s fixture could show it.
+- the slot's cell was read back out of the **banked record**, whose
+  `SH_C_ROW` is row **packed with the sheet**, and handed to `sh_findcell`,
+  which wants a plain row. On Sheet 1 the two are the same number, so this
+  worked everywhere a test had looked and restored nothing at all on sheets
+  2–4.
+
+The slot carries the plain column and row in its own header now
+(`SH_TBS_COL`/`SH_TBS_ROW`, written **before** the lookup), so unbanking
+knows which cell it is putting back whether or not there turned out to be a
+record to read it from.
+
+#### 81.114.5 What stage 1 cost
+
+| | before | after |
+|---|---|---|
+| region | 60,668 of 61,440 | **60,862 — 578 spare** |
+| `CHART.OVL` | 47,902 of 49,152 | **48,477 — 675 free** |
+
+The resident half is the menu row and `mov al, SH_ID_TBLROW` / `call
+sh_idlg_open_r`; the dialogs and the engine are `CHART.OVL`'s, because 772
+bytes of region was all there was. The bss is 66 bytes and **the first
+sixteen are laid out as BIFF3's `DATATABLE` body (`0236H`)**, so the writer
+of §81.114's later stage copies them rather than building them.
+
+#### 81.114.7 Stage 2 — a result cell cannot be edited, and a clear is all or nothing
+
+Stage 1 filled the rectangle. What makes it a **table** rather than a one-shot
+fill is that the result cells stop being ordinary cells, and the Reference
+Guide (pp. 150–156) states both halves of that:
+
+> Other than copying, you cannot edit cells inside the table. If you try to
+> edit a portion of the table, Microsoft Excel displays a message.
+
+> Clearing the Values in a Table: … You must clear all the resulting values.
+
+**The table outlives the run.** A 16-byte record goes in a list carved from
+the border claim, and **the sixteen bytes are BIFF3's `DATATABLE` body field
+for field** — range, option flags, both input cells — so stage 4's writer
+copies the record rather than building one. A seventeenth byte says which of
+the four sheets it is on, which the format never needs because a BIFF file
+describes one sheet. `SH_TBL_CAP` is 56 at `SH_CLAIM_TBL_KB` = 1.
+
+**It is the claim's THIRD carve, not a ninth claim.** `MEM_OWNER_MAX` is
+eight an owner and SHEET holds eight (§81.102's list), so this is §81.94's
+answer applied once more: one `OSAPI_MEM_CLAIM` of `BORD + NOTE + TBL`, with
+the note table at `+BORD` and this at `+BORD+NOTE`, both derived in `sh_reloc`
+after its patch loop because no word names either as a base.
+
+##### The mark is in the BORDER byte, and the plan was wrong about where
+
+`docs/plans/SHEET-TABLE-PLAN.md` put the result-cell mark in `SH_C_FLAGS`
+bit 2, on the correct observation that bits 2–7 are free there. **§81.46's
+own comment, six hundred lines up the same file, is the argument against
+it**: that byte is written as a WORD together with the format at several
+sites and cleared outright when a formula becomes a value, so a bit there
+would survive some edits and not others. It is the reason cell PROTECTION
+went into the border byte, and it applies here unchanged.
+
+So `SH_TBL_RESULT` is **bit 7 of the border byte** — the last free one, beside
+`SH_PROT_UNLOCK` and `SH_PROT_HIDDEN` — and `SH_BT_KEEP` (0E0h) is what a
+border write must preserve, which is `SH_PROT_MASK` with this bit added.
+
+That choice is also why the guard is free. `sh_prot_blocked` **already**
+fetches the border byte for every cell of the selection, to test the lock
+bit; the table test is one more `test` on a byte already in hand, and no cell
+record is looked up at all. The list is walked only by `Edit ▸ Clear`, which
+is a menu command and may spend a scan.
+
+**A result cell costs a border-table record**, which is the price of putting
+the mark in a sparse table instead of in every cell. A 10 × 10 table takes
+100 of `SH_BORD_CAP`'s 682; a table that exhausts the border table keeps the
+right numbers and silently loses its protection, the same scope limit every
+other writer of that table takes.
+
+##### Two guards, because Clear asks a different question
+
+Typing is always one cell, so "may this cell be edited" refuses it outright.
+A clear is a block, and the question is **coverage**:
+
+| | asks |
+|---|---|
+| typing, Paste, Fill, a sort's write-back, Cut, formats, notes | `sh_prot_blocked` — refused on any result cell |
+| `Edit ▸ Clear` | …the same, with `[sh_prot_clr]` set so the table test is **deferred**, then `sh_tbl_clearguard` |
+
+`sh_tbl_clearguard` walks the list and compares each table's **result
+rectangle** — the range less its top row and left column, since those are the
+user's own formulas and input values — against the selection. Any table
+covered *partly* refuses the whole clear; when none is, every table covered
+*wholly* is dropped. `[sh_prot_clr]` is cleared inside `sh_prot_blocked` on
+every exit, so it is one call's worth and never a mode.
+
+**Clearing FORMATS is exempt, and that is Excel too rather than a shortcut.**
+A table's cells can be formatted — the guide tells you to — so taking a
+number format off them is a format change and not an edit of the values.
+
+##### Two more defects in the same byte, both older than the mark
+
+`SH_TBL_RESULT` shares the border byte with the four edges, the shade and
+§81.46's two protection bits. Putting it there found two things already wrong
+with the cells that byte describes:
+
+**`Clear ▸ Formats` removed the whole record.** `sh_clear_one`'s `.fmt` arm
+was a plain `sh_bt_removecell`, which takes everything stored for the cell —
+so clearing formats **reset Locked and Hidden to the default**, which is a
+§81.46 defect that predates this feature entirely, and once the table mark
+joined them it silently un-protected a table's result cells while leaving the
+table itself recorded. It clears the edges, the shade and the number format
+now, keeps `SH_BT_KEEP`, and removes the record only when nothing is left —
+which is `sh_bdlg_apbord`'s own `.clearit`, unchanged for cycles, three
+hundred lines away.
+
+**`Clear ▸ Formulas` orphaned the marks.** §81.63 keeps a cell that still has
+a border record, on purpose, so clearing a whole table that way dropped the
+table and left every result cell marked. An orphaned mark refuses edits for
+ever — and only while some *other* table keeps `sh_prot_blocked`'s scan
+armed, which makes it as hard to see as it sounds. `sh_tbl_dropsel` unmarks
+the rectangle it is dropping, so every clear mode behaves the same and the
+`Clear ▸ All` path's own `sh_bt_removecell` is belt and braces.
+
+`sh_tbl_unmark` is ONE walk of the border table rather than a lookup per
+cell: the rectangle can be large and the table is `SH_BORD_CAP` records at
+most. It does not remove a record left holding nothing — every reader treats
+a zero record exactly as it treats no record, and removing one mid-walk would
+shift the array under the cursor — so a table cleared through `Formulas` can
+leave one empty record per result cell, bounded by the number of distinct
+result cells the document has ever had.
+
+##### The Del key never asked any guard at all
+
+`.delcell` cleared `[sh_selcol]`/`[sh_selrow]` directly. Every other write
+path in this app funnels through `sh_commit`, which asks `sh_prot_blocked`;
+Del did not, so **it cleared a locked cell on a protected document** and
+would have cleared a table result cell. That is a §81.46 defect that predates
+this feature by a long way, found only because this feature went looking at
+every write path. It asks now, strictly — Del clears one cell, and one cell of
+a table is exactly the partial clear that is refused — and it repaints on the
+refusal, or the status line would never show what it just said.
+
+##### A defect the gate caught and reading did not
+
+`sh_tbl_dropsel` computed the list's length in `AX`, called `sh_tbl_overlap`,
+and then used `AX` as that length. **`sh_tbl_overlap` answers in `AL`**, so
+`AX` came back as the old `AH` over a 0, 1 or 2, and the `rep movsb` that
+closes the gap ran with a byte count out of nowhere — off the end of a 10 KB
+claim. The machine reported **`STACK OVERFLOW TASK 00`**, three structures
+away from the mistake, and the Clear dialog stayed up. Same family as stage
+1's own two (§81.114.6) and as §81.17's `sh_findcell`/`DI`: a documented
+output register eating a caller's live value. The length is re-taken after
+the call now, with the reason written at the instruction.
+
+##### Evidence
+
+`tests/sheettbl2.py`, **9 checks**, through the menus and a SYLK save, on the
+cycle-accurate CGA. **Two** one-input tables side by side in rows 1–3, and
+**neither input cell is in the file at all** — so the absent-cell arm of
+§81.114.4 is the one under test, rather than the restore-what-was-there arm
+`sheettable.py`'s zero-filled inputs exercise.
+
+1 RECORDED `[sh_ntbl]` is 2 · 2 REFUSED typing into a result cell sets the
+status line to `sh_s_tblpart` · 3 PART a clear over half a result area is
+refused and both tables survive · 4 FORMATS the *same* half-selection cleared
+as Formats is allowed · 5 FMTKEEP …and it did not un-protect the cells, read
+off the border table itself · 6 WHOLE a clear over all of one table's results
+drops that table, 2 → 1 · 7 DROPPED so those cells take a typed value, while
+the second table keeps the guard armed · 8 FORMULAS the second table cleared
+the *other* allowed way loses its marks too · 9 INPUT both input cells are
+still absent in the saved file, the typed 99 is in C2, and every other result
+cell of both tables is gone.
+
+**Three of those nine are there because a mutation refused to fail**, and
+each is a shape worth keeping:
+
+- **A cheap early-out makes every check behind it vacuous.**
+  `sh_prot_blocked` returns at once on `[sh_ntbl] == 0`. With ONE table,
+  clearing it takes that counter to zero and the guard never reads a mark —
+  so the mutation that leaves the cleared cells marked **passed all six
+  checks of the one-table version of this row**, against a paragraph of this
+  section that said it would fail. Hence two tables.
+- **Allowed and harmless are different facts.** Check 4 asks whether the
+  Formats clear went through; it passed throughout the defect in which that
+  clear was wiping the mark and both protection bits. Check 5 reads the
+  border byte, and only a direct read of the thing itself found it.
+- **A fix needs the path it exists for.** `sh_tbl_dropsel`'s unmark is
+  unreachable through `Clear ▸ All`, which removes the whole border record in
+  `sh_clear_one` anyway; with All alone, deleting the unmark **passed all
+  eight checks**. Check 8 clears the second table through `Formulas`, the
+  path §81.63 keeps the record on.
+
+Check 4's control is check 3: same cells, same menu, the radio row is the only
+difference. Checks 8 and 9 overlap on one fix and say so — 8 reads the border
+table, 9 reads the file, where an orphaned mark shows up as `0.0` in a cell
+that should hold nothing.
+
+Mutations, each built and run **twice**, and these are the runs' own numbers
+rather than the ones predicted for them:
+
+| mutation | fails |
+|---|---|
+| no `sh_tbl_add` — the table is never recorded | **all nine**: the same early-out means an unrecorded table is an unprotected one, so the record is load-bearing for protection and not only for Clear |
+| no `sh_table_mark` | 2, 5, 8 |
+| a partial cover reported as whole | 3, 4, 5 |
+| Formats guarded like every other clear | 4 |
+| Formats wiping the whole border byte | 5 |
+| no `sh_tbl_dropsel` | 6, 7, 8, 9 |
+| no unmark on the drop | 8, 9 |
+| `sh_table_unbank`'s absent-cell arm removed | 9 |
+
+Four of the eight isolate a single check. The four that do not each fail
+checks genuinely downstream of what they broke, and the table says which.
+
+##### What stage 2 does NOT do yet, said plainly
+
+**`Insert`/`Delete Row`/`Column` and `Sort` do not move a table's stored
+rectangle.** The result cells' marks DO move, because they live in the border
+table and `sh_rowcol_op` adjusts that; the 16-byte record does not, so a table
+with a row inserted above it is guarded against a rectangle one row too high.
+The symptom is a clear that is refused when it should be allowed, or allowed
+when it should be refused — never a wrong number, because the marks are what
+refuse an edit. It belongs with stage 3's recalculation, which has to walk the
+same records on the same four operations; §81.108's reference adjustment is
+the worked example of what that costs.
+
+**Nothing recalculates a table yet.** Editing an input value leaves the
+results as the run left them. That is stage 3, and it is the reason Excel has
+an `fAlwaysCalc` bit in the record this one already stores.
+
+##### What stage 2 cost
+
+| | stage 1 | stage 2 |
+|---|---|---|
+| region | 60,880 of 61,440 | **61,040 — 400 spare** |
+| `CHART.OVL` | 48,473 of 49,152 | **49,204 of 52,224 — 3,020 free** |
+| `CH_OVKB` | 48 | **51** |
+| bss | 9,249 | 9,279 |
+
+**`CHART.OVL` is the constraint now, not the region**, and stage 2 ran out in
+it mid-fix: 49,204 against 48 KB's 49,152. `CH_OVKB` went to **51 — three
+ahead on purpose**, which is the step `os88chartovl.inc`'s own history took at
+50 and for the same stated reason: `SHEET-TABLE-PLAN` has three stages left
+and stage 4 is a BIFF reader *and* a writer. It is HEAP and not image —
+§82.16.3 already says a machine too small for the claim still runs the
+spreadsheet — and 63 is the wall, the module being one segment.
+
+#### 81.114.8 Stage 3a — recalculation, and Excel's third mode
+
+A table's result cells hold **stored values**. This app's entire
+recalculation mechanism is `inc word [sh_pass]`, after which `sh_eval_cell`
+re-evaluates lazily as the grid draws and memoizes per pass — which is cheap,
+and which does **nothing whatever** for a table. Its cells have to be
+computed again: one full formula evaluation per result cell, plus the
+substitute-and-restore either side of it.
+
+That cost is not a detail to be optimised away later. It is the reason
+Excel 2.1's own Calculation dialog has three modes and not two, and the
+capture is the authority —
+`LIBRARY/documentation/screenshots/excel/dialog_calculation.png` reads
+**Automatic / Automatic except Tables / Manual**. This app had Automatic /
+Manual / Calculate Now; it has Excel's three, with Calculate Now kept as the
+fourth row (§81.78's folded-in menu command, which Excel has as a separate
+item beside `Calculation…`).
+
+`sh_calcmanual` is `sh_calcmode` now, because a byte with three values whose
+name says "manual" is a false premise waiting to be read as a flag — and two
+of its three readers tested it as one.
+
+##### Every table, entirely, and that is the design
+
+**There is no dependency tracking.** A recalculation re-runs every table on
+the document from its stored record, start to finish. A cell's formula is not
+analysed to discover that it mentions an input cell, and a table is not asked
+whether anything it reads has changed.
+
+That is a deliberate choice and not a shortcut deferred: the dependency graph
+would have to be rebuilt on every structural edit, it would cost resident
+bytes this package does not have, and **the mode switch is the user-facing
+answer Excel itself shipped** for exactly this. A sheet where the cost bites
+is a sheet whose owner moves to Automatic except Tables, and the status bar
+says `CALCULATE` while anything is owed.
+
+##### Where it hooks, and the two paths that bypass the funnel
+
+`sh_commit` is the one funnel — typing, Paste in all six modes, Fill Right,
+Fill Down and a sort's write-back all end up there, which is the same reason
+`sh_prot_blocked` sits at its other end. The re-run goes at its exit, inside
+the `pushf`/`popf` that preserves the carry every caller reads.
+
+It is **gated on `[sh_commitdirty]`, not on reaching the exit**: a refused
+commit comes through there too, and under §81.114.7 typing into a result cell
+is refused *by construction* — so without the gate every rejected keystroke
+would re-run every table on the document.
+
+Two paths write cells without going through `sh_commit`, and each owes its
+own call:
+
+- **the Del key**, which clears the selected cell directly — and that cell
+  may be an input cell;
+- **`Edit ▸ Clear`**, whose loop is the module's. The tables it *covered* are
+  already gone by then (§81.114.7's drop); this re-runs the ones that merely
+  **read** what it took away.
+
+`Calculate Now` re-runs tables **whatever the mode**. Under Automatic except
+Tables it is the only thing that ever will, which is the whole point of the
+command; and it exists in two copies, resident and module, for the reason
+§81.78 already records — so both were changed.
+
+##### The sheet comes from the record
+
+`sh_getcell2` and `sh_setvald` work on `[sh_cursheet]`. A table on Sheet 3
+re-run while Sheet 1 is showing would read and write the wrong grid
+entirely, so `sh_tbl_runall` sets that word from each record's
+`SH_T_SHEET` byte and puts it back — `sh_recalc_all`'s own push/pop, for the
+same reason. `sh_table_run` was split for this: the half that reads the
+**selection** is right exactly once, when the dialog is answered, and wrong
+every time after, because a recalculation re-runs a table that is not
+selected and may not even be on the visible sheet. `sh_table_fill` is the
+half that does not care.
+
+A re-entrancy guard byte sits in front of the walk. Nothing can reach it
+today — a table's formula is evaluated, not committed — but the guard is two
+bytes and what it prevents is unbounded.
+
+##### Two things the third mode made sayable
+
+- **`GET.DOCUMENT(14)`** answers 1 Automatic, 2 Automatic except tables,
+  3 Manual. This app answered 1 or 3 and had **no way to say 2**, the mode
+  not existing; it is `[sh_calcmode] + 1` now, which is exactly Excel's
+  numbering. That the old code picked 1 and 3 rather than 1 and 2 says the
+  author knew the numbering and was working around the missing mode.
+- **the `CALCULATE` indicator** means "something on screen is stale". Under
+  Automatic except Tables that is true when a table exists and false when
+  none does, so the indicator reads `[sh_ntbl]` as well as the mode.
+
+##### What the third mode broke, and it was not the feature
+
+Adding a row to the Calculation dialog broke **two existing gates and one
+shipped macro command**, and all three had the same shape: something counted
+a position that moved.
+
+**`CALCULATION(2)` was folded into Automatic**, on this written ground:
+
+> `; CALCULATION(type_num) - 1 Automatic, 2 Automatic Except Tables (SHEET has`
+> `; no tables, so automatic), 3 Manual`
+
+True when it was written and false from §81.114's first stage. That is the
+whole hazard of a comment reasoning from a feature's **absence**: nothing
+re-reads it when the feature arrives, and a macro asking for the one mode
+that exists to make tables affordable was given the mode that does not. It is
+`type_num - 1` now, which is the radio row and is Excel's numbering.
+`tests/sheetmcmd.py` gained the case — the number was not **sayable** before,
+so no row could have caught it.
+
+**`tests/sheetcalc.py` and `tests/sheetmcmd.py` both selected the wrong
+mode.** `sheetcalc` carried `MANUAL = 1` with the comment
+`0 Automatic / 1 Manual / 2 Calc Now`; row 1 is still a **live** row, so it
+went on clicking it, silently chose the new middle mode and reported Manual
+as broken. This is the dialog-shaped twin of the menu index that shifted when
+`Table...` went in at 8 (§81.114.7), and it has the same answer: **ask, do
+not count.** `sheetfmt.radio_row` reads the row out of the dialog's own array
+of label pointers, so a row inserted above the one wanted moves the answer
+with it, and the new row uses it too.
+
+The pattern is now three for three in this feature: an inserted **menu**
+item, an inserted **dialog row**, and a **mode number** that a comment had
+reasoned away. Each was found by a gate going red rather than by review.
+
+##### Evidence
+
+`tests/sheettblcalc.py`, **8 checks**, on the cycle-accurate CGA, every value
+read **out of the cell records** rather than off the glass or out of a saved
+file. For a result cell that is sound and exact: it holds a stored number, so
+the record *is* the answer — which is also what lets this row assert a table
+that did **not** move as precisely as one that did. §81's "stored vs
+published" trap is about FORMULA cells, and this row never reads one.
+
+0 FILLED the control · 1 AUTO changing an input value re-runs it · 2 FORMULA
+and so does changing the governing formula · 3 AUEX the same edit under
+Automatic except Tables leaves the table alone · 4 NOW and Calculate Now
+catches it up · 5 MANUAL neither moves until Calculate Now, which moves both
+· 6 DEL the Del key owes its own re-run · 7 SHEET2 a table on Sheet 2,
+re-run by a commit made while Sheet 1 is showing, still reads and writes
+Sheet 2.
+
+**Checks 3 and 5 assert that nothing changed, and are only worth anything
+because 4 and 6 follow them**: the later check needs the earlier edit to have
+landed, so an edit that silently missed fails the pair. A "nothing changed"
+check standing alone passes when the keystroke never arrived.
+
+**Check 7 exists because a mutation refused to fail.** Deleting the
+`[sh_cursheet]` assignment from the walk passed all seven of the checks
+above, every one of which used Sheet 1 — where the assignment is a no-op.
+That is the *same bug class, in the same feature*, that §81.114.4 records:
+`sh_table_unbank` restored input cells correctly on Sheet 1 and nowhere
+else, for a whole cycle, because no fixture had ever used another sheet.
+**The ghost is the sharp half of the check**: Sheet 2's values could survive
+by simply not being touched, where a cell appearing at those coordinates on
+Sheet 1 can only have been written by this walk.
+
+**What the row does NOT claim:** that only the affected results are
+recomputed. Every table re-runs entirely, so row 3 standing still after an
+edit to row 2's input proves nothing about which cells were visited — its
+inputs did not change either way. No assertion tries to.
+
+##### What stage 3a cost
+
+| | stage 2 | stage 3a |
+|---|---|---|
+| region | 61,040 of 61,440 | **61,168 — 272 spare** |
+| `CHART.OVL` | 49,204 of 52,224 | 49,381 |
+| bss | 9,279 | 9,280 |
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| no re-run on commit | 1, 2, 3 |
+| the commit hook ignoring the mode | 3, 5 |
+| `Calculate Now` not re-running tables | 4, 5 |
+| the Del hook removed | 6 |
+| `[sh_cursheet]` not set from the record | 7 — and **nothing at all** until check 7 existed |
+
+Check **0 FILLED has no mutation of its own and is not claimed to**: it is the
+control, and that the rectangle fills correctly in the first place is
+`sheettable`'s subject and §81.114.7's.
+
+#### 81.114.9 Stage 3b — the stored rectangle follows the grid
+
+`Insert`/`Delete Row`/`Column` move the cells, and they move a result cell's
+**mark** with them for free: the mark is a bit in the border byte, and
+`sh_rc_sides` already shifts that table. The 16-byte table **record** did not
+move. A table whose sheet gained a row above it was therefore guarded against
+a rectangle one row too high — a clear refused when it should be allowed, or
+allowed when it should be refused. Never a wrong number; the numbers are
+stored. Wrong *behaviour*, which §81.114.7 said plainly was outstanding.
+
+##### Why the generic shifter does not fit
+
+`sh_rc_table` shifts any sparse table whose record begins *(packed row/sheet,
+column)* — borders, notes and row heights all go through it. A table record
+is not a point, and every one of these is a different answer:
+
+| | |
+|---|---|
+| a row inserted **above** | the whole rectangle moves down, **and the input cell with it** |
+| a row inserted **inside** | the rectangle **grows**: `r2` moves, `r1` does not |
+| a row deleted **inside** | it shrinks, and the table goes when no interior is left |
+| the **top row** deleted | that row is the formulas (or the input values), so the table goes |
+| an **input cell** deleted | nothing is left to substitute, so the table goes |
+
+Columns are the mirror, with one extra: `c1`/`c2` are single **bytes** in the
+record, because that is what BIFF3's `DATATABLE` has, so the write-back is
+where a column pushed past 255 is refused.
+
+**The order matters.** `sh_tbl_rcshift` runs *after* `sh_rc_sides`, not
+before: a table it drops has to unmark its result cells, and those marks are
+in the border table the previous line has just moved — so the rectangle to
+unmark is the **shifted** one, not the one the record still holds.
+
+##### Undo did not carry the table list, and that is older than this stage
+
+The snapshot held cells, borders, notes and the text arena. It did **not**
+hold the table list, which §81.114.7 added without noticing — so an undone
+`Insert Row` restored every cell and every mark and left every rectangle
+shifted, and an undone `Edit ▸ Clear` restored the cells of a table it had
+dropped without restoring the table. **A half-restoring Undo is worse than
+none, because the user believes it** — and the state it left is precisely the
+cells and the record disagreeing, which is the defect this whole stage
+exists to prevent.
+
+`SH_UD_HDR` is 10 now, with `ntbl` as its fifth word and the list as the
+fourth array. 74 resident bytes, which is what saying so costs.
+
+##### Sort drops, and says so
+
+A sort is an arbitrary permutation of rows. A table whose range it touches
+stops being a table: the results are still the right numbers, in an order
+nothing can reconstruct. The record goes and the marks with it, and the
+**values stay where the sort put them** — the same shape of answer SYLK gives
+a table it cannot describe (§81.114.7).
+
+It is **said**, on the status line, because a table silently ceasing to be
+one is the kind of thing a user finds out about much later. The test asserts
+the message as well as the count, for that reason.
+
+The test for overlap is the **whole range**, not the result area: a sort that
+reorders only the formula row, or only the input values, has broken the table
+just as surely.
+
+##### Three defects, and one is a family this feature keeps producing
+
+Two were caught by re-reading before the first build:
+
+- a stray **global label** in the middle of a routine — this tree is one flat
+  namespace (§1) and every module-internal label carries its prefix or is a
+  NASM local;
+- a **stale flag**: `test byte [sh_rc_op], 1` sat between a `cmp ax, bx` and
+  the `je` that wanted its flags, so "this index was deleted" could never
+  have fired. The compare is repeated at the branch now, with the reason at
+  the instruction.
+
+The third survived to the gate. `sh_tbl_sortdrop` counted dropped tables in
+`DL` and computed the list's length with `mul cx` — **which writes `DX`**. The
+count came back as the multiply's high word, which is 0 for any list that
+fits, so the tables were dropped correctly and the status line never said so.
+That is the **third** instance in this feature of a documented output
+register eating a caller's live value: §81.114.6's `sh_getcell2` returning in
+`DX` while `DX` held a destination row, §81.114.7's `sh_tbl_overlap`
+answering in `AL` while `AX` held a length, and now `mul`. §81.17's
+`sh_findcell`/`DI` is the same family and predates all three.
+
+##### Evidence
+
+`tests/sheettblshift.py`, **9 checks**, every rectangle read **out of the
+record itself** and never inferred from what the guard then allowed — the
+cells moving and the record moving are different facts, and the whole defect
+is the two disagreeing.
+
+0 RECORDED the control · 1 ABOVE the rectangle and both input cells move down
+· 2 INSIDE an inserted row grows it, `r2` moving and `r1` not · 3 SHRINK and
+deleting it shrinks it back · 4 COLUMN `c1`, `c2` and the input columns move,
+which is also the check that the byte fields are written back · 5 UNDO the
+**record** comes back, not only the cells · 6 TOPROW deleting the table's own
+top row drops it and unmarks its cells · 7 UNDROP and Undo brings that whole
+table back, count and all · 8 SORT a sort over its range drops it, with the
+status line saying so.
+
+##### THREE MUTATIONS PASSED, AND ALL THREE INDICTED THE FIXTURE
+
+Not one of them was a weak assertion. Each time the check was right and the
+**fixture never reached the code the mutation broke**:
+
+| mutation that passed | why the fixture could not see it |
+|---|---|
+| the ROW input cell's shift removed | the table was **one-input**, so `sh_tbl_ir`/`ic` stayed `SH_TBL_NONE` and half the input-shifting code was never entered |
+| the **top-row** drop rule removed | the input cell sat on the table's own top row, so deleting it dropped the table through the **input-cell** rule instead — the right outcome for the wrong reason |
+| Undo's `ntbl` restore removed | check 5 undoes an `Insert Column`, which leaves the count unchanged, so a count that was never restored was unobservable |
+
+The fixture is two-input now, with **both input cells below the table** at A5
+and A6, and check 7 undoes an operation that **changes** the number of
+tables. That is the whole repair: the assertions did not move.
+
+**This is five for five in this feature.** §81.114.7's orphaned mark needed a
+*second table*; §81.114.8's `[sh_cursheet]` needed *Sheet 2*; and these three
+needed a second input cell, a different row, and an undo that counts. Every
+time, the mutation passed because the fixture sat on a degenerate value — one
+table, one sheet, one input cell, a row that collided, a count that did not
+change. **When a mutation passes, suspect the fixture before the check.**
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| no rectangle shift at all | 1, 2, 3, 4, 5, 6, 7 |
+| the ROW input cell's shift removed | 1, 2, 3, 4, 5, 7 |
+| `r1` never moves, so an insert above never relocates | 1, 2, 3, 4, 5, 6, 7 |
+| `c1` not written back to the record's byte | **4 alone** |
+| Undo does not copy the list back | 5, 6, 7 |
+| Undo does not restore the count | 7, 8 |
+| the top-row rule removed | **6 alone** |
+| a dropped table keeps its marks | **6 alone** |
+| a sort does not drop | **8 alone** |
+| the drop is silent | **8 alone** |
+
+Five isolate a single check. Check **0 RECORDED has no mutation of its own
+and is not claimed to** — it is the control, and that the dialog stores the
+rectangle at all is §81.114.7's subject.
+
+##### What stage 3b cost
+
+| | stage 3a | stage 3b |
+|---|---|---|
+| region | 61,168 of 61,440 | **61,309 — 131 spare** |
+| `CHART.OVL` | 49,381 of 52,224 | 50,109 |
+| bss | 9,280 | 9,280 |
+
+Of the 141 resident bytes, **74 are Undo's** — the fifth array in the
+snapshot, in `sh_undo_size`, `sh_undo_save` and `sh_undo_load` alike. The
+shifter itself is the module's, behind a stub of the same shape as
+§81.114.8's: `sh_rowcol_op` is resident and this is a menu operation, not a
+hot path.
+
+**131 bytes is the number to watch.** Stage 4's reader and writer are
+`CHART.OVL`'s (§82.16.9), which has 2,115 free, but any resident thunk they
+need comes out of this.
+
+#### 81.114.10 Stage 4 — a table that survives save and load
+
+Until this stage a table saved to any format kept its **numbers** and
+silently stopped being a table. This is the stage the owner's "fully
+Excel-faithful" choice was really about.
+
+##### The two records
+
+Excel writes a table as a **`FORMULA` record per RESULT cell** whose entire
+token array is one `tTbl`, plus **one `DATATABLE`** immediately after the
+first `FORMULA` record of the table's range.
+
+| | |
+|---|---|
+| `tTbl` | `02H`, then the table's first row (2 bytes) and first column — **2 bytes in BIFF3**, 1 in BIFF2. Always the only token in its array, and legal only in a `FORMULA` record |
+| `DATATABLE` | **`0236H`** in BIFF3 (`0036H` in BIFF2, which split the two-input case into a second record `0037H`). 16 bytes: the range, the option flags, and two input cells |
+
+**A reader that knows neither still sees the right figures**, because the
+`FORMULA` record carries the cached result — which is exactly why this is
+the faithful shape rather than a private one.
+
+##### Where "the body is the record" stops being true
+
+§81.114.7 laid the list entry out as `DATATABLE`'s body field for field so
+that reading one would be a copy. The **range and the flags** are. The
+**input cells are not**, and this is the one place the two conventions
+genuinely differ:
+
+- the **format** names a one-input table's single cell in the **first** pair,
+  whichever kind it is, and option **bit 2** says the orientation; the second
+  pair is the two-dimensional case's alone;
+- this **app** keeps the row input in the first pair and the column input in
+  the second *always*, with `SH_TBL_NONE` in the unused one, because that is
+  what `sh_table_cell`'s `.rowonly`/`.colonly` arms read.
+
+Copied verbatim, every **column-input** table — the common shape — would
+write `0FFFFh` as its input cell, and every one read back would claim a
+**row** input cell and substitute along the wrong axis. Both directions
+translate, with the reason written at both.
+
+**A copy is still of the FILE's bytes, so they are checked first**, in
+`sh_biff_rcok`'s shape: the record is skipped unless `R1 <= R2 < SH_ROWS`,
+`C1 <= C2`, and every input cell the table uses (the first pair, and the
+second for a two-dimensional one) is `SH_TBL_NONE` or on the grid. An `R2` of
+`0FFFFh` would never end `sh_tbl_markall`'s row walk, and a row past the grid
+packs into another sheet's key.
+
+##### Which `FORMULA` record the `DATATABLE` follows
+
+The format says the **first of the range**, and that is usually the user's
+own formula in the top row rather than a result cell — so the hook is after
+*every* `FORMULA` this writer emits inside a table, not only after a `tTbl`
+one. A seven-byte bitmap (`SH_TBL_CAP` is 56) says which tables have already
+had theirs, cleared **once per file** rather than per sheet, because a
+workbook's tables are one list.
+
+##### The reader marks afterwards, not as it goes
+
+`SH_TBL_RESULT` is set on every result cell by a single pass **after the
+whole stream is in**. A `DATATABLE` arrives immediately after the *first*
+formula of its range, so most of the cells it describes are still ahead of
+it in the file; marking as it arrived would mark cells that do not exist
+yet. The sheet is impersonated per table, `sh_tbl_runall`'s reason exactly.
+
+The result cells themselves need no reader change: `sh_dc_decode` has no
+handler for token `02H`, so it refuses the array and the existing fallback
+stores the **cached value** — which for a table result cell is the whole
+answer.
+
+##### The other formats, unchanged and said again
+
+SYLK, DIF and CSV have **no table record of any kind**. A table saved to one
+keeps its values and loses its table-ness. That is a format limit rather than
+an app one, and it is the same shape of answer those formats already give to
+four number formats of twenty-one and to row heights (§81.114.7, §81.39.3).
+
+##### Evidence
+
+`tests/sheettblbiff.py`, **6 checks**. The host authors a BIFF3 stream
+containing a `DATATABLE`, four `tTbl` result cells and the governing
+formulas as real token arrays — and **asserts its own fixture through
+`read_biff_tables`/`read_biff_ttbl` before SHEET has seen it**, so a wrong
+fixture fails at the host rather than being blamed on the app.
+
+1 READ SHEET opens that file and has the table, every field against what
+went in · 2 MARKED its result cells are protected · 3 LIVE `Calculate Now`
+re-runs the loaded table to the same numbers · 4 DTOUT SHEET's own save
+carries one `DATATABLE`, every field asserted · 5 TTBL every result cell is
+a `FORMULA` whose only token is a `tTbl` naming the corner · 6 VALUES the
+numbers came back.
+
+**Check 3 is the one that says the record was read into a WORKING table**
+rather than merely stored: a re-run drives off the rectangle *and* the input
+cell, so either being wrong shows up as different numbers. Check 5 asserts
+the token's own **bytes**, because a check that merely noticed the formula
+would not decode is satisfied by any corrupt array at all.
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| `DATATABLE` not read at all | 1, 2, 4, 5 |
+| `DI` left advanced after the copy | 1, 3, 6 |
+| the input cells read verbatim | 1, 3, 6 |
+| no marking pass after a read | **2 alone** |
+| no `DATATABLE` written | **4 alone** |
+| the input cells written verbatim | **4 alone** |
+| no `tTbl` record, the cell goes out as a number | **5 alone** |
+| the cached result taken from `sh_wrec_val` | **6 alone** |
+
+Five isolate a single check, and every check is covered.
+
+##### Three defects, and two of them only the gate could find
+
+- `rep movsb` **advances `DI`**, and everything after the copy addressed the
+  record through it — so the sheet byte and the whole input-cell translation
+  landed sixteen bytes on, in the next record's space. The record read back
+  verbatim, which is exactly what the translation existed to prevent.
+- the cached result was copied from `sh_wrec_val`, **the word the RK path
+  packs an exact integer from**, not `sh_wrec_dval`, the double. Four cells
+  of denormal noise.
+- and `checkdocs` refused the build for a §81.114.10 citation written into
+  `os88sheetfmt.py` before this section existed, which is the doc gate doing
+  its job.
+
+The input-cell translation itself was found **by working out what the
+authored fixture should contain**, not by reading the code — which is the
+argument for the host learning the record first, in one line.
+
+##### What stage 4 cost
+
+| | stage 3b | stage 4 |
+|---|---|---|
+| region | 61,309 of 61,440 | **61,318 — 122 spare** |
+| `CHART.OVL` | 50,109 of 52,224 | 50,908 |
+| bss | 9,280 | 9,289 |
+
+**Nine resident bytes**, all of them the bitmap and two scratch flags. The
+reader, the writer, the translation and the marking pass are `CHART.OVL`'s
+entirely (§82.16.9 put the file formats there), which is the whole reason
+this stage fitted at all with 131 bytes of region left.
+
+##### The host learns the record first
+
+`tools/os88sheetfmt.py` gained `read_biff_tables` and `read_biff_ttbl`,
+through the **same walk** as the cells rather than a second loop that would
+go stale against it. That ordering is §81's format-gate rule: the host
+authors the input and verifies the output independently, so a writer defect
+and a reader defect cannot cancel — the trap that gate has already caught
+twice.
+
+#### 81.114.11 Stage 5 — `TABLE`, and the feature is finished
+
+`TABLE([row_input][, column_input])` is Excel's macro equivalent of
+`Data ▸ Table`, and with it **`Data ▸ Table` is complete** — §81.39's
+inventory now has no menu command Excel 2.1d has and this app does not,
+printing (no OS backend) and MDI (struck on purpose) aside.
+
+**Either argument may be omitted, and that is not a refusal**: it is how a
+one-input table says which kind it is, exactly as the dialog's empty field
+does (§81.114.1). Both omitted leaves nothing to substitute, and the engine
+refuses that the same way it refuses it from the dialog. The **selection**
+is the rectangle, as it is for the command.
+
+The engine is `CHART.OVL`'s and this is `MACRO.OVL`, so `TABLE` reaches it
+through a verb rather than a near call — `SHM_TBLCMD`, the shape §81.94
+established for every crossing between the two modules.
+
+##### The Cetab number was looked up, not guessed
+
+`TABLE` is **Cetab `0029H`**, and `[MS-XLS]` 2.5.198.4 gives
+`table-params = *2(ref / val)` — nought to two parameters, so the row is
+**variable** arity. Its neighbour `DATA.SERIES` at `0028H` is already in
+this tree's table, which is the cross-check that the numbering is the one
+being read.
+
+That mattered: the first row written here was `0x29, 0, 0`, and
+`tools/os88sheetfmt.py --selfcheck` refused the build with *"TABLE is Ftab
+index 41, which is DSUM"* — the third byte is what says Cetab rather than
+Ftab, and `0029H` in the Ftab really is `DSUM`. The host validating the
+assembler's tables against the document is what caught it in one build, and
+it is the same guard that keeps §81.63's `0FFh` honest: a guessed opcode is
+a file Excel runs differently.
+
+##### Two stale counts, found by going to read the list
+
+Stage 5's whole job was in §81.93, and reading it properly found that
+list wrong twice:
+
+- **the plan said this feature unblocks "13 declined macro names"**. It
+  unblocks **one**. Thirteen is the size of §81.93's whole "blocked on a
+  SHEET feature" list, of which `TABLE` is a single entry; the other twelve
+  are blocked on other missing commands. That sentence has been corrected
+  where it stands, with what it used to say.
+- **`WORKSPACE` had stopped being blocked** and nobody re-read the list.
+  §81.106 gave `Options ▸ Workspace...` its check-box dialog, which is the
+  command `WORKSPACE` drives. It moves to **not yet decided** rather than
+  being quietly built — the dialog exists, the decision does not.
+
+A list of "blocked on something that does not exist yet" goes stale the
+moment the thing arrives, and nothing re-reads it. This is the same shape as
+§81.114.8's `CALCULATION(2)` comment, which reasoned from a feature's
+absence and was never revisited when the feature came.
+
+##### Evidence
+
+`tests/sheetmcmd.py`, the command-equivalents gate, **24 checks** now. Three
+are `TABLE`'s: the near result and the far one of a one-input table built by
+`TABLE(,L25)` over a selected `M21:O23`, and **the input cell afterwards** —
+`L25` is not in the fixture at all, so a run that failed to put it back
+would leave the last substituted value in a cell the user never filled
+(§81.114.4). No two of the four results agree, so a substitution that went
+to the wrong cell cannot land on a right answer.
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| the engine never reached | the two result checks |
+| an empty first argument refused instead of accepted | those two, the input-cell check, **and the run never reaching its end** |
+| the column input cell stored as a **row** one | the two result checks |
+
+The third is the pair §81.114.10 showed the two conventions disagree about,
+and it is worth a mutation of its own for that reason.
+
+**The input-cell check has no mutation HERE, and that is said rather than
+glossed**: it fails only under the mutation that halts the run, which is not
+a test of the restore. The restore itself is `sh_table_unbank`'s `.gone`
+arm, and `tests/sheettbl2.py`'s own mutation of that arm fails its check 9
+alone — the same code, covered in the row that owns it.
+
+##### What stage 5 cost
+
+| | stage 4 | stage 5 |
+|---|---|---|
+| region | 61,318 of 61,440 | **61,318 — 122 spare, unchanged** |
+| `MACRO.OVL` | 18,747 of 28,672 | 18,831 |
+| `CHART.OVL` | 50,908 of 52,224 | 50,924 |
+
+**Not one resident byte.** The handler is `MACRO.OVL`'s, the verb is twelve
+bytes of `CHART.OVL`, and the four positional tables it appends to are the
+module's own.
+
+### 81.115 The radio dialogs take Excel's shape — a group box, buttons stacked right
+
+Stage 1.8's §15, and it is **one engine for fifteen dialogs**: Format Number,
+Alignment, Font, Insert, Delete, Clear, New, Calculation, Sort, Gallery, File
+Format, Paste Special, Cell Protection, Extract and Series all come out of
+`sh_fdlg`, so the shape is changed once.
+
+Excel 2.1d's `dialog_alignment.png` is the reference: the choices live in a
+**group box titled with the dialog's name**, its label breaking the top edge
+at the left, and **OK and Cancel are stacked at the top right**, outside the
+box. SHEET drew its buttons side by side along the bottom with no box at all
+— the one place this engine disagreed both with Excel and with SHEET's OWN
+check-box engine (`sh_bdlg`, §81.106), which has had the Excel shape since it
+was written.
+
+| | |
+|---|---|
+| where it lives | `SH_MODSEC` — **CHART.OVL**, which is why this was affordable at all: the overlay went 50,924 → 51,037, **+113 bytes with 1,187 still spare**, and SHEET's resident image is byte-for-byte unchanged at 52,029 of the 61,440 it has 122 bytes left in |
+| the box | `OSAPI_GFX_FRAME` from `(GX1, GY1)` to `(GX2, GY1 + rows·ROWH + …)`, as tall as **this kind's** rows |
+| the label | **ONE opaque `font_run`**, not `sh_bdlg`'s `FONT_WIDTH` + `GFX_FILL` + transparent string. The run paints its own cells' ground, which is exactly the erase that breaks the frame line — the line passes through the middle of an 8-tall cell placed at `GY1 - 4`. Three calls become one, and no new site joins `tests/textsites.txt`'s ratchet (§6.6) |
+| the buttons | a stacked column at `BTX = GX2 + 10`, level with the box's top edge. The rects go into `[sh_fdlg_btrects]` exactly as before, so the click half and the gates both follow with no change |
+
+**THE HEIGHT IS PER KIND NOW, and that is not cosmetic.** Every kind used to
+be sized for the tallest (`SH_FDLG_MAXROWS` = 7), so Insert's two choices got
+Gallery's seven-row dialog. Bare rows hid it; a group box does not — a tall
+empty frame is plainly wrong. `sh_fdlg_open` patches `WT_H` from
+`[sh_fdlg_count]` before it creates the window, exactly as it already patched
+`WT_X` and `WT_Y`, taking the greater of the box and the two stacked buttons.
+
+It also **retires** the CGA workaround recorded at that routine's
+`OSAPI_WM_KEEPH` call rather than working around it: the buttons no longer sit
+below the rows, so even the tallest kind is shorter than the fixed 171 this
+used to be.
+
+#### 81.115.1 What it cost the GATES, and why they are better for it
+
+**Forty test files clicked these dialogs at screen absolutes** — `FMT_RADIO_X
+= 246`, rows at `55 + 16·row`, OK at `(267, 170)` — and all of them were
+wrong the moment the dialog changed width and height. That is the real bill
+for this change and it is worth writing down, because the constants were not
+careless: they were correct, and `tests/sheetcalc.py` even carried the reason
+in a comment — *"every fdlg kind is the same size, so it opens in the same
+place and sheetfmt's own coordinates carry straight over."* §81.115 made that
+sentence false.
+
+**A dialog coordinate that is wrong by one row does not fail — it clicks a
+LIVE row.** This engine has already paid for that once: when DBF was added,
+a pitch of 14 against a real 16 silently saved a `.TXT` (§81.41), and the
+same shape bit `MANUAL = 1` when "Automatic except Tables" went in above it
+(§81.114.8).
+
+So the constants are **deleted, not re-measured** — `fdlg_xy(m, row)` and
+`fdlg_okxy(m)` ask the live window instead, and 99 call sites across 40 files
+now go through them. The helpers read the FRONT WINDOW's rect out of the
+kernel's own `wm_wins` rather than `[sh_fdlg_ox]`: most of these rows are
+glass-and-file tests with no package symbols at all, so a helper wanting
+SHEET's segment would have had to teach thirty-five files how to find it.
+Deleting the names is what stops the next geometry change re-arming this.
+
+#### 81.115.2 The sweep keyed on one idiom, and two rows used another
+
+**It missed two**, and the soak after the 2026-10-20 merge is what said so -
+both reading as merge fallout and neither being any such thing.
+
+`tests/sheettitle.py` did not use `sheetfmt`'s constants at all. It asked
+`dispcp.win_rect` where the dialog was and then clicked `dy + TITLE_H + 136`,
+a LITERAL carrying `SH_FDLG_BTY1..2` in a comment - so a sweep that replaced
+`FMT_RADIO_X` and its kin could not see it. The click landed on nothing, New
+was never OK'd, the document was never renamed, and the row reported *File >
+New does not rename the caption* - a defect in a feature that was working.
+**It is `fdlg_okxy(m)` now**, like the other 99.
+
+`tests/sheetdlgcga.py` is the sharper one, because it was not a coordinate at
+all. Its subject is §81.100: a dialog TALLER than a CGA's 155-row band keeps
+its height through `OSAPI_WM_KEEPH` instead of being cut, and it carried
+`radio (Alignment), 171` as the tall case. §81.115 sized the radio column per
+kind - **57 + 16·rows** - so Alignment is 121 and FITS. The row did not just
+fail; had the number been quietly updated it would have gone on passing while
+testing nothing, because a dialog that fits the band cannot exercise the thing
+being asserted.
+
+**Only one radio kind is still taller than the band**: Gallery, at seven rows
+and **169**. It is in the list now, driven from `Data` row 11, and Alignment
+has moved down to join the list (147) and Data Form (153) as a control. The
+heights are DERIVED from `sheetfmt`'s own `SH_FDLG_*` rather than written
+down, so the next geometry change moves them instead of staling them.
+
+**Mutated to prove it**: `mov al, 1` → `mov al, 0` at the `OSAPI_WM_KEEPH`
+call, and Gallery comes back **155 with 197 debris pixels** below SHEET's
+frame - §81.100's original defect, exactly. Alignment at 121 does **not**
+fail under that mutation, which is the measurement that says adding Gallery
+was necessary and not decoration.
+
+
+### 81.116 Dotted gridlines: measured, free, and DEFERRED on the instrument
+
+Stage 1.8's §9, *"the most visible difference in the grid"*. Excel 2.1d draws
+the cell boundaries DOTTED; SHEET draws them solid. **The drawing change is
+two lines and it is not what stopped this.**
+
+`sh_drawlines` already draws every boundary as a degenerate one-pixel
+rectangle, so the whole change is which primitive fills it —
+`OSAPI_GFX_FILL_GRAY` instead of `OSAPI_GFX_FILL`. On a one-pixel line a 50%
+dither IS a dotted line, and one primitive dots both directions: the pattern
+is `0AAh` on even rows and `55h` on odd, so a horizontal alternates along its
+length and a vertical alternates down it. Nothing is staged.
+
+**THE LOOK REPORT SAID TO PRICE IT FIRST AND EXPECTED IT TO COST MORE. It is
+free** (PERFORMANCE.md Set 163): `GFX_FILL_GRAY 256x1` is **599.49 µs against
+`GFX_FILL 256x1`'s 608.61** — the dotted line is **9 µs FASTER**, with the
+instrument's spread at 0.05 µs. A one-row solid fill pays to arm Set/Reset and
+to walk a masked left column, a masked right column and an interior; the gray
+body arms nothing and writes one pattern byte a row. At 64×64 that per-row
+work loses by 19%; at one row it wins. It is 7 bytes smaller too, the
+`OSAPI_SET_COLOR` ahead of the loops being dead once the fill ignores it.
+
+#### 81.116.2 Why it is not shipped yet: a dotted line and a DITHER are the same thing
+
+**`tests/glass.py` finds the grid by looking for lines, and a 50% dither is
+locally indistinguishable from a dotted line.** Twelve sheet rows read cell
+text through it. Measured on real captures, with the gridlines dotted:
+
+| | |
+|---|---|
+| a horizontal gridline | lit on one phase of x, blank on the other |
+| a row of the DESKTOP's 50% dither | exactly the same, on every row of it |
+| a vertical gridline | lit on one parity of rows |
+| a column through any dithered area | exactly the same |
+
+Three detectors were tried and each failed on the next capture: sampling one
+phase (finds the desktop), requiring the opposite phase to be blank (finds a
+dithered *block* — twelve consecutive "lines" below the grid, which then
+stretch the evenly spaced run past it), and isolating a line by its
+neighbours (drops the real line where §81.116.1's header rule sits beside
+column A's). With the change in, **3 of 5 glass rows failed**.
+
+**A SECOND attempt was made after §81.116.1 landed, on the theory that the
+corner box's solid rules would anchor the search. It got close and it is not
+enough**, and the detail is worth keeping because the next attempt should not
+start there:
+
+| | |
+|---|---|
+| dotted AND isolated, on BOTH axes | the right pair of tests. *Dotted* excludes the window's solid borders; *isolated* excludes the desktop's dithered area, every column of which is dotted by construction. Neither alone works: without the first the border becomes column A, without the second the desktop contributed 56 candidates and the row-header column measured 96 pixels wide |
+| the gap walk goes away | with those two tests the columns ARE the gridlines, and the 36..46 gap that used to find column A past the row header is no longer needed — the border it measured from is solid and no longer in the list |
+| sampling must start at the SECOND row line | the corner box's own vertical is solid down to the first gridline, so a column sampled from there is solid for its top 14 rows and fails the dotted test — which loses column A, the line every caller indexes from |
+
+That reached **5 of 8 rows green**, with `sheetcolw`, `sheetrowh` and
+`sheethide` still failing — the three whose geometry is UNEVEN and which read
+the header letters as well as the cells. Reverted.
+
+**What the next attempt should do instead of a better heuristic: BOUND the
+search.** Every one of these failures is a pixel heuristic mistaking one part
+of the screen for another, and the kernel already knows exactly where SHEET's
+window is. A detector handed the window rect — `wm_wins`, which
+`tests/dispcp.py` and `tools/os88geom.py` already read — can compute the grid
+origin from `SH_RH_W`/`SH_CH_H`/`SH_FB_H` and never look at the desktop at
+all. The cost is that `glass.grid`'s callers must pass it, which is the same
+shape of churn §81.115 paid for the dialogs and for the same reason.
+
+So the gridlines stay solid, the measurement stands, and the two lines that
+change them are named here. `glass.py` already carries the dotted-aware
+helpers (`_run_h`, `_run_v`, `_dotted_lines`) from the attempt; they are
+harmless on solid lines and are half of what the bounded detector needs.
+
+### 81.116.1 The headers are BOXED — given back to one merge and re-landed by the next
+
+Stage 1.8's §10. SHEET's column letters and row numbers floated outside the
+grid with no lines at all; Excel rules the header row and the header column
+off from the grid and from each other.
+
+**IT WAS GIVEN BACK TO PAY FOR THE FIRST 2026-10-20 MERGE** (§81.117): #268
+grew the shared includes under SHEET — `os88api.inc` and `os88ui.inc` between
+them — and the package went **over `APP_MAX_SIZE` by at most 64 bytes** with
+46 to spare. `sh_drawhdrrules` was the newest thing in the package, the only
+purely cosmetic one, and self-contained. Removing it left **34 bytes**.
+
+**AND IT IS BACK**, unchanged, with the second merge of the same day: that
+one raised `APP_MAX_SIZE` from `0xF000` to `0xFE00` (§20.1.1), so a routine
+that had to be sold for 83 bytes costs **66** against 3,235 spare, and SHEET
+has 3,169. One `call` in `sh_drawall` and the body, exactly as this section
+said it would be. The three glass rows that shaped it — `sheetrowh`,
+`sheetcolw` and `sheethide` — are green on the re-landing, which is the
+check that matters: what follows is why they had to be.
+
+`sh_drawhdrrules` draws exactly two one-pixel fills, and they are SHORT:
+row 1's own top gridline already rules the column headers off across the
+width of the grid, and column A's left gridline does the same down its
+height. What was missing is only the **L that closes the corner** — the
+row-header column's width, and the column-header band's height. 83 bytes,
+leaving **46** of `APP_MAX_SIZE` (§81.115 re-measured that figure, and it has
+been stale twice).
+
+**They started as two LONG rules and the gates cut them down**, which is
+worth recording because the reason is not cosmetic. A full-width rule sits
+one pixel above row 1's gridline and a full-height one sits one pixel beside
+column A's, and `tests/glass.py` reads the grid out of the GAPS between the
+lines it finds: the pair produced a gap of 1 in the row list (`sheetrowh`:
+*"the gaps are [1, 11, 14, 33]"*) and a first gap of 161 where the column
+walk wanted the row-header column's 36..46 (`sheetcolw`). Shortening them to
+the corner removes both collisions AND the redundancy that caused them.
+
+Per-header separators between each letter and each number were written first
+and taken out. They are 27 more one-pixel fills on a ten-by-fifteen
+viewport, they are not what the look report asked for — *"lines through the
+header row and column, and a corner box"* — and the routine **did not fit**.
+It cannot move to `CHART.OVL` the way the dialog engine did (§81.115), either:
+a repaint may not depend on an on-demand overlay being loaded.
+
+**They are SOLID**, which is Excel's own distinction rather than an oversight:
+a header rule is a real edge and a gridline is a guide. When §81.116 lands
+that distinction becomes load-bearing twice over, since it is also what lets
+`glass.py` tell chrome from a cell boundary.
+
+Two fills on a full repaint, at the 608.61 µs Set 163 measured: ~1.2 ms,
+against the ~3 ms a SINGLE cell's opaque text run costs. Not on the damage
+path — a cell edit repaints its own rect and never comes here.
+
+### 81.117 The 2026-10-20 upstream merge: what #268 added to SHEET, and what this fork did NOT take
+
+`main`'s #268 carried SHEET work of its own, and the two implementations of
+the file formats have diverged far enough that this merge took **ours** for
+all 33 conflicts in `apps/sheet/sheet.asm` and the 5 in `apps/chart/chart.asm`.
+Where the two overlap the fork is generally ahead — `main`'s §81.24 keeps Row
+Height and Column Width the whole sheet's, where §81.56 and §81.60 made them
+per column and per row; `main`'s menu-tick section is §81.64 here.
+
+**TWO FEATURES ARE A REAL GAP AND ARE RECORDED RATHER THAN SILENTLY DROPPED**,
+which is docs/UPSTREAM.md's rule about `--ours`:
+
+| gap | upstream's symbols | what it does |
+|---|---|---|
+| **Ask before throwing work away** | `sh_modified`, `sh_ask_unsaved`, `sh_pend`, `sh_onclose` — 34 references in `main`, **none here** | New, Open and Close put §75.3's alert in front of an unsaved workbook: *Save changes to SHEET1.SLK?*, Save / Discard / Cancel, the question Note Pad and Word already ask |
+| **~~Borders and~~ notes SURVIVE A SAVE** | `sh_bxf_collect`, `SH_BXF_BASE`, `SH_BXF_CAP` | the writer's half — **and the BORDER half of this row was WRONG, see §81.117.1** |
+
+#### 81.117.1 The border half of that row was wrong
+
+Written from `main`'s symbol list rather than from this fork's writers, and
+reading them settles it: **this fork writes borders already, through
+machinery of its own that is a superset of main's.**
+
+`main` keys an extra XF on a **(format, border) pair** — `sh_bxf_collect`
+builds the list, `sh_bxf_find` looks one up, `sh_biff_xfof` points a cell's
+record at it. This fork keys on a **(format, border, number-format) TRIPLE**:
+`sh_xfp_scan` builds it, `sh_biff_ixfe` points the cell at it (§81.47.6 is
+where that walk learned to bank `[sh_cursheet]`, because a workbook write
+crosses sheets and the border table answers for the active one), and the XF
+body emits `SH_BORD_TOP`/`LEFT`/`BOTTOM`/`RIGHT` as BIFF line style 1 and
+`SH_BORD_SHADE` as area pattern 2. The triple is what §81.55 needed: main's
+pair cannot carry a number format, so two cells differing only in their
+format would share an XF.
+
+**ONE THING WAS MISSING, AND IT WAS NOT THE ONE WRITTEN HERE FIRST.** This
+section claimed two further gaps. Only one was real, and the way the other
+died is the part worth keeping:
+
+* **A border on an empty cell was said to be lost.** It is not. §81.77
+  already met exactly this case: `sh_xfp_scan` has a SECOND pass over the
+  border table for entries with no cell record, and `sh_biff_cells` writes a
+  `BLANK` (`0201H`) for each. The claim came from reading `sh_xfp_scan`'s
+  first loop — `mov cx, [sh_ncells]` — and stopping there. The comment on the
+  second pass describes the very defect being claimed, in the past tense.
+* **Notes really were never written**, and that one is §81.119, which ports
+  `main`'s writer and reader and gates them.
+
+**THREE CLAIMS, TWO WRONG, ALL THREE WRITTEN THE SAME WAY**: from `main`'s
+symbol list and a partial read of ours, in a section about what this fork
+does not have. The general form is worth more than the corrections — **a
+symbol `main` has and we do not is evidence about NAMES, not about
+BEHAVIOUR**, and the two diverged implementations of the same feature are
+exactly where that inference fails. The question that settles it is "what
+does our writer emit", and it is answerable by reading the writer or, better,
+by a round-trip gate: §81.119.1 is the first of those, and the remaining
+formats still owe one.
+
+**The code is not lost and needs no copy kept**: it is
+`git show origin/main:apps/sheet/sheet.asm` at merge `1e3608d8`, and the
+sections that describe it are `81.22.3` and `81.23` **in main's own
+numbering**, which is not this file's — §81.22 here is a formula answering
+with text, and §81.23 is a different section again. That collision is the
+whole reason this one exists.
+
+**THE FIRST OF THEM IS DONE — §81.118.** The 2026-10-20 merge of
+`1e3608d8..eea2d24a` raised `APP_MAX_SIZE` to `0xFE00` (§20.1.1) and the ask
+was the first thing that headroom bought, at 227 bytes of image and 38 of
+bss. The borders-and-notes writer is done too: BIFF's half is §81.119's (and
+its borders were never missing, §81.117.1), and SYLK's — with Percent — is
+§81.15.1's, `main`'s `sh_sylk_extras` and its `;S`/`;A` reader arms ported
+into `CHART.OVL` at the review of PR #289 together with §81.17.2's block walk.
+The two took `CHART.OVL` to 52,373 bytes, so `CH_OVKB` 51 → **52**, and to 38
+clusters packed — which `office360.img` holds because the owner took
+`LAKE.JPG` off it the same day (§24.6.1).
+
+**WHY THEY WERE NOT IN THE FIRST MERGE, PLAINLY: SHEET HAD 46 RESIDENT BYTES**
+(§81.115, re-measured 2026-10-18 — image 52,105 + bss 9,289 of 61,440). Both
+features are hundreds of bytes and neither fits. Taking them needs resident
+room made first, and §81.116.2's own measurement says where it is not: the
+largest single resident routine is 300 bytes and 70% of the image is a long
+tail, so this is a subsystem move to an overlay, not a size pass.
+
+**The order to do it in**, when the room exists: the ask comes first. It is
+the one a user can lose work to, it is cheaper than the XF collection, and
+Note Pad and Word already ask — so SHEET is the odd one out in its own
+system. That is what happened, and §81.118 is the record of it.
+
+
+### 81.119 A cell note survives a save
+
+SHEET has had cell notes since stage 3.0b (`Formula ▸ Note...`, §81.102's
+dialog) and **could not save one**. No writer in `sheet.asm` read
+`[sh_nnote]` and nothing emitted BIFF's `NOTE` (`001CH`), so a note made here
+was lost on every save in every format — silently, with the file looking
+complete. `main`'s Sheet has kept them since **its own 81.22.3**, a number
+that means something else here (§81.117 is where that collision is
+recorded), so a PR that
+replaces `main`'s `sheet.asm` wholesale would have TAKEN A WORKING FEATURE
+AWAY. That is what makes this a blocker rather than a gap.
+
+Both halves are `main`'s `sh_biff_extras` and its `.isnote` arm, ported: the
+writer walks the note table after the sheet's cells and the border table's
+`BLANK`s, emitting row, col, cch and the bytes; the reader feeds them to
+`sh_nt_set`, the same door a typed note takes, so a refusal (table or arena
+full) drops it exactly as typing one would. Two adaptations: our note record
+is `SH_NOTE_REC` and our `sh_unpackrow` is a `SHOUT`, and `jcxz` could not
+reach the end of the loop — it is short-only on an 8086, which is the kind of
+thing that only shows up once the body is long enough.
+
+**The reader's arm borrows `CX`**, which is the record walk's file end, as
+its copy counter, so it puts `[sh_biff_end]` back before `.skip` as every
+other borrower does. The first port did not: the walk then ended at the first
+`NOTE` and said *Loaded*, so a second note and every later sheet were gone.
+
+**It cost 268 bytes of `CHART.OVL` (51,106 → 51,374 of 52,224) and NOT ONE
+RESIDENT BYTE**, because both the BIFF writer and the BIFF reader already
+live in the module.
+
+#### 81.119.1 The gate, and why the host parses the file
+
+`tests/sheetnote.py` (`soak -k sheetnote`) is §81.38's shape **with the ends
+swapped**, and deliberately: `tools/os88sheetfmt.py` writes no `NOTE` record,
+so the host cannot author the input. The GUEST writes the file and the HOST
+reads it back with a ten-line parser that knows nothing about `sheet.asm` —
+opcode, length, then row, col, cch, the bytes. Then the file goes in again
+and the note is read off the dialog.
+
+**Why the ten lines are worth it:** a writer and a reader that share a defect
+cancel it. Length in the wrong place, read from the same wrong place, and a
+round trip through SHEET alone passes while the file is one no other
+spreadsheet can read. Mutated both ways:
+
+| mutation | what the row says |
+|---|---|
+| the writer's `mov cx, [sh_nnote]` → `xor cx, cx` | the host finds no record AND the reload is empty — 2 checks |
+| the reader's `cmp ax, 0x001C` → a value no record has | **the reload alone** — 1 check, while the host still finds the record |
+
+The second is the one the parser buys. Without it that mutation is invisible.
+
+**THE ROW CAUGHT ITS OWN NAVIGATION FIRST.** It began by selecting B2 with
+`Formula ▸ Goto`, and the selection never moved: the note went on A1, the
+writer wrote A1 correctly, and the row reported *the host finds the NOTE on
+B2* as a failure of a writer that was right. It clicks the cell on the glass
+now and **asserts `[sh_selcol]`/`[sh_selrow]` before going on** — a gate that
+believes its own navigation reports the wrong half.
+
+
+### 81.118 Ask before throwing work away — main's §81.23, ported
+
+SHEET was the only document program in this system that would silently throw
+a changed workbook away. Note Pad, TeXPad, Paint and Word all answer §75.1's
+close negotiation; §81.117 recorded SHEET's absence as a real gap with the
+reason it could not be paid then — **46 resident bytes**. The 2026-10-20
+merge raised `APP_MAX_SIZE` from `0xF000` to `0xFE00` (§20.1.1), which is
+3,584 bytes of package headroom, and this is the first thing that room bought.
+
+**It is main's implementation, ported rather than written again**: the
+arrangement, the words and the refusal cases are `main`'s §81.23 at
+`eea2d24a`. `[sh_modified]` is a byte set by the eight routines that can
+change a document — `sh_addcell`, `sh_removecell`, `sh_bt_addcell`,
+`sh_bt_removecell`, `sh_nt_addcell`, `sh_nt_removecell`, `sh_clear_one` and
+`sh_fmt_one` — and cleared by New, by a successful read and by a save that
+kept EVERYTHING. `sh_ask_unsaved` raises §75.3's Save / Discard / Cancel
+alert; `sh_onask` acts on the answer; `sh_proceed` does the owed action; and
+`sh_onclose` is the negotiator `OSAPI_WM_ONCLOSE` is given.
+
+**Three things are this fork's rather than main's**, and each is a consequence
+of structure rather than a preference:
+
+* `sh_fdlg_open` is `CHART.OVL`'s here, so `sh_proceed` calls the resident
+  thunk `sh_fdlg_open_r`. The whole family is `.text` for the same kind of
+  reason: a close negotiator has to answer with the module unmounted.
+* **A new document is CLEAN.** §81.23's own comment says the flag is "cleared
+  by New" and `main`'s `sh_new` does not clear it, so on `main` a Close
+  straight after a New asks about an empty sheet nobody has touched. One
+  instruction at the foot of `sh_new`.
+* **BIFF's success path marks clean on its own.** The other five writers end
+  in `sh_dowrite`'s `.warn`, which is where the clean mark and the
+  one-sheet-only downgrade both live; `.biff` jumps to `sh_dowrite_biff` and
+  never reaches it. BIFF writes the whole workbook, so a plain success there
+  is clean whatever `sh_sheets_used` would say — and a TRUNCATED one is not.
+  **Both of its paths do it**: the one-sheet stream and §81.10.5's
+  `sh_biff_workbook`, which first did not, so a two-sheet save said *Saved*,
+  stayed dirty, and Save on close could never close.
+
+**Cost: 227 bytes of image and 38 of bss** (`sh_modified`, `sh_pend` and
+`sh_askmsg`'s `OS88UI_AMAX + 2`), leaving 3,235 spare.
+
+**The macro language's `NEW()` and `OPEN()` replace the document too, and
+they REFUSE while it is modified** — through the macro error path
+(`shm_merr`: the run stops, or `ERROR()` decides), before any action. They
+cannot ask: a running macro cannot answer the Save / Discard / Cancel alert,
+and the document they would discard includes the macro sheet running them.
+`OPEN()` reads through `SHM_READ` from inside the module and so never passes
+the resident `sh_doread`, which is where a successful read's clean mark lives;
+`shm_mopen` makes the same mark itself, or every cell the read made would
+leave the file it had just read dirty.
+
+#### 81.118.1 The gate, and the two mutations
+
+`tests/sheetask.py` (`soak -k sheetask`) reads `[sh_modified]` at four states
+— opened 0, typed 1, saved 0, typed again 1 — and then drives the close box
+and answers the alert. **The four readings are what make the last two mean
+something**: a flag stuck at 1 would pass a close test on its own and fail
+nothing, which is the shape `tests/paintdirty.py` already argues for Paint.
+
+Mutated twice, because each half can fail without the other:
+
+| mutation | what the row says |
+|---|---|
+| `cmp byte [sh_modified], 0` → `, 2` in `sh_onclose` (never equal, so it never refuses) | the close box CLOSES a changed workbook; no alert; Discard never reached — 3 checks |
+| the clean mark in `sh_dowrite`'s `.warn` → `nop` | `[sh_modified] is 0 after saved` alone — 1 check, and the close half still passes |
+
+The second is the one worth having. Without the four readings it would have
+been invisible: the document stays dirty, the question still gets asked, and
+the only symptom is being asked to save a file that is already on the disk.
+
+**`sh_i_file` is LABELLED now** (`.new`, `.open`, `.save`, `.saveas`,
+`.fdelete`), the way `sh_i_data` already was, so the gate names the row it
+wants instead of counting to it — §81.114.8's rule about a row that moves.
+
+
+### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
+
+Four things, and three of them are invisible in a diff.
+
+**`OSAPI_FILE_GOTO` became `OSAPI_FILE_GOTO_QM`** (§19.9.1). The deferred
+load stands in the document's folder QUIETLY: nothing here lists it, so the
+remount's scan, sort and icon harvest were about half a second of floppy
+bought for no reader.
+
+**`sh_itoa` is `dec_s16` now** (`apps/os88dec.inc`, §20.5.2) - upstream
+consolidated the signed itoa this file and `os88chart.inc` each carried. THE
+TRAP IS THE SECTION, not the call: `os88chart.inc` includes `os88dec.inc`
+when nobody else has, and under `CH_OVERLAY` that put `dec_s16` in `.modc`
+while `sh_itoa` calls it near from TWELVE resident callers. `sheet.asm` claims
+the include for `.text` before `os88chartovl.inc`, and `os88chart.inc`'s own
+guarded copy moved ABOVE its section switch - `tools/os88ovlchk.py` does not
+evaluate `%ifdef` and takes a file's LAST inclusion, so the source has to be
+unambiguous and not merely correct. The module reaches both routines through
+`CHFP`'s vectors like every other resident routine it needs, which is two
+more shims, two more `ch_v_*` slots and `OS88_BSS` 9,174 -> 9,182.
+
+**Both modules SHIP PACKED** (§20.13.5, §73.14.1). `CHART.OVL` and `MACRO.OVL`
+go through the C SDK's `CC_OVLZ_RULE` although SHEET is assembly, exactly as
+`SCRIBE.OVL` does: `ch_ovneed` reads with `OSAPI_FILE_READ`, which is
+transparent, and the `CH_OVKB`/`SH_M2KB` checks are against the UNPACKED cut.
+A disk names `$(CC_OVLZ)/<NAME>.OVL`; `tests/unit/t_pkgzrules.py` fails the
+build otherwise, and `t_pkg` had to learn that `build/ovlz/` overrides the
+top-level copy.
+
+**AND THE STANDARD FILE DIALOG IS A DISK WINDOW** (§38.3, upstream 2657efea's
+line), which is what the merge actually cost. Its buttons are a column down
+the right edge and its list is a Disk window's rows; this fork's sheet fixture
+clicked both at the old geometry and **38 of 56 rows failed with no error
+message anywhere** - the click lands in the file list, selects nothing, the
+chooser stays up, and every later assertion reads `None`. The 18 that passed
+are exactly the ones that never open a chooser. The rows drive it BY NAME now
+(`tools/os88ui.py`'s `chooser_open`/`chooser_save`, which confirm against the
+chooser's own `FS_SEL`), which is `open_shin`'s lesson one dialog along:
+rows double-clicked the THIRD row until §81.94's `MACRO.OVL` sorted between
+`CHART.OVL` and `SHEET.O88` and seven of them opened an empty sheet.
+
+### 81.112 SHEET's window resizes
+
+`OSAPI_WM_SIZABLE` with `AL=1`, once, straight after `OSAPI_WM_CREATE`. That
+is the whole of the feature, and the reason is that **the grid was never fixed
+at the template's 560x380 - only the window was.** `sh_geom` asks
+`OSAPI_WM_CONTENT` and `OSAPI_WM_GEOM` for the content box on every call, and
+`sh_paint` calls `sh_geom` on every repaint; the column walk and the row walk
+then fill slots until the pixels run out (§81.56, §81.60). Nothing in the
+package held a width. So the layout followed the new size on the first drag
+with no further change, and that is the same property §11.1 asks of a
+resizable window: lay out from the LIVE record every paint. `np_paint` carries
+the identical note for the identical reason.
+
+**What it did owe was the grow box.** §11.1's 13x13 corner belongs to the
+frontmost visible `WF_SIZABLE` window, `wm_grow_paint` draws it, and
+`wm_grow_erase` takes it off when that window loses the front - but
+`sh_drawstatus` erases the status strip's interior all the way to the
+content's right edge, which is where the box sits, and SHEET called
+`OSAPI_WM_GROW` nowhere. So every selection move ate the box while `wm_hit`
+went on reporting `AL=4` from geometry alone: **an invisible corner that still
+resizes**, which is exactly the failure the API's own banner names. One call
+at the end of `sh_drawstatus` pays all eight of its callers, `sh_repaint`'s
+full repaint among them, because the fill that erases the box is that one.
+Word and Browser spell it `mov bx, si`; this one reads `[sh_ownwin]`, SI being
+the message string here and not the window.
+
+The box does not collide with anything: the indicator block (§81.104) ends at
+`sh_cw-16` and the box starts at `sh_cw-13`, and the strip's top rule is at
+`sh_ch-16`, three rows above it.
+
+**`SH_MAXVR` and `SH_MAXVC` were left alone, and that is a measurement rather
+than an oversight.** They cap the walks, so on a desktop bigger than the one
+they were sized for the grid would end in mid-air - white below and to the
+right of the last slot, not a refusal. The numbers:
+
+A maximized window on that desktop is `W_W` 1024, `W_H` 768, so `sh_cw` is
+1022 and `sh_ch` 749; the grid is `sh_cw` less `SH_RH_W + SH_VSB_W` (54) by
+`sh_ch` less the five strips above and below it (74).
+
+| | cap | grid px | px per slot the cap allows | what the standard size wants |
+|---|---:|---:|---:|---|
+| rows | 64 | 675 | 10.5 | 14px (`SH_RH_STDTW`, 12.75pt) -> 48 |
+| columns | 80 | 968 | 12.1 | 56px (`SH_CW_NORMAL`, 7 chars) -> 17 |
+
+So both caps are reached only by a sheet whose rows are near `SH_RH_MIN` (8px,
+84 slots) or whose columns are at `SH_CW_MINCH` (1 character, 121 slots). Raising them to 96 and 128 - 768px and
+1024px at the minimum, which is the rule the original numbers followed - costs
+**240 bytes of bss**, and §81.111 left SHEET **262 bytes** of `APP_MAX_SIZE`.
+Spending 92% of the remaining budget on the pathological configuration is the
+wrong trade while the headroom is what it is; the caps go up in the same
+commit that moves another resident routine to CHART.OVL. Measured with
+`tools/os88pkgsize.py`, which is the only honest way to quote this.
+
+**A FLOOR comes with the flag** (§11.100.2). `WMIN_W`/`WMIN_H` are 96 and 64
+for the whole machine, and this window's chrome alone is 54px across and 74px
+down: at 96x64 `sh_cw`/`sh_ch` are 94x45, `sh_geom` clamps both grid
+dimensions to zero, and the horizontal bar - placed at
+`sh_ch - SH_SB_H - SH_HSB_H` - lands inside the formula bar. So the entry proc
+calls `OSAPI_WM_MINSIZE` with `SH_MINW` x `SH_MINH`, which are **derived from
+the strips** rather than written as numbers, so a strip that changes height
+carries the floor with it:
+
+| | |
+|---|---|
+| `SH_MINW` | `SH_RH_W + SH_VSB_W + SH_CW_NORMAL + 2` = 112 |
+| `SH_MINH` | `SH_MBAR_H + SH_FB_H + SH_CH_H + SH_HSB_H + SH_SB_H + SH_RH_NORMAL + TITLE_H + 1` = 107 |
+
+They sit below `SH_MBAR_H` and not up in the geometry block, because an `equ`
+cannot forward-reference and half their inputs are 500 lines further down.
+Measured: dragged as small as the glass allows, SHEET comes to rest at 114x107
+outer with a 112x88 content and **exactly one column and one row**.
+
+**The cost of the feature is 36 bytes**: image 52,040 with 9,174 of bss, so
+226 bytes of resident room are left.
+
+`tests/sheetsize.py` is the row, and it drags rather than reads: SIZABLE,
+SHRUNK (`W_W`/`W_H` and `sh_cw`/`sh_ch` both fall), FEWER (`sh_vcols`/
+`sh_vrows` fall - the claim, since the walks fill slots until the pixels run
+out), INSIDE (§11.94.5.1's leg: the status strip's rule must be solid ink to
+the NEW right edge and no longer a rule at the old one, because every count
+can be right while the layout is still drawn at the width the window ASKED
+for), FLOOR and GREW. **It packs its own floppy, so it declares
+`build/sheet.o88` and the two overlays in `wants=`** - without that it built
+them itself under the other rows, and before that it did not build them at
+all and the control below passed all five legs against the previous build.
+
+The control is `OSAPI_WM_SIZABLE` with `AL=0`: SIZABLE, SHRUNK, FEWER and
+INSIDE all fail and GREW passes, a window that never resizes ending with the
+counts it began with.
+
+`tests/sheetmove.py` grows check **4a**: the grow box is a framed box in both
+of its shots. That row already compared Sheet's content rectangle byte for
+byte either side of a heap compaction and a raise, and the erase defect failed
+it as "12 of 135 rows" differing at x 603..614, y 186..197 - the corner
+exactly. It read as a DIFFERENCE rather than an absence because the two shots
+lose the box differently: at rest SHEET's own status-bar repaint ran last, and
+after the raise `wm_draw_win` did. 4a names it, and it is not redundant with
+the band, because a box missing from both shots is identical to itself.
+Mutation-tested per the standing rule: with the `OSAPI_WM_GROW` call commented
+out, check 4 reports DIFFERENT and 4a reports MISSING at rest.
+
+### 81.111 Every SHEET dialog button fires on the release
+
+Upstream changed `os88ui_btn` (§20.5.1.3): it draws button *n* of a RECORD
+(rects, labels, flags, count, and the library's own pressed state), and
+`os88ui_btninit` installs the §13.7 gesture: the press arms and draws the
+button down, a drag off it lets it up, and only a release on the same button
+fires. The old loose-rect call no longer assembles into anything sensible, so
+the merge (§81.110) had to convert every caller. The owner chose the whole
+gesture over a draw-only port.
+
+**Upstream's own SHEET conversion could not be taken**, because in this fork
+the dialog engines run from CHART.OVL (§81.71) and MACRO.OVL (§81.94), and
+`W_ONMOUSEUP`/`W_ONDRAG` take near procs in the WINDOW's segment. Each engine
+has a record in the resident image and two resident doors from the
+`SH_BTDOORS` macro. The release door calls `os88ui_btnup` and hands the fired
+button to the engine through a CHART.OVL verb, and the drag door calls
+`os88ui_btndrag`. The engines' open routines attach their own records, as
+their last act after `OSAPI_WM_SHOW`, through `sh_btfix`: one resident table of
+record, window, and three procs per engine, and one vector. The first version
+attached in the resident open DOOR instead, and Sort's order dialog came up
+with an OK that did nothing, because Sort's key dialog opens it from inside
+CHART.OVL and no door is involved. Series, Extract and File Format's
+follow-on Save As are chained the same way. `sheetsort` caught it: every
+save came back empty. The painters fill the
+record's rect array and draw by index, and the click handlers lost their
+button hit tests, since the library sees the press first and passes on only
+what is not a button.
+
+| Engine | Buttons | Verb |
+|---|---|---|
+| radio (`sh_fdlg`) | OK, Cancel | `SHM_FDBTN` |
+| Border (`sh_bdlg`) | OK, Cancel | `SHM_BDBTN` |
+| one-line input (`sh_idlg`) | OK, Cancel, and Parse's Guess and Clear (`OS88UI_BT_N` is 2 or 4 by kind) | `SHM_IDBTN` |
+| list (`sh_ldlg`) | OK, Cancel | `SHM_LDBTN` |
+| Note (`sh_ndlg`) | OK, Cancel | `SHM_NDBTN` |
+| Data Form (`sh_df`) | Prev, Next, New, Delete, Close (Close keeps the ring) | `SHM_DFBTN` |
+| macro `DIALOG.BOX` (`sh_dbx`) | any of its items | `SHM2_DFIRE` |
+
+**`DIALOG.BOX` is the one that is not a group.** Its buttons are items mixed
+in with edit boxes, check boxes and option buttons, laid out by the macro's
+own range. It takes two one-button records instead of one array. The PAINT
+record is staged per item by `shm_dbdraw`. The GESTURE record is staged only
+by a press on a button it does not already hold (`shm_dbgrab`, after which the
+resident thunk calls `os88ui_btnpress`), and no repaint touches it. A release
+is therefore always judged against the button the press armed, and the one
+item it holds is drawn with the gesture's pressed state by every paint.
+
+**A latent upstream defect, avoided rather than fixed.** `os88ui_btninit`
+pushes the record onto `os88ui_btlist` without checking whether it is already
+there. A dialog opened a second time pushes the same record again, its
+`OS88UI_BT_NEXT` then points at itself, and `os88ui_btnclick` walks that
+loop for ever the first time a click misses the record's window. Every SHEET
+dialog is re-openable, so `sh_btattach` unlinks the record before calling
+btninit. PLAN does the same thing (`pl_btunlink`). Upstream's own packages
+never reach it, because each attaches its records once.
+
+**Resident room, measured.** The seven records and their doors cost more
+than the 418 bytes SHEET had. Formula ▸ Find
+(`sh_docmd_find` and its two helpers) moved to CHART.OVL to pay for it. It
+runs only on a menu command, is reached from MACRO.OVL as `CHOUT SHM_FIND`,
+and gave up its vector slot, which `sh_btfix` took (`SH_NVEC` stays 150).
+SHEET's image is now 52,004 bytes with 9,174 of bss, so **262 bytes** of
+resident room are left. CHART.OVL is 48,075 of its 49,152.
+
+`tests/btnsites.txt` registers SHEET's fifteen call sites: two per dialog
+pair, four for the input dialog, one each for the Data Form, the paint
+record and the resident shim the overlays call through.
+
+### 81.110 The 2026-09-26 upstream merge, as it reached SHEET
+
+Four upstream commits were merged (`jggonz/os8088` 86f92ad … 6212352,
+through PIXELSTEIN §97): two Elendilon squashes (DOS, the shared button
+control, the machine-wide icon store, region self-compaction, a 4.5 KB
+smaller kernel), PIXELSTEIN, and a NASM 3.02 fix.
+
+Upstream had rewritten parts of SHEET too, 39 hunks against the fork's heavily
+diverged file, and git merged some of them silently and conflicted on 24
+others. A mix would have left five dialog engines half converted, so
+`sheet.asm` was taken from the fork and upstream's changes were **re-applied
+one at a time, each with a decision**. UPSTREAM.md's rule against a blanket
+`--ours` is about losing things unseen; here every hunk was listed and
+answered:
+
+| Upstream change | Taken? | Why |
+|---|---|---|
+| The thumb's rate as a PAIR, `os88ui_sbrate` picking the 8088's or the 286's (§13.10.5.4.1) | **yes** | the fork's `mov al, 2` still worked, but this is the element's contract now |
+| `OSAPI_ABOUT_SET` is slot **0x018A** (was 0x01E0) | **yes** (a comment) | SHEET names the symbol; the SDK carries the number, so a rebuild is all it needs |
+| `OS88_REGION_MOVABLE sh_reloc`: SHEET's image region movable | **no** | the fork's overlay holds CS in CHART.OVL's vectors and a far frame across eleven file calls (the pinned-region decision, `sh_entry`); unchanged |
+| The five dialog engines' buttons fire on RELEASE (`os88ui_btninit`, §20.5.1.3) | **yes, rebuilt** | upstream's `os88ui_btn` takes a RECORD now, so the old call could not stay; in this tree the engines run from CHART.OVL and the gesture's callbacks must be near procs in the window's segment, so it was ported rather than taken - §81.111, all seven engines and PLAN's two |
+| The thumb's PAUSE commit (§13.10.5.4.2), `sh_ontimer` on `W_ONTIMER` | **deferred** | a window has one timer proc, and SHEET's is the macro engine's (WAIT, ON.TIME, DIALOG.BOX's close, §81.86, §81.96); both need ONE dispatcher |
+| upstream SHEET's `OS88_BSS` literal | no | a different file; the fork's is self-checking |
+
+**One collision git could not see**, caught at the merge: both trees had
+appended an alert button set at index **3** (`os88ui.inc`), the fork's
+`OS88UI_ASTEP` (the macro Single Step) and upstream's `OS88UI_ADANGER`
+(Cancel / Proceed). It is UPSTREAM.md's two-names-one-number case. ADANGER
+keeps 3 because upstream's DOS package uses it unconditionally, and the
+fork's `OS88UI_AEXTRA` pair moved to 4 and 5 with its table rows. Every
+user names the sets symbolically, and nothing bounds the index.
+
+The rest was the ordinary kind of merge:
+
+- the Makefile's disk lists gained upstream's `smallsub` / `--kern-small`
+  form and `APPS_GAMES_360`, and kept the fork's PLAN and overlays;
+- PACMAN left `all`, upstream having retired it (§89.12);
+- the overlay tools kept both the fork's second-module cut and upstream's
+  `--pad-bss` and `vstart` rules;
+- SPEC took upstream's §2.6.2 onward.
+
+The post-merge checks were all clean: no SDK slot or `DSV_*` collisions, no
+duplicate § headings, no tracked build files.
+
+**Two fixes the merged tree needed, and neither was a merge conflict:**
+
+- **`apps/dos/dos.asm` did not assemble on this fork's NASM 3.01**, and it
+  was right not to. Its `jmp near dos_pkt_go` is a hint, not a strict size,
+  and 3.01 shortens it to two bytes. That put the Crynwr `PKT DRVR`
+  signature at offset 2, and the file's own `%if` assertion said so. The
+  jump is `jmp strict near` now, and the assertion is a pair of `times`
+  lines, the assembled form §81.83.3.3 prefers. The package then assembles
+  **byte-identical** on NASM 3.01 and 2.15.05, and identical to upstream's
+  untouched source on 2.15. Upstream builds on 2.16 and 3.02, which is why
+  it never saw this. `tests/unit/t_nasm3.py` asks only whether NASM 3
+  *accepts* the tree, never whether the bytes match, so a hint shortened
+  with no assertion nearby is invisible to every row in the tree.
+- **`tools/os88ovlchk.py` flagged 83 of Word's calls** as crossing into an
+  overlay. They do not: upstream's Word lays part 1 in its own segment with
+  `section .modc vstart=WD_P1ORG`, and upstream's checker knows that. The
+  merge put upstream's `vstart` rule in the fork's *first* copy of
+  `check_pkgs`, but the fork's file defines it twice, and Python keeps the
+  second copy. The rule is in both now.
+
+### 81.109 The pulldowns carry Excel's group separators
+
+Gap #12 of the 1.8 look report. Excel 2.1d draws a line between the groups
+of every menu, and SHEET drew none.
+
+**The shape is a HAIRLINE inside the existing 12 px pitch**, which was the
+owner's choice over Word's 5 px separator band. The line sits at
+`row_top + 10`: two clear pixel rows below the glyph, one above the next
+row. No row moves, so each row's y position, the hit test, the save-under
+rect, the panel height (`12 × n + 4`) and every gate that clicks a row by
+its pitch are all unchanged. About 34 gate files click that way, one of
+them the owner's own work in progress.
+
+**The groups are a MASK, not rows.** `sh_msep` holds one word per built-in
+menu, in `sh_mtab`'s order, with bit *i* meaning "a line after row *i*". A
+`times` pair holds its length to `SH_MENU_N`, and the bits are built from
+the named row constants where the rows have names (`SH_EI_*`, `SH_OI_*`,
+`SH_MAI_*`, `SH_FI_REF`). Word makes a separator an item record. Here that
+would renumber every row after it, which is exactly the hazard §81.99's
+constants exist for. The mask renumbers nothing.
+
+`sh_msepdraw` runs **after** the rows, so a highlight redraw never loses a
+line; over the lit row it is black on black. A macro's custom bar (§81.95),
+and any menu after Help, has no lines.
+
+The groups are read off Excel's captures (`menu_*.png`):
+
+| Menu | Lines after |
+|---|---|
+| File | Open |
+| Edit | Undo, Paste Link, Insert |
+| Formula | Reference, Define Name, Note |
+| Format | Cell Protection, Column Width |
+| Data | Form, Set Criteria, Sort, Parse. The last one sets SHEET's own chart items apart |
+| Options | Freeze Panes, Protect Document |
+| Macro | Run |
+
+Sheets and Help have none. Cost: 107 bytes.
+
+**Evidence:** `tests/sheetmsep.py` (14 checks, CGA) holds each built-in
+menu open and reads SHEET's own panel words:
+
+- where a line is expected, the whole interior span at `row_top + 10` is
+  ink, and everywhere else that gap is paper;
+- every panel is exactly `12 × n + 4` tall.
+
+With the draw call removed, all seven line checks fail and the seven height
+checks still pass.
+
+#### 81.109.1 Why not the shared menu element
+
+The measurement the owner asked for before choosing. §13.16's element
+(`OS88UI_MENU`, Word's menus) was the "use the OS's own" option, and it
+loses for SHEET today:
+
+- **Resident cost: about +950 bytes net**, of the 1,355 free after §81.108:
+  - the element itself: 1,905 bytes, assembled into a package that already
+    has SHEET's other `os88ui.inc` controls;
+  - SHEET's own control code it would replace: −1,331 (bar, pulldown, hit
+    test, gesture, bank);
+  - about +270 for the item tables, at 8 bytes per item instead of a
+    2-byte pointer;
+  - about +100 for the hooks.
+
+  It cannot go in an overlay, because it near-calls the caller's hooks.
+- **Its save-under claims a heap block on every open** (`os88ui_mnbank` →
+  `OSAPI_MEM_CLAIM`). SHEET holds 8 of `MEM_OWNER_MAX`'s 8, so every one
+  would be refused, and SHEET would lose §81.98's save-under, which banks
+  into the staging claim SHEET already has. Adopting the element needs it
+  to take a bank from its caller first, with Word proved byte-identical.
+- **It does not do keyboard menus.** It draws the mnemonic underlines and
+  runs click-to-open, but Alt+letter and the arrow keys are Word's own
+  code. So it would not deliver gap #17 either.
+- SHEET's macro-built custom menus (§81.95) would need rewriting into the
+  element's record format.
+
+`UI-MENU-ELEMENT.md`'s figure, "Sheet can then delete ~1,382 bytes and stop
+repainting its whole content on every menu close", predates §81.98's
+save-under and §81.101's captions, and counts none of the above. It is
+corrected there. **When to revisit:** once the element takes a
+caller-supplied bank, and ideally once Word's keyboard handling has moved
+into it. Then SHEET would gain #17 with the conversion, instead of paying
+for a second copy.
+
+### 81.108 Formula ▸ Reference, and F4
+
+The rest of gap #7. §81.106 moved A1/R1C1 to Workspace and greyed this
+item. It now does what Excel's does (Reference Guide, p. 381): *"Converts
+the selected references in the formula bar from relative to absolute, from
+absolute to mixed, and from mixed back to relative ... if the insertion
+point is within or next to the reference. Shortcut key: F4."*
+
+**The cycle:** A1 → $A$1 → A$1 → $A1 → A1, as a four-entry table indexed
+by (column-absolute, row-absolute).
+
+**The reference is whatever the caret is in or touching**, found as the run
+of `$`, letters and digits around it. That run has to read as exactly one
+reference: `$?`, one or two letters, `$?`, one to five digits, and nothing
+after. Anything else is left alone:
+
+- a function's name (`SUM`);
+- a defined name (`RATE1`);
+- a sheet qualifier (`Sheet2!` ends the run at its `!`);
+- a longer string of digits than a row can have (16,384 is five digits).
+  That limit also bounds the 12-byte buffer the new form is built in.
+
+**The edit goes through the field's own keys** (`sh_flkey`), as Paste
+Function's insertion already did: Right to the reference's end, Backspace
+over it, then the new form typed. So the field's text, length, caret and
+view, and SHEET's `sh_editlen`, stay consistent with each other. The caret
+ends just after the reference, where the next F4 finds it again.
+
+**When it is live:** only while a **formula** is being entered in **A1
+style**. In R1C1 a reference reads `R[1]C[2]`, and cycling those is a
+different job. `sh_refmark` sets the item live or greyed. It is called when
+a pulldown opens and when F4 is pressed, rather than kept current on every
+keystroke. The routine checks the same conditions again, for a macro's fire
+of the item.
+
+**F4 is the one shortcut allowed during entry.** §81.101 swallows
+shortcuts while a cell is being edited. Reference is the one command that
+only *means* something during entry, so `sh_kaccel` lets its entry through,
+and the Formula pulldown captions it `F4`.
+
+The routine lives in CHART.OVL behind one door (`SHM_REFCYC`). Resident:
+the door, `sh_refmark` and the two item strings. Cost: resident 50,832 →
+50,911, bss +24 (its scratch), CHART.OVL +400.
+
+**Evidence:** `tests/sheetrefcyc.py` (6 checks, CGA, the real keyboard,
+reading `sh_editbuf`):
+
+- outside an entry, the item is greyed and F4 is inert;
+- `=A1+B2` with the caret after B2: four F4s walk B2 round the whole cycle
+  and back, and A1 is untouched;
+- with the caret in A1, F4 converts A1;
+- mid-entry the menu item is live and does the same;
+- with the caret after `SUM` in `=SUM(A1)`, nothing changes.
+
+With the cycle table made the identity, three of the six fail.
+
+### 81.107 Macro ▸ Start Recorder
+
+Gap #8 of the 1.8 look report. Excel 2.1d's Macro menu is **Record...,
+Run..., Start Recorder, Set Recorder, Relative Record**, and SHEET lacked
+the third item. §81.74 left it out on the grounds that there was no
+"armed but paused" state. There is one: a recorder range, whether set by
+Set Recorder or left behind by a stopped recording. The Reference Guide
+(p. 504) describes the command:
+
+- *"You cannot choose Macro Start Recorder until you set the recorder
+  range."* So it is **greyed** until `[sh_rec_set]`, and greyed while a
+  recording is live, when Stop Recorder is the item that means something.
+  `sh_recmark` repoints it between a live and a `MENU_DIS` copy, as it
+  already did for Record/Stop and Relative/Absolute.
+- *"You can use Macro Start Recorder and Macro Stop Recorder to
+  temporarily pause while recording a macro. You can also use them to add
+  to an existing macro."* So it **continues** the macro: *"If the end of
+  the recorder range contains a RETURN function, RETURN is overwritten."*
+  The RETURN this code knows is at that end is its own. Stop Recorder
+  writes it and sets `[sh_rec_ret]`, and Start steps `[sh_rec_row]` back
+  over it, so the next write lands on it. Set Recorder clears the flag,
+  since a new range has no RETURN of ours at its end.
+
+Unlike Record..., it asks for **no name**: Record names a new macro, and
+this adds to one. A macro's fire of the item is refused under the same two
+conditions as the greying.
+
+**Rows are named** (`SH_MAI_RECORD` … `SH_MAI_REL`, `SH_MAI_N`, each held
+by a `times` pair). Start Recorder went in at Excel's row 2, so Set Recorder
+and Relative Record each moved down one. No macro function fires a Macro
+row by number; `tests/sheetrecord.py` was the only thing that did.
+
+**The one limit, stated.** Excel reads the range's end to find a RETURN.
+This code trusts its own flag. If the user overtypes that RETURN between
+Stop and Start, Start still steps back and writes over the overtyped cell.
+The same flag cannot claim a RETURN it did not write.
+
+**Evidence:** `tests/sheetrecord.py` (4 checks, CGA) records A1 and A2,
+stops, then Start Recorder, types 33 into A3, and stops again:
+
+- column E reads as one macro, with `FORMULA("33")` on the row the first
+  `RETURN()` held and the single `RETURN()` at the new end;
+- running it after A1:A3 are cleared puts 11, 22 and 33 back;
+- the item is greyed fresh, live after Stop, and greyed while recording.
+
+Without the step back, the old RETURN stays mid-macro, and both the text
+check and the replay fail (A3 stays empty). Cost: 123 bytes, bss +1.
+
+### 81.106 The Options menu in Excel's order, with Display and Workspace
+
+Gap #6 of the 1.8 look report, which takes #7's wrong half with it.
+
+Excel 2.1d's Options menu (`menu_options_full.png`), less the three print
+items and Short Menus, both decided out, is:
+
+**Display..., Freeze Panes, Protect Document, Calculation..., Calculate
+Now, Workspace...**
+
+SHEET's had Gridlines and Formulas as two relabelling toggles at the top,
+Freeze Panes last, and no Workspace. Its A1/R1C1 switch sat on the Formula
+menu, under the name of Excel's Reference command, which does something
+else. In Excel, Gridlines and Formulas are check boxes in **Display...**
+(`dialog_display.png`), and R1C1 is one in **Workspace...** (Reference
+Guide, p. 584). That is where they are now.
+
+**The rows are named.** `SH_OI_DISPLAY` … `SH_OI_WORKSPACE` and `SH_OI_N`,
+with `sh_i_options` labelling each row and a `times` pair holding each label
+to its constant (§81.99's device). Swapping two rows fails the build on
+those two rows' lines; that was tried. Calculate Now stayed at row 4, so
+F9 (§81.101) and CALCULATE.DOCUMENT moved nowhere. FREEZE.PANES and
+PROTECT.DOCUMENT fire by constant.
+
+**Display and Workspace are the check-box engine's kinds 1 and 2**, beside
+the Border dialog's kind 0 (`SH_BK_*`). Excel's three dialogs of this shape
+share a layout: a titled group of independent boxes, with OK/Cancel stacked
+beside it. So one engine gains a kind, the way the radio engine has one.
+Each kind has its own title (which is also the group's label, as in
+Excel's), item list and count, in resident tables the module reads through
+DS.
+
+- The group box and the window height follow the count
+  (`sh_bdlg_gy2`: `ROWTOP + n × ROWH − 2`, which is the Border's 132 for
+  six). The window is never shorter than the buttons.
+- Outline's coupling of the four edges applies to kind 0 alone.
+- The label's gap in the frame is measured from the label.
+- Display opens on the live state: bit 0 Formulas, bit 1 Gridlines, in
+  Excel's order. Its OK writes both flags. Workspace's R1C1 box writes
+  `sh_a1style`.
+
+**What each dialog leaves out:**
+
+- **Display** leaves out Row & Column Headings, Zero Values and the colour
+  group. The colour group is ruled out by the black-and-white decision. The
+  other two are real features SHEET lacks, and remain in the report's 4.3.
+- **Workspace** leaves out Fixed Decimal Places, Scroll Bars, Formula Bar,
+  Status Bar, Alternate Menu Key and Ignore Remote Requests. The bars would
+  change the window's layout, and none of them has a setting in SHEET yet.
+
+**Formula ▸ Reference was greyed here** (`MENU_DIS`), as Excel's is whenever
+no formula is being edited, which the capture shows. §81.108 then gave it
+Excel's meaning, live mid-formula. Its old job moved to
+Workspace, so nothing was lost. Its Excel meaning, flipping the edited
+reference between relative and absolute, is gap #7. A macro that fires it
+does nothing, as Excel's would. The row stays, so Define Name, Note, Goto
+and Find keep their numbers, and their shortcuts with them.
+
+**DISPLAY()** (the macro function) now sets the two flags and repaints
+once. It used to fire menu rows that no longer toggle. The first draft
+kept a "changed" byte beside it, which would have lived in MACRO.OVL's
+segment and been read through DS; a single repaint needs no byte.
+
+**Cost:** resident 50,780 → **50,709**, down, because the toggle code went.
+bss +1 (the kind).
+
+**Evidence:** `tests/sheetopts.py` (6 checks, CGA, off the glass and
+SHEET's bytes):
+
+- the pulldown reads the six in order;
+- Display opens as kind 1 on the live state, and its OK sets Gridlines off
+  and Formulas on;
+- Workspace opens as kind 2, and R1C1 switches the reference box to read
+  `R1C1`;
+- Formula ▸ Reference's string starts with `MENU_DIS`.
+
+With Display's gridline write removed, the OK check fails. Three existing
+gates follow the new rows: `sheetfreeze` (Freeze Panes is 1),
+`sheetside` and `sheetmkind`. The last two go through a shared
+`tests/sheetfmt.py` helper, `display_toggle`, which finds the dialog
+through the window table.
+
+### 81.105 `sh_repaint` arms its own clip region
+
+Upstream issue #152 (jggonz/os8088). `sh_repaint`, SHEET's whole-content
+redraw, drew with **no clip region armed**. Nearly none of its fifty callers
+is a `W_PAINT`: they are menu commands, dialog applies and edit paths, and
+those arrive with no region (§11.3). So the white fill and every glyph landed
+on the glass wherever they fell, including over any window stacked above
+SHEET.
+
+**Data ▸ Chart Column... shows it.** `sh_docmd_chart` creates the Chart
+window at (0, 0), over SHEET's top-left corner, shows it, paints it, and
+then calls `sh_repaint`. In this tree it looks different from the issue's
+account. `sh_repaint`'s own tail repaints a dirty, uncovered Chart's
+**content** after SHEET draws, so the content survived. The Chart's
+**frame**, which only the kernel draws and nothing redraws, lost its right
+and bottom edges to SHEET's fill. §11.96's raise cache then banks that
+damage and carries it along on the next drag, which is how the issue saw it.
+
+**The fix is one arm in one place, so a new caller cannot forget it.**
+`sh_repaint` calls `OSAPI_WM_CLIP_SET` on its own window before the fill
+(CF = 1, meaning SHEET is wholly covered, draws nothing). It calls
+`OSAPI_WM_CLIP_CLEAR` as soon as SHEET's content is down.
+
+**The clear is load-bearing.** A region lives until the next
+`OSAPI_GFX_UNLOCK`, and what these callers draw afterwards is not SHEET's:
+
+- the Chart's repaint in `sh_repaint`'s own tail (the Chart is *above*
+  SHEET);
+- a dialog;
+- a pulldown hanging past the window.
+
+Clipped to SHEET's region, all of those would vanish. Clearing instead
+drops nothing a caller was handed: every path from a paint callback was
+walked, including the overlay paints behind the `*_r` doors, and none
+reaches `sh_repaint`. The only caller that armed a region itself,
+`sh_abdismiss`, draws nothing after.
+
+A side benefit: a dialog's OK that repaints SHEET before the dialog closes
+no longer flashes SHEET's fill across the dialog.
+
+**What remains exposed.** SHEET's narrower draws (the selection repaint,
+the status bar, the menu bar) are still unclipped. They matter less than
+it sounds, because every click or key reaches SHEET only after the window
+manager has **raised** it, so nothing is above it then. The windows that
+can be above SHEET while it draws are the ones it just opened itself (the
+Chart, dialogs) and a timer's or a macro's work. The issue's wider point,
+sweeping other packages for a bare content fill with nothing armed, is its
+own job and is not done here.
+
+**Evidence:** `tests/sheetclip.py`, VGA, off the card's frame:
+
+- SHEET's ink is photographed where the Chart will land;
+- Data ▸ Chart Column opens the Chart over it;
+- in the overlap, SHEET's black pixels are not painted back over the Chart;
+- the Chart's frame is whole: **398 of 398** edge pixels black.
+
+Without the arm: **37 of 398**. The first version checked only the
+content, and passed the unfixed build. The frame is where this tree shows
+the defect, which is why the frame check is there. Cost: 12 bytes.
+
+### 81.104 The status bar's divider, and NUM inverted
+
+Gap #3 of the 1.8 look report. Excel 2.1d's status bar has a vertical
+**divider** between the message and the indicator block, and draws **NUM
+inverted**, white in a black box. SHEET had neither.
+
+- **The divider** is one `OSAPI_GFX_VLINE` down the strip's interior, at
+  `right − SH_SB_DIVX` (96), which is 8 px clear of the indicator at
+  `right − 88`.
+- **The indicator** (NUM, or CALCULATE when Manual mode has left the sheet
+  stale) is a 1-pixel `OSAPI_GFX_FRAME` **just outside** the text, then
+  `OSAPI_FONT_RUN`, white on black. The ring touches no pixel of the run, so
+  nothing in the box is written twice.
+
+This was one of `sheet.asm`'s transparent text calls, so the §6.6 registry
+goes **17 → 16**, and that line's backlog note now names only the
+message. The message still sits over the strip's fill; §6.6.2 leaves it in
+the backlog, because making it opaque costs more primitive calls than it
+saves on this bar.
+
+**Gap #2, the plus-shaped pointer, is NOT done, and here is why.**
+`OSAPI_WM_CURSOR` (§7.2) dresses a window's **whole content**, and the
+kernel decides the shape with `wm_hit`. SHEET's menu bar, formula bar and
+scroll bars are inside its content, and Excel shows the arrow over all of
+those. So a cross there would look less like Excel than the arrow does.
+Doing it properly needs a content sub-rectangle for the shape: a kernel
+mechanism, and the owner's to decide on.
+
+**Evidence:** `tests/sheetstatus.py` runs on the 1-bit CGA, where an
+inverted box has to survive, and reads SHEET's own geometry words:
+
+- the divider column is black on every interior row, and is one column
+  wide;
+- the ring is solid black;
+- inside it the glyphs are white, and every cell's column 7 (the space
+  between letters) is black;
+- "Ready" is still black on white.
+
+With the divider removed and the run drawn plain, the divider and
+inversion checks fail. Cost: 63 bytes.
+
+### 81.103 The window names the document
+
+Gap #1 of the 1.8 look report: the caption always read "Sheet", so the open
+file's name appeared nowhere on the screen. Excel's window names its
+document. SHEET's caption is now **`Sheet - <NAME>`**, which is Word's
+`Microsoft Word - <NAME>` convention (§68). A new sheet reads
+`Sheet - SHEET1.SLK`, since `sh_defname` is SHEET's equivalent of Excel's
+"Sheet1".
+
+**The mechanism is Word's too.** The window template's title points at a
+resident buffer, `sh_ttlbuf` (21 bytes of bss). `sh_title_sync` composes it
+from `[sh_name]` only when the two differ, then calls `OSAPI_WM_TITLE` with
+AX = 0 ("the bytes `W_TITLE` names changed"). That redraws the 17-row strip
+and nothing else (§11.92).
+
+**It is called from two places, and one place it is not:**
+
+- **At entry, before `OSAPI_WM_CREATE`.** The name seed (`sh_defname`, then
+  `sh_note_arg`) moved ahead of the create for this, so the first frame
+  already carries the right caption. With no window yet, it composes and
+  tells nobody.
+- **At the end of `sh_repaint`.** Open, Save As, New and the macro file
+  commands all end there, and each is an event with the lock held.
+- **Not from `sh_paint`**, although that is where a double-clicked document
+  is actually read (`sh_deferred_ld`). §11.92 says a caption changes on an
+  event and never on a paint, and `wm_title_set`'s own clip handling would
+  disarm a paint's armed region. The name was already known at entry,
+  because `sh_note_arg` copies it without touching the disk, so nothing
+  needs the paint path.
+
+`sh_ttl` ("Sheet") lost its only user and is gone. The prefix is
+`sh_ttl_pre`. Cost: 75 bytes of image and 21 of bss.
+
+**Evidence:** `tests/sheettitle.py` reads the caption the way the kernel
+does, through the record's `W_TITLE` in the window's own segment:
+
+- a double-clicked `LEDGER.SLK` is named from the start;
+- File ▸ New renames the caption to `SHEET1.SLK`;
+- the caption strip's pixels changed, so it was redrawn, not only recorded.
+
+Every test that finds SHEET's window by title matches a prefix
+(`startswith`), so the longer caption breaks none of them; checked by
+grep, and by the `sheet*` soak rows.
+
+### 81.102 Resident room: the Note dialog and its box move to `CHART.OVL`
+
+Stage 0 of `docs/plans/SHEET-PROPORTIONAL-PLAN.md`, the part that needed no
+owner's decision. §81.101 had left **97 bytes** under `APP_MAX_SIZE`, and
+anything more that SHEET draws needs room.
+
+**Resident 52,220 → 50,630: 1,590 bytes.** With bss 9,127, that leaves
+**1,683** of 61,440.
+
+**What moved** is the one block that is both large and self-contained:
+
+- **Formula ▸ Note's engine**: open, paint, key, click, apply and close.
+- **`apps/os88text.inc`**, the multi-line box. This is 1,280 bytes, and the
+  Note dialog is its only consumer in SHEET.
+
+The rule is §81.62's: what runs least, and what takes the fewest new doors.
+The box calls nothing but itself and the kernel, and every resident routine
+the dialog calls already had a vector except `sh_note_load`. That one gained
+a vector (`SH_NVEC` 149 → 150, +4 bss).
+
+**What stays resident, and why:**
+
+- **the window template and its four strings.** The kernel reads the
+  template, and FONT_STR reads the strings, through DS, which is the
+  package.
+- **`sh_note_load`.** Paste uses it too.
+- **four doors** (`sh_ndlg_open_r`, `_paint_r`, `_onkey_r`, `_onclick_r`)
+  on verbs `SHM_NOPEN` to `SHM_NCLICK` (47–50, `SHM_N` 44 → 48).
+
+The open door forces the module in before the window exists (81.71.5.1's
+invariant). **`CH_OVKB` goes 46 → 48**: CHART.OVL is 47,364 bytes, which is
+heap and not image.
+
+**A defect came out of it: the Note dialog's close box.** It was §81.100.1's
+defect again, in the one engine that pass did not look at. The kernel's
+close box only hides the window, so `[sh_noteopen]` stayed set and
+Formula ▸ Note refused for the rest of the session. The open door now
+installs `sh_ndlg_cls_r`, which takes the close as Cancel (the edit copy is
+dropped and the note table is untouched) and answers CF = 1.
+
+**Not done here:** carving the chart and undo claims into one. That is the
+plan's §8 question 2, which is the owner's.
+
+**Evidence:** `tests/sheetdlgclose.py` gains the Note arms (11 checks):
+
+- the dialog opens from the module;
+- typed text and OK store the note;
+- reopening loads it back, which exercises every door, the new vector and
+  the box's key path;
+- the close box clears both words, and the dialog opens again.
+
+With the negotiator's install removed, the two close-box checks fail. The
+dialog was also looked at, to confirm the box, label and buttons paint from
+the module. All 49 `sheet*` soak rows pass on this build.
+
+#### 81.102.1 The rest of stage 0 that needed no decision
+
+**The band's size is SHEET's to set.** `apps/os88type.inc` takes
+`TY_BAND_STRIDE` and `TY_BAND_ROWS` (§6.3). The five packages that include
+it today set neither, so fontview, cword, scribe, word and `tests/facetest`
+assemble **byte-identical** to before; each was compared against its
+pre-change binary. `tests/facetest` assembled with a stride of 42 takes the
+bss from 1,933 to 1,133 bytes (800 saved), and with 43 the build stops
+with the reason. SHEET does not include the library yet, so nothing in
+SHEET changes.
+
+**SHEET's claim count, measured from the kernel and corrected in four
+comments.** Four comments in `sheet.asm` said the package's region "counts
+as one of" `MEM_OWNER_MAX`'s eight. It does not:
+
+- a region's record is owned by the **instance slot**;
+- every data claim's owner word is the region's **segment**
+  (`kernel/memory.inc`'s `mem_own`);
+- the cap counts only records whose owner word matches.
+
+The study's live `heapmap` count agreed. The eight are cellseg, txtseg,
+stgseg, bordseg (with the note table carved in), chartseg, undoseg,
+CHART.OVL's and, from the first macro, MACRO.OVL's. That is still 8 of 8,
+so a proportional face still needs a slot freed; that is the owner's
+question above.
+
+### 81.101 Keyboard shortcuts — the modern set
+
+The owner's decision, 2026-09-23: SHEET takes **today's** shortcuts, not
+Excel 2.1d's. Excel 2.1d's Edit menu captions Cut, Copy and Paste as
+Shift+Del, Ctrl+Ins and Shift+Ins
+(`_LIBRARY/documentation/screenshots/excel/menu_edit_full.png`). No other
+menu in the captures names a key.
+
+| Key | Item | Menu, row |
+|---|---|---|
+| Ctrl+N | New... | File 0 |
+| Ctrl+O | Open... | File 1 |
+| Ctrl+S | Save | File 2 |
+| Ctrl+Z | Undo | Edit `SH_EI_UNDO` |
+| Ctrl+X | Cut | Edit `SH_EI_CUT` |
+| Ctrl+C | Copy | Edit `SH_EI_COPY` |
+| Ctrl+V | Paste | Edit `SH_EI_PASTE` |
+| Ctrl+R | Fill Right | Edit `SH_EI_FILLR` |
+| Ctrl+D | Fill Down | Edit `SH_EI_FILLD` |
+| F3 | Paste Name... | Formula 0 |
+| Shift+F3 | Paste Function... | Formula 1 |
+| Ctrl+G, F5 | Goto... | Formula 5 |
+| Ctrl+F | Find... | Formula 6 |
+| F9 | Calculate Now | Options 4 |
+
+F2 (edit in place) and Delete (clear the cell) were already handled and
+have no menu item to caption.
+
+**One table drives both halves.** `sh_katab` holds the key and the caption
+together. `sh_kaccel` reads it for the key; `sh_kcap` reads it for the
+caption that `sh_mdrop_geo` measures and `sh_mdrop_draw` right-aligns. So a
+caption can never name a key that does something else.
+
+- A caption is drawn OPAQUE, with `OSAPI_FONT_RUN` (§6.6): the panel's
+  ground was filled in the same pass, which is the pair §6.6.2 does not
+  allow, so the transparent count stays at its registered 17. `font_run`
+  honours the greyed pen itself, so a greyed item's key is grey, and the
+  hot row's inverts with it.
+- Where an item has two keys (Goto), the first entry is the one shown.
+- A Ctrl+letter matches its control byte, which int 16h already delivers
+  (Word decodes keys the same way). A function key matches its scan code.
+  Ctrl+H, Ctrl+I and Ctrl+M are Backspace, Tab and Enter, and cannot be
+  shortcuts.
+
+**A shortcut fires the ITEM, through `sh_mfire`.** That is the door a
+click already uses, and so does a macro's command equivalent (§81.88). The
+undo snapshot, the recorder and every refusal are therefore the item's own,
+not copies. Before firing, the status line is drawn, which is the order a
+click has: `sh_mclose` draws it before `sh_mfire`.
+
+**A shortcut is swallowed, not passed on, in three cases:**
+
+- **while a cell is being edited.** Modern Excel greys its commands during
+  entry, and SHEET's field has no clipboard for Ctrl+C to mean anything
+  else. Control characters never reached a cell anyway.
+- **when its item is greyed**, as the menu would refuse it.
+- **while a macro's custom bar is up** (§81.95). The built-in commands are
+  not on the screen, and the custom menus name no keys.
+
+A key bound by ON.KEY (§81.92) is asked about first, so a macro can still
+take any of these.
+
+**Cost: 420 resident bytes** (image 51,800 → 52,220). The table, the
+dispatcher and the captions have to be resident, because the key callback
+and the panel drawing are. That leaves **97 bytes** under `APP_MAX_SIZE`,
+which is the resident room `docs/plans/SHEET-PROPORTIONAL-PLAN.md` measures
+against.
+
+**Not added:**
+
+- **Keyboard menus** (Alt or F10, and the underlined letters), gap #17.
+  Those are a separate feature.
+- **Ctrl+B and Ctrl+U.** SHEET's bold and underline are four choices in one
+  Font dialog, not two toggles, so neither key has an item to fire.
+- **F12 (Save As).** Word notes that the keyboard path does not reliably
+  deliver the F11 and F12 scan codes.
+
+`tests/sheetkeys.py` (19 checks, cycle-accurate CGA) drives the real
+keyboard through MartyPC. With the hook in `sh_onkey` removed it fails 11.
+The one that still passes is the entry-swallow check, which guards a later
+change rather than this one. It checks:
+
+- the Edit captions and Options' F9, read off the screen;
+- Ctrl+C then Ctrl+V; Ctrl+Z tied to the paste having happened; Ctrl+X then
+  Ctrl+V; Ctrl+D over A1:A3;
+- no paste mid-entry;
+- the six dialog keys opening their engines;
+- Ctrl+S saving in place, read back off the disk.
+
+### 81.100 Four displays, and the two dialog defects only two of them showed
+
+The 1.8 look measurement (§81.39; `docs/reports/SHEET-EXCEL-LOOK-2026-09-22.md`)
+photographed SHEET on VGA only. It was then repeated on all four displays the
+OS drives, and two defects came out of it. Neither shows on VGA.
+
+| Display | Machine | Geometry | Result |
 |---|---|---|---|
-| number format, alignment | all four | all four (`$`, `%`, `;K`) | no |
-| bold, underline | yes | no | no |
-| borders and Shade | yes | yes (`;S`) | no |
-| notes | yes (`NOTE`) | yes (`;A`) | no |
+| CGA | MartyPC `os8088_5150_cga_gla` | 640×200, one plane | both defects |
+| Hercules | MartyPC `os8088_5150_herc_gla` | 720×348 (a 720×350 frame) | defect 1 only |
+| EGA | QEMU, `VIDEO=ega` forced onto its VGA | 640×350, mode 10h, planar | defect 1 only |
+| VGA | MartyPC `os8088_xt_vga` | 640×480, four planes | defect 1 only |
 
-**BIFF has nowhere to put a border but the cell's XF**, and the 64 XFs are one
-per format byte (§81.4). So `sh_bxf_collect` gathers every distinct
-(format, border) pair in the border table — over every sheet, since a workbook
-writes its XFs once — and each gets an XF after the 64, `SH_BXF_BASE` + its
-index, with `XF_BORDER_34`'s four edges thin and black and `XF_AREA_34`'s fill
-pattern 2 for Shade. `sh_biff_xfof` gives a bordered cell its pair's XF; a
-bordered cell with no record of its own goes out as a `BLANK` (0201H) so the
-border has a cell to ride on. Past `SH_BXF_CAP` = 64 pairs a border is not
-written and nothing else is lost. The reader keeps `SH_BIFF_XF_CAP` = 128 XFs
-and a border byte for each (`sh_xf_bord`, any line style an edge and any fill
-pattern Shade), and `sh_biff_applyfmt` adds the border whether or not the
-record carried a value. A note is a `NOTE` record (001CH: row, column, length,
-text) after the sheet's cells.
+**There is no MartyPC EGA.** Its EGA card needs IBM's ROM, which is not
+bundled. The EGA row is therefore QEMU's VGA forced into the EGA geometry
+(the Makefile's `VIDFORCE` note). That exercises the 350-row layout and the
+planar renderer, but NOT the period EGA probe or a real mode 10h set. Those
+remain `make xt-ega`'s, and it is interactive.
+`build/macwork/probe18ega.py` is the harness. It drives QEMU through
+`tests/ethernet.py`'s `Qemu` and `dispcp`'s blind path, the same way
+`tests/minesrc.py` does.
 
-**SYLK's style field `;S`** carries the four edges as `L R T B` and Shade as
-`S`, each border in an `F` record of its own (`F;X3;Y4;SLT`) that the reader
-applies without touching the format; Excel's `D`, `I` and `M` letters are
-passed over. **A note is SYLK's comment field**, a `C` record carrying only
-`;A`, so it needs no value and disturbs none: a `;` in the text is doubled and
-a line break is ESC `" :"`, which is what Excel writes. Percent is `F`'s own
-`%` code.
+**The pulldown save-under (§81.98) holds on all four.** EGA: all nine menus
+were opened and released off every item, and the window came back
+pixel-identical. The only differences were one clock digit and the status
+bar's "Loaded" → "Ready". `sheetmtail --card herc` (6 checks) joins the CGA
+and VGA arms.
 
-**DIF carries values only**, by its definition, and still does.
+#### 81.100.1 A close box shut two dialog engines for the session
 
-### 81.23 New, Open and Close ask before throwing work away
+A package's secondary window has no owner record, so the kernel's close box
+only HIDES it (§75.1, and §81.96.2 for DIALOG.BOX). Each of SHEET's dialog
+engines refuses to open while its window word is set. `sh_onclick`'s
+gate-lock recovery clears that word for the radio, Border and Form dialogs
+on the next grid click. It never covered the other two:
 
-New and Open replaced the workbook without a word, and closing the window
-did the same. `[sh_modified]` is set by every routine that changes the
-document — `sh_addcell`, `sh_removecell`, the border and note tables' add and
-remove, `sh_fmt_one`, `sh_clear_one` — and cleared by New, by a read that
-said `Loaded`, and by a save that kept EVERYTHING: a truncated file, or SYLK
-or DIF keeping one sheet of several, leaves it set.
+- **the list dialog**: Format ▸ Number, Paste Function, Paste Name;
+- **the input dialog**: Goto, Define Name, Row Height, Column Width, Sort,
+  Run, and the macro engine's INPUT.
 
-`sh_ask_unsaved` puts §75.3's standard alert in front of all three —
-*Save changes to SHEET1.SLK?*, Save / Discard / Cancel, the question Note Pad
-and Word ask — with the action owed in `[sh_pend]`. **Save writes under the
-current name and goes on only if the save kept everything**; otherwise the
-status line says what happened and the workbook is still there, so Discard is
-a choice made knowing. Closing is §75.1's negotiator, `sh_onclose`, finishing
-with `OSAPI_WM_CLOSE`. A refused ask — an alert already up — changes nothing,
-`[sh_pend]` included, so the question already on the screen keeps the action
-it was asked for.
+So closing Format ▸ Number with its box left Paste Function and Paste Name
+refusing, in silence, until SHEET was restarted. The first photograph run
+showed an empty Paste Function on all four displays.
 
-#### 81.23.1 New resets the whole workbook
+Each engine now has a close negotiator (`OSAPI_WM_ONCLOSE`) that takes the
+close itself and answers CF = 1. This is `sc_close`'s shape and
+`os88ui_aclose`'s.
 
-New cleared the cells and the anchor but not the selection's EXTENT, so the
-fresh sheet came up with the old document's block (`A1:D9`) still framed. It
-resets `sh_selcol2`/`sh_selrow2`, the defined names (a new workbook has none)
-and the Sheets menu's tick too, and no longer repaints itself: it painted
-through whatever `SI` the New dialog's callback held, and its one caller
-repaints once after setting the status line.
+- `sh_ldlg_cls_r` destroys the list dialog; it has no Cancel beyond that.
+- `sh_idlg_cls_r` sends Esc through the input dialog's own key door, so an
+  INPUT or a Run resumes exactly as Cancel resumes it.
 
-### 81.24 Row Height and Column Width are the whole sheet's, and stay so
+Both are installed from the RESIDENT open doors (`SH_ONCLOSE`), not from the
+module. The proc is a near pointer in the window's segment, and CHART.OVL
+runs banked (§81.71.5.1). `tests/sheetdlgclose.py` has 6 checks. With both
+installs removed it fails 4.
 
-Both set one size for every row or column — `[sh_cellw]`, `[sh_cellh]` — and
-that is kept rather than fixed. Per-column widths would be cheap to STORE (256
-bytes, or a column-width record in each format), but every piece of geometry in
-Sheet is a multiply by the one size: `sh_geom` divides the content by
-`[sh_cellw]` to count the visible columns, the hit test, the selection frame,
-the gridlines, the scroll bars and the row blit all compute a cell's position
-as index × size. Per-column widths turn each of those into a running sum over
-the columns to the left, which is a redesign of the drawing and hit-testing
-layer, not a feature on top of it; per-row heights over 16,384 rows would need
-a sparse table as well. Neither is a file-format question — BIFF's `COLWIDTH`
-and SYLK's `F;W` exist — it is that the window could not draw what the file
-said.
+#### 81.100.2 On a CGA, two dialogs were cut and drew through their frames
 
-### 81.30 The menu tick is a SOLID SQUARE
+`wm_fit` cuts any window taller than the desktop band, which is 155 rows on
+a CGA (§11.93). The package is not told. Two of SHEET's fixed dialogs are
+taller than that:
+
+- the radio column (`SH_FDLG_H`, 171 rows: Alignment, Font, Calculation, New,
+  File Format, Insert, Delete, Gallery);
+- Border (`SH_BDLG_H`, 159).
+
+On the radio kinds, OK and Cancel landed through the bottom frame. They
+were outside the window's clicks, and a close left them painted on the
+desktop, where later photographs still showed them.
+
+Both dialogs now ask for `OSAPI_WM_KEEPH` before their show. They hang over
+the dock instead: 171 rows from y 20 end at 191, inside the 200 rows the
+display has.
+
+The list (147 rows) and Data Form (153) fit the band already and are left
+alone. That was measured, not assumed: an earlier reading of the list's
+photograph as cut was wrong, because the line was its own frame.
+
+`tests/sheetdlgcga.py` has 16 checks. For each dialog, the window table's
+height must match the template's, the window must end on the display, and
+closing it must leave zero changed pixels below SHEET. With both KEEPH calls
+removed, radio and Border lose their height, and the radio dialog leaves 203
+pixels behind.
+
+### 81.99 Edit ▸ Repeat is dropped, and its row with it
+
+The owner's decision, 2026-09-22: `Edit ▸ Repeat` is not coming, and the
+permanently greyed `Can't Repeat` row goes too. SHEET's Edit menu is now
+Excel 2.1d's less its second row - the one deliberate difference from the
+capture. Repeat has no macro function to decline: the book says "There is
+no command-equivalent macro function for the Edit Repeat command".
+
+**Taking a row out is the dangerous kind of menu change.** An item is
+dispatched by its POSITION - `AL` is the row that was clicked - so removing
+row 1 moves every row after it, and a number left unchanged anywhere does
+not crash: it silently runs the NEIGHBOURING command. This file already
+records one such orphan: a `cmp al, 9 / je .sort` left behind when Sort
+moved to Data, which would have turned Insert into Sort the day three items
+were added. The row numbers were in four places:
+
+- the dispatch chain in `sh_docmd_edit` (10 comparisons);
+- its undo-snapshot choice (Cut, Paste, Paste Link, Fill Right, Fill Down);
+- the command equivalents that fire an Edit item by number (FILL.RIGHT,
+  FILL.DOWN, PASTE.LINK, UNDO, and FORMULA.FILL's own Fill Right and Fill
+  Down in `shm_mffill`);
+- the bar's own count, 12, in `sh_mtab`.
+
+**They are names now** - `SH_EI_UNDO` … `SH_EI_FILLD` and `SH_EI_N` - and
+`sh_i_edit` labels each of its rows. A `times` pair per row holds each
+label's position to its constant (§81.83.3.3: assembled, not preprocessed),
+so moving a row without its constant, or the reverse, fails the build on
+that row's own line. `sh_docmd_edit`'s header, which listed the rows by
+number, had gone stale twice over: it still read "1 Cut, 2 Copy" with Repeat
+sitting at 1.
+
+What did NOT need changing, checked rather than assumed: the click path
+(the row comes from the hit test, so it follows the table), `sh_mfire`'s
+undo-drop rules (they name menus, not Edit rows), the recorder (it is called
+from inside each command, not by position), custom menus (they refuse
+built-in menus), and Undo's own relabelling (it rewrites `sh_it_undo` by
+label).
+
+Six gates click Edit items by row - sheetundo, sheetside, sheetrecord,
+sheetrowh, sheetsort, sheetcolw - and each had its numbers moved by one for
+every row after Undo. They assert what each command DID (Insert inserts,
+Fill fills, Undo undoes), so a row that still pointed at its neighbour would
+fail rather than pass.
+
+The assertions were proven by mutation both ways: swapping the Cut and Copy
+rows, and raising `SH_EI_PASTE` alone, each fail the build on the row
+concerned. **Resident -16 bytes** (the row and its string); §81.98.1 has
+the headroom after all three.
+
+### 81.98 The pulldown leaves nothing behind it
+
+`docs/plans/SHEET-GAPS-PLAN.md` section 0.1's defect. A pulldown taller than
+the room under SHEET's bar hangs PAST the window's bottom edge - on a
+200-row screen, Data's twelve items reach row 199 from a window that ends at
+174, over the dock - and `sh_mclose` repainted the window and nothing else,
+so the rows below it kept the menu's last items for the rest of the session.
+No repaint SHEET can make reaches them: they belong to the desktop, the dock
+or another window.
+
+**The pixels are banked instead** - the kernel menu's own answer (§12.4),
+and Word's (§68.2.1):
+
+- **`sh_mbank`** runs between `sh_mdrop_geo` and the first draw and calls
+  `OSAPI_GFX_SAVE` over the panel's rect. Its size is §13.16.4's formula,
+  planes × rows × byte columns, with the plane count from
+  `OSAPI_WM_DISPLAY` (never `OSAPI_VIDEO`, §39.16.4) and taken AS IT COMES,
+  §120.5's package rule: DH ≥ 4 is DH planes, 8 or 16 being the bytes a
+  column on a packed display, and only 1 is one plane. The bottom is clamped
+  to the display's last row, in `[sh_mbky2]`.
+- **`sh_mclose`** writes it back with `OSAPI_GFX_REST` and redraws the bar
+  so the title is plain again. The full `sh_repaint` it used to make is now
+  the REFUSAL path only: no bank (a rect straddling two displays, or one
+  past the buffer) closes exactly as before. §68.2.1's rule: every refusal
+  is the old path, never a new one.
+- **The buffer is the staging claim** (`sh_stgseg`, 32 KB), not a claim of
+  its own: SHEET holds `MEM_OWNER_MAX`'s eight (§81.94.1) and §50.3 keeps
+  its claims in the entry proc. Staging holds nothing a command reads back
+  without rebuilding it - its uses are scratch inside one command or one
+  paint, and Copy and Paste only stage through it: the clipboard is the
+  OS's. The one exception is the chart's staged series, which
+  `sh_chart_render` rasterizes from staging offset 0, so Data > Chart
+  Gallery... - reached only through the Data panel this bank has just
+  written over them - sets `[sh_chartdirty]` and lets `sh_repaint` rescan
+  rather than re-rendering what is there. A
+  menu is closed, and its bank written back, before the picked command runs.
+  Data's panel, measured by the gate, is 25 byte columns × 148 rows:
+  3,700 bytes on CGA and 14,800 on a four-plane display, against 32,768.
+
+**The lock stays HELD while the panel is up.** `sh_mtrack` was Word's
+`wd_mtrack`: unlock, yield, relock between reads. That is right for a panel
+inside its own window, where no other task can draw - which is exactly why
+the shared element (§13.16) can bank under it. SHEET's panel hangs past its
+window, where other tasks CAN draw, and a restore would then put their
+pixels back stale. So it takes `menu_drop`'s discipline instead: it yields
+with the lock held, and nothing else draws until the panel is gone. It is
+the same pause every task already takes under the kernel's own menus.
+
+**Not slid up when it runs off the screen**, although §12.4's popup slides.
+A window dragged low pushes a tall menu past the display's last row, and
+those items are drawn nowhere and cannot be reached - as before this
+section, and as the shared element's own `os88ui_mngeo` does. The first build
+slid the panel up, and the gate's screenshot showed why the element refuses
+to: a slid bar menu covers its own title and lands UNDER THE POINTER, so a
+plain click on the title releases on an item and runs it. The bank clips at
+the last row, so closing such a panel still leaves nothing.
+
+`tests/sheetmtail.py` (8 checks) reads the panel's rect out of SHEET's own
+memory to prove it overhangs the window - a panel inside it would make every
+other check pass by default - then compares every row below the window with
+a photograph taken before it opened. The same happens with the window
+dragged 24 rows lower, where the panel runs off the screen. Skipping the
+restore fails both comparisons.
+
+**Resident +174 bytes, bss +3** on the build this section first shipped on.
+
+#### 81.98.1 What the VGA machine found
+
+The gates above run on the 5150's CGA, whose one plane is the only path they
+reach. `tests/sheetmtail.py --card vga` runs `os8088_xt_vga` (640×480, four
+planes) and reads the card's own rendered framebuffer. There the panel fits
+inside the window, so it adds the comparison `tests/atmenusu.py` makes: one
+close through the bank and one with the bank poked to 0 - the repaint - and
+**both must land on the same pixels**.
+
+**They did not, by 63 pixels, and the bank was the one that was wrong.** The
+click that opens a menu clears `[sh_msg]` in `sh_onclick`, and the old full
+repaint drew the status bar as a side effect, so "Loaded" became "Ready". The
+bank put back the pixels it saved, the stale message among them. Nothing that
+compared only against a photograph taken before the menu opened could see it,
+because that photograph was stale in the same way. `sh_mclose` now redraws
+the status bar after the bar on the bank path: one row of text, where the old
+path repainted the whole window. Taking the call out again fails the A/B.
+
+The four-plane bank itself restored the screen exactly on the first run. The
+only pixels that ever differed were the status bar's.
+
+**Resident +3 bytes for the status redraw.** SHEET after §81.98, §81.98.1 and
+§81.99: 51,725 + 9,123 bss of 61,440, **592 bytes** of headroom.
+
+### 81.97 The reader half: macro sheets come back as macro sheets
+
+Wave 5 of `docs/plans/SHEET-MACRO-PLAN.md`. §81.83 made the writer emit a
+macro cell's formula. The reader could not read one back, so Excel's own
+macro sheets opened with every command as its cached value.
+
+#### 81.97.1 Commands decode
+
+- **Ptg 58H** (tFuncVarCE: 58H, 38H and 78H fold to 38H) is BIFF2/3's
+  command. It decodes as tFuncVar does, with its index looked up in the
+  **Cetab** (`sh_dc_fnce`).
+- **BIFF4's fCeFunc,** bit 15 of the index word, says the same thing.
+  `sh_dc_index` used to refuse any high byte; it now takes 80H as a command.
+- **The lookup honours the table** (`sh_dc_name`). Every Cetab index
+  collides with an Ftab one: 6DH is SELECT in the Cetab and a worksheet
+  function in the Ftab. A match in `sh_rpn_fid` counts only when
+  `sh_rpn_fce` agrees about the table.
+- **The extension functions decode too.** Waves 1–4's names live in
+  CHART.OVL's `shm_mxnames` and `shm_mxrpn`, which the old lookup never
+  searched. A hit is copied into `sh_ident`, which the decode does not
+  otherwise use and which holds the longest of them: CALCULATE.DOCUMENT, 18
+  characters, against `SH_IDENT_MAX` 20.
+- **`shm_mxargc`** is new: each extension function's fixed argument count,
+  since a tFunc token carries only an index. It is 0 for a variable
+  function and for every command, which Excel writes with a count of their
+  own. `tools/os88sheetfmt.py --selfcheck` holds it to the document, and was
+  proven by a mutation (DEREF's 1 set to 2).
+
+The host decoder (`decode_rpn`) learned the same three things, with four
+selfcheck vectors: a 58H command, a BIFF4 fCeFunc command, a macro Ftab
+function, and a command SHEET lacks, which must stay a value. It had also
+looked only in `BIFF_FUNCS`, so the macro Ftab functions (GOTO, RETURN)
+never decoded on the host either.
+
+**Excel 2.1d's KWWHAT.CPM** now reads with all **71** of its formulas on
+the host, and SHEET brings every one of them back as a formula:
+`tests/sheetxl2.py`'s macro arm, the owner's work, passes 31/31.
+
+#### 81.97.2 A document has a kind
+
+`sh_dockind` (one byte of bss): 1 is a **macro sheet**, BIFF's dt 0040H.
+It changes nothing about how cells, functions and commands behave, because
+SHEET's macros have always run from ordinary cells. What changes:
+
+- **the BOF** says so, in the BIFF3 stream and in each BIFF4 sheet
+  substream (`sh_biff_dt`);
+- **a BOF that says 0040H makes the document one** (`sh_rd_bofkind`),
+  whether BIFF2, 3 or 4. A workbook with one macro sheet in it is a macro
+  sheet document: the kind is the document's, and SHEET's four sheets are
+  one document;
+- **a macro sheet shows its formulas,** as Excel's does (`sh_macsheet` sets
+  Options ▸ Formulas and its label) - and `sh_dockind` is **2** when they
+  are the document's doing and **1** when the user already had them on, so
+  closing it takes away only what it turned on;
+- **File ▸ New ▸ Macro Sheet makes one.** §81.83.6's "an ordinary sheet,
+  and a status line saying so" is retired: the status line now says "New
+  macro sheet - formulas shown; Macro > Run runs them."
+
+**Every reader and New put it back** (`sh_kindreset`, beside each reader's
+`sh_nnames` reset, and inline in the resident `sh_new`). The formulas a
+macro sheet turned on go with it, while a Formulas the user turned on for a
+worksheet stays - the kind byte is what tells them apart, and the gate reads
+both bytes out of SHEET's own memory rather than off the glass.
+
+**SYLK, DIF, CSV, text and dBASE carry no kind,** so a macro sheet saved in
+one of them reopens as a worksheet, with its formulas intact.
+
+#### 81.97.3 The gate, and its mutations
+
+`tests/sheetmkind.py` (5 checks) has the host write a BIFF2 macro sheet
+whose formulas are SELECT by ptg 58H, ECHO (a variable extension function),
+DEREF (a fixed one, which only `shm_mxargc` can count) and RETURN. SHEET
+opens it and saves it Normal. Then File ▸ Open, in the same window, opens a
+BIFF2 worksheet, which is saved too. The host reads both saves, with its own
+decoder checked against the fixture first.
+
+Each claim was mutated to prove it can fail:
+
+- removing the 38H dispatch fails the formulas check;
+- a `sh_kindreset` that returns at once fails the worksheet's dt;
+- a `sh_rd_bofkind` that returns at once fails the macro sheet's dt;
+- putting §81.97.4's flag leak back turns the `=IF()` into `OPEN()`;
+- a `sh_kindreset` that clears Formulas unconditionally fails the
+  ownership check.
+
+Nine checks. That the formulas are SHOWN is read as `sh_showformulas`
+itself, not off the glass.
+
+**CHART.OVL +385 bytes** (45,618 of `CH_OVKB` 46), resident bss +1, resident
+code +29 (the inline reset in `sh_new`).
+
+#### 81.97.4 A ptg's flag outlived its own token
+
+`sh_dc_fnce` set "this index is a command" and fell into `sh_dc_fnv`, which
+has an earlier exit than `sh_dc_index`: a TRUNCATED 58H token - the ptg with
+its count and index cut off - returned with the flag still set. The next
+token to carry an index then read it, and every Cetab number collides with
+an Ftab one, so a worksheet's `=IF(A5,1,2)` was decoded, stored and SAVED
+BACK as `OPEN(A5,1,2)`. Nothing cleared the flag between documents either,
+so a crafted file poisoned the next clean one opened after it.
+
+It is cleared on that exit and again at the start of every decode.
+`tests/sheetmkind.py` carries the case - a truncated 58H above an `=IF()` -
+and the mutation that puts the bug back reproduces `OPEN($A$5,1,2)` exactly.
+
+### 81.96 DIALOG.BOX
+
+DIALOG.BOX(dialog_ref) puts up a dialog that a range describes, in Excel's
+seven columns: item type, x, y, width, height, text, and the initial value,
+which becomes the result. The first row is the dialog itself: its width and
+height in columns 4 and 5, and its title in column 6.
+
+- **Types built:** 1 default OK, 2 default Cancel, 3 OK, 4 Cancel, 5 text,
+  6 text edit, 7 integer edit, 8 number edit, 9 formula edit, 10 reference
+  edit, 11 option group, 12 option button, 13 check box, 14 group box.
+- **Refused:** the list boxes (15, 16), more than 16 items, and more than 4
+  edit boxes. A refusal is a macro error, so ERROR(FALSE) turns it into
+  FALSE.
+- **Units:** Excel's dialog units are an eighth of a character across and a
+  twelfth down. With the 8×8 cell that is a pixel across and two thirds of
+  one down. A blank width or height takes the item's own: every button
+  `OS88UI_ABW` wide, text its own length, an edit box twenty characters, and
+  a check box or option button its glyph plus its label.
+- **The run pauses while it is up,** by INPUT's mechanism (§81.63): the cell
+  answers FALSE, the step pauses with `SH_MC_PAUSEH`, and the second
+  evaluation answers. That answer is the pressed button's item number,
+  counted from the second row, or FALSE for Cancel, Esc or the close box.
+- **OK writes every result into the seventh column first:** an edit box's
+  text (a number, for the integer and number boxes, when it reads as one), a
+  check box's TRUE or FALSE, and an option group's place of the button that
+  is on.
+- **Keys:** Enter presses the default button. When no default is named,
+  that is the first OK. Esc cancels, Tab moves to the next edit box, and
+  every other key goes to the focused edit box (`os88line_key`).
+
+**Where it lives.** The engine is in MACRO.OVL: parsing, painting, keys,
+clicks and the results. The resident part is what the kernel calls or
+names: the template `sh_dbx_tpl`, three thunks forwarding to `sh_m2call`
+(verbs `SHM2_DPAINT`, `SHM2_DKEY` and `SHM2_DCLICK`), the create, and the
+close negotiator. The create is resident because `OSAPI_WM_ONCLOSE` takes a
+near proc in the caller's segment. The edit boxes share **one** line block
+and one 33-byte buffer in DS, where `os88line` reads its buffer. Each box's
+text and caret live in the module and are swapped in to be drawn or typed
+at, which saves 99 bytes of resident bss against a buffer per box.
+
+**Closing.**
+
+- **A button** sets `sh_dbx_done`. The resident thunk destroys the window
+  and resumes the run, INPUT's order.
+- **The close box REFUSES and closes itself** (§81.96.2), on the next tick
+  (`sh_macro_ontimer`, `SH_MW_DBOX`), answering Cancel. Two reasons, and the
+  first is the one that matters: a package's SECONDARY window has no owner
+  record, so the kernel's own close only HIDES it and the slot never comes
+  back; and a run resumed from inside the negotiator could open the next
+  DIALOG.BOX while this window is half closed.
+- **A click on the sheet** raises the dialog (§81.86.4's gate).
+
+#### 81.96.1 What the gate found
+
+**The window was painted over.** DIALOG.BOX opened its window while the
+formula was being evaluated. The step then paused, and the pause's repaint
+of the sheet drew over it: the first screenshot had the dialog's items
+floating on the grid with no window around them. The window now opens at
+the pause, after the repaint, which is where INPUT's has always opened.
+
+`tests/sheetmdbox.py` has 10 checks. It types into the text box, clicks the
+check box and an option button, and Tabs to the number box. Enter takes the
+default OK, then Esc, the Cancel button and the OK button each close one of
+three more dialogs, and a list box is refused. Every result is read from
+SHEET's own save.
+
+**Resident +252 bytes, bss +61, MACRO.OVL +3,021** (18,635 bytes). Each
+text channel (§81.91.1) is now **5,008 bytes**, and resident headroom **756
+bytes** of `APP_MAX_SIZE` - every figure measured on the build these three
+sections were finished on, since they share one budget.
+
+#### 81.96.2 The close box was costing a window record
+
+`sh_dbx_close_r` first answered CF = 0 - let the close happen - having
+already cleared `sh_dbx_win`. `app_close_win` finds no instance for a
+secondary window and takes `wm_hide`, which clears only W_FLAGS bit 1: the
+record stays IN USE, `wm_create` never reuses it, and nothing in SHEET can
+still name it. `MAX_WIN` is 12, so about ten dismissals stop every window on
+the machine from opening - §81.6's defect, one door along.
+
+It refuses now (CF = 1) and arms the one-tick timer, and the tick calls
+`OSAPI_WM_DESTROY` itself, where no kernel close is half done. A refusal
+owes the user a way out (§75.1) and the tick is it. If the timer cannot be
+armed - `kern_small`, which does not carry SHEET at all (§24.5) - it lets
+the close through instead, because a refusal with nothing behind it would
+strand the run.
+
+The gate counts window records IN USE, not visible ones: a leaked slot is
+used and invisible, so `dispcp.win_list` cannot see it, and the check reads
+W_FLAGS bit 0 across all twelve.
+
+#### 81.96.3 Three more the review found
+
+- **The dialog was never centred.** `OSAPI_VIDEO` answers the screen size in
+  AX/BX and CLOBBERS CX and DX (the dock row, the adapter), which is what
+  `sh_dbx_open` then subtracted. The window landed at x = 231, y = 28
+  instead of 175, 40 - and a wide dialog would have been clamped by `wm_fit`
+  and truncated rather than centred. The size is read back from the template
+  now. The gate checks the position, allowing for §11.94's 8-pixel snap.
+- **A negative width or height** made a window no click could ever hit
+  (`wm_hit` tests `x < W_X + W_W`), so a paused run could only be ended by
+  Esc or the close box. A size that is not positive takes the default now,
+  for the dialog and for each item. **For a height that needs the vertical
+  unit's conversion to be SIGNED**: `shm_db23`'s `* 2 / 3` was an unsigned
+  divide, so -30 came out 21,825 and the sign tests after it never saw a
+  negative. It is `imul`/`idiv` now, and an item's negative y is 0.
+- **A dialog that could not be created** left `sh_macro_wait` at
+  `SH_MW_DBOX`, which a later ON.TIME tick would then consume. It clears it.
+
+**The one-flag limit, which INPUT shares.** `shm_dbpend` is one flag, so two
+DIALOG.BOX calls IN THE SAME CELL do not work: the second consumes the
+first's pending answer and the first then asks again. `SH_MACRO_MAXSTEPS`
+bounds it and the close box ends it. INPUT's `sh_macro_ansok` is the same
+shape (§81.63), and a per-call answer is a change to that mechanism rather
+than to this function.
+
+### 81.95 Custom menus
+
+ADD.BAR, SHOW.BAR, DELETE.BAR, ADD.MENU, ADD.COMMAND, DELETE.MENU,
+DELETE.COMMAND, ENABLE.COMMAND, CHECK.COMMAND and RENAME.COMMAND, on SHEET's
+own in-window bar (§81.54).
+
+- **The bar walks a pointer now**, `[sh_mtabp]`, `[sh_mcount]` entries
+  long, instead of `sh_mtab` and `SH_MENU_N`.
+  - **Bar 1** is `sh_mtab`, SHEET's nine menus with the custom menus added
+    after Help.
+  - **Bar 7** is `sh_mtabc`, the one custom bar ADD.BAR makes. It holds
+    custom menus only, so Macro ▸ Run is not on it; ON.KEY is the way back
+    (the gate uses F9).
+- **A custom menu is a resident record** (`sh_mcrec`, three of them, 148
+  bytes each): a title, up to six commands, and the cell each command runs.
+  Its table entry points into the record, so `sh_mfire` finds the command's
+  cell by subtraction (`sh_mcrun`) and starts a run the way Macro ▸ Run does.
+- **The menu description** is Excel's: a range whose first row is the title,
+  followed by one row per command, holding its name and its macro (a
+  reference or a name, as text).
+- **Checked and disabled** are the prefix bytes `sh_mdrop_draw` already
+  reads (`SH_MENU_CHK`, then `MENU_DIS`). A command's state is read back from
+  where its pointer starts, so there is no second copy of it to keep in step.
+- **SHEET's own menus and commands are not edited:** every function refuses
+  a built-in menu. That is Excel's own rule for ENABLE.COMMAND on a built-in
+  command, applied to all ten.
+
+#### 81.95.1 The bar is the window's width
+
+A title past the window's edge was drawn outside the window and never
+erased, and the gate's screenshots showed it. So:
+
+- **ADD.MENU refuses a menu that does not fit its bar**, measured with
+  `OSAPI_FONT_WIDTH` and the pads. On a 562-pixel window, bar 1 has room
+  for one title of about three letters after Help. The custom bar has room
+  for several.
+- **A dropdown that would run past the window's right edge moves left**
+  (`sh_mdrop_geo`). The built-in menus never reached the edge, so this had
+  never come up.
+
+A RENAME.COMMAND of a title (command 0) is not measured.
+
+#### 81.95.2 What the gate found
+
+- **ADD.MENU banked its bar in `shm_acc8`,** and `shm_mcrows`, which it
+  calls, uses that byte as its title flag. The menu was counted on the wrong
+  bar.
+- **`shm_mcflags` read its flags after a `MUL` had overwritten AH, and
+  popped a misaligned stack.** The first CHECK.COMMAND corrupted the screen
+  and wedged the machine.
+- **`shm_barshow` calls `sh_mtab_calc`,** which does not keep DX, and ADD.MENU
+  held its answer there.
+
+#### 81.95.3 What an adversarial review found afterwards
+
+The gate passed 8/8 with three of these live, which is what a gate over
+VALUES cannot see.
+
+- **`shm_barent` answered a count in CL and its callers stored CX.** CH
+  arrived from whatever the evaluator or a kernel callback had left there.
+  `shm_barref` copies that word into `shm_gst`, and DELETE.MENU uses it as
+  the end of its shift-down: one nonzero high byte moves about fifteen
+  hundred bytes of SHEET's own data segment - every built-in menu's title
+  and item table - six bytes down, and the bar draws as rubble while the
+  test's H-column values all still pass. Proven by injecting `mov ch, 1`
+  before the call, which nothing in the call chain rules out. It zeroes CH
+  now, at the source, and its header says CX.
+- **A menu deleted while its dropdown was open** left `sh_mcrun` reading
+  the zeroed table entry, subtracting `SH_MC_ITEMS` from 0 and taking the
+  command's cell from 0xFFF0 - a wild read near the top of the segment.
+  `sh_mtrack` yields, so an ON.TIME run can fire mid-dropdown. Two fixes: a
+  zero entry is refused, and `sh_macro_ontimer` makes an ON.TIME request
+  wait while a menu is open, as it already does while a run is going.
+- **RENAME.COMMAND of a TITLE was not measured**, which §81.95.1 recorded
+  as a gap: it is the very defect `shm_barfits` was added for. It is
+  measured now, with the old title banked and put back when the new one
+  does not fit, and the gate has the case.
+- **A CHECKED item measured one cell wider than it drew**, because
+  `sh_mdrop_geo` skipped `MENU_DIS` and not `SH_MENU_CHK` while
+  `sh_mdrop_draw` skips both. Pre-dates §81.95 and reachable from the
+  built-in menus.
+
+Two of the four are gated: the title rename has a check of its own, and the
+wild record read is covered by the picks the gate already makes. The CL/CX
+defect is not - the value that triggers it cannot be produced from a macro
+today, which is why the fix is at the source rather than at the call sites -
+and neither is the ON.TIME-mid-dropdown race, which needs a timer to fire
+inside `sh_mtrack`'s yield.
+
+**Resident +155 bytes, bss +476, MACRO.OVL +1,731** (15,614 bytes). Each
+text channel (§81.91.1) is now **6,528 bytes**. Resident headroom is 1,118
+bytes of `APP_MAX_SIZE`. `tests/sheetmmenu.py` has 8 checks, and every
+command is picked with the mouse.
+
+### 81.94 MACRO.OVL: the macro language gets a module of its own
+
+Option 1 of §81.93.1, the owner's choice. The macro language moved out of
+CHART.OVL into a **second module, MACRO.OVL**, loaded at entry into a claim
+of its own. That leaves room for the rest of wave 4 and for the reader half,
+without dropping anything.
+
+#### 81.94.1 A claim slot, carved
+
+SHEET held `MEM_OWNER_MAX`'s eight claims, so MACRO.OVL's claim had nowhere
+to come from. **The border and note tables are now one claim, carved.**
+They were 4 KB and 5 KB; now they are one claim of 9 KB, with the note table
+starting `SH_CLAIM_BORD_KB * 64` paragraphs in. It stays movable:
+`sh_reloc` patches the border table's word and then derives the note
+table's from it, because no word names the note table's base as a claim.
+This is §50's "one claim, carved" applied to a package.
+
+**The first build declared the wrong segment movable.** `OSAPI_MEM_MOVABLE`
+takes the claim's base in DX, and DX had already been advanced to the note
+table's start. The kernel refused the declaration, so the carved claim
+stayed silently pinned. `tests/sheetmove.py` counts the declared claims,
+and it failed on 4 against the 5 expected. It now also checks that
+`sh_noteseg` follows the border table.
+
+**What the gate has not seen:** in its compaction, the kernel moved the
+cells and text claims, not the carved one. So `sh_reloc`'s recompute ran,
+harmlessly, on both of those moves, but a move of the carved claim itself
+is not exercised.
+
+#### 81.94.2 One assembly, two modules
+
+MACRO.OVL is a **section**, `.modm vstart=0 follows=.modc`, in the same
+assembly, so every symbol it names is the package's own address (§68.10's
+reason for one assembly). Its offset 0 is its dispatcher (`SHM2_*` verbs:
+the macro functions, and a run starting or resuming). The eight bytes
+after that dispatcher's jump are **`SHMACRO2`**, the mark
+`tools/os88ovl.py --second` cuts the file at. The tool refuses unless the
+mark occurs exactly once and follows a short jump, so the boundary lives in
+the image and nowhere else. The build stamp (§82.16.5) follows the mark, so
+it moves nothing the cut depends on.
+
+**What stayed in CHART.OVL:**
+
+- `shm_mxnames` and `shm_mxrpn`, the names and BIFF rows, because the
+  evaluator's lookup and the BIFF writer read them there;
+- `shm_mfind`;
+- `shm_mname`, which the database functions use too.
+
+**How the two modules call each other:**
+
+- **MACRO.OVL → CHART.OVL** goes through verbs, `CHOUT <verb>`, which is a
+  far call through `ch_ovfar`. The verbs are the dialog applies, the R1C1
+  converters, `sh_setext`, `shm_mname`, `sh_read_rc`, the reader, Sort and
+  Series. The two slots the old macro verbs held are reused.
+- **CHART.OVL → MACRO.OVL** does not happen.
+- **Resident code → MACRO.OVL** goes through `sh_m2call`: `sh_pmacro` (the
+  evaluator's door) and `sh_macro_onalert` (every resume).
+
+#### 81.94.3 A near call across the two sections assembles and runs wrong
+
+NASM assembled a planted `call sh_fdlg_apply` from `.modm` into `.modc`
+without a word: `E8 9110`, relative to the wrong segment. So the migration
+was gated by a cross-section check over the listing, and was proven by
+exactly that plant. The check flags:
+
+- any reference between `.modc` and `.modm`;
+- any resident reference into `.modm`;
+- any near call or jump from a module into resident code.
+
+**Sizes, measured:**
+
+- CHART.OVL is **45,070** bytes of `CH_OVKB` 46;
+- MACRO.OVL is **13,883** of `SH_M2KB` 28;
+- resident +152 bytes and bss +5 (the door, the loader, and the pointer and
+  failure byte);
+- the text-file tail (§81.91.1) is **MACRO.OVL's** now: 14,789 bytes, two
+  channels of **7,392** bytes when this was built (§81.95 took them to
+  6,528).
+
+Together the two claims are 74 KB, against 63 KB for the one before: 11 KB
+more heap for the room to finish.
+
+**MACRO.OVL ships beside CHART.OVL** on every disk that carries SHEET. Every
+test disk carries both. `tests/sheetxl2.py` does not yet, because it holds
+the owner's uncommitted work and was not edited.
+
+#### 81.94.4 Both dispatch tables are held to their counts
+
+A review of this migration found the hazard §81.83.3.3 is about, in the
+verb tables themselves: nothing bound `sh_mverb` to `SHM_N` or `sh_m2verb`
+to `SHM2_N`. A verb added without raising the count answers CF = 1, which
+every caller reports as "there is no module" - a feature that silently does
+nothing. A count raised without the entry jumps through the two bytes AFTER
+the table, which is a wild far jump with no diagnostic.
+
+Both carry `times` pairs now, assembled rather than preprocessed, and both
+were proven by mutation: raising either count alone fails the build with
+`TIMES value -1 is negative` on the assertion's own line.
+
+### 81.93 What the macro language does not do, and where the module stands
+
+This is Excel 2.0's macro vocabulary as `docs/plans/SHEET-MACRO-PLAN.md`
+measured it, against what SHEET builds. A name listed here evaluates
+`#NAME?`. The decision about it is below, so it is not a gap nobody has
+looked at.
+
+**Re-swept 2026-09-22 against the book itself** (`Microsoft Excel Functions
+and Macros`, 347 names in its directory): fourteen names were in neither
+list. Nine were classified by decisions already on record - MDI below, and
+PRINT, GRIDLINES, LEGEND, INITIATE and QUIT into their existing groups -
+and the five with no decision yet are listed last.
+
+**Declined, with the reason (72):**
+
+- **Printing (7)**, out of scope by the owner's decision: PAGE.SETUP, PRINT,
+  PRINTER.SETUP, REMOVE.PAGE.BREAK, SET.PAGE.BREAK, SET.PRINT.AREA,
+  SET.PRINT.TITLES.
+- **The application window (7).** The OS owns every window's size,
+  position and state, and its lifetime - `Exit` is the OS menu's (§12.2):
+  APP.ACTIVATE, APP.MAXIMIZE, APP.MINIMIZE, APP.MOVE, APP.RESTORE, APP.SIZE,
+  QUIT.
+- **MDI - more than one document window (22).** SHEET has one document per
+  instance and one window per document, and the OS has no multiple-document
+  interface for it to use, so everything that CREATES, SWITCHES, ARRANGES,
+  HIDES, SIZES, CLOSES or LINKS document windows is struck (§81.39.2 has the
+  menu side): ACTIVATE, ACTIVATE.NEXT, ACTIVATE.PREV, ARRANGE.ALL, CLOSE
+  (Control ▸ Close of a DOCUMENT window), CLOSE.ALL, DOCUMENTS, FILE.CLOSE,
+  FULL (Control ▸ Maximize/Restore of a DOCUMENT window), HIDE, MOVE,
+  NEW.WINDOW, ON.WINDOW, SAVE.WORKSPACE, SHOW.INFO (the Info window is a
+  second document window), SIZE, SPLIT, UNHIDE, WINDOWS - and the three LINK
+  functions, which exist to reach ANOTHER open document through external
+  references: CHANGE.LINK, LINKS, OPEN.LINKS.
+- **Another program (9).** There is no DDE, no DLL and no callable code
+  outside a package: CALL, EXEC, EXECUTE, INITIATE, ON.DATA, POKE, REGISTER,
+  REQUEST, TERMINATE.
+- **Keystrokes (1): SEND.KEYS.** Excel's sends keys to the active
+  application. Here that would be SHEET itself, whose run gate eats every
+  key while a macro runs (§81.86.4), and the kernel has no slot that posts a
+  keystroke to anything: `OSAPI_KEY_DOWN` only asks whether a key is held.
+  A kernel primitive for one package is not a trade to make for it.
+- **Dropped by the owner (1): SHORT.MENUS**, with `Options ▸ Short Menus`
+  (2026-09-22). Edit ▸ Repeat went the same day and has no macro function to
+  decline: the book says so ("There is no command-equivalent macro function
+  for the Edit Repeat command").
+- **A chart document (25).** SHEET's chart is a rendering of a range (§82),
+  not a document with arrows, overlays and a plot area to select: ADD.ARROW,
+  ADD.OVERLAY, ATTACH.TEXT, AXES, COMBINATION, COPY.CHART, DELETE.ARROW,
+  DELETE.OVERLAY, FORMAT.LEGEND, FORMAT.MOVE, FORMAT.SIZE, FORMAT.TEXT,
+  GET.CHART.ITEM, GRIDLINES, LEGEND, MAIN.CHART, MAIN.CHART.TYPE, OVERLAY,
+  OVERLAY.CHART.TYPE, PATTERNS, PREFERRED, SCALE, SELECT.CHART,
+  SELECT.PLOT.AREA, SET.PREFERRED.
+
+**Blocked on a SHEET feature (11).** Each drives a command SHEET does not
+have, and the function comes cheaply with the command:
+
+- APPLY.NAMES, CREATE.NAMES, DELETE.FORMAT, FORMULA.REPLACE, HELP,
+  SELECT.SPECIAL, SHOW.CLIPBOARD and STYLE,
+  from the plan - SHOW.CLIPBOARD stays here rather than under MDI: the
+  Reference Guide has it run Windows' separate Clipboard UTILITY, not open a
+  document window;
+- FORMULA.ARRAY, FILL.LEFT and FILL.UP, from wave 3 (§81.90.1).
+
+**This list was 13 and the count was stale twice over**, which is what a
+list of "blocked on something that does not exist yet" does when the thing
+arrives and nobody re-reads it:
+
+- **TABLE is built** (§81.114.11). It was the only one of the thirteen that
+  `Data ▸ Table` unblocks - the plan's "it also unblocks 13 declined macro
+  names" counted the whole list rather than the one entry, and that sentence
+  has been corrected where it stands.
+- **WORKSPACE's blocker went in §81.106**, which gave `Options ▸
+  Workspace...` its check-box dialog. It had been sitting here as blocked on
+  a command that already existed. It is **not yet decided** below now rather
+  than silently built: the function reads and writes settings whose dialog
+  exists, but nobody has taken that decision.
+
+**Not yet decided (6):** A1.R1C1 (Options ▸ Workspace's reference style -
+§81.39.2's Preferences question), COPY.PICTURE, FILES, GET.BAR,
+REPLACE.FONT and WORKSPACE (above). None is MDI; each is a small build or a
+decline nobody has taken yet.
+
+#### 81.93.1 The 64 KB wall - resolved by §81.94
+
+CHART.OVL is one segment, and its claim is `CH_OVKB` KB. **63 is the
+ceiling**, the most that `mov cx, CH_OVKB * 1024` can express. The module
+image is **58,793 bytes**, so **5,719 bytes are left**. Every one of them is
+also text-file buffer (§81.91.1): what the module grows by, a macro's files
+lose.
+
+**Not built, because they do not fit:**
+
+- **the custom menus:** ADD.BAR, ADD.COMMAND, ADD.MENU, CHECK.COMMAND,
+  DELETE.BAR, DELETE.COMMAND, DELETE.MENU, ENABLE.COMMAND, RENAME.COMMAND,
+  SHOW.BAR;
+- **DIALOG.BOX;**
+- **the reader half:** ptg `0x58`, and the macro-sheet kind;
+- **SEND.KEYS.**
+
+Together they are estimated at 5–6.5 KB. Getting there takes one of these,
+which is the owner's call, not this section's:
+
+- **a second overlay module,** which first needs a claim slot, since SHEET
+  holds `MEM_OWNER_MAX`'s eight. Carving the border and note tables (4 KB
+  and 5 KB) from one claim frees one;
+- **or dropping something from CHART.OVL.** Measured candidates: dBASE III
+  read/write 1,588 bytes, Data ▸ Form 1,851, the regression family
+  (LINEST/LOGEST/TREND/GROWTH) about 1,500, DIF about 930, CSV/TXT 755.
+
+### 81.92 ON.KEY and ON.TIME
+
+Each starts a run the way Macro ▸ Run does: it sets `sh_macro_col/row`,
+then `SH_MW_START` goes through `sh_macro_onalert`.
+
+- **ON.KEY(key_text[, macro_text])**:
+  - **Keys:** a character (`"x"`), Ctrl plus one (`"^q"`), or `"{F1}"` to
+    `"{F12}"`. Shift and Alt combinations and the named keys are refused
+    rather than guessed.
+  - **Macro:** a reference as text, or a defined name. `""` makes the key do
+    nothing, and omitting it puts the key back.
+  - **Where the bindings live:** the four live in a **resident** table
+    (`sh_macro_keys`), because the key arrives at `sh_onkey`.
+    `sh_macro_keyck` looks there after the run gate, so a binding is heard
+    only while no run is going, which is when a key can reach the sheet at
+    all.
+- **ON.TIME(time, macro_text[, tolerance[, insert]])**:
+  - **The schedule:** it keeps **one** request; a second replaces the
+    first. `insert` FALSE cancels it.
+  - **Refused:** a time alone (under 1, Excel's "every day at"), and a
+    machine with no timer. Tolerance is read and not used.
+  - **The timer:** it is the window's one timer, shared with WAIT
+    (§81.86.3). `sh_macro_ontimer` resumes WAIT when WAIT is waiting.
+    Otherwise it lets the module look at the clock (`SH_MW_ONTIME`), and
+    waits its turn while a run is paused on a dialog. When a run ends with
+    a request pending, the run's end re-arms the timer, since WAIT may have
+    taken it.
+  - **Unverified:** like WAIT's pause, ON.TIME cannot be reached by the
+    gate. The 5150 has no BIOS clock, so `NOW()` is `#N/A` there.
+
+**Resident +110 bytes** (the key check, the timer's second duty and the
+resume case), **bss +25** (the key table and ON.TIME's flag), **`CHART.OVL`
++580** (58,793 of 64,512). Each text-file channel (§81.91.1) is now **2,848
+bytes**.
+
+#### 81.92.1 `sh_skipargs` writes AL, and AL was the key
+
+The first build stored every binding's character after `sh_skipargs` had
+overwritten it. F7 still worked, because a function key is matched on AH.
+So "does F7 work" would have passed on a build where no character binding
+could ever fire. The gate binds a character, Ctrl plus a character, and a
+function key, for that reason. It is the third time in this series that
+`sh_skipargs`'s AL has cost a build (§81.89.2).
+
+`tests/sheetmevt.py` has 4 checks. Every key is really pressed, with no run
+going. The swallowed `x` is checked the way a failure would show: typed
+over a cell and Entered, it would be the cell's text.
+
+### 81.91 Macro text files: FOPEN, FCLOSE, FREAD, FREADLN, FWRITE, FWRITELN, FPOS, FSIZE
+
+The first part of wave 4 of `docs/plans/SHEET-MACRO-PLAN.md`.
+
+- **FOPEN(file_text[, access])** answers a channel number. Access 1 is read
+  and write, 2 read only, 3 a new file (an existing one is emptied). A file
+  that is missing, or too big (§81.91.1), answers `#N/A`.
+- **FREADLN** reads to the end of the line and does not answer its CR LF (or
+  LF). **FREAD(ch, n)** reads exactly n characters. Past the end, both answer
+  `#N/A`. A text value holds `SH_STR_MAX`.
+- **FWRITE / FWRITELN** write at the position, over what is there and on
+  past the end, and answer the number of characters written; FWRITELN
+  counts its CR LF. A read-only channel refuses them.
+- **FPOS** is 1-based, as Excel's is, and can set the position anywhere up
+  to the end. **FSIZE** answers the file's bytes.
+- **All eight are commands, not values.** A repaint that re-evaluated FWRITE
+  would write again, and FREAD moves the position. So they act only when the
+  step engine runs them.
+
+#### 81.91.1 A channel is the whole file, in the tail of the module's claim
+
+**The file API is cluster-grained.** `OSAPI_FILE_READ_AT`'s offset and
+`OSAPI_FILE_APPEND`'s file size must each be a cluster multiple, so "line
+3" and "one byte" cannot go to the disk as they are asked for. Instead:
+
+1. FOPEN reads the whole file with `OSAPI_FILE_READ`, which also expands a
+   compressed one — into a buffer that starts on a PARAGRAPH, since the
+   kernel expands in place only there (§20.14.2): `SHM_FTAIL`, the tail's
+   start, is the image's end rounded up to 16, and every channel's share is
+   a multiple of 16 after it. The channel's size is the byte count the read
+   delivered, not the directory's, which under-reports a packed file whose
+   hint a foreign OS dropped (§20.14.6.3).
+2. Every read and write works on those bytes in memory.
+3. FCLOSE writes the file back whole with `OSAPI_FILE_WRITE`, if it
+   changed. A new file is always written, empty or not. A write the disk
+   refuses — write-protected, full, a refused name — answers `#N/A` and
+   leaves the channel **open and changed**, because the tail is the only copy
+   of what the macro wrote; answering TRUE and freeing it lost that text.
+
+**The memory is the tail of the macro module's own claim** - CHART.OVL's
+when this was built, **MACRO.OVL's since §81.94** - the bytes between the
+module image's end (`shm_m2end`) and `SH_M2KB` KB. It is not a claim of its own, and the gate found why
+twice:
+
+- **`MEM_OWNER_MAX` is 8 claims an owner, and SHEET already holds 8**
+  (cells, text, staging, border, note, chart, undo, CHART.OVL). The first
+  build's FOPEN claimed memory and was refused every time.
+- **§50.3 takes a package's claims in its entry proc and nowhere else.** A
+  claim at FOPEN broke that rule even when it succeeded.
+
+`CH_OVKB` is **63**, the most that `mov cx, CH_OVKB * 1024` can express.
+The tail was 6,299 bytes when this was built, two channels of 3,136
+bytes each; §81.92 took it to 2,848. **That is the size limit on a file a macro can open, and it
+shrinks by every byte the module grows**, so it is measured here and must
+be re-measured, never quoted. A channel left open when SHEET closes is not
+written. That is Excel's behaviour with an unsaved file too.
+
+**Resident +0, bss +0, `CHART.OVL` +950** (58,213 of 64,512).
+`tests/sheetmfile.py` has 16 checks. OUT.TXT's bytes are read off the
+volume, so what was written is checked, not what the macro was told. The
+limit is checked with a 5,000-byte file.
+
+### 81.90 Command equivalents, slice 3c: File, FORMULA.FILL, DATA.SERIES; wave 3 closed
+
+Six more commands, which close wave 3: 65 of the plan's 68 are built.
+
+- **FILE.DELETE(file_text)** deletes the file in this instance's current
+  folder (DIRECTORY's, §81.87.4). A file that is not there is an error. The
+  name goes through `sh_delname`, File ▸ Delete's own buffer, so a bad name
+  cannot rename the open document.
+- **SAVE.AS(file_text[, type_num])** takes Excel's type numbers: 1 Normal
+  (BIFF), 2 SYLK, 3 Text, 6 CSV, 8 dBASE III, 9 DIF. WKS, WK1 and dBASE II
+  are refused, because SHEET does not write them. It renames the document,
+  fixes the extension (`sh_setext`) and fires File ▸ Save.
+- **NEW([type_num]) and OPEN(file_text)** put another document **in this
+  window**. SHEET has one document per instance, and a macro lives in the
+  document it runs in (§81.88.2). So **the run ends there**: the cells it
+  was running are gone. That is what Excel does when a macro closes its own
+  macro sheet. OPEN calls the reader's module body (`shm_doread`) directly.
+  Both are refused while the document is modified (§81.118).
+- **FORMULA.FILL(formula_text, ref)** puts the formula into ref's top-left
+  cell, as FORMULA does, then runs Fill Down and then Fill Right over ref.
+  Those two already adjust relative references, and in that order they
+  reach every cell.
+- **DATA.SERIES** works on the selection. Rows or columns follow its shape
+  (§81.72). Type 1 is linear, 2 growth, 3 a date by unit, and the step
+  defaults to 1. A **stop** value is §81.72's documented shortfall and is
+  refused.
+
+**Resident +0. `CHART.OVL` +624** (57,263); **8,273 bytes remain to the 64
+KB wall**, which is what wave 4 has.
+
+#### 81.90.1 The three not built
+
+- **FORMULA.ARRAY:** SHEET has no multi-cell array formulas (§81.67).
+- **FILL.LEFT and FILL.UP:** SHEET's Edit menu has Fill Right and Fill Down
+  only. These are missing features, not command equivalents to write, and a
+  macro naming them evaluates `#NAME?`.
+
+#### 81.90.2 What the gates call without checking the effect
+
+A command can be called in a gate without the gate checking what it did.
+These have not been verified by any gate, and are stated rather than
+counted:
+
+- **menu-fired, with effects unchecked:** UNDO, PASTE.LINK, FILL.RIGHT,
+  JUSTIFY, SAVE, SET.CRITERIA, DATA.FORM, FREEZE.PANES;
+- **not called at all:** DATA.FIND, DATA.FIND.NEXT, DATA.DELETE, EXTRACT,
+  PARSE, HLINE, HPAGE, VPAGE, NEW, and five of the six GALLERY.* commands.
+
+Each one fires the same code as its menu item or its dialog's OK, so each
+is only as unverified as the plumbing to it.
+
+`tests/sheetmcmd3.py` has 10 checks. It reads its answers from the file
+that SAVE.AS wrote, reads FILE.DELETE's effect off the volume itself, and
+checks that OPEN's replacement document carries the other file's marker.
+
+### 81.89 Command equivalents, slice 3b: Formula, Data, RUN, movement, the gallery
+
+33 more commands, built as in §81.88. The **one-line dialog** gets the same
+treatment as the others: `shm_idk` writes the text argument into
+`sh_idlg_buf` and calls `sh_idlg_apply`, just as typing it and pressing OK
+would. FORMULA.FIND and PARSE go that way.
+
+| group | commands | here |
+|---|---|---|
+| Formula | FORMULA.GOTO, FORMULA.FIND, FORMULA.FIND.NEXT | Goto is SELECT's own handler; Find is the dialog's: displayed text, part of it, any case, forwards from the cell after the active one |
+| names | DEFINE.NAME, SET.NAME, DELETE.NAME | a name is a place (§81.84.3), so refers_to and value must be references; DELETE.NAME slides the table down |
+| | NOTE | the whole note; empty or omitted removes it |
+| Data | DATA.FIND, DATA.FIND.NEXT, DATA.DELETE, EXTRACT, PARSE, SORT | DATA.DELETE does not ask: a macro that says so has answered the question. SORT is by rows, one key, which must lie inside the selection (§81.80) |
+| Macro | RUN | a **subroutine** call to its reference: §81.84's mechanism with no arguments, and RETURN's value is RUN's answer |
+| movement | VLINE, HLINE, VPAGE, HPAGE, VSCROLL, HSCROLL | the window, not the selection |
+| | SHOW.ACTIVE.CELL, SELECT.LAST.CELL, SELECT.END | SELECT.LAST.CELL uses GET.DOCUMENT's own extents; SELECT.END is Ctrl+arrow |
+| | UNLOCKED.NEXT, UNLOCKED.PREV | walk the border table, which is sorted in reading order, so walking it *is* reading order |
+| gallery | GALLERY.AREA … GALLERY.SCATTER | Chart Gallery's choice; SHEET has one format per type |
+
+**Refused:** FORMULA.FIND.PREV, DATA.FIND.PREV, and FORMULA.FIND with dir 2
+(backwards), because SHEET's searches go one way; SORT with a second key or
+by columns; SET.NAME with a value that is not a reference.
+
+**Resident +0 code; bss +8** (the NOTE vector, and `SH_IDENT_MAX` 16 → 20).
+**`CHART.OVL` +2,098** (56,639). **8,897 bytes remain to the 64 KB wall.**
+
+#### 81.89.1 Names longer than the lexer
+
+FORMULA.FIND.NEXT and FORMULA.FIND.PREV are 17 characters, and
+CALCULATE.DOCUMENT is 18. `SH_IDENT_MAX` was 16, so each one collected cut
+short and evaluated to `#NAME?`. That is §81.83.3.1's failure again, one
+size up.
+
+The gate caught it only because FIND.NEXT's answer was checked. FIND.PREV's
+refusal was the second sign: it "ran", and the run carried on. The cap is now
+20, above the longest name in the plan.
+
+#### 81.89.2 Three register defects, each found by a check
+
+- **SELECT.END read its direction after `sh_skipargs`,** which writes AL.
+  Every direction became "up", and from row 1 that is nowhere.
+- **UNLOCKED.NEXT kept the comparison's flags with `lahf`,** which writes
+  AH, and AH was half of the packed row being compared. The answer was
+  P1545. It uses `pushf`/`popf` now.
+- **HSCROLL/VSCROLL banked the position in `sh_acc`,** which the second
+  argument's evaluation then overwrote. `VSCROLL(1,TRUE)` passed by the
+  accident that TRUE is 1. Both readings of the position are now taken
+  before the second argument is read.
+
+`tests/sheetmcmd2.py` has 24 checks, including FIND.PREV's refusal
+arriving at ERROR's handler, and the handler's next row never being
+reached.
+
+### 81.88 Command equivalents, slice 3a: Format, Edit and Options
+
+The first slice of wave 3 of `docs/plans/SHEET-MACRO-PLAN.md`, 26
+commands. **Every one is SHEET's own command, reached by the code a click
+reaches.**
+
+- **A command that acts at once** fires its own menu item through
+  `sh_mfire`, SHEET's single menu dispatcher, so it cannot drift from the
+  menu. Each costs a five-byte stub: FILL.RIGHT, FILL.DOWN, PASTE.LINK,
+  UNDO, JUSTIFY, SAVE, SET.DATABASE, SET.CRITERIA, CALCULATE.DOCUMENT and
+  DATA.FORM. DATA.FORM opens the Form dialog and the run carries on, which
+  is Excel's `?` form rather than its argument form.
+- **A command that takes arguments** sets the state its dialog would have
+  set, then calls the dialog's own apply (`sh_fdlg_apply`, `sh_bdlg_apply`,
+  `sh_nf_apply`, `sh_colw_set`, `sh_rowh_set`). The arguments therefore reach
+  the same code that OK does: ALIGNMENT, FORMAT.FONT, FORMAT.NUMBER, BORDER,
+  CELL.PROTECTION, COLUMN.WIDTH, ROW.HEIGHT, INSERT, EDIT.DELETE,
+  PASTE.SPECIAL and CALCULATION.
+- **The Options toggles** fire their menu item only when the flag differs, so
+  the menu's own labels follow: DISPLAY, FREEZE.PANES and PROTECT.DOCUMENT.
+- CANCEL.COPY forgets the copy. PRECISION(TRUE) is the only precision SHEET
+  has.
+
+**Resident +15 bytes** (the door and its vector), **bss +4, `CHART.OVL`
++1,325** (54,541). `CH_OVKB` 54 → **58**.
+
+#### 81.88.1 What is refused rather than pretended
+
+Each of these is a macro error, which ERROR() can turn off:
+
+- ALIGNMENT(5), Fill, which has no bit in the format byte;
+- FORMAT.NUMBER with a format that is not one of the 21 built-in ones;
+- PASTE.SPECIAL with an operation, skip-blanks or transpose, none of which
+  SHEET's Paste Special does;
+- INSERT and EDIT.DELETE with shift_num 1 or 2 (shift cells), because SHEET
+  inserts and deletes whole rows and columns only;
+- PRECISION(FALSE).
+
+These arguments are read and not used, because SHEET has one of them only:
+
+- FORMAT.FONT's face and size;
+- DISPLAY's headings, zeros and colour;
+- PROTECT.DOCUMENT's windows and password.
+
+BORDER and CELL.PROTECTION act on the active cell, as their dialogs do.
+
+#### 81.88.2 A macro lives in the document it edits
+
+Excel keeps a macro on its own macro sheet. SHEET keeps it on the sheet it
+works on, and two things follow from that. The gate found both.
+
+- **A row inserted through the macro's own rows moves the macro.** The
+  engine then runs the moved INSERT again, which loops until the step
+  limit.
+- **Insert and Delete rewrite every formula's references (81.3.1), and the
+  macro's formulas are formulas.** A `SET.VALUE(H16,K81)` that runs after a
+  row is inserted above row 81 reads K82, where the value went. That is
+  correct, and it is why the gate expects it.
+
+#### 81.88.3 A ghost, found by the first macro to format without a dialog
+
+`sh_fdlg_apply`'s format path repainted with SI still holding its loop's
+last column. `sh_repaint` takes the window in SI, so it drew a ghost of the
+sheet at a garbage origin. The dialog's own close repaint had always
+covered it. FORMAT.* from a macro showed it, and it is fixed by loading the
+window first. Screenshots taken before and after the fix are the evidence:
+the gate reads cells, not glass.
+
+`tests/sheetmcmd.py` has 20 checks. Each reads a command's effect back
+through the GET.* functions that §81.87 verified, so a command that did
+nothing reads the default rather than passing.
+
+### 81.87 Macro information: GET.CELL, GET.FORMULA, GET.NAME, GET.DEF, GET.NOTE, NAMES, GET.DOCUMENT, GET.WINDOW, GET.WORKSPACE, DIRECTORY
+
+The information half of wave 2 of `docs/plans/SHEET-MACRO-PLAN.md`. All ten
+are **value** functions, so each one answers wherever it is evaluated,
+including in a worksheet cell. Their numbered tables are the ones in
+*Functions and Macros*: 23 rows for GET.CELL, 26 for GET.DOCUMENT, 16 for
+GET.WINDOW and 19 for GET.WORKSPACE. A number past the end of a table
+answers `#VALUE!`.
+
+#### 81.87.1 The tables are data
+
+Most rows are constant for SHEET: a document is always a worksheet, it has
+one window and no password, and scroll bars are always shown. So each table
+is data, three bytes per row: a kind and a word. One interpreter,
+`shm_ginfo`, reads them. The kinds are:
+
+- `GI_NUM`: a number;
+- `GI_BOOL`: a logical;
+- `GI_BVAR`: a byte of SHEET's own state, such as gridlines or protection;
+- `GI_NA`: `#N/A`, for something SHEET does not keep;
+- `GI_STR`: a string constant;
+- `GI_FN`: a routine that looks the answer up.
+
+Only the rows that look something up are code.
+
+#### 81.87.2 What each row answers, where it is not Excel's
+
+- **GET.CELL 18 and 19**: `"Helv"` and 10, the font SHEET's BIFF writer
+  records. **21 and 23** (italic, strikeout) are FALSE because SHEET has
+  neither. **17** is the row height in points: twips / 20, with the standard
+  row being 255 twips.
+- **GET.FORMULA** gives R1C1 references, as Excel does (`=R[-2]C[-2]*2`).
+  It uses the same converter the SYLK writer uses. **GET.CELL 6** gives the
+  formula as the formula bar shows it.
+- **GET.NAME / GET.DEF**: a name in SHEET is always a place, so a definition
+  is always `=R1C1` or `=R1C1:R2C2`. GET.DEF answers the first name, in the
+  order the names were defined, whose rectangle matches.
+- **NAMES** and GET.DOCUMENT **21–26** are arrays in Excel. SHEET has no
+  array values, so they answer the first element, which is also what Excel
+  shows in a single cell (§81.67's rule).
+- **GET.NOTE** is cut to `SH_STR_MAX` (64) characters, because that is what a
+  text value holds; a note holds `SH_NOTEMAX`.
+- **GET.DOCUMENT 2** (the directory, as a path) and **4** (changed since the
+  last save) answer `#N/A`. The file system names a folder by cluster, not
+  by path, and SHEET keeps no changed-since-save flag.
+- GET.DOCUMENT **15–17** report iteration as off, with the Iteration
+  dialog's defaults of 100 and 0.001, because SHEET has no iteration.
+- **GET.WINDOW 3–6** are in **pixels**; the screen has no points.
+  **13–16** describe the first pane.
+- **GET.WORKSPACE 1** is `"OS/8088"`. **2** is `"2.1"`, the Excel that SHEET
+  is modelled on, which is what a macro that tests the version means to
+  test. **13–14** are the usable desktop (`OSAPI_VIDEO`), **16** is the free
+  KB (`OSAPI_MEM_AVAIL`), **17** is `#N/A` (the OS has no such sum), and
+  **18** is the 8087 that os88fp actually uses.
+
+#### 81.87.3 SI is the parse pointer, and the first build pointed it at its answer
+
+The string-answer helpers used to take their string in SI. Every caller
+pointed SI at the answer and jumped to the helper, so when the function
+returned, **the evaluator resumed parsing inside the answer**.
+
+For `"General"` this passed by luck, because a letter ends an expression.
+For GET.CELL(6) of a formula cell it did not: `=C3*2` was read as the
+comparison operator, and the answer came back as the logical FALSE. The gate
+found it as `TYPE(GET.CELL(6,E5)) = 4`. DIRECTORY's success path failed the
+same way, as `#VALUE!`.
+
+The helpers now take the string in **BX**. Each table interpreter call keeps
+SI across the table walk.
+
+#### 81.87.4 DIRECTORY keeps its own path text
+
+`DIRECTORY(path)` walks the path one folder at a time with
+`OSAPI_FILE_FIND` (type `OSAPI_FT_DIR`) and `OSAPI_FILE_GOTO_QM`, so the
+instance moves as Excel's current directory does. A walk that fails puts the
+instance back where it started.
+
+The OS does not know a folder's path, only its cluster, so the text is
+SHEET's own. `DIRECTORY()` answers the path the last walk arrived at, but
+only while the instance still stands in that folder; a file dialog may have
+moved it. Otherwise it answers `"B:\"` at a drive's root, and `#N/A`
+anywhere else. `..` is not walked, because a folder does not know its
+parent here either.
+
+`tests/sheetminfo.py` has 31 checks, one per table row it reads. Each row
+says which row it is, because an off-by-one reads a neighbour that is also a
+plausible answer. The walk is checked into a folder, refused on a missing
+one (the instance must not move), and walked back to the root.
+**Resident +6 bytes and bss +4** (the GET.NOTE vector) and **`CHART.OVL` +2,535** (53,216 of 55,296).
+
+### 81.86 Macro control: ECHO, ERROR, RESTART, STEP, CANCEL.KEY, DISABLE.INPUT, WAIT, and ALERT's type 1
+
+The control half of wave 2. Every setting made here lasts only as long as
+the run that made it: `shm_mresume` clears all of them when a run starts.
+That is Excel's rule for ECHO and CANCEL.KEY, and it is the only safe rule
+for the others.
+
+| function | here |
+|---|---|
+| `ECHO(FALSE)` | no repaint after a step that changed something; the end of the run always paints, and pauses still paint |
+| `ERROR(FALSE)` | a macro error is ignored and the run goes on |
+| `ERROR(TRUE, ref)` | the run goes on **from ref**; see §81.86.2 |
+| `RESTART([n])` | forgets the return addresses above level n, so the next RETURN past them ends the run |
+| `STEP()` | the Single Step dialog, *Step / Halt / Continue*, comes up before each cell |
+| `CANCEL.KEY` | FALSE or omitted: Esc cannot interrupt. TRUE: Esc raises the Single Step dialog, as Excel's does, or goes to ref |
+| `DISABLE.INPUT` | accepted; already true of every run (§81.86.4) |
+| `WAIT(serial)` | pauses on a timer until that time (§81.86.3) |
+| `ALERT(msg, 1)` | OK and Cancel, answering TRUE or FALSE |
+
+**Resident +193 bytes, bss +11, `CHART.OVL` +1,040.** `CH_OVKB` 50 → **54**, ahead of the information half.
+
+#### 81.86.1 Esc is read from the keyboard, not from the event queue
+
+A run is **one callback**, so no key event reaches SHEET until the run
+pauses. The engine therefore reads the key's state directly
+(`OSAPI_KEY_DOWN`) at the top of every step. It acts on the **press edge**,
+not the level, because a held key would otherwise re-trigger on every step
+after Continue.
+
+During a WAIT, the run has returned to the kernel. The keystroke then
+arrives as an event, and `sh_macro_gatek` turns it into `sh_macro_esc`.
+
+#### 81.86.2 ERROR(TRUE, ref) is a GOTO, not a call
+
+The manual says macro_ref is run "whenever an error is encountered". Here
+that is a jump. A subroutine call would return to the failing cell and fail
+again. The step limit still ends a handler that fails forever.
+
+RESTART forgets only the addresses. The dropped frames' argument slots and
+bindings stay committed until the run ends, because the running cell may
+still read its arguments.
+
+#### 81.86.3 WAIT is a pause, because a callback cannot sleep
+
+A callback holds the gfx lock, and with it the whole desktop, so WAIT cannot
+simply sleep. It is a pause instead:
+
+1. The engine returns.
+2. A half-second `OSAPI_WM_TIMER` brings the run back to the same cell, which
+   looks at the clock again.
+
+The target time is banked on the first evaluation, because `WAIT(NOW()+x)`
+evaluated a second time would move its own target. A look at the clock does
+not count as a step.
+
+**The timer must be armed from resident code** (`sh_macro_arm`).
+`OSAPI_WM_ONTIMER` takes a near proc *in the caller's segment*. Called from
+CHART.OVL, it named the module's segment, the timer fired into the module at
+a package offset, and the first build's WAIT never came back.
+
+On `kern_small` there is no timer, so WAIT does not wait.
+
+**The timer path has not been run by the gate.** `tests/sheetmctl.py` runs
+on an IBM 5150. Its BIOS has no clock service, so `NOW()` is `#N/A` there
+(§81.42), and WAIT of an error is a macro error. The gate records whether
+there is a clock and skips WAIT when there is none. It prints that the path
+was not exercised, rather than passing a WAIT that never paused.
+
+#### 81.86.4 A run's dialogs are modal to the sheet, one click late
+
+The gate test found that a click on the sheet while ALERT waited **buried the
+alert**. The run was then waiting on a dialog nobody could see. A key or
+click on the sheet during a pause now brings the run's dialog (the alert or
+INPUT's) back to the front, and the sheet ignores it (`sh_macro_gate`).
+
+**The fix works one click late, and that is not by choice.** A click on a
+background window only raises it: the kernel calls no `W_ONCLICK` for it
+(`ui.inc`'s content path). So the first click raises the sheet over the
+dialog, and the second click, now on the front window, is the one the gate
+sees. The run can always be finished, which it could not be before. A
+one-click fix would need a raise notification that the kernel does not have.
+
+With every pause modal, **DISABLE.INPUT has nothing left to disable**. While
+the engine steps, no event can arrive; while it pauses, its dialog is modal
+and WAIT swallows everything but Esc. Its reason in Excel, DDE, does not
+exist here, so it answers TRUE and does nothing.
+
+#### 81.86.5 The alert's two new sets
+
+`os88ui.inc` gained `OS88UI_ASTEP` (Step / Halt / Continue) and
+`OS88UI_AOKCAN` (OK / Cancel), behind `%ifdef OS88UI_AEXTRA`, so no other
+package pays for them.
+
+ALERT's type 1 answers the same way INPUT does (§81.63): the cell is
+evaluated again and answers the button. So what the formula does before
+the ALERT happens twice.
+
+A **dismissed** Step dialog (Esc, or the close box) means Step, not Halt.
+The Esc that raised the dialog can arrive at it as a key and dismiss it,
+and "keep stepping" is the answer that cannot lose anything.
+
+`tests/sheetmctl.py` covers each row of the table except two:
+
+- **ECHO**, which changes only how often the screen is painted, and this
+  harness has no counter for that;
+- **WAIT's pause**, for the clock reason in §81.86.3.
+
+### 81.85 The reference family: OFFSET, ABSREF, RELREF, REFTEXT, TEXTREF, DEREF, SELECTION, CALLER
+
+The second half of wave 1 of `docs/plans/SHEET-MACRO-PLAN.md`. These are the
+functions that let a macro compute a place instead of naming one. The
+definitions come from *Functions and Macros*, and each one is checked against
+the manual's own example:
+
+| function | answers | the manual's example, and SHEET's answer |
+|---|---|---|
+| `OFFSET(ref,rows,cols[,h[,w]])` | a reference | `OFFSET(C3,2,3,1,1)` = F5; `OFFSET(C3:E5,-1,0,3,3)` = C2:E4; over the edge = `#REF!` |
+| `ABSREF(ref_text,ref)` | a reference | `ABSREF("R[-2]C[-2]",C3)` = A1. The text is relative to ref's top-left |
+| `RELREF(ref,rel_to_ref)` | text | `RELREF(A1,C3)` = `"R[-2]C[-2]"`. A zero part is written bare, as in `"RC[1]"` |
+| `REFTEXT(ref[,a1])` | text | absolute: `"$C$3"` when a1 is TRUE, `"R3C3"` when it is FALSE or omitted |
+| `TEXTREF(text[,a1])` | a reference | `TEXTREF("R5C5",FALSE)` = E5; `TEXTREF("B7",FALSE)` = `#REF!` |
+| `DEREF(ref)` | a value | ref's top-left value, and never a reference |
+| `SELECTION()` | a reference | the whole selection |
+| `CALLER()` | a reference | the cell whose formula called the running subroutine (§81.84); `#REF!` in a macro the user started |
+
+**`ACTIVE.CELL()` is a reference now as well** (it is one in Excel), so
+`SET.VALUE(OFFSET(ACTIVE.CELL(),1,0),x)` writes below the active cell.
+**Resident +0 bytes. `CHART.OVL` +1,055 bytes** (48,586 → 49,641 of
+`CH_OVKB`'s 51,200). All eight functions are extension functions (§81.83),
+with Ftab indices from MS-XLS 2.5.198.17. The selfcheck holds them to that
+document and was mutated on an index and on an arity.
+
+#### 81.85.1 A reference is two answers, and the argument decides which one it reads
+
+SHEET's evaluator has **no reference value**. An expression answers a
+number, text, a logical or an error. A reference exists only as formula
+TEXT, which an argument parser recognises (`sh_pargref`). Adding a fifth
+value type would change every function in the evaluator. Instead, a
+reference function gives two answers:
+
+- **its value**, which is the top-left cell's value. Excel converts a
+  reference to a value like this wherever a value is wanted, and in SHEET
+  that is everywhere except one place;
+- **its reference**, which goes into a record in module state
+  (`shm_rrok`…`shm_rrr2`). The one place is a macro function's reference
+  argument (`shm_mref`, `shm_mrangeref`), and it reads the record back only
+  when **the whole argument is exactly one call to the function that wrote
+  it**.
+
+"Whole" is decided by **position, not by name**. `shm_pmacro` records where
+the answering call's arguments begin and end. `shm_refarg` accepts the
+argument only if both of these hold:
+
+- the argument ends where the call ends;
+- everything before the call's `(` is a single identifier.
+
+`SET.VALUE(OFFSET(C3,0,5)+0,77)` is therefore refused, because the argument
+is an expression. Its value names no cell, even though OFFSET set the
+record. Nesting needs no extra machinery. `OFFSET(OFFSET(A1,1,1),12,6)`
+records the inner call and then the outer one over it, and the outer one is
+the argument. The gate breaks both rules:
+
+- a `shm_refarg` that accepts any argument fails the refusal row;
+- a record that keeps its first stamp fails the nested row.
+
+#### 81.85.2 Two passes over a text argument
+
+`ABSREF` and `TEXTREF` take text followed by a second argument, and the
+second argument's evaluation can reuse `sh_sacc`. They do not copy the text
+into a buffer, which a nested call would overwrite. Instead they evaluate it
+**twice**: once to get past it, and again after the second argument is
+known, parsing it straight away. This is INPUT's approach again, and the text
+is almost always a literal.
+
+`ABSREF` parses with the ordinary R1C1 reader, swapping `ref`'s top-left in
+for the active cell during the parse, so a relative part means what it means
+everywhere else in SHEET. `TEXTREF` reads **only** the style its `a1`
+argument names. That is what makes the manual's `TEXTREF("B7",FALSE)` a
+`#REF!`, and `shm_rangetext`'s two halves are called on their own for it.
+
+#### 81.85.3 What this does NOT do
+
+- **A worksheet function cannot be given a range.** `SUM(OFFSET(A1,0,0,3,1))`
+  sums A1 alone, where Excel sums A1:A3. SUM's arguments are read from
+  formula text by `sh_pargref`, and a reference value does not exist
+  (§81.85.1). A function that answers a reference is exact **as a macro
+  function's argument**, which is what the macro language needs.
+- **No sheet qualification.** Excel's `REFTEXT` and `SELECTION` name the
+  document. SHEET's text is the bare reference, because a formula can see
+  only its own sheet.
+- **CALLER is not an array formula's range.** SHEET has no multi-cell
+  array formulas (§81.67). A subroutine's caller is one cell.
+
+`tests/sheetmref.py` has 15 checks, one per row of the table above plus both
+halves of §81.85.1.
+
+### 81.84 Subroutines, ARGUMENT and RETURN(value)
+
+The first wave of `docs/plans/SHEET-MACRO-PLAN.md` that adds functions, and
+the one the gap plan called "the one that makes the rest worth having".
+Excel's form, from *Functions and Macros* ("Subroutines:"): **`ref(arg1, …)`**
+— a reference or a defined name followed by parentheses, inside a running
+macro, branches to that cell; **`ARGUMENT`** names the passed values in the
+order it executes; **`RETURN(value)`** comes back with the call's answer.
+
+**Resident +165 bytes** (four messages and the call path); **`CHART.OVL`
++2,443**, about 1 KB of it the frame state below; `CH_OVKB` 46 → **50**, two
+ahead of need on purpose — the plan has ~8 KB still to come and the module is
+one segment, so 64 KB is a wall rather than a setting.
+
+#### 81.84.1 The answer comes back by evaluating the caller again
+
+This is **INPUT's mechanism** (§81.63) and it is here for INPUT's reason. The
+engine runs a step, returns to the kernel and resumes; a subroutine that asks
+the user something pauses *in the middle of the calling formula*, and there
+is no way to suspend an 8086 call stack halfway through an evaluation.
+
+So the call site answers `FALSE` on the first pass and asks for a frame; the
+engine pushes one and runs the subroutine as ordinary steps — loops, `ALERT`
+and `INPUT` included; `RETURN` pops it and sends the engine back to the
+**calling cell**, whose call site now answers `RETURN`'s value. The cost is
+INPUT's too, and stated rather than hidden: **whatever the calling formula
+does before the call happens twice, and so there is ONE call to a cell.**
+`=IF(c, A(), B())` is one call — IF parses the branch it does not take
+without running anything in it.
+
+`HALT` ends the run whatever the depth; `RETURN` with no frame ends it as it
+always did. `RETURN()` with no value answers `TRUE`, as a macro command that
+did its job does — the manual leaves it unspecified.
+
+#### 81.84.2 A pending call outranks every other control — found by review
+
+`RETURN(SQ(v)+1)` sets **two** controls in one step: `SQ`'s call, and then
+`RETURN`'s own over it — and with a single control byte the call was simply
+lost and `RETURN` handed back `FALSE+1`. It was found designing the gate,
+before any code ran.
+
+The call is a **flag** now (`shm_cpend`), and in the engine it outranks
+everything but `STOP`. That is safe for a reason worth stating: every other
+control in the step belongs to the calling cell, which is evaluated again
+after the subroutine returns, and that is when `RETURN`, `GOTO` or a loop's
+control happens — with the call answered. The gate's H5 is this case, and
+letting `RETURN` outrank the call fails exactly it and nothing else.
+
+#### 81.84.3 A name here is a place, so ARGUMENT binds a CELL
+
+§81.29's names bind rectangles, not values, which is the design problem
+`ARGUMENT` poses. With a `ref`, the value is written there and the name bound
+to it — exactly Excel. **Without one, the name is bound to the ARGUMENT cell
+itself**, and `ARGUMENT` is a *value* function (`shm_mkind`): reading `x`
+anywhere evaluates that cell, which answers what `x` is bound to in the
+running subroutine. Only the step engine *binds*; any other evaluation — a
+repaint, a reference to `x` — answers the binding and consumes nothing.
+
+**And the binding moves `sh_pass`**, which the gate found. `sh_eval_cell`
+answers a cell computed in the current pass from its cache, and the ARGUMENT
+cell had been computed — by a repaint, with nothing bound — so every read of
+`x` got the fixture's cached 0. A binding changes what a cell *means*; so
+does a frame's bindings going on `RETURN`; both bump the pass, which is
+Calculate Now's own invalidation (§81.78).
+
+`ARGUMENT`'s `type` is **accepted and not enforced**. `RESULT(type)` is
+enforced, against Excel's bits (1 number, 2 text, 4 logical, 16 error); the
+reference and array bits always pass, since by the time this app returns one
+it is a value.
+
+#### 81.84.4 Where it lives
+
+A defined name followed by `(` reaches `sh_pfunc`'s call path, where it used
+to be `#NAME?`; there it becomes `SH_FID_MCALL`, extension function 0, whose
+name is the byte 1 so no formula can spell it. Outside the step engine it is
+inert and `FALSE`, like every macro command (§81.63).
+
+The state is **the module's own**, addressed through `CS`: four frames
+(`SH_MSUBS`), fourteen arguments to a call (Excel's own limit), 24 banked
+values and 384 bytes of their text across every frame at once, sixteen
+bindings. `CHART.OVL` is loaded once and kept (`ch_ovneed`), so it lives as
+long as a run; the run start clears it, since a `HALT` or an error mid-call
+leaves it dirty. Overflowing any of it stops the run with a message rather
+than corrupting a frame.
+
+**BIFF cannot carry the call yet** — Excel writes one as a name reference and
+the user-function index 255, which is wave 5's reader and writer. SYLK keeps
+it as text, as it always kept macros. `ARGUMENT` and `RESULT` themselves are
+Ftab `0x51` and `0x60`, and `tools/os88sheetfmt.py --selfcheck` now holds the
+module's extension table to the document the way it holds the resident one —
+index, table and arity, each proven to fail when broken.
+
+`tests/sheetmsub.py` is the gate, six checks.
+
+
+### 81.83 A macro cell's FORMULA survives a Normal save
+
+Every one of §81.63's twenty macro functions was `0xFF` in `sh_rpn_fid`, so a
+Normal save wrote the cell's **cached value** and the macro was gone. SYLK
+carried it; BIFF did not. §81.68 recorded the blocker and §81.68's own
+correction records why it was not one: the Command Equivalents Table is in
+`docs/ms-xls.pdf`, and the numbers are verified against a macro sheet real
+Excel 2.1d wrote.
+
+**45 bytes resident, 43 of `CHART.OVL`, 1 of bss.**
+
+#### 81.83.1 Two tables, and the split is not guessable
+
+Ten of the twenty are **commands** (`Cetab`) and ten are **functions**
+(`Ftab`). Nothing about a name says which: `SELECT` and `FORMULA` are
+commands, and `GOTO` and `RETURN` — which read exactly like commands — are
+functions. `sh_rpn_fce` is which, twenty bytes beside `sh_rpn_fid`.
+
+`SH_FN_MAC0` is **derived** from a label in `sh_functab`, and two `%if`s
+refuse the build if `sh_rpn_fce` is not twenty entries or if `sh_rpn_fid`'s
+macro run is not where `sh_functab`'s is. These tables are positional and
+nothing else checks that they line up.
+
+#### 81.83.2 BIFF2/3 select the table by the PTG
+
+`fCeFunc` is BIFF8's mechanism — bit 15 of a two-byte index — and BIFF2/3
+have only one byte. What Excel 2.1d writes instead is a **different ptg**:
+`0x58` for a command, `0x42` for a function. That is in no document here; it
+came off Excel's own file (§81.68). Both forms are emitted, since the
+workbook writer emits BIFF4 where the index *is* a word and `fCeFunc` *is*
+bit 15.
+
+#### 81.83.3 A dot is part of a name — in THREE lexers, not one
+
+`sh_rpn_func` gathered `A-Z` and stopped at anything else, so `SET.VALUE`,
+`ACTIVE.CELL` and `CALCULATE.NOW` could not be written **even once their
+numbers were known** — three of the twenty, lost in the lexer. A dot is taken
+into the identifier now; a *leading* dot still ends it, so nothing that was
+not already a name becomes one.
+
+**Fixing that one was not enough, and the reason generalises.** The writer
+looks ahead with `sh_rpn_isfunc` before committing — *"a letter starts either
+a reference or a FUNCTION CALL, and only the character after the name tells
+them apart"* — and that lookahead has a gather of its own. It stopped at the
+dot, found `.` where it wanted `(`, reported "not a call", and handed the
+whole thing to the **reference** parser, which declined and took the formula
+with it. The two have to agree or the name is never even offered.
+
+`sheet.asm` has **ten** identifier gathers. Six of them *should* stop at a
+dot — `sh_pcellref`, `sh_copy_cellpart` and the rest are reading a cell
+REFERENCE, which cannot contain one — so this is not a sweep to apply
+everywhere; it is a distinction to get right per gather, and the way to find
+them is to list them all and say which kind each is.
+
+#### 81.83.3.1 And the cap was the wrong constant
+
+`CALCULATE.NOW` is **thirteen** characters. Every gather capped at
+`SH_NAME_MAX` = 12, on reasoning the evaluator's own comment states: *"a
+DEFINED NAME can be this long, so the cap is its length rather than a column
+pair's — a function name is shorter than either."*
+
+That stopped being true the day §81.63 added the macro functions.
+`CALCULATE.NOW` collected as `CALCULATE.NO`, matched nothing, and **evaluated
+to `#NAME?`** — in `sh_functab`, listed among the twenty, and unreachable
+since it was added. Nothing noticed because nothing had ever written one to a
+file, which is the only thing that reads them back.
+
+So `SH_IDENT_MAX` (16) is what a lexer COLLECTS and `SH_NAME_MAX` (12)
+remains what a defined-name RECORD holds. Raising the latter would have
+widened all `SH_NAME_CAP` name records for a reason that has nothing to do
+with them.
+
+#### 81.83.3.3 `%if` cannot assert on labels — the check was vacuous
+
+Both positional tables were guarded with `%if (end - start) != 20` /
+`%error`. **One of them never fired.** `%if` is a PREPROCESSOR test and label
+arithmetic is not reliably available to it — NASM evaluates against pass-1
+values — so a mutation that made `sh_rpn_fce` twenty-one entries long built
+cleanly and silently.
+
+They are `times` pairs now, the idiom `OS88_BSS` already uses: assembled
+rather than preprocessed, emitting nothing when the count is zero and driving
+**negative** when it is not, which `-w+error` turns into a build failure
+naming the line. Proven by mutating the table in **both** directions and
+seeing each line fire, rather than by reading.
+
+The general form: an assertion nobody has seen fail is an assertion nobody
+has seen.
+
+#### 81.83.4 Arity from the document, not from one file
+
+The first draft marked all twenty variable-arity, on the strength of "Excel
+writes them in the three-byte form". That was an **over-reading of one file**:
+the sheet examined contains `SELECT`, `FORMULA` and `RETURN`, and all three
+are variable — it says nothing about `NEXT` or `BREAK`. They follow the
+document's arities now, and `tools/os88sheetfmt.py --selfcheck` holds them
+there, the same way it holds every other row. It caught this.
+
+#### 81.83.5 The trap: a near call from the module to the resident half
+
+`sh_rpn_func` is in `CHART.OVL`. The Cetab lookup was written as a resident
+helper and near-called from it — **a call across a segment boundary**, which
+jumps into whatever is at that offset in the module. The machine **hung on
+every save, in every format**, and the failure surfaced as the mouse pointer
+freezing rather than as anything about macros.
+
+`os88ovlchk` catches exactly this and reports it by name. It did not, because
+**`make build/sheet.o88` does not run it** — only a full `make` does, and the
+whole edit-build-test loop had been on the target alone. The lookup is
+inlined now; §81.82.8 is the same rule (`movsb` through `ES`) one step along,
+and both are the package boundary being invisible until it is not.
+
+#### 81.83.6 What this does NOT do
+
+**A macro sheet still reopens as a worksheet.** `dt = 0x0040` is confirmed
+from Excel's own `BOF` and is not written, because SHEET has no macro-sheet
+state to write it from: `New ▸ Macro Sheet` makes an ordinary sheet and says
+so on the status line, deliberately (*"this app has one grid type, so Chart
+and Macro Sheet do the honest thing rather than the flattering one"*). Giving
+a document a KIND is its own change — New, the readers, Save and the grid all
+have to agree — and it is not smuggled in here.
+
+So: the formulas are in the file and are the bytes Excel writes. What is
+missing is the sheet saying what it is.
+
+**§81.97 supplies it:** the document kind, New ▸ Macro Sheet, and the
+reader half.
+
+
+### 81.82 Data ▸ Parse
+
+Excel's Data menu carries **Parse** after Table, and §81.39.2 listed it as one
+of that menu's two missing commands. **120 bytes resident, 920 of `CHART.OVL`,
+296 of bss.**
+
+**Parse is not CSV, and the difference is the whole feature.** CSV splits on a
+delimiter. Parse splits at **fixed character positions**, because what it
+exists for is a report another program *printed* — every record in one cell,
+the fields lining up because they were laid out for a printer. §81.40 already
+serves the delimited case; nothing served this one.
+
+#### 81.82.1 Excel's place in the menu, and what that moved
+
+SHEET's Data menu was Excel's first eight commands in Excel's order (§81.71)
+followed by three charting items of its own, which Excel has no Data entry
+for. Parse goes at **index 8 — Excel's position, directly after Series** —
+and the three chart items each moved down one.
+
+**That is the insertion §81.78 paid a test for**, taken deliberately this
+time and only after measuring: nothing in `tests/` clicks Data items 8–10 by
+index, so the blast radius is one dispatch chain in `sh_docmd_data`. The
+alternative — appending Parse after SHEET's own extras — costs nothing and
+would have put an Excel command below three items Excel does not have, which
+is not "Excel's order" in any useful sense.
+
+#### 81.82.2 The bracket line, on the dialog that already existed
+
+The parse line is a one-line `os88line` field, which is what §81.74.2's input
+dialog already is — so the caret, LEFT/RIGHT, Backspace and Delete that the
+Reference Guide names come free, and what had to be added is what it
+*refuses*: every printable key but `[` and `]` is dropped before the field
+sees it. That is the Guide's *"the only editing allowed in the parse line is
+adding and deleting brackets"*, said in one test.
+
+**Guess and Clear fit without making any other dialog taller.** `SH_IDLG_H`
+is derived from the last button's bottom, so a new row of buttons would have
+grown all eleven kinds — Goto and Column Width included — for a feature they
+do not have. The Cancel row's left half is empty on every kind, and that is
+where the two go (`SH_IDLG_G1X1`/`G2X1`). They are painted and hit-tested
+only for this kind.
+
+#### 81.82.3 Guess is a TWO-SPACE rule
+
+A printed report separates its columns with a **run** of spaces and puts
+single spaces inside a field. So a field ends at two spaces, not one, and
+`New York  10001` is two fields rather than three.
+
+This is the single most likely wrong implementation and the one the gate is
+shaped to catch: splitting on every space puts `New` and `York` in different
+columns and shifts every field after them. The mutation that makes Guess
+one-space fails that check with `('New', 'York', 1234.0)`.
+
+#### 81.82.4 The positions are in the TEXT, not in the line
+
+`sh_parse_fields` counts **non-bracket** characters as it walks, because a
+bracket marks a position in the cell's text and occupies none of it. Without
+that, every field after the first would be displaced by the number of
+brackets before it — and the displacement grows left to right, so the first
+field would look right.
+
+The settings come from the first cell and are applied to all of them, as the
+Guide says. That is why the fixture pads its three rows differently: a build
+that re-guessed per row passes §81.82.3's check and fails this one.
+
+#### 81.82.5 A field is typed by its spelling
+
+Exactly as a CSV field is (§81.40): a complete number is a number, `TRUE`/
+`FALSE` is the logical, anything else is a label, and an error *spelling*
+comes back as text — because neither Parse nor CSV has a type field to say
+otherwise. A grid of labels that look like numbers and will not add up is the
+failure this avoids, and it is asserted on the saved SYLK's types rather than
+on what the cells look like.
+
+**The row is read whole before the first field is written**, into `sh_pa_src`.
+The first field lands on the very cell it came from, so reading as it went
+would parse the second field out of its own first.
+
+#### 81.82.6 No brackets is a refusal
+
+A line with no bracket pair writes nothing and says so. The shape to avoid is
+a worker that loops over zero fields and clears as it goes, which would
+destroy the column it was asked to split — so the gate presses **Clear**, then
+OK, and asserts the column is whole *and* that nothing was written beside it,
+with a marker cell proving that save landed at all (§81.81's lesson, applied
+without having to relearn it).
+
+Excel warns that Parse overwrites the cells to the right; this does too, and
+that is what `SH_UL_PARSE` is for.
+
+#### 81.82.7 A body inserted into a FALL-THROUGH path
+
+The worse of this section's two traps, because it broke a command in a
+different menu and the symptom named neither.
+
+`sh_idlg_open` prefills the field per kind, and its branches END BY FALLING
+THROUGH to `.prenone`, which was a bare label. §81.82 put `.preparse:` with a
+body in it immediately above that label — so `.pregoto`, having just built
+`A1` into the buffer, ran on into `sh_parse_pre` and had it overwritten with
+the column's first label.
+
+`.pregoto` serves **Goto, Sort and Run**. So `Data ▸ Sort` opened its key
+dialog prefilled with `pear`, the key validator refused it as it should, and
+**the command silently did nothing** — with no message about Parse, in a menu
+Parse is not in, three items above where Parse was added.
+
+`tests/sheetsort.py` caught it: 5 of 10, column A in its original order. It
+was not found by `sheetparse`, which passed throughout — **a fifth feature
+running whose defect was found by something other than its own gate**, and
+the argument for the whole-family soak rather than the row just written.
+
+Two things generalise. A branch that ends by falling through to a label is
+**an implicit contract with whatever comes next**, and nothing in the file
+says so; the fix is one `jmp short .prenone`, which makes it explicit.
+And an insertion is not only "does my code run" but "does it run for anyone
+else" — the mirror of §81.78's menu-index lesson, where a body moved and here
+a body arrived.
+
+#### 81.82.8 `movsb` moves to ES:DI
+
+Recorded because it cost a build and the symptom pointed nowhere near the
+cause. `sh_parse_guess` built the bracketed line with `movsb`, which moves
+`DS:SI` to **`ES:DI`** — and ES in a package is whatever was last loaded, here
+the cell or text segment. The brackets, written DS-relative with `mov [di]`,
+landed in the buffer; every character between them went somewhere else. The
+parse line came back as a single `[`.
+
+Every other string move in `sheet.asm` sets `ES` first and on purpose. This
+one had no `mov es` at all, which is the tell — and it was found by *looking
+at the screenshot*, not by a test.
+
+
+### 81.81 Format ▸ Justify
+
+Excel's Format menu carries **Justify** after Column Width, and §81.39.2
+listed it as the one command that menu was missing. **131 bytes resident, 671
+of `CHART.OVL`, 84 of bss** — the worker is in the module, which is where
+§81.39's headroom note puts a command nobody runs in a loop.
+
+**Like §81.79 and unlike §81.78, nothing moved.** Excel's Format is
+Number/Alignment/Font/Border/Cell Protection/Row Height/Column Width/Justify,
+which is SHEET's seven in Excel's own order plus one at the END, so no index
+below it shifted. It is worth saying because the command after this one —
+`Short Menus` — is the opposite case, and its whole cost is that the hidden
+items are interleaved. (Short Menus was then dropped by the owner,
+2026-09-22.)
+
+**The menu ORDER is from the 2.1d capture and the BEHAVIOUR from the manual**,
+and they are two sources on purpose. `menu_format_full.png` in the reference
+captures shows Number/Alignment/Font/Border/Cell Protection/Row Height/Column
+Width/Justify with Justify last, and `dialog_about.png` from that same session
+reads *Version 2.1d*. The Reference Guide this tree holds is **Version 2.0**
+(© 1987, "For IBM Personal System/2, IBM PC AT, and Compatibles").
+
+This section first cited that manual as "the 2.1d Reference Guide", and §81.57
+had the same wrong label four sections on. It changes no conclusion here — the
+capture independently confirms both the command and its position — but a
+citation nobody re-reads is exactly how a premise stops being checked, and the
+next reader would have gone looking for a 2.1d manual that is not held.
+
+#### 81.81.1 The contract is more specific than "wrap a long label"
+
+Read out of **Excel 2.0's Reference Guide**, *Format Justify command*, rather
+than guessed, because four of its five clauses are things a reasonable
+implementation gets wrong:
+
+1. **The text comes from the LEFT COLUMN and nowhere else.** The other
+   columns lend their WIDTH and nothing else; what is in them is untouched.
+   The Guide's own note is that they "should be blank or they will interfere
+   with the display of the text" — a display problem, not a data one.
+2. **The line is as wide as the WHOLE selection.** "Enough text in the
+   upper-left cell to fill to the edge of that row of the selection." A build
+   that wrapped to the left column's own width produces lines that look
+   perfectly plausible and are about a third as long as they should be.
+3. **Every cell in the left column must be text or blank.** A value refuses
+   the whole command; it is not skipped and not stringified.
+4. **A blank cell is a PARAGRAPH SEPARATOR** — the Guide's five-row example,
+   where a blank third cell makes the top two rows one paragraph and the
+   bottom two another, each justified *inside its own rows*.
+5. **Rows a section does not need are left blank.**
+
+Clause 4 is the one that makes this a real feature rather than a loop. Without
+it, Justify is "merge the column and re-break it", which produces *the same
+lines in the wrong rows* — so a gate that only asks whether the text wrapped
+passes on it. `tests/sheetjust.py` asserts the row a line lands in, and the
+mutation that collapses the sections into one fails exactly that check and no
+other value check.
+
+#### 81.81.2 The width, and what a hidden column contributes
+
+`sh_ju_block` sums `sh_colwidth` across the selected columns. A hidden column
+answers **zero** (§81.73), so it contributes nothing — which is right, since
+it shows no characters to fill. A selection of nothing but hidden columns
+would give a width of zero, so it is floored at one: a one-character wrap is
+a silly answer and a divide-free loop that never terminates is a worse one.
+
+It is capped at `SH_EDITMAX`, and that is a decision rather than a buffer
+size. **A justified line is a LABEL**, and `SH_EDITMAX` is what a label can
+be; a wider line would be text this app can write into a cell and the user
+cannot retype into the same cell.
+
+#### 81.81.2.1 No line ends in a space
+
+`.lead` takes the leading spaces off the next line, but a break landing on
+the SECOND of two consecutive spaces left the first one stored, and a line
+that ends where the source does keeps whatever the source ended with —
+`alpha beta gamma delta` + `epsilon zeta ` emitted `delta epsilon zeta `.
+A justified line is written back as a **label**, so that space is a character
+the cell really holds.
+
+`sh_ju_nextline` right-trims before it emits. The gate's fixture carries that
+trailing space on purpose: the expectation does not change, so it costs the
+fixture nothing and fails the moment the trim goes. Found by tracing the wrap
+by hand, not by a test.
+
+#### 81.81.3 What is scoped out, and why it is the WRITE and not the ask
+
+Excel, when the text does not fit, **asks** whether it may go past the bottom
+of the selection and on OK overwrites what is there. SHEET refuses instead,
+with the rows it would have needed.
+
+The ask is not the expensive part — `os88ui_ask` is one call, and §81.79 has
+the pattern. The **write** is: the alert is asynchronous, so the wrapped text
+would have to survive in `sh_stgseg` across a window the user can click
+anywhere in, and staging is the same scratch that Undo's swap, the clipboard
+block and every file write also use. Refusing costs the user one Column Width
+or one more selected row and costs no data; getting the other one subtly
+wrong costs the cells below the selection.
+
+It is checked **before anything is written**, over every section, which is
+what makes the refusal total: a document where section one fitted and section
+two did not would otherwise be half justified.
+
+#### 81.81.4 Not recorded, which is not the same as refused
+
+§81.74's recorder emits only what §81.63's twenty macro functions can say, so
+that a recording is an ordinary macro sheet afterwards. There is no
+`JUSTIFY()` in that language, and inventing one at the emitter would have
+written recordings that no longer replay. So Justify is simply not recorded —
+the bargain that section already documents for every command its language
+cannot express, and the same one Excel's own recorder makes.
+
+Undo, by contrast, **does** cover it: the Guide names Edit Undo as the way
+back from a justification that overwrote something, so `SH_UL_JUST` is a real
+label and not one of `sh_ud_kind`'s `DROP`s.
+
+#### 81.81.5 The overlay went to 45KB
+
+`CHART.OVL` came to 44,990 of the 45,056 that `CH_OVKB` = 44 reserves — **59
+bytes spare**. That is the case that constant's own comment already refuses
+in as many words: a margin of one is not a margin, it is the next change
+failing a build for a reason that has nothing to do with it. 45 it is, and
+1,090 bytes spare. It is heap, not image.
+
+
+### 81.80 Sort puts a BLANK key cell last, in both directions
+
+Excel sorts rows whose key cell is empty to the **bottom**, ascending and
+descending alike. SHEET left them exactly where they were. **227 bytes of
+`CHART.OVL` and 7 of bss; the resident image is unchanged at 50,172** — the
+whole of it is in the module, which is where §81.39's headroom note says
+rarely-run code belongs.
+
+#### 81.80.1 Why they did not move: they were never in the list
+
+§81.43's sort permutes **values among occupied rows** rather than moving rows,
+and `rows[]` was built by scanning for cells **in the key column**. A row with
+no cell there produced no entry, so it was neither moved nor moved over: the
+values around it were permuted and it sat still in the middle of them, with
+its own carried columns still attached to a row that no longer belonged
+there. The larger half of the defect is that second part — the carried
+columns of a blank-key row silently stopped travelling with their row.
+
+So the fix is not a comparison change. It is that **a row must enter `rows[]`
+because the BLOCK has something on it, not because the key column does.**
+
+#### 81.80.2 The scan groups by row now
+
+The scan walks the cell store, which is in no useful order, so "has this row
+anything in the block?" cannot be answered by looking at one cell. It is
+answered by **grouping**: the block's column span is computed once
+(`sh_sort_c1`/`c2`, from `sh_selcol`/`sh_selcol2` with the two put in order —
+a right-to-left drag gives them the other way round), a cell outside that span
+is skipped entirely, and a cell whose row differs from `[sh_sort_currow]`
+**flushes** the row before it.
+
+`sh_sort_flushblank` is that flush: if `[sh_sort_haskey]` was never set for
+the row being closed, it stages the row with a zeroed value and **class 4**,
+which is one above §81.43's four classes and therefore above every value there
+is. `.scandone` calls it once more, for the last row — the group that has no
+successor to close it.
+
+`[sh_sort_haskey]` is a byte rather than a test against the staged value,
+because a key cell legitimately holding an empty string is a *value*, not a
+blank, and the two must not collapse.
+
+#### 81.80.3 Blanks are decided BEFORE the direction is read
+
+This is the part that a plausible implementation gets wrong. Class 4 sorts
+above everything, so an insertion that merely classified blanks and then let
+`[sh_sort_desc]` reverse the comparison would put them **first** descending —
+which is not Excel's rule and is arguably worse than leaving them alone,
+because it is wrong in a way that looks deliberate.
+
+So the two blank cases are answered ahead of the direction test. A blank
+being placed never shifts past anything; anything being placed shifts past a
+blank; two blanks compare equal, which keeps them in their original order and
+so keeps the sort stable among them. `[sh_sort_desc]` is read only on the
+path where both are real values.
+
+#### 81.80.4 The emptiness is written back
+
+A permutation that can move emptiness has to be able to **write** it. The
+write-back's blank case calls `sh_clearcell` on the destination rather than
+storing a value, because the destination row already holds whatever was there
+before — and leaving it would mean the blank had been sorted into place while
+the old value stayed underneath it.
+
+#### 81.80.5 A found premise: the single-column key
+
+The Sort dialog already refuses a key column **outside the selection** — the
+carry moves only the block's columns, so an outside key would reorder a column
+the carry does not move and break §81.19's correspondence. Its single-column
+arm carried a comment saying *"a single-column selection sorts by itself
+whatever was typed"*, and it did not: it stored the **typed** column. Column A
+selected and `C1` typed sorted A's values by C's order — exactly what the
+multi-column arm refuses, in the one case that skipped the test.
+
+§81.80 cannot leave it either way. The scan now selects on the **block**, so a
+key column outside it matches no cell, every row stages blank, and the sort
+becomes a silent no-op. So the single-column arm sets the key to the selected
+column, which is what its comment always claimed.
+
+Found by reading the diff rather than by a test, which is the fourth defect
+running to be found by something other than the check written for it.
+
+`tests/sheetsort.py` grew three checks on a B2:C4 block whose B3 is missing.
+The one with teeth is the second: **the blank row is last descending too.**
+The third reads the saved SYLK for the absence of a `C` record at B4, which is
+what says §81.80.4 ran rather than the destination merely looking right
+because the value that used to be there happened to match.
+
+
+### 81.79 File ▸ Delete
+
+Excel's File menu carries **Delete** after Save As, and §81.39.2 listed it
+among the six that menu was missing. **152 bytes and 14 of bss.**
+
+`OSAPI_FILE_DELETE` already existed, and so did the confirm — this follows
+`sh_docmd_dbdelete`'s shape exactly, Yes/No through `os88ui_ask` with a
+completion that acts on `AL == 0` and on nothing else, because a *dismissed*
+alert must not delete anything.
+
+**Unlike §81.78 nothing moved.** Excel's place for Delete is after Save As,
+which here is the END of the File menu, so no item index shifted and no
+dispatch had to be renumbered. Worth saying only because the command before
+this one had the opposite property and it cost a test.
+
+#### 81.79.1 The picker is an Open, and it says so
+
+The kernel's file dialog has two modes, `FDLG_OPEN` and `FDLG_SAVE` (§38),
+and no way to set a title or a verb. So Delete's picker **is** an Open: the
+window is titled *Open* and its button says *Open*, and a byte
+(`[sh_dlg_del]`) is what tells `sh_ondlg` what was meant by it.
+
+That is a wart and it is recorded rather than hidden. It is not a hazard
+only because the step that destroys something is separately labelled — the
+alert says **"Delete this file?"** — so nothing is lost by pressing a button
+marked Open. Making the picker say Delete is a kernel change (a third mode,
+or a caption), not a SHEET one.
+
+#### 81.79.2 The name the picker chose is NOT the document's
+
+`sh_ondlg` copies the chosen name into **`sh_name`** — which is the open
+document's own name, the one Save writes to. A Delete that let it do that
+would have left the sheet pointing at the file it had just deleted, and the
+next Save would have re-created it under the document's contents. So a
+delete's name lands in `sh_delname`, a buffer of its own, and `sh_name` is
+never touched.
+
+**The flag is cleared before the alert goes up**, not after the delete. Every
+path out of the alert — Yes, No, dismissed, or `os88ui_ask` refusing because
+one was already up — therefore leaves it down, and cannot leave the *next*
+File ▸ Open behaving like a Delete.
+
+`tests/sheetdel.py` is the gate, three checks, and the first is the one with
+teeth: **No must not delete.** A build that ignored the answer would still
+pass the Yes check. The third pins §81.79.2 — the open document is still on
+the volume afterwards.
+
+#### 81.79.3 `SH_NAMEMAX` and `SH_NAME_MAX` were two constants one underscore apart
+
+Both were **12** and they mean different things. `SH_NAMEMAX` bounds an **8.3
+file name** — it fills `sh_name`, `sh_delname` (§81.79.2's own buffer) and
+`sh_chart_name`, each sized *"13: 8.3 name + NUL"*. `SH_NAME_MAX` is a
+**defined name's** length (§81.29). Neither carried a comment saying so, and
+the first had no comment at all, so a reader had nothing to tell them apart
+by and either could have been edited for the other's reason.
+
+Three things changed and **the package image is byte-for-byte identical**,
+which is what says it was a naming defect and not a behavioural one:
+
+1. The file-name constant is **`SH_FNAME_MAX`** now, and says what it is.
+2. **`shm_mname` was bounded by the wrong one.** Its own header says it
+   gathers *"a word that is a DEFINED NAME"* and it tested the FILE-name
+   bound — correct only because the two were equal. It reads `SH_NAME_MAX`.
+3. The three buffers are **sized from the constant** rather than from a
+   hand-written `13`. That is the part that closes the hazard rather than
+   labelling it: raising `SH_FNAME_MAX` used to run every copy past the end
+   of its buffer and into the next bss symbol, silently. Setting it to 20 now
+   moves all three and the `OS88_BSS` check reports the shortfall — proven,
+   not assumed.
+
+Two constants that must stay equal are a bug waiting; two that merely happen
+to be equal are a bug already, because nothing says which one a given use
+meant.
+
+### 81.78 Options ▸ Calculate Now
+
+Excel's Options menu carries **Calculate Now** directly after
+`Calculation...`; §81.39.2 listed it among the five that menu was missing.
+SHEET had the *capability* — the Calculation dialog's third choice — and not
+the command.
+
+It is **45 bytes** — 26 for the item and its arm, 19 for the resident
+`sh_calc_now` the arm calls — and the interesting part is what the first
+attempt got wrong. (The commit that landed it says 26 and 50,001: that figure
+was measured BEFORE `sh_calc_now` was split out and never re-taken. The image
+is 50,020. Measure last, not first.)
+
+Writing the menu's arm from scratch, it called `sh_recalc_all`, set no status
+message, and **recorded nothing** — so a macro recorded over it would have
+played back with the command missing. The dialog's own version does none of
+those things: it bumps `[sh_pass]`, a stamp nothing has cached, which is what
+actually forces the recompute, then sets the message and tells the recorder.
+**The existing implementation was the specification**, and not reading it
+first produced a second, divergent answer to one command.
+
+**Two copies, knowingly.** The dialog's arm is in `CHART.OVL`, and a module
+reaches resident code only through the `sh_v_*` vector table — which is filled
+**positionally** from a parallel `dw sh_x_*` list, with nothing gating that
+the two agree. A slot appended to one and not the other is a silent far call
+to the wrong routine. Four duplicated lines with `CHANGE ONE AND CHANGE THE
+OTHER` in both comments is the cheaper risk.
+
+**The item is index 4, which moves Freeze Panes to 5**, because Excel's place
+for it is after `Calculation...` rather than at the end. An item index is a
+POSITION: `sh_i_options+8` became `+10` for the two sites that relabel Freeze
+Panes, and `tests/sheetfreeze.py`'s `FREEZE` went 4 → 5. A click one row off
+opens a neighbouring command rather than failing, which is why both are named
+constants and the patch asserted it found exactly two relabel sites.
+
+`tests/sheetcalc.py` is the gate, and its middle check is the one with teeth:
+with Calculation on Manual, `B1` must **still read 2** after `A1` becomes 5.
+A build where Manual did nothing would show 6 there and still pass the last
+check. It reads the GLASS rather than the record, because the record's cached
+value is exactly what Manual leaves stale — reading it would be reading the
+thing under test.
+
+### 81.77 A cell formatted while EMPTY
+
+Apply a number format to a cell with no value, save, and the format was gone
+with no message. §81.39.3 listed it as *"a formatted empty cell (BIFF's BLANK)
+loses its format"* and the measurement is why it had stayed open: the defect
+is in **two passes at once**, and each looks complete on its own.
+
+A format applied to a cell that has **no record** does not go into a cell
+record — there is not one. It goes into the side table: `sh_bt_addcell`, the
+**border table's sixth byte** (§81.55), which is where the seventeen formats
+that will not fit the format byte's two bits already live. And both halves of
+the BIFF writer walk the **cell array**:
+
+- `sh_xfp_scan` collects the distinct (format, border, number format) triples
+  that need an XF of their own. Walking the cells, it never sees this one, so
+  **no XF is registered** for it.
+- `sh_biff_cells` writes a record per cell. Walking the cells, it never sees
+  this one either, so **no record is written**.
+
+Fixing one without the other buys nothing: a BLANK record naming an XF that
+was never registered falls back to the plain format byte — zero, for a cell
+with no record — and says the cell is General. Both walks gained the same
+second pass over the border table, and `sh_xfp_add` exists so the two agree
+exactly about what "already registered" means.
+
+The record is **`BLANK`, `0x0201`** in BIFF3: row, column, XF and nothing
+else. A bordered empty cell comes out right for free, since the triple carries
+the border byte too.
+
+#### 81.77.1 The overlay's own byte
+
+**+213 bytes, all of it in `CHART.OVL`** — the whole BIFF writer lives there —
+which took the module to **44,031 bytes of the 44,032** `CH_OVKB` = 43
+reserved. It still built. `CH_OVKB` is 44 now, and that step was taken *for
+one byte*: a margin of one is not a margin, it is the next change failing a
+build for a reason that has nothing to do with it.
+
+#### 81.77.2 A stale overlay made the A/B lie, twice
+
+Worth writing down, because it cost more than the fix and will happen again.
+
+`CHART.OVL` is a **side effect** of `$(BUILD)/sheet.o88` (`$(BUILD)/CHART.OVL:
+$(BUILD)/sheet.o88 ;`), and this change is **entirely overlay-side** — so
+`sheet.o88` came out byte-identical in size and the module did not get
+rebuilt when the source was reverted to check the defect was real.
+
+The A/B then ran the **old resident half against the new overlay**, the BLANK
+record appeared, and the evidence said the defect did not exist: a BLANK
+record at H4 naming an XF that resolved to the right format id, reproducible
+to the byte across two runs. The conclusion drawn from it — *"§81.39.3 is
+stale, revert the fix"* — was exactly wrong, and it was the **search for the
+`mov ax, 0x0201` that had supposedly always been there** that broke it: the
+opcode was in `CHART.OVL` and in no version of `sheet.asm`, which is only
+possible if the two halves came from different sources.
+
+The rule: **an overlay-only change leaves the package byte-identical**, so
+nothing keyed on `sheet.o88` — a size, a stamp, an mtime — can see it. Delete
+`sheet.bin`, `sheet.trim.bin`, `sheet.o88` and `CHART.OVL` together before
+trusting an A/B that touches the module.
+
+#### 81.77.3 And the walk left ES on the border table
+
+The first build of the writer's walk passed its own gate and broke a
+different one: `sheetfmt`'s *"a second sheet makes it a WORKBOOK"*, which came
+back reporting one sheet.
+
+`sh_biff_cells`'s contract is **"every cell record for ONE sheet, appended at
+ES:DI"** — ES is the caller's staging segment and stays that way. The border
+walk reads its entries with `ES = sh_bordseg`, and on every path that writes
+*nothing* (the cell exists, the entry is empty, the sheet is not this one) it
+returned with ES still there. The caller's next records — the sheet's own
+`EOF` among them — were then written **into the border table**: a two-sheet
+save came back as one sheet, and the table was being overwritten as it went.
+
+The lesson is the ordinary one about this machine and worth the line anyway:
+**a routine that borrows a segment register owes it back**, and the one
+documented in its header is the one it owes. The gate that caught it was not
+the gate for this feature — running the whole `sheet*` set is what found it,
+and the row that failed had nothing to do with formats.
+
+#### 81.77.4 Evidence
+
+`tests/sheetnumfmt.py` gains **three checks** and keeps the file it read back
+(`saved.bif`, beside the screenshots it already wrote — a gate about what a
+save WROTE cannot be diagnosed from the fixture it read, and both are called
+`NF.BIF`). Its step 2 already formatted an empty cell and then typed a value
+into it; the new cell **H4 is formatted the same way and left empty**, which
+is the whole difference. The previous binary writes **no BLANK record at
+all** — `BLANK records at []` — so the first of the three fails outright.
+
+`tests/sheetfmt.py`'s `cell_xfs` learned `0x0201` as well. A reader of BIFF
+cell records that omits BLANK is simply incomplete, and it is the only reader
+in the tree that checks XFs.
+
+### 81.55 Excel 2.1d's twenty-one number formats
+
+**SHEET drew four.** General, `$#,##0`, `#,##0` and `0%` — the two bits §81.4
+left the format byte for a number format. No decimal places, no scientific,
+and **no date or time**: DATE and NOW computed correctly and showed `32888`, an
+Excel file's other formats read back as General, and TEXT() understood `$`,
+`,`, `0`, `#`, `.` and `%` and fell back to General on anything else. §81.39
+named it the largest visible gap left.
+
+#### 81.55.1 One engine, Excel's own codes
+
+`sh_fmtcode` draws a value by a format **code** — Excel's, as a string — and
+it is the only thing that does: the grid draws a cell through the code for its
+format id (`sh_nf_codes`, Excel 2.1d's 21 built-ins in Excel's order, which is
+the BIFF built-in id), and **TEXT() hands it the code it was given**. Its old
+parser and renderer are gone, and with them `sh_curr_ins` and `sh_pct_app`.
+
+- **Sections.** `;` separates positive, negative and zero; a negative value
+  takes the second section **as its magnitude** — the section's own `(` `)`
+  are its sign — and with one section keeps its `-`, in front of any `$`.
+- **Numbers.** The digit placeholders and the `,` and `.` among them are one
+  run, drawn as one number where the first of them stands, out of the pieces
+  TEXT() already had (`sh_numdp`, `sh_padzero`, `sh_group3`). Everything else
+  is a literal in place: `$`, `(`, a space, a quoted run, `\x`; `[Red]` is
+  skipped — there is no colour — and `_x` is a space. `%` scales by a hundred.
+  `E+`/`E-` is scientific, scaled by ten a step at a time rather than through
+  a logarithm, and a mantissa that rounds to `10.00` takes one more step. A
+  section with no placeholder at all is only its text.
+- **Dates and times** — any `d`, `y`, `h` or `s`, or an `m` with no digit
+  placeholder: `yy`/`yyyy`, `m`/`mm`/`mmm`/`mmmm`, `d`/`dd`/`ddd`/`dddd`, `h`,
+  `mm` as **minutes** straight after an `h` or before an `s` (Excel's rule),
+  `ss`, and `AM/PM` or `A/P`, which make `h` twelve-hour. Out of the pieces
+  DATE and HOUR already had (`sh_ser_to_ymd`, `sh_dt_hms`). **The time is
+  split first**: `sh_acc_toudw` truncates `sh_acc` in place, and with the days
+  taken first every time drew as midnight.
+
+**A number never shows part of itself.** It was drawn whole and the next cell
+painted over the rest, so 123456789 in a seven-character cell read `1234567` —
+a plausible number, and a wrong one. Now a formatted result too wide for its
+cell fills it with `#`, as Excel's does; General first takes fewer significant
+digits, then Excel's own last resort, the mantissa with as many places as the
+cell has room for: `1.2E+08`. Every format drew the same way before, so the
+old currency changed too — `$3.5` is `$4 ` now, which is what the code the BIFF
+writer already declared for it (`$#,##0 ;($#,##0)`) says.
+
+#### 81.55.2 Where a format is kept
+
+The format byte keeps its four, so an existing cell with one of them costs
+nothing new, and **its value is still the BIFF XF index** (§81.4). Any other
+format goes in **the border table**, whose record is **six bytes now, not
+five** (`SH_BT_SZ`): the byte after the border-and-protection byte is Excel's
+format id plus one, 0 for none. That table was chosen for the reason §81.4
+chose it for borders — almost no cell has one — and because it already keeps a
+record for an **empty** cell. Format > Number now applies to the whole
+selection, empty cells included, as Excel's does: the format waits in the
+table and the value typed later is drawn by it. The old dialog skipped a cell
+with no record. `SH_BORD_CAP` is 682 records, not 819.
+
+The record stays while either byte holds anything; Border, Cell Protection,
+Clear and Paste were each taught the second byte (`sh_bt_getw`).
+
+**Format > Number is Excel's list** — the scrolling list's third kind (the
+dialog's own header said a third would be free), the 21 codes, the selected
+cell's own format chosen and in view. It is 332 pixels wide now, not 222, for
+Excel's longest code; Paste Function and Paste Name widen with it.
+
+#### 81.55.3 The files
+
+- **BIFF write**: Excel's 21 `FORMAT` records, in order, before the XFs — none
+  were written, and a reader had to assume the built-in list. An XF past the
+  base 64 is now one per **(format byte, border byte, number format)** triple,
+  and names its format id.
+- **BIFF read**: an XF's format id, and a BIFF2 cell's attribute byte, go to
+  the border table when they are not one of the four (`sh_biff_nfside`).
+- **Not yet**: SYLK carries only the four (its `P` records would carry the
+  rest), and CSV/DIF/dBASE write the value, not the formatted text. The
+  formula bar still shows a date's serial, where Excel shows the date.
+
+#### 81.55.4 Evidence
+
+`tests/sheetnumfmt.py`, **27 checks**. The host writes a BIFF3 file of twenty
+cells in different formats; each cell's **text is read off the glass** by the
+kernel's own glyphs (`tests/glass.py`, which learned to mask the gridline rows
+as well as the columns: a glyph's top row lies on its cell's upper line). A
+cell formatted `0.00` while empty is typed into, and Save As Normal must keep
+every cell's format and write the 21 FORMAT records. **24 of the 27 fail
+against the previous binary.** Mutations, each built and each caught: no
+FORMAT records fails one, an empty cell's format not kept two, the `#` fill
+taken out six, General's scientific last step one. `tests/sheeteval.py` holds 18 TEXT() cases on
+the same engine — dates, times, twelve-hour, minutes after an hour,
+scientific up and down, `0.00%`, a code with no placeholder — which found the
+midnight defect above on their first run.
+
+Resident +2,322 bytes (the engine, less TEXT()'s old parser), bss +320,
+`CHART.OVL` +189; 3,873 bytes of resident headroom are left, and 467 of the
+overlay's.
+
+### 81.56 Each column its own width
+
+**The whole sheet had one column width.** Format > Column Width set
+`sh_cellw` and `sh_cellch` for every column at once, and an Excel file's
+COLWIDTH records were skipped — so a worksheet laid out for its data opened at
+seven characters a column, and §81.55's formats filled with `#` wherever its
+author had widened a column for them. §81.39 put it down as the geometry
+enabler: "`sh_gridhit` divides by the width once, and a per-column grid has to
+walk".
+
+#### 81.56.1 Where a width lives
+
+**256 bytes a sheet, in the top kilobyte of the note claim** (`SH_COLW_OFF`):
+each column's width in characters, Excel's own unit, **0 for the standard
+width** (`sh_defch`, the seven characters every column had). A new claim would
+have been SHEET's eighth and last, and the same kilobyte of bss a third of the
+headroom §81.55 left; notes are the least-used table there is, and
+`SH_NOTE_CAP` is **512 now, not 682**. `sh_colwidth`, `sh_colw_set` and
+`sh_colw_clear` are the only doors — the readers and writers reach them
+through vectors (`SH_NVEC` 56) — and every document that replaces the sheet
+clears it, beside the note table it shares a claim with.
+
+#### 81.56.2 Drawing and hitting a column
+
+`sh_geom` **walks** the columns from the scroll position, each its own width,
+until the next would not fit whole, and keeps the visible ones' widths in
+`sh_vcw`. **`sh_vcx` is the only arithmetic that turns a visible column into
+pixels** — the painter, the column letters, the gridlines, the borders, the
+selection, the damage and blit rectangles all ask it, where each multiplied by
+the one width — and `sh_gridhit` walks the same widths to turn a click into a
+column.
+
+**`sh_cellw` and `sh_cellch` mean "the column being drawn" now**, and the
+painter sets them at each cell. That is what let every justifier, §81.55's
+number fit, the blank string and `sh_spill`'s slice width keep working without
+knowing widths had become per-column. `sh_spill` itself sums the real widths
+of the columns between a label and the empty cell it reaches, scrolled out of
+view or not. A horizontal scroll erases the strip past the last whole column,
+which one width had kept the same and narrower than a column.
+
+#### 81.56.3 Setting one
+
+- **Format > Column Width** applies to the **selected columns**, as Excel's
+  does, and opens on the selected column's own width. A width equal to the
+  standard is stored as 0.
+- **Insert and Delete Column** move the widths with their columns
+  (`sh_colw_shift`); an inserted column is the standard width.
+- **Files.** BIFF reads COLWIDTH (`0024H`, BIFF2-4) and COLINFO (`007DH`),
+  rounding 1/256ths of a character to whole ones, and writes a COLWIDTH per
+  column that is not the standard width, before each sheet's cells. SYLK reads
+  and writes Walden's `F;W<first> <last> <width>` field. Widths are clamped to
+  what the dialog allows (`sh_cwbyte`).
+- **Not done**: the standard width itself is not a setting a file or the
+  dialog can change. (Row heights were whole-sheet here; §81.60 made them
+  per row.)
+
+#### 81.56.4 Evidence
+
+`tests/sheetcolw.py`, **12 checks**, read off the glass: the host's SYLK sets
+A to twenty characters and C to three, and the grid's own lines must be
+160, 56, 24 and 56 pixels apart; A1's label must show twenty characters and
+run on into B1, C1's number fill its three with `#`. A click in the middle of
+C2 must type into C2 — **at twenty, one width of 56 would have landed in E**,
+where at twelve it would have landed in C by accident, so the test was
+widened until dividing could not pass it. Column Width 10 on B must move B's
+lines and no others; SYLK and Normal must carry all three widths; and Insert
+Column at A must move each one right. **9 of the 12 fail against the
+previous binary.** Mutations, each built and caught: the hit-test by one
+width fails five (its later clicks land in the wrong column too), `sh_spill`
+by the standard width one, no `sh_colw_shift` one, no COLWIDTH written one,
+SYLK's `F;W` not read seven.
+
+`tests/glass.py` needed two changes for it: column A is the line after the
+row-header column, not "the first gap of the commonest width", and a
+gridline is found by 380 of 400 pixels from x=100, because the lines stop
+short of the old window once the columns are not one width. And the Format
+menu's items are **twelve** pixels apart, measured off a menu held open: the
+eleven the older gates assume for File put this one's click on Row Height.
+
+Resident +369 bytes, bss +94, `CHART.OVL` +345 — which leaves the overlay 122
+bytes short of its claim, so the next file-format work raises `CH_OVKB`.
+
+### 81.57 Edit > Undo, and Redo
+
+**Every entry and every command was final.** The Edit menu opened on
+"Can't Undo", greyed, and meant it — §81.39 listed "an undo record" among the
+enablers still to build. Excel's own, from the **2.0** Reference Guide (Edit
+Undo command) — the manual this tree actually holds; §81.81.1 is why that
+label is worth getting right: **one level** — "the last command you chose or the last cell entry
+you typed" — covering a typed entry, every command on the Edit menu and Data
+Sort; the menu names the action ("Undo Paste"), and once undone offers
+**Redo**. Formats, names and notes it cannot reverse.
+
+#### 81.57.1 A snapshot, in a claim of its own
+
+Undo is a **snapshot**, not a log of changes: before an undoable command runs,
+the cell array, the border table, the note table and the column widths are
+copied into Undo's own claim (`SH_CLAIM_UNDO_KB`, 16 KB), with the text
+arena's **length** — the arena is append-only (only a new or loaded document
+resets it), so the cells it restores point only at bytes that are still
+there. Formula text results that `sh_str_store` rewrote in place are
+recomputed after the restore, as every formula is.
+
+**The swap never cuts the arena back.** The arena is not in the snapshot, so
+the side swapped out still points at whatever it appended; were the live
+length cut back to the restored one, the recompute that follows — a formula
+that now answers text claims a fresh slot — or the next label would be
+written over those bytes, and Redo would bring back cells reading someone
+else's text. `sh_undo_do` therefore keeps the length at the **larger** of the
+live one and the restored one. It costs arena that only a new or loaded
+document gives back, and it cannot alias, in either direction.
+
+**Undo swaps** the live document and the snapshot, through the staging
+claim, so Redo is the same operation again and the label toggles.
+
+The claim is SHEET's **eighth and last** (`MEM_OWNER_MAX`), and **optional**:
+if the heap cannot spare it, Undo stays "Can't Undo" and nothing else
+changes. The staging claim could not have held it — Insert, Delete and Sort
+stage every record there themselves — and a document too large for 16 KB
+cannot be undone rather than half-undone.
+
+#### 81.57.2 When a snapshot is taken, and when Undo ends
+
+- **Edit's commands that act at once** — Cut, Paste, Paste Link, Fill Right,
+  Fill Down — take it in `sh_docmd_edit`. **The dialogs' commands** — Clear,
+  Delete, Insert, Paste Special, Sort — take it at **OK**, in
+  `sh_fdlg_apply` (a table, `sh_ud_kind`, says per dialog kind: its label,
+  "ends Undo", or "changes nothing Undo holds"); a cancelled dialog changes
+  nothing. **Del**, Edit Clear's key, takes its own.
+- **A typed entry** takes it in `sh_commit` — unless an undoable command is
+  already running (`sh_ud_busy`): Paste, Fill and Sort make their changes
+  through `sh_commit` too, and each would otherwise have replaced the
+  command's snapshot with one cell's.
+- **What Undo cannot reverse ends it**: the Format menu, Define Name, Note, a
+  macro, a new or loaded document. A snapshot older than any of those would
+  put them back too, silently, beside the command it was taken for.
+- Undo **abandons an edit in progress**, as Excel's does; committing it would
+  have snapshot over the snapshot.
+
+**Not done**: Repeat is still "Can't Repeat" - dropped by the owner on
+2026-09-22, and the row removed (§81.99) - and cancelling a Format dialog
+ends Undo where Excel's would keep it (the drop is taken when the menu
+fires).
+
+#### 81.57.3 Evidence
+
+`tests/sheetundo.py`, driven through the real menus and read off the glass,
+then the saved document checked whole: an entry undone and redone; a paste of
+**two** cells undone — both, where per-cell snapshots would have taken back
+only the last, which a one-cell paste can never show; a Clear through its
+dialog undone; an inserted column undone; and a paste followed by a format,
+after which Undo must change nothing. **11 checks; 5 fail against the
+previous binary** (the six that pass are the typing, pasting and clearing
+themselves). Mutations, each built: a snapshot per `sh_commit` even inside a
+command fails the two-cell paste; the dialogs snapshotting nothing at OK
+fails four. The format case first used Format > Alignment and passed with
+the MENU's drop taken out — Alignment's dialog ends Undo at its own OK — so
+it uses Column Width now, which only the menu's drop covers, and taking
+that drop out fails two. `tests/sheetmove.py`
+lists Undo's claim among the movable ones, so a heap compaction must carry
+its contents too.
+
+Resident +869 bytes, bss +5 — 2,536 bytes of headroom are left.
+
+### 81.58 Insert and Delete move a cell's borders and notes
+
+**The border and note tables stayed where they were.** Insert and Delete
+Row/Column moved the cells, rewrote the formulas that referred to them (the
+reidx pass) and, since §81.56, the column widths — but never walked the two
+tables beside the cell array, which are keyed by position exactly as the
+cells are. A bordered cell moved down a row and its border stayed on the row
+above, around whatever was there now; a deleted row left its borders on the
+row that took its place; a note stayed on the old address.
+
+`sh_rc_sides` walks both, beside `sh_colw_shift`, through one routine
+(`sh_rc_table`) given each table's record size: every record on the sheet
+past the pivot moves one row or column, a delete takes the pivot's own
+records, and one pushed off the grid goes too. It works **in place**, closing
+gaps as it goes: the tables are in (row, column) order, and a shift that
+moves every record past the pivot by the same one cannot reorder them, so
+nothing is re-sorted.
+
+`tests/sheetside.py`, 5 checks: the host's BIFF3 file borders A1 top and
+bottom; with gridlines off the border is the only ink on a cell's edge, and
+it must move down with an Insert Row, come back with a Delete Row, and go
+with a Delete of its own row — while the saved file keeps it on its cell.
+The previous binary fails the insert and the own-row delete; taking out the
+delete's shift fails three, keeping the deleted row's records one. The notes
+go through the same routine with their own record size; nothing SHEET writes
+carries a note, so it is the borders that are observed. (The test's first
+version sampled a bottom border on the next cell's gridline; `sh_drawborders`
+draws it on the cell's own last pixel row.) Resident +217 bytes.
+
+### 81.59 The preset width dialogs retired, and CHART.OVL's claim raised
+
+**Column Width... and Row Height... had two dialogs, and one of them was
+dead.** Before stage 3.0c gave SHEET a text field, the two were radio
+dialogs of `sh_fdlg_*` — Narrow/Normal/Wide and Short/Normal/Tall, kinds 5
+and 6 — and 3.0c sent both menu items to `sh_idlg_open`'s typed number
+instead. `sh_docmd_format` has not passed either kind to `sh_fdlg_open`
+since, but the prefill that preselected a preset from `sh_cellw`/`sh_cellh`,
+the two apply handlers that wrote one back, their four constants and ten
+strings all stayed assembled. They are gone. The kind-indexed tables
+(`sh_fdlg_titles`, `sh_fdlg_items`, `sh_fdlg_counts`) keep slots 5 and 6 as
+zeros so every later kind keeps its number — `SH_FDK_*` and §81.57's
+`sh_ud_kind` are indexed by it. Resident **−286 bytes** (53,492 → 53,206),
+bss unchanged.
+
+**`CH_OVKB` 22 → 23.** `CHART.OVL` stood at 22,406 of 22,528 bytes, 122
+short of its claim, so any further file-format or function work in the
+module would have hit the sheet.o88 rule's refusal first. It is 22,406 of
+23,552 now. That is heap taken when the module is first needed, not package
+image, and the claim count is unchanged.
+
+Checked by the Sheet gates as they stand (the widths through
+`tests/sheetcolw.py`, which drives the typed Column Width dialog, and
+`tests/sheetmove.py` over the larger claim); nothing new is observable, so
+there is no new test.
+
+### 81.60 Each row its own height
+
+**The whole sheet had one row height.** Format > Row Height set `sh_cellh`,
+in pixels, for every row at once, and an Excel file's ROW records were
+skipped, so a worksheet's tall title row or squeezed spacer row opened at the
+standard height. Excel's Row Height is per row and in points: *"Sets the
+height of the selected rows. Row height is measured in points, as are fonts"*
+(Excel 2.0 Reference Guide, Format Row Height command).
+
+#### 81.60.1 Where a height lives, and in what unit
+
+**In twips**, a twentieth of a point, which is what Excel keeps and BIFF
+writes, so a file's height comes back to the twip. It is drawn at
+`(tw × 14 + 127) / 255` pixels: the standard 12.75 points (`SH_RH_STDTW`,
+255) is the 14 pixels (`SH_RH_NORMAL`) every row already had.
+
+**A sorted sparse table in the note claim's fifth kilobyte** (`SH_ROWH_OFF`,
+4096): a packed row/sheet word, the cell array's own key, and the twips, for
+each row that is not the standard height — 255 records, the count in the
+kilobyte's last word. A flat table like the widths' would be 32 KB a sheet at
+16,384 rows. `SH_CLAIM_NOTE_KB` goes 4 → 5, which is heap and not image, and
+SHEET holds no more claims than it did (all eight, §81.57). `sh_rowtw`,
+`sh_rowheight` and `sh_rowh_set` are the doors (the reader reaches the last
+through a vector, `SH_NVEC` 57), and `sh_colw_clear` now clears both tables
+for every document that replaces the sheet.
+
+#### 81.60.2 Drawing, hitting and scrolling a row
+
+`sh_geom` **walks** the rows from the scroll position as it walks the
+columns, each its own height, until the next would not fit whole, and keeps
+the visible ones' heights in `sh_vrh`. **`sh_vry` is the only arithmetic that
+turns a visible row into pixels** — the cells, the row numbers, the
+gridlines, the borders, the selection and the damage bands all ask it — and
+`sh_gridhit` walks the same heights to turn a click into a row. `sh_cellh`
+means "the row being drawn", as `sh_cellw` means the column (§81.56.2).
+
+**Text sits low in a tall row**, as Excel's does: `sh_vtoff` puts it as far
+above the row's bottom as a standard row's is, so a standard row draws
+exactly as before and a shorter one keeps its text at the top. The row
+number follows its row's text. `sh_dmgdraw` fills the band above the glyphs
+as well as the one below.
+
+**The row blit stands aside** unless every row either view shows, and the
+one past each, is the standard height (`sh_rh_anyin`): `sh_scrollrow_blit`
+moves the picture by whole rows of one height, which is only the picture
+when they are. Refused, the scroll is the full repaint it always fell back
+to.
+
+**Bringing a cell into view walks too.** `sh_scrollto_t` took the new scroll
+position as the target less the number of rows the OLD view held, less one —
+right while every row was one height, and for columns wrong since §81.56: a
+column wider than the ones scrolled past landed partly or wholly off the
+glass. `sh_backrows` and `sh_backcols` walk back from the target, each row or
+column its own size, while the grid (`sh_gridh`, `sh_gridw`) still holds it.
+
+#### 81.60.3 Setting one
+
+- **Format > Row Height** applies to the **selected rows** and takes
+  **points**, fractions allowed — `9.75` is 195 twips — and opens on the
+  selected row's own height, `12.75` for the standard (`sh_ptwips`,
+  `sh_twpts`). The range is 7.3 to 43.7 points (`SH_RH_TWMIN`..`TWMAX`), the
+  8 to 48 pixels the dialog allowed before: a glyph must fit a row, and a
+  row the grid. Excel's 0, which hides a row, is refused, and so is anything
+  past 43.7; there is no Standard Height box, and typing 12.75 is the same.
+- **Insert and Delete Row** move the heights with their rows through
+  §81.58's `sh_rc_table` (row operations only — the table has no column
+  word). **Undo** snapshots them with the widths (§81.57), 2048 bytes.
+- **BIFF** reads ROW, `0208H` and BIFF2's `0008H` (after a BIFF2 BOF only),
+  skipping bit 15 ("the default height") and a height of 0, and clamping the
+  rest to the dialog's range; it writes a `0208H` ROW for each row that is
+  not the standard, before each sheet's cells (docs/BIFF-NOTES.md).
+- **SYLK carries no heights.** Walden's SYLK 1.2 F record has widths (`;W`)
+  and no row height; neither the Excel 2.0 manuals nor LibreOffice — which
+  writes neither widths nor heights to SYLK, and ignored an `F;M` field when
+  given one — offered a field to follow, and a guessed one is a file no other
+  program reads. A SYLK save keeps the widths and loses the heights.
+- **Not done**: hidden rows, the Standard Height box, dragging a row heading
+  to resize it, and BIFF's DEFAULTROWHEIGHT.
+
+#### 81.60.4 Evidence
+
+`tests/sheetrowh.py`, **10 checks**, read off the glass with `glass.rgrid` —
+new, because `glass.grid` finds the rows as the longest evenly spaced run of
+lines and needs three of them to find the columns; `rgrid` takes the columns
+first, as the lines that share one vertical extent. The host's BIFF3 file
+makes row 2 eighteen points, row 3 eight and row 5 thirty, and gives row 4
+twenty with bit 15 set: the lines must be 14, 20, 9 and 14 pixels apart, the
+tall row's text must sit in its lower fourteen, and a click in the lower part
+of B2 must type into B2 — a point one height would call B3. Row Height 9.75
+on B4 must make it 11 pixels, and OK alone on rows 2 and 1 must change
+neither (the dialog opened on 18 and on 12.75); Save As Normal must carry
+rows 2-5 in twips, Insert Row move them down and Undo put them back. Last,
+Down from B4 onto the thirty-point row must scroll until it shows whole —
+two rows here, where the old arithmetic scrolled one and left it below the
+glass — and come out 9, 11, 33. CGA leaves the grid about sixty pixels, which
+is why the heights are small: a thirty-point row does not fit under three
+standard ones, and SHEET rightly draws three.
+
+**9 of the 10 fail against the previous binary** (the one that passes reads
+the two labels, which uniform rows show too). Ten mutations, each built and
+caught: the hit-test by one height (one check), the blit without its refusal
+(the scroll), no text offset (the tall row's text), the prefill in pixels
+(four - OK alone then writes 22 points), bit 15 not honoured (the grid: row
+4 at 22 pixels leaves three rows), the ROW record not written (the three
+saves), no height shift on Insert (one), Undo copying the widths alone (two),
+the old scroll arithmetic (the scroll) and the hundredths dropped (six).
+LibreOffice, given the test's save converted to `.fods`, reads rows 2-5 at
+18, 8, 9.75 and 30 points.
+
+`sh_geom` walks the table once beside the rows rather than searching it for
+each: it runs on every repaint, and a full table searched per row is some
+twelve thousand compares a paint on the target.
+
+Resident +871 bytes (53,206 → 54,077, 1,660 left), bss +74, `CHART.OVL` +180
+(22,586 of 23,552), and one kilobyte of heap in the note claim.
+
+### 81.61 Formulas and constants that did not survive the trip
+
+Five defects from §81.39.3's list and around it, each of which lost what a
+cell held without saying so.
+
+#### 81.61.1 A `;` inside a formula, in SYLK
+
+SYLK escapes its field separator by doubling it (Walden: *"Any field
+containing the reserved semicolon character must have two of them"*), and
+§81.38.1 taught the K field that, both ways. The **E field** was never taught:
+the writer copied the formula verbatim and the reader ended the field at the
+first `;`. A `;` can only be in a formula inside a string constant, so
+`="a;b"&A5` went out as `E"a;b"&A5` — which any reader, SHEET's included,
+reads as the formula `"a` — and a conforming file's `E"a;;b"` came in cut at
+the same place. Both are fixed, and `tools/os88sheetfmt.py` doubles it when it
+authors a file too.
+
+#### 81.61.2 Strings, `&` and error constants in a saved formula
+
+`sh_rpn_emit` refused a string constant, the `&` operator and an error
+constant, so Save As Normal wrote any formula using one as its **cached value
+alone** — the formula was gone the next time the file was opened, with no
+message. It emits `tStr` (17H: a count byte, then the characters, a doubled
+quote being one), `tConcat` (08H) at the level the evaluator gives `&` —
+between the comparisons and `+`/`-`, left-associative — and `tErr` (1CH, then
+BIFF's own code through `sh_biff_e2b`), the name matched exactly against
+`sh_errtab` as `sh_perrlit` matches it. An unterminated string constant is
+still refused; Excel has no such thing. §81.10.10's decoder already read all
+three.
+
+#### 81.61.3 An error constant, stored
+
+An error **constant** — `#DIV/0!` held as a value, as a file or a typed entry
+leaves it — was lost three ways:
+
+- **Fill Right/Down** read it and stored the number underneath: 0. It is
+  stored as the error now (`sh_seterr`, which moved into resident code for
+  it; the readers reach it through a vector, `SH_NVEC` 58).
+- **Copy/Paste** carried `sh_cellnum`'s text of it, which was that same 0.
+  `sh_cellnum` names an error as it names a logical, so the formula bar shows
+  it too.
+- **Typing `#N/A`** made a label. `sh_commit` takes the seven error names, in
+  any case, as the error constant (`sh_errword`), as Excel does — and Paste
+  and Sort's carry commit through it, so an error in a carried column
+  survives a sort. The file readers are untouched: a quoted `"#N/A"` in SYLK
+  is still a label, as Walden's grammar says.
+
+`sh_seterr` also answers CF=1 when the cell table refuses it, because
+`sh_commit`'s callers stop on that.
+
+#### 81.61.4 Sort orders every constant
+
+**Sort ordered numbers alone**: a label, a logical and an error value in the
+key column sat the sort out, their rows never entering `rows[]` (§81.19), so
+sorting a column of names moved nothing. Excel's ascending order is numbers,
+then text, then logicals, then errors, and descending reverses all of it.
+
+Each entry carries a **class** now — 0 number, 1 text, 2 logical, 3 error —
+in a byte array at `SH_SORT_CLS_OFF` (30720, the staging segment's free tail),
+indexed by the entry's original index so the insertion sort never moves it.
+`sh_sort_cmp` compares classes first; two numbers or two logicals by value,
+two errors as equal, and **two labels in any case**, character by character.
+A label's text is staged in a `SH_SORT_SNAP_OFF` slot — idle until the carry,
+which runs after the write-back — and its value bytes name the slot, so text
+entries are capped at the snapshot's 180, the cap the carry already had; one
+past it sits out as before. A formula sorts by its **result**, a text result
+staged the same way (`sh_sort_class`). The write-back restores each class
+through its own setter: `sh_setvald`, `sh_settext` (skipped when the label is
+already in its row, which spends no arena), `sh_setbool`, `sh_seterr`.
+
+A column heading in the key column is sorted with its data now, which is what
+Excel 2.1 does with a selection that includes it; §81.19's "what the header
+row wants" was the side effect of labels sitting out. Empty cells in the key
+column still stay where they are, where Excel puts them last.
+
+#### 81.61.5 Evidence
+
+`tests/sheetdec.py` gains **12 checks**, six formulas each checked as written
+(decoded on the host) and as reopened: `"a;b"&A5`, `A5&"-"&A1`,
+`IF(A1>A2,"big","small")`, `"q""t"`, `#N/A` and `ISERROR(#REF!)`. The
+previous binary fails 11 of them. The twelfth passed only by coincidence:
+it saved `=#N/A` as an error *value*, which the host reads as
+`('err', '#N/A')` — whose second field is the formula's text. The check
+requires a FORMULA record now. Mutations, each caught: the E field read without
+its escape (2 checks), written without it (1), no `tStr` (8), no `tConcat`
+(4), no `tErr` (4).
+
+`tests/sheetsort.py`, **7 checks**, through the menus and a SYLK save:
+Fill Right, Copy/Paste and typing each keep an error constant; Sort on a
+single cell sorts column A's eleven mixed entries — three numbers, three
+labels (`apple` and `Banana`, which ASCII would order the other way), two
+logicals, an error, and two formulas, one with a text result — into Excel's
+order with both formulas still formulas; and a two-column block sorts on its
+key's classes ascending and descending with its second column carried.
+The previous binary fails 6 of the 7. Mutations, each caught: Fill without
+its error case (1), `sh_cellnum` without its (1), `sh_commit` without
+`sh_errword` (2 - Paste commits through it), labels sitting the sort out
+again (3), the class compare dropped (3), a formula's text result not staged
+(1), and the comparison without its case fold (1). A first version of that
+last mutation took the fold off one side only and passed, because in this
+fixture every text comparison has the folded label on the key side - the
+mutation was wrong, not the gate.
+
+Resident +654 bytes (54,077 → 54,731, **995 left**), bss +11, `CHART.OVL`
++178 (22,764 of 23,552, `sh_seterr` having left it).
+
+### 81.62 The less-used functions go to `CHART.OVL`
+
+**Resident 54,731 → 52,148: 2,583 bytes**, with 995 left before it — which is
+the whole of why: the next resident feature had nowhere to go. The rule is
+§82.16.10's: the code that runs only when a cell using it recalculates, and
+of that, what a sheet uses least. **Stays resident**: the folds (SUM,
+AVERAGE, MIN, MAX, COUNT, COUNTA, PRODUCT, AND, OR, and the variance family,
+which shares SUM's path), IF, CHOOSE, NOT, ABS, the special forms (MOD, INT,
+TRUNC, ROUND, SQRT, POWER, SIGN, FACT, ROW, COLUMN), the lookups (VLOOKUP,
+HLOOKUP, INDEX, MATCH, LOOKUP), the dates, NOW and RAND. **Moves**: the
+**text** family (23 functions, `sh_ptext` and five helpers only it calls),
+the **logarithms and trigonometry** (`sh_ptrans`, 12) and the **information**
+functions (`sh_pinfo` and `sh_pargclass`, 13) — 48 functions.
+
+The evidence for "least" is thin and says so: Microsoft's own 33 Excel 2.1
+sample worksheets carry 323 formulas, and every function in them is SUM (187),
+AVERAGE (3) or NOW (1). The split beyond that is judgement about what business
+sheets use, and it is cheap to be wrong about: once `CHART.OVL` is loaded —
+at start-up, and kept — a moved function costs a far call through its door
+and its calls back, not a disk read. What a wrong guess costs is a machine
+without the file, where the functions answer `#VALUE!`, as the financial
+family's do and as a machine without the file cannot open a document anyway.
+RAND stays because it is nullary: the door's refusal steps over arguments, and
+RAND has a `)` its caller consumes itself.
+
+**One door, four verbs.** `sh_pfin`'s stub became `sh_pdoor`, entered by
+`sh_pfin`, `sh_ptext`, `sh_ptrans` and `sh_pinfo` with `SHM_FIN`, `SHM_TEXT`,
+`SHM_TRANS` and `SHM_INFO` in BP; the refusal is the one §82.16.10 wrote. The
+bodies are bracketed where they stand — `sh_pargclass` joins the financial
+block at its top and `sh_ptrans` at its bottom, making one region from
+`sh_pargclass` to `sh_trcopy`, and the text family is five brackets — with
+169 calls turned to `SHOUT` and **23 new vectors** (`SH_NVEC` 81), found by a
+call-graph walk over the source: a routine moves when every caller it has
+moves with it.
+
+**Two routines could not be called through a vector, and the stack checker
+said so.** `sh_vpush` and `sh_binop_pre` move `sh_acc` on and off their
+CALLER's stack past their own return address; behind a far call and a shim
+they would bank it on the shim's frame and `retf` into the value.
+`stkbalance` refused the shims (`ret at depth -4`, `+4`) before anything ran.
+The module has its own two (`shm_vpush`, `shm_binop_pre`), and the part of
+`sh_binop_pre` that touches no stack became `sh_binop_ld`, resident and
+shared.
+
+**`CH_OVKB` 23 → 26**: `CHART.OVL` 22,764 → 25,797 of 26,624. Heap, not image.
+
+#### 81.62.1 A defect the gate found on both builds
+
+`SEARCH` came in from SYLK as `SEAC16H` — **#NAME? on every load, SHEET's own
+files included**. `sh_formula_from_r1c1` starts a reference at any `R`
+followed by a bracket, a digit, `-` or `C`, and never asked whether the `R`
+began a word: the `RC` inside SEARCH is "this row, this column", and became
+the A1 of the cell holding it. A defined name containing RC — SOURCE, BARC,
+RCOST — the same. A reference now has to start where a word does (the `R`
+does not follow a letter, digit, `.` or `_`, `sh_rcident`) and end where one
+does (not followed by one of those, or `(`). SHEET's writer was never
+affected: it spelled `LOG10` and `ATAN2` whole.
+
+#### 81.62.2 Evidence
+
+**The move is checked against a gate that passes both builds**, as §82.16.10
+requires: `tests/sheetfunc.py` evaluates all 48 moved functions from formulas
+cached with a wrong value, read back from SHEET's SYLK save. Run against the
+resident build (the commit before) and the moved one, **the two SYLK files
+SHEET wrote are byte-identical**, and both fail exactly one check — SEARCH,
+above, which is how it was found. The fourteen existing gates pass the moved
+build unchanged; `sheeteval`'s 102 and `sheetfin`'s 30 go through the
+reshaped door.
+
+With the R1C1 fix `sheetfunc` is **51 checks**: the 48 functions, plus RCOST
+and BARC, two names beginning and ending in RC. Each half of the word check,
+taken out, fails its own name — and the start check was not visible at first:
+taken out, SEARCH still passed, because its `RC` runs into an `H` and the end
+check alone refuses it. BARC, which ends in RC, is the case that needs the
+start.
+
+Resident −2,583 bytes (**3,486 free**), bss +92, `CHART.OVL` +3,033.
+
+### 81.63 A macro language you can use
+
+§81.8's engine knew five keywords, each only as the **whole** of a cell, so a
+macro could not decide anything, loop, or ask the user a question, and it
+started wherever the selection happened to be. This is Excel 2.1's model,
+as much of it as is useful here:
+
+**Macro functions are functions, and act when evaluated** (*Functions and
+Macros*, chapter 7), so `=IF(A5>10,GOTO(B20))` branches and
+`=SET.VALUE(B1,B1+1)` counts. **But only when the step engine is evaluating
+the current macro cell**, at its own evaluation depth (`sh_macro_exec`,
+`sh_macro_exdep`). A repaint evaluates every visible formula, macro cells
+included, and a SELECT mid-run repaints — without the depth test the painter
+would run every macro cell on the screen. A macro command in a worksheet
+formula, or evaluated by the painter, does nothing and answers FALSE.
+
+**IF and CHOOSE parse the branch they do not take**, as they always have —
+the parse is what moves the text pointer — and that branch now runs no macro
+command: `sh_macro_exec` is held off across it. The first run of the gate had
+`=IF(H7=3,BREAK())` break out of its loop at 1.
+
+| | |
+|---|---|
+| control | `GOTO(ref)`, `RETURN()`, `HALT()`, `FOR(counter,start,end[,step])`, `WHILE(test)`, `NEXT()`, `BREAK()` |
+| the sheet | `SELECT(ref)`, `FORMULA(x[,ref])` — entered as if typed, so `"=A1*2"` is a formula and `"#N/A"` the error — `SET.VALUE(ref,x)`, `ACTIVE.CELL()` |
+| the user | `ALERT(text)`, `INPUT(prompt)`, `MESSAGE(show[,text])`, `BEEP()` |
+| commands | `COPY()`, `CUT()`, `PASTE()`, `CLEAR([n])` (Excel's numbering: 1 all, 2 formats, 3 formulas, 4 notes, which this Clear has no row for), `CALCULATE.NOW()` |
+
+**A reference argument** is a reference, a defined name, or **text**: `"B5"`,
+or `"R[1]C"` relative to the active cell — the form Excel's recorder writes,
+and how a macro walks a column without OFFSET. **A FOR counter is a cell** (or
+a name for one) where Excel's is a name holding a value: names here are
+places, so the counter lives where the name points. Loops nest four deep
+(`SH_MLOOPS`); a FOR or WHILE that does not run, or a BREAK, goes on past its
+own NEXT, found by counting FOR/WHILE/NEXT down the column.
+
+**Macro > Run...** asks for the start — a defined name, Excel's way, or a
+reference — through stage 3.0c's one-line dialog, prefilled with the
+selection, which is where a macro used to start.
+
+**ALERT and INPUT pause the run.** The engine raises the dialog after the
+step and returns; the dialog's completion carries on — `sh_macro_onalert` for
+the alert, `sh_idlg_after` once the input dialog has **closed** (a run may
+open it again). ALERT resumes at the next cell; INPUT at **the same cell**,
+whose second evaluation answers what was typed — a number if all of it is
+one — or FALSE for Cancel, as Excel's does. One INPUT to a cell. **A dialog
+that does not come up stops the run** with the macro error, DIALOG.BOX's rule
+(§81.96): `os88ui_ask` refuses while another alert is up or the window table
+is full, and `sh_idlg_open` while one of its own dialogs is open — and no
+completion would ever come, so a run left paused on it would hold
+`sh_macro_running` for the rest of the session, answering every Macro > Run
+with *A macro is running*. `sh_macro_inputup` answers `CF` for that reason;
+`sh_idlg_open` has no output of its own.
+
+**SELECT repaints; SET.VALUE and FORMULA do not**: the grid catches up at the
+next SELECT or command, a pause, or the end — every change repainted as it
+happens is seconds a step on the target. A run takes no Undo snapshot per
+entry (`sh_ud_busy`) and ends with "Can't Undo", as Excel cannot undo a macro
+either. `SH_MACRO_MAXSTEPS` is 10,000 now that a macro can loop.
+
+**Where it lives.** The engine and every macro function are `CHART.OVL`'s
+(verbs `SHM_MACRO`, `SHM_MRESUME`; `CH_OVKB` 26 → 28); the package keeps the
+twenty names in `sh_functab`, the door, the Run dialog and the resumptions,
+and the old resident engine went — resident +118 bytes net for all of it.
+**BIFF cannot carry a macro function**: no reference on hand gives Excel's
+numbers for them, and a guess is a file Excel runs differently, so they are
+`0xFF` in `sh_rpn_fid` and a Normal save keeps the value. SYLK carries the
+formulas as text. `sh_dc_look` refuses index 255, which it would otherwise
+have decoded as the first `0xFF` entry, POWER.
+
+**Clear's "Formulas" row removes a cell with nothing to keep** — no format
+byte, no border, no number format — instead of leaving a zero on the grid:
+CLEAR()'s default is that row, and Excel shows nothing there.
+
+#### 81.63.1 Evidence
+
+`tests/sheetmacro.py`, **16 checks**, through the menus and a SYLK save. A
+macro run by NAME: FOR/NEXT summing 1..5; WHILE(ACTIVE.CELL()<>0) walking C1:C3
+by SELECT("R[1]C"); FORMULA entering a formula and a label into the active
+cell; IF with GOTO jumping a SET.VALUE; IF with BREAK leaving a FOR at 3; a
+FOR stepping −3 inside another (3 × 4 turns); COPY and PASTE; CLEAR();
+MESSAGE on the status bar, read off the glass; SET.VALUE through a defined
+name; a FOR that runs no turn, skipped past its own NEXT over the loop inside
+it; RETURN ending the run. A macro run by reference: ALERT, dismissed, then
+INPUT answered 42. And `=GOTO(A12)` on the worksheet, inert and FALSE.
+
+The first run found two defects the design review had not: IF's untaken
+branch running BREAK, above, and INPUT reading its "answered" flag out of AL
+after `sh_skipargs` had walked the text in it — every answer was a Cancel.
+CLEAR had the same AL fault, and Excel's CLEAR numbering is not Clear's row
+order. The previous binary fails 14 of the 16 (the two it passes hold trivially
+when no macro runs at all). Mutations, each built and caught: the untaken IF
+branch left live (1), the depth test dropped - the painter running macro
+cells mid-run (5), INPUT's flag left in AL (1), R1C1 text refused (9), names
+refused as references (2), the loop skip counting no nesting (1), and Clear
+keeping the zero (1). The skip mutation passed at first: the no-turn FOR's
+inner loop had nothing between its NEXT and the outer one, so stopping at the
+wrong NEXT ran nothing observable; a SET.VALUE placed between the two is what
+tells them apart.
+
+Resident +118 bytes (52,148 → 52,266, **3,079 free**), bss +289, `CHART.OVL`
++2,266 (28,063 of 28,672).
+
+### 81.64 The menu tick is a SOLID SQUARE
 
 Sheet draws its own menus (§81), so it carried its own copy of the checked-item
 mark: two `OSAPI_GFX_LINE` calls in the shape of a tick. **It is one
@@ -134211,13 +143750,1464 @@ own catch-up pass is still owed** and this is not it: when that lands Sheet
 becomes a consumer of `os88ui.inc`'s shared menu (§13.16) the way Word is, and
 this copy goes with the rest of its private menu code.
 
-## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
-
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
 a SYLK, DIF or BIFF file and draws a bar chart of one column of it; **Sheet's
 Data > Chart Column...** opens a live chart window onto the column the user has
 selected. `apps/os88chart.inc` is the half they share, so the two cannot drift
 into drawing the same data differently.
+
+### 81.65 The DATABASE functions, and the criteria engine underneath them
+
+§81.39.4's own dependency ordering named "a database + criteria area" as the
+first of six enablers, and a cross-era survey of what other spreadsheets of
+this machine's period actually shipped is what decided it should go first:
+Lotus 1-2-3, SuperCalc 5 and Quattro Pro's own lineage all implement a
+labeled database range plus a separate criteria range plus a family of `D*`
+aggregate functions the same way, independently - the one place every DOS
+competitor checked agreed, where array formulas (§81.39.1's other big piece)
+turned out to be more of an Excel/GUI-era design bet, shipped by its DOS
+rivals as one-shot menu commands rather than live formulas. Multiplan -
+Excel's own direct ancestor - has neither at either end of its 1982-1985
+life, which if anything argues the other five vendors converging on the
+same shape is a real signal and not survivorship.
+
+**All eleven, DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM
+DVAR DVARP**, take exactly three arguments - `DFUNC(database, field,
+criteria)` - and this section is really about the criteria engine
+underneath them: which rows get folded. Once a row is chosen, the actual
+accumulation is not reimplemented at all - `shm_pdatabase` sets `[sh_pfid]`
+to whichever EXISTING fold id (SUM 0, AVERAGE 1, MIN 2, MAX 3, COUNT 4,
+PRODUCT 10, COUNTA 11, VAR 77, VARP 78, STDEV 79, STDEVP 80) the function
+folds like and hands each matching row's field cell to `sh_foldvalue`, the
+same routine an ordinary `=SUM(A1:A9)` already walks through, then reads
+the answer back off `sh_funcfinish` - the same two routines §81.34's
+variance folds and every plain fold before them already use. DAVERAGE folds
+like AVERAGE, DCOUNT like COUNT (numbers only), DCOUNTA like COUNTA
+(anything non-blank) - the same split that let COUNT and COUNTA first
+disagree (§81.43) now lets DCOUNT and DCOUNTA disagree over one field: a
+Fruit row whose own Amount is the text `N/A` counts toward DCOUNTA (a name
+is there) and not DCOUNT (a number is not), `tests/sheetdb.py`'s own worked
+example.
+
+**The field argument** is either a 1-based column NUMBER within the
+database rectangle, or TEXT matched case-insensitively against the
+database's own header row (the rectangle's first row) - `sh_dbresolve`,
+shared verbatim by the function's own field argument and by every criteria
+column's header, so `DSUM(A1:D7,"Amount",...)` and
+`DSUM(A1:D7,3,F1:F2)` name the same column.
+
+**The criteria range** is itself a small table: its own first row is
+headers, matched against the database's headers the identical way the
+field argument is; every row beneath it is one set of conditions.  A
+database row is included when **ANY ONE** criteria row's conditions **ALL**
+hold - OR across the criteria rows, AND across one row's own columns,
+Excel's own shape and the one every DOS-era competitor checked shares. A
+criteria header that is blank, or that names no real database field, is
+skipped rather than refused: an unrelated extra column in the criteria
+range must not break every call. A criteria range that is only its own
+header row, with no condition row beneath it at all, matches every database
+row - `DSUM(db,f,A1:A1)` with `A1` the header alone sums the whole column,
+which is Excel's rule too.
+
+**One condition cell, tested against one database cell** (`sh_dbcmp`):
+
+- **blank** - no constraint (already filtered out one level up, in
+  `sh_dbrowok`)
+- **a NUMBER or a LOGICAL** - exact equality against a database cell of the
+  SAME type; Sheet's own `=` operator draws the identical line (§81.53), so
+  `5` never equals `TRUE` here either
+- **TEXT with no relational prefix** - a case-insensitive PREFIX match
+  against the database cell's own text if the criterion has neither `*` nor
+  `?` in it (Excel's own rule for a bare label criterion - `"B"` matches
+  `"Banana"`), or a full `*`/`?` WILDCARD match, anchored at both ends, if
+  it does (`"*an*"` matches `"Banana"` and `"Eggplant"`, not `"Apple"` or
+  `"Carrot"`). Either way the database cell has to be text; a number is
+  never coerced to its printed digits for this
+- **TEXT opening with `=`, `<>`, `<=`, `>=`, `<` or `>`** - what follows the
+  operator is tried as a NUMBER first (`fp_atof`, the same reader CSV's
+  import uses, §81.40); if it parses cleanly, the two are compared
+  NUMERICALLY against a NUMBER database cell (`">15"` matches `20` and not
+  `10`). If it does not parse as a clean number, the remainder is compared
+  as EXACT TEXT instead, against a text database cell. An operator followed
+  by something that is neither - a fraction of a number, say - is
+  therefore a literal text match including the operator characters, which
+  will simply never match real data: a documented shortfall rather than a
+  silent wrong answer, the same shape as `~`-escaping a literal `*` or `?`
+  being absent from the wildcard match
+
+**Re-entrancy is REFUSED, not guarded** (`sh_db_busy`), the identical shape
+§81.34.1 already uses for a variance fold caught inside another one
+(`sh_stbusy`, which a database function folding like VAR/VARP/STDEV/STDEVP
+shares and must not corrupt either - `sh_db_varguard` remembers whether THIS
+call is the one that set it, so it clears it again and only then). The
+database and criteria rectangles stay live across the WHOLE row-by-row,
+column-by-column scan - unlike `sh_r1col`/`sh_r2col`, which one
+`sh_getcell2` call banks around itself when a formula cell folds a range of
+its own (§81.52), these would need banking around EVERY recursable call a
+scan like this makes many of. A database or criteria cell whose own formula
+calls another database function answers `#VALUE!` instead. A database
+argument is a fixed reference, not a value a formula is likely to compute
+cell by cell, so the cost of refusing this is small next to a scan that has
+to be careful everywhere instead of careful once.
+
+**Where it lives.** All eleven join §81.62's tenants in `CHART.OVL` -
+`shm_pdatabase` and the criteria engine beneath it, reached through a new
+door (`sh_pdatabase`, `SHM_DATABASE`) exactly like the financial, text,
+transcendental and information families before them. Two more resident
+shims joined the vector table for it (`sh_foldvalue`, `sh_funcfinish` -
+everything else the engine calls back into was already vectored for an
+earlier family), and `CH_OVKB` rose from 28 to 29.
+
+`tests/sheetdb.py` is the gate: all eleven functions, the field argument by
+name and by number, all four criteria shapes above, AND across one
+criteria row and OR across its rows, and the DCOUNT/DCOUNTA split.
+
+### 81.66 CELL, Excel's own compatibility subset
+
+`CELL(type_of_info [, reference])` closes §81.39.1's last function, and the
+cheapest of the three gaps that section found - no enabler needed, unlike
+the database and array-formula pieces beside it. Checked against the real
+text of `Microsoft Excel Functions and Macros` (`LIBRARY/documentation/
+excel_man/`, p.31-33) rather than recalled: this era's CELL answers exactly
+**nine** attributes - `"width" "row" "col" "protect" "address" "contents"
+"format" "prefix" "type"` - Excel's own note in that manual is that CELL is
+"provided for compatibility with other worksheet programs" and a macro
+wanting more used `GET.CELL` instead, which this app's macro language
+(§81.63) does not have either, so nine is the whole of it and not a chosen
+subset of a longer one.
+
+`type_of_info` is matched case-insensitively; `reference` is a single cell
+or a range, using its UPPER-LEFT corner either way - the reference argument
+is parsed with the same `sh_pargref` every other range-taking function
+here uses, so "B9:A1" is not sorted into "A1:B9" any more than it is for
+DSUM (§81.65) or a lookup. Omitted, `reference` is the CURRENT SELECTION's
+own upper-left, normalized by hand (`sh_selcol`/`sh_selcol2`/`sh_selrow`/
+`sh_selrow2`, two comparisons) rather than through `sh_selrect` - not among
+this module's vectors, and adding one for a single caller was not worth it.
+
+Each attribute:
+
+| value | answers |
+|---|---|
+| `"width"` | the column's width in characters (§81.56's own unit - `sh_colwidth` already returns it that way) |
+| `"row"` / `"col"` | the 1-based row/column number, matching `ROW()`/`COLUMN()` (§81.31) - `sh_pcellref`'s own numbering is 0-based internally |
+| `"protect"` | 1 if locked, 0 if not - reading the border table's inverted-sense bits exactly as Options ▸ Protect Document does (§81.46): no record there means LOCKED, an untouched sheet's real default |
+| `"address"` | the cell as text, `$A$1`-style, built from `sh_colname` and `sh_itoa` |
+| `"contents"` | the cell's own value, published exactly as `sh_getcell2` leaves it - a number stays a number, a label a label, matching INDEX's own "the caller reads whatever type is there" rule |
+| `"format"` | a short code for the cell's number format (`"G"`, `"F2"`, `"C2"`, `"P0"`, `"D1"`...) - one new table, `sh_ci_fmtcodes`, indexed exactly as §81.55's own `sh_nf_codes` is, so the two stay in step by construction. The index is `sh_cell_nfid`'s, the id Format ▸ Number shows: the border table's stored id+1 less one, else the format byte's. A raw border-table byte answered the NEXT id's code, ignored the format byte, and read past the table at id 20; an id past `SH_NF_N` is `"G"` |
+| `"prefix"` | `'` left-aligned, `"` right-aligned, `^` centred, or `""` for General - reading the alignment bits `sh_getcell2` already publishes in `sh_curfmt` |
+| `"type"` | `"b"` blank, `"l"` label, `"v"` value - Excel's own three-letter answer |
+
+**Where it lives.** CELL joins the DATABASE family in `CHART.OVL`, through
+its own door (`sh_pcell`, `SHM_CELL`) - a single id (`SH_FID_CELL`, 142, one
+past DVARP) rather than a range, since it is the only function this door
+answers for. No new vectors: every resident routine it calls back into
+(`sh_pcmp`, `sh_pargref`, `sh_getcell2`, `sh_colwidth`, `sh_bt_get`,
+`sh_bt_getw`, `sh_colname`, `sh_itoa`, `sh_acc_int`, `sh_skipargs`) was
+already reachable from an earlier family. `CH_OVKB` rose from 29 to 30.
+
+**Two bugs, one shape, found by comparing the SAME diagnostic value against
+what it should have been rather than trusting that "it built" meant "it
+runs":** `sh_ci_names` and `sh_ci_fmtcodes` are tables of pointers INTO THIS
+MODULE'S OWN DATA - CS-relative, not the package's DS - and the first
+version dereferenced them with a plain `[si]`/`[di]`, which defaults to DS
+and so read essentially random bytes at the package's own version of that
+offset; every `CELL(...)` call answered `#VALUE!`, and the table itself
+turned out to be byte-perfect on inspection (`python3 -c
+"open('build/CHART.OVL','rb').read()[...]"` against the file directly,
+which is how the guess was ruled OUT rather than in) - only the READ of it
+was wrong. `sh_ci_namecmp` and `sh_ci_copy_cs` fixed the dereference; then
+"format" and "prefix" alone kept failing, because both reused SI - the
+FORMULA'S OWN parse position, live from `.haveref`'s own `inc si` all the
+way to `.out` - as `sh_ci_copy_cs`'s source pointer, the identical class of
+bug the type-match loop already had earlier in the same routine (and which
+`.address`'s own calls to `sh_ci_appendstr` had already, correctly, banked
+around with `push si`/`pop si` - the fix both handlers needed too).
+
+`tests/sheetcell.py` is the gate: all nine attributes, `type_of_info`
+case-insensitivity, `reference` explicit and omitted (the current
+selection, after a real click), and the defaults every attribute answers
+against an untouched cell (`"format"` is `"G"`, `"prefix"` is `""`,
+`"protect"` is `1`).
+
+### 81.67 The ARRAY/MATRIX functions, one element at a time
+
+§81.39.1's last gap, and the one the cross-era survey (§81.65's own header)
+found the least evidence for as a period-standard expectation: neither
+Lotus 1-2-3 nor SuperCalc 5 exposes matrix inversion, multiplication or
+regression as a *formula* at all - both shipped the identical
+*capability* as a one-shot `/Data` menu command instead, and Multiplan has
+neither at either end of its life. **All eight are implemented**, the
+regression family (`LINEST LOGEST TREND GROWTH`) closing the same day as
+the rest.
+
+**Sheet has no array-formula (Ctrl+Shift+Enter, multi-cell) entry at all** -
+building one is its own feature, §81.39.4's "array formulas" enabler, and
+not a prerequisite these functions were waiting on. Instead each one
+computes its REAL, WHOLE result and publishes only the array's own
+TOP-LEFT element as an ordinary value - which is exactly what Excel itself
+answers when one of these is entered as a plain cell formula without CSE:
+TRANSPOSE becomes a same-cell echo (its own (1,1) element is always the
+source's own (1,1) cell, moved nowhere), MMULT one dot product, MDETERM and
+MINVERSE still the WHOLE determinant or inverse - there is no way to answer
+element (1,1) of an inverse without doing the whole elimination, so those
+two are exactly as much engine as a real array-formula MINVERSE would need,
+just addressed at the end instead of spilled across a selected range.
+
+**MDETERM and MINVERSE share one elimination workspace**, `sh_mx_buf` - 8
+rows by 16 (`SH_MX_N` by `2*SH_MX_N`) packed-double columns, wide enough for
+MINVERSE's augmented `[A|I]` and MDETERM's plain triangulation alike, never
+both at once (`sh_mx_busy` - refused, not guarded, the same shape §81.65's
+`sh_db_busy` already uses and for the same reason: the workspace stays live
+across a whole elimination's worth of recursable `sh_getcell2` calls, not
+just one. The call that set it clears it on every exit it owns, a bad
+argument list included, which once left every array function refused for the
+session; a refused call leaves it to the outer one). `SH_MX_N` = 8 caps every array argument at 8 rows/columns each
+way. MDETERM triangulates with partial pivoting (the first nonzero entry at
+or below the pivot row, not the largest-magnitude one - correct, if less
+numerically robust than full partial pivoting, which nothing here has
+needed to upgrade to yet) and takes the signed product of the diagonal;
+MINVERSE runs full Gauss-Jordan to reduced row-echelon form and reads the
+inverse's own (1,1) back out of the identity half. A singular matrix
+answers `0` from MDETERM (correct - that is the determinant) and `#NUM!`
+from MINVERSE (Excel's own answer, not `#VALUE!` - a singular matrix is a
+real, well-formed argument that simply has no inverse).
+
+MMULT validates the shared dimension (`array1`'s columns against `array2`'s
+rows) and computes the one dot product `(1,1)` needs directly, with no
+matrix buffer at all - the same reasoning that lets TRANSPOSE skip one
+entirely: only one element of the answer is ever published, so only one
+element's worth of arithmetic is ever done.
+
+**LINEST, LOGEST, TREND and GROWTH need no matrix at all** - simple
+(single-predictor) linear regression is four running sums over the known
+points (`sh_mx_sumx/sumy/sumxy/sumx2`, one pass, §81.34's variance folds are
+the precedent), which `sh_mx_regsums` accumulates and `sh_mx_fitline` turns
+into a slope and an intercept. This is real LINEST's own element `(1,1)`
+too, not a simplification for lack of CSE: it is always the slope of the
+*last* x-variable, and with only one x-variable that is the entire answer a
+non-CSE entry could ever show. `known_y's` and `known_x's` must each be a
+single row or a single column - `sh_mx_regsums` rejects a genuine
+two-dimensional range, since multiple regression is out of scope here -
+capped at `SH_MX_REGN` = 200 points, an O(n) guard against a whole-column
+reference rather than `SH_MX_N`'s O(n³) kind of limit. `known_x's` defaults
+to `1,2,3,...,n` when omitted, and the `const` argument (LINEST/LOGEST's
+3rd, TREND/GROWTH's 4th) forces the intercept to 0 when FALSE - a fit
+through the origin, `slope = Sxy/Sxx` directly rather than through the
+general two-sum formula. LOGEST/GROWTH fit `ln(y) = ln(b) + x·ln(m)` by
+running the identical sums over `ln(y)` (`sh_mx_logy`, `fp_ln` - already
+vectored for the logarithm functions, §81.62) and undo the transform with
+`fp_exp` at the end: LOGEST publishes `m = exp(slope)`, not `ln(m)`.
+`fp_ln`'s own `CF=1` on a non-positive input is what answers `#VALUE!` for a
+`known_y's` that cannot be logged - no separate sign check needed. TREND and
+GROWTH evaluate the fitted line at `new_x's[0][0]`, parsed through
+`sh_pargclass` rather than `sh_pargref` because `new_x's` is as often a bare
+number as a reference and `sh_pargclass` already answers a reference with
+its own top-left value; when `new_x's` is omitted the evaluation point is
+`known_x's[0]` (or the default sequence's own first value, `1`, when
+`known_x's` was omitted too) - Excel's own default. A zero fit denominator
+(every `known_x` equal, or, forced through the origin, every `known_x`
+zero) answers `#NUM!`, MINVERSE's own singular-matrix precedent: the shape
+was a valid argument, the arithmetic simply has no answer. The `stats`
+argument (LINEST/LOGEST's 4th) is parsed and discarded - it never reaches
+element `(1,1)`.
+
+**Every row/column index in the elimination code is NAMED SCRATCH
+(`sh_mx_i`/`j`/`tr`/`sr`), never a register** - `sh_mx_addr` takes its row
+and column through AX/BX and returns with them clobbered, so a loop counter
+kept in a register does not survive a call to it. And **every function
+banks the FORMULA'S OWN parse position (`push si`) the instant argument
+parsing finishes**, restoring it just before answering - `fp_unpack_a`/`_b`
+take their operand through SI, so the elimination code below uses SI
+constantly as scratch, and without banking it first this is CELL's
+`"format"`/`"prefix"` bug (§81.66) again: every call would answer
+`#VALUE!`, the formula parser finding whatever the last `fp_unpack_a` left
+SI pointing at instead of the real text. Both lessons were applied from the
+start writing this rather than rediscovered by testing it - §81.66's own
+header is why.
+
+`tests/sheetmatrix.py` is the gate for all eight: TRANSPOSE on both a label
+and a number, MMULT and MDETERM on 2x2 matrices, MDETERM on a 3x3 that needs
+a real row swap and a post-pivot elimination pass, MINVERSE against
+MDETERM's own determinant, a singular 2x2 answering `0` and `#NUM!` from the
+two respectively, a trivial 1x1 case at each end of the size range, and the
+regression family against one exact line (`y=2x+1`) and one exact curve
+(`y=2^x`) - LINEST/TREND with the default `known_x's` sequence, an explicit
+one, `const=FALSE`'s through-the-origin fit, and `new_x's` given against
+omitted, LOGEST/GROWTH the same shape one level exponentiated.
+
+### 81.68 Macro arguments in R1C1, the way the recorder writes them
+
+§81.63 already let a reference ARGUMENT be R1C1 text - `SELECT("R[1]C")` -
+but two narrower gaps sat underneath that: a macro's own FORMULA text could
+not carry an R1C1 reference (`FORMULA("=R[-1]C*2",H21)` answered `#NAME?`,
+because "as if typed" went straight to the ordinary A1-only entry parser),
+and SELECT's reference argument could only ever be ONE cell, never a range
+(`SELECT("R23C8:R24C9")` did nothing at all). Both close here; a macro
+sheet's own **BIFF encoding** - Excel's Command Equivalents numbering for
+`FOR`/`SET.VALUE`/`NEXT`/`SELECT` and the rest, and the BOF `dt` flag that
+says a sheet IS one - does not, for the reason its own paragraph below gives.
+
+**FORMULA's text goes through `sh_formula_from_r1c1` before `sh_commit`
+sees it**, using the RESOLVED TARGET CELL (`sh_macro_tcol`/`trow`, not the
+cell running the macro) as the R1C1 origin - the recorder's own convention,
+and the reason the conversion has to wait until after the optional `ref`
+argument is parsed rather than running on the raw text up front. It only
+runs on text starting `=`: a bare label FORMULA enters unconverted, so a
+label that happens to read `"R5C3"` stays exactly that text rather than
+being read as a reference. A1 text passes through the same converter
+UNCHANGED (its own header, §81.7.1) - so this is not a second parser guessing
+which style the text is in, it is the one SYLK's `;E` field already trusted,
+run one call earlier.
+
+**SELECT gained its own reference resolver, `shm_mrangeref`**, alongside
+`shm_mref` rather than replacing it - GOTO/FOR/SET.VALUE/FORMULA's `ref`
+argument only ever wants one cell, and changing what `shm_mref` returns
+under them for SELECT's sake would be the tail moving the dog. Every
+reference SHAPE `shm_mref` accepts (a literal reference, a defined name, A1
+text, R1C1 text) `shm_mrangeref` accepts too, keeping the FAR corner
+alongside the near one (`sh_pargref`'s `sh_arg2col/row` and
+`sh_name_lookup`'s own CX/DX were already computing it - `shm_mref` just
+never kept it). A defined name pointing at a whole range now selects the
+whole range, not its first cell, for the same reason. The new
+`shm_rangetext` is what walks A1 or R1C1 text with or without a `:` -
+**and which one it tries first is not a coin flip**: `"R23C8"` is ALSO a
+legal, if unintended, A1 reference (column R, row 23), and trying A1
+unconditionally first would read `"R23C8:R24C9"` as `"R23"` followed by
+unconsumed garbage rather than as a range. `sh_formula_from_r1c1`'s own
+header already carries the fix - a word-start `R` followed by `[`, a digit,
+`-` or `C` is R1C1, anything else is A1 - and `shm_rangetext` peeks the same
+way rather than inventing a second rule.
+
+**Two more of `shm_pmacro`'s local routines changed contract for this**:
+`shm_mname` used to preserve the caller's CX/DX across its own scratch use
+and discard `sh_name_lookup`'s far-corner output in the same pop; it now
+outputs the far corner instead, safe because it had exactly one caller
+(`shm_mref`) before `shm_mrangeref` became the second. `shm_r1c1` (the
+single-reference-only R1C1 parser, requiring the string to end at the
+reference) split into `shm_r1c1one`, which does not require that - both
+`shm_mref` (checking for the end itself, unchanged behaviour) and
+`shm_rangetext` (checking for `:` first) need to keep going past one
+reference now.
+
+**Why BIFF encoding WAS out of scope — and is not any more (2026-09-21).**
+
+A macro sheet's `dt` flag (`0040H`, confirmed in `docs/excelfileformat.pdf`)
+is easy and sourced; the functions were not. Excel numbers worksheet
+functions through one table (`tools/os88sheetfmt.py`'s `BIFF_FUNCS`, from
+that same document) and macro COMMANDS through an entirely different one —
+the **Command Equivalents Table** — which `excelfileformat.pdf` does not
+carry at all. §81.63's header refused the work on that basis: *"no reference
+on hand gives Excel's numbers for them, and a guess is a file Excel runs
+differently."* This paragraph used to end by calling the alternative "a
+research project of its own, not a coding continuation".
+
+**That premise was false, and had been for as long as it was written down.**
+The check behind it was made against `excelfileformat.pdf` **only**. The
+tree also holds **`[MS-XLS].pdf`** — Microsoft's own *Excel Binary File
+Format (.xls) Structure*, now linked as `docs/ms-xls.pdf` — and its own
+section 2.5.198.4, **`Cetab`**, is the Command Equivalents Table in full:
+395 entries from `0x0000 BEEP`. Its section 2.5.198.17, **`Ftab`**, is the
+function table, 372 entries. (Those are MS-XLS's numbers, not this
+document's.)
+`PtgFuncVar`'s **`fCeFunc`** bit is what selects between them.
+
+All twenty of §81.63's macro functions are sourced by those two tables —
+**ten in each**, which is itself the thing a guess would have got wrong:
+
+| Cetab (commands) | | Ftab (functions) | |
+|---|---|---|---|
+| `BEEP` | `0x0000` | `GOTO` | `0x0035` |
+| `CALCULATE.NOW` | `0x001F` | `HALT` | `0x0036` |
+| `CUT` | `0x0031` | `RETURN` | `0x0037` |
+| `COPY` | `0x0032` | `ACTIVE.CELL` | `0x005E` |
+| `PASTE` | `0x0033` | `INPUT` | `0x0068` |
+| `CLEAR` | `0x0034` | `SET.VALUE` | `0x006C` |
+| `FORMULA` | `0x0060` | `FOR` | `0x00AB` |
+| `SELECT` | `0x006D` | `BREAK` | `0x00AD` |
+| `ALERT` | `0x0076` | `WHILE` | `0x00AC` |
+| `MESSAGE` | `0x007A` | `NEXT` | `0x00AE` |
+
+**And they are CHECKED, not trusted.** `[MS-XLS]` documents BIFF8, so those
+numbers holding back to BIFF2 was an assertion. The evidence was already in
+the tree: `build/sheetxl2/excel21d/KWWHAT.CPM` is a macro sheet off an
+original Excel 2.1d distribution disk (SZDD-compressed; `A0.XLS` is the
+expansion), and its 71 `FORMULA` records decode against these tables and
+against nothing else.
+
+**BIFF2 selects the table by the PTG ITSELF, not by a bit in the index.**
+`fCeFunc` is BIFF8's mechanism and there is no room for it in BIFF2's
+one-byte function field. What Excel 2.1 actually writes is:
+
+| ptg | then | table |
+|---|---|---|
+| **`0x58`** | `cargs`, `iftab` | **`Cetab`** — a command |
+| **`0x42`** | `cargs`, `iftab` | **`Ftab`** — a function |
+
+Read the other way round, every token in that file is nonsense, which is
+what makes this a verification rather than a plausible reading:
+
+| ptg | idx | × | Cetab says | Ftab says |
+|---|---|---|---|---|
+| `0x58` | `0x6D` | 22 | **`SELECT`** | `LOG` |
+| `0x58` | `0x60` | 11 | **`FORMULA`** | `RESULT` |
+| `0x58` | `0x3D` | 5 | **`DEFINE.NAME`** | `MIRR` |
+| `0x58` | `0x6E` | 5 | **`DELETE.NAME`** | `EXEC` |
+| `0x58` | `0x39` | 2 | **`FILL.DOWN`** | `FV` |
+| `0x42` | `0x37` | 8 | `INSERT` | **`RETURN`** |
+| `0x42` | `0x57` | 1 | `SCALE` | **`ECHO`** |
+
+Twenty-two `SELECT`s, eleven `FORMULA`s whose one argument is a formula
+string (`"=Price-Down_Pmt"`), five `DEFINE.NAME`s whose argument is a name
+(`"Principal"`), and eight `RETURN`s against the file's fourteen `NAME`
+records. That is a recorded formatting session, and it reads as one under
+exactly one assignment of the two tables.
+
+`dt = 0x0040` is confirmed from the same file's `BOF`.
+
+The lesson is the one §81.81.1 records one section along: **a check is only
+as wide as the documents it was made against**, and "no reference on hand"
+was a claim about one file that read like a claim about the tree. It cost
+this feature a cycle.
+
+`tests/sheetmacro.py` is the gate for what closed here: `FORMULA` entering
+an R1C1 formula and reading back the value it should compute, `SELECT`
+resolving an R1C1 range and `FORMULA`'s own default landing on its top-left
+cell, and `MESSAGE` reaching the status bar at all - it could not before,
+because the macro run stopped on the SELECT failure two cells earlier and
+never got there. The BIFF round-trip assertions remain in the file, still
+failing, for the reason directly above; they are not a regression to chase
+before closing this section, they are the placeholder for the piece that is
+genuinely still open.
+
+### 81.69 Data ▸ Set Database.../Set Criteria...
+
+The cheapest-LOOKING of §81.39.2's Data menu gaps, and the reason for the
+qualifier: the eleven database functions (§81.65) already take a `database`
+and `criteria` argument as ordinary cell references, and a **defined name**
+(Formula ▸ Define Name..., §81.29/81.30) is resolvable as a reference in
+most places one is expected - so naming the current selection `DATABASE` or
+`CRITERIA` looked like the whole feature. `sh_docmd_setname` calls the
+identical `sh_name_def` `sh_idlg_apply`'s own `.defname` case already uses,
+with a fixed name (`sh_s_dbname`/`sh_s_critname`, pre-uppercased so
+`sh_name_def`'s own `sh_upcase_at` pass is a no-op rather than a mutation)
+in place of whatever text `Define Name...`'s dialog field held - that part
+was exactly as small as expected.
+
+**What was not expected: `shm_pdatabase`'s own `database`/`criteria`
+arguments could not see a name at all.** `sh_pargref` alone has no name
+fallback of its own - that logic lives in `shm_mref`'s wrapper, §81.68's
+own family, which every macro reference argument goes through but no
+database function ever called. `shm_pdatabase` calls `SHOUT sh_pargref`
+directly for both its range arguments, so `DSUM(Database,"Amount",
+Criteria)` answered `#VALUE!` the first time this was actually run through
+the emulator - caught by `tests/sheetdb.py` itself, not found by reading the
+code first. Fixed the same way `shm_mrangeref` was built for SELECT
+(§81.68): on `sh_pargref`'s failure, try `shm_mname` (a plain `call` -
+`shm_pdatabase` and `shm_mname` are both `.modc`, the same CHART.OVL
+segment, whichever family's source they were written under) before falling
+to `.badargs`. Argument 2 (the field) needed no change - it was always text
+or a number, never a range.
+
+**No dialog**, unlike every other `SH_ID_*` command in this family: real
+Excel's own Set Database/Set Criteria apply to the selection the instant the
+menu item is chosen, so this is a one-shot command (`sh_docmd_setname`,
+dispatched from the Data menu's items 4/5) rather than another
+`sh_idlg_open` kind. `sh_name_def`'s existing `CF=1` (name table full)
+answer reuses `sh_idlg_apply`'s own two status messages
+(`sh_s_id_named`/`sh_s_id_nofit`) rather than inventing a third pair that
+would say the identical thing. Redefining either REBINDS it, matching
+Define Name's own behaviour, so choosing the command twice on two different
+selections is how a user changes which range each name means.
+
+`tests/sheetdb.py` gates it through the real menu on a real mouse-dragged
+selection: A1:D4 (the CGA window shows only 4 rows at once, which is why
+this is not the same A1:D7 the file's other seventeen cases use) becomes
+`DATABASE`, F1:F2 becomes `CRITERIA`, and a live-typed
+`DSUM(Database,"Amount",Criteria)` answers the identical 30.0 the
+first case already proved for the full range typed out in full - a
+different-sized database summing to the same total by construction (two
+Fruit rows either way), not a coincidence to be suspicious of.
+
+### 81.70 Options ▸ Freeze Panes
+
+Excel's own: the split is **at the active cell**, so every row above it and
+every column left of it stops scrolling, and choosing the item again
+unfreezes (the label flips `Freeze Panes`/`Unfreeze Panes`, the
+relabel-by-repointing the three Options toggles beside it already use).
+Freezing on A1 is REFUSED in its own words - there is nothing above or left
+of it to freeze - rather than silently doing nothing. State is
+`sh_freezecol`/`sh_freezerow` (0 = that axis is not frozen), saved and
+restored **per sheet** alongside the selection and scroll position that
+`sh_switchsheet` already banks, because Excel's freeze is per sheet too.
+
+**The whole feature is one broken assumption, repaired in eleven places.**
+Before this, a visible column index and a real column differed by exactly
+`[sh_scrollcol]`, and ~62 sites across the geometry, the hit test, both
+scroll bars, both header painters, the cell painter, the border painter,
+the selection frame and the damage-rect fast path each open-coded that one
+addition or its inverse. Frozen panes break it: `sh_geom` now lays
+`sh_vcw`/`sh_vrh` out as the **frozen prefix** (real columns/rows
+`0..freeze-1`, walked first, always shown) followed by the **scrolling
+suffix** (from `sh_scrollcol`/`sh_scrollrow`), so a visible index names a
+real cell through a mapping rather than an addition. Four routines are that
+mapping and everything else calls them:
+
+| | |
+|---|---|
+| `sh_vreal_col` / `sh_vreal_row` | visible index → real column/row. The hit test, both header painters and the cell painter |
+| `sh_vidx_col` / `sh_vidx_row` | real → visible index, `CF=0` when it is off-screen. The border table's sparse walk, which holds real keys already |
+| `sh_vclip_col` / `sh_vclip_row` | a real RANGE → a visible-index range, each edge clamped into view rather than the range rejected. The selection frame and the damage rect, which both open-coded this clamp before |
+| `sh_frozencw` / `sh_frozenrh` | the frozen prefix's own pixel width/height, summed fresh from `sh_colwidth`/`sh_rowheight` rather than read from `sh_vcw` - that cache can be one repaint stale for exactly the column whose width just changed |
+
+`sh_scrollto_t` skips an axis entirely when its target is inside the frozen
+prefix (always visible, and `sh_scrollcol` may never go there), and bounds
+the other with `sh_vcols - sh_freezecol`, the scrolling window's own width.
+`sh_backcols`/`sh_backrows` stop at the freeze boundary rather than at 0,
+and start their pixel budget with the frozen prefix already spent. The bars
+report `total`/`fit`/`pos` shifted into the scrolling region's own space,
+so the thumb represents what can actually scroll; `sh_ondrag` adds the
+freeze back when it turns the bar's answer into an absolute scroll row, and
+`sh_setscrollrow`/`sh_setscrollcol` clamp to `[freeze, freeze+total-fit]`.
+
+**One deliberate cost: `sh_scrollrow_blit` refuses while rows are frozen.**
+`OSAPI_GFX_SCROLL` shifts a whole rectangle's pixels and the frozen strip's
+must not move with the rest; cutting the rect below it is real work in the
+one routine whose rectangle arithmetic is hardest to get right, for a
+saving only a frozen sheet being scrolled would ever see. The caller
+already owns a refusal path - it repaints - so this takes it. Unfrozen
+scrolling keeps the blit and is byte-for-byte the code it always was. The
+horizontal side needed no such guard: `sh_scrollcol_part` never blitted
+(`OSAPI_GFX_SCROLL` is vertical-only, §5.5), it damages the viewport and
+redraws, which the new mapping already makes correct.
+
+**Known edge, cosmetic only:** a damage range that starts in the frozen
+prefix and ends inside the *gap* - columns past the freeze but scrolled off
+the left - clamps to the prefix's last column rather than resolving two
+disjoint visible spans, which `sh_dmgc1..c2` cannot express. It can leave a
+stale pixel in a partial redraw; the next full repaint (any cell edit takes
+that path) clears it.
+
+**The gate is `tests/sheetfreeze.py`, and it can only be a glass one.** No
+file SHEET writes holds a freeze, so there is nothing to save and read back:
+every assertion is a cell's text read off the framebuffer with the kernel's
+own glyphs (`tests/glass.py`). A1 is labelled `ZZ`, the rest of row 1
+`C1, C2, …` and the rest of column A `R1, R2, …`, so every visible cell says
+where it is. The refusal on A1 is read out of the status bar; then the split
+is taken at B2 and the selection driven six rows down and twelve columns
+right, which puts real columns G..N and real rows 6..8 in a window still
+showing `ZZ` in its corner, `C6` beside it and `R5` under it.
+
+### 81.71 Data ▸ Find, Extract and Delete
+
+§81.39.4 called the criteria engine an **unspent enabler**, and this is
+spending it: three of Excel's seven missing Data commands, adding no matching
+logic at all. Every one of them is `sh_dbrowmatch` (§81.65) in a loop, and the
+rectangles it walks come from §81.69's two defined names rather than from a
+formula's argument list — `sh_dbcmd_ranges` reads `DATABASE` and `CRITERIA`
+through `sh_name_lookup` and fills the identical `sh_db_c1..sh_cr_r2` that
+`shm_pdatabase` fills by parsing. Past that point the two callers are the same
+code.
+
+**The whole family runs in `CHART.OVL`**, behind one new verb (`SHM_DBCMD`,
+`SHM_N` 12 → 13). That is forced rather than chosen: `sh_dbrowmatch`,
+`sh_dbrowok`, `sh_dbtest` and `sh_dbcmp` are all `.modc` and none is exported,
+so a resident command would have had to duplicate the matcher. What stays
+resident is what a *menu* needs — the dispatch, the alert, the item's relabel
+and the door. `sh_dbc_kind` picks the command; **the answer comes back in
+`sh_dbc_res`, not in CF**, because CF on that door already means "is there a
+module at all" and a second meaning on it could not be told from the first.
+
+**`sh_db_busy` has a writer outside `shm_pdatabase` for the first time.** It
+is set around each command's whole walk for §81.65's own reason: the eight
+rectangle words stay live across the scan, so a criteria cell holding its own
+`=DSUM(...)` would trample them mid-walk. A command that arrives while a
+database *function* is evaluating refuses and says so.
+
+**Both rectangles are normalised here and nowhere else** (`sh_dbcmd_norm`).
+`shm_pdatabase` never had to: a formula's range argument reaches it from
+`sh_pargref` already ordered. A NAME does not — `sh_name_def` stores both
+corners as the selection gave them — so `Set Database` on a selection dragged
+*upwards* binds `r1 > r2`, and every `ja`/`jg` below would walk zero rows and
+report "no records match", which reads as a broken criteria rather than a
+backwards drag.
+
+#### 81.71.1 Find, and the item that renames itself
+
+The Reference Guide's rule, followed exactly: *"If the active cell is outside
+the database when you choose Data Find, Microsoft Excel selects the first
+record in the database that matches the criteria. If the active cell is inside
+the database ... the first record BELOW the active cell."* The whole record is
+selected, not one cell of it.
+
+The item relabels to `Exit Find` — Excel's own (*"Exit Find appears on the Data
+menu only when you are in Data Find"*) — through the relabel-by-repointing the
+Options toggles and §81.70's Freeze Panes already use. **Which means stepping
+is a two-item loop, and that is Excel's, not a shortfall**: leaving find mode
+touches nothing but the mode and the label, so the record stays selected, and
+the *next* `Find` starts below it. The Guide spells the loop out — *"When you
+exit Data Find, the matching record you last found stays selected. If you
+choose Data Find again, Microsoft Excel selects the next matching record. This
+means that you can find and replace matching database records by choosing Data
+Find to find the next matching record after each edit."* What Excel has and
+this does not is the other way through the same state: in find mode its scroll
+bars go striped and **scrolling** moves between matching records only. That
+needs a second meaning for both bars and is not here, so the menu is the only
+way round the loop.
+
+The test's own sequence is therefore `Find` → `Exit Find` → `Find`, and it was
+written the other way first — two `Find`s in a row, which the relabel turns
+into find-then-exit and which read as "the second Find did nothing".
+
+Walking off the last match says `Last matching record.`; finding nothing at
+all from a search that started at the top says `No records match the
+criteria.` They are different sentences because they are different facts, and
+a search that began part-way down cannot honestly claim the second.
+
+#### 81.71.2 Extract, and the one control Excel's dialog has
+
+The extract range is the **selection**, and `SH_FDK_EXTRACT` is the first kind
+in that engine to **pin** it at open. §81.6 says a dialog pins the cell it was
+opened on; in practice only `sh_ndlg` did, and `sh_fdlg_apply0` reads the live
+`sh_selcol`/`sh_selrow` at OK. These windows are not modal, the selection can
+move while one is up, and here the selection *is* the argument — so
+`.prefillextract` banks all four corners and the module reads those.
+
+The range's first row names the fields to take, resolved by `sh_dbresolve` —
+the identical resolver the criteria headers use, so a field is named the same
+way everywhere. A subset is allowed and order need not match, which is Excel's
+rule. **A range whose header names no real field at all refuses** rather than
+extracting nothing, because an empty extract and a mistyped header look
+identical on the glass.
+
+Two shapes, both Excel's. A range that is **only** its header row extracts
+downward unbounded; a range with rows beneath it takes as many records as fit
+and says `The extract range is too small.` when they did not all fit.
+Afterwards the rows below what this run wrote are cleared — Excel clears *"all
+cells below the field names to the bottom of the worksheet"*, and without it
+the previous extract's tail reads as part of this one. This clears what it
+wrote plus `SH_DBC_EXTAIL` = 64 rows past it, which is the same thing for any
+sheet this machine holds and is bounded work rather than a walk to the last
+row.
+
+**Values, never formulas**, per the Guide: *"If a record contains a formula,
+the extract range will contain only the value produced by that formula and not
+the formula itself."* `sh_dbcmd_put` therefore reads through `sh_getcell2`,
+which hands back the evaluated cell, and never touches the formula text.
+
+Excel's dialog carries one control, a `Unique Records Only` **check box**;
+this engine paints a radio column, so the same single bit is asked as a
+two-way pick (`All Matching Records` / `Unique Records Only`). Identical
+meaning, no sixth dialog engine, and the same divergence §81.31 already took
+for Gridlines and Formulas.
+
+#### 81.71.3 Delete, which is not `sh_rowcol_op`
+
+*"When you delete records from the database, the other records in the database
+shift up to fill any gaps, but the rest of the worksheet is not affected ...
+the cells below the database do not shift up ten rows, as they would if you
+used the Edit Delete command."* So only the database's own rectangle moves,
+cell by cell, and a cell one column to its right stays exactly where it is —
+which rules out the row operation the Edit menu uses.
+
+Records are carried as **text**: `sh_cell_totext` out, `sh_commit` back. That
+is the pair Sort's own carry (§81.61) and the block clipboard (§81.18) already
+move a record with, so values, labels and formulas need no three cases here,
+and a moved formula's references follow it through `sh_formula_copyshift` the
+same way Sort's do. Compaction runs **top down and only ever writes above
+where it reads**, so no snapshot is needed — the destination row has already
+been read past.
+
+Afterwards `DATABASE` names one row fewer per deleted record, so the next
+command does not walk the blanks this one left; deleting every record leaves
+the name its header row and nothing else.
+
+**The alert is the feature, not a courtesy.** The Guide is explicit that
+`Data Delete` cannot be reversed with `Edit ▸ Undo` and that *"a message warns
+that records will be permanently deleted"*, so `os88ui_ask` with
+`OS88UI_AYESNO` is on the path and a dismissed alert deletes nothing. Extract's
+`sh_ud_kind` byte is `SH_UL_DROP` for the same reason — Undo saying so rather
+than appearing to offer something it cannot do.
+
+#### 81.71.5 Form, and the sixth dialog engine
+
+`Data ▸ Form...` shows one record at a time: the field names down the left,
+their values beside them, a `n of m` counter, and `Prev` / `Next` / `New` /
+`Delete` / `Close`. It is the one command here that **needs no criteria engine
+at all** — the Guide is explicit that *"Data Form works independently of the
+other database commands (Data Find, Data Delete, and Data Extract). Data Form
+also operates independently of the criteria range"* — so all it reads is the
+`DATABASE` name.
+
+**It is a sixth dialog engine, and it had to be.** `sh_fdlg` is a radio
+column, `sh_idlg` one text field, `sh_bdlg` check boxes, `sh_ldlg` a list and
+`sh_ndlg` one multi-line box; a form is N labelled fields over a record with a
+button row, and none of the five bends to that without becoming a sixth
+anyway.
+
+**One live editor, not N.** Every field is drawn in a box but only the focused
+one is a real `os88line`; `Tab`/`Shift+Tab` move the focus and `Enter` moves
+to the next record, which is the Guide's own keyboard table. A field is
+written back to its cell as the focus **leaves** it, where Excel saves a
+record's changes when you leave the *record*. Those are observably the same
+here because `Restore` — the one command that can tell them apart — is not
+implemented. **Only a field that was typed in is written back** (`sh_df_dirty`,
+set by a character, Backspace or Delete and cleared when a field is loaded):
+the editor holds the cell's text as `sh_cell_totext` gives it, ten significant
+digits of a number and a label's raw characters, and committing that again
+would round the number and re-parse a label such as `02134` into one — and
+take an Undo snapshot and mark the document modified for a record the user
+only looked at.
+
+Computed and protected fields are shown without a box and cannot be typed
+into, which is Excel's own rule (*"Fields that are computed or protected
+cannot be edited, and so do not appear in a text box"*); `sh_df_editable` is
+the test, and it asks the same two questions §81.46 does. A field wider than
+`SH_DF_MAXF` = 5 rows scrolls its window of fields with the focus rather than
+being refused.
+
+`New` appends a record and grows `DATABASE` by a row, **refusing when the row
+below the database is not empty** — extending over a user's own data is not
+something to do quietly. `Delete` drops the displayed record and closes the
+gap across the database's columns only, §81.71.3's rule for one record and
+through the same `sh_cell_totext`/`sh_commit` pair, behind the same alert.
+
+`sh_commit`'s argument *is* the selection, so every write banks the real
+selection and puts it back; without that, closing the form would leave the
+user's cursor on whichever field was last edited.
+
+**Not implemented, with reasons:** `Restore` (needs a per-record snapshot that
+nothing else here keeps), and `Criteria` (a second mode inside the form whose
+conditions are deliberately *not* the criteria range, so it shares no state
+with §81.71 and is a feature of its own size).
+
+##### 81.71.5.1 Two dialogs moved into CHART.OVL
+
+Form is ~2.2 KB of code that runs only while it is open, and **SHEET did not
+have it**: the package was 1,806 bytes over `APP_MAX_SIZE` with Form resident,
+having had about 46 bytes of headroom before it. So the engine went into the
+overlay, and the Border dialog (§81.34's, ~900 bytes, opened perhaps once a
+session) followed it for the same reason — the measurement that §81.62 acted
+on, taken again.
+
+**What stays resident is the data, because of who reads it**: the window
+template, its title, the button labels and the status-line strings are all
+read by the kernel or by `os88ui_*` through **DS**, so a copy in the module's
+segment would be read as garbage. That is ~230 bytes against the 3.1 KB of
+code moved.
+
+**A window callback cannot be a module label**, so `WT_PAINT`/`WT_ONKEY`/
+`WT_ONCLICK` point at resident thunks that `ch_ovcall` one verb each
+(`SHM_FORM`, `SHM_FPAINT`, `SHM_FKEY`, `SHM_FCLICK`, and `SHM_BOPEN`/
+`SHM_BPAINT`/`SHM_BCLICK`) — four and three rather than one verb with a
+sub-op, because `sh_modc_ext` already dispatches on a number and a callback
+should not have to spend a register saying which one it is. `ch_ovcall`
+passes the registers straight through, so each thunk is a `push bp`, a `mov`
+and a call.
+
+**Nor can any other address something resident near-calls.** `os88ui_adone`
+runs an `os88ui_ask` completion with `call di` in the package's segment, and
+the kernel runs `W_ONWH` the same way, so the Form's Delete alert hands over
+`sh_df_ondel_r` (`SHM_DFDEL`) and the list dialog registers `sh_ldlg_wheel_r`
+(`SHM_LWHEEL`), never the module labels behind them: a module offset taken
+as a resident one lands mid-instruction in unrelated code.
+
+**The invariant that makes this safe**: `ch_ovneed` returns on its first
+compare once `ch_ovseg` is set, so only the *first* call reads the file. The
+menu's own entry point (`sh_docmd_form_r`, `sh_bdlg_open_r`) makes that call
+**before** `OSAPI_WM_CREATE`, and refuses to open the window at all if the
+module cannot be read — so no paint, holding the gfx lock, is ever the call
+that has to touch a disk.
+
+Eight more vectors went with them (`os88line_set`/`_draw`/`_key`/`_click`,
+`os88ui_btn`, `os88ui_ask`, `os88ui_glyph`, `sh_bt_findcell`,
+`sh_bt_removecell`; `SH_NVEC` 99 → 108) and `CH_OVKB` rose again.
+
+#### 81.71.6 The headroom pass, and what a package can still spend
+
+Form landed with **390 bytes** of resident room left, which is not enough to
+implement anything else in, so two more rarely-run blocks followed it out
+before the next stage started.
+
+**What the two ceilings actually are**, measured rather than recalled:
+
+| | limit | why |
+|---|---|---|
+| resident image + bss | **`APP_MAX_SIZE` = 60 KB** | the SEGMENT, not a pool: a package links at `org 0` and addresses itself with 16-bit offsets |
+| `CHART.OVL` | **63 KB** | `ch_ovneed` does `mov cx, CH_OVKB * 1024`, so 64 would wrap CX to 0. The module is `vstart=0` and dispatches through a 16-bit `jmp`, which caps it at the same segment anyway |
+
+The floppy is **not** a third ceiling: SHEET is already off `apps360.img`
+(§24.6, the geometry that runs out first) and ships on `office360.img`, which
+is under 200 of its 354 clusters.
+
+**Moved**: `Data ▸ Sort`'s whole worker — `sh_docmd_sortcol` and the
+`sh_sort_*` family, ~1,900 bytes, and the cheapest of all of these because it
+has **no window callback at all**, so it is one verb and one door; and the
+scrolling **list dialog** (`sh_ldlg_*`, Paste Function, Paste Name and Format
+Number's code list), ~1,000 bytes, on §81.71.5.1's recipe. Seven more vectors
+(`SH_NVEC` 108 → 115); `CH_OVKB` 37 → 40.
+
+Resident headroom: **390 → 3,255 bytes**, with ~23 KB still free in the
+module.
+
+**What may still go, if a later stage needs it**: the other two dialog
+engines (`sh_fdlg_*`, `sh_idlg_*`, ~2 KB together), `sh_rowcol_op`, and the
+copy/paste workers — all menu-driven, none on a paint or keystroke path.
+**What may not**, and the rule behind it: anything the main window repaints or
+types through (`sh_drawgrid`, `sh_drawbar`, `sh_geom`, `sh_onkey`,
+`sh_mfire`), the number-format engine (it runs per cell painted), the
+evaluator's core — and, by construction, **anything already vectored *from*
+the module**, which has to stay resident to be reached at all.
+
+#### 81.71.4 What it cost, and the menu's order
+
+Three new vectors (`sh_cell_totext`, `sh_clearcell`, `sh_formula_copyshift`;
+`SH_NVEC` 96 → 99) and 38 bytes of bss, 12 of which are the vector table's own
+growth.
+
+The Data menu is now in **Excel's own order**
+(`LIBRARY/documentation/screenshots/excel/menu_data_full.png`): Find, Extract,
+Delete, Set Database, Set Criteria, Sort, then this app's three chart items.
+`Sort` moved from index 0 to 5 and the chart items after it — a real cost paid
+once, and the reason this package has a menu bar of its own (§81.24) is to
+look like the captures.
+
+`tests/sheetdbcmd.py` is the gate.
+
+### 81.72 Data ▸ Series
+
+*"Fills the selected range of cells with a series of numbers or dates. The
+command fills by rows or columns. The first cell in each row or column to be
+filled must have the starting value in it."*
+
+**Excel's dialog carries five controls and this asks two questions**, which is
+this app's own ask-in-sequence idiom (§81.15's Sort, File ▸ Save As) rather
+than a seventh dialog engine — `sh_fdlg` is a radio column and `sh_idlg` is
+one text field, and nothing here has both:
+
+| Excel | here |
+|---|---|
+| **Type** (Linear/Growth/Date) and **Date Unit** (Day/Weekday/Month/Year) | **one radio column of six**: Linear, Growth, Date: Day, Date: Weekday, Date: Month, Date: Year. A date unit is only ever read when the type *is* Date, so the two controls are really one question |
+| **Step Value** | the second dialog, `SH_ID_SERSTEP`, defaulting to `1` so Enter alone gives 1, 2, 3… |
+| **Series In** (Rows/Columns) | **derived**: a selection taller than it is wide fills down each column, otherwise along each row — which is what Excel's own dialog preselects from the same shape |
+| **Stop Value** | **not implemented.** The selection already bounds the fill; an early stop would be a third dialog for the rarer half of one control |
+
+**The step is parsed with `fp_atof`, not `sh_pnum_at`.** A growth factor of
+1.5 and a linear step of 0.25 are both ordinary, and `sh_pnum_at` — what the
+three numeric `sh_idlg` kinds beside it use — answers integers only. Text that
+is not a number at all is refused in silence, which is that engine's
+documented behaviour for every numeric kind.
+
+**The range is PINNED when the first dialog opens**, §81.71.2's reason twice
+over: these windows are not modal, and here there are *two* of them in
+sequence, so the selection has two chances to move out from under the command.
+
+**Linear and Date: Day are the same arithmetic**, and are separate items only
+because the menu asks the question Excel's does — a serial is a count of days,
+so adding the step to it *is* adding days. `Date: Weekday` walks one day at a
+time and steps over Saturday and Sunday, taking `(serial + 6) mod 7`, `0` =
+Sunday — the convention `WEEKDAY` already answers in.
+
+**`Date: Month` and `Date: Year` are computed from the START of the line every
+time, not from the cell before them, and they CLAMP.** Both halves were wrong
+first and the gate caught both:
+
+- `sh_ymd_to_ser` deliberately *rolls* — its own header says `DATE(1990,13,1)`
+  is January 1991 and `DATE(1990,1,32)` is 1 February — which is right for
+  `DATE()` and wrong here. Excel takes 31 January + 1 month to **28
+  February**, not to 3 March, so `sh_ser_clampday` rolls the month back into
+  1..12 and cuts the day to that month's own length first.
+- The clamp then **loses information**, so an iterative series drifts: 31 Jan
+  → 28 Feb → *28* Mar, where Excel gives 31 Mar. Each term is therefore
+  `start + k months` with the clamp applied fresh, which is why the line banks
+  its starting serial and counts terms.
+
+**A serial is not an `fp_a2i`, in either direction.** That conversion is
+signed and clamps at 32,767, which as a date is 24 September 1989 — so the
+arms read through `sh_acc_toudw` and write back through `sh_acc_fromudw`.
+Writing one back with `fp_i2a` made every date past 1989 **negative**, which
+the gate saw as one wrong date repeating down the column, because the next
+term then failed to read its own predecessor as a serial at all. A value that
+is not a serial leaves the cell alone rather than writing a wrong date.
+
+**A line whose first cell is not a number is skipped whole**, not refused:
+filling a table's body one column at a time is exactly the case where one of
+them is a label, and Excel leaves that column alone too.
+
+The worker lives in `CHART.OVL` behind one verb — it has no window callback,
+so it is §81.71.6's cheap shape rather than Form's four thunks. Five more
+vectors (`sh_acc_toudw`, `sh_acc_fromudw`, `sh_ser_to_ymd`, `sh_ymd_to_ser`,
+`sh_monlen`; `SH_NVEC` 115 → 120).
+
+`tests/sheetseries.py` is the gate.
+
+### 81.73 Hidden rows and columns, and the mapping they broke
+
+§81.39.3's remaining half of the per-row/per-column pair: Excel hides a row or
+a column by giving it **a height or width of zero**, and `Format ▸ Row
+Height...` / `Column Width...` is where you type it. That line previously
+refused, and said so in a comment — *"Excel's 0 (hidden) and its 409 points
+are both refused"* — which is exactly the line this section opens.
+
+**Zero was already spent, so hiding is a sentinel.** A column's stored width
+byte uses 0 for "the standard width" and tops out at `SH_CW_MAXCH` = 40, so
+`SH_CW_HIDDEN` = 255; a row's height is twips and 0 is the standard there too,
+so `SH_RH_HIDDEN` = 0xFFFF. `sh_colwidth` and `sh_rowheight` then answer **zero
+pixels**, and `sh_geom` skips anything with no extent. That is the whole of
+what hiding is: every other reader sees a viewport that does not contain it.
+
+**Unhiding needs no second command.** The apply loops walk *real* indices from
+`sh_selcol` to `sh_selcol2`, so selecting across the gap and typing a real
+width brings the column back — Excel's own way, and it fell out rather than
+being built.
+
+#### 81.73.1 The mapping stopped being arithmetic
+
+Before this, a visible slot's real column was the scroll origin plus the
+slot's own index — plus §81.70's frozen prefix, which shifted where the
+addition started but kept it an addition. **A hidden column anywhere between
+them ends that**: the slots no longer march in step with the columns. So
+`sh_geom` now records the mapping it actually built — `sh_vrc` and `sh_vrr`,
+`SH_MAXVC` + `SH_MAXVR` words — and the four routine pairs §81.70 factored out
+read it back:
+
+| | before | now |
+|---|---|---|
+| `sh_vreal_col/row` | add the scroll origin | a two-instruction table read — **smaller than the arithmetic it replaced** |
+| `sh_vidx_col/row` | subtract it, bounds-check | a scan of ≤ 80 entries |
+| `sh_vclip_col/row` | each edge clamped separately, per axis | **one** shared scan, `sh_vclip`, for both axes |
+| `sh_scrollto_t` | `scrollcol + the window's width` as the last visible column | asks `sh_vidx_*` whether the target already shows |
+
+**§81.70 is what made this containable.** That section moved every consumer —
+the hit test, both header painters, the cell painter, the border walk, the
+selection frame, the damage rect, both scroll bars — onto those four pairs, so
+there was no open-coded arithmetic left to hunt down; a sweep for one confirms
+none remains. The walks gained a second cursor each (`sh_geom_rc`/`_rr`), because
+the slot index and the real index are now different numbers, and the row walk
+needed `sh_geom_rbase` to keep the streaming height table's key in step.
+
+**A range that is entirely hidden answers `CF=0`** from `sh_vclip`, which is
+the same answer an off-screen range gives and the right one: there is nothing
+to draw either way.
+
+#### 81.73.2 Resizing by dragging the heading
+
+The other half of §81.39.3's bullet. A press within `SH_RZ_GRAB` = 3 pixels of
+a heading's **trailing edge** grabs it — asked before the selection hit test,
+because the gesture starts on a press the selection never sees — the drag sets
+the width or height live, and the release only lets go.
+
+**Live, but stepped in whole units.** A width is stored in characters, so the
+grid repaints once per 8 pixels of travel rather than once per mouse event: a
+full repaint is priced in primitive calls (PERFORMANCE.md), and one per pixel
+across a 56-pixel column is 56 of them where 7 is the same gesture. Excel 2.1
+drew a guide line instead for exactly this reason — that wants an XOR line
+this app does not have, and stepping in whole units buys the feedback without
+one. Rows step per pixel, since a height is stored in twips and 8 pixels of
+granularity would be visible.
+
+The drag measures from **where the edge was**, not from where the pointer
+landed inside the grab band, so the column does not jump by up to three pixels
+on the first movement. The press banks the slot's **leading** edge, which the
+resize never moves, and every packet sets the size to the pointer less that
+edge: a delta added to the size as it *now* stands would be added again on
+every packet once the first step had moved the edge, and the drag would run
+away to `SH_CW_MAXCH` or to hidden.
+
+**Dragging it shut hides it**, which is Excel's behaviour and falls out of
+§81.73 rather than being built: no width *is* what the hidden sentinel means.
+Anything that is not shut still has to fit a glyph, so `SH_RH_MIN` applies as
+it always did.
+
+**Known shortfall:** the scroll bars still size their thumb from the *real*
+row and column counts, so a sheet with many hidden rows has a thumb slightly
+smaller than the scrollable range warrants. It is a proportion, not a
+position, and no click lands wrong because of it.
+
+`tests/sheethide.py` is the gate, and it gates the *mapping* rather than the
+feature: the headers, the cell contents and the hit test each reach the table
+through a different one of those four routines, so a slot showing `C1` while a
+click on it selects `B1` is what a break would look like.
+
+### 81.74 The macro recorder
+
+§81.68 was built for this and says so in its own title — a macro's references
+are written in R1C1 *"the way the recorder writes them"*. This is the
+recorder, and **it emits exactly the language §81.63 already runs**: a
+recording is an ordinary macro sheet afterwards, readable and editable and
+runnable by `Macro ▸ Run`, not a second representation that happens to play
+back.
+
+**What is recordable is what those 20 functions can say**: the selection
+moving (`SELECT`), a cell entered (`FORMULA`), and the five menu commands the
+language already has (`COPY`, `CUT`, `PASTE`, `CLEAR`, `CALCULATE.NOW`).
+Anything else is **not recorded and not refused** — the recording stays valid
+and simply does not contain it, which is the same bargain Excel's own recorder
+makes with the commands its language cannot express. Recording is stopped with
+a `RETURN()` of the recorder's own, so the macro ends rather than running on
+into whatever was below it.
+
+**Enter's own step down is recorded**, because it happened: committing an
+entry moves the selection, and a replay that did not move would end up
+somewhere else. A selection change that did *not* move anything records
+nothing at all, so clicking the cell Enter already went to is silent.
+
+**`Macro ▸ Set Recorder` keeps the SHEET as well as the corner.** Excel opens
+a macro sheet when there is no recorder range; this instance has four sheets
+and no way to guess which one was meant, so it asks for one instead of
+choosing. That sheet is then banked and restored around every write, so the
+recording lands on the macro sheet while the user goes on working on theirs.
+
+**Absolute by default, relative on request**, which is Excel's own initial
+state and its own toggle — and the item names *what choosing it would do*, not
+the state it is in, again Excel's wording. A relative `SELECT` is written
+against the cell the last recorded `SELECT` left the macro standing on; with
+nothing recorded yet there is no origin to be relative to, so the first one is
+absolute whatever the setting.
+
+#### 81.74.1 Why the entry recorder is two halves
+
+`sh_rec_emit` writes its macro formula **through `sh_commit`** — the same
+routine a typed entry goes through — and the typed entry is itself a recording
+site. So `FORMULA(...)` is **staged** inside `sh_commit` (copying `sh_editbuf`
+out before the store reads it) and **flushed** at that same routine's exit,
+once the outer call has finished with the buffer. `sh_rec_busy` then stops the
+inner commit staging anything of its own: a recorded write is not itself news.
+
+The flush sits inside a `pushf`/`popf` because every caller of `sh_commit`
+reads its `CF`.
+
+`sh_ud_busy` is what separates a *typed* entry from one made by Paste, Fill or
+Sort — those are part of a command that took its own Undo snapshot, and
+recording each cell they write would produce a macro that reproduced the
+result rather than the action.
+
+**A recorded line is not an Undo step, and not a repaint.** `sh_rec_emit`
+holds `sh_ud_busy` across its own `sh_commit`, so the line takes no snapshot:
+Undo is one snapshot deep, and a snapshot per recorded line replaced the
+user's own entry's at once, so Undo took back the recorder's last line and
+never the change. It puts `sh_commitdirty` back as it found it when the line
+went onto a sheet other than the one shown, because a `SELECT` is recorded
+*after* `sh_selpaint` has run and would otherwise send every next arrow key
+down the full repaint, about a second each on the target. An edit in progress
+when a line is emitted is **committed first** — the buffer is about to hold
+the line — so it is recorded ahead of the command, in order, rather than
+discarded.
+
+A double quote inside a typed label is **doubled** in the recorded text, which
+is how this app's own parser reads a quote inside a string (§81.18's
+`"a""b"`), so a label containing one records as a macro that re-enters that
+same label.
+
+**Nothing is left unimplemented here, and the one thing that was listed
+never existed.** `Start Recorder` was listed until §81.107 built it (a range
+set by Set Recorder, or left by a stopped recording, *is* the "armed but
+paused" state it needed). `Resume` was listed beside it, declined on the
+ground that *"Excel's Resume continues a macro halted by `PAUSE()`"* — and
+**Excel 2.1d has no `Resume` command and no `PAUSE()` function**. The Macro
+menu capture (§81.39's own authority) holds five items and none is Resume;
+the Reference Guide names the other five commands and never that one; and
+*Functions and Macros* offers `WAIT(serial_number)`, `ALERT`/`INPUT` and the
+ESC interrupt's **Halt / Step / Continue** as the ways a 2.x macro stops.
+`PAUSE`/`Resume` belong to a later Excel. The decline was right by accident
+and wrong in its reason, which is worse than either: it made the phantom
+look checked.
+
+`tests/sheetrecord.py` is the gate.
+
+#### 81.74.2 The last two dialog engines follow
+
+§81.71.5.1 moved Data ▸ Form and the Border dialog into `CHART.OVL` and
+§81.71.6 the list dialog; **the radio engine (`sh_fdlg_*`) and the one-line
+input engine (`sh_idlg_*`) are the last two**, and they were resident only
+because they were the *first* two — nothing else ever made them so.
+
+They cost **2,652 bytes** of resident room, which is what §81.74's recorder
+and everything after it had been spending. What they cost back is 22 more
+vectors and ten doors (`SH_NVEC` 120 → 142, `CH_OVKB` 40 → 43).
+
+Three things this one taught that the earlier moves did not:
+
+- **`ch_ovcall` is re-entrant, so a module routine may call a resident door.**
+  Its fast path is `ch_ovneed`'s single compare and the far call holds no
+  static state. That matters because `sh_fdlg_apply0` reaches `Data ▸ Extract`
+  and `Series` through their resident doors, which call straight back into the
+  module — an extra far call per menu OK, and nothing else.
+- **A tail `jmp` into a resident body is not a call.** `sh_macro_clear` ended
+  `jmp sh_fdlg_apply`, and with that engine in the module the jump would have
+  entered a `retf` body with no far frame — which `os88ovlchk` catches by
+  name. It is a door and a `ret` now, and `sh_fdlg_apply` gained a verb for it.
+- **Three of the vectors were wrong to add at all**: `sh_clear_one`,
+  `sh_fmt_one` and `sh_setext` are the radio engine's *own* helpers and moved
+  with it, so vectoring them pointed the shims at the module they had just
+  left.
+
+**And it exposed a disk bug that had been silent for a long time.**
+`APPS_TOOLS_360` filters `sheet.o88` and `chart.o88` off the 360KB apps disk
+but never filtered **their overlay**, so that disk was carrying `CHART.OVL`
+for two applications it does not have — 37 of 354 clusters, until the grown
+module tipped it over and `os88disk.py` refused the image. A `filter-out` that
+matches only half of what it should is exactly the failure §24.5's own list
+keeps producing.
+
+### 81.75 PLAN — the same source, sized for the small disks
+
+SHEET cannot go on a 360KB apps disk or a 128KB machine, and neither is
+recoverable by trimming menus. Measured 2026-09-19: the region is **57,823
+bytes** (49,721 + 8,102) and `CHART.OVL` another **43,818** — ~92 of a 360KB
+floppy's 354 clusters — while its heap claims on open total **159KB**, of
+which the cells claim *alone* (32KB) is nearly twice the **17.5KB largest run**
+the floor machine can hand a claimant (§50.6.2). That is the same test that
+omitted `SKIES`, and it is why §24.5.2 argues SHEET's absence is a
+*requirement* and not a size.
+
+**PLAN is a second product of this source**: one file, no overlay, every claim
+under the run limit. `-DPLAN` builds it, the way `-DAPP_SMALL` already builds
+six reduced packages (§27.16 and the five beside it) — with the package **name**
+changed as well, which is what keeps §73.12 satisfied (two things may not
+answer to one name) while still sharing as SOURCE rather than as a copy
+(WEAVE-SPEC §1.2).
+
+**The flag block is at the top of the file and must stay there.** NASM's
+preprocessor is one pass, so a `%ifdef` is answered where it sits and the
+bodies these flags gate are thousands of lines below; defined any lower, every
+test above reads false and the package calls routines cut out of its own image
+— which froze the whole VM the one time this file got it wrong (§82.16's own
+`CH_OVERLAY` story). Every gated body tests the **feature** flag, never `PLAN`.
+
+#### 81.75.1 The cuts are a precondition, not an optimisation
+
+The scaffolding stage was meant to produce "a PLAN that is simply SHEET" and
+measure a baseline from it. **There is no such build.** Assembling this source
+with every `.modc` tenant resident overflows the **64KB segment**: `dw
+OS88_IMAGE_SIZE` in the package header fails first, a bss offset past 65,535
+second, and one layer up `os88pkg` refuses the file because the header
+describes the resident half while the `.modc` section is still in it.
+
+That is the overlay's own justification restated, and it reorders the work:
+the feature cuts have to land *before* the overlay can be dissolved, not after.
+So `make plan` reports the **split** rather than packaging —
+
+```
+plan: resident 49,716 + module 43,818 = 93,534 bytes
+plan: one file needs resident+module+bss under 65,536
+plan: to go: 36,102 bytes
+```
+
+— and that last line is the cut list's meter until `PLAN_ONEFILE` can be set.
+
+**SHEET must come out byte-identical at every stage**, which `t_appsmall.py`
+already enforces for the six gated packages by comparing the *unwrapped* image
+md5. It took two goes here: `sh_planvec` and the `OS88_BSS` literal both have
+to sit inside `%ifdef PLAN`, or PLAN's two extra bytes move the shared bss
+chain under SHEET's feet.
+
+#### 81.75.2 The flags did not survive, and the source split
+
+The one-source arrangement above is **not what shipped**, and the section is
+left standing because the reason it failed is the interesting part.
+
+The cut list is not a handful of features. It is most of the program: charts,
+macros, the database family, BIFF/DIF/dBASE, array and matrix, multi-sheet,
+borders, notes, protection, the transcendentals, defined names, Goto and Find,
+Insert and Delete Row/Column, Fill, the About card, and — once the arithmetic
+changed — every routine in the evaluator that touched an eight-byte value. A
+`%ifdef` per family is a flag block that is longer than some of the families,
+and every gated body is a place where one arm can be edited and the other
+silently not. `sheet.asm` is 18,000 lines; the two arms had stopped being the
+same program.
+
+So **PLAN is its own source**, `apps/plan/plan.asm`, produced by resolving
+every `-DPLAN` conditional in `sheet.asm` and proved **byte-identical to the
+gated build** before a single further cut. Then the prefix went with it:
+8,038 identifiers, `sh_` → `pl_`, `SH_` → `PL_`, `shm_` → `plm_`, again
+byte-identical. Two mechanical transformations, each proved by the image it
+produced, is the only way to move 18,000 lines and still know what you have.
+
+**What that costs is the drift defence**, and it is a real cost. `sheet.asm`
+and `plan.asm` must still agree about the SYLK and CSV formats they both read
+and write, and nothing checks it now that the compiler cannot. `make
+planflags` is retired and says so; what is owed in its place is a FORMAT GATE
+— `tools/os88sheetfmt.py` authors a fixture, each package opens it and saves
+it back, and the two files are compared. That is the shape §81.63's own
+round-trip gate already uses, and the reason it is the right shape is written
+there: a host-authored input is the only kind where the writer's defect and
+the reader's defect cannot cancel.
+
+#### 81.75.3 Fixed-point decimal, and what four places cost
+
+`apps/os88fp.inc` is software IEEE-754 double (§81.64): eight bytes a value,
+and the routines to match. PLAN replaced it with **`apps/os88fix.inc`**,
+fixed-point decimal on a 32-bit signed integer, `FX_SCALE` = 10,000 —
+**four decimal places**, range **±214,748.3647**.
+
+The entry points mirror os88fp.inc name for name (`fx_` for `fp_`) so that the
+evaluator's call sites did not have to be re-reasoned, only re-pointed. What
+did have to change is every place that knew a value was eight bytes: the cell
+record (20 → **16 bytes**, `PL_C_SZ`), `pl_vpush`'s bank (four words → two,
+and its `STKBALANCE-NET` declaration with it — that tool counts WORDS), and
+the two idioms that reached for the IEEE **sign bit**. `xor byte [pl_acc+7],
+0x80` is unary minus on a double and lands outside a four-byte value
+entirely; `=-5` came back 5 and `=3*-2` came back 6, with no gate anywhere
+catching either. `pl_acc_neg` and `pl_acc_abs` replaced them.
+
+**What four places are honestly worth**, stated rather than implied:
+
+* a budget in pounds and pence has two places and three spare, and a
+  percentage rate written `0.0625` is exact rather than nearly;
+* the range is **±214,748.3647**, which is a household budget and not a
+  balance sheet. Six places would have been ±2,147.48;
+* `fx_pow` rounds at **every one of n multiplies**, so `(1.005)^12` drifts to
+  1.0612 against a true 1.0617. Long amortisation is NOT solved by this
+  library, and a mortgage schedule written in PLAN will diverge from one
+  written in SHEET. That is the trade the 128KB machine buys.
+
+The library shipped one defect that took the application down rather than the
+value: `fx_round` counted its scale-back loop in **BX**, which `fx_qmulcx`
+clobbers — `fx_qmulcx`'s own header block says so. `=ROUND(1000)` multiplied
+by ten some thousands of times and what came back took the display with it.
+os88fp.inc has `apps/fptest`, an on-target harness; **os88fix.inc has no
+equivalent and one is owed.**
+
+#### 81.75.4 The grid, the cell capacity, and the two numbers that got confused
+
+PLAN's grid is **256 columns × 1,024 rows**. That number is the *addressable
+range* and it costs **zero bytes** — measured byte-identical at 2,048 rows and
+at 1,024, because the cell array is sparse and what it costs is the cells that
+exist. The number that is actually tight is `PL_CELL_CAP`, the cells claim
+divided by `PL_C_SZ`: **5KB at 16 bytes a record = 320 cells**.
+
+The two were being quoted as one thing for most of a day, and "reduce the grid
+to fit" is a sentence that buys nothing. A record that got 4 bytes smaller is
+what raised the capacity; the grid dimensions are a user-facing limit and a
+parser limit, and nothing else.
+
+#### 81.75.5 Cutting the entries leaves the bodies
+
+Seventy labels and 1,659 lines came out of `plan.asm` **after** the feature
+cuts were complete, and every one of them was already unreachable. NASM keeps
+an unreferenced label's body, so cutting a family's menu item and dialog
+leaves its engine assembled with no arm routing to it: `pl_rowcol_op`, the 222
+lines Insert and Delete Row/Column shared, sat in the image for a week after
+both items went. So did the points↔twips pair the Row Height dialog used, the
+scroll bar's drag follow, the BIFF number-format table and the seventeen DIF
+literals.
+
+The sweep is mechanical — collect every `pl_*:` at column zero, strip the
+comments, and report each label the rest of the file names exactly once, which
+is its own definition — and it **cascades**: deleting an orphan orphans
+everything only it called. Six passes to a fixpoint. `pl_formula_reidx` and
+its four helpers went on the second, which is worth naming because
+"reference adjustment" is exactly what Copy and Paste needs and losing it
+silently would make `=A1` pasted a column left read the wrong cell. It was
+checked rather than argued: paste has its own `pl_copy_shift` and
+`pl_copy_cellpart`, and those are referenced.
+
+**The tool's first version was wrong in the way worth recording.** A dead
+label's body runs to the next label — correct until the LAST label in the
+file, where there is no next one and the body ran to EOF. It took 800 live
+lines with it, including the `%define` block that sizes `OS88UI_AMAX`, and the
+cascade then reported SYLK and CSV as dead because their callers had just been
+deleted. **A wrong bound does not look like a wrong bound; it looks like a
+much better result** — 5,031 lines instead of 1,095. It now stops at the first
+column-0 line that cannot be a body, checks a list of anchors survived, and
+refuses to cut a third of the file.
+
+#### 81.75.6 The claim ladder, the measurement, and the five volumes
+
+| claim | SHEET | PLAN |
+|---|---:|---:|
+| cells | 32,768 | **5,120** |
+| text arena | 8,192 | **1,024** |
+| staging | 32,768 | **8,192** |
+| undo | 16,384 | **6,144**, and optional |
+| borders / notes / chart / overlay | 4K + 5K + 19K + 43K | — |
+| **required on open** | **159KB** | **14,336** |
+
+Undo keeps its code and its claim stays **optional**, which is what makes
+"keep undo" and "fit the floor machine" both true: the entry proc takes it
+last and carries on without it (`jc .noundo`), so a machine with room gets
+Undo and one without simply does not. Staging is 8KB and not SHEET's 32KB
+because that 32KB was forced by the *sort* layout; PLAN's SYLK and CSV stream
+through a small buffer. Every claim is under §50.6.2's **17.5KB run limit**,
+which is the test a total cannot answer — SHEET's cells claim fits the arena
+and does not fit a run, and that is what omitted `SKIES`.
+
+Measured 2026-09-19, and it is a two percent margin rather than a comfortable
+one:
+
+```
+plan: image 33,162 + bss 3,152 = 36,314 of 61,440 (APP_MAX_SIZE)
+plan: region 36,314 + claims 14,336 = 50,650 of 51,712 usable arena
+plan: 128KB machine: FITS, 1,062 bytes spare
+```
+
+**Five volumes carry it**: `apps360.img`, where SHEET has never fitted
+(§24.6.3) and where PLAN leaves 15 of 354 clusters; `small360.img` and
+`small.img`, the small SYSTEM disks — §24.5.6 requires that pairing, because a
+128KB machine with one drive never swaps floppies; and both `make smallapps`
+floppies. The live media carries SHEET and not PLAN, which is
+`t_livefull.py`'s `EXEMPT_DIRS` stating a category rather than the DEADLINE it
+used to carry.
+
+**`tests/unit/t_planfit.py` is the gate**, and it checks both halves: the
+region plus the claims against 51,712, each single claim against the run
+limit, and PLAN.O88's presence on three of the five volumes. Over the line
+there is no build error and nothing refuses to assemble — a claim fails on the
+machine and the spreadsheet opens with no cells, which is a symptom nobody
+would trace back to a feature added without measuring.
+
+#### 81.75.7 The audit, and what four rigs found
+
+PLAN was gone over for defects once it fitted, and the four things that came
+out were all the same shape: **a cut that removed one half of a pair and left
+the other standing, assembling, and silent.**
+
+| | |
+|---|---|
+| **Paste never pasted** | `pl_paste_cell` kept the `jc .refused` whose `call sh_prot_blocked` protection had been cut from. The flag it read was `cmp bx, PL_ROWS` two lines up, and an IN-RANGE row is exactly the case that leaves CF set — so it was taken for **every valid cell**, on every machine, with the menu item enabled and nothing said. Cut and Clear had the same orphan and read the *caller's* carry, so they ran or refused by accident of the previous command |
+| **AVERAGE was n/n** | `fx_i2b` is `fx_i2a` + `fx_a_to_b`, so it goes THROUGH register A. `.avgok` loaded A with the sum and then called it. Every AVERAGE was 1, while `SUM/COUNT` over the same range was right — the third occurrence of the ordering rule *build the constant first, load the value last* |
+| **Two names, one field** | the number-format field had `PL_FMT_NUM_*` (Currency = 1) from the interpreter and `PL_NF_*` (Currency = 2) from the three that replaced it. The file code was on one set and the display code on the other, so a Currency cell was written as comma-with-no-dollar and Excel's own `$` came back as Text |
+| **Silent overflow** | `fx_mul` kept the low 32 bits of its 64-bit intermediate and returned no carry at all, so a product past ±214,748.3647 wrapped to a plausible number where Excel says `#NUM!` — `100000*100000` read 27,644.7232. It signals now, and §81.75.9 is what that cost |
+
+**The generalisation is worth more than the four fixes: CUTTING A CALL LEAVES
+ITS CONSUMERS.** §81.75.5 is the same lesson about code that is no longer
+*reached*; this is about code that still runs and now reads something nobody
+sets. A flag is the worst case, because it has no name to grep for.
+
+Both were found by asking the file a question rather than reading it. For the
+flags: *for every `call sh_X` whose carry `sheet.asm` tests, is there a site in
+`plan.asm` with the same preceding instruction and the same jump and no call?*
+— 127 candidates, one hit, and a **second pass** for the jump preceded by a
+LABEL (control arrives there by a jump) found the third. A generic "conditional
+jump after an instruction that cannot set flags" sweep is ~20 sites and mostly
+false positives, because `pop`/`mov` deliberately banking a flag across
+register restores is a real idiom in this tree.
+
+#### 81.75.8 The four rigs
+
+| row | machine | what it answers |
+|---|---|---|
+| `t_planfit` | host | the region plus the claims fit 51,712, each claim clears §50.6.2's run limit, and PLAN.O88 is on the volumes |
+| `plansmall` | 128KB | it OPENS, its three required claims are granted, and one formula evaluates |
+| `planrig` | 128KB | **71 asserted cases and 8 reported** — arithmetic and precedence, unary minus, references and absolute references, the folds, the logicals and comparisons, the surviving maths, and every cut family answering `#NAME?` rather than a wrong number |
+| `planui` | 128KB | the menus, Copy, Paste **with its reference shift**, Cut, and Undo greyed when its claim is refused |
+| `planfmt` | 640KB | the SYLK reader and the three number formats, against a host-authored fixture |
+
+Three rules they follow, each paid for:
+
+* **What is compared is the CELL RECORD, never the glass** (§81.66). The grid
+  shows what the evaluator *published* through the number format, so a format
+  defect and an arithmetic defect are the same picture — and a column one
+  character too narrow already looked like a wrong answer once.
+* **Every asserted case is exact in four places**, so the rigs do not have to
+  model PLAN's rounding in order to test its arithmetic. The cases that cannot
+  be — `1/3`, `10/3*3`, `SQRT(2)`, `RAND()` — are REPORTED and read by a
+  person. `NOW()` answers `#N/A` on a 5150 and that is correct: there is no
+  RTC, and `pl_bios_ymd` says so.
+* **`planrig` TYPES its battery rather than loading one**, because §54.0 takes
+  file associations out of `kern_small` entirely: a `.SLK` cannot be
+  double-clicked on the floor machine at all, so a rig that loaded its cases
+  would be testing a path that machine has not got. `planfmt` is on 640KB for
+  the same reason, from the other side.
+
+`planui` drives PLAN's own menu bar (§81.54), which `os88ui`'s `menu_pick`
+cannot see. It does not remember coordinates: `pl_mboxof` lays each title out
+at `[pl_ox]` plus the running sum of `pl_mw[i] + 2*PL_MPAD`, and `pl_mw` is an
+array in PLAN's own bss — so the rig reads the layout the guest actually drew,
+and proves each step against `[pl_mopen]` and `[pl_mhi]` before releasing the
+button.
+
+#### 81.75.9 Overflow is an answer, not a wrap
+
+`fx_mul` runs in 64 bits and the result is the low 32 of them. The other 32
+were simply dropped, so every product past ±214,748.3647 came back taken
+modulo 2^32: `100000*100000` read **27,644.7232**. That is the one thing an
+error value exists to prevent — a wrong answer that cannot be told from a
+right one — and it was the only arithmetic path in the package with no way to
+say so, while `^` and `POWER()` had tested `fx_pow`'s carry all along.
+
+It **clamps and signals**: CF=1, and A set to the largest representable value
+rather than zeroed. The clamp is the part worth arguing. A caller that tests
+the flag turns it into `#NUM!` and never reads A, so for those it makes no
+difference; a caller that does *not* test it gets a saturated value instead of
+a wrapped one — visibly too big rather than quietly wrong. `fx_i2a`'s own
+"CF=1 and A clamped" is the same decision one routine along.
+
+Three consumers had to be told, and only two were new: the `*` operator, and
+`PRODUCT`, the one fold that multiplies. `fx_pow` carries an overflow straight
+out of its squaring loop, so `^` and `POWER()` inherited it without an edit —
+and `=2^20` answers `#NUM!` for that reason.
+
+**What is NOT covered, stated rather than left to be discovered:** `fx_add`
+and `fx_sub` still wrap, so `SUM` over a column that passes the range does not
+say so. That is a separate and much rarer case — it needs two operands already
+near the ceiling — and the same treatment would touch the summing folds as
+well as the operators.
+
+The cost is **46 bytes** of a package with 1,110 spare, and `planrig` carries
+six cases for it: the two signs, the fold, the power, and — the ones that
+matter as much — `214748*1` and `100000*2`, which must still evaluate. A clamp
+that fires one value early is the same defect facing the other way, and
+nothing else in the battery would catch it.
+
+#### 81.75.10 What the manual page found
+
+PLAN's page in the project guide (`tools/guide/manuals/PLAN_O88.md`) is the
+first time anybody read the whole program from the user's side, and reading it
+that way found three things the four rigs could not: a rig asserts what a
+cell holds, and none of these is about a cell.
+
+**Two status messages named menus PLAN has not got.** `File ▸ New...` keeps
+Excel's three kinds and makes a worksheet whichever is picked, with the status
+line saying what was actually made — the honest answer, and §81.75's own
+comment says so. The sentences it said were `New sheet - use Data > Chart
+Column to chart it.` and `New sheet - Macro > Run reads commands from cells.`
+Both menus went with the cuts. They are `Plan has no charts.` and `Plan has no
+macros.` now, which is the same honesty pointed at this program.
+
+**The About card's BODY survived its menu.** §81.75 withdrew the Help menu and
+left `OSAPI_ABOUT_SET` uncalled, which is the slot's own sanctioned state — and
+`pl_ablines`, its four strings, the paint call in `pl_drawall` and the dismiss
+in `pl_abdismiss` are all still here, with `pl_ab1` reading **`Sheet for
+os8088`**. Nothing ever sets `[pl_abon]`, so none of it can be reached. §81.75.5
+is this lesson about code that is no longer *reached* and §81.75.7 about code
+that still runs; this is the third case, a body whose only entry was the menu
+that went. **A sweep is owed** and it is wider than the card: `pl_fdlg_apply0`
+still has arms for Paste Special and the Gallery, `pl_idlg` titles for Goto,
+Find, Define Name, Record Macro, Run, Sort and Row Height, and
+`pl_fdlg_counts` rows for Protection, Extract and Series — every one of them a
+dialog kind no menu in this program can open. It is not urgent (the package has
+room) and it is not free to do carelessly, because `pl_abdismiss` is called
+from both `pl_onkey` and `pl_onclick`.
+
+**§81.55 did not come to PLAN.** *A number never shows part of itself* is
+SHEET's rule: General drops significant digits until the figure fits, any other
+format fills the cell with `#`, and the reason given there is that a truncated
+number is a plausible wrong answer nobody has cause to doubt. PLAN's `pl_rjust`
+pads a short value and copies a long one WHOLE, so a figure wider than its
+column is cut off at the column's edge and shows its leading digits. The
+manual says so in the reader's own terms — *a total that looks too small for
+its parts wants a wider column* — which is the honest thing to write and not a
+substitute for the fix. Fixing it properly needs `fx_` formatting at a chosen
+precision, the equivalent of SHEET's `.fit` loop; the `#` fill alone is cheap
+and would at least stop the wrong number.
+
+## 82. CHART — charting, and the buffer both halves draw into
+
+> **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts
+> through the same rasterizer and exports the same BMP, so the standalone
+> viewer was a second window onto a capability the spreadsheet already had, at
+> 13,865 bytes on every geometry. **`CHART.OVL` stays** — it is SHEET's module
+> and carries its file formats now (§82.16.9), and a disk without it leaves
+> SHEET unable to open or save anything.
+>
+> The package is still **built**, in `all`, because it is the only thing that
+> compiles this file's RESIDENT half: SHEET builds the overlay half, so without
+> chart.o88 the `%ifndef CH_OVERLAY` branch is a path nothing assembles. The
+> asymmetry below is therefore still real and still checked — it is just no
+> longer a shipping decision. Everything in this section describes code that
+> still runs; only its second host stopped being on the floppy. (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 ### 82.1 The offscreen canvas, and why it is not optional
 
@@ -134351,6 +145341,79 @@ category labels, titles, a legend — is **text into the 4bpp buffer**, which
 also does not exist yet; `apps/paint`'s glyph-stamping into its own private
 canvas is the model, since it is buffer-targeted rather than screen-targeted
 and maps onto `ch_fillrect` almost directly.
+
+#### 82.4.1 The Gallery has a gate now, and it is the first one with pixels in it
+
+`chartname` and `chartread` both read **numbers out of the package's bss**,
+and no amount of that can see the drawing: `ch_type` dispatches seven types
+through `ch_draw`, and an arm that silently did nothing would leave
+`ct_valcnt`, `ct_mincol` and `ct_wvals` all perfectly correct. The whole
+drawing half of this package was in exactly the position §82.15 and §82.18.2
+were in — asserted in words, with nothing driving it.
+
+**`tests/chartgal.py` reads §82.1's offscreen canvas, not the screen.**
+240×160 at 4bpp from `ct_chartseg`, which is the buffer both halves draw into
+and the same pixels `File > Export as BMP...` writes, so the row needs no
+export dialog, no floppy to extract from and no screen geometry.
+
+Five checks, and the shape of the argument is the same as the reader row's:
+every type **inks** something; **no two types draw the same picture** (a
+`ct_gal_map` with a repeated entry, or a `ch_draw` arm falling into its
+neighbour, leaves every number right and two menu items doing one thing);
+Column and Bar are **transposed**; Area carries strictly **more ink** than
+Line, being the same walk filled to the axis; and Pie's bounding box has an
+**inked centre with four blank corners**.
+
+| mutation | what fails |
+|---|---|
+| `ct_gal_map`'s Bar entry pointed at `CH_T_COLUMN` | 2 and 3 |
+| `ch_draw`'s Area arm sent to `.line`, so the fill never runs | 2 and 4 (`Area==Line`, 719 ink each) |
+
+**Two of the five metrics were wrong the first time, and the canvas said
+so** — which is the argument for looking at pixels rather than reasoning
+about them:
+
+- *"how many columns and how many rows carry any ink"* separates nothing.
+  A column chart's tallest bar reaches the top of the canvas, so every row
+  has ink; the axis labels (§82.7, drawn in colour 0) spread ink across the
+  top, so every column does too. Both charts measured 240×160. **Longest run
+  per colour** is the real transposition, and it is immune to both.
+- **the pie is an ELLIPSE**, 94×70 on this data. A near-square test on its
+  bounding box fails on a correct picture; "centre inked, corners blank"
+  does not, and says the same thing about a disc.
+
+**And the row's own read is where all the difficulty was**, which is the tax
+on looking at pixels instead of bss. Three things are needed and none of them
+works alone:
+
+1. **The guest is PAUSED for the read.** 19,200 bytes is not one round trip,
+   so a running guest can redraw underneath one and hand back a frame that
+   never existed.
+2. **Wait for the canvas to CHANGE from the previous type's.** `ui.settle()`
+   watches the *screen* stop changing, and a canvas still being computed has
+   not reached the screen — the frame is already still, so settle on its own
+   returns before the drawing starts. That returned a half-swept pie under a
+   mutation that cannot touch Pie at all.
+3. **Then let the screen settle.** The canvas is rasterised and *then*
+   blitted, so a screen that has stopped changing is a render that finished
+   and reached the glass. With (2) in front of it this is exact.
+
+**The failure worth recording is the version in between.** Before (3), the
+row took the first picture *seen twice* and tolerated never seeing one —
+because Pie sometimes never settled, and what kept moving said why: 24 bytes
+on EVEN rows 72–80, §82.6.2's alternate-row slice hatching, a sweep still
+running. To stop a half-swept pie forging a match, check 2 was loosened from
+exact equality to a 0.5%-of-canvas threshold. **That made the gate miss its
+own mutation.** With `ct_gal_map`'s Bar entry pointed at `CH_T_COLUMN` the
+two charts are identical, but read at different moments they drifted past the
+threshold, and one run reported seven distinct pictures. The same version
+also failed check 5 spuriously on a pie read mid-sweep.
+
+A gate that intermittently fails wastes an afternoon; **one that
+intermittently misses is worse than not existing**. The tolerance was
+treating a measurement problem as a tolerance problem. With the read made
+exact, both picture comparisons went back to exact equality, and the
+`ct_gal_map` mutation now fails checks 2 and 3 on every run.
 
 ### 82.6 CH_T_PIE — the one type that is not a rectangle
 
@@ -134544,6 +145607,51 @@ it away — it is the next-lowest by construction.
 Neither app invents data. A file with one column of numbers gets a scatter
 against the row index and a combination that is just its columns.
 
+#### 82.8.2 The data model has a gate now — `tests/chart2ser.py`
+
+`chartgal` (§82.4.1) proves Scatter and Combination **draw** differently from
+the other five. It cannot see the half §82.8 calls the hard one — *"it is a
+data-model change, not a drawing one"* — and that half had no test.
+
+**The demotion is why the row exists.** `ct_record` keeps the two
+lowest-numbered columns, and §82.8.1 states what happens when a column
+arrives that is lower than the series already being built: it **demotes**
+that series to second rather than discarding it, *"it is the next-lowest by
+construction"*. A SYLK in plain row-major order **never reaches that path** —
+the lowest column is in the very first row and nothing ever supersedes it —
+so the fixture puts column B in rows 0–3 and column A only in rows 4–7. The
+answer must come out the same as the row-major file's.
+
+**And the counts are not the assertion.** Two counts and two column numbers
+would pass just as happily if both series held column A, and the demote path
+*copies one array over the other*, so the check that matters reads the
+**values**: column A rises throughout and column B does not, and `ch_scale`
+normalises both against one `[ch_e10]`, so two non-proportional columns
+cannot produce the same scaled words.
+
+| mutation | what fails |
+|---|---|
+| `jmp` over the demotion, so a superseded series is thrown away | 3 and 3a — check 1's row-major file reaches `.newcol` with a count of zero and never demotes, so it stays green |
+| the demotion copies series two over series one | **3a alone** — every count and column number is still right |
+
+**The second of those was MISSED by the first version of this row, and the
+miss is the reason check 3a exists.** The values check was written against
+the row-major file — the one fixture that never takes the demote path — so a
+`rep movsw` with its pointers swapped satisfied every count, every column
+number, and the values of a file it had not touched. It passed five of five.
+Check 3a reads the demoted series two back and compares it against **the same
+column read the ordinary way**, which is the only comparison that can see
+which array the copy actually took.
+
+**One finding came out of writing it, and it was the test that was wrong.**
+Check 5 asserts §82.8's independent scales and first read `[ch_max2]` as 0,
+which it reported as one maximum shared by both series. It is not: `ch_prep2`
+is called from the **Scatter and Combination arms of `ch_draw` and nowhere
+else**, so the second scale is computed by the types that *spend* it rather
+than by the reader, and on the Column chart a file opens as it is simply
+still zero. The check picks a Scatter first now. A gate that reads a value
+before anything computes it diagnoses a correct app as broken.
+
 ### 82.9 A category's band is derived from the count, never fixed
 
 `ch_band` answers *"which pixels belong to category N"* for every type that
@@ -134718,6 +145826,32 @@ every other label would otherwise wear its decimals whether it needed them or
 not: `44.10` where the number is 44.1, and `0.00` — or, at a negative exponent,
 `0000` — where the number is 0.
 
+#### 82.13.2 The gate — `tests/chartexp.py`
+
+Five checks, one per clause above, and each asserts the **words** as well as
+`E`: an exponent on its own says what the labels will claim, and `ct_wvals`
+says what the bars will be. A scale that picked the right exponent and wrote
+the wrong words would draw a correct axis against wrong heights, which is the
+shape of the defect this section exists to have fixed.
+
+| mutation | what fails |
+|---|---|
+| `CHFP round` dropped, so `fp_a2i` truncates | **4 alone** — `0.66666e4` comes back 6666 against 6667, the one unit this section's own sentence is about |
+| `CH_E10_MAX` 4 → 9 | **3 alone** — E 6 and every word a hundred times bigger |
+| `ct_finalize`'s two `ch_scale` calls swapped | **all five** |
+
+**That third result was not what was predicted, and the reason is worth
+having.** Reversing the order was expected to fail only the two-series check,
+since that is the case the ordering comment is written about. It fails every
+check — and on the SINGLE-column files `[ch_e10]` comes back **0** with the
+words still perfectly correct. Scaling an empty second series is not a no-op:
+it writes `ch_e10` like any other call, and zero is what it writes. So
+"series two first, series one last" is load-bearing for **every** chart in
+the app, not only for the two that have a second series, and getting it wrong
+draws correct bars against an axis labelled in the wrong units on every file
+it opens. The comment in `ct_finalize` explains the two-series case; this is
+the larger half of what it is protecting.
+
 **Two series, one exponent word.** Scatter and Combination (§82.8) each draw
 against their own `ch_max`/`ch_max2`, and only the first is labelled —
 Combination's value axis measures its columns, which *are* series one, and a
@@ -134740,7 +145874,7 @@ doubles, and `ct_dslot` is the one place the stride-8 multiply lives.
 **Sheet's live chart** stages doubles at `SH_CHART_D1`/`SH_CHART_D2` in
 `sh_stgseg` and scales them into the word arrays at 0 and `SH_CHART_S2` that
 `ch_draw` already read. Its scan takes the whole value with
-`sh_cellval_to_acc_si` rather than the truncation `sh_cellint_si` gave it.
+`sh_cellval_to_acc_si` rather than the truncation an integer read gave it.
 
 **One trap, twice.** Both scans keep their record index in **CX**, and both new
 eight-byte copies wanted CX as a counter. In `sh_chart_scan1` that would have
@@ -134805,8 +145939,795 @@ Data > Column (§82.12) reads it again; the export used to copy the Save
 dialog's answer over it, so a column choice after an export parsed `CHART.BMP`
 as SYLK and said *No data in that column.* The export name is staged in
 `ct_ntxt`, `ct_esatof`'s scratch, which no read is using at that moment.
+### 82.18 Keeping Chart in step with what Sheet writes
 
-### 82.15 Apps size pass 2: the shipped file
+Sheet grew four stages of value model while Chart's readers stood still, and
+the two drifted in opposite directions — one reader was too generous and one
+was not generous enough.
+
+**The LIVE feeder was the generous one.** §82.11 taught chart.o88's *file*
+readers that a label is not a data point, and §81.19's sort scan learned the
+same about labels and errors. `sh_chart_scan1` — the feeder behind Sheet's own
+`Data > Chart Column...`, the one that does not go through a file at all —
+never did. A plain label leaves `SH_C_VAL` zero (`sh_commit` writes the value
+before the tag), so a column with a heading charted **a 0 bar at the top of
+it**, and a `#DIV/0!` charted the zero underneath the error. It now skips both,
+and judges a formula by what it **answered** rather than by its stored tag —
+the tag may predate the fix that unbroke it, which is the same reason
+`sh_getcell2` raises from the freshly published one (§81.20).
+
+**The BIFF reader was the stingy one.** It handled `RK` and `NUMBER` and
+skipped everything else, which was right until Sheet started writing real
+`FORMULA` records instead of flattened values. From then on, saving a column
+of formulas and opening it in Chart drew **nothing at all** — while the same
+column charted correctly inside Sheet, from the same data, one menu away.
+
+A `FORMULA`'s cached result sits at the same offset as `NUMBER`'s value, so
+reading it is the NUMBER path with one extra test: BIFF marks a cached
+**string, boolean or error** by setting the double's top word to `0xFFFF`,
+which no finite double has. Sheet writes exactly that for a `#DIV/0!` or a text
+result (§81.24.3), and charting the bytes underneath one would plot a NaN's
+mantissa as a data point.
+
+Verified against a file Sheet wrote and the host decoded: a `LABEL` heading,
+four `FORMULA` records cached at 20/30/40/50, and a fifth whose cached result
+is non-numeric. Chart draws four bars — the same four the live chart draws.
+
+#### 82.18.2 The readers have a gate now — `tests/chartread.py`
+
+**Until this row only SYLK had ever been executed by a test.** `chartname`
+(§82.15) opens one `.SLK` and nothing else, so `ct_read_dif`, `ct_read_biff`
+and `ct_rkdec` were a few hundred bytes of record walking apiece that nothing
+ran — and a decoder that is wrong does not fail, it charts a number. That is
+the same shape as the defect that made `chartname` exist.
+
+**One dataset, written three ways by the HOST, and the three readings are
+compared to each other.** A reader is checked against its siblings rather than
+against a number recomputed in the test, because `ch_scale` normalises a
+series into signed words against `[ch_e10]` and restating that arithmetic on
+the host would test the test's copy of it. What is compared is what the
+*drawing* reads — `ct_valcnt`, `ct_mincol`, `[ch_e10]` and `ct_wvals` — since
+the raw doubles live in the staging claim `ct_read_by_ext` frees before it
+returns (§82.14).
+
+**The host reads each fixture back with `tools/os88sheetfmt.py` before the
+guest sees it.** A DIF or BIFF writer defect would otherwise arrive as a data
+defect and be read as Chart's; the round trip fails on the host, at build
+time, where it is legible.
+
+**Column A is 12.5, −3.25, 1000.0, 0.125** — a fraction, a negative, three
+orders of magnitude, and nothing that survives truncation to an integer — and
+in the BIFF file its four values are written **one record kind each**: NUMBER,
+FORMULA, RK, NUMBER. Column B's whole numbers go as RK. One file therefore
+exercises every value record `ct_read_biff` knows, `ct_rkdec` included. A
+*fifth* cell in column A is a FORMULA whose cached result is `#DIV/0!`, and
+§82.18's own claim is that it is skipped: `ct_valcnt` staying 4 is that
+assertion, and it had no gate before this row.
+
+**Two checks exist because the ones above them are not enough**, and the
+mutations say so:
+
+| mutation | what fails |
+|---|---|
+| `ct_rkdec` shifts an RK by 1 instead of 2 | **4 alone** |
+| the DIF parse steps past `"0,"` by 3 instead of 2 | **4 alone** |
+| §82.18's `0xFFFF` test deleted | 3 and 4 |
+| the per-file `ct_nnames` reset removed (§82.17) | **6 alone** |
+| `abs()` in `ct_record`'s store — a defect **shared** by all three readers | **5 alone, with 4 passing** |
+| the slot/file routing defect restored (§82.15) | **8 alone** |
+
+The first two are the argument for check 4: a decoder that drops a sign or
+shifts an RK wrong still hands `ct_record` four numbers, so checks 1–3 all
+pass on four wrong ones. The last is the argument for check 5: a defect in
+the *shared* path leaves the three readers agreeing, so check 4 passes and
+only a check tying the published words back to the data can catch it.
+
+**Checks 7 and 8 are `Data > Column` (§82.12), the untested twin of §82.15's
+range filter** — `ct_wantcol` and `ct_wantrng` are a pair and only the range
+half had ever been exercised. Check 7 is the ordinary path, on the BIFF file,
+which carries no names; **check 8 is the same menu item on the SYLK, which
+does**, and it failed the first time it ran. §82.15 has the defect it found.
+That is the second time in this chapter that a feature was written down as
+working and was not, and both times the reason was the same: nothing drove
+the menu.
+
+#### 82.18.1 What Chart still does not know
+
+Recorded rather than fixed, because both are honest limits and neither is
+silent-wrong:
+
+- **A multi-sheet workbook is read as its first sheet.** Sheet writes BIFF4
+  with a `SHEETHDR` per sheet when more than one has data (§81.10.5); Chart
+  has no record for `0x008F` and stops at the first `EOF`, which is the end of
+  worksheet one. It plots that sheet and says nothing about the others.
+- **There is no range selection.** `Data > Column` picks a *column* — A..H, or
+  Automatic — and charts all of it. Excel charts a selection because it has
+  one; this app opens a file, and a file does not carry what was selected
+  (§82.12). A row range would need a second pair of fields and a reader that
+  bounds its walk by them.
+
+### 82.15 Charting a range Sheet named
+
+Chart is the **helper that keeps image generation out of Sheet**, so what it
+charts should be what the user pointed at — not "whatever the lowest column
+turned out to be", which is all a file used to say. Sheet now names ranges
+(§81.29) and writes them as SYLK `NN` records (§81.29.1), so there is
+something to point at.
+
+`ct_parse_nn` reads them into a small table and `Data` offers them by name.
+`ct_record` then admits only cells inside the chosen rectangle, and the
+existing two-lowest-column logic picks within it — which for the usual
+one-column name is that column and nothing else, so **no new selection
+machinery was needed**, only a filter in front of the old one.
+
+**THE FILTER NEVER RAN UNTIL THE 2026-10-14 MERGE.** The paragraph above
+describes what the code was shaped to do and not what it did: `ct_reset_series`
+zeroed `ct_wantrng` and EVERY READER called it first, so `Data > <a name>` set
+the request, re-read the file, and `ct_record` then tested a zero and filtered
+nothing. Every chart was the lowest column's, exactly as before the feature.
+
+It survived because **nothing tests Chart**: there is no `tests/chart*.py` and
+no chart row in `tests/suite.py`, so the only thing that could have caught it
+was reading the reset and the test together, which nobody had reason to do.
+Upstream's own restructure is what fixed it - the per-reader reset became one
+reset in `ct_read_by_ext`, and `ct_wantrng` is pointedly NOT in it, because the
+request has to outlive the read it is requesting. `ct_ondlg` clears it for a
+NEW file, which is the only place that ever wanted it cleared.
+
+A feature whose gate does not exist is a feature nobody can say is working,
+and this one was written down as working for two cycles.
+
+**`tests/chartname.py` is the gate now** - the first test Chart has ever had.
+Its fixture makes the two answers DIFFER, which is the whole design: column A
+is 10,20,30,40, column B is 7,3,9,1, and the only name in the file is B1:B4,
+so `Automatic` must keep column A (`ct_mincol` 0) and the name must keep B
+(`ct_mincol` 1). **Check 5a is the control** - a row that only asked whether
+picking a name charted SOMETHING would have passed against the broken code,
+because it did chart something: the wrong column, every time. The two columns
+are deliberately not proportional, because `ch_scale` normalises a series
+against `[ch_e10]` and two proportional columns produce the SAME scaled words
+with only the exponent differing, so a check on the drawn numbers could not
+tell them apart. Mutation-tested by restoring the defect itself - zeroing
+`ct_wantrng` in `ct_read_by_ext` - which fails checks 4, 5 and 5a and leaves
+the other four passing, exactly as the shipped defect did.
+
+**It is a relabelling, not a second menu.** The `Data` menu's eight slots are
+buffers, filled at startup with `Column A`..`Column H` and overwritten with
+the names when a file supplies any — the same relabel-in-place idiom Sheet's
+Options menu uses. The kernel re-reads an item's text each time the menu
+drops, so nothing has to be rebuilt; a genuinely dynamic menu would have to
+be, and the kernel's menu set is a static structure (§13.5). Any slot past
+the last name keeps its column label, so a half-filled menu still says what
+the rest are.
+
+**That last sentence was false for as long as the feature existed, and
+`tests/chartread.py` found it on its first run (§82.18.2).** The labels were
+right — `ct_labels_names` calls `ct_labels_cols` first and overwrites only
+the slots a name occupies, exactly as described — but the *handler* decided
+which KIND a slot was by asking whether the file had any names at all:
+
+```nasm
+    cmp byte [ct_nnames], 0
+    je .dcol
+    mov [ct_wantrng], ax            ; ...for ALL EIGHT slots
+```
+
+So one name in a file made every slot a name. Picking `Column B` on a
+one-name document stored `ct_wantrng` = 2, which selects **name record #1 —
+a record no file ever defined**, and `ct_record` then filtered the cells
+against whatever corners that slot happened to hold. The menu said one thing
+and the app did another, and only a document with *both* a name and data
+outside it can tell: `chartname`'s fixture has one name and two columns but
+never picks a column, so it could not.
+
+The fix is that **the slot decides, not the file** — `cmp al, [ct_nnames]` /
+`ja .dcol`, `AL` being the 1-based slot, so "past the last name" is a column.
+It subsumes the old zero test (with no names every slot is past the last one)
+and the package got a byte smaller.
+
+Names belong to **the file that is open**: a read clears the table first, and
+opening another file relabels from that one. `Automatic` clears both the
+column and the range choice.
+
+Only SYLK carries names. DIF has no equivalent record, and BIFF's `NAME`
+(0x0018) holds its reference as an RPN token stream — a bigger piece of work
+than the SYLK line, and not done, so a `.BIF` still charts by column.
+
+**`mul` writes DX:AX, and DX was the far corner's row.** Computing the
+record's address with the corner still live stored the multiply's high word —
+zero — as the row, so every named range came out one row tall and charted its
+first cell alone: one giant bar. Both halves are banked across the multiply
+now. The trap is the oldest one in this file and it still caught a fresh
+routine.
+
+### 82.17 Chart reads a named range out of BIFF too
+
+`ct_parse_nn` has read SYLK's `NN` record since §82.15. BIFF's `DEFINEDNAME`
+(0218H, §81.10.8) now feeds the same table, so the **Data** menu offers a
+document's named ranges whichever of the two formats it arrived in. The only
+token array accepted is a lone `tAreaR` — which is the only one Sheet writes,
+and the only one that *is* a rectangle rather than something needing a cell to
+be relative to.
+
+Two things this closed beyond the new record:
+
+**`ct_name_store` is shared by both readers.** The corner-writing tail used to
+live inside `ct_parse_nn`, and it is the part with the `mul` that must not run
+with `DX` live (§82.15). A second reader open-coding it would have been the
+obvious way to reintroduce exactly that bug in a place the first one no longer
+had it.
+
+**The name table is reset in `ct_reset_series`, not in one reader.** Clearing
+it was `ct_read_sylk`'s alone, so a BIFF or DIF file opened after a SYLK one
+inherited the SYLK file's names and the Data menu offered ranges that were not
+in the document it was showing. All three readers call `ct_reset_series`, and
+all three mean the same thing by it.
+
+### 82.16 `CHART.OVL` — the rasterizer as an overlay, and why only SHEET takes it
+
+`apps/os88chart.inc` is 4,735 bytes of drawing code shared by two packages.
+SHEET assembles it into a `.modc` section, cut out by `tools/os88ovl.py` and
+loaded on demand; CHART assembles it straight into `.text`. **Same source, one
+`%define` apart** — `CH_OVERLAY`.
+
+That asymmetry is the whole design, and it is deliberate:
+
+| | resident image | + bss | of 61,440 |
+|---|---|---|---|
+| SHEET, module resident | 53,713 | 3,897 | 57,610 — past §68.10's 55,000 trigger |
+| SHEET, module overlaid | 49,278 | 3,897 | **53,175** |
+| CHART, module resident | 12,154 | 2,150 | 14,304 |
+
+SHEET is the package with a problem. CHART has 47KB spare, so an overlay would
+buy it nothing and cost it a **new way to fail** — a missing file, a heap
+refusal, a volume it cannot navigate back from. A package takes an overlay
+when it must, not because a sibling did.
+
+**Those SHEET numbers are a snapshot of the day the split was made, and they
+have not been true for a long time.** The 8KB the overlay bought was spent —
+on 106 functions, the macro language, the dialogs, the formula and status
+bars, and the soft-float. Today:
+
+| | resident image | + bss | of 61,440 | when |
+|---|---|---|---|---|
+| SHEET, chart module overlaid | 56,976 | 4,239 | 61,215 — 225 spare | 2026-09-02 |
+| SHEET, file formats too (§82.16.9) | 48,948 | 4,371 | **53,319 — 8,121 spare** | 2026-09-03 |
+
+**Every row here is dated, and the bottom one is the only one that describes
+the tree.** The rows above it are kept because they are the argument for the
+move, not because they are true.
+
+That column exists because this section already made the mistake once and then
+made it again: it was written to correct the stale 53,175 above, said "225
+bytes", and was itself stale within a day — while §81.2 cited it as "133
+bytes", a third number, and §82.16.9 recorded a fourth. Four figures for one
+quantity, in one document, inside two days. **A figure without a date is a
+claim about the present that nobody renewed.**
+
+#### 82.1.2 The interior fix, in full — the measurements and the half that did not reproduce
+
+*The fix itself is §82.1.1, which is upstream's record of it. This is the fork's fuller one: the pixel evidence, the method that caught the border regression, and the raise half of #142 that could not be reproduced.*
+
+`sh_chart_paint` was the `OSAPI_GFX_BLIT4` and nothing else, and that is not
+enough to paint a window.
+
+The frame is `SH_CHARTWIN_W` × `SH_CHARTWIN_H` = 260 × 200, so its content is
+260 × 181; the image is `CH_W` × `CH_H` = 240 × 160. **A 20-pixel band down the
+right and 21 along the bottom belonged to the window and was never written by
+anything** — the "little margin around the CH_W x CH_H canvas" that
+`SH_CHARTWIN_W`'s own comment describes. The margin was deliberate; painting it
+was not considered.
+
+So on a move or a raise the frame redrew and the picture re-blitted, and
+whatever had been on the glass in between stayed there. Photographed either
+side of the fix, dragging the same chart across the SHEET window: before,
+`rma` from SHEET's *Format* menu, and `40`, `90`, `15`, `84`, `9 TOTAL 12795
+14229` from its cells, all sitting inside the Chart window's frame; after,
+white.
+
+**One fill, not four round the edges.** A fill costs 756 µs whatever it covers
+(PERFORMANCE.md), so covering the whole content once is cheaper than computing
+and drawing the four strips the picture leaves, and the blit that follows lands
+on top of it. The content height is derived — `W_H - TITLE_H - 1` — rather than
+written as a literal, which §81.6's dialogs got wrong once already.
+
+**`OSAPI_WM_GEOM`, not `W_W`/`W_H`.** Those are the OUTER frame, and filling to
+them paints over the window's own right and bottom border — a two-pixel black
+line the first version of this fix erased. `WM_GEOM` answers the size of the
+box `WM_CONTENT` gives the origin of, which is exactly the rectangle wanted.
+**A screenshot diff against the unfixed build is what caught it**: on a raise,
+the only thing that had changed was that border going white. Comparing the two
+builds pixel for pixel says what "it looks right" cannot.
+
+**The raise half of #142 did not reproduce.** Driven through the reported
+sequence — chart on top, raise SHEET over it, click the Chart's title bar —
+the window comes forward and draws correctly, and the fixed and unfixed builds
+are **identical to the pixel** (0 differing). So the interior fill neither
+causes nor cures it, and it is not established as the same defect: something
+about the reporter's session differs from this repro. The drag half is
+confirmed both ways, 1,530 pixels apart.
+
+`CHART.O88` shares the paint proc and was not driven — it no longer ships
+(§82), but the code is still built.
+
+#### 82.16.1 One overlay cannot serve two packages — the reason is addressing
+
+The obvious ambition was one `CHART.OVL` on disk, loaded by either package,
+proven identical by `cmp`ing the two independent cuts. **It does not work, and
+the reason is worth writing down because it will be reached for again.**
+
+§68.10's model keeps `DS` pointing at the *package's* segment while the module
+runs, so the module reads and writes the package's variables by their ordinary
+absolute offsets. Those offsets are the problem. Every `ch_*` variable lives in
+bss, and **bss begins where the image ends**:
+
+```
+    ch_type  =  os88_image_end + 6
+```
+
+`os88_image_end` is 49,278 in SHEET and 12,154 in CHART. Putting the `ch_*`
+block at the same *bss-relative offset* in both — which
+`apps/os88chartbss.inc` does, asserted at assembly time — makes the offsets
+match each other and does **not** make the addresses match. The cut files
+differed at byte 238:
+
+```
+    sheet : 8b 36 e8 bf     mov si, [0xbfe8]
+    chart : 8b 36 bf 1d     mov si, [0x1dbf]
+```
+
+1,026 bytes apart, all of them operands. **A shared module would have to stop
+addressing its state absolutely** — either by reaching everything through a
+base register the dispatcher loads, or by owning its state in its own segment
+and switching `DS` on entry, which then breaks every call back out to the
+package's soft-float. Both are real designs; neither is worth it to save 4,735
+bytes in a package that has 47,000 free.
+
+So: **`CH_OVERLAY` is opt-in per package, and today exactly one package opts
+in.** The `cmp` gate was removed along with the claim it was defending.
+
+#### 82.16.2 SHEET builds BOTH WAYS, and that is a test tool
+
+`%define CH_OVERLAY` at the top of `apps/sheet/sheet.asm` selects the overlay;
+`-DCH_RESIDENT` instead builds the identical source with the module compiled
+straight in. One of the two must be chosen — `sheet.asm` `%error`s if neither
+is — and that is not ceremony:
+
+**An overlay has two failure modes that look exactly alike from outside.** The
+module can be drawing wrongly, or the wiring around it can be handing it wrong
+arguments, and in both cases you get a chart that is blank or wrong with no
+error anywhere. Flipping one `%define` and rebuilding answers which in one
+step. It is what found the two bugs in §82.16.4 after an afternoon of reading
+the code and getting nowhere; the switch stays working for the next person.
+
+Three macros carry the difference, so no call site is written twice:
+
+- **`CHMOD <routine>`** — `call ch_draw` resident, `mov bp, CHM_draw` plus
+  `call ch_ovcall` overlaid. `CF=1` means the module could not be loaded,
+  which the resident build cannot produce, so it emits `clc` and every
+  caller's error path is dead code rather than wrong code.
+- **`CHFP <op>`** — the module's calls back out to the soft-float core
+  (§84): a near `call fp_unpack_a` resident, `call far [ch_v_unpacka]`
+  overlaid.
+- The `%ifdef` around `ch_ovbind` / `ch_ovneed` at entry.
+
+`CHMOD` and its `CHM_*` verb numbers live near the **top** of `sheet.asm`,
+beside the `CH_*` geometry constants, for the reason stated there: the shared
+code has to be `%include`d at the end of the file, and anything used by code
+before that has to already exist.
+
+#### 82.16.3 The four things the split required
+
+**1. The `ch_*` block sits at bss offset 0 in both packages**, and says so:
+
+```
+    %define CH_BSS_BASE (os88_image_end + 0)
+    %include "os88chartbss.inc"
+    %if CH_BSS_BASE != os88_image_end
+      %error "the ch_* block must start at bss offset 0 - see 82.16"
+    %endif
+```
+
+Not required by the split any more, but kept: it is what makes the two
+packages' copies of the module *structurally* the same, so a change to one
+cannot silently mean something else in the other.
+
+**2. Calls out go through vectors, and the vectors go through shims.** The
+module calls `fp_unpack_a` and five siblings, which are resident. From another
+segment that is a far call; every one of them is a near proc ending in `ret`.
+So each gets a shim in the resident half — `call` plus `retf` — and
+`ch_ovbind` fills `ch_v_*` with each shim's offset and the package's own
+segment at start-up.
+
+`ch_s_aiszero` is the **fused** one and shows the class of problem: the module
+used to load `bx, fp_am0` itself, which is an address in the package's bss —
+exactly what a module in its own segment cannot name. The shim supplies it.
+
+**3. The verbs.** `ch_modc` at the module's offset 0 is the dispatcher; `BP`
+carries the verb, because none of the entry points takes `BP` as an argument.
+Three verbs, and only three, because SHEET calls exactly three routines:
+
+```
+    CHM_draw = 0    CHM_scale = 1    CHM_bmp_write = 2
+```
+
+`ch_sc_copy8` is *in* the module and has no verb: CHART calls it, and CHART
+does not use the dispatcher. **An unreachable verb is a claim nothing tests**,
+so it is not there.
+
+**4. The launch directory is banked at start-up, and the claim is taken
+there too.** `CHART.OVL` lives beside `SHEET.O88`, and by the time a chart is
+drawn the user may have navigated anywhere, so SHEET's entry calls
+`OSAPI_FILE_HERE` **before anything can move** and `ch_ovneed` goes there,
+loads, and puts the volume back (`ch_ovback`) on every path including both
+failures. Same rule as `CWORD.OVL` (§54.9, §19.2.1).
+
+Entry is also where `ch_ovneed` is *first called*, so the module's 8KB is
+claimed with every other claim. §50.3 is not advice: a claim taken mid-session
+can move a block, and the chart path calls the module with `[sh_stgseg]`
+already in `DX`.
+
+#### 82.16.4 Two bugs this shape produces, both silent
+
+Neither was caught by the assembler, the 25-check suite, or reading the code.
+Both were found by building the same source the other way.
+
+**The dispatcher must not stage the verb index in a register a verb uses.**
+The first `ch_modc` did:
+
+```
+    shl bp, 1
+    mov si, bp                 ; <- destroys an argument
+    jmp word [cs:si+ch_mverb]
+```
+
+Every verb here takes `SI` as an argument — `ch_scale` its source offset,
+`ch_bmp_write` its filename — so each was handed a 0, 2 or 4 instead.
+`ch_draw` survived it, because its `SI` is 0 and so is its verb, which is
+precisely what made the failure so hard to read: **charts drew their title and
+their axis and no data at all**, and the axis collapsed to 0..1 because every
+value scaled to zero. Index through `BP`, which is the verb already and which
+no verb wants: `jmp word [cs:bp+ch_mverb]`.
+
+**`%define CH_OVERLAY` has to be the first line of the file.** NASM's
+preprocessor runs top to bottom in one pass, so a `%ifdef` is tested *where it
+sits*. With the `%define` down beside the `%include`s, all four `CHMOD` sites
+and both loader calls read "not an overlay" and quietly assembled near calls
+to routines that had already been cut out of the image. SHEET jumped into
+unmapped memory and **took the whole machine with it** — a frozen desktop
+clock, not an application error. No warning, no diagnostic, and one call site
+in the listing showing an instruction with no bytes beside it.
+
+That is why `sheet.asm` now `%error`s when neither `CH_OVERLAY` nor
+`CH_RESIDENT` is defined at that point in the file. A `%ifdef` tested before
+its `%define` is not an error to NASM; it is just false.
+
+**A related one, same class:** `ch_hdrtpl` and `ch_pal_bgra` — the 118-byte
+BMP header and palette — are the module's only *data* the resident half reads,
+copied into the chart buffer by SHEET's entry proc long before `CHART.OVL` is
+loaded. They stay in `.text` in both builds. A module-relative address handed
+to resident code copies whatever happens to sit at that offset in the package,
+which is a wrong BMP header and, again, no error anywhere. `ch_margin` is
+resident too, for the converse reason: `sh_chart_paint` near-calls it, and it
+names no module data.
+
+**The converse, the module reading its own data.** The module runs with
+`DS` = the package, so a table inside it — `ch_sintab`, `ch_pie_pattab` — is
+read `[cs:...]`, the way the dispatchers read their verb tables. Without the
+override a Pie chart is drawn from the package's code bytes taken as sines and
+hatches. In CHART.O88's resident build `CS` = `DS`, so the override is right
+in both.
+
+#### 82.16.5 Refusal is an ordinary path
+
+No heap, or a disk without the file, and `ch_ovcall` returns **CF=1**. The
+include has no toast of its own and should not grow one — the two packages
+report differently, and only one of them uses this at all. In SHEET:
+
+- `CHM_bmp_write` already had a CF contract, so the export's existing error
+  path covers it with no new code.
+- `CHM_draw` sets the status bar to `CHART.OVL not found.`
+- `CHM_scale` has no return contract; the `CHM_draw` that follows it reports.
+
+`sh_chart_render` **owns `[sh_msg]`** for this reason. Its caller used to set
+`"Charted."` unconditionally afterwards, which overwrote the refusal: a chart
+that never drew still reported success, and the status bar could not be used
+to tell the two failure modes apart.
+
+The chart simply does not appear. That is the right direction to fail in: a
+spreadsheet whose numbers are all still there.
+
+**A failure is remembered, not retried** (`ch_ovfail`, `sh_m2need`'s rule):
+every formula door reaches `ch_ovneed`, and a repaint must not re-claim 51KB
+and search the disk once per visible cell.
+
+**A module from another build is a failure too.** Both `.OVL`s are separate
+files, so a file copy can pair a new `SHEET.O88` with an old module — which
+reads the package's bss at stale offsets and returns through a vector table
+laid out for another build. Each module carries `crt0.asm`'s pair (§73.14),
+its own length and `os88_image_end`: `CHART.OVL` at +3, after a `jmp near`,
+and `MACRO.OVL` at +10, after its `SHMACRO2` mark. `ch_ovneed` and
+`sh_m2need` free the claim and refuse when either word disagrees with the
+assembled value.
+
+#### 82.16.6 SHEET is full, and the tail is where the room is
+
+**Superseded by §82.16.9, which did this — SHEET has 8,121 bytes spare as of
+2026-09-03. What follows is the measurement that justified the move, kept as
+the argument rather than as the state.**
+
+225 bytes. That was what remained of `APP_MAX_SIZE` after the financial
+functions landed, and it was the binding constraint on everything SHEET did
+next — including the matrix and array family, which is all that now separates
+it from Excel 2.1d's function set.
+
+**Where those 56,976 bytes were.** Measured from a NASM listing, mapping every
+top-level label to the address of the first line that emits a byte, and
+bucketing by subsystem (the shared `%include`s are excluded — they are the
+unmapped remainder):
+
+| subsystem | bytes | |
+|---|---|---|
+| formula parser + 106 functions | 12,529 | 26.8% |
+| **file formats — SYLK/DIF/BIFF/CSV** | **6,913** | 14.8% |
+| dialogs | 4,841 | 10.4% |
+| grid paint + scroll | 4,538 | 9.7% |
+| macro language | 2,614 | 5.6% |
+| menu bar | 415 | 0.9% |
+
+**There is no fat.** The largest contiguous run of pure data in the whole file
+is 619 bytes (a dialog's control table), and the total of every such run is
+1,731. Nothing here can be shrunk into room for a feature; the only lever is
+moving code out of the resident image.
+
+**The tenant is the file-format code**, and it is the right one for reasons
+that have nothing to do with its size. It is reached from exactly two places
+— File▸Open and File▸Save — so the boundary crossing is a menu action and not
+an inner loop; a spreadsheet whose recalc is unaffected by an overlay is worth
+more than one that saves 200 more bytes. And it is already the most separable
+thing in the file.
+
+**What it costs, counted rather than guessed.** The BIFF reader/writer and the
+read/write drivers are 40 routines over ~3,440 source lines, and between them
+they make **~120 calls to symbols that would stay resident** — `sh_findcell`,
+`sh_setvald`, the `fp_*` machine, the R1C1 conversions. Every one becomes a
+far call, because §68.10 keeps `DS` on the package but moves `CS`. That is the
+same edit the Scribe split made 47 times (§95.8.3), at two and a half times the
+scale, and the mechanism is the one that worked there: the module carries a
+table of `dw target, 0` and the bind step stamps the package segment into each
+high word, so a call site is `call far [cs:thk_findcell]` and the linker
+supplies the offset.
+
+**Why this was not obvious, and the part worth remembering.** It took most of
+an investigation to establish that the tail was even available, because
+`apps/os88chartovl.inc` said in its header that ONE FILE SERVES BOTH PACKAGES
+and that the Makefile asserted the two cuts identical. Neither is true —
+82.16.1, written afterwards, proves the first one *cannot* be — and no such
+Makefile rule has ever existed. A false claim of joint ownership is expensive
+in a way a wrong constant is not: it does not produce a wrong answer that
+someone eventually chases, it makes a correct action **unthinkable**, and the
+only symptom is that nobody ever proposes it. The comment now says what is
+true, and says that it used to say otherwise.
+
+
+#### 82.16.8 Offset 0, claimed by three bytes
+
+`ch_ovcall` far-calls `(0, the claim)`, so **whatever NASM lays down first in
+`.modc` is the dispatcher**, whether it meant to be or not — and fragments are
+laid down in *source order*.
+
+That is the one structural obstacle to a second tenant. SHEET's file-format
+code sits nine thousand lines above the `os88chart.inc` include, so bracketing
+it where it stands would put a BIFF writer at offset 0 and send every chart
+verb into the middle of it. §82.16.7 concluded the tenant therefore had to be
+physically moved to the end of the file — 4,786 lines of code motion, with
+every local label and every interleaved data block along for the ride.
+
+**It does not.** Three bytes claim offset 0 before anything else can:
+
+```nasm
+%define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
+section .modc vstart=0 align=1
+sh_modc0:
+    jmp ch_modc
+section .text
+```
+
+Both ends are inside the module, so it is an ordinary near jump, and NASM
+picks `EB xx` — **two bytes**, not three. Everything else may now be bracketed
+wherever it already lives. (The build stamp of §82.16.5 has since made it a
+`jmp near`, three bytes, so the stamp sits at a fixed +3.)
+
+`ch_modc` grew one hook to go with it: an unknown verb falls through to
+`CH_MODC_EXT` when a host defines one, so a host can continue the numbering
+past `CHM_MAX` without editing a file CHART shares. Undefined, it still just
+`retf`s, and CHART — which compiles the whole include into `.text` — never sees
+either change.
+
+**Verified before anything was moved**, which is the point of doing it first:
+resident image unchanged at 57,068, module 4,735 → 4,737, and a chart drawn and
+exported through the trampoline produced a `CHART.BMP` **byte-identical** to
+the one from before it existed (sha256 `c78484ceb60c1397…`, 19,318 bytes).
+
+
+#### 82.16.9 The move, done — 133 bytes to 8,121
+
+SHEET's file formats are a second tenant of the module now.
+
+| | image | + bss | free |
+|---|---|---|---|
+| before | 57,068 | 4,239 | **133** |
+| after | 48,948 | 4,371 | **8,121** |
+
+`CHART.OVL` went 4,735 → 13,262 and `CH_OVKB` 8 → 16 to hold it.
+
+**Nothing was moved.** §82.16.8's two-byte trampoline made source position
+irrelevant, so the tenant is *bracketed where it stands* — 10 regions, 4,696
+lines, `section .modc` … `section .text`. No code motion, no shuffled local
+labels, no data blocks separated from the routines that own them.
+
+**The boundary is smaller than §82.16.7 predicted**, because the closure was
+computed rather than guessed: absorb every routine *all* of whose callers are
+already inside, repeatedly, and 12 tenant-only helpers — `sh_stgput` alone
+accounts for 44 crossings — come with it. **33 symbols and 96 call sites**,
+against the 36 and 144 estimated. Each is `SHOUT sym`, one macro that is a near
+call resident and `call far [sh_v_sym]` overlaid, so the two builds cannot
+drift. `sh_ovbind` fills the 33 vectors with the shim offsets and this
+package's segment, exactly as `ch_ovbind` does.
+
+Three routines are entered from outside — `sh_doread`, `sh_dowrite`,
+`sh_difbbox` — and each keeps a **resident stub of its own name** that sets a
+verb and calls `ch_ovcall`. Every existing call site is untouched and never
+learns the reader moved.
+
+##### The two defects the gate caught, both invisible to the assembler
+
+**Module data read through DS.** `sh_biff_errtab` went into the module with the
+code that uses it, and `#DIV/0!` exported as `#NULL!` — an index of 0 where 1
+was written. DS points at the *package* while the label now holds a
+*module-relative* offset, so the lookup read whatever sat at that offset in the
+package. §68.10 rule 2, and four data blocks had to be pushed back into `.text`
+(`sh_biff_errtab`, `sh_rpn_fid`, `sh_rpn_fvar`, `sh_biff_numfmt_tab`) along
+with the `_end` labels the `TIMES` assertions subtract from them — a difference
+across two sections is not a constant, which is the build telling you the same
+thing.
+
+`sh_mverb` stays in the module and is correct there, because it is read
+`[cs:bp+sh_mverb]`.
+
+**A near call to a resident stub from module CS.** The DIF writer said `call
+sh_difbbox`, and `sh_difbbox` had become the resident stub. A near call from
+the module lands at that offset *in the module*, so the writer ran into
+whatever code was there and **stopped producing a file**, silently. It wanted
+`shm_difbbox`, the module's own copy.
+
+**That rule was already written and already checked.** `tools/os88ovlchk.py`
+has enforced "no near call across the boundary" since WORD's split — it was
+simply never pointed at SHEET. It is now, and it also compares each `.OVL`
+against the claim constant it is read into, because `ch_ovneed` reads
+`CH_OVKB*1024` bytes and a tail that outgrows its claim is not an error: it is
+a module truncated at a byte boundary. Both checks were mutation-tested.
+
+**What made the move safe to attempt** was §81.38's round-trip gate, built two
+days earlier for exactly this. It failed twice, named both defects by their
+symptom — a wrong error code, a missing file — and passed on the third run: 6
+checks, all three formats written by the moved code and read back by a host
+library that has never seen it.
+
+
+#### 82.16.7 The move is designed, and it is blocked on a test that does not exist
+
+82.16.6 picked the tenant. This is the design, and the reason it has not been
+executed.
+
+**The boundary is unusually clean.** Of the 43 routines, resident code calls
+into only five — `sh_doread`, `sh_dowrite`, `sh_parsecrec`, `sh_slk_r1c1`,
+`sh_difbbox` — and the last three are small helpers the resident SYLK path
+uses, so leaving them behind reduces the module's public surface to **two
+verbs**, `SHM_read` and `SHM_write`, entered from File▸Open and File▸Save.
+Exactly one piece of data inside the tenant is named from outside it,
+`sh_biff_numfmt_tab`, and it stays in `.text`.
+
+**Data needs no vectors; only code does.** §68.10 keeps `DS` on the package, so
+module code reading a resident table by its ordinary offset is correct. It is
+`CS` that moves, so it is only *calls* that must become far — the ~144 of them,
+through the same shim-and-vector table `ch_ovbind` already fills, with a macro
+per §82.16's `CHFP` so the resident and overlaid builds cannot drift.
+
+**Ordering is the one structural change.** The dispatcher must be at the
+module's offset 0, and NASM lays `.modc` fragments down in source order — so
+the tenant cannot simply be bracketed where it sits, 14,000 lines above the
+`os88chart.inc` include. It moves to the end of the file, and `ch_modc` grows a
+single fall-through so a host can extend the verb table without editing a file
+CHART shares.
+
+**Why it is not done. Nothing tests the code it moves.** The suite's only SHEET
+row is `stkbalance`, a static check. There is **no SYLK, DIF or BIFF
+round-trip anywhere** — nothing writes a workbook, reads it back and compares.
+Moving 3,500 lines of file-format code across a segment boundary is precisely
+the change that produces a file which still loads and is quietly wrong in one
+column, and this stage found six defects of that shape in code written the same
+week.
+
+So the order is: **the round-trip gate first, the move second.** The gate is
+worth having on its own terms and is buildable from parts that exist — the
+guest writes the file, the host reads the floppy back and checks it.
+
+**BOTH HAVE SINCE HAPPENED**, which is what makes this paragraph history
+rather than a plan: §81.38's `sheetfmt` is that gate (the host authors the
+file from the published grammar, so the writer's defect and the reader's
+cannot cancel), the family is twenty rows now, and the move landed —
+`CHART.OVL` ships. The citation here named section **772**, which does not
+exist; it survived because `checkdocs`' patterns stopped at two digits and so
+never saw a number of three at all (upstream #279, raised by this fork's
+#269 — 283 headings and one bad citation in this tree were invisible to the
+gate until it was fixed).
+
+Doing the move first would have meant
+verifying it by opening a spreadsheet and looking at it, which is how the
+`rep movsw` that wrote MATCH's keys into another segment survived being looked
+at: text worked, numbers did not, and only one of the two was on screen.
+
+
+#### 82.16.10 The financial family, the module's third tenant
+
+**Resident 51,579 → 48,750: 2,829 bytes**, which is what SHEET had nearest to
+spare after the file formats went. `CHART.OVL` 16,236 → 19,544 of `CH_OVKB`'s
+20,480, bss +52 for thirteen vectors. The family was picked by §81.39's own
+measure — the largest code in the package that runs only when a cell using it
+recalculates — and by its closure, which is small: **seven routines**
+(`sh_pfin`, its argument parser `sh_pfargs`, the cash-flow walker `sh_irwalk`
+and four helpers), no one else calls any of them, and they touch no data of
+their own except three constants.
+
+**Bracketed where it stands, §82.16.8's shape.** One region from `sh_pfin` to
+`sh_ptrans`, with a `.text` hole around `sh_c_r10`, `sh_c_r01` and `sh_c_eps`:
+the resident `fp_*` routines read those through DS, and a module-relative
+address handed to them reads the package at that offset — §82.16.9's
+`sh_biff_errtab` defect, which is why it is a hole and not a move.
+
+**345 calls out, to 22 routines**, every one `SHOUT`. Nine targets already had
+vectors from the file formats; thirteen are new — the `fp_*` arithmetic the
+formats never needed (`add`, `sub`, `mul`, `pow`, `ln`, `pack_a`, `azero`,
+`iszero`, `a_to_b`) and four of SHEET's own: `sh_pargref`, `sh_pcmp`,
+`sh_skipargs`, `sh_trcopy`. `sh_pcmp` is the one worth noticing: a financial
+function's arguments are parsed by the RESIDENT evaluator, so the module calls
+back into the parser, the parser can evaluate a cell, and that cell's formula
+can call the family again — **the module is re-entered while it is still on the
+stack**. The dispatcher is stateless and indexes through `BP`, which the stub
+banks, so nothing in the path cares; `sh_fnbusy` still refuses a financial
+function inside another's arguments, exactly as it did resident. **The refusal
+has its own exit**: it skips its own arguments from its own `SI` and touches
+neither `sh_trsi` nor `sh_fnbusy`, which are the outer call's. Through `.zero`
+it resumed the parse at a stale `sh_trsi` and cleared the flag, so the next
+nested call ran and wiped `sh_fnarg[]` under the outer one.
+
+**The stub is the first one here that answers a refusal itself.** `sh_doread`,
+`sh_dowrite` and `sh_difbbox` hand `ch_ovcall`'s CF to callers that already
+test it. `sh_pfin`'s caller is the formula parser, which expects the arguments
+consumed and a value in `sh_acc`, and on CF=1 would carry on parsing from
+inside the argument list. So a machine without the module answers what the
+family's own refusals answer: zero, `#VALUE!` (§47), arguments stepped over.
+The verb's wrapper `clc`s before its `retf`, so "the module ran" does not
+depend on the last instruction of a 2,400-byte routine leaving CF clear.
+
+**936 bytes of the claim are left.** The next tenant raises `CH_OVKB`, which
+costs heap and not package image; the sheet.o88 rule and `os88ovlchk.py` both
+refuse a module that outgrows it.
+
+**Verified the way §82.16.9 says a move must be: against a gate that existed
+first.** `tests/sheetfin.py` was written against the resident family and
+passed there — after it had found two defects the move did not cause (§81.48,
+§81.37.8) — and it passes the moved one **30 of 30**, with the SYLK file SHEET
+wrote **byte-identical** to the resident build's (nothing in it is volatile,
+so any difference would have been the move). `os88ovlchk.py` was
+mutation-tested on the new region: one `SHOUT fp_add` put back to a near call
+fails the build at that line. And the refusal path was run, not assumed: with
+no `CHART.OVL` on the disk, `=PMT(0.01,60,-20000)` typed into A1 is stored as
+`SH_T_ERR`/`#VALUE!` and `=1+1` in A2 — typed next, parsed by the same routine
+the refusal had to hand the position back to — is stored as 2.
+
+### 82.19 Apps size pass 2: the shipped file
 
 The subject was DISK ROOM (docs/plans/HANDOFF-APPS-SIZE-P2.md): `CHART.O88`
 rides `office360.img` and every larger apps disk, LZ4-packed. Nothing a user
@@ -135129,11 +147050,16 @@ thing to debug from inside a spreadsheet: a wrong bit in the guard region
 surfaces as one cell being slightly off, on some inputs. So the expectations
 are **generated on the host in real double precision** and embedded as exact
 bytes — the reference is not the same arithmetic restated in assembly — and a
-case passes only if all eight bytes match. 70 cases: carrying, cancellation,
-mixed signs, ties that must round to even, ties broken only by bits lost below
-the working form, an operand lost below the guard, 1e±300 extremes,
-non-terminating quotients, `0.1+0.2`, the text round trip, negative and
-oversized text exponents, and `sqrt`/`floor`/`trunc`/`round`. The stated
+case passes only if all eight bytes match. **88 cases in this tree** (counted
+in `fpcases.inc`'s groups; re-measure, never quote this): carrying,
+cancellation, mixed signs, ties that must round to even, ties broken only by
+bits lost below the working form, an operand lost below the guard, 1e±300
+extremes, non-terminating quotients, `0.1+0.2`, the text round trip, negative
+and oversized text exponents, and `sqrt`/`floor`/`trunc`/`round`. **None
+reaches §84.10's layer**: the 126 this section counted on 2026-10-16 included
+the 38 series cases of §84.11.2, and those are not in `apps/fptest` as merged,
+which sets `OS88FP_NOTRANS` and `FP_NO_POW` (§84.8) and so assembles to the
+bytes it did before the layer existed. The stated
 simplifications are covered too — the overflow clamp, the subnormal flush, and
 division by zero with its **CF asserted, not just its bytes** — and those
 expected values are the posture of §84.2, marked as such, where a real double
@@ -135146,16 +147072,136 @@ to `os88fp.inc` has to build it on purpose. This said *"breaks the build"*
 until the first apps size pass found `all` had stopped naming it.
 
 **The cases are POOLED, which is a size decision and not a weaker test.** The
-70 cases name only 68 distinct doubles, 29 of them zero below the top word, so
-`fpcases.inc` writes each double once and a case names it by a one-byte index
-that `fpt_ld` expands back into the same eight bytes; the operator rides in
-bit 7 of two index bytes, a case's name follows it inline, and a round trip
-whose output is its input says so with an empty string. The four kinds of case
-are one walk over that stream with a handler each. The image fell **7,164 ->
-5,813 bytes** and the bss 219 -> 169, a **6 KB** claim where it was 8, with the
-window drawn pixel for pixel as before and each kind of case — a low-bits-only
-miss, a CF-only miss on every division, a parse, a round trip — confirmed to
-go red when broken, on both the software and the coprocessor pass.
+88 cases name only 72 distinct doubles, 32 of them zero below the top word,
+so `fpcases.inc` writes each double once and a case names it by a one-byte
+index that `fpt_ld` expands back into the same eight bytes; the operator rides
+in bit 7 of two index bytes, a case's name follows it inline, and a round trip
+whose output is its input says so with an empty string. The kinds of case
+are one walk over that stream with a handler each. The image fell
+**7,164 -> 5,813 bytes** and the bss 219 -> 169, a **6 KB** claim where it was
+8, with the window drawn pixel for pixel as before and each kind of case — a
+low-bits-only miss, a CF-only miss on every division, a parse, a round trip —
+confirmed to go red when broken, on both the software and the coprocessor
+pass. A seven-bit index caps the pool at 128 and the file asserts it.
+
+#### 84.4.1 What the 38 series cases cost the instrument
+
+**NOT IN THIS TREE.** What follows describes an `apps/fptest` with a third
+column, `FPT_W` 460, `fpt_hmath` and 126 cases. The FPTEST that is here is the
+300-wide, 88-case one of §84.4, and the record below stands until that
+version of `fptest.asm` and `fpcases.inc` is committed with it.
+
+Four things had to move, each a constraint the file had not met before —
+and a fifth was found on the glass and deliberately left alone.
+
+**A THIRD COLUMN, and `FPT_W` 300 -> 460.** Rows 0–32 already carry two
+verdicts and two names out to x 270 and rows 33–44 three items out to x 232;
+there was no gap for 38 more rows. The new column puts its verdict at x 300
+and its name at x 340, where `POW1.12^6` — the longest — ends at 412.
+
+**The group header's column became a word.** It was `db count, x, firstrow`,
+which cannot express 300. It is `db count, firstrow` then `dw x, handler` now,
+and `fpt_runall` keeps the column in `fpt_vx` instead of the high half of CX.
+
+**`fpt_appn` prints three digits.** 126 cases can fail, and `AAM` alone
+reports 126 as `1` followed by the character 26 past `'0'`. The file's guard
+moved from 99 to 999 with the code that backs it.
+
+**The summary line got its own 32 bytes.** It shared `fpt_out` with the four
+doubles a case lives in, which was free while a paint took half a second: the
+gate read the line long before anything wrote there again. At 126 cases a
+paint runs over two seconds — long enough for a REDRAW to arrive, and a redraw
+re-runs every case, so the first thing it did was put a double over the line's
+tail while the gate was reading it. Measured, not feared: `  8087 -` came back
+as `` a\xe7R\xee!0``. `tests/fptest.py` waits for a COMPLETE line and keeps
+the text that matched, rather than settling for the prefix and reading again.
+
+**An OPEN cosmetic defect, found by widening the window and NOT chased.**
+At 460 wide the window overlaps the Disk window the harness leaves open
+behind it, and a later redraw paints an **8-row band — y 112–185, the full
+window width, x 56–487** — as striped rubble, FPTEST's own text with vertical
+bars through it. What is measured, and no more than that:
+
+- **it needs BOTH the width and the long paint, not either alone.** The same
+  126 cases in a 300-wide window corrupt nothing; and a 460-wide window whose
+  paint is made fast — the series call cut out, all 126 rows still drawn —
+  corrupts nothing either. (An earlier revision of this section said the
+  overlap alone was "the whole A/B". It was written before the second half of
+  that A/B existed, and it was wrong.)
+- **the data is NOT merely untouched, and this is the part to chase first.**
+  The FIRST paint is always right — every run, every probe, `fpt_bad` 0 and
+  the gate's line correct, which is why `tests/fptest.py` is honest: it reads
+  the first complete line and returns. But a 135-second watch caught a later
+  redraw ending with **`fpt_bad` = 236, and then 217**. There are 126 cases
+  and the byte is zeroed at the top of `fpt_runall`, so no single run can
+  reach either number. Something is counting past the table or two runs are
+  interleaving;
+- **re-entrancy is NOT yet proven.** A build instrumented with a nesting
+  counter in `fpt_paint` reports `maxnest` = 1 — but in those runs no redraw
+  ever happened, so the instrument has not yet seen the case that matters.
+  Redraws here are not deterministic: of the runs attempted, the artefact
+  appeared in two and the other four never repainted at all;
+- FPTEST is the FRONT window (`z-order bottom-first ['APPS', 'FP self-test']`),
+  so this is not the app being clipped against something above it;
+- the band is wider than the window behind it — x 56 is 274 pixels left of the
+  Disk window's edge — so "the window behind leaked through" does not fit
+  either, and no mechanism is claimed here;
+- the width itself is ordinary: `isotron` is 640 wide and `midirack` 624.
+
+- **a 126-case paint is ~8 GUEST seconds, and the pointer cannot move
+  through it.** That is what defeated every attempt to force a redraw and
+  measure one: `ui.close()` gives a raise 8 guest seconds and `os88mouse.to`
+  gives a move 6, and both expire inside a single repaint. The emulator runs
+  at ~3.6x real time, so the 2.3 host seconds the first paint takes are
+  roughly 8 of the guest's own. It is not a kernel fault — §11.90.1 prices
+  Paint's own `W_PAINT` at 8.7 seconds and §28.10 calls that interval what it
+  is — but it does mean this window is hostile to drive, and anything that
+  wants to catch a redraw needs budgets raised past one paint first.
+
+**WHY EVERY INSTRUMENTED RUN HAS BEEN BLIND, probably** (2026-10-18, an
+attempt that did NOT solve this but narrowed it). FPTEST declares
+`OS88_REGION_MOVABLE` in its entry proc, so a compaction moves the region —
+and a probe that reads `W_SEG` **once** then samples through it is reading
+whatever took the old segment's place. Measured directly: with a cached
+segment the counters climbed for two samples and then sat at **zero for
+forty seconds** while the window's own summary line stayed correct on screen;
+re-reading `W_SEG` on every access instead showed a live paint
+(`nest` 1, then 0 when it ended). **That is a plausible account of
+"`maxnest` = 1 but no redraw ever happened in those runs"** — the earlier
+instrument may have been reading a dead segment rather than observing a
+quiet one. It is not proof: nobody has re-run that instrument with the
+segment re-read.
+
+Two further things that attempt established, both cheap to get wrong again:
+
+- **a package's bss is NOT zero at load.** `-f bin` zeroes nothing and
+  nothing else does it either, so an added counter starts as whatever was
+  there. The first probe read a nesting depth of **52** and, in the same
+  sample, a depth of 0 alongside "entered 2, exited 1" — arithmetically
+  impossible, which is the only reason it was caught. A believable garbage
+  value would have been read as a result. Zero any new field in the entry
+  proc.
+- **the counters must be read as RAW BYTES at least once** before being
+  trusted. Reading them as named fields showed a `maxnest` of 60 then 110
+  then 0 with `exits` stuck at 0 while `nest` demonstrably decremented —
+  symptoms that cannot all be true of the same memory, and that a hex dump
+  of the surrounding bytes would have separated sooner than another round of
+  naming them.
+
+**Still not solved, and still worth the next attempt** — the entry
+instrument works, the segment trap is known, and what is owed is a redraw
+forced with budgets raised past a paint (`os88mouse.to` takes `tries=`).
+
+A first clean frame is `screenshots/fptest-126.png`, and it carries one
+8-pixel scanline of the same artefact at y 167 — the smallest instance of it,
+left in the picture rather than cropped out.
+
+**What NOT to do with this.** The app's own header says running the cases in
+`W_PAINT` is deliberate, *"so the answer on screen is never a stale one"*, and
+caching the results would make a redraw cheap by giving up exactly that. The
+gate does not need it either: `tests/fptest.py` reads the first complete line,
+and the first paint has been correct in every run of every probe. Fix the
+redraw, or leave it; do not buy a quiet redraw with a stale verdict.
 
 ### 84.5 A design note worth keeping
 
@@ -135361,15 +147407,154 @@ takes opt-out gates, defined before the `%include`:
 | `FP_NO_FLOOR` | `fp_floor`, `fp_a_to_tv`, `fp_tv_to_a` | 57 |
 | `FP_NO_I2X` | `fp_i2a`, `fp_i2b` | 118 |
 | `FP_NO_SUB` | `fp_sub`, `fps_sub`, `fpx_sub` | 56 |
+| `FP_NO_POW` | `fp_pow`, and `fp_c_one` too when `OS88FP_NOTRANS` is set | 164 (+8) |
 
-The last two are called by the first three, and dropping one while a caller
-stays is refused by name in the include, not as an undefined symbol. A gate
+`FP_NO_SUB` and `FP_NO_I2X` are called by the first three, and dropping one
+while a caller stays is refused by name in the include, not as an undefined
+symbol. Nothing calls `fp_pow`, so `FP_NO_POW` needs no such check; with
+`OS88FP_NOTRANS` as well nothing names `fp_e0`–`fp_e3` or `fp_ek` (§84.10),
+and that scratch may go too. A gate
 takes its routine's caller-declared scratch with it (§84.3): `fp_dig`,
 `fp_d10` and `fp_nd` are `fp_ftoa`'s, `fp_sq` and `fp_g` `fp_sqrt`'s, `fp_tv`
 `fp_floor`'s. CHART sets all five - it parses numbers and scales a series, and
 never prints, roots or subtracts one - and with `apps/os88chart.inc`'s
 `CH_NO_BMPWRITE` (its export flips the canvas in place, §82.14) that is 1,035
-bytes of image and 52 of bss. SHEET and FPTEST set none.
+bytes of image and 52 of bss. CHART also sets `OS88FP_NOTRANS` and
+`FP_NO_POW`, which take §84.10's layer and its 34 bytes of scratch. FPTEST sets
+those two and no other, because it has no case for that layer (§84.4); SHEET
+sets none.
+### 84.10 The transcendental layer: `ln`, `exp`, `pow`
+
+**None of this is free on hardware either**, which is the first thing to say
+about it. The **8087 has no `FSIN` or `FCOS`** — those are 387 and later — and
+even a machine with a coprocessor in the socket builds them out of `FPTAN`,
+`FPATAN`, `F2XM1` and `FYL2X`. So this is shared work rather than a software
+fallback for something the FPU would otherwise have done.
+
+**`fp_ln`.** `value = f · 2^E` with `f` in `[√½, √2)`, so
+`ln(value) = E·ln2 + ln(f)`. The range reduction is the whole accuracy
+argument: an unreduced series over `[1,2)` has `s` up to ⅓ and needs three
+times the terms for the same answer. Then `ln(f) = 2·atanh(s)` with
+`s = (f−1)/(f+1)`, summed as `s + s³/3 + s⁵/5 + …` — twelve terms, because
+`|s| ≤ 0.1716` so `s² ≤ 0.0295` and `0.0295¹²` is under 1e-18, past the 53 bits
+a double carries. `ln(x)` for `x ≤ 0` returns CF=1 and leaves zero; naming the
+error is the *cell's* business, as it is everywhere else in this file.
+
+**`fp_exp`.** `k = round(x/ln2)` and `r = x − k·ln2`, so `|r| ≤ 0.3466` and
+`e^x = 2^k · e^r`; fifteen terms of `1 + r + r²/2! + …` take `0.3466¹⁵/15!` far
+below the last bit. **`2^k` goes onto the exponent** rather than through a
+multiply — it costs nothing and cannot round. `k` is rounded with `CX` = 0,
+whole units: `fp_round`'s `CX` is its decimal places, and the caller's
+(SHEET's recalculation holds a cell count there) once decided whether `k` was
+rounded, truncated or flushed to zero. **`|k|` past 2,200 is past any double**,
+and added to the working exponent it would wrap `fp_pack_a`'s signed test into
+a flush, so it goes where a `k` past a word goes: a negative `x` answers 0 and a
+positive one **clamps** to the largest finite double, §84.2's rule. `EXP(25000)`
+and `2^40000` answered 0.
+
+**`fp_pow`.** A **whole-number exponent goes by repeated squaring**, and not
+for speed: `exp(y·ln x)` is inexact for cases everyone expects to be exact —
+`10^2` must be 100, not 99.999999999998 — and it cannot do a negative base at
+all, where `(−2)³` is perfectly ordinary. Everything else is `e^(y·ln x)`, for
+`x > 0` only. `0^0` is an error, as Excel has it.
+
+The three share four caller-declared temporaries `fp_e0`–`fp_e3` and a counter
+`fp_ek`, which is why those names joined the block a caller must provide.
+**They own that scratch**: a caller that parks something there across a call
+to `fp_ln` loses it, and §81.35 is what that cost the first time.
+
+#### 84.10.1 Tested to a tolerance, and the tolerance is the point
+
+`apps/fptest`'s algebraic rows compare **bytes** — `fp_sqrt`'s Newton iteration
+really is bit-exact against the host. **A truncated series is not**, and
+demanding it would be demanding the wrong thing. So a series result is
+compared bit for bit FIRST and, only when that fails, by **distance: 64 units
+in the last place over the whole 64 bits** — a hundred times tighter than the
+series' own error bound and a hundred times looser than a bit-for-bit demand
+it cannot meet. (This section used to say "exactly on the top three words and
+to within 64 ulp on the fourth", which §84.11.1 had already replaced and which
+`tan(π/4)` disproves; the sentence outlived the rule it described.)
+
+Twelve cases, every expected value computed on the host from Python's `math`
+and packed as a real double: `LN` of 1, 2, 10, 0.5, 1e10 and 0.001; `EXP` of 0,
+1, −1, 10, 0.5 and −5. **They are not in this tree** (§84.4): the FPTEST here
+runs 88 cases and none of them reaches `fp_ln` or `fp_exp`, so nothing in it
+runs the 64-ulp arm either.
+`screenshots/fptest-transcendental.png` and `screenshots/fptest-trig.png` are
+these rows in the layout they had before §84.4.1 widened the window; the
+current picture is `screenshots/fptest-126.png`.
+
+
+### 84.11 sin, cos, tan and atan
+
+`fp_cos` **is** `fp_sin(x + π/2)` and not a second series — one add, and a
+whole routine that could disagree with the first one never exists.
+
+**`fp_sin`**: `k = round(x·2/π)`, `r = x − k·(π/2)`, so `|r| ≤ π/4` and the
+quadrant `k mod 4` says which of `±sin(r)`, `±cos(r)` the answer is; ten terms
+each. **The reduction is the accuracy limit, not the series**: π/2 is a double,
+so a very large `x` is reduced against a π/2 that is itself rounded and the
+answer degrades as `x` grows. Excel has the same limit for the same reason.
+`k` is rounded with `CX` = 0, as `fp_exp`'s is. Past a word of quadrants
+(`|x|` > 32767·π/2, about 51,470) `fp_sin` and `fp_cos` return **CF=1** and
+zero, and SHEET's `SIN` and `COS` answer `#NUM!` (§81.36), not a stored 0.
+
+**`fp_tan`** is sin/cos, with `x` banked **on the stack** because `fp_sin` and
+`fp_cos` both own `fp_e0`–`fp_e3`.
+
+**`fp_atan`**: `|x| > 1` goes through `atan(x) = π/2 − atan(1/x)`, and what is
+left is **halved** by `atan(x) = 2·atan(x/(1+√(1+x²)))` until it is under 0.2,
+where nine terms of `x − x³/3 + x⁵/5 …` are past the last bit. The bare series
+is useless near 1 — at `x = 1` it *is* the Leibniz series and wants thousands
+of terms.
+
+#### 84.11.1 The ulp comparison, and the case that had to go
+
+Adding trig broke fptest's near-equality rule and the break was instructive.
+The first version allowed **the low word** to differ and nothing else;
+`tan(π/4)` failed on it, because the answer is 1.0 and the reference
+0.9999999999999999 — **one ulp apart and on opposite sides of an exponent
+step**, so three of the four words differ. The distance is measured over all
+64 bits now: two same-signed doubles read as integers are monotonic, so a
+subtraction says it. 64 ulps, as before.
+
+**`sin(π)` was removed as a case.** The reference is 1.2246e-16 and this
+answers exactly 0, because the reduction cancels perfectly against a `π/2` that
+is exactly half the double `π`. No ulp rule can bridge 0 and 1.2e-16, and the
+case was testing the *reduction's* cancellation rather than the series. `sin(3)`
+replaced it, where the answer is O(0.14) and the series is what is under test.
+
+#### 84.11.2 The 38 series cases, and what proves they are a test
+
+**NOT IN THIS TREE**, like §84.4.1: the `fpcases.inc` here carries **none** of
+them, and FPTEST runs 88 cases with the layer gated out (§84.4). As recorded,
+the group was **38** — `LN` 6, `EXP` 6, `SIN` 6, `COS` 4, `TAN` 3, `ATAN` 6,
+`POW` 7 — run by `fpt_hmath`. Three things
+about that group are not like the rest of the file.
+
+**The operator is a WHOLE BYTE.** `fpt_op` reads bit 7 of two index bytes,
+which names four operations; this layer has seven. Nothing else needed to
+change — the pool index is still seven bits and `fpt_ld` still masks it.
+
+**`POW` has no field for its second operand**, so the record's spare argument
+word carries the exponent in TENTHS: enough for 0.5, 6, −2, 10 and 3 without
+widening all 38 records by eight bytes. `fpt_pow` divides it by ten through
+`fp_i2a`/`fp_i2b`/`fp_div` and hands `fp_pow` the pair.
+
+**The 64-ulp arm is reached, and the number says how often.** Forcing
+`fpt_ulps` to refuse everything turns **18 of the 38** red — so 20 land bit
+for bit on the host's own libm and 18 need the tolerance. It is not dead code
+and it is not covering for a broken routine.
+
+**MUTATION-TESTED five ways**, each a different mechanism and each a different
+verdict: one host expectation pointed at the wrong double reads `soft 1`; the
+64-ulp arm refusing reads `soft 18`; `fp_sin` and `fp_cos` swapped in
+`fpt_mops` reads `soft 10`, which is every `SIN` and `COS` case and no other;
+`POW2^10`'s tenths changed from 100 to 50 reads `soft 1`; and inverting the
+verdict reads `soft 126`, which is also what proves `fpt_appn`'s new hundreds
+digit. **126 of 126 passed** on the software path of that version, and on an
+8087 the same bytes were demanded of the coprocessor; none of it can be re-run
+until those sources are committed.
 
 ## 85. TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`)
 
@@ -189864,9 +202049,11 @@ the bytes read.
 
 - **Where it ships:** `APPS_TOOLS`, so `apps.img` (1.44MB), `apps120.img`,
   the everything set and the live media — whose `MEDIA/` gets `LAKE.JPG` too,
-  by way of `MEDIA_EXTRA`; `office360.img` with
+  by way of `MEDIA_EXTRA`; `office360.img`, which carried
   `LAKE.JPG` in `MEDIA/` (§24.6.2: the gallery's smallest picture, 18 KB,
-  where `VACATION.JPG` would have taken 85 of that disk's 181 free clusters); and `make pixeldisk` in all four
+  where `VACATION.JPG` would have taken 85 of that disk's 181 free clusters)
+  until §24.6.1's dated decision of 2026-10-22 took the picture off that disk
+  alone, the package staying; and `make pixeldisk` in all four
   geometries — the package at the root, the gallery in `PICTURES/`,
   `SYSTEM/APPDATA/` made.
 - **Off `apps360.img` and `apps720.img`**, by §24.6.1's dated decision,

@@ -292,7 +292,7 @@ short = "Word for Windows 1.1a remake"
 ["SHEET.O88"]
 title = "Sheet"
 kind = "program"
-summary = "A spreadsheet in the style of Excel 2.1, with formulas, formats, macros, charts and SYLK, DIF and BIFF files."
+summary = "A spreadsheet in the style of Excel 2.1, with four sheets to a workbook, formulas, formats, a database, macros, charts, and Excel, SYLK, DIF, CSV and dBASE files."
 short = "Excel 2.1-style spreadsheet"
 
 ["CHART.O88"]
@@ -300,6 +300,18 @@ title = "Chart"
 kind = "program"
 summary = "Opens a spreadsheet file, draws a chart from a column of its numbers, and can save the chart as a BMP."
 short = "Charts from spreadsheet data"
+
+["CHART.OVL"]
+title = "Sheet charts and files"
+kind = "data"
+summary = "Part of Sheet, read when Sheet starts: its dialogs, its charts, its file formats and many of its functions. Keep it beside SHEET.O88."
+short = "Sheet's chart and file module"
+
+["MACRO.OVL"]
+title = "Sheet macros"
+kind = "data"
+summary = "Part of Sheet that runs its macros, read when Sheet starts. Keep it beside SHEET.O88."
+short = "Sheet's macro module"
 
 ["PAINT.O88"]
 title = "Paint"

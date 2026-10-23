@@ -32,6 +32,12 @@
 
 # --- high --------------------------------------------------------------------
 
+high apps/sheet/sheet.asm       # ITS OWN CS STAMPED INTO TWO OVERLAYS: ch_ovbind
+    # (apps/os88chartovl.inc) and sh_ovbind (sheet.asm, `mov ax, cs`) write the
+    # region's CS into the vector tables CHART.OVL and MACRO.OVL far-call back
+    # through, as real-mode far pointers. Retired when the two modules become
+    # parts reached through a selector kern_mega can patch (PR #289's review
+    # flagged sidecars-to-parts). Not run on kern_mega.
 high apps/realdmg/realdmg.asm     # FAR POINTERS STAMPED WITH ITS OWN CS: rdg_init
     # (apps/realdmg/rdgsys.inc, "the far vectors the core jumps through")
     # writes the region's CS into S_EVVEC, S_IORVEC, S_IOWVEC and S_MBCVEC in
@@ -43,6 +49,11 @@ high apps/realdmg/realdmg.asm     # FAR POINTERS STAMPED WITH ITS OWN CS: rdg_in
 
 # --- highmem -----------------------------------------------------------------
 
+highmem apps/sheet/sheet.asm    # FAR-CALLS CODE IN A CLAIM: CHART.OVL and MACRO.OVL
+    # are read into claims and entered with `call far [ch_ovfar]` /
+    # `call far [sh_m2far]` at (0, the claim's segment) - os88chartovl.inc's
+    # ch_ovneed and sheet.asm's sh_m2need - which OS88_HIGHMEM's contract
+    # rules out (apps/os88api.inc). Retired with the `high` line above.
 highmem apps/realdmg/realdmg.asm  # PARAGRAPH ARITHMETIC ON ITS CLAIMS, AND CODE
     # WRITTEN THROUGH CS: cartridge RAM banks at S_RAMSEG + bank x 200h
     # (rdg_rambank, rdgsys.inc), the bank cache's slots at rw_slotseg + slot

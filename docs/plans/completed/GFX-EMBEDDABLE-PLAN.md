@@ -1410,7 +1410,7 @@ and `gfx_ls_lx`/`ly` stay for the same reason (§5.12.7).
 
 **Sheet and `cword`** were deferred (§8.6), but Sheet *ships* — so its private
 tick had to go before the slot could, and it is the same one-`gfx_fill` solid
-square (§81.30, §13.16.2.1). `cword`'s went with it, which retired the C
+square (§81.64, §13.16.2.1). `cword`'s went with it, which retired the C
 `os88_gfx_line` thunk, its header declaration and the host-test's model of it.
 Neither needed the big Sheet pass; both are ten lines.
 

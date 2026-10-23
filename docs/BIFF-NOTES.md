@@ -16,15 +16,20 @@ Sheet and Chart both dispatch on it.
 A save of **one** sheet is a **BIFF3** worksheet stream:
 
 ```
-BOF 0209H   FONT 0231H x4   XF 0243H x64   cell records   EOF 000AH
+BOF 0209H   FONT 0231H x4   XF 0243H x64   COLWIDTH 0024H*   ROW 0208H*
+  cell records   EOF 000AH
 ```
+
+`*` one per column not the standard width (§81.56), one per row not the
+standard height (§81.60) - none at all for a sheet that changes neither.
 
 More than one sheet with data (`sh_sheets_used` >= 2) is a **BIFF4 workbook**,
 because BIFF3 has no multi-sheet form at all (§81.10.5):
 
 ```
 BOF 0409H (dt 0100H)   FONT x4   XF 0443H x64   SHEETSOFFSET 008EH
-  SHEETHDR 008FH   BOF 0409H (dt 0010H)   cells   EOF        one per used sheet
+  SHEETHDR 008FH   BOF 0409H (dt 0010H)   COLWIDTH*   ROW*   cells   EOF
+                                                             one per used sheet
 EOF
 ```
 
@@ -47,6 +52,9 @@ writer's version switch, set only inside `sh_biff_workbook`.
 | `FORMULA`      | 0006H | **0206H** | 0406H | 0006H | writes 0206H (workbook: 0406H); reads both |
 | `SHEETSOFFSET` | -     | -     | 008EH | -     | writes in the workbook; reader ignores it |
 | `SHEETHDR`     | -     | -     | 008FH | -     | writes in the workbook; reads 008FH |
+| `DEFINEDNAME`  | 0018H | **0218H** | 0218H | 0018H | writes and reads 0218H |
+| `COLWIDTH`     | 0024H | **0024H** | 0024H | -     | writes and reads 0024H; reads BIFF3+'s `COLINFO` 007DH too (§81.56) |
+| `ROW`          | 0008H | **0208H** | 0208H | 0208H | writes 0208H; reads both - 0008H only after a BIFF2 `BOF` (§81.60) |
 | `EOF`          | 000AH | 000AH | 000AH | 000AH | writes and reads 000AH |
 
 Three traps in that table:
@@ -61,6 +69,12 @@ Three traps in that table:
 - **`BOF` is six bytes in BIFF3 and BIFF4** (version, substream type, two
   unused), four in BIFF2, eight in BIFF5. Skip it by its length field, as
   the reader does; a fixed skip desynchronises on any other version.
+- **`DEFINEDNAME` is the same trap as `FONT`, and the newer one to fall
+  into**: 0018H in BIFF2, 0018H again in BIFF5 and BIFF8, 0218H only in
+  BIFF3 and BIFF4. Nearly every reference says 0018H because BIFF8 is what
+  people read, and writing that into a BIFF3 stream produces a file no
+  reader complains about - an unrecognised opcode is skipped by its length,
+  so the names are simply not there.
 
 ## Record bodies, as written
 
@@ -102,7 +116,7 @@ Horizontal alignment is at offset 4 bits 2-0 in **both**, and the font and
 format indices at 0 and 1, which is why the reader has one XF body path for
 both opcodes.
 
-**Border `XF`s** (SPEC.md 81.22.3): after the 64, one more per distinct
+**Border `XF`s** (SPEC.md 81.117 — READ here, never written by this fork): after the 64, one more per distinct
 (format byte, border byte) pair the border table holds, at most 64, numbered
 from 64 in the order `sh_bxf_collect` finds them. The body is the format
 byte's, plus `XF_AREA_34` = 4A02H for Shade (pattern 2, the 50% grey,
@@ -130,10 +144,25 @@ write (the format's ceiling; `SH_EDITMAX` = 63 binds first) and truncated to
 Written only for an error cell whose formula could not be tokenised.
 
 **`FORMULA`** (18 + cce): head, result(8), flags 0000H, cce(2), the RPN
-tokens from `sh_rpn_emit`. A numeric result is the double; an error result
+tokens from `sh_rpn_emit` - numbers, references, the operators, `tBool`,
+and since SPEC.md 81.61 `tStr` (17H, a count byte then the characters),
+`tConcat` (08H) and `tErr` (1CH, then the file's error code). A formula it
+cannot express is written as its cached value alone. A numeric result is the double; an error result
 is byte 0 = 2, byte 2 = the error code, bytes 6-7 = FFFFH. The token
 array's function indexes are one byte under 0206H and a word under 0406H,
 which is the one place the workbook changes a body beyond `XF` (§81.10.2).
+
+**`COLWIDTH`** (4): first column, last column (a byte each), the width in
+1/256ths of a character. One record per column, however many share a width.
+
+**`ROW`** (16): the row, first and one-past-last cell column (0, 0 - no
+cells are claimed), the height in twips with bit 15 clear (a custom height),
+0000H, BIFF3/4's offset to the row's first cell (0000H), option flags
+0140H (bit 8 is always set; bit 6 says the height was set by hand) and XF
+index 000FH, unused while bit 7 is clear. Nothing depends on the two zeroed
+offsets: the reader here walks the stream, and LibreOffice (checked on
+tests/sheetrowh.py's save, converted to .fods) reads all four heights to the
+point - 18, 8, 9.75 and 30.
 
 **`SHEETSOFFSET`** (4): stream offset of the first `SHEETHDR`, dword.
 **`SHEETHDR`** (11): byte length of the substream that follows, dword,
@@ -171,7 +200,7 @@ a `FORMULA` result is 00H #NULL!, 07H #DIV/0!, 0FH #VALUE!, 17H #REF!, 1DH
 #NAME?, 24H #NUM!, 2AH #N/A. `sh_biff_e2b` converts on the way out
 (`sh_biff_cells`' `.aserr`, `.errresult`) and `sh_biff_b2e` on the way in
 (`sh_doread_biff`'s `.isboolerr`, `.isformula`) - the four places this note
-used to say a translation had to go (SPEC.md 81.22.2). Before it, SHEET's
+used to say a translation had to go (SPEC.md 81.38.1). Before it, SHEET's
 own files round-tripped because the reader applied the same wrong numbers,
 while a `#DIV/0!` written here was byte 2 where Excel expects 07H, and
 Excel's 07H read back here as #N/A.
@@ -193,10 +222,16 @@ Excel's 07H read back here as #N/A.
   (row FFFFH) is skipped by the row check below.
 - A row >= `SH_ROWS` or column >= `SH_COLS` skips the record: a row with
   bit 14 set would land on another sheet through the packed key.
-- `FORMULA`: the cached result is used and the tokens are skipped; Sheet
-  keeps formulas as text and has no RPN decompiler. A BIFF `FORMULA` cell
-  therefore reads back as a value.
-- `BOOLERR` with the flag clear reads as 0 or 1 - there is no BOOL type.
+- `FORMULA`: the tokens are decoded back to the formula's text
+  (`sh_biff_dcrpn`, SPEC.md 81.10.10); only a token array the decoder
+  refuses falls back to the cached result, as a value.
+- `COLWIDTH` and `COLINFO` round to whole characters and are clamped to
+  what the Column Width dialog allows (SPEC.md 81.56).
+- `ROW`: bit 15 set means the default height and is skipped; a height of
+  0 (hidden, which this grid cannot draw) is skipped too; the rest are
+  clamped to the Row Height dialog's range, 146-874 twips (SPEC.md 81.60).
+- `BOOLERR` with the flag clear reads as the logical (SPEC.md 81.51); it was
+  0 or 1 while Sheet had no logical type, and is what Sheet writes for one.
 - A read clears all four grids first. A plain stream loads onto the sheet
   the user was on, which stays current. In a workbook, `EOF` ends the read
   only before the first `SHEETHDR`; each `SHEETHDR` advances the target
@@ -232,3 +267,26 @@ under MartyPC, read the file off the run directory's copy of the floppy with
 opcode and length in the table above, `BOF`'s version and dt, the first
 `XF`'s twelve bytes, each cell's decoded value, and the walk landing exactly
 on `EOF`. Then load it back and compare the grid.
+
+**`DEFINEDNAME`** (BIFF3-4): option flags(2) - 0 is visible, user-defined,
+standard, simple formula - shortcut(1), `ln`(1) the name's length in
+characters, `sz`(2) the size of the formula data, the name (`ln` bytes,
+**counted, not NUL-terminated**), then the RPN token array (`sz` bytes, with
+no size field of its own).
+
+Sheet's `sz` is always 7: one `tAreaR` (25H) plus a six-byte cell-range
+address - row1(2), row2(2), col1(1), col2(1) - the same encoding the FORMULA
+tokens use, with the two relative-flag bits in each row word **clear**.
+
+`tAreaR` and not `tAreaN`: excelfileformat 3.9.11 says a defined name in
+BIFF2-BIFF4 uses `tAreaN`, the relative form, but *"if all components of the
+cell range address are absolute, a tArea token is used instead"* - and a name
+in this app is always absolute, the same rule SYLK's `NN` record follows.
+Reference class (25H), not the value class (45H) the cell formulas use: the
+name **is** the range, it is not a value read out of one.
+
+Where the record goes in the stream is **not documented for BIFF3/4** -
+excelfileformat's 4.2.3 (BIFF4 worksheet stream order) and 4.10.1 (references
+in BIFF2-BIFF4) both read `2do`. Sheet follows the BIFF5 worksheet stream the
+same document *does* give: the link table sits after the globals and before
+the cell records.

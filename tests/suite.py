@@ -904,8 +904,8 @@ FAST = [
         "NOT tests/filler: a package reaches mem_claim only from inside its "
         "own callback, so the asker's own region is refused for having a "
         "frame in it and a row built that way stays green with the pin taken "
-        "out of the kernel - measured. SHEET is the control: PINME's region "
-        "must stand still WHILE SHEET'S MOVES, or the run proves nothing",
+        "out of the kernel - measured. CALC is the control: PINME's region "
+        "must stand still WHILE CALC'S MOVES, or the run proves nothing",
         wants=("build/regpin360.img",)),
     Row("drvclaim", "soak", py("tests/unit/t_drvclaim.py"), 0.1,
         "a driver's SERVICE TASK may not reach a claim door: mem_claim can "
@@ -1679,10 +1679,28 @@ FAST = [
         "is a landmine for whoever edits the TCP stack next. "
         "SOAK and not fast: every one of those markers is ETHER.DRV's "
         "own, so this is a per-driver row"),
+    Row("sheetfmtlib", "fast",
+        py("tools/os88sheetfmt.py", "--selfcheck"), 1.5,
+        "tools/os88sheetfmt.py parses what it writes - the host-side SYLK, "
+        "DIF and BIFF2 reader that gives SHEET's file formats a SECOND "
+        "OPINION (SPEC.md 81.38). It is written from the published grammars "
+        "and not from sheet.asm on purpose: a writer and a reader that share "
+        "a misunderstanding agree perfectly, and the file they agree about is "
+        "one no other program can open. This row only proves the library is "
+        "self-consistent; tests/sheetfmt.py is the one that points it at "
+        "SHEET"),
     Row("stkbalance", "fast",
-        py("tools/stkbalance.py", *_kernel_sources()), 0.7,
-        "every `ret` in the KERNEL is reached at "
-        "the depth it started at. `ch_legend` pushed SI and never popped it, so "
+        py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
+           "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",
+           "apps/os88line.inc", "apps/os88img.inc",
+           "apps/scribe/scribe.asm", "apps/scribe/scdoc.inc",
+           "apps/scribe/scrtf.inc", *_kernel_sources()), 1.5,
+        "every `ret` in the KERNEL and in SHEET, CHART and the includes they "
+        "share is reached at "
+        "the depth it started at. WORD AND SCRIBE ARE IN SCOPE TOO: wd_pictload "
+        "pushed seven registers and popped six, and while Word was outside the "
+        "scope the suite stayed green as the machine went to 000E:00DF inside "
+        "the interrupt vector table. `ch_legend` pushed SI and never popped it, so "
         "its `ret` jumped to the saved register: a black canvas and a wedged "
         "app, with no crash and no message (SPEC.md 82.7.3). The walk is "
         "path-aware because a naive push-vs-pop count flags one routine in ten "
@@ -2789,6 +2807,11 @@ SOAK = [
         "the table goes 4 claims to 2 and this row names it. Needs `make "
         "mseg`.",
         needs=("marty", "nasm"), serial=True, wants=("build/mseg.img",)),
+    # THE REALDMG CORE ROWS UNDER A QEMU THAT LOSES SAHF'S FLAGS run one guest
+    # instruction a block (tests/rdgcore/rdgqemu.py tcg_args, QEMU 11.0.2 on an
+    # M1), five to twelve times slower than their declared seconds, which stay
+    # a correct QEMU's. Their timeouts are the backstop for that arm: gbcpu
+    # took 266s and rdgstatic 304s there against 230 and 126.
     Row("gbcpu", "soak", py("tests/gbcpu.py"), 50.0,
         "REALDMG's SM83 core (docs/REALDMG-SPEC.md) against Blargg's eleven "
         "cpu_instrs ROMs, the combined MBC1 one, instr_timing, mem_timing and "
@@ -2810,7 +2833,7 @@ SOAK = [
         "with POP BC's branch to it taken out as the control. WHY QEMU: a correctness gate, and QEMU counts work "
         "exactly - the cycle counts instr_timing checks are the core's own. "
         "SOAK: one package's core",
-        needs=("qemu", "nasm", "rgbds")),
+        needs=("qemu", "nasm", "rgbds"), timeout=660),
     Row("rdgstatic", "soak", py("tests/rdgstatic.py"), 24.0,
         "REALDMG's Static recompiler (docs/REALDMG-SPEC.md section 16.8): "
         "cpu_instrs, instr_timing, mem_timing and tools/gbprof/gbrmw.asm each "
@@ -2826,7 +2849,7 @@ SOAK = [
         "moving into the second twice; NEGATIVE CONTROL: rt_exit chaining "
         "across the segments must fail. WHY QEMU: a correctness gate, "
         "counted, not timed. SOAK: one package's core",
-        needs=("qemu", "nasm", "rgbds")),
+        needs=("qemu", "nasm", "rgbds"), timeout=360),
     Row("gbacid", "soak", py("tests/rdgcore/rdgacid.py"), 3.0,
         "REALDMG's renderer (apps/realdmg/rdgppu.inc, docs/REALDMG-SPEC.md "
         "section 13) against dmg-acid2's reference picture, all 23,040 pixels: "
@@ -2878,7 +2901,7 @@ SOAK = [
         "frame as the package does and twice on a checked one: without the "
         "lines a call left being composed by the next it fails on 151-499. "
         "SOAK: one package",
-        needs=("qemu", "nasm", "rgbds")),
+        needs=("qemu", "nasm", "rgbds"), timeout=450),
     Row("gbdemo", "soak", py("tests/gbdemo.py"), 30.0,
         "RealDMG's 5150 demo (docs/plans/REALDMG-PLAN.md section 6, wave 8's "
         "gate): GBDEMO.GB (tools/gbours.py, ours) taken full screen by Alt+Enter "
@@ -2970,7 +2993,7 @@ SOAK = [
         "off the floppy), F8 takes the frame counter back to the save (without "
         "rdg_stapply it does not), an empty slot changes nothing - in the window "
         "and in full screen. SOAK: one package",
-        needs=("qemu", "marty", "nasm", "rgbds"),
+        needs=("qemu", "marty", "nasm", "rgbds"), timeout=540,
         wants=("build/realdmg.o88", "build/os8088-720.img")),
     Row("gbsave", "soak", py("tests/gbsave.py"), 40.0,
         "REALDMG.O88's battery RAM and MBC3 clock (docs/REALDMG-SPEC.md "
@@ -5457,7 +5480,7 @@ SOAK = [
         "A package's REGION moves and the package keeps working (SPEC.md "
         "66.6.1). 66.6 said since it was written that a region can never move "
         "because its base IS its CS; this is the door open. FOUR PACKAGES and "
-        "each has a job - PAINT takes the ceiling, SHEET goes under it and is "
+        "each has a job - PAINT takes the ceiling, NOTEPAD goes under it and is "
         "the one that has to move, FILLER takes the arena down to a few tens "
         "of KB, and closing PAINT leaves the hole. tests/filler is an "
         "instrument with NO assertions of its own, which heapfrag cannot be: "
@@ -7833,8 +7856,10 @@ SOAK = [
         "88 cases, the summary line read out of FPTEST's own bss. The "
         "float library Sheet and Chart compute with; fp_i2a, fp_a2i and "
         "fp_cmpab (whose AX AND flags are both checked) gained cases here. "
-        "Red on purpose two ways: a wrong expectation, and fps_cmpab's flags "
-        "disagreeing with its AX",
+        "84.10's ln/exp/pow/trig layer is gated OUT of this build "
+        "(OS88FP_NOTRANS, FP_NO_POW) - 84.11.2's 38 series cases are not in "
+        "the tree. Red on purpose two ways: a wrong expectation, and "
+        "fps_cmpab's flags disagreeing with its AX",
         needs=("marty",), serial=True,
         wants=("build/fptest.o88",)),
     Row("imgtest", "soak", py("tests/imgtest.py"), 135.0,
@@ -8083,6 +8108,35 @@ SOAK = [
         needs=("marty",),
         wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
+    Row("sheetdel", "soak", py("tests/sheetdel.py"), 120.0,
+        "SPEC.md 81.79: File > Delete, and the No that must not delete. The "
+        "kernel file dialog has only OPEN and SAVE modes, so the picker is an "
+        "Open and a flag tells sh_ondlg what was meant by it - which makes "
+        "two things worth gating. NO MUST NOT DELETE is the check with the "
+        "teeth: a build that ignored the answer would still pass the Yes "
+        "check. And the flag is cleared BEFORE the alert goes up, so a "
+        "dismissed alert cannot leave the next Open behaving like a Delete. "
+        "The third check is the trap that was avoided: sh_ondlg copies the "
+        "chosen name into sh_name, the OPEN DOCUMENT's own name, so a Delete "
+        "needed a buffer of its own or Save afterwards would have written "
+        "over the file just deleted. Read off the VOLUME, because 'is the "
+        "file gone' is a question about the disk",
+        needs=("marty",), serial=True),
+    Row("sheetcalc", "soak", py("tests/sheetcalc.py"), 120.0,
+        "SPEC.md 81.78: Calculation: Manual really leaves a formula STALE, "
+        "and Options > Calculate Now catches it up. sh_drawgrid re-evaluates "
+        "every formula cell on EVERY repaint, so Manual is not a label on a "
+        "no-op - it is what a big sheet on a 4.77MHz 8088 needs, and "
+        "Calculate Now is then the only way back. Until 81.78 that command "
+        "was only the third choice inside the Calculation dialog; Excel has "
+        "it on the Options menu too. "
+        "THE MIDDLE CHECK IS THE ONE WITH TEETH: B1 must still read 2 after "
+        "A1 becomes 5, because a build where Manual did nothing would show 6 "
+        "there and still pass the last check. Read off the GLASS by the "
+        "kernel's own glyphs, because the record's cached value is precisely "
+        "what Manual leaves stale - reading the record would be reading the "
+        "thing under test",
+        needs=("marty",), serial=True),
     Row("tanksmall", "soak", py("tests/tanksmall.py"), 30.0,
         "SPEC.md 85.3.5.1: TANK's APP_SMALL arm plays on the 128KB floor"
         "machine - the claim is GRANTED off its ladder, and the HUD template's"
@@ -9051,7 +9105,7 @@ SOAK = [
         "Measured 20s",
         needs=("marty",), serial=True),
     Row("vgacolor", "soak", py("tests/vgacolor.py"), 40.0,
-        "SPEC.md 39.28/31.10.4: Force Color. MartyPC's VGA booted with a "
+        "SPEC.md 39.30/31.10.4: Force Color. MartyPC's VGA booted with a "
         "PVGA1A's 'monochrome display' verdict planted at drvf_drv_mounted "
         "(40:89h summing + mono, the live DAC summed grey): the box CLEAR "
         "leaves it grey, a click on the Display page's box puts the EGA "
@@ -15179,6 +15233,685 @@ SOAK = [
         "byte BAR BS_VolID: the copy carries a serial of its own (SPEC.md "
         "18.8.2.1), different from the source's and from the other clone's "
         "- red on all three with DSK_VOLID emptied",
+        needs=("marty",), serial=True),
+    Row("sheetfmt", "soak", py("tests/sheetfmt.py"), 180.0,
+        "SPEC.md 81.38: do SHEET's three file formats say what they mean? "
+        "The host authors a SYLK file from the published grammar, the guest "
+        "opens it by ASSOCIATION and saves it as BIFF3, SYLK and DIF, and "
+        "os88flush takes the floppy back so the host can read all three. "
+        "Nothing outside SHEET had ever read one of its files before this, "
+        "and it found two defects on its first run - neither visible from "
+        "inside, because in both cases the writer and the reader made the "
+        "SAME mistake and cancelled it",
+        needs=("marty",), serial=True),
+    Row("sheetdec", "soak", py("tests/sheetdec.py"), 600.0,
+        "SPEC.md 81.10.10: a formula saved in Normal format comes back as a "
+        "FORMULA. SHEET's own round trip - SYLK in, Normal out (checked by "
+        "the host's decode_rpn against the document's function table), "
+        "reopened, SYLK out - and two BIFF files the host writes the way "
+        "Excel does, BIFF3 and a BIFF4 worksheet, with the tokens SHEET's "
+        "writer never emits and eight it must refuse by keeping the value - "
+        "three of them cached with a result that is not a number at all. "
+        "It found IF losing a text branch on its way to passing",
+        needs=("marty",), serial=True),
+    Row("sheeteval", "soak", py("tests/sheeteval.py"), 240.0,
+        "SPEC.md 81.49-81.52: what SHEET's evaluator answers, checked by the "
+        "host - the row an evaluator parity gap goes into when it closes. "
+        "CHOOSE returning the value it picked (it was an integer function: "
+        "2.5 answered 2, text answered 0), a quoted ')' not counting as a "
+        "parenthesis when arguments are stepped over, the WHOLE formula "
+        "parsed (=1+2 3 answered 3) with spaces dropped where it is stored "
+        "(=A1 * ( A2 - 1 ) answered 2), the logical value, a total of "
+        "totals, and IF keeping a text branch. Each "
+        "fix fails its own cases against the binary before it",
+        needs=("marty",), serial=True),
+    Row("sheetbool", "soak", py("tests/sheetbool.py"), 300.0,
+        "SPEC.md 81.51: what SHEET's readers make of a LOGICAL value. The "
+        "host authors a DIF, a CSV, a dBASE and a BIFF3 file holding TRUE "
+        "and FALSE, SHEET opens each and saves Normal, and the BOOLERR "
+        "records say it kept a logical. Before, a BOOLERR read as 1, DIF's "
+        "TRUE indicator left the cell blank, and CSV and dBASE made labels "
+        "of them - ten of its checks fail against that binary",
+        needs=("marty",), serial=True),
+    Row("sheetxl2", "soak", py("tests/sheetxl2.py"), 420.0,
+        "SPEC.md 81.52: SHEET opens EXCEL 2.1's OWN FILES. Excel 2.1 saves "
+        "BIFF2 and the reader took BIFF3/4 only, so one opened empty. Arm A "
+        "is a BIFF2 file the host authors - every cell record, tAttr's one-"
+        "byte data, a BIFF2 STRING, the attribute bytes' formats; arm B is "
+        "three of Excel 2.1d's own sample worksheets, extracted at run time "
+        "from the user's release archive beside the repo (skipped, with a "
+        "notice, where it is absent) and compared cell by cell with what "
+        "the host reads in Excel's file. Arm B found a fold defect: a SUM "
+        "over formula cells that fold ranges of their own lost its range",
+        needs=("marty",), serial=True),
+    Row("sheetspill", "soak", py("tests/sheetspill.py"), 180.0,
+        "SPEC.md 81.54: a label wider than its column runs on into the "
+        "EMPTY cells to its right, as Excel draws it, and stops at the first "
+        "that holds anything; a formula's text RESULT runs on too. Read off "
+        "the glass: the host finds the grid by its own lines and counts ink "
+        "inside each cell. Five of its checks fail against the binary that "
+        "clipped every label to its own cell",
+        needs=("marty",), serial=True),
+    Row("sheetnumfmt", "soak", py("tests/sheetnumfmt.py"), 300.0,
+        "SPEC.md 81.55: Excel 2.1d's twenty-one number formats. SHEET had "
+        "four, and a date showed as its serial. The host writes a BIFF3 file "
+        "of twenty cells in different formats; each cell's TEXT is read off "
+        "the glass by the kernel's own glyphs, a cell formatted while EMPTY "
+        "shows its typed value by that format, and Save As Normal keeps "
+        "every format and writes Excel's 21 FORMAT records. 24 of its 27 "
+        "checks fail against the binary before",
+        needs=("marty",), serial=True),
+    Row("sheetcolw", "soak", py("tests/sheetcolw.py"), 360.0,
+        "SPEC.md 81.56: each column its own width. SHEET had one for the "
+        "whole sheet and skipped a file's COLWIDTH records. The host's SYLK "
+        "sets A to 20 and C to 3; the grid's lines are measured off the "
+        "glass and each cell's text read, a click in the narrow column must "
+        "land there, Column Width widens only its column, SYLK and Normal "
+        "carry the widths, and Insert Column moves them with their columns",
+        needs=("marty",), serial=True),
+    Row("sheetundo", "soak", py("tests/sheetundo.py"), 360.0,
+        "SPEC.md 81.57: Edit > Undo and Redo, Excel 2.1's one level. An "
+        "entry undone and redone, a paste, a clear through its dialog and an "
+        "inserted column each undone, and a format after a paste ending Undo "
+        "rather than letting it put the paste back - read off the glass, "
+        "then the saved document checked whole",
+        needs=("marty",), serial=True),
+    Row("sheetside", "soak", py("tests/sheetside.py"), 300.0,
+        "SPEC.md 81.58: Insert and Delete Row move a cell's BORDERS with it "
+        "(and its notes, by the same routine). They moved the cells alone. "
+        "With gridlines off a border is the only ink on an edge: an insert "
+        "must carry it down, a delete bring it back, deleting its own row "
+        "take it away, and the saved file keep it on its cell",
+        needs=("marty",), serial=True),
+    Row("sheetrowh", "soak", py("tests/sheetrowh.py"), 400.0,
+        "SPEC.md 81.60: each row its own height, in points as Excel keeps "
+        "it. A BIFF3 file's ROW records set the rows the glass then measures "
+        "(a default-flagged one ignored), the tall row's text sits low, a "
+        "click below the odd rows lands in its own row, Row Height takes "
+        "9.75 points and opens on the row's own height, BIFF writes the "
+        "twips back, Insert and Undo carry them, and scrolling onto a tall "
+        "row shows it whole with no blit by the standard height",
+        needs=("marty",), serial=True),
+    Row("sheetsort", "soak", py("tests/sheetsort.py"), 400.0,
+        "SPEC.md 81.61: Data > Sort orders every constant as Excel does - "
+        "numbers, labels in any case, logicals, errors, formulas by their "
+        "results - where labels, logicals and errors sat the sort out; and "
+        "an error constant survives Fill Right, Copy/Paste and typing, "
+        "which stored 0, pasted 0 and made a label",
+        needs=("marty",), serial=True),
+    Row("sheetmsub", "soak", py("tests/sheetmsub.py"), 400.0,
+        "SPEC.md 81.84: subroutines - a defined name called like a function "
+        "runs from that cell, ARGUMENT binds in the order it EXECUTES, and "
+        "RETURN's value comes back by evaluating the calling cell a second "
+        "time (INPUT's mechanism). Five shapes: a call inside an expression, "
+        "two arguments whose order is visible, a whole-statement call, a TEXT "
+        "answer, and a call inside another subroutine's RETURN - which the "
+        "design review caught losing the call until a pending call outranked "
+        "every other control in the step",
+        needs=("marty",), serial=True),
+    Row("sheetmref", "soak", py("tests/sheetmref.py"), 400.0,
+        "SPEC.md 81.85: the reference family - OFFSET, ABSREF, RELREF, "
+        "REFTEXT, TEXTREF, DEREF, SELECTION, CALLER, and ACTIVE.CELL as a "
+        "reference. A reference function answers its top-left VALUE and "
+        "leaves the reference for a reference argument that is exactly one "
+        "call to it: both halves, a range, nesting, CALLER in and out of a "
+        "subroutine, the manual's own #REF! for TEXTREF, and an expression "
+        "refused as a target",
+        needs=("marty",), serial=True),
+    Row("sheetmctl", "soak", py("tests/sheetmctl.py"), 900.0,
+        "SPEC.md 81.86: macro control - ERROR(FALSE) and ERROR(TRUE,ref), "
+        "RESTART(1) two subroutines deep, ALERT's type 1 answering OK and "
+        "Cancel, the Single Step dialog (Step, then Continue), Esc raising it "
+        "mid-loop and Halt ending the run, CANCEL.KEY(FALSE) ignoring Esc, "
+        "WAIT on the timer, and a run's dialog being modal to the sheet",
+        needs=("marty",), serial=True),
+    Row("sheetminfo", "soak", py("tests/sheetminfo.py"), 400.0,
+        "SPEC.md 81.87: macro information - thirty rows of GET.CELL, "
+        "GET.FORMULA, GET.NAME, GET.DEF, GET.NOTE, NAMES, GET.DOCUMENT, "
+        "GET.WINDOW, GET.WORKSPACE and DIRECTORY against a fixture that fixes "
+        "each answer, including a DIRECTORY walk into a folder and a refused "
+        "one that must leave the instance where it stood",
+        needs=("marty",), serial=True),
+    Row("sheetmcmd", "soak", py("tests/sheetmcmd.py"), 400.0,
+        "SPEC.md 81.88: command equivalents, slice 3a - Format (ALIGNMENT, "
+        "FORMAT.FONT, FORMAT.NUMBER, BORDER, CELL.PROTECTION, COLUMN.WIDTH, "
+        "ROW.HEIGHT), Edit (FILL.DOWN, INSERT, EDIT.DELETE, PASTE.SPECIAL, "
+        "CANCEL.COPY), Options (CALCULATION, DISPLAY, PROTECT.DOCUMENT) and "
+        "SET.DATABASE, each read back through the GET.* functions 81.87 "
+        "verified",
+        needs=("marty",), serial=True),
+    Row("sheetmcmd2", "soak", py("tests/sheetmcmd2.py"), 400.0,
+        "SPEC.md 81.89: command equivalents, slice 3b - FORMULA.GOTO/FIND/"
+        "FIND.NEXT, DEFINE/SET/DELETE.NAME, NOTE, SORT, RUN as a subroutine, "
+        "VSCROLL/VLINE/HSCROLL, SELECT.END both ways, UNLOCKED.NEXT/PREV "
+        "wrapping, SELECT.LAST.CELL, and FIND.PREV refused into ERROR's ref",
+        needs=("marty",), serial=True),
+    Row("sheetmcmd3", "soak", py("tests/sheetmcmd3.py"), 400.0,
+        "SPEC.md 81.90: command equivalents, slice 3c - FORMULA.FILL moving "
+        "relative references both ways, DATA.SERIES linear and growth, "
+        "FILE.DELETE (off the volume itself) and its refusal, SAVE.AS "
+        "writing the very file the answers are read from, and OPEN ending "
+        "the run with the other document in the window",
+        needs=("marty",), serial=True),
+    Row("sheetmfile", "soak", py("tests/sheetmfile.py"), 400.0,
+        "SPEC.md 81.91: macro text files - FOPEN/FREADLN/FREAD/FPOS/FSIZE over "
+        "a file the host wrote, a read-only channel refusing FWRITE, "
+        "FWRITELN/FWRITE and an FPOS overwrite checked as BYTES off the "
+        "volume, and #N/A for a missing file and for one bigger than a "
+        "channel's share of the module claim's tail",
+        needs=("marty",), serial=True),
+    Row("sheetmevt", "soak", py("tests/sheetmevt.py"), 400.0,
+        "SPEC.md 81.92: ON.KEY - Ctrl+Q and F7 bound to counting macros and "
+        "PRESSED with no run going, F7 unbound again, and x bound to nothing "
+        "so that typing it over a cell leaves the cell empty",
+        needs=("marty",), serial=True),
+    Row("sheetmmenu", "soak", py("tests/sheetmmenu.py"), 400.0,
+        "SPEC.md 81.95: custom menus - a menu after Help built from a range, "
+        "a command added, ticked, greyed and renamed, then USED with the "
+        "mouse (the renamed one runs, the greyed one does not); a menu too "
+        "wide for the bar refused; the custom bar made, shown and picked "
+        "from, and SHOW.BAR()/DELETE.BAR/DELETE.MENU putting SHEET's own back",
+        needs=("marty",), serial=True),
+    Row("sheetmdbox", "soak", py("tests/sheetmdbox.py"), 400.0,
+        "SPEC.md 81.96: DIALOG.BOX - a dialog described by a range, typed "
+        "at, clicked and Tabbed through, then Entered: the text, check box, "
+        "option group and number box results in the seventh column and the "
+        "answer 1; Esc and Cancel answering FALSE; OK by the mouse; and a "
+        "list box refused",
+        needs=("marty",), serial=True),
+    Row("chartname", "soak", py("tests/chartname.py"), 300.0,
+        "SPEC.md 82.15: CHART charts the range Sheet NAMED, not the lowest "
+        "column - THE FIRST TEST CHART HAS EVER HAD, and it exists because "
+        "of what that cost: the filter NEVER RAN, ct_reset_series having "
+        "zeroed ct_wantrng at the top of every reader, and 82.15 asserted the "
+        "opposite for two cycles because there was no chart row to say "
+        "otherwise. The fixture makes the two answers DIFFER - column A is "
+        "10,20,30,40, column B is 7,3,9,1 and the only name is B1:B4 - so "
+        "Automatic keeps column A and the name must keep B. Check 5a is the "
+        "control: a row that only asked whether picking a name charted "
+        "SOMETHING would have passed against the broken code, which charted "
+        "the wrong column every time. The values are deliberately not "
+        "proportional, because ch_scale would give two proportional columns "
+        "the same scaled words and only [ch_e10] would differ",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartread", "soak", py("tests/chartread.py"), 300.0,
+        "SPEC.md 82.18: CHART's THREE readers are one reader. It opens SYLK, "
+        "DIF and BIFF, and until this row only SYLK had ever been executed "
+        "by a test - chartname opens one .SLK and nothing else - so "
+        "ct_read_dif, ct_read_biff and ct_rkdec were a few hundred bytes of "
+        "record walking apiece that nothing ran. One dataset is written "
+        "three ways by the HOST (and read back with tools/os88sheetfmt.py "
+        "before the guest sees it, so a writer defect cannot pass as a "
+        "reader one) and the three readings are compared to EACH OTHER: "
+        "ct_valcnt, ct_mincol, [ch_e10] and the ct_wvals the drawing "
+        "actually runs on. Column A is 12.5, -3.25, 1000.0, 0.125 so BIFF "
+        "must carry fractions as NUMBER records while column B's whole "
+        "numbers go as RK, putting ct_rkdec under the row too. Check 4 is "
+        "why 1-3 are not enough: a decoder that drops a sign or shifts an "
+        "RK wrong still hands ct_record four numbers. Check 5 is why 4 is "
+        "not enough either - it ties the published words back to the data, "
+        "so three readers agreeing on rubble cannot pass. The BIFF file "
+        "also carries a FORMULA whose cached result is #DIV/0! (top word "
+        "0xFFFF), which 82.18 says must be skipped and had no gate. Red on "
+        "purpose five ways: ct_rkdec shifted by 1 and the DIF parse stepped "
+        "by 3 each fail 4 ALONE; dropping the per-file ct_nnames reset fails "
+        "6 alone; deleting 82.18's 0xFFFF test charts the dead cell and "
+        "fails 3 and 4; and abs() in ct_record's store - a defect SHARED by "
+        "all three readers, so they still agree - fails 5 with 4 passing. "
+        "Checks 7-8 are Data > Column (82.12), the untested twin of 82.15's "
+        "range filter: 7 on the BIFF (no names) and 8 on the SYLK (one "
+        "name), where the SAME menu item must still mean a column. 8 FAILED "
+        "the first time it ran - the handler asked whether the FILE had any "
+        "names rather than which SLOT was picked, so one name made all eight "
+        "slots names and Column B selected a name record nothing defined. "
+        "Fixed in the same commit; restoring it fails 8 alone",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartgal", "soak", py("tests/chartgal.py"), 600.0,
+        "SPEC.md 82.4/82.6: the Gallery actually DRAWS seven different "
+        "charts - THE FIRST CHART ROW THAT LOOKS AT PIXELS. chartname and "
+        "chartread both read numbers out of bss, and no amount of that can "
+        "see the drawing: a ch_draw arm that silently did nothing leaves "
+        "ct_valcnt, ct_mincol and ct_wvals all correct. It reads 82.1's "
+        "offscreen canvas (240x160 4bpp at ct_chartseg) rather than the "
+        "screen, which is the buffer both halves draw into and what Export "
+        "as BMP writes. Checks: every type drew ink; no two types drew the "
+        "SAME picture; Column and Bar are TRANSPOSED by longest-run (Excel's "
+        "naming - Bar is the horizontal one); Area carries strictly more ink "
+        "than Line, being the same walk filled to the axis; and Pie's "
+        "bounding box has an inked centre with four blank corners. Red on "
+        "purpose: ct_gal_map's Bar entry pointed at CH_T_COLUMN fails 2 and "
+        "3, and ch_draw's Area arm sent to .line fails 2 and 4 (Area==Line, "
+        "719 ink each). The canvas is read with the guest PAUSED, after it "
+        "has CHANGED from the previous type's AND the screen has settled - "
+        "all three are needed: a running guest redraws under a 19,200-byte "
+        "read, settle() alone returns before the drawing starts (the frame "
+        "is already still), and the change alone cannot tell started from "
+        "finished. An earlier version took the first picture seen twice and "
+        "loosened check 2 to a pixel threshold to tolerate a Pie that "
+        "sometimes never settled - and THAT MADE THE ROW MISS ITS OWN "
+        "MUTATION on one run. Both comparisons are exact again",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chart2ser", "soak", py("tests/chart2ser.py"), 300.0,
+        "SPEC.md 82.8/82.8.1: CHART keeps the TWO lowest columns, and "
+        "DEMOTES. chartgal proves Scatter and Combination draw differently "
+        "from the other five; this is the data model under them, which 82.8 "
+        "calls the hard half ('a data-model change, not a drawing one'). "
+        "Check 3 is why the row exists: ct_record demotes a series when a "
+        "LOWER column arrives rather than discarding it, and a SYLK in plain "
+        "row-major order never reaches that path - the lowest column is in "
+        "the first row and nothing supersedes it - so DEMOTE.SLK puts column "
+        "B in rows 0-3 and column A only in rows 4-7. Check 2 is check 1's "
+        "control: two counts would pass if both series held the same column, "
+        "and the demote path COPIES one array over the other, so the values "
+        "are what say the copy took the right source - but they have to be "
+        "read off the DEMOTED file, which is check 3a and which the first "
+        "version of this row did not have: it checked values on the "
+        "row-major file, the one that never demotes, and MISSED the "
+        "wrong-direction-copy mutation entirely. Red on purpose, twice each: "
+        "jumping over the demotion fails 3 and 3a; copying it the wrong way "
+        "round fails 3a ALONE, every count still right. ch_max2 is read on a "
+        "SCATTER because ch_prep2 runs only in the two ch_draw arms that "
+        "spend it - on the Column chart a file opens as it is still zero, "
+        "which this row first reported as a shared maximum",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartexp", "soak", py("tests/chartexp.py"), 300.0,
+        "SPEC.md 82.13: the series' decimal exponent, at both ends and in "
+        "the middle. ch_scale picks one E per series to fit signed words, "
+        "capped at CH_E10_MAX 4 and CH_E10_MIN -9, and [ch_e10] is how the "
+        "labels are told. One check per clause: positive E keeps fractions "
+        "(44.1 -> 4410 at E=2), negative E makes a large series chartable at "
+        "all (3.4e6 -> 3400 at E=-3, the section's own example), the cap "
+        "binds (0.004 wants E=6, gets 4), scaling ROUNDS rather than "
+        "truncates (0.66666e4 is 6666.6 -> 6667, and one unit is the whole "
+        "of that sentence), and [ch_e10] is left holding SERIES ONE's - "
+        "ct_finalize scales series two first for exactly that reason. Every "
+        "check asserts the WORDS as well as E, since a right exponent with "
+        "wrong words draws a correct axis against wrong bars. Red on "
+        "purpose: dropping the round fails 4 alone, raising the cap fails 3 "
+        "alone, and swapping the two ch_scale calls fails ALL FIVE - on a "
+        "one-column file ch_e10 comes back 0 with the words still right, "
+        "because scaling an empty second series writes ch_e10 too",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("sheettable", "soak", py("tests/sheettable.py"), 400.0,
+        "SPEC.md 81.114: Data > Table, the last menu command Excel 2.1d has "
+        "that SHEET did not. A result cell is the governing formula "
+        "evaluated with an input value substituted into an input cell "
+        "elsewhere on the sheet, so the assertion is the NUMBERS and the "
+        "fixture is built so no two expected values agree - a transposed "
+        "substitution cannot land on a right answer by luck. Two tables, "
+        "side by side in rows 1-3 so both can be selected by clicking: a "
+        "one-input table whose values run down the left column and formulas "
+        "across the top, and a two-input table with one corner formula. "
+        "Check 4 reads the INPUT CELLS back, which is what caught the "
+        "substitution writing to row = the value (81.114.6); check 5 names "
+        "the FIRST result of each table, which is the one and only cell the "
+        "pass stamp buys - this row first asked instead whether the four "
+        "results DIFFER, on a story about memoization repeating ONE number, "
+        "and that check PASSED on its own mutation because 0, 14, 18 and 19 "
+        "are four distinct values",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettbl2", "soak", py("tests/sheettbl2.py"), 520.0,
+        "SPEC.md 81.114.7: a Data > Table is PROTECTED and clears "
+        "all-or-nothing. sheettable proves the numbers; this proves the "
+        "thing that makes them a table - the Reference Guide's 'you cannot "
+        "edit cells inside the table' and 'you must clear all the resulting "
+        "values'. Each table outlives its run in a list carved from the "
+        "border claim, and each result cell is marked by bit 7 of the BORDER "
+        "byte, which sh_prot_blocked already fetches. THREE of its nine "
+        "checks are there because a mutation refused to fail, and each is a "
+        "shape worth keeping: (a) a cheap early-out makes every check behind "
+        "it vacuous - sh_prot_blocked returns at once on [sh_ntbl]==0, so "
+        "with ONE table the mutation that leaves cleared cells MARKED passed "
+        "all six checks, hence two tables; (b) allowed and harmless are "
+        "different facts - the check that the Formats clear went through "
+        "passed throughout the defect where that clear wiped the mark AND "
+        "both protection bits, so check 5 reads the border byte itself; (c) "
+        "a fix needs the path it exists for - the unmark on a table's drop "
+        "is unreachable through Clear > All, which removes the whole record "
+        "anyway, so check 8 clears the second table through FORMULAS, the "
+        "path 81.63 keeps the record on. Both input cells are DELIBERATELY "
+        "ABSENT from the fixture, the arm sheettable's zero-filled inputs "
+        "cannot reach. The menu is driven BY NAME out of the assembler's map "
+        "and the guest's own rects, so an inserted item cannot silently aim "
+        "it at a live neighbour the way index 8 did to three rows",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettblbiff", "soak", py("tests/sheettblbiff.py"), 520.0,
+        "SPEC.md 81.114.10: a Data > Table survives SAVE AND LOAD. Until "
+        "this stage a table saved to any format kept its NUMBERS and "
+        "silently stopped being a table. Excel writes one as a FORMULA "
+        "record per RESULT cell whose whole token array is a single tTbl, "
+        "plus one DATATABLE (0236H in BIFF3) immediately after the first "
+        "FORMULA record of the table's RANGE - which is usually the user's "
+        "own top-row formula, not a result cell. THE HOST AUTHORS THE "
+        "INPUT, which is 81's format-gate rule: a file SHEET never wrote "
+        "cannot carry a writer defect, so a reader defect has nothing to "
+        "cancel against, and that trap has been caught here twice. The "
+        "input cell is a COLUMN one deliberately: the format names a "
+        "one-input table's single cell in the FIRST pair whichever kind it "
+        "is, with option bit 2 giving the orientation, where this app keeps "
+        "the row input first and the column input second ALWAYS - so the "
+        "column shape is the one where a verbatim copy of the sixteen bytes "
+        "is wrong in BOTH directions, and it is the common shape. Check 3 "
+        "runs Calculate Now on the LOADED table, which is what says the "
+        "record was read into a working table rather than merely stored; "
+        "check 5 asserts the tTbl's own BYTES, because a check that merely "
+        "noticed the formula would not decode is satisfied by any corrupt "
+        "array at all",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettblshift", "soak", py("tests/sheettblshift.py"), 560.0,
+        "SPEC.md 81.114.9: a Data > Table's stored RECTANGLE follows the "
+        "grid. Insert/Delete Row/Column move the cells and move a result "
+        "cell's MARK with them for free - it is a bit in the border byte, "
+        "and sh_rc_sides already shifts that table - but the 16-byte table "
+        "record did not move, so a table whose sheet gained a row above it "
+        "was guarded against a rectangle one row too high. sh_rc_table is "
+        "the generic shifter for (packed row/sheet, column) records and "
+        "does NOT fit: a row inserted above moves the rectangle, one "
+        "inserted INSIDE grows it, a delete inside shrinks it, deleting the "
+        "top row takes the formulas so the table goes, and deleting an "
+        "input cell leaves nothing to substitute. Every rectangle is read "
+        "OUT OF THE RECORD, never inferred from what the guard then "
+        "allowed - the cells moving and the record moving are different "
+        "facts and the whole defect is the two disagreeing. Check 5 is "
+        "Undo, which did not carry the table list at all until this stage: "
+        "an undone Insert Row restored every cell and every mark and left "
+        "the rectangle shifted, which is a half-restoring Undo and worse "
+        "than none. Check 7 is a SORT, an arbitrary permutation, which "
+        "drops any table whose range it touches and SAYS SO on the status "
+        "line - the message is asserted too, because a table silently "
+        "ceasing to be one is found out about much later",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettblcalc", "soak", py("tests/sheettblcalc.py"), 520.0,
+        "SPEC.md 81.114.8: a Data > Table RECALCULATES, and Excel's three "
+        "modes decide when. A result cell holds a STORED value, so this "
+        "app's whole recalculation - advance [sh_pass] and let sh_eval_cell "
+        "re-evaluate lazily - does nothing for it; the table has to be "
+        "computed again, one full formula evaluation per result cell. That "
+        "cost is why Excel 2.1's Calculation dialog offers Automatic / "
+        "Automatic except Tables / Manual rather than two modes "
+        "(dialog_calculation.png is the authority), and this row drives all "
+        "three. sh_commit is the one funnel for typing, Paste, Fill and a "
+        "sort's write-back; Del and Edit > Clear bypass it and owe their "
+        "own call; Calculate Now re-runs tables WHATEVER the mode. Every "
+        "value is read out of the CELL RECORDS, which is exact for a stored "
+        "number and is what lets the row assert a table that did NOT move. "
+        "Checks 3 and 5 assert that nothing changed and are only worth "
+        "anything because 4 and 6 follow them - the later check needs the "
+        "earlier edit to have landed, so an edit that silently missed fails "
+        "the pair, where a 'nothing changed' check alone passes when the "
+        "keystroke never arrived. CHECK 7 USES SHEET 2, and exists because "
+        "a mutation refused to fail: deleting the [sh_cursheet] assignment "
+        "from the walk passed all seven checks above, every one of which "
+        "used Sheet 1 - where cursheet 0 makes the packed row equal the "
+        "plain row and the assignment is a no-op. That is the same bug "
+        "class, in the same feature, that 81.114.4 records. The sharp half "
+        "is the GHOST: Sheet 2's values can survive by not being touched, "
+        "where a cell appearing at those coordinates on Sheet 1 can only "
+        "have been written by this walk",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
+        "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
+        "to the new box. The grow box dragged in 160x24 and back out, with "
+        "the kernel's W_W/W_H, the package's sh_cw/sh_ch and the walk counts "
+        "sh_vcols/sh_vrows read each time - the counts are the claim, since "
+        "sh_geom walks slots until the pixels run out rather than reading a "
+        "number from the template. The pixel leg is 11.94.5.1's: the status "
+        "strip's rule must be solid to the NEW right edge and gone from the "
+        "old one, because every count can be right while the layout is "
+        "still drawn at the width the window ASKED for",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheetmkind", "soak", py("tests/sheetmkind.py"), 400.0,
+        "SPEC.md 81.97: the reader half - a host-written BIFF2 macro sheet "
+        "(BOF dt 0040H) whose formulas are a ptg-58H command, a variable and "
+        "a fixed extension function and RETURN, saved Normal: dt 0040H and "
+        "all four formulas back; a worksheet opened next saves as 0010H",
+        needs=("marty",), serial=True),
+    Row("sheetmtail", "soak", py("tests/sheetmtail.py"), 400.0,
+        "SPEC.md 81.98: the pulldown leaves nothing behind it - Data's panel "
+        "hangs past the window over the dock, is banked, and closing it "
+        "leaves every row below the window as it was; with the window "
+        "dragged low the panel runs off the screen, is NOT slid up, and the "
+        "bank clips at the last row",
+        needs=("marty",), serial=True),
+    Row("sheetmtailvga", "soak", py("tests/sheetmtail.py", "--card", "vga"),
+        400.0,
+        "SPEC.md 81.98.1: the pulldown's save-under on the FOUR-PLANE path "
+        "(os8088_xt_vga, 640x480): the bank is taken, closing changes nothing "
+        "the panel covered, and the bank path lands on the same pixels as a "
+        "full repaint - the A/B that caught the stale status line",
+        needs=("marty",), serial=True),
+    Row("sheetmsep", "soak", py("tests/sheetmsep.py"), 400.0,
+        "SPEC.md 81.109: every built-in pulldown carries Excel's group "
+        "separators as a hairline at row_top + 10, exactly where sh_msep "
+        "says and nowhere else, and no panel grew - 12 * n + 4, so no row "
+        "moved",
+        needs=("marty",), serial=True),
+    Row("sheetrefcyc", "soak", py("tests/sheetrefcyc.py"), 400.0,
+        "SPEC.md 81.108: Formula > Reference and F4, Excel's own - the "
+        "reference at the caret round A1 > $A$1 > A$1 > $A1 > A1, by key and "
+        "by menu, live only mid-formula, and a function's name left alone",
+        needs=("marty",), serial=True),
+    Row("sheetopts", "soak", py("tests/sheetopts.py"), 400.0,
+        "SPEC.md 81.106: the Options menu in Excel's order off the glass, "
+        "Display... (kind 1: Formulas, Gridlines) and Workspace... (kind 2: "
+        "R1C1, the reference box then reads R1C1) setting their flags, and "
+        "Formula > Reference greyed",
+        needs=("marty",), serial=True),
+    Row("sheetclip", "soak", py("tests/sheetclip.py"), 400.0,
+        "SPEC.md 81.105 (upstream issue #152): sh_repaint arms its own clip "
+        "region - Data > Chart Column opens the Chart over SHEET and then "
+        "repaints SHEET, and SHEET's ink stays out of the Chart and its "
+        "FRAME is whole (37 of 398 edge pixels without the clip)",
+        needs=("marty",), serial=True),
+    Row("sheetstatus", "soak", py("tests/sheetstatus.py"), 400.0,
+        "SPEC.md 81.104: the status bar in Excel's shape on the 1bpp CGA - "
+        "a divider down the strip at right - SH_SB_DIVX, and the indicator "
+        "INVERTED in a solid 1px-ringed black box (its gaps black), the "
+        "message still black on white",
+        needs=("marty",), serial=True),
+    Row("sheettitle", "soak", py("tests/sheettitle.py"), 400.0,
+        "SPEC.md 81.103: the window names the document - 'Sheet - <NAME>' "
+        "from the first frame for a double-clicked document (composed at "
+        "entry, never in a paint, 11.92), renamed by File > New, and the "
+        "caption strip really redrawn",
+        needs=("marty",), serial=True),
+    Row("sheetkeys", "soak", py("tests/sheetkeys.py"), 400.0,
+        "SPEC.md 81.101: the modern keyboard shortcuts on the cycle-accurate "
+        "CGA - the captions the pulldowns draw, Ctrl+C/V copy, Ctrl+Z undo, "
+        "Ctrl+X move, Ctrl+D fill, nothing pasted mid-entry, F3/Shift+F3/"
+        "Ctrl+G/F5/Ctrl+F/Ctrl+N open their dialogs, and Ctrl+S saves",
+        needs=("marty",), serial=True),
+    Row("sheetnote", "soak", py("tests/sheetnote.py"), 300.0,
+        "SPEC.md 81.119: a cell NOTE survives a save. 81.38's shape with the "
+        "ends swapped - the host cannot author a NOTE record, so the GUEST "
+        "writes the file and the HOST reads it with a ten-line parser that "
+        "knows nothing about sheet.asm, then the file goes back in. The "
+        "reader-only mutation fails ONE check while the host still finds the "
+        "record, which is what the independent parser is for",
+        needs=("marty",), serial=True),
+    Row("sheetask", "soak", py("tests/sheetask.py"), 300.0,
+        "SPEC.md 81.118: SHEET asks before it throws a workbook away - "
+        "[sh_modified] 0 on open, 1 on an entry, 0 on a save that kept "
+        "everything and 1 again after; then the CLOSE BOX refuses and puts "
+        "75.3's Save/Discard/Cancel up, and Discard closes it. The four "
+        "flag readings are what stop a stuck 1 passing the close test",
+        needs=("marty",), serial=True),
+    Row("sheetdlgclose", "soak", py("tests/sheetdlgclose.py"), 400.0,
+        "SPEC.md 81.100: a dialog's CLOSE BOX leaves its engine usable - the "
+        "list (Format Number) and input (Goto) dialogs closed by their boxes "
+        "clear their window words, and Paste Function and Define Name then "
+        "open; the kernel only HIDES an unowned window (75.1)",
+        needs=("marty",), serial=True),
+    Row("sheetdlgcga", "soak", py("tests/sheetdlgcga.py"), 400.0,
+        "SPEC.md 81.100: SHEET's tall fixed dialogs keep their height on a "
+        "CGA (WF_KEEPH, 11.93) - Gallery 169 and Border 159 rows against a "
+        "155-row band, still on the display, and closing each leaves "
+        "nothing below SHEET's window; Alignment (121 since 81.115), list "
+        "and Data Form as controls",
+        needs=("marty",), serial=True),
+    Row("sheetmtailherc", "soak",
+        py("tests/sheetmtail.py", "--card", "herc"), 400.0,
+        "SPEC.md 81.98.1: the same save-under photographs on the Hercules "
+        "machine (os8088_5150_herc_gla, 720x348): one plane, but the "
+        "four-bank interleave and 90-byte row are its own",
+        needs=("marty",), serial=True),
+    Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
+        "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
+        "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "
+        "value and the macro was gone. Byte-level on purpose: SELECT and "
+        "RETURN are checked against the tokens in a macro sheet REAL Excel "
+        "2.1d wrote, because our reader and writer can agree with each other "
+        "and both be wrong - which is why 81.68 refused to guess. Both "
+        "tables and both ptgs, and a dotted name through the lexer",
+        needs=("marty",), serial=True),
+    Row("sheetparse", "soak", py("tests/sheetparse.py"), 400.0,
+        "SPEC.md 81.82: Data > Parse splits one column at FIXED CHARACTER "
+        "POSITIONS, not at a delimiter. 'New York' must survive as one "
+        "field - Guess's rule is two spaces - and the boundaries guessed "
+        "from the FIRST cell must be applied to rows that pad differently, "
+        "which is what separates this from a per-row tokenise. Fields are "
+        "typed by their spelling as a CSV field is, and no brackets is a "
+        "refusal rather than a no-op that eats the column",
+        needs=("marty",), serial=True),
+    Row("sheetjust", "soak", py("tests/sheetjust.py"), 400.0,
+        "SPEC.md 81.81: Format > Justify re-wraps a paragraph down the left "
+        "column at the width of the WHOLE selection, a blank cell divides "
+        "the range into sections justified inside their own rows, and a "
+        "value in the left column refuses the block rather than being "
+        "skipped - with a marker cell proving the save that shows it landed",
+        needs=("marty",), serial=True),
+    Row("sheetfunc", "soak", py("tests/sheetfunc.py"), 400.0,
+        "SPEC.md 81.62: all 48 text, information and transcendental "
+        "functions, each evaluated from a formula cached with a wrong value "
+        "and read back from SHEET's SYLK save - the gate the move of the "
+        "three families into CHART.OVL was checked against, on both builds",
+        needs=("marty",), serial=True),
+    Row("sheetmacro", "soak", py("tests/sheetmacro.py"), 400.0,
+        "SPEC.md 81.63: the macro language - FOR/NEXT nested and stepping "
+        "down, WHILE with ACTIVE.CELL and SELECT(\"R[1]C\"), IF with GOTO "
+        "and BREAK (the branch not taken runs no command), FORMULA, "
+        "SET.VALUE through a name, COPY/PASTE, CLEAR, MESSAGE, RETURN, and "
+        "ALERT then INPUT pausing a run - started from Macro > Run by name "
+        "and by reference; and a macro command in a worksheet formula inert",
+        needs=("marty",), serial=True),
+    Row("sheetdb", "soak", py("tests/sheetdb.py"), 400.0,
+        "SPEC.md 81.65: the eleven DATABASE functions - DAVERAGE DCOUNT "
+        "DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP - each "
+        "evaluated from a formula cached with a wrong value and read back "
+        "from SHEET's SYLK save. The field argument by name and by number; "
+        "criteria by exact equality, prefix, wildcard (`*`/`?`) and a "
+        "relational operator (`>15`); AND across one criteria row's columns "
+        "and OR across its rows; and DCOUNT counting numbers only against "
+        "DCOUNTA counting anything non-blank, over a Fruit row whose own "
+        "Amount is deliberately the text \"N/A\"",
+        needs=("marty",), serial=True),
+    Row("sheetcell", "soak", py("tests/sheetcell.py"), 300.0,
+        "SPEC.md 81.66: CELL's nine attributes - width row col protect "
+        "address contents format prefix type - checked against the real "
+        "text of Microsoft Excel Functions and Macros. type_of_info matched "
+        "case-insensitively; reference explicit and omitted (the current "
+        "selection, after a real click); and the defaults an untouched "
+        "cell answers (\"format\" is \"G\", \"prefix\" is \"\", \"protect\" "
+        "is 1)",
+        needs=("marty",), serial=True),
+    Row("sheetmatrix", "soak", py("tests/sheetmatrix.py"), 300.0,
+        "SPEC.md 81.67: TRANSPOSE MMULT MDETERM MINVERSE, each publishing "
+        "only its array's top-left element (Sheet has no array-formula "
+        "entry) - TRANSPOSE on a label and a number, MMULT and MDETERM on "
+        "2x2 matrices, MDETERM on a 3x3 needing a real row swap and a "
+        "post-pivot elimination pass, MINVERSE against MDETERM's own "
+        "determinant, a singular 2x2 answering 0 and #NUM! from the two "
+        "respectively, and a trivial 1x1 case at each end of the size "
+        "range. LINEST LOGEST TREND GROWTH round it out, each fitted "
+        "against the host's own least squares - a straight line, an "
+        "exponential curve, the const=FALSE arm through the origin, and a "
+        "non-positive y answering #VALUE! out of fp_ln",
+        needs=("marty",), serial=True),
+    Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
+        "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
+        "computed by SHEET and checked against the host's own arithmetic. "
+        "Every formula is authored with a WRONG cached value, so a pass means "
+        "SHEET recalculated rather than echoed. Written as the gate for moving "
+        "the family into CHART.OVL, and its first two runs found what the "
+        "move did not cause: a Save wrote the STALE value of every formula "
+        "off the glass (81.48), and MIRR discounted from the wrong period - "
+        "which SPEC's own reference table had done too",
+        needs=("marty",), serial=True),
+    Row("sheetdbcmd", "soak", py("tests/sheetdbcmd.py"), 450.0,
+        "SPEC.md 81.71: Data > Find, Extract and Delete - 81.65's criteria "
+        "engine driven from the MENU, over 81.69's two defined names. Find "
+        "selecting the first matching record whole and then stepping to the "
+        "next, the item renaming itself to Exit Find, Extract copying both "
+        "matches into a range whose header names a REORDERED SUBSET of the "
+        "fields, and Delete compacting the database while the cell one row "
+        "below it stays put - which is what separates it from Edit > Delete",
+        needs=("marty",), serial=True),
+    Row("sheetrecord", "soak", py("tests/sheetrecord.py"), 450.0,
+        "SPEC.md 81.74 and 81.107: the macro recorder, and Start Recorder "
+        "greyed until a range exists and continuing the same macro over "
+        "Stop's own RETURN(). 81.68 is titled \"the way the "
+        "recorder writes them\" and this is that recorder - it emits the SAME "
+        "language 81.63 runs, so the test does not just read the cells it "
+        "wrote, it RUNS them after clearing the originals. Set Recorder, "
+        "Record with a name, a session of selects and entries recorded in "
+        "absolute R1C1, Stop writing its own RETURN(), and a redundant click "
+        "recording nothing at all",
+        needs=("marty",), serial=True),
+    Row("sheethide", "soak", py("tests/sheethide.py"), 400.0,
+        "SPEC.md 81.73: a hidden row and a hidden column - Format > Column "
+        "Width 0, Excel's own way, on the line that used to refuse it. What "
+        "this really gates is the MAPPING hiding broke: a visible slot's "
+        "real column was the scroll origin plus the slot index, and a hidden "
+        "column ends that, so sh_geom records the mapping and four routine "
+        "pairs read it back. The headers, the cell contents and the hit test "
+        "each reach it through a different one of them - a slot showing C1 "
+        "while a click on it selects B1 is what a break looks like. 81.73.2's "
+        "heading drag rides with it: the edge moves 24px and widens ONE "
+        "column by exactly that",
+        needs=("marty",), serial=True),
+    Row("sheetseries", "soak", py("tests/sheetseries.py"), 450.0,
+        "SPEC.md 81.72: Data > Series - two dialogs in sequence (the type as "
+        "a radio column, the step as a text field) over a direction derived "
+        "from the selection's shape. Linear with a FRACTIONAL step of 2.5, "
+        "which sh_pnum_at would have refused; Growth multiplying; Date: "
+        "Month rolling the month and clamping the day; Date: Year; and a "
+        "column whose first cell is a label skipped whole while the one "
+        "beside it in the same selection still fills",
+        needs=("marty",), serial=True),
+    Row("sheetform", "soak", py("tests/sheetform.py"), 450.0,
+        "SPEC.md 81.71.5: Data > Form - one record at a time, the sixth "
+        "dialog engine and the first one that lives in CHART.OVL behind "
+        "resident thunks, so this gates that arrangement as much as the "
+        "feature. The counter and the fields moving together, a field typed "
+        "over reaching the CELL, New growing DATABASE, and Close putting the "
+        "user's own selection back rather than leaving it on the last field "
+        "edited. It found `Veg` drawn over `Fruit` reading `Vegit`",
+        needs=("marty",), serial=True),
+    Row("sheetfreeze", "soak", py("tests/sheetfreeze.py"), 400.0,
+        "SPEC.md 81.70: Options > Freeze Panes. Nothing a file holds can "
+        "show a freeze, so every assertion is a cell's text read off the "
+        "glass with the kernel's own glyphs: the split refused on A1 in its "
+        "own words, then frozen at B2 and the selection driven well down "
+        "and well right - A1 still in the corner while the cell beside it "
+        "is past B1 and the cell under it past A2 - and Unfreeze letting "
+        "the corner scroll away again",
         needs=("marty",), serial=True),
     Row("fmtlow", "soak", py("tests/fmtlow.py"), 65.0,
         "fmtlow - Format Disk... reclaims a disk it cannot READ (SPEC.md "

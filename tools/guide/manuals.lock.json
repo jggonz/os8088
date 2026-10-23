@@ -207,9 +207,9 @@
   "sources": [
    "apps/chart"
   ],
-  "stamped": "e4576a70",
-  "strings": "fe83b9c972b49330",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "6d53446d",
+  "strings": "865c1b184df0f478",
+  "why": "checked against apps/chart/chart.asm: Data menu offers a file's named ranges (SYLK and BIFF), first sheet of a workbook, .XLS not read, Sheet's save formats named; no capture run"
  },
  "CITY_PCX": {
   "sources": [],
@@ -940,9 +940,9 @@
   "sources": [
    "apps/sheet"
   ],
-  "stamped": "2c8ba025",
-  "strings": "bfdc6bbbc5be137d",
-  "why": "Percent x100, Border over the block, ask before New/Open/Close, .XLS as Normal, what each format keeps (notes, borders) - all checked against SHEET.O88 under MartyPC"
+  "stamped": "6d53446d",
+  "strings": "854ef1a2afd44837",
+  "why": "rewritten for Sheet 2.1 against apps/sheet/sheet.asm: menus, shortcut table, Undo/Redo, Paste Special/Link, Data database commands, Series, Table, Parse, Justify, Options Display/Workspace/Freeze/Protect, per-row/column sizes, recorder, six file formats, CHART.OVL/MACRO.OVL; no capture run"
  },
  "SHEET_WAB": {
   "sources": [],

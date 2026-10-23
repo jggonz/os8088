@@ -1,7 +1,32 @@
 ; =============================================================================
 ; os8088 - apps/os88chart.inc
 ;
-; The chart rasterizer (all seven types) and BMP writer shared between apps/sheet/sheet.asm
+; THIS FILE IS A MODULE IN SHEET ONLY (82.16). Under CH_OVERLAY - which only
+; sheet.asm defines - everything below sits in `section .modc vstart=0`, is cut
+; out by tools/os88ovl.py, ships as CHART.OVL beside the package, and is
+; far-called through the dispatcher at its offset 0. chart.asm defines neither
+; CH_ symbol and assembles the whole file straight into `.text`.
+;
+; An earlier version of this header said both packages assemble it and "both
+; produce THE SAME BYTES - the Makefile asserts that". NEITHER IS TRUE: there
+; is no such Makefile rule, chart.asm produces no module at all, and 82.16.1
+; shows the two COULD NOT match anyway - the module reaches ch_* at absolute
+; offsets past its host's image end, and the two hosts' images are different
+; lengths. What is true is the design intent underneath it: the module names
+; nothing that differs between hosts, keeping its ch_* state at a fixed bss
+; offset and sending the seven things it calls in its host out through vectors
+; (os88chartovl.inc). That discipline is worth keeping - it is what would make
+; a second host possible - but it has never been enforced by a build rule, and
+; a comment that says it is checked when it is not is worse than no comment.
+;
+; vstart=0 because it is loaded at offset 0 of its claim, so its own labels
+; must be numbered from there. align=1 is load-bearing, not tidiness: a bin
+; section aligns to 4 by default and the pad would land between the image size
+; the header records and where the section really starts, so the cut would
+; take the pad with it and the dispatcher would not be at offset 0.
+;
+; The chart rasterizer (all seven types) and BMP writer shared between
+; apps/sheet/sheet.asm
 ; (its own live "Data > Chart Column..." window) and apps/chart/chart.asm (a
 ; standalone SYLK/DIF/BIFF chart viewer). Same idea as apps/os88ui.inc: get
 ; the scaling math and the BMP header bytes right once, and both callers
@@ -80,6 +105,127 @@
 ; your entry proc, right after claiming it) - ch_bmp_write just stages
 ; whatever is already sitting there, unmodified.
 ; -----------------------------------------------------------------------------
+; CHFP - the module's calls out to the soft-float core.
+;
+; Resident, that is a near call like any other. As an overlay it cannot be:
+; the module lives in its own segment, so every route back into the package
+; is a FAR call through a vector the package fills in at start-up
+; (os88chartovl.inc). One macro so the two builds cannot drift apart.
+; -----------------------------------------------------------------------------
+%macro CHFP 1
+  %ifdef CH_OVERLAY
+    call far [ch_v_%1]
+  %else
+    %ifidn %1,aiszero
+    mov bx, fp_am0
+    call fp_iszero
+    %else
+    call ch_res_%1
+    %endif
+  %endif
+%endmacro
+
+%ifndef CH_OVERLAY
+  %define ch_res_unpacka fp_unpack_a
+  %define ch_res_unpackb fp_unpack_b
+  %define ch_res_a2i     fp_a2i
+  %define ch_res_cmpab   fp_cmpab
+  %define ch_res_round   fp_round
+  %define ch_res_scale10 fp_scale10
+  %define ch_res_dec_s16 dec_s16
+  %define ch_res_dec_u16 dec_u16
+%endif
+
+; -----------------------------------------------------------------------------
+; apps/os88dec.inc (SPEC.md 20.5.2), AND IT IS INCLUDED HERE RATHER THAN BESIDE
+; its first caller for one reason: everything below this point may be `.modc`.
+;
+; The labels' numbers are dec_s16's for a plain one and dec_u16's for a whole
+; part, each leaving DI on its NUL so the point and the decimals append. This
+; file had a signed itoa of its own and Sheet carried a second one beside it,
+; which is why they were consolidated.
+;
+; An includer that calls one of them ITSELF - sh_itoa does, from twelve
+; resident callers - must claim the file for `.text` first, and then this is a
+; no-op. Leaving the include where it used to sit, past the section switch,
+; made `dec_s16` a `.modc` label to tools/os88ovlchk.py: it reads the LAST of a
+; file's inclusions and deliberately does not evaluate %ifdef, so the guarded-
+; out copy down there won the vote and three correct near calls were reported.
+; The binary was right and the gate was right to complain - a resident routine
+; whose source says `.modc` is one nobody can reason about.
+; -----------------------------------------------------------------------------
+%ifdef OS88DEC_INC
+  %ifndef DEC_S16
+    %error "os88chart.inc needs dec_s16: %define DEC_S16 before os88dec.inc"
+  %endif
+%else
+  %define DEC_S16
+  %include "os88dec.inc"
+%endif
+
+; -----------------------------------------------------------------------------
+; ONLY THE CALLER THAT NEEDS THE SPACE PAYS FOR THE MODULE. %define CH_OVERLAY
+; and this becomes .modc, cut out and loaded on demand; leave it undefined and
+; the same source assembles straight into .text as it always did. Sheet is
+; over SPEC.md 68.10's 55,000-byte trigger and Chart has 46KB free, so exactly
+; one of them asks (82.16).
+%ifdef CH_OVERLAY
+  %ifdef CH_MODC_OPENED
+section .modc                       ; the host already claimed offset 0
+  %else
+section .modc vstart=0 align=1
+  %endif
+%endif
+
+%ifdef CH_OVERLAY
+ch_modc:                              ; +0: the dispatcher, and the only offset
+    cmp bp, CHM_MAX                   ; the resident half knows
+    ja .out
+    shl bp, 1
+    jmp word [cs:bp+ch_mverb]         ; INDEX THROUGH BP, NOT SI. Every verb
+                                      ; here takes SI as an argument - ch_scale
+                                      ; its source offset, ch_bmp_write its
+                                      ; filename - so a dispatcher that stages
+                                      ; the index in SI hands each of them a 0,
+                                      ; 2 or 4 instead. ch_draw survived it
+                                      ; (its SI is 0 and so is its verb), which
+                                      ; is why charts drew their title and axis
+                                      ; and no data at all. BP is the verb
+                                      ; already and no verb wants it.
+.out:
+%ifdef CH_MODC_EXT
+    jmp CH_MODC_EXT               ; a host may continue the numbering past
+%else                             ; CHM_MAX with verbs of its own (82.16.8);
+    retf                          ; without one, an unknown verb just returns
+%endif
+
+ch_mverb:
+    dw ch_m_draw, ch_m_scale, ch_m_bmpwrite
+
+; Each verb is a near call to the routine and then the far return ch_ovcall is
+; waiting for. The routines keep their own register contracts; a verb adds
+; nothing but the return kind.
+ch_m_draw:
+    call ch_draw
+    retf
+ch_m_scale:
+    call ch_scale
+    retf
+ch_m_bmpwrite:
+    call ch_bmp_write
+    retf
+
+%endif
+
+; The BMP header template and palette are the module's only DATA the resident
+; half reads: SHEET's entry proc copies all 118 bytes into the chart buffer
+; once, long before CHART.OVL is loaded (82.16). So they stay RESIDENT in both
+; builds - a module-relative address handed to resident code copies whatever
+; happens to sit at that offset in the package, which is a wrong BMP header
+; and no error anywhere.
+%ifdef CH_OVERLAY
+section .text
+%endif
 ch_hdrtpl:
     db 'BM'
     dd CH_HDRSZ + (CH_STRIDE * CH_H)   ; bfSize
@@ -130,6 +276,9 @@ ch_pal_bgra:
 ch_pal_bgra_end:
 %if (ch_pal_bgra_end - ch_pal_bgra) != 64
     %error "ch_pal_bgra drifted from the real 16x4-byte BMP palette size"
+%endif
+%ifdef CH_OVERLAY
+section .modc
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -968,7 +1117,7 @@ ch_deco:
     ; the canvas top and zero just above the axis, which is the opposite of what
     ; the first version computed - it put every label in the bottom eight rows.
     mov ax, [ch_max]
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_DECO_LX
     xor bx, bx                        ; the top
     mov si, ch_tnum
@@ -976,7 +1125,7 @@ ch_deco:
     call ch_text
 
     xor ax, ax                        ; zero, just above the axis line
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_DECO_LX
     mov bx, [ch_base]
     sub bx, CH_GLYPH_H
@@ -992,7 +1141,7 @@ ch_deco:
     je .nolow                         ; bottom, because the axis is mid-canvas
     mov ax, [ch_max]
     neg ax
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_DECO_LX
     mov bx, CH_H - CH_GLYPH_H
     mov si, ch_tnum
@@ -1099,7 +1248,7 @@ ch_legend:
     add si, ax
     mov ax, [es:si]
     pop es
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_W - 46 + CH_LEG_SW + 3
     mov bx, [ch_legy]
     dec bx
@@ -1575,7 +1724,13 @@ ch_draw:
 ; in:  BX = window ptr, AX = content x, DX = content y (WM_CONTENT's own
 ;      outputs, so the call site is `call OSAPI_WM_CONTENT` / `call ch_margin`)
 ; out: nothing; preserves every register
+;
+; RESIDENT in both builds, ch_hdrtpl's way: SHEET's W_PAINT near-calls it,
+; and it names no module data - only OSAPI cells and CH_W/CH_H
 ; -----------------------------------------------------------------------------
+%ifdef CH_OVERLAY
+section .text
+%endif
 ch_margin:
     push ax
     push bx
@@ -1635,6 +1790,9 @@ ch_margin:
     pop bx
     pop ax
     ret
+%ifdef CH_OVERLAY
+section .modc
+%endif
 
 ; =============================================================================
 ; TEXT INTO THE CANVAS - the prerequisite for every label.
@@ -1790,19 +1948,6 @@ ch_glyph:
     pop ax
     ret
 
-; The labels' numbers are apps/os88dec.inc's (SPEC.md 20.5.2): dec_s16 for a
-; plain one and dec_u16 for a whole part, each leaving DI on its NUL so the
-; point and the decimals append. This file had a signed itoa of its own, and
-; Sheet carried a second one beside it.
-%ifdef OS88DEC_INC
-  %ifndef DEC_S16
-    %error "os88chart.inc needs dec_s16: %define DEC_S16 before os88dec.inc"
-  %endif
-%else
-  %define DEC_S16
-  %include "os88dec.inc"
-%endif
-
 ; -----------------------------------------------------------------------------
 ; ch_num_t (stage 4.6) - AX = one of the scaled words, [ch_e10] = the series'
 ; exponent; the VALUE that word stands for, as text, into ch_tnum.
@@ -1847,7 +1992,7 @@ ch_num_t:
 .fpos:
     xor dx, dx
     div bx                            ; AX = whole part, DX = the remainder
-    call dec_u16                      ; ...and DI on its NUL
+    CHFP dec_u16                      ; ...and DI on its NUL
     mov byte [di], '.'
     inc di
 .floop:
@@ -1881,7 +2026,7 @@ ch_num_t:
 .zeros:
     or ax, ax                         ; ...but zero is zero at every scale,
     jz .plain                         ; and "0000" is not how anyone writes it
-    call dec_s16                      ; DI on its NUL
+    CHFP dec_s16                      ; DI on its NUL
     neg cx
 .zput:
     cmp cx, 0
@@ -1898,7 +2043,7 @@ ch_num_t:
     mov byte [di], 0
     jmp .out
 .plain:
-    call dec_s16
+    CHFP dec_s16
 .out:
     pop di
     pop dx
@@ -1960,10 +2105,10 @@ ch_scale:
     call ch_sc_fetch                  ; ch_dbl = value[BX]
     and byte [ch_dbl+7], 0x7F         ; abs(), by the sign BIT - exact, and
     mov si, ch_dbl                    ; cheaper than unpacking to negate
-    call fp_unpack_a
+    CHFP unpacka
     mov si, ch_dmax
-    call fp_unpack_b
-    call fp_cmpab
+    CHFP unpackb
+    CHFP cmpab
     jle .p1n
     mov si, ch_dbl                    ; a new largest
     mov di, ch_dmax
@@ -1975,9 +2120,9 @@ ch_scale:
 
     ; --- choose E ----------------------------------------------------------
     mov si, ch_dmax                   ; a series of nothing but zeros has no
-    call fp_unpack_a                  ; scale to choose, and walking the loops
-    mov bx, fp_am0                    ; below would settle on E=4 and label
-    call fp_iszero                    ; every tick "0.0000"
+    CHFP unpacka                  ; scale to choose, and walking the loops
+    CHFP aiszero                      ; below would settle on E=4 and label
+                                      ; every tick "0.0000"
     jc .havee0
     ; Walk UP while max*10^(E+1) still fits a signed word, then DOWN while it
     ; does not fit at all. Both loops are bounded by the caps, and the test is
@@ -1987,20 +2132,20 @@ ch_scale:
     cmp cx, CH_E10_MAX
     jge .down
     mov si, ch_dmax
-    call fp_unpack_a
+    CHFP unpacka
     push cx
     inc cx
-    call fp_scale10
+    CHFP scale10
     pop cx
-    call fp_a2i
+    CHFP a2i
     jc .down                          ; would not fit: CX is already the most
     inc cx                            ; we can keep
     jmp .up
 .down:
     mov si, ch_dmax
-    call fp_unpack_a
-    call fp_scale10
-    call fp_a2i
+    CHFP unpacka
+    CHFP scale10
+    CHFP a2i
     jnc .havee                        ; fits: this E is the one
     cmp cx, CH_E10_MIN
     jle .havee                        ; nothing more we can do - the clamp in
@@ -2018,12 +2163,12 @@ ch_scale:
 .p2:
     call ch_sc_fetch
     mov si, ch_dbl
-    call fp_unpack_a
+    CHFP unpacka
     mov cx, [ch_e10]
-    call fp_scale10
+    CHFP scale10
     xor cx, cx
-    call fp_round                     ; to the nearest whole one, half away
-    call fp_a2i                       ; from zero - fp_a2i truncates, and a
+    CHFP round                     ; to the nearest whole one, half away
+    CHFP a2i                       ; from zero - fp_a2i truncates, and a
                                       ; truncated bar is short by up to one
                                       ; whole unit at the top of the scale
     push ax
@@ -2204,7 +2349,7 @@ ch_sin:
 .direct:
     shl bx, 1
     push ax
-    mov ax, [ch_sintab + bx]
+    mov ax, [cs:ch_sintab + bx]       ; [cs:]: module data, DS the package
     mov cx, ax
     pop ax
     cmp al, 2                         ; quadrants 2 and 3 are negative
@@ -2411,7 +2556,7 @@ ch_pie_plot:
     shl ax, cl                        ; four bytes per pattern
     add si, ax
     pop ax
-    mov ch, [ch_pie_pattab + si]
+    mov ch, [cs:ch_pie_pattab + si]   ; [cs:]: module data, DS the package
     and ax, 3                         ; the pattern column
     mov cl, al
     shr ch, cl
@@ -2657,3 +2802,7 @@ ch_bmp_write:
     pop ax
     ret
 %endif ; CH_NO_BMPWRITE
+
+%ifdef CH_OVERLAY                       ; ...and the section restore is OUTSIDE
+section .text                           ; it: CLAUDE.md's rule is that a file
+%endif                                  ; ends in .text whatever it compiled

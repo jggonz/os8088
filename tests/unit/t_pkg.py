@@ -286,6 +286,20 @@ def main():
             p = os.path.join(faces, f)
             if os.path.isfile(p) and f.endswith(".f88"):
                 arts[f.upper()] = read(p)
+    # ...and the OVERLAYS, same shape and the same reason (SPEC.md 20.13.5,
+    # 73.14.1): build/ovlz/<NAME>.OVL is what CC_OVLZ_RULE wrapped and what a
+    # disk carries, so it OVERRIDES the top-level cut of the same basename,
+    # which is what tools/os88ovl.py wrote and what the size checks read.
+    # SCRIBE.OVL never needed this because it rides no floppy; SHEET's
+    # CHART.OVL and MACRO.OVL are the first packed overlays on a shipped
+    # image, and without this the row reported every disk carrying them stale
+    # - naming the one failure mode it exists to catch, about a current build.
+    ovlz = os.path.join(build, "ovlz")
+    if os.path.isdir(ovlz):
+        for f in sorted(os.listdir(ovlz)):
+            q = os.path.join(ovlz, f)
+            if os.path.isfile(q):
+                arts[f.upper()] = read(q)
     # ...and the DATA files, same shape and a sharper reason (SPEC.md 20.13.5):
     # build/zdata-<fmt>/ is what os88lz wrapped and what the disk carries, and
     # it OVERRIDES a top-level file of the same basename. That is not a tidy

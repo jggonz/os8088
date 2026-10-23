@@ -479,6 +479,9 @@ fpt_skip:
     ret
 
 %include "fpcases.inc"
+%define OS88FP_NOTRANS                 ; SPEC.md 84.8/84.10.1: no case here
+%define FP_NO_POW                      ; reaches 84.10's layer, so it is not
+                                       ; assembled and fp_e0..fp_ek are not owed
 %include "os88fp.inc"
 
 ; -----------------------------------------------------------------------------

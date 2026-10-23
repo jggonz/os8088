@@ -15,7 +15,8 @@ hold a program, its overlay or data files, and its documents, which all have
 to sit in the folder the program is launched from (SPEC.md 19.10). A
 COLLECTION folder (--collection: APPS, GAMES, MEDIA) is a set of independent
 programs, and only when one outgrows a whole floppy is it split, between
-same-stem groups so that a GAMES\\X.O88 keeps its X.* data beside it. Any
+same-stem groups so that a GAMES\\X.O88 keeps its X.* data beside it - and a
+module that shares a program but not its stem is in COMPANIONS below. Any
 other folder that outgrows a floppy is refused by name: it needs a decision.
 
 PLACEMENT IS FIRST FIT IN PAYLOAD ORDER, so the set is a function of the
@@ -138,11 +139,19 @@ def units(args_):
     return [(t, by[t]) for t in order]
 
 
+# A file whose program has another stem: {file name: the program's stem}.
+# SHEET reads both modules out of the folder it was launched from (SPEC.md
+# 82.16), so a split that put either on another disk would refuse charts or
+# macros with no build error - and CHART.OVL's own stem is CHART.O88's.
+COMPANIONS = {"CHART.OVL": "SHEET", "MACRO.OVL": "SHEET"}
+
+
 def stem_groups(entries):
     """A collection's entries, grouped by 8.3 stem in first-appearance order."""
     order, by = [], {}
     for f, p in entries:
-        stem = os.path.basename(p).upper().partition(".")[0]
+        name = os.path.basename(p).upper()
+        stem = COMPANIONS.get(name, name.partition(".")[0])
         if stem not in by:
             by[stem] = []
             order.append(stem)

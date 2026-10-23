@@ -18,6 +18,10 @@ import os88geom  # noqa: E402
 
 SH_MPAD, SH_MI_H = 8, 12                 # apps/sheet/sheet.asm
 FILE, EDIT, FORMULA, FORMAT, DATA = 0, 1, 2, 3, 4
+# rows, from sh_i_formula / sh_i_format / sh_i_data in apps/sheet/sheet.asm
+FM_PFUNC, FM_GOTO = 1, 5
+FT_NUMBER, FT_COLW = 0, 6                # Cell Protection... sits at 4
+DT_CHART = 10                            # Form, Find, Extract... come first
 
 
 def u16(b):
@@ -96,13 +100,18 @@ def capture(ui, shot):
         ui.settle()
 
     def goto(ref):
-        pick(FORMULA, 5)                   # Goto...
+        pick(FORMULA, FM_GOTO)             # Goto...
         keys(*["Backspace"] * 8)
         m.type_text(ref)
         keys("Enter")
 
-    # wider columns so the labels read: Format > Column Width... = 10
-    pick(FORMAT, 5)
+    # wider columns so the labels read: Format > Column Width... = 10 sets
+    # the SELECTED columns, so select A1:C1 first
+    goto("A1")
+    for _ in range(2):
+        m._shifted("ArrowRight", True)
+    ui.settle()
+    pick(FORMAT, FT_COLW)
     keys(*["Backspace"] * 4)
     m.type_text("10")
     keys("Enter")
@@ -112,7 +121,7 @@ def capture(ui, shot):
 
     # the Formula menu, held open on Paste Function...
     press(FORMULA)
-    over(1)
+    over(FM_PFUNC)
     shot("sheet-menu", window="Sheet", pad=8)
     release()                              # ...which opens Paste Function
     shot("sheet-functions", window="Sheet", pad=8)
@@ -127,15 +136,15 @@ def capture(ui, shot):
     shot("sheet-formula", window="Sheet", pad=8)
     keys("Enter")
 
-    # Format > Number... on the average
-    goto("F4")
-    pick(FORMAT, 0)
+    # Format > Number... on the spread: the list of number formats
+    goto("F6")
+    pick(FORMAT, FT_NUMBER)
     park()
     shot("sheet-number", window="Sheet", pad=8)
-    button("sh_fdlg_btrec", 1)
+    button("sh_ldlg_btrec", 1)
 
     # Data > Chart Column... on Revenue
     goto("C2")
-    pick(DATA, 1)
+    pick(DATA, DT_CHART)
     park()
     shot("sheet-chart")

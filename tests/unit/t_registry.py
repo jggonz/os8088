@@ -129,6 +129,10 @@ UNREGISTERED = {
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
     "npbench.inc": "a benchmark body, %included",
+    "glass.py": "reading SHEET's grid off the 1bpp screen - its lines, and "
+                "a cell's text by the kernel's own glyphs - for the gates "
+                "whose subject is what is drawn (SPEC.md 81.54, 81.55); "
+                "library, imported by them, not a test",
     "fatdel.py": "deletes one file anywhere in a FAT12 image, a sub-folder "
                  "too, which tools/os88fat.py's `del` refuses - imported by "
                  "assocstale.py to take a program out from under the "

@@ -84,6 +84,18 @@ region apps/pixelstein/pxstein.asm  # csload's shape exactly: the launch image
                                  # freed inside that call (SPEC.md 97.9).
                                  # Retired by nothing; correct as it stands.
 
+region apps/sheet/sheet.asm      # SCRIBE'S OLD SHAPE, back: a segment of our
+                                 # own stamped somewhere. ch_ovbind stamps CS
+                                 # into CHART.OVL's vectors, and the module
+                                 # far-returns across its own file calls - a
+                                 # file call claims and can compact - so a
+                                 # moved image would leave both naming the old
+                                 # one (sh_entry's note, SPEC.md 82.16.9). The
+                                 # DATA claims are declared and do move.
+                                 # Retired when the overlay becomes a part in
+                                 # the package's own segment (SCRIBE's 95.8.8
+                                 # shape).
+
 # --- worker -------------------------------------------------------------------
 #
 # THE FOUR PARK-SAFE PACKAGES ARE GONE FROM THIS LIST and the reason they were

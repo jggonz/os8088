@@ -38,7 +38,7 @@
                                    # card's row, the alert's, and os88ui_kbtn
 
 # --- packages ---------------------------------------------------------------
-10 apps/sheet/sheet.asm            # five dialog pairs, a record each
+15 apps/sheet/sheet.asm            # seven dialog engines, a record each
 4 apps/dos/dos.asm                 # the bar's two and the Setup page's two,
                                    # one record repointed per page
 1 apps/ftpd/ftpd.asm               # Start/Stop, Setup, Done - one shared body (fd_btn_draw)

@@ -17,6 +17,9 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rdgqemu  # noqa: E402
+
 SHADE = (255, 170, 85, 0)
 
 
@@ -25,7 +28,8 @@ def capture(img, timeout):
     os.close(fd)
     p = subprocess.Popen(["qemu-system-i386", "-drive", "file=%s,format=raw,if=floppy" % img,
                           "-boot", "a", "-display", "none", "-serial", "file:%s" % log,
-                          "-no-reboot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                          "-no-reboot"] + rdgqemu.tcg_args(),   # (its SAHF probe)
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     need = 0x2000 + 0xA0 + 0x0C + 0x100 + 12 + 5760 + 768 + 8 + 4
     t0, data = time.time(), b""
     try:

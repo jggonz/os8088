@@ -66,8 +66,14 @@ REGION = re.compile(r"^\s*OS88_REGION_MOVABLE(?:_NOKEEP)?\b", re.M)
 WORKER = re.compile(r"^\s*OS88_WORKER_RESTARTABLE(?:_NOKEEP)?\b", re.M)
 # ...and the hand-rolled spellings, so a package that calls the slot directly
 # is not reported as undeclared. sheet.asm did exactly that for a cycle and a
-# grep for the macro called it a gap.
-REGION_RAW = re.compile(r"^\s*call\s+OSAPI_MEM_MOVABLE\b", re.M)
+# grep for the macro called it a gap. Matched on the REGION's shape - DX = CS
+# and a proc in AX, crt0's below - and not on the slot name, because the same
+# slot declares every DATA claim too: SHEET un-declared its region and kept
+# five claim calls, and a bare `call OSAPI_MEM_MOVABLE` counted those as the
+# region. A pin (`xor ax, ax`, wflink.inc's) is not a declaration either.
+REGION_RAW = re.compile(r"^\s*(?:mov\s+dx,\s*cs\s*\n\s*mov\s+ax,\s*[A-Za-z_.]\w*"
+                        r"|mov\s+ax,\s*[A-Za-z_.]\w*\s*\n\s*mov\s+dx,\s*cs)"
+                        r"\s*\n\s*call\s+OSAPI_MEM_MOVABLE\b", re.M)
 # ...and crt0's own, which must be matched EXACTLY rather than by the slot
 # name. crt0.asm calls OSAPI_MEM_MOVABLE twice - once for the region and once,
 # under CC_HAS_PARTS, for a part's claim - so "crt0 mentions the slot" is a

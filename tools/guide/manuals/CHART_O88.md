@@ -23,11 +23,11 @@ Chart reads files, so a chart of your own figures starts in Sheet:
 
 1. In Sheet, put the numbers in a column. A heading above them is fine:
    labels are skipped.
-2. Save the sheet with **File > Save As...**. Any of Sheet's three formats
-   will do.
+2. Save the sheet with **File > Save As...** as **Normal**, **SYLK** or
+   **DIF**, so the file's name ends in `.BIF`, `.SLK` or `.DIF`.
 3. Start Chart, choose **File > Open...** and pick the file.
 
-Sheet can also draw a chart of the selected column itself, with **Data >
+Sheet can also draw a chart of the selected cells itself, with **Data >
 Chart Column...**. Use that while you are still working on the figures, and
 Chart when you want to look at a saved file without opening Sheet.
 
@@ -41,7 +41,14 @@ column, and **Automatic** goes back to the leftmost one. Chart reads the
 file again from the disk when you choose, so keep the disk in the drive. If
 the column holds no numbers, Chart says `No data in that column.`
 
-Opening another file goes back to Automatic.
+**Named ranges.** When the file has names for blocks of cells, made in Sheet
+with **Formula > Define Name...** and saved as SYLK or Normal, the Data menu
+lists those names first, in place of Column A, Column B and so on. Choose a
+name to chart that block. The items after the last name keep their column
+labels.
+
+Opening another file goes back to Automatic, and the Data menu shows that
+file's names.
 
 ## Choosing the chart type
 
@@ -91,18 +98,21 @@ open yet, Chart says `No chart to export.`
 | File | Export as BMP... | saves the chart as a BMP picture |
 | Gallery | Area, Bar, Column, Line, Pie, Scatter, Combination | chooses the chart type |
 | Data | Automatic | charts the leftmost column of numbers |
-| Data | Column A to Column H | charts that column |
+| Data | Column A to Column H | charts that column. A file's named ranges take the first of these places |
 | Chart | About Chart | shows who made it |
 | Chart | Close | closes this Chart |
 
 ## Files
 
-Chart opens the three formats Sheet writes, and decides which by the file's
-extension:
+Chart opens three of the formats Sheet writes, and decides which by the
+file's extension:
 
 - `.SLK`, SYLK
 - `.DIF`, DIF
-- `.BIF`, Excel's BIFF format
+- `.BIF`, Excel's BIFF format, which Sheet calls Normal
+
+It does not read `.XLS`, CSV, text or dBASE files. To chart one, open it in
+Sheet and save it under a name ending in `.BIF`.
 
 It saves only BMP pictures. It never changes the spreadsheet file.
 
@@ -113,6 +123,8 @@ It saves only BMP pictures. It never changes the spreadsheet file.
   says `Not enough memory.`
 - A file with no numbers in it gives `No numeric data found.`, and a file
   Chart cannot make sense of gives `Could not read that file`.
-- Only columns A to H can be picked from the Data menu.
+- Only columns A to H, or up to eight named ranges, can be picked from the
+  Data menu.
+- From a workbook with several sheets, Chart reads the first sheet.
 - Chart cannot edit numbers. Change them in Sheet, save, and open the file
   again.
