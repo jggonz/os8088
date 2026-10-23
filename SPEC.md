@@ -217661,7 +217661,9 @@ set by the source; refused on a 32-48 kHz source).
 
 **Calibration** decodes the actual track from its start, timed by
 `pit_now`: the front end, GRANULE, and the feed's copy into the card's ring,
-plus the disk's share priced from the priming reads' measured cost per byte.
+plus the disk's share priced from the priming reads' measured cost per byte
+- which, for a track the hold has (§121.6.1), is the cost of a copy, as it
+will be while the track plays.
 A warm-up granule runs untimed first. **A probe is ARMED and starts two
 timer passes later** (`x3l_arm`): a document's play arms it in the very
 pass whose face update then repaints the whole new track, and a probe
@@ -217789,6 +217791,37 @@ sample for sample against x3sim; a finished file's bytes reaching a Covox
 one for one (`xtmp3eng`'s `covox`, QEMU's parallel-port trace; its pcspk
 renders only a square and cannot carry the speaker bracket). Not shown: the
 SB Pro's stereo on its own card, a real SB16, and anything listened to.
+
+#### 121.6.1 The hold: a live play reads no disk (shipped)
+
+The Video Player's rule for its desktop Live (§98.3.18.1), for the same
+reason: a read holds `sch_lock`, so the card plays its ring alone through
+it, and a floppy whose motor has stopped charges its spin-up to the next
+refill. Before a track's ladder or job (`x3_go`), `x3h_begin` reads **the
+whole MP3** into a hold:
+
+| hold | when | how |
+|---|---|---|
+| one XMS block (`X3HK_XMS`) | `OSAPI_XMEM_CAPS` has the file's KB | 32 KB `READ_SEQ` chunks into the look-ahead's claim, each `OSAPI_XMEM_COPY`'d up |
+| a conventional claim (`X3HK_CONV`) | no pool, the file at most `X3H_CAPKB` = 192 KB, the heap's largest run holds it and `X3H_MARGKB` = 96 KB stay free beside it, and the CPU is not an 8086 | the chunks read straight into it |
+| none | otherwise, and on every 8088 | the track streams as before (§121.6's 4 KB gulps) |
+
+The load is `MD_LOAD`, state **Loading NN%** (`X3ST_LOAD`): a pass of the
+window's timer reads chunks until about 110 ms have gone, so Stop is
+answered between passes. Then the ladder or the job starts as it would
+have. From then on aplook.inc's gulps are copies: its read is `AP_RSEQ`, which the
+Audio Player leaves `os88_rseq` (AUDIO.O88 is byte-identical) and XTMP3
+makes `x3_rseq`, a copy out of the hold for the held file and the disk for
+anything else (a finished WAV, `x3_readat`'s header and fingerprint reads).
+`[x3_nrseq]` counts the disk's gulps and `[x3h_ncopy]` the hold's.
+
+**The key** is the file's folder, volume and name. A track that opens with
+the same key keeps its hold (a replay, a seek, a step, a Decode first after
+Stop). Any other track, Stop, a load cut short and a failed read each free
+it, and the kernel frees both kinds with the instance. **The ceiling
+stands:** a conventional hold is the first thing given up. `x3_plan`,
+asked for a plan the 400,000 bytes cannot hold beside it, frees the hold
+and plans again, and the track streams.
 
 ### 121.7 Decode first: choose a drive, convert the whole track, then play (shipped)
 
@@ -218239,7 +218272,7 @@ replace.
 | | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
 | 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.39, XT Standard 0.71, XT Fast 0.78 (round 6; before 0.30, 0.73, 0.78) | Decode first, on ORIGINAL | the dialog; 11.43 s | 383 KB (calibrating) |
 | | C128 | Quarter 0.16, XT Standard at 4 0.28 (round 6; before: Quarter 0.15, XT Standard 0.10, XT Fast 0.21) | Decode first, on QUARTER | the dialog; 6.67 s | 307 KB |
-| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **no underrun** with a 4 KB gulp asked for as soon as it fits (§121.6; xtmp3/int round 4: calibration 6.20 s, probe 2.02x). It was one underrun, stepped to XT FAST, on round 3's 16 KB grant with a refill every half ring (calibration 5.76 s), and 11 on round 2's 8 KB grant | 350 KB |
+| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 1.06, XT Standard 2.71 (round 7: the probes no longer pay the floppy; before 0.96, 2.14) | **live XT STANDARD**, 11,025 Hz mono 8-bit | **no underrun, from the HOLD** (§121.6.1, round 7: XMS, 0 disk gulps all session; calibration 4.39 s after the load). Before the hold: no underrun with a 4 KB gulp asked for as soon as it fits (§121.6; xtmp3/int round 4: calibration 6.20 s, probe 2.02x). It was one underrun, stepped to XT FAST, on round 3's 16 KB grant with a refill every half ring (calibration 5.76 s), and 11 on round 2's 8 KB grant | 350 KB |
 | | C128 | Quarter 0.37, XT Standard at 4 0.63 (round 6; before: Quarter 0.37, XT Standard 0.47, XT Fast 0.51) | Decode first, on QUARTER | the dialog; 5.44 s | 269 KB |
 | 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB |
 | | C128 | Quarter 0.97, **XT Standard at 4 1.27** (round 6, xtmp3/int; before: Quarter 0.97, XT Standard 1.15, XT Fast 1.16, Decode first) | **live XT STANDARD at 4**, 11,025 Hz mono 8-bit | **no underrun**, the song played out; calibration 4.00 s | 275 KB |

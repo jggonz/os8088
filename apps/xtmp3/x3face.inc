@@ -70,7 +70,8 @@ X3ST_PAUSED equ 7                   ; Paused
 X3ST_BUFFER equ 8                   ; Buffering
 X3ST_DONE   equ 9                   ; Finished
 X3ST_ERROR  equ 10                  ; Error: X3S_ERR says what
-X3ST_N      equ 11
+X3ST_LOAD   equ 11                  ; Loading NN% (the hold, SPEC.md 121.6.1)
+X3ST_N      equ 12
 
 X3Q_AUTO    equ 0                   ; the quality ladder (SPEC.md 121.5)
 X3Q_ORIG    equ 1
@@ -1907,8 +1908,11 @@ x3f_e_sbst:                         ; the state, or the advanced figures
     mov si, [x3_stnames+bx]
     call x3_putn
     cmp byte [x3_st+X3S_STATE], X3ST_DECODE
+    je .pct
+    cmp byte [x3_st+X3S_STATE], X3ST_LOAD
     jne .err
-    mov al, [x3_st+X3S_PCT]         ; 'Decoding to disk 42%'
+.pct:
+    mov al, [x3_st+X3S_PCT]         ; 'Decoding to disk 42%', 'Loading 42%'
     call x3f_pct
     jmp short .key
 .err:

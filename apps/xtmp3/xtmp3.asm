@@ -1704,7 +1704,7 @@ x3_q_xtspch:  db 'XT SPEECH', 0
 
 x3_stnames: dw x3_t_idle, x3_t_check, x3_t_choose, x3_t_decode, x3_t_ready
             dw x3_t_live, x3_t_file, x3_t_paused, x3_t_buffer, x3_t_done
-            dw x3_t_error
+            dw x3_t_error, x3_t_load
 %if ($ - x3_stnames) / 2 != X3ST_N
 %error "x3_stnames has a name for every state"
 %endif
@@ -1719,6 +1719,7 @@ x3_t_paused:  db 'Paused', 0
 x3_t_buffer:  db 'Buffering', 0
 x3_t_done:    db 'Finished', 0
 x3_t_error:   db 'Error: ', 0
+x3_t_load:    db 'Loading ', 0
 
 x3_ablines:
     dw x3_ab1, x3_ab2, x3_ab3, 0

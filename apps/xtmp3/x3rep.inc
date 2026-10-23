@@ -35,7 +35,7 @@
 ;   MD mm QUAL qq RATE rrrr CHANS cc BITS bb FLAGS ff
 ;                               the mode and x3_st's output, at the write
 ;   UNDER uuuu PEAK pppp GRANS gggg
-;   RING rrrr LA llll RD dddd UG gggg UK kk
+;   RING rrrr LA llll RD dddd UG gggg UK kk HK hh DISK nnnn
 ;   PLAYED pppppppp DLEN dddddddd SRCDONE ss GOT gggggggg
 ;                               the card's bytes (x3_played), the source's
 ;                               data length, its end flag and bytes read
@@ -43,7 +43,9 @@
 ;                               (x3_lasz) and its gulp cap (x3_rdmax), bytes;
 ;                               the first underrun's x3_grans and kind (55h
 ;                               'U' the card ran dry, 53h 'S' the look-ahead
-;                               starved; 0 none)
+;                               starved; 0 none), the hold's kind (0 none,
+;                               1 XMS, 2 conventional) and the look-ahead's
+;                               gulps read off the disk (x3_nrseq)
 ;   FREE0 kkkk AVAIL kkkk LARGEST kkkk
 ;                               the heap's free KB at launch (x3_free0), and
 ;                               OSAPI_MEM_AVAIL's total and largest run now
@@ -86,6 +88,8 @@ x3r_s_la:   db ' LA ', 0
 x3r_s_rd:   db ' RD ', 0
 x3r_s_ug:   db ' UG ', 0
 x3r_s_uk:   db ' UK ', 0
+x3r_s_hk:   db ' HK ', 0
+x3r_s_hn:   db ' DISK ', 0
 x3r_s_pl:   db 13, 10, 'PLAYED ', 0
 x3r_s_dl:   db ' DLEN ', 0
 x3r_s_dn:   db ' SRCDONE ', 0
@@ -292,6 +296,14 @@ x3r_write:
     call x3_put
     mov al, [x3r_ukind]
     call x3c_hex2
+    mov si, x3r_s_hk                ; the hold's kind (0 none, 1 XMS, 2
+    call x3_put                     ; conventional) and the gulps read off
+    mov al, [x3h_kind]              ; the disk all session (x3_nrseq)
+    call x3c_hex2
+    mov si, x3r_s_hn
+    call x3_put
+    mov ax, [x3_nrseq]
+    call x3c_hex4
     mov si, x3r_s_pl                ; the card's bytes, the data's length,
     call x3_put                     ; and the source's end flag and count
     mov ax, [x3_played+2]

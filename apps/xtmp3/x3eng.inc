@@ -131,6 +131,7 @@ MD_SPK      equ 4                   ; a finished WAV on the speaker / Covox
 MD_CHOOSE   equ 5                   ; the decode-first dialogs are up
 MD_CONV     equ 6                   ; converting
 MD_STEP     equ 7                   ; live, draining the ring for a rung change
+MD_LOAD     equ 8                   ; the track read into its hold (x3hold.inc)
 
 ; --- a rung's row (x3_rungs): backend, profile, divisor ---------------------------
 RG_BE       equ 0                   ; X3K_STD / X3K_XT
@@ -274,11 +275,13 @@ apw_e_io:     db 'Cannot read the file', 0
 
 %define APLOOK_GET
 %define APLOOK_REFILL
+%define AP_RSEQ x3_rseq             ; a held track's gulps: copies (x3hold.inc)
 %include "aplook.inc"
 %undef APLOOK_GET
 %undef APLOOK_REFILL
 %include "os88rseq.inc"
 %include "os88pit.inc"
+%include "x3hold.inc"               ; THE HOLD: a live play reads no disk
 %include "sndpkg.inc"               ; SNDV_MIX*: the knob's mixer verbs
 
 ;
@@ -389,6 +392,10 @@ x3_e_tick:
     mov byte [x3_job], WJ_CAL
 .na:
     call x3_needles                  ; the worker's peaks into the needles
+    cmp byte [x3_md], MD_LOAD       ; LOADING: the hold's chunks (x3hold.inc)
+    jne .nld
+    jmp x3h_tick
+.nld:
     cmp byte [x3_md], MD_IDLE       ; IDLE: a queued entry whose probe was not
     jne .nq                         ; had (QEF_AGAIN) is asked again, one a
     call x3_qagain                  ; pass
@@ -449,6 +456,11 @@ x3_go:
     jc .ladder
     jmp x3_file_play                ; ...played, nothing decoded
 .ladder:
+    call x3h_begin                  ; THE HOLD (SPEC.md 121.6.1): CF = 1 the
+    jnc .lad                        ; track loads first - x3h_tick goes on to
+    clc                             ; the ladder when it is in
+    ret
+.lad:
     jmp x3l_start                   ; CHECK: the ladder (decode first, too,
                                     ; wants its profile and its speed)
 .err:
@@ -552,6 +564,7 @@ x3_e_resume:
 ; -----------------------------------------------------------------------------
 x3_e_stop:
     call x3_stopall
+    call x3h_free                   ; (Stop gives the hold back, SPEC 121.6.1)
     mov al, X3ST_READY
     cmp byte [x3_st+X3S_CUR], 0xFF
     jne .s
@@ -566,6 +579,10 @@ x3_e_stop:
 ; claims. The decoder's parts stay (a play that follows wants them). Keeps BX
 x3_stopall:
     push bx
+    cmp byte [x3_md], MD_LOAD       ; a load cut short: its hold is no use
+    jne .nld
+    call x3h_free
+.nld:
     cmp byte [x3_md], MD_CONV
     jne .nconv
     call x3c_abort                  ; (x3conv.inc) the temporary file deleted
@@ -3802,6 +3819,19 @@ x3_reuse:
 ;      fits, AX = the sentence
 ; -----------------------------------------------------------------------------
 x3_plan:
+    call x3_plan0                   ; THE CEILING STANDS (SPEC.md 121.10): a
+    jnc .o                          ; plan that does not fit beside a
+    cmp byte [x3h_kind], X3HK_CONV  ; CONVENTIONAL hold gives the hold up,
+    jne .no                         ; and the track streams
+    call x3h_free
+    call x3_plan0
+.o:
+    ret
+.no:
+    stc
+    ret
+
+x3_plan0:
     push bx
     push cx
     push dx
@@ -5573,6 +5603,20 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_lamask, 2                ; refill mark (x3_lasize)...
     X3B x3_lalw, 2
     X3B x3_rdmax, 2                 ; aplook's gulp cap (AP_RD_CHUNK)
+    X3B x3h_kind, 1                 ; THE HOLD (x3hold.inc): none, XMS, conv
+    X3B x3h_on, 1                   ; ...whole
+    X3B x3h_base, 4                 ; ...its XMS base, or its segment
+    X3B x3h_ckb, 2                  ; ...a conventional one's KB
+    X3B x3h_size, 4                 ; ...the file's bytes
+    X3B x3h_have, 4                 ; ...and how many are in
+    X3B x3h_dir, 2                  ; ...its key: folder, volume, name
+    X3B x3h_vol, 1
+    X3B x3h_name, 13
+    X3B x3h_cur, FSEQ_SIZE          ; ...the load's own cursor
+    X3B x3h_t0, 4                   ; ...a pass's start
+    X3B x3h_tw, 2                   ; ...an odd last byte's word
+    X3B x3h_ncopy, 2                ; gulps copied out of it
+    X3B x3_nrseq, 2                 ; gulps read off the disk (aplook's)
     X3B x3_laxkb, 2                 ; ...and a conversion's stage after it
     X3B x3_bseg, 2                  ; ...its segment...
     X3B x3_bvec, 4                  ; ...a verb's far vector (UI task's)...
