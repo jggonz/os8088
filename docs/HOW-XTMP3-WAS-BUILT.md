@@ -425,3 +425,78 @@ guide render, the kern_mega apps disks built and measured, and the derived
 disk lists printed through make. The pictures are QEMU's (VGA, SB16) and
 MartyPC's (VGA XT). No soak row and no `test-full` was run; those wait for
 the final pass.
+
+## 2026-10-22 — the field: the whole player on the XT, and the ladder up to a Pentium
+
+Every number before this day timed a PART. This was the first time anyone
+measured XTMP3 itself, doing what a user does: open a track, let Auto
+decide, decode first, and play.
+
+**The instrument came first, and it changed once.** MartyPC's XT
+(`os8088_xt_vga_hdd_sb`: VGA, XT-IDE, a DSP 2.01) boots off a VHD holding
+the system, the package and one MP3. The first version sampled the 8088's
+IP at host-timed intervals, and it said the front end took 28% of a
+conversion. That figure was wrong. A sample past the end of the FRONT
+part's 24 KB image had been charged to its last label, a data table called
+`xf_blk`, and the code really running there was the face's. Bounding each
+region by its image fixed it.
+
+The second version drives the machine with `advance` in pseudo-random steps
+of guest cycles. That makes every sample uniform in GUEST time, and the
+breakpoints on the engine's procs land in the same steps as exact stamps.
+With the same buckets, the two samplers agreed to within a point, so the
+host's speed was not biasing the first one. The guest-uniform one is what `tests/xtmp3xt.py`
+keeps.
+
+**Observed (MartyPC, cycle counter):**
+- XT Standard converted the 10 s, 11 kHz test track in **182.8 s
+  (0.055x)**. The part alone is 0.166x. XT Fast took 169.3 s (0.060x), XT
+  Speech 118.3 s (0.085x).
+- Every WAV, read off the disk image afterwards, was **bit for bit** what
+  `tools/x3simxt.py` makes after the trim. So was the Quarter conversion of
+  the 44.1 kHz track, against `tools/x3sim.py`.
+- Broken on purpose (XT Standard's WAV held to XT Fast's model), the row
+  failed at byte 6.
+
+**Where the time went is the day's finding.** The face took 44.5% of the
+conversion's cycles, more than the decoder's 38%. While XTMP3 decodes, the
+VU meter follows the decoded audio. On a 4.77 MHz XT with a VGA each needle
+redraw costs about 140 ms, at most every five ticks. A knob turn costs
+400 ms. Playing the finished WAV, the face takes 55-74% of the machine. The
+Sound Blaster's DMA carries the sound, so nothing was heard: no underrun,
+and no granule decoded. The decode-first dialog's estimate ("about 1:31")
+is therefore half the real three minutes, because the probe never paid for
+the face.
+
+**Calibration** took 16.1 s on the XT before the dialog: three probes, each
+mostly the part's fetch and OPEN rather than its timed granule. X3S_PEAK
+during calibration read 402 KB, which is over SPEC.md §121.10's
+400,000 bytes. The conversion's own peak, 386 KB, is inside.
+
+**The ladder on 86Box** was run with no hands. A system floppy's
+`\AUTOSTRT` opens the track, a report build of the package writes what
+it decided to the floppy, and the host reads the floppy image. The 486's
+first boot stopped at "CMOS system options not set - press F1", which
+nobody here can press. The fix was to borrow a checksum-valid CMOS image of
+the same board, set the drive types and re-sum it.
+
+**Observed (86Box, the emulated clock):**
+- The XT and the 286 decode first on both tracks. The 286's best rung on
+  11 kHz mono was XT Fast at 0.80x.
+- The 386 plays the 11 kHz track live on XT Standard. It underran once and
+  stepped down to XT Fast, as the contract says it should.
+- The 486 plays 11 kHz on Original. The 44.1 kHz stereo track sent it to
+  XT Standard live, and that ran out of memory. The engine does not step
+  past a rung whose claims fail, so a 486 cannot play that file.
+- The Pentium-133 plays it on Quarter.
+- On the XT the two instruments agree: 0.03 / 0.11 / 0.11 against
+  0.03 / 0.11 / 0.12. That disagreement sits exactly on the offline pick's
+  1/8 threshold.
+
+**Sent to the integration track:** rest the needles during a conversion;
+step on, or decode first, when a rung's claims fail; the calibration peak;
+the estimate.
+
+**Tested where:** MartyPC (cycles) and 86Box (its emulated clock); QEMU
+only to watch the report file get written. No real machine has run any of
+it.
