@@ -6289,6 +6289,32 @@ $(BUILD)/xtmp3.bin: apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
 $(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@
 
+# --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
+# The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
+# front end's (tools/x3fronttab.py: x3ftab.inc), each after its --selfcheck,
+# and the two parts this track ships: x3front.bin (FRONT, eager: the shared
+# front end) and x3stdp.bin (STANDARD, lazy: the reconstruction). Their gate
+# is tests/x3bench/x3bench.py (the x3stdexact soak row), on QEMU, against
+# tools/x3sim.py's tests/xtmp3/X3SIM.txt.
+$(BUILD)/x3std.inc: tools/x3tables.py tools/x3tab_iso.py | $(BUILD)
+	python3 tools/x3tables.py --selfcheck
+	python3 tools/x3tables.py --out $(BUILD)
+$(BUILD)/x3std.bin: $(BUILD)/x3std.inc
+	@test -f $@ || python3 tools/x3tables.py --out $(BUILD)
+$(BUILD)/x3ftab.inc: tools/x3fronttab.py tools/x3tab_iso.py tools/x3tables.py | $(BUILD)
+	python3 tools/x3fronttab.py --selfcheck
+	python3 tools/x3fronttab.py --out $@
+X3PARTDEP := apps/xtmp3/x3gran.inc apps/xtmp3/x3crc.inc $(BUILD)/x3std.inc \
+             $(BUILD)/x3std.bin $(BUILD)/x3ftab.inc
+$(BUILD)/x3front.bin: apps/xtmp3/x3front.asm $(X3PARTDEP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
+		-o $@ apps/xtmp3/x3front.asm
+	@echo "x3front: $(call FILESIZE,$@) bytes"
+$(BUILD)/x3stdp.bin: apps/xtmp3/x3std.asm $(X3PARTDEP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
+		-o $@ apps/xtmp3/x3std.asm
+	@echo "x3stdp: $(call FILESIZE,$@) bytes"
+
 # --- XTMP3's XT BACKEND (S7; SPEC.md 121.3, 121.4, 121.10; docs/xtmp3/XT.md):
 # x3xt.asm is a far-called OP_SEG part and XTGEN.BIN its generator input, an
 # asset its OPEN expands into the profile's table pack (tools/x3xttab.py's
