@@ -6289,9 +6289,9 @@ $(BUILD)/xtmp3.bin: apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
 	@echo "xtmp3:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin $(BUILD)/x3front.bin $(BUILD)/x3stdp.bin \
-                    tools/os88pkg.py $(PKGZSTAMP)
+                    $(BUILD)/x3xt.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@ --part $(BUILD)/x3front.bin \
-		--part $(BUILD)/x3stdp.bin --part-compress lz4
+		--part $(BUILD)/x3stdp.bin --part $(BUILD)/x3xt.bin --part-compress lz4
 
 # --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
 # The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
@@ -6350,8 +6350,6 @@ $(BUILD)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc 
 .PHONY: x3xt
 x3xt: $(BUILD)/x3xt.bin $(BUILD)/XTGEN.BIN
 xtmp3: x3xt
-# every `make` assembles the part, until the package's parts table carries it
-all: $(BUILD)/x3xt.bin $(BUILD)/XTGEN.BIN
 
 # INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
 # system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and
