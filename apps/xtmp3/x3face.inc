@@ -179,6 +179,29 @@ X3_C1H      equ 88
 X3_C2H      equ 172
 
 ; =============================================================================
+; THE ART PART - every picture, font and line table the face draws from
+; =============================================================================
+; tools/os88x3art.py lays them out as ONE part of XTMP3.O88 (OP_ASSET, SPEC.md
+; 20.12), so they cost the primary segment nothing but this: x3art.inc, whose
+; x3art_ labels are OFFSETS in the part, and [x3_artseg]. Every composer that
+; reads a picture (x3d_bor, x3d_bpic, x3d_picw, x3d_bstr, x3d_bdigs,
+; x3d_line4, and here the dial faces, the needle, the scale and the knob's
+; planes) loads ES from [x3_artseg] ONCE A CALL - a glyph, a picture, a field
+; - and never once a byte. Eager, because every adapter draws from it at the
+; first paint, and LZ4 on the disk (OP_COMP).
+X3_PART_ART equ 0                   ; its row in xtmp3.asm's part table
+%define X3_ARTFLAGS OP_COMP
+
+; x3f_artseg - [x3_artseg] = the art part's segment: once, from the entry
+; proc after op_load. The part's claim is the carve's, and a claim is born
+; pinned (SPEC.md 66), so the segment never moves. clobbers AX
+x3f_artseg:
+    mov al, X3_PART_ART
+    call op_seg
+    mov [x3_artseg], ax
+    ret
+
+; =============================================================================
 ; SETUP
 ; =============================================================================
 
@@ -1000,13 +1023,16 @@ x3f_dgrow:
 ; x3f_nend - BL = a needle position, SI = the dials -> CX, DX = its end.
 ; clobbers BX
 x3f_nend:
+    push es
+    mov es, [x3_artseg]             ; the table is the art part's
     xor bh, bh
     shl bx, 1
     add bx, [si+DG_ND]
-    mov cl, [bx]
+    mov cl, [es:bx]
     xor ch, ch
-    mov dl, [bx+1]
+    mov dl, [es:bx+1]
     xor dh, dh
+    pop es
     ret
 
 ; x3f_dmode - CX = a dial -> AL = 0 a VU meter / 1 the BUFFER gauge, AH = the
@@ -1114,6 +1140,8 @@ x3f_dface:
 .build:
     or [x3f_fok], al
     push di
+    push es
+    mov es, [x3_artseg]             ; the masks are the art part's
     mov cx, X3ART_DIALF_W           ; the whole face in the canvas...
     mov dx, [si+DG_H]
     xor al, al
@@ -1125,7 +1153,7 @@ x3f_dface:
 .zc:
     mov [x3f_dzone], al
     mov bx, [si+DG_K]               ; (one stride for both masks)
-    mov al, [bx+3]
+    mov al, [es:bx+3]
     xor ah, ah
     mov [x3f_mst], ax
     xor bx, bx                      ; BX = the row
@@ -1158,12 +1186,12 @@ x3f_dface:
     and si, 7
     mov ch, [x3f_bitm+si]
     mov si, [x3f_rp]
-    test [si+bx], ch
+    test [es:si+bx], ch
     jz .nz
     mov dl, [x3f_dzone]
 .nz:
     mov si, [x3f_kp]
-    test [si+bx], ch
+    test [es:si+bx], ch
     jz .nk
     xor dl, dl                      ; CBLACK
 .nk:
@@ -1193,6 +1221,7 @@ x3f_dface:
     inc bx
     cmp bx, [si+DG_H]
     jb .row
+    pop es
     mov byte [x3d_pmode], X3P_C4    ; ...the printed scale...
     mov byte [x3d_pcol], CBLACK
     call x3f_dscale
@@ -1226,7 +1255,10 @@ x3f_dial1:
     call x3d_bnew
     push si
     mov si, [si+DG_BW]              ; the face's rows dy0.., ORed in
-    mov cl, [si+3]
+    push es
+    mov es, [x3_artseg]
+    mov cl, [es:si+3]
+    pop es
     xor ch, ch
     mov ax, [x3f_dy0]
     mul cx
@@ -1252,26 +1284,29 @@ x3f_dial1:
 ; target is set (a partial band clips it). in SI = the dials. keeps SI
 x3f_dscale:
     push si
+    push es
+    mov es, [x3_artseg]             ; the marks and their glyphs: the art part
     mov di, [si+DG_SVU]
     cmp byte [x3f_dmd], 0
     je .sc
     mov di, [si+DG_SBUF]
 .sc:
-    cmp byte [di], 0xFF
+    cmp byte [es:di], 0xFF
     je .out
-    mov al, [di]                    ; a mark: x, y, its text
+    mov al, [es:di]                 ; a mark: x, y, its text
     xor ah, ah
-    mov bl, [di+1]
+    mov bl, [es:di+1]
     xor bh, bh
     add di, 2
 .ch:
-    mov cl, [di]
+    mov cl, [es:di]
     inc di
     or cl, cl
     jz .sc
     call x3f_ddig                   ; AX advanced
     jmp short .ch
 .out:
+    pop es
     pop si
     ret
 
@@ -1291,14 +1326,15 @@ x3f_needle:
     ret
 
 ; x3f_ddig - CL = a scale character, plotted at AX, BX through x3d_plot (so a
-; partial canvas clips it); AX past it (4). clobbers CX, DX
+; partial canvas clips it); AX past it (4). ES = [x3_artseg] (x3f_dscale's).
+; clobbers CX, DX
 x3f_ddig:
     push si
     push di
     mov dl, cl                      ; the glyph in the dial-digit face
     xor dh, dh
     mov si, dx
-    mov dl, [x3art_dd_ix + si - X3ART_FONT_FIRST]
+    mov dl, [es:x3art_dd_ix + si - X3ART_FONT_FIRST]
     or dl, dl
     jz .adv
     dec dl
@@ -1310,7 +1346,7 @@ x3f_ddig:
     push bx
     mov dh, 5
 .row:
-    mov dl, [si]
+    mov dl, [es:si]
     inc si
     push ax
     mov cx, 3
@@ -1466,6 +1502,8 @@ x3f_klines:
 x3f_knob4:
     push si
     push bp
+    push es
+    mov es, [x3_artseg]             ; the planes are the art part's
     mov di, x3_work                 ; DI = the canvas row
     mov ax, [si+KG_KY]
     mul word [x3d_cvst]
@@ -1476,7 +1514,7 @@ x3f_knob4:
     mov cx, [si+KG_ROWS]
     mov bx, [si+KG_P1]
     mov bp, [si+KG_P0]
-    mov dl, [ds:bp+3]               ; (DS: BP alone would address SS)
+    mov dl, [es:bp+3]               ; (ES: BP alone would address SS)
     xor dh, dh
     mov [x3f_kst], dx
     add bx, 4
@@ -1488,8 +1526,8 @@ x3f_knob4:
     push bp
     mov cx, X3ART_KNOBF_W / 8       ; eight pixels a step: four canvas bytes
 .oct:
-    mov al, [ds:bp]                 ; plane 0 (DS: BP would address SS)
-    mov ah, [bx]                    ; plane 1
+    mov al, [es:bp]                 ; plane 0 (ES: BP would address SS)
+    mov ah, [es:bx]                 ; plane 1
     push cx
     mov cx, 4
 .pair:
@@ -1516,6 +1554,7 @@ x3f_knob4:
     add bp, [x3f_kst]
     add di, [x3d_cvst]
     loop .row
+    pop es
     pop bp
     pop si
     ret

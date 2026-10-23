@@ -30,9 +30,9 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'XTMP3', x3_entry, 3
-                                    ; flags: bit 0 the icon, bit 1 the
-                                    ; association block (SPEC.md 54.6)
+    OS88_HEADER 'XTMP3', x3_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_PARTS
+                                    ; the icon, the association block (SPEC.md
+                                    ; 54.6), and parts (SPEC.md 20.12)
     OS88_ICON16                     ; a little stereo deck: an LCD, a knob
     ; --- mask ---
     dw 0x7FFE, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF
@@ -46,6 +46,9 @@
     db 1
     OS88_ASSOC_EXT 'MP3'
     OS88_ASSOC16_END
+
+%include "os88parts.inc"            ; the package's parts (SPEC.md 20.12):
+                                    ; the table is at the image's tail
 
 X3_TICK     equ 5                   ; ticks between passes: the demo's clock,
                                     ; and the needles' 3.6 a second
@@ -140,6 +143,11 @@ X3F_FACESZ  equ (X3ART_DIALF_W / 2) * X3ART_DIALF_H  ; a colour dial face
 ; opened on joins the queue at the first tick.
 ; -----------------------------------------------------------------------------
 x3_entry:
+    push es                         ; the parts, FIRST (SPEC.md 20.12): SI is
+    call op_load                    ; still the kernel's name for this file,
+    pop es                          ; and OSAPI_ARG_FILE reads through ES
+    jc x3_ret                       ; refused: a toast has said why
+    call x3f_artseg                 ; the face's pictures' segment
     call OSAPI_ARG_FILE             ; an .MP3? CF = 1: launched empty
     jc .plain
     mov di, x3_argname              ; SI -> its name in KERNEL_SEG: copied out
@@ -1652,6 +1660,12 @@ x3_ab1:     db 'XTMP3 for os8088', 0
 x3_ab2:     db 'MP3 at the best quality', 0
 x3_ab3:     db 'this machine can sustain', 0
 
+; THE PART TABLE (SPEC.md 20.12.3). Row X3_PART_ART is the face's pictures
+; and fonts (tools/os88x3art.py's build/x3art.bin; x3art.inc is its labels'
+; offsets): eager, because every adapter draws from it from the first paint
+OS88_PARTS_BEGIN 1
+    OS88_PART OP_ASSET, X3_ARTFLAGS                     ; 0  the face's art
+OS88_PARTS_END
 %include "x3art.inc"
 
 %define OS88UI_ABOUT
@@ -1660,12 +1674,13 @@ x3_ab3:     db 'this machine can sustain', 0
 %include "os88ui.inc"
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5), allocated in order --------------------
-%assign X3B_AT 0
+%assign X3B_AT 0                    ; (after the parts standard's OP_BSS)
 %macro X3B 2                        ; name, bytes
-%1 equ os88_image_end + X3B_AT
+%1 equ os88_image_end + OP_BSS + X3B_AT
 %assign X3B_AT X3B_AT + (%2)
 %endmacro
     X3B x3_st, X3S_SIZE             ; THE STATE RECORD (x3face.inc)
+    X3B x3_artseg, 2                ; the art part's segment (x3f_artseg)
     X3B x3_win, 2                   ; our window
     X3B x3_lp, 2                    ; the layout record
     X3B x3_pband, 2                 ; the primary's desktop band
@@ -1748,5 +1763,5 @@ x3_ab3:     db 'this machine can sustain', 0
     X3B x3f_fvu, X3F_FACESZ         ; the colour dial faces, VU and BUFFER
     X3B x3f_fbuf, X3F_FACESZ
     X3B x3_work, X3_WORKSZ          ; the band / the canvas
-    OS88_BSS X3B_AT
+    OS88_BSS OP_BSS + X3B_AT
     OS88_IMAGE_END
