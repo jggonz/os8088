@@ -711,7 +711,10 @@ def main():
         write_golden()
         return 0
     if a.check:
-        return 1 if check(a.all) else 0
+        bad = check(a.all)
+        if a.all:
+            bad += G.fullcheck(True)
+        return 1 if bad else 0
     if a.quality:
         quality(names=tuple(a.only) if a.only else GOLDEN_FIXTURES, out=a.json)
         return 0

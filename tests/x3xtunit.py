@@ -5,13 +5,19 @@ model (tools/x3simxt.py), in Unicorn's x86 core (SPEC.md 121.4).
     python3 tests/x3xtunit.py [--profile P ...] [--fixture F ...] [--granules N]
                               [--expand] [--synthetic N] [-v]
 
-  --expand     OPEN each profile and compare every expanded table, byte for
-               byte, with tools/x3xtgen.py's expanded() (and the refusals:
-               a damaged XTGEN.BIN, a bad profile or divisor)
-  default      decode fixtures granule by granule through GRANULE and compare
-               each granule's PCM with the model's
+  --expand     CAPS and OPEN for each profile, every expanded table compared
+               byte for byte with tools/x3xtgen.py's expanded(); every
+               X3E_ refusal (x3gran.inc); a damaged XTGEN.BIN and an
+               unbiased recurrence caught by the Fletcher check; the S16
+               format and the gain against their definitions
+  --fixture    decode fixtures granule by granule through GRANULE and compare
+               each granule's PCM, CX, AX and STATS with the model's
   --synthetic  N random records with disagreeing block types and random
                plans, to reach the split path no LAME fixture takes
+  (none)       all three: four fixtures, 30 synthetic granules a profile
+
+Every call is checked against x3gran.inc's contract: the registers kept
+but AX and the outputs, DF clear, IF untouched, at most 64 bytes of stack.
 
 A design-time check of the part's arithmetic: the instruction set Unicorn
 runs is a superset of the 8086's, so `cpu 8086` in the source is what keeps
@@ -454,7 +460,7 @@ def synthetic(image, prof, count, seed, verbose):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--profile', nargs='*', default=list(G.PNAMES))
-    ap.add_argument('--fixture', nargs='*', default=['X8K16.MP3', 'AFTERHRS.MP3'])
+    ap.add_argument('--fixture', nargs='*', default=None)
     ap.add_argument('--granules', type=int, default=0)
     ap.add_argument('--expand', action='store_true')
     ap.add_argument('--synthetic', type=int, default=0)
@@ -464,14 +470,15 @@ def main():
     os.makedirs(os.path.dirname(out), exist_ok=True)
     image = build(out)
     fails = 0
-    if a.expand:
+    every = not (a.expand or a.synthetic or a.fixture)
+    if a.expand or every:
         fails += check_expand(image, a.v)
         fails += check_formats(image, a.v)
-    elif a.synthetic:
+    if a.synthetic or every:
         for prof in a.profile:
-            fails += synthetic(image, prof, a.synthetic, 7, a.v)
-    else:
-        for name in a.fixture:
+            fails += synthetic(image, prof, a.synthetic or 30, 7, a.v)
+    if a.fixture or every:
+        for name in a.fixture or ('X8K16.MP3', 'IS22.MP3', 'MONO44.MP3', 'BBADSIDE.MP3'):
             for prof in a.profile:
                 f, n = run_fixture(image, name, prof, a.granules, a.v)
                 fails += f
