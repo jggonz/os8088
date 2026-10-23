@@ -16322,6 +16322,24 @@ SOAK = [
         "speaker colors/clock position, 30KB save-under, exact restore and cleanup",
         needs=("qemu", "nasm"), timeout=600,
         wants=("build/mixervesa.img", "build/mixplay.img")),
+    Row("sndfmt", "soak", py("tests/sndfmt.py"), 45.0,
+        "SPEC.md 34.5.5 on QEMU's SB16 (DSP 4.05, DMA 5): SND_CAP_STEREO and "
+        "SND_CAP_PCM16 published; verb 11's refusals (an unknown bit 7, a "
+        "format on a linear open 7, 4,500 Hz 2, an odd 16-bit ring 7); then "
+        "16-bit stereo, 8-bit stereo and 16-bit mono rings played from an "
+        "\\AUTOSTRT start, each opened, still playing at its end and at its "
+        "byte rate by verb 9 - and the card's own output, captured at "
+        "22,050 Hz stereo, carrying the right tone on the right side with no "
+        "crosstalk, the -35 dBFS 16-bit channel 45 dB clear of its residual",
+        needs=("qemu", "nasm"), timeout=300,
+        wants=("build/sndfmtsys.img", "build/sndfmt.img")),
+    Row("sndfmtmarty", "soak", py("tests/sndfmt.py", "--marty"), 60.0,
+        "SPEC.md 34.5.5's refusal machine: MartyPC's DSP 2.01 publishes "
+        "neither new caps bit, verb 11 answers 2 for every format and 7 for "
+        "an unknown bit, and a refused verb 11 holds nothing - the same "
+        "opens then succeed as 8-bit mono",
+        needs=("marty", "nasm"), timeout=600,
+        wants=("build/mixer360.img", "build/sndfmt360.img")),
     Row("mixerhost", "soak", py("tests/mixermodel.py"), 2.0,
         "SPEC.md 34.15: the shipped mixer assembly against independent Creative "
         "register maps, all percentages and asymmetric stereo, refusals before "
