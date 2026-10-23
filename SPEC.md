@@ -217867,7 +217867,8 @@ key's greying, its menu item and its keystroke. **The art is a part** (row 1,
 it once a call, never once a byte. The identity check (an incremental paint
 equals a full repaint, pixel for pixel) passed on FULL and C2 in colour and
 black and white on QEMU's VGA, MID on `VIDEO=ega` and on Hercules, and C1 on
-the CGA.
+the CGA, and again at the final build (70323ad3) on FULL colour, MID black
+and white and C1. The faces in `docs/xtmp3/` are that build's.
 
 **Mouse**: a queue row selects and a second click on the selection plays it;
 the scroll bar's arrows step a row and its trough a page; the wheel scrolls
@@ -218304,6 +218305,16 @@ third-party audio in them.
 
 **Open:**
 
+- **An MP3 on a hard disk fails every rung when XTMP3 was started from a
+  floppy** (found at the final build, 70323ad3, on QEMU): with the package
+  on B: and the song on a FAT16 C:, Auto goes to Decode first and Decode
+  and Play stops on `Error: Needs 390 KB, has 571 KB`, HAS above NEEDS.
+  The same song on B:, or the package on C: too, plays live. Not
+  diagnosed; the stated minimum is reporting a refusal that is not memory.
+- **The compact layouts print `STEREO44.1 kHz`**: STEREO is two characters
+  longer than MONO and runs into the rate.
+- **A queued song's title can stay its file stem** while a slow rung plays
+  (seen on QEMU's Hercules build under XT FAST).
 - **The offline pick sits on a knife edge on an XT**: XT Fast measured 11
   (x100) on MartyPC and 12 on 86Box against `X3_OFFMAX`'s 12, so the same
   machine class converts on XT Standard under one instrument and XT Fast
