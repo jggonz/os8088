@@ -772,3 +772,32 @@ was evidently refused. The engine then kept the stem for good. A failed
 probe now flags its entry, which is asked again when the player is idle,
 and a song's own open takes its tag. The `qagain` leg refuses the probe
 through the hook. The Hercules build itself was not re-run here.
+
+## 2026-10-23 — a finished WAV that played for one second
+
+The owner's 86Box IBM XT converted three songs correctly. Each finished WAV
+was whole on the disk, but each played for about a second and then stopped.
+The first guess was the part-fetch bug again: a refill reading the WAV by
+name in the wrong folder. QEMU could not reproduce that. The test was the
+owner's own disk image, booted from C:, with their folders, their cache
+index and a conversion saved into a third folder. Every byte played.
+
+**86Box could reproduce it**, because the X3REPORT build reports more now
+(PLAYED, DLEN, SRCDONE, GOT). The disk was a copy of the owner's with
+`\AUTOSTRT` links that open C:\MEDIA\NIGHTSIG.MP3, which their cache maps
+to C:\NIGHTSIG.WAV, on their machine's own `86box.cfg`. The first run
+read the whole file and played 16,384 of its 55,308 bytes, which is one
+card ring. Then SOUND.DRV's watchdog ended the stream, and XTMP3 took the
+end of the stream for the end of the song.
+
+The machine was the cause. The owner's Sound Blaster 2.0 sat at IRQ 5,
+and so did the `st506_xt` controller of the ST-225 fixed disk, which is
+the IBM XT's own assignment for it. The same run with the card on IRQ 7
+played every byte. XTMP3's part of the fix is to say so: a card that
+stops by itself mid-stream now shows `The sound card stopped`, and the
+queue stays where it is. A third run with the card back on IRQ 5 showed
+that message on the glass. Whether SOUND.DRV should refuse IRQ 5 on an XT
+whose fixed disk owns it is the driver's question, and it is left open.
+
+`xtmp3eng`'s `wavdirs` leg keeps the owner's folder layout honest on
+QEMU. It plays the finished WAV and then the cached one to the last byte.

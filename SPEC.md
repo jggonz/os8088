@@ -218344,6 +218344,15 @@ third-party audio in them.
   at 4-7, and never on a quiet host: QEMU's SB16 plays in host real time
   while a starved guest runs slow, and that stream's lead between a refill
   request and an empty card is about 240 ms. Not reproduced, not changed.
+- **A card that stops by itself is an error, and on an XT it can be the
+  configuration.** The owner's 86Box XT (SB 2.0 at 220h, IRQ 5, DMA 1,
+  beside an ST-225 on the `st506_xt` controller, whose IRQ is also 5)
+  played one 16 KB ring of a finished WAV, 16,384 of 55,308 bytes, and
+  then SOUND.DRV's watchdog ENDED the stream. XTMP3 called that Finished
+  and went on. It now says `The sound card stopped` (`x3_cstop`) and keeps
+  the queue where it is. With the card on IRQ 7 the same disk plays every
+  byte (one 86Box run each). SOUND.DRV's IRQ probe accepts IRQ 5 on an XT
+  whose fixed disk owns it: open, the driver's call (§34).
 - **86Box's 386 plays XT Standard live with no underrun** from a floppy
   (11 on round 2's 8 KB grant, 1 on round 3's 16 KB one, which stepped it to
   XT Fast). The report placed the one at granule 58 of 194, the card run

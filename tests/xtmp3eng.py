@@ -152,7 +152,8 @@ def pkgsym(name, stub=True):
 # -----------------------------------------------------------------------------
 class Rig(object):
     def __init__(self, leg, sb=False, hd=(), floppy=(), xcfg=None, keep=None,
-                 stub=True, extra=(), mach="pc,vmport=off", syscfg=None):
+                 stub=True, extra=(), mach="pc,vmport=off", syscfg=None,
+                 pkgdir=None, hdimg=None, boot="a"):
         """hd: up to two (geometry, files, folders, junk_bytes) - the first is
         C:, the second D:; floppy: B:'s files (with SYSTEM/APPDATA); xcfg:
         X3STUB.CFG's bytes, written beside XTMP3.O88 (B: when the package is
@@ -163,6 +164,9 @@ class Rig(object):
         self.extra = list(extra)        # QEMU arguments of the leg's own
         self.mach = mach
         self.syscfg = syscfg            # SYSTEM.CFG's bytes (else the SB's)
+        self.pkgdir = pkgdir            # C:'s folder for the package, else root
+        self.hdimg = hdimg              # a prepared C: image, copied as it is
+        self.boot = boot                # "c": C: is the boot volume (TESTHD)
         self.tmp = keep or tempfile.mkdtemp(dir=os.path.join(ROOT, "build"),
                                             prefix="x3e")
         self.sock = os.path.join(self.tmp, "q.sock")
@@ -206,6 +210,10 @@ class Rig(object):
                         os.path.join(t, "b.img"), "--size", "1440",
                         "--folder", "SYSTEM/APPDATA"] + bfiles, check=True,
                        capture_output=True)
+        if self.hdimg:                  # (a disk someone handed us)
+            img = os.path.join(t, "hd0.img")
+            shutil.copy(self.hdimg, img)
+            self.hds.append(img)
         for i, (geo, files, folders, junk) in enumerate(hd):
             img = os.path.join(t, "hd%d.img" % i)
             if isinstance(geo, dict):       # a FAT16 volume of a forced
@@ -217,7 +225,9 @@ class Rig(object):
                 continue
             files = list(files)
             if i == 0 and not floppy:
-                files = [pkg, cfgf] + files
+                files = ([pkg, cfgf] if not self.pkgdir else
+                         ["%s:%s" % (self.pkgdir, pkg),
+                          "%s:%s" % (self.pkgdir, cfgf)]) + files
             if junk:
                 jf = os.path.join(t, "JUNK.BIN")
                 with open(jf, "wb") as f:
@@ -251,7 +261,7 @@ class Rig(object):
             a += ["-device", "sb16,audiodev=a0", "-audiodev",
                   "wav,id=a0,path=%s" % self.wav]
         a += self.extra
-        a += ["-boot", "a", "-chardev", "msmouse,id=m0", "-serial",
+        a += ["-boot", self.boot, "-chardev", "msmouse,id=m0", "-serial",
               "chardev:m0", "-display", "none", "-qmp",
               "unix:%s,server,nowait" % self.sock, "-daemonize",
               "-pidfile", self.pidf]
@@ -1902,6 +1912,92 @@ def leg_offdir():
         r.done()
 
 
+def leg_wavdirs():
+    """A FINISHED WAV PLAYED TO ITS END from the owner's layout: XTMP3 in
+    C:\\XTMP3, the song in C:\\MEDIA, the WAV saved to C:\\ - a third
+    folder. An XT Standard conversion, its play, then the song again
+    through the cache: every byte of the WAV's data reaches the card, no
+    underrun, and Finished at the total. (The owner's 86Box XT played one
+    ring of it: its SB 2.0 shared IRQ 5 with the fixed disk, and the card
+    stopped - which XTMP3 now says, 'The sound card stopped'; QEMU's SB16
+    has no such conflict, so this leg is the layout's half)"""
+    leg = "wavdirs"
+    r = Rig(leg, sb=True, stub=False, pkgdir="XTMP3",
+            hd=[(HD0_GEO, ["MEDIA:" + fixture("AFTERHRS.MP3")],
+                 ["SYSTEM/APPDATA", "MEDIA", "XTMP3"], 0)])
+
+    def played():
+        return struct.unpack("<I", r.rd("x3_played", 4))[0]
+
+    def dlen():
+        e, o = (struct.unpack("<I", r.rd(n, 4))[0]
+                for n in ("ap_data_end", "ap_data_off"))
+        return e - o
+
+    def to_end(what):
+        r.until(lambda: r.st()["state"] == ST_DONE, what + " to its end",
+                60, 0.3)
+        s = r.st()
+        check(leg, what + ": every byte to the card, no underrun, Finished",
+              s["state"] == ST_DONE and played() >= dlen() > 0 and
+              s["under"] == 0 and s["elap"] == s["total"],
+              "state %d, %d of %d bytes, %d underruns, %d of %d s '%s'" % (
+                  s["state"], played(), dlen(), s["under"], s["elap"],
+                  s["total"], r.errtext()))
+    try:
+        xmcheck.dblclick(r.sock, ICON_X, DRIVE_Y["C"])
+        time.sleep(2.5)
+        xmcheck.dblclick(r.sock, ROW_X, ROW_Y0 + ROW_H * 2)    # XTMP3
+        time.sleep(2.5)
+        for _ in range(3):                  # '..', X3STUB.CFG, XTMP3.O88
+            xmcheck.dblclick(r.sock, ROW_X, ROW_Y0 + ROW_H * 2)
+            if r.until(lambda: r.x3seg() is not None, "XTMP3's window", 20):
+                r.seg = r.x3seg()
+                break
+        if not check(leg, "XTMP3 opens from C:\\XTMP3", r.seg is not None):
+            return
+        if not check(leg, "File > Add to Queue", r.menu_pick("File", 1)):
+            return
+        r.until(lambda: struct.unpack("<H", r.read(S("fdlg_win"), 2))[0],
+                "the Open dialog", 20)
+        wp = struct.unpack("<H", r.read(S("fdlg_win"), 2))[0]
+        wx, wy = struct.unpack("<HH", r.read(geom.KERNEL_SEG * 16 + wp + 2, 4))
+        time.sleep(1.5)                     # C:\MEDIA: '..', the song
+        xmcheck.dblclick(r.sock, wx + 70, wy + 47 + 16)
+        r.until(lambda: r.b("x3_qn") == 1, "the queue of one", 20)
+        r.key("spc")
+        r.until(lambda: r.st()["md"] == MD_LIVE, "live", 60, 0.2)
+        r.key("s")
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 20)
+        for _ in range(Q_XTSTD):
+            r.key("q")
+            time.sleep(0.4)
+        r.key("d")
+        conv_flow(r, leg)                   # the Save dialog stands in C:\
+        s = r.st()
+        if not check(leg, "converted into C:\\ and playing",
+                     s["state"] == ST_FILE and
+                     r.mcat(r.hds[0], "::AFTERHRS.WAV") is not None,
+                     "state %d '%s'" % (s["state"], r.errtext())):
+            return
+        to_end("the finished WAV")
+        r.key("q")                          # Auto again: the cache
+        time.sleep(0.4)
+        for _ in range(7):
+            if r.rd("x3_st", 3)[2] == 0:
+                break
+            r.key("q")
+            time.sleep(0.4)
+        r.key("spc")
+        r.until(lambda: r.st()["md"] in (MD_FILE, MD_LIVE, MD_CHOOSE),
+                "the second play", 30, 0.2)
+        check(leg, "the second play is the cache's WAV", r.st()["md"] ==
+              MD_FILE, "md %d" % r.st()["md"])
+        to_end("the cached WAV")
+    finally:
+        r.done()
+
+
 LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "cancel": leg_cancel, "full": leg_full, "stale": leg_stale,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
@@ -1910,7 +2006,7 @@ LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox,
         "probe32": leg_probe32, "shortmem": leg_shortmem,
         "rungfail": leg_rungfail, "offvol": leg_offvol,
-        "qagain": leg_qagain, "offdir": leg_offdir}
+        "qagain": leg_qagain, "offdir": leg_offdir, "wavdirs": leg_wavdirs}
 
 
 def main():

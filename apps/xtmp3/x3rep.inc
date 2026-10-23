@@ -36,6 +36,9 @@
 ;                               the mode and x3_st's output, at the write
 ;   UNDER uuuu PEAK pppp GRANS gggg
 ;   RING rrrr LA llll RD dddd UG gggg UK kk
+;   PLAYED pppppppp DLEN dddddddd SRCDONE ss GOT gggggggg
+;                               the card's bytes (x3_played), the source's
+;                               data length, its end flag and bytes read
 ;                               the card's ring (x3_rsz), the look-ahead
 ;                               (x3_lasz) and its gulp cap (x3_rdmax), bytes;
 ;                               the first underrun's x3_grans and kind (55h
@@ -55,7 +58,7 @@
 ; the whole report.
 ; =============================================================================
 
-X3R_BUFSZ   equ 384                 ; the longest report (an ERR, OFFLINE) is ~350
+X3R_BUFSZ   equ 512                 ; the longest report (an ERR, OFFLINE) is ~420
 
 x3r_s_name: db 'X3REPORT.TXT', 0
 x3r_s_head: db 'X3REPORT 1', 13, 10, 'EVENT ', 0
@@ -83,6 +86,10 @@ x3r_s_la:   db ' LA ', 0
 x3r_s_rd:   db ' RD ', 0
 x3r_s_ug:   db ' UG ', 0
 x3r_s_uk:   db ' UK ', 0
+x3r_s_pl:   db 13, 10, 'PLAYED ', 0
+x3r_s_dl:   db ' DLEN ', 0
+x3r_s_dn:   db ' SRCDONE ', 0
+x3r_s_got:  db ' GOT ', 0
 x3r_s_free: db 13, 10, 'FREE0 ', 0
 x3r_s_avl:  db ' AVAIL ', 0
 x3r_s_lrg:  db ' LARGEST ', 0
@@ -285,6 +292,33 @@ x3r_write:
     call x3_put
     mov al, [x3r_ukind]
     call x3c_hex2
+    mov si, x3r_s_pl                ; the card's bytes, the data's length,
+    call x3_put                     ; and the source's end flag and count
+    mov ax, [x3_played+2]
+    call x3c_hex4
+    mov ax, [x3_played]
+    call x3c_hex4
+    mov si, x3r_s_dl
+    call x3_put
+    mov ax, [ap_data_end]
+    mov dx, [ap_data_end+2]
+    sub ax, [ap_data_off]
+    sbb dx, [ap_data_off+2]
+    push ax
+    mov ax, dx
+    call x3c_hex4
+    pop ax
+    call x3c_hex4
+    mov si, x3r_s_dn
+    call x3_put
+    mov al, [ap_src_done]
+    call x3c_hex2
+    mov si, x3r_s_got
+    call x3_put
+    mov ax, [ap_got+2]
+    call x3c_hex4
+    mov ax, [ap_got]
+    call x3c_hex4
     mov si, x3r_s_free
     call x3_put
     mov ax, [x3_free0]

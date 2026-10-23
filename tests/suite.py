@@ -495,8 +495,10 @@ FAST = [
         "the LPT data port; its pcspk renders no PWM). And the package's "
         "parts fetched from its launch folder with the song on another "
         "drive (offvol) and in another folder of the same one (offdir), "
-        "live and converting, and a queued song whose probe was not had "
-        "given its title when idle (qagain)",
+        "live and converting, a queued song whose probe was not had "
+        "given its title when idle (qagain), and a finished WAV in a third "
+        "folder played to its last byte, then again through the cache "
+        "(wavdirs)",
         needs=("qemu", "nasm", "mtools", "numpy"), serial=True,
         timeout=2700,
         wants=("build/xtmp3s.o88", "build/xtmp3s.bin", "build/xtmp3.o88",

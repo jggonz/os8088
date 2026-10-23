@@ -1683,6 +1683,7 @@ x3_snd_open:
     mov [x3_lasthalf], al
     mov [x3_sended], al
     mov [x3_drvund], al
+    mov [x3_cstop], al
     mov [x3_rampst], al             ; (a step's ramp out is the old stream's)
     mov [x3_wslow], al              ; a new rung: a new window
     mov [x3_wund], al
@@ -2060,7 +2061,13 @@ x3_feed:
     cmp ax, [x3_cons]               ; the stream is over
     jne .out
 .dead:
-    mov byte [x3_sended], 1
+    cmp ax, SND_ST_ENDED            ; THE CARD STOPPED BY ITSELF (34.5.4: the
+    jne .dd                         ; watchdog's ENDED, "for a card that stops
+    cmp byte [x3_lasthalf], 0       ; by itself") before the stream's last
+    jne .dd                         ; half: an error, never a Finished - an XT
+    mov byte [x3_cstop], 1          ; whose fixed disk shares the card's IRQ 5
+.dd:                                ; played one ring and went on to the next
+    mov byte [x3_sended], 1         ; song (86Box, the owner's machine)
     mov al, X3R_END
     jmp x3_kick
 .fill:
@@ -3189,6 +3196,14 @@ x3_ended:
     cmp byte [x3_sended], 0
     je .out
     call x3_snd_close
+    cmp byte [x3_cstop], 0          ; the card stopped mid-stream: said, and
+    je .played                      ; the queue stays where it is
+    mov byte [x3_cstop], 0
+    mov byte [x3_md], MD_IDLE
+    mov word [x3_st+X3S_ERR], x3_s_cstop
+    mov byte [x3_st+X3S_STATE], X3ST_ERROR
+    ret
+.played:
 %ifdef X3REPORT
     call x3r_we                     ; FIELD (x3rep.inc): the report, EVENT E
 %endif
@@ -5476,6 +5491,7 @@ x3_s_notask:  db 'No free task - close an app', 0
 x3_s_rate:    db 'The device cannot play it', 0
 x3_s_nobe:    db 'No decoder in this build', 0
 x3_s_nopart:  db 'Cannot read its decoder', 0
+x3_s_cstop:   db 'The sound card stopped', 0
 x3_s_offer:   db 'The decoder cannot do it', 0
 x3_s_table:   db 'Damaged decoder tables', 0
 x3_s_decode:  db 'The decoder refused', 0
@@ -5573,6 +5589,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_sended, 1
     X3B x3_drvund, 1
     X3B x3_wund, 1                  ; underruns in this window (x3_under)
+    X3B x3_cstop, 1                 ; the card's watchdog ENDED it mid-stream
 %ifdef X3STUB
     X3B x3_lgr, 2                   ; live granules on this rung (the hook)
 %endif

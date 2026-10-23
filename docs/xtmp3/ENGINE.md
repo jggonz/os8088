@@ -125,6 +125,14 @@ stream on a 32-frame ramp to silence (`X3_RAMP`) rather than a DC step. A
 live underrun is a reason to re-evaluate (section 3). On a finished file it
 is counted as a disk or device fault and never steps (§121.5).
 
+**A card that stops by itself** (verb 3's `SND_ST_ENDED`, SOUND.DRV's
+watchdog, §34.5) before the stream's last half is published sets
+`x3_cstop`: `x3_ended` closes the stream, shows ERROR `The sound card
+stopped` and does not advance the queue. Before, it read as the track's end.
+The owner's 86Box XT showed it: an SB 2.0 on IRQ 5 beside an `st506_xt`
+fixed disk on IRQ 5 played one ring of a finished WAV (16,384 of 55,308
+bytes). On IRQ 7 every byte played.
+
 **States** (`x3_md` behind `x3_st`'s state): `MD_CHECK` (calibrating, "Checking
 performance"), `MD_LIVE`, `MD_FILE` (a finished WAV on the card), `MD_SPK` (a
 finished WAV on the speaker or Covox), `MD_CHOOSE` (the Decode-first dialogs),
@@ -741,6 +749,7 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | `rungfail` | Original calibrates (4x) but its live start is refused as out of memory (the stub's hook): the ladder stores it at 0 and plays HALF, with no ERROR on the way |
 | `offvol` | the SHIPPED package on B:, the song on C: with an SB16: a part is fetched standing in the launch folder (`x3_fetchhome`), so Auto plays live on Original with STANDARD fetched; then a forced XT Standard converts onto C: and plays. Red without the bracket (`Cannot read its decoder`: a fetch that fails while `x3_fits` says the machine has room is not reported as memory) |
 | `offdir` | the same drive, another folder (the owner's 86Box XT: C:\XTMP3 and C:\MEDIA): the package at C:'s root, the song in C:\MEDIA through File > Add to Queue. STANDARD's fetch follows the carve's read and rides `os88_rseq`'s cursor, so it never looks the name up and played even before the fix; the forced XT Standard's part is read by NAME, and without the bracket refused (`Cannot read its decoder`, the old `Needs ... KB`) |
+| `wavdirs` | the owner's layout (package in C:\XTMP3, the song in C:\MEDIA, the WAV saved to C:\): an XT Standard conversion and its play to the end, then a second play through the cache. Every byte of the data reaches the card (`x3_played` against the data's length), no underrun, Finished at the total |
 | `qagain` | a song queued (File > Add to Queue) while live, its probe refused by the stub's hook (`X3SB_QFAIL`): the row keeps the stem flagged `QEF_AGAIN`, and the tag's title arrives once the player is idle (`x3_qagain`) |
 | `probe32` | an MP3 whose first frame sits 200 bytes short of 32 KB, on a 32 KB-cluster C:: the queue's probe reads its title and x3sim's duration across the cluster's end, and Play refuses it by name (`Its disk's clusters are too large`) |
 | `covox` | the finished file's ACTUAL SOUND with no card: QEMU's pcspk renders only a PIT mode-3 square (its capture of the speaker bracket was EMPTY), so the Covox tier (SYSTEM.CFG, LPT1): every byte written to the LPT data port traced (`-trace parallel_ioport_write`) and the WAV's samples found there, in order, one for one - 32,724 identical in 45 s, QEMU running the bracket's 11 kHz IRQ0 slowly |
