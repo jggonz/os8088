@@ -68,9 +68,10 @@ nearly the whole chain wraps, as XT-STUDY.md 3 pins.  Formats:
  7 MATRIXING a slot: Lee's DCT-II of size N = 32/div on the subband samples
    (x3xtmodel.DctPlan's recursion), every multiply LEE's byte-split rows,
    wrapping.  X[div l] of the 32-point DCT is the N-point DCT's X[l].
- 8 V CODES: V from X (x3xtmodel.dct_to_V); the code of a V value is
-   ENCV[v + 4096] for |v| < 4096, else the nearest V level (ties toward
-   zero; the slow path, counted).
+ 8 V CODES: each kept X value is coded once, ENCV[x + 4096] for |x| <
+   4096, else the nearest V level (ties toward zero; the slow path,
+   counted); a V value is +-X (x3xtmodel.dct_to_V) and its code is the
+   same sign times code(X).
  9 THE WINDOW: output j of a slot is acc = 32 + sum over the profile's kept
    taps i of sign(D[32i+j]) WIN[|D|][code(V_age i [j or 32+j])], wrapping
    (V[j] at even ages, V[32+j] at odd).  PCM8 = 255 if acc >= 8192, 0 if acc
@@ -470,10 +471,12 @@ class XTDecoder:
         div = self.div
         X = wrap(self.plan.run(Sb.astype(np.int64),
                                lambda v, c, n: T.smul(v, _c16(c))))
+        # each kept X value is coded once; a V value is +-X, and its code
+        # is +-code(X) (the target folds the sign into the add or sub)
+        cx = T.enc_v(X.reshape(-1), self.stats).reshape(X.shape)
         Xf = np.zeros((18, 32), dtype=np.int64)
-        Xf[:, ::div] = X
-        V = wrap(XM.dct_to_V(Xf))
-        codes = T.enc_v(V.reshape(-1), self.stats).reshape(18, 64)
+        Xf[:, ::div] = cx
+        codes = XM.dct_to_V(Xf)
         hist = np.concatenate([self.ring[::-1], codes])    # rows: ages 15..1, then slots
         out = np.empty((18, len(self.phases)), dtype=np.int64)
         for m, j in enumerate(self.phases):
