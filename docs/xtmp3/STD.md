@@ -9,8 +9,10 @@ it says so.
 | file | what it is |
 |---|---|
 | `apps/xtmp3/x3gran.inc` | **the contract**, equates only: the `X3G_*` record, a backend part's header and verbs, `X3C`/`X3O`/`X3Z`, the front end's API, `X3I`/`X3R`/`X3PC`, the FRONT part's fixed data layout |
-| `apps/xtmp3/x3pars.inc` | the front end, frame level, in the PRIMARY: the open as a state machine, the queue's probe, sync, side information, the reservoir, the verdicts |
-| `apps/xtmp3/x3front.asm` | the FRONT part (eager): scalefactors, Huffman, the quarter exponents, the stereo plan, into the record |
+| `apps/xtmp3/x3pars.inc` | the front end's PRIMARY half: the open as a state machine, the queue's probe, seeking, and the thin near entries the engine calls |
+| `apps/xtmp3/x3phdr.inc` | the frame header (x3sim.parse_header), shared as source by the primary and the FRONT part |
+| `apps/xtmp3/x3pnext.inc` | the frame loop - sync, the resync scan, side information, the reservoir, the verdicts - assembled into the FRONT part as its NEXT verb |
+| `apps/xtmp3/x3front.asm` | the FRONT part (eager): NEXT, then per granule scalefactors, Huffman, the quarter exponents, the stereo plan, into the record |
 | `apps/xtmp3/x3std.asm` | the STANDARD part (lazy): `x3sim.Decoder.granule()` from `requant_i` on |
 | `apps/xtmp3/x3crc.inc` | CRC-32 (nibble table), the parts' table checks |
 | `tools/x3fronttab.py` | the ISO tables the front end reads, laid out for the 8086 (`build/x3ftab.inc`) |
@@ -34,7 +36,9 @@ beyond it:
   outputs, never calls the kernel, never masks interrupts, and uses at most
   64 bytes of the caller's stack. The STANDARD part uses about 32 (six
   pushes, the far call, four levels of near call at most).
-- **The front end** is near procs in the primary. `x3p_open` never reads a
+- **The front end** is near procs in the primary (`x3p_next` a thin entry
+  that far-calls the FRONT part's NEXT verb, where the frame loop lives so
+  the primary's segment does not carry it). `x3p_open` never reads a
   file: it answers `X3P_NEED` with `[X3I_WANT, +X3I_WANTN)` until the record
   is complete, so the probe (UI task, file reads) and the engine share it.
   `x3p_next` stages a frame from the engine's `X3R` ring (free-running read
@@ -208,15 +212,16 @@ with STANDARD on an XT, a 3-minute 11 kHz mono track takes about
 
 | what | bytes | |
 |---|---|---|
-| the primary: image + bss | 33,995 + 10,238 = 44,233 | of which x3pars.inc 5,491 of code and tables and 389 of bss (a 256-byte X3I record for the queue's probe among them) |
-| FRONT part (eager, in the carve) | 22,534 | 9,048 fixed data (the record 5,228, the main-data buffer 1,968, the frame 1,448, side information and scalefactors), the Huffman tables 8,924, code and variables the rest; 7,152 packed on the disk |
+| the primary: image + bss | 19,670 + 10,213 = 29,883 | after the face's art moved to its part; of which x3pars.inc **4,023 of code and tables and 362 of bss** (a 256-byte X3I record for the queue's probe among them). It was 5,491 + 389 until the frame loop moved into the FRONT part (the primary is the package's tightest segment) |
+| FRONT part (eager, in the carve) | 24,509 | 9,048 fixed data (the record 5,228, the main-data buffer 1,968, the frame 1,448, side information and scalefactors), the Huffman tables 8,924, the frame loop and the granule code the rest; 8,982 packed on the disk |
 | STANDARD part (lazy, op_fetch) | 57,732 | code 38,702 (the generated DCT-32/16/8 and windows are most of it), tables 4,860 (x3std.bin from P43M on), state 14,170: xr 4,608, the reorder's copy 2,304, overlap 2,304, the two rings 4,096, the regrouped IMDCT window 336; 22,533 packed |
 | the probe's transient claim | 8,192 (2 clusters, 32 KB at most) | UI task, freed before it returns |
 
-**The STANDARD path's decoder peak**, the engine's rings and the sound
-driver's grant excluded (they are the engine track's to add): **44,233 +
-22,534 + 57,732 = 124,499 bytes** (about 121.6 KB), with 8 KB more for a
-moment while a probe reads a file. The STANDARD part is never fetched on an
+**The STANDARD path's peak**, the engine's rings and the sound driver's
+grant excluded (they are the engine track's to add): the primary 29,883 +
+FRONT 24,509 + the face's ART part 12,985 (eager) + STD 57,732 = **125,109
+bytes** (about 122 KB), with 8 KB more for a moment while a probe reads a
+file. The STANDARD part is never fetched on an
 XT's own path, and the XT backend's part replaces it rather than joining it
 (SPEC §121.3).
 
