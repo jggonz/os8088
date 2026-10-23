@@ -85,19 +85,26 @@ story's own verification has been run and its evidence is in the PR.
   identity and reuse, stale and incomplete rejection, and Decoded Files.
   The finished WAV plays through the SB, the speaker or the Covox with no
   MP3 work.
-  *Status: every path has an `xtmp3eng` leg, the Covox's bytes included;
-  only the PC speaker's sound is unshown (QEMU's pcspk cannot carry the
-  bracket; the bracket is the Audio Player's own, held by `apspk`).*
+  *Status: every path has an `xtmp3eng` leg, the Covox's bytes included,
+  and the final build's pictures show the dialog, the Save dialog, the
+  progress window's `About mm:ss left`, `Playing decoded file` and the
+  stated minimum. Not verified: the PC speaker's sound (QEMU's pcspk cannot
+  carry the bracket), and at the final build an MP3 on a hard disk fails
+  every rung when the package was started from a floppy (SPEC §121.13,
+  open).*
 - [ ] **S10 Acceptance.** Docs: the guide manual, §121.11 measured, a
   PERFORMANCE set, the INDEX, and the diary with pictures. Suite rows,
   disks, a 86Box machine profile, and the screenshots on every adapter.
   Then the deduplicated soak union once and `test-full` once.
-  *Status: SPEC §121 rewritten as shipped with §121.12's disk placement;
-  the guide manual and song pages; the disks (`make xtmp3disk`, the music
-  disk, the 1.44MB and 1.2MB apps disks, the live media); INDEX, README and
-  the screenshots in `docs/xtmp3/s10-*.png` (the docs track); §121.11.5's
-  period-machine figures and PERFORMANCE.md Set 162 (FIELD). Open: listening,
-  real hardware, a suite row for the face, the soak union and `test-full`.*
+  *Status, done: SPEC §121 as shipped with §121.12's disk placement; the
+  guide manual and song pages; the disks (`make xtmp3disk`, the music
+  disk, the 1.44MB and 1.2MB apps disks, the live media); INDEX, README;
+  §121.11.5's period-machine figures, PERFORMANCE.md Set 162 and the five
+  `*-xtmp3` 86Box machines (FIELD); every face and state picture in
+  `docs/xtmp3/` retaken at the final build (70323ad3) on VGA, EGA, CGA
+  and Hercules, with the identity check passing on FULL colour, MID black
+  and white and C1. Open: listening, real hardware, a suite row for the
+  face's identity check, the soak union and `test-full`.*
 
 ## How the work is fanned out
 

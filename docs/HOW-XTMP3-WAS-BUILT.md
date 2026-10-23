@@ -393,18 +393,10 @@ scratch hard disk, drove the shipped package through the states nobody had
 photographed: live 16-bit stereo, the queue with the songs' own titles, the
 Decode First dialog, the Save dialog, a conversion in progress and the
 decoded file playing. A ten-second song converts too fast on QEMU to
-photograph, so the last four pictures use a five-minute stream,
-`AFTERX30.MP3`, made by repeating AFTER HOURS' frames thirty times. It has
-no tag, so its title is its name. The machine was paused at 33% for the
-progress picture.
-
-| | |
-|---|---|
-| ![Playing live: NEON DRIVE in 16-bit stereo on an SB16, both dials VU](xtmp3/s10-live-stereo.png) | ![The queue with the songs' own titles; AFTER HOURS live in mono, so the right dial is BUFFER](xtmp3/s10-queue-live.png) |
-| ![Decode First, with C: and the room and time the file needs](xtmp3/s10-decode-drive.png) | ![The Save dialog standing on C:, the name already the song's with .WAV](xtmp3/s10-decode-save.png) |
-| ![Decoding to disk at 33%, with the speed QEMU manages](xtmp3/s10-decode-progress.png) | ![The decoded file playing](xtmp3/s10-decoded-play.png) |
-
-![The progress window, enlarged](xtmp3/s10-decode-progress-zoom.png)
+photograph, so the conversion used a stream made by repeating AFTER HOURS'
+frames. Those first pictures showed `(se` and were retaken at the final
+build; the set below is the final one (the last section says how it was
+taken).
 
 **Observed.** The status bar's quality field is too narrow for its longest
 name with the override marker: it reads `Quality: XT STANDARD (se`. That
@@ -657,3 +649,67 @@ progress window says `About mm:ss left` once it has measured itself. The
 manual's "close to an hour" became "about half an hour". The guide's
 MartyPC shots were retaken: the queue row now shows `~00:10`, and the
 quality field has room for `(set)`.
+
+## 2026-10-23 — the last look, at the final build
+
+Every picture in `docs/xtmp3/` was retaken at 70323ad3, the build with all
+the tracks merged. QEMU drew each face from the shipped package on its own
+system disk:
+- VGA, with an SB16 and a scratch C:;
+- EGA, CGA and Hercules from knob kernels in private trees (`VIDEO=ega`,
+  `VIDEO=cga`, and `VIDEO=herc HERCSEG=0x7000`, the Hercules screen read
+  back out of guest RAM with `tools/hercshot.py`).
+
+The three demo songs were queued through File > Open on each machine, and
+NEON DRIVE was played and paused.
+
+| | |
+|---|---|
+| ![VGA, colour, NEON DRIVE live in 16-bit stereo](xtmp3/vga-color.png) | ![VGA, black and white, paused](xtmp3/vga-bw.png) |
+| ![EGA, MID, colour](xtmp3/ega-mid.png) | ![EGA, MID, black and white](xtmp3/ega-mid-bw.png) |
+| ![Hercules, MID, on XT FAST](xtmp3/herc-mid.png) | ![VGA, the compact player](xtmp3/vga-compact.png) |
+| ![CGA, the compact player](xtmp3/cga-compact.png) | ![The colour mockup beside the final VGA face](xtmp3/vs-mockup-color.png) |
+
+**The identity check passed at the final build.** A paused face was
+photographed, a full repaint was forced, and the face was photographed
+again. Each time, the two pictures' difference had an empty bounding box:
+- FULL in colour (T twice);
+- MID in black and white on EGA (T twice);
+- C1 on CGA (the About card up and down). On CGA the menu bar's clock
+  ticked between the two pictures, so that one compares from the menu bar
+  down.
+
+**The states**, from the same VGA machine:
+
+| | |
+|---|---|
+| ![Playing live: NEON DRIVE, 16-bit stereo, L and R](xtmp3/s10-live-stereo.png) | ![The queue with the songs' own titles; AFTER HOURS live in mono, so the right dial is BUFFER](xtmp3/s10-queue-live.png) |
+| ![XT Standard set by the user: Quality: XT STANDARD (set), whole](xtmp3/s10-xt-live-set.png) | ![Decode First on C:, with the room the file needs and no time](xtmp3/s10-decode-drive.png) |
+| ![The Save dialog standing on C:](xtmp3/s10-decode-save.png) | ![Decoding to disk at 85%: About 00:02 left](xtmp3/s10-decode-progress.png) |
+| ![Playing decoded file](xtmp3/s10-decoded-play.png) | ![Error: Needs 390 KB, has 300 KB](xtmp3/s10-short-memory.png) |
+
+![The progress window after 14 s, with About mm:ss left](xtmp3/s10-decode-progress-zoom.png)
+![The quality field whole: XT STANDARD (set)](xtmp3/s10-status-zoom.png)
+
+The conversion used `AFTERX99.MP3`, AFTER HOURS' frames 99 times over: 16:43
+of audio. The job had to run past the progress window's 10-second
+self-measure on QEMU, which converts at 59x. The picture was taken 14 s in.
+**The short-memory picture is the test build's.** QEMU always gives 640 KB,
+and a `RAMKB=384` kernel still let XT Standard claim its 387 KB, so the
+`X3STUB` package with its hook's `HAS` set to 300 KB shows the message the
+shipped code composes (`x3_needmsg`, which `xtmp3eng`'s `shortmem` leg
+asserts).
+
+**Observed on the final build, and sent to the integration track:**
+- **An MP3 on a hard disk fails every rung when XTMP3 was started from a
+  floppy.** Double-clicking C:\NEONDRV.MP3 with the package on B: goes
+  straight to Decode First, and Decode and Play stops on `Error: Needs 390
+  KB, has 571 KB`, so has is more than needs. The same song on B:, or the
+  package on C: too, plays live. The state pictures were therefore taken
+  with the package on C:.
+- The compact layouts print `STEREO44.1 kHz`: STEREO runs into the rate.
+- On QEMU's Hercules build, a song queued while XT FAST played kept its
+  file stem (`NIGHTSIG`) as its title.
+
+**Tested where.** QEMU only: VGA, the `VIDEO=` knob kernels and
+`tools/hercshot.py`. No soak row and no `test-full` was run.
