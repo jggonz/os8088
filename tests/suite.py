@@ -446,6 +446,27 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/kdos/DOS.O88",
                "build/recorder.o88", "build/DOSHELLO.COM",
                "build/DOSHMA.COM")),
+    Row("x3xttab", "fast", py("tools/x3xttab.py", "--selfcheck"), 0.25,
+        "XTMP3's XT table packs (SPEC.md 121.10, docs/xtmp3/XT-STUDY.md): "
+        "every product row, encoder table, byte-split table and requantiser "
+        "row is rebuilt by the EXACT integer recurrence the 8088 runs at "
+        "OPEN and compared entry for entry with its direct formula - odd "
+        "symmetry, a word's range, the ties-toward-zero encoder walk, the "
+        "split pair reconstructing x * c within one LSB over the proven "
+        "range, the 64 KiB segment layout - and the integer generator input "
+        "is what --derive's formulas round to. Negative controls prove the "
+        "checks can fail (an unbiased row, c16 + 1, a ties-up walk, and a "
+        "mirrored error a plain word sum cannot see but fl32 must). Host "
+        "only, standard library, so FAST: the generator is the one source "
+        "of the bytes phase 2's x3xt.asm expands"),
+    Row("x3xtdesign", "soak", py("tools/x3xtstudy.py", "--check-design"), 8.0,
+        "the XT study's chosen design (docs/xtmp3/XT-STUDY.md) against "
+        "tools/x3xttab.py's literals: the code maps, the 8- and 4-term tap "
+        "sets and every table the generator writes are re-derived from the "
+        "study's training material and must equal the bytes the quality "
+        "figures were measured on, entry for entry. Soak because it "
+        "rebuilds the corpus with numpy (seconds, not a fast row)",
+        needs=("numpy",)),
     Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,
         "docs/plans/ROM-PLAN.md 1.3: the ROM image builder re-derives its own "
         "invariants - 55 AA and a 32KB declaration (40KB would send the "
