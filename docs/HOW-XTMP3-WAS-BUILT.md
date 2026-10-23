@@ -931,3 +931,82 @@ needed. The XT needs no settings file at all.
   wrong IRQ, not a defect, and it was found only because the files could
   be read off the disk image and shown to be whole before anything in the
   player was blamed.
+
+**What to expect on each machine.** Speeds are audio seconds per wall
+second (`1.00x` is exactly real time), and Auto plays live only on a rung
+that probes at 1.25x or better. **Measured** figures are SPEC.md §121.11.5's:
+MartyPC's cycle counter for the XT, and 86Box's `pit_now` for the others,
+which is cycle-approximate. **Estimate** marks a figure nobody has measured;
+it says what it is derived from and is to be replaced by a run.
+
+The test songs (`tests/xtmp3/`, all generated here):
+
+| file | format | length |
+|---|---|---|
+| AFTERHRS.MP3 | MPEG-2.5, 11,025 Hz mono, 24 kbps | 10.1 s |
+| X11K24.MP3 / X8K16.MP3 / X12K32.MP3 | MPEG-2.5 mono, 11,025 / 8,000 / 12,000 Hz | 3.1 / 3.2 / 2.1 s |
+| M22.MP3 | MPEG-2, 22,050 Hz stereo, 64 kbps | 1.6 s |
+| NIGHTSIG.MP3 | MPEG-2, 22,050 Hz stereo, 40 kbps | 10.1 s |
+| NEONDRV.MP3 | MPEG-1, 44.1 kHz stereo, 56 kbps | 10.0 s |
+| C128.MP3 / C320.MP3 | MPEG-1, 44.1 kHz stereo, 128 / 320 kbps | 1.5 / 1.0 s |
+
+- **Pentium/133, SB16 (measured on 86Box).** AFTERHRS plays live on
+  ORIGINAL; the probe was 4.88x. C128 plays live on QUARTER (11,025 Hz
+  stereo 16-bit): Original probed 0.75x, Half 0.98x, Quarter 1.30x. NEONDRV
+  is the same rate at a lower bitrate, so expect the same rung (estimate).
+  C320's 320 kbps costs more Huffman work and may fall under 1.25x on
+  Quarter (estimate). On this build that means Decode First, and with no
+  hard disk on that machine the dialog says so. Round 6 adds the ÷4 XT rungs
+  beneath Quarter for exactly this case. Peak memory 157 KB to 174 KB.
+- **IBM XT, 8088 at 4.77 MHz, SB 2.0 (measured on MartyPC).** Nothing plays
+  live; every song is Decode First. Calibration takes **6.4 s** to that
+  verdict (it was 16.1 s before round 2), peaking at 387 KB.
+  - **AFTERHRS converts on XT STANDARD at 0.0946x end to end: 106.6 s** for
+    its 10.1 s. Of that, 0.26 s is setup, 100.5 s the decode loop and 5.8 s
+    finalising. A 3-minute 11 kHz song takes about 32 minutes and fills
+    about 1.98 MB of disk (180 s x 11,025 bytes).
+  - Measured before round 2's faster face: XT Fast 0.0596x and XT Speech
+    0.0853x. Both should now be faster too (estimate: not re-run).
+  - A 44.1 kHz stereo song converts on QUARTER at 0.0117x. C128's 1.5 s
+    takes about 2 minutes. NEONDRV's 10 s at its lower bitrate should take
+    about 10 to 14 minutes (estimate, from C128's rate). A 3-minute
+    44.1 kHz song is about 4.3 hours.
+  - The owner's NIGHTSIG.WAV came out at 5,512 Hz, so that 22 kHz song
+    converted on the quarter-rate rung.
+  - Playing the finished WAV costs no decoding at all (no GRANULE is
+    reached). The face takes about half the machine while it plays: a
+    needle redraw is 136 to 187 ms and the knob 400 ms. The card carries it
+    with no underrun.
+  - MartyPC's XT-IDE has no seek or rotation. On the owner's ST-225 the disk
+    share (about 1% here) and the 5.8 s finalisation can only be longer.
+- **386SX at 25 MHz, SB16 (not measured: estimates from the 386DX-25).**
+  The 86Box 386DX-25 probed AFTERHRS at 0.96x on Original and 2.02x to
+  2.14x on XT Standard, and played it live on XT STANDARD with no underrun.
+  On C128 it probed Quarter 0.37x, XT Standard 0.47x and XT Fast 0.51x, so
+  it went to Decode First on QUARTER. The 386SX runs this 16-bit code on the
+  same core with a 16-bit bus and no cache, so it should be somewhat slower
+  at the same clock: say 0.7 to 0.9 of the DX.
+  - The 11 kHz songs should still play live on XT STANDARD or XT FAST,
+    around 1.4x to 1.9x.
+  - The 22 kHz songs are near the margin and may go to Decode First.
+  - The 44.1 kHz songs go to Decode First on this build. Converting onto C:
+    should run at a few tenths of real time, so NEONDRV's 10 s takes well
+    under a minute (estimate).
+  - Round 6's ÷4 XT rungs are expected to let the 44.1 kHz songs play live
+    there (estimate).
+- **For comparison, measured on 86Box:**
+  - The **286/12.5** goes to Decode First on everything. It probed AFTERHRS
+    at Original 0.30x, XT Standard 0.73x and XT Fast 0.78x, and C128 at
+    Quarter 0.15x.
+  - The **486DX2/66** plays AFTERHRS live on ORIGINAL at 3.08x. On C128 it
+    probed Quarter 0.97x, XT Standard 1.15x and XT Fast 1.16x, all just
+    under the margin, so it chose Decode First. That near miss is the case
+    round 6 was made for.
+
+**Round 6's expected effect** is an estimate until the 86Box re-run reports.
+Decoding a 44.1 kHz source at ÷4 cuts the synthesis and IMDCT work to about
+a quarter, but Huffman and requantisation still cover every line. So expect
+the XT rungs on a 44.1 kHz source to run perhaps 2x to 3x faster than at
+÷1. That would put the 486's XT Standard on C128 near 2.5x to 3.5x, which is
+live, and the 386DX's near 1x to 1.5x, which is borderline. The 286 and the
+XT are not expected to change.
