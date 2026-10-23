@@ -811,7 +811,7 @@ def read_scf_mpeg2(r, gi, right_is):
     return s
 
 
-def huffman(r, gi, end, h, tables, count=False):
+def huffman(r, gi, end, h, tables, count=False, rec=None):
     """x3p_huff: the 576 quantised values of one channel/granule, in
     bitstream order.  Returns (ix list, ok, stats).  ok is False when the
     big-values region ran past the granule's own end (part2_3_length)."""
@@ -838,6 +838,8 @@ def huffman(r, gi, end, h, tables, count=False):
         v, used, lk = TB.huff_decode(tab, lambda n: _peekat(r, p0, n), first)
         lookups += lk
         r.pos += used
+        if rec is not None:
+            rec.append((t, used))
         lin = ISO.LINBITS[t]
         x, y = v >> 4, v & 15
         if x == 15 and lin:
@@ -861,6 +863,8 @@ def huffman(r, gi, end, h, tables, count=False):
         if p0 + used > end:
             break
         r.pos = p0 + used
+        if rec is not None:
+            rec.append((32 + gi.count1_table, used))
         q = [(v >> 3) & 1, (v >> 2) & 1, (v >> 1) & 1, v & 1]
         for k in range(4):
             if q[k] and r.get(1):
@@ -1975,6 +1979,99 @@ def alias_f(x, nb):
             x[18 * b + i] = u * cs[i] - d * ca[i]
             x[18 * b - 1 - i] = d * cs[i] + u * ca[i]
     return x
+
+
+def granules(path_or_bytes):
+    """A read-only view of every granule's intermediate data, for studies
+    (the XT track's cost model).  Yields one dict per granule and channel:
+
+      frame, granule, ch     indices (frames counted from the first audio frame)
+      version, rate, nch     1 / 2 / 25, Hz, the frame's channel count
+      verdict                F_OK, or why the frame was dropped (then no data)
+      ok                     False: this channel's Huffman data overran
+      block_type, mixed, win_switch, global_gain, scalefac_compress
+      table_select           the three region tables (region 2 is 0 when
+                             window switching), count1_table (0 A, 1 B)
+      region1, region2       the region boundaries in lines
+      big_values             pairs; nbig = 2 * big_values lines
+      nlines                 lines Huffman wrote: nbig + 4 * quadruples
+      ix                     int list of 576, the signed Huffman values, in
+                             BITSTREAM order (short blocks not reordered)
+      codes                  [(table, code length in bits)] per symbol,
+                             pairs then quadruples (no linbits, no signs)
+      part23_bits            the granule's part2_3_length
+      xr                     int64 array of 576: the requantised lines after
+                             stereo, REORDERED (subband order), before the
+                             antialias, int32 Q28 (1.0 = 2^28), exactly what
+                             x3s_alias receives
+      xr_q                   28
+    Nothing here changes the model; it runs the same functions."""
+    data = path_or_bytes if isinstance(path_or_bytes, (bytes, bytearray)) else \
+        open(path_or_bytes, 'rb').read()
+    st = Stream(data)
+    if st.refused:
+        raise Refused(st.refused)
+    tabs = huff_tables()
+    for fi, (h, side, md, verdict) in enumerate(st.frames()):
+        if verdict == F_TRUNC:
+            return
+        if verdict != F_OK:
+            for gr in range(h.granules):
+                for ch in range(h.nch):
+                    yield dict(frame=fi, granule=gr, ch=ch, version=h.version, rate=h.rate,
+                               nch=h.nch, verdict=verdict, ok=False)
+            continue
+        r = BitReader(md)
+        prev = [None, None]
+        for gr in range(h.granules):
+            sp = []
+            for ch in range(h.nch):
+                gi = side.gr[gr][ch]
+                end = r.pos + gi.part23
+                if h.mpeg1:
+                    scf = read_scf_mpeg1(r, gi, side.scfsi[ch], gr, prev[ch])
+                else:
+                    scf = read_scf_mpeg2(r, gi, h.intensity and ch == 1)
+                prev[ch] = scf
+                rec = []
+                if r.pos > end:
+                    ix, ok, n = [0] * 576, False, (0, 0)
+                else:
+                    ix, ok, n = huffman(r, gi, end, h, tabs, count=True, rec=rec)
+                r.pos = end
+                r.over = False
+                bd = bands(h)
+                if gi.win_switch:
+                    r1 = 3 * bd.sc[3] if gi.block_type == 2 else bd.lc[8]
+                    r2 = 576
+                else:
+                    r1 = bd.lc[min(gi.region0 + 1, 22)]
+                    r2 = bd.lc[min(gi.region0 + gi.region1 + 2, 22)]
+                nbig = min(2 * gi.big_values, 576)
+                nlines = nbig + 4 * sum(1 for t, _ in rec if t >= 32)
+                sp.append((gi, scf, ix, ok, dict(
+                    frame=fi, granule=gr, ch=ch, version=h.version, rate=h.rate, nch=h.nch,
+                    verdict=verdict, ok=ok, block_type=gi.block_type, mixed=gi.mixed,
+                    win_switch=gi.win_switch, global_gain=gi.global_gain,
+                    scalefac_compress=gi.sfc, table_select=list(gi.table),
+                    count1_table=gi.count1_table, region1=r1, region2=r2,
+                    big_values=gi.big_values, nlines=nlines, ix=list(ix), codes=rec,
+                    part23_bits=gi.part23, xr_q=X3_XRQ)))
+            xs = []
+            for gi, scf, ix, ok, d in sp:
+                if not ok:
+                    xs.append(np.zeros(576, dtype=np.int64))
+                    continue
+                q = quarter_exponents(h, gi, scf, h.ms and h.nch == 2)
+                xs.append(requant_i(np.array(ix, dtype=np.int64), q))
+            if h.nch == 2 and h.mode == 1 and sp[0][3] and sp[1][3]:
+                plan = stereo_plan(h, sp[1][0], sp[1][1], sp[1][2])
+                xs = list(stereo_i(h, sp[1][0], plan, xs[0], xs[1]))
+            for (gi, scf, ix, ok, d), x in zip(sp, xs):
+                if gi.block_type == 2:
+                    x = x[reorder_index(h, gi)]
+                d['xr'] = x
+                yield d
 
 
 def decode_file(path_or_bytes, model='int', div=1, mono=False, trim=False):
