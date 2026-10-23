@@ -430,3 +430,24 @@ The first run of the leg modelled the pulses at the END's rung (5,512 Hz)
 and failed at the first differing count. The leg now models the first
 door's rung, which is the rung the traced writes were made at. That failed
 run is the negative control: the comparison distinguishes the two rates.
+
+### 7.3 Round 3: the 386 and the 486 once more
+
+On round 3 (`feature/xtmp3` 3e3a9306) the integration track made two
+changes: the probe starts after the face is drawn, and a live XT stream
+prefers the 16 KB card grant with an 8 KB look-ahead. FIELD re-ran two
+cases once each, with the same disks and procedure.
+
+| machine | track | probes | decision | what ran | X3S_PEAK | calibration |
+|---|---|---|---|---|---|---|
+| 386DX/25, SB16 | AFTERHRS | ORIG 0.96, XT STD 2.14 | **live XT STANDARD** | **one underrun** (11 on round 2, one at 55a051b4), stepped to XT FAST | 350 KB = 358,400 B | 5.76 s |
+| 486DX2/66, SB16 | C128 | QUARTER 0.97, XT STD 1.15, XT FAST 1.16 | **Decode first, on QUARTER** | the dialog; no "Out of memory" | 344 KB | 6.09 s |
+
+- **The 386's underruns went from 11 to one.** That fits round 2's 8 KB
+  grant (0.74 s of audio) being the cause. One underrun still steps it
+  down to XT Fast. Its moment is not measured, because the report counts
+  it and does not time it.
+- **The 486's pick did not move.** The probe that no longer pays a face
+  redraw gives the same figures to the hundredth: 0.97, 1.15 and 1.16
+  against 0.98, 1.15 and 1.17. So the drop from 55a051b4's 1.48x on XT
+  Standard is not the face. It is still untraced.
