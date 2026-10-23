@@ -6,6 +6,9 @@ argument-hint: "<package or new app name> [mockup paths]"
 
 # A retro hardware face
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 CDRack is the worked example: `apps/cdrack/` (three files), `tools/os88cdart.py`
 (the art), SPEC.md §119.6 (the contract), `docs/cdrack/` (the mockups and the
 faces as built) and the "Wave 4 — CDRack" part of `docs/HOW-CDROM-WAS-BUILT.md`
@@ -31,8 +34,8 @@ moved.
   has an answer to: a Help menu where `OSAPI_ABOUT_SET` is the convention, a
   check mark the menu cannot draw. Note each one and how the OS answers it -
   that note goes in the SPEC and the PR.
-- Work in a worktree under `~/Repos/os8088-<name>` (CLAUDE.local.md), on the
-  PR branch if the app already has one.
+- Work in a separate worktree, using the session's preferred location and a
+  short path for emulator sockets, on the PR branch if the app already has one.
 
 ## Step 1 - the contract first
 

@@ -13,6 +13,7 @@ export const meta = {
 
 const A = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const WT = A.worktree || '/tmp/game'
+const REPO = A.repo || WT
 const REF = A.ref || '/path/to/reference'
 const REP = A.reports || WT + '-reports'
 const NAME = A.name || 'Game'
@@ -33,12 +34,12 @@ const POLICY = "ART AND ASSET POLICY (user decision, binding, overrides anything
 const COMMON = `
 CONTEXT
 - Task: a native 8086 remake of ${NAME} to os8088, in the style of DrMarco (SPEC.md section 100, apps/drmario/) and 1942 (SPEC.md section 101, apps/1942/). It is a native remake, NOT an NES emulator: the simulation is our own, guided by the disassembly. The primary goal is BLAZING SPEED on a 4.77MHz IBM PC/XT (8088), on VGA and CGA (and Hercules if the DrMarco precedent shows it is cheap).
-- Work ONLY in the git worktree ${WT} (branch game/${LOW}). Never touch /Users/jggonz/Repos/os8088 (the main checkout). Do not commit, do not push, do not use git add -A/-u; do not run pkill with broad patterns (other worktrees run emulators) - kill only by pidfile.
+- Work ONLY in the git worktree ${WT} (branch game/${LOW}). Other checkouts, including ${REPO} when it differs from the worktree, are read-only. Do not commit, do not push, do not use git add -A/-u; do not run pkill with broad patterns (other worktrees run emulators) - kill only by pidfile.
 - ${POLICY}
 - Reference source for game LOGIC study only (read-only, external): ${REF} (disassembly/source files, RAM maps, CHR/asset dumps, any replay files). 
-- Repo rules: CLAUDE.md (already in your context) is binding. Read docs/INDEX.md before inventing a mechanism. Text via font_run. 8086-only NASM. SPEC.md is updated BEFORE/with each change (new section, next free number after 101). Never spend kernel bytes: this is a package, no new API slots, no kernel change.
+- Repo rules: read ${WT}/AGENTS.md in Codex or ${WT}/CLAUDE.md in Claude Code; its rules are binding. Read docs/INDEX.md before inventing a mechanism. Text via font_run. 8086-only NASM. SPEC.md is updated BEFORE/with each change (new section, next free top-level number). Never spend kernel bytes: this is a package, no new API slots, no kernel change.
 - Reports go to files under ${REP}/ (write the full report there; your final message is a SHORT summary plus the file path). Messages truncate; files do not.
-- Emulator tests: MartyPC is the timing-faithful 4.77MHz XT model. A fresh worktree lacks build/martypc: copy it from /Users/jggonz/Repos/os8088/build/martypc (cp -R, not symlink) and run 'make marty' if needed. Use short paths for sockets. Run 'make' output through a check for 'Error' (exit-code hygiene: wrappers can hide 'make: *** Error').
+- Emulator tests: MartyPC is the timing-faithful 4.77MHz XT model. A fresh worktree lacks build/martypc: if ${REPO} differs from ${WT} and has the instrument, copy ${REPO}/build/martypc into ${WT}/build/martypc (cp -R, not symlink); otherwise run 'make marty' in ${WT}. Rebuild it if stale. Use short paths for sockets. Run 'make' output through a check for 'Error' (exit-code hygiene: wrappers can hide 'make: *** Error').
 - SOAK RUNS ONCE, AT THE END (CLAUDE.md, Testing): during a wave NO agent runs a soak row or 'make test-full' - not via os88test.py, not as 'python3 tests/<row>.py', not launched in the background and polled, not as a scratch MartyPC script that measures what a row measures. A wave checks on the host ('make', which runs the fast tier; host-side unit checks; 'make KERN_SMALL=1' and tools/kernsize.py if kernel/ or the Makefile moved) and by LOOKING (one boot, screenshots cropped and zoomed). Append the tests/suite.py row names covering what you changed, one per line, to ${REP}/soak-rows.txt; the close runs their union once. The one exception is a number that DECIDES a design (which renderer, which table size): take it once, write it in your report, and nobody re-takes it. Never wait for host load before a MartyPC cycle measurement - the cycle counter is emulated.`
 
 const SCOUTS = [

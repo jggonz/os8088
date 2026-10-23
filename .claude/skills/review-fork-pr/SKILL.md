@@ -5,6 +5,9 @@ description: Review an incoming pull request that comes from someone else's fork
 
 # Review a pull request from a fork
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 A contributor works in their own fork of os8088 and opens a PR against
 `jggonz/os8088:main`. It is usually **large** (98 files and +27,500 lines was
 PR #92; 193 files and +73,000 was #80), usually **long-lived** — cut from a
@@ -15,7 +18,7 @@ branch on their fork** so the PR itself becomes mergeable, and explain every
 change on the PR in language a semi-technical reader can follow.
 
 Invoking this skill **authorises the multi-agent orchestration below** — the
-`Agent` fan-out and the two `Workflow` scripts (what the user calls
+host's agent fan-out and the two shared workflow scripts (what the user calls
 "ultracode"). Every decision that is the user's comes back through
 `AskUserQuestion`; everything else you decide and record.
 
@@ -288,6 +291,9 @@ Workflow({ scriptPath: "<abs repo>/.claude/skills/review-fork-pr/workflows/fix.j
            args: { wt: "<abs worktree>", pr: <N>, batches: [ { key: "B1-...", title: "...",
                    findings: [...], extra: "batch-specific verification commands" } ] } })
 ```
+
+If the session configures a commit attribution trailer, pass the complete
+line as `args.attribution`. Omit it otherwise; do not guess a model identity.
 
 Batches run **sequentially** — they share one worktree, and two agents editing
 one tree do not merge. Each fixer builds, runs its own host-side verification,

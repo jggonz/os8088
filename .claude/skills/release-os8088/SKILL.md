@@ -5,6 +5,9 @@ description: Build os8088 and publish the floppy images to the os8088.com websit
 
 # Release os8088
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 Builds the floppy images, publishes them into the website repository next
 door along with the notes for its releases page, opens a pull request there,
 and cuts a GitHub release on this repo.
@@ -790,7 +793,7 @@ inventory that parses and a guide that renders an empty pane read the same in
 
 ```bash
 cd "$WEB_REPO"
-git add -A
+git add <explicit paths changed by this release>
 git commit -m "Release $VERSION"
 git push -u origin "release/$VERSION"
 gh pr create --title "Release $VERSION" --body "<body>"
@@ -817,10 +820,17 @@ list the scenes captured, and name the video it embeds. Mention that the video
 poster only resolves once the Worker is serving the page, so a reviewer reading
 a local build does not file it as a broken image.
 
-End the PR body with:
+When the session calls for an attribution line, name the host that actually
+performed the release. For Claude Code:
 
 ```
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
+For Codex:
+
+```
+Generated with [Codex](https://developers.openai.com/codex/)
 ```
 
 ### 6. Tag and cut the GitHub release

@@ -5,6 +5,9 @@ description: Build a native 8086 assembly remake of a console/arcade game (refer
 
 # Native game port (assembly, XT-first)
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 This is the technique that produced `apps/excitebike/` (SPEC.md §102, PR #206)
 in one orchestrated run on **Sonnet 5.5** (53 agents, 7 waves, ~83 minutes of
 wall clock). Agents inherit the session model - **never pass a `model`
@@ -79,12 +82,15 @@ Also ask for the **display name** (requirement 3), unless the user gave one.
 
 **Prove the match against the real game, recorded once.** Where the reference
 assembles into a ROM, a host emulator (agnes, MIT, for NES) runs it with
-scripted controller bytes, and the recordings are committed as fixtures:
-per-frame state, frame buffers and the APU note log. The gates compare the
-guest against those fixtures on MartyPC, so they need neither the reference
-nor the emulator. A mode that never reads the RNG is compared byte for byte
-every frame; one that does gets the recorded RNG bytes injected. 1942's lesson
-applies: port the ROUTINE that reads a table, not the table alone.
+scripted controller bytes. Commit per-frame behavior/state fixtures for the
+simulation checks. In `extract` mode, also commit frame buffers and the APU
+note log for pixel/audio comparisons. In `recreate` or `original` mode, keep
+reference pixels and note streams outside the repo; visual/audio acceptance
+uses the authored assets and the chosen look rather than byte equality with
+the cartridge. The gates run on MartyPC and need neither the reference nor
+the host emulator. A simulation mode that never reads the RNG is compared
+byte for byte every frame; one that does gets the recorded RNG bytes injected.
+1942's lesson applies: port the ROUTINE that reads a table, not the table alone.
 
 Levels, piece/obstacle grammar, speed and timing tables, par times and rules
 are transcribed once into committed text sources (Excitebike's `.trk` files)
@@ -121,9 +127,14 @@ main.
 ```
 Workflow({ scriptPath: "<repo>/.claude/skills/native-game-port/workflows/port.js",
            args: { repo: "<abs main repo>", worktree: "/tmp/<short>", ref: "<abs reference dir>",
-                   name: "<Game>", stem: "<pkgstem>", reports: "/tmp/<short>-reports",
-                   scope: "<what must ship / may be cut>", artMode: "extract", levels: "transcribe" } })
+                   name: "<original game>", display: "<chosen display name>", stem: "<pkgstem>",
+                   reports: "/tmp/<short>-reports", scope: "<what must ship / may be cut>",
+                   artMode: "<extract|recreate|original chosen at intake>", levels: "transcribe" } })
 ```
+
+Bind `name` to the game being studied, `display` to the replacement name shown
+on screen, and `stem` to its 8.3-safe package stem. Carry the user's chosen
+`artMode` into the workflow; the example is not a new default over their answer.
 
 `args` can arrive as a STRING in some harnesses; the script parses it and has
 defaults, so a bare launch with edited DEFAULTS also works. Phases (`skipScout: true` reuses existing reports):

@@ -7,6 +7,9 @@ disable-model-invocation: true
 
 # The colour face
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 A package on this machine is drawn for the 1bpp adapters first - black ink,
 white paper - and on a VGA it looks the same. This skill gives one a second
 face for a **4bpp display** without touching the first: colour where colour

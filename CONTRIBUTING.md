@@ -188,11 +188,11 @@ Useful in this repo:
   manager. Those two break in ways that only show up as a hang.
 - `claude --permission-mode acceptEdits` if you're tired of approving edits to
   `.inc` files; keep approvals on for `Bash` so you see what it boots.
-- Three project skills live in `.claude/skills/` and Claude Code picks them up
-  automatically: `/release-os8088` cuts a release, `/port-to-os8088` ports an
-  existing program to a C package — the next section — and
-  `/review-fork-pr <PR#>` is the maintainer's side of a pull request that
-  arrives from a fork.
+- Eight project skills live in `.claude/skills/` and Claude Code picks them up
+  automatically: releases, C ports, native game ports, fork reviews, stale PR
+  refreshes, functional checks, colour faces and hardware-style faces. Codex
+  discovers the same sources through `.agents/skills/`. The
+  [shared runtime guide](docs/AGENT-SKILLS.md) explains both hosts.
 
 #### Porting a program with the agent
 
@@ -210,8 +210,9 @@ claude                                  # from the repo root, on Opus 5 or Fable
 
 What happens, and what it needs from you:
 
-1. **It checks the model.** Opus 5 and Fable 5 are the two it supports; on
-   anything else it tells you to `/model` and stops.
+1. **It checks the runtime.** Claude Code retains its Opus 5/Fable 5 model
+   gate. Codex uses the current session model and native delegation. Both
+   preserve the independent review and verification stages.
 2. **It asks where the original is.** Either it scans this directory and the
    one above for git checkouts and lets you pick, or you give it a list of
    repositories to clone into a scratch directory. The reference source stays
@@ -247,8 +248,10 @@ desktop on a 200-line screen, the stale QEMU answering with the old image —
 and what each one cost to find.
 
 You can also run any single piece by hand: the two workflow scripts under
-`.claude/skills/port-to-os8088/workflows/` are ordinary `Workflow` scripts
-that take their inputs as `args`, and the skill file says what to pass.
+`.claude/skills/port-to-os8088/workflows/` take their inputs as `args`, and
+the skill file says what to pass. A host with `Workflow` executes them there;
+Codex follows their prompts, schemas and stage dependencies with native agents
+as described in the shared runtime guide. They are not standalone Node scripts.
 
 #### Reviewing a pull request that comes from a fork
 
@@ -294,19 +297,23 @@ side, and binds both.
 npm install -g @openai/codex      # or: brew install codex
 ```
 
-Then run `codex` from the repo root. Codex looks for `AGENTS.md`, which this
-repo doesn't ship — the agent brief lives in `CLAUDE.md`. Either open your
-session with:
-
-> Read CLAUDE.md and SPEC.md before touching anything. They are binding.
-
-or, in your own clone only, make an untracked pointer:
+Then run `codex` from the repo root. It reads the tracked
+[AGENTS.md](AGENTS.md), which carries the same repository rules as
+`CLAUDE.md`. The tracked `.agents/skills/` symlinks expose all eight shared
+skills without a separate installation or copied instructions. For example:
 
 ```
-ln -s CLAUDE.md AGENTS.md     # don't commit this
+codex
+> $port-to-os8088
+> $functional-check 123
 ```
 
-Docs: <https://github.com/openai/codex>.
+Use `/skills` to inspect the discovered skills. Codex can also select a skill
+from its description; `$vga-face` remains explicit-only. If newly added skills
+do not appear, restart Codex. See [the shared runtime guide](docs/AGENT-SKILLS.md)
+for tool mappings, delegation and session notes.
+
+Docs: <https://learn.chatgpt.com/docs/build-skills>.
 
 ### Any agent
 

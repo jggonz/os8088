@@ -5,6 +5,9 @@ description: Functionally verify a change on the glass before it merges - boot t
 
 # Functional check
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 A change's tests prove what the tests ask. This skill proves the thing the
 user was promised: the button fires, the cell recalculates, the pane draws
 the picture. It boots what `make` built, drives the real UI over QMP, and
@@ -66,9 +69,8 @@ greener.
 ## Step 2 - boot what was built
 
 ```
-pkill -f "[q]emu-system"        # a stale QEMU answers on the old kernel;
-                                # the pattern must not appear in the killing
-                                # command itself (CLAUDE.md, Testing)
+# Stop a stale QEMU only through this worktree's QMP socket or recorded PID.
+# Other worktrees may have their own VMs running.
 make <the-disk-target>          # weavedisk, zdisk, worddisk, ... whatever
                                 # the change ships on
 make test TESTAPPS=build/<x>.img &

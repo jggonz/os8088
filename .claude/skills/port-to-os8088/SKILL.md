@@ -1,9 +1,12 @@
 ---
 name: port-to-os8088
-description: Port an existing program - written in C or in any other language - to os8088 as a C package (SPEC.md §73), the way apps/cword ported Microsoft Word 1.1a. Interactive intake of the reference source (scan nearby repos or clone a list), then a multi-agent scouting workflow that drafts the port plan, then one multi-agent implementation workflow per wave, asking the user only at real decisions, and a PR at the end. Runs on Opus 5 or Fable 5 only. Use when the user asks to port, bring over, reimplement or "do a CWORD-style port of" an application.
+description: Port an existing program - written in C or in any other language - to os8088 as a C package (SPEC.md §73), the way apps/cword ported Microsoft Word 1.1a. Interactive intake of the reference source (scan nearby repos or clone a list), then a multi-agent scouting workflow that drafts the port plan, then one multi-agent implementation workflow per wave, asking the user only at real decisions, and a PR at the end. Use when the user asks to port, bring over, reimplement or "do a CWORD-style port of" an application.
 ---
 
 # Port a program to os8088, in C
+
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
 
 This skill turns a reference codebase — the original program, in whatever
 language — into a **native os8088 package written in C**, the way
@@ -16,9 +19,10 @@ compiles here and is not expected to. Its resources, tables, formats and
 behaviour do.
 
 Invoking this skill **authorises the multi-agent orchestration below** (the
-`Workflow` tool — what the user calls "ultracode"). Every phase that reads a
-lot or writes a lot fans out; every decision that is the user's comes back to
-them through `AskUserQuestion`; everything else you decide and record.
+host's Workflow or native agent tools — what the user calls "ultracode").
+Every phase that reads a lot or writes a lot fans out; every decision that is
+the user's comes back through `AskUserQuestion`; everything else you decide
+and record.
 
 Three files travel with this skill and are read by every agent it spawns:
 
@@ -34,18 +38,20 @@ and what each refusal means), `SPEC.md §73` (the contract), `apps/cc/os88.h`
 
 ---
 
-## 0. The model gate — do this first
+## 0. Runtime and model readiness — do this first
 
-This skill is supported on **Opus 5** and **Fable 5** only. Look at the
-`# Environment` block of your own system prompt: it says which model is
-running. If it is not `claude-opus-5` or `claude-fable-5`, say so in one line,
-tell the user to switch with `/model` and re-run `/port-to-os8088`, and
-**stop**. Do not run the workflows on another model: they were sized and
-worded for these two, and a smaller model reading twenty thousand lines of
-someone else's source and a 50,000-line SPEC does not scout, it guesses.
+In **Claude Code**, this workflow was sized for **Opus 5** and **Fable 5**.
+Keep the original gate there: if the session is not `claude-opus-5` or
+`claude-fable-5`, tell the user to switch with `/model` and rerun the skill,
+then stop.
+In **Codex**, use the current session model and the native-agent procedure in
+the shared runtime guide; Claude model identifiers are not a Codex gate.
+Check that delegation is available before scouting. Narrow each scout's
+assignment to the source it can actually read, and preserve every review and
+independent verification stage.
 
 Never pass a `model` override to an agent inside the workflows — they inherit
-the session model, which is the one the gate just checked.
+the session model.
 
 ## 1. Read before asking
 
@@ -84,11 +90,10 @@ If they chose *scan*, run the scan and ask a second `AskUserQuestion`
 file extensions, and one line from its README if it has one — and let them
 pick one or more. If nothing plausible is found, fall through to *clone*.
 
-Then confirm the set back in one line and record it: **write a memory** (a
-`reference` type, like the existing `word-opus-source` memory) naming where the
-reference source lives, because the repo will never say — SPEC.md names the
-release, not a path — and the next session that touches the port will need
-it.
+Then confirm the set back in one line and record where the reference source
+lives, using host memory or the external session note described in the shared
+runtime guide. SPEC.md names the release, not a private host path; the next
+session that touches the port will need the note.
 
 Two things to say to the user here, once, plainly:
 
@@ -107,12 +112,16 @@ Two things to say to the user here, once, plainly:
 ## 3. Preflight — the machine and the branch
 
 ```
-tools/setup-cc.sh && make cc-smoke        # the compiler, at the pinned commit; the smoke test builds
-make covl                                 # the overlay gate builds (you will very likely need the overlay)
-pkill -f qemu-system-i386 || true         # a stale QEMU answers on build/qmp.sock with an OLD image
-git status --short                        # clean tree
-git checkout -b port/<name> main          # branch; never work on main
+git fetch origin main
+git worktree add -b port/<name> /tmp/<short> origin/main
+cd /tmp/<short>                           # every build and edit happens here
+tools/setup-cc.sh && make cc-smoke         # the pinned compiler and smoke build
+make covl                                # the overlay gate builds
+git status --short                       # clean worktree
 ```
+
+Before booting, stop a stale emulator only through this worktree's QMP
+socket or recorded PID. Never use a host-wide `pkill`.
 
 If `setup-cc.sh` fails, that is a blocker for the *user* (network, Xcode
 tools) — say what it printed and stop. Every later step needs the compiler.
@@ -234,8 +243,8 @@ When the last wave is done:
    shipping ones (`os88pkg` line, overlay size, frame max, the harness's cost
    table). `docs/plans/<NAME>-PORT-PLAN.md` gets a closing "What shipped" section.
    `README.md` gets a paragraph beside the CWORD one under *A package can also
-   be written in C*. `CLAUDE.md`'s command table gets the new targets if they
-   are on demand like `cword`'s.
+   be written in C*. Both `CLAUDE.md` and `AGENTS.md` get the new targets in
+   their command tables if they are on demand like `cword`'s.
 3. **The gates.** `make clean && make` (nothing in `all` may need the
    compiler — your targets are on demand); `make <name>disk`; the host
    harness; boot the 360KB image once (`make test TESTAPPS=build/<name>360.img`);
@@ -249,7 +258,8 @@ When the last wave is done:
    CONTRIBUTING.md §7 asks for: what changed and why, which SPEC sections
    moved, **how you verified it** with the exact commands and cropped
    screendumps, and whether the 360KB build was booted. Attach the cost
-   table. Add `Co-Authored-By: Claude <model> <noreply@anthropic.com>`.
+   table. Use the actual session's configured attribution, as the shared
+   runtime guide describes.
 5. Tell the user, in a paragraph they can paste into a release note, what the
    port does, what it greys, and what it costs — numbers, not adjectives
    (the `release-os8088` skill's "Writing the copy" section is the standard).

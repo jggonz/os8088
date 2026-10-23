@@ -7,7 +7,7 @@
 //   Workflow({ scriptPath: "<repo>/.claude/skills/review-fork-pr/workflows/fix.js",
 //              args: { wt: "<abs path of the scratch worktree holding the PR>",
 //                      pr: <PR number>,
-//                      model: "Claude Opus 5 (1M context)",   // for Co-Authored-By
+//                      attribution: "<complete session-configured Co-Authored-By trailer>", // optional
 //                      batches: [ { key:   "B1-compactor-pointers",
 //                                   title: "Pointers banked across a call that can move memory",
 //                                   findings: [ <verified finding objects from review.js> ],
@@ -28,7 +28,7 @@ export const meta = {
 
 const WT = args.wt
 const PR = args.pr
-const MODEL = args.model || 'Claude Opus 5 (1M context)'
+const ATTRIBUTION = args.attribution || ''
 const BATCHES = args.batches || []
 if (!BATCHES.length) throw new Error('fix.js: args.batches is empty')
 
@@ -100,10 +100,10 @@ VERIFICATION IS PART OF THE JOB - a fix you have not verified is not done:
 - If your build fails, fix it. Never report a batch whose build does not pass.
 
 COMMIT WHEN DONE, and only then, in the worktree:
-  cd ${WT} && git add -A && git commit
+  cd ${WT} && git add <explicit paths for this batch> && git commit
 Write the message in this repo's style: one summary line naming the section or subsystem and what
-changed, a blank line, then one bullet per fix saying what would have gone wrong. End with:
-Co-Authored-By: ${MODEL} <noreply@anthropic.com>
+changed, a blank line, then one bullet per fix saying what would have gone wrong.
+${ATTRIBUTION ? 'End with this session-configured attribution trailer:\n' + ATTRIBUTION : 'No attribution trailer was supplied; do not invent an agent, model or email.'}
 Commit ONLY your own batch's changes.`
 
 const FIX_SCHEMA = {

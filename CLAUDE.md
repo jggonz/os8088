@@ -863,6 +863,17 @@ every adapter gets a face — is `.claude/skills/retro-face`
 (`/retro-face <app> [mockups]`), whose `LESSONS.md` is what CDRack (SPEC.md
 §119.6) learned.
 
+## Shared agent skills
+
+The maintained skills live in `.claude/skills/`; `.agents/skills/` links to
+those same directories for Codex discovery. Claude Code uses `/skill-name`,
+Codex CLI/IDE uses `$skill-name`. Read
+[docs/AGENT-SKILLS.md](docs/AGENT-SKILLS.md) when running a skill: it maps the
+host's tools and explains how native agents follow the shared workflow scripts
+when `Workflow` is unavailable. Keep the skill's lessons, independent review
+stages, authorization gates and final test pass on either host. `vga-face`
+remains manual-only, with matching policy in its `agents/openai.yaml`.
+
 ## Building an app or game in waves
 
 Use WireFleet's delivery workflow for new applications and games, unless the

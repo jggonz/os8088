@@ -5,6 +5,9 @@ description: Bring one of the maintainer's own stale pull requests (a branch on 
 
 # Refresh a stale pull request
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 The PRs this is for are the maintainer's own: a branch on `jggonz/os8088`,
 usually one focused change, cut from a `main` that has since moved by tens of
 commits. Nobody else is going to push to it. The question is never "is this
@@ -190,7 +193,8 @@ conflicts or not), each fix with the `main` change that made it necessary,
 and the validation with real numbers (tests, tiers with pass/fail/skip,
 the end-to-end check and what it ran on). Keep the body's "still
 outstanding" line honest - a hardware test nobody ran is still outstanding.
-End with the Claude Code attribution line.
+Use the actual session's configured attribution, as the shared runtime guide
+describes.
 
 ```sh
 gh pr view <N> --json body -q .body > /tmp/pr<N>-body.md
