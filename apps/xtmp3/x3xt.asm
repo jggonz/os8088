@@ -1398,25 +1398,39 @@ x3x_mkruns:
 
 ; ============================================================ requantisation
 ; x3x_rqline - CX lines of a channel: ES:SI = ix[l] (q 1,152 bytes on), DS:DI
-; = the destination, DX = its stride in bytes. Each |ix| <= 15 reads RQL
-; (q < -80: 0, q > 7: 32767), a larger one x3x_rqbig; the sign of ix.
-; Advances SI by 2 a line and DI by DX. Clobbers AX, BX, BP; CX = 0.
+; = the destination, DX = its stride in bytes (2 or 6). Each |ix| <= 15
+; reads RQL (q < -80: 0, q > 7: 32767), a larger one x3x_rqbig; the sign of
+; ix. Advances SI by 2 a line and DI by the stride. Clobbers AX, BX, DX;
+; CX = 0. One loop a stride, so DX is free for CWD's sign.
 x3x_rqline:
+    cmp dx, 2
+    je x3x_rq2
+    jmp x3x_rq6
+
+%macro X3X_STEP 1                   ; DI += the stride %1
+%if %1 == 2
+    inc di
+    inc di
+%else
+    add di, %1
+%endif
+%endmacro
+
+%macro X3X_RQLOOP 1                 ; %1: the stride
 .l: mov ax, [es:si]
     or ax, ax
     jnz .nz
     mov [di], ax
-.nx:
     inc si
     inc si
-    add di, dx
+    X3X_STEP %1
     loop .l
     ret
 .nz:
-    mov bp, ax
-    jns .p
-    neg ax
-.p: cmp ax, 15
+    cwd                             ; DX = the sign
+    xor ax, dx
+    sub ax, dx                      ; |ix|
+    cmp ax, 15
     ja .big
     mov bx, [es:si + X3X_R_Q - X3X_R_IX]
     add bx, -X3X_RQ_G0
@@ -1431,12 +1445,14 @@ x3x_rqline:
     add bx, ax
     mov ax, [bx + X3X_H1_RQL]
 .sg:
-    or bp, bp
-    jns .st
-    neg ax
-.st:
+    xor ax, dx                      ; the sign back
+    sub ax, dx
     mov [di], ax
-    jmp short .nx
+    inc si
+    inc si
+    X3X_STEP %1
+    loop .l
+    ret
 .qout:
     or bx, bx                       ; q + 80 < 0: below the table, 0
     js .zq
@@ -1444,11 +1460,17 @@ x3x_rqline:
     jmp short .sg
 .zq:
     xor ax, ax
-    jmp short .st
+    jmp short .sg
 .big:
     mov bx, [es:si + X3X_R_Q - X3X_R_IX]
     call x3x_rqbig
     jmp short .sg
+%endmacro
+
+x3x_rq2:
+    X3X_RQLOOP 2
+x3x_rq6:
+    X3X_RQLOOP 6
 
 ; x3x_rqbig - AX = |ix| > 15, BX = q: the Q13 magnitude, saturated at 32767.
 ; x3sim's pow43 (M, E) with F = 2^((q & 3) / 4) Q14: P = M F, s = 15 - E -
@@ -2077,6 +2099,8 @@ x3x_hybrid:
 .go:
     call x3x_produce                ; CF = 1: the subband is all zero
     jc .zero
+    or al, al                       ; AL = 1: windowed AND overlapped
+    jnz .nx                         ; already (a long block in mode 0)
     cmp byte [cs:x3x_mode], 1
     je .keep
     cmp byte [cs:x3x_mode], 2
@@ -2109,7 +2133,9 @@ x3x_hybrid:
     jmp short .sb
 
 ; x3x_produce - the subband x3x_sb of X into Y36 (H2). CF = 1 when its 18
-; lines are all zero (Y36 untouched). Leaves DS = H1.
+; lines are all zero (Y36 untouched). Otherwise CF = 0 and AL = 0, or, for
+; a long block in mode 0, AL = 1: its window and overlap are done (the slot
+; samples written, no Y36). Leaves DS = H1.
 x3x_produce:
     mov ds, [cs:x3x_segh1]
     mov es, [cs:x3x_segh2]
@@ -2173,18 +2199,49 @@ x3x_produce:
 .win:
     pop ax
     mov ds, [cs:x3x_segh2]
+    cmp byte [cs:x3x_mode], 0
+    jne .y36
+    ; mode 0: the window and the overlap in one pass
+    push ax
+    call x3x_sbaddr                 ; BX = the overlap row, DI = the column
+    mov si, bx
+    xor bx, bx
+    mov es, [cs:x3x_segsy]
+    xor bp, bp
+    test byte [cs:x3x_sb], 1
+    jz .ev
+    dec bp                          ; an odd subband: its odd slots negated
+.ev:
+    pop ax
+    cmp al, 1
+    je .f1
+    cmp al, 3
+    je .f3
+    call x3x_wfuse0
+    jmp short .fd
+.f1:
+    call x3x_wfuse1
+    jmp short .fd
+.f3:
+    call x3x_wfuse3
+.fd:
+    mov al, 1
+    jmp short .wd
+.y36:
     xor bx, bx
     cmp al, 1
     je .w1
     cmp al, 3
     je .w3
     call x3x_wlong0
-    jmp short .wd
+    jmp short .w0
 .w1:
     call x3x_wlong1
-    jmp short .wd
+    jmp short .w0
 .w3:
     call x3x_wlong3
+.w0:
+    mov al, 0
 .wd:
     mov ds, [cs:x3x_segh1]
     clc
@@ -2202,14 +2259,16 @@ x3x_produce:
     mov cx, 36
     xor ax, ax
     rep stosw
-    xor dx, dx                      ; the window
+    xor dx, dx                      ; DL the window, DH: any code in it
 .sw:
     mov di, X3X_H2_Z
     mov cx, 6
     xor ax, ax
     rep stosw
+    mov dh, 0
     push si
-    mov bx, dx
+    mov bl, dl
+    xor bh, bh
     shl bx, 1
     add si, bx                      ; x[3k + w]
     xor di, di                      ; 2k
@@ -2220,6 +2279,7 @@ x3x_produce:
     call x3x_encr
     or ax, ax
     jz .sn
+    mov dh, 1
     xchg bx, ax
     call [cs:x3x_im6tab + di]
 .sn:
@@ -2229,7 +2289,10 @@ x3x_produce:
     cmp di, 12
     jb .sk
     pop si
+    or dh, dh                       ; every code 0: z, and so the window's
+    jz .nw                          ; twelve outputs, are 0 - nothing to add
     ; window it into Y36 at 6 + 6w
+    mov dh, 0
     push si
     push dx
     mov ds, [cs:x3x_segh2]
@@ -2245,10 +2308,12 @@ x3x_produce:
     mov ds, [cs:x3x_segh1]
     pop dx
     pop si
-    inc dx
-    cmp dx, 3
+.nw:
+    inc dl
+    cmp dl, 3
     jb .sw
 .sd:
+    mov al, 0
     clc
     ret
 
@@ -2520,6 +2585,9 @@ x3x_aa_split:
 %assign i 0
 %rep 8
     mov ax, [si - 2 - 2 * i]        ; lo
+    mov dx, ax
+    or dx, [si + 2 * i]
+    jz .z%[i]                       ; lo = hi = 0: the butterfly changes nothing
     X3X_SPL X3X_H1_AA + 1024 * i
     mov di, dx                      ; lo cs
     X3X_SPL X3X_H1_AA + 1024 * (8 + i)
@@ -2531,6 +2599,7 @@ x3x_aa_split:
     sub dx, bp                      ; hi cs - lo ca
     mov [si + 2 * i], dx
     mov [si - 2 - 2 * i], di
+.z%[i]:
 %assign i i + 1
 %endrep
     add si, 36
@@ -2547,6 +2616,9 @@ x3x_aa_tab:
 %assign i 0
 %rep 8
     mov ax, [si + 2 * i]
+    mov dx, ax
+    or dx, [si - 2 - 2 * i]
+    jz .z%[i]                       ; lo = hi = 0: the butterfly changes nothing
     call x3x_encr
     mov di, ax                      ; code(hi)
     mov ax, [si - 2 - 2 * i]
@@ -2558,6 +2630,7 @@ x3x_aa_tab:
     sub dx, [bx + X3X_H1_AA + 512 * (8 + i) + 256]
     mov [si - 2 - 2 * i], ax
     mov [si + 2 * i], dx
+.z%[i]:
 %assign i i + 1
 %endrep
     add si, 36

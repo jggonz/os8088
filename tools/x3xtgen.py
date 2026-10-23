@@ -274,9 +274,9 @@ def fl32_chain(blobs):
 # ===================================================================== LEE
 def lee_ops(N):
     """Lee's DCT-II of size N IN PLACE on N words (x3xtmodel.DctPlan's
-    recursion): ('bf', a, b, c16) is a = a + b, b = split(a - b, c16);
-    ('add', o, o1) is o = o + o1. Returns (ops, where) with where[l] the
-    word that holds X[l] at the end."""
+    recursion): ('bf', a, b, c16, n) is a = a + b, b = split(a - b, c16), at
+    the recursion's size n; ('add', o, o1) is o = o + o1. Returns (ops,
+    where) with where[l] the word that holds X[l] at the end."""
     ops = []
 
     def rec(xs):
@@ -287,7 +287,7 @@ def lee_ops(N):
         b = xs[::-1][:n // 2]
         for k in range(n // 2):
             c = 0.5 / math.cos((2 * k + 1) * math.pi / (2 * n))
-            ops.append(('bf', a[k], b[k], int(round(c * 65536))))
+            ops.append(('bf', a[k], b[k], int(round(c * 65536)), n))
         ev = rec(a)
         od = rec(b)
         out = [None] * n
@@ -307,7 +307,7 @@ def lee_run(ops, x, smul):
     x = list(x)
     for op in ops:
         if op[0] == 'bf':
-            _, a, b, c = op
+            _, a, b, c = op[:4]
             s = wrap(x[a] + x[b])
             d = wrap(x[a] - x[b])
             x[a] = int(s)
@@ -330,43 +330,148 @@ def code_pairs(div):
     return out
 
 
+def _split(pb):
+    """AX times the constant at planes pb into DX (BH = 0)."""
+    return ['    mov bl,ah', '    mov dl,[bx+%d]' % (pb + 512), '    mov dh,[bx+%d]' % (pb + 768),
+            '    mov bl,al', '    add dl,[bx+%d]' % pb, '    adc dh,[bx+%d]' % (pb + 256)]
+
+
+def _add_run(run):
+    """A run of Lee's odd adds (o = o + o1) with CX, SI and BP as a small
+    write-back cache: a value is loaded once while it stays in a register,
+    every add is register to register or register from memory, and each
+    changed value is stored once when the run ends (or its register is
+    taken). The same adds, in the same order: wrapping makes order free
+    anyway, and the stored words are exactly the one-at-a-time ones."""
+    regs = ['cx', 'si', 'bp']
+    held = {}          # slot -> register
+    dirty = set()
+    lru = []           # slots, least recent first
+    L = []
+
+    def touch(sl):
+        if sl in lru:
+            lru.remove(sl)
+        lru.append(sl)
+
+    def later(sl, i):
+        return any(sl in (o, o1) for _, o, o1 in run[i + 1:])
+
+    def grab(i):
+        free = [r for r in regs if r not in held.values()]
+        if free:
+            return free[0]
+        # evict: the least recently used slot not needed by this add
+        for sl in lru:
+            if sl not in (run[i][1], run[i][2]):
+                r = held.pop(sl)
+                lru.remove(sl)
+                if sl in dirty:
+                    L.append('    mov [di+%d],%s' % (2 * sl, r))
+                    dirty.discard(sl)
+                return r
+        raise AssertionError('no register')
+
+    for i, (_, o, o1) in enumerate(run):
+        if o not in held:
+            r = grab(i)
+            L.append('    mov %s,[di+%d]' % (r, 2 * o))
+            held[o] = r
+        ro = held[o]
+        touch(o)
+        if o1 in held:
+            L.append('    add %s,%s' % (ro, held[o1]))
+            touch(o1)
+        elif later(o1, i):
+            r = grab(i)
+            L.append('    mov %s,[di+%d]' % (r, 2 * o1))
+            held[o1] = r
+            touch(o1)
+            L.append('    add %s,%s' % (ro, r))
+        else:
+            L.append('    add %s,[di+%d]' % (ro, 2 * o1))
+        dirty.add(o)
+    for sl in sorted(dirty):
+        L.append('    mov [di+%d],%s' % (2 * sl, held[sl]))
+    return L
+
+
 def lee_asm(N, lee, label):
     """NASM for one slot: DS = SY, DI = the slot record, BH = 0. In place,
     then each pair's two V codes into the record's code area. Ends with
-    BH = 0. Clobbers AX, BX, CX, DX."""
+    BH = 0. Clobbers AX, BX, CX, DX, SI, BP.
+
+    Every DCT-4 at the bottom of the recursion - two butterflies, two
+    DCT-2s and the odd add, five operations on four words - runs in
+    registers (CX, SI, BP beside the multiply's AX and DX): four loads and
+    four stores where the operations one at a time make nineteen memory
+    accesses (MartyPC: matrixing was a quarter of XT Standard)."""
     ops, where = lee_ops(N)
     plane = {c: SY['LEE'] + 1024 * i for i, c in enumerate(lee)}
     L = ['%s:' % label]
-    for op in ops:
+    i = 0
+    while i < len(ops):
+        op = ops[i]
+        if op[0] == 'bf' and op[4] == 4:
+            g = ops[i:i + 5]
+            x0, x3, c40 = g[0][1], g[0][2], g[0][3]
+            x1, x2, c41 = g[1][1], g[1][2], g[1][3]
+            assert g[2][:3] == ('bf', x0, x1) and g[2][4] == 2, g
+            assert g[3][:3] == ('bf', x3, x2) and g[3][4] == 2 and g[3][3] == g[2][3], g
+            assert g[4] == ('add', x3, x2), g
+            c2 = g[2][3]
+            L += ['    mov ax,[di+%d]' % (2 * x0), '    mov cx,[di+%d]' % (2 * x3),
+                  '    mov si,ax', '    add si,cx',
+                  '    sub ax,cx']
+            L += _split(plane[c40])
+            L += ['    mov bp,dx',
+                  '    mov ax,[di+%d]' % (2 * x1), '    mov cx,[di+%d]' % (2 * x2),
+                  '    mov dx,ax', '    sub ax,cx', '    add cx,dx']
+            L += _split(plane[c41])
+            # SI x0', CX x1', BP x3', DX x2'
+            L += ['    mov ax,si', '    sub ax,cx', '    add si,cx', '    mov cx,dx']
+            L += _split(plane[c2])
+            L += ['    mov [di+%d],dx' % (2 * x1), '    mov [di+%d],si' % (2 * x0),
+                  '    mov ax,bp', '    sub ax,cx', '    add bp,cx']
+            L += _split(plane[c2])
+            L += ['    mov [di+%d],dx' % (2 * x2), '    add bp,dx', '    mov [di+%d],bp' % (2 * x3)]
+            i += 5
+            continue
         if op[0] == 'bf':
-            _, a, b, c = op
-            pb = plane[c]
+            _, a, b, c = op[:4]
             L += ['    mov ax,[di+%d]' % (2 * a), '    mov cx,[di+%d]' % (2 * b),
                   '    mov dx,ax', '    add dx,cx', '    mov [di+%d],dx' % (2 * a),
-                  '    sub ax,cx',
-                  '    mov bl,ah', '    mov dl,[bx+%d]' % (pb + 512),
-                  '    mov dh,[bx+%d]' % (pb + 768), '    mov bl,al',
-                  '    add dl,[bx+%d]' % pb, '    adc dh,[bx+%d]' % (pb + 256),
-                  '    mov [di+%d],dx' % (2 * b)]
-        else:
-            _, o, o1 = op
-            L += ['    mov ax,[di+%d]' % (2 * o), '    add ax,[di+%d]' % (2 * o1),
-                  '    mov [di+%d],ax' % (2 * o)]
-    # the V codes: each needed X value once
+                  '    sub ax,cx']
+            L += _split(plane[c])
+            L += ['    mov [di+%d],dx' % (2 * b)]
+            i += 1
+            continue
+        j = i
+        while j < len(ops) and ops[j][0] == 'add':
+            j += 1
+        L += _add_run(ops[i:j])
+        i = j
+    # the V codes: each needed X value once, three to a group, the rare slow
+    # path (|x| >= 2 FS) out of line after its group
     div = 32 // N
     need = {}
     for p, a, b in code_pairs(div):
         if a is not None:
             need.setdefault(a, []).append(SLOT_CODE + 4 * (p // div))
         need.setdefault(b, []).append(SLOT_CODE + 4 * (p // div) + 2)
-    for k, (l, dests) in enumerate(sorted(need.items())):
-        L += ['    mov ax,[di+%d]' % (2 * where[l]), '    add ax,4096',
-              '    cmp ax,8191', '    jbe .f%d' % k, '    call x3x_vslow',
-              '    jmp short .b%d' % k,
-              '.f%d:' % k, '    xchg bx,ax', '    mov al,[bx+%d]' % SY['ENCV'],
-              '    cbw', '    shl ax,1', '.b%d:' % k]
-        for d in dests:
-            L.append('    mov [di+%d],ax' % d)
+    items = list(enumerate(sorted(need.items())))
+    for g0 in range(0, len(items), 3):
+        grp = items[g0:g0 + 3]
+        for k, (l, dests) in grp:
+            L += ['    mov ax,[di+%d]' % (2 * where[l]), '    add ax,4096',
+                  '    cmp ax,8191', '    ja .s%d' % k, '    xchg bx,ax',
+                  '    mov al,[bx+%d]' % SY['ENCV'], '    cbw', '    shl ax,1', '.b%d:' % k]
+            for d in dests:
+                L.append('    mov [di+%d],ax' % d)
+        L.append('    jmp short .g%d' % g0)
+        for k, _ in grp:
+            L += ['.s%d:' % k, '    call x3x_vslow', '    jmp short .b%d' % k]
+        L.append('.g%d:' % g0)
     L += ['    xor bh,bh', '    ret']
     return L, ops, where, need
 
@@ -414,7 +519,7 @@ def win_asm(profile, div, label):
     from x3x_wseg. Writes the slot's PCM. Clobbers AX, BX, CX, DX, SI, DS."""
     n = PROFILES[profile][0]
     lodsw = n == 16
-    pairs = win_pairs(profile, div)
+    pairs = sorted(win_pairs(profile, div), key=lambda q: (q[1], q[0]))
     L = ['%s:' % label]
     cur = None
     for p, g, ring, outs in pairs:
@@ -448,17 +553,19 @@ def win_asm(profile, div, label):
                 for a, ro, sg in tl:
                     if a == age:
                         L.append('    %s %s,[bx+%d]' % ('add' if sg == '+' else 'sub', r, ro + 256))
+        # PCM8: two shl/jo pairs catch |acc| >= 2^13 and the high byte is
+        # then acc >> 6. On a clip CF holds the sign (bit 15 at the first jo,
+        # bit 14 = bit 15 at the second), which the stub reads after `inc`
         for k, ((m, tl), r) in enumerate(zip(outs, accs)):
             lab = '.p%do%d' % (p, k)
-            L += ['    mov ax,%s' % r, '    shl ax,1', '    jo %sc' % lab, '    shl ax,1',
-                  '    jo %sc' % lab, '    mov al,ah', '    xor al,80h',
+            L += ['    shl %s,1' % r, '    jo %sc' % lab, '    shl %s,1' % r,
+                  '    jo %sc' % lab, '    mov al,%sh' % r[0], '    xor al,80h',
                   '%sw:' % lab, '    mov [es:bp+%d],al' % (SLOT_PCM + m)]
         L.append('    jmp short .p%dx' % p)
         for k, ((m, tl), r) in enumerate(zip(outs, accs)):
             lab = '.p%do%d' % (p, k)
-            L += ['%sc:' % lab, '    inc word [cs:x3x_clips]', '    mov al,0FFh',
-                  '    or %s,%s' % (r, r), '    jns %sw' % lab, '    inc ax',
-                  '    jmp short %sw' % lab]
+            L += ['%sc:' % lab, '    inc word [cs:x3x_clips]', '    mov al,0',
+                  '    jc %sw' % lab, '    dec ax', '    jmp short %sw' % lab]
         L.append('.p%dx:' % p)
     L.append('    ret')
     return L
@@ -554,6 +661,36 @@ def shape_code():
                 L.append('    neg ax')
             L += mul(H2['IMWIN'] + 1024 * k)
             L.append('    mov [%d],dx' % (H2['Y36'] + 2 * i))
+        L.append('    ret')
+    # mode 0: the window AND the overlap, no Y36. DS = H2, ES = SY, SI = the
+    # subband's overlap row, DI = its slot column, BP = 0 (an even subband)
+    # or FFFFh (odd: xor/sub negates its odd slots), BH = 0
+    for bt in (0, 1, 3):
+        L.append('x3x_wfuse%d:' % bt)
+        for i in range(36):
+            k = WINDOWS[bt][i]
+            z, neg = zsrc36[i]
+            if i < 18:
+                if k is None:
+                    L.append('    mov dx,[si+%d]' % (2 * i))
+                else:
+                    L.append('    mov ax,[%d]' % (H2['Z'] + 2 * z))
+                    if neg:
+                        L.append('    neg ax')
+                    L += mul(H2['IMWIN'] + 1024 * k)
+                    L.append('    add dx,[si+%d]' % (2 * i))
+                if i & 1:
+                    L += ['    xor dx,bp', '    sub dx,bp']
+                L.append('    mov [es:di+%d],dx' % (i * SLOTSZ))
+            else:
+                if k is None:
+                    L.append('    mov word [si+%d],0' % (2 * (i - 18)))
+                    continue
+                L.append('    mov ax,[%d]' % (H2['Z'] + 2 * z))
+                if neg:
+                    L.append('    neg ax')
+                L += mul(H2['IMWIN'] + 1024 * k)
+                L.append('    mov [si+%d],dx' % (2 * (i - 18)))
         L.append('    ret')
     L.append('x3x_wshort:')
     for i in range(12):
@@ -728,7 +865,7 @@ def selfcheck(verbose=False):
             y = list(x)
             for op in ops:
                 if op[0] == 'bf':
-                    _, a_, b_, c = op
+                    _, a_, b_, c = op[:4]
                     y[a_], y[b_] = y[a_] + y[b_], (y[a_] - y[b_]) * (c / 65536.0)
                 else:
                     y[op[1]] = y[op[1]] + y[op[2]]
