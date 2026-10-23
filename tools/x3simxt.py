@@ -91,15 +91,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import x3sim as S      # noqa: E402
 import x3xttab as XT   # noqa: E402
 import x3xtmodel as XM  # noqa: E402
+import x3xtgen as G     # noqa: E402
 
-FAST_MIN = 10          # a long subband with this many nonzero lines takes the fast IMDCT
-PROFILES = {
-    # name: (window taps, pack, antialias form)
-    'std': (16, 'std', 'split'),
-    'fast': (8, 'fast', 'tab'),
-    'turbo': (4, 'turbo', 'tab'),
-    'speech': (16, 'speech', 'split'),
-}
+FAST_MIN = G.FAST_MIN
+PROFILES = G.PROFILES
 GOLDEN = os.path.join(S.FIXDIR, 'X3XT.txt')
 
 
@@ -182,28 +177,13 @@ def _c16(c):
     return int(round(c * 65536))
 
 
-# the windows: per block type, 36 entries of an IMWIN index (None = 0)
-def _wk(i):
-    return min(i, 35 - i)
-
-
-def _block_windows():
-    sine36 = [_wk(i) for i in range(36)]
-    s12 = [_wk(3 * m + 1) for m in range(12)]
-    w = {0: sine36,
-         1: sine36[:18] + [18] * 6 + s12[6:] + [None] * 6,
-         3: [None] * 6 + s12[:6] + [18] * 6 + sine36[18:]}
-    return w, s12
-
-
-WINDOWS, SHORT_WIN = _block_windows()
-
-# fast IMDCT constants, Q15
-TW1 = [XT.COS_C15[9 + i] for i in range(9)]       # cos(pi (19 + 2i) / 72)
-TW0 = [XT.COS_C15[8 - i] for i in range(9)]       # sin(pi (19 + 2i) / 72)
-DCT9 = dict(S.Q.DCT9)
-R18, SG18 = XM.R18, XM.SG18
-R6, SG6 = XM.R6, XM.SG6
+# the windows, the fast IMDCT's constants and the cos sign tables: one
+# definition each, in tools/x3xtgen.py (standard library, the make path's)
+WINDOWS, SHORT_WIN = G.WINDOWS, G.SHORT_WIN
+TW1, TW0 = G.TW1, G.TW0
+DCT9 = G.DCT9
+R18, SG18 = np.array(G.R18), np.array(G.SG18)
+R6, SG6 = np.array(G.R6), np.array(G.SG6)
 
 
 def imq(a, c):
@@ -301,6 +281,8 @@ class XTDecoder:
         self.ring = np.zeros((15, 64), dtype=np.int64)     # V codes, ages 1..15
         self.stats = dict(clip=0, vslow=0, rqsat=0, fast=0, sparse=0, short=0,
                           granules=0, split=0)
+        self.fast_min = FAST_MIN        # (a measurement may move it; the target's is X3X_FAST_MIN)
+        self.sblog = None               # per long nonzero subband: its nonzero lines
         self.plan = XM.DctPlan(self.nsb)
         self.phases = list(range(0, 32, div))
         D = self.T.D
@@ -380,6 +362,8 @@ class XTDecoder:
         for sb in range(nsb):
             short = gi.block_type == 2 and not (gi.mixed and sb < 2)
             if short:
+                if self.sblog is not None:
+                    self.sblog.append(-1)
                 self.stats['short'] += 1
                 for w in range(3):
                     c = T.enc_r(xb[sb, w::3]) + 128          # 6 codes
@@ -392,7 +376,9 @@ class XTDecoder:
                 y[sb] = wrap(y[sb])
                 continue
             bt = 0 if (gi.win_switch and gi.mixed and sb < 2) else gi.block_type
-            if np.count_nonzero(xb[sb]) >= FAST_MIN:
+            if self.sblog is not None:
+                self.sblog.append(int(np.count_nonzero(xb[sb])))
+            if np.count_nonzero(xb[sb]) >= self.fast_min:
                 self.stats['fast'] += 1
                 z = dct4_18_fast(xb[sb:sb + 1])[0]
             else:

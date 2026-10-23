@@ -116,7 +116,7 @@ def open_part(part, profile, div):
 
 def check_expand(image, verbose):
     fails = 0
-    for prof in G.PROFILES:
+    for prof in G.PNAMES:
         part = Part(image)
         L = G.layout(prof)
         caps = part.call(0, ax=PNUM[prof])
@@ -317,7 +317,7 @@ def synthetic(image, prof, count, seed, verbose):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--profile', nargs='*', default=list(G.PROFILES))
+    ap.add_argument('--profile', nargs='*', default=list(G.PNAMES))
     ap.add_argument('--fixture', nargs='*', default=['X8K16.MP3', 'AFTERHRS.MP3'])
     ap.add_argument('--granules', type=int, default=0)
     ap.add_argument('--expand', action='store_true')

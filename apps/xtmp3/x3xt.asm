@@ -374,7 +374,7 @@ x3x_fl32:
     add bx, ax
     add dx, bx
     loop .f
-    mov [cs:x3x_fs1], bx
+.r: mov [cs:x3x_fs1], bx            ; (.r: where a profile run ends a check)
     mov [cs:x3x_fs2], dx
     pop dx
     pop bx
@@ -994,7 +994,7 @@ x3x_granule:
     call x3x_mix
     mov byte [cs:x3x_mode], 0
     call x3x_hybrid
-    jmp short .synth
+    jmp .synth
 .split:
     add word [cs:x3x_s_split], 1
     adc word [cs:x3x_s_split + 2], 0
@@ -1004,14 +1004,35 @@ x3x_granule:
     je .noplan
     call x3x_stproc
 .noplan:
+    ; the split path: either channel may be nonzero up to the larger nz
+    mov es, [cs:x3x_rseg]
+    mov si, [cs:x3x_roff]
+    xor ax, ax
+    cmp byte [es:si + X3X_R_CH0 + X3X_R_OK], 0
+    je .sz1
+    mov ax, [es:si + X3X_R_CH0 + X3X_R_NZ]
+.sz1:
+    cmp byte [es:si + X3X_R_CH0 + X3X_R_CHSZ + X3X_R_OK], 0
+    je .sz2
+    cmp ax, [es:si + X3X_R_CH0 + X3X_R_CHSZ + X3X_R_NZ]
+    jae .sz2
+    mov ax, [es:si + X3X_R_CH0 + X3X_R_CHSZ + X3X_R_NZ]
+.sz2:
+    cmp ax, 576
+    jbe .sz3
+    mov ax, 576
+.sz3:
+    mov [cs:x3x_nzsplit], ax
     mov bx, 0
     call x3x_setgi
+    call x3x_splitnz
     mov si, X3X_H1_XL
     call x3x_place
     mov byte [cs:x3x_mode], 1
     call x3x_hybrid
     mov bx, 1
     call x3x_setgi
+    call x3x_splitnz
     mov si, X3X_H1_XR
     call x3x_place
     mov byte [cs:x3x_mode], 2
@@ -1383,6 +1404,7 @@ x3x_rqmono:
     mov es, [cs:x3x_rseg]
     cmp byte [es:bx + X3X_R_OK], 0
     jne .ok
+    mov word [cs:x3x_nzx], 0
     mov di, X3X_H1_X
     mov cx, 576
     jmp x3x_zero
@@ -1401,7 +1423,8 @@ x3x_rqmono:
     cmp cx, dx
     jbe .c
     mov cx, dx
-.c: push dx
+.c: mov [cs:x3x_nzx], cx            ; X is zero from here up
+    push dx
     push cx
     mov di, X3X_H1_X
     mov dx, 2
@@ -1416,6 +1439,7 @@ x3x_rqmono:
     mov cx, dx
     jmp x3x_zero
 .short:
+    mov word [cs:x3x_nzx], 576
     push si
     mov di, X3X_H1_X
     mov cx, 576
@@ -1507,6 +1531,7 @@ x3x_mix:
     jbe .l1
     mov cx, dx
 .l1:
+    mov [cs:x3x_nzx], cx
     push dx
     push cx
     mov di, X3X_H1_X
@@ -1523,6 +1548,7 @@ x3x_mix:
     mov cx, dx
     jmp x3x_zero
 .short:
+    mov word [cs:x3x_nzx], 576
     mov [cs:x3x_rem], ax
     push bx
     push si
@@ -1777,6 +1803,20 @@ x3x_place:
 
 x3x_rem     dw 0
 x3x_hasplan db 0
+x3x_nzx     dw 576                  ; X is zero from this line up
+x3x_nzsplit dw 576
+
+; x3x_splitnz - the split path's bound for the current block: max nz for a
+; long block, everything for a short one
+x3x_splitnz:
+    push ax
+    mov ax, [cs:x3x_nzsplit]
+    cmp byte [cs:x3x_bt], 2
+    jne .l
+    mov ax, 576
+.l: mov [cs:x3x_nzx], ax
+    pop ax
+    ret
 
 ; =============================================================== the hybrid
 ; x3x_hybrid - X (subband order, H1) of the current block: antialias, then a
@@ -1801,7 +1841,28 @@ x3x_hybrid:
     jbe .a2
     mov cx, ax
 .a2:
+    ; and no boundary whose 16 lines all lie at or above nzx (zero, so the
+    ; butterfly changes nothing): b < floor((nzx + 25) / 18)
+    mov ax, [cs:x3x_nzx]
+    add ax, 25
+    mov dl, 18
+    div dl
+    xor ah, ah
+    dec ax
+    cmp cx, ax
+    jbe .a3
+    mov cx, ax
+.a3:
     jcxz .noaa
+    ; the last butterfly reaches 8 lines into the subband above it
+    mov ax, 18
+    mul cx
+    add ax, 8
+    cmp ax, [cs:x3x_nzx]
+    jbe .a4
+    mov [cs:x3x_nzx], ax
+.a4:
+    xor bx, bx
     call [cs:x3x_aafn]
 .noaa:
     mov word [cs:x3x_sb], 0
@@ -1857,6 +1918,12 @@ x3x_produce:
     shl si, 1
     shl si, 1                       ; 32 sb
     add si, ax                      ; 36 bytes a subband
+    mov ax, si
+    shr ax, 1                       ; 18 sb, the subband's first line
+    cmp ax, [cs:x3x_nzx]
+    jb .look
+    jmp .allz
+.look:
     add si, X3X_H1_X
     ; nonzero lines: neg sets CF for a nonzero word
     xor cx, cx
@@ -1978,6 +2045,7 @@ x3x_produce:
     inc dx
     cmp dx, 3
     jb .sw
+.sd:
     clc
     ret
 
@@ -2428,6 +2496,7 @@ x3x_synth:
     pop cx
     add di, X3X_SLOTSZ
     loop .l
+.ld:                                ; (Lee and the V codes done)
     mov es, [cs:x3x_segsy]
     mov bp, X3X_SY_SLOT
     mov word [cs:x3x_t], 18
@@ -2448,6 +2517,7 @@ x3x_synth:
     add bp, X3X_SLOTSZ
     dec word [cs:x3x_t]
     jnz .w
+.wd:
     ret
 
 ; x3x_vslow - a V value past ENCV's +-4096: AX = v + 4096 (wrapped). AX =

@@ -38,17 +38,84 @@ import struct
 import sys
 import zlib
 
-import numpy as np
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import x3xttab as XT     # noqa: E402
-import x3simxt as SX     # noqa: E402
-import x3sim as S        # noqa: E402
-import x3xtmodel as XM   # noqa: E402
-import x3tab_iso as ISO  # noqa: E402
+import x3xttab as XT      # noqa: E402
+import x3tables as TB     # noqa: E402
+import x3tab_iso as ISO   # noqa: E402
+
+# STANDARD LIBRARY ONLY at module level and on the make path (numpy is not a
+# build dependency in this tree: Makefile, LOGOVID). --fullcheck is the
+# numpy cross-check against tools/x3simxt.py, which imports the constants
+# below from here so the model and the part have one definition of each.
+
+# ---------------------------------------------------------- the XT chain's
+# constants (x3simxt.py's docstring is the chain they belong to)
+FAST_MIN = 13          # a long subband with this many nonzero lines takes the fast IMDCT (MartyPC: sparse 2,700 + 1,280 n cycles, factored 17,900)
+PROFILES = {
+    # name: (window taps, pack, antialias form)
+    'std': (16, 'std', 'split'),
+    'fast': (8, 'fast', 'tab'),
+    'turbo': (4, 'turbo', 'tab'),
+    'speech': (16, 'speech', 'split'),
+}
+TW1 = [XT.COS_C15[9 + i] for i in range(9)]       # cos(pi (19 + 2i) / 72), Q15
+TW0 = [XT.COS_C15[8 - i] for i in range(9)]       # sin(pi (19 + 2i) / 72)
+DCT9 = dict(TB.STD.DCT9)                           # minimp3's 9-point constants, Q15
+
+
+def _wk(i):
+    """The IMWIN index of the 36-point sine window's sample i (WIN36_C16
+    holds the 18 distinct values ascending, then 1.0)."""
+    return min(i, 35 - i)
+
+
+def _block_windows():
+    sine36 = [_wk(i) for i in range(36)]
+    s12 = [_wk(3 * m + 1) for m in range(12)]   # sin(pi/12 (m + .5)) = sine36[3m + 1]
+    w = {0: sine36,
+         1: sine36[:18] + [18] * 6 + s12[6:] + [None] * 6,
+         3: [None] * 6 + s12[:6] + [18] * 6 + sine36[18:]}
+    return w, s12
+
+
+WINDOWS, SHORT_WIN = _block_windows()
+
+
+def _cos_rows(n):
+    """For the n-point DCT-IV cos(pi (2r+1)(2k+1) / 4n), each entry as (row of
+    the 18 |cos(pi m / 72)|, sign): x3xtmodel.R18/SG18 (n = 18) and R6/SG6
+    (n = 6), in integers."""
+    R, SG = [], []
+    mult = 72 // (4 * n) * 2            # the angle in units of pi / 72
+    for r in range(n):
+        rr, ss = [], []
+        for k in range(n):
+            m = (2 * r + 1) * (2 * k + 1) * (mult // 2) % 144   # cos(pi m / 72)
+            sg = 1
+            if m > 72:
+                m = 144 - m
+            if m > 36:
+                m = 72 - m
+                sg = -1
+            assert m % 2 == 1, (n, r, k, m)
+            rr.append((m - 1) // 2)
+            ss.append(sg)
+        R.append(rr)
+        SG.append(ss)
+    return R, SG
+
+
+R18, SG18 = _cos_rows(18)
+R6, SG6 = _cos_rows(6)
+
+
+def wrap(v):
+    """v as a 16-bit two's complement word."""
+    return ((int(v) + 32768) & 0xFFFF) - 32768
+
 
 RING = 128               # a pair's two rings: 2 x (16 ages doubled) words
-PROFILES = ('std', 'fast', 'turbo', 'speech')
+PNAMES = ('std', 'fast', 'turbo', 'speech')
 PACK_OF = {'std': 'std', 'fast': 'std', 'turbo': 'std', 'speech': 'speech'}
 
 # ---------------------------------------------------------------- XTGEN.BIN
@@ -151,7 +218,7 @@ SY['LEE'] = SY['SLOT'] + 18 * SLOTSZ
 
 
 def layout(profile):
-    n, pack, aa = SX.PROFILES[profile]
+    n, pack, aa = PROFILES[profile]
     div = 2 if profile == 'speech' else 1
     ws = win_layout(n, div)
     lee = lee_list(pack)
@@ -241,13 +308,13 @@ def lee_run(ops, x, smul):
     for op in ops:
         if op[0] == 'bf':
             _, a, b, c = op
-            s = SX.wrap(x[a] + x[b])
-            d = SX.wrap(x[a] - x[b])
+            s = wrap(x[a] + x[b])
+            d = wrap(x[a] - x[b])
             x[a] = int(s)
             x[b] = int(smul(d, c))
         else:
             _, o, o1 = op
-            x[o] = int(SX.wrap(x[o] + x[o1]))
+            x[o] = int(wrap(x[o] + x[o1]))
     return x
 
 
@@ -345,7 +412,7 @@ def win_asm(profile, div, label):
     """NASM for one slot of the window pass. In: ES = SY, BP = the slot
     record, DI = rA (64 * (s & 1) + 2 * ((-s) & 15)); DS is loaded here
     from x3x_wseg. Writes the slot's PCM. Clobbers AX, BX, CX, DX, SI, DS."""
-    n = SX.PROFILES[profile][0]
+    n = PROFILES[profile][0]
     lodsw = n == 16
     pairs = win_pairs(profile, div)
     L = ['%s:' % label]
@@ -410,7 +477,7 @@ def win_run(profile, div, rows, ring_codes, slot_codes):
             for a, ro, sg in tl:
                 v = rows[g][ro][seq[a] // 2 + 128]
                 acc += v if sg == '+' else -v
-            acc = int(SX.wrap(acc))
+            acc = int(wrap(acc))
             if acc >= 8192:
                 out[m] = 255
                 clips += 1
@@ -429,15 +496,15 @@ def imdct_blocks():
     for k in range(18):
         L.append('x3x_im18_%d:' % k)
         for r in range(18):
-            ro = H1['IMR'] + 512 * int(XM.R18[r, k]) + 256
-            op = 'add' if XM.SG18[r, k] > 0 else 'sub'
+            ro = H1['IMR'] + 512 * R18[r][k] + 256
+            op = 'add' if SG18[r][k] > 0 else 'sub'
             L += ['    mov ax,[bx+%d]' % ro, '    %s [es:%d],ax' % (op, H2['Z'] + 2 * r)]
         L.append('    ret')
     for k in range(6):
         L.append('x3x_im6_%d:' % k)
         for r in range(6):
-            ro = H1['IMR'] + 512 * int(XM.R6[r, k]) + 256
-            op = 'add' if XM.SG6[r, k] > 0 else 'sub'
+            ro = H1['IMR'] + 512 * R6[r][k] + 256
+            op = 'add' if SG6[r][k] > 0 else 'sub'
             L += ['    mov ax,[bx+%d]' % ro, '    %s [es:%d],ax' % (op, H2['Z'] + 2 * r)]
         L.append('    ret')
     L.append('x3x_im18tab:')
@@ -477,7 +544,7 @@ def shape_code():
     for bt in (0, 1, 3):
         L.append('x3x_wlong%d:' % bt)
         for i in range(36):
-            k = SX.WINDOWS[bt][i]
+            k = WINDOWS[bt][i]
             z, neg = zsrc36[i]
             if k is None:
                 L.append('    mov word [%d],0' % (H2['Y36'] + 2 * i))
@@ -494,7 +561,7 @@ def shape_code():
         L.append('    mov ax,[%d]' % (H2['Z'] + 2 * z))
         if neg:
             L.append('    neg ax')
-        L += mul(H2['IMWIN'] + 1024 * SX.SHORT_WIN[i])
+        L += mul(H2['IMWIN'] + 1024 * SHORT_WIN[i])
         L.append('    add [di+%d],dx' % (12 + 2 * i))
     L.append('    ret')
     return L
@@ -503,18 +570,18 @@ def shape_code():
 # ================================================================== tables
 def const_tables():
     L = []
-    C = SX.DCT9
+    C = DCT9
     L.append('x3x_dct9:     ; c1 c2 c3 c4 c5 c6 s3, Q15')
     L.append('    dw %s' % ', '.join(str(C[k]) for k in ('c1', 'c2', 'c3', 'c4', 'c5', 'c6', 's3')))
     L.append('x3x_tw:       ; per i: -tw1, -tw0, tw1 (Q15): z[9+i], z[8-i]')
     for i in range(9):
-        L.append('    dw %d, %d, %d' % (-SX.TW1[i], -SX.TW0[i], SX.TW1[i]))
+        L.append('    dw %d, %d, %d' % (-TW1[i], -TW0[i], TW1[i]))
     # short band widths per (version, sr_idx): version 1, 2, 25 at 0, 3, 6
     L.append('x3x_sfbs:     ; 13 short-band widths, (version, rate) 1/0..2, 2/0..2, 2.5/0..2')
     for v in (1, 2, 25):
         for r in range(3):
             L.append('    db %s' % ', '.join(str(w) for w in ISO.SFB_SHORT[(v, r)]))
-    Q = S.Q
+    Q = TB.STD
     L.append('x3x_p43f:     dw %s' % ', '.join(str(v) for v in Q.P43_F))
     L.append('x3x_p43m:')
     m = list(Q.P43_M)
@@ -588,7 +655,7 @@ def emit(path):
     L.append('XG_NRQ equ %d' % (XT.RQ_G1 - XT.RQ_G0 + 1))
     L.append('X3X_RQ_G0 equ %d' % XT.RQ_G0)
     L.append('X3X_RQ_G1 equ %d' % XT.RQ_G1)
-    L.append('X3X_FAST_MIN equ %d' % SX.FAST_MIN)
+    L.append('X3X_FAST_MIN equ %d' % FAST_MIN)
     for k, v in H1.items():
         L.append('X3X_H1_%s equ %d' % (k, v))
     for k, v in H2.items():
@@ -600,7 +667,7 @@ def emit(path):
           'X3X_RING equ %d' % RING, '']
     L.append('%else')
     L.append('; ---- profile descriptors')
-    for p in PROFILES:
+    for p in PNAMES:
         L += profile_data(p)
     L.append('; ---- constant tables')
     L += const_tables()
@@ -623,11 +690,130 @@ def emit(path):
 
 
 # ================================================================ selfcheck
+def _smul_tab():
+    """x * c16 through the generator's own split rows (x3xttab)."""
+    cache = {}
+
+    def smul(v, c):
+        if c not in cache:
+            cache[c] = XT.split_recurrence(c)
+        H, L = cache[c]
+        v &= 0xFFFF
+        return wrap(H[(v >> 8) & 255] + L[v & 255])
+    return smul
+
+
+def _dct2(x):
+    N = len(x)
+    return [sum(x[k] * math.cos(math.pi * n * (2 * k + 1) / (2 * N)) for k in range(N))
+            for n in range(N)]
+
+
 def selfcheck(verbose=False):
+    """Standard library only (the make rule's): Lee's in-place operation
+    lists ARE the DCT-II (run in floats with exact multiplies), the window
+    pass's tap signs and rows are the window's (against the V-domain formula
+    written out here), the cos sign tables are the DCT-IVs, the layouts fit,
+    XTGEN.BIN's offsets are what the part reads. tests/x3xtunit.py and
+    --fullcheck hold the arithmetic to tools/x3simxt.py."""
     fails = []
     rnd = random.Random(1234)
+    for N in (32, 16, 8):
+        ops, where = lee_ops(N)
+        for _ in range(5):
+            x = [rnd.uniform(-1, 1) for _ in range(N)]
+            y = list(x)
+            for op in ops:
+                if op[0] == 'bf':
+                    _, a_, b_, c = op
+                    y[a_], y[b_] = y[a_] + y[b_], (y[a_] - y[b_]) * (c / 65536.0)
+                else:
+                    y[op[1]] = y[op[1]] + y[op[2]]
+            ref = _dct2(x)
+            if max(abs(y[where[l]] - ref[l]) for l in range(N)) > 1e-3:
+                fails.append('Lee %d: the operation list is not the DCT-II' % N)
+                break
+    for n, R, SG in ((18, R18, SG18), (6, R6, SG6)):
+        for r in range(n):
+            for k in range(n):
+                v = math.cos(math.pi * (2 * r + 1) * (2 * k + 1) / (4 * n))
+                c = math.cos(math.pi * (2 * R[r][k] + 1) / 72) * SG[r][k]
+                if abs(v - c) > 1e-12:
+                    fails.append('cos table %d (%d, %d)' % (n, r, k))
+    # the window pass against the V-domain sum, codes by age
+    smul = _smul_tab()
+    D = XT.iso_window_int()
+    vm = XT.DESIGN['v_map']
+    for prof, div in (('std', 1), ('fast', 1), ('turbo', 1), ('speech', 2), ('speech', 4)):
+        L = layout(prof)
+        rows = [{s_['rowoff'][ib]: XT.win_row_recurrence(ib, vm['lens'], vm['s0'])
+                 for ib in s_['rows']} for s_ in L['win']]
+        taps = XT.kept_taps(L['n'])
+        nX = 32 // div
+        for _ in range(8):
+            hist = [[rnd.randint(-127, 127) for _ in range(nX)] for _ in range(16)]
+            ring = {}
+            for p, a, b in code_pairs(div):
+                ring[p] = [2 * (hist[age][a] if (age % 2 == 0 and a is not None) else
+                                (hist[age][b] if age % 2 else 0)) for age in range(16)]
+            got, _ = win_run(prof, div, rows, ring, None)
+            for m, j in enumerate(range(0, 32, div)):
+                acc = 32
+                for i in taps[j]:
+                    d = D[32 * i + j]
+                    if not d:
+                        continue
+                    X = [0] * 32
+                    for l in range(nX):
+                        X[div * l] = hist[i][l]
+                    # V from X: V[i] = X[16+i] (i < 16), V[16] = 0, V[32-i] = -V[i],
+                    # V[48+i] = -X[i], V[96-i] = V[i] (i = 49..63)
+                    V = [0] * 64
+                    for q in range(16):
+                        V[q] = X[16 + q]
+                    for q in range(1, 16):
+                        V[32 - q] = -V[q]
+                    V[32] = -V[0]
+                    for q in range(16):
+                        V[48 + q] = -X[q]
+                    for q in range(49, 64):
+                        V[96 - q] = V[q]
+                    c = V[j] if i % 2 == 0 else V[32 + j]
+                    row = XT.win_row_recurrence(abs(d), vm['lens'], vm['s0'])
+                    acc += (1 if d > 0 else -1) * row[c + 128]
+                acc = wrap(acc)
+                want = 255 if acc >= 8192 else 0 if acc < -8192 else (acc >> 6) + 128
+                if got.get(m) != want:
+                    fails.append('window %s d%d output %d: %r != %r' % (prof, div, j, got.get(m), want))
+                    break
+    for p in PNAMES:
+        for name, nb in layout(p)['segs']:
+            if nb > 65536:
+                fails.append('%s %s over 64 KiB' % (p, name))
+    gen_offsets()
+    if fails:
+        for f in fails[:20]:
+            print('x3xtgen: FAIL', f)
+        return 1
+    if verbose:
+        print('x3xtgen: selfcheck ok')
+    return 0
+
+
+def fullcheck(verbose=False):
+    """numpy: the in-place Lee with the split multiplies against
+    tools/x3simxt.py's DctPlan arithmetic, and the cos sign tables against
+    x3xtmodel's."""
+    import numpy as np
+    import x3simxt as SX
+    import x3xtmodel as XM
+    fails = []
+    if [list(r) for r in XM.R18] != R18 or [list(r) for r in XM.SG18] != SG18:
+        fails.append('R18/SG18 differ from x3xtmodel')
+    if [list(r) for r in XM.R6] != R6 or [list(r) for r in XM.SG6] != SG6:
+        fails.append('R6/SG6 differ from x3xtmodel')
+    rnd = random.Random(99)
     T = SX.Tabs('std')
-    # Lee in place against x3xtmodel.DctPlan with the same multiplies
     for N in (32, 16, 8):
         ops, where = lee_ops(N)
         plan = XM.DctPlan(N)
@@ -640,66 +826,22 @@ def selfcheck(verbose=False):
             if [got[where[l]] for l in range(N)] != [int(v) for v in ref]:
                 fails.append('Lee %d in place differs from DctPlan' % N)
                 break
-    # the window pass against the model's arithmetic for one slot
-    for prof, div in (('std', 1), ('fast', 1), ('turbo', 1), ('speech', 2), ('speech', 4)):
-        Tp = SX.Tabs(prof)
-        L = layout(prof)
-        vm = XT.DESIGN['v_map']
-        rows = [{s['rowoff'][ib]: XT.win_row_recurrence(ib, vm['lens'], vm['s0'])
-                 for ib in s['rows']} for s in L['win']]
-        D = XT.iso_window_int()
-        for _ in range(20):
-            # 16 ages of X codes for one slot, then both ways
-            nX = 32 // div
-            hist = [[rnd.randint(-127, 127) for _ in range(nX)] for _ in range(16)]
-            ring = {}
-            for p, a, b in code_pairs(div):
-                seq = []
-                for age in range(16):
-                    v = hist[age][a] if (age % 2 == 0 and a is not None) else \
-                        (hist[age][b] if age % 2 else 0)
-                    seq.append(2 * v)
-                ring[p] = seq
-            got, _ = win_run(prof, div, rows, ring, None)
-            # the model: codes of V by age, the window of x3simxt
-            for m, j in enumerate(range(0, 32, div)):
-                acc = 32
-                for i in Tp.taps[j]:
-                    d = D[32 * i + j]
-                    if not d:
-                        continue
-                    xf = [0] * 32
-                    for l in range(nX):
-                        xf[div * l] = hist[i][l]
-                    V = XM.dct_to_V(np.array([xf]))[0]
-                    c = V[j] if i % 2 == 0 else V[32 + j]
-                    acc += (1 if d > 0 else -1) * Tp.win[abs(d)][int(c) + 128]
-                acc = int(SX.wrap(acc))
-                want = 255 if acc >= 8192 else 0 if acc < -8192 else (acc >> 6) + 128
-                if got.get(m) != want:
-                    fails.append('window %s d%d output %d: %r != %r' % (prof, div, j, got.get(m), want))
-                    break
-    # layouts fit; the speech pack serves divisor 4
-    for p in PROFILES:
-        L = layout(p)
-        for name, nb in L['segs']:
-            if nb > 65536:
-                fails.append('%s %s over 64 KiB' % (p, name))
-    for c in lee_list('speech'):
-        pass
-    _, _, _, need8 = lee_asm(8, lee_list('speech'), 'x')
-    gen_offsets()
     if fails:
-        for f in fails[:20]:
+        for f in fails:
             print('x3xtgen: FAIL', f)
         return 1
     if verbose:
-        print('x3xtgen: selfcheck ok')
+        print('x3xtgen: fullcheck ok')
     return 0
 
 
+def xtgen(path):
+    with open(path, 'wb') as f:
+        f.write(XT.gen_input())
+
+
 def manifest():
-    for p in PROFILES:
+    for p in PNAMES:
         L = layout(p)
         fl = fl32_chain(expanded(p))
         tb = sum(len(b) for b in expanded(p))
@@ -713,7 +855,14 @@ def main():
     ap.add_argument('-o', metavar='INC')
     ap.add_argument('--selfcheck', action='store_true')
     ap.add_argument('--manifest', action='store_true')
+    ap.add_argument('--fullcheck', action='store_true')
+    ap.add_argument('--xtgen', metavar='BIN', help='write XTGEN.BIN (x3xttab.gen_input)')
     a = ap.parse_args()
+    if a.fullcheck:
+        return fullcheck(True)
+    if a.xtgen:
+        xtgen(a.xtgen)
+        return 0
     if a.selfcheck:
         r = selfcheck(True)
         if r or not a.o:
