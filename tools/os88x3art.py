@@ -539,6 +539,17 @@ SCREW_MID = from_art([                  # ...and on the shorter rows, 9 x 7
 ])
 
 
+def arrow(w, h, up):
+    """The queue's scroll arrows: a solid triangle in a w x h box."""
+    b = blank(w, h)
+    m = (w - 1) / 2.0 + 0.5
+    if up:
+        fill_poly(b, [(2, h - 2.5), (m, 1.5), (w - 2, h - 2.5)])
+    else:
+        fill_poly(b, [(2, 1.5), (m, h - 2.5), (w - 2, 1.5)])
+    return b
+
+
 def grille(w, h, pitch, on=2):
     """The speaker grilles beside the knob: `on` dark rows every `pitch`."""
     return [[1 if y % pitch < on else 0] * w for y in range(h)]
@@ -743,6 +754,8 @@ def all_bitmaps():
         bm['h_' + n] = rows_or(b, 7)
     bm['screw'] = SCREW
     bm['screwm'] = SCREW_MID
+    bm['sbup'], bm['sbdn'] = arrow(13, 12, True), arrow(13, 12, False)
+    bm['sbupm'], bm['sbdnm'] = arrow(13, 8, True), arrow(13, 8, False)
     bm['grillf'] = grille(42, 38, 5)
     bm['grillm'] = grille(42, 26, 4)
     bm['logof'], bm['logom'] = logo_pictures()
