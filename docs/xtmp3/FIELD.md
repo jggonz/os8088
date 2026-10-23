@@ -227,7 +227,9 @@ The SB's DMA carries the play, so none of it is heard. During a conversion
 `SND_CAP_MIXER`), and the master reads 0. So the knob shows 0 here. That is
 the emulator's card, not XTMP3: a DSP 2.01 has no mixer chip.
 
-## 3. The selection matrix (86Box)
+## 3. The selection matrix (86Box), at 55a051b4
+
+This is the first build's matrix. The shipped build's re-run, and how it differs, is section 7.
 
 Each machine boots `make xtmp3field`'s system floppy. Its `\AUTOSTRT`
 opens B:\XTMP3, which teaches the machine the `.MP3` association, then
@@ -328,6 +330,99 @@ time). 86Box cannot assert, so the matrix is this procedure and its JSON.
 - **Live XT play with a card** on an XT-class machine. No XT rung passes,
   so it never runs live there.
 - **A conversion on 86Box.** It needs keys this host cannot send.
-- **The 386's underrun's cause.** It had 2.21x of headroom. The report
-  carries the count, not the moment.
+- **The 386's underruns' cause**: 1 at 55a051b4 and 11 on the shipped build
+  (section 7.1). The report carries the count, not the moment.
 - **Listening.** No output was heard, on any machine.
+
+## 7. Round 2: the shipped build, re-run (feature/xtmp3 70323ad3)
+
+The integration track acted on sections 2 to 4:
+- the face rests while converting;
+- an 8086 probes XT Standard alone;
+- the probe's OPEN is reused;
+- calibration fits under 400,000 bytes;
+- a rung that cannot start falls through;
+- the XT backend's card ring is the 8 KB grant.
+
+It re-measured XT Standard on MartyPC itself (ENGINE.md section 12):
+- conversion 0.0552x -> **0.0946x**, with the face's share 44.6% -> 9.8%;
+- calibration 16.1 s -> **6.4 s**;
+- calibration peak 402 KB -> 387 KB.
+
+FIELD re-ran two things on that build: the 86Box matrix once (the same
+`-DX3REPORT` disks and procedure), and the speaker.
+
+### 7.1 The matrix (86Box, `docs/xtmp3/field/86box-matrix-r2.json`)
+
+The report now carries OFFLINE (the conversion's rung) and PASS (the
+ladder's re-runs after a rung that could not start: 0 on every machine).
+
+| machine | track | probes | Auto's decision | what ran | X3S_PEAK | calibration |
+|---|---|---|---|---|---|---|
+| XT 4.77, SB 2.0 | AFTERHRS | XT STD 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive | 381 KB | **10.08 s** (27.00) |
+| | C128 | QUARTER 0.01 | Decode first, on QUARTER | the dialog | 179 KB | 7.89 s |
+| 286/12.5, SB16 | AFTERHRS | ORIG 0.29, XT STD 0.73, XT FAST 0.78 | Decode first, on ORIGINAL | the dialog | 381 KB | 9.28 s |
+| | C128 | QUARTER 0.15, XT STD 0.10, XT FAST 0.21 | Decode first, on QUARTER | the dialog | 381 KB | 7.62 s |
+| 386DX/25, SB16 | AFTERHRS | ORIG 0.96, XT STD 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (1 at 55a051b4), stepped to XT FAST | 343 KB | 5.45 s |
+| | C128 | QUARTER 0.37, XT STD 0.47, XT FAST 0.51 | Decode first, on QUARTER | the dialog | 343 KB | 7.15 s |
+| 486DX2/66, SB16 | AFTERHRS | ORIG 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB | 2.34 s |
+| | C128 | QUARTER 0.98, XT STD 1.15, XT FAST 1.17 | **Decode first, on QUARTER** (11,025 Hz stereo 16-bit; "Needs 162 KB") | the dialog: **no "Out of memory"** | 343 KB | 5.39 s |
+| Pentium/133, SB16 | AFTERHRS | ORIG 4.88 | **live ORIGINAL** | no underrun | 157 KB | 2.17 s |
+| | C128 | ORIG 0.75, HALF 0.98, QUARTER 1.30 | **live QUARTER**, 11,025 Hz stereo 16-bit | no underrun | 174 KB | 4.25 s |
+
+![86Box's 486 on the 44.1 kHz track, round 2: Decode first on Quarter](field/r2-86box-486-c128.png)
+![86Box's 386 on the 11 kHz track, round 2: XT Standard live, stepped to XT Fast](field/r2-86box-386-aftr.png)
+
+**The 486 and C128 no longer end in "Out of memory".** It did not reach
+the fall-through, though: XT Standard now probes at **1.15x**, where the
+first build read 1.48x, and XT Fast at 1.17x. So no live rung passes the
+1.25x margin, and Auto asks for a drive, converting on Quarter. The ladder
+ran once (PASS 0). Two things are still unmeasured on 86Box: the
+fall-through itself (the engine's `rungfail` leg proves it on QEMU), and
+whether a live XT Standard start now fits on that heap.
+
+The XT rungs' probes read lower across the board in this build. The 486's
+XT Standard went 1.48 -> 1.15, the 386's 2.21 -> 2.14, and 86Box's XT
+0.11 -> 0.05. The Pentium's Half went 1.18 -> 0.98. The decisions moved
+only on the 486. FIELD has not traced why; the probe's code changed in
+round 2 (the 8 KB grant, the OPEN reuse). On the XT, 0.05 (against
+0.11 at 55a051b4) is far below the 1.25x margin either way, so the
+decision cannot move.
+
+**The 386's live XT Standard underran 11 times**, against once on the
+first build, and still stepped to XT Fast. It plays from a floppy through
+the 8 KB grant, which is 0.74 s of 11 kHz 8-bit audio, where the first
+build's grant was 16 KB. That looks like the cause, but it is not proven:
+the report counts underruns and does not time them. **Sent to the
+integration track as a possible regression.**
+
+Every peak is at or under 381 KB = 390,144 bytes, calibrating included.
+
+### 7.2 The PC speaker's sound (MartyPC, `xtmp3xt --leg spk`)
+
+QEMU renders no PWM, so S9's last gap was whether a finished XTMP3 WAV
+SOUNDS right through the speaker. The `spk` leg answers it on
+tests/apspk.py's machine (`os8088_5150_herc_hdd_gla`: a card-less 640 KB
+5150 with a Hercules and an XT-IDE disk) with the shipped build:
+
+1. AFTERHRS is double-clicked. Auto finds no card and asks for a drive.
+2. Enter, Enter: the conversion runs on XT Standard. The WAV off the VHD is
+   bit-exact to `tools/x3simxt.py`.
+3. The finished file plays in the Audio Player's bracket (MD_SPK).
+4. Port 42h is traced from the door's open. Its first **800 writes are
+   `tools/os88spkfx.py`'s counts for the WAV's own bytes**, exactly as
+   tests/apspk.py models them: 11,025 Hz stepped to 8,000 by the
+   resampler, then the shaper. They start after one silent pulse, at the
+   model's offset 0. **2.0%** of pulses were lost to IF = 0.
+5. `x3_gran1` was armed for the whole play and **never reached**.
+6. Channel 2 and the sample ISR were given back at the end.
+
+The play fell one rung mid-way, to 5,512 Hz. The ring ran dry 24 times,
+and 10.08 s of audio took 11.06 s. That is apspk's known lag (its `box3`
+leg): MartyPC's XT-IDE is copied by the CPU beside 8088 pulses. A DMA disk
+is the other answer, and was not available.
+
+The first run of the leg modelled the pulses at the END's rung (5,512 Hz)
+and failed at the first differing count. The leg now models the first
+door's rung, which is the rung the traced writes were made at. That failed
+run is the negative control: the comparison distinguishes the two rates.

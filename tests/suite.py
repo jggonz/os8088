@@ -519,7 +519,7 @@ FAST = [
                "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys", "build/x3stdp.bin",
                "build/XTGEN.BIN")),
-    Row("xtmp3xt", "soak", py("tests/xtmp3xt.py"), 620.0,
+    Row("xtmp3xt", "soak", py("tests/xtmp3xt.py"), 660.0,
         "XTMP3 END TO END on MartyPC's 4.77 MHz XT (SPEC.md 121.5-121.11, "
         "docs/xtmp3/FIELD.md): the SHIPPED package and its real FRONT and XT "
         "parts on os8088_xt_vga_hdd_sb (a 5160 with a VGA, an XT-IDE disk "
@@ -532,9 +532,13 @@ FAST = [
         "WAV read off the VHD must equal tools/x3simxt.py's (or x3sim.py's "
         "STANDARD model's) PCM after the trim BIT FOR BIT, X3S_PEAK x 1024 "
         "must stay <= 400,000, and the finished WAV's play must reach no "
-        "GRANULE and no underrun; the knob and the needles are timed. "
-        "Broken on purpose (--expect fast on the std leg) it FAILS at the "
-        "first differing byte",
+        "GRANULE and no underrun; the knob and the needles are timed. The "
+        "spk leg converts on tests/apspk.py's card-less 5150 and plays the "
+        "finished WAV through the speaker bracket: port 42h's first 800 "
+        "writes must be tools/os88spkfx.py's counts for the WAV's own bytes, "
+        "with no GRANULE reached and the kernel left clean. Broken on "
+        "purpose (--expect fast on the std leg) it FAILS at the first "
+        "differing byte",
         needs=("marty", "nasm", "mtools", "numpy"), timeout=2400,
         wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/x3xt.bin",
                "build/x3front.bin", "build/sound.drv", "build/mbr.bin",

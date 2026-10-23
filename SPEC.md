@@ -218115,23 +218115,36 @@ The integration track then acted on what it found (the face resting while
 converting, one probe on an 8086, the probe's OPEN reused, the grant given
 back before OPEN, a failed start falling through, the XT backend's 8 KB
 ring) and re-measured XT Standard on MartyPC's XT with `xtmp3xt`. Those rows
-are marked **shipped**; the rest are FIELD's figures at 55a051b4, and the
-86Box matrix has not been re-run since.
+are marked **shipped**; the rest are FIELD's figures at 55a051b4. **The
+86Box rows are the shipped build's** (70323ad3, re-run once by FIELD with
+the `-DX3REPORT` build); FIELD.md section 3 keeps the 55a051b4 matrix they
+replace.
 
 | machine | track | probes (x real) | Auto's decision | what ran | peak |
 |---|---|---|---|---|---|
 | 4.77 MHz XT, DSP 2.01 (MartyPC) | AFTERHRS | Original 0.03, XT Standard 0.11, XT Fast 0.11 | Decode first, on XT STANDARD | the conversion at **0.0552x end to end** (182.8 s for 10.09 s) | 395,264 B converting; **411,648 B calibrating** |
 | | C128 | Quarter 0.01 (no XT rung: its output would be 44.1 kHz, above a DSP 2.01) | Decode first, on QUARTER | the conversion at **0.0117x** | 204,800 B |
-| 4.77 MHz XT, SB 2.0 (86Box, floppy only) | AFTERHRS | Original 0.03, XT Standard 0.11, XT Fast 0.12 | Decode first, on XT FAST | the dialog: no hard drive | 396 KB |
-| | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog | 178 KB |
-| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.30, XT Standard 0.73, XT Fast 0.80 | Decode first, on ORIGINAL | the dialog | 396 KB (calibrating) |
-| | C128 | Quarter 0.16, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog | 396 KB |
-| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.21 | **live XT STANDARD**, 11,025 Hz mono 8-bit | one underrun, stepped to XT FAST | 358 KB |
-| | C128 | Quarter 0.37, XT Standard 0.51, XT Fast 0.59 | Decode first, on QUARTER | the dialog | 358 KB |
-| 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 2.99 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 156 KB |
-| | C128 | Quarter 0.98, XT Standard 1.48 | live XT STANDARD at 44,100 Hz mono 8-bit | at 55a051b4 **Error: Out of memory** on the external ring; the shipped build gives the XT backend the 8 KB grant, the probe's own, and falls through a failed start (§121.5). Not re-run | 358 KB |
-| Pentium 133 MHz, SB16 (86Box) | AFTERHRS | Original 4.65 | **live ORIGINAL** | no underrun | 156 KB |
-| | C128 | Original 0.84, Half 1.18, Quarter 1.30 | **live QUARTER**, 11,025 Hz stereo 16-bit | no underrun | 173 KB |
+| 4.77 MHz XT, SB 2.0 (86Box, floppy only) | AFTERHRS | XT Standard 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive; calibration 10.08 s | 381 KB |
+| | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
+| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.29, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
+| | C128 | Quarter 0.15, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog; 7.62 s | 381 KB |
+| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (one at 55a051b4), stepped to XT FAST | 343 KB |
+| | C128 | Quarter 0.37, XT Standard 0.47, XT Fast 0.51 | Decode first, on QUARTER | the dialog; 7.15 s | 343 KB |
+| 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB |
+| | C128 | Quarter 0.98, XT Standard 1.15, XT Fast 1.17 | **Decode first, on QUARTER** - no rung passes 1.25x now | the dialog; **no "Out of memory"** (it was, at 55a051b4, after XT Standard probed 1.48x); the fall-through was not reached | 343 KB |
+| Pentium 133 MHz, SB16 (86Box) | AFTERHRS | Original 4.88 | **live ORIGINAL** | no underrun | 157 KB |
+| | C128 | Original 0.75, Half 0.98, Quarter 1.30 | **live QUARTER**, 11,025 Hz stereo 16-bit | no underrun | 174 KB |
+
+Every 86Box peak in the shipped build is at or under 381 KB = 390,144 bytes,
+calibrating included. **A finished WAV through the PC speaker** (MartyPC's
+card-less 640 KB 5150 with a Hercules and an XT-IDE disk, `xtmp3xt`'s `spk`
+leg, shipped build): AFTERHRS converts on XT Standard (bit-exact), then plays
+in the Audio Player's bracket; the first 800 writes to port 42h are
+`tools/os88spkfx.py`'s counts for the WAV's own bytes (11,025 Hz stepped to
+8,000) after one silent pulse, 2.0% of pulses lost, `x3_gran1` never reached
+and the kernel left clean. The bracket came down one rung (to 5,512 Hz)
+mid-play, the ring ran dry 24 times and 10.08 s played in 11.06 s - the
+XT-IDE's CPU-copied reads beside the pulses, apspk's known lag.
 
 **The XT's conversions** (MartyPC, AFTERHRS unless named):
 
@@ -218162,7 +218175,8 @@ has no seek or rotation.
 the shipped build: one probe, XT Standard (the fetch 1.01 s, OPEN 3.29 s,
 the prime and the probe 2.13 s), peak 387 KB. At 55a051b4 it was three
 probes and 16.10 s (each rung 4.7 to 5.8 s), peak 411,648 bytes; 4.32 s on
-C128; 27.0 s on 86Box's floppy-only XT.
+C128; 27.0 s on 86Box's floppy-only XT (10.08 s there in the shipped
+build).
 
 **The face on the 4.77 MHz VGA XT** (MartyPC; its VGA wait states are a
 model, the CPU side credible):
@@ -218194,7 +218208,7 @@ has run XTMP3.
 | `x3xtunit` | soak, Unicorn | the XT part's contract, expansion, refusals and split paths, with OPEN's half overwritten after OPEN |
 | `xtmp3eng` | soak, QEMU | the engine's 21 legs over the stub and the real XT part: the ladder, the slowdown, a failed start falling through, the conversion and every failure, the cache, Decoded Files, a batch, a read-only volume, packed and 32 KB-cluster MP3s, the stated minimum, the Covox's bytes, and the ceiling (`xtpeak`, `xtclu`) (§121.5, §121.7, §121.10) |
 | `xtmp3live` | soak, QEMU | the REAL decoders end to end on the SB16, the card's capture held to x3sim sample for sample: Original at 44.1 and 22.05 kHz, Half, 8-bit stereo and mono as the DEVICE's, a seek, and XT Standard's WAV byte-exact to x3simxt (§121.6, §121.9) |
-| `xtmp3xt` | soak, MartyPC | the shipped package end to end on a 4.77 MHz XT: every conversion's WAV bit-exact to the models off the VHD, the 400,000-byte conversion peak, and a finished WAV's play with no GRANULE and no underrun (§121.11.5) |
+| `xtmp3xt` | soak, MartyPC | the shipped package end to end on a 4.77 MHz XT: every conversion's WAV bit-exact to the models off the VHD, the 400,000-byte conversion peak, a finished WAV's play with no GRANULE and no underrun, and (the `spk` leg, a card-less 5150) the finished WAV through the PC speaker: port 42h's first 800 writes are `tools/os88spkfx.py`'s counts for its bytes (§121.11.5) |
 | `sndfmt`, `sndfmtmarty` | soak | SOUND.DRV's 16-bit and stereo streams (§34.5.5) |
 
 MartyPC confirmed both parts bit-exact on an 8088 core as well (eight
