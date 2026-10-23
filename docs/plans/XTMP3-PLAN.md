@@ -51,14 +51,14 @@ story's own verification has been run and its evidence is in the PR.
   skip and title, Xing/Info/VBRI duration, side info and the reservoir, and
   it is byte-identical in decision to `x3sim.py`'s parser on every fixture.
   The queue shows real titles and durations.
-- [ ] **S6 STANDARD decoder on target.** `x3std.asm` is BIT-EXACT to
+- [x] **S6 STANDARD decoder on target.** `x3std.asm` is BIT-EXACT to
   `x3sim.py`'s STANDARD model at divisors 1, 2 and 4, proved by a bench
   build that decodes each fixture to a WAV on QEMU and is compared on the
   host. Real-time playback through the SB stream with the worker and the
   look-ahead ring, and Original on 16-bit stereo where S2 offers it.
-  *Status: the bit-exact half is verified (`x3stdexact`, 157 of 157); live
-  Original in 16-bit stereo runs on QEMU's SB16 with the real part
-  (`docs/xtmp3/s10-live-stereo.png`), and has not yet been listened to.*
+  *Status: verified - bit-exact (`x3stdexact`, 157 of 157), and live on
+  QEMU's SB16 held to x3sim sample for sample in every device format
+  (`xtmp3live`). Not listened to on a real card.*
 - [x] **S7 XT backend on target.** `x3xt.asm` with table packs expanded at
   OPEN and CRC-checked, bit-exact to `x3sim.py`'s XT model. Speed is measured
   per profile and per stage on MartyPC's 5150 (cycles, not wall time), and
@@ -74,9 +74,10 @@ story's own verification has been run and its evidence is in the PR.
   `ladder` and `slowdown`), and MartyPC's VGA XT takes the shipped package
   to Decode first with XT Standard (the guide's capture). Measured by FIELD
   on MartyPC's XT and 86Box's XT, 286, 386, 486 and Pentium (SPEC §121.11.5,
-  `xtmp3xt`); left open by what that found - calibration over 400,000
-  bytes, out-of-memory ending in ERROR, an XT estimate twice too short
-  (§121.13).*
+  `xtmp3xt`). The integration track then closed what that found (calibration
+  inside 400,000 bytes, a failed start falling through, one probe on an
+  8086: 6.4 s) and re-measured the XT; the 86Box matrix has not been re-run
+  on the shipped build.*
 - [ ] **S9 Decode first.** The drive dialog covers multiple fixed volumes,
   read-only volumes, no hard drive and too little space. Then the Save
   dialog, the disk estimate, conversion with progress, measured speed and
@@ -84,9 +85,9 @@ story's own verification has been run and its evidence is in the PR.
   identity and reuse, stale and incomplete rejection, and Decoded Files.
   The finished WAV plays through the SB, the speaker or the Covox with no
   MP3 work.
-  *Status: verified by `xtmp3eng`'s legs except a read-only volume, the
-  Decoded Files delete, batch approval over two tracks, and the speaker's
-  and the Covox's sound (QEMU checked their state only).*
+  *Status: every path has an `xtmp3eng` leg, the Covox's bytes included;
+  only the PC speaker's sound is unshown (QEMU's pcspk cannot carry the
+  bracket; the bracket is the Audio Player's own, held by `apspk`).*
 - [ ] **S10 Acceptance.** Docs: the guide manual, §121.11 measured, a
   PERFORMANCE set, the INDEX, and the diary with pictures. Suite rows,
   disks, a 86Box machine profile, and the screenshots on every adapter.

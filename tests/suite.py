@@ -499,26 +499,6 @@ FAST = [
                "build/xtmp3.bin", "build/os8088.img",
                "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys")),
-    Row("xtmp3xt", "soak", py("tests/xtmp3xt.py"), 620.0,
-        "XTMP3 END TO END on MartyPC's 4.77 MHz XT (SPEC.md 121.5-121.11, "
-        "docs/xtmp3/FIELD.md): the SHIPPED package and its real FRONT and XT "
-        "parts on os8088_xt_vga_hdd_sb (a 5160 with a VGA, an XT-IDE disk "
-        "and a DSP 2.01), driven by `advance` so every stamp is a guest "
-        "cycle and every IP sample is uniform in guest cycles. AFTERHRS.MP3 "
-        "(11 kHz mono): Auto calibrates (each probe's fetch, OPEN and probe "
-        "timed), finds no live rung and asks for a drive, then XT Standard "
-        "converts; XT Fast and XT Speech by Q; C128.MP3 (44.1 kHz stereo) "
-        "converts on Quarter, no XT rung being playable on that DSP. Each "
-        "WAV read off the VHD must equal tools/x3simxt.py's (or x3sim.py's "
-        "STANDARD model's) PCM after the trim BIT FOR BIT, X3S_PEAK x 1024 "
-        "must stay <= 400,000, and the finished WAV's play must reach no "
-        "GRANULE and no underrun; the knob and the needles are timed. "
-        "Broken on purpose (--expect fast on the std leg) it FAILS at the "
-        "first differing byte",
-        needs=("marty", "nasm", "mtools", "numpy"), timeout=2400,
-        wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/x3xt.bin",
-               "build/x3front.bin", "build/sound.drv", "build/mbr.bin",
-               "build/boothd.bin", "build/kernel.sys")),
     Row("xtmp3live", "soak", py("tests/xtmp3live.py"), 300.0,
         "XTMP3 with its REAL decoders end to end on QEMU's SB16 (SPEC.md "
         "121.3-121.7, docs/xtmp3/ENGINE.md), the card captured by the wav "
@@ -539,6 +519,30 @@ FAST = [
                "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
                "build/boothd.bin", "build/kernel.sys", "build/x3stdp.bin",
                "build/XTGEN.BIN")),
+    Row("xtmp3xt", "soak", py("tests/xtmp3xt.py"), 660.0,
+        "XTMP3 END TO END on MartyPC's 4.77 MHz XT (SPEC.md 121.5-121.11, "
+        "docs/xtmp3/FIELD.md): the SHIPPED package and its real FRONT and XT "
+        "parts on os8088_xt_vga_hdd_sb (a 5160 with a VGA, an XT-IDE disk "
+        "and a DSP 2.01), driven by `advance` so every stamp is a guest "
+        "cycle and every IP sample is uniform in guest cycles. AFTERHRS.MP3 "
+        "(11 kHz mono): Auto calibrates (each probe's fetch, OPEN and probe "
+        "timed), finds no live rung and asks for a drive, then XT Standard "
+        "converts; XT Fast and XT Speech by Q; C128.MP3 (44.1 kHz stereo) "
+        "converts on Quarter, no XT rung being playable on that DSP. Each "
+        "WAV read off the VHD must equal tools/x3simxt.py's (or x3sim.py's "
+        "STANDARD model's) PCM after the trim BIT FOR BIT, X3S_PEAK x 1024 "
+        "must stay <= 400,000, and the finished WAV's play must reach no "
+        "GRANULE and no underrun; the knob and the needles are timed. The "
+        "spk leg converts on tests/apspk.py's card-less 5150 and plays the "
+        "finished WAV through the speaker bracket: port 42h's first 800 "
+        "writes must be tools/os88spkfx.py's counts for the WAV's own bytes, "
+        "with no GRANULE reached and the kernel left clean. Broken on "
+        "purpose (--expect fast on the std leg) it FAILS at the first "
+        "differing byte",
+        needs=("marty", "nasm", "mtools", "numpy"), timeout=2400,
+        wants=("build/xtmp3.o88", "build/xtmp3.bin", "build/x3xt.bin",
+               "build/x3front.bin", "build/sound.drv", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys")),
     Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,
         "docs/plans/ROM-PLAN.md 1.3: the ROM image builder re-derives its own "
         "invariants - 55 AA and a 32KB declaration (40KB would send the "

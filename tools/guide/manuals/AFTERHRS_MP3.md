@@ -20,5 +20,5 @@ XTMP3's own disk in every size, and on the live USB image and CD.
 
 Double-click **AFTERHRS.MP3** and XTMP3 ([[XTMP3.O88]]) opens and plays it.
 On a 4.77 MHz PC, XTMP3 decodes it to the hard disk first and then plays
-the decoded file. Its ten seconds take about three minutes to
-decode there.
+the decoded file. Its ten seconds take a little under two minutes
+to decode there.

@@ -200,6 +200,7 @@ def decode(rep):
         "card": int(rep["CARD"], 16), "caps": "%04X" % caps,
         "source": "%d Hz, %d ch" % (int(rep["SRC"], 16), int(rep["CH"], 16)),
         "calibration_s": round(int(rep["CALPIT"], 16) * PIT, 3),
+        "ladder_reruns": int(rep["PASS"], 16) if "PASS" in rep else None,
         "measured": meas,
         "choice": "Decode first" if choice == 0xFF else QNAME[choice],
         "override": QNAME[want] if want else None,
