@@ -81,7 +81,7 @@ SECTION_TITLE = {"main": ["Start here", ""],
 BLURB = {
     "System disk": "Starts os8088. Boot from it in drive A.",
     "Software disk": "The everyday programs, with sample documents. Goes in drive B.",
-    "Music disk": "Songs and a tracker module for the music programs.",
+    "Music disk": "MIDIRack and XTMP3, with songs and a tracker module.",
     "Office disk": "Writing, spreadsheet, chart and drawing programs.",
     "Network disk": "Browser, Telnet, FTP server, The Wire and WireChat, for an Ethernet card.",
     "Games disk": "Every game on one floppy.",
@@ -101,6 +101,7 @@ BLURB = {
     "REDLINE": "A benchmark that scores your PC against a 4.77 MHz IBM PC.",
     "MIDIRack": "A MIDI music player with ten songs.",
     "PiXEL": "An image viewer and editor, with sample pictures.",
+    "XTMP3": "An MP3 player for every PC, with three demo songs.",
     "Weave": "Weave apps, ready to run.",
     "Weave editor": "The Weave editor, with the demo apps' sources.",
     "Video demo": "A ready-installed hard disk with demo videos: CGA and "
