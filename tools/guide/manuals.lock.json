@@ -1308,8 +1308,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "05755a06",
+  "stamped": "3d5fae9b",
   "strings": "222c4f61704cd4f5",
-  "why": "checked round 5: 'The sound card stopped' is a rare error below the page's detail; the X3REPORT fields are test-only"
+  "why": "checked: kern_mega's class bit and the XT part's CS on protected mode are below the page's level of detail"
  }
 }
