@@ -808,7 +808,64 @@ xf_region:
     mov bl, [x3ft_tree+bx]
     call xf_tree
 .pair:
-    call xf_sym                     ; AL = x << 4 | y
+    ; THE COMMON CASE: a code that is a first-level leaf (at most 8 bits)
+    ; and no 15 with linbits - both signs are then in the same 16-bit window
+    mov bx, bp
+    call xf_pk                      ; AX = 16 bits at BP
+    mov dx, ax                      ; DX = the window
+    mov cl, [xf_hsh]
+    shr ax, cl
+    mov si, ax
+    shl si, 1
+    add si, [xf_hbase]
+    mov ax, [si]                    ; the entry
+    test ah, 0x80
+    jnz .slow                       ; a pointer: the general walk
+    mov cl, ah
+    and cl, 15                      ; CL = its length, AL = x << 4 | y
+    cmp byte [xf_lin], 0
+    je .fast
+    mov ah, al
+    and ah, 0xF0
+    cmp ah, 0xF0
+    je .lin                         ; a 15 with linbits: the general values
+    mov ah, al
+    and ah, 0x0F
+    cmp ah, 0x0F
+    je .lin
+.fast:
+    xor ch, ch
+    add bp, cx                      ; past the code
+    shl dx, cl                      ; the window past it: >= 8 bits left
+    mov bl, al
+    mov cl, 4
+    shr al, cl
+    xor ah, ah                      ; x
+    or al, al
+    jz .x0
+    inc bp                          ; its sign
+    shl dx, 1
+    jnc .x0
+    neg ax
+.x0:
+    stosw
+    mov al, bl
+    and ax, 15                      ; y
+    jz .y0
+    inc bp
+    shl dx, 1
+    jnc .y0
+    neg ax
+.y0:
+    stosw
+    jmp short .next
+.lin:
+    xor ch, ch                      ; a leaf, but linbits: the values the
+    add bp, cx                      ; general way
+    jmp short .vals
+.slow:
+    call xf_sym                     ; AL = x << 4 | y, BP past the code
+.vals:
     mov dl, al
     mov cl, 4
     shr al, cl
@@ -818,6 +875,7 @@ xf_region:
     and al, 15
     call xf_val                     ; y
     stosw
+.next:
     cmp bp, [xf_end]
     ja .past
     cmp di, [xf_lim]

@@ -419,9 +419,11 @@ X3PC_SIZE   equ 34
 ; =============================================================================
 ;
 ; An OP_SEG part, loaded eagerly, assembled at org 0. x3pars.inc (the
-; primary) runs its frame-level code with DS = THIS part's data segment and
-; reads and writes the fields below at these offsets, so they are fixed here
-; and x3front.asm asserts them. The record (section 1) is at X3P_REC.
+; primary) runs its frame-level code with DS = the package's segment and ES =
+; THIS part's data segment, and reads and writes the fields below at these
+; offsets, so they are fixed here (x3front.asm reserves them with `times`
+; before its code). The record (section 1) is at X3P_REC. The FRONT part's
+; own verbs (GRAN, CHECK) run with DS = this part's data segment.
 X3P_SIG     equ 0       ; db 'X3', X3G_ABI, X3K_FRONT, verbs, 0 - as X3K_*
 X3P_VGRAN   equ X3K_VEC ; dw  GRAN: the granule-level decode (below)
 X3P_VCHECK  equ X3K_VEC + 2 ; dw  CHECK: the part's tables against their CRC
