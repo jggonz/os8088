@@ -6266,6 +6266,29 @@ $(BUILD)/cdrack.bin: apps/cdrack/cdrack.asm apps/cdrack/crdraw.inc \
 $(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/cdrack.bin -o $@
 
+# XTMP3 (SPEC.md 121): the adaptive MP3 player. Its face is the retro-face
+# skill's (CDRack's shape): every picture and font is build/x3art.inc, made by
+# tools/os88x3art.py - from definitions in that file and from the committed
+# masters in apps/xtmp3/art/, which it reads itself - after its --selfcheck.
+# S4 builds the face over a DEMO engine (apps/xtmp3/x3demo.inc); it rides the
+# 1.44MB apps disk and the live media for now, and S10 places it for good
+.PHONY: xtmp3
+xtmp3: $(BUILD)/xtmp3.o88
+XTMP3ART := apps/xtmp3/art/knob.png apps/xtmp3/art/vu.png apps/xtmp3/art/logo.png
+$(BUILD)/x3art.inc: tools/os88x3art.py $(XTMP3ART) | $(BUILD)
+	python3 tools/os88x3art.py --selfcheck
+	python3 tools/os88x3art.py --out $@
+
+$(BUILD)/xtmp3.bin: apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
+                    apps/xtmp3/x3face.inc apps/xtmp3/x3demo.inc \
+                    $(BUILD)/x3art.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
+		-o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@
+
 # INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
 # system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and
 # HDD.DRV's HDV_TOOL reach the Control Panel's own engine - so its only
@@ -15383,8 +15406,14 @@ MEDIAARGS360 := $(BUILD)/midirack.o88 \
                 $(addprefix MEDIA:,$(MEDIA_DISK_DATA)) $(LOGOVIDARG) \
                 $(MIDISONGARGS)
 
-$(APPSIMG): $(APPS) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
+# XTMP3 (SPEC.md 121) rides THIS disk alone while it is built (S4 of
+# docs/plans/XTMP3-PLAN.md): it is not in $(APPS_TOOLS), so no other geometry
+# and no other list carries it, and S10 decides where it ships. Its argument
+# goes FIRST - $(APPSARGS) ends in an option, and a positional after one is
+# not collected
+XTMP3TMP := $(BUILD)/xtmp3.o88
+$(APPSIMG): $(APPS) $(XTMP3TMP) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 APPS:$(XTMP3TMP) $(APPSARGS)
 
 $(APPSIMG120): $(APPS) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS)
@@ -15972,8 +16001,9 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # tests/unit/t_livefull.py now holds the live volume to every file the 1.44MB
 # apps disk ships, folder and all, so the next one cannot drop out this way.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
-               $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS)
-LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
+               $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3TMP)
+LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
+                 $(XTMP3TMP)) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
                $(addprefix MEDIA:,$(MEDIA_EXTRA)) \
                $(MIDISONGARGS)
