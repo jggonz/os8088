@@ -32,6 +32,10 @@ The driver looks for the drive on the computer's IDE connectors, which
 means writing to them, so it is never loaded unless you ask. It uses about
 9K of memory while loaded.
 
+It is on the 720KB, 1.2MB and 1.44MB system disks and the live media. The
+360KB system disk leaves it out: that disk is for an IBM PC or XT, and a
+CD-ROM drive needs a 286 or better.
+
 ## Turning it on
 
 Open the **Control Panel**, choose **Drivers**, scroll the list down to

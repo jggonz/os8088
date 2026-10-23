@@ -193,9 +193,9 @@
   "sources": [
    "drivers/cdrom"
   ],
-  "stamped": "ca9acbde",
+  "stamped": "dda3902c",
   "strings": "c3a141853e1e7543",
-  "why": "the player it names is CDRack now"
+  "why": "Which system disks carry it: the 360KB one leaves it out (SPEC.md 119.6.7)"
  },
  "CHARTER_F88": {
   "sources": [],

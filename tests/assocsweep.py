@@ -130,16 +130,8 @@ def leg_floppy():
     img = os.path.join(B, "assocsweep-%d.img" % os.getpid())
     stub = img + ".mod"
     shutil.copyfile(os.path.join(B, "os8088-360.img"), img)
-    # Nothing on this path reads the document - its NAME is what asks for
-    # TRACKER - so a stub, and THE ROOM IS THE HARNESS'S: the 360KB system
-    # disk ships with no cluster to spare (1 on main, 0 once SOUND.DRV grew a
-    # cluster for SPEC.md 34.5.5), and the stub is three of its 512-byte
-    # clusters. So this private copy gives up README.TXT first - a root file
-    # nothing on this path opens - rather than the row depending on whatever
-    # slack the shipped disk happens to have this week.
-    subprocess.check_call(["python3", "tools/os88fat.py", "del", img,
-                           "README.TXT"], cwd=ROOT,
-                          stdout=subprocess.DEVNULL)
+    # The system disk has a dozen clusters free, and nothing on this path
+    # reads the document - its NAME is what asks for TRACKER - so a stub.
     with open(stub, "wb") as f:
         f.write(b"\0" * 1084)
     subprocess.check_call(["python3", "tools/os88fat.py", "add", img, stub,

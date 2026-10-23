@@ -216123,7 +216123,10 @@ one job is to say a file is not the one this release wrote. Every file is
 compared as stored, so nothing is decompressed to check a sum.
 
 The files are the ones every kern_big system-disk geometry carries: the
-manifest describes all four (`KERNEL.SYS` is byte-identical across them).
+manifest describes all four (`KERNEL.SYS` is byte-identical across them). So
+it is built from `$(DRIVERS360)`, the 360 KB disk's set, which leaves
+`CDROM.DRV` out (§119.6.7): System Check does not judge that driver on any
+disk, the way it does not judge `CDRACK.O88`.
 `SYSCHECK.O88` itself is not in it - the manifest is part of the file it
 would describe.
 
@@ -216373,6 +216376,8 @@ mixed on this machine, so the only cost of a playing CD is a status poll.
   a DOS program may be reading, and it holds no IRQ or DMA channel a
   program could want back.
 - `kern_small` has no driver layer (§51.0) and so no CD-ROM.
+- **The file is not on the 360 KB system disks** (`$(DRIVERS360)`, §119.6.7):
+  every other kern_big system disk carries it.
 
 ### 119.2 The drive
 
@@ -216794,6 +216799,20 @@ class byte says `OS88_HIGH | OS88_HIGHMEM` (it makes no claim and does no
 arithmetic on its own segment), so kern_mega runs it above 1MB - except
 when `\AUTOSTRT` opens it, the walk running before `mega_enter`. Mixer
 (§34.15) ships separately on the apps disks.
+
+**...and CDROM.DRV left the 360 KB system disk with it** (2026-10-23, the
+owner's decision taken in the XTMP3 PR, §121.12). The driver refuses an XT's
+8-bit bus (§119.2), and the 360 KB system disk is the XT's, which is CDRack's
+reason one file along. What made it a removal rather than a tidy-up is the
+disk's arithmetic: SOUND.DRV's stereo and 16-bit streams (§34.5.5) grew it
+from 17 to 18 clusters of 512 bytes and took the disk from 705 of 706 to 706
+of 706, and a system disk with no free cluster cannot take a new SYSTEM.CFG
+or any `SYSTEM\APPDATA` write (§19.9). CDROM.DRV is 11 clusters, which
+leaves **11 free**. It is `$(DRIVERS360)`, derived from `$(DRIVERS)` and
+guarded so that a filter matching nothing stops the build, and every 360 KB
+variant of the system disk (the test and field disks built from the same
+lists) takes it. The Drivers page still lists the row; ticking it reports
+what it reports for any driver that is not on the system disk.
 
 | | |
 |---|---|
@@ -217452,7 +217471,7 @@ lz4-packed on the disk):
 | 3 | XT (`x3xt.bin`) | lazy | 58,634 | 24,531 | the XT backend |
 | 4 | STUB (`x3stub.bin`) | `X3STUB` builds only | 688 | | a backend that only pretends, for the engine's row |
 
-The file is 98,259 bytes. **Only one backend is resident at a time**:
+The file is 98,771 bytes. **Only one backend is resident at a time**:
 switching drops one part before fetching the other (`op_drop`/`op_fetch`).
 The STANDARD backend contains no XT kernel and no product table.
 
@@ -218253,22 +218272,33 @@ room: being curated onto a disk is a decision with a date on it.
 
 | disk | carries | clusters |
 |---|---|---|
-| `apps.img`, 1.44MB | XTMP3.O88; NEONDRV, NIGHTSIG, AFTERHRS in `MEDIA/` | 512-byte clusters: the package 192, the songs 60 + 99 + 138 = 297; 380 of 2,847 left |
-| `apps120.img`, 1.2MB | XTMP3.O88; NIGHTSIG, AFTERHRS | 393 free before it and the package is 192, which leaves 201: all three songs are 297, and NEON DRIVE with AFTER HOURS (198) would leave 3, a disk the next byte fills. The two smaller songs (159) leave 42 |
-| `apps720.img` | **not on it** | 36 of 713 free; the package alone is 96. `make xtmp3disk`'s 720KB floppy carries it, and it is a candidate for the third 720KB disk the owner has planned (§121.13) |
+| `apps.img`, 1.44MB | XTMP3.O88; NEONDRV, NIGHTSIG, AFTERHRS in `MEDIA/` | 512-byte clusters: the package 193, the songs 60 + 99 + 138 = 297; 379 of 2,847 left |
+| `apps120.img`, 1.2MB | XTMP3.O88; NIGHTSIG, AFTERHRS | 393 free before it and the package is 193, which leaves 200: all three songs are 297, and NEON DRIVE with AFTER HOURS (198) would leave 2, a disk the next byte fills. The two smaller songs (159) leave 41 |
+| `apps720.img` | **not on it** | 36 of 713 free; the package alone is 97. `make xtmp3disk`'s 720KB floppy carries it, and it is a candidate for the third 720KB disk the owner has planned (§121.13) |
 | `apps360.img` | **not on it** | 14 of 354 free |
-| `media360.img`, 360KB | XTMP3.O88 at the root, AFTERHRS in `MEDIA/` | 147 of 354 free before it; 96 + 30 leaves 21 |
+| `media360.img`, 360KB | XTMP3.O88 at the root, AFTERHRS in `MEDIA/` | 147 of 354 free before it; 97 + 30 leaves 20 |
 | `megaapps.img`, `megaapps120.img` | as the 1.44MB and 1.2MB apps disks | |
 | the everything set | XTMP3.O88 in `APPS/`, no songs | MIDIRack's songs' reason (§105.10): the RunCPM fill would pay for them |
 | the live media | XTMP3.O88 in `APPS/`, all three songs in `MEDIA/` | `t_livefull` holds it to the 1.44MB apps disk |
 | `smallapps*.img`, `small*.img` | **not on them** (`$(SMALLOMIT)`) | |
 | the 360KB combo | **not on it** (`$(COMBO_DROP)`) | a player, not a calibration instrument; the 720KB and 1.44MB combos carry it |
-| `make xtmp3disk` | XTMP3.O88 at the root, all three songs in `MEDIA/`, in all four geometries | 360KB: 249 of 354 with the folders and `ASSOC.DAT`; 720KB 249 of 713 |
+| `make xtmp3disk` | XTMP3.O88 at the root, all three songs in `MEDIA/`, in all four geometries | 360KB: 250 of 354 with the folders and `ASSOC.DAT`; 720KB 250 of 713 |
 
 **The 360KB machine gets the media disk because it is an XT**, and an XT is
 what this player converts for. The media disk's subject is music already
 (§24.4, §105.10), and AFTER HOURS is the song an XT is for: 11,025 Hz mono at
 24 kbps, the fixture every XT figure in §121.11 was measured on.
+
+**The 360 KB system disk paid for the PR's driver work, not for XTMP3.**
+XTMP3 rides no system disk, but SOUND.DRV's stereo and 16-bit streams
+(§34.5.5, story S2) grew it by one cluster: 8,585 to 9,158 bytes, 17 to 18
+of 512. That took `os8088-360.img` from 705 of 706 clusters (main) to 706 of
+706, and a full system disk cannot save a new SYSTEM.CFG or write
+`SYSTEM\APPDATA`. So CDROM.DRV (11 clusters) left that disk on §119.6.7's
+ground, and it has **11 free**. Two soak rows had already failed on main
+because the disk had no slack, and they pass now. `lzship`'s lz4-only knob
+tree needed 708 of 706 clusters on main and 709 here; it needs 698 now.
+`assocsweep`'s 3-cluster stub found 1 free cluster on main.
 
 **kern_small: a requirement, not a size** (§24.5). XTMP3 streams: `READ_SEQ`
 plays a track and `WRITE_SEQ` writes a decoded one, and kern_small has

@@ -3315,6 +3315,21 @@ HMAIMG = $(KMODDIR)/coldhma.sys
 DRIVERS += $(HMAIMG)
 endif
 
+# --- ...and the 360KB SYSTEM DISK's, which is that set less CDROM.DRV --------
+# (SPEC.md 119.2, 119.6.7). The driver refuses an XT's 8-bit bus at attach,
+# and the 360KB system disk is the XT's - which is why CDRack is not on it
+# either. It came off when SOUND.DRV's stereo and 16-bit streams (34.5.5)
+# took the disk's last free cluster: 706 of 706, so a Control Panel save of a
+# new SYSTEM.CFG, or any SYSTEM\APPDATA write, had nowhere to go. Its 11
+# clusters are the room. DERIVED, and guarded: a filter-out that matches
+# nothing is silent, so the day CDROM.DRV leaves $(DRIVERS) or is renamed this
+# stops the build rather than quietly putting it back. RECURSIVE for
+# $(DRIVERS)' own reason ($(KMODS) reads $(KMODDIR) at the recipe).
+DRIVERS360 = $(if $(filter $(BUILD)/cdrom.drv,$(DRIVERS)),,$(error \
+    DRIVERS360 filters $(BUILD)/cdrom.drv out of DRIVERS and it is not \
+    there - SPEC.md 119.6.7's omission now matches nothing))$(filter-out \
+    $(BUILD)/cdrom.drv,$(DRIVERS))
+
 # --- ...and what the EMULATOR disks carry on top (SPEC.md 9.11.7) -------------
 # $(DRIVERS) PLUS the absolute pointer, and that direction is the point: this
 # is an ADDITION to the shipped set, where $(SMALLDRIVERS) below is a
@@ -3893,16 +3908,18 @@ $(BUILD)/rlapply.o88: $(BUILD)/rlapply.bin tools/os88pkg.py $(PKGZSTAMP)
 
 # SYSTEM CHECK (SPEC.md 118). Its MANIFEST is the release it judges a volume
 # against: every file the system disk carries in the root, SYSTEM\ and
-# STIKAPPS\ - the kernel, $(DRIVERS) (modules, BOOTHD.SYS and COLDHMA.SYS
+# STIKAPPS\ - the kernel, $(DRIVERS360) (modules, BOOTHD.SYS and COLDHMA.SYS
 # among them), $(SYSAPPS), $(STIKAPPS) - sized and summed AS STORED, from the
 # disk's own inputs, since the image depends on SYSCHECK.O88 (SPEC.md 118.2.1).
-# t_sysman holds it to every built system disk.
-$(BUILD)/syscheck_man.inc: $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) \
+# t_sysman holds it to every built system disk. $(DRIVERS360) and not
+# $(DRIVERS): the manifest is what EVERY geometry carries (118.2), and the
+# 360KB disk leaves CDROM.DRV off (SPEC.md 119.6.7).
+$(BUILD)/syscheck_man.inc: $(KERNFILE) $(DRIVERS360) $(SYSAPPS) $(STIKAPPS) \
                            apps/syscheck/retired.txt tools/os88sysman.py \
                            tools/os88drv.py tools/os88mod.py tools/os88lz.py | $(BUILD)
 	python3 tools/os88sysman.py --kernel $(KERNFILE) \
 	        --retired apps/syscheck/retired.txt -o $@ \
-	        $(DRIVERS) $(SYSAPPSARGS) $(STIKARGS)
+	        $(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS)
 
 $(BUILD)/syscheck.bin: apps/syscheck/syscheck.asm apps/syscheck/scan.inc \
                        apps/syscheck/ui.inc apps/syscheck/out.inc \
@@ -5076,7 +5093,7 @@ $(BUILD)/emstest.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(C
             $(BUILD)/emscfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG360) $(BUILD)/emscfg/system.cfg \
 		$(BUILD)/emstest.o88 $(APPDATAFOLDER)
 
@@ -5220,7 +5237,7 @@ $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
@@ -5360,7 +5377,7 @@ $(BUILD)/covoxsys720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS)
 $(BUILD)/covoxsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/covoxcfg1/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/covoxcfg1/system.cfg $(APPDATAFOLDER)
 
 .PHONY: covoxtest
@@ -5407,7 +5424,7 @@ $(BUILD)/pmsys720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(
 $(BUILD)/pmsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 $(APPDATAFOLDER)
 
 .PHONY: picomemtest
@@ -5456,7 +5473,7 @@ $(BUILD)/mixer360.img: $(BUILD)/boot360.bin $(KERNFILE) \
         $(BUILD)/mixercfg/SYSTEM.CFG tools/os88disk.py Makefile
 	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
 		$(BUILD)/mixercfg/SYSTEM.CFG \
 		--folder SYSTEM/APPDATA
 
@@ -5473,7 +5490,7 @@ ethertest: $(BUILD)/ether360.img
 $(BUILD)/ether360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/system.cfg
 
 # FTPDTEST: the FTP SERVER's gate disk (SPEC.md 77, docs/plans/completed/NET-STACK-PLAN.md
@@ -5681,7 +5698,7 @@ SYS360SPC := --spc 1
 $(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # AUTOSTARTTEST - the LINKS and AUTOSTART gate's disk (SPEC.md 26.10): the
@@ -5709,7 +5726,7 @@ $(BUILD)/astest/.made: tools/os88lnk.py | $(BUILD)
 $(BUILD)/autostart360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py $(BUILD)/astest/.made
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(FACESARG360) \
 		$(BUILD)/astest/CALC.LNK AUTOSTRT:$(BUILD)/astest/BADVER.LNK \
 		AUTOSTRT:$(BUILD)/astest/NOTES.TXT AUTOSTRT:$(BUILD)/astest/TASKMGR.LNK \
 		$(APPDATAFOLDER)
@@ -6374,7 +6391,7 @@ $(BUILD)/x3field360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
         $(BUILD)/x3f/A_X3.LNK tools/os88disk.py Makefile
 	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
 		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/x3f/A_X3.LNK \
 		AUTOSTRT:$(BUILD)/x3f/X3.LNK --folder SYSTEM/APPDATA
 $(BUILD)/x3fb-%.img: $(BUILD)/x3f/XTMP3.O88 $(BUILD)/x3f/%/TRACK.MP3 \
@@ -9137,14 +9154,14 @@ $(STIKFIX)/DESKPROB.DAT: tools/os88stik.py | $(BUILD)
 $(BUILD)/stikdesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(STIKFIX)/desk/system.cfg $(STIKFIX)/DESKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		STIKAPPS:$(BUILD)/deskprob.o88 SYSTEM/APPDATA:$(STIKFIX)/DESKPROB.DAT \
 		$(STIKFIX)/desk/system.cfg
 
 $(BUILD)/stik%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/%/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		STIKAPPS:$(BUILD)/stikprob.o88 SYSTEM/APPDATA:$(STIKFIX)/STIKPROB.DAT \
 		$(STIKFIX)/$*/system.cfg
 
@@ -12297,7 +12314,7 @@ $(BUILD)/npbench360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
                          $(SYSAPPS) $(SYSDOC) $(BUILD)/npb/notepad.o88 tools/os88disk.py $(SYSROOT)
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(SYSDOC) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(SYSDOC) \
 		APPS:$(BUILD)/npb/notepad.o88 $(MEDIAFOLDER)
 
 # --- ...and the ONE LONG RUN disk, for SPEC.md 27.4.2 ------------------------
@@ -12353,7 +12370,7 @@ $(BUILD)/nprun360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
                        tools/os88disk.py $(SYSROOT)
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(BUILD)/nprun/run.txt \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(BUILD)/nprun/run.txt \
 		APPS:$(BUILD)/npb/notepad.o88 $(MEDIAFOLDER)
 
 # --- the A/V SYNC disk (ON DEMAND: `make clicktest`) -------------------------
@@ -14489,7 +14506,7 @@ $$(BUILD)/font-$(1)-360.img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $(SYSROOT) $$
 	python3 tools/os88disk.py -o $$@ --size 360 \
 		--boot $$(call FONTDIR,$(1))/boot360.bin \
 		--kernel $$(call FONTDIR,$(1))/$(KERNNAME) \
-		$$(DRIVERS) $$(SYSAPPSARGS) $(SYSROOTARG) $$(SYSDOC) $$(MEDIAFOLDER)
+		$$(DRIVERS360) $$(SYSAPPSARGS) $(SYSROOTARG) $$(SYSDOC) $$(MEDIAFOLDER)
 	@echo "font: $$@ - a 360KB system disk set in $(1)"
 
 # its kernel is that face's
@@ -14591,7 +14608,7 @@ $(BUILD)/herc.img: $(BUILD)/kernel.bin $(DRIVERS) \
 	@$(MAKE) BUILD=$(HERCDIR) $(FIELDKNOBS) $(HERCDIR)/boot360.bin $(HERCDIR)/boothd.sys $(HERCDIR)/coldhma.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(HERCDIR)/boot360.bin --kernel $(HERCDIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(DRIVERS360) $(SYSAPPSARGS) $(FIELDBENCH)
 	@python3 tools/fieldsize.py $(BUILD)/kernel.bin $(HERCDIR)/kernel.bin
 	@echo "field: $@ - the PROBE kernel; on a machine holding both cards it"
 	@echo "       finds the Hercules (SPEC.md 39.1)"
@@ -14604,7 +14621,7 @@ $(BUILD)/cga.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin $(CGADIR)/boothd.sys $(CGADIR)/coldhma.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CGADIR)/boot360.bin --kernel $(CGADIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(DRIVERS360) $(SYSAPPSARGS) $(FIELDBENCH)
 	@echo "field: $@ - VIDEO=cga, so the Hercules is ignored and the CGA"
 	@echo "       column can be taken without opening the machine"
 
@@ -14651,7 +14668,7 @@ $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	@$(MAKE) BUILD=$(F1DIR) FLOPPY1=1 $(FIELDKNOBS) $(F1DIR)/boot360.bin $(F1DIR)/boothd.sys $(F1DIR)/coldhma.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(F1DIR)/boot360.bin --kernel $(F1DIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(DRIVERS360) $(SYSAPPSARGS) $(FIELDBENCH)
 	@echo "field: $@ - FLOPPY1=1, one sector per int 13h. The A/B against"
 	@echo "       herc.img for docs/FIELD-NOTES.md 7 - run SYSBENCH on both"
 
@@ -14677,7 +14694,7 @@ $(BUILD)/cqdiag.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	@$(MAKE) BUILD=$(CQDIR) BOOTDIAG=1 $(FIELDKNOBS) $(CQDIR)/boot360.bin $(CQDIR)/boothd.sys $(CQDIR)/coldhma.sys
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CQDIR)/boot360.bin --kernel $(CQDIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(DRIVERS360) $(SYSAPPSARGS) $(FIELDBENCH)
 	@echo "field: $@ - BOOTDIAG=1. A boot that fails prints int 13h's status"
 
 # STACKPROBE measures the 256-byte task-stack margin (SPEC.md 8) from the
@@ -15298,7 +15315,7 @@ $(ZDATA)/MIDI/%.MID: apps/midirack/songs/%.MID tools/os88lz.py $(PKGZSTAMP) | $(
 # WHICH DISK CARRIES WHICH (SPEC.md 121.12 has the arithmetic, 24.6.1's rule,
 # dated 2026-10-22): all three on the 1.44MB apps disk and the live media;
 # NIGHT SIGNALS and AFTER HOURS on the 1.2MB one, which had 393 clusters of
-# 512 bytes free and the package is 192 of them; AFTER HOURS alone on
+# 512 bytes free and the package is 193 of them; AFTER HOURS alone on
 # media360.img, beside the package. `make xtmp3disk` carries all three in
 # every geometry.
 XTMP3MP3SRC  := tests/xtmp3
@@ -15517,7 +15534,7 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
 #     network360.img beside Telnet and the Browser.
 #     XTMP3 IS NOT CURATED ONTO IT (SPEC.md 121.12, 24.6.1's rule, dated
-#     2026-10-22): that disk had 14 clusters spare and the player is 96. It
+#     2026-10-22): that disk had 14 clusters spare and the player is 97. It
 #     rides the MEDIA DISK on MIDIRack's ground - the floppy whose subject is
 #     music already - at its root, with AFTER HOURS in MEDIA/.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
@@ -15582,7 +15599,7 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # meant for a third primary 720KB disk, content not yet decided, which is to
 # carry what the 720KB system and apps disks leave off.
 # ...AND XTMP3 IS NOT ON IT (SPEC.md 121.12, 24.6.1's rule, dated 2026-10-22):
-# the disk had 36 of 713 clusters free and the player is 96 of them before a
+# the disk had 36 of 713 clusters free and the player is 97 of them before a
 # single song. `make xtmp3disk`'s 720KB floppy carries it with all three demo
 # songs, and it is the obvious candidate for the third 720KB disk above - the
 # owner's call, like that disk's contents.
@@ -15696,8 +15713,8 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # apps disk had to drop the module, and 1.2MB is not such a geometry.
 #
 # XTMP3 JOINED IT (SPEC.md 121.12, dated 2026-10-22) on MIDIRack's ground: the
-# disk had 147 of 354 clusters free, the player is 96 and AFTER HOURS 30, which
-# leaves 21. The other two songs (69 and 50) did not fit beside it, and AFTER
+# disk had 147 of 354 clusters free, the player is 97 and AFTER HOURS 30, which
+# leaves 20. The other two songs (69 and 50) did not fit beside it, and AFTER
 # HOURS is the one a 360KB machine - an XT, which converts first - is for.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
                 $(BUILD)/xtmp3.o88 $(XTMP3MP3_360) \
@@ -16628,7 +16645,7 @@ imager:
 # WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
 # chat client is the network disk's subject, and network360.img carries it.
 #
-# XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 96
+# XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 97
 # clusters, a player and not a calibration instrument, and media360.img
 # carries it at this geometry. The 720KB and 1.44MB combos carry it.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
@@ -18356,7 +18373,7 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 # floppy. It is the 720KB home the apps disk has no room for (APPSARGS720's
 # note) and the 360KB disk with every song, where media360.img has room for
 # one. The songs are PLAIN, never under $(ZDATA) (XTMP3MP3's note). 360KB:
-# 96 + 69 + 50 + 30 = 245 clusters of files, 249 of 354 with the folders and
+# 97 + 69 + 50 + 30 = 246 clusters of files, 250 of 354 with the folders and
 # ASSOC.DAT.
 .PHONY: xtmp3disk
 xtmp3disk: $(BUILD)/xtmp3.img $(BUILD)/xtmp3720.img $(BUILD)/xtmp3120.img \
