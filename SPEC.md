@@ -217430,18 +217430,33 @@ model BIT-EXACTLY, and the full-quality model must match the host reference
 (`lame --decode`) within a documented tolerance, with SNR and peak error per
 fixture.
 
-- **STANDARD**: requantised values are 16-bit with a per-granule exponent
-  aligned to a fixed Q before the stereo stage, never normalised frame by
-  frame. The IMDCT (36 and 3x12 points) is a factored transform with 16-bit
-  constants and 32-bit accumulation, with a 16-bit overlap history. Synthesis
-  is a fast 32-point DCT plus the 512-tap window, 16 products an output, a
-  16-bit V history. Output is 16-bit, converted to the device's format at the
-  feed.
+- **STANDARD** (design D5 in docs/xtmp3/NUMERICS.md, chosen by
+  measurement). The spectral domain (requantised lines, stereo, antialias)
+  is int32 Q28. The IMDCT (36 and 3x12 points, minimp3's factorisation with
+  the twiddle merged into the window) works in int16 with a block scale k
+  that lives in one subband of one granule and never crosses it. The subband
+  samples, the overlap and the DCT-II are int32 Q28. The synthesis history is
+  a ring of the last 16 DCT vectors in int16 Q14, against a window stored in
+  consumption order, with 16 products an output into an int32 Q28
+  accumulator. The output is int16 Q15, converted to the device's format at
+  the feed. Every stored result is rounded half up once, and every overflow
+  saturates and is counted. Against `lame --decode` it measures 63.8 to
+  78.2 dB SNR, at most 3.1 LSB RMS and 19 LSB peak on every fixture. The
+  tolerance is RMS 4 LSB, peak 32 LSB and 60 dB above -40 dBFS. All-int16
+  reached only 53-62 dB, because a rounding step in the spectral domain
+  reaches the output about 7x larger. The port is correct when it reproduces
+  `tests/xtmp3/X3SIM.txt`'s 141 PCM hashes. The tables are `x3std.bin`,
+  13,888 bytes, shipped raw, with an 8-bit Huffman first level (1.04
+  lookups a symbol, measured).
 - **Reduced rate (STANDARD, divisor 2 or 4)** does not reconstruct subbands
   at or above `32 / divisor`: no requantisation, no IMDCT and no butterflies
   for them, though Huffman still parses them because the bitstream layout
   requires it. It computes only the output phases kept. Pitch and sample
-  counts are exact at `rate / divisor`.
+  counts are exact at `rate / divisor`. With those subbands zero, the decimated output is
+  exactly the N-point DCT-II (N = 32/divisor) of the kept subbands against
+  every divisor-th window row. In float it equals the decimated full-rate
+  output bit for bit. Aliasing appears only for tones in the 10% just above
+  the new Nyquist: -29 dBc at half rate, -20 dBc at quarter.
 - **XT**: product tables `T[row][code] = round(S * c_row * decode(code))`
   replace the multiplications of synthesis, matrixing and IMDCT. `code` is
   an 8-bit signal code under a fixed companding map that is global and never
