@@ -114,45 +114,55 @@ constant is the exact 48-bit product.  Order of operations is as written.
  stereo M/S   L, R               int32   Q28             M + S, M - S (1/sqrt2 is the q - 2)     exact, sat32
  stereo I/S   L, R               int32   Q28             xL * k, k Q14 (x sqrt2 if also M/S)     round >>14, sat32
  antialias    lines of 0..nb     int32   Q28             u cs - d ca, d cs + u ca (Q15)          round >>15, sat32
- band scale   x16 (18 a subband) int16   Q(14+k)         k = max(min(25 - bl, 14), min(0,        round, sat16
-                                                         29 - bl)) >= -6, bl = bitlength(max|x|)
+ band scale   x16 (18 a subband) int16   Q(14+k)         bl = bitlength(max|x|): k = 25 - bl     round, sat16
+                                                         if bl >= 30 (|x| >= 2.0, k >= -6),
+                                                         else clip(25 - bl, 0, 14)
  IMDCT inside co, si, 9-pt DCT   int16   Q(14+k)         adds; x Q15 constant; x/2 = (x+1)>>1    round >>15, sat16
- IMDCT out    subband samples    int16   Q14 (+-2)       o*w + ((co*a + si*b) >> k), one sum:    round >>15, sat16
-                                                         o the Q14 overlap, a b c d the twiddle
-                                                         merged into the window (Q15)
- overlap      9 words a subband  int16   Q14             co*tw0 - si*tw1                         round >>(15+k), sat16
- freq. invert odd subbands' odd  int16   Q14             negate                                  sat16
- mono mix     subband samples    int16   Q14             (a + b + 1) >> 1                        cannot saturate
- DCT-II       u, v, z, FFT, X    int16   Q14             adds; rotations a c +- b s (Q15)        round >>15, sat16
- V history    16 X vectors of N  int16   Q14             N = 32 / divisor words a slot
- window       acc                int32   Q28             16 products X (Q14) * D (Q14)           exact: x3tables
+ IMDCT out    subband samples    int32   Q28             ((o*w) >> 14) + ((co*a + si*b) >> k),   (u+1) >> 1,
+                                                         both floor-shifted to Q29, one sum: o   sat32
+                                                         the overlap, w a window word, a b c d
+                                                         the twiddle merged into it (Q15)
+ overlap      9 words a subband  int32   Q28             co*tw0 - si*tw1                         round >>(1+k), sat32
+ freq. invert odd subbands' odd  int32   Q28             negate                                  sat32
+ mono mix     subband samples    int32   Q28             (a + b + 1) >> 1                        cannot saturate
+ DCT-II       u, v, z, FFT, X    int32   Q28             adds; rotations a c +- b s (Q15)        round >>15, sat32
+ V history    16 X vectors of N  int16   Q14             (X + 2^13) >> 14, N = 32/divisor words  round, sat16
+ window       acc                int32   Q28             16 products V (Q14) * D (Q14)           exact: x3tables
                                                                                                  proves < 2^31
  PCM          output             int16   Q15             (acc + 2^12) >> 13                      clip, counted
 
-WHY THESE, ON AN 8088.  Measured first (`floor` experiments in NUMERICS.md
-3): with every stage int16 Q14 the decoder sat at 53 to 62 dB against mpglib,
-because a quantisation step in the spectral domain reaches the output about
-seven times larger and one in the subband domain about 5.6 times (the
-synthesis's sqrt(32)): those domains need ~3 bits more than the PCM.  So:
-  * The spectral domain is int32 where it is cheap.  Requantisation already
-    has the 32-bit product in DX:AX (keeping it costs nothing), M/S is
-    add/adc, intensity is rare; only the antialias butterflies pay double
-    multiplies (~9% of a granule).
-  * The IMDCT, the most multiplies before the window, stays 16-bit by taking
-    a BLOCK SCALE per subband: a quiet band is shifted up so its largest
-    input uses 11 bits, a loud one stays at Q14.  No scale crosses a block:
-    the overlap and the output are at the fixed Q14, so the next granule
-    adds nothing it would have to align (the brief's section 4 rule).
+WHY THESE, ON AN 8088.  Measured first (NUMERICS.md 3): with every stage
+int16 Q14 the decoder sat at 53 to 62 dB against mpglib, because a
+quantisation step in the spectral domain reaches the output about seven
+times larger and one in the subband domain about 5.6 times (the synthesis's
+sqrt(32)) - those domains need ~3 bits more than the PCM - while one in V
+reaches it only 1.4 times larger.  So:
+  * Everything from requantisation to the DCT's output is int32 EXCEPT the
+    IMDCT's inside, and V and the window stay int16.  Requantisation already
+    has the 32-bit product in DX:AX, M/S is add/adc, intensity is rare; the
+    antialias, the IMDCT's output stage and the DCT pay the double multiply
+    (int32 x int16 = mul + imul).
+  * The IMDCT's inside, the most multiplies before the window, stays 16-bit
+    under a BLOCK SCALE per subband: a quiet band's inputs are shifted up so
+    its largest uses 11 bits, a loud one stays at Q14.  No scale crosses a
+    block: the IMDCT's output and overlap are int32 at the fixed Q28, so the
+    next granule adds nothing it would have to align (the brief's section 4).
+  * V is the one history that must stay 16-bit (16 slots a channel, and the
+    window's 16 products an output are the decoder's whole cost): a step in
+    V costs the PCM 0.8 LSB RMS.  Its words feed `imul` directly.
   * Every product of a Q15 constant is rounded by >> 15, which is
     `add ax,4000h / adc dx,0 / shl ax,1 / rcl dx,1` and DX is the answer;
     >> 16 is DX itself.  A shift by CL costs 8 + 4n cycles and every
-    instruction byte 4 cycles of fetch, so no variable shift is in an inner
-    loop except the block scale's (once per subband per granule).
-  * D needs Q14 (it reaches 1.145); X * D is Q28 and the PCM is >> 13.
+    instruction byte 4 cycles of fetch, so the only variable shifts are the
+    block scale's (once per subband word per granule) and the IMDCT output
+    stage's alignment by k.
+  * D needs Q14 (it reaches 1.145); V * D is Q28 and the PCM is >> 13.
   * Saturation is a `jo`: 4 cycles not taken, and it makes every input -
-    including a hostile one - produce a defined output.
-The result is 57 to 72 dB on the fixtures at the source rate, with no
-saturation anywhere on real material.
+    a hostile one included - produce a defined output.
+The result: 63.8 to 78.2 dB against mpglib on every fixture louder than
+-40 dBFS at the source rate (RMS error <= 3.1 LSB, peak <= 19), and no
+saturation anywhere on real material.  The int32 subband domain (against
+int16 Q14 there, NUMERICS.md 3) buys 3 to 5 dB for about 15% more cycles.
 
 REDUCED RATE (divisor 2 or 4).  Subbands at and above N = 32/div are not
 requantised past Huffman (still parsed), get no IMDCT and no butterflies
@@ -1448,18 +1458,21 @@ def alias_i(x, nb):
 
 def band_scale(xb):
     """x3s_scale: each subband's 18 int32 Q28 lines become int16 at its own
-    Q(14 + k), with bl = bitlength(max |x|):
-        k = max(min(29 - X3_IMDCT_HEAD - bl, 14), min(0, 29 - bl)),
+    Q(14 + k), with bl = bitlength(max |x|) and H = X3_IMDCT_HEAD:
+        k = 29 - H - bl                  when bl >= 30 (a band at 2.0 or more)
+        k = clip(29 - H - bl, 0, 14)     otherwise,
     then at least X3_K_MIN; x16 = (x + 2^(13-k)) >> (14 - k) (k = 14: x
-    itself), saturated.  A quiet band's largest input uses 15 - HEAD bits,
+    itself), saturated.  A quiet band's largest input uses 15 - H bits,
     leaving the IMDCT's internal sums that much room.  A loud band stays at
     Q14 (k = 0) - as fine as the fixed format and no coarser, its internal
-    values bounded by the absolute range instead - and only a band at or
-    above 2.0 (a stream clipping far past full scale) takes k < 0, enough to
-    hold it in 16 bits.  A silent band takes 14.  Returns (k, x16)."""
+    values bounded by the absolute range instead - and a band at or above
+    2.0 (a stream clipping far past full scale) is scaled down with the same
+    H bits of room, so that only the PCM clips.  A silent band takes 14.
+    Returns (k, x16)."""
     m = np.abs(xb).max(axis=1)
     bl = np.array([int(v).bit_length() for v in m], dtype=np.int64)
-    k = np.maximum(np.minimum(29 - X3_IMDCT_HEAD - bl, 14), np.minimum(0, 29 - bl))
+    k = np.where(bl >= 30, 29 - X3_IMDCT_HEAD - bl,
+                 np.clip(29 - X3_IMDCT_HEAD - bl, 0, 14))
     k = np.maximum(k, X3_K_MIN)
     sh = (14 - k)[:, None]
     r = np.where(sh > 0, (xb + (np.int64(1) << np.maximum(sh - 1, 0))) >> sh, xb)
@@ -1502,28 +1515,37 @@ def dct3_9_i(y):
 
 
 def _merge(o, w, co, a, si, b, k, sign):
-    """o*w (Q14 x Q15) + sign * ((co*a + si*b) >> k) (Q(14+k) x Q15, floor-
-    shifted to Q29), rounded to Q14: the window and twiddle in one rounding.
-    The 32-bit sums cannot overflow (x3tables' --selfcheck proves the bound)."""
+    """One subband sample: o*w + sign * (co*a + si*b), int32 Q28.  o is the
+    int32 Q28 overlap and w a Q15 window word: their 48-bit product is
+    floor-shifted by 14 to Q29.  co, si are int16 at Q(14+k) and a, b the
+    twiddle merged into the window (Q15): their 32-bit sum is floor-shifted
+    by k to Q29 (left, saturating, for k < 0).  The two are added (int32,
+    saturated) and rounded once to Q28: (u + 1) >> 1.  The floor shifts
+    drop nothing at or above 2^-29."""
     st = 'imdct'
     n = _size(o)
-    OPS.count(st, 'mul', 3 * n)
-    OPS.count(st, 'add', 2 * n)
+    OPS.count(st, 'mul32', n)
+    OPS.count(st, 'mul', 2 * n)
+    OPS.count(st, 'add32', 2 * n)
     OPS.count(st, 'shift', 2 * n)
     p = co * a + si * b
     t = np.where(k >= 0, p >> np.maximum(k, 0), s32(p << np.maximum(-k, 0), st))
-    return s16(s32(o * w + sign * t, st) + (1 << 14) >> 15, st)
+    u = s32(((o * w) >> 14) + sign * t, st)
+    return s32((u + 1) >> 1, st)
 
 
 def _ovl(co, c0, si, c1, k):
-    """(co*c0 - si*c1) rounded from Q(29+k) to Q14: the new overlap."""
+    """The new overlap word: (co*c0 - si*c1) from Q(29+k) rounded to the
+    int32 Q28 overlap."""
     st = 'imdct'
     n = _size(co)
     OPS.count(st, 'mul', 2 * n)
     OPS.count(st, 'add', n)
     OPS.count(st, 'shift', n)
-    sh = 15 + k
-    return s16((co * c0 - si * c1 + (np.int64(1) << (sh - 1))) >> sh, st)
+    sh = 1 + k
+    p = co * c0 - si * c1
+    return s32(np.where(sh > 0, (p + (np.int64(1) << np.maximum(sh - 1, 0))) >> np.maximum(sh, 0),
+                        p << np.maximum(-sh, 0)), st)
 
 
 def imdct36_i(x, k, ovl, wi):
@@ -1610,18 +1632,19 @@ def imdct_short_i(x, k, ovl):
 # ---- synthesis: the DCT-II and the window ------------------------------------
 
 def dct2_i(x):
-    """x3s_dct: N-point DCT-II (N = 32, 16 or 8) of a list of N arrays (one
-    per subband, each a vector over the granule's 18 slots).  Recursive:
-    X[2k] = DCT-II(N/2) of u = x[n] + x[N-1-n], X[2k+1] = DCT-IV(N/2) of
-    v = x[n] - x[N-1-n]; the DCT-IV by pre-rotation, an N/4-point complex
-    FFT and post-rotation, so every multiplier is a cosine or sine <= 1."""
+    """x3s_dct: N-point DCT-II (N = 32, 16 or 8) of a list of N int32 Q28
+    arrays (one per subband, each a vector over the granule's 18 slots).
+    Recursive: X[2k] = DCT-II(N/2) of u = x[n] + x[N-1-n], X[2k+1] =
+    DCT-IV(N/2) of v = x[n] - x[N-1-n]; the DCT-IV by pre-rotation, an
+    N/4-point complex FFT and post-rotation, so every multiplier is a cosine
+    or sine <= 1 (Q15) and every product is int32 x int16."""
     st = 'dct'
     n = len(x)
     if n == 1:
         return [x[0]]
     h = n // 2
-    u = [iadd(x[i], x[n - 1 - i], st) for i in range(h)]
-    v = [isub(x[i], x[n - 1 - i], st) for i in range(h)]
+    u = [iadd32(x[i], x[n - 1 - i], st) for i in range(h)]
+    v = [isub32(x[i], x[n - 1 - i], st) for i in range(h)]
     e = dct2_i(u)
     o = dct4_i(v)
     out = [None] * n
@@ -1635,15 +1658,15 @@ def dct4_i(v):
     st = 'dct'
     m = len(v)
     if m == 1:
-        return [imul(v[0], Q.COS_PI4, st)]
+        return [imul32(v[0], Q.COS_PI4, st, 15)]
     l = m // 2
     pre = Q.DCT4_PRE[m]
     zr, zi = [], []
     for k in range(l):
         a, b = v[2 * k], v[m - 1 - 2 * k]
-        c, s = pre[k]
-        zr.append(imul2(a, c, b, s, st))
-        zi.append(imul2(b, c, a, -s, st))
+        c, s_ = pre[k]
+        zr.append(imul2_32(a, c, b, s_, st))
+        zi.append(imul2_32(b, c, a, -s_, st))
     fr, fi = fft_i(zr, zi)
     post = Q.DCT4_POST[m]
     out = [None] * m
@@ -1651,18 +1674,18 @@ def dct4_i(v):
         if k == 0:
             yr, yi = fr[0], fi[0]
         else:
-            c, s = post[k]
-            yr = imul2(fr[k], c, fi[k], s, st)
-            yi = imul2(fi[k], c, fr[k], -s, st)
+            c, s_ = post[k]
+            yr = imul2_32(fr[k], c, fi[k], s_, st)
+            yi = imul2_32(fi[k], c, fr[k], -s_, st)
         out[2 * k] = yr
-        out[m - 1 - 2 * k] = ineg(yi, st)
+        out[m - 1 - 2 * k] = s32(-yi, st)
     return out
 
 
 def fft_i(re, im):
-    """Radix-2 decimation-in-time complex FFT (forward, e^-i), of a power-of
-    -two length; W^0 and W^(n/4) = -i are exact, every other twiddle is a
-    rotation in Q15.  Butterfly sums saturate."""
+    """Radix-2 decimation-in-time complex FFT (forward, e^-i) of a power-of-
+    two length, int32 Q28; W^0 and W^(n/4) = -i are exact, every other
+    twiddle a rotation in Q15.  Butterfly sums saturate."""
     st = 'dct'
     n = len(re)
     if n == 1:
@@ -1676,16 +1699,22 @@ def fft_i(re, im):
         if k == 0:
             tr, ti = orr[k], oi[k]
         elif 4 * k == n:
-            tr, ti = oi[k], ineg(orr[k], st)       # times -i
+            tr, ti = oi[k], s32(-orr[k], st)       # times -i
         else:
-            c, s = tw[k]                            # W = c - i s
-            tr = imul2(orr[k], c, oi[k], s, st)
-            ti = imul2(oi[k], c, orr[k], -s, st)
-        outr[k] = iadd(er[k], tr, st)
-        outi[k] = iadd(ei[k], ti, st)
-        outr[k + n // 2] = isub(er[k], tr, st)
-        outi[k + n // 2] = isub(ei[k], ti, st)
+            c, s_ = tw[k]                           # W = c - i s
+            tr = imul2_32(orr[k], c, oi[k], s_, st)
+            ti = imul2_32(oi[k], c, orr[k], -s_, st)
+        outr[k] = iadd32(er[k], tr, st)
+        outi[k] = iadd32(ei[k], ti, st)
+        outr[k + n // 2] = isub32(er[k], tr, st)
+        outi[k + n // 2] = isub32(ei[k], ti, st)
     return outr, outi
+
+
+def to_v(x):
+    """An int32 Q28 DCT output into the int16 Q14 V history: round, saturate."""
+    OPS.count('dct', 'shift', _size(x))
+    return s16((x + (1 << 13)) >> 14, 'dct')
 
 
 class IntSynth:
@@ -1717,8 +1746,8 @@ class IntSynth:
         self.nprod = int(np.count_nonzero(self.co))
 
     def granule(self, sb):
-        """sb: list of N arrays (18 slots each) -> int16 PCM (18 * N)."""
-        X = dct2_i(sb)
+        """sb: list of N int32 Q28 arrays (18 slots each) -> int16 PCM."""
+        X = [to_v(v) for v in dct2_i(sb)]
         out = np.empty(18 * self.n, dtype=np.int64)
         for t in range(18):
             self.pos = (self.pos + 1) & 15
@@ -1882,7 +1911,11 @@ class Decoder:
                 out[sel] = o
                 idx = np.nonzero(sel)[0]
                 ovl[idx] = nv
-        out[1::2, 1::2] = -out[1::2, 1::2] if flt else ineg(out[1::2, 1::2], 'imdct')
+        if flt:
+            out[1::2, 1::2] = -out[1::2, 1::2]
+        else:
+            OPS.count('imdct', 'add32', out[1::2, 1::2].size)
+            out[1::2, 1::2] = s32(-out[1::2, 1::2], 'imdct')
         return out.T      # (18, nsb)
 
     def synth(self, sbs):
@@ -1891,7 +1924,7 @@ class Decoder:
             if flt:
                 sbs = [(sbs[0] + sbs[1]) * 0.5]
             else:
-                OPS.count('mix', 'add', 2 * sbs[0].size)
+                OPS.count('mix', 'add32', 2 * sbs[0].size)
                 sbs = [(sbs[0] + sbs[1] + 1) >> 1]
         elif self.out_nch == 2 and len(sbs) == 1:
             sbs = [sbs[0], sbs[0]]
@@ -2073,19 +2106,27 @@ FIXDIR = os.path.join(ROOT, 'tests', 'xtmp3')
 GOLDEN = os.path.join(FIXDIR, 'X3SIM.txt')
 LAME = os.environ.get('LAME') or '/opt/homebrew/bin/lame'
 
-# THE TOLERANCE (NUMERICS.md 4).  Against `lame --decode` (mpglib), at the
-# source rate, for every fixture the comparison applies to: the error's RMS
-# and peak in 16-bit LSB, and on the music fixtures the SNR.  At divisors 2
-# and 4 the arithmetic is held to the same RMS and peak against the float
-# reference at the same divisor (the reduced synthesis is exact in float,
-# so that difference is the integer arithmetic alone); the alias leakage
-# against an ideal lowpass-and-decimate of mpglib's output is reported.
-TOL_RMS = 6.0
-TOL_PEAK = 48
-TOL_MUSIC_SNR = 60.0
-MUSIC = ('NEONDRV.MP3', 'NIGHTSIG.MP3', 'AFTERHRS.MP3', 'C128.MP3', 'C320.MP3',
-         'VBR2.MP3', 'MSF.MP3', 'DUAL44.MP3', 'BASS.MP3', 'C48.MP3', 'M22.MP3',
-         'M24.MP3', 'X11K24.MP3', 'IS44.MP3', 'ISMS44.MP3', 'RSV32.MP3', 'MONO44.MP3')
+# THE TOLERANCE (NUMERICS.md 4).  Against `lame --decode` (mpglib) at the
+# source rate, and against the float reference at the same divisor at 2 and
+# 4 (the reduced synthesis is exact in float, so that difference is the
+# integer arithmetic alone): the error's RMS and peak in 16-bit LSB on every
+# fixture, and its SNR on every fixture whose reference is louder than
+# -40 dBFS RMS (a quiet passage's SNR measures its level, not the decoder:
+# QUIET is held by the RMS and peak alone).  The alias leakage against an
+# ideal lowpass-and-decimate of mpglib is reported, not held.
+TOL_RMS = 4.0
+TOL_PEAK = 32
+TOL_SNR = 60.0
+TOL_SNR_LEVEL = 32768 * 10 ** (-40 / 20.0)
+
+
+def _held(name, div, s, ref, fails):
+    lvl = float(np.sqrt(np.mean(ref.astype(np.float64) ** 2))) if ref.size else 0.0
+    if s['rms'] > TOL_RMS or s['peak'] > TOL_PEAK:
+        fails.append('%s d%d: rms %.2f peak %d past %.1f/%d' % (
+            name, div, s['rms'], s['peak'], TOL_RMS, TOL_PEAK))
+    if lvl >= TOL_SNR_LEVEL and s['snr'] < TOL_SNR:
+        fails.append('%s d%d: SNR %.1f < %.1f' % (name, div, s['snr'], TOL_SNR))
 
 
 def read_wav(path):
@@ -2259,11 +2300,7 @@ def compare(only=(), divs=(1, 2, 4), wavdir=None, cache=None, verbose=True):
                     s2 = err_stats(trim_pcm(pcm_d, st.info, 1), lame_ref)
                     line += '  (mpglib %.1f dB: mpglib departs from ISO in MPEG-2 intensity stereo)' % s2['snr']
                 rows.append(line)
-                if s['rms'] > TOL_RMS or s['peak'] > TOL_PEAK:
-                    fails.append('%s d1: rms %.2f peak %d past %.1f/%d' % (
-                        name, s['rms'], s['peak'], TOL_RMS, TOL_PEAK))
-                if name in MUSIC and s['snr'] < TOL_MUSIC_SNR:
-                    fails.append('%s d1: music SNR %.1f < %.1f' % (name, s['snr'], TOL_MUSIC_SNR))
+                _held(name, 1, s, ref, fails)
             else:
                 fl = decode_file(data, 'float', div)[0]
                 a = err_stats(pcm_d, fl)
@@ -2277,16 +2314,14 @@ def compare(only=(), divs=(1, 2, 4), wavdir=None, cache=None, verbose=True):
                 lk = err_stats(fl[lo:hi], ideal[lo:hi]) if hi > lo else dict(snr=float('inf'))
                 rows.append('%-13s d%d  vs float snr %6.1f  rms %5.2f  peak %4d  dc %+6.3f  clip %d  sat %d | leak vs ideal %6.1f dB' % (
                     name, div, a['snr'], a['rms'], a['peak'], a['dc'], clip, sat, lk['snr']))
-                if a['rms'] > TOL_RMS or a['peak'] > TOL_PEAK:
-                    fails.append('%s d%d: rms %.2f peak %d past %.1f/%d' % (
-                        name, div, a['rms'], a['peak'], TOL_RMS, TOL_PEAK))
+                _held(name, div, a, fl, fails)
         if verbose:
             pass
     if verbose:
         print('\n'.join(rows))
-        print('tolerance: d1 vs mpglib rms <= %.1f LSB, peak <= %d LSB, music SNR >= %.0f dB; '
-              'd2/d4 vs float at the same divisor, rms <= %.1f, peak <= %d' % (
-                  TOL_RMS, TOL_PEAK, TOL_MUSIC_SNR, TOL_RMS, TOL_PEAK))
+        print('tolerance: rms <= %.1f LSB, peak <= %d LSB, and SNR >= %.0f dB where the reference '
+              'is above -40 dBFS RMS; d1 against mpglib, d2/d4 against the float model' % (
+                  TOL_RMS, TOL_PEAK, TOL_SNR))
         for f in fails:
             print('FAIL ' + f)
         print('x3sim --compare: %d failure(s)' % len(fails))
