@@ -65,17 +65,32 @@ XS_TOFF     equ X3T_P43M_OFF
 %endmacro
 
 ; XS_SAT32 stage - after an add/adc or sub/sbb into DX:AX: a signed overflow
-; becomes the clamp on the side the true value lies, counted
+; becomes the clamp on the side the true value lies, counted. The clamp is
+; out of line (xs_fxs_<stage>: a CALL keeps the flags it decides on), five
+; bytes a site: it never runs on real material, and there are thousands
 %macro XS_SAT32 1
     jno %%ok
+  %if (%1) == XS_ST_DCT
+    call xs_fxs_dct
+  %elif (%1) == XS_ST_STER
+    call xs_fxs_ster
+  %else
+    call xs_fxs_imdct
+  %endif
+%%ok:
+%endmacro
+
+; the clamps: SF = 1 after an overflow means the true value is positive
+%macro XS_FXS 2
+%1:
     mov ax, 0xFFFF
     mov dx, 0x7FFF
-    js %%c                          ; the result's sign is wrong: SF = 1 means
-    inc ax                          ; the true value is positive
-    inc dx                          ; (80000000h)
+    js %%c
+    inc ax                          ; (80000000h)
+    inc dx
 %%c:
-    XS_CNT %1
-%%ok:
+    XS_CNT %2
+    ret
 %endmacro
 
 %macro XS_ADD 3
@@ -149,29 +164,42 @@ XS_TOFF     equ X3T_P43M_OFF
   %endif
 %endmacro
 
-; XS_R15 dst, stage - sat32((CX:BP:SI + 2^14) >> 15) into dst
+; XS_R15 dst, stage - sat32((CX:BP:SI + 2^14) >> 15) into dst. Out of
+; range, xs_fx15_<stage> loads the clamp PRE-SHIFTED, so the one path after
+; it is the same either way
 %macro XS_R15 2
     add si, 0x4000
     adc bp, 0
     adc cx, 0
     mov ax, cx                      ; it fits when bits 47 and 46 agree
     add ax, 0x4000
-    js %%sat
+    jns %%fit
+  %if (%2) == XS_ST_DCT
+    call xs_fx15_dct
+  %else
+    call xs_fx15_alias
+  %endif
+%%fit:
     shl si, 1
     rcl bp, 1
     rcl cx, 1
     mov [%1], bp
     mov [%1+2], cx
-    jmp short %%d
-%%sat:
+%endmacro
+
+%macro XS_FX15 2
+%1:
     XS_CNT %2
-    mov word [%1], 0xFFFF
-    mov word [%1+2], 0x7FFF
     or cx, cx
-    jns %%d
-    mov word [%1], 0
-    mov word [%1+2], 0x8000
-%%d:
+    mov cx, 0x3FFF                  ; << 1 makes 7FFF:FFFF
+    mov bp, 0xFFFF
+    mov si, 0x8000
+    jns %%p
+    mov cx, 0xC000                  ; << 1 makes 8000:0000
+    xor bp, bp
+    xor si, si
+%%p:
+    ret
 %endmacro
 
 ; XS_ROT dst, a, |c1|, c1 < 0, b, |c2|, c2 < 0 - x3sim imul2_32, sh 15
@@ -194,27 +222,20 @@ XS_TOFF     equ X3T_P43M_OFF
     mov dx, [%2+2]
     add ax, 0x2000
     adc dx, 0
-    jo %%hi
+    jno %%n
+    call xs_fxv_hi                  ; past int32: far above
+%%n:
     mov cx, dx                      ; it fits when DX is in [-2000h, 1FFFh]
     add cx, 0x2000
     test cx, 0xC000
-    jnz %%sat
+    jz %%ok
+    call xs_fxv                     ; (both load the clamp pre-shifted)
+%%ok:
     shl ax, 1
     rcl dx, 1
     shl ax, 1
     rcl dx, 1
-    jmp short %%st
-%%sat:
-    or dx, dx
-    js %%lo
-%%hi:
-    mov dx, 0x7FFF
-    jmp short %%c
-%%lo:
-    mov dx, 0x8000
-%%c:
-    XS_CNT XS_ST_DCT
-%%st:
+    xor dx, 0x8000                  ; the ring holds V + 32768 (XS_WTP)
     mov [di+%1], dx
     mov [di+%1+32], dx
 %endmacro
@@ -225,21 +246,35 @@ XS_TOFF     equ X3T_P43M_OFF
     xor bp, bp
 %endmacro
 
-%macro XS_WT 2
-    mov ax, [%2]
-    imul word [di+%1]
+; XS_WTP / XS_WTM disp, |D| - one product of the window: the ring word is
+; V + 32768 (unsigned), so a MUL (about 15 cycles under an IMUL on the 8088)
+; by |D|, added for a positive D and subtracted for a negative one; XS_WOUT's
+; correction takes the 32768 sum(D) back out (tools/x3stdgen.py)
+%macro XS_WTP 2
+    mov ax, %2
+    mul word [di+%1]
     add si, ax
     adc bp, dx
 %endmacro
+%macro XS_WTM 2
+    mov ax, %2
+    mul word [di+%1]
+    sub si, ax
+    sbb bp, dx
+%endmacro
 
-; XS_WOUT disp - (acc + 2^12) >> 13, clipped and counted, to xs_pcmt + disp
-%macro XS_WOUT 1
-    add si, 0x1000
-    adc bp, 0
+; XS_WOUT disp, lo, hi - (acc + 2^12) >> 13, clipped and counted, to xs_pcmt
+; + disp; lo:hi is 2^12 less the bias's 32768 sum(D), mod 2^32 (xs_fxw loads
+; the clip pre-shifted)
+%macro XS_WOUT 3
+    add si, %2
+    adc bp, %3
     mov ax, bp                      ; it fits when BP is in [-1000h, 0FFFh]
     add ax, 0x1000
     test ax, 0xE000
-    jnz %%clip
+    jz %%ok
+    call xs_fxw
+%%ok:
     shl si, 1
     rcl bp, 1
     shl si, 1
@@ -247,16 +282,6 @@ XS_TOFF     equ X3T_P43M_OFF
     shl si, 1
     rcl bp, 1
     mov [xs_pcmt+%1], bp
-    jmp short %%d
-%%clip:
-    inc word [xs_gclip]
-    mov ax, 0x7FFF
-    or bp, bp
-    jns %%p
-    inc ax
-%%p:
-    mov [xs_pcmt+%1], ax
-%%d:
 %endmacro
 
 ; --- the 16-bit arithmetic of the IMDCT's inside (x3sim iadd, isub, ineg) --
@@ -302,6 +327,164 @@ XS_TOFF     equ X3T_P43M_OFF
     rcl dx, 1
     mov ax, dx
 %endmacro
+
+; XS_PAIRL i - xs_mpf's arithmetic for output pair i of a long block, with
+; every address a constant off BX (the overlap), DI (the window's groups) and
+; [xs_bx] (the outputs); a pair whose |o| >= 2^30 takes xs_mpair
+%macro XS_PAIRL 1
+    mov ax, [bx + 4*%1 + 2]         ; |o| < 2^30?
+    add ax, 0x4000
+    jns %%f
+    mov ax, [xs_co + 2*%1]          ; no: the general pair
+    mov [xs_mco], ax
+    mov ax, [xs_si + 2*%1]
+    mov [xs_msi], ax
+    mov ax, [xs_bx]
+    add ax, 4*%1
+    mov [xs_mlo], ax
+    mov ax, [xs_bx]
+    add ax, 68 - 4*%1
+    mov [xs_mhi], ax
+    push bx
+    push di
+    add bx, 4*%1
+    add di, 16*%1
+    call xs_mpair
+    pop di
+    pop bx
+    jmp %%done
+%%f:
+    mov ax, [xs_co + 2*%1]          ; t1 = (co a + si b) >> k
+    imul word [di + 16*%1 + 4]
+    mov cx, ax
+    mov si, dx
+    mov ax, [xs_si + 2*%1]
+    imul word [di + 16*%1 + 6]
+    add ax, cx
+    adc dx, si
+    call [xs_srkp]
+    mov [xs_mt1], ax
+    mov [xs_mt1+2], dx
+    mov ax, [xs_co + 2*%1]          ; t2 = (co c + si d) >> k
+    imul word [di + 16*%1 + 8]
+    mov cx, ax
+    mov si, dx
+    mov ax, [xs_si + 2*%1]
+    imul word [di + 16*%1 + 10]
+    add ax, cx
+    adc dx, si
+    call [xs_srkp]
+    mov [xs_mt2], ax
+    mov [xs_mt2+2], dx
+    mov ax, [bx + 4*%1 + 2]         ; U(w) = 4 o_hi w + ((o_lo w) >> 14)
+    imul word [di + 16*%1]
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov cx, ax
+    mov si, dx
+    mov ax, [bx + 4*%1]
+    mul word [di + 16*%1]
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov ax, dx
+    mov dx, 0
+    adc dx, 0
+    add ax, cx
+    adc dx, si
+    sub ax, [xs_mt1]                ; lo = (sat32(U - t1) + 1) >> 1
+    sbb dx, [xs_mt1+2]
+    XS_SAT32 XS_ST_IMDCT
+    sar dx, 1
+    rcr ax, 1
+    adc ax, 0
+    adc dx, 0
+    mov si, [xs_bx]
+    mov [si + 4*%1], ax
+    mov [si + 4*%1 + 2], dx
+    mov ax, [bx + 4*%1 + 2]         ; U(w9)
+    imul word [di + 16*%1 + 2]
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov cx, ax
+    mov si, dx
+    mov ax, [bx + 4*%1]
+    mul word [di + 16*%1 + 2]
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov ax, dx
+    mov dx, 0
+    adc dx, 0
+    add ax, cx
+    adc dx, si
+    add ax, [xs_mt2]                ; hi = (sat32(U + t2) + 1) >> 1
+    adc dx, [xs_mt2+2]
+    XS_SAT32 XS_ST_IMDCT
+    sar dx, 1
+    rcr ax, 1
+    adc ax, 0
+    adc dx, 0
+    mov si, [xs_bx]
+    mov [si + 68 - 4*%1], ax
+    mov [si + 68 - 4*%1 + 2], dx
+    mov ax, [xs_co + 2*%1]          ; o' = ((co tw0 - si tw1) >> k + 1) >> 1
+    imul word [di + 16*%1 + 12]
+    mov cx, ax
+    mov si, dx
+    mov ax, [xs_si + 2*%1]
+    imul word [di + 16*%1 + 14]
+    sub cx, ax
+    sbb si, dx
+    mov ax, cx
+    mov dx, si
+    call [xs_srkp]
+    add ax, 1
+    adc dx, 0
+    sar dx, 1
+    rcr ax, 1
+    mov [bx + 4*%1], ax
+    mov [bx + 4*%1 + 2], dx
+%%done:
+%endmacro
+
+; the out-of-line clamps
+    XS_FXS xs_fxs_dct, XS_ST_DCT
+    XS_FXS xs_fxs_ster, XS_ST_STER
+    XS_FXS xs_fxs_imdct, XS_ST_IMDCT
+    XS_FX15 xs_fx15_dct, XS_ST_DCT
+    XS_FX15 xs_fx15_alias, XS_ST_ALIAS
+xs_fxv_hi:                          ; TOV: x + 2^13 past int32: 7FFFh
+    XS_CNT XS_ST_DCT
+    mov dx, 0x1FFF                  ; (<< 2 makes 7FFF; and passes the range
+    mov ax, 0xC000                  ;  test after it, so it is counted once)
+    ret
+xs_fxv:                             ; TOV: out of int16, by the sign
+    XS_CNT XS_ST_DCT
+    or dx, dx
+    mov dx, 0x1FFF
+    mov ax, 0xC000
+    jns .p
+    mov dx, 0xE000                  ; (<< 2 makes 8000h)
+    xor ax, ax
+.p:
+    ret
+xs_fxw:                             ; WOUT: a clipped sample, counted
+    inc word [xs_gclip]
+    or bp, bp
+    mov bp, 0x0FFF                  ; (<< 3 makes 7FFFh)
+    mov si, 0xE000
+    jns .p
+    mov bp, 0xF000                  ; (<< 3 makes 8000h)
+    xor si, si
+.p:
+    ret
 
 ; the generated bodies, one instance each
 xs_dct32:
@@ -564,6 +747,10 @@ xs_clear:
     mov cx, (xs_hist_end - xs_ovl) / 2
     cld
     rep stosw
+    mov ax, 0x8000                  ; the rings hold V + 32768: V = 0
+    mov di, xs_ring
+    mov cx, 2 * 32 * 32
+    rep stosw
     ret
 
 ; xs_tcheck - every table of the slice against its CRC-32 (x3std.inc)
@@ -720,6 +907,9 @@ xs_granule:
     jne .nost
     call xs_stereo
 .nost:
+%ifdef XS_DUMPRQ
+    jmp .dump                       ; (DEBUG: the requantised lines)
+%endif
     ; --- the hybrid filterbank, each channel of the frame ---
     mov byte [xs_ch], 0
 .hy:
@@ -729,7 +919,30 @@ xs_granule:
     cmp al, [xs_fnch]
     jb .hy
     ; --- the synthesis ---
+%ifdef XS_DUMP
+.dump:
+    ; A DEBUG BUILD ONLY (never shipped): channel 0's subband samples, int32,
+    ; as the "PCM" - 2,304 bytes, which the bench reads as 1,152 mono frames
+    push es
+    mov es, [xs_oseg]
+    mov di, [xs_ooff]
+    mov si, xs_xr
+    mov cx, 576 * 2
+    rep movsw
+    mov si, xs_ovl                  ; ...then channel 0's overlap
+    mov cx, 32 * 9 * 2
+    rep movsw
+    pop es
+    mov word [xs_gclip], 0
+    add word [xs_ngran], 1
+    adc word [xs_ngran+2], 0
+    mov cx, 1152 + 576
+    xor ax, ax
+    clc
+    jmp .out
+%endif
     call xs_synth
+.m_end:                             ; (a mark for tests/x3bench/x3marty.py)
     ; --- the answer ---
     add word [xs_ngran], 1
     adc word [xs_ngran+2], 0
@@ -902,8 +1115,9 @@ xs_rq1:
     jcxz .sign
 .ls:
     shl ax, 1
-    rcl dx, 1
-    js .sat
+    rcl dx, 1                       ; (a rotate sets no SF: test bit 31)
+    test dh, 0x80
+    jnz .sat
     loop .ls
     jmp short .sign
 .sat:
@@ -1209,12 +1423,38 @@ xs_hybrid:
 .noaa:
     mov byte [xs_b], 0              ; each kept subband
 .sb:
+    ; a subband whose 18 lines AND 9 overlap words are all zero comes out
+    ; zero with a zero overlap - x3sim's arithmetic on it is exactly that -
+    ; so it is skipped (the top of every band-limited stream)
+    call xs_chxr
+    mov al, 18 * 4
+    mul byte [xs_b]
+    add di, ax
+    mov cx, 36
+    xor ax, ax
+    repe scasw
+    jne .work
+    mov di, xs_ovl                  ; its overlap: [ch][b][9]
+    cmp byte [xs_ch], 0
+    je .o0
+    add di, 32 * 9 * 4
+.o0:
+    mov al, 36
+    mul byte [xs_b]
+    add di, ax
+    xor ax, ax
+    mov cx, 18
+    repe scasw
+    je .skip
+.work:
     call xs_scale
     call xs_imdct
+.skip:
     inc byte [xs_b]
     mov al, [xs_b]
     cmp al, [xs_nsb]
     jb .sb
+.m_fi:                              ; (a mark for tests/x3bench/x3marty.py)
     call xs_chxr                    ; frequency inversion: odd subbands, odd
     add di, 18 * 4 + 4              ; slots, negated (saturating)
     mov dl, [xs_nsb]
@@ -1314,6 +1554,15 @@ xs_alias:
     mov bx, di
     sub di, 4
 .b:
+    push di                         ; eight lines each side all zero: the
+    sub di, 7 * 4                   ; butterflies give zeros (skipped)
+    mov cx, 32
+    xor ax, ax
+    repe scasw
+    pop di
+    jne .bw
+    jmp .bn
+.bw:
 %assign XS_I 0
 %rep 8
     XS_P 1, 0, bx + 4 * XS_I, XS_T(AA) + 2 * XS_I
@@ -1332,6 +1581,7 @@ xs_alias:
     mov [di - 4 * XS_I + 2], ax
 %assign XS_I XS_I + 1
 %endrep
+.bn:
     add bx, 18 * 4
     add di, 18 * 4
     dec byte [xs_acnt]
@@ -1407,22 +1657,34 @@ xs_scale:
 .k:
     mov [xs_k], dx
     mov [xs_kb], dl
+    mov word [xs_mpp], xs_mpair     ; k < 0: the general pair (a left shift)
+    or dx, dx
+    js .kp
+    mov word [xs_mpp], xs_mpf       ; k >= 0: the fast pair, and its shift
+    mov bx, dx
+    shl bx, 1
+    mov ax, [xs_srkt+bx]
+    mov [xs_srkp], ax
+.kp:
     mov cx, 14
     sub cx, dx
     mov [xs_sh], cl                 ; sh = 14 - k (0..20)
+    jcxz .s0
+    mov bx, cx                      ; ((x >> (sh - 1)) + 1) >> 1: the
+    dec bx                          ; shift by sh - 1, chosen once
+    shl bx, 1
+    mov ax, [xs_srkt+bx]
+    mov [xs_scp], ax
+.s0:
     mov si, [xs_bx]
     mov di, xs_x16
     mov bp, 18
 .v:
     mov ax, [si]
     mov dx, [si+2]
-    mov cl, [xs_sh]
-    or cl, cl
-    jz .fit
-    dec cl                          ; ((x >> (sh - 1)) + 1) >> 1
-    push si
-    call xs_sar32
-    pop si
+    cmp byte [xs_sh], 0
+    je .fit
+    call [xs_scp]
     add ax, 1
     adc dx, 0
     sar dx, 1
@@ -1513,7 +1775,18 @@ xs_imdct:
     mov [xs_si + 2 * XS_I], ax
 %assign XS_I XS_I + 2
 %endrep
-    ; nine output pairs and nine overlap words
+    ; nine output pairs and nine overlap words: unrolled when k >= 0
+    cmp word [xs_k], 0
+    jl .gen
+    mov bx, [xs_ovp]
+    mov di, [xs_wg]
+%assign XS_I 0
+%rep 9
+    XS_PAIRL XS_I
+%assign XS_I XS_I + 1
+%endrep
+    ret
+.gen:
     xor cx, cx
 .pair:
     push cx
@@ -1536,7 +1809,7 @@ xs_imdct:
     shl di, 1                       ; 16 i
     add di, [xs_wg]
     add bx, [xs_ovp]                ; BX -> ovl[i]
-    call xs_mpair
+    call [xs_mpp]
     pop cx
     inc cx
     cmp cx, 9
@@ -1622,7 +1895,7 @@ xs_imdct12:
     shl di, 1                       ; 16 i
     add di, xs_imc + 2 * XS_IMC_L   ; the short groups
     add bx, xs_o3
-    call xs_mpair                   ; o3[i] becomes the new
+    call [xs_mpp]                   ; o3[i] becomes the new
     pop cx
     inc cx
     cmp cx, 3
@@ -1840,6 +2113,154 @@ xs_mpair:
     mov [bx], ax
     mov [bx+2], dx
     ret
+
+; =============================================================================
+; xs_mpf - xs_mpair's contract, FAST, for k >= 0 (the caller's choice): the
+; same arithmetic in 32-bit registers wherever the overlap word |o| < 2^30 -
+; then U = (o w) >> 14 = 4 (o_hi w) + ((o_lo w) >> 14) fits int32, and
+; U -/+ t saturates exactly as a 32-bit sub/add's overflow says. A larger
+; overlap word (a stream far past full scale) takes the general xs_mpair.
+; clobbers: AX, CX, DX, BP, SI
+; =============================================================================
+xs_mpf:
+    mov ax, [bx+2]                  ; |o| < 2^30?
+    mov cx, ax
+    add cx, 0x4000
+    jns .fast
+    jmp xs_mpair
+.fast:
+    ; t1 = (co a + si b) >> k, t2 = (co c + si d) >> k
+    mov ax, [xs_mco]
+    imul word [di+4]
+    mov cx, ax
+    mov si, dx
+    mov ax, [xs_msi]
+    imul word [di+6]
+    add ax, cx
+    adc dx, si
+    call [xs_srkp]
+    mov [xs_mt1], ax
+    mov [xs_mt1+2], dx
+    mov ax, [xs_mco]
+    imul word [di+8]
+    mov cx, ax
+    mov si, dx
+    mov ax, [xs_msi]
+    imul word [di+10]
+    add ax, cx
+    adc dx, si
+    call [xs_srkp]
+    mov [xs_mt2], ax
+    mov [xs_mt2+2], dx
+    ; lo = (sat32(U(w) - t1) + 1) >> 1
+    mov bp, [di]
+    call xs_uw                      ; DX:AX = (o w) >> 14
+    sub ax, [xs_mt1]
+    sbb dx, [xs_mt1+2]
+    XS_SAT32 XS_ST_IMDCT
+    sar dx, 1
+    rcr ax, 1
+    adc ax, 0
+    adc dx, 0
+    mov si, [xs_mlo]
+    mov [si], ax
+    mov [si+2], dx
+    ; hi = (sat32(U(w9) + t2) + 1) >> 1
+    mov bp, [di+2]
+    call xs_uw
+    add ax, [xs_mt2]
+    adc dx, [xs_mt2+2]
+    XS_SAT32 XS_ST_IMDCT
+    sar dx, 1
+    rcr ax, 1
+    adc ax, 0
+    adc dx, 0
+    mov si, [xs_mhi]
+    mov [si], ax
+    mov [si+2], dx
+    ; the new overlap: ((co tw0 - si tw1) >> k + 1) >> 1
+    mov ax, [xs_mco]
+    imul word [di+12]
+    mov cx, ax
+    mov si, dx
+    mov ax, [xs_msi]
+    imul word [di+14]
+    sub cx, ax
+    sbb si, dx
+    mov ax, cx
+    mov dx, si
+    call [xs_srkp]
+    add ax, 1
+    adc dx, 0
+    sar dx, 1
+    rcr ax, 1
+    mov [bx], ax
+    mov [bx+2], dx
+    ret
+
+; xs_uw - DX:AX = floor(o BP / 2^14), o the int32 at [BX] with |o| < 2^30,
+; BP the window word (>= 0): 4 (o_hi BP) + ((o_lo BP) >> 14), exactly
+; clobbers: CX, SI
+xs_uw:
+    mov ax, [bx+2]
+    imul bp                         ; o_hi w, |.| < 2^29
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    mov cx, ax
+    mov si, dx                      ; SI:CX = 4 o_hi w
+    mov ax, [bx]
+    mul bp                          ; o_lo w, unsigned, < 2^31
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1                       ; CF:DX = its bits 14..30
+    mov ax, dx
+    mov dx, 0
+    adc dx, 0
+    add ax, cx
+    adc dx, si
+    ret
+
+; xs_srk0 .. xs_srk19 - DX:AX >>= n, arithmetic: [xs_srkp] for the IMDCT's
+; k and [xs_scp] for the band scale's sh - 1, picked once a subband by
+; xs_scale. n >= 8 moves bytes first, n >= 16 a word
+xs_srkt:
+%assign XS_I 0
+%rep 20
+    dw xs_srk %+ XS_I
+%assign XS_I XS_I + 1
+%endrep
+%assign XS_I 20
+%rep 20
+%assign XS_I XS_I - 1
+xs_srk %+ XS_I:
+  %if XS_I >= 16
+    mov ax, dx                      ; >> 16: the high word down, DX the sign
+    cwd
+    %rep XS_I - 16
+    sar ax, 1
+    %endrep
+  %elif XS_I >= 8
+    mov al, ah                      ; >> 8: the bytes down, DX the sign
+    mov ah, dl
+    mov dl, dh
+    xchg ax, dx
+    cbw
+    xchg ax, dx
+    %rep XS_I - 8
+    sar dx, 1
+    rcr ax, 1
+    %endrep
+  %else
+    %rep XS_I
+    sar dx, 1
+    rcr ax, 1
+    %endrep
+  %endif
+    ret
+%endrep
 
 ; xs_kshift - DX:AX >>= k (arithmetic, k >= 0), or <<= -k saturating (k < 0,
 ; counted in imdct). clobbers: CX, SI
@@ -2201,6 +2622,9 @@ xs_rpp:     dw 0
 xs_rb:      dw 0
 xs_dctp:    dw 0
 xs_winp:    dw 0
+xs_mpp:     dw 0                    ; the IMDCT's pair routine, its shift
+xs_srkp:    dw 0
+xs_scp:     dw 0                    ; the band scale's shift
 xs_e_t0:    dw 0                    ; xs_dct9's temporaries
 xs_e_s0:    dw 0
 xs_e_t4:    dw 0

@@ -52,7 +52,9 @@ PORT_EXIT   equ 0xF4
 D_FRONT     equ 4                   ; dw lba, dw sectors
 D_STD       equ 8
 D_NCASE     equ 12
-D_CASES     equ 16
+D_SPT       equ 16                  ; a floppy's geometry (CHS reads)
+D_HEADS     equ 18
+D_CASES     equ 32
 C_LBA       equ 0                   ; dd
 C_SIZE      equ 4                   ; dd
 C_DIV       equ 8                   ; db
@@ -61,7 +63,10 @@ C_MODE      equ 10                  ; db 0 front records, 1 PCM
 C_RINGK     equ 11                  ; db log2 of the ring's size
 C_CHUNK     equ 12                  ; dw the producer's refill
 C_NAME      equ 14                  ; 12 db
+C_MAXG      equ 26                  ; dw granules to decode, 0 = all
 C_SZ        equ 32
+; C_MODE: 0 the front end's records, 1 PCM out, 2 PCM into a CRC-32 only
+; (MartyPC: no debug console; the host reads b_crc at b_caseend)
 
 entry:
     cli
@@ -82,10 +87,16 @@ entry:
     ; the parts
     mov ax, SEG_DIR
     mov es, ax
+    mov ax, [es:D_SPT]
+    mov [b_spt], ax
+    mov ax, [es:D_HEADS]
+    mov [b_heads], ax
     mov ax, [es:D_FRONT]
     mov cx, [es:D_FRONT+2]
     mov dx, SEG_FRONT
     call b_load
+    mov ax, SEG_DIR                 ; (b_read's CHS path leaves ES elsewhere)
+    mov es, ax
     mov ax, [es:D_STD]
     mov cx, [es:D_STD+2]
     mov [b_hasstd], cx
@@ -153,22 +164,93 @@ b_wcall:
 ; -----------------------------------------------------------------------------
 b_load:
     push ax
-    push bx
-    push cx
     push dx
-    push si
-    mov [b_dap_lba], ax
-    mov word [b_dap_lba+2], 0
     mov [b_dap_seg], dx
+    xor dx, dx
+    call b_read
+    pop dx
+    pop ax
+    ret
+
+; b_loadfile - the case's file: [b_c+C_SIZE] bytes from [b_c+C_LBA] to SEG_FILE
+b_loadfile:
+    mov word [b_dap_seg], SEG_FILE
+    mov ax, [b_c+C_SIZE]
+    mov dx, [b_c+C_SIZE+2]
+    add ax, 511
+    adc dx, 0
+    mov cx, 512
+    div cx
+    mov cx, ax
+    mov ax, [b_c+C_LBA]
+    mov dx, [b_c+C_LBA+2]
+    jmp b_read
+
+; b_read - CX sectors from LBA DX:AX to [b_dap_seg]:0: int 13h's extended
+; read from a hard disk, CHS reads from a floppy (a track's rest at most,
+; never across a 64 KB physical boundary). clobbers AX, BX, CX, DX, SI, ES
+b_read:
+    mov [b_dap_lba], ax
+    mov [b_dap_lba+2], dx
 .c:
-    jcxz .out
+    or cx, cx
+    jnz .go
+    ret
+.go:
     mov ax, cx
     cmp ax, 64
     jbe .n
     mov ax, 64
 .n:
+    cmp byte [b_drive], 0x80
+    jae .ext
+    push cx                         ; CHS: the track's rest, the boundary
+    mov bx, ax
+    mov ax, [b_dap_seg]
+    mov cl, 4
+    shl ax, cl
+    neg ax
+    mov cl, 9
+    shr ax, cl
+    jnz .b
+    mov ax, 128
+.b:
+    cmp bx, ax
+    jbe .b2
+    mov bx, ax
+.b2:
+    mov ax, [b_dap_lba]
+    xor dx, dx
+    div word [b_spt]
+    push dx                         ; sector - 1
+    mov cx, [b_spt]
+    sub cx, dx
+    cmp bx, cx
+    jbe .b3
+    mov bx, cx
+.b3:
+    xor dx, dx
+    div word [b_heads]
+    mov ch, al                      ; cylinder
+    mov dh, dl                      ; head
+    pop ax
+    mov cl, al
+    inc cl
+    mov ax, [b_dap_seg]
+    mov es, ax
+    mov al, bl
+    push bx
+    xor bx, bx
+    mov dl, [b_drive]
+    mov ah, 0x02
+    int 0x13
+.chs13:                             ; (a mark for a debugger)
+    pop ax
+    pop cx
+    jc .err
+    jmp short .adv
+.ext:
     mov [b_dap_cnt], ax
-    sub cx, ax
     push ax
     push cx
     mov si, b_dap
@@ -178,69 +260,26 @@ b_load:
     pop cx
     pop ax
     jc .err
+.adv:
+    sub cx, ax
     add [b_dap_lba], ax
     adc word [b_dap_lba+2], 0
     mov bx, 32
     mul bx
     add [b_dap_seg], ax
-    jmp short .c
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp .c
 .err:
     mov si, m_disk
     call b_fail
 m_disk:     db 'disk read failed', 0
 
-; b_load32 - the case's file: [b_c+C_SIZE] bytes from [b_c+C_LBA] to SEG_FILE
-b_loadfile:
-    mov ax, [b_c+C_LBA]
-    mov dx, [b_c+C_LBA+2]
-    mov [b_dap_lba], ax
-    mov [b_dap_lba+2], dx
-    mov word [b_dap_seg], SEG_FILE
-    mov ax, [b_c+C_SIZE]
-    mov dx, [b_c+C_SIZE+2]
-    add ax, 511
-    adc dx, 0
-    mov cx, 512
-    div cx
-    mov cx, ax
-.c:
-    jcxz .out
-    mov ax, cx
-    cmp ax, 64
-    jbe .n
-    mov ax, 64
-.n:
-    mov [b_dap_cnt], ax
-    sub cx, ax
-    push ax
-    push cx
-    mov si, b_dap
-    mov dl, [b_drive]
-    mov ah, 0x42
-    int 0x13
-    pop cx
-    pop ax
-    jc b_load.err
-    add [b_dap_lba], ax
-    adc word [b_dap_lba+2], 0
-    mov bx, 32
-    mul bx
-    add [b_dap_seg], ax
-    jmp short .c
-.out:
-    ret
-
 ; -----------------------------------------------------------------------------
 ; b_runcase - one case
 ; -----------------------------------------------------------------------------
 b_runcase:
+    mov word [b_ngr_done], 0
+    mov word [b_crc], 0xFFFF
+    mov word [b_crc+2], 0xFFFF
     call b_loadfile
     call b_stackfill
     ; --- the open, over simulated reads ---
@@ -296,12 +335,19 @@ b_runcase:
     mov si, b_ring
     call x3p_start
     ; --- the backend ---
-    cmp byte [b_c+C_MODE], 1
-    jne .loop
+    cmp byte [b_c+C_MODE], 0        ; modes 1 and 2 decode
+    je .loop
     call b_sopen
 .loop:
+    mov ax, [b_c+C_MAXG]            ; a granule limit (MartyPC's runs)
+    or ax, ax
+    jz .nolim
+    cmp [b_ngr_done], ax
+    jae .eos
+.nolim:
     call b_refill
     mov si, b_ring
+.mk_next:                           ; (marks: tests/x3bench/x3marty.py)
     call x3p_next
     jnc .frame
     cmp ax, X3P_END
@@ -315,14 +361,16 @@ b_runcase:
     mov byte [b_gr], 0
 .g:
     mov al, [b_gr]
+.mk_gran:
     call x3p_gran                   ; DX:AX = the record
-    cmp byte [b_c+C_MODE], 1
-    je .pcm
+    cmp byte [b_c+C_MODE], 0
+    jne .pcm
     call b_dumprec
     jmp short .gn
 .pcm:
     call b_granule
 .gn:
+    inc word [b_ngr_done]
     inc byte [b_gr]
     mov al, [b_gr]
     cmp al, [b_ngr]
@@ -338,14 +386,15 @@ b_runcase:
     call x3p_counts
     mov si, b_cnt
     call b_out
-    cmp byte [b_c+C_MODE], 1
-    jne .end
+    cmp byte [b_c+C_MODE], 0
+    je .end
     call b_sstats
 .end:
     call b_stackmark
     mov al, 'E'
     xor cx, cx
     call b_rhead
+b_caseend:                          ; (x3marty.py reads b_crc here)
     ret
 
 ; b_window - DX:AX = a 512-aligned offset: ES:BX -> the file there, CX = the
@@ -573,7 +622,9 @@ b_granule:
     mov dx, SEG_PCM
     xor di, di
     mov bx, X3V_GRANULE
+.mk_std:
     call b_scall
+.mk_done:
     jnc .ok
     mov si, m_gran
     call b_fail
@@ -585,6 +636,8 @@ b_granule:
 .m:
     shl ax, 1
     mov cx, ax
+    cmp byte [b_c+C_MODE], 2
+    je .crc
     push cx
     mov al, 'P'
     push ds
@@ -595,6 +648,41 @@ b_granule:
     mov es, ax
     xor si, si
     call b_out
+    ret
+.crc:
+    mov ax, SEG_PCM                 ; the PCM into the case's CRC-32, a
+    mov es, ax                      ; 256-byte block at a time through our
+    xor si, si                      ; own segment (x3g_crc32 reads its table
+.cb:                                ; through DS)
+    mov bx, cx
+    cmp bx, 256
+    jbe .cn
+    mov bx, 256
+.cn:
+    push cx
+    push si
+    mov cx, bx
+    mov di, b_crcbuf
+.cc:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cc
+    mov cx, bx
+    mov si, b_crcbuf
+    mov ax, [b_crc]
+    mov dx, [b_crc+2]
+    push bx
+    call x3g_crc32
+    pop bx
+    mov [b_crc], ax
+    mov [b_crc+2], dx
+    pop si
+    pop cx
+    add si, bx
+    sub cx, bx
+    jnz .cb
     ret
 
 b_sstats:
@@ -660,6 +748,8 @@ b_stackmark:
 ; OUTPUT: b_rhead AL = type, CX = length; b_out ES:SI, CX bytes
 ; -----------------------------------------------------------------------------
 b_rhead:
+    cmp byte [b_c+C_MODE], 2        ; MartyPC: no console
+    je .q
     push ax
     push dx
     mov dx, PORT_OUT
@@ -677,9 +767,12 @@ b_rhead:
     out dx, al
     pop dx
     pop ax
+.q:
     ret
 
 b_out:
+    cmp byte [b_c+C_MODE], 2
+    je .q
     push ax
     push cx
     push dx
@@ -696,6 +789,7 @@ b_out:
     pop dx
     pop cx
     pop ax
+.q:
     ret
 
 b_fail:                             ; SI = the text, in ours: say it, stop
@@ -724,6 +818,7 @@ b_fail:                             ; SI = the text, in ours: say it, stop
 ; THE SHIPPING SOURCE
 ; =============================================================================
 %include "x3pars.inc"
+%include "x3crc.inc"
 
 ; =============================================================================
 ; DATA AND BSS
@@ -750,6 +845,11 @@ b_gr:       db 0
 b_och:      db 0
     align 2
 b_wm:       dw 0
+b_ngr_done: dw 0
+b_spt:      dw 0
+b_heads:    dw 0
+b_crc:      dd 0                    ; mode 2: the PCM's CRC-32 (not inverted)
+b_crcbuf:   times 256 db 0
 b_fpos:     dd 0
 b_c:        times C_SZ db 0
 b_info:     times X3I_SIZE db 0
