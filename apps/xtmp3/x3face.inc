@@ -170,6 +170,8 @@ X3_QCH      equ 57                  ; a queue row's characters
 X3F_RATECH  equ 22                  ; the rate's field: '44.1 kHz 16-BIT DEVICE'
 X3F_DIALT   equ 5                   ; ticks between needle draws: 3.6 a second,
                                     ; under SPEC.md 121.8's four
+X3F_DIALC   equ 55                  ; ...and while CONVERTING (the BUFFER gauge
+                                    ; only, the VU at rest): every 3 s at most
 
 X3_FW       equ 512                 ; the content boxes (the four layouts)
 X3_FH       equ 352
@@ -275,12 +277,42 @@ x3f_ekdone:
     mov ax, [x3f_kpend]
     cmp byte [x3d_cutf], 0
     je .keep
+    cmp word [x3c_dwin], 0          ; ONE OF OUR DIALOGS over the face (the
+    je .forget                      ; drive dialog, the conversion's progress):
+    mov si, [x3f_slot]              ; the key is kept, and THIS element is
+    sub si, x3f_keys                ; owed when it goes (x3f_repay, from
+    shr si, 1                       ; x3c_dlgclose). Forgotten, the hidden
+    mov byte [x3f_owe+si], 1        ; title and dials were drawn again on
+    jmp short .keep                 ; EVERY pass of a conversion - a tenth of
+.forget:                            ; an XT's machine (FIELD.md)
     mov ax, 0xFFFF
 .keep:
     mov si, [x3f_slot]
     mov [si], ax
     pop si
     pop ax
+    ret
+
+; x3f_repay - our dialog has gone: the elements it cut, and only those, owed
+; (a whole-face redraw there was the knob's 400 ms and the queue's rows on an
+; XT, just as a finished file starts to play). keeps everything
+x3f_repay:
+    push cx
+    push si
+    xor si, si
+.e:
+    cmp byte [x3f_owe+si], 0
+    je .n
+    mov byte [x3f_owe+si], 0
+    shl si, 1
+    mov word [x3f_keys+si], 0xFFFF
+    shr si, 1
+.n:
+    inc si
+    cmp si, X3F_NKEYS
+    jb .e
+    pop si
+    pop cx
     ret
 
 ; x3f_forget - every key and every button's flags owed: the next pass draws all
@@ -923,13 +955,22 @@ x3f_e_dial:
     jc .out
     cmp byte [x3f_full], 0          ; at most X3F_DIALT ticks between needle
     jne .draw                       ; draws: a later pass will catch up
+    call x3f_dskip                  ; (LIVE with the card's lead low: not
+    jc .out                         ; this pass - the decoder first)
     push ax
     push bx
+    push dx
+    mov dx, X3F_DIALT
+    cmp byte [x3_md], MD_CONV       ; CONVERTING: the needles rest, and the
+    jne .t                          ; BUFFER gauge (the progress) moves at
+    mov dx, X3F_DIALC               ; most every X3F_DIALC ticks - a needle
+.t:                                 ; is 136-187 ms on a VGA XT (FIELD.md)
     call OSAPI_GET_TICKS
     mov bx, cx
     shl bx, 1
     sub ax, [x3f_dlast+bx]
-    cmp ax, X3F_DIALT
+    cmp ax, dx
+    pop dx
     pop bx
     pop ax
     jae .draw
@@ -1001,6 +1042,30 @@ x3f_e_dial:
     call x3f_dial1                  ; black and white: a band, one BLIT1
 .done:
     call x3f_ekdone
+    ret
+
+; x3f_dskip - CF = 1: a LIVE stream whose card holds under half its ring -
+; the needle's frame skipped (it is drawn on a later pass), the time going to
+; the decoder that feeds the card. keeps everything
+x3f_dskip:
+    push ax
+    push bx
+    cmp byte [x3_md], MD_LIVE
+    jne .no
+    mov ax, [x3_total]
+    sub ax, [x3_cons]
+    mov bx, [x3_rsz]
+    shr bx, 1
+    cmp ax, bx
+    jb .yes
+.no:
+    clc
+    jmp short .out
+.yes:
+    stc
+.out:
+    pop bx
+    pop ax
     ret
 
 ; x3f_dgrow - the redraw box [x3f_dx0..dx1] x [x3f_dy0..] grown to hold CX, DX
@@ -1634,7 +1699,12 @@ x3f_e_qrow:
     cmp ax, 0xFFFF
     jne .t
     mov ax, 0x7FFF
+    jmp short .u
 .t:
+    test byte [si+QE_FLAGS], X3SF_EST   ; an ESTIMATED duration says so, as
+    jz .u                           ; the LCD's total does ('/~00:10')
+    mov byte [di-1], '~'
+.u:
     call x3f_mmss5
     mov byte [x3f_tbuf + X3_QCH - 1], ' '
     pop ax
@@ -2297,8 +2367,8 @@ x3_dfull:
     DRECT R_STAT, 0, 326, X3_FW - 1, X3_FH - 1
     DPIC x3art_screw, 3, 334, (R_STAT << 8) | R_LABEL
     DPIC x3art_screw, X3_FW - 12, 334, (R_STAT << 8) | R_LABEL
-    DRECT R_EDGE, 220, 330, 220, 347
-    DRECT R_HI, 221, 330, 221, 347
+    DRECT R_EDGE, 236, 330, 236, 347  ; (after 'Quality: XT STANDARD (set)',
+    DRECT R_HI, 237, 330, 237, 347    ; 26 characters from x 24)
     dw D_END
 
 x3_efull:
@@ -2379,8 +2449,8 @@ x3_dmid:
     DRECT R_STAT, 0, 223, X3_FW - 1, X3_MH - 1
     DPIC x3art_screwm, 3, 232, (R_STAT << 8) | R_LABEL
     DPIC x3art_screwm, X3_FW - 12, 232, (R_STAT << 8) | R_LABEL
-    DRECT R_EDGE, 220, 226, 220, 243
-    DRECT R_HI, 221, 226, 221, 243
+    DRECT R_EDGE, 236, 226, 236, 243
+    DRECT R_HI, 237, 226, 237, 243
     dw D_END
 
 x3_emid:
@@ -2476,7 +2546,7 @@ x3_lfull:
     dw 43, 121, 280, 133
     dw 42, 151, 86
     dw x3_dgfull, x3_kgfull, x3_qgfull
-    dw 335, 24, 24, 232, 32
+    dw 335, 24, 26, 248, 31
     dw 0
 x3_lmid:
     dw X3_FW, X3_MH, x3_dmid, x3_emid, x3_bmid, x3_ibig, x3_cbtn
@@ -2486,7 +2556,7 @@ x3_lmid:
     dw 43, 90, 280, 99
     dw 42, 111, 86
     dw x3_dgmid, x3_kgmid, x3_qgmid
-    dw 231, 24, 24, 232, 32
+    dw 231, 24, 26, 248, 31
     dw 0
 x3_lc1:
     dw X3_CW, X3_C1H, x3_dc1, x3_ecmp, x3_bc1, x3_ic1, x3_cbtn
@@ -2496,7 +2566,7 @@ x3_lc1:
     dw 13, 39, 426, 42
     dw 262, 7, 298
     dw 0, 0, 0
-    dw 76, 8, 25, 220, 27
+    dw 76, 8, 26, 224, 27
     dw 1
 x3_lc2:
     dw X3_CW, X3_C2H, x3_dc2, x3_ecmp, x3_bc2, x3_ibig, x3_cbtn
@@ -2506,7 +2576,7 @@ x3_lc2:
     dw 15, 75, 424, 85
     dw 262, 15, 298
     dw 0, 0, 0
-    dw 152, 8, 25, 220, 27
+    dw 152, 8, 26, 224, 27
     dw 1
 %if (x3_lmid - x3_lfull) != L_SIZE || (x3_lc1 - x3_lmid) != L_SIZE
 %error "an XTMP3 layout record is L_SIZE bytes"

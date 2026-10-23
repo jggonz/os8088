@@ -583,10 +583,10 @@ def calibrate(r, leg, res):
           "the dialog; X3S_PEAK %d KB through it, the heap %d KB free at "
           "launch" % (out["wall_s"], out["to_dialog_s"], res["cal_peak_kb"],
                       res["free0_kb"]))
-    if res["cal_peak_kb"] * 1024 > PEAK_MAX:
-        print("     NOTE: X3S_PEAK through the probes is OVER SPEC.md 121.10's "
-              "400,000 bytes - reported, not asserted (docs/xtmp3/FIELD.md "
-              "2.3: whether the budget binds a probe is the engine's call)")
+    check(leg, "X3S_PEAK through the calibration x 1024 <= 400,000 (SPEC.md "
+          "121.10 is the XT path's WHOLE working set: the probes too)",
+          0 < res["cal_peak_kb"] * 1024 <= PEAK_MAX, "%d KB = %d bytes" % (
+              res["cal_peak_kb"], res["cal_peak_kb"] * 1024))
     for p in out["probes"]:
         print("       %-12s %5s x100  %.3f s  (fetch %s, OPEN %s, prime and "
               "probe %s)" % (p["rung"], p["measured_x100"], p["total_s"],

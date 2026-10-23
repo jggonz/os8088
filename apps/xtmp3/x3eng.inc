@@ -1049,6 +1049,8 @@ x3_trkinfo:
     mov [x3_st+X3S_TOTAL], ax
     and byte [x3_st+X3S_FLAGS], ~(X3SF_EST | X3SF_NOTOT)
     mov si, [x3_trkent]
+    push word [si+QE_DUR]           ; (what the queue's row shows now)
+    push word [si+QE_FLAGS]
     mov [si+QE_DUR], ax
     mov byte [si+QE_FLAGS], 0
     test byte [x3_info+X3I_FLAGS], X3IF_EXACT
@@ -1056,6 +1058,15 @@ x3_trkinfo:
     or byte [x3_st+X3S_FLAGS], X3SF_EST
     mov byte [si+QE_FLAGS], X3SF_EST
 .x:
+    pop ax                          ; the stream's own figures differ from the
+    cmp al, [si+QE_FLAGS]           ; probe's: the row is news (its key is the
+    pop ax                          ; queue's generation)
+    jne .gen
+    cmp ax, [si+QE_DUR]
+    je .same
+.gen:
+    inc byte [x3_qgen]
+.same:
     mov al, [x3_info+X3I_NCH]
     mov [x3_snch], al
     mov ax, [x3_info+X3I_RATE]
@@ -1535,6 +1546,16 @@ x3_snd_open:
     mov byte [x3_job], WJ_NONE      ; (the worker sits it out until the open)
     call x3_fbytes
     mov [x3_fby], ax
+%ifdef X3STUB
+    mov al, [x3h_cfg+X3SB_FAILR]    ; (the test hook: this rung's live start
+    or al, al                       ; out of memory - tests/xtmp3eng.py's
+    jz .nf                          ; rungfail leg)
+    cmp byte [x3_sjob], WJ_LIVE
+    jne .nf
+    cmp al, [x3_rung]
+    je .nomem
+.nf:
+%endif
     call x3_ringget                 ; (sized by the bytes a second)
     jc .nomem
     mov ax, [x3_orate]              ; THE SLEEP'S FLOOR: a sleep of one tick
@@ -2443,7 +2464,10 @@ x3_gran1:
     inc word [x3_grans]
     call x3_trim                    ; CX frames -> CX bytes kept
     jcxz .again
-    call x3_peak                    ; the meters
+    cmp byte [x3_job], WJ_CONV      ; the meters (converting they rest: 3% of
+    je .np                          ; an XT's conversion, FIELD.md)
+    call x3_peak
+.np:
     clc
     jmp short .out
 .refused:
@@ -3291,21 +3315,44 @@ x3_steptick:
     push ax
     push dx
     call x3_snd_close
+    mov [x3_startms], ax            ; (the position, for a rung that cannot)
+    mov [x3_startms+2], dx
+.try:
     mov al, [x3_steprung]
     call x3_rungset                 ; the backend opened at the rung below
-    pop dx
-    pop ax
-    jc .out
+    jc .next
+    mov ax, [x3_startms]
+    mov dx, [x3_startms+2]
     call x3_resync
-    jc .out
+    jc .next
     mov byte [x3_sjob], WJ_LIVE
     mov byte [x3_rampin], X3_RAMP   ; THE RAMP IN: the new rung's first frames
     call x3_snd_open                ; rise from silence (x3_feedhalf)
-    jc .out
+    jc .next
     mov byte [x3_md], MD_LIVE
     mov byte [x3_st+X3S_STATE], X3ST_LIVE
+    pop dx
+    pop ax
 .out:
     ret
+.next:                              ; THAT RUNG CANNOT START (its memory, the
+    call x3_snd_close               ; card): the one below it; and below the
+    mov word [x3_st+X3S_ERR], 0     ; last live rung, Decode first from the
+    mov al, [x3_steprung]           ; track's start - never an error
+    mov [x3_rung], al
+    call x3l_below
+    jc .df
+    mov [x3_steprung], al
+    jmp short .try
+.df:
+    pop dx
+    pop ax
+    mov byte [x3_md], MD_IDLE
+    xor ax, ax
+    mov [x3_startms], ax
+    mov [x3_startms+2], ax
+    mov byte [x3_wantdf], 1
+    jmp x3l_start
 
 ; =============================================================================
 ; THE BACKEND: the part fetched, its work segments claimed, OPEN
@@ -3323,6 +3370,11 @@ x3_rungset:
     mov [x3_st+X3S_QUAL], al
     call x3_ofmt
     jc .rate
+    cmp byte [x3_sopen], 0          ; THE CARD'S GRANT, given back first: a
+    jne .g                          ; probe's is held until the next probe
+    call x3_gfree                   ; takes one, and through an XT OPEN that
+.g:                                 ; was 16 KB over the ceiling (402 KB on
+                                    ; MartyPC); every caller has no stream open
     call x3_la_free                 ; THE CLAIM ORDER (SPEC.md 121.10): the
                                     ; part, its work and OPEN before the ring
                                     ; - every caller re-aims and refills it
@@ -3340,7 +3392,7 @@ x3_rungset:
     call x3_rungrow
     mov al, [bx+RG_BE]
     call x3_be_get                  ; the part HERE, its vectors banked
-    jc .nobe
+    jc .nofit
     call x3_rungrow
     call x3_rungdiv                 ; CL = the divisor
     mov ah, cl
@@ -3399,6 +3451,15 @@ x3_rungset:
 .rate:
     mov word [x3_st+X3S_ERR], x3_s_rate
     jmp short .fail
+.nofit:                             ; a part this build carries that could
+    call x3_rungrow                 ; not be fetched is memory: said with
+    mov al, X3_PART_STD             ; the figures
+    cmp byte [bx+RG_BE], X3K_XT
+    jne .np
+    mov al, X3_PART_XT
+.np:
+    cmp al, 0xFF
+    jne .mem
 .nobe:
     mov word [x3_st+X3S_ERR], x3_s_nobe
     jmp short .fail
@@ -3406,7 +3467,7 @@ x3_rungset:
     mov word [x3_st+X3S_ERR], x3_s_offer
     jmp short .fail
 .mem:
-    mov word [x3_st+X3S_ERR], ap_s_nomem
+    call x3_needmsg                 ; 'Needs 390 KB, has 300 KB' (the rung's)
     jmp short .fail
 .openerr:
     cmp ax, X3E_TABLE
@@ -3929,6 +3990,7 @@ PH_XT       equ 3                   ; XT Standard
 PH_XTF      equ 4                   ; XT Fast
 PH_ONE      equ 5                   ; the user's override, alone
 PH_DONE     equ 6
+PH_HINT     equ 7                   ; an 8086: XT Standard first, alone
 X3L_NONE    equ 0xFF                ; no rung chosen
 
 ; -----------------------------------------------------------------------------
@@ -3948,7 +4010,15 @@ x3l_start:
     call x3_fillb
     mov byte [x3l_ph], PH_LOW
     cmp byte [x3_st+X3S_QWANT], X3Q_AUTO
-    je x3l_run
+    jne .one
+    push ax                         ; AN 8086 (OSAPI_CPU_INFO's tier 0 - a HINT,
+    call OSAPI_CPU_INFO             ; never the verdict): XT Standard is probed
+    cmp al, CPU_8086                ; FIRST, and alone if it is hopeless (see
+    pop ax                          ; x3l_result) - the rung its conversion
+    jne x3l_run                     ; will use, so the probe's OPEN is reused
+    mov byte [x3l_ph], PH_HINT
+    jmp short x3l_run
+.one:
     mov byte [x3l_ph], PH_ONE
     mov byte [x3l_one], 0
     ; fall into x3l_run
@@ -3988,6 +4058,14 @@ x3l_probed:
 ; -----------------------------------------------------------------------------
 x3l_pick:
     mov al, [x3l_ph]
+    cmp al, PH_HINT
+    jne .nh
+    mov al, X3Q_XTSTD
+    call x3l_ok
+    jnc .got
+    mov byte [x3l_ph], PH_LOW       ; (the device cannot play its rate)
+    jmp short x3l_pick
+.nh:
     cmp al, PH_LOW
     je .low
     cmp al, PH_ORIG
@@ -4075,6 +4153,8 @@ x3l_result:
     mov al, [x3l_ph]
     cmp al, PH_ONE
     je .one
+    cmp al, PH_HINT
+    je .hint
     cmp al, PH_LOW
     je .low
     cmp al, PH_ORIG
@@ -4124,6 +4204,18 @@ x3l_result:
     mov byte [x3l_ph], PH_XTF
 .out:
     ret
+.hint:                              ; THE 8086'S ONE PROBE. XT Standard short
+    mov byte [x3l_ph], PH_LOW       ; of passing by X3_CAL_HOPE (4x) leaves no
+    push bx                         ; Auto rung within reach on this machine:
+    mov bl, cl                      ; STANDARD at a quarter of the rate is no
+    xor bh, bh                      ; cheaper than XT Standard on an 8088
+    shl bx, 1                       ; (1.76 M a granule against 1.62 M, STD.md
+    mov ax, [x3l_meas+bx]           ; and FIELD.md), and XT Fast is under 1.3
+    pop bx                          ; times as fast. So nothing else is probed
+    cmp ax, X3_SAFETY / X3_CAL_HOPE ; and the machine asks for a drive -
+    jae .out                        ; 5.5 s on MartyPC's XT, not 16.1. Not
+    mov byte [x3l_ph], PH_DONE      ; hopeless (a fast 8086, a V20): the whole
+    ret                             ; ladder, this measure cached
 
 ; -----------------------------------------------------------------------------
 ; x3l_ok - may Auto try rung AL here? The device plays its rate, the build has
@@ -4617,11 +4709,19 @@ x3l_done:
     cmp al, X3L_NONE
     je .off
     call x3_rungset
-    jc .out
+    jc .cant
     call x3_ms2samp
     call x3_live_at
-.out:
+    jc .cant
     ret
+.cant:                              ; A RUNG THAT CANNOT START - its claims
+    mov al, [x3l_choice]            ; refused (out of memory), the card - IS A
+    mov [x3l_cur], al               ; RUNG THAT FAILED: stored at 0 for the
+    xor ax, ax                      ; session, and the ladder runs again,
+    call x3l_store                  ; every other measure out of the cache,
+    call x3_snd_close               ; to the next rung or to Decode first.
+    mov word [x3_st+X3S_ERR], 0     ; Never an error (each pass stores one
+    jmp x3l_start                   ; more 0: it ends)
 .off:
     mov byte [x3c_strict], 0        ; nothing live: any cache this device
     call x3c_cachefind              ; plays, before a question is asked
@@ -4629,6 +4729,15 @@ x3l_done:
     jmp x3_file_play
 .ask:
     call x3l_offpick                ; AL = the conversion's rung
+    call x3_fits                    ; ...in this machine (SPEC.md 121.10):
+    jnc .fit                        ; else the minimum, stated - before a
+    mov [x3_rung], al               ; drive is asked for
+    mov [x3_st+X3S_QUAL], al
+    call x3_needmsg
+    mov byte [x3_md], MD_IDLE
+    mov byte [x3_st+X3S_STATE], X3ST_ERROR
+    ret
+.fit:
 %ifdef X3REPORT
     call x3r_wd                     ; FIELD (x3rep.inc): the report, EVENT D
 %endif
@@ -4674,6 +4783,79 @@ x3l_offpick:
     jae .c
     mov al, X3Q_ORIG
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; THE STATED MINIMUM (SPEC.md 121.10, 24.5's rule: a package that cannot run
+; refuses in its own words). Each rung's working set, MEASURED (ENGINE.md
+; section 6): the region, the eager carve, the part, its work, the rings -
+; XT Standard at the ceiling's 390 KB (385-387 measured), XT Fast 360, XT
+; Turbo 330, XT Speech 340, a STANDARD rung 220 (with a card's external
+; ring). What the machine HAS is the same measure's: the region and the
+; carve, and the heap free at launch.
+; -----------------------------------------------------------------------------
+x3_needkb:  dw 0, 220, 220, 220, 390, 360, 330, 340     ; by X3Q_*
+
+; x3_haskb - AX = what this machine has for XTMP3, KB. keeps the rest
+x3_haskb:
+%ifdef X3STUB
+    mov ax, [x3h_cfg+X3SB_HAS]      ; (the test hook's machine, when it says)
+    or ax, ax
+    jnz .o
+%endif
+    mov ax, [x3_free0]
+    add ax, X3_REGIONKB
+%ifdef X3_PARTS
+    add ax, [op_kb]
+%endif
+.o:
+    ret
+
+; x3_fits - AL = a rung: CF = 1 this machine has less than it needs. keeps all
+x3_fits:
+    push ax
+    push bx
+    mov bl, al
+    xor bh, bh
+    and bl, 7
+    shl bx, 1
+    call x3_haskb
+    cmp ax, [x3_needkb+bx]
+    pop bx
+    pop ax
+    ret
+
+; x3_needmsg - X3S_ERR = 'Needs 390 KB, has 300 KB' for rung [x3_rung]
+; (24 characters: the status line says it whole). keeps everything
+x3_needmsg:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    mov di, x3_errbuf
+    mov si, x3_s_needs
+    call x3_put
+    mov bl, [x3_rung]
+    and bx, 7
+    shl bx, 1
+    mov ax, [x3_needkb+bx]
+    xor dx, dx
+    call dec_u32
+    mov si, x3_s_kbhas
+    call x3_put
+    call x3_haskb
+    xor dx, dx
+    call dec_u32
+    mov si, x3_s_kb2
+    call x3_put
+    mov byte [di], 0
+    mov word [x3_st+X3S_ERR], x3_errbuf
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; x3l_below - the next live rung DOWN from [x3_rung] that this device and
@@ -4986,6 +5168,9 @@ x3_s_decode:  db 'The decoder refused', 0
 x3_s_clus:    db "Its disk's clusters are too large", 0
 x3_s_ceil:    db 'Too little memory for that disk', 0
 x3_s_packed:  db 'The MP3 is stored packed', 0
+x3_s_needs:   db 'Needs ', 0
+x3_s_kbhas:   db ' KB, has ', 0
+x3_s_kb2:     db ' KB', 0
 
 ; =============================================================================
 ; THE ENGINE'S BSS, laid out by xtmp3.asm's X3B list
@@ -5005,6 +5190,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_bopen, 1                 ; ...OPEN and in effect (x3_reuse)...
     X3B x3_bkind, 1                 ; ...its kind, X3K_* (FFh none)...
     X3B x3_onrec, X3O_NSEG          ; ...the record the next OPEN would take
+    X3B x3_errbuf, 26               ; x3_needmsg's sentence
     X3B x3_free0, 2                 ; the heap's free KB at launch (x3_memck)
     X3B x3_lasz, 2                  ; the look-ahead ring: its bytes, mask,
     X3B x3_lamask, 2                ; refill mark (x3_lasize)...

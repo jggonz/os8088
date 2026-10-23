@@ -102,6 +102,16 @@ the name's stem until the parser (S5) writes the tag's.
 - A needle is redrawn at most every `X3F_DIALT` = 5 ticks (3.6 a second);
   a full paint draws it whatever the time. Options > Meters: Off rests
   both needles and the dials stop being redrawn.
+- **While CONVERTING** (integration track, on FIELD.md's measurement that a
+  needle is 136-187 ms on a VGA XT and the face cost a conversion 45% of
+  the machine): the VU rests and the BUFFER gauge - the conversion's
+  progress - moves at most every `X3F_DIALC` = 55 ticks (3 s). The figures
+  behind the LCD's clock, the bar and the status move once a second
+  (`XC_DRAWT` = 18 ticks), and the progress window redraws only the
+  characters that changed (`x3c_linec`).
+- **While LIVE**, a needle frame is skipped when the card holds under half
+  its ring (`x3f_dskip`): the decoder that feeds it comes first, and the
+  needle is drawn on a later pass.
 - Needle positions: 25, from -48 to +48 degrees about the pivot.
 
 ## Roles and themes
@@ -146,7 +156,7 @@ the knob is the master's four greys. Both have explicit 1bpp faces.
 | dial x2 | needle position, mode | colour: the mode's face (built once a paint) copied for the box the old and new needles share, the needle drawn, ONE `OSAPI_GFX_BLIT4`; black and white: those rows of the 1bpp face, one `OSAPI_GFX_BLIT1` |
 | dial label x2 | the string | one band (L, R, MONO, BUFFER) |
 | knob | detent, greyed | one 80x68 (FULL) / 80x52 (MID) canvas - panel, the knob's planes, the tick ring and the indicator - in ONE blit |
-| queue row x3 / x2 | entry, selected, shown, the queue's generation | three rects and one `OSAPI_FONT_RUN` |
+| queue row x3 / x2 | entry, selected, shown, the queue's generation | three rects and one `OSAPI_FONT_RUN`; an estimated duration reads `~00:10`, as the LCD's total does, and the stream's own figures bump the generation when they differ from the probe's |
 | scroll bar | top, entries | three rects |
 | quality field | hash | one `OSAPI_FONT_RUN` |
 | state field | hash | one `OSAPI_FONT_RUN` (or the advanced figures) |
@@ -280,3 +290,14 @@ disk.
 - 86Box was not used; Hercules was QEMU's software renderer read back with
   `tools/hercshot.py`, not a card.
 - The wheel was driven on QEMU's PS/2 mouse (`MOUSEPORT=ps2`).
+
+## The integration track's changes (2026-10-23)
+
+- **The status line** (all four layouts): the quality field is 26
+  characters, so `Quality: XT STANDARD (set)` is whole (it was 24 and read
+  `(se`); the divider moved from x 220 to 236 (FULL and MID) and the state
+  field starts at 248 with 31 characters (224 and 27 on the compact ones).
+- **The drive dialog's buttons** are 136 pixels: `Decode and Play` no longer
+  fills its button edge to edge.
+- The dials' throttles while converting and live, the queue row's `~`: see
+  "The meters" and the element table above.

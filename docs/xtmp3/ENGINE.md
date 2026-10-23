@@ -188,6 +188,32 @@ step back one tick under QEMU, because the BIOS tick and the 8253 disagree
 across a pending IRQ0. `x3_pitd` treats a negative span as zero, and the
 stub's own clock adds the pending tick.
 
+**An 8086 probes ONE rung first** (`PH_HINT`, the integration track's
+second round, on FIELD.md's 16.1 s of XT calibration). When
+`OSAPI_CPU_INFO` answers `CPU_8086` and Quality is Auto, XT Standard - the
+rung an XT's conversion uses - is probed first. If it is short of passing
+by `X3_CAL_HOPE` (4x), nothing else is probed and the machine asks for a
+drive: STANDARD at a quarter of the rate is no cheaper than XT Standard on
+an 8088 (1.76 M cycles a granule against 1.62 M), and XT Fast is under 1.3
+times as fast, so no Auto rung is within reach. The CPU is a HINT that
+picks the order; the verdict is still the measure (a fast 8086 or a V20
+whose XT Standard is not hopeless runs the whole ladder, that measure
+cached). And the job's rung is the probe's, so its OPEN is reused. Measured
+on MartyPC's 5160 (`xtmp3xt`, AFTERHRS): **6.4 s to the decision, against
+16.1 s** (one probe: the fetch 1.0 s, OPEN 3.3 s, the prime and the probe
+2.1 s), and the conversion's setup no longer fetches or OPENs at all.
+
+**A rung that cannot start is a rung that failed** (`x3l_done`). Its claims
+refused (out of memory), or the card, the rung is stored at 0 for the
+session and the ladder runs again from its cache, to the next rung or to
+Decode first; never an error. A step down whose rung cannot open tries the
+one below it, and below the last live rung asks for a drive from the
+track's start (`x3_steptick`). The `rungfail` leg makes Original's live
+start fail (the stub's test hook) and plays Half with no ERROR on the way.
+On 86Box's 486 (FIELD.md section 3) XT Standard died "Out of memory" at
+44.1 kHz on the external ring; under the XT backend the card's ring is now
+the 8 KB grant, which the probe already held, so that start fits.
+
 **The session cache** (`x3l_cached`, `x3l_store`): up to 8 results, keyed
 by fingerprint, rung (backend, profile and divisor together) and device
 (the format bits and the rate cap). A second play of the same track asks no
@@ -248,6 +274,13 @@ Every caller re-aims and refills the ring afterwards (`x3_resync`,
 `x3_live_at`, a probe's prime). A conversion claims its stage inside that
 claim. A shrunk part refuses a second OPEN, so `x3_be_get` drops it and
 fetches it whole again before any OPEN of a DIFFERENT record.
+
+**The card's grant is given back before any OPEN** (`x3_rungset`, with no
+stream open). A probe's grant was held until the NEXT probe took one, so an
+XT probe's OPEN ran beside the previous probe's 16 KB grant: 402 KB =
+411,648 bytes on MartyPC (FIELD.md 2.3). SPEC.md 121.10's ceiling is the
+XT path's WHOLE working set, calibration included; `xtmp3xt` now asserts it
+through the probes: **387 KB = 396,288 bytes**.
 
 **RESET instead of a re-fetch** (`x3_reuse`). `x3_rungset` builds the
 rung's OPEN record first (`x3_onew`: profile, divisor, channels, format,
@@ -354,9 +387,16 @@ The dialog's own window slot is watched (`OSAPI_WM_OWNSEG`) to see a cancel.
    `OSAPI_FILE_WRITE_SEQ` (`WSEQF_HELD | WSEQF_KEEP`, §18.4.9). Each half is
    a byte handshake, written last by the producer and cleared last by the
    consumer.
-4. The progress window, at most twice a second (`XC_DRAWT` = 9 ticks):
-   output, quality, decoded audio against track time, percent, wall time and
-   speed (`0.31x`).
+4. The progress window, at most ONCE a second (`XC_DRAWT` = 18 ticks), and
+   only the characters that changed (`x3c_linec`): output, quality, decoded
+   audio against track time, percent, wall time and speed (`0.31x`) - and,
+   once the job has measured itself for `XC_ESTT` = 182 ticks (10 s), `About
+   mm:ss left` from that speed. The figures behind the face (the LCD's
+   clock, the bar, the status, the BUFFER gauge) move at the same rate
+   (`x3c_prog`), and the dials rest (FACE.md). **The drive dialog shows no
+   time**: a probe times the decoder, not the job, and on the XT its "About
+   01:31" was a 3:03 conversion (FIELD.md) - SPEC.md 121.7 shows an estimate
+   "only when the estimate is justified".
 5. **Cancel** (Esc or the button) is answered within one granule batch. The
    worker parks, the token is abandoned, and **only this job's** temporary
    file is deleted. The measured time was 0.22 s from the key to READY.
@@ -572,6 +612,19 @@ the Audio Player's names over its own state (x3eng.inc's shim block). No
 Audio row needs re-running for these bytes. If someone wants a behavioural
 check anyway, the rows that drive AUDIO.O88 are `apspk`, `apspkcard`,
 `apspkcardc`, `apspkpause`, `apspkcovox` and `audhand`.
+
+**The stated minimum** (SPEC.md 121.10; 24.5's rule that a package that
+cannot run refuses in its own words). Each rung's working set, measured
+(section 6), is `x3_needkb`: XT Standard 390 KB (the ceiling; 385-387
+measured), XT Fast 360, XT Turbo 330, XT Speech 340, a STANDARD rung 220
+(with a card's external ring). What the machine HAS is the same measure's:
+the region, the eager carve and the heap free at launch (`x3_haskb`). The
+conversion's rung is checked before the drive is asked for (`x3_fits`, in
+`x3l_done`), and any rung whose part or claims are refused for memory says
+it the same way (`x3_needmsg`): **`Needs 390 KB, has 300 KB`** - 24
+characters, so the status line holds it whole. The `shortmem` leg holds
+the sentence (the machine's figure from the stub's test hook), and that no
+drive was asked for.
 
 ## 9. Where the code and §121 part ways
 

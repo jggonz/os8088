@@ -1799,6 +1799,7 @@ x3_ab3:     db 'this machine can sustain', 0
     X3B x3d_pcol, 1                 ; dotting
     X3B x3d_pdim, 1
     X3B x3f_full, 1                 ; x3face.inc: 1 = this pass is a paint
+    X3B x3f_owe, X3F_NKEYS          ; ...an element a dialog of ours cut
     X3B x3f_fok, 1                  ; the colour dial faces built (bit 0 VU,
                                     ; bit 1 BUFFER) for the dials x3f_fdg names
     X3B x3f_dpos, 1                 ; a dial's needle, its mode, its zone
