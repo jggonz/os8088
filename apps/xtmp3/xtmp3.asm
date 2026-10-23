@@ -33,10 +33,16 @@
 %include "x3gran.inc"               ; the decoder's record and ABI (121.3)
 %include "x3ftab.inc"               ; the front end's tables (x3fronttab.py)
 
-    OS88_HEADER 'XTMP3', x3_entry, 3 | OS88_F_PARTS
+    OS88_HEADER 'XTMP3', x3_entry, 3 | OS88_F_PARTS, OS88_STACK_DEFAULT | OS88_HIGH
                                     ; flags: bit 0 the icon, bit 1 the
                                     ; association block (SPEC.md 54.6), bit 2
-                                    ; the decoder's parts (SPEC.md 20.12)
+                                    ; the decoder's parts (SPEC.md 20.12).
+                                    ; Class: the largest worker stack, as
+                                    ; before, and the region may run above
+                                    ; 1MB (no arithmetic on its own CS or DS;
+                                    ; the parts' vectors are op_cseg's). Not
+                                    ; OS88_HIGHMEM: tests/megahigh.txt says
+                                    ; why (the conversion's stage)
     OS88_ICON16                     ; a little stereo deck: an LCD, a knob
     ; --- mask ---
     dw 0x7FFE, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF

@@ -2350,8 +2350,20 @@ x3x_opentail:
     mov [cs:x3x_segh1], ax
     mov ax, [es:si + 4]
     mov [cs:x3x_segh2], ax
-    ; XTGEN.BIN, paragraph-aligned in this image
+    ; XTGEN.BIN, 128-byte aligned in this image: its paragraph is this
+    ; part's own plus its offset. CS IS NOT ALWAYS THAT PARAGRAPH: under
+    ; kern_mega the part is far-called through its claim's LDT code alias
+    ; (op_cseg, OS88_CODESEL: (seg >> 2) | 4), whose segment is (CS & ~7)
+    ; << 2 (docs/BOCHS.md), and a part's claim is on the 512-byte grid, so a
+    ; real CS never has bit 2 set. The sum lands on the identity map's
+    ; 8-paragraph grid (KERN-MEGA-PLAN 3.1) because x3x_gen is 128-aligned
     mov ax, cs
+    test al, 4
+    jz .rmcs
+    and al, 0xF8
+    shl ax, 1
+    shl ax, 1
+.rmcs:
     add ax, strict word (x3x_gen - $$) / 16
     mov [cs:x3x_gseg], ax
     mov es, ax
@@ -2944,7 +2956,7 @@ x3x_xh2:
 ; ======================================================== the generator input
 ; XTGEN.BIN (tools/x3xttab.py's gen_input, written by x3xtgen.py --xtgen),
 ; carried in the part: OPEN expands from it, after checking its Fletcher-32
-    align 16
+    align 128                       ; (the identity map's grid: x3x_open)
 x3x_gen:
     incbin "XTGEN.BIN"
 x3x_genend:
