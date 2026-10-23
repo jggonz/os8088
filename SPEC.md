@@ -218374,6 +218374,17 @@ third-party audio in them.
   at 4-7, and never on a quiet host: QEMU's SB16 plays in host real time
   while a starved guest runs slow, and that stream's lead between a refill
   request and an empty card is about 240 ms. Not reproduced, not changed.
+- **On kern_mega the region runs above 1MB and the claims do not.** The
+  header declares `OS88_HIGH` and not `OS88_HIGHMEM`. tests/megahigh.txt
+  names the reason: the conversion's stage is cut from the look-ahead claim
+  by paragraph arithmetic (`x3c_sseg`). The XT part found its embedded
+  `XTGEN.BIN` as its own CS plus a paragraph offset. Under kern_mega that
+  CS is the claim's LDT code alias, so it now takes the segment the alias
+  names (`(CS & ~7) << 2`), and `XTGEN.BIN` sits on a 128-byte boundary.
+  Measured once on Bochs (kern_mega, SB16, a 20 MB C:): Auto played
+  AFTERHRS live on Original with the region's DS an LDT selector (2844h),
+  then a forced XT Standard converted onto C: and played. The WAV is
+  bit-exact to `tools/x3simxt.py`, with no fault in E9.
 - **A card that stops by itself is an error, and on an XT it can be the
   configuration.** The owner's 86Box XT (SB 2.0 at 220h, IRQ 5, DMA 1,
   beside an ST-225 on the `st506_xt` controller, whose IRQ is also 5)

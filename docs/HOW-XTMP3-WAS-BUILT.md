@@ -812,3 +812,30 @@ whose fixed disk owns it is the driver's question, and it is left open.
 
 `xtmp3eng`'s `wavdirs` leg keeps the owner's folder layout honest on
 QEMU. It plays the finished WAV and then the cached one to the last byte.
+
+## 2026-10-23 — above the megabyte
+
+`test-full` failed on one row, `megahigh`: XTMP3 declared neither of
+kern_mega's two opt-ins. The audit went through the region and the parts.
+- **The region does no arithmetic on its own CS or DS.** Every vector into
+  a part is `op_cseg`'s, and the one `push cs` is a far return used on the
+  spot.
+- **The claims are another matter.** A Decode First cuts its stage out of
+  the look-ahead claim as a segment: `ap_la_seg` plus the ring's and the
+  PCM's paragraphs. That is right on the identity map and wrong on an LDT
+  selector.
+
+So the header says `OS88_HIGH`, and tests/megahigh.txt says why not
+`OS88_HIGHMEM`.
+
+The audit found one more thing, which neither bit governs. The XT part
+reached its embedded generator tables as `mov ax, cs / add ax, n`. On
+kern_mega a part is far-called through its claim's code alias, an LDT
+selector, and the sum names a different descriptor. The part now takes the
+segment the alias stands for, and the tables sit on the identity map's
+128-byte grid.
+
+Bochs then ran it once. Auto played AFTERHRS live on Original with the
+region above 1MB (its DS was LDT selector 2844h). A forced XT Standard
+converted the song onto the 20 MB C: and played it. The WAV came off the
+image bit-exact against the model, and E9 recorded no fault.
