@@ -2281,6 +2281,20 @@ def compare(only=(), divs=(1, 2, 4), wavdir=None, cache=None, verbose=True):
         else:
             ref = lame_decode(path, cache)[0]
             lame_ref = None
+        if st.h0.nch == 2 and 1 in divs:
+            # the downmix path: one synthesis of the averaged subband samples
+            # (held against the float model's own downmix: mpglib's channels are
+            # clipped before any average could be taken of them, which on a
+            # stream past full scale is a different signal; its average is
+            # printed for the record)
+            pm = decode_file(data, 'int', 1, mono=True)[0]
+            fm = decode_file(data, 'float', 1, mono=True)[0]
+            sm = err_stats(pm[:, 0], fm[:, 0])
+            sa = err_stats(trim_pcm(pm, st.info, 1)[:, 0], ref.astype(np.float64).mean(axis=1))
+            rows.append('%-13s d1  mono vs float  snr %6.1f  rms %5.2f  peak %4d  dc %+6.3f  '
+                        '(vs mpglib\'s L/R average %.1f dB)' % (
+                            name, sm['snr'], sm['rms'], sm['peak'], sm['dc'], sa['snr']))
+            _held(name + ' mono', 1, sm, fm, fails)
         for div in divs:
             OPS.__init__()
             pcm_d, rate_d, st_d, dec_d = decode_file(data, 'int', div)

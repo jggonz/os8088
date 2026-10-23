@@ -16700,11 +16700,12 @@ SOAK = [
         "(SPEC.md 121.4): the whole of the port's bit-exact target, "
         "recomputed",
         needs=("numpy",)),
-    Row("x3compare", "soak", py("tools/x3sim.py", "--compare"), 61.0,
+    Row("x3compare", "soak", py("tools/x3sim.py", "--compare"), 75.0,
         "XTMP3's STANDARD integer model against `lame --decode` (mpglib) on "
-        "every fixture at the source rate - RMS <= 6 LSB, peak <= 48 LSB, "
-        "music SNR >= 60 dB (docs/xtmp3/NUMERICS.md 4) - and against its own "
-        "float reference at divisors 2 and 4; every malformed fixture ends "
+        "every fixture at the source rate - RMS <= 4 LSB, peak <= 32 LSB, "
+        "SNR >= 60 dB above -40 dBFS (docs/xtmp3/NUMERICS.md 4) - and against "
+        "its own float reference at divisors 2 and 4 and for the mono "
+        "downmix; every malformed fixture ends "
         "in its documented refusal or recovery with no exception, and the "
         "garbage, tag and VBRI variants decode to the clean stream's PCM "
         "exactly. SKIPS without LAME",
