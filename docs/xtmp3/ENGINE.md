@@ -507,18 +507,19 @@ the assembler's map at this branch's head, merged with `feature/xtmp3`:
 
 | build | image | bss | image + bss | left |
 |---|---|---|---|---|
-| shipped | 42,297 | 14,115 | 56,412 | 8,612 |
-| `PKG_MEGA` | 43,194 | 14,115 | 57,309 | 7,715 |
-| `X3STUB` (test only) | 42,557 | 14,186 | 56,743 | 8,281 |
+| shipped | 42,935 | 14,279 | 57,214 | 7,810 |
+| `PKG_MEGA` | 43,832 | 14,279 | 58,111 | 6,913 |
+| `X3STUB` (test only) | 43,225 | 14,354 | 57,579 | 7,445 |
 
 (At the integration track's head, from each build's own package header.
 The engine track's figures were 41,275 + 14,078: the integration added
-1,022 bytes of image - the plan, the OPEN reuse, the ramps, the packed and
-cluster refusals, the probe's 32 KB path - and 37 of bss.)
+1,660 bytes of image - the plan, the OPEN reuse, the ramps, the packed and
+cluster refusals, the probe's 32 KB path, the rung fall-through, the 8086
+hint, the stated minimum, the face's throttles - and 201 of bss.)
 
 **The engine's share.** Against `feature/xtmp3`'s primary with the demo
 engine (image 19,670, image + bss 29,883), the engine added **21,605 bytes
-of image and 3,865 of bss**, and the integration the 1,059 above. The
+of image and 3,865 of bss**, and the integration the 1,861 above. The
 `X3STUB` build adds 260 bytes of image and 71 of bss more: the test hook and
 the debug ring.
 
@@ -555,6 +556,7 @@ meanwhile.
 | XT Standard conversion, 16 KB-cluster destination | `xtclu/16k` | 385 KB | ONE 16 KB half, 16 KB look-ahead |
 | XT Standard conversion, 32 KB-cluster destination | `xtclu/32k` | refused, 377 KB at the refusal | nothing fits: `Too little memory for that disk` |
 | XT Fast conversion, 32 KB-cluster destination | `xtclu/32k` | 387 KB | two 32 KB halves (its work is 182 KB) |
+| XT Standard CALIBRATION on MartyPC's 5160 (an SB 2.01) | `xtmp3xt` std | 387 KB = 396,288 (was 402 KB = 411,648: the previous probe's grant was held through the OPEN) | the grant given back before any OPEN |
 
 The peak of a conversion is at OPEN (the part unshrunk, 58 KB, with its
 work), not during the decode; the plan sizes what follows the shrink. The
@@ -643,6 +645,10 @@ drive was asked for.
   clusters are too large`): its look-ahead would need two clusters, 64 KB.
   A finished WAV plays from one, and the queue's probe reads its title and
   duration there (STD.md).
+- **An 8086 probes XT Standard first, and alone when it is hopeless**
+  (section 2): the CPU picks the order, the measure decides.
+- **The drive dialog shows no time estimate**; the progress window shows
+  one after 10 s of the job's own speed (section 4).
 - **An lz4-packed MP3 is refused by name** (`The MP3 is stored packed`,
   and the probe's `PACKED FILE`), never decoded as noise.
 - **Volume labels** are not shown, and no package-level slot can give one
@@ -701,6 +707,8 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | `batch` | two tracks queued (File > Add to Queue), the first's drive dialog with `Queue too: Yes`: the second converts into the same folder with no dialog; both WAVs on C:, no .TMP |
 | `rovol` | a read-only fixed volume: QEMU's IDE has no write-protect for a hard disk, so the one this machine has - a CD through CDROM.DRV (VK_FIXED, `VT_FILE`) - is listed flagged read-only, and Decode and Play refuses it |
 | `packed` | an MP3 wrapped by `tools/os88lz.py --wrap`: ERROR `The MP3 is stored packed`, no decoder fetched |
+| `shortmem` | an XT-class ladder (the stub) on a machine the test hook says HAS 300 KB: ERROR `Needs 390 KB, has 300 KB`, and the drive dialog never opened |
+| `rungfail` | Original calibrates (4x) but its live start is refused as out of memory (the stub's hook): the ladder stores it at 0 and plays HALF, with no ERROR on the way |
 | `probe32` | an MP3 whose first frame sits 200 bytes short of 32 KB, on a 32 KB-cluster C:: the queue's probe reads its title and x3sim's duration across the cluster's end, and Play refuses it by name (`Its disk's clusters are too large`) |
 | `covox` | the finished file's ACTUAL SOUND with no card: QEMU's pcspk renders only a PIT mode-3 square (its capture of the speaker bracket was EMPTY), so the Covox tier (SYSTEM.CFG, LPT1): every byte written to the LPT data port traced (`-trace parallel_ioport_write`) and the WAV's samples found there, in order, one for one - 32,724 identical in 45 s, QEMU running the bracket's 11 kHz IRQ0 slowly |
 
@@ -730,7 +738,11 @@ is asserted): each leg boots its own private QEMU with its own disks under
   plan is measured after OPEN, so a 32 KB-cluster volume under XT Standard
   is offered and the job then fails at once, before a byte is written,
   with its reason.
-- **Every timing** is the FIELD track's (section 11).
+- **Every timing** is the FIELD track's (section 11), and the integration
+  track's second round measured its own changes there (`xtmp3xt`, MartyPC's
+  5160 with a VGA): XT Standard's conversion of AFTERHRS 0.055x -> 0.0946x
+  (the decode loop 0.0586x -> 0.1004x; the face's share 44.6% -> 9.8%),
+  calibration 16.1 s -> 6.4 s, its peak 402 KB -> 387 KB.
 - Closed by the integration track: live XT with a card (387 KB, the 8 KB
   grant), the ceiling on any cluster (the plan), the re-fetch after a probe
   (`x3_reuse`), the untested paths (the `chgsrc`, `dfdel`, `batch`, `rovol`
