@@ -217580,7 +217580,13 @@ by the source).
 **Calibration** decodes the actual track from its start, timed by
 `pit_now`: the front end, GRANULE, and the feed's copy into the card's ring,
 plus the disk's share priced from the priming reads' measured cost per byte.
-A warm-up granule runs untimed first.
+A warm-up granule runs untimed first. **A probe is ARMED and starts two
+timer passes later** (`x3l_arm`): a document's play arms it in the very
+pass whose face update then repaints the whole new track, and a probe
+running beside that repaint was charged for it - XT Standard's first probe
+on MartyPC's XT read 0.06x against its 0.11x (and every 86Box probe read
+lower on the build that first made XT Standard an 8086's first probe).
+Measured with the arm: 0.11x again, the calibration 6.6 s.
 
 | constant | value | what |
 |---|---|---|
@@ -217669,7 +217675,7 @@ QEMU's SB16 and finds it sample for sample.
 |---|---|
 | under `X3_RINGHI` = 32,000 | SOUND.DRV's grant (verb 7): 16 KB, else 8 |
 | 32,000 or more | an EXTERNAL ring (`SND_OPENF_EXT`, §34.5.3): 32 KB of the package's own plus the control words, claimed DMA-safe, written directly. The pool tops out at 16 KB, which is 93 ms of 44.1 kHz 16-bit stereo |
-| any, under the XT backend | the 8 KB grant (`X3_RINGSM`), never the external ring: the 400,000 bytes hold the card's ring too (§121.10) |
+| any, under the XT backend | the 16 KB grant with the look-ahead made smaller to fit, else the 8 KB grant (`x3_plan`); never the external ring: the 400,000 bytes hold the card's ring too (§121.10). The 16 KB is 1.5 s of 11 kHz where 8 is 0.74, and a smaller look-ahead makes a floppy's gulp shorter |
 
 **The feed** (`x3_feed`, the worker, lock-free) is §86.5's pattern: verb 3's
 consumed count is the clock, and up to `X3_MAXFEED` = 8 halves of `X3_HALF`
@@ -217700,8 +217706,9 @@ SB Pro's stereo on its own card, a real SB16, and anything listened to.
 carries the brief's sentence exactly: *This computer needs to decode this
 track before playing.* / *Choose a hard drive for the decoded audio.* It
 lists every `VK_FIXED` volume with its letter and free space, greying one
-with its reason (`read-only`, `too little room`, `clusters too large`,
-`cannot be read`). It never assumes C:, never lists a floppy, and says *This
+with its reason (`read-only`, `too little room`, `cannot be read`, and
+`32 KB clusters` under XT Standard, whose stage cannot hold one such cluster
+inside §121.10's ceiling - the other rungs convert there). It never assumes C:, never lists a floppy, and says *This
 machine has no hard drive to decode to.* when there is none. It shows the
 quality, the PCM the job makes (rate, channels, bits), the disk needed as
 `frames x channels x bytes` plus the header cluster in 32-bit arithmetic
@@ -217929,8 +217936,8 @@ conversion zeroes it at its start, so it is that job's peak.
    needed again);
 4. **plan the buffers from what is left, measured** (`x3_plan`): under the
    XT backend the look-ahead, the PCM's 3 KB, a conversion's stage and, live
-   or probing, the card's 8 KB grant must fit the ceiling less what is held
-   now. The look-ahead keeps two of the source's clusters and 4 KB at least
+   or probing, the card's grant (16 KB first, with the look-ahead halved as
+   far as it may; else 8 KB) must fit the ceiling less what is held now. The look-ahead keeps two of the source's clusters and 4 KB at least
    (one cluster can wait forever for a gulp it has no room for); a stage
    that does not fit as two halves is one, then the look-ahead halves, and
    nothing fitting fails the job by name. STANDARD has no ceiling;
@@ -217951,7 +217958,7 @@ finished WAV plays only after the decoder's parts are dropped.
 | the region (image + bss) | 57,214 bytes (56 KB) | the package runs |
 | the eager carve: FRONT + ART | 37 KB | the package runs |
 | look-ahead ring + PCM (+ the stage) | 32 KB + 3 KB, or 16 KB + 3 KB under the XT backend (the plan may halve the look-ahead) | a track is open |
-| the card's ring | the 16 KB grant (8 when the pool is short) or 33 KB external; the 8 KB grant under the XT backend | live, a probe, or a finished file on a card |
+| the card's ring | the 16 KB grant (8 when the pool is short) or 33 KB external; under the XT backend x3_plan's grant, 16 KB or 8 | live, a probe, or a finished file on a card |
 | the backend's part | STANDARD 57 KB; XT 58 KB, then 29 after OPEN | live, a probe, a conversion |
 | the backend's work | STANDARD none; XT Standard 5 claims, 236 KB; Fast 5, 182 KB; Turbo 4, 149 KB; Speech 4, 160 KB | live, a probe, a conversion |
 | the stage | 2 x max(8 KB, cluster), or 2 x max(4 KB, cluster) under XT, or ONE where two do not fit; inside the ring's claim | converting |
@@ -217962,9 +217969,9 @@ finished WAV plays only after the decoder's parts are dropped.
 |---|---|---|---|
 | XT Standard conversion, 2 KB clusters, no card | QEMU `xtpeak`; MartyPC `xtmp3xt` | 385 KB = 394,240 B | two 4 KB halves, 16 KB look-ahead |
 | XT Standard calibration on an XT | MartyPC `xtmp3xt` | 387 KB = 396,288 B | the probe's ring and the 8 KB grant |
-| XT Standard LIVE on an SB16 (44.1 kHz) | QEMU `xtpeak` | 387 KB = 396,288 B | 16 KB look-ahead, the 8 KB grant |
+| XT Standard LIVE on an SB16 (44.1 kHz) | QEMU `xtpeak` | 387 KB = 396,288 B | 8 KB look-ahead, the 16 KB grant |
 | XT Standard conversion, 8 and 16 KB clusters | QEMU `xtclu` | 385 KB | ONE stage half |
-| XT Standard conversion, 32 KB clusters | QEMU `xtclu` | refused at 377 KB | `Too little memory for that disk` |
+| XT Standard conversion, 32 KB clusters | QEMU `xtclu` | the volume greyed in the drive dialog (387 KB there) | `32 KB clusters` |
 | XT Fast conversion, 32 KB clusters | QEMU `xtclu` | 387 KB | two 32 KB halves |
 
 The peak of a conversion is at OPEN (the part unshrunk, with its work), not
@@ -218128,7 +218135,7 @@ replace.
 | | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
 | 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.29, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
 | | C128 | Quarter 0.15, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog; 7.62 s | 381 KB |
-| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (one at 55a051b4), stepped to XT FAST | 343 KB |
+| 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (one at 55a051b4), stepped to XT FAST - on the 8 KB grant from a floppy; the next build plays it on the 16 KB grant with an 8 KB look-ahead (not yet re-run on 86Box) | 343 KB |
 | | C128 | Quarter 0.37, XT Standard 0.47, XT Fast 0.51 | Decode first, on QUARTER | the dialog; 7.15 s | 343 KB |
 | 486DX2 66 MHz, SB16 (86Box) | AFTERHRS | Original 3.08 | **live ORIGINAL**, 11,025 Hz mono 16-bit | no underrun | 157 KB |
 | | C128 | Quarter 0.98, XT Standard 1.15, XT Fast 1.17 | **Decode first, on QUARTER** - no rung passes 1.25x now | the dialog; **no "Out of memory"** (it was, at 55a051b4, after XT Standard probed 1.48x); the fall-through was not reached | 343 KB |
@@ -218286,10 +218293,17 @@ third-party audio in them.
 
 **Open:**
 
-- **The drive dialog does not grey a volume the plan will refuse**: the plan
-  is measured after OPEN, so a 32 KB-cluster volume under XT Standard is
-  offered and the job then fails at once, before a byte is written, with its
-  reason.
+- **The drive dialog greys only what it can predict**: a 32 KB-cluster
+  volume under XT Standard. Any other shortfall the plan measures after OPEN
+  fails the job at once, before a byte is written, with the stated minimum.
+- **86Box's 386 underran 11 times** live on XT Standard with the 8 KB grant
+  from a floppy (§121.11.5); the 16 KB grant with an 8 KB look-ahead that
+  replaced it has run on QEMU (`xtpeak`, 387 KB) and not yet on 86Box.
+- **QEMU's `playwav` leg underran once** in three full passes, at 176 KB/s
+  on the external ring with the host's load average at 4-7, and never on a
+  quiet host: QEMU's SB16 plays in host real time while a starved guest runs
+  slow, and that stream's lead between a refill request and an empty card is
+  about 240 ms. Not reproduced, not changed.
 - **The offline pick sits on a knife edge on an XT**: XT Fast measured 11
   (x100) on MartyPC and 12 on 86Box against `X3_OFFMAX`'s 12, so the same
   machine class can convert on XT Standard under one instrument and XT Fast
