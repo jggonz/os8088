@@ -272,6 +272,7 @@ x3c_ixload:
     mov cx, X3C_IXSZ
     xor al, al
     call x3_fillb
+    call x3c_ixhome                 ; the package's own volume
     push ds
     pop es
     mov si, x3c_s_ixf
@@ -279,6 +280,9 @@ x3c_ixload:
     mov cx, X3C_IXSZ
     xor dx, dx
     call od_read
+    pushf
+    call x3c_ixback
+    popf
     jc .empty
     cmp word [x3c_ix], 'X3'
     jne .empty
@@ -312,6 +316,7 @@ x3c_ixsave:
     mov word [x3c_ix], 'X3'
     mov word [x3c_ix+2], 'DT'
     mov word [x3c_ix+4], 1
+    call x3c_ixhome                 ; the package's own volume
     push ds
     pop es
     mov si, x3c_s_ixf
@@ -319,11 +324,45 @@ x3c_ixsave:
     mov cx, X3C_IXSZ
     mov di, x3c_ixst
     call od_write
+    pushf
+    call x3c_ixback
+    popf
     pop es
     pop di
     pop si
     pop cx
     pop bx
+    ret
+
+; x3c_ixhome / x3c_ixback - stand in the folder XTMP3 was launched from, and
+; back where we stood. os88data.inc works on the volume the instance stands
+; on, and after a conversion that is the DESTINATION; the index is the
+; program's own (SPEC.md 19.9). keep everything but the flags
+x3c_ixhome:
+    push ax
+    push bx
+    push dx
+    call OSAPI_FILE_HERE
+    mov [x3c_ixbd], dx
+    mov [x3c_ixbv], bl
+    mov dx, [x3_homed]
+    mov bl, [x3_homev]
+    call OSAPI_FILE_GOTO_QM
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+x3c_ixback:
+    push ax
+    push bx
+    push dx
+    mov dx, [x3c_ixbd]
+    mov bl, [x3c_ixbv]
+    call OSAPI_FILE_GOTO_QM
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; x3c_ixrow - AL = a record -> SI -> it. keeps the rest
@@ -935,7 +974,8 @@ x3c_dclose:
     call x3c_chooseoff              ; the choice abandoned: READY
     jmp short .out
 .prog:
-    call x3c_cancel                 ; (closes the window too)
+    mov al, XU_CANCEL               ; (the main window's wake does it)
+    call x3c_post
 .out:
     mov bx, [x3_win]
     call x3f_update
@@ -1054,7 +1094,9 @@ x3c_pdrive:
     xor al, al
     call x3c_line
     add dx, 10
-    call x3c_nline                  ; 'Needs ~1,985 KB   About 17 min to decode'
+    push dx
+    call x3c_nline                  ; 'Needs ~1,985 KB   About 17:00 to decode'
+    pop dx
     mov si, x3c_lbuf2
     xor al, al
     jmp x3c_line
@@ -1171,16 +1213,13 @@ x3c_nline:
     cmp dx, bx
     jae .z
     div bx                          ; AX = seconds of converting
-    add ax, 59
-    xor dx, dx
-    mov cx, 60
-    div cx                          ; AX = minutes, rounded up
+    inc ax                          ; (a second at least)
     push ax
     mov si, x3c_s_about
     call x3_put
     pop ax
-    xor dx, dx
-    call dec_u32
+    call x3_mmss                    ; mm:ss
+    dec di
     mov si, x3c_s_mindec
     call x3_put
 .z:
@@ -1314,7 +1353,8 @@ x3c_bfire:
 .close:
     jmp x3c_dlgclose
 .prog:
-    jmp x3c_cancel
+    mov al, XU_CANCEL
+    jmp x3c_post
 .drv:
     or al, al
     jz .cancel
@@ -1330,7 +1370,8 @@ x3c_bfire:
 .go:
     call x3c_vusable
     jc .out
-    jmp x3c_savedlg
+    mov al, XU_SAVE                 ; the Save dialog, from the main window's
+    jmp x3c_post                    ; wake (the instance stands there)
 .out:
     ret
 
@@ -2842,11 +2883,19 @@ x3c_fdel:
 .out:
     ret
 
-; x3c_fdel2 - the alert's answer: AL = 1 Proceed. The file is checked to be
-; the record's own (its xtm3 chunk), deleted, and the record forgotten
+; x3c_fdel2 - the alert's answer: AL = 1 Proceed - done by the main window's
+; wake, the alert being unbound too
 x3c_fdel2:
     cmp al, 1
     jne .out
+    mov al, XU_DELETE
+    jmp x3c_post
+.out:
+    ret
+
+; x3c_fdelgo - the file checked to be the record's own (its xtm3 chunk),
+; deleted, and the record forgotten
+x3c_fdelgo:
     mov al, [x3c_fsel]
     cmp al, 0xFF
     je .out
@@ -2875,6 +2924,40 @@ x3c_fdel2:
     jc .out
     mov si, bx
     call x3c_dpaint
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; x3c_post / x3c_uiop - A DIALOG'S ACTION, CARRIED TO THE MAIN WINDOW. The
+; dialog, the progress window and the alert are UNBOUND windows (SPEC.md
+; 20.2's second window): their callbacks are billed to no instance, so
+; OSAPI_FILE_GOTO_QM there moves the MACHINE and marks nobody, and the Save
+; dialog then opens wherever the instance last stood. So the action is posted
+; (AL = XU_*) and the main window's wake - ours - does it with the lock taken
+; -----------------------------------------------------------------------------
+XU_SAVE     equ 1                   ; Decode and Play: the Save dialog
+XU_CANCEL   equ 2                   ; the conversion's Cancel
+XU_DELETE   equ 3                   ; Decoded Files' Delete, confirmed
+
+x3c_post:
+    mov [x3_uiop], al
+    mov al, X3R_UIOP
+    jmp x3_kick
+
+x3c_uiop:
+    mov al, [x3_uiop]
+    mov byte [x3_uiop], 0
+    cmp al, XU_SAVE
+    jne .c
+    jmp x3c_savedlg
+.c:
+    cmp al, XU_CANCEL
+    jne .d
+    jmp x3c_cancel
+.d:
+    cmp al, XU_DELETE
+    jne .out
+    jmp x3c_fdelgo
 .out:
     ret
 
@@ -2960,7 +3043,7 @@ x3c_s_16:    db '16-bit', 0
 x3c_s_needs: db 'Needs ', 0
 x3c_s_kb:    db ' KB', 0
 x3c_s_about: db '   About ', 0
-x3c_s_mindec: db ' min to decode', 0
+x3c_s_mindec: db ' to decode', 0
 x3c_s_cancel: db 'Cancel', 0
 x3c_s_decode: db 'Decode and Play', 0
 x3c_s_close: db 'Close', 0
@@ -3030,6 +3113,7 @@ x3c_s_ren:   db 'Cannot name the file', 0
     X3B x3c_eof, 1                  ; the stream ended
     X3B x3c_wn, 1                   ; granules left this pass
     X3B x3c_canc, 1
+    X3B x3_uiop, 1                  ; a dialog's action, posted (XU_*)
     X3B x3c_err, 2                  ; the failure's sentence, 0 none
     X3B x3c_tok, 2                  ; the WRITE_SEQ token
     X3B x3c_dlen, 4                 ; data bytes written
@@ -3068,6 +3152,8 @@ x3c_s_ren:   db 'Cannot name the file', 0
     X3B x3c_wdoff, 4                ; data's offset and length, the identity
     X3B x3c_wdlen, 4
     X3B x3c_widn, X3C_IDN
+    X3B x3c_ixbd, 2                 ; (where we stood around an index visit)
+    X3B x3c_ixbv, 1
     X3B x3c_ixok, 1                 ; THE INDEX: loaded, its state byte, it
     X3B x3c_ixst, 1
     X3B x3c_ix, X3C_IXSZ

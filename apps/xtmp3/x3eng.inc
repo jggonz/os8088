@@ -101,6 +101,11 @@ X3R_END     equ 0x04                ; the job ended (the stream, the source)
 X3R_STEP    equ 0x08                ; step DOWN a rung (live)
 X3R_CAL     equ 0x10                ; a probe finished
 X3R_FAIL    equ 0x20                ; the decoder refused (x3_wfail says why)
+X3R_UIOP    equ 0x40                ; a dialog's action, [x3_uiop] (x3conv.inc):
+                                    ; its window is UNBOUND - billed to no
+                                    ; instance - so a file call from its own
+                                    ; callbacks would move the MACHINE and not
+                                    ; us; the main window's wake does it
 
 ; --- the engine's own mode (x3_md): what x3_st's state is the face of ------------
 MD_IDLE     equ 0
@@ -237,6 +242,28 @@ apw_e_io:     db 'Cannot read the file', 0
 %include "os88pit.inc"
 %include "sndpkg.inc"               ; SNDV_MIX*: the knob's mixer verbs
 
+;
+; X3LOG code, value: a byte and a word appended to x3_dlog (X3STUB builds
+; only - tests/xtmp3eng.py reads it to say which way a probe or a job went)
+%macro X3LOG 2
+%ifdef X3STUB
+    push ax
+    push bx
+    mov bl, [x3_dlogn]
+    xor bh, bh
+    cmp bl, 3 * 63
+    jae %%full                      ; (full: the first 63 are kept)
+    mov al, %1
+    mov [x3_dlog+bx], al
+    mov ax, %2
+    mov [x3_dlog+bx+1], ax
+    add byte [x3_dlogn], 3
+%%full:
+    pop bx
+    pop ax
+%endif
+%endmacro
+
 ; ap_ret6 - THE SHARED EPILOGUE aplook.inc ends on: pop DI SI DX CX BX AX, ret
 ap_ret6:
     pop di
@@ -261,6 +288,13 @@ x3_e_init:
     mov byte [x3_md], MD_IDLE
     mov byte [x3_lastq], 0xFF
     mov byte [x3_bpart], 0xFF       ; no backend part fetched
+    push bx
+    push dx
+    call OSAPI_FILE_HERE            ; where we were launched from: the index's
+    mov [x3_homed], dx              ; volume (SPEC.md 19.9 - the program's own,
+    mov [x3_homev], bl              ; wherever a play has since moved us)
+    pop dx
+    pop bx
     call x3_volsense                ; the knob: a mixer's master, or the gain
 %ifdef X3STUB
     call x3_stubcfg                 ; the test hook (x3stubp.inc)
@@ -812,9 +846,20 @@ x3_onwake:
     jz .nwr
     call x3c_write                  ; (x3conv.inc) clears the bit itself
 .nwr:
-    test byte [x3_req], X3R_END | X3R_STEP | X3R_CAL | X3R_FAIL
+    test byte [x3_req], X3R_END     ; 2b. A CONVERSION'S END: its finishing
+    jz .nfin                        ; I/O, lock-free (x3conv.inc)
+    cmp byte [x3_md], MD_CONV
+    jne .nfin
+    call x3c_final
+.nfin:
+    test byte [x3_req], X3R_END | X3R_STEP | X3R_CAL | X3R_FAIL | X3R_UIOP
     jz .out
     call OSAPI_GFX_LOCK             ; 3. what changes the state, and draws
+    test byte [x3_req], X3R_UIOP
+    jz .nu
+    and byte [x3_req], ~X3R_UIOP
+    call x3c_uiop                   ; a dialog's action, billed to us
+.nu:
     test byte [x3_req], X3R_FAIL
     jz .nf
     and byte [x3_req], ~X3R_FAIL
@@ -1256,8 +1301,8 @@ x3_refill:
     push cx
     push dx
     call pit_now
-    mov bx, ax
-    mov cx, dx
+    mov [x3_rft0], ax
+    mov [x3_rft0+2], dx
     push word [ap_la_wr]
     mov word [ap_msg], 0
     call ap_refill_chunk
@@ -1266,9 +1311,8 @@ x3_refill:
     sub ax, dx                      ; AX = bytes this gulp published
     add [x3_dkby], ax
     adc word [x3_dkby+2], 0
-    call pit_now
-    sub ax, bx
-    sbb dx, cx
+    mov bx, x3_rft0
+    call x3_pitd
     add [x3_dkpit], ax
     adc [x3_dkpit+2], dx
     cmp word [ap_msg], apw_e_io
@@ -3417,6 +3461,9 @@ x3l_launch:
     mov [x3l_acc+2], ax
     mov ax, [x3_ring+X3R_POS]
     mov [x3l_pos0], ax
+    X3LOG 'L', [ap_la_wr]
+    X3LOG 'l', [ap_la_rd]
+    X3LOG 'e', [x3_req]
     call x3_wspawn
     jc .no
     mov byte [x3_job], WJ_CAL
@@ -3443,6 +3490,7 @@ x3l_wprobe:
     mov si, x3_ring
     call x3p_next
     jnc .staged
+    X3LOG 'N', ax
     cmp ax, X3P_END
     je .finish
     cmp word [x3l_g], 0             ; dry: what was measured is the measure
@@ -3498,9 +3546,8 @@ x3l_wprobe:
     call OSAPI_SND_STREAM
     pop ds
 .timed:
-    call pit_now
-    sub ax, [x3l_t0]
-    sbb dx, [x3l_t0+2]
+    mov bx, x3l_t0
+    call x3_pitd                    ; DX:AX = the granule's wall time
     add [x3l_acc], ax
     adc [x3l_acc+2], dx
     inc word [x3l_g]
@@ -3516,13 +3563,19 @@ x3l_wprobe:
     jae .finish
     jmp .loop
 .refused:
+    X3LOG 'R', ax
     mov word [x3l_g], 0
 .finish:
+    X3LOG 'F', [x3l_g]
     xor ax, ax
     cmp word [x3l_g], 0
     je .res
     call x3l_speed
 .res:
+    cmp ax, 0xFFFF                  ; (FFFFh is "not measured": a speed past
+    jne .r2                         ; the scale is FFFEh)
+    dec ax
+.r2:
     mov [x3l_res], ax
     mov byte [x3_job], WJ_NONE
     mov al, X3R_CAL
@@ -3584,6 +3637,23 @@ x3l_speed:
     pop dx
     pop cx
     pop bx
+    ret
+
+; x3_pitd - DX:AX = pit_now - the dword at [BX]: a span. pit_now can step
+; back one whole tick (65,536 counts) under an emulator whose IRQ0 is late
+; against its counter - seen on QEMU, a granule of 1.4 ms read as -53 ms -
+; so a span one tick negative is given its tick back, and anything worse is
+; 0. A span is never negative. keeps the rest
+x3_pitd:
+    call pit_now
+    sub ax, [bx]
+    sbb dx, [bx+2]
+    jns .out
+    inc dx                          ; one tick back
+    jns .out
+    xor ax, ax
+    xor dx, dx
+.out:
     ret
 
 ; x3_mdiv - DX:AX x CX / BX -> DX:AX (FFFF:FFFF when it does not fit).
@@ -4238,8 +4308,11 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_pkr, 1
     X3B x3_last, 2                  ; the last frame made (a ramp's start)
     X3B x3_rampn, 1
+    X3B x3_homed, 2                 ; the folder we were launched from
+    X3B x3_homev, 1
     X3B x3_dkpit, 4                 ; the disk's measured cost: time...
     X3B x3_dkby, 4                  ; ...for bytes
+    X3B x3_rft0, 4                  ; (a gulp's start)
     X3B x3l_ph, 1                   ; THE LADDER: its phase...
     X3B x3l_cur, 1                  ; ...the rung measured...
     X3B x3l_low, 1                  ; ...the cheaper STANDARD rung that passed
@@ -4252,6 +4325,10 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3l_t0, 4
     X3B x3l_pos0, 2                 ; ...the file offset it began at
     X3B x3l_goff, 2                 ; ...the grant's rolling offset
+%ifdef X3STUB
+    X3B x3_dlog, 3 * 64             ; the debug log (X3LOG)
+    X3B x3_dlogn, 1
+%endif
     X3B x3l_cnext, 2                ; the session's cache: the next row...
     X3B x3l_cache, X3_NCAL * X3L_CREC
     X3_CONVBSS
