@@ -1,0 +1,340 @@
+{
+ "part_bytes": 58634,
+ "open": {
+  "std": {
+   "cycles": 20296808,
+   "seconds": 4.252664776342749,
+   "regions": {
+    "XTGEN check and setup": 834955,
+    "window rows": 7781154,
+    "ENCV and Lee planes": 4539833,
+    "RQL, IMDCT rows, ENCR, antialias": 5052433,
+    "IMWIN, reset": 2088674,
+    "done": 43
+   },
+   "fletcher": 6160548,
+   "ok": true
+  },
+  "fast": {
+   "cycles": 15981953,
+   "seconds": 3.3485998675390403,
+   "regions": {
+    "XTGEN check and setup": 834955,
+    "window rows": 4269501,
+    "ENCV and Lee planes": 4539833,
+    "RQL, IMDCT rows, ENCR, antialias": 4266012,
+    "IMWIN, reset": 2071827,
+    "done": 109
+   },
+   "fletcher": 4624548,
+   "ok": true
+  },
+  "turbo": {
+   "cycles": 13874047,
+   "seconds": 2.906943347063429,
+   "regions": {
+    "XTGEN check and setup": 834799,
+    "window rows": 2174667,
+    "ENCV and Lee planes": 4539833,
+    "RQL, IMDCT rows, ENCR, antialias": 4266012,
+    "IMWIN, reset": 2058955,
+    "done": 65
+   },
+   "fletcher": 3825738,
+   "ok": true
+  },
+  "speech": {
+   "cycles": 14784469,
+   "seconds": 3.097698443678006,
+   "regions": {
+    "XTGEN check and setup": 834903,
+    "window rows": 3971651,
+    "ENCV and Lee planes": 2921225,
+    "RQL, IMDCT rows, ENCR, antialias": 5052433,
+    "IMWIN, reset": 2004476,
+    "done": 65
+   },
+   "fletcher": 4317258,
+   "ok": true
+  }
+ },
+ "granule": {
+  "AFTERHRS.MP3 std": {
+   "granules": 194,
+   "divisor": 1,
+   "rate_out": 11025,
+   "cycles_mean": 1505847.1804123712,
+   "cycles_min": 917942,
+   "cycles_max": 1887482,
+   "speed": 0.16558827372758836,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5697.1875,
+    "requantise + stereo": 96043.0,
+    "antialias": 67547.375,
+    "IMDCT": 296862.8125,
+    "IMDCT window": 152365.8125,
+    "overlap": 19304.875,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 432286.0,
+    "output copy": 12255.0,
+    "IMDCT (short, with its window)": 32153.875
+   },
+   "staged_granules": 16
+  },
+  "X8K16.MP3 std": {
+   "granules": 44,
+   "divisor": 1,
+   "rate_out": 8000,
+   "cycles_mean": 1450529.1136363635,
+   "cycles_min": 1022842,
+   "cycles_max": 1743049,
+   "speed": 0.23690413433931734,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5688.5,
+    "requantise + stereo": 105630.625,
+    "antialias": 31336.9375,
+    "IMDCT (short, with its window)": 191074.75,
+    "overlap": 49416.75,
+    "IMDCT": 156097.1875,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 432286.0,
+    "output copy": 12255.0,
+    "IMDCT window": 66318.0
+   },
+   "staged_granules": 16
+  },
+  "X11K24.MP3 std": {
+   "granules": 60,
+   "divisor": 1,
+   "rate_out": 11025,
+   "cycles_mean": 1440692.8833333333,
+   "cycles_min": 1051399,
+   "cycles_max": 1683247,
+   "speed": 0.1730768840372959,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5706.6875,
+    "requantise + stereo": 140927.75,
+    "antialias": 5868.5,
+    "IMDCT": 24787.625,
+    "IMDCT window": 8533.3125,
+    "overlap": 72425.125,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 432286.0,
+    "output copy": 12255.0,
+    "IMDCT (short, with its window)": 328262.6875
+   },
+   "staged_granules": 16
+  },
+  "AFTERHRS.MP3 fast": {
+   "granules": 194,
+   "divisor": 1,
+   "rate_out": 11025,
+   "cycles_mean": 1363354.3917525774,
+   "cycles_min": 791168,
+   "cycles_max": 1739425,
+   "speed": 0.18289495131306488,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5708.25,
+    "requantise + stereo": 96043.0,
+    "antialias": 56713.0,
+    "IMDCT": 292601.75,
+    "IMDCT window": 150713.0625,
+    "overlap": 19743.125,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 305512.0,
+    "output copy": 12255.0,
+    "IMDCT (short, with its window)": 32153.875
+   },
+   "staged_granules": 16
+  },
+  "X8K16.MP3 fast": {
+   "granules": 44,
+   "divisor": 1,
+   "rate_out": 8000,
+   "cycles_mean": 1317441.8409090908,
+   "cycles_min": 889753,
+   "cycles_max": 1598428,
+   "speed": 0.2608360637482686,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5694.0,
+    "requantise + stereo": 105630.625,
+    "antialias": 26425.4375,
+    "IMDCT (short, with its window)": 191074.75,
+    "overlap": 49416.75,
+    "IMDCT": 156114.625,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 305512.0,
+    "output copy": 12255.0,
+    "IMDCT window": 66317.9375
+   },
+   "staged_granules": 16
+  },
+  "X11K24.MP3 fast": {
+   "granules": 60,
+   "divisor": 1,
+   "rate_out": 11025,
+   "cycles_mean": 1308932.5666666667,
+   "cycles_min": 924625,
+   "cycles_max": 1533139,
+   "speed": 0.1904992216192147,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5697.0,
+    "requantise + stereo": 140927.75,
+    "antialias": 5081.5,
+    "IMDCT": 23160.3125,
+    "IMDCT window": 7707.0625,
+    "overlap": 72646.875,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 305512.0,
+    "output copy": 12255.0,
+    "IMDCT (short, with its window)": 328262.6875
+   },
+   "staged_granules": 16
+  },
+  "AFTERHRS.MP3 turbo": {
+   "granules": 194,
+   "divisor": 1,
+   "rate_out": 11025,
+   "cycles_mean": 1276955.0670103093,
+   "cycles_min": 704768,
+   "cycles_max": 1653025,
+   "speed": 0.1952697017647119,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5716.4375,
+    "requantise + stereo": 96043.0,
+    "antialias": 56713.0,
+    "IMDCT": 292601.75,
+    "IMDCT window": 150713.0625,
+    "overlap": 19743.125,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 219112.0,
+    "output copy": 12255.0,
+    "IMDCT (short, with its window)": 32153.875
+   },
+   "staged_granules": 16
+  },
+  "X8K16.MP3 turbo": {
+   "granules": 44,
+   "divisor": 1,
+   "rate_out": 8000,
+   "cycles_mean": 1231043.8409090908,
+   "cycles_min": 803353,
+   "cycles_max": 1512006,
+   "speed": 0.27914224707564783,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5699.5,
+    "requantise + stereo": 105630.625,
+    "antialias": 26425.4375,
+    "IMDCT (short, with its window)": 191074.75,
+    "overlap": 49416.75,
+    "IMDCT": 156114.625,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 219112.0,
+    "output copy": 12255.0,
+    "IMDCT window": 66317.9375
+   },
+   "staged_granules": 16
+  },
+  "X11K24.MP3 turbo": {
+   "granules": 60,
+   "divisor": 1,
+   "rate_out": 11025,
+   "cycles_mean": 1222534.4,
+   "cycles_min": 838225,
+   "cycles_max": 1446739,
+   "speed": 0.20396206037395825,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 5703.875,
+    "requantise + stereo": 140927.75,
+    "antialias": 5081.5,
+    "IMDCT": 23160.3125,
+    "IMDCT window": 7707.0625,
+    "overlap": 72646.875,
+    "matrixing (Lee + V codes)": 389374.0,
+    "window": 219112.0,
+    "output copy": 12255.0,
+    "IMDCT (short, with its window)": 328262.6875
+   },
+   "staged_granules": 16
+  },
+  "AFTERHRS.MP3 speech": {
+   "granules": 194,
+   "divisor": 2,
+   "rate_out": 5512,
+   "cycles_mean": 839890.3402061856,
+   "cycles_min": 430292,
+   "cycles_max": 931685,
+   "speed": 0.29688475169368833,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 3085.625,
+    "requantise + stereo": 72181.8125,
+    "antialias": 46766.0,
+    "IMDCT": 212851.625,
+    "IMDCT window": 97632.3125,
+    "overlap": 3884.0,
+    "matrixing (Lee + V codes)": 158902.0,
+    "window": 219958.0,
+    "output copy": 7359.0,
+    "IMDCT (short, with its window)": 19496.0
+   },
+   "staged_granules": 16
+  },
+  "X8K16.MP3 speech": {
+   "granules": 44,
+   "divisor": 2,
+   "rate_out": 4000,
+   "cycles_mean": 797360.2272727273,
+   "cycles_min": 495541,
+   "cycles_max": 896081,
+   "speed": 0.43096750031709746,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 3082.375,
+    "requantise + stereo": 93177.25,
+    "antialias": 20138.25,
+    "IMDCT (short, with its window)": 128591.3125,
+    "overlap": 25295.125,
+    "matrixing (Lee + V codes)": 158902.0,
+    "window": 219958.0,
+    "output copy": 7359.0,
+    "IMDCT": 97843.1875,
+    "IMDCT window": 35174.875
+   },
+   "staged_granules": 16
+  },
+  "X11K24.MP3 speech": {
+   "granules": 60,
+   "divisor": 2,
+   "rate_out": 5512,
+   "cycles_mean": 799647.0666666667,
+   "cycles_min": 511010,
+   "cycles_max": 895837,
+   "speed": 0.3118258610532524,
+   "pcm_mismatch": 0,
+   "stages": {
+    "loop and dispatch": 3089.5,
+    "requantise + stereo": 139481.125,
+    "antialias": 5253.0,
+    "IMDCT": 19020.1875,
+    "IMDCT window": 7707.3125,
+    "overlap": 36279.0,
+    "matrixing (Lee + V codes)": 158902.0,
+    "window": 219958.0,
+    "output copy": 7359.0,
+    "IMDCT (short, with its window)": 200013.25
+   },
+   "staged_granules": 16
+  }
+ },
+ "note": "MartyPC IBM 5150 (GLaBIOS, 4.77 MHz), tools/x3xtmarty.py, 2026-10-22. granule: the XT part GRANULE only (the FRONT part not included); open: the final two-half part (OPEN includes the tail check and the kernel copy); granule figures were taken on the part before its two-half layout and re-taken after it: 1,505,843 cycles against 1,505,847 for XT Standard on AFTERHRS.MP3"
+}

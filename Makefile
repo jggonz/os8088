@@ -6292,9 +6292,10 @@ $(BUILD)/xtmp3.bin: apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
 	@echo "xtmp3:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin $(BUILD)/x3front.bin $(BUILD)/x3art.bin \
-                    $(BUILD)/x3stdp.bin tools/os88pkg.py $(PKGZSTAMP)
+                    $(BUILD)/x3stdp.bin $(BUILD)/x3xt.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@ --part $(BUILD)/x3front.bin \
-		--part $(BUILD)/x3art.bin --part $(BUILD)/x3stdp.bin --part-compress lz4
+		--part $(BUILD)/x3art.bin --part $(BUILD)/x3stdp.bin \
+		--part $(BUILD)/x3xt.bin --part-compress lz4
 
 # --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
 # The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
@@ -6325,6 +6326,35 @@ $(BUILD)/x3stdp.bin: apps/xtmp3/x3std.asm $(X3PARTDEP) $(BUILD)/x3sgen.inc | $(B
 	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
 		-o $@ apps/xtmp3/x3std.asm
 	@echo "x3stdp: $(call FILESIZE,$@) bytes"
+
+# --- XTMP3's XT BACKEND (S7; SPEC.md 121.3, 121.4, 121.10; docs/xtmp3/XT.md):
+# x3xt.asm is a far-called OP_SEG part carrying XTGEN.BIN, its generator
+# input, inside itself (x3gran.inc's OPEN record has no slot for an asset);
+# its OPEN expands the profile's table pack into the segments it is handed
+# (tools/x3xttab.py's recurrences, a Fletcher-32 checked against the
+# generator's).
+# build/x3xtk.inc is what tools/x3xtgen.py assembles for it - the claim's
+# layout, Lee's DCTs, each profile's window pass, the IMDCT row blocks -
+# after x3xttab's and its own --selfcheck; both are standard library only,
+# so numpy stays off the make path. tests/x3xtunit.py and the x3xtexact row
+# hold the part to tools/x3simxt.py byte for byte.
+X3XTGENDEPS := tools/x3xtgen.py tools/x3xttab.py tools/x3tables.py tools/x3tab_iso.py
+$(BUILD)/x3xtk.inc: $(X3XTGENDEPS) | $(BUILD)
+	python3 tools/x3xttab.py --selfcheck
+	python3 tools/x3xtgen.py --selfcheck -o $@
+
+$(BUILD)/XTGEN.BIN: $(X3XTGENDEPS) | $(BUILD)
+	python3 tools/x3xtgen.py --xtgen $@
+
+$(BUILD)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc \
+                   $(BUILD)/XTGEN.BIN | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -I $(BUILD)/ -o $@ apps/xtmp3/x3xt.asm
+	python3 tools/x3xtgen.py --seal $@
+	@echo "x3xt:   $(call FILESIZE,$@) bytes"
+
+.PHONY: x3xt
+x3xt: $(BUILD)/x3xt.bin $(BUILD)/XTGEN.BIN
+xtmp3: x3xt
 
 # INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
 # system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and

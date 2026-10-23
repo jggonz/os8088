@@ -115,3 +115,80 @@ feel, and that measurement belongs to S10 on MartyPC. The engine behind
 the face is a demo that plays nothing; S8 replaces it behind the same
 names. Looked at on QEMU only - Hercules through its software renderer -
 and never on 86Box or a real card.
+
+## 2026-10-22 — the XT backend on the target
+
+*The XT track (S7), on `xtmp3/xt`. The contract notes and every table are
+[docs/xtmp3/XT.md](xtmp3/XT.md). The emulators were Unicorn on the host,
+QEMU for the exactness row, and MartyPC's IBM 5150 for every cycle. Nothing
+here ran on 86Box or on iron.*
+
+**Observed, in this order.**
+
+- **The model came first.** `tools/x3simxt.py` runs x3sim's front end into
+  the study's integer chain. It settles what the study had left open:
+  - requantisation through RQL;
+  - the per-subband IMDCT switch;
+  - a mono downmix that mixes spectra when both channels' blocks agree and
+    windowed outputs when they do not;
+  - V codes taken from the DCT's outputs, the sign going into the add or
+    sub.
+
+  Its first quality run reproduced the study's figures within a few tenths
+  of a dB on every XT fixture, before a line of the part existed.
+- **Then the part, and a generator beside it.** `tools/x3xtgen.py` writes
+  every address the 8088 does not need to compute: the layout of the
+  claim, Lee's DCT as straight-line code, each profile's window pass as
+  unrolled rows.
+- **OPEN's expansion matched on the first run.** In Unicorn, every table
+  OPEN built was byte-identical to the generator's on all four profiles.
+- **The first granules were bit-exact too**, on the two XT fixtures for
+  every profile. Because that seemed too easy, a deliberately damaged
+  constant went in; the first damage was too small to reach 8-bit output,
+  and a larger one was caught at granule 1.
+- **The STANDARD track then pinned the record and the ABI**, and the part
+  was moved onto them. That meant the header vector table, CAPS and OPEN
+  records, separate claims per segment, and STATS' layout. One decision
+  came out of it: the OPEN record has no slot for an asset, so the part
+  carries XTGEN.BIN inside itself.
+- **The exactness row reuses the STANDARD track's bench mechanism.** It
+  runs QEMU booting the shipping front end into the XT part. All 51 cases
+  were exact.
+- **MartyPC agreed bit for bit as well.** Its 8088 core gave the same PCM
+  on every granule it timed.
+
+**What the measurements changed.**
+
+- **The model priced the kernels well and the code between them less
+  well.** The first build took 1,662,211 cycles a granule for XT Standard
+  on the song, where the model expected 1.37 M.
+- **The IMDCT crossover is 12.5 lines.** The study had modelled 9.6, and
+  the factored form costs 17,900 cycles, not 11,300.
+- **Nine changes followed, each re-checked bit-exact and re-measured
+  only where it moved.** The largest:
+  - the bottom of Lee's recursion kept in registers;
+  - the IMDCT window fused with the overlap;
+  - butterflies with two zero lines skipped.
+
+  Together they brought XT Standard to 1,505,847 (−9.4%). The window
+  pass, the largest stage, was already within 11% of the 1,277 cycles a
+  pair measured alone in the study.
+- **Memory was the surprise.** Summed honestly with the engine's
+  primary, the XT Standard path came to about 413 KB against SPEC.md
+  121.10's 400,000 bytes.
+- **The answer was the OS's own shrink-to-fit.** Everything only OPEN
+  reads now sits behind a resident 29 KB, checked by a Fletcher sum
+  before it runs. OPEN copies the chosen profile's kernels into a slot,
+  and the claim can then shrink, with no change to the ABI.
+- **The harness proves the shrink is safe.** It overwrites the tail with
+  `int3` after every OPEN and decodes anyway.
+
+**Intentions, not yet observations.**
+
+- **Fitting 400,000 bytes for XT Standard also needs the engine** to
+  claim its ring after OPEN and the shrink. The numbers went to the engine
+  track; the decision is theirs and the integrator's.
+- **No figure here includes the front end's Huffman decode or the disk.**
+- **The 286, 386 and 486 numbers are 86Box's to take.**
+- **Nobody has listened to the target's own output yet.** Its PCM is the
+  model's to the byte, so the study's listening WAVs stand in for it.

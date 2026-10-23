@@ -59,6 +59,11 @@ X3PART_ART   equ 1                  ; the face's pictures and fonts, eager
 X3PART_STD   equ 2                  ; the STANDARD reconstruction, lazy
                                     ; (the XT track's rows follow: see the
                                     ; table at the foot of this file)
+; --- the XT track (S7): its one part ---------------------------------------------
+X3PART_XT    equ 3                  ; the XT reconstruction, lazy: x3xt.asm,
+                                    ; carrying XTGEN.BIN inside itself (OPEN
+                                    ; expands its tables from it; x3gran.inc's
+                                    ; OPEN record has no slot for an asset)
 
 X3_TICK     equ 5                   ; ticks between passes: the demo's clock,
                                     ; and the needles' 3.6 a second
@@ -1690,13 +1695,14 @@ x3_ab3:     db 'this machine can sustain', 0
 
 ; --- THE PARTS TABLE (SPEC.md 20.12.3; the STANDARD track's rows) ------------------
 ; os88pkg.py lays the parts out after the image in this order, from the Makefile's
-; --part arguments: build/x3front.bin, build/x3art.bin and build/x3stdp.bin, all lz4.
-    OS88_PARTS_BEGIN 3
+; --part arguments: build/x3front.bin, build/x3art.bin, build/x3stdp.bin and
+; build/x3xt.bin, all lz4.
+    OS88_PARTS_BEGIN 4
       OS88_PART OP_SEG, OP_COMP             ; X3PART_FRONT: x3front.asm
       OS88_PART OP_ASSET, X3_ARTFLAGS       ; X3PART_ART: tools/os88x3art.py
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; X3PART_STD: x3std.asm
-      ; >>> the XT track's rows go here (x3xt.asm and its pack), lazy, with
-      ; their X3PART_* numbers beside X3PART_STD's and the count above <<<
+      ; --- the XT track's row (S7) ---
+      OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; X3PART_XT: x3xt.asm (+ XTGEN.BIN)
     OS88_PARTS_END
 
 %define OS88UI_ABOUT
