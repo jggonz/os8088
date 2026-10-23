@@ -1,0 +1,57 @@
+# XTMP3: the XT backend model's output (tools/x3simxt.py, SPEC.md 121.4).
+# Made by `tools/x3simxt.py --golden`; x3xt.asm is BIT-EXACT when its PCM
+# (unsigned 8-bit mono, untrimmed, from the first audio frame) hashes to
+# these.  fixture, profile, divisor, samples, SHA-256, output clips, V
+# codes on the slow path.  XTGEN.BIN CRC-32 67C85179, FAST_MIN 10.
+
+AFTERHRS.MP3  std    d1  111744 ef3e320c06d73affc6f7b417c3f260c8c1fa2c0b7fc0e7cd0d48eb9ae6fb469d clip 0 vslow 0
+AFTERHRS.MP3  fast   d1  111744 ab753bbdb15eb14bf94545d929df0154f907a51f47fbfa3c9601c6095af5785f clip 0 vslow 0
+AFTERHRS.MP3  turbo  d1  111744 1446b3e2e6fbf6a9c6f3552432437a105f5f4a5c7ec774b6b6e901fb0de44ce1 clip 0 vslow 0
+AFTERHRS.MP3  speech d2   55872 e026bd702ada0462ab46015e9813c1181da90c41456f0f3ed669e8d9393acd0a clip 0 vslow 0
+X8K16.MP3     std    d1   25344 73d0fdc5c96a1c00f1d9bd77005f6239585fc601edf8f5448eed7590af7aa51c clip 0 vslow 0
+X8K16.MP3     fast   d1   25344 9f18130268ffe6ce40e90998c1bfa7a2f6d71f0cd887443edaef2402fac633b4 clip 0 vslow 0
+X8K16.MP3     turbo  d1   25344 1b15f75f953e18c60bb454ef40173f6e2dd0f9d1c8793ad4edd1bf7c8d9a820a clip 0 vslow 0
+X8K16.MP3     speech d2   12672 79e54e0c5ff490e55fd3bced47f50e0e641cb52fba14b8b25e9a968e72bb1063 clip 0 vslow 0
+X11K24.MP3    std    d1   34560 5c8306f8853ff54c062a0a9d7b659a754db03a20fb326a063d1f6bcab44ac1d8 clip 0 vslow 0
+X11K24.MP3    fast   d1   34560 3c657905f1a9729a96f170fc30b38d56536d6b27b9325351454a03b0a559df78 clip 0 vslow 0
+X11K24.MP3    turbo  d1   34560 ee34e25981327a52d179f832b4b0665b37222e5aa8342a017b01a114512defd1 clip 0 vslow 0
+X11K24.MP3    speech d2   17280 1664ee892f49b6194cd6be7393629518d3d187da1d92cdb31d54b95e1f440f8b clip 0 vslow 0
+X12K32.MP3    std    d1   25344 d2fde8de9af7cbf621ee1691b9ee11a7cd68ca21c5fec595150ce3bf3c2e6e5b clip 0 vslow 0
+X12K32.MP3    fast   d1   25344 bfed1285afb63627b6fa7277ec3db516c669c872287367c95196f830ec71464e clip 0 vslow 0
+X12K32.MP3    turbo  d1   25344 fb569be7d1f048513e7fbcc503dee37764931f49836c4306a7b7c5762ac37a95 clip 0 vslow 0
+X12K32.MP3    speech d2   12672 9c60afdfa147a9cce64f11dc830a3bafedff034d6e118d2e7402eb30cdecb8bf clip 0 vslow 0
+M16.MP3       std    d1   33408 0fd3ee7e4656d17c48b89709b745d66354b9e6907eba8542cc8900af08f2c98a clip 0 vslow 0
+M16.MP3       fast   d1   33408 d638dabbd07f0e29245ce7d58b58bdc5ab539a2819fae58b9350caff129da19d clip 0 vslow 0
+M16.MP3       turbo  d1   33408 4bf199c39b027a52a2972f127ae9849c341a34618a690f537dc0dcc80d0db893 clip 0 vslow 0
+M16.MP3       speech d4    8352 1e624f02f4ab379742405ab319a7e0c370aecd8b495d6e2f3e9e966bf749b1c5 clip 0 vslow 0
+NIGHTSIG.MP3  std    d1  221760 04f252802d44c88ad679b1a3a983dbb06be62d177e40a023276147a0adb01c55 clip 0 vslow 0
+NIGHTSIG.MP3  fast   d1  221760 2dcddc94bda5202b78ca959246d84a4672bdcc9281aceb3d234f1ec4f1ab91b0 clip 0 vslow 0
+NIGHTSIG.MP3  turbo  d1  221760 c6b284c9007b33408d2b1648f883565e9d659c3c4557aa8cf8f8e4b8e46fe84c clip 1 vslow 0
+NIGHTSIG.MP3  speech d4   55440 d24b9a23f24b0c9ff10d9b227c16348bc1e336be5f07ae2176ce655b030cec2f clip 0 vslow 0
+M22.MP3       std    d1   34560 b1d08b7772a712c2c7d68b1ddcea120c0b80a43dbfc9a2cd660967afa344f45a clip 0 vslow 0
+M22.MP3       fast   d1   34560 054e649434f0ec5a5967113c11a093b6f8291af7c4ce21906294dc962cab44ba clip 0 vslow 0
+M22.MP3       turbo  d1   34560 99c8040d54452698741e8b4fc7e9705bff9f79f8791c2bb28b1d7d81caf5535d clip 0 vslow 0
+M22.MP3       speech d4    8640 75924d5d3dd13baca1b662ed9ea02027bc2db1391b8c8b113c0eff25ac259ccb clip 0 vslow 0
+M24.MP3       std    d1   37440 96131f3eba5f5152e0563fab4164bc8081a610fd98bd78f0839432ce768e2bc0 clip 0 vslow 0
+M24.MP3       fast   d1   37440 21a13d9172fa93e84e15d3d283ccd66da055aa501b860120dad091b21b029e8b clip 0 vslow 0
+M24.MP3       turbo  d1   37440 6c01dc5e2671c22c548fd0761f29997b0d970224d473b9903732f97510cfb3a5 clip 0 vslow 0
+M24.MP3       speech d4    9360 1c798c4089020815e0c85693968adb0fb6338989a793b00aed66d48ff02587c3 clip 0 vslow 0
+IS22.MP3      std    d1   23616 eb4e8f4cf58f60fc2f37f96afffa8388362e2668ae6c430d798fb2825804e04b clip 0 vslow 0
+IS22.MP3      fast   d1   23616 df98c1ce14b0c00174ca28e72c71c25ef01cf0bf292ffd13e59df815af584b5a clip 0 vslow 0
+IS22.MP3      turbo  d1   23616 fa537ca1bbf539efba15fa20594be6bbbe5e2fe2b2de724ca3140d619011dd40 clip 0 vslow 0
+IS22.MP3      speech d4    5904 372341a8bebf2f1e5819496828a552c289b043b2b4952d28e92f38814af2429c clip 0 vslow 0
+MONO44.MP3    std    d1   89856 67ee239af8cbd8d83b68396c84ba87bc2f386fb9ae33e4cf9b000b9270549034 clip 0 vslow 0
+MONO44.MP3    fast   d1   89856 456476ecbaf36aca3062210345398fb657b047cf9d906e8d4218a4e12e1c510d clip 0 vslow 0
+MONO44.MP3    turbo  d1   89856 215b9e89d9a921566b141ddebfdda1683cd4da576c124d9daecebb5f72647ae9 clip 0 vslow 0
+NEONDRV.MP3   std    d1  442368 74ccf513ea928c38cf7ad1cfba32ec25193dc3080cdd0f92c6e66258119d4afd clip 2 vslow 0
+NEONDRV.MP3   fast   d1  442368 43dc13fd30e72d3b06d9853888cf1c79dc22977a0a154f34011f2cd9785aecaf clip 2 vslow 0
+NEONDRV.MP3   turbo  d1  442368 301d5c0543b9f33492a18cec5610cdb223c71b25c08556f72195da35fb7db63f clip 0 vslow 0
+ISMS44.MP3    std    d1   46080 eed85c9c2f82c7251c131fc5755b814bad88836ece4ebb8dc37f2da772c84037 clip 0 vslow 0
+ISMS44.MP3    fast   d1   46080 b949320e5eaf3f7cca4c8bed9dd01ff1ab624d995b2b649ea43fe282bf73601e clip 0 vslow 0
+ISMS44.MP3    turbo  d1   46080 cff5e4f17193556aa3409c4e640441483ed3bad6978292f1e62c5457c51f1f77 clip 0 vslow 0
+C128.MP3      std    d1   67968 26056937bb94e5c9ed4e65062998bbe995e660c649ec307b954b90af6898a5fc clip 0 vslow 0
+C128.MP3      fast   d1   67968 58a40fe0a66b73d26237679b7092ad3d027df9d8f4db064d51df6ae0d95a64b5 clip 0 vslow 0
+C128.MP3      turbo  d1   67968 b68f67b4656e9a1e1db227b69a1b64aadd46aad51d3df34e0093353980df7c1b clip 0 vslow 0
+BBADSIDE.MP3  std    d1   49536 22f52fc07b3961e2c83104d1da9d77f53a0265ea15acc1628bc9e3897415e5e0 clip 0 vslow 0
+BBADSIDE.MP3  fast   d1   49536 71b96c3a5b8a883cb6f976548632fef3c6086f7e0c7056c88b43e24f1c2d4a83 clip 0 vslow 0
+BBADSIDE.MP3  turbo  d1   49536 f1abb8dfd66f7e733e869864910e00d61ef21789ad3a393e0345fa7412eb4c73 clip 0 vslow 0
