@@ -328,6 +328,7 @@ sb_spin:
     call sb_now
     sub ax, [sb_t0]
     sbb dx, [sb_t0+2]
+    js .l                           ; (a span read back: not yet)
     cmp dx, [sb_wait+2]
     jb .l
     ja .out
@@ -339,9 +340,12 @@ sb_spin:
     ret
 
 ; sb_now - DX:AX = the BIOS tick (high) and the 8253's channel 0 counting up
-; (low): one count 838 ns, one tick 65,536 counts. No cli: the latch holds
-; the count until it is read, and the tick is read again until it agrees
+; (low): one count 838 ns, one tick 65,536 counts - apps/os88pit.inc's
+; pit_now without its cli (a backend never masks interrupts): the tick read
+; again until it agrees, and a reload whose IRQ0 is still pending (the
+; PIC's IRR) given its tick, else the time steps back across it
 sb_now:
+    push bx
     push es
     mov ax, 0x40
     mov es, ax
@@ -350,11 +354,22 @@ sb_now:
     mov al, 0
     out 0x43, al
     in al, 0x40
-    mov ah, al
+    mov bl, al
     in al, 0x40
-    xchg al, ah
-    neg ax
+    mov bh, al
+    mov al, 0x0A                    ; OCW3: the next read of 20h is the IRR
+    out 0x20, al
+    in al, 0x20
     cmp dx, [es:0x6C]
     jne .a
+    neg bx
+    test al, 1
+    jz .c
+    or bx, bx                       ; pending, under half a tick in: the
+    js .c                           ; reload came first
+    inc dx
+.c:
+    mov ax, bx
     pop es
+    pop bx
     ret

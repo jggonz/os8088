@@ -1458,6 +1458,15 @@ x3_snd_open:
     mov [x3_fby], ax
     call x3_ringget                 ; (sized by the bytes a second)
     jc .nomem
+    mov ax, [x3_orate]              ; THE SLEEP'S FLOOR: a sleep of one tick
+    mul word [x3_fby]               ; is up to two (110 ms, 1/9 of a second),
+    mov cx, 9                       ; the card's block IRQ wants the NEXT
+    div cx                          ; block fed (34.5.2), and the first half
+    add ax, 3 * X3_HALF             ; after a wake takes a rung near 1.00x a
+    mov [x3_slp], ax                ; half's time to make - so the worker
+                                    ; sleeps on that much more than three
+                                    ; blocks, and on 176 KB/s's 32 KB ring
+                                    ; never: a half-ring rule ran it dry at 1.07x
     xor ax, ax
     mov [x3_total], ax
     mov [x3_staged], ax
@@ -1467,6 +1476,10 @@ x3_snd_open:
     mov [x3_lasthalf], al
     mov [x3_sended], al
     mov [x3_drvund], al
+    mov [x3_wslow], al              ; a new rung: a new window
+    mov [x3_wg], ax
+    mov [x3_wacc], ax
+    mov [x3_wacc+2], ax
     mov byte [x3_fill], 1           ; the producer, on the UI task: whole
     mov cx, [x3_ring_n]             ; halves, the ring less one
 .pre:
@@ -1727,10 +1740,8 @@ x3_worker:
     cmp byte [x3_job], WJ_CONV      ; a conversion and a probe run flat out:
     jae .yield                      ; the machine's whole speed is the point
     mov ax, [x3_total]              ; the card: a tick - or none while it
-    sub ax, [x3_cons]               ; holds under half its ring (a 32 KB ring
-    mov dx, [x3_rsz]                ; is 186 ms of 44.1 kHz 16-bit stereo and
-    shr dx, 1                       ; a tick is 55)
-    cmp ax, dx
+    sub ax, [x3_cons]               ; holds less than a sleep can drain
+    cmp ax, [x3_slp]
     jb .yield
     mov ax, 1
 .sleep:
@@ -1815,7 +1826,7 @@ x3_feed:
     cmp byte [x3_drvund], 0
     jne .feed
     mov byte [x3_drvund], 1
-    X3LOG 'U', [x3_total]
+    X3LOG 'U', [x3_played+2]
     call x3_under
     jmp short .feed
 .nund:
@@ -1836,7 +1847,6 @@ x3_feed:
 .more:
     mov ax, [x3_total]              ; comfortably full: nothing this pass
     sub ax, [x3_cons]
-    X3LOG 'w', ax
     mov bx, [x3_rsz]
     sub bx, X3_HALF
     cmp ax, bx
@@ -1844,7 +1854,6 @@ x3_feed:
     cmp byte [x3_job], WJ_NONE      ; parked meanwhile
     je .out
     call x3_feedhalf                ; CF = 1 nothing published
-    X3LOG 'h', [x3_staged]
     jc .out
     mov cx, [x3_total]
     cmp byte [x3_ext], 0            ; an external ring: its control word is
@@ -1887,9 +1896,13 @@ x3_feedhalf:
     add ax, X3_PCMSZ
     cmp ax, [x3_rsz]
     ja .none
+    call pit_now                    ; (the slow window's clock)
+    mov [x3_wt0], ax
+    mov [x3_wt0+2], dx
     call x3_gran1                   ; CF = 0: CX bytes of PCM
     jc .dry
     call x3_stage                   ; ...into the grant at [x3_staged]
+    call x3_window                  ; is the machine keeping up?
     jmp short .top
 .file:
     call x3_filebytes               ; CF = 0: CX bytes staged from the ring
@@ -1917,6 +1930,77 @@ x3_feedhalf:
     ret
 .none:
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; x3_window - THE SLOW WINDOW (SPEC.md 121.5): each live granule's wall time
+; (the front end, GRANULE and the feed's copy, from [x3_wt0]) summed over
+; X3_WINGR granules; a window under X3_SLOW = 1.10 audio seconds a wall
+; second counts, two in a row ask for a step DOWN (and the count starts
+; again), a window at or over it clears the count - the hysteresis. Never a
+; step UP: nothing here promotes mid-track. The disk's time is not in it: a
+; read stalls the worker while the ring plays on, and a disk that cannot keep
+; up shows as an underrun, which steps down by itself. The worker's (not the
+; pre-roll's); keeps all but AX
+; -----------------------------------------------------------------------------
+x3_window:
+    cmp byte [x3_fill], 0
+    jne .out
+    cmp byte [x3_sjob], WJ_LIVE
+    jne .out
+    push bx
+    push cx
+    push dx
+    mov bx, x3_wt0
+    call x3_pitd
+    add [x3_wacc], ax
+    adc [x3_wacc+2], dx
+    inc word [x3_wg]
+    cmp word [x3_wg], X3_WINGR
+    jb .pop
+    mov cx, [x3_wg]                 ; THE WINDOW'S SPEED
+    call x3_audpit                  ; DX:AX = its audio, in pit counts
+    mov bx, [x3_wacc]
+    mov cx, [x3_wacc+2]
+    call x3_ratio                   ; AX = x 100
+    mov [x3_st+X3S_SPEED], ax
+    X3LOG 'W', ax
+    xor bx, bx
+    mov [x3_wg], bx
+    mov [x3_wacc], bx
+    mov [x3_wacc+2], bx
+    cmp ax, X3_SLOW
+    jae .fine
+    inc byte [x3_wslow]
+    cmp byte [x3_wslow], 2
+    jb .pop
+    mov byte [x3_wslow], 0          ; two slow windows: a step down
+    mov al, X3R_STEP
+    call x3_kick
+    jmp short .pop
+.fine:
+    mov byte [x3_wslow], 0
+.pop:
+    pop dx
+    pop cx
+    pop bx
+.out:
+    ret
+
+; x3_audpit - CX granules of 576 source samples at [x3_srate] -> DX:AX =
+; their duration in pit counts. keeps the rest
+x3_audpit:
+    push bx
+    push cx
+    mov ax, 576
+    mul cx
+    mov cx, ax
+    mov ax, 0x34DE                  ; x 1,193,182 / rate
+    mov dx, 0x0012
+    mov bx, [x3_srate]
+    call x3_mdiv
+    pop cx
+    pop bx
     ret
 
 ; x3_under - an underrun, counted (SPEC.md 121.6), and on a live stream the
@@ -3627,6 +3711,7 @@ x3l_launch:
     mov [x3l_acc+2], ax
     mov ax, [x3_ring+X3R_POS]
     mov [x3l_pos0], ax
+    mov byte [x3l_warm], 1          ; the first granule untimed (below)
     call x3_wspawn
     jc .no
     mov byte [x3_job], WJ_CAL
@@ -3710,6 +3795,13 @@ x3l_wprobe:
 .timed:
     mov bx, x3l_t0
     call x3_pitd                    ; DX:AX = the granule's wall time
+    cmp byte [x3l_warm], 0          ; THE FIRST GRANULE IS A WARM-UP, untimed:
+    je .count                       ; it overlaps the UI task's repaint of the
+    mov byte [x3l_warm], 0          ; state that launched the probe, which is
+    mov ax, [x3_ring+X3R_POS]       ; not the machine's speed (and the bytes
+    mov [x3l_pos0], ax              ; it consumed are not charged)
+    jmp .loop
+.count:
     add [x3l_acc], ax
     adc [x3l_acc+2], dx
     inc word [x3l_g]
@@ -3752,13 +3844,8 @@ x3l_speed:
     push dx
     push si
     push di
-    mov ax, 576                     ; THE AUDIO, in pit counts:
-    mul word [x3l_g]                ; g x 576 x 1,193,182 / rate
-    mov cx, ax
-    mov ax, 0x34DE
-    mov dx, 0x0012
-    mov bx, [x3_srate]
-    call x3_mdiv                    ; DX:AX
+    mov cx, [x3l_g]                 ; THE AUDIO, in pit counts
+    call x3_audpit
     push dx
     push ax
     mov ax, [x3_dkby]               ; THE DISK: consumed x pit / byte
@@ -4449,6 +4536,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_ghave, 1                 ; ...the grant...
     X3B x3_grnt, 2
     X3B x3_rsz, 2                   ; ...its size
+    X3B x3_slp, 2                   ; the lead the worker may sleep on
     X3B x3_ext, 1                   ; ...1: an external ring, at x3_xseg:0
     X3B x3_xseg, 2
     X3B x3_rmask, 2
@@ -4475,6 +4563,10 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_pkr, 1
     X3B x3_last, 2                  ; the last frame made (a ramp's start)
     X3B x3_rampn, 1
+    X3B x3_wt0, 4                   ; THE SLOW WINDOW: a granule's start...
+    X3B x3_wacc, 4                  ; ...the window's wall time...
+    X3B x3_wg, 2                    ; ...its granules...
+    X3B x3_wslow, 1                 ; ...slow windows in a row
     X3B x3_homed, 2                 ; the folder we were launched from
     X3B x3_homev, 1
     X3B x3_dkpit, 4                 ; the disk's measured cost: time...
@@ -4493,6 +4585,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3l_t0, 4
     X3B x3l_pos0, 2                 ; ...the file offset it began at
     X3B x3l_goff, 2                 ; ...the grant's rolling offset
+    X3B x3l_warm, 1                 ; ...1: the next granule is the warm-up
 %ifdef X3STUB
     X3B x3_dlog, 3 * 16             ; the debug log (X3LOG)
     X3B x3_dlogn, 1

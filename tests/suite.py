@@ -467,6 +467,23 @@ FAST = [
         "figures were measured on, entry for entry. Soak because it "
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
+    Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 420.0,
+        "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
+        "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "
+        "X3STUB.CFG), on QEMU because what is asserted is behaviour: the "
+        "ladder on five machines (capable stays Original; middling Half or "
+        "Quarter; slower Quarter; an XT-class one Decode first; a hopeless "
+        "one bounded in time), a mid-track slowdown stepping down ONCE and "
+        "never back, Decode first end to end (the drive dialog, the Save "
+        "dialog, the WAV's fields and length on the host, the cache reused "
+        "with no granule decoded), Esc cancelling and deleting only its "
+        "temp, a disk filled mid-write, stale and incomplete caches "
+        "refused, no fixed disk, two writable volumes, a finished WAV "
+        "through the SB16 with no decoder resident, and pause/resume",
+        needs=("qemu", "nasm", "mtools"), serial=True, timeout=1500,
+        wants=("build/xtmp3s.o88", "build/xtmp3s.bin", "build/os8088.img",
+               "build/mixercfg/SYSTEM.CFG", "build/mbr.bin",
+               "build/boothd.bin", "build/kernel.sys")),
     Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,
         "docs/plans/ROM-PLAN.md 1.3: the ROM image builder re-derives its own "
         "invariants - 55 AA and a 32KB declaration (40KB would send the "
