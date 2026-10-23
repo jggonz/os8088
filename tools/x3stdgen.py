@@ -14,9 +14,12 @@ asked to do - and writes the operations it saw, in order, as straight-line
 NASM macro calls. apps/xtmp3/x3std.asm defines the macros (the 8086 arithmetic
 of each one) and %includes the result.
 
-Every constant is addressed in the SHIPPED table (x3std.bin's ROT, SYNW and
-SYNIDX, tools/x3tables.py): the generator finds each multiplier's word there,
-so the code and the blob cannot disagree about a number.
+The DCT's multipliers are addressed in the SHIPPED table (x3std.bin's ROT):
+the generator finds each one's word there. The window's are immediates (a
+`mov ax, imm` is 4 cycles to a load's 14, sixteen times an output sample),
+written from x3tables' STD.SYNW - the definition the blob is made from - and
+--selfcheck holds every one to its SYNW word in the blob, so the code and the
+blob cannot disagree about a number either way.
 
 --selfcheck interprets the emitted program in Python with the same int32 /
 int16 semantics the macros implement and holds it bit-exact to x3sim.dct2_i,
@@ -31,8 +34,11 @@ The emitted macros:
       xs_t, each output X[k] rounded into V and stored in ring column k at
       [di + 64 k] and [di + 64 k + 32] (the doubled ring)
   X3SG_WIN1 / X3SG_WIN2 / X3SG_WIN4     one slot's window: N outputs, each
-      XS_W0 then the non-zero taps XS_WT (disp from di, the coefficient's
-      address) then XS_WOUT m (round, clip, store to xs_pcmt + 2 m)
+      XS_W0 then the non-zero taps XS_WTP / XS_WTM (disp from di, |D|: the
+      ring holds V + 32768, so a product is an unsigned MUL, added or
+      subtracted by D's sign) then XS_WOUT m, lo, hi (the correction that
+      cancels 32768 sum(D) and rounds, mod 2^32; >> 13, clip, store to
+      xs_pcmt + 2 m)
 """
 import argparse
 import os
@@ -202,15 +208,37 @@ def window_taps(div):
     return out
 
 
+def wout_corr(taps):
+    """The ring holds V + 32768 (V XOR 8000h) so every product is an unsigned
+    MUL by |D|, added or subtracted by D's sign: the sum is then the true one
+    plus 32768 sum(D). This is what XS_WOUT adds to cancel that and round, mod
+    2^32 - where the true accumulator lies, so the wrap is exact."""
+    return (4096 - 32768 * sum(coef for _, _, _, _, coef in taps)) & 0xFFFFFFFF
+
+
 def emit_window(div):
     lines = ['%%macro X3SG_WIN%d 0' % div]
     for m, taps in window_taps(div):
         lines.append('    XS_W0')
-        for disp, w, *_ in taps:
-            lines.append('    XS_WT %d, xs_synw+%d' % (disp, w * 2))
-        lines.append('    XS_WOUT %d' % (m * 2))
+        for disp, w, age, col, coef in taps:
+            lines.append('    %s %d, %d' % ('XS_WTP' if coef > 0 else 'XS_WTM', disp, abs(coef)))
+        c = wout_corr(taps)
+        lines.append('    XS_WOUT %d, %d, %d' % (m * 2, c & 0xFFFF, c >> 16))
     lines.append('%endmacro')
     return lines
+
+
+def run_window(taps, ring):
+    """One output as the macros compute it: ring[(age, col)] holds V + 32768
+    as an unsigned word; 32-bit wrapping sums; the correction; >> 13; clip."""
+    acc = 0
+    for _, _, age, col, coef in taps:
+        u = ring[(age, col)]
+        acc = (acc + (u * abs(coef) if coef > 0 else -u * abs(coef))) & 0xFFFFFFFF
+    acc = (acc + wout_corr(taps)) & 0xFFFFFFFF
+    if acc >= 1 << 31:
+        acc -= 1 << 32
+    return max(-32768, min(32767, acc >> 13))
 
 
 def make_inc():
@@ -290,6 +318,15 @@ def selfcheck():
             for _, w, _, _, coef in taps:
                 if synw[w] != coef:
                     bad.append('SYNW word %d is not the coefficient' % w)
+            for trial in range(40):     # the biased arithmetic, numerically
+                v = {(age, col): rng.choice((-32768, 32767, rng.randrange(-32768, 32768)))
+                     for _, _, age, col, _ in taps}
+                want = sum(coef * v[(age, col)] for _, _, age, col, coef in taps)
+                want = max(-32768, min(32767, (want + 4096) >> 13))
+                got = run_window(taps, {k: x + 32768 for k, x in v.items()})
+                if got != want:
+                    bad.append('window div %d output %d: biased %d != %d' % (div, m, got, want))
+                    break
     # multipliers the hand-written macros of x3std.asm treat as unsigned (a
     # 32 x 16 product's low word is a MUL): every table they read is
     # non-negative (the generated code takes |c| from ROT and a sign)
