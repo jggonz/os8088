@@ -796,6 +796,14 @@ x3d_bput:
     mov cx, [x3d_bw]
     mov dx, [x3d_bh]
     call OSAPI_GFX_BLIT1
+    jnc .done
+    mov di, ax                      ; refused: kern_small takes x on the byte
+    and di, 7                       ; grid only. The shifted band from its
+    jz .done                        ; byte column, the x & 7 pixels before x
+    add cx, di                      ; laid in its paper - which is the ground
+    sub ax, di                      ; it sits on, for every field but a few
+    call OSAPI_GFX_BLIT1
+.done:
     pop es
     pop bp
     pop di

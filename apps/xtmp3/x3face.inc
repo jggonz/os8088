@@ -2229,9 +2229,9 @@ x3_dfull:
     DFRAME R_BEZEL, 403, 39, 490, 98
     DFRAME R_BEZEL, 404, 40, 489, 97
     ; OUTPUT, on its rule
-    DRECT R_EDGE, 312, 113, 374, 113
-    DRECT R_EDGE, 425, 113, 488, 113
-    DCSTR x3_fcapsb, x3_s_output, 400, 110, X3_SCREW
+    DRECT R_EDGE, 312, 117, 374, 117
+    DRECT R_EDGE, 425, 117, 488, 117
+    DCSTR x3_fcapsb, x3_s_output, 400, 114, X3_SCREW
     ; the grilles, and the knob's printed parts
     DPIC x3art_grillf, 312, 154, X3_SCREW
     DPIC x3art_grillf, 446, 154, X3_SCREW
