@@ -217750,6 +217750,37 @@ one for one (`xtmp3eng`'s `covox`, QEMU's parallel-port trace; its pcspk
 renders only a square and cannot carry the speaker bracket). Not shown: the
 SB Pro's stereo on its own card, a real SB16, and anything listened to.
 
+#### 121.6.1 The hold: a live play reads no disk (shipped)
+
+The Video Player's rule for its desktop Live (§98.3.18.1), for the same
+reason: a read holds `sch_lock`, so the card plays its ring alone through
+it, and a floppy whose motor has stopped charges its spin-up to the next
+refill. Before a track's ladder or job (`x3_go`), `x3h_begin` reads **the
+whole MP3** into a hold:
+
+| hold | when | how |
+|---|---|---|
+| one XMS block (`X3HK_XMS`) | `OSAPI_XMEM_CAPS` has the file's KB | 32 KB `READ_SEQ` chunks into the look-ahead's claim, each `OSAPI_XMEM_COPY`'d up |
+| a conventional claim (`X3HK_CONV`) | no pool, the file at most `X3H_CAPKB` = 192 KB, the heap's largest run holds it and `X3H_MARGKB` = 96 KB stay free beside it, and the CPU is not an 8086 | the chunks read straight into it |
+| none | otherwise, and on every 8088 | the track streams as before (§121.6's 4 KB gulps) |
+
+The load is `MD_LOAD`, state **Loading NN%** (`X3ST_LOAD`): a pass of the
+window's timer reads chunks until about 110 ms have gone, so Stop is
+answered between passes. Then the ladder or the job starts as it would
+have. From then on aplook.inc's gulps are copies: its read is `AP_RSEQ`, which the
+Audio Player leaves `os88_rseq` (AUDIO.O88 is byte-identical) and XTMP3
+makes `x3_rseq`, a copy out of the hold for the held file and the disk for
+anything else (a finished WAV, `x3_readat`'s header and fingerprint reads).
+`[x3_nrseq]` counts the disk's gulps and `[x3h_ncopy]` the hold's.
+
+**The key** is the file's folder, volume and name. A track that opens with
+the same key keeps its hold (a replay, a seek, a step, a Decode first after
+Stop). Any other track, Stop, a load cut short and a failed read each free
+it, and the kernel frees both kinds with the instance. **The ceiling
+stands:** a conventional hold is the first thing given up. `x3_plan`,
+asked for a plan the 400,000 bytes cannot hold beside it, frees the hold
+and plans again, and the track streams.
+
 ### 121.7 Decode first: choose a drive, convert the whole track, then play (shipped)
 
 **The drive dialog** (`x3c_dopen`, its own window, titled *Decode First*)

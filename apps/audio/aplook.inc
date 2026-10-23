@@ -121,6 +121,9 @@ ap_la_get:
 
 %endif
 
+%ifndef AP_RSEQ                    ; the gulp's read: os88_rseq, or an
+%define AP_RSEQ os88_rseq           ; includer's with its registers (XTMP3's
+%endif                              ; x3_rseq copies out of its hold)
 %ifdef APLOOK_REFILL
 ; =============================================================================
 ; ap_refill_chunk - read ONE gulp of the data chunk STRAIGHT INTO THE RING,
@@ -201,7 +204,7 @@ ap_refill_chunk:
     mov ax, [ap_rd_pos]
     mov dx, [ap_rd_pos+2]
     mov di, ap_rd_cur              ; one FAT link a gulp, not a walk from the
-    call os88_rseq                 ; front (SPEC.md 18.4.8.1); out CF, DX:AX
+    call AP_RSEQ                   ; front (SPEC.md 18.4.8.1); out CF, DX:AX
     APCNT apc_readat
     APCNT apc_refill
     jc .ioerr                     ; an I/O error ends the data - and says why

@@ -6303,6 +6303,7 @@ XTMP3_SRC := apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
              apps/xtmp3/x3conv.inc apps/xtmp3/x3hook.inc \
              apps/xtmp3/x3pars.inc apps/xtmp3/x3phdr.inc \
              apps/xtmp3/x3stub.inc apps/xtmp3/x3gran.inc \
+             apps/xtmp3/x3hold.inc \
              apps/audio/aplook.inc apps/audio/apspk.inc \
              apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc \
              apps/os88rseq.inc apps/os88pit.inc apps/os88dec.inc \

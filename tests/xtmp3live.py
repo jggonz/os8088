@@ -74,16 +74,17 @@ class LRig(E.Rig):
     """xtmp3eng's rig with the SHIPPED package, the card's options and the
     capture's rate"""
 
-    def __init__(self, leg, afreq=44100, sbopt="", **kw):
+    def __init__(self, leg, afreq=44100, sbopt="", mem="4", **kw):
         self.afreq = afreq
         self.sbopt = sbopt
+        self.mem = mem                  # "4": an XMS pool; "1": none
         kw.setdefault("sb", True)
         super().__init__(leg, stub=False, **kw)
 
     def launch(self, sb):
         t = self.tmp
         os88qemu.own(self.pidf, self.sock)
-        a = ["qemu-system-i386", "-machine", "pc,vmport=off", "-m", "4",
+        a = ["qemu-system-i386", "-machine", "pc,vmport=off", "-m", self.mem,
              "-drive", "file=%s,format=raw,if=floppy" % os.path.join(t, "sys.img"),
              "-drive", "file=%s,format=raw,if=floppy,index=1" % os.path.join(t, "b.img")]
         for i, img in enumerate(self.hds):
@@ -280,15 +281,16 @@ def play_live(r, leg, name, qual=None):
         s["md"] = E.MD_LIVE             # (it was, and it played out)
     s["nf0"] = r.nfetch()
     s["bpart"] = r.b("x3_bpart")
+    s["nrseq"] = r.w("x3_nrseq")
     return s
 
 
 def live_case(leg, name, want_q, rate, ch, bits, devlim, afreq, sbopt="",
-              qual=None, div=1, mono=False, std_proof=False):
+              qual=None, div=1, mono=False, std_proof=False, hold=1, mem="4"):
     print(" %s: %s" % (leg, name))
     if std_proof:
         std_has_no_xt(leg)
-    r = LRig(leg, afreq=afreq, sbopt=sbopt,
+    r = LRig(leg, afreq=afreq, sbopt=sbopt, mem=mem,
              hd=[(E.HD0_GEO, [E.fixture(name)], ["SYSTEM/APPDATA"], 0)])
     try:
         s = play_live(r, leg, name, qual)
@@ -314,6 +316,17 @@ def live_case(leg, name, want_q, rate, ch, bits, devlim, afreq, sbopt="",
               "state %d under %d" % (s2["state"], s2["under"]))
         check(leg, "the XT part was never fetched (x3_nfetch)",
               nf[X3PART_XT] == 0 and nf[X3PART_STD] >= 1, str(nf))
+        # THE HOLD (SPEC.md 121.6.1): the whole MP3 read before the ladder -
+        # XMS on -m 4, a conventional claim on -m 1 - and from LIVE to the
+        # end not one gulp off the disk; the capture below is still x3sim's
+        kind, on = r.b("x3h_kind"), r.b("x3h_on")
+        n1, nc = r.w("x3_nrseq"), r.w("x3h_ncopy")
+        check(leg, "held whole (%s), and NO READ_SEQ from LIVE to the end: "
+              "%d gulps copied out of the hold" % (
+                  {1: "XMS", 2: "a conventional claim"}.get(hold, hold), nc),
+              kind == hold and on == 1 and n1 == s["nrseq"] and nc > 0,
+              "kind %d on %d, disk gulps %d -> %d, copies %d" % (
+                  kind, on, s["nrseq"], n1, nc))
     finally:
         r.close()
     try:
@@ -330,6 +343,13 @@ def live_case(leg, name, want_q, rate, ch, bits, devlim, afreq, sbopt="",
             distinct(leg, cap[got[0]:got[0] + got[1]])
     finally:
         r.done()
+
+
+def leg_holdconv():
+    """the hold with no XMS pool (QEMU -m 1): a conventional claim, the
+    same song, the same sample-exact capture and no disk read while live"""
+    live_case("holdconv", "C128.MP3", E.Q_ORIG, 44100, 2, 16, False, 44100,
+              hold=2, mem="1")
 
 
 def leg_orig44():
@@ -543,7 +563,7 @@ def leg_xtfile():
         r.done()
 
 
-LEGS = {"orig44": leg_orig44, "orig22": leg_orig22, "half": leg_half,
+LEGS = {"holdconv": leg_holdconv, "orig44": leg_orig44, "orig22": leg_orig22, "half": leg_half,
         "dev8st": leg_dev8st, "dev8mono": leg_dev8mono, "seek": leg_seek,
         "xtfile": leg_xtfile}
 
