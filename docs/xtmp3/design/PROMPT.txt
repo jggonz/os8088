@@ -1,0 +1,218 @@
+XTMP3 — Implementation prompt for an adaptive MP3 player with an ultra-XT-optimized lossy fallback
+
+You are implementing XTMP3 inside the existing os8088 operating-system repository. Build a working native application, its decoder, offline table generator, conversion/cache path, audio-output integration, benchmarks, and documentation. Inspect the repository and implement the feature using its established conventions. Do not stop after producing a plan or a UI mockup.
+
+PRODUCT GOAL
+
+XTMP3 plays MP3 files at the best quality that the actual machine and audio device can sustain. On fast enough machines, use a proper standards-oriented integer MP3 decoder at the source sample rate and channel count, with suitable PCM precision. If that is too slow, progressively reduce the reconstruction sample rate using a proper decoder. Only after those standard paths are insufficient should Auto use the highly approximated, table-driven XT implementation described below.
+
+Preserve original MP3 bitstream support and quality on capable machines, including normal high-bitrate music. “Full bitrate” means decoding the original source without transcoding it to a lower MP3 bitrate; the selected output is PCM, whose bit depth, sample rate, and channels are distinct from compressed bitrate. Prefer 16-bit stereo at the original rate where the device and machine support it. Do not force every machine through 8-bit mono, coarse product tables, shortened filters, or an artificial 11 kHz ceiling. Clearly distinguish hardware output limitations from CPU-driven quality reductions.
+
+The slow-machine target remains a 4.77 MHz Intel 8088, no FPU, and approximately 400 KB for the complete application. Its fallback normally produces unsigned 8-bit mono PCM near 8–11 kHz, using RAM tables and controlled reconstruction errors. Music should remain recognizable and speech intelligible, with explicit quality choices.
+
+For non-real-time decoding on XT hardware, ask the user which hard drive/volume and folder to use for decoded output, finish decoding the entire track to disk, finalize it successfully, and only then play the completed PCM stream from disk. Do not attempt progressive decode-and-play or rely on a large head-start buffer in this mode. Keep the interface responsive during conversion. Never disguise slow decoding by lowering playback speed.
+
+Do not implement 8087 detection, an x87 decoder, or FPU-dependent code in any target path, including the standard decoder. This is a deliberate scope choice, not a claim that an 8087 can never accelerate another design. Host-side generators and reference tools may use modern CPUs and floating point.
+
+1. START WITH THE EXISTING SYSTEM
+
+Read AGENTS.md and relevant repository documentation. Locate application examples, build rules, executable format, memory allocation, segmented-memory conventions, filesystem APIs, clocks, scheduling/yield points, UI widgets, file dialogs, audio devices, DMA support, and test/emulator tooling.
+
+Use the repository's actual native APIs. Do not assume DOS interrupts, BIOS calls, malloc, threads, protected mode, a standard C runtime, or existing MP3 services. Do not create a browser application or replace the desktop shell. If a missing system capability is necessary, add a small reusable integration consistent with the OS and document it.
+
+Keep the decoder independent of the UI and hardware sink. Create a small host-buildable reference/harness implementation for algorithm development and verification, plus a true 8088 target implementation. Use NASM assembly for hot paths if consistent with this repository. Select other implementation languages only when the existing toolchain supports them.
+
+Initial deliverable sequence: correct file parsing and standard integer decoder; native full-quality PCM playback on capable machines; measured native/half/quarter-rate selection; measured XT baseline and table arithmetic; individually evaluated approximations; destination-drive selection and complete offline conversion; integrated native UI. Maintain working builds throughout. Both the proper decoder and the XT fallback are deliverables; a host-only reference decoder does not satisfy the proper on-target player requirement.
+
+2. HARDWARE AND MEMORY CONTRACT
+
+Use only the 8086/8088 integer instruction set. No 80186+ instructions, operand/address-size prefixes, MMX/SIMD, or x87 instructions. In particular, avoid PUSHA/POPA, immediate-count shifts other than one, and later forms of IMUL. Audit the emitted binary/disassembly, including compiler-generated helpers, if C is used.
+
+The XT fallback's total application working set must fit within 400,000 bytes when that much memory is available. Count code, stack, product tables, Huffman tables, requantization data, decoder history, scratch buffers, compressed input, PCM buffers, alignment, and allocation overhead. System-owned allocations caused by this application also count. Do not assume 400 KB is available for tables alone, or assume one contiguous allocation. Load only the selected decoder backend/table pack where possible, and release obsolete allocations when changing modes. Do not keep two complete decoders and all table packs resident on the XT. The standard path may use a separately measured allocation on machines with more memory; never silently exceed available memory or require the XT to load it first.
+
+An initial 384 KiB planning allocation is:
+  Synthesis product tables:       128 KiB
+  Transform product tables:       64 KiB
+  Requantization tables:          32 KiB
+  Huffman lookup tables:          24 KiB
+  Decoder history and scratch:    16 KiB
+  Code and stack:                 48 KiB
+  Compressed input:               16 KiB
+  PCM buffer:                     56 KiB
+  Total:                        384 KiB = 393,216 bytes
+
+This is a provisional budget, not a guaranteed layout. Its roughly 6.6 KB headroom must cover alignment/allocator costs; reduce buffers if needed. Produce a measured memory report and adjust the partition based on actual code and table sizes. At lower available RAM, choose a smaller validated table pack or clearly report the minimum required memory. Never overcommit memory.
+
+Respect 64 KiB segment boundaries. Keep individual rows and frequently accessed working sets within a segment; explicitly handle multi-segment tables. Account for segment-register changes and prefetch stalls in performance work. Favor aligned word reads and arrange hot coefficients in the order they are consumed. Save/restore required registers and segment registers across native APIs and interrupts.
+
+3. STREAM FORMAT AND CORRECTNESS
+
+The standard player must support MPEG-1/2/2.5 Layer III, mono/stereo/joint stereo, CBR and VBR, including ordinary 44.1/48 kHz music and valid high-bitrate files up to 320 kbps in applicable MPEG-1 profiles. Preserve source quality when hardware permits. The XT optimization harness should prioritize MPEG-2.5 mono at 8,000, 11,025, and 12,000 Hz and useful 16/24/32 kbps examples before extending all approximation profiles. Use native 11,025 Hz mono files for initial XT benchmarks, but do not require users to supply pre-transcoded files for ordinary player use. Document unsupported XT combinations clearly; parse or convert normal source MP3s correctly through a compatible backend rather than interpreting them as a low-rate profile.
+
+Implement and validate frame sync, version/layer/rate/bitrate fields, frame sizes, padding, side information, scalefactors, main-data reservoir, Huffman escape/sign bits, requantization, short-block reordering, stereo processing, antialias butterflies, IMDCT, window/overlap state, frequency inversion, and polyphase synthesis.
+
+For MPEG-2/2.5 Layer III, account for the one-granule structure rather than copying MPEG-1's two-granule assumptions. Handle reservoir dependencies across frames and across input-buffer boundaries. Skipping metadata or seeking to a frame does not remove the need to rebuild required decoder history.
+
+Bound every read, table index, allocation, and metadata length. Skip ID3 data without loading whole tags, display bounded title/artist strings when practical, and handle truncation, invalid side information, excessive lengths, unsupported free-format streams, and corrupt frame recovery. If CRC validation is omitted, document it; never confuse CRC with reservoir handling. Do not accept malformed data as a performance shortcut.
+
+Keep bitstream correctness separate from reconstruction quality. Lossy profiles may approximate arithmetic or omit selected reconstruction work; they must not invent reservoir bytes, skip arbitrary compressed bytes, or misinterpret frame boundaries.
+
+4. BASELINE AND NUMERICAL DESIGN
+
+First obtain a correct reference decoding path. Use a compatible, appropriately licensed implementation or implement from the specification. Review source licenses before incorporating code; do not assume every Helix port has the same license. Modern decoder code is an algorithm reference, not evidence it can run efficiently on an 8088.
+
+Maintain a host reference that can produce reliable PCM for comparison, and a proper target integer decoder with full synthesis, adequate numerical precision, correct stereo, and no intentional XT approximations. Full-quality output must match the selected reference to a documented tolerance, not necessarily bit-for-bit across different valid implementations. Use fast factored transforms, precomputed constants, circular history buffers, zero-region skipping where valid, and efficient channel handling before introducing lossy shortcuts. Keep proper reduced-rate synthesis separate from shortened-filter/coarse-table XT synthesis so the standard fallback ladder does not silently activate experimental artifacts.
+
+Define the Q format, range, rounding, saturation, and accumulator width at each stage. Use explicit word operations for necessary wider arithmetic. Quantize intermediate data deliberately, not by taking an arbitrary high or low byte. Consider reduced-precision or block-scaled data only after analyzing its range and error.
+
+If block scaling is used, preserve scale information for all history that overlaps subsequent blocks. Align scales before adding old and new contributions. Independently normalizing each frame can cause pumping, clipping, clicks, and invalid overlap-add behavior; do not do that.
+
+Store unsigned 8-bit PCM with silence at 128 where required by the sink. Internal values may be signed. Output gain changes should not cause sudden discontinuities. Count clip/saturation events and numeric overflows separately.
+
+5. BUILD-TIME PRODUCT TABLES: THE MAIN OPTIMIZATION
+
+Create a deterministic host-side generator. It may use high-precision arithmetic to emit target-endian binary assets and metadata. Avoid generating large tables slowly on the XT. Record generator version, coefficient source, quality settings, numeric scales, dimensions, checksums, and expected error bounds. Regeneration must be reproducible.
+
+For a constant coefficient c, replace runtime multiplication with a precomputed scaled product:
+  T[coefficient_id][sample_code] = round(S * c * decode(sample_code))
+Here S and decode() are explicitly defined by the stage's numerical representation. Clamp or widen entries when their proven range requires it. A two-byte table entry is permissible only when its scaled product fits.
+
+Useful table dimensions:
+  128 coefficient representatives * 256 signal codes * 2 bytes = 64 KiB
+  256 coefficient representatives * 256 signal codes * 2 bytes = 128 KiB
+  512 coefficient rows            * 256 signal codes * 2 bytes = 256 KiB
+  128 coefficient representatives * 1024 signal codes * 2 bytes = 256 KiB
+
+Eight-bit signal indices sacrifice intermediate precision; ten-bit indices consume more RAM but may preserve sound better. Quantizing coefficients is a separate approximation from quantizing the signal or rounding products. Measure those errors independently.
+
+Use the actual coefficient set first. Investigate repeated coefficients, sign symmetry, symmetry in table inputs, and coefficient clustering. Compare shared coefficient rows against duplicated rows arranged to avoid segment switches. Smaller tables are not automatically faster. If clustering is needed, prefer an error-aware nonuniform palette over uniform bins that erase small important coefficients. Generate mappings offline.
+
+Prototype several table organizations, including coefficient-major rows and hot-loop-specific layouts. Compare looped and unrolled kernels. Include signal-code extraction, index scaling, segment changes, memory reads, accumulation, and output normalization in timing. Do not benchmark a table read alone and call that the product cost.
+
+Use tables for eligible synthesis and transform constants. Keep arithmetic fallbacks for dynamic values or uncommon constants. Do not force all products through a slower generic dispatcher. No allocation or table generation in the audio interrupt or hot decode loop.
+
+6. OTHER MULTIPLICATION STRATEGIES TO MEASURE, NOT ASSUME
+
+For signed 16-bit x and y, the exact identity
+  Q(n) = floor(n*n/4)
+  x*y = Q(abs(x+y)) - Q(abs(x-y))
+can use 65,537 four-byte entries, totaling 262,148 bytes. The sum and difference need 17-bit handling, including the abs(-65536) endpoint. Integer floors cancel because the two arguments have matching parity.
+
+Treat this quarter-square table as an optional isolated microbenchmark, disabled by default. Multi-segment addressing, absolute values, two 32-bit reads, and subtraction may make it slower than native 16-bit IMUL. Do not allocate it alongside the main table pack unless the total budget permits it. Drop it if it does not improve measured end-to-end performance.
+
+Approximate suitable constants with short signed sums of powers of two where profitable. For example, 0.375*x can become (x >> 1) - (x >> 3), subject to explicitly defined signed rounding. On the 8088, multi-bit shifts and instruction fetches are not free. Generate candidate sequences and compare their total cost against native multiplication and lookups.
+
+7. APPROXIMATE SYNTHESIS FILTERING
+
+Keep a full-history, full 16-term-per-output synthesis path as the comparison baseline. Add experimental eight-term and four-term-per-output variants. Select retained history positions using coefficient importance/error analysis per output phase; do not blindly keep the first N terms or drop every other term.
+
+Generate shortened-filter coefficients offline. Preserve correct time positions and sample counts. If coefficients are retuned, document the optimization objective and validate on held-out material. Gain normalization must not introduce excessive amplification, clipping, or time-varying artifacts. Preserve necessary decoder state even when a contribution is omitted.
+
+Window shortening can break alias cancellation, not merely remove treble. Evaluate ringing, tones, transient smearing, metallic artifacts, noise, DC offset, and clipping. A four-term filter is an experiment until listening tests show it is useful. If it sounds unacceptable, keep it clearly experimental or remove it from normal playback choices.
+
+Do not multiply stage speedups together. Under a representative 24-products-per-output-sample budget, shortening a 16-product window to four leaves about 12 total products. That halves total product work, not the whole decoder's execution time by four.
+
+8. BANDWIDTH REDUCTION AND MONO
+
+Compute only required output phases for 2:1 or 4:1 reduced-rate synthesis. Do not first calculate the full PCM stream and throw samples away. Keep timing and pitch correct; if output hardware needs a different clock, use a justified lightweight conversion and report the actual rates.
+
+When the output bandwidth permits it, prune high-frequency reconstruction, including requantization and IMDCT work where valid. Handle short-block reordering, transition bands, alias coupling, and overlap history correctly. Low-frequency coefficients are not always a simple contiguous prefix after every representation change.
+
+The parser must still consume or correctly skip the relevant encoded data according to declared boundaries. Only skip Huffman work when the exact stream layout makes that safe; otherwise parse discarded coefficients without reconstructing them.
+
+For stereo input, downmix before final synthesis where mathematically valid so only one synthesis pass is needed. Implement channel coding and scalefactor rules correctly. Different block types or channel layouts may require different handling. Selecting one channel can be offered as an explicit speed/quality option, but must not be mislabeled as a full mono mix.
+
+Native 8 kHz MP3 input is a useful speech target. Half-rate 11.025 kHz input yields 5.5125 kHz reconstruction with approximately 2.76 kHz bandwidth; expose that as a deliberately muffled speech/preview option. Interpolating or repeating those samples into an 11 kHz output buffer does not restore bandwidth.
+
+9. REQUANTIZATION AND HUFFMAN OPTIMIZATION
+
+Replace runtime powers and exponentials with bounded tables, shifts, and optionally piecewise approximations. Treat small frequent quantized values efficiently. Preserve sign, scale-factor semantics, dynamic range, and rare escape values. Verify maximum supported indices and large-value fallback behavior.
+
+Use compact multi-bit Huffman prefix tables with bounded secondary tables or another measured scheme. Avoid a huge flat table for every possible code. Benchmark 4/6/8-bit first-level choices against memory pressure and 8088 bit-extraction cost. Include input refill and reservoir access in timings. Use known zero regions to avoid unnecessary downstream reconstruction.
+
+10. ADAPTIVE PLAYER AND QUALITY LADDER
+
+Default to Auto: highest validated quality that meets the real-time throughput budget. Implement separate shared-interface backends for proper integer decoding and XT approximate decoding. They may share a parser and utilities, but the proper decoder must not inherit shortened filters or coarse intermediate quantization. At minimum expose capability probing, memory requirement, open/reset, bounded decode, seek/pre-roll, drain, statistics, and close operations.
+
+Try this ordered quality ladder for each track and output device:
+  1. Original: proper full-filter decoding at native source sample rate and channels, with 16-bit PCM when supported. Decode the supplied MP3 at its original encoded bitrate, including VBR; no MP3 re-encoding.
+  2. Half rate: proper decoder with efficient 2:1 reduced-rate reconstruction, preserving channels/precision where feasible.
+  3. Quarter rate: proper decoder with efficient 4:1 reduced-rate reconstruction, within the user's acceptable quality floor and valid device rates.
+  4. XT Standard / XT Fast / XT Turbo: the separately identified table-driven approximate backend, trying validated settings in descending quality. XT Standard retains the full filter; XT Fast initially evaluates eight terms; XT Turbo initially evaluates four terms. XT Speech is an explicit lower-bandwidth option. Test measured choices rather than assuming their order always predicts speed.
+  5. Decode first: if no acceptable real-time configuration is sustainable, choose a validated conversion profile, ask for an output drive/folder, fully decode to disk, then play the completed PCM.
+
+Device-driven PCM format conversion is distinct from CPU-driven fallback. If a device only supports 8-bit mono, adapt to it without pretending the CPU failed a stereo benchmark. If mono reconstruction is an additional CPU-saving step, show it explicitly and keep full-filter reduced-rate options ahead of XT approximations. Do not reduce already low-rate material below a useful floor just to make a ladder step appear viable. Skip invalid or unsupported candidates.
+
+Calibrate using bounded representative decoding and end-to-end costs, including disk reads, device feeding, UI, and interrupt overhead. CPU identity or clock is a hint, not a throughput measurement. Use conservative moving windows/slow-frame statistics and a configurable safety margin; an initial target of at least 1.25 audio seconds decoded per wall second is reasonable, but does not by itself guarantee underrun-free output. Account for VBR and expensive transient/short-block regions. Bound calibration wall time so an XT does not spend minutes probing a clearly unsuitable high-quality decoder. Safely preserve/reset stream and reservoir history after probes.
+
+Maintain a small PCM ring buffer in real-time modes to absorb scheduling/I/O jitter. Its job is not to disguise sustained decoding below real time. On falling throughput, step down at a safe boundary before the buffer empties where feasible. Re-prime histories, preserve playback position, avoid clicks, and show the selected mode. Use hysteresis; do not oscillate between qualities or automatically promote in mid-track without demonstrated headroom. Cache calibration results only with appropriate source/device/backend identity and invalidate stale measurements. User overrides must remain visible and must not bypass stream correctness.
+
+If all acceptable real-time choices fail, stop the real-time attempt and enter the explicit drive-selection/full-conversion flow. Do not silently start writing a long decoded file, progressively play a partial XT cache, or substitute slow-pitch playback. A full-quality offline conversion should remain available when a user prefers quality over conversion time; do not force the lowest-quality profile merely because the job is offline.
+
+Profile names describe measured configurations, not promises of real-time speed. Do not count an optimization twice. Keep poor-sounding or unvalidated variants out of Auto. Rebuild or reset/re-prime history when switching representations; do not reinterpret old scaled data with a new table pack. Cache entries must distinguish decoder backend, profile, sample rate, precision, channel mode, and every output-affecting parameter.
+
+11. CHOOSE OUTPUT DRIVE, FULLY DECODE, THEN PLAY
+
+This is the required non-real-time XT workflow. Large RAM buffers and partially decoded disk files are not sufficient substitutes for complete conversion. Do not implement progressive XT cached playback or a calculated head-start exception. Real-time PCM ring buffers and streaming a completed PCM file from disk are still necessary and allowed.
+
+When the user opens an uncached track that cannot play in an acceptable real-time mode, present a native dialog: “This computer needs to decode this track before playing. Choose a hard drive for the decoded audio.” List discovered hard-drive volumes using the OS's actual naming scheme, volume labels, available free space, and writability. Allow a destination folder and filename. Do not assume C:, the boot disk, or the source drive. Preselecting a previously used location is fine, but require the user's selection/confirmation before each new conversion job. An explicitly approved batch may reuse its selected destination without per-track prompts.
+
+Show the chosen quality, resulting PCM rate/channels/bit depth, estimated disk requirement, and conversion time only when the estimate is justified. Use PCM bytes = sample_count * channels * bytes_per_sample, plus file header/metadata and allocation margin, with overflow-safe arithmetic. For example, 180 seconds at 11,025 Hz, 8-bit mono needs 1,984,500 PCM bytes before overhead. VBR duration estimates may be unreliable; use trusted frame/sample counts or bounded scanning and show uncertainty. Recheck free space and device state during writing. If no suitable writable hard drive is available, stop with a clear explanation and let the user choose another location; do not silently fall back to a floppy or RAM-only conversion.
+
+Provide Decode and play, Cancel, and any existing compatible cache reuse choice. Keep settings and the output path visible during conversion. Decode the entire track into a uniquely named temporary/incomplete file on the selected volume. Display decoded audio duration versus track duration, progress, elapsed conversion time, and measured speed with throttled redraws. Let the user cancel responsively; close handles and clean up only this job's temporary files. Handle full disks, device removal/read failures, source changes, and write errors without starting partial playback or overwriting the source.
+
+At successful end-of-stream, drain decoder and synthesis tails as appropriate, honor supported gapless trim metadata, finalize PCM/WAV lengths, flush and close output, and mark or rename it complete. Verify the completed file's format and length. Only after successful finalization reopen it for buffered PCM playback at the correct rate. The MP3 decoder is no longer required during this playback and its large tables may be released. Keep disk reading and audio feeding reliable even on the slow XT. Clearly distinguish “Decoding 67%” from playback position; the playback clock starts when completed PCM playback starts.
+
+Never treat an interrupted or corrupt/incomplete cache as a complete song. A completed shorter recovery export may be offered only as a separately labeled user action. Resume interrupted conversion only if source identity, numerical state, reservoir, overlap history, and temporary-file validity can all be reconstructed correctly; otherwise restart cleanly.
+
+Cache identity includes source fingerprint, decoder/table version, backend, profile, rate, channel mode, encoding, and all numerical settings. Reuse a matching completed cache without re-decoding or requiring a new destination choice. Invalidate incompatible caches. Offer keep/delete/manage decoded files using native conventions; never remove unrelated user files. If the filesystem limits names/extensions or maximum file size, adapt explicitly and retain source identity in metadata. Use a supported WAV format for export, or a documented native PCM cache for normal playback. If a complete output cannot fit within volume/file-size limits, report the limit before conversion or use a deliberately specified supported segmented-cache format; do not silently truncate it.
+
+12. AUDIO DEVICE AND SCHEDULING
+
+Use the existing audio subsystem and its actual device capabilities. Prefer DMA/buffered PCM output if supported. Respect DMA buffer-placement and boundary rules. Do not assume Sound Blaster support exists. If only PC-speaker output exists, integrate an appropriate available backend, account for its CPU load, and report quality limitations.
+
+Keep output interrupts minimal: service the device, update buffer indices/counters, and acknowledge interrupts. No MP3 decode, file I/O, UI drawing, or large memory copies in an interrupt. Yield in bounded decoding units so the desktop remains responsive. Poll cancellation between suitable blocks/stages. Avoid long interrupt-disabled sections.
+
+On underrun, output safe silence or a brief controlled transition, count the underrun, and recover without stale memory or a loud DC step. In real-time decoding modes, reevaluate the fallback ladder rather than repeatedly masking a sustained CPU deficit. If it cannot be solved, offer the destination-drive/full-conversion workflow. An underrun while playing an already completed cache is a disk/device/scheduling issue and must not trigger more lossy MP3 conversion. Stop/pause/close must release resources and restore device/system state correctly.
+
+13. NATIVE XTMP3 INTERFACE
+
+Use the two bundled visual references: images/XTMP3-color-VGA-EGA.png and images/XTMP3-monochrome.png. Match their 1980s stereo-component skeuomorphism inside native os8088 window chrome: striped title bar, bold bitmap font, recessed digital display, tactile transport keys, restrained pixel bevels, stepped volume knob, small screw details, and compact queue. Implement color VGA/EGA and strict monochrome variants with shared functionality. Use palette colors and ordered dithering rather than gradients or antialiasing. Support the OS's other available modes, including a compact usable 640x200 layout. Images are design references, not exact geometry requirements or proof of performance. Adapt status text to actual behavior.
+
+Treat analog meters and decorative details as cheap optional display elements, not an expensive spectrum analyzer. Mono playback should not falsely claim separate stereo channels just because the reference shows two meters. Static decoration should be drawn once; meter updates should be optional and low frequency.
+
+Provide Open, Play/Pause, Stop, track queue, position, title/filename, quality selection including Auto, actual decoder mode, actual output rate/channels/precision, and appropriate conversion/buffer status. Show states including Checking performance, Choosing output drive, Decoding to disk, Ready to play, Playing live, Playing decoded file, Paused, Buffering, Finished, and Error. Include cancel conversion and the destination-drive/folder dialog. “Original” must mean the proper source-quality path, while XT Fast/Turbo must clearly identify approximation. “Playing from cache” is only shown after completion. Expose file-browser integration/association with .MP3 if the OS supports it.
+
+Advanced/status information should show measured decode rate, estimated conversion time when justified, peak memory, cache status, and underrun count. Present audio time separately from conversion wall time. Throttle UI refreshes and draw only changed regions. Keyboard operation is required.
+
+Seeking in a real-time MP3 path must rebuild reservoir/overlap/synthesis history correctly with pre-roll. Completed PCM caches support normal direct seeking. Never seek to an arbitrary MP3 byte and immediately synthesize. In non-real-time XT mode, disable playback and playback seeking until the full decode is finalized; progress inspection is not partial-track playback.
+
+14. BENCHMARKS AND VALIDATION
+
+Provide a host test harness and target benchmark mode. Use generated signals or redistributable fixtures rather than unlicensed bundled songs. Include speech, bass, quiet passages, high-frequency tones, transients, silence, clipping stress, short blocks, reservoir dependencies, VBR, stereo modes, truncated input, and malformed lengths.
+
+Measure at 4.77 MHz on real hardware where available or an emulator configured for credible XT timing. Clearly identify emulator timing limitations. QEMU or an unconstrained host execution time is not proof of XT performance. Prefer existing OS timing facilities; account for interrupt and timer overhead, and do not disturb the audio clock while profiling.
+
+Measure complete decode paths and individual stages: parser/reservoir/Huffman; requantization; stereo; IMDCT; synthesis; audio feeding; UI/I/O. Record output samples, elapsed time, cycles or a justified estimate, memory, profile/table hashes, clip count, and underruns. Benchmark tables including their addressing cost.
+
+Validate the full selection matrix: a capable machine stays on proper original-rate decoding; an intermediate machine falls back through proper half/quarter-rate synthesis before XT approximations; a slow XT asks for a destination and completes conversion before any audio starts. Use deterministic capability/throughput fixtures to exercise transitions, plus actual target measurements for performance claims. Cover high-bitrate CBR, VBR spikes, correct pitch/sample counts in each reduced-rate mode, hysteresis, profile-switch pre-roll, different device channel/precision limits, and bounded calibration on very slow machines. Prove original-quality mode does not call lossy XT kernels.
+
+Test the destination flow for multiple writable/read-only drives, no hard drive, insufficient free space, uncertain duration, disk-full mid-write, canceled selection/conversion, changed source, valid cache reuse, stale/incomplete cache rejection, flush/finalization failure, and final decoded-file playback without MP3 decoding work. Confirm no partial cache starts playback in the XT offline path.
+
+Prior discussion suggested illustrative values around 7–9 seconds per second of native 11 kHz mono with tables, or 5–6 with an aggressive four-term filter. These were unverified arithmetic models with assumed lookup costs. Do not encode them as requirements, expected benchmark output, or marketing claims. Replace them with measurements. Never call a decoder real-time unless it sustains correct-speed playback with hardware-output overhead and a practical safety margin.
+
+For each approximation, report stage speed, end-to-end speed, memory, waveform error, DC/gain behavior, clipping, and listening observations. SNR alone is insufficient for aliasing and transient artifacts. Save comparable host-generated reference and experimental audio for human evaluation. Test approximations separately before combining them.
+
+Test table entries against the generator's intended numerical formula; check boundaries, symmetry, sign, and rounding. Test identical results between host emulation of target arithmetic and target kernels. Do not require lossy profiles to pass full-accuracy MP3 compliance; explicitly document deviations. Verify accurate paths against the chosen reference to their stated tolerance.
+
+15. COMPLETION AND DELIVERABLES
+
+Deliver source, native build integration, generated or reproducibly generated table packs, host generator, host harness, native application, audio/cache integration, fixtures or fixture-generation commands, benchmark reports, and user/developer documentation. Use repository naming and directory conventions rather than imposing a new project structure unnecessarily.
+
+Document supported MP3 versions/rates/modes, memory requirements, output devices, cache behavior, profile settings, known artifacts, reproducible builds, and measured speed. Include source provenance and required license notices.
+
+Acceptance requires: true 8088-compatible target code without x87; XT peak usage within the stated ceiling; a proper on-target source-quality integer player for capable machines; a measured original/half/quarter-rate-to-XT fallback ladder; correct supported bitstreams; native destination-drive selection for new offline jobs; complete decode and successful finalization before XT PCM playback; responsive cancellation; deterministic tables; safe corrupt-file/disk handling; measured performance for shipped modes; both color and monochrome native interfaces; and quality evidence for every default approximation.
+
+Real-time MP3 decoding on a stock 4.77 MHz XT is not an acceptance prerequisite. If it is not achieved, ship a useful, honest convert/cache/play application and report the bottleneck. Do not substitute a remote decoder, hidden host CPU, accelerated emulator, or hardware MP3 chip for the requested 8088 implementation.
+
+Begin by inspecting the repository, identify the smallest complete vertical slice, and implement it. Continue through the optimization and integration work. Resolve routine technical choices from the repository and evidence; ask only when a genuinely missing requirement blocks progress.

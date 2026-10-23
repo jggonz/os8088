@@ -217162,3 +217162,281 @@ CLAUDE.md's closed list). The resident hook is measured by
 selector inventory of §120.3.1 honest. The fullscreen round trip is S8's
 driving pass, not a row of its own: `fsx_capstab`'s VESA row is VGA's and
 `fsx_leave` restores through `vid_setmode`'s arm.
+
+## 121. XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`)
+
+**XTMP3 plays MP3 files at the best quality the machine and its audio device
+can actually sustain, and says which quality that is.** On a fast machine it
+is a proper standards-oriented integer MPEG-1/2/2.5 Layer III decoder at the
+source's rate. Slower machines step down through the SAME decoder at half and
+quarter output rate. Only after those are a separately identified,
+table-driven XT backend's approximations used. When nothing sustains real
+time, the player asks for a hard-drive folder, decodes the whole track to a
+WAV there, finalises it and only then plays it. This is the normal path on a
+4.77 MHz 8088. There is no progressive XT decode-and-play.
+
+The design record is [docs/plans/XTMP3-PLAN.md](docs/plans/XTMP3-PLAN.md),
+the brief is `docs/xtmp3/design/PROMPT.txt`, and the owner's two mockups are
+`docs/xtmp3/design/xtmp3-color.png` and `xtmp3-mono.png`. Every subsection
+below says whether it is **pinned** (the contract the code is written to) or
+**shipped** (the code does it and a row says so). Until a subsection says
+shipped, it is pinned.
+
+Prefixes: `x3_` (shell and engine), `x3d_` (drawing layer), `x3f_` (face),
+`x3s_` (the STANDARD decoder), `x3x_` (the XT backend), `x3p_` (the parser
+and bit reader both backends share), `x3c_` (conversion and cache), `x3l_`
+(playlist). The art generator's labels are `x3art_`.
+
+### 121.1 Files (pinned)
+
+| file | holds |
+|---|---|
+| `apps/xtmp3/xtmp3.asm` | header, `.MP3` association, entry, window, menus, keys, callbacks, bss |
+| `apps/xtmp3/x3draw.inc` | the drawing layer: roles and themes, the composing band (retro-face, CDRack's `crdraw.inc` shape) |
+| `apps/xtmp3/x3face.inc` | the three layouts, the static parts, every cached element, the button painter |
+| `apps/xtmp3/x3eng.inc` | the look-ahead ring, the worker, the feed, the ladder, calibration |
+| `apps/xtmp3/x3conv.inc` | the output-drive dialog, conversion, finalisation, the cache index |
+| `apps/xtmp3/x3pars.inc` | frame sync, header, Xing/Info/LAME, ID3v2/ID3v1 skip and title, side info, the reservoir |
+| `apps/xtmp3/x3std.asm` | the STANDARD decoder, a separately assembled `OP_SEG` part |
+| `apps/xtmp3/x3xt.asm` | the XT backend, a separately assembled `OP_SEG` part |
+| `tools/x3sim.py` | the REFERENCE: a bit-exact Python model of both backends' integer arithmetic, and the comparison harness |
+| `tools/x3tables.py` | the deterministic table generator, `--selfcheck` in the make rule |
+| `tools/os88x3art.py` | the face's pictures and fonts, from code and from committed masters in `apps/xtmp3/art/` |
+| `tools/x3fixtures.py` | the fixture generator: synthesized signals and the LAME commands that encoded them |
+| `tests/xtmp3/` | committed fixtures (`*.MP3`, each with its recipe and SHA-256 in `FIXTURES.txt`) |
+
+### 121.2 Streams (pinned)
+
+MPEG-1, MPEG-2 and MPEG-2.5 Layer III: mono, dual channel, stereo, joint
+stereo (M/S and intensity), CBR and VBR, 8 to 320 kbps, every rate the
+three versions define. Free-format streams are REFUSED by name. A Layer I or
+II stream is refused by name. CRC (`protection_bit` = 0) is PARSED and
+skipped, and not checked. That is a documented omission, unrelated to the
+reservoir.
+
+- **ID3v2** at the head is skipped by its synchsafe length without being read
+  whole. TIT2 and TPE1 are copied into a bounded 40-byte field each when
+  they lie inside the first read. ID3v1 (`TAG` in the last 128 bytes)
+  supplies a title when v2 did not.
+- **Xing/Info/VBRI** in the first frame gives the frame count, so the
+  duration is exact. Without one, the duration is `file bytes / first frame's
+  bitrate` and is shown with a `~`. A LAME tag's encoder delay and padding are
+  honoured for the gapless trim of a conversion (§121.7).
+- **Sync** needs two consecutive headers that agree on version, layer and
+  rate before a frame is believed. A frame whose side information exceeds
+  its own `main_data_begin` budget, or whose `part2_3_length` runs past the
+  reservoir, is DROPPED and decoded as silence with the history kept, and it
+  is counted. It is never read past.
+- **The reservoir** is a 4 KB-bounded byte ring of main data. A frame whose
+  `main_data_begin` reaches back further than the bytes held (the first
+  frames after a seek or open) is decoded as silence, which is the
+  standard's own answer.
+
+### 121.3 Two backends, one interface (pinned)
+
+Both backends are far-called `OP_SEG` parts with ONE entry table at offset 0:
+
+| verb | does |
+|---|---|
+| `CAPS` | memory wanted for a profile (KB of tables, KB of state), the profiles it offers |
+| `OPEN` | profile, output rate divisor (1, 2, 4), output channels, PCM format. Expands this profile's tables into the claim it is handed and checks their CRC |
+| `RESET` | clears every history: overlap, synthesis V, reservoir. Used after a seek or a probe |
+| `GRANULE` | decodes ONE granule (576 or 1,152 source samples' worth) from the frame the parser staged into a caller buffer, answers samples written and the clip count |
+| `STATS` | clip and overflow counts, the stage counters |
+| `CLOSE` | nothing to free: the primary owns every claim |
+
+The parser and the bit reader (`x3pars.inc`) are SHARED and live in the
+primary, so bitstream correctness is the same code on both backends.
+Approximation lives only in reconstruction. **The STANDARD backend contains
+no XT kernel and no product table**, and a row proves it by symbol and by
+output (§121.10). Only the selected backend's part and its table pack are
+resident: switching backend drops one part before fetching the other
+(`op_drop`/`op_fetch`).
+
+### 121.4 Numerics (pinned in outline; `tools/x3sim.py` is the authority)
+
+All arithmetic is 8086 integer: 16-bit words, `imul` 16x16 to 32, and
+32-bit accumulators carried in register pairs. No x87 instruction appears
+in any target path and none is probed. The Q formats, ranges, rounding and
+saturation of each stage are written down in `tools/x3sim.py`'s module
+docstring, which is the binding table. The target must reproduce that
+model BIT-EXACTLY, and the full-quality model must match the host reference
+(`lame --decode`) within a documented tolerance, with SNR and peak error per
+fixture.
+
+- **STANDARD**: requantised values are 16-bit with a per-granule exponent
+  aligned to a fixed Q before the stereo stage, never normalised frame by
+  frame. The IMDCT (36 and 3x12 points) is a factored transform with 16-bit
+  constants and 32-bit accumulation, with a 16-bit overlap history. Synthesis
+  is a fast 32-point DCT plus the 512-tap window, 16 products an output, a
+  16-bit V history. Output is 16-bit, converted to the device's format at the
+  feed.
+- **Reduced rate (STANDARD, divisor 2 or 4)** does not reconstruct subbands
+  at or above `32 / divisor`: no requantisation, no IMDCT and no butterflies
+  for them, though Huffman still parses them because the bitstream layout
+  requires it. It computes only the output phases kept. Pitch and sample
+  counts are exact at `rate / divisor`.
+- **XT**: product tables `T[row][code] = round(S * c_row * decode(code))`
+  replace the multiplications of synthesis, matrixing and IMDCT. `code` is
+  an 8-bit signal code under a fixed companding map that is global and never
+  block-normalised. Profiles are XT Standard (16 terms an output), XT Fast
+  (8) and XT Turbo (4), with terms chosen per output phase by error
+  analysis, plus XT Speech (the 4:1 pruned rate). Their measured error,
+  speed and listening notes are §121.11's table, and a profile without a
+  quality record is not offered by Auto.
+
+### 121.5 The quality ladder (pinned)
+
+Auto takes the first rung that calibrates real time on THIS machine with this
+device: **Original** (STANDARD, divisor 1), **Half** (STANDARD, 2), **Quarter**
+(STANDARD, 4), **XT Standard**, **XT Fast**, **XT Turbo**, and then **Decode
+first** (§121.7). A rung whose output rate the device cannot play is skipped
+rather than tried, and so is a rung whose output would fall below
+`X3_FLOOR` = 8,000 Hz while the source is above it. An 11,025 Hz track
+therefore never auto-halves to 5,512 Hz. Below-floor output is XT Speech's
+and the user's explicit choice, labelled as muffled. Device format
+limits (8-bit, mono, a top rate) are applied at the feed and labelled as the
+DEVICE's ("Device: 8-bit mono"), separately from any CPU step-down.
+
+**Calibration** decodes a bounded sample of the actual track (at most
+`X3_CAL_GRAN` granules and `X3_CAL_TICKS` ticks a rung, so a hopeless rung
+costs an XT under a second) timed by `pit_now`. That includes the feed's and
+the disk's measured share. A rung passes at `X3_SAFETY` = 1.25 audio seconds
+a wall second. Probes restore the stream and RESET the decoder. Results are
+cached per (source fingerprint, backend, profile, divisor, device) for the
+session.
+
+**While playing live**, a PCM look-ahead ring absorbs jitter. Two consecutive
+slow windows below 1.10x, or one underrun, step DOWN one rung at the next
+granule boundary: RESET, pre-roll one frame, keep the position. The step is
+never automatically back up mid-track. An underrun while playing a FINISHED
+conversion is a disk or device fault, counted and shown, and never a reason
+to decode with more loss.
+
+### 121.6 Output (pinned)
+
+Through `OSAPI_SND_STREAM` (§34.5): 8-bit unsigned mono on every Sound
+Blaster, at the rung's rate, the card's ceiling permitting (22,222 Hz below
+DSP 3.00, 44,100 Hz on SB Pro and SB16 with `SND_CAP_PCM_HI`). **Where
+SOUND.DRV offers 16-bit and stereo streams (planned for §34.5, in the same
+PR), Original uses them.** A machine with no card plays a FINISHED file
+through the PC speaker or a Covox the way the Audio Player does (§86.21),
+inside its bracket, and never decodes MP3 live into the speaker. Silence is
+128. Underruns play silence, are counted, and never leave a DC step.
+
+### 121.7 Decode first: choose a drive, convert the whole track, then play (pinned)
+
+When no live rung passes, or the user chooses Decode First, XTMP3 shows its
+own dialog: *This computer needs to decode this track before playing. Choose
+a hard drive for the decoded audio.* It lists every `VK_FIXED` volume with its
+letter, label, free space and whether it is writable. It never assumes C: or
+the boot disk and never lists a floppy. A writable volume and Decode and Play
+lead to the Standard File Save dialog (§38) standing in that volume, for the
+folder and the name. The dialog shows the quality, the resulting PCM
+(rate, channels, bits) and the disk needed, computed as `samples x channels x
+bytes` plus the header. That figure gets a `~` when the duration is
+estimated. The last destination is preselected. Each new job needs a
+confirmation, and an approved batch reuses the folder.
+
+The conversion writes `X3nnnnnn.TMP` in the chosen folder with
+`OSAPI_FILE_WRITE_SEQ` from the UI task. The worker decodes into a staged
+buffer and never touches a file (§20.6 rule 7). Progress shows the decoded
+audio time against the track time, the percentage, the elapsed wall time and
+the measured speed (`0.31x`), redrawn at most twice a second. Cancel is
+answered within one granule batch. The temporary file is deleted, and only
+that file. A full disk, a write error, a source that changed or a volume that
+left stops the job with its reason and plays nothing.
+
+At the end: the decoder's tail is drained, the LAME tag's delay and padding
+are trimmed, the RIFF and `data` lengths are written, the file is closed,
+re-read and checked, and only then renamed to the final `.WAV`. **Only a
+finalised file is ever played.** Its `xtm3` RIFF chunk (which other readers
+skip) carries the cache identity: the source fingerprint (size, plus CRC-32 of
+the first and last 16 KB), the decoder and table version, backend, profile,
+rate, channels and bits. `SYSTEM\APPDATA\XTMP3.DAT` maps fingerprints to
+finished files, so a track converted once plays again without decoding. A
+cache whose identity does not match is not used. Options > Decoded Files lists
+the caches it made and deletes only those.
+
+### 121.8 The face (pinned)
+
+The owner's mockups: an 80s stereo component inside the native window. It has
+a logo strip with screws, a recessed LCD (track and title line, large
+seven-segment elapsed time, a thin `/ total`, a progress bar, the output
+format), two VU meters over an OUTPUT rule, a stepped VOLUME knob between
+grilles, five transport keys and OPEN, a queue with a scroll bar, and a
+status bar (`Quality: …` | the state). It is built the retro-face way
+(`.claude/skills/retro-face`): roles and two theme tables, every field one
+band and one blit, cached element keys, art generated on the host.
+
+| layout | content | where |
+|---|---|---|
+| FULL | ~512 x 352 | VGA's 480 lines: everything in the mockup, the queue three rows |
+| MID | ~512 x 272 | EGA's 350 and Hercules' 348: the queue two rows, the meters shorter |
+| COMPACT | ~440 x 120 | CGA's 200: LCD, progress, the transport and OPEN, the status line, at half row height |
+
+Colour is the default where the display has more than one bit. Black and
+white is used everywhere else, and Options > Theme switches on a colour
+display. **The meters never claim stereo the output does not have.** With
+mono output the left dial is labelled `MONO` and the right one is the BUFFER
+gauge (the PCM ring's fill while live, conversion progress while decoding).
+Meters update at most four times a second, from the fed block's peak, and
+Options > Meters: Off leaves them static. The knob is the mixer's master
+(`SND_CAP_MIXER`) where there is one. Otherwise it is a digital gain applied
+in the decoder's final conversion. On a finished file with no mixer it is
+greyed.
+
+States shown: Checking performance, Choosing output drive, Decoding to disk
+NN%, Ready to play, Playing live, Playing decoded file, Paused, Buffering,
+Finished, Error. `Quality:` names the rung actually running (`ORIGINAL`,
+`HALF`, `QUARTER`, `XT STANDARD`, `XT FAST`, `XT TURBO`, `XT SPEECH`) and an
+override shows `(set)`.
+
+### 121.9 Menus and keys (pinned)
+
+**File**: Open, Add to Queue, Remove from Queue, Clear Queue, Decoded Files.
+**Playback**: Play/Pause, Stop, Previous, Next, Rewind, Fast Forward, Decode
+First. **Options**: Quality (Auto / Original / Half / Quarter / XT Standard /
+XT Fast / XT Turbo / XT Speech, named in the item since an app menu has no
+check mark), Theme, Meters, Compact/Full Player, Status. About is
+`OSAPI_ABOUT_SET`'s card, and there is no Help menu.
+
+| key | does | key | does |
+|---|---|---|---|
+| Space | play / pause | S | stop |
+| Left / Right | previous / next track | `,` `.` | back / forward 10 s |
+| Up / Down | queue selection | Enter | play the selection |
+| `+` `-` | volume | O | open |
+| Q | cycle quality | D | decode first |
+| T | theme | C | compact / full |
+| I | status (advanced) | Esc | cancel a conversion |
+
+Seeking a LIVE stream re-syncs at the target frame minus a pre-roll of
+`X3_PREROLL` frames decoded to nothing, rebuilding reservoir, overlap and
+V. A finished WAV seeks directly. While a conversion runs, playback and
+seeking are disabled. Progress is not playback.
+
+### 121.10 Memory (pinned budget; the measured table replaces it)
+
+The XT path's whole working set is at most **400,000 bytes**, counting the
+package region, every part, every claim the player makes and SOUND.DRV's
+grant made on its behalf. It is reported live in Status (`Peak 371 KB`).
+Planning figures, which the measured table replaces: primary + bss 56 KB,
+XT part 12 KB, XT table pack up to 224 KB (synthesis 128, matrix and IMDCT
+64, requantisation and Huffman 32), decoder state 16 KB, compressed
+look-ahead 16 KB, PCM staging 32 KB. Smaller machines get a smaller validated
+pack or the minimum is stated. The STANDARD path's claim is measured on its
+own and never loaded first on an XT. Every table pack ships as GENERATOR
+INPUT (coefficients and the code map, a few KB) and is EXPANDED at `OPEN` by
+an exact integer recurrence. The host generator produces identical bytes and
+their CRC-32, which `OPEN` checks. This is because reading 128 KB from a
+floppy costs an XT over ten seconds, while expansion costs it under one
+(to be measured).
+
+### 121.11 Measured (filled in by the waves)
+
+Decode speed per rung (audio seconds a wall second) on MartyPC's 5150 and on
+86Box's 286, 386 and 486, end to end and per stage. Each approximation's
+SNR, peak error, DC, clip count and listening notes. Peak memory. The table
+CRCs. Nothing is claimed real time unless it sustained correct-speed playback
+with the device's overhead and the safety margin.
