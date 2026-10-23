@@ -1140,10 +1140,13 @@ def leg_xtpeak():
               s["md"] == MD_LIVE and s["qual"] == Q_XTSTD,
               "md %d qual %s %s" % (s["md"], QNAME[s["qual"]], r.errtext()))
         check(leg, "the card's ring is the 16 KB grant (never the external "
-              "ring), the look-ahead made 8 KB to fit it under the ceiling",
+              "ring), XT Standard divided by 4 (NEONDRV is 44.1 kHz: the "
+              "speech tables, so the 16 KB look-ahead fits beside it)",
               r.w("x3_rsz") == 16384 and r.b("x3_ext") == 0 and
-              r.w("x3_lasz") == 8192, "%d bytes, ext %d, look-ahead %d" % (
-                  r.w("x3_rsz"), r.b("x3_ext"), r.w("x3_lasz")))
+              r.b("x3_odiv") == 4 and r.w("x3_lasz") in (8192, 16384),
+              "%d bytes, ext %d, div %d, look-ahead %d" % (
+                  r.w("x3_rsz"), r.b("x3_ext"), r.b("x3_odiv"),
+                  r.w("x3_lasz")))
         check(leg, "...and a gulp is X3_RDXT, 4 KB: one read the card's ring "
               "plays through (a read holds sch_lock)", r.w("x3_rdmax") == 4096,
               "%d" % r.w("x3_rdmax"))
