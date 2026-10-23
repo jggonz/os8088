@@ -192,3 +192,17 @@ here ran on 86Box or on iron.*
 - **The 286, 386 and 486 numbers are 86Box's to take.**
 - **Nobody has listened to the target's own output yet.** Its PCM is the
   model's to the byte, so the study's listening WAVs stand in for it.
+
+**Later the same day: the merge, and OPEN.**
+
+- **The integration branch now has one parts table.** FRONT and ART are
+  eager and STD is lazy; the XT part became row 3.
+- **OPEN dropped from 4.25 s to 2.96 s on XT Standard**, still on
+  MartyPC, with every expanded byte unchanged:
+  - the Fletcher loop is unrolled;
+  - the encoder walks hold the midpoint they are waiting for in a
+    register;
+  - the expansion loops keep their constants in registers.
+- **The Fletcher stays a read-back**, not a sum folded into the stores. A
+  read-back is what catches a bad RAM cell on a 1981 machine, and a
+  store-order sum cannot.

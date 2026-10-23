@@ -172,22 +172,31 @@ spread over it:
 
 ## 5. OPEN: expansion and the checks
 
-| profile | OPEN | of which the table Fletcher | the tail check | model |
+| profile | OPEN | of which the Fletcher (tables + the tail check) | first build | model |
 |---|---|---|---|---|
-| XT Standard | 4.253 s | 1.145 s | 0.146 s | 2.11 s (Fletcher 0.77) |
-| XT Fast | 3.349 s | 0.823 s | 0.146 s | 1.62 s |
-| XT Turbo | 2.907 s | 0.655 s | 0.146 s | 1.37 s |
-| XT Speech | 3.098 s | 0.758 s | 0.146 s | 1.49 s |
+| XT Standard | 2.959 s | 0.867 s | 4.253 s | 2.11 s (Fletcher 0.77) |
+| XT Fast | 2.322 s | 0.651 s | 3.349 s | 1.62 s |
+| XT Turbo | 1.990 s | 0.539 s | 2.907 s | 1.37 s |
+| XT Speech | 2.100 s | 0.608 s | 3.098 s | 1.49 s |
 
-**The model was optimistic by a factor of two.** The window rows alone take
-1.63 s on Standard: 241 rows, a positive half by the running sum and a
-negative half by negation. The tables then read back for the Fletcher. Folding
-the Fletcher into the stores (XT-STUDY.md 6) would save most of the second
-read. It was not done here, because a read-back also proves the bytes landed
-where the check says.
+**The first build took about twice the model's time.** Three changes, with
+every expanded byte unchanged, took 30% off it:
+
+- the Fletcher loop unrolled eight words a pass;
+- the encoder walks keep the midpoint they wait for in a register, so an
+  entry costs a compare and two stores;
+- the byte-split planes and the window rows keep their constants in
+  registers and store with STOSW.
+
+The Fletcher stays a READ-BACK of the expanded tables, not a sum folded into
+the stores (XT-STUDY.md 6). A read-back is what catches a bad RAM cell or a
+misplaced store on period hardware, and a store-order sum cannot.
+
+The window rows are now the largest part of OPEN: 1.23 s on Standard, for
+241 rows, their Fletcher included.
 
 **Calibration on an XT pays an OPEN per XT rung probed.** The ladder (S8)
-should treat that as a known cost: 4.3 s for XT Standard.
+should treat that as a known cost: 3.0 s for XT Standard.
 
 ## 6. Memory
 
@@ -313,7 +322,7 @@ Against `lame --decode` the figures equal the float ones, except:
    track.
 2. **The part carries XTGEN.BIN.** If the integrator prefers it as an
    asset, the OPEN record needs a segment field for it.
-3. **OPEN takes 2.9-4.3 s.** A calibration that probes XT rungs on an 8088
+3. **OPEN takes 2.0-3.0 s.** A calibration that probes XT rungs on an 8088
    pays that each time.
 4. **End-to-end speed with the real FRONT part**, and the conversion's disk
    share, are S8/S10's measurement.

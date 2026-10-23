@@ -147,7 +147,7 @@ x3x_fs1     dw 0                    ; the Fletcher sums carried
 x3x_fs2     dw 0
 x3x_cnt     dw 0
 x3x_ptr     dw 0
-x3x_c16     dw 0, 0                 ; OPEN's split constant (the tail stays
+x3x_wstep   dw 0                    ; OPEN's encoder walk step (the tail stays
                                     ; read-only: a second OPEN re-checks it)
 
 ; a dword counter in this part, += 1
@@ -315,10 +315,27 @@ x3x_fl32:
     push dx
     mov bx, [cs:x3x_fs1]
     mov dx, [cs:x3x_fs2]
-.f: lodsw
+    mov ax, cx
+    and ax, 7
+    push ax                         ; the odd words
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1                       ; eight words a pass: the loop's own
+    jcxz .tail                      ; 17 cycles paid an eighth as often
+.f:
+%rep 8
+    lodsw
     add bx, ax
     add dx, bx
+%endrep
     loop .f
+.tail:
+    pop cx
+    jcxz .r
+.t: lodsw
+    add bx, ax
+    add dx, bx
+    loop .t
 .r: mov [cs:x3x_fs1], bx            ; (.r: where a profile run ends a check)
     mov [cs:x3x_fs2], dx
     pop dx
@@ -2573,8 +2590,8 @@ x3x_xrow:
     rcl bp, 1
     loop .sh
 .s0:
-    mov ax, 8000h                   ; A = 2^15
-    xor dx, dx
+    xor ax, ax                      ; A = 2^15: AX its high word,
+    mov dx, 8000h                   ; DX its low (STOSW stores the high)
     add di, 258
     mov cl, [XG_VMAP + 2]
     mov si, XG_VMAP + 3
@@ -2583,11 +2600,9 @@ x3x_xrow:
     mov cl, [si]
     inc si
 .ent:
-    add ax, bx
-    adc dx, bp
-    mov [es:di], dx
-    inc di
-    inc di
+    add dx, bx
+    adc ax, bp
+    stosw
     loop .ent
     shl bx, 1                       ; the next segment's step doubles
     rcl bp, 1
@@ -2595,20 +2610,23 @@ x3x_xrow:
     loop .seg
     pop ds
     pop di
-    ; the negative half: T[-k] = -T[k]
+    ; the negative half: T[-k] = -T[k], read and written in the row's own
+    ; segment
     push di
+    push ds
+    push es
+    pop ds
     lea si, [di + 258]
     lea bx, [di + 254]
     mov cx, 127
 .neg:
-    mov ax, [es:si]
+    lodsw
     neg ax
-    mov [es:bx], ax
-    inc si
-    inc si
+    mov [bx], ax
     dec bx
     dec bx
     loop .neg
+    pop ds
     pop di
     ret
 
@@ -2618,39 +2636,9 @@ x3x_xsy:
     ; ENCV: the walk over the V levels, nearest level, ties toward zero
     call x3x_vlevels
     mov di, X3X_SY_ENCV + 4096
-    xor bx, bx                      ; k
-    xor dx, dx                      ; v
-.v: ; advance k while 2v > lv[k] + lv[k+1]
-.adv:
-    cmp bx, 127
-    jae .got
-    mov si, bx
-    shl si, 1
-    mov ax, [cs:x3x_lv + si]
-    add ax, [cs:x3x_lv + si + 2]
-    mov cx, dx
-    shl cx, 1
-    cmp cx, ax
-    jbe .got
-    inc bx
-    jmp short .adv
-.got:
-    cmp dx, 4096
-    jae .neg
-    mov [es:di], bl                 ; ENCV[4096 + v] = k
-.neg:
-    or dx, dx
-    jz .nx
-    mov al, bl
-    neg al
-    mov si, X3X_SY_ENCV + 4096
-    sub si, dx
-    mov [es:si], al                 ; ENCV[4096 - v] = -k
-.nx:
-    inc di
-    inc dx
-    cmp dx, 4096
-    jbe .v
+    mov cx, 4096
+    mov word [cs:x3x_wstep], 2      ; 2 at(v) = 2v
+    call x3x_xwalk
     ; fl32 over ENCV
     push ds
     push es
@@ -2698,23 +2686,70 @@ x3x_xsy:
     pop ds
     ret
 
+; x3x_xwalk - an encoder by the walk (x3xttab.enc_walk): ES:DI = its
+; centre, CX = n, [x3x_wstep] = twice a step's value (2 for ENCV's v, 8 for
+; ENCR's 4b). For v = 0..n the nearest level's code k (ties toward zero):
+; [di + v] = k for v < n, [di - v] = -k for v > 0. The midpoint the walk is
+; waiting for stays in AX, so an entry costs a compare and two stores.
+x3x_xwalk:
+    mov si, di                      ; the negative side
+    xor bx, bx                      ; BL = k, BH = -k
+    mov dx, cx                      ; positive entries left
+    call .thr
+    xor cx, cx                      ; 2 at(v)
+.v: cmp cx, ax
+    ja .adv
+    mov [es:si], bh                 ; [c - v] = -k (v = 0: 0, written again)
+    mov [es:di], bl                 ; [c + v] = k
+    inc di
+    dec si
+    add cx, [cs:x3x_wstep]
+    dec dx
+    jnz .v
+.l: cmp cx, ax                      ; v = n: the negative side only (ENCR's
+    jbe .lst                        ; 8n wraps to 0, its k long at 127)
+    inc bl
+    dec bh
+    call .thr
+    jmp short .l
+.lst:
+    mov [es:si], bh
+    ret
+.adv:
+    inc bl
+    dec bh
+    call .thr
+    jmp short .v
+.thr:                               ; AX = lv[k] + lv[k+1], FFFFh past the top
+    mov ax, 0FFFFh
+    cmp bl, 127
+    jae .top
+    push bx
+    xor bh, bh
+    shl bx, 1
+    mov ax, [cs:x3x_lv + bx]
+    add ax, [cs:x3x_lv + bx + 2]
+    pop bx
+.top:
+    ret
+
 ; x3x_xsplit - the four 256-byte planes of a byte-split constant c16 = DX:AX
 ; at ES:DI: L low, L high, H low, H high (x3xttab.split_recurrence).
-; Preserves DI; clobbers AX, BX, CX, DX.
+; Preserves DI; clobbers AX, BX, CX, DX, SI, BP.
 x3x_xsplit:
-    mov [cs:x3x_c16], ax
-    mov [cs:x3x_c16 + 2], dx
+    mov si, ax
+    mov bp, dx                      ; c16 = BP:SI
     ; L[l] = A >> 16, A = 2^15 + l c16
     mov ax, 8000h
     xor dx, dx
     xor bx, bx
+    mov cx, 256
 .l: mov [es:bx + di], dl
     mov [es:bx + di + 256], dh
-    add ax, [cs:x3x_c16]
-    adc dx, [cs:x3x_c16 + 2]
+    add ax, si
+    adc dx, bp
     inc bx
-    cmp bx, 256
-    jb .l
+    loop .l
     ; H[h] = (A >> 8) mod 2^16, A = 2^7 + h c16; H[-h] = -H[h]
     mov ax, 80h
     xor dx, dx
@@ -2736,8 +2771,8 @@ x3x_xsplit:
     mov [es:bx + di + 768], ch
     pop bx
 .h1:
-    add ax, [cs:x3x_c16]
-    adc dx, [cs:x3x_c16 + 2]
+    add ax, si
+    adc dx, bp
     inc bx
     cmp bx, 128
     jbe .h
@@ -2784,41 +2819,9 @@ x3x_xh1:
     pop ds
     ; ENCR: the walk with at(b) = 4b; then the sentinel
     mov di, X3X_H1_ENCR + 8192
-    xor bx, bx                      ; k
-    xor dx, dx                      ; b
-.v:
-.adv:
-    cmp bx, 127
-    jae .got
-    mov si, bx
-    shl si, 1
-    mov ax, [cs:x3x_lv + si]
-    add ax, [cs:x3x_lv + si + 2]
-    mov cx, dx
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1                       ; 2 at(b) = 8b (b < 8192 here)
-    cmp cx, ax
-    jbe .got
-    inc bx
-    jmp short .adv
-.got:
-    cmp dx, 8192
-    jae .neg
-    mov [es:di], bl
-.neg:
-    or dx, dx
-    jz .nx
-    mov al, bl
-    neg al
-    mov si, X3X_H1_ENCR + 8192
-    sub si, dx
-    mov [es:si], al
-.nx:
-    inc di
-    inc dx
-    cmp dx, 8192
-    jb .v
+    mov cx, 8192
+    mov word [cs:x3x_wstep], 8      ; 2 at(b) = 8b
+    call x3x_xwalk
     ; b = 8192: k is 127 by then (8 x 8191 is past every midpoint)
     mov byte [es:X3X_H1_ENCR], -127
     mov word [es:X3X_H1_ENCR + 16384], 127
