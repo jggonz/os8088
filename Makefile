@@ -6281,13 +6281,17 @@ $(BUILD)/x3art.inc: tools/os88x3art.py $(XTMP3ART) | $(BUILD)
 
 $(BUILD)/xtmp3.bin: apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
                     apps/xtmp3/x3face.inc apps/xtmp3/x3demo.inc \
+                    apps/xtmp3/x3pars.inc apps/xtmp3/x3gran.inc \
+                    $(BUILD)/x3ftab.inc apps/os88parts.inc apps/os88partsbody.inc \
                     $(BUILD)/x3art.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
 		-o $@ apps/xtmp3/xtmp3.asm
 	@echo "xtmp3:  $(call FILESIZE,$@) bytes"
 
-$(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@
+$(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin $(BUILD)/x3front.bin $(BUILD)/x3stdp.bin \
+                    tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@ --part $(BUILD)/x3front.bin \
+		--part $(BUILD)/x3stdp.bin --part-compress lz4
 
 # --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
 # The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
@@ -6304,13 +6308,17 @@ $(BUILD)/x3std.bin: $(BUILD)/x3std.inc
 $(BUILD)/x3ftab.inc: tools/x3fronttab.py tools/x3tab_iso.py tools/x3tables.py | $(BUILD)
 	python3 tools/x3fronttab.py --selfcheck
 	python3 tools/x3fronttab.py --out $@
+$(BUILD)/x3sgen.inc: tools/x3stdgen.py tools/x3sim.py tools/x3tables.py \
+                     tools/x3tab_iso.py | $(BUILD)
+	python3 tools/x3stdgen.py --selfcheck
+	python3 tools/x3stdgen.py --out $@
 X3PARTDEP := apps/xtmp3/x3gran.inc apps/xtmp3/x3crc.inc $(BUILD)/x3std.inc \
              $(BUILD)/x3std.bin $(BUILD)/x3ftab.inc
 $(BUILD)/x3front.bin: apps/xtmp3/x3front.asm $(X3PARTDEP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
 		-o $@ apps/xtmp3/x3front.asm
 	@echo "x3front: $(call FILESIZE,$@) bytes"
-$(BUILD)/x3stdp.bin: apps/xtmp3/x3std.asm $(X3PARTDEP) | $(BUILD)
+$(BUILD)/x3stdp.bin: apps/xtmp3/x3std.asm $(X3PARTDEP) $(BUILD)/x3sgen.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
 		-o $@ apps/xtmp3/x3std.asm
 	@echo "x3stdp: $(call FILESIZE,$@) bytes"

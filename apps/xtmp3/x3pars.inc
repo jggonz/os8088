@@ -64,6 +64,9 @@ x3p_init:
 ; Built as push/push/RETF so nothing is read through CS (an execute-only
 ; alias under kern_mega).
 x3p_fcall:
+    ; STKBALANCE-OK: a far CALL built by hand - the return (CS:x3p_fret) and
+    ; the target are pushed and RETF enters the part, whose own RETF comes
+    ; back to x3p_fret, which pops what x3p_fcall pushed before them
     push ds
     push cx
     mov cx, [x3p_fds]
@@ -74,6 +77,8 @@ x3p_fcall:
     mov ds, cx
     retf                            ; = call far FRONT:BX
 x3p_fret:
+    ; STKBALANCE-OK: the far return of x3p_fcall's verb lands here, two
+    ; pushes deep, and these pop them
     pop cx
     pop ds
     ret
@@ -2540,5 +2545,6 @@ x3p_seekpos:
     X3B x3p_ppos, 4                 ; ...its file offset...
     X3B x3p_pwant, 4                ; ...the offset x3p_open asked for...
     X3B x3p_pfind, OSAPI_FIND_SZ    ; ...and the file's directory entry
+    X3B x3p_qinfo, X3I_SIZE         ; the queue's record (x3_e_qadd's probe)
 %endif
 %endmacro
