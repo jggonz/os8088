@@ -167,10 +167,20 @@ X3_LAXT     equ 0x4000
 %define AP_LA_LOW  word [x3_lalw]
 X3_PCMRES   equ 2560                ; the PCM's room, X3_PCMSZ to 512 bytes, so
                                     ; a conversion's stage after it is aligned
-AP_RD_CHUNK equ 32768               ; the most a gulp reads: a cluster of 32 KB
+X3_RDMAX    equ 32768               ; the most a gulp reads: a cluster of 32 KB
                                     ; (FAT16's largest) is one gulp, so a
                                     ; finished WAV plays from any volume; an
                                     ; MP3 wants two in its ring (x3_plan)
+X3_RDXT     equ 4096                ; ...and a LIVE XT stream's gulp (x3_plan):
+                                    ; a read holds sch_lock, so the card plays
+                                    ; its ring alone through it, and 8 sectors
+                                    ; are one int 13h call, two where they
+                                    ; cross a cylinder - ~0.8 s at CLAUDE.md's
+                                    ; 400 ms a call, against the 16 KB grant's
+                                    ; 1.49 s of 11 kHz. A 16 KB gulp was three
+                                    ; calls: 86Box's 386 underran 11 times
+%define AP_RD_CHUNK word [x3_rdmax] ; aplook.inc's cap, a word: x3_lasize
+                                    ; sets X3_RDMAX, x3_plan the XT's
 AP_DRAW_TICKS equ 8                 ; the speaker's redraw throttle
 AP_FMT_PCM8 equ 0                   ; apspk's file formats: a finished WAV is
 AP_FMT_ADPCM equ 1                  ; always PCM, so its ADPCM arm never runs
@@ -377,6 +387,10 @@ x3_e_tick:
     mov byte [x3_job], WJ_CAL
 .na:
     call x3_needles                  ; the worker's peaks into the needles
+    cmp byte [x3_md], MD_IDLE       ; IDLE: a queued entry whose probe was not
+    jne .nq                         ; had (QEF_AGAIN) is asked again, one a
+    call x3_qagain                  ; pass
+.nq:
     mov al, [x3_md]
     cmp al, MD_LIVE
     je .play
@@ -770,9 +784,27 @@ x3_e_qadd:
     mov bl, [si+QE_VOL]
     mov dx, [si+QE_DIR]
     add si, QE_NAME
+%ifdef X3STUB
+    cmp byte [x3h_cfg+X3SB_QFAIL], 0    ; (the test hook: the probe's claim
+    je .real                        ; refused while a stream is live)
+    cmp byte [x3_md], MD_LIVE
+    jne .real
+    pop si
+    stc
+    jmp short .qf
+.real:
+%endif
     call x3p_probe                  ; CF = 0: the record complete
     pop si
-    jc .out
+.qf:
+    jnc .probed
+    or byte [si+QE_FLAGS], QEF_AGAIN    ; NOT REFUSED, NOT READ: its buffer
+    jmp short .out                  ; (8 KB) not had beside a live stream on a
+                                    ; small heap - QEMU's relocated Hercules
+                                    ; kept the stem. Asked again when idle
+                                    ; (x3_e_tick), and at its own open
+                                    ; (x3_trkinfo) the stream's tag is taken
+.probed:
     cmp byte [x3p_qinfo+X3I_REF], 0
     jne .out                        ; refused: Play says why, by name
     mov ax, [x3p_qinfo+X3I_DUR]
@@ -1051,9 +1083,32 @@ x3_trk_open:
     stc
     ret
 
-; x3_trkinfo - the opened stream's duration into x3_st and the queue entry
+; x3_qagain - the first queued entry flagged QEF_AGAIN probed again (its flag
+; cleared first: a probe that fails again flags it again). keeps nothing
+x3_qagain:
+    xor al, al
+.l:
+    cmp al, [x3_qn]
+    jae .o
+    push ax
+    call x3_qent
+    pop ax
+    test byte [si+QE_FLAGS], QEF_AGAIN
+    jnz .go
+    inc al
+    jmp short .l
+.go:
+    and byte [si+QE_FLAGS], ~QEF_AGAIN
+    call x3_e_qadd
+    inc byte [x3_qgen]              ; (the row is news)
+.o:
+    ret
+
+; x3_trkinfo - the opened stream's duration into x3_st and the queue entry,
+; and its tag's title where the queue's probe was not had (the stem)
 x3_trkinfo:
     push si
+    call x3_trktitle
     mov ax, [x3_info+X3I_DUR]
     mov [x3_st+X3S_TOTAL], ax
     and byte [x3_st+X3S_FLAGS], ~(X3SF_EST | X3SF_NOTOT)
@@ -1081,6 +1136,47 @@ x3_trkinfo:
     mov ax, [x3_info+X3I_RATE]
     mov [x3_srate], ax
     pop si
+    ret
+
+; x3_trktitle - the open stream's title (x3_info) into its queue entry and
+; x3_st when the entry's differs: the stem of a probe not had. keeps all
+x3_trktitle:
+    push ax
+    push cx
+    push si
+    push di
+    cmp byte [x3_info+X3I_TITLE], 0
+    je .o                           ; no tag: the stem is the title
+    mov si, x3_info+X3I_TITLE
+    mov di, [x3_trkent]
+    add di, QE_TITLE
+.c:
+    mov al, [si]
+    cmp al, [di]
+    jne .new
+    inc si
+    inc di
+    or al, al
+    jnz .c
+    jmp short .o
+.new:
+    mov di, [x3_trkent]
+    add di, QE_TITLE
+    mov si, x3_info+X3I_TITLE
+    mov cx, 40
+    call x3_putn
+    mov byte [di], 0
+    mov di, x3_st+X3S_TITLE
+    mov si, x3_info+X3I_TITLE
+    mov cx, 40
+    call x3_putn
+    mov byte [di], 0
+    inc byte [x3_qgen]
+.o:
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 ; x3_readat - DX:AX = a file offset: up to 32 KB of x3_fname from the cluster
@@ -1247,7 +1343,7 @@ x3_cluget:
     xor ah, ah
     mov cl, 9
     shl ax, cl                      ; x 512
-    cmp ax, AP_RD_CHUNK
+    cmp ax, X3_RDMAX
     ja .no
     mov [ap_clu], ax
     clc
@@ -1298,7 +1394,8 @@ x3_la_claim:
 ; x3_lasize - AX = the ring's size (a power of two): the claim given back
 ; first when it was another size. keeps everything
 x3_lasize:
-    cmp ax, [x3_lasz]
+    mov word [x3_rdmax], X3_RDMAX   ; every ring's gulp is whole until x3_plan
+    cmp ax, [x3_lasz]               ; says a live XT stream's is not
     je .o
     call x3_la_free
     mov [x3_lasz], ax
@@ -1385,7 +1482,8 @@ x3_la_mp3:
 ; queued or the file is in. Each one timed (x3_refill)
 x3_prime:
     push cx
-    mov cx, X3_LABIG / AP_RD_CHUNK + 1
+    mov cx, X3_LABIG / X3_RDXT + 1  ; (the least gulp: the loop ends on the
+                                    ; amount or the file's end long before)
 .l:
     cmp byte [ap_src_done], 0
     jne .out
@@ -1587,6 +1685,10 @@ x3_snd_open:
     mov [x3_drvund], al
     mov [x3_rampst], al             ; (a step's ramp out is the old stream's)
     mov [x3_wslow], al              ; a new rung: a new window
+    mov [x3_wund], al
+%ifdef X3STUB
+    mov [x3_lgr], ax                ; (the test hook's granule count)
+%endif
     mov [x3_wg], ax
     mov [x3_wacc], ax
     mov [x3_wacc+2], ax
@@ -1946,6 +2048,7 @@ x3_feed:
     jne .feed
     mov byte [x3_drvund], 1
     X3LOG 'U', [x3_played+2]
+    mov al, 'U'
     call x3_under
     jmp short .feed
 .nund:
@@ -2071,6 +2174,7 @@ x3_feedhalf:
     sub ax, [x3_cons]               ; a ramp to silence and a half of it - an
     cmp ax, X3_HALF                 ; underrun, counted, with no DC step
     jae .none
+    mov al, 'S'
     call x3_under
     call x3_ramp
     jmp short .publish
@@ -2101,6 +2205,9 @@ x3_window:
     jne .out
     cmp byte [x3_sjob], WJ_LIVE
     jne .out
+%ifdef X3STUB
+    call x3_stubund                 ; (the test hook's underruns, by granule)
+%endif
     push bx
     push cx
     push dx
@@ -2119,6 +2226,7 @@ x3_window:
     mov [x3_st+X3S_SPEED], ax
     X3LOG 'W', ax
     xor bx, bx
+    mov [x3_wund], bl               ; (the underruns are counted a window)
     mov [x3_wg], bx
     mov [x3_wacc], bx
     mov [x3_wacc+2], bx
@@ -2157,19 +2265,110 @@ x3_audpit:
     ret
 
 ; x3_under - an underrun, counted (SPEC.md 121.6), and on a live stream the
-; ladder told: one underrun is a step DOWN (121.5). On a finished file it is
-; the disk or the device, counted and shown, and never a reason to decode
-; with more loss. Worker-safe
+; ladder RE-EVALUATED (121.5): a step DOWN only when the decode is what is
+; short - this window's speed so far (four granules or more), else the last
+; whole window's, else the rung's probe, under X3_SLOW - or on the second
+; underrun inside one X3_WINGR window, the safety valve. An underrun at
+; 1.10x or better is the DISK's (a read holds sch_lock and the card plays its
+; ring alone through it: 86Box's 386 at 2.02x stepped on one): counted, the
+; rung kept, and the look-ahead's refill asked for earlier, at 3/4 of the
+; ring instead of 1/2, until the ring is sized again. On a finished file it is
+; the disk or the device, counted and shown, never a step. Worker-safe; AL
+; is the kind for the field report ('U' the card ran dry, 'S' the
+; look-ahead starved). keeps all
 x3_under:
     inc word [x3_st+X3S_UNDER]
+%ifdef X3REPORT
+    cmp word [x3_st+X3S_UNDER], 1   ; THE FIRST: when, and which kind
+    jne .r1
+    push ax
+    mov [x3r_ukind], al
+    mov ax, [x3_grans]
+    mov [x3r_ugr], ax
+    pop ax
+.r1:
+%endif
     cmp byte [x3_sjob], WJ_LIVE
     jne .out
     cmp byte [x3_fill], 0
     jne .out
+    push ax
+    inc byte [x3_wund]
+    cmp byte [x3_wund], 2           ; two in one window: a step, whatever
+    jae .step                       ; the speed
+    call x3_wspeed                  ; AX = x 100 (0: nothing known)
+    cmp ax, X3_SLOW
+    jb .step
+    mov ax, [x3_lasz]               ; THE DISK'S: refill at 3/4, not 1/2
+    shr ax, 1
+    shr ax, 1
+    neg ax
+    add ax, [x3_lasz]
+    mov [x3_lalw], ax               ; (one word: the UI task reads it whole)
+    X3LOG 'K', ax
+    jmp short .pop
+.step:
     mov al, X3R_STEP
     call x3_kick
+.pop:
+    pop ax
 .out:
     ret
+
+; x3_wspeed - AX = the live speed x 100 the underrun rule judges: this
+; window's so far from 4 granules, else the last whole window's, else this
+; rung's probe; 0 = none known (a step). keeps the rest
+x3_wspeed:
+    cmp word [x3_wg], 4
+    jb .last
+    push bx
+    push cx
+    push dx
+    mov cx, [x3_wg]
+    call x3_audpit                  ; DX:AX = the window's audio, pit counts
+    mov bx, [x3_wacc]
+    mov cx, [x3_wacc+2]
+    call x3_ratio
+    pop dx
+    pop cx
+    pop bx
+    ret
+.last:
+    mov ax, [x3_st+X3S_SPEED]
+    or ax, ax
+    jnz .o
+    push bx
+    mov bl, [x3_rung]
+    and bx, 7
+    shl bx, 1
+    mov ax, [x3l_meas+bx]
+    pop bx
+    cmp ax, 0xFFFF
+    jne .o
+    xor ax, ax
+.o:
+    ret
+
+%ifdef X3STUB
+; x3_stubund - the test hook's underruns (X3SB_UNDAT, X3SB_UNDN): at that
+; live granule of a rung, and 4 granules after for each more, x3_under as
+; the card's own would call it - once a session. keeps all
+x3_stubund:
+    push ax
+    inc word [x3_lgr]
+    cmp byte [x3h_cfg+X3SB_UNDN], 0
+    je .o
+    mov ax, [x3_lgr]
+    cmp ax, [x3h_cfg+X3SB_UNDAT]
+    jne .o
+    add word [x3h_cfg+X3SB_UNDAT], 4
+    dec byte [x3h_cfg+X3SB_UNDN]
+    mov al, 'U'
+    call x3_under
+.o:
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; x3_ramp - [x3_staged] brought up to [x3_total] + X3_HALF with SILENCE: the
@@ -3468,7 +3667,12 @@ x3_rungset:
     mov al, X3_PART_XT
 .np:
     cmp al, 0xFF
-    jne .mem
+    je .nobe
+    mov al, [x3_rung]               ; ...but ONLY when the machine is short:
+    call x3_fits                    ; a part that would fit and still was not
+    jc .mem                         ; had is the disk's (its package's folder
+    mov word [x3_st+X3S_ERR], x3_s_nopart ; gone, a bad read), and saying
+    jmp short .fail                 ; 'Needs 360 KB, has 571 KB' was a lie
 .nobe:
     mov word [x3_st+X3S_ERR], x3_s_nobe
     jmp short .fail
@@ -3684,6 +3888,19 @@ x3_plan:
     mov ax, dx
     call x3_lasize
     mov [x3_laxkb], cx
+    cmp byte [x3_bkind], X3K_XT     ; LIVE (or a probe) under XT with a card:
+    jne .fok                        ; a gulp no longer than the card's ring
+    cmp byte [x3_card], 0           ; can play through (X3_RDXT), or one
+    je .fok                         ; cluster where that is more. A probe
+    cmp word [x3c_planc], 0         ; gulps the same, so its timing holds the
+    jne .fok                        ; disk's share at this size
+    mov ax, X3_RDXT
+    cmp ax, [ap_clu]
+    jae .rdx
+    mov ax, [ap_clu]
+.rdx:
+    mov [x3_rdmax], ax
+.fok:
     clc
 .out:
     pop di
@@ -3730,6 +3947,60 @@ x3_rungs:
     db X3K_XT, 2, 1, 0              ; XT TURBO
     db X3K_XT, 3, 0, 0              ; XT SPEECH (the divisor by the source)
 
+%ifdef X3_PARTS
+; x3_fetchhome - op_fetch of part AL, STANDING IN THE FOLDER XTMP3 WAS
+; LAUNCHED FROM. op_fetch reads the package's file by NAME, and a name
+; resolves where the instance stands (SPEC.md 19.2.1) - which after a track
+; opens is the TRACK's folder, so a song on C: with the package on B: looked
+; for C:\XTMP3.O88 and was told it was out of memory. apps/weave/wfetch.inc's
+; bracket, on x3_homed/x3_homev (x3_e_init's). QM both ways: nothing is
+; listed. out: CF = op_fetch's (or 1 when home is gone). clobbers AX
+x3_fetchhome:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ax
+    call OSAPI_FILE_HERE            ; DX, BL = where we stand: banked
+    mov [x3_fhd], dx
+    mov [x3_fhv], bl
+    mov byte [x3_fhmv], 0
+    cmp dx, [x3_homed]
+    jne .go
+    cmp bl, [x3_homev]
+    je .home
+.go:
+    mov dx, [x3_homed]
+    mov bl, [x3_homev]
+    call OSAPI_FILE_GOTO_QM         ; clobbers AX (and CX/SI/DI redirected)
+    jc .gone
+    mov byte [x3_fhmv], 1
+.home:
+    pop ax
+    push ax
+    call op_fetch                   ; CF = 1: a toast has said why
+    pushf
+    cmp byte [x3_fhmv], 0
+    je .stay
+    mov dx, [x3_fhd]
+    mov bl, [x3_fhv]
+    call OSAPI_FILE_GOTO_QM         ; back where the track stands
+.stay:
+    popf
+    jmp short .out
+.gone:
+    stc
+.out:
+    pop ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; x3_be_get - AL = a backend kind (X3K_*): its part fetched (the other one
 ; dropped first), its header checked, the far vectors banked
@@ -3761,7 +4032,7 @@ x3_be_get:
     call x3_be_drop                 ; ONE backend resident (SPEC.md 121.3)
     mov al, bl
     push bx
-    call op_fetch                   ; CF = 1: a toast has said why
+    call x3_fetchhome               ; CF = 1: a toast has said why
     pop bx
     jc .no
     mov [x3_bpart], bl
@@ -5194,6 +5465,7 @@ x3_s_card:    db 'The sound card refused', 0
 x3_s_notask:  db 'No free task - close an app', 0
 x3_s_rate:    db 'The device cannot play it', 0
 x3_s_nobe:    db 'No decoder in this build', 0
+x3_s_nopart:  db 'Cannot read its decoder', 0
 x3_s_offer:   db 'The decoder cannot do it', 0
 x3_s_table:   db 'Damaged decoder tables', 0
 x3_s_decode:  db 'The decoder refused', 0
@@ -5227,6 +5499,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_lasz, 2                  ; the look-ahead ring: its bytes, mask,
     X3B x3_lamask, 2                ; refill mark (x3_lasize)...
     X3B x3_lalw, 2
+    X3B x3_rdmax, 2                 ; aplook's gulp cap (AP_RD_CHUNK)
     X3B x3_laxkb, 2                 ; ...and a conversion's stage after it
     X3B x3_bseg, 2                  ; ...its segment...
     X3B x3_bvec, 4                  ; ...a verb's far vector (UI task's)...
@@ -5289,6 +5562,10 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_lasthalf, 1
     X3B x3_sended, 1
     X3B x3_drvund, 1
+    X3B x3_wund, 1                  ; underruns in this window (x3_under)
+%ifdef X3STUB
+    X3B x3_lgr, 2                   ; live granules on this rung (the hook)
+%endif
     X3B x3_fill, 1                  ; 1 = the pre-roll is filling (UI task)
     X3B x3_grn, 1                   ; the staged frame's granules, and the next
     X3B x3_grk, 1
@@ -5310,6 +5587,9 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_wslow, 1                 ; ...slow windows in a row
     X3B x3_homed, 2                 ; the folder we were launched from
     X3B x3_homev, 1
+    X3B x3_fhd, 2                   ; x3_fetchhome: where the track stood
+    X3B x3_fhv, 1
+    X3B x3_fhmv, 1                  ; ...and whether we moved from it
     X3B x3_dkpit, 4                 ; the disk's measured cost: time...
     X3B x3_dkby, 4                  ; ...for bytes
     X3B x3_rft0, 4                  ; (a gulp's start)

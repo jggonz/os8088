@@ -701,15 +701,28 @@ shipped code composes (`x3_needmsg`, which `xtmp3eng`'s `shortmem` leg
 asserts).
 
 **Observed on the final build, and sent to the integration track:**
-- **An MP3 on a hard disk fails every rung when XTMP3 was started from a
-  floppy.** Double-clicking C:\NEONDRV.MP3 with the package on B: goes
-  straight to Decode First, and Decode and Play stops on `Error: Needs 390
-  KB, has 571 KB`, so has is more than needs. The same song on B:, or the
-  package on C: too, plays live. The state pictures were therefore taken
-  with the package on C:.
+- **An MP3 on a hard disk failed every rung when XTMP3 was started from a
+  floppy.** Double-clicking C:\NEONDRV.MP3 with the package on B: went
+  straight to Decode First, and Decode and Play stopped on `Error: Needs 390
+  KB, has 571 KB`, so has was more than needs. The same song on B:, or the
+  package on C: too, played live, so the state pictures were taken with the
+  package on C:. **The integration track found the cause and fixed it**
+  (d43336e2). The lazy part is read from XTMP3.O88 by name, and the name
+  resolved in the open track's folder, so the fetch looked for
+  C:\XTMP3.O88. The fetch now stands in the launch folder, and a fetch that
+  fails on a machine with room says `Cannot read its decoder`. Its
+  `offvol` leg plays that case live.
 - The compact layouts print `STEREO44.1 kHz`: STEREO runs into the rate.
 - On QEMU's Hercules build, a song queued while XT FAST played kept its
   file stem (`NIGHTSIG`) as its title.
+
+**They hold for the later head.** `feature/xtmp3` moved on to 3e3a9306
+after the pictures were taken. Between the two, nothing in the face's code
+or its art changed (`x3face.inc`, `x3draw.inc`, `tools/os88x3art.py`).
+What did change was the engine: a probe starts after the face is drawn,
+and a live XT stream takes the 16 KB card ring. The drive dialog's
+greying string also changed, to `32 KB clusters`. None of those appear
+in these pictures.
 
 **Tested where.** QEMU only: VGA, the `VIDEO=` knob kernels and
 `tools/hercshot.py`. No soak row and no `test-full` was run.

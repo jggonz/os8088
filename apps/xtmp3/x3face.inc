@@ -2564,7 +2564,7 @@ x3_lc1:
     dw 12, 17, x3_dstc
     dw 148, 26, x3_dsnc
     dw 13, 39, 426, 42
-    dw 262, 7, 298
+    dw 256, 7, 298                  ; 'STEREO' is 36 of 42 (the title ends at 252)
     dw 0, 0, 0
     dw 76, 8, 26, 224, 27
     dw 1
@@ -2574,7 +2574,7 @@ x3_lc2:
     dw 14, 30, x3_dstf
     dw 160, 48, x3_dsnf
     dw 15, 75, 424, 85
-    dw 262, 15, 298
+    dw 256, 15, 298                 ; (the title's 24 cells end at 230)
     dw 0, 0, 0
     dw 152, 8, 26, 224, 27
     dw 1

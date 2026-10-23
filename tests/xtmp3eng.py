@@ -104,12 +104,15 @@ def check(leg, what, ok, more=""):
     return ok
 
 
-def cfg(speeds, slr=0, slaft=0, slspd=0, has=0, failr=0):
+def cfg(speeds, slr=0, slaft=0, slspd=0, has=0, failr=0, undat=0, undn=0,
+        qfail=0):
     """X3STUB.CFG (apps/xtmp3/x3stub.inc): a speed x 100 by rung, the
-    mid-track slowdown, and the KB the machine HAS (0: its own)"""
+    mid-track slowdown, the KB the machine HAS (0: its own), a rung whose
+    live start fails, and UNDN underruns counted from live granule UNDAT,
+    four granules apart, and the queue's probe refused while live (qfail)"""
     sp = list(speeds) + [0] * (8 - len(speeds))
-    return struct.pack("<8HBBHHHBB", *sp, slr, 0, slaft, slspd, has,
-                       failr, 0)
+    return struct.pack("<8HBBHHHBBHBB", *sp, slr, 0, slaft, slspd, has,
+                       failr, 0, undat, undn, qfail)
 
 
 # -----------------------------------------------------------------------------
@@ -649,8 +652,10 @@ def leg_slowdown():
     the card is still fed, so only the WINDOWS can see it - two under 1.10
     step down before anything is heard. 0.60x: genuinely too slow, so the
     ring runs dry before two windows can close - one underrun at a granule
-    boundary is the step's other trigger (SPEC.md 121.5). Either way ONE
-    step, Original to Half, never back up, and the position never goes back"""
+    boundary, with the window under 1.10x, is the step's other trigger
+    (SPEC.md 121.5). Either way ONE step, Original to Half, never back up,
+    and the position never goes back. Then the underrun RULE at 4x: one is
+    kept, two in a window step"""
     leg = "slowdown"
     for spd, under_ok in ((105, False), (60, True)):
         r = Rig(leg, sb=True, xcfg=cfg([0, 400, 400, 400, 400, 400],
@@ -684,6 +689,38 @@ def leg_slowdown():
             back = [b - a for a, b in zip(el, el[1:]) if b < a]
             check(leg, tag + "the position never went back", not back,
                   str(el))
+        finally:
+            r.done()
+    # AN UNDERRUN IS A REASON TO RE-EVALUATE, NOT A STEP (SPEC.md 121.5): at
+    # 4x headroom one underrun (the test hook counts it as the card's own, at
+    # live granule 40) is the disk's - the rung is kept and the refill asked
+    # for earlier; two inside one 32-granule window (40 and 44) step anyway
+    for n, quals_want in ((1, [Q_ORIG]), (2, [Q_ORIG, Q_HALF])):
+        r = Rig(leg, sb=True, xcfg=cfg([0, 400, 400, 400, 400, 400],
+                                       undat=40, undn=n),
+                hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+        tag = "%d underrun%s at 4x: " % (n, "" if n == 1 else "s")
+        try:
+            if not check(leg, tag + "XTMP3 opens",
+                         r.open_file("C", NEON, hd_listing([NEON]))):
+                return
+            r.until(lambda: r.st()["md"] == MD_LIVE, "live", 60, 0.1)
+            seen = []
+            r.until(lambda: seen.append(r.st()["qual"]) or
+                    r.st()["state"] == ST_DONE, "the end", 60, 0.3)
+            quals = [q for i, q in enumerate(seen)
+                     if i == 0 or q != seen[i - 1]]
+            s = r.st()
+            check(leg, tag + ("kept Original: the disk's, not the decode's"
+                              if n == 1 else "stepped to Half: the safety "
+                              "valve"), quals == quals_want and
+                  s["under"] == n, "%s, %d underruns" % (
+                      [QNAME[q] for q in quals], s["under"]))
+            if n == 1:
+                check(leg, tag + "...and the refill comes earlier: the "
+                      "look-ahead's low water at 3/4 of its ring",
+                      r.w("x3_lalw") == r.w("x3_lasz") * 3 // 4,
+                      "%d of %d" % (r.w("x3_lalw"), r.w("x3_lasz")))
         finally:
             r.done()
 
@@ -1084,9 +1121,13 @@ def leg_xtpeak():
               r.w("x3_rsz") == 16384 and r.b("x3_ext") == 0 and
               r.w("x3_lasz") == 8192, "%d bytes, ext %d, look-ahead %d" % (
                   r.w("x3_rsz"), r.b("x3_ext"), r.w("x3_lasz")))
+        check(leg, "...and a gulp is X3_RDXT, 4 KB: one read the card's ring "
+              "plays through (a read holds sch_lock)", r.w("x3_rdmax") == 4096,
+              "%d" % r.w("x3_rdmax"))
         time.sleep(3)
         s = r.st()
         print("     live peak %d KB = %d bytes" % (s["peak"], s["peak"] * 1024))
+        check(leg, "...no underrun", s["under"] == 0, "%d" % s["under"])
         check(leg, "live XT with a card: the working set at or under 400,000 "
               "bytes", 0 < s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
     finally:
@@ -1714,6 +1755,97 @@ def leg_pause():
         r.done()
 
 
+def leg_offvol():
+    """THE PACKAGE ON B:, THE SONG ON C: (the docs track's report): a lazy
+    part is read from XTMP3.O88 by NAME, and a name resolves where the
+    instance stands - the track's folder once a track is open - so the fetch
+    must stand in the folder XTMP3 was launched from (x3_fetchhome). Before
+    it, Auto's probe could not fetch STANDARD, went to Decode First and said
+    'Needs 360 KB, has 571 KB', a memory figure for a disk refusal. The
+    SHIPPED package with a card: it plays live and the part was fetched;
+    then a forced XT Standard converts onto C:"""
+    leg = "offvol"
+    t = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    note = os.path.join(t, "NOTE.TXT")
+    open(note, "wb").write(b"the package's disk\r\n")
+    r = Rig(leg, sb=True, stub=False, floppy=[note],
+            hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+    try:
+        if not check(leg, "XTMP3 (on B:) opens C:'s song", r.open_file(
+                "C", NEON, hd_listing([NEON]))):
+            return
+        states = []
+        r.until(lambda: states.append(r.st()["state"]) or
+                r.st()["md"] in (MD_LIVE, MD_CHOOSE) or
+                r.st()["state"] == ST_ERROR, "Auto's decision", 90, 0.2)
+        s = r.st()
+        check(leg, "plays LIVE (no Decode First, no ERROR)",
+              s["md"] == MD_LIVE and ST_ERROR not in states,
+              "md %d qual %s '%s'" % (s["md"], QNAME[s["qual"]],
+                                       r.errtext()))
+        nf = list(r.rd("x3_nfetch", 5))
+        check(leg, "...STANDARD's part was fetched from B:", nf[2] >= 1,
+              "fetches %s" % nf)
+        r.key("s")                          # then XT STANDARD, forced, and
+        r.until(lambda: r.st()["md"] == MD_IDLE, "the stop", 20)
+        for _ in range(Q_XTSTD):            # Decode First onto C: - the XT
+            r.key("q")                      # part fetched from B: as well
+            time.sleep(0.4)
+        r.key("d")
+        conv_flow(r, leg)
+        s = r.st()
+        nf = list(r.rd("x3_nfetch", 5))
+        check(leg, "a forced XT STANDARD converts and plays, the XT part "
+              "fetched from B:", s["state"] == ST_FILE and nf[3] >= 1,
+              "state %d md %d '%s', fetches %s" % (
+                  s["state"], s["md"], r.errtext(), nf))
+    finally:
+        r.done()
+        shutil.rmtree(t, ignore_errors=True)
+
+
+def leg_qagain():
+    """A QUEUED TRACK WHOSE PROBE WAS NOT HAD (the docs track's Hercules
+    report): on QEMU's relocated Hercules the heap beside a live XT stream
+    had no room for the probe's 8 KB, and the row kept its file's stem for
+    good. Here the test hook refuses the probe while live: the row shows the
+    stem, is flagged QEF_AGAIN, and the title arrives once the player is
+    idle (x3_qagain)"""
+    leg = "qagain"
+    a, b = NEON, "NIGHTSIG.MP3"
+    lst = floppy_listing([a, b])
+    r = Rig(leg, sb=True, xcfg=cfg([0, 400, 400, 400, 400, 400], qfail=1),
+            floppy=[fixture(a), fixture(b)], hd=[(HD0_GEO, [], [], 0)])
+    try:
+        if not check(leg, "XTMP3 opens on the first", r.open_file("B", a, lst)):
+            return
+        r.until(lambda: r.st()["md"] == MD_LIVE, "live", 60, 0.1)
+        if not check(leg, "File > Add to Queue", r.menu_pick("File", 1)):
+            return
+        r.until(lambda: struct.unpack("<H", r.read(S("fdlg_win"), 2))[0],
+                "the Open dialog", 20)
+        wp = struct.unpack("<H", r.read(S("fdlg_win"), 2))[0]
+        wx, wy = struct.unpack("<HH", r.read(geom.KERNEL_SEG * 16 + wp + 2, 4))
+        time.sleep(1.5)
+        xmcheck.dblclick(r.sock, wx + 70, wy + 47 + 16 * lst.index(b))
+        r.until(lambda: r.b("x3_qn") == 2, "the queue of two", 20)
+        def row():                          # entry 1 (xtmp3.asm's QE_*: 60
+            raw = r.rd("x3_q", 2 * 60)[60:]  # bytes, flags 18, title 19)
+            t = raw[19:60].split(b"\0")[0].decode("ascii", "replace")
+            return t, raw[18]
+        t, fl = row()
+        check(leg, "queued while live: the stem, flagged to ask again",
+              r.st()["md"] == MD_LIVE and t == "NIGHTSIG" and fl & 0x40,
+              "md %d '%s' flags %02x" % (r.st()["md"], t, fl))
+        r.key("s")
+        r.until(lambda: row()[0] != "NIGHTSIG", "the title, idle", 20, 0.2)
+        t, fl = row()
+        check(leg, "idle: asked again, the tag's title", t == "NIGHT SIGNALS"
+              and not fl & 0x40, "'%s' flags %02x" % (t, fl))
+    finally:
+        r.done()
+
+
 LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "cancel": leg_cancel, "full": leg_full, "stale": leg_stale,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
@@ -1721,7 +1853,8 @@ LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "chgsrc": leg_chgsrc, "dfdel": leg_dfdel, "batch": leg_batch,
         "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox,
         "probe32": leg_probe32, "shortmem": leg_shortmem,
-        "rungfail": leg_rungfail}
+        "rungfail": leg_rungfail, "offvol": leg_offvol,
+        "qagain": leg_qagain}
 
 
 def main():
