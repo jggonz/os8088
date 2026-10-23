@@ -1151,7 +1151,27 @@ def leg_xtclu():
                 r.key("q")
                 time.sleep(0.4)
             r.key("d")
-            clu_convert(r, leg)
+            if clu == 32768:                # GREYED IN THE DIALOG for XT
+                r.until(lambda: r.st()["md"] == MD_CHOOSE, "the drive "
+                        "dialog", 90, 0.2)  # Standard, which cannot hold a
+                vf = list(r.rd("x3c_vf", 2))    # 32 KB cluster's stage
+                check(leg, "XT STANDARD: D: greyed '32 KB clusters' in the "
+                      "drive dialog, C: not", bool(vf[1] & 4) and
+                      not vf[0] & 4, str(vf))
+                r.key("down")
+                time.sleep(1)
+                r.key("ret")
+                time.sleep(2)
+                check(leg, "...Decode and Play refuses it (Enter does "
+                      "nothing)", r.st()["md"] == MD_CHOOSE and
+                      not r.b("x3c_savepend"))
+                check(leg, "...the peak so far under 400,000 bytes",
+                      r.st()["peak"] * 1024 <= 400000,
+                      "%d KB" % r.st()["peak"])
+                r.key("esc")
+                r.until(lambda: r.st()["md"] == MD_IDLE, "the cancel", 20)
+            else:
+                clu_convert(r, leg)
             s = r.st()
             if clu < 32768:
                 check(leg, "XT STANDARD converted to D: and plays",
@@ -1171,12 +1191,6 @@ def leg_xtclu():
                 r.close()
                 xt_wav_check(leg, r, r.hds[1], wav, src, "std", clu)
             else:
-                check(leg, "XT STANDARD refused on 32 KB clusters, by name",
-                      s["state"] == ST_ERROR and
-                      r.errtext() == "Too little memory for that disk",
-                      "state %d '%s'" % (s["state"], r.errtext()))
-                check(leg, "...its peak still under 400,000 bytes",
-                      s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
                 r.key("q")                  # XT FAST
                 time.sleep(0.4)
                 check(leg, "the override is XT FAST",

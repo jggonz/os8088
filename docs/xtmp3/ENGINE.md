@@ -701,7 +701,7 @@ is asserted): each leg boots its own private QEMU with its own disks under
 | `playwav` | a finished WAV on the SB16: no decoder resident, no granule, no underrun, the square's frequency in the capture |
 | `pause` | pause, resume, rewind |
 | `xtpeak` | the SHIPPED package with the real XT part, no card: XT Standard set by Q, Decode First, the conversion finishes, `X3S_PEAK` x 1024 <= 400,000 (385 KB), and the XT part is fetched ONCE (the probe's OPEN reused); then LIVE on an SB16: the 8 KB grant, never the external ring, 387 KB |
-| `xtclu` | three boots, the destination D: a FAT16 volume of 8, 16 and 32 KB clusters (sparse images, the least FAT16 that has them): XT Standard converts to 8 and 16 KB with ONE stage half, 385 KB, its WAV byte-exact to x3simxt; on 32 KB it is refused by name (`Too little memory for that disk`), and XT Fast converts there (two 32 KB halves, 387 KB), byte-exact |
+| `xtclu` | three boots, the destination D: a FAT16 volume of 8, 16 and 32 KB clusters (sparse images, the least FAT16 that has them): XT Standard converts to 8 and 16 KB with ONE stage half, 385 KB, its WAV byte-exact to x3simxt; on 32 KB the drive dialog greys D: (`32 KB clusters`) for XT Standard and Decode and Play refuses it, and XT Fast converts there (two 32 KB halves, 387 KB), byte-exact |
 | `chgsrc` | a byte of the source's first 16 KB changed on the host DURING a (stub-slowed) conversion: `The MP3 changed meanwhile`, nothing plays, no .TMP or .WAV left |
 | `dfdel` | two boots: a conversion, then on the host a second index record naming OTHER.WAV (a WAV whose chunk is not `xtm3`) and an unrelated KEEP.TXT; File > Decoded Files, Delete, Proceed, twice: XTMP3's WAV is deleted, OTHER.WAV STAYS, KEEP.TXT untouched, both records gone |
 | `batch` | two tracks queued (File > Add to Queue), the first's drive dialog with `Queue too: Yes`: the second converts into the same folder with no dialog; both WAVs on C:, no .TMP |
@@ -734,10 +734,10 @@ is asserted): each leg boots its own private QEMU with its own disks under
 - **XT Standard on a 32 KB-cluster destination** is refused by the ceiling
   (section 6). A slot that wrote less than a cluster at a time would lift
   it; nothing in the SDK does.
-- **The drive dialog does not grey a volume the plan will refuse**: the
-  plan is measured after OPEN, so a 32 KB-cluster volume under XT Standard
-  is offered and the job then fails at once, before a byte is written,
-  with its reason.
+- **The drive dialog greys only what it can predict**: a 32 KB-cluster
+  volume under XT Standard (`x3c_vscan`, `32 KB clusters`; the `xtclu/32k`
+  leg). Any other memory shortfall the plan measures after OPEN fails the
+  job at once, before a byte is written, with the stated minimum.
 - **Every timing** is the FIELD track's (section 11), and the integration
   track's second round measured its own changes there (`xtmp3xt`, MartyPC's
   5160 with a VGA): XT Standard's conversion of AFTERHRS 0.055x -> 0.0946x
