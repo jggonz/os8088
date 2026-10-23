@@ -6,20 +6,21 @@
 ; is - behind the face of an 80s stereo component, the owner's two mockups in
 ; docs/xtmp3/design/.
 ;
-; THIS WAVE IS THE FACE (S4, docs/plans/XTMP3-PLAN.md): the window, the four
-; layouts in colour and in black and white, the menus, the keys, the queue,
-; File > Open and the .MP3 association - working, over a DEMO engine
-; (x3demo.inc) that plays a pretend track so the clock, the bar and the
-; needles move. The decoders and the real engine arrive behind the same
-; boundary: x3_st, the one record the face reads (x3face.inc), and the
-; x3_e_* procs the face calls (x3demo.inc says what each one is for).
+; THE FACE (S4, docs/plans/XTMP3-PLAN.md) is the window, the four layouts in
+; colour and in black and white, the menus, the keys, the queue, File > Open
+; and the .MP3 association. THE ENGINE (S6, S8, S9: x3eng.inc, x3conv.inc)
+; is behind one boundary: x3_st, the one record the face reads (x3face.inc),
+; and the x3_e_* procs the face calls (x3eng.inc says what each is for).
 ;
 ; THE FILES:
 ;   xtmp3.asm    this: the entry, the commands and their one predicate, the
 ;                queue, the menus, the keys and the callbacks
 ;   x3draw.inc   the drawing layer - roles, themes, the band, the canvas
 ;   x3face.inc   the state record, the four layouts, every element
-;   x3demo.inc   the demo engine (S4 only: S8's x3eng.inc replaces it)
+;   x3eng.inc    the engine: the ring, the worker, the feed, the ladder
+;   x3conv.inc   decode first: the drive dialog, the conversion, the cache
+;   x3pars.inc   the front end (the STANDARD track's): frames, the probe
+;   x3hook.inc   the stub backend's test hook (X3STUB=1 builds only)
 ;   build/x3art.inc  the pictures and fonts, made on the host by
 ;                tools/os88x3art.py
 ;
@@ -64,6 +65,18 @@ X3PART_XT    equ 3                  ; the XT reconstruction, lazy: x3xt.asm,
                                     ; carrying XTGEN.BIN inside itself (OPEN
                                     ; expands its tables from it; x3gran.inc's
                                     ; OPEN record has no slot for an asset)
+; --- the engine track (S9): which part answers for each backend. An X3STUB=1
+; build (tests only, never shipped) adds the stub backend as row 4 and lets it
+; answer for both, so the ladder runs on any host (docs/xtmp3/ENGINE.md)
+%define X3_PARTS
+%ifdef X3STUB
+X3PART_STUB  equ 4
+X3_PART_STD  equ X3PART_STUB
+X3_PART_XT   equ X3PART_STUB
+%else
+X3_PART_STD  equ X3PART_STD
+X3_PART_XT   equ X3PART_XT
+%endif
 
 X3_TICK     equ 5                   ; ticks between passes: the demo's clock,
                                     ; and the needles' 3.6 a second
@@ -213,6 +226,7 @@ x3_entry:
     OS88_REGION_MOVABLE_NOKEEP x3_ret ; every byte that outlives a pass is a
                                     ; static and moves with us
     mov [x3_win], bx
+    call x3_e_attach                ; ENGINE TRACK: its wake and close handlers
     mov al, 1
     call OSAPI_WM_SNAP              ; content origin on the 8-pixel grid
     mov al, 1
@@ -356,10 +370,10 @@ x3_busy:
 ; in:  AL = a command (B_* or C_*)
 ; out: CF = 0 live, CF = 1 refused; every register preserved
 ;
-; Decode First and Decoded Files are refused until their engine exists: the
-; output-drive dialog and the conversion are S9 (SPEC.md 121.7), and a menu
-; item that does nothing is a lie about the program. Cancel is live only
-; while a conversion runs, which until S9 is never.
+; Decode First and Decoded Files are the engine's to answer (x3conv.inc's
+; x3c_okdec / x3c_okfiles: a track and nothing under way; not while a dialog
+; or a conversion owns the machine). Cancel is live only while a conversion
+; runs.
 ; -----------------------------------------------------------------------------
 x3_bok:
     push bx
@@ -418,6 +432,14 @@ x3_bok:
     test byte [x3_st+X3S_FLAGS], X3SF_VOLOK
     jz .no
     jmp short .yes
+.dec:                               ; ENGINE TRACK: Decode First...
+    call x3c_okdec
+    jc .no
+    jmp short .yes
+.dfl:                               ; ...and Decoded Files (x3conv.inc)
+    call x3c_okfiles
+    jc .no
+    jmp short .yes
 .pp:
     mov al, B_PAUSE
     call x3_bok
@@ -433,7 +455,7 @@ x3_boktab:
     dw x3_bok.track, x3_bok.play, x3_bok.track, x3_bok.stop, x3_bok.track
     dw x3_bok.yes                   ; OPEN
     dw x3_bok.queue, x3_bok.queue   ; PREV NEXT
-    dw x3_bok.no, x3_bok.no         ; DECODE DFILES: S9's
+    dw x3_bok.dec, x3_bok.dfl       ; DECODE DFILES (x3conv.inc)
     dw x3_bok.yes, x3_bok.queue, x3_bok.queue   ; ADD REMOVE CLEAR
     dw x3_bok.cancel, x3_bok.theme, x3_bok.layout
     dw x3_bok.yes, x3_bok.yes, x3_bok.yes       ; QUAL METERS STATUS
@@ -516,7 +538,7 @@ x3_act:
 
 x3_acttab:
     dw x3_a_rew, x3_a_play, x3_a_pause, x3_e_stop, x3_a_ff, x3_a_open
-    dw x3_a_prev, x3_a_next, x3_a_none, x3_a_none
+    dw x3_a_prev, x3_a_next, x3c_actdec, x3c_actfiles   ; (x3conv.inc)
     dw x3_a_add, x3_a_remove, x3_a_clear
     dw x3_e_cancel, x3_a_theme, x3_a_layout
     dw x3_a_qual, x3_a_meters, x3_a_status
@@ -1474,9 +1496,15 @@ x3_hash:
 
 %include "x3draw.inc"
 %include "x3face.inc"
-%include "x3demo.inc"
-%define X3P_WANT_PROBE              ; the STANDARD track: the front end, frame
-%include "x3pars.inc"               ; level (and the queue's probe)
+; --- ENGINE TRACK: the engine and decode first (S9), over the STANDARD
+; track's front end (x3pars.inc) and its queue probe (x3_e_qadd, x3eng.inc)
+%define X3P_WANT_PROBE
+%include "x3pars.inc"
+%include "x3eng.inc"
+%include "x3conv.inc"
+%ifdef X3STUB
+%include "x3hook.inc"               ; the stub backend's test hook
+%endif
 
 ; =============================================================================
 ; DATA
@@ -1697,18 +1725,27 @@ x3_ab3:     db 'this machine can sustain', 0
 ; os88pkg.py lays the parts out after the image in this order, from the Makefile's
 ; --part arguments: build/x3front.bin, build/x3art.bin, build/x3stdp.bin and
 ; build/x3xt.bin, all lz4.
+%ifdef X3STUB
+    OS88_PARTS_BEGIN 5
+%else
     OS88_PARTS_BEGIN 4
+%endif
       OS88_PART OP_SEG, OP_COMP             ; X3PART_FRONT: x3front.asm
       OS88_PART OP_ASSET, X3_ARTFLAGS       ; X3PART_ART: tools/os88x3art.py
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; X3PART_STD: x3std.asm
       ; --- the XT track's row (S7) ---
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; X3PART_XT: x3xt.asm (+ XTGEN.BIN)
+%ifdef X3STUB                       ; --- the engine track's (tests only) ---
+      OS88_PART OP_SEG, OP_LAZY             ; X3PART_STUB: x3stub.asm
+%endif
     OS88_PARTS_END
 
 %define OS88UI_ABOUT
 %define OS88UI_NOGLYPH
 %define OS88UI_BOWN
+%define OS88UI_ALERT                ; ENGINE TRACK: Decoded Files' Delete asks
 %include "os88ui.inc"
+
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5), allocated in order --------------------
 %assign X3B_AT 0
@@ -1796,10 +1833,15 @@ x3_ab3:     db 'this machine can sustain', 0
     X3B x3_rects, X3_NB * 8         ; the keys, screen
     X3B x3_bflags, X3_NB * 2        ; ...as drawn
     X3B x3f_keys, X3F_NKEYS * 2     ; the elements' keys, as drawn
-    X3_DEMOBSS                      ; x3demo.inc's own
+    X3_ENGBSS                       ; ENGINE TRACK: x3eng.inc's and x3conv.inc's
     X3P_BSS                         ; x3pars.inc's own (the STANDARD track)
+%ifdef X3STUB
+    X3_HOOKBSS                      ; ENGINE TRACK: the stub's test hook
+%endif
     X3B x3f_fvu, X3F_FACESZ         ; the colour dial faces, VU and BUFFER
     X3B x3f_fbuf, X3F_FACESZ
     X3B x3_work, X3_WORKSZ          ; the band / the canvas
     OS88_BSS OP_BSS + X3B_AT
+X3_REGIONKB equ (os88_image_end - $$ + OP_BSS + X3B_AT + 1023) / 1024
+                                    ; the region, image and bss (x3_memck)
     OS88_IMAGE_END
