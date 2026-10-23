@@ -334,7 +334,7 @@ time). 86Box cannot assert, so the matrix is this procedure and its JSON.
   (section 7.1). The report carries the count, not the moment.
 - **Listening.** No output was heard, on any machine.
 
-## 7. Round 2: the shipped build, re-run (feature/xtmp3 70323ad3)
+## 7. Round 2: the shipped build, re-run (feature/xtmp3 d5e53fea)
 
 The integration track acted on sections 2 to 4:
 - the face rests while converting;
@@ -349,8 +349,12 @@ It re-measured XT Standard on MartyPC itself (ENGINE.md section 12):
 - calibration 16.1 s -> **6.4 s**;
 - calibration peak 402 KB -> 387 KB.
 
-FIELD re-ran two things on that build: the 86Box matrix once (the same
-`-DX3REPORT` disks and procedure), and the speaker.
+FIELD re-ran two things on that build: the 86Box matrix (the same
+`-DX3REPORT` disks and procedure), and the speaker. Both ran first on
+70323ad3, then once more on d5e53fea, which added the drive dialog's
+greying of 32 KB-cluster drives. The tables below are d5e53fea's. The only
+figure that moved is the 286's Original probe on AFTERHRS, 0.29 -> 0.30;
+every decision, peak, calibration time and underrun count was identical.
 
 ### 7.1 The matrix (86Box, `docs/xtmp3/field/86box-matrix-r2.json`)
 
@@ -361,7 +365,7 @@ ladder's re-runs after a rung that could not start: 0 on every machine).
 |---|---|---|---|---|---|---|
 | XT 4.77, SB 2.0 | AFTERHRS | XT STD 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive | 381 KB | **10.08 s** (27.00) |
 | | C128 | QUARTER 0.01 | Decode first, on QUARTER | the dialog | 179 KB | 7.89 s |
-| 286/12.5, SB16 | AFTERHRS | ORIG 0.29, XT STD 0.73, XT FAST 0.78 | Decode first, on ORIGINAL | the dialog | 381 KB | 9.28 s |
+| 286/12.5, SB16 | AFTERHRS | ORIG 0.30, XT STD 0.73, XT FAST 0.78 | Decode first, on ORIGINAL | the dialog | 381 KB | 9.28 s |
 | | C128 | QUARTER 0.15, XT STD 0.10, XT FAST 0.21 | Decode first, on QUARTER | the dialog | 381 KB | 7.62 s |
 | 386DX/25, SB16 | AFTERHRS | ORIG 0.96, XT STD 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (1 at 55a051b4), stepped to XT FAST | 343 KB | 5.45 s |
 | | C128 | QUARTER 0.37, XT STD 0.47, XT FAST 0.51 | Decode first, on QUARTER | the dialog | 343 KB | 7.15 s |

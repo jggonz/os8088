@@ -218128,8 +218128,8 @@ converting, one probe on an 8086, the probe's OPEN reused, the grant given
 back before OPEN, a failed start falling through, the XT backend's 8 KB
 ring) and re-measured XT Standard on MartyPC's XT with `xtmp3xt`. Those rows
 are marked **shipped**; the rest are FIELD's figures at 55a051b4. **The
-86Box rows are the shipped build's** (70323ad3, re-run once by FIELD with
-the `-DX3REPORT` build); FIELD.md section 3 keeps the 55a051b4 matrix they
+86Box rows are the shipped build's** (d5e53fea, re-run by FIELD with the
+`-DX3REPORT` build; 70323ad3 measured the same but for one probe); FIELD.md section 3 keeps the 55a051b4 matrix they
 replace.
 
 | machine | track | probes (x real) | Auto's decision | what ran | peak |
@@ -218138,7 +218138,7 @@ replace.
 | | C128 | Quarter 0.01 (no XT rung: its output would be 44.1 kHz, above a DSP 2.01) | Decode first, on QUARTER | the conversion at **0.0117x** | 204,800 B |
 | 4.77 MHz XT, SB 2.0 (86Box, floppy only) | AFTERHRS | XT Standard 0.05 (an 8086 probes it alone) | Decode first, on XT STANDARD | the dialog: no hard drive; calibration 10.08 s | 381 KB |
 | | C128 | Quarter 0.01 | Decode first, on QUARTER | the dialog; 7.89 s | 179 KB |
-| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.29, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
+| 286 12.5 MHz, SB16 (86Box) | AFTERHRS | Original 0.30, XT Standard 0.73, XT Fast 0.78 | Decode first, on ORIGINAL | the dialog; 9.28 s | 381 KB (calibrating) |
 | | C128 | Quarter 0.15, XT Standard 0.10, XT Fast 0.21 | Decode first, on QUARTER | the dialog; 7.62 s | 381 KB |
 | 386DX 25 MHz, SB16 (86Box) | AFTERHRS | Original 0.96, XT Standard 2.14 | **live XT STANDARD**, 11,025 Hz mono 8-bit | **11 underruns** (one at 55a051b4), stepped to XT FAST | 343 KB |
 | | C128 | Quarter 0.37, XT Standard 0.47, XT Fast 0.51 | Decode first, on QUARTER | the dialog; 7.15 s | 343 KB |
@@ -218357,10 +218357,12 @@ MartyPC's 5160 through `xtmp3xt`, the rest QEMU's `xtmp3live` and
   request and an empty card is about 240 ms. Not reproduced, not changed.
 - **The 720KB disks** carry XTMP3 only on `make xtmp3disk`; whether it rides
   the third primary 720KB disk is the owner's call.
-- **Not re-run on the shipped build**: the 86Box matrix (§121.11.5, at
-  55a051b4), and XT Fast, XT Speech and Quarter's conversions on MartyPC.
+- **Not re-run on the shipped build**: XT Fast, XT Speech and Quarter's
+  conversions on MartyPC (the 86Box matrix and the speaker were, at
+  d5e53fea). On 86Box the rung fall-through was not reached: no rung's
+  probe passed and then failed to start.
 - **Untested**: the SB Pro's stereo path.
 - **Not measured**: any real machine, a real hard disk's share of a
   conversion, the face on CGA and Hercules on an XT, a conversion on
-  86Box, the cause of the 386's one underrun, the SB Pro's stereo on its
+  86Box, the cause of the 386's underruns (11 on the shipped build), the SB Pro's stereo on its
   own card, and a listening pass of each rung.
