@@ -573,21 +573,25 @@ br_bmrefresh:
     xor dx, dx
     mov si, br_s_bmfile
     call od_read
-    jc .empty
+    jnc .got
+    cmp ax, FERR_NOENT              ; a missing file is the only honest empty
+    je .empty
+    jmp .bad                        ; any other read failure is not "empty"
+.got:
     or dx, dx
-    jnz .empty
+    jnz .bad
     cmp ax, BR_BMHEADER
-    jb .empty
+    jb .bad
     cmp byte [br_bmdata], 'B'
-    jne .empty
+    jne .bad
     cmp byte [br_bmdata+1], 'M'
-    jne .empty
+    jne .bad
     cmp byte [br_bmdata+2], '0'
-    jne .empty
+    jne .bad
     cmp byte [br_bmdata+3], '1'
-    jne .empty
+    jne .bad
     cmp byte [br_bmdata+4], BR_BMMAX
-    ja .empty
+    ja .bad
     xor bx, bx
     mov [br_copycap], ax
     mov bl, [br_bmdata+4]
@@ -595,9 +599,26 @@ br_bmrefresh:
     mul bx
     add ax, BR_BMHEADER
     cmp ax, [br_copycap]
-    ja .empty
+    ja .bad
+    mov cl, [br_bmdata+4]           ; a record's text fields end in NUL whatever
+    xor ch, ch                      ; the file held
+    mov bx, BR_BMREC
+    jcxz .okend
+.nul:
+    mov byte [bx+BR_BMTITLE-1], 0
+    mov byte [bx+BR_BMRECSZ-1], 0
+    add bx, BR_BMRECSZ
+    loop .nul
+.okend:
+    clc
     jmp .done
+.bad:
+    stc                             ; CF=1: read failed or foreign file; the
+    jmp short .clr                  ; cache is empty but must not be written
 .empty:
+    clc
+.clr:
+    pushf
     push es
     push ds
     pop es
@@ -610,8 +631,11 @@ br_bmrefresh:
     mov byte [br_bmdata+2], '0'
     mov byte [br_bmdata+3], '1'
     pop es
+    popf
 .done:
+    pushf
     call br_bmmenuset
+    popf
     pop es
     pop di
     pop si
@@ -689,11 +713,9 @@ br_bmfindurl:
     push si
     push di
     push es
-    xor dx, dx
-    mov dl, [br_bmdata+4]           ; count is a byte, not a word
     xor bx, bx
 .next:
-    cmp bx, dx
+    cmp bl, [br_bmdata+4]           ; count is a byte; mul below clobbers DX
     jae .miss
     mov ax, bx
     mov di, BR_BMRECSZ
@@ -979,6 +1001,12 @@ br_bmservice:
     mov byte [br_bmrefreshreq], 0
     call br_bmrefresh
     mov al, [br_bmreq]
+    jnc .readok
+    mov byte [br_bmreq], 0          ; unreadable or foreign file: never write
+    or al, al                       ; over it, and say so
+    jz .refresh_only
+    jmp .failmsg
+.readok:
     or al, al
     jz .refresh_only
     mov byte [br_bmreq], 0
@@ -1021,6 +1049,7 @@ br_bmservice:
     jmp .restore
 .failed:
     call br_bmrefresh
+.failmsg:
     mov word [br_nmsg], br_s_bmfail
     mov byte [br_nstate], BN_DONE
 .restore:
@@ -1066,7 +1095,7 @@ br_bmaddmem:
     jne .title
     mov si, br_bmrequrl
 .title:
-    mov cx, BR_BMTITLE - 1
+    mov cx, BR_BMTITLE
     call br_copyz
     mov ax, bx
     mov di, BR_BMRECSZ
@@ -1075,7 +1104,7 @@ br_bmaddmem:
     mov di, ax
     mov si, br_bmrequrl
 .url:
-    mov cx, BR_BMURL - 1
+    mov cx, BR_BMURL
     call br_copyz
     inc byte [br_bmdata+4]
     clc
@@ -1139,30 +1168,28 @@ br_bmwrite:
     call od_write
     ret
 
+; Copy a NUL-terminated string DS:SI -> ES:DI into a field of CX bytes: at most
+; CX-1 characters, always a NUL, the rest zero-filled.
 br_copyz:
     push ax
     push cx
     push di
     push si
-    xor al, al
     cld
+    jcxz .done
+    dec cx
 .copy:
-    jcxz .end
+    jcxz .term
     lodsb
     or al, al
-    jz .zero
-    stosb
-    loop .copy
-    jmp .done
-.zero:
+    jz .term
     stosb
     dec cx
-.zeroes:
-    jcxz .done
+    jmp .copy
+.term:
+    xor al, al
     stosb
-    loop .zeroes
-.end:
-    stosb
+    rep stosb
 .done:
     pop si
     pop di
