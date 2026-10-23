@@ -19,7 +19,9 @@
 ;                queue, the menus, the keys and the callbacks
 ;   x3draw.inc   the drawing layer - roles, themes, the band, the canvas
 ;   x3face.inc   the state record, the four layouts, every element
-;   x3demo.inc   the demo engine (S4 only: S8's x3eng.inc replaces it)
+;   x3eng.inc    the engine: the ring, the worker, the feed, the ladder
+;   x3conv.inc   decode first: the drive dialog, the conversion, the cache
+;   x3stubp.inc  the front end's stand-in, until x3pars.inc
 ;   build/x3art.inc  the pictures and fonts, made on the host by
 ;                tools/os88x3art.py
 ;
@@ -29,8 +31,24 @@
 ; =============================================================================
 
 %include "os88api.inc"
+%include "x3gran.inc"               ; the decoder's ABI (SPEC.md 121.3)
 
+; --- ENGINE TRACK: the decoder's parts. An X3STUB=1 build (tests only) carries
+; the stub backend (x3stub.asm) as part 0 and answers for both backends with
+; it; a build with no backend part has them FFh, and every rung is refused by
+; name ("No decoder in this build"). The STANDARD and XT tracks' parts table
+; replaces this block (docs/xtmp3/ENGINE.md)
+%ifdef X3STUB
+  %define X3_PARTS
+X3_PART_STD equ 0
+X3_PART_XT  equ 0
+    OS88_HEADER 'XTMP3', x3_entry, 3 | OS88_F_PARTS
+%include "os88parts.inc"
+%else
+X3_PART_STD equ 0xFF
+X3_PART_XT  equ 0xFF
     OS88_HEADER 'XTMP3', x3_entry, 3
+%endif
                                     ; flags: bit 0 the icon, bit 1 the
                                     ; association block (SPEC.md 54.6)
     OS88_ICON16                     ; a little stereo deck: an LCD, a knob
@@ -140,6 +158,12 @@ X3F_FACESZ  equ (X3ART_DIALF_W / 2) * X3ART_DIALF_H  ; a colour dial face
 ; opened on joins the queue at the first tick.
 ; -----------------------------------------------------------------------------
 x3_entry:
+%ifdef X3_PARTS                     ; ENGINE TRACK: the parts FIRST
+    push es                         ; (os88parts.inc rule 1), ES banked for
+    call op_load                    ; OSAPI_ARG_FILE
+    pop es
+    jc x3_ret
+%endif
     call OSAPI_ARG_FILE             ; an .MP3? CF = 1: launched empty
     jc .plain
     mov di, x3_argname              ; SI -> its name in KERNEL_SEG: copied out
@@ -176,6 +200,7 @@ x3_entry:
     OS88_REGION_MOVABLE_NOKEEP x3_ret ; every byte that outlives a pass is a
                                     ; static and moves with us
     mov [x3_win], bx
+    call x3_e_attach                ; ENGINE TRACK: its wake and close handlers
     mov al, 1
     call OSAPI_WM_SNAP              ; content origin on the 8-pixel grid
     mov al, 1
@@ -319,10 +344,10 @@ x3_busy:
 ; in:  AL = a command (B_* or C_*)
 ; out: CF = 0 live, CF = 1 refused; every register preserved
 ;
-; Decode First and Decoded Files are refused until their engine exists: the
-; output-drive dialog and the conversion are S9 (SPEC.md 121.7), and a menu
-; item that does nothing is a lie about the program. Cancel is live only
-; while a conversion runs, which until S9 is never.
+; Decode First and Decoded Files are the engine's to answer (x3conv.inc's
+; x3c_okdec / x3c_okfiles: a track and nothing under way; not while a dialog
+; or a conversion owns the machine). Cancel is live only while a conversion
+; runs.
 ; -----------------------------------------------------------------------------
 x3_bok:
     push bx
@@ -381,6 +406,14 @@ x3_bok:
     test byte [x3_st+X3S_FLAGS], X3SF_VOLOK
     jz .no
     jmp short .yes
+.dec:                               ; ENGINE TRACK: Decode First...
+    call x3c_okdec
+    jc .no
+    jmp short .yes
+.dfl:                               ; ...and Decoded Files (x3conv.inc)
+    call x3c_okfiles
+    jc .no
+    jmp short .yes
 .pp:
     mov al, B_PAUSE
     call x3_bok
@@ -396,7 +429,7 @@ x3_boktab:
     dw x3_bok.track, x3_bok.play, x3_bok.track, x3_bok.stop, x3_bok.track
     dw x3_bok.yes                   ; OPEN
     dw x3_bok.queue, x3_bok.queue   ; PREV NEXT
-    dw x3_bok.no, x3_bok.no         ; DECODE DFILES: S9's
+    dw x3_bok.dec, x3_bok.dfl       ; DECODE DFILES (x3conv.inc)
     dw x3_bok.yes, x3_bok.queue, x3_bok.queue   ; ADD REMOVE CLEAR
     dw x3_bok.cancel, x3_bok.theme, x3_bok.layout
     dw x3_bok.yes, x3_bok.yes, x3_bok.yes       ; QUAL METERS STATUS
@@ -479,7 +512,7 @@ x3_act:
 
 x3_acttab:
     dw x3_a_rew, x3_a_play, x3_a_pause, x3_e_stop, x3_a_ff, x3_a_open
-    dw x3_a_prev, x3_a_next, x3_a_none, x3_a_none
+    dw x3_a_prev, x3_a_next, x3c_actdec, x3c_actfiles   ; (x3conv.inc)
     dw x3_a_add, x3_a_remove, x3_a_clear
     dw x3_e_cancel, x3_a_theme, x3_a_layout
     dw x3_a_qual, x3_a_meters, x3_a_status
@@ -1437,7 +1470,11 @@ x3_hash:
 
 %include "x3draw.inc"
 %include "x3face.inc"
-%include "x3demo.inc"
+; --- ENGINE TRACK: the engine and decode first (S9). x3stubp.inc stands in for
+; the front end (x3pars.inc, the STANDARD track's) until it lands here
+%include "x3stubp.inc"
+%include "x3eng.inc"
+%include "x3conv.inc"
 
 ; =============================================================================
 ; DATA
@@ -1657,12 +1694,24 @@ x3_ab3:     db 'this machine can sustain', 0
 %define OS88UI_ABOUT
 %define OS88UI_NOGLYPH
 %define OS88UI_BOWN
+%define OS88UI_ALERT                ; ENGINE TRACK: Decoded Files' Delete asks
 %include "os88ui.inc"
+
+%ifdef X3STUB                       ; ENGINE TRACK: the stub backend, part 0
+    OS88_PARTS_BEGIN 1
+      OS88_PART OP_SEG, OP_LAZY     ; 0 x3stub.asm (tests only)
+    OS88_PARTS_END
+%endif
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5), allocated in order --------------------
 %assign X3B_AT 0
+%ifdef X3_PARTS                     ; ENGINE TRACK: after the parts standard's
+  %define X3B_BASE os88_image_end + OP_BSS
+%else
+  %define X3B_BASE os88_image_end
+%endif
 %macro X3B 2                        ; name, bytes
-%1 equ os88_image_end + X3B_AT
+%1 equ X3B_BASE + X3B_AT
 %assign X3B_AT X3B_AT + (%2)
 %endmacro
     X3B x3_st, X3S_SIZE             ; THE STATE RECORD (x3face.inc)
@@ -1744,9 +1793,14 @@ x3_ab3:     db 'this machine can sustain', 0
     X3B x3_rects, X3_NB * 8         ; the keys, screen
     X3B x3_bflags, X3_NB * 2        ; ...as drawn
     X3B x3f_keys, X3F_NKEYS * 2     ; the elements' keys, as drawn
-    X3_DEMOBSS                      ; x3demo.inc's own
+    X3_ENGBSS                       ; ENGINE TRACK: x3eng.inc's and x3conv.inc's
+    X3_STUBPBSS                     ; ...and the front end's stand-in's
     X3B x3f_fvu, X3F_FACESZ         ; the colour dial faces, VU and BUFFER
     X3B x3f_fbuf, X3F_FACESZ
     X3B x3_work, X3_WORKSZ          ; the band / the canvas
+%ifdef X3_PARTS
+    OS88_BSS OP_BSS + X3B_AT
+%else
     OS88_BSS X3B_AT
+%endif
     OS88_IMAGE_END

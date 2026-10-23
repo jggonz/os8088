@@ -6279,12 +6279,38 @@ $(BUILD)/x3art.inc: tools/os88x3art.py $(XTMP3ART) | $(BUILD)
 	python3 tools/os88x3art.py --selfcheck
 	python3 tools/os88x3art.py --out $@
 
-$(BUILD)/xtmp3.bin: apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
-                    apps/xtmp3/x3face.inc apps/xtmp3/x3demo.inc \
-                    $(BUILD)/x3art.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
-		-o $@ apps/xtmp3/xtmp3.asm
+XTMP3_SRC := apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
+             apps/xtmp3/x3face.inc apps/xtmp3/x3eng.inc \
+             apps/xtmp3/x3conv.inc apps/xtmp3/x3stubp.inc \
+             apps/xtmp3/x3stub.inc apps/xtmp3/x3gran.inc \
+             apps/audio/aplook.inc apps/audio/apspk.inc \
+             apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc \
+             apps/os88rseq.inc apps/os88pit.inc apps/os88dec.inc \
+             apps/os88data.inc apps/os88parts.inc apps/os88partsbody.inc \
+             drivers/sound/sndpkg.inc \
+             $(BUILD)/x3art.inc apps/os88api.inc apps/os88ui.inc
+$(BUILD)/xtmp3.bin: $(XTMP3_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
 	@echo "xtmp3:  $(call FILESIZE,$@) bytes"
+
+# THE ENGINE'S TEST BUILD (docs/xtmp3/ENGINE.md, tests/xtmp3eng.py): the same
+# source with -DX3STUB, carrying the STUB backend (apps/xtmp3/x3stub.asm) as
+# its one part - a tone a granule at a cost X3STUB.CFG sets per rung, so the
+# ladder's transitions, the conversion and the cache are deterministic on
+# QEMU. ON DEMAND (`make xtmp3stub`); nothing ships it. On a disk it must be
+# named XTMP3.O88: op_load reads the parts out of the file it came from.
+.PHONY: xtmp3stub
+xtmp3stub: $(BUILD)/xtmp3s.o88
+$(BUILD)/x3stub.bin: apps/xtmp3/x3stub.asm apps/xtmp3/x3gran.inc \
+                     apps/xtmp3/x3stub.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -o $@ apps/xtmp3/x3stub.asm
+$(BUILD)/xtmp3s.bin: $(XTMP3_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -DX3STUB -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3 (X3STUB):  $(call FILESIZE,$@) bytes"
+$(BUILD)/xtmp3s.o88: $(BUILD)/xtmp3s.bin $(BUILD)/x3stub.bin tools/os88pkg.py
+	$(OS88PKG) $(BUILD)/xtmp3s.bin -o $@ --part $(BUILD)/x3stub.bin
 
 $(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@
@@ -13936,7 +13962,7 @@ MEGADIR := $(BUILD)/megak
 MEGAAPPDIR := $(MEGADIR)/apps
 MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
-            $(MEGAAPPDIR)/pixel.o88
+            $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -13993,6 +14019,17 @@ $(MEGAAPPDIR)/midirack.bin: $(MIDIRACK_SRC) | $(BUILD)
 	@echo "midirack (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/midirack.o88: $(MEGAAPPDIR)/midirack.bin $(BUILD)/mrfaces.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(MEGAAPPDIR)/midirack.bin -o $@ --part $(BUILD)/mrfaces.bin
+
+# XTMP3's arm (SPEC.md 121): the PC speaker's and the Covox's protected-mode
+# ISR copies, which it carries as the Audio Player's own source
+# (apps/os88spk.inc through apps/audio/apspk.inc, SPEC.md 86.21)
+$(MEGAAPPDIR)/xtmp3.bin: $(XTMP3_SRC) apps/os88mega.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+	    -I drivers/sound/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3 (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@
 
 megapkgs: $(MEGAPKGS) $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 	@python3 tests/unit/t_megapkg.py --sizes
