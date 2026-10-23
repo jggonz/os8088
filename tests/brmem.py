@@ -12,9 +12,19 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_ROOT, "tests"))
+sys.path.insert(0, os.path.join(_ROOT, "tools"))
+import brmemory
 import ethernet
 
 subprocess.run(["make", "browsertest"], check=True)
-sys.argv = ["tests/ethernet.py", "--large-kb", "40"]
+os.makedirs("build/brmemory", exist_ok=True)
+PAGE = "build/brmemory/mem40k.htm"
+brmemory.write_numbered_rows(
+    PAGE, 40 * 1024,
+    b"<!doctype html><title>Browser 40 KB</title><h1>Browser 40 KB</h1><pre>\n",
+    b"row %06d: conventional page data beyond the old source ceiling\n",
+    b"\n</pre>")
+sys.argv = ["tests/ethernet.py", "--page", PAGE]
 raise SystemExit(ethernet.main())
