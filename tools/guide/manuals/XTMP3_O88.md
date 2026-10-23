@@ -262,8 +262,7 @@ About, in the XTMP3 menu, shows the program's card.
   packed**).
 - A hard disk partition of 1 to 2GB stores files in very large pieces.
   XTMP3 cannot play an MP3 from one (**Its disk's clusters are too large**);
-  copy it to another disk first. It can play a decoded WAV from one, and on
-  the Decode First list such a disk may say **clusters too large**. XT
-  Standard cannot decode onto it (**Too little memory for that disk**); the
-  other qualities can.
+  copy it to another disk first. It can play a decoded WAV from one. XT
+  Standard cannot decode onto such a disk, so the Decode First list greys
+  it with **32 KB clusters**; the other qualities can.
 - Playback and seeking wait while a song is being decoded.
