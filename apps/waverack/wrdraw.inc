@@ -293,6 +293,9 @@ wd_bnew:
     shr cx, 1
     shr cx, 1
     mov [wd_bst], cx
+    mov [wd_tst], cx                ; wd_bor composes here (we_target
+    mov word [wd_tbase], wd_band    ; points it at the waveform band)
+    mov [wd_tseg], ds
     mov ax, cx
     mul dx                          ; AX = the bytes (DX = 0: a band is small)
     cmp ax, WD_BANDSZ
@@ -317,7 +320,9 @@ wd_bnew:
 ; -----------------------------------------------------------------------------
 ; wd_bor - OR 1bpp rows into the band at any x
 ; in:  SI = the source's first row, CX = its stride in bytes, DX = rows,
-;      AX = x, BX = y (band coordinates). The rows must fit the band
+;      AX = x, BX = y (band coordinates). The rows must fit the band. The
+;      band is the TARGET: wd_band, set by wd_bnew - or the waveform band,
+;      set by we_target (wd_tseg:wd_tbase, wd_tst a row)
 ; -----------------------------------------------------------------------------
 wd_bor:
     push ax
@@ -327,17 +332,19 @@ wd_bor:
     push si
     push di
     push bp
+    push es
+    mov es, [wd_tseg]
     mov bp, cx                      ; BP = the source stride
     push dx
     mov di, ax
     mov ax, bx
-    mul word [wd_bst]               ; AX = the band row's offset (DX spent)
+    mul word [wd_tst]               ; AX = the band row's offset (DX spent)
     mov cx, di
     shr di, 1
     shr di, 1
     shr di, 1
     add di, ax
-    add di, wd_band                 ; DI = the first byte the row touches
+    add di, [wd_tbase]              ; DI = the first byte the row touches
     and cl, 7                       ; CL = the shift into it
     pop dx
 .row:
@@ -348,8 +355,8 @@ wd_bor:
     mov ah, [si]
     xor al, al
     shr ax, cl
-    or [di], ah
-    or [di+1], al
+    or [es:di], ah
+    or [es:di+1], al
     inc si
     inc di
     dec bx
@@ -357,9 +364,10 @@ wd_bor:
     pop di
     pop si
     add si, bp
-    add di, [wd_bst]
+    add di, [wd_tst]
     dec dx
     jnz .row
+    pop es
     pop bp
     pop di
     pop si
@@ -572,29 +580,7 @@ wd_bout:
     and dx, 0x0F0F                  ; DL = the ink, DH = the paper
     cmp byte [wd_bdim], 0
     je .nodim
-    push cx                         ; greyed: half the ink, a checkerboard
-    push si
-    push bx
-    mov si, wd_band
-    xor bx, bx
-.drow:
-    push cx
-    mov cx, [wd_bst]
-    mov bl, 0xAA
-    test bh, 1
-    jz .dodd
-    mov bl, 0x55
-.dodd:
-    and [si], bl
-    inc si
-    loop .dodd
-    inc bh
-    pop cx
-    sub cx, [wd_bst]
-    ja .drow
-    pop bx
-    pop si
-    pop cx
+    call wd_bdith                   ; greyed: half the ink, a checkerboard
     mov byte [wd_bdim], 0
 .nodim:
     cmp byte [wr_bpp1], 0
@@ -637,6 +623,33 @@ wd_bout:
     pop es
     pop bp
     pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wd_bdith - the band ANDed with a checkerboard: half its ink (SPEC.md 47
+; rule 1, the 1bpp way). keeps every register
+wd_bdith:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, wd_band
+    mov dx, [wd_bh]
+    mov ah, 0xAA
+.row:
+    mov cx, [wd_bst]
+.byte:
+    and [si], ah
+    inc si
+    loop .byte
+    not ah                          ; 0xAA, 0x55, 0xAA, ...
+    dec dx
+    jnz .row
     pop si
     pop dx
     pop cx

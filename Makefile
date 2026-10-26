@@ -6317,7 +6317,9 @@ $(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py | $(BUILD)
 	python3 tools/os88wrart.py --out $@
 
 $(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
-                       apps/waverack/wrface.inc $(BUILD)/wrart.inc \
+                       apps/waverack/wrface.inc apps/waverack/wrwav.inc \
+                       apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
+                       $(BUILD)/wrart.inc apps/os88dec.inc \
                        apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \
 		-o $@ apps/waverack/waverack.asm
@@ -6325,6 +6327,25 @@ $(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
 
 $(BUILD)/waverack.o88: $(BUILD)/waverack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/waverack.bin -o $@
+
+# ...and its FIXTURE DISK (ON DEMAND: `make waverackfix`, never in `all`):
+# a 1.44MB scratch floppy with WAVERACK.O88 at the root and every WAV
+# tools/wrsim.py makes - the reference's fixtures, uncompressed, in MEDIA/
+# (the folder the Standard File dialog opens on): GOOD/ the files it must
+# open, BAD/ the ones it must refuse, and LONG.WAV (~1.1MB) beside them to
+# prove the scan streams. `make test TESTAPPS=build/wrfix.img` swaps it into
+# B:; tests/waverack.py is the soak row that opens every one of them
+.PHONY: waverackfix
+waverackfix: $(BUILD)/wrfix.img
+$(BUILD)/wrfix.img: $(BUILD)/waverack.o88 tools/wrsim.py tools/os88disk.py
+	rm -rf $(BUILD)/wrfix && mkdir -p $(BUILD)/wrfix
+	python3 tools/wrsim.py --selfcheck --quiet
+	python3 tools/wrsim.py --fixtures $(BUILD)/wrfix
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/waverack.o88 \
+	    $$(for f in $(BUILD)/wrfix/GOOD/*.WAV; do printf 'MEDIA/GOOD:%s ' $$f; done) \
+	    $$(for f in $(BUILD)/wrfix/BAD/*.WAV; do printf 'MEDIA/BAD:%s ' $$f; done) \
+	    MEDIA:$(BUILD)/wrfix/LONG.WAV
+	@echo "wrfix: $@"
 
 # XTMP3 (SPEC.md 121): the adaptive MP3 player. Its face is the retro-face
 # skill's (CDRack's shape): every picture and font is build/x3art.bin, a PART

@@ -124,3 +124,109 @@ repaint, PIL difference `None` - held on VGA colour, VGA black and white and
 EGA, and across a COMPACT and back round trip on VGA. A relaunch after Close
 drew a face identical to the first launch. Hercules was not looked at here
 (QEMU cannot show it); that look is MartyPC's.
+
+## Wave 2 - the document (US-04)
+
+**The story.** Open a WAV and inspect it without loading it into RAM: a
+real RIFF walk, the sample frame as the one unit of time, min/max envelopes
+so a single-sample click is visible at full zoom out, both channels of a
+stereo file, zoom down to the samples themselves, an overview, and a long
+file that stays cancellable while it loads.
+
+**The reference came first.** `tools/wrsim.py` is the package written in
+Python: the same chunk walk with the same refusal codes, the same envelope
+and the same view-cache columns, plus a generator for seventeen fixtures -
+a tone, single-sample impulses, a stereo file whose right channel is
+silence and one spike, an odd `LIST` chunk, unknown chunks, `data` before
+`fmt `, the extensible format, a data size past the end, one that is not a
+whole number of frames, an unfinished take, six files that must be refused,
+and a 1.1 MB file that only a streaming scan can take. Its selfcheck reads
+every file it can back through Python's own `wave` and is a fast suite row,
+so the reference cannot drift under the soak row that holds the guest to it.
+
+**What was built.** Three modules beside the face: `wrwav.inc` (the reader:
+any 1..48 bytes of a file at any offset, read as the two clusters holding
+them, so a header of any shape is one read), `wrdoc.inc` (sources, the
+piece table, the 32-bit arithmetic, and `wo_read`, which reads document
+frames for the UI task after restanding in the source's folder) and
+`wrenv.inc` (the scan, the view, the view cache and its refinement, the
+ruler, the lanes, the overview and the cursor). The scan and the refinement
+run from the window's one-shot timer - a 16 KB gulp or an 8 KB read a tick -
+so the desktop stays live and Stop, Escape or another Open cancels.
+
+![A 1 kHz tone at Fit](waverack/waverack-w2-tone.png)
+
+![Single-sample impulses at Fit: a min/max envelope keeps every one](waverack/waverack-w2-impulse-fit.png)
+
+**The band holds everything at once.** The waveform band grew from the
+lanes alone to the ruler, the lanes and the overview (10 KB), so the lanes
+are still in RAM after they are drawn: moving the cursor puts the one
+column it left back from the band with a 1-pixel blit and draws the line
+again, which is exactly how wave 3's playhead will move.
+
+![A stereo file: two lanes, L over R, the right channel's one spike](waverack/waverack-w2-stereo.png)
+
+**Three colours in a 1bpp blit.** A blit has one ink and one paper. The
+trace is green, the grid dark grey and the ground black, so in colour the
+grid's columns are drawn as one-pixel blits whose PAPER is dark grey and
+whose ink is the trace's - a trace crossing a grid line stays green - and
+the runs between them one blit each. In black and white everything is
+white and the whole lanes area is one blit. The colour face lost its dotted
+quarter rows for it; the time grid on the ruler's majors stayed.
+
+**Zoom to the samples.** Below the block size a column first shows its
+block's range and is then refined from the samples, carrying a column
+across reads when a column is bigger than one read, and including the
+previous column's last sample so a sine at one frame a column is a line,
+not a cloud of dots.
+
+![The tone at fpp = 1, refined from the samples](waverack/waverack-w2-tone-fpp1.png)
+
+![LONG.WAV, 104 seconds, scanned in 72 gulps](waverack/waverack-w2-long.png)
+
+**Refusals say why.** Each refusal is its own code and its own sentence of
+at most 22 characters, and the document is left empty with every claim
+given back.
+
+![ADPCM refused: Format 0011h: not PCM](waverack/waverack-w2-refused.png)
+
+**The greyed keys on one bit, fixed.** Wave 1's review found the CGA's
+greyed keys illegible: a checkerboard over a 5 x 7 caption with one-pixel
+strokes leaves noise. A greyed key in black and white now keeps its caption
+solid, dithers only its picture, and draws its frame dotted - one band, the
+frame included, so it is one call rather than two.
+
+![COMPACT on the CGA: live OPEN and +, greyed REC, STOP, PAUSE, PLAY, SAVE and -](waverack/waverack-w2-cga-keys-3x.png)
+
+![The same on the black-and-white VGA face](waverack/waverack-w2-bw-keys-2x.png)
+
+**What was discovered.**
+
+- *A stale floppy reads as a broken package.* The first look read the bss
+  through the current map while the scratch floppy still carried the
+  previous build - every variable four bytes off, `we_busy` reading 3. The
+  soak row now checks that the running package's code is
+  `build/waverack.bin`'s before it reads a byte of its state.
+- *Two real bugs the first boots found:* the block store clobbered the
+  scan's buffer pointer (every block after the first was garbage - the
+  reference comparison named the column), and the scan re-armed its timer
+  only from its first step, so a file longer than one gulp stopped at 74%.
+- *The format line is longer than wave 1 measured*: `22,050 Hz 16-bit
+  Stereo` is 23 characters. The layout's longest text moved to it and the
+  layout selfcheck re-measured every layout before the asm was rebuilt.
+- *A packed WAV is not a WAV.* READ_AT is raw, so a compressed file's bytes
+  are the compressor's; the open finds the file with `OSAPI_FILE_FIND_RAW`
+  and refuses one with the `CZ` bit (`File is compressed`).
+
+**What was measured.** Image 25,010 bytes (packed 18,926), bss 2,525. Heap
+with a document open and idle, read off the kernel's claim map by the soak
+row: 31 KB for a small mono file, 33 KB for LONG.WAV, 36 KB for the
+22,050 Hz stereo file (38 KB is the ceiling); a refused open leaves only the
+10 KB band. The soak row opened all seventeen fixtures through File > Open
+and found the parse, the status sentence and the view cache equal to the
+reference for every one, the impulses refined at one frame a column with
+their neighbours reaching them, and a forced full repaint pixel-identical to
+the incremental picture after the zoom. The CGA's 360 KB media disk is now
+full (354 of 354 clusters): the next wave needs a decision there. Not seen:
+Hercules, EGA's MID with a document, the wheel (QEMU's serial mouse sends
+none), 86Box, real hardware, and any XT timing.

@@ -446,6 +446,17 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/kdos/DOS.O88",
                "build/recorder.o88", "build/DOSHELLO.COM",
                "build/DOSHMA.COM")),
+    Row("wrsim", "fast", py("tests/unit/t_wrsim.py"), 0.2,
+        "WaveRack's host reference (SPEC.md 122.3-122.5, tools/wrsim.py): "
+        "every fixture the soak row opens parses to its expectation - "
+        "tones, impulses, stereo 16-bit, odd and unknown chunks, data "
+        "before fmt, the extensible format, clamped, floored and unfinished "
+        "data, six refusals each with its own code and a 22-character "
+        "sentence the package spells the same way, and a 1.1 MB file - read "
+        "back by Python's own `wave` wherever it can, and the impulses and "
+        "the stereo spike survive the coarse envelope at Fit. A drifted "
+        "reference would let tests/waverack.py compare the guest with the "
+        "wrong answer and pass. Standard library, milliseconds"),
     Row("x3xttab", "fast", py("tools/x3xttab.py", "--selfcheck"), 0.25,
         "XTMP3's XT table packs (SPEC.md 121.10, docs/xtmp3/XT-STUDY.md): "
         "every product row, encoder table, byte-split table and requantiser "
@@ -467,6 +478,21 @@ FAST = [
         "figures were measured on, entry for entry. Soak because it "
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
+    Row("waverack", "soak", py("tests/waverack.py"), 150.0,
+        "WaveRack's document (SPEC.md 122.3-122.5) on QEMU, because what "
+        "is asserted is behaviour: every tools/wrsim.py fixture on `make "
+        "waverackfix`'s floppy opened through File > Open and the Standard "
+        "File dialog's own rows; the bss read by the package's map and held "
+        "to wrsim.parse() - format, frames, data offset, note, dirty, the "
+        "status sentence, and each refusal's code and number with the "
+        "document left empty; the view cache at Fit against wrsim.columns() "
+        "column for column (the impulses at full zoom out, the stereo spike "
+        "on R alone, LONG.WAV streamed in 16 KB gulps); IMPULSE.WAV zoomed "
+        "to fpp 1 about the cursor and refined from the samples with each "
+        "span reaching the last column's sample; and the identity check - "
+        "the window after the zoom equal to a forced full repaint",
+        needs=("qemu", "nasm", "pil"), serial=True, timeout=600,
+        wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin")),
     Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 1200.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "

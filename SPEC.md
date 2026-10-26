@@ -219095,7 +219095,7 @@ third-party audio in them.
 
 ## 122. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
 
-**Status: PINNED; wave 1 (the face) SHIPPED - §122.11 to §122.13.** Every subsection below is the contract the
+**Status: PINNED; wave 1 (the face) SHIPPED - §122.11 to §122.13; wave 2 (the document) SHIPPED - §122.3 to §122.5, marked per part.** Every subsection below is the contract the
 implementation is written against; each says *(pinned)* until the wave that
 builds it marks it *(shipped)* with what was measured. The delivery record is
 `docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
@@ -219115,7 +219115,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 §122.7 is the one driver extension it needs. Pure NASM, for Audio's reason
 (§86): the C SDK does not wrap the stream verbs.
 
-### 122.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc)
+### 122.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`)
 
 | file | holds | prefix |
 |---|---|---|
@@ -219159,7 +219159,7 @@ in the plan, not a claim here.
 list (§24.5) on a requirement ground. kern_mega's arm (`-DPKG_MEGA`, §20.18)
 is not in this delivery either.
 
-### 122.3 The document and the timeline (pinned)
+### 122.3 The document and the timeline (pinned; the frame, sources, the piece table and New/Open shipped in wave 2)
 
 **The canonical unit is the sample FRAME**: one sample per channel. Every
 position, length, selection end and edit offset is a frame index held in 32
@@ -219196,7 +219196,31 @@ either is refused.
   `Save changes to NAME?` with Save, Discard and Cancel (os88ui's alert,
   `OS88UI_ALERT`).
 
-### 122.4 Reading and writing WAV (pinned)
+**Shipped in wave 2** (`wrdoc.inc`, prefix `wo_`): a source is a 40-byte
+record (`WS_*`: name, volume, folder, data offset, frames, the envelope's
+claim, block shift and block count, the volume's cluster in bytes, and the
+source's rate, bits, channels and block-align shift); a piece is 10 bytes
+(`WP_*`: source, first frame, count); both tables are bss (160 + 640
+bytes). File > Open lays ONE piece over the whole file. `wo_new` (File > New,
+a refused open, Stop during a scan) empties the document, gives back every
+claim it holds and moves every generation, so each element draws the empty
+face again. `wo_locate` maps a document frame to (piece, offset, frames
+left); `wo_read` reads document frames for the UI task - the cluster-aligned
+run holding the first frame read into the I/O claim with READ_AT after
+`wo_stand` restands in the source's folder (GOTO_QM only when the instance
+is elsewhere), answering ES:DI = the frame and CX = the frames there, all in
+one piece; the claim remembers the run it holds, so a second read of it is
+free. The 32-bit arithmetic is `wo_muldiv` (DX:AX x BX / CX through a 48-bit
+product), `wo_div32` (shift and subtract) and `wo_time`, the LCD's
+`MM:SS.cc`, divided in TWO steps (the seconds, then the remainder's
+hundredths) so 2^31 frames never overflow, `--:--.--` past 99 minutes.
+The dirty question, undo and the clipboard are wave 4's; what this wave
+leaves them is the immutable source and `wo_npc`. A recovered take opens
+dirty (`wo_dirty`) and says so; nothing else sets it yet, and the LCD shows
+no mark for it - its filename field holds 12 characters, and an 8.3 name is
+12.
+
+### 122.4 Reading and writing WAV (the reader shipped in wave 2; the writer pinned)
 
 **The reader** walks the RIFF chunk list with `OSAPI_FILE_READ_AT` at 32-bit
 offsets. It accepts any chunk order, honours the odd-length pad byte, skips
@@ -219215,15 +219239,50 @@ the carry of every 32-bit sum tested.
   with its frames counted from the file's length and the document DIRTY:
   `Recovered N s from an unfinished header - save to repair`.
 - Refused, each with its own sentence on the status bar: not RIFF/WAVE, no
-  `fmt `, no `data`, a format tag other than PCM (`Format 0011h is not PCM`),
+  `fmt `, no `data`, a format tag other than PCM (`Format 0011h: not PCM`),
   other bit depths, more than two channels, a block align that disagrees,
   more than 64 chunks, and a file past 2^31 bytes.
+
+**Shipped in wave 2** (`wrwav.inc`, prefix `ww_`). `ww_peek` hands back any
+1..48 bytes of the file at any offset: when its window does not hold them it
+reads the two clusters from the one holding the offset (READ_AT wants a
+cluster multiple for offset and length), so a header of any shape costs one
+read. The walk stops when it has both `fmt ` and `data`, at a header that
+would pass the file's end, or at any 32-bit sum that carries; `data` before
+`fmt ` is taken. The refusal is a CODE in `[ww_err]` and the number its
+sentence names in `[ww_arg]` - `tools/wrsim.py`'s `E_*`, and its `parse()`
+is this walk in Python, the reference the soak row holds the package to:
+
+| code | sentence (status bar, at most 22 characters) |
+|---|---|
+| 1 | `Not a RIFF/WAVE file` |
+| 2 | `No fmt chunk` |
+| 3 | `No data chunk` |
+| 4 | `Format 0011h: not PCM` (the tag; an extensible one whose sub-format is not PCM's GUID says `FFFEh`) |
+| 5 | `24-bit is unsupported` (the bits) |
+| 6 | `3 channels unsupported` |
+| 7 | `Bad block align` |
+| 8 | `Bad sample rate` (outside 1,000..65,535 Hz) |
+| 9 | `More than 64 chunks` |
+| 10 | `File over 2 GB` |
+| 11 | `File is compressed` (a packed file's raw bytes are not its sound: READ_AT is raw, SPEC.md 20.14.3; the size comes from `OSAPI_FILE_FIND_RAW` and its `CZ` bit) |
+| 12 | `Cannot read the file` |
+| 13 | `Cluster too large` (more than 8 KB: two must fit the 16 KB I/O claim) |
+| 14 | `File not found` |
+| 15 | `Not enough memory` (a claim refused) |
+| 16 | `Bad fmt chunk` (under 16 bytes, or an extensible one under 40) |
+
+An accepted file may carry a NOTE (`[ww_note]`), said when its scan ends:
+`Data clamped to file`, `3 bytes ignored at end` (the floor; `1 byte` for
+one), or `Recovered; save to fix` (the unfinished take, which opens dirty) -
+the 22-character field has no room for the seconds the pinned sentence
+named, and the LCD already shows the length.
 
 **The writer** emits the canonical 44-byte header (`RIFF`, `WAVE`, a 16-byte
 `fmt ` chunk, `data`) and the frames, and a pad byte when the data length is
 odd. A take's header is different and is §122.7's.
 
-### 122.5 The waveform: coarse envelopes, the view cache and the band (pinned)
+### 122.5 The waveform: coarse envelopes, the view cache and the band (shipped in wave 2; the take's live envelope and the selection's split pinned)
 
 **A coarse envelope per source**: the block is the smallest power of two
 `B` >= 16 frames for which `frames / B` <= 2,048, and each block stores, per
@@ -219260,6 +219319,69 @@ the selection's run is blitted with its own paper role. A 570-column wave
 drawn as vertical lines would be 570 primitive calls, ~430 ms on the target;
 the band is a handful. The playhead is one vertical line; moving it
 re-blits the byte column it left from the band, and draws the line again.
+
+**Shipped in wave 2** (`wrenv.inc`, prefix `we_`/`wv_`):
+
+- **The scan** runs from the window's one-shot timer (§13.9), one 16 KB
+  `wo_read`-shaped read (`WE_GULP`) a tick, folding every frame into its
+  block in one of four inner loops (8/16-bit x mono/stereo, a 16-bit sample
+  read as its high byte, no multiply) and storing each block as it ends; the
+  status bar says `Scanning 45%` while it runs and the open's note, or
+  `Ready`, when it is done. Stop, Escape and another Open abandon it, and
+  the document with it (`Open cancelled`). The envelope claim is
+  `ceil(blocks x channels x 2 / 1024)` KB - LONG.WAV's 1,150,000 frames are
+  B = 1,024 and 1,123 blocks, 3 KB.
+- **The view**: `wv_first` is always a multiple of fpp (`we_clamp` rounds
+  it down after bounding it to `frames - ww << z`), so at fpp >= B every
+  column is whole blocks and exact. Zoom In/Out keep the cursor's frame at
+  its column when the cursor is in view, else the view's middle; Fit is z =
+  `wv_zfit` from frame 0. A new layout width refits and rebuilds (`we_geom`,
+  at every full paint).
+- **The view cache** is a 4 KB claim (`WE_VKB`): 640 columns x (min, max) x
+  2 channels, 640 exact bytes, and the 256-byte value -> row table. Below B a
+  column shows its block's range at once and the refinement reads
+  `WE_REFINE` = 8 KB a tick through `wo_read`, carrying a column across reads
+  (a column at a large fpp can be bigger than one read) and stepping back one
+  frame at each column start so the span includes the previous column's
+  last sample; `Refining` while it runs, `Ready` when it said so. Any view
+  change rebuilds the cache and restarts it.
+- **The band** is one claim, `WRL_BANDKB` (10 KB, FULL's 75-byte stride x
+  128 rows): the ruler's rows, the lanes' rows, the overview's rows, so the
+  lanes stay intact for the cursor's (and wave 3's playhead's) partial puts.
+  `we_target` points `wd_bor` - the small caps and pictures - at it, so the
+  ruler's labels and the lane names are composed with the face's own font.
+- **The ruler** picks the first step of a 1/2/5 series in milliseconds whose
+  frames reach 56 << z (labels at least 56 px apart), puts majors on the
+  step's multiples from the view's first frame, four minors between, and a
+  label right of each major where it fits and clears the last: `0.2`,
+  `1:20`, decimals as many as the step needs. It is ONE blit.
+- **The lanes**: mono one lane; stereo two of `(lanes - 1) / 2` rows, L over
+  R, a dotted row between, `L` and `R` on a cleared box at each lane's top
+  left so a loud lane does not swallow its name. Each column is one vertical
+  run per channel through the row table. Black and white: the grid is dots
+  in the band (every fourth row on the majors' columns, every fourth pixel on
+  a mono lane's quarter rows) and the lanes are ONE blit. Colour: the grid is
+  the majors' columns only, each a one-pixel blit whose PAPER is the grid's
+  dark grey and whose ink is the trace's - so the trace crossing a grid line
+  stays green - and the runs between them one blit each: `2G + 1` calls for
+  G majors in view (about 21 on FULL). The quarter rows are not drawn in
+  colour; dark grey dots under a green trace would be a third colour in one
+  blit.
+- **The overview** is the whole document at `frames / ow` frames a column
+  (`wo_muldiv`, not a power of two), the two channels' union in one lane
+  (neither is dropped), from the coarse blocks, never refined; the view's
+  extent is two edge columns and dotted rows along its top and bottom between
+  them. One blit in black and white; five in colour (the edges in the
+  handle's cyan).
+- **The cursor** is a frame (`wo_cur`), drawn as the playhead will be: a
+  one-pixel line in the playhead role over the lanes (the element
+  `wf_e_cur`, keyed by its column). Moving it puts the column it left back
+  from the band with one 1-pixel blit and draws the line again; the
+  waveform's own draw forgets it. Home/End go to frame 0 and to the end,
+  Left/Right one column, PgUp/PgDn seven eighths of the view, a press in the
+  waveform puts it there (a drag follows), and a press or drag in the
+  overview centres the view; the wheel over either scrolls an eighth of the
+  view a notch (elsewhere it still turns VOLUME).
 
 ### 122.6 Playback and the transport (pinned)
 
@@ -219468,7 +219590,7 @@ white whatever was chosen.
 | LCD, waveform, overview ground | black | black |
 | time digits, waveform ink, the centre line | light green | white |
 | filename, format line, ruler, PEAK | light cyan | white |
-| the waveform's grid | dark grey dots, every other row | white dots, every fourth row |
+| the waveform's grid | dark grey lines on the ruler's majors (wave 2: the paper of a one-pixel blit, under a green trace) | white dots, every fourth row, and a mono lane's quarter rows |
 | selection ground | dark grey | a 50% dither under the wave (wave 3) |
 | selection handles and edges | light cyan | white (wave 3) |
 | playhead | yellow | white (wave 3) |
@@ -219477,7 +219599,19 @@ white whatever was chosen.
 | sliders | black groove, ticks and thumb outline; the thumb's face is the faceplate | the same in black on white |
 | selection field / status field | white / light grey, sunken | white, ruled |
 | drop-downs and the Loop box | os88ui's (§13.14) and the generated box picture: white box, black frame | the same |
-| disabled | dark grey ink | half the ink (a checkerboard, §47 rule 1) |
+| disabled | dark grey ink | a key: the caption SOLID, the picture half its ink (a checkerboard), the frame DOTTED - one band, the frame included; a static label or a drop-down: half the ink (§47 rule 1) |
+
+**A greyed key on one bit (decided in wave 2).** The 5 x 7 small caps
+have one-pixel strokes, and §47's checkerboard over the whole key took half
+of them: on the CGA's COMPACT `REC`, `STOP` and `OPEN` dithered into noise,
+and the black-and-white VGA face was barely better. So a greyed key in
+black and white keeps its CAPTION solid, takes half the ink of its PICTURE
+(the 13- or 7-row symbol survives a checkerboard), and draws its FRAME
+dotted - every other pixel along the top and bottom, every other row down
+the sides - composed with the inside into ONE band and put down in one call
+(it was two: a solid frame and the inside). Live and greyed differ at a
+glance in the frame and the symbol, and the word is legible in both. The
+colour face is unchanged: a greyed key's ink is the dark grey role there.
 
 **The art is generated**, `tools/os88wrart.py` from definitions in the
 script, CDRack's shape (§119.6.3): three seven-segment digit sets made
@@ -219518,7 +219652,7 @@ on VGA colour and across a layout round trip, and the faces in
 `docs/waverack/` (VGA colour and black and white FULL, EGA MID, CGA COMPACT).
 Hercules is the orchestrator's MartyPC look (QEMU cannot show it).
 
-### 122.12 Menus and keys (shipped, wave 1)
+### 122.12 Menus and keys (shipped, wave 1; the document's commands live in wave 2)
 
 **File**: New, Open..., Save, Save As..., Save Selection As..., Recover
 Take. **Edit**: Undo, Redo, Cut, Copy, Paste, Delete, Trim, Select All,
@@ -219533,7 +219667,14 @@ keystroke names a command (`C_*`), and the predicate greys all three; a
 press on a greyed control - a key's release, a keystroke, a menu item - puts
 the reason on the status bar (§122.2). In wave 1 the commands that have state
 are live - Loop, Rate, Theme, the layout, INPUT GAIN and VOLUME - and every
-command a document, playback or capture needs is greyed, not faked.
+command a document, playback or capture needs is greyed, not faked. **Wave 2
+makes the document's live**: New (with a document; `No document`), Open
+(always; the OPEN key too), Zoom In (`Zoomed in fully` at fpp 1), Zoom Out
+and Fit (`Whole sound shown` at Fit; both `Still scanning` while the scan
+runs; the - and + keys follow), the cursor keys (`No document`), and Stop and
+Escape while a scan runs (they cancel it: `Open cancelled`). New and a
+refused open say `New document` / the refusal. Play, record, edit and save
+stay greyed for their waves.
 
 | key | does | key | does |
 |---|---|---|---|
@@ -219541,6 +219682,7 @@ command a document, playback or capture needs is greyed, not faked.
 | S, Escape | stop (Escape also cancels a scan, and takes an open drop-down list down) | L | loop on / off |
 | Left / Right | cursor one column | Shift+Left/Right | extend the selection |
 | Home / End | to the start / end | `+` (or `=`) `-` | zoom in / out |
+| PgUp / PgDn | the view back / on seven eighths of itself (wave 2) | the wheel | over the waveform or overview: scroll an eighth a notch; elsewhere VOLUME |
 | F | fit | Delete | delete the selection |
 | T | trim | U / Y | undo / redo |
 | X / C / V | cut / copy / paste | A | select all |
@@ -219558,17 +219700,20 @@ greyed (§122.7); Rate is live. While a list is open the key record has no
 keys (BT_N = 0), so a press on a list that covers a key is the list's.
 
 **`.WAV` is not claimed**: Audio owns the association (§86), and WaveRack
-opens a WAV through File > Open; `OSAPI_ARG_FILE` is accepted when the Open
-wave lands (§122.4).
+opens a WAV through File > Open. `OSAPI_ARG_FILE` is accepted (wave 2): a
+launch with a document (`OSAPI_PKG_START`'s document form, §21.5.3) copies
+its name and folder at entry and opens it from the first timer tick, after
+standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
-### 122.13 Where it ships, and what it costs (wave 1 measured)
+### 122.13 Where it ships, and what it costs (waves 1 and 2 measured)
 
-| | wave 1 |
-|---|---|
-| image | 16,310 bytes (`WAVERACK.O88`, lz4-packed to 11,646 - 12 clusters at 1 KB) |
-| bss | 1,414 bytes (state, the key and element caches, a 1 KB composing band) |
-| heap, idle | the waveform band, `WRL_BANDKB` = 7 KB (FULL's 588 x 94 lanes at 75 bytes a row), claimed at entry; plus os88ui's bank under an open drop-down list, for as long as it is open |
-| disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) |
+| | wave 1 | wave 2 |
+|---|---|---|
+| image | 16,310 bytes (`WAVERACK.O88`, lz4-packed to 11,646 - 12 clusters at 1 KB) | 25,010 bytes (packed 18,926 - 19 clusters) |
+| bss | 1,414 bytes (state, the key and element caches, a 1 KB composing band) | 2,525 bytes (+ the reader's, the document's - 4 sources and the 64-piece table, 800 bytes - and the waveform's state) |
+| heap, idle, no document | the waveform band, `WRL_BANDKB` = 7 KB (FULL's 588 x 94 lanes at 75 bytes a row), claimed at entry; plus os88ui's bank under an open drop-down list, for as long as it is open | the band, now 10 KB (FULL's ruler, lanes and overview: 75 bytes x 128 rows); every document claim is given back by New, a refused open and Stop during a scan (the soak row checks it after every refusal) |
+| heap, idle, a document open | - | the band 10 KB + the I/O claim 16 KB (`WO_IOKB`: a scan gulp, and two 8 KB clusters) + the view cache 4 KB (`WE_VKB`) + the envelope, `ceil(blocks x channels x 2 / 1 KB)` - at most 4 KB mono, 8 KB stereo. Measured by the soak row on the kernel's claim map: 31 KB for the small mono fixtures, 33 KB for LONG.WAV (1,123 blocks), 36 KB for the 22,050 Hz stereo file; 38 KB is the most any document can hold. A refused open leaves the band alone (10 KB) |
+| disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it in wave 1; **354 of 354** with wave 2's - the next wave needs a curation decision there), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) | the same, plus `make waverackfix`'s scratch floppy (on demand, never shipped) |
 
 To be measured and written here as the later waves land: the heap claims
 while playing and recording, and the sustained record and play rates on

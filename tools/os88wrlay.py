@@ -108,7 +108,7 @@ FIELDS = [
 ELEMS = [('wf_e_fname', 0), ('wf_e_time', 0), ('wf_e_total', 0),
          ('wf_e_fmt', 0), ('wf_e_mcap', 0), ('wf_e_meter', 0),
          ('wf_e_peak', 0), ('wf_e_gain', 0), ('wf_e_vol', 0),
-         ('wf_e_wave', 0), ('wf_e_ovw', 0), ('wf_e_sel', 0),
+         ('wf_e_wave', 0), ('wf_e_cur', 0), ('wf_e_ovw', 0), ('wf_e_sel', 0),
          ('wf_e_stat', 0), ('wf_e_drop', 0), ('wf_e_drop', 1),
          ('wf_e_drop', 2), ('wf_e_drop', 3), ('wf_e_loop', 0)]
 
@@ -117,7 +117,7 @@ ELEMS = [('wf_e_fname', 0), ('wf_e_time', 0), ('wf_e_total', 0),
 STATUS_MAX = 22                 # wr_s_* status messages (SPEC.md 122.2)
 SEL_VALUE = 13                  # 'SS.cc - SS.cc' (SPEC.md 122.9)
 FNAME_CH = 12                   # an 8.3 name
-FMT_TEXT = '11,025 Hz  8-bit  Mono'
+FMT_TEXT = '22,050 Hz 16-bit Stereo'   # the longest format line
 MCAPS_FULL = ['LEVEL', 'LEVEL  REC', 'LEVEL  PLAY']
 MCAPS_CMP = ['LEVEL', 'REC', 'PLAY']
 THUMB_W = 7                     # a slider's thumb (wrface.inc WF_THUMB)
@@ -643,9 +643,12 @@ def emit(bm, art):
     Ls = layouts(art, bm)
     band = 0
     for L in Ls:
-        r = L.f['WAVE']
-        lanes = r[3] - r[1] + 1 - L.f['RULH']
-        band = max(band, ((r[2] - r[0] + 1 + 15) // 8) * lanes)
+        # the waveform band (SPEC.md 122.5): the ruler's rows, the lanes'
+        # and the overview's, at the stride the widest x phase needs
+        r, o = L.f['WAVE'], L.f['OVW']
+        assert (r[0], r[2]) == (o[0], o[2]), "the overview shares the x"
+        rows = (r[3] - r[1] + 1) + (o[3] - o[1] + 1)
+        band = max(band, ((r[2] - r[0] + 1 + 14) // 8) * rows)
         N = L.name.upper()
         out.append("WRL_%s_W equ %d" % (N, L.w))
         out.append("WRL_%s_H equ %d" % (N, L.h))

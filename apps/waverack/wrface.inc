@@ -96,7 +96,9 @@ wf_setup:
     add si, 2
     add di, OS88UI_DR_SIZE
     loop .dr
-    jmp wd_origin
+    call wd_origin
+    jmp we_geom                     ; the waveform's boxes, and a new width's
+                                    ; view (wrenv.inc)
 
 ; =============================================================================
 ; THE ELEMENT CACHE
@@ -546,10 +548,14 @@ wf_padc:
 
 ; --- the filename on the LCD -----------------------------------------------------
 wf_e_fname:
-    xor ax, ax                      ; no document yet: one key, NO FILE
+    mov ax, [wo_gen]                ; the document's name, or NO FILE
     call wf_ek
     jc .out
     mov si, wr_s_nofile
+    cmp byte [wo_doc], 0
+    je .none
+    mov si, wo_name
+.none:
     mov di, [wd_lp]
     mov cx, [di+WL_FNCH]
     call wf_pad
@@ -564,10 +570,14 @@ wf_e_fname:
 
 ; --- the big time: the position, MM:SS.cc ----------------------------------------
 wf_e_time:
-    xor ax, ax                      ; no document: 00:00.00
+    mov ax, [we_cgen]               ; the cursor's time (00:00.00 with none)
     call wf_ek
     jc .out
-    mov si, wr_s_zero
+    mov ax, [wo_cur]
+    mov dx, [wo_cur+2]
+    mov di, wr_tbuf2
+    call wo_time
+    mov si, wr_tbuf2
     mov di, [wd_lp]
     mov di, [di+WL_DSET]
     mov cx, [di+WDD_TIMEW]
@@ -587,13 +597,18 @@ wf_e_time:
 
 ; --- '/ MM:SS.cc', the length -------------------------------------------------------
 wf_e_total:
-    xor ax, ax
+    mov ax, [wo_gen]                ; '/ MM:SS.cc', the document's length
     call wf_ek
     jc .out
+    mov word [wr_tbuf2], '/ '
+    mov ax, [wo_frames]
+    mov dx, [wo_frames+2]
+    mov di, wr_tbuf2 + 2
+    call wo_time
     mov di, [wd_lp]
     mov cx, [di+WL_TOT]
     mov dx, [di+WL_TOT+2]
-    mov si, wr_s_total
+    mov si, wr_tbuf2
     mov ax, (R_LCD << 8) | R_LCDTXT
     call wd_text
     call wf_ekdone
@@ -602,10 +617,21 @@ wf_e_total:
 
 ; --- the format line: the document's, or with none the next take's -----------------
 wf_e_fmt:
-    mov al, [wr_rate]
+    mov al, [wr_rate]               ; the next take's, keyed by its rate...
     xor ah, ah
+    cmp byte [wo_doc], 0
+    je .key
+    mov ax, [wo_gen]                ; ...or the document's
+    or ax, 0x8000
+.key:
     call wf_ek
     jc .out
+    cmp byte [wo_doc], 0
+    je .take
+    call wo_fmttext                 ; '22,050 Hz 16-bit Stereo'
+    mov si, wr_tbuf2
+    jmp short .s
+.take:
     mov si, wr_s_fmt8
     or al, al
     jz .s
@@ -1016,10 +1042,59 @@ wf_thumbx:
 ; with the centre line in the waveform's ink between them, so no pixel is
 ; written twice. Without the claim the lanes are two fills.
 wf_e_wave:
-    xor ax, ax
+    mov ax, [we_wgen]
     call wf_ek
     jc .out
+    cmp byte [wo_doc], 0            ; a document: wrenv.inc's band
+    je .empty
+    call we_draw
+    jmp short .done
+.empty:
     call wf_wave0
+.done:
+    call wf_ekdone
+    mov si, [wf_slot]               ; the cursor's line went with it: the
+    mov word [si+2], 0xFFFF         ; next element has nothing to put back
+.out:
+    ret
+
+; --- the cursor: a thin line on the lanes (drawn as the playhead will be) -------
+; Moving it puts the column it left back from the band - one 1-pixel blit -
+; and draws the line again. Its key is its column + 1, 0 when it is out of
+; view; the waveform's own draw forgets it (wf_e_wave).
+wf_e_cur:
+    call we_curcol                  ; AX = the column, CF = 1 none
+    jnc .in
+    mov ax, -1
+.in:
+    inc ax
+    call wf_ek
+    jc .out
+    push ax
+    call wf_old                     ; the line it left
+    or ax, ax
+    jz .new
+    cmp ax, 0xFFFF
+    je .new
+    dec ax
+    mov cx, ax
+    mov di, ax
+    call we_bank
+    call we_putcols
+.new:
+    pop ax
+    or ax, ax
+    jz .done
+    dec ax
+    add ax, [we_bx]
+    mov bx, [we_by]
+    add bx, [we_rulh]
+    mov dx, bx
+    add dx, [we_lh]
+    dec dx
+    mov si, R_PLAYHEAD
+    call wd_vl
+.done:
     call wf_ekdone
 .out:
     ret
@@ -1294,9 +1369,14 @@ wf_wblit:
 
 ; --- the overview: the whole document, which is nothing yet -----------------------
 wf_e_ovw:
-    xor ax, ax
+    mov ax, [we_ogen]
     call wf_ek
     jc .out
+    cmp byte [wo_doc], 0            ; a document: wrenv.inc's band
+    je .empty
+    call we_ovdraw
+    jmp short .done
+.empty:
     mov di, [wd_lp]
     mov ax, [di+WL_OVW]
     mov bx, [di+WL_OVW+2]
@@ -1315,6 +1395,7 @@ wf_e_ovw:
     mov dx, [di+WL_OVW+6]
     mov si, R_LCD
     call wd_rect                    ; below it
+.done:
     call wf_ekdone
 .out:
     ret
@@ -1447,14 +1528,22 @@ wf_bpaint:
     sub bx, [wd_oy]
     mov si, R_BTNEDGE               ; the roles: up, or down (pressed or
     mov word [wf_bink], (R_BTN << 8) | R_BTNTXT ; latched)
+    mov byte [wf_bdis], 0
     test di, OS88UI_DIS
-    jnz .up
+    jnz .dis
     test di, OS88UI_DOWN
     jz .up
     mov si, R_BTNONE
     mov word [wf_bink], (R_BTNON << 8) | R_BTNONT
+    jmp short .up
+.dis:
+    cmp word [wd_th], wrart_tbw     ; greyed in black and white: the frame is
+    jne .up                         ; DOTTED and goes in the key's one band
+    mov byte [wf_bdis], 1           ; (SPEC.md 122.11)
+    jmp short .in
 .up:
     call wd_frame
+.in:
     inc ax                          ; the inside
     inc bx
     dec cx
@@ -1517,7 +1606,7 @@ wf_bpaint:
     mov ax, [wf_split]
     mov [wf_py2], ax
     call wf_bpart2
-    jmp short .out
+    jmp .out
 .sidesplit:
     mov ax, [wf_cx]                 ; side by side: the columns before the
     dec ax                          ; caption
@@ -1538,19 +1627,41 @@ wf_bpaint:
     call wf_bpart2
     jmp short .out
 .one:
+    cmp byte [wf_bdis], 0
+    jne .bwdis
     mov cx, [wf_bbw]                ; the whole inside, one band
     mov dx, [wf_bbh]
     call wd_bnew
     call wf_bpic1
     call wf_bcap1
-    test di, OS88UI_DIS
-    jz .put
-    cmp word [wd_th], wrart_tbw
-    jne .put
-    mov byte [wd_bdim], 1
 .put:
     mov ax, [wf_bx]
     mov bx, [wf_by]
+    mov dx, [wf_bink]
+    call wd_bout
+    jmp .out
+.bwdis:
+    ; GREYED ON ONE BIT (SPEC.md 122.11): the 5 x 7 caps have one-pixel
+    ; strokes and a checkerboard takes half of them, so the CAPTION stays
+    ; solid; the PICTURE is dithered and the frame is dotted. One band, the
+    ; frame included - one call
+    mov cx, [wf_bbw]
+    add cx, 2
+    mov dx, [wf_bbh]
+    add dx, 2
+    call wd_bnew
+    inc word [wf_px]                ; (the places were the inside's)
+    inc word [wf_py]
+    inc word [wf_cx]
+    inc word [wf_cy]
+    call wf_bpic1
+    call wd_bdith                   ; the picture: half its ink
+    call wf_bcap1
+    call wf_bdots                   ; the frame: every other pixel
+    mov ax, [wf_bx]
+    dec ax
+    mov bx, [wf_by]
+    dec bx
     mov dx, [wf_bink]
     call wd_bout
 .out:
@@ -1617,6 +1728,49 @@ wf_bcap1:
     call wd_bcaps
 .out:
     pop si
+    pop bx
+    pop ax
+    ret
+
+; wf_bdots - a dotted frame round the band: its first and last rows every
+; other pixel, its first and last columns every other row. keeps every register
+wf_bdots:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, wd_band                 ; the first row
+    mov cx, [wd_bst]
+.t:
+    or byte [si], 0xAA
+    inc si
+    loop .t
+    mov ax, [wd_bh]                 ; the last row
+    dec ax
+    mul word [wd_bst]
+    add ax, wd_band
+    mov si, ax
+    mov cx, [wd_bst]
+.b:
+    or byte [si], 0xAA
+    inc si
+    loop .b
+    xor bx, bx                      ; the two columns
+.c:
+    xor ax, ax
+    xor cx, cx
+    call wd_brun
+    mov ax, [wd_bw]
+    dec ax
+    mov cx, ax
+    call wd_brun
+    add bx, 2
+    cmp bx, [wd_bh]
+    jb .c
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret

@@ -8,25 +8,31 @@
 ; format row and a VOLUME slider. The design is the owner's three mockups in
 ; docs/waverack/design/; the delivery record is docs/plans/WAVERACK-PLAN.md.
 ;
-; THIS IS WAVE 1, THE FACE (US-01..US-03): the package, the three layouts in
-; both themes, and every control drawn from REAL state - which is an empty
-; document. What later waves build (open, play, record, edit, save, zoom) is
-; GREYED through the one predicate, wr_cmdok, which a key, its menu item and
-; its keystroke all ask (SPEC.md 47 rule 2), and a press on a greyed control
-; says why on the status bar (47 rule 6). What works is what has state now:
-; Loop, the next take's rate, INPUT GAIN, VOLUME, the theme and the layout.
+; WAVE 1 WAS THE FACE (US-01..US-03): the package, the three layouts in both
+; themes, every control drawn from REAL state. WAVE 2 IS THE DOCUMENT
+; (US-04): File > New and Open (and OSAPI_ARG_FILE at launch), the RIFF walk
+; (wrwav.inc), sources and the piece table (wrdoc.inc), the coarse envelope's
+; scan, the view cache and its refinement, the waveform band, zoom, scroll,
+; the overview and the cursor (wrenv.inc). What later waves build (play,
+; record, edit, save) is GREYED through the one predicate, wr_cmdok, which a
+; key, its menu item and its keystroke all ask (SPEC.md 47 rule 2), and a
+; press on a greyed control says why on the status bar (47 rule 6).
 ;
 ; THE FILES (SPEC.md 122.1):
 ;   waverack.asm  this: the entry, the commands, the predicate, the menus, the
 ;                 keys and the callbacks
 ;   wrdraw.inc    the drawing primitives - roles, themes, the band
 ;   wrface.inc    the layouts' static parts, the elements, the key painter
+;   wrwav.inc     the RIFF/WAVE reader (tools/wrsim.py is its reference)
+;   wrdoc.inc     sources, the piece table, 32-bit frame arithmetic, reading
+;   wrenv.inc     the envelopes, the view and its cache, the waveform band
 ;   build/wrart.inc  the pictures, the fonts, the meter's table, the role
 ;                 tables and the three layouts as DATA, made and measured on
 ;                 the host by tools/os88wrart.py (and tools/os88wrlay.py)
 ;
 ; .WAV IS NOT CLAIMED: Audio owns the association (SPEC.md 86), and WaveRack
-; opens a WAV through File > Open (SPEC.md 122.4, a later wave).
+; opens a WAV through File > Open, or when another program starts it with
+; one (OSAPI_ARG_FILE, SPEC.md 122.4).
 ;
 ; REGISTER CONTRACTS are the callbacks' (SPEC.md 111.6): W_PAINT and W_ONKEY
 ; give SI back; W_ONTIMER and the W_ONCLICK family may clobber AX, BX, CX,
@@ -84,6 +90,12 @@ K_VOLDN     equ 0xF0                ; keystrokes that are not commands
 K_VOLUP     equ 0xF1
 K_GAINDN    equ 0xF2
 K_GAINUP    equ 0xF3
+SC_LEFT     equ 0x4B                ; C_CURSOR's keys, by scan code
+SC_RIGHT    equ 0x4D
+SC_HOME     equ 0x47
+SC_END      equ 0x4F
+SC_PGUP     equ 0x49
+SC_PGDN     equ 0x51
 
 ; =============================================================================
 ; ENTRY
@@ -94,6 +106,21 @@ K_GAINUP    equ 0xF3
 ; out: BX = the window, CF clear (set = abort). Nothing here may draw.
 ; -----------------------------------------------------------------------------
 wr_entry:
+    call OSAPI_ARG_FILE             ; launched to open a document? (read and
+    jc .noarg                       ; clear: ask first). ES = KERNEL_SEG
+    mov di, wo_nbuf
+    mov cx, 13
+.an:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .an
+    mov byte [wo_nbuf+13], 0
+    mov [wr_argdir], dx
+    mov [wr_argvol], bl
+    mov byte [wr_argpend], 1        ; opened from the first tick
+.noarg:
     call OSAPI_SND_CAPS             ; what the machine can do (SPEC.md 122.2)
     mov [wr_caps], ax
     call OSAPI_VIDEO                ; the primary: colour by default where it
@@ -110,6 +137,7 @@ wr_entry:
     xor dx, dx
 .band:
     mov [wr_bseg], dx
+    mov word [wv_ww], 0xFFFF        ; no width yet: the first paint's
     mov byte [wr_gain], WR_GAIN0
     mov byte [wr_vol], 75
     mov byte [wr_rate], 1           ; the next take at 11,025 Hz
@@ -123,6 +151,12 @@ wr_entry:
     OS88_REGION_MOVABLE_NOKEEP wr_ret ; every byte that outlives a pass is a
                                     ; static or in a pinned claim
     mov [wr_win], bx
+    mov ax, wr_ontimer              ; the scan, the refinement, a launch's
+    call OSAPI_WM_ONTIMER           ; document: all from the one-shot timer
+    cmp byte [wr_argpend], 0
+    je .noopen
+    call wr_arm
+.noopen:
     mov di, wr_drops                ; the drop-downs' window and counts
     mov si, wr_dropn
     mov cx, WR_NDROP
@@ -198,22 +232,87 @@ wr_prefset:
 ;            predicate, shared by the keys' greying, the menus and the keys)
 ; out: CF = 0 live, CF = 1 refused; every register preserved
 ;
-; Wave 1 has no document, so every command a document needs is refused - and
-; play and record besides, which later waves build. What has state works.
+; Wave 2 has a document: New, Open, the view and the cursor work. Play,
+; record, edit and save are later waves', and refused until they land.
 ; -----------------------------------------------------------------------------
 wr_cmdok:
     cmp al, C_LOOP
     je .yes
     cmp al, C_RATE
     je .yes
+    cmp al, C_OPEN
+    je .yes
     cmp al, C_THEME
     je .theme
     cmp al, C_LAYOUT
     je .layout
+    cmp al, C_NEW
+    je .doc
+    cmp al, C_CURSOR
+    je .frames
+    cmp al, C_STOP
+    je .stop
+    cmp al, C_ZIN
+    je .zin
+    cmp al, C_ZOUT
+    je .zout
+    cmp al, C_FIT
+    je .fit
 .no:
     stc
     ret
 .yes:
+    clc
+    ret
+.doc:
+    cmp byte [wo_doc], 0            ; New: a document to empty
+    je .no
+    clc
+    ret
+.frames:
+    cmp byte [wo_doc], 0            ; the cursor: frames to stand on
+    je .no
+    push ax
+    mov ax, [wo_frames]
+    or ax, [wo_frames+2]
+    pop ax
+    jz .no
+    clc
+    ret
+.stop:
+    cmp byte [we_busy], 1           ; Stop cancels a scan (SPEC.md 122.5)
+    jne .no
+    clc
+    ret
+.zin:
+    call we_ready
+    jc .no
+    cmp byte [wv_z], 0
+    je .no
+    clc
+    ret
+.zout:
+    call we_ready
+    jc .no
+    push ax
+    mov al, [wv_z]
+    cmp al, [wv_zfit]
+    pop ax
+    jae .no
+    clc
+    ret
+.fit:
+    call we_ready
+    jc .no
+    push ax
+    mov al, [wv_z]
+    cmp al, [wv_zfit]
+    jne .fitp
+    mov ax, [wv_first]
+    or ax, [wv_first+2]
+.fitp:
+    pop ax
+    je .no
     clc
     ret
 .theme:
@@ -246,6 +345,17 @@ wr_canbig:
 ;              rule 6, 122.2). clobbers SI
 ; -----------------------------------------------------------------------------
 wr_explain:
+    mov si, wr_s_nodoc
+    cmp al, C_NEW
+    je .say
+    cmp al, C_CURSOR
+    je .say
+    cmp al, C_ZIN
+    je .view
+    cmp al, C_ZOUT
+    je .view
+    cmp al, C_FIT
+    je .view
     mov si, wr_s_notyet
     cmp al, C_PLAY
     je .play
@@ -278,12 +388,58 @@ wr_explain:
     mov si, wr_s_nocap
 .say:
     jmp wr_say
+.view:
+    cmp byte [wo_doc], 0            ; no document, still scanning, or the
+    je .say                         ; zoom at its end
+    mov si, wr_s_busy
+    cmp byte [we_busy], 1
+    je .say
+    mov si, wr_s_zinmax
+    cmp al, C_ZIN
+    je .say
+    mov si, wr_s_whole
+    jmp short .say
 
 ; -----------------------------------------------------------------------------
 ; wr_cmd - do command AL (it is live: the caller asked wr_cmdok)
 ; in:  BX = the window. clobbers AX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wr_cmd:
+    cmp al, C_NEW
+    jne .c1
+    call wo_new                     ; the document emptied, its claims back
+    mov si, wr_s_new
+    jmp wr_say
+.c1:
+    cmp al, C_OPEN
+    jne .c2
+    jmp wr_open
+.c2:
+    cmp al, C_STOP
+    jne .c3
+    call wo_new                     ; a scan abandoned: the open with it
+    mov si, wr_s_cancel
+    jmp wr_say
+.c3:
+    cmp al, C_ZIN
+    jne .c4
+    mov al, -1
+    jmp we_zoom
+.c4:
+    cmp al, C_ZOUT
+    jne .c5
+    mov al, 1
+    jmp we_zoom
+.c5:
+    cmp al, C_FIT
+    jne .c6
+    xor al, al
+    jmp we_zoom
+.c6:
+    cmp al, C_CURSOR
+    jne .c7
+    jmp wr_cursor
+.c7:
     cmp al, C_LOOP
     jne .n1
     xor byte [wr_loop], 1
@@ -309,6 +465,184 @@ wr_cmd:
     jne .out
     jmp wr_relayout
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wr_cursor - C_CURSOR, by AH = its scan code: Left / Right one column (one
+;             frame at fpp = 1), Home / End to the ends, PgUp / PgDn a page
+;             of the view (seven eighths of it). clobbers AX, BX, CX, DX, SI,
+;             DI
+; -----------------------------------------------------------------------------
+wr_cursor:
+    cmp ah, SC_PGUP
+    je .page
+    cmp ah, SC_PGDN
+    je .page
+    cmp ah, SC_HOME
+    jne .end
+    xor ax, ax
+    xor dx, dx
+    jmp we_setcur
+.end:
+    cmp ah, SC_END
+    jne .step
+    mov ax, [wo_frames]
+    mov dx, [wo_frames+2]
+    jmp we_setcur
+.step:
+    push ax
+    call we_fpp                     ; CX:BX = one column of frames
+    mov bx, ax
+    mov cx, dx
+    pop ax
+    cmp ah, SC_LEFT
+    mov ax, [wo_cur]
+    mov dx, [wo_cur+2]
+    jne .right
+    sub ax, bx
+    sbb dx, cx
+    jmp we_setcur                   ; (negative: clamped to 0)
+.right:
+    add ax, bx
+    adc dx, cx
+    jmp we_setcur
+.page:
+    call we_ready                   ; a scanned document: the view moves
+    jc .out
+    push ax
+    mov ax, [we_ww]
+    mov cx, ax
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    sub ax, cx
+    pop cx                          ; CH = the scan code
+    cmp ch, SC_PGUP
+    jne .pd
+    neg ax
+.pd:
+    jmp we_scroll
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wr_open - File > Open...: the Standard File dialog (SPEC.md 38); its
+;           answer is wr_dlgdone. in: BX = the window. clobbers AX, SI, DI
+; -----------------------------------------------------------------------------
+wr_open:
+    mov al, FDLG_OPEN
+    mov di, wr_dlgdone
+    xor si, si
+    call OSAPI_FILE_DLG
+    jnc .out
+    mov si, wr_s_dlg                ; one is up already
+    jmp wr_say
+.out:
+    ret
+
+; wr_dlgdone - the dialog's answer: AL = its mode, SI = the window, ES:DI =
+; the name (the kernel's: copied), DX:CX its size. The instance stands in the
+; folder the user chose. The dialog lay over the content: repainted whole
+wr_dlgdone:
+    push si
+    mov si, di
+    mov di, wo_nbuf
+    mov cx, 13
+.c:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .c
+    mov byte [wo_nbuf+13], 0
+    pop bx
+    push bx
+    call wo_open                    ; CF = 1 refused: the status bar says why
+    pop bx
+    jmp wr_repaint
+
+; wr_arm - the one-shot timer in one tick (SPEC.md 13.9). keeps every register
+wr_arm:
+    push ax
+    push bx
+    mov bx, [wr_win]
+    mov ax, 1
+    call OSAPI_WM_TIMER
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wr_ontimer - W_ONTIMER: a launch's document opened, one gulp of the scan,
+;              or one refinement read - then what changed is drawn. Each step
+;              re-arms the timer while it has more to do.
+; in:  SI = the window. Keeps SI and BP
+; -----------------------------------------------------------------------------
+wr_ontimer:
+    push si
+    push bp
+    mov bx, si
+    cmp byte [wr_argpend], 0
+    je .work
+    mov byte [wr_argpend], 0        ; OSAPI_ARG_FILE's: stand in its folder,
+    mov dx, [wr_argdir]             ; then open it
+    mov bl, [wr_argvol]
+    call OSAPI_FILE_GOTO_QM
+    jc .noarg
+    mov bx, si
+    call wo_open
+    jmp short .draw
+.noarg:
+    mov byte [ww_err], E_NOFILE
+    call ww_say
+    jmp short .draw
+.work:
+    cmp byte [we_busy], 1
+    jne .ref
+    call we_scanstep
+    jmp short .draw
+.ref:
+    cmp byte [we_busy], 2
+    jne .draw
+    call we_refstep
+.draw:
+    pop bp
+    pop bx
+    push bx
+    call wr_redraw
+    pop si
+    ret
+
+; wr_curat - CX = a content x over the waveform: the cursor there. clobbers
+; AX, BX, CX, DX, SI, DI
+wr_curat:
+    call wr_wcol
+    call we_colframe
+    jmp we_setcur
+
+; wr_ovat - CX = a content x over the overview: the view centred there.
+; clobbers AX, BX, CX, DX, SI, DI
+wr_ovat:
+    call wr_wcol
+    mov bx, cx
+    mov ax, [wo_frames]
+    mov dx, [wo_frames+2]
+    mov cx, [we_ww]
+    call wo_muldiv
+    jmp we_centre
+
+; wr_wcol - CX = a content x -> CX = the waveform's column, clamped. keeps
+; the rest
+wr_wcol:
+    sub cx, [we_bx]
+    jns .pos
+    xor cx, cx
+.pos:
+    cmp cx, [we_ww]
+    jb .in
+    mov cx, [we_ww]
+    dec cx
+.in:
     ret
 
 ; wr_setrate - the next take's rate, AL = 0 (8,000 Hz) or 1 (11,025 Hz):
@@ -757,6 +1091,28 @@ wr_hit:
     inc di
     cmp di, WR_NDROP
     jb .gdrop
+    cmp byte [wo_doc], 0            ; the waveform: the cursor there
+    je .loop
+    mov si, [wd_lp]
+    add si, WL_WAVE
+    call wf_in
+    jc .novw
+    mov byte [wr_drag], 4
+    call wr_curat
+    clc
+    ret
+.novw:
+    mov si, [wd_lp]                 ; the overview: the view centred there
+    add si, WL_OVW
+    call wf_in
+    jc .loop
+    call we_ready
+    jc .loop
+    mov byte [wr_drag], 3
+    call wr_ovat
+    clc
+    ret
+.loop:
     mov si, [wd_lp]                 ; the Loop box and its label
     add si, WL_LOOP
     call wf_in
@@ -800,6 +1156,16 @@ wr_ondrag:
     call wd_origin
     sub cx, [wd_ox]
     mov si, [wd_lp]
+    cmp byte [wr_drag], 3           ; the overview: the view follows
+    jne .ncur
+    call wr_ovat
+    jmp short .draw
+.ncur:
+    cmp byte [wr_drag], 4           ; the waveform: the cursor follows
+    jne .ngain
+    call wr_curat
+    jmp short .draw
+.ngain:
     cmp byte [wr_drag], 1
     jne .vol
     add si, WL_GSL
@@ -864,8 +1230,35 @@ wr_onup:
 ; -----------------------------------------------------------------------------
 wr_wheel:
     push si
-    neg ax                          ; a notch toward the user is quieter
-    call wr_volstep                 ; (clobbers SI)
+    push ax
+    mov bx, si
+    call wd_origin
+    call OSAPI_MOUSE                ; CX, DX = the pointer (the wheel's own
+    pop ax                          ; call carries none)
+    sub cx, [wd_ox]
+    sub dx, [wd_oy]
+    call we_ready                   ; over the waveform or the overview, with
+    jc .vol                         ; a document scanned: the view scrolls,
+    mov si, [wd_lp]                 ; an eighth of it a notch
+    add si, WL_WAVE
+    call wf_in
+    jnc .scroll
+    mov si, [wd_lp]
+    add si, WL_OVW
+    call wf_in
+    jc .vol
+.scroll:
+    mov cx, [we_ww]
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    imul cx
+    call we_scroll
+    jmp short .draw
+.vol:
+    neg ax                          ; elsewhere VOLUME: a notch toward the
+    call wr_volstep                 ; user is quieter (clobbers SI)
+.draw:
     pop bx
     push bx
     call wr_redraw
@@ -1119,6 +1512,90 @@ wr_num:
 
 %include "wrdraw.inc"
 %include "wrface.inc"
+%include "wrwav.inc"
+%include "wrdoc.inc"
+%include "wrenv.inc"
+
+; =============================================================================
+; TEXT HELPERS (numbers)
+; =============================================================================
+
+; wr_hex4 - AX as four hex digits at DI; DI past them. clobbers AX
+wr_hex4:
+    push bx
+    push cx
+    mov bx, ax
+    mov cx, 4
+.h:
+    push cx
+    mov cl, 4
+    rol bx, cl
+    pop cx
+    mov al, bl
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .d
+    add al, 7
+.d:
+    mov [di], al
+    inc di
+    loop .h
+    pop cx
+    pop bx
+    ret
+
+; wr_upper - AL in upper case. keeps the rest
+wr_upper:
+    cmp al, 'a'
+    jb .out
+    cmp al, 'z'
+    ja .out
+    sub al, 'a' - 'A'
+.out:
+    ret
+
+; wo_fmttext - the document's format line at wr_tbuf2, the LCD's spelling:
+; '11,025 Hz  8-bit  Mono', '22,050 Hz 16-bit Stereo'. clobbers AX, DX, SI,
+; DI
+wo_fmttext:
+    mov di, wr_tbuf2
+    mov ax, [wo_rate]               ; the rate, with its thousands comma
+    xor dx, dx
+    push cx
+    mov cx, 1000
+    div cx
+    pop cx
+    push dx
+    call dec_u16
+    mov byte [di], ','
+    inc di
+    pop ax
+    push cx
+    mov cl, 100
+    div cl                          ; AL = hundreds, AH = the rest
+    pop cx
+    add al, '0'
+    mov [di], al
+    inc di
+    mov al, ah
+    call wo_two
+    mov si, wr_s_hz
+    call wr_put
+    mov si, wr_s_b8
+    cmp byte [wo_bits], 16
+    jne .b
+    mov si, wr_s_b16
+.b:
+    call wr_put
+    mov si, wr_s_mono
+    cmp byte [wo_ch], 2
+    jne .c
+    mov si, wr_s_stereo
+.c:
+    call wr_put
+    mov byte [di], 0
+    ret
 
 ; =============================================================================
 ; DATA
@@ -1154,6 +1631,8 @@ wr_keytab:
     db 0, 0x4D, C_CURSOR
     db 0, 0x47, C_CURSOR
     db 0, 0x4F, C_CURSOR
+    db 0, 0x49, C_CURSOR            ; PgUp, PgDn: a page of the view
+    db 0, 0x51, C_CURSOR
     db 2, '+', C_ZIN
     db 2, '=', C_ZIN
     db 2, '-', C_ZOUT
@@ -1277,6 +1756,18 @@ wr_s_rate11: db 'Next take 11,025 Hz', 0
 wr_s_gain:   db 'Input gain ', 0
 wr_s_db:     db ' dB', 0
 wr_s_volume: db 'Volume ', 0
+wr_s_new:    db 'New document', 0
+wr_s_cancel: db 'Open cancelled', 0
+wr_s_nodoc:  db 'No document', 0
+wr_s_busy:   db 'Still scanning', 0
+wr_s_zinmax: db 'Zoomed in fully', 0
+wr_s_whole:  db 'Whole sound shown', 0
+wr_s_dlg:    db 'A dialog is open', 0
+wr_s_hz:     db ' Hz', 0
+wr_s_b8:     db '  8-bit', 0
+wr_s_b16:    db ' 16-bit', 0
+wr_s_mono:   db '  Mono', 0
+wr_s_stereo: db ' Stereo', 0
 
 wr_ablines:
     dw wr_ab1, wr_ab2, wr_ab3, 0
@@ -1286,6 +1777,10 @@ wr_ab3:     db 'edits WAV sound', 0
 
 %define WRART_DATA
 %include "wrart.inc"
+
+%define DEC_U16                     ; the numbers: os88dec.inc (SPEC.md 20.5.2)
+%define DEC_U32
+%include "os88dec.inc"
 
 %define OS88UI_ABOUT
 %define OS88UI_NOGLYPH
@@ -1307,11 +1802,133 @@ WRM_ABOUT   equ 1                   ; the About card is up
 WRM_DROP    equ 2                   ; a drop-down's list is open
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) ------------------------------------------
-WRB_SIZE    equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
+WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
+
+%define WRB(off) (os88_image_end + (off))
+
+; ...and the document's, laid out by size after the face's (WRV name, bytes)
+%assign WRX 0
+%macro WRV 2
+%1 equ WRB(WRB_SIZE0 + WRX)
+%assign WRX WRX + %2
+%endmacro
+    WRV wd_tseg, 2                  ; wrdraw.inc: wd_bor's target band...
+    WRV wd_tbase, 2
+    WRV wd_tst, 2                   ; ...and its stride
+    WRV wf_bdis, 1                  ; wrface.inc: a greyed key on one bit
+    WRV wr_argpend, 1               ; OSAPI_ARG_FILE's document, pending
+    WRV wr_argvol, 1
+    WRV wr_argdir, 2
+    ; --- the reader (wrwav.inc) ------------------------------------------------------
+    WRV ww_err, 1                   ; E_*: the last open's refusal
+    WRV ww_note, 1                  ; N_*: ...or its note
+    WRV ww_narg, 1
+    WRV ww_wv, 1                    ; the peek window is valid
+    WRV ww_n, 1                     ; chunk headers read
+    WRV ww_gotf, 1
+    WRV ww_gotd, 1
+    WRV ww_pad0, 1
+    WRV ww_arg, 2                   ; the number the refusal names
+    WRV ww_clu, 2                   ; the volume's cluster in bytes
+    WRV ww_wl, 2                    ; the window's bytes
+    WRV ww_tag, 2                   ; fmt: 1 = PCM, else the tag
+    WRV ww_ch, 2
+    WRV ww_ba, 2
+    WRV ww_bits, 2
+    WRV ww_flen, 4                  ; the file's raw size
+    WRV ww_wb, 4                    ; the window's offset
+    WRV ww_pos, 4                   ; the chunk being read
+    WRV ww_csz, 4
+    WRV ww_rate, 4
+    WRV ww_doff, 4                  ; data: its offset and (clamped,
+    WRV ww_dlen, 4                  ; floored) length
+    WRV wo_nbuf, 14                 ; the name being opened
+    WRV wo_fbuf, 24                 ; OSAPI_FIND_SZ
+    ; --- the document (wrdoc.inc): wo_new zeroes from wo_zero0 to wo_zero1 ----------
+    WRV wo_zero0, 0
+    WRV wo_doc, 1                   ; 1 = a document is open
+    WRV wo_dirty, 1
+    WRV wo_bits, 1                  ; its format
+    WRV wo_ch, 1
+    WRV wo_ba, 1
+    WRV wo_sh, 1
+    WRV wo_rate, 2
+    WRV wo_npc, 2                   ; pieces in the table
+    WRV wo_frames, 4                ; its length in frames
+    WRV wo_cur, 4                   ; the cursor, a frame
+    WRV wo_name, 14                 ; the name the LCD shows
+    WRV wo_cv, 1                    ; the I/O claim's run is valid
+    WRV wv_z, 1                     ; the view: fpp = 1 << z
+    WRV wv_zfit, 1
+    WRV wv_ok, 1                    ; the view cache is built
+    WRV we_busy, 1                  ; 0 idle, 1 scanning, 2 refining
+    WRV we_bs, 1                    ; the envelope's block shift
+    WRV we_yh, 2                    ; the row table's lane height
+    WRV wv_first, 4                 ; the view's first frame
+    WRV wo_zero1, 0
+    WRV wo_gen, 2                   ; generations: element keys
+    WRV we_wgen, 2
+    WRV we_ogen, 2
+    WRV we_cgen, 2
+    WRV wo_ioseg, 2                 ; claims: the I/O buffer...
+    WRV we_vseg, 2                  ; ...the view cache
+    WRV wv_ww, 2                    ; the width the cache is for
+    WRV wo_csrc, 2                  ; the run the I/O claim holds
+    WRV wo_ccap, 2
+    WRV wo_clen, 2
+    WRV wo_rmax, 2
+    WRV wo_cbase, 4
+    WRV wo_src, WO_NSRC * WS_SIZE   ; the sources
+    WRV wo_pc, WO_NPC * WP_SIZE     ; the piece table
+    ; --- the waveform (wrenv.inc) ----------------------------------------------------
+    WRV we_bx, 2                    ; the boxes: the waveform's x, y,
+    WRV we_by, 2                    ; width, ruler, rows, lanes
+    WRV we_ww, 2
+    WRV we_rulh, 2
+    WRV we_wrows, 2
+    WRV we_lh, 2
+    WRV we_oy, 2                    ; ...the overview's
+    WRV we_oh, 2
+    WRV we_oh1, 2
+    WRV we_lt0, 2                   ; the lanes: tops, the row between,
+    WRV we_lt1, 2                   ; a lane's height
+    WRV we_lsep, 2
+    WRV we_lnh, 2
+    WRV we_boff, 2                  ; the scan: the envelope's next entry,
+    WRV we_pct, 1                   ; the percentage said
+    WRV we_inexact, 1
+    WRV we_rcs, 1                   ; refinement: a column under way,
+    WRV we_rsaid, 1                 ; 'Refining' said
+    WRV we_rcol, 2
+    WRV we_pc1, 2
+    WRV we_pgi, 2
+    WRV we_ng, 2                    ; the ruler's majors
+    WRV we_lend, 2
+    WRV we_dpx, 2
+    WRV we_mst, 2
+    WRV we_nst, 2
+    WRV we_ox0, 2
+    WRV we_ox1, 2
+    WRV we_dec, 2
+    WRV we_gx, WE_NGX * 2
+    WRV we_sf, 4
+    WRV we_bleft, 4
+    WRV we_acc, 4
+    WRV we_racc, 4
+    WRV we_f0, 4
+    WRV we_f1, 4
+    WRV we_n, 4
+    WRV we_fppd, 4
+    WRV we_rf, 4
+    WRV we_rend, 4
+    WRV we_tgt, 4
+    WRV we_base, 4
+    WRV we_s, 4
+    WRV we_t, 4
+WRB_SIZE    equ WRB_SIZE0 + WRX
     OS88_BSS WRB_SIZE
     OS88_IMAGE_END
 
-%define WRB(off) (os88_image_end + (off))
 wr_caps     equ WRB(0)              ; word: OSAPI_SND_CAPS at entry
 wr_theme    equ WRB(2)              ; 0 colour, 1 black and white (the choice)
 wr_bpp1     equ WRB(3)              ; 1 = the window's display is one bit
@@ -1376,6 +1993,6 @@ wd_rects    equ WRB(240)            ; WR_NB x 4 words: the keys, screen
 wr_bflags   equ wd_rects + WR_NB * 8    ; WR_NB words: as drawn
 wf_keys     equ wr_bflags + WR_NB * 2   ; WF_NKEYS words: as drawn
 wd_band     equ wf_keys + WF_NKEYS * 2  ; WD_BANDSZ: the composing band
-%if wd_band + WD_BANDSZ - os88_image_end != WRB_SIZE
+%if wd_band + WD_BANDSZ - os88_image_end != WRB_SIZE0
 %error "WaveRack's bss layout and OS88_BSS disagree"
 %endif
