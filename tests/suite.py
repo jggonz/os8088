@@ -16453,6 +16453,17 @@ SOAK = [
         "opens then succeed as 8-bit mono",
         needs=("marty", "nasm"), timeout=600,
         wants=("build/mixer360.img", "build/sndfmt360.img")),
+    Row("sndcap", "soak", py("tests/sndcap.py"), 60.0,
+        "SPEC.md 34.6.4 on MartyPC's DSP 2.01: verb 4 records into an "
+        "EXTERNAL ring - a ring across a 64KB page answers 7; a 16KB "
+        "CLAIM_DMA_HI ring at 11,025 Hz opens, SND_EXT_CONS zeroed, and ~2 s "
+        "later counts the rate in whole 2,048-byte blocks with verb 3 still "
+        "PLAYING (no overrun pause) and every ring byte the card's 80h; verb "
+        "2 stops the DMA and the IRQ (count and a re-zeroed ring unmoved 10 "
+        "ticks on); the legacy grant capture is unchanged (6,000 bytes, "
+        "paused, 80h read back); and a single-cycle DSP answers 7",
+        needs=("marty", "nasm"), timeout=600,
+        wants=("build/mixer360.img", "build/sndcap360.img")),
     Row("mixerhost", "soak", py("tests/mixermodel.py"), 2.0,
         "SPEC.md 34.15: the shipped mixer assembly against independent Creative "
         "register maps, all percentages and asymmetric stereo, refusals before "

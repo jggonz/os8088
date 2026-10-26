@@ -68633,6 +68633,71 @@ was claimed for is a refusal either way, and every caller that can live with
 less — Tracker, Audio, the Recorder — already tiers its own grant and asks
 again.
 
+#### 34.6.4 An external record ring (verb 4 with `SND_OPENF_EXT`)
+
+Verb 4's record stream (§34.6) is linear into ONE grant of the pool - 20KB at
+most, 1.9 s at 11,025 Hz - and its drain is a kernel task, which a disk
+transfer stops for up to ~400 ms on an XT while the record ring is 372 ms
+deep. A recorder that writes its take to disk as it goes (WaveRack, §122.7)
+needs the opposite shape: a ring the CARD writes and the PACKAGE reads, with
+nothing of the driver's in between. That is §34.5.3's external ring run the
+other way, and it is opened the same way.
+
+**The contract.** `OSAPI_SND_STREAM` verb 4 with `SND_OPENF_EXT` in AH:
+
+- `DI:SI` is the ring, in the caller's own `OSAPI_MEM_CLAIM_DMA_HI` claim; its
+  length RL = 4096 << AH bits 4-5 (`SND_OPENF_RLSH`), the two control words
+  (`SND_EXT_TOTAL`, `SND_EXT_CONS`) right after it, ring and words inside the
+  page-safe head. `SND_OPENF_RING` is implied and may be set or not.
+- The block is `SBL_RHALF` (2,048) >> AH bits 6-7 (`SND_OPENF_BLKSH`), so
+  2,048, 1,024, 512 or 256 - the cap that says a driver honours the code is
+  verb 0's `SND_CAP_EXTBLK`, and this driver honours it on both verbs.
+- **CX and the grant are not read.** Pass CX = 0: a driver older than this
+  section reads verb 4's CX as the capture capacity and refuses 0 with 7, so
+  the caller finds out by refusal rather than by recording into a grant it
+  does not hold.
+- The rate range, half-duplex, the busy and clip refusals, IRQ discovery and
+  the error codes are verb 4's, unchanged.
+- **Refusals of its own, both 7**: a single-cycle DSP (`[sbl_auto]` = 0 - the
+  ISR re-arms a single-cycle capture per half, which an in-place ring does
+  not carry), and a ring whose physical span crosses a 64KB page
+  (`sbl_ring_phys`, verb 0's own test). Neither writes a byte of the ring or
+  its words.
+
+**What runs.** The open zeroes `SND_EXT_CONS`, publishes the record with no
+drain task and no 8KB buffer (`sbl_dma_get` is not called; `[sbl_direct]` and
+`[sbl_ext]` are both 1, so `sbl_unpin` frees nothing at the close), and
+`sbl_hw_start_in` programs channel 1 for an auto-init WRITE cycle (55h) over
+the whole ring - `[sbl_xoff]`, `[sbl_xpage]`, count RL - 1, as verb 0's
+direct stream does - with `48h` set to the block and `2Ch`. The ISR's input
+leg tests `[sbl_ext]` first and, for such a stream, does exactly two things:
+adds the block to the free-running 16-bit count (`[sbl_consumed]`) and writes
+it to `[DI:SI + RL + SND_EXT_CONS]`. **There is no overrun pause**: the card
+never waits for the reader, which owns the ring and judges its own lag
+(count - what it has read > RL is an overrun it can name). Verb 3 answers
+PLAYING with the same count; verb 9 answers verb 3's, as for every record
+stream; verbs 1 and 10 answer 7.
+
+**Stopping.** Verb 2 is the existing input stop, `sbl_stop_stream`: `D0h`,
+`DAh` (leave auto-init at the block edge), `D3h`, channel 1 masked, a latched
+IRQ retired, the record dead. **The watchdog still ends it**: `sbl_tick`
+counts down while the stream is PLAYING with an IRQ expected, which an
+external record stream always is, and every block IRQ rewinds it - so a card
+whose IRQs stop is halted and reads `SND_ST_ENDED`, with no drain task needed
+to notice. Its period is sized for a 2,048-byte block; a smaller block only
+makes it more patient. A dying instance's stream is stopped by
+`sbl_release_inst` before its memory is freed (`inst_rel_rec`), as for verb
+0's external ring.
+
+**Cost: 182 bytes of `SOUND.DRV`** (image 11,907 -> 12,089 with the PicoMEM
+tier, the shipped build), inside its 12KB claim: `DRVM_IMG_SND` stays 12 and
+no heap rung moves. The path without the flag sends the card the same bytes
+it did; what it gained is a handful of tests and register moves at the open
+and in `sbl_hw_start_in`, and one test in the ISR's input leg. `apps/os88api.inc` documents the bit beside
+`SND_OPENF_EXT`; the change is comment-only to the ABI fingerprint, so
+`tools/abilock.py` records nothing and neither `DRV_VER` nor `PKG_FMT` moves.
+`tests/sndcap.py` (`soak -k sndcap`, MartyPC's DSP 2.01) is the gate.
+
 ### 34.7 State, boot gate, teardown
 
 - **The `snd_live` boot-gate rule (binding).** `sched_init` hooks int 08h
@@ -219246,7 +219311,7 @@ pair unreachable, and SOUND.DRV refuses it besides (§34.3).
 
 ### 122.7 Capture: the external record ring and the take file (pinned)
 
-**The driver extension.** `OSAPI_SND_STREAM` verb 4 accepts
+**The driver extension (shipped - §34.6.4).** `OSAPI_SND_STREAM` verb 4 accepts
 `SND_OPENF_EXT` in AH, as verb 0 does (§34.5.3): `DI:SI` is a ring in the
 CALLER's `OSAPI_MEM_CLAIM_DMA_HI` claim, its length `RL` = 4096 << the size
 code in AH bits 4-5, followed by the two control words, ring and words inside

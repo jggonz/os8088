@@ -6131,6 +6131,25 @@ $(BUILD)/sndfmtsys.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SY
 		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/sfmtlnk/SNDFMT.LNK \
 		--folder SYSTEM/APPDATA
 
+# SNDCAP: SPEC.md 34.6.4's gate - verb 4 into an EXTERNAL record ring, the
+# card capturing in place by auto-init DMA. Never shipped. It runs itself from
+# a window timer; tests/sndcap.py boots the mixer gate's 360KB system disk
+# (its SYSTEM.CFG wants SOUND.DRV) on MartyPC's 5150 + Sound Blaster and opens
+# it from this B: by name.
+#   make sndcaptest && python3 tests/sndcap.py
+.PHONY: sndcaptest
+sndcaptest: $(BUILD)/sndcap360.img $(BUILD)/mixer360.img
+
+$(BUILD)/sndcap.bin: tests/sndcap/sndcap.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/sndcap/sndcap.asm
+	@echo "sndcap: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sndcap.o88: $(BUILD)/sndcap.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sndcap.bin -o $@
+
+$(BUILD)/sndcap360.img: $(BUILD)/sndcap.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/sndcap.o88
+
 # The same fixture with 4.8 seconds staged: QMP and floppy activity must
 # leave audio still playing when the volume popup opens. Default SBTEST
 # remains byte-identical; this arm is only the mixer's background-service leg.
