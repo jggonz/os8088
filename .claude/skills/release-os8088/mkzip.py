@@ -63,6 +63,17 @@ A COMPANION BUILT FROM AN OLDER TREE IS REFUSED, not skipped. The live media
 and the video machines carry a kernel, and the tools zip carries ROMs cut
 against one kernel that refuse every other (SPEC.md 2.10), so a companion
 older than build/kernel.sys describes a build this release is not. Rebuild it.
+And a companion zip of THIS version that this run did not write - an earlier
+run's, whose source has since gone - is deleted, and said, because the
+release attaches `os8088-<version>-*.zip` by glob.
+
+A RELEASE STAMPED WITH ANOTHER DATE IS REFUSED. Line 1 of
+apps/install/OS88VER.TXT is the release INSTALL is assembled with and the
+published tree announces (SPEC.md 117.10.1), and it must be the YYYYMMDD in
+--version - and so must build/nettree/*/SYSTEM/OS88VER.TXT where a tree is
+built, so a tree cut before a re-stamp is caught too. An installed machine
+decides "newer" by comparing that line, so a stale one is an upgrade nobody
+is ever offered.
 
 The zips are byte-for-byte reproducible: entries are written in a fixed
 order, every timestamp is the date in the version string, and permissions are
@@ -491,6 +502,11 @@ COMPANIONS = [
 # against one, must be at least this new.
 KERNFILE = "kernel.sys"
 
+# The release stamp's source, and the published trees `make nettree` cuts
+# (SPEC.md 117.10.1, 117.10.2) - each must say this version's date.
+VERFILE = "apps/install/OS88VER.TXT"
+NETTREES = ("big", "mega", "emu")
+
 README = """\
 # os8088 {version}
 
@@ -554,6 +570,13 @@ def version_date(version):
         if 1980 <= y <= 2107 and 1 <= mo <= 12 and 1 <= d <= 31:
             return (y, mo, d, 12, 0, 0)
     return (1980, 1, 1, 0, 0, 0)
+
+
+def release_of(path):
+    """Line 1 of an OS88VER.TXT, read as the Makefile's INREL reads it."""
+    with open(path, "rb") as f:
+        first = re.split(rb"[\r\n]", f.read(), maxsplit=1)[0]
+    return first.replace(b" ", b"").decode("ascii", "replace")
 
 
 def sha256(path):
@@ -741,6 +764,27 @@ def main():
     v = args.version
     when = version_date(v)
 
+    # The release stamp (SPEC.md 117.10.1) is this version's date, in the
+    # source INSTALL is assembled from and in every published tree built.
+    m = re.search(r"\d{8}", v)
+    if not m:
+        print("mkzip: %s carries no YYYYMMDD, so there is no release to check "
+              "OS88VER.TXT against -- refusing." % v, file=sys.stderr)
+        return 1
+    stamps = [VERFILE] + [os.path.join(bd, "nettree", k, "SYSTEM", "OS88VER.TXT")
+                          for k in NETTREES]
+    for i, p in enumerate(stamps):
+        if not os.path.isfile(p):
+            if i == 0:
+                print("mkzip: %s is missing -- refusing." % p, file=sys.stderr)
+                return 1
+            continue
+        rel = release_of(p)
+        if rel != m.group(0):
+            print("mkzip: %s says release %r and this is %s -- stamp it (step "
+                  "1a), rebuild, and try again." % (p, rel, v), file=sys.stderr)
+            return 1
+
     commit = args.commit
     if not commit:
         import subprocess
@@ -855,6 +899,15 @@ def main():
             return 1
         comps.append((key, src, top))
     written = (["live"] if live else []) + [k for k, _, _ in comps]
+
+    # A companion zip of this version that this run will not write is an
+    # earlier run's, and the release attaches os8088-<version>-*.zip by glob.
+    for k in ["live"] + [c[0] for c in COMPANIONS]:
+        old = os.path.join(od, "os8088-%s-%s.zip" % (v, k))
+        if k not in written and os.path.isfile(old):
+            os.remove(old)
+            print("mkzip: removed %s -- an earlier run wrote it and this one "
+                  "did not." % old)
 
     # --- the main zip ----------------------------------------------------------
     os.makedirs(od, exist_ok=True)

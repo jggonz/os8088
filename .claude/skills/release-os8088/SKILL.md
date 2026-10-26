@@ -187,15 +187,35 @@ of two shapes to the user and let them choose:
 
 Count to 40 including the `* `; a longer line is cut at 40 on the glass, and
 a fifth line is never shown (`make nettree` warns on both). Ask the user for
-the points if the changes since the last release do not make them obvious. Then commit it (`Release YYYYMMDD: version file`)
-so the images, the zip and the published tree all carry the same release and
-the manifest's commit is the one that says so.
+the points if the changes since the last release do not make them obvious.
+
+**Then land it on `origin/main` through a short pull request, before step 2
+builds anything.** Never commit it straight onto `main`: the build number is
+the commit count (SPEC.md 14.2), so a local commit gives the release kernel
+the number the next merge to `main` also gets, `origin/main` keeps the old
+release for every later build of INSTALL, and the tag names a commit `main`
+does not contain. Never tag the branch commit either - the squash merge
+re-hashes it. Merged first, the built tree, the build number and the commit
+step 6 tags are all `origin/main`'s tip:
 
 ```bash
 cd "$OS_REPO"
+git switch main && git pull --ff-only
+git switch -c "release/$VERSION-version"
 $EDITOR apps/install/OS88VER.TXT        # line 1 = the date, then what is new
 git commit -m "Release YYYYMMDD: version file" apps/install/OS88VER.TXT
+git push -u origin "release/$VERSION-version"
+gh pr create --title "Release YYYYMMDD: version file" \
+  --body "The release stamp INSTALL checks (SPEC.md 117.10.1)."
+gh pr merge --squash --admin --delete-branch
+git switch main && git pull --ff-only
+head -n 1 apps/install/OS88VER.TXT      # must print YYYYMMDD
 ```
+
+`--admin` because the ruleset wants a review the sole maintainer cannot give.
+With `--no-pr`, stop after the commit on the branch, build from it, and say
+in the report that `main` does not carry the release yet. Step 3a refuses to
+pack when line 1 is not this version's date.
 
 ### 2. Build the images
 
@@ -219,7 +239,12 @@ All eighteen must exist -- step 3a refuses to pack without them.
 ```bash
 make mega              # kern_mega's system and apps disks, which the mega tree is cut from
 make nettree           # build/nettree/{big,mega,emu}/: system + apps, SYSTEM/OS88VER.TXT, OS88.IDX
+head -n 1 build/nettree/{big,mega,emu}/SYSTEM/OS88VER.TXT   # each YYYYMMDD
 ```
+
+`make nettree` builds all three trees, so it runs after `make emu` (above)
+and `make mega`: the emu tree is cut from `build/emu.img`, the mega tree from
+`build/mega.img` and `build/megaapps.img`.
 
 There are THREE trees, one per kernel, because kern_big, kern_mega and
 kern_emu install different kernels: `build/nettree/big/`,
@@ -227,13 +252,10 @@ kern_emu install different kernels: `build/nettree/big/`,
 apps.img). kern_big's INSTALL asks `http://os8088.com/net/big/`, kern_mega's
 `http://os8088.com/net/mega/` and kern_emu's `http://os8088.com/net/emu/`.
 They are published to the R2 bucket `os8088-net` (SPEC.md 117.10.2's store)
-from the website repo, never committed to it: `python3 tools/netpublish.py
---release YYYYMMDD <os-repo>/build/nettree` uploads every file under the
-`YYYYMMDD/` prefix and only then writes `CURRENT`, and `python3
-tools/netpublish.py --verify` checks what `/net/` now serves. The last
-release's prefix stays until the maintainer deletes it. Plain
-`http://` must serve it: the HTTP drive does not do TLS. **Change nothing in
-it by hand once it is built**: `OS88.IDX` carries every file's size and the
+by step 6a, after the GitHub release exists, and never committed to the
+website repo. The last release's prefix stays until the maintainer deletes
+it. Plain `http://` must serve it: the HTTP drive does not do TLS. **Change
+nothing in it by hand once it is built**: `OS88.IDX` carries every file's size and the
 drive believes it, so an edited OS88VER.TXT is served cut to its old length.
 Edit `apps/install/OS88VER.TXT` and run `make nettree` again, or re-index the
 folder in place with `python3 tools/os88httpdrv.py export DIR DIR`. (Four
@@ -433,7 +455,7 @@ find. **Quote every zip's sha256 in the release notes** -- it is the only
 checksum a reader of the GitHub release gets, since there is no longer a
 per-file table there.
 
-The script does five things worth knowing about:
+The script does seven things worth knowing about:
 
 - **Its file list is an allowlist, not a glob.** `build/` also holds the story
   disks and every test gate's scratch image, and a glob ships those the first
@@ -457,6 +479,13 @@ The script does five things worth knowing about:
 - **It refuses a stale companion.** The live images, the videos zip and the
   tools zip must be newer than `build/kernel.sys` (step 2 says why); one that
   is not names the target to run again.
+- **It refuses a release stamped with another date.** Line 1 of
+  `apps/install/OS88VER.TXT`, and of each `build/nettree/*/SYSTEM/OS88VER.TXT`
+  that is built, must be the `YYYYMMDD` in `$VERSION`; one that is not means
+  step 1a was skipped or the tree was cut before it.
+- **It deletes this version's companion zips that it did not write**, and
+  prints each one: an earlier run's `-live`, `-videos` or `-tools` zip whose
+  source has since gone would otherwise ride out on step 6's glob.
 - **The zips are byte-for-byte reproducible.** Timestamps come from the date
   in the version string and the images are already deterministic, so the same
   version from the same commit packs to the same bytes. The videos and tools
@@ -938,9 +967,10 @@ whether screenshots were recaptured. If `--shots` ran, say which screenshots
 actually changed (`git diff --stat public/img/shots/`) -- if a UI change was
 expected and nothing changed, that is a signal something is wrong.
 
-Check the diff includes `data/releases.json` with its prose filled in. A
-release PR that touches the images and the manifest but not the release log
-means step 4a was skipped.
+The diff carries no network tree: those go to R2 in step 6a, never into
+this repo. Check the diff includes `data/releases.json` with its prose filled
+in. A release PR that touches the images and the manifest but not the release
+log means step 4a was skipped.
 
 Say what step 4d did to the Docs section: the snapshot commit it moved from
 and to, the images whose inventory changed, the manuals and articles you
@@ -1019,11 +1049,39 @@ places -- the releases page exists to mirror this, and the two disagreeing is
 worse than either alone. If the wording improved while writing these, go back
 and update `data/releases.json` to match before the website PR is merged.
 
+### 6a. Publish the network trees (SPEC.md 117.10.2)
+
+Only after the GitHub release exists. Publishing is the one act every
+installed machine notices by itself - INSTALL's check then tells it a newer
+release is out - so it comes last, when the page and the zips it would go
+looking for are already there. With `--no-pr` there is no release, so
+there is no publishing either.
+
+```bash
+cd "$WEB_REPO"
+python3 tools/netpublish.py --release YYYYMMDD "$OS_REPO/build/nettree"
+python3 tools/netpublish.py --verify
+```
+
+The first uploads every file of `build/nettree/` to the R2 bucket
+`os8088-net` under `YYYYMMDD/<kernel>/<path>` (`big`, `mega` and `emu`), and
+only then writes `CURRENT`, the one pointer the Worker reads, so `/net/`
+switches from the last release to this one whole. The website commit carries
+no tree. The second fetches
+`http://os8088.com/net/{big,mega,emu}/SYSTEM/OS88VER.TXT` and checks that
+each answers `200` with no `Location`, carries a `Content-Length`, says
+`YYYYMMDD` on line 1, and answers a Range request with `206`. **If it fails,
+stop and report**: a redirect, a 404 or a chunked answer reads as "no answer"
+to every installed machine. Leave the last release's prefix in the bucket;
+deleting it is the maintainer's, and a machine mid-install is still reading
+it.
+
 ### 7. Report
 
-Tell the user: the version, the PR URL, the release URL, the kernel size and
-its delta, each zip's packed size and how many images went into the main
-one, the
+Tell the user: the version, the version-file PR step 1a merged, the PR URL,
+the release URL, the kernel size and its delta, each zip's packed size and
+how many images went into the main one, what step 6a's `--verify` printed
+for each of the three trees, the
 Spotlight page's URL if step 4b ran, the Docs snapshot commit step 4d moved
 to (or that it did not, and why), and anything you skipped or that needs
 their attention -- naming any on-demand disk or companion zip that did not
@@ -1075,6 +1133,9 @@ them in a status line is how they get lost.
 - **The licence is MIT** -- `LICENSE` is in the root of this repo and the
   website's colophon says so. Do not restate the terms in release copy, and do not claim a
   different one.
+- **Never publish the network trees before the release they name.** Step 6a
+  comes after the GitHub release, and the version file reaches `main` through
+  step 1a's pull request before anything is built.
 - Both repositories get branches, never direct commits to `main`.
 - If any step fails, stop and report rather than continuing with a partial
   release. A half-published release is worse than none.

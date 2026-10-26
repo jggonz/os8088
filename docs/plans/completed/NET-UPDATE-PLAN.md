@@ -83,8 +83,8 @@ volume, and its apps phase is skipped because there is nothing left to copy.
 - [x] **`make nettree`** writes `build/nettree/`: the 1.44MB system disk's
       files and the 1.44MB apps disk's files as ONE tree, minus `ASSOC.DAT`
       (the engine builds the volume's own, 52.10.14), plus `OS88VER.TXT`, plus
-      the `OS88.IDX` `tools/os88httpdrv.py` writes. The release skill copies it
-      to the website as `/net/`.
+      the `OS88.IDX` `tools/os88httpdrv.py` writes. The release skill publishes
+      it to the `os8088-net` store the website serves as `/net/` (117.10.2).
 
 ### Wave 3 - INSTALL checks the network
 
