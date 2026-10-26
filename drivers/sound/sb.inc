@@ -965,10 +965,10 @@ sbl_isr:
     sub ax, cx                  ; the finished block at
     and ax, bx
     inc bx
-    shr bx, 1                   ; past it by half the ring or more is BEHIND
-    cmp ax, bx                  ; it - a count read ahead of the copy that
-    jb .dfl                     ; moves it (a PicoMEM 1.x) - and nothing
-    xor ax, ax
+    dec bh                      ; past it by RL - 256 or more is BEHIND it -
+    cmp ax, bx                  ; a count read ahead of the 128-byte copy
+    jb .dfl                     ; that moves it (a PicoMEM 1.x), with room
+    xor ax, ax                  ; to spare - and nothing
 .dfl:
     mov cx, [sbl_half]          ; (a power of two)
     neg cx
@@ -989,7 +989,7 @@ sbl_isr:
     inc dx                      ; is no refill task to do it. A whole ring
     cmp ax, dx                  ; fed is verb 1's bound; MORE than the
     jbe .dpub                   ; ring is NEGATIVE: the chip passed the total
-    mov [sbl_consumed], ax      ; in a masked stretch, and what it played
+    add [sbl_consumed], ax      ; in a masked stretch, and what it played
     xor ax, ax                  ; past it was stale - consumed stops at the
 .dpub:                          ; total, and the next IRQ's count takes it on
     cmp byte [sbl_ext], 0

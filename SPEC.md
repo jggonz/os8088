@@ -15773,7 +15773,7 @@ unchanged, so they pair with the ordinary apps disks.
 
 | row | written by | when |
 |---|---|---|
-| `I` | `kbm_isr` | every IRQ1. `st` is port 64h BEFORE the ROM's handler, `>st` and `60` are port 64h and port 60h AFTER it - or, with `x` bit 3 set (§9.7.2's int 15h AH=4Fh path), the byte the ROM handed over, since a re-read there could take the next one - `tl>tl` the BIOS buffer tail either side, `key` the word the ROM stored (0 if the tail did not move) |
+| `I` | `kbm_isr` | every IRQ1. `st` is port 64h BEFORE the ROM's handler, `>st` and `60` are port 64h and port 60h AFTER it - or, with `x` bit 3 set (§9.7.2's int 15h AH=4Fh path), the byte the ROM handed over, since a re-read there could take the next one - `tl>tl` the BIOS buffer tail either side, `key` the word the ROM stored (0 if the tail did not move). On that path the ROM stores only AFTER its `int 15h` returns, so `>st`, the second `tl` and `key` are taken at the next record or tick (`kbg_late`), not at the call |
 | `S` | `sch_isr` | inside a bracket, a tick whose keyboard state CHANGED - OBF and AUX from port 64h, and IRQ1's bit in the PIC's ISR, IRR and IMR |
 | `E` / `L` | `fsx_run` | a bracket entered (`x` = its flags) / leaving, BEFORE `.restore` drains the BIOS buffer |
 
@@ -15795,6 +15795,8 @@ saw OBF set, IRQ1 requested, in service, and masked.
 
 **What it changes**: only that `kbm_isr` CALLS the ROM's `int 09h`
 (`pushf`/`call far`) instead of jumping to it, so the aftermath can be read.
+On §9.7.2's path it calls the ROM's `int 15h` that way, with the AX the ROM
+handed over (AH = 4Fh, AL = the byte) and 4Fh's CF = 1 put back first.
 Port 64h is a status read with no side effect, and port 60h is read only after
 the ROM has taken the byte, when a re-read returns the same byte and consumes
 nothing — so the ROM sees the hardware a plain kernel shows it. Port 64h is
@@ -69466,11 +69468,16 @@ nothing was lost, three after a stretch that swallowed two. Three guards:
   offset banked each time, 0 at verb 0) is no count at all, and the IRQ adds
   one block as before - a card whose 8237 registers say nothing is played the
   way it always was;
-- **an offset half the ring or more past consumed's** is BEHIND it, not ahead
-  (a count read before the copy that advances it - a PicoMEM 1.x's
-  multiplexer writes channel 1's count back after each 128-byte copy,
-  §34.10.1), and adds nothing; **zero whole blocks** adds nothing either, and
-  the next IRQ's count takes them;
+- **an offset within 256 bytes short of a whole ring past consumed's** is
+  BEHIND it, not ahead (a count read before the copy that advances it - a
+  PicoMEM 1.x's multiplexer writes channel 1's count back after each
+  128-byte copy, §34.10.1 - with that lag twice over), and adds nothing;
+  **zero whole blocks** adds nothing either, and the next IRQ's count takes
+  them. The window is the copy's lag and no wider: half the ring classed a
+  two-block ring's every ordinary advance - one block and the few bytes the
+  chip has read since - as behind, so consumed never moved and the card
+  replayed the ring until Stop, and it lost a four-block ring's count after
+  a stretch that swallowed two;
 - **consumed past the total** - `total − consumed` more than the ring, which
   is negative: the chip played through the end of what was fed while the
   line was masked (a whole ring fed is verb 1's bound and is not this) -
@@ -133025,15 +133032,21 @@ released when the kernel's teardown says the instance has gone.
   per verb. DOS's `DOSNET_CARD` test arm, which stands in for the cable, asks
   `NETV_STATE` before its arena is taken, as NET.DRV holds its buffers from
   load. Without that it read a largest free run of 0KB. **A claim inside a
-  verb may not move anything.** A worker's claim is plain first fit anyway
-  (§66.3.1, as `sbl_v_grant`'s is). A UI-task caller's would compact, though,
-  and the caller may hold a claim's segment in a register across the verb:
-  DOS's `NETV_RECV` target, or its arena under a running program. The first
-  build let a claim compact, and DOSPKT.COM's first `NETV_RAW` hung the
-  machine exactly that way. So `sk_try` never asks for more than the largest
-  free run (`sk_lrun`, read once per claim): it takes a smaller rung rather
-  than moving the heap. A refusal is the same "no ring" the socket reports
-  today.
+  verb can move the heap.** A worker's claim is plain first fit (§66.3.1, as
+  `sbl_v_grant`'s is), but a UI-task caller's compacts and sheds when first
+  fit fails, and the kernel gives a driver no first-fit-only door. So a
+  slot's first non-raw verb, and a socket open that finds no pool, is a call
+  that can claim, and §66.3's second author rule binds its caller as it does
+  around any other: re-read a movable claim's base after it. The first build
+  claimed on any first verb, and DOSPKT.COM's first `NETV_RAW` compacted the
+  heap under DOS's arena and hung the machine; the raw verbs never claim now,
+  which is what keeps a running DOS program's arena still. `sk_try` never asks for
+  more than the largest free run (`sk_lrun`, read once per claim), but that
+  is not a first-fit bound: `OSAPI_MEM_AVAIL`'s run is the one a compaction
+  and a shed would leave, so a rung under it can still move the heap. What
+  the bound buys is that a rung the heap cannot serve at all is never asked
+  for, since a refused claim has compacted and shed every cache on its way
+  to CF = 1. A refusal is the same "no ring" the socket reports today.
 - **When it goes back.** When no slot's bit is set *and* no ring is out
   (`sk_idle`, from `sk_ring_put` and from teardown). Both halves are needed,
   because a call from an entry proc carries slot 0xFF (`inst_caller` has no
@@ -133052,8 +133065,8 @@ released when the kernel's teardown says the instance has gone.
 What it costs: `kern_big` gains the class compare and the teardown call
 (`kern_small` has no driver layer and is unchanged). `ETHER.DRV` gains the
 bookkeeping and loses `eth_buf_apply`. The time cost is one claim per first
-network session, a walk of the claim table and never a compaction. On a
-fragmented heap the price is a smaller rung, not a moved heap. Memory can no longer
+network session: a walk of the claim table, and on a fragmented heap the
+compaction the claim needs, as any UI-task claim takes. Memory can no longer
 refuse the attach, so a machine short of heap now loads the driver and
 refuses at the first connect instead.
 

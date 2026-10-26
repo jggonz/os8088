@@ -688,12 +688,17 @@ sk_release:
 ; an ENTRY PROC carries slot 0xFF (inst_caller has no callback to read), so a
 ; socket can exist with nobody counted, and its ring alone keeps the pool.
 ;
-; A CLAIM INSIDE A VERB MAY NOT MOVE ANYTHING. A worker's claim is plain
-; first fit anyway (SPEC.md 66.3.1, sbl_v_grant's shape), but a UI-task
-; caller's would compact, and the caller may be holding a claim's segment in
-; a register across the verb - DOS's NETV_RECV target is one. So sk_try never
-; asks for more than the largest free run (sk_lrun): a smaller rung rather
-; than a moved heap.
+; A CLAIM INSIDE A VERB CAN MOVE THE HEAP, and no bound in here stops it. A
+; worker's claim is plain first fit (SPEC.md 66.3.1, sbl_v_grant's shape),
+; but a UI-task caller's compacts and sheds when first fit fails, the kernel
+; gives a driver no first-fit-only door, and OSAPI_MEM_AVAIL's largest run is
+; the one a compaction and a shed would LEAVE. So a slot's first non-raw verb,
+; and a socket that finds no pool, is a call that can claim, under SPEC.md
+; 66.3's second author rule like any other: re-read a movable claim's base
+; after it. The RAW verbs never claim (eth_user), which is what keeps a DOS
+; program's arena still. sk_try's bound (sk_lrun) keeps only a rung the heap
+; cannot serve at all from being asked for: a refused claim has compacted
+; and shed everything on its way to CF = 1.
 ; =============================================================================
 
 ; --- eth_user - BH = the calling instance's slot, BL = the verb ------------
@@ -964,15 +969,15 @@ sk_try:
     add ax, 1023
     mov cl, 10
     shr ax, cl                      ; AX = KB
-    cmp ax, [sk_lrun]               ; **NEVER MORE THAN FITS AS IT STANDS**
-    ja  .no                         ; (SPEC.md 72.13.4): this runs inside a
-                                    ; package's verb now, and a claim that
-                                    ; needed a compaction would move claims
-                                    ; the caller is holding in a register -
-                                    ; DOS's NETV_RECV target, its arena under
-                                    ; a running program. A rung that fits the
-                                    ; largest run is first fit and moves
-                                    ; nothing; a smaller rung is the price
+    cmp ax, [sk_lrun]               ; **NEVER MORE THAN CAN BE SERVED**
+    ja  .no                         ; (SPEC.md 72.13.4): a claim the heap
+                                    ; cannot serve compacts and sheds every
+                                    ; cache on the UI task before its CF = 1,
+                                    ; so a rung past the largest run is not
+                                    ; asked for. It is NOT a first-fit bound:
+                                    ; that run is the one a compaction and a
+                                    ; shed would leave, so a rung under it can
+                                    ; still move the heap inside this verb
     call OSAPI_MEM_CLAIM_HI         ; out DX = the base segment. FROM THE TOP
                                     ; (SPEC.md 50.3.2), because it is long-lived
                                     ; and driver-owned and belongs at the same

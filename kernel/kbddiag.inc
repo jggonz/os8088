@@ -80,6 +80,9 @@ kbg_st:
 ; Preserves every other register
 ; -----------------------------------------------------------------------------
 kbg_new:
+%ifdef KBD_I15
+    call kbg_late               ; the 'I' row a 4Fh ROM still owes, first
+%endif
     push ax
     push cx
     push es
@@ -179,18 +182,51 @@ kbg_pre:
 ; IF = 0. Every register preserved
 ; -----------------------------------------------------------------------------
 kbg_post:
-    push ax
-    push bx
-    push si
-    push es
-    mov bx, [kbg_cur]
 %ifdef KBD_I15
     cmp byte [kbm_ivec], 0x54   ; SPEC.md 9.7.2: kbg_4f already has the byte,
-    je .nore                    ; and on an 8042 that loads its NEXT byte on a
-%endif                          ; read, a re-read would take that one
+    jne .rd                     ; and on an 8042 that loads its NEXT byte on a
+    mov byte [kbg_owe], 1       ; read, a re-read would take that one - and
+    ret                         ; the ROM STORES after its int 15h returns, so
+.rd:                            ; the aftermath is kbg_late's to take
+%endif
+    push ax
+    push bx
+    mov bx, [kbg_cur]
     in al, 0x60                 ; the byte the ROM just took: a re-read
     mov [bx+KR_DAT], al
-.nore:
+    call kbg_aft
+    pop bx
+    pop ax
+    ret
+
+%ifdef KBD_I15
+; -----------------------------------------------------------------------------
+; kbg_late - kbg_new's and kbg_irq0's head, DS = KERNEL_SEG, IF = 0: on the
+; int 15h AH=4Fh path, complete the 'I' record kbg_post left owed, the ROM
+; having stored (or not) since. Every register and the flags preserved
+; -----------------------------------------------------------------------------
+kbg_late:
+    cmp byte [kbg_owe], 0
+    je .ret
+    pushf
+    push bx
+    mov byte [kbg_owe], 0
+    mov bx, [kbg_cur]
+    call kbg_aft
+    pop bx
+    popf
+.ret:
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; kbg_aft - BX = an 'I' record: port 64h, the tail and the stored word AFTER
+; the ROM's handler. DS = KERNEL_SEG, IF = 0. Every register preserved
+; -----------------------------------------------------------------------------
+kbg_aft:
+    push ax
+    push si
+    push es
     call kbg_st
     mov [bx+KR_ST2], al
     xor ax, ax
@@ -211,7 +247,6 @@ kbg_post:
 .out:
     pop es
     pop si
-    pop bx
     pop ax
     ret
 
@@ -234,6 +269,9 @@ kbg_4f:
 ; that changes. Outside one, nothing. Every register preserved
 ; -----------------------------------------------------------------------------
 kbg_irq0:
+%ifdef KBD_I15
+    call kbg_late               ; a 4Fh ROM's 'I' row, at the latest a tick on
+%endif
     cmp byte [fsx_task], 0xFF
     je .ret
     push ax
@@ -592,4 +630,5 @@ kbg_tisr:   dw 0                ; ...with IRQ1 in service
 kbg_tmsk:   dw 0                ; ...with IRQ1 masked
 kbg_dlast:  dw 0                ; [ticks] at the last redraw
 kbg_last:   db 0xFF             ; the last sample's packed state
+kbg_owe:    db 0                ; kbg_post left kbg_cur to kbg_late (4Fh)
 %endif

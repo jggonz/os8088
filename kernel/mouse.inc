@@ -3020,6 +3020,16 @@ kbm_isr:
     cmp [cs:kbm_old9+2], ax
     je .selfchain
 %ifdef KBD_DIAG
+%ifdef KBD_I15
+    cmp byte [kbm_ivec], 0x54   ; hooked at int 15h (9.7.2): the ROM below is
+    jne .dcall                  ; called with ITS AX - AH = 4Fh, AL = the byte
+    pop ds                      ; - and 4Fh's CF = 1, not with the CS the
+    pop ax                      ; self-chain test left in AX
+    push ax
+    push ds
+    stc
+.dcall:
+%endif
     pushf                       ; KBDDIAG=1 (SPEC.md 9.8.1): CALL the ROM rather
     call far [cs:kbm_old9]      ; than jump to it, so what it did can be read
     KDS                         ; when it returns. Its iret restores OUR flags,
