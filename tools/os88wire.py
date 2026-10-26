@@ -113,19 +113,21 @@ WIRE_NMAX = 255
 WIRE_SCMAX = 32
 # What the Wire built from this tree installs (SPEC.md 92.2): 1 = plain records
 # and version 1 archives, 2 = version 2 archives too (92.13.1), 3 = a package
-# that far-calls a cell at or past 0x046D too (92.2's cell fence).
-WIRE_LEVEL = 3
+# that far-calls a cell at or past 0x046D too (92.2's cell fence), 4 = one at
+# or past 0x04A5 too.
+WIRE_LEVEL = 4
 # THE CELL FENCE (SPEC.md 92.2): (first cell, level) rows. A record whose
 # package far-calls a cell at or past a row's cell needs that row's level.
 # Each row's cell is the table end of the OLDEST kernel the level fences -
 # v1.0.20261014's 0x046D for level 3, the older of the two kernels at PKG_FMT
-# 10 - and not last release's.
-WIRE_CELL_LEVELS = ((0x046D, 3),)
+# 10 - and not last release's. Level 4's 0x04A5 is v1.0.20261020's table end,
+# the one level-3 Wire there is.
+WIRE_CELL_LEVELS = ((0x046D, 3), (0x04A5, 4))
 # The end of the API table the TOP level's kernel has (kernel.asm's
 # osapi_table_end). A call at or past it is newer than any Wire in the field
 # can be told about, so --verify refuses it: the release that first publishes
 # one adds a row, moves this, and raises WIRE_LEVEL here and in wcat.inc.
-WIRE_TABLE_END = 0x04A5
+WIRE_TABLE_END = 0x04D7
 # 0x100000, one megabyte: the reader's sanity bound on an ARCHIVE record's
 # WC_SIZE. WIRE_FILEMAX is the wrong bound there and refusing on it is what
 # the machine did to the site's real RUNCPM record at 231,463 bytes - an

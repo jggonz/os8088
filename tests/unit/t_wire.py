@@ -76,7 +76,7 @@ S_FILEMAX = 64512
 S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261002.1)
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
-S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 3   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
+S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 4   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
 S_PKGFMT = 10                           # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
@@ -1701,6 +1701,12 @@ def fence(tmp, mod):
        "it far-calls 0x0499, which v1.0.20261014's kernel does not have")
     lvl, _ = mod.cell_level([open(os.path.join(BUILD, "hello.o88"), "rb").read()])
     eq(lvl, 0, "Hello calls nothing past 0x046D")
+    pix = os.path.join(BUILD, "pixel.o88")
+    if os.path.exists(pix):
+        lvl, top = mod.cell_level([open(pix, "rb").read()])
+        eq(lvl, 4, "PiXEL's depth blit needs a level-4 Wire",
+           "it far-calls 0x%04X, which v1.0.20261020's kernel (table end "
+           "0x04A5) does not have" % (top or 0))
 
     pub = os.path.join(tmp, "fpkg")
     os.makedirs(pub, exist_ok=True)
