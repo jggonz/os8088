@@ -614,7 +614,8 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
                                  ; silence and let the user choose (SPEC.md
                                  ; 34.5.3.1)
 SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
-                                 ; (SPEC.md 34.5.3)
+                                 ; (SPEC.md 34.5.3), and so does verb 4's
+                                 ; external ring where it has one (34.6.4)
 SND_CAP_MIXER    equ 0200h       ; readable hardware mixer (SPEC.md 34.15)
 SND_CAP_STEREO   equ 0400h       ; verb 11 takes SND_FMT_STEREO: an SB Pro
                                  ; (DSP 3.xx, 4,000..22,050 Hz a channel) or
@@ -697,7 +698,19 @@ SND_OPENF_EXT    equ 2           ; ...an EXTERNAL ring (SPEC.md 34.5.3), with
                                  ; consumed count to [...+SND_EXT_CONS], both
                                  ; free-running mod 65536, so you feed without
                                  ; a call; verb 1 is only needed to RESUME an
-                                 ; underrun, and verb 9 still answers exactly
+                                 ; underrun, and verb 9 still answers exactly.
+                                 ; VERB 4 TAKES IT TOO (SPEC.md 34.6.4): a
+                                 ; RECORD ring at DI:SI, the same claim, RL
+                                 ; and block codes (RING is implied; CX and
+                                 ; the grant are not read - pass CX = 0, which
+                                 ; a driver without it refuses with 7). The
+                                 ; card captures into it in place, and each
+                                 ; block IRQ writes the count of bytes
+                                 ; captured, free-running, to [...+
+                                 ; SND_EXT_CONS], zeroed at the open. No
+                                 ; drain, no grant, NO OVERRUN PAUSE: you
+                                 ; judge your own lag. 7 on a single-cycle
+                                 ; DSP or a ring across a 64KB page
 SND_OPENF_ADPCM4 equ 4           ; ...the bytes are Creative 4-bit ADPCM, the
                                  ; card decoding them (DSP 7Dh, auto-init with
                                  ; a reference byte: stream byte 0). DX is the
