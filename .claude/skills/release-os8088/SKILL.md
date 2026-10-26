@@ -218,16 +218,20 @@ All eighteen must exist -- step 3a refuses to pack without them.
 
 ```bash
 make mega              # kern_mega's system and apps disks, which the mega tree is cut from
-make nettree           # build/nettree/{big,mega}/: system + apps, SYSTEM/OS88VER.TXT, OS88.IDX
+make nettree           # build/nettree/{big,mega,emu}/: system + apps, SYSTEM/OS88VER.TXT, OS88.IDX
 ```
 
-There are TWO trees, one per kernel, because kern_big and kern_mega install
-different kernels and packages: `build/nettree/big/` and
-`build/nettree/mega/`. `build/nettree/` goes on the website at **`/net/`** -
-kern_big's INSTALL asks `http://os8088.com/net/big/` and kern_mega's
-`http://os8088.com/net/mega/` - copied whole, replacing the last release's, in the
-same website commit as the release entry (`rsync -a --delete build/nettree/
-"$WEB_REPO/site/net/"`, or wherever the site's document root is). Plain
+There are THREE trees, one per kernel, because kern_big, kern_mega and
+kern_emu install different kernels: `build/nettree/big/`,
+`build/nettree/mega/` and `build/nettree/emu/` (emu.img with the shipped
+apps.img). kern_big's INSTALL asks `http://os8088.com/net/big/`, kern_mega's
+`http://os8088.com/net/mega/` and kern_emu's `http://os8088.com/net/emu/`.
+They are published to the R2 bucket `os8088-net` (SPEC.md 117.10.2's store)
+from the website repo, never committed to it: `python3 tools/netpublish.py
+--release YYYYMMDD <os-repo>/build/nettree` uploads every file under the
+`YYYYMMDD/` prefix and only then writes `CURRENT`, and `python3
+tools/netpublish.py --verify` checks what `/net/` now serves. The last
+release's prefix stays until the maintainer deletes it. Plain
 `http://` must serve it: the HTTP drive does not do TLS. **Change nothing in
 it by hand once it is built**: `OS88.IDX` carries every file's size and the
 drive believes it, so an edited OS88VER.TXT is served cut to its old length.

@@ -15,9 +15,11 @@ because an install builds the destination volume's own (SPEC.md 52.10.14) and
 neither disk's cache describes the merged tree.
 
 One tree per kernel: `make nettree` writes build/nettree/big/ (os8088.img +
-apps.img) and build/nettree/mega/ (mega.img + megaapps.img), and the release
-skill publishes build/nettree/ at http://os8088.com/net/ - so each lands at
-net/big/ or net/mega/, the IN_URL of that kernel's own INSTALL.
+apps.img), build/nettree/mega/ (mega.img + megaapps.img) and
+build/nettree/emu/ (emu.img + apps.img), and the release publishes
+build/nettree/ under http://os8088.com/net/ (SPEC.md 117.10.2's store) - so
+each lands at net/big/, net/mega/ or net/emu/, the IN_URL of that kernel's
+own INSTALL.
 """
 import os
 import re

@@ -880,7 +880,8 @@ hd_inst_step:
     call hd_inst_sys
     jc .failed
     cmp byte [hd_isrcx], 0xFF   ; a NAMED source carried the apps with it:
-    jne .named                  ; no disk to find, and none to ask for
+    jne .fin                    ; no disk to find, none to ask for - straight
+                                ; to the cache and Done (SPEC.md 117.10.5)
     call hd_iapps_find          ; ...and do not ask for a disk that is already
     jc .swap                    ; in the machine (SPEC.md 52.10.5). Falling
     mov [hd_iautod], al         ; straight into .apps is what makes the whole
@@ -889,12 +890,12 @@ hd_inst_step:
 .swap:
     mov si, hd_s_laask
     call hd_ilog
-.named:
     mov byte [hd_iw_st], HII_SYSDONE    ; (no caption: the wizard reads one
     jmp short .out                      ; only on HDG_FAIL)
 .apps:
     call hd_inst_apps
     jc .failed
+.fin:
     mov si, hd_s_lasc
     call hd_ilog
     push dx                     ; ...and the volume's OWN association cache,
@@ -2252,6 +2253,9 @@ hd_isrc_ck:
 .src:
     call hd_isrc_ck_one         ; where the bank left us...
     jnc .ok
+    cmp byte [hd_isrcx], 0xFF   ; ...but a NAMED source is the only one
+    jne .no                     ; (SPEC.md 117.10.5): a floppy would install
+                                ; its system and no apps, and say Done
     push bx                     ; ...and then EVERY FLOPPY, lowest first
     mov bh, [hd_isrcdrv]        ; (SPEC.md 52.10.15). It was A: alone, which
     xor bl, bl                  ; is right on the machine this was written

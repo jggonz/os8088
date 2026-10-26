@@ -3439,13 +3439,15 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # should see, and on the disk the install copies FROM - so an installed
 # machine carries C:\INSTALL.O88 too, which is how the next release's upgrade
 # is found again. A plain path is the root to os88disk.py. kern_big's system
-# disks here, and kern_mega's carry their own build of it ($(MEGAINST), which
-# asks the mega tree, SPEC.md 117.10.2): kern_small has no driver layer and so no HDD.DRV to switch on
+# disks here, and kern_mega's and kern_emu's carry their own builds of it
+# ($(MEGAINST) and $(EMUINST), which ask the mega and emu trees, SPEC.md
+# 117.10.2): kern_small has no driver layer and so no HDD.DRV to switch on
 # (SPEC.md 51.0, 24.5) - its recipes never name this variable, and a
 # filter-out of something no list contains would be the no-op SPEC.md 24.5
 # warns about. DEFINED HERE for $(SYSAPPS)'s reason: a prerequisite list is
 # expanded where the rule is read.
 SYSINST := $(BUILD)/install.o88
+EMUINST := $(EMUDIR)/apps/install.o88
 
 # --- ...and THE STICKY APPS in STIKAPPS/ (SPEC.md 110) --
 # A widget belongs to the BOOT volume - the desktop configuration that
@@ -6683,13 +6685,15 @@ xtmp3: x3xt
 #
 # ONE TREE PER KERNEL (117.10.2): kern_big and kern_mega install different
 # kernels and different package builds (the mega arms, $(MEGAPKGS)), so each
-# INSTALL is pointed at its own tree under $(INURLBASE) - big/ here, and
-# mega/ for $(MEGAINST), the copy on kern_mega's system disks. A machine
+# INSTALL is pointed at its own tree under $(INURLBASE) - big/ here, mega/
+# for $(MEGAINST), the copy on kern_mega's system disks, and emu/ for
+# $(EMUINST), the copy on emu.img and the browser's live image. A machine
 # therefore upgrades to the kernel it was installed with.
 INREL := $(shell head -n 1 apps/install/OS88VER.TXT | tr -d '\r\n ')
 INURLBASE := http://os8088.com/net/
 INURL := $(INURLBASE)big/
 INMEGAURL := $(INURLBASE)mega/
+INEMUURL := $(INURLBASE)emu/
 $(BUILD)/install.bin: apps/install/install.asm apps/os88api.inc apps/os88ui.inc \
                       apps/os88dec.inc apps/os88link.inc apps/os88data.inc \
                       drivers/httpfs/hfpkg.inc drivers/net/netpkg.inc \
@@ -6719,12 +6723,15 @@ $(BUILD)/install-gate.o88: $(BUILD)/install-gate.bin tools/os88pkg.py $(PKGZSTAM
 # THE PUBLISHED TREES (SPEC.md 117.10.2): per kernel, the 1.44MB system and
 # apps disks as one tree, OS88VER.TXT and its OS88.IDX - build/nettree/big/
 # from os8088.img + apps.img, build/nettree/mega/ from mega.img +
-# megaapps.img. On demand; the release skill publishes build/nettree/ whole
-# at $(INURLBASE), so each lands where its own INSTALL looks.
-.PHONY: nettree nettree-big nettree-mega
-nettree: nettree-big nettree-mega
+# megaapps.img, build/nettree/emu/ from emu.img + the SHIPPED apps.img (there
+# is no emu apps disk, `make emu`). On demand; the release publishes
+# build/nettree/ whole under $(INURLBASE) (117.10.2's store), so each lands
+# where its own INSTALL looks.
+.PHONY: nettree nettree-big nettree-mega nettree-emu
+nettree: nettree-big nettree-mega nettree-emu
 nettree-big: $(BUILD)/nettree/big/OS88.IDX
 nettree-mega: $(BUILD)/nettree/mega/OS88.IDX
+nettree-emu: $(BUILD)/nettree/emu/OS88.IDX
 $(BUILD)/nettree/big/OS88.IDX: $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
                                tools/os88nettree.py tools/os88httpdrv.py
 	python3 tools/os88nettree.py $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
@@ -6734,9 +6741,27 @@ $(BUILD)/nettree/mega/OS88.IDX: $(BUILD)/mega.img $(BUILD)/megaapps.img \
                                 tools/os88nettree.py tools/os88httpdrv.py
 	python3 tools/os88nettree.py $(BUILD)/mega.img $(BUILD)/megaapps.img \
 		apps/install/OS88VER.TXT $(BUILD)/nettree/mega
+$(BUILD)/nettree/emu/OS88.IDX: $(BUILD)/emu.img $(APPSIMG) apps/install/OS88VER.TXT \
+                               tools/os88nettree.py tools/os88httpdrv.py
+	python3 tools/os88nettree.py $(BUILD)/emu.img $(APPSIMG) \
+		apps/install/OS88VER.TXT $(BUILD)/nettree/emu
 
 $(BUILD)/install.o88: $(BUILD)/install.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/install.bin -o $@
+
+# ...and kern_emu's (SPEC.md 117.10.2), $(MEGAINST)'s shape: the same source
+# asking the emu tree, in a folder of its own so it lands as INSTALL.O88
+$(EMUDIR)/apps/install.bin: apps/install/install.asm apps/os88api.inc apps/os88ui.inc \
+                            apps/os88dec.inc apps/os88link.inc apps/os88data.inc \
+                            drivers/httpfs/hfpkg.inc drivers/net/netpkg.inc \
+                            apps/os88sock.inc apps/install/OS88VER.TXT | $(BUILD)
+	@mkdir -p $(EMUDIR)/apps
+	$(NASM) -f bin -w+error --before "[map all $(EMUDIR)/apps/install.map]" \
+		-I apps/ -I drivers/httpfs/ -I drivers/net/ -D"IN_REL='$(INREL)'" \
+		-D"IN_URL='$(INEMUURL)'" -o $@ apps/install/install.asm
+
+$(EMUINST): $(EMUDIR)/apps/install.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(EMUDIR)/apps/install.bin -o $@
 
 $(BUILD)/bounce.bin: apps/bounce/bounce.asm apps/os88api.inc apps/os88ui.inc \
                      | $(BUILD)
@@ -14400,13 +14425,13 @@ $(BUILD)/emu.img: KMODDIR := $(EMUDIR)
 # one feature it was built for has not been given anything. build/vmmcfg is the
 # gate's own SYSTEM.CFG with bit 5 set, which is the absolute mouse's bit and
 # not its row number (drv_cfgbit), and it is reused verbatim rather than copied.
-$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(EMUINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
                   $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg \
                   tools/os88disk.py
 	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin $(EMUDIR)/boothd.sys $(EMUDIR)/coldhma.sys
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
-		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) \
+		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(EMUINST) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vmmcfg/system.cfg \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
@@ -16995,12 +17020,13 @@ $(USBIMG): LIVEDRVS = $(DRIVERS)
 $(USBIMG): LIVESUB :=
 $(EMUUSBIMG): KMODDIR := $(EMUDIR)
 $(EMUUSBIMG): LIVEKDIR := $(EMUDIR)
-$(EMUUSBIMG): LIVENOTOOLS = $(SYSTOOLSARGS)
-$(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/webcfg/system.cfg
+# ...and kern_big's INSTALL out, kern_emu's $(EMUINST) in (SPEC.md 117.10.2)
+$(EMUUSBIMG): LIVENOTOOLS = $(SYSTOOLSARGS) $(SYSINST)
+$(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/webcfg/system.cfg $(EMUINST)
 $(EMUUSBIMG): LIVESUB = $(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 \
                         $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.sys $(EMUDIR)/boot.bin
 $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
-              $(BUILD)/webcfg/system.cfg
+              $(BUILD)/webcfg/system.cfg $(EMUINST)
 
 # THE SELECTIONS ARE "hdd" AND NOT 1440 (SPEC.md 80.6). Both fetch tools
 # price their fill in the target geometry's clusters, and this volume is

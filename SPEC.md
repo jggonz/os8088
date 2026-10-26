@@ -102017,7 +102017,10 @@ a volume with `KERNEL.SYS` on it, and a copy of a volume onto itself replaces
 each file with its own first chunk), and **the system disk is looked for in
 every floppy drive**, lowest first, where it was A: alone — a machine that
 boots its hard disk has a blank in A: or nothing, and the new system disk in
-whichever drive the BIOS was not reading. The apps phase takes the same
+whichever drive the BIOS was not reading. A source `HDI_GO` NAMED (117.10.5)
+is the one exception: it is the only volume asked, so a network tree with no
+`KERNEL.SYS` is refused before the format rather than replaced by whatever
+floppy is in A:. The apps phase takes the same
 destination guard. The caption for a disk it cannot find reads `No system
 disk found - nothing done`.
 
@@ -219999,7 +220002,7 @@ back when they are done.
 ### 117.10 Installing over the network
 
 `docs/plans/completed/NET-UPDATE-PLAN.md` is the story list. **The network install is
-the ordinary install with another source volume**: `HTTPFS.DRV` (120) mounts
+the ordinary install with another source volume**: `HTTPFS.DRV` (122) mounts
 a published tree and `HDI_GO` NAMES that volume as its source (117.10.5).
 The engine learns one thing - that a named source carried the apps with it -
 and the driver and the kernel learn nothing.
@@ -220022,12 +220025,15 @@ build.
 #### 117.10.2 The published tree, and `OS88VER.TXT`
 
 `make nettree` writes `build/nettree/`, which holds **one tree per kernel**:
-`big/` and `mega/`. kern_big and kern_mega install different kernels and
-different package builds (kern_mega's arms, 20.18), so a machine must upgrade
-from the tree of the kernel it runs. Each tree is the 1.44MB system disk's
-files and the 1.44MB apps disk's files as one - `build/os8088.img` and
-`build/apps.img` for `big/`, `build/mega.img` and `build/megaapps.img` for
-`mega/` - `SYSTEM\OS88VER.TXT`, and the
+`big/`, `mega/` and `emu/`. kern_big, kern_mega and kern_emu install
+different kernels, and kern_mega different package builds too (its arms,
+20.18), so a machine must upgrade from the tree of the kernel it runs. Each
+tree is the 1.44MB system disk's files and the 1.44MB apps disk's files as
+one - `build/os8088.img` and `build/apps.img` for `big/`, `build/mega.img`
+and `build/megaapps.img` for `mega/`, `build/emu.img` and the SHIPPED
+`build/apps.img` for `emu/` (there is no emu apps disk, 9.11.7; `make
+nettree` therefore needs `make mega` and builds `make emu`'s disk) -
+`SYSTEM\OS88VER.TXT`, and the
 `OS88.IDX` `tools/os88httpdrv.py export` writes for it. The version file is
 in `SYSTEM\` because an install copies the tree whole: there it lands beside
 the rest of the system on the installed volume, as that machine's record of
@@ -220036,12 +220042,34 @@ carries every file's size and the drive believes it**, so a file edited in
 the published folder is served cut to its old length: edit
 `apps/install/OS88VER.TXT` and build the tree again, or re-index the folder in
 place with `os88httpdrv.py export DIR DIR`. **`ASSOC.DAT` is left
-out**: an install builds the destination's own (52.10.14). The release skill
-publishes `build/nettree/` whole at **`http://os8088.com/net/`**, so the two
-trees are `http://os8088.com/net/big/` - the `IN_URL` of the INSTALL on
-kern_big's system disks - and `http://os8088.com/net/mega/`, the `IN_URL` of
-the INSTALL kern_mega's system disks carry (`$(MEGAINST)`, the same source
-assembled with the other address).
+out**: an install builds the destination's own (52.10.14). The release
+publishes `build/nettree/` whole under **`http://os8088.com/net/`**, so the
+three trees are `http://os8088.com/net/big/` - the `IN_URL` of the INSTALL on
+kern_big's system disks - `http://os8088.com/net/mega/`, the `IN_URL` of the
+INSTALL kern_mega's system disks carry (`$(MEGAINST)`, the same source
+assembled with the other address), and `http://os8088.com/net/emu/`, the
+`IN_URL` of `$(EMUINST)`, the copy on `build/emu.img` and on `make
+usb-emu`'s image in kern_big's place.
+
+**The store.** The trees live in an R2 bucket named `os8088-net`, bound to
+the os8088-web Worker as `NET`. A key is `<YYYYMMDD>/<kernel>/<path>`:
+`<kernel>` is `big`, `mega` or `emu`, and `<path>` is the tree path exactly
+as `build/nettree/<kernel>/` holds it (`20261101/big/SYSTEM/OS88VER.TXT`,
+`20261101/big/OS88.IDX`). One pointer object, `CURRENT`, has the eight-digit
+release (117.10.1) as its whole body. The Worker serves
+`GET /net/<kernel>/<path>` from `<CURRENT>/<kernel>/<path>`: plain `http`, no
+redirect, `Content-Length` always, `Range: bytes=a-b` answered `206` with
+`Content-Range`, no chunked encoding and no compression - what `HTTPFS.DRV`
+(122) and the check (117.10.3) can read. **An old release's prefix stays
+until the maintainer deletes it**, so a machine mid-install keeps getting
+files that match the `OS88.IDX` it already fetched: an in-place overwrite
+would serve sizes that disagree with the index, which the drive believes.
+The upload is `tools/netpublish.py` in the os8088-web repository: `python3
+tools/netpublish.py --release YYYYMMDD <os-repo>/build/nettree` uploads every
+file under the prefix and only then writes `CURRENT`; `--verify` fetches
+`http://os8088.com/net/{big,mega,emu}/SYSTEM/OS88VER.TXT` and checks `200`,
+no `Location`, a `Content-Length`, line 1 equal to the release, and a Range
+request answered `206`.
 
 `OS88VER.TXT` is text: line 1 the release, `YYYYMMDD`, and up to four more
 lines of what is new, each shown to 40 characters. CR, LF or both end a line;
@@ -220070,7 +220098,7 @@ and 2.2KB off the network for one file of about 150 bytes, at every boot
 once the startup check (117.10.6) is on. The drive is mounted only when
 `Next` is pressed with the network picked (117.10.5), and the user's own
 address is banked then. **`HTTPDRV.CFG` is never written** - only the
-Control Panel's page saves it (121.5) - so the setting a user made survives
+Control Panel's page saves it (122.5) - so the setting a user made survives
 whatever happens here.
 
 `IN_URL` is split into `IN_HOST`, `IN_PORT` and `IN_PATH` **by the
@@ -220080,7 +220108,15 @@ index entry either, so the check reads an `OS88VER.TXT` edited on the server
 whole - the install's copy of it is still sized by the index (117.10.2).
 
 The window is up before the request, saying *Looking for a newer os8088 on
-the network...*, so a slow server is a sentence rather than a frozen screen.
+the network...*, so a slow server is a sentence on the screen - **but the
+screen is frozen behind it**: `in_vget` loops on its socket verbs and the
+tick count without yielding, from the window's timer with the gfx lock held,
+so the UI task takes no input and nothing else paints until the reply or the
+ten seconds are over. `ETHER.DRV`'s own task still runs (the machine is
+pre-emptive), so the exchange completes; what it costs is the wait, which on
+an XT includes the DNS, the connect and the reply of a successful check. The
+startup check (117.10.6) runs the same loop from the entry, with no window
+up yet.
 
 **WHAT COUNTS AS AN ANSWER** is a reply whose status is exactly `200` *and*
 whose body opens with eight digits (`in_vparse`, the release line of
@@ -220138,9 +220174,16 @@ with it**. Standing there, the system phase came off the network and then the
 engine did what it does on a floppy machine - looked for an apps disk already
 in a drive (52.10.5) and, finding one in B:, carried straight on and copied
 the apps phase off the floppy without INSTALL ever being asked. Named, the
-engine skips that probe, answers `HDG_APPS` with no line asking for a disk,
-and INSTALL sends `HDI_QUIT` - the engine's `ASSOC.DAT` pass runs on a
-declined apps phase too (52.10.14) - and goes to Done. The drive is put back
+engine skips that probe and the apps phase both, runs the apps phase's
+finish - the installed volume's `ASSOC.DAT` in FULL mode (52.10.14), the
+release of the writer and the log's totals - and answers `HDG_DONE`, and
+INSTALL goes to Done. It answered `HDG_APPS` first and INSTALL sent
+`HDI_QUIT`, which only releases: the full flush never ran on a network
+install. **A named source is also the only source asked**: the system-disk
+check (52.10.15) does not fall back to the floppies for it, so a tree with no
+`KERNEL.SYS`, or a root the HTTP drive could not read, is refused before the
+format - where falling back installed the system disk in A: with no apps
+phase and said Done. The drive is put back
 as in 117.10.3 when the window closes. `HDI_QUIT` is sent **only to a run
 that is waiting** (`[in_wait]`, set by an `HDG_APPS` answer): it is
 `HDD.DRV`'s door, which reads `HDDTOOL.DRV` in before it forwards a verb, so
@@ -220159,7 +220202,15 @@ the first picked writes
 it, so a user can turn it off by installing again or by deleting the link.
 
 Started with `CHECK` (`OSAPI_ARG_TEXT`), INSTALL runs 117.10.3 **before** it
-creates a window. Nothing newer, no card, or no answer: one toast saying which
+creates a window. **The cell is asked whether it is there first**: a kernel
+built before `OSAPI_ARG_TEXT` ends its table at `0x04DD` and a far call there
+runs data (the debug registry's tags, or kern_mega's data word), and the new
+release's `A:\INSTALL.O88` double-clicked on a machine booted from an older
+C: is exactly that kernel. `in_entry` compares the cell's bytes - `push bp`
+and a `call` - and the call's target with those of `OSAPI_ARG_FILE` (`0x0249`,
+54.5, the same `OSAPI_RCSLOT` on every kernel) without calling either;
+a mismatch takes the plain start, which is exact, since a kernel without the
+cell cannot have started INSTALL from a link. Nothing newer, no card, or no answer: one toast saying which
 (*os8088 is up to date*, *Update check: no network*) and the entry refuses,
 which aborts the launch with the toast standing and no `Load failed` (20.12.4).
 Newer: the window, on the source page, with the network row picked.
@@ -220193,6 +220244,8 @@ when the class is down, and the arrow keys' radio redraw:
 | `HDDTOOL.DRV` image / file | 18,322 -> **18,327** / 14,079 -> 14,100 | the named source; `hd_pv_go`'s erase normaliser went, the bit now being a bit. No cluster crossed |
 | `INSTALL.O88` image / bss, the direct check | 9,126 -> **9,461** / 1,521 -> 1,972 | `in_vget` and its three helpers, `net_find`, the request and host strings (about 70 bytes for `os8088.com`); the mount, the walk into `SYSTEM\` and the file read left the check. The bss is the reply buffer, 320 -> 768 |
 | `INSTALL.O88` on the disk | 7,230 -> **7,542** | no cluster crossed: the eighth KB at 360KB, the fifteenth 512 bytes elsewhere |
+| `INSTALL.O88` image, the review's round | 9,469 -> **9,477** | the `OSAPI_ARG_TEXT` gate (117.10.6) in, the `HDG_APPS` branch for a named source out |
+| `HDDTOOL.DRV` image | 16,510 -> **16,510** | the named source's finish and its refusal (117.10.5): different bytes, the same length |
 
 `tests/netinst.py` (soak, QEMU) is the gate: the check, the install - with an
 apps disk in B: that must NOT be copied - the link and the boot check with
