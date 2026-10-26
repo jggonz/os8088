@@ -246,6 +246,32 @@ fpg_show:
     push si
     mov al, [menu_bovr]         ; sampled BEFORE: a bar that owes an overdraw
     call menu_draw_bar          ; repair gets it from in there, and
+%ifdef OS88_SNDCARD
+    mov bx, [vid_clk_hx]        ; THE ORIGIN AGAIN, off the geometry that
+    sub bx, FPG_W               ; composition settled: the toast this hands
+    cmp bx, FPG_MINX            ; back from held the clock's field, and its
+    jl .x0                      ; going moves [vid_clk_hx] under a clock line
+    xchg bx, [fpg_x0]           ; past 22 cells (SPEC.md 12.8, 34.15). BX =
+    cmp bx, [fpg_x0]            ; the old one, and the reservation was just
+    je .x0                      ; composed at the new
+    or al, al                   ; the overdraw arm painted at the OLD one:
+    jz .x0                      ; its band is lettered over already, and the
+    mov ax, bx                  ; rows above and below it that the new box
+    lea cx, [bx+FPG_W-1]        ; does not cover are the ground again
+    mov dx, [fpg_x0]
+    cmp dx, bx
+    jb .lt
+    mov cx, dx                  ; moved right: old .. new - 1
+    dec cx
+    jmp short .rg
+.lt:
+    add dx, FPG_W               ; moved left: new + FPG_W .. old's right
+    xchg ax, dx
+.rg:
+    call fpg_ring
+    xor ax, ax                  ; ...and the box painted at the new
+.x0:
+%endif
     or al, al                   ; menu_furniture puts the widget back ITSELF
     jnz .span                   ; (SPEC.md 12.9) - a second paint would be
     call fpg_paint              ; PERFORMANCE.md Part 1's double draw

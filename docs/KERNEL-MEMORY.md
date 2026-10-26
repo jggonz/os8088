@@ -277,8 +277,8 @@ had added.
     "bss": 5398,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37644,
-    "coldpara": 2353,
+    "cold": 37650,
+    "coldpara": 2354,
     "colds": 3790,
     "fatpara": 288,
     "fats": 3008,
@@ -293,13 +293,13 @@ had added.
     "minramkb": 128,
     "ovl": 5110,
     "stk0": 512,
-    "text": 41064,
+    "text": 41128,
     "toppara": 2880,
     "vga": 2032,
     "vgabuf": 336,
     "vgabufpara": 21,
     "vgars": 3663,
-    "vgas": 6143
+    "vgas": 6144
   },
   "emu": {
     "blobseg": 6304,
@@ -733,14 +733,14 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,436 | 37.4% |
-| the window system and its furniture | 22,405 | 28.5% |
+| the window system and its furniture | 22,475 | 28.5% |
 | drawing: adapters, primitives, glyphs, icons | 10,845 | 13.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,035 | 10.2% |
 | the kernel proper: API table, heap, scheduler, events | 7,371 | 9.4% |
 | the Control Panel | 316 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **78,708** | |
+| **total** | **78,778** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -754,7 +754,7 @@ there and nowhere else.
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,849 | — | **3,849** | 111 | 824 | — |
 | `memory.inc` — the claim heap (§50) | 296 | 2,613 | **2,909** | 26 | 324 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,800 | 9 | **2,809** | 56 | — | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,447 | 165 | **2,612** | 209 | 84 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,455 | 165 | **2,620** | 209 | 84 | — |
 | `assoc.inc` — file type associations (§54) | 506 | 2,065 | **2,571** | 31 | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,118 | **2,153** | 86 | — | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 499 | 1,630 | **2,129** | 388 | — | 2,031 |
@@ -768,9 +768,9 @@ there and nowhere else.
 | `fsx.inc` — fullscreen exclusive (§53) | 981 | — | **981** | 9 | — | — |
 | `icons.inc` — the icon renderer (§10) | 930 | — | **930** | 288 | — | — |
 | `dock.inc` — the dock strip (§30) | 910 | — | **910** | 59 | — | 75 |
+| `fprog.inc` — the file-operation progress widget (§12.8) | 808 | — | **808** | — | — | — |
 | `snd.inc` — the sound layer (§34) | 800 | — | **800** | 35 | — | — |
-| `fprog.inc` — the file-operation progress widget (§12.8) | 752 | — | **752** | — | — | — |
-| `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 90 | 560 | **650** | 5 | — | 481 |
+| `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 90 | 566 | **656** | 5 | — | 481 |
 | `viddet.inc` — adapter detection and geometry (§39) | 606 | — | **606** | — | — | 324 |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 574 | — | **574** | 74 | — | 419 |
 | `mod.inc` — on-demand kernel modules (§2.8) | 155 | 395 | **550** | — | — | — |
@@ -806,7 +806,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,165 | 241 | **2,406** | — | — | 662 |
-| **total** | **41,064** | **37,644** | **78,708** | **5,398** | **5,358** | **6,444** |
+| **total** | **41,128** | **37,650** | **78,778** | **5,398** | **5,358** | **6,444** |
 <!-- END generated table -->
 
 ### Reading it

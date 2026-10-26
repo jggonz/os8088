@@ -949,11 +949,17 @@ hb_walk:                        ; SI = hb_tab
     shr al, 1                   ; AL = KB, at most 16
     cbw
     stosw
-    mov ds, [cs:si+4]           ; the owner: a driver's image segment
+    mov bx, [cs:si+4]           ; the owner: a driver's image segment
+    mov ds, bx
+    cmp bh, 0xF0                ; hb_drop's test: F000 up is an image in the
+    mov bx, HB_ORG              ; pool, its header at HB_ORG...
+    jae .hdr
+    xor bx, bx                  ; ...below, a HEAP driver's, at its offset 0
+.hdr:
     mov ah, 0
-    cmp word [HB_ORG], 0x384F   ; 'O8': its header, and the class in it
+    cmp word [bx], 0x384F       ; 'O8': its header, and the class in it
     jne .nc
-    mov ah, [HB_ORG+3]
+    mov ah, [bx+3]
 .nc:
     mov al, XMW_HMAI
     cmp dx, [cs:si+4]           ; its own segment owns it: the image

@@ -26372,7 +26372,12 @@ FPG_BAR_PX equ FPG_BOX_W - 2    ; 62: the trough, in pixels
 
 The origin is `[vid_clk_hx] - FPG_W`, computed at arm time from the **live**
 geometry (§39.2) exactly as the clock is — never from `MENU_CLK_HX`, which is
-the VGA reference. Everything it draws is in §39.4's black/white class, no
+the VGA reference — and taken again by `fpg_show` after the composition it
+makes, because the toast it hands the bar back from may have held the
+clock's field, and its going moves `[vid_clk_hx]` under a clock line past 22
+cells (§34.15). On the overdraw arm, which has already painted the box at the
+old origin, the rows outside the text band that the new box does not cover
+are filled with the bar's ground; the band there is the composition's. Everything it draws is in §39.4's black/white class, no
 dither anywhere, because an 8x8 dithered glyph loses half its strokes on a
 1bpp adapter (§48's wave counter) and a 1px box frame would lose half of
 itself.
@@ -27414,7 +27419,7 @@ path (§45), and `WF_SNAP` (§11.94) doing it for ordinary windows.
 | `menu_furniture` | `menu_draw_bar`'s overdraw arm since kernel size pass 14 (its one caller; the name is kept here for the record): white-fills the bar's field, draws the black rule and the logo, forgets every cell. |
 | `menu_bar_text` | in: nothing (gfx lock held). Composes menus, clock and toast into `menu_bcell` and emits the runs that differ. Preserves all registers. `menu_sound`'s door: the composition alone. |
 | `menu_bar_clock` | as `menu_bar_text`, past the menus: the clock and the toast strip only - and then `menu_sound`. |
-| `menu_bt_ent` | `menu_draw_bar`'s door: CF = 1 the whole bar's cells, CF = 0 the clock's, then `menu_sound`. |
+| `menu_bt_ent` | `menu_draw_bar`'s door: CF = 1 the whole bar's cells, CF = 0 the clock's - after `toast_place` and `menu_sound` have settled the geometry (§34.15), and then `menu_sound` again. |
 
 #### The composition IS the diff
 
@@ -58159,6 +58164,8 @@ then runs RLAPPLY with nobody touching anything.
 the path's NUL, inside the same 45-byte field. The path and the parameter
 share 44 characters, and the field's last byte is forced to 0 by `lnk_open`
 as it always was, so the parameter is terminated whatever the file says.
+**A link file shorter than 50 bytes carries none**: the record is read onto
+the stack, and a tail the file did not supply is the stack's bytes.
 `LNK_V` stays **1**: a kernel that predates this ends the path at its NUL and
 never reads the rest, so a new link opens on an old kernel as a plain one.
 
@@ -58197,7 +58204,10 @@ a flag. A parameter costs the table nothing and serves any program.
 
 Writers: `apps/os88link.inc`'s `OS88_LINK` takes the parameter as an optional
 fifth argument; `tools/os88lnk.py --arg` writes one and `--read` shows it.
-The Control Panel's Alt-drop writes none.
+The Control Panel's Alt-drop writes none, and zeroes the field before the
+path goes in: its record is built in `cpc_buf`, the settings file's buffer,
+which nothing clears, and a 12-character name's NUL is the last byte
+`sc_m_wpath` copies, so the byte after it was whatever the buffer held.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 
@@ -64245,7 +64255,7 @@ the install succeeds, +28, the door's offset at FFFF, and far-calls
 |---|---|
 | `XMW_HMAK` (F5h) | `.cold` and the tail: `XMW_OFF` FFFFh, `XMW_KB` 64 less `HB_HI`'s whole KB |
 | `XMW_HMAI` (F6h) | a driver's image: `XMW_OFF` the segment it runs at, `XMW_KB` its bytes rounded UP, `XMW_CLS` its class off its own header |
-| `XMW_HMAB` (F7h) | a buffer a driver took there, the same fields, class off its OWNER's header |
+| `XMW_HMAB` (F7h) | a buffer a driver took there, the same fields, class off its OWNER's header - at `HB_ORG` for an owner in the pool (segment F000h up, `hb_drop`'s test) and at offset 0 for one left in the heap |
 
 All of it is inside the span `[tm_hifix]` already counts, so `tm_hikb`'s
 system sum and `tm_himax` skip F0h-F7h, and a block's group is flagged
@@ -71389,7 +71399,12 @@ what is SHOWING, is what the field width and the hit test read, not the
 driver's capability. A toast moved the boundary three cells left until it
 was found to letter the strip under §12.8's progress widget, whose origin is
 taken at arm time; the boundary no longer moves for a toast at all, so the
-widget and the strip cannot meet. A move relayouts the application menus at
+widget and the strip cannot meet - except under the 12-hour line with
+seconds, where a toast that hides the speaker gives the field back its 22
+cells and its going takes them again, so `fpg_show` re-takes the widget's
+origin (§12.8). **The geometry is settled before the composition**:
+`menu_bt_ent` runs `toast_place` and `menu_sound` first, so the clock and the
+strip are never lettered from the old boundary and then moved. A move relayouts the application menus at
 the new boundary - their existing prefix/index rule is unchanged - and
 forgets the drawn record from the old boundary on, so a segment growing
 back repaints cells the clock had drawn. It was the LEFT end of a field

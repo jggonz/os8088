@@ -352,6 +352,9 @@ lnk_open:
                                 ; tail is stack bytes that can only fail to
                                 ; name anything (5 bytes, kept out). SS:BP =
                                 ; the record, which needs no segment prefix
+    sub cx, ax                  ; CX = 0: the whole record was read (the read
+                                ; clobbers AX/DX alone) - and only then is
+                                ; there a parameter to arm, below
     cmp word [bp+LNK_SIG], 'LK'
     jne .notours
     cmp byte [bp+LNK_VER], LNK_V
@@ -373,6 +376,8 @@ lnk_open:
                                 ; carries none to whichever program its
                                 ; extension names. ES is still SS: the read
                                 ; above was handed ES:BX and keeps ES
+    or cx, cx                   ; A SHORT FILE carries none: its tail is the
+    jnz .noarg                  ; stack's bytes, not the file's
     xor al, al
     mov cx, SC_PATHMAX - 1
     repne scasb                 ; past the path's NUL - or onto the forced
@@ -1029,8 +1034,13 @@ sc_m_lnk:
     stosb
     PUSH_CSDATA                 ; ...and the RECORD in the image, ES = CS from
     pop es                      ; here to the write (its DATA segment)
-    lea di, [cs:cpc_buf + LNK_PATH] ; the path, sc_m_new's: dsk_path's leading
-    call sc_m_wpath             ; `\` lands on the kind byte, written after it
+    lea di, [cs:cpc_buf + LNK_PATH] ; the field ZEROED first, AL still 0: the
+    mov cx, SC_PATHMAX          ; buffer is the settings file's and never
+    rep stosb                   ; cleared, and a byte after the path's NUL is
+    sub di, SC_PATHMAX          ; a PARAMETER (SPEC.md 26.10.7), which this
+                                ; writes none of
+    call sc_m_wpath             ; the path, sc_m_new's: dsk_path's leading
+                                ; `\` lands on the kind byte, written after it
     jc .nopath
     lea di, [cs:cpc_buf]        ; (`lea` with `cs:` - the pointer is the
                                 ; IMAGE's, ES = CS, and os88ovlchk is told so)

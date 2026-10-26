@@ -970,8 +970,10 @@ menu_draw_bar:
 ;   menu_bt_ent     CF as given, then the speaker   - menu_draw_bar's
 ;   menu_bar_text   CF = 1, the composition alone   - menu_sound's
 ;   menu_bt_raw     CF as given, the composition alone
-; Every composition but menu_sound's own is followed by menu_sound (SPEC.md
-; 34.15), whose picture and geometry answer to what was just composed - so
+; Every composition but menu_sound's own is preceded by toast_place and
+; menu_sound, so the geometry it composes against is this pass's, and
+; followed by menu_sound (SPEC.md 34.15), whose picture and geometry answer
+; to what was just composed - so
 ; that is said once, here, where it was said at both callers and again in a
 ; menu_draw_clock of its own. menu_sound's own re-composition goes through
 ; menu_bar_text and so does NOT come back round: it is the one place the
@@ -981,8 +983,16 @@ menu_bar_clock:
     clc                         ; CF = 0: past the menus
 menu_bt_ent:
 %ifdef OS88_SNDCARD
+    pushf                       ; the choice, across the settle
+    call toast_place            ; THE GEOMETRY BEFORE THE COMPOSITION: this
+    call menu_sound             ; pass's toast decides [vid_clk_hx] (SPEC.md
+    popf                        ; 34.15), whose own menu_bar_text letters it
+                                ; on a move - so nothing below is lettered
+                                ; from a stale [menu_bc0] and then moved
     call menu_bt_raw            ; ...and FALLS INTO menu_sound, which is
-                                ; written here for that (pass 14: 3 bytes)
+                                ; written here for that (pass 14: 3 bytes):
+                                ; a whole-bar composition may move the menus'
+                                ; end, and with it whether the strip fits
 ; The speaker is the RIGHT end of the clock's field, and the clock is
 ; right-aligned against it (SPEC.md 34.15). The menus' boundary stays where
 ; it is with no speaker, so the gap a toast tries first is unchanged; it
@@ -1029,8 +1039,8 @@ menu_sound:
     jne .store                  ; high byte says which (pass 14: 1)
     mov ax, [menu_mixx]         ; the speaker went: erase its picture ABOVE
     mov cx, ax                  ; and BELOW the text band - the band is the
-    add cx, 23                  ; composition's, which has just lettered the
-    call fpg_ring               ; clock or the strip over it. fpg_ring's rows
+    add cx, 23                  ; composition's, which letters the clock or
+    call fpg_ring               ; the strip over it below. fpg_ring's rows
                                 ; are the whole field's, 0..MBAR_H-2, where
                                 ; the picture is rows 2..17: the four more are
                                 ; the bar's own ground under no other painter
