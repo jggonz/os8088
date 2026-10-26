@@ -9,4 +9,4 @@ for. Double-click a song to open its player.
 At 360KB the tracker module does not fit beside the programs, so it rides
 here too, in `MEDIA`. Start Tracker from the software disk, then swap disks
 and open the module from this one. The larger software disks carry the
-module and MIDIRack themselves, and the 1.44MB and 1.2MB ones carry XTMP3.
+module and MIDIRack themselves, and the 1.44MB one carries XTMP3.

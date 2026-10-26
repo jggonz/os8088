@@ -21,8 +21,9 @@ RealDMG, the picture, the timing and the sound work on your machine.
 ## Where it is
 
 In the `REALDMG` folder of RealDMG's disk in every size, beside
-`REALDMG.O88` and `README.TXT`, and in the same folder on the everything set
-and the live USB image and CD.
+`REALDMG.O88` and `README.TXT`. The 1.44MB and 1.2MB software disks, the
+everything set and the live USB image and CD carry it in `MEDIA`, with
+RealDMG in `GAMES`.
 
 ## Running it
 

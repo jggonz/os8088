@@ -16,7 +16,7 @@ is named for the screen in use, and clicking it while its dot is on it
 steps through the screens the card offers. **Set Primary** applies the
 choice, which is kept.
 
-The driver needs a computer with a 386 or better; it is not loaded on an
-XT. Hibernate is not offered while the desktop is on the VESA screen, and
+The driver needs a card whose VESA BIOS is version 1.2 or later; a 286 or
+better with such a card qualifies. Hibernate is not offered while the desktop is on the VESA screen, and
 the extended desktop over two cards is not available with it. Full-screen
 programs and games work as on the VGA and return to the VESA desktop.

@@ -14,7 +14,8 @@ Several Mixer windows can be open; they all control the same card and show
 its current settings.
 
 Mixer needs [[SOUND.DRV]] loaded and a compatible Sound Blaster mixer.
-All four apps disk sizes and live media carry it. The system floppies leave
+The 1.44MB, 1.2MB and 720KB apps disks, the everything set and the live
+media carry it; the 360KB apps disk leaves it out. The system floppies leave
 it out; the speaker beside the clock offers quick master volume separately.
 The small system's apps disks omit Mixer because they do not load the sound
 driver.

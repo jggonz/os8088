@@ -16,8 +16,9 @@ something to run straight away.
 
 RealDMG comes on a disk of its own, in a folder called `REALDMG`. The folder
 holds the program, **REALDMG.O88**, the demo, **GBDEMO.GB**, and
-[[README.TXT]], which has notes on the program. The everything set and the
-live USB image and CD carry the same folder.
+[[README.TXT]], which has notes on the program. The 1.44MB and 1.2MB
+software disks, the everything set and the live USB image and CD carry
+RealDMG too, in `GAMES`, with the demo in `MEDIA`.
 
 There are two ways to start a game:
 
@@ -315,7 +316,7 @@ window.
 | `NAME.RP1` to `NAME.RP9` | beside the game | Replays, one for each slot |
 | `NAME.RDP` | beside the game | The game's profile, for the Static Recompiler |
 | `XXXXXXnn.LOG` | beside REALDMG.O88 | The log |
-| `REALDMG.CFG` | in `SYSTEM\APPDATA` on RealDMG's own disk | Your keys, the Cache setting, and each game's Speed and Sound |
+| `REALDMG.CFG` | in `SYSTEM\APPDATA` on the disk RealDMG was started from | Your keys, the Cache setting, and each game's Speed and Sound |
 
 A battery save is the usual `.SAV` format. For a cartridge with a clock, the
 clock is saved with it the way other Game Boy emulators save it, so a save
