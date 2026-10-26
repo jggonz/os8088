@@ -392,7 +392,23 @@ rw_aread:
     mov dx, [rw_pkgdir]
     mov bl, [rw_pkgvol]
     call rw_fgo
-    jc .fix                         ; (no folder: none of them, interpreted)
+    jnc .go
+    xor bx, bx                      ; no folder: none of them, interpreted -
+.z:                                 ;   every claim given back unread, or
+    cmp bl, [rw_anseg]              ;   rw_afixup links heap it never read
+    jae .fix                        ;   (rw_fgo freed the hold already)
+    push bx
+    shl bx, 1
+    xor dx, dx
+    xchg dx, [rw_aseg + bx]
+    or dx, dx
+    jz .zn
+    call OSAPI_MEM_FREE
+.zn:
+    pop bx
+    inc bx
+    jmp short .z
+.go:
     xor bx, bx
 .l:
     cmp bl, [rw_anseg]

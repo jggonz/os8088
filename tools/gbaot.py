@@ -1098,23 +1098,25 @@ def package(build, img, rom, out, romname, image=None, log=print, embed=False):
         plain.add(AOT_CODE + 2 * nseg + i)
     filed = [0, 1, 3, 4] + list(range(AOT_CODE, AOT_CODE + 2 * nseg + romrows))
     work = tempfile.mkdtemp(prefix="gbaotpkg-")
-    paths = []
-    for row, body in zip(filed, parts):
-        if row in plain or len(os88lz.compress(body, os88lz.LZ4)) >= len(body):
-            b[rows + 8 * row + 1] &= ~16       # plain: OP_COMP off
-        p = os.path.join(work, "part%02d.bin" % row)
-        open(p, "wb").write(body)
-        paths.append(p)
-    binp = os.path.join(work, "game.bin")
-    open(binp, "wb").write(b)
-    cmd = [sys.executable, os.path.join(HERE, "os88pkg.py"), "--compress-if=lz4",
-           binp, "-o", out, "--part-compress", "lz4"]
-    for p in paths:
-        cmd += ["--part", p]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode:
-        raise SystemExit(r.stdout + r.stderr)
-    shutil.rmtree(work)
+    try:                                   # (the parts gone however it ends)
+        paths = []
+        for row, body in zip(filed, parts):
+            if row in plain or len(os88lz.compress(body, os88lz.LZ4)) >= len(body):
+                b[rows + 8 * row + 1] &= ~16       # plain: OP_COMP off
+            p = os.path.join(work, "part%02d.bin" % row)
+            open(p, "wb").write(body)
+            paths.append(p)
+        binp = os.path.join(work, "game.bin")
+        open(binp, "wb").write(b)
+        cmd = [sys.executable, os.path.join(HERE, "os88pkg.py"), "--compress-if=lz4",
+               binp, "-o", out, "--part-compress", "lz4"]
+        for p in paths:
+            cmd += ["--part", p]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode:
+            raise SystemExit(r.stdout + r.stderr)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     size = os.path.getsize(out)
     if size >= 1 << 20:                    # PKG_FILE_HI (SPEC.md 19.1): the
         os.remove(out)                     #   mount types no package file of
@@ -1217,13 +1219,21 @@ def make(build, rom_path, out, romname=None, heat_frames=3000, replays=(), check
                             hram=hram)
         d1 = os.path.join(work, "final")
         save(img, d1, rom)
-        package(build, load(d1), rom, out, romname, log=log, embed=embed)
-        if check:
-            log("gbaot: checking %d frames beside the interpreter..." % check)
-            ok, what = compare(build, rom, load(d1), check, log=log)
-            log("gbaot: " + what)
-            if not ok:
-                raise SystemExit("gbaot: the precompiled code is NOT the interpreter's machine")
+        # GAME.O88 is written under its own name only once it is checked: a
+        # package that failed the check is not left beside the ROM
+        part = out + ".part"
+        try:
+            package(build, load(d1), rom, part, romname, log=log, embed=embed)
+            if check:
+                log("gbaot: checking %d frames beside the interpreter..." % check)
+                ok, what = compare(build, rom, load(d1), check, log=log)
+                log("gbaot: " + what)
+                if not ok:
+                    raise SystemExit("gbaot: the precompiled code is NOT the interpreter's machine")
+            os.replace(part, out)
+        finally:
+            if os.path.exists(part):
+                os.remove(part)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return out

@@ -5,9 +5,11 @@
 
 Choose a Game Boy cartridge and it writes GAME.O88 beside it: RealDMG with
 the whole cartridge translated ahead of time (tools/gbaot.py's `make`), so
-the game never stops to translate. The ROM is NOT inside the package - put
-the two side by side on an os8088 disk, double-click the package, and it
-opens its ROM itself. Optionally:
+the game never stops to translate. With "Put the ROM inside the package"
+ticked - the default - the package CONTAINS the cartridge ROM: it is one
+file that runs alone, it is the cartridge itself, and it must not be shared.
+Unticked, the ROM is not inside it - put the two side by side on an os8088
+disk, double-click the package, and it opens its ROM itself. Optionally:
 
   * REPLAYS - a NAME.RPn RealDMG recorded (Save State > Record Replay) and
     the NAME.SSn it starts from: the counters are taken from real play as

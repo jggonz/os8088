@@ -53,12 +53,18 @@ NEEDS
 USING IT
   1. Choose the cartridge. The package is written beside it, GAME.O88.
   2. Make the package (a minute or two; a 1 MB cartridge longer).
-  3. Put GAME.O88 and the cartridge, under the name the window shows, in one
-     folder of an os8088 disk - or tick a floppy and it makes one - and
-     double-click the package. It opens its own ROM, and refuses any other.
+  3. With "Put the ROM inside the package" ticked - the default - GAME.O88
+     is the whole game in one file: copy it to an os8088 disk - or tick a
+     floppy and it makes one - and double-click it. Unticked, put GAME.O88
+     and the cartridge, under the name the window shows, in one folder of
+     an os8088 disk and double-click the package: it opens its own ROM, and
+     refuses any other.
 
-  The ROM is never inside the package: it is yours and stays a file of its
-  own. A package is one cartridge's.
+  WITH THE BOX TICKED THE PACKAGE CONTAINS THE CARTRIDGE ROM. It is the
+  cartridge itself, and it must not be shared or posted. To give someone
+  only the precompiled code, untick the box: that package carries no ROM and
+  opens the one beside it, which they bring themselves. A package is one
+  cartridge's either way.
 
   COUNTERS: the window runs the translated game for a while with a scripted
   player and puts the code that ran most in the first of the package's

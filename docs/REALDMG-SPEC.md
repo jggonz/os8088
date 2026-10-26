@@ -145,7 +145,19 @@ bytes decoded as code where they are data.
 What it does not cover, and costs where it does: a READ of the patched byte
 as data reads D3 - the one ROM in 26 surveyed with an instruction across
 3FFF is Looney Tunes, and it does not - and the plain interpreter's JR
-across, above. `gbcpu`'s "bank seam" leg is `tools/gbprof/gbseam.asm` -
+across, above. **The choice is a heuristic over the bytes alone**:
+`rdg_seaminit` cannot tell code from data, so a bank 0 whose last bytes are
+DATA that decodes as such an instruction (a text or tile row ending 20h or
+30h, say) gets the trap as well, and the game's own read of that byte - a
+table, a glyph, a checksum - answers D3 where the ROM has something else, a
+known wrong byte with no error anywhere. The read path keeps no check for it:
+0000-3FFF is answered by one `mov dh,[ss:bx]`, and a compare there would be
+paid by every bank-0 read on the 8088. It is the same in REALDMG.O88 and in
+every GAME.O88; `gbaot`'s walk could tell the two apart (an instruction found
+at 3FFE or 3FFF, or none) and say so in the meta, and does not yet. On a
+reset with the ROM in the bank cache, where bank 0 is read from the view
+itself, `rw_reset` puts the opcode back before `rdg_init` copies it, or the
+trap would outlive the `S_SEAMPC` naming it. `gbcpu`'s "bank seam" leg is `tools/gbprof/gbseam.asm` -
 CALL NZ across 3FFF into four banks, taken and not, (`gbseam2`) INC D at
 3FFF on into 4000, and (`gbseam5`) a JR at 3FFF whose displacement is each
 bank's own - interpreted and translated, its control the harness without
@@ -3856,6 +3868,12 @@ so a 1 MB cartridge - Looney Tunes' .gbc, 1,344,512 bytes embedded - cannot
 be inside its package, and the host refuses it there and says to leave the
 ROM beside it. Within that, a ROM is a row a 32KB, and the table's 64 rows
 are the other bound.
+
+**The window's tick is ON by default** (the CLI's `--embed` is off), so a
+package made with the window's defaults CONTAINS the cartridge ROM - it is
+the cartridge, and must not be shared. The window's docstring and the
+bundle's README say so in those words; unticked, the package carries no ROM
+and opens the one beside it.
 
 Opened with no document, such a package loads from ITSELF: `rw_aname`
 names the package's own file, the size probe is skipped (the meta's), and

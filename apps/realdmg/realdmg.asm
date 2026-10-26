@@ -783,9 +783,6 @@ rw_load0:
     jc .say
     jmp .loaded
 .one:
-%ifdef RDG_AOT
-    call rw_atight
-%endif
     mov ax, [rw_romkb]              ; whole 16KB banks first: the probe answers
     and ax, 0FFF0h                  ;   a KB over an exact size (SPEC.md
     jnz .claim                      ;   20.14.6.3), and on a 1MB 286 Kirby's
@@ -802,6 +799,9 @@ rw_load0:
     mov word [rdg_dmgseg], 0         ;   and rdg_renderd composes whole frames
     jmp short .claim                ;   without it
 .got:
+%ifdef RDG_AOT
+    call rw_atight                  ; (the claim compacted what it had to:
+%endif                              ;   rw_bload's order, rw_aloose's reason)
     mov [rw_romseg], dx
 %ifdef RDG_AOT
     cmp byte [rw_aemb], 0
@@ -896,6 +896,9 @@ rw_load0:
     jmp short .say
 %endif
 .room:
+%ifdef RDG_AOT
+    call rw_atight                  ; (the hold back: .one's claim failed)
+%endif
     mov si, rw_s_room
 .say:
     pop bx                          ; (the window, banked)
@@ -3077,6 +3080,19 @@ rw_reset:
     call rw_logevt
     call rw_prfnote                 ; the profile's growth, before rdg_init
     call rw_ramkeep                 ; the cartridge's RAM and clock survive
+    mov ax, [rw_romseg]             ; bank 0 read into the view itself (the
+    cmp ax, [rdg_viewseg]           ;   bank cache): rdg_init copies it onto
+    jne .st                         ;   itself, so the seam's trap goes back
+    push ds                         ;   to the ROM's opcode first, or it is
+    mov ds, ax                      ;   kept as D3 with S_SEAMPC zeroed and
+    mov bx, [S_SEAMPC]              ;   the game stops on it (REALDMG-SPEC
+    or bx, bx                       ;   3.1)
+    jz .ns
+    mov al, [S_SEAMOP]
+    mov [bx - 1], al
+.ns:
+    pop ds
+.st:
     call rw_start
     mov byte [rw_state], 1
     mov word [rw_owed], 0
