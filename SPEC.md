@@ -222758,6 +222758,13 @@ may carry `#`, `%` or `&` - and every server reads `%XX` as the byte.
 `HF_IDLE` = 182 ticks, ten seconds, with nothing arriving is a timeout. A
 file verb runs on the UI task with the gfx lock held, so that bound IS the
 longest a dead server freezes the machine, exactly as a dead floppy would.
+**The status line and the headers have a deadline of their own**, because
+the idle bound restarts with every byte and a header is read to its LF
+however long it is: `HF_HDRT` = 364 ticks, twenty seconds from the request,
+for all of them, checked at every refill. A server that keeps SENDING
+headers - hostile or broken, with no LF or with LFs forever - is a timeout
+(`HFE_TIMEOUT`) like a silent one, rather than a machine frozen for as long
+as it cares to talk. The body needs no such bound: it is `[hf_left]` bytes.
 
 The reply is read through one kilobyte of staging (`hf_rbuf`, `NET_SKMAX`):
 header lines a byte at a time, the body in runs copied to the caller's
@@ -222774,7 +222781,11 @@ the image) and so is a read of a packed file (the sniff, then the read),
 and each was a handshake and a close. So the request says
 `Connection: keep-alive` - on **HTTP/1.0**, which forbids a chunked reply
 this driver does not decode - and a reply read **whole** leaves its socket
-open (`[hf_live]`) when the server agreed - **`keep-alive` in the reply's
+open (`[hf_live]`) **for the one GET that follows a peek**: only a
+`FSV_READAT` from offset 0 that stopped short of the file's end - the
+loader's peek, the sniff, a copy's first chunk - is kept, and a GET that
+rode a kept connection ends it however it went, as the index's fetch and a
+whole-file read always do. And only when the server agreed - **`keep-alive` in the reply's
 `Connection:`, and that alone**, anywhere in its list (Apache with HTTP/2
 enabled says `Upgrade, Keep-Alive`, and the driver reads any `K` in the
 value as it: `close` has none): the request is HTTP/1.0, and a 1.0 client's
@@ -222789,17 +222800,25 @@ A 200 answering a read has an unread tail and is kept only when the read
 took it to the file's end; Mount,
 Unmount and detach drop a kept connection, so a re-pointed drive never
 sends its next GET to the old server. **What it holds is one of
-`ETHER.DRV`'s socket slots while the drive is idle**, until the server
-closes it (`os88httpdrv.py serve` does after 15 seconds).
+`ETHER.DRV`'s eight socket slots and one of its three lean rings - and
+with a ring held, the ring pool's claim, which `sk_idle` gives back only
+when no ring is** - until the drive's next verb, even after the server has
+closed it: the driver has no timer, and a socket the peer closed is freed
+only by our own abort. That is why the keep is narrowed to a peek's one
+successor rather than left on every reply: a hold that waited for the next
+verb after an index fetch or a whole read could last the session, and a
+third lean user (FTPD's control connection, the Browser and Telnet) would
+be refused for it.
 
 **A connection that is not kept is ABORTED, never closed** - even after a
 reply read whole. A close we start holds its slot through FIN-WAIT for a
-round trip, and there are four. Found in the field against Apache, whose
+round trip, and the slots and rings are few. Found in the field against Apache, whose
 `Upgrade, Keep-Alive` the first parser read as no: every GET ended in our
 close, and the sniff's or the header peek's OPEN, the next GET, was refused
 while the read after it connected - so a packed file opened as its raw
 `CZ` bytes and every package off the drive said `Load failed`. The HFDIAG
-build (`-DHFDIAG`, `drivers/httpfs/hfdiag.inc`) is the instrument that
+build (`make HFDIAG=1`, `drivers/httpfs/hfdiag.inc`: both images, the page
+being what draws the log) is the instrument that
 showed it: the last two reads drawn on the page, what each asked, what the
 reply said and what landed.
 
@@ -222885,7 +222904,7 @@ drive picture.
 |---|---|---|---|
 | 0 | `HFV_IDENT` | | AX = `'HF'`, CX = `HF_ABI` |
 | 1 | `HFV_STATE` | | AL = the volume (FFh none), AH = `HFS_IDLE`/`LAZY`/`READY`/`FAILED`, CX = records, DX = the last HTTP status, SI = the last `HFE_*` |
-| 2 | `HFV_MOUNT` | ES:SI = a NUL address | AL = the volume. **Lazy**: nothing is fetched. A drive already mounted is re-pointed and its index dropped |
+| 2 | `HFV_MOUNT` | ES:SI = a NUL address | AL = the volume. **Lazy**: nothing is fetched. A drive already mounted is re-pointed: its index dropped, and its volume given back and added again, so the kernel's drive and folder - handles into the OLD index - fall back to A: and every banked position is asked again through `FSV_CHDIR`, which checks it against the new one. An address refused (`HFE_URL`) drops the index and any kept connection too, so a half-parsed host is never sent a GET: the drive stays, failed, until a good address is mounted |
 | 3 | `HFV_UNMOUNT` | | the volume and the index go back |
 | 4 | `HFV_FETCH` | | the index fetched now: CX = records; CF = 1 and AX = an `HFE_*` |
 | 5 | `HFV_URL` | ES:DI = 96 bytes | the address the drive is pointed at, NUL-terminated |
@@ -222949,7 +222968,7 @@ Measured at one build number against the tree before it:
 | | `kern_big` | `kern_small` |
 |---|---|---|
 | resident | **81 bytes**: `.text` +43 - `drv_tab`'s row (16), its two strings (22), `drv_fptr10`'s pair (4), `drv_svcix`'s byte (1) - and `.bss` +38, `drv_owner`'s word and the class's 36-byte service-table copy. `DRVC_CD`'s shape (§119.5), five bytes of longer name over it. No rung crossed (the image rung 409 -> 316 left). `.boot2` +1, `drv_cfgbit`'s byte, is not resident | 0 - byte-identical |
-| `HTTPFS.DRV` | **5,460 bytes of image, a 6 KB claim while attached; 3,575 on the floppy** (7 clusters at 360 KB), LZ4 - 7,927 / 5,653 with the page in it. The 1 KB reader is most of its bss | none |
+| `HTTPFS.DRV` | **5,557 bytes of image, a 6 KB claim while attached; 3,658 on the floppy** (8 clusters at 360 KB), LZ4 - 7,927 / 5,653 with the page in it. The 1 KB reader is most of its bss | none |
 | `HTTPPAGE.DRV` | **2,357 bytes of image, a 3 KB claim while the panel shows the page; 2,030 on the floppy** - four 512-byte clusters, and under 2 KB as split. Half of it is the shared field (`os88line.inc`, 775) and button (`os88ui.inc`, 299) | none |
 | while mounted | the index's claim: `ceil((16 + 18 x records) / 1024)` KB - **2 KB for a system disk's 70 records**, 16 KB at `HF_MAXREC` | none |
 

@@ -66,7 +66,7 @@ hf_svc:
 
 ; --- the FSV_* table DSV_FS points at (SPEC.md 62.9.1, 122.4) ----------------
 hf_fsv:
-%ifdef HFTRACE                  ; a gate's diagnostic build, never shipped:
+%ifdef HFTRACE                  ; HFTRACE=1's diagnostic build, never shipped:
     dw hft_0, hft_2, hft_4, hft_6   ; every verb through hf_trace (below)
     dw hf_wprot, hf_wprot, hft_12, hf_wprot, hf_wprot, hf_wprot, hf_wprot
     dw hft_22, hft_24, 0, 0
@@ -150,17 +150,20 @@ hf_detach:
     ret
 
 ; -----------------------------------------------------------------------------
-; hf_vadd - the volume, if there is none yet. out: CF=0 and [hf_vol];
-;           CF=1 and AX = HFE_VOL. A volume already up is RE-POINTED: its
-;           index goes, so the next open fetches the new address's
+; hf_vadd - the volume, added. out: CF=0 and [hf_vol]; CF=1 and AX =
+;           HFE_VOL. A volume already up is RE-POINTED: its index goes, so
+;           the next open fetches the new address's, and the VOLUME goes and
+;           comes back, because the kernel's drive and folder - and every
+;           instance's banked one - are handles into the OLD index. A row
+;           kept would leave them standing in a folder hf_cwd no longer is
+;           (SPEC.md 122.4); given back, a drive standing on it falls to
+;           A: and each one is asked again through FSV_CHDIR, which checks
+;           it against the new index. The letter is VOL_ADD's first free one
 ; -----------------------------------------------------------------------------
 hf_vadd:
-    call hf_abort               ; a KEPT connection is to the OLD address
-    call hf_drop_idx
-    mov byte [hf_failed], 0
+    call hf_unmount             ; a KEPT connection is to the OLD address,
+                                ; and the index and the row are the OLD tree's
     mov word [hf_err], 0        ; ...and the OLD address's last failure
-    cmp byte [hf_vol], 0xFF
-    jne .have
     push cx
     push dx
     push si
@@ -174,7 +177,6 @@ hf_vadd:
     pop cx
     jc .full
     mov [hf_vol], al
-.have:
     clc
     ret
 .full:
@@ -259,7 +261,13 @@ hf_pmount:
     pop si
     pop cx
     call hf_parse
-    jc hf_pno
+    jnc .parsed
+    call hf_abort               ; REFUSED, after hf_parse wrote some of the
+    call hf_drop_idx            ; new host and port over the old: a kept
+    mov byte [hf_failed], 1     ; connection and the old index would send the
+    jmp hf_pno                  ; next GET to that mixture. Dropped, the next
+                                ; open re-parses and fails cleanly (HFE_URL)
+.parsed:
     call hf_vadd
     jc hf_pno
     mov al, [hf_vol]
@@ -377,6 +385,7 @@ hf_kept:    db 0                ; 1 = this GET rides a kept connection
 hf_keep:    db 0                ; 1 = this reply's server agreed to keep it
 hf_reqn:    dw 0                ; the request's length, for a resend
 hf_tbase:   dw 0                ; the idle bound's start tick
+hf_hbase:   dw 0                ; ...and the headers' deadline's (HF_HDRT)
 hf_rpos:    dw 0                ; the reader: next byte...
 hf_rlen:    dw 0                ; ...and bytes staged
 hf_status:  dw 0                ; the last HTTP status

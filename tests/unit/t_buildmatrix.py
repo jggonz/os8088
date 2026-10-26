@@ -378,6 +378,13 @@ KNOBS = [
     # 98.3): four lines a shipped player does not carry, so this is the only
     # thing that assembles them.
     ("vpdiag",      ["VPDIAG=1"], "video.o88"),
+    # HFDIAG= and HFTRACE= are HTTPFS.DRV's field instruments (SPEC.md
+    # 122.2.1): the read log, which reaches the page image as well - the
+    # target builds httppage.bin on the way, with the define - and the verb
+    # ring. Nothing shipped assembles either, and the read log is what a
+    # report from a server this tree cannot reach is answered with.
+    ("hfdiag",      ["HFDIAG=1"], "httpfs.drv"),
+    ("hftrace",     ["HFTRACE=1"], "httpfs.drv"),
     # MOUDIAG= is SPEC.md 9.9.6's identify-window table drawn on the finished
     # desktop, and it had NO ROW HERE AT ALL until SPEC.md 2.9.12 - which is
     # how a short jump out of range inside the moved mouse cluster went

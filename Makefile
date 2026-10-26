@@ -2080,7 +2080,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              FONT INSTCHUNK NOPICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND KBDDIAG DOSRMARK FDDSLOW TRACKRUN NOHDCYL HDCYLPROBE SBDRAGOFF SBRATE SBRATE286 SBIDLE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL KERN_EMU KERN_MEGA MEGATRAP PICLOSE MEGADIAG FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL NOVIDEXT LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
+                             KERN_SMALL KERN_EMU KERN_MEGA MEGATRAP PICLOSE MEGADIAG FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL NOVIDEXT LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG HFDIAG HFTRACE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -2106,7 +2106,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # kern_emu carrying -DKERN_KNOB would SKIP guard 1 (the KERN_BUDGET footprint
 # check), so the one build that adds a feature would be the one build nothing
 # measured.
-ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
+ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% HFDIAG=% HFTRACE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 BOOT2_XSEC := 1
 endif
@@ -4580,22 +4580,44 @@ $(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
 # Its Control Panel page is HTTPPAGE.DRV, RAMPAGE.DRV's shape (SPEC.md 122.5):
 # built FIRST, because -DHFPAGE_KB is the claim HTTPFS.DRV makes for it, off
 # the IMAGE - a ceiling, the transparent read expanding the 'CZ' file into it.
+#
+# HFDIAG=1 builds BOTH images with the read log (SPEC.md 122.2.1,
+# drivers/httpfs/hfdiag.inc): the last four reads, drawn on the page where
+# the status lines were - the instrument for a server this tree cannot reach.
+# Both, because the page is what draws it and -DHFPAGE_KB is cut from that
+# page. HFTRACE=1 is the verb ring (httpfs.asm), the driver alone. Neither
+# reaches a kernel byte, so they carry the drive's own stamp and are exempt
+# from -DKERN_KNOB - VPDIAG's shape: flipping either rebuilds these four files
+HFDEF :=
+ifneq ($(HFDIAG),)
+HFDEF += -DHFDIAG
+endif
+ifneq ($(HFTRACE),)
+HFDEF += -DHFTRACE
+endif
+HFSTAMP := $(BUILD)/.httpfs-$(if $(HFDIAG),diag,ship)$(if $(HFTRACE),-trace)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(HFSTAMP) ] || { rm -f $(BUILD)/.httpfs-* $(BUILD)/httppage.bin \
+                                     $(BUILD)/httppage.drv $(BUILD)/httpfs.bin \
+                                     $(BUILD)/httpfs.drv; \
+                               touch $(HFSTAMP); })
 HTTPFS_SRC := drivers/httpfs/httpfs.asm drivers/httpfs/hfpkg.inc \
               drivers/httpfs/hfnet.inc drivers/httpfs/hfidx.inc \
               drivers/httpfs/hfpage.inc drivers/net/netpkg.inc \
               apps/os88sock.inc
 $(BUILD)/httppage.bin: drivers/httpfs/httppage.asm drivers/httpfs/hfpkg.inc \
                        drivers/net/netpkg.inc drivers/os88drv.inc \
-                       apps/os88api.inc apps/os88ui.inc apps/os88line.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/httpfs/ -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
+                       apps/os88api.inc apps/os88ui.inc apps/os88line.inc \
+                       $(HFSTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error $(HFDEF) -I drivers/httpfs/ -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
 	@echo "httppage: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/httppage.drv: $(BUILD)/httppage.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/httppage.bin -o $@
 
 $(BUILD)/httpfs.bin: $(HTTPFS_SRC) drivers/os88drv.inc apps/os88api.inc \
-                     $(BUILD)/httppage.bin | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/httpfs/ -I drivers/net/ -I drivers/ -I apps/ \
+                     drivers/httpfs/hfdiag.inc $(BUILD)/httppage.bin | $(BUILD)
+	$(NASM) -f bin -w+error $(HFDEF) -I drivers/httpfs/ -I drivers/net/ -I drivers/ -I apps/ \
 	        -DHFPAGE_KB=$$(( ( $(call FILESIZE,$(BUILD)/httppage.bin) + 1023 ) / 1024 )) \
 	        -o $@ $<
 	@echo "httpfs: $(call FILESIZE,$@) bytes"

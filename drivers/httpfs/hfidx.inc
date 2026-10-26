@@ -137,7 +137,8 @@ hf_fetch:
     mov word [hf_left+2], 0
     call hf_body
     jc .free
-    call hf_done
+    call hf_abort               ; NOT KEPT: nothing follows the index on the
+                                ; wire, and a hold would last the session
     mov es, [hf_tseg]
     call hf_valid
     mov ax, HFE_INDEX

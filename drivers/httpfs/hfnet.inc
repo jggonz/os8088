@@ -13,7 +13,9 @@
 ; bounded by the system tick and not a loop count: HF_IDLE ticks with nothing
 ; arriving is a timeout, whatever the CPU. A file verb runs on the UI task with
 ; the gfx lock held, so this bound IS the longest a dead server can freeze the
-; machine (SPEC.md 122.2).
+; machine (SPEC.md 122.2). The headers have HF_HDRT besides, because the idle
+; bound restarts with every byte: a server that never stops SENDING them is a
+; timeout too, and not a machine frozen for as long as it cares to talk.
 ;
 ; THE READER IS ONE KB OF STAGING (hf_rbuf). Header lines are read a byte at a
 ; time out of it; a body is copied out of it in runs. ES on the way into every
@@ -22,6 +24,8 @@
 ; =============================================================================
 
 HF_IDLE      equ 182            ; ticks: ten seconds with nothing arriving
+HF_HDRT      equ 2 * HF_IDLE    ; ticks: the status line and every header,
+                                ; however they arrive (SPEC.md 122.2)
 HF_RBUF      equ 1024           ; = NET_SKMAX: the most one NETV_RECV moves
 ; HF_URLMAX is hfpkg.inc's: the page image sizes its field by it
 HF_PFXMAX    equ 96             ; the path prefix, NUL included
@@ -233,9 +237,10 @@ hf_open:
 ; --- hf_abort - give the handle back, NOW (keeps every register) ----------
 ; Never a graceful NETV_CLOSE, even after a reply read whole: a close we
 ; START holds the slot through FIN-WAIT for a round trip to the server, and
-; ETHER.DRV has four. A field run against Apache - which keeps every
-; connection, so we were always the one closing - had the next GET's OPEN
-; refused on a short read every time, while the read after it connected
+; ETHER.DRV's slots and lean rings are few. A field run against Apache - which
+; keeps every connection, so we were always the one closing - had the next
+; GET's OPEN refused on a short read every time, while the read after it
+; connected
 hf_abort:
     push ax
     mov ah, NETV_ABORT
@@ -344,11 +349,19 @@ hf_fill:
     ret
 
 ; --- hf_getc - AL = the next byte. CF=1 and AX = an HFE_* at the end ---------
+;     The HEADERS' reader, so each refill is where HF_HDRT is checked: one
+;     tick read per refill, a kilobyte or a single dripped byte
 hf_getc:
     push si
     mov si, [hf_rpos]
     cmp si, [hf_rlen]
     jb .have
+    call OSAPI_GET_TICKS
+    sub ax, [hf_hbase]
+    cmp ax, HF_HDRT             ; CF=1 while under the deadline...
+    mov ax, HFE_TIMEOUT
+    cmc                         ; ...so CF=1 = the headers ran out of time
+    jc .out
     call hf_fill
     jc .out
     xor si, si
@@ -609,6 +622,8 @@ hf_get:
     mov cx, [hf_reqn]
     call hf_send
     jc .drop
+    call OSAPI_GET_TICKS        ; HF_HDRT runs from here (hf_getc)
+    mov [hf_hbase], ax
     call hf_line                ; the status line: HTTP/1.x NNN ...
     jc .drop
     cmp word [hf_lbuf], 'HT'    ; 'HTTP/1.x NNN'
@@ -681,20 +696,43 @@ hf_get:
     ret
 
 ; -----------------------------------------------------------------------------
-; hf_done - a reply read WHOLE: its connection is kept for the next GET when
-;           the server agreed to keep it and nothing past the body arrived,
-;           and closed otherwise. keeps every register
+; hf_done - a READ's reply read WHOLE: its connection is kept for the next GET
+;           when it was a PEEK - from offset 0 and short of the file's end,
+;           on a connection of its own - the server agreed to keep it and
+;           nothing past the body arrived, and closed otherwise. keeps every
+;           register
+;
+; NARROW ON PURPOSE (SPEC.md 122.2.1): the driver has no timer, so a kept
+; socket holds an ETHER.DRV slot, a lean ring and the ring pool's claim until
+; the drive's next verb, however long that is. A peek is followed at once by
+; the read it was for - the loader's header, the sniff, a copy's first chunk -
+; and a GET that rode a kept connection is that read, and ends it.
 ; -----------------------------------------------------------------------------
 hf_done:
     cmp byte [hf_keep], 0
     je hf_abort
+    cmp byte [hf_kept], 0
+    jne hf_abort
     push ax
+    mov ax, [hf_rlo]
+    or ax, [hf_rlo+2]
+    jnz .drop                   ; not from offset 0
+    mov ax, [hf_rn+2]
+    cmp ax, [hf_fsize+2]
+    jne .hi
+    mov ax, [hf_rn]
+    cmp ax, [hf_fsize]
+.hi:
+    jae .drop                   ; the whole file: nothing follows it
     mov ax, [hf_rpos]
     cmp ax, [hf_rlen]
+    jne .drop
     pop ax
-    jne hf_abort
     mov byte [hf_live], 1
     ret
+.drop:
+    pop ax
+    jmp hf_abort
 
 ; --- hf_urlch - AL into the request: A-Z, 0-9, '/' and '.' as they are and
 ;     everything else %XX, which every server reads as that byte
