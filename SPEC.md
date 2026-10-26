@@ -167121,8 +167121,8 @@ RECORD i, 256 bytes at 32 + 256*i
  +253 1   WC_NEEDW: the oldest Wire that can INSTALL the record - 1 for a
           plain record or a version 1 archive, 2 for a version 2 archive
           (92.13.1), 3 when a package the record installs far-calls an
-          API cell at or past 0x046D (the cell fence, below); the highest
-          that applies. 0 is "no claim"
+          API cell at or past 0x046D, 4 at or past 0x04A5 (the cell fence,
+          below); the highest that applies. 0 is "no claim"
  +254 2   zero
 
 SIDECAR TABLE entry j, 16 bytes at (header +10) + 16*j
@@ -167140,7 +167140,7 @@ WC_PKGFMT with ITS OWN `PKG_FMT`, which needs nothing from the kernel: a
 running package's format IS the kernel's, or the loader would not have
 started it (§20.2.0). Higher greys both buttons with `Needs a newer os8088 -
 update the system disk`, lower with `Made for an older os8088`; a WC_NEEDW
-above `WIRE_LEVEL` (3) greys them with `Needs a newer Wire - update the
+above `WIRE_LEVEL` (4) greys them with `Needs a newer Wire - update the
 system disk`. 0 in either is a catalog from before the bytes and is not
 judged. **Every Wire released before these bytes reads none of them** - the
 reader never looked past +252 - so the bytes protect machines from the
@@ -167169,6 +167169,7 @@ the true sentence for it too. The rows are `WIRE_CELL_LEVELS` in
 | level | a package that far-calls a cell at or past | fenced from | first Wire at the level |
 |---|---|---|---|
 | 3 | 0x046D | every level-2 Wire at `PKG_FMT` 10: v1.0.20261014 (its table ends at 0x046D) and v1.0.20261019 (0x0499) | v1.0.20261020 |
+| 4 | 0x04A5 | the level-3 Wire, v1.0.20261020 (its table ends at 0x04A5): PiXEL calls `OSAPI_GFX_BLITD` (0x04AB, §120), 1942 `OSAPI_MEM_CODESEL` (0x04B9) and PIXELSTEIN 3D and Skies `OSAPI_MEM_SUBSEG` (0x04D1) | v1.0.20261025 |
 
 **A row's cell is the table end of the OLDEST kernel the level fences, not
 of the last release.** Two releases share `PKG_FMT` 10 and both Wires are
@@ -167176,7 +167177,7 @@ level 2, so one byte has to hold both back, and the older table is the one
 that decides. That over-fences a v1.0.20261019 machine for the cells
 0x046D..0x0498 it does have - TeXpad and FTPD read `Needs a newer Wire`
 there and would have run - which is the safe side of a one-byte test.
-`WIRE_TABLE_END` (0x04A5) is the end of the table the TOP level's kernel
+`WIRE_TABLE_END` (0x04D7) is the end of the table the TOP level's kernel
 has. **A call at or past `WIRE_TABLE_END` is refused** by `--verify
 --pkgdir`, because no Wire in the field can be told about it: the release
 that first publishes such a package adds a row (the next level, its first
