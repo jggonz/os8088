@@ -10,8 +10,8 @@ to MP3. No recording or existing song is in it.
 
 ## Where it is
 
-In `MEDIA` on the 1.44MB and 1.2MB software disks, on XTMP3's own disk in
-every size, and on the live USB image and CD.
+In `MEDIA` on the 1.44MB software disk, on XTMP3's own disk in every size,
+and on the live USB image and CD.
 
 ## Playing it
 

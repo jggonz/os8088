@@ -16,11 +16,11 @@ IBM PC or XT that is how every song plays.
 
 ## Starting XTMP3
 
-XTMP3 is in the `APPS` folder of the 1.44MB and 1.2MB software disks. At
-360KB it is at the root of the music disk. XTMP3 has a disk of its own in
-every size, and the live USB image, the live CD and the everything set carry
-it too. The 720KB software disk does not carry it. Use XTMP3's own disk at
-that size.
+XTMP3 is in the `APPS` folder of the 1.44MB software disk. At 360KB it is
+at the root of the music disk. XTMP3 has a disk of its own in every size,
+and the live USB image, the live CD and the everything set carry it too. The
+1.2MB and 720KB software disks do not carry it. Use XTMP3's own disk at
+those sizes.
 
 Double-click **XTMP3.O88** to open it, or double-click any `.MP3` file to
 open XTMP3, add that song to the queue and play it.
@@ -44,7 +44,8 @@ What XTMP3 needs depends on the computer:
 ## Playing a song
 
 Press `O`, or choose **File > Open...**, and pick an `.MP3` file. It joins
-the queue and plays. The software disks carry three demo songs in `MEDIA`:
+the queue and plays. The 1.44MB software disk and XTMP3's own disks carry
+three demo songs in `MEDIA`:
 [[NEONDRV.MP3]], [[NIGHTSIG.MP3]] and [[AFTERHRS.MP3]].
 
 The keys under the LCD work like a tape deck's: **Rewind**, **Play**,

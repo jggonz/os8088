@@ -79,7 +79,8 @@ panel. The thumb follows the requested percentage smoothly; arrow keys move
 it by one percent. The card applies its nearest supported hardware level.
 Opening the panel starts at the card's current setting.
 
-Open [[MIXER.O88]] from the apps disk's `APPS` folder for individual sources
+Open [[MIXER.O88]] from the `APPS` folder of the 720KB, 1.2MB or 1.44MB
+apps disk for individual sources
 and balance. The speaker's quick volume panel controls master volume.
 These controls adjust the sound card; they do not change the built-in PC
 speaker or a Covox.
@@ -106,3 +107,8 @@ loaded** and os8088 stops trying at every start.
   The small system for 128KB machines loads no drivers and leaves it off.
 - A Covox cannot be detected, so it is used only when you choose it on the
   Sound page.
+- On an 8088 or 8086 PC whose hard-disk controller uses interrupt 5, a
+  Sound Blaster set to interrupt 5 is not used: the two would share the line and
+  the card would stop after its first block. The first time this happens
+  the menu bar shows **IRQ 5 is the hard disk's**. Set the card to another
+  interrupt, such as 7 or 3. FM music still plays, since it needs none.

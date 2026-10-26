@@ -988,9 +988,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "32e6dce5",
-  "strings": "d5ccec072faf56ae",
-  "why": "Document smooth requested volume and one-percent keys; speaker uses menu-bar theme colors"
+  "stamped": "b7fb2a37",
+  "strings": "84884b633231227c",
+  "why": "IRQ 5 refusal on an 8088/8086 PC (#307) under Good to know; the Mixer pointer names the apps disks that carry it; the volume section (#296/#300) checked against the driver"
  },
  "SPACEJAM_MID": {
   "sources": [],
