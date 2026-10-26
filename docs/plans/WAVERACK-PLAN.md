@@ -21,13 +21,13 @@ the evidence column says what was actually seen.
 
 | ID | user outcome | depends on | status | evidence / commit |
 |---|---|---|---|---|
-| US-00 | The plan is reviewable in a draft PR before code | - | In progress | this file, SPEC §122, the draft PR |
+| US-00 | The plan is reviewable in a draft PR before code | - | Verified | this file, SPEC §122, draft PR #311 opened at 3cde0b9a before any functional change |
 | US-01 | WaveRack installs and launches like any package; menus; clean close | US-00 | Implemented — verification pending | `WAVERACK.O88` on the 1.44/1.2 MB apps disks and media360.img; launched, menus, About, closed and relaunched on QEMU VGA (relaunch face identical to the first); `make`, `make KERN_SMALL=1` green; see Wave 1 below |
-| US-02 | The same WaveRack in colour and black and white | US-01 | Implemented — verification pending | `docs/waverack/waverack-vga-color-full.png`, `waverack-vga-bw-full.png`, `waverack-ega-mid.png`; identity check `None` on VGA colour, VGA B&W, EGA and across a layout round trip; Hercules not seen (QEMU cannot) |
+| US-02 | The same WaveRack in colour and black and white | US-01 | Implemented — verification pending | `docs/waverack/waverack-vga-color-full.png`, `waverack-vga-bw-full.png`, `waverack-ega-mid.png`; identity check `None` on VGA colour, VGA B&W, EGA and across a layout round trip; Hercules MID and COMPACT seen on MartyPC's 5150 + Hercules (`docs/waverack/waverack-herc-mid.png`, `waverack-herc-compact.png`, captured from VRAM at 038ea5ed) |
 | US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Implemented — verification pending | `docs/waverack/waverack-cga-compact.png` (native 640 x 200) and `-3x.png`; all 15 controls clicked with `--screen 640x200`, each answered; the layout measurement below |
 | US-04 | Open a WAV and inspect it without loading it into RAM | US-01 | Implemented — verification pending | `wrwav.inc`/`wrdoc.inc`/`wrenv.inc`; `tools/wrsim.py` reference + fast row `wrsim`; soak row `waverack` (every fixture through File > Open, bss vs the reference, the view cache column for column, zoom to fpp 1, identity); screenshots `docs/waverack/waverack-w2-*.png`; see Wave 2 below |
 | US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Planned | |
-| US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | Planned | |
+| US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | In progress | driver half shipped: 1a027a77, SPEC §34.6.4, soak row `sndcap` passed on MartyPC SB DSP 2.01 (flat 80h - not a microphone); app side is Wave 5 |
 | US-07 | See the active level; set input gain separately from volume | US-05, US-06 | Planned | |
 | US-08 | Select a precise range, audition it, loop it | US-05 | Planned | |
 | US-09 | Trim, delete, cut, copy, paste, undo and redo | US-08 | Planned | |

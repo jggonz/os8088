@@ -230,3 +230,13 @@ the incremental picture after the zoom. The CGA's 360 KB media disk is now
 full (354 of 354 clusters): the next wave needs a decision there. Not seen:
 Hercules, EGA's MID with a document, the wheel (QEMU's serial mouse sends
 none), 86Box, real hardware, and any XT timing.
+
+### Hercules, looked at by hand
+
+QEMU cannot show a Hercules card, so the MID and COMPACT faces were looked at
+on MartyPC's cycle-exact 5150 with a Hercules card, captured straight out of
+video memory. Both draw as on the other adapters; COMPACT leaves the Disk
+window below it repainted correctly.
+
+![MID on Hercules](waverack/waverack-herc-mid.png)
+![COMPACT on Hercules](waverack/waverack-herc-compact.png)
