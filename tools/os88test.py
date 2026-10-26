@@ -346,6 +346,13 @@ def capabilities():
     # is not os88disk.py, so the fixture is not built by the tree under test.
     if shutil.which("mcopy") and shutil.which("mattrib"):
         caps.add("mtools")
+    # a private mount namespace, which `httpmountname` (tests/httpmount.py
+    # --name) binds its own /etc/resolv.conf over so QEMU's slirp asks a stub
+    # resolver: `unshare -m` plus `mount --bind`, so Linux and root. A Mac
+    # has neither and the row died on EACCES in 1.6s instead of skipping.
+    if sys.platform.startswith("linux") and shutil.which("unshare") and \
+            os.geteuid() == 0:
+        caps.add("unshare")
     # DOSBox, which carries a DOS of its own and runs headless: OS88CZ.COM's
     # row (tests/czdos.py, SPEC.md 20.17.4) runs the program under it. No DOS
     # is in this repository and none can be, so a DOS program's own gate

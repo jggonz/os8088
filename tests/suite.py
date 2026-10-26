@@ -2777,7 +2777,7 @@ SOAK = [
         "through a private /etc/resolv.conf: ETHER.DRV's name cache holds the "
         "name after the open, and the resolver is asked ONCE for six "
         "connections. Red (six lookups) with dns_cached's answer ignored",
-        needs=("qemu", "nasm"), serial=True, timeout=600,
+        needs=("qemu", "nasm", "unshare"), serial=True, timeout=600,
         wants=("build/httpmount.img", "build/httpfs.bin", "build/ether.bin",
                "build/mines.o88"),
         locks=("port:8095", "port:53")),

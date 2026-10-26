@@ -263,6 +263,12 @@ def requirements():
                 "partition before a kept install (SPEC.md 52.10.15).",
                 "apt-get install -y mtools"))
 
+    req.append(("unshare", sys.platform.startswith("linux")
+                and bool(shutil.which("unshare")) and os.geteuid() == 0,
+                "httpmountname, which binds its own /etc/resolv.conf in a "
+                "private mount namespace (SPEC.md 72.5.1).",
+                "run the soak as root on Linux (the container is)"))
+
     req.append(("dosbox", bool(shutil.which("dosbox")),
                 "czdos, which runs OS88CZ.COM under a real DOS (SPEC.md "
                 "20.17.4).",

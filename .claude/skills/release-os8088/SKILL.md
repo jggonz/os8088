@@ -1060,7 +1060,8 @@ there is no publishing either.
 ```bash
 cd "$WEB_REPO"
 python3 tools/netpublish.py --release YYYYMMDD "$OS_REPO/build/nettree"
-python3 tools/netpublish.py --verify
+sleep 30                                 # the Worker re-reads CURRENT at most every 30 s
+python3 tools/netpublish.py --verify --release YYYYMMDD
 ```
 
 The first uploads every file of `build/nettree/` to the R2 bucket
