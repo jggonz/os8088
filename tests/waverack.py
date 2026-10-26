@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""waverack - SPEC.md 122.3-122.5: WaveRack opens every fixture as the
+"""waverack - SPEC.md 123.3-123.5: WaveRack opens every fixture as the
 reference says it must.
 
     make && make waverackfix && python3 tests/waverack.py [--keep]

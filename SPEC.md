@@ -68638,7 +68638,7 @@ again.
 Verb 4's record stream (§34.6) is linear into ONE grant of the pool - 20KB at
 most, 1.9 s at 11,025 Hz - and its drain is a kernel task, which a disk
 transfer stops for up to ~400 ms on an XT while the record ring is 372 ms
-deep. A recorder that writes its take to disk as it goes (WaveRack, §122.7)
+deep. A recorder that writes its take to disk as it goes (WaveRack, §123.7)
 needs the opposite shape: a ring the CARD writes and the PACKAGE reads, with
 nothing of the driver's in between. That is §34.5.3's external ring run the
 other way, and it is opened the same way.
@@ -219093,9 +219093,9 @@ third-party audio in them.
   conversion, the face on CGA and Hercules on an XT, a conversion on
   86Box, the SB Pro's stereo on its own card, and a listening pass of each rung.
 
-## 122. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
+## 123. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
 
-**Status: PINNED; wave 1 (the face) SHIPPED - §122.11 to §122.13; wave 2 (the document) SHIPPED - §122.3 to §122.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §122.6, §122.8's playback half and §122.9's selection half.** Every subsection below is the contract the
+**Status: PINNED; wave 1 (the face) SHIPPED - §123.11 to §123.13; wave 2 (the document) SHIPPED - §123.3 to §123.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §123.6, §123.8's playback half and §123.9's selection half.** Every subsection below is the contract the
 implementation is written against; each says *(pinned)* until the wave that
 builds it marks it *(shipped)* with what was measured. The delivery record is
 `docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
@@ -219112,10 +219112,10 @@ format row, and a VOLUME slider. The owner's three mockups are in
 
 It owns no hardware. Playback is a client of `OSAPI_SND_STREAM`'s ring
 stream (§34.5); capture is a client of the same slot's record stream, and
-§122.7 is the one driver extension it needs. Pure NASM, for Audio's reason
+§123.7 is the one driver extension it needs. Pure NASM, for Audio's reason
 (§86): the C SDK does not wrap the stream verbs.
 
-### 122.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`, wave 3 `wrxport.inc`)
+### 123.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`, wave 3 `wrxport.inc`)
 
 | file | holds | prefix |
 |---|---|---|
@@ -219128,9 +219128,9 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 | `wrxport.inc` | the transport state machine, the look-ahead, the worker, conversion, volume, the playhead, the meter's state (wave 3; pinned as `wrplay.inc`, renamed when it was written) | `wt_` |
 | `wrrec.inc` | capture: the external record ring, the take file, gain, the recovery marker | `wc_` |
 | `wrsave.inc` | Save, Save As, Save Selection As, the temp file and the replace | `ws_` |
-| `build/wrart.inc` | the pictures, fonts, meter table, role tables and the three layouts as data, made and measured by `tools/os88wrart.py` with `tools/os88wrlay.py` (§122.11) | `wrart_`, `WRART_`, `WL_`, `WO_`, `R_`, `B_` |
+| `build/wrart.inc` | the pictures, fonts, meter table, role tables and the three layouts as data, made and measured by `tools/os88wrart.py` with `tools/os88wrlay.py` (§123.11) | `wrart_`, `WRART_`, `WL_`, `WO_`, `R_`, `B_` |
 
-### 122.2 What the machine can do, and what the face says when it cannot (pinned)
+### 123.2 What the machine can do, and what the face says when it cannot (pinned)
 
 `OSAPI_SND_CAPS` is read at entry and again before every Play and Record:
 
@@ -219138,7 +219138,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 |---|---|---|
 | open, inspect, edit, save | nothing | always available |
 | play | `SND_CAP_PCM_BG` - SOUND.DRV's Sound Blaster tier | Play, Pause and the loop audition grey; a press on one says `Needs a Sound Blaster` on the status bar |
-| record, long take | `SND_CAP_PCM_IN` and the external record ring (§122.7) - an auto-init DSP, 2.00 or later | - |
+| record, long take | `SND_CAP_PCM_IN` and the external record ring (§123.7) - an auto-init DSP, 2.00 or later | - |
 | record, short take | `SND_CAP_PCM_IN` on a DSP 1.x (verb 4 refuses the external ring with 7) | a take is one grant, `20 KB` at most (§34.6.3): the status bar names the limit in seconds before Record |
 | record at all | `SND_CAP_PCM_IN` | Record greys; a press on it says `No capture device` |
 
@@ -219150,7 +219150,7 @@ a 1bpp display), `Screen too small` (Full Layout where MID does not fit), or
 `Not in this build yet` for a command a later wave builds *(shipped, wave
 1)*. Wave 3 adds the transport's: `Stop first` (Open or New while a play is
 held), `Not playing` (Pause with nothing playing), `No selection` (Select
-None), and Play's refusals - `Card needs 4,000+ Hz` (§122.6's, the pinned
+None), and Play's refusals - `Card needs 4,000+ Hz` (§123.6's, the pinned
 `The card cannot play below 4,000 Hz` being 34 characters), `Sound card is
 busy` (verb 0's 1), `Card refused the rate` (its 2), `Cannot open the card`,
 `Not enough memory`, `No task for the sound` and `Cannot read the file`
@@ -219165,7 +219165,7 @@ in the plan, not a claim here.
 list (§24.5) on a requirement ground. kern_mega's arm (`-DPKG_MEGA`, §20.18)
 is not in this delivery either.
 
-### 122.3 The document and the timeline (pinned; the frame, sources, the piece table and New/Open shipped in wave 2)
+### 123.3 The document and the timeline (pinned; the frame, sources, the piece table and New/Open shipped in wave 2)
 
 **The canonical unit is the sample FRAME**: one sample per channel. Every
 position, length, selection end and edit offset is a frame index held in 32
@@ -219181,7 +219181,7 @@ either is refused.
   opened WAV, a take, and whatever the clipboard brought. Each records its
   8.3 name, its folder (`OSAPI_FILE_HERE`'s cluster and volume, restood with
   `OSAPI_FILE_GOTO_QM` before a read, §86.3's lesson), its data offset and
-  frame count, and its coarse envelope (§122.5). **A source is immutable
+  frame count, and its coarse envelope (§123.5). **A source is immutable
   while anything references it** - the document, an undo snapshot or the
   clipboard - and WaveRack never writes into one.
 - **The piece table** (`WO_NPC` = 64): the document is an ordered list of
@@ -219226,7 +219226,7 @@ dirty (`wo_dirty`) and says so; nothing else sets it yet, and the LCD shows
 no mark for it - its filename field holds 12 characters, and an 8.3 name is
 12.
 
-### 122.4 Reading and writing WAV (the reader shipped in wave 2; the writer pinned)
+### 123.4 Reading and writing WAV (the reader shipped in wave 2; the writer pinned)
 
 **The reader** walks the RIFF chunk list with `OSAPI_FILE_READ_AT` at 32-bit
 offsets. It accepts any chunk order, honours the odd-length pad byte, skips
@@ -219241,7 +219241,7 @@ the carry of every 32-bit sum tested.
   whole number of frames is floored, and the status bar says how many bytes
   were ignored.
 - **A take that never got its header** (`data` size 0 or FFFFFFFFh with bytes
-  after it, which is what a take interrupted mid-record leaves, §122.7) opens
+  after it, which is what a take interrupted mid-record leaves, §123.7) opens
   with its frames counted from the file's length and the document DIRTY:
   `Recovered N s from an unfinished header - save to repair`.
 - Refused, each with its own sentence on the status bar: not RIFF/WAVE, no
@@ -219286,9 +219286,9 @@ named, and the LCD already shows the length.
 
 **The writer** emits the canonical 44-byte header (`RIFF`, `WAVE`, a 16-byte
 `fmt ` chunk, `data`) and the frames, and a pad byte when the data length is
-odd. A take's header is different and is §122.7's.
+odd. A take's header is different and is §123.7's.
 
-### 122.5 The waveform: coarse envelopes, the view cache and the band (shipped in wave 2; the take's live envelope and the selection's split pinned)
+### 123.5 The waveform: coarse envelopes, the view cache and the band (shipped in wave 2; the take's live envelope and the selection's split pinned)
 
 **A coarse envelope per source**: the block is the smallest power of two
 `B` >= 16 frames for which `ceil(frames / B)` <= 2,048, and each block stores, per
@@ -219398,10 +219398,10 @@ re-blits the byte column it left from the band, and draws the line again.
   overview centres the view; the wheel over either scrolls an eighth of the
   view a notch (elsewhere it still turns VOLUME).
 
-### 122.6 Playback and the transport (pinned)
+### 123.6 Playback and the transport (pinned)
 
 **One state machine** (`wt_state`), and every command's greying is a
-function of it and of §122.2's capabilities (one predicate, §47 rule 2):
+function of it and of §123.2's capabilities (one predicate, §47 rule 2):
 
 | state | Record | Play | Pause | Stop | edit, Open, Save | seek |
 |---|---|---|---|---|---|---|
@@ -219532,9 +219532,9 @@ the reference, in the fast `wrsim` row):
   calls a tick idle; 1.70 a tick playing at Fit** (the time every tick, the
   line every 3.4, the meter every third); **3.08 a tick at 256 frames a
   column** (the line moving every tick); a full repaint is 120. The soak row
-  `waverackplay` holds the output to `convert()` sample for sample (§122.13).
+  `waverackplay` holds the output to `convert()` sample for sample (§123.13).
 
-### 122.7 Capture: the external record ring and the take file (pinned)
+### 123.7 Capture: the external record ring and the take file (pinned)
 
 **The driver extension (shipped - §34.6.4).** `OSAPI_SND_STREAM` verb 4 accepts
 `SND_OPENF_EXT` in AH, as verb 0 does (§34.5.3): `DI:SI` is a ring in the
@@ -219584,7 +219584,7 @@ polls the count, computes the meter, extends the live envelope and wakes it.
 - **The recovery marker**: Record writes `WAVERACK.TAK` to the boot volume's
   `\SYSTEM\APPDATA` (§19.9) naming the take, and Stop deletes it. A launch
   that finds it offers File > Recover Take, which opens the take through
-  §122.4's unfinished-header path.
+  §123.4's unfinished-header path.
 
 **INPUT GAIN is digital, and says so.** No card SOUND.DRV drives exposes a
 capture gain (§34.15 never writes the recording route), so the slider is a
@@ -219601,7 +219601,7 @@ format is the LCD's line, never the row's.
 
 **Monitoring through the speaker is never offered**: the card is half-duplex.
 
-### 122.8 The level meter (pinned)
+### 123.8 The level meter (pinned)
 
 One horizontal bar of 24 cells over the gain slider, -30 to 0 dBFS at 1.25 dB
 a cell: cells 0..17 green, 18..21 yellow, 22..23 red in colour; lit, outlined
@@ -219632,7 +219632,7 @@ each run of changed cells of one state is one `wf_cells`, so a step of the
 bar is one to three calls. PLAYING shows `LEVEL  PLAY`; PLAY_PAUSED keeps the
 caption with every cell dark; IDLE is `LEVEL` and dark.
 
-### 122.9 Selection and editing (pinned)
+### 123.9 Selection and editing (pinned)
 
 A selection is `[s, e)`, clamped to the document; `s = e` is no selection
 and leaves the cursor at `s`. Click places the cursor; a drag selects; the
@@ -219649,7 +219649,7 @@ selection, and a click there centres the view. The selection field shows
 | Cut / Copy | a selection | to WaveRack's clipboard (Cut then deletes) |
 | Paste | a clipboard of the same format | inserted at the cursor, replacing a selection |
 | Select All / None | frames | - |
-| Undo / Redo | history | §122.3 |
+| Undo / Redo | history | §123.3 |
 
 Every edit stops the transport first, and leaves the selection on the
 result (the pasted range, or the cursor at a deletion's seam).
@@ -219679,7 +219679,7 @@ M:SS.c` from there (`tools/wrsim.py`'s `sel_text`); a value too long for
 COMPACT's 19-character field loses the spaces round its dash, then the
 prefix.
 
-### 122.10 Saving (pinned)
+### 123.10 Saving (pinned)
 
 **Save never writes over a file until the new one is whole.** It writes
 `WRSAVE.$$$` in the destination folder, checks `OSAPI_FILE_DFREE` first
@@ -219697,7 +219697,7 @@ and any clipboard pieces that named the old file, because that file no
 longer exists. The status bar says so. The format is preserved: this
 delivery offers no conversion on save.
 
-### 122.11 The face: layouts, themes, art (shipped, wave 1)
+### 123.11 The face: layouts, themes, art (shipped, wave 1)
 
 | layout | content | window | where | what is on it |
 |---|---|---|---|---|
@@ -219768,7 +219768,7 @@ COMPACT's (14 x 16, block), each with the colon and the decimal point; a
 key pictures (record, stop, pause, play, open, save, minus, plus) at 13 rows
 and at the CGA's 7; the VOLUME speaker, the slider's quiet and loud ends,
 the screw and the check box; the package's 16 x 16 icon; and `wrart_db`, the
-meter's 129-byte table (§122.8), checked entry by entry against
+meter's 129-byte table (§123.8), checked entry by entry against
 `20 log10`. The roles and both theme tables are emitted with them. `--png
 DIR` writes a preview of every picture and of each layout in each theme. No
 image is read and no service is asked. Window chrome and menus stay the
@@ -219788,7 +219788,7 @@ red dot on the colour face is two bands that TILE the key's inside - the
 picture's part in red, the caption's in the key's ink - so no pixel is
 written twice. Each slider is one band (groove, ticks and the thumb's outline
 in the slider ink, the faceplate as paper). The waveform is composed in the
-WAVEFORM BAND (§122.5's claim, made at entry): the ruler, then the lanes
+WAVEFORM BAND (§123.5's claim, made at entry): the ruler, then the lanes
 above and below the centre line, then the centre line between them - four
 calls, no pixel twice; without the claim it is two fills and the line.
 
@@ -219798,7 +219798,7 @@ on VGA colour and across a layout round trip, and the faces in
 `docs/waverack/` (VGA colour and black and white FULL, EGA MID, CGA COMPACT).
 Hercules is the orchestrator's MartyPC look (QEMU cannot show it).
 
-### 122.12 Menus and keys (shipped, wave 1; the document's commands live in wave 2)
+### 123.12 Menus and keys (shipped, wave 1; the document's commands live in wave 2)
 
 **File**: New, Open..., Save, Save As..., Save Selection As..., Recover
 Take. **Edit**: Undo, Redo, Cut, Copy, Paste, Delete, Trim, Select All,
@@ -219811,7 +219811,7 @@ menu and no check mark - a toggle names its state (§12.2).
 **One predicate** (`wr_cmdok`, §47 rule 2): every key, menu item and
 keystroke names a command (`C_*`), and the predicate greys all three; a
 press on a greyed control - a key's release, a keystroke, a menu item - puts
-the reason on the status bar (§122.2). In wave 1 the commands that have state
+the reason on the status bar (§123.2). In wave 1 the commands that have state
 are live - Loop, Rate, Theme, the layout, INPUT GAIN and VOLUME - and every
 command a document, playback or capture needs is greyed, not faked. **Wave 2
 makes the document's live**: New (with a document; `No document`), Open
@@ -219820,9 +219820,9 @@ and Fit (`Whole sound shown` at Fit; both `Still scanning` while the scan
 runs; the - and + keys follow), the cursor keys (`No document`), and Stop and
 Escape while a scan runs (they cancel it: `Open cancelled`). New and a
 refused open say `New document` / the refusal. **Wave 3 makes the
-transport's live** (§122.6): Space, the Play and Pause keys, Sound >
+transport's live** (§123.6): Space, the Play and Pause keys, Sound >
 Play/Pause and Stop, `S` and Escape; Shift+Left/Right, a drag, a handle and
-Shift+click select, `A` and Edit > Select All / Select None (§122.9).
+Shift+click select, `A` and Edit > Select All / Select None (§123.9).
 Record, edit and save stay greyed for their waves.
 
 | key | does | key | does |
@@ -219845,7 +219845,7 @@ drag, the value in bss), and says its value on the status bar (`Volume 75%`,
 press, drag, release; or press, press): Input (`Microphone`, COMPACT `Mic`),
 Rate (`8,000 Hz` / `11,025 Hz`, COMPACT `8 kHz` / `11 kHz`), Bits (`8-bit`)
 and Channels (`Mono`). Input, Bits and Channels hold one choice each and are
-greyed (§122.7); Rate is live. While a list is open the key record has no
+greyed (§123.7); Rate is live. While a list is open the key record has no
 keys (BT_N = 0), so a press on a list that covers a key is the list's.
 
 **`.WAV` is not claimed**: Audio owns the association (§86), and WaveRack
@@ -219854,7 +219854,7 @@ launch with a document (`OSAPI_PKG_START`'s document form, §21.5.3) copies
 its name and folder at entry and opens it from the first timer tick, after
 standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
-### 122.13 Where it ships, and what it costs (waves 1, 2 and 3 measured)
+### 123.13 Where it ships, and what it costs (waves 1, 2 and 3 measured)
 
 | | wave 1 | wave 2 | wave 3 |
 |---|---|---|---|

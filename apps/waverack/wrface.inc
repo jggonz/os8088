@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/waverack/wrface.inc - WaveRack's faces (SPEC.md 122.11)
+; os8088 - apps/waverack/wrface.inc - WaveRack's faces (SPEC.md 123.11)
 ;
 ; THREE LAYOUTS, chosen at every full paint from the content box the window
 ; was given (wf_setup):
@@ -572,7 +572,7 @@ wf_e_fname:
 wf_e_time:
     mov ax, [we_cgen]               ; the cursor's time (00:00.00 with none) -
     call wf_ek                      ; the playhead's while the transport
-    jc .out                         ; holds a play (SPEC.md 122.6)
+    jc .out                         ; holds a play (SPEC.md 123.6)
     mov ax, [wo_cur]
     mov dx, [wo_cur+2]
     call wt_active
@@ -688,7 +688,7 @@ wf_e_mcap:
     ret
 
 ; --- the meter's cells: only those whose state changed ----------------------
-; Its key is the lit length and the peak-hold cell (SPEC.md 122.8); the cells
+; Its key is the lit length and the peak-hold cell (SPEC.md 123.8); the cells
 ; are two 24-bit masks, what the glass shows and what it should, and each run
 ; of changed cells of one state is one wf_cells - so a bar that grows by two
 ; and a hold that steps are two or three calls, never the bar.
@@ -1146,7 +1146,7 @@ wf_thumbx:
 ; --- the waveform: its ruler, its grid and its centre line ------------------------
 ; With no document there is no time to rule: the ticks divide the width in
 ; fiftieths, the majors in tenths, and the grid stands on the majors. The two
-; are composed in the waveform band (a heap claim, SPEC.md 122.5) and put down
+; are composed in the waveform band (a heap claim, SPEC.md 123.5) and put down
 ; in three calls - the ruler, and the lanes above and below the centre line -
 ; with the centre line in the waveform's ink between them, so no pixel is
 ; written twice. Without the claim the lanes are two fills.
@@ -1554,7 +1554,7 @@ wf_e_ovw:
 ; --- the selection field: 'Selection:' and the range, empty with none -----------
 wf_e_sel:
     mov ax, [wo_sgen]               ; 'Selection:  01.00 - 02.50' (SPEC.md
-    call wf_ek                      ; 122.9): the prefix and the value
+    call wf_ek                      ; 123.9): the prefix and the value
     jc .out
     mov di, [wd_lp]
     mov si, [di+WL_SELPFX]
@@ -1712,7 +1712,7 @@ wf_bpaint:
 .dis:
     cmp word [wd_th], wrart_tbw     ; greyed in black and white: the frame is
     jne .up                         ; DOTTED and goes in the key's one band
-    mov byte [wf_bdis], 1           ; (SPEC.md 122.11)
+    mov byte [wf_bdis], 1           ; (SPEC.md 123.11)
     jmp short .in
 .up:
     call wd_frame
@@ -1814,7 +1814,7 @@ wf_bpaint:
     call wd_bout
     jmp .out
 .bwdis:
-    ; GREYED ON ONE BIT (SPEC.md 122.11): the 5 x 7 caps have one-pixel
+    ; GREYED ON ONE BIT (SPEC.md 123.11): the 5 x 7 caps have one-pixel
     ; strokes and a checkerboard takes half of them, so the CAPTION stays
     ; solid; the PICTURE is dithered and the frame is dotted. One band, the
     ; frame included - one call

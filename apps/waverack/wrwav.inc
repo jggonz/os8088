@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/waverack/wrwav.inc - WaveRack's RIFF/WAVE reader (SPEC.md 122.4)
+; os8088 - apps/waverack/wrwav.inc - WaveRack's RIFF/WAVE reader (SPEC.md 123.4)
 ;
 ; THE READER walks the chunk list with OSAPI_FILE_READ_AT at 32-bit offsets.
 ; It accepts any chunk order, honours the odd-length pad byte, skips every
@@ -150,7 +150,7 @@ ww_parse:
     mov [ww_gotf], al
     mov [ww_gotd], al
     mov dx, [ww_flen+2]
-    test dh, 0x80                   ; past 2^31 - 1 bytes (SPEC.md 122.3)
+    test dh, 0x80                   ; past 2^31 - 1 bytes (SPEC.md 123.3)
     jz .size
     mov al, E_BIG
     jmp .refuse

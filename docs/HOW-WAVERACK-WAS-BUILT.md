@@ -3,7 +3,7 @@
 A diary kept while the work happened, for later reuse. Observations and
 intentions are kept apart: what was MEASURED or SEEN says so, and what was
 planned says that. The plan is [WAVERACK-PLAN.md](plans/WAVERACK-PLAN.md)
-and the contract SPEC.md §122.
+and the contract SPEC.md §123.
 
 ## The ask
 
@@ -105,7 +105,7 @@ dark cells outlined, greyed captions half their ink.
 - *A slider is one blit too*: groove, ticks and the thumb's outline in the
   slider ink with the faceplate as paper, so the thumb's face is simply
   paper and nothing under it is drawn twice.
-- *The waveform band*, the heap claim §122.5 sizes for the document wave,
+- *The waveform band*, the heap claim §123.5 sizes for the document wave,
   is claimed at entry already (7 KB): the empty waveform's ruler and dotted
   grid are composed in it and put down in three blits around the centre
   line. Its x phase is composed in, because a 1bpp blit at an x off the byte
@@ -346,7 +346,7 @@ look-ahead; the 16 KB ring grant is the driver's.
 
 **The 360 KB disk.** Wave 2 left `media360.img` with no cluster to spare,
 and this wave's growth does not fit, so WaveRack is off it (a dated note in
-the Makefile and §122.13). A 360 KB home for it is the owner's decision.
+the Makefile and §123.13). A 360 KB home for it is the owner's decision.
 
 **Wave 2's review, folded in.** An independent read of wave 2 found no
 memory fault and five things to fix, all done in this wave: a chunk size
@@ -357,7 +357,7 @@ below Fit the last few frames of a file could never be shown and a cursor
 parked there vanished (now rounded up - the view may end a few empty columns
 past the document); a frame over 2^31 read as negative; a short disk read
 ended the scan silently over uninitialised blocks (now it refuses, and says
-why); and §122.5 had a block count off by one.
+why); and §123.5 had a block count off by one.
 
 **The soak row's first run caught the meter.** STEREO16.WAV's right channel
 is silent but for one full-scale sample, and PEAK never lit: the meter read

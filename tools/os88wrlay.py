@@ -1,4 +1,4 @@
-"""os88wrlay: WaveRack's three layouts and two themes, as DATA (SPEC.md 122.11).
+"""os88wrlay: WaveRack's three layouts and two themes, as DATA (SPEC.md 123.11).
 
 Imported by tools/os88wrart.py, which emits what this builds into
 build/wrart.inc beside the pictures, and runs selfcheck() as part of its own.
@@ -116,8 +116,8 @@ ELEMS = [('wf_e_fname', 0), ('wf_e_time', 0), ('wf_e_total', 0),
 
 # the longest text each field is ever handed (waverack.asm's strings): the
 # measurement holds the asm to these
-STATUS_MAX = 22                 # wr_s_* status messages (SPEC.md 122.2)
-SEL_VALUE = 13                  # 'SS.cc - SS.cc' (SPEC.md 122.9)
+STATUS_MAX = 22                 # wr_s_* status messages (SPEC.md 123.2)
+SEL_VALUE = 13                  # 'SS.cc - SS.cc' (SPEC.md 123.9)
 FNAME_CH = 12                   # an 8.3 name
 FMT_TEXT = '22,050 Hz 16-bit Stereo'   # the longest format line
 MCAPS_FULL = ['LEVEL', 'LEVEL  REC', 'LEVEL  PLAY']
@@ -652,7 +652,7 @@ def emit(bm, art):
     Ls = layouts(art, bm)
     band = 0
     for L in Ls:
-        # the waveform band (SPEC.md 122.5): the ruler's rows, the lanes'
+        # the waveform band (SPEC.md 123.5): the ruler's rows, the lanes'
         # and the overview's, at the stride the widest x phase needs
         r, o = L.f['WAVE'], L.f['OVW']
         assert (r[0], r[2]) == (o[0], o[2]), "the overview shares the x"

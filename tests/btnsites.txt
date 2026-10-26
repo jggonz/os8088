@@ -69,7 +69,7 @@
                                    # os88ui_btnup fires them
 1 apps/waverack/waverack.asm       # eleven keys through one record with its OWN painter
                                    # (OS88UI_BOWN, wf_bpaint) - CDRack's shape; wr_regrey
-                                   # writes BT_RECTS and BT_N beside the call (SPEC.md 122.1)
+                                   # writes BT_RECTS and BT_N beside the call (SPEC.md 123.1)
 1 apps/xtmp3/xtmp3.asm             # the five transport keys and OPEN through one
                                    # record with its OWN painter (SPEC.md 121.8):
                                    # x3_regrey draws them, os88ui_btnup fires them

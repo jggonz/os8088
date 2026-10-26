@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/waverack/waverack.asm
 ;
-; WAVERACK (SPEC.md 122): a sound recorder, WAV player and waveform editor
+; WAVERACK (SPEC.md 123): a sound recorder, WAV player and waveform editor
 ; behind the face of a rack unit - a silver faceplate, a recessed LCD with
 ; seven-segment time, a segmented LED level bar over an INPUT GAIN slider,
 ; picture transport keys, the waveform and its overview, the edit row, the
@@ -22,7 +22,7 @@
 ; rule 2), and a press on a greyed control says why on the status bar (47
 ; rule 6).
 ;
-; THE FILES (SPEC.md 122.1):
+; THE FILES (SPEC.md 123.1):
 ;   waverack.asm  this: the entry, the commands, the predicate, the menus, the
 ;                 keys and the callbacks
 ;   wrdraw.inc    the drawing primitives - roles, themes, the band
@@ -39,7 +39,7 @@
 ;
 ; .WAV IS NOT CLAIMED: Audio owns the association (SPEC.md 86), and WaveRack
 ; opens a WAV through File > Open, or when another program starts it with
-; one (OSAPI_ARG_FILE, SPEC.md 122.4).
+; one (OSAPI_ARG_FILE, SPEC.md 123.4).
 ;
 ; REGISTER CONTRACTS are the callbacks' (SPEC.md 111.6): W_PAINT and W_ONKEY
 ; give SI back; W_ONTIMER and the W_ONCLICK family may clobber AX, BX, CX,
@@ -57,13 +57,13 @@
 
 WR_PARK     equ 0x7FF0              ; a key a layout lacks: off every screen
 WR_GAINMAX  equ 12                  ; INPUT GAIN: 13 steps, -12..+12 dB, unity
-WR_GAIN0    equ 6                   ; in the middle (SPEC.md 122.7)
+WR_GAIN0    equ 6                   ; in the middle (SPEC.md 123.7)
 WR_VOLSTEP  equ 5                   ; VOLUME's keys and wheel: 5% a step
 WD_BANDSZ   equ 1024                ; the composing band (wrdraw.inc)
 
 ; -DWR_CALLS counts every drawing primitive WaveRack calls into [wr_ncalls]
 ; (a fill, a frame, a font run, a blit): the instrument the redraw costs in
-; SPEC.md 122.13 were measured with (PERFORMANCE.md's rule 4 - a counter, not
+; SPEC.md 123.13 were measured with (PERFORMANCE.md's rule 4 - a counter, not
 ; a timer). The shipped build carries none of it
 %macro WR_NCALL 0
   %ifdef WR_CALLS
@@ -141,17 +141,17 @@ wr_entry:
     mov [wr_argvol], bl
     mov byte [wr_argpend], 1        ; opened from the first tick
 .noarg:
-    call OSAPI_SND_CAPS             ; what the machine can do (SPEC.md 122.2)
+    call OSAPI_SND_CAPS             ; what the machine can do (SPEC.md 123.2)
     mov [wr_caps], ax
     call OSAPI_VIDEO                ; the primary: colour by default where it
-    mov byte [wr_theme], 1          ; has more than one bit (SPEC.md 122.11)
+    mov byte [wr_theme], 1          ; has more than one bit (SPEC.md 123.11)
     cmp dh, 1
     jbe .bw
     mov byte [wr_theme], 0
 .bw:
     sub cx, MBAR_H                  ; its desktop band, for the size table
     mov [wr_pband], cx
-    mov ax, WRL_BANDKB              ; the waveform band (SPEC.md 122.5): a
+    mov ax, WRL_BANDKB              ; the waveform band (SPEC.md 123.5): a
     call OSAPI_MEM_CLAIM            ; refusal is not fatal - the waveform is
     jnc .band                       ; then drawn without its grid
     xor dx, dx
@@ -160,7 +160,7 @@ wr_entry:
     mov word [wv_ww], 0xFFFF        ; no width yet: the first paint's
     mov byte [wr_gain], WR_GAIN0
     mov byte [wr_vol], 75
-    call wt_vbuild                  ; VOLUME's table (SPEC.md 122.6)
+    call wt_vbuild                  ; VOLUME's table (SPEC.md 123.6)
     mov byte [wr_rate], 1           ; the next take at 11,025 Hz
     mov si, wr_s_ready
     call wr_say
@@ -176,7 +176,7 @@ wr_entry:
     call OSAPI_WM_ONTIMER           ; document, the playhead: all from the
     mov ax, wr_onwake               ; one-shot timer; the refills and the
     call OSAPI_WM_ONWAKE            ; play's end from the worker's wake
-    mov ax, wr_onclose              ; (SPEC.md 122.6); and a close stops the
+    mov ax, wr_onclose              ; (SPEC.md 123.6); and a close stops the
     call OSAPI_WM_ONCLOSE           ; play first
     cmp byte [wr_argpend], 0
     je .noopen
@@ -257,7 +257,7 @@ wr_prefset:
 ;            predicate, shared by the keys' greying, the menus and the keys)
 ; out: CF = 0 live, CF = 1 refused; every register preserved
 ;
-; Wave 3 has the transport: its commands follow SPEC.md 122.6's table - Play
+; Wave 3 has the transport: its commands follow SPEC.md 123.6's table - Play
 ; with a card and frames, Pause and Stop while a play is held, and Open and
 ; New only with the transport idle (Stop first). Record, edit and save are
 ; later waves', and refused until they land.
@@ -326,7 +326,7 @@ wr_cmdok:
 .stop:
     call wt_active                  ; Stop: a play held...
     jnc .yes
-    cmp byte [we_busy], 1           ; ...or a scan to cancel (SPEC.md 122.5)
+    cmp byte [we_busy], 1           ; ...or a scan to cancel (SPEC.md 123.5)
     jne .no
     clc
     ret
@@ -404,7 +404,7 @@ wr_canbig:
 
 ; -----------------------------------------------------------------------------
 ; wr_explain - command AL was refused: the status bar says why (SPEC.md 47
-;              rule 6, 122.2). clobbers SI
+;              rule 6, 123.2). clobbers SI
 ; -----------------------------------------------------------------------------
 wr_explain:
     mov si, wr_s_stopfirst          ; Open, New: a play is held
@@ -511,7 +511,7 @@ wr_cmd:
 .c2:
     cmp al, C_STOP
     jne .c3
-    call wt_active                  ; a play: stopped (SPEC.md 122.6)
+    call wt_active                  ; a play: stopped (SPEC.md 123.6)
     jc .scan
     jmp wt_stop
 .scan:
@@ -608,7 +608,7 @@ wr_cursor:
     cmp ah, SC_PGDN
     je .page
     call wr_shift                   ; Shift+Left / Right: the selection
-    jz .plain                       ; extended (SPEC.md 122.9)
+    jz .plain                       ; extended (SPEC.md 123.9)
     cmp ah, SC_LEFT
     mov al, -1
     je .ext
@@ -815,7 +815,7 @@ wr_onclose:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_wpress - a press in the waveform at content x CX (SPEC.md 122.9): Shift
+; wr_wpress - a press in the waveform at content x CX (SPEC.md 123.9): Shift
 ;             extends the selection from its anchor (the cursor, with none);
 ;             a press on a selection's handle drags that end; otherwise the
 ;             cursor goes there, the selection goes, and a play seeks there.
@@ -913,7 +913,7 @@ wr_setrate:
     jmp wr_say
 
 ; wr_dropdis - SI = a drop-down 0..3 -> DI = its flags: Input, Bits and
-; Channels hold one choice each and are greyed (SPEC.md 122.7); Rate is
+; Channels hold one choice each and are greyed (SPEC.md 123.7); Rate is
 ; wr_cmdok's. keeps everything else
 wr_dropdis:
     mov di, OS88UI_DIS
@@ -1110,7 +1110,7 @@ wr_bflag:
     push ax
     mov bx, OS88UI_OWN
     cmp al, B_PLAY                  ; Play latched while playing, Pause while
-    jne .np                         ; paused (SPEC.md 122.6)
+    jne .np                         ; paused (SPEC.md 123.6)
     cmp byte [wt_state], WT_PLAY
     jne .np
     or bx, OS88UI_LATCH
@@ -1338,7 +1338,7 @@ wr_hit:
     ret
 .nvol:
     mov si, [wd_lp]                 ; a greyed drop-down says why (47 rule
-    add si, WL_DROPS                ; 6): it holds one choice (SPEC.md 122.7)
+    add si, WL_DROPS                ; 6): it holds one choice (SPEC.md 123.7)
     xor di, di
 .gdrop:
     call wf_in
@@ -1532,7 +1532,7 @@ wr_wheel:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_key - W_ONKEY: SPEC.md 122.12's table (wr_keytab)
+; wr_key - W_ONKEY: SPEC.md 123.12's table (wr_keytab)
 ; in:  AL = ASCII, AH = scan, SI = the window. Keeps SI
 ; -----------------------------------------------------------------------------
 wr_key:
@@ -1607,7 +1607,7 @@ wr_key:
     ret
 
 ; =============================================================================
-; THE MENUS (SPEC.md 12.2, 122.12) - About is the application menu's own
+; THE MENUS (SPEC.md 12.2, 123.12) - About is the application menu's own
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -1891,7 +1891,7 @@ wr_btncmd:  db C_RECORD, C_STOP, C_PAUSE, C_PLAYK, C_OPEN, C_SAVE, C_ZOUT
 %error "wr_btncmd needs a command for every key"
 %endif
 
-; the keystrokes (SPEC.md 122.12): kind (0 a scan code, 1 a letter of either
+; the keystrokes (SPEC.md 123.12): kind (0 a scan code, 1 a letter of either
 ; case, 2 an exact character), the code, the command; FF ends it
 wr_keytab:
     db 0, 0x39, C_PLAY              ; Space: play / pause
@@ -1925,7 +1925,7 @@ wr_keytab:
     db 2, '.', K_GAINUP
     db 0xFF
 
-; --- the menus (SPEC.md 122.12) ---------------------------------------------------
+; --- the menus (SPEC.md 123.12) ---------------------------------------------------
     OS88_MENUSET wr_menus, wr_name, wr_menu
         OS88_MENU wr_mt_file, wr_items + 2 * C_NEW, 6
         OS88_MENU wr_mt_edit, wr_items + 2 * C_UNDO, 9
@@ -2151,7 +2151,7 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV we_yh, 2                    ; the row table's lane height
     WRV wv_first, 4                 ; the view's first frame
     WRV wo_s, 4                     ; the selection [s, e), frames (SPEC.md
-    WRV wo_e, 4                     ; 122.9), and the end a drag holds still
+    WRV wo_e, 4                     ; 123.9), and the end a drag holds still
     WRV wo_anc, 4
     WRV wo_zero1, 0
     WRV wo_gen, 2                   ; generations: element keys
@@ -2238,7 +2238,7 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_ghave, 1                 ; the ring grant is held
     WRV wt_wk, 1                    ; the worker is hired
     WRV wt_lp, 1                    ; Loop, as the play began
-    WRV wt_d, 1                     ; the divisor (SPEC.md 122.6)
+    WRV wt_d, 1                     ; the divisor (SPEC.md 123.6)
     WRV wt_ntry, 1                  ; counters: the pre-roll's tries, a
     WRV wt_nfill, 1                 ; refill's reads, a feed's halves
     WRV wt_nfeed, 1
@@ -2301,8 +2301,8 @@ wr_want     equ WRB(4)              ; 1 = the user asked for COMPACT
 wr_mode     equ WRB(5)              ; WRM_*
 wr_dropo    equ WRB(6)              ; the open drop-down + 1, 0 = none
 wr_drag     equ WRB(7)              ; 1 INPUT GAIN held, 2 VOLUME held
-wr_gain     equ WRB(8)              ; 0..12, unity 6 (SPEC.md 122.7)
-wr_vol      equ WRB(9)              ; 0..100 (SPEC.md 122.6)
+wr_gain     equ WRB(8)              ; 0..12, unity 6 (SPEC.md 123.7)
+wr_vol      equ WRB(9)              ; 0..100 (SPEC.md 123.6)
 wr_loop     equ WRB(10)             ; 1 = Loop on
 wr_rate     equ WRB(11)             ; the next take: 0 8,000, 1 11,025 Hz
 wr_mwho     equ WRB(12)             ; the meter's: 0 none, 1 REC, 2 PLAY

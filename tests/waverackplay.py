@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""waverackplay - SPEC.md 122.6, 122.8, 122.9: WaveRack PLAYS what the
+"""waverackplay - SPEC.md 123.6, 123.8, 123.9: WaveRack PLAYS what the
 reference says it must, and gives everything back.
 
     make && make waverackfix build/mixercfg/SYSTEM.CFG &&

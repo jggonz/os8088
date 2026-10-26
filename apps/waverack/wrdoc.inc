@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/waverack/wrdoc.inc - the document (SPEC.md 122.3)
+; os8088 - apps/waverack/wrdoc.inc - the document (SPEC.md 123.3)
 ;
 ; THE CANONICAL UNIT IS THE SAMPLE FRAME: one sample per channel. Every
 ; position, length and offset is a frame index in 32 bits (DX:AX), and a
@@ -16,7 +16,7 @@
 ; THE PIECE TABLE (WO_NPC = 64) is the document: an ordered list of {source,
 ; first frame, frame count}. An open makes one piece; the edits of wave 4
 ; build new lists and move no audio. Undo and the clipboard are wave 4's
-; (SPEC.md 122.3): their hooks are wo_npc and the immutable sources.
+; (SPEC.md 123.3): their hooks are wo_npc and the immutable sources.
 ;
 ; READING IS THE UI TASK'S (SPEC.md 20.6 rule 7): wo_read is called from a
 ; callback, never from a worker, and READ_AT wants a cluster multiple for both
@@ -26,7 +26,7 @@
 
 WO_NSRC     equ 4
 WO_NPC      equ 64
-WO_IOKB     equ 16                  ; the I/O claim: a scan gulp (SPEC.md 122.5)
+WO_IOKB     equ 16                  ; the I/O claim: a scan gulp (SPEC.md 123.5)
 WO_MAXCLU   equ 8192                ; a cluster two of which fit the claim
 
 ; --- a source ----------------------------------------------------------------------
@@ -42,7 +42,7 @@ WS_NBLK     equ 28                  ; word: blocks in the envelope
 WS_CLU      equ 30                  ; word: its volume's cluster, in bytes
 WS_RATE     equ 32                  ; word: the source's format (a document's
 WS_BITS     equ 34                  ; byte  sources share it: paste of another
-WS_CH       equ 35                  ; byte  format is refused, SPEC.md 122.3)
+WS_CH       equ 35                  ; byte  format is refused, SPEC.md 123.3)
 WS_SH       equ 36                  ; byte: log2 of the block align
 WS_SIZE     equ 40
 ; --- a piece -----------------------------------------------------------------------
@@ -173,7 +173,7 @@ wo_find:
 
 ; -----------------------------------------------------------------------------
 ; wo_open - OPEN [wo_nbuf], in the folder the instance stands in, as the
-;           document: whatever was open is emptied first (SPEC.md 122.3 -
+;           document: whatever was open is emptied first (SPEC.md 123.3 -
 ;           the dirty question is wave 4's), the header walked (wrwav.inc),
 ;           the claims made, one piece laid, the view fitted and the scan
 ;           begun. A refusal leaves the document EMPTY and says why.
@@ -265,7 +265,7 @@ wo_open:
     mov [di+WS_FRM+2], dx
     mov [wo_frames], ax
     mov [wo_frames+2], dx
-    ; --- its envelope's claim (SPEC.md 122.5) and the view cache ----------------
+    ; --- its envelope's claim (SPEC.md 123.5) and the view cache ----------------
     call we_envsize                 ; CL = the block shift, BX = the blocks,
     mov [di+WS_BS], cl              ; AX = the claim in KB (0: an empty sound)
     mov [di+WS_NBLK], bx
@@ -303,7 +303,7 @@ wo_open:
     loop .dname
     xor al, al
     cmp byte [ww_note], N_RECOVER   ; a recovered take is dirty (SPEC.md
-    jne .clean                      ; 122.4): saved, it is repaired
+    jne .clean                      ; 123.4): saved, it is repaired
     inc al
 .clean:
     mov [wo_dirty], al

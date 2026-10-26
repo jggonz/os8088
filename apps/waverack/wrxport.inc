@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/waverack/wrxport.inc - the transport (SPEC.md 122.6, 122.8)
+; os8088 - apps/waverack/wrxport.inc - the transport (SPEC.md 123.6, 123.8)
 ;
 ; ONE STATE MACHINE, wt_state: IDLE, PLAYING, PLAY_PAUSED (and RECORDING and
 ; REC_PAUSED, wave 5's, whose values are reserved). BUSY - a scan - is not a
@@ -40,7 +40,7 @@
 WT_IDLE     equ 0
 WT_PLAY     equ 1
 WT_PPAUSE   equ 2
-WT_REC      equ 3                   ; wave 5's (SPEC.md 122.6, reserved)
+WT_REC      equ 3                   ; wave 5's (SPEC.md 123.6, reserved)
 WT_RPAUSE   equ 4
 WT_HALF     equ 2048                ; a staged half: the ring stream's unit
 WT_LAKB     equ 32                  ; the look-ahead claim...
@@ -73,7 +73,7 @@ wt_active:
     ret
 
 ; -----------------------------------------------------------------------------
-; wt_vbuild - VOLUME's table (SPEC.md 122.6): out = 80h + (in - 80h) x v /
+; wt_vbuild - VOLUME's table (SPEC.md 123.6): out = 80h + (in - 80h) x v /
 ;             100, truncated toward 80h - the worker passes every sample
 ;             through it, after the meter has read it. keeps every register
 ; -----------------------------------------------------------------------------
@@ -116,7 +116,7 @@ wt_vbuild:
 ; -----------------------------------------------------------------------------
 ; wt_go - Play from IDLE: a non-empty selection [s, e), else the cursor to the
 ;         end (from frame 0 when the cursor stands at the end); Loop repeats
-;         the selection, or with none the whole document (SPEC.md 122.6).
+;         the selection, or with none the whole document (SPEC.md 123.6).
 ;         in: BX = the window. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wt_go:
@@ -205,7 +205,7 @@ wt_resume:
 ; -----------------------------------------------------------------------------
 ; wt_stop - Stop: the output silenced, every claim given back, and the
 ;           playhead put back where the play began; the cursor and the
-;           selection do not move (SPEC.md 122.6). clobbers AX, BX, CX, DX, SI
+;           selection do not move (SPEC.md 123.6). clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 wt_stop:
     call wt_release
@@ -231,7 +231,7 @@ wt_reref:
 ; -----------------------------------------------------------------------------
 ; wt_seek - the cursor moved while the transport holds a play: PLAYING
 ;           restarts the stream there (closed and reopened - no stale ring
-;           bytes), PLAY_PAUSED moves the paused position (SPEC.md 122.6).
+;           bytes), PLAY_PAUSED moves the paused position (SPEC.md 123.6).
 ;           in: BX = the window. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wt_seek:
@@ -307,7 +307,7 @@ wt_dark:
     ret
 
 ; -----------------------------------------------------------------------------
-; wt_outsay - the status bar: what the card plays (SPEC.md 122.6) -
+; wt_outsay - the status bar: what the card plays (SPEC.md 123.6) -
 ;             'Out 22,050 Hz mono /2', or with d = 1 'Out 11,025 Hz mono'.
 ;             clobbers AX, DX, SI, DI
 ; -----------------------------------------------------------------------------
@@ -338,7 +338,7 @@ wt_outsay:
 
 ; -----------------------------------------------------------------------------
 ; wt_begin - A STREAM FROM DOCUMENT FRAME DX:AX: the card asked again (SPEC.md
-;            122.2), the divisor and the output rate, the claims (kept across
+;            123.2), the divisor and the output rate, the claims (kept across
 ;            a pause), the look-ahead primed, the pre-roll converted into the
 ;            grant, the ring stream opened (verb 0), the worker hired once.
 ;            The region [wt_r0, wt_r1), [wt_lp] and [wt_p0] are the caller's.
@@ -698,7 +698,7 @@ wt_tick:
     call we_cmoved                  ; the time and the line
     call we_ready                   ; the view follows: a PAGE, when the
     jc .meter                       ; playhead leaves it - never a scroll a
-    mov ax, [wt_ph]                 ; tick (SPEC.md 122.6)
+    mov ax, [wt_ph]                 ; tick (SPEC.md 123.6)
     mov dx, [wt_ph+2]
     call we_fcol
     jnc .meter
@@ -712,7 +712,7 @@ wt_tick:
     jmp wt_finish
 
 ; -----------------------------------------------------------------------------
-; wt_meter - the meter's state (SPEC.md 122.8), at most every WT_MTICKS: the
+; wt_meter - the meter's state (SPEC.md 123.8), at most every WT_MTICKS: the
 ;            peak of the half SOUNDING now (the worker noted it before the
 ;            volume) through wrart_db for the bar; the halves played since
 ;            the last look for the hold and PEAK, so a transient shorter than
@@ -1045,7 +1045,7 @@ wt_kick:
     ret
 
 ; -----------------------------------------------------------------------------
-; wt_conv - THE CONVERSION (SPEC.md 122.6): look-ahead frames into the half
+; wt_conv - THE CONVERSION (SPEC.md 123.6): look-ahead frames into the half
 ;           (wt_hbuf) until it is full or the input runs out. A full half is
 ;           staged; at the document's end the half is padded with 80h (a part
 ;           box group dropped) and staged as the last. Any task - the worker,
@@ -1185,7 +1185,7 @@ wt_fill80:
 ; -----------------------------------------------------------------------------
 ; THE INNER LOOPS - CL (1..255) frames from DS:SI (never across the seam) to
 ; ES:DI: each frame to an unsigned 8-bit mono value, its peak |u - 80h| into
-; DL and a rail into DH (both BEFORE the volume, SPEC.md 122.8), the box sum
+; DL and a rail into DH (both BEFORE the volume, SPEC.md 123.8), the box sum
 ; of d frames in BP ([es:wt_bk] of them so far), and the mean through
 ; VOLUME's table at ES:BX. clobbers AX, CH
 ; -----------------------------------------------------------------------------

@@ -426,7 +426,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | WIREBALL | `apps/wireball/wireball.asm` | §109 | yes |
 | WORD | `apps/word/wdload.asm` | §68 | no |
 | WORD | `apps/word/word.asm` | §68 | yes |
-| WaveRack | `apps/waverack/waverack.asm` | §122 | yes |
+| WaveRack | `apps/waverack/waverack.asm` | §123 | yes |
 | WireChat | `apps/wirechat/wirechat.asm` | §113 | yes |
 | WireFleet | `apps/wirefleet/wirefleet.asm` | §114 | yes |
 | XTMP3 | `apps/xtmp3/xtmp3.asm` | §121 | yes |
@@ -557,7 +557,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 119 | CDROM.DRV — CD-ROM data and audio (`drivers/cdrom/`, `apps/cdrack/`) |
 | 120 | VESA — high-resolution, deep-colour desktops through a video driver (`drivers/vesa/`, `kernel/vidext.inc`) |
 | 121 | XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`) |
-| 122 | WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`) |
+| 123 | WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`) |
 
 ## docs/
 

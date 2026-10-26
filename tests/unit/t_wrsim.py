@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""t_wrsim: WaveRack's host reference holds (SPEC.md 122.3-122.5).
+"""t_wrsim: WaveRack's host reference holds (SPEC.md 123.3-123.5).
 
     python3 tests/unit/t_wrsim.py
 

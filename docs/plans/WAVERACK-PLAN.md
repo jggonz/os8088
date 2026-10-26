@@ -8,7 +8,7 @@ over an input-gain slider, picture transport keys, an editable waveform with
 an overview, and a volume slider. The visual brief is the owner's three
 mockups in [`docs/waverack/design/`](../waverack/design/) and the written
 brief beside them ([`BRIEF.txt`](../waverack/design/BRIEF.txt)). **The
-binding contract is [SPEC.md §122](../../SPEC.md#122-waverack--a-sound-recorder-wav-player-and-waveform-editor-appswaverack-waverackos88)**;
+binding contract is [SPEC.md §123](../../SPEC.md#123-waverack--a-sound-recorder-wav-player-and-waveform-editor-appswaverack-waverackos88)**;
 this file is the story list and what each wave actually delivered. The diary
 is [HOW-WAVERACK-WAS-BUILT.md](../HOW-WAVERACK-WAS-BUILT.md).
 
@@ -21,15 +21,15 @@ the evidence column says what was actually seen.
 
 | ID | user outcome | depends on | status | evidence / commit |
 |---|---|---|---|---|
-| US-00 | The plan is reviewable in a draft PR before code | - | Verified | this file, SPEC §122, draft PR #311 opened at 3cde0b9a before any functional change |
+| US-00 | The plan is reviewable in a draft PR before code | - | Verified | this file, SPEC §123, draft PR #311 opened at 3cde0b9a before any functional change |
 | US-01 | WaveRack installs and launches like any package; menus; clean close | US-00 | Implemented — verification pending | `WAVERACK.O88` on the 1.44/1.2 MB apps disks and media360.img; launched, menus, About, closed and relaunched on QEMU VGA (relaunch face identical to the first); `make`, `make KERN_SMALL=1` green; see Wave 1 below |
 | US-02 | The same WaveRack in colour and black and white | US-01 | Implemented — verification pending | `docs/waverack/waverack-vga-color-full.png`, `waverack-vga-bw-full.png`, `waverack-ega-mid.png`; identity check `None` on VGA colour, VGA B&W, EGA and across a layout round trip; Hercules MID and COMPACT seen on MartyPC's 5150 + Hercules (`docs/waverack/waverack-herc-mid.png`, `waverack-herc-compact.png`, captured from VRAM at 038ea5ed) |
 | US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Implemented — verification pending | `docs/waverack/waverack-cga-compact.png` (native 640 x 200) and `-3x.png`; all 15 controls clicked with `--screen 640x200`, each answered; the layout measurement below |
 | US-04 | Open a WAV and inspect it without loading it into RAM | US-01 | Implemented — verification pending | `wrwav.inc`/`wrdoc.inc`/`wrenv.inc`; `tools/wrsim.py` reference + fast row `wrsim`; soak row `waverack` (every fixture through File > Open, bss vs the reference, the view cache column for column, zoom to fpp 1, identity); screenshots `docs/waverack/waverack-w2-*.png`; see Wave 2 below |
-| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§122.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. Not seen: underruns at 4.77 MHz (US-11, MartyPC) |
+| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§123.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. Not seen: underruns at 4.77 MHz (US-11, MartyPC) |
 | US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | In progress | driver half shipped: 1a027a77, SPEC §34.6.4, soak row `sndcap` passed on MartyPC SB DSP 2.01 (flat 80h - not a microphone); app side is Wave 5 |
-| US-07 | See the active level; set input gain separately from volume | US-05, US-06 | In progress | the PLAYBACK half shipped in wave 3 (§122.8): the played half's peak before the volume through `wrart_db`, the hold, PEAK at a rail, `LEVEL  PLAY`, only the changed cells drawn; the soak row reads the lit cells for STEREO16's tone and PEAK at its 16-bit spike. The record meter and the gain are wave 5's |
-| US-08 | Select a precise range, audition it, loop it | US-05 | Implemented — verification pending | §122.9's selection half shipped in wave 3: drag, handles, Shift+click, Shift+Left/Right, Select All / None, `[s, e)` clamped, the field's two formats, the inverted span (B&W) / its own ground (colour) drawn by changed columns only; Loop seamless; the soak row drags a range, loops it and holds verb 9's count to `play_pos` and the capture to the selection repeated; identity checks with a selection on VGA colour, B&W, COMPACT and the CGA knob tree |
+| US-07 | See the active level; set input gain separately from volume | US-05, US-06 | In progress | the PLAYBACK half shipped in wave 3 (§123.8): the played half's peak before the volume through `wrart_db`, the hold, PEAK at a rail, `LEVEL  PLAY`, only the changed cells drawn; the soak row reads the lit cells for STEREO16's tone and PEAK at its 16-bit spike. The record meter and the gain are wave 5's |
+| US-08 | Select a precise range, audition it, loop it | US-05 | Implemented — verification pending | §123.9's selection half shipped in wave 3: drag, handles, Shift+click, Shift+Left/Right, Select All / None, `[s, e)` clamped, the field's two formats, the inverted span (B&W) / its own ground (colour) drawn by changed columns only; Loop seamless; the soak row drags a range, loops it and holds verb 9's count to `play_pos` and the capture to the selection repeated; identity checks with a selection on VGA colour, B&W, COMPACT and the CGA knob tree |
 | US-09 | Trim, delete, cut, copy, paste, undo and redo | US-08 | Planned | |
 | US-10 | Save, Save As, Save Selection As without losing the source | US-09 | Planned | |
 | US-11 | The design's personality, readable and fast on an XT | US-02..US-10 | Planned | |
@@ -66,9 +66,9 @@ drop-down), §18.4.7–18.4.9 (read-at, write-at, the streaming append).
 |---|---|---|
 | package location and format | `apps/<name>/`, `nasm -f bin` at org 0 → `os88pkg.py` → `.o88`; no relocation | `apps/waverack/`, `WAVERACK.O88` |
 | face technique | CDRack's: generated art, role tables, one band one blit, element keys, three layouts | `wrdraw.inc` copies `crdraw.inc` with prefix `wd_` |
-| display modes | VGA 640x480x16, EGA 640x350x16, Hercules 720x348 mono, CGA 640x200 mono, all from one binary; content boxes ~608x416, ~285 rows, ~136 rows | FULL / MID / COMPACT (§122.11) |
-| playback | `OSAPI_SND_STREAM` ring stream through SOUND.DRV's Sound Blaster tier: 8-bit mono ≤ 22,222 Hz, ≤ 44,100 on an SB Pro / SB16; verb 11 stereo/16-bit on those | convert to 8-bit mono at `R/d` (§122.6) |
-| capture | verb 4, Sound Blaster only (`SND_CAP_PCM_IN`), 8-bit mono, 4,000–15,000 Hz (13,000 on DSP 1.x); **linear into ONE grant, ≤ 20 KB** ("input has no ring mode"); drained by a kernel task that a disk transfer stalls | a driver extension: verb 4 with `SND_OPENF_EXT` (§122.7) |
+| display modes | VGA 640x480x16, EGA 640x350x16, Hercules 720x348 mono, CGA 640x200 mono, all from one binary; content boxes ~608x416, ~285 rows, ~136 rows | FULL / MID / COMPACT (§123.11) |
+| playback | `OSAPI_SND_STREAM` ring stream through SOUND.DRV's Sound Blaster tier: 8-bit mono ≤ 22,222 Hz, ≤ 44,100 on an SB Pro / SB16; verb 11 stereo/16-bit on those | convert to 8-bit mono at `R/d` (§123.6) |
+| capture | verb 4, Sound Blaster only (`SND_CAP_PCM_IN`), 8-bit mono, 4,000–15,000 Hz (13,000 on DSP 1.x); **linear into ONE grant, ≤ 20 KB** ("input has no ring mode"); drained by a kernel task that a disk transfer stalls | a driver extension: verb 4 with `SND_OPENF_EXT` (§123.7) |
 | capture gain / source | SOUND.DRV's mixer verbs (§34.15) set output volumes and never write the recording route; SB 2.0 records the mic only | digital gain, labelled; source fixed and greyed |
 | full duplex | none: one stream record, either direction | no monitoring; Record and Play exclusive |
 | file I/O | `FILE_READ_AT` (any offset), `FILE_WRITE_SEQ` (streaming append, kern_big), `FILE_WRITE_AT` (cluster-aligned offset), `FILE_WRITE`, `RENAME`, `DELETE`, `DFREE`; UI task only (§20.6 rule 7) | worker never touches a file; temp + rename for Save |
@@ -86,7 +86,7 @@ drop-down), §18.4.7–18.4.9 (read-at, write-at, the streaming append).
 | bss | ≤ 4 KB | state only; buffers are claims |
 | heap, idle with a document | ~8–16 KB | the coarse envelope (≤ 8 KB stereo), the view cache, the undo snapshots (~5 KB) |
 | heap, playing | + 32 KB look-ahead (16 KB tier) + SOUND.DRV's 16 KB ring grant (8 KB tier) | Audio's numbers |
-| heap, recording | + 32 KB DMA ring (16 / 8 KB tiers) | §122.7 |
+| heap, recording | + 32 KB DMA ring (16 / 8 KB tiers) | §123.7 |
 | the waveform band | ~9 KB claim | 600 x 120 at 1bpp |
 
 The XTMP3 400 KB budget does not apply. A 256 KB XT with a card should be
@@ -121,7 +121,7 @@ Built: `apps/waverack/` (`waverack.asm`, `wrdraw.inc`, `wrface.inc`),
 `tools/os88wrart.py` (pictures, fonts, the meter's dB table, the role tables)
 and `tools/os88wrlay.py` (the three layouts as data, and their measurement).
 Image 16,310 bytes, packed 11,646, bss 1,414; a 7 KB waveform band claimed at
-entry. SPEC.md §122.11–§122.13 are marked shipped with these figures.
+entry. SPEC.md §123.11–§123.13 are marked shipped with these figures.
 
 Seen on the glass (QEMU): FULL on VGA in both themes, MID on EGA (`VIDEO=ega`),
 COMPACT on CGA (`VIDEO=cga`) and on VGA through View > Compact Layout. The
@@ -207,14 +207,14 @@ there is at most 22 characters (`STATUS_MAX`), COMPACT's status field.
 
 ## Wave 2 — the document (US-04): what shipped and what was seen
 
-Built: `apps/waverack/wrwav.inc` (the RIFF walk, SPEC.md §122.4),
-`wrdoc.inc` (sources, the piece table, 32-bit arithmetic, `wo_read`, §122.3),
+Built: `apps/waverack/wrwav.inc` (the RIFF walk, SPEC.md §123.4),
+`wrdoc.inc` (sources, the piece table, 32-bit arithmetic, `wo_read`, §123.3),
 `wrenv.inc` (the scan, the view and its cache, refinement, the ruler, the
-lanes, the overview, the cursor, §122.5); `tools/wrsim.py` (the reference and
+lanes, the overview, the cursor, §123.5); `tools/wrsim.py` (the reference and
 the fixture generator); `make waverackfix` (`build/wrfix.img`, on demand);
 the fast row `wrsim` (`tests/unit/t_wrsim.py`) and the soak row `waverack`
 (`tests/waverack.py`). Also in this wave: a greyed key on a 1bpp face keeps
-its caption solid, dithers its picture and dots its frame (§122.11).
+its caption solid, dithers its picture and dots its frame (§123.11).
 
 Measured: image 25,010 bytes (16,310 in wave 1), packed 18,926 (19
 clusters), bss 2,525. Heap: the band 10 KB from entry; with a document open
@@ -386,10 +386,10 @@ rc=0
 
 ## Wave 3 — the transport (US-05, US-08, US-07's playback half): what shipped and what was seen
 
-Built: `apps/waverack/wrxport.inc` (`wt_`, §122.6: the state machine, the
+Built: `apps/waverack/wrxport.inc` (`wt_`, §123.6: the state machine, the
 look-ahead and its copying fill, the worker, the conversion, VOLUME, the
 playhead, the meter's state); the selection model and its class-aware runs
-in `wrenv.inc` (§122.9); the line, the meter's mask diff, the selection
+in `wrenv.inc` (§123.9); the line, the meter's mask diff, the selection
 element `wf_e_wsel` and the selection field in `wrface.inc`; the
 predicate, the keys, the gestures, `OSAPI_WM_ONWAKE` and the close
 negotiator in `waverack.asm`; `tools/wrsim.py`'s playback reference and two
@@ -425,12 +425,12 @@ white FULL, VGA black and white COMPACT, and COMPACT on the CGA knob tree
 **The 360 KB disk (an open owner decision).** `media360.img` was 354 of 354
 clusters after wave 2 and wave 3's package does not fit beside the rest, so
 WaveRack is OFF it, dated 2026-10-26 in the Makefile (`MEDIAARGS360`) and in
-§122.13; without it the disk is 335 of 354. **No 360 KB disk carries
+§123.13; without it the disk is 335 of 354. **No 360 KB disk carries
 WaveRack now.** A 360 KB home for it - a disk of its own, or a curation that
 moves something else off `media360.img` - is the owner's to decide; nothing
 else was moved.
 
-Deviations, each written into §122: the pinned status sentences that do not
+Deviations, each written into §123: the pinned status sentences that do not
 fit COMPACT's 22 characters are shortened (`Out 22,050 Hz mono /2`, `Card
 needs 4,000+ Hz`); the black-and-white selection is the band inverted for
 its blit rather than a dither (a dither cannot be a blit's paper); Loop is
@@ -452,14 +452,14 @@ negative only from C000_0000h up, so a step past the end of a document over
 a floppy); **L2** a scan read that delivers nothing short of the source's
 frames refuses the document with `Cannot read the file` instead of ending
 silently over unscanned blocks (code-read; nothing here shortens a READ_AT);
-**L3** §122.5 says `ceil(frames / B)` and LONG.WAV's 1,124 blocks.
+**L3** §123.5 says `ceil(frames / B)` and LONG.WAV's 1,124 blocks.
 
 The soak row, run once at the end (`python3 tools/os88test.py soak -v -k
 waverackplay`). Its FIRST run failed in the test (bytes handed to numpy as
 an int list) and at one real check - PEAK never lit for STEREO16's
 one-sample spike, because the meter read only the half sounding every three
 ticks and a 93 ms half fell between two looks; the meter now takes every
-half played since its last look for the hold and PEAK (§122.8). The second
+half played since its last look for the hold and PEAK (§123.8). The second
 run, on the build before the review's five fixes (which touch the reader and
 the view, not the transport):
 

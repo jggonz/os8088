@@ -447,7 +447,7 @@ FAST = [
                "build/recorder.o88", "build/DOSHELLO.COM",
                "build/DOSHMA.COM")),
     Row("wrsim", "fast", py("tests/unit/t_wrsim.py"), 0.2,
-        "WaveRack's host reference (SPEC.md 122.3-122.5, tools/wrsim.py): "
+        "WaveRack's host reference (SPEC.md 123.3-123.5, tools/wrsim.py): "
         "every fixture the soak row opens parses to its expectation - "
         "tones, impulses, stereo 16-bit, odd and unknown chunks, data "
         "before fmt, the extensible format, clamped, floored and unfinished "
@@ -479,7 +479,7 @@ FAST = [
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
     Row("waverack", "soak", py("tests/waverack.py"), 150.0,
-        "WaveRack's document (SPEC.md 122.3-122.5) on QEMU, because what "
+        "WaveRack's document (SPEC.md 123.3-123.5) on QEMU, because what "
         "is asserted is behaviour: every tools/wrsim.py fixture on `make "
         "waverackfix`'s floppy opened through File > Open and the Standard "
         "File dialog's own rows; the bss read by the package's map and held "
@@ -494,7 +494,7 @@ FAST = [
         needs=("qemu", "nasm", "pil"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin")),
     Row("waverackplay", "soak", py("tests/waverackplay.py"), 420.0,
-        "WaveRack's transport (SPEC.md 122.6, 122.8, 122.9) on QEMU's SB16, "
+        "WaveRack's transport (SPEC.md 123.6, 123.8, 123.9) on QEMU's SB16, "
         "its output captured by the wav audiodev at the rate the card plays "
         "and each play a slice held to tools/wrsim.py's convert(): "
         "STEREO16.WAV (16-bit stereo, the high byte and the average, VOLUME "

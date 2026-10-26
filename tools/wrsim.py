@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wrsim.py - WaveRack's host REFERENCE (SPEC.md 122.3-122.5): htmsim's and
+"""wrsim.py - WaveRack's host REFERENCE (SPEC.md 123.3-123.5): htmsim's and
 weavesim's role for apps/waverack.
 
     python3 tools/wrsim.py --selfcheck [--quiet]   # the fast row
@@ -9,13 +9,13 @@ weavesim's role for apps/waverack.
 Three things live here, and the 8086 code is held to each:
 
   THE READER   parse(bytes) walks a RIFF/WAVE file exactly as wrwav.inc does
-               (SPEC.md 122.4): any chunk order, the odd-length pad byte,
+               (SPEC.md 123.4): any chunk order, the odd-length pad byte,
                unknown chunks skipped, at most WW_NCHUNK = 64 chunks, every
                length checked against the file before it is trusted, and
                every refusal its own CODE - the same numbers the package
                leaves in its bss ([ww_err]), so tests/waverack.py compares
                the guest with this file field for field.
-  THE ENVELOPE envelope(...) is SPEC.md 122.5's coarse envelope: the block
+  THE ENVELOPE envelope(...) is SPEC.md 123.5's coarse envelope: the block
                B = the smallest power of two >= 16 with ceil(frames / B) <=
                2,048, and per block and channel the minimum and maximum as
                signed 8-bit (an 8-bit sample - 80h; a 16-bit sample's high
@@ -24,13 +24,13 @@ Three things live here, and the 8086 code is held to each:
                each column's span stretched to the previous column's last
                value (the trace is a line, not dots).
   PLAYBACK     out_rate(), vtab(), mono(), convert() and play_pos() are
-               SPEC.md 122.6's conversion and transport arithmetic: the
+               SPEC.md 123.6's conversion and transport arithmetic: the
                divisor d (the smallest whole number that brings the rate to
                the card's ceiling), the box filter of d frames, a 16-bit
                sample's high byte, the stereo average, the VOLUME table, and
                the frame a played count stands for - through the first lap
                and every loop after it. sel_text() is the selection field
-               (SPEC.md 122.9). tests/waverackplay.py holds the captured
+               (SPEC.md 123.9). tests/waverackplay.py holds the captured
                output of QEMU's SB16 to convert(), sample for sample.
   THE FIXTURES fixtures() makes every WAV the soak row opens: tones,
                impulses (single-sample spikes a coarse envelope MUST show),
@@ -54,7 +54,7 @@ import sys
 import wave
 
 WW_NCHUNK = 64          # chunks the walk reads before it refuses
-ENV_MAXBLK = 2048       # SPEC.md 122.5
+ENV_MAXBLK = 2048       # SPEC.md 123.5
 ENV_MINSHIFT = 4        # B >= 16
 
 # --- the refusal codes ([ww_err]) and their status sentences (<= 22 chars,
@@ -199,7 +199,7 @@ def sentence(r):
 # THE ENVELOPE AND THE VIEW (wrenv.inc)
 # =============================================================================
 def samples(data, r):
-    """Per channel, the signed 8-bit view of every frame (SPEC.md 122.5)."""
+    """Per channel, the signed 8-bit view of every frame (SPEC.md 123.5)."""
     raw = data[r["dataoff"]:r["dataoff"] + r["datalen"]]
     ch, bits = r["ch"], r["bits"]
     if bits == 8:
@@ -270,7 +270,7 @@ def columns(chans, env, s, frames, first, z, ww):
 
 
 # =============================================================================
-# PLAYBACK AND SELECTION (wrxport.inc, SPEC.md 122.6, 122.9)
+# PLAYBACK AND SELECTION (wrxport.inc, SPEC.md 123.6, 123.9)
 # =============================================================================
 CEIL, CEIL_HI, MIN_OUT = 22222, 44100, 4000     # the card; the refusal
 
@@ -334,7 +334,7 @@ def lap_end(sp, r1, frames):
 
 
 def play_pos(F, sp, e1, r0, r1, loop):
-    """the document frame F frames into a play stands at (SPEC.md 122.6):
+    """the document frame F frames into a play stands at (SPEC.md 123.6):
     SP + F through the first lap, then [R0, R1) round and round - or, not
     looping, the lap's end"""
     if F < e1 - sp:
@@ -345,7 +345,7 @@ def play_pos(F, sp, e1, r0, r1, loop):
 
 
 def sel_text(s, e, rate):
-    """the selection field's value (SPEC.md 122.9): `SS.cc - SS.cc` while
+    """the selection field's value (SPEC.md 123.9): `SS.cc - SS.cc` while
     the end is under a minute, `M:SS.c - M:SS.c` from there; '' for none"""
     if s >= e:
         return ""
@@ -633,7 +633,7 @@ def selfcheck(quiet=False):
     ok((r["frames"] + (1 << s) - 1) >> s <= ENV_MAXBLK and
        (r["frames"] + (1 << (s - 1)) - 1) >> (s - 1) > ENV_MAXBLK,
        "LONG: B is the smallest that fits 2,048 blocks")
-    # --- playback (SPEC.md 122.6): the divisor, the refusal, the table
+    # --- playback (SPEC.md 123.6): the divisor, the refusal, the table
     for rate, hi, want in ((8000, 0, (1, 8000)), (11025, 0, (1, 11025)),
                            (22050, 0, (1, 22050)), (22222, 0, (1, 22222)),
                            (22223, 0, (2, 11111)), (44100, 0, (2, 22050)),

@@ -6303,7 +6303,7 @@ $(BUILD)/cdrack.bin: apps/cdrack/cdrack.asm apps/cdrack/crdraw.inc \
 $(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/cdrack.bin -o $@
 
-# WAVERACK (SPEC.md 122): the sound recorder, WAV player and waveform editor,
+# WAVERACK (SPEC.md 123): the sound recorder, WAV player and waveform editor,
 # a retro-face package in CDRack's shape. build/wrart.inc is its pictures,
 # fonts, meter table, role tables AND its three layouts as data, made by
 # tools/os88wrart.py with tools/os88wrlay.py - after the --selfcheck, which
@@ -13623,7 +13623,7 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/video.o88 \
              $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88 \
              $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88
-# WAVERACK (SPEC.md 122.2) is the AUDIO row's omission: it plays and records
+# WAVERACK (SPEC.md 123.2) is the AUDIO row's omission: it plays and records
 # through SOUND.DRV's stream (SPEC.md 34.5), which kern_small does not load,
 # so with no card tier it would be an editor whose every sound key is grey
 # on every machine the small disks are for.
@@ -15122,7 +15122,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
               $(BUILD)/timer.o88 $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88 \
               $(BUILD)/waverack.o88
-# WAVERACK.O88 (SPEC.md 122.13) is in this list, so it reaches every apps
+# WAVERACK.O88 (SPEC.md 123.13) is in this list, so it reaches every apps
 # disk but the 360KB one, the everything set and the live media. Three sites
 # take it OFF again: APPS_TOOLS_360 (the media disk carries it at that
 # geometry, MIDIRack's and XTMP3's ground), $(SMALLOMIT) (SOUND.DRV, a
@@ -15781,7 +15781,7 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # single song. `make xtmp3disk`'s 720KB floppy carries it with all three demo
 # songs, and it is the obvious candidate for the third 720KB disk above - the
 # owner's call, like that disk's contents.
-# ...AND WAVERACK IS NOT ON IT (SPEC.md 122.13, 24.6.1's rule, dated
+# ...AND WAVERACK IS NOT ON IT (SPEC.md 123.13, 24.6.1's rule, dated
 # 2026-10-25): its first wave alone is 12 clusters and took this disk from
 # 701 to 713 of 713 - the last cluster - before a single later wave of it
 # exists. Every other apps disk carries it, and media360.img at 360KB.
@@ -15832,7 +15832,7 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
 #
-# ...AND WAVERACK HAS LEFT IT (SPEC.md 122.13, 24.6.1's rule, dated
+# ...AND WAVERACK HAS LEFT IT (SPEC.md 123.13, 24.6.1's rule, dated
 # 2026-10-26): wave 2 took the disk to 354 of 354 clusters and wave 3's
 # transport grows the package past what is left, so no 360KB disk carries
 # WaveRack at this date. A 360KB home for it - a disk of its own, or a curation
@@ -16846,7 +16846,7 @@ imager:
 # WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
 # chat client is the network disk's subject, and network360.img carries it.
 #
-# WAVERACK (SPEC.md 122.13) goes on APPS360's ground, added 2026-10-25: a
+# WAVERACK (SPEC.md 123.13) goes on APPS360's ground, added 2026-10-25: a
 # recorder and editor and not a calibration instrument. media360.img carried
 # it at this geometry until 2026-10-26, when wave 3 outgrew that disk too
 # (MEDIAARGS360's note): no 360KB disk carries it now, an open decision.

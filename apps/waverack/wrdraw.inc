@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/waverack/wrdraw.inc - WaveRack's drawing primitives
-;          (SPEC.md 122.11; apps/cdrack/crdraw.inc's shape, SPEC.md 119.6.3)
+;          (SPEC.md 123.11; apps/cdrack/crdraw.inc's shape, SPEC.md 119.6.3)
 ;
 ; Everything WaveRack puts on the glass goes through these, so a THEME is one
 ; table: a primitive is handed a ROLE (R_*), never a colour, and looks it up

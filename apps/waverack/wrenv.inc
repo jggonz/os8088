@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/waverack/wrenv.inc - the waveform (SPEC.md 122.5)
+; os8088 - apps/waverack/wrenv.inc - the waveform (SPEC.md 123.5)
 ;
 ; A COARSE ENVELOPE PER SOURCE: the block B is the smallest power of two
 ; >= 16 frames for which ceil(frames / B) <= 2,048, and each block stores,
@@ -37,7 +37,7 @@ WE_CMAX     equ 640                 ; columns it holds (COMPACT's 615 fit)
 WE_EXACT    equ WE_CMAX * 4         ; its exact bytes
 WE_YTAB     equ WE_EXACT + WE_CMAX  ; the 256-entry value -> row table
 WE_GULP     equ 16384               ; a scan's read
-WE_REFINE   equ 8192                ; a refinement's read (SPEC.md 122.5)
+WE_REFINE   equ 8192                ; a refinement's read (SPEC.md 123.5)
 WE_NGX      equ 16                  ; the ruler's majors a view can hold
 WE_LBLGAP   equ 56                  ; labels at least this far apart
 WE_EMPTY    equ 0x807F              ; a min/max pair with nothing in it
@@ -236,7 +236,7 @@ we_clamp:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; we_envsize - the envelope for [wo_frames] (SPEC.md 122.5)
+; we_envsize - the envelope for [wo_frames] (SPEC.md 123.5)
 ; out: CL = the block shift, BX = the blocks, AX = the claim in KB (0: an
 ;      empty sound, no claim). clobbers CH, DX
 ; -----------------------------------------------------------------------------
@@ -1097,7 +1097,7 @@ we_zoom:
     jmp we_moved
 
 ; we_anchor - DX:AX = the cursor's frame - the PLAYHEAD's while the transport
-; holds a play (SPEC.md 122.5) - and CX = its column when it is in view, else
+; holds a play (SPEC.md 123.5) - and CX = its column when it is in view, else
 ; the view's middle frame and column. clobbers BX
 we_anchor:
     mov ax, [wo_cur]
@@ -1545,7 +1545,7 @@ we_blit:
 ; we_putcols - the lanes' columns CX..DI from the band onto the glass, as RUNS
 ;              of one CLASS each (we_lcls): in black and white a run outside
 ;              the selection is one call and one inside it is the band
-;              INVERTED for that call (SPEC.md 122.9); in colour a run
+;              INVERTED for that call (SPEC.md 123.9); in colour a run
 ;              between the grid's columns is one call, a grid column one
 ;              whose paper is the grid's (so a trace crossing it keeps its
 ;              own colour), the selection one on its own ground, and each of
@@ -2562,7 +2562,7 @@ we_ofx:
     ret
 
 ; =============================================================================
-; THE SELECTION (SPEC.md 122.9): [s, e) in frames, clamped to the document;
+; THE SELECTION (SPEC.md 123.9): [s, e) in frames, clamped to the document;
 ; s = e is none and leaves the cursor where it is. A non-empty selection puts
 ; the cursor at s. [wo_anc] is the end a drag or Shift holds still.
 ; =============================================================================
@@ -3054,7 +3054,7 @@ we_linecol:
     ret
 
 ; -----------------------------------------------------------------------------
-; we_seltext - the selection field's value at DI (SPEC.md 122.9): 'SS.cc -
+; we_seltext - the selection field's value at DI (SPEC.md 123.9): 'SS.cc -
 ;              SS.cc' while its end is under a minute, 'M:SS.c - M:SS.c'
 ;              from there; nothing with none (tools/wrsim.py's sel_text).
 ;              out DI past it. clobbers AX, CX, DX
