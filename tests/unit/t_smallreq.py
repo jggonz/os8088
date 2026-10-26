@@ -115,6 +115,8 @@ FORBIDDEN = {
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "MIXER.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34.15)",
+    "WAVERACK.O88": "SOUND.DRV is in no small driver set (SPEC.md 24.5, "
+                    "122.2)",
     "MIDIRACK.O88": "SOUND.DRV is in no small driver set, and its speaker "
                     "synth is an FSXF_RATE bracket (SPEC.md 24.5, 105)",
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse

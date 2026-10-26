@@ -219030,7 +219030,7 @@ third-party audio in them.
 
 ## 122. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
 
-**Status: PINNED, not shipped.** Every subsection below is the contract the
+**Status: PINNED; wave 1 (the face) SHIPPED - §122.11 to §122.13.** Every subsection below is the contract the
 implementation is written against; each says *(pinned)* until the wave that
 builds it marks it *(shipped)* with what was measured. The delivery record is
 `docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
@@ -219050,7 +219050,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 §122.7 is the one driver extension it needs. Pure NASM, for Audio's reason
 (§86): the C SDK does not wrap the stream verbs.
 
-### 122.1 Files and prefixes (pinned)
+### 122.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc)
 
 | file | holds | prefix |
 |---|---|---|
@@ -219063,7 +219063,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 | `wrplay.inc` | the transport state machine, the look-ahead, the worker, conversion, volume, the meter | `wt_` |
 | `wrrec.inc` | capture: the external record ring, the take file, gain, the recovery marker | `wc_` |
 | `wrsave.inc` | Save, Save As, Save Selection As, the temp file and the replace | `ws_` |
-| `build/wrart.inc` | the pictures and fonts, made by `tools/os88wrart.py` (§122.11) | `wrart_`, `WRART_` |
+| `build/wrart.inc` | the pictures, fonts, meter table, role tables and the three layouts as data, made and measured by `tools/os88wrart.py` with `tools/os88wrlay.py` (§122.11) | `wrart_`, `WRART_`, `WL_`, `WO_`, `R_`, `B_` |
 
 ### 122.2 What the machine can do, and what the face says when it cannot (pinned)
 
@@ -219072,10 +219072,18 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 | capability | needs | without it |
 |---|---|---|
 | open, inspect, edit, save | nothing | always available |
-| play | `SND_CAP_PCM_BG` - SOUND.DRV's Sound Blaster tier | Play, Pause and the loop audition grey; the status bar says `No sound card - playback needs a Sound Blaster` |
+| play | `SND_CAP_PCM_BG` - SOUND.DRV's Sound Blaster tier | Play, Pause and the loop audition grey; a press on one says `Needs a Sound Blaster` on the status bar |
 | record, long take | `SND_CAP_PCM_IN` and the external record ring (§122.7) - an auto-init DSP, 2.00 or later | - |
 | record, short take | `SND_CAP_PCM_IN` on a DSP 1.x (verb 4 refuses the external ring with 7) | a take is one grant, `20 KB` at most (§34.6.3): the status bar names the limit in seconds before Record |
-| record at all | `SND_CAP_PCM_IN` | Record greys; the status bar says `No capture device` |
+| record at all | `SND_CAP_PCM_IN` | Record greys; a press on it says `No capture device` |
+
+**Every status message is at most 22 characters** - COMPACT's status field
+holds 22 (tools/os88wrlay.py `STATUS_MAX`, which the layout measurement
+holds the field to). A press on any greyed control says why there (§47 rule
+6): the capability above, `Nothing to stop`, `Only one choice here` (a greyed drop-down), `One color on screen` (Theme on
+a 1bpp display), `Screen too small` (Full Layout where MID does not fit), or
+`Not in this build yet` for a command a later wave builds *(shipped, wave
+1)*.
 
 A machine with no card keeps a complete editor: it opens, edits, saves and
 draws every waveform; it does not pretend to play. PC speaker and Covox
@@ -219356,69 +219364,147 @@ and any clipboard pieces that named the old file, because that file no
 longer exists. The status bar says so. The format is preserved: this
 delivery offers no conversion on save.
 
-### 122.11 The face: layouts, themes, art (pinned)
+### 122.11 The face: layouts, themes, art (shipped, wave 1)
 
-| layout | content | where | what is on it |
-|---|---|---|---|
-| FULL | 608 x 400 | a VGA's 480 lines | the logo strip, the LCD, the LEVEL bar over INPUT GAIN, nine transport keys, the waveform with its ruler, the overview, the edit row, the format row, the grille, VOLUME and the status bar |
-| MID | 608 x 272 | EGA's 350 and Hercules' 348 | FULL without the logo strip and grille; shorter LCD digits, keys and waveform; the edit and format rows as two |
-| COMPACT | 624 x 132 | the CGA's 200 | the mockup's shallow layout: the LCD top left, the meter over the gain top right, one row of keys, the waveform and overview, and the footer as TWO rows - selection, Loop, Trim, Delete, Save As; then Input, rate, bits, channels, VOLUME, status |
+| layout | content | window | where | what is on it |
+|---|---|---|---|---|
+| FULL | 608 x 400 | 610 x 419 | a VGA's 480 lines | the logo strip (screws, `WaveRack`, `DIGITAL SOUND RECORDER`), the LCD, the LEVEL bar over INPUT GAIN, eight keys (Record, Stop, Pause, Play, Open, Save, Zoom -, Zoom +), the waveform with its ruler, the overview, the edit row (selection, Trim, Delete, Save As), the format row (Loop, Input, rate, bits, channels), and the grille, VOLUME and the status bar |
+| MID | 608 x 272 | 610 x 291 | EGA's 350 and Hercules' 348 | FULL without the logo strip, the screws and the grille; 24-row LCD digits, 30-row keys, a 62-row waveform; the edit row, the format row and the VOLUME/status row as three rows of 16 |
+| COMPACT | 624 x 132 | 626 x 151 | the CGA's 200 | the mockup's shallow layout: the LCD top left (8.3 name, the format line in small caps, 16-row block digits), LEVEL over INPUT GAIN top right, one row of eight keys (a 7-row picture beside a small-caps caption), the waveform and overview, and the footer as TWO rows - selection, Loop, Trim, Delete, Save As; then Input, rate, bits, channels, VOLUME, status |
+
+**The layouts are data**, made by `tools/os88wrlay.py` (imported by
+`tools/os88wrart.py`) into `build/wrart.inc`: per layout a record of
+coordinates (`WL_*`), an op list of the static parts (`WO_*`: raised and
+sunken panels, grooves, rules, small caps, system-font labels, pictures, the
+grille, the meter's dark cells), the element list, and the keys' rects,
+pictures and captions. `wrface.inc` interprets them and writes no coordinate
+of its own. `--selfcheck` - in the `make` rule, before the include is written
+- MEASURES them: every rect inside its content box; no two controls (a key, a
+slider, a drop-down, the Loop box, a field, the LCD, the meter's well, the
+waveform, the overview) overlapping; every static label, picture and rule
+clear of every control unless declared inside one; every element's text
+inside its container at 8 px a system-font character and 6 px a small-caps
+one; every key's picture and caption, every drop-down's longest item (4 px +
+8 a character + the 12 px arrow cell) and every field's longest text fitting;
+each window inside the screen it was cut for with the menu bar, the dock and
+the title bar counted. Its report is in docs/plans/WAVERACK-PLAN.md (US-03).
 
 The layout is chosen at every full paint from `OSAPI_WM_GEOM`'s content box
 (the largest that fits) and the window sized by an `OSAPI_WM_PREFER` table,
-exactly as §119.6.2; View > Compact / Full resizes. Colour is the default
-where the window's display has more than one bit; View > Theme switches it,
-and is grey on a 1bpp display, which is black and white whatever was chosen.
+exactly as §119.6.2; View > Compact Layout / Full Layout resizes with
+`OSAPI_WM_RESIZE` (Full Layout greys where MID does not fit the display).
+Colour is the default where the window's display has more than one bit;
+View > Theme switches it, and is grey on a 1bpp display, which is black and
+white whatever was chosen.
 
 | role | colour | black and white |
 |---|---|---|
-| faceplate | light grey, rules dark grey and white (a bevel) | white, rules black |
+| faceplate | light grey; raised panels lit white top-left, shaded dark grey bottom-right; grooves dark grey and white | white; panels and wells ruled black; grooves one black rule |
 | LCD, waveform, overview ground | black | black |
-| time digits, waveform ink | light green | white |
-| filename, format line, ruler | light cyan / white | white |
-| selection ground | dark grey | a 25% dither under the wave |
-| selection handles and edges | light cyan | white, dashed |
-| playhead | yellow | white |
-| LED cells | green / yellow / red, dark grey when off | lit white / outlined black / 50% dither for the hold |
-| keys | light grey faces, black pictures; Play latched green, Record's dot red | white faces; latched inverted |
+| time digits, waveform ink, the centre line | light green | white |
+| filename, format line, ruler, PEAK | light cyan | white |
+| the waveform's grid | dark grey dots, every other row | white dots, every fourth row |
+| selection ground | dark grey | a 50% dither under the wave (wave 3) |
+| selection handles and edges | light cyan | white (wave 3) |
+| playhead | yellow | white (wave 3) |
+| LED cells | green / yellow / red, dark grey when off | lit white / outlined white on the black glass when off |
+| keys | light grey faces, black frame and ink; latched black with light green ink; Record's dot red | white faces, black ink; latched inverted |
+| sliders | black groove, ticks and thumb outline; the thumb's face is the faceplate | the same in black on white |
+| selection field / status field | white / light grey, sunken | white, ruled |
+| drop-downs and the Loop box | os88ui's (§13.14) and the generated box picture: white box, black frame | the same |
 | disabled | dark grey ink | half the ink (a checkerboard, §47 rule 1) |
 
 **The art is generated**, `tools/os88wrart.py` from definitions in the
-script, CDRack's shape (§119.6.3): seven-segment digit sets for each
-layout's timer (mitre at FULL, block below 20 rows), a 5 x 7 small-caps face
-for panel labels and scale numbers, the logo, the transport and file
-pictures at 13 rows and at the CGA's 7, the speaker, the drop arrow, the
-screws, and the meter's dB table. `--selfcheck` runs in the `make` rule;
-`--png DIR` writes previews. No image is read and no service is asked.
-Window chrome and menus stay the OS's; panel text that is not small caps is
-the system font through `OSAPI_FONT_RUN` (§6.1).
+script, CDRack's shape (§119.6.3): three seven-segment digit sets made
+natively, `df` FULL's (18 x 32, mitre), `dm` MID's (14 x 24, BLOCK - a mitred
+24-row set's `1` inked 12 of 24 rows and the selfcheck refused it) and `dc`
+COMPACT's (14 x 16, block), each with the colon and the decimal point; a
+5 x 7 small-caps face with `( ) + , - . / :`; the `WaveRack` logo at 2x; the
+key pictures (record, stop, pause, play, open, save, minus, plus) at 13 rows
+and at the CGA's 7; the VOLUME speaker, the slider's quiet and loud ends,
+the screw and the check box; the package's 16 x 16 icon; and `wrart_db`, the
+meter's 129-byte table (§122.8), checked entry by entry against
+`20 log10`. The roles and both theme tables are emitted with them. `--png
+DIR` writes a preview of every picture and of each layout in each theme. No
+image is read and no service is asked. Window chrome and menus stay the
+OS's; panel text that is not small caps is the system font through
+`OSAPI_FONT_RUN` (§6.1). The drop-downs draw their own arrow, so the
+generator makes none.
 
-**Draw what changed** (§119.6.4): static parts at a full paint only; every
-changing field an element with a 16-bit key; the paint forgets the keys and
-runs the same elements; a clipped field is forgotten.
+**Draw what changed** (§119.6.4): static parts at a full paint only (the
+op list); every changing field an element with a 16-bit key - the filename,
+the time, the length, the format line, the meter's caption, its cells (only
+the run between the old length and the new), PEAK, both sliders, the
+waveform, the overview, the selection field, the status bar (keyed by its
+message's generation), the four drop-downs and the Loop box - 18 in all; the
+paint forgets the keys and runs the same elements; a clipped field is
+forgotten. A key is two calls in any state (a frame and one band); Record's
+red dot on the colour face is two bands that TILE the key's inside - the
+picture's part in red, the caption's in the key's ink - so no pixel is
+written twice. Each slider is one band (groove, ticks and the thumb's outline
+in the slider ink, the faceplate as paper). The waveform is composed in the
+WAVEFORM BAND (§122.5's claim, made at entry): the ruler, then the lanes
+above and below the centre line, then the centre line between them - four
+calls, no pixel twice; without the claim it is two fills and the line.
 
-### 122.12 Menus and keys (pinned)
+Verified on the glass: the identity check (a full repaint after Loop,
+VOLUME and the rate were changed through the face, PIL difference `None`)
+on VGA colour and across a layout round trip, and the faces in
+`docs/waverack/` (VGA colour and black and white FULL, EGA MID, CGA COMPACT).
+Hercules is the orchestrator's MartyPC look (QEMU cannot show it).
+
+### 122.12 Menus and keys (shipped, wave 1)
 
 **File**: New, Open..., Save, Save As..., Save Selection As..., Recover
 Take. **Edit**: Undo, Redo, Cut, Copy, Paste, Delete, Trim, Select All,
-Select None. **View**: Zoom In, Zoom Out, Fit, Compact / Full Layout, Theme.
-**Sound**: Play / Pause, Stop, Record, Loop: On / Off, Rate: 8,000 /
-11,025 Hz. About is the application menu's (`OSAPI_ABOUT_SET`); there is no
-Help menu and no check mark - a toggle names its state (§12.2).
+Select None. **View**: Zoom In, Zoom Out, Fit, Compact Layout / Full Layout,
+Theme: Color / Theme: Black and White. **Sound**: Play/Pause, Stop, Record,
+Loop: Off / Loop: On, Rate: 8,000 Hz / Rate: 11,025 Hz. About is the
+application menu's (`OSAPI_ABOUT_SET` and os88ui's card); there is no Help
+menu and no check mark - a toggle names its state (§12.2).
+
+**One predicate** (`wr_cmdok`, §47 rule 2): every key, menu item and
+keystroke names a command (`C_*`), and the predicate greys all three; a
+press on a greyed control - a key's release, a keystroke, a menu item - puts
+the reason on the status bar (§122.2). In wave 1 the commands that have state
+are live - Loop, Rate, Theme, the layout, INPUT GAIN and VOLUME - and every
+command a document, playback or capture needs is greyed, not faked.
 
 | key | does | key | does |
 |---|---|---|---|
 | Space | play / pause | R | record / pause the take |
-| S, Escape | stop (Escape also cancels a scan) | L | loop on / off |
+| S, Escape | stop (Escape also cancels a scan, and takes an open drop-down list down) | L | loop on / off |
 | Left / Right | cursor one column | Shift+Left/Right | extend the selection |
-| Home / End | to the start / end | `+` `-` | zoom in / out |
+| Home / End | to the start / end | `+` (or `=`) `-` | zoom in / out |
 | F | fit | Delete | delete the selection |
 | T | trim | U / Y | undo / redo |
 | X / C / V | cut / copy / paste | A | select all |
-| `[` `]` | volume down / up | `<` `>` | input gain down / up |
+| `[` `]` | volume down / up, 5% a press | `<` `>` (or `,` `.`) | input gain down / up, 2 dB a press |
 
-### 122.13 Where it ships, and what it costs (pinned)
+The wheel turns VOLUME. A slider is pressed and dragged (its own hit-test and
+drag, the value in bss), and says its value on the status bar (`Volume 75%`,
+`Input gain +4 dB`).
 
-To be measured and written here when it ships: image, packed file, bss, the
-heap claims while idle, playing and recording, the disks that carry it, and
-the sustained record and play rates on MartyPC's XT.
+**The format row** is four os88ui drop-downs (§13.14, the library's gesture:
+press, drag, release; or press, press): Input (`Microphone`, COMPACT `Mic`),
+Rate (`8,000 Hz` / `11,025 Hz`, COMPACT `8 kHz` / `11 kHz`), Bits (`8-bit`)
+and Channels (`Mono`). Input, Bits and Channels hold one choice each and are
+greyed (§122.7); Rate is live. While a list is open the key record has no
+keys (BT_N = 0), so a press on a list that covers a key is the list's.
+
+**`.WAV` is not claimed**: Audio owns the association (§86), and WaveRack
+opens a WAV through File > Open; `OSAPI_ARG_FILE` is accepted when the Open
+wave lands (§122.4).
+
+### 122.13 Where it ships, and what it costs (wave 1 measured)
+
+| | wave 1 |
+|---|---|
+| image | 16,310 bytes (`WAVERACK.O88`, lz4-packed to 11,646 - 12 clusters at 1 KB) |
+| bss | 1,414 bytes (state, the key and element caches, a 1 KB composing band) |
+| heap, idle | the waveform band, `WRL_BANDKB` = 7 KB (FULL's 588 x 94 lanes at 75 bytes a row), claimed at entry; plus os88ui's bank under an open drop-down list, for as long as it is open |
+| disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) |
+
+To be measured and written here as the later waves land: the heap claims
+while playing and recording, and the sustained record and play rates on
+MartyPC's XT.

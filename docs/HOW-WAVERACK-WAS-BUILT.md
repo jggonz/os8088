@@ -38,3 +38,89 @@ The emulators set the limits of what can be checked here: QEMU's Sound
 Blaster never raises a capture interrupt, and MartyPC's records a flat
 mid-scale value. Both are useful - one for "no input", the other for rates,
 counts and files - and neither is a microphone.
+
+## Wave 1 - the face (US-01, US-02, US-03)
+
+**What was built.** A real package, `WAVERACK.O88`, with all three layouts
+in both themes and every control drawn from real state - which, before the
+document wave, is an empty document: `NO FILE`, `00:00.00 / 00:00.00`, the
+next take's format on the LCD's bottom line, a dark meter, an empty
+selection field, and the waveform area showing only its ruler, grid and
+centre line. Everything a later wave builds - Open, Save, the edits, zoom,
+play, record - is greyed through ONE predicate, `wr_cmdok`, which a key, its
+menu item and its keystroke all ask; a press on a greyed control says why on
+the status bar (`Needs a Sound Blaster`, `No capture device`, `Not in this
+build yet`). What already has state works: Loop, the next take's rate (a
+real os88ui drop-down), INPUT GAIN and VOLUME (own hit-test and drag, `<`
+`>` and `[` `]`, the wheel), the theme and the layout.
+
+![FULL on a VGA, colour](waverack/waverack-vga-color-full.png)
+
+**The layouts became data.** CDRack's three layouts are numbers written into
+its asm, and it took three looks to get them right. WaveRack's are written
+once, in Python (`tools/os88wrlay.py`): every key, slider, drop-down, field,
+panel, label and picture, emitted as layout records and static-part op lists
+that the asm interprets (`wf_deco`). That moved the "does it fit" question
+to the host, where it is cheap: the generator's `--selfcheck`, in the make
+rule, MEASURES the layouts - no two controls overlap, every label is clear of
+every control, every caption and drop-down item fits at 8 px a system-font
+character and 6 px a small-caps one, and each window fits the screen it was
+cut for with the menu bar, the dock and the title bar counted. Its first run
+caught three things before any asm existed: COMPACT's edit-row keys were one
+row too shallow for a small-caps caption, a mitred 24-row digit set (MID's)
+whose `1` inked 12 of 24 rows - CDRack's own lesson, caught by CDRack's own
+check - and a logo letter whose rows were uneven. The previews (`--png`)
+rendered each layout in each theme as a rough picture to LOOK at before the
+asm was written; the real face matched them on the first boot.
+
+![MID on EGA](waverack/waverack-ega-mid.png)
+
+**The CGA's layout** is the mockup's shallow one at 624 x 132, the footer as
+two rows. On 2.4:1 pixels the 7-row pictures sit beside small-caps captions,
+the LCD's digits are 16-row block segments, and the drop-downs speak in short
+forms (`Mic`, `11 kHz`). Every control was clicked with `tools/mouse.py
+--screen 640x200`, and each answered: the greyed keys with their reasons,
+Loop with `Loop on`, the sliders with their values, the Rate list sliding up
+over its own box (os88ui's §13.14.2) and the pick reaching the LCD.
+
+![COMPACT on the CGA, 3x](waverack/waverack-cga-compact-3x.png)
+
+**Black and white** is the same face from the second role table: white
+faceplate, black rules, the LCD still black with white segments, the meter's
+dark cells outlined, greyed captions half their ink.
+
+![FULL in black and white](waverack/waverack-vga-bw-full.png)
+
+**What was discovered.**
+
+- *The generated include has to be two halves.* The icon must follow the
+  header, so its macro and every constant are needed before the first
+  instruction, while the pictures and layouts are data that belong at the
+  end. `build/wrart.inc` emits both under `%ifndef WRART_DATA` and is
+  included twice.
+- *Record's red dot without writing a pixel twice.* A key is one band and
+  one blit, and a blit has one ink. The red dot is two bands that TILE the
+  key's inside - rows (stacked) or columns (side by side) - the picture's
+  part in red and the caption's in the key's ink.
+- *A slider is one blit too*: groove, ticks and the thumb's outline in the
+  slider ink with the faceplate as paper, so the thumb's face is simply
+  paper and nothing under it is drawn twice.
+- *The waveform band*, the heap claim §122.5 sizes for the document wave,
+  is claimed at entry already (7 KB): the empty waveform's ruler and dotted
+  grid are composed in it and put down in three blits around the centre
+  line. Its x phase is composed in, because a 1bpp blit at an x off the byte
+  grid starts at the byte column holding x (§5.4.2.8, CDRack's lesson).
+- *A bug the boots found*: a View > Full Layout from the menu hung the UI
+  task, because `wr_menu` reused SI as the window after the command - and a
+  resize clobbers SI. The same shape was in the wheel handler. Both take the
+  window off the stack now.
+- *Disk space decided a disk.* Wave 1 alone took the 720 KB apps disk from
+  701 to 713 of 713 clusters, so that disk leaves WaveRack off (a dated
+  decision, §24.6.1); the media disk carries it at 360 KB.
+
+**What was measured.** Image 16,310 bytes, packed file 11,646, bss 1,414,
+the waveform band 7 KB. The identity check - change the face, force a full
+repaint, PIL difference `None` - held on VGA colour, VGA black and white and
+EGA, and across a COMPACT and back round trip on VGA. A relaunch after Close
+drew a face identical to the first launch. Hercules was not looked at here
+(QEMU cannot show it); that look is MartyPC's.

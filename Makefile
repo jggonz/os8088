@@ -6284,6 +6284,29 @@ $(BUILD)/cdrack.bin: apps/cdrack/cdrack.asm apps/cdrack/crdraw.inc \
 $(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/cdrack.bin -o $@
 
+# WAVERACK (SPEC.md 122): the sound recorder, WAV player and waveform editor,
+# a retro-face package in CDRack's shape. build/wrart.inc is its pictures,
+# fonts, meter table, role tables AND its three layouts as data, made by
+# tools/os88wrart.py with tools/os88wrlay.py - after the --selfcheck, which
+# also MEASURES the layouts (nothing overlaps, nothing leaves its box, every
+# caption fits, COMPACT fits a 640 x 200 screen), so a layout that broke one
+# of those never reaches a disk
+.PHONY: waverack
+waverack: $(BUILD)/waverack.o88
+$(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py | $(BUILD)
+	python3 tools/os88wrart.py --selfcheck --quiet
+	python3 tools/os88wrart.py --out $@
+
+$(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
+                       apps/waverack/wrface.inc $(BUILD)/wrart.inc \
+                       apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \
+		-o $@ apps/waverack/waverack.asm
+	@echo "waverack: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/waverack.o88: $(BUILD)/waverack.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/waverack.bin -o $@
+
 # XTMP3 (SPEC.md 121): the adaptive MP3 player. Its face is the retro-face
 # skill's (CDRack's shape): every picture and font is build/x3art.bin, a PART
 # of XTMP3.O88 (SPEC.md 20.12), and build/x3art.inc its labels' offsets and
@@ -13558,7 +13581,11 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/audio.o88 $(BUILD)/mixer.o88 $(BUILD)/sheet.o88 $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
              $(BUILD)/video.o88 \
              $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88 \
-             $(BUILD)/xtmp3.o88
+             $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88
+# WAVERACK (SPEC.md 122.2) is the AUDIO row's omission: it plays and records
+# through SOUND.DRV's stream (SPEC.md 34.5), which kern_small does not load,
+# so with no card tier it would be an editor whose every sound key is grey
+# on every machine the small disks are for.
 # XTMP3 (SPEC.md 121.12) is VIDEO's row and SHEET's at once. It streams:
 # OSAPI_FILE_READ_SEQ plays a track and OSAPI_FILE_WRITE_SEQ writes a decoded
 # one, and kern_small has neither (SPEC.md 18.4.8, 18.4.9), so the queue would
@@ -15052,7 +15079,14 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/wirechat.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
-              $(BUILD)/timer.o88 $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88
+              $(BUILD)/timer.o88 $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88 \
+              $(BUILD)/waverack.o88
+# WAVERACK.O88 (SPEC.md 122.13) is in this list, so it reaches every apps
+# disk but the 360KB one, the everything set and the live media. Three sites
+# take it OFF again: APPS_TOOLS_360 (the media disk carries it at that
+# geometry, MIDIRack's and XTMP3's ground), $(SMALLOMIT) (SOUND.DRV, a
+# requirement kern_small cannot meet) and $(COMBO_DROP) (not a calibration
+# instrument).
 # XTMP3.O88 (SPEC.md 121.12) is in this list, so it reaches the 1.44MB and
 # 1.2MB apps disks, the kern_mega apps disks (its PKG_MEGA arm), the
 # everything set and the live media. Four sites take it OFF again, each with
@@ -15642,7 +15676,8 @@ APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                     $(BUILD)/fractal.o88 $(BUILD)/piano.o88 \
                     $(BUILD)/wirechat.o88 $(BUILD)/mixer.o88 \
                     $(BUILD)/timer.o88 $(BUILD)/bounce.o88 \
-                    $(BUILD)/calc.o88 $(BUILD)/xtmp3.o88,$(APPS_TOOLS))
+                    $(BUILD)/calc.o88 $(BUILD)/xtmp3.o88 \
+                    $(BUILD)/waverack.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -15705,10 +15740,15 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # single song. `make xtmp3disk`'s 720KB floppy carries it with all three demo
 # songs, and it is the obvious candidate for the third 720KB disk above - the
 # owner's call, like that disk's contents.
-APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 \
+# ...AND WAVERACK IS NOT ON IT (SPEC.md 122.13, 24.6.1's rule, dated
+# 2026-10-25): its first wave alone is 12 clusters and took this disk from
+# 701 to 713 of 713 - the last cluster - before a single later wave of it
+# exists. Every other apps disk carries it, and media360.img at 360KB.
+APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
              $(RDG_SHIP) $(RDG_DEMO),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
                  APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
+                 APPS:$(BUILD)/waverack.o88 \
                  GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 # ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
@@ -15750,7 +15790,7 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
 # is in the folder the Open dialog already opens on whichever disk is in the
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
-MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
+MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
                 $(addprefix MEDIA:,$(MEDIA_DISK_DATA) $(XTMP3MP3_360)) \
                 $(LOGOVIDARG) $(MIDISONGARGS)
 
@@ -15829,7 +15869,7 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # leaves 20. The other two songs (69 and 50) did not fit beside it, and AFTER
 # HOURS is the one a 360KB machine - an XT, which converts first - is for.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
-                $(BUILD)/xtmp3.o88 $(XTMP3MP3_360) \
+                $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 $(XTMP3MP3_360) \
                 $(MIDISONGS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(MEDIAARGS360) \
 		--folder SYSTEM/APPDATA
@@ -16757,6 +16797,10 @@ imager:
 # WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
 # chat client is the network disk's subject, and network360.img carries it.
 #
+# WAVERACK (SPEC.md 122.13) goes on APPS360's ground, added 2026-10-25: a
+# recorder and editor and not a calibration instrument, and media360.img
+# carries it at this geometry.
+#
 # XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 97
 # clusters, a player and not a calibration instrument, and media360.img
 # carries it at this geometry. The 720KB and 1.44MB combos carry it.
@@ -16765,7 +16809,7 @@ COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
               $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
               $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
-              $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88
+              $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 

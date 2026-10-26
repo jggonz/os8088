@@ -22,9 +22,9 @@ the evidence column says what was actually seen.
 | ID | user outcome | depends on | status | evidence / commit |
 |---|---|---|---|---|
 | US-00 | The plan is reviewable in a draft PR before code | - | In progress | this file, SPEC §122, the draft PR |
-| US-01 | WaveRack installs and launches like any package; menus; clean close | US-00 | Planned | |
-| US-02 | The same WaveRack in colour and black and white | US-01 | Planned | |
-| US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Planned | |
+| US-01 | WaveRack installs and launches like any package; menus; clean close | US-00 | Implemented — verification pending | `WAVERACK.O88` on the 1.44/1.2 MB apps disks and media360.img; launched, menus, About, closed and relaunched on QEMU VGA (relaunch face identical to the first); `make`, `make KERN_SMALL=1` green; see Wave 1 below |
+| US-02 | The same WaveRack in colour and black and white | US-01 | Implemented — verification pending | `docs/waverack/waverack-vga-color-full.png`, `waverack-vga-bw-full.png`, `waverack-ega-mid.png`; identity check `None` on VGA colour, VGA B&W, EGA and across a layout round trip; Hercules not seen (QEMU cannot) |
+| US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Implemented — verification pending | `docs/waverack/waverack-cga-compact.png` (native 640 x 200) and `-3x.png`; all 15 controls clicked with `--screen 640x200`, each answered; the layout measurement below |
 | US-04 | Open a WAV and inspect it without loading it into RAM | US-01 | Planned | |
 | US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Planned | |
 | US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | Planned | |
@@ -114,6 +114,96 @@ and zoomed). It names the suite rows it adds or touches. **Soak rows and
 | US-10 | temp + rename; replace prompt; DFREE; cancel/failure leave the original; rebase after save-over; dirty close | reopen saved files with Python's `wave` module; a full scratch disk for disk-full; source preservation checked on the image |
 | US-11 | generated art with selfcheck; fonts complete; measured RAM/code/asset sizes; sustained record/play rates; redraw cost | `--selfcheck`; MartyPC cycle counts for a play and a take on the 5150; primitive-call counters; sizes from the build |
 | US-12 | docs, guide page, test matrix, screenshots, final gates | the guide lock; the soak union and `test-full` once |
+
+## Wave 1 — the face (US-01..US-03): what shipped and what was seen
+
+Built: `apps/waverack/` (`waverack.asm`, `wrdraw.inc`, `wrface.inc`),
+`tools/os88wrart.py` (pictures, fonts, the meter's dB table, the role tables)
+and `tools/os88wrlay.py` (the three layouts as data, and their measurement).
+Image 16,310 bytes, packed 11,646, bss 1,414; a 7 KB waveform band claimed at
+entry. SPEC.md §122.11–§122.13 are marked shipped with these figures.
+
+Seen on the glass (QEMU): FULL on VGA in both themes, MID on EGA (`VIDEO=ega`),
+COMPACT on CGA (`VIDEO=cga`) and on VGA through View > Compact Layout. The
+identity check (change the face through it, force a full repaint with the
+About card, PIL difference) was `None` on VGA colour, VGA black and white and
+EGA, and across COMPACT-and-back on VGA. On the CGA every control was clicked
+with `tools/mouse.py --screen 640x200`: the eight keys and the three edit
+keys answered with their reasons (`No capture device`, `Nothing to stop`,
+`Needs a Sound Blaster`, `Not in this build yet`), Loop with `Loop on`, INPUT
+GAIN and VOLUME with their values, the greyed Input drop-down with `Only one
+choice here`, and the Rate list opened, slid up over its box and its pick
+reached the LCD. Not seen: Hercules (QEMU cannot show it - MartyPC's look),
+86Box, real hardware.
+
+**The layout measurement** (`python3 tools/os88wrart.py --selfcheck`, run by
+the make rule before the include is written) - this is the brief's "measure
+every label, truncation rule, control rectangle and hit target":
+
+```
+FULL 608 x 400 (window 610 x 419 on a 640 x 480 screen):
+  24 controls, 27 static parts, 10 element texts - no overlap, all inside
+  key REC     64 x 42 inside, needs  39 x 25  (RECORD)
+  key STOP    64 x 42 inside, needs  27 x 25  (STOP)
+  key PAUSE   64 x 42 inside, needs  33 x 25  (PAUSE)
+  key PLAY    64 x 42 inside, needs  27 x 25  (PLAY)
+  key OPEN    64 x 42 inside, needs  27 x 25  (OPEN)
+  key SAVE    64 x 42 inside, needs  27 x 25  (SAVE)
+  key ZOUT    44 x 26 inside, needs  19 x 15  (i_minus)
+  key ZIN     44 x 26 inside, needs  19 x 15  (i_plus)
+  key TRIM   110 x 20 inside, needs  29 x  9  (TRIM)
+  key DEL    110 x 20 inside, needs  41 x  9  (DELETE)
+  key SAVEAS 102 x 20 inside, needs  65 x  9  (SAVE AS...)
+  drop IN    120 px, longest 'Microphone' needs  99
+  drop RATE  100 px, longest '11,025 Hz' needs  91
+  drop BITS   68 px, longest '8-bit'     needs  59
+  drop CH     70 px, longest 'Mono'      needs  51
+  selection field 29 chars, needs 25 ('Selection:  ' + 'SS.cc - SS.cc')
+  status field 34 chars, longest message 22
+MID 608 x 272 (window 610 x 291 on a 640 x 350 screen):
+  24 controls, 18 static parts, 10 element texts - no overlap, all inside
+  key REC     64 x 28 inside, needs  39 x 25  (RECORD)
+  key STOP    64 x 28 inside, needs  27 x 25  (STOP)
+  key PAUSE   64 x 28 inside, needs  33 x 25  (PAUSE)
+  key PLAY    64 x 28 inside, needs  27 x 25  (PLAY)
+  key OPEN    64 x 28 inside, needs  27 x 25  (OPEN)
+  key SAVE    64 x 28 inside, needs  27 x 25  (SAVE)
+  key ZOUT    44 x 22 inside, needs  19 x 15  (i_minus)
+  key ZIN     44 x 22 inside, needs  19 x 15  (i_plus)
+  key TRIM   110 x 14 inside, needs  29 x  9  (TRIM)
+  key DEL    110 x 14 inside, needs  41 x  9  (DELETE)
+  key SAVEAS 102 x 14 inside, needs  65 x  9  (SAVE AS...)
+  drop IN    120 px, longest 'Microphone' needs  99
+  drop RATE  100 px, longest '11,025 Hz' needs  91
+  drop BITS   68 px, longest '8-bit'     needs  59
+  drop CH     70 px, longest 'Mono'      needs  51
+  selection field 29 chars, needs 25 ('Selection:  ' + 'SS.cc - SS.cc')
+  status field 34 chars, longest message 22
+CMP 624 x 132 (window 626 x 151 on a 640 x 200 screen):
+  24 controls, 8 static parts, 10 element texts - no overlap, all inside
+  key REC     74 x 13 inside, needs  39 x  9  (REC)
+  key STOP    74 x 13 inside, needs  45 x  9  (STOP)
+  key PAUSE   74 x 13 inside, needs  51 x  9  (PAUSE)
+  key PLAY    74 x 13 inside, needs  45 x  9  (PLAY)
+  key OPEN    74 x 13 inside, needs  48 x  9  (OPEN)
+  key SAVE    74 x 13 inside, needs  45 x  9  (SAVE)
+  key ZOUT    44 x 13 inside, needs  19 x  9  (h_minus)
+  key ZIN     43 x 13 inside, needs  19 x  9  (h_plus)
+  key TRIM    54 x  9 inside, needs  29 x  9  (TRIM)
+  key DEL     62 x  9 inside, needs  41 x  9  (DELETE)
+  key SAVEAS  80 x  9 inside, needs  65 x  9  (SAVE AS...)
+  drop IN     52 px, longest 'Mic'       needs  43
+  drop RATE   72 px, longest '11 kHz'    needs  67
+  drop BITS   60 px, longest '8-bit'     needs  59
+  drop CH     52 px, longest 'Mono'      needs  51
+  selection field 19 chars, needs 18 ('Sel: ' + 'SS.cc - SS.cc')
+  status field 22 chars, longest message 22
+os88wrart: selfcheck ok
+```
+
+The truncation rule it holds the asm to: a field is padded or CUT to its
+character count (`wf_pad`, `wf_padc`), and every message the package can put
+there is at most 22 characters (`STATUS_MAX`), COMPACT's status field.
 
 ## Known risks
 
