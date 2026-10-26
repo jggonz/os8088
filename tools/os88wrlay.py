@@ -50,7 +50,8 @@ ROLES = [
     ('WAVE',      'CLGREEN', 'CWHITE'),   # the waveform's ink
     ('GRID',      'CDGRAY',  'CWHITE'),   # its grid (B&W: sparse dots)
     ('RULER',     'CLCYAN',  'CWHITE'),   # its ruler
-    ('SELBG',     'CDGRAY',  'P_DITHER'),  # a selection's ground (wave 3)
+    ('SELBG',     'CDGRAY',  'CWHITE'),   # a selection's ground (B&W: the
+                                          # span is the band INVERTED, wave 3)
     ('HANDLE',    'CLCYAN',  'CWHITE'),   # its handles and edges (wave 3)
     ('PLAYHEAD',  'CYELLOW', 'CWHITE'),   # (wave 3)
     ('LEDOFF',    'CDGRAY',  'CWHITE'),   # a dark cell (B&W: outlined)
@@ -108,7 +109,8 @@ FIELDS = [
 ELEMS = [('wf_e_fname', 0), ('wf_e_time', 0), ('wf_e_total', 0),
          ('wf_e_fmt', 0), ('wf_e_mcap', 0), ('wf_e_meter', 0),
          ('wf_e_peak', 0), ('wf_e_gain', 0), ('wf_e_vol', 0),
-         ('wf_e_wave', 0), ('wf_e_cur', 0), ('wf_e_ovw', 0), ('wf_e_sel', 0),
+         ('wf_e_wave', 0), ('wf_e_ovw', 0), ('wf_e_wsel', 0), ('wf_e_cur', 0),
+         ('wf_e_sel', 0),
          ('wf_e_stat', 0), ('wf_e_drop', 0), ('wf_e_drop', 1),
          ('wf_e_drop', 2), ('wf_e_drop', 3), ('wf_e_loop', 0)]
 
@@ -640,6 +642,13 @@ def emit(bm, art):
     for i, n in enumerate(DROP_N):
         out.append("WR_DROPN%d equ %d" % (i, n))
     out.append("WF_THUMB equ %d" % THUMB_W)
+    # each element's key slot (wrface.inc reaches its neighbours' by these)
+    seen = set()
+    for i, (p, _) in enumerate(ELEMS):
+        if p not in seen:
+            seen.add(p)
+            out.append("WRE_%s equ %d" % (p[5:].upper(), i))
+    out.append("WRE_N equ %d" % len(ELEMS))
     Ls = layouts(art, bm)
     band = 0
     for L in Ls:

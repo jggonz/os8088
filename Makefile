@@ -6319,6 +6319,7 @@ $(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py | $(BUILD)
 $(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
                        apps/waverack/wrface.inc apps/waverack/wrwav.inc \
                        apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
+                       apps/waverack/wrxport.inc \
                        $(BUILD)/wrart.inc apps/os88dec.inc \
                        apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \
@@ -15830,7 +15831,15 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
 # is in the folder the Open dialog already opens on whichever disk is in the
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
-MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
+#
+# ...AND WAVERACK HAS LEFT IT (SPEC.md 122.13, 24.6.1's rule, dated
+# 2026-10-26): wave 2 took the disk to 354 of 354 clusters and wave 3's
+# transport grows the package past what is left, so no 360KB disk carries
+# WaveRack at this date. A 360KB home for it - a disk of its own, or a curation
+# that moves something else - is an OPEN DECISION for the owner
+# (docs/plans/WAVERACK-PLAN.md); nothing else was moved to make room. The
+# 1.44MB and 1.2MB apps disks, the everything set and the live media carry it.
+MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
                 $(addprefix MEDIA:,$(MEDIA_DISK_DATA) $(XTMP3MP3_360)) \
                 $(LOGOVIDARG) $(MIDISONGARGS)
 
@@ -15909,7 +15918,7 @@ $(APPSIMG360): $(APPS360) tools/os88disk.py
 # leaves 20. The other two songs (69 and 50) did not fit beside it, and AFTER
 # HOURS is the one a 360KB machine - an XT, which converts first - is for.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
-                $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 $(XTMP3MP3_360) \
+                $(BUILD)/xtmp3.o88 $(XTMP3MP3_360) \
                 $(MIDISONGS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(MEDIAARGS360) \
 		--folder SYSTEM/APPDATA
@@ -16838,8 +16847,9 @@ imager:
 # chat client is the network disk's subject, and network360.img carries it.
 #
 # WAVERACK (SPEC.md 122.13) goes on APPS360's ground, added 2026-10-25: a
-# recorder and editor and not a calibration instrument, and media360.img
-# carries it at this geometry.
+# recorder and editor and not a calibration instrument. media360.img carried
+# it at this geometry until 2026-10-26, when wave 3 outgrew that disk too
+# (MEDIAARGS360's note): no 360KB disk carries it now, an open decision.
 #
 # XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 97
 # clusters, a player and not a calibration instrument, and media360.img

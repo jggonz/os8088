@@ -240,3 +240,130 @@ window below it repainted correctly.
 
 ![MID on Hercules](waverack/waverack-herc-mid.png)
 ![COMPACT on Hercules](waverack/waverack-herc-compact.png)
+
+## Wave 3 - the transport (US-05, US-08, US-07's playback half)
+
+**The story.** Play what is on the screen at the right pitch, pause and
+resume without a stutter, stop and find yourself where you began, drag a
+range and loop it until it is right - and see the level of what is playing
+while it plays.
+
+**The shape was Audio's, on purpose.** The Audio Player (§86) already
+streams a WAV through the Sound Blaster's ring stream: the UI task reads
+the disk into a look-ahead ring, a worker task converts out of it into the
+driver's ring grant, and the worker wakes the UI when the look-ahead runs
+low. WaveRack copies that shape, with one difference that matters: under it
+is a *document*, not a file - a piece table that later waves will cut and
+paste - so the fill reads document frames piece by piece through the reader
+wave 2 wrote, and copies them into the ring. The worker never sees a file,
+a piece or a loop; it sees a stream of frames.
+
+**A loop is just a refill position.** When the fill reaches the end of the
+region it carries on from the region's start in the same pass. The worker's
+box filter runs straight across the seam, so a looped selection plays
+seamlessly - and the soak row checks it by finding the selection's bytes
+repeated, sample for sample, in what QEMU's card actually played.
+
+**Pause closes the stream.** The obvious pause - stop feeding and let the
+driver underrun - plays out whatever is in the ring first: up to 16 KB, most
+of a second at 22 kHz. Instead Pause reads the exact played count (verb 9,
+the DMA's own progress), closes the stream and keeps the position; Play
+opens a new stream from it. Pause is immediate, nothing stale ever plays,
+and resume and seek become the same operation.
+
+![Playing LONG.WAV: LEVEL PLAY lit, the Play key latched, the output on the status bar](waverack/waverack-w3-play.png)
+
+**The output is what the card takes, and the status bar says so.** An
+8-bit mono stream at `R / d`, `d` the smallest whole number that brings the
+rate under the card's ceiling: a 44.1 kHz file on an old Sound Blaster
+plays at 22,050 Hz through a two-frame box filter and the status bar reads
+`Out 22,050 Hz mono /2`. A 16-bit sample gives its high byte, a stereo pair
+its average, and VOLUME is a 256-byte table the worker passes every byte
+through - the document never changes. `tools/wrsim.py` grew the same
+conversion in Python, and the soak row holds the captured output to it.
+
+**The playhead is a number first.** It is derived from the played count -
+`n` output samples are `n x d` frames into the play, then round the loop -
+and drawn the way wave 2 drew the cursor: the column it left put back from
+the band, the line drawn again. The view pages when the playhead leaves it,
+rather than scrolling every tick.
+
+![Zoomed in while playing: the view paged to follow the playhead](waverack/waverack-w3-play-zoom.png)
+
+![Paused: the Pause key latched, the playhead held, LEVEL PLAY dark](waverack/waverack-w3-paused.png)
+
+**Selecting without repainting.** A drag changes the selection on every
+mouse move, and redrawing the waveform for each would be ~20 blits a move.
+So the lanes and the overview are now put down as *runs of one class each*:
+outside the selection, inside it, its edges, the grid's columns. A change
+redraws only the columns between where the edges were and where they are -
+measured with a counter build at five or six drawing calls a move. In
+colour the selection is the trace on a dark grey ground with cyan edges; in
+black and white a dither cannot be a blit's paper, so the span is the band
+turned over for its one blit and turned back - an inverted span.
+
+![A selection in colour: the trace on its own ground, cyan edges, its extent in the overview](waverack/waverack-w3-sel-col.png)
+
+![The same in black and white: the span inverted](waverack/waverack-w3-sel-bw.png)
+
+![A looped selection playing](waverack/waverack-w3-loop.png)
+
+![COMPACT in black and white with the selection](waverack/waverack-w3-sel-cmp-bw.png)
+
+![COMPACT on the CGA knob tree, a selection looping (3x)](waverack/waverack-w3-cga-cmp-sel-3x.png)
+
+**The meter reads the half that is sounding.** The worker notes each
+staged half's peak before the volume - and whether it touched a rail - in a
+table indexed by the half's place in the stream; the UI looks up the half
+the card is playing *now* from the played count, so the bar moves with the
+sound and not with the staging, which runs ahead of it. The cells are two
+24-bit masks, shown and wanted, and only the changed runs are drawn.
+
+**What was discovered.**
+
+- *SOUND.DRV is not wanted by default.* The first look said `Needs a Sound
+  Blaster` with QEMU's SB16 in the machine: §51.3 makes every driver
+  not-wanted until a `SYSTEM.CFG` asks, and the test's system disk now
+  carries `build/mixercfg/SYSTEM.CFG`, as XTMP3's rows do.
+- *A refinement talks over a pause.* Zooming while playing leaves the view
+  coarse (the refinement waits, its reads would race the look-ahead's); on
+  Pause it resumed and its `Ready` replaced `Paused`. It is silent now while
+  a play is held.
+- *The harness's absolute mouse is not a drag.* `tools/mouse.py to` pins the
+  pointer against the bottom-right corner and walks back, so a "move" in a
+  drag is dozens of moves across the screen; the first measurement read 88
+  drawing calls a move. Relative moves (`mouse_move 8 0`) gave the real
+  figure: five or six.
+- *A selection is the cursor's too.* With a selection the cursor stands at
+  its start, and a rightward drag moved the time display every move for
+  nothing; it is redrawn only when `s` moves.
+
+**Measured** (the `-DWR_CALLS` counter build): idle 0 drawing calls a tick;
+playing 1.70 a tick at Fit and 3.08 at 256 frames a column; a selection
+drag five or six a move; a full repaint 120. Image 30,179 bytes (packed
+23,129), bss 5,016; heap while playing the idle document's plus the 32 KB
+look-ahead; the 16 KB ring grant is the driver's.
+
+**The 360 KB disk.** Wave 2 left `media360.img` with no cluster to spare,
+and this wave's growth does not fit, so WaveRack is off it (a dated note in
+the Makefile and §122.13). A 360 KB home for it is the owner's decision.
+
+**Wave 2's review, folded in.** An independent read of wave 2 found no
+memory fault and five things to fix, all done in this wave: a chunk size
+that carried the walk's next position to just under 4 GB made the next
+header wrap to offset 0 (the walk now tests that carry, and a new fixture,
+`WRAPPOS.WAV`, holds it); the view's last first frame was rounded DOWN, so
+below Fit the last few frames of a file could never be shown and a cursor
+parked there vanished (now rounded up - the view may end a few empty columns
+past the document); a frame over 2^31 read as negative; a short disk read
+ended the scan silently over uninitialised blocks (now it refuses, and says
+why); and §122.5 had a block count off by one.
+
+**The soak row's first run caught the meter.** STEREO16.WAV's right channel
+is silent but for one full-scale sample, and PEAK never lit: the meter read
+the half sounding every three ticks, and a 93 ms half fell between two
+looks. The hold and PEAK now take every half played since the last look.
+The second run passed: STEREO16 and TONE44 at d = 2 sample for sample, the
+loop's four laps byte-identical in the capture, the paused position equal
+to the reference's arithmetic, and every claim back after Stop and after a
+close.

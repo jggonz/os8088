@@ -180,6 +180,7 @@ ww_parse:
     mov dx, [ww_pos+2]
     add ax, 8
     adc dx, 0
+    jc .walked                      ; (past 4 GB: wave 2's review, M1)
     call ww_vsflen                  ; CF = 1: DX:AX > the file's size
     jc .walked
     inc byte [ww_n]

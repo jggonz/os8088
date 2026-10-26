@@ -493,6 +493,25 @@ FAST = [
         "the window after the zoom equal to a forced full repaint",
         needs=("qemu", "nasm", "pil"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin")),
+    Row("waverackplay", "soak", py("tests/waverackplay.py"), 420.0,
+        "WaveRack's transport (SPEC.md 122.6, 122.8, 122.9) on QEMU's SB16, "
+        "its output captured by the wav audiodev at the rate the card plays "
+        "and each play a slice held to tools/wrsim.py's convert(): "
+        "STEREO16.WAV (16-bit stereo, the high byte and the average, VOLUME "
+        "75%) every sample, with the output line, LEVEL PLAY, the meter's "
+        "cells for its tone and PEAK at its 16-bit rail; a selection DRAGGED "
+        "in the waveform against the drag arithmetic, looped, paused after "
+        "two laps - the position from verb 9's count against "
+        "wrsim.play_pos, the capture the selection repeated sample for "
+        "sample - resumed and stopped (the playhead back where it began, the "
+        "cursor and selection kept, every claim and the grant back); TONE8 "
+        "and TONE8K by dominant frequency and length; the window closed "
+        "mid-play leaving no claim and the card free for a relaunch; and on "
+        "a DSP 2.01 (no PCM_HI) TONE44.WAV at d = 2 with VOLUME 50% from the "
+        "keys, every sample",
+        needs=("qemu", "nasm", "numpy"), serial=True, timeout=900,
+        wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin",
+               "build/mixercfg/SYSTEM.CFG")),
     Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 1200.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "

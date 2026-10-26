@@ -23,6 +23,15 @@ Three things live here, and the 8086 code is held to each:
                ranges at fpp >= B, and below it the samples themselves with
                each column's span stretched to the previous column's last
                value (the trace is a line, not dots).
+  PLAYBACK     out_rate(), vtab(), mono(), convert() and play_pos() are
+               SPEC.md 122.6's conversion and transport arithmetic: the
+               divisor d (the smallest whole number that brings the rate to
+               the card's ceiling), the box filter of d frames, a 16-bit
+               sample's high byte, the stereo average, the VOLUME table, and
+               the frame a played count stands for - through the first lap
+               and every loop after it. sel_text() is the selection field
+               (SPEC.md 122.9). tests/waverackplay.py holds the captured
+               output of QEMU's SB16 to convert(), sample for sample.
   THE FIXTURES fixtures() makes every WAV the soak row opens: tones,
                impulses (single-sample spikes a coarse envelope MUST show),
                stereo 16-bit, odd and unknown chunks, chunk orders, the
@@ -224,6 +233,17 @@ def fit_zoom(frames, ww):
     return z
 
 
+def view_clamp(first, z, ww, frames):
+    """we_clamp: the view's first frame bounded to frames - span ROUNDED UP to
+    a multiple of fpp (so the view's end reaches the document's last frame
+    below Fit), at least 0, and rounded down to a multiple of fpp"""
+    fpp = 1 << z
+    hi = max(0, frames - (ww << z))
+    if hi:
+        hi = (hi + fpp - 1) & ~(fpp - 1)
+    return min(max(0, first), hi) & ~(fpp - 1)
+
+
 def columns(chans, env, s, frames, first, z, ww):
     """The view cache when it is EXACT: per column, per channel, (min, max)
     or None past the end. fpp >= B: the blocks it covers; below: the samples,
@@ -247,6 +267,94 @@ def columns(chans, env, s, frames, first, z, ww):
                 col.append((min(seg), max(seg)))
         out.append(col)
     return out
+
+
+# =============================================================================
+# PLAYBACK AND SELECTION (wrxport.inc, SPEC.md 122.6, 122.9)
+# =============================================================================
+CEIL, CEIL_HI, MIN_OUT = 22222, 44100, 4000     # the card; the refusal
+
+
+def out_rate(rate, hi=False):
+    """(d, out) for a document at RATE: d the smallest whole number with
+    rate / d at most the card's ceiling (44,100 with SND_CAP_PCM_HI), out
+    the rate the card is opened at (floored). None: refused, under 4,000"""
+    ceil = CEIL_HI if hi else CEIL
+    d = (rate + ceil - 1) // ceil
+    out = rate // d
+    return (d, out) if out >= MIN_OUT else None
+
+
+def vtab(v):
+    """VOLUME's 256-byte table: out = 80h + (in - 80h) x v / 100, the
+    product truncated toward zero (the 8086's idiv)"""
+    t = []
+    for i in range(256):
+        x = (i - 128) * v
+        q = abs(x) // 100
+        t.append(128 + (q if x >= 0 else -q))
+    return bytes(t)
+
+
+def mono(data, r):
+    """per frame, the unsigned 8-bit mono value the conversion starts from:
+    an 8-bit sample as it is, a 16-bit one's high byte XOR 80h, and the two
+    channels' (L + R) >> 1"""
+    raw = data[r["dataoff"]:r["dataoff"] + r["datalen"]]
+    if r["bits"] == 8:
+        u = list(raw)
+    else:
+        u = [b ^ 0x80 for b in raw[1::2]]
+    if r["ch"] == 2:
+        u = [(u[i] + u[i + 1]) >> 1 for i in range(0, len(u) - 1, 2)]
+    return u
+
+
+def frames_played(n, sp, e1, r0, r1, loop):
+    """the document frames a play that began at SP plays, the first N of
+    them: SP up to E1, then (looping) [R0, R1) for ever"""
+    out = list(range(sp, min(e1, sp + n)))
+    while loop and len(out) < n and r1 > r0:
+        out += list(range(r0, min(r1, r0 + n - len(out))))
+    return out
+
+
+def convert(m, d, v):
+    """mono values M -> the bytes the card is given: the box filter of D
+    frames (a sum floored by d - a trailing part group is dropped), then
+    VOLUME's table"""
+    vt = vtab(v)
+    return bytes(vt[sum(m[i:i + d]) // d] for i in range(0, len(m) - d + 1, d))
+
+
+def lap_end(sp, r1, frames):
+    """where the first lap ends: the region's end, or (a play begun past
+    it) the document's"""
+    return r1 if sp < r1 else frames
+
+
+def play_pos(F, sp, e1, r0, r1, loop):
+    """the document frame F frames into a play stands at (SPEC.md 122.6):
+    SP + F through the first lap, then [R0, R1) round and round - or, not
+    looping, the lap's end"""
+    if F < e1 - sp:
+        return sp + F
+    if not loop or r1 <= r0:
+        return e1
+    return r0 + (F - (e1 - sp)) % (r1 - r0)
+
+
+def sel_text(s, e, rate):
+    """the selection field's value (SPEC.md 122.9): `SS.cc - SS.cc` while
+    the end is under a minute, `M:SS.c - M:SS.c` from there; '' for none"""
+    if s >= e:
+        return ""
+    if e < 60 * rate:
+        f = lambda x: "%02d.%02d" % (x // rate, (x % rate) * 100 // rate)
+    else:
+        f = lambda x: "%d:%02d.%d" % (x // rate // 60, x // rate % 60,
+                                       (x % rate) * 10 // rate)
+    return "%s - %s" % (f(s), f(e))
 
 
 # =============================================================================
@@ -342,6 +450,16 @@ def fixtures():
                                chunk(b"data", pcm16(interleave(left, right)))]),
                          "GOOD", "stereo 16-bit 22,050 Hz: L a tone, R silence "
                          "and one spike")
+    f["TONE8K.WAV"] = (riff([chunk(b"fmt ", fmt_body(1, 8000, 16)),
+                             chunk(b"data", pcm16(tone(8000, 8000, 500,
+                                                       24000)))]), "GOOD",
+                       "mono 16-bit 8,000 Hz, a 500 Hz tone, 1 s")
+    f["TONE44.WAV"] = (riff([chunk(b"fmt ", fmt_body(2, 44100, 8)),
+                             chunk(b"data", pcm8(interleave(
+                                 tone(22050, 44100, 1000, 26000),
+                                 tone(22050, 44100, 1500, 20000))))]), "GOOD",
+                       "stereo 8-bit 44,100 Hz (1 kHz L, 1.5 kHz R), 0.5 s: "
+                       "d = 2 on a card without PCM_HI")
     t2 = pcm8(tone(4000, 8000, 500, 20000))
     f["LISTODD.WAV"] = (riff([chunk(b"fmt ", fmt_body(1, 8000, 8)),
                               chunk(b"LIST", b"INFOx"),     # 5: a pad byte
@@ -390,6 +508,13 @@ def fixtures():
     f["BADALIGN.WAV"] = (riff([chunk(b"fmt ", fmt_body(1, 11025, 16, balign=4)),
                                chunk(b"data", b"\0" * 400)]), "BAD",
                          "a block align that disagrees")
+    # a chunk size that carries the walk's next position to FFFFFFF8h: the
+    # header after it would wrap past 4 GB to offset 0..7 (wave 2's review,
+    # M1) - the walk ends there, with fmt and without data
+    f["WRAPPOS.WAV"] = (riff([chunk(b"fmt ", fmt_body(1, 8000, 8))]) +
+                        b"JUNK" + struct.pack("<I", 0xFFFFFFF8 - 44) +
+                        b"\0" * 16, "BAD",
+                        "a chunk size that wraps the walk past 4 GB")
     many = [chunk(b"x%03d" % i, b"ab") for i in range(70)]
     f["CHUNK70.WAV"] = (riff(many + [chunk(b"fmt ", fmt_body(1, 8000, 8)),
                                      chunk(b"data", t2[:100])]), "BAD",
@@ -401,6 +526,8 @@ def fixtures():
 
 EXPECT = {      # name -> (err, arg) or the accepted file's facts
     "TONE8.WAV": dict(rate=11025, bits=8, ch=1, frames=11025, note=N_NONE),
+    "TONE8K.WAV": dict(rate=8000, bits=16, ch=1, frames=8000, note=N_NONE),
+    "TONE44.WAV": dict(rate=44100, bits=8, ch=2, frames=22050, note=N_NONE),
     "IMPULSE.WAV": dict(rate=11025, bits=8, ch=1, frames=IMP_FRAMES,
                         note=N_NONE),
     "STEREO16.WAV": dict(rate=22050, bits=16, ch=2, frames=22050, note=N_NONE),
@@ -421,6 +548,7 @@ EXPECT = {      # name -> (err, arg) or the accepted file's facts
     "CHAN3.WAV": (E_CHANS, 3),
     "BADALIGN.WAV": (E_BALIGN, 0),
     "CHUNK70.WAV": (E_CHUNKS, 0),
+    "WRAPPOS.WAV": (E_NODATA, 0),
     "LONG.WAV": dict(rate=11025, bits=8, ch=1, frames=LONG_FRAMES, note=N_NONE),
 }
 
@@ -505,6 +633,64 @@ def selfcheck(quiet=False):
     ok((r["frames"] + (1 << s) - 1) >> s <= ENV_MAXBLK and
        (r["frames"] + (1 << (s - 1)) - 1) >> (s - 1) > ENV_MAXBLK,
        "LONG: B is the smallest that fits 2,048 blocks")
+    # --- playback (SPEC.md 122.6): the divisor, the refusal, the table
+    for rate, hi, want in ((8000, 0, (1, 8000)), (11025, 0, (1, 11025)),
+                           (22050, 0, (1, 22050)), (22222, 0, (1, 22222)),
+                           (22223, 0, (2, 11111)), (44100, 0, (2, 22050)),
+                           (48000, 0, (3, 16000)), (44100, 1, (1, 44100)),
+                           (48000, 1, (2, 24000)), (65535, 1, (2, 32767)),
+                           (4000, 0, (1, 4000)), (3999, 0, None),
+                           (1000, 1, None)):
+        ok(out_rate(rate, hi) == want, "out_rate(%d, %d) = %r, want %r" %
+           (rate, hi, out_rate(rate, hi), want))
+    ok(vtab(100) == bytes(range(256)), "VOLUME 100% is the identity")
+    ok(set(vtab(0)) == {128}, "VOLUME 0% is silence")
+    ok(vtab(75)[0] == 32 and vtab(75)[255] == 223 and vtab(75)[127] == 128
+       and vtab(50)[1] == 65, "VOLUME 75%/50%: truncated toward 80h")
+    # the conversion: 16-bit high byte, the stereo average, the box filter
+    data = fx["TONE44.WAV"][0]
+    r = parse(data)
+    m = mono(data, r)
+    raw = data[r["dataoff"]:r["dataoff"] + 4]
+    ok(m[0] == (raw[0] + raw[1]) >> 1 and m[1] == (raw[2] + raw[3]) >> 1,
+       "TONE44: the stereo average")
+    out = convert(m, 2, 100)
+    ok(len(out) == 11025 and out[1] == (m[2] + m[3]) // 2,
+       "TONE44 at d = 2: 11,025 bytes, each the floor of a pair's mean")
+    data = fx["TONE8K.WAV"][0]
+    r = parse(data)
+    m = mono(data, r)
+    ok(m[2] == data[r["dataoff"] + 5] ^ 0x80, "TONE8K: a 16-bit high byte")
+    ok(len(convert(m[:7], 3, 100)) == 2, "a trailing part group is dropped")
+    # the transport's arithmetic: through the lap, around the loop
+    ok(play_pos(0, 100, 300, 100, 300, True) == 100 and
+       play_pos(199, 100, 300, 100, 300, True) == 299 and
+       play_pos(200, 100, 300, 100, 300, True) == 100 and
+       play_pos(450, 100, 300, 100, 300, True) == 150,
+       "play_pos around a selection loop")
+    ok(play_pos(500, 50, 1000, 0, 1000, False) == 550 and
+       play_pos(5000, 50, 1000, 0, 1000, False) == 1000 and
+       play_pos(960, 50, 1000, 0, 1000, True) == 10,
+       "play_pos: to the end, and Loop with no selection (the whole)")
+    ok(lap_end(400, 300, 1000) == 1000 and lap_end(100, 300, 1000) == 300,
+       "a play begun past the region runs to the document's end")
+    seq = frames_played(7, 8, 10, 4, 10, True)
+    ok(seq == [8, 9, 4, 5, 6, 7, 8], "frames_played: the lap, then the loop")
+    ok(sel_text(0, 0, 11025) == "" and
+       sel_text(11025, 22050 + 5513, 11025) == "01.00 - 02.50" and
+       sel_text(0, 60 * 8000 + 12000, 8000) == "0:00.0 - 1:01.5",
+       "sel_text: SS.cc under a minute, M:SS.c from there")
+    # --- the view's end reaches the document's below Fit (wave 2's review,
+    #     M2): LONG.WAV at z = 10 on FULL's 588 columns, 48 frames past the
+    #     last whole fpp - the bound rounded up shows them, and the cursor on
+    #     the last frame has a column
+    fr, ww = LONG_FRAMES, 588
+    for z in range(0, fit_zoom(fr, ww)):
+        f0 = view_clamp(1 << 40, z, ww, fr)
+        ok(f0 % (1 << z) == 0 and f0 + (ww << z) >= fr and
+           f0 + ((ww - 1) << z) < fr and 0 <= (fr - 1 - f0) >> z < ww,
+           "view_clamp z %d: the last frame in the view at its end" % z)
+    ok(view_clamp(1 << 40, fit_zoom(fr, ww), ww, fr) == 0, "Fit is frame 0")
     if not quiet or bad:
         for b in bad:
             print("wrsim: FAIL " + b)

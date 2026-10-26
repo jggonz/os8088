@@ -9,14 +9,18 @@
 ; docs/waverack/design/; the delivery record is docs/plans/WAVERACK-PLAN.md.
 ;
 ; WAVE 1 WAS THE FACE (US-01..US-03): the package, the three layouts in both
-; themes, every control drawn from REAL state. WAVE 2 IS THE DOCUMENT
+; themes, every control drawn from REAL state. WAVE 2 WAS THE DOCUMENT
 ; (US-04): File > New and Open (and OSAPI_ARG_FILE at launch), the RIFF walk
 ; (wrwav.inc), sources and the piece table (wrdoc.inc), the coarse envelope's
 ; scan, the view cache and its refinement, the waveform band, zoom, scroll,
-; the overview and the cursor (wrenv.inc). What later waves build (play,
-; record, edit, save) is GREYED through the one predicate, wr_cmdok, which a
-; key, its menu item and its keystroke all ask (SPEC.md 47 rule 2), and a
-; press on a greyed control says why on the status bar (47 rule 6).
+; the overview and the cursor (wrenv.inc). WAVE 3 IS THE TRANSPORT (US-05,
+; US-08, US-07's playback half): Play, Pause, Stop, seek and Loop through the
+; Sound Blaster's ring stream (wrxport.inc), the playhead, the meter while
+; playing, and the selection - drag, handles, Shift, Select All / None. What
+; later waves build (record, edit, save) is GREYED through the one predicate,
+; wr_cmdok, which a key, its menu item and its keystroke all ask (SPEC.md 47
+; rule 2), and a press on a greyed control says why on the status bar (47
+; rule 6).
 ;
 ; THE FILES (SPEC.md 122.1):
 ;   waverack.asm  this: the entry, the commands, the predicate, the menus, the
@@ -25,7 +29,10 @@
 ;   wrface.inc    the layouts' static parts, the elements, the key painter
 ;   wrwav.inc     the RIFF/WAVE reader (tools/wrsim.py is its reference)
 ;   wrdoc.inc     sources, the piece table, 32-bit frame arithmetic, reading
-;   wrenv.inc     the envelopes, the view and its cache, the waveform band
+;   wrenv.inc     the envelopes, the view and its cache, the waveform band,
+;                 the selection
+;   wrxport.inc   the transport: the state machine, the look-ahead, the
+;                 worker, the conversion, VOLUME, the playhead, the meter
 ;   build/wrart.inc  the pictures, the fonts, the meter's table, the role
 ;                 tables and the three layouts as DATA, made and measured on
 ;                 the host by tools/os88wrart.py (and tools/os88wrlay.py)
@@ -53,7 +60,19 @@ WR_GAINMAX  equ 12                  ; INPUT GAIN: 13 steps, -12..+12 dB, unity
 WR_GAIN0    equ 6                   ; in the middle (SPEC.md 122.7)
 WR_VOLSTEP  equ 5                   ; VOLUME's keys and wheel: 5% a step
 WD_BANDSZ   equ 1024                ; the composing band (wrdraw.inc)
-WF_NKEYS    equ 20                  ; element keys: every layout's 18
+
+; -DWR_CALLS counts every drawing primitive WaveRack calls into [wr_ncalls]
+; (a fill, a frame, a font run, a blit): the instrument the redraw costs in
+; SPEC.md 122.13 were measured with (PERFORMANCE.md's rule 4 - a counter, not
+; a timer). The shipped build carries none of it
+%macro WR_NCALL 0
+  %ifdef WR_CALLS
+    pushf
+    inc word [wr_ncalls]
+    popf
+  %endif
+%endmacro
+WF_NKEYS    equ WRE_N               ; element keys: one a layout element
 
 ; --- the commands: a key, a menu item and a keystroke each name one, and
 ;     wr_cmdok is the ONE predicate over them (SPEC.md 47 rule 2). The menu
@@ -86,6 +105,7 @@ C_RATE      equ 24
 C_NMENU     equ 25                  ; ...the menus' items end here
 C_PAUSE     equ 25                  ; the Pause key's own
 C_CURSOR    equ 26                  ; the cursor keys (a document's)
+C_PLAYK     equ 27                  ; the Play key's own (latched while playing)
 K_VOLDN     equ 0xF0                ; keystrokes that are not commands
 K_VOLUP     equ 0xF1
 K_GAINDN    equ 0xF2
@@ -140,6 +160,7 @@ wr_entry:
     mov word [wv_ww], 0xFFFF        ; no width yet: the first paint's
     mov byte [wr_gain], WR_GAIN0
     mov byte [wr_vol], 75
+    call wt_vbuild                  ; VOLUME's table (SPEC.md 122.6)
     mov byte [wr_rate], 1           ; the next take at 11,025 Hz
     mov si, wr_s_ready
     call wr_say
@@ -152,7 +173,11 @@ wr_entry:
                                     ; static or in a pinned claim
     mov [wr_win], bx
     mov ax, wr_ontimer              ; the scan, the refinement, a launch's
-    call OSAPI_WM_ONTIMER           ; document: all from the one-shot timer
+    call OSAPI_WM_ONTIMER           ; document, the playhead: all from the
+    mov ax, wr_onwake               ; one-shot timer; the refills and the
+    call OSAPI_WM_ONWAKE            ; play's end from the worker's wake
+    mov ax, wr_onclose              ; (SPEC.md 122.6); and a close stops the
+    call OSAPI_WM_ONCLOSE           ; play first
     cmp byte [wr_argpend], 0
     je .noopen
     call wr_arm
@@ -232,8 +257,10 @@ wr_prefset:
 ;            predicate, shared by the keys' greying, the menus and the keys)
 ; out: CF = 0 live, CF = 1 refused; every register preserved
 ;
-; Wave 2 has a document: New, Open, the view and the cursor work. Play,
-; record, edit and save are later waves', and refused until they land.
+; Wave 3 has the transport: its commands follow SPEC.md 122.6's table - Play
+; with a card and frames, Pause and Stop while a play is held, and Open and
+; New only with the transport idle (Stop first). Record, edit and save are
+; later waves', and refused until they land.
 ; -----------------------------------------------------------------------------
 wr_cmdok:
     cmp al, C_LOOP
@@ -241,7 +268,7 @@ wr_cmdok:
     cmp al, C_RATE
     je .yes
     cmp al, C_OPEN
-    je .yes
+    je .idle
     cmp al, C_THEME
     je .theme
     cmp al, C_LAYOUT
@@ -258,17 +285,28 @@ wr_cmdok:
     je .zout
     cmp al, C_FIT
     je .fit
+    cmp al, C_PLAY
+    je .play
+    cmp al, C_PLAYK
+    je .play
+    cmp al, C_PAUSE
+    je .pause
+    cmp al, C_SELALL
+    je .selall
+    cmp al, C_SELNONE
+    je .selnone
 .no:
     stc
     ret
 .yes:
     clc
     ret
+.idle:
+    jmp wt_idle                     ; Open: the transport idle (Stop first)
 .doc:
-    cmp byte [wo_doc], 0            ; New: a document to empty
+    cmp byte [wo_doc], 0            ; New: a document to empty, and no play
     je .no
-    clc
-    ret
+    jmp wt_idle
 .frames:
     cmp byte [wo_doc], 0            ; the cursor: frames to stand on
     je .no
@@ -279,11 +317,29 @@ wr_cmdok:
     jz .no
     clc
     ret
+.selall:
+    call we_ready                   ; Select All: frames, scanned
+    jc .no
+    jmp short .frames
+.selnone:
+    jmp we_hassel                   ; Select None: a selection
 .stop:
-    cmp byte [we_busy], 1           ; Stop cancels a scan (SPEC.md 122.5)
+    call wt_active                  ; Stop: a play held...
+    jnc .yes
+    cmp byte [we_busy], 1           ; ...or a scan to cancel (SPEC.md 122.5)
     jne .no
     clc
     ret
+.pause:
+    jmp wt_active                   ; Pause: a play held
+.play:
+    call wt_active                  ; Play: a play held (pause, resume)...
+    jnc .yes
+    test word [wr_caps], SND_CAP_PCM_BG ; ...or a card, and frames scanned
+    jz .no
+    call we_ready
+    jc .no
+    jmp short .frames
 .zin:
     call we_ready
     jc .no
@@ -328,6 +384,12 @@ wr_cmdok:
     je .yes
     jmp wr_canbig
 
+; wt_idle - CF = 0 when the transport is idle (wr_cmdok's). keeps all
+wt_idle:
+    call wt_active
+    cmc
+    ret
+
 ; wr_canbig - CF = 0 when the window's display holds MID at least. keeps all
 wr_canbig:
     cmp word [wr_dband], WRL_MID_H + TITLE_H + 1
@@ -345,9 +407,12 @@ wr_canbig:
 ;              rule 6, 122.2). clobbers SI
 ; -----------------------------------------------------------------------------
 wr_explain:
+    mov si, wr_s_stopfirst          ; Open, New: a play is held
+    cmp al, C_OPEN
+    je .held
     mov si, wr_s_nodoc
     cmp al, C_NEW
-    je .say
+    je .new
     cmp al, C_CURSOR
     je .say
     cmp al, C_ZIN
@@ -356,11 +421,18 @@ wr_explain:
     je .view
     cmp al, C_FIT
     je .view
+    cmp al, C_SELALL
+    je .view
+    mov si, wr_s_nosel
+    cmp al, C_SELNONE
+    je .say
     mov si, wr_s_notyet
     cmp al, C_PLAY
     je .play
-    cmp al, C_PAUSE
+    cmp al, C_PLAYK
     je .play
+    cmp al, C_PAUSE
+    je .pause
     cmp al, C_RECORD
     je .rec
     cmp al, C_STOP
@@ -371,15 +443,34 @@ wr_explain:
     jne .say
     mov si, wr_s_noroom
     jmp short .say
+.new:
+    cmp byte [wo_doc], 0            ; New: no document, or a play held
+    je .say
+    mov si, wr_s_stopfirst
+.held:
+    call wt_active
+    jnc .say
+    mov si, wr_s_notyet
+    jmp short .say
 .theme:
     mov si, wr_s_bwonly
     jmp short .say
 .stop:
     mov si, wr_s_nostop
     jmp short .say
+.pause:
+    mov si, wr_s_noplay             ; Pause: nothing playing, or no card
 .play:
     test word [wr_caps], SND_CAP_PCM_BG
-    jnz .say
+    jz .nocard
+    cmp al, C_PAUSE
+    je .say
+    mov si, wr_s_nodoc              ; Play: no document, or still scanning
+    cmp byte [wo_doc], 0
+    je .say
+    mov si, wr_s_busy
+    jmp short .say
+.nocard:
     mov si, wr_s_nocard
     jmp short .say
 .rec:
@@ -393,6 +484,9 @@ wr_explain:
     je .say                         ; zoom at its end
     mov si, wr_s_busy
     cmp byte [we_busy], 1
+    je .say
+    mov si, wr_s_nodoc              ; (Select All: no frames)
+    cmp al, C_SELALL
     je .say
     mov si, wr_s_zinmax
     cmp al, C_ZIN
@@ -417,6 +511,10 @@ wr_cmd:
 .c2:
     cmp al, C_STOP
     jne .c3
+    call wt_active                  ; a play: stopped (SPEC.md 122.6)
+    jc .scan
+    jmp wt_stop
+.scan:
     call wo_new                     ; a scan abandoned: the open with it
     mov si, wr_s_cancel
     jmp wr_say
@@ -437,8 +535,39 @@ wr_cmd:
     jmp we_zoom
 .c6:
     cmp al, C_CURSOR
-    jne .c7
+    jne .t1
     jmp wr_cursor
+.t1:
+    cmp al, C_PLAY                  ; Space: play, pause, resume
+    jne .t2
+    cmp byte [wt_state], WT_PLAY
+    jne .t3
+    jmp wt_pause
+.t2:
+    cmp al, C_PLAYK                 ; the Play key: play, resume - latched
+    jne .t4                         ; while playing
+    cmp byte [wt_state], WT_PLAY
+    je .out
+.t3:
+    cmp byte [wt_state], WT_PPAUSE
+    jne .go
+    jmp wt_resume
+.go:
+    jmp wt_go
+.t4:
+    cmp al, C_PAUSE                 ; the Pause key: pause - and resume, when
+    jne .t5                         ; latched
+    cmp byte [wt_state], WT_PPAUSE
+    je .t3
+    jmp wt_pause
+.t5:
+    cmp al, C_SELALL
+    jne .t6
+    jmp we_selall
+.t6:
+    cmp al, C_SELNONE
+    jne .c7
+    jmp we_selnone
 .c7:
     cmp al, C_LOOP
     jne .n1
@@ -478,6 +607,59 @@ wr_cursor:
     je .page
     cmp ah, SC_PGDN
     je .page
+    call wr_shift                   ; Shift+Left / Right: the selection
+    jz .plain                       ; extended (SPEC.md 122.9)
+    cmp ah, SC_LEFT
+    mov al, -1
+    je .ext
+    cmp ah, SC_RIGHT
+    jne .plain
+    mov al, 1
+.ext:
+    jmp we_extend
+.plain:
+    call wt_active                  ; a play held: the step is from the
+    jc .sel                         ; PLAYHEAD, where the user is looking
+    push ax
+    mov ax, [wt_ph]
+    mov [wo_cur], ax
+    mov ax, [wt_ph+2]
+    mov [wo_cur+2], ax
+    pop ax
+.sel:
+    push ax                         ; a plain move: the selection goes, the
+    push bx                         ; cursor moves - and a play seeks there
+    call we_selnone
+    pop bx
+    pop ax
+    push bx
+    call wr_cmove
+    pop bx
+    call wt_active
+    jc .out
+    jmp wt_seek
+.page:
+    call we_ready                   ; a scanned document: the view moves
+    jc .out
+    push ax
+    mov ax, [we_ww]
+    mov cx, ax
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    sub ax, cx
+    pop cx                          ; CH = the scan code
+    cmp ch, SC_PGUP
+    jne .pd
+    neg ax
+.pd:
+    jmp we_scroll
+.out:
+    ret
+
+; wr_cmove - the cursor by AH's key: Home, End, Left, Right. clobbers AX,
+; BX, CX, DX, SI, DI
+wr_cmove:
     cmp ah, SC_HOME
     jne .end
     xor ax, ax
@@ -506,24 +688,6 @@ wr_cursor:
     add ax, bx
     adc dx, cx
     jmp we_setcur
-.page:
-    call we_ready                   ; a scanned document: the view moves
-    jc .out
-    push ax
-    mov ax, [we_ww]
-    mov cx, ax
-    shr cx, 1
-    shr cx, 1
-    shr cx, 1
-    sub ax, cx
-    pop cx                          ; CH = the scan code
-    cmp ch, SC_PGUP
-    jne .pd
-    neg ax
-.pd:
-    jmp we_scroll
-.out:
-    ret
 
 ; -----------------------------------------------------------------------------
 ; wr_open - File > Open...: the Standard File dialog (SPEC.md 38); its
@@ -574,8 +738,10 @@ wr_arm:
 
 ; -----------------------------------------------------------------------------
 ; wr_ontimer - W_ONTIMER: a launch's document opened, one gulp of the scan,
-;              or one refinement read - then what changed is drawn. Each step
-;              re-arms the timer while it has more to do.
+;              one refinement read, or - while PLAYING - the playhead and the
+;              meter (wt_tick; a refinement waits for the play to stop: its
+;              reads would race the look-ahead's) - then what changed is
+;              drawn. Each step re-arms the timer while it has more to do.
 ; in:  SI = the window. Keeps SI and BP
 ; -----------------------------------------------------------------------------
 wr_ontimer:
@@ -597,6 +763,11 @@ wr_ontimer:
     call ww_say
     jmp short .draw
 .work:
+    cmp byte [wt_state], WT_PLAY
+    jne .scan
+    call wt_tick
+    jmp short .draw
+.scan:
     cmp byte [we_busy], 1
     jne .ref
     call we_scanstep
@@ -613,12 +784,95 @@ wr_ontimer:
     pop si
     ret
 
-; wr_curat - CX = a content x over the waveform: the cursor there. clobbers
-; AX, BX, CX, DX, SI, DI
-wr_curat:
+; wr_onwake - OSAPI_WM_ONWAKE (UI task, the gfx lock NOT held): the
+; worker's refill and the play's end (wrxport.inc). SI = the window
+wr_onwake:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call wt_onwake
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wr_onclose - the close negotiator (SPEC.md 75.1): a play is stopped and
+; every claim it held given back before the window goes - and the stream
+; closed, so the card is never left running. CF = 0 lets the close happen
+wr_onclose:
+    push si
+    call wt_release
+    pop si
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wr_wpress - a press in the waveform at content x CX (SPEC.md 122.9): Shift
+;             extends the selection from its anchor (the cursor, with none);
+;             a press on a selection's handle drags that end; otherwise the
+;             cursor goes there, the selection goes, and a play seeks there.
+;             A drag goes on in wr_ondrag. clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+wr_wpress:
+    call wr_wcol                    ; CX = the column
+    mov byte [wr_drag], 5           ; (5: an end held still)
+    call wr_shift
+    jz .nshift
+    call we_hassel
+    jnc .ext
+    mov ax, [wo_cur]                ; none: from the cursor
+    mov [wo_anc], ax
+    mov ax, [wo_cur+2]
+    mov [wo_anc+2], ax
+.ext:
+    call we_colframe
+    jmp we_dragsel
+.nshift:
+    call we_handle                  ; a handle: the other end holds still
+    jnc .out
+    mov byte [wr_drag], 4           ; plain: the cursor, here
+    call we_colframe
+    mov [wo_anc], ax
+    mov [wo_anc+2], dx
+    push ax
+    push dx
+    call we_selnone
+    pop dx
+    pop ax
+    call we_setcur
+    call wt_active
+    jc .out
+    mov bx, [wr_win]
+    jmp wt_seek
+.out:
+    ret
+
+; wr_wdrag - the drag in the waveform at content x CX: the selection between
+; the anchor and the column under the pointer. clobbers AX, BX, CX, DX, SI, DI
+wr_wdrag:
     call wr_wcol
     call we_colframe
-    jmp we_setcur
+    jmp we_dragsel
+
+; wr_shift - ZF = 0 when a Shift key is down (the BIOS's flags at 0040:0017,
+; which the keyboard driver keeps; a plain read). keeps every register
+wr_shift:
+    push ax
+    push es
+    mov ax, 0x40
+    mov es, ax
+    test byte [es:0x17], 3
+    pop es
+    pop ax
+    ret
 
 ; wr_ovat - CX = a content x over the overview: the view centred there.
 ; clobbers AX, BX, CX, DX, SI, DI
@@ -736,6 +990,7 @@ wr_gainset:
 ; wr_volset - VOLUME to AL (0..100), said. clobbers AX, SI, DI
 wr_volset:
     mov [wr_vol], al
+    call wt_vbuild                  ; the worker's table, at once
     mov si, wr_s_volume
     mov di, wr_tbuf2
     call wr_put
@@ -854,6 +1109,18 @@ wr_regrey:
 wr_bflag:
     push ax
     mov bx, OS88UI_OWN
+    cmp al, B_PLAY                  ; Play latched while playing, Pause while
+    jne .np                         ; paused (SPEC.md 122.6)
+    cmp byte [wt_state], WT_PLAY
+    jne .np
+    or bx, OS88UI_LATCH
+.np:
+    cmp al, B_PAUSE
+    jne .cmd
+    cmp byte [wt_state], WT_PPAUSE
+    jne .cmd
+    or bx, OS88UI_LATCH
+.cmd:
     call wr_bcmd
     call wr_cmdok
     jnc .live
@@ -1097,8 +1364,7 @@ wr_hit:
     add si, WL_WAVE
     call wf_in
     jc .novw
-    mov byte [wr_drag], 4
-    call wr_curat
+    call wr_wpress                  ; the cursor, a selection, a seek
     clc
     ret
 .novw:
@@ -1161,9 +1427,9 @@ wr_ondrag:
     call wr_ovat
     jmp short .draw
 .ncur:
-    cmp byte [wr_drag], 4           ; the waveform: the cursor follows
-    jne .ngain
-    call wr_curat
+    cmp byte [wr_drag], 4           ; the waveform: the selection follows
+    jb .ngain
+    call wr_wdrag
     jmp short .draw
 .ngain:
     cmp byte [wr_drag], 1
@@ -1515,6 +1781,7 @@ wr_num:
 %include "wrwav.inc"
 %include "wrdoc.inc"
 %include "wrenv.inc"
+%include "wrxport.inc"
 
 ; =============================================================================
 ; TEXT HELPERS (numbers)
@@ -1560,7 +1827,28 @@ wr_upper:
 ; DI
 wo_fmttext:
     mov di, wr_tbuf2
-    mov ax, [wo_rate]               ; the rate, with its thousands comma
+    mov ax, [wo_rate]
+    call wr_ratetxt
+    mov si, wr_s_hz
+    call wr_put
+    mov si, wr_s_b8
+    cmp byte [wo_bits], 16
+    jne .b
+    mov si, wr_s_b16
+.b:
+    call wr_put
+    mov si, wr_s_mono
+    cmp byte [wo_ch], 2
+    jne .c
+    mov si, wr_s_stereo
+.c:
+    call wr_put
+    mov byte [di], 0
+    ret
+
+; wr_ratetxt - a rate AX (1,000 or more) with its thousands comma at DI:
+; '22,050'; DI past it. clobbers AX, DX
+wr_ratetxt:
     xor dx, dx
     push cx
     mov cx, 1000
@@ -1579,23 +1867,7 @@ wo_fmttext:
     mov [di], al
     inc di
     mov al, ah
-    call wo_two
-    mov si, wr_s_hz
-    call wr_put
-    mov si, wr_s_b8
-    cmp byte [wo_bits], 16
-    jne .b
-    mov si, wr_s_b16
-.b:
-    call wr_put
-    mov si, wr_s_mono
-    cmp byte [wo_ch], 2
-    jne .c
-    mov si, wr_s_stereo
-.c:
-    call wr_put
-    mov byte [di], 0
-    ret
+    jmp wo_two
 
 ; =============================================================================
 ; DATA
@@ -1613,7 +1885,7 @@ wr_pref:    times 6 dw 0            ; OSAPI_WM_PREFER's table (wr_prefset)
 wr_dropn:   db WR_DROPN0, WR_DROPN1, WR_DROPN2, WR_DROPN3
 
 ; the keys' commands, B_* order
-wr_btncmd:  db C_RECORD, C_STOP, C_PAUSE, C_PLAY, C_OPEN, C_SAVE, C_ZOUT
+wr_btncmd:  db C_RECORD, C_STOP, C_PAUSE, C_PLAYK, C_OPEN, C_SAVE, C_ZOUT
             db C_ZIN, C_TRIM, C_DELETE, C_SAVEAS
 %if ($ - wr_btncmd) != WR_NB
 %error "wr_btncmd needs a command for every key"
@@ -1763,6 +2035,19 @@ wr_s_busy:   db 'Still scanning', 0
 wr_s_zinmax: db 'Zoomed in fully', 0
 wr_s_whole:  db 'Whole sound shown', 0
 wr_s_dlg:    db 'A dialog is open', 0
+wr_s_stopfirst: db 'Stop first', 0
+wr_s_noplay: db 'Not playing', 0
+wr_s_nosel:  db 'No selection', 0
+wr_s_paused: db 'Paused', 0
+wr_s_stopped: db 'Stopped', 0
+wr_s_end:    db 'End of the sound', 0
+wr_s_unders: db ' underruns', 0
+wr_s_under1: db ' underrun', 0
+wr_s_lowrate: db 'Card needs 4,000+ Hz', 0
+wr_s_cbusy:  db 'Sound card is busy', 0
+wr_s_rateno: db 'Card refused the rate', 0
+wr_s_noopen: db 'Cannot open the card', 0
+wr_s_notask: db 'No task for the sound', 0
 wr_s_hz:     db ' Hz', 0
 wr_s_b8:     db '  8-bit', 0
 wr_s_b16:    db ' 16-bit', 0
@@ -1865,11 +2150,15 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV we_bs, 1                    ; the envelope's block shift
     WRV we_yh, 2                    ; the row table's lane height
     WRV wv_first, 4                 ; the view's first frame
+    WRV wo_s, 4                     ; the selection [s, e), frames (SPEC.md
+    WRV wo_e, 4                     ; 122.9), and the end a drag holds still
+    WRV wo_anc, 4
     WRV wo_zero1, 0
     WRV wo_gen, 2                   ; generations: element keys
     WRV we_wgen, 2
     WRV we_ogen, 2
     WRV we_cgen, 2
+    WRV wo_sgen, 2                  ; the selection's
     WRV wo_ioseg, 2                 ; claims: the I/O buffer...
     WRV we_vseg, 2                  ; ...the view cache
     WRV wv_ww, 2                    ; the width the cache is for
@@ -1925,6 +2214,82 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV we_base, 4
     WRV we_s, 4
     WRV we_t, 4
+    ; --- the selection's draw (wrenv.inc) ---------------------------------------
+    WRV we_smode, 1                 ; we_stime: 0 'SS.cc', 1 'M:SS.c'
+    WRV we_kon, 1                   ; the class record: a selection in view,
+    WRV we_k0, 2                    ; its first and last columns, its edges
+    WRV we_k1, 2                    ; in view (lanes)
+    WRV we_kf, 2
+    WRV we_dl, 7                    ; ...as the glass shows it: the lanes,
+    WRV we_do, 7                    ; the overview
+    WRV we_clsp, 2                  ; we_runs: the class proc, the rows
+    WRV we_rs, 2
+    WRV we_rb, 2
+    WRV we_rn, 2
+    WRV we_dput, 2                  ; we_seldiff's putter
+    WRV wf_mn, 4                    ; wrface.inc: the meter's cells, now...
+    WRV wf_mc, 4                    ; ...and changed
+    WRV wr_hold, 1                  ; the meter's hold: its cell + 1, 0 none
+    ; --- the transport (wrxport.inc) --------------------------------------------
+    WRV wt_state, 1                 ; WT_*
+    WRV wt_sopen, 1                 ; a stream is open (the worker feeds it)
+    WRV wt_hand, 1                  ; ...its handle
+    WRV wt_mixing, 1                ; the worker is in a feed pass
+    WRV wt_ghave, 1                 ; the ring grant is held
+    WRV wt_wk, 1                    ; the worker is hired
+    WRV wt_lp, 1                    ; Loop, as the play began
+    WRV wt_d, 1                     ; the divisor (SPEC.md 122.6)
+    WRV wt_ntry, 1                  ; counters: the pre-roll's tries, a
+    WRV wt_nfill, 1                 ; refill's reads, a feed's halves
+    WRV wt_nfeed, 1
+    WRV wt_laseg, 2                 ; the look-ahead claim, its size, mask
+    WRV wt_lasz, 2
+    WRV wt_lamask, 2
+    WRV wt_grant, 2                 ; the ring grant, its size, mask
+    WRV wt_ring, 2
+    WRV wt_rmask, 2
+    WRV wt_preroll, 2               ; halves before the open
+    WRV wt_out, 2                   ; the card's rate
+    WRV wt_cvp, 2                   ; the format's inner loop
+    WRV wt_mtick, 2                 ; the meter's last tick, the hold's, PEAK's
+    WRV wt_holdt, 2
+    WRV wt_peakt, 2
+    WRV wt_sp, 4                    ; frames: the stream's start, the fill's
+    WRV wt_fpos, 4                  ; next, the first lap's end, the lap's end
+    WRV wt_e1, 4                    ; now, where Stop puts the playhead, the
+    WRV wt_lend, 4                  ; region, the playhead, the paused place
+    WRV wt_p0, 4
+    WRV wt_r0, 4
+    WRV wt_r1, 4
+    WRV wt_ph, 4
+    WRV wt_ppos, 4
+    WRV wt_zero0, 0                 ; wt_begin zeroes from here...
+    WRV wt_bk, 1                    ; frames in the box group begun
+    WRV wt_srcdone, 1               ; the fill has the whole play
+    WRV wt_last, 1                  ; the last half is staged
+    WRV wt_ended, 1                 ; the card has played it (the worker's)
+    WRV wt_req, 1                   ; a refill asked for
+    WRV wt_err, 1                   ; a read failed
+    WRV wt_ust, 1                   ; the stream's state at the last poll
+    WRV wt_npre, 1                  ; halves pre-rolled
+    WRV wt_lwr, 2                   ; the look-ahead's counters (free-running)
+    WRV wt_lrd, 2
+    WRV wt_total, 2                 ; the stream's: staged, played
+    WRV wt_cons, 2
+    WRV wt_hfill, 2                 ; the half's bytes so far
+    WRV wt_bsum, 2                  ; the box group's sum
+    WRV wt_pkcl, 2                  ; the half's peak and clip
+    WRV wt_nunder, 2                ; underruns this play
+    WRV wt_played, 4                ; output samples played (verb 9)
+    WRV wt_mlast, 1                 ; the meter's last half (mod 32)
+    WRV wt_pks, 16                  ; each staged half's peak and clip, by
+    WRV wt_clips, 16                ; its slot (total / 2 KB, mod 16)
+    WRV wt_zero1, 0                 ; ...to here
+    WRV wt_vtab, 256                ; VOLUME's table
+    WRV wt_hbuf, WT_HALF            ; the half being converted
+%ifdef WR_CALLS
+    WRV wr_ncalls, 2                ; -DWR_CALLS: drawing primitives called
+%endif
 WRB_SIZE    equ WRB_SIZE0 + WRX
     OS88_BSS WRB_SIZE
     OS88_IMAGE_END

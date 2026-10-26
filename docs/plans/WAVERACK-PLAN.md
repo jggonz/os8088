@@ -26,10 +26,10 @@ the evidence column says what was actually seen.
 | US-02 | The same WaveRack in colour and black and white | US-01 | Implemented — verification pending | `docs/waverack/waverack-vga-color-full.png`, `waverack-vga-bw-full.png`, `waverack-ega-mid.png`; identity check `None` on VGA colour, VGA B&W, EGA and across a layout round trip; Hercules MID and COMPACT seen on MartyPC's 5150 + Hercules (`docs/waverack/waverack-herc-mid.png`, `waverack-herc-compact.png`, captured from VRAM at 038ea5ed) |
 | US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Implemented — verification pending | `docs/waverack/waverack-cga-compact.png` (native 640 x 200) and `-3x.png`; all 15 controls clicked with `--screen 640x200`, each answered; the layout measurement below |
 | US-04 | Open a WAV and inspect it without loading it into RAM | US-01 | Implemented — verification pending | `wrwav.inc`/`wrdoc.inc`/`wrenv.inc`; `tools/wrsim.py` reference + fast row `wrsim`; soak row `waverack` (every fixture through File > Open, bss vs the reference, the view cache column for column, zoom to fpp 1, identity); screenshots `docs/waverack/waverack-w2-*.png`; see Wave 2 below |
-| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Planned | |
+| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§122.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. Not seen: underruns at 4.77 MHz (US-11, MartyPC) |
 | US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | In progress | driver half shipped: 1a027a77, SPEC §34.6.4, soak row `sndcap` passed on MartyPC SB DSP 2.01 (flat 80h - not a microphone); app side is Wave 5 |
-| US-07 | See the active level; set input gain separately from volume | US-05, US-06 | Planned | |
-| US-08 | Select a precise range, audition it, loop it | US-05 | Planned | |
+| US-07 | See the active level; set input gain separately from volume | US-05, US-06 | In progress | the PLAYBACK half shipped in wave 3 (§122.8): the played half's peak before the volume through `wrart_db`, the hold, PEAK at a rail, `LEVEL  PLAY`, only the changed cells drawn; the soak row reads the lit cells for STEREO16's tone and PEAK at its 16-bit spike. The record meter and the gain are wave 5's |
+| US-08 | Select a precise range, audition it, loop it | US-05 | Implemented — verification pending | §122.9's selection half shipped in wave 3: drag, handles, Shift+click, Shift+Left/Right, Select All / None, `[s, e)` clamped, the field's two formats, the inverted span (B&W) / its own ground (colour) drawn by changed columns only; Loop seamless; the soak row drags a range, loops it and holds verb 9's count to `play_pos` and the capture to the selection repeated; identity checks with a selection on VGA colour, B&W, COMPACT and the CGA knob tree |
 | US-09 | Trim, delete, cut, copy, paste, undo and redo | US-08 | Planned | |
 | US-10 | Save, Save As, Save Selection As without losing the source | US-09 | Planned | |
 | US-11 | The design's personality, readable and fast on an XT | US-02..US-10 | Planned | |
@@ -381,6 +381,150 @@ os88test: soak tier - 1 rows, 150s declared, budget none  (caps: lame,mtools,nas
        | waverack: ok
 
 os88test: 1 passed, 0 failed, 0 skipped in 219.1s, 87.3s charged (budget none)
+rc=0
+```
+
+## Wave 3 — the transport (US-05, US-08, US-07's playback half): what shipped and what was seen
+
+Built: `apps/waverack/wrxport.inc` (`wt_`, §122.6: the state machine, the
+look-ahead and its copying fill, the worker, the conversion, VOLUME, the
+playhead, the meter's state); the selection model and its class-aware runs
+in `wrenv.inc` (§122.9); the line, the meter's mask diff, the selection
+element `wf_e_wsel` and the selection field in `wrface.inc`; the
+predicate, the keys, the gestures, `OSAPI_WM_ONWAKE` and the close
+negotiator in `waverack.asm`; `tools/wrsim.py`'s playback reference and two
+fixtures (TONE8K.WAV, 8,000 Hz 16-bit; TONE44.WAV, 44,100 Hz 8-bit stereo);
+the soak row `waverackplay` (`tests/waverackplay.py`); `-DWR_CALLS`, a
+counter build of every drawing primitive.
+
+Measured: image 30,179 bytes, packed 23,129 (23 clusters), bss 5,016.
+Heap while playing: the idle document's claims plus the 32 KB look-ahead
+(the soak row's output below has the figure); the 16 KB ring grant is
+SOUND.DRV's. Drawing (the counter build, QEMU, LONG.WAV): **0 calls a tick
+idle, 1.70 a tick playing at Fit, 3.08 at 256 frames a column, 5-6 a
+selection drag move, 120 a full repaint.**
+
+Seen on the glass (QEMU with `-device sb16`): STEREO16, TONE8, LONG.WAV
+played - the playhead moving, the time following it, `LEVEL  PLAY` lit (and
+PEAK at STEREO16's spike), the Play key latched; Pause (the Pause key
+latched, the position held, the status `Paused`) and resume; Stop putting
+the playhead back; a click while playing seeking there, Right while paused
+moving the paused position a column from the playhead, End while playing
+ending it; a zoomed play paging the view to the playhead; Open greyed
+while playing; a drag selecting, both handles dragged, Select All, Select
+None, Shift+Right twice; Loop on a selection; View > Theme and View >
+Compact Layout with a selection standing still across both. The identity
+check (a forced full repaint, the About card up and down, PIL difference)
+with a selection present: **`None`** on VGA colour FULL, VGA black and
+white FULL, VGA black and white COMPACT, and COMPACT on the CGA knob tree
+(`make BUILD=build-cga VIDEO=cga`, a loop playing there too). Screenshots:
+`docs/waverack/waverack-w3-play.png`, `-play-zoom.png`, `-paused.png`,
+`-sel-col.png`, `-sel-bw.png`, `-sel-cmp-bw.png`, `-loop.png`,
+`-cga-cmp-sel.png` (native 640 x 200) and `-cga-cmp-sel-3x.png`.
+
+**The 360 KB disk (an open owner decision).** `media360.img` was 354 of 354
+clusters after wave 2 and wave 3's package does not fit beside the rest, so
+WaveRack is OFF it, dated 2026-10-26 in the Makefile (`MEDIAARGS360`) and in
+§122.13; without it the disk is 335 of 354. **No 360 KB disk carries
+WaveRack now.** A 360 KB home for it - a disk of its own, or a curation that
+moves something else off `media360.img` - is the owner's to decide; nothing
+else was moved.
+
+Deviations, each written into §122: the pinned status sentences that do not
+fit COMPACT's 22 characters are shortened (`Out 22,050 Hz mono /2`, `Card
+needs 4,000+ Hz`); the black-and-white selection is the band inverted for
+its blit rather than a dither (a dither cannot be a blit's paper); Loop is
+latched at Play; the line is the playhead while a play is held and the
+cursor otherwise, and none beside a selection.
+
+**Folded in from wave 2's review** (`wr-reports/review-wave2.md`, each
+verified against the code first): **M1** the walk now tests the carry of
+`pos + 8` (a chunk size that carried the next position to FFFFFFF8h wrapped
+the header to offset 0..7 and read at ~4 GB, answering E_IO where wrsim
+answers E_NODATA/E_NOFMT) - new BAD fixture `WRAPPOS.WAV`, refused on the
+glass with `No data chunk`, the document empty; **M2** `we_clamp` rounds the
+view's bound UP to a multiple of fpp, so the last `frames mod fpp` frames are
+reachable below Fit - LONG.WAV at z = 10: first 548,864 (was 547,840), the
+cursor at the end on the last column, Left and Right round it; wrsim's
+`view_clamp` and a selfcheck case for every z below Fit; **L1** a frame is
+negative only from C000_0000h up, so a step past the end of a document over
+2^30 frames clamps to the end, not 0 (code-read; no fixture that large fits
+a floppy); **L2** a scan read that delivers nothing short of the source's
+frames refuses the document with `Cannot read the file` instead of ending
+silently over unscanned blocks (code-read; nothing here shortens a READ_AT);
+**L3** §122.5 says `ceil(frames / B)` and LONG.WAV's 1,124 blocks.
+
+The soak row, run once at the end (`python3 tools/os88test.py soak -v -k
+waverackplay`). Its FIRST run failed in the test (bytes handed to numpy as
+an int list) and at one real check - PEAK never lit for STEREO16's
+one-sample spike, because the meter read only the half sounding every three
+ticks and a 93 ms half fell between two looks; the meter now takes every
+half played since its last look for the hold and PEAK (§122.8). The second
+run, on the build before the review's five fixes (which touch the reader and
+the view, not the transport):
+
+```
+os88test: building 4 declared artefact(s): build/os8088.img build/wrfix.img build/waverack.bin build/mixercfg/SYSTEM.CFG
+os88test: soak tier - 1 rows, 420s declared, budget none  (caps: lame,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+
+ ok  waverackplay                 136.6s
+       | waverackplay: rates - an SB16 (PCM_HI), captured at 22,222 Hz
+       |    the running WaveRack is build/waverack.bin (make waverackfix) ok
+       |    WaveRack launches off B:                                     ok
+       |      heap, idle, no document: [10] KB
+       |    STEREO16.WAV opens                                           ok
+       |      heap, idle with it open: [4, 6, 10, 16] KB = 36 KB
+       |    STEREO16: d = 1 at 22,050 Hz (SND_CAP_PCM_HI)                ok
+       |    STEREO16: the status said 'Out 22,050 Hz mono'               ok
+       |    STEREO16: the meter's caption was LEVEL  PLAY (wr_mwho 2)    ok
+       |    STEREO16: the meter lit 22 cells for its tone (wrart_db[93]) ok
+       |    STEREO16: PEAK lit at R's spike (32767, a rail)              ok
+       |      heap, playing: [4, 6, 10, 16, 32] KB = 68 KB
+       |    STEREO16: ended IDLE, no underrun, 'End of the sound'        ok
+       |    STEREO16: every claim given back (heap [4, 6, 10, 16] KB)    ok
+       |    STEREO16 at 75%: found in the capture                        ok
+       |    STEREO16 at 75%: every sample                                ok
+       |  loop: a selection dragged in the waveform, looped
+       |    the drag selects [7488, 16960): columns 117..264 at fpp 64   ok
+       |    the cursor stands at s                                       ok
+       |    paused after 4.8 laps: 45728 samples played (verb 9)         ok
+       |    the region and the lap: sp 7488 e1 16960 = [s, e)            ok
+       |    the paused position 15328 = wrsim.play_pos(45728 x 1) = 15328 ok
+       |    the capture holds the selection REPEATED, every sample: 4 whole laps of 9472 ok
+       |    Space resumes it                                             ok
+       |    Stop: the playhead back where the play began (7488)          ok
+       |    Stop: the cursor and the selection where they were           ok
+       |    Stop: every claim and the grant back (heap [4, 6, 10, 16] KB) ok
+       |    TONE8.WAV opens                                              ok
+       |    TONE8.WAV: 11025 Hz on the card (d = 1), status 'End of the sound' ok
+       |    TONE8.WAV: the capture's tone 1007.9 Hz, want 1007.8 (+-2%)  ok
+       |    TONE8.WAV: 1.044 s long, want 0.992 (+-0.06)                 ok
+       |    TONE8K.WAV opens                                             ok
+       |    TONE8K.WAV: 8000 Hz on the card (d = 1), status 'End of the sound' ok
+       |    TONE8K.WAV: the capture's tone 499.8 Hz, want 500.0 (+-2%)   ok
+       |    TONE8K.WAV: 1.008 s long, want 1.000 (+-0.06)                ok
+       |  close: the window closed mid-play
+       |    STEREO16.WAV opens                                           ok
+       |    the window closes                                            ok
+       |    no claim of the closed region left ([])                      ok
+       |    the running WaveRack is build/waverack.bin (make waverackfix) ok
+       |    WaveRack launches again                                      ok
+       |    STEREO16.WAV opens again                                     ok
+       |    the card opens again - the old stream was closed (Out 22,050 Hz mono) ok
+       | waverackplay: d2 - a DSP 2.01 (no PCM_HI), captured at 22222 Hz
+       |    the running WaveRack is build/waverack.bin (make waverackfix) ok
+       |    WaveRack launches off B:                                     ok
+       |    TONE44.WAV opens                                             ok
+       |    VOLUME 50% from the keys (wr_vol 50)                         ok
+       |    TONE44: d = 2 at 22,050 Hz (the ceiling 22,222)              ok
+       |    TONE44: the status said 'Out 22,050 Hz mono /2'              ok
+       |    TONE44: ended, no underrun                                   ok
+       |    TONE44: 12288 samples played (verb 9) - the frames / 2, padded to a half ok
+       |    TONE44 at d = 2, 50%: found in the capture                   ok
+       |    TONE44 at d = 2, 50%: every sample                           ok
+       | waverackplay: ok
+
+os88test: 1 passed, 0 failed, 0 skipped in 136.6s, 43.9s charged (budget none)
 rc=0
 ```
 

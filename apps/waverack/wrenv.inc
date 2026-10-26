@@ -161,8 +161,13 @@ we_span:
     ret
 
 ; -----------------------------------------------------------------------------
-; we_clamp - the first frame inside the document - at most frames - span, at
-;            least 0 - and on a multiple of fpp. keeps every register
+; we_clamp - the first frame inside the document - at most frames - span
+;            ROUNDED UP to a multiple of fpp, at least 0 - and on a multiple
+;            of fpp. Rounded up, so the last (frames mod fpp) frames are in the
+;            view at its end (the columns past the document draw empty): a
+;            bound rounded down hid them below Fit, and a cursor parked there
+;            vanished and could not be scrolled to (wave 2's review, M2).
+;            keeps every register
 ; -----------------------------------------------------------------------------
 we_clamp:
     push ax
@@ -174,14 +179,25 @@ we_clamp:
     mov cx, [wo_frames+2]
     sub bx, ax
     sbb cx, dx
-    jnc .max
+    jnc .up
     xor bx, bx
     xor cx, cx
+    jmp short .max
+.up:
+    call we_fpp                     ; ...up to a multiple of fpp:
+    sub ax, 1                       ; (max + fpp - 1) & ~(fpp - 1)
+    sbb dx, 0
+    add bx, ax
+    adc cx, dx
+    not ax
+    not dx
+    and bx, ax
+    and cx, dx
 .max:
     mov ax, [wv_first]
     mov dx, [wv_first+2]
-    test dh, 0x80                   ; a scroll left of nought
-    jz .pos
+    cmp dh, 0xC0                    ; a scroll left of nought (NEGATIVE is
+    jb .pos                         ; C000_0000h up: see we_setcur)
     xor ax, ax
     xor dx, dx
 .pos:
@@ -194,8 +210,8 @@ we_clamp:
     mov ax, bx
     mov dx, cx
 .in:
-    push ax                         ; ...on a multiple of fpp: rounded DOWN,
-    push dx                         ; so the end stays in view
+    push ax                         ; ...on a multiple of fpp: a first asked
+    push dx                         ; for rounded DOWN (the bound is one)
     call we_fpp
     sub ax, 1
     sbb dx, 0
@@ -334,12 +350,16 @@ we_scanstep:
     mov cx, 0xFFFF
     mov bp, WE_GULP
     call wo_srcread                 ; ES:DI = the frames, CX = how many
-    jnc .read
-    mov byte [ww_err], E_IO         ; the file could not be read: the document
-    call wo_new                     ; goes, and the status bar says why
-    jmp ww_say
-.read:
-    jcxz we_scandone
+    jc .ioerr
+    or cx, cx                       ; NOTHING, short of the source's frames
+    jnz .fold                       ; (the scan's own end is the test after
+.ioerr:                             ; the fold): a short READ_AT - a chain
+    mov byte [ww_err], E_IO         ; shorter than its entry, a disk swapped -
+    call wo_new                     ; and the blocks after it were never
+    jmp ww_say                      ; stored. The document goes, and the
+                                    ; status bar says why (wave 2's review,
+                                    ; L2: it ended silently, 'Ready', over
+                                    ; uninitialised blocks)
 .fold:
     mov ax, cx                      ; n = min(what is here, the block's rest)
     cmp word [we_bleft+2], 0
@@ -882,6 +902,8 @@ we_refstep:
     call we_moved                   ; draw what was refined
     cmp byte [we_rsaid], 0
     jne .armed
+    call wt_active                  ; (silent under a paused play: the status
+    jnc .armed                      ; bar says Paused, and keeps saying it)
     mov byte [we_rsaid], 1
     mov si, we_s_refine
     call wr_say
@@ -1074,14 +1096,22 @@ we_zoom:
     call wv_build
     jmp we_moved
 
-; we_anchor - DX:AX = the cursor's frame and CX = its column when it is in
-; view, else the view's middle frame and column. clobbers BX
+; we_anchor - DX:AX = the cursor's frame - the PLAYHEAD's while the transport
+; holds a play (SPEC.md 122.5) - and CX = its column when it is in view, else
+; the view's middle frame and column. clobbers BX
 we_anchor:
-    call we_curcol                  ; AX = the column, CF = 1 out of view
-    jc .mid
-    mov cx, ax
     mov ax, [wo_cur]
     mov dx, [wo_cur+2]
+    call wt_active
+    jc .f
+    mov ax, [wt_ph]
+    mov dx, [wt_ph+2]
+.f:
+    push ax
+    call we_fcol                    ; AX = the column, CF = 1 out of view
+    mov cx, ax
+    pop ax
+    jc .mid
     ret
 .mid:
     mov cx, [we_ww]
@@ -1168,8 +1198,12 @@ we_centre:
 ;             the view scrolled to show it. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 we_setcur:
-    test dh, 0x80
-    jz .pos
+    cmp dh, 0xC0                    ; NEGATIVE from C000_0000h up: a frame is
+    jb .pos                         ; under 2^31, a step left of nought at most
+                                    ; 2^30 below it, so 8000_0000h..BFFF_FFFFh
+                                    ; is a step PAST the end of a document over
+                                    ; 2^30 frames, clamped to it below - bit 31
+                                    ; alone sent it to 0 (wave 2's review, L1)
     xor ax, ax
     xor dx, dx
 .pos:
@@ -1225,15 +1259,26 @@ we_setcur:
 .out:
     ret
 
-; we_curcol - AX = the cursor's column, CF = 1 when it is not in view (or
-; there is nothing to show it on). keeps the rest
+; we_curcol - AX = the cursor's column (we_fcol). keeps the rest
 we_curcol:
-    cmp byte [wo_doc], 0
-    je .no
-    push cx
     push dx
     mov ax, [wo_cur]
     mov dx, [wo_cur+2]
+    call we_fcol
+    pop dx
+    ret
+
+; we_fcol - document frame DX:AX -> AX = its column, CF = 1 when it is not in
+; view (or there is nothing to show it on). keeps the rest
+we_fcol:
+    cmp byte [wo_doc], 0
+    je .no
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, ax                      ; (the frame, for the end's test)
+    mov si, dx
     sub ax, [wv_first]
     sbb dx, [wv_first+2]
     jc .no2
@@ -1245,21 +1290,23 @@ we_curcol:
     cmp ax, [we_ww]
     jb .in
     jne .no2                        ; one past the last column: the END of
-    mov dx, [wo_cur]                ; the document stands there when the
-    cmp dx, [wo_frames]             ; view ends on it (we_clamp cannot
-    jne .no2                        ; scroll further) - its line is drawn
-    mov dx, [wo_cur+2]              ; on the last column
-    cmp dx, [wo_frames+2]
-    jne .no2
+    cmp bx, [wo_frames]             ; the document stands there when the
+    jne .no2                        ; view ends on it (we_clamp cannot
+    cmp si, [wo_frames+2]           ; scroll further) - its line is drawn
+    jne .no2                        ; on the last column
     dec ax
 .in:
+    pop si
     pop dx
     pop cx
+    pop bx
     clc
     ret
 .no2:
+    pop si
     pop dx
     pop cx
+    pop bx
 .no:
     stc
     ret
@@ -1482,6 +1529,7 @@ we_blit:
     mov bp, [wf_wst]
     mov es, [wr_bseg]
     call OSAPI_GFX_BLIT1
+    WR_NCALL
     pop es
     pop bp
     pop di
@@ -1494,53 +1542,85 @@ we_blit:
     ret
 
 ; -----------------------------------------------------------------------------
-; we_putcols - the lanes' columns CX..DI from the band onto the glass: one
-;              call in black and white; in colour one a run between the
-;              grid's columns and one a grid column, whose paper is the
-;              grid's colour (so a trace crossing it keeps its own).
-;              keeps every register
+; we_putcols - the lanes' columns CX..DI from the band onto the glass, as RUNS
+;              of one CLASS each (we_lcls): in black and white a run outside
+;              the selection is one call and one inside it is the band
+;              INVERTED for that call (SPEC.md 122.9); in colour a run
+;              between the grid's columns is one call, a grid column one
+;              whose paper is the grid's (so a trace crossing it keeps its
+;              own colour), the selection one on its own ground, and each of
+;              its edges in view one on the handle's. keeps every register
 ; -----------------------------------------------------------------------------
 we_putcols:
+    push ax
+    push cx
+    push dx
+    call we_lanesel                 ; the selection's columns, for the class
+    mov word [we_clsp], we_lcls
+    mov ax, [we_rulh]               ; the lanes' rows
+    mov [we_rs], ax
+    add ax, [we_by]
+    mov [we_rb], ax
+    mov ax, [we_lh]
+    mov [we_rn], ax
+    pop dx
+    pop cx
+    pop ax
+    ; (falls into we_runs)
+
+; -----------------------------------------------------------------------------
+; we_runs - band columns CX..DI onto the glass, cut into runs of one class:
+;           [we_clsp] answers a column's class (AL the ink role, AH the paper
+;           role, AH bit 7 = the band inverted for it) and a run is ONE
+;           we_blit of [we_rn] rows from band row [we_rs] to content row
+;           [we_rb]. keeps every register
+; -----------------------------------------------------------------------------
+we_runs:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    mov [we_pc1], di
-    mov si, [we_rulh]
-    mov bx, [we_by]
-    add bx, si
-    mov dx, [we_lh]
-    cmp word [wd_th], wrart_tbw
-    je .last
-    mov word [we_pgi], 0
-.g:
-    mov di, [we_pgi]
-    cmp di, [we_ng]
-    jae .last
-    inc word [we_pgi]
-    shl di, 1
-    mov ax, [we_gx + di]
-    cmp ax, cx
-    jb .g                           ; left of the run: passed
-    cmp ax, [we_pc1]
-    ja .last                        ; right of it: the run is done
-    mov di, ax
-    dec di
-    push ax
-    mov ax, (R_LCD << 8) | R_WAVE   ; the run up to it...
-    call we_blit
-    pop cx
+    push bp
+    mov bp, di                      ; BP = the last column
+.run:
+    cmp cx, bp
+    jg .done
+    call word [we_clsp]             ; AX = column CX's class
+    mov bx, ax
     mov di, cx
-    mov ax, (R_GRID << 8) | R_WAVE  ; ...and the grid column itself
+.ext:
+    inc di                          ; the run: while the class holds
+    cmp di, bp
+    jg .put
+    push cx
+    mov cx, di
+    call word [we_clsp]
+    pop cx
+    cmp ax, bx
+    je .ext
+.put:
+    dec di
+    mov ax, bx
+    mov si, [we_rs]
+    mov bx, [we_rb]
+    mov dx, [we_rn]
+    test ah, 0x80
+    jz .plain
+    and ah, 0x7F                    ; inverted: the band's bytes turned over
+    call we_xor                     ; for the one call, and back
     call we_blit
+    call we_xor
+    jmp short .next
+.plain:
+    call we_blit
+.next:
+    mov cx, di
     inc cx
-    jmp short .g
-.last:
-    mov di, [we_pc1]
-    mov ax, (R_LCD << 8) | R_WAVE
-    call we_blit
+    jmp short .run
+.done:
+    pop bp
     pop di
     pop si
     pop dx
@@ -1548,6 +1628,147 @@ we_putcols:
     pop bx
     pop ax
     ret
+
+; we_xor - band columns CX..DI turned over (every byte that holds one of
+; them) on DX rows from band row SI. Bytes shared with a neighbour's columns
+; are turned back by the second call before anything else reads them.
+; keeps every register
+we_xor:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov es, [wr_bseg]
+    mov ax, di                      ; the bytes: from the one holding CX...
+    add ax, [wf_wk]
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov bx, cx
+    add bx, [wf_wk]
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    sub ax, bx                      ; ...to the one holding DI
+    inc ax
+    push bx
+    mov bx, si
+    call we_rowoff                  ; DI = the first row
+    pop bx
+    add di, bx
+.row:
+    push di
+    mov cx, ax
+.b:
+    not byte [es:di]
+    inc di
+    loop .b
+    pop di
+    add di, [wf_wst]
+    dec dx
+    jnz .row
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; we_lcls - a lanes column CX's class (we_runs; we_lanesel ran). keeps all
+; but AX
+we_lcls:
+    cmp byte [we_kon], 0
+    je .un
+    cmp cx, [we_k0]
+    jb .un
+    cmp cx, [we_k1]
+    ja .un
+    cmp word [wd_th], wrart_tbw     ; selected: black and white turns it over
+    je .inv
+    mov ax, (R_HANDLE << 8) | R_WAVE  ; colour: an edge in view, the handle's
+    cmp cx, [we_k0]
+    jne .e1
+    cmp byte [we_kf], 0
+    jne .out
+.e1:
+    cmp cx, [we_k1]
+    jne .mid
+    cmp byte [we_kf+1], 0
+    jne .out
+.mid:
+    mov ax, (R_SELBG << 8) | R_WAVE ; ...and the rest on the selection's ground
+    ret
+.inv:
+    mov ax, 0x8000 | (R_LCD << 8) | R_WAVE
+    ret
+.un:
+    mov ax, (R_LCD << 8) | R_WAVE
+    cmp word [wd_th], wrart_tbw
+    je .out
+    push si                         ; colour: a grid column's paper is the
+    mov si, [we_ng]                 ; grid's
+    shl si, 1
+.g:
+    sub si, 2
+    jb .ng
+    cmp cx, [we_gx + si]
+    jne .g
+    mov ax, (R_GRID << 8) | R_WAVE
+.ng:
+    pop si
+.out:
+    ret
+
+; we_ocls - an overview column CX's class (we_oputcols). keeps all but AX
+we_ocls:
+    cmp byte [we_kon], 0
+    je .un
+    cmp cx, [we_k0]
+    jb .un
+    cmp cx, [we_k1]
+    ja .un
+    cmp word [wd_th], wrart_tbw
+    je .inv
+    mov ax, (R_SELBG << 8) | R_WAVE
+    jmp short .br
+.inv:
+    mov ax, 0x8000 | (R_LCD << 8) | R_WAVE
+    ret
+.un:
+    mov ax, (R_LCD << 8) | R_WAVE
+    cmp word [wd_th], wrart_tbw     ; (black and white: the bracket is dots
+    je .out                         ; in the band)
+.br:
+    cmp cx, [we_ox0]                ; colour: the view's edges, the handle's
+    je .h
+    cmp cx, [we_ox1]
+    jne .out
+.h:
+    mov al, R_HANDLE
+.out:
+    ret
+
+; we_oputcols - the overview's columns CX..DI as runs (we_ocls): the view's
+; bracket in colour, the selection's extent in either theme. keeps all
+we_oputcols:
+    push ax
+    push cx
+    push dx
+    call we_ovsel
+    mov word [we_clsp], we_ocls
+    mov ax, [we_wrows]
+    mov [we_rs], ax
+    mov ax, [we_oy]
+    mov [we_rb], ax
+    mov ax, [we_oh]
+    mov [we_rn], ax
+    pop dx
+    pop cx
+    pop ax
+    jmp we_runs
 
 ; we_bank - the band's phase and stride for the waveform's x (wf_wbank).
 ; keeps every register
@@ -1696,7 +1917,9 @@ we_draw:
     xor cx, cx
     mov di, [we_ww]
     dec di
-    jmp we_putcols
+    call we_putcols
+    mov si, we_dl                   ; the selection the glass shows now
+    jmp we_kkeep
 
 ; we_lane1 - lane name SI at the top left of the lane whose top is band row
 ; BX: columns 1..7, rows 0..8 cleared, the letter at column 2, row 1.
@@ -2258,35 +2481,12 @@ we_ovdraw:
     call we_pix
     jmp short .dot
 .put:
-    mov si, [we_wrows]
-    mov dx, [we_oh]
-    mov bx, [we_oy]
-    xor cx, cx
-    cmp word [wd_th], wrart_tbw
-    je .one1
-    mov di, [we_ox0]                ; colour: the edges in the handle's ink
-    dec di
-    mov ax, (R_LCD << 8) | R_WAVE
-    call we_blit
-    mov cx, [we_ox0]
-    mov di, cx
-    mov ax, (R_LCD << 8) | R_HANDLE
-    call we_blit
-    inc cx
-    mov di, [we_ox1]
-    dec di
-    mov ax, (R_LCD << 8) | R_WAVE
-    call we_blit
-    mov cx, [we_ox1]
-    mov di, cx
-    mov ax, (R_LCD << 8) | R_HANDLE
-    call we_blit
-    inc cx
-.one1:
-    mov di, [we_ww]
-    dec di
-    mov ax, (R_LCD << 8) | R_WAVE
-    jmp we_blit
+    xor cx, cx                      ; one run in black and white; in colour
+    mov di, [we_ww]                 ; the bracket's edges, and the
+    dec di                          ; selection's extent in either
+    call we_oputcols
+    mov si, we_do
+    jmp we_kkeep
 
 ; we_orow - AX = 127 - a sample (0..255) -> BX = its overview row,
 ; (AX * (oh - 1) + 127) / 255. keeps AX, CX
@@ -2359,6 +2559,609 @@ we_ofx:
     xor ax, ax
 .out:
     pop cx
+    ret
+
+; =============================================================================
+; THE SELECTION (SPEC.md 122.9): [s, e) in frames, clamped to the document;
+; s = e is none and leaves the cursor where it is. A non-empty selection puts
+; the cursor at s. [wo_anc] is the end a drag or Shift holds still.
+; =============================================================================
+
+; we_hassel - CF = 0 when the selection is non-empty. keeps every register
+we_hassel:
+    push ax
+    mov ax, [wo_s]
+    cmp ax, [wo_e]
+    jne .yes
+    mov ax, [wo_s+2]
+    cmp ax, [wo_e+2]
+    jne .yes
+    pop ax
+    stc
+    ret
+.yes:
+    pop ax
+    clc
+    ret
+
+; we_clampf - DX:AX (signed) clamped to 0..frames. keeps the rest
+we_clampf:
+    cmp dh, 0xC0                    ; (negative: we_setcur's rule)
+    jb .pos
+    xor ax, ax
+    xor dx, dx
+    ret
+.pos:
+    cmp dx, [wo_frames+2]
+    jb .out
+    ja .end
+    cmp ax, [wo_frames]
+    jbe .out
+.end:
+    mov ax, [wo_frames]
+    mov dx, [wo_frames+2]
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; we_selset - the selection between frames DX:AX and CX:BX, either order,
+;             each clamped: [min, max). A non-empty one puts the cursor at s.
+;             The face is owed the selection. clobbers AX, BX, CX, DX
+; -----------------------------------------------------------------------------
+we_selset:
+    call we_clampf
+    xchg ax, bx
+    xchg dx, cx
+    call we_clampf
+    cmp dx, cx
+    jb .ord
+    ja .swap
+    cmp ax, bx
+    jbe .ord
+.swap:
+    xchg ax, bx
+    xchg dx, cx
+.ord:
+    mov [wo_s], ax
+    mov [wo_s+2], dx
+    mov [wo_e], bx
+    mov [wo_e+2], cx
+    call we_hassel
+    jc we_smoved
+    cmp ax, [wo_cur]                ; the cursor at s (its time redrawn only
+    jne .cur                        ; when it moved: a drag rightward holds
+    cmp dx, [wo_cur+2]              ; s still)
+    je we_smoved
+.cur:
+    mov [wo_cur], ax
+    mov [wo_cur+2], dx
+    call we_cmoved
+    ; (falls into we_smoved)
+
+; we_smoved - the selection moved: its draw and its field are owed. keeps all
+we_smoved:
+    push ax
+    mov ax, [wo_sgen]
+    call wo_inc
+    mov [wo_sgen], ax
+    pop ax
+    ret
+
+; we_selnone - none: s = e = the cursor. clobbers AX, BX, CX, DX
+we_selnone:
+    mov ax, [wo_cur]
+    mov dx, [wo_cur+2]
+    mov bx, ax
+    mov cx, dx
+    jmp we_selset
+
+; we_selall - Select All: [0, frames), anchored at 0. clobbers AX, BX, CX, DX
+we_selall:
+    xor ax, ax
+    xor dx, dx
+    mov [wo_anc], ax
+    mov [wo_anc+2], ax
+    mov bx, [wo_frames]
+    mov cx, [wo_frames+2]
+    jmp we_selset
+
+; -----------------------------------------------------------------------------
+; we_extend - Shift+Left / Shift+Right (AL = -1 / +1): the selection's MOVING
+;             end - the one that is not the anchor - a column on (one frame
+;             at fpp = 1); with none, from the cursor, which becomes the
+;             anchor. clobbers AX, BX, CX, DX, SI
+; -----------------------------------------------------------------------------
+we_extend:
+    mov si, ax                      ; SI's low byte: the direction
+    call we_hassel
+    jnc .sel
+    mov ax, [wo_cur]                ; none: the cursor is the anchor and the
+    mov dx, [wo_cur+2]              ; moving end both
+    mov [wo_anc], ax
+    mov [wo_anc+2], dx
+    jmp short .m
+.sel:
+    mov ax, [wo_s]                  ; the moving end: s, unless s is the
+    mov dx, [wo_s+2]                ; anchor
+    cmp ax, [wo_anc]
+    jne .m
+    cmp dx, [wo_anc+2]
+    jne .m
+    mov ax, [wo_e]
+    mov dx, [wo_e+2]
+.m:
+    push ax
+    push dx
+    call we_fpp
+    mov bx, ax
+    mov cx, dx
+    pop dx
+    pop ax
+    test si, 0x80
+    jz .r
+    sub ax, bx
+    sbb dx, cx
+    jmp short .set
+.r:
+    add ax, bx
+    adc dx, cx
+.set:
+    mov bx, [wo_anc]
+    mov cx, [wo_anc+2]
+    jmp we_selset
+
+; -----------------------------------------------------------------------------
+; we_dragsel - a drag in the waveform: DX:AX = the frame of the column under
+;              the pointer, [wo_anc] the press's. Both columns are in the
+;              selection: rightward [A, p + fpp), leftward [p, A + fpp) -
+;              and from a handle or a Shift press ([wr_drag] = 5, an anchor
+;              that is an end, not a column) [p, A). Back on the press's own
+;              column (a plain drag): none. clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+we_dragsel:
+    mov bx, [wo_anc]
+    mov cx, [wo_anc+2]
+    cmp dx, cx
+    ja .right
+    jb .left
+    cmp ax, bx
+    ja .right
+    jb .left
+    cmp byte [wr_drag], 4           ; on the press's column
+    jne .right
+    jmp we_selset                   ; (s = e: none)
+.right:
+    push ax
+    push dx
+    call we_fpp                     ; e = p + fpp
+    mov si, ax
+    mov di, dx
+    pop dx
+    pop ax
+    add ax, si
+    adc dx, di
+    jmp we_selset
+.left:
+    cmp byte [wr_drag], 4
+    jne .l5
+    push ax
+    push dx
+    call we_fpp                     ; e = A + fpp
+    add bx, ax
+    adc cx, dx
+    pop dx
+    pop ax
+.l5:
+    jmp we_selset
+
+; -----------------------------------------------------------------------------
+; we_handle - a press on column CX: a selection's HANDLE, within two columns
+;             of an edge in view? The other end becomes the anchor (the end's
+;             handle first: a narrow selection is widened, not inverted).
+;             out: CF = 0 grabbed. clobbers AX, BX, DX, SI
+; -----------------------------------------------------------------------------
+we_handle:
+    push cx
+    call we_selcols                 ; AX = c0, CX = c1, DL/DH the edges
+    mov bx, cx
+    pop cx
+    jc .no
+    or dh, dh                       ; the end's edge
+    jz .st
+    mov si, bx
+    sub si, 2
+    cmp cx, si
+    jl .st
+    add si, 4
+    cmp cx, si
+    jg .st
+    mov ax, [wo_s]                  ; grabbed: s holds still
+    mov dx, [wo_s+2]
+    jmp short .anc
+.st:
+    or dl, dl                       ; the start's
+    jz .no
+    mov si, ax
+    sub si, 2
+    cmp cx, si
+    jl .no
+    add si, 4
+    cmp cx, si
+    jg .no
+    mov ax, [wo_e]                  ; grabbed: e holds still
+    mov dx, [wo_e+2]
+.anc:
+    mov [wo_anc], ax
+    mov [wo_anc+2], dx
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; we_selcols - the selection's columns in the lanes: AX = the first, CX = the
+;              last (0 <= AX <= CX < ww), DL = 1 when its start's edge is in
+;              view, DH = 1 its end's. CF = 1 none in view (or none at all).
+;              keeps BX, SI, DI
+; -----------------------------------------------------------------------------
+we_selcols:
+    call we_hassel
+    jc .no0
+    push bx
+    push si
+    mov ax, [wo_s]                  ; the first: (s - first) >> z...
+    mov dx, [wo_s+2]
+    mov bl, 1
+    sub ax, [wv_first]
+    sbb dx, [wv_first+2]
+    jnc .s1
+    xor ax, ax                      ; ...0 when it starts left of the view
+    xor dx, dx
+    xor bl, bl
+.s1:
+    mov cl, [wv_z]
+    xor ch, ch
+    call we_shr
+    or dx, dx
+    jnz .no
+    cmp ax, [we_ww]
+    jae .no                         ; (right of the view: none in it)
+    mov si, ax
+    mov ax, [wo_e]                  ; the last: (e - 1 - first) >> z
+    mov dx, [wo_e+2]
+    sub ax, 1
+    sbb dx, 0
+    sub ax, [wv_first]
+    sbb dx, [wv_first+2]
+    jc .no                          ; (left of the view)
+    call we_shr
+    mov bh, 1
+    or dx, dx
+    jnz .clip
+    cmp ax, [we_ww]
+    jb .c1
+.clip:
+    mov ax, [we_ww]                 ; ...the last column when it ends right
+    dec ax                          ; of the view
+    xor bh, bh
+.c1:
+    mov cx, ax
+    mov ax, si
+    mov dl, bl                      ; (BL the start's edge, BH the end's)
+    mov dh, bh
+    pop si
+    pop bx
+    clc
+    ret
+.no:
+    pop si
+    pop bx
+.no0:
+    stc
+    ret
+
+; we_oselcols - the selection's extent in the overview: AX = the first
+; column, CX = the last. CF = 1 none. keeps BX, SI, DI
+we_oselcols:
+    call we_hassel
+    jc .out
+    push bx
+    push dx
+    mov ax, [wo_e]
+    mov dx, [wo_e+2]
+    sub ax, 1
+    sbb dx, 0
+    call we_ofx
+    mov cx, ax
+    mov ax, [wo_s]
+    mov dx, [wo_s+2]
+    call we_ofx
+    mov bx, [we_ww]
+    dec bx
+    cmp cx, bx
+    jbe .c
+    mov cx, bx
+.c:
+    cmp ax, cx
+    jbe .o
+    mov ax, cx
+.o:
+    pop dx
+    pop bx
+    clc
+.out:
+    ret
+
+; we_lanesel / we_ovsel - the selection's columns in the lanes / the
+; overview into the class record: [we_kon], [we_k0], [we_k1], [we_kf] (the
+; edges in view, lanes only). clobber AX, CX, DX
+we_lanesel:
+    mov byte [we_kon], 0
+    call we_selcols
+    jc .out
+    mov [we_kf], dx
+    jmp short we_kset
+.out:
+    ret
+
+we_ovsel:
+    mov byte [we_kon], 0
+    call we_oselcols
+    jc we_lanesel.out
+    mov word [we_kf], 0
+we_kset:
+    mov [we_k0], ax
+    mov [we_k1], cx
+    mov byte [we_kon], 1
+    ret
+
+; we_kkeep - the class record as the glass now shows it, into the drawn
+; record at SI (we_dl: the lanes, we_do: the overview). keeps every register
+we_kkeep:
+    push ax
+    mov al, [we_kon]
+    mov [si], al
+    mov ax, [we_k0]
+    mov [si+1], ax
+    mov ax, [we_k1]
+    mov [si+3], ax
+    mov ax, [we_kf]
+    mov [si+5], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; we_selpass - THE SELECTION REDRAWN WHERE IT CHANGED (the face's wf_e_wsel):
+;              in the lanes and in the overview, the columns between the
+;              old and the new edges - never a recomposition. Whatever a full
+;              draw of the lanes or the overview showed is in their drawn
+;              records already. clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+we_selpass:
+    call we_bank
+    call we_lanesel                 ; the lanes
+    mov word [we_dput], we_lput
+    mov si, we_dl
+    call we_seldiff
+    call we_lanesel
+    mov si, we_dl
+    call we_kkeep
+    call we_ovsel                   ; the overview
+    mov word [we_dput], we_oputcols
+    mov si, we_do
+    call we_seldiff
+    call we_ovsel
+    mov si, we_do
+    jmp we_kkeep
+
+; we_seldiff - the class record (now) against the drawn one at SI: each end
+; that moved (or whose edge came into or left the view) redrawn from the old
+; edge to the new, inclusive, by [we_dput] (CX..DI). clobbers AX, BX, CX, DX,
+; DI
+we_seldiff:
+    mov al, [we_kon]
+    mov ah, [si]
+    or al, al
+    jnz .now
+    or ah, ah
+    jz .out
+    mov cx, [si+1]                  ; gone: where it was
+    mov di, [si+3]
+    jmp word [we_dput]
+.now:
+    or ah, ah
+    jnz .both
+    mov cx, [we_k0]                 ; new: where it is
+    mov di, [we_k1]
+    jmp word [we_dput]
+.both:
+    mov ax, [we_k0]                 ; the start
+    mov bx, [si+1]
+    mov dl, [we_kf]
+    cmp ax, bx
+    jne .s
+    cmp dl, [si+5]
+    je .e
+.s:
+    call we_range2
+.e:
+    mov ax, [we_k1]                 ; the end
+    mov bx, [si+3]
+    mov dl, [we_kf+1]
+    cmp ax, bx
+    jne .e1
+    cmp dl, [si+6]
+    je .out
+.e1:
+    call we_range2
+.out:
+    ret
+
+; we_range2 - [min(AX, BX), max(AX, BX)] redrawn by [we_dput]. keeps SI
+we_range2:
+    mov cx, ax
+    mov di, bx
+    cmp cx, di
+    jbe .p
+    xchg cx, di
+.p:
+    push si
+    call word [we_dput]
+    pop si
+    ret
+
+; we_lput - the lanes' columns CX..DI put (we_putcols), and the line forgotten
+; when it stood among them - it is drawn again by its own element, after this
+; one. keeps every register
+we_lput:
+    call we_putcols
+    push ax
+    mov ax, [wf_keys + 2 * WRE_CUR]
+    or ax, ax
+    jz .out
+    cmp ax, 0xFFFF
+    je .out
+    dec ax
+    cmp ax, cx
+    jb .out
+    cmp ax, di
+    ja .out
+    mov word [wf_keys + 2 * WRE_CUR], 0xFFFF
+.out:
+    pop ax
+    ret
+
+; we_linecol - AX = THE LINE's column: the playhead's while the transport
+; holds a play, else the cursor's - and none beside a selection, which shows
+; where Play begins already. CF = 1 none. keeps the rest
+we_linecol:
+    push dx
+    call wt_active
+    jc .idle
+    mov ax, [wt_ph]
+    mov dx, [wt_ph+2]
+    call we_fcol
+    pop dx
+    ret
+.idle:
+    pop dx
+    call we_hassel
+    jnc .none
+    jmp we_curcol
+.none:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; we_seltext - the selection field's value at DI (SPEC.md 122.9): 'SS.cc -
+;              SS.cc' while its end is under a minute, 'M:SS.c - M:SS.c'
+;              from there; nothing with none (tools/wrsim.py's sel_text).
+;              out DI past it. clobbers AX, CX, DX
+; -----------------------------------------------------------------------------
+we_seltext:
+    call we_hassel
+    jc .out
+    mov byte [we_smode], 0          ; under a minute? e < 60 x rate
+    mov ax, [wo_rate]
+    mov cx, 60
+    mul cx
+    cmp [wo_e+2], dx
+    ja .long
+    jb .short
+    cmp [wo_e], ax
+    jb .short
+.long:
+    mov byte [we_smode], 1
+.short:
+    mov ax, [wo_s]
+    mov dx, [wo_s+2]
+    call we_stime
+    mov word [di], ' -'
+    mov byte [di+2], ' '
+    add di, 3
+    mov ax, [wo_e]
+    mov dx, [wo_e+2]
+    call we_stime
+.out:
+    ret
+
+; we_stime - frame DX:AX at the document's rate, 'SS.cc' ([we_smode] = 0) or
+; 'M:SS.c' (1), at DI; DI past it. clobbers AX, CX, DX
+we_stime:
+    push bx
+    mov cx, [wo_rate]
+    mov bx, ax                      ; the seconds, high word first
+    mov ax, dx
+    xor dx, dx
+    div cx
+    xchg ax, bx
+    div cx                          ; BX:AX = the seconds, DX = the rest
+    push dx
+    cmp byte [we_smode], 0
+    jne .long
+    call wo_two                     ; (under a minute: AX < 60)
+    mov byte [di], '.'
+    inc di
+    pop ax                          ; the hundredths: rest x 100 / rate
+    mov dx, 100
+    mul dx
+    div cx
+    call wo_two
+    pop bx
+    ret
+.long:
+    push ax                         ; the minutes: BX:AX / 60
+    mov ax, bx
+    xor dx, dx
+    mov bx, 60
+    div bx
+    pop ax
+    div bx                          ; AX = the minutes, DX = the seconds
+    push dx
+    call dec_u16
+    mov byte [di], ':'
+    inc di
+    pop ax
+    call wo_two
+    mov byte [di], '.'
+    inc di
+    pop ax                          ; the tenths
+    mov dx, 10
+    mul dx
+    div cx
+    add al, '0'
+    mov [di], al
+    inc di
+    pop bx
+    ret
+
+; we_squeeze - the value at BX..DI without the spaces round its dash (a
+; narrow field's). out DI the new end. keeps the rest
+we_squeeze:
+    push ax
+    push si
+    mov si, bx
+.f:
+    cmp si, di
+    jae .out
+    cmp word [si], ' -'
+    je .got
+    inc si
+    jmp short .f
+.got:
+    mov byte [si], '-'              ; ' - ' -> '-': the rest moved two left
+    inc si
+.mv:
+    mov al, [si+2]
+    mov [si], al
+    inc si
+    cmp si, di
+    jb .mv
+    sub di, 2
+.out:
+    pop si
+    pop ax
     ret
 
 we_s_scan:   db 'Scanning ', 0

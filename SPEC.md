@@ -219095,7 +219095,7 @@ third-party audio in them.
 
 ## 122. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
 
-**Status: PINNED; wave 1 (the face) SHIPPED - §122.11 to §122.13; wave 2 (the document) SHIPPED - §122.3 to §122.5, marked per part.** Every subsection below is the contract the
+**Status: PINNED; wave 1 (the face) SHIPPED - §122.11 to §122.13; wave 2 (the document) SHIPPED - §122.3 to §122.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §122.6, §122.8's playback half and §122.9's selection half.** Every subsection below is the contract the
 implementation is written against; each says *(pinned)* until the wave that
 builds it marks it *(shipped)* with what was measured. The delivery record is
 `docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
@@ -219115,7 +219115,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 §122.7 is the one driver extension it needs. Pure NASM, for Audio's reason
 (§86): the C SDK does not wrap the stream verbs.
 
-### 122.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`)
+### 122.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`, wave 3 `wrxport.inc`)
 
 | file | holds | prefix |
 |---|---|---|
@@ -219125,7 +219125,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 | `wrwav.inc` | the RIFF/WAVE reader and the header writer | `ww_` |
 | `wrdoc.inc` | sources, the piece table, 32-bit frame arithmetic, undo/redo, the clipboard | `wo_` |
 | `wrenv.inc` | the coarse envelopes, the view cache and its refinement, the waveform band | `we_` |
-| `wrplay.inc` | the transport state machine, the look-ahead, the worker, conversion, volume, the meter | `wt_` |
+| `wrxport.inc` | the transport state machine, the look-ahead, the worker, conversion, volume, the playhead, the meter's state (wave 3; pinned as `wrplay.inc`, renamed when it was written) | `wt_` |
 | `wrrec.inc` | capture: the external record ring, the take file, gain, the recovery marker | `wc_` |
 | `wrsave.inc` | Save, Save As, Save Selection As, the temp file and the replace | `ws_` |
 | `build/wrart.inc` | the pictures, fonts, meter table, role tables and the three layouts as data, made and measured by `tools/os88wrart.py` with `tools/os88wrlay.py` (§122.11) | `wrart_`, `WRART_`, `WL_`, `WO_`, `R_`, `B_` |
@@ -219148,7 +219148,13 @@ holds the field to). A press on any greyed control says why there (§47 rule
 6): the capability above, `Nothing to stop`, `Only one choice here` (a greyed drop-down), `One color on screen` (Theme on
 a 1bpp display), `Screen too small` (Full Layout where MID does not fit), or
 `Not in this build yet` for a command a later wave builds *(shipped, wave
-1)*.
+1)*. Wave 3 adds the transport's: `Stop first` (Open or New while a play is
+held), `Not playing` (Pause with nothing playing), `No selection` (Select
+None), and Play's refusals - `Card needs 4,000+ Hz` (§122.6's, the pinned
+`The card cannot play below 4,000 Hz` being 34 characters), `Sound card is
+busy` (verb 0's 1), `Card refused the rate` (its 2), `Cannot open the card`,
+`Not enough memory`, `No task for the sound` and `Cannot read the file`
+*(shipped, wave 3)*.
 
 A machine with no card keeps a complete editor: it opens, edits, saves and
 draws every waveform; it does not pretend to play. PC speaker and Covox
@@ -219285,7 +219291,7 @@ odd. A take's header is different and is §122.7's.
 ### 122.5 The waveform: coarse envelopes, the view cache and the band (shipped in wave 2; the take's live envelope and the selection's split pinned)
 
 **A coarse envelope per source**: the block is the smallest power of two
-`B` >= 16 frames for which `frames / B` <= 2,048, and each block stores, per
+`B` >= 16 frames for which `ceil(frames / B)` <= 2,048, and each block stores, per
 channel, its minimum and maximum as signed 8-bit (an 8-bit sample - 80h; a
 16-bit sample's high byte). Mono is 4 KB at most, stereo 8 KB, one heap claim
 each. It is built by a SCAN at open - 16 KB a pass on the UI task, the status
@@ -219328,12 +219334,21 @@ re-blits the byte column it left from the band, and draws the line again.
   read as its high byte, no multiply) and storing each block as it ends; the
   status bar says `Scanning 45%` while it runs and the open's note, or
   `Ready`, when it is done. Stop, Escape and another Open abandon it, and
-  the document with it (`Open cancelled`). The envelope claim is
+  the document with it (`Open cancelled`). A read that delivers nothing
+  short of the source's frames (a chain shorter than its entry, a disk
+  swapped) refuses the document with `Cannot read the file` rather than
+  leaving its last blocks unscanned (wave 3, from wave 2's review). The
+  envelope claim is
   `ceil(blocks x channels x 2 / 1024)` KB - LONG.WAV's 1,150,000 frames are
-  B = 1,024 and 1,123 blocks, 3 KB.
-- **The view**: `wv_first` is always a multiple of fpp (`we_clamp` rounds
-  it down after bounding it to `frames - ww << z`), so at fpp >= B every
-  column is whole blocks and exact. Zoom In/Out keep the cursor's frame at
+  B = 1,024 and 1,124 blocks, 3 KB.
+- **The view**: `wv_first` is always a multiple of fpp (`we_clamp` bounds it
+  to `frames - ww << z` ROUNDED UP to a multiple of fpp, and rounds a first
+  asked for down), so at fpp >= B every column is whole blocks and exact,
+  and below Fit the view's end reaches the document's last frame - the
+  columns past it draw empty. (Wave 2 rounded the bound down, which hid the
+  last `frames mod fpp` frames below Fit; fixed in wave 3 from the review.)
+  A frame is negative only from `C000_0000h` up, so a step past the end of
+  a document over 2^30 frames clamps to the end rather than to 0. Zoom In/Out keep the cursor's frame at
   its column when the cursor is in view, else the view's middle; Fit is z =
   `wv_zfit` from frame 0. A new layout width refits and rebuilds (`we_geom`,
   at every full paint).
@@ -219431,6 +219446,94 @@ pair unreachable, and SOUND.DRV refuses it besides (§34.3).
   rate stops the transport with the reason. No stale ring bytes are played
   after a seek: the stream is closed and reopened.
 
+**Shipped in wave 3** (`wrxport.inc`, prefix `wt_`; `tools/wrsim.py`'s
+`out_rate`, `vtab`, `mono`, `convert`, `frames_played` and `play_pos` are
+the reference, in the fast `wrsim` row):
+
+- **The states** are `wt_state`: IDLE 0, PLAYING 1, PLAY_PAUSED 2, and 3 and
+  4 reserved for RECORDING and REC_PAUSED (wave 5). BUSY is `[we_busy]` = 1,
+  a scan, which `wr_cmdok` reads. The predicate follows the table: Play
+  (Space, the Play key, Sound > Play/Pause) with `SND_CAP_PCM_BG` and a
+  scanned document with frames; Space pauses a play and resumes a paused
+  one; **the Play key is LATCHED while playing** (`OS88UI_LATCH`) and a press
+  on it then does nothing; the Pause key pauses and, latched while paused,
+  resumes; Stop stops a play (or cancels a scan); Open and New grey while a
+  play is held (`Stop first`); zoom, scroll, the theme, the layout and Loop
+  stay live.
+- **What Play plays**: with a selection, it starts at `s` and the region is
+  `[s, e)`; without, it starts at the cursor - at frame 0 when the cursor
+  stands at the end - and the region is the whole document. Loop is LATCHED
+  when the play begins (`wt_lp`): toggling it mid-play takes effect at the
+  next Play or seek. A play begun past the region's end (a seek there) runs
+  to the document's end first, then loops the region.
+- **Pause CLOSES THE STREAM**: the worker is told to stop, its pass drained,
+  verb 9 read once more so the position is exact, verb 2; the look-ahead
+  claim is kept. Resume opens a new stream from the paused position - so
+  Pause is immediate and nothing stale is ever played. **Stop** closes the
+  stream, gives back the grant and the look-ahead claim, puts the playhead
+  back at `wt_p0` (where the play began) and leaves the cursor and the
+  selection alone; the status bar says `Stopped`.
+- **Seek**: a press in the waveform (the cursor there), Home/End and
+  Left/Right while a play is held seek - PLAYING closes and reopens the stream
+  at the cursor, PLAY_PAUSED moves the paused position. Left/Right step from
+  the PLAYHEAD while a play is held (where the user is looking), from the
+  cursor otherwise.
+- **The conversion** is exactly the pinned one: `d` = ceil(R / ceiling), 22,222
+  or 44,100 with `SND_CAP_PCM_HI`, and the card opened at `R / d` (floored);
+  four inner loops (8/16-bit x mono/stereo) make each frame an unsigned 8-bit
+  value - a 16-bit sample's high byte XOR 80h, stereo `(L + R) >> 1` - the box
+  sum of `d` frames floored by `d` (a part group at the very end is dropped),
+  then VOLUME's 256-byte table (`out = 80h + (in - 80h) x v / 100`, the 8086's
+  idiv truncating toward 80h), rebuilt the moment the slider moves. The
+  status bar says the output: `Out 22,050 Hz mono /2`, or `Out 11,025 Hz
+  mono` with `d` = 1 (the pinned `Out 22,050 Hz 8-bit mono, /2` is 28
+  characters; the field holds 22).
+- **The pipeline**: the look-ahead is a 32 KB claim (16 KB tier) of RAW
+  document frames with free-running 16-bit counters. The UI task fills it
+  on `OSAPI_WM_ONWAKE` (and twice before the open) through `wo_read` - a read
+  of up to 16 KB into the I/O claim, then COPIED into the ring at the write
+  counter, split at the seam (the copying form the wave 2 report asked for;
+  READ_AT's cluster rule stays wo_read's). The lap's end is a refill position:
+  the fill goes on from the region's start in the same pass, so a loop is
+  seamless. The worker (hired once, `OS88_WORKER_RESTARTABLE_NOKEEP`)
+  converts into a 2 KB half in bss, stages each full half with verb 6 at
+  `total & mask` and feeds verb 1, at most four a pass while the ring has
+  room for one; asks for a refill when the look-ahead is under half full;
+  reads verb 9 (verb 3 on a driver without it) every pass; and wakes the UI
+  at the end. The grant is 16 KB (8 KB tier); the pre-roll is `ring / 2 KB -
+  1` halves, at most six, and at least the card's half (4 KB above 22,222
+  Hz; a short sound's padded half is followed by silence). `[wt_mixing]`
+  brackets a pass and `wt_halt` drains it before verb 2 or the grant's free.
+- **The playhead** (`wt_ph`) is `wt_place`'s: `F = played x d` frames; `sp +
+  F` while `F < e1 - sp` (the first lap), then `r0 + (F - (e1 - sp)) mod (r1 -
+  r0)` looping, or `e1`. The UI's one-shot timer runs every tick while
+  PLAYING: the playhead from the count, the time element and the line moved
+  when it moved, the VIEW PAGED to it when it leaves - the playhead at the
+  view's left edge, never a scroll a tick - and the meter. A refinement waits
+  while PLAYING (its reads would race the look-ahead's) and goes on when the
+  play pauses or stops; it says nothing under a paused play.
+- **The line** is ONE element (`wf_e_cur`): the playhead while a play is held,
+  the cursor otherwise, and none beside a selection (which shows where Play
+  begins). Moving it is the column it left put back from the band (one run,
+  one blit) and the line drawn (one fill) - **two calls a column**; in black
+  and white a line over the inverted selection is drawn black. The time
+  element shows the playhead while a play is held.
+- **End, underrun, failure, close**: the worker sees `total = played` after
+  the last half (or verb 3's ENDED/STALE) and wakes the UI, which closes the
+  stream, gives everything back and says `End of the sound`, or `3
+  underruns` when a play underran (counted when an underrun BEGINS, never
+  the end's own), or `Cannot read the file`. The window's close negotiator
+  (`OSAPI_WM_ONCLOSE`) does the same before the window goes, so a close
+  mid-play never leaves the card running; and an instance torn down any
+  other way has its stream closed and its grant freed by the teardown's
+  `snd_release_inst`, whose Sound Blaster leg is SOUND.DRV's
+  `sbl_release_inst` (§34.3).
+- **Measured** (the `-DWR_CALLS` counter build, QEMU, LONG.WAV): **0 drawing
+  calls a tick idle; 1.70 a tick playing at Fit** (the time every tick, the
+  line every 3.4, the meter every third); **3.08 a tick at 256 frames a
+  column** (the line moving every tick); a full repaint is 120. The soak row
+  `waverackplay` holds the output to `convert()` sample for sample (§122.13).
+
 ### 122.7 Capture: the external record ring and the take file (pinned)
 
 **The driver extension (shipped - §34.6.4).** `OSAPI_SND_STREAM` verb 4 accepts
@@ -219511,6 +219614,24 @@ rails (00h/FFh, -32768/32767). The bar redraws at most every 3 ticks and only
 the cells between its old and new length. The caption says whose level it is:
 `LEVEL  REC`, `LEVEL  PLAY`, or `LEVEL` with every cell dark.
 
+**Shipped in wave 3, the playback half** (the capture half is wave 5's): the
+worker notes each staged half's peak - `|u - 80h|` of every channel's
+unsigned value, BEFORE the volume - and whether a sample hit a rail (00h/FFh,
+or a 16-bit 8000h/7FFFh), in a sixteen-slot table by the half's place in
+the stream (`total / 2 KB mod 16`; the feed runs at most eight halves ahead,
+so the seven before the one sounding are never overwritten). At most every 3
+ticks the UI reads the slot of the half SOUNDING (`played / 2 KB`) and maps
+it through `wrart_db` to the lit cells; the hold (the highest, decaying to
+the current after 18 ticks) and `PEAK` (36 ticks after a rail) take every
+half played SINCE THE LAST LOOK, so a transient shorter than the meter's
+period - a half is 93 ms at 22 kHz, three ticks are 165 ms - still lights
+them. (The first version read the sounding half alone and missed
+STEREO16.WAV's one-sample spike: the soak row's first run.) The element's key is the lit
+length and the hold; the cells are two 24-bit masks - shown and wanted - and
+each run of changed cells of one state is one `wf_cells`, so a step of the
+bar is one to three calls. PLAYING shows `LEVEL  PLAY`; PLAY_PAUSED keeps the
+caption with every cell dark; IDLE is `LEVEL` and dark.
+
 ### 122.9 Selection and editing (pinned)
 
 A selection is `[s, e)`, clamped to the document; `s = e` is no selection
@@ -219532,6 +219653,31 @@ selection, and a click there centres the view. The selection field shows
 
 Every edit stops the transport first, and leaves the selection on the
 result (the pasted range, or the cursor at a deletion's seam).
+
+**Shipped in wave 3, the selection half** (the edits are wave 4's):
+`[wo_s, wo_e)` in frames, clamped, and `wo_anc`, the end a drag or Shift
+holds still; a non-empty selection puts the cursor at `s`. A plain press in
+the waveform puts the cursor there and clears the selection (and seeks a
+held play); a DRAG selects, both the press's column and the pointer's
+included - rightward `[A, p + fpp)`, leftward `[p, A + fpp)`, back on the
+press's column none; a press within two columns of an edge in view grabs
+that HANDLE (the end's first, so a narrow selection widens rather than
+inverts) and the other end holds still; Shift+click extends from the anchor
+(the cursor, with none); Shift+Left/Right move the end that is not the
+anchor one column; Select All (`A`, Edit > Select All) and Edit > Select
+None. Plain Left/Right/Home/End clear it. **The draw costs no
+recomposition**: the lanes and the overview are put down as RUNS of one
+class each (`we_runs`) - in colour the selection on the `SELBG` ground with
+its two edges in view on the `HANDLE`'s, in black and white the band's bytes
+INVERTED for the one call and turned back (`we_xor`) - and a change redraws
+only the columns between the edges the glass shows and the new ones
+(`we_selpass`, the element `wf_e_wsel`, keyed by the selection's
+generation): **five or six calls a drag move**, measured. It is frames, so it
+stands still across zoom, scroll and a layout switch. The field shows
+`Selection:  01.00 - 02.50` while the end is under a minute and `M:SS.c -
+M:SS.c` from there (`tools/wrsim.py`'s `sel_text`); a value too long for
+COMPACT's 19-character field loses the spaces round its dash, then the
+prefix.
 
 ### 122.10 Saving (pinned)
 
@@ -219591,9 +219737,9 @@ white whatever was chosen.
 | time digits, waveform ink, the centre line | light green | white |
 | filename, format line, ruler, PEAK | light cyan | white |
 | the waveform's grid | dark grey lines on the ruler's majors (wave 2: the paper of a one-pixel blit, under a green trace) | white dots, every fourth row, and a mono lane's quarter rows |
-| selection ground | dark grey | a 50% dither under the wave (wave 3) |
-| selection handles and edges | light cyan | white (wave 3) |
-| playhead | yellow | white (wave 3) |
+| selection ground | dark grey, the trace green on it | the span INVERTED: the band's bytes turned over for its one blit, so the trace is black on white (shipped, wave 3 - a 50% dither cannot be a blit's paper) |
+| selection handles and edges | light cyan: each edge column in view on the handle's ground | the inverted span is its own edge (wave 3) |
+| playhead | yellow | white; black over the inverted selection (wave 3) |
 | LED cells | green / yellow / red, dark grey when off | lit white / outlined white on the black glass when off |
 | keys | light grey faces, black frame and ink; latched black with light green ink; Record's dot red | white faces, black ink; latched inverted |
 | sliders | black groove, ticks and thumb outline; the thumb's face is the faceplate | the same in black on white |
@@ -219673,8 +219819,11 @@ makes the document's live**: New (with a document; `No document`), Open
 and Fit (`Whole sound shown` at Fit; both `Still scanning` while the scan
 runs; the - and + keys follow), the cursor keys (`No document`), and Stop and
 Escape while a scan runs (they cancel it: `Open cancelled`). New and a
-refused open say `New document` / the refusal. Play, record, edit and save
-stay greyed for their waves.
+refused open say `New document` / the refusal. **Wave 3 makes the
+transport's live** (§122.6): Space, the Play and Pause keys, Sound >
+Play/Pause and Stop, `S` and Escape; Shift+Left/Right, a drag, a handle and
+Shift+click select, `A` and Edit > Select All / Select None (§122.9).
+Record, edit and save stay greyed for their waves.
 
 | key | does | key | does |
 |---|---|---|---|
@@ -219705,16 +219854,18 @@ launch with a document (`OSAPI_PKG_START`'s document form, §21.5.3) copies
 its name and folder at entry and opens it from the first timer tick, after
 standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
-### 122.13 Where it ships, and what it costs (waves 1 and 2 measured)
+### 122.13 Where it ships, and what it costs (waves 1, 2 and 3 measured)
 
-| | wave 1 | wave 2 |
-|---|---|---|
-| image | 16,310 bytes (`WAVERACK.O88`, lz4-packed to 11,646 - 12 clusters at 1 KB) | 25,010 bytes (packed 18,926 - 19 clusters) |
-| bss | 1,414 bytes (state, the key and element caches, a 1 KB composing band) | 2,525 bytes (+ the reader's, the document's - 4 sources and the 64-piece table, 800 bytes - and the waveform's state) |
-| heap, idle, no document | the waveform band, `WRL_BANDKB` = 7 KB (FULL's 588 x 94 lanes at 75 bytes a row), claimed at entry; plus os88ui's bank under an open drop-down list, for as long as it is open | the band, now 10 KB (FULL's ruler, lanes and overview: 75 bytes x 128 rows); every document claim is given back by New, a refused open and Stop during a scan (the soak row checks it after every refusal) |
-| heap, idle, a document open | - | the band 10 KB + the I/O claim 16 KB (`WO_IOKB`: a scan gulp, and two 8 KB clusters) + the view cache 4 KB (`WE_VKB`) + the envelope, `ceil(blocks x channels x 2 / 1 KB)` - at most 4 KB mono, 8 KB stereo. Measured by the soak row on the kernel's claim map: 31 KB for the small mono fixtures, 33 KB for LONG.WAV (1,123 blocks), 36 KB for the 22,050 Hz stereo file; 38 KB is the most any document can hold. A refused open leaves the band alone (10 KB) |
-| disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it in wave 1; **354 of 354** with wave 2's - the next wave needs a curation decision there), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) | the same, plus `make waverackfix`'s scratch floppy (on demand, never shipped) |
+| | wave 1 | wave 2 | wave 3 |
+|---|---|---|---|
+| image | 16,310 bytes (`WAVERACK.O88`, lz4-packed to 11,646 - 12 clusters at 1 KB) | 25,010 bytes (packed 18,926 - 19 clusters) | **30,179** bytes (packed **23,129** - 23 clusters) |
+| bss | 1,414 bytes (state, the key and element caches, a 1 KB composing band) | 2,525 bytes (+ the reader's, the document's - 4 sources and the 64-piece table, 800 bytes - and the waveform's state) | **5,016** bytes: + the transport's state, VOLUME's 256-byte table and the 2 KB half the worker converts into (a claim would have needed the stream verb's DS pointed at it, per call, by the worker) |
+| heap, idle, no document | the waveform band, `WRL_BANDKB` = 7 KB (FULL's 588 x 94 lanes at 75 bytes a row), claimed at entry; plus os88ui's bank under an open drop-down list, for as long as it is open | the band, now 10 KB (FULL's ruler, lanes and overview: 75 bytes x 128 rows); every document claim is given back by New, a refused open and Stop during a scan (the soak row checks it after every refusal) | unchanged: 10 KB |
+| heap, idle, a document open | - | the band 10 KB + the I/O claim 16 KB (`WO_IOKB`: a scan gulp, and two 8 KB clusters) + the view cache 4 KB (`WE_VKB`) + the envelope, `ceil(blocks x channels x 2 / 1 KB)` - at most 4 KB mono, 8 KB stereo. Measured by the soak row on the kernel's claim map: 31 KB for the small mono fixtures, 33 KB for LONG.WAV (1,124 blocks), 36 KB for the 22,050 Hz stereo file; 38 KB is the most any document can hold. A refused open leaves the band alone (10 KB) | unchanged (STEREO16.WAV `[4, 6, 10, 16]` = 36 KB, LONG.WAV 33 KB, read on the claim map) |
+| heap, playing or paused | - | - | the idle document's + the look-ahead, **32 KB** (16 KB tier): STEREO16.WAV **68 KB**, LONG.WAV 65 KB; the most a document can hold while playing is 70 KB. The ring grant - **16 KB** (8 KB tier) - is SOUND.DRV's staging pool's (verb 7), not a claim of WaveRack's region. Stop, the play's end and the window's close give both back (the soak row checks the claim map and `wt_ghave` after each) |
+| drawing, measured (`-DWR_CALLS`) | - | - | idle **0** calls a tick; playing **1.70** a tick at Fit, **3.08** at 256 frames a column (time 1 + the line's 2 a column + the meter's runs every third tick); a selection drag **5-6** a move; a full repaint 120 |
+| disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it in wave 1; **354 of 354** with wave 2's - the next wave needs a curation decision there), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) | the same, plus `make waverackfix`'s scratch floppy (on demand, never shipped) | **OFF `media360.img`** (24.6.1's rule, dated 2026-10-26, `MEDIAARGS360`'s note: wave 2 left it 354 of 354 and wave 3's growth does not fit; without WaveRack it is 335 of 354). **No 360 KB disk carries WaveRack now** - a 360 KB home for it is an open decision for the owner (docs/plans/WAVERACK-PLAN.md), and nothing else was moved to make room. The 1.44 MB apps disk is 2,565 of 2,847 clusters, the 1.2 MB 2,072 of 2,371; `wrfix.img` gains TONE8K.WAV and TONE44.WAV (2,737 of 2,847) |
 
 To be measured and written here as the later waves land: the heap claims
-while playing and recording, and the sustained record and play rates on
-MartyPC's XT.
+while recording, and the sustained record and play rates on MartyPC's XT
+(the conversion's cost a frame on a 4.77 MHz 8088 is US-11's).

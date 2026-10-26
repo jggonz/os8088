@@ -169,6 +169,7 @@ wd_rect:
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FILL
+    WR_NCALL
     jmp short .out
 .pat:
     and si, 0x7F                    ; the pattern's eight bytes
@@ -177,6 +178,7 @@ wd_rect:
     shl si, 1
     add si, wd_pats
     call OSAPI_GFX_FILL_PAT
+    WR_NCALL
 .out:
     pop si
     pop dx
@@ -201,6 +203,7 @@ wd_frame:
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FRAME
+    WR_NCALL
     pop si
     pop dx
     pop cx
@@ -263,6 +266,7 @@ wd_text:
     pop ax                          ; standard draw left it in (SPEC.md 47 r1)
     and ax, 0x0F0F
     call OSAPI_FONT_RUN             ; CX = x, DX = y, SI = the run
+    WR_NCALL
     pop di
     pop si
     pop dx
@@ -620,6 +624,7 @@ wd_bout:
     mov cx, [wd_bw]
     mov dx, [wd_bh]
     call OSAPI_GFX_BLIT1
+    WR_NCALL
     pop es
     pop bp
     pop di

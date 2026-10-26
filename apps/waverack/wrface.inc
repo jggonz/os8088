@@ -570,11 +570,16 @@ wf_e_fname:
 
 ; --- the big time: the position, MM:SS.cc ----------------------------------------
 wf_e_time:
-    mov ax, [we_cgen]               ; the cursor's time (00:00.00 with none)
-    call wf_ek
-    jc .out
+    mov ax, [we_cgen]               ; the cursor's time (00:00.00 with none) -
+    call wf_ek                      ; the playhead's while the transport
+    jc .out                         ; holds a play (SPEC.md 122.6)
     mov ax, [wo_cur]
     mov dx, [wo_cur+2]
+    call wt_active
+    jc .t
+    mov ax, [wt_ph]
+    mov dx, [wt_ph+2]
+.t:
     mov di, wr_tbuf2
     call wo_time
     mov si, wr_tbuf2
@@ -682,44 +687,148 @@ wf_e_mcap:
 .out:
     ret
 
-; --- the meter's cells: only the run between the old length and the new ----------
+; --- the meter's cells: only those whose state changed ----------------------
+; Its key is the lit length and the peak-hold cell (SPEC.md 122.8); the cells
+; are two 24-bit masks, what the glass shows and what it should, and each run
+; of changed cells of one state is one wf_cells - so a bar that grows by two
+; and a hold that steps are two or three calls, never the bar.
 wf_e_meter:
     mov al, [wr_lit]
-    xor ah, ah
+    mov ah, [wr_hold]
     call wf_ek
     jc .out
-    push ax
-    call wf_old                     ; AX = what the glass shows
-    mov bx, ax
-    pop ax
-    cmp bx, 0xFFFF
+    call wf_mmask                   ; [wf_mn] = the cells lit now
+    call wf_old                     ; ...and what the glass shows
+    cmp ax, 0xFFFF
     jne .diff
-    push ax                         ; forgotten: the lit run and the dark
-    mov cx, ax                      ; rest, both
-    xor ax, ax
-    mov dl, 1
-    call wf_cells
-    pop ax
-    mov cx, 24
-    xor dl, dl
-    call wf_cells
-    jmp short .done
+    mov word [wf_mc], 0xFFFF        ; forgotten: every cell
+    mov word [wf_mc+2], 0x00FF
+    jmp short .walk
 .diff:
-    cmp ax, bx
-    je .done
-    ja .grow
-    mov cx, bx                      ; shrank: [new, old) goes dark
-    xor dl, dl
+    push word [wf_mn]
+    push word [wf_mn+2]
+    call wf_mmask                   ; [wf_mn] = the old cells
+    pop dx
+    pop bx                          ; DX:BX = the new
+    mov ax, [wf_mn]                 ; changed = old ^ new
+    xor ax, bx
+    mov [wf_mc], ax
+    mov ax, [wf_mn+2]
+    xor ax, dx
+    mov [wf_mc+2], ax
+    mov [wf_mn], bx                 ; [wf_mn] = the new again
+    mov [wf_mn+2], dx
+.walk:
+    xor si, si                      ; the runs
+.cell:
+    cmp si, 24
+    jae .done
+    mov bx, wf_mc
+    call wf_tbit
+    jz .nx
+    mov bx, wf_mn                   ; changed: its state now
+    call wf_tbit
+    mov dl, 0
+    jz .st
+    inc dl
+.st:
+    mov di, si
+.ext:
+    inc di                          ; while changed and of the same state
+    cmp di, 24
+    jae .run
+    push si
+    mov si, di
+    mov bx, wf_mc
+    call wf_tbit
+    jz .endr
+    mov bx, wf_mn
+    call wf_tbit
+    mov dh, 0
+    jz .s2
+    inc dh
+.s2:
+    pop si
+    cmp dh, dl
+    je .ext
+    jmp short .run
+.endr:
+    pop si
+.run:
+    push di
+    mov ax, si
+    mov cx, di
     call wf_cells
-    jmp short .done
-.grow:
-    mov cx, ax                      ; grew: [old, new) lights
-    mov ax, bx
-    mov dl, 1
-    call wf_cells
+    pop si
+    jmp short .cell
+.nx:
+    inc si
+    jmp short .cell
 .done:
     call wf_ekdone
 .out:
+    ret
+
+; wf_mmask - AL = the lit cells, AH = the hold (the cell + 1, 0 none) ->
+; [wf_mn] = the 24-bit mask of the cells lit: [0, lit), and the hold's when
+; it stands above them. keeps everything but AX
+wf_mmask:
+    push bx
+    push cx
+    push dx
+    xor bx, bx
+    xor dx, dx
+    mov cl, al
+    xor ch, ch
+    jcxz .h
+.s:
+    stc
+    rcl bx, 1
+    rcl dx, 1
+    loop .s
+.h:
+    cmp ah, al
+    jbe .out
+    mov cl, ah
+    dec cl
+    push ax
+    mov ax, 1
+    cmp cl, 16
+    jb .lo
+    sub cl, 16
+    shl ax, cl
+    or dx, ax
+    jmp short .hd
+.lo:
+    shl ax, cl
+    or bx, ax
+.hd:
+    pop ax
+.out:
+    mov [wf_mn], bx
+    mov [wf_mn+2], dx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; wf_tbit - ZF = 0 when bit SI (0..23) of the dword at BX is set. keeps all
+wf_tbit:
+    push ax
+    push cx
+    mov cx, si
+    and cl, 15
+    mov ax, 1
+    shl ax, cl
+    cmp si, 16
+    jb .lo
+    test [bx+2], ax
+    jmp short .o
+.lo:
+    test [bx], ax
+.o:
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1053,17 +1162,37 @@ wf_e_wave:
     call wf_wave0
 .done:
     call wf_ekdone
-    mov si, [wf_slot]               ; the cursor's line went with it: the
-    mov word [si+2], 0xFFFF         ; next element has nothing to put back
+    mov word [wf_keys + 2 * WRE_CUR], 0xFFFF  ; the line went with it: its
+.out:                               ; element has nothing to put back
+    ret
+
+; --- the selection in the lanes and the overview: only where it changed --------
+; Its key is the selection's generation. A full draw of the lanes or of the
+; overview drew the selection as it stood and recorded it; this redraws the
+; columns between the edges the glass shows and the edges it should - a
+; drag is a few blits a move, never the waveform (wrenv.inc, we_selpass).
+wf_e_wsel:
+    mov ax, [wo_sgen]
+    call wf_ek
+    jc .out
+    cmp byte [wo_doc], 0
+    je .done
+    cmp word [wr_bseg], 0
+    je .done
+    call we_selpass
+.done:
+    call wf_ekdone
 .out:
     ret
 
-; --- the cursor: a thin line on the lanes (drawn as the playhead will be) -------
-; Moving it puts the column it left back from the band - one 1-pixel blit -
-; and draws the line again. Its key is its column + 1, 0 when it is out of
-; view; the waveform's own draw forgets it (wf_e_wave).
+; --- the line: the playhead while the transport holds a play, else the cursor
+; (none beside a selection). Moving it puts the column it left back from the
+; band - one run, one blit - and draws the line again: two calls a tick. Its
+; key is its column + 1, 0 when it is out of view; the waveform's own draw
+; forgets it (wf_e_wave), and so does the selection's where it redrew under
+; it (we_lput).
 wf_e_cur:
-    call we_curcol                  ; AX = the column, CF = 1 none
+    call we_linecol                 ; AX = the column, CF = 1 none
     jnc .in
     mov ax, -1
 .in:
@@ -1093,6 +1222,27 @@ wf_e_cur:
     add dx, [we_lh]
     dec dx
     mov si, R_PLAYHEAD
+    cmp word [wd_th], wrart_tbw     ; black and white: white on the inverted
+    jne .line                       ; span is nothing - black there
+    push ax
+    push cx
+    push dx
+    sub ax, [we_bx]
+    push ax
+    call we_lanesel
+    pop ax
+    cmp byte [we_kon], 0
+    je .r
+    cmp ax, [we_k0]
+    jb .r
+    cmp ax, [we_k1]
+    ja .r
+    mov si, R_LCD
+.r:
+    pop dx
+    pop cx
+    pop ax
+.line:
     call wd_vl
 .done:
     call wf_ekdone
@@ -1361,6 +1511,7 @@ wf_wblit:
     mov bp, [wf_wst]
     mov es, [wr_bseg]
     call OSAPI_GFX_BLIT1
+    WR_NCALL
     pop es
     pop bp
     pop di
@@ -1402,12 +1553,34 @@ wf_e_ovw:
 
 ; --- the selection field: 'Selection:' and the range, empty with none -----------
 wf_e_sel:
-    xor ax, ax
-    call wf_ek
+    mov ax, [wo_sgen]               ; 'Selection:  01.00 - 02.50' (SPEC.md
+    call wf_ek                      ; 122.9): the prefix and the value
     jc .out
     mov di, [wd_lp]
     mov si, [di+WL_SELPFX]
-    mov cx, [di+WL_SELCH]
+    mov di, wr_tbuf2
+    call wr_put
+    mov bx, di                      ; where the value starts
+    call we_seltext
+    mov byte [di], 0
+    mov si, [wd_lp]
+    mov cx, [si+WL_SELCH]
+    mov ax, di
+    sub ax, wr_tbuf2
+    cmp ax, cx
+    jbe .fit
+    call we_squeeze                 ; too long: no spaces round the dash...
+    mov byte [di], 0
+    mov ax, di
+    sub ax, wr_tbuf2
+    cmp ax, cx
+    jbe .fit
+    mov si, bx                      ; ...and then no prefix
+    jmp short .pad
+.fit:
+    mov si, wr_tbuf2
+.pad:
+    mov di, [wd_lp]
     call wf_pad
     mov cx, [di+WL_SELT]
     mov dx, [di+WL_SELT+2]
