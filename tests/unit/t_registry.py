@@ -66,6 +66,7 @@ UNREGISTERED = {
 
     # --- ON DEMAND: needs material that is never in the tree ---
     "rdgspeed286.py": "RealDMG's game speed on 86Box's 286 with the OWNER'S cartridges (Super Mario Land, Kirby; $OS88_GB_ROMS) - never in the tree, so no tier can run it and a soak row only ever SKIPPED. Run it by hand when the cartridges are to hand: OS88_GB_ROMS=<dir> python3 tests/rdgspeed286.py (docs/plans/REALDMG-PLAN.md wave 4)",
+    "vidbench.py": "what a video frame COSTS on MartyPC's 5150, and the only host check of vidbench.asm's vb_res/vb_chk against tools/os88vid.py's checksum (docs/plans/VIDEO-PLAN.md wave 0) - it decodes the OWNER'S four XDC streams ($OS88_XDC_SAMPLES), which are copyrighted and never in the tree, so no tier can run it and a soak row only ever SKIPPED. Run it by hand with the streams to hand: make vidbench && OS88_XDC_SAMPLES=<dir> python3 tests/vidbench.py",
 
     # --- library and support code, not tests ---
     "wcprobe.py": "WireChat's guest reader and reply injector (SPEC.md "

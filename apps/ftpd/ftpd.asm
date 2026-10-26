@@ -1954,6 +1954,13 @@ fd_stgpin:
     jz .o
     call OSAPI_MEM_MOVABLE
 .o:
+%if FD_STG2                         ; the second stage is a commit stage too
+    mov dx, [fd_stg2]               ; (fd_commp's .claim), so it is held the
+    or dx, dx                       ; same way
+    jz .o2
+    call OSAPI_MEM_MOVABLE
+.o2:
+%endif
     pop dx
     popf
     ret

@@ -36,7 +36,7 @@ SHIPPED = ["build/os8088.img", "build/os8088-120.img", "build/os8088-720.img",
 # The small kernel's 1.44MB disk is build/small.img: these used to name
 # build/smallk/os8088*.img, which no rule writes, so it was never read.
 ON_DEMAND = ["build/small.img",
-             "build/emu.img", "build/megak/mega.img", "build/megak/mega120.img"]
+             "build/emu.img", "build/mega.img", "build/mega120.img"]
 
 # What the system writes to its own boot disk and must always be able to.
 # Sizes are the most each file is (SPEC.md 51.5's CFG_FBUF; desksc.inc's

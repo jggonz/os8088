@@ -518,7 +518,12 @@ def _communicate(p, timeout, cpus=1, cpu_seen=True, qdir=None):
             pid, status, ru = os.wait4(p.pid, os.WNOHANG)
             if pid:
                 return status, ru
-            if wall is not None and time.time() - t0 > wall:
+            # A QEMU row EARNS the wider backstop: until one of its own
+            # pidfiles has been read, its emulator's CPU is not being
+            # charged (a launcher that still writes under build/ never
+            # gets there), so the declared timeout is the wall limit.
+            lim = wall if (not cpu or qdir is None or qseen) else blind
+            if lim is not None and time.time() - t0 > lim:
                 return None
             n += 1
             if cpu and limit is not None and n % 50 == 0:
