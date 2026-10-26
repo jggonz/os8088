@@ -173,7 +173,7 @@ for os8088, Contributed by Elendilon*.
 
 ## Good to know
 
-- Task Manager needs about 7K of free memory to open.
+- Task Manager needs about 12K of free memory to open.
 - The CPU figure is measured, not estimated: it is the time the machine spent
   doing nothing, taken away from the total.
 - A program that hires a background worker shows **run**, **rdy** or **slp**.
