@@ -219027,3 +219027,398 @@ third-party audio in them.
 - **Not measured**: any real machine, a real hard disk's share of a
   conversion, the face on CGA and Hercules on an XT, a conversion on
   86Box, the SB Pro's stereo on its own card, and a listening pass of each rung.
+
+## 122. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
+
+**Status: PINNED, not shipped.** Every subsection below is the contract the
+implementation is written against; each says *(pinned)* until the wave that
+builds it marks it *(shipped)* with what was measured. The delivery record is
+`docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
+
+WaveRack records from a Sound Blaster's input, plays a WAV through its
+output, shows the sound as an editable waveform, and saves WAV files. It is a
+companion to XTMP3 (§121) and Audio (§86) with a hardware face in CDRack's
+manner (§119.6): a silver faceplate, a recessed black LCD with
+seven-segment time, a segmented LED level bar over an INPUT GAIN slider,
+picture transport keys, the waveform and its overview, the edit row, the
+format row, and a VOLUME slider. The owner's three mockups are in
+`docs/waverack/design/` - colour, black and white, and the shallow
+640 x 200 layout - with the brief they came with (`BRIEF.txt`).
+
+It owns no hardware. Playback is a client of `OSAPI_SND_STREAM`'s ring
+stream (§34.5); capture is a client of the same slot's record stream, and
+§122.7 is the one driver extension it needs. Pure NASM, for Audio's reason
+(§86): the C SDK does not wrap the stream verbs.
+
+### 122.1 Files and prefixes (pinned)
+
+| file | holds | prefix |
+|---|---|---|
+| `waverack.asm` | header, icon, entry, bss, window template, menus, commands, callbacks, the greying predicate and `wr_regrey` (it must call `os88ui_btn` and write `BT_RECTS`/`BT_N`, `tests/btnsites.txt`) | `wr_` |
+| `wrdraw.inc` | drawing primitives: roles, themes, the composing band - `apps/cdrack/crdraw.inc`'s shape (§119.6.3) | `wd_` |
+| `wrface.inc` | the three layouts, the static parts, the elements and their keys, the button painter | `wf_` |
+| `wrwav.inc` | the RIFF/WAVE reader and the header writer | `ww_` |
+| `wrdoc.inc` | sources, the piece table, 32-bit frame arithmetic, undo/redo, the clipboard | `wo_` |
+| `wrenv.inc` | the coarse envelopes, the view cache and its refinement, the waveform band | `we_` |
+| `wrplay.inc` | the transport state machine, the look-ahead, the worker, conversion, volume, the meter | `wt_` |
+| `wrrec.inc` | capture: the external record ring, the take file, gain, the recovery marker | `wc_` |
+| `wrsave.inc` | Save, Save As, Save Selection As, the temp file and the replace | `ws_` |
+| `build/wrart.inc` | the pictures and fonts, made by `tools/os88wrart.py` (§122.11) | `wrart_`, `WRART_` |
+
+### 122.2 What the machine can do, and what the face says when it cannot (pinned)
+
+`OSAPI_SND_CAPS` is read at entry and again before every Play and Record:
+
+| capability | needs | without it |
+|---|---|---|
+| open, inspect, edit, save | nothing | always available |
+| play | `SND_CAP_PCM_BG` - SOUND.DRV's Sound Blaster tier | Play, Pause and the loop audition grey; the status bar says `No sound card - playback needs a Sound Blaster` |
+| record, long take | `SND_CAP_PCM_IN` and the external record ring (§122.7) - an auto-init DSP, 2.00 or later | - |
+| record, short take | `SND_CAP_PCM_IN` on a DSP 1.x (verb 4 refuses the external ring with 7) | a take is one grant, `20 KB` at most (§34.6.3): the status bar names the limit in seconds before Record |
+| record at all | `SND_CAP_PCM_IN` | Record greys; the status bar says `No capture device` |
+
+A machine with no card keeps a complete editor: it opens, edits, saves and
+draws every waveform; it does not pretend to play. PC speaker and Covox
+playback (Audio's bracket, §86.21) is NOT in this delivery - a later story
+in the plan, not a claim here.
+
+`kern_small` carries no card tier (§34.0), so WaveRack is on its omission
+list (§24.5) on a requirement ground. kern_mega's arm (`-DPKG_MEGA`, §20.18)
+is not in this delivery either.
+
+### 122.3 The document and the timeline (pinned)
+
+**The canonical unit is the sample FRAME**: one sample per channel. Every
+position, length, selection end and edit offset is a frame index held in 32
+bits (DX:AX), and a byte offset is only ever formed as `data offset + frame
+x block align` at the moment a file is read or written. A document is at most
+2^31 - 1 frames and its data at most 2^31 - 1 bytes; an open that would pass
+either is refused.
+
+- **Format**: rate (1,000..65,535 Hz), 8 or 16 bits, 1 or 2 channels; block
+  align = channels x bits / 8. 8-bit is unsigned (silence 80h), 16-bit signed
+  little-endian (silence 0). A document has ONE format.
+- **Sources** (`WO_NSRC` = 4): the files a document's audio lives in - the
+  opened WAV, a take, and whatever the clipboard brought. Each records its
+  8.3 name, its folder (`OSAPI_FILE_HERE`'s cluster and volume, restood with
+  `OSAPI_FILE_GOTO_QM` before a read, §86.3's lesson), its data offset and
+  frame count, and its coarse envelope (§122.5). **A source is immutable
+  while anything references it** - the document, an undo snapshot or the
+  clipboard - and WaveRack never writes into one.
+- **The piece table** (`WO_NPC` = 64): the document is an ordered list of
+  `{source, first frame, frame count}`. Every edit builds a new list; none
+  moves audio. An edit that would need more than 64 pieces is refused with
+  `Too many edits - save to consolidate`.
+- **Undo and redo** (`WO_NUNDO` = 8): a snapshot is the piece list, the
+  selection and the cursor, kept in one heap claim. Undo and Redo walk it; a
+  new edit drops the redo side. Because sources are immutable, a snapshot is
+  always replayable.
+- **The clipboard** is WaveRack's own: a piece list of up to 16 pieces and
+  the format it was cut in, kept for the instance's life across New and
+  Open. The system clipboard (§55) carries text and is not used. Paste into a
+  document of another format is REFUSED, naming both formats - bytes are
+  never reinterpreted.
+- **Dirty**: set by an edit, cleared by a save. New, Open, Record (which
+  starts a new take), Close and Recover on a dirty document ask
+  `Save changes to NAME?` with Save, Discard and Cancel (os88ui's alert,
+  `OS88UI_ALERT`).
+
+### 122.4 Reading and writing WAV (pinned)
+
+**The reader** walks the RIFF chunk list with `OSAPI_FILE_READ_AT` at 32-bit
+offsets. It accepts any chunk order, honours the odd-length pad byte, skips
+every chunk it does not know, and stops after `WW_NCHUNK` = 64 chunks.
+Every length is checked against the file's size before it is trusted, with
+the carry of every 32-bit sum tested.
+
+- Accepted: `WAVE_FORMAT_PCM` (1), and `WAVE_FORMAT_EXTENSIBLE` (FFFEh) whose
+  sub-format GUID is PCM's; 8 or 16 bits; 1 or 2 channels; the block align
+  the format implies.
+- A `data` size past the file's end is clamped to it; a size that is not a
+  whole number of frames is floored, and the status bar says how many bytes
+  were ignored.
+- **A take that never got its header** (`data` size 0 or FFFFFFFFh with bytes
+  after it, which is what a take interrupted mid-record leaves, §122.7) opens
+  with its frames counted from the file's length and the document DIRTY:
+  `Recovered N s from an unfinished header - save to repair`.
+- Refused, each with its own sentence on the status bar: not RIFF/WAVE, no
+  `fmt `, no `data`, a format tag other than PCM (`Format 0011h is not PCM`),
+  other bit depths, more than two channels, a block align that disagrees,
+  more than 64 chunks, and a file past 2^31 bytes.
+
+**The writer** emits the canonical 44-byte header (`RIFF`, `WAVE`, a 16-byte
+`fmt ` chunk, `data`) and the frames, and a pad byte when the data length is
+odd. A take's header is different and is §122.7's.
+
+### 122.5 The waveform: coarse envelopes, the view cache and the band (pinned)
+
+**A coarse envelope per source**: the block is the smallest power of two
+`B` >= 16 frames for which `frames / B` <= 2,048, and each block stores, per
+channel, its minimum and maximum as signed 8-bit (an 8-bit sample - 80h; a
+16-bit sample's high byte). Mono is 4 KB at most, stereo 8 KB, one heap claim
+each. It is built by a SCAN at open - 16 KB a pass on the UI task, the status
+bar showing `Scanning 45%`, Escape or another Open cancelling it - and live,
+block by block, while a take records.
+
+**The view** is a first frame and a zoom, frames per pixel `fpp`, a power of
+two from 1 (one frame a column: sample detail) up to the smallest that fits
+the whole document (`Fit`). Zoom In and Out halve and double `fpp` about the
+cursor - or the playhead while playing - so the point under it stays put;
+the overview's frame and the scroll keep the first frame inside the
+document.
+
+**The view cache** holds, per column and channel, a minimum and a maximum,
+and an EXACT bit. A column whose span is at least `B` frames is made from the
+coarse blocks it covers, which is exact but for a piece edge inside a block,
+where the block's whole range is shown (a superset, never a fabrication).
+Below `B` a column first shows its block's range and is then REFINED from
+the samples themselves, in bounded reads (`WE_REFINE` = 8 KB a pass, on the
+UI task, abandoned when the view moves) - the status bar says `Refining`
+until every column is exact. At `fpp` = 1 and 2 the samples ARE the columns.
+
+**A stereo document draws two lanes**, left above right, each half the
+height, with `L` and `R` beside them; neither channel is mixed away. Mono
+draws one lane.
+
+**Drawing is a band, not lines.** The waveform area - ruler, grid and lanes -
+is composed into a 1bpp band (a heap claim the size of the widest layout's
+area) and put down with `OSAPI_GFX_BLIT1`, split at the selection's edges so
+the selection's run is blitted with its own paper role. A 570-column wave
+drawn as vertical lines would be 570 primitive calls, ~430 ms on the target;
+the band is a handful. The playhead is one vertical line; moving it
+re-blits the byte column it left from the band, and draws the line again.
+
+### 122.6 Playback and the transport (pinned)
+
+**One state machine** (`wt_state`), and every command's greying is a
+function of it and of §122.2's capabilities (one predicate, §47 rule 2):
+
+| state | Record | Play | Pause | Stop | edit, Open, Save | seek |
+|---|---|---|---|---|---|---|
+| IDLE | if capture | if PCM_BG and frames | - | - | yes | yes |
+| PLAYING | - | latched | yes | yes | no (Stop first) | restarts the stream |
+| PLAY_PAUSED | - | resume | latched | yes | no | moves the paused position |
+| RECORDING | latched | - | yes | yes | no | no |
+| REC_PAUSED | resume | - | latched | yes | no | no |
+| BUSY (scan, save) | - | - | - | cancels | no | no |
+
+A half-duplex card never has Record and Play both live: the table makes the
+pair unreachable, and SOUND.DRV refuses it besides (§34.3).
+
+- **What Play plays**: a non-empty selection `[s, e)`, or with none the
+  cursor to the end. **Loop** repeats the selection; with no selection it
+  repeats the whole document. **Stop** silences the output and puts the
+  playhead back where the play began; the cursor and selection do not move.
+  Pause keeps the position and Play resumes from it.
+- **The output is what the card takes, converted, never re-clocked**: 8-bit
+  mono at `R / d`, where `d` is the smallest whole number that brings the
+  document's rate `R` to at most the card's ceiling (22,222 Hz; 44,100 with
+  `SND_CAP_PCM_HI`). `d` > 1 averages each `d` frames (a box filter before
+  the decimation); 16-bit takes the high byte, stereo averages left and
+  right. A rate below 4,000 Hz is refused (`The card cannot play below 4,000
+  Hz`). The LCD's format line shows the document's format and the status bar
+  the output's (`Out 22,050 Hz 8-bit mono, /2`).
+- **VOLUME scales the output, not the document**: a 256-byte table, rebuilt
+  when the slider moves, that the conversion passes every sample through
+  (`out = 80h + (in - 80h) x v / 100`). It never touches a source, and the
+  meter reads the samples before it.
+- **The pipeline is Audio's** (§86.5): the UI task reads document frames
+  into a 32 KB look-ahead claim (16 KB tier) with `OSAPI_FILE_READ_AT`, piece
+  by piece, restanding in each source's folder; the worker converts out of it
+  into the stream's 16 KB ring grant (8 KB tier) with verbs 6 and 1, and
+  reads verb 9 for the exact played count, from which the playhead's frame
+  is derived. The worker WAKES the UI task for a refill and at the end; it
+  touches no file and draws nothing (§20.6 rule 7). A seek or a loop
+  boundary is a refill position, so a loop is seamless.
+- **End, underrun, failure**: the last half is padded with 80h. An underrun
+  (verb 3's `SND_ST_UNDER`) is counted, and the status bar reports the count
+  when the play ends. A read error, a busy card (verb 0's 1) or a refused
+  rate stops the transport with the reason. No stale ring bytes are played
+  after a seek: the stream is closed and reopened.
+
+### 122.7 Capture: the external record ring and the take file (pinned)
+
+**The driver extension.** `OSAPI_SND_STREAM` verb 4 accepts
+`SND_OPENF_EXT` in AH, as verb 0 does (§34.5.3): `DI:SI` is a ring in the
+CALLER's `OSAPI_MEM_CLAIM_DMA_HI` claim, its length `RL` = 4096 << the size
+code in AH bits 4-5, followed by the two control words, ring and words inside
+the page-safe head. The card captures into the ring by auto-init DMA; each
+block IRQ adds the block to a free-running 16-bit count and writes it to
+`[DI:SI + RL + SND_EXT_CONS]`. There is no drain task, no grant and no
+overrun pause: the reader owns the ring and judges its own lag. The rest is
+verb 4's: the rate range (4,000..15,000, 13,000 on a single-cycle DSP),
+half-duplex, verb 3's state, verb 2's close. A single-cycle DSP answers 7,
+and WaveRack falls back to a short take. The kernel already routes an
+external ring on verb 4 (`osapi_snd_stream`'s kern_mega test names it).
+`apps/os88api.inc` documents the bit; `tools/abilock.py --update` without a
+`DRV_VER` bump, because nothing built before is affected.
+
+**Why it is needed**: verb 4's record stream is linear into ONE grant of the
+driver's pool, 20 KB at most - 1.9 s at 11,025 Hz - and its drain is a kernel
+task, which a disk transfer stops (a read or write holds `sch_lock`, §86.5)
+for up to ~400 ms on an XT while the DMA ring is 372 ms deep. With the card
+writing a 32 KB ring directly, a 400 ms write is 4.4 KB of a ring that holds
+2.97 s, and a long take is bounded by the disk, not by RAM.
+
+**The take is the file.** Record writes `VOICEnnn.WAV` (the first free
+001..999) in the folder the instance stands in, after `OSAPI_FILE_DFREE`
+says it holds at least 2 s at the take's rate - the status bar names the
+volume and the seconds it holds (`B: 312 KB free - 28 s`). The file begins
+with a header ONE CLUSTER long: `RIFF`, `WAVE`, `fmt `, a `JUNK` chunk
+filling the cluster to 8 bytes short, and `data`, so the audio starts on a
+cluster boundary, every append is a whole number of clusters until the last
+(`OSAPI_FILE_WRITE_SEQ`'s rule), and the header is patched in place at Stop
+with one `OSAPI_FILE_WRITE_AT` at offset 0. The UI task writes from the ring
+in place, in gulps of half the ring, on `OSAPI_WM_ONWAKE`; the worker only
+polls the count, computes the meter, extends the live envelope and wakes it.
+
+- **Pause** stops the stream (verb 2) and Record resumes with a new stream
+  appending to the same file; no frame is duplicated or lost across it.
+- **Stop** writes the rest, closes the sequence, patches the header and
+  opens the take as the document - saved already, not dirty.
+- **Disk full or a write error** stops the take, keeps what was written,
+  patches the header to it, and says so.
+- **Overrun** - the reader more than one ring behind - stops the take at
+  the last good frame, keeps it, and says `The disk could not keep up - take
+  kept to M:SS`.
+- **No input** - the count still 0 after one second - stops with `No input
+  from the card`, which is what QEMU's SB16 does (§35).
+- **The recovery marker**: Record writes `WAVERACK.TAK` to the boot volume's
+  `\SYSTEM\APPDATA` (§19.9) naming the take, and Stop deletes it. A launch
+  that finds it offers File > Recover Take, which opens the take through
+  §122.4's unfinished-header path.
+
+**INPUT GAIN is digital, and says so.** No card SOUND.DRV drives exposes a
+capture gain (§34.15 never writes the recording route), so the slider is a
+software gain, `-12 .. +12 dB` in 13 steps with unity in the middle, applied
+to each gulp through a saturating 256-byte table before it is written. The
+panel's caption reads `INPUT GAIN (DIGITAL)`. It cannot undo clipping in the
+converter, and it does not change audio already recorded.
+
+**The format row is the next take's**: Input names the card's one input,
+`Microphone` (greyed - nothing to choose); the rate offers the standard rates
+the driver accepts, 8,000 and 11,025 Hz; bits and channels show `8-bit` and
+`Mono`, greyed, because that is all verb 4 records. An opened file's own
+format is the LCD's line, never the row's.
+
+**Monitoring through the speaker is never offered**: the card is half-duplex.
+
+### 122.8 The level meter (pinned)
+
+One horizontal bar of 24 cells over the gain slider, -30 to 0 dBFS at 1.25 dB
+a cell: cells 0..17 green, 18..21 yellow, 22..23 red in colour; lit, outlined
+and patterned cells in black and white. Its input is the peak `|s - 80h|`
+(8-bit) or `|s| >> 8` (16-bit) of the newest block - CAPTURED while
+recording, PLAYED (before the volume) while playing - mapped through a
+129-byte table the art generator computes (no logarithm on the target). A
+peak-hold cell decays after 1 s; `PEAK` lights for 2 s when a sample hits the
+rails (00h/FFh, -32768/32767). The bar redraws at most every 3 ticks and only
+the cells between its old and new length. The caption says whose level it is:
+`LEVEL  REC`, `LEVEL  PLAY`, or `LEVEL` with every cell dark.
+
+### 122.9 Selection and editing (pinned)
+
+A selection is `[s, e)`, clamped to the document; `s = e` is no selection
+and leaves the cursor at `s`. Click places the cursor; a drag selects; the
+two handles drag either end; Shift+click extends. Left/Right move the
+cursor one column (one frame at `fpp` = 1), Shift extends, Home/End go to the
+ends. The overview shows the whole document, the view's extent and the
+selection, and a click there centres the view. The selection field shows
+`SS.cc - SS.cc` under a minute and `M:SS.c` above.
+
+| command | needs | does |
+|---|---|---|
+| Trim | a selection | the document becomes `[s, e)` |
+| Delete | a selection | `[s, e)` is removed and the gap closes |
+| Cut / Copy | a selection | to WaveRack's clipboard (Cut then deletes) |
+| Paste | a clipboard of the same format | inserted at the cursor, replacing a selection |
+| Select All / None | frames | - |
+| Undo / Redo | history | §122.3 |
+
+Every edit stops the transport first, and leaves the selection on the
+result (the pasted range, or the cursor at a deletion's seam).
+
+### 122.10 Saving (pinned)
+
+**Save never writes over a file until the new one is whole.** It writes
+`WRSAVE.$$$` in the destination folder, checks `OSAPI_FILE_DFREE` first
+(the document's bytes + 44 + one cluster), streams the pieces through, and
+only then deletes the target and renames the temp file to it. A failure or
+a cancel before the rename leaves the original untouched and deletes the
+temp file; a failure between the delete and the rename leaves
+`WRSAVE.$$$` - complete - and says so. Save As asks the Standard File dialog
+(§38) for a name, and before replacing an existing file that is not the
+document's own, asks. Save Selection As writes `[s, e)` the same way.
+
+**Saving over a source the document uses** (Save on an opened file) rebases
+the document onto the saved file - one piece - and clears the undo history
+and any clipboard pieces that named the old file, because that file no
+longer exists. The status bar says so. The format is preserved: this
+delivery offers no conversion on save.
+
+### 122.11 The face: layouts, themes, art (pinned)
+
+| layout | content | where | what is on it |
+|---|---|---|---|
+| FULL | 608 x 400 | a VGA's 480 lines | the logo strip, the LCD, the LEVEL bar over INPUT GAIN, nine transport keys, the waveform with its ruler, the overview, the edit row, the format row, the grille, VOLUME and the status bar |
+| MID | 608 x 272 | EGA's 350 and Hercules' 348 | FULL without the logo strip and grille; shorter LCD digits, keys and waveform; the edit and format rows as two |
+| COMPACT | 624 x 132 | the CGA's 200 | the mockup's shallow layout: the LCD top left, the meter over the gain top right, one row of keys, the waveform and overview, and the footer as TWO rows - selection, Loop, Trim, Delete, Save As; then Input, rate, bits, channels, VOLUME, status |
+
+The layout is chosen at every full paint from `OSAPI_WM_GEOM`'s content box
+(the largest that fits) and the window sized by an `OSAPI_WM_PREFER` table,
+exactly as §119.6.2; View > Compact / Full resizes. Colour is the default
+where the window's display has more than one bit; View > Theme switches it,
+and is grey on a 1bpp display, which is black and white whatever was chosen.
+
+| role | colour | black and white |
+|---|---|---|
+| faceplate | light grey, rules dark grey and white (a bevel) | white, rules black |
+| LCD, waveform, overview ground | black | black |
+| time digits, waveform ink | light green | white |
+| filename, format line, ruler | light cyan / white | white |
+| selection ground | dark grey | a 25% dither under the wave |
+| selection handles and edges | light cyan | white, dashed |
+| playhead | yellow | white |
+| LED cells | green / yellow / red, dark grey when off | lit white / outlined black / 50% dither for the hold |
+| keys | light grey faces, black pictures; Play latched green, Record's dot red | white faces; latched inverted |
+| disabled | dark grey ink | half the ink (a checkerboard, §47 rule 1) |
+
+**The art is generated**, `tools/os88wrart.py` from definitions in the
+script, CDRack's shape (§119.6.3): seven-segment digit sets for each
+layout's timer (mitre at FULL, block below 20 rows), a 5 x 7 small-caps face
+for panel labels and scale numbers, the logo, the transport and file
+pictures at 13 rows and at the CGA's 7, the speaker, the drop arrow, the
+screws, and the meter's dB table. `--selfcheck` runs in the `make` rule;
+`--png DIR` writes previews. No image is read and no service is asked.
+Window chrome and menus stay the OS's; panel text that is not small caps is
+the system font through `OSAPI_FONT_RUN` (§6.1).
+
+**Draw what changed** (§119.6.4): static parts at a full paint only; every
+changing field an element with a 16-bit key; the paint forgets the keys and
+runs the same elements; a clipped field is forgotten.
+
+### 122.12 Menus and keys (pinned)
+
+**File**: New, Open..., Save, Save As..., Save Selection As..., Recover
+Take. **Edit**: Undo, Redo, Cut, Copy, Paste, Delete, Trim, Select All,
+Select None. **View**: Zoom In, Zoom Out, Fit, Compact / Full Layout, Theme.
+**Sound**: Play / Pause, Stop, Record, Loop: On / Off, Rate: 8,000 /
+11,025 Hz. About is the application menu's (`OSAPI_ABOUT_SET`); there is no
+Help menu and no check mark - a toggle names its state (§12.2).
+
+| key | does | key | does |
+|---|---|---|---|
+| Space | play / pause | R | record / pause the take |
+| S, Escape | stop (Escape also cancels a scan) | L | loop on / off |
+| Left / Right | cursor one column | Shift+Left/Right | extend the selection |
+| Home / End | to the start / end | `+` `-` | zoom in / out |
+| F | fit | Delete | delete the selection |
+| T | trim | U / Y | undo / redo |
+| X / C / V | cut / copy / paste | A | select all |
+| `[` `]` | volume down / up | `<` `>` | input gain down / up |
+
+### 122.13 Where it ships, and what it costs (pinned)
+
+To be measured and written here when it ships: image, packed file, bss, the
+heap claims while idle, playing and recording, the disks that carry it, and
+the sustained record and play rates on MartyPC's XT.
