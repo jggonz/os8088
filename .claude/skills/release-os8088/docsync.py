@@ -180,7 +180,15 @@ def main():
                              'disk-guide.json `manuals`/`entries`, matching the house style): '
                              + ', '.join(sorted(undescribed)))
     listed = {d['file'] for d in guide['disks']}
-    shipped = set(re.findall(r'"([\w.-]+\.(?:img|iso|VHD))"', (SKILL / 'mkzip.py').read_text()))
+    mkzip = (SKILL / 'mkzip.py').read_text()
+    shipped = set(re.findall(r'"([\w.-]+\.(?:img|iso|VHD))"', mkzip))
+    for lst in re.findall(r'"@([\w.-]+\.list)"', mkzip):    # a set: its list names the disks
+        lp = OS_REPO / 'build' / lst
+        if lp.is_file():
+            shipped |= {Path(l.strip()).name for l in lp.read_text().splitlines() if l.strip()}
+        else:
+            attention.append(f'build/{lst} is not built, so its set was not checked against '
+                             'the guide: build it (step 2) or check the set by hand.')
     unlisted = sorted(shipped - listed)
     if unlisted:
         attention.append('Release images the guide does not list at all (add a `disks` '
