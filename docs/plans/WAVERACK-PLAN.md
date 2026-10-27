@@ -30,8 +30,8 @@ the evidence column says what was actually seen.
 | US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | In progress | driver half shipped: 1a027a77, SPEC §34.6.4, soak row `sndcap` passed on MartyPC SB DSP 2.01 (flat 80h - not a microphone); app side is Wave 5 |
 | US-07 | See the active level; set input gain separately from volume | US-05, US-06 | In progress | the PLAYBACK half shipped in wave 3 (§123.8): the played half's peak before the volume through `wrart_db`, the hold, PEAK at a rail, `LEVEL  PLAY`, only the changed cells drawn; the soak row reads the lit cells for STEREO16's tone and PEAK at its 16-bit spike. The record meter and the gain are wave 5's |
 | US-08 | Select a precise range, audition it, loop it | US-05 | Implemented — verification pending | §123.9's selection half shipped in wave 3: drag, handles, Shift+click, Shift+Left/Right, Select All / None, `[s, e)` clamped, the field's two formats, the inverted span (B&W) / its own ground (colour) drawn by changed columns only; Loop seamless; the soak row drags a range, loops it and holds verb 9's count to `play_pos` and the capture to the selection repeated; identity checks with a selection on VGA colour, B&W, COMPACT and the CGA knob tree |
-| US-09 | Trim, delete, cut, copy, paste, undo and redo | US-08 | Planned | |
-| US-10 | Save, Save As, Save Selection As without losing the source | US-09 | Planned | |
+| US-09 | Trim, delete, cut, copy, paste, undo and redo | US-08 | Implemented — verification pending | `wredit.inc` (§123.3, §123.9 shipped): piece lists built and coalesced, the 64-piece refusal, a 9-state undo ring in a 6 KB claim, the 16-piece clipboard kept across New and Open (format refusal, adopted by an empty document), sources swept; edits grey while a play is held (§123.6's table); the dirty mark is the window title; `tools/wrsim.py`'s `Editor` against a flat model in the fast `wrsim` row; soak row `waverackedit` (every edit's piece table, selection and history against the reference); identity `None` after a cut at Fit and at fpp 1; screenshots `docs/waverack/waverack-w4-*.png`; see Wave 4 below |
+| US-10 | Save, Save As, Save Selection As without losing the source | US-09 | Implemented — verification pending | `wrsave.inc` (§123.10 shipped): `WRSAVE.$$$`, DFREE first, the canonical header, a gulp a tick through a 16 KB output claim (`OSAPI_FILE_WRITE` then `OSAPI_FILE_WRITE_SEQ`), Escape cancels, delete + rename, `Replace NAME?`, the rebase over a source, the save-changes question; `wrsim.write_wav` read back by `wave` and `parse()`; soak row `waverackedit` (each saved file read back off the guest's floppy, byte for byte; the cancel, the rebase, the disk-full refusal, the close question); see Wave 4 below. Not seen: a write-protected or full disk MID-write (the refusal before writing is tested), a real XT's save time |
 | US-11 | The design's personality, readable and fast on an XT | US-02..US-10 | Planned | |
 | US-12 | A maintainer can build, install and test it from the PR | all | Planned | |
 
@@ -526,6 +526,138 @@ os88test: soak tier - 1 rows, 420s declared, budget none  (caps: lame,mtools,nas
 
 os88test: 1 passed, 0 failed, 0 skipped in 136.6s, 43.9s charged (budget none)
 rc=0
+```
+
+## Wave 4 — editing and saving (US-09, US-10): what shipped and what was seen
+
+Built: `apps/waverack/wredit.inc` (`wx_`, §123.3 and §123.9: the piece-list
+builder with coalescing, the 64-piece refusal, the 9-state undo ring in one
+6 KB claim, the 16-piece clipboard kept across New and Open, the source
+sweep, the format refusal and the adoption by an empty document);
+`apps/waverack/wrsave.inc` (`ws_`, §123.10: `WRSAVE.$$$`, DFREE first, the
+canonical header, a gulp a tick through a 16 KB output claim -
+`OSAPI_FILE_WRITE`, then `OSAPI_FILE_WRITE_SEQ` - Escape cancels, delete +
+rename, `Replace NAME?`, the rebase over a source); the dirty title
+(`OSAPI_WM_TITLE`) and the save-changes question (os88ui's alert) in
+`waverack.asm`; the predicate's and the reasons' wave 4 rows;
+`tools/wrsim.py`'s `pc_add`, `pc_range`, `Editor`, `wav_header`,
+`write_wav` with a selfcheck against a flat model (fast `wrsim` row); the
+soak row `waverackedit` (`tests/waverackedit.py`).
+
+**The open item "the dirty indicator is not on screen" is resolved**: the
+indicator is the window title, `WaveRack - NAME*` (TexPad's shape), set
+only when it changes (§123.3). US-04's acceptance line about a dirty
+indicator is met by it.
+
+Measured: image 35,953 bytes (packed 27,915, 28 clusters), bss 5,997; heap
+idle with a document and a history `[2, 4, 6, 10, 16]` = 38 KB (TONE8.WAV),
+saving `[2, 4, 6, 10, 16, 16]` = 54 KB; an edit costs 34-37 drawing calls at
+Fit, 81-84 at fpp 1 with the refinement finishing, against 126 for a full
+repaint (`-DWR_CALLS`). The apps disks still fit (1.44 MB 2,574 of 2,847
+clusters, 1.2 MB 2,081 of 2,371); nothing was moved.
+
+Seen on the glass (QEMU): cut, paste, undo and redo on TONE8.WAV and
+STEREO16.WAV; the dirty title; the save-changes alert on New and on the
+close box (Cancel keeps it, Discard closes it, Save saves and then closes,
+leaving no claim); Save As a new file read back off the floppy byte for
+byte; a Save As cancelled with Escape leaving STEREO16.WAV byte-identical;
+Save over the source rebasing; Save Selection As over the document's source
+refused before the replace question; the replace question (Cancel, then
+Proceed); Paste of another format refused naming the clipboard's; New +
+Paste adopting the format as UNTITLED.WAV and Save going to Save As. The
+identity check after a cut at a non-block boundary: **`None`** at Fit and
+at fpp 1. Screenshots: `docs/waverack/waverack-w4-edit-col.png`,
+`-edit-bw.png`, `-ask.png`, `-cga-compact.png` (native 640 x 200, the CGA
+knob tree) and `-cga-compact-2x.png`.
+
+**The soak row's first run failed six checks in its rebase leg, and the
+cause was the TEST's floppy**: `MEDIA/` was built one cluster (16 slots: `.`,
+`..`, twelve fixtures), the row's OUT1.WAV and SEL1.WAV filled it, and the
+save over STEREO16.WAV was refused `Folder is full` - the kernel never grows
+a directory (§18.5). WaveRack behaved as §123.10 says (the reason said, the
+original untouched, the document still edited). The row now builds
+`MEDIA/` with `--dir-slots MEDIA=64`; the second run passed (below). It ran
+on the build with wave 3's review fixes; the one change after it - a stale
+`No selection` cleared when a selection is made - touches only the status
+line, and was seen on the glass instead.
+
+**Wave 3's review, folded in** (`wr-reports/review-wave3.md`): H1 the end
+padded to the card's 4 KB block above 22,222 Hz (and `waverackplay` gained
+a `hi` leg - TONE44.WAV at d = 1, an odd number of halves - EDITED, NOT RUN:
+the final soak pass runs it); L1 the srcdone snapshot before the counters;
+L2 a Loop region under a half plays once (`Too short to loop`); L3 a stale
+count not folded; L4 `Sound card stopped`; L5 Resume at a non-looping
+play's end finishes it; L6 the pre-roll's silence keeps converted samples;
+N1, N2 comments; N4 `wt_err` cleared once said. N3 (the played count's
+32-bit product wraps after ~18 h of looping) is left: documented, not worth
+a 48-bit playhead.
+
+The soak row (`python3 tools/os88test.py soak -v -k waverackedit`, the
+second run, verbatim):
+
+```
+os88test: building 3 declared artefact(s): build/os8088.img build/waverack.o88 build/waverack.bin
+os88test: soak tier - 1 rows, 420s declared, budget none  (caps: lame,mtools,nasm,nasm3,numpy,pil,qemu,qemu9,unicorn)
+
+ ok  waverackedit                 500.2s
+       |    the running WaveRack is build/waverack.bin (make waverackfix) ok
+       |    WaveRack launches off B:                                     ok
+       |    TONE8.WAV opens                                              ok
+       |      heap, idle with it open: [2, 4, 10, 16] KB
+       |  edits: TONE8.WAV, every edit against wrsim's Editor
+       |    cut: pieces 2, sel 1280-1280, cursor 1280, history 1/2 - the reference's ok
+       |    an edit makes it dirty: the title says so                    ok
+       |    paste: pieces 4, sel 3840-4832, cursor 3840, history 2/3 - the reference's ok
+       |    cut: pieces 2, sel 3840-3840, cursor 3840, history 3/4 - the reference's ok
+       |    paste: pieces 1, sel 1280-2272, cursor 1280, history 4/5 - the reference's ok
+       |    a cut pasted back where it came from is one piece again      ok
+       |    delete: pieces 2, sel 6400-6400, cursor 6400, history 5/6 - the reference's ok
+       |    undo: pieces 1, sel 6400-7392, cursor 6400, history 4/6 - the reference's ok
+       |    redo: pieces 2, sel 6400-6400, cursor 6400, history 5/6 - the reference's ok
+       |    copy: pieces 2, sel 480-832, cursor 480, history 5/6 - the reference's ok
+       |    paste: pieces 3, sel 9600-9952, cursor 9600, history 6/7 - the reference's ok
+       |    undo: pieces 2, sel 9600-10033, cursor 9600, history 5/7 - the reference's ok
+       |    undo: pieces 1, sel 6400-7392, cursor 6400, history 4/7 - the reference's ok
+       |    redo: pieces 2, sel 9600-10033, cursor 9600, history 5/7 - the reference's ok
+       |    trim: pieces 2, sel 0-0, cursor 0, history 6/7 - the reference's ok
+       |    undo: pieces 2, sel 3200-10033, cursor 3200, history 5/7 - the reference's ok
+       |      heap, idle with a history: [2, 4, 6, 10, 16] KB
+       |  save as: OUT1.WAV and SEL1.WAV read back off the floppy
+       |    OUT1.WAV is wrsim.write_wav of the pieces, byte for byte (10078) ok
+       |    no WRSAVE.$$$ left                                           ok
+       |    TONE8.WAV untouched                                          ok
+       |    the document is OUT1.WAV and clean ('WaveRack - OUT1.WAV')   ok
+       |    'Saved OUT1.WAV'                                             ok
+       |      heap, saving: [2, 4, 6, 10, 16, 16] KB = 54 KB
+       |    SEL1.WAV is [800, 1456) byte for byte                        ok
+       |    the document is still OUT1.WAV                               ok
+       |  cancel: a Save As of STEREO16 stopped with Escape
+       |    STEREO16.WAV opens                                           ok
+       |    the clipboard names STEREO16.WAV                             ok
+       |    'Save cancelled'                                             ok
+       |    no OUT2.WAV, no WRSAVE.$$$                                   ok
+       |    STEREO16.WAV byte-identical                                  ok
+       |    the save's claim given back, the document still edited       ok
+       |      heap, saving (sampled before the Escape landed): [4, 6, 6, 10, 16] KB = 42 KB
+       |  rebase: File > Save over STEREO16.WAV, the file it reads
+       |    STEREO16.WAV is the edited document byte for byte            ok
+       |    the document is ONE piece of the saved file ([(1, 0, 16866)]) ok
+       |    the history is empty, its claim given back                   ok
+       |    the clipboard's pieces of the old file dropped               ok
+       |    'Saved; undo cleared'                                        ok
+       |    clean: 'WaveRack - STEREO16.WAV'                             ok
+       |  full: a document bigger than the disk's free space
+       |    refused before writing: 'Not enough disk space' (404784 bytes) ok
+       |    nothing on the disk changed                                  ok
+       |  pieces: a one-column clip pasted until WO_NPC would pass
+       |    refused at 63 pieces: 'Too many edits; save'                 ok
+       |  close: the close box on an edited document
+       |    'Save changes to TONE8.WAV?' asked                           ok
+       |    Discard closes the window                                    ok
+       |    no claim of the closed region left ([])                      ok
+       | waverackedit: ok
+
+os88test: 1 passed, 0 failed, 0 skipped in 500.2s, 84.5s charged (budget none)
 ```
 
 ## Known risks

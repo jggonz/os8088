@@ -13,14 +13,17 @@
 ; (US-04): File > New and Open (and OSAPI_ARG_FILE at launch), the RIFF walk
 ; (wrwav.inc), sources and the piece table (wrdoc.inc), the coarse envelope's
 ; scan, the view cache and its refinement, the waveform band, zoom, scroll,
-; the overview and the cursor (wrenv.inc). WAVE 3 IS THE TRANSPORT (US-05,
+; the overview and the cursor (wrenv.inc). WAVE 3 WAS THE TRANSPORT (US-05,
 ; US-08, US-07's playback half): Play, Pause, Stop, seek and Loop through the
 ; Sound Blaster's ring stream (wrxport.inc), the playhead, the meter while
-; playing, and the selection - drag, handles, Shift, Select All / None. What
-; later waves build (record, edit, save) is GREYED through the one predicate,
-; wr_cmdok, which a key, its menu item and its keystroke all ask (SPEC.md 47
-; rule 2), and a press on a greyed control says why on the status bar (47
-; rule 6).
+; playing, and the selection - drag, handles, Shift, Select All / None. WAVE 4
+; IS EDITING AND SAVING (US-09, US-10): Trim, Delete, Cut, Copy, Paste, Undo
+; and Redo over the piece table (wredit.inc), the dirty title and the
+; save-changes question, and Save, Save As and Save Selection As through a
+; temp file and a rename (wrsave.inc). What a later wave builds (record) is
+; GREYED through the one predicate, wr_cmdok, which a key, its menu item and
+; its keystroke all ask (SPEC.md 47 rule 2), and a press on a greyed control
+; says why on the status bar (47 rule 6).
 ;
 ; THE FILES (SPEC.md 123.1):
 ;   waverack.asm  this: the entry, the commands, the predicate, the menus, the
@@ -33,6 +36,9 @@
 ;                 the selection
 ;   wrxport.inc   the transport: the state machine, the look-ahead, the
 ;                 worker, the conversion, VOLUME, the playhead, the meter
+;   wredit.inc    the edits, undo and redo, the clipboard, the source sweep
+;   wrsave.inc    Save, Save As, Save Selection As: the temp file, the
+;                 replace, the rebase
 ;   build/wrart.inc  the pictures, the fonts, the meter's table, the role
 ;                 tables and the three layouts as DATA, made and measured on
 ;                 the host by tools/os88wrart.py (and tools/os88wrlay.py)
@@ -257,26 +263,23 @@ wr_prefset:
 ;            predicate, shared by the keys' greying, the menus and the keys)
 ; out: CF = 0 live, CF = 1 refused; every register preserved
 ;
-; Wave 3 has the transport: its commands follow SPEC.md 123.6's table - Play
-; with a card and frames, Pause and Stop while a play is held, and Open and
-; New only with the transport idle (Stop first). Record, edit and save are
-; later waves', and refused until they land.
+; The transport's commands follow SPEC.md 123.6's table - Play with a card and
+; frames, Pause and Stop while a play is held. The document's - New, Open, the
+; edits and the saves - want the transport IDLE (`Stop first`: the table's
+; "no" for PLAYING, so an edit never mutates what is being played; Copy alone
+; is live under a play, the document unchanged), no save running (`Still
+; saving`), and a scanned document; each its own condition besides (wave 4,
+; SPEC.md 123.9, 123.10). Record is a later wave's, refused until it lands.
 ; -----------------------------------------------------------------------------
 wr_cmdok:
     cmp al, C_LOOP
     je .yes
     cmp al, C_RATE
     je .yes
-    cmp al, C_OPEN
-    je .idle
     cmp al, C_THEME
     je .theme
     cmp al, C_LAYOUT
     je .layout
-    cmp al, C_NEW
-    je .doc
-    cmp al, C_CURSOR
-    je .frames
     cmp al, C_STOP
     je .stop
     cmp al, C_ZIN
@@ -285,28 +288,100 @@ wr_cmdok:
     je .zout
     cmp al, C_FIT
     je .fit
-    cmp al, C_PLAY
-    je .play
-    cmp al, C_PLAYK
-    je .play
-    cmp al, C_PAUSE
-    je .pause
+    cmp al, C_CURSOR
+    je .frames
     cmp al, C_SELALL
     je .selall
     cmp al, C_SELNONE
     je .selnone
+    cmp al, C_PAUSE
+    je .pause
+    cmp al, C_COPY                  ; Copy: a selection, even under a play
+    je .copy
+    cmp al, C_RECORD                ; (Record, Recover Take: wave 5's)
+    je .no
+    cmp al, C_RECOVER
+    je .no
+    cmp byte [ws_busy], 0           ; every other command waits for a save
+    jne .no
+    cmp al, C_PLAY
+    je .play
+    cmp al, C_PLAYK
+    je .play
+    call wt_active                  ; ...and for the transport to be idle
+    jnc .no
+    cmp al, C_OPEN
+    je .open
+    cmp al, C_PASTE
+    je .paste
+    cmp al, C_NEW
+    je .new
+    call we_ready                   ; the rest want a scanned document
+    jc .no
+    cmp al, C_SAVEAS
+    je .yes
+    cmp al, C_SAVE
+    je .save
+    cmp al, C_UNDO
+    je .undo
+    cmp al, C_REDO
+    je .redo
+    jmp short .selected             ; Trim, Delete, Cut, Save Selection As
 .no:
     stc
     ret
 .yes:
     clc
     ret
-.idle:
-    jmp wt_idle                     ; Open: the transport idle (Stop first)
-.doc:
-    cmp byte [wo_doc], 0            ; New: a document to empty, and no play
+.open:
+    push ax                         ; Open: a source record the clipboard does
+    call wx_clipsrcs                ; not hold (SPEC.md 123.3)
+    cmp ax, WO_NSRC
+    pop ax
+    jae .no
+    clc
+    ret
+.new:
+    cmp byte [wo_doc], 0            ; New: a document to empty
     je .no
-    jmp wt_idle
+    clc
+    ret
+.paste:
+    cmp word [wo_ncp], 0            ; Paste: a clipboard of the document's
+    je .no                          ; format (none: it is adopted), and a
+    call wx_clipfmt                 ; document scanned when there is one
+    jc .no
+    cmp byte [wo_doc], 0
+    je .yes
+    jmp we_ready
+.save:
+    cmp byte [wo_titled], 0         ; Save: an untitled document (it is Save
+    je .yes                         ; As), or an edited one
+    cmp byte [wo_dirty], 0
+    je .no
+    clc
+    ret
+.undo:
+    cmp byte [wo_upos], 0           ; Undo: a state before this one
+    je .no
+    clc
+    ret
+.redo:
+    push ax                         ; Redo: one after it
+    mov al, [wo_upos]
+    inc al
+    cmp al, [wo_un]
+    pop ax
+    jae .no
+    clc
+    ret
+.copy:
+    cmp byte [ws_busy], 0
+    jne .no
+    call we_ready
+    jc .no
+.selected:
+    jmp we_hassel
 .frames:
     cmp byte [wo_doc], 0            ; the cursor: frames to stand on
     je .no
@@ -324,10 +399,14 @@ wr_cmdok:
 .selnone:
     jmp we_hassel                   ; Select None: a selection
 .stop:
-    call wt_active                  ; Stop: a play held...
+    cmp byte [ws_busy], 0           ; Stop: a save to cancel...
+    jne .yes
+    call wt_active                  ; ...a play held...
     jnc .yes
     cmp byte [we_busy], 1           ; ...or a scan to cancel (SPEC.md 123.5)
-    jne .no
+    jne .no                         ; - not a save's rescan: that document
+    cmp byte [ww_note], N_REBASE    ; is saved, and stays
+    je .no
     clc
     ret
 .pause:
@@ -404,17 +483,28 @@ wr_canbig:
 
 ; -----------------------------------------------------------------------------
 ; wr_explain - command AL was refused: the status bar says why (SPEC.md 47
-;              rule 6, 123.2). clobbers SI
+;              rule 6, 123.2), in wr_cmdok's order. clobbers SI
 ; -----------------------------------------------------------------------------
 wr_explain:
-    mov si, wr_s_stopfirst          ; Open, New: a play is held
-    cmp al, C_OPEN
-    je .held
-    mov si, wr_s_nodoc
-    cmp al, C_NEW
-    je .new
-    cmp al, C_CURSOR
+    mov si, wr_s_bwonly
+    cmp al, C_THEME
     je .say
+    mov si, wr_s_noroom
+    cmp al, C_LAYOUT
+    je .say
+    cmp al, C_STOP
+    je .stop
+    cmp al, C_PAUSE
+    je .pause
+    cmp al, C_SELNONE
+    je .nosel
+    cmp al, C_RECORD
+    je .rec
+    mov si, wr_s_notyet
+    cmp al, C_RECOVER
+    je .say
+    cmp al, C_CURSOR
+    je .nodoc
     cmp al, C_ZIN
     je .view
     cmp al, C_ZOUT
@@ -423,38 +513,68 @@ wr_explain:
     je .view
     cmp al, C_SELALL
     je .view
-    mov si, wr_s_nosel
-    cmp al, C_SELNONE
-    je .say
-    mov si, wr_s_notyet
     cmp al, C_PLAY
     je .play
     cmp al, C_PLAYK
     je .play
-    cmp al, C_PAUSE
-    je .pause
-    cmp al, C_RECORD
-    je .rec
-    cmp al, C_STOP
-    je .stop
-    cmp al, C_THEME
-    je .theme
-    cmp al, C_LAYOUT
+    cmp al, C_COPY
+    je .copy
+    mov si, wr_s_saving             ; the document's commands: a save, a play,
+    cmp byte [ws_busy], 0           ; no document, a scan - then their own
     jne .say
-    mov si, wr_s_noroom
-    jmp short .say
-.new:
-    cmp byte [wo_doc], 0            ; New: no document, or a play held
-    je .say
     mov si, wr_s_stopfirst
-.held:
     call wt_active
     jnc .say
-    mov si, wr_s_notyet
+    cmp al, C_OPEN
+    je .open
+    cmp al, C_PASTE
+    je .paste
+    cmp byte [wo_doc], 0
+    je .nodoc
+    mov si, wr_s_busy
+    cmp byte [we_busy], 1
+    je .say
+    mov si, wr_s_clean
+    cmp al, C_SAVE
+    je .say
+    mov si, wr_s_noundo
+    cmp al, C_UNDO
+    je .say
+    mov si, wr_s_noredo
+    cmp al, C_REDO
+    je .say
+.nosel:
+    mov si, wr_s_nosel              ; Trim, Delete, Cut, Copy, Save Selection
+.say:                               ; As, Select None
+    jmp wr_say
+.nodoc:
+    mov si, wr_s_nodoc
     jmp short .say
-.theme:
-    mov si, wr_s_bwonly
+.open:
+    mov si, ww_e17                  ; 'Clipboard uses 4 files'
     jmp short .say
+.paste:
+    mov si, wr_s_noclip
+    cmp word [wo_ncp], 0
+    je .say
+    call wx_clipfmt
+    jnc .pscan
+    push ax
+    push dx
+    push di
+    call wx_clipsay                 ; 'Clip: 22050 16b stereo'
+    pop di
+    pop dx
+    pop ax
+    ret
+.pscan:
+    mov si, wr_s_busy
+    jmp short .say
+.copy:
+    mov si, wr_s_saving
+    cmp byte [ws_busy], 0
+    jne .say
+    jmp short .view
 .stop:
     mov si, wr_s_nostop
     jmp short .say
@@ -465,26 +585,30 @@ wr_explain:
     jz .nocard
     cmp al, C_PAUSE
     je .say
-    mov si, wr_s_nodoc              ; Play: no document, or still scanning
-    cmp byte [wo_doc], 0
-    je .say
+    mov si, wr_s_saving
+    cmp byte [ws_busy], 0
+    jne .say
+    cmp byte [wo_doc], 0            ; Play: no document, or still scanning
+    je .nodoc
     mov si, wr_s_busy
     jmp short .say
 .nocard:
     mov si, wr_s_nocard
     jmp short .say
 .rec:
+    mov si, wr_s_notyet
     test word [wr_caps], SND_CAP_PCM_IN
     jnz .say
     mov si, wr_s_nocap
-.say:
-    jmp wr_say
+    jmp short .say
 .view:
     cmp byte [wo_doc], 0            ; no document, still scanning, or the
-    je .say                         ; zoom at its end
+    je .nodoc                       ; zoom at its end
     mov si, wr_s_busy
     cmp byte [we_busy], 1
     je .say
+    cmp al, C_COPY
+    je .nosel
     mov si, wr_s_nodoc              ; (Select All: no frames)
     cmp al, C_SELALL
     je .say
@@ -492,25 +616,65 @@ wr_explain:
     cmp al, C_ZIN
     je .say
     mov si, wr_s_whole
-    jmp short .say
+    jmp .say
 
 ; -----------------------------------------------------------------------------
 ; wr_cmd - do command AL (it is live: the caller asked wr_cmdok)
 ; in:  BX = the window. clobbers AX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wr_cmd:
-    cmp al, C_NEW
-    jne .c1
-    call wo_new                     ; the document emptied, its claims back
-    mov si, wr_s_new
-    jmp wr_say
-.c1:
+    mov ah, WRQ_NEW                 ; New and Open: an edited document is
+    cmp al, C_NEW                   ; asked about first (wr_ask)
+    je .ask
+    mov ah, WRQ_OPEN
     cmp al, C_OPEN
+    jne .e0
+.ask:
+    mov al, ah
+    call wr_ask
+    jc .out                         ; asked: the answer does the rest
+    jmp wr_qrun
+.e0:
+    mov si, wx_trim                 ; the edits and the saves (wredit.inc,
+    cmp al, C_TRIM                  ; wrsave.inc)
+    je .run
+    mov si, wx_delete
+    cmp al, C_DELETE
+    je .run
+    mov si, wx_cut
+    cmp al, C_CUT
+    je .run
+    mov si, wx_copy
+    cmp al, C_COPY
+    je .run
+    mov si, wx_paste
+    cmp al, C_PASTE
+    je .run
+    mov si, wx_undo
+    cmp al, C_UNDO
+    je .run
+    mov si, wx_redo
+    cmp al, C_REDO
+    je .run
+    mov byte [ws_qact], 0           ; a save from a key or a menu carries no
+    mov si, ws_save                 ; deferred action (only the question's
+    cmp al, C_SAVE                  ; does: wr_onask)
+    je .run
+    mov si, ws_saveas
+    cmp al, C_SAVEAS
+    je .run
+    mov si, ws_savesel
+    cmp al, C_SAVESEL
     jne .c2
-    jmp wr_open
+.run:
+    jmp si
 .c2:
     cmp al, C_STOP
     jne .c3
+    cmp byte [ws_busy], 0           ; a save: cancelled, its temp file gone
+    je .nsave
+    jmp ws_cancel
+.nsave:
     call wt_active                  ; a play: stopped (SPEC.md 123.6)
     jc .scan
     jmp wt_stop
@@ -763,6 +927,11 @@ wr_ontimer:
     call ww_say
     jmp short .draw
 .work:
+    cmp byte [ws_busy], 0           ; a save's gulp (wrsave.inc); a
+    je .play                        ; refinement waits for it
+    call ws_step
+    jmp short .draw
+.play:
     cmp byte [wt_state], WT_PLAY
     jne .scan
     call wt_tick
@@ -804,14 +973,192 @@ wr_onwake:
     pop ax
     ret
 
-; wr_onclose - the close negotiator (SPEC.md 75.1): a play is stopped and
-; every claim it held given back before the window goes - and the stream
-; closed, so the card is never left running. CF = 0 lets the close happen
+; wr_onclose - the close negotiator (SPEC.md 75.1): a save running is
+; cancelled (its temp file deleted), an edited document is asked about
+; (CF = 1: not yet - wr_onask closes it when it is answered), and a play is
+; stopped and every claim it held given back before the window goes - the
+; stream closed, so the card is never left running. CF = 0 lets it close
 wr_onclose:
     push si
+    call ws_cancel
+    mov al, WRQ_CLOSE
+    call wr_ask
+    jc .not
     call wt_release
     pop si
     clc
+    ret
+.not:
+    pop si
+    stc
+    ret
+
+; =============================================================================
+; THE SAVE-CHANGES QUESTION (SPEC.md 123.3): New, Open and Close throw the
+; document away, and an EDITED one is asked about first with os88ui's alert
+; (SPEC.md 75.3) - Save / Discard / Cancel, TexPad's shape (SPEC.md 69.12).
+; The alert is a window of its own and not modal, so asking returns at once
+; and wr_onask carries the action out when it is answered - or, for Save,
+; hands it to the save, which carries it out only if the save SUCCEEDS
+; ([ws_qact], ws_finish): a failed or cancelled save leaves the document
+; here, still edited.
+; =============================================================================
+WRQ_NEW     equ 1
+WRQ_OPEN    equ 2
+WRQ_CLOSE   equ 3
+
+; -----------------------------------------------------------------------------
+; wr_ask - AL = WRQ_*: CF = 0 the document is not edited, go ahead; CF = 1 it
+;          is - 'Save changes to NAME?' is up (or, one being up already, it
+;          was raised and its action stands). keeps every register
+; -----------------------------------------------------------------------------
+wr_ask:
+    cmp byte [wo_dirty], 0
+    jne .ask
+    clc
+    ret
+.ask:
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    push ax
+    mov di, wr_qbuf                 ; 'Save changes to NAME?' - 29 characters
+    mov si, wr_s_qsave              ; at most, under OS88UI_AMAX
+    call wr_put
+    mov si, wo_name
+    call wr_put
+    mov word [di], '?'
+    mov ax, KERNEL_SEG              ; os88ui_ask reads our caption out of the
+    mov es, ax                      ; window record through ES (SPEC.md 20.1)
+    mov bx, [wr_win]
+    mov si, wr_qbuf
+    mov di, wr_onask
+    mov al, OS88UI_ASAVE
+    call os88ui_ask
+    pop ax
+    jc .o
+    mov [wr_qact], al
+.o:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; wr_onask - the alert answered: AL = 0 Save, 1 Discard, 2 Cancel or
+; OS88UI_ACANCEL; SI = our window, the gfx lock held, the alert gone and what
+; it covered repainted
+wr_onask:
+    mov ah, [wr_qact]
+    mov byte [wr_qact], 0
+    mov bx, si
+    or al, al
+    jz .save
+    cmp al, 1
+    jne .out                        ; Cancel / dismissed: nothing happens
+    mov al, ah                      ; Discard
+    call wr_qrun
+    jmp short .draw
+.save:
+    mov [ws_qact], ah               ; ...carried out when the save is done
+    push bx
+    call ws_save
+    pop bx
+.draw:
+    jmp wr_redraw
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wr_qrun - carry out AL = WRQ_*: New (the document emptied), Open (the
+;           dialog) or Close (the play released and the window closed -
+;           DEFERRED, SPEC.md 75.2, so nothing may draw after: wr_redraw
+;           sees [wr_closing]). in: BX = the window. clobbers AX, CX, DX, SI,
+;           DI
+; -----------------------------------------------------------------------------
+wr_qrun:
+    cmp al, WRQ_OPEN
+    jne .n1
+    jmp wr_open
+.n1:
+    cmp al, WRQ_CLOSE
+    je .close
+    call wo_new                     ; the document emptied, its claims back
+    mov si, wr_s_new
+    jmp wr_say
+.close:
+    push bx
+    call wt_release
+    pop bx
+    mov byte [wr_closing], 1
+    call OSAPI_WM_CLOSE
+    ret
+
+; -----------------------------------------------------------------------------
+; wr_retitle - THE DIRTY INDICATOR IS THE TITLE (SPEC.md 123.3): 'WaveRack -
+;              NAME*' while edited, 'WaveRack - NAME' saved, 'WaveRack' with
+;              no document - through OSAPI_WM_TITLE, which keeps the POINTER,
+;              so the buffer is bss (TexPad's tp_retitle). Set only when it
+;              changes: a caption is 17 rows. keeps every register
+; -----------------------------------------------------------------------------
+wr_retitle:
+    push ax
+    push bx
+    push si
+    push di
+    mov ax, wr_ttl                  ; the program's own name...
+    xor bl, bl
+    cmp byte [wo_doc], 0
+    je .set
+    mov di, wr_tbuf2                ; ...or the document's
+    mov si, wr_s_ttl
+    call wr_put
+    mov si, wo_name
+    call wr_put
+    cmp byte [wo_dirty], 0
+    je .z
+    mov byte [di], '*'
+    inc di
+.z:
+    mov byte [di], 0
+    mov si, wr_tbuf2                ; the same as it is? nothing to do
+    mov di, wr_ttlbuf
+.cmp:
+    mov al, [si]
+    cmp al, [di]
+    jne .copy
+    inc si
+    inc di
+    or al, al
+    jnz .cmp
+    jmp short .out
+.copy:
+    mov si, wr_tbuf2
+    mov di, wr_ttlbuf
+    call wr_put
+    mov byte [di], 0
+    mov ax, wr_ttlbuf
+    mov bl, 1
+.set:
+    cmp bl, 0                       ; the program's name: only when the
+    jne .go                         ; document's was up
+    cmp byte [wr_ttlbuf], 0
+    je .out
+    mov byte [wr_ttlbuf], 0
+.go:
+    mov bx, [wr_win]
+    or bx, bx
+    jz .out
+    call OSAPI_WM_TITLE
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -938,6 +1285,11 @@ wr_say:
     push cx
     push si
     push di
+    mov byte [wr_stsel], 0          ; 'No selection' is up: the selection's
+    cmp si, wr_s_nosel              ; next change must not leave it standing
+    jne .c0                         ; over one (wr_selsaid)
+    mov byte [wr_stsel], 1
+.c0:
     mov di, wr_stbuf
     mov cx, 39
 .c:
@@ -956,6 +1308,18 @@ wr_say:
     pop si
     pop cx
     pop ax
+    ret
+
+; wr_selsaid - a selection was made: a 'No selection' refusal still on the
+; status bar would contradict the face, so it becomes 'Ready'. keeps all
+wr_selsaid:
+    cmp byte [wr_stsel], 0
+    je .out
+    push si
+    mov si, wr_s_ready
+    call wr_say
+    pop si
+.out:
     ret
 
 ; --- INPUT GAIN and VOLUME ---------------------------------------------------------
@@ -1147,6 +1511,8 @@ wr_bcmd:
 ;             SI, DI
 ; -----------------------------------------------------------------------------
 wr_redraw:
+    cmp byte [wr_closing], 0        ; closing: the window is going (75.2)
+    jne .out
     cmp byte [wr_mode], WRM_ABOUT   ; the About card is opaque over the face,
     je .out                         ; and its dismissal repaints the content
     call OSAPI_WM_CLIP_SET          ; CF = 1: not one visible pixel
@@ -1160,6 +1526,8 @@ wr_redraw:
 ; wr_repaint - the whole content, now. BX = the window. clobbers AX, CX, DX,
 ; SI, DI
 wr_repaint:
+    cmp byte [wr_closing], 0
+    jne wr_redraw.out
     call OSAPI_WM_CLIP_SET
     jc .out
     mov si, bx
@@ -1782,6 +2150,8 @@ wr_num:
 %include "wrdoc.inc"
 %include "wrenv.inc"
 %include "wrxport.inc"
+%include "wredit.inc"
+%include "wrsave.inc"
 
 ; =============================================================================
 ; TEXT HELPERS (numbers)
@@ -2048,6 +2418,37 @@ wr_s_cbusy:  db 'Sound card is busy', 0
 wr_s_rateno: db 'Card refused the rate', 0
 wr_s_noopen: db 'Cannot open the card', 0
 wr_s_notask: db 'No task for the sound', 0
+wr_s_saving: db 'Still saving', 0
+wr_s_clean:  db 'Nothing to save', 0
+wr_s_noundo: db 'Nothing to undo', 0
+wr_s_noredo: db 'Nothing to redo', 0
+wr_s_noclip: db 'Clipboard is empty', 0
+wr_s_npc:    db 'Too many edits; save', 0
+wr_s_cplx:   db 'Selection too complex', 0
+wr_s_trim:   db 'Trimmed', 0
+wr_s_del:    db 'Deleted', 0
+wr_s_cut:    db 'Cut', 0
+wr_s_copied: db 'Copied', 0
+wr_s_pasted: db 'Pasted', 0
+wr_s_undone: db 'Undone', 0
+wr_s_redone: db 'Redone', 0
+wr_s_clip:   db 'Clip: ', 0
+wr_s_bmono:  db 'b mono', 0
+wr_s_bster:  db 'b stereo', 0
+wr_s_untitled: db 'UNTITLED.WAV', 0
+wr_s_ttl:    db 'WaveRack - ', 0
+wr_s_qsave:  db 'Save changes to ', 0
+wr_s_repl:   db 'Replace ', 0
+wr_s_saved:  db 'Saved ', 0
+wr_s_scancel: db 'Save cancelled', 0
+wr_s_inuse:  db 'File is in use', 0
+wr_s_dfull:  db 'Not enough disk space', 0
+wr_s_dfull2: db 'Disk is full', 0
+wr_s_wprot:  db 'Disk write-protected', 0
+wr_s_dirfull: db 'Folder is full', 0
+wr_s_wfail:  db 'Cannot write the file', 0
+wr_s_norepl: db 'Cannot replace file', 0
+wr_s_kept    equ ww_s_kept
 wr_s_hz:     db ' Hz', 0
 wr_s_b8:     db '  8-bit', 0
 wr_s_b16:    db ' 16-bit', 0
@@ -2068,6 +2469,7 @@ wr_ab3:     db 'edits WAV sound', 0
 %include "os88dec.inc"
 
 %define OS88UI_ABOUT
+%define OS88UI_ALERT                ; the save-changes and replace questions
 %define OS88UI_NOGLYPH
 %define OS88UI_BOWN
 %define OS88UI_DROP
@@ -2153,6 +2555,9 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wo_s, 4                     ; the selection [s, e), frames (SPEC.md
     WRV wo_e, 4                     ; 123.9), and the end a drag holds still
     WRV wo_anc, 4
+    WRV wo_titled, 1                ; 0: UNTITLED.WAV (New, then Paste)
+    WRV wo_fvol, 1                  ; the document's own file's folder (a
+    WRV wo_fdir, 2                  ; Save writes there)
     WRV wo_zero1, 0
     WRV wo_gen, 2                   ; generations: element keys
     WRV we_wgen, 2
@@ -2169,6 +2574,55 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wo_cbase, 4
     WRV wo_src, WO_NSRC * WS_SIZE   ; the sources
     WRV wo_pc, WO_NPC * WP_SIZE     ; the piece table
+    WRV we_ssrc, 2                  ; the source the scan is building
+    ; --- the edits, the history, the clipboard (wredit.inc) --------------------
+    WRV wo_ncp, 2                   ; the clipboard: its pieces, frames and
+    WRV wo_cfr, 4                   ; format - kept across New and Open
+    WRV wo_crate, 2
+    WRV wo_cbits, 1                 ; (bits, then channels: wx_clipfmt reads
+    WRV wo_cch, 1                   ; the two as one word)
+    WRV wo_csh, 1
+    WRV wo_un, 1                    ; the history: states held, the current
+    WRV wo_upos, 1                  ; one, the ring's oldest
+    WRV wo_ubase, 1
+    WRV wo_useg, 2                  ; ...its claim (WX_UKB)
+    WRV wx_tn, 2                    ; the list being built: pieces, too many
+    WRV wx_tov, 1
+    WRV wx_es, 2                    ; wx_emit's piece
+    WRV wx_ef, 4
+    WRV wx_ec, 4
+    WRV wx_ra, 4                    ; wx_range's frames and position
+    WRV wx_rb, 4
+    WRV wx_rpos, 4
+    WRV wx_na, 4                    ; the selection the edit leaves
+    WRV wx_nb, 4
+    WRV wo_clip, WO_NCLIP * WP_SIZE ; the clipboard's pieces
+    WRV wx_tmp, WO_NPC * WP_SIZE    ; the list being built
+    ; --- the save (wrsave.inc) --------------------------------------------------
+    WRV ws_busy, 1                  ; 1 = a save is writing (state BUSY)
+    WRV ws_mode, 1                  ; WSM_*
+    WRV ws_made, 1                  ; WRSAVE.$$$ exists
+    WRV ws_padded, 1                ; the pad byte is decided
+    WRV ws_pct, 1                   ; the percentage said
+    WRV ws_qact, 1                  ; WRQ_*: carried out when it succeeds
+    WRV ws_rb, 1                    ; the document was rebased onto it
+    WRV ws_dvol, 1                  ; the destination: volume, folder,
+    WRV ws_ddir, 2                  ; cluster
+    WRV ws_dclu, 2
+    WRV ws_oseg, 2                  ; the output claim, its bytes
+    WRV ws_fill, 2
+    WRV ws_tok, 2                   ; OSAPI_FILE_WRITE_SEQ's token
+    WRV ws_tmask, 2                 ; the source records that ARE the target
+    WRV ws_bytes, 4                 ; the data's bytes
+    WRV ws_f, 4                     ; frames: next, first, end
+    WRV ws_f0, 4
+    WRV ws_f1, 4
+    WRV ws_tname, 14                ; the target's name
+    WRV wr_qact, 1                  ; the question's action (WRQ_*)
+    WRV wr_closing, 1               ; OSAPI_WM_CLOSE asked: draw nothing
+    WRV wr_stsel, 1                 ; the status is 'No selection'
+    WRV wr_qbuf, 40                 ; the question's line
+    WRV wr_ttlbuf, 28               ; the title (OSAPI_WM_TITLE keeps it)
     ; --- the waveform (wrenv.inc) ----------------------------------------------------
     WRV we_bx, 2                    ; the boxes: the waveform's x, y,
     WRV we_by, 2                    ; width, ruler, rows, lanes
@@ -2249,6 +2703,8 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_ring, 2
     WRV wt_rmask, 2
     WRV wt_preroll, 2               ; halves before the open
+    WRV wt_chalf, 2                 ; the card's block: 2 or 4 KB (H1)
+    WRV wt_lshort, 1                ; Loop asked, the region too short
     WRV wt_out, 2                   ; the card's rate
     WRV wt_cvp, 2                   ; the format's inner loop
     WRV wt_mtick, 2                 ; the meter's last tick, the hold's, PEAK's
@@ -2267,6 +2723,8 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_bk, 1                    ; frames in the box group begun
     WRV wt_srcdone, 1               ; the fill has the whole play
     WRV wt_last, 1                  ; the last half is staged
+    WRV wt_fin, 1                   ; ...and the card's block filled after it
+    WRV wt_cdead, 1                 ; the card stopped before the end (L4)
     WRV wt_ended, 1                 ; the card has played it (the worker's)
     WRV wt_req, 1                   ; a refill asked for
     WRV wt_err, 1                   ; a read failed

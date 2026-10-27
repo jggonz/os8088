@@ -219095,7 +219095,7 @@ third-party audio in them.
 
 ## 123. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
 
-**Status: PINNED; wave 1 (the face) SHIPPED - §123.11 to §123.13; wave 2 (the document) SHIPPED - §123.3 to §123.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §123.6, §123.8's playback half and §123.9's selection half.** Every subsection below is the contract the
+**Status: PINNED; wave 1 (the face) SHIPPED - §123.11 to §123.13; wave 2 (the document) SHIPPED - §123.3 to §123.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §123.6, §123.8's playback half and §123.9's selection half; wave 4 (editing, undo, the clipboard, saving) SHIPPED - §123.3's edits, §123.4's writer, §123.9's edits and §123.10.** Every subsection below is the contract the
 implementation is written against; each says *(pinned)* until the wave that
 builds it marks it *(shipped)* with what was measured. The delivery record is
 `docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
@@ -219115,7 +219115,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 §123.7 is the one driver extension it needs. Pure NASM, for Audio's reason
 (§86): the C SDK does not wrap the stream verbs.
 
-### 123.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`, wave 3 `wrxport.inc`)
+### 123.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`, wave 3 `wrxport.inc`, wave 4 `wredit.inc` and `wrsave.inc`)
 
 | file | holds | prefix |
 |---|---|---|
@@ -219123,11 +219123,12 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 | `wrdraw.inc` | drawing primitives: roles, themes, the composing band - `apps/cdrack/crdraw.inc`'s shape (§119.6.3) | `wd_` |
 | `wrface.inc` | the three layouts, the static parts, the elements and their keys, the button painter | `wf_` |
 | `wrwav.inc` | the RIFF/WAVE reader and the header writer | `ww_` |
-| `wrdoc.inc` | sources, the piece table, 32-bit frame arithmetic, undo/redo, the clipboard | `wo_` |
+| `wrdoc.inc` | sources, the piece table, 32-bit frame arithmetic, reading | `wo_` |
+| `wredit.inc` | the edits, undo/redo, the clipboard and the source sweep (wave 4: split from `wrdoc.inc`, which would have doubled; its piece-list state keeps `wo_` where it is the document's - `wo_clip`, `wo_useg`, `wo_sweep`) | `wx_` |
 | `wrenv.inc` | the coarse envelopes, the view cache and its refinement, the waveform band | `we_` |
 | `wrxport.inc` | the transport state machine, the look-ahead, the worker, conversion, volume, the playhead, the meter's state (wave 3; pinned as `wrplay.inc`, renamed when it was written) | `wt_` |
 | `wrrec.inc` | capture: the external record ring, the take file, gain, the recovery marker | `wc_` |
-| `wrsave.inc` | Save, Save As, Save Selection As, the temp file and the replace | `ws_` |
+| `wrsave.inc` | Save, Save As, Save Selection As, the temp file, the replace and the rebase (lower-case `ws_` labels; the upper-case `WS_*` are `wrdoc.inc`'s source-record fields - NASM is case-sensitive, and no name differs only by case) | `ws_` |
 | `build/wrart.inc` | the pictures, fonts, meter table, role tables and the three layouts as data, made and measured by `tools/os88wrart.py` with `tools/os88wrlay.py` (§123.11) | `wrart_`, `WRART_`, `WL_`, `WO_`, `R_`, `B_` |
 
 ### 123.2 What the machine can do, and what the face says when it cannot (pinned)
@@ -219154,7 +219155,14 @@ None), and Play's refusals - `Card needs 4,000+ Hz` (§123.6's, the pinned
 `The card cannot play below 4,000 Hz` being 34 characters), `Sound card is
 busy` (verb 0's 1), `Card refused the rate` (its 2), `Cannot open the card`,
 `Not enough memory`, `No task for the sound` and `Cannot read the file`
-*(shipped, wave 3)*.
+*(shipped, wave 3)*. Wave 4 adds the document's: `Still saving` (anything
+but Stop, the view and the theme while a save writes), `Nothing to undo`,
+`Nothing to redo`, `Nothing to save` (Save on a clean, titled document),
+`Clipboard is empty`, `Clip: 22050 16b stereo` (Paste of another format,
+naming the clipboard's), `Clipboard uses 4 files` (Open, §123.3), `Selection
+too complex` (a Copy of more than 16 pieces), `Too many edits; save` (the
+pinned `Too many edits - save to consolidate` is 36 characters) and the
+save's own, §123.10 *(shipped, wave 4)*.
 
 A machine with no card keeps a complete editor: it opens, edits, saves and
 draws every waveform; it does not pretend to play. PC speaker and Covox
@@ -219165,7 +219173,7 @@ in the plan, not a claim here.
 list (§24.5) on a requirement ground. kern_mega's arm (`-DPKG_MEGA`, §20.18)
 is not in this delivery either.
 
-### 123.3 The document and the timeline (pinned; the frame, sources, the piece table and New/Open shipped in wave 2)
+### 123.3 The document and the timeline (shipped: the frame, sources, the piece table and New/Open in wave 2; the edits, undo, the clipboard and dirty in wave 4)
 
 **The canonical unit is the sample FRAME**: one sample per channel. Every
 position, length, selection end and edit offset is a frame index held in 32
@@ -219224,9 +219232,83 @@ The dirty question, undo and the clipboard are wave 4's; what this wave
 leaves them is the immutable source and `wo_npc`. A recovered take opens
 dirty (`wo_dirty`) and says so; nothing else sets it yet, and the LCD shows
 no mark for it - its filename field holds 12 characters, and an 8.3 name is
-12.
+12. *(Settled in wave 4: the mark is the window TITLE, below.)*
 
-### 123.4 Reading and writing WAV (the reader shipped in wave 2; the writer pinned)
+**Shipped in wave 4** (`wredit.inc`, prefix `wx_`; `tools/wrsim.py`'s
+`pc_add`, `pc_range` and `Editor` are the reference, in the fast `wrsim`
+row, and the soak row `waverackedit` holds the guest's table to them):
+
+- **An edit builds its list in `wx_tmp`** (640 bytes of bss): `wx_range`
+  emits the document's pieces over a frame range and `wx_emit` appends one,
+  COALESCED - a piece that continues the last one's source where it stopped
+  extends it, and an empty one is nothing - so a cut pasted back where it
+  came from is ONE piece again and repeated edits do not leak pieces. A
+  result past `WO_NPC` sets an overflow byte and is refused before anything
+  changes: `Too many edits; save`.
+- **The history** is one claim of `WO_NUNDO + 1` = 9 states, a ring: a
+  state is the piece list, the cursor, the selection and its anchor, 662
+  bytes (22 + 64 x 10), **6 KB** in all, made by the first edit and given
+  back by New, Open and a save over a source. The current state is slot
+  `[wo_upos]` of `[wo_un]`; an edit first writes the selection the user has
+  NOW into it (so an Undo puts it back), drops the redo side, and appends
+  its result, the oldest falling off - eight Undos, and as many Redos as
+  were undone. Undo and Redo load a state whole; the document is dirty
+  after either. A claim that cannot be made refuses the edit (`Not enough
+  memory`) rather than making it without an undo.
+- **The clipboard** is `WO_NCLIP` = 16 pieces (160 bytes of bss), their
+  frames and the rate, bits, channels and shift they were cut in, kept for
+  the instance's life across New and Open. A Copy of more than 16 pieces is
+  refused (`Selection too complex`). Paste into a document of another
+  format is refused naming the CLIPBOARD's in 22 characters (`Clip: 22050
+  16b stereo`; both formats do not fit, and the document's is on the LCD).
+  A paste into an EMPTY document (after New) adopts the clipboard's format:
+  the document's I/O claim and view cache are made, its name is
+  `UNTITLED.WAV`, and Save on it is Save As.
+- **Sources are swept, not counted**: `wo_sweep` keeps a record while the
+  document, a state in the history or the clipboard names it, and gives
+  back every other one with its envelope claim - four records are at most a
+  few hundred compares, cheaper in bytes than four counters kept right
+  through every edit, undo, paste, drop and open. New and Open empty the
+  document and clear the history, so what survives them is what the
+  clipboard names; an Open takes a free record and **greys** (`Clipboard
+  uses 4 files`) while the clipboard holds all four - never dropping one
+  silently (`wo_open` refuses with the same sentence, code 17 `E_NSRC`, as
+  a second fence). One file may be two records (an Open of what the
+  clipboard already holds); a source is immutable, so that is harmless, and
+  a save over the file finds both (§123.10).
+- **An edit never rescans.** The view cache is rebuilt FROM THE PIECES
+  (`wx_relaid`): Fit for the new length, the zoom clamped to it, the view
+  clamped, the exactness block `[we_bs]` the largest any piece's source has
+  (a column at a coarser zoom is whole blocks of every source), and the
+  cursor centred when it left the view. A piece edge inside a block shows
+  the block's range at coarse zoom (a superset, never a fabrication); below
+  B the refinement reads the right source through `wo_read`. The waveform
+  band is recomposed once; nothing else repaints - measured, **34-37
+  drawing calls an edit at Fit** (the band's ruler, lanes and overview, the
+  time, the length, the selection field, the status, the edit keys' grey),
+  **81-84 at one frame a column** where the refinement redraws the band
+  as it finishes, against **126** for a full repaint (`-DWR_CALLS`,
+  TONE8.WAV, QEMU). The identity check after a cut at a non-block boundary
+  - the window, then a forced full repaint - is `None` at Fit and at fpp 1.
+- **Dirty is set by an edit, an Undo or a Redo, and cleared by a save of
+  the whole document. THE INDICATOR IS THE WINDOW TITLE** - `WaveRack -
+  NAME*` while edited, `WaveRack - NAME` saved, `WaveRack` with no document
+  - through `OSAPI_WM_TITLE` (TexPad's `tp_retitle`, §69.12: the buffer is
+  bss because the kernel keeps the pointer), set only when the string
+  changes, so an edit on an already-edited document costs no caption. This
+  settles wave 2's open item (the LCD's 12-character name field has no room
+  for a mark).
+- **The question** (`wr_ask`, TexPad's shape): New, Open and the close box
+  on an edited document raise os88ui's alert (`OS88UI_ALERT`, §75.3) -
+  `Save changes to NAME?`, Save / Discard / Cancel - and return; the answer
+  carries the action out (`wr_onask`, `wr_qrun`). Save hands it to the save
+  (`[ws_qact]`), which carries it out only when the save SUCCEEDS: a failed
+  or cancelled save leaves the document here, still edited, and a save
+  begun from a key or a menu carries no action. A close is deferred
+  (`OSAPI_WM_CLOSE`, §75.2), so nothing draws after it (`[wr_closing]`).
+  Record and Recover Take, which the pinned list also names, are wave 5's.
+
+### 123.4 Reading and writing WAV (the reader shipped in wave 2; the writer in wave 4)
 
 **The reader** walks the RIFF chunk list with `OSAPI_FILE_READ_AT` at 32-bit
 offsets. It accepts any chunk order, honours the odd-length pad byte, skips
@@ -219287,6 +219369,16 @@ named, and the LCD already shows the length.
 **The writer** emits the canonical 44-byte header (`RIFF`, `WAVE`, a 16-byte
 `fmt ` chunk, `data`) and the frames, and a pad byte when the data length is
 odd. A take's header is different and is §123.7's.
+
+**Shipped in wave 4** (`wrsave.inc`'s `ws_header`, `tools/wrsim.py`'s
+`wav_header` / `write_wav`): `RIFF` and 36 + the data + the pad, `WAVE`,
+`fmt ` 16 - PCM, the document's channels, rate, rate x block align, block
+align and bits - then `data` and the data's length WITHOUT the pad; the pad
+byte (0) follows the frames when their length is odd and is counted in
+RIFF's size only. The format is the document's: no conversion. The soak row
+reads each saved file back off the guest's floppy and holds it to
+`write_wav()` byte for byte, and the selfcheck reads `write_wav`'s output
+back with Python's `wave` and with `parse()`.
 
 ### 123.5 The waveform: coarse envelopes, the view cache and the band (shipped in wave 2; the take's live envelope and the selection's split pinned)
 
@@ -219398,7 +219490,7 @@ re-blits the byte column it left from the band, and draws the line again.
   overview centres the view; the wheel over either scrolls an eighth of the
   view a notch (elsewhere it still turns VOLUME).
 
-### 123.6 Playback and the transport (pinned)
+### 123.6 Playback and the transport (shipped in wave 3; RECORDING and REC_PAUSED pinned for wave 5)
 
 **One state machine** (`wt_state`), and every command's greying is a
 function of it and of §123.2's capabilities (one predicate, §47 rule 2):
@@ -219533,6 +219625,24 @@ the reference, in the fast `wrsim` row):
   line every 3.4, the meter every third); **3.08 a tick at 256 frames a
   column** (the line moving every tick); a full repaint is 120. The soak row
   `waverackplay` holds the output to `convert()` sample for sample (§123.13).
+- **Corrected in wave 4, from wave 3's review**: (H1) above 22,222 Hz the
+  card's block is 4 KB (`[wt_chalf]`) against the worker's 2 KB half, so a
+  play of an ODD number of halves underran on its last one and stayed
+  PLAYING with the final 2 KB unheard; the end is now padded with silence to
+  a whole card block, and the end test waits for that FINAL half
+  (`[wt_fin]`), not merely the last converted one - the soak row's `hi` leg
+  plays TONE44.WAV at d = 1 (eleven halves) to its end. (L1) the conversion
+  reads "the document is done" BEFORE the look-ahead's counters, the order
+  the refill publishes them in, so a refill landing between the two can no
+  longer drop the document's tail. (L2) a Loop region shorter than a half (2
+  KB of frames) plays ONCE and says `Too short to loop`: eight laps a refill
+  would not fill half the look-ahead, and the UI woke itself without end.
+  (L3) a STALE answer's count is not folded into the played count. (L4) the
+  watchdog's ENDED, or a stream gone, before the final half is staged says
+  `Sound card stopped`, not `End of the sound`. (L5) Resume from a pause in
+  the tail of a play that does not loop finishes it (`End of the sound`)
+  instead of playing on past the selection to the document's end. (L6) the
+  pre-roll's silence tops the half up from what is already converted.
 
 ### 123.7 Capture: the external record ring and the take file (pinned)
 
@@ -219601,7 +219711,7 @@ format is the LCD's line, never the row's.
 
 **Monitoring through the speaker is never offered**: the card is half-duplex.
 
-### 123.8 The level meter (pinned)
+### 123.8 The level meter (shipped in wave 3, the playback half; the capture half pinned)
 
 One horizontal bar of 24 cells over the gain slider, -30 to 0 dBFS at 1.25 dB
 a cell: cells 0..17 green, 18..21 yellow, 22..23 red in colour; lit, outlined
@@ -219632,7 +219742,7 @@ each run of changed cells of one state is one `wf_cells`, so a step of the
 bar is one to three calls. PLAYING shows `LEVEL  PLAY`; PLAY_PAUSED keeps the
 caption with every cell dark; IDLE is `LEVEL` and dark.
 
-### 123.9 Selection and editing (pinned)
+### 123.9 Selection and editing (shipped: the selection in wave 3, the edits in wave 4)
 
 A selection is `[s, e)`, clamped to the document; `s = e` is no selection
 and leaves the cursor at `s`. Click places the cursor; a drag selects; the
@@ -219652,7 +219762,11 @@ selection, and a click there centres the view. The selection field shows
 | Undo / Redo | history | §123.3 |
 
 Every edit stops the transport first, and leaves the selection on the
-result (the pasted range, or the cursor at a deletion's seam).
+result (the pasted range, or the cursor at a deletion's seam). *(Wave 4:
+an edit GREYS while a play is held instead - `Stop first` - which is
+§123.6's table, "no (Stop first)" for edits while PLAYING, and the same
+answer Open already gives, so an edit never mutates what the worker is
+reading; Copy, which changes no frame, stays live under a play.)*
 
 **Shipped in wave 3, the selection half** (the edits are wave 4's):
 `[wo_s, wo_e)` in frames, clamped, and `wo_anc`, the end a drag or Shift
@@ -219679,7 +219793,26 @@ M:SS.c` from there (`tools/wrsim.py`'s `sel_text`); a value too long for
 COMPACT's 19-character field loses the spaces round its dash, then the
 prefix.
 
-### 123.10 Saving (pinned)
+**Shipped in wave 4, the edits** (`wredit.inc`; the commands are wr_cmd's,
+greyed by `wr_cmdok`): every one wants the transport idle (`Stop first`), no
+save running (`Still saving`) and a scanned document, and builds a new piece
+list (§123.3) - no audio moves.
+
+| command | keys | result | the selection after |
+|---|---|---|---|
+| Trim | T, the TRIM key, Edit > Trim | `[s, e)` | none, the cursor at 0 |
+| Delete | Delete, the DELETE key, Edit > Delete | `[0, s)` + `[e, end)` | none, the cursor at the seam `s` |
+| Cut | X, Edit > Cut | Copy, then Delete | as Delete |
+| Copy | C, Edit > Copy | the clipboard := `[s, e)` and the document's format; the document unchanged, not dirty, no history; live under a play | unchanged |
+| Paste | V, Edit > Paste | `[0, a)` + the clipboard + `[b, end)`, `[a, b)` the selection or the cursor twice | the pasted range `[a, a + n)`, the cursor at `a` |
+| Undo / Redo | U / Y, Edit > Undo / Redo | the previous / next state in the history | the state's own |
+
+Trim, Delete, Cut and Copy need a selection (`No selection`); Paste a
+clipboard of the document's format, or no document; Undo and Redo a state
+to go to. A refusal changes nothing. The status bar says `Trimmed`,
+`Deleted`, `Cut`, `Copied`, `Pasted`, `Undone` or `Redone`.
+
+### 123.10 Saving (shipped in wave 4)
 
 **Save never writes over a file until the new one is whole.** It writes
 `WRSAVE.$$$` in the destination folder, checks `OSAPI_FILE_DFREE` first
@@ -219696,6 +219829,70 @@ the document onto the saved file - one piece - and clears the undo history
 and any clipboard pieces that named the old file, because that file no
 longer exists. The status bar says so. The format is preserved: this
 delivery offers no conversion on save.
+
+**Shipped in wave 4** (`wrsave.inc`, prefix `ws_`):
+
+- **The commands**: Save (the SAVE key, File > Save) writes to the
+  document's own file - its name and the folder it was opened from or last
+  saved to (`[wo_fdir]`, `[wo_fvol]`) - and is Save As on an untitled
+  document; it greys on a clean, titled one (`Nothing to save`). Save As
+  (the SAVE AS key, File > Save As...) and Save Selection As (File > Save
+  Selection As..., `[s, e)`, needs a selection) raise the Standard File
+  dialog in Save mode with the document's name offered; the folder it
+  stands in when it answers is the destination. A name that is already a
+  file there and is not the document's own is replaced only after
+  `Replace NAME?` (os88ui's alert, `OS88UI_ADANGER`: Cancel / Proceed,
+  Enter being Cancel).
+- **Refused before anything is written**, each said on the status bar:
+  Save Selection As over a file the document still reads (`File is in
+  use` - asked BEFORE the replace question, so the user is never asked to
+  replace what cannot be), data past 2^31 bytes (`File over 2 GB`), a
+  destination folder gone or no answer from `OSAPI_FILE_DFREE` (`Cannot
+  write the file`), a cluster over 16 KB (`Cluster too large`: the output
+  claim must hold a whole number of them), the free space under the data +
+  45 + one cluster (`Not enough disk space`), and no 16 KB claim (`Not
+  enough memory`).
+- **The write is the UI task's, one disk call a tick** (`ws_step` from the
+  window's one-shot timer; §20.6 rule 7): the frames come through `wo_read`
+  (the I/O claim, restood in each source's folder) and are COPIED into a
+  16 KB output claim behind the 44-byte header; a full claim is written
+  the next tick - the first write CREATES `WRSAVE.$$$` with
+  `OSAPI_FILE_WRITE` (16 KB, a whole number of clusters), every later one
+  appends with `OSAPI_FILE_WRITE_SEQ` (§18.4.9) and its token, committed
+  every call. The status bar says `Saving 45%`; Stop and Escape cancel
+  (`Save cancelled`). While it writes the state is BUSY (§123.6): Play,
+  Record, the edits, New, Open and the other saves grey (`Still saving`),
+  a refinement waits, and the view, the cursor and the selection stay live
+  (Save Selection As took `[s, e)` when it began). A write that fails stops
+  with its reason - `Disk is full`, `Disk write-protected`, `Folder is
+  full`, `Cannot write the file` - and the temp file is deleted. Reading
+  the pieces back is `OSAPI_FILE_READ_AT` through `wo_read`, not
+  `OSAPI_FILE_READ_SEQ`: READ_AT re-walks the FAT chain each call (142 ms a
+  MB of offset on a fixed disk, §18.4.8), and a 16 KB gulp a tick bounds
+  that to a fraction of the tick's disk call; the cursor form is a later
+  optimisation if an XT measurement asks for it.
+- **The replace**: the target deleted (absent is fine; one that will not
+  go - read-only - stops the save with `Cannot replace file`, the original
+  standing and the temp deleted), then `WRSAVE.$$$` renamed to it. A rename
+  that fails after the delete keeps `WRSAVE.$$$` - complete - and says
+  `Kept as WRSAVE.$$$`; a document that read the deleted file is rebased
+  onto `WRSAVE.$$$` instead (below), so nothing is left naming a file that
+  is gone. A whole-document save names the document after its file, clears
+  dirty and retitles; `Saved NAME`.
+- **The rebase** (`ws_rebase`): every live source record whose name,
+  folder and volume ARE the target (one file can be two records) is stale
+  once the rename lands. With any, the history is cleared (its claim given
+  back) and the clipboard's pieces of them dropped - so a save over a file
+  that only the clipboard (or only the history) names is handled the same
+  way. A save of the WHOLE document that read one rewrites that record in
+  place - the new name, folder, data offset 44, the frames, a new envelope
+  claim - makes the document ONE piece of it, sweeps the rest, and scans
+  the new file's envelope again from the timer with the view, the cursor
+  and the selection KEPT (`we_rescan`: the frames are the same); the scan
+  ends saying `Saved; undo cleared` (`N_REBASE`), and Stop does not cancel
+  it - that document is saved and stays.
+- **The question's action** (§123.3) runs after a successful save: New,
+  the Open dialog, or the close.
 
 ### 123.11 The face: layouts, themes, art (shipped, wave 1)
 
@@ -219823,7 +220020,12 @@ refused open say `New document` / the refusal. **Wave 3 makes the
 transport's live** (§123.6): Space, the Play and Pause keys, Sound >
 Play/Pause and Stop, `S` and Escape; Shift+Left/Right, a drag, a handle and
 Shift+click select, `A` and Edit > Select All / Select None (§123.9).
-Record, edit and save stay greyed for their waves.
+Record, edit and save stay greyed for their waves. **Wave 4 makes the
+edits and the saves live** (§123.9, §123.10): T, Delete, X, C, V, U, Y, the
+TRIM, DELETE, SAVE and SAVE AS keys, Edit's Undo to Trim, File's Save, Save
+As... and Save Selection As...; New and Open ask first about an edited
+document, and so does the close box. Record and Recover Take stay greyed
+for wave 5.
 
 | key | does | key | does |
 |---|---|---|---|
@@ -219854,17 +220056,18 @@ launch with a document (`OSAPI_PKG_START`'s document form, §21.5.3) copies
 its name and folder at entry and opens it from the first timer tick, after
 standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
-### 123.13 Where it ships, and what it costs (waves 1, 2 and 3 measured)
+### 123.13 Where it ships, and what it costs (waves 1, 2, 3 and 4 measured)
 
-| | wave 1 | wave 2 | wave 3 |
-|---|---|---|---|
-| image | 16,310 bytes (`WAVERACK.O88`, lz4-packed to 11,646 - 12 clusters at 1 KB) | 25,010 bytes (packed 18,926 - 19 clusters) | **30,179** bytes (packed **23,129** - 23 clusters) |
-| bss | 1,414 bytes (state, the key and element caches, a 1 KB composing band) | 2,525 bytes (+ the reader's, the document's - 4 sources and the 64-piece table, 800 bytes - and the waveform's state) | **5,016** bytes: + the transport's state, VOLUME's 256-byte table and the 2 KB half the worker converts into (a claim would have needed the stream verb's DS pointed at it, per call, by the worker) |
-| heap, idle, no document | the waveform band, `WRL_BANDKB` = 7 KB (FULL's 588 x 94 lanes at 75 bytes a row), claimed at entry; plus os88ui's bank under an open drop-down list, for as long as it is open | the band, now 10 KB (FULL's ruler, lanes and overview: 75 bytes x 128 rows); every document claim is given back by New, a refused open and Stop during a scan (the soak row checks it after every refusal) | unchanged: 10 KB |
-| heap, idle, a document open | - | the band 10 KB + the I/O claim 16 KB (`WO_IOKB`: a scan gulp, and two 8 KB clusters) + the view cache 4 KB (`WE_VKB`) + the envelope, `ceil(blocks x channels x 2 / 1 KB)` - at most 4 KB mono, 8 KB stereo. Measured by the soak row on the kernel's claim map: 31 KB for the small mono fixtures, 33 KB for LONG.WAV (1,124 blocks), 36 KB for the 22,050 Hz stereo file; 38 KB is the most any document can hold. A refused open leaves the band alone (10 KB) | unchanged (STEREO16.WAV `[4, 6, 10, 16]` = 36 KB, LONG.WAV 33 KB, read on the claim map) |
-| heap, playing or paused | - | - | the idle document's + the look-ahead, **32 KB** (16 KB tier): STEREO16.WAV **68 KB**, LONG.WAV 65 KB; the most a document can hold while playing is 70 KB. The ring grant - **16 KB** (8 KB tier) - is SOUND.DRV's staging pool's (verb 7), not a claim of WaveRack's region. Stop, the play's end and the window's close give both back (the soak row checks the claim map and `wt_ghave` after each) |
-| drawing, measured (`-DWR_CALLS`) | - | - | idle **0** calls a tick; playing **1.70** a tick at Fit, **3.08** at 256 frames a column (time 1 + the line's 2 a column + the meter's runs every third tick); a selection drag **5-6** a move; a full repaint 120 |
-| disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it in wave 1; **354 of 354** with wave 2's - the next wave needs a curation decision there), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) | the same, plus `make waverackfix`'s scratch floppy (on demand, never shipped) | **OFF `media360.img`** (24.6.1's rule, dated 2026-10-26, `MEDIAARGS360`'s note: wave 2 left it 354 of 354 and wave 3's growth does not fit; without WaveRack it is 335 of 354). **No 360 KB disk carries WaveRack now** - a 360 KB home for it is an open decision for the owner (docs/plans/WAVERACK-PLAN.md), and nothing else was moved to make room. The 1.44 MB apps disk is 2,565 of 2,847 clusters, the 1.2 MB 2,072 of 2,371; `wrfix.img` gains TONE8K.WAV and TONE44.WAV (2,737 of 2,847) |
+| | wave 1 | wave 2 | wave 3 | wave 4 |
+|---|---|---|---|---|
+| image | 16,310 bytes (`WAVERACK.O88`, lz4-packed to 11,646 - 12 clusters at 1 KB) | 25,010 bytes (packed 18,926 - 19 clusters) | **30,179** bytes (packed **23,129** - 23 clusters) | **35,953** bytes (packed **27,915** - 28 clusters): + the edits, the history, the clipboard, the save, os88ui's alert (`OS88UI_ALERT`, its 607 bytes) and the title |
+| bss | 1,414 bytes (state, the key and element caches, a 1 KB composing band) | 2,525 bytes (+ the reader's, the document's - 4 sources and the 64-piece table, 800 bytes - and the waveform's state) | **5,016** bytes: + the transport's state, VOLUME's 256-byte table and the 2 KB half the worker converts into (a claim would have needed the stream verb's DS pointed at it, per call, by the worker) | **5,997** bytes: + the clipboard (160), the list being built (640), the history's and the save's state, the question's line and the title (OSAPI_WM_TITLE keeps the pointer) |
+| heap, idle, no document | the waveform band, `WRL_BANDKB` = 7 KB (FULL's 588 x 94 lanes at 75 bytes a row), claimed at entry; plus os88ui's bank under an open drop-down list, for as long as it is open | the band, now 10 KB (FULL's ruler, lanes and overview: 75 bytes x 128 rows); every document claim is given back by New, a refused open and Stop during a scan (the soak row checks it after every refusal) | unchanged: 10 KB | unchanged: 10 KB - plus, when the clipboard outlives New, the envelope of each source it names (1..8 KB each) |
+| heap, idle, a document open | - | the band 10 KB + the I/O claim 16 KB (`WO_IOKB`: a scan gulp, and two 8 KB clusters) + the view cache 4 KB (`WE_VKB`) + the envelope, `ceil(blocks x channels x 2 / 1 KB)` - at most 4 KB mono, 8 KB stereo. Measured by the soak row on the kernel's claim map: 31 KB for the small mono fixtures, 33 KB for LONG.WAV (1,124 blocks), 36 KB for the 22,050 Hz stereo file; 38 KB is the most any document can hold. A refused open leaves the band alone (10 KB) | unchanged (STEREO16.WAV `[4, 6, 10, 16]` = 36 KB, LONG.WAV 33 KB, read on the claim map) | unchanged until the first edit; then + the HISTORY, **6 KB** (`WX_UKB`: 9 states x 662 bytes) - TONE8.WAV edited is `[2, 4, 6, 10, 16]` = 38 KB, read on the claim map - and + the envelope of any other source the clipboard or the history names. The most: 38 + 6 + three other sources' envelopes (24) = 68 KB |
+| heap, playing or paused | - | - | the idle document's + the look-ahead, **32 KB** (16 KB tier): STEREO16.WAV **68 KB**, LONG.WAV 65 KB; the most a document can hold while playing is 70 KB. The ring grant - **16 KB** (8 KB tier) - is SOUND.DRV's staging pool's (verb 7), not a claim of WaveRack's region. Stop, the play's end and the window's close give both back (the soak row checks the claim map and `wt_ghave` after each) | unchanged (edits grey while a play is held) |
+| drawing, measured (`-DWR_CALLS`) | - | - | idle **0** calls a tick; playing **1.70** a tick at Fit, **3.08** at 256 frames a column (time 1 + the line's 2 a column + the meter's runs every third tick); a selection drag **5-6** a move; a full repaint 120 | an edit at Fit **34-37** calls (the waveform band recomposed once, the time, the length, the selection field, the status, the edit keys' grey); at one frame a column **81-84** with the refinement finishing; a refused command **1** (the status); a full repaint **126** |
+| disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it in wave 1; **354 of 354** with wave 2's - the next wave needs a curation decision there), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) | the same, plus `make waverackfix`'s scratch floppy (on demand, never shipped) | **OFF `media360.img`** (24.6.1's rule, dated 2026-10-26, `MEDIAARGS360`'s note: wave 2 left it 354 of 354 and wave 3's growth does not fit; without WaveRack it is 335 of 354). **No 360 KB disk carries WaveRack now** - a 360 KB home for it is an open decision for the owner (docs/plans/WAVERACK-PLAN.md), and nothing else was moved to make room. The 1.44 MB apps disk is 2,565 of 2,847 clusters, the 1.2 MB 2,072 of 2,371; `wrfix.img` gains TONE8K.WAV and TONE44.WAV (2,737 of 2,847) | the same disks: the 1.44 MB apps disk 2,574 of 2,847 clusters, the 1.2 MB 2,081 of 2,371 (both fit; nothing moved). `make waverackfix` unchanged; the soak row `waverackedit` builds its own floppy |
+| heap, saving | - | - | - | the idle document's (with its history) + the OUTPUT claim, **16 KB** (`WS_OUT`), for as long as the save writes - measured by the soak row on the claim map: an edited TONE8.WAV saving is `[2, 4, 6, 10, 16, 16]` = **54 KB** (the envelope, the view cache, the history, the band, the I/O claim, the output); the most is 68 + 16 = 84 KB. Given back at the end, a failure and a cancel (the row checks `[ws_oseg]` after the Escape) |
 
 To be measured and written here as the later waves land: the heap claims
 while recording, and the sustained record and play rates on MartyPC's XT

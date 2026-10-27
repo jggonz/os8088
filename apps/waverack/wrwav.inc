@@ -43,11 +43,14 @@ E_CLUSTER   equ 13
 E_NOFILE    equ 14
 E_MEM       equ 15
 E_BADFMT    equ 16
+E_NSRC      equ 17                  ; every source record held (the clipboard)
 ; --- ...and the notes an accepted file may carry: wrsim.py's N_*
 N_NONE      equ 0
 N_CLAMP     equ 1
 N_IGNORED   equ 2
 N_RECOVER   equ 3
+N_REBASE    equ 4                   ; (not a file's: a save over a source's
+N_KEPT      equ 5                   ; rescan says these when it ends - 123.10)
 
 ; -----------------------------------------------------------------------------
 ; ww_peek - CX (1..48) bytes of the file [wo_nbuf] at offset DX:AX
@@ -527,9 +530,16 @@ ww_say:
     jmp short .tail
 .n2:
     cmp al, N_RECOVER
-    jne .n3
+    jne .n4
     mov si, ww_s_recov
     jmp short .tail
+.n4:
+    mov si, ww_s_rebase
+    cmp al, N_REBASE
+    je .tail
+    mov si, ww_s_kept
+    cmp al, N_KEPT
+    je .tail
 .n3:
     cmp al, N_IGNORED
     jne .none
@@ -556,7 +566,7 @@ ww_say:
     ret
 
 ww_errs:    dw 0, ww_e1, ww_e2, ww_e3, 0, 0, 0, ww_e7, ww_e8, ww_e9, ww_e10
-            dw ww_e11, ww_e12, ww_e13, ww_e14, ww_e15, ww_e16
+            dw ww_e11, ww_e12, ww_e13, ww_e14, ww_e15, ww_e16, ww_e17
 ww_e1:      db 'Not a RIFF/WAVE file', 0
 ww_e2:      db 'No fmt chunk', 0
 ww_e3:      db 'No data chunk', 0
@@ -570,11 +580,14 @@ ww_e13:     db 'Cluster too large', 0
 ww_e14:     db 'File not found', 0
 ww_e15:     db 'Not enough memory', 0
 ww_e16:     db 'Bad fmt chunk', 0
+ww_e17:     db 'Clipboard uses 4 files', 0
 ww_s_fmt:   db 'Format ', 0
 ww_s_notpcm: db 'h: not PCM', 0
 ww_s_bits:  db '-bit is unsupported', 0
 ww_s_chans: db ' channels unsupported', 0
 ww_s_clamp: db 'Data clamped to file', 0
 ww_s_recov: db 'Recovered; save to fix', 0
+ww_s_rebase: db 'Saved; undo cleared', 0
+ww_s_kept:  db 'Kept as WRSAVE.$$$', 0
 ww_s_byte:  db ' byte', 0
 ww_s_ign:   db ' ignored at end', 0

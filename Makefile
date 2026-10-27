@@ -6319,7 +6319,8 @@ $(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py | $(BUILD)
 $(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
                        apps/waverack/wrface.inc apps/waverack/wrwav.inc \
                        apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
-                       apps/waverack/wrxport.inc \
+                       apps/waverack/wrxport.inc apps/waverack/wredit.inc \
+                       apps/waverack/wrsave.inc \
                        $(BUILD)/wrart.inc apps/os88dec.inc \
                        apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \

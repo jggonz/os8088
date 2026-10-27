@@ -292,18 +292,27 @@ we_envsize:
     ret
 
 ; -----------------------------------------------------------------------------
-; we_open - a document was laid: Fit, the cursor at nought, and the scan
-;           begun (or, for an empty sound, done). clobbers AX, CX, DX, SI, DI
+; we_open - a document was laid: Fit, the cursor at nought, and the scan of
+;           its source ([we_ssrc]) begun (or, for an empty sound, done).
+;           clobbers AX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 we_open:
-    mov al, [wo_src + WS_BS]
-    mov [we_bs], al
     call we_zfit
     mov al, [wv_zfit]
     mov [wv_z], al
     xor ax, ax
     mov [wv_first], ax
     mov [wv_first+2], ax
+    ; (falls into we_rescan)
+
+; we_rescan - the scan of [we_ssrc]'s envelope begun, the view left as it is
+; (a save over the document's own file rebased it onto the saved file: the
+; frames are the same, SPEC.md 123.10). clobbers AX, CX, DX, SI, DI
+we_rescan:
+    mov si, [we_ssrc]
+    mov al, [si+WS_BS]
+    mov [we_bs], al
+    xor ax, ax
     mov [we_sf], ax
     mov [we_sf+2], ax
     mov [we_boff], ax
@@ -344,7 +353,7 @@ we_bstart:
 ;               DX, SI, DI, BP, ES
 ; -----------------------------------------------------------------------------
 we_scanstep:
-    mov si, wo_src
+    mov si, [we_ssrc]
     mov ax, [we_sf]
     mov dx, [we_sf+2]
     mov cx, 0xFFFF
@@ -391,11 +400,12 @@ we_scanstep:
 .more:
     or cx, cx
     jnz .fold
-    mov ax, [we_sf+2]               ; the whole source?
-    cmp ax, [wo_src + WS_FRM+2]
+    mov si, [we_ssrc]               ; the whole source?
+    mov ax, [we_sf+2]
+    cmp ax, [si + WS_FRM+2]
     jb .say
     mov ax, [we_sf]
-    cmp ax, [wo_src + WS_FRM]
+    cmp ax, [si + WS_FRM]
     jae we_scandone
 .say:
     call we_scansay
@@ -424,7 +434,8 @@ we_scandone:
 we_bstore:
     push di
     push es
-    mov es, [wo_src + WS_ENV]
+    mov di, [we_ssrc]
+    mov es, [di + WS_ENV]
     mov di, [we_boff]
     mov ax, [we_acc]
     stosw
@@ -2628,6 +2639,7 @@ we_selset:
     mov [wo_e+2], cx
     call we_hassel
     jc we_smoved
+    call wr_selsaid                 ; (a stale 'No selection' goes)
     cmp ax, [wo_cur]                ; the cursor at s (its time redrawn only
     jne .cur                        ; when it moved: a drag rightward holds
     cmp dx, [wo_cur+2]              ; s still)

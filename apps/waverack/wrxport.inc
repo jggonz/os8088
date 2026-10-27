@@ -148,7 +148,30 @@ wt_go:
     xor ax, ax                      ; (at the end: from the start)
     xor dx, dx
 .go:
-    mov cl, [wr_loop]               ; Loop as it stands now
+    mov cl, [wr_loop]               ; Loop as it stands now - but a region
+    mov byte [wt_lshort], 0         ; shorter than a half (2 KB of frames)
+    or cl, cl                       ; plays ONCE: eight laps a refill would
+    jz .lp                          ; not fill the look-ahead's half, and the
+    push ax                         ; UI would wake itself without end (wave
+    push dx                         ; 3's review, L2)
+    mov bx, [wt_r1]
+    mov dx, [wt_r1+2]
+    sub bx, [wt_r0]
+    sbb dx, [wt_r0+2]
+    jnz .lpok
+    push cx
+    mov ax, WT_HALF
+    mov cl, [wo_sh]
+    shr ax, cl
+    pop cx
+    cmp bx, ax
+    jae .lpok
+    xor cl, cl
+    mov byte [wt_lshort], 1
+.lpok:
+    pop dx
+    pop ax
+.lp:
     mov [wt_lp], cl
     mov [wt_p0], ax                 ; where Stop puts the playhead back
     mov [wt_p0+2], dx
@@ -159,7 +182,10 @@ wt_go:
     mov byte [wt_state], WT_PLAY
     mov byte [wr_mwho], 2           ; LEVEL  PLAY
     call we_cmoved
-    jmp wt_outsay
+    cmp byte [wt_lshort], 0
+    je wt_outsay
+    mov si, wt_s_short              ; 'Too short to loop'
+    jmp wr_say
 
 ; wt_refuse - wt_begin refused (SI = why): IDLE again, and the status bar
 ; says so. clobbers AX, BX, CX, DX, SI
@@ -197,6 +223,14 @@ wt_pause:
 wt_resume:
     mov ax, [wt_ppos]
     mov dx, [wt_ppos+2]
+    cmp byte [wt_lp], 0             ; paused in the tail of a play that does
+    jne .go                         ; not loop - the lap's end reached: it is
+    cmp ax, [wt_e1]                 ; over, not begun again past it (wave 3's
+    jne .go                         ; review, L5)
+    cmp dx, [wt_e1+2]
+    jne .go
+    jmp wt_finish
+.go:
     call wt_begin
     jc wt_refuse
     mov byte [wt_state], WT_PLAY
@@ -276,6 +310,9 @@ wt_finish:
     mov si, ww_e12                  ; 'Cannot read the file'
     cmp byte [wt_err], 0
     jne .say
+    mov si, wt_s_cdead              ; 'Sound card stopped' (L4)
+    cmp byte [wt_cdead], 0
+    jne .say
     mov si, wr_s_end
     mov ax, [wt_nunder]
     or ax, ax
@@ -291,6 +328,7 @@ wt_finish:
     mov byte [di], 0
     mov si, wr_tbuf2
 .say:
+    mov byte [wt_err], 0            ; said: a stray wake finds nothing (N4)
     call wr_say
     jmp wt_reref
 .out:
@@ -338,8 +376,9 @@ wt_outsay:
 
 ; -----------------------------------------------------------------------------
 ; wt_begin - A STREAM FROM DOCUMENT FRAME DX:AX: the card asked again (SPEC.md
-;            123.2), the divisor and the output rate, the claims (kept across
-;            a pause), the look-ahead primed, the pre-roll converted into the
+;            123.2), the divisor and the output rate, the claims (the
+;            look-ahead kept across a pause, the grant made again), the
+;            look-ahead primed, the pre-roll converted into the
 ;            grant, the ring stream opened (verb 0), the worker hired once.
 ;            The region [wt_r0, wt_r1), [wt_lp] and [wt_p0] are the caller's.
 ; in:  BX = the window. out: CF = 0 playing; CF = 1 refused, SI = why (the
@@ -388,6 +427,11 @@ wt_begin:
     xor dx, dx
     div bx
     mov [wt_out], ax
+    mov word [wt_chalf], WT_HALF    ; the card's block: 4 KB above 22,222 Hz
+    cmp ax, WT_CEIL                 ; (SPEC.md 34.5) - the stream must end on
+    jbe .ch                         ; one, or the last 2 KB is never played
+    mov word [wt_chalf], 2 * WT_HALF ; (wave 3's review, H1)
+.ch:
     mov si, wr_s_lowrate            ; under 4,000 Hz: refused
     cmp ax, WT_MINOUT
     jb .no
@@ -437,13 +481,9 @@ wt_begin:
     cmp ax, [wt_preroll]
     jb .pre
 .half:
-    mov cx, WT_HALF                 ; at least the card's half: 4 KB above
-    cmp word [wt_out], WT_CEIL      ; 22,222 Hz (SPEC.md 34.5) - a short
-    jbe .hk                         ; sound's padded half and silence
-    shl cx, 1
-.hk:
-    cmp [wt_total], cx
-    jae .open
+    mov cx, [wt_chalf]              ; at least the card's half: 4 KB above
+    cmp [wt_total], cx              ; 22,222 Hz (SPEC.md 34.5) - a short
+    jae .open                       ; sound's padded half and silence
     call wt_silence
     jmp short .half
 .open:
@@ -602,6 +642,8 @@ wt_poll:
     mov ah, [wt_hand]
     call OSAPI_SND_STREAM
 .got:
+    cmp ax, SND_ST_STALE            ; the stream is gone: its DX = 0 is no
+    je .out                         ; count (wave 3's review, L3)
     mov bx, dx
     sub bx, [wt_cons]
     mov [wt_cons], dx
@@ -610,13 +652,14 @@ wt_poll:
     add [wt_played], bx
     adc word [wt_played+2], 0
     popf
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
 ; wt_place - THE PLAYHEAD from the played count: F = played x d frames into
 ;            the play; SP + F through the first lap, then the region round and
 ;            round (Loop), or the lap's end (tools/wrsim.py play_pos).
-;            clobbers AX, BX, CX, DX
+;            clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 wt_place:
     pushf
@@ -980,9 +1023,9 @@ wt_feed:
     jne .out
     call wt_poll                    ; AX = the state
     cmp ax, SND_ST_ENDED
-    je .dead
+    je .lost
     cmp ax, SND_ST_STALE
-    je .dead
+    je .lost
     cmp ax, SND_ST_UNDER            ; an underrun: counted when it BEGINS,
     jne .st                         ; and not the end's own
     cmp byte [wt_ust], SND_ST_UNDER
@@ -992,11 +1035,16 @@ wt_feed:
     inc word [wt_nunder]
 .st:
     mov [wt_ust], al
-    cmp byte [wt_last], 0
-    je .feed
+    cmp byte [wt_fin], 0            ; the FINAL half staged (the card's
+    je .feed                        ; block filled: wt_stage)
     mov ax, [wt_total]              ; the last half staged: the end when the
     cmp ax, [wt_cons]               ; card has played it all
     jne .out
+    jmp short .dead
+.lost:
+    cmp byte [wt_fin], 0            ; the watchdog, or the stream gone, with
+    jne .dead                       ; the sound not all staged: the card
+    mov byte [wt_cdead], 1          ; stopped - not the end (review, L4)
 .dead:
     mov byte [wt_ended], 1
     call wt_kick
@@ -1064,9 +1112,10 @@ wt_conv:
     sub al, [wt_bk]
     sbb ah, 0
     mov bx, ax
-    mov ax, [wt_lwr]                ; the frames in the look-ahead
-    sub ax, [wt_lrd]
-    mov cl, [wo_sh]
+    mov ch, [wt_srcdone]            ; BEFORE the counters: the refill
+    mov ax, [wt_lwr]                ; publishes wt_lwr, then srcdone (wave
+    sub ax, [wt_lrd]                ; 3's review, L1)
+    mov cl, [wo_sh]                 ; the frames in the look-ahead
     shr ax, cl
     jz .dry
     cmp ax, bx
@@ -1115,8 +1164,8 @@ wt_conv:
     add [wt_lrd], ax                ; PUBLISH, last
     jmp .more
 .dry:
-    cmp byte [wt_srcdone], 0
-    jne .end
+    or ch, ch                       ; done as it stood BEFORE the count
+    jnz .end
     xor ax, ax                      ; more input wanted
     ret
 .end:
@@ -1127,8 +1176,13 @@ wt_conv:
     sub cx, [wt_hfill]
     cmp cx, WT_HALF
     jne .pad
-    mov ax, 2                       ; nothing begun: the last half was the
-    ret                             ; one before
+    mov ax, [wt_chalf]              ; nothing begun - but the stream must end
+    dec ax                          ; on the card's block: a half of silence
+    test [wt_total], ax             ; more (H1)
+    jnz .pad
+    mov byte [wt_fin], 1
+    mov ax, 2                       ; the last half was the one before
+    ret
 .pad:
     mov di, [wt_hfill]              ; the rest of the half: silence
     add di, wt_hbuf
@@ -1157,17 +1211,26 @@ wt_stage:
     add word [wt_total], WT_HALF
     mov word [wt_hfill], 0
     mov ax, 1
-    cmp byte [wt_last], 0
-    je .out
+    cmp byte [wt_last], 0           ; the last, and the card's block full:
+    je .out                         ; the FINAL half (else one of silence
+    mov bx, [wt_chalf]              ; follows, and wt_feed waits for it - H1)
+    dec bx
+    test [wt_total], bx
+    jnz .out
+    mov byte [wt_fin], 1
     inc ax
 .out:
     ret
 
-; wt_silence - a half of silence staged (a short sound's pre-roll must reach
-; the card's half). clobbers AX, BX, CX, SI, DI
+; wt_silence - the half topped up with silence and staged (a short sound's
+; pre-roll must reach the card's half) - from what is converted already, so
+; frames the look-ahead gave up are never lost (wave 3's review, L6).
+; clobbers AX, BX, CX, SI, DI
 wt_silence:
-    mov di, wt_hbuf
+    mov di, [wt_hfill]
     mov cx, WT_HALF
+    sub cx, di
+    add di, wt_hbuf
     call wt_fill80
     jmp wt_stage
 
@@ -1303,4 +1366,6 @@ wt_cv16s:
 
 ; --- strings -----------------------------------------------------------------------
 wt_s_out:    db 'Out ', 0
+wt_s_short:  db 'Too short to loop', 0
+wt_s_cdead:  db 'Sound card stopped', 0
 wt_s_mono:   db ' Hz mono', 0

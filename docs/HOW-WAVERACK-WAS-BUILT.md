@@ -367,3 +367,129 @@ The second run passed: STEREO16 and TONE44 at d = 2 sample for sample, the
 loop's four laps byte-identical in the capture, the paused position equal
 to the reference's arithmetic, and every claim back after Stop and after a
 close.
+
+## Wave 4 - editing and saving (US-09, US-10)
+
+**The story.** Cut out the cough, paste the good take after the intro,
+change your mind and undo it - and then save, without ever being able to
+lose the file you started from.
+
+**An edit moves no audio.** The document has been a piece table since wave
+2 - a list of `{source, first frame, count}` over files that are never
+written - so Trim, Delete, Cut, Copy and Paste are all one operation: build
+a new list out of ranges of the old one (and of the clipboard), then swap it
+in. A one-hour file cuts in the same time as a one-second one. The builder
+COALESCES - a piece that carries on exactly where the last one stopped, in
+the same file, just makes the last one longer - so cutting a range and
+pasting it back where it came from leaves one piece, not three, and a long
+editing session does not creep towards the 64-piece ceiling. Past it the
+edit is refused before anything changes: `Too many edits; save`.
+
+![STEREO16.WAV after a copy pasted three times and a selection: four spikes on R where the file had one, and the title says it is edited](waverack/waverack-w4-edit-col.png)
+
+**Undo is a ring of whole states.** Nine slots of 662 bytes - the piece
+list, the cursor, the selection - in one 6 KB claim made by the first edit.
+An edit first writes the selection you have *now* into the current slot
+(so Undo puts it back where you had it), drops anything that could have
+been redone, and appends its result; the oldest falls off a full ring.
+Eight steps back. Restoring a state is a copy, and because sources are
+immutable every state stays replayable.
+
+**Sources are swept, not counted.** The clipboard outlives New and Open, so
+a file can stay "open" long after its document is gone - because the
+clipboard holds a piece of it, or an undo state does. Rather than keep four
+reference counts right through every edit, undo, paste and save, WaveRack
+asks, whenever something could have let go: does the document, a history
+state or the clipboard still name this source? Four records, a few hundred
+compares, and the bookkeeping cannot drift. When the clipboard holds four
+different files, Open greys and says why (`Clipboard uses 4 files`) instead
+of quietly dropping one.
+
+**The dirty mark is the title.** Wave 2 left an open question: the LCD's
+name field holds exactly an 8.3 name, so there is no room for a `*`. The
+answer was already in the tree - TexPad puts `TexPad - NAME*` in its title
+bar through `OSAPI_WM_TITLE`, and that costs a caption strip, not a
+repaint. WaveRack does the same, and only when the string actually changes.
+New, Open and the close box ask about an edited document with os88ui's
+standard alert, and a Save chosen there carries the New, Open or close out
+only if the save succeeds.
+
+![Save changes to STEREO16.WAV? - os88ui's alert over the edited document](waverack/waverack-w4-ask.png)
+
+**Saving never risks the original.** The frames are written to
+`WRSAVE.$$$` in the destination folder - a gulp a tick from the window's
+timer, one disk call each, so the desktop stays live and the status bar
+counts `Saving 45%` - and only when every byte is down is the target
+deleted and the temp renamed over it. Escape stops it and deletes the temp;
+a disk that cannot hold it is refused before a byte is written. The first
+write creates the file, every later one appends through the streaming
+append the kernel offers (`OSAPI_FILE_WRITE_SEQ`), carrying its token so an
+append does not walk the file's chain from the front.
+
+**Saving over the file you are editing changes what the pieces mean.**
+Once the rename lands, `TONE8.WAV` is the new bytes, and every piece that
+said "frames 4,512 onwards of TONE8.WAV" is now wrong. So the save
+*rebases*: the document becomes one piece of the file just written, the
+history and any clipboard pieces of the old file are dropped (they would
+replay bytes that no longer exist), and the new file's envelope is scanned
+again with the view, the cursor and the selection kept - the frames are the
+same frames. The status bar says `Saved; undo cleared`. A Save Selection As
+over the file the document is still reading is refused outright (`File is
+in use`), and asked before the "replace?" question, not after it.
+
+![The same edit in black and white](waverack/waverack-w4-edit-bw.png)
+
+![COMPACT on the CGA knob tree: an edited document, the selection inverted, the title marked (native 640 x 200)](waverack/waverack-w4-cga-compact.png)
+
+**What was discovered.**
+
+- *The edits did not need a rescan, and must not have one.* A source's
+  coarse envelope is its own and never changes, so the view after an edit
+  is rebuilt from the pieces over the envelopes already in memory. The one
+  subtlety: the "this column is exact" test used the block size of the file
+  that was opened; with pieces from two files of different lengths it is
+  now the largest block of any piece's source.
+- *Two records can name one file.* Open a file whose piece is on the
+  clipboard and there are two source records for it. Harmless while
+  nothing writes - but a save over that file has to find both, so the save
+  collects every matching record into a mask.
+- *A save is a gulp a tick, so it needs the same care as the scan.* The
+  refinement waits while a save writes, Stop cancels it, and the close box
+  cancels it before asking about the document.
+- *QEMU's `sendkey shift-right` does not reach WaveRack's Shift test* (the
+  BIOS's flags), so the harness selects by dragging, as wave 3's did.
+
+**Measured** (the `-DWR_CALLS` counter build on QEMU): an edit at Fit costs
+34 to 37 drawing calls - the waveform band recomposed once, the time, the
+length, the selection field, the status and the edit keys' grey - against
+126 for a full repaint; at one frame a column it is 81 to 84, the
+refinement redrawing the band as it finishes. The identity check after a
+cut at a non-block boundary is clean at Fit and at one frame a column.
+Image 35,953 bytes (packed 27,915), bss 5,997 (with wave 3's review fixes); the history is a 6 KB claim
+from the first edit, a save adds a 16 KB output claim while it writes.
+
+**The soak row's first run caught the test's floppy, not the editor.**
+`waverackedit` builds its own B: with the fixtures in `MEDIA/`, and a folder
+built to fit twelve files is ONE cluster - sixteen directory slots, two of
+them `.` and `..`. The row's Save As and Save Selection As filled the last
+two, and the save over STEREO16.WAV could not create `WRSAVE.$$$`: the
+kernel never grows a directory (§18.5). WaveRack did what §123.10 says -
+`Folder is full`, the original untouched, the document still edited - and
+the row now builds `MEDIA/` with 64 slots (`os88disk.py --dir-slots`),
+which is what a folder programs save into has to ship with.
+
+**Wave 3's review, folded in.** One high finding: above 22,222 Hz the Sound
+Blaster plays 4 KB blocks while the worker stages 2 KB halves, so a 44.1 kHz
+file that converts to an odd number of halves underran on its last one, the
+end was never seen, and WaveRack sat PLAYING with the final 46 ms unheard -
+about half of all 44.1 kHz files on an SB16. The end is now padded with
+silence to a whole card block and the end test waits for that final half;
+`waverackplay` gained a leg that plays TONE44.WAV at 44,100 Hz (eleven
+halves) to its end. Six low ones, also fixed: the conversion reads "the
+document is done" before the look-ahead's counters (a refill landing between
+them dropped the tail); a Loop region shorter than a half plays once (`Too
+short to loop`) rather than letting the UI wake itself without end; a stale
+answer's count is not folded in; a card that stops mid-play says `Sound card
+stopped`; Resume from the tail of a non-looping play finishes it rather than
+running on past the selection; the pre-roll's silence keeps what was already
+converted.

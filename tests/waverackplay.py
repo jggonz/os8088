@@ -32,6 +32,10 @@ capture's, by its dominant frequency and its length where QEMU resamples:
            dominant frequency and length in the capture
          the window CLOSED mid-play: no claim of its region left, and a
            relaunch opens the card again (the stream was closed)
+  hi     one boot, an SB16 captured at the 44,100 Hz time constant's rate:
+         TONE44.WAV at d = 1 - eleven 2 KB halves against the card's 4 KB
+         block, an ODD count - must end IDLE with no underrun and every
+         sample in the capture (wave 3's review, H1)
   d2     one boot, a DSP 2.01 (no PCM_HI: the ceiling 22,222 Hz): TONE44.WAV
          (44,100 Hz 8-bit stereo) at d = 2 - 22,050 Hz, the box filter of
          two frames - with VOLUME at 50% from the keys: every sample, and
@@ -444,11 +448,50 @@ def leg_d2(syms, img, tmp):
         pr.q.close()
 
 
+def leg_hi(syms, img, tmp):
+    """above 22,222 Hz the card's block is 4 KB and the worker's half 2 KB:
+    a play of an ODD number of halves must still end, every sample heard
+    (wave 3's review, H1 - it underran on its last half and sat PLAYING)"""
+    rate = tc_rate(44100)
+    say("waverackplay: hi - an SB16 (PCM_HI), d = 1 at 44,100 Hz, captured "
+        "at %d Hz" % rate)
+    pr = PR(tmp, syms, img, afreq=rate)
+    try:
+        if not check("WaveRack launches off B:", pr.launch()):
+            return
+        time.sleep(1)
+        if not check("TONE44.WAV opens", pr.open("MEDIA/GOOD/TONE44.WAV")):
+            return
+        pr.settled()
+        data, r, m = reference("TONE44.WAV")
+        check("TONE44: %d frames are %d halves - an ODD count" % (
+            len(m), (len(m) + 2047) // 2048), (len(m) + 2047) // 2048 & 1)
+        f0, seen = pr.play_to_end("TONE44", secs=20)
+        f1 = pr.mark()
+        check("TONE44: d = 1 at 44,100 Hz, a 4 KB block (wt_chalf %d)" %
+              pr.w("wt_chalf"), (pr.b("wt_d"), pr.w("wt_out"),
+                                 pr.w("wt_chalf")) == (1, 44100, 4096),
+              "d %d out %d" % (pr.b("wt_d"), pr.w("wt_out")))
+        check("TONE44: ended IDLE, no underrun, 'End of the sound'",
+              pr.state() == WT_IDLE and pr.w("wt_nunder") == 0 and
+              pr.text("wr_stbuf") == "End of the sound",
+              "state %d under %d '%s'" % (pr.state(), pr.w("wt_nunder"),
+                                          pr.text("wr_stbuf")))
+        n = pr.d("wt_played")
+        check("TONE44: %d samples played - every frame, padded to the card's "
+              "4 KB block" % n, n >= len(m) and n % 4096 == 0 and
+              n - len(m) < 4096, "want %d" % len(m))
+        cap, _ = pr.capture(f0, f1)
+        held("TONE44 at d = 1, 75%", cap, wrsim.convert(m, 1, 75), rate=rate)
+    finally:
+        pr.q.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true",
                     help="leave the scratch folders (the captures) behind")
-    ap.add_argument("--leg", action="append", choices=("rates", "d2"))
+    ap.add_argument("--leg", action="append", choices=("rates", "d2", "hi"))
     a = ap.parse_args()
     for p in ("build/os8088.img", "build/wrfix.img", "build/waverack.bin",
               "build/mixercfg/SYSTEM.CFG"):
@@ -459,7 +502,7 @@ def main():
                          ("apps/", "apps/waverack/", os88build.at("build") + "/"))
     if img != open(os88build.at("build/waverack.bin"), "rb").read():
         sys.exit("waverackplay: build/waverack.bin is not this source's - make")
-    for name, leg in (("rates", leg_rates), ("d2", leg_d2)):
+    for name, leg in (("rates", leg_rates), ("d2", leg_d2), ("hi", leg_hi)):
         if a.leg and name not in a.leg:
             continue
         tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"), prefix="wrp")

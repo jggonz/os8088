@@ -493,7 +493,7 @@ FAST = [
         "the window after the zoom equal to a forced full repaint",
         needs=("qemu", "nasm", "pil"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin")),
-    Row("waverackplay", "soak", py("tests/waverackplay.py"), 420.0,
+    Row("waverackplay", "soak", py("tests/waverackplay.py"), 480.0,
         "WaveRack's transport (SPEC.md 123.6, 123.8, 123.9) on QEMU's SB16, "
         "its output captured by the wav audiodev at the rate the card plays "
         "and each play a slice held to tools/wrsim.py's convert(): "
@@ -508,10 +508,32 @@ FAST = [
         "and TONE8K by dominant frequency and length; the window closed "
         "mid-play leaving no claim and the card free for a relaunch; and on "
         "a DSP 2.01 (no PCM_HI) TONE44.WAV at d = 2 with VOLUME 50% from the "
-        "keys, every sample",
+        "keys, every sample; and on an SB16 TONE44.WAV at d = 1 - 44,100 Hz, "
+        "the card's 4 KB block against eleven 2 KB halves - ending IDLE with "
+        "no underrun and every sample captured",
         needs=("qemu", "nasm", "numpy"), serial=True, timeout=900,
         wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin",
                "build/mixercfg/SYSTEM.CFG")),
+    Row("waverackedit", "soak", py("tests/waverackedit.py"), 420.0,
+        "WaveRack's edits and saves (SPEC.md 123.3, 123.9, 123.10) on QEMU, "
+        "on a floppy the row builds (the fixtures in MEDIA/, a filler leaving "
+        "300 KB free): TONE8.WAV cut, pasted, pasted back where it came from "
+        "(one piece again), deleted, undone, redone, copied, pasted over a "
+        "selection, trimmed - each edit made with a DRAGGED selection and the "
+        "keys, and the piece table, selection, cursor and history read by the "
+        "package's map against tools/wrsim.py's Editor; Save As and Save "
+        "Selection As read back off the guest's floppy by a FAT12 reader of "
+        "the row's own and held to wrsim.write_wav() byte for byte, no "
+        "WRSAVE.$$$ left and the source untouched; a Save As cancelled with "
+        "Escape mid-write leaving the disk as it was; File > Save over the "
+        "file the document reads - the file the document byte for byte, the "
+        "document one piece of it, the history and the clipboard's pieces of "
+        "it gone; a Save As refused for want of space before a byte is "
+        "written; the 64-piece refusal; and the close box asking about an "
+        "edited document, Discard closing it with no claim left",
+        needs=("qemu", "nasm"), serial=True, timeout=900,
+        wants=("build/os8088.img", "build/waverack.o88",
+               "build/waverack.bin")),
     Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 1200.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "

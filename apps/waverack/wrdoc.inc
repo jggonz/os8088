@@ -14,9 +14,9 @@
 ; claim and block shift (wrenv.inc). A source is never written.
 ;
 ; THE PIECE TABLE (WO_NPC = 64) is the document: an ordered list of {source,
-; first frame, frame count}. An open makes one piece; the edits of wave 4
-; build new lists and move no audio. Undo and the clipboard are wave 4's
-; (SPEC.md 123.3): their hooks are wo_npc and the immutable sources.
+; first frame, frame count}. An open makes one piece; the edits build new
+; lists and move no audio (wredit.inc, with undo and the clipboard), and a
+; source stays while anything names it (wo_sweep).
 ;
 ; READING IS THE UI TASK'S (SPEC.md 20.6 rule 7): wo_read is called from a
 ; callback, never from a worker, and READ_AT wants a cluster multiple for both
@@ -52,28 +52,29 @@ WP_CNT      equ 6                   ; dword: how many
 WP_SIZE     equ 10
 
 ; -----------------------------------------------------------------------------
-; wo_new - EMPTY THE DOCUMENT: the scan stopped, every claim the document
-;          holds given back, the view and the cursor at nought, every
-;          generation moved so each element draws the empty face again.
-;          The status bar is the caller's. clobbers AX, CX, DX, SI, DI
+; wo_new - EMPTY THE DOCUMENT: the scan stopped, the history cleared, every
+;          claim the document holds given back - and every source with it
+;          but the ones the CLIPBOARD still names, which outlives New and
+;          Open (SPEC.md 123.3) - the view and the cursor at nought, every
+;          generation moved so each element draws the empty face again, and
+;          the title back to the program's. The status bar is the caller's.
+;          clobbers AX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wo_new:
+    call wo_empty
+    jmp wr_retitle
+
+; wo_empty - wo_new without the title (an Open sets its own at once: two
+; captions for one open would be 34 rows for nothing). clobbers as wo_new
+wo_empty:
     mov byte [we_busy], 0           ; a scan or a refinement: abandoned
-    mov si, wo_src
-    mov cx, WO_NSRC
-.src:
-    mov dx, [si+WS_ENV]
-    call wo_free
-    mov [si+WS_ENV], dx
-    mov byte [si+WS_USED], 0
-    add si, WS_SIZE
-    loop .src
     mov dx, [wo_ioseg]
     call wo_free
     mov [wo_ioseg], dx
     mov dx, [we_vseg]
     call wo_free
     mov [we_vseg], dx
+    call wx_uclear
     push es                         ; every document byte at nought
     push ds
     pop es
@@ -83,6 +84,7 @@ wo_new:
     cld
     rep stosb
     pop es
+    call wo_sweep                   ; no pieces now: what the clipboard holds
     ; (falls into wo_moved)
 
 ; wo_moved - every element that shows the document is owed a draw. keeps all
@@ -173,17 +175,30 @@ wo_find:
 
 ; -----------------------------------------------------------------------------
 ; wo_open - OPEN [wo_nbuf], in the folder the instance stands in, as the
-;           document: whatever was open is emptied first (SPEC.md 123.3 -
-;           the dirty question is wave 4's), the header walked (wrwav.inc),
-;           the claims made, one piece laid, the view fitted and the scan
-;           begun. A refusal leaves the document EMPTY and says why.
+;           document: whatever was open is emptied first (the dirty question
+;           was asked before: wr_ask), a free source record found (the
+;           clipboard may hold up to four - wr_cmdok refuses the Open then),
+;           the header walked (wrwav.inc), the claims made, one piece laid,
+;           the view fitted and the scan begun. A refusal leaves the document
+;           EMPTY and says why.
 ; in:  BX = the window. out: CF = 0 opened (the scan running), CF = 1
 ;      refused ([ww_err], and the status bar). clobbers AX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wo_open:
     push bx
-    call wo_new
+    call wo_empty
     mov byte [ww_note], N_NONE
+    mov di, wo_src                  ; a record the clipboard does not hold
+    mov cx, WO_NSRC
+.slot:
+    cmp byte [di+WS_USED], 0
+    je .free
+    add di, WS_SIZE
+    loop .slot
+    mov bl, E_NSRC
+    jmp .refuse
+.free:
+    mov [we_ssrc], di
     call wo_find
     mov bl, E_NOFILE
     jc .refuse
@@ -214,8 +229,8 @@ wo_open:
     mov bl, [ww_err]
     jmp .refuse
 .parsed:
-    ; --- source 0 --------------------------------------------------------------
-    mov di, wo_src
+    ; --- its source record -------------------------------------------------------
+    mov di, [we_ssrc]
     mov si, wo_nbuf
     mov cx, 13
 .name:
@@ -223,10 +238,12 @@ wo_open:
     mov [di], al
     inc di
     loop .name
-    mov di, wo_src
+    mov di, [we_ssrc]
     call OSAPI_FILE_HERE            ; DX = the folder, BL = the volume
     mov [di+WS_DIR], dx
     mov [di+WS_VOL], bl
+    mov [wo_fdir], dx               ; ...the document's own file's, too
+    mov [wo_fvol], bl
     mov ax, [ww_doff]
     mov [di+WS_DOFF], ax
     mov ax, [ww_doff+2]
@@ -283,7 +300,12 @@ wo_open:
     mov [we_vseg], dx
     mov byte [di+WS_USED], 1
     ; --- the document: one piece, the whole source --------------------------------
-    mov word [wo_pc + WP_SRC], 0
+    mov ax, di
+    sub ax, wo_src
+    mov cl, WS_SIZE
+    div cl
+    xor ah, ah
+    mov [wo_pc + WP_SRC], ax
     xor ax, ax
     mov [wo_pc + WP_FIRST], ax
     mov [wo_pc + WP_FIRST+2], ax
@@ -308,7 +330,9 @@ wo_open:
 .clean:
     mov [wo_dirty], al
     mov byte [wo_doc], 1
+    mov byte [wo_titled], 1
     call wo_moved
+    call wr_retitle
     pop bx
     call we_open                    ; the view fitted, the scan begun
     clc

@@ -61,7 +61,7 @@ ENV_MINSHIFT = 4        # B >= 16
 #     tools/os88wrlay.py STATUS_MAX). The package spells the same sentences
 E_OK, E_NOTRIFF, E_NOFMT, E_NODATA, E_NOTPCM, E_BITS, E_CHANS, E_BALIGN, \
     E_RATE, E_CHUNKS, E_BIG, E_PACKED, E_IO, E_CLUSTER, E_NOFILE, E_MEM, \
-    E_BADFMT = range(17)
+    E_BADFMT, E_NSRC = range(18)
 SENTENCE = {
     E_NOTRIFF: "Not a RIFF/WAVE file",
     E_NOFMT: "No fmt chunk",
@@ -78,6 +78,7 @@ SENTENCE = {
     E_CLUSTER: "Cluster too large",
     E_NOFILE: "File not found",
     E_MEM: "Not enough memory",
+    E_NSRC: "Clipboard uses 4 files",
     E_BADFMT: "Bad fmt chunk",
 }
 # --- the notes an accepted file may carry ([ww_note])
@@ -358,9 +359,214 @@ def sel_text(s, e, rate):
 
 
 # =============================================================================
+# EDITING AND SAVING (wredit.inc, wrsave.inc - SPEC.md 123.3, 123.9, 123.10)
+# =============================================================================
+WO_NPC = 64             # pieces a document may hold
+WO_NCLIP = 16           # pieces the clipboard may hold
+WO_NUNDO = 8            # undo steps; the claim holds WO_NUNDO + 1 states
+X_OK, X_NOSEL, X_NPC, X_CPLX, X_FMT, X_NOCLIP, X_NOHIST = range(7)
+XSAY = {X_NPC: "Too many edits; save", X_CPLX: "Selection too complex",
+        X_NOCLIP: "Clipboard is empty"}
+
+
+def pc_add(out, piece):
+    """append (src, first, count) to a piece list, COALESCED: a piece that
+    continues the last one's source where it stopped extends it, and an empty
+    one is nothing - so a cut pasted back where it came from is one piece
+    again, and repeated edits do not leak pieces"""
+    src, first, cnt = piece
+    if not cnt:
+        return
+    if out and out[-1][0] == src and out[-1][1] + out[-1][2] == first:
+        out[-1] = (src, out[-1][1], out[-1][2] + cnt)
+    else:
+        out.append((src, first, cnt))
+
+
+def pc_frames(pieces):
+    return sum(p[2] for p in pieces)
+
+
+def pc_range(pieces, a, b, out=None):
+    """the document frames [a, b) as pieces, appended to OUT (coalesced)"""
+    out = [] if out is None else out
+    pos = 0
+    for src, first, cnt in pieces:
+        lo, hi = max(a, pos), min(b, pos + cnt)
+        if lo < hi:
+            pc_add(out, (src, first + lo - pos, hi - lo))
+        pos += cnt
+    return out
+
+
+def clip_text(fmt):
+    """Paste's refusal, naming the clipboard's format in 22 characters"""
+    rate, bits, ch = fmt
+    return "Clip: %d %db %s" % (rate, bits, "stereo" if ch == 2 else "mono")
+
+
+class Editor:
+    """the document's piece list, selection, cursor, clipboard and undo, as
+    wredit.inc keeps them. A state is (pieces, cur, s, e, anc); the history
+    holds at most WO_NUNDO + 1 of them, the current one at [pos]: an edit
+    first writes the selection the user has NOW into [pos] (an undo puts it
+    back), drops the redo side, and appends its result - the oldest falling
+    off - so Undo is pos - 1 and Redo pos + 1."""
+
+    def __init__(self, pieces=(), fmt=None):
+        self.pieces = list(pieces)
+        self.fmt = fmt              # None: an empty document (after New)
+        self.cur = self.s = self.e = self.anc = 0
+        self.clip, self.cfmt = [], None
+        self.hist, self.pos = [], 0
+        self.dirty = False
+
+    frames = property(lambda self: pc_frames(self.pieces))
+
+    def state(self):
+        return (tuple(self.pieces), self.cur, self.s, self.e, self.anc)
+
+    def load(self, st):
+        p, self.cur, self.s, self.e, self.anc = st
+        self.pieces = list(p)
+
+    def select(self, s, e):
+        self.s, self.e = min(s, e), max(s, e)
+        self.anc = self.s
+        if self.s < self.e:
+            self.cur = self.s
+
+    def commit(self, new, cur, s, e):
+        if len(new) > WO_NPC:
+            return X_NPC
+        if not self.hist:
+            self.hist, self.pos = [self.state()], 0
+        else:
+            p = self.hist[self.pos][0]
+            self.hist[self.pos] = (p, self.cur, self.s, self.e, self.anc)
+        del self.hist[self.pos + 1:]
+        self.pieces, self.cur, self.s, self.e, self.anc = new, cur, s, e, s
+        self.hist.append(self.state())
+        if len(self.hist) > WO_NUNDO + 1:
+            del self.hist[0]
+        self.pos = len(self.hist) - 1
+        self.dirty = True
+        return X_OK
+
+    def trim(self):
+        if self.s >= self.e:
+            return X_NOSEL
+        return self.commit(pc_range(self.pieces, self.s, self.e), 0, 0, 0)
+
+    def delete(self):
+        if self.s >= self.e:
+            return X_NOSEL
+        new = pc_range(self.pieces, 0, self.s)
+        pc_range(self.pieces, self.e, self.frames, new)
+        return self.commit(new, self.s, self.s, self.s)
+
+    def copy(self):
+        if self.s >= self.e:
+            return X_NOSEL
+        c = pc_range(self.pieces, self.s, self.e)
+        if len(c) > WO_NCLIP:
+            return X_CPLX
+        self.clip, self.cfmt = c, self.fmt
+        return X_OK
+
+    def cut(self):
+        r = self.copy()
+        return r if r else self.delete()
+
+    def paste(self):
+        if not self.clip:
+            return X_NOCLIP
+        if self.fmt is None:            # an empty document takes the clip's
+            self.fmt = self.cfmt
+        elif self.fmt != self.cfmt:
+            return X_FMT
+        a, b = (self.s, self.e) if self.s < self.e else (self.cur, self.cur)
+        new = pc_range(self.pieces, 0, a)
+        for p in self.clip:
+            pc_add(new, p)
+        pc_range(self.pieces, b, self.frames, new)
+        n = pc_frames(self.clip)
+        return self.commit(new, a, a, a + n)
+
+    def undo(self):
+        if not self.hist or self.pos == 0:
+            return X_NOHIST
+        self.pos -= 1
+        self.load(self.hist[self.pos])
+        self.dirty = True
+        return X_OK
+
+    def redo(self):
+        if self.pos >= len(self.hist) - 1:
+            return X_NOHIST
+        self.pos += 1
+        self.load(self.hist[self.pos])
+        self.dirty = True
+        return X_OK
+
+    def new(self):
+        """File > New: the document emptied, the history with it, the
+        clipboard KEPT (SPEC.md 123.3)"""
+        self.pieces, self.fmt, self.hist, self.pos = [], None, [], 0
+        self.cur = self.s = self.e = self.anc = 0
+        self.dirty = False
+
+
+def wav_header(fmt, nbytes):
+    """the canonical 44-byte header (SPEC.md 123.4's writer): RIFF, WAVE, a
+    16-byte fmt chunk, data - the RIFF size counting the pad byte"""
+    rate, bits, ch = fmt
+    ba = ch * bits // 8
+    return (b"RIFF" + struct.pack("<I", 36 + nbytes + (nbytes & 1)) +
+            b"WAVE" + b"fmt " + struct.pack("<IHHIIHH", 16, 1, ch, rate,
+                                           rate * ba, ba, bits) +
+            b"data" + struct.pack("<I", nbytes))
+
+
+def write_wav(pieces, sources, fmt, a=0, b=None):
+    """the file Save writes for document frames [a, b) (all of it by
+    default): the header, then each piece's frames read out of its source
+    (SOURCES[src] = the source's data bytes, frame 0 first), then a pad byte
+    when the data's length is odd"""
+    ba = fmt[2] * fmt[1] // 8
+    b = pc_frames(pieces) if b is None else b
+    data = b"".join(sources[s][f * ba:(f + n) * ba]
+                    for s, f, n in pc_range(pieces, a, b))
+    return wav_header(fmt, len(data)) + data + (b"\0" if len(data) & 1 else b"")
+
+
+def edit_script():
+    """the edit sequence the soak row types on the guest (tests/
+    waverackedit.py) and the reference replays: (command, argument).
+    'sel' selects [a, b) frames, 'cur' places the cursor"""
+    return [("sel", (1000, 3000)), ("cut", None), ("cur", 500), ("paste", None),
+            ("sel", (6000, 7000)), ("delete", None), ("undo", None),
+            ("redo", None), ("sel", (100, 9000)), ("copy", None),
+            ("cur", 2000), ("paste", None), ("undo", None), ("undo", None),
+            ("redo", None)]
+
+
+def run_script(ed, script):
+    for cmd, arg in script:
+        if cmd == "sel":
+            ed.select(*arg)
+        elif cmd == "cur":
+            ed.s = ed.e = ed.anc = ed.cur = arg
+        else:
+            r = getattr(ed, cmd)()
+            assert r == X_OK, (cmd, r)
+    return ed
+
+
+# =============================================================================
 # THE FIXTURES
 # =============================================================================
-SINE = [round(math.sin(2 * math.pi * i / 4096) * 32767) for i in range(4096)]
+SINE =[round(math.sin(2 * math.pi * i / 4096) * 32767) for i in range(4096)]
 
 
 def tone(n, rate, hz, amp, phase=0):
@@ -691,6 +897,118 @@ def selfcheck(quiet=False):
            f0 + ((ww - 1) << z) < fr and 0 <= (fr - 1 - f0) >> z < ww,
            "view_clamp z %d: the last frame in the view at its end" % z)
     ok(view_clamp(1 << 40, fit_zoom(fr, ww), ww, fr) == 0, "Fit is frame 0")
+    # --- editing (SPEC.md 123.9): every step against a FLAT model - the
+    #     document as a plain list of frames, edited by slicing - so the
+    #     piece arithmetic is checked by something that has none
+    ok(pc_range([(0, 0, 100)], 10, 20) == [(0, 10, 10)] and
+       pc_range([(0, 0, 10), (1, 5, 10)], 5, 15) == [(0, 5, 5), (1, 5, 5)],
+       "pc_range splits at piece edges")
+    p = []
+    for q in ((0, 0, 5), (0, 5, 5), (0, 0, 0), (1, 10, 2), (0, 10, 1)):
+        pc_add(p, q)
+    ok(p == [(0, 0, 10), (1, 10, 2), (0, 10, 1)], "pc_add coalesces")
+    for name in ("TONE8.WAV", "STEREO16.WAV"):
+        data = fx[name][0]
+        r = parse(data)
+        fmt, ba = (r["rate"], r["bits"], r["ch"]), r["balign"]
+        src = {0: data[r["dataoff"]:r["dataoff"] + r["datalen"]]}
+        frm = [src[0][i * ba:(i + 1) * ba] for i in range(r["frames"])]
+        ed = Editor([(0, 0, r["frames"])], fmt)
+        flat, clip, hist = list(frm), [], [list(frm)]
+        pos = 0
+        for cmd, arg in edit_script():
+            if cmd == "sel":
+                ed.select(*arg)
+                continue
+            if cmd == "cur":
+                ed.s = ed.e = ed.anc = ed.cur = arg
+                continue
+            s, e, c = ed.s, ed.e, ed.cur
+            ok(getattr(ed, cmd)() == X_OK, "%s: %s" % (name, cmd))
+            if cmd in ("cut", "copy"):
+                clip = flat[s:e]
+            if cmd in ("cut", "delete"):
+                flat = flat[:s] + flat[e:]
+            elif cmd == "paste":
+                a, b = (s, e) if s < e else (c, c)
+                flat = flat[:a] + clip + flat[b:]
+            if cmd in ("cut", "delete", "paste", "trim"):
+                del hist[pos + 1:]
+                hist.append(list(flat))
+                pos = len(hist) - 1
+            elif cmd == "undo":
+                pos -= 1
+                flat = list(hist[pos])
+            elif cmd == "redo":
+                pos += 1
+                flat = list(hist[pos])
+            got = write_wav(ed.pieces, src, fmt)
+            ok(got[44:44 + len(flat) * ba] == b"".join(flat),
+               "%s: after %s the pieces read the flat model's frames"
+               % (name, cmd))
+        w = wave.open(io.BytesIO(got))
+        ok((w.getnchannels(), w.getsampwidth() * 8, w.getframerate(),
+            w.getnframes()) == (fmt[2], fmt[1], fmt[0], len(flat)),
+           "%s: wave reads the saved file" % name)
+        rr = parse(got)
+        ok(rr["err"] == E_OK and rr["dataoff"] == 44 and
+           rr["frames"] == len(flat), "%s: parse() reads it back" % name)
+        sel = write_wav(ed.pieces, src, fmt, 100, 1101)
+        ok(sel[44:] == b"".join(flat[100:1101]) + (b"\0" if 1001 * ba & 1
+                                                    else b""),
+           "%s: Save Selection As writes [s, e)" % name)
+    # the pad byte, and the RIFF size that counts it
+    odd = write_wav([(0, 0, 3)], {0: b"\x10\x20\x30"}, (8000, 8, 1))
+    ok(len(odd) == 48 and odd[-1] == 0 and struct.unpack_from("<I", odd, 4)[0]
+       == 40 and struct.unpack_from("<I", odd, 40)[0] == 3,
+       "an odd data length: the pad byte, outside data's size, inside RIFF's")
+    # a cut pasted back where it came from is ONE piece again
+    ed = Editor([(0, 0, 1000)], (8000, 8, 1))
+    ed.select(100, 200)
+    ed.cut()
+    ed.s = ed.e = ed.cur = 100
+    ed.paste()
+    ok(ed.pieces == [(0, 0, 1000)], "a cut pasted back coalesces to one piece")
+    # undo: eight steps, the oldest falling off; a new edit drops the redo
+    ed = Editor([(0, 0, 1000)], (8000, 8, 1))
+    for k in range(10):
+        ed.select(0, 10)
+        ed.delete()
+    n = 0
+    while ed.undo() == X_OK:
+        n += 1
+    ok(n == WO_NUNDO and ed.frames == 1000 - 10 * (10 - WO_NUNDO),
+       "undo: %d steps back, the oldest gone (%d)" % (WO_NUNDO, n))
+    ed.redo()
+    ed.select(0, 1)
+    ed.delete()
+    ok(ed.redo() == X_NOHIST, "a new edit drops the redo side")
+    # the WO_NPC refusal: nothing changes
+    ed = Editor([(0, 0, 10000)], (8000, 8, 1))
+    ed.select(0, 1)
+    ed.copy()
+    r = X_OK
+    k = 0
+    while r == X_OK:
+        ed.s = ed.e = ed.cur = 100 + 50 * k
+        before = list(ed.pieces)
+        r = ed.paste()
+        k += 1
+    ok(r == X_NPC and ed.pieces == before and len(before) <= WO_NPC,
+       "past %d pieces the edit is refused and nothing changes" % WO_NPC)
+    # the clipboard: its format named, paste of another refused, an empty
+    # document adopts it
+    ok(len(clip_text((65535, 16, 2))) <= 22 and
+       clip_text((22050, 16, 2)) == "Clip: 22050 16b stereo",
+       "Paste's refusal names the clipboard's format in 22 characters")
+    ed.new()
+    ok(ed.clip and ed.paste() == X_OK and ed.fmt == (8000, 8, 1) and
+       ed.frames == 1, "New keeps the clipboard; a paste adopts its format")
+    ed2 = Editor([(1, 0, 50)], (11025, 8, 1))
+    ed2.clip, ed2.cfmt = ed.clip, ed.cfmt
+    ok(ed2.paste() == X_FMT, "a paste of another format is refused")
+    for s_ in XSAY.values():
+        ok(len(s_) <= 22, "'%s' fits 22" % s_)
     if not quiet or bad:
         for b in bad:
             print("wrsim: FAIL " + b)
