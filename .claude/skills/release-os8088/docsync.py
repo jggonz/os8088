@@ -65,8 +65,12 @@ def kernsize(build, *defines):
                           '--build', build, '--ico', build, *defines],
                          cwd=OS_REPO, check=True, capture_output=True, text=True).stdout
     k = json.loads(out)
+    # vgacode is kern_big's VGA-only code rung (SPEC.md 2.10.9), between LOW
+    # and COLD; without a VGA the cold code slides over it at boot, which the
+    # page's model shows by dropping the rung.
     return {'image': k['imgpara'], 'cold': k['coldpara'], 'fat': k['fatpara'],
-            'low': k['lowpara'], 'vga': k['vgabufpara']}
+            'low': k['lowpara'], 'vga': k['vgabufpara'],
+            'vgacode': (k.get('vga', 0) + 15) // 16}
 
 
 def articles(html):

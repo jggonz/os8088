@@ -507,6 +507,15 @@ needs 86Box built (`python3 tools/os88box.py build`, docs/86BOX.md). **Look at
 each screenshot in `build/smoke-vid/`**: the desktop, with a Disk C icon.
 Delete them afterwards.
 
+**On a Mac that build is not available** (its preflight is apt-only), so boot
+the three folders out of the unpacked zip in the 86Box app instead -
+`/Applications/86Box.app/Contents/MacOS/86Box -P <folder> -N`, all three at
+once - and after about 100 seconds capture each one's window by its pid
+(`screencapture -x -o -l <window id>`; another session's 86Box may be in
+front, so never capture the whole screen). Each must show the desktop with a
+Disk C icon. Then kill only those pids, with `-9`: 86Box asks before it
+closes.
+
 Then look inside each zip, the same way step 3 makes you look at the
 screenshot:
 
@@ -610,11 +619,9 @@ has moved once already. The other three are not printed by the build, so
 measure them -- from `$OS_REPO`:
 
 ```bash
-# ramBytes: image + .bss, the number the build-time assertion guards.
-# The kernel refuses to assemble over the cap, so bypass the %error to read it.
-sed 's/%error "kernel too big.*/%warning bypassed/' kernel/kernel.asm > /tmp/ksz.asm
-printf '%%assign KT KTEXT_SIZE\n%%assign KB KBSS_SIZE\n%%warning KTEXT=KT KBSS=KB\n' >> /tmp/ksz.asm
-nasm -f bin -I kernel/ -o /dev/null /tmp/ksz.asm     # warning prints both; ramBytes = KT + KB
+# ramBytes: .text + .bss, the number the build-time assertion guards.
+# kernsize prints it on its `segment` line: ".text+.bss N of KERN_CODE_MAX".
+python3 tools/kernsize.py | grep segment
 
 # sourceLines and modules: the boot sector, kernel.asm and everything it
 # actually includes, the SDK header, and every package's .asm AND the .inc
