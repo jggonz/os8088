@@ -534,6 +534,25 @@ FAST = [
         needs=("qemu", "nasm"), serial=True, timeout=900,
         wants=("build/os8088.img", "build/waverack.o88",
                "build/waverack.bin")),
+    Row("waverackdisk", "soak", py("tests/waverackdisk.py"), 1500.0,
+        "WaveRack PLAYING THROUGH DISK READS (SPEC.md 123.6) on MartyPC, "
+        "because the defect is time: disk.inc holds sch_lock across every "
+        "int 13h, so nothing converts while anything reads. Each leg runs "
+        "BEFORE (Wave 4's package, built out of git) and AFTER on one "
+        "machine and one set of files, and a play's SILENCE is its guest "
+        "seconds less verb 9's played samples over the card's real rate. "
+        "HARD DISK first (XT-IDE + SB 2.0, a VHD of tools/wrsim.py's "
+        "DISK_FX): the 2 MB BIG22.WAV's scan - guest seconds and the "
+        "kernel's int 13h by FAT/dir/data - then 30 s of play with no "
+        "underrun; 16-bit stereo past the disk HELD ('Loading', from "
+        "memory, no underrun) or, past the heap too, 'Disk too slow: gaps' "
+        "with the gaps counted; and a play while a SECOND WaveRack scans "
+        "1.7 MB - what the ring covers. FLOPPY second: LONG.WAV off a 1.44 "
+        "MB floppy for 30 s with no underrun",
+        needs=("marty", "nasm"), serial=True, timeout=3600,
+        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/sound.drv", "build/mixercfg/SYSTEM.CFG")),
     Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 1200.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "

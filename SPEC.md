@@ -219095,7 +219095,7 @@ third-party audio in them.
 
 ## 123. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
 
-**Status: PINNED; wave 1 (the face) SHIPPED - §123.11 to §123.13; wave 2 (the document) SHIPPED - §123.3 to §123.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §123.6, §123.8's playback half and §123.9's selection half; wave 4 (editing, undo, the clipboard, saving) SHIPPED - §123.3's edits, §123.4's writer, §123.9's edits and §123.10.** Every subsection below is the contract the
+**Status: PINNED; wave 1 (the face) SHIPPED - §123.11 to §123.13; wave 2 (the document) SHIPPED - §123.3 to §123.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §123.6, §123.8's playback half and §123.9's selection half; wave 4 (editing, undo, the clipboard, saving) SHIPPED - §123.3's edits, §123.4's writer, §123.9's edits and §123.10; wave 4b (playing through disk reads: our own external ring, convert before read, bounded sequential reads, the hold) SHIPPED - §123.6's last part and §123.13.** Every subsection below is the contract the
 implementation is written against; each says *(pinned)* until the wave that
 builds it marks it *(shipped)* with what was measured. The delivery record is
 `docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
@@ -219126,7 +219126,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 | `wrdoc.inc` | sources, the piece table, 32-bit frame arithmetic, reading | `wo_` |
 | `wredit.inc` | the edits, undo/redo, the clipboard and the source sweep (wave 4: split from `wrdoc.inc`, which would have doubled; its piece-list state keeps `wo_` where it is the document's - `wo_clip`, `wo_useg`, `wo_sweep`) | `wx_` |
 | `wrenv.inc` | the coarse envelopes, the view cache and its refinement, the waveform band | `we_` |
-| `wrxport.inc` | the transport state machine, the look-ahead, the worker, conversion, volume, the playhead, the meter's state (wave 3; pinned as `wrplay.inc`, renamed when it was written) | `wt_` |
+| `wrxport.inc` | the transport state machine, the external ring, the look-ahead, the hold, the worker, conversion, volume, the playhead, the meter's state (wave 3; pinned as `wrplay.inc`, renamed when it was written; the ring and the hold wave 4b's) | `wt_` |
 | `wrrec.inc` | capture: the external record ring, the take file, gain, the recovery marker | `wc_` |
 | `wrsave.inc` | Save, Save As, Save Selection As, the temp file, the replace and the rebase (lower-case `ws_` labels; the upper-case `WS_*` are `wrdoc.inc`'s source-record fields - NASM is case-sensitive, and no name differs only by case) | `ws_` |
 | `build/wrart.inc` | the pictures, fonts, meter table, role tables and the three layouts as data, made and measured by `tools/os88wrart.py` with `tools/os88wrlay.py` (§123.11) | `wrart_`, `WRART_`, `WL_`, `WO_`, `R_`, `B_` |
@@ -219220,11 +219220,13 @@ a refused open, Stop during a scan) empties the document, gives back every
 claim it holds and moves every generation, so each element draws the empty
 face again. `wo_locate` maps a document frame to (piece, offset, frames
 left); `wo_read` reads document frames for the UI task - the cluster-aligned
-run holding the first frame read into the I/O claim with READ_AT after
-`wo_stand` restands in the source's folder (GOTO_QM only when the instance
-is elsewhere), answering ES:DI = the frame and CX = the frames there, all in
+run holding the first frame read into the I/O claim after `wo_stand`
+restands in the source's folder (GOTO_QM only when the instance is
+elsewhere), answering ES:DI = the frame and CX = the frames there, all in
 one piece; the claim remembers the run it holds, so a second read of it is
-free. The 32-bit arithmetic is `wo_muldiv` (DX:AX x BX / CX through a 48-bit
+free. Since wave 4b every read is a STREAM - `os88_rseq` (§18.4.8.1) with a
+cursor in the source's record, and a frame inside the held run keeping the
+overlap and reading only what follows (§123.6's last part). The 32-bit arithmetic is `wo_muldiv` (DX:AX x BX / CX through a 48-bit
 product), `wo_div32` (shift and subtract) and `wo_time`, the LCD's
 `MM:SS.cc`, divided in TWO steps (the seconds, then the remainder's
 hundredths) so 2^31 frames never overflow, `--:--.--` past 99 minutes.
@@ -219531,7 +219533,9 @@ pair unreachable, and SOUND.DRV refuses it besides (§34.3).
   reads verb 9 for the exact played count, from which the playhead's frame
   is derived. The worker WAKES the UI task for a refill and at the end; it
   touches no file and draws nothing (§20.6 rule 7). A seek or a loop
-  boundary is a refill position, so a loop is seamless.
+  boundary is a refill position, so a loop is seamless. *(Wave 4b replaced
+  the grant with WaveRack's own external ring and made the refill convert
+  before it reads - the last part of this section.)*
 - **End, underrun, failure**: the last half is padded with 80h. An underrun
   (verb 3's `SND_ST_UNDER`) is counted, and the status bar reports the count
   when the play ends. A read error, a busy card (verb 0's 1) or a refused
@@ -219643,6 +219647,140 @@ the reference, in the fast `wrsim` row):
   the tail of a play that does not loop finishes it (`End of the sound`)
   instead of playing on past the selection to the document's end. (L6) the
   pre-roll's silence tops the half up from what is already converted.
+
+**Wave 4b: playing THROUGH disk reads (shipped; US-05 hardening).** The
+owner heard it on 86Box: the play went silent whenever the disk was read.
+QEMU never showed it, its floppy being instantaneous. The cause is the
+kernel's, and it stays: `kernel/disk.inc` holds `[sch_lock]` across every
+`int 13h`, so while ANY window reads, no task switches - the worker cannot
+convert - and the card plays on alone from what is queued. Wave 3's 16 KB
+grant held 0.74 s at 22,050 Hz, and `wt_refill` made up to eight 16 KB
+`READ_AT`s back to back - each walking the FAT chain from the file's front -
+with nothing making the ring full when the burst began. The design is the
+Video Player's (§98.3.1) without its hook, which only an FSX bracket has;
+there is no desktop-level interrupt-time feeder for a package, and none was
+added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
+
+- **Our own ring.** 32 KB (16 KB tier) and its two control words in one
+  `OSAPI_MEM_CLAIM_DMA_HI` claim of 33 KB (17), all of it the page-safe head
+  and never moved, opened with verb 0 `SND_OPENF_RING | SND_OPENF_EXT` and RL's
+  code in AH bits 4-5 (§34.5.3). The card plays it in place; its block IRQ
+  reads our total and writes back what it consumed, so feeding a half is a
+  2 KB copy and then one word store, the bytes before the total - no call.
+  Verb 9 still gives the exact played count. A card that refuses an external
+  ring (verb 0's 7: a single-cycle DSP 1.x) is given wave 3's grant and
+  verbs 6 and 1 instead, for the rest of the instance (`[wt_noext]`), and so
+  is a heap that holds neither ring. The end is still padded with silence
+  to a whole card block (wave 3's H1). **A card paused for want of data is
+  resumed (verb 1) the moment a whole block is queued, asked every pass** -
+  §98.3.1's foreground rule; on the grant, verb 1 after each half already
+  did it. A stream never stays stopped for want of data: the underrun is a
+  gap, counted when it begins, as before.
+- **Convert before you read.** The refill is the UI task's (`wt_refill`):
+  the ring topped up to full from the look-ahead (`wt_topup`, the
+  conversion inline - pure memory work), THEN ONE bounded read into the
+  look-ahead, then again, at most eight reads a call - so at the instant any
+  read of WaveRack's starts, the ring holds all the look-ahead can give it.
+  A read is taken only when the look-ahead has room for ALL of it, so the
+  next read follows it on the disk. The UI's timer tops the ring up every
+  tick too. **The worker stays**: it feeds between the UI's passes - while
+  another window's callback holds the UI task, which a timer cannot see -
+  and it is what notices the end and asks for a read. The two never convert
+  at once: `[wt_uiown]` and `[wt_mixing]`, each set by its owner before it
+  reads the other's; the worker stands aside, and the UI waits out a pass
+  it began (`OSAPI_TASK_YIELD`).
+- **Reads bounded per medium** (`wo_rdsize`, by `OSAPI_VOL_KIND`'s MEDIUM,
+  §18.7.2): **16 KB on a fixed disk** (the kernel and HDD.DRV read to the
+  cylinder's end, §18.91.5, so a larger read is cheaper a byte); on a floppy
+  about one `int 13h`'s worth, which since §18.91.1 is a CYLINDER - **12 KB**
+  where the cluster is a sector (1.2 and 1.44 MB: under 1.2's 15 KB cylinder,
+  at most two calls) and **9 KB** otherwise (360 and 720 KB: 9 sectors x 2
+  heads, a multiple of the 1 KB cluster). A call costs ~400 ms whatever it
+  moves, so the brief's track-sized 4 KB would have cost a 360 KB floppy its
+  11 kHz play (`tools/wrsim.py streams`: 10.8 KB/s of an 11 KB/s need). A
+  read is at most half the look-ahead. The worst read - two calls and a
+  seek, under a second - is inside the ring's 1.49 s at 22 kHz and 2.97 s
+  at 11 kHz.
+- **Every read a stream** (`wrdoc.inc`): `os88_rseq` (§18.4.8.1) with a
+  16-byte cursor in each source's record, zeroed whenever the record names
+  a new file (`wo_srcnew`: an open, a save's rebase). A frame INSIDE the run
+  the I/O claim holds keeps the overlap and reads only what follows, from
+  the cursor (`wo_slide`) - without it a data offset that is not a multiple
+  of the block align (46: an 18-byte `fmt `, common) puts a frame across
+  every read's end and re-seeds the cursor every gulp. The play, the
+  envelope SCAN and the save's reads all come through `wo_srcread`. Each
+  read is TIMED: its bytes and ticks are added to the source's `WS_RDB` /
+  `WS_RDT` (both halved together past 4,096 ticks), which is what the
+  medium is judged by.
+- **The plan** (`wt_plan`, at every Play, resume and seek): a play's share
+  of a second, in 256ths, is the MEDIUM's - `(R << shift) x 256 / B`, B the
+  bytes a second the slowest source's reads have sustained (18.2 x bytes /
+  ticks; with none timed, a floor: 64 KB/s fixed, 24 for a sector-cluster
+  floppy, 12 otherwise) - plus, on an 8086/8088 (`OSAPI_CPU_INFO` tier 0),
+  the CONVERSION's: cycles a frame x R / (4,772,727 / 256). The cycles are
+  MEASURED, on MartyPC's 5150 (cycle-exact): **114** a frame for 8-bit mono
+  at d = 1, **205** 8-bit stereo, **276** 16-bit mono, **456** 16-bit stereo,
+  and the box at d > 1 ~300 more (413 for 8-bit mono at d = 2). On a 286 or
+  better the CPU term is none. It streams when the two together are at most
+  **205 (80%)**. Else, when the region the play needs (`[sp, e1)`, from `r0`
+  if Loop starts earlier) fits the heap's largest run beside the ring, the
+  look-ahead and 16 KB, and the HELD play's own conversion (8-bit mono)
+  fits the budget, it is **HELD**; else it plays anyway and says which
+  cannot keep up - `Disk too slow: gaps`, or `CPU too slow: gaps` when the
+  conversion's share alone is past the budget - and the underruns are
+  counted and said at the end. On MartyPC's XT-IDE (148 KB/s as WaveRack's
+  own reads time it): 8-bit mono 22,050 Hz is 38 + 134 = 172, and streams;
+  16-bit stereo 22,050 Hz is 152 + 539 and cannot - its conversion alone is
+  2.1 s of an 8088's second - so 4 s of it is held and 20 s of it, past the
+  heap, plays with gaps.
+- **The hold** (XTMP3's precedent, §121.6.1): one conventional claim of ONE
+  BYTE A FRAME - the 8-bit mono value the conversion starts from
+  (`wrsim.mono`: a 16-bit sample's high byte XOR 80h, a pair's `(L + R) >> 1`)
+  - so a stereo or 16-bit region holds in a half or a quarter of its bytes,
+  and the held play runs the d = 1 8-bit mono loop. It is loaded first on the
+  window's timer, reads of up to 16 KB for about 110 ms a pass, the status
+  saying `Loading 45%`; Stop, Escape and Pause cancel it (`Load cancelled`).
+  Then the stream opens from memory, the look-ahead fed by copies. A pause, a
+  resume and a seek inside the held region keep it (once fully loaded); Stop,
+  the end, an error, a seek outside it and the window's close free it. **A
+  held play's meter reads the mixed sample**, not each channel - a rail on
+  one channel of a stereo file does not light PEAK there; that is the trade
+  for holding four times as much.
+- **The d = 1 8-bit loops** (`wt_cv8m1`, `wt_cv8s1`): no box, so a sample is
+  the load, the extremes, the table and the store, and the peak and the rails
+  are derived from the extremes once a call (`wt_cvx`) - the same values the
+  general loop's per-sample tests give. **The general loop was 227 cycles a
+  sample for 8-bit mono**: wave 3's player could not keep 22 kHz up on an
+  8088 even from memory. The 16-bit loops are unchanged (and are why 16-bit
+  is held on an 8088).
+- **The meter's slots are 32**, not 16: a 32 KB ring runs up to 16 halves
+  ahead of the one sounding, and a slot must not be rewritten while the
+  meter can still look back at it.
+- **Other programs' disk work**: a file copy in another window, a second
+  WaveRack's scan, an install - any `int 13h` anywhere - still freezes every
+  task for as long as each call lasts. What covers it is the ring alone:
+  **1.49 s at 22,050 Hz, 2.97 s at 11,025 Hz** of output (32 KB; half that on
+  the 16 KB tier). A disk call longer than that, or a run of them faster than
+  the UI task can top up between, is a gap.
+- **Measured** (`waverackdisk`, MartyPC's 5150 with XT-IDE and a Sound
+  Blaster 2.0, each leg on Wave 4's package and this one; silence = the
+  guest seconds less verb 9's samples over the card's real rate):
+
+  | play | before (Wave 4) | after |
+  |---|---|---|
+  | BIG22.WAV, 2 MB 8-bit mono 22,050 Hz, off the fixed disk, ~31 s | 19.33 s of 33.0 silent | **0.00 s of 30.8 silent, 0 underruns** |
+  | LONG.WAV, 1.1 MB 8-bit mono 11,025 Hz, off a 1.44 MB floppy, 32 s | 19.91 s of 32.1 silent | **0.09 s of 32.0 silent, 0 underruns** |
+  | ST22S.WAV, 4 s 16-bit stereo 22,050 Hz | 5.43 s of 6.8 silent, 1 underrun | **HELD** ('Loading', 0 underruns); its silence NOT measured - the row read the last play's count during the load (fixed in the row afterwards, not re-run) |
+  | ST22L.WAV, 20 s of the same (past the heap) | 13.25 s of 16.6 silent | `CPU too slow: gaps`, 11.08 s of 15.8 silent, 26 underruns |
+  | BIG22 while a second WaveRack launches and scans ST22L | 26.58 s of 46.6 silent, 2 underruns | 10.41 s of 103.7 silent, 2 underruns (the window ran from the play's start through the second window's launch to BIG22's end: not the same span as before's) |
+  | the 2 MB scan | 94.0 s guest; int 13h FAT 18, dir 2, data 168 | **80.0 s** guest (-15%); FAT 18, dir 1, data 168 |
+  | LONG.WAV's scan off the floppy | 108.2 s | **85.5 s** (-21%) |
+
+  The scan's FAT reads do not move - the kernel's FAT window holds a 2 MB
+  file's chain - so what READ_SEQ saves there is the walk's CPU, 14 s of 94.
+  MartyPC's hard disk has no mechanical model (docs/MARTYPC-DEBUG.md): its
+  reads are the option ROM's PIO, 148 KB/s as WaveRack times them, so the
+  counts are exact and the milliseconds are not a field figure.
 
 ### 123.7 Capture: the external record ring and the take file (pinned)
 
@@ -219866,11 +220004,14 @@ delivery offers no conversion on save.
   (Save Selection As took `[s, e)` when it began). A write that fails stops
   with its reason - `Disk is full`, `Disk write-protected`, `Folder is
   full`, `Cannot write the file` - and the temp file is deleted. Reading
-  the pieces back is `OSAPI_FILE_READ_AT` through `wo_read`, not
-  `OSAPI_FILE_READ_SEQ`: READ_AT re-walks the FAT chain each call (142 ms a
-  MB of offset on a fixed disk, §18.4.8), and a 16 KB gulp a tick bounds
-  that to a fraction of the tick's disk call; the cursor form is a later
-  optimisation if an XT measurement asks for it.
+  the pieces back goes through `wo_read`, which since wave 4b reads through
+  each source's READ_SEQ cursor (§123.6's last part). **What that buys a
+  save is bounded by §18.4.8.1's rule**: each tick's plain `WRITE_SEQ`
+  commit moves the volume's generation, so the read after it re-seeds - one
+  walk from the file's front, what READ_AT paid on every gulp - and the
+  gulps inside one tick follow each other. A HELD stream across wakes
+  (`WSEQF_HELD | WSEQF_KEEP` on a fixed disk, §18.4.9.3) would keep the
+  cursor hot for the whole save; it is not taken in wave 4b.
 - **The replace**: the target deleted (absent is fine; one that will not
   go - read-only - stops the save with `Cannot replace file`, the original
   standing and the temp deleted), then `WRSAVE.$$$` renamed to it. A rename
@@ -220056,7 +220197,7 @@ launch with a document (`OSAPI_PKG_START`'s document form, §21.5.3) copies
 its name and folder at entry and opens it from the first timer tick, after
 standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
-### 123.13 Where it ships, and what it costs (waves 1, 2, 3 and 4 measured)
+### 123.13 Where it ships, and what it costs (waves 1, 2, 3, 4 and 4b measured)
 
 | | wave 1 | wave 2 | wave 3 | wave 4 |
 |---|---|---|---|---|
@@ -220069,6 +220210,16 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 | disks | the 1.44 MB and 1.2 MB apps disks (`APPS/`), `media360.img` at 360 KB (347 of 354 clusters with it in wave 1; **354 of 354** with wave 2's - the next wave needs a curation decision there), the everything set and the live media. **Not the 720 KB apps disk** (24.6.1's rule, dated 2026-10-25: wave 1 alone took it from 701 to 713 of 713) and **not the 360 KB apps disk** (`APPS_TOOLS_360`). **Not kern_small** (`SMALLOMIT`, `t_smallreq.py`: SOUND.DRV, §24.5) | the same, plus `make waverackfix`'s scratch floppy (on demand, never shipped) | **OFF `media360.img`** (24.6.1's rule, dated 2026-10-26, `MEDIAARGS360`'s note: wave 2 left it 354 of 354 and wave 3's growth does not fit; without WaveRack it is 335 of 354). **No 360 KB disk carries WaveRack now** - a 360 KB home for it is an open decision for the owner (docs/plans/WAVERACK-PLAN.md), and nothing else was moved to make room. The 1.44 MB apps disk is 2,565 of 2,847 clusters, the 1.2 MB 2,072 of 2,371; `wrfix.img` gains TONE8K.WAV and TONE44.WAV (2,737 of 2,847) | the same disks: the 1.44 MB apps disk 2,574 of 2,847 clusters, the 1.2 MB 2,081 of 2,371 (both fit; nothing moved). `make waverackfix` unchanged; the soak row `waverackedit` builds its own floppy |
 | heap, saving | - | - | - | the idle document's (with its history) + the OUTPUT claim, **16 KB** (`WS_OUT`), for as long as the save writes - measured by the soak row on the claim map: an edited TONE8.WAV saving is `[2, 4, 6, 10, 16, 16]` = **54 KB** (the envelope, the view cache, the history, the band, the I/O claim, the output); the most is 68 + 16 = 84 KB. Given back at the end, a failure and a cancel (the row checks `[ws_oseg]` after the Escape) |
 
+**Wave 4b** (playing through disk reads, §123.6's last part):
+
+| | wave 4b |
+|---|---|
+| image | **37,981** bytes (packed **29,573** - 29 clusters at 1 KB): + the external ring, convert-before-read, the plan and its medium and CPU shares, the hold and its load, READ_SEQ with the slide and the timed reads, the d = 1 8-bit loops |
+| bss | **6,163** bytes: + the ring's and the hold's state, a source record of 64 bytes (40: + its read size, its 16-byte cursor, its read bytes and ticks - 96 bytes for the four), the meter's slots 32 + 32 (16 + 16) |
+| heap, playing or paused | the idle document's + the look-ahead **32 KB** (16 KB tier) + the RING, now a claim of WaveRack's: **33 KB** (`OSAPI_MEM_CLAIM_DMA_HI`, 32 KB and its words; 17 KB tier). Read on the claim map (QEMU): STEREO16.WAV playing `[4, 6, 10, 16, 32, 33]` = **101 KB**, LONG.WAV `[3, 4, 10, 16, 32, 33]` = 98 KB; the most a document can hold while streaming is 38 + 32 + 33 = **103 KB**. SOUND.DRV's pool grant is no longer used, except on a card that refuses an external ring. Paused: the ring is freed (`[4, 6, 10, 16, 32]`) |
+| heap, held | + the HOLD, one byte a frame of the region rounded up to a KB - STEREO16.WAV held is `[4, 6, 10, 16, 22, 32, 33]` = 123 KB (22,050 frames: 22 KB, against 87 KB of 16-bit stereo); it is claimed only when the heap's largest run holds it beside the ring, the look-ahead and **16 KB** more, so the most is the machine's |
+| disks | the 1.44 MB apps disk **2,577** of 2,847 clusters, the 1.2 MB **2,084** of 2,371 (both fit; nothing moved). `make waverackfix` unchanged; `waverackdisk` builds its own VHD and floppy |
+| CPU, measured | an 8088's cycles a FRAME in each conversion loop (MartyPC's 5150, cycle-exact): 8-bit mono d = 1 **114** (the general loop it replaces was ~227), 8-bit stereo d = 1 **205**, 16-bit mono **276**, 16-bit stereo **456**, 8-bit mono at d = 2 **413**. So a 4.77 MHz 8088 converts 8-bit mono at 22,050 Hz in 53% of its time and 16-bit stereo not at all (2.1x) |
+
 To be measured and written here as the later waves land: the heap claims
-while recording, and the sustained record and play rates on MartyPC's XT
-(the conversion's cost a frame on a 4.77 MHz 8088 is US-11's).
+while recording, and the sustained record rate on MartyPC's XT.

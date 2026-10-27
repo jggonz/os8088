@@ -2467,6 +2467,7 @@ wr_ab3:     db 'edits WAV sound', 0
 %define DEC_U16                     ; the numbers: os88dec.inc (SPEC.md 20.5.2)
 %define DEC_U32
 %include "os88dec.inc"
+%include "os88rseq.inc"             ; os88_rseq: every read a stream (wrdoc.inc)
 
 %define OS88UI_ABOUT
 %define OS88UI_ALERT                ; the save-changes and replace questions
@@ -2572,6 +2573,7 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wo_clen, 2
     WRV wo_rmax, 2
     WRV wo_cbase, 4
+    WRV wo_t0, 2                    ; wo_rdrun: the read's first tick
     WRV wo_src, WO_NSRC * WS_SIZE   ; the sources
     WRV wo_pc, WO_NPC * WP_SIZE     ; the piece table
     WRV we_ssrc, 2                  ; the source the scan is building
@@ -2689,7 +2691,17 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_sopen, 1                 ; a stream is open (the worker feeds it)
     WRV wt_hand, 1                  ; ...its handle
     WRV wt_mixing, 1                ; the worker is in a feed pass
-    WRV wt_ghave, 1                 ; the ring grant is held
+    WRV wt_ghave, 1                 ; the ring is held: ours, or the grant
+    WRV wt_ext, 1                   ; ...ours: an external ring (34.5.3)
+    WRV wt_noext, 1                 ; the card refused one: the grant
+    WRV wt_rcode, 1                 ; ...its RL code (SND_OPENF_RLSH)
+    WRV wt_uiown, 1                 ; the UI is topping the ring up
+    WRV wt_inui, 1                  ; ...and the pass running is the UI's
+    WRV wt_lsh, 1                   ; the look-ahead's frame shift
+    WRV wt_held, 1                  ; the play reads from the hold...
+    WRV wt_hload, 1                 ; ...which is loading
+    WRV wt_hpct, 1                  ; ...its percentage said
+    WRV wt_slow, 1                  ; no stream, no hold: 1 the disk, 2 CPU
     WRV wt_wk, 1                    ; the worker is hired
     WRV wt_lp, 1                    ; Loop, as the play began
     WRV wt_d, 1                     ; the divisor (SPEC.md 123.6)
@@ -2699,7 +2711,16 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_laseg, 2                 ; the look-ahead claim, its size, mask
     WRV wt_lasz, 2
     WRV wt_lamask, 2
-    WRV wt_grant, 2                 ; the ring grant, its size, mask
+    WRV wt_rseg, 2                  ; our ring's claim (its words after it)
+    WRV wt_rdsz, 2                  ; a play's bounded read, bytes
+    WRV wt_csh, 2                   ; wt_plan: the streamed play's CPU share
+    WRV wt_hseg, 2                  ; the hold's claim
+    WRV wt_ht0, 2                   ; a load pass's first tick
+    WRV wt_hlo, 4                   ; the hold: frames [hlo, hhi), loaded
+    WRV wt_hhi, 4                   ; up to hpos
+    WRV wt_hpos, 4
+    WRV wt_nlo, 4                   ; (wt_plan's region low)
+    WRV wt_grant, 2                 ; the ring: the grant's offset, size, mask
     WRV wt_ring, 2
     WRV wt_rmask, 2
     WRV wt_preroll, 2               ; halves before the open
@@ -2740,8 +2761,8 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_nunder, 2                ; underruns this play
     WRV wt_played, 4                ; output samples played (verb 9)
     WRV wt_mlast, 1                 ; the meter's last half (mod 32)
-    WRV wt_pks, 16                  ; each staged half's peak and clip, by
-    WRV wt_clips, 16                ; its slot (total / 2 KB, mod 16)
+    WRV wt_pks, 32                  ; each staged half's peak and clip, by
+    WRV wt_clips, 32                ; its slot (total / 2 KB, mod 32)
     WRV wt_zero1, 0                 ; ...to here
     WRV wt_vtab, 256                ; VOLUME's table
     WRV wt_hbuf, WT_HALF            ; the half being converted

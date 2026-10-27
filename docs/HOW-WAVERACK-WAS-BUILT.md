@@ -493,3 +493,101 @@ answer's count is not folded in; a card that stops mid-play says `Sound card
 stopped`; Resume from the tail of a non-looping play finishes it rather than
 running on past the selection; the pre-roll's silence keeps what was already
 converted.
+
+## Wave 4b - playing through disk reads (US-05 hardening)
+
+**The story.** The owner played a WAV on 86Box and it stopped - went silent
+- every time the disk was read. QEMU had never shown it, because QEMU's
+floppy answers instantly. And WaveRack, the owner said, will read from hard
+disks far more than from floppies: design for the fixed disk first.
+
+**The cause is the kernel's, and it stays.** `kernel/disk.inc` holds
+`[sch_lock]` across every `int 13h`: while anything on the machine reads,
+no task switches. WaveRack's worker - the task that converted and fed the
+card - could not run during a read, and the card played on alone from a
+16 KB grant: 0.74 s at 22 kHz. Meanwhile the refill made up to eight 16 KB
+reads back to back, each one walking the file's FAT chain from the front,
+and nothing made the ring full before the burst. A floppy burst outlasted
+the ring every time.
+
+**The Video Player had already solved it, behind a door WaveRack cannot
+use.** Its sound ring is its own memory, opened as an *external* ring
+(§34.5.3): the card plays it in place, the block interrupt reads the
+player's total out of it and writes back what it has played, so feeding is
+a memory write. Its feeder runs at interrupt time - alive during `int 13h` -
+but only inside a full-screen FSX bracket, which freezes the desktop. A
+desktop editor cannot live in a bracket, and there is no desktop-level
+interrupt hook for packages. So WaveRack took the principles without the
+hook:
+
+- **its own ring** - 32 KB in a DMA-safe claim of its own, fed by a copy
+  and one word store;
+- **convert before you read** - the UI tops the ring up to full, THEN makes
+  one read, then tops up again. At the instant any read of WaveRack's
+  starts, the ring holds everything the look-ahead can give it;
+- **reads bounded per medium** - 16 KB on a fixed disk, a cylinder's worth
+  on a floppy. The plan had said a track; the arithmetic said otherwise. A
+  disk call costs about 400 ms whatever it moves, so 4 KB reads off a 360 KB
+  floppy would have delivered 10.8 KB a second against an 11 KB a second
+  play;
+- **every read a stream** - READ_SEQ with a cursor per source, so a read
+  walks one FAT link instead of the whole chain. A small trick keeps it
+  sequential: when the next frame lies inside the run already in memory -
+  which happens every read when a WAV's data starts at byte 46, as any
+  18-byte `fmt ` chunk makes it - the overlap is kept and only what follows
+  is read, from where the cursor stands.
+
+**Then the 8088 had its say.** With the disk out of the way, one
+measurement on MartyPC's cycle-exact 5150 asked what each conversion loop
+costs a frame - and the answer was the second finding of the wave: wave 3's
+loop took **~227 cycles a sample for 8-bit mono**, so a 4.77 MHz 8088 could
+not keep a 22 kHz play up *even from memory*. A loop with no box filter,
+tracking only the sample's extremes and deriving the meter's peak from
+them once a call, does it in **114** - 53% of the machine at 22 kHz. 16-bit
+stereo costs **456** a frame: 2.1 seconds of an 8088's time for every second
+of sound. No buffer fixes that.
+
+**So the plan weighs both.** At every Play WaveRack adds up the disk's share
+of a second (the play's byte rate over what *this source's own reads* have
+sustained, timed as they happen) and, on an 8088, the conversion's share
+(the measured cycles), and streams when the two stay under 80%. When they
+do not, it **holds** the region in memory first - `Loading 45%`, Escape
+cancels - storing one byte a frame, the 8-bit mono value the conversion
+starts from, so a 16-bit stereo region takes a quarter of its size and plays
+through the cheap loop. When it neither streams nor fits, it plays anyway
+and says which part cannot keep up:
+
+![WaveRack playing LONG.WAV with the status bar reading "Disk too slow: gaps"](waverack/waverack-w4b-slow.png)
+
+*QEMU, VGA colour: LONG.WAV with its source's timed read rate poked down to
+18 bytes a second to drive the path - the status line's new sentence. On a
+real 8088, 20 s of 16-bit stereo says `CPU too slow: gaps` instead.*
+
+**The measurement.** One soak row, `waverackdisk`, on MartyPC's 5150 with an
+XT-IDE disk and a Sound Blaster 2.0, every leg played on Wave 4's package and
+then on this one. A play's *silence* is the guest seconds it has run less
+the samples the card says it played:
+
+| | Wave 4 | wave 4b |
+|---|---|---|
+| a 2 MB 8-bit mono 22 kHz WAV off the hard disk, ~31 s | 19.3 s silent | **0.00 s**, no underrun |
+| a 1.1 MB 11 kHz WAV off a 1.44 MB floppy, 32 s | 19.9 s silent | **0.09 s**, no underrun |
+| 4 s of 16-bit stereo 22 kHz | 5.4 s of 6.8 silent | held, no underrun |
+| 20 s of it (past the heap) | 13.3 s of 16.6 silent | `CPU too slow: gaps`, 11.1 of 15.8 |
+| the 2 MB file's envelope scan | 94.0 s | **80.0 s** |
+
+The scan's FAT reads did not change (18 either way - the kernel's FAT window
+holds a 2 MB file's chain), so what the cursor saved there was CPU: the walk
+from the front, gulp after gulp.
+
+**What the row got wrong, twice.** Its first run died launching a second
+WaveRack: the harness's "acting Disk window" still named the file dialog the
+first window had just closed. Its second run reported 101 seconds of silence
+in a 6.8-second held play - it had taken the previous play's sample count,
+still sitting in memory while the hold loaded, as the start. WaveRack's own
+counter said no underrun; the row was fixed, and the silence of that one
+play is the number this wave did not take.
+
+**Still not heard.** No `vm/` machine here is an XT with both a hard disk and
+a Sound Blaster. `vm/xt-mfm` - the ST-225 on a Xebec, the machine to install
+on - needs one line, `sndcard = sb2.0`; `vm/286-video` has both today.

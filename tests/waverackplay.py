@@ -27,12 +27,13 @@ capture's, by its dominant frequency and its length where QEMU resamples:
            the position from verb 9's count held to wrsim.play_pos, the
            capture the selection's bytes REPEATED, every sample; resumed;
            Stop - the playhead back where the play began, the cursor and
-           the selection where they were, every claim and the grant back
+           the selection where they were, every claim and the ring back
+           (wt_ghave: our external ring's claim, or a grant)
          TONE8.WAV (11,025 Hz) and TONE8K.WAV (8,000 Hz, 16-bit): their
            dominant frequency and length in the capture
          the window CLOSED mid-play: no claim of its region left, and a
            relaunch opens the card again (the stream was closed)
-  hi     one boot, an SB16 captured at the 44,100 Hz time constant's rate:
+  hi     one boot, an SB16 captured at 44,100 Hz (wide: DSP 41h takes Hz):
          TONE44.WAV at d = 1 - eleven 2 KB halves against the card's 4 KB
          block, an ODD count - must end IDLE with no underrun and every
          sample in the capture (wave 3's review, H1)
@@ -42,8 +43,9 @@ capture's, by its dominant frequency and its length where QEMU resamples:
          'Out 22,050 Hz mono /2'
 
 Break on purpose: drop the `rcr al, 1` in wt_cv16s and STEREO16 fails at its
-first sample; take the loop's wrap out of wt_refill and the loop leg's laps
-are not there; count wt_played without d and the d2 leg's length and the
+first sample; take the loop's wrap out of wt_rd1 (wt_refill's one fill
+step since SPEC.md 123.6's disk-read wave) and the loop leg's laps are not
+there; count wt_played without d and the d2 leg's length and the
 loop's position both fail.
 """
 import argparse
@@ -452,7 +454,12 @@ def leg_hi(syms, img, tmp):
     """above 22,222 Hz the card's block is 4 KB and the worker's half 2 KB:
     a play of an ODD number of halves must still end, every sample heard
     (wave 3's review, H1 - it underran on its last half and sat PLAYING)"""
-    rate = tc_rate(44100)
+    # NOT tc_rate: above 22,222 Hz an SB16 is opened WIDE (SPEC.md 34.5),
+    # and DSP 41h takes the rate in Hz - so the card plays 44,100 exactly and
+    # a capture at the time constant's 45,454 is QEMU's mixer resampling, not
+    # one byte of which reads back (measured in the disk-read wave: every
+    # sample at 44,100, none at 45,454, on the same build)
+    rate = 44100
     say("waverackplay: hi - an SB16 (PCM_HI), d = 1 at 44,100 Hz, captured "
         "at %d Hz" % rate)
     pr = PR(tmp, syms, img, afreq=rate)

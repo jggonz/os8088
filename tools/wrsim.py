@@ -359,6 +359,223 @@ def sel_text(s, e, rate):
 
 
 # =============================================================================
+# PLAYING THROUGH DISK READS (wrdoc.inc, wrxport.inc - SPEC.md 123.6)
+# =============================================================================
+RD_FIX, RD_HD, RD_DD = 16384, 12288, 9216       # wo_rdsize's reads
+RINGKB, RINGKB2, LAKB, HMARGKB = 32, 16, 32, 16  # the ring, look-ahead, margin
+RDT_MAX = 4096                                    # WO_RDTMAX
+TICK_HZ = 18.2
+
+
+def rd_size(fixed, clu):
+    """a play's bounded read (wo_rdsize): 16 KB on a fixed disk; on a floppy
+    about one int 13h's worth, which since SPEC.md 18.91.1 is a CYLINDER -
+    12 KB where the cluster is a sector (1.2 / 1.44 MB: under 1.2's 15 KB
+    cylinder, so at most two calls), 9 KB on any other (360 / 720 KB: 9
+    sectors x 2 heads, a multiple of the 1 KB cluster)"""
+    return RD_FIX if fixed else (RD_HD if clu == 512 else RD_DD)
+
+
+def src_bps(rdb, rdt, rdsz):
+    """what a source's reads have sustained (wt_srcbps): bytes x 182 / (ticks
+    x 10), a tick at least; with nothing timed, the medium's floor"""
+    if rdb == 0:
+        return {RD_FIX: 65536, RD_HD: 24576}.get(rdsz, 12288)
+    return rdb * 182 // (max(rdt, 1) * 10)
+
+
+def time_reads(reads):
+    """wo_rdrun's accounting over (bytes, ticks) reads: both halved together
+    whenever the ticks pass RDT_MAX -> (rdb, rdt)"""
+    rdb = rdt = 0
+    for b, t in reads:
+        rdb += b
+        rdt += t
+        if rdt >= RDT_MAX:
+            rdt >>= 1
+            rdb >>= 1
+    return rdb, rdt
+
+
+CYC = {(8, 1): 114, (8, 2): 205, (16, 1): 276, (16, 2): 456}   # wt_cyctab
+BOX, CYCDIV, BUDGET = 300, 18643, 205
+
+
+def dshare(rate, sh, medium):
+    """wt_dshare: the medium's share of a second, in 256ths, a streamed play
+    takes - (R << sh) x 256 / the medium, both over 16"""
+    m16 = medium >> 4
+    if m16 >= 65536:
+        return 0
+    if m16 == 0:
+        return 0xFFFF
+    return min(((rate << sh) >> 4) * 256 // m16, 0xFFFF)
+
+
+def cshare(rate, cost, tier0=True):
+    """wt_cshare: the CPU's share, 256ths, of a conversion costing COST
+    cycles a frame at RATE frames a second - on an 8088 only"""
+    return min(rate * cost // CYCDIV, 0xFFFF) if tier0 else 0
+
+
+def hold_kb(frames):
+    """the hold's claim: ONE BYTE A FRAME - mono()'s value, the 8-bit mono
+    sample the conversion starts from - rounded up to a KB"""
+    return (frames + 1023) >> 10
+
+
+def hold_bytes(data, r, lo, hi):
+    """what wt_hput writes into the hold for frames [lo, hi), from the raw
+    frames as its four loops take them (8-bit as it is, 16-bit's high byte
+    XOR 80h, a stereo pair's add-and-rcr) - the selfcheck holds it to
+    mono(), which is what makes a held play the card's same bytes"""
+    ba = r["bits"] // 8 * r["ch"]
+    raw = data[r["dataoff"] + lo * ba:r["dataoff"] + hi * ba]
+    out = bytearray()
+    for i in range(0, len(raw) - ba + 1, ba):
+        f = raw[i:i + ba]
+        u = [b ^ 0x80 for b in f[1::2]] if r["bits"] == 16 else list(f)
+        out.append(u[0] if len(u) == 1 else (u[0] + u[1]) >> 1)
+    return bytes(out)
+
+
+def plan(rate, bits, ch, d, medium, frames, largest_kb, la_held=False,
+         tier0=True):
+    """wt_plan -> ('stream' | 'hold' | 'slow-disk' | 'slow-cpu', the hold's
+    KB). A play streams when the medium's share and the conversion's
+    together stay inside the budget (80% of a second); else it is held when
+    the hold, the ring, the margin and (unless held) the look-ahead fit the
+    heap's largest run and the held play's own conversion (8-bit mono) fits
+    the budget; else it plays with gaps, blaming the CPU when its share
+    alone is past the budget"""
+    sh = {1: 0, 2: 1, 4: 2}[bits // 8 * ch]
+    box = BOX if d > 1 else 0
+    csh = cshare(rate, CYC[(bits, ch)] + box, tier0)
+    tot = dshare(rate, sh, medium) + csh
+    if tot <= 0xFFFF and tot <= BUDGET:
+        return "stream", 0
+    kb = hold_kb(frames)
+    want = kb + RINGKB + 1 + HMARGKB + (0 if la_held else LAKB)
+    if want <= largest_kb and cshare(rate, CYC[(8, 1)] + box,
+                                     tier0) <= BUDGET:
+        return "hold", kb
+    return ("slow-cpu" if csh > BUDGET else "slow-disk"), 0
+
+
+def ring_secs(out, ringkb=RINGKB):
+    """how long the external ring plays alone at OUT samples a second -
+    what a disk call anywhere on the machine may take before a gap"""
+    return ringkb * 1024 / out
+
+
+def streams(out, d, sh, readsz, bps, call_s, ringkb=RINGKB):
+    """the pipeline's guarantee (SPEC.md 123.6): the ring is FULL as each of
+    our reads starts, so a read of READSZ bytes at BPS plus CALL_S of seek
+    and latency is silent-free when it takes less than the ring plays, and
+    the play keeps up when the reads bring the source's bytes faster than
+    they are spent. -> (no gap inside a read, keeps up)"""
+    t = call_s + readsz / bps
+    return t < ring_secs(out, ringkb), readsz / t >= out * d * (1 << sh)
+
+
+DISK_FX = {     # name -> (rate, bits, ch, seconds, why): tests/waverackdisk.py
+    "BIG22.WAV": (22050, 8, 1, 95, "2 MB of 8-bit mono 22,050 Hz: streams "
+                  "off a fixed disk - 15% of an XT's second the disk's, 53% "
+                  "the conversion's"),
+    "ST22S.WAV": (22050, 16, 2, 4, "4 s of 16-bit stereo 22,050 Hz: 88 KB/s, "
+                  "past MartyPC's disk - held"),
+    "ST22L.WAV": (22050, 16, 2, 20, "20 s of the same: past the disk AND the "
+                  "heap - it plays with gaps, and says so"),
+}
+
+
+def disk_fixture(name):
+    """a DISK_FX file: a slow sweep (so every second differs) at -6 dB, made
+    with bytes.translate/array so megabytes cost milliseconds"""
+    rate, bits, ch, secs, _ = DISK_FX[name]
+    n = rate * secs
+    sec = tone(rate, rate, 440, 20000)
+    if bits == 8:
+        one = pcm8(sec)
+        out = bytearray()
+        k = 0
+        while len(out) < n:
+            a = 30 + (k * 23) % 70
+            out += one.translate(bytes(max(0, min(255, 128 + (v - 128) * a
+                                                  // 100)) for v in range(256)))
+            k += 1
+        data = bytes(out[:n])
+    else:
+        left = pcm16(sec)
+        right = pcm16(tone(rate, rate, 660, 16000))
+        st = bytearray(len(left) * 2)
+        st[0::4], st[1::4] = left[0::2], left[1::2]
+        st[2::4], st[3::4] = right[0::2], right[1::2]
+        data = (bytes(st) * (secs + 1))[:n * 4]
+    return riff([chunk(b"fmt ", fmt_body(ch, rate, bits)),
+                 chunk(b"data", data)])
+
+
+def disk_selfcheck(ok):
+    """the arithmetic SPEC.md 123.6 pins, and the soak row's predictions"""
+    ok(rd_size(True, 2048) == 16384 and rd_size(False, 512) == 12288 and
+       rd_size(False, 1024) == 9216, "the reads: 16 KB fixed, 12/9 KB floppy")
+    ok(src_bps(0, 0, RD_FIX) == 65536 and src_bps(0, 0, RD_DD) == 12288,
+       "an untimed source's floor")
+    ok(src_bps(38 * 1024 * 10, 182, RD_FIX) == 38 * 1024 * 10 * 182 // 1820,
+       "bytes x 18.2 / ticks")
+    rdb, rdt = time_reads([(16384, 8)] * 1000)
+    ok(rdt < RDT_MAX and abs(src_bps(rdb, rdt, RD_FIX) - 16384 * 18.2 / 8)
+       < 40, "halving keeps the ratio (%d %d)" % (rdb, rdt))
+    mart = 148000                       # MartyPC's XT-IDE, as WaveRack's
+    ok(dshare(22050, 0, mart) == 38 and cshare(22050, 114) == 134,
+       "BIG22 on MartyPC: 38 + 134 of 256 - a 4.77 MHz 8088's 53% is the "
+       "conversion")                    # reads timed it (wave 4b's scan)
+    ok(plan(22050, 8, 1, 1, mart, 22050 * 95, 400)[0] == "stream",
+       "BIG22 streams off MartyPC's disk")
+    ok(plan(22050, 16, 2, 1, mart, 22050 * 4, 400) == ("hold", 87),
+       "ST22S is held (87 KB: one byte a frame) - its 16-bit stereo "
+       "conversion alone is 2.1 s a second on an 8088")
+    ok(plan(22050, 16, 2, 1, mart, 22050 * 20, 400)[0] == "slow-cpu",
+       "ST22L neither streams nor fits: gaps, and the CPU named")
+    ok(plan(22050, 16, 2, 1, mart, 22050 * 20, 400, tier0=False)[0] ==
+       "stream", "...where a 286's CPU is not the limit: it streams")
+    ok(plan(22050, 16, 2, 1, 38 * 1024, 22050 * 20, 400,
+            tier0=False)[0] == "slow-disk",
+       "...and a slow disk under a fast CPU blames the disk")
+    ok(plan(11025, 8, 1, 1, src_bps(0, 0, RD_HD), 1150000, 400)[0] ==
+       "stream", "LONG.WAV streams off a 1.44 MB floppy at its floor")
+    ok(plan(44100, 8, 1, 2, mart, 44100, 400)[0] == "slow-cpu",
+       "44.1 kHz at d = 2 is past an 8088 whether it streams or is held")
+    for name in ("STEREO16.WAV", "TONE8K.WAV", "TONE44.WAV"):
+        data, _, _ = fixtures()[name]
+        r = parse(data)
+        held = hold_bytes(data, r, 0, r["frames"])
+        ok(list(held) == mono(data, r) and
+           convert(list(held), 1, 75) == convert(mono(data, r), 1, 75),
+           "%s: a held play gives the card a streamed play's bytes" % name)
+    ok(abs(ring_secs(22050) - 1.486) < 0.01 and
+       abs(ring_secs(11025) - 2.972) < 0.01, "the ring: 1.49 s / 2.97 s")
+    ok(streams(22050, 1, 0, 16384, 38 * 1024, 0.0) == (True, True),
+       "a 16 KB read at 38 KB/s fits inside the ring at 22 kHz")
+    dd = 300 // 60 * 9 * 512            # a 360 KB track a revolution
+    ok(streams(11025, 1, 0, RD_DD, dd, 0.2) == (True, True),
+       "a 9 KB read off a 360 KB floppy (0.2 s to find it) keeps 11 kHz up")
+    ok(streams(11025, 1, 0, 4096, dd, 0.2)[1] is False,
+       "...where a 4 KB track-sized one would NOT: a call costs a call")
+    ok(streams(22050, 1, 2, 16384, 38 * 1024, 0.0)[1] is False,
+       "16-bit stereo cannot keep up at 38 KB/s")
+    for name in DISK_FX:
+        r = parse(disk_fixture(name))
+        rate, bits, ch, secs, _ = DISK_FX[name]
+        ok(r["err"] == E_OK and (r["rate"], r["bits"], r["ch"], r["frames"])
+           == (rate, bits, ch, rate * secs), "%s parses as made" % name)
+    for s_ in ("Loading 100%", "Load cancelled", "Disk too slow: gaps",
+               "CPU too slow: gaps"):
+        ok(len(s_) <= 22, "'%s' fits 22" % s_)
+
+
+# =============================================================================
 # EDITING AND SAVING (wredit.inc, wrsave.inc - SPEC.md 123.3, 123.9, 123.10)
 # =============================================================================
 WO_NPC = 64             # pieces a document may hold
@@ -1009,6 +1226,7 @@ def selfcheck(quiet=False):
     ok(ed2.paste() == X_FMT, "a paste of another format is refused")
     for s_ in XSAY.values():
         ok(len(s_) <= 22, "'%s' fits 22" % s_)
+    disk_selfcheck(ok)
     if not quiet or bad:
         for b in bad:
             print("wrsim: FAIL " + b)
@@ -1020,6 +1238,13 @@ def selfcheck(quiet=False):
 def main(argv):
     if "--selfcheck" in argv:
         return 0 if selfcheck("--quiet" in argv) else 1
+    if "--disk-fixtures" in argv:
+        d = argv[argv.index("--disk-fixtures") + 1]
+        os.makedirs(d, exist_ok=True)
+        for name in DISK_FX:
+            with open(os.path.join(d, name), "wb") as fh:
+                fh.write(disk_fixture(name))
+        return 0
     if "--fixtures" in argv:
         d = argv[argv.index("--fixtures") + 1]
         for name, (data, folder, _) in fixtures().items():

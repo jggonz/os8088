@@ -57,7 +57,7 @@ from cycweb import pkg_syms                                   # noqa: E402
 from vidxms import Q                                          # noqa: E402
 
 FAIL = []
-WS_DOFF, WS_SIZE = 16, 40               # wrdoc.inc's source record
+WS_DOFF, WS_SIZE = 16, 64               # wrdoc.inc's source record
 WE_EXACT = 640 * 4                      # wrenv.inc's cache layout
 BANDKB = None                           # WRL_BANDKB: the band, from entry
 

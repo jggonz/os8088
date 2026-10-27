@@ -749,6 +749,11 @@ ws_rebase:
     rep movsb
     pop es
     sub di, 13
+    call wo_srcnew                  ; a new file under the record: its
+    mov al, [ws_dvol]               ; cursor cold (os88rseq.inc), its reads
+    mov dx, [ws_dclu]               ; untimed, its read sized for where it
+    call wo_rdsize                  ; is now
+    mov [di+WS_RDSZ], cx
     mov ax, [ws_ddir]
     mov [di+WS_DIR], ax
     mov al, [ws_dvol]

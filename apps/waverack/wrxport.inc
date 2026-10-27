@@ -7,26 +7,47 @@
 ; command's greying is a function of the state and the card (one predicate,
 ; SPEC.md 47 rule 2).
 ;
-; THE PIPELINE IS AUDIO'S (SPEC.md 86.5), with a document under it instead of
-; a file:
+; A DISK READ STOPS EVERY TASK (SPEC.md 123.6): disk.inc holds [sch_lock]
+; across each int 13h, so while ANY window reads, nothing converts and the
+; card plays on alone from what is queued. So the pipeline is the Video
+; Player's (SPEC.md 98.3.1) without its hook, which only an FSX bracket has:
 ;
-;   the UI task   reads document frames - piece by piece, through wo_read and
-;                 the I/O claim, restanding in each source's folder - and
-;                 COPIES them into the look-ahead ring (a 32 KB claim, 16 KB
-;                 tier) on OSAPI_WM_ONWAKE; the end of a lap is just a refill
-;                 position, so Loop wraps to the region's start seamlessly
-;   the worker    converts out of the look-ahead into a 2 KB half - 8-bit mono
-;                 at R / d, the box filter of d frames, a 16-bit sample's high
-;                 byte, the stereo average, VOLUME's table - and stages each
-;                 full half into the stream's ring grant (16 KB, 8 KB tier)
-;                 with verbs 6 and 1; reads verb 9 for the exact played count;
-;                 notes each half's peak for the meter; and WAKES the UI for a
-;                 refill and at the end. It touches no file and draws nothing
-;                 (SPEC.md 20.6 rule 7)
+;   the ring      is OURS - 32 KB (16 KB tier) and its two control words in an
+;                 OSAPI_MEM_CLAIM_DMA_HI claim, opened as an EXTERNAL ring
+;                 (SPEC.md 34.5.3): the card plays it in place, its block IRQ
+;                 reads our total and writes back what it consumed, so a half
+;                 is fed by a copy and a word, no call. A card that refuses it
+;                 (a single-cycle DSP: verb 0's 7) gets wave 3's ring grant
+;                 and verbs 6 and 1 instead, for the rest of the instance
+;   the UI task   CONVERTS BEFORE IT READS (wt_refill): the ring topped up to
+;                 full from the look-ahead, THEN one bounded read - 16 KB on a
+;                 fixed disk, a track's worth on a floppy (wo_rdsize) - into
+;                 the look-ahead (a 32 KB claim of raw frames, 16 KB tier),
+;                 then again; so at the instant any read of ours starts the
+;                 ring holds all it can. The end of a lap is a refill
+;                 position, so Loop wraps seamlessly
+;   the hold      when the medium cannot sustain the play's byte rate (its
+;                 reads are timed, wrdoc.inc) and the region fits the heap,
+;                 the region is loaded first ('Loading 45%') into a claim of
+;                 8-bit samples and played from memory - XTMP3's precedent
+;                 (SPEC.md 121.6.1); when it neither streams nor fits, it
+;                 plays anyway and says so ('Disk too slow: gaps')
+;   the worker    feeds between the UI's passes - while another window's
+;                 callback holds the UI task - converting out of the
+;                 look-ahead into a 2 KB half (8-bit mono at R / d, the box
+;                 filter of d frames, a 16-bit sample's high byte, the stereo
+;                 average, VOLUME's table) and copying it into the ring; reads
+;                 verb 9 for the exact played count; resumes a card paused for
+;                 want of data the moment a whole block is queued (verb 1,
+;                 asked every pass); notes each half's peak for the meter; and
+;                 WAKES the UI for a read and at the end. It touches no file
+;                 and draws nothing (SPEC.md 20.6 rule 7)
 ;
-; [wt_mixing] brackets a feed pass (set first, cleared last), and wt_halt
-; drains it before it closes the stream or hands the grant back (SPEC.md
-; 34.6's rule: never free a grant the worker may be staging into).
+; [wt_mixing] brackets the worker's pass and [wt_uiown] the UI's top-up: each
+; sets its own flag and then reads the other's, so the two never convert at
+; once (the worker stands aside; the UI waits out a pass). wt_halt drains the
+; worker before it closes the stream, and closes the stream before it frees
+; the ring (SPEC.md 34.6's rule).
 ;
 ; PAUSE CLOSES THE STREAM: the played count is read once more, the stream
 ; closed and the position kept, and Play opens a new one from it - so Pause
@@ -45,10 +66,20 @@ WT_RPAUSE   equ 4
 WT_HALF     equ 2048                ; a staged half: the ring stream's unit
 WT_LAKB     equ 32                  ; the look-ahead claim...
 WT_LAKB2    equ 16                  ; ...and its tier
-WT_RINGKB   equ 16                  ; the ring grant (verb 7)...
-WT_RINGKB2  equ 8                   ; ...and its tier
+WT_RINGKB   equ 32                  ; the external ring (SPEC.md 34.5.3)...
+WT_RINGKB2  equ 16                  ; ...and its tier (each + 1 KB: its words)
+WT_GRANTKB  equ 16                  ; a single-cycle DSP's ring grant (verb
+WT_GRANTKB2 equ 8                   ; 7), and its tier
 WT_PREROLL  equ 6                   ; halves staged before the open, at most
-WT_MAXFEED  equ 4                   ; halves a feed pass stages, at most
+WT_MAXFEED  equ 4                   ; halves a worker's pass stages, at most
+WT_TOPMAX   equ 16                  ; ...and the UI's top-up (a whole ring)
+WT_HMARGKB  equ 16                  ; the hold leaves this free beside the
+                                    ; play's own claims
+WT_HLOADT   equ 2                   ; a load pass: two ticks (~110 ms)
+WT_BUDGET   equ 205                 ; a play's share of a second, 256ths:
+                                    ; 80% - the disk's and the CPU's together
+WT_CYCDIV   equ 18643               ; 4,772,727 / 256: an XT's cycles a 256th
+WT_CYC8M1   equ 114                 ; wt_cv8m1's cycles a frame (wt_cyctab)
 WT_CEIL     equ 22222               ; the card's ceiling (SPEC.md 34.5)...
 WT_CEILHI   equ 44100               ; ...with SND_CAP_PCM_HI
 WT_MINOUT   equ 4000                ; and its floor
@@ -183,7 +214,9 @@ wt_go:
     mov byte [wr_mwho], 2           ; LEVEL  PLAY
     call we_cmoved
     cmp byte [wt_lshort], 0
-    je wt_outsay
+    je wt_said
+    cmp byte [wt_hload], 0          ; (a load's progress says more)
+    jne wt_said
     mov si, wt_s_short              ; 'Too short to loop'
     jmp wr_say
 
@@ -203,6 +236,8 @@ wt_refuse:
 ;            closed, the position kept. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wt_pause:
+    cmp byte [wt_hload], 0          ; a load under way: Pause cancels it, as
+    jne wt_stop                     ; Stop and Escape do
     call wt_halt                    ; (the count read last)
     call wt_place
     mov ax, [wt_ph]
@@ -234,7 +269,7 @@ wt_resume:
     call wt_begin
     jc wt_refuse
     mov byte [wt_state], WT_PLAY
-    jmp wt_outsay
+    jmp wt_said
 
 ; -----------------------------------------------------------------------------
 ; wt_stop - Stop: the output silenced, every claim given back, and the
@@ -242,6 +277,12 @@ wt_resume:
 ;           selection do not move (SPEC.md 123.6). clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 wt_stop:
+    mov si, wr_s_stopped
+    cmp byte [wt_hload], 0          ; a load cut short (Stop, Escape, Pause)
+    je .s
+    mov si, wt_s_lcan
+.s:
+    push si
     call wt_release
     mov byte [wt_state], WT_IDLE
     mov ax, [wt_p0]
@@ -250,7 +291,7 @@ wt_stop:
     mov [wt_ph+2], ax
     call wt_quiet
     call we_cmoved
-    mov si, wr_s_stopped
+    pop si
     call wr_say
     ; (falls into wt_reref)
 
@@ -291,6 +332,8 @@ wt_seek:
     call wt_begin
     jc wt_refuse
     call we_cmoved
+    cmp byte [wt_hload], 0          ; a load begun (the seek left the hold)
+    jne wt_said
 .out:
     ret
 
@@ -345,6 +388,23 @@ wt_dark:
     ret
 
 ; -----------------------------------------------------------------------------
+; wt_said - the status bar as a play begins: a load's progress, the medium
+;           too slow for the play ('Disk too slow: gaps'), else the output.
+;           clobbers AX, DX, SI, DI
+; -----------------------------------------------------------------------------
+wt_said:
+    cmp byte [wt_hload], 0
+    jne wt_hsay
+    cmp byte [wt_slow], 0
+    je wt_outsay
+    mov si, wt_s_slow               ; 1: the disk
+    cmp byte [wt_slow], 1
+    je .say
+    mov si, wt_s_cslow              ; 2: the CPU
+.say:
+    jmp wr_say
+
+; -----------------------------------------------------------------------------
 ; wt_outsay - the status bar: what the card plays (SPEC.md 123.6) -
 ;             'Out 22,050 Hz mono /2', or with d = 1 'Out 11,025 Hz mono'.
 ;             clobbers AX, DX, SI, DI
@@ -375,20 +435,19 @@ wt_outsay:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wt_begin - A STREAM FROM DOCUMENT FRAME DX:AX: the card asked again (SPEC.md
-;            123.2), the divisor and the output rate, the claims (the
-;            look-ahead kept across a pause, the grant made again), the
-;            look-ahead primed, the pre-roll converted into the
-;            grant, the ring stream opened (verb 0), the worker hired once.
+; wt_begin - A PLAY FROM DOCUMENT FRAME DX:AX: the card asked again (SPEC.md
+;            123.2), the divisor and the output rate, the medium against the
+;            play's byte rate (wt_plan: stream, hold, or stream with gaps) -
+;            and then the stream (wt_open), or a load into the hold first,
+;            which the timer runs and which opens the stream when it is done.
 ;            The region [wt_r0, wt_r1), [wt_lp] and [wt_p0] are the caller's.
-; in:  BX = the window. out: CF = 0 playing; CF = 1 refused, SI = why (the
-;      caller gives everything back). clobbers AX, BX, CX, DX, SI, DI
+; in:  BX = the window. out: CF = 0 playing or loading ([wt_hload]); CF = 1
+;      refused, SI = why (the caller gives everything back).
+;      clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wt_begin:
-    mov [wt_sp], ax                 ; the stream starts here...
+    mov [wt_sp], ax                 ; the stream starts here
     mov [wt_sp+2], dx
-    mov [wt_fpos], ax               ; ...and so does the fill
-    mov [wt_fpos+2], dx
     mov cx, [wt_r1]                 ; the first lap ends at the region's end -
     mov si, [wt_r1+2]               ; or, begun past it, the document's
     cmp dx, si
@@ -402,8 +461,6 @@ wt_begin:
 .lap:
     mov [wt_e1], cx
     mov [wt_e1+2], si
-    mov [wt_lend], cx
-    mov [wt_lend+2], si
     call OSAPI_SND_CAPS             ; THE CARD NOW, not at launch
     mov [wr_caps], ax
     mov si, wr_s_nocard
@@ -435,17 +492,69 @@ wt_begin:
     mov si, wr_s_lowrate            ; under 4,000 Hz: refused
     cmp ax, WT_MINOUT
     jb .no
-    mov bl, [wo_bits]               ; the format's inner loop
-    shr bl, 1
-    shr bl, 1                       ; 8 -> 2, 16 -> 4
-    add bl, [wo_ch]                 ; + 1 or 2: 3, 4, 5, 6
+    call wt_plan                    ; stream, hold or gaps (CF: SI = why)
+    jc .no
+    cmp byte [wt_hload], 0
+    je wt_open
+    call wr_arm                     ; the load runs on the timer (wt_hstep)
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; wt_open - THE STREAM FROM [wt_sp]: the claims (the look-ahead kept across a
+;           pause, the ring made again), the look-ahead primed - from the
+;           disk, or from the hold - the pre-roll converted into the ring,
+;           the stream opened (verb 0: our external ring, or the grant on a
+;           card that refuses one), the worker hired once, and a refill asked
+;           at once so the ring and the look-ahead fill to the top.
+; in:  BX = the window. out: CF = 0 playing; CF = 1 refused, SI = why.
+;      clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+wt_open:
+    mov ax, [wt_sp]                 ; the fill starts where the stream does
+    mov dx, [wt_sp+2]
+    mov [wt_fpos], ax
+    mov [wt_fpos+2], dx
+    mov ax, [wt_e1]
+    mov [wt_lend], ax
+    mov ax, [wt_e1+2]
+    mov [wt_lend+2], ax
+    mov al, [wo_sh]                 ; the look-ahead's frames: the document's,
+    mov bl, [wo_bits]               ; or the hold's 8-bit mono samples
+    mov bh, [wo_ch]
+    cmp byte [wt_held], 0
+    je .fmt
+    xor al, al
+    mov bx, 0x0108
+    mov word [wt_rdsz], WT_HALF     ; (a copy, not a read: any room will do)
+.fmt:
+    mov [wt_lsh], al
+    shr bl, 1                       ; the format's inner loop: 8 -> 2,
+    shr bl, 1                       ; 16 -> 4
+    add bl, bh                      ; + 1 or 2: 3, 4, 5, 6
     sub bl, 3
+    mov si, wt_cvtab
+    cmp byte [wt_d], 1              ; d = 1 and 8-bit: the loops with no box
+    jne .tab                        ; (an 8088's 22 kHz, SPEC.md 123.6)
+    cmp bl, 2
+    jae .tab
+    mov si, wt_cvtab1
+.tab:
     xor bh, bh
     shl bx, 1
-    mov ax, [wt_cvtab + bx]
+    mov ax, [si + bx]
     mov [wt_cvp], ax
     call wt_claims                  ; CF: SI = why
     jc .no
+    mov ax, [wt_lasz]               ; a read fills at most half the look-ahead
+    shr ax, 1
+    cmp [wt_rdsz], ax
+    jbe .rd
+    mov [wt_rdsz], ax
+.rd:
     push es                         ; the pipeline at nought
     push ds
     pop es
@@ -456,11 +565,10 @@ wt_begin:
     rep stosb
     pop es
     call wt_refill                  ; the look-ahead primed
-    call wt_refill
     mov si, ww_e12
     cmp byte [wt_err], 0
     jne .no
-    mov byte [wt_ntry], 24          ; the pre-roll: halves into the grant
+    mov byte [wt_ntry], 24          ; the pre-roll: halves into the ring
 .pre:
     call wt_conv
     or ax, ax
@@ -487,14 +595,41 @@ wt_begin:
     call wt_silence
     jmp short .half
 .open:
-    mov al, 0                       ; verb 0: the ring stream
-    mov ah, SND_OPENF_RING
-    mov si, [wt_grant]
     mov cx, [wt_total]
     mov dx, [wt_out]
+    cmp byte [wt_ext], 0
+    je .gopen
+    push es                         ; OUR RING (SPEC.md 34.5.3): the total in
+    mov es, [wt_rseg]               ; its word before the card can read it
+    mov bx, [wt_ring]
+    mov [es:bx+SND_EXT_TOTAL], cx
+    mov word [es:bx+SND_EXT_CONS], 0
+    pop es
+    mov ah, [wt_rcode]              ; RING + EXT, RL's code in bits 4-5
+    push cx
+    mov cl, SND_OPENF_RLSH
+    shl ah, cl
+    pop cx
+    or ah, SND_OPENF_RING | SND_OPENF_EXT
+    mov al, 0                       ; verb 0: DI:SI the ring
+    xor si, si
+    mov di, [wt_rseg]
+    call OSAPI_SND_STREAM           ; AL = 0 and AH = the handle, else why
+    or al, al
+    jz .opened
+    cmp al, 7                       ; 7: the card cannot play a ring in place
+    jne .snderr                     ; (a single-cycle DSP, SPEC.md 34.5.3) -
+    mov byte [wt_noext], 1          ; the grant ring for the rest of the
+    call wt_halt                    ; instance, the pipeline begun again on it
+    jmp wt_open
+.gopen:
+    mov al, 0                       ; verb 0: the grant's ring stream
+    mov ah, SND_OPENF_RING
+    mov si, [wt_grant]
     call OSAPI_SND_STREAM           ; AL = 0 and AH = the handle, else why
     or al, al
     jnz .snderr
+.opened:
     mov [wt_hand], ah
     mov byte [wt_sopen], 1
     cmp byte [wt_wk], 0             ; THE WORKER, hired once and kept
@@ -511,6 +646,8 @@ wt_begin:
     OS88_WORKER_RESTARTABLE_NOKEEP wt_worker
 .run:
     call wr_arm                     ; the UI's tick: the playhead, the meter
+    mov byte [wt_req], 1            ; ...and the rest of the fill at once:
+    call wt_kick                    ; the ring and the look-ahead to the top
     clc
     ret
 .snderr:
@@ -526,11 +663,337 @@ wt_begin:
     ret
 
 ; wt_cvtab - the format's inner loop: 8-bit mono, stereo; 16-bit mono, stereo
+; - and wt_cvtab1, the 8-bit pair's at d = 1
 wt_cvtab:   dw wt_cv8m, wt_cv8s, wt_cv16m, wt_cv16s
+wt_cvtab1:  dw wt_cv8m1, wt_cv8s1
 
 ; -----------------------------------------------------------------------------
-; wt_claims - the look-ahead claim (32 KB, 16 KB tier) and the ring grant
-;             (verb 7: 16 KB, 8 KB tier), each made once and kept.
+; wt_plan - CAN THE MEDIUM KEEP UP (SPEC.md 123.6)? The play's byte rate,
+;           R << shift, against what the slowest source the document reads
+;           has SUSTAINED - its reads' bytes over their ticks (wrdoc.inc's
+;           wo_rdrun), or with none timed yet the medium's floor - with a
+;           quarter to spare for the conversion. It can: stream. It cannot,
+;           and the region fits the heap beside the play's own claims: HOLD
+;           it - [wt_hload] = 1, the claim made, the load the timer's. Else
+;           stream anyway, [wt_slow] = 1, and the underruns are counted and
+;           said. A hold that already covers the region is kept (a resume, a
+;           seek inside it). [wt_rdsz] = the smallest bounded read of those
+;           sources. out: CF = 0 (CF = 1 is never refused today; SI kept for
+;           the contract). clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+wt_plan:
+    xor ax, ax
+    mov [wt_held], al
+    mov [wt_slow], al
+    mov [wt_hload], al
+    mov ax, [wt_sp]                 ; the region a hold would hold: [sp, e1),
+    mov dx, [wt_sp+2]               ; and with Loop from r0 if r0 comes first
+    cmp byte [wt_lp], 0
+    je .lo
+    cmp dx, [wt_r0+2]
+    jb .lo
+    ja .r0
+    cmp ax, [wt_r0]
+    jbe .lo
+.r0:
+    mov ax, [wt_r0]
+    mov dx, [wt_r0+2]
+.lo:
+    mov [wt_nlo], ax
+    mov [wt_nlo+2], dx
+    cmp word [wt_hseg], 0           ; a hold that covers it already is kept
+    je .rate                        ; (a resume, a seek inside it) - once it
+    mov bx, [wt_hpos]               ; is all loaded: a seek in mid-load
+    cmp bx, [wt_hhi]                ; begins it again
+    jne .drop
+    mov bx, [wt_hpos+2]
+    cmp bx, [wt_hhi+2]
+    jne .drop
+    cmp dx, [wt_hlo+2]
+    jb .drop
+    ja .lo1
+    cmp ax, [wt_hlo]
+    jb .drop
+.lo1:
+    mov ax, [wt_e1]
+    mov dx, [wt_e1+2]
+    cmp dx, [wt_hhi+2]
+    ja .drop
+    jb .keep
+    cmp ax, [wt_hhi]
+    ja .drop
+.keep:
+    mov byte [wt_held], 1
+    clc
+    ret
+.drop:
+    call wt_hfree
+.rate:
+    call wt_medium                  ; DX:AX = bytes a second, CX = the read
+    mov [wt_rdsz], cx
+    call wt_dshare                  ; AX = the disk's share, 256ths
+    push ax
+    mov bl, [wo_bits]               ; the streamed conversion's cost a frame
+    shr bl, 1                       ; (8 -> 0, 16 -> 2, + the channels - 1)
+    shr bl, 1
+    shr bl, 1
+    and bl, 2
+    add bl, [wo_ch]
+    dec bl
+    xor bh, bh
+    shl bx, 1
+    mov ax, [wt_cyctab + bx]
+    cmp byte [wt_d], 1              ; the box (d > 1) costs ~300 more
+    je .c1
+    add ax, 300
+.c1:
+    call wt_cshare                  ; AX = the CPU's share
+    mov [wt_csh], ax
+    pop bx
+    add ax, bx
+    jc .new                         ; (past a second: cannot)
+    cmp ax, WT_BUDGET
+    jbe .stream
+.new:
+    mov ax, [wt_e1]                 ; it cannot: the hold's KB - one byte a
+    mov dx, [wt_e1+2]               ; frame (8-bit mono, what the conversion
+    sub ax, [wt_nlo]                ; starts from), rounded up
+    sbb dx, [wt_nlo+2]
+    add ax, 1023
+    adc dx, 0
+    jc .slow
+    mov cx, 10
+.kb:
+    shr dx, 1
+    rcr ax, 1
+    loop .kb
+    or dx, dx
+    jnz .slow
+    mov bx, ax                      ; BX = the hold's KB
+    add ax, WT_RINGKB + 1 + WT_HMARGKB  ; + the ring, the margin...
+    jc .slow
+    cmp word [wt_laseg], 0
+    jne .la
+    add ax, WT_LAKB                 ; ...and the look-ahead, unless held
+    jc .slow
+.la:
+    push bx
+    push ax
+    call OSAPI_MEM_AVAIL            ; AX = the largest run, KB
+    pop cx
+    pop bx
+    cmp ax, cx
+    jb .slow
+    push bx                         ; ...and the held play's conversion -
+    mov ax, WT_CYC8M1               ; 8-bit mono, d = 1's loop or the box's -
+    cmp byte [wt_d], 1              ; within the budget
+    je .h1
+    add ax, 300
+.h1:
+    call wt_cshare
+    pop bx
+    cmp ax, WT_BUDGET
+    ja .slow
+    mov ax, bx
+    call OSAPI_MEM_CLAIM            ; (exactly the size, not the run)
+    jc .slow
+    mov [wt_hseg], dx
+    mov ax, [wt_nlo]
+    mov dx, [wt_nlo+2]
+    mov [wt_hlo], ax
+    mov [wt_hlo+2], dx
+    mov [wt_hpos], ax
+    mov [wt_hpos+2], dx
+    mov ax, [wt_e1]
+    mov dx, [wt_e1+2]
+    mov [wt_hhi], ax
+    mov [wt_hhi+2], dx
+    mov byte [wt_held], 1
+    mov byte [wt_hload], 1
+    mov byte [wt_hpct], 0xFF
+    clc
+    ret
+.slow:
+    mov al, 1                       ; neither: it plays, and says which of
+    cmp word [wt_csh], WT_BUDGET    ; the two cannot keep up - the CPU when
+    jbe .s1                         ; its share alone is past the budget
+    inc ax
+.s1:
+    mov [wt_slow], al
+.stream:
+    clc
+    ret
+
+; wt_dshare - the medium's share of a second (256ths) a streamed play takes:
+; (R << shift) x 256 / DX:AX bytes a second, both over 16 (past 1 MB a
+; second: none). out AX (FFFFh: past a second). clobbers BX, CX, DX
+wt_dshare:
+    mov cx, 4
+.s:
+    shr dx, 1
+    rcr ax, 1
+    loop .s
+    or dx, dx
+    jnz .none
+    or ax, ax
+    jz .all
+    mov bx, ax                      ; BX = the medium / 16
+    mov ax, [wo_rate]               ; R << shift / 16 (at most 11,025)
+    xor dx, dx
+    mov cl, [wo_sh]
+    jcxz .n0
+.n:
+    shl ax, 1
+    rcl dx, 1
+    loop .n
+.n0:
+    mov cx, 4
+.d:
+    shr dx, 1
+    rcr ax, 1
+    loop .d
+    mov cx, bx
+    mov bx, 256
+    call wo_muldiv                  ; DX:AX = the share
+    or dx, dx
+    jz .out
+.all:
+    mov ax, 0xFFFF
+.out:
+    ret
+.none:
+    xor ax, ax
+    ret
+
+; wt_cshare - the CPU's share of a second (256ths) a conversion costing AX
+; cycles a frame takes at R frames a second - on an 8086/8088 (tier 0, a
+; 4.77 MHz XT: 4,772,727 / 256 = WT_CYCDIV cycles a 256th); on anything
+; faster, none (SPEC.md 123.6). out AX (FFFFh: past a second). keeps the rest
+wt_cshare:
+    push bx
+    push cx
+    push dx
+    mov bx, ax
+    call OSAPI_CPU_INFO             ; AL = the tier (keeps all but AX)
+    or al, al
+    mov ax, 0
+    jnz .out
+    mov ax, [wo_rate]
+    xor dx, dx
+    mov cx, WT_CYCDIV
+    call wo_muldiv                  ; DX:AX = R x cost / WT_CYCDIV
+    or dx, dx
+    jz .out
+    mov ax, 0xFFFF
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; wt_cyctab - an 8088's cycles a FRAME in each loop at d = 1 - 8-bit mono
+; (wt_cv8m1), stereo (wt_cv8s1), 16-bit mono, stereo - measured on MartyPC's
+; 5150 (cycle-exact; SPEC.md 123.6), the box at d > 1 being ~300 more
+wt_cyctab:  dw WT_CYC8M1, 205, 276, 456
+
+; -----------------------------------------------------------------------------
+; wt_medium - the slowest source the document's pieces read: DX:AX = the
+;             bytes a second it has sustained, CX = the smallest bounded read
+;             of them (wo_rdsize). clobbers BX, SI, DI
+; -----------------------------------------------------------------------------
+wt_medium:
+    mov ax, 0xFFFF                  ; the fastest thing there is, so far
+    mov dx, ax
+    mov cx, ax
+    mov di, wo_pc
+    mov si, [wo_npc]                ; SI = the pieces left
+.p:
+    or si, si
+    jz .out
+    push si
+    push ax
+    mov ax, [di+WP_SRC]
+    call wx_srec                    ; BX = the record
+    pop ax
+    mov si, bx
+    mov bx, [si+WS_RDSZ]
+    or bx, bx                       ; (a record no open sized: the floor's)
+    jnz .r
+    mov bx, WO_RDDD
+    mov [si+WS_RDSZ], bx
+.r:
+    cmp bx, cx
+    jae .r1
+    mov cx, bx
+.r1:
+    push cx
+    push ax
+    push dx
+    call wt_srcbps                  ; DX:AX = this one's
+    pop cx
+    pop bx                          ; CX:BX = the slowest so far
+    cmp dx, cx
+    jb .lower
+    ja .keep
+    cmp ax, bx
+    jb .lower
+.keep:
+    mov ax, bx
+    mov dx, cx
+.lower:
+    pop cx                          ; the smallest read
+    pop si                          ; the pieces left
+    add di, WP_SIZE
+    dec si
+    jmp short .p
+.out:
+    ret
+
+; wt_srcbps - source SI's sustained bytes a second: its reads' bytes x 18.2
+; over their ticks (a tick at least), or with nothing timed yet its medium's
+; FLOOR - 64 KB/s for a fixed disk, 24 for a sector-cluster floppy, 12 for
+; the rest (SPEC.md 123.6). out DX:AX. clobbers BX, CX
+wt_srcbps:
+    mov ax, [si+WS_RDB]
+    mov dx, [si+WS_RDB+2]
+    mov cx, ax
+    or cx, dx
+    jz .floor
+    mov cx, [si+WS_RDT]
+    or cx, cx
+    jnz .t
+    inc cx                          ; under a tick: as if it took one
+.t:
+    mov bx, cx                      ; x 10 (WO_RDTMAX keeps it in a word)
+    shl cx, 1
+    shl cx, 1
+    add cx, bx
+    shl cx, 1
+    mov bx, 182
+    jmp wo_muldiv                   ; bytes x 182 / (ticks x 10)
+.floor:
+    mov ax, [si+WS_RDSZ]
+    xor dx, dx
+    cmp ax, WO_RDFIX
+    jne .f1
+    inc dx                          ; 65,536
+    xor ax, ax
+    ret
+.f1:
+    cmp ax, WO_RDHD
+    mov ax, 24576
+    je .f2
+    mov ax, 12288
+.f2:
+    ret
+
+; -----------------------------------------------------------------------------
+; wt_claims - the look-ahead claim (32 KB, 16 KB tier), made once and kept;
+;             and the RING: our own, 32 KB (16 KB tier) and its two control
+;             words in one OSAPI_MEM_CLAIM_DMA_HI claim, all of it the
+;             page-safe head and never moved (SPEC.md 34.5.3, 98.3.1) - or,
+;             on a card that refused one ([wt_noext]) or with no room for
+;             either size, the driver's pool grant (verb 7: 16 KB, 8 KB tier).
 ; out: CF = 1 refused, SI = why. clobbers AX, CX, DX
 ; -----------------------------------------------------------------------------
 wt_claims:
@@ -552,20 +1015,46 @@ wt_claims:
 .ring:
     cmp byte [wt_ghave], 0
     jne .ok
-    mov cx, WT_RINGKB * 1024
+    mov byte [wt_ext], 0
+    cmp byte [wt_noext], 0
+    jne .grant
+    mov ax, WT_RINGKB + 1           ; the ring and its words, the head all of
+    mov cl, 3                       ; it: RL's code 3, 32 KB
+.etry:
+    push cx
+    mov cx, ax
+    call OSAPI_MEM_CLAIM_DMA_HI     ; (keeps all but DX)
+    pop cx
+    jnc .egot
+    cmp ax, WT_RINGKB2 + 1
+    je .grant                       ; no room for either: the pool's grant
+    mov ax, WT_RINGKB2 + 1
+    mov cl, 2                       ; code 2, 16 KB
+    jmp short .etry
+.egot:
+    mov [wt_rseg], dx
+    mov [wt_rcode], cl
+    mov byte [wt_ext], 1
+    mov word [wt_grant], 0          ; (the ring at its claim's offset 0)
+    mov ax, 4096
+    shl ax, cl                      ; RL
+    jmp short .rl
+.grant:
+    mov cx, WT_GRANTKB * 1024
 .try:
     mov ax, 7                       ; verb 7, sub-op 0: a grant of CX
     call OSAPI_SND_STREAM           ; AX = 0, SI = its offset
     or ax, ax
     jz .got
-    cmp cx, WT_RINGKB2 * 1024
+    cmp cx, WT_GRANTKB2 * 1024
     jbe .nomem
-    mov cx, WT_RINGKB2 * 1024
+    mov cx, WT_GRANTKB2 * 1024
     jmp short .try
 .got:
     mov [wt_grant], si
-    mov [wt_ring], cx
     mov ax, cx
+.rl:
+    mov [wt_ring], ax
     dec ax
     mov [wt_rmask], ax
     inc ax                          ; the pre-roll follows the ring: halves =
@@ -589,8 +1078,9 @@ wt_claims:
 ; -----------------------------------------------------------------------------
 ; wt_halt - the stream closed (if open): the worker told to feed no more, its
 ;           pass drained, the played count read ONCE MORE so the position is
-;           exact, verb 2; then the grant handed back. The look-ahead claim is
-;           kept. UI task. clobbers AX, BX, CX, DX, SI
+;           exact, verb 2; then - the stream closed FIRST - the ring given
+;           back (our claim freed, or the grant handed back). The look-ahead
+;           and the hold are kept. UI task. clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 wt_halt:
     cmp byte [wt_sopen], 0
@@ -609,6 +1099,14 @@ wt_halt:
 .free:
     cmp byte [wt_ghave], 0
     je .out
+    cmp byte [wt_ext], 0
+    je .grant
+    mov dx, [wt_rseg]               ; our ring: the card no longer plays it
+    call wo_free
+    mov [wt_rseg], dx
+    mov byte [wt_ghave], 0
+    ret
+.grant:
     mov si, [wt_grant]
     mov ax, 0x0107                  ; verb 7, sub-op 1: free
     call OSAPI_SND_STREAM
@@ -618,13 +1116,22 @@ wt_halt:
 .out:
     ret
 
-; wt_release - wt_halt, and the look-ahead claim given back too.
+; wt_release - wt_halt, and the look-ahead claim and the hold given back too.
 ; clobbers AX, BX, CX, DX, SI
 wt_release:
     call wt_halt
     mov dx, [wt_laseg]
     call wo_free
     mov [wt_laseg], dx
+    mov byte [wt_hload], 0
+    ; (falls into wt_hfree)
+
+; wt_hfree - the hold given back. keeps all but DX
+wt_hfree:
+    mov dx, [wt_hseg]
+    call wo_free
+    mov [wt_hseg], dx
+    mov byte [wt_held], 0
     ret
 
 ; -----------------------------------------------------------------------------
@@ -717,13 +1224,20 @@ wt_place:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wt_tick - the window's one-shot timer while PLAYING (gfx lock held): the
-;           stream's end or failure finished; else the playhead from the
+; wt_tick - the window's one-shot timer while PLAYING (gfx lock held): a
+;           load's next pass while the hold loads; else the ring topped up,
+;           the stream's end or failure finished, the playhead from the
 ;           count (the time and the line follow it), the view paged to it
 ;           when it leaves, and the meter. Re-arms itself.
 ;           in: BX = the window. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wt_tick:
+    cmp byte [wt_hload], 0
+    je .play
+    call wt_hstep                   ; (it opens the stream when it is done)
+    jmp wr_arm
+.play:
+    call wt_topup                   ; the ring as full as the look-ahead goes
     cmp byte [wt_ended], 0
     jne .fin
     cmp byte [wt_err], 0
@@ -774,8 +1288,8 @@ wt_meter:
     mov cl, 11
     shr si, cl
     mov ax, si                      ; the halves since the last look, at
-    sub al, [wt_mlast]              ; most 7 (the slots hold 16, and the
-    and al, 31                      ; feed runs 8 ahead)
+    sub al, [wt_mlast]              ; most 7 (the slots hold 32, and the
+    and al, 31                      ; feed runs up to 16 ahead)
     cmp al, 7
     jbe .n
     mov al, 7
@@ -786,7 +1300,7 @@ wt_meter:
     xor dx, dx                      ; DL = their peak, DH = a rail in any
 .back:
     mov bx, si
-    and bx, 15
+    and bx, 31
     mov al, [wt_pks + bx]
     cmp al, dl
     jbe .b1
@@ -799,7 +1313,7 @@ wt_meter:
     mov si, [wt_cons]               ; the bar: the half sounding
     mov cl, 11
     shr si, cl
-    and si, 15
+    and si, 31
     mov al, [wt_pks + si]
     mov bx, wrart_db
     xlatb                           ; AL = lit cells, 0..24
@@ -842,7 +1356,7 @@ wt_onwake:
     cmp byte [wt_sopen], 0          ; (a Stop got there first: nothing to do)
     je .clr
     call wt_refill
-    call wt_lalow                   ; still low: come back
+    call wt_lroom                   ; room for another read still: come back
     jnc .clr
     mov bx, [wr_win]
     call OSAPI_WM_WAKE
@@ -863,40 +1377,62 @@ wt_onwake:
 .out:
     ret
 
-; wt_lalow - CF = 1 when the look-ahead holds under half its size and the
-; document has more to give. keeps everything but AX
-wt_lalow:
+; wt_lroom - CF = 1 when the look-ahead has room for one whole read
+; ([wt_rdsz] bytes - never a part of one, so the next read follows it on the
+; disk) and the play has more to give. keeps everything but AX
+wt_lroom:
     cmp byte [wt_srcdone], 0
     jne .no
-    push bx
-    mov ax, [wt_lwr]
-    sub ax, [wt_lrd]
-    mov bx, [wt_lasz]
-    shr bx, 1
-    cmp ax, bx
-    pop bx
-    ret                             ; (below: the carry)
+    mov ax, [wt_lasz]               ; the free bytes
+    sub ax, [wt_lwr]
+    add ax, [wt_lrd]
+    cmp ax, [wt_rdsz]
+    cmc                             ; (free >= the read: the carry)
+    ret
 .no:
     clc
     ret
 
 ; -----------------------------------------------------------------------------
-; wt_refill - THE LOOK-AHEAD TOPPED UP from the document (UI task only, SPEC.md
-;             20.6 rule 7): whole frames through wo_read - piece by piece,
-;             each source's folder restood - COPIED into the ring. The lap's
-;             end is a refill position: Loop goes on from the region's start
-;             in the same pass, otherwise the document is done. A read error
-;             latches [wt_err]. clobbers AX, BX, CX, DX, SI, DI, ES
+; wt_refill - CONVERT BEFORE YOU READ (SPEC.md 123.6; UI task only, SPEC.md
+;             20.6 rule 7): the ring topped up to full from the look-ahead,
+;             THEN one bounded read into it ([wt_rdsz]: 16 KB on a fixed
+;             disk, a track's worth on a floppy) - never more than one read
+;             between two top-ups, so at the instant any read starts the ring
+;             holds as much as it can - while the look-ahead has room for a
+;             whole read, at most WT_FILLMAX reads a call. A held play copies
+;             from the hold instead, and reads nothing. A read error latches
+;             [wt_err]. clobbers AX, BX, CX, DX, SI, DI, ES
 ; -----------------------------------------------------------------------------
 wt_refill:
     mov byte [wt_nfill], WT_FILLMAX
 .more:
+    call wt_topup                   ; the ring full FIRST
+    call wt_lroom                   ; room for a whole read, and more to read?
+    jnc .out
+    call wt_rd1                     ; ONE read (or a copy out of the hold)
+    dec byte [wt_nfill]
+    jnz .more
+    call wt_topup
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wt_rd1 - ONE FILL STEP: from [wt_fpos], whole frames up to the look-ahead's
+;          free room and the lap's end - one wo_read of [wt_rdsz] bytes (a
+;          piece at a time, its source's folder restood, through its cursor:
+;          wrdoc.inc), or a copy out of the hold - COPIED into the ring.
+;          The lap's end is a refill position: Loop goes on from the region's
+;          start, otherwise the play is done. clobbers AX, BX, CX, DX, SI, DI,
+;          ES
+; -----------------------------------------------------------------------------
+wt_rd1:
     cmp byte [wt_srcdone], 0
     jne .out
     mov ax, [wt_lasz]               ; the free frames
     sub ax, [wt_lwr]
     add ax, [wt_lrd]
-    mov cl, [wo_sh]
+    mov cl, [wt_lsh]
     shr ax, cl
     jz .out
     mov bx, [wt_lend]               ; ...no further than the lap's end
@@ -912,17 +1448,23 @@ wt_refill:
 .k:
     mov cx, ax
     jcxz .lap
+    cmp byte [wt_held], 0
+    je .disk
+    call wt_hget                    ; ES:DI = the frames in the hold
+    jmp short .copy
+.disk:
     mov ax, [wt_fpos]
     mov dx, [wt_fpos+2]
     push bp
-    mov bp, WO_IOKB * 1024
+    mov bp, [wt_rdsz]
     call wo_read                    ; ES:DI = the frames, CX = how many
     pop bp
     jc .err
     jcxz .lap                       ; (the document ended under the lap)
+.copy:
     push cx
     mov ax, cx
-    mov cl, [wo_sh]
+    mov cl, [wt_lsh]
     shl ax, cl
     call wt_lacopy                  ; into the ring; published
     pop cx
@@ -930,10 +1472,10 @@ wt_refill:
     adc word [wt_fpos+2], 0
     mov ax, [wt_fpos]
     cmp ax, [wt_lend]
-    jne .next
+    jne .out
     mov ax, [wt_fpos+2]
     cmp ax, [wt_lend+2]
-    jne .next
+    jne .out
 .lap:
     cmp byte [wt_lp], 0             ; the lap's end: round again, or done
     je .done
@@ -945,15 +1487,190 @@ wt_refill:
     mov [wt_lend], ax
     mov ax, [wt_r1+2]
     mov [wt_lend+2], ax
-.next:
-    dec byte [wt_nfill]
-    jnz .more
 .out:
     ret
 .err:
     mov byte [wt_err], 1            ; the UI stops, and says why
 .done:
     mov byte [wt_srcdone], 1
+    ret
+
+; wt_hoff - the hold's address of document frame DX:AX ([wt_hlo] <= it):
+; ES:DI, DI < 16 - one byte a frame. clobbers AX, DX
+wt_hoff:
+    sub ax, [wt_hlo]
+    sbb dx, [wt_hlo+2]
+    mov di, ax
+    and di, 15
+    push cx
+    mov cx, 4
+.p:
+    shr dx, 1
+    rcr ax, 1
+    loop .p
+    pop cx
+    add ax, [wt_hseg]
+    mov es, ax
+    ret
+
+; wt_hget - CX frames from [wt_fpos] in the hold: ES:DI. keeps CX
+wt_hget:
+    mov ax, [wt_fpos]
+    mov dx, [wt_fpos+2]
+    jmp short wt_hoff
+
+; -----------------------------------------------------------------------------
+; wt_hstep - ONE PASS OF THE LOAD (SPEC.md 123.6, XTMP3's shape, SPEC.md
+;            121.6.1): reads of up to 16 KB of the region (wo_read, through
+;            each source's cursor) into the hold - an 8-bit sample's byte as
+;            it is, a 16-bit one's high byte - until about 110 ms have gone,
+;            so Stop and Escape are answered between passes; 'Loading 45%'.
+;            The load done, the stream opens from the hold. UI timer, gfx
+;            lock held. clobbers AX, BX, CX, DX, SI, DI, ES
+; -----------------------------------------------------------------------------
+wt_hstep:
+    call OSAPI_GET_TICKS
+    mov [wt_ht0], ax
+.more:
+    mov ax, [wt_hhi]                ; the frames still to load
+    mov dx, [wt_hhi+2]
+    sub ax, [wt_hpos]
+    sbb dx, [wt_hpos+2]
+    mov bx, ax
+    or bx, dx
+    jz .done
+    mov bx, WO_IOKB * 1024          ; at most the I/O claim's frames
+    mov cl, [wo_sh]
+    shr bx, cl
+    or dx, dx
+    jnz .n
+    cmp ax, bx
+    jae .n
+    mov bx, ax
+.n:
+    mov cx, bx
+    mov ax, [wt_hpos]
+    mov dx, [wt_hpos+2]
+    push bp
+    mov bp, WO_IOKB * 1024
+    call wo_read                    ; ES:DI = the frames, CX = how many
+    pop bp
+    jc .err
+    jcxz .err                       ; (short of the pieces: a disk changed)
+    call wt_hput
+    call OSAPI_GET_TICKS
+    sub ax, [wt_ht0]
+    cmp ax, WT_HLOADT
+    jb .more
+    jmp wt_hsay
+.done:
+    mov byte [wt_hload], 0          ; LOADED: the play goes on from memory
+    mov bx, [wr_win]
+    call wt_open
+    jc .no
+    jmp wt_said
+.no:
+    jmp wt_refuse
+.err:
+    mov byte [wt_err], 1            ; wt_finish says 'Cannot read the file'
+    mov byte [wt_hload], 0
+    jmp wt_finish
+
+; wt_hput - CX frames at ES:DI (the I/O claim) into the hold at [wt_hpos],
+; ONE BYTE A FRAME - the unsigned 8-bit mono value the conversion starts from
+; (wrsim.mono: a 16-bit sample's high byte XOR 80h, the channels' (L + R) >>
+; 1), so the held play is the d = 1 8-bit loop's and a stereo or 16-bit
+; region holds in a half or a quarter of its bytes; [wt_hpos] on.
+; clobbers AX, BX, DX, SI, DI, ES
+wt_hput:
+    push cx
+    mov si, di                      ; DS:SI will be the frames...
+    mov bx, es
+    mov ax, [wt_hpos]
+    mov dx, [wt_hpos+2]
+    call wt_hoff                    ; ...ES:DI the hold
+    mov dl, [wo_bits]
+    mov dh, [wo_ch]
+    push ds
+    mov ds, bx
+    cld
+    cmp dl, 16
+    je .w
+    cmp dh, 2
+    je .s8
+    rep movsb                       ; 8-bit mono: as it is
+    jmp short .x
+.s8:
+    lodsw                           ; 8-bit stereo: (L + R) >> 1
+    add al, ah
+    rcr al, 1
+    stosb
+    loop .s8
+    jmp short .x
+.w:
+    cmp dh, 2
+    je .s16
+.m16:
+    lodsw                           ; 16-bit mono: the high byte, unsigned
+    mov al, ah
+    xor al, 0x80
+    stosb
+    loop .m16
+    jmp short .x
+.s16:
+    lodsw                           ; 16-bit stereo: both high bytes, the
+    mov bl, ah                      ; average of the two unsigned
+    xor bl, 0x80
+    lodsw
+    mov al, ah
+    xor al, 0x80
+    add al, bl
+    rcr al, 1
+    stosb
+    loop .s16
+.x:
+    pop ds
+    pop cx
+    add [wt_hpos], cx
+    adc word [wt_hpos+2], 0
+    ret
+
+; wt_hsay - 'Loading 45%' on the status bar, when the figure moves.
+; clobbers AX, BX, CX, DX, SI, DI
+wt_hsay:
+    mov ax, [wt_hpos]               ; done and all, shifted until all fits a
+    mov dx, [wt_hpos+2]             ; word
+    sub ax, [wt_hlo]
+    sbb dx, [wt_hlo+2]
+    mov bx, [wt_hhi]
+    mov cx, [wt_hhi+2]
+    sub bx, [wt_hlo]
+    sbb cx, [wt_hlo+2]
+.f:
+    jcxz .w
+    shr cx, 1
+    rcr bx, 1
+    shr dx, 1
+    rcr ax, 1
+    jmp short .f
+.w:
+    or bx, bx
+    jz .out
+    mov cx, bx
+    mov bx, 100
+    call wo_muldiv                  ; AX = the percentage
+    cmp al, [wt_hpct]
+    je .out
+    mov [wt_hpct], al
+    mov di, wr_tbuf2
+    mov si, wt_s_load
+    call wr_put
+    call dec_u16
+    mov byte [di], '%'
+    mov byte [di+1], 0
+    mov si, wr_tbuf2
+    jmp wr_say
+.out:
     ret
 
 ; wt_lacopy - AX bytes (whole frames, at most the ring's free room) from
@@ -1010,13 +1727,55 @@ wt_worker:
     jmp short .loop
 
 ; -----------------------------------------------------------------------------
-; wt_feed - THE FEED PASS: the count, the state (an underrun counted once, the
-;           end seen), a refill asked for when the look-ahead is half empty,
-;           and halves converted and staged while the ring has room for one.
-;           Worker context. clobbers AX, BX, CX, DX, SI, DI
+; wt_feed - THE WORKER'S PASS: wt_pass, at most WT_MAXFEED halves - unless
+;           the UI is topping the ring up itself ([wt_uiown]), when it stands
+;           aside. Worker context. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wt_feed:
     mov byte [wt_mixing], 1         ; FIRST - before any guard
+    cmp byte [wt_uiown], 0          ; the UI is converting: not now
+    jne .out
+    mov byte [wt_nfeed], WT_MAXFEED
+    mov byte [wt_inui], 0
+    call wt_pass
+.out:
+    mov byte [wt_mixing], 0         ; LAST
+    ret
+
+; -----------------------------------------------------------------------------
+; wt_topup - THE UI'S PASS (SPEC.md 123.6): the ring topped up as far as the
+;            look-ahead goes - a whole ring's halves at most - before a read,
+;            and each tick. Its flag first, then the worker's pass waited out
+;            (bounded: a pass is at most WT_MAXFEED halves). UI task.
+;            clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+wt_topup:
+    cmp byte [wt_sopen], 0
+    je .out
+    mov byte [wt_uiown], 1          ; FIRST: the worker stands aside...
+.w:
+    cmp byte [wt_mixing], 0         ; ...once out of a pass it began
+    je .go
+    call OSAPI_TASK_YIELD
+    jmp short .w
+.go:
+    mov byte [wt_nfeed], WT_TOPMAX
+    mov byte [wt_inui], 1
+    call wt_pass
+    mov byte [wt_uiown], 0          ; LAST
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wt_pass - A FEED PASS, the worker's or the UI's (never both: wt_feed,
+;           wt_topup): the count, the state (an underrun counted once, the
+;           end seen), the worker's read asked for when the look-ahead has
+;           room for one, halves converted and fed while the ring has room
+;           for one - [wt_nfeed] at most - and a card paused for want of data
+;           resumed the moment a whole block is queued (SPEC.md 98.3.1's
+;           foreground rule: asked every pass). clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+wt_pass:
     cmp byte [wt_sopen], 0
     je .out
     cmp byte [wt_ended], 0
@@ -1047,17 +1806,16 @@ wt_feed:
     mov byte [wt_cdead], 1          ; stopped - not the end (review, L4)
 .dead:
     mov byte [wt_ended], 1
-    call wt_kick
-    jmp short .out
+    jmp wt_kick
 .feed:
-    call wt_lalow                   ; the look-ahead half empty: a refill
-    jnc .nofill
+    cmp byte [wt_inui], 0           ; (the UI reads as it tops up)
+    jne .f
+    call wt_lroom                   ; room in the look-ahead for a read
+    jnc .f
     cmp byte [wt_req], 0
-    jne .nofill
+    jne .f
     mov byte [wt_req], 1
     call wt_kick
-.nofill:
-    mov byte [wt_nfeed], WT_MAXFEED
 .f:
     cmp byte [wt_sopen], 0
     je .out
@@ -1066,22 +1824,38 @@ wt_feed:
     mov bx, [wt_ring]
     sub bx, WT_HALF
     cmp ax, bx
-    ja .out
+    ja .res
     call wt_conv                    ; AX = 0 not yet, 1 a half, 2 the last
     or ax, ax
-    jz .out
+    jz .res
+    cmp byte [wt_ext], 0            ; our ring: the total is in its word
+    jne .fed                        ; already (wt_stage)
     push ax
     mov cx, [wt_total]
-    mov al, 1                       ; verb 1: the new total
+    mov al, 1                       ; the grant's: verb 1, the new total
     mov ah, [wt_hand]
     call OSAPI_SND_STREAM
     pop ax
+.fed:
     cmp ax, 2
-    je .out
+    je .res
     dec byte [wt_nfeed]
     jnz .f
+.res:
+    cmp byte [wt_ext], 0            ; OUR RING, PAUSED FOR WANT OF DATA: verb
+    je .out                         ; 1 resumes it once a whole block is
+    cmp byte [wt_ust], SND_ST_UNDER ; queued (the grant's verb 1 above does
+    jne .out                        ; it a half at a time)
+    mov cx, [wt_total]
+    mov ax, cx
+    sub ax, [wt_cons]
+    cmp ax, [wt_chalf]
+    jb .out
+    mov al, 1
+    mov ah, [wt_hand]
+    call OSAPI_SND_STREAM
+    mov byte [wt_ust], SND_ST_PLAYING
 .out:
-    mov byte [wt_mixing], 0         ; LAST
     ret
 
 ; wt_kick - one OSAPI_WM_WAKE for our window (worker-safe). keeps all
@@ -1115,7 +1889,7 @@ wt_conv:
     mov ch, [wt_srcdone]            ; BEFORE the counters: the refill
     mov ax, [wt_lwr]                ; publishes wt_lwr, then srcdone (wave
     sub ax, [wt_lrd]                ; 3's review, L1)
-    mov cl, [wo_sh]                 ; the frames in the look-ahead
+    mov cl, [wt_lsh]                ; the frames in the look-ahead
     shr ax, cl
     jz .dry
     cmp ax, bx
@@ -1159,7 +1933,7 @@ wt_conv:
     sub di, wt_hbuf
     mov [wt_hfill], di
     pop ax                          ; the frames taken
-    mov cl, [wo_sh]
+    mov cl, [wt_lsh]
     shl ax, cl
     add [wt_lrd], ax                ; PUBLISH, last
     jmp .more
@@ -1189,27 +1963,49 @@ wt_conv:
     call wt_fill80
     ; (falls into wt_stage)
 
-; wt_stage - the full half into the grant at [wt_total] (verb 6), its peak
-; and clip into the slot the meter reads, and the total on. out AX = 1, or 2
-; for the last. clobbers BX, CX, SI, DI
+; wt_stage - the full half into the ring at [wt_total] - a copy into OUR ring
+; and the total written to its word after it (the card's block IRQ reads it:
+; SPEC.md 34.5.3), or verb 6 into the grant - its peak and clip into the
+; slot the meter reads, and the total on. out AX = 1, or 2 for the last.
+; clobbers BX, CX, SI, DI
 wt_stage:
     mov di, [wt_total]
     and di, [wt_rmask]
-    add di, [wt_grant]
     mov si, wt_hbuf
+    cmp byte [wt_ext], 0
+    je .grant
+    push es                         ; OUR RING: a half never straddles its
+    mov es, [wt_rseg]               ; seam (both are multiples of 2 KB)
+    mov cx, WT_HALF / 2
+    cld
+    rep movsw
+    pop es
+    jmp short .slot
+.grant:
+    add di, [wt_grant]
     mov cx, WT_HALF
     mov ax, 6                       ; verb 6: staged from our segment
     call OSAPI_SND_STREAM
-    mov bx, [wt_total]              ; the half's slot: total / 2 KB, mod 16
+.slot:
+    mov bx, [wt_total]              ; the half's slot: total / 2 KB, mod 32
     mov cl, 11
     shr bx, cl
-    and bx, 15
+    and bx, 31
     mov ax, [wt_pkcl]
     mov [wt_pks + bx], al
     mov [wt_clips + bx], ah
     mov word [wt_pkcl], 0
     add word [wt_total], WT_HALF
     mov word [wt_hfill], 0
+    cmp byte [wt_ext], 0            ; PUBLISHED: the bytes first, the total
+    je .pub                         ; after them, one word store
+    push es
+    mov es, [wt_rseg]
+    mov bx, [wt_ring]
+    mov ax, [wt_total]
+    mov [es:bx+SND_EXT_TOTAL], ax
+    pop es
+.pub:
     mov ax, 1
     cmp byte [wt_last], 0           ; the last, and the card's block full:
     je .out                         ; the FINAL half (else one of silence
@@ -1364,8 +2160,105 @@ wt_cv16s:
 .out:
     ret
 
+; -----------------------------------------------------------------------------
+; THE d = 1 LOOPS, 8-bit (SPEC.md 123.6): no box, so a sample is the load, the
+; extremes, the table and the store - ~111 cycles a sample on an 8088 where
+; the general loop's ~227 could not keep 22 kHz up even from memory. The
+; extremes (DL the largest u, DH the smallest) become the peak and the rails
+; once a call, in wt_cvx: |u - 80h| is greatest at one extreme or the other,
+; and an 8-bit rail is 00h or FFh. Every held play takes wt_cv8m1. Same
+; registers as the general loops; CH is spent.
+; -----------------------------------------------------------------------------
+wt_cv8m1:
+    push dx                         ; the half's peak and clip so far
+    mov dx, 0xFF00                  ; no largest yet, no smallest
+    xor ch, ch
+.l:
+    lodsb
+    cmp al, dl
+    jbe .a
+    mov dl, al
+.a:
+    cmp al, dh
+    jae .b
+    mov dh, al
+.b:
+    es xlatb
+    stosb
+    loop .l
+    jmp short wt_cvx
+
+wt_cv8s1:
+    push dx
+    mov dx, 0xFF00
+    xor ch, ch
+.l:
+    lodsb                           ; L
+    cmp al, dl
+    jbe .a
+    mov dl, al
+.a:
+    cmp al, dh
+    jae .b
+    mov dh, al
+.b:
+    mov ah, al
+    lodsb                           ; R
+    cmp al, dl
+    jbe .c
+    mov dl, al
+.c:
+    cmp al, dh
+    jae .d
+    mov dh, al
+.d:
+    add al, ah                      ; (L + R) >> 1, the carry the ninth bit
+    rcr al, 1
+    es xlatb
+    stosb
+    loop .l
+    ; (falls into wt_cvx)
+
+; wt_cvx - the extremes DL (largest) and DH (smallest) folded into the peak
+; and clip on the stack (DL, DH as wt_cv8m's): the peak max(largest - 80h,
+; 80h - smallest), a rail when either is one. out DX. clobbers AX
+wt_cvx:
+    mov al, dl
+    sub al, 0x80
+    jae .h
+    xor al, al
+.h:
+    mov ah, 0x80
+    sub ah, dh
+    jae .l
+    xor ah, ah
+.l:
+    cmp ah, al
+    jbe .m
+    mov al, ah
+.m:
+    xor ah, ah                      ; AL = the peak, AH = a rail
+    cmp dl, 0xFF
+    je .r
+    or dh, dh
+    jnz .n
+.r:
+    inc ah
+.n:
+    pop dx
+    cmp al, dl
+    jbe .k
+    mov dl, al
+.k:
+    or dh, ah
+    ret
+
 ; --- strings -----------------------------------------------------------------------
 wt_s_out:    db 'Out ', 0
 wt_s_short:  db 'Too short to loop', 0
 wt_s_cdead:  db 'Sound card stopped', 0
 wt_s_mono:   db ' Hz mono', 0
+wt_s_load:   db 'Loading ', 0
+wt_s_lcan:   db 'Load cancelled', 0
+wt_s_slow:   db 'Disk too slow: gaps', 0
+wt_s_cslow:  db 'CPU too slow: gaps', 0

@@ -26,7 +26,7 @@ the evidence column says what was actually seen.
 | US-02 | The same WaveRack in colour and black and white | US-01 | Implemented — verification pending | `docs/waverack/waverack-vga-color-full.png`, `waverack-vga-bw-full.png`, `waverack-ega-mid.png`; identity check `None` on VGA colour, VGA B&W, EGA and across a layout round trip; Hercules MID and COMPACT seen on MartyPC's 5150 + Hercules (`docs/waverack/waverack-herc-mid.png`, `waverack-herc-compact.png`, captured from VRAM at 038ea5ed) |
 | US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Implemented — verification pending | `docs/waverack/waverack-cga-compact.png` (native 640 x 200) and `-3x.png`; all 15 controls clicked with `--screen 640x200`, each answered; the layout measurement below |
 | US-04 | Open a WAV and inspect it without loading it into RAM | US-01 | Implemented — verification pending | `wrwav.inc`/`wrdoc.inc`/`wrenv.inc`; `tools/wrsim.py` reference + fast row `wrsim`; soak row `waverack` (every fixture through File > Open, bss vs the reference, the view cache column for column, zoom to fpp 1, identity); screenshots `docs/waverack/waverack-w2-*.png`; see Wave 2 below |
-| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§123.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. Not seen: underruns at 4.77 MHz (US-11, MartyPC) |
+| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§123.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. **Wave 4b** (play through disk reads, see below): our own external ring, convert before read, bounded sequential reads per medium, the hold; soak row `waverackdisk` (MartyPC, XT-IDE + SB 2.0 and a 1.44 MB floppy, before/after): BIG22 0.00 s silent of 30.8 (Wave 4: 19.3 of 33.0), LONG off the floppy 0.09 of 32.0 (19.9 of 32.1); 16-bit stereo HELD on an 8088. Not heard on 86Box or iron |
 | US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | In progress | driver half shipped: 1a027a77, SPEC §34.6.4, soak row `sndcap` passed on MartyPC SB DSP 2.01 (flat 80h - not a microphone); app side is Wave 5 |
 | US-07 | See the active level; set input gain separately from volume | US-05, US-06 | In progress | the PLAYBACK half shipped in wave 3 (§123.8): the played half's peak before the volume through `wrart_db`, the hold, PEAK at a rail, `LEVEL  PLAY`, only the changed cells drawn; the soak row reads the lit cells for STEREO16's tone and PEAK at its 16-bit spike. The record meter and the gain are wave 5's |
 | US-08 | Select a precise range, audition it, loop it | US-05 | Implemented — verification pending | §123.9's selection half shipped in wave 3: drag, handles, Shift+click, Shift+Left/Right, Select All / None, `[s, e)` clamped, the field's two formats, the inverted span (B&W) / its own ground (colour) drawn by changed columns only; Loop seamless; the soak row drags a range, loops it and holds verb 9's count to `play_pos` and the capture to the selection repeated; identity checks with a selection on VGA colour, B&W, COMPACT and the CGA knob tree |
@@ -50,6 +50,10 @@ The stories land as six waves on one branch and one draft PR:
    the meter while playing, selection, handles and Loop.
 4. **Edit and save** — US-09, US-10: edits, undo/redo, the clipboard,
    dirty-close, Save / Save As / Save Selection As, the replace sequence.
+   **4b. Play through disk reads** — US-05 hardening, after the owner heard
+   the play stop on 86Box whenever the disk was read: our own external
+   ring, convert before read, reads bounded per medium and made sequential,
+   the hold, hard disk first.
 5. **Capture** — US-06, US-07's capture half: SOUND.DRV's external record
    ring, the take file and its header, gain, the meter while recording,
    the recovery marker, the short-take fallback.
@@ -659,6 +663,124 @@ os88test: soak tier - 1 rows, 420s declared, budget none  (caps: lame,mtools,nas
 
 os88test: 1 passed, 0 failed, 0 skipped in 500.2s, 84.5s charged (budget none)
 ```
+
+## Wave 4b — play through disk reads (US-05 hardening): what shipped and what was measured
+
+**The defect** (the owner, on 86Box): the play goes silent whenever the disk
+is read. `kernel/disk.inc` holds `[sch_lock]` across every `int 13h`, so no
+task switches while anything reads - the worker cannot convert - and the
+card plays alone from what is staged: wave 3's 16 KB grant, 0.74 s at 22 kHz,
+behind up to eight back-to-back 16 KB `READ_AT`s that each walked the FAT
+chain from the file's front, with nothing making the ring full first. QEMU's
+floppy is instantaneous, so no QEMU row could see it. **The owner's
+priority: WaveRack reads from hard disks more than floppies** - so every
+size below is a fixed disk's first.
+
+**What shipped** (SPEC.md §123.6's last part, §123.13's wave 4b table):
+
+- [x] **Our own external ring** - 32 KB (16 KB tier) + its words in an
+  `OSAPI_MEM_CLAIM_DMA_HI` claim, verb 0 `SND_OPENF_EXT`; a half fed by a
+  copy and one word; verb 1 resumes a paused card once a whole block is
+  queued, asked every pass. The grant and verbs 6/1 remain only for a card
+  that refuses an external ring (a single-cycle DSP 1.x) - a deviation from
+  the brief, which said they go away: without it a period XT's own card,
+  the SB 1.x, would have lost playback.
+- [x] **Convert before you read** - the UI tops the ring up, then reads
+  ONE bounded gulp, then again; the worker stays for the time the UI task is
+  someone else's.
+- [x] **Reads bounded per medium** - 16 KB fixed; 12 KB / 9 KB floppy (a
+  cylinder's worth, not the brief's track: a call costs a call, and a 4 KB
+  read would have cost a 360 KB floppy its 11 kHz play).
+- [x] **READ_SEQ** for the play, the scan and the save, a cursor per source,
+  with the slide that keeps it sequential when the data offset is not a
+  multiple of the block align.
+- [x] **The hold** - measured medium + an 8088's measured conversion
+  cycles against an 80% budget; `Loading 45%`, Escape cancels; one byte a
+  frame; `Disk too slow: gaps` / `CPU too slow: gaps` when neither.
+- [x] **The d = 1 8-bit loops** - 114 cycles a frame against the general
+  loop's ~227, which could not keep 22 kHz up on an 8088 even from memory.
+- [x] **The meter's 32 slots** (a 32 KB ring runs 16 halves ahead).
+- [x] SPEC §123.6 / §123.13, this section, the diary.
+- [ ] **Heard on 86Box or iron.** No `vm/` profile has a hard disk AND a
+  Sound Blaster on an XT: `vm/xt-mfm` (the ST-225 on a Xebec, the machine to
+  install on) would need `sndcard = sb2.0` added; `vm/286-video` (mr286, IDE,
+  SB16) has both and can be listened on once WAVERACK.O88 and a WAV are on
+  its VHD. Not edited here.
+
+**The measurement** - soak row `waverackdisk`, run once and once more after
+a test fix (its first run died on a stale `[fm_vinst]` in the row's second
+launch; the second run's one failure is a second TEST bug, below, fixed and
+not re-run). Verbatim:
+
+```
+FAIL waverackdisk                 196.2s  exit 1
+       | waverackdisk: hdd before - .../WAVERACK.O88 on XT-IDE + SB 2.0
+       |      before BIG22 scan: 94.0 s guest, int 13h {'fat': 18, 'dir': 2, 'data': 168}
+       |      before BIG22 (2 MB, 22 kHz)    33.0 s: silent 19.33 s,   0 underruns,  302716 samples
+       |      before BIG22 + another's scan  46.6 s: silent 26.58 s,   2 underruns,  444417 samples
+       |      before ST22S (4 s, 88 KB/s)     6.8 s: silent  5.43 s,   1 underruns,   31282 samples
+       |      before ST22L (20 s, 88 KB/s)   16.6 s: silent 13.25 s,   3 underruns,   73783 samples
+       | waverackdisk: hdd after - build/waverack.o88 on XT-IDE + SB 2.0
+       |      after  BIG22 scan: 80.0 s guest, int 13h {'fat': 18, 'dir': 1, 'data': 168}
+       |      after  BIG22 (2 MB, 22 kHz)    30.8 s: silent  0.00 s,   0 underruns,  688742 samples, held=0 slow=0 rdsz=16384 ext=1
+       |      after  BIG22 + another's scan 103.7 s: silent 10.41 s,   2 underruns, 2073274 samples, ended, held=0 slow=0 rdsz=16384 ext=1
+       |      after  ST22S (4 s, 88 KB/s)     6.8 s: silent 101.05 s,   0 underruns, -2094508 samples, held=1 slow=0 rdsz=2048 ext=1
+       |      after  ST22L (20 s, 88 KB/s)   15.8 s: silent 11.08 s,  26 underruns,  104448 samples, held=0 slow=2 rdsz=16384 ext=1
+       | waverackdisk: hdd, before -> after
+       |    BIG22 scan: guest seconds 94.0 -> 80.0, no slower            ok
+       |    BIG22 scan: FAT reads 18 -> 18                               ok
+       |    BIG22 after: streamed (held 0), the external ring (1)        ok
+       |    BIG22 after: no underrun in 31 s (before: 0, 19.33 s silent) ok
+       |    ST22S after: HELD - 'Loading' said, read from memory         ok
+       |    ST22S after: no underrun (before: 1, 5.43 s silent)          FAIL  0 underruns, 101.05 s silent
+       |    ST22L after: 'CPU too slow: gaps' said, the gaps counted (26 underruns, 11.08 s silent) ok
+       |      another window reading: before 2 underruns / 26.58 s silent, after 2 / 10.41 s (its scan still running at the end: True)
+       | waverackdisk: floppy before - LONG.WAV off a 1.44 MB floppy
+       |      before LONG scan: 108.2 s guest
+       |      before LONG (1.1 MB, 11 kHz)   32.1 s: silent 19.91 s,   0 underruns,  135122 samples
+       | waverackdisk: floppy after - LONG.WAV off a 1.44 MB floppy
+       |      after  LONG scan: 85.5 s guest
+       |      after  LONG (1.1 MB, 11 kHz)   32.0 s: silent  0.09 s,   0 underruns,  354534 samples, held=0 slow=0 rdsz=12288 ext=1
+       |    LONG after: no underrun in 32 s off the floppy (before: 0, 19.91 s silent) ok
+       |   FAIL: ST22S after: no underrun (before: 1, 5.43 s silent)
+       | waverackdisk: FAILED (1)
+```
+
+**The one FAIL is the row's, not WaveRack's**: `-2094508 samples` - the row
+took "the play has begun" from `[wt_played] > 0` while the hold LOADED, and
+`wt_played` still held the previous play's count until `wt_open` zeroed it,
+so the window's start was the old count and its silence nonsense. The
+underrun counter (0) and the hold (`held=1`, `Loading` said) stand; ST22S's
+silence is NOT measured. The row now waits for a count that is not the last
+play's and for the load to be over, and starts the second-window leg's
+window when that window's launch is done (its two spans above differ:
+46.6 s against 103.7). Re-running it is the final pass's.
+
+**Before's `0 underruns` beside 19 s of silence** is Wave 4's counter, which
+saw an underrun only when a poll caught the stream paused; the silence -
+verb 9's count against the guest clock - is the measure that cannot miss
+one, and is why the row asserts on it.
+
+**The case for a desktop interrupt-time feeder** (the brief asked for it if
+buffering were not enough): on these measurements buffering IS enough for
+WaveRack's own reads - 0.00 s and 0.09 s of silence - and what is left is
+(a) another program's long disk work, which the 32 KB ring covers for 1.49 s
+at 22 kHz, and (b) an 8088's CPU. A feeder at interrupt time would answer
+(a) only for a ring that is already FULL - it moves bytes, it cannot read
+the disk under `[sch_lock]` either - so it buys exactly what a bigger ring
+buys, and costs a resident hook. It is not argued for here. What would earn
+one is a measurement of a real ST-225 copy in another window outlasting the
+ring.
+
+**Decisions taken on numbers taken once** (CLAUDE.md's exception, by the
+agent choosing): the conversion's cycles a frame (`cyc`: 114 / 205 / 276 /
+456 / 413 on MartyPC's 5150), which sized the plan's CPU term and showed the
+general loop could not keep 22 kHz up; and one calibration play of BIG22
+and BIG11 off the VHD (0 underruns each, WaveRack's own 16 KB reads timing
+148 KB/s on `os8088_5150_herc_hdd_sb_gla` - where docs/MARTYPC-DEBUG.md's
+figure for `os8088_xt_hdd`'s XT-IDE is 38 KB/s read, the figure this wave
+was planned against), which moved ST22S from "streams if the disk keeps up"
+to "held because the CPU cannot".
 
 ## Known risks
 

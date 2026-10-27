@@ -22,12 +22,26 @@
 ; callback, never from a worker, and READ_AT wants a cluster multiple for both
 ; the offset and the length, so a read takes the cluster-aligned run holding
 ; the frame into the I/O claim and answers where the frame landed in it.
+;
+; EVERY READ IS A STREAM (SPEC.md 18.4.8.1, 123.6): os88_rseq with a cursor in
+; each source's record, so a read that follows the last one walks one FAT link
+; and not the chain from the file's front - which on a multi-megabyte WAV on a
+; fixed disk was a walk that grew with the offset, every gulp. A frame that
+; lies INSIDE the run the claim holds keeps the overlap and reads only what
+; follows it (wo_srcread's slide), so the read stays sequential even when the
+; data's offset is not a multiple of the block align. Each read is timed:
+; the bytes and the ticks a source's reads took are what the transport asks
+; the medium for (SPEC.md 123.6's hold rule).
 ; =============================================================================
 
 WO_NSRC     equ 4
 WO_NPC      equ 64
 WO_IOKB     equ 16                  ; the I/O claim: a scan gulp (SPEC.md 123.5)
 WO_MAXCLU   equ 8192                ; a cluster two of which fit the claim
+WO_RDTMAX   equ 4096                ; a source's read ticks before halving
+WO_RDFIX    equ 16384               ; a play's read: a fixed disk (SPEC.md
+WO_RDHD     equ 12288               ; 123.6), a 512-byte-cluster floppy
+WO_RDDD     equ 9216                ; (1.2/1.44 MB), any other floppy
 
 ; --- a source ----------------------------------------------------------------------
 WS_NAME     equ 0                   ; 13: the NUL 8.3 name
@@ -44,7 +58,13 @@ WS_RATE     equ 32                  ; word: the source's format (a document's
 WS_BITS     equ 34                  ; byte  sources share it: paste of another
 WS_CH       equ 35                  ; byte  format is refused, SPEC.md 123.3)
 WS_SH       equ 36                  ; byte: log2 of the block align
-WS_SIZE     equ 40
+WS_RDSZ     equ 38                  ; word: a play's bounded read (SPEC.md
+                                    ; 123.6): 16 KB fixed, else 8 or 4 KB
+WS_SEQ      equ 40                  ; 16: its READ_SEQ cursor (os88rseq.inc)
+WS_RDB      equ 56                  ; dword: the bytes its reads delivered...
+WS_RDT      equ 60                  ; word: ...in this many ticks (both halved
+                                    ; together past WO_RDTMAX)
+WS_SIZE     equ 64
 ; --- a piece -----------------------------------------------------------------------
 WP_SRC      equ 0                   ; word: the source's index
 WP_FIRST    equ 2                   ; dword: its first frame in the source
@@ -244,6 +264,12 @@ wo_open:
     mov [di+WS_VOL], bl
     mov [wo_fdir], dx               ; ...the document's own file's, too
     mov [wo_fvol], bl
+    call wo_srcnew                  ; its cursor cold, its reads untimed,
+    mov al, bl                      ; its play's read sized by the medium
+    mov dx, [ww_clu]
+    call wo_rdsize
+    mov [di+WS_RDSZ], cx
+    xor cx, cx                      ; (the shift below counts in CL: CH = 0)
     mov ax, [ww_doff]
     mov [di+WS_DOFF], ax
     mov ax, [ww_doff+2]
@@ -461,33 +487,39 @@ wo_srcread:
     jbe .cap
     mov cx, bp
 .cap:
-    cmp byte [wo_cv], 0             ; the claim holds that run already?
-    je .read
+    cmp byte [wo_cv], 0             ; the claim holds a run of this source,
+    je .read                        ; read at this size?
     cmp si, [wo_csrc]
-    jne .read
-    cmp ax, [wo_cbase]
-    jne .read
-    cmp dx, [wo_cbase+2]
     jne .read
     cmp cx, [wo_ccap]
     jne .read
-    mov ax, [wo_clen]
+    mov bx, ax                      ; k = the cluster's offset - the run's
+    push dx
+    sub bx, [wo_cbase]
+    sbb dx, [wo_cbase+2]
+    pop dx
+    jnz .read                       ; (before it, or far past it)
+    or bx, bx
+    jnz .inside
+    mov ax, [wo_clen]               ; k = 0: the run is there already
+    jmp short .got
+.inside:
+    cmp bx, [wo_clen]               ; INSIDE it, and it was a whole read:
+    jae .read                       ; THE SLIDE - the overlap kept, and only
+    mov ax, [wo_clen]               ; what follows the run read, from where
+    cmp ax, [wo_ccap]               ; the cursor stands
+    jne .read
+    call wo_slide                   ; CF: a read error
+    jc .err
     jmp short .got
 .read:
     mov byte [wo_cv], 0
-    call wo_stand                   ; in the source's folder
-    jc .err
-    push si
-    push di
     mov [wo_csrc], si
     mov [wo_cbase], ax
     mov [wo_cbase+2], dx
     mov [wo_ccap], cx
-    mov es, [wo_ioseg]
-    xor bx, bx                      ; (SI = the record = its name, WS_NAME 0)
-    call OSAPI_FILE_READ_AT         ; out DX:AX = delivered
-    pop di
-    pop si
+    xor bx, bx                      ; into the claim's front
+    call wo_rdrun                   ; out DX:AX = delivered
     jc .err
     or dx, dx
     jnz .err
@@ -520,6 +552,152 @@ wo_rdend:
     mov es, [wo_ioseg]
     xor di, di
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wo_slide - the run the claim holds is [cbase, cbase + clen), a whole read of
+;            [wo_ccap], and the cluster BX bytes into it is wanted: the bytes
+;            from there to the run's end move to the claim's front, and the
+;            rest of the capacity is read at the run's end - exactly where
+;            the source's cursor stands, so the read is one FAT link and not a
+;            walk. in: SI = the source, BX = k (a cluster multiple, 0 < k <
+;            clen), DX:AX = cbase + k. out: CF = 0, AX = the new run's length
+;            (the claim's run now [cbase + k, ...)); CF = 1 a read error.
+;            keeps SI, DI
+; -----------------------------------------------------------------------------
+wo_slide:
+    push di
+    push si
+    mov byte [wo_cv], 0
+    push ax                         ; the run's new base
+    push dx
+    mov cx, [wo_clen]
+    sub cx, bx                      ; L = what is kept (a cluster multiple)
+    push ds
+    push es
+    mov es, [wo_ioseg]
+    push es
+    pop ds
+    mov si, bx
+    xor di, di
+    cld
+    shr cx, 1
+    rep movsw                       ; (L is even: a cluster multiple)
+    pop es
+    pop ds
+    mov bx, di                      ; BX = L: the read lands after it
+    mov ax, [wo_cbase]              ; ...from the run's end
+    mov dx, [wo_cbase+2]
+    add ax, [wo_clen]
+    adc dx, 0
+    pop word [wo_cbase+2]
+    pop word [wo_cbase]
+    pop si
+    push si
+    mov cx, [wo_ccap]
+    sub cx, bx                      ; the capacity left (a cluster multiple)
+    call wo_rdrun
+    jc .out
+    or dx, dx
+    stc
+    jnz .out
+    add ax, bx                      ; the run: L + what came
+    mov [wo_clen], ax
+    mov byte [wo_cv], 1
+    clc
+.out:
+    pop si
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; wo_rdrun - ONE READ of source SI: CX bytes (a cluster multiple) at file
+;            offset DX:AX into the I/O claim at BX, in the source's folder,
+;            through its cursor (os88_rseq: READ_SEQ, a seek re-seeding it),
+;            and TIMED - the bytes and the ticks added to the source's
+;            [WS_RDB] and [WS_RDT]. out: READ_AT's - CF = 0, DX:AX delivered;
+;            CF = 1 an error. keeps BX, CX, SI, DI
+; -----------------------------------------------------------------------------
+wo_rdrun:
+    call wo_stand                   ; in the source's folder
+    jc .out
+    push di
+    push es
+    push ax
+    call OSAPI_GET_TICKS
+    mov [wo_t0], ax
+    pop ax
+    mov es, [wo_ioseg]
+    lea di, [si+WS_SEQ]             ; (SI = the record = its name, WS_NAME 0)
+    call os88_rseq                  ; out DX:AX = delivered
+    jc .done
+    push ax
+    push dx
+    add [si+WS_RDB], ax             ; the medium's own rate, as it reads
+    adc [si+WS_RDB+2], dx
+    call OSAPI_GET_TICKS
+    sub ax, [wo_t0]
+    add ax, [si+WS_RDT]
+    cmp ax, WO_RDTMAX               ; past the bound: both halved, the
+    jb .t                           ; ratio kept and the recent weighted
+    shr ax, 1
+    shr word [si+WS_RDB+2], 1
+    rcr word [si+WS_RDB], 1
+.t:
+    mov [si+WS_RDT], ax
+    pop dx
+    pop ax
+    clc
+.done:
+    pop es
+    pop di
+.out:
+    ret
+
+; wo_rdsize - A PLAY'S BOUNDED READ (SPEC.md 123.6) on volume AL, whose
+; cluster is DX bytes: 16 KB on a FIXED disk (the kernel and HDD.DRV read to
+; the cylinder's end, SPEC.md 18.91.5, so a larger read is cheaper a byte, and
+; one is 0.42 s even at MartyPC's 38 KB/s); on a floppy about one int 13h's
+; worth, which since SPEC.md 18.91.1 is a CYLINDER - 12 KB where the cluster
+; is a sector (1.2 and 1.44 MB: under 1.2's 15 KB cylinder, so at most two
+; calls) and 9 KB otherwise (360 and 720 KB: 9 sectors x 2 heads, a multiple
+; of the 1 KB cluster). A call costs ~400 ms whatever it moves, so a track's
+; 4 KB would cost a 360 KB floppy its 11 kHz play (tools/wrsim.py streams).
+; The medium is SPEC.md 18.7.2's question, not the transport's. out CX.
+; clobbers AX
+wo_rdsize:
+    mov cx, WO_RDFIX
+    call OSAPI_VOL_KIND
+    jc .flop
+    cmp al, VK_FIXED
+    je .out
+.flop:
+    mov cx, WO_RDHD
+    cmp dx, 512
+    je .out
+    mov cx, WO_RDDD
+.out:
+    ret
+
+; wo_srcnew - source record DI: its cursor cold (a record that names a new
+; file must never be trusted with the old one's - os88rseq.inc), and its
+; reads untimed. keeps every register
+wo_srcnew:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    add di, WS_SEQ                  ; WS_SEQ, WS_RDB, WS_RDT: 22 bytes
+    mov cx, (WS_RDT + 2 - WS_SEQ) / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
     ret
 
 ; wo_stand - stand in source SI's folder (OSAPI_FILE_GOTO_QM, only when the
