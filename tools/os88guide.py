@@ -67,8 +67,8 @@ SECTORS = {2880: "1440", 2400: "1200", 1440: "720", 720: "360"}
 # Which release group lands in which half of a geometry's disk list. "main"
 # is the disks most people need; "own" is a disk that ships one program of
 # its own, or a set that repeats programs already on the main disks.
-SECTION = {"start": "main", "xt": "main", "emu": "main",
-           "live": "main", "all": "own", "progs": "own"}
+SECTION = {"start": "main", "xt": "main", "x720": "main", "small": "main",
+           "emu": "main", "live": "main", "all": "own", "progs": "own"}
 # Every section but "main" is one expandable item at the end of the disk row:
 # (its title, the line under it). The count of disks is the page's to add.
 SECTION_TITLE = {"main": ["Start here", ""],
@@ -85,6 +85,11 @@ BLURB = {
     "Office disk": "Writing, spreadsheet, chart and drawing programs.",
     "Network disk": "Browser, Telnet, FTP server, The Wire and WireChat, for an Ethernet card.",
     "Games disk": "Every game on one floppy.",
+    "Emulators disk": "RealDMG, the Game Boy emulator, with its demo cartridge.",
+    "Utilities disk": "System Check, REDLINE, the Task Manager and two tools for a PC running MS-DOS.",
+    "Second software disk": "PiXEL, MIDIRack, RealDMG and DrMarco, with pictures, songs and a video. "
+                            "Goes in drive B.",
+    "128KB system disk": "The small system for a machine with 128KB of memory, with every program that fits it.",
     "Emulator system disk": "A system disk whose pointer needs no mouse capture in an emulator.",
     "Live USB image": "The whole system and every program, for a USB stick.",
     "Live CD": "The live USB image as a bootable CD. Changes last until power-off.",
@@ -120,6 +125,7 @@ ROLE = [
     (r"^os8088(-\d+)?\.img$", "System disk"),
     (r"^apps\d*\.img$", "Software disk"),
     (r"^emu\.img$", "Emulator system disk"),
+    (r"^more720\.img$", "Second software disk"),
     (r"^apps-all(-120)?-(\d+)\.img$", None),     # "Everything set, disk N"
     (r"^os8088-usb\.img$", "Live USB image"),
     (r"^os8088\.iso$", "Live CD"),
@@ -349,11 +355,15 @@ def md_inline(s):
 def md(text, shots):
     """A small Markdown: #/##/### headings, paragraphs, - lists, 1. lists,
     | tables |, > notes, and ![caption](shot:id) screenshots."""
-    out, para, lst, tbl, vids = [], [], None, [], []
+    out, para, lst, tbl, vids, note = [], [], None, [], [], []
     nshot = 0                       # the first shot introduces the program: full width
 
     def flush():
-        nonlocal para, lst, tbl, vids
+        nonlocal para, lst, tbl, vids, note
+        if note:
+            # The lines of one > note are one note, as in any Markdown.
+            out.append('<aside class="note">%s</aside>' % md_inline(" ".join(note)))
+            note = []
         if vids:
             # A run of videos or shots with no blank line between them is a
             # gallery, side by side.
@@ -431,9 +441,12 @@ def md(text, shots):
         elif tbl:
             flush()
         if s.startswith("> "):
-            flush()
-            out.append('<aside class="note">%s</aside>' % md_inline(s[2:]))
+            if not note:
+                flush()
+            note.append(s[2:].strip())
             continue
+        elif note:
+            flush()
         m = re.match(r"^(-|\d+\.)\s+(.*)$", s)
         if m:
             tag = "ol" if m.group(1)[0].isdigit() else "ul"

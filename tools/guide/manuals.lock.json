@@ -576,9 +576,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "177c1b6c",
-  "strings": "e66d0a07c66d6c99",
-  "why": "the check asks the sockets directly; nothing the page says changed"
+  "stamped": "dccaad5b6",
+  "strings": "5dfa863f9bc6c17e",
+  "why": "checked against #313's network install, the startup check and the slot list's Empty, No Room; the page covers them"
  },
  "INTRO_MID": {
   "sources": [],

@@ -25,7 +25,9 @@ second file, `HDDTOOL.DRV`, which is read only while you use them.
 ## Why it is on the system disk
 
 Most floppy-only machines have no hard disk, so the driver stays a file on
-the system disk and costs about 4K of memory only where it is loaded.
+the system disk and costs about 4K of memory only where it is loaded. On a
+286 or newer with memory above 1MB it loads into the high memory area
+instead, and takes no conventional memory at all.
 
 You rarely need to load it yourself. When os8088 starts, it asks the BIOS
 whether there is a hard disk. If there is, the driver loads and mounts the

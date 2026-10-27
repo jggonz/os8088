@@ -34,7 +34,8 @@ A disk has four slots. Each shows its size and what is in it, in the same
 words as [[INSTALL.O88]]'s partition list: `FAT16` or `FAT12` for a volume
 os8088 can use, after its drive letter when it is mounted (`C: FAT16`);
 `Not Formatted` for a FAT slot with nothing in it; `Unpartitioned` for free
-space; the name of another system's partition, such as `Linux`, or its type
+space; `Empty, No Room` for a free slot when the disk has no space left to
+make another partition; the name of another system's partition, such as `Linux`, or its type
 number (`Type 2Bh`); and a reason after a comma when os8088 cannot use it,
 such as `Too Big`, `Wrong Geometry` or `Booted From` for the volume the
 machine is running from. The bar under the
