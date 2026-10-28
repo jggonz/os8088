@@ -5742,7 +5742,8 @@ mega_xmrunf:
     shl dx, cl
     or ax, dx                       ; AX = its KB from the pool's base
     pop dx
-    mov di, mx_tab
+    inc byte [sch_lock]             ; the scan to the MX_SEL store: the
+    mov di, mx_tab                  ; block stays where MX_OFF says (14.37)
 .f:
     cmp word [ss:di+MX_KB], 0
     je .fn
@@ -5754,11 +5755,11 @@ mega_xmrunf:
     add di, MX_BLKSZ
     cmp di, mx_tab_end
     jb .f
-    jmp .not
+    jmp .notl
 .fs:
     cmp word [ss:di+MX_SEL], 0
     je .fs1
-    jmp .not                        ; (a selector already: one view a block)
+    jmp .notl                       ; (a selector already: one view a block)
 .fs1:
     mov si, [ss:di+MX_OFF]          ; DX:SI = where the block is now
     mov dx, si
@@ -5825,6 +5826,7 @@ mega_xmrunf:
     mov ax, dx
     or al, 1                        ; MX_SEL: the run, marked
     mov [ss:di+MX_SEL], ax
+    dec byte [sch_lock]
     mov cx, 8
     clc
     jmp short .out
@@ -5838,8 +5840,12 @@ mega_xmrunf:
     pop di
     popf
     pop di
+    dec byte [sch_lock]
     mov ax, 1                       ; no run of free entries
     jmp short .fail
+.notl:
+    dec byte [sch_lock]
+    jmp short .not
 .notp:
     pop dx
 .not:
@@ -7555,6 +7561,9 @@ mega_xmsel:
     push dx
     push si
     push di
+    inc byte [sch_lock]             ; the scan to the MX_SEL it leaves: no
+                                    ; other task moves the block or re-aims
+                                    ; one between (14.37; it nests)
     mov [mxs_lo], ax                ; the window, banked: the arithmetic
     mov [mxs_hi], dx                ; below spends every register (the XMEM
     mov [mxs_len], cx               ; cells are the UI task's, so one copy)
@@ -7647,6 +7656,7 @@ mega_xmsel:
 .fail:
     stc
 .out:
+    dec byte [sch_lock]             ; (dec leaves CF)
     pop di
     pop si
     pop dx
@@ -8095,8 +8105,9 @@ mega_hiclaim:
     mov bl, MX_KOWN
     mov ax, cx
     xor dx, dx
-    call mx_alloc                   ; DX:AX = its linear base
-    jc .no
+    inc byte [sch_lock]             ; to the MX_FPURGE mark: the base is
+    call mx_alloc                   ; used before any other task can move
+    jc .nol                         ; it (14.37). DX:AX = its linear base
     push dx
     push ax
     call mega_xmsel                 ; AX = the selector, in its MX_SEL (BL is
@@ -8105,6 +8116,8 @@ mega_hiclaim:
     jnc .got
     xchg ax, cx                     ; no entry: the block goes back
     call mx_free
+.nol:
+    dec byte [sch_lock]
 .no:
     stc
     jmp short .out
@@ -8125,6 +8138,7 @@ mega_hiclaim:
     or byte [ss:si+MX_FL], MX_FPURGE
 .pin:
     pop ax
+    dec byte [sch_lock]
     clc
 .out:
     pop si
@@ -8168,18 +8182,23 @@ mega_hiclaim2:
     mov ax, cx
     xor dx, dx
     mov bx, MX_KOWN                 ; (BH = 0: code outranks every cache)
-    call mx_alloc                   ; DX:AX = the base
-    pop cx
-    jc .no
+    inc byte [sch_lock]             ; to the pair: the base is aimed before
+    call mx_alloc                   ; any other task can compact it away
+    pop cx                          ; (14.37). DX:AX = the base
+    jc .unl
     dec cx
     mov bx, ax
     call mega_ldt_alloc2            ; AX = the code selector
-    jnc .out                        ; (DX:BX the base, CF = 0)
+    jnc .unl                        ; (DX:BX the base, CF = 0)
     xchg ax, bx                     ; no pair: the block goes back
     push bx
     mov bl, MX_KOWN
     call mx_free
     pop bx
+    stc
+.unl:
+    dec byte [sch_lock]             ; (dec leaves CF)
+    jmp short .out
 .no:
     stc
 .out:
@@ -8230,8 +8249,10 @@ mega_modhif:
     push di
     push bp
     mov bp, ax
-    call mega_hiclaim2              ; AX = the code selector, DX:BX the base
-    jc .out
+    inc byte [sch_lock]             ; to the copy's end: the base is used
+    call mega_hiclaim2              ; before any other task can move it
+    jc .out                         ; (14.37). AX = the code selector, DX:BX
+                                    ; the base
     mov [mega_xdst], bx
     mov [mega_xdst+2], dx
     push ax
@@ -8241,12 +8262,11 @@ mega_modhif:
     pop cx                          ; reads N x 16 there all the same)
     mov [mega_xsrc], ax
     mov [mega_xsrc+2], dx
-    inc byte [sch_lock]
     call KERNEL_SEG:mega_lincopyf
-    dec byte [sch_lock]
     pop ax
     clc
 .out:
+    dec byte [sch_lock]             ; (dec leaves CF)
     pop bp
     pop di
     pop si

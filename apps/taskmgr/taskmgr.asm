@@ -4967,6 +4967,7 @@ tm_drvgid:
     mov ax, bx
     call tm_pwes                ; ES = over the image's PARAGRAPH (MC7)
     pop ax
+    jc .own                     ; (no window: no header to read)
 %ifdef PKG_MEGA
 .hd:
 %endif
@@ -4990,7 +4991,8 @@ tm_drvgid:
 ; snapshot names by its paragraph: under kern_mega a paragraph is no
 ; selector (KERN-MEGA-MEMORY-PLAN MC7), so OSAPI_SEG's SEG_WIN makes one and
 ; it is re-aimed per use, the one window held for the instance; every
-; real-mode kernel answers the paragraph itself. Every other register kept
+; real-mode kernel answers the paragraph itself. CF = 1 and ES kept: kern_mega
+; had no window to give (its table full). Every other register kept
 tm_pwes:
     push ax
     push bx
@@ -5001,8 +5003,10 @@ tm_pwes:
     xor cx, cx
     mov bl, SEG_WIN
     call OSAPI_SEG
+    jc .no                      ; (the pops keep CF)
     mov [tm_pwin], dx
     mov es, dx
+.no:
     pop dx
     pop cx
     pop bx
@@ -5650,6 +5654,7 @@ tm_drvnam:
     jnz .drvs                   ; above 1MB and unnamed: no header to read
     push es
     call tm_pwes                ; ES = over the image's PARAGRAPH (MC7)
+    jc .hno                     ; (no window: no header to read)
     cmp word [es:0], 0x384F     ; 'O8': a driver header, whose name is at +16
     jne .hno
     mov di, tm_nbuf

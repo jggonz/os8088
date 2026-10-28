@@ -210421,7 +210421,11 @@ the kernel, and each runs with interrupts off for its few instructions.
 Answers are in AX, CX, DX and SI (DI is an argument, never an answer:
 §20.11). Errors: CF=1 with AX = `EMSE_ROOM` 1 (no run of pages that long),
 `EMSE_HND` 2 (no free handle, `EMS_NHND` = 8), `EMSE_BAD` 3 (not yours, or
-out of range), `EMSE_BUSY` 4 (a quarter is another instance's).
+out of range), `EMSE_BUSY` 4 (a quarter is another instance's - or, from
+`EMSV_CAPS` and `EMSV_FRAME`, kern_mega in protected mode had no window over
+the frame to give, `OSAPI_SEG`'s `SEG_WIN` refusing with its table full: no
+quarter is taken, and attach finds no board. A real-mode kernel never refuses
+it).
 
 | BL | verb | in | out |
 |---|---|---|---|

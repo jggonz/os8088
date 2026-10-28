@@ -11042,8 +11042,8 @@ vp_rbnd:
 vp_rcur:
     push cx
 %ifdef PKG_MEGA
-    call vp_rwmk                    ; (protected mode: the hook's windows)
-%endif
+    nop                             ; (the play's routines' parity: vp_rwmk
+%endif                              ; is vp_spos's now)
     mov dx, [vp_rbseg]
     mov si, [vp_rboff]
     mov cx, [vp_base]
@@ -11276,12 +11276,15 @@ vp_rres:
     ret
 
 ; vp_rwmk - the resident blocks loaded: in protected mode the hook's three
-; bound windows over them (vp_rres, vp_raud), made once. Every register kept
+; bound windows over them (vp_rres, vp_raud), made once. CF=1 the kernel gave
+; not all it owes (its table full): the ones made are given back, none is
+; kept, and the play is refused - the hook has no window to fall back on.
+; Every register kept
 vp_rwmk:
     cmp byte [vp_pm], 0
-    je .r
+    je .r                           ; (CF=0)
     cmp word [vp_rbw0], 0
-    jne .r
+    jne .r                          ; (CF=0)
     push bx
     push dx
     push di
@@ -11291,6 +11294,30 @@ vp_rwmk:
     call .b
     mov dx, [vp_rablk]
     call .b
+    cmp word [vp_rbw0], 0           ; BOTH CURSORS' windows...
+    je .bad
+    cmp word [vp_rbw0 + 2], 0
+    je .bad
+    or dx, dx                       ; ...and the audio's, when there is an
+    jz .ok                          ; audio block (CF=0)
+    cmp word [vp_rbw0 + 4], 0
+    jne .ok                         ; (CF=0)
+.bad:
+    mov di, vp_rbw0
+.f:
+    mov dx, [di]
+    or dx, dx
+    jz .fn
+    mov bl, SEG_FREE
+    call OSAPI_SEG
+    mov word [di], 0
+.fn:
+    inc di
+    inc di
+    cmp di, vp_rbw0 + 6
+    jb .f
+    stc
+.ok:
     pop di
     pop dx
     pop bx
@@ -12372,6 +12399,9 @@ vp_spos:
     mov [vp_ring], dx
 %ifdef PKG_MEGA
     call vp_rsmk                    ; (protected mode: its slots' selectors)
+    jnc .rsok                       ; ...and BIGSP's window, or no play
+    jmp .nowin
+.rsok:
 %endif
     ; --- WHERE IT STARTS (98.3.5): the file's first super-packet, or the
     ;     picked keyframe's - its record read into the ring, to be decoded
@@ -12567,10 +12597,20 @@ vp_spos:
     mov [vp_psec], ax               ; the first super-packet, not yet entered
     cmp byte [vp_resid], 0          ; RESIDENT: the cursor on the block
     je .out
+%ifdef PKG_MEGA
+    call vp_rwmk                    ; (protected mode: the hook's windows,
+    jc .nowin                       ; or no play)
+%endif
     call vp_rcur
 .out:
     clc
     ret
+%ifdef PKG_MEGA
+.nowin:                             ; (no window the hook reads through:
+    mov word [vp_msg], vp_s_mem     ; the kernel's table is full)
+    stc
+    ret
+%endif
 
 ; =============================================================================
 ; THE LAYER (SPEC.md 98.1.9): a second stream after the base's, encoded on
@@ -14235,8 +14275,10 @@ vp_subtab:
 ; ([vp_rclm], [vp_rckb] KB; above 1MB they are OSAPI_MEM_HUGE's own windows,
 ; which SEG_SUB answers), [vp_rgob] where the ring starts in that claim (THE
 ; GAP), a BIGSP file's bound window [vp_rbw] once a claim, and vp_addr
-; patched to vp_paddr. Nothing in real mode, where the slots are sums. Every
-; register kept
+; patched to vp_paddr. Nothing in real mode, where the slots are sums. CF=1:
+; a BIGSP ring read through its slots (not in place, not resident) that the
+; kernel gave no such window - its records would run off their slots'
+; (vp_pmbigq's case, on the ring). Every register kept
 vp_rsmk:
     cmp byte [vp_pm], 0
     je .r
@@ -14292,7 +14334,21 @@ vp_rsmk:
 .p:
     mov al, 1
     call vp_rhpat
+    cmp word [vp_rbw], 0            ; NONE, where BIGSP needs it: a ring
+    jne .o                          ; whose 38-63 KB records only that
+    cmp word [vp_msl], 2            ; window holds whole (vp_pmbig) - in
+    jne .o                          ; place they are [vp_xbw]'s, resident
+    cmp byte [vp_xip], 0            ; vp_rres's
+    jne .o
+    cmp byte [vp_einp], 0
+    jne .o
+    cmp byte [vp_resid], 0
+    jne .o
+    stc
+    jmp short .x
 .o:
+    clc
+.x:
     pop di
     pop dx
     pop cx
