@@ -28,6 +28,10 @@
 ;             wants, and is still right after the disk is copied to C:. kind
 ;             is 1 for a package, 0 for a document, 2 for a folder. path is
 ;             below the root and has no leading backslash: 'SYSTEM\RLAPPLY.O88'
+;   OS88_LINK label, volume, 1, 'path', 'PARAM'
+;             ...the same, carrying a PARAMETER for the program it starts:
+;             it reads it with OSAPI_ARG_TEXT (SPEC.md 26.10.7). The path and
+;             the parameter share 44 characters
 ;   ol_autostart
 ;             SI = the link's NUL 8.3 name ('RLAPPLY.LNK'), BX = its record
 ;             in DS. out CF=0 written (an existing one of that name is
@@ -53,12 +57,15 @@ LNK_SIZE    equ 50
 LNK_V       equ 1
 LNK_SELF    equ 0xFF
 
-%macro OS88_LINK 4
+%macro OS88_LINK 4-5
 %1: db 'LK', LNK_V, %2, %3, %4, 0
-    times LNK_SIZE - ($ - %1) db 0
-%if $ - %1 != LNK_SIZE
-  %error "OS88_LINK: the path is longer than a link holds (44 characters)"
+%if %0 > 4
+    db %5, 0                        ; THE PARAMETER (SPEC.md 26.10.7), for a
+%endif                              ; kind-1 link: OSAPI_ARG_TEXT's answer
+%if $ - %1 > LNK_SIZE - 1
+  %error "OS88_LINK: the path and its parameter are longer than a link holds (44 characters)"
 %endif
+    times LNK_SIZE - ($ - %1) db 0
 %endmacro
 
 ol_s_auto:  db 'AUTOSTRT', 0

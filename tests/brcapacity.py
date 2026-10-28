@@ -20,7 +20,8 @@ import dispcp
 import os88build
 import os88qemu
 import os88sym
-from ethernet import Qemu, Mouse, settle, SOCK
+import os88fixture
+from ethernet import Qemu, Mouse, settle
 
 S = os88sym.linear
 FLOOR = 196 * 1024
@@ -62,17 +63,23 @@ def fixtures():
 def main():
     if "--fixtures" in sys.argv[1:]:
         return fixtures()
-    os88qemu.own()
-    os88qemu.kill()
-    subprocess.run(["make", "browsertest"], check=True)
+    # NOTHING SHARED (docs/plans/SOAK-PARALLEL.md 17): the package is this
+    # row's `wants=`, the page and the disk are made in this process's own
+    # directory, and the machine is private (os88qemu.make_test) - where this
+    # was `make browsertest`, a page and a disk under build/ and `make test`
+    # on build/qmp.sock, which kept the row out of every shared lane.
+    os88fixture.need("build/browser.o88")
+    pages = os.path.join(os88qemu.RUNDIR, "brmemory")
+    subprocess.run([sys.executable, os.path.join(_ROOT, "tools", "brmemory.py"),
+                    "--out", pages], check=True, stdout=subprocess.DEVNULL)
+    disk = os.path.join(os88qemu.RUNDIR, "brcapacity.img")
     subprocess.run([
-        "python3", "tools/os88disk.py", "-o", "build/brcapacity.img",
-        "--size", "1440", "build/browser.o88",
-        "build/brmemory/mem196k.htm",
-    ], check=True)
-    subprocess.run(["make", "test", "TESTAPPS=build/brcapacity.img"],
-                   check=True)
-    m = Qemu(SOCK)
+        "python3", "tools/os88disk.py", "-o", disk,
+        "--size", "1440", os88build.at("build/browser.o88"),
+        os.path.join(pages, "mem196k.htm"),
+    ], check=True, stdout=subprocess.DEVNULL)
+    os88qemu.make_test("TESTAPPS=" + disk)
+    m = Qemu()
     try:
         os88qemu.acted(m, lambda: os88qemu.ui_idle(m, S), secs=30,
                        what="desktop UI idle")
@@ -90,7 +97,7 @@ def main():
         image = os.path.getsize(os88build.at("build/browser.bin"))
 
         def symbol(name):
-            with open("build/browser.map", encoding="ascii") as f:
+            with open(os88build.at("build/browser.map"), encoding="ascii") as f:
                 for line in f:
                     fields = line.split()
                     if len(fields) >= 3 and fields[-1] == name:
@@ -112,6 +119,17 @@ def main():
         os88qemu.acted(
             m, lambda: word(38) > 0 and dword(doclen_lo, doclen_hi) > 0,
             secs=120, what="196 KiB page parse/layout")
+        # ...and then until the LAYOUT HAS FINISHED. The condition above holds
+        # from the first line laid out, and QEMU reads guest memory between
+        # any two instructions: with heap enough to hold the whole formatted
+        # page, the line table is what runs out, and br_layout sets br_trunc
+        # and cuts br_doclen only at its own end - so a sample taken at the
+        # first line read 204,744 formatted bytes, 404 lines and no cut, which
+        # is the layout half way through and not the defect it looked like.
+        os88qemu.quiesce(
+            m, lambda: (word(38), dword(doclen_lo, doclen_hi),
+                        byte(symbol("br_trunc"))),
+            what="the 196 KiB page's layout")
         doclen = dword(doclen_lo, doclen_hi)
         srclen = dword(srclen_lo, srclen_hi)
         truncated = byte(symbol("br_trunc"))

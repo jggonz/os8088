@@ -38,7 +38,8 @@ def check_basic(m, cfg):
     assert word(m, "vid_dock_y0") == word(m, "vid_ph") - 24
     eq = os88sym.equates()
     off = os88sym.syms()["mod_gone"]
-    expected = off.to_bytes(2, "little") + eq["COLD_SEG"].to_bytes(2, "little")
+    # (where `.cold` RUNS - [api_coldseg], not COLD_SEG: on a machine with no VGA and no EGA it slid down at boot, docs/plans/MOVABLE-COLD-PLAN.md 2)
+    expected = off.to_bytes(2, "little") + m.read(S("api_coldseg"), 2)
     base = S("DKFP")
     assert m.read(base, eq["DK_NENT"] * 4) == expected * eq["DK_NENT"], \
         "an unloaded callback still points into module memory"

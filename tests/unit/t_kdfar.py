@@ -5,7 +5,7 @@
 
 `kerndos/` (docs/plans/KERN-DOS-PLAN.md) assembles the kernel's own
 `disk.inc`, `diskw.inc` and `dskwin.inc` into a root that is not the kernel,
-and reaches into them by hand: `kerndos/kdback.inc` is the DOS box's second
+and reaches into them by hand: `kerndos/kdback.inc` is DOS's second
 back end and `kerndos/kdgate.inc` / `kerndos/kdosgate.inc` are the two test
 entries.  Those call sites are the only hand-written ones in the tree.
 

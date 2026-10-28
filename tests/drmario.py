@@ -413,7 +413,7 @@ def input_checks(p,tag):
 def arm(tag,sym,input_only=False):
     machine={'vga':'os8088_xt_vga','cga':'os8088_5150_cga_gla'}[tag]
     out=ROOT/'build/drmario-proof';out.mkdir(exist_ok=True)
-    with os88ui.boot(str(ROOT/'build/os8088-360.img'),apps=str(ROOT/'build/drmario360.img'),machine=machine) as ui:
+    with os88ui.boot(str(ROOT/'build/os8088-360.img'),apps=str(ROOT/'build/drmario360.img'),machine=machine,quick=True) as ui:
         m=ui.m
         ui.open_drive('B');ui.open('DRMARCO.O88');ui.settle()
         p=Probe(ui,sym)

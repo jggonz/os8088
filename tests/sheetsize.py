@@ -64,7 +64,8 @@ import sheetfmt as SF                                        # noqa: E402
 from paintmove import pkg_syms                               # noqa: E402
 
 WORK = "build/sheetsize"
-DISK = "build/sheetsize.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetsize.img")        # the run's tree, so a soak lane finds it
 NAME = "SIZE.SLK"
 SB_H = 16                               # sheet.asm: SH_SB_H
 
@@ -77,14 +78,12 @@ def main():
     # it tests whatever was last built - which it did: the control below
     # (OSAPI_WM_SIZABLE with AL=0) passed all five legs against a stale
     # .o88, exactly the vacuous pass os88fixture.need exists to stop.
-    os88fixture.need("build/sheet.o88", "build/CHART.OVL",
-                     "build/MACRO.OVL", SF.SYS)
+    os88fixture.need("build/sheet.o88", SF.SYS)
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk({(r, c): float(r * 10 + c)
                                         for r in range(8) for c in range(5)}))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL",
-                    "build/MACRO.OVL", src], check=True,
+                    "360", "build/sheet.o88", src], check=True,
                    stdout=subprocess.DEVNULL)
     S = os88sym.linear
     sym = pkg_syms("apps/sheet/sheet.asm")

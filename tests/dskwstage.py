@@ -141,7 +141,10 @@ class Caller(object):
 
     def __init__(self, m, trap="dskw_rmtree"):
         self.m = m
-        self.trap = os88sym.linear(trap)
+        self.trap = m.sym(trap)         # (m.sym follows a slid `.cold`)
+        # (where `.cold` RUNS - [api_coldseg], not COLD_SEG: on a machine with no VGA and no EGA it slid down at boot, docs/plans/MOVABLE-COLD-PLAN.md 2)
+        self.cs = int.from_bytes(m.read(m.sym("api_coldseg"), 2), "little")
+        self.cb = self.cs << 4
         self.lock = os88sym.linear("sch_lock")
         # **ON TASK 0's STACK, NOT ON THE INTERRUPTED TASK'S**, and this is
         # what the row was failing on - `dskw_write_x never returned`, 2 runs
@@ -191,11 +194,11 @@ class Caller(object):
         from its own return code.
         """
         m = self.m
-        wmap = dict((os88sym.linear(w), w) for w in watch)
+        wmap = dict((m.sym(w), w) for w in watch)
         m.bp_exec(self.trap, *wmap.keys())
-        m.cmd(cmd="park", cs=COLD_SEG, ip=os88sym.linear(name) - CB)
+        m.cmd(cmd="park", cs=self.cs, ip=m.sym(name) - self.cb)
         sp = (self.sp - 2) & 0xFFFF
-        off = self.trap - CB
+        off = self.trap - self.cb
         m.write((self.ss << 4) + sp, bytes((off & 0xFF, off >> 8)))
         m.setreg("ss", self.ss)
         m.setreg("sp", sp)
@@ -248,8 +251,8 @@ class Caller(object):
         # with the "stack" pointing at kernel CODE. Confirming costs one round
         # trip and turns a silent bad start into a sentence naming it, which
         # is what the rest of this harness does for every other action.
-        want = {"ss": self.ss, "sp": sp, "cs": COLD_SEG,
-                "ip": os88sym.linear(name) - CB}
+        want = {"ss": self.ss, "sp": sp, "cs": self.cs,
+                "ip": m.sym(name) - self.cb}
         want.update((k, v & 0xFFFF) for k, v in regs.items())
         got = m.regs()
         wrong = [(k, want[k], got[k]) for k in want if got.get(k) != want[k]]
@@ -318,8 +321,8 @@ def _where(m, limit):
     _by_seg = {
         os88sym.KERNEL_SEG: sorted((v, k) for k, v in _syms.items()
                                    if _sec.get(k) in (".text", ".bss")),
-        COLD_SEG: sorted((v, k) for k, v in _syms.items()
-                         if _sec.get(k) == ".cold"),
+        int.from_bytes(m.read(m.sym("api_coldseg"), 2), "little"):
+            sorted((v, k) for k, v in _syms.items() if _sec.get(k) == ".cold"),
     }
 
     def near(cs, ip):
@@ -450,7 +453,10 @@ def run(img, apps, machine, want_bug, verbose):
     bad = []
     src_pat = pattern(FSIZE)
     with os88marty.launch(img, apps=apps, machine=machine,
-                          label="dskwstage") as m:
+                          label="dskwstage", boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the state gate; the drive is waited for
+                                    # below, on the drive
         # **TAKE THE MACHINE OVER AT A DEFINED POINT, not wherever `pause`
         # lands.** Everything below runs kernel routines on a synthetic
         # context, so the state they inherit is whatever the guest was in the

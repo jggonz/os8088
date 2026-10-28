@@ -158,7 +158,7 @@ def wait_for(m, cond, guest, poll=0.25):
 def run(tag, machine, why, image, apps):
     print("== %s: %s (%s) ==" % (tag, machine, why))
     names = DD.bss()
-    with os88ui.boot(image, apps=apps, machine=machine) as ui:
+    with os88ui.boot(image, apps=apps, machine=machine, quick=True) as ui:
         m = ui.m
 
         # --- A: the window opens -------------------------------------------

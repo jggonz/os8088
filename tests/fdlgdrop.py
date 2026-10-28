@@ -74,7 +74,7 @@ need("build/muptest.img")           # `all` builds nothing under tests/
 need("build/small360.img")          # ...and `all` does not build kern_small
 
 with os88ui.boot("build/small360.img", apps="build/muptest.img",
-                 machine=MACHINE) as ui:
+                 machine=MACHINE, quick=True) as ui:
     m = ui.m
     row = ui._S("mod_r_fdlg")
     print("== %s : FDLG.DRV is given back on every route (SPEC.md 38.0.1) =="
@@ -90,7 +90,7 @@ with os88ui.boot("build/small360.img", apps="build/muptest.img",
 
     # --- put muptest up; its button Two is what opens a chooser -------------
     ui.path("B:/MUPTEST.O88")
-    ui.settle()
+    ui.still()
     mup = ui.window("MupTest")
     cx, cy = mup.content[:2]
     TWO = (cx + 100 + 31, cy + 40 + 9)     # muptest's mu_layout: Two is
@@ -122,7 +122,7 @@ with os88ui.boot("build/small360.img", apps="build/muptest.img",
         ui._wait(lambda: bytes(m.read(ui._S("fm_ebuf"), 13))
                  .split(b"\0")[0].decode("ascii", "replace") == name,
                  "%s in the Save box" % name, os88ui.T_NAV)
-        ui.settle()                     # the box's line is drawn
+        ui.still()                     # the box's line is drawn
         ui.chooser_button(ui.CH_OPEN, w)
 
     dismiss("Cancel button",

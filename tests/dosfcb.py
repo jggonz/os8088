@@ -57,7 +57,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=GATE) as ui:
+    with os88ui.boot(SYS, apps=GATE, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/PARSEFCB.COM"):
             fail("double-clicking PARSEFCB.COM opened no window")
@@ -67,7 +67,7 @@ def main():
             rows[:] = m.screen() or []
             return any("PARSEFCB READY" in r for r in rows)
         try:
-            os88marty.until(m, ready, "PARSEFCB READY", poll=0.3, limit=180)
+            os88marty.until(m, ready, "PARSEFCB READY", poll=0.05, limit=180)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:14],))

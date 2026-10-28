@@ -4,9 +4,9 @@
     python3 tests/dosdev.py [--machine NAME]
 
 SPEC.md 96.11.7, and the row exists because of what it cost: Microsoft
-Works - the first program anyone ran on this box from outside the project -
+Works - the first program anyone ran on this DOS from outside the project -
 could not open its own WORKS.INI, and said `Too many files open` about it.
-The box was answering `file not found`, to `CON`.
+DOS was answering `file not found`, to `CON`.
 
 Works opens CON at ONE CALL SITE over and over until DOS refuses, counts the
 handles it got, and closes them again. Traced against IBM DOS 3.30 on the
@@ -19,7 +19,7 @@ DIFFERENT handles, because that is the property the counting loop rests on -
 and an implementation that answers with one of the five standard handles
 passes `does CON open` and hangs the loop for ever.
 
-CONDEV.COM runs under this box AND under a real DOS unchanged
+CONDEV.COM runs under this DOS AND under a real DOS unchanged
 (docs/DOS-DEBUGGING.md), so the answers it checks are the reference's.
 
 WHAT IT WOULD CATCH: the device test taken out of AH=3Dh (A); a device handle
@@ -58,7 +58,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine, quick=True) as ui:
         m = ui.m
         # An association open of a .COM RUNS it (SPEC.md 54), which is the
         # shortest route to a DOS program and the one a user takes.
@@ -71,7 +71,7 @@ def main():
             rows[:] = [r.rstrip() for r in (m.screen() or []) if r.strip()]
             return any("CONDEV PASS" in r or "CONDEV FAIL" in r for r in rows)
         try:                        # GUEST time: `limit` is idle-box seconds
-            M.until(m, _seen, "CONDEV.COM to report", poll=0.5,
+            M.until(m, _seen, "CONDEV.COM to report", poll=0.05,
                             limit=240.0)
         except M.MartyError:
             fail("CONDEV.COM never reported; the last screen was %r"

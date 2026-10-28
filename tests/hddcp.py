@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The hard-disk driver's Control Panel page, and the two windows behind it.
+"""The hard-disk driver's Control Panel page, and the two windows behind it
+(the Format tool's, and the INSTALL.O88 wizard its Install button starts).
 
 SPEC.md 51.3: no driver row is wanted by default, so the Hard Drive row has
 to be TICKED once before its page exists at all (SPEC.md 31.9 - the item list
@@ -53,7 +54,7 @@ CP_DBY1, CP_DROWH = 20, 26         # ...the Drivers page's hit bands
 CP_IDRV = 2                        # SPEC.md 31.3
 HDP_BY, HDP_BH = 82, 16            # page.inc: the Disks page's button row
 HDP_B0X, HDP_BW0 = 2, 64           # ...Format, which OPENS the partition tool
-HDP_B2X, HDP_BW2 = 74, 64          # ...Install, now the MIDDLE of the three
+HDP_B2X, HDP_BW2 = 74, 64          # ...Install, the MIDDLE of the three
                                    #    (SPEC.md 52.4)
 DRVR_SZ, DRVR_SEG = 16, 2          # driver.inc: 0 = not loaded
 HDD_ROW = 1                        # drv_tab row 1 is the hard disk
@@ -149,9 +150,11 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     grab(cp, "disks")
 
     # --- and the two WINDOWS behind it -------------------------------------
-    # Format and Install both just OPEN a window (hd_tool_open loads the tool
-    # as a second image off the system volume); neither writes to the disk
-    # until a button inside is clicked, and none is.
+    # Format and Install both just OPEN a window - Format the tool's own,
+    # Install the INSTALL.O88 wizard's (SPEC.md 52.10.4.4), a POSTED launch
+    # off the boot volume, so it is waited for rather than settled on.
+    # Neither writes to the disk until a button inside is clicked, and none
+    # is.
     def pane_click(px, py):
         mo.click(x0 + CP_RX + px, y0 + py)
         quiet(m, 20.0)                          # the tool is a floppy read
@@ -163,6 +166,12 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
                         ("installer", HDP_B2X, HDP_BW2)):
         known = {w[0] for w in wins(m)}
         pane_click(bx + bw // 2, HDP_BY + HDP_BH // 2)
+        try:
+            M.until(m, lambda _: newwin(known) is not None,
+                    f"the {tag} window", limit=60.0)
+            quiet(m)
+        except M.MartyError:
+            pass
         w = newwin(known)
         if w is None:
             bad.append(f"{tag} did not open")

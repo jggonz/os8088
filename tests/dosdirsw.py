@@ -8,7 +8,7 @@ command line args. Like /p"*.
 **WHAT THE SWITCHES ARE WAS MEASURED**, off the IBM DOS 3.30 image and out of
 `COMMAND.COM`'s own string table, and one of the answers is the reason this row
 exists at all: **`/B` is NOT a DOS 3.3 switch** - the real thing answers
-`Invalid parameter`, exactly as it does for `/Z` - so a box reporting 3.31 that
+`Invalid parameter`, exactly as it does for `/Z` - so a DOS reporting 3.31 that
 accepted it would be wrong in the direction nobody checks.
 
 **AND `/P` MAY NOT WAIT FOR A KEY.**  `dos_con_key` is `W_ONKEY`'s handler and
@@ -52,7 +52,7 @@ SYS = "build/os8088-360.img"
 # DOS does not list and neither do we.  build/dirsw360.img is 24
 # plain files: over a 16-line CGA page, under a 24-line one.
 APPS = "build/dirsw360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 SUBPROG = "DOSHELLO"       # ...and a copy of it in BIN\\ (SPEC.md 96.33.13)
 MACHINE = "os8088_5150_cga_gla"
 STRIKE = "Strike a key when ready"
@@ -63,15 +63,15 @@ def fail(msg):
     sys.exit(1)
 
 
-class Box(object):
+class Dos(object):
     def __init__(self, m):
         self.m = m
         self.dm = dosmap.package()
 
     @property
     def base(self):
-        # **RESOLVED PER ACCESS, NOT CACHED** (SPEC.md 66.6.1.2): the DOS
-        # box's region MOVES now - it is a re-homed carve and was pinned only
+        # **RESOLVED PER ACCESS, NOT CACHED** (SPEC.md 66.6.1.2): DOS's
+        # region MOVES now - it is a re-homed carve and was pinned only
         # until that section - so a base banked in __init__ names the bytes
         # the package used to occupy, and decodes as plausible rubbish.
         return dosmap.instance(self.m) << 4
@@ -102,7 +102,13 @@ class Box(object):
 
     def type(self, s):
         self.m.type_text(s)
-        os88marty.settle(self.m)
+        # WHAT IS READ NEXT IS con_scr, guest memory - so the wait is on those
+        # bytes (and on the drive: a command mid-read can sit still on the
+        # screen), not on the glass
+        os88marty.quiesce(self.m, lambda: (self.rows(), self.w("con_vtop"),
+                                           self.w("con_vrows"),
+                                           self.m.disk().get("reads")),
+                          guest=0.5, stable=3, what="DOS's screen")
 
     def run(self, cmd):
         self.type(cmd + "\n")
@@ -127,10 +133,10 @@ def main():
 
     with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
         m = ui.m
-        if not ui.path(BOX):
-            fail("could not launch %s" % BOX)
+        if not ui.path(DOSPKG):
+            fail("could not launch %s" % DOSPKG)
         os88marty.settle(m)
-        bx = Box(m)
+        bx = Dos(m)
         # LEARN THE BAND'S RECTANGLE NOW, while it holds a banner and a prompt
         # and nothing else - see dosconcga.band_lit for why a full band cannot
         # be measured from scratch.
@@ -217,7 +223,7 @@ def main():
             fail("[dsh_more] is set but %r is not on the glass: %r"
                  % (STRIKE, paged[-3:]))
         if paged[-1].rstrip().endswith(">"):
-            fail("a prompt was printed UNDER the pause (%r) - the box is "
+            fail("a prompt was printed UNDER the pause (%r) - DOS is "
                  "asking two questions at once" % paged[-1])
         # **AND THE PAGE IS ON THE GLASS** (96.33.9.1 item 1).  The band's
         # BUFFER is right whether or not anything painted, so this reads
@@ -262,7 +268,7 @@ def main():
                  % done[-2:])
         print("dosdirsw: a key resumed it and the total is still %d" % total)
 
-        # --- 5: a bare name runs from where the box STANDS (96.33.13) --------
+        # --- 5: a bare name runs from where DOS STANDS (96.33.13) --------
         # `CD` moves [dos_curdir] and dos_path_take's no-separator arm left
         # [dos_dir] - the LAUNCH folder - so from the second directory onward
         # every bare name resolved against the first one.  Reported with the

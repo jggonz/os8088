@@ -79,12 +79,16 @@ def slots_at_rest(m, eq, where):
     the next time a window is put down, and it would not fault: the claim is
     still readable."""
     off = os88sym.syms()["mod_gone"]
-    want = off.to_bytes(2, "little") + eq["COLD_SEG"].to_bytes(2, "little")
+    # (where `.cold` RUNS - [api_coldseg], not COLD_SEG: on a machine with no VGA and no EGA it slid down at boot, docs/plans/MOVABLE-COLD-PLAN.md 2)
+    want = off.to_bytes(2, "little") + m.read(S("api_coldseg"), 2)
     base = S("EXFP")
     got = m.read(base, eq["EXT_NENT"] * 4)
     if got != want * eq["EXT_NENT"]:
         FAILS.append("%s: an EXTD.DRV slot still points into module memory: "
                      "%s" % (where, got.hex()))
+
+
+EQ = {}
 
 
 def fixture(folder, name, extd, extend_saved):
@@ -98,11 +102,20 @@ def fixture(folder, name, extd, extend_saved):
         # the boot takes drv_boot_x's .vnosw arm and applies the ARRANGEMENT on
         # whichever card the probe chose - this test is about the two bytes,
         # not about a switch.
+        #
+        # ...and on a kernel with VID_EXT (kern_big's default since SPEC.md
+        # 120.3) the record is ver 3, FOUR bytes: the packed display's mode
+        # class rides after the arrangement (120.2.3, CFG_VE; 0 = Auto). A
+        # ver-2 record stops matching there and the defaults stand - which
+        # booted this arm Single and read as EXTD.DRV failing to load.
+        # CFG_VEL is 1 * DRV_VX, so the kernel's own equate says which.
+        vel = EQ.get("CFG_VEL", 0)
         d = folder / name
         d.mkdir()
         cfg = d / "system.cfg"          # the basename IS the 8.3 name
         cfg.write_bytes(b"O88CFG\0\0" + (3).to_bytes(2, "little")
-                        + b"VM" + bytes([2, 3, 0xFF, 1, 0]) + b"\0\0")
+                        + b"VM" + bytes([2 + vel, 3 + vel, 0xFF, 1, 0])
+                        + bytes(vel) + b"\0\0")
         files.append(str(cfg))
     image = folder / (name + ".img")
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", str(image),
@@ -122,7 +135,9 @@ def click_mode(m, mo, which):
 
 
 def boot(image):
-    m = os88marty.launch(image, machine=MACHINE)
+    m = os88marty.launch(image, machine=MACHINE, boot=False)
+    m.run()                             # the boot gate on STATE: the first
+    os88marty.kernel_up(m)              # act is a panel verb that confirms
     os88marty.no_saver(m)
     return m
 
@@ -205,6 +220,7 @@ def arm_boot(image, eq, fails, arm, want_ext):
 
 def main():
     eq = os88sym.equates()
+    EQ.update(eq)
     if "MOD_EXT" not in eq:
         sys.exit("extdmod: this kernel has no MOD_EXT - kern_small? "
                  "EXTD.DRV is kern_big's alone (SPEC.md 39.19.6)")

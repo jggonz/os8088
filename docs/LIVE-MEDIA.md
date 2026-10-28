@@ -21,9 +21,12 @@ keeps them like a real hard disk (§80.3).
 
 ## Getting the images
 
-**From a release:** both files are in the release zip on the
+**From a release:** both files are in `os8088-<version>-live.zip` on the
 [releases page](https://github.com/jggonz/os8088/releases), when that
-release built them. `SHA256SUMS` in the zip covers them.
+release built them, named `LIVEUSB.IMG` and `OS8088.ISO`, with the Mac
+burner beside them as `burn-usb-macos.py`. `SHA256SUMS` in that zip covers
+them. The commands below use the names `make live` gives them; with a
+release's files, put those names in their place.
 
 **From source:** the live media are an on-demand build — they carry the
 applications written in C. Make automatically fetches and builds the pinned
@@ -137,7 +140,7 @@ Three things both do that a raw copy command does not:
 Only the write itself runs privileged (`sudo` asks once); listing and
 choosing do not. `python3 tools/os88burn.py --scan` lists the attached
 drives and burners without touching anything, and `--image PATH` /
-`--iso PATH` point it at images from an unpacked release zip instead of
+`--iso PATH` point it at images from an unpacked live zip instead of
 `build/` (it asks for a path anyway when `build/` has none). It is macOS
 only — `diskutil`, `drutil`, `hdiutil` — and refuses elsewhere.
 
@@ -240,8 +243,8 @@ survive reboots; on the CD, saving refuses — the disc is read-only).
 
 ## If it does not boot
 
-1. **Check the image first.** `shasum -a 256 os8088-usb.img` against the
-   `SHA256SUMS` in the release zip rules out a bad download in one line.
+1. **Check the image first.** `shasum -a 256 -c SHA256SUMS` in the
+   unpacked live zip rules out a bad download in one line.
 2. **A black screen or "No boot device"** usually means the machine booted
    in UEFI mode. Enable Legacy/CSM boot, or use the boot menu entry *not*
    labelled "UEFI:".

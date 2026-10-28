@@ -30,6 +30,12 @@
 ;               ready (a VBlank began), the budget ran out, or the game hit
 ;               an opcode the SM83 does not have or STOP.
 ;
+; A host that defines RDG_CSEL offers one near proc more, rdg_csel: AX = a
+; segment of code, out AX = the selector a far jump to it loads (the segment
+; itself on a real-mode kernel, its code alias on kern_mega - REALDMG-SPEC
+; 16.2.4), every other register kept. rdg_init asks it for the core's; a
+; host without it jumps through the core's segment as it always did.
+;
 ; Everything here runs on the HOST's stack. The core enters it by a far jump
 ; with SS:SP the Game Boy's stack; the first thing each entry does is save
 ; that SP and switch to the host stack rdg_run left in S_HSS:S_HSP, so that
@@ -54,6 +60,12 @@ rdg_bmiss        dw 0
 ; rdg_init - AX = view, BX = core, CX = ROM image, DX = 16KB banks in it
 ; =============================================================================
 rdg_init:
+%ifdef RDG_LOSSY
+    call rdg_lpatch                      ; (the lossy picture's hooks as
+    jmp short .lp                       ;   rdg_lossy says, REALDMG-SPEC 13.4:
+    times 11 db 0                       ;   16 bytes, so every routine after
+.lp:                                    ;   it is on the 16 it had)
+%endif
     push ax
     push bx
     push cx
@@ -91,6 +103,9 @@ rdg_init:
     mov ax,es
     mov ds,ax                           ; DS = view from here on
     mov [S_VIEW],ax
+%ifndef RDG_NOSEAM                      ; (tests/gbcpu.py's control)
+    call rdg_seaminit
+%endif
     ; the bank table: bank 0 is the view's own 0000-3FFF (MBC5 can put it in
     ; 4000-7FFF), the rest the image's - or the host's, which fills them
     sub ax,400h
@@ -167,6 +182,10 @@ rdg_init:
     mov [S_TRACEVEC+2],ax
 %endif
     mov ax,[cs:rdg_coreseg]
+    mov [S_COREDS],ax                   ; (what writes the core: its data)
+%ifdef RDG_CSEL
+    call rdg_csel                       ; (what jumps to it: its code
+%endif                                  ;   selector, REALDMG-SPEC 16.2.4)
     mov [S_RETFAR+2],ax
     mov [S_DISP+2],ax
     mov word [S_DISP],0DD00h            ; RDG_DISPATCH, slot DD's main half
@@ -324,6 +343,9 @@ rdg_exit:
 ; rdg_resume: into the core with the state block's registers. DS = view.
 rdg_resume:
     mov ax,[S_AF]
+%ifndef RDG_NOSEAM
+    mov byte [S_AF],0D3h                ; 4000 the trap while the core runs
+%endif                                  ;   (seam_trap, REALDMG-SPEC 3.1)
     mov bx,[S_HL]
     mov cx,[S_BC]
     mov di,[S_DE]
@@ -360,6 +382,125 @@ rdg_resume:
     mov ds,[cs:rdg_viewseg]
     cld
 %endmacro
+
+; rdg_seaminit - an instruction that runs from bank 0 across 3FFF into the
+; bank (REALDMG-SPEC 3.1): the view's copy of its opcode made the trap
+; seam_trap takes, the opcode kept. One at 3FFE of 3 bytes, or at 3FFF of 2
+; or 3 that is not a JR - and only where the bytes before it cannot be an
+; instruction reaching into it. DS = the view. Every register kept
+rdg_seaminit:
+    push ax
+    push bx
+    push dx
+    mov bx,3FFEh
+    mov dx,4001h
+    mov al,[bx]
+    call rdg_ilen
+    cmp al,3
+    jne .f
+    mov al,[3FFCh]
+    call rdg_ilen
+    cmp al,3
+    je .f
+    mov al,[3FFDh]
+    call rdg_ilen
+    cmp al,1
+    je .p
+.f:
+    inc bx                              ; 3FFF
+    mov byte [S_SEAMJR],0
+    mov al,[bx]
+    cmp al,18h                          ; a JR: its displacement the bank's
+    je .jr                              ;   4000, and seam_jr runs it whole
+    and al,0E7h
+    cmp al,20h
+    jne .njr
+.jr:
+    mov byte [S_SEAMJR],1
+.njr:
+    mov al,[bx]
+    call rdg_ilen
+    cmp al,2
+    jb .r
+    xor ah,ah
+    mov dx,3FFFh
+    add dx,ax                           ; 3FFF + its length
+    mov al,[3FFEh]
+    call rdg_ilen
+    cmp al,1
+    jne .r
+    mov al,[3FFDh]
+    call rdg_ilen
+    cmp al,3
+    je .r
+.p:
+    mov al,[bx]
+    mov [S_SEAMOP],al
+    mov byte [bx],0D3h
+    inc bx
+    mov [S_SEAMPC],bx
+    mov [S_SEAMEND],dx
+.r:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; rdg_ilen - AL = an SM83 opcode: AL = its length in bytes. Keeps the rest
+rdg_ilen:
+    push bx
+    mov bl,al
+    mov bh,al
+    and bh,0CFh                         ; LD rr,nn
+    cmp bh,01h
+    je .l3
+    mov bh,al
+    and bh,0E7h                         ; JP cc and CALL cc
+    cmp bh,0C2h
+    je .l3
+    cmp bh,0C4h
+    je .l3
+    cmp bh,20h                          ; JR cc
+    je .l2
+    mov bh,al
+    and bh,0C7h
+    cmp bh,06h                          ; LD r,n
+    je .l2
+    cmp bh,0C6h                         ; the ALU on n
+    je .l2
+    push di
+    push cx
+    push es
+    push cs
+    pop es
+    mov di,rdg_il3
+    mov cx,rdg_il2 - rdg_il3
+    repne scasb
+    je .x3
+    mov cx,rdg_ilend - rdg_il2
+    repne scasb
+    pop es
+    pop cx
+    pop di
+    je .l2
+    mov al,1
+    pop bx
+    ret
+.x3:
+    pop es
+    pop cx
+    pop di
+.l3:
+    mov al,3
+    pop bx
+    ret
+.l2:
+    mov al,2
+    pop bx
+    ret
+rdg_il3:        db 08h, 0C3h, 0CDh, 0EAh, 0FAh
+rdg_il2:        db 10h, 18h, 0CBh, 0E0h, 0E8h, 0F0h, 0F8h
+rdg_ilend:
 
 ; rdg_ret: back into the core at S_RETFAR, the game's DS and SP restored.
 ; DH (an I/O read's answer) survives; DL leaves as 0.
@@ -526,6 +667,9 @@ rdg_trace:
     cli                                 ; interrupts stay off in the core
     mov ss,[cs:rdg_viewseg]
     mov sp,[ss:S_SP]
+%ifndef RDG_NOSEAM
+    mov byte [ss:S_AF],0D3h             ; (the trap back, as rdg_resume)
+%endif
     mov ds,[ss:S_SAVDS]
     xor dx,dx
     jmp far [ss:S_DISP]                 ; the RAW dispatch, never traced
@@ -1656,6 +1800,7 @@ rdg_rlog:
     mov si,ax
     mov [RDG_RLOG+si],dl                 ; line
     mov [RDG_RLOG+si+1],ch               ; register
+..@lk_rlog:
     mov [RDG_RLOG+si+2],cl               ; value
 .done:
     pop si

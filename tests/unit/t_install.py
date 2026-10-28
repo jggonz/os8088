@@ -114,7 +114,7 @@ for a, b in (("HDG_FAIL", "HII_IDLE"), ("HDG_APPS", "HII_SYSDONE"),
              ("HDS_SMALL", "HIS_SMALL"), ("HDS_ALIEN", "HIS_ALIEN"),
              ("HDS_NONE", "HIS_NONE"), ("HDS_LIVE", "HIS_LIVE")):
     eq(api.get(a), inst.get(b), "%s (SDK) == %s (inst.inc)" % (a, b),
-       why="SPEC.md 117.4: the tool answers in the Install window's own "
+       why="SPEC.md 117.4: the tool answers in its engine's own "
            "numbering and the package reads it with the SDK's")
 eq(api["HDIS_TEXT"] + api["HDIS_TEXTSZ"], api["HDIS_SIZE"],
    "HDIS_TEXT ends the slot record",

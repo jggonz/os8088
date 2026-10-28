@@ -1,0 +1,94 @@
+! =============================================================================
+! os8088 - tests/frotz/zrestart.inf
+!
+! The story tests/zrestart.py plays: every opcode at which Frotz's worker can
+! PARK (SPEC.md 66.5.9.3), each behind one command, so the gate can stop the
+! interpreter inside exactly that wait, move its region and watch it carry on.
+!
+!   loop      a long computation      - the burst loop's own OSAPI_TASK_ALIVE
+!   <words>   echoed and parsed       - @read (the default arm)
+!   char      one key                 - @read_char
+!   count     bump a global           - something for save/restore to keep
+!   save      @save                   - the request handshake
+!   restore   @restore                - ...and its other half
+!   restart   @restart                - ...and its third
+!   verify    @verify                 - the chunked checksum walk
+!   more      forty lines             - [MORE], the one wait that is NOT
+!                                       resumable and must pin instead
+!
+! Built by `make build/zt/ZRS.Z5` with `inform -v5` (the Makefile's
+! build/zrestart360.img rule): no library, no parser - the parse buffer is read
+! by hand, so the story's own behaviour is the transcript and nothing else.
+! =============================================================================
+
+Constant Story "ZRESTART";
+
+Array tbuf -> 66;
+Array pbuf -> 34;
+Array known table 'open' 'door';   ! in the dictionary, so 'parsed:' can
+                                    ! name them
+Global n;
+
+[ Main w r i t k;
+    print "ZRESTART ready^";
+    for (::) {
+        print ">";
+        tbuf->0 = 60;
+        tbuf->1 = 0;            ! v5: byte 1 is PRELOADED input, and dfrotz
+                                ! refuses a stale count as "inconsistent"
+        pbuf->0 = 8;
+        @aread tbuf pbuf -> t;
+        w = pbuf-->1;
+        if (w == 'loop') {
+            r = 0;
+            for (i = 1 : i <= 3000 : i++) r = (r + i) % 9973;
+            print "loop ", r, "^";
+            continue;
+        }
+        if (w == 'char') {
+            print "key?^";
+            @read_char 1 -> k;
+            print "char ", k, "^";
+            continue;
+        }
+        if (w == 'count') {
+            n++;
+            print "count ", n, "^";
+            continue;
+        }
+        if (w == 'save') {
+            @save -> r;
+            print "save ", r, " n ", n, "^";
+            continue;
+        }
+        if (w == 'restore') {
+            @restore -> r;
+            print "restore ", r, "^";
+            continue;
+        }
+        if (w == 'restart') {
+            @restart;
+        }
+        if (w == 'verify') {
+            @verify ?Vok;
+            print "verify bad^";
+            continue;
+          .Vok;
+            print "verify ok^";
+            continue;
+        }
+        if (w == 'more') {
+            for (i = 1 : i <= 40 : i++) print "line ", i, "^";
+            continue;
+        }
+        print "typed: ";
+        for (i = 0 : i < tbuf->1 : i++) print (char) tbuf->(2 + i);
+        new_line;
+        print "parsed:";
+        for (i = 0 : i < pbuf->1 : i++) {
+            t = pbuf-->(1 + 2 * i);
+            if (t) print " ", (address) t; else print " ?";
+        }
+        new_line;
+    }
+];

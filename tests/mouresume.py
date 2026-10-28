@@ -3,7 +3,7 @@
 
     make kdostest && make marty && python3 tests/mouresume.py
 
-`kd_mou_stop` gives the serial port back QUIET on the way into the box - IER = 0
+`kd_mou_stop` gives the serial port back QUIET going into kern_dos - IER = 0
 and the line masked - and restored nothing, on the ground that *"the live
 restore['s] os8088 runs `mouse_init` again on the way up"*.  It does not.
 `mouse_init` is in `.ovl`, which `mem_unblob` handed back at the end of
@@ -21,7 +21,7 @@ it is the keyboard's - the reporter could type in the DOS window throughout.
 WHY NOTHING CAUGHT IT.  `tests/kdreturn.py` drives this exact resume and
 passes; it asserts the program ran, the exit code came home and the mailbox was
 cleared, and **nothing in the suite looked at the pointer after a return**.
-`tests/kdmouse.py` is about the mouse INSIDE the box.  This row is that gap.
+`tests/kdmouse.py` is about the mouse under kern_dos.  This row is that gap.
 
 FOUR READINGS, and the third is what stops the other three passing vacuously:
 
@@ -30,7 +30,7 @@ FOUR READINGS, and the third is what stops the other three passing vacuously:
      about the return.
   2. **The program gets the whole machine.**  More KB above the PSP under
      `kern_dos` than in the window - the handoff actually happened, rather than
-     the box refusing and the machine never leaving.
+     the windowed DOS refusing and the machine never leaving.
   3. **THE RETURN IS THE LIVE ONE.**  Measured in guest CYCLES, because
      `kd_leave`'s fallback is a POST and a whole boot - and a boot runs
      `mouse_init`, which arms the UART and would make readings 4 GREEN ON A
@@ -99,10 +99,15 @@ def main():
         machine = sys.argv[sys.argv.index("--machine") + 1]
     KR.fixture()
     m = M.launch(None, apps=KR.FLOPPY, machine=machine,
-                 extra=["--mount", "hd:0:" + KR.VHD])
+                 extra=["--mount", "hd:0:" + KR.VHD], boot=False)
     try:
+        # a gate on STATE (SOAK-SPEED technique 4): the first act is a guest
+        # read and a closed-loop move, so no picture settle is owed
+        m.run()
         ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        ui.up(limit=240)
+        M.no_saver(m)
+        M.ui_done(m)
         mo = os88mouse.Mouse(marty=m)
 
         # --- 1. the pointer works BEFORE the handoff ------------------------
@@ -126,7 +131,7 @@ def main():
             fail("double-clicking DOSHELLO.COM opened no window")
         win_kb = KR.topmem(KR.wait_text(m, "READY", 150, "the windowed run"))
         m.type_text("x")
-        M.settle(m)
+        M.ui_done(m)            # what follows is bss writes and a click
         dm = dosmap.package()
         pseg = dosmap.instance(m)
         # **[dos_keepc] IS THE MEMORY ARM'S RADIO** (SPEC.md 96.36), so this

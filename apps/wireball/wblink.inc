@@ -33,22 +33,32 @@ wb_openports:
     mov al, 0x40
     mov es, ax
     mov si, wb_ports
-    mov dx, [es:0]
-    cmp dx, 0x3f8
-    je .first
-    xor dx, dx
-.first:
+    mov dx, 0x3f8
+    call wb_listed
     call wb_openone
     mov si, wb_ports+WP_SIZE
-    mov dx, [es:2]
-    cmp dx, 0x2f8
-    je .second
-    xor dx, dx
-.second:
+    mov dx, 0x2f8
+    call wb_listed
     call wb_openone
     mov al, [wv_fast]
     mov [wb_async], al
     pop es
+    ret
+; DX=standard base, ES=40h: DX kept if ANY of the four BIOS COM slots lists
+; it, else 0. A Compaq lists the ports in its SETUP's order (109.1).
+wb_listed:
+    push bx
+    xor bx, bx
+.slot:
+    cmp dx, [es:bx]
+    je .out
+    inc bx
+    inc bx
+    cmp bx, 8
+    jb .slot
+    xor dx, dx
+.out:
+    pop bx
     ret
 wb_openone:
     or dx, dx

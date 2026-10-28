@@ -90,6 +90,10 @@ def boot(rom, machine=M640, panel=True, sites=None):
 def main():
     eq = os88sym.equates(DEFS)
     cold_ram, heap = eq["COLD_RAM"], eq["HEAP_SEG"]
+    # ...and the floor a ROM leaves, COLD_RAM ROUNDED UP to 512 bytes: the
+    # top of the ladder is packed to the paragraph (SPEC.md 2.10.9), so the
+    # cold rung's base is no longer a rung boundary and mem_floor_ax rounds
+    floor = (cold_ram + 31) // 32 * 32
     fails = []
 
     def want(cond, what):
@@ -120,9 +124,9 @@ def main():
         a = boot(good, sites=sites)
         want(a["cs"] == os88rom.ROM_BASE // 16,
              "[api_coldseg] = %04X, `.cold` runs in ROM" % a["cs"])
-        want(a["base"] == cold_ram,
+        want(a["base"] == floor,
              "[mem_base] = %04X: the floor fell onto the cold rung (%04X)"
-             % (a["base"], cold_ram))
+             % (a["base"], floor))
         want(a["mfp"][0] == os88rom.ROM_BASE // 16,
              "rom_mfp = %04X:%04X, the ROM's module door" % a["mfp"])
         want(a.get("panel"), "the Control Panel opened")
@@ -146,7 +150,7 @@ def main():
 
         print("D: the ROM on the 128KB floor machine")
         d = boot(good, machine=M128, panel=False)
-        want(d["cs"] == os88rom.ROM_BASE // 16 and d["base"] == cold_ram,
+        want(d["cs"] == os88rom.ROM_BASE // 16 and d["base"] == floor,
              "a desktop with `.cold` in ROM and the floor at %04X: %.1f KB of "
              "heap against %.1f without" % (d["base"],
                                            (128 * 1024 - d["base"] * 16) / 1024,

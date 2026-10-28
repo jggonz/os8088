@@ -26,7 +26,7 @@
 ; size pass 1 - kerndos/kdlayout.inc carries the measurement.)
 ;
 ; **SERIAL ONLY.** A PS/2 mouse ([mou_port] = MOU_P2ROW, SPEC.md 9.9) is a
-; different transport on a different line through the 8042, and the box sends
+; different transport on a different line through the 8042, and DOS.O88 sends
 ; a zero base for it - which lands on exactly the still pointer this file
 ; replaces, so a PS/2 machine is no worse than it was and says so in one
 ; place. MartyPC is an 8088 and the field 5150 is serial, so the arm that
@@ -291,7 +291,7 @@ kd_mou_isr:
     ; --- and into INT 33h's virtual screen, clamped --------------------------
     ; 1:1 with the mickeys, which is what the kernel's own pointer does with
     ; them on the desktop - so a hand movement means the same distance in the
-    ; box's window and out here, and a program that sets its own sensitivity
+    ; DOS.O88's window and out here, and a program that sets its own sensitivity
     ; (function 15) is doing arithmetic on the same input either way.
     add ax, [kdm_x]
     js .xlo                     ; a signed add is the clamp's whole test: the
@@ -333,7 +333,7 @@ kd_mou_isr:
 ; in:  nothing; DS = KD_SEG
 ; out: BX = the button mask, CX = x, DX = y - all in INT 33h units
 ;
-; The box's `dos_hk_mouse` scales the kernel's screen pixels into 640x200 here
+; DOS.O88's `dos_hk_mouse` scales the kernel's screen pixels into 640x200 here
 ; (SPEC.md 96.10); this accumulates in those units already, because there is
 ; no screen to scale from - `kern_dos` never sets a mode and the program owns
 ; every pixel.

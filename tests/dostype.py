@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TYPE` AT THE DOS PROMPT, AND THE FLAG THAT MUTED THE BOX (SPEC.md 96.30.7).
+"""`TYPE` AT THE DOS PROMPT, AND THE FLAG THAT MUTED DOS (SPEC.md 96.30.7).
 
     make && make build/dostype360.img && python3 tests/dostype.py
 
@@ -26,13 +26,13 @@ each one fail for its own reason and not for its neighbour's.
    way `AH=3Dh` opens one `FHF_WHOLE`. Asserted on the README's own last line
    rather than on a byte count, because the wrapper is binary and would put
    nothing legible on the console at all.
-3. ONE `>` MUTED THE BOX FOR GOOD. `[dsh_quiet]` is set by the first
+3. ONE `>` MUTED DOS FOR GOOD. `[dsh_quiet]` is set by the first
    redirection and was never cleared - it is package bss, so every `dsh_say`
    in the instance went silent for the life of a window somebody leaves open.
    What that looks like is not an error, which is the point: `VER` prints
    nothing and `DIR` keeps printing NAMES while losing its `<DIR>` markers,
    its sizes and its footer. **Asserted in that order on one prompt**, and it
-   is the sharpest row here: a box that has stopped speaking passes every
+   is the sharpest row here: a DOS that has stopped speaking passes every
    other assertion in this file by printing nothing.
 3b. AND IT WAS CASE-SENSITIVE, which is a FIFTH defect this row let through
    on its first build: `dos_fh_stat` compares byte-exact against an upper-case
@@ -67,11 +67,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88build                                               # noqa: E402
 import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
-from doscon import Box                                         # noqa: E402
+from doscon import Dos                                         # noqa: E402
 
 SYS = "build/os8088-360.img"
 APPS = "build/dostype360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 
 fails = []
 
@@ -137,9 +137,9 @@ def main():
 
     with os88ui.boot(os88build.at(SYS), apps=os88build.at(APPS)) as ui:
         m = ui.m
-        ui.path(BOX)
+        ui.path(DOSPKG)
         os88marty.settle(m)
-        bx = Box(m)
+        bx = Dos(m)
 
         # --- 0: stand on B:, where the fixture is ---------------------------
         rows = run(bx, "B:")
@@ -329,8 +329,8 @@ def main():
             no("COPY wrote COPIED.TXT and TYPE reads %r out of it, where "
                "SHORT.TXT is `a short one`" % out[:2])
 
-        # --- 7: A REFUSED REDIRECTION SPEAKS, AND DOES NOT MUTE THE BOX -----
-        # **THE ORDER IS THE ASSERTION.** A box that has stopped speaking
+        # --- 7: A REFUSED REDIRECTION SPEAKS, AND DOES NOT MUTE DOS -----
+        # **THE ORDER IS THE ASSERTION.** A DOS that has stopped speaking
         # passes every check above by printing nothing, so the redirection
         # goes LAST and VER and DIR are asked again after it.
         rows = run(bx, "TYPE NOTES.TXT > FILE.TXT")
@@ -359,7 +359,7 @@ def main():
         if not any("File(s)" in r for r in out):
             no("DIR after a redirection printed %r and lost its footer. It "
                "writes NAMES through dos_tty directly and its <DIR> markers, "
-               "its sizes and its footer through dsh_say, so a muted box "
+               "its sizes and its footer through dsh_say, so a muted DOS "
                "still lists - the listing silently changes SHAPE, which is "
                "why this is asserted on the footer and not on the rows"
                % out[-3:])

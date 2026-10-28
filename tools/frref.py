@@ -130,35 +130,51 @@ def frac_iter(zx, zy, cx, cy, flg, count=None, cycle=True):
     same answer sooner.  The reference is z0 on entry and is replaced every
     FR_CYCK iterations, the refresh tested AFTER the countdown is decremented
     because that is the order the assembly runs them in."""
+    # The arithmetic is qsq/qmul/s16 written in line, with the constants
+    # hoisted: the soak sweeps (t_frcycle, t_frinset) are tens of millions of
+    # calls and the helper calls were a third of them. `((v + 0x8000) &
+    # 0xFFFF) - 0x8000` IS s16(v); checked equal to the helper-call body over
+    # t_frcycle's whole stride-7 sweep, counts included.
     cap, guard, four = K["FR_CAP"], K["FR_GUARD"], K["FR_FOUR"]
+    span = guard * 2 + 1
+    fabs, fneg = flg & K["FF_ABS"], flg & K["FF_NEG"]
+    bias = K["FR_ONE"] - 1                      # qmul's toward-zero bias
     di = cap
     hx, hy = zx, zy                             # the reference starts as z0
     mask = K["FR_CYCK"] - 1
+    n = 0
     while True:
-        if ((zx + guard) & 0xFFFF) >= guard * 2 + 1:
-            return cap - di
-        if ((zy + guard) & 0xFFFF) >= guard * 2 + 1:
-            return cap - di
-        x2, y2 = qsq(zx), qsq(zy)
-        if s16(x2 + y2) >= four:
-            return cap - di
-        t = qmul(zx, zy)
-        if flg & K["FF_ABS"] and t < 0:
+        if ((zx + guard) & 0xFFFF) >= span:
+            break
+        if ((zy + guard) & 0xFFFF) >= span:
+            break
+        x2 = (((zx * zx) >> 12) + 0x8000 & 0xFFFF) - 0x8000     # qsq(zx)
+        y2 = (((zy * zy) >> 12) + 0x8000 & 0xFFFF) - 0x8000     # qsq(zy)
+        if ((x2 + y2 + 0x8000) & 0xFFFF) - 0x8000 >= four:
+            break
+        p = zx * zy                                             # qmul(zx, zy)
+        if p < 0:
+            p += bias
+        t = ((p >> 12) + 0x8000 & 0xFFFF) - 0x8000
+        if fabs and t < 0:
             t = -t
-        t = s16(t + t)
-        if flg & K["FF_NEG"]:
-            t = s16(-t)
-        zx, zy = s16(x2 - y2 + cx), s16(t + cy)
-        if count is not None:
-            count[0] += 1
+        t = ((t + t + 0x8000) & 0xFFFF) - 0x8000
+        if fneg:
+            t = ((0x8000 - t) & 0xFFFF) - 0x8000                # s16(-t)
+        zx = ((x2 - y2 + cx + 0x8000) & 0xFFFF) - 0x8000
+        zy = ((t + cy + 0x8000) & 0xFFFF) - 0x8000
+        n += 1
         if cycle and zx == hx and zy == hy:
-            return cap                          # a repeat: it never escapes
+            di = 0                              # a repeat: it never escapes
+            break
         di -= 1
         if di == 0:
-            return cap
+            break
         if cycle and not (di & mask):
             hx, hy = zx, zy
-
+    if count is not None:
+        count[0] += n
+    return cap - di
 
 def inset(cx, cy, flg):
     """apps/fractal's fr_inset (SPEC.md 40.5): True = this c is PROVABLY one

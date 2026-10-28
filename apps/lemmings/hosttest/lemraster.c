@@ -124,6 +124,7 @@ static unsigned char *h_ptr(unsigned seg, unsigned off)
 }
 
 unsigned os88_mem_claim(int kb)      { return h_claim(kb); }
+int os88_mem_movable(unsigned seg, int on) { (void)seg; (void)on; return 0; }
 unsigned os88_mem_largest_kb(void)   { return (unsigned)(H_MEM_KB - h_mem_kb_used); }
 unsigned os88_mem_total_kb(void)     { return H_MEM_KB; }
 
@@ -464,7 +465,6 @@ static unsigned h_wp0, h_wp3, h_tseg;
 
 void lem_r_wsetup(unsigned p0, unsigned p3) { h_wp0 = p0; h_wp3 = p3; }
 void lem_r_tsetup(unsigned t) { h_tseg = t; }
-
 /* THE VGA COMPOSE (lemsprite.inc lem_r_cband): between lem_r_cband and
  * lem_r_cend the machine draws into a VRAM SCRATCH a band of the world's rows
  * high, and copies each rectangle on in one latch pass (lem_r_clatch). So the

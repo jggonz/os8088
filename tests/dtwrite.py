@@ -75,8 +75,9 @@ def panel(m):
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)
     mo = Mouse(marty=m)
 
     def dirty():
@@ -87,7 +88,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
 
     print(f"== {MACHINE} : the close spends the RTC write (37.94) ==")
     mo.menu(8, 8, 8, 40)
-    M.settle(m)
+    M.ui_done(m)                # every read below is guest state
     w = panel(m)
     check("the Control Panel opened", w is not None)
     if not w:
@@ -97,16 +98,14 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     row = sum(1 for r in range(CP_ITIME) if not (hide & (1 << r)))
     mo.click(w[0] + 1 + CP_IX + 30,
              w[1] + TITLE_H + 1 + CP_I0Y + row * CP_IROWH + CP_IROWH // 2)
-    m.advance(frames=30)
-    m.run()
+    M.ui_done(m)
     check("nothing is owed before the edit", dirty() == 0 and wdirty() == 0,
           f"([clk_dirty]={dirty()} [cp_wdirty]={wdirty()})")
 
     # --- 1: the arrow posts BOTH flags ------------------------------------
     px, py = w[0] + 1 + CP_RX, w[1] + TITLE_H + 1
-    mo.click(px + CPT_BX + CPT_BW // 2, py + CPT_BUY + CPT_BH // 2, settle=0.4)
-    m.advance(frames=20)
-    m.run()
+    mo.click(px + CPT_BX + CPT_BW // 2, py + CPT_BUY + CPT_BH // 2, settle=0)
+    M.ui_done(m)
     check("the step posts [clk_dirty]", dirty() == 1, f"({dirty()})")
     check("...and [cp_wdirty], or the close would not load the module",
           wdirty() == 1, f"({wdirty()})")
@@ -121,9 +120,8 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
 
     # --- 3: the close spends it -------------------------------------------
     w = panel(m)
-    mo.click(w[0] + 10, w[1] + TITLE_H // 2, settle=0.4)      # the close box
-    m.advance(frames=120)
-    m.run()
+    mo.click(w[0] + 10, w[1] + TITLE_H // 2, settle=0)        # the close box
+    M.ui_done(m)                # the close's module load and write included
     check("the panel's CLOSE spent it", dirty() == 0, f"({dirty()})")
     check("...and the panel is gone", panel(m) is None)
 

@@ -117,7 +117,7 @@ def unclosed(m, rw, vhd):
     commit it (SPEC.md 18.4.9). Killed a second after W returns, with nothing
     else run, the disk must hold all 12.5 MB"""
     os88marty.until(m, lambda mm: rw("vk_wdone") != 0, "W to finish",
-                    poll=2.0, limit=3600.0, guest=4000.0)
+                    poll=0.25, limit=3600.0, guest=4000.0)
     t0 = m.status()["cycles"]
     os88marty.until(m, lambda mm: m.status()["cycles"] - t0 > 4_770_000,
                     "a guest second", poll=0.2, guest=5.0)
@@ -347,14 +347,24 @@ def main():
             subprocess.run(hdd + ["--file", "FILLER.DAT=" + filler],
                            check=True, capture_output=True)
         def boot():
-            return os88marty.launch(None, apps=FLOPPY if a.floppy else None,
-                                    machine=a.machine,
-                                    extra=["--mount", "hd:0:" + vhd])
+            # LAUNCHED PAUSED AND RUN, NO PICTURE SETTLE: `opened`'s `up` -
+            # the kernel's desktop STATE, [spl_live] = 0 - is the boot gate,
+            # and every act after it is an os88ui verb or a guest read
+            m = os88marty.launch(None, apps=FLOPPY if a.floppy else None,
+                                 machine=a.machine, boot=False,
+                                 extra=["--mount", "hd:0:" + vhd])
+            m.run()
+            return m
 
         def opened(m):
             """the bench's window opened; a reader of its words"""
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)
+            os88marty.no_saver(m)
+            # ...and the boot's LAST work done: a fixed-disk boot publishes
+            # the floppy's zone in `dsk_vtab` after [spl_live] falls (the
+            # drive probe), so `path("B:...")` asked at `up` found none
+            os88marty.ui_done(m, "the desktop's first pass")
             w = ui.path("B:/VIDDISK.O88" if a.floppy else "C:/VIDDISK.O88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
@@ -405,7 +415,7 @@ def main():
                           % (per, ", ".join("%s %.1f" % (k, v / per)
                                             for k, v in sorted(tally.items()))))
                 os88marty.until(m, lambda mm: rw("vk_wdone") != 0,
-                                "W to write STREAM.DAT", poll=2.0,
+                                "W to write STREAM.DAT", poll=0.25,
                                 limit=3600.0, guest=4000.0)
                 wk, werr = rw("vk_wk"), rw("vk_err")
                 print("\n   W: %d of 400 chunks, %d errors, %.0f guest s"
@@ -416,7 +426,7 @@ def main():
                 a.no_stream = False             # R has a stream now
             m.type_text("r")
             os88marty.until(m, lambda mm: rw("vk_done") != 0,
-                            "the disk bench to finish", poll=1.0,
+                            "the disk bench to finish", poll=0.25,
                             limit=1500.0, guest=900.0)
             done = rw("vk_done")
             res = m.read(base + syms["vk_res"], NRES * 4)
@@ -476,7 +486,7 @@ def main():
                 base, rw = opened(m)
                 m.type_text("d")
                 os88marty.until(m, lambda mm: rw("vk_ddone") != 0,
-                                "D to delete STREAM.DAT", poll=1.0,
+                                "D to delete STREAM.DAT", poll=0.25,
                                 limit=600.0, guest=600.0)
             finally:
                 m.close()

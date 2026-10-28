@@ -177,21 +177,28 @@ def main():
             sys.exit("brclick: no link arena was claimed - nothing below can "
                      "be measured")
         arena = bytes(m.readseg(lseg, 0, max(rw("br_lnkw"), 1)))
-        # the arena IS the index (br_follow): hrefs packed in link order,
-        # each ending at its NUL, so link N is the Nth string
-        hrefs = [h.decode("latin-1") for h in arena.split(b"\0")[:n]]
+        # LINK N IS WHERE br_lnkoff[N] SAYS (br_follow reads it the same
+        # way). The arena is shared: Browser 1.6's #fragment index stores
+        # each NAME/ID in it too (br_saveanchor), so DEMO.HTM's
+        # <a name="http"> sits between the first two hrefs and the Nth
+        # string is no longer link N
+        hrefs = [arena[u16(m.readseg(pseg, sy["br_lnkoff"] + 2 * i, 2)):]
+                 .split(b"\0", 1)[0].decode("latin-1") for i in range(n)]
         say("hrefs: %r" % hrefs)
         if hrefs != WANT_HREFS:
             fails.append("hrefs %r != %r" % (hrefs, WANT_HREFS))
 
         # --- the app's own line table, for aiming ------------------------
-        docseg = rw("br_docseg")
+        # br_docseg is READ AT EACH USE below and not banked here: the
+        # document claim is MOVABLE (NO-PINNING A3, SPEC.md 71.14.1), and a
+        # claim the page makes later - a View Source, a copy - can compact
+        # it, after which a banked segment reads whatever moved in there
         nl = rw("br_nlines")
         tab = bytes(m.readseg(rw("br_lseg"), 0, nl * 10))
         # Link state at layout entry must be the no-link sentinel. Otherwise
         # the plain heading/intro before DEMO.HTM's first <a href> inherits
         # LNF_LNK and is visibly underlined as if it were clickable.
-        doc = bytes(m.readseg(docseg, 0, rw("br_doclen")))
+        doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
         first_link = doc.find(bytes([14]))  # D_LNK1
         heading = doc.find(b"os8088")
         if heading >= 0:
@@ -232,7 +239,7 @@ def main():
             o = u32(tab[line * 10:line * 10 + 4])
             e = u32(tab[line * 10 + 4:line * 10 + 8])
             col = tab[line * 10 + 8]
-            doc = bytes(m.readseg(docseg, o, e - o))
+            doc = bytes(m.readseg(rw("br_docseg"), o, e - o))
             i = 0
             while i < len(doc):
                 if o + i == off:
@@ -316,7 +323,7 @@ def main():
         # the painter uses. Ctrl+C must put only its visible text on the shared
         # OS clipboard; right-clicking while that selection is retained opens
         # a one-item Copy menu and preserves the selection until it is chosen.
-        doc = bytes(m.readseg(docseg, 0, rw("br_doclen")))
+        doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
         selected = b"os8088"
         sel_at = doc.find(selected)
         if sel_at < 0:
@@ -719,7 +726,7 @@ def main():
                              % rb("br_fcur"))
             m.type_text("hi")           # ...through the real 8255 and int 09h
             os88marty.settle(m)
-            typed = bytes(m.readseg(docseg, fofs, 4)).decode("latin-1")
+            typed = bytes(m.readseg(rw("br_docseg"), fofs, 4)).decode("latin-1")
             say("the field holds %r" % typed)
             if not typed.startswith("hi"):
                 fails.append("typing after a click did not reach the field: %r"
@@ -730,7 +737,7 @@ def main():
             # with '_', one per backspace. Exactly one may be present.
             m.type_text("\b")
             os88marty.settle(m)
-            after = bytes(m.readseg(docseg, fofs, 8))
+            after = bytes(m.readseg(rw("br_docseg"), fofs, 8))
             say("after one backspace the field holds %r"
                 % after.decode("latin-1"))
             if after.count(b"_") != 1:
@@ -864,6 +871,11 @@ def main():
         if bytes(m.readseg(pseg, sy["br_ubuf"], 160)).split(b"\0", 1)[0] != bookmark_url.encode():
             fails.append("the address field lost the remote bookmark URL")
 
+        def url_base():
+            return (bytes(m.readseg(pseg, sy["br_host"], 64)).split(b"\0", 1)[0],
+                    rw("br_port"),
+                    bytes(m.readseg(pseg, sy["br_path"], 96)).split(b"\0", 1)[0])
+        base0 = url_base()
         bm = sy["br_bmdata"]
         bm_count = lambda: m.readseg(pseg, bm + 4, 1)[0]  # noqa: E731
         sx, sy0 = rw("br_starx1") + 7, rw("br_stary1") + 5
@@ -920,24 +932,20 @@ def main():
                 fails.append("clicking the empty bookmark star did not restore it")
 
             # Saving a bookmark must not disturb the current page's URL base.
-            # Exercise a relative link immediately after the asynchronous disk
-            # service has added it; the bookmark.invalid fetch is expected to
-            # fail later, but resolution itself must retain its host.
+            # It used to be exercised by clicking DEMO.HTM's relative link here
+            # - but the navigation to bookmark.invalid above discards that page
+            # before it fetches (br_go's br_free_all), so there is no link left
+            # to click, and the row could only ever fail on it. The property is
+            # the BASE itself: every part of it a relative href resolves
+            # against, read before the asynchronous disk service ran and after.
             host = bytes(m.readseg(pseg, sy["br_host"], 64)).split(b"\0", 1)[0]
             if host != b"bookmark.invalid":
                 fails.append("bookmark save changed the active URL host to %r"
                              % host)
-            err = click_offset(at + 4)
-            if err:
-                fails.append("relative link after bookmark save: " + err)
-            else:
-                resolved = bytes(m.readseg(pseg, sy["br_ubuf"], 160)).split(
-                    b"\0", 1)[0]
-                if resolved != b"http://bookmark.invalid/torture.htm":
-                    fails.append("relative link after bookmark save resolved to %r"
-                                 % resolved)
-                if rw("br_nmsg") == sy["br_s_nohost"]:
-                    fails.append("bookmark save left relative links without a host")
+            if url_base() != base0:
+                fails.append("bookmark save changed the URL base relative "
+                             "links resolve against: %r -> %r"
+                             % (base0, url_base()))
         except os88mouse.MartyError as e:
             say("bookmark failure state: count=%d saved=%d req=%d op=%d status=%04X"
                 % (bm_count(), rb("br_bmsaved"), rb("br_bmreq"),

@@ -1,7 +1,7 @@
 ; DOSTRAP.COM - log every INT 21h under a REAL DOS, in os8088's own trace
 ; format (SPEC.md 96.22.1). OURS, MIT with the rest of the tree.
 ;
-; WHY THIS EXISTS. A DOS program that behaves differently under this box and
+; WHY THIS EXISTS. A DOS program that behaves differently under this DOS and
 ; under real DOS is not debuggable from one side: our trace says what we were
 ; asked and what we answered, and both look right. What is missing is what
 ; DOS answers to the SAME questions, and the only place that exists is on a
@@ -12,13 +12,13 @@
 ;   DOSTRAP /D         write TRACE.LOG from the ring and stay installed
 ;
 ; It logs AX BX CX DX on the way in and AX/CF on the way out, 16 bytes an
-; entry, and filters the console writers exactly as the box does - a
+; entry, and filters the console writers exactly as DOS does - a
 ; hundred-character message is a hundred entries of noise standing where the
 ; calls that caused it should be.
     org 0x100
     cpu 8086
 
-ENTSZ   equ 32                      ; bytes an entry - the same layout the box's
+ENTSZ   equ 32                      ; bytes an entry - the same layout DOS's
                                     ; own ring uses (apps/dos/dos.asm's
                                     ; DOS_TRACE_SZ), because the whole point of
                                     ; this program is that one reader decodes
@@ -29,7 +29,7 @@ SEQ33   equ 96                      ; ...and the first 96 calls IN ORDER, which
                                     ; STOPPED (SPEC.md 96.10.3.2)
 NENT33  equ 32                      ; INT 33h functions counted, and the size of
 SZ33    equ 8                       ; a slot: count, then BX/CX/DX at the last
-                                    ; call. THE SAME SHAPE AS THE BOX'S
+                                    ; call. THE SAME SHAPE AS DOS'S
                                     ; (SPEC.md 96.10.3.1), so one host-side
                                     ; reader decodes both sides of a diff
 NENT    equ 512                     ; entries, 16KB. IT KEEPS THE FIRST ONES AND
@@ -67,10 +67,10 @@ start:
     int 0x21
 
     ; --- ...AND INT 33h, WHICH IS THE OTHER HALF OF A COMPARISON (96.10.3.1)
-    ; The box records which mouse functions a program asks for and with what;
+    ; DOS records which mouse functions a program asks for and with what;
     ; without the same record from a REAL driver there is nothing to align it
     ; against, and a difference in the program's own behaviour reads as a
-    ; defect in the box underneath. Load the driver BEFORE this TSR and the
+    ; defect in DOS underneath. Load the driver BEFORE this TSR and the
     ; chain is program -> here -> the real driver.
     ;
     ; A VECTOR OF ZERO IS NOT AN ERROR HERE: a machine with no mouse driver is
@@ -100,7 +100,7 @@ start:
 
 ; --- the MOUSE hook ---------------------------------------------------------
 ; One saturating byte per function and the arguments of its last call, which is
-; exactly the box's own shape (SPEC.md 96.10.3.1) so the two decode with one
+; exactly DOS's own shape (SPEC.md 96.10.3.1) so the two decode with one
 ; reader. It records BEFORE chaining, because what is wanted is what the
 ; PROGRAM asked - a driver that rewrites a register on the way out is telling
 ; us something else.
@@ -128,7 +128,7 @@ new33:
     mov [si+4], cx
     mov [si+6], dx
     mov si, [m33n]                  ; ...AND THE ORDER (SPEC.md 96.10.3.2), the
-    cmp si, SEQ33                   ; same 96 bytes the box keeps, so one
+    cmp si, SEQ33                   ; same 96 bytes DOS keeps, so one
     jae .done                       ; reader decodes both
     mov [si+m33seq], al
     inc si

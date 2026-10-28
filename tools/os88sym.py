@@ -504,6 +504,12 @@ def _load(defines=(), check=True):
         mine = open(binf, "rb").read()
         mine = mine[:_modcut(mine)]
         theirs = open(built, "rb").read()
+        # ...less the blob's cfx_tab, which tools/os88cfx.py stamps AFTER the
+        # assembly (docs/plans/MOVABLE-COLD-PLAN.md 4): zeros in this one
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import os88cfx
+        with open(mapf) as mf:
+            theirs = os88cfx.blank(theirs, mf.read())
         if mine != theirs:
             # **SAY WHAT DIFFERS, AND HOW OLD THE FILE IS.** This message used
             # to end at "a DIFFERENT kernel", and its advice - run `make` - is

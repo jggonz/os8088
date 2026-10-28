@@ -14,7 +14,9 @@
 ; "Passed" or "Failed" on the link port, as Blargg's ROMs do. Irq does the
 ; same for a store through (HL) that requests an interrupt, which a store
 ; that guards itself (rdggen.self_guard) must leave its block for, and
-; HramCode rewrites a routine in HRAM once it has been translated.
+; HramCode rewrites a routine in HRAM once it has been translated. Rows,
+; Copies, Fills and W16s hold the loop idioms (add_ff, cpy_ff, fill_ff,
+; w16_ff) to the same loops closed by JP NZ.
 
 SECTION "timer", ROM0[$50]
     push af                                 ; the timer interrupt: counts
@@ -47,12 +49,21 @@ Start:
     ld [$C025], a                           ; copies that parted
     ld [$C031], a                           ; ...and their count
     ld [$C026], a                           ; PPU waits that parted
+    ld [$C027], a                           ; fills that parted
+    ld [$C033], a                           ; ...and their count
+    ld [$C028], a                           ; 16-bit countdowns that parted
+    ld [$C035], a                           ; ...and their count
     call HramCode
     call Waits
     ld b, 128                               ; (each case 32 times: translated)
 .copies:
     push bc
     call Copies
+    call Fills
+    pop bc
+    push bc
+    bit 0, b                                ; (W16s on every other pass: 64
+    call z, W16s                            ;   cases, the large among them)
     pop bc
     dec b
     jr nz, .copies
@@ -107,6 +118,14 @@ Start:
     ld a, [$C026]
     or a
     ld hl, FailWait
+    jr nz, .print
+    ld a, [$C027]
+    or a
+    ld hl, FailFill
+    jr nz, .print
+    ld a, [$C028]
+    or a
+    ld hl, FailW16
     jr nz, .print
     ld hl, Passed
 .print:
@@ -330,6 +349,414 @@ Copies:
 .bad:
     ld a, 1
     ld [$C025], a
+    ret
+
+; LD (HL+),A / DEC B (or C) / JR NZ - the recompiler's fill_ff - against the
+; same loop closed by JP NZ, which it does not take: A, F, HL, DE, BC and
+; what the fill left in C100-C1FF and FFC0-FFD3 must agree. Counts 1-16 and
+; 256 (0) into WRAM and HRAM, the carry set and clear, and a range from FF7C
+; across I/O into HRAM, which fill_ff must decline (its stores are io_wr's)
+Fills:
+    ld a, [$C033]
+    inc a
+    ld [$C033], a
+    call Fill
+    call FSetup
+    call FI
+    call Save
+    ld hl, $C050                            ; to C040: the reference's room
+    ld de, $C040
+    ld c, 10
+.mv:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .mv
+    call Fill
+    call FSetup
+    call FR
+    call Save
+    ld hl, $C040
+    ld de, $C050
+    ld c, 10
+.cmp:
+    ld a, [de]
+    cp [hl]
+    jr nz, .bad
+    inc hl
+    inc de
+    dec c
+    jr nz, .cmp
+    ret
+.bad:
+    ld a, 1
+    ld [$C027], a
+    ret
+
+; The recompiler's w16_ff: a 16-bit countdown closed by LD A,r / OR r /
+; JR NZ - the delay (NOP x3 / DEC DE / LD A,D / OR E), the copy (LD A,(HL+)
+; / LD (DE),A / INC DE / DEC BC / LD A,B / OR C) and three fills (XOR A, LD
+; A,D or LD A,E / LD (HL+),A / DEC BC / LD A,B / OR C, or LD A,C / OR B) -
+; against the same loops closed by JP NZ: A, F, BC, DE, HL and a sum of
+; C200-C9FF must agree. Counts 1-16, and 2048 passes (2000 for the delay),
+; more than a frame's budget, so the loop is taken in pieces; copies from
+; bank 0 and from the bank at 4000; a fill from FF7C across I/O to decline
+W16s:
+    ld a, [$C035]
+    inc a
+    ld [$C035], a
+    call W16Init
+    call W16Set
+    call W16I
+    call W16Save
+    ld hl, $C050                            ; to C040: the reference's room
+    ld de, $C040
+    ld c, 10
+.mv:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .mv
+    call W16Init
+    call W16Set
+    call W16R
+    call W16Save
+    ld hl, $C040
+    ld de, $C050
+    ld c, 10
+.cmp:
+    ld a, [de]
+    cp [hl]
+    jr nz, .bad
+    inc hl
+    inc de
+    dec c
+    jr nz, .cmp
+    ret
+.bad:
+    ld a, 1
+    ld [$C028], a
+    ret
+
+; C200-C9FF to a pattern, by a loop no idiom takes
+W16Init:
+    ld hl, $C200
+.f:
+    ld a, l
+    xor h
+    ld [hl+], a
+    ld a, h
+    cp $CA
+    jr nz, .f
+    ret
+
+; the case: [$C036] the shape 0-4, BC (or DE) the count, HL and DE
+W16Set:
+    ld a, [$C035]
+    ld c, a
+    ld b, 0
+.m5:                                        ; the shape: the case mod 5
+    cp 5
+    jr c, .s
+    sub 5
+    jr .m5
+.s:
+    ld [$C036], a
+    ld a, c
+    and 56
+    cp 8                                    ; (one case in eight: large)
+    jr z, .big
+    ld a, c
+    swap a
+    and 15
+    inc a
+    ld c, a                                 ; 1-16
+    jr .regs
+.big:
+    ld a, [$C036]
+    or a
+    ld bc, 2000                             ; (the delay's: in pieces)
+    jr z, .regs
+    ld bc, 2048
+.regs:
+    ld a, [$C036]
+    or a
+    jr nz, .notd
+    ld d, b                                 ; the delay: DE the count
+    ld e, c
+    ld bc, $1234
+    ld hl, $5678
+    ret
+.notd:
+    dec a
+    jr nz, .notc
+    ld de, $C200                            ; the copy: to C200, from bank 0
+    ld hl, $0150                            ;   or the bank at 4000
+    ld a, [$C035]
+    bit 4, a
+    ret z
+    ld hl, $4000
+    ret
+.notc:
+    ld de, $5A37                            ; a fill: D and E the values
+    ld hl, $C200
+    ld a, [$C035]
+    and $28
+    cp $20                                  ; (now and then a small one
+    ret nz                                  ;   from FF7C, through I/O:
+    ld hl, $FF7C                            ;   declined)
+    ld a, c
+    and 7
+    add a, 5
+    ld c, a
+    ld b, 0
+    ret
+
+W16I:
+    ld a, [$C036]
+    or a
+    jr z, D1I
+    dec a
+    jr z, C2I16
+    dec a
+    jr z, F3I
+    dec a
+    jr z, F4I
+    jr F5I
+W16R:
+    ld a, [$C036]
+    or a
+    jr z, D1R
+    dec a
+    jr z, C2R16
+    dec a
+    jr z, F3R
+    dec a
+    jr z, F4R
+    jr F5R
+D1I:
+    nop
+    nop
+    nop
+    dec de
+    ld a, d
+    or e
+    jr nz, D1I
+    ret
+D1R:
+    nop
+    nop
+    nop
+    dec de
+    ld a, d
+    or e
+    jp nz, D1R
+    ret
+C2I16:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, C2I16
+    ret
+C2R16:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jp nz, C2R16
+    ret
+F3I:
+    xor a
+    ld [hl+], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, F3I
+    ret
+F3R:
+    xor a
+    ld [hl+], a
+    dec bc
+    ld a, b
+    or c
+    jp nz, F3R
+    ret
+F4I:
+    ld a, d
+    ld [hl+], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, F4I
+    ret
+F4R:
+    ld a, d
+    ld [hl+], a
+    dec bc
+    ld a, b
+    or c
+    jp nz, F4R
+    ret
+F5I:
+    ld a, e
+    ld [hl+], a
+    dec bc
+    ld a, c
+    or b
+    jr nz, F5I
+    ret
+F5R:
+    ld a, e
+    ld [hl+], a
+    dec bc
+    ld a, c
+    or b
+    jp nz, F5R
+    ret
+
+; the registers and a sum of C200-C9FF, into C050-C059
+W16Save:
+    push af
+    ld a, l
+    ld [$C051], a
+    ld a, h
+    ld [$C052], a
+    ld a, e
+    ld [$C053], a
+    ld a, d
+    ld [$C054], a
+    ld a, b
+    ld [$C055], a
+    ld a, c
+    ld [$C056], a
+    pop hl                                  ; L = F, H = A
+    ld a, l
+    ld [$C050], a
+    ld a, h
+    ld [$C057], a
+    ld hl, $C200
+    ld de, 0
+.s:
+    ld a, [hl+]
+    add a, e
+    ld e, a
+    ld a, d
+    adc a, 0
+    rlca
+    ld d, a
+    ld a, h
+    cp $CA
+    jr nz, .s
+    ld a, e
+    ld [$C058], a
+    ld a, d
+    ld [$C059], a
+    ret
+
+; HL, B or C the count and the other a constant, DE a constant, E the
+; value; [$C034] 0 the count in B, 1 in C
+FSetup:
+    ld a, [$C033]
+    ld c, a
+    and 15
+    inc a
+    ld b, a                                 ; 1-16
+    xor a
+    ld [$C034], a
+    ld a, c
+    and 3
+    jr z, .w
+    dec a
+    jr z, .h
+    dec a
+    jr z, .z
+    ld hl, $FF7C                            ; 3: into I/O, then HRAM: 5-12
+    ld a, b
+    and 7
+    add a, 5
+    ld b, a
+    jr .v
+.w:
+    ld hl, $C110                            ; 0: WRAM
+    jr .v
+.h:
+    ld hl, $FFC2                            ; 1: HRAM, to FFD1 at most
+    jr .v
+.z:
+    ld a, c                                 ; 2: 256 passes over C100-C1FF,
+    and 63                                  ;   or 1-16 to its end
+    jr nz, .z2
+    ld b, a
+    ld hl, $C100
+    jr .v
+.z2:
+    ld hl, $C1E0
+.v:
+    ld a, c
+    xor $A5
+    ld e, a                                 ; E = the value
+    ld d, $5A
+    bit 2, c
+    jr z, .b
+    ld a, 1
+    ld [$C034], a
+    ld c, b                                 ; the count in C, B a constant
+    ld b, $37
+    ret
+.b:
+    ld c, $59                               ; the count in B, C a constant
+    ret
+
+FI:
+    ld a, [$C034]
+    or a
+    jr nz, FIC
+FIB:
+    ld a, [$C033]
+    rra                                     ; C = the count's bit 0
+    ld a, e
+.l:
+    ld [hl+], a
+    dec b
+    jr nz, .l
+    ret
+FIC:
+    ld a, [$C033]
+    rra
+    ld a, e
+.l:
+    ld [hl+], a
+    dec c
+    jr nz, .l
+    ret
+FR:
+    ld a, [$C034]
+    or a
+    jr nz, FRC
+FRB:
+    ld a, [$C033]
+    rra
+    ld a, e
+.l:
+    ld [hl+], a
+    dec b
+    jp nz, .l
+    ret
+FRC:
+    ld a, [$C033]
+    rra
+    ld a, e
+.l:
+    ld [hl+], a
+    dec c
+    jp nz, .l
     ret
 
 ; HL, DE, B and C for the case, [$C032] the loop (0 HL to DE), C the
@@ -666,5 +1093,9 @@ FailRows:
     db "Failed: a map-row loop parted", 10, 0
 FailCopy:
     db "Failed: a copy loop parted", 10, 0
+FailFill:
+    db "Failed: a fill loop parted", 10, 0
+FailW16:
+    db "Failed: a 16-bit countdown parted", 10, 0
 FailWait:
     db "Failed: a wait on the PPU parted", 10, 0

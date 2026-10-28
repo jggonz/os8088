@@ -3,7 +3,7 @@
 ;
 ; SPEC.md 96.11.7.  Microsoft Works opens CON at ONE CALL SITE over and over
 ; until DOS refuses, to find out how many handles it has left, then closes
-; them all.  A box that answers `file not found` to the first one tells it the
+; them all.  A DOS that answers `file not found` to the first one tells it the
 ; answer is ZERO - and it then refuses to open its own files, with the message
 ; `Too many files open` for a condition nothing reported.
 ;

@@ -87,10 +87,12 @@ def main():
              "--file", "SOUND.DRV=" + os88build.at("build/sound.drv")],
             check=True, capture_output=True)
         m = M.launch(None, apps=disk, machine=MACHINE,
-                     extra=["--mount", "hd:0:" + vhd])
+                     extra=["--mount", "hd:0:" + vhd], boot=False)
         try:
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            m.run()                    # a quick boot: the next act is a
+            ui.up(limit=240)            # verb or a read, so STATE is the gate
+            M.no_saver(m)
 
             def players():
                 return [w for w in ui.windows() if "Audio" in w.title]

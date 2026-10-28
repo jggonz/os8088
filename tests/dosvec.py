@@ -30,11 +30,11 @@ WHAT EACH LINE CATCHES, and each of them was seen failing:
                   faults somewhere else entirely; the probe's `add sp,2` then
                   reads SPD=FFFE (SPEC.md 96.5.2.2).
   exit code 0     `INT 21h AH=00h` exits with ZERO, not AL.  The probe leaves
-                  with AL=42h, so a box that reports AL prints 066 - which is
+                  with AL=42h, so a DOS that reports AL prints 066 - which is
                   the field's `Exit code 002` in a different hat (96.5.2.3).
 
 CF AND AX ON THE `25` LINE ARE NOT COMPARED and the probe does not judge them:
-IBM DOS reads sector 0 of drive A and succeeds (CF0 AX=0100), this box refuses
+IBM DOS reads sector 0 of drive A and succeeds (CF0 AX=0100), this DOS refuses
 (CF1 AX=0C01).  That is the designed difference.  What has to agree is SPD.
 """
 import os
@@ -71,7 +71,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=GATE) as ui:
+    with os88ui.boot(SYS, apps=GATE, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/VECS.COM"):
             fail("double-clicking VECS.COM opened no window")
@@ -86,7 +86,7 @@ def main():
             rows[:] = m.screen() or []
             return any("KEY" in r for r in rows)
         try:                        # GUEST time: `limit` is idle-box seconds
-            os88marty.until(m, _seen, "the probe to reach KEY", poll=0.25,
+            os88marty.until(m, _seen, "the probe to reach KEY", poll=0.05,
                             limit=45.0)
         except os88marty.MartyError:
             got = [r.rstrip() for r in (m.screen() or []) if r.strip()]
@@ -139,8 +139,7 @@ def main():
               "%s" % (mo.group(1), line[3:].split(" SPD")[0]))
 
         # --- and out through AH=00h, whose exit code is ZERO -----------------
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")   # every read below is guest state
         titles = ui.titles()
         if "DOS" not in titles:
             fail("the DOS window is gone after the program exited: %r" % titles)
@@ -148,7 +147,7 @@ def main():
         seg = dosmap.instance(m)
         code = m.read((seg << 4) + dm["dos_exit"], 1)[0]
         if code != 0:
-            fail("the box recorded exit code %d where DOS's AH=00h always "
+            fail("DOS recorded exit code %d where DOS's AH=00h always "
                  "exits 0 - the probe left AL=%02Xh and that is what came "
                  "back (SPEC.md 96.5.2.3)" % (code, EXIT_AL))
         print("dosvec: AH=00h with AL=%02Xh exited %d, as DOS does"

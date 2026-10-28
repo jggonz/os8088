@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The DOS arena's unmount-and-compact (SPEC.md 96.35, 51.11.1, 66.4.3).
 
-SOUND.DRV is ~14KB at the TOP of the heap, and the DOS box unmounts it so a
+SOUND.DRV is ~14KB at the TOP of the heap, and DOS unmounts it so a
 DOS program can have the card. That memory used to be unreachable: the
 suspend was fenced on the fsx bracket (SPEC.md 51.11.1), which is long AFTER
 the arena is claimed, so the driver's bytes went back to a heap nobody would
@@ -21,7 +21,7 @@ can be present and still leave the program with less memory. It reads
 suspend that never happened and a hole nothing can reach give the same number.
 
 **IT WENT RED FOR A FOURTH REASON AND THAT ONE IS WORTH THE PARAGRAPH.**
-SPEC.md 96.40.3 shipped the four-piece DOS.O88, which makes the box PART 0 of
+SPEC.md 96.40.3 shipped the four-piece DOS.O88, which makes DOS PART 0 of
 a RE-HOMED package - and a re-homed package's region is the loader's CARVE,
 whose base is not the segment the program runs in. `OS88_REGION_MOVABLE` was
 refused (`mem_find_own` could not match it), so the wall came back and the
@@ -75,7 +75,7 @@ def fail(msg):
 
 def measure(machine):
     """(SOUND.DRV's segment at the desktop, the arena the program got) in KB."""
-    with os88ui.boot(SYS, apps=SND, machine=machine) as ui:
+    with os88ui.boot(SYS, apps=SND, machine=machine, quick=True) as ui:
         m = ui.m
         snd = struct.unpack("<H", m.read(m.sym("drv_tab")
                                          + os88geom.DRVR_SEG, 2))[0]
@@ -146,7 +146,7 @@ def main():
 
     # --- 1: THE MECHANISM, which is what the A/B used to prove indirectly ---
     if not crloc:
-        fail("the claim the DOS box is RUNNING IN has MC_RLOC = %s, so its "
+        fail("the claim DOS is RUNNING IN has MC_RLOC = %s, so its "
              "region is PINNED. OS88_REGION_MOVABLE is one line of "
              "apps/dos/dos.asm and it is refused when mem_find_own cannot "
              "match a caller's own segment INSIDE its claim - which is the "
@@ -155,9 +155,9 @@ def main():
              "and read as SPEC.md 96.35 breaking instead"
              % ("None (no claim contains it at all)" if crloc is None
                 else "0"))
-    print("dosarena: ...and the box's own region is MOVABLE, rloc=%04X" % crloc)
+    print("dosarena: ...and DOS's own region is MOVABLE, rloc=%04X" % crloc)
     if not cout:
-        fail("[dos_drvout] is 0 on the machine WITH a card: the box did not "
+        fail("[dos_drvout] is 0 on the machine WITH a card: DOS did not "
              "unmount SOUND.DRV before it sized the arena. That is SPEC.md "
              "51.11.1's fence back on, or the suspend moved back inside the "
              "fsx bracket - and it is the half of SPEC.md 96.35 that still "
@@ -173,10 +173,10 @@ def main():
     # --- 2: ...and the two machines AGREE ----------------------------------
     if ckb + SLACK_KB < bkb:
         fail("the card costs the DOS program %d KB. SOUND.DRV's image and its "
-             "ring are ~14KB and the box unmounts them before it sizes the "
+             "ring are ~14KB and DOS unmounts them before it sizes the "
              "arena, so they should come back - either the suspend is not "
              "happening before the claim, or the posted compaction is not "
-             "reaching the hole it leaves (SPEC.md 96.35), or the box's own "
+             "reaching the hole it leaves (SPEC.md 96.35), or DOS's own "
              "REGION has stopped moving, which for this package means the "
              "re-homed carve went back to being a wall (SPEC.md 66.6.1.2)"
              % (bkb - ckb))

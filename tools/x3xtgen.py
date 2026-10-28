@@ -34,6 +34,7 @@ import argparse
 import math
 import os
 import random
+import re
 import struct
 import sys
 import zlib
@@ -788,13 +789,27 @@ PAIRING = (('std', 'win_std', 'lee32'), ('fast', 'win_fast', 'lee32'),
            ('sp4', 'win_sp4', 'lee8'))
 
 
+_DISP = re.compile(r'\[((?:[a-z]{2}:)?[a-z]{2})\+(\d+)\]')
+
+
+def signed_disp(lines):
+    """A displacement of 32768 or more is a NEGATIVE one (the address wraps
+    at 64KB), and written as such: NASM 2.16.01 refuses `[di+65408]` as a
+    byte displacement under -w+error, where `[di-128]` is the same encoding
+    every NASM accepts."""
+    def one(m):
+        v = int(m.group(2))
+        return '[%s-%d]' % (m.group(1), 65536 - v) if v >= 32768 else m.group(0)
+    return [_DISP.sub(one, l) for l in lines]
+
+
 def kernel_lines():
     """{name: NASM lines} for every profile's Lee and window kernels."""
     out = {}
     for name, N, pack in KERNELS:
-        out[name] = lee_asm(N, lee_list(pack), 'x3x_' + name)[0]
+        out[name] = signed_disp(lee_asm(N, lee_list(pack), 'x3x_' + name)[0])
     for name, prof, div in WINKERNELS:
-        out[name] = win_asm(prof, div, 'x3x_' + name)
+        out[name] = signed_disp(win_asm(prof, div, 'x3x_' + name))
     return out
 
 
@@ -1022,14 +1037,15 @@ def fullcheck(verbose=False):
 
 def seal(path):
     """Stamp the part's tail Fletcher-32 (x3xt.asm's x3x_open checks the
-    tail - OPEN's half - against it before entering it). The header is 18
-    bytes; at 18 and 20 the image holds the tail's and the end's offsets,
-    and the sum goes at 22. Returns (tail offset, end offset)."""
+    tail - OPEN's half - against it before entering it). The header is 20
+    bytes (x3gran.inc's X3K_SIZE: seven verbs since RESEG); at 20 and 22
+    the image holds the tail's and the end's offsets, and the sum goes at
+    24. Returns (tail offset, end offset)."""
     b = bytearray(open(path, 'rb').read())
-    tail, end = struct.unpack_from('<HH', b, 18)
+    tail, end = struct.unpack_from('<HH', b, 20)
     assert b[0:2] == b'X3' and 0 < tail < end <= len(b) and (end - tail) % 2 == 0, (tail, end)
     fl = XT.fl32(bytes(b[tail:end]))
-    struct.pack_into('<HH', b, 22, fl & 0xFFFF, fl >> 16)
+    struct.pack_into('<HH', b, 24, fl & 0xFFFF, fl >> 16)
     open(path, 'wb').write(bytes(b))
     return tail, end
 

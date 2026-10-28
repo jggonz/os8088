@@ -47,23 +47,38 @@ def frames(wire):
 
 
 class Mouse(W.Mouse):
+    """CLOSED-LOOP (docs/plans/completed/SOAK-SPEED.md technique 15): the pointer read
+    back off mouse_x/mouse_y and each edge off mouse_btn, where tools/
+    mouse.py pinned, walked and slept ~1.7 s a click."""
+
+    def _hmp(self, *cmds):
+        import xmcheck
+        return xmcheck.qmp(self.m.path, *cmds)
+
     def where(self):
-        x,y = struct.unpack('<HH', self.m.read(W.S('mouse_x'),4))
-        return x,y,self.m.read(W.S('mouse_btn'),1)[0]
+        return Q.mouse_where(self.m, W.S)
 
     def _edge(self, down):
-        self.run('down' if down else 'up')
+        Q.mouse_button(self.m, W.S, self._hmp, 1 if down else 0)
+
+    def run(self, verb, *xy):
+        Q.Mouse(self.m, W.S, self._hmp, after=0).run(verb, *xy)
 
     def to(self, x, y, l=None, **kw):
         if l is not None and bool(self.where()[2]&1) != l:
             self._edge(l)
-        super().to(x,y)
+        Q.mouse_to(self.m, W.S, self._hmp, x, y)
 
     def click(self,x,y,settle=None):
-        super().click(x,y)
+        Q.mouse_click(self.m, W.S, self._hmp, x, y)
 
     def dblclick(self,x,y,settle=None):
-        super().dblclick(x,y)
+        Q.Mouse(self.m, W.S, self._hmp, after=0).dblclick(x, y)
+
+
+# ...and the one wireball's Machine opens the package with in its __init__
+# (it names the module's Mouse at call time): this process only
+W.Mouse = Mouse
 
 
 class UI(os88ui.UI):
@@ -148,6 +163,7 @@ class Machine(W.Machine):
 
     def reopen_load(self,record):
         self.ui.close(self.ui.window('WireFleet'))
+        W.settle(self)      # teardown done first: a fast click left [fm_vinst] stale
         assert self.read(W.S('ser_row'),2)==b'\xff\xff','forced lifetime retained a row'
         self.ui.open('WIREFLET.O88')
         W.settle(self)

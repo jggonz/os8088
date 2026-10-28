@@ -1,9 +1,9 @@
 """A HELD stream that runs out of room, and a DELETE while its hold is
-pending (SPEC.md 18.4.9.1, 18.4.9.2; the DOS box's writes are held streams
+pending (SPEC.md 18.4.9.1, 18.4.9.2; DOS's writes are held streams
 since SPEC.md 96.53).
 
 tests/dostrap/dosfull.asm fills an empty 360KB floppy through one handle in
-8KB writes until the box refuses, then deletes the file WITHOUT closing it.
+8KB writes until DOS refuses, then deletes the file WITHOUT closing it.
 Every cluster must be free afterwards but the program's own, and the host's
 own fsck (os88disk --verify) says so or names the lost ones.
 
@@ -40,7 +40,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make build/dosfull360.img`" % p)
     shutil.copyfile(GATE, SCRATCH)
-    with os88ui.boot(SYS, apps=SCRATCH) as ui:
+    with os88ui.boot(SYS, apps=SCRATCH, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/DOSFULL.COM"):
             fail("double-clicking DOSFULL.COM opened no window")
@@ -50,7 +50,7 @@ def main():
             rows[:] = [r.rstrip() for r in (mm.screen() or []) if r.strip()]
             return any(r.startswith("READY") for r in rows)
         try:
-            os88marty.until(m, done, "the probe's READY line", poll=1.0,
+            os88marty.until(m, done, "the probe's READY line", poll=0.1,
                             limit=900.0)
         except os88marty.MartyError:
             fail("the probe never finished; the last text screen was %r"
@@ -64,7 +64,7 @@ def main():
             fail("the DELETE of the held file was refused: %r" % line[0])
         m.type_text("x")
         os88marty.until(m, lambda mm: "Disk" in ui.titles(),
-                        "the desktop to come back", guest=60.0, poll=0.5)
+                        "the desktop to come back", guest=60.0, poll=0.1)
         os88marty.quiesce(m, lambda: (m.disk().get("writes"),
                                       m.disk().get("write_sectors")),
                           guest=2.0, what="the floppy's writes to stop")

@@ -2011,7 +2011,7 @@ cr_cc1:
     dw 0, 0, 0, 0, 0, 0, 0, 0
     dw cr_s_brep, cr_s_bshuf, cr_s_bprog, cr_s_btime, cr_s_bexp
 
-    OS88UI_BTNREC cr_btrec, cr_rects, cr_blbl, cr_bflags, CR_NB
+    OS88UI_BTNREC cr_btrec, cr_rects, cr_blbl, cr_bflags, CR_NB, cr_place
 cr_blbl:    times CR_NB dw cr_bpaint    ; every button is CDRack's to paint
 
 ; hit rects (content) for the full player's grid, list rows and scroll bar

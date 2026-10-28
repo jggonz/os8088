@@ -336,6 +336,18 @@ unsigned os88_mem_claim(int kb)
     exit(1);
 }
 unsigned os88_mem_largest_kb(void) { return 200; }
+/* the Z80 claim's MC_RLOC, as os88_mem_movable last set it (SPEC.md 74.3.2):
+ * born pinned, declared once rc_ax_load's read is done, pinned again around
+ * the debug loader's reads. A read into it while it is movable is the defect
+ * SPEC.md 66.5.7.1 is about, so os88_file_read_segoff refuses one */
+static int z_movable, n_zdecl;
+int os88_mem_movable(unsigned seg, int on)
+{
+    if (seg != 0x2000) { printf("HARNESS: os88_mem_movable(%04x): not the Z80 claim\n", seg); exit(1); }
+    z_movable = on != 0;
+    n_zdecl++;
+    return 0;
+}
 
 int os88_ferr(void) { return ferr; }
 void os88_file_here(struct os88_place *p) { p->clus = std_clus; p->vol = std_vol; }
@@ -429,6 +441,10 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
 unsigned os88_file_read_segoff(const char *name, unsigned seg, unsigned off, unsigned cap)
 {
     if (off & 15) { printf("HARNESS: os88_file_read_segoff at offset %04x: not a paragraph\n", off); exit(1); }
+    if (seg == 0x2000 && z_movable) {
+        printf("HARNESS: os88_file_read_segoff(%s) into the Z80 claim while it is MOVABLE - pin it (SPEC.md 66.5.7.1)\n", name);
+        exit(1);
+    }
     return os88_file_read_seg(name, seg + (off >> 4), cap);
 }
 static const char hello_bytes[40] = "\016\011\021\011\001\315\005\000\311Hello from the Z80 - 40 bytes.$";
@@ -789,7 +805,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     ccp_load();                             /* op_load, before os88_main */
     rc_khead = rc_ktail = 0;
     n_claims = 0; spawn_refuses = 0; spawned = 0; destroyed = 0;
-    n_axreads = 0; n_partseg = 0;
+    n_axreads = 0; n_partseg = 0; z_movable = 0;   /* a fresh claim is born pinned */
     /* AUTOEXEC.TXT: 'DIR' and a rest behind a CR - and on one geometry a
      * 200-byte line, longer than main.c's 125-byte poke AND than a 125-byte
      * read would carry: the file is read whole and the first 125 bytes are
@@ -805,6 +821,15 @@ static void run_all(int cols_geom, int rows_geom, int table)
     win = os88_main();
     if (!win) { printf("FAIL: os88_main returned 0 (%s)\n", last_toast); fails++; return; }
     if (rc_z.seg != 0x2000) { printf("FAIL: rc_z.seg not the claim\n"); fails++; }
+    /* ...declared MOVABLE before the window exists, AFTER the AUTOEXEC read
+     * (os88_file_read_segoff refuses a read into it otherwise) */
+    if (!z_movable) { printf("FAIL: the Z80 claim was not declared movable at launch (SPEC.md 74.3.2)\n"); fails++; }
+    /* ...and os88_onmove follows a move of it into BOTH words the core and
+     * the movers read, and back */
+    os88_onmove(0x2000, 0x2800);
+    if (rc_zseg != 0x2800 || rc_z.seg != 0x2800) { printf("FAIL: os88_onmove left the Z80 claim's words at %04x/%04x\n", rc_zseg, rc_z.seg); fails++; }
+    os88_onmove(0x2800, 0x2000);
+    if (rc_zseg != 0x2000 || rc_z.seg != 0x2000) { printf("FAIL: os88_onmove did not move them back\n"); fails++; }
     /* the CCP: no claim and no read of its own - it is part 0, in the carve
      * before os88_main ran (SPEC.md 74.3); one claim is the Z80's */
     if (n_claims != 1) { printf("FAIL: the launch made %d claims, wanted the Z80's alone\n", n_claims); fails++; }
@@ -1200,6 +1225,9 @@ static void run_all(int cols_geom, int rows_geom, int table)
        * (the claim is 0x2000: that is 0x2020) and is copied down to 0100h */
       if (strcmp(last_read, "HELLO.COM") != 0 || last_read_seg != 0x2020) { printf("FAIL: the loader read '%s' into %04x, wanted HELLO.COM into 2020 (512-aligned)\n", last_read, last_read_seg); fails++; }
       if (memcmp(zram + 0x100, hello_bytes, 40) != 0) { printf("FAIL: the .COM was not copied down to 0100h\n"); fails++; }
+      /* the read was made with the claim PINNED (the stub refuses one
+       * otherwise) and it is MOVABLE again once the loader is done */
+      if (!z_movable) { printf("FAIL: the loader left the Z80 claim pinned\n"); fails++; }
       if (calls() != 0) { printf("FAIL: the load wake drew %d calls (nothing changed on the glass)\n", calls()); fails++; }
       if (wakes_posted == w) { printf("FAIL: the load wake did not re-post for the first slice\n"); fails++; }
     }

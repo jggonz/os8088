@@ -93,7 +93,9 @@ def bands(ui, w, fit):
     return out
 
 
-with os88ui.boot("build/os8088-360.img", apps="build/apps360.img") as ui:
+with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
+                 quick=True) as ui:
+    ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
     m = ui.m
     w = ui.path("B:/APPS")
     ui.settle()

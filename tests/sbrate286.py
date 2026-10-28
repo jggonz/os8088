@@ -181,7 +181,9 @@ def one_drag(m, mo, cx, from_y, to_y, band, mono):
     return was, before, armed, scrl(m), sig(m, mono, band)
 
 
-with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE) as ui:
+with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE,
+                 quick=True) as ui:
+    ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
     m = ui.m
     mo = Mouse(marty=m)
     mono = m.video()["type"] in ("cga", "mda", "herc")

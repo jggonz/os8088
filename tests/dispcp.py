@@ -550,9 +550,12 @@ def listing(m, S):
     if vp:
         base = (KERNEL_SEG << 4) + vp
         n = _u16(m.read(base + FS_N, 2))
-        vseg = _u16(m.read(base + FS_VSEG, 2))
-        if n and vseg:
-            return _decode(m.read(vseg << 4, n * DSK_DE_STRIDE), n)
+        if n:                       # the cache claim MOVES (SPEC.md 66): its
+            vseg, got = os88marty.seg_snap(     # base and bytes in one read
+                m, base + FS_VSEG, [(0, n * DSK_DE_STRIDE)],
+                what="the Disk window's listing", sym=S, step=False)
+            if vseg:
+                return _decode(got[0], n)
     return snapshot(m, S)
 
 
@@ -575,9 +578,11 @@ def snapshot(m, S):
     n = _u16(m.read(S("disk_nfiles"), 2))
     if not n:
         return []
-    seg = _u16(m.read(S("dsk_dseg"), 2))
     off = _u16(m.read(S("dsk_doff"), 2))
-    return _decode(m.read((seg << 4) + off, n * DSK_DE_STRIDE), n)
+    seg, got = os88marty.seg_snap(m, S("dsk_dseg"), [(off, n * DSK_DE_STRIDE)],
+                                  what="the mount snapshot", sym=S,
+                                  step=False)
+    return _decode(got[0], n) if seg else []
 
 
 def row_of(m, S, name):

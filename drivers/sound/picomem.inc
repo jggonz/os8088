@@ -128,6 +128,12 @@ PM_TMO       equ 9              ; ...and the deadline, in ticks (~0.5s)
 PM_OUTERN    equ 512            ; ...under a hard cap on the batches themselves
 PM_RESETS    equ 4              ; how many wedged-status resets we will spend
 
+; --- PM_ONCE: ATTACH-ONLY (SPEC.md 34.15.1) ------------------------------
+; pm_wait, pm_cmd, pm_init and pm_undo run inside the attach and never after.
+; Defined as a macro and expanded HERE unless SND_SPLIT is set; SOUND.DRV
+; sets it and expands PM_ONCE past snd_keepmix, the end of what the driver
+; keeps once its attach has answered, so these bytes leave the claim.
+%macro PM_ONCE 0
 ; -----------------------------------------------------------------------------
 ; pm_wait - poll the command status until the card will take a command
 ; in:  [pm_base] set
@@ -455,6 +461,10 @@ pm_undo:
 .out:
     ret
 
+%endmacro
+%ifndef SND_SPLIT
+    PM_ONCE
+%endif
 ; -----------------------------------------------------------------------------
 ; pm_runaway - is DMA channel 1 RACING while a stream plays? (SPEC.md 34.10.5)
 ; in:  a playing stream, IF = 0 (sbl_tick, inside snd_tick's IRQ0 leaf)

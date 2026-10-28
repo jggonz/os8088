@@ -292,8 +292,11 @@ def main():
     run_dir = M.stage_run_dir("hdboot")
     print("  installing (tests/instdeep.py's own installer, on this tree)...")
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=instdeep.MACHINE, run_dir=run_dir) as m:
-        M.settle(m)
+                  machine=instdeep.MACHINE, run_dir=run_dir,
+                  boot=False) as m:
+        m.run()
+        M.kernel_up(m)                  # the gate on STATE: the installer's
+        M.no_saver(m)                   # first acts are clicks and reads
         instdeep.install(m)
         v = instdeep.partition(instdeep.vhd(m))
     tree = v.tree()

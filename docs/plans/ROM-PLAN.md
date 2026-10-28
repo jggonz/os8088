@@ -573,7 +573,7 @@ WITH it pays them in ROM, and gets the whole `.cold` rung back.
 | §3.3's sentinels | everywhere | **0** | `jbe` → `je` |
 | §3.2's eight self-calls | `.cold` | **−8** | `push cs / call near` |
 | "is the ROM in?" | — | **0** | `cmp word [api_coldseg], COLD_RAM`, a word that exists already |
-| hibernate, and the DOS box's live resume | `HIBER.DRV`, staged stub | **0 resident** | the image records the key; a resume against a different ROM, or none, refuses (3.4.5) |
+| hibernate, and DOS's live resume | `HIBER.DRV`, staged stub | **0 resident** | the image records the key; a resume against a different ROM, or none, refuses (3.4.5) |
 | "ROM build N ignored" | the boot overlay | **0 resident** | the splash says it once |
 | **total, per kernel** | | **~+16 to +23 bytes of `.cold`, 0 of `.text`, 0 of `.bss`** | ESTIMATE: no line of it is built |
 

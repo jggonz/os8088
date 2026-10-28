@@ -37,17 +37,21 @@ def main():
     a = ap.parse_args()
     rom = subprocess.check_output([sys.executable, os.path.join(ROOT, "tools", "gbours.py")],
                                   text=True).strip().splitlines()[-1]
-    o = argparse.Namespace(rom=rom, vm=a.vm, keep="", mem=None, big=False, rdpin="")
+    o = argparse.Namespace(rom=rom, vm=a.vm, keep="", mem=None, big=False, rdpin="",
+                           quick=True)
     b = rdgwin.boot(o)
     try:
         seg, view, core = rdgwin.find(b)
-        b.cmd("step 6000")                      # past frame 150, the note
+        # past frame 150, the note - by the core's own frame count (the red
+        # case stops at 151, so this does not insist: the 5 s below fails it)
+        b.until(lambda: rdgwin.frames(b, view) >= 160, "frame 160", 20000, 250,
+                need=False)
         c = b.memr(view * 16 + 0xC000, 1)[0]
         f0 = rdgwin.frames(b, view)
         b.cmd("step 5000")
         f1 = rdgwin.frames(b, view)
     finally:
-        b.cmd("quit")
+        b.quit(remove=True)
     run = (f1 - f0) & 0xFFFF
     print("gbhifreq: the ROM's count since the note at x = 7FFh %d; the core's frames %d -> %d "
           "(%d in 5 s)" % (c, f0, f1, run))

@@ -34,6 +34,12 @@ and is retried (28.2) - 240 more calls that paint nothing, ~47us each, against
             452 that used to.
   DREW      ...and it must still have painted the part of itself that stays
             visible, or the leg is passed by drawing nothing at all.
+
+The page is put in +ALL and +DETAIL first. Since SPEC.md 28.4.10 (2cd6ddc7)
+the memory page opens as one row per owner, three rows long, and everything
+lettered is then under the mover - DREW read 0 on a cull doing its job. With
+every claim listed it reads 27 inside / 85 outside, and taking the cull out
+(`jmp .out` at wm_dw_cull's top) reads 454 inside: the A/B above, intact.
 """
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
@@ -52,6 +58,7 @@ KSEG = os88geom.KERNEL_SEG
 TITLE_H = 18
 STEP = 8
 WCR_SZ = 8
+TM_PEN, TMM_HDR_Y = 8, 66               # apps/taskmgr/taskmgr.asm
 
 
 def tick(mm, card=None):
@@ -89,6 +96,39 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         mo.click(w.x + 20, w.y + TITLE_H + 40)
         mo.to(*dispcorner.PARK)
         tick(m)
+    # **EVERY CLAIM LISTED, or there is nothing left visible to paint.** Since
+    # KERN-MEGA-PLAN 14.70.2 (SPEC.md 28.4.10, 2cd6ddc7) the memory page is
+    # one row per OWNER, collapsed: three rows at the top, then white ground
+    # to the frame. The A/B above was taken on the page that listed every
+    # claim to the bottom of the window, and DREW is about that bottom strip,
+    # the part of the list the mover does not cover. Collapsed, everything
+    # lettered there is under the mover, so DREW read `0 cells outside` on a
+    # cull doing exactly its job (27 painted, 27 inside, and nothing outside
+    # because there is no text outside) - deterministically, from 2cd6ddc7 on,
+    # against 27 outside on its parent. `+ALL` (the header's right end, the
+    # switch heapdrv and heapscrl press for the same reason) AND `+DETAIL`
+    # (its left end: Purgeable, where the kernel's caches are filed now, and
+    # the 640K-1MB rows) give the page back EVERY claim, which is the list
+    # this row was written against. +ALL alone is not enough: measured, the
+    # open list still ended at y 295 on a window whose visible strip starts
+    # at 341, and DREW read 0 again.
+    def tmw(name, n=2):
+        b = m.read((seg << 4) + dispapps.img_size("taskmgr")
+                   + dispapps.bss_off("taskmgr", name), n)
+        return int.from_bytes(b, "little")
+    for name, n, want, col in (("tm_exp", 4, 0xFFFFFFFF, 22 * 8 + 4),
+                               ("tm_detail", 1, 1, 4 * 8)):
+        for _ in range(3):
+            if tmw(name, n) == want:
+                break
+            mo.click(tmw("tm_cx") + TM_PEN + col,
+                     tmw("tm_cy") + TMM_HDR_Y - tmw("tm_xoff") + 4)
+            mo.to(*dispcorner.PARK)
+            tick(m)
+        if tmw(name, n) != want:
+            sys.exit("dmgcull: the header switch did not set %s (%X), so "
+                     "the list stops short of the strip DREW is about"
+                     % (name, tmw(name, n)))
     d = [x for x in os88geom.windows(m) if x.i == disk][0]
     mo.click(d.x + 30, d.y + 9)
     mo.to(*dispcorner.PARK)

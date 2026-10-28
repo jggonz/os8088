@@ -294,8 +294,15 @@ static int lm_save(int slot)
         lm_say("The project's folder is unreachable - was the disk swapped?");
         return -1;
     }
-    if (os88_file_write_segoff(lm_fname(slot), lm_srcseg, lm_soff(slot),
-                               lm_slen[slot]) != 0) {
+    /* PINNED ACROSS THE WRITE (WEAVE-SPEC 1.2.6, SPEC.md 66.3 rule 5): the
+     * kernel holds ES:BX into the source claim across a call that claims
+     * for itself, before its own transfer pin applies. Declared again
+     * whatever the write answered. */
+    os88_mem_movable(lm_srcseg, 0);
+    e = os88_file_write_segoff(lm_fname(slot), lm_srcseg, lm_soff(slot),
+                               lm_slen[slot]);
+    os88_mem_movable(lm_srcseg, 1);
+    if (e != 0) {
         e = os88_ferr();
         lm_l0();
         lm_ls(lm_fname(slot));
@@ -631,6 +638,11 @@ static int ovl_openproj(void *win, const char *name)
     ovl_companion(LM_SLOT_WJS, "MAIN.WJS");
     ovl_companion(LM_SLOT_WFX, "SHEET.WFX");
     ovl_companion(LM_SLOT_WSP, "SPRITES.WSP");
+    /* ...AND NOW IT MAY MOVE (WEAVE-SPEC 1.2.6): every read into it is done,
+     * so no transfer holds its address, and lm_srcseg is the one word that
+     * names it - a slot is an OFFSET (lm_soff), the shadow too. lm_save pins
+     * it again around each write. */
+    os88_mem_movable(lm_srcseg, 1);
 
     lm_state = LM_ST_EDIT;
     lm_slot = LM_SLOT_WML;
@@ -809,6 +821,12 @@ static void lm_pack(void)
 
     if (lm_state == LM_ST_EMPTY)
         return;
+    if (lm_state == LM_ST_PREVIEW)      /* the pane's two claims go back
+                                         * FIRST: lm_pack_claim() reuses the
+                                         * same two words, and overwriting
+                                         * them leaked 112KB until LOOM
+                                         * closed (NO-PINNING C5) */
+        lm_prev_off();
     lm_packran = 1;
     lm_packok = 0;
     lm_packlen = 0;
@@ -826,7 +844,12 @@ static void lm_pack(void)
      * seconds for the smallest demo, more for PONG's sprite art. One
      * status-row line - 78 cells, ~71 ms - is a cheap thing to spend on
      * saying so. */
-    lm_say("Packing...");
+    /* The status row says it for the whole verb; the TOAST says it only
+     * around the compile below. The save before it and the .WAB write after
+     * it are disk work, which SPEC.md 12.8's file widget reports with how
+     * much is left - and a toast that is up outranks that widget (SPEC.md
+     * 12.8.7), so one up through the writes would hide the bar. */
+    lm_quiet("Packing...");
     lm_status_paint(1);
 
     /* Save first. WEAVE-SPEC 11.3 calls pack-on-save Loom's default, and the
@@ -848,7 +871,9 @@ static void lm_pack(void)
     }
 
     lm_clearerr();
+    os88_toast("Packing...", 0);        /* the compile: no disk, no widget */
     ok = ovl_pack();
+    os88_toast("", 0);                  /* retired: the write shows the bar */
     if (!ok && !lm_failed()) {
         lm_pack_free();
         lm_say("LOOM could not load its overlay; no bundle can be packed.");

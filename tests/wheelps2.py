@@ -54,9 +54,11 @@ import heapmap                                              # noqa: E402
 import os88fixture                                          # noqa: E402
 import os88sym                                              # noqa: E402
 import os88qemu                                             # noqa: E402
+import os88build                                            # noqa: E402
 
-SOCK = os.path.join(ROOT, "build", "wheelps2.sock")
-PIDFILE = os.path.join(ROOT, "build", "wheelps2.pid")
+# THIS PROCESS'S pair (tests/os88qemu.py RUNDIR), so the row shares the
+# soak's emulator lane (docs/plans/SOAK-PARALLEL.md 17)
+SOCK, PIDFILE = os88qemu.paths("wheelps2")
 KBHEAD = 0x41A
 TARGET_X, TARGET_Y = 200, 150
 MB_ENTSZ = 12
@@ -82,13 +84,16 @@ def launch():
     """ps2mouse.py's machine exactly: no UARTs, no VMware backdoor, so the
     PS/2 mouse is the only pointing device and wins the contest alone."""
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=off"
-        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"
+        # SNAPSHOT: the shared images, booted without a write lock - the
+        # guest's writes go to an overlay and nothing here reads a disk back
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
         " -serial none"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
-        % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
+        % (os88build.at("build/os8088.img"), os88build.at("build/apps.img"),
+           SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
     os88qemu.own(PIDFILE, SOCK)
 
 

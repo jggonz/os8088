@@ -244,7 +244,7 @@ start:
     call eol
     cmp byte [churn], 0
     je .nochurn
-    mov si, n_kid                   ; **AND THE CACHE'S OWN HISTORY**: the box
+    mov si, n_kid                   ; **AND THE CACHE'S OWN HISTORY**: DOS
     call churnfile                  ; reads ahead into a window that outlives
     mov si, n_title                 ; the handle, so a file read in ISOLATION
     call churnfile                  ; exercises an empty cache and a file read
@@ -281,7 +281,7 @@ start:
 
 
     ; --- 9: ...AND WITH THE TOP OF MEMORY SCRIBBLED ON -----------------------
-    ; The box keeps its read window in a segment of its own, and on this
+    ; DOS keeps its read window in a segment of its own, and on this
     ; machine that segment is `PSP:0002` - the first paragraph past the
     ; program.  A .COM never goes near it; a game that fills memory does.  So
     ; this writes 8KB of AAh from there and repeats test 8: if the visits now

@@ -97,6 +97,7 @@ x3h_begin:
     jc .now
     mov [x3h_base], dx
     mov byte [x3h_kind], X3HK_CONV
+    call x3_ldecl                   ; MOVABLE (x3_rmove), pinned per read
 .go:
     call x3h_keyset
     xor ax, ax
@@ -225,7 +226,9 @@ x3h_read1:
 .cx:
     mov si, x3_fname
     mov di, x3h_cur
+    call x3_lpin                    ; ES:BX: the bounce or the hold itself
     call os88_rseq                  ; DX:AX = bytes delivered
+    call x3_ldecl
     push ds
     pop es
     jc .bad
@@ -387,7 +390,9 @@ x3_rseq:
     ret
 .disk:
     inc word [x3_nrseq]
-    jmp os88_rseq
+    call x3_lpin                    ; ES:BX the ring's, across READ_SEQ's
+    call os88_rseq                  ; walk (a copy above claims nothing)
+    jmp x3_ldecl                    ; (keeps the flags: CF the read's)
 
 ; x3h_same - CF = 0 the hold is THIS track's file, whole: its folder, volume
 ; and name (ap_trk_dir/ap_trk_vol, x3_fname). keeps everything but flags

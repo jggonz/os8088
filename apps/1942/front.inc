@@ -572,10 +572,16 @@ n_launch:
     mov byte [n_error],0
     mov byte [n_fronthelp],0
     mov byte [n_frontkind],0
-    mov ax,n_exclusive
+    xor ax,ax                      ; THE CANVAS IS PINNED FOR THE BRACKET
+    call n_canvasdecl              ; (SPEC.md 101.2.1): ES holds it across
+    mov ax,n_exclusive             ; the claims the scenes and banks make
     mov bx,[n_win]
     mov cx,FSXF_FASTTICK
     call OSAPI_FSX_RUN
+    pushf
+    mov ax,n_canvasmv              ; ...and movable again on the desktop
+    call n_canvasdecl
+    popf
     jnc .paint
 .error:
     mov al,1

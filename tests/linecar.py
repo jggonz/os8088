@@ -48,7 +48,7 @@ import os88mouse                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 # The menu bar carries a CLOCK, which is the one thing on this screen that
 # changes for a reason that is not the field.  Everything below it - the
 # window's chrome, its console band, the desktop either side - is static
@@ -69,8 +69,8 @@ class Field(object):
 
     @property
     def seg(self):
-        # **RESOLVED PER ACCESS, NOT CACHED** (SPEC.md 66.6.1.2): the DOS
-        # box's region MOVES now - it is a re-homed carve and was pinned only
+        # **RESOLVED PER ACCESS, NOT CACHED** (SPEC.md 66.6.1.2): DOS's
+        # region MOVES now - it is a re-homed carve and was pinned only
         # until that section - so a base banked in __init__ names the bytes
         # the package used to occupy, and decodes as plausible rubbish.
         return dosmap.instance(self.m)
@@ -117,10 +117,10 @@ def main():
     if not os.path.exists(SYS):
         fail("%s is missing - `make` builds it" % SYS)
 
-    with os88ui.boot(SYS, apps=SYS, machine="os8088_5150_herc_gla") as ui:
+    with os88ui.boot(SYS, apps=SYS, machine="os8088_5150_herc_gla", quick=True) as ui:
         m = ui.m
-        if not ui.path(BOX):
-            fail("could not launch the DOS box")
+        if not ui.path(DOSPKG):
+            fail("could not launch DOS")
         f = Field(m)
         x1, y1, x2, y2 = dosmap.rect(m, f.seg, f.dm, "dos_pln")
         os88mouse.Mouse(marty=m).click((x1 + x2) // 2, (y1 + y2) // 2)

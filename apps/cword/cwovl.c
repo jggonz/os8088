@@ -201,8 +201,8 @@ static int  cw_d_focus;
 static int  cw_d_fresh;                 /* the focused edit's text is SELECTED:
                                          * the first key replaces it, as a
                                          * dialog box's does on Windows */
-static int  cw_d_x;                     /* the panel, in pixels */
-static int  cw_d_y;
+/* cw_d_x, cw_d_y - the panel, in pixels - live in cword.c, because
+ * cw_layout() moves them with the window (SPEC.md 11.96.12.0) */
 static int  cw_d_w;
 static int  cw_d_h;
 static int  cw_d_attr;                  /* Format Character's working copy */

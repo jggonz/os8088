@@ -241,7 +241,7 @@ def main():
         cards = {c["idx"]: c for c in m.cards()}
         pri = [i for i, c in cards.items() if c["type"] == "vga"][0]
         sec = [i for i, c in cards.items() if c["type"] == "mda"][0]
-        m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run(); os88marty.kernel_up(m)   # the first act is a click
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
@@ -461,7 +461,7 @@ def main():
                 mo.to(px, py)
             except Exception as e:
                 print("   position raised: %s" % str(e)[:80]); break
-            os88marty.settle(m, card=pri)
+            os88marty.ui_done(m)            # the move's repaint, finished
 
             ka, kb = ticks(m), bios_ticks(m)
             m.breakpoints([{"type": "mem", "addr": flat}] +
@@ -475,7 +475,7 @@ def main():
                 caught = pump(0.6)
             if caught is None:
                 m.mouse(0, 0, l=False)
-                caught = pump(25.0, tail=5.0)
+                caught = pump(25.0, tail=1.5)
             m.breakpoints([])
             if caught is not None:
                 print("   (%d benign ui_task accesses before it)" % state["benign"])
@@ -495,7 +495,7 @@ def main():
             if how != "ALIVE":
                 show(m, "the machine after the click")
                 return 1
-            os88marty.settle(m, card=pri)
+            os88marty.ui_done(m)            # snapshot() reads memory
             snapshot()
         print("no non-ui_task access to ui_rebootq in 6 clicks")
     return 0

@@ -363,26 +363,53 @@ xb_menu_begin:
     call xb_palette
     ret
 
-; the typed keys away, and the Enter that got us here let go of (bounded)
+; the typed keys away (a key typed while the screen is drawn is kept).  The Enter that
+; got us here is NOT waited for: xb_rdkey swallows its typematic repeats for as long as
+; it is held, so one press is one screen however long it is held (a bounded wait for
+; its release ran out under a long hold and handed the repeats to the next screen)
 xb_flush:
-.d:
-    mov ah, 1
-    int 16h
-    jz .rel
-    xor ah, ah
-    int 16h
-    jmp .d
-.rel:
-    mov cx, 40
-.r:
+    call xb_rdkey
+    jnz xb_flush
+    ret
+
+; the next typed key: ZF=1 none, else AX = the key.  An Enter is taken once per PRESS:
+; [xb_enth] is set when one is taken and cleared when OSAPI_KEY_DOWN reads it up, and
+; every Enter typed between the two - the held key's repeats - is thrown away.  THAT
+; INCLUDES THE ONES STILL IN THE BUFFER WHEN THE RELEASE IS SEEN: a repeat and the
+; break after it can both land inside one frame, and the repeat's Enter then sits in
+; the BIOS buffer behind a key that already reads up - taken as a new press, it ran
+; the course screen straight into a race for 6 of 24 release points across a
+; typematic period.  A key reading up cannot have been pressed again since, so an
+; Enter at the buffer's head at that moment is the held key's
+xb_rdkey:
+    cmp byte [xb_enth], 0
+    je .rd
     mov al, KSC_ENTER
     call OSAPI_KEY_DOWN
-    jnc .out
-    push cx
-    mov al, FSXW_FRAME
-    call OSAPI_FSX_WAIT
-    pop cx
-    loop .r
+    jc .rd
+.stale:
+    mov ah, 1
+    int 16h
+    jz .up
+    cmp al, 13
+    jne .up
+    xor ah, ah
+    int 16h                         ; a repeat typed before the release: away
+    jmp short .stale
+.up:
+    mov byte [xb_enth], 0
+.rd:
+    mov ah, 1
+    int 16h
+    jz .out
+    xor ah, ah
+    int 16h
+    cmp al, 13
+    jne .out                        ; (ZF=0: a key)
+    cmp byte [xb_enth], 0
+    mov byte [xb_enth], 1
+    jne xb_rdkey                    ; a repeat: the next one
+    cmp al, 0                       ; ZF=0: the press
 .out:
     ret
 
@@ -393,11 +420,8 @@ xb_getkey:
     mov al, FSXW_FRAME
     call OSAPI_FSX_WAIT
     call xu_menu_tick               ; the menus' music, once a frame
-    mov ah, 1
-    int 16h
+    call xb_rdkey
     jz .none
-    xor ah, ah
-    int 16h
     push ax
     or al, 20h
     cmp al, 'm'

@@ -47,7 +47,7 @@ class Session:
         self.seg=ui._word('drv_fseg')
         origin=os88sym.equates()['DRV_HMA_ORG'] if self.seg>=0xF000 else 0
         self.d=Pkg(self.m,self.seg+origin//16,os88drvsym.symbols('sound.bin'))
-        self.ix=ui._word('menu_mixx')
+        self.hx=ui._word('menu_mixx')     # the speaker: the clock's right end
 
     def wait(self,cond,why):
         if self.qemu:
@@ -59,21 +59,28 @@ class Session:
         if self.qemu: os88qemu.pace(self.m,n)
         else: M.guest_sleep(self.m,n)
 
+    def done(self,n):
+        """QEMU: the UI finished with the input, capped at the old pause
+        (SOAK-SPEED 14) - a crop after it sees what the handler drew"""
+        os88qemu.ui_done(self.m,os88sym.linear,cap=n)
+
     def key(self,k):
         if self.qemu: self.m.hmp('sendkey '+{'space':'spc'}.get(k,k))
         else: self.m.key({'esc':'Escape','home':'Home','end':'End','space':'Space',
                               'left':'ArrowLeft','right':'ArrowRight'}[k])
-        self.pace(.3)
+        if self.qemu: self.done(.3)   # (MartyPC: every key is followed by a
+                                      # wait on the state it changes)
 
     def click(self,x,y):
         if self.qemu:
             self.mo.to(x,y);self.mo._edge(True);self.mo._edge(False)
-            self.pace(.4)
-        else: self.mo.click(x,y)
+            self.done(.4)
+        else: self.mo.click(x,y,settle=0)   # (every click is followed by a
+                                            # wait on the state it changes)
 
     def open(self):
-        self.ix=self.ui._word('menu_mixx')
-        self.click(self.ix+12,9)
+        self.hx=self.ui._word('menu_mixx')
+        self.click(self.hx+12,9)
         self.wait(lambda:self.d.rb('volume_live')==1,'volume popup opened')
         self.pace(.3)
         return self.d.rw('volume_x')
@@ -118,7 +125,7 @@ class Session:
     def icon(self):
         # Compare all pixels with the actual bar paper and rule ink, including
         # gray/color paper which a binary lit/unlit comparison cannot see.
-        self.ix=self.ui._word('menu_mixx')
+        self.hx=self.ui._word('menu_mixx')
         data=self.m.read(self.d.addr('mix_speaker'),48)
         if self.qemu:
             path=EVIDENCE/'icon.ppm'
@@ -134,15 +141,19 @@ class Session:
         paper,ink=pixel(w-4,2),pixel(w-4,19)
         expected=b''.join(paper if (b>>bit)&1 else ink
                           for b in data for bit in range(7,-1,-1))
-        actual=b''.join(pixel(self.ix+x,2+y) for y in range(16) for x in range(24))
+        actual=b''.join(pixel(self.hx+x,2+y) for y in range(16) for x in range(24))
         check(actual==expected,'speaker bitmap uses the menu-bar paper and ink')
-        padding=b''.join(pixel(x,y) for y in range(6,14)
-                         for x in range(self.ui._word('vid_clk_hx'),self.ix))
-        check(padding==paper*(len(padding)//stride),
-              'clock padding erases disk-progress marks at the old icon position')
+        check(self.hx==self.ui._word('vid_wm8')-24,
+              'speaker is the last 24 pixels before the bar margin')
+        # The clock is right-aligned against the speaker by leading spaces
+        # (SPEC.md 34.15), so the cells between the field's left edge and the
+        # first glyph are lettered paper - which is what erases a disk-
+        # progress mark left in the field.
         text=self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0]
-        check(self.ix+24==self.ui._word('vid_wm8')-8*len(text),
-              'speaker floats immediately before the visible clock text')
+        padding=b''.join(pixel(x,y) for y in range(6,14)
+                         for x in range(self.ui._word('vid_clk_hx'),self.hx-8*len(text)))
+        check(padding==paper*(len(padding)//stride),
+              'clock padding erases disk-progress marks in the field')
 
     def themes(self):
         import dispthm
@@ -155,15 +166,18 @@ class Session:
             self.open();self.screenshot(name.lower()+'-popup');self.close()
             self.mo.to(80,150);self.pace(.3);self.icon()
         self.ui.close(self.ui.window('Control Panel'))
-        # A longer clock form must move the icon and its hit target together.
+        # A longer clock form widens the field LEFT; the speaker and its hit
+        # target stay at the bar margin (SPEC.md 34.15).
         flags=[self.ui._byte(n) for n in ('clk_h12','clk_secs')]
         self.m.write(self.ui._S('clk_h12'),bytes([1]))
         self.m.write(self.ui._S('clk_secs'),bytes([1]))
         def long_clock_ready():
             text=self.m.read(self.ui._S('clk_str'),32).split(bytes([0]),1)[0]
             # clk_fmt stages its string before menu_sound publishes the new
-            # icon position. Wait for both, not an intermediate guest state.
-            return len(text)>=23 and self.ui._word('menu_mixx')+24==self.ui._word('vid_wm8')-8*len(text)
+            # field edge. Wait for both, not an intermediate guest state.
+            pw=self.ui._word('vid_pw')
+            return (len(text)>=23 and self.ui._word('menu_mixx')==pw-32 and
+                    self.ui._word('vid_clk_hx')==((pw-206)&0xFFF8)-8*(len(text)-22))
         self.wait(long_clock_ready,'long clock format and speaker reached the bar')
         self.mo.to(80,150);self.pace(.3);self.icon()
         self.open();self.close()
@@ -172,15 +186,51 @@ class Session:
         self.mo.to(80,150);self.icon()
 
 
+def toast(s,pw):
+    """A toast that missed the gap HIDES the speaker and leaves [vid_clk_hx]
+    where it is (SPEC.md 34.15), so a progress widget armed against that edge
+    is never under the strip. It used to widen the field three cells left."""
+    ui=s.ui
+    # The gap runs to the clock's first GLYPH (SPEC.md 59.9.1), so on a bare
+    # desktop even a TOAST_MAX strip fits it at 640px. A Disk window's four
+    # menus narrow it to 21 cells there - and leave 31 at 720, which is the
+    # other branch, asserted rather than skipped.
+    w=ui.open_drive('A')
+    hx=ui._word('vid_clk_hx')
+    msg=b'Toast covers the speaker'           # TOAST_MAX characters
+    s.m.write(ui._S('toast_buf'),msg+b'\0')
+    s.m.write(ui._S('toast_ttl'),struct.pack('<H',36))
+    s.m.write(ui._S('toast_inst'),b'\0')
+    s.m.write(ui._S('toast_want'),b'\1')
+    s.wait(lambda:ui._byte('toast_on')==1,'toast is up')
+    s.pace(.3)
+    if pw==640:
+        check(ui._byte('toast_scov'),'a TOAST_MAX strip misses a Disk window\'s gap at 640px')
+        check(ui._word('menu_mixcap')==0,'a toast in the clock field hides the speaker')
+        check(ui._word('vid_clk_hx')==hx,'...and the clock edge does not move for it')
+    else:
+        check(not ui._byte('toast_scov'),'...and fits it at %dpx'%pw)
+        check(ui._word('menu_mixcap')!=0,'a toast in the gap leaves the speaker up')
+        check(ui._word('vid_clk_hx')==hx,'a toast in the gap moves nothing')
+    s.wait(lambda:ui._byte('toast_on')==0,'toast expires')
+    s.wait(lambda:ui._word('menu_mixcap')!=0,'the speaker comes back')
+    ui.close(w)
+    s.pace(.3);s.icon()
+
+
 def session(ui,adapter):
+    if adapter not in ('sb16','vesa'): ui.still()   # (a quick boot: the desktop drawn)
     s=Session(ui,adapter);d=s.d
     check(s.seg and d.rb('mix_kind')>0,'readable mixer publishes the speaker')
-    check(ui._word('menu_clkx')==ui._word('vid_clk_hx')+24,
-          'speaker reservation preserves the full clock field')
-    check((ui._word('vid_pw')-8-ui._word('menu_clkx'))//8>=25,
-          'speaker preserves the full clock and maximum toast field')
+    pw=ui._word('vid_pw')
+    check(s.hx==pw-32,'speaker sits right of the clock, at the bar margin')
+    check(ui._word('vid_clk_hx')==(pw-206)&0xFFF8,
+          'speaker leaves the menus segment as it is without one')
+    check((s.hx-ui._word('vid_clk_hx'))//8>=22,
+          'the default clock keeps its whole line left of the speaker')
     check(not s.owned(),'idle mixer holds no scratch claim')
     s.mo.to(80,150);s.pace(.3);s.icon()
+    if not s.qemu: toast(s,pw)   # QEMU's monitor here writes no memory
     x=s.open()
     check(d.rw('volume_bottom')==91,'popup contains only the master-volume control')
     check(ui._byte('fpg_on')==0,'file activity ends while popup remains open')
@@ -207,7 +257,7 @@ def session(ui,adapter):
     s.wait(lambda:d.rb('volume_live')==0,'drag release dismisses the popup')
     check(not s.owned(),'drag dismissal releases the save-under')
     # Exact restore over a quiet desktop, with the pointer on the bar both times.
-    s.mo.to(s.ix+12,9);s.pace(.5)
+    s.mo.to(s.hx+12,9);s.pace(.5)
     rect=(x,20,x+207,91)
     before=s.crop(rect)
     s.open();s.close()
@@ -264,9 +314,10 @@ def session(ui,adapter):
 
 
 def absent():
-    with os88ui.boot('build/os8088-360.img',machine='os8088_5150_cga_gla',verbose=False) as ui:
+    with os88ui.boot('build/os8088-360.img',machine='os8088_5150_cga_gla',verbose=False,quick=True) as ui:
         check(ui._word('menu_mixcap')==0,'no mixer leaves the speaker absent')
-        check(ui._word('menu_clkx')==ui._word('vid_clk_hx'),'no mixer restores full clock width')
+        check(ui._word('vid_clk_hx')==(ui._word('vid_pw')-206)&0xFFF8,
+              'no mixer keeps the full clock field')
 
 
 def background(ui):
@@ -277,7 +328,7 @@ def background(ui):
     x,y,_,_=w.content
     s.mo.to(x+40,y+30);s.mo._edge(True);s.mo._edge(False)
     s.wait(lambda:d.rb('sbl_str_act')==1,'background stream opened')
-    s.mo.to(s.ix+12,9);s.mo._edge(True);s.mo._edge(False)
+    s.mo.to(s.hx+12,9);s.mo._edge(True);s.mo._edge(False)
     s.wait(lambda:d.rb('volume_live')==1,'volume popup opened during playback')
     consumed=d.rw('sbl_consumed')
     check(consumed<19200,'volume popup opened before the stream finished')
@@ -310,7 +361,7 @@ def main():
             def click(self,x,y,**_kw):
                 # UI.close also uses click; pace it on QEMU's guest ticks.
                 self.to(x,y);self._edge(True);self._edge(False)
-                os88qemu.pace(self.q,.2)
+                os88qemu.ui_done(self.q,os88sym.linear,cap=.2)
         class QUI(hmacold.QUI):
             def scroll_to(self,entry,win=None):
                 # Both files fit in the fixture's root listing. Avoid the
@@ -330,7 +381,7 @@ def main():
                 try:
                     xmcheck.wait_desktop(q.sock,'mixer')
                     ui=QUI(q,mouse=QMouse(q),sym=os88sym.linear,verbose=False)
-                    os88qemu.pace(q,2)
+                    os88qemu.ui_done(q,os88sym.linear,cap=2)
                     if a.adapter=='vesa':
                         check(ui._byte('vid_kind')==G.VID_VESA and ui._byte('vid_planes')==16,
                               'packed desktop reached 1024x768x16')
@@ -340,7 +391,7 @@ def main():
                 finally:q.close()
     else:
         with os88ui.boot('build/mixer360.img',apps='build/mixplay.img',
-                         machine=MACHINES[a.adapter],verbose=False) as ui:
+                         machine=MACHINES[a.adapter],verbose=False,quick=True) as ui:
             session(ui,a.adapter)
         if a.adapter=='cga':absent()
 

@@ -113,8 +113,7 @@ def main(argv):
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
         os88marty.no_saver(m)
         seg = dispapps.pkg_seg(m, 0)[1]
         pw = dispcp.win_list(m, S)[-1]
@@ -130,9 +129,9 @@ def main(argv):
             m.advance(frames=3)
             m.run()
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.to(4, 4)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         w0, h0 = _bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")
         v0 = _visible(m, cx0, cy0)
         before = _grab(m, cx0 + 2, cy0 + 2, v0[0], v0[1])
@@ -162,9 +161,9 @@ def main(argv):
         with os88marty.bp_trace(m, base + pm["pt_blit"], on_hit=rect) as tr:
             mo.drag(gx, gy, gx - 60, gy - 40)
         rects = [h["hit"] for h in tr.hits]
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.to(4, 4)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         w1, h1 = _bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")
         # ...taken LAST, so a stale pixel anywhere in the surviving canvas has
         # had every chance to appear

@@ -1193,3 +1193,121 @@ PWM setup 12, channel 0 5, **the AX + DX:BX return** 9.
 (~−178) stays refused for READ_SEQ's reason (HANDOFF-KERNEL-SIZE-P6.md §2) -
 `mod_need` loads only from the boot volume, so a video on a data disk would
 ask for the system disk.
+
+### 7.12 A fourteenth blob sector on kern_big - ~200-270 resident bytes, DECLINED FOR BOOT TIME
+
+Priced by kernel size pass 14's `reach` agent (`docs/plans/completed/ksp14/reach.md`,
+WANTS THE OWNER 2), ESTIMATED. After that pass's vesa agent took kern_big's
+blob from 12 sectors to 13 (`vx_boot_x` and `vx_blk` into it, -178), and
+`reach` filled it with `vid_apply`'s boot copy and `mod_init`'s loop, the
+blob had **61 bytes** spare. A fourteenth sector would admit the boot-only
+bodies still resident for want of room:
+
+| body | resident bytes | where its callers are |
+|---|---:|---|
+| `desk_rowcalc_x` | ~100 (kern_small ~123 with `desk_reflow`/`desk_live`) | the blob, `CTRL.DRV`, `.ovl`'s `desk_init` - needs `.ovl` room too |
+| `vid_tab`'s four constant rows | ~72 | the three `vid_apply` copies (the VESA row stays DS-addressable) |
+| `vid_ctx_capture` | ~29 | needs a blob copy of ~49 |
+| `vgcf_boot` | ~21 | one caller, `driver.inc`'s blob path |
+| `exf_sync` | ~46 | one caller, `driver.inc`'s blob path, plus `CTRL.DRV` |
+
+**What it costs**: `python3 tests/unit/t_blobruns.py --sectors 14` prices one
+more `int 13h` for the blob AND one more for the kernel read on both 360 KB
+and 720 KB disks - **~0.4-0.8 s of a 5150 boot**, all of it before the user
+sees anything. The owner declined it on exactly that ground: *"We are
+increasing 'time before the user sees anything' a bit much."*
+
+**The free alternative was taken first**: `ovc_buf`'s 163 zero bytes made
+nobits with a `mem_init` reserve covering them (P14 handoff 6, ksp13 xfile's
+WANTS 3), which gives the blob room without a sector; whatever of the table
+above that room did not admit is what this row still buys. Re-price it
+against the blob as it then stands before proposing it again, and price the
+boot time on the 5150 (docs/FIELD-MACHINES.md), not in an emulator.
+
+### 7.13 The FAT window and the sector buffer under the kernel - one rounding fewer, WAITING FOR THE NEXT ABI BREAK
+
+Raised by the owner on 2026-10-24, after docs/plans/MOVABLE-COLD-PLAN.md
+landed. **This row is NOT a refusal.** It is doable, and the owner's call is to
+take it the next time the SDK breaks anyway, because what it costs is a flag
+day, not code.
+
+**Where the padding is.** The ladder (SPEC.md 2.10.9, kern_big at build 477)
+is:
+
+    0x0000  IVT, BDA, 0x500       1,536 bytes = 3 x 512
+    0x0060  KERNEL_SEG            .text + .bss, ROUNDED to 512      46,427 -> 46,592
+    0x0BC0  FAT_SEG               the FAT window, DSK_FAT_SECS x 512   4,608
+    0x0CE0  LOW_SEG               .lowbss + task 0's stack           5,358 + 512
+            VGA, COLD, VGABUF     paragraph-packed (LADDER_PACK)
+            KERN_END              ROUNDED to 512
+    0x1820  HEAP_SEG
+
+Guard 6 makes every `int 13h` target 512-aligned. Two blocks of arbitrary size
+end at such a target, so there are two roundings. The image's pad is the one
+this row removes: **165 bytes at build 477**, anywhere from 0 to 511 depending
+on the day, about 256 on average.
+
+**What has to move, and why it is FIXED in size.** `.ovlw` is loaded onto the
+FAT window and spills through the mount buffers (docs/plans/KERN-SMALL-CUT-PLAN.md
+§7), so the FAT window and what follows it move together or not at all. What
+follows it is `.lowbss`, and `.lowbss` holds exactly ONE DMA buffer:
+`dsk_secbuf` (`dsk_win_base` .. `dsk_win_end`), 512 bytes at offset 0.
+Everything else in it never sees DMA: `gfx_pairtab0/1`, `vga_p4tab`,
+`vid_rowtab`, `mou_pstack`, `sch_chstack`, `sch_stacks`, `evq_buf`,
+`mem_tab`, `menu_bar`. So the DMA block is the FAT window plus one sector,
+**5,120 bytes = ten sectors**, and its size depends only on `DSK_FAT_SECS`
+and the buffer count.
+
+**The layout:**
+
+    0x0060  FAT window + dsk_secbuf     5,120, ten sectors, .ovlw inside both
+    0x01A0  KERNEL_SEG                  .text + .bss, NOT rounded
+            the rest of .lowbss         stacks, tables, task 0's stack (SS)
+            VGA, COLD, VGABUF
+            KERN_END                    ROUNDED to 512
+            HEAP_SEG
+
+- 0x0600 is 3 x 512 and ten sectors keep `KERNEL_SEG` at 0x01A0 (a multiple of
+  32 paragraphs), so guard 6 holds as written and nothing below the heap pads.
+  **One rounding is left: the heap base's.**
+- Stage 2's single read starts at 0x0600 with `.ovlw` first, so the file's
+  layout changes and the read run's base becomes the window, not the kernel.
+- `.cold` still sits directly on top of the VGA rung, so the slide
+  (SPEC.md 2.10.9) is untouched: the rung is still the one paragraph-packed
+  block under `.cold`.
+- `KERNEL_SEG` is still a constant, derived from `DSK_FAT_SECS` and the buffer.
+  Changing either becomes an ABI event in its own right, which is the honest
+  price of having a FIXED block below the kernel. Putting all of `.lowbss`
+  below would make `KERNEL_SEG` move whenever a stack or table grew, so it
+  splits: the sector buffer goes down with the window, and everything else
+  stays above the image in a segment of its own (SS for the stacks). Code that
+  reaches `dsk_secbuf` through `LOW_SEG` takes the window's segment instead.
+
+**What the flag day is:**
+
+- `KERNEL_SEG equ 0x0060` is in the SDK (`apps/os88api.inc`; also
+  `drivers/os88drv.inc`, the C SDK's `crt0.asm`), and every `OSAPI_*` cell
+  expands to `call KERNEL_SEG:0xNNNN`: 199 far-call immediates compiled into
+  every package and every driver. ES = KERNEL_SEG on callback entry is part of
+  the contract too. **Both ABI version numbers bump (`PKG_FMT` and `DRV_VER`),
+  everything is rebuilt, and any binary built outside the tree stops running.**
+- DOS (`apps/dos/`, `kerndos/`), the hard-disk loader and both boot paths,
+  hibernate images, the ROMs and COLDHMA.SYS (re-cut by `make` anyway), and
+  every host tool and test that names 0x0060 (`tools/os88sym.py`'s
+  `KERNEL_SEG` first).
+
+**What it buys:** the image's pad - 165 bytes today, about 256 on average. A
+one-off, not a rate. It makes the ladder a single rounding, which is also the
+first step towards the owner's further idea of making even the heap base
+unaligned (aligning only the claims that need it, at claim time) - a project
+of its own, not priced here.
+
+**Filling the pad instead, with no ABI change, is NOT worth it.** The pad's
+size changes with every kernel edit, so nothing of fixed size can live in it.
+The only ways to use it are an assembly-time "if it fits here, put it here"
+for some non-DMA block, which makes the ladder flip between two shapes on
+unrelated changes, or sizing a table to soak up whatever is left, which makes
+a capacity (claim records, queue depth) change from one build to the next.
+Either makes behaviour depend on the day's padding. The pad is also already
+spoken for in the only sense that matters: the next bytes `.text` or `.bss`
+grows by land in it free. This row removes it outright instead.

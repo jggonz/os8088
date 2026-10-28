@@ -155,7 +155,8 @@ for mach in machines:
     modes = MACHINES[mach]
     print("== PiXEL's full screen on %s: modes %s (SPEC.md 106.23) =="
           % (mach, [P.FSM_NAMES[k] for k in modes]))
-    with os88ui.boot("build/os8088-360.img", apps=DISK, machine=mach) as ui:
+    with os88ui.boot("build/os8088-360.img", apps=DISK, machine=mach,
+                     quick=True) as ui:
         m = ui.m
         S = ui._S
         vga = 0 in modes
@@ -163,7 +164,7 @@ for mach in machines:
                                   "mem_tab")}
         ui.path("B:/PICS/BALLOONS.PNG")
         M.until(m, lambda _: instance(m, S, image), "PiXEL's instance",
-                poll=0.3, limit=120)
+                poll=0.05, limit=120)
         base = instance(m, S, image) * 16
         B = lambda n: m.read(base + syms[n], 1)[0]             # noqa: E731
         W2 = lambda n: u16(m.read(base + syms[n], 2))          # noqa: E731
@@ -171,7 +172,7 @@ for mach in machines:
         def still(what, limit=900):
             M.until(m, lambda _: W2("px_ndone") and B("px_busy") == 0
                     and B("px_job") == 0 and B("px_hmode") == 0
-                    and B("px_fsin") == 0, what, poll=0.5, limit=limit)
+                    and B("px_fsin") == 0, what, poll=0.05, limit=limit)
             M.ui_done(m, what)
 
         def pseg():
@@ -219,7 +220,7 @@ for mach in machines:
             M.until(m, lambda _: pseg() and pw("pxf_nren") > n0
                     and pb("pxf_jon")[0] == 0 and pb("pxf_bup")[0] == 0
                     and pb("pxf_bdue")[0] == 0, "the full screen drawn",
-                    poll=0.5, limit=900)
+                    poll=0.05, limit=900)
 
         def timed_enter(mode):
             """F, timed by the guest's cycle counter: the bracket's entry
@@ -432,7 +433,7 @@ for mach in machines:
         n_in = W2("px_fsn")
         m.key("KeyF")
         M.until(m, lambda _: W2("px_fsn") > n_in and B("px_fsin"),
-                "the bracket", poll=0.3, limit=120)
+                "the bracket", poll=0.05, limit=120)
         rendered(0)
         frame_check(dmode, "ORDERED " + P.FSM_NAMES[dmode])
         m.key("Escape")
@@ -450,7 +451,7 @@ for mach in machines:
             n_in = W2("px_fsn")
             m.key("KeyF")
             M.until(m, lambda _: W2("px_fsn") > n_in and B("px_fsin"),
-                    "the bracket", poll=0.3, limit=120)
+                    "the bracket", poll=0.05, limit=120)
             rendered(0)
             _, _, mw, mh, _ = master()
             Wz, Hz = P.FS_GEOM[zm][:2]
@@ -511,7 +512,7 @@ for mach in machines:
         n_in = W2("px_fsn")
         m.key("KeyF")
         M.until(m, lambda _: W2("px_fsn") > n_in and B("px_fsin"),
-                "the bracket", poll=0.3, limit=120)
+                "the bracket", poll=0.05, limit=120)
         rendered(0)
         was = master()[0]
         # the COMMIT is the moment, caught by a breakpoint: two reads of a
@@ -524,7 +525,7 @@ for mach in machines:
         m.key("KeyN")
         m.run()
         M.until(m, lambda _: m.status().get("state") == "breakpoint",
-                "the next picture's commit", poll=0.2, limit=900)
+                "the next picture's commit", poll=0.05, limit=900)
         n0 = pw("pxf_nren")
         m.breakpoints([])
         m.run()
@@ -549,19 +550,19 @@ for mach in machines:
         n_in = W2("px_fsn")
         m.key("KeyF")
         M.until(m, lambda _: W2("px_fsn") > n_in and B("px_fsin"),
-                "the bracket", poll=0.3, limit=120)
+                "the bracket", poll=0.05, limit=120)
         rendered(0)
         seen = [master()[0]]
         m.key("KeyS")
-        M.until(m, lambda _: B("px_slon") == 1, "the slideshow", poll=0.3,
+        M.until(m, lambda _: B("px_slon") == 1, "the slideshow", poll=0.05,
                 limit=60)
         for k in range(2):
             M.until(m, lambda _: master()[0] != seen[-1],
-                    "slide %d" % (k + 2), poll=0.5, limit=900)
+                    "slide %d" % (k + 2), poll=0.05, limit=900)
             seen.append(master()[0])
         m.key("KeyQ")
         M.until(m, lambda _: B("px_slon") == 0, "the slideshow to stop",
-                poll=0.3, limit=120)
+                poll=0.05, limit=120)
         check("SLIDES: S showed %s, a key stopped it" % " -> ".join(seen),
               len(seen) == 3 and B("px_fsin") == 1)
         m.key("Escape")

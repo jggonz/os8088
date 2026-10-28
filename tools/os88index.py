@@ -58,10 +58,10 @@ GROUPS = [
     ("Input - keyboard and mouse", ["9", "10", "13"],
      ["KEY_", "MOUSE", "EVQ_", "CUR_"]),
     ("Files and volumes", ["18", "19", "22", "38", "54", "20.13"],
-     ["FILE_", "VOL_", "FS_", "ASSOC", "ARG_FILE", "BATCH_", "DECOMP",
+     ["FILE_", "VOL_", "FS_", "ASSOC", "ARG_FILE", "ARG_TEXT", "BATCH_", "DECOMP",
       "DSK_", "FERR_"]),
     ("Memory", ["2", "41", "50", "66"],
-     ["MEM_", "XMEM_", "CLAIM_SNAPSHOT", "SYS_KB"]),
+     ["MEM_", "XMEM_", "CLAIM_SNAPSHOT", "SYS_KB", "IMG_NAME"]),
     ("Tasks, timing and the clock", ["7", "8", "37"],
      ["TASK_", "GET_TICKS", "BOOT_TICKS", "CLK_"]),
     ("Sound", ["34", "35"],
@@ -166,7 +166,8 @@ INCLUDES = [
      "hand-copied into both callers. Set `CH_BSS_BASE` to where the block "
      "goes and carry on from `CH_BSS_END`."),
     ("os88chartovl.inc", "82.16",
-     "The resident half of the CHART.OVL split: loader, verb dispatch and the "
+     "The resident half of SHEET's chart module (a part of SHEET.O88): its "
+     "loader, verb dispatch and the "
      "shims os88chart.inc calls back out through. Only a package that %defines "
      "CH_OVERLAY needs it - today that is SHEET alone."),
     ("os88fp.inc", "84",

@@ -2,12 +2,12 @@
 ; kerndos/kdlaunch.inc - THE LAUNCH BLOCK (docs/plans/KERN-DOS-PLAN.md §7 step 4)
 ;
 ; What the running os8088 tells `kern_dos` about the program it is handing
-; over, staged in the text framebuffer by the box and copied into `kern_dos`'s
+; over, staged in the text framebuffer by DOS.O88 and copied into `kern_dos`'s
 ; own image by the stub (§7 step 7).
 ;
-; **IT IS A GATHER/SCATTER OF THE BOX'S OWN BSS, and that is the whole trick.**
+; **IT IS A GATHER/SCATTER OF DOS.O88'S OWN BSS, and that is the whole trick.**
 ; Both sides `%include "dos.asm"`, so `dos_name`, `dos_args`, `dos_ebuf` and
-; the rest are the same offsets FROM `DOS_CBASE` in the box and in
+; the rest are the same offsets FROM `DOS_CBASE` in DOS.O88 and in
 ; `kern_dos` - the images differ, the DBSS layout cannot. So the block is a
 ; list of (offset, length) rows that one side gathers from and the other
 ; scatters to, and adding a field is one line HERE rather than two copies of
@@ -33,7 +33,7 @@ KDL_FLAGS   equ 6               ; dw  KDLF_*
 KDL_TLEN    equ 8               ; dw  the payload's bytes, as the SENDER
                                 ;     counted them
 KDL_CAP     equ 10              ; dw  KB the machine has (the BDA's, banked by
-                                ;     the box because kern_dos's own int 12h
+                                ;     DOS.O88 because kern_dos's own int 12h
                                 ;     would answer the same and this is the
                                 ;     one place a cap can be imposed)
 KDL_UNIT    equ 12              ; dw  THE UNIT `int 19h` IS TO BOOT FROM, and
@@ -51,7 +51,7 @@ KDL_UNIT    equ 12              ; dw  THE UNIT `int 19h` IS TO BOOT FROM, and
 KDL_MOUBASE equ 14              ; dw  THE SERIAL MOUSE'S UART BASE, 0 = this
                                 ;     machine has none that `kern_dos` can
                                 ;     drive (SPEC.md 96.45). KDL_UNIT's field
-                                ;     and not the box's: `mouse_init` spends
+                                ;     and not DOS.O88's: `mouse_init` spends
                                 ;     596 ms at boot deciding which port has a
                                 ;     mouse and which LINE it actually fires,
                                 ;     against a modem on the other one
@@ -84,10 +84,10 @@ KDL_MOULINE equ 27              ; db  ...and its bit in the master 8259's mask -
                                 ;     learned which line fires by watching
                                 ;     packets arrive on it
 KDL_DPT     equ 16              ; db[11] THE DISKETTE PARAMETER TABLE, and it
-KDL_DPT_LEN equ 11              ;     is the KERNEL's rather than the box's -
+KDL_DPT_LEN equ 11              ;     is the KERNEL's rather than DOS.O88's -
                                 ;     the one field below that no package can
                                 ;     fill, so `hbm_dosrun` patches it into the
-                                ;     STAGED copy after the box has gathered
+                                ;     STAGED copy after DOS.O88 has gathered
                                 ;     the rest. SPEC.md 18.92: `int 1Eh` is a
                                 ;     POINTER the BIOS re-reads on every floppy
                                 ;     operation, os8088 points it at its own
@@ -117,7 +117,7 @@ KDL_DPT_LEN equ 11              ;     is the KERNEL's rather than the box's -
 ;     nothing frees it here - so drive B: exists, answers, and is a unit the
 ;     ROM has nothing on.
 ;
-; The volume INDEX is the identity DOS drive (SPEC.md 96.6) and the box hands
+; The volume INDEX is the identity DOS drive (SPEC.md 96.6) and DOS.O88 hands
 ; over `dos_vol` as an index, so an index resolved against a different table
 ; is a program reading a drive that is not its own. Carrying the table is
 ; what makes the identity true rather than hoped for.
@@ -265,13 +265,13 @@ KDL_POUT    equ 506             ; dw ms the park's copy and sum took, carried
 ; --- AND WHERE THE OTHER kern_dos IS (SPEC.md 96.40.9.1, KERN-MEGA-PLAN 14.26)
 ; The HMA image switches itself to part 3, the LOW one, for an EXEPACK program
 ; its unpacker refuses - reading the part off the disk with its own file layer,
-; because the stub that read part 2 is gone. Two numbers are the BOX's (it
+; because the stub that read part 2 is gone. Two numbers are DOS.O88's (it
 ; holds part 3's row) and two the KERNEL's (it found DOS.O88 at step 2); a
 ; zero offset or cluster is a sender that did not fill them, and the switch is
 ; not tried. Four bytes in the gap between the body and the park's fields, the
 ; body ending at 483, and four of the park's reserve.
-KDL_L3OFF   equ 484             ; dw part 3's first file SECTOR (the box's)
-KDL_L3ZB    equ 486             ; dw ...and its PACKED bytes (the box's)
+KDL_L3OFF   equ 484             ; dw part 3's first file SECTOR (DOS.O88's)
+KDL_L3ZB    equ 486             ; dw ...and its PACKED bytes (DOS.O88's)
 KDL_O88CL   equ 508             ; dw DOS.O88's first cluster (the kernel's)
 KDL_O88V    equ 510             ; db ...and its volume (the kernel's)
 KDL_MRSV    equ 511             ; db reserved for the park
@@ -287,7 +287,7 @@ KDL_MRSV    equ 511             ; db reserved for the park
 ; THE SAME BYTES AS THE kern_mega TAIL's XMS ARENA ABOVE, because neither
 ; build writes the other's: kern_mega has no HMA image (its HMA is its own),
 ; and no kern_big build has an arena or a park. Written by the KERNEL into the
-; staged block; the box never writes them and its record is zeroed bss, so a
+; staged block; DOS.O88 never writes them and its record is zeroed bss, so a
 ; kernel that does not write them hands over KDL_HOFF = 0 - nothing to check.
 KDL_HOFF    equ 488             ; dw the first HMA offset (FFFF:x) summed,
                                 ;    0 = `.cold` is not in the HMA
@@ -308,7 +308,7 @@ KDL_VER_NOW equ 5               ; what this tree writes and checks. It is a
                                 ; the header, so the body moved 100 -> 106.
                                 ; **THE BUMP IS OWED EVEN
                                 ; THOUGH BOTH SIDES SHIP IN ONE FILE**:
-                                ; kern_dos is part 2 of DOS.O88 and the box
+                                ; kern_dos is part 2 of DOS.O88 and the DOS
                                 ; is part 0, so those two are always in step -
                                 ; but the third writer is the KERNEL, which
                                 ; patches the header and is a different
@@ -324,7 +324,7 @@ KDLF_REBOOT equ 1               ; bit 0: `int 19h` when the program exits.
 KDLF_HIBER  equ 4               ; bit 2: THE KERNEL HAS WRITTEN A HIBERNATION
                                 ; IMAGE, so the exit code has somewhere to go
                                 ; (docs/plans/KERN-DOS-PLAN.md 8). It is not
-                                ; the box's to set and never arrives from it:
+                                ; DOS.O88's to set and never arrives from it:
                                 ; `hbm_dosrun` patches it into the STAGED
                                 ; block, because whether there is a fixed disk
                                 ; to come back to is `hb_pick`'s question and
@@ -333,8 +333,8 @@ KDLF_NOMOUSE equ 8              ; bit 3: **THE USER DOES NOT WANT A POINTER**
                                 ; (SPEC.md 96.36.8). `KDL_MOUBASE` is the
                                 ; KERNEL's field and a package cannot zero it
                                 ; by writing there - `hbm_dosrun` patches the
-                                ; word AFTER the box has gathered the block -
-                                ; so the box says so in a bit and the kernel's
+                                ; word AFTER DOS.O88 has gathered the block -
+                                ; so DOS.O88 says so in a bit and the kernel's
                                 ; patch is what tests it. Zero base is already
                                 ; "this machine has none that kern_dos can
                                 ; drive", so the refusal needs nothing new on
@@ -359,7 +359,7 @@ KDLF_NOMOUSE equ 8              ; bit 3: **THE USER DOES NOT WANT A POINTER**
 ; home as `ended, exit code 255` and read as a program that ran and failed.
 ; 255 cannot be the signal either: it is a legal `INT 21h AH=4Ch` code.
 ;
-; **THE REASON IS A `DER_*`, the BOX's own**, and not a code of kern_dos's to
+; **THE REASON IS A `DER_*`, DOS.O88's own**, and not a code of kern_dos's to
 ; be translated. `apps/dos/dos.asm` defines them ungated, so this build sees
 ; them and the window half needs no mapping table - one `and` and a store into
 ; [dos_err], and `dos_err_line` says the sentence it already had. The DER_*
@@ -381,12 +381,12 @@ KDLF_RAHM   equ 0x0700          ; DOES NOT GET** (SPEC.md 96.36.6), as
                                 ; MOVES - filling reserved bits of a word that
                                 ; is already there moves none, which is
                                 ; exactly KDL_MOUBASE's own precedent
-KDLF_LOADFIX equ 0x10           ; bit 4: LOADFIX (kern_mega's box, W4): the
+KDLF_LOADFIX equ 0x10           ; bit 4: LOADFIX (kern_mega's DOS, W4): the
                                 ; program's arena starts at 64KB at the lowest,
                                 ; DOS 5's answer to a program packed by EXEPACK
                                 ; that cannot be loaded below it with A20 open
 KDLF_LOWDOS equ 0x20            ; bit 5: kern_mega's LOW kern_dos (SPEC.md
-                                ; 96.40.9.2): the box posted part 3, the image
+                                ; 96.40.9.2): DOS.O88 posted part 3, the image
                                 ; assembled at 0060:0000, and the KERNEL's
                                 ; loader stub expands it there and not in the
                                 ; HMA. kern_dos itself never reads the bit -
@@ -397,7 +397,7 @@ KDLF_SAVE   equ 0x40            ; bit 6: kern_mega's `Save the session to
                                 ; machine reset or switched off during the
                                 ; program comes back from the disk. The
                                 ; KERNEL's to act on; kern_dos never reads it
-KDLF_EXE    equ 2               ; bit 1: the box already knows it is an .EXE.
+KDLF_EXE    equ 2               ; bit 1: DOS.O88 already knows it is an .EXE.
                                 ; A HINT and not an instruction - kern_dos
                                 ; still asks `dos_is_exe`, which reads the
                                 ; FILE (SPEC.md 96.8) - carried so the two

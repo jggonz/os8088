@@ -25,7 +25,7 @@ WHAT IT ASSERTS, and the two failures are DIFFERENT SIZES on purpose:
     that the arena - which is ONE run - cannot reach the floor under it
     (96.23.7.2).
 
-2.  **NO CLAIM THE BOX HOLDS IS PINNED BELOW THE ARENA.** That is the
+2.  **NO CLAIM DOS HOLDS IS PINNED BELOW THE ARENA.** That is the
     mechanism behind assertion 1 and it is read out of `mem_tab` itself, so a
     build that loses the `OSAPI_MEM_MOVABLE` declaration is named rather than
     inferred from a number. A claim is born pinned (SPEC.md 66.2), so this is
@@ -106,7 +106,7 @@ def claims(m):
 def pkg_seg(m, want=0):
     """The segment of a visible package window, newest last.
 
-    **ASKED AT THE POINT OF USE** (SPEC.md 66.6.1.2): the DOS box's region
+    **ASKED AT THE POINT OF USE** (SPEC.md 66.6.1.2): DOS's region
     moves under the compactor at every arena claim, so a base taken earlier
     names the bytes the package used to occupy - which decode as plausible
     rubbish rather than as an error.
@@ -127,29 +127,37 @@ def main():
         if not os.path.exists(os88build.at(p)):
             fail("%s is missing - run `make ethertest && make dospkt`" % p)
 
-    if os.path.exists("build/qemu.pid"):
-        try:
-            pid = int(open("build/qemu.pid").read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)
-        except (OSError, ValueError):
-            pass
-    for f in ("build/qmp.sock", "build/qemu.pid"):
-        if os.path.exists(f):
-            os.remove(f)
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "ETHER=1", "TESTIMG=" + SYS,
-                        "TESTAPPS=" + PKT], capture_output=True, text=True)
-    if r.returncode:
-        fail("make test failed:\n" + r.stdout + r.stderr)
-
-    m, mouse = eth.Qemu(), eth.Mouse()
+    # A PRIVATE QEMU (os88qemu.Private): what `make test ETHER=1 TESTIMG=
+    # TESTAPPS=` launched, without the `make` in the shared tree or the kill
+    # of whatever build/qemu.pid named; the mouse is closed-loop
+    # (docs/plans/completed/SOAK-SPEED.md technique 15).
+    import tempfile
+    import xmcheck
+    import atexit
+    import shutil
+    # dospkt.asm's segment goes to 10.0.2.2:8099, which is tests/dosxlat.py's
+    # listener: a dosxlat beside this row would ANSWER it, so the port is
+    # held for the run (SOAK-PARALLEL.md 17.3) and the row `locks=` it too
+    os88qemu.lease_port(8099)
+    work = tempfile.mkdtemp(prefix="dpk-")      # short: a QMP socket path
+    atexit.register(shutil.rmtree, work, True)  # (runs after q's close)
+    q = os88qemu.Private(work, os88build.at(SYS), os88build.at(PKT),
+                         ether=True)
+    eth.SOCK = q.sock
+    m = eth.Qemu(q.sock)
+    mouse = os88qemu.Mouse(m, eth.S, lambda *c: xmcheck.qmp(q.sock, *c))
     fails = FAILS
     try:
         # --- the card has to be THERE, or this row asserts nothing ---------
         # Every wait in this row is in the GUEST's seconds (tests/os88qemu.py).
         drvrow = (eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
                   + eth.DRVR_SEG)
+        # THE BOOT FIRST (os88qemu.kernel_up): drv_tab is .bss, and until
+        # stage 2 has expanded the packed kernel those bytes are the LZ4
+        # stream - a non-zero JUNK word satisfied this poll at 0.7 s and the
+        # row reported "never attached" off the cleared one (SOAK-PARALLEL
+        # 17.5)
+        os88qemu.kernel_up(m, eth.S, secs=120)
         os88qemu.acted(m, lambda: u16(m.read(drvrow, 2)) != 0, secs=60,
                        what="ETHER.DRV's drv_tab row", poll=0.4)
         seg = u16(m.read(drvrow, 2))
@@ -160,6 +168,12 @@ def main():
                  "machine without one answers nothing (SPEC.md 51.3.1)")
         say("dosnetarena: ETHER.DRV at %04X" % seg)
 
+        # THE DESKTOP, NOT THE DRIVER. drv_boot_x fills ETHER.DRV's row
+        # during the loading screen and desk_rowcalc lays the zones out AFTER
+        # it (kernel.asm's kmain), so a row that is there says nothing about
+        # B:'s zone - a loaded box landed in that window and open_drive read
+        # "no desktop zone". Drive B's zone is the condition, as dosxlat's.
+        xmcheck.wait_desktop(q.sock, "dosnetarena")
         dispcp.open_drive(m, mouse, eth.S, eth.settle, "B")
         wins = dispcp.win_list(m, eth.S)
         wx, wy = dispcp.win_rect(m, eth.S, wins[-1])[:2]
@@ -205,7 +219,7 @@ def main():
                  if c[3] and abase and c[0] < abase and c[2] == pseg]
         if walls:
             fails.append(
-                "the DOS box holds %d PINNED claim(s) below its own arena: %s."
+                "DOS holds %d PINNED claim(s) below its own arena: %s."
                 " A claim is born pinned (SPEC.md 66.2) and dos_pkt_bufs takes"
                 " its buffers BEFORE dos_run's compaction pass, so one left"
                 " undeclared is a wall with a hole under it that the arena -"
@@ -215,11 +229,11 @@ def main():
                 % (len(walls), ", ".join("%04X+%.1fK" % (c[0], c[1] / 64.0)
                                          for c in walls)))
         else:
-            say("dosnetarena: no claim of the box's is pinned below the arena")
+            say("dosnetarena: no claim of DOS's is pinned below the arena")
 
         # --- 1: the promise IS the delivery, in both arms -------------------
         # **LET THE PROGRAM OUT FIRST.** An association open of a `.COM` runs
-        # it (SPEC.md 54), so the box arrives inside its own fsx bracket with
+        # it (SPEC.md 54), so DOS arrives inside its own fsx bracket with
         # the program on the screen - no window and no page. DOSPKT.COM holds
         # on int 16h, so Enter is what ends it, and what happens next is a
         # whole bracket teardown: poll for the window rather than sleeping on

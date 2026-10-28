@@ -96,7 +96,9 @@ def raise_win(m, mo, x, y, i):
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()                             # the boot gate on STATE: the first
+    os88marty.kernel_up(m)              # act is a verb or a guest read
     mo = os88mouse.Mouse(marty=m)
     os88marty.no_saver(m)               # this gate drives for guest minutes
     dispcp.open_panel(m, mo, S, os88marty.settle, page=None)

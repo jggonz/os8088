@@ -128,11 +128,12 @@ def main():
         if len(cards) != 2:
             sys.exit("pxsmd: %s is not a two-card machine" % a.machine)
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle)
-        dispcp.set_mode(m, mo, S, os88marty.settle, "right")
-        dispcp.close_panel(m, mo, S, os88marty.settle)
+        os88marty.kernel_up(m)          # the boot gate on STATE; the panel
+        mo = os88mouse.Mouse(marty=m)   # verbs confirm on guest state too
+        done = lambda mm, **k: os88marty.ui_done(mm)    # noqa: E731
+        dispcp.open_panel(m, mo, S, done)
+        dispcp.set_mode(m, mo, S, done, "right")
+        dispcp.close_panel(m, mo, S, done)
         if m.read(S("vid_ndisp"), 1)[0] != 2:
             sys.exit("pxsmd: the Control Panel did not turn Extend on")
         g = pxslib.open_game(m)
@@ -140,7 +141,8 @@ def main():
         g.god(True)
         g.pin(rung="flat", lowres=True, size=64)
         g.wait_frames(1)
-        os88marty.settle(m)
+        os88marty.ui_done(m, lock=False)    # every read up to the bracket is
+                                            # guest memory (bss, B000, CRTC)
 
         # --- (a) the window on the VGA: a Mode X bracket, the Hercules still ---
         print("   on the VGA: px_vkind %d, px_bpp %d, px_mode0 %d"

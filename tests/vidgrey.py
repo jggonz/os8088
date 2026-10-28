@@ -80,7 +80,9 @@ def main():
                         "--size", "360", os88build.at("build/video.o88"), v88],
                        check=True, capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine,
+                         quick=True) as ui:
+            ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
             m = ui.m
             w = ui.path("B:/GREY.V88")
             wrec = ui._S("wm_wins") + w.i * geom.WIN_SIZE

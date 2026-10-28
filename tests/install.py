@@ -48,8 +48,9 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 import os88marty as M                                       # noqa: E402
 import os88ui                                               # noqa: E402
-import os88geom as geom                                     # noqa: E402
 import instdeep as ID                                       # noqa: E402
+import instwiz as IW                                        # noqa: E402
+import os88lnk                                              # noqa: E402
 import hdboot as HB                                         # noqa: E402
 import instkeep as IK                                       # noqa: E402
 import os88build                                            # noqa: E402
@@ -57,25 +58,8 @@ import os88build                                            # noqa: E402
 SECTOR = 512
 USER_TXT = b"a file of the user's, which an upgrade must keep\r\n" * 30
 
-# --- the wizard's geometry and pages, read from its source --------------------
-SRC = open("apps/install/install.asm").read()
-
-
-def const(name):
-    m = re.search(r"^%s\s+equ\s+(\d+)" % name, SRC, re.M)
-    if not m:
-        sys.exit("install: %s is not an `equ` in apps/install/install.asm"
-                 % name)
-    return int(m.group(1))
-
-
-P = {n: const(n) for n in ("P_WELCOME", "P_DRIVE", "P_SLOT", "P_MODE",
-                            "P_CONFIRM", "P_APPS", "P_DONE", "P_STOP",
-                            "P_BUSY")}
-NAMES = {v: k for k, v in P.items()}
-BX0, BW, BGAP, BY, BH = (const(n) for n in
-                         ("IN_BX0", "IN_BW", "IN_BGAP", "IN_BY", "IN_BH"))
-LOGN, LOGC = const("IN_LOGN"), const("IN_LOGC")
+# --- the wizard's geometry and pages: tests/instwiz.py's ---------------------
+P, NAMES = IW.P, IW.NAMES
 
 # --- ...and the progress widget's, read from the kernel's (SPEC.md 12.8) -----
 FPGSRC = open("kernel/fprog.inc").read()
@@ -87,82 +71,31 @@ for _n in ("FPG_ICO_W", "FPG_ISP", "FPG_BOX_W", "FPG_BOX_Y"):
     FPG[_n] = int(_m.group(1))
 
 
-def symmap():
-    """The package's symbols, off the map its build rule writes."""
-    out = {}
-    path = os88build.at("build/install.map")
-    for line in open(path):
-        p = line.split()
-        if len(p) == 3 and re.match(r"^[0-9A-F]+$", p[0]):
-            out[p[2]] = int(p[0], 16)
-    return out
-
-
-SYM = symmap()
-
-
 def hd_tseg_off():
     """[hd_tseg]'s offset in HDD.DRV's image (the HMA build is the same code
-    assembled at DRV_ORG = E000h)."""
+    assembled at DRV_ORG = the kernel's DRV_HMA_ORG, read rather than
+    restated: it was E000h when this was written and is C000h now, and a
+    stale constant here read a word of CODE and called it a leaked tool)."""
+    m = re.search(r"^DRV_HMA_ORG\s+equ\s+(0x[0-9A-Fa-f]+|\d+)",
+                  open("kernel/kernel.asm").read(), re.M)
+    if not m:
+        sys.exit("install: DRV_HMA_ORG is not an `equ` in kernel/kernel.asm")
+    org = int(m.group(1), 0)
     for line in open(os88build.at("build/hdd.hma.map")):
         p = line.split()
         if len(p) == 3 and p[2] == "hd_tseg":
-            return int(p[0], 16) - 0xE000
+            return int(p[0], 16) - org
     sys.exit("install: no hd_tseg in build/hdd.hma.map")
 
 
-class Wizard(object):
-    """The INSTALL window on one machine: its pages, read and clicked."""
+class Wizard(IW.Wizard):
+    """The INSTALL window on one machine: its pages, read and clicked -
+    tests/instwiz.py's, through os88ui's window and mouse."""
 
     def __init__(self, ui, w):
-        self.ui, self.m, self.w = ui, ui.m, w
-        base = ui._S("wm_wins") + w.i * geom.WIN_SIZE
-        self.seg = struct.unpack("<H", bytes(self.m.read(base + geom.W_SEG,
-                                                          2)))[0]
-
-    def byte(self, name):
-        return self.m.readseg(self.seg, SYM[name], 1)[0]
-
-    def word(self, name, add=0):
-        b = bytes(self.m.readseg(self.seg, SYM[name] + add, 2))
-        return struct.unpack("<H", b)[0]
-
-    def page(self):
-        return self.byte("in_page")
-
-    def caption(self):
-        return bytes(self.m.readseg(self.seg, SYM["in_cap"], 48)) \
-            .split(b"\0")[0].decode("latin-1")
-
-    def button(self, n):
-        x0, y0 = self.w.x + 1, self.w.y + geom.TITLE_H
-        x = x0 + BX0 + n * (BW + BGAP) + BW // 2
-        y = y0 + BY + BH // 2
-        self.ui.mo.click(x, y)
-
-    def wait(self, want, what, limit=60.0):
-        def ok(_):
-            pg = self.page()
-            if pg == P["P_STOP"] and want != P["P_STOP"]:
-                sys.exit("install: FAIL - the install STOPPED %s: %r"
-                         % (what, self.caption()))
-            return pg == want
-        M.until(self.m, ok, "INSTALL to show %s (%s)" % (NAMES[want], what),
-                limit=limit)
-        print("  %-10s %s" % (NAMES[want][2:], what))
-
-    def next(self, want, what, limit=60.0):
-        self.button(1)
-        self.wait(want, what, limit)
-
-    def log(self):
-        """The lines the Installing page keeps (SPEC.md 117.4.1), oldest
-        first - the last IN_LOGN of the run."""
-        n = self.byte("in_logn")
-        raw = bytes(self.m.readseg(self.seg, SYM["in_log"],
-                                   LOGN * (LOGC + 1)))
-        return [raw[i * (LOGC + 1):i * (LOGC + 1) + LOGC].decode("latin-1")
-                .rstrip() for i in range(n)]
+        self.ui = ui
+        IW.Wizard.__init__(self, ui.m, ui.mo.click, w.i, w.x, w.y)
+        self.w = w
 
     def install(self, want, what, limit=900.0, move=False):
         """Install, from Confirm: the Installing page writes its log while
@@ -174,29 +107,14 @@ class Wizard(object):
         laid its buttons out only when it painted hit-tested the press
         against where the window USED to be: "Finished - click Next", and
         Next did nothing until a minimize and restore repainted it."""
-        self.button(1)
+        self.button(IW.NEXT)
         bar = BarWatch(self.m)
-
-        def ended(_):
-            pg = self.page()
-            if pg not in (P["P_CONFIRM"], P["P_BUSY"]):
-                sys.exit("install: FAIL - Install left the Installing page "
-                         "by itself, for %s: its log must stay until Next"
-                         % NAMES.get(pg, pg))
-            done = pg == P["P_BUSY"] and self.byte("in_logend")
-            if pg == P["P_BUSY"] and not done:
-                bar.sample()
-            return done
-        M.until(self.m, ended, "the Installing page to end (%s)" % what,
-                limit=limit)
+        lines = self.ended(what, limit=limit, sample=bar.sample)
         bar.verdict(what)
-        lines = self.log()
-        print("  BUSY       %s; the log ends:" % what)
-        for ln in lines:
-            print("             | %s" % ln)
         if move:
             x0, y0 = self.w.x, self.w.y
             self.w = self.ui._refresh(self.ui.drag_window(self.w, 48, 24))
+            self.x, self.y = self.w.x, self.w.y
             print("  MOVED      the window %d,%d -> %d,%d, no repaint"
                   % (x0, y0, self.w.x, self.w.y))
         self.next(want, "after Next on the log" + (" - at the window's NEW "
@@ -262,7 +180,9 @@ def launch_wizard(ui, path):
 
 
 def plant(vhd):
-    """USER.TXT into the root of the active partition, through mtools."""
+    """USER.TXT into the root of the active partition, through mtools - and
+    the update check's startup link, which the upgrade's Done page must
+    find and keep ticked (SPEC.md 117.10.6)."""
     blob = bytearray(open(vhd, "rb").read())
     for i in range(4):
         e = blob[446 + i * 16:462 + i * 16]
@@ -277,6 +197,12 @@ def plant(vhd):
         open(img, "wb").write(part)
         open(os.path.join(td, "USER.TXT"), "wb").write(USER_TXT)
         IK.mtools("mcopy", "-i", img, os.path.join(td, "USER.TXT"), "::/")
+        lnk = os.path.join(td, "OSCHECK.LNK")
+        open(lnk, "wb").write(os88lnk.make("INSTALL.O88", arg="CHECK"))
+        subprocess.run(["mmd", "-i", img, "::/AUTOSTRT"],     # (the system
+                       capture_output=True,                  # disk has one)
+                       env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
+        IK.mtools("mcopy", "-i", img, lnk, "::/AUTOSTRT/")
         part = open(img, "rb").read()
     blob[lba * SECTOR:(lba + secs) * SECTOR] = part
     blob[400] = 0xA5                   # the MBR's unused tail: a marker the
@@ -417,6 +343,11 @@ def main():
         if not wz.byte("in_skip"):
             sys.exit("install: FAIL - Done after Skip does not say the apps "
                      "disk was left off")
+        if wz.byte("in_chk") != 1:
+            sys.exit("install: FAIL - C: has \\AUTOSTRT\\OSCHECK.LNK and the "
+                     "Done page does not start on *Check for updates at "
+                     "startup* (SPEC.md 117.10.6)")
+        print("  KEPT       the startup check's tick, off C:\\AUTOSTRT")
     blob = open(vhd, "rb").read(SECTOR)
     v = ID.partition(vhd)
     bad = []

@@ -4,7 +4,7 @@
 ; THE POINT IS THAT ONE BINARY RUNS ON BOTH (tests/dostrap/dosref.asm's shape,
 ; and docs/DOS-DEBUGGING.md's method).  "DOS preserves every register it does
 ; not answer in" is a sentence out of a reference book; the same program run
-; under IBM DOS 3.30 and under the box, printing the same table, is a
+; under IBM DOS 3.30 and under DOS, printing the same table, is a
 ; MEASUREMENT - and SPEC.md 96.7.1.1 is what happens when the sentence is
 ; applied by reasoning instead: the argument was made for SI, DI and ES, DX
 ; was left out of it because five functions answer in DX, and DX turned out to
@@ -417,7 +417,7 @@ tab:
     dw 0, 0, 0, 0, 0, 0, 0, 0, 0                                    ; ...AX = 0 ends it
 
 ; --- what AH=25h points INT 60h at.  Nothing calls it; the vector is the
-; user-reserved one precisely so that nothing can, and the box banks the whole
+; user-reserved one precisely so that nothing can, and DOS banks the whole
 ; IVT across the bracket anyway (SPEC.md 96.13).
 stub:
     iret

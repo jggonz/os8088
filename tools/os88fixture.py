@@ -231,3 +231,102 @@ def recipe(goal, contains):
             "os88fixture: `make -n %s` printed %d recipe line(s) containing "
             "%r, wanted exactly one:\n%s" % (g, len(lines), contains, out))
     return lines[0], g
+
+
+def apps360_plus(*pkgs, tag="plus"):
+    """`build/apps360.img` as the shipped recipe makes it, PLUS packages it no
+    longer carries, written to a disk of this process's own - never a
+    shipping one.
+
+        apps = os88fixture.apps360_plus("APPS:build/timer.o88")
+
+    The 360KB apps disk is CURATED (SPEC.md 24.6.1): a package comes off it
+    every time the geometry runs out, and a row that boots it for one of those
+    packages fails for a reason that has nothing to do with what it tests.
+    Re-arranging the shipping disks to keep a row green is the wrong way
+    round, so the row asks for its package here instead. Each argument is an
+    os88disk.py `FOLDER:path` (or a bare path for the root). The recipe is the
+    shipped one lifted out of `make -n` (`recipe` above), so everything else
+    on the disk is what ships; the extra files are appended to its argument
+    list, and os88disk.py refuses a disk they do not fit on. Returns the
+    image's path, which is deleted when the process exits.
+    """
+    import atexit
+    import os88build
+    import shlex
+    cmd, g = recipe("build/apps360.img", "os88disk.py")
+    argv = shlex.split(cmd)
+    out = os.path.join(os88build.at("build"), "apps360-%s-%d.img"
+                       % (tag, os.getpid()))
+    i = argv.index("-o")
+    argv[i + 1] = out
+    for p in pkgs:
+        path = p.split(":", 1)[-1]
+        need(os.path.relpath(os88build.at(path), ROOT) if os.path.isabs(path)
+             else path)
+    # BESIDE the recipe's own packages: they are one positional run, and
+    # os88disk.py's parser takes no second run after its trailing --folder
+    at = next(k for k, t in enumerate(argv) if t.endswith(".o88"))
+    argv[at:at] = list(pkgs)
+    r = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit("os88fixture: apps360_plus%r:\n%s%s"
+                         % (pkgs, r.stdout[-800:], r.stderr[-800:]))
+    atexit.register(lambda: os.path.exists(out) and os.remove(out))
+    return out
+
+
+# --- a HOST fixture made once per INPUT, not once per row ---------------------
+#
+# A row that makes its input on the host - an ffmpeg source run through
+# tools/os88venc.py, a page of generated frames - remakes the same bytes on
+# every run, and its siblings remake them again: vidlysplit's clip is 32 of a
+# 50 s row, five rows the same clip. `cached` makes the file once per KEY and
+# copies it out after that. The key is everything the bytes depend on: the
+# caller's own parameters (a command line, a seed) AND the bytes of every
+# source file that makes them, so an edited encoder is a miss and never a
+# stale clip. A miss is only slow. OS88_FIXCACHE=0 turns it off (the A/B).
+
+ENCODER = ("tools/os88venc.py", "tools/os88vid.py", "tools/os88cgacomp.py",
+           "tools/os88spkfx.py", "tools/os88txtfont.py")
+CACHE = os.path.join(ROOT, "build", "fixcache")
+
+
+def _tool_version(name):
+    try:
+        r = subprocess.run([name, "-version"], capture_output=True, text=True,
+                           timeout=30)
+        return (r.stdout or "").splitlines()[:1]
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def cached(dest, key, produce, sources=ENCODER, tools=()):
+    """Put the fixture for `key` at `dest`: copied out of the cache, or made
+    by `produce(dest)` and then cached. `sources` are repo-relative files the
+    bytes depend on (the encoder by default), `tools` host programs whose
+    `-version` line joins the key (ffmpeg). Answers `dest`."""
+    import hashlib
+    import shutil
+    import tempfile
+    h = hashlib.sha256(repr((key, sys.version_info[:2])).encode())
+    for t in tools:
+        h.update(repr(_tool_version(t)).encode())
+    for s in sources:
+        p = os.path.join(ROOT, s)
+        h.update(s.encode() + b"\0")
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                h.update(f.read())
+    hit = os.path.join(CACHE, h.hexdigest()[:32])
+    if os.environ.get("OS88_FIXCACHE", "1") != "0" and os.path.exists(hit):
+        shutil.copyfile(hit, dest)
+        return dest
+    produce(dest)
+    if os.environ.get("OS88_FIXCACHE", "1") != "0":
+        os.makedirs(CACHE, exist_ok=True)
+        fd, t = tempfile.mkstemp(dir=CACHE)     # (atomic: rows run in
+        os.close(fd)                            # parallel lanes)
+        shutil.copyfile(dest, t)
+        os.replace(t, hit)
+    return dest

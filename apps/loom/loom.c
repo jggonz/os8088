@@ -209,6 +209,7 @@ static void lm_prefs_write(void);
 static void lm_open_pend(void *win);
 static void lm_pack(void);
 static void lm_prev_toggle(void);
+static void lm_prev_off(void);
 static void lm_prev_paint(void);
 static void lm_freeproject(void);
 static int  ovl_openproj(void *win, const char *name);

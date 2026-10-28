@@ -33,13 +33,17 @@ RW_KEEPKB       equ 24              ; KB the plan keeps for the cartridge's
 RW_XROMMAX_KB   equ 8192            ; MBC5's largest cartridge
 
 ; rw_plan - [rw_romkb] is the size probe's: how the cartridge will live.
-; CF = 0: [rw_bcache] 0 one claim, 1 the cache ([rw_nslot] slots); CF = 1:
-; SI = the refusal
+; CF = 0: [rw_bcache] 0 one claim, 1 the cache ([rw_nslot] slots), 2 (kern_
+; mega's arm) its banks IN PLACE above 1MB; CF = 1: SI = the refusal
 rw_plan:
     mov byte [rw_bcache], 0
     call OSAPI_MEM_AVAIL            ; AX = the heap's largest run, KB (and
     mov [rw_pavail], ax             ;   BX its total: the log's head says the
-    push ax                         ;   one)
+%ifdef PKG_MEGA                     ;   one)
+    call rw_xplan
+    jnc .r
+%endif
+    push ax
     mov bx, RW_KEEPKB               ; BX = what else the heap must hold
     pop ax
     mov cx, [rw_romkb]
@@ -103,10 +107,47 @@ rw_plan:
     jb .no
 .whole:
     clc
+.r:
     ret
 .no:
     stc
     ret
+
+%ifdef PKG_MEGA
+; rw_xplan - kern_mega's arm (REALDMG-SPEC 10.3.1): under CPU_F_PM the
+; cartridge's banks 1 on go above 1MB WHOLE and are addressed IN PLACE, a
+; selector a bank, so nothing is ever copied down and the heap holds none of
+; them - [rw_bcache] 2, one 16KB slot for the load to read through. CF = 1:
+; not here (real mode, one bank, or the pool short), the plan goes on as
+; before. Keeps AX
+rw_xplan:
+    cmp byte [rw_pm], 0
+    je .no
+    mov cx, [rw_romkb]
+    and cx, 0FFF0h                  ; whole banks
+    cmp cx, 32
+    jb .no
+    cmp cx, RW_XROMMAX_KB
+    ja .no
+    push ax
+    push cx
+    call OSAPI_XMEM_CAPS            ; AX = KB the pool can hand out
+    mov dx, ax
+    pop cx
+    pop ax
+    sub cx, 16                      ; banks 1 on, a 32KB window each: KB x 2
+    shl cx, 1
+    cmp dx, cx
+    jb .no
+    and word [rw_romkb], 0FFF0h
+    mov word [rw_nslot], 1
+    mov byte [rw_bcache], 2
+    clc
+    ret
+.no:
+    stc
+    ret
+%endif
 
 ; rw_bload - the cache's load, on the UI task in rw_name's folder: the slots,
 ; the store, then the file read raw a bank at a time - bank 0 into the view,
@@ -116,17 +157,29 @@ rw_bload:
     mov ax, [rw_nslot]
     mov cl, 4
     shl ax, cl
-    call OSAPI_MEM_CLAIM            ; DX = the slots, pinned: the bank table
-    jc .room                        ;   names them
+    call OSAPI_MEM_CLAIM            ; DX = the slots (the bank table names
+%ifdef RDG_AOT                      ;   them: rw_mreloc, rwmove.inc)
+    call rw_atight                  ; (the claim compacted what it had to)
+%endif
+    jc .room
     mov [rw_slotseg], dx
     mov ax, [rw_romkb]
     sub ax, 16
+%ifdef PKG_MEGA
+    cmp byte [rw_bcache], 2         ; in place: a 32KB window a bank, the
+    jne .sz                         ;   bank its upper half (10.3.1)
+    shl ax, 1
+.sz:
+%endif
     mov cx, 1024
     mul cx
     call OSAPI_XMEM_ALLOC           ; DX:AX = the store's base
     jc .noxms
     mov [rw_xbase], ax
     mov [rw_xbase + 2], dx
+%ifdef RDG_AOT
+    mov word [rw_aebank], 0         ; (the ROM in the package: from bank 0)
+%endif
     mov di, rw_bcur                 ; the read's cursor, from offset 0
     mov cx, FSEQ_SIZE / 2
     xor ax, ax
@@ -184,6 +237,15 @@ rw_bload:
     dec ax
     mov cx, 16384
     mul cx
+%ifdef PKG_MEGA
+    cmp byte [rw_bcache], 2         ; in place: (n - 1) x 32KB + 16KB, so
+    jne .at                         ;   that window n - 1 of the run, at
+    shl ax, 1                       ;   (n - 1) x 32KB, has the bank at its
+    rcl dx, 1                       ;   4000h - the core's ROMX, whose 4000h
+    add ax, 16384                   ;   is the bank's first byte
+    adc dx, 0
+.at:
+%endif
     add ax, [rw_xbase]
     adc dx, [rw_xbase + 2]
     xor si, si
@@ -205,8 +267,29 @@ rw_bload:
     mov word [rdg_bfill], rw_bfill
     mov word [rdg_bmiss], rw_bmiss
     mov word [rw_nmiss], 0
+%ifdef PKG_MEGA
+    cmp byte [rw_bcache], 2
+    jne .done
+    mov ax, [rw_xbase]              ; the run: a data selector every 32KB,
+    mov dx, [rw_xbase + 2]          ;   each a 64KB window (KERN-MEGA-PLAN
+    call OSAPI_XMEM_RUN             ;   14.16) - DX the first, CX 8
+    jc .xrun
+    mov [rw_xsel], dx
+    xor dx, dx                      ; the slot was the read's alone
+    xchg dx, [rw_slotseg]
+    call OSAPI_MEM_FREE
+    mov word [rw_nslot], 0
+    mov word [rdg_bfill], rw_xfill
+    mov word [rdg_bmiss], rw_xmiss
+.done:
+%endif
     clc
     ret
+%ifdef PKG_MEGA
+.xrun:                              ; (no run of LDT entries that long)
+    mov si, rw_s_room
+    jmp short .why
+%endif
 .xbad:
 .bad:
     mov si, rw_s_notrom
@@ -220,7 +303,8 @@ rw_bload:
 .noxms:
     mov si, rw_s_room
 .free:
-    mov dx, [rw_slotseg]
+    xor dx, dx
+    xchg dx, [rw_slotseg]
     call OSAPI_MEM_FREE
     stc
     ret
@@ -231,6 +315,12 @@ rw_bload:
 
 ; rw_bread - the file's next 16KB into DX:0000. CF = 1 unless it all came
 rw_bread:
+%ifdef RDG_AOT
+    cmp byte [rw_aemb], 0           ; the ROM in the package: bank n at its
+    je .f                           ;   offset (rwaot.inc)
+    jmp rw_aebread
+.f:
+%endif
     push es
     push ds
     pop es
@@ -280,10 +370,38 @@ rw_bfill:
     pop ax
     ret
 
+%ifdef PKG_MEGA
+; rw_xfill - rdgsys's rdg_init in kern_mega's arm (10.3.1), the bank table
+; just zeroed (DS = the view): every bank 1 on, window n - 1 of the run
+rw_xfill:
+    push ax
+    push cx
+    push di
+    mov ax, [cs:rw_xsel]
+    mov cx, [cs:rw_banks]
+    dec cx
+    mov di, RDG_BTAB + 2
+.f:
+    mov [di], ax
+    add ax, 8                       ; (OSAPI_XMEM_RUN's step)
+    inc di
+    inc di
+    loop .f
+    pop di
+    pop cx
+    pop ax
+; rw_xmiss - ...whose table has every bank: rdg_setbank maps bank 0 for a
+; bank past the cartridge's end, as it does for a fetch that failed
+rw_xmiss:
+    ret
+%endif
+
 ; rw_bmiss - rdgsys's rdg_setbank: BX = a bank x 2 with no segment in the
 ; table, DS = the view. The UI task fetches it now; the worker asks the UI
-; task to and yields until the table has it - or, if the window is closing,
-; ends at OSAPI_TASK_ALIVE, which a closed window never returns from. A
+; task to and yields until the table has it - or, if the window is closing
+; and the bank has not come, asks OSAPI_TASK_ALIVE, which a closed window
+; never returns from (while rw_onclose waits for us it serves the bank, so the
+; frame finishes and the worker leaves the machine as the close needs). A
 ; yield and not a tick's sleep: the wake makes the UI task runnable at once,
 ; so a fetch is a switch there and back and the copy, where a sleep made every
 ; one a whole tick - 18 a second at most, which a game moving among one bank
@@ -304,16 +422,16 @@ rw_bmiss:
     pop bx
 .w:
     call OSAPI_TASK_YIELD
-    cmp byte [cs:rw_closing], 0
-    jne .gone
-    cmp word [cs:rw_bankreq], 0
-    jne .w
+    cmp word [cs:rw_bankreq], 0     ; served: the frame goes on - and FIRST,
+    je .in                          ;   closing or not: rw_onclose serves us
+    cmp byte [cs:rw_closing], 0     ;   (rw_bserve) while it waits for
+    je .w                           ;   [rw_incore] to fall, which only the
+    mov bx, [cs:rw_win]             ;   frame's end can do. Testing closing
+    call OSAPI_TASK_ALIVE           ;   first looped here for ever, and the
+    jmp short .w                    ;   close with it (REALDMG-SPEC 10.3)
+.in:
     pop ax
     ret
-.gone:
-    mov bx, [cs:rw_win]
-    call OSAPI_TASK_ALIVE
-    jmp short .w
 .ui:
     call rw_bfetch
     pop ax

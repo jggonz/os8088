@@ -154,3 +154,39 @@ behind the scenes."*
       `hdauto`, `vidxiphd`, `vidxiphdhold`, `hmadrv` - 13 of 13 passed;
       `make test-full` 60 passed, 1 skipped (`ctoolchain`, no C compiler).
 
+
+## Wave 5 — one installer: the Control Panel's Install starts the wizard (2026-10-24)
+
+The owner: *"no point in having two interfaces that do the same thing. And
+the saved disk space helps."* `HDDTOOL.DRV` carried the Install window beside
+the engine the wizard drives; the window goes, and the button opens the
+wizard (SPEC.md 52.10.4.4).
+
+- [x] SPEC.md 52.10.4.4 pinned: the button posts `INSTALL.O88`'s launch
+      off the boot volume's root; §52.10.6 / §52.10.6.1 marked superseded;
+      §52.4, §117, §117.4 brought into line; `0FDh` kept as an older tool's
+      answer.
+- [x] `drivers/hdd/`: the window, its drawing layer, the Erase box, the
+      window-only captions and the two-faces bookkeeping (`hd_ipkg`, the
+      `0FDh` refusal, *Close the Install window first*) out; `hd_inst_post`
+      / `hd_lwake` in: a never-shown window whose wake runs the launch with
+      the gfx lock free, `HDT_BUSY` holding the image until it has.
+- [x] Measured: `HDDTOOL.DRV` 18,327 → 17,038 bytes, claim 18 → 17 KB,
+      the file 14,100 → 13,130 (14 → 13 clusters at 360 KB). `HDD.DRV` moves
+      only by the claim size; `INSTALL.O88` byte-identical.
+- [x] Host: `make` (fast tier 61/61), `DISKCNT=1` and `INSTCHUNK=1` knob
+      trees assemble.
+- [x] Tests: `tests/instwiz.py` is the wizard driver every installing row
+      shares (MartyPC and QEMU); `instdeep`'s `open_installer` presses the
+      Control Panel's Install and gets the wizard; `inststate` reads the
+      State words out of the wizard's slot records; `httpinstall` starts
+      `INSTALL.O88` off the HTTP drive; `instrest` retired with the window,
+      its glyph apparatus kept as `tests/glyphread.py`.
+- [x] Final pass (2026-10-24): soak `install`, `instdeep`, `instkeep`,
+      `inststate`, `instcross`, `instimg`, `instassoc`, `hdboot`, `knobhd`,
+      `bigvol`, `hdmap`, `hdsize`, `hmadrv`, `httpinstall`, `netinst`,
+      `fddpark`, `hddcp`, `hdauto` - 16 of 18 first time; `httpinstall`
+      and `netinst` failed on the test changes themselves (a deleted helper
+      `netinst` imports, and a Disk-window walk QEMU could not time), fixed
+      and re-run green, `httpinstall --noattr` still red on KERNEL.SYS.
+      `make test-full` 71 passed.

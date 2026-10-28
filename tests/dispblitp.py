@@ -62,14 +62,17 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
-def run(a, case, iw, ih, px, sym):
-    settle = os88marty.settle
+def run(a, cases, iw, ih, px, sym):
+    # Every wait in the setup is followed by a guest read or a click, so it
+    # is the UI task finishing (ui_done), not a still screen; the only
+    # capture is the leg's last, which keeps the screen settle.
+    settle = lambda m, card=None, gate=None: os88marty.ui_done(m)
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         if len(m.cards()) != 2:
             sys.exit("dispblitp: %s is not a two-card machine" % a.machine)
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, settle)
         dispcp.set_primary(m, mo, S, settle, 0)
@@ -134,38 +137,59 @@ def run(a, case, iw, ih, px, sym):
         ix, iy = ox0 - wx, oy0 - wy
         print("   canvas is four planes at +%d,+%d in the frame; window "
               "(%d,%d) %dx%d, seam at x=%d" % (ix, iy, wx, wy, ww, wh, seam))
+        # ONE BOOT, BOTH LEGS: pt_planar is one-way, so each leg needs a
+        # Paint that has never crossed a seam - a FORK of this one taken
+        # before the drag, not a second boot and a second Paint open.
+        with os88marty.Forks(m) as fk:
+            for case in cases:
+                with fk.restore() as r:
+                    res = leg(r, case, seam, D, wx, wy, ww, planar, pw)
+                check(case, res, seam, D, ww, ix, iy, iw, ih, px)
+    return 0
 
-        # STRADDLE: two thirds over the far card, so it is unambiguous and
-        # the title bar stays reachable on the near one. DIRECT: clear onto
-        # the far display in one move, which never straddles - the outline
-        # drag repaints nothing on the way, so the first blit after it is a
-        # whole canvas on a MONO display, and gfx_blitp refuses on its very
-        # first guard rather than on the seam. That is a different exit from
-        # the same routine and it had a different bug behind it.
-        tgt = (seam - ww // 3) if case == "straddle" else (D[1][0] + 20)
-        mo.drag(wx + ww // 2, wy + TITLE_H // 2,
-                tgt + ww // 2, wy + TITLE_H // 2)
-        settle(m, card=0)
-        # THE CONVERSION IS CPU WORK THE SCREEN CAN SIT STILL THROUGH, so wait
-        # on the flag it clears - and on a broken kernel, which never clears
-        # it, spend what the old 8-second pause gave and let the assertion
-        # below say so.
-        try:
-            os88marty.until(m, lambda mm: not mm.read(planar, 1)[0],
-                            "Paint to convert its canvas", poll=0.2,
-                            guest=8 * os88marty.GUEST_PACE)
-        except os88marty.MartyError:
-            pass
-        settle(m, card=0)               # ...and the repaint it starts, on
-        settle(m, card=1)               # both displays, before [gfx_dnest]
-        still = m.read(planar, 1)[0]
-        nest = m.read(S("gfx_dnest"), 1)[0]
-        wx2, wy2, _, _ = dispcp.win_rect(m, S, pw)
-        print("   %s: window at x=%d, [pt_planar] = %d, [gfx_dnest] = %d"
-              % (case, wx2, still, nest))
-        mo.to(4, 4)
-        settle(m, card=0)
-        fw, fh, fb = m.fbuf(card=0)
+
+def leg(m, case, seam, D, wx, wy, ww, planar, pw):
+    mo = os88mouse.Mouse(marty=m)
+    if not m.read(planar, 1)[0]:        # the fork must be a Paint that has
+        sys.exit("dispblitp: the %s leg's fork is not four planes - it did "
+                 "not start from an unconverted Paint" % case)  # never crossed
+
+    # STRADDLE: two thirds over the far card, so it is unambiguous and
+    # the title bar stays reachable on the near one. DIRECT: clear onto
+    # the far display in one move, which never straddles - the outline
+    # drag repaints nothing on the way, so the first blit after it is a
+    # whole canvas on a MONO display, and gfx_blitp refuses on its very
+    # first guard rather than on the seam. That is a different exit from
+    # the same routine and it had a different bug behind it.
+    tgt = (seam - ww // 3) if case == "straddle" else (D[1][0] + 20)
+    mo.drag(wx + ww // 2, wy + TITLE_H // 2,
+            tgt + ww // 2, wy + TITLE_H // 2)
+    os88marty.ui_done(m)
+    # THE CONVERSION IS CPU WORK THE SCREEN CAN SIT STILL THROUGH, so wait
+    # on the flag it clears - and on a broken kernel, which never clears
+    # it, spend what the old 8-second pause gave and let the assertion
+    # below say so.
+    try:
+        os88marty.until(m, lambda mm: not mm.read(planar, 1)[0],
+                        "Paint to convert its canvas", poll=0.05,
+                        guest=8 * os88marty.GUEST_PACE)
+    except os88marty.MartyError:
+        pass
+    os88marty.ui_done(m)            # ...and the repaint it starts, on
+                                    # both displays, before [gfx_dnest]
+    still = m.read(planar, 1)[0]
+    nest = m.read(S("gfx_dnest"), 1)[0]
+    wx2, wy2, _, _ = dispcp.win_rect(m, S, pw)
+    print("   %s: window at x=%d, [pt_planar] = %d, [gfx_dnest] = %d"
+          % (case, wx2, still, nest))
+    mo.to(4, 4)
+    os88marty.settle(m, card=0)     # the capture: the glass, so a settle
+    fw, fh, fb = m.fbuf(card=0)
+    return wx2, wy2, still, nest, fw, fb
+
+
+def check(case, res, seam, D, ww, ix, iy, iw, ih, px):
+    wx2, wy2, still, nest, fw, fb = res
 
     if case == "straddle" and (wx2 >= seam or wx2 + ww <= seam):
         sys.exit("dispblitp: the window ended at x=%d, which does not "
@@ -245,8 +269,7 @@ def main():
     # TWO BOOTS, because pt_planar is one-way: once a straddle has converted
     # the canvas there is no second refusal to watch, so the direct move needs
     # a Paint that has never crossed a seam.
-    for case in ([a.case] if a.case else ["straddle", "direct"]):
-        run(a, case, iw, ih, px, sym)
+    run(a, [a.case] if a.case else ["straddle", "direct"], iw, ih, px, sym)
     print("dispblitp: gfx_blitp refuses a seam and a mono display, says so, "
           "and leaves the nest where it found it")
     return 0

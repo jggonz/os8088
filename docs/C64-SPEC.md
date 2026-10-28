@@ -172,7 +172,7 @@ their own segments:
 | claim | size | contents |
 |---|---|---|
 | RAM | `os88_mem_claim(64)` — 65,536 bytes, `c64_m.ramseg` | the C64's RAM, `$0000-$FFFF`, flat, one segment |
-| ROM | `op_load`'s carve — 20,480 bytes, `c64_m.romseg` = `os88_part_seg(0)` | the ROM part, §1.4's layout, claimed and decoded by the parts standard before `os88_main` runs. The same carve holds the overlay, part 1 (§13.3): 23.0K in all, measured, top-down and pinned |
+| ROM | `op_load`'s carve — 20,480 bytes, `c64_m.romseg` = `os88_part_seg(0)` | the ROM part, §1.4's layout, claimed and decoded by the parts standard before `os88_main` runs. The same carve holds the overlay, part 1 (§13.3): 23.0K in all, measured, top-down - and MOVABLE, §3.1.1 |
 
 Launch is **defined by the claims succeeding**, not by a free-KB figure: the
 64KB claim must succeed (its refusal toasts `C64: 64KB? <n> KB`, with
@@ -186,6 +186,42 @@ first wake, until it became a part (§13.3).
 Colour RAM (1,024 nibbles), the VIC/CIA/SID register files, the 1bpp frame
 shadow and the keyboard matrix are in the package's **bss** (§13.0). The
 core's own hot scratch is in neither — §3.5.
+
+#### 3.1.1 All three long-lived claims MOVE
+
+**The RAM, the parts carve and Paste's queue are movable** (SPEC.md 66.2,
+docs/plans/NO-PINNING-PLAN.md C3 and C2). Each was born pinned and stayed
+pinned - 64KB and 23KB of wall in the arena for as long as the machine ran.
+The shim says `CC_HAS_ONMOVE` and `CC_ONMOVE_PARTS`, and `os88_onmove`
+(`c64.c`) puts right every word that names one:
+
+| claim | the words that name it | declared |
+|---|---|---|
+| the 64KB RAM | `c64_m.ramseg` - the record `c64cpu.inc` and `c64mem.inc` load DS/ES from - and `c64_chr_seg` (`c64scr.c`) while the character generator is in RAM | at the end of `os88_main`, every claim made and every copy taken |
+| the parts carve (ROM + overlay) | `c64_m.romseg`, re-read through `os88_part_seg(0)` on EVERY call, and `c64_chr_seg` while the character generator is the ROM's; the module's vectors, `[cc_ovseg]` and `op_base` are crt0's (`cc_ovcarve`, which then calls `os88_onmove` with the carve's two bases) | by crt0, after `os88_main` returns (SPEC.md 73.14.2.1) |
+| Paste's 2KB queue | `c64_paste_seg` (`c64kbd.c`), which the feeder peeks through at each use | once `os88_clip_get_seg` has filled it |
+
+The `.PRG` claim of Smart attach and Copy's staging claim are claimed and
+freed inside one call and stay pinned - bucket C, "in use right now".
+
+**THE CORE IS UNTOUCHED.** `c64_run` loads DS from `c64_m.ramseg` at its
+door and zeroes the fetch `BOUND` there, so its first fetch re-derives the
+cached fetch ES (`C64_SCR_FES`) from both words; every other C entry into the
+core reads them per call. It runs on the UI task - the only task that
+compacts (SPEC.md 66.3.1) - and nothing inside it claims (the I/O handlers'
+one kernel call is `OSAPI_SND_TONE`), so a move lands between two runs and
+never inside one. `tools/os88rdiff.py` over the two builds reads all 128
+routines of `c64cpu.inc`, `c64mem.inc` and `c64band.inc` instruction-identical
+at an EVEN shift; the shim's one-byte parity pad ahead of the core keeps it
+there however the compiled C grows. Cost: `.text` +190, `.modc` +13, `.data`
++4 bytes.
+
+**Gated** by `hosttest/c64uitest.c` (the launch declares the RAM, Paste's
+queue is declared once filled, and `os88_onmove` follows the RAM and the
+carve into every word - red with the `romseg` store taken out) and by
+`tests/emumove.py --pkg c64` (`soak -k c64move`), which moves the RAM, the
+region and the carve on MartyPC with the 6510 mid-boot and checks the ROM is
+at the new `romseg` and the machine still runs.
 
 ### 3.2 `$0000` and `$0001` are NOT RAM
 

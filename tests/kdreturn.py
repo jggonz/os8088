@@ -66,9 +66,9 @@ boot and a restore at the desktop.  The field reported exactly that and this
 row is what would have caught it - the LIVE_MAX cycle bound below goes red on
 the fallback, which is the whole reason it is a bound and not a screen read.
 
-**`--compact extent` / `--compact module` MOVE THE BOX UNDER THE HANDOFF**
+**`--compact extent` / `--compact module` MOVE DOS UNDER THE HANDOFF**
 (SPEC.md 96.40.8).  The post is a far pointer, `[hb_dosseg]`, and the DOS
-box's region is MOVABLE - so a claim between the post and the picture that
+package's region is MOVABLE - so a claim between the post and the picture that
 has to compact can carry the region away from the word that names it.  Two
 claims in that window are the handoff's own: `HIBER.DRV`'s image, loaded by
 `hbf_perform` before step 1 reads the record, and step 3's extent list, taken
@@ -87,14 +87,14 @@ Everything else is filled with PINNED claims under a tombstone tag, and the
 two caches are retagged pinned and unpurgeable too - a compaction DROPS a
 cache before it moves anything, so a heap that still has one never needs the
 region to move.  They stand in for any other program's claims.  A ceiling
-wall is placed before the box opens and taken away at the stop, because a
+wall is placed before DOS opens and taken away at the stop, because a
 region claimed top-down packs to the ceiling and there must be ground on BOTH
 sides of it.  The heap and the window's own state are then left to the
 ordinary assertions above, unchanged.
 
 **VERIFIED RED** on the kernel before 96.40.8, both arms: `extent` came home
 with `[dos_exit]` 0 and the code `002A` written a kilobyte under the record,
-INTO THE BOX'S OWN CODE, and `module` was refused outright - step 1 read the
+INTO DOS'S OWN CODE, and `module` was refused outright - step 1 read the
 record from where the region used to be and the magic did not match.
 
 The fixture is the SHIPPED 360KB system disk with one file added: a SYSTEM.CFG
@@ -237,7 +237,7 @@ def claims(m):
     return out
 
 
-# --- --compact: the heap shaped so the handoff's own claim moves the box ----
+# --- --compact: the heap shaped so the handoff's own claim moves DOS ----
 # MEM_K_ICO_UNUSED: a TOMBSTONE tag nothing claims or frees under
 # (kernel/memory.inc), so a wall written with it is pinned, unpurgeable and
 # nobody's to give back.
@@ -290,12 +290,12 @@ def shape(m, arm, seg):
     cl = sorted(claims(m))
     region = [c for c in cl if c[0] == seg]
     if not region:
-        fail("no claim is based at the box's segment %04X" % seg)
+        fail("no claim is based at DOS's segment %04X" % seg)
     under = max(c[0] + c[1] for c in cl if c[0] < seg)
     end = seg + region[0][1]
     over = min([c[0] for c in cl if c[0] > seg] + [word(m, "mem_top")])
     if any(c[0] < under and c[0] + c[1] > under for c in cl):
-        fail("the heap under the box is not one free run")
+        fail("the heap under DOS is not one free run")
     K = 0x40                                    # a KB, in paragraphs
     if arm == "module":                         # hu+ho for the image and
         ho = min(mod_kb // 2, (over - end - 1) // K) * K   # NEITHER alone:
@@ -303,7 +303,7 @@ def shape(m, arm, seg):
                                                 # and 3 over for the 7KB one
                                                 # kernel size pass 13 made it
                                                 # (the ceiling leaves 4KB over
-                                                # the box, a paragraph short
+                                                # DOS, a paragraph short
                                                 # of 4+wall); 2 for the list.
                                                 # The OVER hole is capped by
                                                 # what the ceiling leaves: an
@@ -315,7 +315,7 @@ def shape(m, arm, seg):
         hu = ho = K                             # 1+1 for the list, the
         floor = mod_kb * K                      # image's own hole
     if over - end < ho + 1 or seg - under < hu + floor + 1:
-        fail("not enough heap round the box to shape: %04X..%04X under, "
+        fail("not enough heap round DOS to shape: %04X..%04X under, "
              "%04X..%04X over" % (under, seg, end, over))
     wall(m, under + floor, seg - hu - (under + floor))
     wall(m, end + ho, over - (end + ho))
@@ -332,7 +332,7 @@ def wait_text(m, want, secs, what):
             return True
         return False
     try:                        # `secs` is budgeted on the GUEST's clock
-        M.until(m, seen, "%s: %r" % (what, want), poll=0.25, limit=secs)
+        M.until(m, seen, "%s: %r" % (what, want), poll=0.05, limit=secs)
         return got[-1]
     except M.MartyError:
         pass
@@ -380,10 +380,14 @@ def wait_desktop(m, ui, secs=300, stamp=None):
         except Exception:
             return False
     try:                        # `secs` is budgeted on the GUEST's clock
-        M.until(m, graphics, "a graphics desktop", poll=0.2, limit=secs)
+        M.until(m, graphics, "a graphics desktop", poll=0.05, limit=secs)
         if stamp is not None:
             stamp.append(m.status()["cycles"])
-        return ui.ready(limit=secs)
+        # the restored desktop's STATE, not its picture: every read after
+        # this is guest memory (titles, DOS, the claims, the clock)
+        ui.up(limit=secs)
+        M.ui_done(m)
+        return ui
     except Exception:           # ...as the host loop swallowed them
         pass
     # EVERY non-blank row, NUMBERED. A failure here is always "the machine
@@ -447,17 +451,22 @@ def main():
     if "--machine" in sys.argv:
         machine = sys.argv[sys.argv.index("--machine") + 1]
     m = M.launch(boot, apps=FLOPPY, machine=machine,
-                 extra=["--mount", "hd:0:" + VHD])
+                 extra=["--mount", "hd:0:" + VHD], boot=False)
     try:
+        # a gate on STATE (SOAK-SPEED technique 4): the first act is a guest
+        # read or an os88ui verb, so no picture settle is owed
+        m.run()
         ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        ui.up(limit=240)
+        M.no_saver(m)
+        M.ui_done(m)
         print("kdreturn: booted off %s"
               % ("a 360KB floppy, with the fixed disk on a DRIVER"
                  if from_floppy else "the fixed disk"))
         if from_floppy:
             # **THE HARD DISK HAS TO BE THERE, or this row quietly becomes
-            # §96.42's** - the one where there is nothing to come back to, the
-            # box asks first, and every assertion below about the return is
+            # §96.42's** - the one where there is nothing to come back to,
+            # DOS asks first, and every assertion below about the return is
             # about a machine that never left. The driver publishes its volume
             # at attach, so a live row past B: is the fact to read.
             G = os88geom
@@ -492,8 +501,7 @@ def main():
             fail("double-clicking %s on the floppy opened no window" % prog)
         rs = wait_text(m, "READY", 150, "the windowed run")
         win_kb = topmem(rs)
-        m.type_text("x")
-        M.settle(m)
+        M.text_taken(m, "x")        # (was type_text + settle: next is memory)
         print("kdreturn: windowed, %d KB above the PSP" % win_kb)
 
         dm = dosmap.package()
@@ -512,15 +520,16 @@ def main():
         m.write((pseg << 4) + dm["dos_keepc"], bytes([1, 0]))
         if compact:
             m.bp_exec("hbf_perform")
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
+        # settle=0: what follows waits on the handoff's own state
+        mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"), settle=0)
         if compact:
-            # --- THE BOX MOVES UNDER THE HANDOFF (SPEC.md 96.40.8) -----------
+            # --- DOS MOVES UNDER THE HANDOFF (SPEC.md 96.40.8) -----------
             if not m.wait_stop(60.0):
                 fail("the post was never spent: hbf_perform was not reached")
             unwall(m, ceiling)
             posted = dosmap.instance(m)
             if word(m, "hb_dosseg") != posted:
-                fail("the post names %04X and the box is at %04X before "
+                fail("the post names %04X and DOS is at %04X before "
                      "anything has claimed" % (word(m, "hb_dosseg"), posted))
             mod_kb = shape(m, compact, posted)
             m.breakpoints([{"type": "mem",
@@ -528,7 +537,7 @@ def main():
             mark = m.go()
             if not m.wait_stop(60.0, since=mark):
                 fail("the handoff never reached its extent-list claim with "
-                     "the box at %04X when it was posted: hbm_dosrun "
+                     "DOS at %04X when it was posted: hbm_dosrun "
                      "REFUSED, which is step 1 reading the record from where "
                      "the region used to be - the module's own load moved it "
                      "and [hb_dosseg] did not follow (SPEC.md 96.40.8)"
@@ -536,17 +545,17 @@ def main():
             now, named = dosmap.instance(m), word(m, "hb_dosseg")
             xseg = word(m, "hb_xseg")
             m.breakpoints([])
-            print("kdreturn: --compact %s - the box was posted at %04X, is at "
+            print("kdreturn: --compact %s - DOS was posted at %04X, is at "
                   "%04X with the extent list at %04X, and [hb_dosseg] says "
                   "%04X" % (compact, posted, now, xseg, named))
             if now == posted:
-                fail("the box did not move: the shaped heap (a %dKB image, "
+                fail("DOS did not move: the shaped heap (a %dKB image, "
                      "the holes round %04X) no longer forces a compaction "
                      "inside the handoff, so this arm proves nothing. "
                      "Re-derive the holes from what hbm_dosrun claims now"
                      % (mod_kb, posted))
             if named != now:
-                fail("[hb_dosseg] still names %04X and the box is at %04X: "
+                fail("[hb_dosseg] still names %04X and DOS is at %04X: "
                      "the image about to be written carries a STALE segment, "
                      "and the wake will put the exit code into whatever is "
                      "there now (SPEC.md 96.40.8)" % (named, now))
@@ -620,12 +629,12 @@ def main():
         st = m.read((pseg << 4) + dm["dos_state"], 1)[0]
         code = m.read((pseg << 4) + dm["dos_exit"], 1)[0]
         if st != 2:                             # DST_RAN
-            fail("[dos_state] is %d and not DST_RAN: the box was woken and "
+            fail("[dos_state] is %d and not DST_RAN: DOS was woken and "
                  "did not read KDH_CODE (SPEC.md 96.41)" % st)
         if code != 42:
             fail("[dos_exit] is %d and DOSHELLO exits with 42 - the code came "
                  "back wrong, which is worse than not coming back" % code)
-        print("kdreturn: the box shows DST_RAN, exit code %d" % code)
+        print("kdreturn: DOS shows DST_RAN, exit code %d" % code)
 
         # --- 4. and the mailbox is spent --------------------------------
         box = m.read(KDB, 6)
@@ -670,7 +679,7 @@ def main():
         #   the LINE. `dos_run`'s arm-3 handoff fell into `.out`, which runs
         #   `dos_con_ended` - so a SUCCESSFUL post logged `ended, exit code
         #   000` before the machine had been handed over, about a program that
-        #   had not started. It reads as the box loading something in order to
+        #   had not started. It reads as DOS loading something in order to
         #   exit. The post leaves by `.outq` now and the line is written HERE,
         #   on the wake that says the run finished;
         #

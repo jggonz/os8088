@@ -120,19 +120,19 @@ the "instruction above" reading - `%ifdef TRKLOG` in apps/tracker/trktxt.inc
 puts a `jmp short .out` in front of a label that a shipped build reaches by
 fall-through - so a preprocessor line clears the walk rather than being walked
 through.  And the scan is the KERNEL, deliberately.  Over the
-whole tree it finds four more and every one of them is real, none of them the
+whole tree it finds four more (three since the hard-disk Install window
+and its hd_iw_click went, SPEC.md 52.10.4.4) and every one of them is real, none of them the
 staging bug's kind - they are lost arms and duplicates, and each is a decision
 about its own package rather than a line of this file:
 
     apps/ftpd/ftpd.asm:7275     fd_drawctl.no        a `pop ax / stc / ret`
     apps/texpad/texpad.asm:4221 tp_bact.next         duplicates the dispatcher's
                                                      own fall-through
-    drivers/hdd/inst.inc:1519   hd_iw_click.refused  draws hd_s_ibad
     drivers/hdd/inst.inc:1793   hd_inst_apps.nboot   sets hd_s_inboot, the
                                                      "files copied, disk will
                                                      not boot" sentence
 
-Widening the scan means answering those four, which is package work; and a gate
+Widening the scan means answering those three, which is package work; and a gate
 that ships with its own findings pre-excused is worth less than one that ships
 green, so there is no exception list here and there should not be one.
 

@@ -157,7 +157,7 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         ui, seg = open_bench(m, S)
         base = seg << 4
         os88marty.ui_done(m, "the bench window's first paint")
@@ -173,7 +173,7 @@ def main():
         # the two method-T rows alone are several - and a host-timed wait
         # allows a different amount of it on every box.
         os88marty.until(m, lambda mm: rw("pb_done") >= 1,
-                        "the bench run to finish", poll=0.5, limit=900.0,
+                        "the bench run to finish", poll=0.05, limit=900.0,
                         guest=240.0)
         res = m.read(base + syms["pb_res"], NRES * 4)
         flags = m.read(base + syms["pb_resf"], NRES)

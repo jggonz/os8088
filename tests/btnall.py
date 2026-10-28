@@ -41,7 +41,7 @@ def u16(b):
 
 def pkg_syms(src, inc, defines=()):
     """A package's symbols, by re-assembling it with a map.  THE DEFINES MUST
-    MATCH THE SHIPPED BUILD - the DOS box on the system disk is dosp.bin, and
+    MATCH THE SHIPPED BUILD - DOS on the system disk is dosp.bin, and
     a map taken without -DDOSKPART resolves to plausible, wrong offsets."""
     with tempfile.TemporaryDirectory() as d:
         cp, mp = os.path.join(d, "t.asm"), os.path.join(d, "t.map")
@@ -109,7 +109,7 @@ def run():
             syms = pkg_syms(ROOT + src, inc, defs)
             w = ui.path(path)
             ui.settle()
-            seg = u16(m.read(os88geom.winptr(m, w.i, ui.sym) + os88geom.W_SEG, 2))
+            seg = os88marty.pkg_live(m, w, ui.sym)
             base = syms[rec]
             rd = lambda off: u16(m.readseg(seg, base + off, 2))
 

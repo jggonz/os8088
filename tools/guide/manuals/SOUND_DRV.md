@@ -10,8 +10,8 @@ machine has. With it, programs can use FM music, digital sound and MIDI.
 
 The driver knows these kinds of sound hardware:
 
-- **AdLib**, and the FM music chip that every Sound Blaster carries. FM music
-  costs the machine almost nothing while it plays, and system beeps move to
+- **AdLib**, and the compatible OPL FM music hardware on supported sound
+  cards. FM music costs the machine almost nothing while it plays, and system beeps move to
   the FM chip too.
 - **Sound Blaster**: digital sound such as WAV files and the voices of a
   module, and recording from the card's input.
@@ -33,8 +33,11 @@ while it is saved.
 
 Most machines of the period had no sound card, so the driver is a file on
 the system disk and not part of the system itself. It costs memory only on a
-machine that loads it: about 11K for the driver, with additional memory while
-a program plays or records digital sound.
+machine that loads it: about 7K for the driver, or 10K with a sound card whose
+mixer it can set, with additional memory while a program plays or records
+digital sound. On a 286 or newer with memory above 1MB, the driver and its
+sound buffer load into the high memory area instead, so most of that comes
+out of conventional memory.
 
 It is not loaded unless it is wanted. The first time os8088 starts on a
 machine, it checks quickly for an FM chip. If it finds one, the driver loads
@@ -82,8 +85,8 @@ panel. The thumb follows the requested percentage smoothly; arrow keys move
 it by one percent. The card applies its nearest supported hardware level.
 Opening the panel starts at the card's current setting.
 
-Open [[MIXER.O88]] from the apps disk's `APPS` folder for individual sources
-and balance. The speaker's quick volume panel controls master volume.
+Open [[MIXER.O88]] from the `APPS` folder of the 720KB, 1.2MB or 1.44MB
+apps disk for individual sources and balance. The speaker's quick volume panel controls master volume.
 These controls adjust the sound card; they do not change the built-in PC
 speaker or a Covox.
 
@@ -109,8 +112,8 @@ loaded** and os8088 stops trying at every start.
   The small system for 128KB machines loads no drivers and leaves it off.
 - A Covox cannot be detected, so it is used only when you choose it on the
   Sound page.
-- On an XT, a Sound Blaster set to IRQ 5 cannot play digital sound when
-  the hard disk controller already uses IRQ 5, as the IBM XT's does. The
-  first time a program tries, the driver says **IRQ 5 is the hard disk's**,
-  and the program carries on as if there were no card. FM music still
-  works. Move the card's IRQ jumper to 7.
+- On an XT with a hard disk, a Sound Blaster set to IRQ 5 shares its line
+  with the disk controller and would fall silent after its first sound. The
+  driver says **IRQ 5 is the hard disk's** once a session and leaves the
+  card's digital sound off; set the card to IRQ 7 with its jumpers. FM music
+  still plays.

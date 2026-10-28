@@ -1,7 +1,7 @@
 ; DOSFULL.COM - a HELD stream that runs out of room, and a DELETE while its
 ; hold is pending (SPEC.md 18.4.9.1, 18.4.9.2, 96.53). OURS, MIT.
 ;
-; Creates FULL.DAT and writes 8 KB chunks until AH=40h refuses - the box's
+; Creates FULL.DAT and writes 8 KB chunks until AH=40h refuses - DOS's
 ; flushes are one HELD WRITE_SEQ stream, so the refusing flush is a held call
 ; that failed with the disk full - then DELETES the file without closing it
 ; and exits. The host fscks the floppy afterwards: every cluster must be free

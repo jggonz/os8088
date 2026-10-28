@@ -230,7 +230,9 @@ def drive(img, apps, machine, card, tree, census, shot=None):
             send()
             os88marty.until(
                 m, lambda _: m.readseg(seg, caret, 2) != before,
-                "ArtfulType to take " + what, poll=0.05, limit=120.0)
+                "ArtfulType to take " + what, poll=0.005, limit=120.0)
+            # (poll 5 ms: ~4,000 keystrokes of ~45 guest ms each, so a
+            # 50 ms poll floor was most of the row's wall clock)
 
         def typec(ch):
             key1(lambda: m.type_text(ch), repr(ch))

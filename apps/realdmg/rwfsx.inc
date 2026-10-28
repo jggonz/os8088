@@ -49,8 +49,8 @@ RW_FSBUD86      equ 1400            ;   to serve, so only IRQ0 bounds it - one
 
 ; rw_mgrey - every menu item made to say what it is now: the choices
 ; marked, the settings' text, and greyed what cannot be had - Full Screen
-; with no game or no mode we have a writer for, the recompiler's items on an
-; 8088 ("(286+)"), the states and replays with no game. Any context.
+; with no game or no mode we have a writer for, the states and replays with
+; no game. Any context.
 rw_mgrey:
     push ax
     push bx
@@ -87,15 +87,28 @@ rw_mgrey:
     shl bx, 1
     mov si, [rw_ilit + bx]
     inc si
-    mov [rw_i_mach + 2 * RW_MIL], si
-    ; CPU: the three modes marked by the one chosen - the recompiler's two
-    ; greyed on an 8088, Interpreter its mode - and Profile for Static and
-    ; the cache likewise; the speed chosen marked
+    mov [rw_i_scr + 2 * RW_SIL], si ; SCREEN: Interlace says what it is,
+%ifdef RDG_LOSSY                    ;   Two Shades marked, Scroll
+    mov al, [rdg_lossy]
+    and al, RDG_LBW
+    mov si, rw_it_bw
+    call rw_mark
+    mov bl, [rdg_lossy]             ;   says its step
+    and bx, RDG_LCOARSE             ;   (the level, x 2 = the word)
+    mov si, [rw_coit + bx]
+    inc si
+    mov [rw_i_scr + 2 * RW_SCO], si
+%endif
+    ; CPU: the three modes marked by the one chosen, Profile for Static
+    ; and the cache likewise; the speed chosen marked
+%ifdef RDG_AOT
+    mov al, 1                       ; (a precompiled cartridge's one mode)
+    mov si, rw_it_jaot
+    call rw_mark
+    mov di, rw_i_cpu + 2 * RW_CSPD
+    jmp short .cspd
+%endif
     mov cl, [rw_jitmode]
-    cmp byte [rw_286], 0
-    jne .m
-    mov cl, 2                       ; (an 8088: the interpreter, and only)
-.m:
     mov di, rw_i_cpu
     mov si, rw_it_jon
     mov al, 1
@@ -106,14 +119,6 @@ rw_mgrey:
     mov si, rw_it_joff
     mov al, 2
     call rw_mitem
-    cmp byte [rw_286], 0
-    jne .c286
-    mov word [rw_i_cpu + 2 * RW_CJON], rw_it_jon8
-    mov word [rw_i_cpu + 2 * RW_CJST], rw_it_jst8
-    mov word [rw_i_cpu + 2 * RW_CPRF], rw_it_prf8
-    mov word [rw_i_cpu + 2 * RW_CBIG], rw_it_big8
-    jmp short .spd
-.c286:
     mov al, [rw_prfon]
     mov si, rw_it_prf
     call rw_mark
@@ -124,8 +129,8 @@ rw_mgrey:
     call rw_mark
     inc si
     mov [rw_i_cpu + 2 * RW_CBIG], si
-.spd:
     mov di, rw_i_cpu + 2 * RW_CSPD  ; Speed's four, the one chosen marked
+.cspd:
     mov cl, [rw_speed]
     xor bx, bx
 .sp:

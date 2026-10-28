@@ -500,6 +500,9 @@ mrl_load:
     mov [mr_fseg], dx
     mov [mr_fkb], ax
 .claimed:
+    mov dx, [mr_fseg]               ; A KEPT claim is MOVABLE: pinned for the
+    xor ax, ax                      ; read (66.5.7.1), whose ES:BX it is; a
+    call OSAPI_MEM_MOVABLE          ; fresh one is born pinned (105.10.1)
     mov es, [mr_fseg]               ; ES:BX = the claim, DX:CX = its room
     xor bx, bx
     mov cx, [mr_fkb]
@@ -537,6 +540,11 @@ mrl_load:
 .bad:
     stc
 .out:
+    pushf                           ; THE SONG MOVABLE, read or refused (SPEC.md
+    mov dx, [mr_fseg]               ; 105.10.1): every reader loads it from
+    mov ax, mr_fmove                ; [mr_fseg], the worker parks only at
+    call OSAPI_MEM_MOVABLE          ; ALIVE, and the bracket claims nothing
+    popf                            ; while ES holds it
     pop es
     pop di
     pop si
@@ -544,6 +552,12 @@ mrl_load:
     pop cx
     pop bx
     pop ax
+    ret
+
+; mr_fmove - the song MOVED (SPEC.md 66.3: BX = was, DX = now). One word:
+; every position the sequencer keeps is an offset into it
+mr_fmove:
+    mov [mr_fseg], dx
     ret
 
 ; mrl_size - SI = a name in the folder we stand in: DX:AX = its size.

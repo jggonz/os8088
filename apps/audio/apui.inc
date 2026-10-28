@@ -951,7 +951,7 @@ apu_draw_buttons:
     jb .b
     jmp ap_ret6
 
-    OS88UI_BTNREC apu_btrec, apu_arects, apu_blabs, apu_bflg, 7
+    OS88UI_BTNREC apu_btrec, apu_arects, apu_blabs, apu_bflg, 7, apu_place
 apu_blabs:
     dw ap_l_prev, ap_l_play, ap_l_pause, ap_l_stop, ap_l_next, ap_l_shuf, ap_l_rep
 
@@ -1026,6 +1026,16 @@ apu_baim:
     pop bx
     pop ax
     ret
+
+; apu_place - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): BX = the record, SI = the
+; window; draws nothing, every register preserved (all three callees keep
+; them). The library runs it before the press, the drag and the release, so
+; a window dragged by its title - REPLAYED, never painted - is tested where
+; it IS: the content-relative rects, the origin, and the absolute group
+apu_place:
+    call apu_layout
+    call apu_origin
+    jmp apu_baim
 
     APBUF apu_arects, 56           ; THE GROUP: seven ABSOLUTE rects, so the
                                    ; drawn control and the clickable control

@@ -98,7 +98,7 @@ def _listing_cap():
     rather than building one the kernel cannot list).
 
     **AND IT IS PER-KERNEL SINCE SPEC.md 22.6.2** - 64 on kern_big, 32 on
-    kern_small, which has no DOS box to list a DOS directory for.  So the
+    kern_small, which has no DOS.O88 to list a DOS directory for.  So the
     file holds two `DSK_NENT equ` lines behind a `%ifndef KERN_SMALL` and
     this returns BOTH, kern_big's first, because that is the default every
     caller wants and `--kern-small` is what selects the other.  Returning
@@ -650,6 +650,73 @@ def vol_id(content: bytes) -> int:
     v = struct.unpack("<I", d[:4])[0]
     return v or VOL_ID                           # 0 is a legal serial but
                                                  # reads as "unset" to tools
+
+
+SIG_SLOT_BITS = 6                            # 63 shipped images, 0 = none
+
+
+def bpb_sig(bs) -> int:
+    """`dsk_bpb_sig` (SPEC.md 18.8.2), in Python: add each word of the sector,
+    rotate left 1, and never answer 0. tests/unit/t_volsig.py carries the same
+    arithmetic as an independent second reader."""
+    ax = 0
+    for i in range(SECTOR // 2):
+        ax = (ax + struct.unpack_from("<H", bs, i * 2)[0]) & 0xFFFF
+        ax = ((ax << 1) | (ax >> 15)) & 0xFFFF
+    return ax or 1
+
+
+def sig_slot(out_path) -> int:
+    """The signature slot of the image being written: its 1-based place in
+    $(SHIPIMGS), sorted (tools/os88ship.py), or 0 for every other image."""
+    if not out_path:
+        return 0
+    try:
+        from os88ship import ship_images
+        names = ship_images()
+    except OSError:                              # no Makefile beside us: a
+        return 0                                 # tool run outside the tree
+    name = os.path.basename(out_path)
+    if name not in names:
+        return 0
+    slot = names.index(name) + 1
+    if slot >= 1 << SIG_SLOT_BITS:
+        fail(f"$(SHIPIMGS) has {len(names)} images and the signature has "
+             f"{(1 << SIG_SLOT_BITS) - 1} slots - widen SIG_SLOT_BITS "
+             f"(SPEC.md 18.8.2.2)")
+    return slot
+
+
+def steer_sig(bs: bytearray, slot: int) -> None:
+    """Make sector 0 SIGN with `slot` in its low SIG_SLOT_BITS bits
+    (SPEC.md 18.8.2.2), by rewriting the serial's middle word.
+
+    A content-derived serial gives each image an independent 16-bit
+    signature, and independent draws collide: thirteen shipped images meet
+    a shared signature about once in 840 trees, and every commit is a new
+    tree because the build number is in every image (SPEC.md 14.2). So the
+    shipped set is made distinct BY CONSTRUCTION. Each step of the sum is
+    x -> rotl(x + w, 1), a bijection of x, so the final signature is a
+    bijection of any ONE word with the others fixed: run forward to word
+    20, run backward from the target to word 21, and the word between is
+    solved, not searched. Word 20 is bytes 40..41, the serial's middle two
+    bytes, so the serial's outer bytes stay the content's digest. The upper
+    bits keep the signature the derived serial gave, which is what keeps
+    identical content signing alike."""
+    mask = (1 << SIG_SLOT_BITS) - 1
+    target = (bpb_sig(bs) & ~mask & 0xFFFF) | slot
+    words = list(struct.unpack_from("<256H", bs, 0))
+    ax = 0
+    for w in words[:20]:
+        ax = (ax + w) & 0xFFFF
+        ax = ((ax << 1) | (ax >> 15)) & 0xFFFF
+    x = target
+    for w in reversed(words[21:]):
+        x = (((x >> 1) | (x << 15)) - w) & 0xFFFF
+    w20 = (((x >> 1) | (x << 15)) - ax) & 0xFFFF
+    struct.pack_into("<H", bs, 40, w20)
+    if bpb_sig(bs) != target:
+        fail(f"steer_sig: wanted {target:04X}, got {bpb_sig(bs):04X}")
 
 
 def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
@@ -1408,6 +1475,9 @@ def build(args) -> int:
                                   drvnum=0x80 if args.hdd else 0,
                                   ksecs=ksecs if args.hdd else 0,
                                   volid=vol_id(body)))
+    slot = sig_slot(args.output)                 # SPEC.md 18.8.2.2: one
+    if slot:                                     # signature per shipped image
+        steer_sig(image, slot)
     image += body
     assert len(image) == tot * SECTOR
 

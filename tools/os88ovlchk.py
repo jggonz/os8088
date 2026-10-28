@@ -763,6 +763,68 @@ def main():
           "(%d of %d labels; %d in .boot2 to spl_finish, %d in .ovl to the "
           "first mount)" % (len(ovl_refs), len(half), len(half) - nw, nw))
 
+    # --- rule 2f: every way INTO THE VGA RUNG is registered -----------------
+    # docs/plans/MOVABLE-COLD-PLAN.md 2. `.vga` is code only a VGA or an EGA
+    # runs, and on a machine with neither the kernel slides `.cold` down over
+    # it at boot - so a call into it from code a mono machine can reach runs
+    # `.cold`'s bytes as whatever they decode to. Nothing faults: the near
+    # call assembles (`.vga` is KERNEL_SEG's address space, which is the
+    # point), the VGA rows pass, and a Hercules machine goes wrong somewhere
+    # later. ovlrefs' shape, one rung along: every reference from outside the
+    # rung into it is listed in tests/vgarefs.txt with the test that keeps a
+    # machine with neither card away from it, and the list only shrinks with
+    # the code. A reference INSIDE the rung needs nothing: it runs only once
+    # something has already been let in.
+    VGAREG = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'tests', 'vgarefs.txt')
+    vreg = set()
+    if os.path.exists(VGAREG):
+        for line in open(VGAREG):
+            line = line.split('#', 1)[0].strip()
+            if line:
+                vreg.add(line.split()[0])
+    vlabs = {lab for lab, sect in where.items() if sect == '.vga'}
+    vrefs, vbad = set(), []
+    if vlabs:
+        vpat = re.compile(r'\b(' + '|'.join(sorted(map(re.escape, vlabs)))
+                          + r')\b')
+        for f in kfiles:
+            inmacro = False
+            for sect, n, line in sections(f):
+                if MACRO_B.match(line):
+                    inmacro = True
+                    continue
+                if ENDMACRO_B.match(line):
+                    inmacro = False
+                    continue
+                if inmacro or sect == '.vga':
+                    continue
+                code = line.split(';', 1)[0]
+                if code.lstrip().startswith('%'):
+                    continue            # an assembly-time check, not a way in
+                if LABEL.match(code) and LABEL.match(code).group(1) in vlabs:
+                    code = code[LABEL.match(code).end():]
+                for m in vpat.finditer(code):
+                    vrefs.add(m.group(1))
+                    if m.group(1) not in vreg:
+                        vbad.append((f, n, sect or '.text', m.group(1),
+                                     code.strip()[:52]))
+    for f, n, sect, sym, src_ in vbad:
+        print("%s:%d: unregistered reference from %s into the VGA rung: %s   %s"
+              % (f, n, sect, sym, src_), file=sys.stderr)
+    if vbad:
+        sys.exit("os88ovlchk: %d reference(s) into the VGA rung are not in "
+                 "tests/vgarefs.txt - each one must name the test that keeps "
+                 "a machine with neither a VGA nor an EGA out of it "
+                 "(MOVABLE-COLD-PLAN 2)" % len(vbad))
+    vstale = sorted(vreg - vrefs)
+    if vstale:
+        sys.exit("os88ovlchk: tests/vgarefs.txt lists %d reference(s) that no "
+                 "longer exist (%s) - the registry may only shrink by deleting "
+                 "the row with the code" % (len(vstale), ', '.join(vstale[:4])))
+    print("os88ovlchk: every reference into the VGA rung is registered "
+          "(%d of %d labels)" % (len(vrefs), len(vlabs)))
+
     # --- rule 2d: the CALL MACRO has to match the HALF ----------------------
     # Rule 2c asks whether a reference is registered. It does not ask whether
     # the call will ARRIVE, and after SPEC.md 2.5.3 those are different

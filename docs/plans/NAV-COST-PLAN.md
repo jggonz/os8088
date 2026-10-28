@@ -4,7 +4,7 @@
 §0, measured; steps 2 and 3 are §0.1 - `apps/os88type.inc` and every other
 `OSAPI_FILE_GOTO` in a package or driver. Step 4's `OSAPI_VOL_SIG` was never
 needed: `GOTO_QM`'s own media test is the evidence §4 asked for. It was
-written while planning the DOS box's path wave (docs/plans/DOS-EXEC-PLAN.md),
+written while planning DOS's path wave (docs/plans/DOS-EXEC-PLAN.md),
 and deviating to it there would have been the tail wagging the dog.
 
 **§0 is what was built.** Everything after it is the plan as it was written,
@@ -85,7 +85,7 @@ standing in `SYSTEM/FONTS`).
   must be a sector multiple) and takes the full write.
 - **Two chunked `READ_AT` loops** are `os88_rseq` now: MIDIRack's wavetable
   bank and the Video Player's stored-block load (through `vp_rdat`, so the
-  XMS hold in front of it is kept). The DOS box's `dos_fh_shrink` copy was
+  XMS hold in front of it is kept). DOS's `dos_fh_shrink` copy was
   left: on kern_big a truncate runs before it, so it is reached only where
   the streaming doors fall back to `READ_AT`/`APPEND` anyway.
 
@@ -335,7 +335,7 @@ nothing to invalidate. "Just being there" is the absence of a walk.
 
 ## 5. What this plan is waiting for
 
-The DOS box's **path wave** produces the number. It walks directories with
+DOS's **path wave** produces the number. It walks directories with
 these same slots and will establish what a level actually costs with `QM`,
 on a 4.77MHz 8088, measured rather than reasoned. Doing this audit first would
 mean doing it blind.

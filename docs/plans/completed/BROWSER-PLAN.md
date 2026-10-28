@@ -55,7 +55,7 @@ keystroke went from 404 walk iterations to 35.
    free. Proportional type is real here (SPEC.md §6.3) and **measurably
    competitive**, and it is v2.
 2. **HTTPS is out of reach, so a proxy is a first-class configuration** (§8),
-   not a workaround. Over the cable the DOS box is already in the room.
+   not a workaround. Over the cable the DOS machine is already in the room.
 3. **Time-to-first-line, not time-to-page** (§3.3). The first screenful is
    ~71 ms of drawing; the rest of the document need not be laid out at all
    until somebody scrolls.
@@ -1148,7 +1148,7 @@ why the two placements below are still worth building.
 
 Two placements, and the first is nearly free:
 
-- **On the DOS box, over the cable.** It is already in the room, already
+- **On the DOS machine, over the cable.** It is already in the room, already
   running mTCP, already running `OS88NET.COM`. A fetch-and-transcode there
   costs the 5150 nothing and is the natural home for the `gzip` and TLS this
   machine cannot do.

@@ -114,9 +114,7 @@ def main(argv):
                                               wx, wy,
                                               dispcp.row_of(m, S, NAME)))
         mo.dblclick(x, y)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
         got = dispapps.pkg_seg(m, 0)
         if got is None:
             sys.exit("paint1load: %s did not open Paint" % NAME)

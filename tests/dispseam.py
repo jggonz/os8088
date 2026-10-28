@@ -130,12 +130,15 @@ def leg(image, apps, machine, tree, say):
     image = tree.img(os.path.basename(image))
     apps = tree.img(os.path.basename(apps))
     S = lambda n: os88sym.linear(n, defines=defs)           # noqa: E731
-    settle = os88marty.settle
+    # EVERY READ HERE IS GUEST MEMORY - the window table and the two cards'
+    # VRAM (m.vram, not the rendered glass) - so after the boot the wait is the
+    # UI task finishing, which is also when the framebuffer is (ui_done).
+    settle = lambda m, card=None, gate=None: os88marty.ui_done(m)  # noqa
     with os88marty.launch(image, apps=apps, machine=machine, boot=False) as m:
         if len(m.cards()) != 2:
             sys.exit("dispseam: %s is not a two-card machine" % machine)
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
 
         dispcp.open_panel(m, mo, S, settle)
@@ -173,8 +176,7 @@ def leg(image, apps, machine, tree, say):
 
         def rest():
             mo.to(*PARK)
-            settle(m, card=0)
-            settle(m, card=1)
+            settle(m)
 
         def move_to(tx):
             x, y, ww, wh = rect()

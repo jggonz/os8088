@@ -49,7 +49,8 @@ from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
 WORK = "build/sheetmsub"                # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetmsub.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetmsub.img")        # the run's tree, so a soak lane finds it
 NAME = "SUB.SLK"
 MACRO = (435, 45)                       # sheetmacro's own, unchanged
 RUN = (MACRO[0] + 17, 57 + 12 + 2)
@@ -82,7 +83,7 @@ def build_disk():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write('\r\n'.join(body).encode('latin-1'))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL", src],
+                    "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

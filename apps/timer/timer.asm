@@ -392,11 +392,42 @@ tm_paint:
     call tm_forget                  ; the content has just been white-filled,
                                     ; so every cell this window was showing is
                                     ; gone and the redraw letters all eight
-    ; --- the buttons' inclusive screen rects, from the content origin -------
-    ; The drawn control and the clickable control are these same four words
-    ; (SPEC.md 22.2's fm_hit discipline, which the standard control enforces
-    ; by construction): the painter fills them and the library's press reads
-    ; them.
+    call tm_place                   ; the buttons' rects, SI = the window
+    call tm_digits                  ; BX = the window still
+    mov dl, TM_NB + 1               ; ...then the greying and all three buttons
+    call tm_flags
+    pop si
+    cmp byte [tm_btrec+OS88UI_BT_N], 0 ; ...and the About card LAST, over the
+    jne .out                        ; content it is opaque about (SPEC.md
+                                    ; 20.5.1). The card is up exactly while the
+                                    ; record has no buttons (tm_about)
+    mov bx, si
+    mov si, tm_ablines
+    call os88ui_about_d             ; _d: this paint's region is already armed;
+    mov si, bx                      ; it keeps every register
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_place - OS88UI_BT_PLACE: the buttons' inclusive screen rects, from the
+;            content origin as it is NOW (SPEC.md 20.5.1.3.5)
+; in:  SI = window ptr (BX = the record, when the library calls it; unused)
+; out: tm_rects written; draws nothing, keeps every register
+;
+; The drawn control and the clickable control are these same four words
+; (SPEC.md 22.2's fm_hit discipline, which the standard control enforces by
+; construction): tm_paint calls this before it draws them, and the library
+; calls it before every press, drag and release it tests - a window dragged by
+; its title is REPLAYED and never painted, so a paint-only layout would name
+; where the window WAS.
+; -----------------------------------------------------------------------------
+tm_place:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     add ax, TM_BX
     add dx, TM_BY
@@ -413,19 +444,11 @@ tm_paint:
     add di, 8
     cmp di, tm_rects + 8 * TM_NB
     jb .rect
-    call tm_digits                  ; BX = the window still
-    mov dl, TM_NB + 1               ; ...then the greying and all three buttons
-    call tm_flags
-    pop si
-    cmp byte [tm_btrec+OS88UI_BT_N], 0 ; ...and the About card LAST, over the
-    jne .out                        ; content it is opaque about (SPEC.md
-                                    ; 20.5.1). The card is up exactly while the
-                                    ; record has no buttons (tm_about)
-    mov bx, si
-    mov si, tm_ablines
-    call os88ui_about_d             ; _d: this paint's region is already armed;
-    mov si, bx                      ; it keeps every register
-.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -640,7 +663,7 @@ tm_lim:     db 24, 60, 60
 
 ; the buttons' record (SPEC.md 20.5.1.3): rects and flags in the bss, filled
 ; by tm_rects and tm_flags; labels above
-    OS88UI_BTNREC tm_btrec, tm_rects, tm_btlbl, tm_bflags, TM_NB
+    OS88UI_BTNREC tm_btrec, tm_rects, tm_btlbl, tm_bflags, TM_NB, tm_place
 
 ; the standard About card's lines (SPEC.md 20.5.1). The card is 2*7 + lines*12
 ; tall and the content is 41, so TWO lines is this window's ceiling.

@@ -1,4 +1,4 @@
-# The OSAPI_* surface the DOS box's INT 21h core can reach that is NOT a
+# The OSAPI_* surface DOS's INT 21h core can reach that is NOT a
 # file-system slot, and what docs/plans/KERN-DOS-PLAN.md does about each.
 # tests/unit/t_dosseam.py is the gate; the FILE-SYSTEM half has no registry
 # and is a hard zero (SPEC.md 96.4.1, 96.4.2).

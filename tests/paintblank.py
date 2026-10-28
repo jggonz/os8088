@@ -48,6 +48,7 @@ import dispapps                                             # noqa: E402
 ROOT = os.path.dirname(HERE)
 S = os88sym.linear
 HZ = 4772727.0
+TAIL = 3.0                      # guest s a zoom is watched for at least
 
 
 def _boff(seg, name):
@@ -119,9 +120,8 @@ def main(argv):
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy,
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
-        mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        mo.dblclick(x, y)               # ...whose own wait is the load
+        os88marty.ui_done(m, "Paint to open")
         got = dispapps.pkg_seg(m, 0)
         if got is None:
             sys.exit("paintblank: PAINT.O88 did not open")
@@ -154,10 +154,15 @@ def main(argv):
             wr = dispcp.win_rect(m, S, pw)
             with os88marty.bp_trace(m, BAND, *DEC) as tr:
                 mo.dblclick(wr[0] + 60, wr[1] + 9)
-                # The zoom's repaint outlives the click's own proof by whole
-                # seconds on a 4.77MHz 8088, so the window is the guest's
-                # clock and not the gesture's return.
-                end = m.status()["cycles"] + int(30 * HZ)
+                # The zoom's repaint outlives the click's own proof, so the
+                # window is the guest's and not the gesture's return: until
+                # the UI task has finished the repaint, and then at least
+                # TAIL guest seconds after the click. It was a flat 30 s;
+                # measured, ui_done answers at 0.5-0.7 s and the stop count
+                # there equals the count at 30 s in all four zooms.
+                c0 = m.status()["cycles"]
+                os88marty.ui_done(m, "the %s repaint" % label)
+                end = c0 + int(TAIL * HZ)
                 while m.status()["cycles"] < end:
                     time.sleep(0.005)
             nf = sum(1 for h in tr.hits if h["addr"] == BAND)
@@ -165,7 +170,7 @@ def main(argv):
             if tr.overflowed:
                 fails.append("SETUP: %s recorded %d of %d stops - the counts "
                              "below are a floor" % (label, len(tr.hits), tr.n))
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             moved = dispcp.win_rect(m, S, pw)
             print("   %-16s %3d DECODED, %2d bands   %r -> %r   %s"
                   % (label, n, nf, wr[:2], moved[:2], _table(m, seg)))
@@ -184,17 +189,18 @@ def main(argv):
         # --- ink, then the same again -----------------------------------------
         cx0, cy0 = _bss(m, seg, "pt_cx0"), _bss(m, seg, "pt_cy0")
         mo.to(cx0 + 40, cy0 + 40)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo._edge(True)
         for (tx, ty) in ((cx0 + 200, cy0 + 60), (cx0 + 90, cy0 + 150)):
             mo.to(tx, ty, l=True)
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m, "the stroke")
         if not _marked(m, seg):
             fails.append("drawing marked no band of the inked table - "
                          "SPEC.md 42.18")
         n, nf = zoom_counting("INKED maximize")
         mo.to(4, 4)
+        os88marty.ui_done(m)
         os88marty.settle(m)
         gx, gy = _bss(m, seg, "pt_cx0"), _bss(m, seg, "pt_cy0")
         fw, fh, fb = m.fbuf(card=0)
@@ -214,6 +220,7 @@ def main(argv):
 
         # --- TRUTH: the glass against a repaint out of the canvas -------------
         mo.to(4, 4)
+        os88marty.ui_done(m)
         os88marty.settle(m)
         cx0, cy0 = _bss(m, seg, "pt_cx0"), _bss(m, seg, "pt_cy0")
         glass = _hash(m, cx0 + 20, cy0 + 20, 240, 200)
@@ -228,14 +235,11 @@ def main(argv):
                          "a restore (%d pixels) - a blank flag that is not "
                          "true (SPEC.md 42.15.3)" % ink)
         m.ctrl("KeyZ")
-        os88marty.settle(m)
-        m.advance(frames=90)
-        m.run()
+        os88marty.ui_done(m, "the undo")
         m.ctrl("KeyZ")
-        os88marty.settle(m)
-        m.advance(frames=90)
-        m.run()
+        os88marty.ui_done(m, "the redo")
         mo.to(4, 4)
+        os88marty.ui_done(m)
         os88marty.settle(m)
         redone = _hash(m, cx0 + 20, cy0 + 20, 240, 200)
         print("   glass %s  after undo+redo %s" % (glass, redone))

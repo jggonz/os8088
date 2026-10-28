@@ -125,8 +125,11 @@ def main():
     # HDD.DRV at boot here, and the user's sequence this row replays starts
     # by ticking it
     import hdoff
-    with M.launch(hdoff.image(a.image), apps=a.apps, machine=a.machine) as m:
-        M.settle(m)
+    with M.launch(hdoff.image(a.image), apps=a.apps, machine=a.machine,
+                  boot=False) as m:
+        m.run()
+        M.kernel_up(m)                  # the boot gate on STATE: the first
+        M.no_saver(m)                   # act is the chip menu
         q, mo = Q(m), Mouse(marty=m)
 
         mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel

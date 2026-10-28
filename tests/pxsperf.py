@@ -76,8 +76,9 @@ def main():
         pxslib.PKG, apps = probe_disk(tmp)
         print("   probe build: %s on %s" % (pxslib.PKG, apps))
     rows = []
-    with os88marty.launch(a.image, apps=apps, machine=a.machine) as m:
-        g = pxslib.open_game(m)
+    with os88marty.launch(a.image, apps=apps, machine=a.machine,
+                          boot=False) as m:
+        g = pxslib.open_game(m)         # (it boots an unbooted one on state)
         st = g.state()
         print("   PXSTEIN.O88: window %d, part 0 at %04x, tier %d, texok %d"
               % (g.win, g.seg, st["tier"], st["texok"]))

@@ -177,7 +177,7 @@ def main():
                         "--size", "360", pkg, v88], check=True,
                        capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/V2BENCH.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -189,7 +189,7 @@ def main():
 
             os88marty.until(m, lambda mm: m.read(base + syms["vp_loaded"],
                                                  1)[0] == 1, "the header",
-                            poll=0.3, limit=600.0, guest=30.0)
+                            poll=0.05, limit=600.0, guest=30.0)
             m.write(base + syms["vp_nowin"], b"\1")
             m.write(base + syms["vp_played"], b"\0")
             with os88marty.bp_trace(m, base + ent, base + ret, cap=100000,

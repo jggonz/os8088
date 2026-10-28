@@ -147,7 +147,7 @@ class App:                                                   # pragma: no cover
         self.s_name = tk.StringVar()
         self.s_size = tk.StringVar(value="720k")
         self.s_meth = tk.IntVar(value=CZ.M_LZ4)
-        self.s_img = tk.BooleanVar(value=True)
+        self.s_img = tk.BooleanVar(value=False)
         self.s_plan = tk.StringVar(value="Choose a file to split.")
         self._row(f, 0, "File", self.s_in, self._pick_split)
         self._row(f, 1, "Parts go to", self.s_out, self._pick_sout)
@@ -156,6 +156,8 @@ class App:                                                   # pragma: no cover
         cb = ttk.Combobox(f, textvariable=self.s_size, values=SIZE_CHOICES,
                           width=14)
         cb.grid(row=3, column=1, sticky="w", pady=3)
+        ttk.Label(f, text="a disk less 2KB, or any size: 500k, 1.1m"
+                  ).grid(row=3, column=2, sticky="w")
         cb.bind("<<ComboboxSelected>>", lambda e: self._plan())
         cb.bind("<KeyRelease>", lambda e: self._plan())
         ttk.Label(f, text="Blocks").grid(row=4, column=0, sticky="nw")
@@ -391,12 +393,12 @@ class App:                                                   # pragma: no cover
             lines += [f"  {os.path.basename(p)}  {os.path.getsize(p):,}"
                       for p in parts]
             if imgs:
-                if size.lower() in CZ.GEOM_KB:
+                if CZ.image_geom(size):
                     lines += [f"  {os.path.basename(p)}" for p in
                               CZ.make_images(parts, size, out)]
                 else:
-                    lines.append("  (no images: a size in bytes is not a "
-                                 "disk)")
+                    lines.append("  (no images: a part that size fits no "
+                                 "floppy)")
             lines.append(f"On the machine: copy every part into ONE folder "
                          f"and Uncompress {CZ.part_name(nm, 1)} "
                          "(SPEC.md 22.23.5).")

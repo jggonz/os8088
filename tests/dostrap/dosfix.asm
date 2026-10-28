@@ -2,7 +2,7 @@
 ; as a probe. OURS, MIT with the rest of the tree.
 ;
 ; 1. FDIR: open SUB\X.DAT from the ROOT and read all of it. X.DAT is 12 KB,
-;    so the read crosses the box's 8 KB window and REFILLS, and a refill
+;    so the read crosses DOS's 8 KB window and REFILLS, and a refill
 ;    that resolves the bare name where the program STANDS finds the DECOY -
 ;    a root X.DAT whose every byte is 0xEE - where the real one's byte i is
 ;    (i >> 10) + 1. A wrong folder is therefore a wrong BYTE, named with its
@@ -13,7 +13,7 @@
 ;    AH=3Eh. DOS closes every handle of a process that terminates; the host
 ;    reads the file off the floppy afterwards and wants all 3,000.
 ; 4. CWD: AH=47h straight after 1, whose refill stood the MACHINE in SUB.
-;    The program never left the root, so DOS answers "" - and a box that
+;    The program never left the root, so DOS answers "" - and a DOS that
 ;    asks the machine where it stands without standing it where the
 ;    program is first answers "SUB" (CWD ok / CWD BAD).
 ;
@@ -94,7 +94,7 @@ start:
 .cw:
     call puts
     ; --- 2. INTERLEAVE: two CREATED files written in turn, 700 bytes a go --
-    ; Each switch takes the box's one window from the other file, so each
+    ; Each switch takes DOS's one window from the other file, so each
     ; file's window is flushed PARTIAL, at a size that is not a cluster
     ; multiple - and a flush after that has to extend a file the kernel's
     ; append refuses to extend. DOS writes both whole. ILV ok, or ILV BAD.

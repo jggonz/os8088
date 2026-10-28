@@ -1336,8 +1336,7 @@ at_ink      equ at_pair + 2                  ; byte: a pull-down item's ink,
 at_pad64    equ at_ink + 1                   ; byte: keeps the words below even
 at_spx      equ at_pad64 + 1                 ; splash geometry (the buttons'
 at_spy      equ at_spx + 2                   ; own rects are at_brects, the
-at_sph      equ at_spy + 2                   ; one copy os88ui_btn reads)
-at_spcx     equ at_sph + 2
+at_spcx     equ at_spy + 2                   ; one copy os88ui_btn reads)
 at_btx      equ at_spcx + 2                  ; bigtext/image cursor
 at_bty      equ at_btx + 2
 ; --- edit scratch -------------------------------------------------------------

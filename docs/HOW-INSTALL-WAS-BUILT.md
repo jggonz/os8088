@@ -170,3 +170,49 @@ log is what the owner wants to read.
 while the tool is loaded); INSTALL grew 385 bytes of image and 428 of bss;
 no kernel byte.
 
+
+## Wave 5 — one face (2026-10-24)
+
+The question came first as arithmetic: *if the Control Panel's Install
+button opened INSTALL.O88 and the window went, what would HDDTOOL.DRV save?*
+Stripped in a scratch copy and assembled, the answer was about 1.25 KB, and
+the owner's reply was the brief: *no point in having two interfaces that do
+the same thing.*
+
+**What was the window's alone** turned out to be a clean cut, because wave 1
+had already made the engine headless - every draw went through `hd_iorg`,
+which drew nothing when the window was not up. The window, its drawing layer,
+the Erase box and its captions came out whole; what needed thought was the
+bookkeeping that existed only because there were TWO faces: the `0FDh`
+answer, *Close the Install window first*, and `hd_ipkg`, a byte that told a
+wizard's run from the window's and is now always the same fact as the stage
+byte.
+
+**The launch was the one real design question.** `OSAPI_PKG_START` wants the
+UI task with the gfx lock free, a Control Panel click holds it, and the
+kernel's own posting (`inst_launch_post`, `ui_post_cmd`) is not reachable from
+a driver. A WAKE is, and a wake needs a window - so the button makes one that
+is never shown and lives exactly until its own wake. Two things follow and
+both are in the code: `HDT_BUSY` must answer busy while it exists, or a
+Control Panel close frees the image the wake is about to call into; and
+`HDT_SHUT` destroys it if the wake never came.
+
+**Where the wizard stands matters.** It records the folder it was started
+from as its floppy source (§117.10.5), so the button starts it from the BOOT
+volume's root - where §117.6 ships it, and on an installed machine that is
+C:, which the engine already refuses as its own source. The old window took
+its source from wherever the user stood; the wizard's equivalent is to be
+started THERE, so `tests/httpinstall.py` - an install off a hand-mounted
+HTTP drive - now double-clicks `INSTALL.O88` on that drive.
+
+**Measured.** `HDDTOOL.DRV` 18,327 → 17,038 bytes, its claim 18 → 17 KB, and
+13,130 bytes on the floppy where it was 14,100: 13 clusters of a 360 KB disk
+instead of 14. About 1,490 bytes came out and the launcher put about 195
+back.
+
+**The tests moved with it.** Nine rows drove the window. Most did so through
+`instdeep`'s `open_installer`, which now presses the button and returns the
+wizard, so they changed by a line each and now also test the button. The
+wizard driver that `tests/install.py` had grown became `tests/instwiz.py`,
+transport-neutral so the two QEMU rows share it. `instrest` was about the
+window's Restart caption and went with it.

@@ -3130,7 +3130,9 @@ pd_drv:
     xor cx, cx
 .row:
     call bl_lclr
-    mov si, [es:bx + PDK_DRVR_TITLE] ; the row's own name, out of the kernel
+    mov si, [es:bx + PDK_DRVR_FILE] ; the row's FILE name, out of the kernel:
+                                ; its display title has not been resident
+                                ; since kernel size pass 14 (DRV_TITLES)
     mov di, 2
 .t:
     mov al, [es:si]

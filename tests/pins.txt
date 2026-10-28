@@ -1,0 +1,383 @@
+# tests/pins.txt - the PIN registry (docs/plans/NO-PINNING-PLAN.md 4)
+#
+# A heap claim is born PINNED (SPEC.md 66.2) and a pinned claim is a WALL: free
+# memory either side of it cannot be joined. The owner's rule
+# (NO-PINNING-PLAN 0) allows three reasons and no other:
+#
+#   M  an on-demand kernel MODULE (MEM_K_MOD, SPEC.md 2.8) - temporary
+#   D  a DEVICE is armed to write into it: DMA, int 13h, an ISR's ring
+#   C  in use RIGHT NOW: claimed and freed inside one callback, command or
+#      call, or pinned only across a call holding its segment (a file call's
+#      ES:BX, an fsx bracket)
+#
+# ...plus three that are not pins at all and one that is a debt:
+#
+#   B  a BOOT ceiling claim: top-down, before the first desktop frame, never
+#      freed - everything later stacks under it (NO-PINNING-PLAN 2.2)
+#   S  shed by design: a purgeable cache the compactor DROPS (6.2, 6.4). A
+#      kernel MEM_P_* claim is accepted with no line at all
+#   X  another reason, and a very good one - 60 characters at least
+#   N  NO VALID REASON YET. Pinned today where the rule says it should move;
+#      every N line is a FINDING for the owner, and the gate prints the count
+#
+# ONE LINE PER PINNED CLAIM: <bucket> <file> <key>  # <reason>
+# A reason may run on over lines that start with spaces and a `#`.
+#
+# THE KEY is what tests/unit/t_pins.py names the claim by: the WORD its
+# segment is stored to (`np_stgseg`), a kernel claim's TAG (`MEM_K_COPY`), a
+# C lvalue (`func:var` for a local), a parts row (`op:carve`, `op:PART`), or
+# `@routine` when nothing names it. Run `python3 tests/unit/t_pins.py --list`
+# for every site and its verdict, `--seed` for a line to start from.
+#
+# THE LIST TURNS ONE WAY: a line whose claim now declares FAILS, and so does a
+# line whose key no longer claims. A C line must say what call or bracket it
+# is confined to, a D line what device is armed on it. The runtime half,
+# tests/pinsrt.py, reads mem_tab back on MartyPC and holds kernel tags to the
+# same buckets.
+
+# --- the kernel ----------------------------------------------------------------
+
+M kernel/mod.inc MEM_K_MOD               # an on-demand module's image: its base
+                                         # IS its CS, claimed top-down; dropped
+                                         # when the feature is done (t_moddrop)
+C kernel/ascw.inc MEM_K_ASC              # FORMAT.DRV's ASSOC.DAT flush work
+                                         # buffer, claimed and freed inside one
+                                         # ascw_flush_x call; every offset into
+                                         # it is live across the write
+C kernel/compress.inc MEM_K_CMPR         # the Compress/Uncompress verb's working
+                                         # block, claimed and freed inside one
+                                         # command; three segments are paragraph
+                                         # arithmetic on its base
+C kernel/desksc.inc MEM_K_SC             # the SYSTEM.CFG trailer's compose buffer,
+                                         # for the length of one write that is
+                                         # READING it (sc_m_ser/sc_m_serx). The
+                                         # shortcuts' table under the same tag
+                                         # declares sc_reloc through sc_m_mem's
+                                         # CX, which this scan cannot prove
+D kernel/diskops.inc MEM_K_CLONE         # the disk cloner's buffer: the int 13h
+                                         # target for the whole of one clone,
+                                         # freed at its end
+C kernel/driver.inc MEM_K_MOD            # the Control Panel's floppy test buffer
+                                         # (cpc_fdtest), claimed and freed inside
+                                         # the one call - an int 13h target too.
+                                         # Tagged MEM_K_MOD though it is no module
+C kernel/hiber.inc MEM_K_HIB             # the hibernate's HMA-pool copy and resume
+                                         # extent list, for the length of one
+                                         # hibernate or resume call - the machine
+                                         # around it is about to be overwritten
+B kernel/font.inc MEM_K_FONT             # the 8x8 glyph table copied out of an
+                                         # option ROM: 1KB claimed TOP-DOWN at
+                                         # boot before any driver, never freed
+X kernel/band.inc MEM_K_BAND             # the 1bpp band composer's buffer, taken
+                                         # once at boot and never freed - and only
+                                         # the BAND=1 knob assembles band.inc, so
+                                         # no shipped kernel makes this claim
+X kernel/loader.inc ld_base              # a package REGION: born pinned, and the
+                                         # PACKAGE declares it (OS88_REGION_
+                                         # MOVABLE, OS88_WORKER_RESTARTABLE), which
+                                         # tests/unit/t_movable.py ratchets. Until
+                                         # then [ld_base] pins it, bucket C, for
+                                         # the load
+S kernel/wm.inc @wm_su_take              # a window's raise cache, MEM_P_WSAVE +
+                                         # the window (wm_su_slot computes the tag,
+                                         # so the scan cannot read it): shed by
+                                         # design, NO-PINNING-PLAN 6.2
+N kernel/filecp.inc MEM_K_COPY           # Cut/Copy/Paste's page-safe copy buffer.
+                                         # The transfer is pinned by mem_in_xfer
+                                         # anyway; what is NOT bucket C is that it
+                                         # is held across a suspended overwrite
+                                         # QUESTION - a user wait. K4b, a one-word
+                                         # proc (~17 bytes), waits for a size pass
+N kernel/mega.inc MEM_K_MTBL             # kern_mega's 82KB descriptor tables in
+                                         # conventional memory. Not a ceiling
+                                         # claim after all: mega_enter runs after
+                                         # drv_boot, so unloading a boot driver
+                                         # opens a hole over it (NO-PINNING-PLAN
+                                         # 5 #6). K3, deferred as niche (a 286
+                                         # with under 192KB of extended memory)
+N kernel/stikmenu.inc MEM_K_MOD          # the Sticky Apps panel's SECOND save-
+                                         # under ([stm_sseg2]), held while the
+                                         # panel is open - a user wait. The first
+                                         # one is menu_drop's and moves
+                                         # (menu_reloc); this one has no proc, and
+                                         # it is tagged MEM_K_MOD though it is no
+                                         # module, so the runtime half would read
+                                         # it as one
+
+# --- drivers -------------------------------------------------------------------
+
+D drivers/sound/sb.inc sbl_seg           # the Sound Blaster DMA double buffer: the
+                                         # 8237 is pointed at it for the whole of
+                                         # one double-buffered stream, and
+                                         # sbl_unpin frees it at the close
+D drivers/hdd/hdd.asm @hd_twins          # 1KB int 13h target for the two LBA 0
+                                         # reads that prove a BIOS row, freed
+                                         # inside the call
+D drivers/hdd/mount.inc @hd_cylprobe     # a 2KB DMA buffer for the cylinder probe's
+                                         # two int 13h reads, freed inside the call
+D drivers/hdd/mount.inc hd_bseg          # hd_raw's bounce sector for one raw
+                                         # transfer (int 13h or the task file),
+                                         # freed inside the call
+C drivers/hdd/inst.inc hd_ibufseg        # the install buffer: an OSAPI_FILE_READ/
+                                         # WRITE target at all four uses, claimed
+                                         # for one install command and freed at
+                                         # its end (SPEC.md 66.5.10)
+C drivers/hdd/hdtool.inc hd_tseg         # HDDTOOL.DRV's second image, a CS: held
+                                         # only while the Control Panel's Drives
+                                         # page or the disk tool is open, freed at
+                                         # DSV_CPCLOSE (NO-PINNING-PLAN R1)
+C drivers/httpfs/hfpage.inc hf_pseg      # HTTPPAGE.DRV's page image, a CS: held
+                                         # while its Control Panel page is open
+                                         # and dropped at DSV_CPCLOSE (R1)
+C drivers/ramdisk/rdpage.inc rd_pseg     # RAMPAGE.DRV's page image, a CS: held
+                                         # while its Control Panel page is open
+                                         # and dropped at DSV_CPCLOSE (R1)
+C drivers/ramdisk/rdimg.inc rd_wseg      # the RAM disk's preserve write buffer, a
+                                         # transient claim for the length of one
+                                         # save or load of the image
+C drivers/sound/volume.inc volume_save   # the VOLUME popup's save-under, held
+                                         # inside volume_popup's one call while
+                                         # the popup is up (NO-PINNING-PLAN 2.3)
+C drivers/xmem/xmem.asm @xm_hma          # the HMA image's read buffer, claimed and
+                                         # freed inside the one xm_hma call
+
+# --- shared SDK includes -------------------------------------------------------
+
+C apps/os88ui.inc bp+OS88UI_DR_SEG       # a dropdown list's save-under, held while
+                                         # the list is down inside one drop and
+                                         # freed at its close
+C apps/os88ui.inc bp+OS88UI_MN_SEG       # a menu button's save-under, held while
+                                         # the menu is down inside one drop and
+                                         # freed at its close
+C apps/os88xgap.inc @xg_gap              # an 8KB scratch at the DMA door for one
+                                         # XMS placement probe, freed inside the
+                                         # call
+
+# --- packages: bucket C - one callback, command, call or bracket ---------------
+
+C apps/notepad/notepad.asm np_stgseg     # the save's CR/LF staging, held only
+                                         # across the OSAPI_FILE_WRITE it is the
+                                         # ES:BX of
+C apps/word/word.asm wd_stgseg           # the load/save staging, claimed and freed
+                                         # inside one command, a transfer's buffer
+                                         # throughout (SPEC.md 68.3.2)
+C apps/word/wdutil.inc wd_scseg          # the Utilities rebuild scratch, claimed
+                                         # and freed inside one command
+C apps/scribe/scribe.asm sc_stgseg       # Word's load/save staging one fork along,
+                                         # inside one command (SPEC.md 95.14)
+C apps/scribe/scutil.inc sc_scseg        # Word's rebuild scratch one fork along,
+                                         # inside one command
+C apps/paint/paint.asm pt_gseg           # the GIF/BMP read staging, inside one
+                                         # Open command: the OSAPI_FILE_READ
+                                         # target, [pt_gbase] derived off it
+C apps/paint/paint.asm pt_lzwseg         # the GIF codec's tables, claimed for the
+                                         # length of one file and freed after it
+C apps/chart/chart.asm ct_stgseg         # the read's staging, inside one callback,
+                                         # a file read's target throughout
+C apps/texpad/tpexport.inc tp_expseg     # the export, grown as the file is
+                                         # composed and freed once it is written,
+                                         # inside one command
+C apps/deskclok/dkset.inc dk_sbseg       # the settings window's tall band, claimed
+                                         # and freed inside one paint
+C apps/artful/atcmd.inc @at_cmd_none     # the None command's offset list, claimed
+                                         # and freed inside one command
+C apps/artful/atui.inc at_suseg          # a pull-down's save-under, per drop,
+                                         # freed in at_surest before the picked
+                                         # item runs - while the menu is down
+C apps/frotz/zpic.inc zp_seg             # a .PIX archive read and validated inside
+                                         # one call, freed before it returns
+C apps/frotz/zpic.inc zp_pseg            # the .mg1 probe buffer, claimed and freed
+                                         # inside one call
+C apps/realdmg/rwlog.inc @rw_logwrite    # the log's text, composed and written
+                                         # inside one command (REALDMG-SPEC 14.4)
+C apps/realdmg/rwaot.inc rw_abseg        # a precompiled package's cluster bounce,
+                                         # a claim of its own only when a cluster
+                                         # passes 16KB: claimed and freed inside
+                                         # rw_acopy's call, the file read's target
+C apps/recorder/recorder.asm @rc_do_play # the speaker play buffer, held for one
+                                         # PCM_EXCL play and freed on every way out
+                                         # of the call
+C apps/stiknote/stiknote.asm @sn_flip    # the note read whole for a checkbox flip
+                                         # and written back, inside one callback
+C apps/syscheck/out.inc sc_rseg          # Save Report's text, composed and written
+                                         # inside one command
+C apps/syscheck/scan.inc @sc_man_expand  # a packed driver read whole for its
+                                         # header, freed inside the call
+C apps/skies/csraster.inc cs_shseg       # the flight shadow, claimed on the way
+                                         # INTO the fsx bracket and freed on the
+                                         # way out; ES holds it across spans
+C apps/skies/skies.asm cs_wgseg          # one packed world stream's read buffer,
+                                         # freed before cs_wldget's call returns
+C apps/tank/tkraster.inc tk_shseg        # the CGA/Hercules shadow, claimed inside
+                                         # the fsx bracket and freed on its way out
+                                         # (SPEC.md 85.3.5.2)
+C apps/tank/tkraster.inc @tk_r_setup     # the shadow's HUD template, the same
+                                         # bracket's
+C apps/tracker/tracker.asm ttx_shseg     # the text bracket's pattern shadow,
+                                         # claimed before the fsx bracket and freed
+                                         # after it
+C apps/1942/front.inc @n_frontload       # a scratch band for one expansion on a
+                                         # kern_mega selector, freed inside the call
+C apps/1942/video.inc @n_readbank        # a bank, fetched inside the fsx bracket
+                                         # and freed at its end (SPEC.md 101.2.1)
+C apps/excitebike/cga.inc xc_dseg        # the CGA dictionary: claimed after
+                                         # xb_fullscreen starts, freed at xb_fsdone,
+                                         # inside the bracket (NO-PINNING A5)
+C apps/excitebike/flow.inc xb_cseg       # EXBTRACK.DAT's read, inside one call
+                                         # (xb_custom_load)
+C apps/excitebike/game.inc xb_tseg       # the harness's script and trace, inside
+                                         # the fsx bracket, freed at xb_fsdone
+C apps/excitebike/sprite.inc xb_sprseg   # the compiled poses, far-called IN the
+                                         # claim, inside the fsx bracket only
+C apps/excitebike/video.inc @xb_partget  # the game art, read inside the fsx
+                                         # bracket and freed at its end
+C apps/pixelstein/pxstein.asm @pxl_entry # the loader's reserve, held across
+                                         # op_load inside the entry call
+C apps/dos/dos.asm dos_arena             # a DOS program's arena: the program is
+                                         # EXECUTING in it, for the length of
+                                         # dos_run's call
+C apps/dos/dosload.asm op:DOS_PART_CORE  # the core, fetched, copied into place
+                                         # and op_drop'ed inside one call
+C apps/wirefleet/wfsound.inc op:WF_P_SFX # the samples part, fetched and dropped
+                                         # inside wf_pcm_open's one call
+C apps/c64/c64kbd.c ovl_clip_service:seg # Copy's staging, claimed and freed
+                                         # inside one wake (Paste's queue in the
+                                         # same function declares)
+C apps/c64/c64load.c ovl_load_prg:seg    # a .PRG's read staging, inside one Load
+                                         # command
+C apps/apple2/a2kbd.c ovl_a2_clip_service:seg  # Copy's staging, claimed and
+                                         # freed inside one wake
+C apps/apple2/a2prog.c ovl_a2_load:seg   # Load Program's staging, inside one
+                                         # command
+C apps/apple2/a2prog.c ovl_a2_save:seg   # Save Program's staging, inside one
+                                         # command
+C apps/apple2/a2scr.c a2_fsx_sh          # the 53KB colour shadow, held for the
+                                         # length of the os88_fsx_run call
+C apps/weave/wstate.c ovl_savestate:seg  # saveState's 8KB, claimed and freed
+                                         # inside one native call
+C apps/weave/wstate.c ovl_loadstate:seg  # loadState's 8KB, claimed and freed
+                                         # inside one native call
+C apps/video/video.asm vp_tmp            # one cluster for the header read inside
+                                         # vp_open's call, freed before it returns
+C apps/video/video.asm vp_kshd           # the 64KB shadow a keyframe decodes into,
+                                         # freed inside vp_kpic's call
+C apps/video/video.asm vp_thseg          # a poster's halving scratch, freed inside
+                                         # vp_thpic's call
+C apps/video/video.asm vp_tscr           # the mono poster's text scratch, freed
+                                         # inside vp_tmono's call
+C apps/video/video.asm vp_rdseg          # the record buffer a key is read through,
+                                         # given back by vp_rdfree once the read
+                                         # is done, inside the call that read it
+C apps/video/video.asm vp_ldseg          # vp_ldblk's scratch word: a RESIDENT
+                                         # block pinned only inside vp_rload's
+                                         # call - read into (file calls hold
+                                         # it), expanded, the other block's
+                                         # claim and read, the walk - then
+                                         # handed back in AX as [vp_rblk] or
+                                         # [vp_rablk] and declared movable
+                                         # there (vp_rmov, SPEC.md 98.1.7.4)
+C apps/video/video.asm vp_simseg         # the 64KB shadow of one simulated borrow
+                                         # probe, inside vp_xok's call
+C apps/video/video.asm vp_xsclm          # one chunk's staging into the XMS hold,
+                                         # inside vp_xstep's call
+C apps/video/video.asm vp_dbnc           # the bounce of a ring above 1MB, held for
+                                         # the length of one play (the reader
+                                         # copies through it), freed with the ring
+C apps/video/video.asm @vp_rhtry         # a play's ring ABOVE 1MB (OSAPI_MEM_HUGE):
+                                         # no conventional heap at all while the
+                                         # play's session holds it
+D apps/video/video.asm vp_aseg           # the card's ring, page-safe: the Sound
+                                         # Blaster DMAs out of it for one play,
+                                         # claimed at vp_sndprep, freed at its end
+D apps/1942/pcm.inc n_pcmseg             # the 13KB PCM rings, page-safe, inside the
+                                         # fsx bracket - the card DMAs out of them
+D apps/midirack/mrout.inc mrb_seg        # the external ring, page-safe: claimed at
+                                         # every Play, freed at every stop, and the
+                                         # card DMAs out of it (SPEC.md 105.8.4)
+D apps/midirack/mrout.inc mrk_seg        # the speaker/Covox ring, filled by the
+                                         # ISR for one session and freed at its end
+                                         # (SPEC.md 105.8.3)
+C apps/pixel/pixel.asm px_flatraw        # a CZ-packed file read whole for ONE open:
+                                         # claimed in px_open's head read, given
+                                         # back by px_finish (or px_relclaims on a
+                                         # refusal) - for the length of the open,
+                                         # where the head parse holds [px_hseg] and
+                                         # the decode worker [px_rsegc] inside it,
+                                         # parking at OSAPI_TASK_ALIVE mid-read
+C apps/pixel/pxmaster.inc px_wbase       # the decode's WORK claim, for the length
+                                         # of one decode job: px_claims makes it,
+                                         # px_finish gives it back. The worker and
+                                         # the decoder parts hold segments derived
+                                         # from it ([px_wseg] + offsets, PXK_RSEG,
+                                         # PXK_DSEG) across their parks inside the
+                                         # job, so it is in use while it exists
+C apps/pixel/pxgif.asm px_wbase          # the GIF part's work claim for ONE pass
+                                         # of an animation (av_start to av_wake):
+                                         # pa_job banks pg_dseg/pg_rseg from it in
+                                         # the part's own words and the worker
+                                         # parks with them, inside the part, at
+                                         # every ring wait and frame delay
+C apps/pixel/pxedit.asm px_ewseg         # one pixel operation's work claim, for
+                                         # the length of the JOB_EDIT job: pf_go
+                                         # claims it, pf_fin gives it back when
+                                         # the worker answers; the operation's
+                                         # rows run on the worker inside it
+C apps/pixel/pxwrite.asm px_ewseg        # Save As's scratch, for the length of
+                                         # the JOB_SAVE job: pu_start claims it,
+                                         # pu_fin's pu_sfree gives it back; the
+                                         # encoder runs on the worker inside it
+D apps/pixel/pxpump.inc @px_dmaclaim     # pxpump's page-safe disk buffer, handed to
+                                         # int 13h as the DMA ring of one read
+X apps/imgtest/imgtest.asm si+IMG_DSTSEG # a TEST INSTRUMENT: imgtest ships on no
+                                         # disk (`all` builds it so it keeps
+                                         # assembling, `make imgtestdisk` is the
+                                         # only disk with it), and its claims live
+                                         # for one scripted test run
+X apps/imgtest/imgtest.asm @it_entry     # ...the same instrument's source claim,
+                                         # grown per case for the same one test
+                                         # run, never on a user's machine
+
+C apps/browser/brcopyselection.inc br_copyseg  # Copy Selection's text buffer,
+                                         # claimed, handed to OSAPI_CLIP_PUT and
+                                         # freed inside br_copyselection
+C apps/xtmp3/x3pars.inc x3p_pseg         # the front end's probe scratch,
+                                         # claimed and freed inside x3p_probe
+D apps/xtmp3/x3eng.inc x3_xseg           # the external ring a DSP 3.00+ plays
+                                         # by auto-init DMA (OSAPI_MEM_CLAIM_DMA_HI,
+                                         # SPEC.md 121.6), freed at the play's stop
+X apps/browser/browser.asm @br_claim     # a CLAIM WRAPPER this scan cannot see
+                                         # through (it unpins the page claims after
+                                         # the call, SPEC.md 71.14.1): every caller
+                                         # stores DX in a word br_reloc names and
+                                         # declares it with br_movable at once
+X apps/video/video.asm @vp_rclaim        # a CLAIM WRAPPER this scan cannot see
+                                         # through (its first claim's `jnc` jumps
+                                         # past the second to the shared ret):
+                                         # kern_mega's ring, every caller storing
+                                         # DX in vp_rclm, which vp_smtab declares
+X apps/realdmg/rwaot.inc rw_aseg+bx      # a precompiled cartridge's CODE IMAGES,
+                                         # each a CS the worker runs in: its frame
+                                         # holds one at every pre-emption, which
+                                         # pins it however it is declared (SPEC.md
+                                         # 66.6.2), and the images' far jumps name
+                                         # each other's and the core's segments.
+                                         # Claimed from the CEILING, as a driver
+                                         # image is, so they stack under each
+                                         # other and wall nothing (REALDMG-SPEC 20.10)
+
+# --- packages: bucket N - pinned with no valid reason yet (the backlog) --------
+
+N apps/pixelstein/pxstein.asm op:PX_PART_ART  # the 37KB art masters: the loader
+                                         # claims them and the re-home re-owns them
+                                         # to the slot, so mem_find_own refuses the
+                                         # program's declaration - the fence
+                                         # NO-PINNING-PLAN 6.5 asks the owner about
+N apps/pixelstein/pxstein.asm op:PX_PART_LEV  # the 10KB levels, behind the same
+                                         # fence (6.5)
+N apps/pixelstein/pxstein.asm pxl_sseg   # the 60KB sprite set, behind the same
+                                         # fence (6.5)
+N apps/browser/brdownload.inc br_dl_partpaint+2  # the Download Manager's
+                                         # lazy part: far-called, and Copy
+                                         # Selection claims under that far call, so
+                                         # op_movable's rule (SPEC.md 20.12.12)
+                                         # refuses it; held while the manager is up

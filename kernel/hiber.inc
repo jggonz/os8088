@@ -191,21 +191,21 @@ KDL_MOULINE equ 27              ; db ...and its bit in the master 8259's mask.
                                 ; the line at boot and nothing a package can
                                 ; see records which one won
 KDLF_HIBER  equ 4               ; ...bit 2, which is the ONE bit the kernel
-                                ; sets rather than the box - whether there is a
+                                ; sets rather than DOS.O88 - whether there is a
                                 ; fixed disk to come back to is hb_pick's
                                 ; question (docs/plans/KERN-DOS-PLAN.md 8)
-KDLF_NOMOUSE equ 8              ; ...and bit 3, which is the box's and is read
+KDLF_NOMOUSE equ 8              ; ...and bit 3, which is DOS.O88's and is read
                                 ; HERE: KDL_MOUBASE is a kernel field patched
-                                ; into the staged block after the box has
+                                ; into the staged block after DOS.O88 has
                                 ; gathered it, so a package cannot say "no
                                 ; pointer" by writing a zero there (SPEC.md
                                 ; 96.36.8)
 %ifdef KERN_MEGA
-KDLF_LOWDOS equ 0x20            ; ...and bit 5, the box's and read by THIS
+KDLF_LOWDOS equ 0x20            ; ...and bit 5, DOS.O88's and read by THIS
                                 ; module's stub: kern_dos is part 3, the LOW
                                 ; image, expanded at 0060:0000 rather than in
                                 ; the HMA (SPEC.md 96.40.9.2)
-KDLF_SAVE   equ 0x40            ; ...and bit 6, the box's and read by
+KDLF_SAVE   equ 0x40            ; ...and bit 6, DOS.O88's and read by
                                 ; hbm_dosrun: HIBERNAT.IMG before the park
                                 ; (SPEC.md 96.40.9.3). MIRRORED
 KD_LSEG     equ 0x0060          ; ...where that image goes, with KD_ORG 0
@@ -216,7 +216,7 @@ KDL_O88V    equ 510             ; db ...its volume, for the HMA image to read
                                 ; are known. MIRRORED in kerndos/kdlaunch.inc
 %endif
 KDL_DPT     equ 16              ; db[11] in the block: the DISKETTE PARAMETER
-KDL_DPT_LEN equ 11              ; TABLE, the one field the box cannot fill.
+KDL_DPT_LEN equ 11              ; TABLE, the one field DOS.O88 cannot fill.
                                 ; `hbm_dosrun` patches it into the STAGED copy
                                 ; out of `dsk_dpt` - see kerndos/kdlaunch.inc
 %if KDL_DPT_LEN != DPT_LEN
@@ -235,10 +235,10 @@ KDH_PLEN    equ 23              ; dd its packed bytes
 KDH_ULEN    equ 27              ; dd ...and its unpacked bytes
 KDH_LB      equ 31              ; db[512] the launch block, verbatim
 KDH_WIN     equ 543             ; dw the window to wake on the way back, which
-                                ; is the box's and only the box knows it
+                                ; is DOS.O88's and only DOS.O88 knows it
 KDH_CODE    equ 545             ; dw the exit code the RESTORED kernel pokes in,
                                 ; 0xFFFF = the program has not run. Both sides
-                                ; of this one are the ordinary wake the box
+                                ; of this one are the ordinary wake DOS.O88
                                 ; already services (SPEC.md 74.1), so the
                                 ; return needs no new slot
 ; --- AND THE CORE PART'S THREE, because the stub reads TWO (96.44.5.4) ------
@@ -249,7 +249,7 @@ KDH_COFF    equ 547             ; dw the CORE part's first file SECTOR
 KDH_CPLEN   equ 549             ; dd its packed bytes
 KDH_CULEN   equ 553             ; dd ...and its unpacked bytes
 KDH_CORG    equ 557             ; dw where the core sits in kern_dos's
-                                ; segment - CORE_ORG, which only the box knows
+                                ; segment - CORE_ORG, which only DOS.O88 knows
 KDH_AKB     equ 559             ; dw the ARENA the program was given, in KB,
                                 ; poked in beside KDH_CODE (SPEC.md 96.41.1)
 KDH_SIZE    equ 561
@@ -458,7 +458,7 @@ drv_suspend_x:
     retf
 
 ; -----------------------------------------------------------------------------
-; osapi_dos_handoff_x - the DOS box asks for the machine (SPEC.md 96.40): verb
+; osapi_dos_handoff_x - DOS asks for the machine (SPEC.md 96.40): verb
 ;                       2 of the slot above
 ; in:  ES:SI = a KDH_* record in the CALLER's segment
 ; out: CF=0 posted, CF=1 refused
@@ -808,6 +808,30 @@ hbm_kbak:
 .n:
     loop .w
 .x:
+    pop cx
+    ret
+
+; hbm_p2drop - every AUX byte the 8042 holds or is still being sent, read and
+; dropped until 0x1000 polls in a row bring none (KERN-MEGA-PLAN 14.62.1); a
+; keyboard byte is left for int 09h. 64 restarts at most: past those it is a
+; device that never stopped, and the quiet count simply runs out. AX clobbered
+hbm_p2drop:
+    push cx
+    push dx
+    mov dl, 64
+.r:
+    mov cx, 0x1000
+.l:
+    in  al, 0x64
+    and al, 0x21
+    cmp al, 0x21
+    jne .n
+    in  al, 0x60
+    dec dl
+    jnz .r                      ; a byte came: the quiet starts again
+.n:
+    loop .l
+    pop dx
     pop cx
     ret
 
@@ -2127,7 +2151,8 @@ hbm_sweep:
     xor cx, cx
 .row:
     mov al, cl
-    call COLD_SEG:drvf_drv_row  ; BX = the row
+    call hbg_cgo                ; BX = the row
+    dw drv_row_x
     cmp word [bx+DRVR_SEG], 0
     je .next
 %ifdef VID_EXT
@@ -2192,7 +2217,8 @@ hbm_sweep:
     pop cx
 .unload:
     mov al, cl
-    call COLD_SEG:drvf_drv_unload
+    call hbg_cgo
+    dw drv_unload_x
 .next:
     inc cx
     cmp cx, DRV_MAX
@@ -2219,7 +2245,8 @@ hbm_reload_m:
     shr dx, 1
     jnc .next
     mov al, cl
-    call COLD_SEG:drvf_drv_row  ; BX = the row hdl_load takes
+    call hbg_cgo                ; BX = the row hdl_load takes
+    dw drv_row_x
     call hdl_load               ; failures show on the Drivers page, as at boot
 .next:
     inc cx
@@ -2254,7 +2281,7 @@ hbm_drvsusp:
 .suspend:
     mov si, hb_susp
     mov dl, DRVC_NET            ; AND THE WIRE STAYS (SPEC.md 96.23.6): the
-                                ; DOS box's packet driver is the only route a
+                                ; DOS's packet driver is the only route a
                                 ; DOS program here has to the card, and it is
                                 ; built on the driver staying mounted - so it
                                 ; is the sweep's third skip and not a fourth
@@ -2399,7 +2426,7 @@ hbm_dosbda:
                                 ; BDA is 14.43's, from a machine RESET during
                                 ; the program (kern_dos goes home by the park
                                 ; and writes no mailbox) - W7's code, so the
-                                ; box says so rather than nothing at all
+                                ; DOS.O88 says so rather than nothing at all
 %else
     dec ax
 %endif
@@ -2568,7 +2595,7 @@ hbm_res:
 ; =============================================================================
 ; THE DOS HANDOFF (SPEC.md 96.40, docs/plans/KERN-DOS-PLAN.md §7)
 ; =============================================================================
-; The DOS box has asked for the WHOLE machine. What follows is §87.5's resume
+; DOS has asked for the WHOLE machine. What follows is §87.5's resume
 ; with a different payload and a different stub - the same extent walk, the
 ; same staging area, the same teardown in the same order - and it is here
 ; rather than in a module of its own for exactly that reason: one walker, one
@@ -2637,7 +2664,7 @@ hbm_dosrun:
     ; partition at ROW 2, which that initialiser has FREE - so a machine with
     ; a fixed disk hands over a volume index kern_dos reads as no volume at
     ; all; and row 1 stays live there on a machine whose second floppy the
-    ; kernel retired. The box hands `dos_vol` over as an INDEX into that
+    ; kernel retired. DOS.O88 hands `dos_vol` over as an INDEX into that
     ; table, so an index resolved against a different one is a program
     ; reading a drive that is not its own.
     ;
@@ -2773,8 +2800,8 @@ hbm_dosrun:
     call hbm_cb                         ; lives in APPS/ and not in the root
     jc .b2
     ; **THE NAME HAS TO BE IN KERNEL_SEG**, which is not what ES says: the
-    ; compare underneath is `dsk_streq`, and that reads DS:SI against DS:DI
-    ; (kernel/disk.inc) - so a name in the module's own image is read at that
+    ; lookup underneath parses it with `dskw_name83`, and that reads DS:SI
+    ; (kernel/diskw.inc) - so a name in the module's own image is read at that
     ; offset in the KERNEL's segment and matches nothing. `api_name` is the
     ; kernel's own 13-byte stage for exactly this question, it is exactly
     ; KDH_NAME's length, and it is free here: it is what the N cells copy a
@@ -2822,7 +2849,7 @@ hbm_dosrun:
     ; 512-aligned, so the core's packed bytes are immediately followed by
     ; `kern_dos`'s and the extent list wanted is one range from KDH_COFF to the
     ; end of KDH_PLEN. Nothing here knows that adjacency as a fact - it takes
-    ; the difference of the two offsets the box posted, so a layout that ever
+    ; the difference of the two offsets DOS.O88 posted, so a layout that ever
     ; put something between them would read that something too and still hand
     ; the stub the right two streams.
     mov ax, [cs:hbm_dosrec + KDH_PLEN]  ; the PACKED bytes, as sectors: what
@@ -2863,7 +2890,7 @@ hbm_dosrun:
     ; nothing torn down.
     test byte [cpu_feat], CPU_F_PM
     jz .kbimg
-    ; --- ...AND, WHEN THE BOX ASKS, THE IMAGE AS WELL (KERN-MEGA-PLAN 14.43,
+    ; --- ...AND, WHEN DOS.O88 ASKS, THE IMAGE AS WELL (KERN-MEGA-PLAN 14.43,
     ; KERN-MEGA-DOS-PLAN 12.1 answer 2): `Save the session to disk first`.
     ; The park lives in RAM, so a program that hangs the machine, or a power
     ; cycle, loses it; HIBERNAT.IMG does not. It is kern_big's arm-3 image
@@ -2880,7 +2907,7 @@ hbm_dosrun:
     ; arena in the picture is a section the size of the pool, which no resume
     ; could place beside itself. So a claim refused AFTER the write is an
     ; unwind (.b9), where the park alone refuses with nothing torn down.
-    ; hb_pick's answer is the predicate the box greys on (dos_hasfixed); a
+    ; hb_pick's answer is the predicate DOS.O88 greys on (dos_hasfixed); a
     ; tick carried by a shortcut onto a machine with no fixed disk parks.
     test word [cs:hbm_dosrec + KDH_LB + KDL_FLAGS], KDLF_SAVE
     jz .nosave
@@ -3068,7 +3095,7 @@ hbm_dosrun:
     ; runs (`drv_release` drops its rows), so a gather at THIS point can only
     ; ever have seen the BIOS ones - which is the whole of the defect.
     mov si, dsk_dpt             ; **THE DISKETTE PARAMETER TABLE IS OURS AND NOT
-    mov di, KDS_LB + KDL_DPT    ; THE BOX'S**, so the block is patched here
+    mov di, KDS_LB + KDL_DPT    ; DOS.O88'S**, so the block is patched here
     mov cx, DPT_LEN             ; rather than gathered there: `int 1Eh` names
     rep movsb                   ; KERNEL_SEG:dsk_dpt and kern_dos lands on that
                                 ; same segment with its own table at a
@@ -3127,7 +3154,9 @@ hbm_dosrun:
     ; and `hbm_handover` below UNMASKS IRQ1 on the way out, so a key pressed
     ; any time after the handover vectors into kern_dos's image at `kbm_isr`'s
     ; KERNEL offset - which is SPEC.md 9.6.5's hard freeze one segment along,
-    ; and `kd_leave` ends on `int 16h`.
+    ; and `kd_leave` ends on `int 16h`. INT 15h goes back in the same call
+    ; (SPEC.md 9.7.2: kbm_i15 is a KERNEL_SEG offset too), before kern_dos's
+    ; kdx_init banks what it finds there for its own filter.
 %ifdef KERN_BIG
     ; **THE PS/2 MOUSE IS QUIETED FIRST, OR THE PROGRAM'S KEYBOARD IS DEAD**
     ; (KERN-MEGA-PLAN 14.62). `mouse_unhook` masks IRQ12 and then sends 0xA7,
@@ -3156,12 +3185,19 @@ hbm_dosrun:
     mov bp, mou_p2dw
     call hbm_kd
     mov cx, 256                 ; bounded: a real device has one packet in
-.p2f5:                          ; flight; Bochs's mouse queues more, and 64
-                                ; let a long move's tail reach the program as a
-                                ; key (megakbtrip trip 1: `key 4300`)
+.p2f5:                          ; flight; Bochs's mouse queues more
     call hbm_p2rd
     cmp al, 0xFA
     loopne .p2f5
+    ; ...and whatever the device still sends behind that 0xFA dropped while
+    ; its clock runs, so that mouse_unhook's command-byte write never meets
+    ; an AUX byte in the buffer (KERN-MEGA-PLAN 14.62.1). Bochs's 0xFA
+    ; overtakes the packet bytes its mouse has queued, and a command-byte
+    ; write made with IRQ12's enable off and an AUX byte waiting makes Bochs
+    ; raise IRQ1 - whose line the AUX byte's read then never lowers, so the
+    ; keyboard sends no edge for the whole DOS program (`nokey 64=11`), or,
+    ; read as a key, the stale 43h: `key 4300`
+    call hbm_p2drop
 .p2q:
 %endif
     mov bp, mouse_unhook
@@ -3171,15 +3207,7 @@ hbm_dosrun:
     ; (a keyboard byte is left for int 09h: IRQ1 is open)
     cmp byte [cpu_tier], CPU_8086   ; an XT's 64h is no 8042 (9.9.2)
     je .p2d
-    mov cx, 0x1000
-.p2dr:
-    in  al, 0x64
-    and al, 0x21
-    cmp al, 0x21
-    jne .p2dn
-    in  al, 0x60
-.p2dn:
-    loop .p2dr
+    call hbm_p2drop
 .p2d:
 %endif
     mov bp, snd_unhook
@@ -4744,7 +4772,7 @@ hbm_wake:
     ; this was invisible: the field machine is a VGA and the exit code came
     ; home on it every time.
     ;
-    ; Read here and POKED at 5b, which is where the wake belongs - the box's
+    ; Read here and POKED at 5b, which is where the wake belongs - DOS.O88's
     ; window has to exist and the drivers have to be back. Both routes home
     ; converge on these cells (96.41.1), so one read serves both.
     call hbm_stageseg
@@ -5089,12 +5117,12 @@ hbm_wake:
     ; the handoff writes the image, so the picture is of a machine that is
     ; missing it and the reload below was told nothing about it.
     ;
-    ; The LIVE return is the suspender's to pay and it pays it - the box gets a
+    ; The LIVE return is the suspender's to pay and it pays it - DOS.O88 gets a
     ; `wm_wake` carrying the exit code and answers it with its own resume
     ; (SPEC.md 96.35.5). **THIS DOOR IT CANNOT.** A DOS program that crashes,
     ; or a machine switched off with one running, comes home by a COLD BOOT and
     ; Resume: `[hb_doscode]` is `KDH_NOCODE` there, so the arm below never
-    ; reaches `wm_wake` and the box is restored onto the desktop with no wake
+    ; reaches `wm_wake` and DOS.O88 is restored onto the desktop with no wake
     ; ever delivered. Nothing in any package runs, so nothing in any package
     ; can put the card back - the user's machine is simply silent from then on.
     ;
@@ -5116,15 +5144,15 @@ hbm_wake:
     or dx, [hb_susp]
     mov word [hb_susp], 0
     call hbm_reload_m
-    ; 5b. ...and the DOS program's exit code, to the box that asked for it ---
+    ; 5b. ...and the DOS program's exit code, to the DOS.O88 that asked ---
     ; **THIS IS THE ONLY THING THE RETURN ADDS TO THE WAKE**
     ; (docs/plans/KERN-DOS-PLAN.md 8). `[hb_dosseg]`/`[hb_dosoff]` are the
     ; IMAGE's, standing because `hbm_dosrun` took the picture before it spent
-    ; the post - so the record the box posted is exactly where it was, and it
+    ; the post - so the record DOS.O88 posted is exactly where it was, and it
     ; gets a number in it. The number itself was banked at 3c: the staging
     ; area is gone by here on two adapters of three (96.41.3).
     ;
-    ; The wake is the ordinary one (SPEC.md 74.1): the box already registers a
+    ; The wake is the ordinary one (SPEC.md 74.1): DOS.O88 already registers a
     ; handler and already services `DST_RAN`, so the way home needed no slot
     ; and no second mechanism.
     mov bx, [hb_dosseg]
@@ -5142,7 +5170,7 @@ hbm_wake:
                                 ; while one stands, so arm 3 was dead for the
                                 ; whole of the restored session. It read as
                                 ; "Not enough memory" on a machine with 425K
-                                ; free, because the box mislabelled the
+                                ; free, because DOS.O88 mislabelled the
                                 ; refusal (96.40.6 again)
     mov ax, [hb_doscode]        ; BANKED AT 3c, before the mode change: on a
                                 ; 1bpp adapter the staging area is the
@@ -5327,7 +5355,7 @@ kds_stub:
 %ifndef KERN_MEGA
     mov ax, KD_SEG
 %else
-    ; **WHICH kern_dos, AND SO WHERE** (SPEC.md 96.40.9.2): the box posted
+    ; **WHICH kern_dos, AND SO WHERE** (SPEC.md 96.40.9.2): DOS.O88 posted
     ; the HMA image (FFFF:0010) or the LOW one (0060:0000) and says which in
     ; the launch block it staged. Picked once and kept in two cells, because
     ; the expansion, the launch block's copy and the jump all want it
@@ -5619,6 +5647,12 @@ hbm_s_psbad: db 13, 10, 'Resume failed: the programs', 39, ' memory did not read
 hbm_s_off:  db 13, 10, 'os8088 has hibernated.', 13, 10, 13, 10
             db 'It is now safe to switch the machine off.', 13, 10
             db 'Press any key to restart it.', 13, 10, 0
+
+; hbg_kgo / hbg_cgo - this image's far hop into the kernel (kernel.asm's
+; KGO_PAIR, CTRL.DRV's cp_ pair and the blob's bvs_ one): drv_row_x,
+; drv_unload_x and drv_load_at are reached through it, so the three resident
+; four-byte far shims that only images called could go (kernel size pass 14)
+KGO_PAIR hbg
 
 ; --- THE IMAGE'S OWN BSS (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.1) --------
 ; `nobits`, in the tail of the module's own claim: mod_need rounds the claim up

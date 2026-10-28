@@ -77,6 +77,7 @@ from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
 # display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88geom                                             # noqa: E402
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
+import os88fixture                                          # noqa: E402
 
 def S(name, _d=[()]):
     """Kernel symbol -> linear address, THROUGH THE KNOB THE BUILD WAS MADE
@@ -597,10 +598,13 @@ def main():
     nodc = "NODRAGCACHE" in a.define
     bad = []
 
-    with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+    # MISSILE.O88 left apps360.img (SPEC.md 24.6.1): the shipped disk plus
+    # it, on a disk of this run's own
+    apps = os88fixture.apps360_plus("GAMES:build/missile.o88", tag="dispcorner")
+    with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine=a.machine, boot=False) as m:
         cards = {c["idx"]: c for c in m.cards()}
-        m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run(); os88marty.kernel_up(m)   # the first act is a click
         mo = os88mouse.Mouse(marty=m)
         pri = [i for i, c in cards.items()
                if c["type"] == dispcp.KIND_CARD[m.read(S("vid_kind"), 1)[0]]][0]

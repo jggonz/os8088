@@ -84,18 +84,6 @@ region apps/pixelstein/pxstein.asm  # csload's shape exactly: the launch image
                                  # freed inside that call (SPEC.md 97.9).
                                  # Retired by nothing; correct as it stands.
 
-region apps/sheet/sheet.asm      # SCRIBE'S OLD SHAPE, back: a segment of our
-                                 # own stamped somewhere. ch_ovbind stamps CS
-                                 # into CHART.OVL's vectors, and the module
-                                 # far-returns across its own file calls - a
-                                 # file call claims and can compact - so a
-                                 # moved image would leave both naming the old
-                                 # one (sh_entry's note, SPEC.md 82.16.9). The
-                                 # DATA claims are declared and do move.
-                                 # Retired when the overlay becomes a part in
-                                 # the package's own segment (SCRIBE's 95.8.8
-                                 # shape).
-
 # --- worker -------------------------------------------------------------------
 #
 # THE FOUR PARK-SAFE PACKAGES ARE GONE FROM THIS LIST and the reason they were
@@ -110,27 +98,11 @@ region apps/sheet/sheet.asm      # SCRIBE'S OLD SHAPE, back: a segment of our
 # OSAPI_GFX_LOCK and never while holding it, and all four take the lock as
 # their first action with nothing set before it.
 
-worker apps/frotz/frotz.asm      # A PARK POINT INSIDE THE INTERPRETER'S OWN
-                                 # CALL CHAIN. NOT, as this line first said,
-                                 # because a restart would restart the story:
-                                 # zx_boot is edge-guarded by [zx_seen], so a
-                                 # restart re-entering zx_worker goes straight
-                                 # to .running and resumes. The real blocker is
-                                 # zi_yield (zio.inc), which is called from
-                                 # EVERY wait loop in the module and holds
-                                 # ES = THE PROGRAM COUNTER'S SEGMENT across
-                                 # the yield - it already banks [zf_sdelta] and
-                                 # re-bases ES afterwards precisely because the
-                                 # story can move under it (SPEC.md 66.5.9).
-                                 # The Z-machine's PC is in the story block and
-                                 # survives; the HOST-side position - mid
-                                 # opcode, mid read, mid print, however many
-                                 # frames deep in zx_run - is on the worker's
-                                 # stack and does not. RETIRED BY answering one
-                                 # question nobody has: whether an opcode in
-                                 # flight at zi_yield has committed, so that
-                                 # re-entering at a burst boundary re-executes
-                                 # it rather than skipping it. Until then
-                                 # undeclared is the SDK's own safe answer -
-                                 # this is the one package in the tree where
-                                 # that sentence is load-bearing.
+# FROTZ IS GONE FROM IT TOO (NO-PINNING P2, SPEC.md 66.5.9.3). Its line said
+# the blocker was the host-side position on the worker's stack - mid read, mid
+# print - and that is what the restart point answers: Frotz is not park-safe,
+# so it parks only inside OSAPI_TASK_ALIVE, and at each of those (the loop top
+# and seven waits) a byte names the wait and zx_restart RESUMES it from bss
+# rather than re-executing the opcode, which would have been lossy. The one
+# wait it cannot resume, [MORE], withdraws the declaration while it is up.
+# The worker list is empty now.

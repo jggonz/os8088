@@ -34,7 +34,8 @@ import sheetfmt as SF                                        # noqa: E402
 
 
 WORK = "build/sheetmfile"               # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetmfile.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetmfile.img")        # the run's tree, so a soak lane finds it
 NAME = "FILE.SLK"
 MACRO = (435, 45)
 RUN = (MACRO[0] + 17, 57 + 12 + 2)
@@ -96,7 +97,7 @@ def build_disk():
     big = os.path.join(WORK, "BIG.TXT")
     open(big, "wb").write(b"x" * 8000)   # over a channel's 7,392 (81.94)
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL", src, inp, big],
+                    "360", "build/sheet.o88", src, inp, big],
                    check=True, stdout=subprocess.DEVNULL)
 
 

@@ -125,8 +125,8 @@ def capture(ui, shot):
     os88marty.guest_sleep(m, 12)            # the ball bouncing, the clock on
     shot("realdmg-window", rect=wrect(ui, TITLE), settle=False)
 
-    for name, sid in (("Machine", "realdmg-machine"), ("CPU", "realdmg-cpu"),
-                      ("Save State", "realdmg-savestate")):
+    for name, sid in (("Machine", "realdmg-machine"), ("Screen", "realdmg-screen"),
+                      ("CPU", "realdmg-cpu"), ("Save State", "realdmg-savestate")):
         x0 = drop(ui, name)
         shot(sid, rect=(max(0, x0 - 8), 0, 226, 206), settle=False)
         undrop(ui)

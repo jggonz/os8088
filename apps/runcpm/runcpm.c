@@ -269,7 +269,10 @@ struct rc_kmset {
 };
 static struct rc_kmset rc_kmenus = { "RunCPM", 0, 0 };
 
-static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim */
+static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim -
+                                              * MOVABLE (os88_onmove below,
+                                              * SPEC.md 74.3.2); rc_z.seg is
+                                              * its other copy */
 
 /* THE MACHINE'S STATE - what a wake does, and whether the next one is
  * wanted (SPEC.md 74.1: re-post only while there is work) */
@@ -288,9 +291,9 @@ static int rc_mode = RC_M_CLOCK;
 /* THE CCP rides at the head of the module, the package's one part
  * (RC_CCP_PART/RC_CCP_OFF, SPEC.md 74.3): op_load put it in the carve at
  * launch and it is copied to 0xE400 on every warm boot. Its segment is ASKED
- * each time (os88_part_seg) and never banked. The carve used to MOVE; it is
- * PINNED since SPEC.md 73.14.2.1 (114.6), so asking is no longer needed and
- * is harmless - one call a warm boot. */
+ * each time (os88_part_seg) and never banked - and it has to be: the carve
+ * MOVES (SPEC.md 73.14.2.1), its proc re-deriving the module's segment, and a
+ * banked copy of the CCP's would be stale after the first compaction. */
 static int rc_slice_n;                       /* control transfers a slice */
 static unsigned rc_sl_fast;                  /* slices in a row that took no
                                               * tick: the length adapts */
@@ -715,6 +718,14 @@ static unsigned rc_zoff512(void)
     return 0x200;
 }
 
+/* rc_zmov - the Z80 claim MOVABLE (1) or PINNED (0) (SPEC.md 66.2, 74.3.2).
+ * Pinned only around a file read INTO it, the editors' np_dmov pair (SPEC.md
+ * 66.5.7.1); a refusal can only mean the claim is not ours, which it is. */
+static void rc_zmov(int on)
+{
+    os88_mem_movable(rc_zseg, on);
+}
+
 /* rc_ax_load - AUTOEXEC.TXT, ONCE, at launch, from the launch folder (main.c
  * _RamLoad(AUTOEXEC, cmd, 125): the first 125 bytes of a file of ANY size).
  * WHERE IT GOES: main.c pokes it into the CCP's own command buffer - +7 the
@@ -757,6 +768,11 @@ static int ovl_load_go(void)                 /* module code: 0 = the module
     os88_strcpy(rc_ldname + rc_ldlen, ".COM", 5);
     n = 0;
     big = 0;
+    /* THE Z80 CLAIM IS THE READ'S DESTINATION, SO IT IS PINNED FOR IT
+     * (SPEC.md 66.5.7.1): the kernel holds ES:BX across the walk between
+     * transfers, and the sector cache it claims there can compact. Pinned
+     * here and declared again after the second read, on every path. */
+    rc_zmov(0);
     if (rc_fs_cd(0, 0) == 0) {               /* A\0 first: the CP/M disk */
         n = os88_file_read_segoff(rc_ldname, rc_zseg, off, RC_TPA_TOP - off);
         big = (n == 0 && os88_ferr() == OS88_FERR_BIG);
@@ -770,6 +786,7 @@ static int ovl_load_go(void)                 /* module code: 0 = the module
         n = os88_file_read_segoff(rc_ldname, rc_zseg, off, RC_TPA_TOP - off);
         big = (n == 0 && os88_ferr() == OS88_FERR_BIG);
     }
+    rc_zmov(1);
     if (n == 0) {
         rc_puts(rc_ldname);
         rc_puts(big ? ": too big for the TPA\r\n" : ": not found\r\n");
@@ -1141,6 +1158,8 @@ void os88_onkey(int ascii, int scan, void *win)
 void os88_onclick(int x, int y, void *win)
 {
     if (rc_abt) {                           /* modal: OK, or nowhere */
+        rc_about_reorg(win);                /* after a drag (SPEC.md
+                                             * 11.96.12.0) */
         if (rc_about_hit_ok(x, y))
             rc_about_close(win);
         return;
@@ -1164,6 +1183,34 @@ void os88_oncmd(int item, int menu, void *win)
 void os88_about(void *win)
 {
     ovl_about_show(win);
+}
+
+/* os88_onmove - THE COMPACTOR MOVED ONE OF OUR CLAIMS (SPEC.md 66.2, 74.3.2).
+ * Two kinds, and each word that names one is put right here and nowhere else:
+ *
+ *   - the Z80's 64KB: rc_zseg and rc_z.seg, the copy rcz80.inc and rcmem.inc
+ *     load DS/ES from. THE CORE IS UNTOUCHED - rc_run loads DS from rc_z.seg
+ *     at its door, every slice, and holds it only until it returns, and it
+ *     runs on the UI task, the only task that compacts (SPEC.md 66.3.1), with
+ *     no claim inside it. So a move lands between two slices, never in one.
+ *   - an open file's buffer, o->seg in the open-file table (rcfs.c): the
+ *     record movers and os88_poke are handed it per call.
+ *
+ * Assignments and compares only - this runs INSIDE the compaction (SPEC.md
+ * 66.3 rule 3). */
+void os88_onmove(unsigned was, unsigned now)
+{
+    struct rc_ofile *o;
+    if (rc_zseg == was) {
+        rc_zseg = now;
+        rc_z.seg = now;
+        return;
+    }
+    for (o = rc_oft; o < rc_oft + RC_OFT; o++)
+        if (o->live && o->seg == was) {
+            o->seg = now;
+            return;
+        }
 }
 
 /* os88_main - the entry (SPEC.md 20.2): claims first, then the window. The
@@ -1203,6 +1250,10 @@ void *os88_main(void)
      * and a launch without the RAM for it was refused there, in the
      * standard's words */
     rc_ax_load();                           /* AUTOEXEC.TXT, once, from here */
+    rc_zmov(1);                             /* ...and only NOW may it move:
+                                             * rc_z.seg is set and the read
+                                             * into it is done (SPEC.md 66.3
+                                             * rule 5, 74.3.2) */
     rc_term_init();
     rc_banner();
     rc_status = RC_ST_RUNNING;

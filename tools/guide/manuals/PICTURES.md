@@ -6,9 +6,11 @@ PCX file. They show what PiXEL can open and how it handles each kind.
 
 ## Where it is
 
-On the PiXEL disk, beside `PIXEL.O88`, in all four sizes. The 1.44MB disk
-has the whole set; the smaller sizes carry fewer, down to five on the 360KB
-disk.
+At the top of the disk, on the disks that carry PiXEL and have room for its
+pictures. The PiXEL disk, the live USB image and CD and the VGA and CGA video
+demo hard disks have the whole set of ten. The second 720KB software disk and
+the everything sets carry five of them. The 1.44MB and 1.2MB software disks
+have PiXEL but no room for the pictures; use the PiXEL disk for those.
 
 ## Using it
 

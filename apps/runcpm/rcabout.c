@@ -84,6 +84,11 @@ static const struct rc_abl rc_ab_lines[] = {
 /* the panel's live geometry, resident bss: the close fills it, the click
  * tests the button (rc_ab_bx/by is the OK box's top-left) */
 static int rc_ab_x, rc_ab_y, rc_ab_w, rc_ab_h, rc_ab_bx, rc_ab_by;
+/* ...and the content origin they were laid out against. A window dragged by
+ * its title is REPLAYED and not repainted (SPEC.md 11.96.12.0): the panel's
+ * pixels move with it and no paint tells ovl_about_show, so rc_about_reorg
+ * moves the four by however far the origin went before they are used. */
+static int rc_ab_ox, rc_ab_oy;
 
 /* one label as ONE band (rc_draw_band: blit1, or font_run if refused);
  * x is on a byte boundary by construction (the panel's x is snapped). The
@@ -147,6 +152,8 @@ static int ovl_about_show(void *win)
     if (y < org.y + 2)
         y = org.y + 2;
     rc_ab_y = y;
+    rc_ab_ox = org.x;
+    rc_ab_oy = org.y;
     x = rc_ab_x;
 
     rc_abt = 1;
@@ -166,12 +173,31 @@ static int ovl_about_show(void *win)
     return 1;
 }
 
+/* rc_about_reorg - the banked rects, where the window is NOW. It draws
+ * nothing (SPEC.md 11.96.12.0 rule 1: the origin is read at the hit test). */
+static void rc_about_reorg(void *win)
+{
+    static struct os88_pt org;
+    int dx, dy;
+
+    os88_wm_content(win, &org);
+    dx = org.x - rc_ab_ox;
+    dy = org.y - rc_ab_oy;
+    rc_ab_ox = org.x;
+    rc_ab_oy = org.y;
+    rc_ab_x += dx;
+    rc_ab_bx += dx;
+    rc_ab_y += dy;
+    rc_ab_by += dy;
+}
+
 /* rc_about_close - the panel comes down (lock held: a key's or a click's):
  * its rectangle is damage, the rows under it are drawn to where they differ,
  * and the paused machine is kicked back into its slices. */
 static void rc_about_close(void *win)
 {
     rc_abt = 0;
+    rc_about_reorg(win);                     /* the rect is where it IS */
     if (os88_wm_clip_set(win) == 0) {        /* something of us shows */
         rc_blank_rect(win, rc_ab_x, rc_ab_y, rc_ab_x + rc_ab_w, rc_ab_y + rc_ab_h);
         rc_flush(win);

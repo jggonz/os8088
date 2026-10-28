@@ -13,7 +13,10 @@ x = (lba >> k) * 280 / (total >> k), k the shift that fits the total in a word.
   0. The machine is a CGA, and the tool is 178 rows: its frame must be all
      of them - hanging over the dock (WF_KEEPH, SPEC.md 11.93) rather than
      cut at it with the buttons drawn on through the cut.
-  1. OPEN (slot 1 selected). The bar, column by column: slot 1 is its digit
+  1. OPEN (slot 1 selected). The rows' State column is the install engine's
+     words (SPEC.md 52.2.2.1): `Not Formatted`, `FAT16` (after its drive
+     letter when it is mounted), and `Unpartitioned` for the two free slots.
+     The bar, column by column: slot 1 is its digit
      and a 50% GREY fill (a table entry with no volume), slot 2 its digit and
      SOLID black (a volume), white between and around them, one white column
      at the end of each. The underline is slot 1's own extent. The line under
@@ -29,7 +32,8 @@ x = (lba >> k) * 280 / (total >> k), k the shift that fits the total in a word.
      is the lesson of the map, that Format takes the largest hole and not the
      one you clicked.
 
-BREAK IT ON PURPOSE: with hd_tw_map's call taken out of hd_tw_paint, step 1
+BREAK IT ON PURPOSE: the tree before 52.2.2.1 says `Not Formatted` on the
+free rows; with hd_tw_map's call taken out of hd_tw_paint, step 1
 reads white where the bar should be; with the `add [hd_xsum], ax` pair taken
 out of hd_slot_extent's walk, the line reads `Free 0M`; with hd_map_hit's
 call replaced by the row arithmetic, step 3 picks nothing.
@@ -44,7 +48,7 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 import os88marty as M                                       # noqa: E402
 import instdeep as ID                                       # noqa: E402
-import instrest as IR                                       # noqa: E402
+import glyphread as IR                                      # noqa: E402
 import bigvol as BV                                         # noqa: E402
 import hdsize as HS                                         # noqa: E402
 
@@ -52,6 +56,11 @@ SECTOR = 512
 C, H, S = BV.C, BV.H, BV.S
 CYL = H * S
 TOTAL = C * CYL
+
+# ...and what each slot's State column says: the install engine's words
+# (SPEC.md 52.2.2.1). A free slot with room is `Unpartitioned`, which the
+# tool's own five words could not say - it called it `Not Formatted`
+STATES = ("Not Formatted", "FAT16", "Unpartitioned", "Unpartitioned")
 
 # tool.inc's geometry, content-relative
 HTW_LX, HTW_R0Y, HTW_ROWH = 4, 22, 12
@@ -187,8 +196,10 @@ def main():
     back = span(*big)
     bad = []
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=ID.MACHINE, run_dir=run_dir) as m:
-        M.settle(m)
+                  machine=ID.MACHINE, run_dir=run_dir, boot=False) as m:
+        m.run()
+        M.kernel_up(m)          # the boot gate on STATE
+        M.no_saver(m)
         tab = IR.glyph_table(m)
         mo, tx, ty = HS.open_tool(m)
 
@@ -200,6 +211,14 @@ def main():
                        "of a frame that a press there has left"
                        % ([w[4] for w in tw], HTW_H))
         rows = look(m, mo, tx, ty, "open")
+        for i, want in enumerate(STATES):      # the State column (52.2.2.1)
+            ink = IR.render(want, tab)
+            y0 = ty + HTW_R0Y + i * HTW_ROWH - 1
+            if not any(IR.find(rows, tx + HTW_LX, y0, 290, 10, k) for k in
+                       (ink, [[1 - p for p in r] for r in ink])):
+                bad.append("slot %d's row does not say %r" % (i + 1, want))
+        if not [b for b in bad if "row does not say" in b]:
+            print("  open: the rows say %s" % ", ".join(map(repr, STATES)))
         got = read_bar(rows, tx, ty)
         got = "".join("d" if w == "d" else g for g, w in zip(got, bar))
         if got != bar:                  # a digit's cell is the glyph's test

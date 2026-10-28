@@ -317,7 +317,7 @@ def refuse(machine):
                         "--size", "360", pkg] + [f for _, f, _, _ in files],
                        check=True, capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=machine) as ui:
+                         machine=machine, quick=True) as ui:
             m = ui.m
             for name, _, ok, want in files:
                 w = ui.path("B:/" + name)
@@ -331,7 +331,7 @@ def refuse(machine):
                 os88marty.until(m, lambda mm: m.read(base + syms["vp_loaded"],
                                                      1)[0] == 1 or
                                 rw("vp_msg") == syms["vp_s_ver"], "the open",
-                                poll=0.3, limit=600.0, guest=30.0)
+                                poll=0.05, limit=600.0, guest=30.0)
                 os88marty.pace(m, 1.0)
                 got = (rw("vp_bseg") != 0, m.read(base + syms["vp_ok"],
                                                   1)[0], rw("vp_msg"))
@@ -412,7 +412,7 @@ def main():
                        capture_output=True)
         ty0, tx0 = (SH - CH) // 2, (SW - CW) // 2
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/V2CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -429,7 +429,7 @@ def main():
                 m.write(base + syms[n], struct.pack("<H", v))
 
             def until(cond, what, guest=120.0):
-                os88marty.until(m, cond, what, poll=0.3, limit=900.0,
+                os88marty.until(m, cond, what, poll=0.05, limit=900.0,
                                 guest=guest)
 
             def check(n, what, x0, y0):

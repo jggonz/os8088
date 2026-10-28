@@ -20,6 +20,19 @@ leg carries the 0.9 s generation and the 0.6 s transpose, so it is the one
 that straddles a minute; 60 RGB bytes of the clock's digits differed and
 nothing of the game - tests/pxsfsx.py's slice, review of wave 2's second
 fix round).
+
+THE PICTURES ARE TAKEN AT THE WORKER'S FRAME BOUNDARIES, with the world
+frozen (px_simoff). The first cut counted px_frames from a mark and ran the
+sim: a guard's step owes a frame every few seconds in scene A, so a frame
+already IN FLIGHT when a poke landed answered the wait, and the glass was
+read a pose behind or torn mid-present - one run in two on the windowed
+Textured Full leg (7,425 RGB bytes), and once on C160 Textured Full (666),
+with the renderer drawing both pictures right. Every poke is now made with
+the guest stopped at px_frame_begin or px_frame_end, and every read follows
+a frame that ENDED with nothing owed (pxslib's hold/drawn). Broken on
+purpose - the Textured delta frame's ceiling put-back skipped, the forced
+frame's left alone - every Textured leg goes red (2,226-2,451 RGB bytes
+windowed, 256-264 on C160, 237-238 on CGA4) and the Flat ones stay green.
 """
 import argparse
 import os
@@ -44,32 +57,62 @@ def check(ok, what):
 
 
 def glass(g, windowed):
-    g.m.pause()
+    """The picture, read off a guest drawn() left STOPPED after a frame that
+    ended with nothing owed. The bracket's is the framebuffer itself; the
+    window's is the RENDERED desktop, which MartyPC finishes a raster after
+    the bytes land - so two CRT frames are run first (the sim frozen and
+    nothing owed: the worker draws nothing in them) and the guest is then
+    stopped between frames again (hold), ready for the next poke."""
     if windowed:
+        g.m.advance(frames=2)
         w, h, px = g.m.fbuf(0)
         got = px[BAR * w * 3:]      # the desktop under the menu bar's clock
+        g.hold()
     else:
         got = g.m.read(B800, 16384)
-    g.m.run()
     return got
 
 
 def leg(g, label, windowed, turns, rung="tex", lowres=True):
-    g.pin(rung=rung, lowres=lowres, size=64)
-    px, py, head = g.scene("a")
-    g.wait_frames(1)
-    for _ in range(turns):
-        head = (head + pxslib.PX_TURN) & 0xFFF
-        g.turn(px, py, head)
-        g.wait_frames(1)
+    """Every poke is made with the guest STOPPED between two frames and every
+    read after a frame that ended with nothing owed (pxslib's hold/drawn):
+    the first cut counted px_frames from a mark, so a frame already in
+    flight answered the wait and the glass was read a pose behind, or torn
+    mid-present - one run in two on the windowed Textured Full leg. The
+    world is frozen (px_simoff, main), so nothing but the pokes moves."""
+    m = g.m
+    g.hold()
+    g.poke_byte("px_detail", pxslib.PXD[rung])     # pin(): the pick, taken
+    g.poke_byte("px_res", 1 if lowres else 0)      # by px_apply between
+    g.poke_byte("px_sizeix", pxslib.SIZES.index(64))   # frames (px_pend)
+    g.poke_byte("px_pend", 1)
+    px, py, head = pxslib.scene_at("a")            # scene(): the pose, owed
+    g.eye_poke(px, py, head)                       # WHOLE
+    g.pcell_poke(px, py)
+    for k in ("px_tap", "px_kturn", "px_kfwd", "px_kstr"):
+        g.poke_byte(k, 0)
+    g.force_all_poke()
+    g.drawn()
+    forced = []
+    for _ in range(turns):                         # turn(): the heading with
+        head = (head + pxslib.PX_TURN) & 0xFFF     # px_dirty and NOTHING
+        g.eye_poke(px, py, head)                   # forced - the delta fill
+        g.pcell_poke(px, py)
+        g.poke_byte("px_dirty", 1)
+        g.drawn()
+        forced.append(g.byte("px_fown"))           # the frame's own force:
+                                                   # 0, or it was no delta
     before = glass(g, windowed)
-    g.force()                       # the same pose, every column, every row
-    g.wait_frames(1)
+    g.force_all_poke()              # the same pose, every column, every row
+    g.drawn()
     after = glass(g, windowed)
+    m.run()
     diff = [i for i in range(len(before)) if before[i] != after[i]]
     check(not diff, "%s: %d turn frames then a full redraw leave the glass identical "
           "(%s)" % (label, turns, "all %d bytes" % len(before) if not diff else
                     "%d differ, first at %d" % (len(diff), diff[0])))
+    check(not any(forced), "%s: the turn frames were deltas, none forced (%s)"
+          % (label, forced))
     ex, ey, eh = g.eye()
     check((ex, ey, eh) == (px, py, head), "%s: the eye stayed put" % label)
 
@@ -82,11 +125,16 @@ def main():
     ap.add_argument("--turns", type=int, default=3)
     a = ap.parse_args()
     os.chdir(ROOT)
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # open_game's first act is a click
         g = pxslib.open_game(m)
         st = g.state()
         print("   PXSTEIN.O88: window %d, part 0 at %04x, texok %d" % (g.win, g.seg, st["texok"]))
         check(st["texok"] == 1, "the Textured rung is on offer")
+        g.sim(False)                    # the world frozen: no guard, door or
+                                        # weapon moves between the pictures
         leg(g, "windowed, Textured Low res", True, a.turns)
         leg(g, "windowed, Textured Full", True, a.turns, lowres=False)
         leg(g, "windowed, Flat Low res", True, a.turns, rung="flat")

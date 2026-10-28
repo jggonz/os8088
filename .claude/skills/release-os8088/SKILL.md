@@ -12,15 +12,23 @@ Builds the floppy images, publishes them into the website repository next
 door along with the notes for its releases page, opens a pull request there,
 and cuts a GitHub release on this repo.
 
-**The GitHub release carries ONE asset: a zip.** `os8088-<version>.zip` holds
-every image, a `README.md` that explains every file in it -- grouped by what the
-reader is trying to do, so the pair most people need comes first and each group
-says how to use its own files -- and a SHA256SUMS covering all of them. Eleven
-loose `.img` files used to hang off the release, and a reader had to know which
-pair they wanted before they could download anything. Step 3a builds it. The website is unchanged -- its download
-page still serves the images individually out of `public/disk/`, because the
-browser demo streams them and a table of per-image checksums is the point of
-that page.
+**The GitHub release carries the release ZIPS and nothing else** -- four of
+them, all written by `mkzip.py` in step 3a:
+
+| zip | holds |
+|---|---|
+| `os8088-<version>.zip` | every floppy, in a folder per disk size (`1440K/`, `1200K/`, `720K/`, `360K/`, with `128K-RAM/` inside the last two) and `PROGRAMS/<APP>/` for the one-program disks, every image and folder named 8.3; a `README.md` that explains every file, grouped by what the reader is trying to do; a `SHA256SUMS` |
+| `os8088-<version>-live.zip` | the live USB image and CD as `LIVEUSB.IMG` and `OS8088.ISO`, the Mac burner as `burn-usb-macos.py`, its own README and SHA256SUMS |
+| `os8088-<version>-videos.zip` | the three 86Box machines with the Video Player demos (`make viddemozip`) |
+| `os8088-<version>-tools.zip` | the PicoMEM firmware, the kernel ROMs cut against this build, the encoder, the Game Boy precompiler, the file splitter, the Browser's proxy and the DOS tools (`make toolszip`) |
+
+The main zip is the one every release has; the other three are written when
+their on-demand targets were built, and named as skipped when not. Eleven
+loose `.img` files used to hang off the release, and a reader had to know
+which pair they wanted before they could download anything. The website is
+unchanged -- its download page still serves the images individually, under
+their build names, out of `public/disk/`, because the browser demo streams
+them and a table of per-image checksums is the point of that page.
 
 The release notes get written once and used twice: `data/releases.json` in the
 website repo (step 4a) and the GitHub release (step 6) say the same thing, and
@@ -156,6 +164,59 @@ hash a lie. If the user says go ahead, note it in the PR body.
 If the website repo has uncommitted changes, stop and ask; the release commits
 to a fresh branch off `main` and would otherwise sweep unrelated work into it.
 
+### 1a. Stamp the release (SPEC.md 117.10.1)
+
+INSTALL's network check compares releases, not builds: the release is the
+date in this version, `YYYYMMDD`, and it lives on the first line of
+`apps/install/OS88VER.TXT`. Write it there, and replace the lines under it
+with **exactly four lines of what is new, 40 characters each** - INSTALL
+shows them on its first page whenever the network is the pick. Recommend one
+of two shapes to the user and let them choose:
+
+- **four points**, one line each, every line starting `* `;
+- **three points**, one of which takes two lines - its second line indented
+  two spaces, so it reads as the same point:
+
+```
+20261024
+* Install and upgrade over the network
+* RealDMG recompiler on 8088 class
+* File Progress, toast, clock and
+  volume icon system consolidation
+```
+
+Count to 40 including the `* `; a longer line is cut at 40 on the glass, and
+a fifth line is never shown (`make nettree` warns on both). Ask the user for
+the points if the changes since the last release do not make them obvious.
+
+**Then land it on `origin/main` through a short pull request, before step 2
+builds anything.** Never commit it straight onto `main`: the build number is
+the commit count (SPEC.md 14.2), so a local commit gives the release kernel
+the number the next merge to `main` also gets, `origin/main` keeps the old
+release for every later build of INSTALL, and the tag names a commit `main`
+does not contain. Never tag the branch commit either - the squash merge
+re-hashes it. Merged first, the built tree, the build number and the commit
+step 6 tags are all `origin/main`'s tip:
+
+```bash
+cd "$OS_REPO"
+git switch main && git pull --ff-only
+git switch -c "release/$VERSION-version"
+$EDITOR apps/install/OS88VER.TXT        # line 1 = the date, then what is new
+git commit -m "Release YYYYMMDD: version file" apps/install/OS88VER.TXT
+git push -u origin "release/$VERSION-version"
+gh pr create --title "Release YYYYMMDD: version file" \
+  --body "The release stamp INSTALL checks (SPEC.md 117.10.1)."
+gh pr merge --squash --admin --delete-branch
+git switch main && git pull --ff-only
+head -n 1 apps/install/OS88VER.TXT      # must print YYYYMMDD
+```
+
+`--admin` because the ruleset wants a review the sole maintainer cannot give.
+With `--no-pr`, stop after the commit on the branch, build from it, and say
+in the report that `main` does not carry the release yet. Step 3a refuses to
+pack when line 1 is not this version's date.
+
 ### 2. Build the images
 
 ```bash
@@ -166,10 +227,38 @@ ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
       build/apps.img build/apps120.img build/apps720.img build/apps360.img \
       build/media360.img \
       build/office360.img build/network360.img build/games360.img \
+      build/emu360.img build/util360.img build/more720.img \
+      build/small360.img build/small720.img \
       build/emu.img
 ```
 
-All thirteen must exist -- step 3a refuses to pack without them. (Four
+All eighteen must exist -- step 3a refuses to pack without them.
+
+**And the published tree** INSTALL upgrades from (SPEC.md 117.10.2):
+
+```bash
+make mega              # kern_mega's system and apps disks, which the mega tree is cut from
+make nettree           # build/nettree/{big,mega,emu}/: system + apps, SYSTEM/OS88VER.TXT, OS88.IDX
+head -n 1 build/nettree/{big,mega,emu}/SYSTEM/OS88VER.TXT   # each YYYYMMDD
+```
+
+`make nettree` builds all three trees, so it runs after `make emu` (above)
+and `make mega`: the emu tree is cut from `build/emu.img`, the mega tree from
+`build/mega.img` and `build/megaapps.img`.
+
+There are THREE trees, one per kernel, because kern_big, kern_mega and
+kern_emu install different kernels: `build/nettree/big/`,
+`build/nettree/mega/` and `build/nettree/emu/` (emu.img with the shipped
+apps.img). kern_big's INSTALL asks `http://os8088.com/net/big/`, kern_mega's
+`http://os8088.com/net/mega/` and kern_emu's `http://os8088.com/net/emu/`.
+They are published to the R2 bucket `os8088-net` (SPEC.md 117.10.2's store)
+by step 6a, after the GitHub release exists, and never committed to the
+website repo. The last release's prefix stays until the maintainer deletes
+it. Plain `http://` must serve it: the HTTP drive does not do TLS. **Change
+nothing in it by hand once it is built**: `OS88.IDX` carries every file's size and the
+drive believes it, so an edited OS88VER.TXT is served cut to its old length.
+Edit `apps/install/OS88VER.TXT` and run `make nettree` again, or re-index the
+folder in place with `python3 tools/os88httpdrv.py export DIR DIR`. (Four
 geometries of each pair since SPEC.md 19's 1.2MB disk, plus the 360KB-only media
 disk and SPEC.md 24.6's three 360KB-only category disks -- at that size the
 spreadsheet and the chart viewer ship on the office disk and on NO other.)
@@ -207,46 +296,72 @@ and not to be "fixed" at release time:
 - **Its kernel lives in `build/emuk/`**, never in `build/`, so nothing in the
   rest of this procedure boots it by accident.
 
-**Then the on-demand disks**, which `make` does not build and the zip carries
-when they exist:
+**Then the on-demand targets**, which `make` does not build and the release
+zips carry when they exist -- the one-program disks and the everything sets in
+the main zip, the live media, the video machines and the tools in zips of
+their own:
 
 ```bash
 tools/setup-cc.sh                     # SmallerC; needed by cword and allapps
-make allapps                          # apps-all-N.img -- every program, a set of disks
+make allapps                          # apps-all-N.img -- every program, a set
+                                      # of disks: 1440K/ALLn-144.IMG and
+                                      # 1200K/ALLn-120.IMG in the zip
 make worddisk cworddisk               # word*.img, cword*.img
 make c64disk                          # c64*.img
-make weavedisk                        # weave*.img -- the Weave family's disk
-make loomdisk                         # loom*.img -- the same family's IDE disk,
-                                      # with the demo SOURCES instead of the
-                                      # compiled bundles
+make weavedisk                        # weave*.img -- the Weave family's disk,
+                                      # runtime, editor and sources
 make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
-make 1942disk redlinedisk             # 1942*.img, redline*.img
-make midirackdisk pixeldisk           # midirack*.img, pixel*.img
+make 1942disk midirackdisk            # 1942*.img, midirack*.img
+make pixeldisk                        # pixel.img -- PiXEL with its whole
+                                      # gallery, which no software disk has
+                                      # room for; the 1.44MB disk alone is
+                                      # released, as PROGRAMS/PIXEL/PIXEL144.IMG
 make xtmp3disk                        # xtmp3*.img -- XTMP3 and its three songs
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
-make realdmgdisk                      # realdmg*.img -- the Game Boy; GBDEMO.GB
-                                      # is committed (apps/realdmg/), no fetch
 make live                             # os8088-usb.img + os8088.iso -- the live
-                                      # USB image and the live CD (SPEC.md 80).
-                                      # Needs the fetch on the line above and
-                                      # the C toolchain, like allapps
+                                      # USB image and the live CD (SPEC.md 80),
+                                      # the live zip. Needs the fetch on the
+                                      # runcpm line and the C toolchain, like
+                                      # allapps
+make viddemo viddemozip               # the three 86Box machines with the Video
+                                      # Player's demo hard disks -- the videos
+                                      # zip. The website's Docs disk guide
+                                      # lists the VHDs too, and step 4d reads
+                                      # every image that guide lists
+make toolszip                         # the firmware and utilities -- the tools
+                                      # zip: it cuts the kernel ROMs (`make
+                                      # rom`, `socketrom`) against THIS tree
+                                      # and packs the encoder, the Game Boy
+                                      # precompiler and the splitter bundles
 make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
                                       # DISK (SPEC.md 80.7), the same volume on
-                                      # kern_emu with VMMOUSE.DRV wanted. Not
-                                      # in the zip; the web repo's release.py
+                                      # kern_emu with VMMOUSE.DRV wanted. In no
+                                      # zip; the web repo's release.py
                                       # publishes it, and skipping it leaves
                                       # the demo on last release's build
-make viddemo                          # VIDDEMO-*-ST11R.VHD -- the Video
-                                      # Player's demo drives. Not in the zip
-                                      # either; the website's Docs disk guide
-                                      # lists them, and step 4d reads every
-                                      # image that guide lists
 ```
 
+**Build the live media, the video machines and the tools AFTER the last
+`make`.** Each carries this build's kernel, or ROMs cut against it that
+refuse every other, so `mkzip.py` refuses one older than `build/kernel.sys`
+rather than releasing a companion from another tree -- and every commit moves
+the kernel, its build number being the commit count (SPEC.md 14.2).
+
+**Three one-program disks are built and NOT released**: `realdmgdisk`,
+`redlinedisk` and `loomdisk`, and of `pixeldisk` only the 1.44MB disk is.
+Their programs ride the main disks -- RealDMG on the 360KB emulators disk and
+the second 720KB software disk, REDLINE on the system disks and the
+utilities disk, PiXEL on the software disks with its gallery's five-picture
+selection on the second 720KB disk and the everything sets (the whole
+gallery on the live media and the VGA and CGA video disks) -- and LOOM is on
+the Weave disk; Word's 360KB disk is left out the same way. Build them only
+when step 4d's Docs disk guide still lists them, since it refuses an
+inventory with a listed image missing.
+
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
-network, no host toolchain -- **release the thirteen and say which on-demand disks
+network, no host toolchain -- **release the eighteen and say which on-demand targets
 were skipped**, and know that step 4d then cannot refresh the Docs disk guide,
 which reads every image it lists or none; they are a convenience, and a release that waits on one is a
 release that does not happen. `mkzip.py` prints the ones it did not find, so
@@ -255,7 +370,7 @@ that list is generated rather than remembered. Boot any that were built in step
 
 **The live media carries the story files, and that is decided.** Since #188,
 `make live` puts every story in `tools/getstories.py`'s MANIFEST on the live
-USB image and the live CD, so the zip carries them inside those two files. The
+USB image and the live CD, so the live zip carries them inside those two files. The
 user decided at v1.0.20260916 that this ships: the MANIFEST is curated to files
 that are free to redistribute -- three Infocom and Activision giveaways (the
 two Samplers, Mini-Zork, ZTUU) and authors' own freeware -- and none of the
@@ -322,10 +437,10 @@ adopted, and its absence means the image booted the kernel and lost the
 volume, which is exactly the failure a screenshot catches and a checksum
 cannot.
 
-### 3a. Pack the release zip
+### 3a. Pack the release zips
 
-The one asset the GitHub release gets. Build it only after step 3 has booted
-the images -- the zip is what people download, and packing an unbooted image is
+What the GitHub release gets. Build them only after step 3 has booted the
+images -- the zips are what people download, and packing an unbooted image is
 the same mistake with an extra layer of wrapping on it.
 
 ```bash
@@ -333,63 +448,119 @@ cd "$OS_REPO"
 python3 .claude/skills/release-os8088/mkzip.py --version "$VERSION"
 ```
 
-It writes `build/os8088-<version>.zip` and prints the entry count, the packed
-and unpacked sizes, the zip's own sha256, and which on-demand disks were not
-built. **Quote that sha256 in the release notes** -- it is the only checksum a
-reader of the GitHub release gets, since there is no longer a per-file table
-there.
+It writes `build/os8088-<version>.zip` and, for each companion that was built,
+`build/os8088-<version>-live.zip`, `-videos.zip` and `-tools.zip`, printing
+each one's entry count, size and sha256, then the on-demand files it did not
+find. **Quote every zip's sha256 in the release notes** -- it is the only
+checksum a reader of the GitHub release gets, since there is no longer a
+per-file table there.
 
-The script does three things worth knowing about:
+The script does seven things worth knowing about:
 
 - **Its file list is an allowlist, not a glob.** `build/` also holds the story
   disks and every test gate's scratch image, and a glob ships those the first
   time somebody runs an unrelated target before cutting a release. If a new
   disk should be in releases, add it to `ITEMS` in `mkzip.py`, in the group a
-  reader would look for it under -- that is the only place the list lives, and
-  the README's description of it is written there too. A disk that fits no
-  group gets a new entry in `GROUPS`, with the instructions for using it.
+  reader would look for it under -- the README's description of it is written
+  there too -- and give it a place: `DEST` names each main disk's path, and a
+  one-program disk takes its folder and short name from `PROGRAMS`. A disk
+  that fits no group gets a new entry in `GROUPS`, with the instructions for
+  using it. `ITEMS` keeps BUILD names because `tools/os88guide.py` and
+  `docsync.py` match on them.
+- **Every image and folder in the main zip is 8.3** -- `WORD-144.IMG`,
+  `360K/128K-RAM/OS88-360.IMG` -- so the unpacked tree can be copied onto an
+  os8088 volume and every disk mounted there. A name that is not, or two
+  files on one name, stops it. An everything set that grows to ten disks
+  would make `ALL10-144.IMG` and stop it too; that is a naming decision for
+  the owner, not a fix to make at release time.
 - **It refuses to pack a partial release.** A missing image that `make` or
-  `make emu` builds stops it; a missing on-demand disk is reported and skipped.
-- **The zip is byte-for-byte reproducible.** Timestamps come from the date in
-  the version string and the images are already deterministic, so the same
-  version from the same commit packs to the same bytes. Do not add anything
-  that varies per run.
+  `make emu` builds stops it; a missing on-demand file is reported and
+  skipped, and its zip is not written.
+- **It refuses a stale companion.** The live images, the videos zip and the
+  tools zip must be newer than `build/kernel.sys` (step 2 says why); one that
+  is not names the target to run again.
+- **It refuses a release stamped with another date.** Line 1 of
+  `apps/install/OS88VER.TXT`, and of each `build/nettree/*/SYSTEM/OS88VER.TXT`
+  that is built, must be the `YYYYMMDD` in `$VERSION`; one that is not means
+  step 1a was skipped or the tree was cut before it.
+- **It deletes this version's companion zips that it did not write**, and
+  prints each one: an earlier run's `-live`, `-videos` or `-tools` zip whose
+  source has since gone would otherwise ride out on step 6's glob.
+- **The zips are byte-for-byte reproducible.** Timestamps come from the date
+  in the version string and the images are already deterministic, so the same
+  version from the same commit packs to the same bytes. The videos and tools
+  zips are `make`'s own, repacked under `os8088-<version>-videos/` and
+  `-tools/` with those timestamps. Do not add anything that varies per run.
 
-Then look inside it, the same way step 3 makes you look at the screenshot:
+**Then boot the video machines out of the zip**, since a published image is a
+booted one and these three are three hard disks:
+
+```bash
+python3 .claude/skills/release-os8088/vidsmoke.py --version "$VERSION"
+```
+
+It unpacks the videos zip into a scratch directory and starts each machine
+folder in 86Box exactly as it is -- the config, the CMOS it carries, its hard
+disk -- so a disk name that does not resolve or a CMOS that stops in BIOS
+setup fails here and not on a reader's machine. It must print `PASS`, and it
+needs 86Box built (`python3 tools/os88box.py build`, docs/86BOX.md). **Look at
+each screenshot in `build/smoke-vid/`**: the desktop, with a Disk C icon.
+Delete them afterwards.
+
+**On a Mac that build is not available** (its preflight is apt-only), so boot
+the three folders out of the unpacked zip in the 86Box app instead -
+`/Applications/86Box.app/Contents/MacOS/86Box -P <folder> -N`, all three at
+once - and after about 100 seconds capture each one's window by its pid
+(`screencapture -x -o -l <window id>`; another session's 86Box may be in
+front, so never capture the whole screen). Each must show the desktop with a
+Disk C icon. Then kill only those pids, with `-9`: 86Box asks before it
+closes.
+
+Then look inside each zip, the same way step 3 makes you look at the
+screenshot:
 
 ```bash
 cd "$(mktemp -d)" && unzip -q "$OS_REPO/build/os8088-$VERSION.zip"
 cd "os8088-$VERSION" && shasum -a 256 -c SHA256SUMS && cat README.md
+find . -type f | sort
 ```
 
-**Read the README with the Read tool.** It is written for someone who has never
-seen this project, so "Writing the copy" governs it exactly as it governs the
-release notes. It is `README.md`: Markdown that reads the same in Notepad as
-on GitHub, generated from two tables in `mkzip.py`:
+and the same for `-live` (which has a SHA256SUMS too) and, by listing,
+`-videos` and `-tools`, whose own READMEs are written by the tools that
+build them.
+
+**Read each README with the Read tool.** It is written for someone who has
+never seen this project, so "Writing the copy" governs it exactly as it governs
+the release notes. The main one is `README.md`: Markdown that reads the same
+in Notepad as on GitHub, generated from two tables in `mkzip.py`:
 
 - **`GROUPS`** -- the situations a reader is in, in the order the README takes
   them: *Start here* (the system and software pair per disk size, as a table),
-  *Extra disks for a 360KB machine*, *In an emulator or virtual machine* (the
-  emulator disk), *No floppy drive* (the live USB image and CD), *Every program,
-  on a set of disks*, *One program per disk*, and *About this zip* (checksums
-  and licence files). Each carries the instructions for using its own files --
-  the QEMU line, the `dd` line -- so they sit beside the files they are about.
+  *More software disks for a 360KB machine*, *A second software disk for a
+  720KB machine*, *A machine with as little as 128KB of memory*, *In an
+  emulator or virtual machine* (the emulator disk), *Every program, on a set
+  of disks*, *One program per disk*, and *About this zip* (checksums and the
+  licence files). Each carries the instructions for using its own files --
+  the QEMU line -- so they sit beside the files they are about. *No floppy
+  drive* is the live zip's README, with the `dd` line and the burner.
 - **`ITEMS`** -- the things a reader chooses between, each in one group, with
   the images it comes as and a line saying what it is for. This is also the
-  allowlist of what can go in the zip.
+  allowlist of what can go in the zips.
 
-Only what was packed is described, and a group with nothing in this zip is left
-out whole. **Check that every file in the unpacked directory has its own line**
+Only what was packed is described, a group with nothing packed is left out
+whole, and the main README ends by naming the companion zips that were
+written. **Check that every file in the unpacked directory has its own line**
 in the README, that the version and commit are this release's, and that no
 group explains a file that is not there.
 
 The QEMU command lines in it are the real ones -- if `make run`'s invocation
 ever changes, `GROUPS` in `mkzip.py` has to change with it, and the way to know
 is to run the commands out of the unpacked directory and see the desktop come
-up. The emulator group's line is the one `emusmoke.py` boots, and it has **no
-mouse line on purpose**: QEMU answers the absolute pointer by default, and the
-serial mouse beside it would be a second pointing device with the buttons split
-across the two.
+up. The emulator group's line is the one `emusmoke.py` boots (on `emu.img`,
+which the zip calls `1440K/VMSYS144.IMG`), and it has **no mouse line on
+purpose**: QEMU answers the absolute pointer by default, and the serial mouse
+beside it would be a second pointing device with the buttons split across the
+two.
 
 ### 4. Publish into the website repo
 
@@ -448,11 +619,9 @@ has moved once already. The other three are not printed by the build, so
 measure them -- from `$OS_REPO`:
 
 ```bash
-# ramBytes: image + .bss, the number the build-time assertion guards.
-# The kernel refuses to assemble over the cap, so bypass the %error to read it.
-sed 's/%error "kernel too big.*/%warning bypassed/' kernel/kernel.asm > /tmp/ksz.asm
-printf '%%assign KT KTEXT_SIZE\n%%assign KB KBSS_SIZE\n%%warning KTEXT=KT KBSS=KB\n' >> /tmp/ksz.asm
-nasm -f bin -I kernel/ -o /dev/null /tmp/ksz.asm     # warning prints both; ramBytes = KT + KB
+# ramBytes: .text + .bss, the number the build-time assertion guards.
+# kernsize prints it on its `segment` line: ".text+.bss N of KERN_CODE_MAX".
+python3 tools/kernsize.py | grep segment
 
 # sourceLines and modules: the boot sector, kernel.asm and everything it
 # actually includes, the SDK header, and every package's .asm AND the .inc
@@ -805,9 +974,10 @@ whether screenshots were recaptured. If `--shots` ran, say which screenshots
 actually changed (`git diff --stat public/img/shots/`) -- if a UI change was
 expected and nothing changed, that is a signal something is wrong.
 
-Check the diff includes `data/releases.json` with its prose filled in. A
-release PR that touches the images and the manifest but not the release log
-means step 4a was skipped.
+The diff carries no network tree: those go to R2 in step 6a, never into
+this repo. Check the diff includes `data/releases.json` with its prose filled
+in. A release PR that touches the images and the manifest but not the release
+log means step 4a was skipped.
 
 Say what step 4d did to the Docs section: the snapshot commit it moved from
 and to, the images whose inventory changed, the manuals and articles you
@@ -835,7 +1005,7 @@ Generated with [Codex](https://developers.openai.com/codex/)
 
 ### 6. Tag and cut the GitHub release
 
-Only after the images are booted and the zip is unpacked and checked.
+Only after the images are booted and the zips are unpacked and checked.
 
 ```bash
 cd "$OS_REPO"
@@ -844,26 +1014,32 @@ git push origin "$VERSION"
 gh release create "$VERSION" \
   --title "os8088 $VERSION" \
   --notes "<notes>" \
-  "build/os8088-$VERSION.zip"
+  build/os8088-"$VERSION".zip build/os8088-"$VERSION"-*.zip
 ```
 
-**One asset, and it is the zip.** Do not attach loose `.img` files beside it --
-that is the arrangement this replaced, and half of each is worse than either.
-Confirm the file exists before running the command: a missing asset makes `gh
+**The assets are the zips `mkzip.py` wrote, and nothing else.** Do not attach
+loose `.img` files beside them -- that is the arrangement this replaced, and
+half of each is worse than either. Confirm the files exist before running the
+command (`ls build/os8088-"$VERSION"*.zip`): a missing asset makes `gh
 release create` fail with the tag already pushed, which is the one failure in
-this whole procedure that cannot simply be re-run.
+this whole procedure that cannot simply be re-run. A companion `mkzip.py`
+named as skipped is simply absent from the glob; say so in the notes.
 
 Because the release page no longer lists a file per image, the notes have to
-say what the zip contains and how big it is -- one sentence naming the two
-images a reader actually needs, the packed size, and the sha256 step 3a
-printed. When the zip carries the live media, name them too: a reader with no
-floppy drive needs to hear that `os8088-usb.img` and `os8088.iso` boot a PC
-or an emulator directly, or the two files that serve them best read as
-padding. Name the emulator disk the same way: someone running os8088 in QEMU,
-VMware, VirtualBox or a browser should hear that `emu.img` goes in drive A in
-place of `os8088.img` and that the pointer then follows their own mouse with no
-click to capture it. Someone who wants a per-image checksum finds it in the SHA256SUMS
-inside the zip, or on the download page, and the notes should say which.
+say what each zip contains and how big it is. For the main zip: one sentence
+naming the pair a reader actually needs -- `1440K/OS88-144.IMG` and
+`1440K/APPS-144.IMG` -- that the disks are in a folder per disk size with the
+larger programs in `PROGRAMS`, the packed size, and the sha256 step 3a
+printed. Name the emulator disk: someone running os8088 in QEMU, VMware,
+VirtualBox or a browser should hear that `1440K/VMSYS144.IMG` goes in drive A
+in place of `OS88-144.IMG` and that the pointer then follows their own mouse
+with no click to capture it. Then one line per companion with its size and
+sha256: the live zip -- a reader with no floppy drive needs to hear that
+`LIVEUSB.IMG` and `OS8088.ISO` boot a PC or an emulator directly -- the
+videos zip, three 86Box machines to drop into 86Box's machines folder, and
+the tools zip, the firmware and the utilities. Someone who wants a per-image
+checksum finds it in the SHA256SUMS inside the main and live zips, or on the
+download page, and the notes should say which.
 
 `gh` infers the repository from the checkout's remote, so this works for a
 fork or a rename without any edit here.
@@ -880,15 +1056,45 @@ places -- the releases page exists to mirror this, and the two disagreeing is
 worse than either alone. If the wording improved while writing these, go back
 and update `data/releases.json` to match before the website PR is merged.
 
+### 6a. Publish the network trees (SPEC.md 117.10.2)
+
+Only after the GitHub release exists. Publishing is the one act every
+installed machine notices by itself - INSTALL's check then tells it a newer
+release is out - so it comes last, when the page and the zips it would go
+looking for are already there. With `--no-pr` there is no release, so
+there is no publishing either.
+
+```bash
+cd "$WEB_REPO"
+python3 tools/netpublish.py --release YYYYMMDD "$OS_REPO/build/nettree"
+sleep 30                                 # the Worker re-reads CURRENT at most every 30 s
+python3 tools/netpublish.py --verify --release YYYYMMDD
+```
+
+The first uploads every file of `build/nettree/` to the R2 bucket
+`os8088-net` under `YYYYMMDD/<kernel>/<path>` (`big`, `mega` and `emu`), and
+only then writes `CURRENT`, the one pointer the Worker reads, so `/net/`
+switches from the last release to this one whole. The website commit carries
+no tree. The second fetches
+`http://os8088.com/net/{big,mega,emu}/SYSTEM/OS88VER.TXT` and checks that
+each answers `200` with no `Location`, carries a `Content-Length`, says
+`YYYYMMDD` on line 1, and answers a Range request with `206`. **If it fails,
+stop and report**: a redirect, a 404 or a chunked answer reads as "no answer"
+to every installed machine. Leave the last release's prefix in the bucket;
+deleting it is the maintainer's, and a machine mid-install is still reading
+it.
+
 ### 7. Report
 
-Tell the user: the version, the PR URL, the release URL, the kernel size and
-its delta, the zip's packed size and how many images went into it, the
+Tell the user: the version, the version-file PR step 1a merged, the PR URL,
+the release URL, the kernel size and its delta, each zip's packed size and
+how many images went into the main one, what step 6a's `--verify` printed
+for each of the three trees, the
 Spotlight page's URL if step 4b ran, the Docs snapshot commit step 4d moved
 to (or that it did not, and why), and anything you skipped or that needs
-their attention -- naming any on-demand disk that did not get built, since a
-reader of the zip's README cannot tell a disk that was left out from one that
-does not exist. If the website PR is merged, the site's own CI
+their attention -- naming any on-demand disk or companion zip that did not
+get built, since a reader of the README cannot tell a disk that was left out
+from one that does not exist. If the website PR is merged, the site's own CI
 deploys from its `main` branch -- say so, and say the site is not live until
 that merge happens.
 
@@ -900,16 +1106,21 @@ them in a status line is how they get lost.
 ## Rules
 
 - **Never publish an unbooted image.** Step 3 is not optional, and packing one
-  into a zip does not make it booted.
-- **The GitHub release gets the zip and nothing else.** Never attach loose
-  images beside it, and never build the zip from a glob of `build/` -- the
-  `ITEMS` table in `mkzip.py` is the list, and it exists so a story disk or a test
-  gate's scratch image cannot ride out with a release.
+  into a zip does not make it booted -- which is why the video machines are
+  booted out of their zip by `vidsmoke.py`.
+- **The GitHub release gets the zips `mkzip.py` wrote and nothing else.** Never
+  attach loose images beside them, and never build a zip from a glob of
+  `build/` -- the `ITEMS` table in `mkzip.py` is the list, and it exists so a
+  story disk or a test gate's scratch image cannot ride out with a release.
+- **Never release a companion from another tree.** The live media, the video
+  machines and the tools carry this build's kernel or ROMs cut against it;
+  `mkzip.py` refuses one older than `build/kernel.sys`, and the answer is to
+  rebuild it, never to touch its timestamp.
 - **Never publish an emulator disk whose driver did not attach.** `emusmoke.py`
   is how step 3 knows, and a desktop screenshot is not.
-- **Never hand-assemble the zip.** `mkzip.py` writes the README, the checksums
-  and a reproducible archive; a `zip -r` by hand gets none of those and looks
-  identical until somebody checks.
+- **Never hand-assemble a zip.** `mkzip.py` writes the READMEs, the
+  checksums, the 8.3 layout and reproducible archives; a `zip -r` by hand gets
+  none of those and looks identical until somebody checks.
 - **Never invent a checksum or a size.** Everything on the download page comes
   from `releases.json`, which `release.py` computes from the actual bytes.
 - **Never ship a release with an empty entry on the releases page.** Step 4a is
@@ -930,6 +1141,9 @@ them in a status line is how they get lost.
 - **The licence is MIT** -- `LICENSE` is in the root of this repo and the
   website's colophon says so. Do not restate the terms in release copy, and do not claim a
   different one.
+- **Never publish the network trees before the release they name.** Step 6a
+  comes after the GitHub release, and the version file reaches `main` through
+  step 1a's pull request before anything is built.
 - Both repositories get branches, never direct commits to `main`.
 - If any step fails, stop and report rather than continuing with a partial
   release. A half-published release is worse than none.

@@ -211,7 +211,7 @@ start:
     mov si, s_done
     call puts
     ; **AND WAIT, so the text screen outlives the bracket.** A program that
-    ; prints and exits takes its screen with it: the box tears the bracket
+    ; prints and exits takes its screen with it: DOS tears the bracket
     ; down and the harness, polling four times a second, reads the graphical
     ; desktop behind it and reports that nothing was printed.
 .hold:

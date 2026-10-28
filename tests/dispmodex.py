@@ -35,6 +35,7 @@ _OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88marty, os88mouse, os88sym, dispcp, dispapps      # noqa: E402
+import os88fixture                                          # noqa: E402
 
 # SPEC.md 39.14's per-display record, from the ONE place that mirrors it.
 # This file indexed it with bare literals - `42 + 36` for the seam and
@@ -205,12 +206,15 @@ def move_to(m, mo, win, x, card, bad):
 
 def main():
     bad = []
-    with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+    # MISSILE.O88 left apps360.img (SPEC.md 24.6.1): the shipped disk plus
+    # it, on a disk of this run's own
+    apps = os88fixture.apps360_plus("GAMES:build/missile.o88", tag="dispmodex")
+    with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine="os8088_xt_vga_herc", boot=False) as m:
         cards = {c["idx"]: c for c in m.cards()}
         pri = [i for i, c in cards.items() if c["type"] == "vga"][0]
         sec = [i for i, c in cards.items() if c["type"] == "mda"][0]
-        m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run(); os88marty.kernel_up(m)   # the first act is a click
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")

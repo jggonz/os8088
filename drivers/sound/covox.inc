@@ -33,6 +33,12 @@
 ; Labels cvx_; state in the image (a driver has no bss: drivers/os88drv.inc).
 ; =============================================================================
 
+; --- CVX_ONCE: ATTACH-ONLY (SPEC.md 34.15.1) ------------------------------
+; cvx_probe and the snd_upnm it falls into run inside the attach and never after.
+; Defined as a macro and expanded HERE unless SND_SPLIT is set; SOUND.DRV
+; sets it and expands CVX_ONCE past snd_keepmix, the end of what the driver
+; keeps once its attach has answered, so these bytes leave the claim.
+%macro CVX_ONCE 0
 ; -----------------------------------------------------------------------------
 ; cvx_probe - which of LPT1..LPT3 answer (attach, once)
 ; in:  SI = snd_services (attach's)
@@ -157,6 +163,10 @@ snd_upnm:
 ; THE TIER (which port is the DAC, and SND_CAP_LPTDAC) is sound.asm's
 ; snd_tier's tail: it runs once per DRVV_TIER, from there and nowhere else.
 
+%endmacro
+%ifndef SND_SPLIT
+    CVX_ONCE
+%endif
 ; -----------------------------------------------------------------------------
 ; cvx_v_info - SNDV_DACINFO (sndpkg.inc): AX = the port while a Covox tier is
 ; live, else CF = 1 AX = SNDE_NODAC. Reads one word: worker-safe.

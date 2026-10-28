@@ -4535,9 +4535,15 @@ cy_aim_mouse:
     push bp
     cmp word [cy_nlane], 0
     je .out
+    call cy_org                     ; AX/DX = the content origin NOW, and
+    mov di, ax                      ; not [cy_ox]/[cy_oy]: those are the last
+    mov bp, dx                      ; FRAME's, and a title-bar drag replays
+                                    ; the window without one (SPEC.md
+                                    ; 11.96.12.0), so a click straight after a
+                                    ; drop aimed at where the window WAS
     call OSAPI_MOUSE                ; CX/DX = screen x/y
-    sub cx, [cy_ox]
-    sub dx, [cy_oy]
+    sub cx, di
+    sub dx, bp
     mov di, cx                      ; DI = the pointer, in content coordinates
     mov bx, dx
     mov bp, 0x7FFF                  ; BP = the best distance seen so far

@@ -14,10 +14,11 @@ and the DOS half tests/czdos.py:
      and the block size as each copy spells them, read out of its source.
      A copy that disagrees does not crash - it rejects every set, or worse,
      accepts a short one.
-  3. "A PART FITS A FRESH DISK" IS A CLAIM, so it is tested: a part of
-     exactly SIZES[g] bytes is put on a floppy of geometry g by the tool
-     that builds every shipped floppy, and must fit. The table is four
-     cluster counts somebody typed.
+  3. "A PART FITS A USED DISK" IS A CLAIM, so it is tested: a part of
+     exactly SIZES[g] bytes, and 2KB more, is put on a floppy of geometry g
+     by the tool that builds every shipped floppy, and must fit - the 2KB
+     is what an OS hides on a disk. The table is four cluster counts
+     somebody typed. Any other size parses, and finds its floppy.
   4. The window's arithmetic, which runs with no display: the estimate a
      person reads BEFORE anything is written must be the stored split's real
      part count, and a long file name must become a name DOS will take.
@@ -97,13 +98,29 @@ def main():
             check(r.returncode == 0,
                   "a %s part of %d bytes fits a fresh %dKB floppy"
                   % (g, os88cz.SIZES[g], kb))
-            open(p, "wb").write(b"\xA5" * (os88cz.SIZES[g] + 1))
+            open(p, "wb").write(b"\xA5" * (os88cz.SIZES[g] + 2048))
+            r = subprocess.run([sys.executable,
+                                os.path.join(ROOT, "tools", "os88disk.py"),
+                                "-o", img, "--size", str(kb), p],
+                               capture_output=True, text=True)
+            check(r.returncode == 0, "...with 2KB to spare for what an OS "
+                  "hides on a disk")
+            open(p, "wb").write(b"\xA5" * (os88cz.SIZES[g] + 2049))
             r = subprocess.run([sys.executable,
                                 os.path.join(ROOT, "tools", "os88disk.py"),
                                 "-o", img, "--size", str(kb), p],
                                capture_output=True, text=True)
             check(r.returncode != 0,
-                  "...and one byte more does NOT (the table is the edge)")
+                  "...and not one byte more (the table is the edge less 2KB)")
+    # any size, and the floppy an arbitrary one goes on
+    for size, want in (("500k", 500 * 1024), ("1.1m", int(1.1 * 2 ** 20)),
+                       ("70000", 70000), ("64KB", 65536)):
+        check(os88cz.part_size(size) == want,
+              "part size %r is %d bytes" % (size, want))
+    for size, want in (("100k", "360k"), ("600k", "720k"), ("1m", "1.2m"),
+                       ("1.3m", "1.44m"), ("2m", None), ("720k", "720k")):
+        check(os88cz.image_geom(size) == want,
+              "a %s part goes on a %s floppy" % (size, want))
 
     # --- 4. the window's arithmetic ------------------------------------------
     data = bytes(range(256)) * 1500             # 384,000 bytes

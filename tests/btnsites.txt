@@ -34,8 +34,10 @@
 # are THE SAME PIXELS in every still.
 
 # --- the library's own ------------------------------------------------------
-7 apps/os88ui.inc                  # os88ui_btn's own dispatch, the About
-                                   # card's row, the alert's, and os88ui_kbtn
+6 apps/os88ui.inc                  # os88ui_btn's own dispatch, the About
+                                   # card's row and the alert's (os88ui_kbtn's
+                                   # call is `call %2` in OS88UI_KBTN_BODY since
+                                   # kernel size pass 14)
 
 # --- packages ---------------------------------------------------------------
 15 apps/sheet/sheet.asm            # seven dialog engines, a record each
@@ -107,6 +109,8 @@
                                    # buttons and the Setup window's Ok and
                                    # Cancel (ethcfg.inc reaches it by name)
 1 drivers/hdd/tool.inc
+2 drivers/httpfs/httppage.asm        # Mount and Unmount, release-fired through
+                                   # the panel's probe as etherui.inc's are
 1 drivers/net/netui.inc
 1 drivers/ramdisk/page.inc
 1 drivers/saver/svcfg.inc
@@ -138,11 +142,11 @@
 # WHOLE Control Panel was missed: the far entry went on pointing at an
 # os88ui_btn that had started taking a record, so every panel button read its
 # live count out of a rectangle's coordinates and Date/Time went white.
-1 kernel/ctrl.inc                  # every Control Panel page's buttons
+2 kernel/ctrl.inc                  # every Control Panel page's buttons - ONE per kernel: the far entry on kern_big, CTRL.DRV's own os88ui_kbtn on kern_small (kernel size pass 14)
 1 kernel/hiber.inc                 # the hibernate prompt's
 1 apps/redline/ui.inc              # both tabs' foot and the tabs themselves; SDK arm/track/release
 1 apps/pixel/pxui.inc              # every PiXEL control, through px_btn; SDK arm/track/release
-1 kernel/shutdown.inc              # modal confirmation; release inside the armed control
+2 kernel/shutdown.inc              # modal confirmation; release inside the armed control - ONE per kernel, as ctrl.inc's
 5 apps/wireball/wbfront.inc        # splash play/help/sound controls; SDK init installs press/drag/release, launch only on release
 1 apps/browser/brdownload.inc     # Cancel/Close control; SDK arm/track/release and action only on button-up
 1 apps/wirefleet/wfvideo.inc      # deployment controls; SDK init installs press/drag/release, shared model predicates refuse disabled actions

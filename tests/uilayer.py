@@ -140,7 +140,9 @@ def main():
             return 1
 
     with os88ui.boot(IMG, apps=APPS,
-                     machine="os8088_5150_cga", verbose=False) as ui:
+                     machine="os8088_5150_cga", verbose=False,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m, mo = ui.m, ui.mo
 
         # --- 1. the verbs -----------------------------------------------
@@ -264,13 +266,17 @@ def main():
               % (bh / ah if ah else 0, bc / ac if ac else 0))
         check(astate == bstate,
               "both arms reach the same desktop: %r against %r" % (bstate, astate))
-        # NOT a tight bound. What is being refused is a REGRESSION - a layer
-        # that confirms by settling anyway would land at ~1.0 and a slower one
-        # above it. The win measured here is ~0.4x, so 0.9 has margin for a
-        # loaded box without letting that through.
-        check(bh <= ah * 0.9,
-              "confirming is not slower than settling (%.2fx host)"
-              % (bh / ah if ah else 0))
+        # IN GUEST CYCLES, which a loaded box cannot move. The win used to be
+        # ~0.4x host and the bound 0.9x host; then `settle` itself learned to
+        # end when the UI idles (docs/plans/completed/SOAK-SPEED.md, harness changes),
+        # so the settling arm now costs the same work plus ~0.6 guest s of
+        # stillness proof per wait - 0.89x guest, and a host ratio that is
+        # noise (1.09x on a box at load 8). What is refused is unchanged: a
+        # layer that confirms by settling anyway pays the settle AND its
+        # check, so it cannot come in under the settling arm.
+        check(bc < ac,
+              "confirming is not slower than settling (%.2fx guest, %.2fx "
+              "host)" % (bc / ac if ac else 0, bh / ah if ah else 0))
 
     print("")
     if fails:

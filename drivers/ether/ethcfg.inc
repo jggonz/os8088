@@ -949,28 +949,6 @@ ec_buf_put:
     ret
 
 ; -----------------------------------------------------------------------------
-; eth_buf_apply - the rung the file asked for, once the file has been read
-;
-; DRVV_READY and not DRVV_ATTACH, and the ordering is the whole point:
-; sk_claim runs at ATTACH because a card with no rings cannot be brought up at
-; all, and ETHER.CFG cannot be read that early - the volume the driver booted
-; from is not mounted yet. So the ladder's automatic answer is taken first and
-; the user's stored choice replaces it here, before any package has had the
-; chance to open a socket.
-; -----------------------------------------------------------------------------
-eth_buf_apply:
-    push ax
-    mov ax, [sk_want]
-    or  ax, ax
-    jz  .out                    ; auto: the ladder's answer stands
-    cmp ax, [sk_rxcap]
-    je  .out                    ; ...and so does an answer that already agrees
-    call sk_reclaim
-.out:
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; eth_cp_close - DSV_CPCLOSE: the panel has gone
 ; -----------------------------------------------------------------------------
 eth_cp_close:

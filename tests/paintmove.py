@@ -309,7 +309,7 @@ def main():
         # contents survived to the md5, the row table followed, the undo
         # delta was right and the repaint was identical - so the feature
         # worked perfectly and the row said it had not. tests/kdhdd.py's
-        # box_state is the same correction one package along.
+        # dos_state is the same correction one package along.
         pt_seg2, _ = pkg_seg(m, S, "Paint")
         if pt_seg2 is not None and pt_seg2 != pt_seg:
             print("Paint's own region moved %04x -> %04x" % (pt_seg, pt_seg2))

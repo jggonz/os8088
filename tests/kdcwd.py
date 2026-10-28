@@ -5,7 +5,7 @@
 
 A program launched out of a subdirectory stands IN it, and everything it opens
 by a bare name resolves there, and the path the environment hands it says where
-it came from.  Four facts; the windowed box has always got all four right, and
+it came from.  Four facts; the windowed DOS has always got all four right, and
 `kern_dos` got the fourth wrong from the day it existed.
 
 **THE POINT IS THE PAIR.**  The DOS core is ONE object joined to two back ends
@@ -189,7 +189,7 @@ def rah_check(m, dm):
 
 
 def main():
-    with os88ui.boot(SYS, apps=APPS, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=APPS, machine=MACH, quick=True) as ui:
         m = ui.m
         ui.path(PROG)                # the association RUNS it, windowed
         dm = dosmap.package()

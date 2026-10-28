@@ -155,6 +155,14 @@
                                     ; is a file a copy can separate from the
                                     ; program it is useless without; a part
                                     ; cannot go missing
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned, unsigned) -
+                                    ; the 49KB RAM and Paste's queue are
+                                    ; MOVABLE (APPLE2-SPEC 3.1.1), and so is...
+%define CC_ONMOVE_PARTS             ; ...the parts carve, the ROM alone since
+                                    ; the overlay is lazy (SPEC.md
+                                    ; 73.14.2.1): os88_onmove re-reads
+                                    ; a2_m.romseg through os88_part_seg, so
+                                    ; crt0 declares it after os88_main
 
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the
@@ -204,6 +212,14 @@ _a2_opbase equ op_base              ; the carve's CLAIM base, which apple2.c
                                     ; hosttest/a2memtest.asm, a2cputest.asm -
                                     ; do not define it, and keep them
 
+section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
+    times (($ - $$) + 0) & 1 db 0     ; core and the composers below stay at
+                                    ; the byte parity they were measured at
+                                    ; whatever the compiled C above them
+                                    ; grows by - an odd shift re-prices every
+                                    ; word fetch on a 16-bit bus (an 8086, a
+                                    ; V30, a 286), where an 8088 does not care
+                                    ; (PERFORMANCE.md Part 7, os88rdiff.py)
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is
 ; assembly). ORDER MATTERS ONLY IN THAT a2cpu.inc declares the register file
 ; and the scratch layout that a2mem.inc addresses through.

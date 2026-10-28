@@ -135,21 +135,19 @@ def main():
     try:
         if not box.wait_for("kern_mega:", 240):
             raise SystemExit("megarehome: no kern_mega line in 240s")
-        time.sleep(15)
-        box.capture()
-        os88bochs.dbl(591, 160)         # C:
-        time.sleep(10)
-        os88bochs.dbl(150, 123)         # RUN
-        time.sleep(8)
-        os88bochs.dbl(160, 139)         # 0RUN.O88: MEGARUN starts the rest
+        box.up()                        # the desktop, off kernel state
+        box.megarun()                   # 0RUN.O88: MEGARUN starts the rest
         end = time.time() + 180
         while time.time() < end:
             ls = box.lines()
             if "MEGARUN: done" in ls or any(
                     l.startswith("kern_mega FAULT") for l in ls):
                 break
-            time.sleep(2)
-        time.sleep(10)                  # the last one's window
+            time.sleep(0.2)
+        # the last one's window: its claims are made by the time ui_task
+        # has finished with its launch (a game's worker may hold the gfx
+        # lock for good, so the lock is not asked) - was a 10 s sleep
+        box.ui_done("the last program's window", lock=False)
         lines = box.lines()
         for l in lines:
             if l.startswith("kern_mega FAULT") or l.startswith("MEGARUN: no "):

@@ -41,9 +41,9 @@ RUNS = {"16": ("build/vesabench.img", 1024, 768, 16),
 
 def launch(sysimg, bimg):
     em = "qemu" + "-system-i386"
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=off -vga std"
-        " -drive file=%s,format=raw,if=floppy -boot a"
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
         " -drive file=%s,format=raw,if=floppy,index=1"
         " -serial msmouse"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"

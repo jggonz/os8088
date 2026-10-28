@@ -118,11 +118,13 @@ def main():
             return 1
         name = G.short83(v88)
         m = M.launch(None, machine=a.machine,
-                     extra=["--mount", "hd:0:" + img])
+                     extra=["--mount", "hd:0:" + img], boot=False)
         try:
             ui = os88ui.UI(m)
             try:
-                ui.ready(limit=300)
+                m.run()             # a quick boot: STATE is the gate
+                ui.up(limit=300)
+                M.no_saver(m)
                 print("   1: the desktop is up, off the hard disk")
             except Exception as e:
                 bad.append("1: no desktop off the disk: %s"
@@ -157,10 +159,13 @@ def main():
         subprocess.run([sys.executable, "tools/os88fat.py", "add", sysimg,
                         cfg, "SYSTEM.CFG"], check=True, capture_output=True)
         m = M.launch(sysimg, apps=os88build.at("build/apps360.img"),
-                     machine=a.machine, extra=["--mount", "hd:0:" + img])
+                     machine=a.machine, extra=["--mount", "hd:0:" + img],
+                     boot=False)
         try:
             ui = os88ui.UI(m)
-            ui.ready(limit=300)
+            m.run()                 # a quick boot: STATE is the gate
+            ui.up(limit=300)
+            M.no_saver(m)
             play(ui, m, syms, name, "3", bad)
         except Exception:
             pass

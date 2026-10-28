@@ -77,7 +77,8 @@ def main(argv):
     def off(n):
         return dispapps.bss_off("tank", n, small=True)
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
         m = ui.m
         ui.open_drive("B")
         ui.open("GAMES")

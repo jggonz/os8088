@@ -69,8 +69,11 @@ def main():
     a = ap.parse_args()
     os.chdir(ROOT)
     with os88marty.launch("build/os8088-360.img", apps="build/games360.img",
-                          machine=a.machine) as m:
-        os88marty.settle(m)
+                          machine=a.machine,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         os88marty.no_saver(m)
         # --- (a) the two loads at entry -------------------------------------
         st = {}

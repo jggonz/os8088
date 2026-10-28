@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A FLOPPY SWAPPED UNDER A RUNNING PACKAGE (SPEC.md 18.9.1.1).
 
-Reported from the field: the DOS box standing on B:, `DIR` correct, a
+Reported from the field: DOS standing on B:, `DIR` correct, a
 DIFFERENT 720KB disk inserted, `DIR` again - and the listing was the old
 disk's, permanently, until the program was closed and reopened.
 
@@ -54,7 +54,7 @@ import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
 APPS = "build/doscom360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 
 # The motor-off countdown is `dsk_dpt` byte 2 = 0x25 = 37 ticks = 2.03s
 # (SPEC.md 18.9.1). Four GUEST seconds is comfortably past it and still cheap.
@@ -76,12 +76,12 @@ def main():
 
     with os88ui.boot(SYS, apps=APPS) as ui:
         m = ui.m
-        w = ui.path(BOX)
-        bx = doscon.Box(m)
+        w = ui.path(DOSPKG)
+        bx = doscon.Dos(m)
 
         bx.type("B:\n")                      # ...a FLOPPY, which is the whole
         if bx.b("dos_vol") != 1:             # subject: a driver volume is not
-            fail("the box did not move to B:, it is on volume %d"
+            fail("DOS did not move to B:, it is on volume %d"
                  % bx.b("dos_vol"))
 
         # --- 1 and 2: a DIR with the motor stopped ------------------------
@@ -97,7 +97,7 @@ def main():
             fail("a DIR after %.0fs idle cost ZERO controller reads, so "
                  "nothing re-read LBA 0 and [dsk_sigcur] cannot change - "
                  "SPEC.md 18.95's cache is keyed on it, so a floppy swapped "
-                 "under this box is invisible for ever (SPEC.md 18.9.1.1)"
+                 "under this DOS is invisible for ever (SPEC.md 18.9.1.1)"
                  % SPUNDOWN)
         if n >= TOOMANY:
             fail("a DIR cost %d controller reads, and the identity check is "

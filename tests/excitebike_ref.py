@@ -239,10 +239,8 @@ def run_guest(quick, courses):
         sc = scripts(art, course, quick)
         with os88ui.boot(V.at("build/os8088-360.img"), apps=V.at("build/excitebike360.img"),
                          machine=V.MACHINE["vga"]) as ui:
-            ui.open_drive("B")
-            ui.settle()
+            ui.open_drive("B")              # (both verbs confirm; the reveal wait follows)
             ui.open("EXCBIKE.O88")
-            ui.settle()
             g = V.Game(ui, "vga", sym, ref)
             g.put("xb_track", course)
             M.until(ui.m, lambda _: g.w("xb_reveal") >= g.w("xb_frontheight") > 0,

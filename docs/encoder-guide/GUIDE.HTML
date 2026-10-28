@@ -1,0 +1,939 @@
+<!doctype html>
+<!-- The pictures in guide/ are made by tools/os88vguide.py in the os8088 tree. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Encoder Guide</title>
+<style>
+:root {
+  --bg: #fbfaf7; --fg: #1f2328; --muted: #5b6168; --line: #d9d6cf;
+  --card: #ffffff; --accent: #2a62b8; --accent-soft: #e6eefb;
+  --why: #fff6dc; --why-line: #e3c25a; --try: #e5f5ea; --try-line: #5aa874;
+  --warn: #fde8e6; --warn-line: #d46a5f; --code: #f1efe9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17191c; --fg: #e6e4df; --muted: #a3a7ad; --line: #353a40;
+    --card: #1f2226; --accent: #7aa7ec; --accent-soft: #233149;
+    --why: #332c16; --why-line: #8f7a2d; --try: #18301f; --try-line: #3f7d52;
+    --warn: #3a1f1c; --warn-line: #a4524a; --code: #26292e;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+a { color: var(--accent); }
+code, kbd {
+  font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code); padding: 0.1em 0.35em; border-radius: 4px;
+}
+kbd { border: 1px solid var(--line); border-bottom-width: 2px; }
+pre {
+  background: var(--code); padding: 12px 14px; border-radius: 8px;
+  overflow-x: auto; font: 0.88em/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+pre code { background: none; padding: 0; }
+.layout { display: flex; max-width: 1240px; margin: 0 auto; }
+nav.toc {
+  position: sticky; top: 0; align-self: flex-start; height: 100vh;
+  overflow-y: auto; width: 260px; flex: none; padding: 24px 16px 40px 20px;
+  border-right: 1px solid var(--line); font-size: 14px;
+}
+nav.toc h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; }
+nav.toc li { margin: 2px 0; }
+nav.toc li li { padding-left: 14px; font-size: 13px; }
+nav.toc a { text-decoration: none; color: var(--fg); display: block; padding: 2px 6px; border-radius: 4px; }
+nav.toc a:hover { background: var(--accent-soft); }
+main { flex: 1; min-width: 0; padding: 32px 40px 80px; max-width: 920px; }
+header.hero { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 8px; }
+header.hero h1 { font-size: 2.2em; margin: 0 0 6px; line-height: 1.2; }
+header.hero p { color: var(--muted); margin: 0; font-size: 1.08em; }
+h2 { font-size: 1.6em; margin: 2.2em 0 0.4em; padding-top: 0.4em; border-top: 1px solid var(--line); line-height: 1.25; }
+h3 { font-size: 1.22em; margin: 1.8em 0 0.3em; line-height: 1.3; }
+h4 { font-size: 1.02em; margin: 1.4em 0 0.2em; }
+p, ul, ol { margin: 0.6em 0; }
+li { margin: 0.2em 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.94em; display: block; overflow-x: auto; }
+th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { background: var(--card); font-weight: 600; }
+figure { margin: 1.2em 0; }
+figure img { max-width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 6px; background: #000; }
+figure.shot img { background: var(--card); }
+figcaption { color: var(--muted); font-size: 0.9em; margin-top: 6px; }
+img.px { image-rendering: pixelated; image-rendering: crisp-edges; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin: 1em 0; }
+.grid.three { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+figure a { display: block; }
+.grid figure { margin: 0; }
+.grid figcaption b { color: var(--fg); }
+.box { border-left: 4px solid; border-radius: 6px; padding: 10px 14px; margin: 1.1em 0; }
+.box > :first-child { margin-top: 0; }
+.box > :last-child { margin-bottom: 0; }
+.box .label { font-weight: 700; display: block; margin-bottom: 2px; }
+.why { background: var(--why); border-color: var(--why-line); }
+.try { background: var(--try); border-color: var(--try-line); }
+.warn { background: var(--warn); border-color: var(--warn-line); }
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps > li { counter-increment: s; position: relative; padding-left: 40px; margin: 0.9em 0; }
+.steps > li::before {
+  content: counter(s); position: absolute; left: 0; top: 0; width: 28px; height: 28px;
+  border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.opt { margin: 1.1em 0; padding: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.opt h4 { margin: 0 0 4px; }
+.opt .when { margin: 0.4em 0 0; }
+.opt .when b { color: var(--accent); }
+.recipe { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 1.2em 0; }
+.recipe h3 { margin-top: 0.2em; }
+.recipe dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0.6em 0; }
+.recipe dt { font-weight: 600; }
+.recipe dd { margin: 0; }
+.small { font-size: 0.9em; color: var(--muted); }
+@media (max-width: 900px) {
+  .layout { display: block; }
+  nav.toc { position: static; height: auto; width: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; }
+  main { padding: 20px 16px 60px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+<h2>Contents</h2>
+<ol>
+<li><a href="#welcome">What the encoder does</a></li>
+<li><a href="#setup">Before you start</a></li>
+<li><a href="#first">Your first video</a></li>
+<li><a href="#madefor">Choosing "Made for"</a>
+  <ol>
+  <li><a href="#gallery">The same clip, every target</a></li>
+  <li><a href="#decide">Which one is mine?</a></li>
+  </ol></li>
+<li><a href="#budget">The big idea: the budget</a>
+  <ol>
+  <li><a href="#cuts">When a frame does not fit</a></li>
+  <li><a href="#report">Reading the report</a></li>
+  </ol></li>
+<li><a href="#window">Finding your way around</a></li>
+<li><a href="#basic">Basic tab</a></li>
+<li><a href="#picture">Picture tab</a></li>
+<li><a href="#colour">Colour tab</a></li>
+<li><a href="#sound">Sound tab</a></li>
+<li><a href="#budgettab">Budget tab</a></li>
+<li><a href="#tradeoffs">Trade-offs tab</a></li>
+<li><a href="#degrade">Degrade to Fit tab</a></li>
+<li><a href="#disk">Making a disk</a></li>
+<li><a href="#play">Playing it on os8088</a></li>
+<li><a href="#after">Changing a finished file</a></li>
+<li><a href="#recipes">Recipes</a></li>
+<li><a href="#trouble">When something looks wrong</a></li>
+<li><a href="#cli">The command line</a></li>
+<li><a href="#words">Words used in this guide</a></li>
+</ol>
+</nav>
+<main>
+
+<header class="hero">
+<h1>The os8088 Video Encoder Guide</h1>
+<p>How to turn any video into a file that plays on a 1980s PC, and how to decide which of the encoder's many settings matter for yours.</p>
+</header>
+
+<!-- ================================================================== -->
+<h2 id="welcome">What the encoder does</h2>
+
+<p>The video encoder runs on your modern computer. It reads an ordinary video file (MP4, MKV, MOV, WebM, an animated GIF: anything ffmpeg understands) and writes a <code>.V88</code> file. On os8088, Video Player (<code>VIDEO.O88</code>) plays that file, with sound, on machines as slow as the original 4.77 MHz IBM PC.</p>
+
+<p>Your modern computer can afford to be fussy, and the old PC cannot, so the encoder does all of the hard work in advance. It:</p>
+<ul>
+<li><b>shrinks the picture to what the target screen can show</b>: black and white on a CGA card, four colours, sixteen, 256 on a VGA, or even a picture built out of text characters;</li>
+<li><b>works out, frame by frame, what changed</b>, so the old machine only redraws the parts of the screen that moved;</li>
+<li><b>keeps every frame inside a budget</b>: how many bytes a second the target's disk can read and how much of its processor the drawing may use. This is what makes a video play smoothly instead of falling behind;</li>
+<li><b>packs the sound</b> for a Sound Blaster, or for the PC's own speaker, or leaves it out;</li>
+<li><b>puts the result on a disk image</b> if you ask: a floppy for drive B:, or a hard disk image that boots os8088 by itself.</li>
+</ul>
+
+<p>Most of this guide is about <em>decisions</em>. The window has well over a hundred settings, and almost all of them are already set sensibly by the first choice you make. This guide walks through that first choice in detail, then explains each tab: what each setting does, <b>when it is worth changing</b>, and why.</p>
+
+<div class="box try"><span class="label">If you only read one section</span>
+Read <a href="#first">Your first video</a> and <a href="#madefor">Choosing "Made for"</a>. The defaults that "Made for" fills in are good. Everything after that is for when you want something different.</div>
+
+<!-- ================================================================== -->
+<h2 id="setup">Before you start</h2>
+
+<h3>What you need on your computer</h3>
+<ul>
+<li><b>Python 3</b> with <b>Tk</b>, for the window. The installer from python.org includes Tk. On Linux, install your distribution's <code>python3-tk</code> package.</li>
+<li><b>numpy</b> and <b>Pillow</b>: <code>python3 -m pip install numpy pillow</code></li>
+<li><b>ffmpeg</b> and <b>ffprobe</b> on your PATH, from <a href="https://ffmpeg.org">ffmpeg.org</a>. They read your video; nothing else needs them.</li>
+<li>Optional: <code>python3 -m pip install tkinterdnd2</code> lets you drop a file on the window on any system. On Windows, dropping works without it.</li>
+<li>Optional: <b>tesseract</b> on your PATH, only for the text-mode setting that reads words in the picture (<a href="#ocr">OCR</a>).</li>
+</ul>
+
+<h3>Starting it</h3>
+<p>Open a terminal in the <code>os8088-encoder</code> folder (the folder this guide is in) and run:</p>
+<pre><code>python3 os88vencgui.py</code></pre>
+<p>On Windows, <code>py os88vencgui.py</code> may be the command instead. The window opens. If it says Python has no tkinter, install Tk as above.</p>
+
+<h3>What is in this folder</h3>
+<table>
+<tr><th>File</th><th>What it is</th></tr>
+<tr><td><code>os88vencgui.py</code></td><td>The encoder window. Start here.</td></tr>
+<tr><td><code>os88venc.py</code></td><td>The same encoder on the command line (see <a href="#cli">The command line</a>). The window runs this underneath, so both make the same file from the same settings.</td></tr>
+<tr><td><code>VIDEO.O88</code></td><td>Video Player, the os8088 program that plays <code>.V88</code> files. Every disk the encoder makes gets a copy.</td></tr>
+<tr><td><code>boot/</code></td><td>os8088 itself (the kernel and drivers), so a hard disk image the encoder makes can boot.</td></tr>
+<tr><td><code>GUIDE.HTML</code>, <code>guide/</code></td><td>This guide and its pictures.</td></tr>
+<tr><td><code>README.TXT</code></td><td>A one-page summary.</td></tr>
+<tr><td>the other <code>.py</code> files</td><td>Parts of the encoder. Leave them where they are.</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="first">Your first video</h2>
+
+<p>The examples in this guide use one 12-second clip with three scenes: a sunset over the sea with a slow zoom in, a sunflower with a slow zoom out, and a 1980s computer desk with a sideways pan. It has a short tune for sound. Every picture of the encoded result in this guide is a real frame of that clip, drawn the way the target screen shows it.</p>
+
+<figure class="shot"><a href="guide/window-empty.png" title="Open full size"><img width="1300" height="860" src="guide/window-empty.png" alt="The encoder window, empty, when it first opens." loading="lazy"></a>
+<figcaption>The window when it opens. The left half is the form; the right half is the preview, which fills in after an encode.</figcaption></figure>
+
+<ol class="steps">
+<li><b>Choose your video.</b> Click <b>Browse...</b> beside <b>Input</b>, or drop the file onto the window. The grey line under <b>Made for</b> then says what ffprobe found: its size, frame rate, length and whether it has sound. <b>Save as</b> fills in with the same name ending in <code>.V88</code>, in the same folder.</li>
+<li><b>Choose what it is for.</b> Pick the machine and screen in the <b>Made for</b> list. This is the one decision that matters most, and it sets dozens of other settings for you. The <a href="#madefor">next section</a> shows what each choice looks like. If you are not sure, the first entry (<b>IBM 5150/XT, CGA - black and white</b>) plays on the widest range of machines.</li>
+<li><b>Optionally tick "...and make a disk of it"</b> and choose a disk from the list beside it. The list starts on a disk that suits your "Made for" choice. See <a href="#disk">Making a disk</a>.</li>
+<li><b>Click Encode.</b> The bar and the line under it say what the encoder is doing and roughly how long is left. A 12-second clip takes a minute or two; a whole music video can take much longer. <b>Cancel</b> stops it and writes nothing.</li>
+<li><b>Look at the result.</b> When it finishes, the right side shows <b>What the screen will show</b>: the encoded frames, in the target's own colours and pixel shape. Drag the slider to move through the video.</li>
+</ol>
+
+<figure class="shot"><a href="guide/encoding.png" title="Open full size"><img width="1300" height="860" src="guide/encoding.png" alt="The window during an encode, with the progress bar part way and the status line describing the step." loading="lazy"></a>
+<figcaption>During an encode. The line under the bar names the step (here, encoding frames) with its own count and an estimate of the time left.</figcaption></figure>
+
+<figure class="shot"><a href="guide/window.png" title="Open full size"><img width="1300" height="860" src="guide/window.png" alt="The window after an encode: the preview shows the sunflower in black and white, with the file's facts, poster and keyframe below." loading="lazy"></a>
+<figcaption>After an encode. Right: the preview at frame 151, the file's facts (format, length, size, data rate), the poster and the keyframe nearest the slider. Bottom left: the encoder's messages.</figcaption></figure>
+
+<p>That is the whole job for most videos. The rest of this guide is for when the preview is not what you hoped for, or when your machine is not one of the defaults.</p>
+
+<div class="box why"><span class="label">Why the preview matters</span>
+The preview is not a mock-up. It is the finished <code>.V88</code> decoded frame by frame, exactly as Video Player will draw it. If something looks wrong in the preview (too dark, too busy, the wrong colours, smeared in a fast scene) it will look the same on the old machine. Fix it here, where an encode takes a minute, rather than after copying a disk across.</div>
+
+<!-- ================================================================== -->
+<h2 id="madefor">Choosing "Made for"</h2>
+
+<p><b>Made for</b> answers three questions at once:</p>
+<ul>
+<li><b>What screen?</b> The display card (CGA, Hercules, VGA) and the mode on it: black and white in a window, four colours full screen, 256 colours, text characters and so on. This is the <b>Preset</b> and the <b>Pixfmt</b> (pixel format) on the Basic tab.</li>
+<li><b>What machine?</b> How fast its disk is and how much processor it has. This is the <b>Profile</b>. A file made for a fast machine falls behind on a slow one; a file made for a slow machine plays fine on a fast one, just with a plainer picture than it could have had.</li>
+<li><b>What sound?</b> Each profile brings a sensible sound format and rate with it.</li>
+</ul>
+
+<p>Choosing an entry fills in every setting those three imply: the picture size, the frame rate, the colour handling, the budget and the sound. The tabs show the filled-in values. You can still change any of them afterwards.</p>
+
+<figure class="shot"><a href="guide/tip.png" title="Open full size"><img width="780" height="210" src="guide/tip.png" alt="A tooltip under the Made for list explaining what it sets." loading="lazy"></a>
+<figcaption>Every field has a tooltip. Rest the mouse pointer on it to read what it does.</figcaption></figure>
+
+<h3 id="gallery">The same clip, every target</h3>
+
+<p>Here is the same moment of the sample clip (the desk scene, ten seconds in) made for each <b>Made for</b> entry, drawn as that screen shows it. Images are scaled up so you can see the pixels; on a real monitor each looks smoother.</p>
+
+<div class="grid">
+<figure><a href="guide/t-cga-mono.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-cga-mono.png" alt="CGA black and white: a fine dithered picture of the desk." loading="lazy"></a><figcaption><b>CGA - black and white.</b> 640 x 200, two colours. Plays in a window on the desktop. The most compatible choice.</figcaption></figure>
+<figure><a href="guide/t-cga-4.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-cga-4.png" alt="CGA four colours: the desk in a palette of four." loading="lazy"></a><figcaption><b>CGA - 4 colours.</b> 320 x 200, one of CGA's fixed four-colour sets. Full screen.</figcaption></figure>
+<figure><a href="guide/t-cga-16.png" title="Open full size"><img width="480" height="360" class="px" src="guide/t-cga-16.png" alt="CGA sixteen colours at 160 x 100: chunky but colourful." loading="lazy"></a><figcaption><b>CGA - 16 colours at 160 x 100.</b> All sixteen colours, at a quarter of the resolution. Full screen.</figcaption></figure>
+<figure><a href="guide/t-cga-composite.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-cga-composite.png" alt="CGA composite colour: soft colour from a black and white pattern." loading="lazy"></a><figcaption><b>CGA on a composite monitor - colour.</b> Black-and-white patterns that a composite monitor shows as colour. Needs that monitor.</figcaption></figure>
+<figure><a href="guide/t-cga-512.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-cga-512.png" alt="CGA composite 512 colours: the richest CGA picture." loading="lazy"></a><figcaption><b>CGA composite - 512 colours.</b> About 450 colours on a real CGA's composite output. Full screen.</figcaption></figure>
+<figure><a href="guide/t-text-colour.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-text-colour.png" alt="Text mode in colour: the desk drawn in coloured characters." loading="lazy"></a><figcaption><b>Text mode, 16 colours.</b> The picture made of 80 x 25 text characters. Plays on CGA, EGA or VGA.</figcaption></figure>
+<figure><a href="guide/t-text-mono.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-text-mono.png" alt="Text mode in black and white." loading="lazy"></a><figcaption><b>Text mode, black and white.</b> Grey, white and reverse characters. Plays on every adapter, Hercules and MDA too.</figcaption></figure>
+<figure><a href="guide/t-herc.png" title="Open full size"><img width="800" height="598" class="px" src="guide/t-herc.png" alt="Hercules black and white." loading="lazy"></a><figcaption><b>Hercules - black and white.</b> 400 x 200 of Hercules' 720 x 348, in a window on the desktop.</figcaption></figure>
+<figure><a href="guide/t-speaker.png" title="Open full size"><img width="656" height="496" class="px" src="guide/t-speaker.png" alt="Hercules black and white at a smaller size, for the PC speaker." loading="lazy"></a><figcaption><b>PC speaker - Hercules.</b> A smaller, slower picture, because the speaker's sound takes most of the processor.</figcaption></figure>
+<figure><a href="guide/t-floppy.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-floppy.png" alt="A small black and white picture for playing off a floppy." loading="lazy"></a><figcaption><b>A floppy - small and slow.</b> 320 x 100, for a disk that reads about 15 KB a second.</figcaption></figure>
+<figure><a href="guide/t-vga-16.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-vga-16.png" alt="VGA sixteen colours." loading="lazy"></a><figcaption><b>286, VGA - 16 colours in the window.</b> The VGA desktop's own sixteen colours, playing in a window.</figcaption></figure>
+<figure><a href="guide/t-vga-256.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-vga-256.png" alt="VGA 256 colours, smooth and close to the original." loading="lazy"></a><figcaption><b>286, VGA - 256 colours.</b> 320 x 200 with a palette chosen for the clip. Full screen.</figcaption></figure>
+<figure><a href="guide/t-modex.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-modex.png" alt="VGA Mode X 256 colours with square pixels." loading="lazy"></a><figcaption><b>286, VGA - Mode X.</b> 256 colours at 320 x 240 with square pixels. Full screen.</figcaption></figure>
+<figure><a href="guide/t-live-cga.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-live-cga.png" alt="A small black and white Live clip for the CGA desktop." loading="lazy"></a><figcaption><b>Live on a CGA desktop.</b> Short, small, loaded whole; plays while you keep using the desktop.</figcaption></figure>
+<figure><a href="guide/t-live-herc.png" title="Open full size"><img width="592" height="446" class="px" src="guide/t-live-herc.png" alt="A small black and white Live clip for the Hercules desktop." loading="lazy"></a><figcaption><b>Live on a Hercules desktop.</b> The same idea at Hercules' pixel shape.</figcaption></figure>
+<figure><a href="guide/t-live-vga.png" title="Open full size"><img width="528" height="400" class="px" src="guide/t-live-vga.png" alt="A small black and white Live clip for the VGA desktop." loading="lazy"></a><figcaption><b>Live on a VGA desktop.</b> The same idea on a VGA.</figcaption></figure>
+</div>
+<p class="small">The two "486" entries look like their 286 counterparts with a bigger picture (16 colours at 400 x 300 in the window, and Mode X with more detail), because a 486 has the speed to draw more.</p>
+
+<h3 id="decide">Which one is mine?</h3>
+
+<p>Work down this list and stop at the first line that fits.</p>
+
+<table>
+<tr><th>If the machine that will play it...</th><th>choose</th><th>because</th></tr>
+<tr><td>...should show it <b>while you keep working</b> (a looping logo, a short animation on the desktop)</td><td>a <b>Live</b> entry for its card</td><td>Live clips are loaded whole and play inside their window without taking over the machine. They must be short (or the machine needs extended memory; see <a href="#held">Held in memory</a>).</td></tr>
+<tr><td>...has <b>no hard disk</b> and will play from a floppy</td><td><b>IBM 5150/XT, a floppy - small and slow</b></td><td>A floppy reads about 15 KB a second, an eighth of a hard disk. Anything bigger falls apart.</td></tr>
+<tr><td>...has <b>no sound card</b> but you want sound</td><td><b>IBM 5150/XT, PC speaker</b> (Hercules; its CGA twin is the <code>cga-spk</code> preset)</td><td>Playing sound on the speaker costs most of an 8088, so this entry plans a smaller, slower picture around it. With a sound card, choose by screen instead.</td></tr>
+<tr><td>...is a <b>286 or 486 with VGA</b></td><td>a <b>286, VGA</b> or <b>486, VGA</b> entry</td><td>These have the speed for colour. 256 colours looks best but takes the whole screen; 16 colours plays in a window. Mode X has square pixels, so circles stay round.</td></tr>
+<tr><td>...is a <b>4.77 MHz PC or XT with CGA</b></td><td>a <b>CGA</b> entry (see below)</td><td>Which one depends on the monitor and what you value.</td></tr>
+<tr><td>...is a <b>PC or XT with Hercules</b></td><td><b>IBM 5150/XT, Hercules - black and white</b></td><td>Hercules has one, sharp, black-and-white graphics mode.</td></tr>
+<tr><td>...could be <b>anything at all</b>, including a monochrome MDA card</td><td><b>Any PC, Hercules and MDA too - text mode, black and white</b></td><td>Every PC display can show text, so this plays everywhere.</td></tr>
+</table>
+
+<h4>Choosing between the CGA entries</h4>
+<ul>
+<li><b>Black and white</b> is the sharpest (640 pixels across), plays in a window, and works on every CGA, EGA and VGA. Choose it for anything with fine detail or for a clip that is black and white already.</li>
+<li><b>4 colours</b> is the classic CGA look. The encoder picks the colour set nearest your clip (green/red/brown, or cyan/magenta/white, bright or dim, with any background colour). Choose it for cartoons and bold, simple images. It suits some clips much better than others: a sunset in cyan and magenta is not a sunset.</li>
+<li><b>16 colours at 160 x 100</b> gives real colour at the cost of chunky pixels. Choose it when colour matters more than detail.</li>
+<li><b>Composite colour</b> and <b>512 colours</b> only work on a <em>composite</em> monitor (the yellow RCA plug), or an emulator set up to show one. On an RGB monitor they look like stripes. 512 colours needs a real IBM CGA card.</li>
+<li><b>Text mode, 16 colours</b> has a distinctive "ASCII art" look and plays on any colour card. Text video is cheap to play, so it runs at 30 frames a second easily.</li>
+</ul>
+
+<div class="box why"><span class="label">Why a "286" file stutters on an XT, and not the other way round</span>
+The budget (next section) is planned for one machine. Made for a 286, the file asks for three to four times the work an XT can do, and the XT falls behind. Made for an XT, the file asks for less than a 286 can do, so the 286 plays it easily, with a plainer picture than a 286 file would have had. When in doubt, make the file for the slowest machine that has to play it. If you need one file that looks good on both, see <a href="#layer">Layer</a>.</div>
+
+<!-- ================================================================== -->
+<h2 id="budget">The big idea: the budget</h2>
+
+<p>Most of the settings in this encoder exist because of one fact: <b>an old PC cannot redraw its whole screen 30 times a second.</b></p>
+
+<p>A black-and-white CGA screen is 16,000 bytes. Thirty of those a second is 480 KB a second. The IBM PC's hard disk (an ST-225, the default profile) reads about 119 KB a second, and the processor has to spend about half its time playing the sound and reading the disk. So the encoder cannot simply send every frame. Instead, it sends <b>only the parts of the picture that changed</b> since the last frame, and it keeps each frame's share inside two limits:</p>
+
+<ul>
+<li><b>The disk</b>: bytes a second the machine can read while playing.</li>
+<li><b>The processor</b>: how long it takes to draw the changes. There is an average to keep to, and a ceiling for any one frame.</li>
+</ul>
+
+<p>Together these are the <b>budget</b>, and the <b>Profile</b> sets it. In a calm stretch (a slow zoom, someone talking) very little changes, the frame fits easily, and it is drawn exactly. The leftover budget is saved up for later, a little like a bank balance.</p>
+
+<h3 id="cuts">When a frame does not fit</h3>
+
+<p>At a scene change or a fast pan, almost every pixel changes at once. That frame cannot fit. The encoder then does the best thing it can:</p>
+<ol>
+<li>It spends the saved-up budget first.</li>
+<li>It lets a scene-change frame run a little late (<a href="#owe">Owe</a>) and catches up over the next two frames.</li>
+<li>If it still does not fit, it <b>cuts the frame</b>: it sends the changes that matter most (the ones your eye would notice) and leaves the rest. Those pixels stay wrong for a moment and are fixed in the next frames, as budget comes back.</li>
+</ol>
+
+<p>So an over-budget moment does not make the video stall or the sound skip. It makes the picture briefly <b>rough</b>: a new scene fills in over a few frames, or part of a fast pan lags. These four pictures are the same moment, a tenth of a second after the cut from the sunflower to the desk:</p>
+
+<div class="grid two">
+<figure><a href="guide/cmp-budget-floppy.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-budget-floppy.png" alt="The full-size picture on the floppy profile: still the sunflower, smeared, with no sign of the desk." loading="lazy"></a><figcaption><b>Full-size picture, floppy profile.</b> The wrong combination. 315 of 361 frames were cut, the desk takes seconds to appear, and the report calls 10 seconds of the clip broken.</figcaption></figure>
+<figure><a href="guide/cmp-budget-floppysmall.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-budget-floppysmall.png" alt="The floppy entry's quarter-size picture: the desk is already there." loading="lazy"></a><figcaption><b>The floppy entry</b> (a quarter of the pixels, same disk). Only 26 frames cut. Smaller, but whole: this is why that entry uses a small picture.</figcaption></figure>
+<figure><a href="guide/cmp-budget-st225.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-budget-st225.png" alt="The ST-225 profile: the desk with a faint ghost of the sunflower still in it." loading="lazy"></a><figcaption><b>5150-st225</b>, the default hard disk. Most of the desk is in; the last of the sunflower is gone a few frames later.</figcaption></figure>
+<figure><a href="guide/cmp-budget-lossless.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-budget-lossless.png" alt="The lossless profile: the desk is complete." loading="lazy"></a><figcaption><b>lossless</b>: no limit, every pixel of every frame. Good for checking a picture; no real XT can keep up with it.</figcaption></figure>
+</div>
+
+<div class="box why"><span class="label">Why not just always choose lossless?</span>
+Because the machine cannot keep up with it. A lossless file is the encoder doing exactly what you asked and the old PC falling further and further behind. The profile is a promise: <em>this machine can play this file on time</em>. Choose the profile of the machine that will play it, then improve the picture inside that promise with the settings in this guide.</div>
+
+<p>How rough the rough moments are depends on the clip. A cartoon with flat colours and slow camera work almost never goes over. A music video with a cut every second goes over at every cut. Things that make a clip easier to fit, roughly from most to least effective:</p>
+<ul>
+<li>a <b>smaller picture</b> (the <b>Box</b> on the Picture tab, or a "small" preset);</li>
+<li>a <b>lower frame rate</b> (<b>Fps</b> on the Basic tab): 20 frames a second leaves each frame half as much budget again as 30;</li>
+<li><b>fewer colours</b>, or black and white;</li>
+<li><b>more stability</b> (<a href="#stable">Stable</a>), which stops grain and noise from costing anything;</li>
+<li><b>smaller sound</b> (ADPCM instead of 8-bit, or a lower rate), which leaves more of the disk for the picture.</li>
+</ul>
+
+<h3 id="report">Reading the report</h3>
+
+<p>When an encode finishes, its messages pane ends with a report. You do not need to read it, but it says exactly how well the clip fitted. This is the report for the CGA black-and-white version of the sample, with the useful lines explained:</p>
+
+<pre><code>FILE  362 frames, 12.1 s: 1,085,952 bytes
+      base stream 81.2 KB/s - the picture 70.4, the sound 10.8 (PCM8 at 11025 Hz)
+BASE  for the 5150-st225, disk 116 KB/s at a play's share of the period
+      CPU (wave 0 model, audio copy in): mean 40.5%, worst 84.4%
+      frames: 349 exact, 13 cut to the budget (2720.6 bytes a frame left wrong);
+              cut by the disk 0, the CPU's average 0, the per-frame ceiling 18, ...
+      ring: a disk reserve of 192 KB, 8 slots - 309 KB of free memory to play it
+      picture: 0.19% error as seen, 0.20% of pixels wrong, ...
+      picture broken at 0:00.0 for 0.1 s, 0:04.1 for 0.1 s, 0:08.1 for 0.1 s</code></pre>
+
+<table>
+<tr><th>Line</th><th>What it tells you</th></tr>
+<tr><td><b>base stream 81.2 KB/s</b></td><td>How fast the file has to be read on average. It must be under the profile's disk rate (here 116 KB/s), and the encoder makes sure it is.</td></tr>
+<tr><td><b>CPU mean 40.5%, worst 84.4%</b></td><td>How busy the machine will be drawing. The average is held to about half; the worst single frame to the ceiling.</td></tr>
+<tr><td><b>349 exact, 13 cut</b></td><td>The important one. 13 of 362 frames went over and were drawn partly. Under a few percent is excellent. A third of the frames cut means the clip is too heavy for this machine as set up: see the list above.</td></tr>
+<tr><td><b>cut by ... the per-frame ceiling 18</b></td><td>Which limit did the cutting. "the disk" means the file is too big for the disk's speed (lower the frame rate or picture size, or use smaller sound). "the per-frame ceiling" means single frames were too much work to draw (usually scene changes, which is normal).</td></tr>
+<tr><td><b>309 KB of free memory to play it</b></td><td>How much memory the player wants for reading ahead. A machine with less still plays the file, but may pause in a heavy stretch. See <a href="#memory">Memory</a>.</td></tr>
+<tr><td><b>picture broken at 0:04.1 for 0.1 s</b></td><td>Where the rough moments are, as times into the clip. Here, one tenth of a second at each of the two scene changes. Drag the preview slider there to see them.</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="window">Finding your way around the window</h2>
+
+<ul>
+<li><b>Tabs.</b> Every setting the encoder has is on one of seven tabs: <a href="#basic">Basic</a>, <a href="#picture">Picture</a>, <a href="#colour">Colour</a>, <a href="#sound">Sound</a>, <a href="#budgettab">Budget</a>, <a href="#tradeoffs">Trade-offs</a> and <a href="#degrade">Degrade to Fit</a>.</li>
+<li><b>Tooltips.</b> Rest the pointer on any field to see what it does.</li>
+<li><b>The "?" buttons.</b> A field that takes one of a list has a <b>?</b> beside it. Click it for a window explaining every choice, with the current one in bold. Click a choice to take it.</li>
+<li><b>Greyed-out groups.</b> Settings that cannot apply to the file you are making are greyed. Rest the pointer on the group's heading to see why, and what to change to use them.</li>
+<li><b>Words in the boxes.</b> Some fields show a word such as <b>auto</b>, <b>nearest</b>, <b>none</b> or <b>all</b>. That word is a real choice: it means "let the encoder decide" (or "none", or "every one"). You can type a value over it.</li>
+</ul>
+
+<div class="grid three">
+<figure class="shot"><a href="guide/help-profile.png" title="Open full size"><img width="593" height="575" src="guide/help-profile.png" alt="The Profile help window listing every machine profile with a description of each." loading="lazy"></a><figcaption>The <b>?</b> beside <b>Profile</b>: every machine, what it is, and the current choice in bold.</figcaption></figure>
+<figure class="shot"><a href="guide/greyed.png" title="Open full size"><img width="760" height="420" src="guide/greyed.png" alt="A tooltip on a greyed group explaining that the settings are for CGA 4 colours and this file is black and white." loading="lazy"></a><figcaption>A greyed group says why it is greyed and what would make it apply.</figcaption></figure>
+</div>
+
+<div class="box try"><span class="label">A good habit</span>
+Change one thing at a time and encode a short piece (set <b>Start</b> and <b>End</b> on the Basic tab to a 10-second stretch with the hardest moment in it). Compare in the preview, then encode the whole clip.</div>
+
+<!-- ================================================================== -->
+<h2 id="basic">Basic tab</h2>
+
+<figure class="shot"><a href="guide/tab-basic.png" title="Open full size"><img width="754" height="544" src="guide/tab-basic.png" alt="The Basic tab." loading="lazy"></a><figcaption>The Basic tab: what it is for, the clip, looping, files held in memory, keyframes and posters.</figcaption></figure>
+
+<h3>Made for</h3>
+<p>These four fields are what the <b>Made for</b> list sets. Change them here to mix and match: a Hercules picture with the 286 budget, for example.</p>
+
+<div class="opt"><h4>Preset</h4>
+<p>The screen layout and the largest picture size, such as <code>cga</code> (640 x 200), <code>herc-mid</code> (480 x 232) or <code>vga4-full</code> (640 x 480). Each family has smaller and bigger versions.</p>
+<p class="when"><b>Change it when</b> you want the same look at a different size. A smaller size is the single most effective way to make a heavy clip fit: <code>cga-small</code> is a quarter of the pixels of <code>cga</code> and needs about a quarter of the budget. A bigger size (<code>herc-full</code>, <code>vga4-full</code>) is for a fast machine or a calm clip.</p></div>
+
+<div class="opt"><h4>Pixfmt (pixel format)</h4>
+<p>How a pixel is stored: <code>mono</code> (black and white), <code>cga4</code>, <code>c160</code>, <code>cgacomp</code>, <code>c512</code>, <code>vga4</code>, <code>vga8</code> or <code>text</code>. Each one only works on some layouts, and the list only offers the ones that fit the preset.</p>
+<p class="when"><b>Change it when</b> you want black and white on a colour card. For example, the <code>vga4</code> preset with Pixfmt <code>mono</code> gives a sharp black-and-white picture on a VGA that is lighter to play than sixteen colours.</p></div>
+
+<div class="opt"><h4>Profile</h4>
+<p>The machine: its disk speed and its processor. This sets the whole <a href="#budget">budget</a>, and with it the default sound.</p>
+<table>
+<tr><th>Profile</th><th>Choose it for</th></tr>
+<tr><td><code>5150-st225</code></td><td>An IBM PC or XT with an MFM hard disk on a controller like the ST11M (the default). Also the right choice for most XT-class machines with an MFM or RLL disk.</td></tr>
+<tr><td><code>5150-xtide</code></td><td>A PC or XT with an XT-IDE card, CompactFlash adapter, or any disk where the processor copies the data. Those disks cost processor time the picture would have had, so this plans for less.</td></tr>
+<tr><td><code>5150-picomem2</code></td><td>A PC or XT with a PicoMEM 2 card.</td></tr>
+<tr><td><code>floppy</code></td><td>Any machine playing from a floppy disk.</td></tr>
+<tr><td><code>286-slow</code></td><td>A 6 to 8 MHz 286 (an IBM AT, for example).</td></tr>
+<tr><td><code>286-fast</code></td><td>A 12 to 16 MHz 286 with VGA and an IDE disk. The safe choice for a "286 with VGA".</td></tr>
+<tr><td><code>286-picomem1</code></td><td>A fast 286 with its disk on a PicoMEM 1.</td></tr>
+<tr><td><code>286-speeddemon</code></td><td>The fastest kind of 286 with a fast IDE disk. Files made for it may be too heavy for an ordinary 286.</td></tr>
+<tr><td><code>486-dx2-66</code></td><td>A 486DX2/66 or similar.</td></tr>
+<tr><td><code>lossless</code></td><td>No budget. For looking at a picture, or for a fast emulator; not for a real old machine.</td></tr>
+</table>
+<p class="when"><b>Why it matters:</b> the profile is the difference between a file that plays smoothly and one that falls behind. If your machine is between two profiles, choose the slower one.</p></div>
+
+<div class="opt"><h4>Aim</h4>
+<p>What to do with budget the clip does not use. <code>asked</code> (the default) makes exactly what the settings say.</p>
+<ul>
+<li><code>quality</code> tries richer versions of your settings (the next bigger preset in the family, then 22 kHz sound) with short trial encodes, and keeps each one only if the picture stays nearly as good. The report says what it tried. <b>Use it</b> when you do not know how big a picture the machine can manage for this clip and want the encoder to find out. It takes several times longer.</li>
+<li><code>size</code> leaves out changes that are not worth their bytes, even when the budget could take them: the smallest file for nearly the same look. <b>Use it</b> to fit more videos on a disk. The <a href="#worth">Worth</a> setting on Trade-offs says how strict it is.</li>
+</ul></div>
+
+<h3>The clip</h3>
+<div class="opt"><h4>Title and Credits</h4>
+<p>The name Video Player shows, and a line for its information card. The title starts as the video's file name. Up to 47 characters; the player's panel shows the first 35.</p></div>
+
+<div class="opt"><h4>Start and End</h4>
+<p>Where in the source to begin and stop, in seconds. <b>Use them</b> to trim a long video, and to make quick test encodes of just the hard part.</p></div>
+
+<div class="opt"><h4>Fps (frames a second)</h4>
+<p>Starts as the source's own rate, up to 30 (25 for the 256-colour entries). The encoder adjusts it very slightly so the picture and sound stay in step.</p>
+<p class="when"><b>Lower it when</b> the report shows many cut frames and the clip is not about smooth motion. 20 or 15 frames a second gives each frame more budget, so each one is drawn more completely. Cartoons were often drawn at 12 to 15 frames a second anyway. <b>Keep it high</b> for fast action, scrolling, or anything where smoothness is the point; reduce the picture size instead.</p></div>
+
+<h3>Loop</h3>
+<div class="opt"><h4>Loop from and Repeat</h4>
+<p><b>Repeat</b> makes the player start with its Repeat button on, so the video plays round and round. <b>Loop from</b> (seconds) makes the loop seamless: the end joins straight back to that point with no pause or redraw. <code>0</code> loops the whole clip.</p>
+<p class="when"><b>Use them</b> for a logo, a background animation or a music loop. Leave <b>Loop from</b> at <b>off</b> for ordinary videos. It cannot be used with ADPCM sound.</p></div>
+
+<h3 id="held">Held in memory</h3>
+<p>Normally Video Player reads the file from disk as it plays. These change that.</p>
+<div class="opt"><h4>Resident</h4>
+<p>The whole file is read into memory first, then played with no disk use at all. The disk budget no longer applies.</p>
+<p class="when"><b>Use it</b> for a short clip on a slow disk (a few seconds from a floppy, for example), or one that must play with no disk noise. The clip has to fit in the machine's free memory.</p></div>
+<div class="opt"><h4>Live</h4>
+<p>A Live clip plays <b>on the desktop</b>, inside its window, while you carry on using other programs. It is small, black and white (or 16 colours on a VGA), and read whole into memory. Choose the desktop it is for: <code>cga</code>, <code>herc</code> or <code>vga</code>.</p>
+<p class="when"><b>Use it</b> for something decorative: a spinning logo, a clock face, a short loop. The "Live" entries in <b>Made for</b> set this for you.</p></div>
+<div class="opt"><h4>Xms</h4>
+<p>With Live: a Live clip of any length, for a 286 or better with extended (XMS) memory to hold it. On a machine without enough, it plays in the window the ordinary way.</p></div>
+
+<h3>Keyframes and the poster</h3>
+<div class="opt"><h4>Keysecs</h4>
+<p>Seconds between keyframes (default 2). A keyframe is a whole picture stored in the file: the places a play can start from, and what the slider in Video Player jumps between.</p>
+<p class="when"><b>Lower it</b> (1 second) if you want finer seeking. <b>Raise it</b> (5 or 10) to save space on a long video; seeking becomes coarser. Keyframes are not read during a normal play, so they cost disk space, not smoothness.</p></div>
+<div class="opt"><h4>Poster, Poster at, Poster image</h4>
+<p>The poster is the still picture Video Player shows before you press Play. By default it is the first keyframe that is not blank. <b>Poster</b> picks a keyframe by number, <b>Poster at</b> picks the keyframe nearest a time, and <b>Poster image</b> uses a picture file of your own (or <code>@12.5</code> for the video's own frame at 12.5 seconds, even between keyframes).</p>
+<p class="when"><b>Use them</b> when the opening frame is a black screen or a studio logo. You can also change the poster after encoding without encoding again; see <a href="#after">Changing a finished file</a>.</p></div>
+<div class="opt"><h4>Desktop posters, Desktop clip, Desktop size</h4>
+<p>Video Player's window shows a small preview picture. For formats the desktop cannot show directly (256 colours, CGA's colour modes), the encoder stores a ready-made preview of each keyframe. <code>auto</code> does this where it helps; <code>colour</code>, <code>mono</code> or <code>both</code> force it; <code>off</code> stores none, which makes the file slightly smaller. <b>Desktop size</b> <code>half</code> or <code>quarter</code> keeps the preview small, and Play then goes full screen.</p>
+<p class="when"><b>Leave these alone</b> unless the preview picture in Video Player looks poor or the file must be as small as possible.</p></div>
+
+<h3>This computer</h3>
+<div class="opt"><h4>Jobs</h4>
+<p>How many processor cores the encoder uses on your computer. <code>all</code> by default. Set fewer if you want your computer to stay responsive while it encodes. The file comes out the same either way.</p></div>
+
+<!-- ================================================================== -->
+<h2 id="picture">Picture tab</h2>
+
+<figure class="shot"><a href="guide/tab-picture.png" title="Open full size"><img width="754" height="544" src="guide/tab-picture.png" alt="The Picture tab." loading="lazy"></a><figcaption>The Picture tab, for a black-and-white CGA file. The text-mode groups are greyed because this file is not text.</figcaption></figure>
+
+<h3>Canvas</h3>
+<div class="opt"><h4>Layout</h4>
+<p>The screen memory the file is laid out for. The preset sets it; you will rarely need to change it.</p></div>
+
+<div class="opt"><h4>Box</h4>
+<p>The largest the picture may be, as width x height (for example <code>480x232</code>). The picture is fitted inside it.</p>
+<p class="when"><b>Change it when</b> you want a size between the presets, or a letterbox shape. Smaller is always cheaper to play.</p></div>
+
+<div class="opt"><h4>Fit</h4>
+<p>What to do when the video's shape differs from the box's shape. These are a 4:3 clip in Hercules' 400 x 200 box, which on a Hercules screen is a wider shape than 4:3:</p>
+<div class="grid three">
+<figure><a href="guide/cmp-fit-fit.png" title="Open full size"><img width="800" height="598" class="px" src="guide/cmp-fit-fit.png" alt="Fit: the whole picture, narrower than the box." loading="lazy"></a><figcaption><b>fit</b> (default). The whole picture, undistorted. The canvas shrinks to its shape, so there are no black bars to store or draw.</figcaption></figure>
+<figure><a href="guide/cmp-fit-fill.png" title="Open full size"><img width="400" height="310" class="px" src="guide/cmp-fit-fill.png" alt="Fill: the box filled, top and bottom cropped." loading="lazy"></a><figcaption><b>fill</b>. The whole box, undistorted, with the edges cropped off. Good for a widescreen look, or when the edges hold nothing important.</figcaption></figure>
+<figure><a href="guide/cmp-fit-stretch.png" title="Open full size"><img width="400" height="310" class="px" src="guide/cmp-fit-stretch.png" alt="Stretch: the box filled, the picture squashed." loading="lazy"></a><figcaption><b>stretch</b>. The whole box and the whole picture, distorted. Only for a source that was already squashed, such as anamorphic video.</figcaption></figure>
+</div></div>
+
+<div class="box why"><span class="label">Why "fit" has no black bars</span>
+Old screens do not have square pixels. A CGA pixel is more than twice as tall as it is wide. The encoder knows the shape of every screen's pixels, sizes the picture so it looks right on that screen, and leaves the rest of the screen alone instead of filling it with black. Black bars would cost nothing to look at but something to store.</div>
+
+<h3>Tone</h3>
+<div class="opt"><h4>Gamma, Contrast, Brightness</h4>
+<p>Adjust the picture before it is reduced. <b>Gamma</b> above 1 lightens the middle tones without washing out the blacks and whites; below 1 darkens them. <b>Contrast</b> stretches or squeezes everything around the middle. <b>Brightness</b> (from -1 to 1) moves everything up or down.</p>
+<div class="grid three">
+<figure><a href="guide/cmp-tone-dark.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-tone-dark.png" alt="Gamma 0.7: darker." loading="lazy"></a><figcaption><b>Gamma 0.7.</b> Darker mid-tones, heavier shadows.</figcaption></figure>
+<figure><a href="guide/cmp-tone-normal.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-tone-normal.png" alt="Gamma 1: as the source." loading="lazy"></a><figcaption><b>Gamma 1.0</b> (default).</figcaption></figure>
+<figure><a href="guide/cmp-tone-bright.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-tone-bright.png" alt="Gamma 1.5: lighter." loading="lazy"></a><figcaption><b>Gamma 1.5.</b> More detail in the dark rocks and palm.</figcaption></figure>
+</div>
+<p class="when"><b>Use Gamma first</b> when a dark video turns to black blobs (raise it) or a bright one looks washed out (lower it). Black and white and four colours have very few tones to spare, so a small gamma change makes a big difference there. A VGA 256-colour picture rarely needs it.</p></div>
+
+<h3>Grey levels</h3>
+<div class="opt"><h4>Levels</h4>
+<p><code>auto</code> stretches the range of greys the clip actually uses to the full black-to-white, ignoring the darkest and lightest 1%. Many videos never quite reach black or white, and on a black-and-white screen that range is precious.</p>
+<p class="when"><b>Set it to none</b> for a clip that is meant to be dark or misty (a night scene, a fade), where stretching would make it look harsh or bring up noise.</p></div>
+
+<h3>One bit</h3>
+<div class="opt"><h4>Dither</h4>
+<p>A black-and-white screen makes grey by mixing black and white dots. How the dots are arranged is the dither:</p>
+<div class="grid three">
+<figure><a href="guide/cmp-dither-bayer.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-dither-bayer.png" alt="Bayer dither: a regular cross-hatched pattern." loading="lazy"></a><figcaption><b>bayer</b> (default). A regular 8 x 8 pattern. Steady from frame to frame, and the smallest file.</figcaption></figure>
+<figure><a href="guide/cmp-dither-bluenoise.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-dither-bluenoise.png" alt="Blue noise dither: an even, grainy pattern with no grid." loading="lazy"></a><figcaption><b>bluenoise</b>. No visible grid, more like film grain. About 8% more data.</figcaption></figure>
+<figure><a href="guide/cmp-dither-threshold.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-dither-threshold.png" alt="Threshold: pure black and white with no grey." loading="lazy"></a><figcaption><b>threshold</b>. No mixing: each pixel is black or white. For clips that are black and white already (line art, silhouettes, Bad Apple).</figcaption></figure>
+</div>
+<p class="when"><b>Choose bluenoise</b> for photographic video where the regular pattern bothers you and there is budget to spare. <b>Choose threshold</b> for high-contrast animation; it is the smallest and sharpest of the three for that kind of picture.</p></div>
+<div class="opt"><h4>Invert</h4>
+<p>Swaps black and white. Useful for a clip of white lines on black, or for a stylised look.</p></div>
+
+<h3>Solid colours</h3>
+<div class="opt"><h4>Clip</h4>
+<p>How close a colour must be to one the screen has to be drawn as that colour <em>solid</em>, with no dots. Default 16 (out of 255). Without it, an MP4's "black" (which is often 3 or 4 rather than 0) would light a faint, even grid of dots across every dark area.</p>
+<p class="when"><b>Raise it</b> (24 or 32) if dark backgrounds or white skies show a fine pattern of stray dots. <b>Lower it</b> (8, or 0) if shadow detail is disappearing into solid black.</p></div>
+
+<h3>Text mode</h3>
+<p>For the two text-mode entries. The picture is drawn with the 256 characters of the PC's text font, each cell a character with a foreground and background colour.</p>
+<div class="opt"><h4>Text glyphs</h4>
+<p>Which characters may be used:</p>
+<div class="grid three">
+<figure><a href="guide/cmp-text-blocks.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-text-blocks.png" alt="Blocks: letters, shades and half blocks give the clearest picture." loading="lazy"></a><figcaption><b>blocks</b> (default). Letters, the four shade characters and the half blocks. The clearest picture.</figcaption></figure>
+<figure><a href="guide/cmp-text-ascii.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-text-ascii.png" alt="ASCII: only printable characters, the classic ASCII-art look." loading="lazy"></a><figcaption><b>ascii</b>. Printable characters only: the classic ASCII-art look, less clear.</figcaption></figure>
+</div>
+<p>The other sets: <code>shades</code> (letters and shades, no half blocks), <code>dots</code> and <code>dots-plus</code> (blocks for shapes, punctuation for edges), and <code>blocks-only</code> and <code>blocks-only-shade</code> (no letters at all, so the picture never seems to "spell" things).</p>
+<p class="when"><b>Choose by look.</b> <code>blocks</code> is the most faithful; <code>ascii</code> and <code>dots</code> are the art styles people recognise; <code>blocks-only</code> is the calmest.</p></div>
+<div class="opt"><h4>Text detail, Text sharpen, Text busy</h4>
+<p><b>Detail</b> (0 to 1) balances getting edges right against getting tones right. <b>Sharpen</b> sharpens the picture before characters are chosen. <b>Busy</b> is how much better a letter must be before it is used instead of a plain block or shade: higher means fewer letters and a calmer picture.</p>
+<p class="when"><b>Raise Busy</b> if the picture looks like a crawling page of random letters. <b>Raise Sharpen</b> for a soft source.</p></div>
+<div class="opt" id="ocr"><h4>Text mode: words read (OCR)</h4>
+<p>With tesseract installed, <b>Text ocr</b> reads words in the picture (a score, a subtitle, a caption) and draws them as real characters, and <b>Text ocr large</b> draws big lettering (a title) as crisp solid blocks. <b>Text ocr conf</b> is how sure it must be; <b>Text ocr every</b> reads one frame in that many to save time.</p>
+<p class="when"><b>Use it</b> for game footage with a score, or anything with on-screen text you want to stay readable. It makes the encode much slower.</p></div>
+
+<!-- ================================================================== -->
+<h2 id="colour">Colour tab</h2>
+
+<p>The Colour tab has a group for each colour format, and only the one for your file is active. At the bottom, the <b>Palette</b> panel shows the colours your choices will give, as swatches. Rest the pointer on a swatch to see its number and colour.</p>
+
+<div class="grid three">
+<figure class="shot"><a href="guide/colour-cga4.png" title="Open full size"><img width="754" height="544" src="guide/colour-cga4.png" alt="The Colour tab for CGA 4 colours: the palette panel shows the six possible colour sets." loading="lazy"></a><figcaption>CGA 4 colours with everything on <b>nearest</b>: the panel shows the six sets the encoder may pick from.</figcaption></figure>
+<figure class="shot"><a href="guide/colour-vga4.png" title="Open full size"><img width="754" height="544" src="guide/colour-vga4.png" alt="The Colour tab for VGA 16 colours: the panel shows the sixteen standard colours." loading="lazy"></a><figcaption>VGA 16 colours: the sixteen standard colours, unless you ask for the clip's own.</figcaption></figure>
+</div>
+
+<h3>CGA, 4 colours</h3>
+<div class="opt"><h4>Cga palette, Cga bright, Cga bg</h4>
+<p>CGA's four-colour mode has three fixed sets of three colours (green/red/brown, cyan/magenta/white, and cyan/red/white), each dim or bright, plus one background colour that can be any of the sixteen. Left on <b>nearest</b>, the encoder looks at the clip and picks the combination closest to it.</p>
+<div class="grid three">
+<figure><a href="guide/cmp-cga4-auto.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-cga4-auto.png" alt="CGA four colours with the palette the encoder chose." loading="lazy"></a><figcaption><b>nearest</b> (what the encoder chose for this clip).</figcaption></figure>
+<figure><a href="guide/cmp-cga4-p0.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-cga4-p0.png" alt="CGA palette 0 bright: green, red and yellow." loading="lazy"></a><figcaption><b>Palette 0, bright</b>: green, red, yellow.</figcaption></figure>
+<figure><a href="guide/cmp-cga4-p1.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-cga4-p1.png" alt="CGA palette 1 bright: cyan, magenta and white." loading="lazy"></a><figcaption><b>Palette 1, bright</b>: cyan, magenta, white. The famous CGA look.</figcaption></figure>
+</div>
+<p class="when"><b>Set them by hand</b> when you want a particular look regardless of the clip (the cyan and magenta of 1980s games, say), or when several clips should match. Choosing the background is often the biggest improvement: a dark blue background can suit a night scene far better than black.</p></div>
+
+<h3>4 and 16 colours</h3>
+<div class="opt"><h4>Vga4 plan cap, Vga4 sparse</h4>
+<p>Fine controls for a 16-colour picture that uses the clip's own colours. <b>Plan cap</b> stops a mix from using a colour very far from the real one (which shows as stray bright dots on dull greys). <b>Sparse</b> removes lone dots that a colour contributes only rarely.</p>
+<p class="when"><b>Leave them alone</b> unless you see scattered bright dots in grey areas; then lower Plan cap.</p></div>
+
+<h3>CGA composite (colour and 512 colours)</h3>
+<div class="opt"><h4>Comp dither, Comp quick, Mix, Levels mix</h4>
+<p>For the composite-colour entry. <b>Comp dither</b> <code>diffuse</code> (default) gives the most accurate colour; <code>pattern</code> is steadier from frame to frame. <b>Comp quick</b> makes the encode about five times faster at a small cost in accuracy. <b>Mix</b> and <b>Levels mix</b> control how the pattern dither blends colours.</p>
+<p class="when"><b>Tick Comp quick</b> while you experiment, and untick it for the final encode. <b>Choose pattern</b> if colours shimmer on a still picture.</p></div>
+<div class="opt"><h4>Cga card, C512 dither, C512 mix</h4>
+<p>For the 512-colour entry. IBM's original CGA (1981) and its 1985 revision show composite colours differently. <b>Cga card</b> <code>both</code> (default) picks colours that look right on either; choose <code>old</code> or <code>new</code> if you know which card will play it, for slightly better colour on that card.</p></div>
+
+<h3>VGA</h3>
+<div class="opt"><h4>Vga8 dither</h4>
+<p>For 256 colours: how strongly to dither between palette colours. Lower is cleaner and smaller; higher has smoother gradients. 0 turns dithering off.</p></div>
+<div class="opt"><h4>Palette</h4>
+<p>Which colours a 256- or 16-colour file uses. <code>auto</code> uses the clip's own 256 (for 256 colours) or the VGA's standard sixteen (for 16).</p>
+<ul>
+<li><code>grey2</code> to <code>grey64</code>: shades of grey only. A black-and-white film in 16 greys looks far better than in black and white dots.</li>
+<li><code>clip2</code> to <code>clip128</code>: the clip's own N most-used colours.</li>
+<li><code>colour8</code>, <code>colour12</code>, <code>colour16</code>: the clip's own colours, chosen to keep small bright things (a red light, a blue sky) in their own colour instead of spending every colour on the greys that fill most of the picture.</li>
+</ul>
+<div class="grid three">
+<figure><a href="guide/t-vga-16.png" title="Open full size"><img width="640" height="480" class="px" src="guide/t-vga-16.png" alt="VGA 16 standard colours." loading="lazy"></a><figcaption><b>auto</b>: the standard sixteen.</figcaption></figure>
+<figure><a href="guide/cmp-vga4-grey16.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-vga4-grey16.png" alt="VGA 16 greys: a smooth black and white picture." loading="lazy"></a><figcaption><b>grey16</b>: sixteen greys. Smooth tones.</figcaption></figure>
+</div>
+<p class="when"><b>Choose colour16</b> (with Scene palettes) for a 16-colour clip whose colours look muddy in the standard sixteen. <b>Choose a grey ramp</b> for a black-and-white film. Fewer colours also means fewer changes, so a smaller, lighter file.</p></div>
+<div class="opt"><h4>Scene palettes, Scene cover, Scene min, Scene join</h4>
+<p>With 16 colours and a <code>colourN</code> palette: <b>Scene palettes</b> gives each scene its own set of colours, switched at the scene change. A sunset gets oranges and a forest gets greens. <b>Scene min</b> is the fewest frames a set must last (so a fast camera does not flash between sets); <b>Scene cover</b> is how much of the picture must change to count as a new scene. <b>Scene join</b> lists times (in seconds) where two scenes should share one set: use it where the report says a scene change showed the old picture in the new colours for a moment.</p></div>
+<div class="opt"><h4>Screen</h4>
+<p>For 16 colours: <code>640x480</code> (default) plays in a window on the VGA desktop. The other sizes play full screen and have room for a second page, which makes <a href="#tearing">page flipping</a> possible.</p></div>
+
+<h3>Text mode colours</h3>
+<div class="opt"><h4>Text colour, Text prefer colour</h4>
+<p><b>Text colour</b> <code>colour</code> uses sixteen foreground and sixteen background colours; <code>mono</code> uses only grey, white and reverse, which every display card shows, including Hercules and MDA. <b>Text prefer colour</b> keeps a cell's colour over its exact brightness, so a pale blue sky is drawn in blue and white rather than grey. 0 turns it off; 2 is stronger.</p></div>
+
+<!-- ================================================================== -->
+<h2 id="sound">Sound tab</h2>
+
+<figure class="shot"><a href="guide/tab-sound.png" title="Open full size"><img width="754" height="544" src="guide/tab-sound.png" alt="The Sound tab." loading="lazy"></a><figcaption>The Sound tab. The ADPCM and PC speaker groups are greyed because this file uses 8-bit sound.</figcaption></figure>
+
+<div class="opt"><h4>Audio</h4>
+<table>
+<tr><th>Choice</th><th>What it is</th><th>Choose it when</th></tr>
+<tr><td><code>pcm8</code></td><td>8-bit sound for a Sound Blaster.</td><td>The machine has a Sound Blaster or compatible. The usual choice.</td></tr>
+<tr><td><code>adpcm4</code></td><td>Sound Blaster's compressed 4-bit format: half the bytes, a little noisier.</td><td>The disk is the bottleneck (the report says frames were "cut by the disk") and you would rather have a better picture than better sound. Some clone cards cannot play it; the player then starts muted.</td></tr>
+<tr><td><code>speaker</code></td><td>The PC's own speaker, for a machine with no sound card.</td><td>There is no card. It costs about half an 8088's time at 5.5 kHz and about 78% at 8 kHz, so the picture must be planned smaller. The <b>PC speaker</b> entry in Made for does that for you.</td></tr>
+<tr><td><code>none</code></td><td>Silent.</td><td>The clip has no sound worth keeping. All the disk and processor time goes to the picture.</td></tr>
+</table></div>
+
+<div class="opt"><h4>Rate</h4>
+<p>Samples a second. The list offers <code>22050</code>, <code>11025</code>, <code>8000</code> and <code>5512</code>; you can type another. The profile sets the default: 11025 for an XT, 22050 for a 286 or faster, 5512 for a floppy.</p>
+<p class="when"><b>Lower it</b> to free disk for the picture: 5512 halves the sound's share. Speech survives 5512 well; music sounds muffled. <b>Raise it</b> to 22050 on a fast machine for music.</p></div>
+
+<div class="opt"><h4>Volume</h4>
+<p>Makes the sound louder or softer: <code>1.5</code> is half as loud again, <code>3dB</code> or <code>6dB</code> louder in decibels, <code>0.5</code> half as loud. 8-bit sound is noisy at low levels, so a quiet source benefits from a boost. Too much and it distorts.</p></div>
+
+<h3>Buffer sound ahead</h3>
+<div class="opt"><h4>Buffer sound ahead, Ahead frames</h4>
+<p>Stores the sound a few frames ahead of its picture, so the player has it before the disk gets to the picture. In a heavy stretch the sound keeps playing smoothly. It costs a little disk space at every keyframe and nothing while playing.</p>
+<p class="when"><b>Leave it on auto</b>; the encoder turns it on where the clip needs it. Set it <b>on</b> if you hear the sound pause in busy moments on the real machine.</p></div>
+
+<h3>ADPCM</h3>
+<div class="opt"><h4>Adpcm</h4>
+<p><code>search</code> (default) finds the best-sounding ADPCM stream and is noticeably cleaner; <code>greedy</code> is much faster to encode. Use greedy for test encodes.</p></div>
+
+<h3>PC speaker</h3>
+<p>The PC speaker can only click on and off, so the encoder plays sound on it by sending very fast pulses. These settings make speech and music audible over the high-pitched whine those pulses make.</p>
+<div class="opt"><h4>Spk shape</h4>
+<p><code>encoder</code> (default) prepares the sound for the speaker here: it cuts what the tiny speaker cannot play, evens out loud and quiet passages, and drives it loud. <code>none</code> leaves it as it is, for comparison; most of it then disappears under the whine on a real PC.</p></div>
+<div class="opt"><h4>Spk pulses</h4>
+<p><code>2</code> sends two pulses a sample, which moves the whine to twice the pitch, where it is much less audible. It needs almost all of a 4.77 MHz 8088, so <b>use it only for a 286 or faster</b>.</p></div>
+<div class="opt"><h4>Spk preview</h4>
+<p>Writes a <code>.WAV</code> of exactly what the speaker will play, whine and all, so you can listen on your computer before copying anything. <b>Use it</b> while choosing the settings below.</p></div>
+<div class="opt"><h4>Spk style and the fine controls</h4>
+<p><b>Spk style</b> <code>natural</code> (default) keeps more of the music's rise and fall; <code>lifted</code> raises quiet passages more, so a soft introduction is heard. The fine controls (highpass, ratio, range, lows, drive, idle) adjust the same processing in detail. <b>Spk drive</b> is overall loudness; <b>Spk highpass</b> removes bass the speaker cannot play anyway.</p>
+<p class="when"><b>Try lifted</b> for speech or a quiet song. Leave the fine controls alone unless you are comparing previews.</p></div>
+
+<div class="box try"><span class="label">Sound alone</span>
+The box at the end of the <b>Save as</b> line can be set to <code>.WAV</code>. The encoder then saves only the sound, shaped for the PC speaker, for os8088's Audio Player to play.</div>
+
+<!-- ================================================================== -->
+<h2 id="budgettab">Budget tab</h2>
+
+<figure class="shot"><a href="guide/tab-budget.png" title="Open full size"><img width="754" height="544" src="guide/tab-budget.png" alt="The Budget tab." loading="lazy"></a><figcaption>The Budget tab: the machine's limits, an XMS bank, and a layer for a faster machine.</figcaption></figure>
+
+<p>The profile fills in this tab. Change it when you know your machine differs from the profile, or to give a particular file more or less room.</p>
+
+<h3>The machine's budget</h3>
+<div class="opt"><h4>Disk</h4>
+<p>The disk's reading speed during a play, in bytes a second.</p>
+<p class="when"><b>Change it when</b> you have measured your own machine, or it has a disk the profile does not describe. For example, an older os8088 kernel reads an ST-225 more slowly (use 96000), and an ST11R controller in a fast 286 reads about 250000.</p></div>
+<div class="opt"><h4>Avg and Peak</h4>
+<p>How much of the processor drawing may use: <b>Avg</b> on average, <b>Peak</b> in any one frame. <code>auto</code> uses the profile's own value. 0.85 means 85% of a frame's time.</p>
+<p class="when"><b>Lower them</b> if the video falls behind its sound on your machine (a slower clone, a busier configuration). Raising them is rarely wise.</p></div>
+<div class="opt" id="owe"><h4>Owe</h4>
+<p>How many frames' time one scene-change frame may borrow (1.6 by default), paid back over the two frames after. The picture waits a fraction of a second at a cut instead of smearing. <code>0</code> turns it off, holding every frame strictly to Peak.</p></div>
+<div class="opt" id="memory"><h4>Reserve and Memory</h4>
+<p>Video Player reads ahead into memory, and the encoder lets a heavy stretch spend what was read ahead in a calm one. <b>Memory</b> is how much free memory (in KB) the player will have for that, 309 by default; <b>Reserve</b> says the same thing as how much of the stream may be banked.</p>
+<p class="when"><b>Lower Memory</b> for a machine with little free memory (a 256 KB machine, or one with many drivers loaded). If the player has less than the file planned for, it says <b>Low memory</b> and may pause in a heavy stretch. <b>Raise it</b> (373, 437) for a machine with plenty free, and heavy stretches will be drawn better.</p></div>
+
+<h3>XMS bank (a 286 or better)</h3>
+<div class="opt"><h4>Bank, Prefill, Pool</h4>
+<p>On a 286 or faster with extended memory, the player can read the stream much further ahead into XMS, so a long heavy stretch can be drawn in full. <b>Bank</b> is how much (in KB), or <code>auto</code> to use as much of <b>Pool</b> (the machine's free XMS) as the clip needs. <b>Prefill</b> is how many seconds are read before the first frame (the player says Buffering meanwhile), or <code>all</code>.</p>
+<p class="when"><b>Use it</b> for a 286 or 486 file with a lot of fast action, on a machine with a few MB of extended memory. A machine without enough XMS still plays the file, possibly with pauses in heavy stretches. It cannot be used with PC speaker sound.</p></div>
+
+<h3 id="layer">Layer: for a faster disk too</h3>
+<div class="opt"><h4>Layer profile and the layer settings</h4>
+<p>A layer is a second stream in the same file, made for a faster machine. Every machine plays the base picture made for <b>Profile</b>; a machine fast enough to read the layer too gets a better picture. Pick the faster machine as <b>Layer profile</b> (for example base <code>5150-st225</code>, layer <code>286-fast</code>).</p>
+<p class="when"><b>Use it</b> when one file has to play on an XT and also look good on a 286. Otherwise leave it at <b>none</b>: a layer makes the file bigger and the encode slower. <b>Layer passes</b> <code>two</code> (default) takes about half as long again to encode and gives the better result.</p></div>
+
+<div class="box why"><span class="label">Why the disk controller matters so much</span>
+An MFM controller such as the ST11M moves data from the disk into memory by itself (DMA), while the processor draws. An XT-IDE or CompactFlash adapter makes the processor copy every byte. So on an XT with an XT-IDE, every byte of video read is time not spent drawing. That is why <code>5150-xtide</code> is a separate profile, and why a file made for an ST-225 machine can fall behind on an otherwise identical XT-IDE machine.</div>
+
+<!-- ================================================================== -->
+<h2 id="tradeoffs">Trade-offs tab</h2>
+
+<figure class="shot"><a href="guide/tab-tradeoffs.png" title="Open full size"><img width="754" height="544" src="guide/tab-tradeoffs.png" alt="The Trade-offs tab." loading="lazy"></a><figcaption>The Trade-offs tab: every setting here gives up a little picture for a smaller file or less work for the player, or the reverse.</figcaption></figure>
+
+<h3 id="stable">Hold the picture still</h3>
+<div class="opt"><h4>Stable (and the per-format versions)</h4>
+<p>Video, especially compressed video, has grain and noise: a wall that should be still flickers slightly from frame to frame. On a dithered screen that makes dots blink on and off, and every blink costs bytes and drawing time. <b>Stable</b> keeps a pixel as it was unless the source has really changed by more than this amount. There is one setting per format: <b>Stable</b> for black and white, <b>Text stable</b>, <b>Comp stable</b>, <b>Vga4 stable</b>, <b>Vga4 hold</b> and <b>Vga4 hold score</b> (16, 4 and CGA 16 colours), <b>C512 stable</b> and <b>Vga8 stable</b>; only your format's is active.</p>
+<p class="when"><b>Raise it</b> for a noisy or grainy source (old film, low-light phone video, a heavily compressed download). The picture becomes calmer, the file smaller, and fewer frames are cut. <b>Too high</b> and slow changes stop showing up: a fade lags, or a slowly moving shadow leaves a trail. <b>Lower it</b> (or 0) for clean animation where every change is real.</p></div>
+
+<h3>VGA, 256 colours: fewer pixels</h3>
+<div class="opt"><h4>Detail</h4>
+<p>Draws the picture at half (<code>2x1</code>) or a quarter (<code>4x1</code>) of the width, or half the height (<code>1x2</code>), and shows it at full size. The 286 VGA entries use <code>2x1</code> by default; the 486 ones <code>1x1</code>.</p>
+<p class="when"><b>Use 1x1</b> on a fast machine for full detail. <b>Use 2x1 or 4x1</b> when a 256-colour clip has too many cut frames: it halves the work with surprisingly little visible loss, since VGA's 256-colour pixels are already wide.</p></div>
+
+<h3>16 colours: the player's time to draw</h3>
+<div class="opt"><h4>Vga4 order, Vga4 wm3</h4>
+<p><b>Vga4 order</b> <code>planes</code> rearranges the colours so changes cost less to draw (a smaller, lighter file, at the cost of a slower encode). <b>Vga4 wm3</b> <code>on</code> stops a wrong colour from flashing for an instant while a pixel is redrawn, at some cost in drawing time.</p>
+<p class="when"><b>Try planes</b> on a heavy 16-colour clip. <b>Turn wm3 off</b> only if the machine is short of time and you do not mind an occasional flicker of colour.</p></div>
+
+<h3>Scenes: fewer bytes at a cut</h3>
+<div class="opt"><h4>Scene hold</h4>
+<p>With scene palettes: starts each new scene from the old scene's screen, so the cut needs fewer bytes. The old scene's pattern fades out over the first few frames.</p></div>
+
+<h3>Blocks: a smaller file, same look</h3>
+<div class="opt"><h4>Blocks</h4>
+<p><code>on</code> lets a frame that does not fit draw small blocks (a filled square, a two-colour pattern, or a tile the stream has seen before) that each stand for many pixels of change; the following frames sharpen them. The same disk budget gives a better picture, at a little more drawing time.</p>
+<p class="when"><b>Turn it on</b> for 16-colour, 256-colour and black-and-white files that cut a lot of frames. It only plays on the Video Player from this release onwards, and cannot be used with Live, resident, bands, a tear, or a looped black-and-white file.</p></div>
+
+<h3 id="tearing">Tearing: bands and a second page</h3>
+<p>When a frame takes longer to draw than one screen refresh, the screen can show half of the old frame and half of the new one: a <b>tear</b>. These settings deal with that on the screens that can.</p>
+<div class="opt"><h4>Bands</h4>
+<p>Mode X and 16 colours draw a picture in four colour planes, so a half-drawn frame shows as stripes of wrong colour across the whole picture. <b>Bands</b> (for example 4 or 8) draws the frame one horizontal band at a time, so a half-drawn frame shows one clean tear line instead. It costs a few bytes and a little drawing time per band.</p></div>
+<div class="opt"><h4>Flip, Flip own</h4>
+<p>With two pages of video memory (Mode X, or 16 colours on a full-screen <b>Screen</b>), the player draws the next frame on the hidden page and then shows it all at once. No tearing at all, but about twice the drawing work. <b>Flip own</b> stores each frame against the page it will be drawn on, which saves drawing time for more bytes.</p>
+<p class="when"><b>Use Flip</b> on a fast machine (a 486, a fast 286) where tearing bothers you.</p></div>
+<div class="opt"><h4>Page ahead, Pages, Page keys, Key pool, Page prune</h4>
+<p><b>Page ahead</b> uses the spare page differently: it builds an upcoming scene change on the hidden page during the calm frames before it, then shows the whole new scene at once with a single flip. The cut is clean instead of filling in over several frames. <code>auto</code> (default) tries it on Mode X and full-screen 16 colours, and keeps it only if the result is better everywhere; it doubles the encode time on those files. <b>Pages</b> uses more hidden pages so several cuts close together can all be built ahead. The remaining three settings tune how those pages are stored; leave them at their defaults.</p>
+<p class="when"><b>Set Page ahead on</b> for a Hercules file with frequent hard cuts (it then plays only on a Hercules with no colour card beside it). <b>Set it off</b> to halve the encode time while experimenting.</p></div>
+
+<h3>When a frame is cut</h3>
+<p>These decide which changes a too-heavy frame keeps. The defaults are good; they are here for clips that misbehave.</p>
+<div class="opt"><h4>Lookahead, Lookahead floor</h4>
+<p>When ranking changes, the encoder also looks this many frames ahead (2 by default), and does not spend budget on a pixel that is about to change again anyway. <b>Lookahead floor</b> makes sure something bright that is about to move is still drawn now.</p></div>
+<div class="opt"><h4>Error</h4>
+<p><code>visible</code> (default) judges a wrong pixel by how wrong it looks to the eye; <code>bits</code> counts wrong pixels plainly. Leave it on visible.</p></div>
+<div class="opt"><h4>Cut</h4>
+<p>Which changes a cut frame keeps. <code>fill</code> (default): the most important first, then everything else that fits. <code>rank</code>: the most important only. <code>tear</code>: whole rows from the top down, carrying on next frame from where it stopped, like a frame drawn without waiting for the screen refresh.</p>
+<p class="when"><b>Try tear</b> for fast horizontal pans, where scattered half-updated rows look worse than one clean tear line moving down the picture.</p></div>
+<div class="opt"><h4>Frame cap</h4>
+<p>The most one frame may hold: <code>32</code> KB (default; every player), <code>48</code> or <code>63.5</code>. Bigger lets a fast pan be cut less, but needs this player or later, 32 KB more memory, and a machine fast enough to read and draw that much in one frame: a 486.</p></div>
+<div class="opt"><h4>Edges, Attend</h4>
+<p><b>Edges</b> gives extra weight to changes that fix an edge (the outline of something, a torn row), so a cut frame looks less broken. <b>Attend</b> spends a cut frame's budget where the eye goes (bright things, things moving against the background) at the strength given; 0 turns it off.</p>
+<p class="when"><b>Try Attend 1</b> for a clip with a clear subject (a person, a car) moving over a busy background.</p></div>
+<div class="opt" id="worth"><h4>Worth (Aim: size)</h4>
+<p>With <b>Aim</b> set to <code>size</code>: how much a change must improve the picture, per byte, to be kept. 1 by default; 2 or 4 gives a smaller, rougher file; 0.5 a bigger, finer one.</p></div>
+
+<!-- ================================================================== -->
+<h2 id="degrade">Degrade to Fit tab</h2>
+
+<p>When a stretch of video is too heavy, the encoder normally cuts frames (it draws the most important changes and lets the rest catch up). This tab offers other ways to give: let the picture fall slightly behind the sound and catch up, slow the frame rate for a moment, use fewer colours for a scene, or draw a scene change in coarse blocks first. You choose which, and in which order.</p>
+
+<figure class="shot"><a href="guide/tab-ladder.png" title="Open full size"><img width="754" height="544" src="guide/tab-ladder.png" alt="The Degrade to Fit tab with the ladder ticked and six rungs filled in." loading="lazy"></a><figcaption>The degrade ladder ticked, for a 16-colour VGA file. The rungs are tried in order; the first that draws the stretch whole is used.</figcaption></figure>
+
+<div class="opt"><h4>Use the degrade ladder, Rung 1 to Rung 8</h4>
+<p>Each rung is one way of giving. For each heavy stretch the encoder tries the first rung, then the first and second together, and so on, and takes the first combination that draws the stretch whole (or the least broken). If none does, the frames are cut as usual. The rungs on offer depend on the file:</p>
+<ul>
+<li><b>Lag up to N ms</b>: let the picture run up to N milliseconds behind the sound and catch up after (only with a sound card's sound). 100 ms is hardly noticeable.</li>
+<li><b>Slow to 5/6 (2/3, 1/2...) of the rate</b>: drop to a lower frame rate for that stretch only.</li>
+<li><b>Fewer colours: 12 or 8</b>: a scene with its own palette steps down (16-colour files with scene palettes).</li>
+<li><b>Coarse cells at a scene change</b>, or <b>at any cut</b>: draw the new picture as flat blocks first, the detail following in the next frames (16-colour VGA and Mode X). "mixed" uses blocks only where it must.</li>
+<li><b>Cut, no frame over N% broken</b>: accept the cut once it is no worse than that.</li>
+</ul>
+<p class="when"><b>Use the ladder</b> when the report shows a clip "VISIBLY BROKEN" at scene changes and you would rather it slowed down or blurred for a moment than tore. Put the least noticeable rungs first: a small lag, then a slight slow-down, then coarser options.</p></div>
+
+<div class="opt"><h4>By time</h4>
+<p>Gives one stretch of the clip a ladder of its own, for example <code>7.3-7.8=lag:50,coarseany:frame,slow:2/3</code> uses those rungs for a stretch starting between 7.3 and 7.8 seconds. Several are separated by <code>;</code>. Use it for the one explosion that needs special treatment.</p></div>
+
+<div class="opt"><h4>Or, without the ladder: Lag, Min fps, Coarse cut, Step down, Step min</h4>
+<p>The same ideas as fixed settings for the whole clip, used when the ladder is not ticked. <b>Lag</b> is a range in milliseconds (default <code>50-100</code>: the encoder tries each allowance and keeps the one that cuts fewest frames). <b>Min fps</b> lets the rate drop as far as this where that draws the picture better (0 is off). <b>Coarse cut</b>, <b>Step down</b> and <b>Step min</b> are the coarse-cell and fewer-colours ideas. With the ladder ticked, these are off unless a rung names them.</p></div>
+
+<div class="opt"><h4>Slow cost, Flip hold</h4>
+<p><b>Slow cost</b> is how much the encoder dislikes a slower frame rate compared with a torn picture: higher keeps the full rate longer. <b>Flip hold</b> is how a held frame is drawn on a page-flipped file; leave it at <code>ahead</code>.</p></div>
+
+<!-- ================================================================== -->
+<h2 id="disk">Making a disk</h2>
+
+<p>Tick <b>...and make a disk of it</b> before you click Encode, and choose the disk from the list. The image is written beside the <code>.V88</code>. The video goes onto it under a short 8.3 name (the first eight letters and digits of its name, then <code>.V88</code>), with Video Player beside it.</p>
+
+<table>
+<tr><th>Disk</th><th>Choose it when</th></tr>
+<tr><td>a 360 KB, 720 KB, 1.2 MB or 1.44 MB floppy</td><td>You will put the disk in drive B: next to an os8088 system disk. Choose the size your drive takes: 360 KB for a PC or XT. Floppies are small for video: the sample clip made for a hard disk is about 1 MB for 12 seconds, so it needs the 1.44 MB size, while the floppy entry's version is about 270 KB and fits on a 360 KB disk.</td></tr>
+<tr><td>a 20 MB hard disk: ST-225 on an ST11M (5150/XT)</td><td>An IBM PC or XT with an ST11M MFM controller, or 86Box set up the same way. The disk boots os8088 straight into a desktop with your video on it.</td></tr>
+<tr><td>a 32 MB hard disk: ST-238R on an ST11R (XT)</td><td>An XT with an ST11R RLL controller.</td></tr>
+<tr><td>a 32 MB hard disk: IDE (286 and up)</td><td>A 286 or later with an IDE disk, a CompactFlash or SD adapter, or 86Box. Also the easiest choice for an emulator.</td></tr>
+</table>
+
+<p>A hard disk image is a fixed-size <code>.VHD</code>: 86Box opens it directly, and a disk-imaging tool writes it onto a real disk or a CompactFlash card. It carries os8088 itself (from this folder's <code>boot/</code>), the hard disk and sound drivers, Video Player and the video.</p>
+
+<p>You do not have to use this. os8088's disks are ordinary FAT disks, so you can copy a <code>.V88</code> onto any os8088 floppy or hard disk with your computer's own tools. Give it a short name (eight characters or fewer before <code>.V88</code>).</p>
+
+<!-- ================================================================== -->
+<h2 id="play">Playing it on os8088</h2>
+<p>Double-click the <code>.V88</code> file in a Disk window. Video Player opens with the poster picture showing.</p>
+<table>
+<tr><th>Key</th><th>What it does</th></tr>
+<tr><td><kbd>Space</kbd>, <kbd>P</kbd> or <kbd>Enter</kbd></td><td>Play. In the window when it fits there, otherwise full screen. Space pauses and resumes.</td></tr>
+<tr><td><kbd>F</kbd> or <kbd>Alt</kbd>+<kbd>Enter</kbd></td><td>Switch between the window and the full screen.</td></tr>
+<tr><td><kbd>Esc</kbd></td><td>Stop.</td></tr>
+<tr><td><kbd>Left</kbd>, <kbd>Right</kbd></td><td>Full screen: back or forward 5 seconds a press.</td></tr>
+<tr><td><kbd>,</kbd> and <kbd>.</kbd></td><td>Full screen, while paused: one frame back or on.</td></tr>
+<tr><td><kbd>R</kbd></td><td>Repeat on or off.</td></tr>
+<tr><td><kbd>M</kbd> or <kbd>S</kbd></td><td>Sound off or on.</td></tr>
+</table>
+<p>If a file plays but the machine is slower than the one it was made for, the picture falls behind; make it again with the right profile.</p>
+
+<!-- ================================================================== -->
+<h2 id="after">Changing a finished file</h2>
+<p><b>Load .V88</b> (top right of the form) opens a video made before. You can scrub through it, and some things can be changed without encoding again:</p>
+<ul>
+<li><b>Title</b> and <b>Set title</b> change the name Video Player shows.</li>
+<li>Drag the slider to a good moment and click <b>Set as poster</b> to make that keyframe the poster.</li>
+<li><b>Redo posters</b> remakes the desktop preview pictures with the Desktop posters, size and clip settings now on the Basic tab.</li>
+</ul>
+<p>When the file records the settings it was made with (files from this encoder do), loading it also sets every field in the form to those settings. Choose the original video as <b>Input</b>, change what you want, and encode again. This is the easiest way to make a second version for a different machine.</p>
+
+<!-- ================================================================== -->
+<h2 id="recipes">Recipes</h2>
+<p>Worked examples for common situations. Each one starts from a <b>Made for</b> entry and lists only what to change after choosing it.</p>
+
+<div class="recipe">
+<h3>A music video for an IBM PC with a Sound Blaster and an MFM hard disk</h3>
+<dl>
+<dt>Made for</dt><dd>IBM 5150/XT, CGA - black and white (or Hercules - black and white)</dd>
+<dt>Then</dt><dd>Nothing, to start. Encode, and read the report's "cut" line.</dd>
+<dt>If many frames are cut</dt><dd>On Trade-offs raise <b>Stable</b> to 10 or 12 (music videos are often noisy). Then lower <b>Fps</b> to 20. Then try the <code>cga-small</code> or a smaller <b>Box</b>.</dd>
+<dt>Disk</dt><dd>a 20 MB hard disk: ST-225 on an ST11M</dd>
+</dl>
+<p><b>Why:</b> black and white at 640 x 200 is the sharpest picture an XT can stream, and its stable dither keeps quiet areas free. Cuts are where music videos struggle; noise reduction and a slightly lower rate leave more budget for each cut.</p>
+</div>
+
+<div class="recipe">
+<h3>The same video for an XT with no sound card</h3>
+<dl>
+<dt>Made for</dt><dd>IBM 5150/XT, PC speaker - Hercules. For a CGA, set <b>Preset</b> to <code>cga-spk</code> afterwards.</dd>
+<dt>Sound tab</dt><dd>Nothing has to change. To hear the result first, choose a file for <b>Spk preview</b> and listen to it after the encode. If quiet passages vanish, set <b>Spk style</b> to <code>lifted</code>.</dd>
+</dl>
+<p><b>Why:</b> the speaker needs most of the processor, so this entry uses a 360 x 160 picture at 23 frames a second. A bigger picture would leave the machine no time to draw it.</p>
+</div>
+
+<div class="recipe">
+<h3>A clip that has to play from a floppy</h3>
+<dl>
+<dt>Made for</dt><dd>IBM 5150/XT, a floppy - small and slow</dd>
+<dt>Consider</dt><dd>Sound tab: <b>Audio</b> <code>adpcm4</code> or <code>none</code> if the picture is too rough. Basic tab: <b>Fps</b> 15.</dd>
+<dt>Disk</dt><dd>a 360 KB floppy</dd>
+</dl>
+<p><b>Why:</b> a floppy reads about 15 KB a second, an eighth of a hard disk. Every byte the sound does not use goes to the picture. For a clip of a few seconds, ticking <b>Resident</b> instead loads it whole and plays it at hard-disk quality.</p>
+</div>
+
+<div class="recipe">
+<h3>A spinning logo on the desktop</h3>
+<dl>
+<dt>Made for</dt><dd>Live on a CGA (Hercules, VGA) desktop</dd>
+<dt>Basic tab</dt><dd><b>Loop from</b> 0, tick <b>Repeat</b>. Set <b>End</b> to the length of one turn.</dd>
+<dt>Sound tab</dt><dd><b>Audio</b> <code>none</code> unless it needs sound; it keeps the clip small.</dd>
+</dl>
+<p><b>Why:</b> Live clips play while the machine stays usable, and a seamless loop with Repeat on plays for ever with no pause at the join.</p>
+</div>
+
+<div class="recipe">
+<h3>The best colour picture a 286 with VGA can play</h3>
+<dl>
+<dt>Made for</dt><dd>286, VGA - Mode X, 256 colours, square pixels (or 256 colours, full screen)</dd>
+<dt>Consider</dt><dd>Budget tab: <b>Bank</b> <code>auto</code> if the machine has a few MB of extended memory. Trade-offs: <b>Blocks</b> <code>on</code>, and <b>Detail</b> <code>1x1</code> if the report shows few cut frames.</dd>
+<dt>Disk</dt><dd>a 32 MB hard disk: IDE</dd>
+</dl>
+<p><b>Why:</b> 256 colours from the clip's own palette is the most faithful picture Video Player draws. The default <b>Detail</b> of 2x1 halves the work; full detail is for a calm clip or a faster machine. The bank lets a long stretch of action spend memory instead of cutting frames.</p>
+</div>
+
+<div class="recipe">
+<h3>A colour video that plays in a window on a VGA desktop</h3>
+<dl>
+<dt>Made for</dt><dd>286, VGA - 16 colours in the window</dd>
+<dt>Colour tab</dt><dd><b>Palette</b> <code>colour16</code> and tick <b>Scene palettes</b>, if the standard sixteen look muddy.</dd>
+<dt>Degrade to Fit</dt><dd>Tick <b>Use the degrade ladder</b> if scene changes look torn.</dd>
+</dl>
+<p><b>Why:</b> 16 colours is the desktop's own mode, so the video can share the screen. A palette per scene puts the sixteen where each scene needs them.</p>
+</div>
+
+<div class="recipe">
+<h3>One file for an XT that looks better on a 286</h3>
+<dl>
+<dt>Made for</dt><dd>IBM 5150/XT, Hercules (or CGA) - black and white</dd>
+<dt>Budget tab</dt><dd><b>Layer profile</b> <code>286-fast</code></dd>
+</dl>
+<p><b>Why:</b> the XT plays the base stream as it would any file. A 286 reads the layer too, and fills in what the base had to leave out.</p>
+</div>
+
+<div class="recipe">
+<h3>Text-mode art that plays on anything</h3>
+<dl>
+<dt>Made for</dt><dd>Any PC - text mode, 16 colours (or the black-and-white one for Hercules and MDA)</dd>
+<dt>Picture tab</dt><dd><b>Text glyphs</b> <code>ascii</code> or <code>dots</code> for the art look. Raise <b>Text busy</b> if it looks like crawling letters.</dd>
+</dl>
+<p><b>Why:</b> a whole text screen is only 4,000 bytes, so it plays at full frame rate even from a slow disk, and every PC can show it.</p>
+</div>
+
+<div class="recipe">
+<h3>As many videos as possible on one disk</h3>
+<dl>
+<dt>Basic tab</dt><dd><b>Aim</b> <code>size</code>; <b>Keysecs</b> 5.</dd>
+<dt>Trade-offs</dt><dd>Raise <b>Stable</b>; raise <b>Worth</b> to 2 for smaller still.</dd>
+<dt>Sound tab</dt><dd><code>adpcm4</code>, or a lower <b>Rate</b>.</dd>
+</dl>
+<p><b>Why:</b> Aim size drops the changes that matter least rather than the ones that happen to come last, which looks better than simply lowering the disk budget.</p>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="trouble">When something looks wrong</h2>
+<table>
+<tr><th>What you see</th><th>Try</th></tr>
+<tr><td>Scene changes fill in slowly or look torn</td><td>Normal in moderation. If it bothers you: lower <b>Fps</b>, use a smaller <b>Box</b>, raise <b>Stable</b>, or use the <a href="#degrade">degrade ladder</a>. On Mode X or full-screen 16 colours, <b>Page ahead</b> builds cuts in advance.</td></tr>
+<tr><td>Fast pans leave scattered half-updated rows</td><td>Trade-offs: <b>Cut</b> <code>tear</code>. Or a smaller picture.</td></tr>
+<tr><td>Flat areas shimmer or crawl with dots</td><td>Raise <b>Stable</b> (Trade-offs) and <b>Clip</b> (Picture).</td></tr>
+<tr><td>Dark scenes are solid black blobs</td><td>Raise <b>Gamma</b> to 1.3 to 1.6; lower <b>Clip</b>.</td></tr>
+<tr><td>Everything looks washed out</td><td>Lower <b>Gamma</b>; check <b>Levels</b> is <code>auto</code>.</td></tr>
+<tr><td>Four colours look wrong</td><td>Set <b>Cga palette</b>, <b>Cga bright</b> and especially <b>Cga bg</b> by hand. Some clips do not suit four colours at all; try 16 colours at 160 x 100 or black and white.</td></tr>
+<tr><td>Composite colours look like stripes</td><td>The monitor is RGB, not composite. Choose a non-composite entry.</td></tr>
+<tr><td>Video falls behind the sound on the real machine</td><td>The profile is too fast for it. Choose a slower one, or lower <b>Avg</b> and <b>Peak</b> on the Budget tab. An XT-IDE machine wants <code>5150-xtide</code>.</td></tr>
+<tr><td>The player says Low memory</td><td>Free memory on the machine (fewer drivers), or encode with a lower <b>Memory</b> on the Budget tab.</td></tr>
+<tr><td>Sound pauses in busy moments</td><td>Sound tab: <b>Buffer sound ahead</b> <code>on</code>.</td></tr>
+<tr><td>Speaker sound is too quiet or lost in the whine</td><td><b>Spk style</b> <code>lifted</code>, raise <b>Spk drive</b>, raise <b>Volume</b>; check with <b>Spk preview</b>.</td></tr>
+<tr><td>The player refuses the file</td><td>An older Video Player. Use the <code>VIDEO.O88</code> from this folder (every disk the encoder makes has it), or avoid Blocks, Frame cap above 32 and Spk pulses 2.</td></tr>
+<tr><td>Encoding takes too long</td><td>Encode a short stretch with <b>Start</b> and <b>End</b> while experimenting. <b>Comp quick</b>, <b>Adpcm</b> <code>greedy</code> and <b>Page ahead</b> <code>off</code> speed up test encodes. <b>Aim</b> <code>quality</code> and layers are the slowest settings.</td></tr>
+<tr><td>The picture is not centred / has the wrong shape</td><td>Picture tab, <b>Fit</b>. The encoder deliberately draws no black bars.</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="cli">The command line</h2>
+<p>Everything in the window is also available as <code>os88venc.py</code>. The window's settings become exactly these options, so a command line is a good way to batch-encode many files the same way:</p>
+<pre><code>python3 os88venc.py clip.mp4 CLIP.V88 --preset herc
+python3 os88venc.py clip.mp4 CLIP.V88 --preset cga4 --cga-palette 1 --cga-bright 1
+python3 os88venc.py clip.mp4 CLIP.V88 --preset modex --profile 286-fast --blocks on
+python3 os88venc.py clip.mp4 CLIP.V88 --preset cga-small --profile floppy --audio adpcm4
+python3 os88venc.py song.mp3 SONG.WAV          # sound alone, for the PC speaker</code></pre>
+<p><code>python3 os88venc.py --profiles</code> lists the presets and profiles; <code>python3 os88venc.py --help</code> lists every option with the same help text as the tooltips. Option names match the field names in the window: <b>Vga4 stable</b> is <code>--vga4-stable</code>, and so on.</p>
+
+<!-- ================================================================== -->
+<h2 id="words">Words used in this guide</h2>
+<table>
+<tr><td><b>Budget</b></td><td>What the target machine can do while playing: bytes a second from its disk, and time to draw. Set by the profile.</td></tr>
+<tr><td><b>Cut frame</b></td><td>A frame that did not fit its budget, so only its most important changes were drawn. The rest follows in the next frames.</td></tr>
+<tr><td><b>Dither</b></td><td>Mixing the few colours a screen has, as dots, to suggest the colours it does not.</td></tr>
+<tr><td><b>Keyframe</b></td><td>A whole picture stored in the file: a place to start playing from.</td></tr>
+<tr><td><b>Layer</b></td><td>A second stream in the file, read only by a faster machine to improve the picture.</td></tr>
+<tr><td><b>Live</b></td><td>A short clip that plays on the desktop while you keep working.</td></tr>
+<tr><td><b>Mode X</b></td><td>A VGA mode with 256 colours, square pixels and room for more than one page.</td></tr>
+<tr><td><b>Page, flip</b></td><td>A second screen's worth of video memory. Drawing on a hidden page and then showing it ("flipping") hides the drawing.</td></tr>
+<tr><td><b>Pixel format</b></td><td>How each pixel is stored: black and white, 4, 16 or 256 colours, composite, or text.</td></tr>
+<tr><td><b>Poster</b></td><td>The still picture Video Player shows before a play.</td></tr>
+<tr><td><b>Preset</b></td><td>A named screen layout and picture size.</td></tr>
+<tr><td><b>Profile</b></td><td>A named machine: disk speed, processor speed and default sound.</td></tr>
+<tr><td><b>Resident</b></td><td>A file read whole into memory before it plays.</td></tr>
+<tr><td><b>Scene</b></td><td>A stretch of video between two cuts. Several settings act scene by scene.</td></tr>
+<tr><td><b>Tear</b></td><td>A screen showing part of one frame and part of the next.</td></tr>
+<tr><td><b>XMS</b></td><td>Extended memory, above 1 MB, on a 286 or better.</td></tr>
+</table>
+
+<p class="small">The sample clip in this guide is made from three original pictures in os8088's own sample gallery (the PiXEL viewer's <code>VACATION.JPG</code>, <code>FLOWER.JPG</code> and <code>ROOM.JPG</code>), with a pan and zoom added and a short generated tune.</p>
+
+</main>
+</div>
+</body>
+</html>

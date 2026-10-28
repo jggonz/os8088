@@ -231,6 +231,9 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
         xmcheck.wait_desktop(q.sock, "vidxip")
         S = xmcheck.sym
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
+        # closed-loop (SOAK-SPEED technique 15), and each pause below a
+        # ui_done CAPPED where the old pace(1) was
+        mo = os88qemu.Mouse(q, S, q.hmp, after=0)
 
         def wait(cond, what, secs):
             if not os88qemu.acted(q, cond, secs=secs, what=what, poll=0.02):
@@ -239,7 +242,7 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
         drv = "C" if HD else "B"
         x, y = geom.drive_pt(q, drv, S)
         wbefore = set(o.i for o in ui.windows())
-        xmcheck.dblclick(q.sock, x, y)
+        mo.dblclick(x, y)
         box = {}
 
         def diskwin():
@@ -250,11 +253,11 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
                     return True
             return False
         wait(diskwin, "drive %s's window" % drv, 30)
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)
         w = box["w"]
         i, _ = ui.entry("CLIP.V88", w)
         before = set(o.i for o in ui.windows())
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        mo.dblclick(*ui.row_xy(w, i - ui.scroll(w)))
 
         def player():
             for o in ui.windows():
@@ -292,13 +295,13 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
                 res["xr10"] = rw("vp_xr10")     # given back: only the
                 res["blk8"] = [b for b in xmcheck.blocks(   # hold is live
                     q.sock, xmcheck.table_base(q.sock)) if b[2] == 8]
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)
         if ekr:                         # a gate's cap on the ring in place
             qpoke(q, [(base + syms["vp_ekr"], struct.pack("<H", ekr))])
         stops = list(range(HOLDN, NF, HOLDN)) if bank and not dry else []
         if stops:                       # the gate's hold (tests/vidplay.py's)
             qpoke(q, [(base + syms["vp_stopat"], struct.pack("<H", stops[0]))])
-        q.hmp("sendkey p")
+        os88qemu.key(q, "p")            # (paced: os88qemu.key says why)
         wait(lambda: rb("vp_ready") == 1, "the play to start", 30)
         import time
         t0 = time.time()
@@ -350,7 +353,7 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
                    kr=krm,
                    sites=u16(q.read(base + syms["..@vd_y1"], 2))
                    if "..@vd_y1" in syms else None)
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)
         rec = q.read(S("wm_wins") + wi * geom.WIN_SIZE, geom.WIN_SIZE)
         shot = os.path.join(d, "win.png")
         subprocess.run([sys.executable, "tools/shot.py", q.sock, shot],

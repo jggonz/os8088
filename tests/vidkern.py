@@ -90,10 +90,12 @@ def main():
              "--file", "STREAM.DAT=" + stream], check=True,
             capture_output=True)
         m = os88marty.launch(None, machine=a.machine,
-                             extra=["--mount", "hd:0:" + vhd])
+                             extra=["--mount", "hd:0:" + vhd], boot=False)
         try:
+            m.run()
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)        # the first act is ui.path: no settle
+            os88marty.no_saver(m)
             w = ui.path("C:/VIDKERN.O88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
@@ -107,7 +109,7 @@ def main():
 
             m.type_text("r")
             os88marty.until(m, lambda mm: rw("vk_rdone") != 0,
-                            "the rate bracket to end", poll=1.0,
+                            "the rate bracket to end", poll=0.05,
                             limit=600.0, guest=60.0)
             sch_fast = ui._byte("sch_fast")
 
@@ -115,17 +117,17 @@ def main():
             fpg = {}
             for ph in (1, 2, 3):
                 os88marty.until(m, lambda mm: rb("vk_phase") == ph,
-                                "the fence's phase %d" % ph, poll=0.5,
+                                "the fence's phase %d" % ph, poll=0.05,
                                 limit=300.0, guest=30.0)
                 fpg[ph] = ui._byte("fpg_on")
                 m.write(base + syms["vk_go"], bytes([ph]))
             os88marty.until(m, lambda mm: rw("vk_fdone") != 0,
-                            "the fence row to end", poll=0.5, limit=300.0,
+                            "the fence row to end", poll=0.05, limit=300.0,
                             guest=30.0)
 
             m.type_text("s")
             os88marty.until(m, lambda mm: rw("vk_sdone") != 0,
-                            "the READ_SEQ rows to end", poll=1.0,
+                            "the READ_SEQ rows to end", poll=0.05,
                             limit=1500.0, guest=300.0)
             r = [rw("vk_res", 2 * i) for i in range(26)]
 
@@ -133,7 +135,7 @@ def main():
             # say go - reported and SAVED as VIDKERN.TXT beside the package
             m.type_text("a")
             os88marty.until(m, lambda mm: rb("bl_saved") != 0,
-                            "the run-all to save its report", poll=1.0,
+                            "the run-all to save its report", poll=0.05,
                             limit=1500.0, guest=300.0)
             full = rb("bl_full")
             auto = [rw("vk_res", 2 * i) for i in range(26)]

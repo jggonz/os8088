@@ -50,7 +50,9 @@ def main():
     root = os.path.join(HERE, "..")
     sysimg = os.path.join(root, "build", "os8088-360.img")
     apps = os.path.join(root, "build", "apps360.img")
-    with os88ui.boot(sysimg, apps=apps, machine=MACHINE) as ui:
+    with os88ui.boot(sysimg, apps=apps, machine=MACHINE,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m if hasattr(ui, "m") else ui.marty
 
         # --- 1. the tier, and MD ------------------------------------------

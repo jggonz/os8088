@@ -15,16 +15,14 @@ timing here means anything. So every assertion below is about BEHAVIOUR and
 none is about speed. There is no number in this file for PERFORMANCE.md to
 want off the 5150, which is the honest position rather than a limitation.
 
-SIX ASSERTIONS, and they climb the stack.
+EIGHT ASSERTIONS, and they climb the stack.
 
 1. THE CARD. A base was found, a station address came out of the PROM, and it
    is a plausible one - not all zero, not all ones, not multicast.
 
-1b. THE RINGS. `sk_seg` is non-zero and the ladder landed on its TOP rung
-   (SPEC.md 72.13.2). This machine has the whole heap free when the driver
-   attaches, so anything lower is the ladder failing and not the machine
-   refusing - and the field spent a round unable to tell those apart, because
-   nothing anywhere said which rung had been taken.
+1b. NO RINGS YET. `sk_seg` and `eth_users` are 0 with the card up and no
+   package open: the pool is claimed when a package first speaks to the driver
+   (SPEC.md 72.13.4), not at attach.
 
 2. THE ADDRESS. `dhcp_st` is DH_BOUND and `eth_ip` is 10.0.2.15, the gateway
    10.0.2.2 and the name server 10.0.2.3 - all three read out of the driver's
@@ -40,6 +38,16 @@ SIX ASSERTIONS, and they climb the stack.
 4. THE PAGE RENDERS. `br_nstate` is BN_DONE and `br_nlines` is non-zero, read
    out of the browser's bss - so the bytes reached br_parse and br_layout and
    the application is not reporting a failure over a page that drew.
+
+4b. THE RINGS, with the browser open: `sk_seg` is non-zero, the ladder
+   landed on its TOP rung (SPEC.md 72.13.2) and the pool is movable and was
+   claimed top-down. A 640KB machine with one package open has far more than
+   four times the ceiling free, so anything lower is the ladder failing and
+   not the machine refusing.
+
+4c. ...AND THEY GO BACK. Closing the browser, the only package that spoke to
+   the driver, frees the pool: the kernel's teardown sends NETV_GONE, and
+   `sk_seg`, `eth_users` and the mem_tab record are all gone.
 
 5. NOT ONE BYTE OF THE BROWSER IS ABOUT ETHERNET. The `.o88` under test is the
    one `make` builds for the shipped floppy, and the only thing it was told is
@@ -74,9 +82,13 @@ import os88sym                                         # noqa: E402
 import os88geom                                        # noqa: E402
 import os88qemu                                              # noqa: E402
 import os88build                                       # noqa: E402
+import os88fixture                                     # noqa: E402
 
 S = os88sym.linear
-SOCK = os.environ.get("QMP_SOCK", "build/qmp.sock")
+# THIS PROCESS'S socket (tests/os88qemu.py RUNDIR), never a shared
+# build/qmp.sock: os88qemu.make_test points this at the machine it launched,
+# and every helper below reads it AT CALL TIME (SOAK-PARALLEL.md 17).
+SOCK = os88qemu.SOCK
 PORT = 8090
 PATH = "/eth.htm"
 ENTITY_ACCENTS = (
@@ -188,8 +200,8 @@ class Qemu:
     command; four round trips on a Unix socket is nothing beside the emulator.
     """
 
-    def __init__(self, path=SOCK):
-        self.path = path
+    def __init__(self, path=None):
+        self.path = path or SOCK
         self.tmp = tempfile.mkdtemp()
         for _ in range(150):                # ...but wait for it to exist
             try:
@@ -200,6 +212,13 @@ class Qemu:
         raise RuntimeError("no QMP socket at %s" % path)
 
     def hmp(self, cmd):
+        # a plain `sendkey` is CONFIRMED (os88qemu.sendkey): HMP's release
+        # follows 100 ms of HOST time later and a starved guest lost the key
+        # (docs/plans/SOAK-PARALLEL.md 17.5)
+        k = re.match(r"^sendkey (\S+)$", cmd)
+        if k is not None:
+            os88qemu.sendkey(self.path, k.group(1))
+            return ""
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.path)
         f = s.makefile("rw")
@@ -279,30 +298,91 @@ def dotted(b):
 
 
 class Mouse:
-    """tools/mouse.py, one process per action - QEMU's msmouse is 1200 baud
-    and the pacing inside that tool is what makes a drag or a click land."""
+    """The pointer, CLOSED LOOP when the kernel's words can be read
+    (os88qemu.mouse_to / mouse_button / mouse_dblclick: send the delta, wait
+    for `mouse_x`/`mouse_btn` to MOVE, repeat until it is there), with
+    tools/mouse.py, which DEAD-RECKONS, as the fallback for a kernel this
+    process cannot resolve. The guest pauses each verb took through
+    tools/mouse.py (0.15 s after an edge, 0.2 s inside a click, 0.4 s after
+    one) are kept, in GUEST seconds: only where the pointer lands changed.
+
+    It was tools/mouse.py for every gesture, one process per action, which
+    pins against the bottom-right clamp and walks back on paced moves - and
+    a guest starved past those pauses took the click somewhere else, or the
+    tool itself gave up: rltune's first `to 592 54` (drive A's zone) exited
+    1 in the 2026-10-25 soak and the row died in dispcp.open_drive. xmcheck's
+    `goto` made the same change for the xmcheck rows (docs/plans/
+    SOAK-PARALLEL.md 17.5); this is the other client, under ~twelve QEMU
+    rows (the browser's, ethcfg, ftpd, ftpkeep, lemmings, rltune...)."""
+
+    def _sock(self):
+        # read at CALL time: os88qemu.make_test re-points SOCK. A row with a
+        # socket of its own (tests/thewire.py) overrides this
+        return SOCK
+
+    def _m(self):
+        return os88qemu._Sock(self._sock())
+
+    def _hmp(self, *cmds):
+        import xmcheck
+        return xmcheck.qmp(self._sock(), *cmds)
+
+    def _closed(self, fn, *a):
+        """Run a closed-loop gesture; False (and nothing sent that matters)
+        when the kernel's pointer words cannot be read, so the caller
+        dead-reckons instead."""
+        try:
+            fn(self._m(), S, self._hmp, *a)
+            return True
+        except os88qemu.GuestStopped:
+            raise
+        except Exception:                   # noqa: BLE001 - no map, or the
+            return False                    # words did not move: dead-reckon
+
+    def _pace(self, secs):
+        os88qemu.pace(self._m(), secs)
+
+    def _tool(self, *args):
+        subprocess.run(["python3", "tools/mouse.py", self._sock()]
+                       + list(args), check=True, capture_output=True)
 
     def run(self, *args):
-        subprocess.run(["python3", "tools/mouse.py", SOCK] + list(args),
-                       check=True, capture_output=True)
+        verb, xy = args[0], tuple(int(v) for v in args[1:])
+        if verb == "to" and len(xy) == 2:
+            if self._closed(os88qemu.mouse_to, *xy):
+                return
+        elif verb in ("down", "up") and len(xy) in (0, 2):
+            if not xy or self._closed(os88qemu.mouse_to, *xy):
+                if self._closed(os88qemu.mouse_button,
+                                1 if verb == "down" else 0):
+                    self._pace(0.15)
+                    return
+        elif verb == "click" and len(xy) == 2:
+            if (self._closed(os88qemu.mouse_to, *xy)
+                    and self._closed(os88qemu.mouse_button, 1)):
+                self._pace(0.2)
+                if self._closed(os88qemu.mouse_button, 0):
+                    self._pace(0.2)
+                    return
+        self._tool(*args)
 
     def click(self, x, y):
         self.run("click", str(x), str(y))
-        gsleep(0.4)
+        self._pace(0.4)
 
     def dblclick(self, x, y):
         # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
-        # compare birth ticks in a 9-tick window and two processes are far too
-        # slow. Position, then both presses down one QMP connection. The
-        # spacing INSIDE the pair stays host time: it is well inside the
-        # window either way, and a tick-rounded one would eat into it.
-        self.run("to", str(x), str(y))
-        subprocess.run(["python3", "tools/qmp.py", SOCK,
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
-                        "sleep 0.12",
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
-                        "gsleep 0.4"],
-                       check=True, capture_output=True)
+        # compare birth ticks in a 9-tick window. mouse_dblclick sends the
+        # four edges in one burst, confirmed at the end (os88qemu's reason:
+        # four confirmed round trips on a loaded box outlast the window)
+        if not self._closed(os88qemu.mouse_dblclick, x, y):
+            self._tool("to", str(x), str(y))
+            subprocess.run(["python3", "tools/qmp.py", self._sock(),
+                            "mouse_button 1", "sleep 0.08", "mouse_button 0",
+                            "sleep 0.12",
+                            "mouse_button 1", "sleep 0.08", "mouse_button 0"],
+                           check=True, capture_output=True)
+        self._pace(0.4)
 
 
 def settle(m, card=None):
@@ -321,18 +401,9 @@ KEYS = {".": "dot", "/": "slash", ":": "shift-semicolon", "-": "minus",
 
 
 def type_url(text):
-    cmds = []
-    for ch in text:
-        if ch.isalnum():
-            k = ch.lower() if ch.isalpha() else ch
-            cmds += ["sendkey " + ("shift-" + k if ch.isupper() else k)]
-        elif ch in KEYS:
-            cmds += ["sendkey " + KEYS[ch]]
-        else:
-            sys.exit("ethernet: no sendkey mapping for %r" % ch)
-        cmds += ["gsleep 0.06"]         # the guest's time (tools/qmp.py)
-    subprocess.run(["python3", "tools/qmp.py", SOCK] + cmds,
-                   check=True, capture_output=True)
+    """`text` into the focused field, every keystroke confirmed
+    (os88qemu.type_text - a starved guest lost characters to HMP sendkey)."""
+    os88qemu.type_text(SOCK, text)
 
 
 class Server(threading.Thread):
@@ -348,6 +419,11 @@ class Server(threading.Thread):
         threading.Thread.__init__(self, daemon=True)
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # THE ONE SHARED THING LEFT (docs/plans/SOAK-PARALLEL.md 17.3): the
+        # guest reaches this at 10.0.2.2:PORT and slirp cannot remap it, so
+        # the port is LEASED - another row (or checkout) serving it is waited
+        # for rather than met as `Address already in use`
+        os88qemu.lease_port(PORT)
         self.s.bind(("0.0.0.0", PORT))
         self.s.listen(4)
         self.request = None
@@ -499,12 +575,14 @@ class Server(threading.Thread):
                         n = rng.randint(1, 257)
                         c.sendall(response[pos:pos + n])
                         pos += n
-                        if self.chunk_delay:
-                            time.sleep(self.chunk_delay)
+                        if self.chunk_delay:    # the SERVER's pacing, a
+                            time.sleep(self.chunk_delay)   # host thread: it
+                            # dribbles the bytes, and no assertion is timed
+                            # against it (docs/plans/SOAK-PARALLEL.md 17.9)
                 elif self.chunk_size > 0 and self.chunk_delay > 0:
                     for pos in range(0, len(response), self.chunk_size):
                         c.sendall(response[pos:pos + self.chunk_size])
-                        time.sleep(self.chunk_delay)
+                        time.sleep(self.chunk_delay)    # (the server's: above)
                 else:
                     c.sendall(response)
             except OSError:
@@ -717,20 +795,18 @@ def main():
     a = ap.parse_args()
     fails = []
 
-    # **THE SYSTEM IMAGE IS REBUILT, NOT CHECKED.** QEMU mounts it WRITABLE and
+    # **THE SYSTEM IMAGE IS A COPY, NOT REBUILT.** QEMU mounts it WRITABLE and
     # the OS writes to it: the Setup window's `ETHER.CFG` (SPEC.md 72.7) is
     # exactly the file this test must not find, because a manual address left
     # behind by tests/ethcfg.py would make this one pass while proving nothing
-    # about DHCP. Staleness is not the hazard here - a dirty image is - and
-    # `make` cannot see the difference, because the guest's write leaves the
-    # image NEWER than everything it was built from.
-    if os.path.exists(os88build.at("build/ether360.img")):
-        os.remove("build/ether360.img")
-    r = subprocess.run(["make", "ethertest"], capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("ethernet: make ethertest failed:\n" + r.stdout + r.stderr)
-
-    img, src = "build/brtest360.img", "build/browser.o88"
+    # about DHCP. That used to be answered by deleting build/ether360.img and
+    # running `make ethertest` here - a write to the shared tree under every
+    # row beside it. os88qemu.make_test boots a private COPY instead, so the
+    # built image is never dirtied by anybody and the row declares it in
+    # `wants=` (docs/plans/SOAK-PARALLEL.md 17).
+    os88fixture.need("build/ether360.img", "build/brtest360.img")
+    img, src = (os88build.at("build/brtest360.img"),
+                os88build.at("build/browser.o88"))
     if not os.path.exists(img):
         sys.exit("ethernet: no %s - run `make browsertest`" % img)
     if stale(img, src):
@@ -818,30 +894,14 @@ def main():
     say("http server on %s, %d byte page%s"
         % (URL, len(page), " from " + a.page if a.page else ""))
 
-    # A SURVIVOR KEEPS THE SOCKET, so the new machine cannot bind and every
-    # read below would come from the OLD one - which reads as a change that
-    # did nothing (CLAUDE.md). Kill it by PID out of the pidfile and never
-    # with `pkill -f qemu`, whose pattern matches the calling shell.
-    if os.path.exists("build/qemu.pid"):
-        try:
-            pid = int(open("build/qemu.pid").read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)
-        except (OSError, ValueError):
-            pass
-    for f in ("build/qmp.sock", "build/qemu.pid"):
-        if os.path.exists(f):
-            os.remove(f)
-    # `make test` DAEMONISES the emulator, so it outlives this script
-    # unless somebody kills it - and the somebody is us (os88qemu).
-    os88qemu.own()
-    cmd = ["make", "test", "ETHER=1", "TESTIMG=build/ether360.img",
-           "TESTAPPS=build/brtest360.img"]
+    # A PRIVATE MACHINE (tests/os88qemu.py make_test): its own socket and
+    # pidfile, copies of both floppies, and torn down at exit - so there is
+    # no survivor of an earlier run to kill first, and no `make` in the tree.
+    knobs = ["ETHER=1", "TESTIMG=build/ether360.img",
+             "TESTAPPS=build/brtest360.img"]
     if os.environ.get("ETHDUMP"):       # every frame either way, to a pcap -
-        cmd.append("ETHDUMP=" + os.environ["ETHDUMP"])   # see the Makefile
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("ethernet: make test failed:\n" + r.stdout + r.stderr)
+        knobs.append("ETHDUMP=" + os.environ["ETHDUMP"])   # see the Makefile
+    os88qemu.make_test(*knobs)
 
     m = Qemu()
     snapshots = {}
@@ -852,9 +912,18 @@ def main():
         # loops they replace allowed on an idle box.
         def drvseg():
             return u16(m.read(S("drv_tab") + ETH_ROW * DRVR_SZ + DRVR_SEG, 2))
+        # THE BOOT FIRST (os88qemu.kernel_up): the row's segment is armed
+        # before the image is read and the ceiling is packed at kmain's end,
+        # so one read mid-boot can be a segment the driver has left
+        # - and measured, the segment MOVES once more after the desktop is up
+        # (39040 -> 39296, 0.2 s after [spl_live] fell), so it is taken once
+        # it has held still for a guest second rather than the moment it is
+        # non-zero
+        os88qemu.kernel_up(m, S, secs=120)
         os88qemu.acted(m, lambda: drvseg() != 0, secs=60,
                        what="ETHER.DRV's drv_tab row", poll=0.4)
-        seg = drvseg()
+        seg = os88qemu.quiesce(m, drvseg, secs=0.5, stable=3,
+                               what="ETHER.DRV's segment")
         if not seg:
             m.quit()
             sys.exit("ethernet: ETHER.DRV never attached - no card was found "
@@ -869,6 +938,9 @@ def main():
 
         def dip(name):
             return m.readseg(seg, syms[name], 4)
+
+        def users():                # 72.13.4's mask, 0 on a driver without
+            return dw("eth_users") if "eth_users" in syms else 0
 
         # DRVR_SEG IS ARMED BEFORE THE IMAGE IS EVEN READ (drv_load: the claim
         # goes into the row so that drv_call works during attach), so the poll
@@ -889,61 +961,16 @@ def main():
             fails.append("the station address %s is MULTICAST, so it is not a "
                          "station address" % mac.hex())
 
-        # --- 1b. THE RINGS, AND WHICH RUNG THE LADDER LANDED ON ------------
-        # SPEC.md 72.13.2. The rung was chosen in silence and the field could
-        # only GUESS which one it got - which is how a change that did nothing
-        # and a change that never ran look the same. This machine has a whole
-        # heap free at attach, so the ceiling is the only right answer, and a
-        # floor here is the ladder failing rather than the machine refusing.
-        skseg, rxcap, txcap = dw("sk_seg"), dw("sk_rxcap"), dw("sk_txcap")
-        say("rings at %04X, rx %d tx %d" % (skseg, rxcap, txcap))
-        if not skseg:
-            fails.append("sk_seg is 0: the rings were never claimed, so every "
-                         "socket verb is refusing")
-        if rxcap != SK_RXMAX:
-            fails.append("the receive ring is %d and not %d on a machine with "
-                         "the heap empty at attach: the ladder stepped down "
-                         "for a reason that is not memory (SPEC.md 72.13.2)"
-                         % (rxcap, SK_RXMAX))
-        if txcap != SK_TXMAX:
-            fails.append("the send ring is %d and not %d: the TX size follows "
-                         "the RX rung and these two have come apart"
-                         % (txcap, SK_TXMAX))
-
-        # --- 1c. ...AND THE POOL DECLARED ITSELF MOVABLE (SPEC.md 66.4.1) --
-        # docs/plans/HEAP-UNPIN-PLAN.md 5.1. This is the largest single block
-        # in 2.0's wall - 14KB of driver furniture claimed from the top and
-        # pinned there for the session - and it was pinned by a comment
-        # ("the card's own descriptors point into these rings and it DMAs into
-        # them") that is false for an NE2000: the 8390's DMA engines are
-        # internal, the host side is `in al, dx` / `stosb`, and this driver
-        # hooks no vector at all.
-        #
-        # IT IS READ FROM mem_tab AND NOT FROM THE DRIVER, because that is the
-        # only place a REFUSED declaration shows. mem_movable's fence is
-        # "yours, or not at all", so a wrong owner returns CF=1, writes no
-        # MC_RLOC, and looks identical from inside the driver - which is
-        # exactly how SPEC.md 66.5.6.2's silent refusal went unnoticed for a
-        # release.
-        pool = [c for c in claims(m, S) if c[0] == skseg]
-        if len(pool) != 1:
-            fails.append("no claim in mem_tab starts at sk_seg %04X, so the "
-                         "rings are not where the driver says they are"
-                         % skseg)
-        else:
-            base_, para_, own_, dma_, rloc_, hi_ = pool[0]
-            say("pool claim %04X %dKB owner %04X%s%s"
-                % (base_, para_ // 64, own_,
-                   " MOVABLE" if rloc_ else " PINNED",
-                   " HI" if hi_ else " low"))
-            if not rloc_:
-                fails.append("the socket pool's MC_RLOC is 0: the "
-                             "OSAPI_MEM_MOVABLE call in sk_claim was REFUSED "
-                             "and the driver cannot tell (SPEC.md 66.5.6.2)")
-            if not hi_:
-                fails.append("the socket pool's MC_DMA_HI is 0: it came in "
-                             "through the low door, so SPEC.md 66.4.1's "
-                             "descending pass will never reach it")
+        # --- 1b. NO RINGS UNTIL A PACKAGE ASKS (SPEC.md 72.13.4) ----------
+        # The pool used to be claimed at attach and held for the session; it
+        # is claimed now when a package first speaks to the driver. The card
+        # is up and DHCP is running here with no package open, so the pool
+        # must not exist yet: a driver that went back to claiming at attach
+        # fails HERE, with the session's 17KB named.
+        if dw("sk_seg") or users():
+            fails.append("sk_seg %04X / eth_users %04X with no package open: "
+                         "the rings were claimed at attach and not on demand "
+                         "(SPEC.md 72.13.4)" % (dw("sk_seg"), users()))
 
         os88qemu.acted(m, lambda: db("dhcp_st") == DH_BOUND, secs=24,
                        what="DHCP bound", poll=0.3)     # DHCP_WAIT: 110 ticks
@@ -1047,9 +1074,8 @@ def main():
         bstate = browser_state(m, pseg, browser_image_size)
         source_len = bstate["source_length"]
         if a.target_fixture:
-            deadline = time.time() + 10
-            while len(srv.requests) < 2 and time.time() < deadline:
-                time.sleep(0.1)
+            os88qemu.acted(m, lambda: len(srv.requests) >= 2, secs=10,
+                           what="HTTP request %s" % 2, poll=0.1)
             by_href = dict(zip(bstate["link_hrefs"], bstate["link_targets"]))
             say("target fixture links: %r" % list(zip(bstate["link_hrefs"],
                                                         bstate["link_targets"])))
@@ -1094,9 +1120,8 @@ def main():
                     fails.append("Tab did not reach the child BASE TARGET=_top link")
                 else:
                     m.key("Enter")
-                    deadline = time.time() + 15
-                    while len(srv.requests) < 3 and time.time() < deadline:
-                        time.sleep(0.1)
+                    os88qemu.acted(m, lambda: len(srv.requests) >= 3, secs=15,
+                                   what="HTTP request %s" % 3, poll=0.1)
                     if len(srv.requests) < 3:
                         state = m.readseg(pseg, browser_image_size + BR_NSTATE, 1)[0]
                         msgptr = u16(m.readseg(pseg, browser_image_size + BR_NMSG, 2))
@@ -1107,27 +1132,24 @@ def main():
                         fails.append("child BASE TARGET=_top fetched %r"
                                      % srv.requests[2].split(b"\r\n", 1)[0])
                     else:
-                        deadline = time.time() + 15
-                        while len(srv.requests) < 4 and time.time() < deadline:
-                            time.sleep(0.1)
+                        os88qemu.acted(m, lambda: len(srv.requests) >= 4, secs=15,
+                                       what="HTTP request %s" % 4, poll=0.1)
                         if len(srv.requests) < 4:
                             fails.append("_top frameset did not fetch its child")
                         elif not focus_link(2):
                             fails.append("Tab did not reach child TARGET=_self")
                         else:
                             m.key("Enter")
-                            deadline = time.time() + 15
-                            while len(srv.requests) < 5 and time.time() < deadline:
-                                time.sleep(0.1)
+                            os88qemu.acted(m, lambda: len(srv.requests) >= 5, secs=15,
+                                           what="HTTP request %s" % 5, poll=0.1)
                             if len(srv.requests) < 5:
                                 fails.append("single-frame TARGET=_self did not navigate")
                             elif srv.requests[4].split(b"\r\n", 1)[0] != b"GET /top.htm HTTP/1.0":
                                 fails.append("child TARGET=_self did not reload its frameset: %r"
                                              % srv.requests[4].split(b"\r\n", 1)[0])
                             else:
-                                deadline = time.time() + 15
-                                while len(srv.requests) < 6 and time.time() < deadline:
-                                    time.sleep(0.1)
+                                os88qemu.acted(m, lambda: len(srv.requests) >= 6, secs=15,
+                                               what="HTTP request %s" % 6, poll=0.1)
                                 if (len(srv.requests) < 6
                                         or srv.requests[5].split(b"\r\n", 1)[0]
                                         != b"GET /self.htm HTTP/1.0"):
@@ -1137,9 +1159,8 @@ def main():
                                     fails.append("Tab did not reach the matching named-frame target")
                                 else:
                                     m.key("Enter")
-                                    deadline = time.time() + 15
-                                    while len(srv.requests) < 8 and time.time() < deadline:
-                                        time.sleep(0.1)
+                                    os88qemu.acted(m, lambda: len(srv.requests) >= 8, secs=15,
+                                                   what="HTTP request %s" % 8, poll=0.1)
                                     if len(srv.requests) < 8:
                                         state = m.readseg(pseg, browser_image_size + BR_NSTATE, 1)[0]
                                         msgptr = u16(m.readseg(pseg, browser_image_size + BR_NMSG, 2))
@@ -1155,9 +1176,8 @@ def main():
                                         fails.append("Tab did not reach the unmatched named target")
                                     else:
                                         m.key("Enter")
-                                        deadline = time.time() + 15
-                                        while len(srv.requests) < 9 and time.time() < deadline:
-                                            time.sleep(0.1)
+                                        os88qemu.acted(m, lambda: len(srv.requests) >= 9, secs=15,
+                                                       what="HTTP request %s" % 9, poll=0.1)
                                         if (len(srv.requests) < 9
                                                 or srv.requests[8].split(b"\r\n", 1)[0]
                                                 != b"GET /missing.htm HTTP/1.0"):
@@ -1170,9 +1190,8 @@ def main():
                                                             [r.split(b"\r\n", 1)[0]
                                                              for r in srv.requests]))
         if a.multi_target_fixture:
-            deadline = time.time() + 15
-            while len(srv.requests) < 3 and time.time() < deadline:
-                time.sleep(0.1)
+            os88qemu.acted(m, lambda: len(srv.requests) >= 3, secs=15,
+                           what="HTTP request %s" % 3, poll=0.1)
             request_lines = [r.split(b"\r\n", 1)[0] for r in srv.requests]
             say("multi-target links: %r; frames: %r"
                 % (list(zip(bstate["link_hrefs"], bstate["link_targets"])),
@@ -1205,9 +1224,8 @@ def main():
                     fails.append("Tab did not skip both frame sources to the child link")
                 else:
                     m.key("Enter")
-                    deadline = time.time() + 20
-                    while len(srv.requests) < 6 and time.time() < deadline:
-                        time.sleep(0.1)
+                    os88qemu.acted(m, lambda: len(srv.requests) >= 6, secs=20,
+                                   what="HTTP request %s" % 6, poll=0.1)
                     request_lines = [r.split(b"\r\n", 1)[0] for r in srv.requests]
                     expected = [b"GET /eth.htm HTTP/1.0",
                                 b"GET /left.htm HTTP/1.0",
@@ -1392,14 +1410,12 @@ def main():
                     top = u16(m.readseg(pseg, browser_image_size
                                         + browser_offsets["br_top"], 2))
                     if a.frame_form_base_fixture:
-                        deadline = time.time() + 10
-                        while len(srv.requests) < 2 and time.time() < deadline:
-                            time.sleep(0.1)
+                        os88qemu.acted(m, lambda: len(srv.requests) >= 2, secs=10,
+                                       what="HTTP request %s" % 2, poll=0.1)
                     Mouse().click(cx + col * 8 + 3, cy + (row - top) * 8 + 3)
-                    deadline = time.time() + 15
                     expected_count = 4 if a.frame_form_base_fixture else 2
-                    while len(srv.requests) < expected_count and time.time() < deadline:
-                        time.sleep(0.1)
+                    os88qemu.acted(m, lambda: len(srv.requests) >= expected_count, secs=15,
+                                   what="HTTP request %s" % expected_count, poll=0.1)
                     if len(srv.requests) < expected_count:
                         fails.append("clicking submit did not issue a second request")
                     else:
@@ -1587,9 +1603,8 @@ def main():
                         if submitpos is None or not click_doc(submitpos + 1):
                             fails.append("password form submit button was not clickable")
                         else:
-                            deadline = time.time() + 15
-                            while len(srv.requests) < 2 and time.time() < deadline:
-                                time.sleep(0.1)
+                            os88qemu.acted(m, lambda: len(srv.requests) >= 2, secs=15,
+                                           what="HTTP request %s" % 2, poll=0.1)
                             if len(srv.requests) < 2:
                                 fails.append("password form did not issue its POST")
                             else:
@@ -1685,6 +1700,99 @@ def main():
         if not a.cookie_fixture and dw("eth_novw"):
             fails.append("%d ring overrun(s): the pump is not keeping up"
                          % dw("eth_novw"))
+
+        # --- 4b. THE RINGS, AND WHICH RUNG THE LADDER LANDED ON ------------
+        # SPEC.md 72.13.2. The rung was chosen in silence and the field could
+        # only GUESS which one it got - which is how a change that did nothing
+        # and a change that never ran look the same. The browser asked for the
+        # pool (72.13.4) on a 640KB machine with one package open, so a
+        # quarter of the free heap is far above the ceiling and the ceiling
+        # is the only right answer: a floor here is the ladder failing rather
+        # than the machine refusing. The browser's connection has closed, so
+        # what holds the pool now is the INSTANCE, not a ring.
+        skseg, rxcap, txcap = dw("sk_seg"), dw("sk_rxcap"), dw("sk_txcap")
+        say("rings at %04X, rx %d tx %d" % (skseg, rxcap, txcap))
+        if not skseg:
+            fails.append("sk_seg is 0 with the browser open: the pool was "
+                         "never claimed, or was given back while a package "
+                         "that has spoken to the driver still lives "
+                         "(SPEC.md 72.13.4)")
+        if not users():
+            fails.append("eth_users is 0 with the browser open: its verbs "
+                         "were not counted, so the pool rests on a ring alone")
+        if rxcap != SK_RXMAX:
+            fails.append("the receive ring is %d and not %d on a machine with "
+                         "the heap empty at attach: the ladder stepped down "
+                         "for a reason that is not memory (SPEC.md 72.13.2)"
+                         % (rxcap, SK_RXMAX))
+        if txcap != SK_TXMAX:
+            fails.append("the send ring is %d and not %d: the TX size follows "
+                         "the RX rung and these two have come apart"
+                         % (txcap, SK_TXMAX))
+
+        # --- 1c. ...AND THE POOL DECLARED ITSELF MOVABLE (SPEC.md 66.4.1) --
+        # docs/plans/HEAP-UNPIN-PLAN.md 5.1. This is the largest single block
+        # in 2.0's wall - 14KB of driver furniture claimed from the top and
+        # pinned there for the session - and it was pinned by a comment
+        # ("the card's own descriptors point into these rings and it DMAs into
+        # them") that is false for an NE2000: the 8390's DMA engines are
+        # internal, the host side is `in al, dx` / `stosb`, and this driver
+        # hooks no vector at all.
+        #
+        # IT IS READ FROM mem_tab AND NOT FROM THE DRIVER, because that is the
+        # only place a REFUSED declaration shows. mem_movable's fence is
+        # "yours, or not at all", so a wrong owner returns CF=1, writes no
+        # MC_RLOC, and looks identical from inside the driver - which is
+        # exactly how SPEC.md 66.5.6.2's silent refusal went unnoticed for a
+        # release.
+        pool = [c for c in claims(m, S) if c[0] == skseg]
+        if len(pool) != 1:
+            fails.append("no claim in mem_tab starts at sk_seg %04X, so the "
+                         "rings are not where the driver says they are"
+                         % skseg)
+        else:
+            base_, para_, own_, dma_, rloc_, hi_ = pool[0]
+            say("pool claim %04X %dKB owner %04X%s%s"
+                % (base_, para_ // 64, own_,
+                   " MOVABLE" if rloc_ else " PINNED",
+                   " HI" if hi_ else " low"))
+            if not rloc_:
+                fails.append("the socket pool's MC_RLOC is 0: the "
+                             "OSAPI_MEM_MOVABLE call in sk_claim was REFUSED "
+                             "and the driver cannot tell (SPEC.md 66.5.6.2)")
+            if not hi_:
+                fails.append("the socket pool's MC_DMA_HI is 0: it came in "
+                             "through the low door, so SPEC.md 66.4.1's "
+                             "descending pass will never reach it")
+
+        # --- 4c. ...AND THEY GO BACK WITH THE LAST PACKAGE (72.13.4) --------
+        # The kernel's teardown sends NETV_GONE; the browser was the only
+        # instance that spoke to the driver, so its close must free the pool
+        # - the bit, the word and the mem_tab record all three. A kernel that
+        # stopped sending GONE, or a driver that ignored it, keeps 17KB for
+        # the session and fails here.
+        bx_, by_ = dispcp.win_rect(m, S, bw)[:2]
+        cx_, cy_ = os88geom.close_xy(bx_, by_)
+        for _ in (1, 2):
+            Mouse().click(cx_, cy_)
+            if os88qemu.acted(m, lambda: bw not in dispcp.win_list(m, S,
+                                                                   False),
+                              secs=10, what="the browser to close", poll=0.4):
+                break
+        os88qemu.acted(m, lambda: dw("sk_seg") == 0, secs=10,
+                       what="the pool to be released", poll=0.4)
+        say("after close: sk_seg %04X, eth_users %04X"
+            % (dw("sk_seg"), users()))
+        if bw in dispcp.win_list(m, S, False):
+            fails.append("the browser did not close, so the release below "
+                         "was never asked for")
+        elif dw("sk_seg") or users():
+            fails.append("sk_seg %04X / eth_users %04X after the last network "
+                         "package closed: the pool was not given back "
+                         "(SPEC.md 72.13.4)" % (dw("sk_seg"), users()))
+        elif skseg and [c for c in claims(m, S) if c[0] == skseg]:
+            fails.append("a claim still starts at the old pool %04X: the "
+                         "driver forgot the pool without freeing it" % skseg)
 
         if a.shot:
             settle(m)

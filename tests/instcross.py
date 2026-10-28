@@ -46,7 +46,6 @@ It ERASES the VHD (its own clone, per instance) and builds the knob pair into
 a private tree (tools/os88build.py), shared with tests/knobhd.py's.
 """
 import argparse
-import hashlib
 import os
 import struct
 import sys
@@ -111,9 +110,10 @@ def boot_c(m):
 
 
 def offer(run_dir, vhd, floppy, commit):
-    """Boot C:, put `floppy` in B:, Install keeping files. With `commit`,
-    wait for the MBR the way instkeep does; without it, wait for the drive to
-    stay still - a refusal writes nothing at all."""
+    """Boot C:, put `floppy` in B:, Install keeping files. With `commit` the
+    wizard must end on Done or the apps-disk question; without it, on its
+    Stopped page - a refusal writes nothing at all, and the caller reads the
+    disk to prove it."""
     blob = bytearray(open(vhd, "rb").read())
     blob[400] = 0xA5                    # the MBR's unused tail: an install
     open(vhd, "wb").write(blob)         # that commits rewrites it to 0
@@ -124,17 +124,12 @@ def offer(run_dir, vhd, floppy, commit):
                      "from C:, so nothing after it means anything")
         m.run()                         # advance() left it paused
         M.settle(m)
-        mo, ix, iy = ID.open_installer(m)
+        wz = ID.open_installer(m)
         if commit:
-            ID.run_install(m, mo, ix, iy)
+            ID.run_install(m, wz)
             return
-        bx = ix + ID.HIW_B0X + ID.HIW_BW0 // 2
-        by = iy + ID.HIW_BY + ID.HIW_BH // 2
-        mo.click(bx, by, settle=3.0)    # arms
-        mo.click(bx, by, settle=0)      # goes - and must stop at once
-        M.quiesce(m, lambda: hashlib.sha1(open(vhd, "rb").read(8 << 20))
-                  .digest(), guest=2.0, stable=8, budget=240.0,
-                  what="the drive to stay still")
+        ID.run_install(m, wz, expect=("P_STOP",))   # it must stop at once
+        print("     the wizard stopped: %r" % wz.caption())
 
 
 def main():
@@ -166,8 +161,8 @@ def main():
     # 1. the STOCK build onto the disk, the erasing install
     print("  1. a stock install from the stock floppy")
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=ID.MACHINE, run_dir=run_dir) as m:
-        M.settle(m)
+                  machine=ID.MACHINE, run_dir=run_dir, boot=False) as m:
+        m.run(); M.kernel_up(m)       # a state gate: every act is a click
         ID.install(m)
     vbr, k = vbr_and_kernel(vhd)
     if code(vbr) != code(stock_vbr) or k != stock_k:

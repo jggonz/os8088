@@ -14,7 +14,7 @@
 ; arena's only owner for the length of the bracket and its allocations die
 ; with it, which is XMS's own rule for a program that exits without freeing.
 ;
-; THREE PIECES, each the box's contract for the same door (SPEC.md 96.15):
+; THREE PIECES, each DOS.O88's contract for the same door (SPEC.md 96.15):
 ;
 ;   - the ALLOCATOR: a table of KDX_N = XMS_NH (offset KB, size KB) rows over
 ;     the arena, first fit, 1KB granular. The table is the HOLES' complement,

@@ -867,7 +867,24 @@ static int h_largest_kb = 200;          /* what the heap says it can spare -
                                          * can end at are told apart by which
                                          * of those two bound it */
 unsigned os88_mem_largest_kb(void) { return (unsigned)h_largest_kb; }
-unsigned os88_part_seg(int i) { return i == 0 ? H_ROMSEG : 0; }
+static unsigned h_rom_seg = H_ROMSEG;   /* os88_part_seg's answer: moved by
+                                         * the carve round trip (APPLE2-SPEC
+                                         * 3.1.1, CC_ONMOVE_PARTS) */
+unsigned os88_part_seg(int i) { return i == 0 ? h_rom_seg : 0; }
+/* os88_mem_movable - the record says so; the harness never compacts. What is
+ * checked is WHO declares WHAT, and WHEN (APPLE2-SPEC 3.1.1): the RAM once
+ * os88_main has made every claim, Paste's queue once it is filled */
+static int h_ram_movable;
+static unsigned h_last_movable;
+int os88_mem_movable(unsigned seg, int on)
+{
+    (void)segbase(seg);                 /* fails on a segment nobody holds */
+    if (seg == H_RAMSEG)
+        h_ram_movable = on;
+    if (on)
+        h_last_movable = seg;
+    return 0;
+}
 
 /* THE CARVE'S CLAIM BASE AND ITS SHRINK (APPLE2-SPEC section 1.5). The model
  * has no head slack, so the claim and the part are one segment; what is
@@ -2414,6 +2431,29 @@ int main(void)
     win = os88_main();
     h_in_main = 0;
     if (win == 0) { fail("os88_main refused with the ROM present"); return 1; }
+
+    /* THE RAM IS MOVABLE ONCE THE LAUNCH IS DONE (APPLE2-SPEC 3.1.1), and
+     * os88_onmove keeps the one word that names it and re-reads the ROM's
+     * through os88_part_seg - a round trip, so nothing after this sees it */
+    if (!h_ram_movable)
+        fail("os88_main did not declare the 49KB RAM movable (APPLE2-SPEC 3.1.1)");
+    os88_onmove(H_RAMSEG, 0x7700);
+    if (a2_m.ramseg != 0x7700 || a2_m.romseg != H_ROMSEG)
+        fail("os88_onmove did not follow the RAM claim");
+    os88_onmove(0x7700, H_RAMSEG);
+    if (a2_m.ramseg != H_RAMSEG)
+        fail("os88_onmove did not follow the RAM claim back");
+    /* ...and the CARVE: crt0 calls os88_onmove with the carve's own bases
+     * once op_base is the new one, so a2_m.romseg follows os88_part_seg */
+    h_rom_seg = 0x1800;
+    os88_onmove(0x0F00, 0x1700);
+    if (a2_m.romseg != 0x1800 || a2_m.ramseg != H_RAMSEG)
+        fail("os88_onmove did not re-read the ROM's segment after the parts "
+             "carve moved (CC_ONMOVE_PARTS)");
+    h_rom_seg = H_ROMSEG;
+    os88_onmove(0x1700, 0x0F00);
+    if (a2_m.romseg != H_ROMSEG)
+        fail("os88_onmove did not follow the carve back");
 
     /* --- what os88_main owes, and every one of these is a rule ----------- */
     if (!h_key_armed)
@@ -4314,6 +4354,9 @@ int main(void)
         if (h_claims_out() != n + 1)
             fail("Edit > Paste has no queue claim after the wake that "
                  "serviced it");
+        if (a2_paste_seg == 0 || h_last_movable != a2_paste_seg)
+            fail("Edit > Paste's queue was not declared movable once it was "
+                 "filled (APPLE2-SPEC 3.1.1)");
 
         /* THE MACHINE DRINKS IT AT ITS OWN RATE, which is what $C000 and
          * $C010 are: a peek and a consume (apple2emu's keyboard_read and

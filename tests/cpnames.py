@@ -83,6 +83,10 @@ def find(rows, x0, y0, w, h, want, inverse=False):
     return None
 
 
+def UD(m, **_):             # every read after it is memory or vram (the
+    return os88marty.ui_done(m)     # framebuffer, which ui_done finishes)
+
+
 def main():
     fails = []
     img = "build/os8088-360.img"
@@ -90,23 +94,24 @@ def main():
         import hdoff
         img = hdoff.image(img)
     with os88marty.launch(img, apps="build/apps360.img",
-                          machine=MACHINE) as m:
+                          machine=MACHINE, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
         os88marty.no_saver(m)
-        os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
         seg = int.from_bytes(m.read(S("font_seg"), 2), "little")
         off = int.from_bytes(m.read(S("font_base"), 2), "little")
         tab = m.read(seg * 16 + off, FONT_N * 8)   # where the renderers read
-        dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
-        os88marty.settle(m)
+        dispcp.open_panel(m, mo, S, UD, page=None)
+        os88marty.ui_done(m)
         hide = m.read(S("cp_hide"), 1)[0]
         shown = [r for r in range(len(NAMES)) if not hide & (1 << r)]
         print("  static records shown: %s" % [NAMES[r] for r in shown])
         lettered = set()
         for rec in shown:
             name = NAMES[rec]
-            dispcp.open_panel(m, mo, S, os88marty.settle, page=rec)
-            os88marty.settle(m)
+            dispcp.open_panel(m, mo, S, UD, page=rec)
+            os88marty.ui_done(m)
             wx, wy = dispcp._cp_win(m, S)
             cx, cy = wx + 1, wy + TITLE_H + 1
             _w, _h, rows = m.vram()
@@ -143,11 +148,11 @@ def main():
             # driver's own segment into cp_sbuf - and it is a different stager
             # from a static row's. Tick the hard disk in on the Drivers page
             # (hddcp.py's opening) and its page's row must letter.
-            dispcp.open_panel(m, mo, S, os88marty.settle, page=CP_IDRV)
+            dispcp.open_panel(m, mo, S, UD, page=CP_IDRV)
             wx, wy = dispcp._cp_win(m, S)
             mo.click(wx + 1 + CP_RX + 40, wy + TITLE_H + 1 + CP_DBY1
                      + HDD_ROW * CP_DROWH + CP_DROWH // 2)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             nst = m.read(S("cp_nst"), 1)[0]
             _w, _h, rows = m.vram()
             cx, cy = wx + 1, wy + TITLE_H + 1

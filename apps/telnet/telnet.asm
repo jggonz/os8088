@@ -471,7 +471,13 @@ te_paint:
 ; arrays are the caller's, so a dynamic caption needs no special case).
 te_btlbl:  dw te_s_conn
 te_btflg:  dw OS88UI_FILL
-    OS88UI_BTNREC te_btrec, te_btn, te_btlbl, te_btflg, 1
+    OS88UI_BTNREC te_btrec, te_btn, te_btlbl, te_btflg, 1, te_layout
+                                    ; ...and te_layout is its PLACE proc
+                                    ; (SPEC.md 20.5.1.3.5): a dragged window
+                                    ; is replayed and never painted, and
+                                    ; te_layout lays te_btn out from the live
+                                    ; content box, draws nothing and keeps
+                                    ; every register - the contract exactly
 
 ; --- te_button - Connect, or Close while a session is up ---------------------
 te_button:
@@ -2049,7 +2055,7 @@ te_tpl:
                                 ; the same buffer onto real text VRAM, which
                                 ; tetxt.inc's bracket drives
 %include "os88con.inc"          ; THE 80x25 CONSOLE (SPEC.md 70.8), which was
-                                ; this package's until SPEC.md 96.32's DOS box
+                                ; this package's until SPEC.md 96.32's DOS
                                 ; wanted the same screen. It carries the CP437
                                 ; face and its own bss, so [te_win] and the
                                 ; rest of ours chain off CON_BSS below

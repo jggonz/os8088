@@ -7,7 +7,7 @@ times over, each in its own window.
 ## Where it is
 
 - **The system disk** carries the core programs, so a machine with one
-  floppy drive still has something to work with: the DOS box, Font Viewer,
+  floppy drive still has something to work with: DOS, Font Viewer,
   Note Pad and Paint, plus the Browser, Telnet and the Video Player on the
   larger sizes.
 - **The software disk** carries most of the rest: Artful Type, Calculator,

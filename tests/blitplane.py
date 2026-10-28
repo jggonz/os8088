@@ -101,9 +101,19 @@ def shots(image, apps, machine, tree=None):
     S = os88sym.linear
     kbase = os88sym.KERNEL_SEG << 4
     out = []
+    # EVERY WAIT BUT THE ONE BEFORE A CAPTURE IS `ui_done` (`uset`): the
+    # Disk window, Paint's load and the raises are handled on the UI task and
+    # confirmed by the guest reads after them. Before an `fbuf` - the rendered
+    # glass, which lags the framebuffer by up to a frame - `still`.
+    def uset(mm, **k):
+        return os88marty.ui_done(mm)
+
+    def still():
+        os88marty.ui_done(m, "the repaint")
+        os88marty.guest_sleep(m, 0.1)
     with os88marty.launch(image, apps=apps, machine=machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         # SPEC.md 79's SAVER IS LEFT ON, DELIBERATELY. It came up in the
         # middle of this gate once and broke it twice over - it ANIMATES, so
         # the settles waited out their whole limit, and it BLITS, so the
@@ -119,19 +129,18 @@ def shots(image, apps, machine, tree=None):
         # and it is under the idle period on purpose; leaving the saver armed
         # is what keeps this gate able to notice if that ever stops being true.
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, uset, "B")
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "MEDIA")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, uset, bx, by, "MEDIA")
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         rx, ry = dispcp.row_xy(bx, by,
-                               dispcp.scroll_to(m, mo, S, os88marty.settle,
+                               dispcp.scroll_to(m, mo, S, uset,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
                                                               gifname())))
         mo.to(rx, ry)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         # --- open it, and DO NOT measure this repaint (SPEC.md 42.13.1) ------
         # Paint's canvas is FOUR PLANES now, and a planar canvas repaints
@@ -160,7 +169,7 @@ def shots(image, apps, machine, tree=None):
             pass
         os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
                           stable=3, what="the picture to load")
-        os88marty.settle(m)
+        os88marty.ui_done(m, "the picture's first paint")
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         px, py, pwid, _ = dispcp.win_rect(m, S, pw)
         dx, dy = dispcp.win_rect(m, S, disk)[:2]
@@ -179,7 +188,7 @@ def shots(image, apps, machine, tree=None):
                                 poll=0.2, limit=20)
             except os88marty.MartyError:
                 pass
-            os88marty.settle(m)
+            os88marty.ui_done(m, "the Disk window's repaint")
             cyc, g = _bracket(          # ...and in front
                 m, kbase,
                 lambda: mo.click(x + pwid // 2, py + TITLE_H // 2))
@@ -191,7 +200,7 @@ def shots(image, apps, machine, tree=None):
             # arrow pixels the other did not, in a lane four wide, and the
             # row reported the DECODER as drawing them.
             mo.to(*PARK)
-            os88marty.settle(m)
+            still()
             return cyc, g, m.fbuf(card=0)[2]
 
         # --- one pixel over, which is the rcr pass AND the refusal ----------

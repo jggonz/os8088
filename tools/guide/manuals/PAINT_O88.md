@@ -148,8 +148,10 @@ not available in full screen; Paint says **Leave Full Screen first**.
 The kind of file is set by the item you choose, and Paint changes the
 name's ending to match. **Save Gif** on `PICTURE.BMP` writes
 `PICTURE.GIF`. A picture that has never been saved asks for a name the
-first time, starting from `PICTURE.BMP` or `PICTURE.GIF`. Paint shows **Saved**
-when the file is written, and **Saving...** while it works.
+first time, starting from `PICTURE.BMP` or `PICTURE.GIF`. A GIF says
+**Encoding GIF** while Paint packs the picture, and the bar at the top of the
+screen then shows the file being written. Paint shows **Saved** when it is
+done.
 
 ## The Edit menu
 

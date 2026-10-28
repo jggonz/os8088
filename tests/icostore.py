@@ -75,7 +75,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make` builds it" % p)
 
-    with os88ui.boot(SYS, apps=APPS) as ui:
+    with os88ui.boot(SYS, apps=APPS, quick=True) as ui:
         m = ui.m
         kseg, low = V("KERNEL_SEG"), V("LOW_SEG")
 

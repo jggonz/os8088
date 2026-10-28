@@ -252,7 +252,7 @@ ALIAS = [
     ("apps/video/video.asm", "VP_BNSPAN", "tools/os88vid.py", "BENCH_SPAN"),
     ("apps/video/video.asm", "R_BENCH", "tools/os88vid.py", "R_BENCH"),
     ("apps/video/video.asm", "V88_BENCHL", "tools/os88vid.py", "H_BENCHL"),
-    # SPEC.md 96.13.1. The DOS box has no slot to ask the kernel what day it
+    # SPEC.md 96.13.1. DOS has no slot to ask the kernel what day it
     # is - there is no date or time cell in the SDK at all - so on a machine
     # with no clock chip it answers the kernel's OWN fallback, spelled again
     # in the package. A drift does not fail a build: it stamps a file with one

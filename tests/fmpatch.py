@@ -98,7 +98,7 @@ def click_cl(ui, win):
 def main():
     off = offsets()
     mach = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla"
-    with os88ui.boot("build/os8088-360.img", apps=disk(), machine=mach) as ui:
+    with os88ui.boot("build/os8088-360.img", apps=disk(), machine=mach, quick=True) as ui:
         m = ui.m
         ui.path("B:/FMTEST.O88")
         win = ui.window("FM Test")

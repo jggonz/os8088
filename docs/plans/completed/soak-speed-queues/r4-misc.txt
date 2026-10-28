@@ -1,0 +1,6 @@
+# ROUND 4: qemu9 (build/qemu9, PATH needed), dosbox, nasm3 (build/nasm3) rows. row  declared_secs  script  needs
+DONE nasm3	165	tests/unit/t_nasm3.py	nasm3
+DONE hmahiber	45	tests/hmahiber.py	qemu,qemu9,nasm
+DONE p2hiber	45	tests/p2hiber.py	qemu,qemu9,nasm
+DONE hmadosret	45	tests/hmadosret.py	qemu,qemu9,nasm
+DONE czdos	11	tests/czdos.py	dosbox

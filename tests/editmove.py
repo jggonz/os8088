@@ -90,7 +90,8 @@ APPS = {
     # finds nothing on exactly the runs that worked
     "frotz":   dict(title="ZOPS", src="apps/frotz/frotz.asm",
                     incs=("apps/", "apps/frotz/"),
-                    words=["zf_sseg", "zf_stkseg"],
+                    words=["zf_sseg", "zf_stkseg", "zw_sbseg",
+                           "zi_savseg", "zi_scrseg"],
                     extra=["zf_pcseg", "zf_sdelta", "zi_undoseg",
                            "zf_err", "zf_dead", "zx_badop"],
                     img="build/zmove360.img", rows=PKG_Z),
@@ -270,7 +271,8 @@ def main():
                           apps=img,
                           machine=a.machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")

@@ -321,19 +321,20 @@ cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick
 ; the dock, the bar and its own close box.
 ; -----------------------------------------------------------------------------
 cp_kinit:
-    push ax
 %ifdef KERN_BIG
-    mov byte [cp_down], 0
+    push ax
     xor ax, ax
+    mov [cp_down], al
     call COLD_SEG:os88ui_arm_f
-%endif
-    mov ax, cpf_cp_onup         ; a COLD offset (SPEC.md 2.6.3)
-    call wm_onmouseup           ; .text calling .text: apps.inc's kind table
-%ifdef KERN_BIG                 ; is resident and so is this proc
-    mov ax, cpf_cp_ondrag
-    call wm_ondrag
-%endif
     pop ax
+%endif
+    mov word [bx+W_ONMOUSEUP], cpf_cp_onup ; a COLD offset (SPEC.md 2.6.3):
+                                ; wm_onmouseup's store, written here - the
+                                ; routine is kern_mega's alone since cell
+                                ; 0x0196 became it (kernel size pass 14).
+%ifdef KERN_BIG                 ; apps.inc's kind table is resident and so
+    mov word [bx+W_ONDRAG], cpf_cp_ondrag ; is this proc. ...and
+%endif                          ; wm_ondrag's store, cell 0x0334's own now
     ret
 cp_ttl:     db 'Control Panel', 0
 cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
@@ -965,11 +966,13 @@ CPE_ONKEY   equ CPE_B + 6       ; (SPEC.md 31.9.2) are kern_big's alone, so
 %ifdef DOCK_OPT                 ; CP_NENT differs between the builds. Which is
 CPE_DOCK_GEOM equ CPE_B + 7     ; safe because MOD_H_NENT is IN the header and
 CPE_DRVUP   equ CPE_B + 8       ; mod_check compares it against the file it
-CP_NENT     equ CPE_B + 10      ; just read, so a CTRL.DRV with the wrong count
-%else                           ; is refused rather than dispatched into - and
-CPE_DRVUP   equ CPE_B + 7       ; MOD_H_STAMP rejects one from another build.
-CP_NENT     equ CPE_B + 9       ; CPE_DRVUP is OSAPI_DRV_USE's (SPEC.md 117.3),
-%endif                          ; kern_big's alone: kern_small has no drivers
+CPE_DLG     equ CPE_B + 9       ; just read, so a CTRL.DRV with the wrong count
+CP_NENT     equ CPE_B + 11      ; is refused rather than dispatched into - and
+%else                           ; MOD_H_STAMP rejects one from another build.
+CPE_DRVUP   equ CPE_B + 7       ; CPE_DRVUP is OSAPI_DRV_USE's (SPEC.md 117.3)
+CPE_DLG     equ CPE_B + 8       ; and CPE_DLG OSAPI_DRV_DLG's (51.10), both
+CP_NENT     equ CPE_B + 10      ; kern_big's alone: kern_small has no drivers
+%endif
 %else
 %ifdef DOCK_OPT
 CPE_DOCK_GEOM equ CPE_B + 5
@@ -1015,6 +1018,7 @@ modc_hdr:
 %endif
 %ifdef KERN_BIG
     dw modc_e_drvup             ; CPE_DRVUP: OSAPI_DRV_USE's load (117.3)
+    dw modc_e_dlg               ; CPE_DLG: OSAPI_DRV_DLG's body (51.10)
 %endif
     dw modc_e_shutdown          ; CPE_SHUTDOWN: confirmation and terminal splash
 section .modu                   ; ...and the PANEL from here on: the stubs below
@@ -1099,6 +1103,69 @@ modc_e_drvup:
     retf
 
 ; -----------------------------------------------------------------------------
+; modc_e_dlg - CPE_DLG: OSAPI_DRV_DLG's body (SPEC.md 51.10), entered FAR
+; in/out: driver.inc's osapi_drv_dlg_x header - the cell's whole contract
+;
+; **IT LIVES HERE BECAUSE IT CAN ONLY SUCCEED WHILE A PANEL IS OPEN**: it
+; borrows the Control Panel's window, so its own `cp_live` test refuses on
+; any machine with no panel up - and a panel up is this image loaded. The
+; resident cell is `jmp far [CPFP + CPE_DLG*4]`, so with no image the slot is
+; mod_gone's CF = 1, registers kept, which is the answer the body gave there
+; (and it writes nothing at all on that path, where the body staged the mode,
+; proc, segment and name before cp_live refused - nothing reads them unarmed).
+; With the image loaded and no panel up, cp_live refuses exactly as before.
+; Nothing new asks for the system disk: the slot never loads the image. Its
+; completion, drv_dlg_done_x, stays resident - a kernel window's callback.
+; (kernel size pass 14: 106 bytes of `.cold`.)
+; -----------------------------------------------------------------------------
+modc_e_dlg:
+    call kentm_bp               ; KENT: push ax..bp (kretf_bp below)
+    cmp word [fdlg_win], 0      ; ...ALREADY UP, the header's third refusal,
+    jne .no                     ; asked before anything is written
+    mov ah, al                  ; the MODE rides in AH across the fences: AL is
+    mov bx, es                  ; what drv_row_ix_of answers in
+    CPXC drv_pub_seg            ; a published driver's, and nobody else's
+    jc .no
+    CPXC drv_row_ix_of
+    jc .no
+    call cp_drvrow              ; BX = the row this segment is running
+    mov [drv_dlg_mode], ah      ; NOTHING IS WRITTEN UNTIL BOTH FENCES PASS
+    mov [drv_dlg_cb], di        ; (SPEC.md 51.10)
+    mov ax, [bx+DRVR_SEG]
+    mov [drv_dlg_seg], ax
+    mov di, drv_dlg_name        ; the default name is the CALLER'S data, staged
+    mov byte [di], 0            ; the way every N cell stages a file name -
+    or si, si                   ; fdlg_setname reads through DS
+    jz .named
+    mov cx, 12
+    CPXC fm_ncpye               ; ES:SI (the driver's) -> DS:DI (ours), NUL
+.named:
+    mov [drv_dlg_row], bx       ; ARMED LAST: until this store there is nothing
+                                ; for a commit to dispatch into
+    CPXC cp_live                ; the panel: our page is inside its window
+    jc .disarm
+    mov bx, [di+I_WIN]
+    or bx, bx
+    jz .disarm
+    mov si, drv_dlg_name
+    cmp byte [si], 0
+    jne .go
+    xor si, si                  ; no default: SPEC.md 38.10's remembered name,
+.go:                            ; not a kernel address holding an empty string
+    mov di, drv_dlg_done_x      ; the COLD body: a kernel window's callback
+                                ; is dispatched into `.cold` (SPEC.md 2.6.3)
+    mov al, [drv_dlg_mode]
+    CPXC fdlg_open_x
+    jc .disarm                  ; ...and not taken is CF = 0, the answer
+.out:
+    jmp kretf_bp
+.disarm:
+    mov word [drv_dlg_row], 0
+.no:
+    stc
+    jmp short .out
+
+; -----------------------------------------------------------------------------
 ; modc_e_onkey - CPE_ONKEY: the Control Panel's W_ONKEY (SPEC.md 31.9.2)
 ; in:  AL = ASCII, AH = scan code, SI = the window; the gfx lock is HELD
 ; out: nothing; every register preserved
@@ -1137,10 +1204,22 @@ modc_e_onkey:
 %ifdef DOCK_OPT
 modc_e_dock_geom: call cpd_geom
     retf
-DOCK_GEOM cpd
+DOCK_GEOM cpd, KSWK
 
 %endif
 section .cold                   ; ...and the two that stay resident
+
+; CP_LIVE - CF = 0 a Control Panel is open, DI = its record; spends AL. The
+; question is driver.inc's cp_live on the build that has one (kernel size
+; pass 14), and the seven bytes it is everywhere else
+%macro CP_LIVE 0
+%ifdef OS88_DRIVERS
+    call cp_live
+%else
+    mov al, KIND_CTRL
+    call KERNEL_SEG:cw_inst_find_kind
+%endif
+%endmacro
 
 ; -----------------------------------------------------------------------------
 ; cp_tick_due_x - is a live Date/Time page showing?
@@ -1157,8 +1236,7 @@ cp_tick_due_x:
     mov al, [cp_sel]
     xor al, CP_ITIME            ; ...and `xor` leaves CF = 0, so every "no"
     jnz .out                    ; below can go straight to .out
-    mov al, KIND_CTRL
-    call KERNEL_SEG:cw_inst_find_kind         ; CF = 1: no live Control Panel
+    CP_LIVE                     ; CF = 1: no live Control Panel
     cmc
     jnc .out
     mov bx, [di+I_WIN]
@@ -2720,7 +2798,11 @@ cp_bemit:
     mov byte [cp_skip], 0
     jne .out
 %endif
+%ifdef KERN_SMALL
+    call os88ui_kbtn            ; this image's own (fdlg.inc, OS88UI_KBTNIMG)
+%else
     call COLD_SEG:os88ui_btn_f
+%endif
 %ifdef KERN_BIG
 .out:
 %endif
@@ -2753,6 +2835,9 @@ cp_krect:
 ; KGO_PAIR, which says how; the boot blob carries the same pair as bvs_kgo /
 ; bvs_cgo for its copies of the adapter switch)
 KGO_PAIR cp
+%ifdef KERN_BIG
+EXF_SYNC cxf, CPXC              ; the arrangement row's EXTD.DRV sync (extmod.inc)
+%endif
 
 cp_wfill:   mov byte [gfx_color], CWHITE ; ...a fill in the GROUND, which is
                                     ; what six sites set the pen for first
@@ -2760,7 +2845,11 @@ cp_fill:    call KERNEL_SEG:cw_gfx_fill
             ret
 cp_penlive: CPXK gfx_pen_live
             ret
-cp_drvrow:  call COLD_SEG:drvf_drv_row
+%ifdef OS88_DRIVERS
+cp_drvrow:  CPXC drv_row_x      ; (the resident far shim went, size pass 14)
+%else
+cp_drvrow:  call COLD_SEG:drvf_drv_row  ; kern_small: driver.inc's refusing stub
+%endif
             ret
 cp_clssvc:  call COLD_SEG:drvf_drv_cls_svc
             ret
@@ -2957,14 +3046,14 @@ cp_thmv_open:
                                 ; cp_sbuf carries it for the length of the
                                 ; call. Nothing else reads thmv_row's FILE or
                                 ; TITLE - it is past DRV_MAX, so no walk meets it
-    call COLD_SEG:drvf_drv_load_at  ; CF = 0 immediately once it is already live
+    CPXC drv_load_at  ; CF = 0 immediately once it is already live
     jc .no
     push es
     mov es, [bx+DRVR_SEG]
     cmp word [es:10], THMV_ABI_VER
     pop es
     je .ok
-    call COLD_SEG:drvf_drv_release  ; never call an incompatible private overlay
+    CPXC drv_release  ; never call an incompatible private overlay
     mov byte [bx+DRVR_ERR], DRVE_BAD
     jmp short .no
 .ok:
@@ -2980,7 +3069,7 @@ cp_thmv_open:
     mov bp, [bx+DRVR_ENT]       ; the panel close's own two steps (the tail
     mov al, THMV_CLOSE          ; of drv_cp_closed_x), through the two far
     call COLD_SEG:drvf_drv_call ; entries. The row and the entry are loaded
-    call COLD_SEG:drvf_drv_release  ; again: a refusing driver may answer in
+    CPXC drv_release  ; again: a refusing driver may answer in
 .no:                            ; BX, and drv_call spends BP
     stc
 .out:
@@ -4459,13 +4548,13 @@ cp_vid_click:
     ; close (SPEC.md 31.8). NOTHING IS REDRAWN, for the Activate button's
     ; reason one screen up: vid_disp_init moves the desktop and re-fits every
     ; window, so DI/BP describe a rectangle that may no longer exist.
-    call COLD_SEG:exf_sync      ; Extend: EXTD.DRV FIRST (SPEC.md 39.19.6)
+    call cxf_sync               ; Extend: EXTD.DRV FIRST (SPEC.md 39.19.6)
     jc .mref                    ; refused, and [vid_dmode] is Single again
     call vid_disp_init           ; (vid_disp_relayout's three, written out:
     call COLD_SEG:desk_rowcalc_x ; it was a resident far body this image
     call wm_refit                ; alone called - kernel size pass 13; the
                                  ; first and last are this image's own now)
-    call COLD_SEG:exf_sync      ; Single: the image goes AFTER the collapse
+    call cxf_sync               ; Single: the image goes AFTER the collapse
     call cp_repost              ; ...and SAY SO once (SPEC.md 13.13)
 %endif
     jmp .done                   ; (near on kern_big: .fc's 0/1 store, 39.28)
@@ -6193,7 +6282,9 @@ cp_drv_paint:
     call cp_drvrow              ; BX = the drv_tab row
     cmp word [bx+DRVR_FILE], 0
     je .next                        ; an empty table row draws nothing
-    mov si, [bx+DRVR_TITLE]
+    mov si, [bx+DRVR_TITLE]         ; an offset into DRV_TITLES, in THIS
+    add si, drvt_base               ; image (kernel size pass 14) - staged,
+    call cp_stage                   ; as any image string font_run is handed
     pop ax
     push ax                         ; AX = the row index again
     push bx
@@ -6375,9 +6466,10 @@ cp_drv_mempar:
     cmp word [bx+DRVR_FILE], 0
     je .next                    ; an empty row names nothing and costs nothing
     mov si, [bx+DRVR_TITLE]
+    add si, drvt_base           ; (DRV_TITLES, this image's: `cs:`)
     xor cx, cx
 .name:
-    cmp byte [si], 0            ; the font is a fixed 8x8 (font_width), so a
+    cmp byte [cs:si], 0         ; the font is a fixed 8x8 (font_width), so a
     je .named                   ; length IS a width and there is no thunk to
     inc si                      ; reach for
     inc cx
@@ -7020,7 +7112,7 @@ cp_drv_click:
     call cp_repost              ; ...and the whole screen is a new shape
 .novx:
 %endif
-    call COLD_SEG:drvf_drv_unload             ; it is up: take it down...
+    CPXC drv_unload_x             ; it is up: take it down...
     jmp short .off              ; ...and nothing failed - it was turned off
 .load:
     cmp byte [bx+DRVR_WANT], 0  ; unloaded but WANTED: the boot tried and
@@ -7263,8 +7355,9 @@ CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
 ; The list names. Each is ALSO its page's heading, which cp_item_paint draws
 ; before it dispatches (SPEC.md 31.9) - so one string, one reader, and it
 ; lives in the image beside its only reader. 'Sound' is here a SECOND time:
-; driver.inc's drv_t_sound is the resident copy drv_tab names its row by, and
-; a string in an image may be copied rather than shared (SPEC.md 2.8.6).
+; driver.inc's DRV_TITLES carries the copy drv_tab's row names (drvt_sound,
+; in this same image since kernel size pass 14), and a string in an image may
+; be copied rather than shared (SPEC.md 2.8.6).
 CPS cp_s_sched, 'Scheduler'
 CPS cp_s_time,  'Date/Time'
 %ifdef OS88_DRIVERS
@@ -7565,12 +7658,17 @@ cpf_shutdown:
     jc .out
     call far [CPFP + CPE_SHUTDOWN*4]
     push di
+%ifdef OS88_DRIVERS
+    call cp_unpin               ; cancellation must not pin the image, unless
+%else                           ; an open panel still owns it (driver.inc)
     mov al, KIND_CTRL
     call KERNEL_SEG:cw_inst_find_kind
-    pop di
-    jnc .out                   ; an open panel still owns CTRL.DRV
+    jnc .kept                  ; an open panel still owns CTRL.DRV
     mov al, MOD_CTRL
     call mod_drop              ; cancellation must not pin the image
+.kept:
+%endif
+    pop di
 .out:
     retf
 
@@ -7612,24 +7710,17 @@ cpf_cp_onkey:
 ; module is gone the arm is stale and there is nothing to fire. Loading the
 ; Control Panel off a floppy to answer a mouse movement would be absurd, and
 ; mod_need on the drag path would do it eighteen times a second.
+;
+; NOR DO THEY ASK mod_live, which is cpf_cp_onkey's shape and the same answer:
+; with no image the slot rests on mod_gone - CF = 1, every register kept -
+; which is exactly what `push ax / mov al, MOD_CTRL / call mod_live / pop ax /
+; jc` returned on that path (kernel size pass 14, -10 a thunk).
 cpf_cp_onup:
-    push ax
-    mov al, MOD_CTRL
-    call mod_live               ; already resident? (no disk, no claim)
-    pop ax
-    jc .u_gone
     call far [CPFP + CPE_ONUP*4]
-.u_gone:
     ret
 %ifdef KERN_BIG
 cpf_cp_ondrag:
-    push ax
-    mov al, MOD_CTRL
-    call mod_live
-    pop ax
-    jc .d_gone
     call far [CPFP + CPE_ONDRAG*4]
-.d_gone:
     ret
 %endif
 

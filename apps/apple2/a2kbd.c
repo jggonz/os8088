@@ -538,6 +538,10 @@ static int ovl_a2_clip_service(void)
             a2_paste_stop();                /* ...which frees the claim */
             return 1;
         }
+        /* ...and the queue may MOVE now it is filled (APPLE2-SPEC 3.1.1):
+         * os88_onmove keeps a2_paste_seg, the one word that names it, and
+         * a2_paste_take peeks through that word at each use */
+        os88_mem_movable(seg, 1);
         a2_paste_i = 0;
         a2_paste_n = got;                   /* WHAT FITS, which is the read's
                                              * answer and not the clipboard's

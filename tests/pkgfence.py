@@ -99,7 +99,10 @@ def name_of(v):
     return NAMES[v] if v < len(NAMES) else "?%d" % v
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)          # every read is ld_status / the listing
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
@@ -123,7 +126,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         # ...and it must REFUSE: this row is the size fence (SPEC.md 19.1).
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, fname,
                           expect="refusal")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         got = m.read(S("ld_status"), 1)[0]
         say("%-13s image %#06x + bss %#06x = %#07x, wraps to %#06x -> %s "
             "(want LD_EBIG)" % (fname, img, bss, img + bss, wrapped,

@@ -171,7 +171,7 @@ def main():
                            (os.path.join(_R, "apps") + "/",))
     with os88ui.boot(os.path.join(_R, "build/os8088-360.img"),
                      apps=os.path.join(_R, "build/apps360.img"),
-                     machine="os8088_5150_herc_gla") as ui:
+                     machine="os8088_5150_herc_gla", quick=True) as ui:
         m = ui.m
         w, p = launch(ui, syms, image)
         first = table(p)

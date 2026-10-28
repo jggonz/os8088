@@ -56,16 +56,17 @@ NPG = int(sys.argv[sys.argv.index("--pages") + 1]) \
     if "--pages" in sys.argv else 2
 SW, SH = (320, 200) if NPG > 2 else (640, 400)
 with tempfile.TemporaryDirectory(dir=ROOT + "/build") as tmp:
-    v88 = vidpage.fclip(tmp, vid.LAY_LIN80, NPG, vid.SCR_320X200)[0] \
+    made = vidpage.fclip(tmp, vid.LAY_LIN80, NPG, vid.SCR_320X200) \
         if "--fpage" in sys.argv else \
-        vidpage.mclip(tmp, vid.LAY_LIN80, NPG, vid.SCR_320X200)[0] \
-        if NPG > 2 else vidpage.clip(tmp, vid.LAY_LIN80)[0]
+        vidpage.mclip(tmp, vid.LAY_LIN80, NPG, vid.SCR_320X200) \
+        if NPG > 2 else vidpage.clip(tmp, vid.LAY_LIN80)
+    v88 = made[0]
     disk = os.path.join(tmp, "t.img")
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk, "--size",
                     "360", os88build.at("build/video.o88"), v88], check=True,
                    capture_output=True)
     with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                     machine="os8088_xt_vga") as ui:
+                     machine="os8088_xt_vga", quick=True) as ui:
         m = ui.m
         w = ui.path("B:/PAGE.V88")
         rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)
@@ -73,7 +74,7 @@ with tempfile.TemporaryDirectory(dir=ROOT + "/build") as tmp:
         rb = lambda n: m.read(base + syms[n], 1)[0]
         rw = lambda n: u16(m.read(base + syms[n], 2))
         ww = lambda n, v: m.write(base + syms[n], struct.pack("<H", v))
-        until = lambda c, w_, g=90.0: os88marty.until(m, c, w_, poll=0.3, limit=600.0, guest=g)
+        until = lambda c, w_, g=90.0: os88marty.until(m, c, w_, poll=0.05, limit=600.0, guest=g)
         until(lambda mm: rb("vp_loaded") == 1, "header", 30.0)
         ww("vp_stopat", 18)
         m.write(base + syms["vp_nowin"], b"\1")
@@ -124,8 +125,7 @@ with tempfile.TemporaryDirectory(dir=ROOT + "/build") as tmp:
                                                               len(looks),
                                                               len(pages)))
         if "--fpage" in sys.argv:
-            cvs = vidpage.fclip(tmp, vid.LAY_LIN80, NPG, vid.SCR_320X200,
-                                name="REF.V88")[1]
+            cvs = made[1]           # (the clip's own canvases)
             W = 224
 
             def keep(mm):

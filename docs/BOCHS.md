@@ -71,11 +71,12 @@ python3 tools/os88bochs.py stop                  # end every Bochs on the box
 | `--cd ISO` | an ATAPI CD-ROM, the secondary master at 170h, holding an ISO 9660 image (CDROM.DRV, SPEC.md 119). **Data only**: Bochs 2.7 answers PLAY AUDIO and a SubQ READ SUB-CHANNEL "not implemented", so `build/megacdsim.img`'s `-DCDSIM_AUDIO` driver is what gives CDRack a TOC here, and 86Box's `vm/286-mega-cdrom` is where a disc plays (KERN-MEGA-PLAN 14.68). `--cfg 0x101` wants SOUND.DRV and CDROM.DRV |
 
 `boot` returns once Bochs is up and leaves it running; the machine outlives the
-command. The desktop takes about **80 seconds**. Wait for it by condition, not
-by a fixed sleep:
+command. The desktop is up about **6 seconds** after reset (it was quoted at
+80 here). Wait for it by condition, not by a fixed sleep - from a script,
+`Box.up()` (below); by hand:
 
 ```
-until grep -aq "kern_mega: protected mode" build/bochs/e9.out; do sleep 3; done; sleep 15
+until grep -aq "kern_mega: protected mode" build/bochs/e9.out; do sleep 1; done
 ```
 
 ## Driving it: tools/os88bochsui.py
@@ -108,6 +109,47 @@ Coordinates on the 640x480 desktop that every recipe below uses:
 
 Take a `shot` and read it before trusting a coordinate in a window you have not
 opened before.
+
+## Waiting on the guest: `os88bochs.Box` from a script
+
+The debugger is cheap: a SIGINT stop, an `xp`, and `c` is **~20 ms** when each
+step is ended on the debugger's NEXT PROMPT rather than on a clock
+(`os88bochs.session`; the module's `dbg` is it too). So a script reads the
+kernel instead of sleeping:
+
+| call | what it waits on / answers |
+|---|---|
+| `box.sym(name)` | a kernel label's LINEAR address, off the BOOTED tree's `megak/kernel.map` (`.text`/`.bss` at KERNEL_SEG, `.lowbss` at LOW_SEG, `.cold` at COLD_SEG) |
+| `box.read(addr_or_label, n)`, `box.reads([(a, n), ...])` | bytes; `reads` is one stop for all of them |
+| `box.until(cond, what, secs)` | polls a condition that reads the guest; RuntimeError naming WHAT |
+| `box.up()` | the boot gate: `desk_rows`/`menu_nbar` written, `[spl_live]` 0, `[ticks]` moving, then `ui_done` - os88marty's `kernel_up` |
+| `box.ui_done(what, lock=True)` | ui_task asleep with nothing queued, no wake, the gfx lock free (`lock=False` for a game's worker) and the BIOS key ring empty, at two reads 0.25 s apart with the tick moving - what a sleep after a click stood for |
+| `box.goto(x, y)`, `box.click(x, y)`, `box.dbl(x, y)` | the pointer CLOSED-LOOP on `mouse_x`/`mouse_y` (~0.6 s, no homing walk), then `ui_done` |
+| `box.megarun(row=0)` | capture, then C:, RUN and 0RUN.O88 - MEGARUN starts the rest |
+| `box.instances()`, `box.pkg_base(name)`, `box.pkg_read(name, label, n, map)` | a package's own bytes by its header name, through its LDT descriptor when it is OS88_HIGH (`build/<pkg>.map` names the label) |
+
+**A stop RELEASES THE MOUSE.** Bochs drops its capture whenever the debugger
+takes over, so after a read the next move or click reaches nobody. A Box that
+has captured re-captures inside the NEXT xdotool call (`xd`, so a row's own
+`os88bochs.xd(...)` is covered too): X delivers the toggle ahead of the input.
+And a stop waits `INPUT_GAP` (60 ms) after the last input, so a click still in
+the X queue is taken while the mouse is captured rather than dropped.
+
+| `box.in_fsx()` | an exclusive fullscreen bracket is running (`[fsx_task]` not FFh) - ui_task is FROZEN inside one, so `ui_done` cannot end there; wait on this into and out of it |
+| `box.fault()` | the first `kern_mega FAULT` line, or None; every `until` raises on one at once rather than waiting out its budget |
+| `box.shot(path)` | a screenshot after `GLASS` (0.45 s): the X window lags the guest by up to one of Bochs's 5 Hz VGA updates |
+| `box.xd(...)`, `box.key(...)`, `box.type(...)` | xdotool on THIS machine's display - one call at a time (a thread wiggling the mouse beside a click is safe) |
+| `box.at_prompt(cmds)` | the machine is ALREADY stopped (an `lb` breakpoint hit): run CMDS and continue, on the prompts |
+| text screen | `box.read(0xB8000, n)[0::2]` is the characters - how a hibernate's `os8088 has hibernated` is waited for, it having no E9 line |
+
+**SEVERAL MACHINES IN ONE PROCESS.** `Box(..., display=os88bochs.take_display(),
+megs=N)` gives a machine its own Xvfb display and input state, so a row runs
+its independent legs in threads at once (tests/megavidv2.py). Drive such a box
+through its own methods - the module's `xd`/`shot` are the DEFAULT display's.
+`take_display()` holds an flock on `/tmp/.os88bochs-N.lock` (:150 up) for the
+life of the process; `tools/os88test.py` takes the same locks for each Bochs
+row's own display (:110 up), so two runners - or a runner and a row's extra
+legs - never share one.
 
 ## Reading it
 
@@ -197,7 +239,10 @@ python3 tools/megatraps.py build/census/x/e9.out --top 20
 `write`, `null0`) and resolves the IP in the image's own listing - by header
 name, or `--lst 1600=part.lst` for a nameless image such as a PiXEL part.
 A `sweep --build build/megatrap --linger 60` leaves a boot running after
-MEGARUN's last start, for the loops a program runs on its own.
+MEGARUN's last start, for the loops a program runs on its own. From Python,
+`sweep(..., parallel=True)` boots every batch AT ONCE, one display each
+(tests/megatrap0.py), and only what a FAULT left unreached goes round again
+one boot at a time.
 
 **Count something per second without a debugger.** The kernel's `mega_rfsec`
 (once a second, from the tick) and `mega_tell` (from `ui_task`, the only
@@ -207,7 +252,8 @@ kern_mega puts no field reading on the glass (KERN-MEGA-PLAN 14.65).
 
 ## Things that cost an hour each here
 
-* **ONE Bochs per DISPLAY.** Clicks, keys and screenshots go to whichever
+* **ONE Bochs per DISPLAY** (and as many displays as you like - `Box(display=)`
+  above). Clicks, keys and screenshots go to whichever
   window is on top of the display, and two machines on one read exactly like a
   guest that froze. `boot` refuses while one runs ON ITS DISPLAY. Two at once
   is two displays: `OS88_BOCHS_DISPLAY=:97 tools/os88bochs.py ... --out

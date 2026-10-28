@@ -139,7 +139,9 @@ def main():
     settle = os88marty.settle
     with os88marty.launch(t.img("os8088-360.img"),
                           apps=t.img("apps360.img"),
-                          machine="os8088_xt_vga") as m:
+                          machine="os8088_xt_vga", boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the first act is open_drive
         mo = os88mouse.Mouse(marty=m)
 
         dispcp.open_drive(m, mo, S, settle, "B")        # a mount and a walk
@@ -231,15 +233,16 @@ def main():
         row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
         rx, ry = dispcp.row_xy(wx, wy, row)
         mo.dblclick(rx, ry)                 # once, to learn where it lands
-        m.advance(frames=300)
-        m.run()
+        os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                      if w != disk], "the window",
+                        poll=0.05, guest=20.0)
+        os88marty.ui_done(m, lock=False, cap=6.75)   # (was advance 300)
         opened = [w for w in dispcp.win_list(m, S) if w != disk]
         if not opened:
             sys.exit("gfxlk: CYCLONE did not open")
         nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
         mo.click(nx + 8, ny + 9)            # its close box
-        m.advance(frames=90)
-        m.run()
+        os88marty.ui_done(m, cap=2.0)       # (was advance 90)
         px, py = max(rx, nx + 12), max(min(ry, ny + nh - 12), ny + 12)
         rect = (wx + 2, wy + TITLE_H + 20, wx + ww - 4, wy + wh - 24)
 
@@ -248,15 +251,16 @@ def main():
         mo.to(px, py)                       # ...and park ON the landing site
         settle(m)
         m.key("Enter")                      # fm_onkey opens it, and the
-        m.advance(frames=300)               # hand never moves again
-        m.run()
+        os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                      if w != disk], "the window",
+                        poll=0.05, guest=20.0)
+        os88marty.ui_done(m, lock=False, cap=6.75)   # (was advance 300)
         opened = [w for w in dispcp.win_list(m, S) if w != disk]
         if not opened:
             sys.exit("gfxlk: Enter opened nothing")
         nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
         mo.click(nx + 8, ny + 9)
-        m.advance(frames=90)
-        m.run()
+        os88marty.ui_done(m, cap=2.0)       # (was advance 90)
         mo.to(*PARK)
         settle(m)
         before, dim = crop(m, rect)

@@ -1526,7 +1526,7 @@ def cards_bad(ui, w):
 def leg_ground(tmp):
     img = os.path.join(tmp, "stikdesk360.img")
     shutil.copy(os.path.join(PKGDIR, "stikdesk360.img"), img)
-    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         m = ui.m
         p = Probe(ui)
         ui.settle()
@@ -1587,7 +1587,7 @@ def leg_fit(tmp):
     tree = os88build.tree("VIDEO=ega", targets=("stikdesk360.img",)).apply()
     img = os.path.join(tmp, "ega.img")
     shutil.copy(tree.img("stikdesk360.img"), img)
-    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         p = Probe(ui)
         ui.settle()
         vh = ui._word("vid_h")
@@ -1627,7 +1627,7 @@ def main():
                        "hoverherc": "os8088_5150_herc_gla"}.get(
                            ARGS.leg, "os8088_xt_vga")
         if ARGS.leg not in ("ground", "fit"):
-            with os88ui.boot(img, machine=machine) as ui:
+            with os88ui.boot(img, machine=machine, quick=True) as ui:
                 {"z": leg_z, "dock": leg_dock, "keys": leg_keys,
                  "small": leg_small,
                  "drag": lambda u: leg_drag(u, tmp),

@@ -99,7 +99,7 @@ def rec(m, pseg, dm, off):
 
 
 # os88ui.inc's alert geometry, mirrored for the same reason tests/dosmem.py
-# mirrors the radio's: these are the SDK's numbers and the box does not own
+# mirrors the radio's: these are the SDK's numbers and DOS does not own
 # them. The row is a FORMULA (SPEC.md 75.3) - every button OS88UI_ABW wide - so
 # a click lands out of the guest's own window record rather than a remembered
 # coordinate.
@@ -129,7 +129,7 @@ def launch_whole(ui, program, drive="B:"):
     """Give a DOS program the WHOLE machine, from a fresh desktop.
 
     The Memory page's third arm (SPEC.md 96.36.1), driven the way
-    `tests/kdmouse.py` does it and for its reasons: open the BOX and not the
+    `tests/kdmouse.py` does it and for its reasons: open DOS and not the
     program (a program launched by ASSOCIATION is already running in the
     window, and the Memory page cannot be re-armed underneath one), change
     drive FIRST, then name the program with no drive on it (SPEC.md 96.48).
@@ -210,7 +210,7 @@ def wait_desktop(m, ui, secs=300):
         except Exception:                               # noqa: BLE001
             return False
     try:
-        os88marty.until(m, graphics, "a graphics desktop", poll=1.0,
+        os88marty.until(m, graphics, "a graphics desktop", poll=0.05,
                         limit=secs)
     except os88marty.MartyError:
         raise RuntimeError("no graphics desktop in %ds; the text screen "
@@ -225,7 +225,7 @@ def main():
             fail("%s is missing - `make` builds the system disk and "
                  "`make kdostest` the B: floppy of DOS programs" % p)
 
-    with os88ui.boot(SYS, apps=COM, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=COM, machine=MACH, quick=True) as ui:
         m = ui.m
 
         # --- 1. the ordinary windowed run, which is the BASELINE -------------
@@ -234,8 +234,7 @@ def main():
         rs = wait_text(m, "READY", what="the windowed run")
         win_kb = topmem(rs, "the windowed run")
         print("kdhand: windowed, the program has %d KB above its PSP" % win_kb)
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")    # (was type_text + settle: memory next)
         if "DOS" not in ui.titles():
             fail("the DOS window is gone after the windowed run: %r"
                  % (ui.titles(),))
@@ -246,7 +245,7 @@ def main():
 
         # --- 2. the Shut down the OS arm, which this build can offer --------------------
         mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if rec(m, pseg, dm, RD_N) != NARM:
             fail("the Memory page has %d arms" % rec(m, pseg, dm, RD_N))
         dis = rec(m, pseg, dm, RD_DIS)
@@ -259,7 +258,7 @@ def main():
         x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
         pitch = rec(m, pseg, dm, RD_PITCH)
         mo.click((x1 + x2) // 2, y1 + WHOLE * pitch + pitch // 2)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if rec(m, pseg, dm, RD_SEL) != WHOLE:
             fail("clicking the Shut down the OS arm left OS88UI_RD_SEL at %d"
                  % rec(m, pseg, dm, RD_SEL))
@@ -267,18 +266,18 @@ def main():
 
         # --- 3. ...and Run, which does not come back -------------------------
         mo.click(*dosmap.centre(m, pseg, dm, "dos_trect"))   # Return, which is
-        os88marty.settle(m)                                  # the ONLY way back
+        os88marty.ui_done(m)                                 # the ONLY way back
                                                              # to the main page:
                                                              # 'Environment' is
                                                              # one-way and Run
                                                              # is only hit there
         mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         # --- 3a. ...WHICH ASKS FIRST (SPEC.md 96.42) -------------------------
         # This machine has no fixed disk, so there is nothing to come back to:
         # every open window goes and the machine restarts when the program
-        # exits. That is the one deliberately destructive thing this box does,
+        # exits. That is the one deliberately destructive thing this DOS does,
         # and it is not allowed to happen quietly.
         base = pseg << 4
         if not alert_up(m, base, dm):
@@ -289,7 +288,7 @@ def main():
         print("kdhand: the confirmation is up")
 
         mo.click(*alert_button(m, base, dm, 0))  # Cancel - and it must NOT
-        os88marty.settle(m)                      # launch
+        os88marty.ui_done(m)                     # launch
         if alert_up(m, base, dm):
             fail("Cancel left the alert up")
         st = m.read(base + dm["dos_state"], 1)[0]
@@ -302,11 +301,12 @@ def main():
         print("kdhand: Cancel was honoured and the desktop is untouched")
 
         mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if not alert_up(m, base, dm):
             fail("the second Run did not ask - the confirmation is once per "
                  "LAUNCH and not once per session (SPEC.md 96.42)")
-        mo.click(*alert_button(m, base, dm, 1))     # Proceed
+        mo.click(*alert_button(m, base, dm, 1), settle=0)   # Proceed: the
+        # wait below is on the program's own text
         rs = wait_text(m, "READY", secs=150, what="the run under kern_dos")
         kd_kb = topmem(rs, "the run under kern_dos")
         print("kdhand: under kern_dos, the program has %d KB above its PSP"

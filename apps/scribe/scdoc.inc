@@ -2696,6 +2696,10 @@ sc_dpic1:
     mov ax, [sc_dpicsg]
     mov [di+6], ax
     inc word [sc_npic]
+    push dx
+    mov dx, ax                      ; ...and it MOVES (SPEC.md 95.14): filled,
+    call sc_picmov                  ; and named by its slot alone
+    pop dx
     mov ax, [sc_dpiclcb]            ; step past the record by the length the
     inc ax                          ; FILE states, now that it has been proved
     and ax, 0xFFFE                  ; to agree with the fields. A record is

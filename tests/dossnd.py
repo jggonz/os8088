@@ -46,7 +46,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=SND, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=SND, machine=MACHINE, quick=True) as ui:
         m = ui.m
         row0 = m.sym("drv_tab")
 
@@ -70,7 +70,7 @@ def main():
             rows[:] = m.screen() or []
             return any("READY" in r for r in rows)
         try:                        # GUEST time: `limit` is idle-box seconds
-            os88marty.until(m, _seen, "DOSSND.COM to finish", poll=0.3,
+            os88marty.until(m, _seen, "DOSSND.COM to finish", poll=0.05,
                             limit=180.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
@@ -108,8 +108,12 @@ def main():
                  "wrong one (SPEC.md 96.17.1)" % blast)
         print("dossnd: the program's environment says %r" % blast)
 
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")      # taken, and the bracket left
+        try:            # the remount is the bracket's exit; wait on IT, with
+            os88marty.until(m, lambda _: loaded(), "SOUND.DRV's remount",
+                            poll=0.05, guest=20.0)  # the old settle's allowance x3
+        except os88marty.MartyError:
+            pass        # ...and say so below
 
         after = loaded()
         if not after:

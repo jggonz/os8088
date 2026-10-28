@@ -525,6 +525,17 @@ static int cw_m_y1;
 static int cw_m_x2;
 static int cw_m_y2;
 
+/* The open dialog's panel (cwovl.c), declared HERE rather than beside the rest
+ * of the dialog's state because cw_layout() has to move it: like the two rects
+ * above it is banked once, in screen pixels, when the panel opens. */
+static int cw_d_x;
+static int cw_d_y;
+
+static int cw_laid;                     /* cw_org has been read at least once:
+                                         * the banked coordinates are about a
+                                         * real origin and may be moved */
+static struct os88_pt cw_was;           /* cw_layout's previous origin */
+
 /* The wrap, computed into file scope because `&local` does not build here. */
 static int cw_w_end;                    /* one past the last character SHOWN */
 static int cw_w_next;                   /* start of the next row, -1 = none */
@@ -879,7 +890,39 @@ static int cw_layout(void *win)
 
     if (os88_wm_geom(win, &cw_sz) != 0)
         return -1;
+    cw_was.x = cw_org.x;
+    cw_was.y = cw_org.y;
     os88_wm_content(win, &cw_org);
+
+    /* A DRAGGED WINDOW IS REPLAYED, NOT REPAINTED (SPEC.md 11.96.12.0): the
+     * pixels moved with it and no paint told us. Everything banked in screen
+     * pixels - the caret, an open menu, the Font list, a dialog, each row's
+     * right edge - still describes where the window USED to be, so it moves
+     * by the same delta here, the one place the origin is read. cw_tx moves
+     * with them, which is what keeps the shadow valid below: the glass under
+     * it moved and did not change, so a keystroke after a drag redraws one
+     * row and not the page. Every handler that hit-tests or draws calls this
+     * first. */
+    x = cw_org.x - cw_was.x;
+    y = cw_org.y - cw_was.y;
+    if (cw_laid && (x != 0 || y != 0)) {
+        cw_car_x = cw_car_x + x;
+        cw_car_y = cw_car_y + y;
+        cw_m_x1 = cw_m_x1 + x;
+        cw_m_x2 = cw_m_x2 + x;
+        cw_m_y1 = cw_m_y1 + y;
+        cw_m_y2 = cw_m_y2 + y;
+        cw_fl_x1 = cw_fl_x1 + x;
+        cw_fl_x2 = cw_fl_x2 + x;
+        cw_fl_y1 = cw_fl_y1 + y;
+        cw_fl_y2 = cw_fl_y2 + y;
+        cw_d_x = cw_d_x + x;
+        cw_d_y = cw_d_y + y;
+        cw_tx = cw_tx + x;
+        for (r = 0; r < CW_ROWS_MAX; r++)
+            cw_sh_rx[r] = cw_sh_rx[r] + x;
+    }
+    cw_laid = 1;
 
     cw_bx = cw_org.x + 8;               /* a multiple of 8: the content origin
                                          * is snapped to one, which is what

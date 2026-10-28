@@ -618,12 +618,15 @@ static unsigned char rom[20480];
 static unsigned char scratch[CLAIM_MAX][65536];
 static struct { unsigned seg; long cap; int live; } claim[CLAIM_MAX];
 static int ram_live, rom_live, claims_live;
+static unsigned h_rom_seg = SEG_ROM;    /* where os88_part_seg says the ROM is:
+                                         * moved by the carve round trip below
+                                         * (CC_ONMOVE_PARTS, C64-SPEC 3.1.1) */
 
 static unsigned char *segbase(unsigned seg)
 {
     int i;
     if (seg == SEG_RAM) return ram;
-    if (seg == SEG_ROM) return rom;
+    if (seg == h_rom_seg) return rom;
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg)
             return scratch[i];
@@ -634,7 +637,7 @@ static long segcap(unsigned seg)
 {
     int i;
     if (seg == SEG_RAM) return 65536;
-    if (seg == SEG_ROM) return 20480;
+    if (seg == h_rom_seg) return 20480;
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg)
             return claim[i].cap;
@@ -674,6 +677,23 @@ int os88_mem_free(unsigned seg)
         }
     fail("os88_mem_free of a segment that is not a live claim");
     return -1;
+}
+
+/* os88_mem_movable - the record says so; the harness never compacts. What is
+ * checked is WHO declares WHAT, and WHEN (C64-SPEC 3.1.1): the RAM once
+ * os88_main has every copy of its segment, Paste's queue once it is filled */
+static int ram_movable, n_movable;
+static unsigned last_movable;
+int os88_mem_movable(unsigned seg, int on)
+{
+    if (segcap(seg) < 0)
+        fail("os88_mem_movable of a segment that is not a live claim");
+    if (seg == SEG_RAM)
+        ram_movable = on;
+    if (on)
+        last_movable = seg;
+    n_movable++;
+    return 0;
 }
 
 unsigned os88_mem_largest_kb(void) { return 200; }
@@ -744,7 +764,7 @@ unsigned os88_part_seg(int i)
         fclose(f);
         rom_live = 1;
     }
-    return SEG_ROM;
+    return h_rom_seg;
 }
 
 int os88_part_fetch(int i) { (void)i; return 0; }
@@ -1732,6 +1752,38 @@ int main(int argc, char **argv)
     win = os88_main();
     h_in_main = 0;
     if (win == 0) { fail("os88_main refused with the ROM present"); return 1; }
+
+    /* THE RAM IS MOVABLE ONCE THE LAUNCH IS DONE (C64-SPEC 3.1.1), and
+     * os88_onmove keeps BOTH words that can name it - c64_m.ramseg and, while
+     * the character generator is in RAM, c64_chr_seg - and leaves the ROM's
+     * where os88_part_seg says. A round trip, so nothing after this sees it */
+    if (!ram_movable)
+        fail("os88_main did not declare the 64KB RAM movable (C64-SPEC 3.1.1)");
+    {
+        unsigned chr = c64_chr_seg;
+        os88_onmove(SEG_RAM, 0x7700);
+        if (c64_m.ramseg != 0x7700 || c64_m.romseg != os88_part_seg(0)
+            || (chr == SEG_RAM ? c64_chr_seg != 0x7700 : c64_chr_seg != chr))
+            fail("os88_onmove did not follow the RAM claim into every word "
+                 "that names it");
+        os88_onmove(0x7700, SEG_RAM);
+        if (c64_m.ramseg != SEG_RAM || c64_chr_seg != chr)
+            fail("os88_onmove did not follow the RAM claim back");
+        /* ...AND THE CARVE: crt0 calls os88_onmove with the CARVE's two bases
+         * once op_base is the new one, so the ROM's word - and the character
+         * generator's while it is the ROM's - must follow os88_part_seg's
+         * answer whatever `was` and `now` say */
+        h_rom_seg = 0x2800;
+        os88_onmove(0x1F00, 0x2700);
+        if (c64_m.romseg != 0x2800 || c64_m.ramseg != SEG_RAM
+            || (chr == SEG_ROM ? c64_chr_seg != 0x2800 : c64_chr_seg != chr))
+            fail("os88_onmove did not re-read the ROM's segment after the "
+                 "parts carve moved (CC_ONMOVE_PARTS)");
+        h_rom_seg = SEG_ROM;
+        os88_onmove(0x2700, 0x1F00);
+        if (c64_m.romseg != SEG_ROM || c64_chr_seg != chr)
+            fail("os88_onmove did not follow the carve back");
+    }
 
     /* THE KEY-STATE MAP MUST BE ARMED BEFORE THE FIRST os88_onkey (7.2's
      * rule 1). Its first call clears the map and always answers "up", so a
@@ -4036,6 +4088,9 @@ int main(int argc, char **argv)
             fail("Edit > Paste did not queue the 40 host bytes the clipboard "
                  "holds - the queue is the HOST's bytes now and the byte map "
                  "is the feeder's, ten a wake with no lock held (§7.7)");
+        if (c64_paste_seg == 0 || last_movable != c64_paste_seg)
+            fail("Edit > Paste's queue was not declared movable once it was "
+                 "filled (C64-SPEC 3.1.1)");
         if (n_band_cells - b_cells > C64_COLS)
             fail("Edit > Paste composed more than one row's worth of cells - "
                  "the command itself draws nothing at all; what reaches the "

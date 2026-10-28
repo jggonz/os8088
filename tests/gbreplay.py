@@ -30,7 +30,6 @@ import argparse
 import os
 import subprocess
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -47,7 +46,8 @@ KEY_A, KEY_B = 0x2D, 0x2C               # X and Z: the shipped A and B
 
 def leg(rom, vm, fs, fails):
     name = "gbreplay%d%s" % (os.getpid(), "fs" if fs else "win")
-    o = argparse.Namespace(rom=rom, vm=vm, keep=name, mem=None, press="", fs=fs)
+    o = argparse.Namespace(rom=rom, vm=vm, keep=name, mem=None, press="", fs=fs,
+                           quick=True)
     b = rdgwin.boot(o)
     where = "full screen" if fs else "window"
     try:
@@ -123,15 +123,16 @@ def leg(rom, vm, fs, fails):
         if res != 2:
             fails.append("%s: a play that went wrong ended in step (rw_rpres %d)" % (where, res))
     finally:
-        b.cmd("quit")
-    time.sleep(3)
-    img = os.path.join(os88box.RUNS, name, "fdd2.img")
+        b.quit()                            # (waits for 86Box to be gone, so
+    img = os.path.join(os88box.RUNS, name, "fdd2.img")  # the disk is written)
     try:
         vol = os88flush.Volume(open(img, "rb").read())
         rp = vol.read("GAME.RP1")
     except Exception as e:                  # noqa: BLE001
         fails.append("%s: GAME.RP1 is not on the disk (%s)" % (where, e))
         return
+    finally:
+        os88box.shutil.rmtree(b.run, ignore_errors=True)
     pairs = (len(rp) - 16) // 2
     print("gbreplay %s: GAME.RP1, %d bytes, %d changes of the buttons" % (where, len(rp), pairs))
     if rp[:4] != b"RDRP" or pairs < 4:

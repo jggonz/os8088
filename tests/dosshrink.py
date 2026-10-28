@@ -11,7 +11,7 @@ stack pointer.
 
 A real DOS switches to an internal stack at its first instruction, so all that
 ever lands there is the three words the `int` pushed, at +0A..+0F, where
-nothing reads them.  This box built its whole INT 21h frame on the program's
+nothing reads them.  this DOS built its whole INT 21h frame on the program's
 stack instead - six words deeper, onto the signature, the owner and the size.
 
 WHAT IT WOULD CATCH, and the first is what it was RED with:
@@ -30,13 +30,13 @@ WHAT IT WOULD CATCH, and the first is what it was RED with:
     than the `cmp bx, 64` floor `dos_exec_load` refuses under
   - `dos_be_go` swapping a SECOND time            -> it would swap UPWARDS
     through the frame the gate just built at `[dos_dstk]`, so the damage
-    lands on the box rather than the program: a hang or a wild jump
+    lands on DOS rather than the program: a hang or a wild jump
   - `[dos_dstk]` not lowered for a child          -> the child's INT 21h
     writes over the parent's live AH=4Bh frame, and the EXEC never returns
 
 **THE ASSERTION IS THE HEADER AND NOT THE EXEC.**  A failed EXEC is the
 symptom the field reported, but it is two steps away from the cause and a
-box with more free memory could pass it while still corrupting the chain.
+DOS with more free memory could pass it while still corrupting the chain.
 SHRINK.COM snapshots the header before any other call and again after five,
 and prints both - so a regression names the bytes.
 
@@ -73,7 +73,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine, quick=True) as ui:
         m = ui.m
         if not ui.path(PROG):
             fail("double-clicking %s opened no window" % PROG)
@@ -84,7 +84,7 @@ def main():
             rows[:] = mm.screen() or []
             return any("KEY" in r for r in rows)
         try:            # a GUEST budget: a loaded box cannot shorten it
-            os88marty.until(m, done, "the program's closing KEY line", poll=0.3, limit=180.0)
+            os88marty.until(m, done, "the program's closing KEY line", poll=0.05, limit=180.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:12],))

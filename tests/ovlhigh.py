@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A C package's OVERLAY is claimed from the top and stays PINNED there.
+"""A C package's OVERLAY is claimed from the top, and it MAY MOVE.
 
     make cworddisk && python3 tests/ovlhigh.py
 
@@ -13,11 +13,11 @@ loaded into", and 50.3.2's rule sends a claim whose base IS A CS to the top.
 
 SINCE SPEC.md 73.14.2 THE OVERLAY IS A PART OF CWORD.O88, EAGER: op_load reads
 it at launch into the parts CARVE, which op_claim takes through the top-down
-door (SPEC.md 20.12.10.8), and crt0's cc_ovinit leaves that carve PINNED -
-it used to declare it movable (cc_ovcarve), until LEMMINGS' wave 4 found that
-a module function calling another is a `call far [cc_ovm_*]` whose pushed CS
-is the module's, so a claim that compacted under such a call moved the carve
-under a live return (SPEC.md 73.14.2.1, 114.6). So
+door (SPEC.md 20.12.10.8), and crt0's cc_ovinit declares that carve movable
+through cc_ovcarve. It was PINNED for a cycle after LEMMINGS' wave 4 found
+that a module function calling another was a `call far [cc_ovm_*]` whose
+pushed CS was the module's; that call goes through cc_ovmthunk now, so no
+stack holds the module's CS and the pin is gone (SPEC.md 73.14.2.1). So
 the claim to look at appears at LAUNCH, not at the first command, and the row
 finds it by its CONTENT rather than by timing: the one new claim of the
 package's whose bytes, past the read's head slack, ARE build/CWORD.OVL - the
@@ -35,25 +35,23 @@ FIVE ASSERTIONS, and each is a different half of the change:
      byte and ignored it; these two are the placement said as facts about the
      arena. The package's own REGION is a top-down claim as well
      (docs/plans/HEAP-UNPIN-PLAN.md 2.1), so the carve lands directly BELOW it.
-  4. **MC_RLOC is 0** - the carve is PINNED. A module return address is on
-     the stack under every module-to-module call, so a carve that could move
-     could move under one; MC_RLOC read from OUTSIDE is the only witness that
-     nothing declared it movable again (SPEC.md 66.5.6.2).
+  4. **MC_RLOC is not 0** - the carve is MOVABLE. A pinned carve is a wall
+     in the arena for the program's whole life (docs/plans/NO-PINNING-PLAN.md),
+     and MC_RLOC read from OUTSIDE is the only witness that the declaration
+     is made and names the CLAIM (SPEC.md 66.5.6.2).
   5. **F5 claims nothing new.** F5 is `CW_K_F5` -> `CWA_GOTO` -> `ovl_dlg_open`,
      an overlay function: with the module already bound, cc_ovneed is the
      worker gate and nothing else, so the call runs on the claim above. It is
      a KEY and not a menu pick because CWORD draws its own menu bar inside its
      window (cwmenu.c).
 
-VERIFIED TO FAIL (before wave 4 of LEMMINGS, against the opposite sign):
-with the OSAPI_MEM_MOVABLE call taken out of cc_ovinit, assertion 4 went red.
-THE INVERTED CONTROL, VERIFIED IN LEMMINGS' FINAL PASS (wave 6): with wave
-3's declaration put back into crt0's eager arm - `mov dx, [op_base]`, a
-cc_ovcarve-shaped proc, `call OSAPI_MEM_MOVABLE`, in a scratch copy of
-apps/cc/crt0.asm - CWORD rebuilt and assertion 4 went red: MC_RLOC 25380,
-the carve listed MOVABLE HI. (Passing the module's own segment, [cc_ovseg],
-instead of the claim's base is refused by mem_own and stays green - the
-declaration has to name the CLAIM.) With CC_OVL_PART taken out of apps/cword/cword.asm (and
+VERIFIED TO FAIL (before wave 4 of LEMMINGS, on this same sign): with the
+OSAPI_MEM_MOVABLE call taken out of cc_ovinit, assertion 4 went red. Wave 4
+inverted the assertion and pinned the carve, and LEMMINGS' wave 6 showed the
+inversion red with the declaration put back (MC_RLOC 25380, MOVABLE HI);
+NO-PINNING restores the original sign with the module-to-module call fixed.
+(Passing the module's own segment, [cc_ovseg], instead of the claim's base
+is refused by mem_own - the declaration has to name the CLAIM.) With CC_OVL_PART taken out of apps/cword/cword.asm (and
 `part` out of the CC_PACKAGE call), the disk carries no overlay part, nothing
 new holds the module after launch, and assertion 1 stops the row.
 
@@ -119,7 +117,9 @@ def main():
     S = os88sym.linear
 
     kw = {"machine": a.machine} if a.machine else {}
-    with os88ui.boot("build/os8088-360.img", apps=DISK, **kw) as ui:
+    with os88ui.boot("build/os8088-360.img", apps=DISK, **kw,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         before = claims(m, S)
         w = ui.path("B:/CWORD.O88")
@@ -191,12 +191,12 @@ def main():
               got="%04x..%04x, next %04x"
                   % (base, base + para, min(above) if above else top),
               want="adjacent")
-        check(rloc == 0, "...and it is PINNED: nothing declared it movable",
-              "a module function calling another pushes the MODULE's CS and "
-              "pops it with a plain retf, so the carve may not move while "
-              "one is on the stack (apps/cc/crt0.asm cc_ovinit, SPEC.md "
-              "73.14.2.1). MC_RLOC read from outside is the only witness",
-              got=rloc, want="0 - no relocation handle")
+        check(rloc != 0, "...and it is MOVABLE: cc_ovcarve is declared",
+              "module-to-module calls go through cc_ovmthunk, so no stack "
+              "holds the module's CS and the carve may move (apps/cc/crt0.asm "
+              "cc_ovinit, SPEC.md 73.14.2.1). MC_RLOC read from outside is "
+              "the only witness",
+              got=rloc, want="a relocation handle")
 
         m.key("F5")                             # CW_K_F5 -> CWA_GOTO ->
         os88marty.settle(m)                     # ovl_dlg_open, an overlay

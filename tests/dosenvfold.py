@@ -50,7 +50,7 @@ def main():
     a = ap.parse_args()
 
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                     machine=a.machine) as ui:
+                     machine=a.machine, quick=True) as ui:
         m = ui.m
         if not ui.path("A:/APPS/DOS.O88"):
             fail("double-clicking DOS.O88 opened no window")

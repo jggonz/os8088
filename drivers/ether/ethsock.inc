@@ -55,7 +55,9 @@ eth_v_open:
     lea si, [bx+SKO_HOST]
     lea di, [bx+SKO_RIP]
     call ip_parse               ; a dotted quad connects at once; a NAME waits
-    jnc .go                     ; for dns_timer to pick it up
+    jnc .go                     ; for dns_timer to pick it up...
+    call dns_cached             ; ...unless it is the name asked last time
+    jnc .go                     ; (SPEC.md 72.5.1): then RIP is filled
     or  byte [bx+SKO_FL], SKF_RES
     call OSAPI_GET_TICKS
     add ax, TCP_CONNTMO
@@ -415,7 +417,7 @@ eth_v_abort:
 ; what counts as a link are the one thing the cable and the card genuinely
 ; disagree about. An ADDRESS is not: both ends answer with the IP of the
 ; machine the stack is running on, and over the cable that machine is the DOS
-; box - which is the true answer there, because an inbound connection arrives
+; machine - which is the true answer there, because an inbound connection arrives
 ; there and is forwarded (docs/plans/completed/NET-STACK-PLAN.md 1.5). One body, so the two
 ; transports cannot come to differ about it.
 ;
@@ -563,7 +565,7 @@ eth_v_raw:
     ret
 .release:
     mov byte [eth_raw], 0       ; **A RELEASE ALWAYS SUCCEEDS** (netpkg.inc):
-    clc                         ; the DOS box calls it on every exit path it
+    clc                         ; DOS calls it on every exit path it
     ret                         ; has, including the ones that never claimed
 .held:
     mov ax, NETE_BUSY

@@ -432,7 +432,7 @@ ui_task:
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
     call COLD_SEG:fdlg_grab_x   ; a modal file dialog swallows every press
-    jc .yj1               ; outside its own frame (SPEC.md 38.2).
+    jc .yj1                     ; outside its own frame (SPEC.md 38.2).
                                 ; AHEAD of every branch below - modality is
                                 ; not a window property, and a press on the
                                 ; menu bar must die as firmly as one on
@@ -482,25 +482,14 @@ ui_task:
 
 .clock_cell:                    ; speaker first, then the Date/Time cell
 %ifdef OS88_SNDCARD
-    test word [drv_svc+DSV_CAPS], SND_CAP_MIXER
-    jz .date_cell
-    mov ax, cx
-    sub ax, [menu_mixx]
-    cmp ax, 24
-    jae .date_cell
-    mov cx, [menu_mixx]
-    push ds
-    pop es
-    mov di, ui_volume_bridge
-    mov bx, DRVC_SOUND*256 + SNDV_MIXPOP ; SNDV_MIXPOP, no graphics lock held
-    call drv_pkg_call_x
-    jmp .yj1
-.date_cell:
-%endif
+    call ui_clkcell             ; OUT OF LINE on kern_big (kernel size pass
+    jmp .yj1                    ; 14): its 43 bytes here put fdlg_grab_x's
+%else                           ; `jc .yj1` above out of a byte's reach, and
+                                ; a far conditional is five bytes on an 8086
     mov byte [cp_sel], CP_ITIME ; page (SPEC.md 31.5); no lock held here, so
     call COLD_SEG:cpf_cp_open   ; cp_open is app_launch with the module load
-    jmp .yj1              ; in front of it (SPEC.md 2.8.4) - and it owns
-                                ; the refusal, beep or toast, so there is
+    jmp .yj1                    ; in front of it (SPEC.md 2.8.4) - and it owns
+%endif                          ; the refusal, beep or toast, so there is
                                 ; nothing left here to say
 
 .on_desktop:
@@ -966,7 +955,7 @@ ui_task:
     call gfx_lock
     test bl, 2
     jz .clk_cp
-    call menu_draw_clock        ; the menu bar cell (SPEC.md 12.1)...
+    call menu_bar_clock         ; the menu bar cell (SPEC.md 12.1)...
 .clk_cp:
     call COLD_SEG:cpf_cp_tick   ; ...and an open Date/Time page (SPEC 31.5),
     call gfx_unlock             ; which is a no-op unless one is showing
@@ -1237,10 +1226,8 @@ ui_arm_trk:                     ; ui_task tests [ui_armw] before calling
     or bp, bp
     jz .ret                     ; the package never asked for tracking, which
                                 ; is every shipped package but Calculator
-    call gfx_lock
-    call ui_bill
-    jmp gfx_unlock
-.ret:
+    jmp ui_rdown.lock           ; lock, bill, dispatch, unlock: ui_rdown's own
+.ret:                           ; three lines (kernel size pass 14, -6)
     ret
 .chrome:
     call wm_hit                 ; BX = window, AL = region
@@ -1460,6 +1447,7 @@ ui_rdown:                       ; CX = press x, DX = press y, loaded by
                                 ; loaded and there is nothing to set up
     or bp, bp
     jz .ctxwin
+.lock:                          ; (ui_arm_trk's drag dispatch joins here)
     call gfx_lock               ; W_ONCLICK's environment exactly - CX = x,
 .bill:                          ; DX = y, SI = window, billed to the owning
     call ui_bill                ; instance (CX/DX survived wm_hit/wm_top)
@@ -1720,8 +1708,12 @@ ui_drag:
     or di, ax                   ; the reload at the union
 
 %ifdef KERN_BIG
-    call ui_drag_dead           ; ...and the title bar has to land somewhere a
-                                ; person can reach (SPEC.md 39.16.1)
+    EXTCALL EXT_DEAD            ; ...and the title bar has to land somewhere a
+                                ; person can reach (SPEC.md 39.16.1). EXTD.DRV's
+                                ; ext_e_dead (kernel size pass 14): a dead zone
+                                ; is two displays, so one display is mod_gone's
+                                ; CF = 1 with every register kept - nothing to
+                                ; correct - once per drag, at the release
 %endif
     call wm_dock_snap           ; barely over the dock? then back above it,
     jnc .nosnap                 ; if it still fits (SPEC.md 11.90)
@@ -1962,14 +1954,16 @@ ui_drag_phase:
                                 ; drop lands on the row the hand chose
 %ifdef KERN_BIG                 ; kern_small has one display and no
                                 ; vid_disp_find (SPEC.md 39.12)
-    cmp byte [vid_ndisp], 1     ; ONE DISPLAY: the interval argument above is
-    jbe .out                    ; the whole proof and nothing more is asked.
-                                ; (AX IS the W_X just stored.)
-                                ; TWO: the legal top-lefts are a UNION of two
-    mov bx, [si + W_Y]          ; rectangles and not an interval, so a phase
-    call vid_disp_find          ; along EITHER axis can leave the origin in the
-    jnc .out                    ; dead zone - x moves toward ui_origx while y
-    mov [si + W_X], cx          ; holds the row the drop chose, and that pair
+    EXTCALL EXT_PHASE           ; ONE DISPLAY: the interval argument above is
+                                ; the whole proof and nothing more is asked -
+                                ; mod_gone, every register kept. (AX IS the
+                                ; W_X just stored, CX the bank, SI the window.)
+                                ; TWO: EXTD.DRV's ext_e_phase since kernel size
+                                ; pass 14 - the legal top-lefts are a UNION of
+                                ; two rectangles and not an interval, so a phase
+                                ; along EITHER axis can leave the origin in the
+                                ; dead zone - x moves toward ui_origx while y
+                                ; holds the row the drop chose, and that pair
                                 ; need not be a point any card has. ui_drag_dead
                                 ; ran before this and cannot see it, and nothing
                                 ; after it moves the origin back. So the phased
@@ -2023,50 +2017,8 @@ ui_drag_xor:
 ;
 ; Reuses ui_drag's statics - one tracker runs at a time on the single UI
 ; task: ui_curx/ui_cury hold the FIXED outline origin (W_X/W_Y),
-%ifdef KERN_BIG
-; -----------------------------------------------------------------------------
-; ui_drag_dead - pull a dragged window's origin out of the DEAD ZONE
-;                (SPEC.md 39.16.1)
-; in:       BX = the window, W_X/W_Y just written by the clamps above
-; out:      an origin inside some display
-; clobbers: flags
-;
-; The two clamps above are per-AXIS, and the virtual desktop is a union
-; (SPEC.md 39.2.1) - so between two displays of different heights they can
-; agree on a point no display covers, and a title bar dropped there is one
-; nobody can grab back. It is mou_clamp's problem one layer up, and it takes
-; the same two routines.
-;
-; INTO THE POINTER'S DISPLAY, because during a drag the title bar is under the
-; hand and [cur_disp] is where the hand is - and 39.15.4 guarantees the
-; pointer itself is inside a display, so there is no second dead zone to fall
-; into. Clamping into the display the window CAME from would be the smaller
-; move, and the record no longer holds that origin by the time this runs.
-; -----------------------------------------------------------------------------
-ui_drag_dead:
-    cmp byte [vid_ndisp], 1
-    jbe .out
-    push ax
-    push bx
-    push cx
-    push si
-    mov si, bx                  ; SI, because vid_disp_find wants BX = y and
-    mov ax, [si+W_X]            ; an 8086 addresses through BX/BP/SI/DI only
-    mov bx, [si+W_Y]
-    call vid_disp_find
-    jnc .done                   ; on a display already: nothing to correct
-    mov cl, [cur_disp]
-    call vid_pt_clamp
-    mov [si+W_X], ax
-    mov [si+W_Y], bx
-.done:
-    pop si
-    pop cx
-    pop bx
-    pop ax
-.out:
-    ret
-%endif
+; (ui_drag_dead is EXTD.DRV's ext_e_dead since kernel size pass 14: a dead
+; zone needs two displays, and two displays need the image - SPEC.md 39.19.6)
 
 ; ui_origx/ui_origy the frame size at mousedown, ui_dragw/ui_dragh the
 ; tracked size ui_drag_xor draws. The low clamp applies every pass (the
@@ -2543,11 +2495,9 @@ UI_LOC_N equ 2
 ; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass and
 ; -f bin gives .bss no image bytes (the dsk_cwd lesson, SPEC.md 1).
 ; -----------------------------------------------------------------------------
-ui_post_cmd:
-    mov [ui_pcmd], ax
-    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
-    retf
-
+; (ui_post_cmd's one caller was STIKMENU.DRV's stm_pick, which writes its two
+; stores out now - kernel size pass 14. The contract above is unchanged: one
+; word store and one bump, drained by ui_task step 3 with nothing held.)
 ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
 
 ; =============================================================================
@@ -3233,22 +3183,23 @@ section .text
 %ifdef OS88_SNDCARD
 ; SOUND.DRV's private modal bridge (SPEC.md 34.15): cursor refcounts and
 ; event draining stay with the kernel's owner. Driver never knows offsets.
+; in:  AL = 0 the popup is up (spend the freeze, show the arrow), 1 hide the
+;      arrow, 2 poll the pointer, 3 drain the modal mouse edges
+; out: AL = 2's buttons, CX/DX its x/y; DS preserved. ES, BX, SI, DI and BP
+;      are NOT - every routine called below preserves them, bar 3's DI, and
+;      volume_popup (drivers/sound/volume.inc), the one caller, holds nothing
+;      in any of them across a bridge call: kernel size pass 14 took the five
+;      pushes off (10 bytes). A second caller that needs one banks it itself
 ui_volume_bridge: dw ui_volume_service, KERNEL_SEG
 ui_volume_service:
     push ds
-    push es
-    push bx
-    push si
-    push di
-    push bp
     KDS
     KES
+    cmp al, 2                   ; AL = 0..3, and nothing else reaches here:
+    je .poll                    ; one compare splits the four (pass 14: 2)
+    ja .drain
     cmp al, 1
     je .hide
-    cmp al, 2
-    je .poll
-    cmp al, 3
-    je .drain
     call fpg_finish             ; discovery is over, even while the menu stays
     cmp byte [cur_shape], CUR_BUSYSH
     jne .arrow
@@ -3256,22 +3207,15 @@ ui_volume_service:
     call cur_shape_set
 .arrow:
     call cur_unlazy
+.show:
     call cursor_show
     jmp short .out
-.hide:
-    call cursor_hide
-    jmp short .out
-.drain:
-    mov di, ui_ev
-    call evq_drain
-    jmp short .out
 .poll:
-    pushf
-    cli
-    mov cx, [mouse_x]
-    mov dx, [mouse_y]
-    mov al, [mouse_btn]
-    popf
+    pushf                       ; the three reads as one instant (an ISR
+    cli                         ; between them would pair one packet's x with
+    call osapi_mouse.live       ; the next's y): OSAPI_MOUSE's own tail is
+    popf                        ; exactly those three loads and a `ret`
+                                ; (pass 14: 8 bytes)
     cmp byte [cur_level], 0
     jl .out                    ; dismissal has already hidden the arrow
     cmp cx, [cur_drawn_x]
@@ -3280,15 +3224,44 @@ ui_volume_service:
     je .out
 .move:
     call cursor_hide
-    call cursor_show
+    jmp short .show
+.drain:
+    mov di, ui_ev
+    call evq_drain
+    jmp short .out
+.hide:
+    call cursor_hide            ; ...and falls into the exit
 .out:
-    pop bp
-    pop di
-    pop si
-    pop bx
-    pop es
     pop ds
     retf
-    times 2 db 0 ; PARITY: ui_task and the following hot routines keep their phase
+
+; ui_clkcell - a press in the clock's field (SPEC.md 12.1, 34.15): the speaker
+; at the field's right end when it is showing - a toast can hide it - and the
+; Control Panel's Date/Time page anywhere else. UI task, no lock held.
+; in: CX = the press's x;  clobbers AX, BX, CX, DX, SI, DI, ES
+;
+; **THE SPEAKER'S HIT TEST IS SOUND.DRV'S** (kernel size pass 14, at the
+; owner's word): the driver is handed the press AND the speaker's x and answers
+; CF = 1 for a press that is not on its 24 pixels - and so does
+; drv_pkg_call_x when no SOUND.DRV is published, so a press in the instant
+; between the driver going and the bar recomposing opens the Date/Time page
+; where the speaker was (the clock is drawn there a moment later anyway).
+; The speaker's x travels with every press rather than being remembered by
+; the driver, so a driver re-mounted before the bar recomposes still hits.
+ui_clkcell:
+    cmp byte [menu_mixcap+1], SND_CAP_MIXER >> 8    ; 0, 0200h or 0FFFFh:
+    jne .date                   ; the high byte says which
+    mov dx, [menu_mixx]         ; DX = the speaker's left x, CX the press's
+    push ds
+    pop es
+    mov di, ui_volume_bridge
+    mov bx, DRVC_SOUND*256 + SNDV_MIXPOP ; SNDV_MIXPOP, no graphics lock held
+    call drv_pkg_call_x
+    jnc .r                      ; the speaker's: the popup has run (or said
+.date:                          ; why not)
+    mov byte [cp_sel], CP_ITIME ; page (SPEC.md 31.5); no lock held here, so
+    call COLD_SEG:cpf_cp_open   ; cp_open is app_launch with the module load
+.r:                             ; in front of it (SPEC.md 2.8.4) - and it owns
+    ret                         ; the refusal, beep or toast
 %endif
 section .text

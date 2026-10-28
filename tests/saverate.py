@@ -174,7 +174,7 @@ def measure(m, o, name, bit, secs, windows):
     m.key("Space")
     try:                                     # the start is the GUEST's work
         os88marty.until(m, lambda mm: mm.read(mm.sym("blk_sv"), 1)[0] == 1,
-                        "the saver session to start", poll=0.2, limit=60.0)
+                        "the saver session to start", poll=0.05, limit=60.0)
     except os88marty.MartyError:
         pass                                 # ...and NEVER STARTED says so
     if m.read(m.sym("blk_sv"), 1)[0] != 1:
@@ -209,7 +209,7 @@ def measure(m, o, name, bit, secs, windows):
     m.key("Space")
     try:
         os88marty.until(m, lambda mm: mm.read(mm.sym("blk_sv"), 1)[0] == 0,
-                        "the saver session to end", poll=0.2, limit=30.0)
+                        "the saver session to end", poll=0.05, limit=30.0)
         os88marty.ui_done(m, "the desktop to come back")
     except os88marty.MartyError:
         pass                                 # the next mode's start says so
@@ -231,7 +231,10 @@ def main():
 
     o = offsets()
     bad = 0
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()                     # the boot gate on STATE: every figure
+        os88marty.kernel_up(m)      # below is a guest counter
         print("one frame a tick is %.2f fps; a mode below %.1f that is also "
               "over %.0f%% halted was ASLEEP while late"
               % (TICKRATE, KEEPUP, HALTED))

@@ -114,7 +114,7 @@ def main():
     shutil.copy(os.path.join(bdir, "os8088-360.img"), sysimg)
     shutil.copy(os.path.join(bdir, "deskitem360.img"), appimg)
 
-    with os88ui.boot(sysimg, apps=appimg, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(sysimg, apps=appimg, machine="os8088_xt_vga", quick=True) as ui:
         m = ui.m
 
         def zbyte(z):

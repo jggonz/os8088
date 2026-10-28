@@ -56,6 +56,20 @@
                                     ; its CODE selector (os88partsbody.inc),
                                     ; never its data segment (KERN-MEGA-PLAN
                                     ; 14.40)
+%define OP_ONMOVE px_mreloc         ; THE CODE PARTS MOVE (SPEC.md 20.12.12,
+                                    ; 106.5): op_lazymv puts the row right and
+                                    ; px_mreloc has nothing of a code part's
+                                    ; to re-base - px_pcall and px_wcall build
+                                    ; the far pointer at every call. What the
+                                    ; standard cannot check is a part's CS on
+                                    ; a stack, and px_pin/px_unpin are that:
+                                    ; a part is PINNED exactly while one task
+                                    ; or the other stands in it
+%define OP_WANT_ASSETHI             ; THE FACE'S PICTURES FROM THE CEILING
+                                    ; (SPEC.md 106.16.1): part 9 is the one
+                                    ; ASSET, and it is held to be GIVEN BACK
+                                    ; to a master - px_artroom - so it sits
+                                    ; where its room joins the master's run
 %include "os88parts.inc"
 
 ; --- the parts (SPEC.md 106.5) --------------------------------------------------
@@ -1926,7 +1940,15 @@ px_pcall:
     pop es                          ; call on kern_mega
     inc word [px_pcalls]
     mov byte [px_pfail], 0          ; from here an answer is the PART's
+    mov al, [px_ppart]              ; PINNED while we stand in it (px_pin):
+    mov bx, px_pum                  ; AX and BX carry nothing into a vector
+    push word [px_pum]              ; (AX was the selector, BX the vector's
+    push ax                         ; index), SI, CX, DI and ES do
+    call px_pin
     call far [px_pfar]              ; DS = ours, CS = the part
+    pop dx                          ; DL = the part (DX is ours to give back)
+    pop word [px_pum]               ; this call's stretch over, nested ones'
+    call px_unpin                   ; kept - CF/AX the part's
     jmp short .out
 .badp:
     pop es
@@ -2000,6 +2022,64 @@ px_pfetch:
     popf
     ret
 
+; px_pin - AL = a part one task is about to far-call, BX = that task's mask
+; ([px_pum] the UI task's, [px_pwm] the worker's): the part's bit set in it
+; and the part's claim PINNED unless either task already stands in it. The
+; caller banks the mask before and puts it back after, so a nested call into
+; the same part stays pinned until the outermost returns (SPEC.md 106.5).
+; THE BIT IS SET UNDER CLI WITH THE TEST, so the other task's px_unpin, which
+; tests the same two words under cli, can never declare a part this one has
+; decided to stand in. Preserves all
+px_pin:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cl, al
+    mov dx, 1
+    shl dx, cl                      ; DX = the part's bit
+    pushf
+    cli
+    mov cx, [px_pum]
+    or cx, [px_pwm]                 ; anybody standing in it already?
+    or [bx], dx
+    popf
+    test cx, dx
+    jnz .x                          ; ...then it is pinned already
+    call op_pin                     ; (an unfetched row answers CF = 1)
+.x:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_unpin - DL = a part a task has stepped out of, its mask already put
+; back: the part's claim may MOVE again (op_movable, px_mreloc the hook) when
+; NEITHER task stands in it any more. Preserves all, the flags included -
+; they are the part's answer
+px_unpin:
+    pushf
+    push ax
+    push cx
+    push dx
+    mov cl, dl
+    mov al, dl
+    mov dx, 1
+    shl dx, cl
+    cli
+    mov cx, [px_pum]
+    or cx, [px_pwm]
+    test cx, dx
+    jnz .x                          ; still stood in: stays pinned
+    call op_movable                 ; (dropped meanwhile: CF = 1, nothing)
+.x:
+    pop dx
+    pop cx
+    pop ax
+    popf
+    ret
+
 ; px_pdrop - AL = a part: give its claim back. Preserves all
 px_pdrop:
     call op_drop
@@ -2032,7 +2112,15 @@ px_wcall:
     call op_cseg                    ; (px_pcall's reason)
     mov [px_wfar + 2], ax
     pop es
+    mov al, dh                      ; PINNED while the worker stands in it:
+    mov bx, px_pwm                  ; a decode parks at OSAPI_TASK_ALIVE
+    push word [px_pwm]              ; INSIDE the part, its CS on this stack
+    push ax                         ; (px_pin)
+    call px_pin
     call far [px_wfar]
+    pop dx                          ; DL = the part
+    pop word [px_pwm]
+    call px_unpin
     jmp short .out
 .no:
     pop es
@@ -2043,6 +2131,11 @@ px_wcall:
     pop dx
     pop bx
     ret
+    nop                             ; PARITY PAD, never executed: px_pin's
+                                    ; bytes above are an odd count, and
+                                    ; everything below - the renderer, the
+                                    ; quantiser, the emitter - keeps the even
+                                    ; shift it was measured at (os88rdiff)
 
 ; px_pstamp - ES = a part's data segment: its header's three segment words,
 ; stamped before every call into it (pxpart.inc rules 2 and 6) - PXP_PKG
@@ -4482,6 +4575,8 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_svfn, 2                ; ...its routine
     PXVAR px_earg, 2                ; a UI verb's argument (px_ecall)
     PXVAR px_mrelp, 2               ; px_mreloc, for a part (MEM_MOVABLE)
+    PXVAR px_pum, 2                 ; the code parts the UI task stands in
+    PXVAR px_pwm, 2                 ; ...and the worker (px_pin), a bit each
 PX_BSSEND   equ px_w2 + PXV
 PX_BSS      equ PX_BSSEND - PXB
 

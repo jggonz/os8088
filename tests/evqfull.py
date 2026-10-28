@@ -134,8 +134,9 @@ def main(argv):
     rec = at + 20                       # the 16-byte stub, then the record
     bad = 0
 
-    with os88marty.launch(a.image, machine=a.machine) as m:
-        os88marty.settle(m)
+    with os88marty.launch(a.image, machine=a.machine, boot=False) as m:
+        m.run()                         # the boot gate on STATE, the UI
+        os88marty.kernel_up(m)          # idle (kernel_up ends on ui_done)
         m.pause()
 
         # --- 1. twenty input records, sixteen slots -------------------------

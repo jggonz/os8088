@@ -191,11 +191,18 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     done(lambda: rb("wd_argp") == 0 and rw("wd_len") > 0, "WELCOME.DOC to open")
 
     def settle_height():
+        # `advance` ENDS PAUSED and resets the mark wait_stop measures from,
+        # so leave the guest RUNNING: timed() arms a breakpoint and waits
+        # straight after this, and whether the loop advanced at all depends
+        # on host pace (tests/wdenter.py failed 4 of 4 run four at once).
+        ok = False
         for _ in range(400):
             if rb("wd_hdirty") == 0:
-                return True
+                ok = True
+                break
             m.advance(cycles=2_000_000)
-        return False
+        m.run()
+        return ok
 
     settle_height()
     tx, ty = rw("wd_tx"), rw("wd_ty")

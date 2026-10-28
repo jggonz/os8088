@@ -98,8 +98,9 @@ class LRig(E.Rig):
               "chardev:m0", "-display", "none", "-qmp",
               "unix:%s,server,nowait" % self.sock, "-daemonize",
               "-pidfile", self.pidf]
-        subprocess.run(a, check=True)
+        os88qemu.start(a, check=True)
         self.pid = int(open(self.pidf).read().strip())
+        E._RIG[0] = self                # E.gpace paces on the rig that is up
         os88qemu.acted(self, lambda: os.path.exists(self.sock), secs=30,
                        what="the QMP socket")
         E.xmcheck.wait_desktop(self.sock, "xtmp3live")
@@ -128,8 +129,14 @@ def capture(path):
 # clipped (measured: every value of a DSP 2.01 capture is in this table, and
 # its inverse gives back x3sim's bytes exactly), so an 8-bit stream's capture
 # is read back into the bytes the CARD was given and held to those
+# - and QEMU 8 widens it to (u - 127) x 256 (measured on 8.2.2: every value
+# of a DSP 2.01 capture a multiple of 256, and that inverse gives back
+# x3sim's bytes exactly). The two tables share ONE value, 0, and it is 127 in
+# both, so one table reads a capture from either engine
 U8WIDE = np.clip((np.arange(256) - 127) * 257, -32768, 32767)
-U8BACK = {int(U8WIDE[u]): u for u in range(256)}
+U8WIDE8 = np.clip((np.arange(256) - 127) * 256, -32768, 32767)
+U8BACK = {int(U8WIDE8[u]): u for u in range(256)}
+U8BACK.update({int(U8WIDE[u]): u for u in range(256)})
 
 
 def as_u8(cap):
@@ -267,7 +274,7 @@ def play_live(r, leg, name, qual=None):
         r.until(lambda: r.st()["md"] == E.MD_IDLE, "the stop", 20, 0.1)
         for _ in range(qual):
             r.key("q")
-            time.sleep(0.3)
+            E.gpace(0.3)
         check(leg, "the override is %s" % E.QNAME[qual],
               r.rd("x3_st", 3)[2] == qual, E.QNAME[r.rd("x3_st", 3)[2]])
         r.key("spc")
@@ -449,9 +456,24 @@ def leg_seek():
               E.QNAME[s["qual"]])
         r.key("dot")                    # forward ten seconds: to the ninth
         r.until(lambda: r.st()["elap"] >= 9, "the seek", 10, 0.05)
-        time.sleep(0.5)                 # (the clock re-opens at the target
-        e = r.st()["elap"]              # frame's first sample, 8.986 s: 0:08
-        tf, off = r.w("x3_tframe"), r.dword("x3_rsoff")     # for 14 ms)
+        # (the clock re-opens at the target frame's first sample, 8.986 s:
+        # 0:08 for 14 ms of the STREAM.) That was a host `time.sleep(0.5)`
+        # past the transient, and a starved guest can spend more than half a
+        # host second in it - the row then read 0:08 under load and passed
+        # alone (docs/plans/SOAK-PARALLEL.md 17.5). So: until the display
+        # reads the SAME second on two readings a guest tick apart, which is
+        # past a 14 ms transient on any box, and then judge that second
+        prev = [None]
+
+        def steady():
+            e = r.st()["elap"]
+            os88qemu.pace(r, 0.06)
+            same = e == r.st()["elap"] and e == prev[0]
+            prev[0] = e
+            return same
+        r.until(steady, "the seek's clock to settle", 10, 0.0)
+        e = r.st()["elap"]
+        tf, off = r.w("x3_tframe"), r.dword("x3_rsoff")
         check(leg, "the seek went to 0:09 (ten seconds on, the clamp)",
               e == 9, "elapsed %d" % e)
         r.until(lambda: r.st()["state"] == E.ST_DONE, "the end", 60, 0.25)
@@ -504,9 +526,7 @@ def leg_xtfile():
                 "Auto's decision", 60, 0.1)
         r.key("s")
         r.until(lambda: r.st()["md"] == E.MD_IDLE, "the stop", 20, 0.1)
-        for _ in range(E.Q_XTSTD):
-            r.key("q")
-            time.sleep(0.3)
+        r.override_to(E.Q_XTSTD)
         check(leg, "the override is XT STANDARD",
               r.rd("x3_st", 3)[2] == E.Q_XTSTD)
         nf0 = r.nfetch()
@@ -523,7 +543,7 @@ def leg_xtfile():
               0 < s["peak"] * 1024 <= 400000, "%d KB" % s["peak"])
         print("     peak %d KB, fetches %s -> %s" % (s["peak"], nf0,
                                                       r.nfetch()))
-        time.sleep(1.0)
+        E.gpace(1.0)
         r.key("dot")                    # a FINISHED file seeks directly
         r.until(lambda: r.st()["elap"] >= 9, "the seek", 10, 0.05)
         e = r.st()["elap"]

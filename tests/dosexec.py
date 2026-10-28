@@ -42,7 +42,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=EXE) as ui:
+    with os88ui.boot(SYS, apps=EXE, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/DOSEXEC.COM"):
             fail("double-clicking DOSEXEC.COM opened no window")

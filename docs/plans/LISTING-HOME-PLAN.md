@@ -289,7 +289,7 @@ are the whole of `kern_dos`'s use of the global listing.
 That matters there because `kerndos/kdlayout.inc:151` holds `KD_LOW_KB` at
 **3 rather than 2** on this exact ground — *"`disk_dir` STAYS: it looked as
 dead as the icons and 96.47's live resume reads it"* — so converting both
-would put a **kilobyte of the DOS box's arena** back. `dskwin.inc:163`'s
+would put a **kilobyte of DOS's arena** back. `dskwin.inc:163`'s
 `DSK_WANT_ICONS` note carries the same claim and would need the same
 correction.
 

@@ -98,7 +98,7 @@ def main(argv):
             sys.exit("dispblit: %s has %d video card(s), not 2"
                      % (a.machine, len(cards)))
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")

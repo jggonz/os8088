@@ -1,6 +1,8 @@
 ; WireFleet — Two PCs. Two fleets. One winner. SPEC.md 114.
 %include "os88api.inc"
     OS88_HEADER 'WireFleet', wf_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
+%define OP_ONMOVE wf_partsmv        ; the stamp bank's claim MOVES (SPEC.md
+                                    ; 20.12.12, 114.11): wf_fx_need declares it
 %include "os88parts.inc"
     OS88_ICON16
     dw 0,0,0x0180,0x03c0,0x03c0,0x07e0,0x1ff8,0x7ffe
@@ -513,6 +515,23 @@ wf_close:
     mov al, WF_P_FX
     call op_drop
     clc
+    ret
+
+; wf_partsmv - the parts standard's hook (OP_ONMOVE, SPEC.md 20.12.12): the
+; stamp bank moved and its row already names the new base, so the one word
+; banked from op_seg is asked again. Only WF_P_FX is ever declared - the
+; samples part is fetched, copied into the ring and dropped inside one call
+; (wf_pcm_open) - and nothing holds [wf_fxseg] across a claim: every reader
+; loads it into ES or DS for a burst of moves and calls nothing inside it
+wf_partsmv:
+    mov al, WF_P_FX
+    call op_seg
+    mov [wf_fxseg], ax
+    ret
+
+; wf_fxpmv - the planar stamps' relocation proc (SPEC.md 66.2): one word
+wf_fxpmv:
+    mov [wf_fxpseg], dx
     ret
 
 wf_wakeworker:

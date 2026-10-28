@@ -49,7 +49,7 @@ the commit count (SPEC.md 14.2), and the four counts are 166, 247, 167 and
 both kernels, and at every intermediate point measured below.
 It is the one generated include a PACKAGE commit could move a kernel byte
 through (it is built from Paint's, Note Pad's, Tracker's, Artful's and the
-DOS box's icons). `font8x8.inc` is generated only under the `FONT=` knob and
+DOS's icons). `font8x8.inc` is generated only under the `FONT=` knob and
 no shipped kernel reads it. So every byte below came out of the 58 files a
 walk of `%include` from `kernel/kernel.asm` finds, plus `apps/os88ui.inc` and
 `boot/boot2.asm`.

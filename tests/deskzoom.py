@@ -81,7 +81,7 @@ def run_drag(machine):
         return 0
     with os88ui.boot(os.path.join(BDIR, "os8088-360.img"),
                      apps=os.path.join(BDIR, "apps360.img"),
-                     machine=machine) as ui:
+                     machine=machine, quick=True) as ui:
         calc = ui.path("B:/APPS/CALC.O88")
         for o in ui.windows():          # the folder window path() opened on
             if o.title.startswith("APPS"):  # the way: it would sit under the
@@ -92,8 +92,7 @@ def run_drag(machine):
         a = ui.move_window(a, *lay["a"])
         b = ui.move_window(b, *lay["b"])
         b = ui.move_window(b, *lay["to"])
-        ui.settle()
-        bad = dc.verify(ui)
+        bad = dc.verify(ui)             # (its own `still` is the settle)
         print("   %s  a drag that overflows the region leaves a whole repaint"
               % ("ok " if not bad else "FAIL"))
         return bad
@@ -103,7 +102,7 @@ def run(machine):
     print(machine)
     with os88ui.boot(os.path.join(BDIR, "os8088-360.img"),
                      apps=os.path.join(BDIR, "apps360.img"),
-                     machine=machine) as ui:
+                     machine=machine, quick=True) as ui:
         ui.open_drive("A")
         w = ui.open_drive("B")
         # move_window waits for the drag to FINISH and not just for the record
@@ -126,7 +125,7 @@ def run(machine):
                          % (frm.title,), 15.0)
             except os88ui.UIError as e:
                 print("   %s" % e)
-            ui.settle()
+            os88ui.os88marty.ui_done(ui.m, "the zoom's repaint")
             return ui._refresh(frm)
         w = toggled(w)
         zoomed = (w.x, w.y, w.w, w.h)

@@ -26,14 +26,17 @@ def main():
     fails = []
     sy = browser_syms()
     with os88marty.launch("build/os8088-360.img", apps="build/brtest360.img",
-                          machine=MACHINE[args.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE[args.adapter], boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on state; every wait
+        os88marty.no_saver(m)           # after is ui_done - the reads are
+                                        # browser state and video memory
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         wins = dispcp.win_list(m, S)
         wx, wy = dispcp.win_rect(m, S, wins[-1])[:2]
         before = len(wins)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "TORTURE.HTM")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "TORTURE.HTM")
         wins = dispcp.win_list(m, S)
         if len(wins) <= before:
             sys.exit("br14: TORTURE.HTM did not open")
@@ -44,7 +47,7 @@ def main():
         rw = lambda n: m.readseg(seg, sy[n], 2)[0] | (m.readseg(seg, sy[n], 2)[1] << 8)
         os88marty.until(m, lambda _m: rw("br_nlines") > 0,
                         "the torture page parsed", limit=120)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         docseg, doclen = rw("br_docseg"), rw("br_doclen")
         comp = rw("br_comp")
         doc = bytes(m.readseg(docseg, 0, max(doclen, comp) + 1))

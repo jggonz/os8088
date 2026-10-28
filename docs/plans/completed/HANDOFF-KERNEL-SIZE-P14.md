@@ -203,11 +203,11 @@ shape that works - both forms on `OSAPI_MEM_FREE` - measured kern_big **+6**.
   includes `drivers/thmpal/thmrows.inc` by a root-relative path (four agents
   hit it; FIXED twice over - a "." in the include search and `drivers/` in
   the export).
-* **`tests/kdreturn.py --compact module` walled 3+3 KB round the DOS box**
+* **`tests/kdreturn.py --compact module` walled 3+3 KB round DOS**
   for a 6 KB `HIBER.DRV`: with the 7 KB image (wkcore, the owner's call) it
   could not fit even after the move, and the handoff refused honestly - the
   row read it as SPEC.md 96.40.8's defect. The holes now add up to the image
-  (4 under, 3 over: the ceiling leaves exactly 4 KB above the box). FIXED.
+  (4 under, 3 over: the ceiling leaves exactly 4 KB above DOS). FIXED.
 * **`tests/kdbigexe.py`'s breakpoint is a flat address that is live KERNEL
   code until the handoff replaces it**; this pass moved an instruction the
   handoff executes onto it, so the first recorded "width" was 2135. A hit

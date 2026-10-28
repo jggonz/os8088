@@ -305,14 +305,22 @@ def _quiet(m):
     if _WATCH[0] is None:
         os88marty.settle(m)
     else:
-        os88marty.quiesce(m, _WATCH[0],
+        # ui_done first (technique 4): the keys are spent and the redraw done
+        # when ui_task sleeps, so the quiesce is a short confirmation rather
+        # than the wait itself.
+        os88marty.ui_done(m)
+        os88marty.quiesce(m, _WATCH[0], guest=0.25,
                           what="the Calculator's display to stop changing")
 
 
 def typed(m, text, settle=True):
     for ch in text:
         press(m, ch)
-        os88marty.pace(m, 0.15)
+        # Each key is HANDLED before the next is sent - which a fixed 0.15
+        # (0.68 guest s a key) only hoped for - and capped at that same pause,
+        # so no key waits longer than it did.
+        os88marty.ui_done(m, "the key %r to be handled" % ch, cap=0.15 * (
+            os88marty.GUEST_PACE or 4.5))
     if settle:
         _quiet(m)
 
@@ -326,7 +334,8 @@ def ctrl(m, letter, settle=True):
     m.key("Key" + letter.upper())
     os88marty.pace(m, 0.05)
     m.key("ControlLeft", down=False, up=True)
-    os88marty.pace(m, 0.15)
+    os88marty.ui_done(m, "Ctrl+%s to be handled" % letter,
+                      cap=0.15 * (os88marty.GUEST_PACE or 4.5))
     if settle:
         _quiet(m)
 

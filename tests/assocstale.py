@@ -44,7 +44,7 @@ def main():
     try:
         fatdel.delete(img, "APPS/VIDEO.O88")
         with os88ui.boot(img, apps=os88build.at("build/apps720.img"),
-                         machine=MACHINE) as ui:
+                         machine=MACHINE, quick=True) as ui:
             ui.path("A:/MEDIA")
             ui.open("OS8088.V88", expect=None)
 
@@ -54,7 +54,7 @@ def main():
                     (on and "Needs" in txt)
             try:
                 os88marty.until(ui.m, lambda mm: done(), "the open",
-                                poll=0.3, limit=300.0, guest=120.0)
+                                poll=0.05, limit=300.0, guest=120.0)
             except os88marty.MartyError as e:
                 bad.append("neither a window nor a toast: %s" % e)
             txt, on = ui.toast()

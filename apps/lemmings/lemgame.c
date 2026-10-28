@@ -145,6 +145,55 @@ static unsigned lem_ptseg, lem_ptoff;   /* item 10's, the spray (wave 6), and
                                          * lem_ptseg 0 when the bank has none */
 static int lem_gfx_ok;              /* all three tables were read */
 
+/* --- THE CLAIMS MOVE (SPEC.md 116.6.2, docs/plans/NO-PINNING-PLAN.md C4) ---
+ *
+ * A level held on the desktop is up to ~330 KB of claims (lemload.c's seven
+ * lem_cl_* words), and a pinned claim is a wall the heap cannot close over.
+ * So while the program is NOT using them - a level kept by 'f', or the
+ * window's postview, both with nothing of LEMMINGS running - every one of
+ * them is MOVABLE, and they are PINNED again for exactly the stretch that
+ * uses them: os88_onwake()'s launch, which is the level's read, the bracket
+ * and everything played in it (SPEC.md 66.2's AX = 0, the HLock half). That
+ * is the policy's bucket C and nothing wider: inside the launch a local or a
+ * register holds a claim's segment across a file read that can claim (the
+ * band reads, the next level's), and pinning is what makes that safe without
+ * a single instruction in the frame path.
+ *
+ * WHAT A MOVE HAS TO PUT RIGHT is every segment word kept BETWEEN calls that
+ * lies inside the block - the claim's own word, and every value derived from
+ * it by base + offset arithmetic: lem_anseg, lem_mkseg and lem_ptseg above
+ * (LEMMAIN items 3, 4 and 10, segments INSIDE lem_cl_main, set by ovl_types at
+ * each level load and read by every frame), lem_far_seg (the out-parameter
+ * ovl_far and lem_far_add answer through), and seven words the raster keeps.
+ * THE PROC IS os88_onmove IN lemblit.inc, in assembly beside those seven, and
+ * its one table names all eighteen: a word in [was, was + the moved claim's
+ * paragraphs) moves by now - was. A derived segment is base + off/16 with off
+ * inside the claim, so it is in exactly one claim's range, and 0 (no spray,
+ * no world on VGA) is in none. A NEW SEGMENT WORD KEPT ACROSS A LAUNCH GOES
+ * IN THAT TABLE, or a move leaves it naming whatever took the block's place.
+ *
+ * lem_cltab is the seven claims alone, for the declaration below, in
+ * lem_cl_kb's order - which is also that table's. */
+static unsigned *lem_cltab[7] = {
+    &lem_cl_mask, &lem_cl_bank, &lem_cl_main, &lem_cl_world,
+    &lem_cl_shadow, &lem_cl_rec, &lem_cl_t
+};
+
+/* ovl_cl_movable - the level's claims MOVABLE (1) or PINNED (0). Called on
+ * each side of os88_onwake()'s launch and from nowhere else; a no-op while
+ * nothing is claimed. A refusal leaves a claim as it was, which for "pin"
+ * cannot happen (they are ours) and for "movable" is only a wall. */
+static void ovl_cl_movable(int on)
+{
+    int i;
+
+    if (!lem_claimed)
+        return;
+    for (i = 0; i < 7; i++)
+        if (*lem_cltab[i])
+            (void)os88_mem_movable(*lem_cltab[i], on);
+}
+
 
 /* --- the level's state (Lemmix TLemmingGame's fields of the same names) --- */
 static int lem_iter;                /* CurrentIteration */

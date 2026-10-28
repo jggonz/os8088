@@ -221,6 +221,15 @@ ZEXEC_SLACK  equ 1684                         ; 84
                                     ; has slid the story by (SPEC.md 66.5.9).
                                     ; Only ever DIFFERENCED across one wait,
                                     ; so wrapping is not a case to handle
+%define zx_seglim  (os88_image_end + ZEXEC_SLACK + 80)  ; word: the last ES
+                                    ; zx_step accepts as the PC's - a SEGMENT
+                                    ; derived from the story's base, so
+                                    ; zf_reloc shifts it by the same delta as
+                                    ; [zf_pcseg]. It did not, and a story slid
+                                    ; UP by the descending pass left the PC's
+                                    ; legal top where the story used to end:
+                                    ; a routine in the moved top of the story
+                                    ; was then "the PC left the story image"
 
 ; --- the tail: frotz.asm's, added after every block above was laid out -----
 %define zf_why     (os88_image_end + 1768)  ; word: the refusal the no-story

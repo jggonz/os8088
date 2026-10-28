@@ -242,19 +242,26 @@ def fs_mono(ui, m, view, want, kind):
 
 def run(kind, want, disk, viewoff):
     img = os.path.join(ROOT, "build", "os8088-720.img")
-    with os88ui.boot(img, apps=disk, machine=MACHINES[kind]) as ui:
+    with os88ui.boot(img, apps=disk, machine=MACHINES[kind], quick=True) as ui:
         m = ui.m
         w = ui.path("B:/ACID2.GB")
         seg, view = None, 0
-        for _ in range(60):
-            M.guest_sleep(m, 2)
-            seg = seg or find_seg(m, b"REALDMG", viewoff)
-            if seg:
-                view = int.from_bytes(m.read(seg * 16 + viewoff, 2), "little")
-            if view:
-                f = int.from_bytes(m.read(view * 16 + S_FRAMES, 2), "little")
-                if f >= 30:
-                    break
+        st = {"seg": None, "view": 0}
+
+        def started(_):                 # polled, not slept: the same 30-frame
+            if not st["seg"]:           # condition, read as it happens
+                st["seg"] = find_seg(m, b"REALDMG", viewoff)
+            if st["seg"]:
+                st["view"] = int.from_bytes(
+                    m.read(st["seg"] * 16 + viewoff, 2), "little")
+            return bool(st["view"]) and int.from_bytes(
+                m.read(st["view"] * 16 + S_FRAMES, 2), "little") >= 30
+        try:
+            M.until(m, started, "the game's first 30 frames", poll=0.25,
+                    guest=120.0)
+        except M.MartyError:
+            pass
+        seg, view = st["seg"], st["view"]
         if not view:
             return "the package never started a game"
         f0 = int.from_bytes(m.read(view * 16 + S_FRAMES, 2), "little")
@@ -277,17 +284,17 @@ def run(kind, want, disk, viewoff):
         err = compare(kind, got, want, kind, rows)
         if err:
             return err
-        if kind == "vga":                   # Machine > Interlace (REALDMG-SPEC
+        if kind == "vga":                   # Screen > Interlace (REALDMG-SPEC
             for item, label in (("Interlace: Off", "On"),   # 13.2): each draw
                                 ("Interlace: On", "Scrolling"),   # defers a
                                 ("Interlace: Scrolling", "Doubled")):
-                ui.menu_pick("Machine", item)   # parity, and the two together
+                ui.menu_pick("Screen", item)    # parity, and the two together
                 M.guest_sleep(m, 2)             #   must be the whole picture
                 got, W, H, data = window_px(ui, m, kind)
                 err = compare(kind, got, want, "vga window, Interlace: " + label, rows)
                 if err:
                     return err
-            ui.menu_pick("Machine", "Interlace: Doubled")     # (Off again)
+            ui.menu_pick("Screen", "Interlace: Doubled")      # (Off again)
         err = fullscreen(ui, m, view, want) if kind == "vga" else fs_mono(ui, m, view, want, kind)
         if err:
             return err

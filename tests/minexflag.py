@@ -96,7 +96,10 @@ def main(argv):
     say = lambda s: print("  " + s)
     settle = os88marty.settle
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, settle, "B")
         disk = dispcp.win_list(m, S)[-1]

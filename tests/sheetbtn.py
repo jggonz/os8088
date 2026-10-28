@@ -67,11 +67,11 @@ INC = ["-I", sys.argv[2].rstrip("/") + "/"] if len(sys.argv) > 2 else []
 S = sheet_syms()
 
 with os88ui.boot(ROOT + "/build/os8088-360.img", apps=APPS,
-                 machine="os8088_xt_vga") as ui:
+                 machine="os8088_xt_vga", quick=True) as ui:
     m, mo = ui.m, ui.mo
     w = ui.path("B:/SHEET.O88")
-    seg = u16(m.read(os88geom.winptr(m, w.i, ui.sym) + os88geom.W_SEG, 2))
-    ui.settle()
+    seg = os88marty.pkg_live(m, w, ui.sym)
+    os88marty.ui_done(m)    # every read below is Sheet's bss: no picture
     rd = lambda sym: u16(m.readseg(seg, S[sym], 2))
 
     def cancel(rec):
@@ -79,9 +79,8 @@ with os88ui.boot(ROOT + "/build/os8088-360.img", apps=APPS,
         rects = u16(m.readseg(seg, S[rec] + BT_RECTS, 2))
         x0, y0, x1, y1 = (u16(m.readseg(seg, rects + 8 + i * 2, 2))
                           for i in range(4))
-        mo.click((x0 + x1) // 2, (y0 + y1) // 2)
-        os88marty.settle(m)
-        ui.settle()
+        mo.click((x0 + x1) // 2, (y0 + y1) // 2, settle=0)
+        os88marty.ui_done(m, cap=1.5 * 4.5)
 
     SH_MPAD, SH_MI_H = 8, 12                 # apps/sheet/sheet.asm
 
@@ -92,14 +91,13 @@ with os88ui.boot(ROOT + "/build/os8088-360.img", apps=APPS,
         for i in range(menu):
             x += u16(m.readseg(seg, S["sh_mw"] + i * 2, 2)) + SH_MPAD * 2
         mo.to(x + SH_MPAD + 2, rd("sh_oy") + 6)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo._edge(True); m.advance(frames=12); m.run()
         mo.to(rd("sh_mrx1") + 12, rd("sh_mry1") + 2 + item * SH_MI_H + 6,
               l=True)
         m.advance(frames=12); m.run()
         mo._edge(False)
-        os88marty.settle(m)
-        ui.settle()
+        os88marty.ui_done(m)
 
     GOTO, NUMBER = (2, 5), (3, 0)            # Formula > Goto..., Format > Number...
 

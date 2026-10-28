@@ -158,7 +158,7 @@ DSKW_EOC16   equ 0xFFFF        ; (0FF8h / 0FFF8h), so a host fsck walks the
 
 %ifdef DSK_STREAM                ; WRITE_SEQ's record rides the append body
 %define DSKW_WSEQ                ; (SPEC.md 18.4.9) on kern_big and in
-%define DSKW_SYSW                ; kern_dos, whose DOS box streams (96.53.1)
+%define DSKW_SYSW                ; kern_dos, whose DOS streams (96.53.1)
 %endif                           ; ...and DSKW_SYSW: can a SYSTEM write
 %ifdef OS88_DRIVERS              ; happen at all (SPEC.md 19.6)? WSQF_SYS, a
 %define DSKW_SYSW                ; driver's fenced cell, the assoc writer and
@@ -523,7 +523,7 @@ dskw_dfree_x:
 ;      AX = FERR_NODISK
 ; clobbers: AX/BX/CX/DX (the outputs), CF
 ;
-; DOS AH=36h's own register shape, and that is not an accident: the DOS box
+; DOS AH=36h's own register shape, and that is not an accident: DOS.O88
 ; is this slot's only caller and it forwards these four to the program
 ; unchanged. It used to be a twelve-byte RECORD with eight fields and a
 ; "the size you pass is the request" rule, so that a short buffer skipped
@@ -607,8 +607,7 @@ dskw_gate:
     jmp short dskw_mounted.quit ; CF/AX = the driver's answer
 %endif                          ; OS88_REDIR
 dskw_gate83:
-    mov di, dskw_n83
-    call dskw_name83            ; SI -> the 11-byte raw name field
+    call dskw_name83n           ; SI -> the 11-byte raw name field
     jnc dskw_mounted.ret
     mov ax, FERR_NAME
     jmp short dskw_mounted.fail
@@ -627,6 +626,18 @@ dskw_mounted:
     inc sp                      ; `inc`
 .ret:
     ret
+
+; dsk_wr1_clba - DSK_WR1D dskw_clba: dsk_secbuf out to the data walk's cursor
+; (disk.inc's macro names it; its three sites are the mkdir's '.'/'..' sector,
+; its zeroed tail and dskw_wone's - kernel size pass 14, a jump per sector)
+dsk_wr1_clba:
+%ifdef OS88_BIGVOL
+    mov bx, dskw_clba
+    jmp dsk_wr1p_x
+%else
+    mov ax, [dskw_clba]
+    jmp dsk_wr1_x
+%endif
 
 %ifdef DSKW_WSEQ
 ; dws_gate - A HELD STREAM ENDS BEFORE ANY OTHER WRITE ON ITS VOLUME (SPEC.md
@@ -2564,6 +2575,7 @@ dskw_dbody_n83:                 ; dskw_n83 already filled (dskw_rmtree)
 %endif
     test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT
     jz .live
+.protj:                         ; (dskw_nbody's refusal jumps here too)
     jmp dskw_wbody.prot         ; read-only, hidden, system, label or dir:
 .out:                           ; FERR_PROT
     ret
@@ -2600,8 +2612,7 @@ dskw_nbody:
 .fatn:
     push si
     mov si, di                  ; the new name first: parse it, then prove
-    mov di, dskw_n83            ; it is free
-    call dskw_name83
+    call dskw_name83n           ; it is free
     pop si
     jnc .named
 .badarg:                        ; (dskw_rtbody and dskw_wabody answer here too)
@@ -2631,8 +2642,9 @@ dskw_nbody:
     call dskw_imgro             ; a mounted image's file (SPEC.md 18.101.3)
 %endif
     test byte [dskw_raw+DSK_R_ATTR], DSKW_NPROT
-    jz .patch                   ; 0x0F, not 0x1F: a FOLDER may be renamed
-    jmp dskw_wbody.prot
+    jnz dskw_dbody_n83.protj    ; 0x0F, not 0x1F: a FOLDER may be renamed -
+                                ; and the refusal is the delete's own `jmp`,
+                                ; in short reach (kernel size pass 14, -3)
 .patch:
     push si
     mov si, dskw_n83b
@@ -2740,8 +2752,7 @@ dskw_stat_x:
     jmp short .out              ; (CF = 0 from the `jc`; xchg writes no flag)
 %endif
 .fat:
-    mov di, dskw_n83
-    call dskw_name83
+    call dskw_name83n
     jc .badname
     call dskw_find              ; ...which now leaves the 32 raw bytes in
     jc .fail                    ; dskw_raw itself (AX = FERR_* on failure)
@@ -3461,7 +3472,7 @@ dws_hlose:
 ; - into the SAME test the write-at makes on any offset: it must land on a
 ; cluster boundary. Two bodies used to make that test two ways.
 ;
-; The offset decides which of two exclusive things happens, and the DOS box's
+; The offset decides which of two exclusive things happens, and DOS's
 ; window (SPEC.md 96.11.6) is why there is no third:
 ;
 ;   INSIDE  - offset + count fits what the file OWNS (its size rounded up to
@@ -3478,7 +3489,7 @@ dws_hlose:
 ;
 ; Anything else - past the allocated end, or straddling it - is FERR_NAME. A
 ; caller that has a partly-full last cluster to top up before it grows makes
-; two calls, which is what the DOS box's window does by construction: its
+; two calls, which is what DOS's window does by construction: its
 ; last window ends at the size and the first window past it starts at the
 ; allocated end.
 ;
@@ -3697,7 +3708,7 @@ dskw_wabody:
     inc bp                      ; ...1: it starts exactly AT the allocated end
     cmp dx, [dwr_off+2]
     jne .jbad                   ; past it, or across it: this is not the
-    cmp ax, [dwr_off]           ; allocator, and the DOS box never asks
+    cmp ax, [dwr_off]           ; allocator, and DOS never asks
     jne .jbad
 .in:
 %ifdef DSKW_WSEQ
@@ -4927,6 +4938,10 @@ dskw_now:
 ; wildcard or a byte outside 21h..7Eh is a rejection - and 0xE5 (the
 ; deleted mark) and "." / ".." cannot be spelled at all.
 ; -----------------------------------------------------------------------------
+; dskw_name83n: the same, with the `mov di, dskw_n83` its callers
+; spelt at the call (kernel size pass 14: it falls into the body)
+dskw_name83n:
+    mov di, dskw_n83
 dskw_name83:
     call kentc_di               ; KENT: push ax..di, so the exit is kretc_di's
                                 ; rung
@@ -5079,17 +5094,19 @@ DFMT_ROWS    equ 4
 
 ; The entry indices - this image's ABI with the resident stubs below.
 FME_PROBE   equ 0
-FME_FORMAT  equ 1
-FME_REACH   equ 2
-FME_LINE    equ 3               ; the status line's own composer (SPEC.md
+FME_FORMAT  equ 1               ; the format, its reach test and the fallback
+                                ; (dskw_fmt_do_x) - FME_REACH was a fifth entry
+                                ; until kernel size pass 14 took the test that
+                                ; called it into the image
+FME_LINE    equ 2               ; the status line's own composer (SPEC.md
                                 ; 2.8.6): every string the confirmation, the
                                 ; swap prompt and the two verdicts letter is
                                 ; in THIS FILE now, read through CS
 %ifdef OS88_ASSOC
-FME_ASCW    equ 4               ; ...and the ASSOC.DAT flush (SPEC.md
-FM_NENT     equ 5               ; 54.7.6.4): kern_big's alone - kern_small has
+FME_ASCW    equ 3               ; ...and the ASSOC.DAT flush (SPEC.md
+FM_NENT     equ 4               ; 54.7.6.4): kern_big's alone - kern_small has
 %else                           ; no associations (54.0), and its FORMAT.DRV
-FM_NENT     equ 4               ; carries no flush code at all
+FM_NENT     equ 3               ; carries no flush code at all
 %endif
 
 %ifndef KD_BUILD                    ; **NO MODULE UNDER kern_dos** (SPEC.md
@@ -5110,10 +5127,11 @@ modf_hdr:
     dw modf_end                 ; MOD_H_IMG
     dw FM_NENT                  ; MOD_H_NENT
     dw dskw_fmt_probe_x         ; the FAR entries ARE the bodies: each is
-    dw dskw_format_x            ; reached by `call far` and by nothing else,
-    dw dskw_fmt_reach_x         ; so each ends in the `retf` itself - a
-    dw dskw_fmt_line_x          ; `call`/`retf` thunk per entry was 16 bytes
-                                ; of image buying nothing (size pass p1)
+    dw dskw_fmt_do_x            ; reached by `call far` - the two inside
+    dw dskw_fmt_line_x          ; dskw_fmt_do_x by `push cs / call` - so each
+                                ; ends in the `retf` itself: a `call`/`retf`
+                                ; thunk per entry was 16 bytes of image buying
+                                ; nothing (size pass p1)
 %ifdef OS88_ASSOC
     dw ascw_flush_x             ; FME_ASCW (ascw.inc, SPEC.md 54.7.6.4)
 %endif
@@ -5342,7 +5360,9 @@ dskw_fmt_line_x:
 ; dskw_fmt_probe_x - which of the four formats is this drive holding?
 ; in:  [disk_drive] = the volume; UI task, gfx lock held (it reads the disk)
 ; out: CF=0 with AL = a dskw_fmt_tab row, the default, and AH = the other row
-;      this drive makes or 0FFh (SPEC.md 18.96.4); CF=1 with AX = FERR_*
+;      this drive makes or 0FFh (SPEC.md 18.96.4) - both also stored, as
+;      [fm_fmtrow] and [fm_fmtalt], the confirmation's pair; CF=1 with AX =
+;      FERR_* and neither stored
 ; clobbers: AX (the output), flags. Returns FAR: it is the module entry
 ;
 ; READS ONLY. That is what lets the Disk window call it before the user has
@@ -5567,6 +5587,10 @@ dskw_fmt_probe_x:
     jae .got2                   ; a 9-sector drive: AL already is
     xchg al, ah                 ; an HD drive: its 9-sector row, the HD alt
 .got2:
+    mov [fm_fmtrow], ax         ; ...and the confirmation's pair, fm_fmtalt
+                                ; the byte after: its one caller, fm_fmt_go,
+                                ; banked them (kernel size pass 14 - three
+                                ; bytes of image for three resident)
     pop bp
     pop word [dsk_totsec]       ; THE PROBE LEAVES NO GEOMETRY BEHIND:
     pop word [disk_heads]       ; dskw_fmt_geo wrote these three to aim its
@@ -5808,7 +5832,8 @@ dskw_fmt_pop6:                  ; (a pop writes no flag)
 ; in:  AL = the dskw_fmt_tab row that was written, [disk_drive] = the volume,
 ;      [disk_spt]/[disk_heads] still the format's (dskw_format_x leaves them)
 ; out: CF=0 = the last sector was written and read back intact; CF=1 = it was
-;      not. Clobbers AX, flags. Returns FAR (it is the entry).
+;      not. Clobbers AX, flags. Returns FAR, though no entry names it now:
+;      dskw_fmt_do_x below reaches it with `push cs / call`.
 ;
 ; SPEC.md 18.96.2. The size on the confirmation can be the USER's rather than
 ; the probe's, and a 720KB pick on a 40-cylinder drive is the one wrong answer
@@ -5866,6 +5891,71 @@ dskw_fmt_reach_x:
     repe scasw                  ; nothing but CF, BX and CX
     jne dskw_fmt_stc            ; the same six pops, right above
     jmp short dskw_fmt_clc
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_do_x - FME_FORMAT: the Disk window's whole format (SPEC.md 18.96.2)
+; in:  [fm_fmtrow] = the row the confirmation named, [fm_fmtalt] = the other
+;      size this drive makes (or 0FFh), [disk_drive] = the volume; UI task,
+;      gfx lock held
+; out: CF=0 with AL = 1 if it had to FALL BACK to 360K and 0 if the size the
+;      user asked for stood; [fm_fmtrow] names the volume ACTUALLY on the
+;      platter either way. CF=1 with AX = FERR_* - the format failed, the
+;      fallback format failed, or a format with no fallback did not reach its
+;      last sector (FERR_IO)
+; clobbers: AX, flags. Returns FAR (it is the entry)
+;
+; dskw_format_x, then dskw_fmt_reach_x on what it wrote (every row is checked,
+; SPEC.md 18.96.4: Space can pick a size the read argued against), then for
+; the one row that FALLS BACK - 720K on a drive whose other format is 360K,
+; the 40-cylinder case - the 360K. Anywhere else a failure is FERR_IO.
+;
+; A failure RE-FORMATS as 360K rather than reporting and stopping, and that is
+; not a courtesy: the 720K volume just written MOUNTS - its whole layout is
+; inside cylinder 0 - and 22.12's predicate greys Format Disk out on a window
+; whose mount succeeded. Stopping would leave a disk that lies about its size
+; and no way left to remake it.
+;
+; IT SAYS NOTHING ITSELF: one operation gets one verdict (SPEC.md 59), so the
+; answer comes back in AL and fm_edit_commit picks which of the two to say -
+; after the re-list, on 22.12.1's own ordering.
+;
+; It was fm_fmt_reach in files.inc - RESIDENT, and reaching this image through
+; two stubs and two far entries for a decision taken while the image is in RAM
+; throughout (kernel size pass 14). The two callees are far entries and stay
+; so, reached here as `push cs / call`.
+; -----------------------------------------------------------------------------
+dskw_fmt_do_x:                  ; STKBALANCE-OK: its two callees are far
+                                ; entries reached as `push cs / call`, so each
+                                ; `retf` takes the pushed CS with the return -
+                                ; a pairing no static walk sees. Both callees
+                                ; are walked on their own
+    mov al, [fm_fmtrow]
+    push cs
+    call dskw_format_x
+    jc .out                     ; AX = FERR_*, said by the caller
+    mov al, [fm_fmtrow]         ; (dskw_format_x spends AX)
+    push cs
+    call dskw_fmt_reach_x       ; two int 13h calls, nothing to an ~80-second
+    mov al, 0                   ; format; AL = 0, the size stood (`mov`
+    jnc .out                    ; writes no flag)
+    mov ax, FERR_IO
+    cmp word [fm_fmtrow], 0x0302 ; only 720K (2) falls back, and only where
+    jne .stc                    ; 360K (3, in fm_fmtalt, the byte after) is
+                                ; the drive's other format - an HD drive's or
+                                ; an internal 720K drive's 720K that cannot
+                                ; reach its end is a bad disk, not a
+                                ; 40-cylinder drive
+    mov al, 3                   ; 360K - and the caller re-lists and re-titles
+    mov [fm_fmtrow], al         ; from this, so the window describes the disk
+    push cs                     ; that exists rather than the one asked for
+    call dskw_format_x
+    jc .out                     ; AX = FERR_*
+    mov al, 1                   ; ...and the caller says WHICH verdict
+.out:
+    retf
+.stc:
+    stc                         ; AX = FERR_IO
+    retf
 
 
 ;-----------------------------------------------------------------------------
@@ -6175,8 +6265,8 @@ dskw_fmt_load:
 ;
 ; FERR_NODISK is dskw_fmt_probe_x's own refusal for a medium it cannot read -
 ; the nearest true thing, and the toast names the disk either way. It is now
-; dskw_fmt_reach's and dskw_fmt_line's refusal too, which costs them nothing
-; they promised: fm_fmt_reach's one caller re-loads AL on the CF=1 arm, and
+; dskw_format's and dskw_fmt_line's refusal too, which costs them nothing
+; they promised: the format's one caller says AX's FERR_* on the CF=1 arm, and
 ; every dskw_fmt_line site reloads AL or has AX banked round the call
 ; (files.inc). THE IMAGE CANNOT BE ABSENT ON THE LINE'S PATH anyway: a prompt
 ; is armed by a probe that loaded it and taken down by the fm_edit_end that
@@ -6193,14 +6283,9 @@ dskw_fmt_probe:
     call far [FMFP + FME_PROBE*4]
     ret
 
-dskw_format:
-    call dskw_fmt_go
+dskw_format:                    ; [fm_fmtrow], proved and fallen back as
+    call dskw_fmt_go            ; dskw_fmt_do_x says
     call far [FMFP + FME_FORMAT*4]
-    ret
-
-dskw_fmt_reach:                 ; "the volume's last sector was NOT reached" is
-    call dskw_fmt_go            ; what an absent formatter has to say, and the
-    call far [FMFP + FME_REACH*4]   ; refusal's CF=1 says it
     ret
 
 ; dskw_fmt_line - the formatter's own status line (SPEC.md 2.8.6)
@@ -6504,7 +6589,7 @@ dwf_dskw_write_seq:             ; SPEC.md 18.4.9: kern_big's alone too
 dwf_dskw_read_seq:  mov ax, FERR_NAME   ; SPEC.md 18.4.8: kern_big's alone, and
                                         ; the cell is in both kernels (20.8
                                         ; rule 4) - falling into the refusal
-dwf_dskw_write_at:  stc         ; the DOS box is the one caller (SPEC.md
+dwf_dskw_write_at:  stc         ; DOS.O88 is the one caller (SPEC.md
                     retf        ; 18.4.7.4) and it does not ship on the small
                                 ; disks: the INSIDE arm, dsk_write_chain and
                                 ; this door are kern_big's, and an append

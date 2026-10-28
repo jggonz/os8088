@@ -1,0 +1,15 @@
+# ROUND 3, Bochs rows (kern_mega). family  row  declared_secs  script
+DONE mega	megapiclose	450	tests/megapiclose.py
+DONE mega	megavidv2	400	tests/megavidv2.py
+DONE(intermittent at base: F9 for k, 1 trip in ~20) mega	megakbtrip	360	tests/megakbtrip.py
+DONE mega	megavidbig	330	tests/megavidbig.py
+DONE mega	megatrap0	300	tests/megatrap0.py
+DONE mega	megahiber	300	tests/megahiber.py
+DONE mega	pxmega	260	tests/pxmega.py
+DONE(fails at base, product) mega	megaovl	260	tests/megaovl.py
+DONE mega	pxsmega	200	tests/pxsmega.py
+DONE mega	megap2hiber	200	tests/megap2hiber.py
+DONE mega	megadosp	160	tests/megadosp.py
+DONE mega	megarehome	120	tests/megarehome.py
+DONE mega	megaflt	110	tests/megaflt.py
+DONE mega	megaown	100	tests/megaown.py

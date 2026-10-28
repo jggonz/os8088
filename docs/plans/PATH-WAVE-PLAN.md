@@ -138,7 +138,7 @@ one across a moment when the user could reach the drive. A walk holds no gfx
 lock and does not unlock, so a bracket taken around one survives it.
 
 **No walker in the tree takes it.** Not `apps/tank`, not `apps/ftpd`'s
-`fd_walk`, not the DOS box. That is a second finding of the same size as
+`fd_walk`, not DOS. That is a second finding of the same size as
 docs/plans/NAV-COST-PLAN.md's `GOTO_QM` conversion, and it stacks with it: the
 conversion stops each level paying for a scan, a sort, an icon harvest and a
 cache flush, and the bracket stops it paying for LBA 0.

@@ -1035,7 +1035,7 @@ def main():
     dk = os.path.join(gtmp, "dark.mkv")
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
-         "gradients=s=320x240:c0=0x060606:c1=0x383838:speed=0.02:"
+         "gradients=s=320x240:c0=0x060606:c1=0x383838:speed=0.02:seed=11:"
          "duration=2:rate=15,format=rgb24", "-vf",
          "drawbox=x=0:y=0:w=320:h=40:color=0x1c2840:t=fill,"
          "drawbox=x=150:y=150:w=10:h=10:color=0xd01818:t=fill,"
@@ -1600,7 +1600,7 @@ def main():
          "clone:stop_duration=1", "-f", "lavfi", "-i",
          "smptehdbars=size=640x360:rate=20:duration=0.05,tpad=stop_mode="
          "clone:stop_duration=1", "-f", "lavfi", "-i",
-         "cellauto=s=640x360:rate=20,trim=duration=1.05", "-filter_complex",
+         "cellauto=s=640x360:rate=20:seed=7,trim=duration=1.05", "-filter_complex",
          "[0:v][1:v][2:v][3:v]concat=n=4:v=1:a=0[v]", "-map", "[v]",
          "-c:v", "ffv1", sp], check=True)
     spo = os.path.join(ptmp, "pcuts.V88")

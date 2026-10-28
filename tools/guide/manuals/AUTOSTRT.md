@@ -31,7 +31,7 @@ The next start opens the Calculator by itself. Several links start several
 things, one after another.
 
 Some programs write their own link. REDLINE's **Apply on boot** button puts
-`RLAPPLY.LNK` here, and a shortcut saved by the DOS box starts its DOS
+`RLAPPLY.LNK` here, and a shortcut saved by DOS starts its DOS
 program when it is placed here.
 
 If the folder has been deleted, open **A:**, choose **New Folder** from the

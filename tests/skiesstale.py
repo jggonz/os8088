@@ -74,7 +74,8 @@ def main(argv):
           % (START, START + STEP * FRAMES, FRAMES,
              "CLOBBERED (must fail)" if a.clobber else "as shipped"))
     bad, seen = [], [0]
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
         slot, seg, base = skiestest.open_game(m)
         lin = seg << 4
         off = lambda n: MP[n] - MP["os88_image_end"]           # noqa: E731

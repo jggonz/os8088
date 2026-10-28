@@ -2,7 +2,7 @@
 """The icon store is shed, and the window it was drawing for gets it BACK
 (SPEC.md 25.9.5).
 
-A DOS box claims the whole arena (SPEC.md 96.35), which is a full compaction,
+DOS claims the whole arena (SPEC.md 96.35), which is a full compaction,
 which correctly drops the machine-wide icon store - it is `MEM_PG_TRIV`
 precisely so that this is the cheap thing to give up. What was missing is the
 other half of cheap: getting it back. A repaint is not a mount, so every Disk
@@ -23,7 +23,7 @@ Four checks:
      `ico_demote`'s half - SPEC.md 54.7.4's guard in `asc_use` is a compare on
      that byte and was inert while the shed left it set), and the window owes
      FSD_ICONS
-  3. after the box closes: the debt is spent and the store holds rows again
+  3. after DOS closes: the debt is spent and the store holds rows again
   4. ...and the window's own reference byte for the .COM RESOLVES - it names
      a row the store actually holds, which is the thing the user sees: a page
      icon rather than the generic diamond. It is checked against the live row
@@ -35,7 +35,7 @@ check 2's debt is 0 and check 4 reads 0xFF. With only the `[ico_n]` store
 removed, check 2 reads the stale count and the repair then declines to
 re-absorb, which check 3 sees as an empty store.
 
-MartyPC: the box is a real DOS program taking the real arena, and no other
+MartyPC: DOS.O88 is a real DOS program taking the real arena, and no other
 emulator here runs one.
 """
 import os
@@ -141,7 +141,7 @@ def main():
         print("icoshed: in DOS  ico_seg=%04X ico_n=%d   window DIRTY=%d"
               % (seg1, n1, dirty1))
         if seg1:
-            fail("the store was NOT shed (ico_seg=%04X): the DOS box did not "
+            fail("the store was NOT shed (ico_seg=%04X): DOS did not "
                  "take the whole arena, so there is nothing to repair and "
                  "every check below would pass for the wrong reason" % seg1)
         if n1:
@@ -157,7 +157,7 @@ def main():
 
         # --- and back --------------------------------------------------------
         m.key("Escape")                 # the program's key: it exits, and
-        quiet(m)                        # the box puts the drivers back
+        quiet(m)                        # DOS puts the drivers back
         ui.close(w)
         quiet(m)                        # ...and the repair's ASSOC.DAT read
 
@@ -167,7 +167,7 @@ def main():
         print("icoshed: after   ico_seg=%04X ico_n=%d   window DIRTY=%d "
               "ref=%02X" % (seg2, n2, dirty2, ref2))
         if dirty2:
-            bad.append("the window still owes %d after the box closed: the "
+            bad.append("the window still owes %d after DOS closed: the "
                        "debt was never spent, so the repair did not run"
                        % dirty2)
         if not n2:

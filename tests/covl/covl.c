@@ -37,6 +37,10 @@
  *     a call that stays inside the module - and is still far, because a
  *     function body cannot have two argument layouts (73.14).
  *
+ *  6. THE MODULE MAY MOVE UNDER ITS OWN CALL CHAIN. M runs ovl_mv_outer ->
+ *     ovl_mv_inner -> cv_claim with a size tests/ovlmove.py chose so that the
+ *     claim only fits after a compaction, which moves the module.
+ *
  *  5. IT SURVIVES REPETITION. The counters go up by exactly one per press:
  *     a mechanism that leaks a word of stack per call works for a while and
  *     then does not, and a single trip through it proves nothing.
@@ -71,6 +75,9 @@ static int  cv_mix;                     /* what ovl_mix() last answered       */
 static int  cv_inner;                   /* ...and ovl_inner(), on its own     */
 static char cv_note[40];                /* what the module said through the   */
                                         /* resident function below            */
+static unsigned cv_mvkb;                /* M: the claim the move test makes,  */
+static int  cv_mvres;                   /* poked by tests/ovlmove.py; and what */
+                                        /* ovl_mv_outer() answered (1008)      */
 static char cv_line[48];
 static char cv_num[8];
 
@@ -112,6 +119,20 @@ static void cv_note_set(int tag)
     os88_toast(cv_note, 0);             /* the UI-touching half of the trip */
 }
 
+/* cv_claim - RESIDENT, called from the module TWO MODULE FRAMES DEEP (point 6,
+ * below): a claim that may COMPACT, and the module is a movable claim. 1 if
+ * the claim was granted (and given straight back), 0 if not. */
+static int cv_claim(unsigned kb)
+{
+    unsigned seg;
+
+    seg = os88_mem_claim((int)kb);
+    if (seg == 0)
+        return 0;
+    os88_mem_free(seg);
+    return 1;
+}
+
 /* ===========================================================================
  * THE MODULE. Everything from here to the end of this block is compiled into
  * `.modc` and shipped as COVL.OVL, because the names begin with `ovl_` and
@@ -125,6 +146,23 @@ static void cv_note_set(int tag)
 static int ovl_inner(int a, int b)
 {
     return a * 10 + b;
+}
+
+/* ovl_mv_inner / ovl_mv_outer - point 6, THE MODULE MAY MOVE UNDER ITS OWN
+ * CALL CHAIN (docs/plans/NO-PINNING-PLAN.md wave 0). outer calls inner (module
+ * to module, through cc_ovmthunk), inner calls cv_claim (out, through
+ * cc_ovthunk), and that claim can compact the heap and move the module. Both
+ * returns have to land in the module where it is NOW: a plain `call far
+ * [cc_ovm_*]` left the old CS on the stack, and the return went into whatever
+ * took its place. 1008 = 1000 + 7 + a granted claim. */
+static int ovl_mv_inner(unsigned kb)
+{
+    return cv_claim(kb) + 7;
+}
+
+static int ovl_mv_outer(unsigned kb)
+{
+    return ovl_mv_inner(kb) + 1000;
 }
 
 /* ovl_mix - four arguments, a call back out, and two calls to itself.
@@ -219,6 +257,8 @@ void os88_onkey(int ascii, int scan, void *win)
         cv_mix   = 0;
         cv_inner = 0;
         cv_note[0] = 0;
+    } else if (ascii == 'm' || ascii == 'M') {
+        cv_mvres = ovl_mv_outer(cv_mvkb);
     } else if (ascii == ' ') {
         cv_calls++;
         cv_mix   = ovl_mix(1, 2, 3, 4);

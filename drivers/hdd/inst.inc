@@ -4,18 +4,17 @@
 ; Install (SPEC.md 52.10.4): make a partition into a system volume the machine
 ; can boot from, by putting both floppies onto it and marking it bootable.
 ;
-;   Install to  Size  State
-;   Slot 1      31M   C: FAT16            <- mounted: its letter, then what
-;   Slot 2      20M   Linux                  is on it (SPEC.md 52.10.4.2)
-;   Slot 3      1M    FAT12, Too Small    <- the reason, when it is a no
-;   Slot 4      -     Empty, No Room
-;   [Install] [Close]      <- the first one says 'Copy Apps', then 'Restart'
-;   Insert the APPS disk in A:, then Install
+; **THIS IS THE ENGINE AND IT HAS NO FACE.** INSTALL.O88, the wizard (SPEC.md
+; 117), is the only installer: its pages ask the questions, and ipkg.inc's
+; HDT_PKG verbs set this file's state and call its routines. The Control
+; Panel's Install button starts the wizard (cppage.inc's hd_inst_post). There
+; was an Install window here as well, a second face on the same stage machine,
+; until the wizard made it a duplicate.
 ;
-; **UNLESS IT KEEPS THE TARGET'S FILES** - the default over a volume, the
-; Erase box clear (SPEC.md 52.10.15): then nothing is formatted, the kernel
-; goes in the first free run long enough for it, and the VBR carries its
-; offset. hd_inst_keep is that path; everything below is the other one.
+; **UNLESS IT KEEPS THE TARGET'S FILES** - the default over a volume (SPEC.md
+; 52.10.15): then nothing is formatted, the kernel goes in the first free run
+; long enough for it, and the VBR carries its offset. hd_inst_keep is that
+; path; everything below is the other one.
 ;
 ; **IT FORMATS THE TARGET, AND THAT IS NOT A CONVENIENCE.** boot/boothd.asm
 ; reads KERNEL.SYS as a flat run from the start of the data area rather than
@@ -24,19 +23,16 @@
 ; volume and contiguous from cluster 2. Formatting guarantees a free cluster
 ; 2; writing the kernel before anything else puts it there.
 ;
-; **THE COPY IS IN STAGES, DRIVEN BY REPEAT CLICKS**, because the machine this
-; is for has ONE floppy drive (docs/FIELD-MACHINES.md) and a driver has no
-; modal dialog to ask in - tool.inc's Delete uses the same idiom, the caption
-; asking and the second click answering:
+; **THE COPY IS IN STAGES**, because the machine this is for has ONE floppy
+; drive (docs/FIELD-MACHINES.md):
 ;
-;   idle     -> Install arms:  'Erases it: Install again to confirm'
-;   armed    -> format, copy the SYSTEM disk (the one in A: now), write the
-;               VBR and then the MBR - the machine boots from here on
-;               (SPEC.md 52.10.10):  'Insert the APPS disk, then Install'
-;   sysdone  -> copy that disk:      'Done - remove the floppy, Restart'
-;   done     -> the SAME button says 'Restart' now, and reboots the machine
-;               (SPEC.md 52.10.6.1). It was a third button of its own, greyed
-;               through every stage but this one
+;   armed    -> HDI_GO: format, copy the SYSTEM disk, write the VBR and then
+;               the MBR - the machine boots from here on (SPEC.md 52.10.10)
+;   sysdone  -> HDI_APPS, once the apps disk is in: copy that disk
+;   done     -> the wizard offers Restart
+;
+; When the apps disk is already in a drive (SPEC.md 52.10.5) the two run as
+; one verb.
 ;
 ; Taking the system disk out mid-install is safe: the kernel is in RAM and the
 ; only thing that reaches for A: afterwards is this copy. A Control Panel
@@ -58,22 +54,6 @@
 ; the user to A:.
 ; =============================================================================
 
-HIW_W        equ 356
-HIW_H        equ 150
-HIW_LX       equ 8              ; a MULTIPLE OF 8, with OSAPI_WM_SNAP on the
-                                ; window, so every OSAPI_FONT_RUN in here takes
-                                ; SPEC.md 6.1's single-store path on the two
-                                ; mono adapters. It was 4, which is off that
-                                ; path by four pixels
-HIW_HY       equ 6
-HIW_R0Y      equ 24
-HIW_ROWH     equ 12
-HIW_CKY      equ 78             ; the Erase box (SPEC.md 52.10.15), between
-HIW_CKH      equ 12             ; the last row and the buttons
-HIW_CKW      equ 12 + 6 + 25*8  ; box, gap, 'Erase the partition first'
-HIW_BY       equ 96
-HIW_BH       equ 16
-HIW_CAPY     equ 120
 ; HDBSTEP - tag which step of hd_icopy_one is running (SPEC.md 52.10.9).
 ; DEFINED IN BOTH BUILDS and empty in the shipped one, because the uses are
 ; in ordinary code: a macro that exists only under a knob makes every build
@@ -87,29 +67,18 @@ HIW_CAPY     equ 120
   %endmacro
 %endif
 
-HIW_B0X      equ 8              ; the ACTION button: 'Install', 'Copy Apps' or
-HIW_B1X      equ 104            ; 'Restart', one control saying what the click
-HIW_BW0      equ 88             ; does NOW (SPEC.md 52.10.6.1). Its widest
-HIW_BW1      equ 56             ; caption is nine characters, 72px, and the
-                                ; button was 72px: it would have touched the
-                                ; frame at both ends, so it is 88 and Close
-                                ; moved right by 16. These drive the HIT TEST
-                                ; as well as the drawing (hd_ibhit reads the
-                                ; same pairs), so there is one place to change
-                                ; and not two
-HIW_CELLS    equ 42             ; characters across the text band: HIW_W - 12
-                                ; less HIW_LX, in 8px cells. 42 and not 35
-                                ; since the State column says what a slot IS
-                                ; (SPEC.md 52.10.4.2): its longest row is 24
-                                ; cells from HIW_STATEC. Every run in this
-                                ; window is padded to it, which is what makes
-                                ; the run OPAQUE over the whole band and so
-                                ; what removes the blank-then-letter flash
+HIW_CELLS    equ 42             ; the longest caption and status row, in
+                                ; characters: the State column's longest row
+                                ; is 24 characters (SPEC.md
+                                ; 52.10.4.2). Both reach the wizard through
+                                ; HDI_CAPSZ and HDIS_TEXTSZ, so it must stay
+                                ; under the first
+%if HIW_CELLS >= HDI_CAPSZ
+  %error "an installer caption would not fit the wizard's HDI_CAPSZ"
+%endif
 
-HIW_SIZEC    equ 12             ; the Size and State columns, in cells -
-HIW_STATEC   equ 18             ; under hd_s_ihead's two headings
-%if HIW_STATEC + 24 > HIW_CELLS
-  %error "the State column's longest row does not fit HIW_CELLS"
+%if 24 >= HDIS_TEXTSZ
+  %error "the State column's longest row (24) does not fit HDIS_TEXT"
 %endif
 
 ; What a slot is as an install TARGET, which is not tool.inc's HTS_* question.
@@ -166,87 +135,6 @@ HIW_CHUNKKB  equ 32             ; the copy buffer, KB. A cluster multiple on
 HIW_KMAXKB   equ 96
 %endif
 
-hd_itpl:    dw 70, 70, HIW_W, HIW_H, hd_s_ititle, hd_iw_paint, 0, hd_iw_click
-
-; -----------------------------------------------------------------------------
-; hd_iw_open - put the installer up (module internal)
-; in:  the gfx lock is HELD (a Control Panel click)
-; -----------------------------------------------------------------------------
-hd_iw_open:
-    call os88_ent
-    mov byte [hd_iw_st], HII_IDLE
-    mov word [hd_imsg], hd_s_ipick
-    mov byte [hd_iautod], 0xFF  ; a fresh run asks the machine again
-    mov al, [hd_sel]
-    mov [hd_idev], al           ; BOUND here, tool.inc's hd_tdev reason: the
-                                ; Control Panel underneath stays clickable, and
-                                ; hd_istate/hd_isecs below describe THIS device
-    mov byte [hd_isel], 0       ; ...and the SLOT starts at 1 every time, as
-                                ; hd_tw_open's hd_tsel does. It used to carry
-                                ; over from the last open for as long as this
-                                ; image stayed loaded - a slot picked on
-                                ; ANOTHER drive, or on this one before it was
-                                ; repartitioned - and hd_iw_scan keeps a
-                                ; carried slot whenever it is usable, which on
-                                ; a blank disk is every slot. So a fresh drive
-                                ; could open on Slot 4 and install there
-    call hd_iw_scan             ; a fresh table every time, tool.inc's reason:
-                                ; the disk can be swapped between two clicks
-    call hd_idefwipe            ; ...and the Erase box follows the selection:
-                                ; clear over a volume, which is then KEPT,
-                                ; set and greyed over anything else. The
-                                ; volume we are RUNNING FROM is a volume too,
-                                ; so it is offered - to keep, never to erase
-                                ; (SPEC.md 52.10.15, which is where 52.10.4.1's
-                                ; 'Boot from a floppy to replace it' went)
-.win:
-    cmp word [hd_iwin], 0
-    jne .show
-    mov si, hd_itpl
-    call OSAPI_WM_CREATE
-    jc .out
-    mov [hd_iwin], bx
-    mov ax, hd_iw_up            ; SPEC.md 13.7/13.8.1: not template words, so
-    call OSAPI_WM_ONMOUSEUP     ; a window installs them itself after create
-    mov ax, hd_iw_drag
-    call OSAPI_WM_ONDRAG
-    mov byte [hd_idown], 0
-    mov al, 1                   ; WF_SNAP (SPEC.md 11.94): the content origin
-    call OSAPI_WM_SNAP          ; stays on a multiple of 8, so every run in
-                                ; here takes SPEC.md 6.1's single-store path
-                                ; on the two mono adapters - and on VGA every
-                                ; glyph of the fallback comes out aligned,
-                                ; which is worth more (SPEC.md 11.94). It
-                                ; costs 8px drag steps, which for a dialog
-                                ; nobody drags twice is not a cost at all
-.show:
-    mov bx, [hd_iwin]
-    call OSAPI_WM_SHOW
-.out:
-    jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_iw_shut - take it down. DETACH's too: the kernel frees this image the
-; moment detach returns, so a window of ours left on screen is a paint through
-; freed memory. The unowned species (SPEC.md 38.1), so hiding IS closing.
-; -----------------------------------------------------------------------------
-hd_iw_shut:
-    call hd_ia_rel              ; ...and an abandoned install's hold with it
-    push bx
-    mov bx, [hd_iwin]
-    or bx, bx
-    jz .out
-    call OSAPI_WM_HIDE
-.out:
-    pop bx
-    ret
-
-; hd_iw_repaint - GONE, and worth a line about why. It erased the content and
-; ran the whole W_PAINT for any change at all, which is the blank-then-redraw
-; this window used to flash with: a click that only changed the caption threw
-; away the header, four rows and two buttons to put back the same pixels.
-; SPEC.md 52.10.6's three emitters replace it, and nothing calls a full
-; repaint of this window any more except W_PAINT itself.
 
 ; -----------------------------------------------------------------------------
 ; hd_iw_scan - what each slot IS, and what it would be as a target
@@ -261,10 +149,21 @@ hd_iw_shut:
 ; and the reason after a comma only when the verdict is no.
 ; -----------------------------------------------------------------------------
 hd_iw_scan:
-    call os88_ent
+    push ax
+    push di
     mov al, [hd_idev]
     call hd_dev_row
     call hd_part_load           ; the table, or a blank one if unreadable
+    call hd_iw_scant
+    pop di
+    pop ax
+    ret
+
+; hd_iw_scant - the same, on the table ALREADY in hd_mbr: DI = [hd_idev]'s
+; row. The Format window's entry (tool.inc's hd_tw_scan), which has just read
+; that table and must not pay a second int 13h for it
+hd_iw_scant:
+    call os88_ent
     xor cl, cl
 .slot:
     mov al, cl
@@ -449,567 +348,52 @@ hd_iw_letter:
 ; the one slot they most need to be sure of.
 ; -----------------------------------------------------------------------------
 hd_ptype_name:
+    push ax
+    push cx
     push si
+    mov ah, al
     mov si, hd_ptypes
-.next:
-    mov dx, [si+1]
-    or dx, dx
-    jz .out                     ; the terminator: 0 = not one we know
-    cmp al, [si]
-    je .out
-    add si, 3
-    jmp short .next
+    xor dx, dx                  ; 0 = not one we know: 'Type nnh'
+.rec:
+    lodsb                       ; the record's count of type bytes
+    or al, al
+    jz .out                     ; the terminator
+    mov cl, al
+    xor ch, ch
+.type:
+    lodsb
+    cmp al, ah
+    jne .nt
+    mov dx, si                  ; a hit: the name follows the type bytes
+    add dx, cx
+    dec dx
+    jmp short .out
+.nt:
+    loop .type
+.skip:
+    lodsb                       ; past the name and its NUL
+    or al, al
+    jnz .skip
+    jmp short .rec
 .out:
     pop si
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_iw_paint - W_PAINT.  in: BX = the window, ES = KERNEL_SEG (SPEC.md 20.3)
-; -----------------------------------------------------------------------------
-hd_iw_paint:
-    call os88_ent
-    call hd_org                 ; W_PAINT hands the window in SI; DI/BP = the
-                                ; KERNEL's content origin (tool.inc). AX and
-                                ; NOT CX is its left, which is what this read
-                                ; first and is a whole content drawn a window's
-                                ; width to the right of where it belongs
-
-    mov si, hd_s_ihead
-    mov cx, HIW_LX
-    mov dx, HIW_HY
-    call hd_wrun                ; black on the content's own white (52.12)
-
-    call hd_irows_emit
-    call hd_ick_emit
-
-    call hd_ibtns_emit
-    call hd_imsg_emit
-
-    jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_ibtn1 - one framed button, in whatever state [hd_idown] says
-; in:  AL = 1 the action button / 2 Close, DI/BP = the content origin
-; out: nothing (all registers preserved)
-;
-; The pen comes from OSAPI_GFX_PEN, so a disabled button carries [gfx_dis]
-; as well as CDGRAY and its LABEL dithers on the two 1bpp adapters instead of
-; coming out solid black inside a dotted frame (SPEC.md 47 rule 1). Close is
-; never disabled: there is always a way out of a window.
-;
-; The id picks the PREDICATE, not the state: 1 = hd_iact_ok, 2 = always live. One
-; predicate per control, shared by the greying, the click refusal and the
-; explanation (SPEC.md 47 rule 2) - and ONE for the action button whichever of
-; its three captions is on it (SPEC.md 52.10.6.1).
-; -----------------------------------------------------------------------------
-
-hd_ibtn1:
-    call os88_ent
-    xor cx, cx                  ; PRESSED if it is the one being held
-    cmp al, [hd_idown]
-    jne .up
-    mov cl, OS88UI_DOWN
-.up:
-    mov si, hd_s_close
-    mov dx, HIW_B1X
-    mov bx, HIW_BW1
-    cmp al, 2                   ; Close: CF = 0, never disabled
-    je .draw
-    call hd_ib0_label           ; SI = 'Install' / 'Copy Apps' / 'Restart'
-    mov dx, HIW_B0X
-    mov bx, HIW_BW0
-    call hd_iact_ok
-.draw:
-    adc cl, 0                   ; CF -> the shared control's DIS flag
-    xchg ax, dx
-    add ax, di
-    lea dx, [bp+HIW_BY]
-    call hd_btn_draw16          ; tool.inc: one tail for the image's four
-    jmp os88_r_bp
-
-hd_idown:   db 0                ; which button is DRAWN pressed, 0 = none
-            dw hd_ictlpaint     ; ...what draws one (hd_xsd)
-            dw hd_ibhit         ; ...and which one a point is on (hd_xover)
-                                ; (SPEC.md 13.8.4). hd_isetdown is its one
-                                ; writer and hd_iw_button its one reader
-
-; -----------------------------------------------------------------------------
-; hd_ibhit - which button is this CONTENT-relative point in?
-; in:  CX = content-relative x, DX = content-relative y
-; out: AL = 1..2 (the action button, Close), or 0; AH clobbered
-;
-; One description, read by the press, the drag and the release - and by the
-; painter through the same HIW_B* constants. The ids are the predicate
-; selector plus one, which is not a coincidence worth hiding: hd_iw_button's
-; CL already names the control.
-; -----------------------------------------------------------------------------
-hd_ibhit:
-    cmp dx, HIW_BY - 2
-    jl .no
-    cmp dx, HIW_BY + HIW_BH
-    jge .no
-    mov al, 1
-    cmp cx, HIW_B0X
-    jl .no
-    cmp cx, HIW_B0X + HIW_BW0
-    jl .out
-    inc al
-    cmp cx, HIW_B1X
-    jl .no
-    cmp cx, HIW_B1X + HIW_BW1
-    jl .out
-.no:
-    xor al, al
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_ictlpaint - redraw ONE button, in whatever state [hd_idown] says
-; in:  AL = 1..2; the lock is held
-; out: nothing (all registers preserved)
-;
-; NOT hd_ibtns_draw: that white-fills the whole 16px band and re-emits both,
-; which on every press and every slide is PERFORMANCE.md's double-draw flash -
-; the defect the feature exists to avoid, introduced by the feature.
-; -----------------------------------------------------------------------------
-hd_ictlpaint:
-    call os88_ent
-    push ax
-    call hd_iorg                ; DI/BP, or CF = 1 = the window is not up
-    pop ax
-    jc .out
-    call hd_ibtn1
-.out:
-    jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_isetdown - AL becomes the button drawn pressed (0 = none), and it DRAWS
-; in:  AL = an id or 0; the lock is held
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-hd_isetdown:
-    push bx
-    mov bx, hd_idown
-    jmp hd_sdtail
-
-; -----------------------------------------------------------------------------
-; hd_iw_up - W_ONMOUSEUP (SPEC.md 13.7): the three buttons fire HERE
-; in:  CX = x, DX = y (SCREEN, possibly outside the window), SI = the window
-; out: nothing
-; -----------------------------------------------------------------------------
-hd_iw_up:
-    call os88_ent
-    mov bx, hd_idown
-    call os88ui_fire            ; AX = what the press armed, and it is CLEARED
-    or ax, ax
-    jz .done
-    call hd_xover               ; tool.inc's: still on it?
-    or al, al
-    jnz .fire
-    call hd_xsd                 ; a different control, or none: CANCELLED
-    jmp short .done
-.fire:
-    mov byte [bx], 0            ; NOT hd_isetdown: every path below redraws the
-                                ; band, hides the window or reboots the
-                                ; machine, and drawing this button upright
-                                ; first is PERFORMANCE.md's double-draw
-    cmp al, 2
-    je .close
-    call hd_iact_ok             ; the action button's one predicate, whichever
-    jc .refused                 ; caption is on it
-    cmp byte [hd_iw_st], HII_DONE   ; ...and at the end that caption is
-    je .restart                     ; 'Restart', so that is what the click does
-                                    ; (SPEC.md 52.10.6.1). The STAGE decides
-                                    ; and not a second id: there is one button
-                                    ; here, and hd_ibhit cannot tell which verb
-                                    ; it is wearing
-    call hd_inst_step
-    call hd_ick_draw            ; the box is greyed once anything is written
-    call hd_ibtns_draw          ; the stage moved, so hd_iact_ok and the
-    call hd_imsg_draw           ; caption may both have flipped - and the
-    jmp short .done             ; message always did. The ROWS did not:
-                                ; hd_iw_scan runs at open, and a stage changes
-                                ; no slot's state (SPEC.md 52.10.6)
-.close:
-    call hd_iw_shut
-    jmp short .done
-.restart:
-    mov al, 1                   ; NOT the flushing kind: the caption
-                                ; this button sits under has just told the
-                                ; user to take the floppy out, so the Control
-                                ; Panel's write would mount an empty drive and
-                                ; then say so (SPEC.md 20.10/52.10.6)
-    call OSAPI_REBOOT           ; POSTED, not performed: we are holding the
-    jmp short .done             ; gfx lock (SPEC.md 20.10)
-.refused:
-    ; A greyed control explains itself (SPEC.md 47 rule 5), so this says
-    ; nothing new - it makes sure the reason is on screen.
-    mov word [hd_imsg], hd_s_ibad
-    call hd_imsg_draw           ; ONE line: nothing else about the window has
-.done:                          ; changed, and a full repaint here flashed
-    jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_iw_drag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
-; -----------------------------------------------------------------------------
-hd_iw_drag:
-    call os88_ent
-    mov bx, hd_idown
-    jmp hd_xdrag                ; tool.inc's, with this window's block
-
-; =============================================================================
-; Drawing the face a piece at a time (SPEC.md 52.10.6)
-;
-; NOTHING HERE BLANKS AND THEN LETTERS. Every text element is one opaque
-; OSAPI_FONT_RUN space-padded to HIW_CELLS, so a cell goes from what it was to
-; what it will be in a single store (SPEC.md 6.1) and there is no frame in
-; which the band is empty. The window carries OSAPI_WM_SNAP and HIW_LX is a
-; multiple of 8, which is what puts those runs on the single-store path.
-;
-; The three emitters take the content origin in DI/BP - the painter already
-; has it - and the three *_draw entry points fetch it for a caller that does
-; not. A click spends only the one whose content actually changed: the message
-; alone for an arm or a refusal, the rows for a selection, the buttons only
-; when a greying predicate flipped.
-;
-; The button band is the ONE thing still erased before it is drawn, because a
-; frame cannot be drawn opaquely: a dithered frame over a solid one leaves the
-; solid one's pixels behind. It is a single 16px-high fill and it happens only
-; on a state change, which is the "massively more expensive not to" case.
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; hd_iorg - the installer window's content origin (module internal)
-; out: CF=0 with DI = content left, BP = content top; CF=1 = no window, or it
-;      is not visible, and the caller must draw nothing
-; -----------------------------------------------------------------------------
-hd_iorg:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov bx, [hd_iwin]
-    or bx, bx
-    jz .no
-    call OSAPI_WM_GEOM          ; the visibility question; CX/DX are its answer
-    jc .no
-    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top - the
-    mov di, ax                  ; KERNEL's, never the template's (wm_fit)
-    mov bp, dx
-    pop dx
     pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_ipad - space-pad hd_line out to HIW_CELLS and re-terminate it
-; out: nothing (all registers preserved)
-;
-; What makes a run OPAQUE over the whole band rather than over its own text:
-; a space paints background on the fast path, so the padding IS the erase.
-; -----------------------------------------------------------------------------
-hd_ipad:
-    call os88_ent
-    mov si, hd_line
-    xor cx, cx
-.len:
-    cmp cx, HIW_CELLS
-    jae .cap
-    cmp byte [si], 0
-    je .pad
-    inc si
-    inc cx
-    jmp short .len
-.pad:
-    mov byte [si], ' '
-    inc si
-    inc cx
-    cmp cx, HIW_CELLS
-    jb .pad
-.cap:
-    mov byte [si], 0
-    jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_irun - hd_line as one opaque run (module internal)
-; in:  DI/BP = content origin, DX = the row's y OFFSET inside the content,
-;      AL = ink, AH = background
-; -----------------------------------------------------------------------------
-hd_irun:
-    call os88_ent
-    clc                         ; A LIVE PEN, every time. FONT_RUN takes its
-    call OSAPI_GFX_PEN          ; ink and background in AX, but [gfx_dis] is a
-                                ; separate piece of state (SPEC.md 47 rule 1)
-                                ; and masks a glyph to a checkerboard whatever
-                                ; the ink says - so a greyed BUTTON drawn just
-                                ; before this left the caption and every row
-                                ; dithered. Preserves every register
-    call hd_ipad
-    mov cx, di
-    add cx, HIW_LX
-    add dx, bp
-    mov si, hd_line
-    call OSAPI_FONT_RUN
-    jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_irows_emit / hd_irows_draw - the four slot rows
-; in (emit): DI/BP = content origin
-;
-; The selected row is the same run with ink and background swapped, which is
-; how the black bar arrives with the text already on it: there is no fill and
-; then a letter, so the row cannot be seen empty. The bar it replaced was a
-; GFX_FILL as wide as the band followed by FONT_STR over it.
-; -----------------------------------------------------------------------------
-hd_irows_emit:
-    call os88_ent
-    xor cx, cx                  ; CL = the row
-.row:
-    mov [hd_irow], cl           ; ...which hd_iw_rowtext reads
-    call hd_iw_rowtext
-    mov al, HIW_ROWH
-    mul cl
-    add ax, HIW_R0Y
-    xchg ax, dx                 ; DX = the row's y offset
-    cmp cl, [hd_isel]
-    mov ax, (CWHITE << 8) | CBLACK
-    jne .go
-    mov ax, (CBLACK << 8) | CWHITE
-.go:
-    call hd_irun
-    inc cx
-    cmp cl, 4
-    jb .row
-    jmp os88_r_bp
-
-hd_irows_draw:
-    push di
-    push bp
-    call hd_iorg
-    jc .out
-    call hd_irows_emit
-.out:
-    pop bp
-    pop di
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_imsg_emit / hd_imsg_draw - the caption line, and NOTHING else
-;
-; The whole point of the pair: a click that only changes what the window SAYS
-; used to erase the content and repaint every row, both buttons and the
-; header, which flashes on every adapter including VGA.
-; -----------------------------------------------------------------------------
-hd_imsg_emit:
-    call os88_ent
-    mov si, [hd_imsg]
-    mov bx, hd_line
-.cp:
-    mov al, [si]
-    mov [bx], al
-    inc si
-    inc bx
-    or al, al
-    jnz .cp
-    mov dx, HIW_CAPY
-    mov ax, (CWHITE << 8) | CBLACK
-    call hd_irun
-    jmp os88_r_bp
-
-hd_imsg_draw:
-    push di
-    push bp
-    call hd_iorg
-    jc .out
-    call hd_imsg_emit
-.out:
-    pop bp
-    pop di
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_ib0_label - what the ACTION button says in the stage we are in
-; out: SI = the string; every other register preserved, flags clobbered
-;
-; ONE control, three captions, each naming what the click actually does
-; (SPEC.md 52.10.6.1): 'Install' while there is one to do, 'Copy Apps' once
-; the volume boots and the click is adding software (SPEC.md 52.10.10), and
-; 'Restart' once the apps are on it too. It is a routine rather than a table
-; because the answer is a STAGE and not a row - and it is a routine rather
-; than a branch because BOTH drawers need it, the full pass and the
-; one-button repaint, and a second copy of it is a second opinion about what
-; the button says.
-; -----------------------------------------------------------------------------
-hd_ib0_label:
-    mov si, hd_s_iinst
-    cmp byte [hd_iw_st], HII_SYSDONE
-    je .copy
-    cmp byte [hd_iw_st], HII_DONE
-    je .rest
-    ret
-.copy:
-    mov si, hd_s_icopy
-    ret
-.rest:
-    mov si, hd_s_irest
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_ibtns_emit / hd_ibtns_draw - both buttons, greying and all
-; -----------------------------------------------------------------------------
-hd_ibtns_emit:
-    push ax
-    mov al, 1                   ; the action button...
-    call hd_ibtn1
-    inc ax                      ; ...and Close
-    call hd_ibtn1
     pop ax
     ret
 
-hd_ibtns_draw:
-    call os88_ent
-    call hd_iorg
-    jc .out
-    mov al, CWHITE              ; the band, once: see the header - a frame is
-    call OSAPI_SET_COLOR        ; the one thing that cannot be drawn opaquely
-    lea ax, [di+HIW_LX]
-    lea bx, [bp+HIW_BY]
-    lea cx, [di+HIW_W-12]
-    lea dx, [bx+HIW_BH-1]
-    call OSAPI_GFX_FILL
-    call hd_ibtns_emit
-.out:
-    jmp os88_r_bp
+
+hd_iwipe:   db 1                ; 1 = format first, 0 = KEEP the volume's files
 
 ; -----------------------------------------------------------------------------
-; THE ERASE BOX (SPEC.md 52.10.15) - 'Erase the partition first'
+; hd_iact_ok - may an install take the selected slot? (module internal)
+; out: CF = 0 yes / 1 no
 ;
-; One check box and not a second button, because it is not a second verb: the
-; one action button installs either way, and what the box changes is whether
-; the volume's own files survive it. CLEAR is the default over a volume, which
-; is then KEPT; over anything else - a free slot, a FAT entry with nothing in
-; it - there is nothing to keep, so the box is SET AND GREYED (SPEC.md 47: a
-; fact, not a choice). It is greyed too once the install has written anything.
-; -----------------------------------------------------------------------------
-hd_idefwipe:
-    push bx
-    mov bl, [hd_isel]
-    xor bh, bh
-    mov bl, [bx+hd_ivol]
-    xor bl, 1                   ; a volume: keep it (0); nothing: erase (1)
-    mov [hd_iwipe], bl
-    pop bx
-    ret
-
-; hd_ick_ok - may the box be clicked? CF = 0 yes. The ONE predicate for the
-; greying and the refusal (SPEC.md 47 rule 2)
-hd_ick_ok:
-    push bx
-    cmp byte [hd_iw_st], HII_SYSDONE
-    jae .no                     ; the install has written: nothing to choose
-    mov bl, [hd_isel]
-    xor bh, bh
-    cmp byte [bx+hd_ivol], 0
-    je .no                      ; nothing to keep
-    pop bx
-    clc
-    ret
-.no:
-    pop bx
-    stc
-    ret
-
-; hd_ickmsg - the caption for the box's current state: the booted-from volume
-; says why Install greyed when it is ticked, everything else the neutral line
-hd_ickmsg:
-    push bx
-    mov word [hd_imsg], hd_s_ipick
-    mov bl, [hd_isel]
-    xor bh, bh
-    cmp byte [bx+hd_istate], HIS_LIVE
-    jne .out
-    cmp byte [hd_iwipe], 0
-    je .out
-    mov word [hd_imsg], hd_s_ilbwipe
-.out:
-    pop bx
-    ret
-
-; hd_ick_rect - the box's rect into its record, SCREEN coordinates
-; in:  DI/BP = the content origin; out: nothing (all registers preserved)
-hd_ick_rect:
-    push ax
-    lea ax, [di+HIW_LX]
-    mov [hd_ickrec+0], ax
-    add ax, HIW_CKW - 1
-    mov [hd_ickrec+4], ax
-    lea ax, [bp+HIW_CKY]
-    mov [hd_ickrec+2], ax
-    add ax, HIW_CKH - 1
-    mov [hd_ickrec+6], ax
-    pop ax
-    ret
-
-; hd_ick_emit / hd_ick_draw - the box, greyed or live. The label is an opaque
-; run and the box is cleared by the glyph, so there is no ground to lay first
-; (SPEC.md 13.15.2)
-hd_ick_emit:
-    push bx
-    push di
-    call hd_ick_rect
-    call hd_ick_ok              ; CF = 1 = greyed...
-    sbb di, di
-    neg di                      ; ...which is OS88UI_DIS, bit 0
-    mov bx, hd_ickrec
-    call os88ui_chk
-    pop di
-    pop bx
-    ret
-
-hd_ick_draw:
-    push di
-    push bp
-    call hd_iorg
-    jc .out
-    call hd_ick_emit
-.out:
-    pop bp
-    pop di
-    ret
-
-hd_ickrec:  dw 0, 0, 0, 0       ; OS88UI_CK_RECT, screen coordinates
-            dw hd_s_ickl        ; OS88UI_CK_LABEL
-hd_iwipe:   db 1                ; OS88UI_CK_ON: 1 = format first, 0 = KEEP the
-            db 0                ; volume's files (SPEC.md 52.10.15)
-hd_s_ickl:  db 'Erase the partition first', 0
-
-; -----------------------------------------------------------------------------
-; hd_iact_ok - may the ACTION button be clicked? (module internal)
-; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's single predicate for it.
-;
-; ONE predicate for one control, whichever of hd_ib0_label's three captions is
-; on it. There were TWO - hd_rest_ok asked whether the stage had reached
-; HII_DONE, and this routine's FIRST test was the same compare answering no
-; because there is nothing left to install - and they collapse because they
-; were always the same question asked from two ends (SPEC.md 52.10.6.1).
-;
-; At HII_DONE it answers YES, and that is a FACT rather than a guess (rule 3):
-; the button says Restart there, and what there is to restart into is the
-; install this dialog just did.
+; A usable slot, or the volume this machine booted from KEPT and never erased
+; (SPEC.md 52.10.15). HDI_GO's refusal, and the wizard greys the same slots
+; off the same HDS_* facts.
 ; -----------------------------------------------------------------------------
 hd_iact_ok:
     push bx
-    cmp byte [hd_iw_st], HII_DONE
-    je .yes                     ; finished: the button is Restart now
     mov bl, [hd_isel]
     xor bh, bh
     cmp byte [bx+hd_istate], HIS_OK
@@ -1028,44 +412,24 @@ hd_iact_ok:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_iw_rowtext - one row into hd_line (module internal)
+; hd_iw_rowtext - slot [hd_irow]'s State column into hd_line (module
+; internal): [letter ': '] body [', ' reason], SPEC.md 52.10.4.2 - and
+; hd_iw_rowtdi, the same at DI, for the Format window's rows (SPEC.md
+; 52.2.2.1), which say what a slot is in the same words
+;
+; THE STATE COLUMN AND NOTHING ELSE. It was the Install window's whole row -
+; 'Slot 1', the size, then this - and since that window went (SPEC.md
+; 52.10.4.4) its readers are hd_pv_slots, which hands the wizard the size as
+; a number (HDIS_SECS), and the Format window, which letters its own.
 ; -----------------------------------------------------------------------------
 hd_iw_rowtext:
+    push di                     ; the CALLER's DI comes back: os88_ent banks
+    mov di, hd_line             ; it below, after this store, so the ladder
+    call hd_iw_rowtdi           ; alone would hand back hd_line
+    pop di
+    ret
+hd_iw_rowtdi:                   ; ...or at DI: the Format window's row
     call os88_ent
-%ifdef INSTBENCH
-    cmp byte [hd_iw_st], HII_DONE   ; SPEC.md 52.10.9: the install is over, so
-    jne .slots                      ; the slot list is answering a question
-    call hd_bn_rowtext              ; nobody has any more
-    jmp .rtout
-.slots:
-%endif
-    mov di, hd_line
-    mov si, hd_s_islot
-    call hd_scat
-    mov al, [hd_irow]
-    xor ah, ah
-    inc ax
-    call hd_utoa
-    mov al, HIW_SIZEC           ; the Size column, under its heading
-    call hd_itab_to
-
-    mov bl, [hd_irow]
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    mov ax, [bx+hd_isecs]
-    mov dx, [bx+hd_isecs+2]
-    mov cx, ax
-    or cx, dx
-    jz .nosize
-    call hd_iw_size
-    jmp short .state
-.nosize:
-    mov si, hd_s_idash
-    call hd_scat
-.state:
-    mov al, HIW_STATEC          ; ...and the State column, under its own
-    call hd_itab_to
     mov bl, [hd_irow]
     xor bh, bh
     mov al, [bx+hd_ilet]        ; 'C: ' when it is on the desktop
@@ -1097,31 +461,7 @@ hd_iw_rowtext:
     call hd_scat
 .done:
     mov byte [di], 0
-%ifdef INSTBENCH
-.rtout:
-%endif
     jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_itab_to - space-pad hd_line from DI out to column AL
-; in:  DI = the write position in hd_line, AL = the column
-; out: DI at that column (or where it was, if already past it: a wide field
-;      prints wide, hd_utoa's own rule)
-; clobbers: DI (the output), flags
-; -----------------------------------------------------------------------------
-hd_itab_to:
-    push ax
-    xor ah, ah
-    add ax, hd_line
-.pad:
-    cmp di, ax
-    jae .out
-    mov byte [di], ' '
-    inc di
-    jmp short .pad
-.out:
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; hd_hex2 - AL as two hex digits at DI, DI advanced
@@ -1454,7 +794,7 @@ hd_bn_save:
     mov di, [hd_bp]                 ; file and the window cannot disagree
     mov si, hd_line
     call hd_scat
-    mov word [di], 0x0A0D           ; CR LF: this is read on a DOS box
+    mov word [di], 0x0A0D           ; CR LF: this is read on a DOS machine
     add di, 2
     mov [hd_bp], di
     inc byte [hd_irow]
@@ -1522,145 +862,14 @@ hd_bn_rowtext:
 %endif
 
 ; -----------------------------------------------------------------------------
-; hd_iw_size - DX:AX sectors as '31M', '970K' or '12G' at DI, DI advanced
-;
-; KB as well as MB, because SPEC.md 52.2.1's alignment gaps are real
-; partitions: a disk repartitioned by a modern tool leaves ~1,985 sectors at
-; the front, and a size column reading '0M' looks like a broken tool rather
-; than a small volume.
-;
-; NOT os88_ent: that banks DI as well and the ladder would put it back, and
-; the ADVANCED DI is this routine's output - hd_iw_rowtext pads from it to
-; the State column, so a restored DI blanked every size it had just written.
-; -----------------------------------------------------------------------------
-hd_iw_size:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    or dx, dx
-    jnz .mb
-    cmp ax, 2048
-    jae .mb
-    shr ax, 1                   ; sectors / 2 = KB
-    call hd_utoa
-    mov si, hd_s_ik
-    jmp short .unit
-.mb:
-    mov cx, 11                  ; sectors / 2048 = MB, a 32-bit shift: a
-.shift:                         ; partition is not bounded by a word of
-    shr dx, 1                   ; sectors (SPEC.md 18.7.5)
-    rcr ax, 1
-    loop .shift
-    mov si, hd_s_mb
-    or dx, dx                   ; past 65,535MB, say it in GB
-    jnz .gb
-    cmp ax, 10000
-    jb .num
-.gb:
-    mov cx, 10
-.gshift:
-    shr dx, 1
-    rcr ax, 1
-    loop .gshift
-    mov si, hd_s_ig
-.num:
-    call hd_utoa
-.unit:
-    call hd_scat
-    jmp os88_r_si               ; ax..si: DI goes back ADVANCED
-
-; -----------------------------------------------------------------------------
-; hd_iw_click - W_ONCLICK.  in: BX = window, CX = x, DX = y, content-relative
-; -----------------------------------------------------------------------------
-hd_iw_click:
-    call os88_ent
-    call hd_xpt                 ; W_ONCLICK's CX/DX are SCREEN coordinates -
-                                ; tool.inc's conversion, and the reason this
-                                ; file had none was an assumption that they
-                                ; arrive content-relative. They do not, and
-                                ; every y then compared past the button row,
-                                ; so nothing was ever hit
-
-    cmp dx, HIW_BY - 2
-    jl .notbtn
-    ; SPEC.md 13.6/13.8.4: the action button writes a disk or reboots the
-    ; machine and Close ends the window - neither has a safe prefix action,
-    ; so the press only ARMS and DRAWS and hd_iw_up acts.
-    call hd_ibhit
-    or al, al
-    jz .done
-    xor ah, ah
-    call os88ui_arm
-    call hd_isetdown
-    jmp short .done
-.notbtn:
-    cmp dx, HIW_CKY
-    jl .rows
-    cmp dx, HIW_CKY + HIW_CKH
-    jge .done
-    call hd_ick_ok              ; greyed: the box is a fact, not a choice
-    jc .done
-    call hd_ick_rect            ; screen coordinates, as the control wants
-    add cx, di
-    add dx, bp
-    mov bx, hd_ickrec
-    call os88ui_chkhit          ; toggled and its mark redrawn, or missed
-    jc .done
-    cmp byte [hd_iw_st], HII_ARMED  ; an armed Install was armed for the OTHER
-    jne .ckmsg                      ; answer: disarm, tool.inc's rule
-    mov byte [hd_iw_st], HII_IDLE
-.ckmsg:
-    call hd_ickmsg
-    call hd_ibtns_draw          ; the greying may have flipped (the booted-from
-    call hd_imsg_draw           ; volume may be kept, never erased)
-    jmp short .done
-.rows:
-    mov ax, dx                  ; (DX is still the relative y on this path)
-    sub ax, HIW_R0Y - 2
-    js .done
-    mov bl, HIW_ROWH
-    div bl                      ; AL = the row
-    cmp al, 4
-    jae .done
-    cmp al, [hd_isel]
-    je .done
-    mov [hd_isel], al
-    call hd_ia_rel                  ; (an install waiting on its apps disk is
-                                    ; abandoned by this too)
-    mov byte [hd_iw_st], HII_IDLE   ; picking another row disarms, tool.inc's
-    call hd_idefwipe                ; rule: anything but the same button again
-    call hd_ickmsg
-    call hd_ick_draw            ; ...and the box is this slot's default now
-    call hd_irows_draw          ; the bar moved, the message changed, and the
-    call hd_ibtns_draw          ; disarm may have re-greyed Install. The header
-    call hd_imsg_draw           ; did not change and is not redrawn
-    ; ...and NO `.refused` arm. It set hd_s_ibad for a click on a greyed
-    ; control, and hd_ibhit answers 0 for one - so nothing ever reached it,
-    ; which its own comment half conceded: "a greyed control explains itself
-    ; (SPEC.md 47 rule 5), so this says nothing new". Rule 5 is still the
-    ; answer; the arm was a second copy of it that could not run.
-.done:
-    jmp os88_r_bp
-
-; -----------------------------------------------------------------------------
-; hd_inst_step - one click of the stage machine (module internal)
+; hd_inst_step - one step of the stage machine (module internal)
+; in:  [hd_iw_st] = HII_ARMED (HDI_GO) or HII_SYSDONE (HDI_APPS) - ipkg.inc's
+;      two verbs, which are its only callers and test the stage first
 ; -----------------------------------------------------------------------------
 hd_inst_step:
     push ax
-    cmp byte [hd_iw_st], HII_ARMED
-    je .go
     cmp byte [hd_iw_st], HII_SYSDONE
     je .apps
-    mov byte [hd_iw_st], HII_ARMED  ; ask. There is no dialog to ask in, and a
-    mov word [hd_imsg], hd_s_iarm   ; second click on the same button is the
-    cmp byte [hd_iwipe], 0          ; (...and what it asks says which install
-    jne .out                        ; this is: SPEC.md 52.10.15)
-    mov word [hd_imsg], hd_s_iarmk
-    jmp short .out                  ; cheapest confirm that cannot be mistaken
-                                    ; for the first (SPEC.md 52.2.3)
-.go:
     call hd_ia_acq              ; HOLD the kernel's ASSOC.DAT writer FIRST
                                 ; (SPEC.md 54.7.6.4): the system phase below
                                 ; replaces FORMAT.DRV on the boot volume, and
@@ -1670,6 +879,9 @@ hd_inst_step:
                                 ; find nothing it may load
     call hd_inst_sys
     jc .failed
+    cmp byte [hd_isrcx], 0xFF   ; a NAMED source carried the apps with it:
+    jne .fin                    ; no disk to find, none to ask for - straight
+                                ; to the cache and Done (SPEC.md 117.10.5)
     call hd_iapps_find          ; ...and do not ask for a disk that is already
     jc .swap                    ; in the machine (SPEC.md 52.10.5). Falling
     mov [hd_iautod], al         ; straight into .apps is what makes the whole
@@ -1678,12 +890,12 @@ hd_inst_step:
 .swap:
     mov si, hd_s_laask
     call hd_ilog
-    mov byte [hd_iw_st], HII_SYSDONE
-    mov word [hd_imsg], hd_s_iswap
-    jmp short .out
+    mov byte [hd_iw_st], HII_SYSDONE    ; (no caption: the wizard reads one
+    jmp short .out                      ; only on HDG_FAIL)
 .apps:
     call hd_inst_apps
     jc .failed
+.fin:
     mov si, hd_s_lasc
     call hd_ilog
     push dx                     ; ...and the volume's OWN association cache,
@@ -1703,12 +915,6 @@ hd_inst_step:
     call hd_ia_rel
     call hd_ilog_sum
     mov byte [hd_iw_st], HII_DONE
-%ifdef INSTBENCH
-    mov word [hd_imsg], hd_s_bdone  ; the rows below are the report now, so the
-    call hd_irows_draw              ; caption is their legend (SPEC.md 52.10.9)
-%else                               ; - and the rows have to be ASKED to
-    mov word [hd_imsg], hd_s_idone  ; redraw: only the caption has a path of
-%endif                              ; its own out of the stage machine
     jmp short .out
 .failed:
     call hd_ia_rel
@@ -1722,9 +928,9 @@ hd_inst_step:
 ; (SPEC.md 54.7.6.4) for the length of an install (module internal)
 ; clobbers: nothing (flags)
 ;
-; Held from the click that starts the copy to the end of the install, however
-; it ends - done, failed, or abandoned at the apps-disk prompt (another row
-; picked, the window closed, the driver detached). The release is cheap and
+; Held from the verb that starts the copy to the end of the install, however
+; it ends - done, failed, or abandoned at the apps-disk prompt (HDI_QUIT, a
+; new HDI_GO, the driver detached). The release is cheap and
 ; idempotent, so every exit simply asks; hd_iheld keeps it from releasing a
 ; hold this tool never took.
 ; -----------------------------------------------------------------------------
@@ -1789,14 +995,16 @@ hd_inst_sys:
                                 ; against cannot arise here: the small-buffer
                                 ; case succeeds instead of failing after the
                                 ; format
-    mov word [hd_imsg], hd_s_iwork
-    call hd_imsg_draw           ; say so BEFORE the writes - a 32MB format is
-                                ; hundreds of sectors and the user should not
-                                ; watch a frozen window wonder. ONE LINE: the
-                                ; rest of the window has not changed, and a
-                                ; full repaint here was a flash right before
-                                ; a long freeze (SPEC.md 52.10.6)
+    mov word [hd_imsg], hd_s_ierr   ; THE CAPTION A STOP SHOWS when no step
+                                ; set a sharper one (the wizard reads it only
+                                ; on HDG_FAIL). It was 'Copying...', the
+                                ; Install window's progress line
     call hd_ivol_bank           ; SPEC.md 51.5.2, whatever happens below
+    mov al, [hd_isrcx]          ; ...and a source HDI_GO NAMED overrides the
+    cmp al, 0xFF                ; bank's: the network volume the package
+    je .bank                    ; mounted, not wherever the machine stands
+    mov [hd_isrcdrv], al        ; (SPEC.md 117.10.5). hd_isrc_ck still asks
+.bank:                          ; it for a KERNEL.SYS
     call hd_iunmount_dst        ; ...and NOTHING may still be mounted on the
                                 ; slot we are about to erase (SPEC.md 52.10.8)
     call OSAPI_BATCH_BEGIN      ; the interface is frozen from here to the
@@ -1926,8 +1134,7 @@ hd_inst_apps:
                                 ; Install click
     call hd_ibuf_get
     jc .nomem
-    mov word [hd_imsg], hd_s_iwork
-    call hd_imsg_draw
+    mov word [hd_imsg], hd_s_ierr   ; hd_inst_sys's default, the same reason
 %ifdef INSTBENCH
     call hd_bn_bank             ; SPEC.md 52.10.9 - and this phase is the one
 %endif                          ; the progress bar has always shown
@@ -3046,6 +2253,9 @@ hd_isrc_ck:
 .src:
     call hd_isrc_ck_one         ; where the bank left us...
     jnc .ok
+    cmp byte [hd_isrcx], 0xFF   ; ...but a NAMED source is the only one
+    jne .no                     ; (SPEC.md 117.10.5): a floppy would install
+                                ; its system and no apps, and say Done
     push bx                     ; ...and then EVERY FLOPPY, lowest first
     mov bh, [hd_isrcdrv]        ; (SPEC.md 52.10.15). It was A: alone, which
     xor bl, bl                  ; is right on the machine this was written
@@ -4389,28 +3599,20 @@ hd_inst_mbr:
 ; one paints over the border and out the other side.
 ; =============================================================================
 hd_s_ititle:  db 'Install', 0
-hd_s_ihead:   db 'Install to  Size  State', 0   ; HIW_SIZEC, HIW_STATEC
 hd_s_iinst    equ hd_s_ititle
-hd_s_icopy:   db 'Copy Apps', 0
-hd_s_irest:   db 'Restart', 0
-hd_s_islot:   db 'Slot ', 0
-hd_s_idash    equ hd_s_minus    ; cppage.inc's '-'
-hd_s_ik       equ hd_s_kb       ; tool.inc's 'K'
 hd_s_kernel:  db 'KERNEL.SYS', 0
 hd_s_bootsys: db 'BOOTHD.SYS', 0    ; ...and the boot sector it came with
                                 ; (SPEC.md 52.10.16)
 hd_s_cfg:     db 'SYSTEM.CFG', 0    ; ...and the two a KEPT volume keeps
 hd_s_appdata: db 'APPDATA', 0       ; (SPEC.md 52.10.15)
 hd_s_kpad:    db 'KPAD.TMP', 0      ; the allocator's pad, for one moment
-hd_s_assoc:   db 'ASSOC.DAT', 0 ; ...the OTHER file the copy may not carry
-                                ; (SPEC.md 52.10.14)
+hd_s_inomb    equ hd_s_tnomb    ; tool.inc's, the same sentence
 hd_s_iapps:   db 'APPS', 0      ; what makes a disk THE APPS DISK (52.10.5)
-hd_s_o88:     db '.O88', 0      ; ...and what has to be INSIDE it
 
 ; THE STATE COLUMN (SPEC.md 52.10.4.2): [letter ': '] body [', ' reason].
 ; What is THERE, and why not only when the answer is no - so the longest row
-; is `C: FAT16, Wrong Geometry`, 24 cells from HIW_STATEC, which is what
-; HIW_CELLS is sized for. The FAT names and three of the reasons are the
+; is `C: FAT16, Wrong Geometry`, 24 characters, which is what HDIS_TEXT is
+; sized for. The FAT names and three of the reasons are the
 ; Format window's own strings, so two windows use one word for one fact.
 hd_s_iunpart: db 'Unpartitioned', 0 ; a free slot the disk has room behind
 hd_s_iempty:  db 'Empty', 0         ; ...and one it has none behind
@@ -4422,78 +3624,23 @@ hd_s_icolon:  db ': ', 0
 hd_s_icomma:  db ', ', 0
 hd_s_itype:   db 'Type ', 0
 hd_s_ih:      db 'h', 0
-hd_s_ig:      db 'G', 0
 
 ; The foreign types worth a NAME: type byte, then the string. Anything else
 ; reads 'Type nnh', which is still more than 'Unusable' said.
+; THE COMMON ONES ONLY: what a PC that also runs DOS, Windows or Linux
+; carries. Anything rarer (BSD, XENIX, OS/2, NetWare, GPT, hidden FAT, ...)
+; reads 'Type nnh', which still says more than 'Unusable' did - the full list
+; cost a 360KB system disk a sector (SPEC.md 52.10.4.4).
+; THE NAMES INLINE: each is its type bytes, then the name. A record is a
+; COUNT byte (0 ends the table), that many type bytes, and the NUL-ended
+; name - no pointer table, which was 25 three-byte entries for 15 names.
 hd_ptypes:
-    db 0x05
-    dw hd_s_pext
-    db 0x0F
-    dw hd_s_pext
-    db 0x85
-    dw hd_s_pext
-    db 0x07
-    dw hd_s_pntfs
-    db 0x0B
-    dw hd_s_pfat32
-    db 0x0C
-    dw hd_s_pfat32
-    db 0x82
-    dw hd_s_pswap
-    db 0x83
-    dw hd_s_plinux
-    db 0x8E
-    dw hd_s_plvm
-    db 0xA5
-    dw hd_s_pbsd
-    db 0xA6
-    dw hd_s_pbsd
-    db 0xA9
-    dw hd_s_pbsd
-    db 0x02
-    dw hd_s_pxenix
-    db 0x03
-    dw hd_s_pxenix
-    db 0x63
-    dw hd_s_punix
-    db 0x0A
-    dw hd_s_pos2
-    db 0xDB
-    dw hd_s_pcpm
-    db 0x64
-    dw hd_s_pnw
-    db 0x65
-    dw hd_s_pnw
-    db 0xEE
-    dw hd_s_pgpt
-    db 0xEF
-    dw hd_s_pefi
-    db 0x11
-    dw hd_s_phid
-    db 0x14
-    dw hd_s_phid
-    db 0x16
-    dw hd_s_phid
-    db 0x1E
-    dw hd_s_phid
-    db 0
-    dw 0                        ; the terminator: its WORD is the test
-hd_s_pext:    db 'Extended', 0
-hd_s_pntfs:   db 'NTFS/HPFS', 0
-hd_s_pfat32:  db 'FAT32', 0
-hd_s_pswap:   db 'Linux Swap', 0
-hd_s_plinux:  db 'Linux', 0
-hd_s_plvm:    db 'Linux LVM', 0
-hd_s_pbsd:    db 'BSD', 0
-hd_s_pxenix:  db 'XENIX', 0
-hd_s_punix:   db 'Unix', 0
-hd_s_pos2:    db 'OS/2 Boot', 0
-hd_s_pcpm:    db 'CP/M-86', 0
-hd_s_pnw:     db 'NetWare', 0
-hd_s_pgpt:    db 'GPT Disk', 0
-hd_s_pefi:    db 'EFI System', 0
-hd_s_phid:    db 'Hidden FAT', 0    ; a FAT type with the hide bit (10h) set
+    db 3, 0x05, 0x0F, 0x85, 'Extended', 0
+    db 1, 0x07, 'NTFS/HPFS', 0
+    db 2, 0x0B, 0x0C, 'FAT32', 0
+    db 1, 0x82, 'Linux Swap', 0
+    db 1, 0x83, 'Linux', 0
+    db 0                        ; the terminator
 
 ; Every line below is one CAPTION, and the macro is what stops one growing
 ; past the band: HIW_CELLS is the run's width and a longer string is silently
@@ -4507,14 +3654,8 @@ hd_s_phid:    db 'Hidden FAT', 0    ; a FAT type with the hide bit (10h) set
     %endif
 %endmacro
 
-    HIMSG hd_s_ipick, 'Pick a partition, then Install'
-    HIMSG hd_s_iarm, 'Erases it: Install again to confirm'
-    HIMSG hd_s_iwork, 'Copying - this takes a few minutes'
-    HIMSG hd_s_iswap, 'Insert the APPS disk, then Install'
-    HIMSG hd_s_idone, 'Done - remove the floppy, Restart'
     HIMSG hd_s_ibad, 'That partition cannot be used'
     HIMSG hd_s_inomem, 'Not enough memory to copy'
-    HIMSG hd_s_inomb, 'Cannot read the partition table'
     HIMSG hd_s_insys, 'No system disk:'   ; + hd_isd_add's entries
     HIMSG hd_s_inovbr, 'Older disk: boot from it to install it'
     HIMSG hd_s_ifmt, 'Could not format that partition'
@@ -4526,18 +3667,10 @@ hd_s_phid:    db 'Hidden FAT', 0    ; a FAT type with the hide bit (10h) set
     HIMSG hd_s_ikbpb, 'That volume is not one we can keep'
     HIMSG hd_s_ikgeom, 'Formatted for another geometry'
     HIMSG hd_s_iksplit, 'The kernel did not land in one piece'
-    HIMSG hd_s_iarmk, 'Keeps its files: Install again to confirm'
-    HIMSG hd_s_ilbwipe, 'Boot from a floppy to erase it'
-%ifdef INSTBENCH
-    HIMSG hd_s_bdone, '     fC   fS   dC   dS   tk  done'
-%endif
 
-hd_iwin:      dw 0              ; .text with a real initialiser: -f bin zeroes
-                                ; nothing, and a garbage window pointer here
-                                ; is a paint through whatever it names
 hd_iw_st:     db 0
 hd_isel:      db 0
-hd_imsg:      dw hd_s_ipick
+hd_imsg:      dw hd_s_ibad
 hd_istate:    times 4 db 0      ; HIS_*: the verdict
 hd_isecs:     times 4 dd 0      ; ...the extent, 32 bits: a PARTITION is not
                                 ; bounded by a word of sectors
@@ -4564,10 +3697,10 @@ hd_isrcdrv:   db 0              ; the drive the COPY reads from, which is the
 hd_iafound:   db 0              ; hd_iapps_find: an APPS folder has been seen
 hd_iappsc:    dw 0              ; ...and its first cluster, for the descent
 hd_iheld:     db 0              ; 1 = this install HOLDS the ASSOC.DAT writer
+hd_isrcx:     db 0xFF           ; HDI_GO's NAMED source, 0xFF = none (117.10.5)
 hd_iautod:    db 0xFF           ; the auto-detected apps drive, 0xFF = none.
-                                ; .text with a real initialiser, hd_iwin's
-                                ; reason: -f bin zeroes nothing and 0 here is
-                                ; drive A:
+                                ; .text with a real initialiser: -f bin
+                                ; zeroes nothing, and 0 here is drive A:
 hd_ilvl:      db 0              ; THE WALK'S LEVEL STACK (SPEC.md 52.10.13):
 hd_isrcc:     times HIW_DEPTH dw 0    ; which folder each level is on the
 hd_idstc:     times HIW_DEPTH dw 0    ; source and on the destination (0 = the
@@ -4634,3 +3767,5 @@ hd_ircur:     times FSEQ_SIZE db 0 ; ...and its READ_SEQ cursor (SPEC.md
 
 ; --- state this module owns (moved out of hdd.asm's data block) ---
 hd_idev:     db 0               ; ...and the installer's, for the same reason
+
+

@@ -122,7 +122,7 @@ if DLG:
     # scrolls the chooser's own block. Registered as `sbardlg`.
     import os88ui                                        # noqa: E402
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                     machine=MACHINE) as ui:
+                     machine=MACHINE, quick=True) as ui:
         m = ui.m
         print(f"== {MACHINE} : the CHOOSER's bar, same derivation (13.10, "
               f"38.3) ==")
@@ -177,8 +177,10 @@ if DLG:
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
+    M.no_saver(m)
     mo = Mouse(marty=m)
     print(f"== {MACHINE} : the shared scroll bar (SPEC.md 13.10) ==")
 

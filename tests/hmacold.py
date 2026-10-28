@@ -28,6 +28,13 @@ Three boots of the shipped 1.44MB system disk (QEMU's VGA), A/B/C:
      without it, A's numbers would say nothing about where they came from.
   C. -m 128 with COLDHMA.SYS one byte away from this kernel's (its `.text`
      hash): refused, and exactly B - a wrong image is no image.
+  D. -m 128 on a VIDEO=cga kernel (a private tree): an AT with neither a VGA
+     nor an EGA, so kmain_o has SLID `.cold` down over the VGA rung before
+     XMEM.DRV rings (SPEC.md 2.10.9) - the order the HMA image's delta mover
+     exists for (docs/plans/MOVABLE-COLD-PLAN.md 4). It copies `.cold` up
+     from where it RUNS, not from COLD_HOME: [api_coldseg] = FFFF, the HMA
+     holds kernel.bin's `.cold`, [mem_base] is VGA_RAM rounded (the rung,
+     `.cold`'s slid copy and `.vgabuf` all heap), and CTRL.DRV says FFFF.
 
     make && python3 tests/hmacold.py
 """
@@ -40,6 +47,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
+import os88build   # noqa: E402
 import os88mouse   # noqa: E402
 import os88qemu    # noqa: E402
 import os88rom     # noqa: E402
@@ -69,18 +77,18 @@ class QMouse(os88mouse.Mouse):
         self.q = q
 
     def to(self, x, y, l=False, **_kw):
-        # A PACKET LOST IS A POSITION WRONG: the msmouse line runs at 1200
-        # baud and tools/mouse.py's walk is relative, so a dropped packet
-        # leaves the pointer short - which the read-back sees, and a second
-        # walk (it pins at the clamp first) repairs. `l` is the level a drag
-        # carries, and QMP's button state is sticky, so it needs nothing here
-        for _ in range(4):
-            xmcheck.goto(self.q.sock, x, y)
-            if os88qemu.acted(self.q, lambda: self.where()[:2] == (x, y),
-                              secs=3, what="the pointer at %d,%d" % (x, y)):
-                return
-        raise os88ui.UIError("the pointer did not reach %d,%d (at %r)"
-                             % (x, y, self.where()))
+        # CLOSED-LOOP (os88qemu.mouse_to, SOAK-SPEED 15): each relative
+        # packet waits for mouse_x/mouse_y to move, so a lost one is seen and
+        # re-sent at once - where tools/mouse.py pinned at the clamp and
+        # walked back blind, ~1.5 s a move. `l` is the level a drag carries;
+        # QMP's button state is sticky, so it only tells the wait what to see
+        try:
+            os88qemu.mouse_to(self.q, os88sym.linear,
+                              lambda *c: xmcheck.qmp(self.q.sock, *c), x, y,
+                              btn=1 if l else 0)
+        except os88qemu.MouseError as e:
+            raise os88ui.UIError("the pointer did not reach %d,%d (at %r): %s"
+                                 % (x, y, self.where(), e))
 
     def dblclick(self, x, y, **_kw):
         """Two clicks over QMP with nothing between them: the msmouse line
@@ -117,7 +125,7 @@ class QUI(os88ui.UI):
         raise os88ui.UIError("timed out waiting for %s%s" % (what, extra))
 
 
-def boot(tmp, mem, sysimg, panel=True, sites=(), vg=()):
+def boot(tmp, mem, sysimg, panel=True, sites=(), vg=(), floors=(), vst=None):
     apps = os.path.join(tmp, "apps.img")
     shutil.copy(APPS, apps)
     q = vidxms.Q(tmp, sysimg, apps, mem)
@@ -131,18 +139,19 @@ def boot(tmp, mem, sysimg, panel=True, sites=(), vg=()):
     # answer while `.cold` is still where stage 2 put it. [mem_base] is raised
     # over the blob until mem_unblob_x, the line after spl_finish, puts it on
     # the floor - one of exactly two floors, by where `.cold` ended up
-    floors = (EQ["HEAP_SEG"], EQ["COLD_RAM"] + EQ["VGABUF_PARA"])
+    floors = floors or (EQ["HEAP_SEG"],        # (rounded: SPEC.md 2.10.9)
+                        (EQ["COLD_RAM"] + EQ["VGABUF_PARA"] + 31) // 32 * 32)
     if not os88qemu.acted(q, lambda: u16(q.read(S("mem_base"), 2)) in floors,
                           secs=120, what="the blob to be given back"):
         raise SystemExit("hmacold: the boot never finished (-m %d): "
                          "[mem_base] = %04X" % (mem, u16(q.read(S("mem_base"),
                                                                 2))))
-    os88qemu.pace(q, 1)
+    os88qemu.ui_done(q, S, cap=1.0)     # (was pace(1): every read is memory)
     mfp = q.read(S("rom_mfp"), 4)
     out = {"cs": u16(q.read(S("api_coldseg"), 2)),
            "base": u16(q.read(S("mem_base"), 2)),
            "mfp": (u16(mfp, 2), u16(mfp)),
-           "hma": q.read(0xFFFF0 + EQ["COLD_VSTART"], 64),
+           "hma": q.read(0xFFFF0 + (vst or EQ["COLD_VSTART"]), 64),
            "vgab": [u16(q.read((os88sym.KERNEL_SEG << 4) + o, 2)) for o in vg]}
     if panel:
         ui = QUI(q, mouse=QMouse(q), sym=S, verbose=False)
@@ -181,7 +190,7 @@ def main():
              "HMA" % a["cs"])
         want(a["hma"] == cold[:64], "FFFF:%04X holds kernel.bin's `.cold` - "
              "the top of the HMA (SPEC.md 2.10.8)" % EQ["COLD_VSTART"])
-        want(a["base"] == cold_ram + vgap, "[mem_base] = %04X: the cold rung "
+        want(a["base"] == (cold_ram + vgap + 31) // 32 * 32, "[mem_base] = %04X: the cold rung "
              "back, the decoder's buffers kept under it (%04X; %04X without)"
              % (a["base"], cold_ram + vgap, heap))
         want(a["mfp"][0] == HMA, "rom_mfp = %04X:%04X" % a["mfp"])
@@ -215,6 +224,31 @@ def main():
         c = boot(tmp, 128, bad, panel=False)
         want(c["cs"] == cold_home, "[api_coldseg] = %04X - refused" % c["cs"])
         want(c["base"] == heap, "[mem_base] = %04X" % c["base"])
+
+        print("D: -m 128, VIDEO=cga - `.cold` slid before the HMA took it")
+        tr = os88build.tree("VIDEO=cga", targets=("os8088.img",)).apply()
+        eq = os88sym.equates(())
+        variant = " ".join("-D" + d for d in tr.defines)
+        dt = os88rom.kernel_tables(tr.dir, variant)
+        dsites = dt["lists"]["mods"].get(eq["MOD_CTRL"], [])
+        mono = (eq["VGA_RAM"] + 31) // 32 * 32
+        dimg = os.path.join(tmp, "cga.img")
+        shutil.copy(tr.img("os8088.img"), dimg)
+        d = boot(tmp, 128, dimg, sites=dsites,
+                 floors=(eq["MONO_FLOOR"], mono), vst=eq["COLD_VSTART"])
+        want(d["cs"] == HMA, "[api_coldseg] = %04X, `.cold` runs from the "
+             "HMA" % d["cs"])
+        want(d["hma"] == bytes(dt["cold"])[:64], "FFFF:%04X holds kernel.bin's"
+             " `.cold`, copied from the slid home %04X"
+             % (eq["COLD_VSTART"], eq["COLD_HOME"] - eq["VGA_PARA"]))
+        want(d["base"] == mono, "[mem_base] = %04X: VGA_RAM rounded (%04X), "
+             "the rung and both copies of `.cold` given back (MONO_FLOOR %04X "
+             "when it only slid)" % (d["base"], mono, eq["MONO_FLOOR"]))
+        want(d["mfp"][0] == HMA, "rom_mfp = %04X:%04X" % d["mfp"])
+        want(d.get("panel"), "the Control Panel opened")
+        cs = d.get("ctrlsites", [])
+        want(cs and all(w == HMA for w in cs), "CTRL.DRV at %04X: all %d of "
+             "its far references say FFFF" % (d.get("ctrlseg", 0), len(cs)))
 
     if fails:
         sys.exit("hmacold: %d failed" % len(fails))

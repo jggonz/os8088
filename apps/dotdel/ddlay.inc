@@ -608,6 +608,23 @@ dd_bank_box:
     mov [dd_lch], ax
     ret
 
+; dd_bdreloc - the board picture moved (SPEC.md 66.2, 93.3.4.6): BX = where it
+; was, DX = where it is now. [dd_bdseg] is the one word naming it: every reader
+; (dd_bd_hrun, dd_bd_wipe, the band copy, the wall blit) loads it into ES or DS
+; for one run, one band or one blit and claims nothing while holding it. The
+; WORKER draws frames through it, and a running worker pins every claim of ours
+; (inst_seg_parked); it parks only inside OSAPI_TASK_ALIVE at the top of
+; dd_worker, where dd_render has returned (no OSAPI_MEM_PARKSAFE). Inside the
+; fsx bracket the worker is frozen and the UI task is in the bracket's own
+; callback, so nothing compacts there but dd_fit_claim's own claim, which holds
+; no copy. No file is ever read into it or written from it.
+dd_bdreloc:
+    cmp bx, [dd_bdseg]
+    jne .o
+    mov [dd_bdseg], dx
+.o:
+    ret
+
 ; dd_bdkb_calc - AX = KB the board picture needs at the current layout
 dd_bdkb_calc:
     push dx
@@ -656,7 +673,9 @@ dd_fit_claim:
     jc .no
     mov [dd_bdseg], dx
     mov [dd_bdkb], ax
-    clc
+    mov ax, dd_bdreloc              ; ...AND IT MOVES (NO-PINNING A3, SPEC.md
+    call OSAPI_MEM_MOVABLE          ; 93.3.4.6): dd_bdreloc's header. A regrow
+    clc                             ; below keeps the declaration (50.3.1)
     ret
 .grow:
     cmp ax, [dd_bdkb]

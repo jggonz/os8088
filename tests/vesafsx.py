@@ -22,7 +22,6 @@ this row's red: the screen stays 1024x768. QEMU by name, vesa's reason.
 import os
 import subprocess
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -32,6 +31,7 @@ import heapmap                                              # noqa: E402
 import os88fixture                                          # noqa: E402
 import os88build as _B                                      # noqa: E402
 import os88qemu                                             # noqa: E402
+import os88sym                                              # noqa: E402
 import shot                                                 # noqa: E402
 import vesa                                                 # noqa: E402
 from os88geom import VID_VESA                               # noqa: E402
@@ -40,10 +40,10 @@ from os88geom import VID_VESA                               # noqa: E402
 def launch(img):
     os88fixture.need(img, "build/apps.img")
     em = "qemu" + "-system-i386"
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=off -vga std"
-        " -drive file=%s,format=raw,if=floppy -boot a"
-        " -drive file=%s,format=raw,if=floppy,index=1"
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
         " -serial msmouse"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (_B.at(img), _B.at("build/apps.img"), vesa.SOCK, vesa.PIDFILE),
@@ -74,21 +74,31 @@ def main():
     fails = []
     try:
         q = heapmap.Qmp(vesa.SOCK)
-        t0 = time.time()
-        while vesa.byte(q, "vid_kind") != VID_VESA:
-            if time.time() - t0 > 60:
-                fails.append("the desktop never reached VID_VESA")
-                break
-            time.sleep(0.5)
-        os88qemu.pace(q, 12.0)              # the autostart's load and first paint
+        # EVERY WAIT IS ON GUEST STATE (docs/plans/SOAK-PARALLEL.md 17.9):
+        # this was a host deadline, then pace(12) for "the autostart's load
+        # and first paint", pace(4) after Alt+Enter and pace(5) after Esc -
+        # pauses something was assumed to have finished inside. In the
+        # 2026-10-25 soak the Alt+Enter found no bracket taken and the Esc
+        # no desktop whole
+        vesa.desk_up(q, fails)              # Gorillas' instance, painted
         sw, sh, pix = vesa.screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
         if out_png:
             shot.png(out_png.replace(".png", "-desk.png"), sw, sh, pix)
         if (sw, sh) != (vesa.WANT_W, vesa.WANT_H):
             fails.append("before: screen is %dx%d, want %dx%d" % (sw, sh, vesa.WANT_W, vesa.WANT_H))
+        fsx = os88sym.linear("fsx_task")    # 0xFF off, else the bracket's task
+        dims = []
+
+        def mode_is(w, h):                  # the card's own mode, read back
+            d = vesa.screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            dims[:] = [d]
+            return d[:2] == (w, h)
         q.hmp("sendkey alt-ret")            # Gorillas: the bracket, any state
-        os88qemu.pace(q, 4.0)
-        sw2, sh2, pix2 = vesa.screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+        os88qemu.acted(q, lambda: q.read(fsx, 1)[0] != 0xFF, secs=20.0,
+                       what="the fsx bracket", poll=0.1)
+        os88qemu.acted(q, lambda: mode_is(640, 480), secs=10.0,
+                       what="the bracket's mode", poll=0.25)
+        sw2, sh2, pix2 = dims[0]
         if out_png:
             shot.png(out_png.replace(".png", "-full.png"), sw2, sh2, pix2)
         if (sw2, sh2) != (640, 480):
@@ -97,7 +107,11 @@ def main():
                          "DL was not VID_VGA, so it drew onto the packed desktop)"
                          % (sw2, sh2))
         q.hmp("sendkey esc")
-        os88qemu.pace(q, 5.0)
+        os88qemu.acted(q, lambda: q.read(fsx, 1)[0] == 0xFF and
+                       vesa.byte(q, "vid_kind") == VID_VESA, secs=20.0,
+                       what="the bracket's end", poll=0.1)
+        os88qemu.ui_done(q, os88sym.linear, cap=5.0,
+                         what="the desktop's repaint")
         sw3, sh3, pix3 = vesa.screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
         if out_png:
             shot.png(out_png.replace(".png", "-back.png"), sw3, sh3, pix3)

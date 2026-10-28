@@ -61,8 +61,15 @@ def fail(msg):
     sys.exit("os88romfix: " + msg)
 
 
+LADDER_HOOK = "%ifdef COLD_CS                  "
+
+
 def decouple(src):
-    """The ladder keeps its RAM rung (COLD_RAM); only the CODE segment moves."""
+    """The ladder keeps its RAM rung (COLD_RAM); only the CODE segment moves.
+    kernel.asm carries the COLD_CS hook itself now (MOVABLE-COLD-PLAN 4), so
+    a source that already has it is returned as it is."""
+    if LADDER_HOOK in src:
+        return src
     if LADDER_COLD not in src:
         fail("kernel.asm's ladder no longer reads the way this tool expects - "
              "look for COLD_SEG's equate and update LADDER_COLD")

@@ -69,7 +69,9 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make` builds it" % p)
 
-    with os88ui.boot(SYS, apps=APPS) as ui:
+    with os88ui.boot(SYS, apps=APPS,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         kseg = V("KERNEL_SEG")
         MEM_K_ASC = _EQ["MEM_K_ASC"]

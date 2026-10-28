@@ -151,11 +151,12 @@ def boot(tmp, prog):
             break
         time.sleep(0.2)
     xmcheck.wait_desktop(q.sock, "hmadosret")
-    floors = (EQ["HEAP_SEG"], EQ["COLD_RAM"] + EQ["VGABUF_PARA"])
+    floors = (EQ["HEAP_SEG"],                  # (rounded: SPEC.md 2.10.9,
+              (EQ["COLD_RAM"] + EQ["VGABUF_PARA"] + 31) // 32 * 32)  # hmadrv's)
     if not os88qemu.acted(q, lambda: u16(q.read(S("mem_base"), 2)) in floors,
                           secs=120, what="the blob to be given back"):
         raise SystemExit("hmadosret: the boot never finished")
-    os88qemu.pace(q, 1)
+    os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
     return q, Gdb(port)
 
 
@@ -186,9 +187,9 @@ def trip(q, gdb, prog, want, label):
     if not ui.path("B:/" + prog):
         want(False, "%s: double-clicking %s opened a window" % (label, prog))
         return None
-    # IN THE OS the run is the box's console, which on a VGA is the
+    # IN THE OS the run is DOS's console, which on a VGA is the
     # full-screen TEXT one (SPEC.md 96.10) and in a window elsewhere - so the
-    # page and the box's own buffer are both asked
+    # page and DOS's own buffer are both asked
     def shown():
         t = text_page(q) if q.read(0x449, 1)[0] in (2, 3, 7) else ""
         return t if "READY" in t else console(q, dm)
@@ -244,7 +245,7 @@ def trip(q, gdb, prog, want, label):
         want(False, "%s: the session came back - mode %02X, text page %r"
              % (label, q.read(0x449, 1)[0], text_page(q).strip()[:240]))
         return None
-    os88qemu.pace(q, 1)
+    os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
     return mb0, q.read(KDB, 8)
 
 
@@ -316,7 +317,10 @@ def main():
                     sys.exit("hmadosret: `.cold` is not in the HMA - "
                              "tests/hmacold.py's premise")
                 row0 = hmadrv.rows(q)["HDD"]
-                if not 0xF200 <= row0["seg"] < 0xF800:
+                org = EQ["DRV_HMA_ORG"]     # hmadrv's range: F401-F9FF at
+                lo = 0xFFFF - (org - 0x10) // 16     # C000 (it was F200-F7FF
+                hi = 0xFFFF - (org - EQ["HMA_COLD_AT"]) // 16   # at E000)
+                if not lo <= row0["seg"] <= hi:
                     sys.exit("hmadosret: HDD.DRV is not in the pool (%04X) - "
                              "tests/hmadrv.py's premise" % row0["seg"])
                 hma0 = {o: q.read(HMA + o, 64) for o in offs}

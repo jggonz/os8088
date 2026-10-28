@@ -50,8 +50,11 @@ mouse through the parse while the row samples the kernel's own cursor state,
 as tests/curdisk.py does for a disk transfer. Two things must hold: the arrow
 MOVES while the gfx lock is held (the parse is CPU work with no int 13h in it,
 so every such move is the verb's bracket and not SPEC.md 7.4's), and the bar
-says `Compressing...` - the toast is up, [toast_on], for the whole of it.
-IT HAS BEEN RED FOR THE REASON IT EXISTS: the first build raised the toast
+says the machine is busy - SPEC.md 12.8's widget is ON THE GLASS (FPG_SHOWN)
+for the whole of it, scaled across the parse. It used to be a
+`Compressing...` toast, and SPEC.md 12.8.7 made a toast outrank the widget, so
+the toast went and the bar that says how long is left took its place.
+IT HAS BEEN RED FOR THE REASON IT EXISTS: the first build raised that toast
 without fpg's bar bracket, the repaint spent gfx_lock's promised hide, and the
 arrow was off the glass for the whole parse - 6 moves in 150 looks, every one
 inside the file's own read, against 144 once the toast kept the promise.
@@ -74,6 +77,7 @@ import os88lz                                          # noqa: E402
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
+import os88sym                                         # noqa: E402
 import dispcp                                          # noqa: E402
 import lzcomp                                          # noqa: E402
 from lzcomp import S, FM_IUNCOMP, compress, cz, say    # noqa: E402
@@ -126,14 +130,14 @@ def watched(m, mo, wx, wy, fails):
         m.mouse(dy=STEP * 3)    # that could reach the bar's rows is held
         m.advance(frames=2)     # there on purpose (SPEC.md 7.4.2 rule 3)
         m.run()
+    SHOWN = os88sym.equates()["FPG_SHOWN"]   # the widget is on the glass
     look, up = [], False
     for i in range(SAMPLES):
         m.advance(frames=PACKET)
         look.append((m.read(S("gfx_lock_flag"), 1)[0],
                      int.from_bytes(m.read(S("cur_drawn_x"), 2), "little"),
                      int.from_bytes(m.read(S("cur_drawn_y"), 2), "little"),
-                     m.read(S("toast_on"), 1)[0],
-                     lzcomp.toast(m)))
+                     m.read(S("fpg_on"), 1)[0] & SHOWN))
         m.run()
         if i % SWING == SWING - 1:
             up = not up
@@ -143,18 +147,17 @@ def watched(m, mo, wx, wy, fails):
     held = [s for s in look if s[0]]
     moves = sum(1 for a, b in zip(look, look[1:])
                 if a[0] and b[0] and (a[1], a[2]) != (b[1], b[2]))
-    # the toast goes up once the module is in and the file sized - the first
-    # second of the hold is DISKOPS.DRV's own read - so it is counted from the
-    # look where it first appears, and from there it must never go down
-    first = next((i for i, s in enumerate(held)
-                  if s[3] and s[4].startswith(lzcomp.BUSY)), len(held))
+    # the widget goes up with the first read - DISKOPS.DRV's own, before the
+    # file is sized - so it is counted from the look where it first appears,
+    # and from there it must never go down: cmz_rearm re-scales it between
+    # chunks and leaves the chrome alone
+    first = next((i for i, s in enumerate(held) if s[3]), len(held))
     held = held[first:]
-    lit = sum(1 for s in held if s[3] and s[4].startswith(lzcomp.BUSY))
+    lit = sum(1 for s in held if s[3])
     say("  watch     %d looks, %d with the lock held: the arrow moved %d "
-        "times, `Compressing...` up for %d" % (len(look), len(held), moves,
-                                                lit))
+        "times, the widget up for %d" % (len(look), len(held), moves, lit))
     if not held:
-        fails.append("`Compressing...` never appeared during the verb")
+        fails.append("the file widget never appeared during the verb")
     if len(look) < SAMPLES // 2 or sum(1 for s in look if s[0]) < SAMPLES // 2:
         fails.append("the watched Compress held the lock for %d looks of %d "
                      "- it was not the parse that got watched"
@@ -164,7 +167,7 @@ def watched(m, mo, wx, wy, fails):
                      ">= %d: the pointer is frozen (SPEC.md 22.22.6)"
                      % (moves, MOVES_MIN))
     if held and lit < len(held):
-        fails.append("`Compressing...` was up for %d of %d looks inside the "
+        fails.append("the file widget was up for %d of %d looks inside the "
                      "verb" % (lit, len(held)))
     try:
         os88marty.until(m, lambda mm: lzcomp.verdict(mm),

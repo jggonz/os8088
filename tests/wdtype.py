@@ -85,10 +85,12 @@ DISK = "build/wdtypegate.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    mo = Mouse(marty=m)                 # launch() has already settled the boot
+with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
+              boot=False) as m:
+    m.run(); M.kernel_up(m); M.no_saver(m)    # the boot gate on STATE
+    mo = Mouse(marty=m)
     print("== Word: a keystroke stops at the end of its line (SPEC.md 27.4.3) ==")
-    dispcp.open_drive(m, mo, S, M.settle, "B")
+    dispcp.open_drive(m, mo, S, lambda mm, **k: M.ui_done(mm), "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
 

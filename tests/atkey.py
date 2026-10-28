@@ -76,15 +76,19 @@ def measure(img, apps, machine, tree, lines, samples, scroll=False,
     tree.apply()
     syms = pkg_syms(["-D" + a.split("=")[0] for a in tree.args
                      if a.startswith("NOAT")])
-    with os88ui.boot(img, apps=apps, machine=machine) as ui:
+    # A QUICK BOOT AND `ui_done` FOR EVERY SETTLE: what this measures is
+    # CYCLES between breakpoints and words in ArtfulType's segment, never the
+    # glass, so a wait is only owed until the UI task has finished with the
+    # last input.
+    with os88ui.boot(img, apps=apps, machine=machine, quick=True) as ui:
         m = ui.m
         w = ui.path("B:/APPS/ARTFUL.O88")
-        seg = u16(m.read(os88geom.winptr(m, w.i, ui.sym) + os88geom.W_SEG, 2))
-        ui.settle()
+        seg = os88marty.pkg_live(m, w, ui.sym)
+        os88marty.ui_done(ui.m)
         m.key("KeyN")
-        m.write(seg * 16 + syms["at_drag"], b"\x01")     # freeze the blink
-        m.write(seg * 16 + syms["at_cphase"], b"\x00")
-        ui.settle()
+        seg.write(syms["at_drag"], b"\x01")     # freeze the blink
+        seg.write(syms["at_cphase"], b"\x00")
+        os88marty.ui_done(ui.m)
 
         caret = syms["at_caret"]
 
@@ -112,7 +116,7 @@ def measure(img, apps, machine, tree, lines, samples, scroll=False,
                 m.type_text("x")
                 want += 1
                 absorbed(want)
-            ui.settle()
+            os88marty.ui_done(ui.m)
             VIEW_X = 8 + (8*4 + 16) + (8*4 + 16) + (8*5 + 16) + (8*4 + 16)//2
             mo = os88mouse.Mouse(marty=m)
             onkey = seg * 16 + syms["at_onkey"]
@@ -215,7 +219,7 @@ def measure(img, apps, machine, tree, lines, samples, scroll=False,
                 out.append(m.status()["cycles"] - c0)
                 m.bp_exec()
                 m.run()
-                ui.settle()
+                os88marty.ui_done(ui.m)
                 moved.append(u16(m.readseg(seg, top, 2)) - t0)
             print("      [at_top] moved by %s lines" % moved)
             return (out, u16(m.readseg(seg, syms["at_rlk"], 2)),
@@ -242,7 +246,7 @@ def measure(img, apps, machine, tree, lines, samples, scroll=False,
             m.type_text(ch)
             want += 1
             absorbed(want)
-        ui.settle()
+        os88marty.ui_done(ui.m)
 
         # --- and now bracket ONE more keystroke ---------------------------
         onkey = seg * 16 + syms["at_onkey"]

@@ -55,16 +55,18 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        os88marty.kernel_up(m)          # the boot gate on STATE: every act
+        mo = os88mouse.Mouse(marty=m)   # below is a guest read or a click
+
+        def uset(mm, **k):              # dispcp's settle: each verb confirms
+            return os88marty.ui_done(mm)    # off guest reads (technique 4)
+        dispcp.open_drive(m, mo, S, uset, "B")
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "APPS")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, uset, bx, by, "APPS")
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         rx, ry = dispcp.row_xy(bx, by,
-                               dispcp.scroll_to(m, mo, S, os88marty.settle,
+                               dispcp.scroll_to(m, mo, S, uset,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
                                                               "GFXBENCH.O88")))
@@ -75,7 +77,7 @@ def main():
                             "GFXBENCH's window", poll=0.3, limit=120)
         except os88marty.MartyError:
             pass                    # the breakpoint below says what it means
-        os88marty.settle(m)
+        os88marty.ui_done(m, "GFXBENCH's first paint")
 
         m.bp_exec("gfx_blitp")
         m.key("KeyR")

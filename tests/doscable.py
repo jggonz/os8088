@@ -13,7 +13,7 @@ one of the three verbs the cable refuses (§72.22.3).
 
 WHAT IS REAL AND WHAT IS NOT, which is `tests/socktest.py`'s arrangement one
 layer up. The GUEST is a cycle-accurate 4.77 MHz 8088 running the shipped
-kernel, a real `NET.DRV`, the real DOS box and a real Crynwr client. The CABLE
+kernel, a real `NET.DRV`, the real DOS.O88 and a real Crynwr client. The CABLE
 is MartyPC's parallel port driven a nibble at a time by
 `tests/lptlink/partner.py`. And the far side's TCP is not modelled at all -
 `partner.SocketBox` is real host sockets.
@@ -167,7 +167,7 @@ class Inbound(threading.Thread):
             # cycle-accurate 8088 whose every wire nibble is a debug round
             # trip, so the round trip from our request to its reply is
             # MINUTES of host wall clock. At 20 seconds this timed out, closed
-            # the socket, and the far side went NSK_CLOSING - so the box
+            # the socket, and the far side went NSK_CLOSING - so DOS
             # closed the flow before the DOS program's reply was ever sent,
             # and the row failed with "the host got nothing back" about a
             # program that had answered perfectly well. docs/WRITING-TESTS.md
@@ -271,7 +271,7 @@ def main():
     # reason.
     for n in ("dos_ebuf", "dos_pkt_xl", "net_cls", "dos_ldpsp"):
         if n not in dm:
-            say("doscable: FAILED - the DOS box has no %s; SPEC.md 96.20's "
+            say("doscable: FAILED - DOS has no %s; SPEC.md 96.20's "
                 "environment page and 96.26's route are what this row reads"
                 % n)
             return 1
@@ -358,7 +358,7 @@ def main():
         # the kernel's double-click window, which needs guest cycles between
         # them - so instead the machine is stopped the instant it has been
         # asked, and the partner steps it through the whole launch from there.
-        # Nothing between the click and the pause touches the wire: the box's
+        # Nothing between the click and the pause touches the wire: DOS's
         # own net_find and dn_init are a driver-table lookup and a memset.
         row = dispcp.row_of(m, S, "DOSPKT.COM")     # RAISES on a miss, so a
         rx, ry = dispcp.row_xy(bx, by, row)         # click can never land on
@@ -390,7 +390,7 @@ def main():
         m.run()
         os88marty.settle(m)
 
-        # --- read the box and the probe out of the guest --------------------
+        # --- read DOS and the probe out of the guest --------------------
         g = dispapps.pkg_seg(m, 0)
         pseg = g[1] if g else None
         if pseg is None:
@@ -421,7 +421,7 @@ def main():
         # THE OTHER DIRECTION (SPEC.md 96.26.8)
         # =====================================================================
         # A listening client sends NOTHING a packet driver could be read for,
-        # so the box is told which port to forward through the environment
+        # so DOS is told which port to forward through the environment
         # page. **IT IS POKED AND NOT TYPED**, deliberately: tests/dosargs.py
         # already asserts that a row typed on that page reaches the program's
         # environment block verbatim (SPEC.md 96.20), so typing it again here
@@ -487,7 +487,7 @@ def main():
             % (inb.tries, inb.got,
                "" if inb.err is None else " (%r)" % (inb.err,)))
 
-        # --- AND THE BOX'S OWN SIDE OF IT, which is what separates the two
+        # --- AND DOS'S OWN SIDE OF IT, which is what separates the two
         # ways this can fail. `LSN 0` alone cannot say whether dn_lsn_init
         # never parsed the environment row, or parsed it and had NETV_LISTEN
         # refused, or took a handle and never saw a connection - and those are
@@ -511,7 +511,7 @@ def main():
             % (bseg, lsn))
 
         # ...AND WHAT THE DRIVER COUNTED, which is the third way this can
-        # fail and the one neither reading above can see: a frame the box
+        # fail and the one neither reading above can see: a frame DOS
         # STAGED and the client REFUSED. dos_pkt_deliver's two-call up-call
         # asks the client for a buffer and a 0:0 answer is a legal reply that
         # costs the frame - `.dropped` is the same arm as "nobody registered
@@ -549,7 +549,7 @@ def main():
 
     # --- 0: the route ------------------------------------------------------
     if not xl:
-        fails.append("[dos_pkt_xl] is 0: the box took the CARD path on a "
+        fails.append("[dos_pkt_xl] is 0: DOS took the CARD path on a "
                      "machine with no card, so net_find or dos_pkt_bufs' "
                      "route compare is wrong")
     if ncls != DRVC_FILE:
@@ -595,16 +595,16 @@ def main():
     # accepted. Without it `LSN 0` is one message for three bugs in three
     # different files.
     if not lsn:
-        fails.append("the box took NO listener: dn_lsn_init did not find "
+        fails.append("DOS took NO listener: dn_lsn_init did not find "
                      "'OS88LISTEN=%d' in [dos_ebuf], or NETV_LISTEN was "
                      "refused by NET.DRV - the wire served %r, and an 'l' is "
                      "what a listen looks like" % (port, "".join(seen2)))
     elif port not in [q for _, q in lsn]:
-        fails.append("the box is listening on %r and the host connected to "
+        fails.append("DOS is listening on %r and the host connected to "
                      "%d" % (lsn, port))
     if not isyn:
         fails.append("no inbound SYN reached the client (%d frame(s) in, %d "
-                     "dropped, [dn_pend]=%d): a DROP means the box staged the "
+                     "dropped, [dn_pend]=%d): a DROP means DOS staged the "
                      "SYN and the client refused the buffer, a PEND means it "
                      "staged one the poll never collected - and neither means "
                      "dn_accept never staged it at all"

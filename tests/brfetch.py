@@ -31,6 +31,7 @@ the page crossed one. The WIRE's verdict is still the 5150's (SPEC.md
 62.10.3).
 """
 import argparse
+import atexit
 import os
 import shutil
 import socket
@@ -150,19 +151,27 @@ def main():
 
     # Bookmark writes are part of this gate, but must not dirty the shared
     # fixture image and make the next run begin with the previous run's list.
-    apps_img = "build/brfetch360.img"
-    shutil.copyfile("build/brtest360.img", apps_img)
+    # A SCRATCH COPY OUTSIDE build/: os88marty.launch reads a `build/...`
+    # path from the run's tree (os88build.at), so a copy made at the literal
+    # build/ path was a file the soak's frozen tree did not have
+    import tempfile
+    tmpd = tempfile.mkdtemp(prefix="brfetch-")
+    atexit.register(shutil.rmtree, tmpd, True)
+    apps_img = os.path.join(tmpd, "brfetch360.img")
+    shutil.copyfile(os88build.at("build/brtest360.img"), apps_img)
     with os88marty.launch("build/os8088-360.img", apps=apps_img,
-                          machine=MACHINE) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE, boot=False) as m:
+        m.run()                         # the boot gate on state (brreload's
+        os88marty.kernel_up(m)          # shape): the first act is a verb
+        os88marty.no_saver(m)           # that confirms on the window list
         mo = os88mouse.Mouse(marty=m)
         p = P.Partner(m)
 
         # --- the browser first, empty: it touches no wire until asked ------
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         wins = dispcp.win_list(m, S)
         wx, wy = dispcp.win_rect(m, S, wins[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BROWSER.O88")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "BROWSER.O88")
         wins2 = dispcp.win_list(m, S)
         if len(wins2) <= len(wins):
             sys.exit("brfetch: BROWSER.O88 did not open a window")

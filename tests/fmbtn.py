@@ -106,8 +106,10 @@ def lit(m, mono, rect):
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)          # the boot gate on STATE
+    M.no_saver(m)
     mo = Mouse(marty=m)
     mono = m.video()["type"] in ("cga", "mda", "herc")
     print(f"== {MACHINE} : Disk window header buttons (SPEC.md 22.18) ==")

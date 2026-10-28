@@ -721,6 +721,11 @@ wd_entry:
     pop es
     pop di
     pop cx
+    push ax                         ; ...and all three MOVE (SPEC.md 68.3.2).
+    mov ax, wd_reloc                ; Declared once all three exist: nothing
+    call wd_dmov                    ; points into any of them yet, and a
+    pop ax                          ; compaction inside the second or third
+                                    ; claim found the first still pinned
     mov word [wd_papn], 1
     mov word [wd_capkb], WD_KB0
     mov word [wd_cap], WD_KB0 * 1024
@@ -2350,6 +2355,63 @@ wd_ctcalc:
     ret
 
 ; -----------------------------------------------------------------------------
+; wd_rebase - move every SCREEN rect Word banked to where the window IS NOW
+; in:  AX/DX = the live content origin, [wd_cl]/[wd_ct] = the one the rects
+;      were laid out against (wd_bounds, before it banks the new one);
+;      preserves all registers
+;
+; A window dragged by its title is REPLAYED, not painted (SPEC.md 11.96.12.0),
+; so the combos' rects the ribbon and ruler painters wrote, the About card and
+; its OK, a dialog's corner and an open menu's panel all named where the
+; window WAS - a press on any of them answered nothing, or the wrong thing,
+; until something repainted. Every one of them was laid out against the
+; origin wd_bounds banked, and wd_bounds is the first thing every handler
+; runs, so the live origin less that one is exactly what each owes - the
+; same delta skies' cs_regeo takes. Closed or never-drawn ones shift too and
+; harmlessly: each is rewritten whole when it next opens or paints.
+; -----------------------------------------------------------------------------
+wd_rebase:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    sub ax, [wd_cl]
+    sub dx, [wd_ct]
+    mov cx, ax
+    or cx, dx
+    jz .out                         ; not moved: nothing owed
+    mov si, wd_rbrects
+    mov cx, WD_RBN
+.r:
+    mov di, [si]                    ; a 4-word inclusive rect: x1 y1 x2 y2
+    add [di], ax
+    add [di+2], dx
+    add [di+4], ax
+    add [di+6], dx
+    inc si
+    inc si
+    loop .r
+    add [wd_dlgx], ax               ; the open dialog's corner
+    add [wd_dlgy], dx
+    add [wd_dfont + OS88UI_DR_TOP], dx  ; an open list's first row
+    add [wd_dpts + OS88UI_DR_TOP], dx
+    add [wd_dstyle + OS88UI_DR_TOP], dx
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+wd_rbrects:
+    dw wd_dfont + OS88UI_DR_RECT, wd_dpts + OS88UI_DR_RECT
+    dw wd_dstyle + OS88UI_DR_RECT, wd_abrect, wd_abok, wd_dlrect
+    dw wd_mnrec + OS88UI_MN_MRECT, wd_mnrec + OS88UI_MN_ABOX
+    dw wd_mnrec + OS88UI_MN_BRECT
+WD_RBN equ ($ - wd_rbrects) / 2
+
+; -----------------------------------------------------------------------------
 ; wd_bounds - the content rectangle and the text origin, from the live record
 ; in:  SI = window ptr, ES = KERNEL_SEG (as every callback is entered)
 ; out: [wd_tx] = the wrap column and left margin, [wd_ty] = the first text
@@ -2364,6 +2426,7 @@ wd_bounds:
     call wd_sv4
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    call wd_rebase                  ; the rects banked at the OLD one follow
     mov [wd_cl], ax                 ; the content box, banked for every chrome
     mov [wd_ct], dx                 ; painter and hit test (SPEC.md 68.2) -
                                     ; read here once, exactly like wd_tx/wd_ty
@@ -5727,10 +5790,20 @@ wd_itinit:
     push si
     push di
     push es
+    xor ax, ax                      ; PIN THE DOCUMENT across this claim
+    call wd_dmov                    ; (SPEC.md 68.3.2): we are inside a
+                                    ; wd_walk, which holds ES = [wd_dseg] for
+                                    ; the whole of its pass, and the claim
+                                    ; below may compact. The one claim this
+                                    ; program makes with a segment in hand
     mov ax, WD_ITKB                 ; the table AND the staging area
     call OSAPI_MEM_CLAIM
-    jc .fail
+    jc .let
     mov [wd_iseg], dx
+.let:
+    mov ax, wd_reloc                ; ...and let them all move again, the
+    call wd_dmov                    ; table with them. Flags kept: CF is the
+    jc .fail                        ; claim's verdict
     call OSAPI_FONT_GLYPHS          ; DX:SI = the kernel's table (NOT in
     mov [wd_itsg], dx               ; KERNEL_SEG - read through ES = DX)
     mov [wd_itso], si
@@ -8626,6 +8699,74 @@ wd_hirechk:
 ; =============================================================================
 ; The document claim (SPEC.md 27.6/50.3)
 ; =============================================================================
+
+; -----------------------------------------------------------------------------
+; wd_reloc - the compactor moved one of the document's claims (SPEC.md 68.3.2)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing (mem_reloc_call banks every register, SPEC.md 66.3 rule 1)
+;
+; ONE PROC FOR EVERY CLAIM THE DOCUMENT KEEPS, Note Pad's shape (66.5.7): the
+; kernel calls the proc the moved claim was declared with and BX says which
+; one it was. Each claim is named by exactly ONE word and every cursor into
+; it is an OFFSET ([wd_len], [wd_cur], the selection, the undo records' blob
+; positions, the PAP indices in the CHP bytes), so the fix is one store - and
+; nothing in the typing or drawing path re-reads anything it did not already.
+; The two transients - the load/save staging and the Utilities scratch - are
+; not here: each is claimed and freed inside one command and is pinned by
+; having no declaration (66.5.7.1's counter-example, bucket C).
+; -----------------------------------------------------------------------------
+wd_reloc:
+    mov si, wd_rltab
+.n:
+    mov di, [si]
+    inc si
+    inc si
+    or di, di
+    jz .out
+    cmp bx, [di]
+    jne .n
+    mov [di], dx                    ; one word names one claim: done
+.out:
+    ret
+
+; ...and the words, which wd_dmov walks too. ORDER IS NOTHING: a base names
+; one claim, so the first match is the only one.
+wd_rltab:   dw wd_dseg, wd_cseg, wd_pseg, wd_iseg, wd_useg, wd_cuseg, 0
+
+; -----------------------------------------------------------------------------
+; wd_dmov - AX = wd_reloc to let every claim the document holds move, AX = 0
+;           to PIN them all (SPEC.md 68.3.2, 66.5.7.1's pair over the table)
+; out: nothing; every register AND the flags preserved - a caller's CF can be
+;      the verdict of the claim it is standing beside
+;
+; A word still 0 (the italic table before the first italic run, the undo
+; arenas before the first deletion) is skipped. The pin is for the one place
+; this program CLAIMS WHILE A SEGMENT IS IN A REGISTER: wd_itinit, reached
+; from inside wd_walk with ES = the document (SPEC.md 68.3.2).
+; -----------------------------------------------------------------------------
+wd_dmov:
+    pushf
+    push dx
+    push si
+    push di
+    mov si, wd_rltab
+.n:
+    mov di, [si]
+    inc si
+    inc si
+    or di, di
+    jz .out
+    mov dx, [di]
+    or dx, dx
+    jz .n
+    call OSAPI_MEM_MOVABLE          ; preserves every register but the CF
+    jmp short .n
+.out:
+    pop di
+    pop si
+    pop dx
+    popf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wd_resize - make the document claim AX kilobytes
@@ -13350,6 +13491,12 @@ wd_ugrow:
     jc .cfail0
     mov [wd_cuseg], dx
     mov [wd_ukb], ax
+    push ax                     ; ...and both MOVE (SPEC.md 68.3.2): every
+    mov ax, wd_reloc            ; record indexes them by OFFSET, and a regrow
+    call OSAPI_MEM_MOVABLE      ; below carries the declaration with the
+    mov dx, [wd_useg]           ; block (SPEC.md 50.3.1), so this is the
+    call OSAPI_MEM_MOVABLE      ; only place it is made
+    pop ax
     jmp short .yes
 .cfail0:
     mov dx, [wd_useg]           ; the half-claimed pair is no arena at all
@@ -18095,6 +18242,7 @@ wd_mkey:
     push di
     cmp word [wd_dlg], 0            ; the dialog is modal (SPEC.md 68.3):
     je .nodlg                       ; Enter fires OK, Esc cancels, a letter
+    call wd_bounds                  ; (where the window IS: wd_rebase)
     call wd_dgkey                   ; toggles its box, and nothing leaks
     jmp .cons
 .nodlg:
@@ -18108,6 +18256,7 @@ wd_mkey:
     je .abx
     jmp .cons                       ; everything else bounces off the modal
 .abx:
+    call wd_bounds                  ; the card's rect where the window IS
     call wd_abclose
     jmp .cons
 .noab:
@@ -18142,6 +18291,7 @@ wd_mkey:
     call wd_mopenm                  ; opened sticky, no highlight yet
     jmp .cons
 .open:
+    call wd_bounds                  ; the panel's rect where the window IS
     cmp al, 27
     je .close
     cmp al, 13
@@ -21452,7 +21602,7 @@ section .text
 ; is not defined yet. DOS_BTREC_SZ in apps/dos/dos.asm is the same
 ; mirror for the same reason; the %if below the include is what stops
 ; either copy drifting.
-WD_BTREC_SZ equ 24
+WD_BTREC_SZ equ 18
 
 %macro WDVAR 2                      ; name, size in bytes
     %1 equ os88_image_end + WDB

@@ -104,7 +104,7 @@ a package's own precheck agree. SPEC.md §88.10.4.1 has the account.
 | consumer | bent how | now possible |
 |---|---|---|
 | **Pixelstein** part 3, levels (9,831 bytes) | LAZY and stored **plain** with a hand RLE, because eager it made 131 sectors (§97.9) | an eager row, `OP_COMP` if it pays — eager is right here, every launch needs the floors |
-| **DOS box** part 2, `kern_dos` (~29KB) | LAZY because the eager pair would be refused (§96.44.4.1) | nothing: the row is never fetched anyway, so it stays lazy for its other reason |
+| **DOS** part 2, `kern_dos` (~29KB) | LAZY because the eager pair would be refused (§96.44.4.1) | nothing: the row is never fetched anyway, so it stays lazy for its other reason |
 | **Word** part 1 | its origin is capped so the carve stays under 65,024 (§68.10) | the cap is gone; the layout can stay |
 | **Video player** resident blocks | a block packing past 61,440 (`BLK_PACKED_MAX`) is written **stored** (`os88vid.py`) | the player can pass `OSAPI_LZ_BIG`; package bytes not measured |
 

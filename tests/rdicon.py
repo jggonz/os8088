@@ -104,15 +104,17 @@ def wins(m):
 
 
 def quiet(m, s=15.0):
+    # every read after one is guest state (window records, drv_tab, the
+    # Font Viewer's bss), so the wait is the UI finishing, not the glass
     try:
-        M.settle(m, limit=s)
+        M.ui_done(m, limit=s)
     except M.MartyError:
         pass
 
 
 t = os88build.tree("RAMSEED=1").apply()
 with os88ui.boot(t.img("os8088-360.img"), apps=t.img("apps360.img"),
-                 machine=MACHINE) as ui:
+                 machine=MACHINE, quick=True) as ui:
     m = ui.m
     mo = Mouse(marty=m)
     print(f"== {MACHINE} : a document on a redirected volume has an icon ==")

@@ -1,0 +1,29 @@
+# ROUND 2, queue 8: the bottom half of r2-q7's open rows. family  row  declared_secs  script
+DONE mcpe	mcperf	50	tests/mcperf.py
+SKIP fails-at-base(Task Manager redesign 89afd69c: memory page paints 27 font_run cells, all under the mover) dmgc	dmgcull	50	tests/dmgcull.py
+DONE bptr	bptrace	45	tests/bptrace.py
+DONE atme	atmenusu	45	tests/atmenusu.py
+DONE cpup	cpup	41.3	tests/cpup.py
+SKIP needs-rgbds(absent) gbst	gbstate	40	tests/gbstate.py
+DONE kdcy	kdcylrun	40	tests/kdcylrun.py
+DONE ddsm	ddsmall	40	tests/ddsmall.py
+DONE reco	recorder	40	tests/recorder.py
+DONE face	facescan	18	tests/facescan.py
+DONE face	facescan144	18	tests/facescan.py
+DONE irqg	irqgrab	35	tests/irqgrab.py
+SKIP needs-rgbds(absent) gbde	gbdemo	30	tests/gbdemo.py
+DONE dtwr	dtwrite	30	tests/dtwrite.py
+DONE path	pathcost	30	tests/pathcost.py
+DONE fmth	fmthumb	30	tests/fmthumb.py
+DONE cpli	cplistrow	30	tests/cplistrow.py
+DONE dosx	dosxms	28	tests/dosxms.py
+SKIP needs-rgbds(absent) gbfm	gbfm	25	tests/gbfm.py
+DONE dosv	dosvec	25	tests/dosvec.py
+DONE tmco	tmcol2	21	tests/tmcol2.py
+DONE post	postboot	20	tests/postboot.py
+DONE lzfe	lzfence	20	tests/lzfence.py
+DONE mouw	mouwheel	20	tests/mouwheel.py
+DONE pxsb	pxsbench	18	tests/pxsbench.py
+SKIP needs-rgbds(absent) gbsh	gbship	15	tests/gbship.py
+DONE dskw	dskwstage	15	tests/dskwstage.py
+DONE dual	dualcheck	10	tests/dualcheck.py

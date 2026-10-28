@@ -21,7 +21,7 @@
 ; split is checkable.
 ;
 ; WHAT IT NAMES OUTSIDE ITSELF IS THREE THINGS, and that is the measurement
-; docs/plans/KERN-DOS-PLAN.md 4.1.3 wanted (*"core -> box is ZERO"*), which
+; docs/plans/KERN-DOS-PLAN.md 4.1.3 wanted (*"core -> package is ZERO"*), which
 ; came out true on the tree: the only symbol a core span names that a host
 ; defines is `DVOL_MAX`, a constant the container already `%ifndef`s.
 ;

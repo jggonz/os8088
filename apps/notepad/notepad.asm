@@ -1062,6 +1062,7 @@ np_ondrag:
     push cx
     push dx
     push si
+    call np_fpre                ; the rects where the window IS (np_fprects)
     mov bx, np_btrec            ; THE FIND PANEL'S BUTTONS FIRST: the held one
     call os88ui_btndrag         ; follows the pointer. A package has ONE arm
     pop si                      ; word, so the bar and the buttons cannot both
@@ -1102,6 +1103,7 @@ np_onup:
     push cx
     push dx
     push si
+    call np_fpre                ; the rects where the window IS (np_fprects)
     mov bx, np_btrec            ; the find panel FIRES here (SPEC.md 13.7)
     call os88ui_btnup           ; AX = what fired, 0 = nothing of ours
     pop si
@@ -9766,12 +9768,73 @@ np_fpgeom:
     inc bx                      ; 3 = Next
     mov cx, 4*8+8
     call np_pbset
+    call np_fprects             ; ...and the buttons' rects from all that
     pop di
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+; np_fpre - np_fpgeom if the panel is up, else nothing. SI = window ptr;
+; preserves all. The gesture's two edges ask the group's rects again rather
+; than trust the press's (np_fprects says why).
+np_fpre:
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .out
+    call np_fpgeom
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fprects - the button group's four rects from np_fpgeom's x/width arrays
+; in:  np_pbx, np_pbw, np_pbtny current; out: np_brects; preserves all
+;
+; HERE and not in the painter, because a window dragged by its title is
+; REPLAYED and never painted (SPEC.md 11.96.12.0): rects np_pbutton wrote at
+; the last paint named where the window WAS, so after a drag the press, the
+; tracking edge and the release all tested the old place and the buttons
+; answered nothing. Every caller of np_fpgeom - the painter, the press and
+; the gesture's two edges - now gets them from the window's origin NOW. A
+; button not shown gets a ZERO rect, so os88ui_bfind cannot answer for it.
+; -----------------------------------------------------------------------------
+np_fprects:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor bx, bx                  ; BX = slot * 2
+    mov si, np_brects           ; SI = its rect (stride 8)
+.r:
+    xor ax, ax                  ; a hidden button: all four words zero
+    xor dx, dx
+    xor di, di
+    mov cx, [bx+np_pbw]
+    jcxz .put
+    cmp [bx+np_pbx], ax
+    je .put
+    mov ax, [bx+np_pbx]         ; x1
+    mov di, ax
+    add di, cx
+    dec di                      ; x2 inclusive
+    mov dx, [np_pbtny]          ; y1
+.put:
+    mov [si+0], ax
+    mov [si+2], dx
+    mov [si+4], di
+    or dx, dx
+    jz .y2
+    add dx, NP_FP_BTNH - 1
+.y2:
+    mov [si+6], dx
+    add si, 8
+    inc bx
+    inc bx
+    cmp bx, 8
+    jb .r
+    jmp np_ld_6
 
 ; -----------------------------------------------------------------------------
 ; np_pfcols - AX = whole cells a text box shows; preserves everything else
@@ -10099,10 +10162,9 @@ np_pdrawn:
 ; in:  BX = 0..3, SI = its NUL label; np_fpgeom run, lock held
 ; out: nothing; preserves all registers
 ;
-; The drawing is os88ui_btn's (apps/os88ui.inc); this turns np_fpgeom's
-; parallel x/width arrays into the 4-word rect the shared control takes. A
-; zero width or a zero x still means "this button is not shown" and returns
-; before anything is drawn.
+; The drawing is os88ui_btn's (apps/os88ui.inc), on the 4-word rect
+; np_fprects laid out when np_fpgeom ran. A zero width or a zero x still
+; means "this button is not shown" and returns before anything is drawn.
 ;
 ; ONE PIXEL MOVED, and deliberately: the label's y was the literal +2 in an
 ; NP_FP_BTNH = 11 box, and the shared control centres at (11-8)/2 = 1, so
@@ -10120,22 +10182,9 @@ np_pbutton:
     shl bx, 1                   ; BX = slot * 2: the group's rects, labels
     mov [np_btlbl+bx], si       ; and flags are parallel arrays the record
     mov cx, [bx+np_pbw]         ; indexes together
-    mov si, bx
-    shl si, 1
-    shl si, 1
-    add si, np_brects           ; SI = this slot's rect (stride 8)
-    jcxz .hide
-    mov di, [bx+np_pbx]
-    or di, di
-    jz .hide
-    mov [si+0], di
-    add di, cx
-    dec di                      ; ...x2 inclusive
-    mov [si+4], di
-    mov dx, [np_pbtny]
-    mov [si+2], dx
-    add dx, NP_FP_BTNH - 1
-    mov [si+6], dx
+    jcxz .out                   ; not shown: np_fprects zeroed its rect
+    cmp word [bx+np_pbx], 0
+    je .out
     mov word [np_btflg+bx], OS88UI_FILL
                                 ; np_fpaint fills the panel band before the
                                 ; first button, but a button REDRAWN in place
@@ -10145,13 +10194,6 @@ np_pbutton:
     mov bx, np_btrec
     inc ax                      ; the record's indices are one-based
     call os88ui_btn
-    jmp short .out
-.hide:                          ; not shown: ZERO its rect, so os88ui_bfind
-    xor ax, ax                  ; cannot answer for a button that is not there
-    mov [si+0], ax
-    mov [si+2], ax
-    mov [si+4], ax
-    mov [si+6], ax
 .out:
     jmp np_ld_6
 

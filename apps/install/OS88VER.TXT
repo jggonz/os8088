@@ -1,0 +1,5 @@
+20261026
+* Install and upgrade over the network
+* Read-only drive over HTTP
+* Programs' memory moves to fill gaps
+* Kernel 2KB smaller; 128KB system disks

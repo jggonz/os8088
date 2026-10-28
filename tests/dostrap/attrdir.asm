@@ -4,13 +4,13 @@
 ; SPEC.md 96.12.4.  Microsoft Works's Save As, given a name on another drive,
 ; asks AH=43h about the DIRECTORY the file would go in before it writes
 ; anything - and reports `Directory not found` when that is refused. Under
-; this box it was refused for every directory there is: `.att_get` resolves
+; this DOS it was refused for every directory there is: `.att_get` resolves
 ; the name through `dos_fh_stat`, which is the FILE lookup AH=3Dh opens
 ; through, so a name that is a folder finds nothing and answers 2.
 ;
 ; The root is its own question and the reason this probe prints rather than
 ; asserts on the first run: DOS is not uniform about `A:\` across versions,
-; and what this box should answer is what the machine on the other side of
+; and what this DOS should answer is what the machine on the other side of
 ; the cable actually says. It runs under os8088 AND under a real DOS
 ; unchanged, so the reference IS the specification.
 ;
@@ -82,7 +82,7 @@ ask:
     ; --- BANK THE CARRY BEFORE ANYTHING CAN TOUCH IT. It is the whole answer
     ; and it is the most fragile thing on the machine: a `push`, an `or bl, bl`
     ; or a `cmp` between here and the test all clear it, and the judgement then
-    ; reads its OWN flag and passes whatever the box said. `mov` is the one
+    ; reads its OWN flag and passes whatever DOS said. `mov` is the one
     ; instruction here that does not write flags, so this `jnc` still sees the
     ; carry INT 21h returned.
     mov byte [n_cf], 0

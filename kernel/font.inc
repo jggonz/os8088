@@ -580,7 +580,11 @@ font_char:
     add dx, ax                  ; ...and at the screen row it belongs on
 
 
-%ifdef GFX_VGA
+%ifdef VID_EXT
+    cmp byte [vid_planes], 4    ; 1bpp? the software renderer IS the direct
+    jae .vram                   ; path there (SPEC.md 39.5) - and .vram's `je`
+                                ; reads these flags: planar, or packed
+%elifdef GFX_VGA
     cmp byte [vid_mono], 0      ; 1bpp? the software renderer IS the direct
     je .vram                    ; path there (SPEC.md 39.5). Without a VGA in
 %endif                          ; the build there is nothing to ask: the call
@@ -590,8 +594,15 @@ font_char:
 %ifdef GFX_VGA                  ; on the framebuffer. With no VGA in the build
     jmp .done                   ; `.done` is the NEXT instruction, and nasm
 .vram:                          ; spends two bytes on `jmp short $+2`
-    VIDEXTC VX_FONTCHAR, .done  ; SPEC.md 120.3: the cell is the driver's,
-                                ; and the frame above is still ours to pop
+%ifdef VID_EXT
+    je .vplanar                 ; (ENTERED BY THE ONE `jae` above.) SPEC.md
+    VXCALL VX_FONTCHAR          ; 120.3: a packed display's cell is the
+    jmp .done                   ; driver's, and the frame above is still ours
+%if ($ - .vram) & 1             ; to pop
+    db 0                        ; PARITY, never executed
+%endif
+.vplanar:
+%endif
     mov di, cx                  ; x/8 goes STRAIGHT into DI and x&7 stays in
     shr di, 1                   ; CL: the old spelling hopped x through BX and
     shr di, 1                   ; back (`mov bx,cx` ... `mov ax,bx` ...
@@ -1204,7 +1215,10 @@ font_run_x:
                                 ; the tighter of the two by design, and 6.1.11
                                 ; is +262 bytes of .text
 %endif
-%ifdef KERN_BIG
+%ifdef VID_EXT
+    cmp byte [vid_planes], 4    ; 4 planes or a packed depth: .planar, whose
+    jae .planar                 ; `je` reads these flags (SPEC.md 120.3.1)
+%elifdef KERN_BIG
     cmp byte [vid_mono], 0
     je .planar                  ; SPEC.md 6.1.10: mode 12h has a single-store
 %endif                          ; prologue of its own. kern_small does not
@@ -1558,8 +1572,8 @@ font_run_x:
 ; environment note) and not this routine's alone: gfx_rowbase's row table and
 ; the claim map are reached through SS on every kernel. Every caller keeps
 ; it (KERN-MEGA-PLAN 14.39): no shipped package calls the kernel on a stack
-; of its own - the DOS box switches SS only around a DOS program and back
-; before it calls in, and on kern_mega the box is the whole-machine handoff
+; of its own - DOS switches SS only around a DOS program and back
+; before it calls in, and on kern_mega DOS is the whole-machine handoff
 ; anyway - and the mouse ISR, the one kernel path that ran on a ROM's stack
 ; (SeaBIOS's int 13h), sets SS itself now (SPEC.md 9.10.1).
 %ifdef KERN_MEGA
@@ -1718,15 +1732,15 @@ font_run_x:
 ; a routine.
 .planar:
 %ifdef VID_EXT
-.vxp0:
-    cmp byte [vid_ext], 0       ; SPEC.md 120.3: a packed display's run is the
-    jz .plok                    ; driver's ONE PASS - unless a region is armed
+.vxp0:                          ; (ENTERED BY THE ONE `jae` above, whose
+    je .plok                    ; compare this reads.) SPEC.md 120.3: a packed
+                                ; display's run is the driver's ONE PASS -
+                                ; unless a region is armed
     CLIPQ                       ; (the per-cell test is the kernel's) or the
     jne .vxslow                 ; text is disabled (the stipple is font_ink's):
     cmp byte [gfx_dis], 0       ; both take the pair, gfx_fill and font_str,
     jne .vxslow                 ; which the driver draws cell by cell
-    call vx_call
-    db VX_FONTRUN
+    VXCALL VX_FONTRUN
     jmp .out
 .vxslow:
     jmp .slow

@@ -47,7 +47,7 @@ DOSCALL = os.path.join(ROOT, "apps", "dos", "doscall.inc")
 PARTS_MAGIC = b"O88PARTS"
 PARTS_HDR = 10                  # magic(8) + count(1) + reserved(1)
 PART_ROW = 8
-DOS_PART_CORE = 1               # loader image, 0 = the box, 1 = the INT 21h
+DOS_PART_CORE = 1               # loader image, 0 = DOS, 1 = the INT 21h
 DOS_PART_KD = 2                 # CORE (SPEC.md 96.44.5), 2 = kern_dos
 
 
@@ -130,14 +130,14 @@ def main():
     if at < 0:
         fail("flags bit 2 is set and there is no 'O88PARTS' table in the image")
     # **kern_dos IS PART 1 AND THE IMAGE IS A LOADER** (SPEC.md 96.44.4). It
-    # was part 0 of a package whose image was the box itself until W9c, which
-    # made the image `apps/dos/dosload.asm` and the box part 0 - because
+    # was part 0 of a package whose image was DOS itself until W9c, which
+    # made the image `apps/dos/dosload.asm` and DOS part 0 - because
     # os88pkg.py refused --compress beside parts then, so whatever was the
     # IMAGE shipped raw and 96.40.3 measured that at +932 ms a launch.
     n = tbl[at + PARTS_HDR - 2]
     if n != 3:
         fail("the table declares %d part(s); the four-piece DOS.O88 is a "
-             "loader image with THREE - the box, the INT 21h core and "
+             "loader image with THREE - DOS, the INT 21h core and "
              "kern_dos (SPEC.md 96.44.5)" % n)
     def row(idx):
         _k, pflags, poff, plen, pzkb = struct.unpack_from(
@@ -150,7 +150,7 @@ def main():
         if not pflags & 8:
             fail("part %d's flags are 0x%02X and OP_LAZY (8) is clear. It "
                  "MUST be lazy: op_load reads every eager part into one carve "
-                 "and op_size refuses a carve of 64KB or more, and the box "
+                 "and op_size refuses a carve of 64KB or more, and DOS "
                  "plus kern_dos unpack to ~74KB (SPEC.md 96.44.4.1)"
                  % (idx, pflags))
         return poff, plen, pzkb

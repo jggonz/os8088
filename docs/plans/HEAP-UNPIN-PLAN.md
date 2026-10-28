@@ -944,14 +944,14 @@ those is still right and the second is what this section is about.
 > be (SPEC.md 66.6.1).
 
 **MEASURED, and the premise holds on a real package** (`os8088_5150_herc_sb_gla`,
-the shipped four-piece `DOS.O88`, the box open and idle): the carve is at
+the shipped four-piece `DOS.O88`, DOS open and idle): the carve is at
 **0x8FC0** and `I_SPTR` is **0x8FE0**, 512 bytes apart — the loader's own image
 sitting at the head of the carve. The two are not the same word and the
 base-match cannot find the second.
 
 **WHAT IT COSTS IS NOT HYPOTHETICAL EITHER** and it is this file's §2.0 with a
 different cause: `SOUND.DRV`'s 6,144-byte image and 8,192-byte ring are claimed
-top-down ABOVE the DOS box, the box unmounts them so a DOS program can have the
+top-down ABOVE DOS, DOS unmounts them so a DOS program can have the
 card (SPEC.md 96.35), and the hole is above a region nothing can move.
 **426 KB against 440** on the same machine with no card — and the one-image
 build of the same package gets the full 440, because there its region really is
@@ -973,7 +973,7 @@ claim's base as an INPUT because `mem_reloc_call` asks about a record whose
 base has already been rewritten. **+155 bytes** (`.text` +41, `.cold` +110,
 `.bss` +2, `.lowbss` +2), A/B'd at ONE commit and no rung crossed — and
 `kern_small` is byte-identical, `OS88_COMPACT` being `KERN_BIG` only.
-Measured: the DOS box's arena goes
+Measured: DOS's arena goes
 **426 KB to 445** on a Sound Blaster machine, equal to the machine with no
 card; `soak -k rehomemove360` is the gate, and `rehome`/`rehomemove` at a zero
 head slack cannot be one — all four questions have the same answer there.
@@ -989,7 +989,7 @@ the equality that held for every other package. −175 resident bytes on
 kern_big against that +155, and kern_small gave up 74 it had been paying for
 the arms, the sweep and `inst_of_seg`. SPEC.md 66.6.1.2 is the record.
 
-**It is not only the DOS box.** Every package that re-homes is a permanent wall
+**It is not only DOS.** Every package that re-homes is a permanent wall
 at whatever depth the heap had when it launched: `apps/c64` and Clear Skies
 re-home too (SPEC.md 88.10.4 is Clear Skies' own encounter with this arm), and
 the wall does not heal — which is exactly §2.0's complaint about a

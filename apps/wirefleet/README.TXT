@@ -3,9 +3,11 @@ WireFleet -- Two PCs. Two fleets. One winner.
 Join two PCs with a null modem cable, 2400 baud, 8N1, no flow control.
 Keep the serial mouse on one port and use the other for the game. Open
 WIREFLET.O88 on both PCs: each one looks for the other by itself, on
-whichever COM port is free, and says when the opponent is found. If the
-mouse has not moved yet, move it once. Link / Automatic starts looking
-again; Link / Connect COM1 or COM2 uses one port only.
+whichever COM port is free, and says when the opponent is found. With no
+serial mouse (the arrow keys driving the pointer), or a mouse that has
+not moved yet, it may ask which port the cable is on: choose Link /
+Connect COM1 or COM2, which uses that one port only. Link / Automatic
+starts looking on both again.
 
 Open WIREFLET.O88. Place five ships on the left grid. They may touch, but
 must not overlap or extend off the grid. Select a ship with 1-5 or click

@@ -102,6 +102,8 @@ int  os88_cpu(void);
 unsigned os88_mem_claim(int kb);
 int      os88_mem_free(unsigned seg);
 unsigned os88_mem_regrow(unsigned seg, int kb);
+int      os88_mem_movable(unsigned seg, int on);
+void     os88_onmove(unsigned was, unsigned now);
 unsigned os88_mem_largest_kb(void);
 int  os88_peek(unsigned seg, unsigned off);
 void os88_poke(unsigned seg, unsigned off, int value);

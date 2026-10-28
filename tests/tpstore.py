@@ -81,7 +81,7 @@ def main():
     shutil.copy(os.path.join(bdir, "apps360.img"), appimg)
 
     print("A: GUIDE.TEX over a Disk window, then closed")
-    with os88ui.boot(sysimg, apps=appimg, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(sysimg, apps=appimg, machine="os8088_xt_vga", quick=True) as ui:
         ui.path("B:/MEDIA")
         mw = [w for w in ui.windows() if w.visible and w.title == "MEDIA"][0]
         idx, _ = ui.entry("GUIDE.TEX", mw)
@@ -114,7 +114,7 @@ def main():
                            os.path.join(bdir, "texpad.o88")] + docs,
                           stdout=subprocess.DEVNULL)
     shutil.copy(os.path.join(bdir, "os8088-360.img"), sysimg)
-    with os88ui.boot(sysimg, apps=bsimg, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(sysimg, apps=bsimg, machine="os8088_xt_vga", quick=True) as ui:
         a = preview(ui, "BSA.TEX")
         b = preview(ui, "BSB.TEX")
     cols = sorted({x for (x, y), v in a.items() if b.get((x, y)) != v})

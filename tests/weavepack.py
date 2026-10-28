@@ -67,9 +67,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88fixture                                       # noqa: E402
 import os88marty as M                                          # noqa: E402
 import os88flush                                               # noqa: E402
-import os88sym                                                 # noqa: E402
-import dispcp                                                  # noqa: E402
-from os88mouse import Mouse                                    # noqa: E402
+import os88ui                                                  # noqa: E402
 from harness import check, done                                # noqa: E402
 
 BUILD = os.path.join(ROOT, "build")
@@ -210,52 +208,40 @@ def build_disk(projects, errs):
     return r.returncode == 0
 
 
-def pack_one(m, mo, S, wx, wy, stem):
-    """Open <stem>.WML from the Disk window at (wx, wy), press ^P, close it.
+def pack_one(ui, stem):
+    """Open <stem>.WML from the Disk window, press ^P, close it.
 
-    WAIT ON THE WINDOW, NOT ON THE PICTURE - weavesmoke's own note, and its
+    WAIT ON THE UI TASK, NOT ON THE PICTURE - weavesmoke's own note, and its
     reason applies twice as hard here: a package LOAD draws nothing while it
     runs, and so does a PACK, so `settle` sees perfect stillness partway
-    through either and returns. os88marty.until is the bounded wait, and
-    NOTHING IS RETRIED: os88mouse steps the guest by cycles between a
-    double-click's two presses (`Mouse.DBL_STEP`), so the 9-tick window sees
-    the same gesture whatever the host is doing, and a launch that does not
-    happen is a finding."""
-    before = set(dispcp.win_list(m, S))
+    through either and returns. `ui.open` confirms the window record and
+    `ui_done` confirms the UI task has finished with the keystroke: WEAVE-SPEC
+    11.4's Pack runs whole on the UI task, inside the key's handler, so the
+    task is not asleep until the .WAB is written (or refused). NOTHING IS
+    RETRIED: a launch that does not happen is a finding."""
     try:
-        dispcp.open_named(m, mo, S, M.settle, wx, wy, "%s.WML" % stem)
-        M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
-                "LOOM's window for %s" % stem, limit=25.0)
+        w = ui.open("%s.WML" % stem, expect="window", limit=45.0)
     except Exception as e:                                      # noqa: BLE001
         check(False, "%s: LOOM opens on the double-click" % stem,
               "the .WML association is LOOM's (WEAVE-SPEC 1.5 step 2)",
-              got=str(e)[:200], want="a package window")
+              got=str(e)[:300], want="a package window")
         return 0
-    M.settle(m)
-    now = set(dispcp.win_list(m, S)) - before
-    if not now:
-        return 0
-    win = sorted(now)[-1]
+    M.ui_done(ui.m, "LOOM to finish opening %s" % stem)
 
-    m.ctrl(K_PACK)                      # WEAVE-SPEC 1.7's ^P
-    M.settle(m)
-    M.settle(m)                         # the write is a disk revolution or
-    M.settle(m)                         # three; settle again rather than sleep
+    ui.m.ctrl(K_PACK)                   # WEAVE-SPEC 1.7's ^P
+    M.ui_done(ui.m, "LOOM's pack of %s" % stem)
 
-    x, y = dispcp.win_rect(m, S, win)[:2]
-    mo.click(x + 9, y + 9)              # the close box
     try:
-        M.until(m, lambda mm: win not in dispcp.win_list(mm, S),
-                "LOOM's window for %s to close" % stem, limit=20.0)
-    except Exception:                                           # noqa: BLE001
+        ui.close(w, limit=20.0)
+    except Exception as e:                                      # noqa: BLE001
         check(False, "%s: the window closes again" % stem,
               "each project is one instance and they cannot all be open at "
               "once - a 640KB machine has room for about four (WEAVE-SPEC "
               "1.4). A window that will not close is also the close guard "
               "refusing, which for an UNMODIFIED project it must not do "
-              "(SPEC.md 75.1)")
+              "(SPEC.md 75.1)", got=str(e)[:300])
         return 0
-    M.settle(m)
+    M.ui_done(ui.m, "the desktop after %s closed" % stem)
     return 1
 
 
@@ -286,21 +272,14 @@ def main():
         return
 
     boot = os.path.join(BUILD, "os8088-360.img")
-    with M.launch(boot, apps=IMG, machine=args.machine) as m:
-        M.settle(m)
-        S = os88sym.linear
-        mo = Mouse(marty=m)
-        desk = set(dispcp.win_list(m, S))
-        dispcp.open_drive(m, mo, S, M.settle, "B")
-        M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - desk,
-                "drive B's Disk window to open", limit=20.0)
-        disk = sorted(set(dispcp.win_list(m, S)) - desk)[-1]
-        wx, wy = dispcp.win_rect(m, S, disk)[:2]
+    with os88ui.boot(boot, apps=IMG, machine=args.machine,
+                     quick=True) as ui:
+        ui.open_drive("B")
         for stem, _ in projects:
-            pack_one(m, mo, S, wx, wy, stem)
+            pack_one(ui, stem)
         for stem, _ in errs:
-            pack_one(m, mo, S, wx, wy, stem)
-        m.flush(1, IMG)
+            pack_one(ui, stem)
+        ui.m.flush(1, IMG)
 
     vol = os88flush.Volume(open(IMG, "rb").read(), IMG)
     names = set(n.upper() for n in vol.names())

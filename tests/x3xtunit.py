@@ -170,7 +170,7 @@ class Part:
         if not r['cf'] and self.clobber:
             # OPEN's half is only OPEN's: GRANULE must run with it gone (the
             # engine may shrink the claim to X3C_PARTKB), so overwrite it
-            tail, end = struct.unpack_from('<HH', self.image, 18)
+            tail, end = struct.unpack_from('<HH', self.image, 20)   # the seal (x3xtgen.py)
             self.write(PART_SEG, tail, bytes([0xCC]) * (end - tail))
         return r
 
@@ -239,8 +239,18 @@ def check_expand(image, verbose):
     fails += refused(part.call(0, ax=PNUM['std'] | (2 << 8), cx=1, es=ARG_SEG, di=0), 'DIV', 'CAPS std at 2')
     fails += refused(part.call(0, ax=7 | (1 << 8), cx=1, es=ARG_SEG, di=0), 'PROFILE', 'CAPS profile 7')
     fails += refused(part.call(0, ax=PNUM['std'] | (1 << 8), cx=2, es=ARG_SEG, di=0), 'CHAN', 'CAPS stereo')
-    fails += refused(part.open('speech', 2, ver=1, sri=0), 'DIV', 'speech on MPEG-1')
-    fails += refused(part.open('speech', 4, ver=25, sri=0), 'DIV', 'speech 4:1 on MPEG-2.5')
+    # the SPEECH tables take 2 or 4 and nothing else - on ANY version, since
+    # XT Standard divided by its source runs on them too (x3x_opentail's
+    # rule, SPEC.md 121.4). So a divisor is refused for being 1 or 3, never
+    # for the stream it would run on
+    fails += refused(part.open('speech', 1, ver=1, sri=0), 'DIV', 'speech at 1')
+    fails += refused(part.open('speech', 3, ver=25, sri=0), 'DIV', 'speech at 3')
+    for div, ver, what in ((2, 1, 'speech 2:1 on MPEG-1'), (4, 25, 'speech 4:1 on MPEG-2.5')):
+        r = Part(image).open('speech', div, ver=ver, sri=0)   # (an accepted
+        if r['cf']:                                          # OPEN spends the
+            print('x3xtunit: %s refused (%s), want accepted'  # part's tail)
+                  % (what, X3E.get(r['ax'], r['ax'])))
+            fails += 1
     fails += refused(part.open('std', 1, ver=3, sri=0), 'RECORD', 'version 3')
     fails += refused(part.open('std', 1, ver=1, sri=3), 'RECORD', 'rate index 3')
     fails += refused(part.open('std', 1, fmt=2), 'FMT', 'format 2')

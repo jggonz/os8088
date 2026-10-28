@@ -14,7 +14,7 @@ an attribute flipped into a cell the driver does not own, and it gets no
 notification of the program's store, so it is LOST until the pointer next
 moves.  That looked like an obvious bug - a status line or a clock redrawing
 under a hand that is holding still takes the cursor with it - and the probe
-went red on this box exactly as predicted:
+went red on this DOS exactly as predicted:
 
     A drawn     7041 want 7041 ok
     B redrawn   1E2A want 612A BAD          <- the predicted defect
@@ -27,7 +27,7 @@ alive because A passes and only a driver can draw that cell).  A serial mouse
 that is not moving raises no interrupt, so there is nothing to repaint from,
 and every DOS program of the era was written against drivers that do this.
 So the behaviour stays and this row is a COMPATIBILITY RATCHET: it goes red if
-this box ever starts repainting where CuteMouse does not.
+this DOS ever starts repainting where CuteMouse does not.
 
 WHAT THE FOUR LETTERS CHECK:
 
@@ -49,7 +49,7 @@ when the cell no longer holds what we wrote - takes B red here, which is the
 divergence from CuteMouse this row exists to catch.
 
 BOTH ARMS, because the two hosts reach `dos_m33_paint` differently - the
-windowed box through `dos_mou_read` on every `dos_getkey`, `kern_dos` through
+windowed DOS through `dos_mou_read` on every `dos_getkey`, `kern_dos` through
 that and the tick - and because a windowed arm that asserted the wrong thing
 is how the cursor shipped broken once already (docs/FIELD-NOTES.md 54).
 
@@ -84,7 +84,7 @@ def verdict(m, limit=240.0):
         rows[:] = [r.rstrip() for r in (m.screen() or []) if r.strip()]
         return any("MREDRAW" in r for r in rows)
     try:                                # `limit` is GUEST time
-        os88marty.until(m, reported, "MREDRAW's report", poll=0.5, limit=limit)
+        os88marty.until(m, reported, "MREDRAW's report", poll=0.05, limit=limit)
     except os88marty.MartyError:
         fail("MREDRAW.COM never reported; the last screen was %r" % rows[:12])
 
@@ -117,13 +117,13 @@ def verdict(m, limit=240.0):
 def judge(said, got, where):
     if said == "SKIP":
         fail("the probe SKIPPED %s - it found no INT 33h or no text mode, and "
-             "under THIS box both are the thing under test" % where)
+             "under THIS DOS both are the thing under test" % where)
     if said != "PASS":
         bad = ", ".join("%s got %s want %s" % (k, v[0], v[1])
                         for k, v in sorted(got.items()) if v[0] != v[1])
         extra = ""
         if got.get("B", ("", ""))[0] != got.get("B", ("", ""))[1]:
-            extra += (" - B means this box REPAINTED where CuteMouse 1.9.1 "
+            extra += (" - B means this DOS REPAINTED where CuteMouse 1.9.1 "
                       "does not, so a DOS program is now handed a cursor put "
                       "back into a cell it had just drawn itself. That is a "
                       "divergence from the reference rather than an "
@@ -138,7 +138,7 @@ def judge(said, got, where):
 
 def arm_window():
     """ARM 1: in the window, on the fsx bracket's own surface."""
-    with os88ui.boot(SYS, apps=RED, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=RED, machine=MACH, quick=True) as ui:
         if not ui.path("B:/MREDRAW.COM"):
             fail("double-clicking B:/MREDRAW.COM opened no window")
         said, got = verdict(ui.m)
@@ -150,10 +150,10 @@ def arm_whole():
     """ARM 3: the whole machine.
 
     A BOOT OF ITS OWN, for `tests/kdmcur.py`'s reason: MREDRAW.COM ends on
-    `AH=08h` waiting for a key, so arm 1 leaves a program RUNNING in the box
+    `AH=08h` waiting for a key, so arm 1 leaves a program RUNNING in DOS
     and the Memory page cannot be re-armed underneath one.
     """
-    with os88ui.boot(SYS, apps=RED, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=RED, machine=MACH, quick=True) as ui:
         try:
             kdhand.launch_whole(ui, "MREDRAW.COM")
         except RuntimeError as e:

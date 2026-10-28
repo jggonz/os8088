@@ -690,6 +690,74 @@ _lem_r_tsetup:
     pop bp
     ret
 
+; void os88_onmove(unsigned was, unsigned now) - THE HEAP COMPACTOR MOVED ONE
+; OF THE LEVEL'S CLAIMS from `was` to `now` (SPEC.md 116.6.2; lemgame.c's
+; "THE CLAIMS MOVE" is the why). It is the C SDK's relocation callback
+; (CC_HAS_ONMOVE, apps/cc/crt0.asm cc_onmove), written HERE because seven of
+; the words it has to put right are the raster's, and one table naming all
+; eighteen is the whole of it:
+;
+;   1. which claim moved: the first seven entries are lem_cl_*, in
+;      _lem_cl_kb's order, and the one equal to `was` gives the block's size,
+;      so `end` = was + KB * 64 paragraphs. None of them = not ours, nothing;
+;   2. every word in the table lying in [was, end) moves by now - was: the
+;      claim's own word, the C's segments derived from it (_lem_anseg,
+;      _lem_mkseg, _lem_ptseg inside lem_cl_main; _lem_far_seg), and the
+;      raster's (each written by a *_setup and read by every draw). A word
+;      holding another claim's segment, or 0, is outside the range.
+;
+; A per-call word (lbp_seg, lp_fseg) needs no entry: no draw spans a point
+; where a compaction can run. It runs INSIDE the compaction (SPEC.md 66.3 rule
+; 3) with DS = CS = ours: it reads and writes these words and nothing else.
+; cc_onmove preserves every register around it; SI and BP are the C's.
+_os88_onmove:
+    push bp
+    mov bp, sp
+    push si
+    mov si, lb_rlist
+    mov ax, [bp+4]                  ; AX = was
+    mov cx, 7
+.find:
+    mov bx, [cs:si]
+    cmp ax, [bx]
+    je .found
+    inc si
+    inc si
+    loop .find
+    jmp .done                       ; not one of the seven
+.found:
+    sub si, lb_rlist                ; SI = 2 * the claim's index
+    mov dx, [si+_lem_cl_kb]
+    mov cl, 6
+    shl dx, cl
+    add dx, ax                      ; DX = end, in paragraphs
+    mov cx, [bp+6]
+    sub cx, ax                      ; CX = now - was
+    mov si, lb_rlist
+.next:
+    mov bx, [cs:si]
+    or bx, bx
+    jz .done
+    inc si
+    inc si
+    mov ax, [bx]
+    cmp ax, [bp+4]
+    jb .next
+    cmp ax, dx
+    jae .next
+    add ax, cx
+    mov [bx], ax
+    jmp .next
+.done:
+    pop si
+    pop bp
+    ret
+lb_rlist:   dw _lem_cl_mask, _lem_cl_bank, _lem_cl_main, _lem_cl_world
+            dw _lem_cl_shadow, _lem_cl_rec, _lem_cl_t   ; the claims, first
+            dw _lem_anseg, _lem_mkseg, _lem_ptseg, _lem_far_seg
+            dw lb_world, lb_shadow, lb_t, lb_wp0, lb_wp3, lm_seg, lo_seg
+            dw 0
+
 ; -----------------------------------------------------------------------------
 ; void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
 ;                   int flags)

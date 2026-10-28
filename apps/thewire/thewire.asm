@@ -1184,7 +1184,15 @@ wr_ddesc:
 ; pass because wr_may decides each button's greying from the state.
 wr_btlbl: dw wr_s_run, wr_s_add
 wr_btflg: dw OS88UI_FILL, OS88UI_FILL
-    OS88UI_BTNREC wr_btrec, wr_ra, wr_btlbl, wr_btflg, 2
+    OS88UI_BTNREC wr_btrec, wr_ra, wr_btlbl, wr_btflg, 2, wr_geom
+                                        ; ...and wr_geom is its PLACE proc
+                                        ; (SPEC.md 20.5.1.3.5): a window
+                                        ; dragged by its title is replayed
+                                        ; and never painted, so the library
+                                        ; asks for wr_ra/wr_rb from where the
+                                        ; window IS before each hit test.
+                                        ; It draws nothing and keeps every
+                                        ; register; its CF is not read
 
 wr_dbtns:
     call wr_sv                          ; AX..DI and ES, given back by the ret
@@ -2646,6 +2654,7 @@ wr_fetchnext:
     call OSAPI_MEM_CLAIM
     jc .nomem
     mov [wr_fseg], dx
+    call wr_fmov                        ; ...and it MOVES (wr_reloc)
     mov ax, dx                          ; the transfer's destination
     xor bx, bx
     mov cx, [wr_flen]
@@ -2726,6 +2735,61 @@ wr_freefile:
     ret
 
 ; -----------------------------------------------------------------------------
+; wr_reloc - THE CATALOG AND THE TRANSFER CLAIM MOVE (SPEC.md 66, NO-PINNING)
+; in:  BX = where a claim WAS, DX = where it is; a relocation proc's rules
+;      (SPEC.md 66.3): no claim, no draw, no file, no yield
+;
+; THREE WORDS NAME OUR TWO CLAIMS, and they are all of them: [wr_catseg] the
+; catalog, [wr_fseg] the transfer claim, and [wr_dseg], the worker's copy of
+; whichever of the two a transfer is filling (a picture's is our own DS and
+; never matches). Every reader loads its segment from one of these at each
+; use - wr_recs, wr_walk and wr_side on the catalog, wr_take, wr_ostore and
+; wr_lzb on the destination - and the worker parks only in OSAPI_TASK_ALIVE
+; at the top of its loop, between two passes that each re-read [wr_dseg]; a
+; RUNNING worker pins every claim of ours (SPEC.md 66.3.1). What holds a
+; segment across a call that can claim is a FILE call or the launch, and
+; those pin the transfer claim themselves (wr_fpin).
+; -----------------------------------------------------------------------------
+wr_reloc:
+    mov si, wr_catseg
+    call .one
+    mov si, wr_fseg
+    call .one
+    mov si, wr_dseg
+.one:
+    cmp [si], bx
+    jne .r
+    mov [si], dx
+.r:
+    ret
+
+; --- wr_fpin / wr_fmov - pin [wr_fseg] / let it move again -------------------
+; Around a call whose ES names the transfer claim and which itself claims:
+; OSAPI_FILE_WRITE and _APPEND hold ES:BX across the sector cache's claims
+; (SPEC.md 66.5.7.1), OSAPI_PKG_START across the new region's. Nothing when
+; there is no claim. EVERY register and the FLAGS kept: the CF beside them is
+; the file call's
+wr_fpin:
+    push ax
+    xor ax, ax
+    jmp short wr_fdecl
+wr_fmov:
+    push ax
+    mov ax, wr_reloc
+wr_fdecl:
+    pushf
+    push dx
+    mov dx, [wr_fseg]
+    or dx, dx
+    jz .n
+    call OSAPI_MEM_MOVABLE
+.n:
+    pop dx
+    popf
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wr_chaindone - every file in the set has landed
 ; -----------------------------------------------------------------------------
 wr_chaindone:
@@ -2786,6 +2850,10 @@ wr_refresh:
     jc .nomem
 .full:
     mov [wr_catseg], dx
+    mov ax, wr_reloc                    ; THE CATALOG MOVES (wr_reloc): held
+    call OSAPI_MEM_MOVABLE              ; for as long as the window is open,
+                                        ; and a regrow keeps the declaration
+                                        ; (SPEC.md 50.3.1)
     mov byte [wr_catkb], WIRE_CATMAX / 1024
     mov cx, WIRE_CATMAX
 .go:
@@ -3011,6 +3079,9 @@ wr_write:
                                         ; claim's uninitialised tail on the
                                         ; user's disk the day that check moves
     xor dx, dx
+    call wr_fpin                        ; PINNED for the write (wr_fpin's
+                                        ; reason), and never let go: the wake
+                                        ; frees the claim next on either path
     call OSAPI_FILE_WRITE
     jnc .ok
     call wr_wrfail
@@ -3138,6 +3209,9 @@ wr_pkgrun:
                                         ; zero; the pairing is written down
                                         ; here so it stays that way
     mov si, wr_fname                    ; ES:DI = the image, DS:SI the name -
+    call wr_fpin                        ; (PINNED: the loader claims the new
+                                        ; region with ES:DI in hand, and every
+                                        ; caller frees the claim next)
     call OSAPI_PKG_START                ; the canonical pairing, where the two
                                         ; used to be the other way round
     jc .bad

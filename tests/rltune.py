@@ -36,11 +36,9 @@ step 3 fails; drop the model byte from cs_cfg_new and step 3's compare
 fails.
 """
 import os
-import shutil
 import struct
 import subprocess
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "tools"), os.path.join(ROOT, "tests"),
@@ -48,6 +46,7 @@ sys.path[:0] = [os.path.join(ROOT, "tools"), os.path.join(ROOT, "tests"),
 os.chdir(ROOT)
 
 import os88geom as G        # noqa: E402
+import os88build            # noqa: E402
 import os88qemu             # noqa: E402
 import os88sym              # noqa: E402
 import dispcp               # noqa: E402
@@ -55,9 +54,9 @@ import ethernet as eth      # noqa: E402
 import redline_profile as R  # noqa: E402
 
 S = os88sym.linear
-SOCK = "build/qmp.sock"
-SYSIMG = "build/rltune-sys.img"
-APPIMG = "build/rltune-apps.img"
+SOCK = os88qemu.SOCK
+SYSIMG = os.path.join(os88qemu.RUNDIR, "rltune-sys.img")   # SCRATCH, in this
+APPIMG = os.path.join(os88qemu.RUNDIR, "rltune-apps.img")  # run's own dir
 
 
 def say(*a):
@@ -84,12 +83,12 @@ def key(m, k):
 
 
 def until(what, cond, secs=30.0):
-    end = time.time() + secs
-    while time.time() < end:
-        if cond():
-            return
-        time.sleep(0.25)
-    raise RuntimeError("timed out: " + what)
+    """`cond()` within `secs` of the GUEST's clock (os88qemu.acted). It was
+    a host deadline, which a loaded box gave the guest less of
+    (docs/plans/SOAK-PARALLEL.md 17.9)."""
+    if not os88qemu.acted(os88qemu._Sock(os88qemu.SOCK), cond, secs=secs,
+                          what=what, poll=0.1):
+        raise RuntimeError("timed out: " + what)
 
 
 class Pkg:
@@ -183,10 +182,12 @@ def proceed(m, mo, p):
 
 def main():
     fails = []
+    # SCRATCH: the guest writes these and the host reads them back, so they
+    # live in this process's RUNDIR, which make_test boots IN PLACE
     for src, dst in (("build/os8088.img", SYSIMG), ("build/redline.img", APPIMG)):
-        if not os.path.exists(src):
+        if not os.path.exists(os88build.at(src)):
             sys.exit("rltune: no %s - run `make` and `make redlinedisk`" % src)
-        shutil.copyfile(src, dst)          # SCRATCH: the guest writes these
+        os88qemu.scratch(src, os.path.basename(dst))
     sym = R.symbols()
     for n in ("os88ui_awin", "os88ui_ar", "cs_setv", "cs_meth", "cs_saved",
               "cs_tfast", "cs_tab", "cs_measd", "cs_pick", "cs_drop",
@@ -194,12 +195,10 @@ def main():
         if n not in sym:
             sys.exit("rltune: %s is not in tools/redline_profile.py's NAMES" % n)
 
-    os88qemu.kill()
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "TESTIMG=" + SYSIMG,
-                        "TESTAPPS=" + APPIMG], capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("rltune: make test failed:\n" + r.stdout + r.stderr)
+    # The machine is PRIVATE (tests/os88qemu.py make_test): its own socket,
+    # pidfile and disk copies, so it shares the soak's lane - and eth.Mouse,
+    # which drives os88qemu.SOCK, drives THIS machine and not build/qmp.sock
+    os88qemu.make_test("TESTIMG=" + SYSIMG, "TESTAPPS=" + APPIMG)
     m = eth.Qemu(SOCK)
     mo = eth.Mouse()
     try:

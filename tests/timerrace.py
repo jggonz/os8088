@@ -42,7 +42,7 @@ W_ONTIMER, W_TIMER = 30, 32     # kernel/wm.inc (the record's timer words)
 def main():
     bad = []
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                     machine="os8088_5150_cga_gla", settle=False) as ui:
+                     machine="os8088_5150_cga_gla", quick=True) as ui:
         m = ui.m
         w = ui.open_drive("B")
         rec = m.sym("wm_wins") + w.i * geom.WIN_SIZE

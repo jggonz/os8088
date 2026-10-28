@@ -50,7 +50,11 @@ def check(m, where):
     return False
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=os88marty.machine("os8088_5150_cga")) as m:
+                      machine=os88marty.machine("os8088_5150_cga"),
+        boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     # THE WHOLE SWEEP RUNS INSIDE THE TRACE, and it has to: every step below
     # drives the UI through os88ui/os88mouse verbs that confirm against

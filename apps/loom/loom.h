@@ -459,6 +459,8 @@ unsigned lpv_call(unsigned verb, unsigned a, unsigned b, unsigned c);
 void     lpv_bindmod(unsigned seg);     /* 0 = forget it */
 int      w_partfetch(int part);         /* a lazy part, from HOME: 0 / -1
                                          * (apps/weave/wfetch.inc) */
+void     w_partmv(int part, unsigned seg);  /* ...and where it MOVED to:
+                                         * the row's zkb (WEAVE-SPEC 1.2.6) */
 #define LM_WPVPART 0                    /* the module's row in the parts
                                          * table (apps/loom/loom.asm) */
 

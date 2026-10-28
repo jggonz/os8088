@@ -194,6 +194,10 @@ ct_entry:
     call OSAPI_ABOUT_SET                ; (SPEC.md 12.2), which every other
                                          ; package in the tree declares and
                                          ; this one did not
+    mov dx, [ct_chartseg]               ; ...AND THE CANVAS MOVES (NO-PINNING
+    mov ax, ct_reloc                    ; A3, SPEC.md 82.14.1): ct_reloc's
+    call OSAPI_MEM_MOVABLE              ; header. Declared once the window
+    clc                                 ; exists, the claims of its own done
     jmp .out
 .fail:
     stc
@@ -204,6 +208,39 @@ ct_entry:
     pop dx
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_reloc - the canvas claim moved (SPEC.md 66.2, 82.14.1): BX = where it was,
+; DX = where it is now. [ct_chartseg] names it, and os88chart.inc's ch_prep
+; borrows it into [ch_stgseg] for a render - re-stored at every render, and
+; put right here too, sh_reloc's rule for a borrowed copy (SPEC.md 66.1).
+; Every use loads ES from the word for one blit, one render or one flip, and
+; Chart has no worker; the one file call it is ES:BX of, the export's write,
+; pins it (ct_pin).
+; -----------------------------------------------------------------------------
+ct_reloc:
+    cmp bx, [ct_chartseg]
+    jne .s
+    mov [ct_chartseg], dx
+.s:
+    cmp bx, [ch_stgseg]
+    jne .o
+    mov [ch_stgseg], dx
+.o:
+    ret
+
+; ct_pin - AX = 0 PINS the canvas, AX = ct_reloc lets it move again: around
+; the export's OSAPI_FILE_WRITE, whose ES:BX it is (the kernel holds that
+; pointer across claims of its own before its transfer pin applies, SPEC.md
+; 66.3 rule 5). Preserves every register and the flags.
+ct_pin:
+    pushf
+    push dx
+    mov dx, [ct_chartseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -708,11 +745,15 @@ ct_expdlg:
     call ct_takename                    ; CHARTED, and Data > Column re-reads
     mov es, [ct_chartseg]               ; it. ct_ntxt is ct_esatof's scratch,
     call ct_flip                        ; dead outside a read
+    xor ax, ax
+    call ct_pin                         ; pinned for the write (ct_pin)
     xor bx, bx
     mov cx, CH_HDRSZ + (CH_STRIDE * CH_H)   ; 19318, fits one word
     xor dx, dx
     mov si, ct_ntxt
     call OSAPI_FILE_WRITE
+    mov ax, ct_reloc
+    call ct_pin                         ; ...and free to move again, CF kept
     pushf
     call ct_flip                        ; back the right way up, written or not
     popf

@@ -4,7 +4,7 @@
     python3 tests/dosgap.py [--machine NAME]
 
 SPEC.md 96.11.6.3, and the row exists because of what it cost: Microsoft
-Works - the first program anyone ran on this box from outside the project -
+Works - the first program anyone ran on this DOS from outside the project -
 could not save a document, and said `Cannot write file` about a floppy with
 42 free clusters on it.
 
@@ -19,7 +19,7 @@ it, and those are opposite cases.  Behind is 96.11.2's real refusal - this
 layer cannot overwrite the middle of a file it is still accumulating.  Past is
 a GAP, and `dos_fh_wiloop`'s `.ihole` already lays one.
 
-WRGAP.COM runs under this box AND under a real DOS unchanged
+WRGAP.COM runs under this DOS AND under a real DOS unchanged
 (docs/DOS-DEBUGGING.md), so the answers it checks are the reference's.
 
 WHAT IT WOULD CATCH: the seek past the end refusing (A); the write there
@@ -64,7 +64,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine, quick=True) as ui:
         m = ui.m
         # An association open of a .COM RUNS it (SPEC.md 54), which is the
         # shortest route to a DOS program and the one a user takes.
@@ -77,7 +77,7 @@ def main():
             rows[:] = [r.rstrip() for r in (mm.screen() or []) if r.strip()]
             return any("WRGAP PASS" in r or "WRGAP FAIL" in r for r in rows)
         try:
-            os88marty.until(m, done, "WRGAP's verdict", poll=0.5, limit=240.0)
+            os88marty.until(m, done, "WRGAP's verdict", poll=0.05, limit=240.0)
         except os88marty.MartyError:
             fail("WRGAP.COM never reported; the last screen was %r"
                  % rows[:12])

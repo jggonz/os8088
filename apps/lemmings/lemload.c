@@ -332,6 +332,15 @@ static unsigned lem_cl_shadow;      /* 0 on VGA */
 static unsigned lem_cl_rec;         /* the record, then the object map */
 static unsigned lem_cl_t;           /* VGA: T; 0 on the other two */
 static int      lem_claimed;
+/* ...and each one's size in KB, IN THE ORDER lemgame.c's lem_cltab AND
+ * lemblit.inc's os88_onmove table NAME THEM (mask, bank, main, world, shadow,
+ * rec, T): the relocation proc tells a moved claim's derived segments from the
+ * next claim's by it, so it is the claim's EXACT size - the world's is the
+ * adapter's and is written where it is claimed */
+static unsigned lem_cl_kb[7] = {
+    LEM_KB_MASK, LEM_KB_BANK, LEM_KB_MAIN, 0, LEM_KB_SHADOW, LEM_KB_REC,
+    LEM_KB_T
+};
 static int      lem_bank_have;      /* the style in lem_cl_bank, or -1 */
 static int      lem_main_have;
 
@@ -405,8 +414,9 @@ static int ovl_claim_all(void)
             return 0;
         }
     } else {
-        lem_cl_world = os88_mem_claim(lem_kind_id() == LEM_RKIND_CGA
-                                      ? LEM_KB_WORLD_C : LEM_KB_WORLD_H);
+        lem_cl_kb[3] = lem_kind_id() == LEM_RKIND_CGA ? LEM_KB_WORLD_C
+                                                       : LEM_KB_WORLD_H;
+        lem_cl_world = os88_mem_claim((int)lem_cl_kb[3]);
         if (lem_cl_world == 0) {
             lem_free_all();
             return 0;

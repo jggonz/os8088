@@ -1,11 +1,11 @@
 ; =============================================================================
 ; os8088 - apps/dos/dosicon.inc
 ;
-; **THE DOS BOX'S FACE, AND BOTH HALVES OF THE PACKAGE WEAR IT** (SPEC.md
+; **DOS'S FACE, AND BOTH HALVES OF THE PACKAGE WEAR IT** (SPEC.md
 ; 96.44.4). Since W9c the file's IMAGE is `apps/dos/dosload.asm` - a parts
-; loader that reads the box and hands its identity over (20.12.10) - so the
-; icon and the association block are read out of the LOADER, before the box
-; exists, while the dock draws the box's own after the launch.
+; loader that reads DOS.O88 and hands its identity over (20.12.10) - so the
+; icon and the association block are read out of the LOADER, before DOS.O88
+; exists, while the dock draws DOS.O88's own after the launch.
 ;
 ; It is a `%include` and not a copy, which is WEAVE-SPEC 1.2's rule one
 ; package along: two files that must agree byte for byte agree by being one

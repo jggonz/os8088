@@ -133,8 +133,10 @@ def sweep(m, seg, o, w, card, x0):
 def herc(a):
     bad = 0
     o = offsets(["sv_step", "sv_fx", "sv_fs", "sv_fos", "sv_hlim"])
-    with os88marty.launch(a.image, apps=a.apps, boot=40,
+    with os88marty.launch(a.image, apps=a.apps, boot=False,
                           machine="os8088_5150_herc_gla", card="herc") as m:
+        m.run()                                 # the gate on STATE, where
+        os88marty.kernel_up(m)                  # `boot=40` paced 40 seconds
         seg = start_sea(m)
         if seg is None:
             print("fishedge: the saver never started")
@@ -172,8 +174,10 @@ def herc(a):
 def cga(a):
     """Every other adapter keeps the whole screen AND the kernel's own clip."""
     o = offsets(["sv_hlim"])
-    with os88marty.launch(a.image, apps=a.apps, boot=40,
+    with os88marty.launch(a.image, apps=a.apps, boot=False,
                           machine="os8088_5150_cga_gla") as m:
+        m.run()                                 # the gate on STATE, where
+        os88marty.kernel_up(m)                  # `boot=40` paced 40 seconds
         seg = start_sea(m)
         if seg is None:
             print("fishedge: the saver never started on CGA")

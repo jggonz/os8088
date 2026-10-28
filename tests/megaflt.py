@@ -66,13 +66,8 @@ def main():
         if not box.wait_for("kern_mega:", 240):
             fails.append("no kern_mega line in 240s")
             raise StopIteration
-        time.sleep(15)                  # the desktop's first frame
-        box.capture()
-        os88bochs.dbl(591, 160)         # C:
-        time.sleep(10)
-        os88bochs.dbl(150, 123)         # RUN
-        time.sleep(8)
-        os88bochs.dbl(160, 139)         # 0RUN.O88
+        box.up()                        # the desktop, off kernel state
+        box.megarun()                   # C:, RUN, 0RUN.O88
         end = time.time() + 300
         while time.time() < end:
             lines = box.lines()
@@ -80,14 +75,17 @@ def main():
                 break
             if "MEGARUN: done" in lines and "FLTZ: alive" in lines:
                 break
-            time.sleep(1)
+            time.sleep(0.2)
         os88bochs.shot(os.path.join(out, "after.png"))
         if "FLTZ: alive" in lines:
+            # each answer is FLTZ's own E9 line, so wait for THAT (10 s,
+            # where a line the machine was going to write takes well under
+            # one) rather than the 3 s each that was slept
             os88bochs.xd("key", "a")    # FLTZ is the front window
-            time.sleep(3)
-            os88bochs.goto(140, 165)    # ...and its content
+            box.wait_for("FLTZ: key", 10)
+            box.goto(140, 165)          # ...and its content
             os88bochs.xd("click", 1)
-            time.sleep(3)
+            box.wait_for("FLTZ: click", 10)
             os88bochs.shot(os.path.join(out, "input.png"))
         lines = box.lines()
     except StopIteration:

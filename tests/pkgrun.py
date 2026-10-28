@@ -232,7 +232,7 @@ def main():
     # 1.44MB one because QEMU's floppy will take any image, and handing it to
     # a period machine is a boot that never reaches a desktop.
     with os88ui.boot("build/os8088-360.img", apps="build/pkgrun360.img",
-                     machine=MACHINE) as ui:
+                     machine=MACHINE, quick=True) as ui:
         # --- open B: and launch the gate's own package ----------------------
         # By NAME. The drive, the row and the launch are each confirmed against
         # the guest's own tables, so a miss raises HERE naming what it saw

@@ -240,8 +240,9 @@ def strike(src):
 
 def run(a, apps, plain, P, fails):
     with os88marty.launch("build/os8088-360.img", apps=apps,
-                          machine=a.machine) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=a.machine, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
         os88marty.no_saver(m)   # SPEC.md 79: it DRAWS, so the settle
                                 # after the wait below can never return
                                 # once it is up - and this row waits on

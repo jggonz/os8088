@@ -45,10 +45,14 @@ def main():
         ("TRACKER.O88", os88build.at("build/tracker.o88")),
         ("BEVERLY.MOD", "apps/tracker/beverly.mod")])
     m = os88marty.launch(None, machine=trkspk.MACHINE,
-                         extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
+                         extra=["--mount", "hd:0:" + os.path.abspath(vhd)],
+                         boot=False)
     try:
-        ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        m.run()                         # the boot gate on STATE: the first
+        ui = os88ui.UI(m)               # act is ui.path, which confirms
+        ui.up(limit=240)
+        os88marty.no_saver(m)
+        os88marty.ui_done(m)
         w = ui.path("C:/TRACKER.O88")
         rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)
         base = (rec[geom.W_SEG] | rec[geom.W_SEG + 1] << 8) << 4

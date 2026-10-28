@@ -45,7 +45,7 @@ REST = "0f00"               # ink CWHITE, paper CBLACK
 def boot():
     return os88ui.boot(os.path.join(BDIR, "os8088-360.img"),
                        apps=os.path.join(BDIR, "apps360.img"),
-                       machine=MACHINE)
+                       machine=MACHINE, quick=True)
 
 
 def leg_desk():

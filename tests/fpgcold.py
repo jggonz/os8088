@@ -30,10 +30,12 @@ import os88ui                                               # noqa: E402
 def main():
     m = M.launch(os.path.join(ROOT, "build/os8088-360.img"),
                  apps=os.path.join(ROOT, "build/media360.img"),
-                 machine=M.machine("os8088_5150_cga"))
+                 machine=M.machine("os8088_5150_cga"), boot=False)
     try:
         ui = os88ui.UI(m, verbose=False)
-        ui.ready(limit=240)
+        m.run()                    # a quick boot: the next act is a
+        ui.up(limit=240)            # verb or a read, so STATE is the gate
+        M.no_saver(m)
         M.guest_sleep(m, 4.0)          # past the 2 s motor-off delay
         bits = m.read(0x43F, 1)[0]
         if bits & 0x0F:

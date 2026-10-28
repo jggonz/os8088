@@ -107,10 +107,12 @@ def leg_hd():
         cwd=ROOT, stdout=subprocess.DEVNULL)
     m = M.launch(None, apps=os.path.join(B, "media360.img"),
                  machine=M.machine("os8088_5150_cga_hdd"),
-                 extra=["--mount", "hd:0:" + vhd])
+                 extra=["--mount", "hd:0:" + vhd], boot=False)
     try:
         ui = os88ui.UI(m, verbose=False)
-        ui.ready(limit=240)
+        m.run()                     # a quick boot: the first act is a
+        ui.up(limit=240)            # verb, so the STATE is the gate
+        M.no_saver(m)
         ui.path("B:/MEDIA")
         mounts, ms = trace(m, ui)
     finally:
@@ -139,10 +141,12 @@ def leg_floppy():
                           stdout=subprocess.DEVNULL)
     os.remove(stub)
     m = M.launch(img, apps=os.path.join(B, "apps360.img"),
-                 machine=M.machine("os8088_5150_cga"))
+                 machine=M.machine("os8088_5150_cga"), boot=False)
     try:
         ui = os88ui.UI(m, verbose=False)
-        ui.ready(limit=240)
+        m.run()                     # a quick boot: the first act is a
+        ui.up(limit=240)            # verb, so the STATE is the gate
+        M.no_saver(m)
         ui.open_drive("A")
         mounts, ms = trace(m, ui)
     finally:
@@ -161,10 +165,12 @@ def leg_four():
     m = M.launch(os.path.join(B, "os8088-360.img"),
                  apps=os.path.join(B, "apps360.img"),
                  machine=M.machine("os8088_5150_cga_4fdd"),
-                 extra=["--mount", "fd:2:" + media])
+                 extra=["--mount", "fd:2:" + media], boot=False)
     try:
         ui = os88ui.UI(m, verbose=False)
-        ui.ready(limit=240)
+        m.run()                     # a quick boot: the first act is a
+        ui.up(limit=240)            # verb, so the STATE is the gate
+        M.no_saver(m)
         ui.path("D:/MEDIA")
         mounts, ms = trace(m, ui)
     finally:

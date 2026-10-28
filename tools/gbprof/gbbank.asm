@@ -15,6 +15,24 @@
 ;   C002       switches that read the wrong bank (stops counting at FFh)
 ;   C003       the bank of the first wrong one, or 0
 ;   C00F       A5h once the first switch has been checked
+;
+; NBITS is the LFSR's width, 6 unless assembled -DNBITS=3: GBBANK8.GB, a
+; 128KB cartridge of 8 banks (x^3 + x^2 + 1: 7 states) that fits ONE claim on
+; an 8088 beside the recompiler - tests/rdgmove.py's, whose claims move under
+; it while it checks every switch. The taps are always the top two bits.
+; PERFRAME, when defined, is the switches checked a frame before it HALTs to
+; the next VBlank, as a game waits for one: GBBANK8 checks 16, so an 8088
+; keeps up with it at full speed and has time left for the pointer. Unset,
+; it never halts - GBBANK.GB, as tests/gbbank.py has it.
+
+IF !DEF(NBITS)
+DEF NBITS EQU 6
+ENDC
+
+IF DEF(PERFRAME)
+SECTION "vblank", ROM0[$40]
+    reti
+ENDC
 
 SECTION "header", ROM0[$100]
     nop
@@ -33,18 +51,34 @@ Start:
     ld [hl], a
     ld [$3000], a                           ; the ninth bank bit: 0
     ld e, 1                                 ; E = the LFSR, never 0
+IF DEF(PERFRAME)
+    ld a, 1                                 ; VBlank's interrupt alone
+    ldh [$FFFF], a
+    ld d, PERFRAME
+ENDC
 .next:
+IF DEF(PERFRAME)
+    dec d                                   ; a frame's switches done: to
+    jr nz, .go                              ;   the next VBlank
+    ld d, PERFRAME
+    xor a
+    ldh [$FF0F], a
+    ei
+    halt
+    di
+.go:
+ENDC
     ld a, e                                 ; x^6 + x^5 + 1: 63 states
     add a, a
-    bit 6, a
+    bit NBITS, a
     jr z, .b5
     xor $01
 .b5:
-    bit 4, e
+    bit NBITS - 2, e
     jr z, .b6
     xor $01
 .b6:
-    and $3F
+    and (1 << NBITS) - 1
     ld e, a                                 ; E = 1..63
     ld [$2000], a                           ; the bank
     ld a, [$4000]
@@ -79,7 +113,7 @@ Start:
     ld [$C003], a
     jr .ok
 
-FOR N, 1, 64
+FOR N, 1, 1 << NBITS
 SECTION "bank{d:N}", ROMX[$4000], BANK[N]
     db N, N ^ $A5
     ds $4010 - @, 0

@@ -80,7 +80,7 @@ def main():
     b = open(os.path.join(BDIR, "stikprob.bin"), "rb").read()
     image = struct.unpack_from("<H", b, 8)[0]
 
-    with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(sysimg, machine="os8088_xt_vga", quick=True) as ui:
         m = ui.m
         print("A: the probe is up and registered; the apps disk goes in A:")
         w = ui.wait_window("StikProbe", limit=60)

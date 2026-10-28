@@ -19,8 +19,14 @@ core's frame counter against guest seconds:
      setting is the game's, kept in SYSTEM\\APPDATA\\REALDMG.CFG by its
      header's checksums.
 
+And Screen's two, kept beside it (REALDMG-SPEC 13.4): Screen > Two Shades
+and Scroll picked twice on the running game (Smooth -> By 2 -> By 4) - posted
+by the UI task, turned over by the worker between frames - read back as
+rdg_lossy 5, and 5 again when the game is opened anew: bit 7 of the record
+kept as well as bits 5 and 6.
+
 Without the clock's scaling (rw_pertick back to RW_PERTICK) step 2 reads
-100%; without rw_spdgame step 3 does.
+100%; without rw_spdgame step 3 does, and Screen's two read 0.
 """
 import os
 import subprocess
@@ -52,6 +58,13 @@ def started(ui, viewoff):
         if view and gbwindow.frames(m, view) >= 30:
             return view
     return None
+
+
+def lossy(m, viewoff):
+    """the running package's rdg_lossy (REALDMG-SPEC 13.4)"""
+    seg = gbwindow.find_seg(m, b"REALDMG", viewoff)
+    off = gbwindow.label_off(os.path.join(ROOT, "build", "realdmg.lst"), "rdg_lossy")
+    return m.read(seg * 16 + off, 1)[0] if seg else None
 
 
 def rate(m, view):
@@ -95,6 +108,16 @@ def main():
         print("gbspeed: Speed 75%%: %.1f%%" % (r * 100))
         if not 0.73 <= r <= 0.77:
             fails.append("at 75%% it ran at %.1f%%" % (r * 100))
+        ui.menu_pick("Screen", "Two Shades")
+        ui.menu_pick("Screen", "Scroll: Smooth")
+        M.guest_sleep(m, 2)                 # (the worker's, between frames)
+        ui.menu_pick("Screen", "Scroll: By 2")
+        M.guest_sleep(m, 2)
+        lo = lossy(m, viewoff)
+        print("gbspeed: Screen's Two Shades and Scroll by 4: rdg_lossy %s" % lo)
+        if lo != 5:
+            fails.append("Screen's two picked read rdg_lossy %s, not 5" % lo)
+        M.guest_sleep(m, 2)                 # (REALDMG.CFG, the UI task's)
         ui.close(w)
         M.guest_sleep(m, 3)
         w = ui.path("B:/CLOCK0.GB")
@@ -108,6 +131,10 @@ def main():
             if not 0.73 <= r <= 0.77:
                 fails.append("opened again it ran at %.1f%% - the game's 75%% was not kept"
                              % (r * 100))
+            lo = lossy(m, viewoff)
+            print("gbspeed: opened again: rdg_lossy %s" % lo)
+            if lo != 5:
+                fails.append("opened again rdg_lossy read %s - Screen's two were not kept" % lo)
     for f in fails:
         print("FAIL gbspeed: " + f)
     print("gbspeed: %s" % ("PASS" if not fails else "FAIL"))

@@ -70,7 +70,9 @@ def content_w(win, vid_w):
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()                             # the boot gate on STATE: the first
+    os88marty.kernel_up(m)              # act is a verb
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")   # a Disk window, which
                                                           # is RESIZABLE and so

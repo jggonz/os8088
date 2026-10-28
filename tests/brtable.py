@@ -119,13 +119,16 @@ def main():
 
     sy, fails = browser_syms(), []
     with os88marty.launch("build/os8088-360.img", apps="build/brtest360.img",
-                          machine=MACHINE[a.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE[a.adapter], boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on state; every wait
+        os88marty.no_saver(m)           # after is ui_done - the reads are
+                                        # browser state and video memory
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
         before = dispcp.win_list(m, S)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "PUBZONE.HTM")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "PUBZONE.HTM")
         wins = dispcp.win_list(m, S)
         if len(wins) <= len(before):
             sys.exit("brtable: PUBZONE.HTM opened no window")
@@ -137,7 +140,7 @@ def main():
         # read straight after the open and this is an empty browser
         os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
                         limit=120)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         nl = rw("br_nlines")
         docseg, doclen = rw("br_docseg"), rw("br_doclen")
@@ -304,10 +307,10 @@ def main():
             col = column_of(ln, at + 4)
             if col is None:
                 return "link %d's first byte is in no cell" % idx
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             mo.click(rw("br_cx") + col * 8 + 3,
                      rw("br_cy") + (ln - rw("br_top")) * 8 + 3)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             return None
 
         # --- 5: A CLICK ON A CELL'S LINK FOLLOWS IT ---------------------

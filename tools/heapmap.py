@@ -31,6 +31,7 @@ Import it, or run it against a live QMP socket:
 """
 import json
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -90,6 +91,15 @@ class Qmp:
         self.tmp = tempfile.mkdtemp()
 
     def hmp(self, cmd):
+        # a plain `sendkey` is CONFIRMED by tools/qmp.py (its `key`): HMP's
+        # release follows 100 ms of HOST time later and a starved guest
+        # lost the key (docs/plans/SOAK-PARALLEL.md 17.5)
+        if re.match(r"^sendkey \S+$", cmd):
+            import qmp as _qmpc
+            _o, _e, _rc = _qmpc.run(self.path, [cmd])
+            if _rc:
+                raise RuntimeError("sendkey: " + _e)
+            return ""
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.path)
         f = s.makefile("rw")

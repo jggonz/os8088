@@ -139,27 +139,69 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
 
     ryb = lambda r: u16(m.read(P("wd_ryb") + 2*r, 2))
 
-    def page_round_trip(g, top0):
-        mo.to(g["sbx"], g["ydn"]); M.pace(m, 0.25)
-        m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False); M.pace(m, 1.5)
+    # THE SCROLL BAR IS CLICKED WHERE ITS OWN GEOMETRY SAYS, never at a fixed
+    # fraction of its height. A click a quarter of the way down was page up
+    # only while the THUMB was below that point - and the thumb's place is
+    # [wd_top] against [wd_drows], which is a LOWER BOUND while the count
+    # runs (SPEC.md 27.7.4), so it moved run to run. Near the top of
+    # WELCOME.DOC the thumb covered the quarter point, the click grabbed it
+    # (SPEC.md 13.10.5), nothing scrolled, and to_top returned SILENTLY at
+    # [wd_top] = 3 or 4. Every later leg then ran on a different page - and
+    # at [wd_top] = 3 leg G's "part of row 3" is the empty row under a
+    # paragraph mark, where a drag selects nothing ("selon 0", 4 runs of 9).
+    # The thumb is read the way os88ui_sbthumb draws it, from the block
+    # wd_sbset filled (wd_sb), and a click goes to the middle of the track
+    # on the far side of it - or to the ARROW when there is no track there.
+    SBCELL, SBMINH = 10, 8                  # apps/os88ui.inc
+    def sbthumb():
+        b = m.read(P("wd_sb"), 14)
+        y1, y2, total, fit, pos = (u16(b, 2), u16(b, 6), u16(b, 8), u16(b, 10),
+                                   u16(b, 12))
+        if total <= fit:
+            return None
+        top = y1 + SBCELL + 1
+        trk = y2 - top - SBCELL
+        if trk < SBMINH:
+            return None
+        h = max(fit * trk // total, SBMINH)
+        t = top + pos * (trk - h) // (total - fit)
+        return y1, y2, min(t, top + trk - h), h
+
+    def sbclick(g, up):
+        """One click on the bar towards the top (`up`) or the bottom - a page
+        when there is track beyond the thumb, the arrow when there is not -
+        PROVEN: both edges confirmed and [wd_top] read after it settles."""
+        th = sbthumb()
+        y1, y2 = (th[0], th[1]) if th else (g["ty"], g["sbb"])
+        if up:
+            a, b = y1 + SBCELL + 1, (th[2] if th else y1)
+            y = (a + b) // 2 if b - a >= 4 else y1 + SBCELL // 2
+        else:
+            a, b = (th[2] + th[3]) if th else y2, y2 - SBCELL
+            y = (a + b) // 2 if b - a >= 4 else y2 - SBCELL // 2
+        mo.to(g["sbx"], y); M.pace(m, 0.25)
+        mo._edge(True); M.pace(m, 0.08); mo._edge(False); M.pace(m, 1.5)
         M.quiesce(m, lambda: rw("wd_top"))
+
+    def page_round_trip(g, top0):
+        sbclick(g, False)
         for _ in range(12):
             if rw("wd_top") <= top0:
                 break
-            mo.to(g["sbx"], g["yup"]); M.pace(m, 0.25)
-            m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False); M.pace(m, 1.5)
-            M.quiesce(m, lambda: rw("wd_top"))
+            sbclick(g, True)
         mo.to(4, 4); M.pace(m, 1.0); M.settle(m)
         return rw("wd_top") == top0
 
     def to_top(g):
-        for _ in range(12):
+        for _ in range(24):
             if rw("wd_top") == 0:
-                return
-            mo.to(g["sbx"], g["yup"]); M.pace(m, 0.25)
-            m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False); M.pace(m, 1.5)
-            M.quiesce(m, lambda: rw("wd_top"))
+                break
+            sbclick(g, True)
         M.settle(m)
+        if rw("wd_top") != 0:       # every leg after this one is written
+            raise M.MartyError(     # against the top of the page
+                "the scroll bar did not bring the view to the top "
+                "([wd_top] = %d)" % rw("wd_top"))
 
     def select(g, r0, x0, r1, x1, hold_below=0):
         mo.to(g["tx"] + x0, ryb(r0) + 2); M.pace(m, 0.4)

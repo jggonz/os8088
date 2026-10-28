@@ -65,7 +65,9 @@ def check(leg, ok, msg):
         fails.append(leg)
 
 
-with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
+with os88ui.boot(SYS, apps=APPS, machine=MACHINE,
+                 quick=True) as ui:
+    ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
     m = ui.m
     ui.path("B:/SYSTEM/FONTS")
     ui.open("CHARTER.F88")              # the open-by-association path the

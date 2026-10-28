@@ -24,7 +24,7 @@ MACHINES = {'adlib': 'os8088_5150_herc_adlib_720_gla',
 
 def arm(tag, disk, off, code, driver, clobber):
     with G.os88ui.boot(G.os88build.at('build/os8088-360.img'),
-                      apps=str(disk), machine=MACHINES[tag]) as ui:
+                      apps=str(disk), machine=MACHINES[tag], quick=True) as ui:
         m = ui.m
         ui.path('B:/GORILLAS.O88')
         p = G.Probe(ui, off)

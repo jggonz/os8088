@@ -91,7 +91,7 @@ done:
     mov dx, s_ready
     call puts
     mov ah, 0                       ; **IT HOLDS THE SCREEN**, the way
-    int 0x16                        ; tests/dosirq's own probe does: the box
+    int 0x16                        ; tests/dosirq's own probe does: DOS
     mov ax, 0x4C00                  ; has no windowed text yet (wave 6), so a
     int 0x21                        ; program that exits takes its output with
                                     ; it and the only reader is a screenshot
@@ -297,7 +297,7 @@ send_arp:
 ; wait_rx - spin on the BIOS tick while the up-call does the work
 ;
 ; **NOTHING HERE POLLS THE DRIVER.** That is the point: a Crynwr client does
-; not, and if frames only arrived when we asked for them the box would be
+; not, and if frames only arrived when we asked for them DOS would be
 ; passing a test no real client would pass.
 ; -----------------------------------------------------------------------------
 wait_rx:
@@ -472,7 +472,7 @@ do_tcp:
 ; -----------------------------------------------------------------------------
 ; do_listen - BE THE SERVER: wait to be connected to, and answer (96.26.8)
 ;
-; The box has to be TOLD which port to forward, because a listening client
+; DOS has to be TOLD which port to forward, because a listening client
 ; sends nothing a packet driver could be read for - `OS88LISTEN=<port>` on the
 ; environment page is how (SPEC.md 96.26.8). This program does not set that
 ; and does not need to: it answers whatever arrives, so the port is the
@@ -488,7 +488,7 @@ do_listen:
     ; **NOTHING IS CLEARED HERE, AND THAT IS THE POINT.** A `.COM` starts with
     ; the zeros its image carries and runs once per launch, so the three
     ; stores that used to stand here bought nothing - and they THREW AWAY the
-    ; case this routine exists for. The box accepts the moment it knows where
+    ; case this routine exists for. DOS accepts the moment it knows where
     ; the client is (dn_accept needs [dn_cip], which any IP frame teaches), so
     ; a connection that was already waiting is accepted DURING the outbound
     ; leg above, and `receiver` banks its SYN before this routine is reached.
@@ -583,7 +583,7 @@ do_listen:
 ; **THE CHECKSUMS ARE COMPUTED AND NOT TEMPLATED**, which the first version's
 ; SYN was: a template only works for a frame that never changes, and a segment
 ; carrying a sequence number and a payload changes every time. A wrong
-; checksum is indistinguishable from the box dropping the frame, which is
+; checksum is indistinguishable from DOS dropping the frame, which is
 ; precisely the wrong diagnosis to leave lying around.
 ; -----------------------------------------------------------------------------
 tcp_build:
@@ -759,7 +759,7 @@ take_ack:
 ; wait_word - spin on the BIOS tick until [SI] is non-zero, CX ticks at most
 ;
 ; **IT POLLS NOTHING.** The frame arrives through the driver's own up-call,
-; called from the box's INT 08h chain (SPEC.md 96.23.4), so a Crynwr client
+; called from DOS's INT 08h chain (SPEC.md 96.23.4), so a Crynwr client
 ; has nothing to ask and this loop is the whole of its receive path.
 ; -----------------------------------------------------------------------------
 wait_word:
@@ -932,7 +932,7 @@ receiver:
     mov [lastflags], ax             ; "flags of zero" are different answers
     ; --- **AN INBOUND SYN IS SOMEBODY CONNECTING TO US** (SPEC.md 96.26.8) -
     ; A SYN with no ACK, arriving unasked: do_listen's whole signal. Banked
-    ; here rather than acted on, because this is an up-call from the box's own
+    ; here rather than acted on, because this is an up-call from DOS's own
     ; INT 08h chain and building a reply inside one would put a send_pkt
     ; inside the driver's own receive path.
     test al, F_SYN
@@ -950,13 +950,13 @@ receiver:
     mov [isyn_dport], ax            ; the half do_listen used to read back out
                                     ; of `rxbuf` when it ran - true only while
                                     ; the SYN is still the LAST frame that
-                                    ; arrived, and it is not: the box accepts
+                                    ; arrived, and it is not: DOS accepts
                                     ; as soon as it knows where we are, so the
                                     ; SYN lands during the outbound leg and
                                     ; `rxbuf` holds that connection's FIN by
                                     ; the time this matters. The reply then
                                     ; went out on the wrong source port and
-                                    ; the box read it as a NEW outbound
+                                    ; DOS read it as a NEW outbound
                                     ; connection - `NETV_OPEN 10.88.0.255` in
                                     ; the far side's log, against its own
                                     ; invented pool address

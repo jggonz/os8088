@@ -1652,7 +1652,7 @@ reproduced by a registered row now:
 1. **§96.44.2.1** — the core and the window laid the shared bss out four bytes
    apart, because `DBSS DOS_B_DVCWD, 2 * DVOL_MAX` sized a core table from a
    per-host constant. That is the console half of the report, entirely: every
-   program typed at the parted box's prompt answered `Bad command or file
+   program typed at the parted DOS's prompt answered `Bad command or file
    name`, root or subdirectory. `tests/unit/t_dosbss.py` rule 4.
 2. **§96.44.10** — `OSAPI_FILE_PATH` is an X cell, so `api_x` puts the
    caller's DS in ES; `kern_dos` bound the door with a far call straight at
@@ -1775,7 +1775,7 @@ costing this program, and §96.44.12 is the class written down with the gate
 that would catch the fourth.
 
 **To reproduce**: `make kdostest`, then `build/os8088-720.img` in A: and a
-720KB Prince disk in B: on `os8088_5150_herc_sb_720_gla`; open the box, Setup
+720KB Prince disk in B: on `os8088_5150_herc_sb_720_gla`; open DOS, Setup
 → Memory → the third arm, Return, type `B:\PRINCE.EXE` in the path box, Run,
 Proceed. `tools/os88intmon.py` armed right after Proceed catches the whole
 startup in 114 calls.
@@ -2064,7 +2064,7 @@ keeps it that way.
 
 ## 46. Microsoft Works: `Too many files open`, with one file open (FIXED — `CON` was resolved through the directory: SPEC.md §96.11.7)
 
-**The first program anyone ran on this box from outside the project**, and the
+**The first program anyone ran on this DOS from outside the project**, and the
 first report from upstream. An IBM PC 5150 on the fork owner's `pc5150`
 profile — 4.77 MHz 8088, Hercules, Sound Blaster — with Microsoft Works 1.00
 (`WORKS.EXE`, 313,702 bytes) on a 360KB floppy in B:. Works **launches and
@@ -2078,12 +2078,12 @@ draws its splash screen**, then puts up
 ```
 
 The handle table had **one slot of eight in use** at that moment — `WORKS.EXE`
-itself — and **the box never returns error 4 at all** on that path: `.fmany`
+itself — and **our DOS never returns error 4 at all** on that path: `.fmany`
 is reachable only from `dos_fh_new` refusing a full table. So the message was
 about a condition nothing had reported, and `DOS_NFH` was never the question.
 
 **Only a reference trace could have found it** (docs/DOS-DEBUGGING.md's whole
-premise: our side looked right, and it was right). Traced under this box and
+premise: our side looked right, and it was right). Traced under this DOS and
 under a real IBM DOS 3.30 on the same disk, one call site diverges:
 
 | | | |
@@ -2098,7 +2098,7 @@ under a real IBM DOS 3.30 on the same disk, one call site diverges:
 The name is **`CON`**. Works opens the console over and over at one site until
 DOS refuses, to count how many handles it has left, then closes them. Under
 DOS it counts three. Under us the first open answered *file not found* —
-because the box resolves every name through the directory and `CON` is not a
+because our DOS resolves every name through the directory and `CON` is not a
 file — so it counted **zero**, and every open it wanted after that it refused
 by itself. The error text is Works being right about what we told it.
 
@@ -2189,7 +2189,7 @@ been read three times by then and said the write could not be lost.
 
 Reported with entry 47 and in the same sentence — *"works is supposed to have
 a mouse, and there is none"*. Functions 3, 5, 6 and `0Bh` were all exact
-throughout, which is why reading the code found nothing: the box's `INT 33h`
+throughout, which is why reading the code found nothing: DOS's `INT 33h`
 answers the position and the buttons correctly and always did.
 
 **The `DOSTRACE` histogram (§96.10.3) answered it in one line.** The ring
@@ -2203,13 +2203,13 @@ INT 33h: 00h reset/installed? x1, 08h set y range x1,
          0Ah set text cursor x1, 0Ch SET EVENT HANDLER x1
 ```
 
-Four calls, then nothing. **It never polls function 3.** A box that answers
+Four calls, then nothing. **It never polls function 3.** A DOS that answers
 `0Ch` with `not supported` and makes no callbacks has told a program a mouse
 exists and then never mentions it again, which a program cannot tell from no
 mouse at all.
 
 §96.10.4 is what it takes to make that real on a machine whose kernel owns
-both mouse ISRs: chain IRQ0, because every other moment the box gets control
+both mouse ISRs: chain IRQ0, because every other moment DOS gets control
 is the program calling *us* and a program with a handler installed has stopped
 calling. 18.2 Hz against a serial mouse's ~40, 398 bytes, and `dosmouevt`
 reads `events 000F move 000D press 0001 release 0001`.
@@ -2223,7 +2223,7 @@ read, then the IRQ0 hook — each one **keeping** the symptom, which is what
 should have named the cause several builds sooner. The row uses `pace="wall"`
 and its docstring carries the corpse.
 
-## 49. Dual-screen Herc/CGA: leaving the DOS box's full screen turns the CGA GREEN and flickering (FIXED — the kernel was reading the ROM's ONE mode shadow for a machine with two cards: SPEC.md §39.18.1.1)
+## 49. Dual-screen Herc/CGA: leaving DOS's full screen turns the CGA GREEN and flickering (FIXED — the kernel was reading the ROM's ONE mode shadow for a machine with two cards: SPEC.md §39.18.1.1)
 
 Reported off 86Box, an `ibmxt` with a CGA and a Hercules Plus in it and the
 **Hercules made primary** in the Control Panel, the dock on bottom/auto and
@@ -2251,7 +2251,7 @@ fix all 128,000 of them are identical across the round trip.
 
 **Three things it is NOT**, each of which was on the table before the trace:
 not the dock (the report mentions it and `fsx_run` drops an open one anyway),
-not `SOUND.DRV`, and **not Alt+Enter or the DOS box** — any BIOS mode set on
+not `SOUND.DRV`, and **not Alt+Enter or DOS** — any BIOS mode set on
 any other card of a two-card machine does it, and the blank direction had the
 same defect with §64.3's idle blanker as its trigger. So the fix is at the
 source of the byte: `[vid_cgamode]`, banked by `vid_setmode` right after the
@@ -2264,7 +2264,7 @@ kernel before the fix — leg 3 reads `Mode3TextCo80`, leg 4 counts 115,010 of
 128,000 pixels changed — while its leg 2 asserts that the ROM really does move
 40:65h, so the row cannot pass vacuously on a BIOS that does not.
 
-## 50. ...and the REVERSE: the DOS box full screen on the CGA corrupts the HERCULES (FIXED — `vid_text` never got §39.19.4's `vid_cga_equip`: SPEC.md §39.19.4.1)
+## 50. ...and the REVERSE: DOS full screen on the CGA corrupts the HERCULES (FIXED — `vid_text` never got §39.19.4's `vid_cga_equip`: SPEC.md §39.19.4.1)
 
 Entry 49's mirror, same machine, reported the next morning: *"Move the dos
 window over to cga (it won't fully fit because of wm_snap). Go fullscreen.
@@ -2305,7 +2305,7 @@ coloured pixels where an 80x25 text screen belongs; it is black-and-white text
 now. And `40:10` was left claiming a colour primary for the rest of the
 session, which is the flag §39.20's Restart reads.
 
-**The flag must NOT be restored by `vid_text`**: the DOS box writes through the
+**The flag must NOT be restored by `vid_text`**: DOS writes through the
 ROM's own teletype while it is full screen and the ROM picks the card off that
 same flag, so putting it back early would send the program's output to the
 monitor it is not on. `vid_fsx_leave` is where it belongs — `vid_disp_init`'s
@@ -2421,7 +2421,7 @@ missing name `CF=1 AX=0002`. We answer `0010` for the two roots deliberately
 — `0074` is bits DOS never set, a root having no directory entry to read them
 from, and what every caller tests is `CF` and bit 4. **The probe prints
 `ATTRDIR PASS` on both machines**, which is what says the assertion is not
-one only this box could satisfy.
+one only this DOS could satisfy.
 
 **The gate's own first version was the near-miss worth keeping.** `ask`
 pushed `AX` and `CX` and then did `or bl, bl` between the `int 21h` and the
@@ -2436,7 +2436,7 @@ The third of the Works reports and the only one where **the reporter brought
 the diagnosis**: *"Apparently we are expected to draw the cursor — including
 in text mode, which we never had to do before in our os — unless the program
 tells us somehow that it is taking over drawing the cursor itself."* That is
-exactly right, and it is the one part of `INT 33h` this box had answered with
+exactly right, and it is the one part of `INT 33h` this DOS had answered with
 a shrug: `01h` and `02h` were both `.none`, on the reasoning that the kernel
 owns the pointer.
 
@@ -2473,7 +2473,7 @@ guard rather than the main mechanism.
 and joined to either host, so it cannot be an `%ifdef`: `kdentry.inc` fills
 the hook and `dos_hk_bind` does not, and in the window the cell stays the zero
 a `.bss` arrives as. `tests/kdmcur.py` asserts **both** arms, because a row
-that only ran arm 3 would pass just as happily with a box that scribbled on
+that only ran arm 3 would pass just as happily with a DOS that scribbled on
 the desktop.
 
 Measured: `doscore.bin` **15,475 → 15,759** (+284, 113 bytes of `CORE_MAX`
@@ -2481,7 +2481,7 @@ left), `kerndos.bin` +52, `DOS.O88` +254 packed. Nothing resident on a machine
 that is not running a DOS program.
 
 **The debugging cost one wasted arm and it was the harness's own.** The first
-gate ran only `ui.path("B:/MCURSOR.COM")` — which is the *windowed* box — and
+gate ran only `ui.path("B:/MCURSOR.COM")` — which is the *windowed* DOS — and
 reported the cursor absent, correctly and uselessly. Reaching arm 3 is
 `tests/kdmouse.py`'s sequence: open `DOS.O88` itself, pick the Memory arm,
 then name the program. And the probe's own labels had no trailing space, so
@@ -2571,7 +2571,7 @@ cannot replicate the stationary cursor issue, so likely works does not redraw
 in this condition? You might have to make a custom program to test that."*
 
 Two observations, and **the reporter had already done the hard half of both**
-by running CTMOUSE beside our box on the same machine. That is the control
+by running CTMOUSE beside our DOS on the same machine. That is the control
 this whole section of the tree is built on (docs/DOS-DEBUGGING.md), and it is
 worth saying plainly: *two independent drivers behaving identically is an
 observation about the application, not about either driver.*
@@ -2611,7 +2611,7 @@ not moving raises no interrupt, so a driver whose repaint hangs off its own
 IRQ has nothing to repaint from, and neither driver hooks the tick for it.
 
 So there is no fix and the early return stays. `tests/kdmredraw.py` asserts
-the **parity** instead — a compatibility ratchet, red if this box ever starts
+the **parity** instead — a compatibility ratchet, red if this DOS ever starts
 repainting where CuteMouse does not. It was verified to fail by building the
 seventeen-byte guarded re-save that would have been the fix, which takes B to
 `612A` and leaves C green: a correct cursor, and a worse DOS.
@@ -2881,7 +2881,7 @@ with no documented return value leaves AX alone" case (SPEC.md §96.10.6) —
 but **`1Fh` is *Disable Mouse Driver*, which documents `AX = 001Fh` and the
 previous handler in `ES:BX`**, and CuteMouse implements it. So the probe
 tests the rule with a function that has an answer, and passes here only
-because this box falls through to `.none`. It is a gate that would go red the
+because this DOS falls through to `.none`. It is a gate that would go red the
 day `1Fh` were implemented properly, and it is not testing what it says.
 
 It asks `AX=0090h` now — above every function this family of drivers defines,
@@ -4211,8 +4211,8 @@ by the same core 0 that mixes. If they return, note whether FTPD was up and
 replay with it closed. Meanwhile pcend is the firmware to keep: the record
 and the A/B switch cost a few bytes and keep A and B useful.
 
-Two things that are true of BOTH cards and are not defects: inside the DOS box
-the USB mouse does not move (the box owns `int 33h` for its bracket, SPEC.md
+Two things that are true of BOTH cards and are not defects: inside DOS
+the USB mouse does not move (DOS owns `int 33h` for its bracket, SPEC.md
 9.12.7), and on a 2.x the Sound Blaster cannot DMA from memory the card is
 itself emulating (§34.10.1), with the DMA jumper on **1**.
 

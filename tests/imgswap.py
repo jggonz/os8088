@@ -101,7 +101,7 @@ check(sec0[510:512] != b"\x55\xAA", "precondition: the image's boot sector's "
 other_run = os.path.abspath(os.path.join(OUT, "other-run.img"))
 shutil.copyfile(other, other_run)       # MartyPC uses `mount`'s file in place
 
-with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
+with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE, quick=True) as ui:
     # --- 1. mount ---------------------------------------------------------
     w = ui.open_drive("B")
     ui.open("TEST.IMG", expect=None, win=w)

@@ -51,12 +51,15 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
 import os88fixture                                       # noqa: E402
+import os88build                                         # noqa: E402
 import os88qemu                                              # noqa: E402
 import os88sym                                               # noqa: E402
 
-PIDFILE = os.path.join(ROOT, "build", "qemu.pid")
-SOCK = os.path.join(ROOT, "build", "qmp.sock")
-IMG = os.path.join(ROOT, "build", "heapmap.img")
+# THIS PROCESS'S pair and scratch (tests/os88qemu.py RUNDIR), never
+# build/qmp.sock or a shared image, so the row shares the soak's emulator lane
+# (docs/plans/SOAK-PARALLEL.md 17)
+SOCK, PIDFILE = os88qemu.paths("heapmap")
+IMG = os.path.join(os88qemu.RUNDIR, "heapmap.img")
 ALLBITS = 0x1F          # sound, hard disk, RAM disk, parallel link, Ethernet
 MEM_K_OVL = 0xFF0B
 
@@ -68,7 +71,7 @@ def cfgfile():
     the basename, and a SYSTEM2.CFG is a file the kernel never looks for, so
     the machine boots perfectly and wants nothing.
     """
-    d = os.path.join(ROOT, "build", "heapcfg")
+    d = os.path.join(os88qemu.RUNDIR, "heapcfg")
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, "system.cfg")
     with open(p, "wb") as f:
@@ -120,24 +123,27 @@ def kill_stale():
 
 
 def launch(hdd_mb=32, hdd=True):
-    hdimg = os.path.join(ROOT, "build", "hdd.img")
+    # A BLANK DISK OF ITS OWN, where it used to be the shared build/hdd.img
+    # that every HDD= launch keeps and formats - so this row's "a disk the
+    # driver finds" depended on what the last row left there, and two rows
+    # on it at once fought over its write lock. Sparse, so it costs nothing.
+    hdimg = os.path.join(os88qemu.RUNDIR, "hdd.img")
     if hdd and not os.path.exists(hdimg):
-        subprocess.run(["dd", "if=/dev/zero", "of=" + hdimg, "bs=1024",
-                        "count=%d" % (hdd_mb * 1024)], check=True,
-                       stderr=subprocess.DEVNULL)
+        with open(hdimg, "wb") as f:
+            f.truncate(hdd_mb * 1024 * 1024)
     hdarg = (" -drive file=%s,format=raw,if=ide,index=0,media=disk" % hdimg) if hdd else ""
     em = "qemu" + "-system-i386"        # never on a command line whole: see kill_stale
     cmd = (em + " -S -machine pc,vmport=off"   # vmport off: the msserial mouse
                                                # is what this drives (SPEC.md 9.11)
            " -drive file=%s,format=raw,if=floppy -boot a"
            " -chardev msmouse,id=m0 -serial chardev:m0"
-           " -drive file=build/apps.img,format=raw,if=floppy,index=1"
+           " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
            "%s"
            " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
            " -audiodev none,id=snd -device sb16,audiodev=snd"
            " -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=3"
-           % (IMG, hdarg, SOCK, PIDFILE))
-    subprocess.run(cmd, cwd=ROOT, shell=True, check=True)
+           % (IMG, os88build.at("build/apps.img"), hdarg, SOCK, PIDFILE))
+    os88qemu.start(cmd, cwd=ROOT, shell=True, check=True)
     # ...and it is DAEMONISED, so it outlives this script unless
     # somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own(PIDFILE, SOCK)

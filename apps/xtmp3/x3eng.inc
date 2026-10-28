@@ -1218,7 +1218,9 @@ x3_readat:
     mov si, x3_fname
     push di
     mov di, ap_rd_cur
+    call x3_lpin                    ; ES:BX is the ring's, across the walk
     call os88_rseq                  ; CF, DX:AX = bytes
+    call x3_ldecl
     pop di
     jc .no
     or dx, dx
@@ -1398,7 +1400,8 @@ x3_la_claim:
     mov [ap_la_seg], dx
     mov dx, [x3_lamask]
     mov [x3_ring+X3R_MASK], dx
-    call x3_memck
+    call x3_ldecl                   ; MOVABLE from birth (x3_rmove): pinned
+    call x3_memck                   ; only across a file call into it
     pop dx
     pop ax
 .ok:
@@ -1428,6 +1431,95 @@ x3_lasize:
 .o:
     ret
 
+; -----------------------------------------------------------------------------
+; THE RINGS MOVE (NO-PINNING, SPEC.md 121.10.1). The look-ahead's claim (ring,
+; PCM, stage) and a conventional hold are MOVABLE from birth, and PINNED only
+; across a file call that holds their segment in ES:BX - READ_SEQ's walk
+; between transfers is not dsk_xfer's to cover (SPEC.md 66.5.7.1), Note Pad's
+; np_dmov shape: two far calls a gulp against a gulp's ~400 ms. Every other
+; use loads [ap_la_seg] afresh (FRONT's NEXT reads X3R_SEG each call), the
+; worker uses it only between two OSAPI_TASK_ALIVEs, and only the UI task
+; compacts (66.3.1). The speaker ring is the Audio Player's rule (86.5.3):
+; pinned for a speaker session (x3_spkpin), declared by ap_rdecl at its close.
+; -----------------------------------------------------------------------------
+
+; x3_lpin / x3_ldecl - the look-ahead (and a conventional hold) pinned across
+; a file call into it / movable again. A claim not held is 0, which
+; OSAPI_MEM_MOVABLE refuses harmlessly. Keep EVERY register and the FLAGS:
+; they stand beside the file call whose CF is the verdict
+x3_lpin:
+    push ax
+    xor ax, ax
+    jmp short x3_lset
+x3_ldecl:
+    push ax
+    mov ax, x3_rmove
+x3_lset:
+    pushf
+    push dx
+    mov dx, [ap_la_seg]
+    call OSAPI_MEM_MOVABLE
+    cmp byte [x3h_kind], X3HK_CONV
+    jne .o
+    mov dx, [x3h_base]
+    call OSAPI_MEM_MOVABLE
+.o:
+    pop dx
+    popf
+    pop ax
+    ret
+
+; x3_spkpin - the speaker ring pinned for a session about to open (os88spk's
+; ISR plays it and os88spk_rseg holds a copy). Keeps every register
+x3_spkpin:
+    push ax
+    push dx
+    xor ax, ax
+    mov dx, [aps_rseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
+    ret
+
+; x3_rmove - a claim MOVED (SPEC.md 66.3: BX = was, DX = now): one word each,
+; and the stage, which a conversion derives from the ring's claim once
+; (x3c_sseg), by the same delta. A work segment is put right in the open
+; record, and the backend part re-banks it at its next verb (x3_wsck)
+x3_rmove:
+    cmp bx, [ap_la_seg]
+    jne .spk
+    mov [ap_la_seg], dx
+    mov ax, dx
+    sub ax, bx
+    add [x3c_sseg], ax              ; (stale when no conversion: re-derived)
+.spk:
+    cmp bx, [aps_rseg]
+    jne .hold
+    mov [aps_rseg], dx
+.hold:
+    cmp byte [x3h_kind], X3HK_CONV
+    jne .ws
+    cmp bx, [x3h_base]
+    jne .ws
+    mov [x3h_base], dx
+.ws:
+    mov cl, [x3_nws]
+    xor ch, ch
+    xor si, si
+    jcxz .out
+.w:
+    cmp bx, [x3_ws+si]
+    jne .wn
+    mov [x3_ws+si], dx
+    mov [x3_open+X3O_SEG+si], dx
+    mov byte [x3_wsmv], 1
+.wn:
+    inc si
+    inc si
+    loop .w
+.out:
+    ret
+
 x3_la_free:
     push dx
     mov dx, [ap_la_seg]
@@ -1435,7 +1527,12 @@ x3_la_free:
     jz .out
     call OSAPI_MEM_FREE
     mov word [ap_la_seg], 0
-.out:
+    and byte [x3_req], ~X3R_READ    ; A GULP ASKED FOR THIS RING IS SPENT
+.out:                               ; with it: the worker is parked (every
+                                    ; caller), and a wake still queued behind a
+                                    ; Stop would read the gulp into segment 0 -
+                                    ; the IVT (xtmp3eng's qagain: a live Stop
+                                    ; with a gulp pending, the machine dead)
     pop dx
     ret
 
@@ -2687,6 +2784,7 @@ x3_gran1:
     call x3p_gran                   ; DX:AX = the record
     mov es, dx
     mov si, ax
+    call x3_wsck                    ; (a moved work segment, re-banked)
     mov dx, [ap_la_seg]             ; the PCM: past the ring, in its claim
     mov di, X3_PCMOFF
     push ds
@@ -3672,6 +3770,7 @@ x3_rungset:
     call x3_bvcall
     jc .openerr
     mov byte [x3_bopen], 1          ; OPEN, and in effect
+    call x3_wsdecl                  ; ...and its work MOVABLE (121.10.1)
     call x3_shrink                  ; the XT part's OPEN half given back
 .ring:
     call x3_rungrow
@@ -4148,8 +4247,16 @@ x3_be_get:
     call op_cseg                    ; segment's own word in real mode, its
     mov [x3_bvec+2], ax             ; alias on kern_mega
     mov [x3_bgran+2], ax
+    mov [x3_bresg+2], ax
     mov ax, [es:X3K_VEC + 2 * X3V_GRANULE]
     mov [x3_bgran], ax
+    mov ax, [es:X3K_VEC + 2 * X3V_RESEG]
+    mov [x3_bresg], ax
+    mov byte [x3_wsmv], 0           ; (a new part: OPEN banks afresh)
+%ifdef X3_PARTS
+    mov al, [x3_bpart]              ; THE PART MAY MOVE (SPEC.md 20.12.12):
+    call op_movable                 ; its segments banked, x3_partsmv re-reads
+%endif
 %ifdef X3STUB
     call x3_stubpoke                ; the test hook's figures, into the part
 %endif
@@ -4194,6 +4301,7 @@ x3_be_drop:
 ; UI task's alone
 ; -----------------------------------------------------------------------------
 x3_bvcall:
+    call x3_wsck                    ; a moved work segment re-banked first
     push bx
     push ds
     xor bh, bh
@@ -4245,6 +4353,55 @@ x3_wsclaim:
     pop ax
     ret
 
+; x3_wsdecl - every work segment MOVABLE (x3_rmove), once OPEN has banked
+; them: a move sets [x3_wsmv] and x3_wsck re-banks them before the part runs
+; again. Not before OPEN - the part has nothing to re-read. keeps everything
+x3_wsdecl:
+    push ax
+    push cx
+    push dx
+    push si
+    mov cl, [x3_nws]
+    xor ch, ch
+    xor si, si
+    jcxz .out
+.d:
+    mov dx, [x3_ws+si]
+    mov ax, x3_rmove
+    call OSAPI_MEM_MOVABLE
+    inc si
+    inc si
+    loop .d
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; x3_wsck - a work segment MOVED since the part last ran: RESEG hands it the
+; open record's segments. Either task (the worker before GRANULE, the UI
+; task before any verb): RESEG is register-only and idempotent, and a move
+; happens only while the worker is parked at OSAPI_TASK_ALIVE, outside the
+; part. keeps everything
+x3_wsck:
+    cmp byte [x3_wsmv], 0
+    je .out
+    mov byte [x3_wsmv], 0
+    push di
+    push es
+    push ds
+    push ds
+    pop es
+    mov di, x3_open
+    mov ds, [x3_bseg]
+    call far [cs:x3_bresg]
+    pop ds
+    pop es
+    pop di
+.out:
+    ret
+
 ; x3_wsfree - every work segment freed. keeps everything
 x3_wsfree:
     push cx
@@ -4262,6 +4419,7 @@ x3_wsfree:
     jmp short .f
 .out:
     mov byte [x3_nws], 0
+    mov byte [x3_wsmv], 0           ; (nothing left to re-bank)
     mov byte [x3_bopen], 0          ; (an OPEN without its work is not one)
     pop si
     pop dx
@@ -4758,6 +4916,7 @@ x3l_wprobe:
     call x3p_gran                   ; DX:AX = the record
     mov es, dx
     mov si, ax
+    call x3_wsck                    ; (a moved work segment, re-banked)
     mov dx, [ap_la_seg]
     mov di, X3_PCMOFF
     push ds
@@ -5411,6 +5570,7 @@ x3_spk_play:
     mov byte [x3_md], MD_SPK
     mov byte [x3_st+X3S_STATE], X3ST_FILE
     call x3_flagsvol
+    call x3_spkpin                  ; (declared again by aps_close)
     call aps_open                   ; THE BRACKET: back when paused, stopped,
     jmp x3_spk_back                 ; at the end, or refused
 
@@ -5421,6 +5581,7 @@ x3_spk_seek:
     mov byte [x3_md], MD_SPK
     mov byte [x3_st+X3S_STATE], X3ST_FILE
     mov byte [x3_paused], 0
+    call x3_spkpin
     call aps_open
     jmp x3_spk_back
 
@@ -5554,6 +5715,21 @@ apu_progress:
     mov ax, [ap_elapsed_s]
     ret
 
+; ap_rdecl - apspk's aps_close: the speaker ring MOVABLE again, the Audio
+; Player's rule (SPEC.md 86.5.3) - x3_spkpin pinned it as the session opened.
+; The look-ahead is not this pair's: it is movable throughout and pinned per
+; file call (x3_lpin). Keeps every register; CF = 0
+ap_rdecl:
+    push ax
+    push dx
+    mov ax, x3_rmove
+    mov dx, [aps_rseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
+    clc
+    ret
+
 %include "os88spk.inc"
 %include "os88spkfx.inc"
 %include "apspk.inc"
@@ -5621,6 +5797,8 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_bseg, 2                  ; ...its segment...
     X3B x3_bvec, 4                  ; ...a verb's far vector (UI task's)...
     X3B x3_bgran, 4                 ; ...and GRANULE's (the worker's)
+    X3B x3_bresg, 4                 ; ...and RESEG's (x3_wsck, either task)
+    X3B x3_wsmv, 1                  ; 1: a work segment MOVED (x3_rmove)
     X3B x3_qfpok, X3_QMAX           ; per queue entry: its print is known...
     X3B x3_qfp, X3_QMAX * X3_FPSZ   ; ...and it
     X3B x3_fname, 14                ; the playing file's name

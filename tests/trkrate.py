@@ -55,7 +55,7 @@ def main():
                           apps=DISK,
                           machine="os8088_5150_sb_gla", boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
         # THE SAVER, OFF, before anything waits. This row polls for the
         # player to become resident for up to two guest MINUTES with no
         # input, which is well inside no_saver's own rule, and the saver

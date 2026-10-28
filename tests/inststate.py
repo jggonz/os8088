@@ -19,15 +19,21 @@ which HDD.DRV mounts at boot as C:):
      FAT16 entry whose own CHS is not its LBA at this geometry (52.2.6);
   c: no MBR signature at all - an unpartitioned disk.
 
-Every row is READ out of the framebuffer against the kernel's own glyph table,
-tests/instrest.py's apparatus: a string rendered on the host, searched for in
-that row's band in both polarities (the selected row is drawn inverted). The
-installer is never clicked past its open, so nothing is written.
+The column is the ENGINE's words (hd_iw_rowtext in HDDTOOL.DRV), and since
+SPEC.md 52.10.4.4 its one reader is the INSTALL.O88 wizard, which HDI_SLOTS
+hands them to as HDIS_TEXT. So the row starts the wizard from the Control
+Panel's Install button, goes to its partition page, and reads the four
+records the wizard holds - out of the package's own memory, because on the
+glass the slots an install may not take are GREYED, and grey is a dither on
+1bpp that no glyph match reads. What the wizard draws from them is
+tests/install.py's subject. Nothing is clicked past the partition page, so
+nothing is written.
 
 BREAK IT ON PURPOSE: the tree before 52.10.4.2 reads `Ready` on slot 1 and
 `Unusable` on slots 2-4 of `a` - the first expectation fails on its first row.
 """
 import os
+import re
 import shutil
 import struct
 import sys
@@ -36,10 +42,13 @@ sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 import os88marty as M                                       # noqa: E402
 import instdeep as ID                                       # noqa: E402
-import instrest as IR                                       # noqa: E402
 
-# inst.inc's row geometry, content-relative
-HIW_LX, HIW_R0Y, HIW_ROWH, HIW_W = 8, 24, 12, 356
+import instwiz as IW                                        # noqa: E402
+
+API = open("apps/os88api.inc").read()
+HDIS_TEXT, HDIS_TEXTSZ, HDIS_SIZE = (
+    int(re.search(r"^%s\s+equ\s+(\d+)" % n, API, re.M).group(1))
+    for n in ("HDIS_TEXT", "HDIS_TEXTSZ", "HDIS_SIZE"))
 
 # (type, lba, sectors, bad CHS) for slots 2..4, and what each row must read
 DISKS = {
@@ -72,12 +81,9 @@ def stage(run_dir, layout):
     open(vhd, "wb").write(b)
 
 
-def row_has(rows, ix, iy, i, want):
-    x0, y0 = ix + HIW_LX, iy + HIW_R0Y + i * HIW_ROWH
-    for ink in (want, [[1 - p for p in r] for r in want]):
-        if IR.find(rows, x0, y0 - 1, HIW_W - 12, 10, ink):
-            return True
-    return False
+def slot_text(wz, i):
+    raw = wz.mem("in_slots", HDIS_TEXTSZ, i * HDIS_SIZE + HDIS_TEXT)
+    return raw.split(b"\0")[0].decode("latin-1")
 
 
 def one(name):
@@ -87,21 +93,20 @@ def one(name):
     try:
         stage(run_dir, layout)
         with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=ID.MACHINE, run_dir=run_dir) as m:
-            M.settle(m)
-            tab = IR.glyph_table(m)
-            mo, ix, iy = ID.open_installer(m)
-            IR.park(mo)
-            M.settle(m)
-            rows = IR.screen(m)[2]
+                      machine=ID.MACHINE, run_dir=run_dir, boot=False) as m:
+            m.run(); M.kernel_up(m)   # a state gate; every act is a click
+            wz = ID.open_installer(m)
+            wz.next(IW.P["P_DRIVE"], "after Welcome", limit=120.0)
+            wz.next(IW.P["P_SLOT"], "after the drive", limit=120.0)
             bad = []
             for i, want in enumerate(expect):
-                ok = row_has(rows, ix, iy, i, IR.render(want, tab))
+                got = slot_text(wz, i)
                 print("  %s slot %d: %-26r %s" % (name, i + 1, want,
-                                                  "ok" if ok else "MISSING"))
-                if not ok:
-                    bad.append("disk %s slot %d does not read %r"
-                               % (name, i + 1, want))
+                                                  "ok" if got == want else
+                                                  "READS %r" % got))
+                if got != want:
+                    bad.append("disk %s slot %d reads %r, not %r"
+                               % (name, i + 1, got, want))
             return bad
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

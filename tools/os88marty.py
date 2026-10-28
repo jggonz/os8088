@@ -169,6 +169,10 @@ GUEST_BUDGET_RATIO = float(os.environ.get("OS88_GUEST_RATIO", "3.0"))
 # 4.5 is the idle measurement, not a margin; OS88_GUEST_PACE=0 puts the host
 # sleeps back, for an A/B and nothing else.
 GUEST_PACE = float(os.environ.get("OS88_GUEST_PACE", "4.5"))
+# wait_stop's longest nap between polls. Doubling straight to `poll` (20 ms)
+# overshot a stop by up to the last nap - a harness-driven guest routine of a
+# few ms (a breakpoint-bracketed handler, a readback stub) paid ~2x its run.
+WAIT_STOP_NAP = float(os.environ.get("OS88_WAIT_STOP_NAP", "0.004"))
 
 # SETTLE'S SHORT WINDOW. `settle` proves stillness over `stable` intervals of
 # `quiet`, and at GUEST_PACE that is nine guest seconds of a still screen
@@ -260,6 +264,8 @@ class Marty:
         self._proc = None
         self._rec = None
         self._pumping = 0   # bp_trace blocks in flight
+        self._planes_verb = None  # the server has `planes`: unknown yet
+        self._pipeline = None     # ...and answers a pipelined burst (batch)
         self._greet(timeout)
 
     def _greet(self, timeout):
@@ -368,6 +374,56 @@ class Marty:
         if not r.get("ok", False):
             raise MartyError(r.get("err", "refused"))
         return r
+
+    def batch(self, cmds):
+        """Several requests as ONE round trip: `cmds` is a list of `cmd()`
+        keyword dicts, sent in one write; the replies come back in order.
+
+        A server that says `pipeline` in its `ping` answers a pipelined burst
+        with no stall, so a stopped-machine sequence (park, a dozen
+        `setreg`s, `bp`, `run`) costs one round trip instead of fifteen. An
+        older server is asked one request at a time - correct and as slow as
+        before (pipelining to it works, but Nagle holds every reply after the
+        first for ~40 ms). Every request is answered before anything is
+        raised; the first refusal raises MartyError naming its index. A
+        `run` in the batch records the resume mark exactly as `run()` does,
+        so a `wait_stop` after the batch is right.
+        """
+        cmds = [dict(c) for c in cmds]
+        if not cmds:
+            return []
+        if self._pipeline is None:
+            try:
+                self._pipeline = bool(self.cmd(cmd="ping").get("pipeline"))
+            except MartyError:
+                self._pipeline = False
+        if not self._pipeline:
+            out = [self._raw_cmd(c) for c in cmds]
+        else:
+            data = b"".join((json.dumps(c) + "\n").encode() for c in cmds)
+            try:
+                with self._lock:
+                    self.f.write(data)
+                    self.f.flush()
+                    lines = [self.f.readline() for _ in cmds]
+            except OSError as e:
+                raise MartyError(self._gone(type(e).__name__ + ": " + str(e))) from None
+            if not all(lines):
+                raise MartyError(self._gone("it closed the connection"))
+            out = [json.loads(l) for l in lines]
+        for i, (c, r) in enumerate(zip(cmds, out)):
+            if not r.get("ok", False):
+                raise MartyError("batch[%d] %s: %s" % (i, c.get("cmd"),
+                                                       r.get("err", "refused")))
+            if c.get("cmd") == "run":
+                self._go = self._mark(r, resumed=True)
+        return out
+
+    def _raw_cmd(self, c):
+        try:
+            return self.cmd(**c)
+        except MartyError as e:
+            return {"ok": False, "err": str(e)}
 
     def _gone(self, how):
         """One sentence for "the emulator is not there any more".
@@ -544,6 +600,89 @@ class Marty:
         r = self.cmd(cmd="fbuf", aperture=aperture, card=card)
         return r["w"], r["h"], bytes.fromhex(r["data"])
 
+    def planes(self, offset=0, length=38400, planes=(0, 1, 2, 3), card=None,
+               stub=None, use_stub=False):
+        """The VGA/EGA card's BIT PLANES as a list of bytes, one per plane in
+        `planes`, each `length` bytes from PLANE offset `offset` (mode 12h and
+        Mode X: the A000 offset). The default is a whole mode 12h screen.
+
+        A `read` of A0000 is the card's side-effect-free peek and serves
+        plane 0 whatever Read Map Select says, so planes 1-3 are not in guest
+        memory at all. The debug server's `planes` verb reads the card's VRAM
+        directly: no guest cycle, register or latch is touched, and it is
+        exact while the machine RUNS as well as stopped. An OLDER server has
+        no such verb; then `stub=(seg, code_off, scratch_off, scratch_size)`
+        names 9 bytes of code room and an EVEN-sized scratch buffer in one
+        guest segment, and the planes come through a REP MOVSW per chunk with
+        Read Map Select stepped - the machine must be PAUSED (and the caller
+        is expected to hold whatever lock keeps the screen still), and every
+        register, both buffers and the GC registers are put back (its exec
+        breakpoint REPLACES any armed set). Without a `stub` an old server
+        raises. `use_stub=True` takes the stub path on any server (a row
+        whose sequence turns out to depend on the guest time the copy spends;
+        see tests/gorillasmenu.py)."""
+        planes = list(planes)
+        if self._planes_verb is not False and not use_stub:
+            try:
+                r = self.cmd(cmd="planes", offset=offset, len=length,
+                             planes=planes, card=card)
+                self._planes_verb = True
+                return [bytes.fromhex(d) for d in r["data"]]
+            except MartyError as e:
+                if "unknown cmd" not in str(e):
+                    raise
+                self._planes_verb = False
+        if stub is None:
+            raise MartyError("this MartyPC has no `planes` verb (rebuild it: "
+                             "make marty) and no guest stub was given")
+        return self._planes_stub(offset, length, planes, stub)
+
+    def _planes_stub(self, offset, length, planes, stub):
+        seg, code, scratch, size = stub
+        size &= ~1
+        base = seg << 4
+        saved = self.regs()
+        old_code = self.read(base + code, 9)
+        old_scr = self.read(base + scratch, size)
+        # cli; mov ax,A000h; mov ds,ax; rep movsw; nop (the stop)
+        self.write(base + code, bytes.fromhex("fab800a08ed8f3a590"))
+        index = self.inb(0x3ce)
+        self.outb(0x3ce, 5)
+        mode = self.inb(0x3cf)
+        self.outb(0x3cf, mode & ~8)             # read mode 0
+        self.outb(0x3ce, 4)
+        selected = self.inb(0x3cf)
+        out = []
+        try:
+            for plane in planes:
+                self.outb(0x3cf, plane)
+                got = []
+                for at in range(0, length, size):
+                    n = min(size, length - at)
+                    self.cmd(cmd="park", cs=seg, ip=code)
+                    for reg, value in (("es", seg), ("si", offset + at),
+                                       ("di", scratch), ("cx", (n + 1) // 2),
+                                       ("flags", saved["flags"] & ~0x600)):
+                        self.setreg(reg, value)
+                    self.bp_exec(base + code + 8)
+                    self.run()
+                    if self.wait_stop(30) != "breakpoint":
+                        raise MartyError("the VGA plane copy stub hung")
+                    got.append(self.read(base + scratch, n))
+                out.append(b"".join(got))
+        finally:
+            self.outb(0x3cf, selected)
+            self.outb(0x3ce, 5)
+            self.outb(0x3cf, mode)
+            self.outb(0x3ce, index)
+            self.write(base + code, old_code)
+            self.write(base + scratch, old_scr)
+            self.cmd(cmd="park", cs=saved["cs"], ip=saved["ip"])
+            for reg in ("ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
+                        "ss", "ds", "es", "flags"):
+                self.setreg(reg, saved[reg])
+        return out
+
     def vram(self, kind=None):
         """The 1bpp framebuffer as (width, height, rows-of-bits).
 
@@ -611,6 +750,16 @@ class Marty:
         return bytes(out)
 
     def readseg(self, seg, off, length):
+        """`length` bytes at seg:off. A LiveSeg (what dispapps.pkg_seg,
+        dosmap.instance and pkg_live answer) is read through the kernel word
+        it came from, the base and the bytes in one compactor-safe snapshot
+        (seg_snap) - so a row that banked one and reads through it here
+        cannot be handed the bytes a compaction left at the old base."""
+        if isinstance(seg, LiveSeg) and seg.m is self:
+            now, out = seg_snap(self, seg.word, [(off, length)], seg.base,
+                                step=False)
+            if now:                     # (gone - window closed: read as an
+                return out[0]           # int, which is what it always did)
         return self.read((seg << 4) + off, length)
 
     def sym(self, name, defines=()):
@@ -631,7 +780,21 @@ class Marty:
         a byte from it succeeds and means nothing. os88sym.py has the story.
         """
         import os88sym
-        return os88sym.linear(name, defines)
+        addr = os88sym.linear(name, defines)
+        # **`.cold` MAY HAVE SLID** (docs/plans/MOVABLE-COLD-PLAN.md 2): on a
+        # machine with neither a VGA nor an EGA, kmain_o moves it down by
+        # VGA_PARA at boot, and from then on a `.cold` label at COLD_SEG is
+        # an address the old copy's leftovers sit at. The guest says which:
+        # [api_coldseg] reads COLD_HOME - VGA_PARA exactly when it slid, and
+        # nothing else ever writes that value (a ROM or the HMA write their
+        # own segments, which the rows that want them name themselves)
+        eq = os88sym.equates(defines)
+        if "VGA_PARA" in eq and \
+                os88sym.segment_of(name, defines) == eq["COLD_SEG"]:
+            live = self.read(os88sym.linear("api_coldseg", defines), 2)
+            if live[0] | live[1] << 8 == eq["COLD_HOME"] - eq["VGA_PARA"]:
+                addr -= eq["VGA_PARA"] * 16
+        return addr
 
     def write(self, addr, data):
         return self.cmd(cmd="write", addr=addr, data=data.hex())["written"]
@@ -776,6 +939,15 @@ class Marty:
           straight to `execseg`'s `off` arms an address 0x600 past the one
           you meant - a real address, in real code, that simply is not
           reached. Use `bp_exec()` below, or subtract `KERNEL_SEG << 4`.
+
+        And one way to see an `io` hit in the WRONG PLACE: the stop is
+        reported at the START of the next step, and an interrupt pending
+        when the I/O instruction ends is entered in between, so CS:IP can be
+        an ISR's first instruction with the I/O instruction's return address
+        only in the frame on SS:SP. The registers are still the I/O's (AL is
+        what an OUT wrote); a row that finds the port by reading the
+        instruction behind IP must also look through that frame, or it drops
+        the hit (tests/sndplay.py's `outs`).
         """
         return self.cmd(cmd="bp", list=bps)["count"]
 
@@ -849,6 +1021,11 @@ class Marty:
         mark = self._go if since is None else since
         c0 = int(self.status().get("cycles", 0))
         stuck = None
+        # The first look is usually answered BEFORE the batch that reaches the
+        # stop has run (the server reads commands first), so a flat `poll`
+        # charged every short run - a guest routine called from the harness -
+        # 20 ms. Start at 1 ms and double up to `poll`.
+        nap = min(poll, 0.001)
         while True:
             st = self.status()
             if self._newer(st, mark):
@@ -877,7 +1054,8 @@ class Marty:
                                    st.get("cs", 0), st.get("ip", 0), mark))
             else:
                 stuck = None
-            time.sleep(poll)
+            time.sleep(nap)
+            nap = min(nap * 2, poll, WAIT_STOP_NAP)
 
     # --- input, through the REAL devices -------------------------------------
     #
@@ -2299,6 +2477,31 @@ def no_saver(m):
         m.write(mins, b"\0")
 
 
+def kernel_up(m, guest=120.0, what="the kernel to reach the desktop"):
+    """A BOOT GATE ON STATE, for a `launch(boot=False)` + `m.run()` caller
+    whose next act is a click or a guest read - os88ui.UI.up's test without
+    the UI object: `desk_rows` and `menu_nbar` written and `[spl_live]` = 0
+    (kmain_o's last act), then `ui_done` so the first paint is finished in the
+    framebuffer too. No picture settle: ~15 guest s where `settle(gate=
+    desktop_up)` pays the boot plus a still-screen proof. Keep the settle when
+    the next read is the rendered glass."""
+    a = (m.sym("desk_rows"), m.sym("menu_nbar"), m.sym("spl_live"))
+    seen = [None]
+
+    def up(_):              # (and [ticks] MOVING across it: os88ui.UI.up)
+        w = m.read(a[0], 2), m.read(a[1], 2)
+        if not (any(w[0]) and any(w[1]) and not m.read(a[2], 1)[0]):
+            seen[0] = None
+            return False
+        t = _ktick(m)
+        if seen[0] is None:
+            seen[0] = t
+            return False
+        return t != seen[0]
+    until(m, up, what, poll=0.05, guest=guest)
+    return ui_done(m, what)
+
+
 def _syms():
     import os88sym
     return os88sym
@@ -2491,6 +2694,41 @@ class _Progress:
             pass
 
 
+def keystroke(m, name, hold=0.2):
+    """One key held EXACTLY `hold` GUEST seconds: paused, the press, `advance`
+    by the cycles, the release, resumed (`go`). Answers nothing.
+
+    THE RELEASE OF A HELD KEY MUST NOT BE SENT ON THE HOST'S CLOCK. The
+    spelling this replaces - `key(up=False)`, `pace(hold)`, `key(down=False)`
+    - lets the guest run free between the two commands, so the hold is
+    whatever the client's polling and scheduling make it. On an idle box that
+    is a "0.05" pace landing at 0.27-0.32 guest seconds; a client that is
+    descheduled for 60 ms of host time while the emulator keeps its core adds
+    another quarter of a guest second at 4.5x real time, and **0.5 guest
+    seconds is the keyboard's typematic delay** (MartyPC's 83-key model,
+    `keyboard_common.rs`). Past it the key REPEATS, and a menu where the key
+    TOGGLES something reads the repeat as a second press: Excitebike's mode
+    screen failed `Up flips the mode` under load exactly so
+    (docs/plans/SOAK-PARALLEL.md 17.12). Here the machine is stopped while the
+    host decides anything, so no host stall reaches the hold at all, and the
+    hold is the same number of cycles on any box.
+
+    Use it for a key whose LENGTH matters - anything with a typematic delay
+    behind it, which is any key held on purpose. Not inside a `bp_trace`
+    pump: a pause from this thread can land on a stop the pump has not
+    recorded (tests/isotronlive.py's `tap_exact`, the same shape, says why).
+    """
+    m.pause()
+    try:
+        m.key(name, down=True, up=False)
+        try:
+            m.advance(cycles=max(1, int(hold * GUEST_HZ)))
+        finally:
+            m.key(name, down=False, up=True)    # ...ALWAYS: a stuck key is a
+    finally:                                    # guest nobody can get back
+        m.go()
+
+
 def guest_sleep(m, secs, poll=0.02):
     """Sleep `secs` of the GUEST's time. The standard replacement for
     `time.sleep` in anything holding a Marty.
@@ -2587,7 +2825,471 @@ def quiesce(m, read, guest=0.5, stable=2, budget=30.0,
         prog.check()
 
 
-BIOS_KBUF = 0x41A               # 0040:001A/001C - the BIOS key ring's head, tail
+HEAP_STEP = 20000               # cycles an advance while a compaction runs
+HEAP_MOST = 2000                # ...and how many: ~8.4 guest seconds
+
+
+def heap_read(m, read, what="a heap snapshot"):
+    """Answer `read(m)` off a guest that is PAUSED and NOT COMPACTING.
+
+        base, val = os88marty.heap_read(m, lambda mm: (seg(mm), byte(mm)))
+
+    **A HEAP ADDRESS AND THE BYTES IT NAMES ARE TWO READS**, and the guest
+    runs between them. A region, a driver image and every movable claim MOVE
+    under the compactor (SPEC.md 66) at any arena claim, so a row that takes
+    a segment out of one table and then reads through it can be told the old
+    base and handed whatever the move left there - a heap block copied down
+    is not scrubbed, so the stale read decodes as plausible rubbish rather
+    than as an error. How often that window is hit is a property of the BOX:
+    every debug round trip is longer on a loaded host and the guest runs on
+    across it, so a row that passed alone read a torn pair in a four-lane
+    soak (call5's `[dos_exit]` read 161 through a base the move had just
+    retired; dosest found SOUND.DRV's claim "nowhere").
+
+    So the guest is stopped for the whole of `read`, and `[mem_cp_busy]` -
+    up for the entire pass, copies and relocation procs alike - must be clear
+    first: a stop that lands mid-pass is stepped on in HEAP_STEP-cycle
+    advances until the pass is over. A kernel with no compactor has no such
+    word and is read at once. The guest resumes only if it was running.
+
+    Inside a bp_trace block the pump owns the stops and a pause from here
+    would take them from it, so there the snapshot is taken running and
+    repeated until two agree with the compactor idle either side - weaker,
+    but never a torn pair the caller is told is consistent.
+    """
+    if _is_qemu(m):
+        import os88qemu
+        return os88qemu.heap_read(m, read, what)
+    busy = _busy_addr(m)
+
+    def idle():
+        return busy is None or not m.read(busy, 1)[0]
+
+    if getattr(m, "_pumping", 0):
+        prog = _Progress(m, what, 30.0)
+        last = object()
+        while True:
+            if idle():
+                cur = read(m)
+                if idle() and cur == last:
+                    return cur
+                last = cur
+            prog.check()
+            time.sleep(0.01)
+    was = m.status().get("state") == "running"
+    m.pause()
+    try:
+        for _ in range(HEAP_MOST):
+            if idle():
+                return read(m)
+            m.advance(cycles=HEAP_STEP)
+        raise MartyError("%s: the heap compactor was still running after %d "
+                         "guest cycles ([mem_cp_busy] never cleared)"
+                         % (what, HEAP_MOST * HEAP_STEP))
+    finally:
+        if was:
+            m.run()
+
+
+def _busy_addr(m, sym=None):
+    """The flat address of [mem_cp_busy], or None on a kernel that has no
+    compactor (kern_small: OS88_COMPACT is KERN_BIG only), cached on `m`."""
+    busy = getattr(m, "_heap_busy_sym", False)
+    if busy is False:
+        try:
+            busy = (sym or m.sym)("mem_cp_busy")
+        except (Exception, SystemExit):                     # noqa: BLE001
+            busy = None
+        try:
+            m._heap_busy_sym = busy
+        except AttributeError:
+            pass
+    return busy
+
+
+def _is_qemu(m):
+    """A QEMU driver object (an `hmp` and a `read`, no cycle clock) rather
+    than a Marty - tests/os88qemu.py carries the twin of everything below."""
+    return hasattr(m, "hmp") and not hasattr(m, "advance")
+
+
+# =============================================================================
+# READING A PACKAGE'S (OR A DRIVER'S) MEMORY BY ITS BASE - ONE SNAPSHOT
+# =============================================================================
+#
+# **THE BASE AND THE BYTES IT NAMES ARE ONE READ, OR THEY ARE A TORN PAIR.**
+# A package's region, a driver image and every movable claim MOVE under the
+# compactor (SPEC.md 66), and the order inside a pass is fixed: `mem_bcopy`
+# copies the bytes FIRST, and only `mem_reloc_call` after it rewrites the
+# records that name the block - W_SEG in a window record, DRVR_SEG in drv_tab,
+# MC_BASE in mem_tab. In between (call5 measured ~400k cycles, dirwshed 686k,
+# ~144 ms of guest) the record still names the OLD base and the old bytes are
+# already somebody's shifted copy. A row that reads the record and then reads
+# through it as a second round trip, with the guest running in between, lands
+# there now and then - more often on a loaded box, where every round trip is
+# longer - and is handed plausible rubbish: call5's exit code 161, dirwshed's
+# 29,888 KB arena, dosest's driver claim "nowhere".
+#
+# seg_snap() is the one place that is solved. It reads the base word, the
+# spans through it, then [mem_cp_busy] and the base word AGAIN - in that
+# order, and the order is the proof: if the compactor is idle at the second
+# look and the base has not changed, no pass that moved this block overlapped
+# the span reads (one still mid-copy reads busy; one that finished has
+# rewritten the record). The spans and the two checks go as ONE pipelined
+# round trip (`batch`), and the first base read is the base the word was last
+# verified at, so an unloaded read is ONE round trip once the block has been
+# seen (two the first time - the naive pair's cost) and the guest is never
+# paused. Only a read that saw the
+# compactor busy, or the base move under it, falls back to heap_read's
+# paused, stepped-until-idle snapshot. Reading [mem_cp_busy] FIRST instead, as
+# the obvious version would, is NOT sound: idle, base, then a pass copies,
+# then the bytes - and a second base read still names the old block.
+#
+# WRITES ARE ALWAYS PAUSED. A torn write is not a wrong answer, it is a byte
+# stored into whatever now occupies the old base - so pkg_write/drv_write go
+# straight to heap_read's stopped, compactor-idle guest.
+
+SNAP_TRIES = 2                  # optimistic attempts before pausing
+
+
+def _u16(b, i=0):
+    return b[i] | (b[i + 1] << 8)
+
+
+def _flat(seg):
+    return seg << 4
+
+
+def seg_snap(m, word, spans, base=None, what="a read through a heap base",
+             sym=None, step=True):
+    """(seg, [bytes, ...]) - the segment the kernel word at flat `word` names
+    and the `spans` [(off, n), ...] read through it, as ONE consistent
+    snapshot: never bytes from a base the compactor has already retired.
+
+        seg, (a, b) = os88marty.seg_snap(m, rec + W_SEG, [(0x120, 2), (8, 2)])
+
+    `base(seg)` turns the segment into the flat address the offsets are
+    relative to - `seg << 4` by default, os88geom.drv_base for a driver row
+    (an HMA image's offsets start at SEG:DRV_HMA_ORG). A word reading 0 (the
+    window closed, the driver unloaded) answers (0, None).
+
+    `step=False` is for the IMPLICIT readers (Marty.readseg on a LiveSeg,
+    os88geom.windows, os88ui's listings): a guest the CALLER has stopped
+    inside a pass - a row holding a breakpoint in the compactor - is not
+    stepped out of it behind the caller's back; the read is answered as the
+    machine stands, which is all a stopped machine can say. An explicit
+    pkg_read/seg_snap steps the pass out, as heap_read does.
+
+    Costs one round trip when nothing is moving (two the first time a word is
+    read: the naive pair's cost), and pauses
+    the guest only when a compaction was caught in flight. A QEMU driver
+    object takes tests/os88qemu.py's twin.
+    """
+    if _is_qemu(m):
+        import os88qemu
+        return os88qemu.seg_snap(m, word, spans, base, what, step)
+    lin = base or _flat
+    spans = [(int(o), int(n)) for o, n in spans]
+    busy = _busy_addr(m, sym)
+    piped = hasattr(m, "batch") and all(n <= 0x10000 for _, n in spans)
+    # THE LAST BASE THIS WORD WAS VERIFIED AT stands in for the first read:
+    # the after-check compares against it exactly as against a fresh one (a
+    # pass that moved the block since reads a different word; one in flight
+    # reads busy), so a steady-state read is ONE round trip - cheaper than
+    # the naive pair. A wrong guess costs one retry with a fresh read.
+    guess = getattr(m, "_snap_guess", None)
+    if guess is None and piped:
+        guess = {}
+        try:
+            m._snap_guess = guess
+        except AttributeError:
+            guess = None
+    for k in range(SNAP_TRIES + 1):
+        seg = (guess or {}).pop(word, 0) if k == 0 and busy is not None \
+            and piped else 0
+        if not seg:
+            seg = _u16(m.read(word, 2))
+        if not seg:
+            return 0, None
+        if busy is None:                    # no compactor: nothing moves
+            return seg, [m.read(lin(seg) + o, n) for o, n in spans]
+        if piped:
+            r = m.batch([{"cmd": "read", "addr": lin(seg) + o, "len": n}
+                         for o, n in spans]
+                        + [{"cmd": "read", "addr": busy, "len": 1},
+                           {"cmd": "read", "addr": word, "len": 2}])
+            got = [bytes.fromhex(x["data"]) for x in r]
+            out, b, s1 = got[:-2], got[-2][0], _u16(got[-1])
+        else:
+            out = [m.read(lin(seg) + o, n) for o, n in spans]
+            b = m.read(busy, 1)[0]
+            s1 = _u16(m.read(word, 2))
+        if not b and s1 == seg:
+            if guess is not None:
+                guess[word] = seg
+            return seg, out
+        if b:                               # a pass in flight: stop it out
+            break
+    if not step and _held(m):
+        return seg, out
+
+    def snap(mm):
+        s = _u16(mm.read(word, 2))
+        return (s, [mm.read(lin(s) + o, n) for o, n in spans] if s else None)
+    return heap_read(m, snap, what)
+
+
+def _held(m):
+    """Is the CALLER holding this machine stopped (not a bp_trace pump)?"""
+    if _is_qemu(m):
+        return "running" not in m.hmp("info status")
+    if getattr(m, "_pumping", 0):
+        return False
+    return m.status().get("state", "running") != "running"
+
+
+def table_snap(m, at, n, take, segs=None, what="a read through a kernel table",
+               first=None, sym=None, step=True):
+    """seg_snap for a whole kernel TABLE whose rows name segments: answers
+    `take(m, raw)` - which may read through any segment in `raw`, the `n`
+    bytes at flat `at` - with the same after-check: [mem_cp_busy] and the
+    table again in one round trip, and `segs(raw)` (default: all of it)
+    unchanged. Otherwise taken off a paused, compactor-idle guest. `first`
+    is the table already read, which saves its round trip; `step` is
+    seg_snap's.
+
+        titles = os88marty.table_snap(m, S("wm_wins"), MAX_WIN * WIN_SIZE,
+                                      lambda mm, raw: [...], segs=W_SEGs)
+    """
+    key = segs or (lambda raw: raw)
+    if _is_qemu(m):
+        import os88qemu
+        busy = os88qemu._busy(m)
+    else:
+        busy = _busy_addr(m, sym)
+    for _ in range(SNAP_TRIES):
+        raw = first if first is not None else m.read(at, n)
+        first = None
+        val = take(m, raw)
+        if busy is None:
+            return val
+        if hasattr(m, "batch") and n <= 0x10000:
+            r = m.batch([{"cmd": "read", "addr": busy, "len": 1},
+                         {"cmd": "read", "addr": at, "len": n}])
+            b, raw1 = bytes.fromhex(r[0]["data"])[0], bytes.fromhex(
+                r[1]["data"])
+        else:
+            b, raw1 = m.read(busy, 1)[0], m.read(at, n)
+        if not b and key(raw1) == key(raw):
+            return val
+        if b:
+            break
+    if not step and _held(m):
+        return val                      # the caller holds it mid-pass
+    return heap_read(m, lambda mm: take(mm, mm.read(at, n)), what)
+
+
+def seg_write(m, word, off, data, base=None,
+              what="a write through a heap base"):
+    """Write `data` at offset `off` of the block the kernel word at `word`
+    names, on a PAUSED guest with the compactor idle (a torn write corrupts
+    whoever holds the old base). Answers the segment written, 0 for none."""
+    lin = base or _flat
+
+    def put(mm):
+        s = _u16(mm.read(word, 2))
+        if s:
+            mm.write(lin(s) + off, bytes(data))
+        return s
+    return heap_read(m, put, what)
+
+
+def _S(m, sym=None):
+    """The symbol resolver: the caller's, the Marty's own, or os88sym's for
+    a QEMU object that carries none."""
+    if sym is not None:
+        return sym
+    if hasattr(m, "sym"):
+        return m.sym
+    import os88sym
+    return os88sym.linear
+
+
+def _winword(m, win, sym=None):
+    """The flat address of window `win`'s W_SEG - `win` an os88geom.Win, an
+    os88ui window (anything with `.i`) or a slot number."""
+    import os88geom
+    i = win.i if hasattr(win, "i") else int(win)
+    return _S(m, sym)("wm_wins") + i * os88geom.WIN_SIZE + os88geom.W_SEG
+
+
+def _drvword(m, row, sym=None):
+    import os88geom
+    return (_S(m, sym)("drv_tab") + int(row) * os88geom.DRVR_SIZE
+            + os88geom.DRVR_SEG)
+
+
+def _wname(win):
+    return getattr(win, "i", win)
+
+
+def pkg_seg(m, win, sym=None):
+    """The segment window `win`'s package runs in, NOW. For printing, or a
+    breakpoint on its code - never to read through as a second step: that is
+    exactly the torn pair. Read with pkg_read/Pkg instead."""
+    return _u16(m.read(_winword(m, win, sym), 2))
+
+
+def pkg_reads(m, win, spans, sym=None):
+    """[bytes, ...] - each (off, n) of `spans` in window `win`'s package
+    segment, all from one snapshot (seg_snap). Raises if the window has no
+    package segment (closed, or a kernel window)."""
+    seg, out = seg_snap(m, _winword(m, win, sym), spans,
+                        what="window %s's package" % _wname(win), sym=sym)
+    if not seg:
+        raise MartyError("window %s has no package segment (W_SEG = 0): it "
+                         "closed, or it is a kernel window" % _wname(win))
+    return out
+
+
+def pkg_read(m, win, off, n, sym=None):
+    """`n` bytes at offset `off` of window `win`'s package segment - the base
+    and the bytes in one compactor-safe snapshot. Offsets are the package's
+    own (org 0): a bss variable is the image size plus its bss offset."""
+    return pkg_reads(m, win, [(off, n)], sym)[0]
+
+
+def pkg_write(m, win, off, data, sym=None):
+    """Write into window `win`'s package segment on a paused, compactor-idle
+    guest. Raises if the window has no package segment."""
+    s = seg_write(m, _winword(m, win, sym), off, data,
+                  what="window %s's package" % _wname(win))
+    if not s:
+        raise MartyError("window %s has no package segment to write"
+                         % _wname(win))
+    return s
+
+
+def drv_reads(m, row, spans, sym=None):
+    """[bytes, ...] through drv_tab row `row`'s segment, in one snapshot, at
+    the driver's own (org 0) offsets - os88geom.drv_base resolves an HMA
+    image. Raises if the row is not loaded."""
+    import os88geom
+    seg, out = seg_snap(m, _drvword(m, row, sym), spans,
+                        base=os88geom.drv_base, what="driver row %d" % row,
+                        sym=sym)
+    if not seg:
+        raise MartyError("drv_tab row %d is not loaded (DRVR_SEG = 0)" % row)
+    return out
+
+
+def drv_read(m, row, off, n, sym=None):
+    """`n` bytes at offset `off` of the driver drv_tab row `row` names."""
+    return drv_reads(m, row, [(off, n)], sym)[0]
+
+
+def drv_write(m, row, off, data, sym=None):
+    """drv_read's write, on a paused, compactor-idle guest."""
+    import os88geom
+    s = seg_write(m, _drvword(m, row, sym), off, data, base=os88geom.drv_base,
+                  what="driver row %d" % row)
+    if not s:
+        raise MartyError("drv_tab row %d is not loaded to write" % row)
+    return s
+
+
+class Pkg(object):
+    """A LIVE view of one package's memory, re-resolved on every access.
+
+        p = os88marty.Pkg(m, w, image=img)      # w: a window, or its slot
+        p.word(off); p.byte(off); p.read(off, n); p.write(off, data)
+        a, b = p.reads([(off_a, 2), (off_b, 8)])  # one snapshot for both
+
+    Every read is pkg_reads' one compactor-safe snapshot and nothing is
+    banked: a row that holds a Pkg across a compaction reads the region where
+    it IS, which a `base = W_SEG << 4` taken at the top of a session does not.
+    `image` is added to every offset, so a view built with the image size
+    takes bss offsets straight from the package's map.
+    """
+
+    def __init__(self, m, win, image=0, sym=None):
+        self.m, self.win, self.image, self.sym = m, win, int(image), sym
+
+    @property
+    def seg(self):
+        """The segment now - see pkg_seg for what it must not be used for."""
+        return pkg_seg(self.m, self.win, self.sym)
+
+    def reads(self, spans):
+        return pkg_reads(self.m, self.win,
+                         [(self.image + o, n) for o, n in spans], self.sym)
+
+    def read(self, off, n):
+        return self.reads([(off, n)])[0]
+
+    def byte(self, off):
+        return self.read(off, 1)[0]
+
+    def word(self, off):
+        return _u16(self.read(off, 2))
+
+    def write(self, off, data):
+        return pkg_write(self.m, self.win, self.image + off, data, self.sym)
+
+
+class LiveSeg(int):
+    """A segment that is still an int - and also knows the kernel WORD it
+    came from, so a helper handed one can re-resolve it per read.
+
+    dispapps.pkg_seg and dosmap.instance answer these. Every existing caller
+    that does `seg << 4` or `m.readseg(seg, ...)` keeps exactly the behaviour
+    it had (a snapshot of the value); a helper that knows - dosmap.rect,
+    dispapps.words, live_reads below - reads through `.word` instead, so a
+    segment a row BANKED across a compaction still reads the block where it
+    is now, in one snapshot.
+    """
+
+    def __new__(cls, seg, m, word, base=None):
+        o = int.__new__(cls, seg)
+        o.m, o.word, o.base = m, word, base
+        return o
+
+    def reads(self, spans):
+        seg, out = seg_snap(self.m, self.word, spans, self.base, step=False)
+        if not seg:
+            raise MartyError("the block named by kernel word %05X is gone (it "
+                             "reads 0): its window closed or its driver "
+                             "unloaded" % self.word)
+        return out
+
+    def read(self, off, n):
+        return self.reads([(off, n)])[0]
+
+    def write(self, off, data):
+        """`data` at `off` of the block where it is NOW, paused and idle."""
+        if not seg_write(self.m, self.word, off, data, self.base):
+            raise MartyError("the block named by kernel word %05X is gone - "
+                             "nothing to write" % self.word)
+
+
+def pkg_live(m, win, sym=None):
+    """Window `win`'s package segment as a LiveSeg: an int (the segment now)
+    whose .read/.reads/.write go through the window record each time, in one
+    compactor-safe snapshot. The drop-in for `seg = W_SEG` in a row that then
+    does `m.readseg(seg, ...)`: make that `seg.read(...)`."""
+    word = _winword(m, win, sym)
+    return LiveSeg(_u16(m.read(word, 2)), m, word)
+
+
+def live_reads(m, seg, spans):
+    """`spans` through `seg`: one snapshot when `seg` is a LiveSeg, plain
+    reads otherwise (an int carries no word to re-check against)."""
+    if isinstance(seg, LiveSeg):
+        return seg.reads(spans)
+    return [m.read((int(seg) << 4) + o, n) for o, n in spans]
+
+
+BIOS_KBUF = 0x41A              # 0040:001A/001C - the BIOS key ring's head, tail
 UI_T_STATE = 0                  # kernel/sched.inc: T_STATE, and task 0 IS ui_task
 UI_ASLEEP = 2                   # ...whose value 2 means "sleeping"
 
@@ -2602,10 +3304,21 @@ def _ktick(m):
     return b[0] | (b[1] << 8)
 
 
+def _ui_lastt(m):
+    """[ui_lastt]: the [ticks] value ui_task's last pass saw (kernel/ui.inc's
+    .posted_done). Asleep with this equal to [ticks] is that tick's pass
+    FINISHED - ui_task sleeps only at .idle, after the whole pass."""
+    a = getattr(m, "_ui_lastt_sym", None)
+    if a is None:
+        a = m._ui_lastt_sym = m.sym("ui_lastt")
+    b = m.read(a, 2)
+    return b[0] | (b[1] << 8)
+
+
 def _ui_mark(m):
     """settle's short-window test: (drive reads, kernel tick) if `ui_idle`
     holds, else None. Anything that cannot be read - a map that does not
-    describe the running kernel, a DOS box that has overwritten it - is None,
+    describe the running kernel, a kern_dos that has overwritten it - is None,
     which is the full window and the old behaviour.
 
     THE TICK IS THE LIVENESS PROOF. A warm reboot does not clear RAM, so
@@ -2631,8 +3344,12 @@ def _ui_same(a, b):
             and a[1] != b[1])
 
 
-def ui_idle(m):
+def ui_idle(m, lock=True):
     """True when the UI TASK HAS FINISHED WITH EVERYTHING IT WAS GIVEN.
+
+    `lock=False` skips the gfx lock: for a package whose WORKER draws all the
+    time (a game), where the lock is almost never free but ui_task's own
+    pass - the drag, the click - is finished all the same.
 
     Five bytes, and each one names a thing that could still be pending:
 
@@ -2660,16 +3377,21 @@ def ui_idle(m):
                                m.sym("gfx_lock_flag"))
     if m.read(a[0], 1)[0] != UI_ASLEEP:
         return False
-    if m.read(a[1], 1)[0] or m.read(a[2], 1)[0] or m.read(a[3], 1)[0]:
+    if (m.read(a[1], 1)[0] or m.read(a[2], 1)[0]
+            or (lock and m.read(a[3], 1)[0])):
         return False
     kb = m.read(BIOS_KBUF, 4)
     return kb[0:2] == kb[2:4]
 
 
 def ui_done(m, what="the UI to finish with that input", hold=0.06,
-            limit=60.0, cap=None):
-    """Run until `ui_idle` is true and STAYS true for `hold` guest seconds with
-    no disk read in between, and answer the guest seconds that took.
+            limit=60.0, cap=None, lock=True):
+    """Run until `ui_idle` is true, at least `hold` guest seconds and one kernel
+    tick after it was first seen true, with no disk read in between and
+    ui_task's pass for the CURRENT tick finished ([ui_lastt] = [ticks]) - and
+    answer the guest seconds that took. ui_task may be busy inside that
+    window: its own tick wake makes it ready every tick, and beside a worker
+    that draws all the time it waits out the worker's frame before it runs.
 
     This is what a fixed pause after a click or a key was standing in for.
     `pace(m, 2.5)` spends eleven guest seconds whether the handler took two
@@ -2695,8 +3417,14 @@ def ui_done(m, what="the UI to finish with that input", hold=0.06,
     early whenever the machine says it can - so no caller ever waits longer
     than it did, and a game whose worker keeps the lock busy gets exactly the
     old pause.
+
+    `lock=False` (ui_idle's) is for a worker that draws ALL the time: the
+    pass is over without the lock ever being seen free, and the framebuffer
+    is then NOT promised finished - settle before a capture.
     """
+    idle = (lambda mm: ui_idle(mm, False)) if not lock else ui_idle
     prog = _Progress(m, what, limit * GUEST_BUDGET_RATIO)
+    c0 = r0 = k0 = None
     while True:
         # THE CLOCK IS READ HERE, EVERY PASS. `spent()` is only as fresh as the
         # last `check()`, and the commonest way round this loop calls none: a
@@ -2709,7 +3437,7 @@ def ui_done(m, what="the UI to finish with that input", hold=0.06,
         prog.check()
         if cap is not None and prog.spent() >= cap:
             return prog.spent()
-        while not ui_idle(m):
+        while not idle(m):
             if cap is not None and prog.spent() >= cap:
                 return prog.spent()
             st = m.status()
@@ -2720,25 +3448,204 @@ def ui_done(m, what="the UI to finish with that input", hold=0.06,
                     % (prog.spent(), what, st["state"], st["cs"], st["ip"]))
             prog.check()
             time.sleep(0.005)
-        c0 = prog._cycles()
-        r0, k0 = m.disk().get("reads"), _ktick(m)
-        held = True
+        # THE HOLD IS A STATE, NOT A STREAK. It used to need ui_idle to read
+        # true at EVERY host poll from its first sighting until a tick had
+        # passed - and ui_task's own tick wake makes it READY at every tick
+        # whether or not anything is owed. On a bare desktop it runs at once
+        # and sleeps again inside a millisecond, so no poll ever saw it. Beside
+        # a worker that draws every frame (Missile, on dispmcfs) the round
+        # robin hands the CPU to the WORKER first and ui_task waits out its
+        # frame - MEASURED at ~25 ms of every 55, ready and not running, with
+        # no event queued and no wake owed. Any poll inside that window broke
+        # the streak and the next tick broke the next one, so whether the
+        # wait ended at all was decided by where the host's polls happened to
+        # land: 3,000 tries in 180 guest seconds without one, on a loaded box.
+        #
+        # What the streak was standing in for is now READ: ui_task stamps
+        # [ui_lastt] with [ticks] on the first pass after each tick, and
+        # sleeps only at .idle, after a whole pass - so asleep with
+        # [ui_lastt] = [ticks] is "the pass for the current tick is FINISHED",
+        # exactly, at whatever moment it is read. The window opens at the
+        # first idle sighting and is NOT reset by ui_task being busy inside
+        # it - only by a disk read, which is a load still moving.
+        if c0 is None or m.disk().get("reads") != r0:
+            c0 = prog._cycles()
+            r0, k0 = m.disk().get("reads"), _ktick(m)
         # At least `hold` guest seconds AND one kernel tick: the tick is
         # ui_task's own periodic wake having come and gone, and the proof
         # that it is THIS kernel's bytes being read (see `_ui_mark`).
-        while ((prog._cycles() - c0) / GUEST_HZ < hold
-               or _ktick(m) == k0):
-            if not ui_idle(m):
-                held = False
-                break
-            if cap is not None and prog.spent() >= cap:
-                return prog.spent()
+        if (prog._cycles() - c0) / GUEST_HZ < hold:
             prog.check()
             time.sleep(0.005)
-        if held and ui_idle(m) and m.disk().get("reads") == r0:
+            continue
+        got = _ui_settled(m, idle, k0, r0)
+        if got:
             prog.done("ui_done")
             return prog.spent()
+        if got is None:                 # a disk read: the window starts again
+            c0 = None
+        time.sleep(0.005)
 
+
+# THE CONFIRMATION IS READ ON A STOPPED GUEST, AND STEPPED IN GUEST TIME.
+# Five reads taken on a running machine are five instants, and MartyPC serves a
+# request at its own cadence - so a poll loop falls into step with anything
+# periodic in the guest and stays there. MEASURED beside Missile (dispmcfs):
+# the tick read and [ui_lastt] came back from the idle half of the tick and the
+# T_STATE read after them from the busy half, sixty polls running, every one -
+# a check that could have passed at half of all instants passed at none,
+# because it was never asked at the other half. Stopped, the bytes are one
+# instant; stepped, the instants are the GUEST's and an eighth of a tick apart,
+# so three ticks of them cannot all land in a window that is ~25 ms of 55.
+_UI_STEP = 65536 * 4 // 8              # cycles: an eighth of a tick (65,536
+_UI_STEPS = 24                          # PIT counts, 4 CPU clocks each) - and
+                                        # 24 of them are three ticks
+
+
+def _ui_settled(m, idle, k0, r0):
+    """True when ui_task's pass for the current tick is FINISHED, a tick later
+    than `k0`, with no read since `r0`; False when three ticks of guest time
+    stepped on a stopped machine never showed it; None when a disk read moved.
+    Under a breakpoint pump the guest is not ours to stop, so it is one
+    snapshot taken running."""
+    def ok():
+        if m.disk().get("reads") != r0:
+            return None
+        k = _ktick(m)
+        return k != k0 and _ui_lastt(m) == k and idle(m)
+    if getattr(m, "_pumping", 0):
+        return ok()
+    m.pause()
+    try:
+        for _ in range(_UI_STEPS):
+            got = ok()
+            if got or got is None:
+                return got
+            m.advance(cycles=_UI_STEP)
+        return ok()
+    finally:
+        m.run()
+
+
+def _ui_asleep(m):
+    """ui_task asleep at `.idle` with no event queued and no wake pending -
+    `ui_idle` WITHOUT the gfx lock and the key ring."""
+    a = getattr(m, "_ui_idle_syms", None)
+    if a is None:
+        a = m._ui_idle_syms = (m.sym("sch_tasks") + UI_T_STATE,
+                               m.sym("evq_count"), m.sym("sch_uiwake"),
+                               m.sym("gfx_lock_flag"))
+    return (m.read(a[0], 1)[0] == UI_ASLEEP and not m.read(a[1], 1)[0]
+            and not m.read(a[2], 1)[0])
+
+
+def ui_passed(m, cap=0.5, what="ui_task to finish its pass"):
+    """Run until ui_task has finished the pass it is in (`_ui_asleep`), at most
+    `cap` guest seconds, and answer the guest seconds spent. `ui_done` for a
+    package that draws on every tick, whose lock is never idle for a whole
+    tick: the pass that handled an input is over, which is what a following
+    breakpoint-armed input or a state read needs."""
+    prog = _Progress(m, what, 60.0 * GUEST_BUDGET_RATIO)
+    while not _ui_asleep(m):
+        prog.check()
+        if prog.spent() >= cap:
+            return prog.spent()
+        time.sleep(0.002)
+    prog.done("ui_passed")
+    return prog.spent()
+
+
+def key_taken(m, name, ui=True, cap=0.675, tail=0.0,
+              what="the guest to take that key"):
+    """Press `name` (`Marty.key`) and return once the guest has TAKEN it, in
+    guest seconds - the replacement for `m.key(name); pace(m, .15)`.
+
+    Taken is three facts read off the machine: the BIOS key ring's TAIL moved
+    (the keyboard ISR stored the key - MartyPC's keyboard model delivers a
+    press some milliseconds after the request), its HEAD caught up (whoever
+    reads keys has read it), and, with `ui`, ui_task is asleep with nothing
+    queued and no wake pending - the pass that dispatched the key is over.
+    The gfx lock is NOT asked, unlike `ui_done`, so a package whose worker
+    or tick draws all the time still ends here as soon as its key handler
+    has run. `ui=False` is for a consumer that is not ui_task (a fullscreen
+    bracket's own loop); `tail` guest seconds are then run after the read so
+    the loop gets to act on what it read.
+
+    BOUNDED: after `cap` guest seconds it returns quietly, so a key that never
+    reaches the ring (a modifier, a key the kernel's own ISR swallows) costs
+    exactly the old pace and never more."""
+    t0 = m.read(BIOS_KBUF + 2, 2)
+    m.key(name)
+    prog = _Progress(m, what, 60.0 * GUEST_BUDGET_RATIO)
+    stage = 0
+    while True:
+        prog.check()
+        if prog.spent() >= cap:
+            return prog.spent()
+        kb = m.read(BIOS_KBUF, 4)
+        if stage == 0 and kb[2:4] != t0:
+            stage = 1
+        if stage == 1 and kb[0:2] == kb[2:4]:
+            if not ui:
+                break
+            stage = 2
+        if stage == 2 and _ui_asleep(m):
+            break
+        time.sleep(0.002)
+    if tail > 0:
+        c0 = prog._cycles()
+        while (prog._cycles() - c0) / GUEST_HZ < tail:
+            prog.check()
+            time.sleep(0.002)
+    prog.done("key_taken")
+    return prog.spent()
+
+
+def text_taken(m, text, ui=True, cap=0.675, what="the guest to take that text"):
+    """`m.type_text(text)` and return once the guest has TAKEN every key, in
+    guest seconds - `key_taken` for a string, the replacement for
+    `m.type_text(t); settle(m)` when what follows is a guest read or a click.
+
+    Typed with the machine PAUSED, so MartyPC's keyboard model queues the
+    whole string and none of it is stored before the count starts; then the
+    BIOS ring's tail is followed (modulo the ring, 0040:0080/0082) until it
+    has moved one entry per character (`type_text` stores one per character:
+    a shift is a modifier, not an entry), its head has caught up and, with
+    `ui`, `ui_done` - the passes that handled them are over. BOUNDED like
+    `key_taken`: `cap` guest seconds a character, then it returns quietly, so
+    a key the consumer never reads costs the old pace and never more."""
+    def w(a):
+        b = m.read(a, 2)
+        return b[0] | (b[1] << 8)
+    lo, hi = w(0x480), w(0x482)
+    size = (hi - lo) if hi > lo else 32
+    was = m.status().get("state") == "running"
+    m.pause()
+    last = w(BIOS_KBUF + 2)
+    m.type_text(text)
+    m.run()
+    n = len(text)
+    prog = _Progress(m, what, 60.0 * GUEST_BUDGET_RATIO)
+    adv = 0
+    while True:
+        prog.check()
+        if prog.spent() >= cap * max(n, 1):
+            return prog.spent()
+        kb = m.read(BIOS_KBUF, 4)
+        t = kb[2] | (kb[3] << 8)
+        if t != last:
+            adv += ((t - last) % size) // 2
+            last = t
+        if adv >= n and kb[0:2] == kb[2:4]:
+            break
+        time.sleep(0.002)
+    if ui:
+        ui_done(m, what)
+    else:
+        prog.done("text_taken")
+    if not was:
+        m.pause()
+    return prog.spent()
 
 def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
            guest=None):
@@ -2920,8 +3827,28 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
         fast = mark is not None
         if fast:
             pace(m, SETTLE_UI_QUIET / (GUEST_PACE or 4.5))
-        else:
+        elif not SETTLE_UI or GUEST_PACE <= 0:
             pace(m, quiet)
+        else:
+            # THE LONG WINDOW ENDS WHEN THE UI TASK GOES IDLE. A settle called
+            # straight after a click almost always takes its first sample
+            # with the handler still running, and then sat out the whole
+            # `quiet` (4.5 guest seconds) even when the repaint was done in
+            # one. So the window is spent in short slices and cut the moment
+            # `_ui_mark` says the UI is idle - and a cut window PROVES
+            # NOTHING: the next capture is a fresh `last` (run = 0), so the
+            # stillness that ends the settle is always the short-window proof
+            # an idle start would have had. A UI that never idles (an
+            # animating worker, NOUIBLOCK) spends the full window as before.
+            # dispprefer: 5.4 guest seconds a settle after an adapter switch.
+            want = quiet * GUEST_PACE
+            c0 = prog._cycles()
+            while (prog._cycles() - c0) / GUEST_HZ < want:
+                if pace(m, SETTLE_UI_QUIET / GUEST_PACE) < SETTLE_UI_QUIET / 2:
+                    break                   # the guest stopped: pace's rule
+                if _ui_mark(m) is not None:
+                    last, run = None, 0
+                    break
 
 
 # HOW MANY TIMES DID ONE GESTURE REACH A ROUTINE? Two tests wrote this loop by
@@ -3069,7 +3996,7 @@ class BpTrace:
     """The record a `bp_trace` block collects. See `bp_trace` below."""
 
     def __init__(self, m, targets, regs=False, poll=0.005, cap=20000,
-                 on_hit=None):
+                 on_hit=None, log=None):
         self.m, self.regs_wanted, self.poll, self.cap = m, regs, poll, cap
         # WHAT THE HAND-ROLLED PUMPS ACTUALLY DID, and the reason a count and
         # a register set are not enough to replace them. tests/paintanchor.py
@@ -3108,11 +4035,27 @@ class BpTrace:
         # Both are ordinary commands through the atomic `cmd()`, and both take
         # effect on the resume this callback is about to return into.
         self.on_hit = on_hit
-        self.hits = []          # the kept records, at most `cap` of them
+        self._hits = []         # the kept STOP records, at most `cap` of them
+        self._logs = []         # ...and the LOGGED ones (see `log` below)
         self.n = 0              # ...and how many there REALLY were
         self.error = None       # what the pump died of, re-raised at exit
         self._by_addr = {}
         self._bps = []
+        # LOGGED TARGETS ARE NOT STOPS. `log=True` (every exec target) or
+        # `log=[some of them]` arms those as the debug server's logging
+        # breakpoints: it notes (address, cycles) and resumes the guest
+        # itself, so the hit costs no round trip and no pump poll. A pumped
+        # stop is two round trips plus the poll, which is what made a
+        # frame-rate trace with seven marks a frame run at half the guest's
+        # free speed. A logged hit has no registers and no `on_hit` - those
+        # need the guest STOPPED - and its record carries "log": True. On a
+        # server too old to log, the same targets are ordinary stops and the
+        # trace is what it always was, only slower.
+        logset = set()
+        if log and log is not True:
+            for t in log:
+                logset.add((m.sym(t) if isinstance(t, str) else int(t)) & 0xFFFFF)
+        self._logaddrs = set()
         for t in targets:
             if isinstance(t, dict):             # a raw breakpoint dict
                 self._bps.append(t)
@@ -3120,50 +4063,97 @@ class BpTrace:
             addr = m.sym(t) if isinstance(t, str) else int(t)
             self._by_addr.setdefault(addr & 0xFFFFF, t if isinstance(t, str)
                                      else "%05X" % addr)
-            self._bps.append({"type": "exec", "addr": addr})
+            if log is True or (addr & 0xFFFFF) in logset:
+                self._logaddrs.add(addr & 0xFFFFF)
+                self._bps.append({"type": "exec", "addr": addr, "log": True})
+            else:
+                self._bps.append({"type": "exec", "addr": addr})
+        self._logging = bool(self._logaddrs)
+        self._dropped = 0
+        self._fetched = 0.0
         self._mark0 = None      # the mark __enter__'s resume found
         self._stop = threading.Event()
         self._thread = None
         self._lock = threading.Lock()
+        self._held = threading.Lock()   # one pump pass, or a holder (`hold`)
 
     # --- the pump ------------------------------------------------------------
 
     def _pump(self):
         mark = self._mark0                  # what `__enter__`'s resume found
         while not self._stop.is_set():
-            try:
-                st = self.m.status()
-                # TWO TESTS, AND THEY ARE NOT THE SAME ONE.
-                #
-                # `_newer` asks whether this is a stop the trace has not been
-                # told about. It has to, because a stop and the SAME stop
-                # polled again both read `"breakpoint"` - the resume is two
-                # round trips and has not always landed by the next poll.
-                # This deduped on `instructions` and that was WRONG, not
-                # merely redundant: `machine.run()` accumulates that count at
-                # the END of a batch and returns early when a breakpoint hits,
-                # so every batch a stop lands in is discarded from it, and what
-                # separated two stops was the single instruction the resume
-                # itself steps. `stops` is the server's own sequence number
-                # and is exact (`_mark`/`_newer` above).
-                #
-                # `== "breakpoint"` then asks whether it is OURS. `advance()`
-                # and `pause()` from the body leave the guest `"paused"`, which
-                # is a new stop by the first test and is not this pump's to
-                # resume: resuming it would cut the body's own `advance` short
-                # from another thread.
-                if not self.m._newer(st, mark):
-                    self._stop.wait(self.poll)
-                    continue
-                if st.get("state") != "breakpoint":
-                    self._stop.wait(self.poll)
-                    continue
-                self._record(st)
-                mark = self.m._mark(self.m.run(), resumed=True)
-            except Exception as e:                  # the emulator went away,
-                self.error = e                      # or a symbol is wrong:
-                return                              # exit re-raises it
-        return
+            # ONE PASS AT A TIME UNDER `_held`, so a gesture that has to own
+            # the guest's clock (os88mouse's stepped double-click) can take it
+            # from the pump between passes - see `hold` below. The wait is
+            # OUTSIDE the lock: a holder is never kept waiting on a nap.
+            with self._held:
+                nap = self._pass(mark)
+            if nap is None:
+                return                      # the pump died: `error` says why
+            if nap is True:
+                self._stop.wait(self.poll)
+                continue
+            mark = nap
+
+    def _pass(self, mark):
+        """One look at the guest: True to nap, the new mark after a resume,
+        or None when the pump has died (`error` set)."""
+        try:
+            st = self.m.status()
+            # TWO TESTS, AND THEY ARE NOT THE SAME ONE.
+            #
+            # `_newer` asks whether this is a stop the trace has not been
+            # told about. It has to, because a stop and the SAME stop
+            # polled again both read `"breakpoint"` - the resume is two
+            # round trips and has not always landed by the next poll.
+            # This deduped on `instructions` and that was WRONG, not
+            # merely redundant: `machine.run()` accumulates that count at
+            # the END of a batch and returns early when a breakpoint hits,
+            # so every batch a stop lands in is discarded from it, and what
+            # separated two stops was the single instruction the resume
+            # itself steps. `stops` is the server's own sequence number
+            # and is exact (`_mark`/`_newer` above).
+            #
+            # `== "breakpoint"` then asks whether it is OURS. `advance()`
+            # and `pause()` from the body leave the guest `"paused"`, which
+            # is a new stop by the first test and is not this pump's to
+            # resume: resuming it would cut the body's own `advance` short
+            # from another thread.
+            if self._logging and time.time() - self._fetched > 0.05:
+                self._fetch()               # keep the server's record short
+            if not self.m._newer(st, mark):
+                return True
+            if st.get("state") != "breakpoint":
+                return True
+            self._record(st)
+            return self.m._mark(self.m.run(), resumed=True)
+        except Exception as e:                  # the emulator went away,
+            self.error = e                      # or a symbol is wrong:
+            return None                         # exit re-raises it
+
+    def hold(self):
+        """Take the guest's clock from the pump: `with tr.hold(): ...`.
+
+        For a gesture that must step the guest itself. A double-click's two
+        presses have to land inside the kernel's 9-tick window, and with the
+        pump resuming stops from its own thread while the host polls, the gap
+        between them was a quantity of the BOX: 212b6e42's one extra status
+        round trip per poll moved int0sweep's spans from a mode of 3 ticks to
+        one of 4-5 with a tail at 8 and 9, and the guest saw two first clicks
+        (os88mouse.dblclick). While held the pump makes no pass, so it can
+        neither resume the holder's `advance` nor race it; every breakpoint
+        stop the holder meets goes to `service`, which records it exactly as
+        the pump would have, and the holder's next `advance` steps past it.
+        The holder must leave the guest RUNNING when it lets go - the pump
+        resumes only `"breakpoint"` stops, so one left `"paused"` stays so.
+        """
+        return self._held
+
+    def service(self, st):
+        """Record a breakpoint stop a holder met (see `hold`)."""
+        if self.error is not None:
+            raise self.error
+        self._record(st)
 
     def _record(self, st):
         flat = ((st.get("cs", 0) << 4) + st.get("ip", 0)) & 0xFFFFF
@@ -3185,18 +4175,49 @@ class BpTrace:
             rec["hit"] = self.on_hit(self.m, rec)
         with self._lock:
             self.n += 1
-            if len(self.hits) < self.cap:
-                self.hits.append(rec)
+            if len(self._hits) + len(self._logs) < self.cap:
+                self._hits.append(rec)
+
+    def _fetch(self):
+        """Collect what the server LOGGED since the last call (one round trip)."""
+        if not self._logging:
+            return
+        r = self.m.cmd(cmd="bplog")
+        with self._lock:
+            self._fetched = time.time()
+            for a, c in r.get("hits", ()):
+                self.n += 1
+                if len(self._hits) + len(self._logs) < self.cap:
+                    self._logs.append({"name": self._by_addr.get(a, "?%05X" % a),
+                                       "addr": a, "cycles": int(c), "log": True})
+            self._dropped = int(r.get("dropped", 0))
+
+    def _sync(self):
+        """Bring a logging trace up to date before it is asked anything -
+        from the body, mid-block, as `until`'s conditions do."""
+        if self._logging and self._thread is not None and not self._stop.is_set():
+            self._fetch()
+
+    @property
+    def hits(self):
+        """Every kept record, in the order the guest reached them."""
+        self._sync()
+        if not self._logs:
+            return self._hits
+        with self._lock:
+            return sorted(self._hits + self._logs, key=lambda h: h["cycles"])
 
     # --- what a caller asks it -----------------------------------------------
 
     @property
     def overflowed(self):
         """Did the trace stop KEEPING hits? `n` is still the true count."""
-        return self.n > len(self.hits)
+        self._sync()
+        return (self.n + self._dropped) > len(self._hits) + len(self._logs)
 
     def count(self, name=None):
         """How many stops, in total or at one symbol."""
+        self._sync()
         if name is None:
             return self.n
         return sum(1 for h in self.hits if h["name"] == name)
@@ -3291,6 +4312,11 @@ class BpTrace:
 
     def __enter__(self):
         self.m.breakpoints(self._bps)
+        if self._logging:
+            try:
+                self.m.cmd(cmd="bplog")         # an old server: no such verb,
+            except MartyError:                  # and the "log" key was ignored,
+                self._logging = False           # so they are ordinary stops
         # `until()` raises on a guest that is not running, and it is RIGHT to:
         # a stopped machine can never make a condition true, and saying so in
         # two seconds beats timing out in sixty. Under a pump the same reading
@@ -3299,6 +4325,7 @@ class BpTrace:
         # alone and needs no help - it watches the CLOCK, and a pumped guest's
         # clock keeps moving.
         self.m._pumping += 1
+        self.m._traces = getattr(self.m, "_traces", []) + [self]
         # `go` and not `run`: it CONFIRMS the release and hands back the mark
         # the pump compares against, so the stop the machine may already have
         # been sitting at when the block opened is not charged to this trace -
@@ -3315,7 +4342,11 @@ class BpTrace:
         if self._thread is not None:
             self._thread.join(timeout=10.0)
         self.m._pumping = max(0, self.m._pumping - 1)
+        self.m._traces = [t for t in getattr(self.m, "_traces", [])
+                          if t is not self]
         try:
+            if self._logging and self.error is None:
+                self._fetch()                   # BEFORE the clear, which empties it
             self.m.breakpoints([])
             self.m.run()
         except MartyError:
@@ -3358,7 +4389,7 @@ def bp_trace(m, *targets, **kw):
 # Wait for a machine that is BUSY WITHOUT DRAWING: anything holding the gfx
 # lock for its whole run. `settle` cannot see that work at all - it watches
 # pixels, and there are none - so ask about the thing being waited for.
-def until(m, cond, what="that condition", poll=1.0, limit=600.0, guest=None):
+def until(m, cond, what="that condition", poll=None, limit=600.0, guest=None):
     """Run until CONDITION IS TRUE, and answer how long that took.
 
     The twin of `settle`, for the case it silently gets wrong. An operation
@@ -3392,6 +4423,14 @@ def until(m, cond, what="that condition", poll=1.0, limit=600.0, guest=None):
     # reported in GUEST_STALL seconds instead of at the end of it.
     prog = _Progress(m, what, guest if guest is not None
                      else limit * GUEST_BUDGET_RATIO)
+    # THE DEFAULT POLL IS ADAPTIVE: 20 ms, doubling to 250 ms. It was a flat
+    # host second, which is up to a second of latency on EVERY wait - and a
+    # row that waits a few hundred times (a chunked trace, a key per field)
+    # spent minutes of it after the condition was already true. A look is a
+    # guest read or two, answered between the emulator's batches, so looking
+    # four times a second costs the guest nothing measurable. An explicit
+    # `poll` keeps the old fixed interval.
+    nap = poll if poll is not None else 0.02
     while True:
         if cond(m):
             prog.done("until")
@@ -3425,7 +4464,9 @@ def until(m, cond, what="that condition", poll=1.0, limit=600.0, guest=None):
                 "never called?"
                 % (prog.spent(), what, st["state"], st["cs"], st["ip"]))
         prog.check()
-        time.sleep(poll)
+        time.sleep(nap)
+        if poll is None:
+            nap = min(nap * 2, 0.25)
 
 
 def faces(folder="SYSTEM/FONTS"):
@@ -3564,6 +4605,94 @@ def _sweep_sidecars(d):
                 os.remove(os.path.join(d, n))
             except OSError:
                 pass
+
+
+class Forks(object):
+    """ONE BOOT, SEVERAL LEGS: a fork snapshot of `m`, restored per leg.
+
+        with os88marty.Forks(ui.m) as fk:          # m PAUSED and frozen here
+            for leg in legs:
+                with fk.restore() as r:            # a fresh copy, running
+                    run_leg(os88ui.UI(r))
+
+    A row that boots the same machine N times to start N legs from the same
+    desktop pays N boots (15-25 guest seconds each, plus a launch); this pays
+    one, and each leg starts from the SAME bytes rather than a similar boot
+    (docs/plans/completed/SNAPSHOT-PLAN.md B: cycles and memory hash
+    identical across restores). The original is paused for the snapshot's
+    life and is the registry - keep it open; its holders exit with it.
+
+    `restore()` answers a Marty on a free port, already running; leaving its
+    `with` (or `drop`) quits that process. Disk images are SHARED, not
+    rolled back, so a leg that writes a floppy changes what the next one
+    mounts - use it for legs that only read the disks.
+    """
+
+    def __init__(self, m):
+        self.m = m
+        m.pause()
+        self.id = m.snapshot()["id"]
+        self.live = []
+
+    def restore(self, tries=3):
+        last = None
+        for _ in range(tries):
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+            s.close()
+            try:
+                r = self.m.restore(self.id, port)
+            except MartyError as e:     # the port was taken in between
+                last = e
+                continue
+            self.live.append(r)
+            r.run()
+            return _Leg(self, r)
+        raise last
+
+    def drop(self, r):
+        r = getattr(r, "_r", r)
+        if r in self.live:
+            self.live.remove(r)
+        pid = r.pid
+        try:
+            r.quit()
+        except Exception:
+            pass
+        r.close()
+        if pid:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+    def close(self):
+        for r in list(self.live):
+            self.drop(r)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *e):
+        self.close()
+
+
+class _Leg(object):
+    """`Forks.restore()`'s answer: the restored Marty, usable directly
+    (attribute access passes through) or as a `with` that drops it."""
+
+    def __init__(self, fk, r):
+        self._fk, self._r = fk, r
+
+    def __getattr__(self, name):
+        return getattr(self._r, name)
+
+    def __enter__(self):
+        return self._r
+
+    def __exit__(self, *e):
+        self._fk.drop(self._r)
 
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
@@ -3741,8 +4870,10 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         _clone(src, dst)                             # a directory per INSTANCE
         mounts += ["--mount", "fd:%d:media/floppies/run%d.img" % (i, i)]
 
-    cmd = ["./martypc_headless", "--machine-config-name", machine] + mounts \
-        + list(extra)
+    # OS88_MARTY_BIN runs another build of the emulator in this instance's
+    # directory - how a debug_server.rs change is tried before it is staged.
+    cmd = [os.environ.get("OS88_MARTY_BIN") or "./martypc_headless",
+           "--machine-config-name", machine] + mounts + list(extra)
     env = dict(os.environ, MARTYPC_DEBUG_ADDR=want,
                MARTYPC_DEBUG_PORTFILE=portfile)
     log = open(logpath, "wb")

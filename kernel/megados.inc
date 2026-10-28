@@ -1,8 +1,8 @@
 ; =============================================================================
-; kernel/megados.inc - the DOS box under kern_mega: the PARK
+; kernel/megados.inc - DOS under kern_mega: the PARK
 ; (docs/plans/KERN-MEGA-DOS-PLAN.md 2.3, waves W1 and W2)
 ;
-; On kern_mega the DOS box has one route, the whole-machine handoff (SPEC.md
+; On kern_mega DOS has one route, the whole-machine handoff (SPEC.md
 ; 96.40), with EXTENDED MEMORY standing in for the hibernation file. HIBER.DRV's
 ; `hbm_dosrun` asks for it in three far calls:
 ;
@@ -102,7 +102,7 @@ MPK_HDR     equ (MPK_STACK + 1023) & ~1023 ; the image of linear 0 .. P, on
 MPK_ANCHOR1 equ 'PK'            ; W7: GDT entry 0 while a park stands - these
 MPK_ANCHOR2 equ 'RS'            ; two words, then the park's dd base
 MPK_RESETCODE equ (0x80 | 9) << 8 ; W7's exit code: KDC_FAIL with DER_RESET
-                                ; (apps/dos), so the box says the program was
+                                ; (apps/dos), so DOS.O88 says the program was
                                 ; stopped by a restart and gives its prompt
 MPK_MIN_KB  equ 128             ; a park smaller than this is no park: kern_dos
                                 ; was ~42KB at 0x600 (SPEC.md 96.40) and is in
@@ -2065,7 +2065,7 @@ section .cold                   ; ...and back to the loader's check
 ;              entry proc; .cold, PM, DS = KDATA, [ld_base] the image)
 ; out: CF = 0 yes; CF = 1 no, and the toast says why
 ;
-; ONE PACKAGE IS REFUSED: kern_big's DOS.O88 (12.1 item 4). Its box runs DOS
+; ONE PACKAGE IS REFUSED: kern_big's DOS.O88 (12.1 item 4). It runs DOS
 ; programs inside the kernel's session, which a protected-mode kernel cannot
 ; host, and it must stay byte-identical, so it cannot say so itself. A
 ; kern_mega DOS.O88 marks both its entry procs with 'KMEG' in the four bytes

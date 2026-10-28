@@ -1184,6 +1184,30 @@ at_mdbuttons:
 ;     and hit-test from, separately - are one array now, and this routine
 ;     writes the slot's label word too rather than every caller doing it.
 at_button:
+    call at_bslot                   ; CX = the width; the slot is laid out
+    push ax
+    mov al, dh                      ; ...and drawn
+    call at_bdraw
+    pop ax
+    ret
+
+; at_bdraw - draw slot AL (0-based) of the group as it is laid out; keeps all
+at_bdraw:
+    push ax
+    push bx
+    mov bx, at_btrec
+    inc ax                          ; the record's indices are one-based
+    call os88ui_btn
+    pop bx
+    pop ax
+    ret
+
+; at_bslot - at_button's LAYOUT half: the slot's rect, label and flags, and
+;            nothing drawn (SPEC.md 20.5.1.3.5)
+; in:  as at_button; out: CX = the width; preserves all else
+; The splash's OS88UI_BT_PLACE proc (at_place) lays its pair out through this
+; too, so the drawn button and the clickable one are one description.
+at_bslot:
     push ax
     push bx
     push dx
@@ -1218,10 +1242,6 @@ at_button:
     mov [si+2], bx                  ; y1
     add bx, 19
     mov [si+6], bx                  ; y2
-    mov bx, at_btrec
-    mov al, dl
-    inc ax                          ; the record's indices are one-based
-    call os88ui_btn
     pop di
     pop si
     pop dx
@@ -1232,7 +1252,7 @@ at_button:
 at_brects:  dw 0,0,0,0, 0,0,0,0, 0,0,0,0   ; THE GROUP, contiguous
 at_btlbl:   dw 0, 0, 0                     ; its labels, written per pass
 at_btflg:   dw 0, 0, 0                     ; ...and its flags
-    OS88UI_BTNREC at_btrec, at_brects, at_btlbl, at_btflg, 3
+    OS88UI_BTNREC at_btrec, at_brects, at_btlbl, at_btflg, 3, at_place
                                        ; THREE is the modal's; the splash and
                                        ; the one-button modal set their own
                                        ; OS88UI_BT_N before they draw
@@ -1664,6 +1684,58 @@ at_blit1ph:
     ret
 %endif
 
+; -----------------------------------------------------------------------------
+; at_place - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): the WINDOWED splash's pair,
+;            from where the window IS. A window dragged by its title is
+;            replayed and never painted, so the library calls this before
+;            every press, drag and release it tests. The alert's buttons are
+;            the same record but run full screen only, where nothing moves,
+;            so they keep what at_mdbuttons laid out.
+; in:  BX = the record, SI = the window; out: nothing; keeps every register
+; -----------------------------------------------------------------------------
+at_place:
+    cmp byte [at_modal], 0
+    jne .out
+    cmp byte [at_fs], 0
+    je at_spbtns                    ; a tail jump: at_spbtns keeps them all
+.out:
+    ret
+
+; at_spbtns - the splash's New and Open, anchored to the content's bottom:
+;             rects, labels, flags and the count, nothing drawn
+; out: nothing; keeps every register
+at_spbtns:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, [at_win]
+    call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    mov si, dx
+    call OSAPI_WM_GEOM              ; CX = w, DX = h; keeps AX
+    lea bx, [si-30]
+    add bx, dx                      ; BX = the button top
+    shr cx, 1
+    add ax, cx                      ; AX = the centre, at_splash's at_spcx
+    push ax
+    sub ax, 76
+    mov word [at_btrec+OS88UI_BT_N], 2   ; the splash's pair, count first
+    mov si, at_i_new
+    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
+    call at_bslot
+    pop ax
+    add ax, 12
+    mov si, at_i_open
+    mov dx, 0100h                   ; DH = slot 1, DL = no ring
+    call at_bslot
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; The windowed splash card (SPEC.md 46.7). The kernel has already
 ; white-filled the content when this runs from W_PAINT.
@@ -1678,8 +1750,7 @@ at_splash:
     call OSAPI_WM_CONTENT           ; AX = left, DX = top
     mov [at_spx], ax
     mov [at_spy], dx
-    call OSAPI_WM_GEOM              ; CX = w, DX = h
-    mov [at_sph], dx
+    call OSAPI_WM_GEOM              ; CX = w (the height is at_spbtns')
     mov ax, cx
     shr ax, 1
     add ax, [at_spx]
@@ -1688,23 +1759,11 @@ at_splash:
     add ax, 10
     mov [at_spy], ax
     call at_about_body              ; title, art, subtitle, version, url
-    ; the two buttons, anchored to the content's bottom
-    mov bx, [at_win]
-    call OSAPI_WM_CONTENT
-    mov bx, dx
-    add bx, [at_sph]
-    sub bx, 30                      ; button top
-    mov ax, [at_spcx]
-    sub ax, 76
-    mov word [at_btrec+OS88UI_BT_N], 2   ; the splash's pair, count first
-    mov si, at_i_new
-    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
-    call at_button
-    mov ax, [at_spcx]
-    add ax, 12
-    mov si, at_i_open
-    mov dx, 0100h                   ; DH = slot 1, DL = no ring
-    call at_button
+    call at_spbtns                  ; the two buttons laid out, then drawn
+    xor ax, ax
+    call at_bdraw                   ; New
+    inc ax
+    call at_bdraw                   ; ...and Open
     pop si
     pop dx
     pop cx

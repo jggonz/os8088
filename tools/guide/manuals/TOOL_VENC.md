@@ -37,8 +37,10 @@ In an os8088 source tree the two programs are `tools/os88venc.py` and
 
 Without the source tree, use the encoder bundle, `os8088-encoder.zip`. It
 holds one folder, `os8088-encoder`, with the window, everything it needs,
-Video Player (**VIDEO.O88**), the files a bootable hard disk needs, and a
-`README.TXT`. Unzip it anywhere and run `python3 os88vencgui.py` inside that
+Video Player (**VIDEO.O88**), the files a bootable hard disk needs, a
+`README.TXT`, and `GUIDE.HTML`: a full guide to open in a web browser, with
+pictures of what every **Made for** choice looks like and, for each
+setting, when it is worth changing and why. Unzip it anywhere and run `python3 os88vencgui.py` inside that
 folder. Someone with the tree makes the bundle with `make vencbundle`.
 
 ## Making a video in the window

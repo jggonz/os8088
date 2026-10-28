@@ -1,0 +1,26 @@
+diff --git a/crates/marty_core/src/devices/pit.rs b/crates/marty_core/src/devices/pit.rs
+index fb9b74be..2d9db3d8 100644
+--- a/crates/marty_core/src/devices/pit.rs
++++ b/crates/marty_core/src/devices/pit.rs
+@@ -783,7 +783,20 @@ impl Channel {
+                 ChannelMode::SquareWaveGenerator => {
+                     // Gate controls counting.
+                     if *self.gate {
+-                        if (*self.count_register & 1) == 0 {
++                        // os8088 patch 16: decide on the count IN EFFECT, not the one
++                        // just written. A new count in mode 3 is only taken at the
++                        // end of the half-cycle (finalize_load's SubsequentLoad), so
++                        // for the rest of it the counting element still holds the
++                        // OLD value - and one written in the PIT clock after an ODD
++                        // value's reload, while the element is still odd, sent an
++                        // even register down the count-by-two arm: odd minus two
++                        // forever never reaches 0, so the output stuck high until
++                        // the next odd count was written. On the 5150 that is a
++                        // speaker that goes silent mid-glide for as long as the
++                        // following divisors stay even (isoTron's crash, two ticks).
++                        // The odd arm below already handles an odd element on both
++                        // chips, and an even element there counts by two as here.
++                        if (*self.count_register & 1) == 0 && (*self.counting_element & 1) == 0 {
+                             // Even reload value. Count decrements by two and reloads on terminal count.
+                             self.count2();
+                             if *self.counting_element == 0 {

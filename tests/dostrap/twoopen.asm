@@ -1,7 +1,7 @@
 ; TWOOPEN.COM - is it the FILE, or is it the SECOND HANDLE?
 ; OURS, MIT with the rest of the tree.  docs/DOS-DEBUGGING.md is the manual.
 ;
-; A program that reads two files at once is ordinary and a box that has ONE
+; A program that reads two files at once is ordinary and a DOS that has ONE
 ; read window is not, so "this file will not read" and "this file will not read
 ; WHILE THAT ONE IS OPEN" are different faults with one symptom.  Three cases,
 ; in one run, so the answer needs no second experiment:

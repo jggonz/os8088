@@ -66,7 +66,10 @@ def main():
     os.chdir(ROOT)
     if a.shots:
         os.makedirs(a.shots, exist_ok=True)
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # open_game's first act is a click
         g = pxslib.open_game(m)             # (a): sys.exit()s if no window
         g.sim(False)
         g.god(True)

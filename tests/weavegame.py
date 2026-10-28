@@ -191,9 +191,8 @@ def session(machine, png_dir=None):
     S = os88sym.linear
     img = open(os.path.join(ROOT, MODULE), "rb").read()
     weavesmoke.BUNDLE = "PONG.WAB"
-    with os88marty.launch("build/os8088-360.img", apps=weavesmoke.DISK,
+    with weavesmoke.booted("build/os8088-360.img", apps=weavesmoke.DISK,
                           machine=machine) as m:
-        os88marty.settle(m)
         mo = os88mouse.Mouse(marty=m)
         before, after = weavesmoke._open_bundle(m, mo, S, machine)
         win = sorted(set(after) - set(before))[-1]

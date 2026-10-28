@@ -69,9 +69,10 @@ x3x_head:
     dw x3x_granule                  ; X3V_GRANULE
     dw x3x_statsv                   ; X3V_STATS
     dw x3x_close                    ; X3V_CLOSE
+    dw x3x_reseg                    ; X3V_RESEG
 
 ; THE SEAL (tools/x3xtgen.py --seal reads the two offsets and writes the
-; Fletcher-32 of [tail, end) after them): at 18, 20, 22 - fixed
+; Fletcher-32 of [tail, end) after them): at 20, 22, 24 - fixed, X3K_SIZE on
 x3x_tailoff dw x3x_tail - $$
 x3x_endoff  dw x3x_imgend - $$
 x3x_tailfl  dw 0, 0
@@ -232,6 +233,42 @@ x3x_captab dw x3x_std_caps, x3x_fast_caps, x3x_turbo_caps, x3x_speech_caps
 ; CLOSE - nothing to free: the primary owns every claim
 x3x_close:
     mov byte [cs:x3x_isopen], 0
+    clc
+    retf
+
+; RESEG - in: ES:DI -> the OPEN record. A compaction MOVED a work segment
+; (SPEC.md 121.10.1): the segments OPEN banked are re-read from X3O_SEG in
+; OPEN's order - the window segments, then SY, H1, H2 - and nothing else
+; changes, the tables having moved with their claims. RESIDENT (before
+; x3x_tail): it is called after the shrink. Not OPEN: nothing to re-read
+x3x_reseg:
+    cmp byte [cs:x3x_isopen], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push si
+    lea si, [di + X3O_SEG]
+    mov cx, [cs:x3x_nwseg]
+    xor bx, bx
+.ws: mov ax, [es:si]
+    mov [cs:x3x_wseg + bx], ax
+    inc si
+    inc si
+    inc bx
+    inc bx
+    loop .ws
+    mov ax, [es:si]
+    mov [cs:x3x_segsy], ax
+    mov ax, [es:si + 2]
+    mov [cs:x3x_segh1], ax
+    mov ax, [es:si + 4]
+    mov [cs:x3x_segh2], ax
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.out:
     clc
     retf
 

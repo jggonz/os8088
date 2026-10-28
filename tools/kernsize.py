@@ -162,7 +162,7 @@ def is_mega_tree(build):
 # is overwritten by the first mount (SPEC.md 2.5, 2.5.3), so neither has a rung
 # of its own. Each still has a ceiling - see the guards on BOOT2_SIZE and
 # OVL_SIZE.
-SECTIONS = ("text", "bss", "cold", "lowbss", "vgabuf", "boot2", "ovl")
+SECTIONS = ("text", "bss", "cold", "vga", "lowbss", "vgabuf", "boot2", "ovl")
 
 # Which rung each section rounds into.  .text and .bss share one; that is why
 # a byte moved from .bss to .lowbss can cost 512 rather than saving anything
@@ -172,6 +172,16 @@ RUNGS = (
     ("cold", ("cold",), "coldpara"),
     ("low", ("lowbss", "stk0"), "lowpara"),
     ("vgabuf", ("vgabuf",), "vgabufpara"),
+)
+
+# ...and a LADDER_PACK kernel's (docs/plans/MOVABLE-COLD-PLAN.md 5): the top
+# of the ladder - LOW, `.cold` and `.vgabuf` - is packed to the paragraph and
+# rounds to 512 ONCE, at KERN_END, so it is one rung and not three. The kernel
+# says which with `toppara` (0 on a kernel with rungs, and absent from a
+# baseline taken before it, which then reads as the three rungs' sum).
+RUNGS_PACK = (
+    ("image", ("text", "bss"), "imgpara"),
+    ("top", ("lowbss", "stk0", "vga", "cold", "vgabuf"), "toppara"),
 )
 
 # ...and therefore the sections a rung CHARGES for, which is not SECTIONS:
@@ -508,6 +518,9 @@ def rung_bytes(v, para_key):
     # (SPEC.md 39.22's `.vgabuf` is the case that arrived): a rung nobody had
     # measured was 0 bytes, which is the honest reading and makes the first
     # report after it lands price the whole thing rather than crashing.
+    if para_key == "toppara" and not v.get("toppara"):
+        return sum(v.get(k, 0) for k in ("lowpara", "coldpara",
+                                          "vgabufpara")) * 16
     return v.get(para_key, 0) * 16
 
 
@@ -585,10 +598,11 @@ def report(cur, base, variant="big", out=sys.stdout):
     # rungs, which is the number the verdict at the bottom prices.
     charged = (None if base is None
                else sum(d(s) or 0 for s in RUNG_SECTIONS))
+    rungs = RUNGS_PACK if cur.get("toppara") else RUNGS
 
     crossed = []
     cells = []
-    for name, members, para in RUNGS:
+    for name, members, para in rungs:
         size = rung_bytes(cur, para)
         used = rung_used(cur, members)
         slack = size - used
@@ -606,7 +620,7 @@ def report(cur, base, variant="big", out=sys.stdout):
     p(tag + " rungs      " + "   ".join(cells))
 
     acc = []
-    for name, members, para in RUNGS:
+    for name, members, para in rungs:
         size = rung_bytes(cur, para)
         spent = rung_accrued(size, rung_used(cur, members))
         acc.append(f"{name} {spent}/512 ({spent * 100 // 512}%)")
@@ -667,6 +681,15 @@ def report(cur, base, variant="big", out=sys.stdout):
     seg = cur["text"] + cur["bss"]
     p(f"{tag} segment    .text+.bss {kb(seg)} of KERN_CODE_MAX"
       f" {kb(cur['codemax'])} -> {kb(cur['codemax'] - seg)} left")
+    if cur.get("vgars"):
+        # ...and the BINDING form of it once the VGA rung exists
+        # (docs/plans/MOVABLE-COLD-PLAN.md 3): `.text` near-calls the rung, so
+        # its last byte must be a KERNEL_SEG offset - and the image, the FAT
+        # window and LOW all sit under it, so this is what `.text` can grow by
+        top = (cur["vgars"] - cur["kseg"]) * 16 + cur.get("vga", 0)
+        p(f"{tag} window     the VGA rung ends at KERNEL_SEG:{top:#06x}"
+          f" -> {kb(0x10000 - top)} of the 64KB window left"
+          f" (`.text` near-calls it)")
 
     # The ladder, because every base in it moves whenever a rung does - and
     # the heap's start is the figure every RAM number in this project falls
@@ -677,7 +700,8 @@ def report(cur, base, variant="big", out=sys.stdout):
     # a kernel older than the four `%assign`s falls back to the old order
     if "colds" in cur:
         rungs = sorted((cur[k], n) for k, n in (("colds", "COLD"),
-                       ("fats", "FAT"), ("lows", "LOW"), ("vgas", "VGABUF")))
+                       ("fats", "FAT"), ("lows", "LOW"), ("vgas", "VGABUF"),
+                       ("vgars", "VGA")) if cur.get(k))
     else:
         cold = ks + cur["imgpara"]
         fat = cold + cur["coldpara"]

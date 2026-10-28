@@ -157,6 +157,31 @@ def drv_syms(src):
         return out
 
 
+def page_syms(src):
+    """rampage.asm's labels - RAMPAGE.DRV, the Ram Disk page the Control
+    Panel hosts, at the segment the driver banks in `rd_pseg` - by
+    re-assembling it with the Makefile's own flags and a map. `rp_edit` is
+    the one a typing gesture waits on: the size box takes keys only once a
+    click has given it the caret, and ui_task reads the BIOS key ring AHEAD
+    of the event queue in a pass, so a key that arrives before the click is
+    handled is dropped as belonging to nobody."""
+    rd = os.path.join(src, "drivers", "ramdisk")
+    with tempfile.TemporaryDirectory() as d:
+        cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
+        open(cp, "w").write(open(os.path.join(rd, "rampage.asm")).read()
+                            + "\n[map symbols %s]\n" % mp)
+        subprocess.run(["nasm", "-f", "bin", "-w+error",
+                        "-I", rd + "/", "-I", os.path.join(src, "drivers/"),
+                        "-I", os.path.join(src, "apps/"),
+                        "-o", os.path.join(d, "p.bin"), cp], check=True)
+        out = {}
+        for line in open(mp):
+            f = line.split()
+            if len(f) == 3 and all(c in "0123456789ABCDEF" for c in f[0]):
+                out[f[2]] = int(f[0], 16)
+        return out
+
+
 def scratch_b(work, data):
     """A blank 360KB volume holding SRC/DATA.BIN and nothing else, so the
     image and the copy-back both have room and the chooser lists two rows."""
@@ -229,7 +254,9 @@ def main():
     with tempfile.TemporaryDirectory() as work:
         bimg = scratch_b(work, data)
         with os88ui.boot(os88build.at(a.sys), apps=bimg,
-                         machine=a.machine) as ui:
+                         machine=a.machine,
+                         quick=True) as ui:
+            ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
             session(ui, a, R, data)
     for f in fails:
         say("  FAIL: " + f)

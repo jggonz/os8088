@@ -61,7 +61,7 @@ ALIAS = 0x2800                          # --pm: CS, the code alias
 VSEG = 0xA000
 VB_PROBE = 0x5642 ^ 0x2E19
 VBV_SET, VBV_LIN, VBV_PLN, VBV_ONE = 0, 1, 2, 3
-VBM_NOWM3, VBM_VGA4 = 1, 2
+VBM_NOWM3, VBM_VGA4, VBM_NEWS = 1, 2, 4
 
 
 class Vga:
@@ -173,8 +173,18 @@ class Part:
                           X.UC_X86_REG_CX, X.UC_X86_REG_DX):
                     u.reg_write(r, 0xDEAD)          # the contract: clobbered
 
-        uc.hook_add(UC_HOOK_MEM_WRITE, on_write)
-        uc.hook_add(UC_HOOK_CODE, on_code)
+        # only the ranges on_write acts on: a stack or data write never
+        # reaches Python (the full-memory hook was a callback per store)
+        uc.hook_add(UC_HOOK_MEM_WRITE, on_write, None,
+                    VSEG * 16, VSEG * 16 + 65535)
+        if self.pm:
+            for a in (PART, ALIAS):
+                uc.hook_add(UC_HOOK_MEM_WRITE, on_write, None,
+                            a * 16, a * 16 + n - 1)
+        if wm3_reads:                   # the latch restore: every boundary
+            uc.hook_add(UC_HOOK_CODE, on_code)
+        else:                           # pend stays empty: the callback only
+            uc.hook_add(UC_HOOK_CODE, on_code, None, CBSEG * 16, CBSEG * 16)
         uc.hook_add(UC_HOOK_INSN, lambda u, port, size, value, user:
                     vga.out(port, size, value), None, 1, 0,
                     X.UC_X86_INS_OUT)
@@ -419,7 +429,16 @@ def main():
                         fails.append("%s (seed %d)" % (e, seed))
     g = vid.Geom(vid.LAY_CGA, 80, 200)   # ...and what one bit refuses
     vga = Vga(True)
+    # "No codebook yet" is a SESSION's state (98.3.23.1): VBV_SET forgets
+    # the codebook only with VBM_NEWS, a session's first bracket, and a
+    # later bracket KEEPS it - the rounds above have left one held, so
+    # without the bit the tile below is legal and must decode.
     cbset(part, vga, 80, 0, 2)
+    r = part.run(vga, VBV_ONE, data=vid.v2_lists(
+        [(0, b"\x00", "tile")], g))
+    if r["FLAGS"] & 1:
+        fails.append("one bit: a later bracket forgot the codebook it held")
+    cbset(part, vga, 80, VBM_NEWS, 2)
     r = part.run(vga, VBV_ONE, data=vid.v2_lists([], g))
     if r["FLAGS"] & 1:
         fails.append("one bit: an empty record with no codebook refused")

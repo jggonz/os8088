@@ -33,7 +33,8 @@ from os88geom import WIN_SIZE, W_SEG                            # noqa: E402
 from paintmove import pkg_syms                                  # noqa: E402
 
 WORK = "build/sheetstatus"
-DISK = "build/sheetstatus.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetstatus.img")        # the run's tree, so a soak lane finds it
 NAME = "STAT.SLK"
 SB_H, DIVX, INDX = 16, 96, 88          # sheet.asm: SH_SB_H, SH_SB_DIVX, right-88
 
@@ -44,8 +45,7 @@ def main():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk({(0, 0): 1.0}))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL",
-                    "build/MACRO.OVL", src], check=True,
+                    "360", "build/sheet.o88", src], check=True,
                    stdout=subprocess.DEVNULL)
     S = os88sym.linear
     sym = pkg_syms("apps/sheet/sheet.asm")

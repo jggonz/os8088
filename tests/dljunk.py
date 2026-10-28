@@ -61,16 +61,41 @@ def boots(junk, apps):
     """
     t = os88build.tree("DLJUNK=%s" % junk)
     img = t.img("os8088-360.img")
-    try:
-        with os88marty.launch(img, apps=apps, machine=MACHINE) as m:
-            return True, "\n".join(m.screen())
-    except os88marty.MartyError:
-        # The desktop gate never fired. Come back with no gate at all and read
-        # what IS on the screen, because `Disk error` is the assertion - a
-        # machine that hung with a blank screen would be a different defect
-        # wearing the same result.
-        with os88marty.launch(img, apps=apps, machine=MACHINE, boot=10) as m:
-            return False, "\n".join(m.screen())
+    # ONE BOOT, ENDED BY WHICHEVER COMES FIRST: the kernel's desktop STATE
+    # (os88marty.kernel_up's words, with the tick moving), or the boot
+    # sector's `Disk error` on the text screen. It used to wait out a whole
+    # picture-settle timeout for the failing value and then boot it again.
+    # A machine that does neither in 120 guest s is reported as not up, with
+    # whatever IS on the screen, because `Disk error` is the assertion - a
+    # hang with a blank screen is a different defect wearing the same result.
+    with os88marty.launch(img, apps=apps, machine=MACHINE, boot=False) as m:
+        m.run()
+        a = (m.sym("desk_rows"), m.sym("menu_nbar"), m.sym("spl_live"))
+        seen, got = [None], [False, ""]
+
+        def either(_):
+            got[1] = "\n".join(m.screen() or [])
+            if "Disk error" in got[1]:
+                return True
+            w = m.read(a[0], 2), m.read(a[1], 2)
+            if not (any(w[0]) and any(w[1]) and not m.read(a[2], 1)[0]):
+                seen[0] = None
+                return False
+            t_ = os88marty._ktick(m)
+            if seen[0] is None:
+                seen[0] = t_
+                return False
+            got[0] = t_ != seen[0]
+            return got[0]
+        try:
+            os88marty.until(m, either, "a desktop or `Disk error`",
+                            poll=0.1, guest=120.0)
+        except os88marty.MartyError:
+            pass
+        if got[0]:
+            os88marty.ui_done(m)
+            got[1] = "\n".join(m.screen() or [])
+        return got[0], got[1]
 
 
 # --- 0x61: the Packard Bell exactly. Clamped to 0, so it boots. ---------

@@ -1,4 +1,4 @@
-"""OS88CZ.COM run in the DOS box, for OS88CZ_COM.md. It is a program for a PC
+"""OS88CZ.COM run in DOS, for OS88CZ_COM.md. It is a program for a PC
 with MS-DOS, and os8088's DOS window runs it too, which is the easiest way
 to show it. It rides SYSTEM/DOS on the 720KB and larger software disks:
 

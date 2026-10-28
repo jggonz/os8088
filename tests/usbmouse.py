@@ -190,7 +190,11 @@ def steer(rig, tx, ty, btn=0):
 
 
 def leg_sim(fail):
-    with os88marty.launch(SIM_IMG, apps=APPS, machine=MACHINE) as m:
+    with os88marty.launch(SIM_IMG, apps=APPS, machine=MACHINE,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         os88marty.no_saver(m)
         rig = Rig(m)
         r = rig.rowbytes()
@@ -373,7 +377,11 @@ def leg_sim(fail):
 
 
 def leg_busy(fail):
-    with os88marty.launch(BUSY_IMG, apps=APPS, machine=MACHINE) as m:
+    with os88marty.launch(BUSY_IMG, apps=APPS, machine=MACHINE,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         r = m.read(S("usbm_row"), 16)
         seg = int.from_bytes(r[DRVR_SEG:DRVR_SEG + 2], "little")
         say("busy     row error %d, segment %04X" % (r[DRVR_ERR], seg))

@@ -79,7 +79,7 @@ kd_lbsz: dw KDL_SIZE                ; KD_H_LBSZ
 ; runtime on a machine with no operating system left to say so.
 
 ; --- AND THE HOLE THE CORE GOES IN (SPEC.md 96.44.5) ------------------------
-; The same reservation the box makes, for the same reason and at the same
+; The same reservation DOS.O88 makes, for the same reason and at the same
 ; addresses: the core is a PART both hosts join, so its jump table is at
 ; CORE_ORG in this segment too and `kern_dos`'s own code begins above the
 ; budget and the bss block. The stub reads this part first and the core's over

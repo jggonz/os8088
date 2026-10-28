@@ -163,7 +163,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="deskcalremind-")
     try:
         img = disk_with(tmp, "remind.img", fixture())
-        with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+        with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
             m = ui.m
             m.write(ui._S("clk_sec"), bytes([0, 28, 9]))
             c = Cal(ui, tmp, check=check)       # sets the date, opens it

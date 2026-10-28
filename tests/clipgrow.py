@@ -86,7 +86,7 @@ def main():
     a = ap.parse_args()
     bad = []
     with os88ui.boot(a.kernel, apps=a.apps,
-                     machine=os88marty.machine(a.machine)) as ui:
+                     machine=os88marty.machine(a.machine), quick=True) as ui:
         m = ui.m
         dk = ui.open_drive("B")
         tm = ui._as_win(ui.path("A:/SYSTEM/TASKMGR.O88"))

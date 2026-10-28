@@ -1991,14 +1991,18 @@ wvm_nat:
     add bx, 4
     loop .cp
 .copied:
-    push ds
-    push es
     mov ds, [cs:wvm_ourds]      ; cc8086:allow the includer's own segment, so
     mov es, [cs:wvm_besv]       ; that C runs normally; ES is what the caller
     cld                         ; had, because a callback's ES is the kernel's
     call wvm_native
-    pop es
-    pop ds
+    ; THE TWO CLAIMS ARE RE-READ, NOT POPPED (WEAVE-SPEC 1.2.6). A
+    ; native may claim - alert() creates a window, saveState() takes 8KB and
+    ; writes a file - and a claim may compact, and both claims are MOVABLE:
+    ; the includer's relocation proc puts wvm_vmseg and wvm_bseg right, but a
+    ; DS and an ES pushed across the call would come back naming where the
+    ; claims WERE. Per native and never per op, and no dearer than the pops.
+    mov ds, [cs:wvm_vmseg]      ; cc8086:allow the slice's segments again
+    mov es, [cs:wvm_bseg]
     mov si, [cs:wvm_pc]
     mov di, [cs:wvm_sp]
     mov cx, [cs:wvm_bcx]

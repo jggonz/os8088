@@ -298,6 +298,13 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
     # --- 6. a marker the machine never cleared ----------------------------
     dblclick(ui, "STALE.IMG")
     wait_images(ui, 1, "STALE.IMG's row")
+    # The row is added BEFORE clo_mount proves the image (a dsk_goto on it)
+    # and only then clears the mark - so the row appearing is not the mount
+    # finishing. The toast is posted after the clear: wait for THAT, or the
+    # host is read mid-mount and the clear is reported missing when it has
+    # not happened yet (it then shows up in the unmount's reading).
+    txt = ui.wait_toast(says="STALE.IMG is drive")
+    check(txt.startswith("STALE.IMG is drive"), "STALE.IMG mounts", txt)
     seg = images(ui)[0][5]
     flg = ui.m.read(seg * 16 + IMG_FLG, 1)[0]
     check(flg == 0, "a stale marker mounts WRITABLE", flg)

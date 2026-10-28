@@ -93,7 +93,7 @@ def arm(tag, sym):
     machine={'vga':'os8088_xt_vga','cga':'os8088_5150_cga_gla',
              'herc':'os8088_5150_herc_gla'}[tag]
     with D.os88ui.boot(str(D.ROOT/'build/os8088-360.img'),
-            apps=str(D.ROOT/'build/drmario360.img'),machine=machine) as ui:
+            apps=str(D.ROOT/'build/drmario360.img'),machine=machine,quick=True) as ui:
         m=ui.m
         ui.open_drive('B');ui.open('DRMARCO.O88');ui.settle()
         p=D.Probe(ui,sym)

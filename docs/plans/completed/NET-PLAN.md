@@ -395,7 +395,7 @@ confirmed rather than assumed:
 | machine | port | BIOS-listed | latch | status | control |
 |---|---|---|---|---|---|
 | **5150**, Hercules GB101 | **03BC** | yes | ok | DD | 88 |
-| **the DOS box**, DIO-500 | **0378** | yes | ok | D7 | EC |
+| **the DOS machine**, DIO-500 | **0378** | yes | ok | D7 | EC |
 
 Neither found anything at the other's address. **That is the whole argument
 for §1.4 in one table** — a driver with a constant in it would have worked on
@@ -403,13 +403,13 @@ exactly one of these two machines.
 
 Two things in those bytes are worth reading rather than skipping:
 
-- **The DOS box's control register is `EC`, and bit 5 is SET** — its data
+- **The DOS machine's control register is `EC`, and bit 5 is SET** — its data
   register was left in INPUT mode. `lp_init` clears that bit by design, but
   the *latch probe* ran before it and did not, so it was probing a port that
   may not have been able to drive the pins at all. It passed anyway, because
   that card reads its latch back regardless; another might not. Fixed — the
   probe now forces output first and restores the control byte after.
-- **A phantom `9FC0` appeared in the DOS box's BIOS list.** `0040:000E` is
+- **A phantom `9FC0` appeared in the DOS machine's BIOS list.** `0040:000E` is
   LPT4 only on a pre-PS/2 BIOS; on everything since it is the **segment of the
   EBDA**, and 0x9FC00 is an EBDA sitting just under 640 KB. The probe rejected
   it, so the fail-safe held — but the tool had already written 0xAA and 0x55
@@ -954,7 +954,7 @@ through, which is what a write does.
 
 `/RO` is enforced in one routine every verb calls first, so a verb added later
 inherits the refusal rather than remembering it — the machine at that end may
-be somebody's real DOS box, and §FIELD-MACHINES keeps a live DOS 3.3 install
+be somebody's real DOS machine, and §FIELD-MACHINES keeps a live DOS 3.3 install
 on the calibration machine's C:.
 
 **Both ends are verified** (SPEC.md §62.10.4.5). The DOS side is twelve cases
@@ -1036,7 +1036,7 @@ OS88NET [/P:378] [/D:C:\OS8088] [/IMG:file] [/RO] [/NET]
   `/P` the program runs §1.4's scan for itself: read its own `0040:0008`, add
   3BCh / 378h / 278h, dedupe, latch-probe each, and then **listen on every
   survivor round-robin** until one of them carries a hello. That is §9.5's
-  "arm every candidate and let the one that delivers win", and on a DOS box
+  "arm every candidate and let the one that delivers win", and on a DOS machine
   with a whole machine to spend there is no reason to do anything cheaper.
   §1.4.5's dwell rule binds here: this side is the patient one.
 - **`/D`** — the directory it exports as the root of the Network volume.

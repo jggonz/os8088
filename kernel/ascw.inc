@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - ascw.inc
 ;
-; The ASSOC.DAT flush (SPEC.md 54.7.6.4): FORMAT.DRV's fifth entry, FME_ASCW.
+; The ASSOC.DAT flush (SPEC.md 54.7.6.4): FORMAT.DRV's fourth entry, FME_ASCW.
 ; Prefix `asw_`.
 ;
 ; A harvest that reads a package this volume's cache does not hold, and a

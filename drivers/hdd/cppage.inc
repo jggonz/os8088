@@ -859,7 +859,9 @@ hd_page_ladder:
                                 ; does not repaint after a click returns, so a
                                 ; pane repaint AFTER wm_show paints straight
                                 ; over the window it has just put up - which is
-                                ; what the Install dialog arrived doing.
+                                ; what the old Install dialog arrived doing.
+                                ; (Install puts up no window of this image's
+                                ; any more: it posts the wizard's launch.)
                                 ; ...and a REFUSED open is the exception to
                                 ; that ordering, because there is no window to
                                 ; paint over: the caption it just set would
@@ -925,7 +927,7 @@ hd_page_repaint:
 ; -----------------------------------------------------------------------------
 ; hd_tool_open - open one of the two windows (module internal)
 ; in:  AL = HDT_FORMAT or HDT_INSTALL
-; out: CF = 0 a window is up; CF = 1 nothing opened and [hd_msgc] says why
+; out: CF = 0 a window is up, or the wizard's launch is posted; CF = 1 nothing opened and [hd_msgc] says why
 ; clobbers: flags
 ;
 ; THE RESIDENT'S NAME AND THE RESIDENT'S CONTRACT, so hd_page_click's two call
@@ -944,8 +946,7 @@ hd_tool_open:
     mov ax, [hd_twin]
     jmp short .chk
 .inst:
-    call hd_iw_open
-    mov ax, [hd_iwin]
+    call hd_inst_post           ; INSTALL.O88, the wizard (SPEC.md 52.10.4)
 .chk:
     or ax, ax                   ; CF = 0, and ZF = 1 = no window went up
     jnz .out
@@ -956,6 +957,103 @@ hd_tool_open:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; hd_inst_post - the Install button: START INSTALL.O88 (SPEC.md 52.10.4)
+; in:  the gfx lock is HELD (a Control Panel click)
+; out: AX = the launch window, 0 = none could be made (all else preserved)
+;
+; THERE IS ONE INSTALLER AND IT IS THE WIZARD. This image used to carry an
+; Install window of its own beside the engine, and the wizard drives the same
+; engine through HDT_PKG (ipkg.inc) - two faces on one stage machine, 1.4KB of
+; this file for the second.
+;
+; POSTED, NOT CALLED: OSAPI_PKG_START wants the UI task with the gfx lock FREE
+; and a Control Panel click holds it. A wake is the one deferral a driver can
+; reach, and a wake needs a WINDOW, so this makes one that is never shown and
+; lives exactly until its own wake: hd_lwake destroys it before it launches.
+; While it exists hd_tbusy answers busy, so the Control Panel cannot free this
+; image between the post and the wake. A second click before the wake reuses
+; it (one queued wake per window, os88api.inc at OSAPI_WM_WAKE).
+; -----------------------------------------------------------------------------
+hd_inst_post:
+    push bx
+    push si
+    mov bx, [hd_lwin]
+    or bx, bx
+    jnz .wake
+    mov si, hd_ltpl
+    call OSAPI_WM_CREATE        ; CF = 1: the window table is full
+    jc .out
+    mov [hd_lwin], bx
+    mov ax, hd_lwake
+    call OSAPI_WM_ONWAKE
+.wake:
+    call OSAPI_WM_WAKE          ; CF = 1, the event ring full, is left: the
+.out:                           ; window stays and the next click kicks it
+    mov ax, [hd_lwin]
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_lwake - the launch window's W_ONWAKE: the UI task, the gfx lock FREE
+;
+; THE BOOT VOLUME'S ROOT, because that is where INSTALL.O88 ships (SPEC.md
+; 117.6) - on the floppy a machine booted from and, after an install, on C:.
+; GOTO_QM and not GOTO_Q, so the name resolves there; the instance's own folder
+; is put back the same way after.
+; -----------------------------------------------------------------------------
+hd_lwake:
+    push es
+    call OSAPI_GFX_LOCK
+    call hd_lkill
+    call OSAPI_GFX_UNLOCK
+    call OSAPI_FILE_HERE        ; BL/DX = where this caller stands
+    push bx
+    push dx
+    call OSAPI_VOL_SYS          ; BL = the volume the machine booted from
+    xor dx, dx
+    call OSAPI_FILE_GOTO_QM
+    jc .fail
+    xor cx, cx                  ; not holding an image...
+    mov dx, cx
+    mov es, cx                  ; ...and no document
+    mov si, hd_s_inspkg
+    call OSAPI_PKG_START
+    jnc .back
+.fail:
+    push ds
+    pop es
+    mov si, hd_s_insfail
+    xor cx, cx
+    call OSAPI_TOAST
+.back:
+    pop dx
+    pop bx
+    call OSAPI_FILE_GOTO_QM
+    pop es
+    ret
+
+; hd_lkill - destroy the launch window if there is one. The gfx lock is HELD
+; (OSAPI_WM_DESTROY's contract); preserves every register
+hd_lkill:
+    push bx
+    xor bx, bx
+    xchg bx, [hd_lwin]
+    or bx, bx
+    jz .out
+    call OSAPI_WM_DESTROY
+.out:
+    pop bx
+hd_lkret:                       ; ...a `ret`, which is the paint the launch
+    ret                         ; window is never asked for
+
+hd_lwin:     dw 0               ; the launch window, 0 = no launch pending
+hd_ltpl:     dw 0, 0, 8, 8, hd_s_inspkg, hd_lkret, 0, 0
+hd_s_insfail: db 'Cannot start '   ; THREE STRINGS IN ONE RUN: the toast,
+hd_s_inspkg: db 'INSTALL'           ; the name it starts, and inst.inc's
+hd_s_o88:    db '.O88', 0           ; package suffix - so nothing goes between
+
 hd_s_page:   db 'Hard Drive', 0 ; THE PAGE'S HEADING, and the resident keeps
                                 ; its own copy for DSV_CPNAME - cp_list
                                 ; letters that one through the kernel's own
@@ -964,7 +1062,7 @@ hd_s_page:   db 'Hard Drive', 0 ; THE PAGE'S HEADING, and the resident keeps
 
 ; --- the page's OWN state, which came over with it (SPEC.md 52.13) ---------
 ; Every one of these was in the resident's bss and had exactly one reader:
-; this file. hd_ndev, hd_sel, hd_rowslot and hd_pair are NOT here - they are
+; this file. hd_ndev and hd_sel are NOT here - they are
 ; hdcom.inc's and so exist in both images already, which is what makes
 ; hd_sync a copy rather than an ABI.
 hd_field:    db 0               ; the C/H/S field the page has selected
@@ -1048,12 +1146,12 @@ hd_s_nodev:   db 'No hard disk found', 0
 hd_s_nogeom:  db 'Geometry unknown: type it', 0
 hd_s_typed:   db 'Geometry set by hand', 0
 hd_s_mounted: db 'Mounted ', 0
-hd_s_vol1:    db ' volume', 0
 hd_s_mnofat:  db 'No FAT partition on it', 0
 hd_s_mhave:   db 'Already mounted', 0
 hd_s_unmounted: db 'Unmounted', 0
 hd_s_mnotab:  db 'No partition table yet', 0
-hd_s_mfull:   db 'No free volume', 0
+hd_s_mfull:   db 'No free'           ; ...and hd_s_vol1 is its tail: ONE run,
+hd_s_vol1:    db ' volume', 0        ; so nothing may be inserted between
 hd_s_mbig:    db 'Partition is over 2GB', 0
 hd_s_nosys:   db 'Need the system disk', 0
 hd_s_notool:  db 'Tool would not open', 0

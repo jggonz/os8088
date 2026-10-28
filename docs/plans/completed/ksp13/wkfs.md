@@ -240,8 +240,8 @@ None.
 One pass after the last code commit, `python3 tools/os88test.py
 soak -k ... --marty-jobs 1`: **24 rows, 24 ok** (1,459 s) - `fcpcopy`,
 `fcpsmall`, `fcpapi`, `fcproom` (FILECP on both kernels, the folder MOVE
-that ends in `dskw_rmtree`/`dskw_fdir`, `dskw_dfree`), `dosdir` (the DOS
-box's `rmdir`, i.e. `dskw_rmbody_n83`), `dskwstage`, `wseq`, `wseqheld`,
+that ends in `dskw_rmtree`/`dskw_fdir`, `dskw_dfree`), `dosdir` (DOS's
+`rmdir`, i.e. `dskw_rmbody_n83`), `dskwstage`, `wseq`, `wseqheld`,
 `wsequnclosed`, `wseqcut`, `wseqioerr`, `wseqfull` (`dws_commit`,
 `dskw_wrp`, `dskw_read_x` tails), `assocstale`, `assocfind`, `assocvol`,
 `assocsweep`, `instassoc` (`assoc_tryvol`'s rung 5 - `instassoc` is the row

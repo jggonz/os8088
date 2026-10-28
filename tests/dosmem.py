@@ -16,7 +16,7 @@ Each arm heads a SUBSECTION, so the pitch is a subsection's height and
 greyed with its reason on the glass, first because `kern_dos` was not written
 and then because it rode a gate disk while `$(SYSROOT)` shipped the plain
 package.  `dos_mem_whole` reads the part table's own length word, so the arm
-is live exactly when the package the box is running from carries `kern_dos` -
+is live exactly when the package DOS is running from carries `kern_dos` -
 and it does now.  So every assertion here is inverted, and what the row
 catches is inverted with it: a shipped floppy that has lost the part, a
 `dos_mem_whole` that has started refusing, or a reason drawn beside an arm
@@ -75,7 +75,7 @@ APPS = "build/apps360.img"
 MACH = "os8088_5150_cga_gla"
 
 # os88ui.inc's record, mirrored here for the same reason the test carries no
-# layout: these are the SDK's offsets and the box does not own them.
+# layout: these are the SDK's offsets and DOS does not own them.
 RD_RECT, RD_ITEMS, RD_N, RD_SEL, RD_PITCH, RD_DIS = 0, 8, 10, 12, 14, 16
 INOS, WHOLE, NARM = 0, 1, 2
 CK_RECT, CK_LABEL, CK_ON = 0, 8, 10     # os88ui.inc's check box
@@ -83,7 +83,7 @@ RDROWH = 20                             # ...and the cap a tall pitch centres in
 DR_SEL, DR_OPEN, DR_TOP = 12, 16, 22    # ...and the DROP-DOWN's, for the dial
 DRIH = 12                               # OS88UI_DRIH, an item's pitch
 # [dos_cache]'s rows - ONE LIST ON BOTH ARMS since SPEC.md 18.95.8 gave the
-# box a door that takes a width (96.36.6). Auto is 0 and is deliberately NOT
+# DOS a door that takes a width (96.36.6). Auto is 0 and is deliberately NOT
 # driven below: on a 640KB machine the kernel's own solve picks 32K, so Auto
 # and 32K read the same figure and a distinctness check over them would fail
 # for a true reason.
@@ -160,7 +160,7 @@ def main():
     with os88ui.boot(SYS, apps=APPS, machine=MACH) as ui:
         m = ui.m
         if not ui.path("A:/APPS/DOS.O88"):
-            fail("could not open the DOS box")
+            fail("could not open DOS")
         os88marty.settle(m)
         dm = dosmap.package()
         pseg = dosmap.instance(m)
@@ -182,7 +182,7 @@ def main():
             fail("OS88UI_RD_N is %d and the page has %d arms"
                  % (rec(m, pseg, dm, RD_N), NARM))
         if rec(m, pseg, dm, RD_SEL) != INOS:
-            fail("the default arm is %d and DOS_MEM_IN is %d - a fresh box "
+            fail("the default arm is %d and DOS_MEM_IN is %d - a fresh DOS "
                  "runs the program inside the OS (SPEC.md 96.25)"
                  % (rec(m, pseg, dm, RD_SEL), INOS))
         dis = rec(m, pseg, dm, RD_DIS)
@@ -311,7 +311,7 @@ def main():
         # a `dos_mem_fix` that demoted anyway would size a link asking for the
         # whole machine against the arm below it and say nothing, which is the
         # same silence the greying exists to prevent. What it can no longer
-        # assert is the demotion ITSELF - that needs a box whose package has no
+        # assert is the demotion ITSELF - that needs a DOS package with no
         # part, and no shipped disk carries one.
         at = (pseg << 4) + dm["dos_keepc"]
         m.write(at, bytes((WHOLE, 0)))

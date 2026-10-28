@@ -151,7 +151,7 @@ def run(machine):
     print(machine)
     with os88ui.boot(os.path.join(BDIR, "os8088-360.img"),
                      apps=os.path.join(ROOT, "build", "apps360.img"),
-                     machine=machine) as ui:
+                     machine=machine, quick=True) as ui:
         m = ui.m
         fails = []
 
@@ -188,7 +188,7 @@ def run(machine):
             ui._wait(lambda: ui._rect(w.i) != (w.x, w.y, w.w, w.h),
                      "the title-bar double-click to zoom %r" % (w.title,),
                      15.0)
-            ui.settle()
+            dc.still(ui)
             return ui._refresh(w)
 
         def small(w):
@@ -215,7 +215,7 @@ def run(machine):
         mover = ui._refresh(mover)
         mover = ui.move_window(mover, *even(mover, *FROM))
         ui.mo.to(4, 4)
-        ui.settle()
+        dc.still(ui)
 
         tx, ty = even(mover, *TO)
         old = (mover.x, mover.y, mover.x + mover.w, mover.y + mover.h)
@@ -255,7 +255,7 @@ def run(machine):
 
         trig = dc.drag_setup(ui, tx - mover.x, ty - mover.y, mover)
         hits = dc.armed(ui, trig, names=MARKS)
-        ui.settle()
+        dc.still(ui)
         got = ui._refresh(mover)
         check((got.x, got.y) != (mover.x, mover.y),
               "SETUP: the drag happened (mover now at %d,%d)" % (got.x, got.y))
@@ -280,7 +280,7 @@ def run(machine):
               % (was, zoomed))
         hits = dc.armed(ui, lambda: ui.mo.dblclick(mover.x + 40, mover.y + 5),
                         names=MARKS)
-        ui.settle()
+        dc.still(ui)
         mover = ui._refresh(mover)
         check((mover.x, mover.y, mover.w, mover.h) == was,
               "SETUP: the restore put it back at %r" % (was,))

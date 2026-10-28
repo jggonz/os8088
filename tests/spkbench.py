@@ -59,8 +59,9 @@ def main():
     bad = []
     with os88ui.boot("build/os8088-360.img", apps=a.apps,
                      machine=a.machine,
-                     why_ibm="the owner's own 5150 ROM" if a.ibm else None) \
-            as ui:
+                     why_ibm="the owner's own 5150 ROM" if a.ibm else None,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         w = ui.path("B:/SPKBENCH.O88")
         rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)

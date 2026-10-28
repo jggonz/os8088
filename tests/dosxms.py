@@ -42,7 +42,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=XMS) as ui:
+    with os88ui.boot(SYS, apps=XMS, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/DOSXMS.COM"):
             fail("double-clicking DOSXMS.COM opened no window")
@@ -53,7 +53,7 @@ def main():
             seen["rows"] = m.screen() or []
             return any("READY" in r for r in seen["rows"])
         try:                            # a GUEST-time budget
-            os88marty.until(m, ready, "DOSXMS.COM to finish", poll=0.3,
+            os88marty.until(m, ready, "DOSXMS.COM to finish", poll=0.05,
                             limit=120.0)
             rows = seen["rows"]
         except os88marty.MartyError:
@@ -93,11 +93,11 @@ def main():
         if "ALIVE" not in text:
             fail("the program did not survive its own int 2Fh calls")
 
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")   # the bracket closed, the UI idle
         if "Disk" not in ui.titles():
             fail("the desktop did not come back after the bracket")
 
+        os88marty.guest_sleep(m, 0.05)  # the glass catching up (UI.still)
         wd, ht, data = m.fbuf()
         os88marty.write_png_rgb("build/dosxms.png", wd, ht, data)
         print("dosxms: build/dosxms.png written")

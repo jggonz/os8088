@@ -180,6 +180,7 @@ transition band: a tone in the 10% above the new Nyquist leaks at most
 import argparse
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -2205,7 +2206,10 @@ def op_counts(path, div=1, mono=False):
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXDIR = os.path.join(ROOT, 'tests', 'xtmp3')
 GOLDEN = os.path.join(FIXDIR, 'X3SIM.txt')
-LAME = os.environ.get('LAME') or '/opt/homebrew/bin/lame'
+# (PATH before Homebrew's prefix: os88test's `lame` capability is LAME= or
+# `lame` on PATH, so a Linux box with /usr/bin/lame ran the row and failed it)
+LAME = (os.environ.get('LAME') or shutil.which('lame')
+        or '/opt/homebrew/bin/lame')
 
 # THE TOLERANCE (NUMERICS.md 4).  Against `lame --decode` (mpglib) at the
 # source rate, and against the float reference at the same divisor at 2 and

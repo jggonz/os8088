@@ -1,6 +1,6 @@
 # Debugging a DOS program under os8088
 
-A DOS program that misbehaves in the box (SPEC.md §96) is **not debuggable
+A DOS program that misbehaves under DOS (SPEC.md §96) is **not debuggable
 from one side**. Our own trace says what we were asked and what we answered,
 and both look right — they looked right through four separate defects in one
 session, every one of which was found only by putting the same program in
@@ -59,7 +59,7 @@ in one pass — docs/FIELD-NOTES.md 54 is the worked example, and it is how
 §96.10.6 was found after two rounds of looking at the wrong subject.
 
 The third row of the table is the one to be ready for. `--state` dumps the PSP, the IVT,
-the BDA and the box's handle table for exactly that case; §96.21.4 is eight
+the BDA and DOS's handle table for exactly that case; §96.21.4 is eight
 PSP fields that were zero here and are not zero under DOS, found that way.
 
 ---
@@ -80,7 +80,7 @@ PSP fields that were zero here and are not zero under DOS, found that way.
 | `tests/dostrap/diskcost.asm` | what one open and one read cost the DRIVE — the only SPEED probe |
 | `tests/dostrap/dfree.asm` | what `AH=36h` answers, for every drive letter |
 | `tests/dostrap/cx0.asm` | what `AH=40h` with `CX=0` does to a file's LENGTH (SPEC.md 96.11.6.2) |
-| `apps/dos/dos.asm`, `%ifdef DOSTRACE` | the box's own ring — **not in any shipped build** |
+| `apps/dos/dos.asm`, `%ifdef DOSTRACE` | DOS's own ring — **not in any shipped build** |
 
 Both Python tools carry `--selfcheck`, which needs no emulator and no network.
 Run them before trusting an answer:
@@ -97,7 +97,7 @@ python3 tools/os88dosdbg.py --selfcheck
 python3 tools/os88fat.py reach GAME.img               # 40-cylinder drive
 python3 tools/os88fat.py reach GAME.img --cylinders 80
 
-# 2. a system disk carrying the traced box (built, then VERIFIED)
+# 2. a system disk carrying the traced DOS (built, then VERIFIED)
 python3 tools/os88dosdbg.py build
 
 # 3. our side
@@ -128,7 +128,7 @@ it**, never transcribed. With no names it prints the set the tool itself uses.
 This exists because nasm will not print a symbol's value and `-f bin` emits no
 map. The trick is to make the assembler emit the numbers: append a signature
 and a `dw` of each name to a copy of the source, assemble, read the words back.
-Use it whenever you want to poke at the box's state from the host.
+Use it whenever you want to poke at DOS's state from the host.
 
 ### `build [--system TARGET] [-o IMG]`
 
@@ -152,11 +152,11 @@ the verify above exists rather than being belt and braces.
 **The third radio arm is greyed on a trace disk**, and that is correct rather
 than a limitation: a `DOSTRACE` build is one image with no part table, so
 `dos_mem_whole` reads zero (SPEC.md 96.36.1). The ring this tool reads lives in
-the box's own bss, and past the handoff there is no box.
+DOS.O88's own bss, and past the handoff there is no DOS.O88.
 
 ### `trace PROG.EXE --disk IMG [--state] [--until N]`
 
-Boots the traced box under MartyPC, double-clicks the program, and reads the
+Boots the traced DOS under MartyPC, double-clicks the program, and reads the
 ring **out of guest memory** — not off the screen. That matters: inside the
 `fsx` bracket the program owns the adapter, so a program that sets Hercules
 graphics has no text screen to read, and `m.screen()` returns the framebuffer
@@ -167,7 +167,7 @@ crash.
 Without it the trace runs to the program's own exit or the ring's cap.
 
 `--state` writes `<out>.psp.bin`, `.ivt.bin`, `.bda.bin` and `.fhtab.bin`
-beside the trace, and prints the box's open handles. Take the same four under
+beside the trace, and prints DOS's open handles. Take the same four under
 DOS (`--state` on `ref` is not implemented; use `cmp` against a known-good run,
 or read the PSP dump directly) whenever the program diverges with no call in
 between.
@@ -193,13 +193,13 @@ Prints the aligned runs, then every gap (with what each side did alone), then
 **two findings that mean opposite things**:
 
 - **The first differing ANSWER** — same instruction, same arguments, different
-  reply. *This is the box being wrong.* Go and read the handler.
+  reply. *This is our DOS being wrong.* Go and read the handler.
 - **The first differing QUESTION** — same instruction, different arguments.
   *The program computed something different*, from state with no call in it:
   the PSP, the BDA, the vectors, its own memory. Reach for `--state`.
 
 Getting *"no call was answered differently"* is a result, not a blank: it says
-nothing the box **says** is the difference, which is most of the search space
+nothing our DOS **says** is the difference, which is most of the search space
 gone in one line.
 
 Both checks are deliberately narrow, and the narrowness is load-bearing —
@@ -282,7 +282,7 @@ takes its 42 KB off the top of the quantity you are measuring.
 It is worth naming because the failure is so plausible. Prince of Persia
 sizes itself from `AH=48h AL=03 BX=FFFF` — *"how much is there?"* — and a
 traced run answered **220 KB** against a real DOS's 393 KB, which reads
-exactly like the box being short of memory by 173 KB. It is not: on the
+exactly like DOS being short of memory by 173 KB. It is not: on the
 shipping build the gap is about a third of that, and the rest was the
 tracer. **Ask the arena question on the SHIPPING build** (`[dos_akb]`, and
 `dos_syms(..., defines=())` — the default is `DOSTRACE`, whose bss offsets do
@@ -322,18 +322,18 @@ which is harder to spot than one that cannot be opened at all.
 
 ## The guest-side probes
 
-They are `.COM` programs, so they run under our box *and* under a real DOS,
+They are `.COM` programs, so they run under our DOS *and* under a real DOS,
 unchanged. Assemble one with `nasm -f bin -o NAME.COM tests/dostrap/NAME.asm`
 and put it on the disk with `os88fat.py add`.
 
 Each of them **waits for a key before exiting**. That is not a courtesy: the
-box's `fsx` bracket ends when the program does and the desktop comes straight
+DOS's `fsx` bracket ends when the program does and the desktop comes straight
 back, so a probe that prints and exits leaves its answers on the screen for a
 few milliseconds.
 
 ### `dosref.asm` — one binary, two DOSes
 
-Puts the questions the box has to answer to *a* DOS and prints what it said.
+Puts the questions our DOS has to answer to *a* DOS and prints what it said.
 The same binary runs on both sides, so the two columns diff with nothing to
 interpret. It is how SPEC.md §96.12.1.2's table was measured, and it found four
 wrong answers in one run.
@@ -354,7 +354,7 @@ one buffer.
 
 ### `twoopen.asm` — the file, or the second handle?
 
-The box has **one** read window; a program reading two files at once is
+DOS has **one** read window; a program reading two files at once is
 ordinary. Three cases in one run: X alone, Y alone, both open at once. A and B
 passing with C failing is the window (SPEC.md §96.11.5 is that bug); all three
 failing is the file; B alone failing is usually the disk — go back to `reach`.
@@ -376,7 +376,7 @@ nasm -f bin -DNOPEN=1 -DNREAD=4 -DCHUNK=8192  -o D4.COM tests/dostrap/diskcost.a
 ```
 
 `(D2 − D1) / 3` is one open and `(D4 − D3) / 3` is one 8KB read. Every point
-carries the identical fixed cost — the file manager loading it, the box
+carries the identical fixed cost — the file manager loading it, DOS
 claiming its arena — so that cost cancels and never has to be known. The same
 binaries run under a real DOS, which is the whole point: *"we make seven times
 the `int 13h` calls"* is a ratio nobody can act on, and *"one open costs us N
@@ -399,7 +399,7 @@ Three traps, all paid for once:
 
 ### `vecs.asm` — the vectors DOS OWNS, and the calls that go through them
 
-The box installed seven of DOS's own vectors and left fourteen at
+Our DOS installed seven of DOS's own vectors and left fourteen at
 `0000:0000`, which is **not** *unimplemented* — an `int` through a null vector
 executes the vector table, and there is no way to test for it beforehand
 because *the probe is the call*. Nothing in our own `INT 21h` trace looks wrong
@@ -416,7 +416,7 @@ Five lines, and the first four are identical on both machines:
 
 `CF` and `AX` on the `25` line are **not** comparable and the probe judges
 nothing: IBM DOS reads sector 0 of drive A and succeeds (`CF0 AX=0100`), this
-box refuses (`CF1 AX=0C01`). `SPD` is the finding — `INT 25h` and `INT 26h`
+DOS refuses (`CF1 AX=0C01`). `SPD` is the finding — `INT 25h` and `INT 26h`
 are the only calls of the era that do not `iret`, DOS leaving the `FLAGS` word
 the `INT` pushed on the stack for the caller to pop, so a handler that `iret`s
 answers correctly and unbalances the caller by two bytes. That faults somewhere
@@ -433,7 +433,7 @@ It reads sector 0 of drive A, which is a read, so neither disk is at risk.
 
 `AH=4Ah` grows a block only into the block immediately above it. That is DOS's
 rule; what DOS *also* does is **coalesce adjacent free blocks during the
-allocation walk**, and a box that implements the first half without the second
+allocation walk**, and a DOS that implements the first half without the second
 refuses a block smaller than one it has already granted.
 
 The five steps are every DOS memory manager's own shape, in eighths of the
@@ -441,7 +441,7 @@ largest block there is: take the lot, give half back, take three quarters, give
 half back, take seven eighths. **Step 5 asks for less than step 2 was given**,
 so `cf=1` there is the finding with nothing to interpret.
 
-    IBM DOS 3.30            this box
+    IBM DOS 3.30            this DOS
     MAX=93AE                MAX=6D9E
     ask=93AE cf=0 bx=93AE   ask=6D9E cf=0 bx=6D9E
     …                       …
@@ -475,7 +475,7 @@ a file between directories of one volume by re-linking it. So the question a
 probe has to answer is not *"does rename work"* — it is which shapes DOS
 refuses, which it does silently, and with what codes.
 
-Measured, IBM DOS 3.30 against this box, same binary, every drive letter
+Measured, IBM DOS 3.30 against this DOS, same binary, every drive letter
 built at run time from `AH=19h` so that both columns mean the same thing:
 
 ```
@@ -582,7 +582,7 @@ system disk in A: and no hard disk at all, and print for each shape:
 ```
 *.*         AX=0000 CF=0 CUR=1 FOUND=DRVNAME.COM
 A:*.*       AX=0000 CF=0 CUR=1 FOUND=COMMAND.COM      <- IBM DOS 3.30
-A:*.*       AX=0000 CF=0 CUR=1 FOUND=DRVNAME.COM      <- this box, before
+A:*.*       AX=0000 CF=0 CUR=1 FOUND=DRVNAME.COM      <- this DOS, before
 ```
 
 Three of those five columns matter and the obvious one matters least:
@@ -647,7 +647,7 @@ it.
 
 `_dump_state` in `os88dosdbg.py` is four `m.read` calls. Anything the guest can
 see, the host can: `dos_syms` gives you any bss offset by name, and
-`os88geom.windows` finds the box's arena. Dump it as raw binary beside the
+`os88geom.windows` finds DOS's arena. Dump it as raw binary beside the
 trace so `cmp` says everything.
 
 ### Add a probe
@@ -682,7 +682,7 @@ print one line per case, and wait for a key. Keep it assembling with
   run once the offset is right, and drifts if it is not.
 
 - **AND SET THE SAME ENVIRONMENT, OR THE TWO SIDES RUN DIFFERENT PROGRAMS.**
-  `COMMAND.COM` hands out `COMSPEC=` and whatever the user set; the box hands
+  `COMMAND.COM` hands out `COMSPEC=` and whatever the user set; our DOS hands
   out `BLASTER=` when it unloaded a sound card on the way in (SPEC.md 96.17),
   and since SPEC.md 96.44.13.1 a `PATH=` when it has nothing else to say. A
   program that picks a device off `BLASTER=` then opens **different files**,
@@ -701,10 +701,10 @@ print one line per case, and wait for a key. Keep it assembling with
   see an untouched machine; use the monitor when the question is *where do
   these two runs part*, which is most of the time.
 
-- **THE TRACE DISK HAS A SMALLER ARENA THAN THE SHIPPED BOX, and a program that
+- **THE TRACE DISK HAS A SMALLER ARENA THAN THE SHIPPED DOS, and a program that
   refuses under the tracer is refusing the TRACER.** This is first because it
   has cost **eight** separate wrong diagnoses, every one of them the same
-  sentence — *"the program will not run, so the box is short of memory"* — about
+  sentence — *"the program will not run, so DOS is short of memory"* — about
   a program that launches perfectly on a plain build. A `DOSTRACE` package
   carries the ring and the rendered dump as an `OP_ASSET` part (SPEC.md
   §96.29.1), so **the part is claimed out of the heap before the arena is**, and
@@ -714,7 +714,7 @@ print one line per case, and wait for a key. Keep it assembling with
   **The rule: a refusal seen under the tracer is not a measurement until it has
   been reproduced without it.** Run the program off `build/os8088-360.img` (or
   whatever geometry you were on) with no `--build` and no `--kernel`, and only
-  then say anything about memory. The box's own arena figure is on the Setup
+  then say anything about memory. DOS's own arena figure is on the Setup
   page and `[dos_akb]` is the word behind it, so the A/B takes one boot.
 
   The cost was written down in three places before this one — in `dos.asm` at
@@ -745,7 +745,7 @@ print one line per case, and wait for a key. Keep it assembling with
 - **Reading the PROGRAM's buffer from the host, after the fact.** A trace entry
   records where an output buffer *was*; the program has reused it by the time
   anything on the host looks. `AH=47h` was read back as answering an **empty**
-  path, twice, and an afternoon went into why — the box was answering
+  path, twice, and an afternoon went into why — DOS was answering
   `\PRINCE` correctly all along, and a probe that copied the answer **in the
   guest, at the instant the slot returned**, said so in one run. Bank it where
   the program cannot reach, or do not quote it.
@@ -759,7 +759,7 @@ print one line per case, and wait for a key. Keep it assembling with
   is the worked example: an `AH=3Dh open` answered "no such file" with every
   piece of state around it reading correct, because an earlier `AH=47h` had
   written a directory sector into the program's own memory. When the diff says
-  the box is wrong at one instruction and the state at that instruction is
+  DOS is wrong at one instruction and the state at that instruction is
   right, the question is **who wrote to this program**, not what this call
   did.
 
@@ -767,7 +767,7 @@ print one line per case, and wait for a key. Keep it assembling with
 
 ## Where the contract lives
 
-SPEC.md §96 is what the box promises; this file is how to find out where it
+SPEC.md §96 is what DOS promises; this file is how to find out where it
 does not keep the promise. The sections most often reached from a trace:
 
 | | |

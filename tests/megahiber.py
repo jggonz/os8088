@@ -60,42 +60,43 @@ def main():
         if not box.wait_for("kern_mega: protected mode", 300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
-        time.sleep(20)
+        # every wait below is on the guest's state (os88bochs.Box) where
+        # 20 + 10 + 8 + 20 + 3 + 20 + 10 s were slept, and the hibernate's
+        # end is the sentence it puts on the TEXT screen, not 30 s of E9
+        # silence
+        box.up()
         box.capture()
-        ob.dbl(591, 160)                # C:
-        time.sleep(10)
-        ob.dbl(150, 123)                # RUN
-        time.sleep(8)
-        ob.dbl(160, 155)                # MEGAHIB
+        box.dbl(591, 160, "C:'s Disk window")
+        box.dbl(150, 123, "RUN's listing")
+        box.goto(160, 155)              # MEGAHIB
+        box.xd("click", "--repeat", 2, "--delay", 120, 1)
         if not box.wait_for("MEGAHIB: held", 60):
             fails.append("MEGAHIB never held its block")
-        time.sleep(20)
-        ob.goto(300, 84)                # RUN's title: the front window
-        ob.xd("click", 1)
-        time.sleep(3)
-        ob.dbl(160, 171)                # Mines
-        time.sleep(20)
+        box.ui_done("MEGAHIB's window")
+        box.click(300, 84, "RUN to the front")  # RUN's title
+        box.dbl(160, 171, "Mines' window")      # Mines
         before = len(traps(box.lines()))
-        ob.goto(10, 5)                  # System menu > Hibernate...
-        ob.xd("mousedown", 1)
+        box.goto(10, 5)                 # System menu > Hibernate...
+        box.xd("mousedown", 1)
         for _ in range(5):              # 83 guest pixels, two X pixels each
-            ob.rel(0, 30)
-        ob.rel(0, 16)
+            box.xd("mousemove_relative", "--", 0, 30)
+            time.sleep(0.04)
+        box.xd("mousemove_relative", "--", 0, 16)
         time.sleep(0.5)
-        ob.xd("mouseup", 1)
-        time.sleep(10)
-        ob.goto(225, 225)               # Hibernate
-        ob.xd("click", 1)
-        end = time.time() + 400         # the off screen has no E9 line of
-        last, lt = None, time.time()    # its own: the trap lines stop
-        while time.time() < end:
-            n = len(box.lines())
-            if n != last:
-                last, lt = n, time.time()
-            elif time.time() - lt > 30:
-                break
-            time.sleep(2)
-        ob.shot(os.path.join(out, "hibernated.png"))
+        box.xd("mouseup", 1)
+        box.ui_done("the Hibernate dialog")
+        box.goto(225, 225)              # Hibernate
+        box.xd("click", 1)
+
+        def off():
+            t = box.read(0xB8000, 160 * 6)[0::2].decode("latin-1")
+            return "hibernated" in t
+        try:
+            box.until(off, "the hibernate's `os8088 has hibernated`", 400,
+                      poll=1.0)
+        except RuntimeError as e:
+            fails.append(str(e))
+        box.shot(os.path.join(out, "hibernated.png"))
         lines = box.lines()
     finally:
         box.stop()
@@ -116,18 +117,16 @@ def main():
         if not box.wait_for("kern_mega: protected mode", 300):
             fails.append("the second boot never reached protected mode")
         else:
-            time.sleep(20)
+            box.up()                    # the desktop and its Resume card
             box.capture()
-            ob.goto(225, 225)           # Resume
-            ob.xd("click", 1)
+            box.goto(225, 225)          # Resume
+            box.xd("click", 1)
             if not box.wait_for("kern_mega: resumed", 120):
                 fails.append("no `kern_mega: resumed`")
-            time.sleep(20)
-            ob.shot(os.path.join(out, "resumed.png"))
-            ob.goto(140, 330)           # MEGAHIB's window, and a key
-            ob.xd("click", 1)
-            time.sleep(2)
-            ob.xd("key", "a")
+            box.ui_done("the resumed desktop")
+            box.shot(os.path.join(out, "resumed.png"))
+            box.click(140, 330, "MEGAHIB to the front")  # ...and a key
+            box.xd("key", "a")
             if not box.wait_for("MEGAHIB: ok", 30):
                 fails.append("MEGAHIB did not read its 64KB back: %s" % [
                     l for l in box.lines() if l.startswith("MEGAHIB")])

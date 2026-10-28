@@ -117,12 +117,12 @@
 ; ZEROS IN THE FILE COST NOTHING ON DISK: this is `OP_SEG | OP_COMP` part, and
 ; a run of zeros is what LZ4 is best at. What it does cost is the host's RAM,
 ; which is why `CORE_MAX`'s slack is a number worth keeping small.
-%ifndef KD_BACKEND                  ; THE BOX'S reservation only: kern_dos makes
+%ifndef KD_BACKEND                  ; DOS.O88's reservation only: kern_dos makes
 %ifdef DOS_EXTCORE                  ; its own in kerndos/kdos.asm, above its
                                     ; API refusal wall, and would otherwise
                                     ; make a second one here
   %if ($ - $$) > CORE_ORG
-    %error "the box's own header and icon reached CORE_ORG - raise it in \
+    %error "DOS.O88's own header and icon reached CORE_ORG - raise it in \
 apps/dos/doscall.inc. Since SPEC.md 96.44.6 this side is what BINDS it: the \
 header, the icon, the association block and the document glyph end at 128 \
 and kern_dos's own fixed header is eight bytes, so CORE_ORG is cut from THIS \
@@ -154,7 +154,7 @@ DSHW_REDIR  equ 7               ; a redirection target that is not NUL
 DSHW_NOCMD  equ 8               ; no such verb - which from a prompt means
                                 ; "try it as a program" (SPEC.md 96.33.3)
 DSHW_NODRV  equ 9               ; `X:` named a drive that is not there
-DSHW_BADSW  equ 10              ; a switch this box has not got (96.33.9)
+DSHW_BADSW  equ 10              ; a switch this DOS has not got (96.33.9)
 
 DOS_MIN_KB  equ 64                  ; a machine that cannot offer this much has
                                     ; nothing worth running a DOS program in,
@@ -179,7 +179,7 @@ DOS_MIN_KB  equ 64                  ; a machine that cannot offer this much has
 ; is not an assembly-time mirror - `kern_dos`'s floor moves with its own image
 ; and a gate on it would fail this build every time that image changed a byte
 ; - but a RUN: `tests/dosram.py` puts a program through arm 3 and compares
-; what the page promised against the arena the box carries home (96.41.1).
+; what the page promised against the arena DOS carries home (96.41.1).
 DOS_LOWKB   equ 1                   ; KB below KERNEL_SEG: the IVT, the BDA and
                                     ; the boot area. 0x0060 paragraphs is 1.5
                                     ; and this rounds DOWN, which is the
@@ -289,7 +289,7 @@ DOS_TR33_SZ equ 8                           ; count, then BX, CX and DX AS THEY
                                             ; picks the software cursor over
                                             ; the hardware one
 DOS_TR33_CB  equ DOS_TR33_N * DOS_TR33_SZ   ; ...and ONE MORE SLOT, counting
-                                            ; the callbacks the box actually
+                                            ; the callbacks DOS actually
                                             ; MADE. Without it `the program
                                             ; asked for events and did nothing
                                             ; further` has two readings - we
@@ -385,7 +385,7 @@ DOS_FRAMEH  equ DOS_CONROWS * 8 + DOS_BARH + TITLE_H + 1
 ; 640x200 CGA - which is the geometry that binds (SPEC.md 39).
 ; THE ENVIRONMENT PAGE (SPEC.md 96.20). Four rows because four fits a 640x200
 ; CGA under the status lines with the buttons still on the glass, and because
-; the DOS programs this box exists for want one or two: BLASTER= is written
+; the DOS programs DOS exists for want one or two: BLASTER= is written
 ; for them and a SOUND= or an MTCPCFG= is the whole of what most of the rest
 ; ask for. The width is what a `NAME=C:\LONGISH\PATH` needs.
 DOS_ENVN    equ 4                   ; rows
@@ -445,8 +445,9 @@ LNK_BX_NOMOU equ 0x04               ; page as a double click opens it: Hard
                                     ; mouse NOT - and NOMOU is that box ticked
 LNK_BX_NOHMA equ 0x08               ; ...and kern_mega's `Load DOS in the HMA`
                                     ; (SPEC.md 96.40.9.2), ticked by default,
-                                    ; so set = UNTICKED. A box with no such row
-                                    ; ignores the bit, and drops it on a save
+                                    ; so set = UNTICKED. A build with no such
+                                    ; row ignores the bit, and drops it on a
+                                    ; save
 LNK_BX_SAVE equ 0x10                ; ...and its `Save the session to disk`
                                     ; (96.40.9.3), UNticked by default, so set
                                     ; = TICKED
@@ -704,7 +705,7 @@ DOS_MEM_N     equ 2                 ; how many arms, for OS88UI_RD_N
 ; What went with it is the whole per-arm apparatus - `[dos_cachei]`,
 ; `[dos_mdrwas]`, the swap, the second item table and the clamp that guarded
 ; two different lengths. With one list there is no pick to park.
-DOS_CA_AUTO   equ 0                 ; what the box picks - 9 KB on arm 1 today
+DOS_CA_AUTO   equ 0                 ; what DOS picks - 9 KB on arm 1 today
 DOS_CA_32     equ 1                 ; 7 runs
 DOS_CA_18     equ 2                 ; 4 runs
 DOS_CA_9      equ 3                 ; 2 runs
@@ -745,7 +746,7 @@ DOS_LNSZ    equ 20
 DSH_LINE    equ 128                 ; DOS's own command tail is a counted byte,
                                     ; so 127 is the longest there has ever been
 DSH_ARG     equ 64                  ; one argument - longer than any 8.3 path
-                                    ; this box can walk, so a truncation here
+                                    ; this DOS can walk, so a truncation here
                                     ; is a path that was going to be refused
 DSH_PAT     equ 11                  ; a padded 8.3 name, the form a match is
                                     ; decided in
@@ -773,7 +774,7 @@ DST_CPWAIT  equ 4                   ; ...and it is waiting for the heap to be
 
 ; --- INT 33h's VIRTUAL SCREEN (SPEC.md 96.10), which is not the machine's ----
 ; A mouse driver's coordinates are a 640x200 grid whatever the adapter is
-; doing, and BOTH hosts hand `dos_mou_read` that grid: the windowed box scales
+; doing, and BOTH hosts hand `dos_mou_read` that grid: the windowed DOS scales
 ; the kernel's pointer into it in `dos_hk_mouse` (dividing by the REAL screen,
 ; which is what `[dos_vw]`/`[dos_vh]` hold there - 640x480 on a VGA), and
 ; `kern_dos` accumulates into it directly. So the window SPEC.md 96.10.7 maps
@@ -781,8 +782,8 @@ DST_CPWAIT  equ 4                   ; ...and it is waiting for the heap to be
 ;
 ; **THAT IS A DEFECT THIS FILE ALREADY HAD ONCE, MEASURED**: cutting the map
 ; from `[dos_vw]`/`[dos_vh]` reads correctly on `kern_dos`, where they are 640
-; and 200, and scales y a second time in the box - `MOURANGE.COM` asked for
-; 0..199, stood the pointer at y=60 and was answered 25.
+; and 200, and scales y a second time in the windowed DOS - `MOURANGE.COM`
+; asked for 0..199, stood the pointer at y=60 and was answered 25.
 M33_VW      equ 640
 M33_VH      equ 200
 
@@ -877,6 +878,13 @@ dos_entry:
     mov [dos_trseg], ax
     mov [dos_m33seg], ax            ; ...and the CORE's own copy, which is what
                                     ; `dos_int33` may name (SPEC.md 96.10.3)
+    mov al, OP_CARVE                ; **AND THE PART MAY MOVE** (SPEC.md
+    call op_movable                 ; 96.29.1.2, NO-PINNING 2): both words are
+                                    ; banked, and dos_trmove asks op_seg for
+                                    ; them again after a move. CF=1 is the
+                                    ; OP_OPT refusal (no carve) and costs
+                                    ; nothing. dos_run pins it for the stretch
+                                    ; a program runs and the dump is written
     pop es
 %endif
 
@@ -891,6 +899,11 @@ dos_entry:
     push dx
     mov ax, bx                      ; **AND THE BUTTONS' GESTURE** (SPEC.md
     mov bx, dos_btrec               ; 20.5.1.3): btninit installs all THREE
+    mov word [bx+OS88UI_BT_PLACE], dos_bplace   ; (a HBSS record, so its
+                                    ; place proc is stored by hand: the
+                                    ; library lays the page out from where
+                                    ; the window IS before every hit test,
+                                    ; SPEC.md 20.5.1.3.5)
     mov si, dos_onup                ; slots - the press, the release and the
     mov di, dos_ondrag              ; tracking edge - and none of them is a
     mov dx, dos_click               ; template word except the press, which
@@ -908,7 +921,7 @@ dos_entry:
                                     ; ANSWER is discarded; the asking is the
                                     ; whole point, and it is what keeps the
                                     ; feature costing a machine that never
-                                    ; opens this box exactly nothing
+                                    ; opens DOS exactly nothing
 %endif
 
 %ifdef DOS_MEGA                     ; (kern_mega: the proc keeps dos_dsel,
@@ -1084,7 +1097,7 @@ dos_entry:
     ; where nothing runs: a `.LNK` on B:, arm 3, and Cancel at SPEC.md 96.42's
     ; question. `dos_wholedone` records the refusal and returns with
     ; `[dos_state]` still DST_READY and nothing to undo, which is right - and
-    ; left `A:\>` on the glass over a box standing on B:.
+    ; left `A:\>` on the glass over a DOS standing on B:.
     call dos_prompt                 ; ...and BEFORE the `clc`: it spends the
 %endif                              ; flags, and the CF here is the loader's
     mov bx, [dos_win]
@@ -1138,7 +1151,7 @@ dos_wake:
     ;
     ; It is tested BEFORE the state machine for `dos_pkgq`'s reason: this is
     ; not `run it again`, it is the answer to a run that already happened, and
-    ; a box sitting at DST_READY would otherwise launch the program a second
+    ; a DOS sitting at DST_READY would otherwise launch the program a second
     ; time on the very wake that says it finished.
     mov ax, [dos_kdh + KDH_CODE]
     cmp ax, KDH_NOCODE
@@ -1152,12 +1165,12 @@ dos_wake:
     jmp short .said                 ; for a program that was never on the disk.
 .ran:                               ; kern_dos sends a DER_* now, so this is one
     mov [dos_exit], al              ; `and` and a store and dos_err_line says
-    mov byte [dos_state], DST_RAN   ; the words the box already had
+    mov byte [dos_state], DST_RAN   ; the words DOS already had
 .said:
     ; **AND THE ARENA IT WAS GIVEN** (SPEC.md 96.41.1), which came home in the
-    ; next cell. The box cannot work this one out: `[dos_akb]` is `dos_run`'s
-    ; banked figure and on this arm `dos_run` posted and returned without ever
-    ; claiming, so what stands there is the last WINDOWED launch's number or
+    ; next cell. The windowed DOS cannot work this one out: `[dos_akb]` is
+    ; `dos_run`'s banked figure and on this arm `dos_run` posted and returned
+    ; without ever claiming, so what stands there is the last WINDOWED launch's number or
     ; nothing at all - and either reads like an answer.
     mov ax, [dos_kdh + KDH_AKB]
     mov [dos_akb], ax
@@ -1208,7 +1221,7 @@ dos_wake:
                                     ; packed BOTH ways: dos_run picks up at the
                                     ; claim, and plain OSAPI_MEM_AVAIL is exact
 %ifdef DOSKPART
-    ; --- A RESUME THIS BOX NEVER SAW (SPEC.md 96.35.5) ---------------------
+    ; --- A RESUME THIS DOS NEVER SAW (SPEC.md 96.35.5) ---------------------
     ; **AFTER THE DST_CPWAIT TEST AND THAT IS THE WHOLE GUARD.** A wake can
     ; find `[dos_drvout]` set for exactly two reasons: the compaction wait,
     ; where the drivers stay out ON PURPOSE and the line above has already
@@ -1219,7 +1232,7 @@ dos_wake:
     ; That second reason is the COLD boot: a DOS program that crashes, or a
     ; machine switched off with one running, comes home by Resume rather than
     ; by the live return, and `hbm_wake` reaches `wm_wake` only when it has an
-    ; exit code to deliver - so this box is restored onto the desktop with its
+    ; exit code to deliver - so this DOS is restored onto the desktop with its
     ; flag set and no wake ever sent. The kernel unions `[hb_susp]` into its
     ; own reload for that door, so the card is already back by here; what is
     ; left is OUR flag, and left set it makes the next `dos_drv_take`
@@ -1313,7 +1326,7 @@ dos_run:
     ; into `.out`, which runs `dos_con_ended` - so a successful post printed
     ; *"ended, exit code 000"* and the arena INTO THE CONSOLE, before the
     ; machine had been handed over and about a program that had not started.
-    ; The field read it as the box loading something in order to exit. Every
+    ; The field read it as DOS loading something in order to exit. Every
     ; reason `.outq` exists for applies here and only the `[dos_cpw]` store
     ; does not: the post is spent, and a compaction wake's flag left set would
     ; survive inside the image and make the NEXT launch in this instance skip
@@ -1509,6 +1522,15 @@ dos_run:
     mov al, DER_BIG
     jmp short .freeerr
 .ready:
+%ifdef DOSTRACE
+    mov al, OP_CARVE                ; THE TRACE PART IS PINNED FROM HERE TO THE
+    call op_pin                     ; DUMP (SPEC.md 96.29.1.2): the program runs
+                                    ; in the bracket below, its INT 21h calls
+                                    ; trace into the part and claim (a mount's
+                                    ; read-ahead, the file window) on the UI
+                                    ; task - which is the task that compacts.
+                                    ; Only DX and the flags are spent
+%endif
 
     call OSAPI_GFX_LOCK             ; ...and only NOW, because fsx_run wants it
     mov ax, dos_fsx_main            ; held and nothing above this may pay for it
@@ -1536,8 +1558,12 @@ dos_run:
     mov byte [dos_state], DST_ERR
 .free:
 %ifdef DOSTRACE
-    call dos_trace_dump             ; ...and the field gets to read it too
-%endif
+    mov al, OP_CARVE                ; pinned again for the paths that never
+    call op_pin                     ; reached .ready: the dump's FILE_WRITE is
+    call dos_trace_dump             ; ES:BX INTO the part, across the kernel's
+    mov al, OP_CARVE                ; own claims (SPEC.md 66.5.7.1) ...and the
+    call op_movable                 ; field gets to read it too. MOVABLE AGAIN:
+%endif                              ; no program, no dump, nothing holds it
     mov dx, [dos_arena]
     or dx, dx
     jz .out
@@ -2407,7 +2433,7 @@ dos_int24:                              ; DOS's critical-error contract: AL = 3
 ; that irets here unbalances the caller's stack by two bytes - a fault that
 ; lands somewhere else entirely and looks like anything but this.
 ;
-; A refusal rather than a body. The public disk surface of this box is file-
+; A refusal rather than a body. The public disk surface of this DOS is file-
 ; and volume-level on purpose, and a program writing raw sectors underneath a
 ; mounted volume with a live cache is the one thing there is no safe answer
 ; to. An honest error is an answer a disk utility can print; address zero is
@@ -2455,7 +2481,7 @@ dos_int29:
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
-; Every vector the box owns, and last the ones a real IBM DOS 3.30 fills with
+; Every vector DOS owns, and last the ones a real IBM DOS 3.30 fills with
 ; one `iret` - measured rather than listed out of a book.  Read through CS:
 ; see dos_hook_vectors.
 dos_ivtab:
@@ -2603,7 +2629,7 @@ dos_build_psp:
     ; --- ...AND NEVER AN EMPTY SET (SPEC.md 96.44.13.1) ----------------------
     ; **A REAL DOS HAS NO SUCH THING**: COMMAND.COM puts `COMSPEC=` in every
     ; environment it hands out, so the first byte a program reads there is a
-    ; letter and never the set's own terminator. This box's set is BLASTER=
+    ; letter and never the set's own terminator. This DOS's set is BLASTER=
     ; plus whatever the user typed, and on a machine with no sound card and an
     ; empty Environment page that is NOTHING - a block that begins with the NUL
     ; that ends it.
@@ -2799,7 +2825,7 @@ dos_psp_make:
     ; a data field - so a CALL 5 aimed at it never served CP/M on any kernel.
     ; dos_cpm below is paragraph-aligned, so it is CS:dos_cpm written with the
     ; size field as the offset: segment = CS + dos_cpm/16 - offset/16.
-    ;   * It fits a word: the windowed box (a heap region, above 64KB).
+    ;   * It fits a word: the windowed DOS (a heap region, above 64KB).
     ;   * It goes below 0: kern_dos low in memory. The segment wraps, and the
     ;     call reaches dos_cpm through the 1MB wrap - which is where the old
     ;     field's own wrap took a low PSP, and how IBM DOS 3.30's CALL 5 works.
@@ -3043,7 +3069,7 @@ dos_int21:
                                     ; would push over that frame; the SP we
                                     ; arrived on is below it (SPEC.md 96.7.2)
     mov ax, [cs:dos_sv_ss]          ; THE STACK dos_be_go ALREADY BORROWS: the
-    mov ss, ax                      ; UI task's on the box (SPEC.md 96.4.1)
+    mov ss, ax                      ; UI task's in DOS.O88 (SPEC.md 96.4.1)
     mov sp, [cs:dos_dstk]           ; and kern_dos's own where there is no
                                     ; kernel, so nothing new is claimed
 .keepsp:
@@ -3115,7 +3141,7 @@ dos_int21:
 .hifn:                              ; above the table: 68h and 6Ah (commit
     cmp ah, 0x68                    ; and extended commit) are the only two,
     je .hidsk                       ; and 69h between them is not a call this
-    cmp ah, 0x6A                    ; box answers
+    cmp ah, 0x6A                    ; DOS answers
     jne .bad
 .hidsk:
     jmp .dskreset
@@ -3729,7 +3755,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; A SEARCH THAT MATCHED NOTHING ANSWERS 18, THE SAME AS ONE THAT RAN OUT,
     ; and the distinction this once drew is one DOS does not (SPEC.md
     ; 96.12.1.2). MEASURED, by running one binary under IBM DOS 3.30 and under
-    ; this box: a name that is not there in a directory that IS answers 0012h,
+    ; this DOS: a name that is not there in a directory that IS answers 0012h,
     ; and 0002h is not what DOS says for it at all. What DOS answers 3 for is
     ; the DIRECTORY not being there, which `dos_fh_name` above has already
     ; refused by the time this runs.
@@ -3764,7 +3790,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; AL, which for this call every program does, is told its plain name HAD
     ; WILDCARDS IN IT. Measured over eleven inputs under IBM DOS 3.30
     ; (tests/dostrap/parsefcb.asm): CF is clear on every one, the invalid
-    ; drive included. SPEC.md 96.22's shape for the fourth time in this box.
+    ; drive included. SPEC.md 96.22's shape for the fourth time in this DOS.
     ;
     ; THE SEGMENTS ARE WHY IT IS THREE PHASES. The name is in the program's
     ; DS, the FCB in the program's ES, and the separator table in OURS - so it
@@ -4102,7 +4128,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; AH=47h: DL = the drive (0 = current, 1 = A), DS:SI = a 64-byte buffer.
     ; The path goes in WITHOUT its leading backslash, which is DOS's shape.
     ;
-    ; IT IS OSAPI_FILE_PATH's ANSWER NOW, not a string this box maintained on
+    ; IT IS OSAPI_FILE_PATH's ANSWER NOW, not a string this DOS maintained on
     ; the way down. The buffer, the level tables and the depth counter all
     ; existed because a package could not ask where it was standing; SPEC.md
     ; 19.2.4 is that question, and answering it here deletes the bookkeeping
@@ -4352,7 +4378,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
                                     ; a lower one, because a program branches
                                     ; on it (DOS-EXEC-PLAN 12 q1) - and 3.31
                                     ; was half a release above the machine this
-                                    ; box is measured against, for no feature
+                                    ; DOS is measured against, for no feature
                                     ; it has. BX and CX are the OEM and serial,
                                     ; and 0/0 is what IBM DOS 3.30 answers too
 
@@ -4413,14 +4439,14 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     push si                         ; are the program's here - and SI STAYS
     call dos_fh_slot                ; alive across the reads below, which is
     jc .ioc_fbad                    ; what the two fixes here both needed
-    mov dl, [si+FH_VOL]             ; **THE HANDLE'S OWN DRIVE, NOT THE BOX'S**
+    mov dl, [si+FH_VOL]             ; **THE HANDLE'S OWN DRIVE, NOT DOS'S**
     and dl, 0x3F                    ; (SPEC.md 96.7.1.2). Bits 0-5 are the drive
     xor dh, dh                      ; the FILE is on and [dos_vol] is where the
                                     ; PROGRAM is standing; they are the same
                                     ; number until a program opens `B:NAME`
                                     ; from A:, and IBM DOS 3.30 answers 0041h
                                     ; for exactly that - the file's drive, with
-                                    ; the box on A:. BIT 7 CLEAR = a file,
+                                    ; DOS on A:. BIT 7 CLEAR = a file,
                                     ; which is the whole question asked
     test byte [si+FH_FLAGS], FHF_WROTE
     jnz .ioc_fok                    ; **BIT 6 IS "HAS NOT BEEN WRITTEN
@@ -4799,7 +4825,7 @@ dos_tr_hex4:
 ;
 ; The ring is unreadable from inside the guest - a DOS program owns the screen
 ; - and reading it off the host needs a debugger the field does not have. So
-; the box writes it: one file, plain text, in the directory the program was
+; DOS writes it: one file, plain text, in the directory the program was
 ; launched from, replaced on every run.
 ;
 ; UI-TASK CONTEXT, which is why it hangs off the end of the bracket and not
@@ -5123,13 +5149,13 @@ dos_tty:
     push bx
     ; --- THE HOST MAY TAKE IT (SPEC.md 96.44.3) ----------------------------
     ; `DHK_TTY` answers CF=0 when it has put the character somewhere of its
-    ; own - the box's console, which is where AH=02h/09h/40h go while the
+    ; own - DOS's console, which is where AH=02h/09h/40h go while the
     ; window is up (96.33). `kern_dos` sets no hook: the bracket is up from
     ; `kd_entry` to `int 19h`, the program owns the screen, and the ROM's
     ; teletype below is the only arm there has ever been on that host.
     ;
     ; A HOOK AND NOT A `%ifndef`, because the core is assembled ONCE (96.44):
-    ; a build-time arm would be the box's or kern_dos's, never both.
+    ; a build-time arm would be DOS.O88's or kern_dos's, never both.
     ; **`cs:` AND IT IS NOT DECORATION** (SPEC.md 96.33): AH=09h, AH=40h and
     ; AH=02h all reach here with DS holding the PROGRAM's segment, off the
     ; gate's frame - so a DS-relative read of our own word lands in the
@@ -5434,7 +5460,7 @@ dos_be_xcopy:
 dos_be_go:
     ; --- THE ORDINAL BECOMES AN ADDRESS HERE (SPEC.md 96.44.1) -------------
     ; **THE CORE MAY NOT NAME A `dos_k_*`.** Each host has its own back end -
-    ; the box's goes to `OSAPI_*` cells and `kern_dos`'s straight to the disk
+    ; DOS.O88's goes to `OSAPI_*` cells and `kern_dos`'s straight to the disk
     ; layer - so a door that stored the address of one could only ever be
     ; assembled INTO that host. It stores `DBE_*` instead and the host fills
     ; `dos_bevec` before the first call, which is the whole of what makes the
@@ -5627,7 +5653,7 @@ dos_be_bind:
 
 
 ; -----------------------------------------------------------------------------
-; dos_hk_bind - the six hooks the BOX wants (SPEC.md 96.44.3)
+; dos_hk_bind - the six hooks DOS.O88 wants (SPEC.md 96.44.3)
 ; in:  nothing; out: nothing, every register preserved
 ;
 ; Beside `dos_be_bind` and called with it. `kern_dos` has no equivalent and
@@ -6194,7 +6220,7 @@ dos_con_geom:
 ; in:  the four above, filled; out: nothing; every register preserved
 ;
 ; A SEPARATE PROC because it is a different STATEMENT: the four words are this
-; box's answer about its own window and the seven below are the library's
+; DOS's answer about its own window and the seven below are the library's
 ; contract, so the mapping between them is in one place and reads as a mapping.
 ;
 ; **AND IT RUNS AT EVERY PAINT, WHICH IS THE POINT** (SPEC.md 11.96.12): a
@@ -6213,7 +6239,7 @@ dos_con_pub:
     mov [con_px], ax                ; the pen: 8-aligned already, which
     mov ax, [dos_cony]              ; OSAPI_GFX_BLIT1 requires (SPEC.md 5.4.2)
     mov [con_oy], ax
-    mov word [con_topy], 0          ; the band's origin IS the text's: this box
+    mov word [con_topy], 0          ; the band's origin IS the text's: this DOS
                                     ; keeps its chrome above the band, where
                                     ; Telnet measures from the window
     mov ax, [dos_concols]
@@ -6460,7 +6486,7 @@ dos_path_make:
 ;                     a user who clears the box back to a name does not have
 ;                     to retype the path. With a drive letter and no
 ;                     separator it is that volume's ROOT, because a per-drive
-;                     current directory is a thing this box does not keep
+;                     current directory is a thing this DOS does not keep
 ; -----------------------------------------------------------------------------
 dos_path_take:
     mov byte [dos_ptres], 0         ; the ordinary door COMMITS
@@ -6565,13 +6591,13 @@ dos_pt_body:
     pop si
     pop di
     jmp short .no                   ; over 12 characters: not an 8.3 name, and
-.cnend:                             ; nothing this box can open
+.cnend:                             ; nothing this DOS can open
     mov byte [di], 0
     pop si
     pop di                          ; the separator again
     cmp byte [dos_tname], 0
     je .no                          ; a path ending in a separator names a
-                                    ; FOLDER and this box runs programs
+                                    ; FOLDER and this DOS runs programs
     or di, di
     jz .here                        ; no separator: the folder we STAND in
     mov si, bx                      ; --- the directory part, into dos_pbuf ---
@@ -6589,7 +6615,7 @@ dos_pt_body:
     jmp short .no                   ; longer than the buffer
 .cdend:
     mov byte [di], 0
-    push dx                         ; **STAND THE MACHINE, do not move the BOX**
+    push dx                         ; **STAND THE MACHINE, do not move DOS**
     mov dl, [dos_tvol]              ; (SPEC.md 96.48.2). This used to set
     call dos_fh_stand               ; `[dos_vol]` for the walk and put it back
     pop dx                          ; if the walk refused, because the walk read
@@ -6597,14 +6623,14 @@ dos_pt_body:
     call dos_walk_pbuf              ; so the drive to walk on is said by
     jc .no                          ; standing on it. The rollback goes with it:
     mov [dos_pgdir], dx             ; nothing was changed, so a typo leaves the
-    jmp short .commit               ; box exactly where it was - and the arm
+    jmp short .commit               ; DOS exactly where it was - and the arm
                                     ; falls into `.commit` rather than past it,
                                     ; because `[dos_vol]` is no longer already
                                     ; set by the time it gets there
 .here:
     ; **THE FOLDER WE STAND IN IS [dos_curdir], NOT [dos_dir]** (SPEC.md
     ; 96.33.13).  This arm left [dos_dir] alone, which is right for the door it
-    ; was written for - the Run button on a box that has never moved - and
+    ; was written for - the Run button on a DOS that has never moved - and
     ; wrong the moment the CONSOLE exists: `CD` goes through dos_cd_go, which
     ; writes [dos_curdir] and nothing else, so from the second directory onward
     ; every bare name resolved against the LAUNCH folder.  `CD SBEEPS` then
@@ -6613,7 +6639,7 @@ dos_pt_body:
     ;
     ; The two are genuinely different (96.6.1): [dos_dir] is where the package
     ; was launched from and survives a program's own chdir, and [dos_curdir] is
-    ; where the box is now.
+    ; where DOS is now.
     mov dx, [dos_curdir]
     mov [dos_pgdir], dx
 .commit:
@@ -7047,7 +7073,7 @@ dos_mck_place:
     ; it is a BUILD-TIME constant and the answer is the same on every machine.
     ; Fed the figures above it read `(Up to  0K)` on a machine with nothing of
     ; that class mounted - a true number that reads exactly like a page whose
-    ; arithmetic has broken, and the state the box is MOST often opened in,
+    ; arithmetic has broken, and the state DOS is MOST often opened in,
     ; since a user shutting the OS down for a DOS program tends not to have a
     ; hard disk or a card in the first place.
     mov ax, DRVM_CEIL_DISK          ; ...and the ceiling is a CONSTANT and not
@@ -7402,7 +7428,7 @@ dos_mem_whole:
 ; =============================================================================
 ; ARM 3: HANDING THE MACHINE TO kern_dos (SPEC.md 96.40)
 ; =============================================================================
-; docs/plans/KERN-DOS-PLAN.md §7. The box fills a record in its OWN image, the
+; docs/plans/KERN-DOS-PLAN.md §7. DOS.O88 fills a record in its OWN image, the
 ; kernel records where it lies and returns, and `ui_task`'s step 0 spends the
 ; post with nothing held: the drivers go, the screen goes, the kernel goes,
 ; and what is left is `kern_dos` with a DOS program in 560 KB of it.
@@ -7608,7 +7634,7 @@ dos_msav_di:
 %endif
 
 ; -----------------------------------------------------------------------------
-; dos_wholeask - THE ONE DELIBERATELY DESTRUCTIVE THING THIS BOX DOES (96.42)
+; dos_wholeask - THE ONE DELIBERATELY DESTRUCTIVE THING THIS DOS DOES (96.42)
 ; in:  the wake handler's context - UI task, the gfx lock NOT held
 ; out: CF = 1 an alert is up and the launch is SUSPENDED; CF = 0 carry on
 ;
@@ -7642,7 +7668,7 @@ dos_wholeask:
     je .hold                    ; **ASKED AND REFUSED, AND THE REFUSAL HAS TO
                                 ; STICK.** The launch is a posted WAKE and a
                                 ; wake is a kick (SPEC.md 74.1): tearing the
-                                ; alert down repaints, and the box is still
+                                ; alert down repaints, and DOS is still
                                 ; DST_READY when the next one lands - so a
                                 ; two-state flag put the question straight back
                                 ; up and Cancel could not be answered at all
@@ -7680,7 +7706,7 @@ dos_wholedone:
     mov byte [dos_wok], DOS_W_NO
     cmp al, 1
     jne .out                    ; Cancel, Esc, the close box: [dos_state] was
-                                ; never advanced, so the box is still READY and
+                                ; never advanced, so DOS is still READY and
                                 ; there is nothing to undo - but the REFUSAL is
                                 ; recorded, because the next wake would
                                 ; otherwise ask again
@@ -7794,7 +7820,7 @@ dos_lbfill:
                                             ; pointing at A:
     mov word [di+KDL_MOUBASE], 0            ; ...and the mouse's two, which are
                                             ; the KERNEL's like KDL_UNIT and
-                                            ; KDL_DPT: the box zeroes them so a
+                                            ; KDL_DPT: DOS.O88 zeroes them so a
                                             ; kernel that does not patch them
                                             ; hands over a still pointer rather
                                             ; than a wild UART base (96.45)
@@ -7835,7 +7861,7 @@ dos_lbfill:
 %unmacro KDL_F 2
 KDL_MINE equ KDL_ACC
 %if KDL_ACC + KDL_BODY > KDL_SIZE
-  %error "the DOS box's launch block outgrew KDL_SIZE"
+  %error "DOS.O88's launch block outgrew KDL_SIZE"
 %endif
 %endif                                  ; DOSKPART
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
@@ -8028,7 +8054,7 @@ dos_mem_arena:
     jbe .none                       ; against the user's ceiling and has no
     sub ax, cx                      ; floor, so an underflow here would print a
     jmp short .cap                  ; 65,000K row on a machine too tight to run
-.none:                              ; the box at all
+.none:                              ; DOS at all
     xor ax, ax
     jmp short .cap
                                     ; ...and the LIMIT is arm 0's too, which
@@ -8122,7 +8148,7 @@ dos_rah_kb:
 ;      (a kernel older than 18.95.8), AX = 0. Every other register preserved
 ;
 ; `DSK_RAH_AUTO` is the sentinel that means *no ceiling of mine*, which is the
-; truth outside a launch - the box has commanded nothing - so ASKING IS NOT A
+; truth outside a launch - DOS has commanded nothing - so ASKING IS NOT A
 ; SIDE EFFECT and the slot needs no read-only spelling. Where a previous launch
 ; left the cache shed it takes it BACK, which is the resting state every figure
 ; on this page is supposed to describe.
@@ -9017,7 +9043,7 @@ dos_click:
     call dos_abdismiss              ; ...and the click likewise: dismissing the
     jc .out                         ; card is not also a button press or a
                                     ; field focus (SPEC.md 96.51)
-    ; **NO DST_IDLE GATE** (SPEC.md 96.32.1): an idle box is the internal
+    ; **NO DST_IDLE GATE** (SPEC.md 96.32.1): an idle DOS is the internal
     ; COMMAND.COM and its bar is live, where the old main page had nothing on
     ; it but an arguments field for a program that did not exist.
     call dos_place                  ; every control of this page, once
@@ -9089,13 +9115,7 @@ dos_ondrag:
     push dx
     push si
     push di
-    mov bx, si
-    push cx
-    push dx
-    call dos_place
-    pop dx
-    pop cx
-    mov bx, dos_btrec
+    mov bx, dos_btrec               ; (dos_bplace lays the page out first)
     call os88ui_btndrag             ; redraws only if the answer CHANGED
     pop di
     pop si
@@ -9128,14 +9148,9 @@ dos_onup:
     push dx
     push si
     push di
-    mov bx, si
-    push cx
-    push dx
-    call dos_place                  ; the window can have moved (13.7)
-    pop dx
-    pop cx
-    mov bx, dos_btrec
-    call os88ui_btnup               ; AX = what FIRED, 0 = cancelled
+    mov bx, dos_btrec               ; the window can have moved (13.7):
+    call os88ui_btnup               ; dos_bplace lays the page out from where
+                                    ; it is NOW. AX = what FIRED, 0 = cancelled
     or ax, ax
     jz .out
     mov bx, si                      ; **BX BACK TO THE WINDOW BEFORE ANYTHING
@@ -9203,9 +9218,9 @@ dos_onup:
 ; `os88line_click` sets `LN_CAR` and `LN_FOCUS` and draws NOTHING - it is state,
 ; not pixels, and the caller owns the glass. Every other package in the tree
 ; does own it: the browser and telnet repaint the whole field, ftpd moves the
-; one cell. THIS BOX DID NEITHER at all three of its call sites, so a click in
-; the middle of a line moved the caret and left the bar standing where it was -
-; reported from the field as exactly that.
+; one cell. THIS PACKAGE DID NEITHER at all three of its call sites, so a click
+; in the middle of a line moved the caret and left the bar standing where it
+; was - reported from the field as exactly that.
 ;
 ; ONE CELL EACH WAY and not `os88line_draw` (SPEC.md 13.14.6): `os88line_click`
 ; cannot scroll - it clamps to `LN_LEN` and never writes `LN_VIEW` - so the only
@@ -9576,6 +9591,19 @@ dos_place:
     pop cx
     pop bx
     pop ax
+    ret
+
+; dos_bplace - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): BX = the record, SI = the
+; window; every register preserved. dos_place with the window where it wants
+; it, and nothing else: a window dragged by its title is REPLAYED and not
+; painted, so the press, the drag and the release each get the page laid out
+; from where the window IS - which is also what aims the record at the page's
+; own pair (dos_bar_rects / dos_furn_rects) before the library reads it
+dos_bplace:
+    push bx
+    mov bx, si
+    call dos_place
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -10275,7 +10303,7 @@ dos_lnk_walk:
     push ax
     push si
     mov dl, bl
-    call dos_fh_stand               ; **THE MACHINE, NOT THE BOX** (SPEC.md
+    call dos_fh_stand               ; **THE MACHINE, NOT DOS** (SPEC.md
     jc .no                          ; 96.48.2), exactly as dos_path_take does
     call dos_walk_pbuf              ; ...and from the volume ROOT, which the
     pop si                          ; stand above has just made [dos_pvol]
@@ -10926,7 +10954,7 @@ dos_tpl:
                                     ; instead of 25 - so this package never
                                     ; has to know the dock exists
 
-    ; --- THE MENU (SPEC.md 12.2), which this box has never had -------------
+    ; --- THE MENU (SPEC.md 12.2), which this package has never had ---------
     OS88_MENUSET dos_menus, dos_ttl, dos_oncmd
         OS88_MENU dos_m_prog, dos_items_prog, 3
     OS88_MENUSET_END dos_menus
@@ -10980,7 +11008,7 @@ dos_l_msav:  db 'Save the session to disk', 0    ; ...and HIBERNAT.IMG first
 ; used to read `Memory for the program: ~NNNNN K`, which says the same thing
 ; in punctuation a reader has to interpret. It also said `for the program`,
 ; which invites the question *which program* - the answer being the one this
-; box is about to run, under whatever is ticked below. One value, one name for
+; DOS is about to run, under whatever is ticked below. One value, one name for
 ; it, and no word about arms: the user is picking options, not picking arms.
 dos_l_marn: db 'Est DOS Ram (Current Machine): '
 %endif                              ; KD_BACKEND
@@ -11054,7 +11082,7 @@ DOS_MCKW    equ 24                  ; ...and kern_mega's save box, a cell more
 ; --- ...and arm 1's one box (SPEC.md 96.36.8) -------------------------------
 ; **THE MOUSE IS NOT FREE ON A 4.77 MHz MACHINE**: `mou_isr` redraws the
 ; pointer out of the interrupt on every packet, and a DOS program that never
-; asks INT 33h anything is paying for a cursor nobody reads. Off, the box
+; asks INT 33h anything is paying for a cursor nobody reads. Off, DOS.O88
 ; hands `kern_dos` a zero KDL_MOUBASE, which kdmouse.inc already reads as
 ; "no mouse: nothing is hooked and INT 33h answers the still pointer".
 dos_l_mmou: db 'Disable the mouse', 0
@@ -11161,7 +11189,7 @@ dos_exitd:   db '000', 0
 dos_errs:
     dw dos_e_goto, dos_e_mem, dos_e_read, dos_e_big, dos_e_fsx
     dw dos_e_badexe                 ; DER_EXE: NOTHING SETS IT any more - the
-                                    ; box has run an .EXE since SPEC.md 96.8 -
+                                    ; DOS has run an .EXE since SPEC.md 96.8 -
                                     ; and its sentence, `.EXE is not supported
                                     ; yet.`, was 27 bytes no path could reach.
                                     ; The SLOT stays, because DER_* is an index
@@ -11186,8 +11214,8 @@ dos_e_fit:   db 'Not enough RAM - try Setup, "Shut down the OS".', 0
                                     ; and matching COMMAND.COM was a nicety
                                     ; this sentence cannot afford (SPEC.md
                                     ; 96.8.1). It is not a DOS program's
-                                    ; output, it is THE BOX refusing to start
-                                    ; one, and the box knows something DOS
+                                    ; output, it is DOS.O88 refusing to start
+                                    ; one, and DOS.O88 knows something DOS
                                     ; never did: there is another arm with
                                     ; ~600KB in it, one page away. A user told
                                     ; `too big to fit` closes the window; one
@@ -11315,7 +11343,7 @@ dos_int33:
     cmp ax, 1
     je .show                       ; show/hide: A TEXT CURSOR, and only where
     cmp ax, 2                      ; the host has a text screen to draw on
-    je .hide                       ; (SPEC.md 96.10.5) - in the windowed box
+    je .hide                       ; (SPEC.md 96.10.5) - in the windowed DOS
     cmp ax, 3                      ; DHK_TXT is absent and both are the no-op
     je .pos                        ; they were
     cmp ax, 4
@@ -11373,7 +11401,7 @@ dos_int33:
                                    ; program that shows the cursor and
                                    ; installs no handler still wants its
                                    ; pointer to move while it is busy - and in
-                                   ; the WINDOWED box there is no cursor at
+                                   ; the WINDOWED DOS there is no cursor at
                                    ; all, so hooking IRQ0 there would buy
                                    ; nothing and cost the DOS task's slice a
                                    ; frame every tick. One-shot, so this and
@@ -11527,7 +11555,7 @@ dos_int33:
     ; back with AX still holding the function number, and zeroing it is not a
     ; polite refusal: it is an ANSWER, to a question the caller may be asking.
     ;
-    ; MICROSOFT WORKS IS THAT CALLER and it cost this box the whole feature
+    ; MICROSOFT WORKS IS THAT CALLER and it cost this DOS the whole feature
     ; (docs/FIELD-NOTES.md 54). Its mouse init is
     ;
     ;       mov ax, 8 / int 33h        ; set the Y range - no return value
@@ -11554,13 +11582,13 @@ dos_int33:
 ;
 ; **THE TICK IS THE ONLY THING THAT FIRES** (SPEC.md 96.10.4.1). A real mouse
 ; driver dispatches from its OWN interrupt - the serial port's, or the aux
-; port's - and this box has neither: the kernel owns both ISRs and keeps
+; port's - and this DOS has neither: the kernel owns both ISRs and keeps
 ; `mouse_x`/`mouse_y`/`mouse_btn` fresh for the whole bracket (SPEC.md 53.1),
 ; which is what makes function 3 exact and costs a translation instead of a
 ; driver. What it does not give is a moment of OUR code running, and a
 ; callback needs one.
 ;
-; Everything else the box gets control at is the program calling us, and a
+; Everything else DOS gets control at is the program calling us, and a
 ; program that installed a handler is precisely the program that has stopped
 ; calling: Works installs one and never touches INT 33h again. `dos_getkey`
 ; is no better - that is INT 21h's key read, and an application with a mouse
@@ -11741,7 +11769,7 @@ dos_m33_tick:
     and ax, [dos_m33m]              ; only what the program asked for
     jz .nothing
 %ifdef DOSTRACE
-    ; --- AND THE BOX COUNTS ITS OWN CALLBACKS (SPEC.md 96.10.3.1), because
+    ; --- AND DOS COUNTS ITS OWN CALLBACKS (SPEC.md 96.10.3.1), because
     ; "the program asked for events and then did nothing" has two readings and
     ; they are opposite defects: we never called it, or we called and it
     ; ignored us. Nothing in the INT 21h ring or the per-function histogram
@@ -11791,7 +11819,7 @@ dos_m33_tick:
 ; cursor is an attribute the driver flips, which is why `0Ah` hands over two
 ; masks and nothing else.
 ;
-; **IT IS `kern_dos`'s CAPABILITY AND NOT THE BOX'S**, and `DHK_TXT` is how
+; **IT IS `kern_dos`'s CAPABILITY AND NOT DOS.O88's**, and `DHK_TXT` is how
 ; that is spelled (96.10.5.1): in the windowed host the OS owns every pixel
 ; and B800 is the kernel's, so the absent hook refuses and nothing is drawn.
 ; The core is assembled once and both hosts read the same code.
@@ -11804,7 +11832,7 @@ dos_m33_tick:
 ; -----------------------------------------------------------------------------
 dos_m33_paint:
     ; **THE HOST TEST IS FIRST AND BEFORE ANY PUSH**, because in the WINDOWED
-    ; box this routine is on a hot path and can never do anything: it is
+    ; DOS this routine is on a hot path and can never do anything: it is
     ; reached from `dos_mou_read`, which is every `dos_getkey` poll, and there
     ; is no text screen there to draw on and so nothing that could be left
     ; behind to wipe. Three instructions rather than thirty (96.10.5.1).
@@ -11906,7 +11934,7 @@ dos_m33_wipe:
     mov ax, [dos_m33dv]
     or ax, ax
     jz .out                         ; nothing drawn, which is every call in the
-                                    ; windowed box and most of them elsewhere
+                                    ; windowed DOS and most of them elsewhere
     mov es, ax
     mov si, [dos_m33do]
     mov ax, [dos_m33dc]
@@ -12030,7 +12058,7 @@ dos_m33_win:
 ;
 ; **MAP, NOT CLAMP, AND THE REASON IS THE POINTER.** A real driver integrates
 ; mickeys and has no idea where the arrow really is, so clamping is the only
-; thing it can do; this box is handed an ABSOLUTE position over the very glass
+; thing it can do; this DOS is handed an ABSOLUTE position over the very glass
 ; the program is drawing on, so the useful answer is that same physical point
 ; in the program's own units. Clamping would pin Battle Chess's cursor at its
 ; right edge for the whole right half of the desk.
@@ -12533,12 +12561,36 @@ dos_mcb_resize:
 ; trace simply refuses, which is what an instrument owes a machine it cannot
 ; fit on.
 %define OP_BSS_AT dos_hbss       ; 96.44.2: the host's block, not the core's
+%define OP_ONMOVE dos_trmove     ; 96.29.1.2: the part MOVES (20.12.12)
 %include "os88parts.inc"
 OS88_PARTS_BEGIN 1
   OS88_PART OP_ASSET, OP_ZERO | OP_OPT, DOS_TRACE_KB
 OS88_PARTS_END
+
 %endif
 %endif                              ; DOS_EXTCORE
+
+%ifdef DOSTRACE
+%ifdef OP_ONMOVE
+; (HOST code, so outside the core span above: it reads [dos_trseg], a host
+; bss cell, which SPEC.md 96.44.2 forbids a core proc to name)
+; dos_trmove - THE TRACE PART MOVED (SPEC.md 96.29.1.2, NO-PINNING 2). The
+; standard's op_carvemv has already stored [op_base]; BX = was, DX = now,
+; under a relocation proc's rules (66.3). Two words were banked from op_seg
+; and nothing else names the part: [dos_trseg] (the host's, which
+; tools/os88dosdbg.py reads afresh at every poll) and [dos_m33seg] (the
+; core's copy, 96.10.3). Every routine that touches the part loads ES from
+; one of them on entry - dos_trace, dos_tr_result, dos_int33's buckets and
+; dos_trace_dump - and no program is ever handed a pointer into it: it is
+; data, not code, and no vector points at it
+dos_trmove:
+    xor al, al
+    call op_seg
+    mov [dos_trseg], ax
+    mov [dos_m33seg], ax
+    ret
+%endif
+%endif
 
 ; -----------------------------------------------------------------------------
 ; kern_dos, AS A PART (docs/plans/KERN-DOS-PLAN.md §4.1)
@@ -12565,7 +12617,7 @@ OS88_PARTS_END
 %ifdef DOSKPART
 ; **THE TABLE IS THE LOADER'S NOW AND THE ROW IS IN OUR bss** (SPEC.md
 ; 96.44.4). This arm carried the part table itself until W9c, when the file's
-; IMAGE became `apps/dos/dosload.asm` - which reads the box out of part 0 and
+; IMAGE became `apps/dos/dosload.asm` - which reads DOS.O88 out of part 0 and
 ; then ceases to exist, taking its table with it. So the three numbers the
 ; handoff wants arrive the way SPEC.md 20.12.10.2 says they should: the loader
 ; writes the row into the head of this bss before it re-homes, and the kernel
@@ -12783,7 +12835,7 @@ DOS_CBASE   equ os88_image_end
 ; was `DBSS` for one wave, when host cells sat past `CORE_BSS_SIZE`, and it
 ; cost `kern_dos` eight bytes it never read. It does not any more.
 ;
-; IT IS AN `OP_ROW` AND NOT A STRUCT OF OUR OWN: the box read
+; IT IS AN `OP_ROW` AND NOT A STRUCT OF OUR OWN: DOS.O88 read
 ; `[dos_kdrow + OP_R_OFF]` when the part table was in its own image, so a
 ; verbatim copy leaves all four of those read sites spelled as they were and
 ; moves only the base.
@@ -12807,14 +12859,14 @@ DOS_CBASE   equ os88_image_end
     ; --- THE TOP BAR (SPEC.md 96.32.1) --------------------------------------
     HBSS DOS_B_PLN,   DOS_LNSZ   ; the path box's os88line block...
     HBSS DOS_B_PATH,  DOS_PBUF   ; ...and its text, which is the only place
-                                 ; this box has ever held a PATH rather than
+                                 ; this DOS has ever held a PATH rather than
                                  ; a volume, a cluster and an 8.3 name
     HBSS DOS_B_ERECT, 8          ; 'Environment' and 'Run', four words each
     HBSS DOS_B_RRECT, 8
     HBSS DOS_B_TVOL,  1          ; dos_path_take's scratch: the parsed volume
     HBSS DOS_B_TNAME, 13         ; and name, held apart until the walk has
                                  ; agreed, so a typo cannot half-commit
-DOS_BTREC_SZ equ 24              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
+DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
                                  ; and it has to be one: this block is laid
                                  ; out thousands of lines before os88ui.inc is
                                  ; included, so the real constant is not
@@ -13142,9 +13194,9 @@ DVOL_MAX    equ DVOL_CAP            ; MIRRORS the kernel's WIDEST arm, which is
                                     ; **IT WAS 6, AND 6 IS NEITHER**: the
                                     ; comment said `assoc.inc` and that file
                                     ; has not owned the constant for some time.
-                                    ; It cost the INLINE box two drives of
+                                    ; It cost the INLINE DOS two drives of
                                     ; reach on a kern_big machine, and it cost
-                                    ; the PARTED box the whole console
+                                    ; the PARTED DOS the whole console
                                     ; launcher, `apps/dos/doscore.asm` saying 8
                                     ; where this said 6.
                                     ; **AND IT STAYED HIDDEN BECAUSE THE
@@ -13157,7 +13209,7 @@ DVOL_MAX    equ DVOL_CAP            ; MIRRORS the kernel's WIDEST arm, which is
                                     ; It is still a CAPACITY rather than a fact
                                     ; about the machine, and every use of it
                                     ; below is bound-checked - so a kernel that
-                                    ; grows a ninth volume costs this box reach
+                                    ; grows a ninth volume costs this DOS reach
                                     ; and can never cost it a write past its
                                     ; own bss, which is somebody else's heap
                                     ; claim
@@ -13645,7 +13697,7 @@ dos_cd_go:
 ; =============================================================================
 ; AH=0Eh used to answer the COUNT and never move, on the reasoning that a
 ; program reads the count far more often than it changes drives and that a
-; real change wanted a directory walk this box did not have. The first half is
+; real change wanted a directory walk this DOS did not have. The first half is
 ; true and is why the no-op path below is still free; the second stopped being
 ; true at SPEC.md 19.2.4.
 ;
@@ -14249,7 +14301,7 @@ dos_exec_load:
     ; **AN EXEPACK CHILD, UNPACKED BY THE HOST** (SPEC.md 96.40.9.1). The HMA
     ; host runs with A20 open, so a child's own unpacker wraps below 64KB; the
     ; hook is `kd_xunp`, which unpacks it in place against the same [dos_exe_*]
-    ; `dos_exe_setup` just filled. Best effort - absent (the box, kern_big) or
+    ; `dos_exe_setup` just filled. Best effort - absent (DOS.O88, kern_big) or
     ; a child it refuses runs its own unpacker, which works when the allocator
     ; placed it at or above 64KB. The hook preserves every register.
     cmp word [dos_hkv + DHK_XUNP], 0
@@ -14966,7 +15018,7 @@ dos_xms_move:
     ; kern_dos's transport is int 15h AH=87h, which moves between two linear
     ; addresses directly, so the refusal below is lifted there: DI = 2 says
     ; "ES:SI is the source's LINEAR address, ES its high word" and the chunk
-    ; loop above steps it linearly. The windowed box never runs on kern_mega
+    ; loop above steps it linearly. The windowed DOS never runs on kern_mega
     ; (KERN-MEGA-DOS-PLAN 12.1 item 1), so OSAPI_XMEM_COPY never sees a 2
 .bothx:
     mov ax, [dos_xmdh]
@@ -15920,6 +15972,17 @@ dos_pkt_bufs:
     call dn_init                    ; ...and THEN the translation's own start,
                                     ; which copies the two MACs in and needs
                                     ; the claim to exist (SPEC.md 96.26.6)
+%ifdef DOSNET_CARD
+    mov bh, DRVC_NET                ; **AND THE CARD'S RING POOL, NOW** (SPEC.md
+    mov bl, NETV_STATE              ; 72.13.4): ETHER.DRV claims it at a
+    call OSAPI_DRV_CALL             ; package's first non-raw verb, and the
+                                    ; translation makes its first only once
+                                    ; the program runs - in an arena that has
+                                    ; taken the heap. NET.DRV, the wire this
+                                    ; arm stands in for, holds its buffers
+                                    ; from load, so this is the cable's
+                                    ; precondition made true on the card
+%endif
 .decl:
     ; --- **AND IT MAY MOVE** (SPEC.md 66.2, 96.23.7.2) ---------------------
     ; A claim is born PINNED, and this one is taken BEFORE the floor, before
@@ -16299,8 +16362,8 @@ dos_spmask:
     jne .net
     ; **...UNLESS THE PROGRAM ITSELF IS ON ONE** (SPEC.md 96.36.7.3).
     ; `dos_run` takes the drivers out BEFORE `dos_load`, so letting `DRVC_DISK`
-    ; go when the box is standing on a driver-backed volume unmounts the disk
-    ; the program is about to be read off. The box would then refuse its own
+    ; go when DOS is standing on a driver-backed volume unmounts the disk
+    ; the program is about to be read off. DOS would then refuse its own
     ; launch with DER_READ, for a request it could simply not grant - and
     ; SPEC.md 96.36.7.1 is explicit that the tick is a REQUEST rather than a
     ; report, so one that cannot be met is not met. A BIOS-reached hard disk
@@ -16423,7 +16486,7 @@ dos_drv_back:
 ; THE WINDOW'S, and dos_hex3/dos_dec2 with it (SPEC.md 96.44.15): its one
 ; caller is dos_drv_out above. The CELL it writes is the core's, because the
 ; core's environment builder reads it - and `kern_dos` is handed the row the
-; box built here (KDL_F dos_blaster), so it never needed the writer.
+; DOS.O88 built here (KDL_F dos_blaster), so it never needed the writer.
 ;
 ; THE TYPE IS DERIVED FROM THE DSP VERSION, which is what every DOS program
 ; that reads this variable expects: 1 is an original Sound Blaster, 3 a 2.0,
@@ -16595,7 +16658,7 @@ dos_fh_setname:
 ;
 ; ONE BODY FOR THE CALL AND FOR THE EXIT (SPEC.md 96.52): a process that
 ; terminates has every handle closed for it, which is DOS's rule and was not
-; this box's - the dirty window a program left behind was never written, and
+; this DOS's - the dirty window a program left behind was never written, and
 ; the next launch's dos_fh_setup threw it away. dos_fh_sweep is the exit's
 ; loop over this.
 ; -----------------------------------------------------------------------------
@@ -16799,9 +16862,9 @@ dos_fh_rdloop:
 ; Nothing published can make a file smaller, and the slot that would was
 ; written, assembled and measured at 271 bytes of .cold plus a cell and a
 ; thunk - costed in docs/plans/DOS-EXEC-PLAN.md and deliberately not taken,
-; because a DOS box growing the resident kernel a couple of hundred bytes at a
-; time is how a machine that boots on 128KB stops doing so. So the prefix is
-; copied out under a temporary name and the two are swapped, which is what a
+; because a DOS package growing the resident kernel a couple of hundred bytes
+; at a time is how a machine that boots on 128KB stops doing so. So the prefix
+; is copied out under a temporary name and the two are swapped, which is what a
 ; DOS utility does by hand - and every door it needs was already here:
 ; read-at, write, append, delete and rename.
 ;
@@ -17436,9 +17499,9 @@ dos_fh_isdev:
 ; length being the constant 3.
 ;
 ; IT LIVES HERE, past the `ret` and inside the core's own gate, and not with
-; the box's other literals: those are in the WINDOW half (`%ifndef
+; DOS.O88's other literals: those are in the WINDOW half (`%ifndef
 ; KD_BACKEND`), which the core build gates out - so a table put beside them
-; assembles for the box and leaves kern_dos with an undefined symbol.
+; assembles for DOS.O88 and leaves kern_dos with an undefined symbol.
 dos_devtab: db 'CON', 0
             db 'NUL', 0
             db 'PRN', 0
@@ -17541,9 +17604,9 @@ dos_fh_new:
 ; program the wrong file under the right name.
 ;
 ; IT USED TO BE DROPPED, on the reasoning that "a program that names its own
-; drive is naming ours" - which was true of a box that had one volume and
+; drive is naming ours" - which was true of a DOS that had one volume and
 ; stopped being true the day AH=0Eh really switched (SPEC.md 96.6.1).  What it
-; cost is in tests/dostrap/drvname.asm: standing on B:, this box answered
+; cost is in tests/dostrap/drvname.asm: standing on B:, this DOS answered
 ; A:*.* with B:'s own directory and answered C:*.* on a machine that HAS no
 ; C:, both of them reporting success.
 ; -----------------------------------------------------------------------------

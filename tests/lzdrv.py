@@ -134,8 +134,9 @@ def run(a, sysimg, plain):
     fails = []
     with os88marty.launch(sysimg,
                           apps="build/drvcall360.img",
-                          machine=MACHINE[a.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE[a.adapter], boot=False) as m:
+        m.run()                         # the boot gate on STATE
+        os88marty.kernel_up(m)
         os88marty.no_saver(m)   # SPEC.md 79: a load that FAILS waits out
                                 # both limits below, which is long enough
                                 # for the saver to start - and it draws, so

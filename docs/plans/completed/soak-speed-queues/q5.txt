@@ -1,0 +1,149 @@
+# family  row  declared_secs  script  (work top-down; a script shared by several rows is optimized once)
+DONE desk	deskclip	350	tests/deskclip.py
+DONE desk	deskwhole	215	tests/deskwhole.py
+DONE desk	desksc	200	tests/desksc.py
+DONE desk	deskbench	180	tests/deskbench.py
+DONE desk	deskclock	150	tests/deskclock.py
+DONE desk	deskcalcards	110	tests/deskcalcards.py
+desk	deskflash	85	tests/deskflash.py
+DONE desk	deskcaltask	85	tests/deskcaltask.py
+desk	deskhover	80	tests/desklayer.py
+DONE desk	deskcaledit	76	tests/deskcaledit.py
+desk	deskdrag	75	tests/desklayer.py
+desk	deskzoom	72	tests/deskzoom.py
+DONE desk	deskcalremind	72	tests/deskcalremind.py
+DONE desk	deskcalperf	63	tests/deskcalperf.py
+DONE desk	deskclockherc	60	tests/deskclock.py
+desk	deskground	60	tests/desklayer.py
+DONE desk	deskcalsnooze	60	tests/deskcalsnooze.py
+DONE desk	deskclipsmall	50	tests/deskclip.py
+desk	deskkeys	45	tests/desklayer.py
+desk	deskclose	45	tests/desklayer.py
+desk	deskfit	45	tests/desklayer.py
+DONE desk	deskcal1bpp	45	tests/deskcal1bpp.py
+DONE desk	deskcalgrid	40	tests/deskcalgrid.py
+desk	deskhovercga	40	tests/desklayer.py
+desk	deskhoverherc	40	tests/desklayer.py
+desk	deskmodal	40	tests/deskmodal.py
+desk	deskfdd	35	tests/deskfdd.py
+desk	deskpen	31	tests/deskpen.py
+desk	deskz	30	tests/desklayer.py
+desk	desksmall	30	tests/desklayer.py
+desk	deskitem	25	tests/deskitem.py
+desk	deskdock	25	tests/desklayer.py
+weav	weavepack	1500	tests/weavepack.py
+weav	weaveprev	240	tests/weaveprev.py
+weav	weavesession	150	tests/weavesession.py
+weav	weavegrid	120	tests/weavegrid.py
+weav	weavegfx	90	tests/weavegfx.py
+weav	weavesmoke	70	tests/weavesmoke.py
+weav	weaveone	60	tests/weaveone.py
+weav	weavegame	50	tests/weavegame.py
+weav	weavelat	40	tests/weavelat.py
+pxbe	pxbenchvga	760	tests/pxbench.py
+pxbe	pxbench	700	tests/pxbench.py
+vidl	vidlyplay	150	tests/vidlyplay.py
+vidl	vidlyplaystream	150	tests/vidlyplay.py
+vidl	vidlive	70	tests/vidlive.py
+vidl	vidlivecga	70	tests/vidlive.py
+vidl	vidlivevga	70	tests/vidlive.py
+vidl	vidlivevga4	60	tests/vidlive.py
+vidl	vidlivext	60	tests/vidlivext.py
+vidl	vidlogovga	45	tests/vidlogo.py
+vidl	vidlogo	30	tests/vidlogo.py
+vidl	vidlogocga	30	tests/vidlogo.py
+vidl	vidlyplaydisk	25	tests/vidlyplay.py
+vidl	vidlyplaynoroom	25	tests/vidlyplay.py
+stik	stiknote	150	tests/stiknote.py
+stik	stiknotevga	80	tests/stiknote.py
+stik	stikswap	50	tests/stikswap.py
+stik	stikregister	50	tests/stikregister.py
+stik	stikmenu	45	tests/stikmenu.py
+stik	stiknotesmall	45	tests/stiknote.py
+stik	stiksmall	35	tests/stiksmall.py
+stik	stiknodesk	32	tests/stiknodesk.py
+stik	stikmove	30	tests/stikmove.py
+stik	stikmovecga	25	tests/stikmove.py
+stik	stikanchor	25	tests/stikmove.py
+stik	stikmiss	21	tests/stikmiss.py
+stik	stikboot	17	tests/stikboot.py
+stik	stikshort	15	tests/stikshort.py
+stik	stikhiber	15	tests/stikhiber.py
+hibe	hibernatedrv	300	tests/hibernate.py
+hibe	hibernatem	82	tests/hibernate.py
+hibe	hibernate	80	tests/hibernate.py
+hibe	hibsumbad	50	tests/hibernate.py
+hibe	hibsumok	35	tests/hibernate.py
+atbl	atblitvga	330	tests/atblit.py
+atbl	atblit	165	tests/atblit.py
+brsc	brscroll	385	tests/brscroll.py
+dosm	dosmem	90	tests/dosmem.py
+dosm	dosmedia	90	tests/dosmedia.py
+dosm	dosmouse	60	tests/dosmouse.py
+dosm	dosmouevt	60	tests/dosmouevt.py
+dosm	dosmcb	30	tests/dosmcb.py
+dose	dosext	170	tests/dosext.py
+dose	dosenvfold	40	tests/dosenvfold.py
+dose	dosest	40	tests/dosest.py
+dose	dosexec	30	tests/dosexec.py
+dose	dosexe	28	tests/dosexe.py
+pxfo	pxfolder	300	tests/pxfolder.py
+doso	dosopen	240	tests/dosopen.py
+brta	brtable	200	tests/brtable.py
+wdre	wdreach	200	tests/wdreach.py
+knob	knobhd	180	tests/knobhd.py
+pxsf	pxsfsx	165	tests/pxsfsx.py
+lzmo	lzmod-lz4big	40	tests/lzmod.py
+lzmo	lzmod	30	tests/lzmod.py
+lzmo	lzmod-dialog	30	tests/lzmod.py
+lzmo	lzmod-nohint	30	tests/lzmod.py
+lzmo	lzmod-lzb	30	tests/lzmod.py
+trac	trackmove	150	tests/trackmove.py
+covo	covoxcp	45	tests/covox.py
+covo	covoxdrv	30	tests/covox.py
+covo	covoxauto	30	tests/covox.py
+covo	covoxnolpt	30	tests/covox.py
+kzbo	kzboot-off	100	tests/kzboot.py
+kzbo	kzboot	30	tests/kzboot.py
+shut	shutdown	120	tests/shutdown.py
+fpte	fptest	120	tests/fptest.py
+arkp	arkpuwipe	80	tests/arkpuwipe.py
+arkp	arkpuwipesmall	35	tests/arkpuwipe.py
+vidw	vidwin	56	tests/vidwin.py
+vidw	vidwinshd	54	tests/vidwin.py
+ptsm	ptsmix	95	tests/ptsmix.py
+pkgf	pkgfence	60	tests/pkgfence.py
+pkgf	pkgfmt	30	tests/pkgfmt.py
+calc	calcflick	90	tests/calcflick.py
+fmco	fmcommit	80	tests/fmcommit.py
+tgpl	tgplay	80	tests/tgplay.py
+gbwi	gbwindow	75	tests/gbwindow.py
+rdic	rdicon	75	tests/rdicon.py
+trkt	trktxsurf	70	tests/trktxsurf.py
+sndp	sndplay	65	tests/sndplay.py
+int	int0sweep	60	tests/int0sweep.py
+spla	splashbar	40	tests/splashbar.py
+spla	splashspin	20	tests/splashspin.py
+drvc	drvcall	60	tests/drvcall.py
+hdsi	hdsize	60	tests/hdsize.py
+trkc	trkcompact	60	tests/trkcompact.py
+cycf	cycfire	50	tests/cycfire.py
+rdmo	rdmove	30	tests/rdmove.py
+rdmo	rdmount	20	tests/rdmount.py
+kdbi	kdbigexe	45	tests/kdbigexe.py
+radi	radio	45	tests/radio.py
+trkr	trkrate	45	tests/trkrate.py
+fscl	fsclass	40	tests/fsclass.py
+reco	recorder	40	tests/recorder.py
+usbm	usbmouse	35	tests/usbmouse.py
+alte	altenter	33	tests/altenter.py
+asca	ascabsorb	30	tests/ascabsorb.py
+lzfi	lzfile	30	tests/lzfile.py
+glyp	glyphcost	30	tests/glyphcost.py
+btng	btngesture	26	tests/btngesture.py
+pkgr	pkgrun	25	tests/pkgrun.py
+tmco	tmcol2	21	tests/tmcol2.py
+lzfe	lzfence	20	tests/lzfence.py
+size	sizesnap	20	tests/sizesnap.py
+pkgm	pkgmax	15	tests/pkgmax.py
+fpgn	fpgnotch	13	tests/fpgnotch.py

@@ -1,0 +1,154 @@
+# family  row  declared_secs  script  (work top-down; a script shared by several rows is optimized once)
+DONE pain	paintpack	210	tests/paintpack.py
+DONE pain	paintback	180	tests/paintback.py
+DONE pain	paintbig	150	tests/paintbig.py
+DONE pain	paintmove	150	tests/paintmove.py
+DONE pain	paintblank	120	tests/paintblank.py
+DONE pain	paintrz	120	tests/paintrz.py
+DONE pain	paintrz-1bpp	120	tests/paintrz.py
+DONE pain	paintsu	120	tests/paintsu.py
+DONE pain	paintpal	90	tests/paintpal.py
+DONE pain	paint1blit	90	tests/paint1blit.py
+DONE pain	paintfill	80	tests/paintfill.py
+DONE pain	paintdirty	70	tests/paintdirty.py
+DONE pain	paintcull	70	tests/paintcull.py
+DONE pain	paintdraw	70	tests/paintdraw.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintrate	60	tests/paintrate.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintstroke	60	tests/paintstroke.py
+DONE pain	paintsize	60	tests/paintsize.py
+DONE pain	paintundo	60	tests/paintundo.py
+DONE pain	paintundo-vga	60	tests/paintundo.py
+DONE pain	paintshrink	60	tests/paintshrink.py
+DONE pain	paint1small	60	tests/paint1small.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintplan	60	tests/paintplan.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintnogrow-vga	55	tests/paintnogrow.py
+DONE pain	paintanchor	50	tests/paintanchor.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintrow	50	tests/paintrow.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintheld	45	tests/paintheld.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintnogrow	45	tests/paintnogrow.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintgif	40	tests/paintgif.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintlzw	40	tests/paintlzw.py
+DONE pain	paint1bpp	40	tests/paint1bpp.py
+DONE pain	paint1load-vga	40	tests/paint1load.py
+DONE pain	paintwalk	30	tests/paintwalk.py
+DONE pain	paint1bpp-colour	30	tests/paint1bpp.py
+DONE pain	paint1load	30	tests/paint1load.py
+SKIP <=60s declared, lean or a measurement window; not opened yet pain	paintwipe	30	tests/paintwipe.py
+DONE vidv	vidv2bench	240	tests/vidv2bench.py
+vidv	vidv2benchmx	240	tests/vidv2bench.py
+vidv	vidv2bench4	240	tests/vidv2bench.py
+vidv	vidv2bench1	240	tests/vidv2bench.py
+vidv	vidvga4	60	tests/vidvga4.py
+vidv	vidv2pgmx	60	tests/vidv2.py
+vidv	vidv2flmx	60	tests/vidv2.py
+vidv	vidv2pg4	60	tests/vidv2.py
+vidv	vidv2lp	60	tests/vidv2.py
+vidv	vidv2ly4	60	tests/vidv2.py
+vidv	vidv2hpa	60	tests/vidv2.py
+vidv	vidmodexrk	40	tests/vidvga8.py
+vidv	vidmodexrs	40	tests/vidvga8.py
+vidv	vidv24	40	tests/vidv2.py
+vidv	vidmodexflc	35	tests/vidvga8.py
+vidv	vidmodex	34	tests/vidvga8.py
+vidv	vidmodex2	34	tests/vidvga8.py
+vidv	vidmodexfl	34	tests/vidvga8.py
+vidv	vidvga8	32	tests/vidvga8.py
+vidv	vidmodexflo	32	tests/vidvga8.py
+vidv	vidmodexflh	31	tests/vidvga8.py
+vidv	vidv2cga	30	tests/vidv2.py
+vidv	vidv2herc	30	tests/vidv2.py
+vidv	vidv2shd	30	tests/vidv2.py
+vidv	vidv2	25	tests/vidv2.py
+vidv	vidv2mx	25	tests/vidv2.py
+vidv	vidv2no	20	tests/vidv2.py
+pxfs	pxfsx	1500	tests/pxfsx.py
+dosc	doscable	600	tests/doscable.py
+dosc	dosconcga	150	tests/dosconcga.py
+dosc	doscon	100	tests/doscon.py
+dosc	doscom	30	tests/doscom.py
+fdlg	fdlgsmall	300	tests/fdlggrey.py
+fdlg	fdlgchoose	120	tests/fdlgchoose.py
+fdlg	fdlgchsmall	105	tests/fdlgchoose.py
+fdlg	fdlgdrop	80	tests/fdlgdrop.py
+fdlg	fdlggrey	60	tests/fdlggrey.py
+fdlg	fdlgup	60	tests/fdlgup.py
+teln	telnet	300	tests/telnet.py
+teln	telnetherc	300	tests/telnet.py
+dock	dockpos	300	tests/dockpos.py
+dock	dockmodule	120	tests/dockmodule.py
+dock	dockmark	90	tests/dockmark.py
+pxdr	pxdraw	200	tests/pxdraw.py
+pxdr	pxdrawvga	200	tests/pxdraw.py
+dosd	dosdirsw	260	tests/dosdirsw.py
+dosd	dosdrv	40	tests/dosdrv.py
+dosd	dosdir	35	tests/dosdir.py
+dosd	dosdev	25	tests/dosdev.py
+wdsc	wdscroll	330	tests/wdscroll.py
+smal	smalllaunch	150	tests/smalllaunch.py
+smal	smallboot	110	tests/smallboot.py
+wfdr	wfdraw	120	tests/wfdraw.py
+wfdr	wfdrawherc	120	tests/wfdraw.py
+vidk	vidkeyclus	120	tests/vidkeyclus.py
+vidk	vidkern	48	tests/vidkern.py
+vidk	vidkpartbad	45	tests/vidkpartbad.py
+pkgt	pkgthumb-np	50	tests/pkgthumb.py
+pkgt	pkgthumb-br	50	tests/pkgthumb.py
+pkgt	pkgthumb-wd	50	tests/pkgthumb.py
+pkgt	pkgthumb-tp	50	tests/pkgthumb.py
+vide	videms	45	tests/videms.py
+vide	videmshyb	45	tests/videms.py
+vide	videmsslow	45	tests/videms.py
+vide	videmswrap	45	tests/videms.py
+dosr	dosram	75	tests/dosram.py
+dosr	dosrange	45	tests/dosrange.py
+dosr	dosren	30	tests/dosren.py
+dosr	dosregs	25	tests/dosregs.py
+gfxl	gfxlk	150	tests/gfxlk.py
+pxpa	pxpaint	90	tests/pxpaint.py
+pxpa	pxparts	60	tests/pxparts.py
+fcpc	fcpcopy	70	tests/fcpcopy.py
+fcpc	fcpsmall	70	tests/fcpcopy.py
+imgt	imgtest	135	tests/imgtest.py
+fatw	fatwpin	120	tests/fatwpin.py
+czjo	czjoin	120	tests/czjoin.py
+czto	czto	115	tests/czto.py
+gfxp	gfxptsmall	60	tests/gfxpoints.py
+gfxp	gfxpoints	45	tests/gfxpoints.py
+pxsm	pxsmd	70	tests/pxsmd.py
+pxsm	pxsmove	30	tests/pxsmove.py
+gfxe	gfxewalk	90	tests/gfxewalk.py
+wden	wdenter	90	tests/wdenter.py
+save	saverate	28	tests/saverate.py
+save	savervga	27	tests/saver.py
+save	saver	25	tests/saver.py
+tgui	tgui	80	tests/tgui.py
+kdno	kdnoprog	75	tests/kdnoprog.py
+stk	stk0water	70	tests/stk0water.py
+vidx	vidxdisp	70	tests/vidxdisp.py
+gbke	gbkeys	66	tests/gbkeys.py
+vidh	vidhdmake	65	tests/vidhdmake.py
+span	spantest	30	tests/spantest.py
+span	spantest-vga	30	tests/spantest.py
+fmbt	fmbtn	60	tests/fmbtn.py
+rdpr	rdpreserve	60	tests/rdpreserve.py
+msel	msel	55	tests/msel.py
+cppr	cppromise	50	tests/cppromise.py
+mine	minexflag	50	tests/minexflag.py
+romn	romnodisk	45	tests/romnodisk.py
+cpna	cpnameshdd	25	tests/cpnames.py
+cpna	cpnames	20	tests/cpnames.py
+imgs	imgswap	45	tests/imgswap.py
+cych	cychs	40	tests/cychs.py
+vgac	vgacolor	40	tests/vgacolor.py
+fmtr	fmtreach	39	tests/fmtreach.py
+gbsp	gbspeed	32	tests/gbspeed.py
+dtwr	dtwrite	30	tests/dtwrite.py
+cfgt	cfgtrip	30	tests/cfgtrip.py
+cpli	cplistrow	30	tests/cplistrow.py
+wdpa	wdparts	27	tests/wdparts.py
+spkf	spkfx	25	tests/spkfx.py
+shed	shedrelist	20	tests/shedrelist.py
+fill	fillpat	20	tests/fillpat.py
+spkb	spkbench	20	tests/spkbench.py
+gbso	gbsound	15	tests/gbsound.py
+zone	zonedmg	15	tests/zonedmg.py

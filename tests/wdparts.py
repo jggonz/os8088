@@ -73,8 +73,12 @@ DISK = "build/wdpartsgate.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    M.settle(m); mo = Mouse(marty=m)
+with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
+              boot=False) as m:
+    m.run()
+    M.kernel_up(m)              # the boot gate on STATE (SOAK-SPEED 4)
+    M.no_saver(m)
+    mo = Mouse(marty=m)
     dispcp.open_drive(m, mo, S, M.settle, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")

@@ -78,8 +78,10 @@ class Own(dispcells.Cells):
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=MACHINE) as m:
-    mo = os88mouse.Mouse(marty=m)
+                      machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)              # the boot gate on state: setup is
+    mo = os88mouse.Mouse(marty=m)       # clicks and guest reads
     os88marty.no_saver(m)
 
     def su(slot):
@@ -101,10 +103,11 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         mo._edge(True); mo.to(x1, y1, l=True); mo._edge(False)
         mo.to(*dispcorner.PARK); os88marty.settle(m, limit=120)
 
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
     disk = dispcp.win_list(m, S)[-1]
     dx, dy, _, _ = dispcp.win_rect(m, S, disk)
-    dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "APPS")
+    dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm),
+                      dx, dy, "APPS")
     dispcp.open_named(m, mo, S, tick, dx, dy, "CALC.O88")
     for _ in range(4):
         tick(m)

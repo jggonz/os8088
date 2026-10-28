@@ -1067,6 +1067,10 @@ static void ovl_clip_service(unsigned base)
             c64_paste_stop();               /* which frees the claim */
             return;
         }
+        /* ...and the queue may MOVE now it is filled (C64-SPEC 3.1.1):
+         * os88_onmove keeps c64_paste_seg, the one word that names it, and
+         * the feeder peeks through that word at each use */
+        os88_mem_movable(seg, 1);
         c64_paste_i = 0;
         c64_paste_n = got;                  /* WHAT FITS, which is CX and not
                                              * the clipboard's whole length */

@@ -10,10 +10,12 @@ closing line - "the arena below the top now has no barrier in it at all - every
 claim there is movable or purgeable" - was true of the configuration it was
 measured on and false the moment a sheet opened.
 
-Five of the six are declared now. The sixth, `sh_stgseg`, is the ES:BX of all
-seven of this package's OSAPI_FILE_READ/WRITE calls (SPEC.md 66.9 reason 4) and
-stays pinned; this row asserts that too, because "we meant to leave that one"
-and "we forgot that one" are the same picture.
+All six are declared now. The sixth, `sh_stgseg`, is the ES:BX of every
+OSAPI_FILE_READ/WRITE the package makes (SPEC.md 66.9 reason 4), so it is
+PINNED across each of those calls and movable the rest of the time
+(NO-PINNING 1, sh_stgpin) - and this leg asserts it now MOVES with the rest.
+The pin itself is the `--leg rt` row's: it stops INSIDE a save and a load,
+reads the staging's MC_RLOC there, and round-trips the file after the move.
 
 paintmove.py's recipe, and it is the recipe rather than a preference: claims
 are first fit from the bottom, so a Sheet launched into an empty arena sits on
@@ -25,8 +27,8 @@ FOUR ASSERTIONS:
 
   1. SHEET'S CELL CLAIM MOVED. Without it the rest is vacuous.
   2. ITS CONTENTS SURVIVED, hashed either side at the two addresses.
-  3. EVERY ONE OF THE FIVE WORDS FOLLOWED, and `sh_stgseg` did NOT move -
-     read out of the package's own bss at offsets nasm computed, not guessed.
+  3. EVERY ONE OF THE SIX WORDS FOLLOWED - read out of the package's own bss
+     at offsets nasm computed, not guessed.
      This is the assertion `sh_reloc` is a table for: SPEC.md 66.1 is the
      record of a word-poke design that failed because a claim had a SECOND
      naming word, and Sheet has three of those in os88chart.inc's borrowed
@@ -70,13 +72,14 @@ MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_HEAPFRAG, PKG_SHEET = "HEAPFRAG.O88", "SHEET.O88"
 DISK = "build/sheetmove360.img"
 
-# the five that are declared - Undo's joined them in SPEC.md 81.57, and the
-# border and note tables became ONE carved claim in 81.94 - and the one that
-# is deliberately not. sh_noteseg is not a claim of its own any more: it is
-# the carved claim's second part, and is checked below to follow it
+# the six that are declared - Undo's joined them in SPEC.md 81.57, the
+# border and note tables became ONE carved claim in 81.94, and the STAGING
+# joined them in NO-PINNING 1 (pinned only across each file call, sh_stgpin).
+# sh_noteseg is not a claim of its own any more: it is the carved claim's
+# second part, and is checked below to follow it
 MOVABLE = ["sh_cellseg", "sh_txtseg", "sh_bordseg",
-           "sh_chartseg", "sh_undoseg"]
-PINNED = "sh_stgseg"
+           "sh_chartseg", "sh_undoseg", "sh_stgseg"]
+STAGING = "sh_stgseg"
 
 
 def pkg_syms(src, incs=("apps/",)):
@@ -185,10 +188,303 @@ def opened(m, S, title):
                       what="%s's claims" % title)
 
 
+DISK_RT = "build/sheetovl360.img"
+RT_NAME = "SHEET1.SLK"                  # sh_defname: Save As keeps it
+RT_VALUE = 12345
+
+
+def rt_poison(m, S, old, new, para):
+    """0xFF over every paragraph of the old staging no live claim holds now.
+
+    ovlmove.py's lesson, for data: a move COPIES and does not erase, so a
+    transfer handed the OLD address still finds the right bytes there and a
+    missing pin "works". Poisoned, a stale save writes 0xFF and a stale load
+    fills a block nobody reads, leaving the parser on these bytes.
+    """
+    held = [(new, new + para)]
+    held += [(b, b + p) for b, p, _, _ in claims(m, S) if b != old]
+    n, q = 0, old
+    while q < old + para:
+        if any(lo <= q < hi for lo, hi in held):
+            q += 1
+            continue
+        e = q
+        while e < old + para and not any(lo <= e < hi for lo, hi in held):
+            e += 1
+        m.write(q * 16, b"\xFF" * ((e - q) * 16))
+        n += (e - q) * 16
+        q = e
+    return n
+
+
+def rt_free_runs(m, S):
+    lo = u16(m.read(S("mem_base"), 2))
+    hi = u16(m.read(S("mem_top"), 2))
+    runs, at = [], lo
+    for base, para, _, _ in sorted(claims(m, S)):
+        if base > at:
+            runs.append(base - at)
+        at = max(at, base + para)
+    if hi > at:
+        runs.append(hi - at)
+    return runs
+
+
+def rt_watch(m, S, SH, seg, stub, trigger):
+    """Run `trigger` and stop INSIDE `stub`'s file call (NO-PINNING 1).
+
+    `<stub>.go` is the instruction that makes the OSAPI_FILE_READ/WRITE: the
+    staging's MC_RLOC is read there and must be 0 - sh_stgpin has run - and
+    the FIRST claim the kernel makes before `sh_stgunpin` is reached is
+    INFLATED to one KB past the largest free run, so it can be granted only
+    by a compaction, inside the transfer the staging is the ES:BX of. A
+    staging that then moves has its old home poisoned (rt_poison), so a
+    kernel walking the stale address writes or reads junk rather than the
+    copy a move leaves behind.
+    """
+    go = seg * 16 + SH[stub + ".go"]
+    out = seg * 16 + SH["sh_stgunpin"]
+    # mem_claim_x.go and not mem_claim: every door (plain, hi, DMA) passes
+    # through it, where `mem_claim` is only .text's trampoline - the disk
+    # layer is in .cold and calls mem_claim_x direct, so a breakpoint on the
+    # trampoline saw none of the caches a file call claims back
+    claim, reloc = S("mem_claim_x.go"), S("mem_reloc_call")
+    stg = lambda: u16(m.read(seg * 16 + SH["sh_stgseg"], 2))
+    res = {"in": False, "rloc": None, "stg": None, "claims": 0, "forced": 0,
+           "moved": 0, "out": False}
+    m.bp_exec(go)
+    trigger()
+    for _ in range(400):
+        if m.wait_stop(60) is None:
+            break
+        r = m.regs()
+        at = r["cs"] * 16 + r["ip"]
+        if at == go and not res["in"]:
+            res["in"] = True
+            s0 = stg()
+            rec = [c for c in claims(m, S) if c[0] == s0]
+            res["stg"], res["rloc"] = s0, (rec[0][3] if rec else None)
+            if os.environ.get("SHM_DEBUG"):
+                print("     at %s.go: claims %s" % (stub, ["%04x/%d/%04x/%04x"
+                      % c for c in sorted(claims(m, S))]))
+            m.bp_exec(out, claim, reloc)
+        elif at == claim and res["in"]:
+            res["claims"] += 1
+            if res["forced"]:           # .go is the retry's target too: one
+                m.go()                  # inflated claim is the experiment
+                continue
+            runs = rt_free_runs(m, S)
+            kb = max(runs) // 64 + 1
+            if sum(runs) >= kb * 64:
+                m.setreg("ax", kb)
+                res["forced"] += 1
+        elif at == reloc and res["in"] and r["bx"] == res["stg"]:
+            res["moved"] += 1
+            para = [p for b, p, _, _ in claims(m, S) if b == r["dx"]]
+            rt_poison(m, S, r["bx"], r["dx"], para[0] if para else 0x800)
+        elif at == out:
+            res["out"] = True
+            break
+        m.go()
+    m.bp_exec()
+    m.go()
+    return res
+
+
+def roundtrip(a):
+    """--leg rt: the staging's PIN, seen inside a save and a load, and the
+    save + reload after the staging has moved (NO-PINNING 1).
+
+    sheetovl360's disk and sheetovlmove's arrangement: Note Pad owns the
+    floor, SHEET lands above it with both modules (the file formats are
+    CHART.OVL's, 82.16.9), Note Pad closes, and a compaction posted from
+    outside at the trivial rank (pkgmove's door, `[mem_cpq]`) slides SHEET's
+    data down - the staging with it.
+
+    SIX ASSERTIONS:
+      1. the staging is declared movable (MC_RLOC != 0, read from outside);
+      2. the posted pass MOVED it, and [sh_stgseg] names the new claim;
+      3. INSIDE the save's OSAPI_FILE_WRITE its MC_RLOC is 0 - pinned;
+      4. the file the save wrote holds the cell, read by a host parser;
+      5. INSIDE the load's OSAPI_FILE_READ its MC_RLOC is 0 - pinned;
+      6. the load put the cell back into an EMPTIED store, and afterwards
+         the staging is movable again.
+
+    The first claim the kernel makes inside either call is inflated so that
+    only a compaction can grant it (rt_watch), and the row prints how many
+    there were. ON THIS DISK THERE ARE NONE, and that is measured rather than
+    assumed: the read-ahead window is claimed at the MOUNT (dsk_rah), a 360KB
+    FAT12 volume takes no FAT window, and even with every cache shed by a
+    0xFF-rank pass just before the keystroke the chooser's own listing has
+    claimed them back before SHEET's call is reached - so no compaction can
+    land inside the transfer here, and 3 and 5 are what carry the pin. The
+    machinery stays because a volume that does claim inside the call (a
+    FAT16 disk's window) gets the stronger experiment for free.
+    """
+    import os88flush
+    import os88sheetfmt
+    import os88ui
+    import sheetfmt as SF
+    S = os88sym.linear
+    os88fixture.need(DISK_RT)
+    SH = pkg_syms("apps/sheet/sheet.asm")
+    bad = 0
+
+    def check(n, ok, what, why=""):
+        print("  %s %-32s %s" % (n, what, "OK" if ok else "FAIL %s" % why))
+        return 0 if ok else 1
+
+    with os88marty.launch("build/os8088-360.img", apps=DISK_RT,
+                          machine=a.machine, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
+        os88marty.no_saver(m)
+        mo = os88mouse.Mouse(marty=m)
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dslot = dispcp.win_list(m, S)[-1]
+        wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
+        mo.drag(wx + 60, wy + 9, wx + 60 + 215, wy + 9)
+        os88marty.settle(m)
+        disk = dispcp.win_rect(m, S, dslot)[:2]
+
+        def win(slot):
+            return [x for x in os88geom.windows(m, S) if x.i == slot][0]
+
+        def raise_win(slot, title=False):
+            pt = uncovered(m, S, win(slot), prefer_title=title)
+            if pt is None:
+                raise RuntimeError("window %d is wholly covered" % slot)
+            mo.click(*pt)
+            os88marty.settle(m)
+
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk,
+                          name="NOTEPAD.O88")
+        np_slot = dispcp.win_list(m, S)[-1]
+        os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
+                          what="Note Pad's claims")
+        npw = win(np_slot)
+        mo.drag(npw.x + 60, npw.y + 9, 60, npw.y + 9)
+        os88marty.settle(m)
+
+        raise_win(dslot)
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk,
+                          name="SHEET.O88")
+        opened(m, S, "Sheet")
+        seg, sh_win = pkg_seg(m, S, "Sheet")
+        if seg is None:
+            print("FAIL: SHEET never opened a window")
+            return 1
+
+        def word(n):
+            return u16(m.read(seg * 16 + SH[n], 2))
+
+        col, row = word("sh_selcol"), word("sh_selrow")
+        m.type_text(str(RT_VALUE))
+        os88marty.settle(m)
+        m.key("Enter")
+        os88marty.settle(m)
+
+        raise_win(np_slot, title=True)
+        npw = win(np_slot)
+        mo.click(npw.x + 8, npw.y + 9)
+        os88marty.settle(m)
+        if any(w.i == np_slot and w.visible for w in os88geom.windows(m, S)):
+            print("FAIL: Note Pad did not close, so no hole opened")
+            return 1
+        raise_win(sh_win.i, title=True)
+
+        s0 = word("sh_stgseg")
+        rec = [c for c in claims(m, S) if c[0] == s0]
+        bad += check(1, bool(rec) and rec[0][3] != 0,
+                     "the staging is declared", "(%r)" % (rec,))
+        wptr = os88geom.winptr(m, sh_win.i, S)
+        m.write(S("mem_cpq_lvl"), bytes([0xFC]))
+        m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+        os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
+                        "the posted compaction", poll=0.2, limit=30)
+        os88marty.ui_done(m)
+        seg, sh_win = pkg_seg(m, S, "Sheet")
+        s1 = word("sh_stgseg")
+        live = set(c[0] for c in claims(m, S))
+        bad += check(2, s1 != s0 and s1 in live, "the staging moved, followed",
+                     "(%04x -> %04x, live %s)" % (s0, s1, s1 in live))
+        print("     staging %04x -> %04x" % (s0, s1))
+
+        # --- Save As SLK, stopped inside the write --------------------------
+        ui = os88ui.UI(m, mouse=mo)
+        SF.menu_pick(m, mo, seg, SH, "sh_i_file", "saveas")
+        os88marty.settle(m, limit=180)
+        mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
+        os88marty.settle(m)
+        mo.click(*SF.fdlg_okxy(m))
+        os88marty.settle(m, limit=180)
+        ui.chooser()
+        for _ in range(13):
+            m.key("Backspace")
+        m.type_text(RT_NAME)
+        w = rt_watch(m, S, SH, seg, "sh_k_file_write",
+                     lambda: m.key("Enter"))
+        print("     the save: %d claim(s) inside the write, %d forced, the "
+              "staging moved %d time(s) in it" % (w["claims"], w["forced"],
+                                                    w["moved"]))
+        bad += check(3, w["in"] and w["rloc"] == 0 and w["out"],
+                     "pinned INSIDE the write",
+                     "(reached %s, MC_RLOC %r, returned %s)"
+                     % (w["in"], w["rloc"], w["out"]))
+        ui.chooser_gone(limit=120)
+        os88marty.settle(m, limit=120)
+        data = None
+        for _ in range(30):
+            v = os88flush.Flush(marty=m).volume(1)
+            if RT_NAME in v.names():
+                data = v.read(RT_NAME)
+                if data:
+                    break
+            os88marty.settle(m, quiet=2.0, stable=2, limit=60)
+        cells = os88sheetfmt.read_sylk(data) if data else {}
+        got = cells.get((row, col))
+        bad += check(4, got == RT_VALUE, "the saved file holds the cell",
+                     "(%r at %r, %d bytes)" % (got, (row, col),
+                                               len(data or b"")))
+
+        # --- ...and Open it into an EMPTIED store, stopped inside the read --
+        m.write(seg * 16 + SH["sh_ncells"], b"\0\0")
+        SF.menu_pick(m, mo, seg, SH, "sh_i_file", "open")
+        os88marty.settle(m, limit=180)
+        ui.chooser()
+        ui.chooser_select(RT_NAME)
+        r = rt_watch(m, S, SH, seg, "sh_k_file_read",
+                     lambda: m.key("Enter"))
+        print("     the load: %d claim(s) inside the read, %d forced, the "
+              "staging moved %d time(s) in it" % (r["claims"], r["forced"],
+                                                    r["moved"]))
+        bad += check(5, r["in"] and r["rloc"] == 0 and r["out"],
+                     "pinned INSIDE the read",
+                     "(reached %s, MC_RLOC %r, returned %s)"
+                     % (r["in"], r["rloc"], r["out"]))
+        ui.chooser_gone(limit=120)
+        os88marty.settle(m, limit=180)
+        seg, _ = pkg_seg(m, S, "Sheet")
+        back = SF.cell_val(m, seg, SH, col, row)
+        s2 = word("sh_stgseg")
+        rec = [c for c in claims(m, S) if c[0] == s2]
+        bad += check(6, back == RT_VALUE and bool(rec) and rec[0][3] != 0,
+                     "reloaded, and movable again",
+                     "(cell %r, staging %r)" % (back, rec))
+    print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)
+    return 1 if bad else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
+    ap.add_argument("--leg", choices=("move", "rt"), default="move",
+                    help="move: the six claims under heapfrag's recipe; rt: "
+                    "the staging's pin inside a save and a load, and the "
+                    "round trip after it moved (roundtrip's docstring)")
     a = ap.parse_args()
+    if a.leg == "rt":
+        return roundtrip(a)
     S = os88sym.linear
     os88fixture.need(DISK)
 
@@ -258,6 +554,19 @@ def main():
         print("Sheet at %04x holds %s"
               % (sh_seg, ["%04x/%dKB%s" % (b, p // 64, "*" if r else "")
                           for b, p, _, r in before]))
+        # SHEET'S TWO CODE MODULES ARE PARTS OF SHEET.O88 since SPEC.md
+        # 82.16.12, so this disk can no longer leave them off: whichever the
+        # heap had room for is loaded with the package. They are
+        # sheetovlmove's subject and not this row's - its six are the DATA
+        # claims - so a module's claim is set aside here, by the words that
+        # name it ([ch_ovseg], [sh_m2far+2])
+        SH = pkg_syms("apps/sheet/sheet.asm")
+        mods = set(u16(m.read(sh_seg * 16 + SH[n] + o, 2))
+                   for n, o in (("ch_ovseg", 0), ("sh_m2far", 2))) - {0}
+        if mods:
+            print("Sheet's modules (parts, 82.16.12) at %s - not counted"
+                  % ["%04x" % b for b in sorted(mods)])
+        before = [c for c in before if c[0] not in mods]
         ndecl = sum(1 for _, _, _, r in before if r)
         if ndecl != len(MOVABLE):
             print("FAIL: Sheet declared %d claims movable and this row expects "
@@ -273,14 +582,12 @@ def main():
         m.key("Enter")
         os88marty.settle(m)
 
-        SH = pkg_syms("apps/sheet/sheet.asm")
-
         def sword(name):
             return u16(m.read(sh_seg * 16 + SH[name], 2))
 
-        w0 = dict((n, sword(n)) for n in MOVABLE + [PINNED])
+        w0 = dict((n, sword(n)) for n in MOVABLE)
         sizes = dict((c[0], c[1]) for c in before)
-        for n in MOVABLE + [PINNED]:
+        for n in MOVABLE:
             if w0[n] not in sizes:
                 print("FAIL: [%s] = %04x is not a claim Sheet holds"
                       % (n, w0[n]))
@@ -288,7 +595,7 @@ def main():
         h0 = dict((n, hashlib.md5(m.read(w0[n] * 16, sizes[w0[n]] * 16))
                    .hexdigest()) for n in MOVABLE)
         print("  " + "  ".join("%s=%04x" % (n[3:], w0[n])
-                               for n in MOVABLE + [PINNED]))
+                               for n in MOVABLE))
         park(mo, m)
         shot0 = m.vram("cga")
 
@@ -333,11 +640,11 @@ def main():
 
         after = mine(claims(m, S), sh_seg1)
         live = set(c[0] for c in after)
-        w1 = dict((n, sword1(n)) for n in MOVABLE + [PINNED])
+        w1 = dict((n, sword1(n)) for n in MOVABLE)
         print("Sheet now holds %s"
               % ["%04x/%dKB" % (b, p // 64) for b, p, _, _ in after])
         print("  " + "  ".join("%s=%04x" % (n[3:], w1[n])
-                               for n in MOVABLE + [PINNED]))
+                               for n in MOVABLE))
 
         bad = 0
         moved = [n for n in MOVABLE if w1[n] != w0[n]]
@@ -360,15 +667,38 @@ def main():
         print("  3 every word names a claim %s"
               % ("OK" if not stale else "STALE: " + ", ".join(stale)))
         bad += bool(stale)
-        nt = sword("sh_noteseg")              # 81.94: carved, so it FOLLOWS
+        nt = sword1("sh_noteseg")             # 81.94: carved, so it FOLLOWS
         nt_ok = nt == w1["sh_bordseg"] + 4 * 64   # the border table's move
         print("  3a sh_noteseg follows      %s" % ("OK" if nt_ok else
               "STALE: %04x, border table at %04x" % (nt, w1["sh_bordseg"])))
         bad += not nt_ok
-        pin_ok = w1[PINNED] == w0[PINNED]
-        print("  3b %s stayed put         %s"
-              % (PINNED, "OK" if pin_ok else "MOVED <-- it is a file target"))
-        bad += not pin_ok
+        # 3c THE MODULES' VECTOR TABLES FOLLOWED THE REGION (NO-PINNING P1):
+        # ch_v_* and sh_v_* hold OUR segment, stamped by the binds, and the
+        # modules far-call back through them - a stale stamp lands in whatever
+        # took the region's old place. sh_rgnreloc re-runs both binds.
+        if sh_seg1 != sh_seg:
+            vs = [u16(m.read(sh_seg1 * 16 + SH[t] + 2 + 4 * i, 2))
+                  for t, n in (("ch_v_first", 9), ("sh_v_first", 2))
+                  for i in range(n)]
+            vec_ok = all(v == sh_seg1 for v in vs)
+            print("  3c vector stamps follow    %s"
+                  % ("OK (%d)" % len(vs) if vec_ok else
+                     "STALE: %s, region at %04x"
+                     % (["%04x" % v for v in vs], sh_seg1)))
+            bad += not vec_ok
+        else:
+            print("  3c vector stamps follow    (not exercised: the region "
+                  "did not move)")
+        # 3b THE STAGING MOVED TOO (NO-PINNING 1). It sits third of the six
+        # in the claim order, with cells and text under it and three claims
+        # over it, so a pass that slid the claims above it down and left it
+        # where it was is the picture of a declaration that did not take
+        stg_ok = w1[STAGING] != w0[STAGING] and w1[STAGING] in live
+        print("  3b %s moved and followed %s"
+              % (STAGING, "OK  %04x -> %04x" % (w0[STAGING], w1[STAGING])
+                 if stg_ok else "NO  (%04x -> %04x)"
+                 % (w0[STAGING], w1[STAGING])))
+        bad += not stg_ok
 
         # --- raise Sheet: the repaint is what reads sh_cellseg --------------
         # ON AN UNCOVERED PIECE OF ITS TITLE BAR, and both halves of that

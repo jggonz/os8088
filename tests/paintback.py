@@ -46,6 +46,7 @@ The VGA's canvas pixels are compared against the file; the mono half never is
 coordinates there samples the wrong pixels).
 """
 import argparse
+import socket
 import tempfile
 import os
 import sys
@@ -103,15 +104,39 @@ def compare(m, base, sym, D, iw, ih, px, card):
     return seen, bad
 
 
-def run(a, case, iw, ih, px, sym):
-    settle = os88marty.settle
-    prim = 0 if case == "vga" else 1        # slot 0 is the VGA, 1 the Hercules
+def run(a, cases, iw, ih, px, sym):
+    """ONE BOOT FOR BOTH LEGS: the machine is snapshotted at the desktop, the
+    first leg runs on it, and the second runs on a restore of the snapshot -
+    the same freshly booted desktop the second boot used to give it, without
+    the boot (SOAK-SPEED technique 3)."""
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         if len(m.cards()) != 2:
             sys.exit("paintback: %s is not a two-card machine" % a.machine)
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.settle(m, gate=os88marty.desktop_up)
+        snap = m.snapshot()["id"] if len(cases) > 1 else None
+        leg(a, m, cases[0], iw, ih, px, sym)
+        for case in cases[1:]:
+            with socket.socket() as sk:
+                sk.bind(("127.0.0.1", 0))
+                port = sk.getsockname()[1]
+            m2 = m.restore(snap, port)
+            try:
+                if m2.status().get("state") != "running":
+                    m2.run()
+                leg(a, m2, case, iw, ih, px, sym)
+            finally:
+                try:
+                    m2.cmd(cmd="quit")
+                except os88marty.MartyError:
+                    pass
+
+
+def leg(a, m, case, iw, ih, px, sym):
+    settle = os88marty.settle
+    prim = 0 if case == "vga" else 1        # slot 0 is the VGA, 1 the Hercules
+    if True:
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, settle)
         dispcp.set_primary(m, mo, S, settle, prim)
@@ -338,8 +363,7 @@ def main():
 
     iw, ih, px = gif_pixels(a.gif)
     sym = pkg_syms("apps/paint/paint.asm")
-    for case in ([a.case] if a.case else ["vga", "herc"]):
-        run(a, case, iw, ih, px, sym)
+    run(a, [a.case] if a.case else ["vga", "herc"], iw, ih, px, sym)
     print("paintback: a window crosses to the other card and home again with "
           "its picture intact, and its planes back")
     return 0

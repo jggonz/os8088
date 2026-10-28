@@ -32,7 +32,10 @@
 # and leaves AX and FLAGS defined, and no caller reads the FLAGS a C function
 # returns. The one routine the input calls that DOES answer in a flag,
 # cc8086's own `call cc_ovneed / jc`, is covered by modelling every call as
-# DEFINING the flags - which is exactly what it does. A call is deliberately
+# DEFINING the flags - which is exactly what it does. The one call that DOES
+# read a register is cc8086's module-to-module `mov bx, cc_ovm_* / call far
+# [cc_ovvmm]`, whose thunk takes the vector in BX, so that call is modelled
+# as reading BX - without it the `mov` reads as dead. A call is deliberately
 # NOT modelled as killing BX, CX or DX: that is the conservative direction,
 # and keeps them live across it. Anything this file does not model reads
 # every register, so an unknown is a missed rewrite, never a wrong one.
@@ -583,6 +586,8 @@ class Prog:
             u = rmask("sp")
             for o in it.ops:
                 u |= mask(cc8086.op_units(o))
+                if "cc_ovvmm" in o:     # cc_ovmthunk takes the callee's
+                    u |= BXM            # vector in BX (cc8086.overlay)
             return u, AXM | FB, [nx]
         u, d, term = cc8086.def_use(it)
         if term:

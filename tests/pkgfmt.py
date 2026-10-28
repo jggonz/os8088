@@ -75,7 +75,11 @@ else:
     plan = [("OLDCALC.O88", LD_EVER, "a format-3 package on this kernel"),
             ("CALC.O88", LD_OK, "this tree's own Calculator")]
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot=False) as m:
+    m.run()                             # the boot gate on STATE: the first
+    os88marty.kernel_up(m)              # act is a verb that confirms
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
@@ -90,7 +94,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         before = len(dispcp.win_list(m, S))
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name,
                           expect="refusal" if want != LD_OK else "auto")
-        os88marty.settle(m)
+        os88marty.ui_done(m)            # every read below is guest state
         got = m.read(S("ld_status"), 1)[0]
         after = len(dispcp.win_list(m, S))
         say("%-11s -> %-9s (want %s) - %s; windows %d -> %d"

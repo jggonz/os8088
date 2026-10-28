@@ -23,6 +23,10 @@ with --mhz when it is not the default.
 the clock restarted at frame 800 so the frames timed are play), and prints
 its frames against real time - the CPU's whole share, I/O and events
 included, with no picture drawn.
+
+RDG_DEFS=LOSSY_X,LOSSY_Y in the environment assembles the harness with
+those defines: the lossy picture options of
+docs/reports/REALDMG-LOSSY-2026-10-22.md, which the package never sees.
 """
 import argparse
 import os
@@ -117,8 +121,10 @@ def main():
     ap.add_argument("--ilace", type=int, default=0, choices=(0, 1, 2, 3),
                     help="with --vga: Interlace Off, On, Scrolling or Doubled (rdg_ilace)")
     a = ap.parse_args()
-    subprocess.check_call([sys.executable, os.path.join(ROOT, "tools/gbclock.py")],
-                          stdout=subprocess.DEVNULL)
+    if not a.rom:                       # (gbclock's ROMs are the fit's alone:
+        subprocess.check_call(          #   two --rom runs at once raced on them)
+            [sys.executable, os.path.join(ROOT, "tools/gbclock.py")],
+            stdout=subprocess.DEVNULL)
     frames = a.frames or (300 if a.marty else 600)
     mhz = a.mhz or (4.772727 if a.marty else 12.5)
     geom = 360 if a.marty else 1440

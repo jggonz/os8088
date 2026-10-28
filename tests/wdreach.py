@@ -76,19 +76,20 @@ DISK = "build/wdreachgate.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    M.settle(m); mo = Mouse(marty=m)
+with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
+              boot=False) as m:
+    m.run(); M.kernel_up(m); mo = Mouse(marty=m)
     print("== Word: every pixel of the band names a row (SPEC.md 27.11.2) ==")
-    dispcp.open_drive(m, mo, S, M.settle, "B")
+    dispcp.open_drive(m, mo, S, lambda m, card=None, gate=None: M.ui_done(m), "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     nwin = len(dispcp.win_list(m, S))
-    dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
+    dispcp.open_named(m, mo, S, lambda m, card=None, gate=None: M.ui_done(m), dx, dy, "WELCOME.DOC")
     try:
         M.until(m, lambda _: len(dispcp.win_list(m, S)) > nwin,
                 "Word's window", poll=0.25, limit=60)
     except M.MartyError:
         pass                            # ...judged by the image hunt below
-    M.settle(m)
+    M.ui_done(m)
 
     raw = m.read(S("inst_tab"), 32*12); seg = None
     for i in range(12):
@@ -127,10 +128,9 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
 
     def page_down():
         m.run()                         # settle_height may have left it paused
-        mo.to(sbx, ydn); M.pace(m, 0.25)
-        m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False)
+        mo.click(sbx, ydn, settle=0)    # every edge proven (os88mouse)
         M.quiesce(m, lambda: (rw("wd_top"), rb("wd_hdirty")))
-        mo.to(4, 4); M.settle(m)
+        mo.to(4, 4); M.ui_done(m)
 
     FR = None
     for _ in range(40):
@@ -160,8 +160,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         # to the end of the document.
         dead = []
         for y in range(y0, y1 + 1):
-            m.run(); mo.to(tx + 8, y); M.pace(m, 0.25)
-            m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False)
+            m.run(); mo.click(tx + 8, y, settle=0)
             M.quiesce(m, lambda: (rw("wd_cur"), rb("wd_hitset")))
             if rw("wd_cur") >= dlen:
                 dead.append(y)
@@ -171,15 +170,14 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
               "name no row at all" % (dead, dlen))
         print("      swept y %d..%d" % (y0, y1))
 
-        m.run(); mo.to(tx + 8, ryb(FR) + 2); M.pace(m, 0.3)
-        m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False)
+        m.run(); mo.click(tx + 8, ryb(FR) + 2, settle=0)
         M.quiesce(m, lambda: (rw("wd_cur"), rb("wd_hitset")))
-        M.settle(m)
+        M.ui_done(m)
         was = rw("wd_cur")
         check("the caret landed on the flush-right row (case, not assertion)",
               rows(FR) <= was < rows(FR + 1) if FR + 1 < vrows else True,
               "[wd_cur] = %d, row %d is %d.." % (was, FR, rows(FR)))
-        m.key("ArrowDown"); M.quiesce(m, caret); M.settle(m)
+        m.key("ArrowDown"); M.quiesce(m, caret); M.ui_done(m)
         check("B: Down off a flush-right line moves the caret",
               rw("wd_cur") != was, "[wd_cur] stayed at %d" % was)
         print("      Down: %d -> %d" % (was, rw("wd_cur")))
@@ -187,14 +185,14 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         # C/D/E: the row BELOW the flush-right one is soft-wrapped, and the
         # flush-right line ends further right than it does - so Down from its
         # END aims past the wrapped row's last character. SPEC.md 27.11.3.
-        m.key("ArrowUp"); M.quiesce(m, caret); M.settle(m)
-        m.key("End"); M.quiesce(m, caret); M.settle(m)
+        m.key("ArrowUp"); M.quiesce(m, caret); M.ui_done(m)
+        m.key("End"); M.quiesce(m, caret); M.ui_done(m)
         top0, row0 = rw("wd_top"), rw("wd_currow")
         full = syms["wd_redraw.full"]
         hits = []
         with M.bp_trace(m, base + full, on_hit=lambda mm, rec: hits.append(1), cap=100):
             m.key("ArrowDown"); M.pace(m, 1.6)
-        M.settle(m)
+        M.ui_done(m)
         cur, crow, top1 = rw("wd_cur"), rw("wd_currow"), rw("wd_top")
         absrow = lambda r, t: (r - 0x10000 if r & 0x8000 else r) + t
         nxt = rows(crow + 1) if 0 <= crow + 1 < vrows else None
@@ -212,10 +210,9 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         # row's end names that row's end, not the next row's first index
         wr = absrow(row0, top0) + 1 - top1  # the WRAPPED row, wherever the
         nxt = rows(wr + 1) if 0 <= wr + 1 < vrows else None  # caret went
-        mo.to(sbx - 12, ryb(wr) + 2); M.pace(m, 0.3)
-        m.mouse(l=True); M.pace(m, 0.08); m.mouse(l=False)
+        mo.click(sbx - 12, ryb(wr) + 2, settle=0)
         M.quiesce(m, lambda: (rw("wd_cur"), rb("wd_hitset")))
-        M.settle(m)
+        M.ui_done(m)
         cur2, crow2 = rw("wd_cur"), rw("wd_currow")
         check("E: a click right of a wrapped row keeps the caret on it",
               crow2 == wr and (nxt is None or cur2 < nxt),

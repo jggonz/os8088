@@ -92,12 +92,15 @@ class Flow:
         return bytes(self.g.rd("xb_hudstr", 20)).decode("latin1")
 
     # ---- driving ---------------------------------------------------------------
-    def key(self, name, hold=.05, settle=.5):
-        m = self.m
-        m.key(name, up=False)
-        M.pace(m, hold)
-        m.key(name, down=False)
-        M.guest_sleep(m, settle)
+    def key(self, name, hold=.2, settle=.5):
+        """One keystroke held `hold` GUEST seconds, exactly (os88marty.keystroke), then `settle`.
+
+        The hold was a host-timed `pace`: the release went whenever this process next ran, and a
+        60 ms stall of it on a loaded box put an Up past the keyboard's 0.5 s typematic delay - the
+        repeat flipped the mode back and `Up flips the mode` failed (docs/plans/SOAK-PARALLEL.md
+        17.12)."""
+        M.keystroke(self.m, name, hold)
+        M.guest_sleep(self.m, settle)
 
     def wait(self, cond, what, guest=60):
         M.until(self.m, lambda _: cond(), what, guest=guest)
@@ -240,11 +243,10 @@ def boot(tag, apps=None):
 
 
 def open_flow(ui, tag, sym, ref, art):
-    ui.open_drive("B")
-    ui.settle()
+    ui.open_drive("B")                      # (confirms the listing; the claims are read
+    M.ui_done(ui.m)                         # once the UI task is idle - no screen settle)
     c0 = F.claims(ui.m)
-    ui.open("EXCBIKE.O88")
-    ui.settle()
+    ui.open("EXCBIKE.O88")                  # (confirms the window; the reveal wait follows)
     fl = Flow(ui, tag, sym, ref, art)
     M.until(ui.m, lambda _: fl.w("xb_reveal") >= fl.w("xb_frontheight") > 0,
             "the splash reveal finishes", guest=30)
@@ -308,8 +310,18 @@ def item_menus(fl):
     assert fl.b("xb_cur") == 1, "Up flips the mode"
     fl.key("ArrowDown", settle=.3)
     assert fl.b("xb_cur") == 0, "Down flips it back"
-    fl.key("Enter")
+    # ONE PRESS, ONE SCREEN (flow.inc xb_rdkey): an Enter held past the typematic
+    # delay repeats, and no repeat may be the course screen's Enter. A soak caught
+    # the mode screen's Enter starting a race when a key-up arrived late: the course
+    # screen's bounded wait for the release (40 frames) ran out and its own key read
+    # took a repeat. 2.7 GUEST seconds of hold - the late key-up, and a long hold,
+    # which a fix that only drains the repeats queued so far does not survive.
+    # Broken on purpose (the old xb_flush), state reaches 3 every time
+    fl.key("Enter", hold=2.7)
     fl.wait_state(ST_TRACK)
+    M.guest_sleep(fl.m, .5)
+    assert fl.state() == ST_TRACK, ("a held Enter went past the course list",
+                                    fl.state())
     n = 5
     for _ in range(n + 2):                          # past the end: it stops on the last course
         fl.key("ArrowDown", settle=.2)
@@ -609,9 +621,7 @@ def item_leave(fl, c0, c_pre, close=True):
         # the next Enter is typed into that load and thrown away. The title
         # zeroes it itself and counts it only in its own key loop.
         fl.put("xb_idle", 0, 2)
-        m.key("Enter", up=False)
-        M.pace(m, .05)
-        m.key("Enter", down=False)
+        M.keystroke(m, "Enter")
         M.until(m, lambda _: fl.b("xb_fs") == 1 and fl.b("xb_state") == ST_TITLE, "back on the title",
                 guest=60)
         fl.wait(lambda: fl.w("xb_idle") > 2, "the title's frames")
@@ -785,10 +795,8 @@ def ai_arm(tag, steps=AI_STEPS, course=3, flag=1):
     def off(name):
         return sym[name] - sym["xm_state"]
     with boot(tag) as ui:
-        ui.open_drive("B")
-        ui.settle()
+        ui.open_drive("B")                  # (both verbs confirm; the reveal wait follows)
         ui.open("EXCBIKE.O88")
-        ui.settle()
         g = V.Game(ui, tag, sym, ref)
         M.until(ui.m, lambda _: g.w("xb_reveal") >= g.w("xb_frontheight") > 0, "the reveal", guest=30)
         ui.settle()
@@ -982,10 +990,8 @@ def collide_arm(tag):
     def off(n):
         return sym[n] - sym["xm_state"]
     with boot(tag) as ui:
-        ui.open_drive("B")
-        ui.settle()
+        ui.open_drive("B")                  # (both verbs confirm; the reveal wait follows)
         ui.open("EXCBIKE.O88")
-        ui.settle()
         g = V.Game(ui, tag, sym, ref)
         M.until(ui.m, lambda _: g.w("xb_reveal") >= g.w("xb_frontheight") > 0, "the reveal", guest=30)
         ui.settle()

@@ -139,10 +139,12 @@ def main():
             cmd += ["--file", "%s=%s" % (n, p)]
         subprocess.run(cmd, check=True, capture_output=True)
         m = os88marty.launch(None, machine=MACHINE,
-                             extra=["--mount", "hd:0:" + img])
+                             extra=["--mount", "hd:0:" + img], boot=False)
         try:
             ui = os88ui.UI(m)
-            ui.ready(limit=300)
+            m.run()                 # a quick boot: STATE is the gate
+            ui.up(limit=300)
+            os88marty.no_saver(m)
             hsym = {n: m.sym(n) for n in ("mem_base", "mem_top", "spl_live",
                                           "mem_tab")}
 

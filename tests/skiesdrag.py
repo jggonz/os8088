@@ -63,7 +63,7 @@ def main(argv):
     mp = dispapps._map("skies")
 
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                     machine=a.machine) as ui:
+                     machine=a.machine, quick=True) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)

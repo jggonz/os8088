@@ -4,7 +4,7 @@
     python3 tests/call5.py [--machine NAME] [--leg window|whole|both]
 
 A CP/M-style program puts the function in CL and does a NEAR `call 5`. PSP:5
-is a far call, and the box aims it at `dos_cpm`, which dispatches on CL and
+is a far call, and DOS aims it at `dos_cpm`, which dispatches on CL and
 returns to the program's own near return. It used to be aimed at PSP:0050,
 the DOS 2+ far gate, which takes AH and returns FAR to PSP:000A - a data
 field - so CALL 5 had never served CP/M on any kernel.
@@ -15,8 +15,8 @@ only a call that dispatched on CL and came back to the program can produce.
 
 TWO LEGS, because the far call reaches `dos_cpm` two different ways:
 
-  window  the windowed box, a heap region above 64KB: the segment fits a
-          word. The exit code is read off the box's own `[dos_exit]`.
+  window  the windowed DOS, a heap region above 64KB: the segment fits a
+          word. The exit code is read off DOS's own `[dos_exit]`.
   whole   the same program under kern_dos (the Memory page's Shut down the OS
           arm), which runs low in memory: the segment goes below 0 and the
           call reaches `dos_cpm` through the 1MB wrap, as IBM DOS 3.30's own
@@ -25,7 +25,7 @@ TWO LEGS, because the far call reaches `dos_cpm` two different ways:
 kern_mega's HMA run is the third way, and is Bochs's (docs/BOCHS.md).
 
 WHAT IT WOULD CATCH: PSP:5 aimed back at the PSP:0050 gate, which is the
-pre-fix box - the program's first CALL 5 dispatches on whatever AH holds and
+pre-fix DOS - the program's first CALL 5 dispatches on whatever AH holds and
 returns into PSP:000A, so neither leg ever sees an exit code of 1.
 """
 import argparse
@@ -53,27 +53,32 @@ def fail(msg):
 
 
 def leg_window(machine):
-    """The box opened bare, B: made current at its prompt, CALL5.COM run.
+    """DOS opened bare, B: made current at its prompt, CALL5.COM run.
 
     NOT by association: a program launched from B: runs with A: current,
-    and A:'s 0 is also what the pre-fix box exits with (AH is 0 at entry, so
+    and A:'s 0 is also what the pre-fix DOS exits with (AH is 0 at entry, so
     its first CALL 5 is a terminate). Only B: current makes 1 the answer
     nothing but a dispatched, returning CALL 5 produces."""
-    with os88ui.boot(SYS, apps=FLOPPY, machine=machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=machine, quick=True) as ui:
         m = ui.m
         if not ui.path("A:/APPS/DOS.O88"):
             fail("could not open DOS.O88 off the system disk")
         M.settle(m)
         dm = dosmap.package()
-        m.write((dosmap.instance(m) << 4) + dm["dos_exit"], bytes([0xEE]))
+        # THE REGION MOVES at the arena claim, so its base is asked per read
+        # (dosmap) - and the base and the byte it names are ONE compactor-safe
+        # snapshot (the LiveSeg dosmap.instance answers: os88marty.seg_snap;
+        # the write pauses). Asked as two reads, the pair tore under load: the
+        # base a move had just retired, and the program's own arena under it,
+        # read as exit code 161.
+        dosmap.instance(m).write(dm["dos_exit"], bytes([0xEE]))
         m.type_text("B:\n")
         M.settle(m)
         m.type_text("CALL5.COM\n")
         code = [0xEE]
 
-        def ran(mm):                # the region MOVES at the arena claim, so
-            base = dosmap.instance(mm) << 4     # it is asked per read (dosmap)
-            code[0] = mm.read(base + dm["dos_exit"], 1)[0]
+        def ran(mm):
+            code[0] = dosmap.instance(mm).read(dm["dos_exit"], 1)[0]
             return code[0] != 0xEE
         try:                        # GUEST time: `limit` is idle-box seconds
             M.until(m, ran, "CALL5.COM to exit", poll=0.5, limit=120.0)
@@ -87,7 +92,7 @@ def leg_window(machine):
 
 
 def leg_whole(machine):
-    with os88ui.boot(SYS, apps=FLOPPY, machine=machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=machine, quick=True) as ui:
         m = ui.m
         try:
             kdhand.launch_whole(ui, "CALL5.COM")

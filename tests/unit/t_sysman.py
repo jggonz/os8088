@@ -87,12 +87,16 @@ def main():
             if name:
                 where[k] = folder(fat, name)
         for kind, f, name, size, sm in rows:
+            opt = f & os88sysman.SCF_OPT
+            f &= ~os88sysman.SCF_OPT
             first = where.get(f)
             if f and first is None:
                 check(False, "%s carries %s\\" % (img, FOLDERS[f]))
                 continue
             hit = [e for e in entries(fat, first)
                    if Fat12.pretty(e[:11]) == name and not e[11] & 0x18]
+            if not hit and opt and img == "os8088-360.img":
+                continue                # SPEC.md 118.2.3: not on this one
             if not hit:
                 check(False, "%s carries %s" % (img, name),
                       "the manifest names it, so System Check would call a "
@@ -104,10 +108,20 @@ def main():
                   "os88disk must copy a file as it is given (SPEC.md 118.2.1)",
                   got=(len(data), os88sysman.sums(data)), want=(size, sm))
         sysf = where.get(1)
-        check(sysf is not None and any(
-              Fat12.pretty(e[:11]) == "SYSCHECK.O88"
-              for e in entries(fat, sysf)),
-              "%s carries SYSTEM\\SYSCHECK.O88 (SPEC.md 118.10)" % img)
+        has = sysf is not None and any(
+            Fat12.pretty(e[:11]) == "SYSCHECK.O88"
+            for e in entries(fat, sysf))
+        if img == "os8088-360.img":     # SPEC.md 24.3.1.7: util360.img's
+            check(not has, "%s does not carry SYSTEM\\SYSCHECK.O88 "
+                  "(SPEC.md 24.3.1.7)" % img)
+            continue
+        check(has, "%s carries SYSTEM\\SYSCHECK.O88 (SPEC.md 118.10)" % img)
+    util = os.path.join(BUILD, "util360.img")
+    if check(os.path.exists(util), "util360.img is built", "`make` builds it"):
+        fat = Fat12(util)
+        check(any(Fat12.pretty(e[:11]) == "SYSCHECK.O88"
+                  for e in entries(fat, None)),
+              "util360.img carries SYSCHECK.O88 at its root (SPEC.md 24.3.1.7)")
     done("t_sysman: %d files against %d system disks" % (len(rows), len(IMAGES)))
 
 

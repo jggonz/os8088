@@ -52,6 +52,9 @@ DESK_PICX   equ (DESK_CW - DESK_ZW) / 2     ; a drive's picture in its cell
     add %1, DESK_PICX + 4
     and %2, 0F8h
 %endmacro
+%if DESK_PICX & 7
+  %error "desk_caprect takes DESKPIC's offset as 4 - ((left + 4) AND 7), which needs DESK_PICX on the byte grid"
+%endif
 %endif
 
 ; --- the table's byte (SPEC.md 26.9) ------------------------------------------
@@ -1010,52 +1013,18 @@ desk_rect_ax:                   ; ...and the arithmetic alone, for a caller
     ret
 
 ; -----------------------------------------------------------------------------
-; desk_zone_label - a zone's caption
-; in:  AL = zone index
-; out: ES:SI -> a NUL string
-; clobbers: ES, SI (the outputs), flags
-;
-; A volume's row names itself or is derived as 'A:' (SPEC.md 26.4); the
-; service item's was copied in at registration (26.7); a shortcut's is read
-; IN PLACE, out of its claim row (26.8.1) - which is why the answer is a far
-; pointer, and why every reader of it takes ES:SI.
-; -----------------------------------------------------------------------------
-desk_zone_label:
-    push ax
-    push bx
-    push ds
-    pop es
-%ifndef KERN_SMALL
-    cmp al, DESK_SVZ
-    jb .vol
-    mov si, desk_svc_cap
-  %ifdef OS88_SHORTCUTS
-    je .out
-    call sc_row                 ; ES:BX = the record
-    lea si, [bx+SC_R_CAP]
-  %endif
-    jmp short .out
-.vol:
-%endif
-    mov bl, al
-    call dsk_vol_slot_x
-    lea si, [bx+DV_LBL]
-    cmp byte [si], 0
-    jne .out                    ; the row named itself
-    mov si, desk_lbl_gen        ; the DRIVE LETTER, built in place (SPEC.md
-    add al, 'A'                 ; 26.4) - 'A:', as every other surface in this
-    mov [si], al                ; OS writes a drive
-.out:
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; desk_caprect - a zone's caption and the white rect that HUGS it (SPEC.md 26.4)
 ; in:  AL = a shown zone
 ; out: AX = x1, BX = y1, CX = x2, DX = y2 of the white rect; ES:SI -> the
 ;      caption. The pen is (AX + DESK_ZOVER, BX + 2).
 ; clobbers: AX, BX, CX, DX, SI, ES (the outputs), flags
+;
+; THE CAPTION first, in line (it was desk_zone_label, a routine with this one
+; caller - kernel size pass 14: its AX/BX bank was this routine's own, -8). A
+; volume's row names itself or is derived as 'A:' (SPEC.md 26.4); the service
+; item's was copied in at registration (26.7); a shortcut's is read IN PLACE,
+; out of its claim row (26.8.1) - which is why the answer is a far pointer,
+; and why every reader of it takes ES:SI.
 ;
 ; Measured at paint for every kind, centred UNDER THE PICTURE. One routine
 ; draws it and one highlight inverts it, so the two cannot disagree about
@@ -1071,37 +1040,73 @@ desk_zone_label:
 ; -----------------------------------------------------------------------------
 desk_caprect:
     push bp
-    push ax
-    call desk_zone_label        ; ES:SI -> it
+    push ax                     ; (AL is spent by the letter below)
+    push ds
+    pop es
+%ifndef KERN_SMALL
+    cmp al, DESK_SVZ
+    jb .vol
+    mov si, desk_svc_cap
+  %ifdef OS88_SHORTCUTS
+    je .lbl
+    call sc_row                 ; ES:BX = the record
+    lea si, [bx+SC_R_CAP]
+  %endif
+    jmp short .lbl
+.vol:
+%endif
+    mov bl, al
+    call dsk_vol_slot_x
+    lea si, [bx+DV_LBL]
+    cmp byte [si], 0
+    jne .lbl                    ; the row named itself
+    mov si, desk_lbl_gen        ; the DRIVE LETTER, built in place (SPEC.md
+    add al, 'A'                 ; 26.4) - 'A:', as every other surface in this
+    mov [si], al                ; OS writes a drive
+.lbl:                           ; ES:SI -> the caption
     mov bp, font_width_x
     call ct_cw_mem_disp         ; AX = its width
+%ifdef OS88_SHORTCUTS
+    ; The picture column is DESKPIC's: the cell's left + DESK_PICX + 4, down
+    ; to a multiple of 8, so it sits 4 - ((left + 4) AND 7) px off the cell's
+    ; middle (-3..+4) - DESK_PICX being a multiple of 8 itself (asserted
+    ; above). That and the centring's own +4 are one term: CX starts as the
+    ; centred offset PLUS 4, and the pen is CX less (left + 4) AND 7. BP is
+    ; the scratch, banked at entry for font_width_x (kernel size pass 14:
+    ; this was DESKPIC on a DX banked for it, 7 bytes more)
+    xchg ax, bx                 ; BX = the width
+    cmp bx, DESK_CW
+    jbe .fit
+    mov bx, DESK_CW             ; wider than the cell: keep the rect inside
+.fit:                           ; what the refill erases (the pen pins below)
+    mov cx, DESK_CW + 8
+    sub cx, bx
+%else
     mov bx, ax
     mov cx, DESK_CW
     sub cx, bx
-    jns .fit
+    jns .fits
     xor cx, cx                  ; wider than the cell: pin it to the left and
     mov bx, DESK_CW             ; keep the rect inside what the refill erases
-.fit:
-    shr cx, 1                   ; CX = the pen's offset in the cell
-    pop ax
+.fits:
+%endif
+    shr cx, 1                   ; CX = the pen's offset in the cell (+ 4 on
+    pop ax                      ; kern_big)
     call desk_zone_xy           ; AX = cell left, DX = cell top
 %ifdef OS88_SHORTCUTS
-    push dx
-    mov dx, ax
-    DESKPIC dx, dl              ; DX = the picture column's left...
-    sub dx, ax
-    sub dx, DESK_PICX           ; ...less the cell's middle: -3..+4
-    add cx, dx                  ; the pen follows the picture
+    mov bp, ax
+    add bp, 4
+    and bp, 7
+    sub cx, bp                  ; the pen follows the picture
     jns .lo
     xor cx, cx                  ; ...but not past the cell's left
 .lo:
-    mov dx, DESK_CW
-    sub dx, bx                  ; DX = the last pen offset the cell holds
-    cmp cx, dx
+    mov bp, DESK_CW
+    sub bp, bx                  ; BP = the last pen offset the cell holds
+    cmp cx, bp
     jle .hi
-    mov cx, dx                  ; ...nor past its right
+    mov cx, bp                  ; ...nor past its right
 .hi:
-    pop dx
 %endif
     add ax, cx                  ; AX = the pen
     lea cx, [bx+DESK_ZOVER-1]
@@ -1681,41 +1686,6 @@ desk_col:
     call desk_colr              ; ...and its selection the way it always was
     jmp ct_cw_gfx_xor_fill
 
-; desk_drvico - a REDIRECTED volume whose driver says FSCAP_ICON draws its own
-;               picture (SPEC.md 26.4.2): the CD-ROM's disc, not a hard disk
-; in:  BL = the volume, CX/DX = the picture's origin; the gfx lock held
-; out: CF = 0 the driver drew it; CF = 1 it is the kernel's to draw - every
-;      floppy, every hard disk, and a file driver without the bit
-; clobbers: nothing else
-;
-; .svcico's call, keyed on the VOLUME: the class off its row (the driver the
-; FSV verbs reach), that class's copied DSV_CAPS, and its door's DRV_ICONV.
-; drv_pkg_call refuses (CF = 1) for a class no driver publishes, so a driver
-; that went away leaves the kernel's own icon rather than nothing.
-desk_drvico:
-    push ax
-    push bx
-    push di
-    call dsk_vol_slot_x         ; BX = the row
-    jc .out
-    cmp byte [bx+DV_KIND], DVK_FILE
-    stc
-    jne .out                    ; only a file class's DSV_CAPS means FSCAP_*
-    mov al, [bx+DV_CLASS]
-    call drv_cls_svc_x          ; CLSCF: DI = its copied table
-    jc .out
-    test byte [di+DSV_CAPS], FSCAP_ICON
-    stc
-    jz .out
-    mov bh, al
-    mov bl, DRV_ICONV
-    call KERNEL_SEG:cw_drv_pkg_call ; the driver's answer is the CF
-.out:
-    pop di
-    pop bx
-    pop ax
-    ret
-
 ; desk_issel - ZF = 1 when the zone being drawn ([desk_zdrv]) is the selected
 ; one; clobbers AL. The three sites were one compare written three times
 ; (kernel size pass 9), and its `ret` is desk_col's as well
@@ -1732,7 +1702,7 @@ desk_ret:
 %endif
 
 ; desk_pic - the zone's picture at [desk_zx]/[desk_zy], into ico_band or onto
-; the glass as [ico_bnd] says. Clobbers AX, BX, CX, DX, SI, BP, ES.
+; the glass as [ico_bnd] says. Clobbers AX, BX, CX, DX, SI, DI, BP, ES.
 desk_pic:
     mov cx, [desk_zx]
     mov dx, [desk_zy]
@@ -1743,8 +1713,35 @@ desk_pic:
     mov si, [desk_pico]         ; [diskette, 5.25", hard disk] at this height
     cmp bl, DESK_SVZ
     je .svcico
-    call desk_drvico            ; a file volume whose driver draws its own
-    jnc desk_ret                ; picture (SPEC.md 26.4.2): drawn
+    ; A REDIRECTED VOLUME WHOSE DRIVER SAYS FSCAP_ICON DRAWS ITS OWN PICTURE
+    ; (SPEC.md 26.4.2): the CD-ROM's disc, not a hard disk. .svcico's call,
+    ; keyed on the VOLUME: the class off its row (the driver the FSV verbs
+    ; reach), that class's copied DSV_CAPS, and its door's DRV_ICONV - whose
+    ; answer is the CF, and drv_pkg_call refuses (CF = 1) for a class no
+    ; driver publishes, so a driver that went away leaves the kernel's own
+    ; icon rather than nothing. CF = 1 everywhere else - every floppy, every
+    ; hard disk, a file driver without the bit - is the kernel's to draw.
+    ; Written here, at its one call (kernel size pass 14: it was desk_drvico,
+    ; and AX and DI are this routine's to clobber - its two calls are both
+    ; desk_col's, which clobbers AX..DI - so only BL is banked)
+    push bx
+    call dsk_vol_slot_x         ; BX = the row
+    jc .kern
+    cmp byte [bx+DV_KIND], DVK_FILE
+    stc
+    jne .kern                   ; only a file class's DSV_CAPS means FSCAP_*
+    mov al, [bx+DV_CLASS]
+    call drv_cls_svc_x          ; CLSCF: DI = its copied table
+    jc .kern
+    test byte [di+DSV_CAPS], FSCAP_ICON
+    stc
+    jz .kern
+    mov bh, al
+    mov bl, DRV_ICONV
+    call KERNEL_SEG:cw_drv_pkg_call ; the driver's answer is the CF
+.kern:
+    pop bx                      ; (a pop writes no flag)
+    jnc desk_ret                ; drawn
     call dsk_vol_fixed_x        ; the MEDIUM, not the transport (SPEC.md 18.7.2)
     jc .icon
     or al, al
@@ -1754,8 +1751,11 @@ desk_pic:
 .svcico:                        ; THE DRIVER DRAWS IT (SPEC.md 26.7): no glyph
                                 ; in here, so a machine with no network card
                                 ; carries none. drv_pkg_call refuses (CF = 1)
-    mov bh, [desk_svc_cls]      ; when no such driver is published, so one
-    mov bl, [desk_svc_vrb]      ; that went away draws nothing. ES = our DS
+    mov bx, [desk_svc_cls]      ; when no such driver is published, so one
+    xchg bl, bh                 ; that went away draws nothing. (The class
+                                ; and the verb are adjacent in the record's
+                                ; own order, so one word and a swap give
+                                ; BH = class, BL = verb: -2.) ES = our DS
                                 ; is the X cell's own first act (api_x), and
                                 ; it gives ES back after - nothing here reads
                                 ; it: desk_cap's caption rect reloads it
@@ -2279,7 +2279,7 @@ section .text                   ; DATA, so back to the kernel segment (SPEC.md
                                 ; them and moved the lot into .cold - where DS
                                 ; still names KERNEL_SEG, so desk_pico read as
                                 ; garbage and the comment below came true
-desk_lbl_gen db "A:", 0         ; scratch for desk_zone_label's derived form:
+desk_lbl_gen db "A:", 0         ; scratch for desk_caprect's derived caption:
                                 ; a volume with no label of its own is named
                                 ; from its index, in place
 
@@ -2347,7 +2347,9 @@ desk_svc_rec:                   ; ...and the record itself, IN THE RECORD'S
 desk_svc_cap  resb DSV_CAPMAX   ; OWN ORDER, so the copy is one `rep movsb`
 desk_svc_file resb DSV_FILEMAX  ; the 8.3 file it launches out of SYSTEM/
 desk_svc_cls  resb 1            ; its DRVC_* class...
-desk_svc_vrb  resb 1            ; ...and the verb that paints the icon
+desk_svc_vrb  resb 1            ; ...and the verb that paints the icon - the
+                                ; byte after it, which desk_pic's .svcico
+                                ; reads as one word
 desk_svc_name resb DSV_NAMEMAX  ; the package's header name - the singleton
 desk_svc_cell resb 1            ; the cell it asked for (SPEC.md 26.9)
 %if ($ - desk_svc_rec) != DSV_R_SIZE

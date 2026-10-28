@@ -37,11 +37,16 @@ it, takes the arena down and forces the compaction. THE ASSERTIONS:
      it - a stale px_drvp would far-call the old copy of the driver and a
      stale QTEX would texture from the old copy of part 3, both of which
      still read plausibly until the arena is reused;
-  7. the window is findable by title (W_SEG followed).
+  7. the window is findable by title (W_SEG followed);
+  8. THE SHADOW (SPEC.md 97.9.2, NO-PINNING A4) is declared movable, and
+     after the compaction both words that name it - [px_shseg], and
+     [px_dseg] while the window composes into it - name the base of a live
+     claim. When it moved, they moved together.
 
 Broken on purpose with px_reloc's table emptied it reports the handoff
 outside the new extent and [px_moved] still counting - the proc ran and
-fixed nothing.
+fixed nothing. With px_shmv a bare `ret` leg 8 reports [px_shseg] naming no
+claim.
 """
 import argparse
 import os
@@ -108,9 +113,10 @@ def main():
     ap.add_argument("--apps", default="build/pxsmove360.img")
     a = ap.parse_args()
     os.chdir(ROOT)
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
         S = m.sym
-        g = pxslib.open_game(m)
+        g = pxslib.open_game(m)         # runs it, gates on kernel_up
         ui = os88ui.UI(m, verbose=False, sym=S)
         seg0 = g.seg
         h0 = g.handoff()
@@ -134,6 +140,11 @@ def main():
         check(st["rung"] == 2, "the window draws Textured (rung %d, texok %d)"
               % (st["rung"], st["texok"]))
         shadow0 = g.shadow()
+        sh0 = g.word("px_shseg")
+        shc = [c for c in claims(m, S).claims if c.seg == sh0]
+        check(bool(shc) and shc[0].rloc != 0,
+              "8. the shadow %04x is declared movable (MC_RLOC %s)"
+              % (sh0, shc[0].rloc if shc else "-"))
         L = pxslib.layout()
         qtex0 = pxslib.u16(m.read((h0["gen"] << 4) + L["QTEX"], 2)) if h0["gen"] else 0
 
@@ -219,6 +230,13 @@ def main():
         diff = sum(1 for x, y in zip(shadow0, shadow1) if x != y)
         check(diff == 0, "6. the game still draws: pose A forced whole after the move "
               "composes the same shadow (%d bytes differ of %d)" % (diff, len(shadow0)))
+        sh1, ds1 = g.word("px_shseg"), g.word("px_dseg")
+        live = [c.seg for c in claims(m, S).claims]
+        print("   the shadow %04x -> %04x%s, px_dseg %04x"
+              % (sh0, sh1, "" if sh1 != sh0 else " (did not move)", ds1))
+        check(sh1 in live, "8. [px_shseg] %04x names a live claim" % sh1)
+        check(ds1 == sh1, "8. [px_dseg] %04x follows it (the window composes "
+              "into the shadow)" % ds1)
         f0 = g.word("px_frames")
         g.force()
         g.wait_frames(1, limit=60.0)

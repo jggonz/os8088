@@ -67,7 +67,10 @@ FAIL = []
 # one carries the open's margin; a first-rows ceiling is the larger of a
 # picture's measured first rows across its opens at one scale, + 30%).
 # BIG.BMP's first rows are 106.17's again (1.34 s on the 5150): the wake's
-# deferral had been reading 32 KB in front of the first paint (106.22). The
+# deferral had been reading 32 KB in front of the first paint (106.22). On
+# the VGA XT they carry the open's volume check - every key here lands with
+# the motor stopped (Guest.open) - and its seek from the decoder part's end
+# of the disk: 3.36-3.49 s since SPEC.md 106.16.1 and 18.8.4.1. The
 # JPEG `huffman` figure is the block's entropy decode WITH its dequantising
 # now (pj_blk less its IDCT), `idct` the IDCT alone (pj_id8).
 # Wave 6 (SPEC.md 106.23): PIXEL.O88 grew past what a 360 KB volume holds
@@ -166,11 +169,11 @@ def session(disk, pics, work, machine=None):
         S = ui._S
         ui.path("B:/PICS/" + pics[0])
         M.until(m, lambda _: instance(m, S, image), "PiXEL's instance",
-                poll=0.3, limit=120)
+                poll=0.05, limit=120)
         seg = instance(m, S, image)
         px = Guest(m, seg)
         M.until(m, lambda _: px.W("px_ndone") and px.idle(), "the first open",
-                poll=0.3, limit=1800)
+                poll=0.05, limit=1800)
         ui.settle()
         ui.mo.to(2, 2)                  # the pointer off the canvas
         ui.settle()
@@ -262,6 +265,19 @@ class Guest:
         to px_rimg's first entry."""
         m = self.m
         n0 = self.W("px_ndone")
+        # THE KEY LANDS WITH EVERY FLOPPY MOTOR STOPPED, by the GUEST's own
+        # word for it (0040:003F, the BIOS's motor bits). A stopped motor is
+        # what makes the open re-validate the volume - a boot-sector read,
+        # and the seek to it from wherever the last read left the head
+        # (SPEC.md 18.9.1) - and whether the motor had stopped was the HOST's
+        # to decide: the BIOS stops it 2.03 s after the last transfer, and
+        # what lay between that and this key was a settle, whose floor is in
+        # host seconds. So the remount is in every figure here, by
+        # construction, and no figure is one side of the timeout or the
+        # other by luck
+        M.until(m, lambda _: not (m.read(0x43F, 1)[0] & 0x0F),
+                "the floppy motors to stop (SPEC.md 18.9.1)", poll=0.05,
+                limit=60)
         m.write(self.a("px_cur"), name.encode().ljust(13, b"\0"))
         rimg = self.a("px_rimg") & 0xFFFFF
         got = {}
@@ -281,7 +297,7 @@ class Guest:
                    {"type": "mem", "addr": self.a("px_ndone")}], stop,
                   lambda: "end" in got, trigger)
         c0 = c0[0]
-        M.until(m, lambda _: self.idle(), "the open to settle", poll=0.3,
+        M.until(m, lambda _: self.idle(), "the open to settle", poll=0.05,
                 limit=600)
         M.ui_done(m, "the open")
         end = got["end"]
@@ -444,7 +460,7 @@ def inflate_bench(m, px, name, outbytes):
         m.write(px.a("px_cur"), name.encode().ljust(13, b"\0"))
         m.ctrl("KeyR")
     px.pump(base_bps, stop, lambda: st["t1"] is not None, trigger)
-    M.until(m, lambda _: px.idle(), "the open to settle", poll=0.3, limit=600)
+    M.until(m, lambda _: px.idle(), "the open to settle", poll=0.05, limit=600)
     M.ui_done(m, "the open")
     tot = st["t1"] - st["t0"]
     infl = tot - st["ext"] - st["next"] - st["ui"]
@@ -549,7 +565,7 @@ def stage_bench(m, px, name, routines):
         m.write(px.a("px_cur"), name.encode().ljust(13, b"\0"))
         m.ctrl("KeyR")
     px.pump(base_bps, stop, lambda: st["t1"] is not None, trigger)
-    M.until(m, lambda _: px.idle(), "the open to settle", poll=0.3, limit=900)
+    M.until(m, lambda _: px.idle(), "the open to settle", poll=0.05, limit=900)
     M.ui_done(m, "the open")
     return st["t1"] - st["t0"], st["tot"], st["n"]
 

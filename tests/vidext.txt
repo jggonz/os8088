@@ -6,13 +6,14 @@
 #   <file> <count> hooked | exempt: <reason>
 #
 # "hooked" means every one of the file's sites is followed by the planar
-# body's VIDEXT / VIDEXTC / VIDEXTR, or jumps into a body that is. A file
+# body's VIDEXT / VIDEXTC / VIDEXTR, or jumps into a body that is. A body
+# whose 1bpp test and hook are one compare (VIDEXTM, kernel size pass 14)
+# has no `[vid_mono]` site left at all: the macro IS the dispatch. A file
 # with a mix says which sites are the exceptions and why.
 
-vga12.inc 15 hooked, but for four: gfx_points' two (1385, 1419) - its planar arm is .slow, every point a hooked gfx_fill, and the second is the display hook's bookkeeping; gfx_xor_fill's second test (4025, the .arm entry menu.inc enters directly) jumps to vga_solid_rect, whose VIDEXT is the hook; gfx_blit1_x's two (5714 the fragment walk's display question, 6200 the pen) sit BELOW the hook at .ybot and a packed display never reaches them
+vga12.inc 9 hooked, but for four: gfx_points' two (1385, 1419) - its planar arm is .slow, every point a hooked gfx_fill, and the second is the display hook's bookkeeping; gfx_xor_fill's second test (4025, the .arm entry menu.inc enters directly) jumps to vga_solid_rect, whose VIDEXT is the hook; gfx_blit1_x's two (5714 the fragment walk's display question, 6200 the pen) sit BELOW the hook at .ybot and a packed display never reaches them
 font.inc 3 hooked, but for one: 910 is font_char's dither decision (SPEC.md 6.1.12), a colour question a packed display answers as the VGA does; font_run's test (1209) jumps to .planar, where the hook is
-icons.inc 1 hooked
-mouse.inc 3 hooked
+vidext.inc 2 exempt: VIDEXTM's and VXMONO's arms on a kernel with no external renderer (kern_small, kern_mega, NOVIDEXT=1) - there is no packed display to hook, and each arm is byte for byte the 1bpp test the macro stands for
 viddet.inc 1 exempt: vid_apply's [vid_rseg] derivation - geometry, not drawing (SPEC.md 39.2)
 vidsel.inc 1 exempt: the adapter probe's mode-6 test, before any driver exists (SPEC.md 39.11.1)
 splash.inc 4 exempt: the loading screen draws before drv_boot and always on the VGA (SPEC.md 15); VESA.DRV cannot be attached yet

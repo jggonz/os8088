@@ -109,7 +109,7 @@ start:
     ; --- 4. an unsupported function, which must LEAVE AX ALONE -------------
     ; **SPEC.md 96.10.6, and this block used to require the opposite.** It
     ; read `or ax, ax / jz .nofn` - AX had to come back ZERO - which was the
-    ; box's behaviour until a zero answer cost it the whole mouse cursor:
+    ; DOS's behaviour until a zero answer cost it the whole mouse cursor:
     ; Microsoft Works ends its init `mov ax, 8 / int 33h / mov [98CAh], al`
     ; and reads that byte as `mouse present` (docs/FIELD-NOTES.md 54). INT 33h
     ; has no not-supported convention at all - no carry flag, no error code -
@@ -124,7 +124,7 @@ start:
     ; in ES:BX, and which CuteMouse IMPLEMENTS. Put in front of IBM DOS 3.30
     ; with CuteMouse 1.9.1 this probe printed `FN CHANGED AX - the gate has
     ; FAILED` about a driver doing exactly the right thing, and it passed here
-    ; only because this box falls through to `.none`. It was a gate that would
+    ; only because this DOS falls through to `.none`. It was a gate that would
     ; go red the day 1Fh were implemented properly (docs/FIELD-NOTES.md 56).
     ;
     ; 90h is above every function any driver in this family defines - the

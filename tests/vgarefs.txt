@@ -1,0 +1,61 @@
+# tests/vgarefs.txt - every reference from outside the VGA rung INTO it, and
+# the test that keeps a machine with neither a VGA nor an EGA out of it.
+# Enforced by tools/os88ovlchk.py rule 2f.
+#
+# WHY THIS FILE EXISTS
+#
+# `.vga` (docs/plans/MOVABLE-COLD-PLAN.md 2, SPEC.md 2.10.9) is the code only a
+# VGA or an EGA runs. It sits inside KERNEL_SEG's 64KB window, so `.text` calls
+# it with the near calls it always used - and on a machine whose [vid_avail]
+# has neither VID_A_VGA nor VID_A_EGA, kmain_o slides `.cold` down over it at
+# boot. From then on a call into the rung runs `.cold`'s bytes as whatever
+# they decode to. Nothing faults where the mistake is: the call assembles, the
+# VGA rows pass, and a Hercules machine goes wrong somewhere later.
+#
+# So the surface is registered rather than trusted, as tests/ovlrefs.txt does
+# for the boot overlay. A NEW reference fails the build until somebody writes
+# down the answer to one question:
+#
+#     WHAT KEEPS A MACHINE WITH NEITHER CARD FROM GETTING HERE?
+#
+# The answer has to be a RUN-TIME test. `%ifdef GFX_VGA` is not one: kern_big
+# defines it on every machine, a Hercules included. [vid_avail] is fixed for
+# the life of the machine; [vid_planes] = 4 and [vid_mono] = 0 describe the
+# display being drawn on, and no display a machine without either card has can
+# be planar - so both answer the question, and so does any path that only
+# starts inside one of them.
+#
+# The list may shrink freely - delete the row with the code. A row here that
+# no longer has a reference is itself a build failure.
+#
+# FORMAT: <symbol>   <the guard>
+
+# --- gfx_blit4's planar arm (vga12.inc) --------------------------------------
+# entered at `.vga` only on [vid_planes] = 4, or [vid_mono] = 0 without VID_EXT
+vga_p4build     gfx_blit4's planar arm: [vid_planes] = 4, once a boot
+vga_blit_span   gfx_blit4's planar arm: [gfx_blit_fst] = 2 is set only there
+vga_blit_prow   gfx_blit4's planar arm: the decoder's handover is armed only there ([gfx_blit_pok])
+
+# --- the doors (vga12.inc) ----------------------------------------------------
+gfx_blitp_v     gfx_blitp's door: [vid_avail] & (VID_A_VGA | VID_A_EGA), else CF = 1
+
+# --- VIDEXTM's planar arm (vga12.inc, vidext.inc) ----------------------------
+# VIDEXTM sends [vid_planes] < 4 to the software renderer and > 4 to the
+# VESA driver, and falls through only on 4 - a planar display, which a machine
+# with neither card does not have. The body behind it is the rung's
+gfx_fill_gray_raw_v   VIDEXTM VX_GRAY: [vid_planes] = 4
+gfx_fill_pat_raw_v    VIDEXTM VX_PAT: [vid_planes] = 4
+vga_save_vram_v       VIDEXTM VX_SAVE: [vid_planes] = 4 (the cursor's IRQ4 path too)
+vga_restore_vram_v    VIDEXTM VX_RESTORE: [vid_planes] = 4
+vga_solid_rect_v      VXMONO in both callers (gfx_fill_raw, gfx_xor_fill_raw) and VIDEXTF: [vid_planes] = 4
+
+# --- the pointer's planar half (mouse.inc), from IRQ3/IRQ4 -------------------
+# cur_put_1, cur_get_1 and cur_move_1 each open with VIDEXTM, and only its
+# planar fall-through calls these
+cur_saveu             cur_put_1 / cur_move_1: VIDEXTM VX_CURPUT / VX_CURMOVE, [vid_planes] = 4
+cur_draw              cur_put_1 / cur_move_1: VIDEXTM VX_CURPUT / VX_CURMOVE, [vid_planes] = 4
+cur_restoreu          cur_get_1 / cur_move_1: VIDEXTM VX_CURGET / VX_CURMOVE, [vid_planes] = 4
+
+# --- icons (icons.inc) --------------------------------------------------------
+ico_core_v            ico_core: VIDEXTM VX_ICON, [vid_planes] = 4
+gfx_scroll_v          gfx_scroll: [vid_planes] = 4 (below 4 is the mono copy, above it the driver)

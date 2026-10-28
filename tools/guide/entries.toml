@@ -129,6 +129,18 @@ summary = "Spreads the desktop across two monitors so windows can be moved from 
 short = "Desktop across two monitors"
 needs = "Two display cards, such as a VGA or CGA beside a Hercules"
 
+["FDLG.DRV"]
+title = "File chooser"
+kind = "system"
+summary = "The Open and Save As chooser programs show, loaded when one asks for it. On the system disks for 128 KB machines."
+short = "Open and Save As chooser"
+
+["FILECP.DRV"]
+title = "Copy and paste files"
+kind = "system"
+summary = "Cut, Copy, Paste and Paste Into for files in a Disk window, loaded when you use them. On the system disks for 128 KB machines."
+short = "Cut, copy and paste files"
+
 ["FORMAT.DRV"]
 title = "Disk formatter"
 kind = "system"
@@ -166,6 +178,12 @@ kind = "system"
 summary = "The hard disk setup tool, used to partition and format a hard disk and install os8088 onto it."
 short = "Partition and install on a disk"
 needs = "A hard disk"
+
+["HTTPPAGE.DRV"]
+title = "HTTP drive settings"
+kind = "system"
+summary = "The Control Panel page for the HTTP drive: the web address to mount, and Mount and Unmount."
+short = "HTTP drive settings page"
 
 ["RAMPAGE.DRV"]
 title = "RAM disk settings"
@@ -238,6 +256,13 @@ summary = "Reads CD-ROM discs in an IDE CD-ROM drive as a drive on the desktop, 
 short = "CD-ROM discs and audio CDs"
 needs = "A 286 or better with an IDE (ATAPI) CD-ROM drive"
 
+["HTTPFS.DRV"]
+title = "HTTP drive"
+kind = "driver"
+summary = "Mounts a folder published on a web server as a read-only drive on the desktop. The Control Panel's Web Drive page takes the address."
+short = "A read-only drive from a web address"
+needs = "A network card, or the parallel link"
+
 ["RAMDISK.DRV"]
 title = "RAM disk"
 kind = "driver"
@@ -300,18 +325,6 @@ title = "Chart"
 kind = "program"
 summary = "Opens a spreadsheet file, draws a chart from a column of its numbers, and can save the chart as a BMP."
 short = "Charts from spreadsheet data"
-
-["CHART.OVL"]
-title = "Sheet charts and files"
-kind = "data"
-summary = "Part of Sheet, read when Sheet starts: its dialogs, its charts, its file formats and many of its functions. Keep it beside SHEET.O88."
-short = "Sheet's chart and file module"
-
-["MACRO.OVL"]
-title = "Sheet macros"
-kind = "data"
-summary = "Part of Sheet that runs its macros, read when Sheet starts. Keep it beside SHEET.O88."
-short = "Sheet's macro module"
 
 ["PAINT.O88"]
 title = "Paint"
@@ -574,9 +587,9 @@ needs = "Two machines, a null modem cable, and a free COM1 or COM2; Connect may 
 ["VESA.DRV"]
 title = "VESA display driver"
 kind = "driver"
-summary = "Puts the desktop on a VGA card's high-resolution screen, up to 1024 by 768 in 256 or 65,536 colours, when the card has a VESA BIOS."
+summary = "Puts the desktop on a VGA card's high-resolution screen, up to 1024 by 768, when the card has a VESA BIOS. The desktop keeps 16 colours; a program can draw a picture in up to 65,536."
 short = "High-resolution desktop on a VESA card"
-needs = "A VGA card with a VESA BIOS (VBE 1.2 or later) and a 386 or better"
+needs = "A VGA card with a VESA BIOS (VBE 1.2 or later), in a 286 or better"
 
 ["SERIAL.DRV"]
 title = "Desktop serial service"
@@ -1010,6 +1023,18 @@ title = "Licence"
 kind = "document"
 summary = "RunCPM's licence."
 short = "RunCPM licence"
+
+["HELLO.O88"]
+title = "Hello"
+kind = "program"
+summary = "The worked example of a native windowed application, with menus and an About dialog."
+short = "Native application example"
+
+["RECORDER.O88"]
+title = "Recorder"
+kind = "program"
+summary = "Records sound from a Sound Blaster and plays it back, with a picture of the wave as it goes."
+short = "Sound recording"
 
 ["CONTENTS.TXT"]
 title = "Contents"

@@ -88,7 +88,7 @@ def wait_line(m, prefix, limit=40.0):
     try:
         os88marty.until(m, lambda _: row() is not None,
                         "the %s line to appear" % prefix,
-                        guest=limit, poll=0.2)
+                        guest=limit, poll=0.05)
     except os88marty.MartyError as e:
         fail("no %r line appeared: %s  The last text screen was %r"
              % (prefix, str(e).split("\n")[0][:200],
@@ -138,7 +138,7 @@ def expect(ui, name, line, tol=2):
 
 def run(machine):
     print("dosmouse: --- %s ---" % machine)
-    with os88ui.boot(SYS, apps=MOU, machine=machine) as ui:
+    with os88ui.boot(SYS, apps=MOU, machine=machine, quick=True) as ui:
         m = ui.m
         win = ui.path("B:/DOSMOUSE.COM")
         if not win:
@@ -169,7 +169,7 @@ def run(machine):
         # --- 3. the edges, which happen while the program is BLOCKED --------
         cx, cy = w // 2, h // 2
         ui.mo.to(cx, cy)
-        ui.mo.click(cx, cy)
+        ui.mo.click(cx, cy, settle=0)   # both edges PROVEN published
         m.type_text("x")
 
         line = wait_line(m, "PRESS")
@@ -203,8 +203,7 @@ def run(machine):
 
         # --- 4. out, and the desktop back -----------------------------------
         wait_line(m, "READY")
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")      # taken, and the bracket left
 
         titles = ui.titles()
         if "Disk" not in titles:

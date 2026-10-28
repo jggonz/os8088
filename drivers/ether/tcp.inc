@@ -120,13 +120,17 @@ SKO_TXT     equ SKO_TXC + 2     ; word: where the send ring's FRONT is - it is
                                 ; CIRCULAR (SPEC.md 72.4.3), so an ACK moves
                                 ; this rather than sliding the rest down
 SKO_SWND    equ SKO_TXT + 2     ; word: the window the peer last offered
+SKO_OWN     equ SKO_SWND + 2    ; byte: the INSTANCE that opened it, 0xFF =
+                                ; none known (SPEC.md 72.13.4) - so a closed
+                                ; package's sockets go with it (eth_v_gone).
+                                ; A listener's children inherit it
 SK_SZ       equ 128             ; A POWER OF TWO ON PURPOSE - `sk_ptr` is a
                                 ; shift, and an 8086 `mul` writes DX, which is
                                 ; live at three of the six call sites
 %if SKO_RXC > 127
   %error "ethsock.inc's sk_ski holds record offsets as sign-extended bytes"
 %endif
-%if SKO_HOST + NET_HOSTMAX > SK_SZ || SKO_SWND + 2 > SK_SZ
+%if SKO_HOST + NET_HOSTMAX > SK_SZ || SKO_OWN + 1 > SK_SZ
   %error "ether: the socket record does not fit SK_SZ"
 %endif
 
@@ -264,6 +268,12 @@ sk_ptr:
 sk_ring_get:
     push ax
     push si
+%ifndef ETH_NOEMIT
+    cmp word [sk_seg], 0            ; **ON DEMAND** (SPEC.md 72.13.4): nobody
+    jne .pool                       ; holds the pool until a socket needs a
+    call sk_claim                   ; ring. From a worker this is plain first
+.pool:                              ; fit (66.3.1) and may refuse, which the
+%endif                              ; test below then reports as no ring
     cmp word [sk_seg], 0            ; no claim at all: no rings to hand out
     stc                             ; (neither `stc` nor `clc` touches ZF)
     je  .out
@@ -315,6 +325,9 @@ sk_ring_put:
     xor ah, ah
     mov bx, ax
     mov byte [sk_rused+bx], 0
+%ifndef ETH_NOEMIT
+    call sk_idle                    ; the last ring back, with nobody using
+%endif                              ; the network: the pool goes (72.13.4)
 .out:
     pop bx
     pop ax
@@ -588,6 +601,8 @@ sk_claim:
     push dx
     cmp word [sk_seg], 0
     jne .have                       ; a second attach must not claim twice
+    call OSAPI_MEM_AVAIL            ; AX = the largest free run, which bounds
+    mov [sk_lrun], ax               ; every rung below (sk_try)
     mov bx, [sk_want]               ; the user's rung, if there is one
     or bx, bx
     jz .auto
@@ -653,6 +668,173 @@ sk_release:
     pop ax
     ret
 
+; =============================================================================
+; THE POOL IS HELD WHILE IT IS WANTED (SPEC.md 72.13.4)
+;
+; It used to be claimed at attach and held to detach, so a machine with a card
+; in it paid 6-17KB of heap for the session whether anything ever opened a
+; socket or not. Nothing outside a socket reads a ring - ARP, ICMP, DHCP and
+; DNS run on the driver's own frame buffers - so the pool is only wanted
+; while a package is using the network, and SOUND.DRV's shape is the one to
+; copy: claim when asked, and let the kernel's teardown say when an instance
+; has gone.
+;
+; [eth_users] is a bit per instance slot, set by any verb that slot makes
+; (eth_user) and cleared by the kernel's NETV_GONE (eth_v_gone). The pool is
+; claimed by a slot's first non-raw verb (eth_user) and again, lazily,
+; whenever a socket needs a ring and there is none (sk_ring_get) - and given
+; back when no slot is left AND no
+; ring is out (sk_idle). Both halves are needed: a call from
+; an ENTRY PROC carries slot 0xFF (inst_caller has no callback to read), so a
+; socket can exist with nobody counted, and its ring alone keeps the pool.
+;
+; A CLAIM INSIDE A VERB CAN MOVE THE HEAP, and no bound in here stops it. A
+; worker's claim is plain first fit (SPEC.md 66.3.1, sbl_v_grant's shape),
+; but a UI-task caller's compacts and sheds when first fit fails, the kernel
+; gives a driver no first-fit-only door, and OSAPI_MEM_AVAIL's largest run is
+; the one a compaction and a shed would LEAVE. So a slot's first non-raw verb,
+; and a socket that finds no pool, is a call that can claim, under SPEC.md
+; 66.3's second author rule like any other: re-read a movable claim's base
+; after it. The RAW verbs never claim (eth_user), which is what keeps a DOS
+; program's arena still. sk_try's bound (sk_lrun) keeps only a rung the heap
+; cannot serve at all from being asked for: a refused claim has compacted
+; and shed everything on its way to CF = 1.
+; =============================================================================
+
+; --- eth_user - BH = the calling instance's slot, BL = the verb ------------
+; out: nothing; every register preserved, the flags NOT (its one caller
+;      tests none after it)
+;
+; The slot is COUNTED on any verb, and its FIRST verb claims the pool -
+; usually net_find's NETV_STATE as the package starts, so the pool exists
+; before the package can take the heap for itself - unless that verb is one
+; of the RAW ones, which never need a ring: a DOS program on the card is a
+; raw consumer for its whole life and must not cost its arena 17KB. Once a
+; slot is counted no verb of its claims again; a socket that finds no pool
+; claims in sk_ring_get, so a refusal is retried once per ring and never
+; once per verb.
+eth_user:
+    push ax
+    push cx
+    mov [eth_cslot], bh         ; who opens a socket in this verb (sk_alloc)
+    cmp bh, 16                  ; 0xFF, or a slot the mask cannot hold: not
+    jae .out                    ; counted, which only means not COUNTED
+    mov cl, bh
+    mov ax, 1
+    shl ax, cl
+    test [eth_users], ax
+    jnz .out                    ; seen before
+    or  [eth_users], ax
+    cmp bl, NETV_RAW            ; NETV_RAW, RAWTX and RAWRX are the last
+    jae .out                    ; three verbs (netpkg.inc)
+    cmp word [sk_seg], 0
+    jne .out
+    call sk_claim               ; a refusal is not this verb's failure: the
+.out:                           ; first socket that needs a ring asks again
+    pop cx
+    pop ax
+    ret
+
+%if NETV_RAW + 2 != NETV_MAX || NETV_RAWRX != NETV_MAX
+  %error "eth_user takes every verb from NETV_RAW up as a raw one"
+%endif
+
+; --- sk_idle - give the pool back if nobody is using it ----------------------
+; out: nothing; every register and the flags preserved
+sk_idle:
+    pushf
+    push ax
+    push si
+    cmp word [eth_users], 0
+    jne .out                    ; an instance still has the network open
+    mov si, sk_rused
+.l:
+    lodsb
+    or  al, al
+    jnz .out                    ; ...or a socket still holds a ring
+    cmp si, sk_rused + SK_NRING
+    jb  .l
+    call sk_release
+.out:
+    pop si
+    pop ax
+    popf
+    ret
+
+; --- eth_v_gone - NETV_GONE: AL = an instance slot the kernel is tearing down
+;
+; ITS SOCKETS GO WITH IT, as a process's do on any system: the ones it never
+; closed are RESET (the peer is owed the news), and the ones it did close and
+; TCP is still finishing are left to finish - unless nobody is left using the
+; network, in which case nothing will ever pump them again, so they are
+; forgotten SILENTLY (their FIN is already sent) and the pool goes back.
+;
+; It cannot wait and cannot fail, so it takes the card only if it is free.
+; Busy means a task is inside a verb right now, which means somebody is
+; using the network and the pool stays anyway; the dead slot's sockets are
+; left for its own close-or-abort timers rather than raced.
+; -----------------------------------------------------------------------------
+eth_v_gone:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp al, 16
+    jae .out                    ; never counted, never an owner we can match
+    mov cl, al
+    mov bx, 1
+    shl bx, cl
+    not bx
+    and [eth_users], bx         ; (no card: every socket is free and there
+    call eth_claim              ; is no pool, so the walk below does nothing)
+    jc  .out
+    mov ah, al                  ; AH = the slot, AL walks the sockets
+    xor al, al
+    mov cx, NET_SOCKS
+.l:
+    call sk_ptr
+    cmp byte [bx+SKO_ST], NSK_FREE
+    je  .next
+    test byte [bx+SKO_FL], SKF_ORPH
+    jnz .orph
+    cmp [bx+SKO_OWN], ah
+    jne .next
+    cmp byte [bx+SKO_TS], TS_ESTAB
+    jb  .kill
+    push ax                     ; eth_dropall's reset, one socket
+    push cx
+    mov al, TF_RST | TF_ACK
+    mov dx, [bx+SKO_TXS]
+    xor cx, cx
+    call tcp_out
+    pop cx
+    pop ax
+    jmp short .kill
+.orph:
+    cmp word [eth_users], 0     ; closed already: TCP finishes it while
+    jne .next                   ; anybody is still pumping the card
+.kill:
+    test byte [bx+SKO_FL], SKF_RES
+    jz  .nores
+    push ax
+    call dns_unres              ; a lookup in flight lets go of it too
+    pop ax
+.nores:
+    mov byte [bx+SKO_TS], TS_CLOSED
+    mov byte [bx+SKO_ST], NSK_FREE
+    call sk_ring_put            ; (and sk_idle, from inside it)
+.next:
+    inc al
+    loop .l
+    call sk_idle                ; nothing held a ring: the pool goes here
+    mov byte [eth_busy], 0
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; --- sk_busy - CF=1 if any socket is in use ---------------------------------
 ; The rings ARE the sockets' data: half a connection's receive queue and its
 ; unacknowledged send bytes both live in the claim, so freeing it under a live
@@ -689,9 +871,13 @@ sk_busy:
 sk_reclaim:
     call sk_busy
     jc  .no
+    cmp word [sk_seg], 0        ; NOTHING HELD (72.13.4): the new request is
+    je  .idle                   ; simply what the next claim will ask for,
+                                ; and sk_busy's CF = 0 is the answer
     call sk_release             ; and the ladder always ends at the floor,
     call sk_claim               ; which is the 6KB we have just handed back -
-    ret                         ; so this cannot leave the driver with none
+.idle:                          ; so this cannot leave the driver with none
+    ret
 .no:
     stc
     ret
@@ -783,6 +969,15 @@ sk_try:
     add ax, 1023
     mov cl, 10
     shr ax, cl                      ; AX = KB
+    cmp ax, [sk_lrun]               ; **NEVER MORE THAN CAN BE SERVED**
+    ja  .no                         ; (SPEC.md 72.13.4): a claim the heap
+                                    ; cannot serve compacts and sheds every
+                                    ; cache on the UI task before its CF = 1,
+                                    ; so a rung past the largest run is not
+                                    ; asked for. It is NOT a first-fit bound:
+                                    ; that run is the one a compaction and a
+                                    ; shed would leave, so a rung under it can
+                                    ; still move the heap inside this verb
     call OSAPI_MEM_CLAIM_HI         ; out DX = the base segment. FROM THE TOP
                                     ; (SPEC.md 50.3.2), because it is long-lived
                                     ; and driver-owned and belongs at the same
@@ -959,6 +1154,12 @@ sk_alloc:
     pop ax
     mov byte [bx+SKO_RING], SK_NORING   ; ...and zero is a ring NUMBER, so the
                                         ; fresh record has to say "none" out loud
+%ifndef ETH_NOEMIT
+    push ax
+    mov al, [eth_cslot]                 ; whoever is calling (72.13.4)
+    mov [bx+SKO_OWN], al
+    pop ax
+%endif
     mov [bx+SKO_IDX], al
     inc al                      ; handles are 1-based: 0 is "no handle" in
     clc                         ; NETV_ACCEPT's answer
@@ -1868,7 +2069,10 @@ tcp_accept_in:
     push di
     mov dx, [bx+SKO_LP]                 ; the port to keep answering on
     mov al, [bx+SKO_WANTB]              ; **AND THE LISTENER'S WISH** - read
-    push ax                             ; before sk_alloc moves BX to the child.
+    mov ah, [bx+SKO_OWN]                ; (and its OWNER, 72.13.4: the package
+    push ax                             ; that listened, not whoever's verb
+                                        ; pumped this SYN) - before sk_alloc
+                                        ; moves BX to the child.
                                         ; This is how a PASV listener hands the
                                         ; bulk ring to a data connection that
                                         ; does not exist yet (SPEC.md 72.21.1)
@@ -1876,6 +2080,7 @@ tcp_accept_in:
     jc  .fullpop
     pop ax
     mov [bx+SKO_WANTB], al
+    mov [bx+SKO_OWN], ah
     call sk_ring_get                    ; before the SYN-ACK, which advertises
     jc  .noring                         ; sk_rxfree                           ; **NO SLOT: SAY SO** (SPEC.md 72.4.2).
                                         ; This used to drop the SYN and leave

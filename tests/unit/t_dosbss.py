@@ -3,8 +3,8 @@
 
     python3 tests/unit/t_dosbss.py
 
-docs/plans/KERN-DOS-PLAN.md §4.1.3 puts the INT 21h core in a part both the
-box and `kern_dos` join, which means the core is assembled ONCE.  Its state is
+docs/plans/KERN-DOS-PLAN.md §4.1.3 puts the INT 21h core in a part both
+DOS and `kern_dos` join, which means the core is assembled ONCE.  Its state is
 reached DS-relative at `os88_image_end + DOS_B_*`, so every one of those
 offsets has to come out the same in both builds - and `DOS_B_*` is a running
 sum over the `DBSS` rows, so ONE conditional row moves every cell after it.
@@ -66,8 +66,8 @@ OPEN = re.compile(r"^%(?:if|ifdef|ifndef)\b")
 # The same `DBSS` table is assembled into all of them and every one of them is
 # something that SHIPS, which is the point: a pair that agrees is not a rule.
 #
-#   inline   build/dos.o88     - the box with the core inside it
-#   parted   build/dosp.bin    - the box that CALLS a core part (-DDOS_EXTCORE)
+#   inline   build/dos.o88     - DOS with the core inside it
+#   parted   build/dosp.bin    - DOS that CALLS a core part (-DDOS_EXTCORE)
 #   root     build/doscore.bin - that core part, assembled on its own
 #   kerndos  build/kerndos.bin - the same core over the KERNEL's disk layer,
 #                                which is where DVOL_MAX comes from somebody
@@ -174,7 +174,7 @@ def main():
           "\n  a host cell is only where it is in THIS host (SPEC.md 96.44.2)")
 
     # --- rule 3 -------------------------------------------------------------
-    # The core is assembled ONCE, so a build-time arm inside it is the box's or
+    # The core is assembled ONCE, so a build-time arm inside it is DOS's or
     # `kern_dos`'s and never both.  Five of these stood at W9b - the last
     # screen, the packet driver's poll, the console and the mouse - and each
     # became a host HOOK (SPEC.md 96.44.3).  DOSTRACE and DOSNET_CARD are not

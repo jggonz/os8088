@@ -99,7 +99,10 @@ AP_LA_LOW      equ 0x4000        ; refill when fewer than 16 KB remain - a whole
 
 ; --- worker pacing (SPEC.md 86.5.1) -----------------------------------------
 AP_SLP_FEED    equ 1              ; ticks the worker sleeps while feeding
-AP_SLP_IDLE    equ 6             ; ...and while stopped / paused / ended
+AP_SLP_IDLE    equ 3             ; ...and while stopped / paused / ended:
+                                 ; under INST_PARKW (4), so a compaction
+                                 ; asking the idle worker to park is answered
+                                 ; (SPEC.md 86.5.1, 86.5.3)
 AP_DRAW_TICKS  equ 8             ; min ticks between dynamic redraws (~2/s)
 AP_REAP_TICKS  equ 18            ; min ticks between end-of-track UI kicks
 AP_QUE_TICKS   equ 90            ; how often a running player checks APQUEUE.DAT

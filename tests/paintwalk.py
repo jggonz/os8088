@@ -107,8 +107,7 @@ def main(argv):
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
         got = dispapps.pkg_seg(m, 0)
         if got is None:
             sys.exit("paintwalk: PAINT.O88 did not open")
@@ -123,7 +122,7 @@ def main(argv):
         m.run()
 
         mo.to(cx0 + 60, cy0 + 12)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if mo.where()[2] & 1:
             mo._edge(False)
         mo._edge(True)
@@ -188,7 +187,7 @@ def main(argv):
         # by the next pt_segdo hit has been counted to the end, so the one in
         # flight is dropped rather than asserted on.
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
     print("   chord                     landed on   pt_rect")
     bad = []

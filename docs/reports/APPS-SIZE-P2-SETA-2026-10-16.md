@@ -48,7 +48,7 @@ whose subject is **disk room**: the packages on the 360KB system disk —
 apps360, office360, games360 and media360 +0. On the 1.2MB and 1.44MB system
 disks (512-byte clusters) RLAPPLY and The Wire each give one back as well.
 
-DOS's image + bss is `build/dos.o88`'s header (the box); what ships is `build/kdos/DOS.O88`, a loader plus three parts.
+DOS's image + bss is `build/dos.o88`'s header (part 0, the UI); what ships is `build/kdos/DOS.O88`, a loader plus three parts.
 
 The bytes: **-2,138 off the full arms on the 360KB system disk**, -1,330 off
 the small arms. RAM fell on every package; no heap claim grew.

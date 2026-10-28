@@ -38,7 +38,7 @@ CSA_X, CSA_Z, CSA_ELEV, CSA_HDG, CSA_HLEN = 2, 4, 6, 8, 10
 def sg(v): return v - 0x10000 if v >= 0x8000 else v
 mp = dispapps._map("skies")
 with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                 machine="os8088_5150_herc_gla") as ui:
+                 machine="os8088_5150_herc_gla", quick=True) as ui:
     m = ui.m
     ui.path("B:/GAMES/SKIES.O88")
     slot, seg = dispapps.pkg_seg(m, 0)

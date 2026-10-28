@@ -1393,8 +1393,10 @@ def leg12(tmp, bad):
         bad.append("12: a whole job exited %d with steps %s" % (rc, firsts))
     long_src = os.path.join(tmp, "long.mp4")
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-                    "-i", "mandelbrot=size=320x240:rate=30", "-t", "20",
-                    long_src], check=True)
+                    "-i", "mandelbrot=size=320x240:rate=30", "-t", "6",
+                    long_src], check=True)      # (180 frames: the cancel
+                                                # lands after 6; 20 s was
+                                                # 3 s more of ffmpeg)
     old = b"an older file, left alone"
     with open(out, "wb") as f:
         f.write(old)

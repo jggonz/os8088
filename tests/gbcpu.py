@@ -73,6 +73,23 @@ DECHL_NOP = "3500:8A3446FFE2"
 # whose sum must be the interpreter's. Its control does not see that an
 # instruction reads a flag (ADC's carry, RLA's, DAA's) before it writes it.
 FLAGS_ROM = "gbflags"
+# tools/gbprof/gblazy.py: the countdown loops whose DEC r is left without F
+# (REALDMG-SPEC 16.1.3), a timer interrupt landing at their JR. Its control
+# takes that event with F stale.
+LAZY_ROM = "gblazy"
+# tools/gbprof/gbseam.asm: code run from bank 0 across 3FFF into the bank
+# (REALDMG-SPEC 3.1), an instruction across it, one on at 4000 and a JR at
+# 3FFF. Its control assembles the harness without the trap (RDG_NOSEAM).
+SEAM_ROMS = ("gbseam", "gbseam2", "gbseam5")
+# ...and gbseam3 and gbseam4, a JR across it from bank 0 into the bank and
+# back: a JR chooses no DS, and only the translated machine's way through
+# tr_int (or tr_ejf) puts it right, so they are held TRANSLATED, and the
+# plain interpreter is their control - it must fail them (REALDMG-SPEC 3.1)
+SEAM_JRS = ("gbseam3", "gbseam4")
+# tools/gbprof/gbcpc.py: copies through (C), RAM to HRAM and back, taken in
+# one step (cpc_ff, REALDMG-SPEC 16.6), a timer interrupt landing in them.
+# Its control takes the copy the wrong way round (RT_CPCBUG).
+CPC_ROM = "gbcpc"
 # tools/gbprof/gbpop.asm: POPs out of a ROM bank, SP in 4000-7FFF, as
 # Pokemon's VBlank copy reads tiles (pop_slow, REALDMG-SPEC 5). Its control
 # takes POP BC's JB out (C104h), so BC pops from the view's rdgsys half again.
@@ -81,8 +98,13 @@ POPBC_FAST = "C104:9090"
 
 
 def rom_path(name):
-    return subprocess.check_output([sys.executable, os.path.join(ROOT, "tools/getgbtest.py"),
-                                    "--path", name], text=True).strip()
+    """`tools/getgbtest.py --path NAME`, in process (a Python start a ROM)"""
+    import getgbtest
+    hits = [f for f in list(getgbtest.FILES) + list(getgbtest.ZIP_FILES)
+            if name in f]
+    if len(hits) != 1:
+        sys.exit("gbcpu: %r matches %d files" % (name, len(hits)))
+    return os.path.join(getgbtest.DEST, hits[0])
 
 
 def run_screen(rom, frames, core, host):
@@ -179,6 +201,64 @@ def main():
                                  "passed - the gate cannot go red" if ok
                                  else "%s, as it must not be" % broke))
         bad += ok
+    if not a.k or a.k in "lazy loops":
+        import gbours
+        rom = gbours.build(LAZY_ROM)
+        want = run_sum(rom, core, host, False)
+        got = run_sum(rom, core, host, True)
+        ok = want is not None and got == want
+        print("%-4s %-24s %s" % ("ok" if ok else "FAIL", "lazy loops",
+                                 "%s, interpreted %s" % (got, want)))
+        bad += not ok
+        broke = run_sum(rom, core, rdgimg.build_host(out, ["RT_LAZYBUG"]), True)
+        rdgimg.build_host(out)
+        ok = broke == want
+        print("%-4s %-24s %s" % ("FAIL" if ok else "ok", "control: event F stale",
+                                 "passed - the gate cannot go red" if ok
+                                 else "%s, as it must not be" % broke))
+        bad += ok
+    if not a.k or a.k in "copies through (C)":
+        import gbours
+        rom = gbours.build(CPC_ROM)
+        want = run_sum(rom, core, host, False)
+        got = run_sum(rom, core, host, True)
+        ok = want is not None and got == want
+        print("%-4s %-24s %s" % ("ok" if ok else "FAIL", "copies through (C)",
+                                 "%s, interpreted %s" % (got, want)))
+        bad += not ok
+        broke = run_sum(rom, core, rdgimg.build_host(out, ["RT_CPCBUG"]), True)
+        rdgimg.build_host(out)
+        ok = broke == want
+        print("%-4s %-24s %s" % ("FAIL" if ok else "ok", "control: copy reversed",
+                                 "passed - the gate cannot go red" if ok
+                                 else "%s, as it must not be" % broke))
+        bad += ok
+    if not a.k or a.k in "bank seam":
+        import gbours
+        nos = rdgimg.build_host(out, ["RDG_NOSEAM"])
+        rdgimg.build_host(out)
+        for name in SEAM_ROMS:
+            rom = gbours.build(name)
+            for jit in (False, True):
+                ok, last = run(name, rom, 600, core, host, jit=jit)
+                print("%-4s %-24s %s" % ("ok" if ok else "FAIL", "%s, %s" % (
+                    name, "translated" if jit else "interpreted"), last))
+                bad += not ok
+            ok, last = run(name, rom, 600, core, nos, jit=False)
+            print("%-4s %-24s %s" % ("FAIL" if ok else "ok", "control: %s no trap" % name,
+                                     "passed - the gate cannot go red" if ok
+                                     else "failed, as it must"))
+            bad += ok
+        for name in SEAM_JRS:
+            rom = gbours.build(name)
+            ok, last = run(name, rom, 600, core, host, jit=True)
+            print("%-4s %-24s %s" % ("ok" if ok else "FAIL", "%s, translated" % name, last))
+            bad += not ok
+            ok, last = run(name, rom, 600, core, host, jit=False)
+            print("%-4s %-24s %s" % ("FAIL" if ok else "ok", "control: %s interpreted" % name,
+                                     "passed - the gate cannot go red" if ok
+                                     else "failed, as it must"))
+            bad += ok
     for name in MOONEYE:
         label = "mooneye " + name
         if a.k and a.k not in label:

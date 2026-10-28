@@ -132,7 +132,7 @@ def slots(m):
 def shot(m, mo, rect):
     """The window's own pixels, with the pointer parked at one fixed spot."""
     mo.to(*PARK)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     w, h, rows = m.vram()       # CGA or Hercules; see the note above
     x, y, rw, rh = rect
     return rw, b"".join(bytes(rows[yy][x:x + rw])
@@ -186,14 +186,25 @@ def ref_read(path):
 def media(m, mo, wx, wy):
     """Stand in B:\\MEDIA, from wherever in the volume we are."""
     while ".." in [n for n, _ in dispcp.listing(m, S)]:
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "..")
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MEDIA")
+        dispcp.open_named(m, mo, S, UD, wx, wy, "..")
+    dispcp.open_named(m, mo, S, UD, wx, wy, "MEDIA")
     return [n for n, _ in dispcp.listing(m, S) if n != ".."]
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+# every read below is guest memory (or the framebuffer after the UI is
+# done), so the boot gate is the kernel's STATE and the dispcp verbs settle
+# on ui_done (docs/plans/completed/SOAK-SPEED.md 4)
+def UD(m, **_):
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, UD, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
 
     # --- 1. one root mount of B:, and nothing else --------------------------
@@ -274,8 +285,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                          "wrong" % (REF, n))
 
     # --- 3. ...and again, with APPS/ harvested in between --------------------
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "..")
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
+    dispcp.open_named(m, mo, S, UD, wx, wy, "..")
+    dispcp.open_named(m, mo, S, UD, wx, wy, "APPS")
     say("APPS/ browsed: the harvest has now read every package's own sector")
     harvested = slots(m)
     media(m, mo, wx, wy)

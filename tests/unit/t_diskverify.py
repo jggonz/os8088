@@ -31,7 +31,12 @@ IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img", "os8088-360.img",
           # and the first shipped ones with PACKAGES AT THE ROOT, so the
           # root-directory arithmetic they exercise is arithmetic no other
           # image in this list reaches.
-          "office360.img", "network360.img", "games360.img", "emu360.img"]
+          "office360.img", "network360.img", "games360.img", "emu360.img",
+          "util360.img",
+          # ...and the 720KB geometry's second apps disk (SPEC.md 24.7)
+          "more720.img",
+          # ...and the 128KB machine's system disks (SPEC.md 24.5.7)
+          "small360.img", "small720.img"]
 
 
 def main():

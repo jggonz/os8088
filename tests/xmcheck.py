@@ -86,19 +86,117 @@ ROW = (180, 128)
 
 
 def qmp(sock, *cmds):
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "qmp.py"), sock,
-                        *cmds], capture_output=True, text=True, cwd=ROOT)
-    if r.returncode != 0:
-        raise SystemExit("xmcheck: qmp failed:\n" + (r.stderr or r.stdout)[-600:])
-    return r.stdout
+    """tools/qmp.py's work, in process (a Python start a call was most of a
+    memory read's cost); a failure is the same SystemExit as before. A plain
+    `sendkey` is CONFIRMED there (tools/qmp.py `key`, SOAK-PARALLEL.md 17.5).
+    """
+    import traceback
+    t = os.path.join(ROOT, "tools")
+    if t not in sys.path:
+        sys.path.insert(0, t)
+    import qmp as qmpc
+    try:
+        c = _KEEP.get(sock)
+        if c is None and sock in _WANT:
+            try:
+                c = _KEEP[sock] = qmpc.Client(sock)
+            except OSError:
+                c = None
+        if c is not None:
+            try:
+                out, err, rc = c.run(list(cmds))
+            except (OSError, RuntimeError, ValueError):
+                release(sock)               # (a dead connection: once more,
+                c = None                    # on a fresh one)
+        if c is None:
+            out, err, rc = qmpc.run(sock, list(cmds))
+    except Exception:                       # noqa: BLE001 - as a crashed child
+        out, err, rc = "", traceback.format_exc(), 1
+    if rc != 0:
+        raise SystemExit("xmcheck: qmp failed:\n" + (err or out)[-600:])
+    return out + "\n" if out else ""
+
+
+def qmp_exec(sock, execute, arguments=None):
+    """ONE raw QMP command - for the few that are not HMP's, such as
+    `input-send-event`, which can send a key's press and its release apart
+    where HMP's `sendkey` sends both. On the kept connection when there is
+    one; a refusal is the same SystemExit as `qmp`'s."""
+    t = os.path.join(ROOT, "tools")
+    if t not in sys.path:
+        sys.path.insert(0, t)
+    import qmp as qmpc
+    obj = {"execute": execute}
+    if arguments is not None:
+        obj["arguments"] = arguments
+    c = _KEEP.get(sock)
+    if c is None and sock in _WANT:
+        c = _KEEP[sock] = qmpc.Client(sock)
+    if c is not None:
+        r = c.send(obj)
+    else:
+        c = qmpc.Client(sock)
+        try:
+            r = c.send(obj)
+        finally:
+            c.close()
+    if "error" in r:
+        raise SystemExit("xmcheck: qmp %s failed: %r" % (execute, r["error"]))
+    return r.get("return")
+
+
+_KEEP = {}
+_WANT = set()
+
+
+def keep(sock, on=True):
+    """Hold ONE QMP connection to `sock` for every later `qmp` call in this
+    process (tools/qmp.py's Client): a call is then one round trip where a
+    fresh connection is three, ~35 ms a memory read on a loaded box. QMP
+    serves ONE client, so this file's mouse.py helpers `release` it before
+    they spawn (the next `qmp` call opens it again); anything else that
+    connects - a tools/shot.py child - must `release` first too, or it waits
+    for ever. `keep(sock, False)` ends it (vidxms.Q.close does)."""
+    if on:
+        _WANT.add(sock)
+    else:
+        _WANT.discard(sock)
+        release(sock)
+
+
+def release(sock):
+    """Close the kept connection, if any; `qmp` reopens it while kept."""
+    c = _KEEP.pop(sock, None)
+    if c is not None:
+        try:
+            c.close()
+        except OSError:
+            pass
 
 
 def goto(sock, x, y):
+    """CLOSED LOOP when the kernel's pointer words can be read
+    (os88qemu.mouse_to: send the delta, wait for `mouse_x` to MOVE, repeat
+    until it is there), which is what a click needs to land on a row it
+    named. tools/mouse.py, the fallback, DEAD-RECKONS - it pins against the
+    clamp and walks back on host sleeps - and a guest starved past those
+    sleeps took a double-click somewhere else, after which the row timed out
+    waiting for a listing that was never asked for (rdxms, httpmountname,
+    docs/plans/SOAK-PARALLEL.md 17.5)."""
+    try:
+        import os88qemu
+        os88qemu.mouse_to(os88qemu._Sock(sock), sym,
+                          lambda *c: qmp(sock, *c), x, y)
+        return
+    except BaseException:               # noqa: BLE001 - no map, a kernel
+        pass                            # without the words: dead-reckon
+    release(sock)
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"), sock,
                     "to", str(x), str(y)], capture_output=True, cwd=ROOT)
 
 
 def click(sock, x, y):
+    release(sock)
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"), sock,
                     "click", str(x), str(y)], capture_output=True, cwd=ROOT)
 
@@ -241,43 +339,19 @@ def show(label, live):
 
 
 def boot():
-    """`make test TESTAPPS=build/xmtest.img`, and answer when QMP is up.
-
-    A previous run's QEMU is killed first, for CLAUDE.md's reason: `make test`
-    fails with `cannot create PID file` while the STALE instance keeps
-    answering on build/qmp.sock, so every read below succeeds and describes a
-    machine nobody asked for. tests/minesrc.py opens the same way.
-    """
-    import time
-    if os.path.exists(PID):
-        try:
-            pid = int(open(PID).read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)
-        except (OSError, ValueError):
-            pass
-    for f in (SOCK, PID):
-        if os.path.exists(f):
-            os.remove(f)
-    # `make test` DAEMONISES the emulator, so it outlives this script
-    # unless somebody kills it - and the somebody is us (os88qemu).
-    os88qemu.own()
-    # THROUGH os88fixture.make: `make test` is a LAUNCHER, and the only thing
-    # it leaves under build/ is the buildnum stamp the parse rewrites - this
-    # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
-    # as this row's `wants=`, so the runner has them current and nothing is
-    # built here either.
-    r = os88fixture.make("test", "TESTAPPS=" + XMIMG)
-    if r.returncode:
-        raise SystemExit("xmcheck: make test failed:\n" + r.stdout + r.stderr)
-    for _ in range(150):                    # ...and wait for the socket
-        if os.path.exists(SOCK):
-            break
-        time.sleep(0.2)
-    else:
-        raise SystemExit("xmcheck: QEMU never opened " + SOCK)
-    wait_desktop(SOCK)                      # ...and for the desktop
-    return SOCK
+    """`make test TESTAPPS=build/xmtest.img`'s machine WITHOUT make
+    (os88qemu.launch_test): its own socket and copies of both floppies, so
+    no `make` runs in the shared build/ (a build/ behind its sources is
+    REBUILT by `make test`'s prerequisites) and no stale instance on
+    build/qmp.sock can answer for it. Answers the socket at a desktop."""
+    import atexit
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    atexit.register(shutil.rmtree, tmp, True)   # (after the kill: LIFO)
+    sock, _ = os88qemu.launch_test(tmp, apps=XMIMG)
+    wait_desktop(sock)                      # ...and for the desktop
+    return sock
 
 
 def wait_desktop(sock, who="xmcheck"):
@@ -288,14 +362,20 @@ def wait_desktop(sock, who="xmcheck"):
     m = Mem(sock)
 
     def zone():
+        # ...AND ui_task ASLEEP WITH NOTHING QUEUED. The zone alone can be
+        # read out of RAM the boot has not written yet - drv_boot_x runs, and
+        # fills a driver's drv_tab row, before desk_rowcalc lays the desktop
+        # out, and a first look in that window has read desk_rows as 33031 -
+        # while ui_idle cannot hold before kmain has become ui_task.
         try:
-            return dispcp.drive_ordinal(m, sym, "B") is not None
+            return (dispcp.drive_ordinal(m, sym, "B") is not None
+                    and os88qemu.ui_idle(m, sym))
         except Exception:                   # noqa: BLE001 - not answering yet
             return False
-    if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.4):
+    if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.05):
         raise SystemExit("%s: drive B: never got a desktop zone - the guest "
                          "did not reach a desktop" % who)
-    os88qemu.pace(m, 1)
+    os88qemu.ui_done(m, sym, cap=1.0)       # (was pace(1): the paint, capped)
 
 
 class Mem(object):
@@ -326,16 +406,19 @@ def check(sock):
     # Every wait below is on the GUEST's clock (tests/os88qemu.py) and on the
     # thing the next line reads: a window, the package's blocks, the close.
     print("xmcheck: opening Disk B and launching XMTEST.O88")
-    dblclick(sock, *DISKB)
+    # closed-loop on mouse_x/mouse_btn, every edge confirmed (SOAK-SPEED 15),
+    # where dblclick walks tools/mouse.py blind
+    hmp = lambda *c: qmp(sock, *c)                          # noqa: E731
+    os88qemu.mouse_dblclick(m, sym, hmp, *DISKB)
     os88qemu.acted(m, lambda: newest_window(sock) is not None, secs=20,
-                   what="the Disk B window", poll=0.3)
-    os88qemu.pace(m, 1)                     # ...and its listing painted
-    dblclick(sock, *ROW)
+                   what="the Disk B window", poll=0.05)
+    os88qemu.ui_done(m, sym, cap=1.0)       # ...and its listing painted
+    os88qemu.mouse_dblclick(m, sym, hmp, *ROW)
 
     def owned_now():
         return [b for b in blocks(sock, base) if b[3] != XM_OWN_KERN]
     if os88qemu.acted(m, lambda: bool(owned_now()), secs=30,
-                      what="an instance-owned block", poll=0.3):
+                      what="an instance-owned block", poll=0.05):
         os88qemu.quiesce(m, lambda: blocks(sock, base), secs=1.0,
                          what="xm_tab")
 
@@ -357,13 +440,13 @@ def check(sock):
     cx, cy = os88geom.close_xy(wx, wy)
     print(f"xmcheck: closing window {slot} at ({wx},{wy}) {ww}x{wh} - "
           f"its close box, at ({cx},{cy}), not minimize")
-    click(sock, cx, cy)
+    os88qemu.mouse_click(m, sym, hmp, cx, cy)
 
     def closed():
         w = newest_window(sock)
         return w is None or w[0] != slot
     if os88qemu.acted(m, closed, secs=15, what="window %d closing" % slot,
-                      poll=0.3):
+                      poll=0.05):
         os88qemu.quiesce(m, lambda: blocks(sock, base), secs=1.0,
                          what="xm_tab")
     # ...and PROVE it closed. Without this the leak report below cannot tell

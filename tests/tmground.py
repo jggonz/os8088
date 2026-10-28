@@ -64,6 +64,7 @@ for i, a in enumerate(sys.argv):
 
 S = os88sym.linear
 TITLE_H = 18
+TM_SLOW = 4                             # apps/taskmgr: intervals per paint
 WF_OWNBG = 64
 fails = []
 
@@ -77,6 +78,54 @@ def tick(mm, card=None):
 def view(m, seg):
     return m.read((seg << 4) + dispapps.img_size("taskmgr")
                   + dispapps.bss_off("taskmgr", "tm_view"), 1)[0]
+
+
+def samples(m, seg):
+    """tm_pos, the history sweep index: tm_sample advances it once a TM_INT
+    interval on EVERY view, so it is the worker's own sample clock. The ring
+    is TM_GW wide, and TM_GW is the distance from tm_hist to tm_pos."""
+    base = (seg << 4) + dispapps.img_size("taskmgr")
+    b = m.read(base + dispapps.bss_off("taskmgr", "tm_pos"), 2)
+    return b[0] | (b[1] << 8)
+
+
+def current(m, seg):
+    """Wait until the memory page's FIGURES are the machine's, not the cover's.
+
+    The memory page samples every TM_INT (9 ticks) but PAINTS only every
+    TM_SLOW = 4 of them (SPEC.md 28.6), so the figures an uncover draws are
+    the last SAMPLE's - and a sample taken while the cover was still up
+    carries its claims. Closing it frees them, `RAM 114/640K` becomes
+    `RAM 112/640K` up to 2 s later, and `settle`'s quiet window is shorter
+    than that. Whether the capture lands before or after that paint is the
+    PHASE of the 2 s cadence against the close, and that moved with the
+    kernel's build number: 72 subpixels, deterministically, on one commit and
+    0 on its parent, every one of them in the RAM digits - nothing to do with
+    the ground fill this leg is about.
+
+    So wait on the WORKER, not on the glass: TM_SLOW + 1 samples after this
+    point include a paint-due interval whose sample was taken after the
+    change, and the settle after it lets that paint land.
+
+    THIS WAIT IS ALSO WHAT CAUGHT A REAL DEFECT, and cannot hide it: under
+    host load the same leg read 549 subpixels WITH it, the page still showing
+    `RAM 114K` forty samples after the machine went back to 112. That was
+    tm_quiet's ABA (SPEC.md 28.11.3) - the worker never repaired the page at
+    all - and a wait for a paint that never comes still compares stale glass
+    against a forced repaint and fails."""
+    gw = (dispapps.bss_off("taskmgr", "tm_pos")
+          - dispapps.bss_off("taskmgr", "tm_hist"))
+    p0 = samples(m, seg)
+    os88marty.until(m, lambda mm: (samples(mm, seg) - p0) % gw >= TM_SLOW + 1,
+                    "the Task Manager to sample past a paint-due interval",
+                    limit=60)
+    os88marty.settle(m, limit=120)
+
+
+def usedk(m, seg):
+    base = (seg << 4) + dispapps.img_size("taskmgr")
+    b = m.read(base + dispapps.bss_off("taskmgr", "tm_usedk"), 2)
+    return b[0] | (b[1] << 8)
 
 
 def flags(m, slot):
@@ -128,7 +177,10 @@ def force_repaint(m):
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)          # the boot gate on STATE
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     os88marty.no_saver(m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
@@ -252,25 +304,32 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         mo.click(*os88geom.close_xy(big.x, big.y))  # ...and the cover GOES
         mo.to(*dispcorner.PARK)
         os88marty.settle(m, limit=120)
+        current(m, seg)                         # ...and its figures are TODAY's
         left = [x for x in os88geom.windows(m) if x.visible and x.i != slot]
         if left:
             fails.append("PIXELS: the cover did not close - %r is still up, "
                          "and a forced repaint moves its claims" % (left,))
         cw, _, uncovered = m.fbuf()
+        used0 = usedk(m, seg)
         saved = force_repaint(m)
         mo.to(*dispcorner.PARK)
         os88marty.settle(m, limit=120)
         for a, f in saved:
             m.write(a, f)
         _, _, honest = m.fbuf()
+        used1 = usedk(m, seg)
         r0 = w.y * cw * 3
         r9 = min((w.y + w.h) * cw * 3, len(honest))
         diff = sum(1 for a, b in zip(uncovered[r0:r9], honest[r0:r9])
                    if a != b)
         print("PIXELS  : zoom covered it wholly=%s, cache %s - %d subpixels "
-              "differ between the uncover and a forced repaint"
+              "differ between the uncover and a forced repaint (RAM %dK, %dK)"
               % (whole, "spoiled, word %s" % ("read" if miss else "0"),
-                 diff))
+                 diff, used0, used1))
+        if used0 != used1:
+            fails.append("PIXELS: the RAM figure moved %dK -> %dK between the "
+                         "two captures, so they compare two machines rather "
+                         "than two paints of one" % (used0, used1))
         if not whole:
             fails.append("PIXELS: the zoomed window did not wholly cover the "
                          "Task Manager, so its pixels were never gone")

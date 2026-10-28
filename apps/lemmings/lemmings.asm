@@ -99,6 +99,10 @@
                                     ; is a stub - but the %define has to be here
                                     ; anyway, because os88_menu_set() is the
                                     ; slot that patches the trampoline in
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned, unsigned) -
+                                    ; the level's claims move while the
+                                    ; desktop holds them (lemgame.c, SPEC.md
+                                    ; 116.6.2)
 %define CC_HAS_ABOUT                ; void os88_about(void *)
 %define CC_HAS_FSX                  ; the bracket's thunks (SPEC.md 53, 116.5):
                                     ; os88_fsx_caps() asked with OUR window is

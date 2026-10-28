@@ -92,7 +92,7 @@ def main():
                         "--size", "360", pkg, LOGO],
                        check=True, capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=machine) as ui:
+                         machine=machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/OS8088.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -105,7 +105,7 @@ def main():
 
             def wait(cond, what, guest=60.0):
                 try:
-                    os88marty.until(m, cond, what, poll=0.1, limit=600.0,
+                    os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                     guest=guest)
                 except os88marty.MartyError as e:
                     raise Stop("%s never happened (%s)"

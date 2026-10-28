@@ -40,7 +40,8 @@ from os88geom import WIN_SIZE, W_SEG                            # noqa: E402
 from paintmove import pkg_syms                                  # noqa: E402
 
 WORK = "build/sheetopts"
-DISK = "build/sheetopts.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetopts.img")        # the run's tree, so a soak lane finds it
 WANT = ["Display...", "Freeze Panes", "Protect Document", "Calculation...",
         "Calculate Now   F9", "Workspace..."]      # F9's caption, 81.101
 SH_MI_H = 12
@@ -53,7 +54,6 @@ def build_disk():
     open(src, "wb").write(F.write_sylk({(0, 0): 1.0}))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL",
                     "APPS:" + src], check=True, stdout=subprocess.DEVNULL)
 
 

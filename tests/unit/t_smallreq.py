@@ -79,7 +79,7 @@ ROOT = os.path.abspath(ROOT)
 # machine (`make small` boots and `make smallapps` goes in B:), and the one
 # defect the pairing has already produced - the 1.44MB half built differently
 # from the 360KB one - is exactly what a per-image list would hide again.
-IMGS = ["build/small360.img", "build/small.img",
+IMGS = ["build/small360.img", "build/small720.img", "build/small.img",
         "build/smallapps360.img", "build/smallapps.img"]
 
 # The ONLY .DRV files legal on a small floppy: `$(SMALLDRIVERS)` is `$(KMODS)`

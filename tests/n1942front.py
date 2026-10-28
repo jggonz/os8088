@@ -16,11 +16,11 @@ def key(ui, name):
 def revealed(ui,g,tag):
     N.M.until(ui.m,lambda _: g.get('frontready')==(12 if tag=='cga' else 24),
               'splash reveal finishes',guest=10)
-    ui.settle()
+    N.M.ui_done(ui.m)
 
 
 def shot(ui, tag, name):
-    ui.mo.to(2,2);ui.settle()
+    ui.mo.to(2,2);ui.still()
     path=N.ROOT/f'build/1942-proof/{tag}-splash-{name}.png'
     path.parent.mkdir(parents=True,exist_ok=True)
     if tag=='vga':
@@ -44,8 +44,8 @@ def logo(image,g,tag,ui=None):
 
 def run(tag,off,code):
     machine={'vga':'os8088_xt_vga','cga':'os8088_5150_cga_gla','herc':'os8088_5150_herc_gla'}[tag]
-    with N.os88ui.boot('build/os8088-360.img',apps='build/1942-360.img',machine=machine) as ui:
-        m=ui.m;ui.open_drive('B');ui.open('1942.O88');ui.settle()
+    with N.os88ui.boot('build/os8088-360.img',apps='build/1942-360.img',machine=machine,quick=True) as ui:
+        m=ui.m;ui.open_drive('B');ui.open('1942.O88')
         g=N.Game(ui,off,code);revealed(ui,g,tag)
         assert g.get('frontkind',1)=={'vga':1,'herc':2,'cga':3}[tag]
         assert g.get('state',1)==0 and g.get('players')==1
@@ -96,7 +96,7 @@ def run(tag,off,code):
             assert help_image.crop((x+32,y+row*scale,x+400,y+row*scale+8)).getbbox(), ('missing help row',row)
         assert m.read(g.get('canvas')<<4,len(canvas))==canvas,'menu decoded/changed artwork'
         key(ui,'Escape');assert g.get('fronthelp',1)==0
-        ui.move_window(ui.window('1942'),127,21 if tag=='cga' else 28);ui.settle()
+        ui.move_window(ui.window('1942'),127,21 if tag=='cga' else 28)
         moved=shot(ui,tag,'moved');logo(moved,g,tag,ui)
         w=ui.window('1942');x,y=w.x+1,w.y+N.G.TITLE_H;scale=g.get('frontscale',1)
         if tag=='herc':
@@ -111,7 +111,7 @@ def run(tag,off,code):
             assert g.get('infs',1)==1 and g.get('players')==2
             assert g.get('state',1)==1 and g.get('flightphase')==1
             g.put('scorelo',1234)
-            m.bp_exec();m.run();key(ui,'Escape');ui.settle()
+            m.bp_exec();m.run();key(ui,'Escape')
             assert g.get('infs',1)==0 and g.get('scorelo')==1234
             revealed(ui,g,tag)
             logo(shot(ui,tag,'resume'),g,tag)
@@ -122,7 +122,7 @@ def run(tag,off,code):
             key(ui,'KeyN');assert g.get('state',1)==0
             key(ui,'Digit1');assert g.get('players')==1
             logo(shot(ui,tag,'new'),g,tag)
-        ui.close(ui.window('1942'));ui.settle()
+        ui.close(ui.window('1942'))
         print(tag+' splash: exact art pixels, selection, help, drag, launch/resume and close OK',flush=True)
 
 

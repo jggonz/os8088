@@ -208,7 +208,7 @@ def main():
         ty0, tx0 = (SH // rs - H) // 2, (SW - W) // 2
         rows_at = [(ty0 + y) * 320 + tx0 for y in range(H)]
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/COLOR.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -225,7 +225,7 @@ def main():
                 m.write(base + syms[n], struct.pack("<H", v))
 
             def until(cond, what, guest):
-                os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                 guest=guest)
 
             until(lambda mm: rb("vp_loaded") == 1, "the header", 30.0)

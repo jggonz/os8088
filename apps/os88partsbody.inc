@@ -659,7 +659,7 @@ op_claim:
     ; CS-based claims, and this is one - it is code you far-call, and on a
     ; re-home it becomes the region itself. Claimed bottom-up it landed at the
     ; FLOOR, left the loader's freed region as a hole beneath it that no single
-    ; contiguous claim can use, and cost the DOS box 6 KB of the arena it hands
+    ; contiguous claim can use, and cost DOS 6 KB of the arena it hands
     ; its program. Measured there: 437 -> 431 KB, 5,120 of hole and 1,024 of
     ; carve head slack. The hole SURVIVED a posted compaction, which is an
     ; open question and not this routine's - SPEC.md 20.12.10.8.1 has the
@@ -1615,8 +1615,16 @@ op_fetch:
     jb .nomem
     mov ax, bx
     xor cx, cx                  ; (op_claim's door: conventional on kern_mega
-    call OSAPI_MEM_CLAIM_DMA    ; whatever the header says, the fetch below
-    jc .nomem                   ; adding paragraphs to the base)
+%ifdef OP_WANT_ASSETHI          ; whatever the header says, the fetch below
+    cmp byte [si+OP_R_KIND], OP_ASSET   ; adding paragraphs to the base)
+    jne .lodoor                 ; A LAZY ASSET FROM THE CEILING, when the
+    call OSAPI_MEM_CLAIM_DMA_HI ; package asks (SPEC.md 20.12.4.1): CX = 0, so
+    jmp short .claimed          ; top-down on every kernel
+.lodoor:
+%endif
+    call OSAPI_MEM_CLAIM_DMA
+.claimed:
+    jc .nomem
     push dx                     ; ...banked across everything below
 
     mov ax, [si+OP_R_OFF]       ; --- where the read starts, and its slack ---
@@ -1990,6 +1998,110 @@ op_row:
     add si, op_table + OP_T_ROWS
     pop ax
     ret
+
+%ifdef OP_ONMOVE
+; -----------------------------------------------------------------------------
+; op_movable / op_pin - THE PARTS' CLAIMS MAY MOVE (SPEC.md 20.12.12,
+;                       docs/plans/NO-PINNING-PLAN.md A8). OPT-IN: assembled
+;                       only for a package that says `%define OP_ONMOVE
+;                       <hook>` before os88parts.inc, so every other package
+;                       is byte for byte what it was
+; in:  AL = a part whose claim is HERE - a FETCHED OP_LAZY row, which is a
+;      claim of its own - or OP_CARVE for the carve every eager part is
+;      arithmetic on
+; out: OSAPI_MEM_MOVABLE's CF; CF=1 too when AL names no claim (an unfetched
+;      or eager row, an empty carve)
+; clobbers: DX, flags
+;
+; op_movable declares that claim with the standard's own proc and op_pin pins
+; it again (OSAPI_MEM_MOVABLE AX = 0), for a stretch in which the package
+; holds one of its segments across something that can claim - a file call
+; into it, an fsx bracket (SPEC.md 66.2's HLock). The proc does the
+; standard's half - [op_base] for the carve, the row's banked segment for a
+; lazy part, so op_seg answers the new place at once - and then jumps to the
+; package's OP_ONMOVE hook with BX = was and DX = now, under a relocation
+; proc's own rules (SPEC.md 66.3): every segment the package BANKED from an
+; op_seg answer is the hook's to put right, by asking op_seg again. A hook
+; with nothing banked is a bare `ret`.
+;
+; WHAT THE PACKAGE ASSERTS BY CALLING IT, and nothing here can check it: no
+; copy of the claim's segment survives a call that can claim, except in the
+; words its hook re-reads - which for an OP_SEG part includes a CS on a
+; stack, so code you far-call is declared only if no claim is ever made
+; under that far call. Declare AFTER the part is in place and its segment
+; banked (SPEC.md 66.3 rule 5's ordering): op_fetch does not declare for you.
+; -----------------------------------------------------------------------------
+OP_CARVE    equ 0FFh
+op_pin:
+    push ax
+    push bx
+    xor bx, bx                  ; the proc: none, which is the pin
+    jmp short op_decl
+op_movable:
+    push ax
+    push bx
+    mov bx, op_lazymv
+%if OP_HAS_CARVE
+    cmp al, OP_CARVE
+    jne op_decl
+    mov bx, op_carvemv
+%endif
+op_decl:
+    push si
+%if OP_HAS_CARVE
+    mov dx, [op_base]           ; the carve: every eager part's segment is
+    cmp al, OP_CARVE            ; arithmetic on this base
+    je .have
+%endif
+    xor ah, ah
+    cmp al, [op_t_n]
+    jae .no
+    call op_row                 ; SI -> the row
+    test byte [si+OP_R_FLAG], OP_FETCHED
+    jz .no                      ; not here (or not lazy: never set there)
+    mov dx, [si+OP_R_ZKB]       ; a fetched row's word IS its claim's base
+.have:
+    or dx, dx
+    jz .no                      ; no carve: op_load made none
+    xchg ax, bx                 ; AX = the proc, or 0
+    call OSAPI_MEM_MOVABLE
+    jmp short .out
+.no:
+    stc
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; op_lazymv - a FETCHED lazy part's relocation proc: the row whose banked
+; segment is the one that moved takes the new one, then the package's hook.
+; OP_FETCHED is set on lazy rows alone, and no two fetched rows share a base
+; (each is a claim of its own), so exactly one row matches
+op_lazymv:
+    mov si, op_table + OP_T_ROWS
+    mov cl, [op_t_n]
+.row:
+    test byte [si+OP_R_FLAG], OP_FETCHED
+    jz .next
+    cmp [si+OP_R_ZKB], bx
+    jne .next
+    mov [si+OP_R_ZKB], dx
+.next:
+    add si, OP_ROW
+    dec cl
+    jnz .row
+    jmp OP_ONMOVE
+%if OP_HAS_CARVE
+; op_carvemv - the carve's relocation proc: op_seg derives every eager part
+; from [op_base] (the head slack and R are offsets from it, not segments), so
+; one store is the standard's whole half. [op_rdseg] is live only inside
+; op_load and op_fetch, which a declared carve is past
+op_carvemv:
+    mov [op_base], dx
+    jmp OP_ONMOVE
+%endif
+%endif                              ; OP_ONMOVE
 
 %if OP_HAS_ZLAZY
 ; GATED (SPEC.md 20.12.9): only a table with an OP_COMP|OP_LAZY row the standard fetches reaches it

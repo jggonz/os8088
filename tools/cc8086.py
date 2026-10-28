@@ -1171,16 +1171,22 @@ def frames(items):
 #      fragments only.  The data fragments stay exactly where they were.
 #
 #   2. EVERY CALL TO AN OVERLAY FUNCTION BECOMES A FAR CALL, including one
-#      from inside the module.  `call far [cc_ovm_<name>]`, a dword of
+#      from inside the module - which goes `mov bx, cc_ovm_<name>` /
+#      `call far [cc_ovvmm]`, through crt0's cc_ovmthunk, so that the module's
+#      CS is never left on a stack for a plain `retf` and the carve may move
+#      under the call (SPEC.md 73.14.2.1).  From resident code it is
+#      `call far [cc_ovm_<name>]`, a dword of
 #      (offset, segment) whose offset is assembled in - the module is
 #      assembled WITH the package, one nasm job, so both halves agree about
 #      every address by construction - and whose segment cc_ovbind stamps at
 #      load.  Uniformly far, because a far call pushes four bytes of return
 #      address and a near call pushes two, and the callee's arguments are at a
 #      fixed offset from its own frame: two kinds of entry would need two
-#      argument layouts for one function body.  An intra-module far call costs
-#      two extra bytes and about thirteen clocks on an 8088, which is nothing
-#      beside a 756 us drawing call (PERFORMANCE.md).
+#      argument layouts for one function body.  An intra-module call costs five
+#      bytes over a near one and the thunk's ~25 instructions (the stash
+#      push and pop, two far transfers), ~40 us on an 8088 - beside a 756 us
+#      drawing call it is small, and it is what lets the module MOVE; a
+#      function hot enough for it to matter belongs resident anyway.
 #
 #   3. So every `[bp+N]` with N >= 4 inside a moved function - which is how
 #      SmallerC names an ARGUMENT - becomes `[bp+N+2]`.  Locals are `[bp-N]`
@@ -1260,7 +1266,7 @@ def overlay(lines, errors, path):
     if not funcs:
         return lines, None
 
-    entries, shims, sites, moved = {}, {}, 0, set()
+    entries, shims, sites, moved, mm = {}, {}, 0, set(), False
     out, sect, cur, inmod = [], ".text", None, False
     for i, line in enumerate(lines):
         m = SECTION.match(line)
@@ -1286,7 +1292,9 @@ def overlay(lines, errors, path):
             if sym in funcs:
                 entries[sym] = True
                 if inmod:           # module to module: it is already loaded,
-                    out.append("%scall far [cc_ovm%s]" % (pad, sym))
+                    mm = True       # and goes through cc_ovmthunk so that no
+                    out.append("%smov\tbx, cc_ovm%s" % (pad, sym))  # stack
+                    out.append("%scall far [cc_ovvmm]" % pad)  # holds our CS
                 else:               # so only a resident site pays for the load
                     sites += 1
                     lab = "..@ovl_site_%d" % sites
@@ -1352,6 +1360,8 @@ def overlay(lines, errors, path):
             tail.append("\tjmp\tcc_ovthunk")
         tail.append("section .data")
     tail.append("cc_ovv_first:")
+    if mm:      # resident like every shim, so cc_ovbind stamps it with CS
+        tail.append("cc_ovvmm:\tdw cc_ovmthunk, 0")
     for sym in sorted(shims):
         tail.append("cc_ovv%s:\tdw cc_ovs%s, 0" % (sym, sym))
     tail += ["cc_ovv_end:", "section .text", ""]

@@ -52,12 +52,16 @@ def manifest():
     SYSCHECK.O88 (SPEC.md 118.2) - so the fixture is the release's own list
     and this file runs nothing that builds. (kind, folder, NAME)."""
     import os88sysman
-    inc = os.path.join(BUILD, "syscheck_man.inc")
-    return [(k, f, n) for k, f, n, _size, _sum in os88sysman.read_inc(inc)]
+    inc = b("syscheck_man.inc")
+    return [(k, f & ~os88sysman.SCF_OPT, n)
+            for k, f, n, _size, _sum in os88sysman.read_inc(inc)]
 
 
 def b(name):
-    return os.path.join(BUILD, name)
+    """An artefact of the tree under test - the run's frozen tree when there
+    is one (tools/os88build.py), so the fixture and the machine agree."""
+    import os88build
+    return os.path.join(ROOT, os88build.at(os.path.join("build", name)))
 
 
 def mtools_img(img):
@@ -124,9 +128,11 @@ def build_fixture(out):
         cmd += ["--raw", r.split(":", 1)[1]]  # the positional places it
     cmd += args + raw
     subprocess.run(cmd, check=True)
-    # ...and the two deletions, after os88disk wrote ASSOC.DAT and the
-    # manifest's driver list
-    for victim in ("::/EMS.DRV", "::/APPS/NOTEPAD.O88"):
+    # ...and the three deletions, after os88disk wrote ASSOC.DAT and the
+    # manifest's driver list. CDROM.DRV is an OPTIONAL manifest file (SPEC.md
+    # 118.2.3) - the 360KB system disk leaves it off - so its absence must add
+    # NOTHING to the report's exact totals below.
+    for victim in ("::/EMS.DRV", "::/CDROM.DRV", "::/APPS/NOTEPAD.O88"):
         subprocess.run(["mattrib", "-i", mtools_img(out), "-r", "-s", "-h",
                         victim], check=True)
         subprocess.run(["mdel", "-i", mtools_img(out), victim], check=True)
@@ -165,9 +171,12 @@ KEPT = ["::/DEBUG.DRV", "::/APPS/GAMES/MINES.O88", "::/APPS/MINES.O88",
 
 
 def click(x, y):
-    subprocess.run(["python3", os.path.join(ROOT, "tools", "mouse.py"),
-                    SOCK, "click", str(x), str(y)], check=True,
-                   capture_output=True)
+    """Closed-loop (SOAK-SPEED technique 15): to (x, y) read back off
+    mouse_x/mouse_y, each button edge off mouse_btn."""
+    import os88qemu
+    import xmcheck
+    os88qemu.mouse_click(M, xmcheck.sym, lambda *c: xmcheck.qmp(SOCK, *c),
+                         x, y)
 
 
 def report(img):
@@ -184,33 +193,103 @@ def exists(img, path):
     return r.returncode == 0 and path.split("/")[-1] in r.stdout.upper()  # hidden file)
 
 
+# The waits are the GUEST's (tests/os88qemu.py): the scan runs in WAKE
+# SLICES on the UI task (SPEC.md 118.3), so `ui_done` - ui_task asleep with
+# nothing queued and no wake pending - is the scan finished, capped where the
+# fixed host sleep used to be so no wait is longer than it was.
+M = None                    # xmcheck.Mem over the private QEMU's socket
+
+
+def done(cap):
+    import os88qemu
+    import xmcheck
+    os88qemu.ui_done(M, xmcheck.sym, cap=cap)
+
+
 def save_until(img, want, secs=120):
     """Click Save Report until the report says `want`: the button is greyed
     while a scan runs, so the first report that lands is a finished scan's."""
-    t = time.time() + secs
-    while time.time() < t:
+    import os88qemu
+    c = os88qemu.Clock(M)
+    while c.secs() < secs:
         click(*BTN_SAVE)
-        time.sleep(2.0)
+        done(2.0)
         text = report(img)
         if text and want in text:
             return text
     return None
 
 
-def drive(img, keep):
+def qemu(work, img, keep=False):
+    """A PRIVATE QEMU - what `make test TESTHD=img` launched, with its own
+    socket, pidfile and copies of both floppies, so the row runs no `make`
+    and kills no other row's emulator (it used os88qemu.kill() on
+    build/qemu.pid)."""
+    import signal
+    import os88build
     import os88qemu
+    global SOCK
+    SOCK = os.path.join(work, "qmp.sock")
+    pidf = os.path.join(work, "qemu.pid")
+    a, bimg = os.path.join(work, "a.img"), os.path.join(work, "b.img")
+    shutil.copy(b("os8088.img"), a)
+    shutil.copy(b("apps.img"), bimg)
+    os88qemu.start(["qemu-system-i386", "-machine", "pc,vmport=off",
+                    "-drive", "file=%s,format=raw,if=floppy" % a,
+                    "-boot", "c", "-chardev", "msmouse,id=m0",
+                    "-serial", "chardev:m0",
+                    "-drive", "file=%s,format=raw,if=floppy,index=1" % bimg,
+                    "-drive", "file=%s,format=raw,if=ide,index=0,media=disk"
+                    % img, "-display", "none",
+                    "-qmp", "unix:%s,server,nowait" % SOCK,
+                    "-daemonize", "-pidfile", pidf], check=True)
+    pid = int(open(pidf).read().strip())
+
+    def close():
+        try:
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
+        except OSError:
+            pass
+    if not keep:
+        os88qemu.own(pidf, SOCK)        # atexit AND SIGTERM (t_qemuown)
+    for _ in range(150):
+        if os.path.exists(SOCK):
+            break
+        time.sleep(0.2)                 # the socket appearing is a HOST event
+    return close
+
+
+def drive(img, keep, work):
+    global M
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    import os88qemu
+    import os88ui
+    import xmcheck
     fails = []
-    os88qemu.kill()
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "TESTHD=" + img], cwd=ROOT,
-                       capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("syscheck: make test failed:\n" + r.stdout + r.stderr)
-    time.sleep(20)                      # boot, the autostart, the scan
+    close = qemu(work, img, keep)
+    M = xmcheck.Mem(SOCK)
+    M.readseg = lambda seg, off, n: M.read((seg << 4) + off, n)
+    ui = os88ui.UI(M, mouse=object(), sym=xmcheck.sym, verbose=False)
+
+    def up(title):
+        try:
+            return any(w.visible and title in w.title for w in ui.windows())
+        except Exception:               # noqa: BLE001 - not booted yet
+            return False
+    # boot, the autostart, the scan: both windows up and the UI done with it
+    if not os88qemu.acted(M, lambda: up("Control Panel") and
+                          up("System Check"), secs=60,
+                          what="the Control Panel and System Check"):
+        sys.exit("syscheck: the boot never showed the Control Panel and "
+                 "System Check")
+    done(20.0)
     click(*CP_CLOSE)
-    time.sleep(1.5)
+    os88qemu.acted(M, lambda: not up("Control Panel"), secs=1.5,
+                   what="the Control Panel to close")
+    done(1.5)
     click(*BTN_SCAN)                    # the chooser (SPEC.md 118.13) offers
-    time.sleep(1.0)                     # C:, the boot hard disk: check it
+    done(1.0)                           # C:, the boot hard disk: check it
     text = save_until(img, "Result: 5 broken, 6 warnings")
     if text is None:
         fails.append("the first report never said 5 broken, 6 warnings:\n%s"
@@ -221,6 +300,9 @@ def drive(img, keep):
     if not re.search(r"checked (19|20)\d\d-\d\d-\d\d \d\d:\d\d", text):
         fails.append("the report's date is not YYYY-MM-DD hh:mm (a DEC_SEP "
                      "comma in the year was the first build's)")
+    if "CDROM.DRV" in text:
+        fails.append("an absent OPTIONAL file (CDROM.DRV) is reported "
+                     "(SPEC.md 118.2.3)")
     for sev, path, word in EXPECT:
         hit = [ln for ln in lines if ln.startswith(sev) and
                (" %s " % path) in ln and word in ln]
@@ -229,9 +311,9 @@ def drive(img, keep):
                          % (sev, path, word))
     # --- Clean Up: removes exactly 118.8's files, rebuilds ASSOC.DAT ----
     click(*BTN_CLEAN)
-    time.sleep(2.0)
+    done(2.0)
     click(*ALERT_PROCEED)
-    time.sleep(6.0)
+    done(6.0)
     after = save_until(img, "Result: 5 broken, 2 warnings")
     if after is None:
         fails.append("after Clean Up the report never said 5 broken, "
@@ -239,9 +321,7 @@ def drive(img, keep):
     elif "NOTEPAD.O88" in after:
         fails.append("ASSOC.DAT still names NOTEPAD.O88 after Clean Up")
     if not keep:
-        subprocess.run(["python3", os.path.join(ROOT, "tools", "qmp.py"),
-                        SOCK, "quit"], capture_output=True)
-        time.sleep(2.0)
+        close()
     for p in REMOVED:
         if exists(img, p):
             fails.append("Clean Up left %s" % p)
@@ -265,12 +345,15 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
         print("syscheck: fixture -> %s" % a.build)
         return 0
-    img = os.path.join(BUILD, "sctest.img")
+    work = tempfile.mkdtemp(prefix="sc-")      # short: a QMP socket path
+    img = os.path.join(work, "sctest.img")      # has a ~107-byte limit
     tmp = build_fixture(img)
     try:
-        fails = drive(img, a.keep)
+        fails = drive(img, a.keep, work)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        if not a.keep:
+            shutil.rmtree(work, ignore_errors=True)
     if fails:
         for f in fails:
             print("FAIL: " + f)

@@ -2,7 +2,7 @@
 ; OURS, MIT with the rest of the tree.  docs/DOS-DEBUGGING.md is the manual.
 ;
 ; SPEC.md 96.10.5.  A DOS mouse driver draws its own pointer - there is no
-; compositor and no arrow the machine keeps for it - and this box answered
+; compositor and no arrow the machine keeps for it - and this DOS answered
 ; 01h and 02h with a shrug. The rule is one line,
 ;
 ;       displayed = (cell AND screen_mask) XOR cursor_mask
@@ -17,7 +17,7 @@
 ;   D  the counter NESTS: hide, hide, show leaves it hidden
 ;   E  ...and the fourth call brings it back
 ;
-; It runs under this box AND under a real DOS with a mouse driver loaded, so
+; It runs under this DOS AND under a real DOS with a mouse driver loaded, so
 ; the answers are checkable against CTMOUSE. With no driver at all INT 33h is
 ; not installed, function 0 answers AX != FFFF, and it prints SKIP - which is
 ; the honest answer rather than a failure of ours.
@@ -105,7 +105,7 @@ start:
     ; --- F: A FUNCTION WITH NO RETURN VALUE LEAVES AX ALONE --------------
     ; This is Microsoft Works's own test, instruction for instruction
     ; (SPEC.md 96.10.6): it sets the Y range and then stores AL as its
-    ; `mouse present` flag. A box that answers 08h with a zero has told it
+    ; `mouse present` flag. A DOS that answers 08h with a zero has told it
     ; there is no mouse at the END of an init it answered correctly - and the
     ; program then never asks for a cursor, while the event handler it already
     ; installed keeps working. Half a working mouse, which is how this

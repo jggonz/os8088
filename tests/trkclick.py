@@ -51,9 +51,11 @@ transition). `SB16=1 ADLIB=1` because the boot's card sniff is the OPL at
 0x388, which QEMU's sb16 device does not carry - SB16 alone boots with no
 SOUND.DRV and the module never plays.
 """
+import atexit
 import os
-import subprocess
+import shutil
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -68,7 +70,6 @@ import os88sym                                                    # noqa: E402
 from os88rate import symbols, scan                                # noqa: E402
 
 DISK = "build/trkship360.img"
-SOCK = "build/qmp.sock"
 # the B: zone and BEVERLY.MOD's row on a 640x480 desktop - tests/trkscrl.py's
 # pair; BEVERLY.MOD sorts first on this disk as it does on that one. The
 # BUTTON is not remembered: it is read out of the guest's own record
@@ -116,18 +117,14 @@ def bufs(P):
     raise SystemExit("trkclick: tw_lastl's declaration run not found")
 
 
-def mouse(*args):
-    subprocess.run([sys.executable, "tools/mouse.py", SOCK] + [str(a) for a in args],
-                   check=True, stdout=subprocess.DEVNULL)
-
-
-def boot():
-    os88qemu.kill()
-    # `make test` DAEMONISES the emulator; os88qemu owns the teardown
-    os88qemu.own()
-    r = os88fixture.make("test", "TESTAPPS=" + DISK, "SB16=1", "ADLIB=1")
-    if r.returncode:
-        raise SystemExit("trkclick: make test failed:\n" + r.stdout + r.stderr)
+def boot(tmp):
+    """`make test TESTAPPS=DISK SB16=1 ADLIB=1`'s machine, without make
+    (os88qemu.launch_test: a private socket, copies of both floppies)"""
+    sock, _ = os88qemu.launch_test(
+        tmp, apps=DISK, card=False,
+        extra=["-audiodev", "none,id=snd", "-device", "adlib,audiodev=snd",
+               "-device", "sb16,audiodev=snd"])
+    return sock
 
 
 def main():
@@ -135,8 +132,10 @@ def main():
     P, _ = symbols(())
     B = bufs(P)
     S = os88sym.linear
-    boot()
-    q = heapmap.Qmp(SOCK)
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    atexit.register(shutil.rmtree, tmp, True)   # (after the kill: LIFO)
+    q = heapmap.Qmp(boot(tmp))
+    hmp = lambda *c: [q.hmp(x) for x in c]                  # noqa: E731
     for _ in range(200):
         try:
             q.hmp("info status")
@@ -149,19 +148,16 @@ def main():
             return dispcp.drive_ordinal(q, S, "B") is not None
         except Exception:                                   # noqa: BLE001
             return False
-    if not os88qemu.acted(q, zone, secs=90, what="drive B's zone", poll=0.4):
+    if not os88qemu.acted(q, zone, secs=90, what="drive B's zone", poll=0.05):
         raise SystemExit("trkclick: no desktop")
-    os88qemu.pace(q, 1)
-    mouse("to", *DISKB)
-    # inside the double-click window either way: host spacing, trkscrl's rule
-    q.hmp("mouse_button 1"); time.sleep(0.1); q.hmp("mouse_button 0")
-    time.sleep(0.2)
-    q.hmp("mouse_button 1"); time.sleep(0.1); q.hmp("mouse_button 0")
+    os88qemu.ui_done(q, S, cap=1.0)     # (was pace(1): the first paint)
+    # closed-loop, every edge confirmed off mouse_btn (SOAK-SPEED 15)
+    os88qemu.mouse_dblclick(q, S, hmp, *DISKB)
     if os88qemu.acted(q, lambda: bool(dispcp.win_list(q, S, check=False)),
-                      secs=20, what="the Disk B window", poll=0.3):
-        os88qemu.pace(q, 1)
-    mouse("click", *MODROW)             # select, then Enter: trkscrl's reason
-    os88qemu.pace(q, 1)
+                      secs=20, what="the Disk B window", poll=0.05):
+        os88qemu.ui_done(q, S, cap=1.0)     # (was pace(1): the listing)
+    os88qemu.mouse_click(q, S, hmp, *MODROW)    # select, then Enter:
+    os88qemu.ui_done(q, S, cap=1.0)             # trkscrl's reason
     q.hmp("sendkey ret")
 
     seg = [None]
@@ -174,14 +170,14 @@ def main():
     def resident():
         seg[0] = scan(q, DISK)[0]
         return bool(seg[0])
-    os88qemu.acted(q, resident, secs=52, what="TRACKER.O88 resident", poll=1.0)
+    os88qemu.acted(q, resident, secs=52, what="TRACKER.O88 resident", poll=0.3)
     if not seg[0]:
         raise SystemExit("trkclick: the player never became resident")
     base = seg[0] * 16
     b = lambda n: q.read(base + P["@" + n], 1)[0]
     wl = lambda off: int.from_bytes(q.read(base + off, 2), "little")
     os88qemu.acted(q, lambda: b("mp_loaded") == 1, secs=30,
-                   what="[mp_loaded]", poll=0.25)
+                   what="[mp_loaded]", poll=0.05)
     os88qemu.quiesce(q, lambda: tuple(
         q.read(base + P["@" + n], 2) for n in
         ("mp_loaded", "mp_playing", "mp_mixrate", "mp_xt", "trk_fs")),
@@ -213,7 +209,7 @@ def main():
     check("trk_cpu0 (not an XT: the face that fails)", b("trk_cpu0"), 0)
     check("mp_xt (a 286 opens with XT mode off)", b("mp_xt"), 0)
     playing = os88qemu.acted(q, lambda: b("trk_sopen") == 1 and b("mp_playing") == 1,
-                             secs=10, what="the module playing", poll=0.2)
+                             secs=10, what="the module playing", poll=0.05)
     check("the module is playing", bool(playing), True)
     os88qemu.pace(q, 1)                 # ...long enough for the meters to run
     key("x", lambda: b("mp_xt") == 1 and b("mp_playing") == 0, "X while playing")
@@ -234,7 +230,7 @@ def main():
     print("    rate button %d at %s" % (idx, pos))
     img0 = img()
     for want in (1, 0):
-        mouse("click", *pos)
+        os88qemu.mouse_click(q, S, hmp, *pos)
         done(lambda: b("trk_xhi") == want, "the rate click")
         check("trk_xhi after a click", b("trk_xhi"), want)
         check("tw_lastl[rate] is its caption (tw_synced)",

@@ -64,7 +64,7 @@ def main(argv):
             sys.exit("dispvy: %s is not a two-card machine" % a.machine)
         cards = m.cards()
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_primary(m, mo, S, os88marty.settle, 0)     # HERCULES, as

@@ -108,7 +108,15 @@ def callsites(defines=("KERN_BIG",), build="build"):
             cmd += ["-D" + d]
         cmd += ["-l", lst, "-o", binf, src]
         subprocess.run(cmd, check=True, cwd=ROOT)
-        if open(binf, "rb").read() != open(built, "rb").read():
+        # ...less `.cfx`'s cfx_tab, which tools/os88cfx.py stamps AFTER the
+        # assembly (SPEC.md 2.10.9): zeros in this one, os88sym's rule.
+        theirs = open(built, "rb").read()
+        mapf = os.path.join(ROOT, build, "kernel.map")
+        if os.path.exists(mapf):
+            import os88cfx
+            with open(mapf) as mf:
+                theirs = os88cfx.blank(theirs, mf.read())
+        if open(binf, "rb").read() != theirs:
             raise SystemExit(
                 "os88boot: the listing is a DIFFERENT kernel from %s - "
                 "`make` and try again (or name the build: --build and "

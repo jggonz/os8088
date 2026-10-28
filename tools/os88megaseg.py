@@ -38,7 +38,12 @@ import re
 import sys
 
 KERN_CODE_MAX = 65536
-WATCH = ('.text', '.bss', '.cold', '.mega')
+WATCH = ('.text', '.bss', '.vga', '.cold', '.mega')
+# kern_big's `.vga` rung (docs/plans/MOVABLE-COLD-PLAN.md 2, SPEC.md 2.10.9) is
+# inside KERNEL_SEG's window - its vstart is a KERNEL_SEG offset - so it counts
+# against KERN_CODE_MAX beside `.text` and `.bss`. kern_mega keeps that code in
+# `.text`; leaving the rung out would bill kern_mega for kern_big's move.
+WINDOW = ('.text', '.bss', '.vga')
 MEGA_FILES = ('mega.inc', 'megados.inc', 'megapark.inc')
 
 
@@ -138,8 +143,8 @@ def main():
     big, mega = attribute(a.big, deff), attribute(a.mega, deff)
     k = mega_consts(a.root)
 
-    win_b = big['.text']['length'] + big['.bss']['length']
-    win_m = mega['.text']['length'] + mega['.bss']['length']
+    win_b = sum(big[s]['length'] for s in WINDOW)
+    win_m = sum(mega[s]['length'] for s in WINDOW)
     out = dict(window=dict(big=win_b, mega=win_m, big_left=KERN_CODE_MAX - win_b,
                            mega_left=KERN_CODE_MAX - win_m, overhead=win_m - win_b))
     if 'MEGA_COLD_LIN' in k and 'MEGA_XPOOL' in k:
@@ -174,10 +179,10 @@ def main():
         print()
         return
     w = out['window']
-    print('os88megaseg: window  .text+.bss  kern_big %6d (%5d left)   kern_mega %6d (%5d left)'
+    print('os88megaseg: window  .text+.bss+.vga  kern_big %6d (%5d left)   kern_mega %6d (%5d left)'
           % (w['big'], w['big_left'], w['mega'], w['mega_left']))
     print('os88megaseg: kern_mega carries %d bytes more than kern_big in the segment, so it'
-          ' overflows when kern_big\'s .text+.bss grows another %d bytes' % (w['overhead'], w['mega_left']))
+          ' overflows when kern_big\'s .text+.bss+.vga grows another %d bytes' % (w['overhead'], w['mega_left']))
     if 'cold_high' in out:
         c = out['cold_high']
         print('os88megaseg: above 1MB  .cold %d + .mega %d (from its rung) + its scratch %d '
@@ -193,8 +198,11 @@ def main():
         if limit is None:
             sys.exit('os88megaseg: %s holds no limit' % a.check)
         if w['overhead'] > limit:
-            grew = [r for r in out['sections']['.text']['files'] + out['sections']['.bss']['files']
-                    if r['delta'] > 0][:6]
+            per = collections.Counter()
+            for s in WINDOW:
+                for r in out['sections'][s]['files']:
+                    per[r['file']] += r['delta']
+            grew = [dict(file=f, delta=d) for f, d in per.most_common() if d > 0][:6]
             sys.exit('os88megaseg: kern_mega carries %d bytes more than kern_big in the kernel '
                      'segment, against the %d %s allows. Protected-mode-only code belongs in '
                      '`.mega` (docs/plans/KERN-MEGA-SEGMENTS-PLAN.md 3.2); only what runs in '

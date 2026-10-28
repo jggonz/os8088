@@ -103,8 +103,10 @@ def tree():
     return t
 
 
-with os88ui.boot(SYS, apps="build/apps360.img", machine=MACHINE) as ui:
+with os88ui.boot(SYS, apps="build/apps360.img", machine=MACHINE,
+                 quick=True) as ui:
     m = ui.m
+    ui.still(0)             # the first paint done: the first act is a raw press
     mo = Mouse(marty=m)
     print(f"== {MACHINE} : the RAM disk and the cable, attached at once ==")
 

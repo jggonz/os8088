@@ -1,0 +1,11 @@
+# ROUND 2, queue 12: the bottom half of r2-q7's remaining rows. family  row  declared_secs  script
+DONE pkgf	pkgfmt	30	tests/pkgfmt.py
+DONE save	saverate	28	tests/saverate.py
+DONE save	savervga	27	tests/saver.py
+DONE save	saver	25	tests/saver.py
+DONE vidt	vidthumb	34	tests/vidthumb.py
+DONE vidt	vidthumbherc	34	tests/vidthumb.py
+DONE msel	msel	55	tests/msel.py
+DONE mart	martyresume	30	tests/martyresume.py
+DONE mart	martyconc	20	tests/martyconc.py
+DONE cycf	cycfire	50	tests/cycfire.py

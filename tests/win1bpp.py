@@ -44,6 +44,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88geom, os88sym, dispcp
+import os88fixture                                          # noqa: E402
 
 MACHINE = "os8088_5150_cga_gla"
 for i, a in enumerate(sys.argv):
@@ -57,8 +58,14 @@ fails = []
 
 def open_under(folder, pkg):
     """Boot, walk B: -> `folder` -> `pkg`, and hand back the window records."""
-    with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine=MACHINE) as m:
+    # MISSILE.O88 left apps360.img (SPEC.md 24.6.1): the shipped disk plus
+    # it, on a disk of this run's own
+    apps = os88fixture.apps360_plus("GAMES:build/missile.o88", tag="win1bpp")
+    with os88marty.launch("build/os8088-360.img", apps=apps,
+                          machine=MACHINE, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         for name in (folder, pkg):

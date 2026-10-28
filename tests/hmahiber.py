@@ -104,7 +104,7 @@ def host_wait(cond, secs=20.0):
     while not cond():
         if time.time() >= end:
             return cond()
-        time.sleep(0.3)
+        time.sleep(0.05)                    # SOAK-SPEED technique 8
     return True
 
 
@@ -156,7 +156,7 @@ def main():
         ui = hmacold.QUI(q, mouse=hmacold.QMouse(q), sym=S, verbose=False)
         ui.menu_pick("Apple", "Hibernate...")
         ui.wait_window("Hibernate")             # HB_M_ASK, the module loaded
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
         xmcheck.qmp(q.sock, "sendkey ret")
         text = os88qemu.acted(q, lambda: q.read(0x449, 1)[0] in (3, 7),
                               secs=120, what="the hibernated sentence")
@@ -184,7 +184,7 @@ def main():
                                 hmacold.QUI(q, mouse=hmacold.QMouse(q), sym=S,
                                             verbose=False).toast()))
         else:
-            os88qemu.pace(q, 1)
+            os88qemu.ui_done(q, S, cap=1.0)     # (was pace(1): capped at it)
             xmcheck.qmp(q.sock, "sendkey ret")      # Resume
             ok = os88qemu.acted(q, lambda: word(q, "hb_resumes") == 1,
                                 secs=120, what="[hb_resumes] to reach 1")
@@ -193,7 +193,7 @@ def main():
             if ok:
                 os88qemu.acted(q, lambda: byte(q, "sch_lock") == 0, secs=20,
                                what="the wake's last step")
-                os88qemu.pace(q, 1)
+                os88qemu.ui_done(q, S, cap=1.0)  # (was pace(1): capped at it)
                 want(byte(q, "sch_lock") == 0, "    ...and [sch_lock] is down")
                 r1 = hmadrv.rows(q)
                 b1 = hmadrv.blocks(q)

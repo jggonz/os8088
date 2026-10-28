@@ -327,6 +327,10 @@ mou_masks   dw MOU_L4, MOU_L3   ; ...the line its base says it drives, which is
                                 ; what to HOOK and never what to retire. READ
                                 ; AS BYTES ONLY: mou_b1 lives in the high bytes
 mou_isrs    dw mou_isr, mou_isr3    ; ...and the stub that vector points at
+MOU_ERRQ    equ 36              ; ~2 s: a port with a line error this recently
+                                ; may not add to its run (SPEC.md 9.5.6)
+mou_errt    dw -MOU_ERRQ, -MOU_ERRQ ; ...[ticks] at each port's last framing
+                                ; error or break; born "long ago"
 
 
 ; -----------------------------------------------------------------------------
@@ -364,17 +368,24 @@ mou_isrs    dw mou_isr, mou_isr3    ; ...and the stub that vector points at
 ; every task stack in the machine is the trade, and it is not close.
 ; -----------------------------------------------------------------------------
 %ifndef NO_MOUPRIV
-%ifdef VID_EXT
-MOU_PSTK    equ 256             ; ...AND TWICE THAT WITH THE EXTERNAL RENDERER
-                                ; (SPEC.md 120.3.3): the driver draws the arrow
-                                ; from this stack and a VBE window switch is an
-                                ; `int 10h`, whose BIOS frame the 54-byte chain
-                                ; never had to hold. 128 bytes of .lowbss,
-                                ; kern_big alone
-%else
 MOU_PSTK    equ 128             ; 2.4x the 54 the chain measures on the deepest
-%endif
-                                ; adapter. Nothing can interrupt this stack -
+                                ; adapter - and WITH the external renderer too,
+                                ; though there the driver draws the arrow from
+                                ; this stack and a VBE window switch is an
+                                ; `int 10h`, whose BIOS frame the 54-byte chain
+                                ; never had to hold (SPEC.md 120.3.3). It was
+                                ; 256 under VID_EXT for that, 128 bytes of
+                                ; .lowbss on every kern_big; since kernel size
+                                ; pass 14 vid_rowtab lies directly under it,
+                                ; and the row table is read by nothing while
+                                ; the display is packed - every body that
+                                ; would use a row is hooked - so a packed
+                                ; display's arrow may run on into those 696
+                                ; bytes, which vid_apply rebuilds whole when
+                                ; the desktop leaves VID_VESA (AFTER
+                                ; vid_depth_set has put [vid_planes] back to 4
+                                ; or 1, so no deep ISR can follow it).
+                                ; Every other kind stays inside the 128. Nothing can interrupt this stack -
                                 ; the ISR holds IF=0 throughout - so 54 is the
                                 ; whole answer and not a sample, and the margin
                                 ; is against a future cur_move rather than
@@ -618,12 +629,19 @@ mouse_init:
 
     BLOBMARK 40
     ; --- which ports are actually there? (SPEC.md 9.5) -----------------------
+    ; ...COUNTED AS THEY ARE FOUND (CX), which used to be a second walk of
+    ; mou_bases below: fifteen bytes of `.ovl` that SPEC.md 9.7.2's int 15h
+    ; hook needed, and the same count - a row is live exactly when mou_uart
+    ; answered for it, and mou_uart preserves CX
     xor bx, bx
+    xor cx, cx
 .probe:
     call mou_uart
-    jc .next
+    jc .live
     mov word [bx+mou_bases], 0  ; nothing answered: retire the row, and every
-.next:                          ; routine below skips it from here on
+    dec cx                      ; routine below skips it from here on
+.live:
+    inc cx
     inc bx
     inc bx
     cmp bx, MOU_PEND
@@ -634,17 +652,6 @@ mouse_init:
     ; slot and nothing to weigh against, so the first packet settles it and is
     ; acted on - which is this kernel's behaviour byte for byte before COM2
     ; was a possibility. Only a machine with two live ports pays MOU_LOCKN.
-    xor cx, cx
-    xor bx, bx
-.count:
-    cmp word [bx+mou_bases], 0
-    je .cnext
-    inc cx
-.cnext:
-    inc bx
-    inc bx
-    cmp bx, MOU_PEND
-    jb .count
     mov al, 1
     cmp cx, 2
     jb .one
@@ -654,6 +661,26 @@ mouse_init:
     mov [mou_need+2], al        ; below may lower ONE of them again
 
     BLOBMARK 41
+%ifdef KBD_I15
+    ; --- does this ROM's int 09h hand its byte to int 15h AH=4Fh? ------------
+    ; SPEC.md 9.7.2: the configuration table's feature byte 1, bit 4, into DL
+    ; (10h yes, 0 no) for the int 09h block below, which is the only reader -
+    ; DX is untouched between here and there. Asked BEFORE either vector is
+    ; ours, so this is the ROM answering. An XT-class ROM has no such service
+    ; and answers CF = 1 (the 5150's cassette code, AH = 80h; an XT's, 86h);
+    ; IBM's contract for a table is CF = 0 AND AH = 0. ES and BX are the block
+    ; below's to load, so neither needs keeping
+    mov ah, 0xC0
+    stc
+    int 0x15
+    mov dl, 0                   ; (a mov leaves CF alone)
+    jc .no4f
+    or ah, ah
+    jnz .no4f
+    mov dl, [es:bx+5]
+    and dl, 0x10
+.no4f:
+%endif
     ; --- save each present port's old vector, install ours -------------------
     xor ax, ax
     mov es, ax
@@ -691,18 +718,45 @@ mouse_init:
     ; keypad 5 away, and on one that delivers it int 16h wins and this claims
     ; nothing. The peek reads port 60h without acknowledging it, which is the
     ; same access DOS's own keyboard code makes.
-    xor ax, ax
-    mov es, ax
+    ;
+    ; ES IS STILL 0 from the serial vectors above, which nothing in that loop
+    ; touches (four bytes of `.ovl`, spent on the int 15h half below).
     pushf
     cli
+%ifndef KBD_I15
     mov ax, [es:0x24]           ; int 09h's vector, saved for the chain
     mov [kbm_old9], ax
     mov ax, [es:0x26]
     mov [kbm_old9+2], ax
+%else
+    ; ...OR INT 15h, FOR AH=4Fh (SPEC.md 9.7.2): ONE of the two is hooked,
+    ; and the one it is goes in [kbm_ivec] and its old vector in kbm_old9,
+    ; which is the chain both entries end in. int 15h where the ROM said its
+    ; int 09h calls 4Fh (DL above), so the ROM's own read is the only read and
+    ; kbm_isr is not in that chain at all; int 09h everywhere else - the peek,
+    ; exactly as it was, so an XT's IVT is the kernel before 9.7.2's
+    mov si, 0x24
+    mov ax, kbm_isr
+    or dl, dl
+    jz .hook9
+    mov si, 0x54
+    mov ax, kbm_i15
+    mov [kbm_ivec], si
+.hook9:
+    mov cx, [es:si]             ; the vector found, saved for the chain - and
+    mov [kbm_old9], cx          ; for mouse_unhook, which puts back
+    mov cx, [es:si+2]           ; [kbm_ivec] from it
+    mov [kbm_old9+2], cx
+    mov [es:si], ax
+    mov word [es:si+2], KERNEL_SEG ; not `cs` - see the int 0Ch/0Bh hook above
+%endif
+%ifndef KBD_I15
     mov word [es:0x24], kbm_isr
     mov ax, KERNEL_SEG          ; not `cs` - see the int 0Ch/0Bh hook above
     mov [es:0x26], ax
+%endif
     popf
+
 
     BLOBMARK 42
     ; --- UART: 1200 baud, 7 data bits, no parity, 1 stop ---------------------
@@ -1169,6 +1223,18 @@ mou_claim:
     push ax
     cmp byte [mou_seen], 0
     jne .out                    ; settled, and never revisited
+    mov ax, [ticks]             ; a line error on this port in the last
+    sub ax, [bx+mou_errt]       ; MOU_ERRQ ticks (SPEC.md 9.5.6): a cable's
+    cmp ax, MOU_ERRQ            ; stream at another baud rate decodes as
+    jae .count                  ; packets now and then - on a ONE-port
+    mov byte [bx+mou_run], -1   ; machine, where one packet settles, within
+                                ; its first frame. Wrap-safe, like [ticks].
+                                ; -1, so the `inc` below makes the run 0 and
+                                ; the compare after it - [mou_need] is never
+                                ; 0 - leaves by .out: the zeroing and the exit
+                                ; in one store (kernel size pass 14, -1; 17
+                                ; bytes, and mouse_unhook's pad went with it)
+.count:
     inc byte [bx+mou_run]
     mov al, [bx+mou_need]       ; 1 where the probe found one port, MOU_LOCKN
     cmp byte [bx+mou_run], al   ; where it found two - and 1 again on a port
@@ -1236,6 +1302,10 @@ mou_lockon:
 .port:
     cmp bl, [mou_port]
     je .next
+    cmp bx, [ser_row]           ; a port LEASED before the contest settled is
+    je .next                    ; SERIAL.DRV's until it is released: srl_close
+                                ; retires it then (SPEC.md 115.2). With no
+                                ; lease [ser_row] is FFFFh and never matches
     cmp word [bx+mou_bases], 0
     je .next
     mov ax, 0x0100              ; IER = 0 - and THIS is what silences the
@@ -1435,9 +1505,14 @@ mouse_unhook:
     cmp byte [mou_p2st], 8
     jb .nop2
     mov si, MOU_P2VEC
+%ifdef KBD_I15
+    mov bx, mou_p2old           ; (mou_vsetm: SPEC.md 9.7.2's size pass)
+    call mou_vsetm
+%else
     mov ax, [mou_p2old]
     mov cx, [mou_p2old+2]
     call mou_vset
+%endif
 .nop2:
 %endif
 
@@ -1460,17 +1535,39 @@ mouse_unhook:
     ; is a tight loop inside an interrupt gate, so IF is 0, IRQ1 is in service
     ; with no EOI coming, and the machine stops dead with the picture it had.
     ; The first key pressed after a soft restart ended the session.
+%ifndef KBD_I15
     mov si, 0x24
     mov ax, [kbm_old9]
     mov cx, [kbm_old9+2]
     call mou_vset
+%else
+    ; ...OR INT 15h, THE SAME RULE FOR THE SAME REASON (SPEC.md 9.7.2):
+    ; whichever mouse_init hooked, [kbm_ivec] names it. kbm_i15 is a
+    ; KERNEL_SEG offset too, so a vector left behind is the next owner's code:
+    ; kern_dos at the DOS handoff (whose own int 15h filter banks what it finds
+    ; there), the fresh kernel after int 19h. On kern_mega in protected mode
+    ; it is int 09h's again (mega_enter), as it always was there
+    mov si, [kbm_ivec]
+    mov bx, kbm_old9
+    call mou_vsetm
+%endif
 
     pop es
     pop si
     jmp kret_cx
+                                ; (no PARITY pad: serial's five bytes above
+                                ; are evened by mou_claim's -1, kernel size
+                                ; pass 14)
 
-    db 0                       ; PARITY: serial cleanup added five bytes above
-
+%ifdef KBD_I15
+; mou_vsetm - mou_vset with the vector's new value at DS:BX rather than in
+; CX:AX: two of mouse_unhook's restores are a saved dword, and four bytes of
+; load at each site is a call's worth of bytes (SPEC.md 9.7.2's size pass).
+; Falls into mou_vset; AX and CX are lost
+mou_vsetm:
+    mov ax, [bx]
+    mov cx, [bx+2]
+%endif
 ; mou_vset - ES:SI = CX:AX, the one IVT write the three restores above share,
 ; under pushf/cli so no interrupt can take the vector half-written.
 ; in: ES:SI = the vector, CX:AX = segment:offset.  preserves everything
@@ -1493,7 +1590,7 @@ mou_vset:
 ;
 ; kern_big: A PROGRAM MAY TAKE THE MOUSE'S IRQ, AND THIS TAKES IT BACK (SPEC.md
 ; 9.13). Inside an fsx bracket a program owns the machine and may have hooked
-; the mouse's vector out from under us; this is the call the DOS box's own
+; the mouse's vector out from under us; this is the call DOS's own
 ; DHK_MOUSE makes on every INT 33h read and every key poll - the same choke
 ; point kd_mou_read is for kern_dos - so the recovery needs no new slot.
 ;
@@ -1916,24 +2013,25 @@ mou_p2_init:
 %endif
     mov al, 0xA8
     call mou_ov_p2cw
-    jc .jnoaux
-    call mou_p2flush
+    jc .jfail                   ; (.noaux IS .fail, so its trampoline is too:
+    call mou_p2flush            ; three bytes of `.ovl`, SPEC.md 9.7.2)
     mov al, 0x20
     call mou_ov_p2cw
-    jc .jnoaux
+    jc .jfail
     call mou_p2rd
-    jc .jnoaux
+    jc .jfail
 %ifdef MOU_DIAG
     mov byte [mou_p2sub], 4
     mov [mou_p2cm1], al
 %endif
     test al, 0x20               ; did 0xA8 take?
-    jz .haveaux
 %ifdef MOU_DIAG
+    jz .haveaux
     mov byte [mou_p2aux], 0xE1  ; no: nothing here has an auxiliary port
+    jmp .jfail
+%else
+    jnz .jfail                  ; no: nothing here has an auxiliary port
 %endif
-.jnoaux:
-    jmp .noaux
 
 .haveaux:
 %ifdef MOU_DIAG
@@ -2046,20 +2144,14 @@ mou_p2_init:
     mov byte [mou_p2], 1
     jmp short .quit
 
-.noaux:                         ; 0xA8 did nothing, or the read never came:
-                                ; either way nothing here has an auxiliary port
-                                ; to talk to
-%ifdef MOU_DIAG
-    in  al, MOU_P2CMD
-    mov [mou_p2sta], al
-%endif
-    mov al, 0xA7
-    call mou_ov_p2cw
-    mov al, [mou_p2cmdr]        ; ...AND THE COMMAND BYTE. Only 0xAD and 0xA8
-    call mou_ov_p2wcmd          ; have been sent on this road, so it is the
-    jmp short .quit             ; byte the BIOS had either way - and writing it
-                                ; costs nothing where nothing changed it
-
+                                ; NO AUXILIARY PORT - 0xA8 did nothing, or the
+                                ; read never came - ends HERE TOO: its own arm
+                                ; (.noaux) was this body byte for byte, the
+                                ; port off and the command byte back, which on
+                                ; that road (only 0xAD and 0xA8 sent) is the
+                                ; byte the BIOS had either way. 16 bytes of
+                                ; `.ovl` with its trampoline, spent on SPEC.md
+                                ; 9.7.2's int 15h question
 .fail:                          ; put the controller back the way it was found
 %ifdef MOU_DIAG
     in  al, MOU_P2CMD           ; ...but FIRST, what 64h said at the moment it
@@ -2215,10 +2307,10 @@ mou_p2_isr:
                                 ; never fires" are different faults and look
                                 ; identical from anywhere else (SPEC.md 9.9.6)
     in  al, MOU_P2CMD
-    test al, 0x01               ; anything in the buffer at all?
-    jz .eoi
-    test al, 0x20               ; ...and is it the AUXILIARY device's?
-    jz .eoi
+    and al, 0x21                ; anything in the buffer at all, and is it
+    cmp al, 0x21                ; the AUXILIARY device's? Both bits in one
+    jne .eoi                    ; compare (kernel size pass 14: -2, and 4
+                                ; clocks faster when a byte is there)
     in  al, MOU_P2DAT           ; ...and THIS read is what drops the request
     call mou_p2_byte
 .eoi:
@@ -2799,6 +2891,39 @@ mou_clamp:
 ; -----------------------------------------------------------------------------
 KBM_5SCAN   equ 0x4C            ; the keypad's centre key, make code
 
+; KBM_SCAN exit[, mem] - ONE SCANCODE, WHEREVER IT CAME FROM: AL = the byte
+; the keyboard sent, AH = [kbd_armed] (or, with `mem`, the byte itself is
+; tested and AH is not read), DS = KERNEL_SEG; AX and the flags are the
+; caller's to lose, and every path leaves at `exit`. One body, expanded once
+; per kernel: inline in kbm_isr on kern_small, which only ever peeks, and in
+; kbm_isr.scan, where SPEC.md 9.7.2's int 15h AH=4Fh path joins it - so a
+; reader of the peek and a reader of the ROM's hand-off cannot disagree
+; about what a byte means.
+%macro KBM_SCAN 1-2
+%ifidn %2, mem
+    cmp byte [kbd_armed], 0     ; (kbm_i15 arrives with AH = 4Fh)
+    je %%p5
+%else
+    or ah, ah
+    jz %%p5                     ; nobody is tracking keys: keypad 5 only
+%endif
+    call kbd_track              ; SPEC.md 9.7 - preserves AL
+%%p5:
+    cmp byte [mou_ptr], 0
+    jne %1                      ; a real mouse has spoken: never intercept
+    cmp al, KBM_5SCAN
+    jne %1
+    call kbm_shf                ; the BIOS data area's KB_FLAG (AX is the
+                                ; caller's: it is banked at the gate and the
+                                ; chain reloads it). 4 bytes deep against
+                                ; kbd_track's 10 above, so no deeper
+    test al, 0x30               ; KB_FLAG: NumLock (20h) - int 16h will deliver
+    jnz %1                      ; it and kbm_key claims it - or ScrollLock
+                                ; (10h), the hatch
+    mov byte [kbm_p5], 1        ; ...otherwise it is a press, spent in task
+                                ; context by kbm_p5spend
+%endmacro
+
 kbm_isr:
     push ax
     push ds
@@ -2806,6 +2931,21 @@ kbm_isr:
 %ifdef KBD_DIAG
     call kbg_pre                ; KBDDIAG=1 (SPEC.md 9.8.1): the 8042's status
 %endif                          ; and the BIOS buffer, before anything reads
+%ifdef KERN_MEGA
+    ; ONLY A KEYBOARD BYTE THAT IS THERE (KERN-MEGA-PLAN 14.62.1). mega_k09,
+    ; this kernel's ROM half, reads port 60h unconditionally, and an IRQ1
+    ; whose byte a POLL already took reads the data register's STALE byte.
+    ; The DOS handoff polls with IRQ1 open at the PIC (mega_d8042get's 20h,
+    ; hbm_dosrun's drain), Bochs delivered such an IRQ1 once in ~30 launches,
+    ; and the stale byte was the command byte, 43h: F9 in 40:1E, so the DOS
+    ; program's first key read `4300`. An AUX byte (status bit 5) is no scan
+    ; code either. Asked HERE, before the peek below clears OBF; neither case
+    ; is a key, so EOI and leave the buffer as it is
+    in  al, 0x64
+    and al, 0x21                ; OBF, and not the AUX device's
+    cmp al, 0x01
+    jne .selfchain
+%endif
     call sch_wake_ui            ; A KEYSTROKE WAKES THE UI TASK (SPEC.md
                                 ; 8.1.2.2). Here at the head and not after the
                                 ; chain below, because the chain is a `jmp far`
@@ -2821,11 +2961,19 @@ kbm_isr:
                                 ; nested beep and a dead machine, and that is
                                 ; true on a machine with a mouse and on one
                                 ; whose software never asked for key state
-    mov ah, [kbd_armed]         ; SPEC.md 9.7's key-state map wants every byte
-    or ah, ah                   ; that arrives; the keypad-5 half wants one
-    jnz .peek                   ; byte on a mouseless machine. EITHER is a
-    cmp byte [mou_ptr], 0       ; reason to read the port, and neither being
-    jne .chain                  ; one is what keeps an idle machine off it
+%ifdef KERN_MEGA
+    cmp byte [mega_on], 0       ; SPEC.md 9.7.2: in protected mode THIS READ
+    jne .peek                   ; IS THE ONLY ONE - mega_k09, the ROM half it
+%endif                          ; chains to, takes the byte from kbm_kbyte
+%ifdef KBD_I15
+    cmp byte [kbd_armed], 0     ; SPEC.md 9.7's key-state map wants every byte
+%else                           ; that arrives; the keypad-5 half wants one
+    mov ah, [kbd_armed]         ; byte on a mouseless machine. EITHER is a
+    or ah, ah                   ; reason to read the port, and neither being
+%endif                          ; one is what keeps an idle machine off it
+    jnz .peek
+    cmp byte [mou_ptr], 0
+    jne .chain
 .peek:
 %ifdef KERN_BIG
     ; --- ...and on an 8042, is the byte waiting even the KEYBOARD's? --------
@@ -2846,23 +2994,15 @@ kbm_isr:
 %endif
     in al, 0x60                 ; PEEK - see above: the 8255 holds it until the
                                 ; BIOS acks, so this consumes nothing
-    or ah, ah
-    jz .p5                      ; nobody is tracking keys: keypad 5 only
-    call kbd_track              ; SPEC.md 9.7 - preserves AL
-.p5:
-    cmp byte [mou_ptr], 0
-    jne .chain                  ; a real mouse has spoken: never intercept
-    cmp al, KBM_5SCAN
-    jne .chain
-    call kbm_shf                ; the BIOS data area's KB_FLAG (AX is the
-                                ; ISR's: it is banked at the gate and the
-                                ; chain reloads it). 4 bytes deep against
-                                ; kbd_track's 10 above, so no deeper
-    test al, 0x30               ; KB_FLAG: NumLock (20h) - int 16h will deliver
-    jnz .chain                  ; it and kbm_key claims it - or ScrollLock
-                                ; (10h), the hatch
-    mov byte [kbm_p5], 1        ; ...otherwise it is a press, spent in task
-                                ; context by kbm_p5spend
+%ifdef KERN_MEGA
+    mov [kbm_kbyte], al         ; (protected mode's ROM half reads it here)
+%endif
+%ifdef KBD_I15
+.scan:                          ; ...and kbm_i15 arrives HERE with the ROM's AL
+    KBM_SCAN .chain, mem
+%else
+    KBM_SCAN .chain
+%endif
 .chain:
     ; A CHAIN TO OURSELVES IS A DEAD MACHINE, so it is refused rather than
     ; taken (SPEC.md 9.6.5). mouse_unhook puts int 09h back now and that is
@@ -2880,6 +3020,16 @@ kbm_isr:
     cmp [cs:kbm_old9+2], ax
     je .selfchain
 %ifdef KBD_DIAG
+%ifdef KBD_I15
+    cmp byte [kbm_ivec], 0x54   ; hooked at int 15h (9.7.2): the ROM below is
+    jne .dcall                  ; called with ITS AX - AH = 4Fh, AL = the byte
+    pop ds                      ; - and 4Fh's CF = 1, not with the CS the
+    pop ax                      ; self-chain test left in AX
+    push ax
+    push ds
+    stc
+.dcall:
+%endif
     pushf                       ; KBDDIAG=1 (SPEC.md 9.8.1): CALL the ROM rather
     call far [cs:kbm_old9]      ; than jump to it, so what it did can be read
     KDS                         ; when it returns. Its iret restores OUR flags,
@@ -2891,6 +3041,7 @@ kbm_isr:
 %else
     pop ds
     pop ax
+.far:                           ; (kbm_i15's chain for every AH but 4Fh too)
     jmp far [cs:kbm_old9]       ; CS, not DS: DS is the interrupted code's again
 %endif
 .selfchain:
@@ -2899,6 +3050,67 @@ kbm_isr:
     pop ds                      ; service and takes the mouse's IRQ3/IRQ4 down
     pop ax                      ; with it
     iret
+
+%ifdef KBD_I15
+; -----------------------------------------------------------------------------
+; kbm_i15 - int 15h, for AH=4Fh alone: the AT BIOS's keyboard intercept
+;           (SPEC.md 9.7.2)
+;
+; An AT-class ROM's int 09h reads port 60h, then calls int 15h AH=4Fh with
+; AL = the byte it read and CF = 1 ("keep it"). Where the ROM's configuration
+; table says it makes that call, mouse_init hooks THIS and leaves int 09h the
+; ROM's: kbm_isr is not in the chain at all, THE ROM'S READ IS THE ONLY READ,
+; and this is told what it got. Everywhere else - every XT, whose ROM has no
+; such service - int 09h is kbm_isr's, the peek, free on an 8255, as before.
+; It is what an 8042 that loads its next queued byte on every read needs -
+; QEMU's, v86's, plausibly an SMM USB-legacy one - because a peek there TAKES
+; a byte: a press and its release queued together lost the press, and E0 4B
+; (grey Left) reached the ROM as two 4Bs, the prefix eaten and the key stored
+; twice.
+;
+; IT IS kbm_isr WITH THE PORT READ TAKEN OUT: the same frame and head, then a
+; jump to kbm_isr.scan, whose tail chains through kbm_old9 - which, hooked
+; here, holds the ROM's int 15h (size pass: no second scan body, no second
+; saved vector, no second restore).
+;
+; Every other AH is the ROM's, chained untouched. The flags reach it as the
+; compare left them, which is what every int 15h chain does: the ROM answers
+; in the frame's flags or in its own. On 4Fh nothing is changed either - AL
+; is not translated and CF is not cleared - so the ROM's own answer is the
+; one its int 09h acts on, and the keypad-5 path still sets a byte rather
+; than swallowing the key (9.6.4: a BIOS that delivers keypad 5 delivers it,
+; and kbm_key's guard is what keeps one press from being two).
+; IF = 0 throughout (an int gate) unless the ROM below opens it.
+; -----------------------------------------------------------------------------
+kbm_i15:
+    cmp ah, 0x4F
+%ifdef KBD_DIAG
+    jne .old
+%else
+    jne kbm_isr.far             ; kbm_old9, untouched: CS-relative, no frame
+%endif
+    push ax                     ; kbm_isr's own frame and head, so its tail is
+    push ds                     ; this one's: the scan, the self-chain test and
+    KDS                         ; `jmp far [cs:kbm_old9]`, which on a machine
+%ifdef KBD_DIAG                 ; hooked here holds the ROM's int 15h
+    call kbg_pre                ; KBDDIAG=1: the 'I' row is written at the
+    call kbg_4f                 ; ROM's 4Fh call, with the byte it handed over
+%endif
+    call sch_wake_ui            ; kbm_isr's two jobs that read no port, which
+    call kbd_ovflow             ; on this machine it is not hooked to do: a
+                                ; keystroke wakes the UI task (8.1.2.2), and the
+                                ; BIOS buffer is kept off full BEFORE the ROM
+                                ; below stores into it (9.8) - 4Fh is called
+                                ; between the ROM's read and its store
+    jmp kbm_isr.scan
+%ifndef KBD_DIAG
+    nop                         ; PARITY PAD, never executed: kbm_i15 is 17
+%endif                          ; bytes, and what follows it is hot (t_hotpar)
+%ifdef KBD_DIAG
+.old:
+    jmp far [cs:kbm_old9]       ; CS: DS is the caller's
+%endif
+%endif
 
 ; =============================================================================
 ; The key-state map (SPEC.md 9.7) - IS THIS KEY DOWN RIGHT NOW?
@@ -3004,6 +3216,7 @@ kbd_track:
                                 ; a second
     test byte [kbd_dnmap + (KSC_ALT >> 3)], 1 << (KSC_ALT & 7)
     jz .set
+.latch:                         ; (a name and no byte: tests/kbd4f.py stops here)
     mov [kbd_ae], al            ; AL IS KSC_ENTER HERE, so the latch carries the
                                 ; SCANCODE rather than a flag - which is what
                                 ; lets ui_task spend it into AX without naming
@@ -3380,6 +3593,18 @@ kbm_old9    dd 0                ; the BIOS's int 09h, chained by kbm_isr
                                 ; (SPEC.md 9.6.4). .text with a real
                                 ; initialiser: -f bin zeroes nothing, and the
                                 ; ISR reads this through CS
+%ifdef KBD_I15
+kbm_ivec    dw 0x24             ; SPEC.md 9.7.2: WHICH vector kbm_old9 is the
+                                ; old value of - int 09h's (24h, kbm_isr), or
+                                ; int 15h's (54h, kbm_i15) on a ROM whose int
+                                ; 09h calls AH=4Fh. mouse_unhook puts back the
+                                ; one it names
+%endif
+%ifdef KERN_MEGA
+kbm_kbyte   db 0                ; ...and kern_mega's protected mode: the byte
+                                ; kbm_isr read, which mega_k09 takes instead of
+                                ; reading port 60h a second time (9.7.2)
+%endif
 kbm_p5      db 0                ; ...and a keypad-5 press it saw, not yet spent
 kbm_step    db KBM_MIN          ; px the current run of repeats is worth
 kbm_lastk   db 0                ; ...and which direction it is a run OF
@@ -3493,21 +3718,25 @@ mou_isr_body:
     mov dx, [bx+mou_bases]
     or  dx, dx
     jz .next                    ; the probe rejected this row
-    cmp bx, [ser_row]
-    jne .mouse
-    push bx
-    call far [SERFP+SER_IRQ]    ; capture before any mouse read of this UART
-    pop bx
-    jmp short .next
-.mouse:
+    cmp bx, [ser_row]           ; the leased UART is SERIAL.DRV's: out of
+    je mou_isr_ser              ; line, so a mouse port falls through
     add dx, 5
     in  al, dx                  ; LSR: is anything waiting here?
 %ifdef MOU_DIAG
     push ax                     ; SPEC.md 9.4.6.5: ...and the error bits, which
-    and al, 0x1E                ; are read here and NOWHERE else in this kernel
+    and al, 0x1E                ; are kept here (9.5.6 stamps them just below)
     or  [bx+mdb_err], al        ; - a mouse at the wrong line rate is framing
     pop ax                      ; errors and no packets, and looks from every
 %endif                          ; other counter exactly like silence
+    test al, 0x18               ; framing error or break (SPEC.md 9.5.6):
+    jz .clean                   ; a byte at the WRONG RATE - a null-modem
+    mov cx, [ticks]             ; peer's 2400 into our 1200 - and no mouse,
+    mov [bx+mou_errt], cx       ; which at its own rate makes none. CX is
+.clean:                         ; free here (mou_byte spends it anyway).
+                                ; mou_claim will not count this port until
+                                ; it has been clean for MOU_ERRQ. 12 bytes,
+                                ; EVEN, so the hot code after it keeps its
+                                ; parity (tests/unit/t_hotpar.py)
     test al, 0x01
     jz .next
     sub dx, 5
@@ -3520,12 +3749,36 @@ mou_isr_body:
     inc bx
     cmp bx, MOU_PEND
     jb .scan
-    jmp mou_eoi
-%ifndef NO_MOUPRIV
- %ifndef KERN_MEGA
-    nop                         ; PARITY PAD, never executed (14.39, as above)
- %endif
-%endif
+                                ; ...and on into mou_eoi, which is HERE so
+                                ; that the serial ISR's exit is a fall and
+                                ; not a jump (kernel size pass 14: -3, and
+                                ; 15 clocks off every IRQ3/IRQ4)
+mou_eoi:
+    mov al, 0x20                ; EOI - the BIOS handles neither IRQ4 nor
+    out 0x20, al                ; IRQ3 for us, and both are on the master
+                                ; (mou_p2_isr joins here too, IRQ12's slave
+                                ; EOI already sent, with the frame in this
+                                ; order)
+    pop es
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    pop bx
+    MOUPRIV_LEAVE               ; ...and back to the task's, whose only cost
+    iret                        ; was the CPU's own six bytes
+
+mou_isr_ser:                    ; mou_isr_body's leased row, out of line:
+    call far [SERFP+SER_IRQ]    ; capture before any mouse read of this UART;
+    jmp short mou_isr_body.next ; BX, the index, comes back (srl_irq)
+%ifdef KERN_MEGA
+ %ifndef NO_MOUPRIV
+    nop                         ; PARITY PAD, never executed (kern_mega's
+ %endif                         ; ENTER is the size it was, so its arm is
+%endif                          ; the odd one here)
 
 ; -----------------------------------------------------------------------------
 ; mou_byte - one received byte, from port BX
@@ -4041,26 +4294,10 @@ mou_apply:
 .out:
     ret
 
-mou_eoi:
-    mov al, 0x20                ; EOI - the BIOS handles neither IRQ4 nor
-    out 0x20, al                ; IRQ3 for us, and both are on the master
-                                ; (mou_p2_isr joins here too, IRQ12's slave
-                                ; EOI already sent, with the frame in this
-                                ; order)
-    pop es
-    pop ds
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    pop bx
-    MOUPRIV_LEAVE               ; ...and back to the task's, whose only cost
-    iret                        ; was the CPU's own six bytes
 %ifndef NO_MOUPRIV
-    nop                         ; PARITY PAD, never executed (14.39: LEAVE
-%endif                          ; grew five)
+    nop                         ; PARITY PAD, never executed: mou_eoi used to
+%endif                          ; stand here (kernel size pass 14 moved it
+                                ; under mou_isr_body, which now falls into it)
 
 %ifdef GFXAUDIT
 ; cur_logput - one ring entry: the tag, the refcount, and where the pixels are
@@ -4200,10 +4437,10 @@ cur_vis:
 ; -----------------------------------------------------------------------------
 cur_put_1:
 %ifdef GFX_VGA                  ; ...AND ONLY A KERNEL WITH A VGA HAS A SIDE TO
-    cmp byte [vid_mono], 0      ; DISPATCH TO: kern_small's [vid_kind] is a
-    jne cur_put_mono            ; CGA or a Hercules for the life of the machine
-    VIDEXT VX_CURPUT            ; a packed display: the driver's whole cycle
-                                ; (SPEC.md 120.3.3) - save under and draw
+    VIDEXTM VX_CURPUT, cur_put_mono ; DISPATCH TO: kern_small's [vid_kind] is
+                                ; a CGA or a Hercules for the life of the
+                                ; machine. A packed display: the driver's whole
+                                ; cycle (SPEC.md 120.3.3) - save under and draw
     call cur_geom               ; (SPEC.md 39.27.1), so [vid_mono] is 1 before
     call cur_saveu              ; the first arrow is drawn and the planar half
     jmp cur_draw                ; was never reached there. The label FALLS
@@ -4280,11 +4517,16 @@ cur_put_mono:
 
 cur_get_1:
 %ifdef GFX_VGA                  ; cur_put_1's reason: the planar half and its
-    cmp byte [vid_mono], 0      ; dispatch are a VGA kernel's alone, and on
-    jne cur_get_mono            ; kern_small this falls into cur_get_mono
-    VIDEXT VX_CURGET            ; a packed display: the driver puts back what
+    VIDEXTM VX_CURGET, cur_get_mono ; dispatch are a VGA kernel's alone, and
+                                ; on kern_small this falls into cur_get_mono.
+                                ; A packed display: the driver puts back what
                                 ; its own put banked (SPEC.md 120.3.3)
+%ifdef COLD_SLIDE
+    jmp cur_restoreu            ; THE PLANAR HALF IS THE VGA RUNG'S (MOVABLE-
+section .vga                    ; COLD-PLAN 2): VIDEXTM above is the door, and
+%else                           ; a planar get is one taken jump dearer
     ; fall through to cur_restoreu
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
@@ -4316,6 +4558,7 @@ cur_restoreu:
     pop word [vga_pn]           ; ...and the caller's arm is its own again
     pop es
     ret
+section .text
 %endif                          ; GFX_VGA: cur_get_1's dispatch and the restore
 
 ; -----------------------------------------------------------------------------
@@ -4353,6 +4596,9 @@ cur_get_mono:
     ret
 
 %ifdef GFX_VGA                  ; the planar save and its rect: a VGA kernel's
+%ifdef COLD_SLIDE                ; (and the VGA rung's, MOVABLE-COLD-PLAN 2:
+section .vga                    ; cur_put_1 and cur_move_1 reach them through
+%endif                          ; VIDEXTM's planar arm alone)
 ; -----------------------------------------------------------------------------
 ; cur_saveu - copy the cell under (cur_drawn_x, cur_drawn_y) into cur_save via
 ;             vga_save_vram. vga_save_vram clips the rect at the screen edges
@@ -4399,6 +4645,7 @@ cur_rect:
     mov dx, bx
     add dx, CUR_GH-1
     ret
+section .text
 %endif                          ; GFX_VGA
 
 ; -----------------------------------------------------------------------------
@@ -5191,10 +5438,10 @@ cur_move:
 cur_move_1:
     CURLOG 'm'                  ; ...from HERE (cur_drawn is still the old one)
 %ifdef GFX_VGA                  ; cur_put_1's reason: kern_small falls straight
-    cmp byte [vid_mono], 0      ; into cur_move_mono, every move a compare
-    jne cur_move_mono           ; and a taken jump cheaper
-    VIDEXT VX_CURMOVE           ; a packed display: AX/BX = the new position,
-                                ; the driver restores, stores, saves and draws
+    VIDEXTM VX_CURMOVE, cur_move_mono, pad ; into cur_move_mono, every move a
+                                ; compare and a taken jump cheaper. A packed
+                                ; display: AX/BX = the new position, the
+                                ; driver restores, stores, saves and draws
     mov [cur_drawn_x], ax       ; planar: the save is four planes through Read
     mov [cur_drawn_y], bx       ; Map Select and cannot take a background from
     call cur_restoreu           ; a buffer, so it stays erase-then-draw. The
@@ -5440,6 +5687,9 @@ cur_mvbg:
 
 %ifdef GFX_VGA                  ; ...and the PLANAR draw, whose only callers are
                                 ; the two planar arms above (kernel size pass 13)
+%ifdef COLD_SLIDE                ; - so it is the VGA rung's (MOVABLE-COLD-PLAN 2)
+section .vga
+%endif
 ; -----------------------------------------------------------------------------
 ; cur_draw - paint the arrow at (cur_drawn_x, cur_drawn_y) on a PLANAR screen:
 ;            white pass with the cur_and outline mask, black pass with the
@@ -5499,6 +5749,11 @@ cur_draw:
     out dx, ax
 .done:
     ret
+section .text
+%ifdef COLD_SLIDE
+    nop                         ; PARITY, never executed (it follows the `ret`
+%endif                          ; above cur_draw): kern_small's reason below,
+                                ; the body having left `.text` for the rung
 %else
     nop                         ; PARITY, never executed (kernel size pass 13):
                                 ; cur_draw's odd 105 would put sch_isr and
@@ -6188,9 +6443,19 @@ resb (2 - (($-$$) % 2)) % 2     ; even, so SP is even across the swap. `alignb`
                                 ; spelled out - NASM refuses the macro form
                                 ; against this nobits section (sch_stacks'
                                 ; declaration carries the same note)
+%ifdef VID_ROWTAB_MOU
+vid_rowtab  resw VID_ROWTAB     ; viddet.inc's row table, declared HERE so the
+                                ; stack below runs on into it on a packed
+                                ; display (MOU_PSTK's note)
+%endif
 mou_pstack  resb MOU_PSTK       ; the mouse ISR's own stack (MOUPRIV_ENTER).
                                 ; .lowbss and not .bss: SS is LOW_SEG for every
                                 ; task and the swap moves SP alone
+%ifdef VID_ROWTAB_MOU
+%if mou_pstack - vid_rowtab != VID_ROWTAB * 2
+  %error "vid_rowtab must lie directly under mou_pstack: a packed display's arrow runs on into it (SPEC.md 120.3.3)"
+%endif
+%endif
 section .bss
 mou_psave   resw 1              ; the task's SP across it, reached through CS at
                                 ; entry because DS is not ours yet

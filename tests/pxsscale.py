@@ -105,7 +105,7 @@ def main():
     ap.add_argument("--c160", action="store_true", help="the second Mode item on a genuine CGA")
     a = ap.parse_args()
     os.chdir(ROOT)
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine, boot=False) as m:
         g = pxslib.open_game(m)
         print("   PXSTEIN.O88: window %d, part 0 at %04x, handoff %s" % (g.win, g.seg, g.handoff()))
         check(g.byte("px_genback") == 0xFF,

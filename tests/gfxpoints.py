@@ -120,7 +120,9 @@ def main():
         if a == "--machine":
             machine = sys.argv[i + 2]
 
-    with os88ui.boot(SYS, apps=APP, machine=machine) as ui:
+    with os88ui.boot(SYS, apps=APP, machine=machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         w = ui.path("B:/PTSTEST.O88")
         ui.settle()

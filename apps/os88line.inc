@@ -59,7 +59,7 @@
 ; An OPT-OUT in os88ui.inc's OS88UI_NO* shape: define it before the include
 ; and os88line_set is not assembled. A package that fills its buffer itself
 ; and calls os88line_resync, or never replaces a field's contents at all
-; (the DOS box, the Desk Calendar), carried 51 bytes it never reached. It
+; (DOS.O88, the Desk Calendar), carried 51 bytes it never reached. It
 ; removes the SYMBOL, so a package that sets it and calls os88line_set does
 ; not assemble; every package that does not set it is byte-identical.
 ; =============================================================================
@@ -893,7 +893,7 @@ os88line_click:
 ; a silent corruption rather than a wrong picture: `set` copies from DS:DI
 ; INTO LN_BUF, so a caller whose data is ALREADY in LN_BUF has nothing to put
 ; in DI and copies whatever it held - into the very buffer it meant to keep.
-; The DOS box hit exactly that (SPEC.md 96.21.1): a shortcut writes the
+; DOS hit exactly that (SPEC.md 96.21.1): a shortcut writes the
 ; arguments straight into `dos_args`, which IS the field's buffer, and the
 ; reload then overwrote them from a stale DI, so a link with arguments ran
 ; with none.

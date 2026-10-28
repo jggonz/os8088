@@ -78,10 +78,13 @@ def leg(tmp, v88, machine, want, syms, bad):
          "--file", "VIDEO.O88=" + os88build.at("build/video.o88"),
          "--file", "CLIP.V88=" + v88], check=True, capture_output=True)
     m = os88marty.launch(None, machine=machine,
-                         extra=["--mount", "hd:0:" + vhd])
+                         extra=["--mount", "hd:0:" + vhd], boot=False)
     try:
-        ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        m.run()                         # the boot gate on STATE: the first
+        ui = os88ui.UI(m)               # act is ui.path, which confirms
+        ui.up(limit=240)
+        os88marty.no_saver(m)
+        os88marty.ui_done(m)
         w = ui.path("C:/CLIP.V88")
         rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)
         base = u16(rec, geom.W_SEG) << 4
@@ -93,7 +96,7 @@ def leg(tmp, v88, machine, want, syms, bad):
             return u16(m.read(base + syms[n], 2))
 
         def until(cond, what, guest=60.0):
-            os88marty.until(m, lambda mm: cond(), what, poll=0.1,
+            os88marty.until(m, lambda mm: cond(), what, poll=0.05,
                             limit=600.0, guest=guest)
         until(lambda: rb("vp_loaded") == 1, "the clip's header")
         if rb("vp_ok") != 1:

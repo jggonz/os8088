@@ -168,7 +168,22 @@ def main():
             subprocess.run([sys.executable, "tools/os88disk.py", "-o", out,
                             "--size", "1440"] + files, check=True,
                            capture_output=True)
-        q = Q(tmp, sysimg, disk, a.mem, bps=a.bps)
+        # THE SPEAKER ARMS BENCH ON THE PIT (98.3.18.9: key 1's decode,
+        # eight ticks of it), so they run on a FIXED-SPEED guest
+        # (os88qemu.icount, docs/plans/SOAK-PARALLEL.md 17.8). Without it
+        # the PIT is the host's clock: at eight emulators on four cores the
+        # guest was descheduled across the bench's eight ticks, it read more
+        # than 11 and called the decode too slow to time - "timed nothing"
+        # in both arms. The other arms are behaviour and keep QEMU's clock.
+        # SHIFT 6 (15.6 MIPS), not os88qemu's 4: a speaker play is an OUT
+        # to the PIT per sample, and icount pays a TB exit for every I/O
+        # instruction, so at shift 4 a guest second of the play was ~20 host
+        # seconds (spkbank 80-217 s against 26 without icount); at 6 the
+        # bench reads 52 (520 us a decode) against yardsticks of 1 and
+        # 65,535 - the verdicts have margins of 26x and 630x either way
+        spk = a.arm in ("spkbank", "spkfast")
+        q = Q(tmp, sysimg, disk, a.mem, bps=a.bps,
+              extra=os88qemu.icount(6) if spk else ())
         for _ in range(150):
             if os.path.exists(q.sock):
                 break
@@ -176,6 +191,7 @@ def main():
         xmcheck.wait_desktop(q.sock, "vidbank")
         S = xmcheck.sym
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
+        mo = os88qemu.Mouse(q, S, q.hmp, after=0)   # SOAK-SPEED 15
 
         def wait(cond, what, secs):
             if not os88qemu.acted(q, cond, secs=secs, what=what, poll=0.05):
@@ -184,7 +200,7 @@ def main():
                                                      rw("vp_bskn")))
 
         x, y = geom.drive_pt(q, "B", S)
-        xmcheck.dblclick(q.sock, x, y)
+        mo.dblclick(x, y)
         box = {}
 
         def diskwin():
@@ -196,11 +212,11 @@ def main():
         if not os88qemu.acted(q, diskwin, secs=30, what="drive B",
                               poll=0.05):
             sys.exit("vidbank: drive B's window did not open")
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)     # (was pace(1))
         w = box["w"]
         i, _ = ui.entry("CLIP.V88", w)
         before = set(o.i for o in ui.windows())
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        mo.dblclick(*ui.row_xy(w, i - ui.scroll(w)))
 
         def player():
             for o in ui.windows():
@@ -293,7 +309,7 @@ def main():
             # --- THE SPEAKER AGAINST THE BANK (98.3.18.9): the file's
             # yardstick says the machine it was made for decodes its key in
             # 10 us (spkbank: this machine is not twice that fast - QEMU
-            # takes ~2 ms) or in 655 ms (spkfast: it is). The bench needs a key, so the play is
+            # at -icount shift=6 takes ~0.5 ms, ~3 ms without) or in 655 ms (spkfast: it is). The bench needs a key, so the play is
             # from key 1 - Right first; spkbank also plays from frame 0,
             # where there is no key to time and the bank wins regardless
             fast = a.arm == "spkfast"
@@ -305,11 +321,28 @@ def main():
                     # stop, the reads and the sendkey between are HOST round
                     # trips - and on a loaded box that was frame 282, the
                     # last key, where one Right has nowhere to go
+                    #
+                    # THE KEYPAD'S 6 AND 4, NOT THE ARROWS: on QEMU one
+                    # `sendkey right` is TWO keystrokes at the program (the
+                    # extended key's E0 prefix - tests/trkscrl.py measured
+                    # arrows 2, every ASCII key 1), so a Right went 0 -> 2
+                    # and a Left 2 -> 0, and the loop only ever reached key 1
+                    # by racing the second stroke: it read 1 between the
+                    # two, pressed Play, and the second moved the play. With
+                    # each step waited out (below) it oscillated 0, 2, 0, 2
+                    # for as long as chance took - 15 steps in one run. The
+                    # keypad's 6 is the same scan code with no prefix (NumLock
+                    # off: the ROM's Right), and steps exactly once.
+                    # ...and each step, and the Esc before them, FINISHED
+                    # (ui_done), so what is read is where the step LANDED
+                    os88qemu.ui_done(q, S, cap=5.0, what="the stop")
                     while rw("vp_sel") != 1:
                         s0 = rw("vp_sel")
-                        q.hmp("sendkey %s" % ("right" if s0 < 1 else "left"))
+                        q.hmp("sendkey %s" % ("kp_6" if s0 < 1 else "kp_4"))
                         wait(lambda: rw("vp_sel") != s0,
                              "a step from key %d toward key 1" % s0, 20)
+                        os88qemu.ui_done(q, S, cap=5.0, what="the step")
+                        print("   step: key %d -> %d" % (s0, rw("vp_sel")))
                 qpoke(q, [(base + syms["vp_played"], b"\0")])
                 q.hmp("sendkey p")
                 wait(lambda: rb("vp_ready") == 1, "the play to start", 120)
@@ -320,7 +353,9 @@ def main():
                       rw("vp_lytm"), rw("vp_ytb"), rb("vp_lbk"))
                 q.hmp("cont")
                 print("   from %s: snd %d, mute %d why %d; bench %d against "
-                      "%d; the bank kind %d (%s)" % ((leg,) + st + (state(),)))
+                      "%d; the bank kind %d; key %d, first frame %d (%s)"
+                      % ((leg,) + st + (rw("vp_sel"), rw("vp_base"),
+                                        state())))
                 want = (VP_SPK, 0) if fast else (0, 1)
                 if st[:2] != want:
                     bad.append("from %s the play's sound is %d, muted %d - "
@@ -522,19 +557,29 @@ def main():
         # seconds a press on from the frame on the glass, to the last key at
         # or before - whose super-packet is in the bank, so the ring is
         # handed the bank's chunk under it and nothing is read again. The
-        # target is read off the player in the half second before it seeks
+        # target is read off the player with the seek's wait HELD
+        # ([vp_skwt], vidfskeys' shape) and the key let go: a QEMU Right
+        # mostly arrives as TWO presses, and read between them the count was
+        # 1 while the player went on to the second's key - the hold armed at
+        # a key the play then started past, and it ran to its end (on any
+        # player: 3 runs in 8 before vp_xlag, 1 in 8 after)
         q.hmp("stop")
         xlo0, cnt1 = rd("vp_xlo"), rw("vp_xcnt")
+        qpoke(q, [(base + syms["vp_skwt"], b"\xF0")])
         q.hmp("cont")
         q.hmp("sendkey right")
         wait(lambda: rb("vo_skp") == 1, "the seek's press", 10)
+        os88qemu.pace(q, 1.0)           # (the key up, every repeat counted)
         q.hmp("stop")
+        if rb("vo_skp") != 1:
+            sys.exit("vidbank: the seek was made with its wait held")
         skn = struct.unpack("<h", q.read(base + syms["vp_skn"], 2))[0]
         skb = rw("vp_skb")
         to = min(skb + skn * 5 * int(FPS), NF - 1)
         kf = [k for k in rd88.keys if k[0] <= to][-1]
         stop = next((k[0] for k in rd88.keys if k[0] > kf[0]), NF - 1)
-        qpoke(q, [(base + syms["vp_stopat"], struct.pack("<H", stop))])
+        qpoke(q, [(base + syms["vp_stopat"], struct.pack("<H", stop)),
+                  (base + syms["vp_skwt"], b"\x09")])    # (VP_SKWAIT)
         q.hmp("cont")
         inbank = xlo0 <= kf[3] < xlo0 + cnt1 * CHUNK
         print("   the seek: %d press(es) from frame %d -> key %d, its "
@@ -545,6 +590,9 @@ def main():
             bad.append("key %d is not inside the bank - the seek leg "
                        "proves nothing" % kf[0])
         hold_at(stop, "after the seek", 120)
+        if rw("vp_base") != kf[0] + 1:  # (the play goes on past its key)
+            bad.append("the seek landed at frame %d, not key %d"
+                       % (rw("vp_base") - 1, kf[0]))
         check(stop)
         print("   seeks the bank answered: %d" % rw("vp_bskn"))
         if rw("vp_bskn") != 1:

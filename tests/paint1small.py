@@ -107,9 +107,7 @@ def main(argv):
         m.advance(frames=2)
         m.run()
         m.ctrl("KeyZ")                  # undo: repaints out of the canvas
-        m.advance(frames=300)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(300): the UI going idle IS the work done
         if m.read(LINE, 64) != SENT:
             fails.append("pt_line was SCRUBBED, so the repaint expanded a row "
                          "at a time - kern_small's gfx_blit1 is refusing and "

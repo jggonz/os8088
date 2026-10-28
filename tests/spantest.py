@@ -99,8 +99,11 @@ def main(argv):
         # already built the artefact (Row(wants=...) and os88test's prebuild).
         # That is what lets this row drop builds=True and share the lane.
         os88fixture.need(a.apps)
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
-        os88marty.settle(m)
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         disk = dispcp.win_list(m, S)[-1]
@@ -109,9 +112,8 @@ def main(argv):
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy,
                                rows.index("SPANTEST.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
-        mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        mo.dblclick(x, y, settle=0)
+        os88marty.ui_done(m, "SPANTEST.O88's open")  # was 250 blind frames
         got = dispapps.pkg_seg(m, 0)
         if got is None:
             sys.exit("spantest: SPANTEST.O88 did not open")

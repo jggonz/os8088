@@ -135,7 +135,7 @@ The same four reasons recur, and they are the useful finding:
   scratch image across parallel lanes (`b2b9551`), and the 3/6 rates sampled
   for it were `os88bisect sample` counting its own build-race SKIPs as
   failures (`342d78b`).
-- **HIBER.DRV `hb_dosseg`** is a far pointer to the DOS box's region, and
+- **HIBER.DRV `hb_dosseg`** is a far pointer to DOS's region, and
   `hbm_dosrun`'s `mem_claim` for the extent list can compact; if the region
   moves, `hbm_wake` pokes the exit code at the stale segment. The fix wants a
   relocation hook, which is resident bytes.

@@ -191,10 +191,14 @@ it_fs_go:
     jc .out                         ; the menu item is greyed for this too
     call it_bld_sync                ; the worker frozen in a build owed or
     jc .out                         ; half done: it is finished first (itrules)
+    xor ax, ax                      ; BOTH CLAIMS PINNED FOR THE BRACKET
+    call it_decl                    ; (SPEC.md 108.8.1)
     mov ax, it_fs_main
     mov bx, [it_win]
     mov cx, FSXF_FASTTICK           ; 54.6 sub-ticks a second: the frame clock
     call OSAPI_FSX_RUN
+    mov ax, it_claimmv              ; ...and movable on the desktop again
+    call it_decl
     IT_MARK it_fsback               ; (the way back's end: SPEC.md 108.12.7)
     mov byte [it_fsret], 0          ; (a paint that never came: nothing owed)
     call it_clock_sync              ; V = now HERE, after the kernel's exit mode

@@ -34,7 +34,7 @@ from os88fat import Fat12  # noqa: E402
 
 DEFAULT = ["build/os8088-360.img", "build/apps360.img", "build/media360.img",
            "build/office360.img", "build/network360.img", "build/games360.img",
-           "build/emu360.img",
+           "build/emu360.img", "build/util360.img",
            "build/small360.img", "build/smallapps360.img"]
 
 

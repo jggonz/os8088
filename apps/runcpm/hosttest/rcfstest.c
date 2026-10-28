@@ -117,6 +117,9 @@ static unsigned char zram[65536];
 static unsigned char *cl_mem[NCLAIM];    /* by index; seg = 0x1000 * (i + 1) */
 static unsigned cl_kb[NCLAIM];
 static int cl_live[NCLAIM];
+static int cl_mov[NCLAIM];               /* os88_mem_movable's last word on it
+                                          * (SPEC.md 66.2): a claim is born 0 */
+static int n_declares;
 static int n_claims_made, n_regrows, n_frees;
 static int cl_limit;                     /* the heap holds this many claims
                                           * (0 = plenty) */
@@ -136,8 +139,19 @@ unsigned os88_mem_claim(int kb)
     for (i = 0; i < NCLAIM; i++) if (!cl_live[i]) break;
     if (i == NCLAIM) return 0;
     cl_mem[i] = malloc(65536); memset(cl_mem[i], 0xA5, 65536);   /* garbage */
-    cl_kb[i] = kb; cl_live[i] = 1; n_claims_made++;
+    cl_kb[i] = kb; cl_live[i] = 1; cl_mov[i] = 0; n_claims_made++;
     return (unsigned)(0x1000 * (i + 1));
+}
+/* os88_mem_movable - the record says so, and nothing more: the harness never
+ * compacts. What it checks is the DISCIPLINE (SPEC.md 66.5.7.1): a file call
+ * may not be handed a movable claim, so the two seg stubs below refuse one */
+int os88_mem_movable(unsigned seg, int on) { cl_mov[ci(seg)] = on != 0; n_declares++; return 0; }
+static void not_movable(unsigned seg, const char *what)
+{
+    if (cl_mov[ci(seg)]) {
+        printf("HARNESS: %s into a MOVABLE claim %04x - pin it for the call (SPEC.md 66.5.7.1)\n", what, seg);
+        exit(1);
+    }
 }
 int os88_mem_free(unsigned seg) { int i = ci(seg); free(cl_mem[i]); cl_mem[i] = 0; cl_live[i] = 0; n_frees++; return 0; }
 /* regrow ALWAYS MOVES here: a caller keeping the old segment reads garbage */
@@ -148,7 +162,8 @@ unsigned os88_mem_regrow(unsigned seg, int kb)
     if (j == NCLAIM) return 0;
     cl_mem[j] = malloc(65536); memset(cl_mem[j], 0xA5, 65536);
     memcpy(cl_mem[j], cl_mem[i], cl_kb[i] << 10);
-    cl_kb[j] = kb; cl_live[j] = 1;
+    cl_kb[j] = kb; cl_live[j] = 1; cl_mov[j] = cl_mov[i];   /* MC_RLOC rides
+                                          * through a regrow (SPEC.md 66.7) */
     free(cl_mem[i]); cl_mem[i] = 0; cl_live[i] = 0;
     n_regrows++;
     return (unsigned)(0x1000 * (j + 1));
@@ -256,6 +271,7 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
 {
     struct ffile *f = ffind(fold(std_clus), name);
     int c = ci(seg);
+    not_movable(seg, "os88_file_read_seg");
     n_reads++;
     if (!f) { ferr = OS88_FERR_NOENT; return 0; }
     if (f->size > cap) { ferr = OS88_FERR_BIG; return 0; }
@@ -277,6 +293,7 @@ unsigned os88_file_read(const char *name, void *buf, unsigned cap)
 int os88_file_write_seg(const char *name, unsigned seg, unsigned count)
 {
     int c = ci(seg);
+    not_movable(seg, "os88_file_write_seg");
     n_writes++;
     if (!fput(fold(std_clus), name, cl_mem[c], count)) { ferr = OS88_FERR_DIRFULL; return -1; }
     ferr = 0;
@@ -532,6 +549,10 @@ int main(void)
     checkeq((unsigned long)(zram[FCB + 33] | (zram[FCB + 34] << 8) | (zram[FCB + 35] << 16)), 1054, "...1054 records");
     fcb_set(FCB, 0, "S65535  BIN");
     checkeq(bdos(15, FCB), 0, "F_OPEN of a 65,535-byte file works");
+    { struct rc_ofile *o = rc_oft_find(0, 0, "S65535  BIN");   /* read, never
+                                          * written: the flush cannot be what
+                                          * declared it (SPEC.md 74.3.2) */
+      check(o && cl_mov[ci(o->seg)], "...its buffer is declared movable once the read is done"); }
     checkeq(zram[FCB + 15], 128, "...rc = 128"); checkeq(zram[FCB + 14], 0x80, "...s2 = 0x80 unmodified");
     zram[FCB + 33] = 0xFF; zram[FCB + 34] = 1;   /* record 511: the tail */
     checkeq(bdos(33, FCB), 0, "READRAND record 511 (the last 127 bytes)");
@@ -928,6 +949,13 @@ int main(void)
     checkeq(bdos(35, FCB), 0, "F_SIZE of a 20MB file");
     checkeq((unsigned long)(zram[FCB + 33] | (zram[FCB + 34] << 8) | ((unsigned long)zram[FCB + 35] << 16)), 0x20000, "...held as 16MB - 1: 131,072 records, the cap");
     bdos(32, 0x0000);
+    /* EVERY OPEN FILE'S BUFFER IS MOVABLE once it is filled (SPEC.md 74.3.2):
+     * rc_oft_get declares it, and os88_onmove (runcpm.c) walks the table */
+    { struct rc_ofile *o; int nl = 0, nm = 0;
+      for (o = rc_oft; o < rc_oft + RC_OFT; o++)
+          if (o->live) { nl++; nm += cl_mov[ci(o->seg)]; }
+      check(nl > 0, "open files are held at the end of the run (the next check has rows to read)");
+      checkeq((unsigned long)nm, (unsigned long)nl, "...and every one's claim is declared movable"); }
     rc_fs_flush_all();
 
     printf("rcfstest: %d failure(s); %d claims made, %d regrows, %d writes, %d walks\n",

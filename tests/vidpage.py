@@ -455,14 +455,16 @@ def fclip(tmp, layout, pages, screen, loop=None, name="PAGE.V88",
     return out, cvs, W, H, pal
 
 
-def hostile(tmp, layout, mk=None):
+def hostile(tmp, layout, mk=None, base=None):
     """PAGELOOP.V88 is page-ahead and LOOPED - its seam was copied into a
     keep page-ahead never claims, segment 0, and the player must refuse it
     (the options audit, 2026-10-14) - and PAGENK.V88 is page-ahead with NO
     KEYS, so no key 0 to preload the hidden page from: it must PLAY"""
     mk = mk or (lambda **k: clip(tmp, layout, **k))
     lp = mk(loop=10, name="PAGELOOP.V88")[0]
-    d = bytearray(open(mk(name="PAGENK.V88")[0], "rb").read())
+    # (the main clip's own bytes when it was made with mk's defaults: the
+    # name is only where it is written, so a second write is the same file)
+    d = bytearray(open(base or mk(name="PAGENK.V88")[0], "rb").read())
     struct.pack_into("<HH", d, 192 + 12, 0, 0xFFFF)  # (the slot's key count
                                                      # and poster, video.asm
                                                      # R_NKEYS and R_POSTER)
@@ -630,12 +632,14 @@ def main():
         else:
             ty0, tx0 = (SH - H) // 2, ((SW - W) // 16) * 8
         disk = os.path.join(tmp, "vidpage.img")
-        lp, nk = hostile(tmp, lay, mk)
+        lp, nk = hostile(tmp, lay, mk, base=v88 if a.fpage or a.pages > 2
+                         or (not a.layer and not a.bench
+                             and a.kpart == vid.KEY_PART) else None)
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
                         "--size", "360", pkg, v88, lp, nk], check=True,
                        capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             # --- 0: THE ONE THE PLAYER MUST REFUSE, at its open
             for fn, want in (("PAGELOOP.V88", "vp_s_bad"),):
@@ -648,7 +652,7 @@ def main():
                 os88marty.until(
                     m, lambda mm: m.read(bh + syms["vp_loaded"], 1)[0] == 1
                     or m.read(bh + syms["vp_card"], 1)[0] == 1,
-                    "%s's open" % fn, poll=0.3, limit=300.0, guest=60.0)
+                    "%s's open" % fn, poll=0.05, limit=300.0, guest=60.0)
                 okh = m.read(bh + syms["vp_ok"], 1)[0]
                 msg = u16(m.read(bh + syms["vp_msg"], 2))
                 said = next((k for k in ("vp_s_bad",)
@@ -672,7 +676,7 @@ def main():
                 m.write(base + syms[n], struct.pack("<H", v))
 
             def until(cond, what, guest=90.0):
-                os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                 guest=guest)
 
             until(lambda mm: rb("vp_loaded") == 1 or rb("vp_card") == 1,

@@ -86,7 +86,7 @@ def main():
         print("   | " + l.decode("latin-1"))
     if not lines[0].startswith(b"REALDMG LOG - GBDEMO.GB - 32K, MBC 0, RAM 0 x 8K"):
         fails.append("the head is %r" % lines[0][:70])
-    if not lines[1].startswith(b"CPU tier 0, display 1 bpp, full screen Hercules, recompiler no"):
+    if not lines[1].startswith(b"CPU tier 0, display 1 bpp, full screen Hercules, recompiler yes"):
         fails.append("the machine's line is %r" % lines[1][:70])
     if not any(b" PAUSE" in l for l in lines) or not any(b" GO" in l for l in lines):
         fails.append("Machine > Pause and its undoing are not in the log")

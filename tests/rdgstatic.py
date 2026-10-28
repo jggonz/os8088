@@ -36,7 +36,7 @@ times over, fill both:
   second segment twice and so flushed both (the DONE line's "seg2", and
   "flushes" past rt_init's own), which is where code crosses between them;
 - THE NEGATIVE CONTROL: the translator's check that a target is in the
-  segment being written (rt_exit's `cmp dx,[S_JITSEG] / jne`) made two NOPs,
+  segment being written (rt_exit's `cmp dx,[S_JITCS] / jne`) made two NOPs,
   so an exit is written as a near jump into the other segment's offsets.
   cpu_instrs must then NOT pass.
 
@@ -50,6 +50,10 @@ squeezed:
   half-slot (its bytes in the harness lowered by 8), so translated code is
   written over the last 8 bytes of op_00-op_07's handlers. cpu_instrs must
   then NOT pass - which says the code written into the core is what ran.
+- gbrmw translated as it runs, squeezed: ~80 flushes, each the oldest tier
+  recycled (REALDMG-SPEC 16.2.3), so a chain into a tier is still taken
+  after that tier's code was written over. It must pass; THE NEGATIVE
+  CONTROL logs no chain into an older tier, and it must then NOT pass.
 
 Every leg runs with the block table at its 64KB (REALDMG-SPEC 16.3); the
 last runs cpu_instrs again with it at 16KB, the package's fallback, whose
@@ -85,15 +89,19 @@ def rom_path(name):
                                     "--path", name], text=True).strip()
 
 
-# rt_exit's same-segment check: cmp dx,[S_JITSEG] / jne - S_JITSEG is 40CCh
-SEGCHK = bytes.fromhex("3B16CC4075")
+# rt_exit's same-segment check: cmp dx,[S_JITCS] / jne - S_JITCS is 48E6h,
+# the code selector of the segment being written (REALDMG-SPEC 16.2.4; the
+# segment itself in the harness, which has no code selectors)
+SEGCHK = bytes.fromhex("3B16E64875")
 
 
 def run(rom, frames, core, host, jit="static", seg2=False, small=False, squeeze=None):
-    img = os.path.join(ROOT, "build", "realdmg", "rdgstatic.img")
+    img = os.path.join(rdgimg.private(os.path.join(ROOT, "build", "realdmg")),
+                       "rdgstatic.img")
     rdgimg.make_image(rom, img, frames=frames, core=core, host=host, jit=jit,
                      seg2=seg2, squeeze=seg2 if squeeze is None else squeeze, small=small)
-    text = rdgqemu.run(img, ["RDGHOST DONE", "RDGHOST BADOP"], timeout=400, quiet=True)
+    text = rdgqemu.run(img, ["RDGHOST DONE", "RDGHOST BADOP"], timeout=400, quiet=True,
+                       final=[" END\n"])
     if jit != "static":
         m = re.search(r"flushes (\d+) seg2 (\d+)", text)
         r = re.search(r"recycled (\d+)", text)
@@ -232,7 +240,19 @@ def main():
             "%d flushes (%d of them one tier recycled), %d moves into the core"
             % (st[0], st[2], st[1]) if st else "no DONE line"))
         bad += not ok
-        n, st = run(rom, frames, nolog(core), host, jit=True, squeeze=True)
+        # the stale chain's control on gbrmw: 80-odd tiers recycled to
+        # cpu_instrs' handful, where a chain into one still runs after it -
+        # cpu_instrs' own stopped showing one when 16.1.3 and 16.1.4 moved
+        # every block's size
+        rrom, rframes = rows[-1][1], rows[-1][2]
+        n, st = run(rrom, rframes, core, host, jit=True, squeeze=True)
+        ok = n == 1 and st is not None and st[2] >= 2
+        print("%-4s %-24s passed %d of 1, %s" % (
+            "ok" if ok else "FAIL", "core tier: rmw as run", n,
+            "%d flushes (%d of them one tier recycled)" % (st[0], st[2]) if st
+            else "no DONE line"))
+        bad += not ok
+        n, st = run(rrom, rframes, nolog(core), host, jit=True, squeeze=True)
         red = n == 0
         print("%-4s %-24s %s" % ("ok" if red else "FAIL", "control: links not logged",
                                  "fails, as it must" if red else

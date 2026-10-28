@@ -71,6 +71,24 @@ static int c64_abt_w, c64_abt_h;            /* ...and how big, clamped to the
                                              * and the close both need the
                                              * exact rect (9.3) */
 
+/* ...and the content origin the panel was placed against. A window dragged
+ * by its title is REPLAYED and not repainted (SPEC.md 11.96.12.0): the card
+ * moves on the glass with it and nothing tells ovl_about_show, so the rect a
+ * close hands on as damage is moved by however far the origin went. */
+static int c64_abt_ox, c64_abt_oy;
+
+/* c64_abt_reorg - RESIDENT (a click is a callback), and it draws nothing. */
+static void c64_abt_reorg(void *win)
+{
+    static struct os88_pt org;
+
+    os88_wm_content(win, &org);
+    c64_abt_x += org.x - c64_abt_ox;
+    c64_abt_y += org.y - c64_abt_oy;
+    c64_abt_ox = org.x;
+    c64_abt_oy = org.y;
+}
+
 static int ovl_about_show(void *win)
 {
     int x, y, i, bx, by;
@@ -107,6 +125,8 @@ static int ovl_about_show(void *win)
                                                             * or 16 px (9.8) */
     c64_abt_x = x;
     c64_abt_y = y;
+    c64_abt_ox = c64_gox;                   /* c64_geom ran above */
+    c64_abt_oy = c64_goy;
 
     os88_set_color(OS88_WHITE);
     os88_gfx_fill(x, y, x + c64_abt_w - 1, y + c64_abt_h - 1);

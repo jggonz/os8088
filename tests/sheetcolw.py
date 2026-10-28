@@ -40,7 +40,8 @@ import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
 
 WORK = "build/sheetcolw"                # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetcolw.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetcolw.img")        # the run's tree, so a soak lane finds it
 # No 'l' and no 'I' in what is read: this BIOS face draws the two alike but
 # for their top row, and a glyph's top row lies under its cell's line
 CELLS = {(0, 0): 'A wider heading spanning', (0, 2): 123456.0,
@@ -65,8 +66,7 @@ def build_disk():
     src = os.path.join(WORK, "SHIN.SLK")
     open(src, "wb").write('\r\n'.join(body).encode('latin-1'))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
+                    "--size", "360", "APPS:build/sheet.o88", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

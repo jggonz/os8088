@@ -3,6 +3,10 @@
 
     make && make ftpdtest && python3 tests/ftpd.py
 
+(Under the suite runner the two disks are the row's `wants=`, built before any
+row starts, and this script builds nothing; it boots COPIES of them, because
+the gate's own STOR writes the apps disk.)
+
 **THIS ONE IS QEMU'S, FOR THE SAME REASON tests/ethernet.py IS.** CLAUDE.md's
 rule is MartyPC first with a short list of exceptions, and the network card is
 on it: MartyPC has no NIC of any kind, so the emulator this tree develops on
@@ -112,7 +116,6 @@ import socket
 import struct
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -120,12 +123,14 @@ import dispcp                                          # noqa: E402
 import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
 import os88layout                                           # noqa: E402
+import os88geom                                             # noqa: E402
 import os88qemu                                              # noqa: E402
 import os88build                                       # noqa: E402
+import os88fixture                                     # noqa: E402
 
 S = os88sym.linear
 
-SOCK = "build/qmp.sock"
+SOCK = os88qemu.SOCK
 SYSIMG = "build/ether360.img"
 APPIMG = "build/ftpapps.img"
 CTRL = 2121
@@ -138,6 +143,19 @@ BINDAT = bytes(range(256)) * 8
 def say(*a):
     print(*a)
     sys.stdout.flush()
+
+
+def gpace(secs):
+    """`secs` of the GUEST's clock (os88qemu.pace on this row's machine).
+
+    Every pause in this file was a host `time.sleep`: a click's settle, a
+    TCP close given its TIME-WAIT, a retry's spacing. Each is the guest's
+    work, and a host second buys a starved guest less of it - the same
+    sleep is four times less of the machine at eight emulators on four
+    cores (docs/WRITING-TESTS.md 7, docs/plans/SOAK-PARALLEL.md 17.9). On
+    an idle box this is the sleep it replaces, rounded up to whole ticks.
+    A clock that stops ends the pause, as a sleep would have."""
+    os88qemu.pace(os88qemu._Sock(os88qemu.SOCK), secs)
 
 
 # --- QMP's names for the keys dispcp's scroller presses ----------------------
@@ -165,49 +183,36 @@ def main():
                          "machine is torn down. For looking at what the "
                          "window DREW, which no assertion here can reach")
     a = ap.parse_args()
-    knob = ["KFZ=1"] if a.kfz else []
-    if a.kfz:
-        os88sym.default_defines("KFZTRACE")     # every S() below resolves
-                                                # against the kernel actually
-                                                # built, or os88sym refuses
+    global SYSIMG, APPIMG
     fails = []
 
-    # THE IMAGES ARE REBUILT, NOT CHECKED. QEMU mounts both WRITABLE and the
-    # guest writes to them - this gate's own STOR lands on ftpapps.img - so a
-    # second run would find the uploaded file already there and assertion 4
-    # would pass without a byte crossing the wire. Staleness is not the hazard
-    # here, a dirty image is, and `make` cannot see the difference because the
-    # guest's write leaves the image NEWER than everything it was built from.
-    for f in (SYSIMG, APPIMG):
-        if os.path.exists(f):
-            os.remove(f)
-    r = subprocess.run(["make", "ftpdtest"] + knob,
-                       capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("ftpd: make ftpdtest failed:\n" + r.stdout + r.stderr)
+    # THE IMAGES ARE NEVER BOOTED AS THEY STAND. QEMU mounts both WRITABLE
+    # and the guest writes to them - this gate's own STOR lands on
+    # ftpapps.img - so a second run on the same image would find the
+    # uploaded file already there and assertion 4 would pass without a byte
+    # crossing the wire. So the built ones are only READ: the apps disk is a
+    # SCRATCH COPY in this process's own directory (booted in place and read
+    # back by verify_host), and make_test copies the system disk.
+    #
+    # The plain images are the row's `wants=` (tests/suite.py): built before
+    # any row starts, so `need` is a no-op under the runner and a `make`
+    # standalone. KFZ=1 is a KERNEL knob, so --kfz builds a PRIVATE tree
+    # (tools/os88build.py) and never writes build/ - and `apply()` points
+    # every S() below at the kernel that tree holds.
+    if a.kfz:
+        t = os88build.tree("KFZ=1", targets=("ether360.img", "ftpapps.img"))
+        t.apply()
+        SYSIMG, src = t.img("ether360.img"), t.img("ftpapps.img")
+    else:
+        os88fixture.need(SYSIMG, APPIMG)
+        src = APPIMG
+    APPIMG = os88qemu.scratch(src, "ftpapps.img")
 
-    # A SURVIVOR KEEPS THE SOCKET, so the new machine cannot bind and every
-    # read below would come from the OLD one - which reads as a change that
-    # did nothing. Kill it by PID out of the pidfile, never with `pkill -f
-    # qemu`, whose pattern matches the calling shell.
-    if os.path.exists("build/qemu.pid"):
-        try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
-        except (OSError, ValueError):
-            pass
-    for f in ("build/qmp.sock", "build/qemu.pid"):
-        if os.path.exists(f):
-            os.remove(f)
-
-    # `make test` DAEMONISES the emulator, so it outlives this script
-    # unless somebody kills it - and the somebody is us (os88qemu).
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "ETHER=1", "ETHFWD=1",
-                        "TESTIMG=" + SYSIMG, "TESTAPPS=" + APPIMG] + knob,
-                       capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("ftpd: make test failed:\n" + r.stdout + r.stderr)
+    # The machine is PRIVATE (tests/os88qemu.py make_test): its own socket
+    # and pidfile, so nothing of build/qmp.sock is shared and ethernet.py's
+    # Mouse, which drives os88qemu.SOCK, drives this machine
+    os88qemu.make_test("ETHER=1", "ETHFWD=1", "TESTIMG=" + SYSIMG,
+                       "TESTAPPS=" + APPIMG)
 
     # ethernet.py's Qemu and Mouse are reused rather than copied: one QMP
     # client at a time, `pmemsave` for memory, and one tools/mouse.py process
@@ -302,15 +307,25 @@ def wait_dhcp(m):
     Control Panel drive.
     """
     syms = eth.ether_syms()
-    for _ in range(200):
-        time.sleep(0.4)
+    got = []
+
+    def bound():
         row = m.read(S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ + eth.DRVR_SEG, 2)
         seg = eth.u16(row)
         if not seg:
-            continue
+            return False
         ip = m.readseg(seg, syms["eth_ip"], 4)
         if any(ip):
-            return eth.dotted(ip)
+            got[:] = [eth.dotted(ip)]
+            return True
+        return False
+    # THE BOOT FIRST (os88qemu.kernel_up): drv_tab is `.bss`, the packed
+    # stream until kmain has expanded it, and a driver's segment is armed
+    # before its image is read (SOAK-PARALLEL 17.5). Then 80 GUEST seconds -
+    # this was 200 polls 0.4 HOST seconds apart
+    os88qemu.kernel_up(m, S)
+    if os88qemu.acted(m, bound, secs=80.0, what="DHCP's address", poll=0.2):
+        return got[0]
     return None
 
 
@@ -328,7 +343,7 @@ def launch(m, mo):
     arrive.
     """
     def settle(mm, card=None):
-        time.sleep(2.0)
+        gpace(2.0)
 
     dispcp.open_drive(m, mo, S, settle, "B")
     # **open_drive ANSWERS THE DRIVE ICON's (x, y), NOT THE WINDOW's**, and
@@ -356,18 +371,22 @@ def launch(m, mo):
     # screen (SPEC.md 39.7) and a CGA desktop is 200 rows.
     bx, by = start_btn(fx, fy)
     mo.click(bx, by)
-    time.sleep(1.5)
+    gpace(1.5)
     return fx, fy
 
 
 def wait_win(m, secs):
     """Poll for the FTP window rather than sleeping a guess."""
-    end = time.time() + secs
-    while time.time() < end:
+    got = []
+
+    def up():
         try:
-            return ftp_win(m)
+            got[:] = [ftp_win(m)]
+            return True
         except RuntimeError:
-            time.sleep(0.5)
+            return False
+    if os88qemu.acted(m, up, secs=secs, what="the FTP window", poll=0.2):
+        return got[0]
     return None, None
 
 
@@ -407,6 +426,17 @@ def ftp_win(m):
                        "newest is %dx%d at (%d,%d), which is the Disk window "
                        "still, so the package never opened one"
                        % (FD_W, FD_W_SNAP, w, h, x, y))
+
+
+def front_rect(m):
+    """The FRONTMOST window's rect, off wm_zord as wm_top takes it
+    (tools/os88geom.py top) - dispcp.win_list is SLOT order, not z-order,
+    so its last entry is the newest window and says nothing about which one
+    is in front."""
+    ptr = os88geom.top(m, S)
+    if not ptr:
+        return None
+    return tuple(dispcp.win_rect(m, S, (ptr - S("wm_wins")) // os88geom.WIN_SIZE))
 
 
 def start_btn(fx, fy):
@@ -464,9 +494,9 @@ def restart(m, mo):
     """Stop, then Start - the root is walked at START and nowhere else."""
     fx, fy = ftp_win(m)
     mo.click(*start_btn(fx, fy))
-    time.sleep(1.5)
+    gpace(1.5)
     mo.click(*start_btn(fx, fy))
-    time.sleep(2.5)
+    gpace(2.5)
 
 
 # [fd_st], read out of the package's own bss. The o88 header carries the image
@@ -502,11 +532,11 @@ def press_slide_release(mo, x0, y0, x1, y1):
     """
     mo.run("to", str(x0), str(y0))
     mo.run("down")
-    time.sleep(0.3)
+    gpace(0.3)
     mo.run("to", str(x1), str(y1))
-    time.sleep(0.3)
+    gpace(0.3)
     mo.run("up")
-    time.sleep(0.8)
+    gpace(0.8)
 
 
 def read_state(m):
@@ -547,11 +577,11 @@ def stor_paced(f, name, blob, tries=4):
     for _ in range(tries):
         try:
             f.storbinary("STOR " + name, io.BytesIO(blob))
-            time.sleep(1.2)
+            gpace(1.2)
             return
         except ftplib.error_temp as e:
             last = e
-            time.sleep(2.5)
+            gpace(2.5)
     raise last
 
 
@@ -579,7 +609,7 @@ def run_gate(m, mo, fails):
             f = connect()
             break
         except (OSError, ftplib.all_errors):
-            time.sleep(1.0)
+            gpace(1.0)
     if f is None:
         fails.append("nothing answered on port 21 - the server did not start, "
                      "or Start was never clicked")
@@ -774,7 +804,7 @@ def run_gate(m, mo, fails):
     # --- 6: Read Only refuses ----------------------------------------------
     fx, fy = ftp_win(m)
     mo.click(*ro_box(fx, fy))
-    time.sleep(1.0)
+    gpace(1.0)
     f = connect()
     f.login("os8088", "os8088")
     refused = False
@@ -811,7 +841,7 @@ def run_gate(m, mo, fails):
     # nothing free. The server answers 425 for that now rather than 501, so a
     # real client retries - but this gate asserts the FIRST attempt, which
     # means it has to give the previous one time to drain.
-    time.sleep(4.0)
+    gpace(4.0)
     f = connect()
     f.login("os8088", "os8088")
     f.set_pasv(False)
@@ -840,7 +870,7 @@ def run_gate(m, mo, fails):
     # and this times out - which is exactly what the field reported.
     fx, fy = ftp_win(m)
     mo.click(*ro_box(fx, fy))
-    time.sleep(1.0)
+    gpace(1.0)
     set_pasv_override(m, mo, "127.0.0.1")
 
     f = ftplib.FTP()
@@ -919,7 +949,7 @@ def run_gate(m, mo, fails):
             f.retrbinary("RETR BANANA~1.MOD", buf.write)
             break
         except ftplib.error_temp:
-            time.sleep(2.5)
+            gpace(2.5)
     if buf.getvalue() != blob:
         fails.append("RETR BANANA~1.MOD did not return what STOR "
                      "'banana split.mod' sent - the mapping does not "
@@ -945,9 +975,12 @@ def run_gate(m, mo, fails):
     f = connect()
     f.login("os8088", "os8088")
     f.retrlines("LIST", lambda _l: None)
-    t0 = time.time()
+    # (GUEST seconds: a starved guest's STOR is long in host time with no
+    # backoff in it, and a client sitting through its SYN backoff is idle
+    # time the guest's clock runs through all the same)
+    c = os88qemu.Clock(m)
     f.storbinary("STOR TWTEST.DAT", io.BytesIO(b"z" * 8192))
-    dt = time.time() - t0
+    dt = c.secs()
     f.quit()
     if dt > 3.0:
         fails.append("a STOR issued straight after a LIST took %.1fs - the "
@@ -977,7 +1010,7 @@ def run_gate(m, mo, fails):
     # its slot for a FIN round trip. With NET_SOCKS = 4 that is real pressure
     # - SPEC.md 77.28 - and this assertion is about recovery after an ABORT,
     # not about that. So it waits for the pool rather than racing it.
-    time.sleep(6.0)
+    gpace(6.0)
     try:
         f = connect()
         f.login("os8088", "os8088")
@@ -987,7 +1020,7 @@ def run_gate(m, mo, fails):
     except Exception as e:
         say("   (first try: %s - waiting for the socket pool)"
             % str(e).strip()[:50])
-        time.sleep(20.0)
+        gpace(20.0)
         try:
             f = connect()
             f.login("os8088", "os8088")
@@ -1019,12 +1052,10 @@ def run_gate(m, mo, fails):
     # not instantly, because the worker has to poll the dead control socket
     # before fd_bye can run. So this WAITS FOR THE STATE and reports the time,
     # which is the number a user retrying after a failed upload feels.
-    t0 = time.time()
-    while time.time() - t0 < 90:
-        if read_state(m) == "listening":
-            break
-        time.sleep(2.0)
-    say("back to listening %.0fs after the client vanished" % (time.time() - t0))
+    c = os88qemu.Clock(m)                  # (90 GUEST seconds, reported so)
+    os88qemu.acted(m, lambda: read_state(m) == "listening", secs=90.0,
+                   what="the server back to listening", poll=0.5)
+    say("back to listening %.0fs (guest) after the client vanished" % c.secs())
 
     ok = False
     for attempt in range(3):
@@ -1041,7 +1072,7 @@ def run_gate(m, mo, fails):
             break
         except Exception as e:
             say("   attempt %d: %s" % (attempt, str(e).strip()[:60]))
-            time.sleep(10.0)
+            gpace(10.0)
     if not ok:
         fails.append("after an aborted transfer the next session could not "
                      "LIST - the data socket's slot was not released, which "
@@ -1199,6 +1230,119 @@ def run_gate(m, mo, fails):
         say("RETR /B/FTPHELLO.TXT is byte-exact through the machine root")
     f.quit()
 
+    say("")
+    say("--- 8e. the log does not paint over the window ON TOP of it "
+        "(SPEC.md 77.33) ---")
+
+    # THE FIELD SAW THE FTP LOG PRINTED ACROSS THE FRONT OF A DISK WINDOW.
+    # fd_flush_glass and the UI wake both take the gfx lock THEMSELVES - they
+    # are not W_PAINT callbacks, so nothing has armed a clip for them - and
+    # the gfx_* primitives take ABSOLUTE screen coordinates. Without
+    # OSAPI_WM_CLIP_SET a background painter draws straight over whatever is
+    # in front of it.
+    #
+    # Driven the way it happens: raise the Disk window over the FTP window,
+    # photograph the overlap, then make the server log a line and photograph
+    # it again. Those pixels belong to the Disk window and must not move.
+    import subprocess as _sp
+    fw = ftp_win(m)
+    disk = None
+    for w in dispcp.win_list(m, S):
+        r = dispcp.win_rect(m, S, w)
+        # ...BY WIDTH, BOTH OF THEM: the kernel snaps the FTP window to
+        # FD_W_SNAP (SPEC.md 11.94), so `!= (FD_W, FD_H)` matched the FTP
+        # window ITSELF and this block cropped the log it was meant to be
+        # protecting a window from - which changes on every line by design
+        if r[2] not in (FD_W, FD_W_SNAP):
+            disk = r
+    if disk is None:
+        fails.append("no Disk window to put in front of the FTP window - "
+                     "this assertion needs one to overlap with")
+    else:
+        dx, dy, dw, dh = disk
+        # the overlap: the Disk window's own area, which the FTP log sits under
+        crop = "%d,%d,%d,%d" % (dx + 2, dy + 20, dw - 8, dh - 40)
+        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_0.png",
+                 "--crop", crop], capture_output=True)
+        # **NOT ITS TITLE BAR** - the Disk window is at (103,80,320,200) and
+        # the FTP window at (40,40,400,176), so that title is UNDERNEATH the
+        # window this is trying to put it in front of and the click lands on
+        # the FTP server. Click the part that shows, below the FTP window's
+        # bottom edge; anywhere in a window raises it.
+        mo.click(dx + dw // 2, dy + dh - 30)
+        gpace(1.5)
+        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_a.png",
+                 "--crop", crop], capture_output=True)
+        # **THE SETUP CHECKS ITSELF.** The first version of this clicked four
+        # pixels too high, never raised anything, and cropped the FTP log -
+        # which changes on every line by design, so it reported the bug it was
+        # written to detect on a build that had just been fixed. A gate whose
+        # premise is unverified is a gate that lies in the expensive direction.
+        if open(tempfile.gettempdir() + "/ftpclip_0.png", "rb").read() == \
+                open(tempfile.gettempdir() + "/ftpclip_a.png", "rb").read():
+            fails.append("clicking the Disk window's title bar changed "
+                         "nothing - it never came to the front, so this "
+                         "assertion has no window on top to protect")
+        # ...and asked of the window manager too, because a pixel change
+        # between the two pictures is also what the POINTER moving into the
+        # crop looks like
+        top = front_rect(m)
+        if top != tuple(disk):
+            fails.append("8e: the front window after the click is %r, not "
+                         "the Disk window %r - nothing is on top of the FTP "
+                         "window to protect" % (top, tuple(disk)))
+        # A CONTROL CONNECTION ONLY - no LIST. 8b above runs seven transfers
+        # back to back and each close holds its slot for TCP_TWTMO, so a data
+        # connection here races the pool for no reason: `Client connected`,
+        # `USER`, `PASS` are four log lines and that is all this needs.
+        gpace(3.0)
+        # **THE SERVER HAS TO BE LISTENING, OR THIS MEASURES NOTHING.** This
+        # block ran AFTER assertion 12, which leaves a Root that will not
+        # resolve and the server in `err` with nothing on port 21 - so every
+        # connect timed out, the log never moved, and "untouched" compared
+        # two pictures of a window nothing had tried to paint over. It runs
+        # before 12 now, logged in as assertion 9's user, and a connection
+        # that never arrives FAILS rather than passing.
+        logged = False
+        for _try in range(3):
+            try:
+                f = connect()
+                f.login("BOB", "s3cret")
+                f.quit()
+                logged = True
+                break
+            except Exception as e:
+                say("   (connect %d: %s)" % (_try, str(e).strip()[:40]))
+                gpace(4.0)
+        if not logged:
+            fails.append("8e: no connection reached the server, so the log "
+                         "never scrolled under the Disk window and the "
+                         "comparison below measured nothing")
+        gpace(2.5)
+        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_b.png",
+                 "--crop", crop], capture_output=True)
+        a = open(tempfile.gettempdir() + "/ftpclip_a.png", "rb").read()
+        b = open(tempfile.gettempdir() + "/ftpclip_b.png", "rb").read()
+        if a != b:
+            fails.append("the Disk window's pixels CHANGED while the FTP "
+                         "server logged underneath it - the log is painting "
+                         "over the window on top (SPEC.md 77.33). See "
+                         "%s/ftpclip_a.png and _b.png" % tempfile.gettempdir())
+        else:
+            say("the window on top is untouched while the log scrolls under it")
+
+        # ...AND THE FTP WINDOW BACK IN FRONT. Assertion 12 clicks the Setup
+        # page's fields, which the Disk window now covers; its title bar is
+        # above the Disk window's top edge, so that is where to click.
+        fx, fy = ftp_win(m)
+        mo.click(fx + FD_W // 2, fy + TITLE_H // 2)
+        gpace(1.0)
+        top = front_rect(m)
+        if not top or top[2] not in (FD_W, FD_W_SNAP):
+            fails.append("8e: clicking the FTP window's title did not bring "
+                         "it back to the front (the front window is %r) - "
+                         "assertion 12 would click the Disk window" % (top,))
+
     # === 12. THE SETUP BUTTON, PERSISTED READ ONLY, AND A BAD ROOT ==========
     # Assertions 7-11 already drove the page through the BUTTON, so what is
     # left here is the three things they could not: that the menu item still
@@ -1251,7 +1395,7 @@ def run_gate(m, mo, fails):
     say("rooted at B:\\DEEP, / holds %r" % names)
     if names != ["FTPHELLO.TXT"]:
         fails.append("a backslash root served %r - the Root field must take "
-                     "`B:\\DEEP` as well as `B:/DEEP`, because a DOS box is "
+                     "`B:\\DEEP` as well as `B:/DEEP`, because DOS is "
                      "what the person typing it is looking at" % names)
     f.quit()
 
@@ -1296,81 +1440,6 @@ def run_gate(m, mo, fails):
     # image, which is what says a refused Start still SAVED the setting the
     # user typed rather than reverting it behind their back.
 
-    say("--- 8e. the log does not paint over the window ON TOP of it "
-        "(SPEC.md 77.33) ---")
-
-    # THE FIELD SAW THE FTP LOG PRINTED ACROSS THE FRONT OF A DISK WINDOW.
-    # fd_flush_glass and the UI wake both take the gfx lock THEMSELVES - they
-    # are not W_PAINT callbacks, so nothing has armed a clip for them - and
-    # the gfx_* primitives take ABSOLUTE screen coordinates. Without
-    # OSAPI_WM_CLIP_SET a background painter draws straight over whatever is
-    # in front of it.
-    #
-    # Driven the way it happens: raise the Disk window over the FTP window,
-    # photograph the overlap, then make the server log a line and photograph
-    # it again. Those pixels belong to the Disk window and must not move.
-    import subprocess as _sp
-    fw = ftp_win(m)
-    disk = None
-    for w in dispcp.win_list(m, S):
-        r = dispcp.win_rect(m, S, w)
-        if (r[2], r[3]) != (FD_W, FD_H):
-            disk = r
-    if disk is None:
-        fails.append("no Disk window to put in front of the FTP window - "
-                     "this assertion needs one to overlap with")
-    else:
-        dx, dy, dw, dh = disk
-        # the overlap: the Disk window's own area, which the FTP log sits under
-        crop = "%d,%d,%d,%d" % (dx + 2, dy + 20, dw - 8, dh - 40)
-        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_0.png",
-                 "--crop", crop], capture_output=True)
-        # **NOT ITS TITLE BAR** - the Disk window is at (103,80,320,200) and
-        # the FTP window at (40,40,400,176), so that title is UNDERNEATH the
-        # window this is trying to put it in front of and the click lands on
-        # the FTP server. Click the part that shows, below the FTP window's
-        # bottom edge; anywhere in a window raises it.
-        mo.click(dx + dw // 2, dy + dh - 30)
-        time.sleep(1.5)
-        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_a.png",
-                 "--crop", crop], capture_output=True)
-        # **THE SETUP CHECKS ITSELF.** The first version of this clicked four
-        # pixels too high, never raised anything, and cropped the FTP log -
-        # which changes on every line by design, so it reported the bug it was
-        # written to detect on a build that had just been fixed. A gate whose
-        # premise is unverified is a gate that lies in the expensive direction.
-        if open(tempfile.gettempdir() + "/ftpclip_0.png", "rb").read() == \
-                open(tempfile.gettempdir() + "/ftpclip_a.png", "rb").read():
-            fails.append("clicking the Disk window's title bar changed "
-                         "nothing - it never came to the front, so this "
-                         "assertion has no window on top to protect")
-        # A CONTROL CONNECTION ONLY - no LIST. 8b above runs seven transfers
-        # back to back and each close holds its slot for TCP_TWTMO, so a data
-        # connection here races the pool for no reason: `Client connected`,
-        # `USER`, `PASS` are four log lines and that is all this needs.
-        time.sleep(3.0)
-        for _try in range(3):
-            try:
-                f = connect()
-                f.login("os8088", "os8088")
-                f.quit()
-                break
-            except Exception as e:
-                say("   (connect %d: %s)" % (_try, str(e).strip()[:40]))
-                time.sleep(4.0)
-        time.sleep(2.5)
-        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_b.png",
-                 "--crop", crop], capture_output=True)
-        a = open(tempfile.gettempdir() + "/ftpclip_a.png", "rb").read()
-        b = open(tempfile.gettempdir() + "/ftpclip_b.png", "rb").read()
-        if a != b:
-            fails.append("the Disk window's pixels CHANGED while the FTP "
-                         "server logged underneath it - the log is painting "
-                         "over the window on top (SPEC.md 77.33). See "
-                         "%s/ftpclip_a.png and _b.png" % tempfile.gettempdir())
-        else:
-            say("the window on top is untouched while the log scrolls under it")
-
     say("--- 13. the controls are STANDARD: press, slide off, release ---")
 
     # THE WHOLE POINT OF SPEC.md 77.18. Every control used to fire on the
@@ -1400,7 +1469,7 @@ def run_gate(m, mo, fails):
     # ...and the same gesture WITHOUT the slide still fires, so the refusal
     # above is a cancel and not a control that has stopped working.
     mo.click(sx, sy)
-    time.sleep(1.2)
+    gpace(1.2)
     now = read_page(m)
     if now != "setup":
         fails.append("a press and release ON Setup did not open the page "
@@ -1410,7 +1479,7 @@ def run_gate(m, mo, fails):
         # Done is in Start's corner, and it is the SETUP page's main control -
         # so this also proves the second rect table is wired to the right one.
         mo.click(*start_btn(fx, fy))
-        time.sleep(1.2)
+        gpace(1.2)
         back = read_page(m)
         if back != "log":
             fails.append("Done did not come back to the log page (%r) - the "
@@ -1436,10 +1505,10 @@ def setup(m, mo, fields=(), machine=None, readonly=None, use_menu=False):
     """
     fx, fy = ftp_win(m)
     enter(m, mo, fx, fy, use_menu)
-    time.sleep(1.0)
+    gpace(1.0)
     for idx, text in fields:
         mo.click(*field_pt(fx, fy, idx))
-        time.sleep(0.6)
+        gpace(0.6)
         # CLEARED FIRST. os88line has no select-all, so a field is only ever
         # appended to - and the Root field is set three times in this gate,
         # which would otherwise give `/NOSUCHB:\DEEP`. End, then enough
@@ -1447,17 +1516,17 @@ def setup(m, mo, fields=(), machine=None, readonly=None, use_menu=False):
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey end"]
                        + ["sendkey backspace", "sleep 0.05"] * 24,
                        check=True, capture_output=True)
-        time.sleep(0.3)
+        gpace(0.3)
         type_text(text)
-        time.sleep(0.4)
+        gpace(0.4)
     if readonly is not None:
         mo.click(*sro_box(fx, fy))
-        time.sleep(0.8)
+        gpace(0.8)
     if machine is not None:
         mo.click(*mach_box(fx, fy))
-        time.sleep(0.8)
+        gpace(0.8)
     leave(m, mo, fx, fy, use_menu)  # leaving is what commits and saves
-    time.sleep(2.0)
+    gpace(2.0)
     say("Setup%s: %s%s%s"
         % (" (by menu)" if use_menu else "",
            ", ".join("field %d = %r" % f for f in fields) or "nothing typed",
@@ -1476,7 +1545,7 @@ def enter(m, mo, fx, fy, use_menu=False):
         menu_setup(m, mo, fx, fy)
     else:
         mo.click(*setup_btn(fx, fy))
-        time.sleep(0.8)
+        gpace(0.8)
 
 
 def leave(m, mo, fx, fy, use_menu=False):
@@ -1493,7 +1562,7 @@ def leave(m, mo, fx, fy, use_menu=False):
         menu_setup(m, mo, fx, fy)
     else:
         mo.click(*start_btn(fx, fy))
-        time.sleep(0.8)
+        gpace(0.8)
 
 
 def set_pasv_override(m, mo, addr):
@@ -1515,11 +1584,11 @@ def menu_setup(m, mo, fx, fy):
     verb - that is os88mouse.py, the MartyPC one - so it is down / to / up.
     """
     mo.run("down", str(MENU_X), str(MENU_Y))
-    time.sleep(0.5)
+    gpace(0.5)
     mo.run("to", str(MENU_X), str(SETUP_Y))
-    time.sleep(0.4)
+    gpace(0.4)
     mo.run("up")
-    time.sleep(0.8)
+    gpace(0.8)
 
 
 # QMP's `sendkey` takes KEY names, not characters, so a shifted character is

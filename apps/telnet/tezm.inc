@@ -1852,6 +1852,8 @@ tz_dlgopen:
     mov al, TZR_MEM
     jc .answer
     mov [tz_sseg], dx
+    mov ax, tz_sreloc               ; ...AND IT MOVES (NO-PINNING A3, SPEC.md
+    call OSAPI_MEM_MOVABLE          ; 70.11.3): tz_sreloc's header
 .held:
     call tz_wmap                    ; ...BEFORE it exists, so the bit that
     mov [tz_base], ax               ; appears is the slot it took. BANKED rather
@@ -2083,6 +2085,35 @@ tz_cancelck:
     ret
 
 ; -----------------------------------------------------------------------------
+; tz_sreloc - the staging area moved (SPEC.md 66.2, 70.11.3): BX = where it
+; was, DX = where it is now. [tz_sseg] is the one word naming it. The WORKER
+; stores into it a byte at a time with ES loaded from the word and put back
+; (tz_store), and a running worker pins every claim of ours (inst_seg_parked);
+; it parks only inside OSAPI_TASK_ALIVE at the top of its loop, with nothing
+; held, and declares no OSAPI_MEM_PARKSAFE. The UI task's one use is
+; tz_commit's file write out of it, which tz_spin pins for the call.
+tz_sreloc:
+    cmp bx, [tz_sseg]
+    jne .o
+    mov [tz_sseg], dx
+.o:
+    ret
+
+; tz_spin - AX = 0 PINS the staging area, AX = tz_sreloc lets it move again.
+; Around tz_commit's OSAPI_FILE_WRITE/_SEQ/APPEND, whose ES:BX it is: the
+; kernel holds that pointer across claims of its own before its transfer pin
+; applies (SPEC.md 66.3 rule 5), so it is bucket C for the call. Preserves
+; every register and the flags.
+tz_spin:
+    pushf
+    push dx
+    mov dx, [tz_sseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; tz_sfree - the staging claim back, once nothing can touch it (SPEC.md 70.11.3)
 ; in:  THE UI TASK, like every store to [tz_sseg]; out: every register kept
 ;
@@ -2128,6 +2159,8 @@ tz_commit:
     mov cx, [tz_un]
     jcxz .ok                        ; an empty tail needs no append at all - and
                                     ; APPEND's own contract wants CX >= 1
+    xor ax, ax
+    call tz_spin                    ; pinned for the write (tz_spin's header)
     mov es, [tz_sseg]               ; ES:BX is the half: the area is a CLAIM
     xor bx, bx                      ; (SPEC.md 70.11.3), and every file slot
     cmp byte [tz_uh], 0             ; takes its buffer as ES:BX
@@ -2172,7 +2205,9 @@ tz_commit:
     jnz .ew                         ; stack below, and this is the UI task
     mov byte [tz_rst], TZR_ERR
 .out:
-    mov word [tz_un], 0
+    mov ax, tz_sreloc
+    call tz_spin                    ; free to move again (a no-op re-declare
+    mov word [tz_un], 0             ; for an empty tail, which never pinned)
     pop es
     jmp te_pop5
 

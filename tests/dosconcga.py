@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """THE CONSOLE BAND ON THE SHORT ADAPTER (SPEC.md 96.33.8).
 
-CGA's 200 lines leave the DOS box **17 of the console's 25 rows**, and
+CGA's 200 lines leave DOS **17 of the console's 25 rows**, and
 `[con_vtop]` is which buffer row the band starts at.  It was `CON_ROWS -
 [con_vrows]` - the bottom of the BUFFER - which is the right number only once
 the console has scrolled a whole screenful.  At the first paint the cursor is
@@ -40,7 +40,7 @@ import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
 APPS = "build/apps360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 MACHINE = "os8088_5150_cga_gla"          # THE POINT: 200 lines, 17 rows of 25
 
 
@@ -49,15 +49,15 @@ def fail(msg):
     sys.exit(1)
 
 
-class Box(object):
+class Dos(object):
     def __init__(self, m):
         self.m = m
         self.dm = dosmap.package()
 
     @property
     def base(self):
-        # **RESOLVED PER ACCESS, NOT CACHED** (SPEC.md 66.6.1.2): the DOS
-        # box's region MOVES now - it is a re-homed carve and was pinned only
+        # **RESOLVED PER ACCESS, NOT CACHED** (SPEC.md 66.6.1.2): DOS's
+        # region MOVES now - it is a re-homed carve and was pinned only
         # until that section - so a base banked in __init__ names the bytes
         # the package used to occupy, and decodes as plausible rubbish.
         return dosmap.instance(self.m) << 4
@@ -187,10 +187,10 @@ def main():
 
     with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
         m = ui.m
-        if not ui.path(BOX):
-            fail("could not launch %s" % BOX)
+        if not ui.path(DOSPKG):
+            fail("could not launch %s" % DOSPKG)
         os88marty.settle(m)
-        bx = Box(m)
+        bx = Dos(m)
 
         # --- 1: the first paint shows the prompt ----------------------------
         vt, vr, cy, vis = bx.visible()

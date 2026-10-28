@@ -408,7 +408,7 @@ def main():
           re.search(r"/kdos/DOS\.O88\s*:\s*\$\(BUILD\)/dosload\.bin\s+"
                     r"\$\(BUILD\)/dosp\.bin", mk),
           "megahigh: kdos/DOS.O88 is no longer dosload.bin + dosp.bin",
-          why="SHIPPED_STEM's DOS line rests on that recipe: the DOS box "
+          why="SHIPPED_STEM's DOS line rests on that recipe: the DOS package "
               "kern_mega's system disk carries is that file, its program "
               "part dosp.bin",
           got="the kdos/DOS.O88 rule changed", want="dosload.bin dosp.bin")

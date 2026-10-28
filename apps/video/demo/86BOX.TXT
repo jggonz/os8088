@@ -1,0 +1,37 @@
+OS8088 VIDEO DEMOS FOR 86BOX
+============================
+
+Three ready-to-run 86Box machines, each with a hard disk holding a whole
+os8088 install and the demo videos made for its graphics card.
+
+  viddemo-vga    a 16 MHz 286 (Micronics MR 286 board, 4 MB), an Oak
+                 OTI-067 VGA, a Sound Blaster 16 and a 504 MB IDE disk.
+                 The VGA videos were made for this machine.
+  viddemo-cga    an IBM PC 5150 (4.77 MHz 8088, 10/27/82 BIOS, 640 KB
+                 with an AST SixPakPlus), a CGA, a Sound Blaster 2.0 and
+                 a 31 MB ST-238R on a Seagate ST11R.
+  viddemo-herc   the same IBM PC with a Hercules card.
+
+INSTALLING
+
+Copy the three folders into the folder 86Box keeps its machines in (the
+86Box Manager's machine directory, or any folder you start 86Box with -P),
+then start the one you want. Each folder is complete: its configuration
+(86box.cfg), its CMOS settings (nvr/) and its hard disk (the .VHD file)
+sit side by side, and the configuration names the disk by file name only,
+so the folder can live anywhere.
+
+You need 86Box 5.0 or later with its ROM set. The VGA machine's CMOS
+already describes its disk (user type 47: 1024 cylinders, 16 heads, 63
+sectors) and two 1.44 MB floppy drives, so it boots straight to os8088
+with no trip into BIOS setup. The IBM PC has no CMOS to set up.
+
+PLAYING
+
+The machines boot from the hard disk with no floppy in A:. The videos are
+in C:\MEDIA, with 00-VIDS.TXT describing each one. Double-click a video to
+open it, then press Space or click Play. Space pauses, Esc stops, and F
+moves a play between the window and the full screen.
+
+The mouse is a serial mouse on COM1: click into the 86Box window to
+capture it, and press Ctrl+End (or the middle button) to let it go.

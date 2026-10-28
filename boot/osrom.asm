@@ -70,6 +70,12 @@ ROMF_HCLAIM     equ 5           ; 5): the drivers and the blocks under `.cold`.
 ROMF_HDROP      equ 7           ; A ROM is never asked any of them - the
 ROMF_HRESET     equ 8           ; kernel's drv_hma_door asks only the HMA's
 ROMF_HTAB       equ 9           ; (...and a hibernate asks where hb_tab is)
+ROMF_HWALK      equ 10          ; ...and XMEM.DRV's walk, the HMA's contents
+                                ; as OSAPI_XMEM_WALK records: XMEM.DRV's
+                                ; equate (MIRRORED there), not the kernel's
+XMW_HMAK        equ 0xF5        ; MIRRORED: apps/os88api.inc's walk owners -
+XMW_HMAI        equ 0xF6        ; `.cold` and the tail, a driver's image in
+XMW_HMAB        equ 0xF7        ; the pool, and a buffer a driver took there
 ROM_MODHB       equ 4           ; MOD_H_BUILD: the build word of a module's
                                 ; header and of mod_hdrt (RT_HDRT), which
                                 ; kernel/mod.inc pins at +4 with an %error
@@ -101,7 +107,14 @@ rom_id:
     dw 0                        ; +12 payload length (tool)
     dw 0                        ; +14 tail length (tool)
 %endif
+%if ROM_KIND == ROM_KIND_HMA
+    dw HB_HI                    ; +16 where `.cold` begins, the pool's top -
+    times 6 db 0                ; XMEM.DRV banks it with +12 so the Task
+                                ; Manager can name what the HMA holds
+                                ; (SPEC.md 28.4.13)
+%else
     times 8 db 0                ; +16 the KEY (tool; kernel ROMs only)
+%endif
     dw rom_patch                ; +24 the patcher's entry, which the tool
                                 ; copies into the header's +10
 %if ROM_KIND == ROM_KIND_HMA
@@ -109,7 +122,12 @@ rom_id:
 %else                           ; tool places the file so it is a paragraph
     dw 0                        ; +26 reserved      past `.cold`
 %endif
+%if ROM_KIND == ROM_KIND_HMA
+    dw rom_modfix               ; +28 the door's offset at FFFF once the tail
+    times 2 db 0                ; is installed, which XMEM.DRV banks to far-
+%else                           ; call ROMF_HWALK (SPEC.md 28.4.13)
     times 4 db 0                ; +28 reserved
+%endif
 %if $ - rom_id != 32
   %error "rom_id must be 32 bytes - the kernel's probe reads it at fixed offsets"
 %endif
@@ -304,6 +322,10 @@ rom_sock_check:
 ;                                 under it, what every far reference names
 ;   RT_COLDLEN                    `.cold`'s length; ours is at CS:0x10
 ;   RT_HASH                       the `.text` hash; rt_spans its word spans
+;   RT_SLIDES RT_SLIDSEG RT_HASHS  the HMA kind: a kernel that slides `.cold`
+;                                 over a dropped VGA rung (SPEC.md 2.10.9),
+;                                 where it is then and the `.text` hash with
+;                                 every listed word saying so
 ;   rt_text / rt_win / rt_blob    the far references, by the segment each is
 ;                                 an offset into: `.text`, the window half
 ;                                 `.ovl` at FAT_SEG, and the blob `.boot2`,
@@ -311,7 +333,10 @@ rom_sock_check:
 ;   rt_vgab, RT_VGABRAM           kern_big's `.vgabuf` words, and the rung
 ;                                 they name, moved down to RT_COLDRAM
 ;   rt_mods                       per mod_tab ROW: its list and its count (the
-;                                 settings core's row shares CTRL.DRV's)
+;                                 settings core's row shares CTRL.DRV's) - and
+;                                 ONLY for a kernel with no mod_cfix (RT_MODFIX:
+;                                 kern_small), a kernel that slides `.cold`
+;                                 finding them itself (MOVABLE-COLD-PLAN 4)
 ;   rt_img                        per ROW: the image this ROM holds (its offset
 ;                                 in the window and its bytes), 0 = none
 ;   RT_PKGOFF RT_PKGLEN           the one package it may hold, and its name,
@@ -397,11 +422,36 @@ rom_patch:
     loop .word
     jmp short .span
 .hashed:
+    ; (DX is the hash's until here, so where `.cold` runs is loaded after it)
+%if ROM_KIND == ROM_KIND_HMA
+    ; WHERE `.cold` RUNS NOW, which every listed word must name and which
+    ; `.cold` is copied up from. A DELTA MOVER: the kernel may have slid
+    ; `.cold` down over a dropped VGA rung before this runs (SPEC.md 2.10.9,
+    ; MOVABLE-COLD-PLAN 4) - a 286 with a CGA or a Hercules and memory above
+    ; 1MB is that machine - and then every listed `.text` word says so, which
+    ; is a second `.text` and a second hash. Nothing else is accepted
+    mov ax, [RT_ACS]            ; (DS = RT_KSEG: the hash's)
+%if RT_SLIDES
+    cmp ax, RT_SLIDSEG
+    jne .home
+    cmp dx, RT_HASHS
+    jmp short .hcmp
+.home:
+%endif
+    cmp ax, RT_COLDSEG
+    jne .no
+    cmp dx, RT_HASH
+.hcmp:
+    jne .no
+    xchg ax, dx
+%else
     cmp dx, RT_HASH
     jne .no
+    mov dx, RT_COLDSEG          ; ...and a ROM rings before anything has moved
+%endif
     ; --- 3. every listed word names what it should - and only then, 4. ------
-    mov bx, RT_COLDSEG          ; BX = RT_COLDSEG: look (what is there is
-    call rp_walk                ; what each word gets back)
+    mov bx, dx                  ; BX = DX: look (what is there is what each
+    call rp_walk                ; word gets back)
     jc .no
 %if ROM_KIND == ROM_KIND_HMA
     ; --- HMA: no module may be HELD. This runs after the mount, and a module a
@@ -424,7 +474,8 @@ rom_patch:
     ; read it and no byte of it is data (os88ovlchk's rule)
     mov ax, ROM_COLDSEG
     mov es, ax
-    mov ax, RT_COLDRAM
+    mov ax, dx                  ; `.cold`'s RAM, wherever it runs: DX:VST
+    add ax, RT_COLDVST / 16
     mov ds, ax
     xor si, si
     mov di, RT_COLDVST          ; `.cold`'s own offsets: FFFF:x is 0xFFFF0 + x
@@ -441,7 +492,8 @@ rom_patch:
     mov cx, rom_tail_end - rom_res
     repe cmpsb
     jne .no
-    mov ax, RT_COLDRAM
+    mov ax, dx
+    add ax, RT_COLDVST / 16
     mov ds, ax
     xor si, si
     mov di, RT_COLDVST
@@ -465,7 +517,7 @@ rom_patch:
     mov cx, RT_NSLOT
     jcxz .slotted
 .slot:
-    cmp word [es:di], RT_COLDSEG
+    cmp [es:di], dx             ; (where it ran)
     jne .snext
     mov word [es:di], ROM_COLDSEG
 .snext:
@@ -495,8 +547,9 @@ rom_patch:
     pop ax
     retf
 
-; rp_walk - the four lists, looked at (BX = RT_COLDSEG, CF = 1 at the first
-; word that is not COLD_SEG) or written (BX = ROM_COLDSEG). BP = the blob.
+; rp_walk - the four lists, looked at (BX = DX, CF = 1 at the first word that
+; does not name DX) or written (BX = ROM_COLDSEG). BP = the blob, DX = where
+; `.cold` runs now (rom_patch).
 rp_walk:
     mov ax, RT_KSEG
     mov si, rt_text
@@ -526,7 +579,7 @@ rp_walk:
 .vnext:
     cs lodsw                    ; (DF = 0: rom_patch's cld)
     xchg ax, di
-    cmp bx, RT_COLDSEG
+    cmp bx, dx
     jne .vwrite
     cmp word [es:di], RT_VGABRAM
     jne .vbad
@@ -555,30 +608,24 @@ rp_walk:
 rom_res:
 %endif
 ; rp_list - AX = the segment, CS:SI = CX offsets, BX = what each word gets:
-; RT_COLDSEG to look (a word that says it is given it back, which writes
-; nothing that was not there) or ROM_COLDSEG to write. Either way CF = 1 at
-; the first word that does not say COLD_SEG - which on a write cannot happen,
+; DX to look (a word that says it is given it back, which writes nothing that
+; was not there) or ROM_COLDSEG to write. Either way CF = 1 at the first word
+; that does not say DX, where `.cold` runs - which on a write cannot happen,
 ; the look having just read every one of them, and each list being a set of
 ; distinct offsets (tools/os88rom.py walks the diff two bytes at a time).
-; DX = no limit. Clobbers AX, CX, DI, SI (past the list), ES = AX. One body
-; for both passes rather than a branch per word (kernel size pass 12, -14)
+; Clobbers AX, CX, DI, SI (past the list), ES = AX. One body for both passes
+; rather than a branch per word (kernel size pass 12, -14). The module door's
+; FIX has a loop of its own (rm_list), DX here being where `.cold` runs and
+; not a limit. DF = 0
 rp_list:
     mov es, ax
-    mov dx, 0xFFFF
-; ...and the module door's way in, with DX = the LAST offset a word may start
-; at, plus one: the bytes it read less one, so a word at or past DX is not in
-; this claim (the settings core reads a PART, SPEC.md 2.8.7). DF = 0
-rp_list_lim:
     jcxz .ok
 .next:
     cs lodsw
     xchg ax, di
-    cmp di, dx
-    jae .skip
-    cmp word [es:di], RT_COLDSEG
+    cmp [es:di], dx             ; DX = where `.cold` runs (rom_patch)
     jne .bad
     mov [es:di], bx
-.skip:
     loop .next
 .ok:
     clc
@@ -601,8 +648,9 @@ rp_list_lim:
 ;           mod_need then refuses it. ES is the claim's, out of the row
 ;           ([bx], MODR_SEG = 0), and is NOT kept. The ROM's own copies are
 ;           kept AS THE BUILD CUT THEM, so a copied module is fixed like a
-;           read one. BX and BP, not ES and CX: mod_need holds both already,
-;           and loading the other two cost it 5 bytes (kernel size pass 12)
+;           read one. ONLY RT_MODFIX's (kern_small): a kernel that slides
+;           `.cold` re-points its modules itself, out of the bytes alone
+;           (mod_cfix, MOVABLE-COLD-PLAN 4), and is never asked this
 ;   2 PKG   DS:SI = a package's 8.3 name (the kernel's) -> the package STARTED
 ;           out of this ROM: ldf_ld_pkg_start run on ES:DI = its image here,
 ;           DX:CX = its length, so CF/AL are that far entry's answer and the
@@ -625,10 +673,12 @@ rom_modfix:
                                 ; mod_row gave mod_need, in the kernel this
                                 ; ROM adopted: it is not re-checked here
 %if RT_MODRSZ != 4
-  %error "rt_mods and rt_img are indexed by row*4 and mod_tab's stride is not 4"
+  %error "rt_img is indexed by row*4 and mod_tab's stride is not 4"
 %endif
+%if RT_MODFIX
     cmp al, ROMF_FIX
     je .fix
+%endif
     mov si, [cs:rt_img+bx]      ; the image's offset in this ROM, 0 = none
     or si, si
     jz .no
@@ -659,38 +709,66 @@ rom_modfix:
 .yes:
     clc
     jmp short .out
+%if RT_MODFIX
 .fix:
     push ax
     push cx
     push dx
     push di
     mov es, [bx + RT_MODTAB]    ; the row's MODR_SEG (+0), DS = the kernel's
-    mov dx, bp                  ; DX = the limit for rp_list_lim: the bytes
-    dec dx                      ; it holds, less one (BP > 0: a header)
+    mov dx, bp                  ; DX = the limit: the bytes it holds, less one
+    dec dx                      ; (BP > 0: a header)
     mov si, [cs:rt_mods+bx]     ; the list...
     mov cx, [cs:rt_mods+bx+2]   ; ...and its count
     push si
     push cx
     cld
     mov bx, RT_COLDSEG          ; look
-    call rp_list_lim
+    call rm_list
     pop cx
     pop si
     jc .fixed
     mov bx, ROM_COLDSEG         ; ...then write: CF = 0
-    call rp_list_lim
+    call rm_list
 .fixed:
     pop di
     pop dx
     pop cx
     pop ax
     jmp short .out
+%endif
 .no:
     stc
 .out:
     pop si
     pop bx
     retf
+
+%if RT_MODFIX
+; rm_list - a module's list: ES = its claim, CS:SI = CX offsets, BX = what each
+; word gets (RT_COLDSEG to look, ROM_COLDSEG to write), DX = the last offset a
+; word may start at plus one (the settings core reads a PART, SPEC.md 2.8.7).
+; CF = 1 at the first word in the claim that does not say COLD_SEG.
+; Clobbers AX, CX, DI, SI. DF = 0
+rm_list:
+    jcxz .ok
+.next:
+    cs lodsw
+    xchg ax, di
+    cmp di, dx
+    jae .skip
+    cmp word [es:di], RT_COLDSEG
+    jne .bad
+    mov [es:di], bx
+.skip:
+    loop .next
+.ok:
+    clc
+    ret
+.bad:
+    stc
+    ret
+%endif
 
 ; rom_pkg - ROMF_PKG: the one package this ROM may carry, LAUNCHED, if it is
 ; the one ui_sys_open is opening: the kernel's [ui_desc] (RT_UIDESC) names a
@@ -750,7 +828,7 @@ rom_pkg:
 ; OSAPI_MEM_HMA). Every block is addressed the same way - a segment of its own
 ; and offsets from HB_ORG - because nothing above 1MB is reachable at offset 0:
 ; FFFF:x is linear 0xFFFF0 + x, so a block at base b is C:HB_ORG with
-; C = 0xFFFF - (HB_ORG - b)/16, which puts every C in F200-F7xx. That is the
+; C = 0xFFFF - (HB_ORG - b)/16, which puts every C in F401-F9FF (HB_ORG C000). That is the
 ; reason the pool is UNDER `.cold`: above it, C would be FBxx-FFxx, which is
 ; the heap's owner tags, and a claim a driver made would read as purgeable.
 ;
@@ -817,6 +895,8 @@ rom_hma:
     je hb_claim
     cmp al, ROMF_HDROP
     je hb_drop
+    cmp al, ROMF_HWALK
+    je hb_walk
     cmp al, ROMF_HRESET
     jne hb_no
     push cs                     ; HRESET: the whole table zero, which is
@@ -833,6 +913,102 @@ hb_htab:                        ; HTAB: SI = hb_tab, which is AX out; DX
     mov word [bp+12], HB_N * 6
     mov ax, si
     jmp hb_yesax
+
+; hb_walk - ROMF_HWALK, XMEM.DRV's OSAPI_XMEM_WALK with BX = XMW_FIXED
+; (SPEC.md 28.4.13): ES:DI = room for CX records of 6 bytes, IF = 0. One for
+; `.cold` and this tail - segment FFFF, the KB from the pool's top to the HMA's
+; end - then one per live block: XMW_OFF the segment it runs at, XMW_KB its
+; bytes rounded UP, XMW_OWN XMW_HMAI for a driver's image (its owner is its
+; own segment) or XMW_HMAB a buffer, XMW_CLS the owning driver's DRVC_* off
+; its header. Out AX = the records written, DI and CX advanced past them (the
+; frame's, as hb_claim writes DX). It was XMEM.DRV's own xm_hwalk, 128 bytes
+; of every 286's heap; here it is in the HMA and reads the table it walks
+hb_walk:                        ; SI = hb_tab
+    xor bp, bp                  ; BP = records written
+    jcxz .done
+    mov ax, 0xFFFF
+    stosw
+    mov ax, 64 - (HB_HI >> 10)
+    stosw
+    mov ax, XMW_HMAK
+    stosw
+    inc bp
+    dec cx
+.b:
+    jcxz .done
+    mov ax, [cs:si]             ; a base, 0 = free
+    or ax, ax
+    jz .n
+    call hb_seg
+    mov dx, ax                  ; DX = the segment it runs at
+    stosw
+    mov ax, [cs:si+2]           ; bytes, at most HB_MAX: +1023 cannot carry
+    add ax, 1023
+    mov al, ah
+    shr al, 1
+    shr al, 1                   ; AL = KB, at most 16
+    cbw
+    stosw
+    mov bx, [cs:si+4]           ; the owner: a driver's image segment
+    mov ds, bx
+    cmp bh, 0xF0                ; hb_drop's test: F000 up is an image in the
+    mov bx, HB_ORG              ; pool, its header at HB_ORG...
+    jae .hdr
+    xor bx, bx                  ; ...below, a HEAP driver's, at its offset 0
+.hdr:
+    mov ah, 0
+    cmp word [bx], 0x384F       ; 'O8': its header, and the class in it
+    jne .nc
+    mov ah, [bx+3]
+.nc:
+    mov al, XMW_HMAI
+    cmp dx, [cs:si+4]           ; its own segment owns it: the image
+    je .img
+    mov al, XMW_HMAB
+.img:
+    stosw
+    inc bp
+    dec cx
+.n:
+    add si, 6
+    cmp si, hb_tab_end
+    jb .b
+.done:
+    xchg ax, bp                 ; AX = the count...
+    mov bp, sp
+    mov [bp+6], di              ; ...and the saved DI and CX advanced
+    mov [bp+12], cx
+    jmp hb_yesax
+
+; hb_keep - HCLAIM with CX = 8000h | bytes (OSAPI_MEM_HMA's MEMHMA_KEEP):
+; the caller's OWN IMAGE - the block that runs at BX and BX owns - cut to
+; that many bytes, paragraph-rounded, the rest a free run (SPEC.md 51.1.3's
+; DRV_H_KEEP, in the HMA, where the kernel's shrink has no claim to cut).
+; Never a growth and never to nothing. SI = hb_tab
+hb_keep:
+    and ch, 0x7F
+    add cx, 15
+    and cl, 0xF0
+    jcxz .no
+.r:
+    cmp word [cs:si], 0
+    je .n
+    mov ax, [cs:si]
+    call hb_seg
+    cmp ax, bx                  ; the block BX runs at...
+    jne .n
+    cmp [cs:si+4], bx           ; ...and owns: its image
+    jne .n
+    cmp cx, [cs:si+2]
+    ja hb_no                    ; a keep past the end is no keep
+    mov [cs:si+2], cx
+    jmp hb_yes
+.n:
+    add si, 6
+    cmp si, hb_tab_end
+    jb .r
+.no:
+    jmp hb_no
 
 hb_free:                        ; SI = hb_tab
     cmp word [cs:si], 0
@@ -866,9 +1042,12 @@ hb_drop:                        ; SI = hb_tab
 
 hb_claim:
     jcxz hb_free                ; CX = 0: DX's block back (SI = hb_tab)
+    test ch, 0x80
+    jnz hb_keep                 ; CX = 8000h | bytes: BX's image cut to them
     cmp cx, HB_MAX
     ja hb_no
-    call hb_alloc               ; AX = base, DI = its record
+    mov bp, sp                  ; a BUFFER: highest-first (BP <> 0), so it
+    call hb_alloc               ; never stands where a foot image regrows
     jc hb_no
     call hb_seg                 ; AX = the segment...
     mov bp, sp
@@ -931,6 +1110,9 @@ hb_place:
     mov cx, [cs:si+4]           ; CX = image + bss: what is copied
     xor bx, bx                  ; no owner yet: it is the image's own segment,
     push si                     ; known once the base is
+    mov bp, [cs:si+8]           ; ...and WHICH END: bit 15 of the relocation
+    and bp, 0x8000              ; count is OS88_DRV_FOOT's, lowest-first;
+    xor bp, 0x8000              ; every other image highest-first (BP <> 0)
     call hb_alloc
     pop si                      ; (the table: hb_alloc walks with SI)
     jc hb_no
@@ -953,6 +1135,7 @@ hb_place:
     pop di
     jne .bad
     mov cx, [cs:si+8]           ; THE RELOCATION: CX bytes of the stream gain
+    and ch, 0x7F                ; (bit 15 is the foot flag, above)
     mov si, [cs:si+6]           ; HB_ORG's high byte, each a delta from the
     mov bp, bx                  ; last (0 = an absolute word follows)
     jcxz .placed
@@ -980,8 +1163,19 @@ hb_place:
     mov word [cs:di], 0         ; the block back: nothing was installed
     jmp hb_no
 
-; hb_alloc - CX = bytes, BX = owner -> CF = 0, AX = base, DI = its record;
-; CF = 1 no record or no room. Lowest fit, paragraph-rounded. Clobbers DX, SI
+; hb_alloc - CX = bytes, BX = owner, BP = 0 lowest fit / BP <> 0 highest fit
+; -> CF = 0, AX = base, DI = its record; CF = 1 no record or no room.
+; Paragraph-rounded. Clobbers DX, SI.
+;
+; TWO ENDS, AND THAT IS THE FRAGMENTATION RULE (SPEC.md 51.1.3.1): an image
+; that cuts itself after attach (OS88_DRV_FOOT, SOUND.DRV) goes lowest-first
+; and everything else - other images, every buffer - highest-first. The cut
+; then frees the foot of the ONE free run between the two stacks, and when
+; that driver is swept and reloaded (a hibernate, the Drivers page) its whole
+; length is free again where it was: the pool comes back as the boot left it.
+; Both walks are first fit from their end: a candidate that overlaps a block
+; moves just past it (up) or just under it (down) and every record is looked
+; at again, so the candidate only ever moves one way and the walk ends
 hb_alloc:
     push cx
     add cx, 15
@@ -995,8 +1189,12 @@ hb_alloc:
     cmp di, hb_tab_end
     jb .rec
     jmp .no
-.room:                          ; ...and the lowest base that overlaps nothing
+.room:                          ; ...and a base that overlaps nothing
     mov ax, HB_LO
+    or bp, bp
+    jz .scan
+    mov ax, HB_HI               ; (CX <= HB_MAX < HB_HI: no borrow)
+    sub ax, cx
 .scan:
     mov si, hb_tab
 .each:
@@ -1010,13 +1208,22 @@ hb_alloc:
     add dx, cx                  ; DX = our end
     cmp [cs:si], dx
     jae .next                   ; it starts past us
-    mov ax, [cs:si]             ; overlap: try just past it, and look again
+    or bp, bp                   ; overlap:
+    jnz .down
+    mov ax, [cs:si]             ; ...up: just past it
     add ax, [cs:si+2]
+    jmp .scan
+.down:
+    mov ax, [cs:si]             ; ...down: just under it
+    sub ax, cx
+    jb .no
     jmp .scan
 .next:
     add si, 6
     cmp si, hb_tab_end
     jb .each
+    cmp ax, HB_LO
+    jb .no
     mov dx, ax
     add dx, cx
     jc .no

@@ -234,28 +234,15 @@ def requirements():
                 "python3 -m pip install unicorn"))
 
     req.append(("bochs", os88build.have_bochs(),
-                "megatrap0, kern_mega's #GP census held at zero: Bochs is the "
-                "one emulator here that checks a 286's segment rules "
-                "(docs/BOCHS.md).",
+                "the kern_mega rows (megatrap0's #GP census and the other mega*): "
+                "Bochs is the one emulator here that checks a 286's segment "
+                "rules (docs/BOCHS.md).",
                 "apt-get install -y bochs bochsbios vgabios bochs-x xvfb "
                 "xdotool x11-apps imagemagick"))
 
-    req.append(("xdc", os88build.have_xdc(),
-                "vidbench, which decodes the owner's four XDC streams and has "
-                "nothing else to decode (docs/plans/VIDEO-PLAN.md 13).",
-                "export OS88_XDC_SAMPLES=<a directory holding %s>\n"
-                "                  (copyrighted: they are the owner's and "
-                "never in the tree)" % ", ".join(os88build.XDC_STREAMS)))
-
-    req.append(("gbroms", os88build.have_gbroms(),
-                "rdgspeed286, which times RealDMG on the owner's two Game Boy "
-                "cartridges (docs/plans/REALDMG-PLAN.md wave 4).",
-                "export OS88_GB_ROMS=<a directory holding %s>\n"
-                "                  (copyrighted: they are the owner's and "
-                "never in the tree)" % ", ".join(os88build.GB_ROMS)))
-
     req.append(("86box", os88build.have_86box(),
-                "rdgspeed286, which needs the automation-enabled 86Box's 286.",
+                "gbreplay, gbbank, gbhifreq and megacdrom, which need the "
+                "automation-enabled 86Box (docs/86BOX.md).",
                 "python3 tools/os88box.py build      (three minutes)"))
 
     req.append(("rgbds", os88build.have_rgbds(),
@@ -275,6 +262,12 @@ def requirements():
                 "instkeep, which plants a user's files on the fixture "
                 "partition before a kept install (SPEC.md 52.10.15).",
                 "apt-get install -y mtools"))
+
+    req.append(("unshare", sys.platform.startswith("linux")
+                and bool(shutil.which("unshare")) and os.geteuid() == 0,
+                "httpmountname, which binds its own /etc/resolv.conf in a "
+                "private mount namespace (SPEC.md 72.5.1).",
+                "run the soak as root on Linux (the container is)"))
 
     req.append(("dosbox", bool(shutil.which("dosbox")),
                 "czdos, which runs OS88CZ.COM under a real DOS (SPEC.md "
@@ -886,7 +879,8 @@ def _frozen_targets(a):
         imgs = ("os8088.img", "os8088-120.img", "os8088-720.img",
                 "os8088-360.img", "apps.img", "apps120.img", "apps720.img",
                 "apps360.img", "media360.img", "office360.img",
-                "network360.img", "games360.img", "emu360.img")
+                "network360.img", "games360.img", "emu360.img", "util360.img",
+                "more720.img", "small360.img", "small720.img")
     shipped = imgs + ("wire.o88",)
     return shipped + tuple(a[len("build/"):] for a in arts
                            if a.startswith("build/"))

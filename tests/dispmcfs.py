@@ -40,6 +40,7 @@ from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
 # VID_CTX_W = 18 layout - two bytes early, and what sits there is
 # display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
+import os88fixture                                          # noqa: E402
 
 S = os88sym.linear
 TITLE_H = 18
@@ -117,13 +118,16 @@ def state(m, mo, label, win, cards):
 
 
 def main():
-    with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+    # MISSILE.O88 left apps360.img (SPEC.md 24.6.1): the shipped disk plus
+    # it, on a disk of this run's own
+    apps = os88fixture.apps360_plus("GAMES:build/missile.o88", tag="dispmcfs")
+    with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine="os8088_xt_vga_herc", boot=False) as m:
         cards = {c["idx"]: c for c in m.cards()}
         pri = [i for i, c in cards.items() if c["type"] == "vga"][0]
         sec = [i for i, c in cards.items() if c["type"] == "mda"][0]
         both = (pri, sec)
-        m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run(); os88marty.kernel_up(m)     # the first act is a click
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
@@ -147,7 +151,7 @@ def main():
         try:
             os88marty.until(m, lambda _: any(w != disk for w in
                                              dispcp.win_list(m, S)),
-                            "Missile's window", poll=0.2, limit=30)
+                            "Missile's window", poll=0.05, limit=30)
         except os88marty.MartyError:
             pass                        # ...and the line below says so
         os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
@@ -159,7 +163,10 @@ def main():
 
         wx, wy, ww, wh = dispcp.win_rect(m, S, g)
         mo.drag(wx + ww // 2, wy + TITLE_H // 2, seam + 300, wy + TITLE_H // 2)
-        os88marty.settle(m, card=sec)
+        os88marty.ui_done(m, lock=False)    # the next read is the window
+                                        # record (Missile's worker holds the
+                                        # lock all the time); state() settles
+                                        # before any capture
         wx, wy, ww, wh = dispcp.win_rect(m, S, g)
         print("missile x %d..%d, centre %d (%s of the seam)"
               % (wx, wx + ww - 1, wx + ww // 2,
@@ -175,7 +182,7 @@ def main():
         fs = lambda: u16(m.read(S("wm_fs"), 2))
         try:                            # the latch (SPEC.md 11.2); state()
             os88marty.until(m, lambda _: fs() != 0,  # settles the glass
-                            "the fullscreen latch", poll=0.2, limit=15)
+                            "the fullscreen latch", poll=0.05, limit=15)
         except os88marty.MartyError:
             pass
         full = state(m, mo, "fullscreen", g, both)
@@ -202,10 +209,10 @@ def main():
         m.key("Escape")
         try:
             os88marty.until(m, lambda _: fs() == 0, "the latch to drop",
-                            poll=0.2, limit=15)
+                            poll=0.05, limit=15)
         except os88marty.MartyError:
             pass
-        os88marty.settle(m, card=sec)
+        os88marty.ui_done(m, lock=False)    # state() settles the glass itself
         mo.to(*park)
         after = state(m, mo, "back to windowed", g, both)
         shot(m, sec, "3-after-herc")
@@ -230,16 +237,16 @@ def main():
         # to one display and set the mode.
         wx, wy, ww, wh = dispcp.win_rect(m, S, g)
         mo.drag(wx + ww // 2, wy + TITLE_H // 2, 300, wy + TITLE_H // 2)
-        os88marty.settle(m, card=pri)
-        wx, wy, ww, wh = dispcp.win_rect(m, S, g)
+        os88marty.ui_done(m, lock=False)    # memory reads and a key follow,
+        wx, wy, ww, wh = dispcp.win_rect(m, S, g)   # not a capture
         mo.to(wx + ww // 2, wy + wh // 2)
-        os88marty.settle(m, card=pri)
+        os88marty.ui_done(m, lock=False)
         m.key("KeyM")
         try:                            # wait for the state asserted below,
             os88marty.until(            # on a GUEST budget; a miss is read
                 m, lambda _: (m.read(S("vid_ndisp"), 1)[0] == 1   # and
                               and m.read(S("fsx_cur"), 1)[0] == 8),  # reported
-                "Mode X to take the machine", poll=0.2, limit=10.0)
+                "Mode X to take the machine", poll=0.05, limit=10.0)
         except os88marty.MartyError:
             pass
         m.pause()
@@ -252,7 +259,7 @@ def main():
         m.key("Escape")
         try:
             os88marty.until(m, lambda _: m.read(S("vid_ndisp"), 1)[0] == 2,
-                            "the second display to come back", poll=0.2,
+                            "the second display to come back", poll=0.05,
                             limit=10.0)
         except os88marty.MartyError:
             pass

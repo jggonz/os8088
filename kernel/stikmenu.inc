@@ -1948,8 +1948,11 @@ stm_pick:
     mov ah, AK_SHOW
 .set:
     CSDO mov [CSEG stm_ak], ah
-    mov ax, CMD_STIK
-    call KERNEL_SEG:ui_post_cmd ; ui_task spends it with nothing held
+    mov ax, CMD_STIK            ; ui_task spends it with nothing held: what
+    mov [ui_pcmd], ax           ; ui_post_cmd did, written out here - this was
+    inc byte [ui_post]          ; its one caller (kernel size pass 14). DS =
+                                ; KERNEL_SEG, and ui_post's one bump is the
+                                ; SAY SO of SPEC.md 13.13
     clc
     ret
 .none:

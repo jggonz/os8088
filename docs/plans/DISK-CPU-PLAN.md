@@ -6,7 +6,7 @@ because the measurement was expensive to take and the conclusion is general:
 **the kernel's disk layer costs more CPU than IBM DOS's does, and it is now the
 larger of the two gaps between them.**
 
-This is not a DOS-box document. `apps/dos` is where it was found because a DOS
+This is not a `DOS.O88` document. `apps/dos` is where it was found because a DOS
 program is the one workload on this machine that does nothing but read files,
 so the OS's own share of the time is visible against a real comparison. Every
 finding below is about `kernel/disk.inc` and `kernel/diskw.inc`, and every
@@ -172,7 +172,7 @@ at the desktop           with PRINCE.EXE running
 9C800..9E800  8.0K ring   (gone)
 9E800..A0000  6.0K image  (gone)
                           2FC00..98800  419.0K  the arena
-                          98800..9C800   16.0K  the box's own region
+                          98800..9C800   16.0K  DOS's own region
 453.5K unclaimed          26.5K unclaimed
 ```
 
@@ -189,7 +189,7 @@ part.** Three things bind:
    exists to avoid. The claim has to precede the read, so the claim is outside
    the bracket by construction.
 3. **And even with perfect ordering it would not be contiguous.** A package
-   REGION is claimed top-down, so the box's own 16KB region sits BETWEEN the
+   REGION is claimed top-down, so DOS's own 16KB region sits BETWEEN the
    arena and the space the drivers vacated. Absorbing it needs the region to
    move — and a region cannot move while its package is inside a kernel →
    package call, which is every moment it could be claiming: `mem_frameless`
@@ -203,7 +203,7 @@ none has been:
 - **Claim the arena in two stages** — take what is available before the
   bracket, enter it, suspend the drivers, then `OSAPI_MEM_REGROW` upward. It
   fails on (3) as things stand: the region is in the way.
-- **Let the box's region be claimed bottom-up**, so the ceiling above the
+- **Let DOS's region be claimed bottom-up**, so the ceiling above the
   arena is only drivers. This is a loader question (§50.3.2), not a DOS one,
   and it trades against the reason regions are at the ceiling in the first
   place.
@@ -218,7 +218,7 @@ scales: `ETHER.DRV` is bigger.
 ## 6. The WRITE side: an append walks the whole chain, every call
 
 **Status: BUILT as SPEC.md 18.4.9 (`OSAPI_FILE_WRITE_SEQ`), and every
-chunked writer in the tree but the DOS box moved onto it; the box is
+chunked writer in the tree but DOS moved onto it; DOS's is
 docs/plans/completed/DOS-STREAM-PLAN.md.** Written down 2026-09-27 at the owner's
 request, from the VIDDISK work that found it. §3.1 is about READS looking
 a name up again. This is the same shape on the way OUT, and on a large file

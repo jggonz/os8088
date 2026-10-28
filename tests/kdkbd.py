@@ -114,7 +114,7 @@ def main():
             fail("%s is missing - `make` builds the system disk and the gate "
                  "floppy carries KBHOLD.COM" % p)
 
-    with os88ui.boot(sysimg, apps=K.COM, machine=K.MACH) as ui:
+    with os88ui.boot(sysimg, apps=K.COM, machine=K.MACH, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/KBHOLD.COM"):
             fail("double-clicking KBHOLD.COM opened no window")

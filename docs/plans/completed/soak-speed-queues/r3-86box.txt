@@ -1,0 +1,6 @@
+# ROUND 3, 86Box rows. family  row  declared_secs  script
+DONE gb	gbreplay	420	tests/gbreplay.py
+DONE gb	gbbank	150	tests/gbbank.py
+DONE gb	gbhifreq	20	tests/gbhifreq.py
+DONE mega	megacdrom	35	tests/megacdrom.py
+SKIP needs gbroms (the owner's cartridges, never in the tree) gb	rdgspeed286	1200	tests/rdgspeed286.py

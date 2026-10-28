@@ -48,7 +48,7 @@
 ;
 ; with AX = NETV_STATE's answer on the CF=0 path (AL the NSTF_* bits, AH the
 ; free handles). It costs net_find 10 bytes and saves each caller 15, so it
-; is opt-in: a package that never asks (the DOS box, NETBENCH) assembles the
+; is opt-in: a package that never asks (DOS.O88, NETBENCH) assembles the
 ; plain net_find and pays nothing, and one with a net_find that must NOT ask
 ; - FTPD's address read at PASV, where NETV_STATE would pump ETHER.DRV's ring
 ; a second time - leaves it undefined and asks inline.

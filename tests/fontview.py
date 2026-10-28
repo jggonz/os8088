@@ -64,10 +64,15 @@ fails = []
 # The 360KB machine: its system disk has no faces since SPEC.md 24.3.1.5 -
 # they and the viewer ride office360.img, which is what this opens on B:, so
 # the viewer finds them by ty_gofonts' SECOND rung, its own volume.
+# Every read is guest state (window records, the listing, fv_* bss): the
+# boot gates on the kernel's state and the waits are ui_done / key_taken.
+done = lambda mm, **k: os88marty.ui_done(mm)
 with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, done, "B")
     slot = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, slot)
     # SYSTEM/FONTS and not FONTS: SPEC.md 19.8.1 moved the folder INTO SYSTEM/
@@ -75,10 +80,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     # - and ty_gofonts walks to exactly one folder. tests/unit/t_fonts.py
     # asserts BOTH halves ("the root has no FONTS folder", "SYSTEM/FONTS holds
     # every face in faces/"), so the root is where this can never be.
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "SYSTEM")
+    dispcp.open_named(m, mo, S, done, wx, wy, "SYSTEM")
     slot = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, slot)
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "FONTS")
+    dispcp.open_named(m, mo, S, done, wx, wy, "FONTS")
     names = [n for n, _ in dispcp.listing(m, S)]
     installed = [n for n in names if n.endswith(".F88")]
     print("installed:", installed)
@@ -88,7 +93,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     slot = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, slot)
     before = dispcp.win_list(m, S)
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CHARTER.F88")
+    dispcp.open_named(m, mo, S, done, wx, wy, "CHARTER.F88")
     try:
         os88marty.until(m, lambda _: len(dispcp.win_list(m, S)) > len(before),
                         "the viewer's window", poll=0.2, limit=15)
@@ -133,15 +138,14 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
                      % state)
 
     oldlen = state["textlen"]
-    m.type_text("XYZ")
-    os88marty.settle(m)
+    os88marty.text_taken(m, "XYZ")
     state = fv_state(m, seg)
     print("after typing XYZ:", state)
     if state["textlen"] != oldlen + 3:
         fails.append("typing changed specimen length %d -> %d, wanted %d" %
                      (oldlen, state["textlen"], oldlen + 3))
-    m.key("Backspace")
-    os88marty.settle(m)
+    os88marty.key_taken(m, "Backspace")
+    os88marty.ui_done(m)
     state = fv_state(m, seg)
     if state["textlen"] != oldlen + 2:
         fails.append("Backspace did not edit the specimen")
@@ -149,7 +153,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     old = state["loaded"]
     m.key("ArrowDown")
     fv_quiet(m, seg)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     state = fv_state(m, seg)
     print("after Down:", state)
     if (state["loaded"] == old or state["selected"] != state["loaded"]
@@ -161,9 +165,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     raw = m.read(seg * 16 + MAP["fv_x"], 4)
     cx, cy = u16(raw, 0), u16(raw, 2)
     target = 4
-    mo.click(cx + 12, cy + FV_LISTY + target * FV_ROWH + 4)
+    mo.click(cx + 12, cy + FV_LISTY + target * FV_ROWH + 4, settle=0)
+    os88marty.ui_done(m, cap=1.5 * 4.5)
     fv_quiet(m, seg)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     state = fv_state(m, seg)
     print("after clicking row 4:", state)
     if (state["selected"] != target or state["loaded"] != target

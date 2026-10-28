@@ -490,12 +490,17 @@ ico_core:
 %ifndef GFX_VGA
     jmp ico_core_bb             ; no VGA: the 1bpp twin is the only pass there
 %else                           ; is, and it returns straight to the wrapper
-    cmp byte [vid_mono], 0      ; 1bpp? (SPEC.md 39.5) - the software
-    jne ico_core_bb             ; twin returns straight to the wrapper
-    VIDEXT VX_ICON              ; ...and a packed display's is the driver's
+    VIDEXTM VX_ICON, ico_core_bb, pad ; 1bpp? (SPEC.md 39.5) - the software
+                                ; twin returns straight to the wrapper
+                                ; ...and a packed display's is the driver's
                                 ; (SPEC.md 120.3): the ico_* cells are set,
                                 ; the clip is done, and it returns to the
                                 ; wrapper exactly as the twin does
+%ifdef COLD_SLIDE
+    jmp ico_core_v              ; THE PLANAR ARM IS THE VGA RUNG'S (MOVABLE-
+section .vga                    ; COLD-PLAN 2): VIDEXTM above is its door
+ico_core_v:
+%endif
 
     mov ax, VGA_SEG
     mov es, ax
@@ -535,9 +540,14 @@ ico_core:
                                 ; of milliseconds; nine other sites in
                                 ; vga12.inc already call it, and this was the
                                 ; last hand-rolled copy.
+%ifdef COLD_SLIDE
+    ret                         ; (it fell into .none's, which stays in .text)
+section .text
 %endif
-.none:
-    ret
+%endif
+ico_core.none:                  ; (spelled out: ico_core_v above is the last
+    ret                         ; non-local label in the text, and a bare
+                                ; `.none` would be its)
 
 ; (ico_core_bb sits HERE, straight after ico_core, so ico_core's `jne` to it
 ; is a short jump rather than a relaxed five-byte one.)
@@ -568,6 +578,9 @@ ico_core_bb:
 
 
 %ifdef GFX_VGA
+%ifdef COLD_SLIDE                ; (the VGA rung's, ico_core_v's alone)
+section .vga
+%endif
 ; -----------------------------------------------------------------------------
 ; ico_pass - one masked pass over [ico_rows] rows of [ico_ww] words each.
 ;            Each word lands at bit offset CL in a 3-byte window at DI+2w;
@@ -641,6 +654,7 @@ ico_pass:
 .done:
     pop di
     ret
+section .text
 %endif                          ; ...end of the VGA icon pass
 
 ; ico_bbpass - AL = a colour, SI -> word rows: [ico_bbop] = 0 (or) for white,

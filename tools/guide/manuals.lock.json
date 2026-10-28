@@ -385,6 +385,22 @@
   "strings": "075d3ddf5a3a826e",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "FDLG_DRV": {
+  "sources": [
+   "kernel/fdlg.inc"
+  ],
+  "stamped": "23071078",
+  "strings": "75c09e9dece6c6d6",
+  "why": "written for small360/small720 shipping: chooser strings and Escape from fdlg.inc, refusal from SPEC.md 38.0"
+ },
+ "FILECP_DRV": {
+  "sources": [
+   "kernel/filecp.inc"
+  ],
+  "stamped": "23071078",
+  "strings": "075d3ddf5a3a826e",
+  "why": "written for small360/small720 shipping: Edit menu items from files.inc, single select on kern_small, drag is a Cut, paste refusal FERR_NODISK = No disk"
+ },
  "FLOWER_JPG": {
   "sources": [],
   "stamped": "e4576a70",
@@ -502,17 +518,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "ddaef50f",
-  "strings": "caf4859056bcb91b",
-  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
+  "stamped": "98a487a2",
+  "strings": "e6fb502f9e95b17d",
+  "why": "Format window rows use the install engine's State words (SPEC.md 52.2.2.1); page updated"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "ddaef50f",
-  "strings": "caf4859056bcb91b",
-  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
+  "stamped": "98a487a2",
+  "strings": "e6fb502f9e95b17d",
+  "why": "HDDTOOL.DRV-side change only; nothing the page describes"
  },
  "HELV_F88": {
   "sources": [],
@@ -534,6 +550,22 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "HTTPFS_DRV": {
+  "sources": [
+   "drivers/httpfs"
+  ],
+  "stamped": "cbabc048",
+  "strings": "3c04230d6d85ba66",
+  "why": "new pages, written from SPEC.md 120 and the drivers' own strings"
+ },
+ "HTTPPAGE_DRV": {
+  "sources": [
+   "drivers/httpfs"
+  ],
+  "stamped": "cbabc048",
+  "strings": "3c04230d6d85ba66",
+  "why": "new pages, written from SPEC.md 120 and the drivers' own strings"
+ },
  "INCONSOL_F88": {
   "sources": [],
   "stamped": "e4576a70",
@@ -544,9 +576,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "ddaef50f",
-  "strings": "1dc0fc6f30c645db",
-  "why": "Copying section describes the Installing page's log and its click-Next ending (SPEC.md 117.4.1)"
+  "stamped": "dccaad5b6",
+  "strings": "5dfa863f9bc6c17e",
+  "why": "checked against #313's network install, the startup check and the slot list's Empty, No Room; the page covers them"
  },
  "INTRO_MID": {
   "sources": [],
@@ -590,9 +622,9 @@
   "sources": [
    "apps/lemmings"
   ],
-  "stamped": "b63b5892",
-  "strings": "2fd010e1297a645f",
-  "why": "first page: written from README.TXT and the launcher, play and results screens of the shipped build"
+  "stamped": "733366a8",
+  "strings": "dad131b4b993929c",
+  "why": "no-pinning C4: the kept level's claims made movable - internal, no text a user reads changed; page checked, nothing to add"
  },
  "LICENSE": {
   "sources": [],
@@ -616,9 +648,9 @@
   "sources": [
    "apps/loom"
   ],
-  "stamped": "7ec8cb8a",
-  "strings": "59bb257edd8ea46a",
-  "why": "checked: New Project starter packs as-is (page updated), Preview status line text updated; pack refusals lost their spec citations (page quotes none)"
+  "stamped": "6495d304",
+  "strings": "f1ec8a4b0eb77b99",
+  "why": "the Packing toast now brackets only the compile; the status line, which the page describes, still says Packing... for the whole verb - unchanged"
  },
  "MEDIA": {
   "sources": [],
@@ -758,9 +790,9 @@
   "sources": [
    "apps/paint"
   ],
-  "stamped": "e4576a70",
-  "strings": "3dcd43ffda068c4a",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "6495d304",
+  "strings": "6aad204f2e3bef9f",
+  "why": "Saving... toast replaced by Encoding GIF around a GIF's encode; the page's save paragraph rewritten to match"
  },
  "PAPER_TEX": {
   "sources": [],
@@ -848,9 +880,9 @@
   "sources": [
    "apps/realdmg"
   ],
-  "stamped": "206eb5be",
-  "strings": "08e5749fb6393b85",
-  "why": "new manual, checked against realdmg.asm's menus, keys and strings"
+  "stamped": "a42f0d4f",
+  "strings": "6261802908aeb9b8",
+  "why": "Read the diff since 733366a8: the precompiled package is the user-visible part (its own program, the ROM beside or inside it, CPU > Precompiled, the F1 line's Pn/m, four toasts) and has a section, a file row and two Good-to-know lines. fill_ff/w16_ff, the kern_mega arm's tiers and the image load order are below the page's detail"
  },
  "REDLINE_O88": {
   "sources": [
@@ -940,9 +972,9 @@
   "sources": [
    "apps/sheet"
   ],
-  "stamped": "6d53446d",
-  "strings": "854ef1a2afd44837",
-  "why": "rewritten for Sheet 2.1 against apps/sheet/sheet.asm: menus, shortcut table, Undo/Redo, Paste Special/Link, Data database commands, Series, Table, Parse, Justify, Options Display/Workspace/Freeze/Protect, per-row/column sizes, recorder, six file formats, CHART.OVL/MACRO.OVL; no capture run"
+  "stamped": "87489ca5",
+  "strings": "287a4709f7de66e1",
+  "why": "Sheet 2.1's two modules are parts of SHEET.O88 now (SPEC.md 82.16.12): the page says Sheet is one file, the refusal reads Not enough memory., and CHART.OVL/MACRO.OVL are gone from the page and entries.toml"
  },
  "SHEET_WAB": {
   "sources": [],
@@ -988,9 +1020,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "c8c92aa96",
+  "stamped": "e60ae715",
   "strings": "84884b633231227c",
-  "why": "Checked against drivers/sound since 32e6dce5: the IRQ 5 refusal on an XT (its toast, the jumper cure) added to Good to know; WaveRack and XTMP3 named among the programs, recording into WaveRack's own memory (verb 4's external ring) said in user terms; volume panel, pages, ports and memory figure unchanged (image 11,273 bytes, about 11K)"
+  "why": "main's IRQ 5 refusal on an XT (SPEC.md 34.5.6) and stereo/16-bit streams (34.5.5) at the merge of main: the refusal's toast and its cure added to Good to know; the streams change no page text"
  },
  "SPACEJAM_MID": {
   "sources": [],
@@ -1066,9 +1098,9 @@
   "sources": [
    "apps/taskmgr"
   ],
-  "stamped": "f596e80c",
-  "strings": "3227cc1b27be84bd",
-  "why": "the memory page and the heap page are one page now (SPEC.md 28.4.10): two pages, collapsible owner groups, the PROGRAMS/SYSTEM and +ALL/-ALL switches, AVAIL/MAX RUN; the third page and its heap shot removed; checked against taskmgr.asm's strings and SPEC.md 28.4.10"
+  "stamped": "15bf7dd5",
+  "strings": "17ad04af66b54570",
+  "why": "e5ddebd1 fixes the heap view's scroll-thumb drag (DX clobbered before os88ui_sbgrab); no user-visible text or behaviour the page describes changed"
  },
  "TELNET_O88": {
   "sources": [
@@ -1280,9 +1312,9 @@
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "3f9bc879",
-  "strings": "4f7d7f10c65ff1a8",
-  "why": "missiles, impacts, music and the Music U item added to Connect and deploy and Display and sound (SPEC 114.11)"
+  "stamped": "18b1ddbe",
+  "strings": "7567de0a93fbbb38",
+  "why": "f9ed8cc4/9217a5c5 change wflink.inc's refusal handling and three status messages (a port the BIOS does not list, a UART the OS did not find, retry on an older SERIAL.DRV); the page quotes no message and describes the Link menu and the automatic search at a level these do not change - rare-case messages, no words needed"
  },
  "WORD": {
   "sources": [],

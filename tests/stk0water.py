@@ -61,9 +61,12 @@ BOT = LOW + eq["KLOW_SIZE"]              # the lowest byte STK0 may reach
 TOP = LOW + eq["STK0_TOP"] + 2           # ...and one past the top
 SIZE = eq["STK0_SIZE"]
 
-with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
+with M.launch(SYS, apps=APPS, machine=MACHINE, boot=False) as m:
     S = lambda n: m.sym(n, DEFS)                              # noqa: E731
-    M.settle(m, limit=180)
+    m.run()                             # the boot gate on STATE, and every
+    M.kernel_up(m, guest=180.0)         # wait after an input is ui_done: the
+                                        # water is guest memory, the drive
+                                        # only has to have HAPPENED
     M.no_saver(m)                                             # SPEC.md 79
     print("== %s : task 0's stack, %d bytes at %#07x..%#07x ==" %
           (MACHINE, SIZE, BOT, TOP))
@@ -90,7 +93,7 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
         sp = int.from_bytes(m.read(S("sch_tasks") + T_SP, 2), "little")
         if cur != 0 and st == 2 and eq["STK0_TOP"] - MARGIN < sp <= eq["STK0_TOP"]:
             break
-        M.settle(m)
+        M.ui_done(m)
     else:
         sys.exit("task 0 never settled asleep with a shallow frame "
                  "(sch_cur=%d, T_STATE=%d, SP=%04X)" % (cur, st, sp))
@@ -116,12 +119,12 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
 
     # --- drive it as hard as this harness can ------------------------------
     mo = Mouse(marty=m)
-    mo.dblclick(*os88geom.drive_pt(m, "B", S)); M.settle(m)   # a Disk window
+    mo.dblclick(*os88geom.drive_pt(m, "B", S)); M.ui_done(m)   # a Disk window
     w = wins(m, S)
     if w:
         x, y = w[-1][0] + w[-1][2] // 2, w[-1][1] + 9
-        mo.menu(x, y, x + 40, y + 20); M.settle(m)            # ...dragged
-        mo.menu(x + 40, y + 20, x, y); M.settle(m)
+        mo.menu(x, y, x + 40, y + 20); M.ui_done(m)            # ...dragged
+        mo.menu(x + 40, y + 20, x, y); M.ui_done(m)
     # Every menu OPENED and closed again, by pressing and releasing ON THE BAR
     # so that nothing is picked. Releasing inside the pane SELECTS an item,
     # which launched the About box and left the machine animating for ever;
@@ -133,7 +136,7 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
     # save-under (SPEC.md 12.4) is taken and dropped on every one of these.
     for mx in (20, 60, 100, 140):
         mo.menu(mx, 8, mx, 8)                                 # open, then close
-        M.settle(m)
+        M.ui_done(m)
 
     # ...and the two DEEPEST things SPEC.md 15.1's original drive had that a
     # Disk window and a menu do not: a PACKAGE LAUNCH (loader, instance
@@ -145,13 +148,13 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
     w = wins(m, S)
     if w:
         d = w[0]
-        mo.dblclick(d[0] + 40, d[1] + 18 + 30); M.settle(m)   # launch one
+        mo.dblclick(d[0] + 40, d[1] + 18 + 30); M.ui_done(m)   # launch one
         w2 = wins(m, S)
         if len(w2) > len(w):
             a = w2[-1]
             mo.menu(a[0] + a[2] // 2, a[1] + 9,
-                    a[0] + a[2] // 2 + 24, a[1] + 29); M.settle(m)
-    mo.menu(20, 8, 20, 8); M.settle(m)
+                    a[0] + a[2] // 2 + 24, a[1] + 29); M.ui_done(m)
+    mo.menu(20, 8, 20, 8); M.ui_done(m)
 
     # --- read the water ----------------------------------------------------
     blob = m.read(lo, hi - lo)

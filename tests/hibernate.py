@@ -219,8 +219,11 @@ def shot(m, name):
 
 
 def quiet(m, s=8.0):
+    # Every read after one of these is guest memory (a shot is a picture,
+    # not a check), so the wait is the UI finishing - bounded at `s` guest
+    # seconds, as the settle's limit was, for the screens with no desktop.
     try:
-        M.settle(m, limit=s)
+        M.ui_done(m, cap=s)
     except M.MartyError:
         pass
 
@@ -293,7 +296,7 @@ def hibernate(m, mo, mouse):
     else:
         m.key("Enter")
     M.until(m, lambda mm: M.video_is_text(mm.video()),
-            "the hibernated sentence in text mode", poll=0.5, limit=240)
+            "the hibernated sentence in text mode", poll=0.05, limit=240)
     ok, have = wrote(["HIBERNAT.PTR", "HIBERNAT.IMG"])
     check(ok, "both files reached the disk (the positive control for the "
               "'gone' checks below)", got=have,
@@ -343,7 +346,7 @@ def _diag(m, mo):
         m.key("Enter")
         try:                            # a GUEST-time budget
             M.until(m, lambda mm: word(mm, "hb_resumes") != before,
-                    "Enter to be acted on", poll=0.5, limit=10.0)
+                    "Enter to be acted on", poll=0.05, limit=10.0)
             print("      *** ENTER WORKED where the click did not: the "
                   "CLICK path is the defect, not the machine ***")
             return
@@ -374,7 +377,7 @@ def answer(m, mo, what, done):
     for attempt in (1, 2):
         mo.click(*button1(m))
         try:
-            M.until(m, done, what, poll=0.5, limit=60 if attempt == 1 else 240)
+            M.until(m, done, what, poll=0.05, limit=60 if attempt == 1 else 240)
             if attempt == 2:
                 print("   the [Resume] click needed sending TWICE")
             return
@@ -420,7 +423,7 @@ def restart(m):
         m.key("Space")
         try:
             M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
-                    "the fresh boot to ask the question", poll=1.0,
+                    "the fresh boot to ask the question", poll=0.05,
                     limit=60 if attempt == 1 else 240)
             if attempt == 2:
                 print("   the restart key needed sending TWICE (the first "
@@ -460,8 +463,8 @@ def pass_resume(driver):
         # construction (`hb_probe_x` says so in as many words) - so the latch
         # came back with the image and nothing ever spent it.
         # `osapi_dos_handoff_x` refuses a second post while one stands, so
-        # "Take the whole OS" was dead for the whole restored session and the
-        # box reported it as "Not enough memory" on a machine with 425K free.
+        # "Take the whole OS" was dead for the whole restored session and
+        # DOS reported it as "Not enough memory" on a machine with 425K free.
         #
         # Poked rather than staged, `tests/fishedge.py`'s shape: the word is
         # what the handoff leaves behind and one store reproduces it, where
@@ -510,7 +513,7 @@ def pass_resume(driver):
         check(word(m, "hb_dosseg") == 0,
               "the DOS handoff's post was spent by the wake (SPEC.md 96.40.6) "
               "- left standing it refuses every later handover for the rest "
-              "of the session, and the box calls that a memory shortage",
+              "of the session, and DOS calls that a memory shortage",
               got=word(m, "hb_dosseg"), want=0)
         check(byte(m, "sch_lock") == 0, "sch_lock is down again",
               got=byte(m, "sch_lock"), want=0)
@@ -616,7 +619,7 @@ def pass_sum(driver, damage):
     with boot(driver) as m:
         mo = Mouse(marty=m)
         M.until(m, lambda mm: byte(mm, "hb_mode") == HB_M_RESUME,
-                "the fresh boot to ask the question", poll=1.0, limit=240)
+                "the fresh boot to ask the question", poll=0.05, limit=240)
         quiet(m)
         if not damage:
             answer(m, mo, "[hb_resumes] to reach 1",
@@ -635,7 +638,7 @@ def pass_sum(driver, damage):
         m.key("Space")
         M.until(m, lambda mm: not M.video_is_text(mm.video())
                 and byte(mm, "sch_lock") == 0,
-                "an ordinary boot after the refusal", poll=1.0, limit=240)
+                "an ordinary boot after the refusal", poll=0.05, limit=240)
         quiet(m)
         check(byte(m, "hb_mode") != HB_M_RESUME,
               "...which does not ask the question again",

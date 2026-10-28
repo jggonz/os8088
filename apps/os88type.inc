@@ -828,6 +828,13 @@ ty_open:
     jc .freefail
 
     mov byte [di + TF_REF], 1
+    push ax                         ; THE FACE MAY MOVE (NO-PINNING A7): its
+    push dx                         ; claim was a read target until here, and
+    mov dx, [di + TF_CLAIM]         ; ty_reloc puts right every word that
+    mov ax, ty_reloc                ; names it. A refusal only pins it
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
     mov ax, di
     sub ax, ty_tab
     mov cl, 4                       ; / TF_SIZE
@@ -1239,6 +1246,9 @@ ty_cache:
     pop ds
     push ds
     push es
+    mov dx, [ty_psseg]              ; ...AND THE TABLE MAY MOVE (NO-PINNING
+    mov ax, ty_reloc                ; A7), once it is built: AX and DX are
+    call OSAPI_MEM_MOVABLE          ; the frame's, put back at .out
     clc
     jmp .out
 .nomem:
@@ -1256,6 +1266,36 @@ ty_cache:
     pop cx
     pop bx
     pop ax
+    ret
+
+; =============================================================================
+; ty_reloc - a FACE or the PRE-SHIFTED TABLE moved (SPEC.md 66.2, NO-PINNING
+; A7). BX = where it was, DX = where it is; may clobber AX..DI and ES, like any
+; relocation proc. A face's claim IS its glyph segment (TF_SEG = TF_CLAIM, the
+; claim being asserted 512-aligned at the read), [ty_curseg] is a copy of the
+; current face's, and [ty_psseg] names the table: every other use loads one of
+; these into ES for one render and claims nothing while it holds it. Face 0
+; is the ROM's and has no claim, so its 0 never matches.
+; =============================================================================
+ty_reloc:
+    mov si, ty_tab
+    mov cx, TY_MAXFACE
+.f:
+    cmp [si + TF_CLAIM], bx
+    jne .n
+    mov [si + TF_CLAIM], dx
+    mov [si + TF_SEG], dx
+.n:
+    add si, TF_SIZE
+    loop .f
+    cmp [ty_curseg], bx
+    jne .c
+    mov [ty_curseg], dx
+.c:
+    cmp [ty_psseg], bx
+    jne .r
+    mov [ty_psseg], dx
+.r:
     ret
 
 ; =============================================================================

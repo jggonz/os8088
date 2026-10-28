@@ -11,18 +11,24 @@
 ; Drivers-page line and not a wrong pixel.
 ; =============================================================================
 
-VX_ABI_VER  equ 4               ; bump on ANY change to the contract below
+VX_ABI_VER  equ 5               ; bump on ANY change to the contract below
                                 ; (2: the S2 block pointers and selectors;
                                 ;  3: the VE class at attach, PICK and NEXT;
-                                ;  4: VX_BLITD, the package's depth blit)
+                                ;  4: VX_BLITD, the package's depth blit;
+                                ;  5: the hook is the far call itself - the
+                                ;     selector's address IS the far return,
+                                ;     VX_CONT, VXB_KRET and VXB_NULL)
 
 ; --- the verbs, past DRVV_* -------------------------------------------------
 ; DRVV_ATTACH (0) probes and chooses a mode and answers SI = the VXS_* table
-; below, in the driver's segment; DRVV_DETACH (1) disarms the kernel's far
-; pointer and the VID_A_VESA bit through the block it was handed. Neither
+; below, in the driver's segment; DRVV_DETACH (1) points the kernel's far
+; pointer at VXB_NULL (which draws nothing) and clears the VID_A_VESA bit,
+; through the block it was handed. Neither
 ; sets a video mode: that is vid_switch's (SPEC.md 120.4).
-VXV_INIT    equ 0x40            ; in SI = the kernel's vx_blk (ES = KERNEL_SEG):
-                                ; bank the kernel's segment and its pointers,
+VXV_INIT    equ 0x40            ; in DX:SI = the kernel's vx_blk, in its boot
+                                ; blob (ES = KERNEL_SEG): bank the kernel's
+                                ; segment and COPY its pointers - the block
+                                ; is given back with the blob -
                                 ; fill vid_tab row 4 from the chosen mode.
                                 ; Well clear of the DRVV_* range
 VXV_PICK    equ 0x41            ; in CL = a mode CLASS (below), after INIT:
@@ -58,7 +64,7 @@ vxc_y8tab   db 50, 60, 75, 96   ; 400, 480, 600, 768
 %endmacro
 
 ; --- the attach answer: SI -> this, in the driver's segment -----------------
-VXS_ENT     equ 0               ; dw: the near proc vx_go far-calls per primitive
+VXS_ENT     equ 0               ; dw: the near proc every hook far-calls
 VXS_BPP     equ 2               ; db: 8 or 16 (15 is rendered as 16)
 VXS_RSV     equ 3               ; db
 VXS_X       equ 4               ; dw: the chosen mode's width
@@ -105,7 +111,10 @@ VXB_SPANS   equ 48              ; -> gfx_sp_seg, gfx_sp_si, gfx_sp_n (3 dw)
 VXB_FONTFG  equ 50              ; -> font_rn_fg (db fg), font_rn_bg (db)
 VXB_CFGVE   equ 52              ; -> drv_cfg + CFG_VE: the class byte the
                                 ;    settings file carries, for PICK's callers
-VXB_SIZE    equ 54
+VXB_KRET    equ 54              ; = vx_kret: a kernel `ret`, where a hook whose
+                                ;    selector has VX_CONT clear goes back to
+VXB_NULL    equ 56              ; = vx_null: what the detach points vx_ep at
+VXB_SIZE    equ 58
 
 ; font_char's glyph range, which the run body paints a blank cell for: the
 ; kernel's FONT_FIRST/FONT_LAST, asserted equal in vidext.inc
@@ -114,8 +123,14 @@ VX_FONT_LAST  equ 126
 
 VXA_BIT     equ 0x10            ; VID_A_VESA: 1 << VID_VESA, VID_VESA being 4
 
-; --- the selectors: the byte after `call vx_go` / `call vx_call` ------------
+; --- the selectors: the byte after the hook's `call far [vx_ep]` ------------
 ; Each names a kernel body and takes that body's registers (SPEC.md 120.3.1).
+; The far return the call pushed is the byte's own address. VX_CONT set: the
+; driver goes back to the byte AFTER it (a hook inside a frame, VIDEXTC's);
+; clear: to VXB_KRET, a kernel `ret` that pops the hooked body's own return
+; address (VIDEXT's, at the top of a body before any push)
+VX_CONT     equ 0x80
+VX_SELM     equ 0x7F
 VX_FILL     equ 0               ; vga_solid_rect: AX/BX/CX/DX, [gfx_color],
                                 ; [vga_xorm]
 VX_GRAY     equ 1               ; gfx_fill_gray_raw: the rect
@@ -132,7 +147,7 @@ VX_SETMODE  equ 10              ; vid_setmode: enter the chosen mode
 VX_BLIT4    equ 11              ; gfx_blit4: BX = y, the gfx_blit_* block,
                                 ; ES = the source segment, BP = its stride;
                                 ; unclipped in x and y
-VX_BLIT1    equ 12              ; gfx_blit1_x (cold, through vx_callf) at
+VX_BLIT1    equ 12              ; gfx_blit1_x (cold, through vx_b1) at
                                 ; .ybot: AX/BX clipped x/y, CX width, DX rows,
                                 ; ES:SI the band, BP its stride, the pen and
                                 ; the head mask through the block

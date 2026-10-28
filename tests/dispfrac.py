@@ -62,7 +62,10 @@ def main(argv):
     fail = []
     say = lambda s: print("  " + s)
     settle = os88marty.settle
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the first act is a click: no settle
         mo = os88mouse.Mouse(marty=m)
         if dispfit.kind(m) != VID_VGA:
             sys.exit("dispfrac: %s did not come up on the VGA" % a.machine)

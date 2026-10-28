@@ -48,9 +48,10 @@ import os88sym                                              # noqa: E402
 import shot                                                 # noqa: E402
 import os88qemu                                              # noqa: E402
 
-PIDFILE = os.path.join(ROOT, "build", "qemu.pid")
-SOCK = os.path.join(ROOT, "build", "qmp.sock")
-PPM = os.path.join(ROOT, "build", "vgadirty.ppm")
+# THIS PROCESS'S pair (tests/os88qemu.py RUNDIR), never build/qmp.sock, so
+# the row shares the soak's emulator lane (docs/plans/SOAK-PARALLEL.md 17)
+SOCK, PIDFILE = os88qemu.paths("vgadirty")
+PPM = os.path.join(os88qemu.RUNDIR, "vgadirty.ppm")
 
 # What the loading screen legitimately draws on, from splash.inc. Everything
 # outside these two rectangles is background and nothing ever touches it.
@@ -100,10 +101,13 @@ KNOB = os88build.tree("VGADIRTY=1", targets=TARGETS).apply()
 
 def launch():
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
-    subprocess.run(
+    os88qemu.start(
         em + " -S -machine pc,vmport=off"   # the msserial mouse drives this
-        " -drive file=%s,format=raw,if=floppy -boot a"                # (SPEC.md
-        " -drive file=%s,format=raw,if=floppy,index=1"                # 9.11)
+        # SNAPSHOT: the knob tree's images are shared by every row that
+        # wants the same knob, and nothing here reads a disk back - so the
+        # guest's writes go to an overlay and no write lock is taken
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"    # (SPEC.md
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"    # 9.11)
         " -chardev msmouse,id=m0 -serial chardev:m0"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (KNOB.img("os8088.img"), KNOB.img("apps.img"), SOCK, PIDFILE),

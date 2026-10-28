@@ -22,8 +22,9 @@ tenth of real time - and REPORTS the speed; a speed is a measurement and
 not a gate, because 86Box is not cycle-accurate (docs/86BOX.md).
 
 The games are the owner's: $OS88_GB_ROMS names a directory holding SML.GB
-and KIRBY.GB. The runner SKIPS the row without them (os88build.have_gbroms)
-and without the automation-enabled 86Box (`python3 tools/os88box.py build`).
+and KIRBY.GB. It is ON DEMAND and in no tier (tests/unit/t_registry.py's
+UNREGISTERED says why); without them it SKIPS, and without the
+automation-enabled 86Box (`python3 tools/os88box.py build`).
 """
 import argparse
 import os

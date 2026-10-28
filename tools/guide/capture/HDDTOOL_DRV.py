@@ -8,7 +8,8 @@ Needs a machine with a hard disk:
 The disk is MartyPC's bundled 31MB XT-IDE image, which the launcher copies
 into the instance's own directory, so nothing here touches a shared file.
 Nothing is formatted, installed or hibernated: every dialog is shown and then
-cancelled or closed.
+cancelled or closed. The Install button starts INSTALL.O88, whose pictures
+are INSTALL_O88.py's.
 """
 import os
 import sys
@@ -63,7 +64,7 @@ def capture(ui, shot):
     ui.m.key("Escape")                      # the window's Cancel
     _wait(ui, 3)
 
-    # --- the Control Panel's Hard Drive page, and its two windows ----------
+    # --- the Control Panel's Hard Drive page, and its Format window -------
     ui.menu_pick("Apple", "Control Panel")
     ui.wait_window("Control Panel", limit=60)
     _cp_row(ui, 8)                          # Hard Drive, the last row
@@ -78,17 +79,6 @@ def capture(ui, shot):
     shot("hddtool-drv-format", window="Format", pad=8)
     t = ui.window("Format")
     ui.mo.click(t.x + 175, t.y + 149)       # its Close button
-    _wait(ui, 4)
-
-    ui.raise_window(ui.window("Control Panel"))
-    w = ui.window("Control Panel")
-    ui.mo.click(w.x + 195, w.y + 107)       # Install
-    ui.wait_window("Install", limit=60)
-    _wait(ui, 6)
-    ui.mo.to(600, 420)
-    shot("hddtool-drv-install", window="Install", pad=8)
-    t = ui.window("Install")
-    ui.mo.click(t.x + 131, t.y + 121)       # its Close button
     _wait(ui, 4)
 
     # --- the Drivers page: tick Ram Disk, then open its page ----------------

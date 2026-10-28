@@ -166,11 +166,8 @@ xb_race:
     mov [xb_result], al
     jmp .out
 .keys:
-    mov ah, 1
-    int 16h
+    call xb_rdkey                     ; (a held Enter pauses once, flow.inc)
     jz .nokey
-    xor ah, ah
-    int 16h
     call xb_racekey
     jc .out
     jmp .keys

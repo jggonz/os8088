@@ -250,7 +250,7 @@ class Partner(object):
         guest time; a DOS package launch is a floppy read and tens of millions
         of cycles, so it is tens of thousands of round trips spent watching a
         line the guest is not driving. tests/doscable.py is the row that needs
-        it: everything before its first `NETV_OPEN` is the box mounting a
+        it: everything before its first `NETV_OPEN` is DOS mounting a
         volume and loading two programs.
 
         **IT IS SAFE FOR `_spend_stall`'s REASON** (which already steps
@@ -771,7 +771,7 @@ class Partner(object):
                 # tick - 262,000 cycles - costs 655 round trips of watching a
                 # line nobody is driving. tests/doscable.py's inbound leg is
                 # where that stopped being an inefficiency and became the
-                # measurement: the box polls NETV_ACCEPT once a tick while a
+                # measurement: DOS polls NETV_ACCEPT once a tick while a
                 # listener is open, so the leg is mostly gap, and it ran for
                 # over twenty minutes.
                 #
@@ -1027,7 +1027,7 @@ class Partner(object):
             elif c == NW_ADDR:   # NW_ADDR: nothing in
                 # FOUR BYTES WHATEVER THE STATUS SAYS - the fixed frame, and
                 # the refusal path is the one nothing exercises. A real slave
-                # answers with the DOS box's own address, because that is the
+                # answers with DOS's own address, because that is the
                 # machine an inbound connection reaches (netpkg.inc).
                 ip = None if sox is None else sox.addr()
                 if ip is None:
@@ -1264,7 +1264,7 @@ class SocketBox(object):
     def addr(self):
         """NW_ADDR: this machine's own IPv4, as four ints, or None.
 
-        The real slave answers with the DOS box's `eth_ip`, because that is
+        The real slave answers with DOS's `eth_ip`, because that is
         the machine an inbound connection reaches and forwards down the cable
         (docs/plans/completed/NET-STACK-PLAN.md 1.5). Here it is the loopback the tests run
         against, which is the same claim: the address a client should dial to

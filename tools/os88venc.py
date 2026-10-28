@@ -6367,6 +6367,13 @@ class EncoderP(Flipped, Encoder):
                     members = {}
                     for i, u in enumerate(unit):
                         members.setdefault(u, []).append(i)
+                    # each unit's (cycles, bytes) ONCE: the loop below asks
+                    # again for every member of every unit it skips, on
+                    # every attempt - 358M generator steps in one 2.5 s clip
+                    # (docs/plans/completed/SOAK-SPEED.md). Same sums, same order
+                    usum = {u: (sum(costs[j][0] for j in js),
+                                sum(costs[j][1] for j in js))
+                            for u, js in members.items()}
                     if self.blocks:
                         blk = self.block_cands(target, er, eb)
                     if blk is not None:
@@ -6393,8 +6400,7 @@ class EncoderP(Flipped, Encoder):
                         continue
                     if blk is not None and ublk.get(u, set()) & taken:
                         continue
-                    c = sum(costs[j][0] for j in members[u])
-                    b = sum(costs[j][1] for j in members[u])
+                    c, b = usum[u]
                     if uc + c > er or ub + b > eb:
                         if self.cut == "tear":
                             break       # (one tear line: 98.2.1.2.1)
@@ -6547,22 +6553,9 @@ class EncoderP(Flipped, Encoder):
         the palette in force"""
         key = self.pal[:16].tobytes()
         if getattr(self, "_mixk", None) != key:
-            pal = self.pal[:16].astype(np.float64)
-            A, B = np.triu_indices(16)
-            m = np.arange(17)
-            mix = ((pal[A][:, None] * m[None, :, None] +
-                    pal[B][:, None] * (16 - m)[None, :, None]) / 16) \
-                .reshape(-1, 3)
-            cand = np.stack([np.repeat(A, 17), np.repeat(B, 17),
-                             np.tile(m, len(A))], 1)
-            q = (np.arange(32) * 8 + 4).astype(np.float64)
-            grid = np.stack(np.meshgrid(q, q, q, indexing="ij"), -1) \
-                .reshape(-1, 3)
-            t = np.empty(len(grid), np.int64)
-            for o in range(0, len(grid), 2048):
-                t[o:o + 2048] = ((grid[o:o + 2048, None] - mix[None]) ** 2) \
-                    .sum(-1).argmin(-1)
-            self._mixt, self._mixc, self._mixk = t, cand, key
+            if key not in _MIXES:       # (one table a palette, every encoder)
+                _MIXES[key] = _mix_table(self.pal[:16])
+            (self._mixt, self._mixc), self._mixk = _MIXES[key], key
         return self._mixt, self._mixc
 
     def block_cands(self, target, er, eb):
@@ -13040,6 +13033,34 @@ def progress_lines(lane="main", out=None):
 
 
 PROGRESS_EVERY = 0.25   # s between two of a step's reports, at most
+
+
+_MIXES = {}
+
+
+def _mix_table(pal16):
+    """EncoderP.mixes' 32^3 table for one palette: for each grid colour, the
+    (a, b, m) whose PFILL mix is nearest. ~3 s, and an encode builds several
+    encoders with the same palette (a layer's, a page's) - so it is made once
+    a palette, in `_MIXES`. (Not in integers: the palette is FLOAT, x 255/63,
+    and a reordered sum would move an argmin tie.)"""
+    import numpy as np
+    pal = pal16.astype(np.float64)
+    A, B = np.triu_indices(16)
+    m = np.arange(17)
+    mix = ((pal[A][:, None] * m[None, :, None] +
+            pal[B][:, None] * (16 - m)[None, :, None]) / 16).reshape(-1, 3)
+    cand = np.stack([np.repeat(A, 17), np.repeat(B, 17),
+                     np.tile(m, len(A))], 1)
+    q = (np.arange(32) * 8 + 4).astype(np.float64)
+    grid = np.stack(np.meshgrid(q, q, q, indexing="ij"), -1).reshape(-1, 3)
+    t = np.empty(len(grid), np.int64)
+    for o in range(0, len(grid), 2048):
+        t[o:o + 2048] = ((grid[o:o + 2048, None] - mix[None]) ** 2) \
+            .sum(-1).argmin(-1)
+    t.flags.writeable = False           # (shared: nobody may edit it)
+    cand.flags.writeable = False
+    return t, cand
 
 
 def main():

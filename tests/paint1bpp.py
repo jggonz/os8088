@@ -128,8 +128,7 @@ def _open_paint(m, mo):
                            rows.index("PAINT.O88"))
     x, y = dispcp.row_xy(wx, wy, row)
     mo.dblclick(x, y)
-    m.advance(frames=250)
-    m.run()
+    os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
     got = dispapps.pkg_seg(m, 0)
     if got is None:
         sys.exit("paint1bpp: PAINT.O88 did not open")
@@ -149,7 +148,7 @@ def main(argv):
     fails = []
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo = os88mouse.Mouse(marty=m)
         seg = _open_paint(m, mo)
 

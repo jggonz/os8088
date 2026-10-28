@@ -75,7 +75,7 @@ def boot(m):
             return False
         return live == 0
     try:                                # a GUEST-time budget
-        os88marty.until(m, desk, "the splash to end", poll=0.2, limit=300)
+        os88marty.until(m, desk, "the splash to end", poll=0.05, limit=300)
     except os88marty.MartyError:
         raise SystemExit("postboot: never reached a desktop - this machine "
                          "did not boot, so nothing below would mean what it "

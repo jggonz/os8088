@@ -6,10 +6,10 @@
 ; `dos_int33` answers both as no-ops - "we clamp nothing, the host's pointer
 ; is already inside the screen" - and Battle Chess is the report that says
 ; otherwise: it sets `AX=7 CX=0 DX=013Fh` and `AX=8 CX=0 DX=00C7h`, a
-; 320x200 window, and then polls `AX=3` for ever. This box answered x=320 on
+; 320x200 window, and then polls `AX=3` for ever. this DOS answered x=320 on
 ; the very first read, one past the range the program had just asked for.
 ;
-; Like every probe in this directory it runs under OUR box and under a real
+; Like every probe in this directory it runs under OUR DOS and under a real
 ; IBM DOS 3.30 with CuteMouse UNCHANGED, and the reference is the point: the
 ; question is not what the documentation says, it is what the driver every
 ; one of these programs was written against actually answers.
@@ -227,7 +227,7 @@ msg_bx:   db ' bx=','$'
 ; **A SPACE BEFORE EVERY `x=`**, which is not cosmetic: every reader of these
 ; lines splits on whitespace and takes the `k=v` tokens, so `319x199)x=82`
 ; parses as a field called `319x199)x` and the row fails saying it could not
-; find a position - a sentence about the box, for a label.
+; find a position - a sentence about DOS, for a label.
 msg_pos1: db 'POS1 (reset)         x=','$'
 msg_pos2: db 'POS2 (range 319x199) x=','$'
 msg_pos3: db 'POS3 (moved right)   x=','$'

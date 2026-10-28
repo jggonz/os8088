@@ -84,15 +84,20 @@
 ; THE CLAIM IS WHOLE KB, and that is heap and not a rung: drv_load_at claims
 ; mem_bytes_kb_x of the file's unpacked size, so image + bss of 1,568 bytes
 ; held 2,048 of every 286+ machine's heap for the session, and 1,014 held
-; 1,024 - until the HMA's loader and the resident A20 re-open took the image
-; to 1,145 and the claim back to 2,048 (docs/plans/HMA-PLAN.md). That KB buys
-; the 38 the cold rung is worth, which the same attach hands the heap. Two things in the image are shaped by that, beyond plain tightening:
+; 1,024 - until the HMA's loader, LOADALL and the two walks took the image to
+; 2,239 and the claim to 3,072. It is 2,042 now, back inside 2,048 (SPEC.md
+; 41.12.6): the HMA's walk is the tail's, the LOADALL save shares the AH=87h
+; block, and la_borrow is one walk of SI. Six bytes are left; a byte spent
+; here is a byte of a KB on every 286 and 386. Two things in the image are
+; shaped by that, beyond plain tightening:
 ;
 ;   - THE SCRATCH LIVES ON TOP OF THE ATTACH-ONLY CODE (xm_once, at the foot
-;     of the file). The block table, the AH=87h descriptor block, the copy's
-;     two ends and the pool's size and base are 124 bytes nothing reads
-;     before attach has finished, and the A20 gate, its probe and the AH=88h
-;     question are 126 bytes nothing runs after it.
+;     of the file). The block table, the AH=87h descriptor block (which the
+;     LOADALL save shares), the copy's two ends, the pool's size and base and
+;     the LOADALL state are 208 bytes nothing reads before attach has
+;     finished, and the A20 gate, its probe, the HMA loader and the unreal
+;     arm are 225 bytes nothing runs after it - so the image is the resident
+;     code plus the larger of the two, and today that is the code.
 ;     xm_attach zeroes the one over the other as its LAST step - from code
 ;     outside the region - and refuses to run twice on one image
 ;     ([xm_feat]'s CPU_F_A20, which only a verified gate sets and nothing
@@ -379,6 +384,12 @@ xm_walk:
     pushf
     cli
     cld
+    cmp bx, XMW_FIXED           ; ...and the HMA's contents first, when the
+    jne .l                      ; Task Manager asks for the fixed areas
+    cmp word [xm_hdoor], 0      ; (SPEC.md 28.4.13) and the tail installed:
+    je .l                       ; ITS walk, of the table it keeps (AH = 0,
+    mov al, ROMF_HWALK          ; AX being the count). Out AX = records, DI
+    call far [xm_hdoor]         ; and CX past them, the rest kept
 .l:
     jcxz .done
     cmp word [si+XB_KB], 0
@@ -406,6 +417,10 @@ xm_walk:
     pop cx
     clc
     ret
+
+XMW_FIXED       equ 0x4658      ; MIRRORED: apps/os88api.inc's walk records
+ROMF_HWALK      equ 10          ; MIRRORED: boot/osrom.asm's - the HMA tail's
+                                ; walk of its own pool (SPEC.md 28.4.13)
 
 
 ; -----------------------------------------------------------------------------
@@ -549,7 +564,7 @@ xm_alloc:
     jmp short .out              ; and at most 0x3FF + 0x11, so CF = 0
 .norun:
     mov al, 2
-    jmp short .fail
+    db 0x3D                     ; `cmp ax, imm16` swallows .full's mov
 .full:
     mov al, 1
 .fail:
@@ -825,11 +840,11 @@ xm_copy:
     jmp short .out
 .e1:
     mov al, 1
-    jmp short .fail
+    db 0x3D                     ; `cmp ax, imm16` swallows the next mov
 .e2:
     mov al, 2
-    jmp short .fail
-.e3:
+    db 0x3D                     ; (...and this one the last: .fail's cbw
+.e3:                            ; sees the AL it was given)
     mov al, 3
 .fail:
     cbw                         ; AX = the code
@@ -1307,6 +1322,10 @@ xm_feat:        db 0            ; CPU_F_* - what actually VERIFIED. This image
                                 ; AH keeps meaning what it always meant. Its
                                 ; CPU_F_A20 is also xm_attach's once-per-image
                                 ; test, so NOTHING may clear that bit
+xm_hdoor:       dw 0, 0xFFFF    ; the HMA tail's door, FFFF:rom_modfix -
+                                ; COLDHMA.SYS rom_id's +28, banked by xm_hma
+                                ; when the tail installed; 0 = no tail, so
+                                ; nothing to name (SPEC.md 28.4.13)
 
 
 ; -----------------------------------------------------------------------------
@@ -1511,8 +1530,18 @@ xm_src          equ xm_once             ; dd: the copy's two ends, ordered,
 xm_dst          equ xm_once + 4         ; dd: as 32-bit linear addresses
 xm_x87          equ xm_once + 8         ; int 15h AH=87h's 48-byte descriptor
                                         ; block - it must itself be in
-                                        ; conventional memory, and this is
-xm_tab          equ xm_once + 56        ; the block table
+                                        ; conventional memory, and this is.
+la_save         equ xm_x87              ; LA_SZ bytes: LOADALL's save of the
+                                        ; API cells (SPEC.md 41.13) SHARES
+                                        ; the descriptor block, because the
+                                        ; two are never live at once - the
+                                        ; save holds bytes only inside ONE
+                                        ; la_borrow..la_restore cli window,
+                                        ; xm_bios zeroes and fills all 48 on
+                                        ; every call before its int 15h, and
+                                        ; no copy runs the one transport
+                                        ; inside the other. 48 bytes of image
+xm_tab          equ xm_x87 + LA_SZ      ; the block table
 xm_tab_end      equ xm_tab + XM_MAX_BLKS * XM_BLKSZ
 xm_kb           equ xm_tab_end          ; dw: KB the pool may hand out.
                                         ; PUBLISHED LAST by xm_attach (the
@@ -1528,9 +1557,9 @@ xm_base_hi      equ xm_kb + 2           ; dw: the pool's 32-bit linear base,
 ; THE LOADALL TRANSPORT'S STATE (SPEC.md 41.13, apps/os88la.inc), tier 1:
 ; the API cells while they are borrowed, the CPU's MSW/IDTR/GDTR, the next
 ; borrow's two caches and selectors, and the copy's two offsets. Zeroed with
-; the rest; xm_lainit fills what it needs after the zeroing
-la_save         equ xm_base_hi + 2      ; LA_SZ bytes
-la_msw          equ la_save + LA_SZ     ; dw
+; the rest; xm_lainit fills what it needs after the zeroing. la_save is
+; above, over the AH=87h block
+la_msw          equ xm_base_hi + 2      ; dw
 la_idt          equ la_msw + 2          ; 6 bytes
 la_gdt          equ la_idt + 6          ; 6 bytes
 la_dsc          equ la_gdt + 6          ; dd
@@ -1542,6 +1571,7 @@ la_fault        equ la_csacc + 1        ; db
 xm_lall         equ la_fault + 1        ; db: 1 = the LOADALL transport
                                         ; verified at attach (xm_lainit)
 XM_SCRATCH      equ (xm_lall + 2 - xm_once) & ~1    ; even (rep stosw)
+    LA_ORDER                            ; la_borrow's one walk of SI
     times ((xm_x87 - xm_src) != 8) * -1 db 0    ; xm_bios ends its descriptor
                                         ; loop with SI = xm_src + 8 and hands
                                         ; that to AH=87h as the block
@@ -1629,7 +1659,10 @@ xm_hma:
     mov [xm_hma_fp+2], dx
     mov ax, [es:24]             ; ...and its entry
     mov [xm_hma_fp], ax
-    call far [xm_hma_fp]        ; CF is its answer and nobody needs it
+    call far [xm_hma_fp]        ; CF is its answer, and every register is
+    jc .free                    ; kept: ES is still the file. INSTALLED: bank
+    mov ax, [es:28]             ; the door the copy runs at, so the walk can
+    mov [xm_hdoor], ax          ; name the HMA's contents (SPEC.md 28.4.13)
 .free:
     pop dx
     call OSAPI_MEM_FREE

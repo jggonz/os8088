@@ -93,13 +93,17 @@ import os88qemu                                            # noqa: E402
 import os88sym                                             # noqa: E402
 import telansi                                             # noqa: E402
 import os88build
+import os88fixture
 
 S = os88sym.linear
 SOCK = telansi.SOCK
-PORT = 8095                     # NOT 8090 (ethernet), 8092 (thewire) or 8094
-                                # (telansi): the gates may be run side by side,
-                                # and a bound port is a gate reading the OTHER
-                                # one's answers
+PORT = 8098                     # NOT 8090 (ethernet), 8092 (thewire), 8094
+                                # (telansi) or 8095 (httpmount's HTTPDRV.CFG -
+                                # this row once shared it): the gates run side
+                                # by side now (SOAK-PARALLEL.md 17.3), and a
+                                # bound port is a gate reading the OTHER one's
+                                # answers. The address is TYPED into Telnet,
+                                # so nothing baked names it.
 HOSTLINE = "10.0.2.2:%d" % PORT
 CON_SCRSZ = 80 * 25 * 2          # ...the screen this gate reads back, which is
                                 # telansi's CON_COLS x CON_ROWS x 2 (SPEC.md 70.8)
@@ -285,18 +289,17 @@ def main():
     fails = []
     tmp = tempfile.mkdtemp()
 
-    # **THE SYSTEM IMAGE IS REBUILT, NOT CHECKED** (tests/telansi.py's reason,
-    # and here it is the whole point): QEMU mounts it WRITABLE, the download
-    # lands ON it, and a second run would then find the PREVIOUS run's file and
-    # pass without the guest having written a byte.
-    for img in ("build/telnetsys.img", "build/telnetdata.img"):
-        p = os.path.join(ROOT, img)
-        if os.path.exists(p):
-            os.remove(p)
-    r = subprocess.run(["make", "telnettest"], capture_output=True, text=True,
-                       cwd=ROOT)
-    if r.returncode:
-        sys.exit("telzm: make telnettest failed:\n" + r.stdout + r.stderr)
+    # **THE SYSTEM IMAGE IS A FRESH COPY, NOT REBUILT** (tests/telansi.py's
+    # reason, and here it is the whole point): QEMU mounts it WRITABLE, the
+    # download lands ON it, and a second run would then find the PREVIOUS
+    # run's file and pass without the guest having written a byte. The copy
+    # is this process's own (os88qemu.scratch), booted in place and read back
+    # from there, and the built images are this row's `wants=` - where this
+    # deleted both and ran `make telnettest` under every row beside it
+    # (docs/plans/SOAK-PARALLEL.md 17). The fixed PORT is leased.
+    os88fixture.need("build/telnetsys.img", "build/telnetdata.img")
+    img = os88qemu.scratch("build/telnetsys.img")
+    os88qemu.lease_port(PORT)
 
     sy = telansi.te_syms()
     for n in ("te_zon", "te_state", "tz_st", "tz_dlg", "tz_name", "tz_pan",
@@ -321,17 +324,9 @@ def main():
     open(small, "wb").write(sdata)
     open(big, "wb").write(bdata)
 
-    os88qemu.kill()
-    if not a.keep:
-        os88qemu.own()
-    r = subprocess.run(["make", "test", "ETHER=1",
-                        "TESTIMG=build/telnetsys.img",
-                        "TESTAPPS=build/telnetdata.img"],
-                       capture_output=True, text=True, cwd=ROOT)
-    if r.returncode:
-        sys.exit("telzm: make test failed:\n" + r.stdout + r.stderr)
+    os88qemu.make_test("ETHER=1", "TESTIMG=" + img,
+                       "TESTAPPS=build/telnetdata.img")
 
-    img = os.path.join(ROOT, "build", "telnetsys.img")
     adata = bytes(range(256)) * 5           # ...the file AFTER the cancelled
                                             # one, compared off the disk below
     ldata = bytes(range(256)) * 24          # ...and the lying sender's, which
@@ -910,8 +905,7 @@ def main():
             # ...and QEMU GONE, which is what flushes the image it has been
             # writing before it is read back - a host wait, on the process
             try:
-                qpid = int(open(os.path.join(ROOT, "build", "qemu.pid"))
-                           .read().strip())
+                qpid = int(open(os88qemu.PIDFILE).read().strip())
             except (OSError, ValueError):
                 qpid = None
             m.quit()

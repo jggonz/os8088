@@ -1,4 +1,4 @@
-# CGA SNOW IN THE DOS BOX'S FULL SCREEN — the options, priced
+# CGA SNOW IN DOS'S FULL SCREEN — the options, priced
 
 **STATUS: NOT STARTED, AND DELIBERATELY SO.** The owner asked for the options
 to be recorded and then left: *"Single char is single snow, now. Dir is mega
@@ -58,7 +58,7 @@ volume of VRAM traffic that a per-line scroll generates, and it is the same
 volume whether or not it is synchronised.
 
 **A real DOS `DIR` on a real CGA is therefore SLOW rather than snowy.** Its
-output goes through `int 10h`, which does the dance above. Our box is fast and
+output goes through `int 10h`, which does the dance above. Our DOS is fast and
 snowy because it writes `con_scr` into `B800` with `rep movsw` and never asks
 the status register.
 

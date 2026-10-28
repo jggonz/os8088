@@ -75,11 +75,13 @@ def main(argv):
             sys.exit("dotdelmd: %s has %d video card(s), not 2"
                      % (a.machine, len(cards)))
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # (state gates: every read after is
+        os88marty.no_saver(m)           # guest memory)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle)
-        dispcp.set_mode(m, mo, S, os88marty.settle, "right")
-        dispcp.close_panel(m, mo, S, os88marty.settle)
+        done = lambda mm, **k: os88marty.ui_done(mm)
+        dispcp.open_panel(m, mo, S, done)
+        dispcp.set_mode(m, mo, S, done, "right")
+        dispcp.close_panel(m, mo, S, done)
         if m.read(S("vid_ndisp"), 1)[0] != 2:
             sys.exit("dotdelmd: the Control Panel did not turn Extend on")
 

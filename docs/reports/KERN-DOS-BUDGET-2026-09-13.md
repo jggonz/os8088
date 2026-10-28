@@ -81,7 +81,7 @@ unless the two binaries are byte-identical:
 
 ### 2.1 The DOS core is 17,667 bytes and not ~12,000
 
-KERN-DOS-PLAN §6's largest row is an estimate with a reason attached — *"the box's image is
+KERN-DOS-PLAN §6's largest row is an estimate with a reason attached — *"`DOS.O88`'s image is
 30,731 and most of it is window"*. It is not most of it.
 
 Measured by **symbol span** over `DOS.O88`'s own map, with local labels rolled

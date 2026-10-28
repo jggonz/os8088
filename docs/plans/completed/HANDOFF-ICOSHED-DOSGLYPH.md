@@ -13,7 +13,7 @@ This file is kept for two things: the measurement that settles it, and the
 
 ## What the feature is
 
-SPEC.md 25.9.5. A DOS box claims the whole arena, which is a full compaction,
+SPEC.md 25.9.5. DOS claims the whole arena, which is a full compaction,
 which correctly drops the purgeable machine-wide icon store — and nothing put
 the pictures back, because **a repaint is not a mount**. Every Disk window on
 screen went on drawing SPEC.md 25's generic icon until the user navigated

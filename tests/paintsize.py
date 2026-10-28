@@ -126,8 +126,7 @@ def main(argv):
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
         got = dispapps.pkg_seg(m, 0)
         if got is None:
             sys.exit("paintsize: PAINT.O88 did not open")
@@ -142,11 +141,9 @@ def main(argv):
         # --- MAXIMIZE ---------------------------------------------------------
         wr = dispcp.win_rect(m, S, pw)
         mo.to(4, 4)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.dblclick(wr[0] + 60, wr[1] + 9)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
         big = dispcp.win_rect(m, S, pw)
         bad, n, cw, ch, st, top = _canvas(m, seg)
         print("   maximized       %dx%d stride=%d   %d of %d bytes not FF   %r"
@@ -160,7 +157,7 @@ def main(argv):
 
         # --- RESTORE, timed ---------------------------------------------------
         mo.to(4, 4)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         t0 = m.status()["cycles"]
         mo.dblclick(big[0] + 60, big[1] + 9)
         # QUIET, not an address: the restore is over when the canvas has come
@@ -192,7 +189,7 @@ def main(argv):
                                 # It used to settle instantly on a frozen
                                 # screen and everything below measured a
                                 # machine that was not running.
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         bad, n, cw2, ch2, st2, top = _canvas(m, seg)
         print("   restored        %dx%d stride=%d   %d of %d bytes not FF   %r"
               % (cw2, ch2, st2, bad, n, dispcp.win_rect(m, S, pw)))

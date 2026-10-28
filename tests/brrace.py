@@ -165,23 +165,32 @@ def main():
     ft.add(0, "READ.ME", content=b"a link volume\r\n")
 
     with os88marty.launch("build/os8088-360.img", apps="build/brtest360.img",
-                          machine=MACHINE) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE, boot=False) as m:
+        m.run()                         # the boot gate on state (brreload's
+        os88marty.kernel_up(m)          # shape): the first act is a verb
+        os88marty.no_saver(m)           # that confirms on the window list
         mo = os88mouse.Mouse(marty=m)
         p = P.Partner(m)
 
         # --- the browser first, empty: it touches no wire until asked ------
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         wins = dispcp.win_list(m, S)
         wx, wy = dispcp.win_rect(m, S, wins[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BROWSER.O88")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "BROWSER.O88")
         wins2 = dispcp.win_list(m, S)
         if len(wins2) <= len(wins):
             sys.exit("brrace: BROWSER.O88 did not open a window")
         bw = wins2[-1]
-        rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
-        pseg = rec[22] | (rec[23] << 8)
-        say("browser at %04X" % pseg)
+        # THE BROWSER'S SEGMENT IS READ AT EACH USE. Its region is MOVABLE
+        # (OS88_REGION_MOVABLE, SPEC.md 66.6.1.1) and its worker restartable,
+        # so a claim the page makes - br_netclaim's, at the hand-over - can
+        # compact it to a new base. A segment banked here then names wherever
+        # the region USED to be: an execseg breakpoint on it is never reached
+        # and every bss read below returns a stale copy.
+        def ps():
+            r = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
+            return r[22] | (r[23] << 8)
+        say("browser at %04X" % ps())
 
         # THE BROWSER'S OWN STATE, at bss offsets derived from the image
         # size the way tests/brtest.py already reads br_url. Reading a STRING
@@ -193,14 +202,14 @@ def main():
         BN_DONE, BN_ERR = 6, 7
 
         def bss_b(off):
-            return m.readseg(pseg, img + off, 1)[0]
+            return m.readseg(ps(), img + off, 1)[0]
 
         def bss_w(off):
-            d = m.readseg(pseg, img + off, 2)
+            d = m.readseg(ps(), img + off, 2)
             return d[0] | (d[1] << 8)
 
         def field(tag):
-            raw = m.readseg(pseg, 0, img + 3000)
+            raw = m.readseg(ps(), 0, img + 3000)
             i = raw.find(tag)
             if i < 0:
                 return None
@@ -290,38 +299,62 @@ def main():
         p.sync()
         m.key("Enter")
         p.allow(400000000)
-        # SERVED ONE COMMAND AT A TIME, and stopped at the CLOSE: the parse
-        # needs no wire, so a serve left to run out its `idle` would spend the
-        # whole parse inside itself where nothing can look. The worker
-        # parses a tick or two after the close, on the far side of the UI
-        # task's claims.
-        n = 0
-        for _ in range(3000):
-            try:
-                got = p.serve(ft, limit=1, idle=12000000, sox=box)
-            except P.LinkTimeout as e:
-                fails.append("the wire stalled during the first fetch: %s"
-                             % e)
-                break
-            if not got:
-                fails.append("the first fetch went quiet before its close")
-                break
-            n += 1
-            if ord(got[0]) == P.NW_CLOSE:
-                break
+        # THE PARSE IS CAUGHT DURING THE DRAIN, NOT AFTER THE CLOSE. Browser
+        # 1.6 parses WHILE IT DRAINS (br_streamparse): once 2KB of source is
+        # in, every receive is parsed on the worker before the next is asked
+        # for, with [br_fin] = 3 for the slice - the very byte br_abort waits
+        # on. So by the CLOSE every tag of this page has been dispatched, and
+        # the breakpoint on br_parse.tag this row used to arm there was never
+        # reached: it went red with "never stopped inside the parse", having
+        # tested nothing.
+        #
+        # And a breakpoint cannot do it during the drain either: the guest
+        # runs only as the partner STEPS it, and MartyPC's step does not stop
+        # on an execution breakpoint (measured: 21,000 steps across the whole
+        # drain, every tag dispatched, not one hit). So the partner's
+        # BETWEEN-COMMANDS wait - idle_until_wire, where nothing is half said
+        # on the wire because the worker is parsing rather than talking - is
+        # wrapped to look at [br_fin] after every chunk it steps, and stop the
+        # moment a parse slice is under way.
+        class _ParseHit(Exception):
+            pass
+
+        def idle_or_parse(steps, chunk=None):
+            chunk = chunk or P.STEP * 64
+            start, left = p._data(), steps
+            while left > 0:
+                if p._data() != start:
+                    return True
+                n = min(chunk, left)
+                m.step(n)
+                p.spent += n
+                left -= n
+                if bss_b(BR_FIN) == 3 and bss_b(BR_NSTATE) == BN_BODY:
+                    raise _ParseHit()
+            return False
+
+        real_idle, p.idle_until_wire = p.idle_until_wire, idle_or_parse
+        caught = None
+        n, got = 0, ""
+        try:
+            for _ in range(3000):
+                try:
+                    got = p.serve(ft, limit=1, idle=12000000, sox=box)
+                except P.LinkTimeout as e:
+                    fails.append("the wire stalled during the first fetch: %s"
+                                 % e)
+                    break
+                if not got:
+                    fails.append("the first fetch went quiet before its close")
+                    break
+                n += 1
+                if ord(got[0]) == P.NW_CLOSE:
+                    break
+        except _ParseHit:
+            caught = (bss_b(BR_NSTATE), bss_b(BR_FIN))
+        finally:
+            p.idle_until_wire = real_idle
         say("first fetch served: %d commands, ending %r" % (n, got))
-        off = codeoff("br_parse.tag")
-        m.breakpoints([{"type": "execseg", "seg": pseg, "off": off}])
-        m.run()
-        caught, t0 = None, time.time()
-        while time.time() - t0 < 120:
-            if m.stopped():
-                caught = (bss_b(BR_NSTATE), bss_b(BR_FIN))
-                break
-            if bss_b(BR_NSTATE) in (BN_DONE, BN_ERR):
-                break
-            time.sleep(0.02)
-        m.breakpoints([])
         if caught is None:
             m.pause()
             fails.append("the guest was never stopped inside the parse - "
@@ -344,7 +377,7 @@ def main():
         m.pause()
         p.sync()
         p.click_paused_release(settle=400000)
-        m.breakpoints([{"type": "execseg", "seg": pseg,
+        m.breakpoints([{"type": "execseg", "seg": ps(),
                         "off": codeoff("br_abort")}])
         m.run()
         t0, at = time.time(), None

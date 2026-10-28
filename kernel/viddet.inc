@@ -340,20 +340,6 @@ vid_planes  db 4                ; 4 or 1 - or the DEPTH, 8 or 16, on VID_VESA
 vid_planes_w dw 4               ; the same, where a word is wanted. A planar
 %endif                          ; kernel's alone (kernel size pass 13: see
                                 ; vid_depth_set)
-%ifdef VID_EXT
-vid_ext     db 0                ; 1 = [vid_kind] is VID_VESA and every planar
-                                ; body far-calls the driver (SPEC.md 120.3).
-                                ; Derived from the kind in vid_depth_set, as
-                                ; [vid_mono] is, so a per-display swap carries
-                                ; it. .text, initialised, splash-resident with
-                                ; the rest of this block - and AFTER the _w
-                                ; twin, which must follow its byte
-            db 0                ; PARITY: kmain's five-byte call to vx_boot_x
-                                ; plus this file's hooks are odd, and this
-                                ; puts gfx_blit4 and everything after it back
-                                ; on the entry parity tests/unit/t_hotpar.py
-                                ; pins
-%endif
 
 ; Hercules has no BIOS mode, so vid_setmode programs the 6845 itself.
 ; R0..R11 for 720x348: 45 char clocks of 16 px across, 87 rows of 4 scan
@@ -449,7 +435,14 @@ VID_ROWTAB  equ 128
 vid_rowmax  dw 0
 
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss - 696
-vid_rowtab  resw VID_ROWTAB     ; bytes in the image rung would cross a step
+%ifdef VID_EXT                  ; bytes in the image rung would cross a step
+ %ifndef NO_MOUPRIV             ; ...and with the external renderer and the
+  %define VID_ROWTAB_MOU        ; mouse ISR's private stack, mouse.inc declares
+ %endif                         ; it, directly UNDER that stack (SPEC.md
+%endif                          ; 120.3.3): a packed display reads no row of it
+%ifndef VID_ROWTAB_MOU
+vid_rowtab  resw VID_ROWTAB
+%endif
 
 section .text                   ; AND spend KERN_CODE_MAX, which is the guard
                                 ; that cannot be raised. Here it costs one
@@ -635,17 +628,14 @@ vid_depth_set:
 %ifdef VID_EXT
     cmp al, VID_VESA            ; SPEC.md 120.4: colour ([vid_mono] = 0), the
     jne .notext                 ; DEPTH for a plane count, and the hook armed
-    mov ah, [vx_bpp]
-    xor al, al
-    mov [vid_mono], ax          ; one word store, as below
-    mov byte [vid_ext], 1
-    mov al, ah
-    cbw
-    mov [vid_planes_w], ax
-    pop ax
-    ret
+    mov ah, [vx_bpp]            ; - the stores below, one word for the pair
+    xor al, al                  ; and the _w twin, as on every other kind,
+    jmp short .st               ; THROUGH THE SAME STORES and not a copy:
+                                ; SPEC.md 39.26 rests on the pair having ONE
+                                ; writer, and tests/unit/t_invariants.py counts
+                                ; it. A depth above 4 IS the hook's test
+                                ; (vidext.inc)
 .notext:
-    mov byte [vid_ext], 0       ; every other kind: the planar bodies run
 %endif
 %ifdef GFX_VGA                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
     cmp al, VID_VGA             ; `jne` BELOW**. WITHOUT A VGA RENDERER THERE
@@ -686,7 +676,27 @@ vid_depth_set:
     pop ax
     ret
 
-vid_apply:
+; VID_APPLY %1, %2 - %1_apply, WRITTEN ONCE (kernel size pass 14). Nothing
+; resident calls it on kern_big: its callers are the boot (the splash's first
+; tick, vid_init, and the blob's copies of vid_switch and vid_disp_init), the
+; Control Panel (CTRL.DRV's vid_switch and vid_disp_init) and EXTD.DRV's
+; fullscreen restore - the population ksp13/dispsw.md moved vid_switch for -
+; so kern_big expands it three times, DRV_ATTACH's shape: `bvs_apply` in the
+; blob (here, beside vid_init), `vid_apply` in CTRL.DRV (vidsel.inc) and
+; `ext_apply` in EXTD.DRV (extmod.inc). kern_small has no EXTD.DRV, so twice:
+; the blob and CTRL.DRV - at the owner's word, which took that panel's claim
+; from 5 KB to 6 KB to make the room (kernel size pass 14, ksp14/reach.md).
+; No kernel has a resident copy any more.
+;
+; %2 is how a copy reaches vid_depth_set: KSWK/EXK from an image, BSPW from
+; the blob - spw_near, the door the splash's first tick
+; already uses, because KGO_PAIR's return lands in the cw_ block at the END of
+; `.text`, which is not aboard yet on that tick. An image's copy also writes
+; gfx_nextrow's three instructions out (its operands are `[cs:]`, the
+; kernel's CS) and its own epilogue (vid_pop8's run is `.text`'s). DS = KERNEL_SEG at
+; every caller, so ES = DS is KES's answer (on kern_mega too: the data alias).
+%macro VID_APPLY 2
+%1 %+ _apply:
     push ax
     push bx
     push cx
@@ -695,9 +705,9 @@ vid_apply:
     push di
     push es
 
-    KES                         ; rep movsw writes through ES, and we may be
-                                ; called from the splash, where ES is the
-                                ; boot sector's
+    push ds                     ; rep movsw writes through ES, and the splash
+    pop es                      ; calls this with the boot sector's: ES = DS =
+                                ; KERNEL_SEG (KES's answer, see above)
 
     mov al, [vid_kind]          ; AL * 18 -> the record. AH is 0 after the
     mov bl, VID_REC             ; mul (3 * 18 = 54 at worst), so the two
@@ -807,13 +817,15 @@ vid_apply:
                                 ; w - 8 - MENU_CLK_W - 6, floored to a glyph
     and ax, 0FFF8h              ; cell: the bar's segments are cell ranges
     mov [vid_clk_hx], ax        ; the union once a second display is extended -
-                                ; 1152 on a 1360px desktop, which is CELL 144
-                                ; of a menu_bcell holding MENU_BCMAX = 62. The
+                                ; 1152 on a 1360px desktop, which is CELL 144,
+                                ; past menu_bcell's MENU_BCMAX cells (menu.inc
+                                ; sizes it for the widest PRIMARY bar). The
                                 ; overrun wrecks whatever follows it in .bss
                                 ; and the machine dies somewhere else entirely,
                                 ; with a stack pointer outside .lowbss. The
-                                ; primary's 640 gives cell 54, inside the
-                                ; buffer, which is the number this always meant
+                                ; primary's own width keeps the clock inside
+                                ; the buffer, which is the number this always
+                                ; meant
 
     mov ax, [vid_bmask]         ; gfx_prevrow's test: the bank number lives in
     mov cl, 13                  ; DI's bits 13..14, so the address mask is the
@@ -839,7 +851,7 @@ vid_apply:
 %ifdef GFX_VGA                  ; (kern_small's vid_depth_set reads no AL)
     mov al, [vid_kind]          ; --- the renderer's DEPTH, in one place
 %endif
-    call vid_depth_set          ; (see there: a display swap needs it too)
+    %2 vid_depth_set            ; (see there: a display swap needs it too)
     mov ax, [vid_seg]           ; font_run's target, [vid_tseg]: see the block
     mov [vid_tseg], ax          ; below for why it is the LIVE [vid_seg]
 %ifdef GFX_VGA                  ; (kern_small has no planar kind to set - SPEC.md
@@ -943,8 +955,12 @@ vid_apply:
     mov [ss:si], di             ; loop no longer calls it. LOW_SEG, like every
     inc si                      ; other reach for the table
     inc si
-    call gfx_nextrow            ; the INCREMENTAL form - see the wrap
-    loop .rowtab                ; arithmetic above. DI and flags, nothing else
+    add di, [vid_rowadd]        ; gfx_nextrow - the INCREMENTAL form, see the
+    test di, [vid_wrapbit]      ; wrap arithmetic above - written out: its
+    jz %%nw                     ; operands are `[cs:]`, and a copy's CS is not
+    add di, [vid_wrapfix]       ; the kernel's
+%%nw:
+    loop .rowtab
     mov word [vid_rowmax], VID_ROWTAB   ; ...and only now may anything read it
     ; NOT FROM THE SPLASH'S FIRST TICK - the `jne .homed` above. Everything
     ; below writes PAST the plain head (mouse.inc's pair, cur_shchk, ui_post's
@@ -992,17 +1008,23 @@ vid_apply:
 %endif
 .homed:
     pop es                      ; ...and the other seven are vid_pop8's own run
-    jmp vid_pop7                ; one label in - this routine has no BP in its
-                                ; frame. See vid_pop8's header
-%ifdef KERN_SMALL
-    nop                         ; PARITY, never executed (kernel size pass
-%endif                          ; 13): kern_small's planar residue came out of this
-                                ; file in an ODD total, and gfx_rowbase,
-                                ; gfx_nextrow and gfx_blit4 below would
-                                ; otherwise sit at an odd shift against the
-                                ; base - one of seven such bytes on that
-                                ; kernel, each placed where a run of hot code
-                                ; begins (PERFORMANCE.md Part 7)
+    pop di                      ; (a copy pops its own: vid_pop8's run is
+                                ; `.text`'s)
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endmacro
+    nop                         ; PARITY, never executed, on every kernel
+                                ; (PERFORMANCE.md Part 7, tests/unit/t_hotpar.py):
+                                ; kern_big's vid_apply copy left `.text` in an
+                                ; ODD total (kernel size pass 14); kern_small's
+                                ; pass-13 pad here went with its resident copy
+                                ; and came back when pass 14's api work freed an
+                                ; odd byte ahead of it - ahead of gfx_rowbase,
+                                ; gfx_nextrow and gfx_blit4 either way
 
 ; -----------------------------------------------------------------------------
 ; vid_6845_prog - write R0..R11 of the mono card's CRTC from a 12-byte table
@@ -1093,12 +1115,13 @@ vid_setmode:
 %ifdef VID_EXT
     cmp al, VID_VESA            ; SPEC.md 120.4: the driver sets its VBE mode
     jne .notvx                  ; and loads the DAC's first sixteen; the
-    call vx_call                ; caller owes the repaint as on every kind.
-    db VX_SETMODE               ; vx_call COMES BACK HERE - the eight pushes
-    jmp .done                   ; and the spl_busy count above are still ours
-    db 0                        ; to undo, at .done. PARITY, never executed:
-.notvx:                         ; the arm is twelve bytes with it
-%endif                          ; (tests/unit/t_hotpar.py)
+    call far [vx_ep]            ; caller owes the repaint as on every kind.
+    db VX_SETMODE | VX_CONT     ; (VXCALL's two lines: vidext.inc is
+    jmp .done                   ; included after this file.) The driver COMES
+                                ; BACK HERE - the pushes and
+.notvx:                         ; the spl_busy count above are still ours to
+%endif                          ; undo, at .done. Twelve bytes, even
+                                ; (tests/unit/t_hotpar.py)
     cmp al, VID_HERC            ; AL is idle until `mov ax, 0x0010`, and
     je .herc                    ; `cmp reg,imm8` is 2 bytes where
 %ifdef GFX_VGA                  ; `cmp byte [mem],imm8` is 5
@@ -1307,17 +1330,15 @@ vid_setmode:
 .done:
     dec byte [spl_busy]         ; ...and the card describes itself again
 
-; vid_pop8 - the eight-register epilogue TWO routines in this file share,
-; and vid_pop7 one label in is a THIRD with a shorter frame.
+; vid_pop8 - the eight-register epilogue TWO routines in this file share.
 ; vid_text jumps here rather than carrying its own copy, so **its prologue is
 ; now part of THIS routine's contract**: both push `ax bx cx dx si di bp es` in
 ; that order, and a `push` added to one of them without the other returns the
 ; machine to a wrong address at boot. (vid_detect was a third until SPEC.md
 ; 2.5.3.3 moved it into the blob, where `.text`'s epilogue is out of reach; it
-; carries its own pop run and `retf` now.)  vid_apply pushes the same run WITHOUT `bp`, pops
-; its own `es`, and enters at `vid_pop7` - so it is bound by the SEVEN and not
-; by the eight, and a `push` added to the other three must not be added to it.
-; Nothing in the tree checks either; these comments and the ones at the three
+; carries its own pop run and `retf` now; vid_apply, which entered one label
+; in with a seven-push frame, has had no resident copy since kernel size pass
+; 14 and pops its own.) Nothing in the tree checks this; these comments and the ones at the three
 ; jump sites are the whole of the guard.  The label is BELOW
 ; `dec byte [spl_busy]`, so the splash counter is decremented once.
 ;
@@ -1334,12 +1355,9 @@ vid_setmode:
 vid_pop8:
     pop es
     pop bp
-vid_pop7:                       ; ...AND A THIRD ENTRY, ONE LABEL IN, WITH A
-    pop di                      ; DIFFERENT FRAME. vid_apply pushes the same
-                                ; run WITHOUT bp and pops its own `es`, so it
-                                ; joins here; it is the one arrival that is
-                                ; not bound by the eight-push contract above,
-                                ; and it is bound by the seven instead
+    pop di                      ; (vid_pop7, one label in, was vid_apply's
+                                ; entry with a seven-push frame; vid_apply has
+                                ; no resident copy since kernel size pass 14)
     pop si
     pop dx
     pop cx
@@ -1449,8 +1467,8 @@ section .boot2                    ; kmain_o's alone (SPEC.md 2.5.3.3), out throu
 vid_init:                       ; the spw_near door the splash already needs
     BLOBCALL vid_detect
     push bp                     ; BP names the routine to spw_near, and this
-    mov bp, vid_apply           ; routine clobbers only flags
-    call KERNEL_SEG:spw_near
+                                ; routine clobbers only flags
+    call bvs_apply              ; (the blob's own copy: VID_APPLY, below)
 %ifdef DOCK_OPT
     mov bp, dock_geom           ; (BP is banked above for spw_near already)
     call KERNEL_SEG:spw_near    ; ...and the strip where the user put it
@@ -1465,6 +1483,16 @@ vid_init:                       ; the spw_near door the splash already needs
 .keep:
     pop bp
     retf
+; BSPW - the blob's way into a `.text` routine that is aboard on the splash's
+; first tick: spw_near, as vid_init and spl_chrome already use it. BP banked.
+%macro BSPW 1
+    push bp
+    mov bp, %1
+    call KERNEL_SEG:spw_near
+    pop bp
+%endmacro
+VID_APPLY bvs, BSPW             ; bvs_apply: the splash, vid_init, and the
+                                ; blob's vid_switch/vid_disp_init (driver.inc)
 section .text
 
 ; -----------------------------------------------------------------------------

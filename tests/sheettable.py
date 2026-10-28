@@ -51,7 +51,8 @@ import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
 
 WORK = "build/sheettable"
-DISK = "build/sheettable.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheettable.img")        # the run's tree, so a soak lane finds it
 NAME = "SHIN.SLK"
 
 # MEASURED off a photograph of the pulldown taken mid-hold, never computed:
@@ -90,8 +91,7 @@ def build_disk(cells):
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk(cells))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "build/sheet.o88",
-                    "build/CHART.OVL", "build/MACRO.OVL", src],
+                    "--size", "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
     return open(src, "rb").read()
 

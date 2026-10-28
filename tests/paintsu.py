@@ -45,6 +45,7 @@ import argparse
 import tempfile
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -61,6 +62,7 @@ import blitpair                                              # noqa: E402
 from blitpair import gif_pixels, BLITS                        # noqa: E402
 
 S = os88sym.linear
+UNCOVER_TAIL = 3.0          # guest s the uncover is watched for, at least
 BAND_KB = 8                 # the band cache measures 3 KB, the whole content 9
 
 
@@ -72,6 +74,7 @@ def idle(m):
                       what="the drive to go quiet")
     os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
                     "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.ui_done(m)            # ...so the settle opens on its short window
     os88marty.settle(m)
 
 
@@ -130,6 +133,7 @@ def main():
         # ever opened. A restore is only answerable for what CHANGED across
         # it, so both sides are measured and the two failures are named apart.
         mo.to(4, 4)                     # ...THE POINTER OFF THE CANVAS FIRST,
+        os88marty.ui_done(m)
         os88marty.settle(m)             # which the uncover capture below has
         fw0, fh0, fb0 = m.fbuf(card=0)  # always done: it is parked over the
         before = _differs(fb0, fw0, ox, oy, iw, ih, px)   # file's icon at this
@@ -200,13 +204,22 @@ def main():
 
         with os88marty.bp_trace(m, *BLITS, regs=True, on_hit=uncover_blit) as tr:
             _close(m, mo)
-            # `required=False` and it MUST be: a canvas-sized blit not running
-            # is this section's whole finding - it means the raise cache put
-            # the picture back - so a timeout here is an answer, not a failure.
-            tr.until(lambda: wide is not None, "a canvas-sized blit",
-                     limit=60.0, required=False)
+            # A canvas-sized blit NOT running is this section's whole finding
+            # - it means the raise cache put the picture back - so the window
+            # is the uncover's own work: until the UI task has finished the
+            # repaint the close started, and at least UNCOVER_TAIL guest
+            # seconds. It was a 60 s `until` that the passing case always
+            # timed out of (180 guest seconds); a repaint happens inside a UI
+            # pass, so a blit that has not run by the time the UI is idle is
+            # one the close did not ask for.
+            c0 = m.status()["cycles"]
+            os88marty.ui_done(m, "the uncover's repaint")
+            end = c0 + int(UNCOVER_TAIL * 4772727)
+            while wide is None and m.status()["cycles"] < end:
+                time.sleep(0.005)
         idle(m)
         mo.to(4, 4)
+        os88marty.ui_done(m)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
 

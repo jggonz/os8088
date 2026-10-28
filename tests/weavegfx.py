@@ -116,18 +116,22 @@ def _ink(rows, cx, cy, row, cells):
 
 def session(machine, card, vidw, vidh, png_dir=None):
     S = os88sym.linear
-    for bundle, src, known in CARDS:
-        weavesmoke.BUNDLE = bundle
-        with os88marty.launch("build/os8088-360.img", apps=DISK,
-                              machine=machine) as m:
-            try:
-                _drive(machine, card, vidw, S, m, bundle, src, known, png_dir)
-            except os88marty.MartyError as e:
-                check(False, "%s/%s: the session broke off" % (machine,
-                                                               bundle),
-                      "the machine booted, so this is the harness losing its "
-                      "grip on it rather than the tree being wrong",
-                      got=str(e)[:200], want="a driven session")
+    # ONE BOOT A MACHINE, A FORK A BUNDLE (os88marty.Forks): each bundle
+    # opens on the same booted desktop bytes, independent of the other.
+    with weavesmoke.booted("build/os8088-360.img", apps=DISK,
+                           machine=machine) as m0, os88marty.Forks(m0) as fk:
+        for bundle, src, known in CARDS:
+            weavesmoke.BUNDLE = bundle
+            with fk.restore() as m:
+                try:
+                    _drive(machine, card, vidw, S, m, bundle, src, known,
+                           png_dir)
+                except os88marty.MartyError as e:
+                    check(False, "%s/%s: the session broke off"
+                          % (machine, bundle),
+                          "the machine booted, so this is the harness losing "
+                          "its grip on it rather than the tree being wrong",
+                          got=str(e)[:200], want="a driven session")
 
 
 def _drive(machine, card, vidw, S, m, bundle, src, known, png_dir):

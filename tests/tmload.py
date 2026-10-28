@@ -165,7 +165,9 @@ def kernel_shares(m, secs=3.0):
 def main(argv):
     os.chdir(ROOT)
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine="os8088_5150_cga_gla") as m:
+                          machine="os8088_5150_cga_gla", boot=False) as m:
+        m.run()                         # the boot gate on STATE: the first
+        os88marty.kernel_up(m)          # act is a verb
         mo = os88mouse.Mouse(marty=m)
         mo.menu(CHIP[0], CHIP[1], MI_TASKS[0], MI_TASKS[1])
         m.advance(frames=300)

@@ -159,7 +159,7 @@ def play_one(g, seed, tier, nr=None, hs=None, script=None):
     got = []
     for k, rec in enumerate(want):
         M.until(m, lambda _: g.b("it_tpause") == 1,
-                "round %d of seed %d to end" % (k + 1, seed), poll=0.2, guest=240)
+                "round %d of seed %d to end" % (k + 1, seed), poll=0.05, guest=240)
         m.pause()
         st = g.state()
         m.run()
@@ -176,7 +176,7 @@ def play_one(g, seed, tier, nr=None, hs=None, script=None):
                  st["lossrow"], st["rng"], st["ck"]), flush=True)
         g.put("it_tpause", 0)
     M.until(m, lambda _: g.w("it_gover") == gover0 + 1 and g.b("it_state") == L.ST_TITLE,
-            "the game to end and return to the title", poll=0.2, guest=30)
+            "the game to end and return to the title", poll=0.05, guest=30)
     secs = (m.status()["cycles"] - t0) / M.GUEST_HZ
     assert len(got) == len(want)
     if script is None:
@@ -211,7 +211,7 @@ def keys_leg(g):
         time.sleep(0.05)
 
     def wait(cond, what, guest=10):
-        M.until(m, lambda _: cond(), what, poll=0.1, guest=guest)
+        M.until(m, lambda _: cond(), what, poll=0.05, guest=guest)
 
     assert g.b("it_state") == L.ST_TITLE, "not at the title (state %d)" % g.b("it_state")
     m.pause()
@@ -326,10 +326,10 @@ def rules(args):
     t0 = time.time()
     with os88ui.boot(os88build.at("build/os8088-360.img"),
                      apps=L.fresh_disk(os88build.at("build/isotron360.img")),
-                     machine=MACHINE) as ui:
+                     machine=MACHINE, quick=True) as ui:
         g = L.open_game(ui)
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.05, guest=20)
         for seed, tier, nr, hs in games(args.all):
             print("  %s, seed %d (%d rounds stored)" % (S.TIERS[tier]["name"], seed, nr), flush=True)
             play_one(g, seed, tier, nr, hs)
@@ -389,15 +389,15 @@ def to_title(g):
     g.put("it_qesc", 1)
     m.run()
     M.until(m, lambda _: g.b("it_state") == L.ST_TITLE and g.w(key) != n0, "the title",
-            poll=0.1, guest=20)
+            poll=0.05, guest=20)
 
 
 def presented(ui, g):
     """Park the pointer off the window and wait until nothing is owed: every
     box, overlay and whole present the guest had has reached the glass."""
     ui.mo.to(2, 2)
-    M.until(g.m, lambda _: not g.owed(), "the picture to be presented", poll=0.1, guest=30)
-    M.guest_sleep(g.m, 0.3)
+    M.until(g.m, lambda _: not g.owed(), "the picture to be presented", poll=0.05, guest=30)
+    M.guest_sleep(g.m, 0.1)             # the glass lags the framebuffer a frame
 
 
 def nearest(palette):
@@ -507,18 +507,52 @@ def boot_for(tag):
         system = tree.img("os8088-360.img")
     return system, L.fresh_disk(os88build.at("build/isotron360.img")), MACHINES[tag]
 
+class _Session:
+    """One booted machine with isoTron open at its title, windowed: what
+    every perf leg starts from. `--perf` hands the SAME one to its three legs
+    (each leaves the game at the title, windowed - the sweep, last, need
+    not), so a machine is booted and the package opened once instead of
+    three times; a leg called alone boots its own."""
 
-def win_leg(tag, rounds=4):
+    def __init__(self, tag, shared=None):
+        self.tag, self.shared, self.cm = tag, shared, None
+
+    def __enter__(self):
+        if self.shared is not None:
+            ui, g = self.shared
+            assert not g.b("it_fsm"), "the shared machine is still in the bracket"
+            if g.b("it_state") != L.ST_TITLE:   # (a leg may leave a round on)
+                to_title(g)
+            assert g.b("it_state") == L.ST_TITLE
+            presented(ui, g)
+            return ui, g
+        system, apps, machine = boot_for(self.tag)
+        self.cm = os88ui.boot(system, apps=apps, machine=machine, quick=True)
+        ui = self.cm.__enter__()
+        try:
+            g = L.open_game(ui)
+            M.until(ui.m, lambda _: g.b("it_spawned") == 1, "the worker to start",
+                    poll=0.05, guest=20)
+            presented(ui, g)
+        except BaseException:
+            self.cm.__exit__(*sys.exc_info())
+            raise
+        return ui, g
+
+    def __exit__(self, *exc):
+        if self.cm is not None:
+            return self.cm.__exit__(*exc)
+        return False
+
+
+
+def win_leg(tag, rounds=4, shared=None):
     """isotronwin / isotronega: the title and a seeded game's rounds, each
     on the glass equal to the model's windowed presenter of the model's own
     canvas - which is the guest's canvas too, held byte for byte."""
-    system, apps, machine = boot_for(tag)
     seed, tier = S.STORED[0][0], S.STORED[0][1]
-    with os88ui.boot(system, apps=apps, machine=machine) as ui:
-        g = L.open_game(ui)
+    with _Session(tag, shared) as (ui, g):
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
-        presented(ui, g)
         geo = g.geom()
         print("  %s: content %dx%d at (%d,%d); picture at (%d,%d), %d bytes x %d rows, %s"
               % (tag, geo["cw"], geo["ch"], geo["cx"], geo["cy"], geo["ox"], geo["oy"],
@@ -536,7 +570,7 @@ def win_leg(tag, rounds=4):
         for k in range(rounds):
             rec = model.play_round()
             M.until(m, lambda _: g.b("it_tpause") == 1, "round %d to end" % (k + 1),
-                    poll=0.2, guest=240)
+                    poll=0.05, guest=240)
             presented(ui, g)
             st = g.state()
             assert (st["h"], st["ck"], st["iter"]) == (rec["h"], rec["ck"], rec["iter"]), \
@@ -557,10 +591,10 @@ def bound_leg():
     """isotronbound: the step's bound counters and the whole canvas, after
     every round of two stored games, against the model."""
     system, apps, machine = boot_for("cga")
-    with os88ui.boot(system, apps=apps, machine=machine) as ui:
+    with os88ui.boot(system, apps=apps, machine=machine, quick=True) as ui:
         g = L.open_game(ui)
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.05, guest=20)
         tg, tc = S.Grid(), S.Canvas()
         tc.title(tg)
         assert g.canvas() == tc.pack(), "the title's 64,000 bytes differ from the model's"
@@ -574,9 +608,9 @@ def bound_leg():
                 rec = model.play_round()
                 k += 1
                 M.until(m, lambda _: g.b("it_tpause") == 1, "round %d to end" % k,
-                        poll=0.2, guest=240)
+                        poll=0.05, guest=240)
                 # the round's last boxes reach the glass in a wake or two
-                M.until(m, lambda _: not g.owed(), "the round's boxes", poll=0.1, guest=30)
+                M.until(m, lambda _: not g.owed(), "the round's boxes", poll=0.05, guest=30)
                 m.pause()
                 st = g.state()
                 mp, ms = g.b("it_maxprobe"), g.b("it_maxspan")
@@ -600,7 +634,7 @@ def bound_leg():
                 print("    seed %d round %d: h%d, %d steps, most probes %d, most rows %d; "
                       "64,000 canvas bytes equal the model's"
                       % (seed, k, rec["h"], rec["nsteps"], mp, ms), flush=True)
-            M.until(m, lambda _: g.b("it_state") == L.ST_TITLE, "the title", poll=0.2, guest=60)
+            M.until(m, lambda _: g.b("it_state") == L.ST_TITLE, "the title", poll=0.05, guest=60)
     # THE NEGATIVE CONTROL: a scan that stops at 21 bytes must count
     # differently from what the guest counted, or the probe row could not
     # tell a broken bound from the real one
@@ -661,10 +695,10 @@ def scan21_leg():
                         "--compress-if=lz4", binf, "-o", o88], check=True, cwd=ROOT)
     apps = M.scratch_disk(os88build.at("build/isoscan21.img"), o88)
     system = os88build.at("build/os8088-360.img")
-    with os88ui.boot(system, apps=apps, machine=MACHINES["cga"]) as ui:
+    with os88ui.boot(system, apps=apps, machine=MACHINES["cga"], quick=True) as ui:
         g = L.open_game(ui)
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.05, guest=20)
         seed, tier, nr, hs = S.STORED[0]
         model = S.Game(seed, tier, canvas=True)
         start_game(g, seed, tier, L.TF_FAST | L.TF_BOT | L.TF_NOFLOW | L.TF_HOLD)
@@ -673,7 +707,7 @@ def scan21_leg():
             rec = model.play_round()
             k += 1
             M.until(m, lambda _: g.b("it_tpause") == 1, "round %d to end" % k,
-                    poll=0.2, guest=240)
+                    poll=0.05, guest=240)
             m.pause()
             mp, ms = g.b("it_maxprobe"), g.b("it_maxspan")
             raw = g.canvas()
@@ -800,18 +834,14 @@ def stats(xs):
                 max=xs[-1])
 
 
-def perf_leg(tag, out, heads=True):
+def perf_leg(tag, out, heads=True, shared=None):
     """isotronperf's windowed part. `heads` = False leaves out the head-step
     rounds - the canvas's own price, which is no adapter's (2,417 / 2,612 on
     all three) - for EGA, whose windowed lines are its WAKES and its round
     start: the colour window at 640 x 350 (SPEC.md 108.15.2, modelled)."""
-    system, apps, machine = boot_for(tag)
     res = {}
-    with os88ui.boot(system, apps=apps, machine=machine) as ui:
-        g = L.open_game(ui)
+    with _Session(tag, shared) as (ui, g):
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
-        presented(ui, g)
         B = g.base
         HS0, HS1 = B + g.code["it_hs0"], B + g.code["it_hs1"]
         AI1 = B + g.code["it_ai1"]
@@ -841,7 +871,7 @@ def perf_leg(tag, out, heads=True):
                 if r not in rounds:
                     g.put(*go)
                     M.until(m, lambda _: g.b("it_tpause") == 1, "round %d's end" % r,
-                            poll=0.1, guest=120)
+                            poll=0.05, guest=120)
                     continue
                 # EVERY computer head-step of the round, from its first to the
                 # hold at its end: one write starts it (no pause inside the
@@ -913,21 +943,21 @@ def perf_leg(tag, out, heads=True):
         # (play starts when the round's whole present is out: it_vsync)
         live = lambda _: g.b("it_state") == L.ST_PLAY and not g.b("it_vsync")  # noqa: E731
         start_game(g, 2425, 1, L.TF_BOT | L.TF_NOFLOW)
-        M.until(m, live, "play", poll=0.1, guest=20)
+        M.until(m, live, "play", poll=0.05, guest=20)
         M.guest_sleep(m, 1.0)
         rook = wakes("rookie")
         to_title(g)
         # Lunatic at h = 4, full boost: round 1 held, the tower poked to 4, the
         # speed to 9 once that round is in play
         start_game(g, 702, 3, L.TF_BOT | L.TF_NOFLOW | L.TF_HOLD)
-        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1", poll=0.2, guest=120)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1", poll=0.05, guest=120)
         m.pause()
         g.put("it_h", 4)
         g.put("it_tflags", L.TF_BOT | L.TF_NOFLOW)
         g.put("it_tpause", 0)
         m.run()
         M.until(m, lambda _: live(m) and g.b("it_hplayed") == 4,
-                "a round at h4", poll=0.1, guest=30)
+                "a round at h4", poll=0.05, guest=30)
         M.guest_sleep(m, 0.5)
         m.pause()
         g.put("it_pspeed", 9)
@@ -1033,7 +1063,7 @@ def perf_leg(tag, out, heads=True):
         m.pause()                       # the rest of round 1 FAST: only its start
         g.put("it_tflags", L.TF_FAST | L.TF_BOT | L.TF_NOFLOW | L.TF_HOLD)
         m.run()
-        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1's end", poll=0.2, guest=120)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1's end", poll=0.05, guest=120)
 
         def h4_prep():
             m.pause()                   # held (it_tpause = 1): nothing moves
@@ -1093,8 +1123,8 @@ FS_MACHINES = {"cga": "os8088_5150_cga_gla", "herc": "os8088_5150_herc_gla",
 def fs_settled(g, what="the full-screen picture"):
     """In the bracket, with nothing owed: a frame has presented everything."""
     M.until(g.m, lambda _: g.b("it_fsm") == 1 and not g.fs_owed(), what,
-            poll=0.1, guest=40)
-    M.guest_sleep(g.m, 0.25)
+            poll=0.05, guest=40)
+    M.guest_sleep(g.m, 0.1)             # the glass lags the framebuffer a frame
 
 
 def fs_enter(ui, g, how):
@@ -1111,7 +1141,7 @@ def fs_enter(ui, g, how):
     else:
         raise ValueError(how)
     M.until(m, lambda _: g.b("it_fsm") == 1 and g.w("it_fsn") > n0,
-            "full screen by %s" % how, poll=0.1, guest=40)
+            "full screen by %s" % how, poll=0.05, guest=40)
     fs_settled(g)
 
 
@@ -1131,7 +1161,7 @@ def fs_leave(ui, g, how):
     # it_fsout moves when OSAPI_FSX_RUN has RETURNED - the kernel's exit mode
     # set and its wm_paint_all done (SPEC.md 53.6); it_fsm drops before both
     M.until(m, lambda _: g.b("it_fsm") == 0 and g.w("it_fsout") > n0,
-            "out of full screen by %s" % how, poll=0.1, guest=40)
+            "out of full screen by %s" % how, poll=0.05, guest=40)
     presented(ui, g)
 
 
@@ -1318,20 +1348,17 @@ def fs_glass(g, tag, canvas, what, name=None, look="isotron", hi=False, want=Non
     return n
 
 
-def fs_leg(tag, rounds=3):
+def fs_leg(tag, rounds=3, shared=None):
     """isotronfs (and isotronega's full-screen half): F at the title, the
     title's canvas on the glass, then a seeded game's rounds - after each the
     canvas the model's and the glass the model's full-screen presenter of it;
     then C (high intensity on a CGA, Classic on a 16-colour surface) and back;
     then Esc in a round ends the game and stays full screen, and Esc at the
     title leaves."""
-    system, apps, machine = boot_for(tag)
     seed, tier = S.STORED[0][0], S.STORED[0][1]
-    with os88ui.boot(system, apps=apps, machine=FS_MACHINES[tag]) as ui:
-        g = L.open_game(ui)
+    assert FS_MACHINES[tag] == MACHINES[tag]        # (_Session boots MACHINES')
+    with _Session(tag, shared) as (ui, g):
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
-        presented(ui, g)
         fs_enter(ui, g, "F")
         print("  %s: full screen, surface %d, %d whole present(s)"
               % (tag, g.b("it_fsk"), g.w("it_fsn")), flush=True)
@@ -1347,7 +1374,7 @@ def fs_leg(tag, rounds=3):
         for k in range(rounds):
             rec = model.play_round()
             M.until(m, lambda _: g.b("it_tpause") == 1, "round %d to end" % (k + 1),
-                    poll=0.2, guest=240)
+                    poll=0.05, guest=240)
             fs_settled(g)
             st = g.state()
             assert (st["h"], st["ck"], st["iter"]) == (rec["h"], rec["ck"], rec["iter"]), \
@@ -1459,10 +1486,10 @@ def toggle_leg(tag):
     too. Esc's four cases (SPEC.md 108.12.6)."""
     system, apps, machine = boot_for(tag)
     seed, tier = S.STORED[0][0], S.STORED[0][1]
-    with os88ui.boot(system, apps=apps, machine=FS_MACHINES[tag]) as ui:
+    with os88ui.boot(system, apps=apps, machine=FS_MACHINES[tag], quick=True) as ui:
         g = L.open_game(ui)
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.05, guest=20)
         presented(ui, g)
         # windowed at the title, Esc does nothing
         m.key("Escape")
@@ -1473,7 +1500,7 @@ def toggle_leg(tag):
         # A PACED game (no FAST): BOT | NOFLOW | HOLD, frozen mid-round
         start_game(g, seed, tier, L.TF_BOT | L.TF_NOFLOW | L.TF_HOLD)
         M.until(m, lambda _: g.b("it_state") == L.ST_PLAY and g.w("it_iter") > 120,
-                "the round under way", poll=0.1, guest=60)
+                "the round under way", poll=0.05, guest=60)
         m.pause()
         g.put("it_tpause", 1)               # the harness's hold: no iteration
         m.run()
@@ -1509,7 +1536,7 @@ def toggle_leg(tag):
         m.pause()
         g.put("it_tpause", 0)
         m.run()
-        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1 to end", poll=0.2, guest=120)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1 to end", poll=0.05, guest=120)
         st = g.state()
         assert (st["winner"], st["iter"], st["rng"], st["ck"]) == \
             (rec1["winner"], rec1["iter"], rec1["rng"], rec1["ck"]), \
@@ -1528,7 +1555,7 @@ def toggle_leg(tag):
         g.put("it_tpause", 0)
         m.run()
         M.until(m, lambda _: g.b("it_state") == L.ST_PLAY and g.w("it_round") == 1
-                and g.w("it_iter") > 60, "round 2 under way", poll=0.1, guest=60)
+                and g.w("it_iter") > 60, "round 2 under way", poll=0.05, guest=60)
         base = paced_wakes(g, 40)
         fs_enter(ui, g, "F")
         M.guest_sleep(m, 1.0)
@@ -1549,7 +1576,7 @@ def toggle_leg(tag):
                  back["first"], base["med"], base["n"], base["max"]), flush=True)
         M.guest_sleep(m, 1.0)
         fs_enter(ui, g, "alt")
-        M.until(m, lambda _: g.b("it_tpause") == 1, "round 2 to end", poll=0.2, guest=120)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "round 2 to end", poll=0.05, guest=120)
         fs_settled(g)
         st = g.state()
         assert (st["winner"], st["iter"], st["rng"], st["ck"]) == \
@@ -1687,7 +1714,7 @@ def twodisp_leg():
         dispcp.close_panel(m, mo, Sy, M.settle)
         assert m.read(Sy("vid_ndisp"), 1)[0] == 2, "the desktop did not extend"
         g = L.open_game(ui)
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.05, guest=20)
         presented(ui, g)
         geo = g.geom()
         assert geo["surf"] == 1, "on the VGA the window is not colour (%r)" % geo
@@ -1701,7 +1728,7 @@ def twodisp_leg():
         mo.drag(x + w // 2, y + 8, 320 + w // 2, y + 8)
         M.settle(m)
         ui.mo.to(2, 2)
-        M.until(m, lambda _: not g.owed(), "the picture across the seam", poll=0.1, guest=60)
+        M.until(m, lambda _: not g.owed(), "the picture across the seam", poll=0.05, guest=60)
         M.guest_sleep(m, 0.5)
         geo = g.geom()
         whole = g.w("it_nwhole") - n0
@@ -1721,7 +1748,7 @@ def twodisp_leg():
         n1 = g.w("it_fsn")
         m.key("KeyF")
         M.until(m, lambda _: g.b("it_fsm") == 1 and g.w("it_fsn") > n1, "the Hercules bracket",
-                poll=0.1, guest=40)
+                poll=0.05, guest=40)
         fs_settled(g)
         assert g.b("it_fsk") == L.FSK["herc"], "the bracket is surface %d, not the Hercules'" \
             % g.b("it_fsk")
@@ -1805,7 +1832,7 @@ def fs_tile(lab, rects, ovs):
     return len(cover)
 
 
-def fs_perf_leg(tag, out):
+def fs_perf_leg(tag, out, shared=None):
     """The head-step WITH its span hook - RNG, decision, move, canvas and the
     column written into video memory - over EVERY computer head-step of the
     same whole rounds as the windowed line (PERF_ROUNDS), in the bracket; the
@@ -1820,14 +1847,10 @@ def fs_perf_leg(tag, out):
     XT-VGA - the instruction count and gfx_blitp's path are the EGA's, only
     the card's wait states differ) has no span hook to time: its lines are
     the presents, the way back, and a Lunatic h4 frame with the governor."""
-    system, apps, machine = boot_for(tag)
     res = {}
     ms = lambda c: 1000.0 * c / M.GUEST_HZ       # noqa: E731
-    with os88ui.boot(system, apps=apps, machine=machine) as ui:
-        g = L.open_game(ui)
+    with _Session(tag, shared) as (ui, g):
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
-        presented(ui, g)
         B = g.base
         HS0, HS1 = B + g.code["it_hs0"], B + g.code["it_hs1"]
         AI1 = B + g.code["it_ai1"]
@@ -1922,7 +1945,7 @@ def fs_perf_leg(tag, out):
                     if r not in rounds:
                         g.put(*go)
                         M.until(m, lambda _: g.b("it_tpause") == 1, "round %d's end" % r,
-                                poll=0.1, guest=120)
+                                poll=0.05, guest=120)
                         continue
                     with M.bp_trace(m, HS0, AI1, HS1, cap=12000) as tr:
                         g.put(*go)
@@ -1945,7 +1968,7 @@ def fs_perf_leg(tag, out):
         # --- IN A ROUND: F's present with the HUD up, and F back -------------------
         start_game(g, 2425, 1, L.TF_BOT | L.TF_NOFLOW | L.TF_HOLD)
         M.until(m, lambda _: g.b("it_state") == L.ST_PLAY and not g.b("it_vsync")
-                and g.w("it_iter") > 100, "a round in play", poll=0.1, guest=60)
+                and g.w("it_iter") > 100, "a round in play", poll=0.05, guest=60)
         m.pause()
         g.put("it_tpause", 1)           # held: the HUD alone, nothing moves
         m.run()
@@ -1957,18 +1980,18 @@ def fs_perf_leg(tag, out):
             to_title(g)
             presented(ui, g)
             start_game(g, 702, 3, L.TF_BOT | L.TF_NOFLOW | L.TF_HOLD)
-            M.until(m, lambda _: g.b("it_tpause") == 1, "round 1", poll=0.2, guest=120)
+            M.until(m, lambda _: g.b("it_tpause") == 1, "round 1", poll=0.05, guest=120)
             m.pause()
             g.put("it_h", 4)
             g.put("it_tflags", L.TF_BOT | L.TF_NOFLOW)
             g.put("it_tpause", 0)
             m.run()
             M.until(m, lambda _: g.b("it_state") == L.ST_PLAY and not g.b("it_vsync")
-                    and g.b("it_hplayed") == 4, "a round at h4", poll=0.1, guest=30)
+                    and g.b("it_hplayed") == 4, "a round at h4", poll=0.05, guest=30)
             n0 = g.w("it_fsn")
             m.key("KeyF")
             M.until(m, lambda _: g.b("it_fsm") == 1 and g.w("it_fsn") > n0, "full screen",
-                    poll=0.1, guest=40)
+                    poll=0.05, guest=40)
             m.pause()
             g.put("it_pspeed", 9)
             m.run()
@@ -2018,7 +2041,7 @@ def fs_perf_leg(tag, out):
             g.put("it_gskip", 1)
             g.put("it_gquiet", 0)
             m.run()
-            M.until(m, lambda _: g.b("it_gskip") == 0, "the governor to let go", poll=0.1,
+            M.until(m, lambda _: g.b("it_gskip") == 0, "the governor to let go", poll=0.05,
                     guest=15)
             print("  ega: the governor, engaged by hand, let go after %d quiet presents"
                   % 32, flush=True)
@@ -2132,10 +2155,10 @@ def flow_leg(tag):
     want = model.play()
     assert S.has_tower_cycle(want), "stored game %d has no tower 1-2-3-4-1" % seed
     series, nextw = [], [1, 2, 3, 4, 1]
-    with os88ui.boot(system, apps=apps, machine=machine) as ui:
+    with os88ui.boot(system, apps=apps, machine=machine, quick=True) as ui:
         g = L.open_game(ui)
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.05, guest=20)
         presented(ui, g)
         # --- the title -------------------------------------------------------------
         texts = [t for _, _, _, _, t in g.overlays()]
@@ -2151,7 +2174,7 @@ def flow_leg(tag):
             """The round about to start (held at its first iteration): the
             sweep done, canvas and glass the model's at height h."""
             M.until(m, lambda _: g.b("it_state") == L.ST_PLAY and g.w("it_nsweep") == k,
-                    "%s: the sweep and READY" % what, poll=0.1, guest=20)
+                    "%s: the sweep and READY" % what, poll=0.05, guest=20)
             presented(ui, g)
             c = start_canvas(h)
             assert g.canvas() == c.pack(), \
@@ -2183,7 +2206,7 @@ def flow_leg(tag):
             g.put("it_tpause", 0)
             m.run()
             M.until(m, lambda _: g.b("it_tpause") == 1, "round %d to end" % (k + 1),
-                    poll=0.1, guest=120)
+                    poll=0.05, guest=120)
             m.pause()
             st, ovs, state = g.state(), g.overlays(), g.b("it_state")
             m.run()
@@ -2225,7 +2248,7 @@ def flow_leg(tag):
             if rec["lossrow"] >= 3:
                 break
             M.until(m, lambda _: g.b("it_state") == L.ST_WAIT and not g.owed(),
-                    "round %d: WAIT" % (k + 1), poll=0.1, guest=10)
+                    "round %d: WAIT" % (k + 1), poll=0.05, guest=10)
             res = guest_str("it_s_pwin" if rec["winner"] == "P" else "it_s_cwin")
             hud = [t for _, _, _, _, t in g.overlays()]
             assert hud == ["PLAYER %d" % rec["sp"], res, "COMPUTER %d" % rec["sc"]], \
@@ -2257,7 +2280,7 @@ def flow_leg(tag):
             raise AssertionError("the game never reached three losses")
         # --- GAME OVER, then the title -------------------------------------------
         M.until(m, lambda _: g.b("it_state") == L.ST_OVER and not g.owed(),
-                "CRASH to give way to GAME OVER", poll=0.1, guest=5)
+                "CRASH to give way to GAME OVER", poll=0.05, guest=5)
         over = guest_str("it_s_over")
         ovs = g.overlays()
         assert over in [t for _, _, _, _, t in ovs], "GAME OVER shows %r" % ovs
@@ -2273,7 +2296,7 @@ def flow_leg(tag):
         W0, W1 = B + g.code["it_wake0"], B + g.code["it_wake1"]     # picture)
         with M.bp_trace(m, W0, W1, cap=4000) as tr:
             M.until(m, lambda _: g.b("it_state") == L.ST_TITLE and g.w("it_nwhole") != nw0,
-                    "GAME OVER to end in the title", poll=0.1, guest=10)
+                    "GAME OVER to end in the title", poll=0.05, guest=10)
         hold = max(holds_of(tr.hits, W0, W1) or [0])
         assert hold <= HOLD_CEIL, "GAME OVER -> the title: a %.0f ms hold (the title's " \
             "build is the worker's, outside the lock: SPEC.md 108.13.2)" % hold
@@ -2292,14 +2315,14 @@ def flow_leg(tag):
         g.put("it_tpause", 0)
         m.run()
         m.key("Digit1")
-        M.until(m, lambda _: g.b("it_tpause") == 1, "a round to end", poll=0.1, guest=120)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "a round to end", poll=0.05, guest=120)
         m.pause()
         g.put("it_lossrow", 0)
         g.put("it_h", 3)
         g.put("it_tpause", 0)
         m.run()
         M.until(m, lambda _: g.b("it_state") == L.ST_WAIT and not g.owed(),
-                "WAIT, the next arena h3 built", poll=0.1, guest=20)
+                "WAIT, the next arena h3 built", poll=0.05, guest=20)
         n0 = g.w("it_nsweep")
         m.pause()
         g.put("it_tpause", 1)
@@ -2315,10 +2338,10 @@ def flow_leg(tag):
         m.run()
         item = "About " + L.TITLE       # the app-name cell's (OSAPI_ABOUT_SET)
         ui.menu_pick(L.TITLE, item)
-        M.until(m, lambda _: g.b("it_abon") == 1, "About to open", poll=0.1, guest=10)
+        M.until(m, lambda _: g.b("it_abon") == 1, "About to open", poll=0.05, guest=10)
         glass(m, tag, "w4-%s-about" % tag)
         m.key("Space")
-        M.until(m, lambda _: g.b("it_abon") == 0, "a key to take About down", poll=0.1, guest=10)
+        M.until(m, lambda _: g.b("it_abon") == 0, "a key to take About down", poll=0.05, guest=10)
         print("  About: '%s' opens the card; a key takes it down" % item, flush=True)
         # --- a PAINT in the middle of a sweep, and the focus pause ----------------
         # (SPEC.md 108.13.3: a paint presents only what the sweep has already
@@ -2350,7 +2373,7 @@ def flow_leg(tag):
         with M.bp_trace(m, P0, P1, cap=4000) as tr:
             ui.raise_window(ours)
             M.until(m, lambda _: g.w("it_nswp") != np0, "the uncover's paint mid-sweep",
-                    poll=0.1, guest=10)
+                    poll=0.05, guest=10)
             M.guest_sleep(m, 0.5)
         pmid = sum(holds_of(tr.hits, P0, P1))
         M.guest_sleep(m, 0.3)
@@ -2392,7 +2415,7 @@ def flow_leg(tag):
         m.run()
         ui.raise_window(disk)           # the front lost in play: paused
         M.until(m, lambda _: g.b("it_paused") == 1, "the lost front to pause the game",
-                poll=0.1, guest=10)
+                poll=0.05, guest=10)
         presented(ui, g)
         with M.bp_trace(m, P0, P1, cap=4000) as tr:
             ui.raise_window(ours)           # (the same rect, a plain paint)
@@ -2407,7 +2430,7 @@ def flow_leg(tag):
             "the auto-pause shows no PAUSED line"
         assert g.b("it_paused") == 1, "the pause is sticky: back in front, still paused"
         m.key("KeyP")
-        M.until(m, lambda _: g.b("it_paused") == 0, "P to resume", poll=0.1, guest=10)
+        M.until(m, lambda _: g.b("it_paused") == 0, "P to resume", poll=0.05, guest=10)
         print("  the front lost in play: PAUSED, sticky; P resumes", flush=True)
         m.pause()
         g.put("it_tflags", 0)
@@ -2422,7 +2445,7 @@ SWEEP_TARGET = 1600.0               # "~1.5 s" where the surface keeps up (the
                                     # schedule's last item is due at tick 25)
 
 
-def sweep_leg(tag, out=None):
+def sweep_leg(tag, out=None, shared=None):
     """isotronperf's sweep part (SPEC.md 108.13.4): MartyPC's cycle counter
     from it_sw0 (the round's start, its arena built) to it_sw1 (the outline
     out) for four sweeps windowed - the title to h1, a raise 3 -> 4, a reset
@@ -2432,14 +2455,10 @@ def sweep_leg(tag, out=None):
     hold from the trigger to the sweep's end, and every CRASH -> WAIT wake's
     (the arena's build is the worker's, outside the lock), is held under
     HOLD_CEIL."""
-    system, apps, machine = boot_for(tag)
     ms = lambda c: 1000.0 * c / M.GUEST_HZ                      # noqa: E731
     res, bad = {}, []
-    with os88ui.boot(system, apps=apps, machine=machine) as ui:
-        g = L.open_game(ui)
+    with _Session(tag, shared) as (ui, g):
         m = ui.m
-        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
-        presented(ui, g)
         B = g.base
         W0, W1 = B + g.code["it_wake0"], B + g.code["it_wake1"]
         S0, S1 = B + g.code["it_sw0"], B + g.code["it_sw1"]
@@ -2483,7 +2502,7 @@ def sweep_leg(tag, out=None):
             with M.bp_trace(m, W0, W1, cap=4000) as tr:
                 m.run()
                 M.until(m, lambda _: g.b("it_state") == L.ST_WAIT and not g.owed(), "WAIT",
-                        poll=0.1, guest=60)
+                        poll=0.05, guest=60)
             hold = max(holds_of(tr.hits, W0, W1) or [0])
             res.setdefault("wait_hold_max_ms", 0.0)
             res["wait_hold_max_ms"] = max(res["wait_hold_max_ms"], hold)
@@ -2499,7 +2518,7 @@ def sweep_leg(tag, out=None):
                 one(lab, lambda: g.put("it_qcont", 1))
             else:
                 g.put("it_qcont", 1)
-            M.until(m, lambda _: g.b("it_tpause") == 1, "the round", poll=0.2, guest=120)
+            M.until(m, lambda _: g.b("it_tpause") == 1, "the round", poll=0.05, guest=120)
 
         m.pause()
         g.put("it_tseed", 2425, 2)
@@ -2507,7 +2526,7 @@ def sweep_leg(tag, out=None):
         g.put("it_tpause", 0)
         m.run()
         one("title -> h1", lambda: m.key("Digit1"))
-        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1", poll=0.2, guest=120)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1", poll=0.05, guest=120)
         nxt(None, 3)
         nxt("raise 3 -> 4", 4)
         nxt("reset 4 -> 1", 1)
@@ -2516,7 +2535,7 @@ def sweep_leg(tag, out=None):
         round_to_wait(3)
         fs_enter(ui, g, "F")
         g.put("it_qcont", 1)
-        M.until(m, lambda _: g.b("it_tpause") == 1, "the round", poll=0.2, guest=120)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "the round", poll=0.05, guest=120)
         nxt("fs raise 3 -> 4", 4)
         nxt("fs reset 4 -> 1", 1)
         nxt("fs same h1", 1)
@@ -2564,9 +2583,10 @@ def main():
         return bound_leg()
     if a.win:
         for tag in (("cga", "herc", "vga") if a.win == "all" else a.win.split(",")):
-            win_leg(tag)
-            if tag == "ega":            # isotronega is BOTH halves (SPEC.md 108.12)
-                fs_leg("ega")
+            with _Session(tag) as sh:   # isotronega's two halves share a boot
+                win_leg(tag, shared=sh)
+                if tag == "ega":        # isotronega is BOTH halves (SPEC.md 108.12)
+                    fs_leg("ega", shared=sh)
         print("isotronwin: ok (%s)" % a.win)
         return 0
     if a.fs:
@@ -2585,13 +2605,18 @@ def main():
         return 0
     if a.perf:
         for tag in (("cga", "herc", "vga", "ega") if a.perf == "all" else a.perf.split(",")):
-            if not a.sweep:
-                if not a.fsonly:    # EGA: its wakes and round start, no head-steps
-                    perf_leg(tag, a.json and a.json.replace(".json", "-%s.json" % tag),
-                             heads=(tag != "ega"))
-                fs_perf_leg(tag, a.json and a.json.replace(".json", "-fs-%s.json" % tag))
-            if not a.fsonly:                    # wave 4: the sweep, both modes
-                sweep_leg(tag, a.json and a.json.replace(".json", "-sweep-%s.json" % tag))
+            # ONE boot a machine for the three legs (_Session): each leaves the
+            # game at the windowed title, and the next asserts it found it so
+            with _Session(tag) as sh:
+                if not a.sweep:
+                    if not a.fsonly:    # EGA: its wakes and round start, no head-steps
+                        perf_leg(tag, a.json and a.json.replace(".json", "-%s.json" % tag),
+                                 heads=(tag != "ega"), shared=sh)
+                    fs_perf_leg(tag, a.json and a.json.replace(".json", "-fs-%s.json" % tag),
+                                shared=sh)
+                if not a.fsonly:                    # wave 4: the sweep, both modes
+                    sweep_leg(tag, a.json and a.json.replace(".json", "-sweep-%s.json" % tag),
+                              shared=sh)
         print("isotronperf: ok (%s)" % a.perf)
         return 0
     ap.print_help()

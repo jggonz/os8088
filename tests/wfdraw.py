@@ -126,7 +126,7 @@ def main():
     a = ap.parse_args()
     img, apps, machine = HERC if a.herc else VGA
     rows, ok = [], True
-    with os88ui.boot(img, apps=apps, machine=machine) as ui:
+    with os88ui.boot(img, apps=apps, machine=machine, quick=True) as ui:
         ui.path("B:/WIREFLET.O88")
         ui.settle()
         # the window's segment is current: the lease pins the region

@@ -173,9 +173,10 @@ wf_auto:
     cmp byte [wf_selected], WF_SHIPS
     jb .ship
 .done:
-    mov byte [wf_selected], 0
-    mov byte [wf_target], 0
-    mov byte [wf_direction], 0
+    xor ax, ax
+    mov [wf_selected], al
+    mov [wf_target], al
+    mov [wf_direction], al
     mov word [wf_message], wf_allplaced
 .out:
     ret

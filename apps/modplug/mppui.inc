@@ -215,6 +215,39 @@ mppu_layout:
     ret
 
 ; =============================================================================
+; mppu_reorg - re-latch the player's content origin from where the window IS
+; in:  nothing; preserves all registers
+;
+; A window dragged by its title is REPLAYED from the drag cache and its W_PAINT
+; is NOT called (SPEC.md 11.96.12.0), so [mppu_cx0]/[mppu_cy0] as mppu_layout
+; last latched them name where the window WAS: a click after a drag missed
+; every control, and the worker's next frame drew its meters at the old place.
+; So the two readers that are not a paint - the hit test and the worker's
+; frame - ask again at their top, which is rule 1 of that section.
+;
+; It does NOT invalidate the way mppu_layout does on a move, and that is the
+; point rather than an omission: a replay carries the face's pixels with the
+; window, so every element's recorded state is still true at the new origin.
+; Where the replay is refused the kernel orders a W_PAINT instead, and
+; mpp_paint invalidates the lot.
+; =============================================================================
+mppu_reorg:
+    cmp byte [mppu_ok], 0           ; never laid out: mppu_layout's to latch
+    je .out
+    push ax
+    push bx
+    push dx
+    mov bx, [mpp_win]
+    call OSAPI_WM_CONTENT           ; out AX = content left, DX = content top
+    mov [mppu_cx0], ax
+    mov [mppu_cy0], dx
+    pop dx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; =============================================================================
 ; Coordinate helpers - content-relative in, absolute at the API
 ;
 ; They add [mppu_dx0]/[mppu_dy0], the CURRENT drawing origin, rather than the
@@ -2878,6 +2911,8 @@ mppu_draw_all:
 ; =============================================================================
 mppu_frame:
     push ax
+    call mppu_reorg                 ; the origin where the window IS: a drag
+                                    ; replays and never paints (mppu_reorg)
     cmp byte [mpp_cpu0], 0          ; SPEC.md 56.7: on the machine XT mode
     je .viz                         ; exists for, the visualiser is not
     cmp byte [mpm_playing], 0       ; animated WHILE PLAYING - those cycles
@@ -3010,6 +3045,8 @@ mppu_hit:
     push di
     cmp byte [mppu_ok], 0
     je .miss
+    call mppu_reorg                 ; from where the window IS, not where the
+                                    ; last paint saw it (mppu_reorg)
     sub cx, [mppu_cx0]              ; content-relative from here down
     js .miss
     sub dx, [mppu_cy0]

@@ -94,15 +94,19 @@ def main():
     with os88marty.launch("build/os8088-360.img", apps=DISK,
                           machine=a.machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)      # SOAK-SPEED 12: a state gate, no settle
         os88marty.no_saver(m)       # SPEC.md 79 DRAWS, so a settle can never
         mo = os88mouse.Mouse(marty=m)   # return while it is up
 
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        # Every read below is guest MEMORY, so the UI being done with each
+        # gesture is the wait (SOAK-SPEED technique 4). lock=False: Tank's
+        # worker holds the gfx lock nearly always once it is open.
+        done = lambda m, **k: os88marty.ui_done(m, lock=False)  # noqa: E731
+        dispcp.open_drive(m, mo, S, done, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
         mo.drag(wx + 60, wy + 9, wx + 60 + 215, wy + 9)
-        os88marty.settle(m)
+        done(m)
         disk = dispcp.win_rect(m, S, dslot)[:2]
 
         def raise_disk():
@@ -110,15 +114,15 @@ def main():
             pt = uncovered(m, S, dw)
             if pt is None:
                 raise RuntimeError("the Disk window is wholly covered")
-            mo.click(*pt)
-            os88marty.settle(m)
+            mo.click(*pt, settle=0)
+            done(m)
 
         bad, checked = 0, 0
         for name in sorted(APPS):
             fname, title = APPS[name]
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
             raise_disk()
-            dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=fname)
+            dispcp.open_named(m, mo, S, done, *disk, name=fname)
             # NO settle: Tank Attack redraws every frame for ever, and this
             # row reads guest MEMORY rather than the glass, so it does not
             # need the screen to hold still - which is what lets one row
@@ -139,8 +143,12 @@ def main():
                         bytes(m.read(S("inst_restart"), INST_MAX * 2)))
             try:
                 os88marty.until(m, lambda _: fresh(), "%s's window" % name,
-                                poll=0.3, limit=30)
-                os88marty.quiesce(m, held, guest=2.0,
+                                limit=30)
+                # the entry and the first paint (where REGPAIR hires) are
+                # UI-task work: done, then the bytes holding still - 0.5
+                # guest s apart, where 2.0 was paying for the paint too
+                done(m)
+                os88marty.quiesce(m, held, guest=0.5,
                                   what="%s's region and worker" % name)
             except os88marty.MartyError as e:
                 print("  (%s)" % e)

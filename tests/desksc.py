@@ -217,7 +217,8 @@ def main():
     print("SYSTEM.CFG before: %d bytes, trailer %r" % (len(before),
                                                        trailer(before)[0]))
 
-    with os88ui.boot(sysimg, apps=appimg, machine=machine) as ui:
+    with os88ui.boot(sysimg, apps=appimg, machine=machine,
+                     quick=True) as ui:
         m = ui.m
         ncell = ui._byte("desk_ncell")
         lky = ui._word("desk_lky")
@@ -258,7 +259,7 @@ def main():
                                             1)[0]))
         cx, cy = cell_xy(ui, cell)
         ui.mo.to(cx + DESK_PX + DESK_CW, cy)    # the arrow is drawn INTO the
-        ui.settle()                        # framebuffer: off the badge first
+        ui.still()                        # framebuffer: off the badge first
         sel = ui._byte("desk_sel") == DESK_SC0
         bad = badge_on_glass(m, cx, cy, lky, sel)
         check(bad == 0, "the badge is on the glass beside the picture "
@@ -317,7 +318,8 @@ def main():
         print("E: reboot, and it comes back")
         m.reset()
         m.run()
-        ui.ready()
+        ui.up()                 # every read below is guest state: no settle
+        os88marty.no_saver(m)
         seg, n, rows = table(ui)
         live = [r for r in rows if r[0] != 0xFF]
         check(len(live) == 1, "one shortcut after the reboot (%d)" % len(live))
@@ -477,18 +479,18 @@ def main():
             w, _h, d = m.fbuf()
             return [bytes(d[(y * w + bx0) * 3:(y * w + bx0 + DESK_CW) * 3])
                     for y in range(by0, by0 + zh)]
-        ui.settle()
+        ui.still()
         plain = bpix()
         ui.mo.click(*cell_mid(ui, zslot(ui, 1)))
         ui._wait(lambda: ui._byte("desk_sel") == 1, "B: selected", 10)
-        ui.settle()
+        ui.still()
         check(bpix() != plain, "B: selected, and lit on the glass")
         win = [w for w in ui.windows() if w.visible][0]
         ui.mo.click(win.x + win.w // 2, win.y + 6)  # its title bar
         ui._wait(lambda: ui._byte("desk_sel") == 0xFF,
                  "the desktop selection to go when a window takes the focus",
                  10, snapshot=lambda: "desk_sel %#x" % ui._byte("desk_sel"))
-        ui.settle()
+        ui.still()
         check(bpix() == plain, "B:'s cell is UNLIT again, pixel for pixel")
 
         # --- L: a DRIVE is an item like any other ------------------------
@@ -518,7 +520,8 @@ def main():
         print("L: ...and after a reboot")
         m.reset()
         m.run()
-        ui.ready()
+        ui.up()                 # every read below is guest state: no settle
+        os88marty.no_saver(m)
         check((zslot(ui, 0), zslot(ui, 1)) == (3, 0),
               "A: back in cell 3 and B: in cell 0 (%r, %r)"
               % (zslot(ui, 0), zslot(ui, 1)))

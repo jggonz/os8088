@@ -34,18 +34,20 @@
 
 high apps/sheet/sheet.asm       # ITS OWN CS STAMPED INTO TWO OVERLAYS: ch_ovbind
     # (apps/os88chartovl.inc) and sh_ovbind (sheet.asm, `mov ax, cs`) write the
-    # region's CS into the vector tables CHART.OVL and MACRO.OVL far-call back
-    # through, as real-mode far pointers. Retired when the two modules become
-    # parts reached through a selector kern_mega can patch (PR #289's review
-    # flagged sidecars-to-parts). Not run on kern_mega.
-high apps/realdmg/realdmg.asm     # FAR POINTERS STAMPED WITH ITS OWN CS: rdg_init
-    # (apps/realdmg/rdgsys.inc, "the far vectors the core jumps through")
-    # writes the region's CS into S_EVVEC, S_IORVEC, S_IOWVEC and S_MBCVEC in
-    # the view, and the core - a part, entered with interrupts off on the
-    # Game Boy's own stack - jumps through them as real-mode far pointers;
-    # rw_reloc (realdmg.asm) re-stamps them when the region moves. Retired
-    # when the core reaches the package through a selector kern_mega can
-    # patch, rather than a paragraph number. Not yet run on kern_mega.
+    # region's CS into the vector tables the chart and macro modules far-call
+    # back through, as real-mode far pointers. The modules ARE parts of
+    # SHEET.O88 now (SPEC.md 82.16.12, the sidecars-to-parts PR #289's review
+    # flagged), but those tables still carry a real-mode CS, so this is retired
+    # when they are reached through a selector kern_mega can patch. Not run on
+    # kern_mega.
+high apps/realdmg/realdmg.asm     # NOT YET RUN HIGH: since REALDMG-SPEC
+    # 16.2.4 the far vectors the core jumps through (S_EVVEC, S_IORVEC,
+    # S_IOWVEC, S_MBCVEC) hold the region's CODE selector (`mov ax, cs`) and
+    # rw_reloc re-stamps them by rw_csel, so the line's first reason is gone;
+    # what is left is that the region above 1MB has never been run - the
+    # parts carve, the worker's restart and the log's pins against a region
+    # whose selectors do not move. Retired by one MEGATRAP run with OS88_HIGH
+    # in the class byte (tests/rdgmega.py's shape) and the declaration.
 high apps/browser/browser.asm     # THE APP RETAINS CLAIM SEGMENTS: br_srcclaim
     # saves OSAPI_MEM_CLAIM's DX in br_srcseg, and br_claimpage retains the
     # document and line claims in br_docseg/br_lseg for later direct ES access.
@@ -71,20 +73,21 @@ highmem apps/waverack/waverack.asm   # A CLAIM STEPPED BY PARAGRAPH: wt_hoff
     # OSAPI_MEM_HUGE's step for the hold (KERN-MEGA-PLAN 14.67) and a run on
     # kern_mega.
 
-highmem apps/sheet/sheet.asm    # FAR-CALLS CODE IN A CLAIM: CHART.OVL and MACRO.OVL
+highmem apps/sheet/sheet.asm    # FAR-CALLS CODE IN A CLAIM: its two module parts
     # are read into claims and entered with `call far [ch_ovfar]` /
     # `call far [sh_m2far]` at (0, the claim's segment) - os88chartovl.inc's
     # ch_ovneed and sheet.asm's sh_m2need - which OS88_HIGHMEM's contract
     # rules out (apps/os88api.inc). Retired with the `high` line above.
-highmem apps/realdmg/realdmg.asm  # PARAGRAPH ARITHMETIC ON ITS CLAIMS, AND CODE
-    # WRITTEN THROUGH CS: cartridge RAM banks at S_RAMSEG + bank x 200h
-    # (rdg_rambank, rdgsys.inc), the bank cache's slots at rw_slotseg + slot
-    # x 400h (rwbank.inc), the recompiler's block table at its cache's
-    # segment + 1000h and its part past the table (rw_jitsegs, rw_jitget);
-    # and the recompiler patches the code it chains through CS (tr_lpatch's
-    # links, rdggen.py; [cs:rb_viewseg] in rdgjitp.asm), which a protected
-    # mode code segment refuses. Retired by addressing each claim at its own
-    # selector and the cache through a writable alias of it.
+highmem apps/realdmg/realdmg.asm  # PARAGRAPH ARITHMETIC ON ITS CLAIMS: cartridge
+    # RAM banks at S_RAMSEG + bank x 200h (rdg_rambank, rdgsys.inc), the bank
+    # cache's slots at rw_slotseg + slot x 400h (rwbank.inc), the recompiler's
+    # block table at its cache's segment + 1000h and its part past the table
+    # (rw_jitsegs, rw_jitget), and the cache and part entered as CODE through
+    # OSAPI_MEM_CODESEL's identity alias, which a lone data selector above
+    # 1MB has none of. (Its link patches no longer write through CS -
+    # REALDMG-SPEC 16.2.4 - and kern_mega's arm keeps the cartridge itself
+    # above 1MB in place, 10.3.1.) Retired by addressing each claim at its own
+    # selector and a code twin for the cache segments.
 
 highmem apps/xtmp3/xtmp3.asm   # PARAGRAPH ARITHMETIC ON ITS LOOK-AHEAD CLAIM:
     # a Decode First's stage is a segment of its own, cut from the ring's claim

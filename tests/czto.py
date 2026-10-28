@@ -177,7 +177,7 @@ def main():
             fails.append("%s: %s" % (tag, msg))
 
     with os88ui.boot(os88build.at("build/os8088.img"), apps=dx,
-                     machine=MACHINE, verbose=False) as ui:
+                     machine=MACHINE, verbose=False, quick=True) as ui:
         m = ui.m
         S = ui._S
         fl = os88flush.Flush(marty=m)
@@ -204,7 +204,7 @@ def main():
             row = ui.scroll_to(idx, win=win)
             x, y = ui.row_xy(win, row)
             ui.mo.click(x, y)
-            ui.settle()
+            os88marty.ui_done(m)
 
         def unto(name):
             """select `name`, File > Uncompress To..., take the Save box's
@@ -213,8 +213,8 @@ def main():
             m.write(S("toast_buf"), b"\0")
             ui.menu_pick("File", "Uncompress To...")
             os88marty.until(m, lambda mm: w16("fdlg_win") != 0,
-                            "the Save box to open", poll=0.1, guest=30.0)
-            ui.settle()
+                            "the Save box to open", poll=0.05, guest=30.0)
+            os88marty.ui_done(m)
             m.key("Enter")
 
         last_why = [None]
@@ -274,7 +274,7 @@ def main():
                     return True
                 return False
             os88marty.until(m, got, "the join to finish or to ask",
-                            poll=0.2, guest=limit)
+                            poll=0.05, guest=limit)
             if box.get("odd"):
                 say("   (transient: %d reads of the prompt with no part in "
                     "its header yet, first %r)" % (len(box["odd"]),
@@ -282,7 +282,7 @@ def main():
             last_why[0] = box.get("why")
             if os.environ.get("CZTO_WHY"):
                 say("   (outcome %r because %r)" % (box["r"], box.get("why")))
-            ui.settle()
+            os88marty.ui_done(m)
             return box["r"]
 
         def key(k):
@@ -292,7 +292,7 @@ def main():
         def motor_off():
             """a swap is noticed once the motor has stopped (SPEC.md 18.9.1)"""
             os88marty.until(m, lambda mm: m.read(0x43F, 1)[0] & 0x0F == 0,
-                            "the floppy motors to stop", poll=0.2, guest=10.0)
+                            "the floppy motors to stop", poll=0.05, guest=10.0)
 
         def a_files():
             return {e.name.upper(): e for e in fl.volume(0).walk()}
@@ -317,8 +317,8 @@ def main():
             % (r,))
         key("Escape")
         os88marty.until(m, lambda mm: claim() is None and mode() == 0,
-                        "Esc to end the join", poll=0.2, guest=30.0)
-        ui.settle()
+                        "Esc to end the join", poll=0.05, guest=30.0)
+        os88marty.ui_done(m)
         af = a_files()
         leg("esc", "ESC.DAT" not in af and "CMPRESS~.TMP" not in af,
             "A: holds %s" % sorted(n for n in af if n.startswith(("ESC",
@@ -358,8 +358,8 @@ def main():
         m.mouse()
         try:
             os88marty.until(m, lambda mm: claim() is None and mode() == 0,
-                            "the click to end the join", poll=0.2, guest=30.0)
-            ui.settle()
+                            "the click to end the join", poll=0.05, guest=30.0)
+            os88marty.ui_done(m)
         except Exception as e:          # the defect wrecks the machine here
             seen["dead"] = str(e)
         af = a_files()
@@ -491,11 +491,11 @@ def main():
         if r[0] == "asked":
             key("Escape")               # ...and give the machine back
             os88marty.until(m, lambda mm: claim() is None and mode() == 0,
-                            "Esc to end the join", poll=0.2, guest=30.0)
+                            "Esc to end the join", poll=0.05, guest=30.0)
         motor_off()
         m.mount(1, dz)
         ui.menu_pick("Nav", "Refresh")  # the third disk's root
-        ui.settle()
+        os88marty.ui_done(m)
 
         # ioerr: BAD.001 on the third disk, BAD.002 on the second - which is
         # the marginal one. The prompt, the swap, then its reads fail
@@ -521,7 +521,7 @@ def main():
             "after the verdict: %d failed reads, pointer (level, x) %r"
             % (len(after), after[:6]))
         ui.menu_pick("Nav", "Refresh")  # the disk reads again: list it
-        ui.settle()
+        os88marty.ui_done(m)
 
         # hopfail: HOP.001 and HOP.002 both on the second disk, still in B:.
         # B: fails part-way, and the error path's own hop back to A: - to

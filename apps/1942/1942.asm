@@ -41,6 +41,8 @@ n_entry:
     call OSAPI_MEM_CLAIM            ; into fullscreen and dropped on the way
     jc .out                         ; out (n_loadgfx, n_dropgfx), so the
     mov [n_canvas], dx              ; desktop holds the canvas and nothing else
+    mov ax, n_canvasmv              ; ...and on the desktop it MOVES (SPEC.md
+    call OSAPI_MEM_MOVABLE          ; 101.2.1): n_launch pins it for the bracket
     mov si, n_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -69,6 +71,26 @@ n_entry:
     mov bx, [n_win]
     clc
 .out:
+    ret
+
+; n_canvasmv - the canvas's relocation proc (SPEC.md 66.2, 101.2.1): it is a
+; 64KB wall on the desktop, which holds nothing else of ours. ONE WORD names
+; it - every reader loads [n_canvas] into ES or DS where it uses it, and the
+; one claim the desktop side makes with the canvas in hand (n_frontload's
+; scratch, kern_mega only) reloads it after. Inside the bracket the scenes,
+; the banks and the ring are claimed while ES holds it, so there it is
+; PINNED (n_launch), and this is never called
+n_canvasmv:
+    mov [n_canvas], dx
+    ret
+
+; n_canvasdecl - AX = the canvas's proc, or 0 to pin it. Preserves all but
+; the flags
+n_canvasdecl:
+    push dx
+    mov dx, [n_canvas]
+    call OSAPI_MEM_MOVABLE
+    pop dx
     ret
 
 n_paint:

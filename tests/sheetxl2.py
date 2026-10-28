@@ -51,7 +51,8 @@ import sheetfmt as SF                                        # noqa: E402
 import sheetdec as SD                                        # noqa: E402
 
 WORK = "build/sheetxl2"                 # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetxl2.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetxl2.img")        # the run's tree, so a soak lane finds it
 ARCHIVE = os.environ.get("EXCEL21D_7Z", os.path.join(
     HERE, "..", "..", "LIBRARY", "platforms", "msdos", "install-media",
     "Microsoft Excel 2.1d for Windows (1990-07) (3.5-720k).7z"))
@@ -241,7 +242,7 @@ def build_disk(files):
     for n, data in files.items():
         open(os.path.join(WORK, n), "wb").write(data)
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL"]
+                    "360", "build/sheet.o88"]
                    + [os.path.join(WORK, n) for n in files],
                    check=True, stdout=subprocess.DEVNULL)
 

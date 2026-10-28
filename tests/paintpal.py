@@ -97,11 +97,14 @@ class Paint(object):
         is served from the raise cache (SPEC.md 11.96.11) and the content is
         never repainted at all."""
         r = self.w.x, self.w.y
+        # Each zoom is a whole W_PAINT inside a UI pass, so the UI going idle
+        # is the wait; only the capture that follows wants the glass still.
         self.ui.mo.dblclick(r[0] + 60, r[1] + 9)
-        self.ui.settle()
+        os88marty.ui_done(self.m, "the zoom's repaint")
         self.ui.mo.dblclick(r[0] + 60, r[1] + 9)
-        self.ui.settle()
+        os88marty.ui_done(self.m, "the unzoom's repaint")
         self.ui.mo.to(4, 4)
+        os88marty.ui_done(self.m)
         self.ui.settle()
 
     def shot(self):

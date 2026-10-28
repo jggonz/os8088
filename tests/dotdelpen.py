@@ -641,7 +641,7 @@ def main(argv):
 
     names = bss()
     fail = 0
-    with os88ui.boot(a.img, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.img, apps=a.apps, machine=a.machine, quick=True) as ui:
         ui.path(PKG)
         p = Probe(ui, names)
         fail += leg_h(ui, p, say)      # the DEMO is what it listens to, so it

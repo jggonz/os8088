@@ -43,7 +43,8 @@ import sheetxl2 as X2                                        # noqa: E402
 import glass                                                 # noqa: E402
 
 WORK = "build/sheetnumfmt"              # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetnumfmt.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetnumfmt.img")        # the run's tree, so a soak lane finds it
 EXCEL21 = ['General', '0', '0.00', '#,##0', '#,##0.00', '$#,##0 ;($#,##0)',
            '$#,##0 ;[Red]($#,##0)', '$#,##0.00 ;($#,##0.00)',
            '$#,##0.00 ;[Red]($#,##0.00)', '0%', '0.00%', '0.00E+00',
@@ -115,7 +116,7 @@ def build_disk():
     src = os.path.join(WORK, "NF.BIF")
     open(src, "wb").write(biff3())
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL", src],
+                    "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

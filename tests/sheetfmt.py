@@ -73,7 +73,8 @@ from harness import check, done                              # noqa: E402
 KINDS = ('bif', 'slk', 'dif', 'csv', 'txt', 'dbf')
 MACHINE = "os8088_5150_cga_gla"
 SYS = "build/os8088-360.img"
-DISK = "build/sheetfmt.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetfmt.img")        # the run's tree, so a soak lane finds it
 
 # The cells the HOST authors.  One of everything the value model has that a
 # text format can express, plus the two that turned out to matter:
@@ -172,8 +173,7 @@ def build_disk():
     import subprocess
     open("build/SHIN.SLK", "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:build/SHIN.SLK"],
+                    "--size", "360", "APPS:build/sheet.o88", "APPS:build/SHIN.SLK"],
                    check=True, stdout=subprocess.DEVNULL)
 
 

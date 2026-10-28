@@ -54,7 +54,9 @@ def run(machine, image, apps, claim_only=False):
         entry = S("mou_isr_body")
         after = S("mou_isr_body.priv")  # just past MOUPRIV_ENTER: 0 bytes
     bad = []
-    with os88ui.boot(image, apps=apps, machine=machine) as ui:
+    with os88ui.boot(image, apps=apps, machine=machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         m.write(ICA, b"\0" * 6)
         ui.path("B:/APPS")

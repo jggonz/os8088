@@ -88,10 +88,10 @@ def repaint(ui):
     v0 = fs(ui, geom.FS_VIEW, 1)
     ui.m.key("KeyV")
     until(ui, lambda: fs(ui, geom.FS_VIEW, 1) != v0, "the view to toggle")
-    ui.settle()
+    ui.still()
     ui.m.key("KeyV")
     until(ui, lambda: fs(ui, geom.FS_VIEW, 1) == v0, "the view to come back")
-    ui.settle()
+    ui.still()
 
 
 def same(name, a, b):
@@ -99,16 +99,16 @@ def same(name, a, b):
     check(name, d == 0, "(%d px differ)" % d)
 
 
-with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
+with os88ui.boot(SYS, apps=APPS, machine=MACHINE, quick=True) as ui:
     m = ui.m
     print("== %s : the chooser's default button, redraw vs repaint (%s) =="
           % (MACHINE, SYS))
     ui.path(NP)
-    ui.settle()                 # a menu picked while the app is still
+    ui.still()                 # a menu picked while the app is still
                                 # coming up is lost (os88ui's known race)
     ui.menu_pick("File", "Open")
     w = ui.chooser()
-    ui.settle()
+    ui.still()
     rows = ui.listing(w)
     check("the Open form is up", w.title == "Open", "(%r)" % w.title)
     check("nothing is selected", fs(ui, geom.FS_SEL) == 0xFFFF,
@@ -118,7 +118,7 @@ with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
     # --- greyed -> live, by a click on a row ---------------------------------
     ui.mo.click(*ui.row_xy(w, 0), settle=0)
     until(ui, lambda: fs(ui, geom.FS_SEL) == 0, "row 0 to be selected")
-    ui.settle()
+    ui.still()
     live_redrawn = btn(ui, w)
     repaint(ui)
     live_fresh = btn(ui, w)
@@ -136,7 +136,7 @@ with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
     if not SMALL:
         m.key("ArrowDown")
         until(ui, lambda: fs(ui, geom.FS_SEL) == 1, "Down to select row 1")
-        ui.settle()
+        ui.still()
         down_redrawn = btn(ui, w)
         repaint(ui)
         down_fresh = btn(ui, w)
@@ -158,7 +158,7 @@ with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
     ui.mo.click(*blank, settle=0)
     until(ui, lambda: fs(ui, geom.FS_SEL) == 0xFFFF,
           "the selection to clear")
-    ui.settle()
+    ui.still()
     grey_redrawn = btn(ui, w)
     repaint(ui)
     grey_fresh = btn(ui, w)

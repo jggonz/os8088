@@ -72,7 +72,7 @@ def main():
     b = open(os.path.join(BDIR, "deskcal.bin"), "rb").read()
     image = struct.unpack_from("<H", b, 8)[0]
 
-    with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(sysimg, machine="os8088_xt_vga", quick=True) as ui:
         m = ui.m
         w = ui.path("A:/STIKAPPS/DESKCAL.O88")
         wseg = struct.unpack_from("<H", m.read(
@@ -133,7 +133,7 @@ def main():
                       "month (%d)" % bss()["sel"])
             if (y, mo) == (1980, 1):
                 key("PageUp")
-                os88marty.pace(m, 3)
+                os88marty.ui_done(m)    # the key consumed: a refusal is no change
                 check((bss()["y"], bss()["m"]) == (1980, 1),
                       "PgUp at January 1980 is refused (%d-%d)"
                       % (bss()["y"], bss()["m"]))
@@ -142,7 +142,7 @@ def main():
                 leg(1980, 2, "PgDn")
             if (y, mo) == (2099, 12):
                 key("PageDown")
-                os88marty.pace(m, 3)
+                os88marty.ui_done(m)    # the key consumed: a refusal is no change
                 check((bss()["y"], bss()["m"]) == (2099, 12),
                       "PgDn at December 2099 is refused (%d-%d)"
                       % (bss()["y"], bss()["m"]))

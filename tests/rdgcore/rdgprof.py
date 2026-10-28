@@ -35,7 +35,7 @@ import rdgimg  # noqa: E402
 
 S_BANK = 0x4000 + 0x35                  # rdgdefs.inc: the ROM bank in 4000-7FFF
 
-HOST, CORE, CACHE, HASH = 0x7600, 0x10000, 0x90000, 0x80000   # rdghost.asm's segments
+HOST, CORE, CACHE, HASH = 0x7200, 0x10000, 0x90000, 0x80000   # rdghost.asm's segments
 HASHLEN = 0x10000                       # (its 64KB block table, 16.3)
 CACHE2 = 0x70000                        # ...and CACHE2_SEG
 

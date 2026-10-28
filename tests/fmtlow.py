@@ -93,7 +93,7 @@ def pick_format_unreadable(ui, m):
     m.breakpoints([])
     m.run()
     t.join()
-    M.settle(m)
+    M.ui_done(m)
     return failed
 
 
@@ -110,7 +110,7 @@ def run_format(m):
         m.run()
     m.breakpoints([])
     m.run()
-    M.settle(m, limit=600)
+    M.ui_done(m, limit=600)
     return tracks
 
 
@@ -126,14 +126,14 @@ open(FIX, "wb").write(_img)                  # BPB: MartyPC's raw flush sizes
                                              # 256) mis-sizes or refuses the
                                              # capture (tests/fmtreach.py)
 try:
-    with os88ui.boot(SYS, apps=FIX, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=FIX, machine=MACHINE, quick=True) as ui:
         m = ui.m
         print("== %s : Format Disk... on a disk it cannot read ==" % MACHINE)
         try:
             ui.open_drive("B")          # random bytes mount nothing, and
         except os88ui.UIError:          # open_drive's check wants a volume;
             pass                        # the WINDOW is what counts here
-        M.settle(m)
+        M.ui_done(m)
 
         # --- 1. the probe reads nothing, and must not refuse ----------------
         n = pick_format_unreadable(ui, m)
@@ -149,12 +149,12 @@ try:
         check(m.read(m.sym("fm_fmtrow"), 1)[0] == 3,
               "...at the size the DRIVE makes: 360K on a ROM with no AH=08h",
               "", got=m.read(m.sym("fm_fmtrow"), 1)[0], want=3)
-        m.key("Escape")
-        M.settle(m)
+        M.key_taken(m, "Escape")
+        M.ui_done(m)
 
         # --- 2. every track is laid ------------------------------------------
         ui.menu_pick("Disk", "Format Disk...")
-        M.settle(m, limit=300)
+        M.ui_done(m, limit=300)
         check(edit(m) == 5, "a disk of random bytes is offered a format", "",
               got=edit(m), want=5)
         tracks = run_format(m)

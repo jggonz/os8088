@@ -10,7 +10,8 @@ unpacks it OUTSIDE the tree, and uses it from there - its own folder the
 only place Python may find an os88 module.
 
 1. IT IS WHOLE: the zip holds the window, the four tools it runs or imports
-   and their own imports, VIDEO.O88 and README.TXT, all in os8088-encoder/;
+   and their own imports, VIDEO.O88, README.TXT and the user's guide -
+   GUIDE.HTML and every guide/ picture it names - all in os8088-encoder/;
    and made twice it is the same bytes.
 2. IT ENCODES: os88venc.py, from the unpacked folder, turns a second of
    ffmpeg's test pattern into a .V88 that os88vid verifies.
@@ -28,6 +29,7 @@ FAIL: os88disk imports it, and both disks are made by processes the window
 starts (which is why 5 counts only the window's own process).
 """
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -42,7 +44,8 @@ import os88build                                              # noqa: E402
 
 NEED = ("os88vencgui.py", "os88venc.py", "os88vid.py", "os88disk.py",
         "os88hdd.py", "VIDEO.O88", "README.TXT", "boot/kernel.sys",
-        "boot/boothd.bin", "boot/mbr.bin", "boot/hdd.drv")
+        "boot/boothd.bin", "boot/mbr.bin", "boot/hdd.drv", "GUIDE.HTML",
+        "guide/window.png")
 
 # run INSIDE the unpacked folder: make a floppy and a hard disk the way the
 # window does, and say where every os88 module came from
@@ -100,6 +103,11 @@ def main():
                            capture_output=True)
         names = zipfile.ZipFile(z1).namelist()
         miss = [n for n in NEED if "os8088-encoder/" + n not in names]
+        page = zipfile.ZipFile(z1).read("os8088-encoder/GUIDE.HTML") \
+            if "os8088-encoder/GUIDE.HTML" in names else b""
+        miss += sorted({n for n in re.findall(
+            r'(?:src|href)="(guide/[^"#?]+)"', page.decode("utf-8"))
+            if "os8088-encoder/" + n not in names})
         same = open(z1, "rb").read() == open(z2, "rb").read()
         print("   1: %d files, all under os8088-encoder/: %s; made twice: %s"
               % (len(names), all(n.startswith("os8088-encoder/")

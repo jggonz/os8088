@@ -134,16 +134,16 @@ def main():
     syms = pkg_syms()
 
     with os88ui.boot(tree.img("os8088-360.img"), apps=tree.img("apps360.img"),
-                     machine=CARDS[a.card]) as ui:
+                     machine=CARDS[a.card], quick=True) as ui:
         m = ui.m
         w = ui.path("B:/APPS/ARTFUL.O88")
-        seg = u16(m.read(os88geom.winptr(m, w.i, ui.sym) + os88geom.W_SEG, 2))
+        seg = os88marty.pkg_live(m, w, ui.sym)
         ui.settle()
         m.key("KeyN")                          # New -> fullscreen (SPEC.md 46.5)
         # Freeze the blink before the first settle, exactly as atmenusu does:
         # a fullscreen ArtfulType otherwise never stops changing.
-        m.write(seg * 16 + syms["at_drag"], b"\x01")
-        m.write(seg * 16 + syms["at_cphase"], b"\x00")
+        seg.write(syms["at_drag"], b"\x01")
+        seg.write(syms["at_cphase"], b"\x00")
         ui.settle()
 
         caret = syms["at_caret"]

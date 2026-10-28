@@ -199,7 +199,9 @@ static unsigned char rc_subfact[RC_USERS];   /* _CheckSUB's answer per user
 struct rc_ofile {
     char name[11];
     unsigned char drive, user, dirty, live, pad0;
-    unsigned seg;                            /* the claim */
+    unsigned seg;                            /* the claim: MOVABLE once it
+                                              * is filled, and this is the
+                                              * word os88_onmove keeps */
     unsigned size;                           /* bytes, 0..65535 */
     unsigned kb;                             /* the claim's size */
     unsigned lru;                            /* rc_oft_clock at last use */
@@ -795,7 +797,12 @@ static int rc_oft_flush(struct rc_ofile *o)
     if (o->dirty) {
         if (rc_fs_cd(o->drive, o->user) == 0) {
             rc_n11_host(o->name, rc_hname);
+            /* PINNED FOR THE WRITE (SPEC.md 66.5.7.1, 74.3.2): the buffer
+             * is movable, and the kernel holds its address across a walk
+             * that claims. Declared again whatever the write said. */
+            os88_mem_movable(o->seg, 0);
             r = os88_file_write_seg(rc_hname, o->seg, o->size);
+            os88_mem_movable(o->seg, 1);
             if (r == 0)
                 rc_dc_note(o->drive, o->user, o->name, o->size);
         } else {
@@ -980,6 +987,10 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
             return 0;
         }
     }
+    /* ...AND NOW IT MAY MOVE (SPEC.md 66.2, 74.3.2): filled, o->seg the one
+     * word that names it, and os88_onmove (runcpm.c) walks this table. Born
+     * pinned until here, so the read above landed where it was aimed. */
+    os88_mem_movable(o->seg, 1);
     return o;
 }
 

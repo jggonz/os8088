@@ -802,7 +802,7 @@ lp_dlset:   db 0
 dl_wf:      dw 0
 
 ; The three the POST itself scans, in its order. 3BC is the MDA/Hercules
-; family's - the GB101 in the calibration machine - and 378 is the DOS box's
+; family's - the GB101 in the calibration machine - and 378 is the DOS machine's
 ; DIO-500 (docs/FIELD-MACHINES.md, both confirmed by a field run). They
 ; DIFFER, which is why this works in ADDRESSES and never in LPT numbers: on a
 ; mono machine LPT1 IS 3BC (NET-PLAN 1.4.1).

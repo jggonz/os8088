@@ -150,7 +150,7 @@ NETV_ADDR    equ 10             ; out ES:DI = filled with FOUR bytes, this
                                 ; and every package built before it keeps
                                 ; working untouched.
                                 ;
-                                ; **ON THE CABLE THE ANSWER IS THE DOS BOX'S**
+                                ; **ON THE CABLE THE ANSWER IS THE DOS MACHINE'S**
                                 ; and that is the honest answer rather than a
                                 ; convenient one (docs/plans/completed/NET-STACK-PLAN.md 1.5):
                                 ; mTCP on the far end owns the IP, an inbound
@@ -282,7 +282,7 @@ NETV_BULK    equ 14
 ;
 ; Every verb above this point is a SOCKET: the driver owns ARP, IP and TCP and
 ; the package owns a byte stream. These three are the other shape - the caller
-; has a stack of its own and wants the wire. The DOS box's packet driver
+; has a stack of its own and wants the wire. DOS's packet driver
 ; (SPEC.md 96.23) is the first consumer and the Crynwr interface is why they
 ; are shaped as they are.
 ;
@@ -354,6 +354,15 @@ NETV_RAWRX   equ 17
 NETV_MAX     equ 17             ; ...and anything above it is refused. A verb
                                 ; table indexed by an unchecked verb is a wild
                                 ; near call inside the driver
+NETV_GONE    equ 0x42           ; **THE KERNEL'S, NEVER A PACKAGE'S**: AL = an
+                                ; instance slot being torn down, ES =
+                                ; KERNEL_SEG (xm_release_rec, SPEC.md
+                                ; 72.13.4). ETHER.DRV drops that instance's
+                                ; sockets and, when no instance that has
+                                ; spoken to it is left, frees its ring pool.
+                                ; Above NETV_MAX, so a package's call with
+                                ; this number is refused as any other is.
+                                ; Mirrored in kernel/driver.inc
 
 ; --- NETV_STATE's bits -------------------------------------------------------
 NSTF_PORT    equ 0x01           ; a parallel port was found

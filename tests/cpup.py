@@ -75,8 +75,9 @@ def row_pt(w, which):
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)
     mo = Mouse(marty=m)
     print(f"== {MACHINE} : Control Panel fires on the release (13.8.3) ==")
 
@@ -84,7 +85,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # opened with a click (os88mouse's own note).
     mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel,
                                             # tests/hddcp.py's own coordinates
-    M.settle(m)
+    M.ui_done(m)
     w = panel(m)
     check("the Control Panel opened", w is not None,
           "" if w else "(the module's entry table is the first suspect)")
@@ -113,6 +114,14 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # other, and VGA is a third renderer, so it is asserted rather than skipped.
     mono = m.video()["type"] in ("cga", "mda", "herc")
 
+    # BEFORE A PIXEL READ: on 1bpp `lit` reads video MEMORY, which the UI
+    # pass has written by the time it is over, so `ui_done` is the whole
+    # wait; the VGA arm reads the rendered frame and keeps the settle.
+    def drawn():
+        M.ui_done(m)
+        if not mono:
+            M.settle(m)
+
     def lit(rect):
         if mono:
             ww, hh, rows = m.vram()
@@ -130,48 +139,48 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     up_t, up_o = lit(glyph(other)), lit(glyph(was))
     mo.to(*target)
     mo._edge(True)
-    M.settle(m)                             # the next read is PIXELS
+    drawn()                                 # the next read is PIXELS
     held_t, held_o = lit(glyph(other)), lit(glyph(was))
     check("the held row's glyph draws PRESSED", held_t != up_t,
           f"({up_t} lit upright, {held_t} held)")
     check("...and the OTHER row's does not move", held_o == up_o,
           f"({held_o} lit, was {up_o})")
     mo.to(w[0] + 20, target[1], l=True)     # slide off, STILL HELD
-    M.settle(m)
+    drawn()
     check("...and it comes back UP when the pointer slides off",
           lit(glyph(other)) == up_t,
           f"({lit(glyph(other))} lit, upright is {up_t})")
     mo._edge(False)
-    M.settle(m)
+    M.ui_done(m)
 
     # --- A: press the row, slide off the pane, release --------------------
     mo.to(*target)
     mo._edge(True)
-    M.pace(m, 0.7)
+    M.ui_done(m)
     mo.to(w[0] + 20, target[1], l=True)     # l=True: STILL HELD, into the
-    M.pace(m, 1.0)                          # item list on the left
+    M.ui_done(m)                            # item list on the left
     mo._edge(False)
-    M.settle(m)
+    M.ui_done(m)
     check("a slide-off release does NOT change the mode", coop(m) == was,
           f"([sch_coop] = {coop(m)})")
 
     # --- B: press it, release on the OTHER row ----------------------------
     mo.to(*target)
     mo._edge(True)
-    M.pace(m, 0.7)
+    M.ui_done(m)
     mo.to(*row_pt(w, was), l=True)
-    M.pace(m, 1.0)
+    M.ui_done(m)
     mo._edge(False)
-    M.settle(m)
+    M.ui_done(m)
     check("released on the OTHER row, nothing fires", coop(m) == was,
           f"([sch_coop] = {coop(m)})")
 
     # --- C: press AND release on it ---------------------------------------
     mo.to(*target)
     mo._edge(True)
-    M.pace(m, 0.7)
+    M.ui_done(m)
     mo._edge(False)
-    M.settle(m)
+    M.ui_done(m)
     check("press-and-release ON the row DOES change it", coop(m) == other,
           f"([sch_coop] = {coop(m)}, wanted {other})")
 

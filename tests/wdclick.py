@@ -128,12 +128,17 @@ DISK = "build/wdclickgate.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    mo = Mouse(marty=m)                 # launch() has already settled the boot
+with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
+              boot=False) as m:
+    m.run()                             # the boot gate on STATE: the first act
+    M.kernel_up(m)                      # is a verb that confirms on the
+    M.no_saver(m)                       # window list
+    mo = Mouse(marty=m)
+    _done = lambda mm, **k: M.ui_done(mm)   # noqa: E731
     print("== Word: a click is a caret move (SPEC.md 27.4.7) ==")
-    dispcp.open_drive(m, mo, S, M.settle, "B")
+    dispcp.open_drive(m, mo, S, _done, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
-    dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
+    dispcp.open_named(m, mo, S, _done, dx, dy, "WELCOME.DOC")
 
     def find_seg():
         raw = m.read(S("inst_tab"), 32*12)
@@ -146,7 +151,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         return None
     try:                                # the package up, on guest state
         M.until(m, lambda _m: find_seg() is not None, "Word to be running",
-                poll=0.3, limit=60)
+                poll=0.05, limit=60)
     except M.MartyError:
         pass
     seg = find_seg()
@@ -176,7 +181,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         twice, a twentieth of a guest second apart, because ui_task pops an
         event a few instructions before it takes the lock for it."""
         wait = ((lambda c, w: tr.until(c, w, 30)) if tr is not None else
-                (lambda c, w: M.until(m, lambda _m: c(), w, poll=0.05, limit=30)))
+                (lambda c, w: M.until(m, lambda _m: c(), w, poll=0.01, limit=30)))
         if tr is None:
             m.run()
         if not idle:                    # ...only that it was DISPATCHED: a text
@@ -215,8 +220,12 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         redraws the scroll bar), then the screen still"""
         m.run()
         M.until(m, lambda _m: rb("wd_hdirty") == 0 and ui_idle(),
-                "Word to finish its height count", poll=0.1, limit=60)
-        M.settle(m, quiet=0.3)
+                "Word to finish its height count", poll=0.05, limit=60)
+        if m.cards()[0]["type"] in ("cga", "mda"):
+            # `shot` reads VIDEO MEMORY there, which is final at ui_done
+            M.ui_done(m, "Word to finish drawing")
+        else:                           # ...and the rendered glass elsewhere
+            M.settle(m, quiet=0.3)
 
     def tracked(x, y):
         """wd_dragsel has taken the pointer at (x, y) - [wd_lmx]/[wd_lmy] are

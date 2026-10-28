@@ -299,17 +299,17 @@ or MartyPC (CLAUDE.md's instruments) and on kern_mega under Bochs.
 **Inputs.** KERN-MEGA-PLAN.md 2.6 and 2.7 (the feasibility verdict: drop to
 real mode for the bracket) and section 13 (high-first, so conventional memory
 is free for the DOS program); docs/plans/DOS-EXEC-PLAN.md and
-docs/plans/KERN-DOS-PLAN.md; SPEC.md 96 (the DOS box) and 87 (hibernate); and
+docs/plans/KERN-DOS-PLAN.md; SPEC.md 96 (DOS) and 87 (hibernate); and
 the reflection lessons in 10.3: a 286 leaves protected mode only by a reset
 through the BIOS's shutdown path, the BIOS may re-initialise the 8259 there
 (`mega_r286`), the IVT and IDT are kept in step by `mega_ivt_sync`, and an
 option ROM's IRQ (the PicoMEM's) must run in real mode with kernel lines
 captured and replayed (items 18-24).
 
-**Answer.** How the box enters and leaves real mode for the length of its
+**Answer.** How DOS enters and leaves real mode for the length of its
 bracket on a 286 and on a 386; what of the kernel must stay below 1MB for it
 (plan 13.2's low region, sized); how the high claims survive the bracket
-untouched; what the box's XMS door becomes (plan 12.2); how hibernate writes
+untouched; what DOS's XMS door becomes (plan 12.2); how hibernate writes
 and restores an image that has state above 1MB (plan 2.6); and what each
 wave would cost and how it would be tested, given Part A.3's limits. End
 with the open questions only the owner can settle.
@@ -319,7 +319,7 @@ regenerate with `tools/os88index.py`.
 
 ---
 
-## Track 6 - M6, the DOS box under kern_mega: waves W0 to W3
+## Track 6 - M6, DOS under kern_mega: waves W0 to W3
 
 Added 2026-10-18, after Track 5's plan landed. **Branch `protected-mode-7`**,
 cut from `protected-mode`. Part A applies in full.
@@ -348,7 +348,7 @@ start them.
 
 **Do, in the plan's order:**
 1. **W0 - break it first, then refuse.** Before any change, run a
-   `tests/dostrap` probe through the DOS box under Bochs and confirm or
+   `tests/dostrap` probe through DOS under Bochs and confirm or
    correct the plan's section 1 predictions (an `int 21h` landing on IRQ1's
    gate; `hbm_handover`'s `retf` into B800h faulting). Record what really
    happens in the plan's section 1. Then the refusal: arms 1-2 greyed on

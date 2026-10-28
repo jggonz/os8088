@@ -166,8 +166,7 @@ def main(argv):
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
         os88marty.no_saver(m)
         seg = dispapps.pkg_seg(m, 0)[1]
         pw = dispcp.win_list(m, S)[-1]
@@ -185,14 +184,14 @@ def main(argv):
         mo.to(cx0 + 120, cy0 + 80)                  # a stroke well OUT in the
                                                     # picture, so the request
                                                     # below is asking to lose it
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo._edge(True)
         for _ in range(8):
             m.mouse(dx=6, dy=6, l=True)
             m.advance(frames=3)
             m.run()
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         ink = _inked(m, seg)
         print("   canvas %dx%d, ink reaches column %d row %d"
               % (w0, h0, ink[0], ink[1]))
@@ -227,7 +226,7 @@ def main(argv):
             if box:
                 by += E["PT_SZ_DY"]
             mo.click(bxm, by)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             if _bss(m, seg, "pt_fbox", 1) != box + 1:
                 return None
             _type(m, value)
@@ -239,9 +238,7 @@ def main(argv):
                 out = (r["ax"], r["dx"])
             m.breakpoints([])
             m.run()
-            m.advance(frames=600)
-            m.run()
-            os88marty.settle(m)
+            os88marty.ui_done(m)    # was advance(600): the UI going idle IS the work done
             return out
 
         gotw = apply(0, ASKW)

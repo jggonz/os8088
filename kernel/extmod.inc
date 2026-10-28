@@ -21,7 +21,7 @@
 ;
 ; THE INVARIANT: [vid_ndisp] > 1 only while this image is mounted. The one
 ; routine that makes it 2 is ext_extend_b below (and vid_fsx_leave, also
-; here, restoring it), so it cannot happen without the image; and exf_sync
+; here, restoring it), so it cannot happen without the image; and EXF_SYNC
 ; drops the image only once the relayout has put [vid_ndisp] back to 1. Every
 ; kernel caller therefore either sits behind a [vid_ndisp] test it already
 ; had, or is content with mod_gone's CF = 1, registers preserved, as the
@@ -34,17 +34,16 @@
 ; routine's own near `ret` lands on cw_kretf - dockmod.inc's device, so the
 ; image costs no resident shim. The two kernel routines that are a pointer
 ; walk (vid_ctx_ptr, vid_kind_of) have a near copy here instead, and the ones
-; that have a resident far shim (cw_thm_desk, cw_dock_band,
-; cw_vid_ctx_capture, and cw_vid_disp_of for the one on OSAPI_WM_DISPLAY's
+; that have a resident far shim (cw_thm_desk, and cw_vid_disp_of for the one
+; on OSAPI_WM_DISPLAY's
 ; path) or a cell of their own (apic_wm_top) are far-called through it, at
 ; the same five bytes as an EXK and without exk_go's work. os88ovlchk
 ; refuses a near call either way across the boundary (its MODS list names
 ; `.modx`).
 ; =============================================================================
 %ifdef KERN_BIG
-section .cold
 ; -----------------------------------------------------------------------------
-; exf_sync - EXTD.DRV follows [vid_dmode] (far)
+; EXF_SYNC prefix, CALLMAC - EXTD.DRV follows [vid_dmode] (near, `%1_sync`)
 ; in:  [vid_dmode], [vid_ndisp]
 ; out: CF = 1 Extend was asked for and the image could not be had - no system
 ;      disk, no heap, a stamp - and [vid_dmode] is Single again, so the caller
@@ -57,31 +56,39 @@ section .cold
 ; boot settings reader calls it once, after SYSTEM.CFG's two arrangement bytes
 ; are stored and before the adapter switch that can extend (driver.inc
 ; drv_boot_x); a refusal there is Single, with the file left as it is.
+;
+; WRITTEN ONCE AND EXPANDED WHERE ITS CALLERS ARE (kernel size pass 14): it was
+; `exf_sync`, a resident `.cold` far body, and its three callers are CTRL.DRV's
+; arrangement row (`cxf_sync`, ctrl.inc) and the blob's drv_boot_x (`bxf_sync`,
+; driver.inc). %2 is the image's far hop into `.cold` (CPXC, BSWC) for the two
+; kernel routines it calls, mod_need and mod_drop - pass 13's DRV_ATTACH shape.
 ; -----------------------------------------------------------------------------
-exf_sync:
+%macro EXF_SYNC 2
+%1_sync:
     push ax
     mov al, MOD_EXT
     cmp byte [vid_dmode], 0
-    jne .need
+    jne %%need
     cmp byte [vid_ndisp], 1
-    ja .out                     ; CF = 0: still extended, drop after relayout
-    call mod_drop               ; (a drop of an empty row is a no-op)
+    ja %%out                    ; CF = 0: still extended, drop after relayout
+    %2 mod_drop                 ; (a drop of an empty row is a no-op)
     clc
-    jmp short .out
-.need:
+    jmp short %%out
+%%need:
     mov ah, [vid_avail]         ; ...but only on a machine that can EVER pair:
     not ah                      ; vid_dual_ok's fixed half, HERC and VGA|CGA -
     test ah, VID_A_HERC | VID_A_CGA ; a VGA sets the CGA bit unprobed
-    jnz .out                    ; (vid_probe_avail), so HERC|CGA is the same
+    jnz %%out                   ; (vid_probe_avail), so HERC|CGA is the same
                                 ; test. CF = 0 (test clears it) and [vid_dmode]
                                 ; kept: a SYSTEM.CFG carried from a dual
                                 ; machine costs this one no read and no claim
-    call mod_need
-    jnc .out
+    %2 mod_need
+    jnc %%out
     mov byte [vid_dmode], 0     ; MOV keeps mod_need's CF = 1
-.out:
+%%out:
     pop ax
-    retf
+    ret
+%endmacro
 
 section .modx
 ; EXK name - far-call the KERNEL routine `name` (a near proc in .text) from the
@@ -93,7 +100,7 @@ section .modx
     call exk_go
     dw %1
 %endmacro
-EXT_NENT    equ 14
+EXT_NENT    equ 16
 modx_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
     db MOD_VER, MOD_EXT         ; MOD_H_VER, MOD_H_ID
@@ -121,8 +128,10 @@ modx_hdr:
 %else
     dw ext_refuse
 %endif
-%if EXT_YLOW != 11 || EXT_NENT != 14
-  %error "extmod: EXT_FCUT and EXT_BCUT are entries 12 and 13, after EXT_YLOW"
+    dw ext_e_dead               ; EXT_DEAD  (kernel size pass 14)
+    dw ext_e_phase              ; EXT_PHASE (kernel size pass 14)
+%if EXT_YLOW != 11 || EXT_DEAD != 14 || EXT_PHASE != 15 || EXT_NENT != 16
+  %error "extmod: EXT_FCUT and EXT_BCUT are entries 12 and 13, after EXT_YLOW, then EXT_DEAD and EXT_PHASE (kernel.asm)"
 %endif
 %ifdef SEAMCUT
  %if EXT_FCUT != 12
@@ -152,8 +161,11 @@ modx_hdr:
 ; wm_disp_xw's arm, because wm_bord reaches them under every window's content
 ; rect (OSAPI_WM_CONTENT, again at the top of every draw) and wm_fs_vis under
 ; every bar and dock paint; fsx_surf's arm, which Tracker and DOT DELIRIUM ask
-; per frame inside a bracket; ui_drag_dead and ui_drag_phase, on the drag; and
-; the two secondary-click tests in ui_task, six bytes each on every press.
+; per frame inside a bracket; and the two secondary-click tests in ui_task,
+; six bytes each on every press. ui_drag_dead and ui_drag_phase's arm were on
+; that list and are EXT_DEAD and EXT_PHASE now (kernel size pass 14): both run
+; ONCE, at a drag's release, so the far call they cost a one-display machine
+; is mod_gone's few dozen clocks against the repaint the release starts anyway.
 
 ext_e_strads:                   ; EXT_STRADS: CF = 1 not straddling, which is
     call wm_strads              ; also mod_gone's answer and the one-display
@@ -216,6 +228,59 @@ ext_e_fsrect:                   ; EXT_FSRECT: wm_fs_setrect's arm, UNGATED.
     pop ax
     clc
     retf
+; ext_e_dead - EXT_DEAD, what was ui.inc's ui_drag_dead: pull a dragged
+; window's origin out of the DEAD ZONE (SPEC.md 39.16.1). In: BX = the window,
+; W_X/W_Y just written by ui_drag's clamps; every register kept.
+;
+; The two clamps are per-AXIS, and the virtual desktop is a union (SPEC.md
+; 39.2.1) - so between two displays of different heights they can agree on a
+; point no display covers, and a title bar dropped there is one nobody can grab
+; back. It is mou_clamp's problem one layer up, and it takes the same two
+; routines. INTO THE POINTER'S DISPLAY, because during a drag the title bar is
+; under the hand and [cur_disp] is where the hand is - and 39.15.4 guarantees
+; the pointer itself is inside a display. UNGATED: the image stays mounted
+; over a collapsed desktop, hence its own test (ext_one).
+ext_e_dead:
+    call ext_one
+    jb .out                     ; one display: no dead zone
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, bx                  ; SI, because vid_disp_find wants BX = y and
+    mov ax, [si+W_X]            ; an 8086 addresses through BX/BP/SI/DI only
+    mov bx, [si+W_Y]
+    EXK vid_disp_find
+    jnc .done                   ; on a display already: nothing to correct
+    mov cl, [cur_disp]
+    EXK vid_pt_clamp
+    mov [si+W_X], ax
+    mov [si+W_Y], bx
+.done:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.out:
+    retf
+
+; ext_e_phase - EXT_PHASE, ui_drag_phase's second-display arm (ui.inc): the
+; phased drop is asked whether a card holds it, and a NO undoes the phase.
+; In: AX = the phased W_X (just stored), CX = the x the clamps left, SI = the
+; window. Every register kept but that one word of the record.
+ext_e_phase:
+    call ext_one
+    jb .out                     ; one display: the interval argument is whole
+    push bx
+    mov bx, [si + W_Y]
+    EXK vid_disp_find           ; (preserves CX, the bank)
+    jnc .ok
+    mov [si + W_X], cx          ; the drop stands where the clamps left it
+.ok:
+    pop bx
+.out:
+    retf
+
 ext_e_ylow:                     ; EXT_YLOW: ui_ylow's arm, behind its caller's
     push ax                     ; gate - ui_drag's release, the drag path
     push bx
@@ -272,7 +337,7 @@ ext_e_fsx:
                                 ; and leaving the flag is what SPEC.md 39.20's
                                 ; Restart then reads
     call ext_two                ; [fsx_vndisp] > 1 is 2, two at most
-    call KERNEL_SEG:cw_dock_band ; ...and the strip where the user put it (30.5)
+    EXK dock_band               ; ...and the strip where the user put it (30.5)
     pop ax
 .r: retf
 
@@ -685,7 +750,7 @@ ui_drag_size:
     mov [di+W_X], ax
 .snapped:
     EXK wm_kind_bank
-    EXK wm_sz_notify            ; TOLD EVEN IF THE BOX DID NOT MOVE: the ADAPTER
+    WM_SZNOTE EXK               ; TOLD EVEN IF THE BOX DID NOT MOVE: the ADAPTER
                                 ; did, and half the tree caches facts about it
                                 ; (SPEC.md 11.98). wm_refit has always done this
                                 ; and the drag path never did. IT IS INSIDE THE
@@ -1142,7 +1207,7 @@ ext_extend_b:
                                 ; card, and what makes its 32KB/16KB clear
                                 ; land on the right memory
     mov al, 1
-    call KERNEL_SEG:cw_vid_ctx_capture ; bank it as display 1
+    EXK vid_ctx_capture         ; bank it as display 1
 
     mov al, ah                  ; ...and back. No vid_setmode: the primary is
     call ext_kapply_eq          ; already in its mode with the splash on it;
@@ -1150,7 +1215,7 @@ ext_extend_b:
                                 ; vid_setmode's CGA path flipped it to colour
                                 ; and nothing else ever would (SPEC.md 39.11.2)
     xor al, al
-    call KERNEL_SEG:cw_vid_ctx_capture ; a no-op today - vid_apply has just republished
+    EXK vid_ctx_capture         ; a no-op today - vid_apply has just republished
                                 ; what vid_ctx_init banked - and 39.12's rule
                                 ; followed mechanically rather than reasoned
                                 ; about one instance at a time
@@ -1197,7 +1262,7 @@ ext_kapply_eq:
     ret
 ext_kapply:
     mov [vid_kind], al
-    EXK vid_apply
+    call ext_apply              ; (this image's own: VID_APPLY, below)
     ret
 ext_two:
     mov word [vid_ndisp], 2     ; ndisp = 2, cur = 0: one word (vidsel.inc)
@@ -1209,6 +1274,7 @@ ext_two:
 ; pass 13, KSW_SECT in kernel.asm)
 VSW_EQUIP ext
 VSW_UNION ext, EXK
+VID_APPLY ext, EXK              ; (viddet.inc: the panel, the boot and this)
 
 %ifdef SEAMCUT
 ; -----------------------------------------------------------------------------

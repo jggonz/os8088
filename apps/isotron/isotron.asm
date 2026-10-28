@@ -316,6 +316,8 @@ it_entry:
     call it_title_build             ; the title's picture, before the first
     call it_box_clear               ; paint shows anything
     pop es
+    mov ax, it_claimmv              ; BOTH MOVE NOW (SPEC.md 108.8.1): filled,
+    call it_decl                    ; and [it_cseg]/[it_seg] are the only
     mov byte [it_full], 1
     jmp short .ok
 .nomem2:
@@ -330,6 +332,41 @@ it_entry:
     clc
 .out:
     pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; it_claimmv - the relocation proc of BOTH claims (SPEC.md 66.2, 108.8.1):
+; whichever word names the base that moved takes the new one. Nothing else
+; can be stale. The row bases (it_xcol) are OFFSETS in our bss; every reader
+; - the worker each wake, every callback, the bracket - loads [it_cseg] and
+; [it_seg] where it uses them and calls nothing that can claim while it
+; holds them; and a worker that is not parked pins them anyway (SPEC.md
+; 66.3), the move landing only while it waits in OSAPI_TASK_ALIVE and the
+; kernel restarting it at it_worker (OS88_WORKER_RESTARTABLE)
+; -----------------------------------------------------------------------------
+it_claimmv:
+    cmp bx, [it_cseg]
+    jne .work
+    mov [it_cseg], dx
+    ret
+.work:
+    cmp bx, [it_seg]
+    jne .out
+    mov [it_seg], dx
+.out:
+    ret
+
+; it_decl - AX = it_claimmv, or 0 to PIN both, which it_fs_go does for the
+; bracket (LEMMINGS' shape, SPEC.md 116.6.2): the bracket's loop keeps them
+; in ES and DS around its kernel calls, and two declarations outside that
+; loop cost it nothing. Preserves all but the flags
+it_decl:
+    push dx
+    mov dx, [it_cseg]
+    call OSAPI_MEM_MOVABLE
+    mov dx, [it_seg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------

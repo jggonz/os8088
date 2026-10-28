@@ -102,7 +102,7 @@ def writes_a(op, cb):
             or 0x78 <= op <= 0x7E or (0x80 <= op < 0xB8))
 
 
-def discover(rom, extra=(), tables=True):
+def discover(rom, extra=(), tables=True, fanout=None):
     """Recursive descent. Returns {(bank, pc): op} of instruction starts found,
     and the reasons a walk stopped: JP HL sites, RETs, RST sites whose routine
     pops its return address (a jump table follows - not code), and calls into
@@ -175,11 +175,14 @@ def discover(rom, extra=(), tables=True):
                 if t >= 0x8000:
                     stops["into RAM"] += 1
                     return
+                if t < 0:                        # a JR back past 0000h: this
+                    stops["below 0000"] += 1     #   is data walked as code
+                    return
                 if t >= 0x4000:
                     if pc < 0x4000:              # bank 0 into ROMX: which bank?
                         if newcb is None:
                             unknown_bank.add((pc, t))
-                            for b in range(1, rom.banks):
+                            for b in (range(1, rom.banks) if fanout is None else fanout):
                                 work.append((b, t, None))
                             return
                         work.append((newcb, t, newcb))

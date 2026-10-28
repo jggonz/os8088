@@ -2,11 +2,11 @@
 ; OURS, MIT with the rest of the tree.  docs/DOS-DEBUGGING.md is the manual.
 ;
 ; Prince of Persia's INSTALL.EXE calls it twice on its way to AH=4Bh, and this
-; box has no handler - so it falls to the "invalid function" arm and answers
+; DOS has no handler - so it falls to the "invalid function" arm and answers
 ; CF=1 with AX=0001.  DOS DOES NOT USE THE CARRY FOR THIS CALL AT ALL: it
 ; returns AL = 0, 1 or FFh, so a program reading AL is told "1 = the name had
 ; wildcards in it", which is a plausible answer to a question nobody asked.
-; That is SPEC.md 96.22's defect shape for the fourth time in this box, and it
+; That is SPEC.md 96.22's defect shape for the fourth time in this DOS, and it
 ; is why the first thing to establish is what the real answer looks like.
 ;
 ;   nasm -f bin -o PARSEFCB.COM tests/dostrap/parsefcb.asm

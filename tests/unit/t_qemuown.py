@@ -75,7 +75,18 @@ _M, _T = '"' + "make" + '"', '"' + "test" + '"'
 _F = "os88" + "fixture" + r"\.make\(\s*"
 LAUNCH = re.compile("(?:" + _M + r",\s*" + _T + "|" + _F + _T + r")")
 PIDFILE = re.compile(r'-pidfile')
+# ...and the third spelling, which is the one the suite uses now
+# (docs/plans/SOAK-PARALLEL.md 17): `make test` reproduced in os88qemu with a
+# private socket, pidfile and disk copies. It IS a launch and it owns its
+# instance itself - os88qemu.make_test calls own() at its own launch site - so
+# a file that only ever launches through it is a launcher that owns.
+MAKE_TEST = re.compile(r'\bos88qemu\.make_test\s*\(|\bQ\.make_test\s*\(')
 OWN = re.compile(r'\bos88qemu\.own\s*\(')
+# A SELF-BUILT, DAEMONISED launch goes through os88qemu.start, which raises
+# QEMU's own stderr - and, for an image lock, which other QEMU holds the
+# file - instead of a bare `exit 1` (docs/plans/SOAK-PARALLEL.md 17.10).
+DAEMON = re.compile(r'["\'][^"\'\n]*-daemonize')
+START = re.compile(r'\bos88qemu\.start\s*\(')
 
 
 def main():
@@ -84,8 +95,11 @@ def main():
         if not name.endswith(".py") or name == "os88qemu.py":
             continue
         src = open(os.path.join(TESTS, name)).read()
-        if LAUNCH.search(src) or PIDFILE.search(src):
-            launchers.append((name, bool(OWN.search(src))))
+        if LAUNCH.search(src) or PIDFILE.search(src) or MAKE_TEST.search(src):
+            # the old spellings still need their own() at the site; a file
+            # that launches ONLY through make_test is owned by it
+            old = LAUNCH.search(src) or PIDFILE.search(src)
+            launchers.append((name, bool(OWN.search(src)) or not old))
 
     check(len(launchers) >= 12,
           "the launch detector still finds the files that launch QEMU",
@@ -101,6 +115,23 @@ def main():
               "instance it did not start does not kill somebody else's "
               "machine (tests/os88qemu.py)")
 
+    daemons = []
+    for name in sorted(os.listdir(TESTS)):
+        if not name.endswith(".py") or name == "os88qemu.py":
+            continue
+        src = open(os.path.join(TESTS, name)).read()
+        if DAEMON.search(src):
+            daemons.append(name)
+            check(bool(START.search(src)),
+                  "tests/%s daemonises QEMU through os88qemu.start" % name,
+                  "a daemonised QEMU that refuses to start (an image another "
+                  "QEMU holds writable: `Failed to get shared \"write\" "
+                  "lock`) reaches the row as `exit 1`. os88qemu.start(cmd, "
+                  "...) is subprocess.run that raises QEMU's own words and "
+                  "names the process holding the file")
+    check(len(daemons) >= 20, "the daemon detector still finds launchers",
+          "a detector that finds nothing passes vacuously",
+          got=len(daemons), want=">= 20")
     print("t_qemuown: %d QEMU launchers, %d own their instance"
           % (len(launchers), sum(1 for _, o in launchers if o)))
     done("t_qemuown")

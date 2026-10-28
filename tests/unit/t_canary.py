@@ -49,7 +49,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 IMAGES = ["os8088-360.img", "os8088-720.img", "os8088-120.img",
-          "os8088.img"]
+          "os8088.img",
+          # the 128KB machine's (SPEC.md 24.5.7): kern_small's KERNEL.SYS
+          # starts at LBA 12 on both, and the band is about the SECTOR, so
+          # they join the same intersection. small.img (1.44MB, on demand)
+          # does NOT cross there and is why it is not shipped as it stands
+          "small360.img", "small720.img"]
 
 
 def ksig_off():
@@ -157,14 +162,19 @@ def main():
             f"is for (SPEC.md 18.93.1)"
         )
 
-    # ...and it has to be tellable from its neighbours, or a shifted read matches
+    # ...and it has to be tellable from its neighbours, or a shifted read
+    # matches - in EVERY shipped kernel's file, the small one's too
     w = lambda o: int.from_bytes(k[o:o + 2], "little")
-    for step in (-512, 512):
-        if 0 <= fileoff + step < len(k) - 1 and w(fileoff) == w(fileoff + step):
-            sys.exit(
-                f"t_canary: the word at {fileoff} equals the one at {fileoff + step}, "
-                f"so a read shifted by a sector still matches (SPEC.md 18.93.1)"
-            )
+    for kf in (kern, BUILD / "smallk" / "kernel.sys"):
+        kk = kf.read_bytes()
+        wk = lambda o: int.from_bytes(kk[o:o + 2], "little")
+        for step in (-512, 512):
+            if 0 <= fileoff + step < len(kk) - 1 and wk(fileoff) == wk(fileoff + step):
+                sys.exit(
+                    f"t_canary: {kf.name} under {kf.parent.name}/: the word at "
+                    f"{fileoff} equals the one at {fileoff + step}, so a read "
+                    f"shifted by a sector still matches (SPEC.md 18.93.1)"
+                )
     print(f"canary: memory offset {off}, file sector {fileoff // 512}, crosses a "
           f"head on {len([n for n in IMAGES if (BUILD / n).exists()])} geometries "
           f"and {len(lengths)} blob length{'' if len(lengths) == 1 else 's'} "

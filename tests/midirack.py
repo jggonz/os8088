@@ -203,11 +203,11 @@ def session(arm, cap, brk):
                         "MEDIA/MIDI:" + SONG, "MEDIA/MIDI:" + INTRO,
                         "--folder", "SYSTEM/APPDATA"], check=True,
                        stdout=subprocess.DEVNULL)
-    with os88ui.boot(img, apps=apps, machine=machine) as ui:
+    with os88ui.boot(img, apps=apps, machine=machine, quick=True) as ui:
         ui.path("B:/APPS/MIDIRACK.O88")
         p = mrprobe.attach(ui)
         M.until(ui.m, lambda _: p.b("mr_loaded") == 1, "the autoload",
-                poll=.2, limit=120)
+                poll=.05, limit=120)
         if p.b("mrl_n") != 2:
             fail("autoload found %d songs in MEDIA\\MIDI, want the 720KB "
                  "disk's two" % p.b("mrl_n"))
@@ -371,6 +371,16 @@ def arm_sbmem(ui, p):
              % p.w("mrk_seg"))
     print("PASS sbmem: the card plays with no speaker ring held", flush=True)
     stop(ui, p)
+    # THE SONG PINNED FROM OUTSIDE for the fill and the grant leg. It is
+    # MOVABLE (SPEC.md 105.10.1), so the filler's asks pack it down and leave
+    # their 8 KB as ONE run - and one run can fund a grant ring only if its
+    # pool happens to land page-safe: a pool that does not needs the 8 KB
+    # double buffer BESIDE it, and a 16 KB grant's pool fits where its buffer
+    # then does not, which mrb_grantopen (rightly) does not retry. What this
+    # leg is about is a FRAGMENTED heap, and the song was its wall while it
+    # was pinned by not declaring; it is that wall again here, by MC_RLOC = 0
+    # in its own record, and declared again after the leg
+    song = rloc_set(m, p.w("mr_fseg"), 0)
     # THE HEAP TAKEN: each key is one more fill and an ask (tests/filler),
     # until nothing of the ring's size could be funded at all
     fl = ui.path("FILLER.O88")         # the acting Disk window, B:/APPS
@@ -406,6 +416,7 @@ def arm_sbmem(ui, p):
           "and the GRANT ring (%d bytes) plays" % (reach, p.w("mrb_grl")),
           flush=True)
     stop(ui, p)
+    rloc_set(m, p.w("mr_fseg"), song)   # the song movable again
     # ...AND THE REST TAKEN ('T'): neither ring, so both Plays refuse in words
     ui.raise_window(fl)
     m.key("KeyT")
@@ -439,6 +450,21 @@ def arm_sbmem(ui, p):
 
 
 MR_ST_PAUSE = 2
+
+
+def rloc_set(m, seg, rloc):
+    """MC_RLOC of the claim at `seg` set to `rloc` from outside; the value
+    it held is the answer. A test's wall, not a package's declaration"""
+    import os88geom as g
+    at = m.sym("mem_tab")
+    raw = m.read(at, g.MEM_MAX * g.MC_SIZE)
+    for i in range(g.MEM_MAX):
+        o = i * g.MC_SIZE
+        if raw[o] | raw[o + 1] << 8 == seg:
+            old = raw[o + 8] | raw[o + 9] << 8
+            m.write(at + o + 8, bytes([rloc & 0xFF, rloc >> 8]))
+            return old
+    fail("sbmem: no claim at %04X to pin" % seg)
 
 
 def stop(ui, p):
@@ -516,7 +542,7 @@ def arm_wt(ui, p):
     stream's OPENING: the bank is read off the floppy first, and the seconds
     that takes are not the mixer's."""
     M.until(ui.m, lambda _: p.b("mrb_open") == 1, "the wavetable's stream",
-            poll=.2, limit=60)
+            poll=.05, limit=60)
     tail = arm_sb(ui, p)
     if p.w("mwt_bseg") == 0:
         fail("wt: the bank was never read")

@@ -364,7 +364,7 @@ def main():
                         G.os88build.at('build/gorillas.o88')], cwd=G.ROOT, check=True)
         for tag in ([args.arm] if args.arm else G.ARMS):
             with G.os88ui.boot(G.os88build.at('build/os8088-360.img'), apps=str(disk),
-                              machine=G.ARMS[tag]) as ui:
+                              machine=G.ARMS[tag], quick=True) as ui:
                 m = ui.m
                 ui.open_drive('B')
                 ui.open('GORILLAS.O88')

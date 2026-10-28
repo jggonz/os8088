@@ -33,7 +33,6 @@ does"). The cost is that this cannot ask 11.93's question about the dock, and
 does not: that is dispmine's row.
 """
 import os
-import subprocess
 import sys
 import time
 
@@ -42,8 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispapps                                             # noqa: E402
 import dispcp                                               # noqa: E402
-from ethernet import Qemu, S, SOCK, settle, gsleep          # noqa: E402
-import os88fixture                                       # noqa: E402
+from ethernet import Qemu, S, settle                        # noqa: E402
 import os88geom                                             # noqa: E402
 import os88qemu                                              # noqa: E402
 
@@ -63,31 +61,27 @@ def check(name, cond, note=""):
 
 
 class Mouse:
-    """tests/ethernet.py's, plus the right button - one process per action."""
+    """The right button and the left, CLOSED-LOOP (os88qemu.mouse_click):
+    the pointer read back off mouse_x/mouse_y and each edge off mouse_btn,
+    where tools/mouse.py pinned, walked and slept a process a gesture. Each
+    gesture then ends when the UI has finished with it (ui_done), capped at
+    the 0.4 guest s it used to pace; every case waits on its own answer."""
 
-    def run(self, *args):
-        subprocess.run(["python3", "tools/mouse.py", SOCK] + list(args),
-                       check=True, capture_output=True)
+    def __init__(self, q):
+        self.q = q
 
-    def click(self, x, y):
-        self.run("click", str(x), str(y))
-        gsleep(0.4)                     # the GUEST's time (tools/qmp.py)
+    def click(self, x, y, mask=1):
+        os88qemu.mouse_click(self.q, S, self.q.hmp, x, y, mask)
+        os88qemu.ui_done(self.q, S, cap=0.4)
 
     def rclick(self, x, y):
-        self.run("rclick", str(x), str(y))
-        gsleep(0.4)
+        self.click(x, y, mask=2)
 
     def dblclick(self, x, y):
         # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
-        # compare birth ticks in a 9-tick window and two processes are far too
-        # slow. Position, then both presses down one QMP connection.
-        self.run("to", str(x), str(y))
-        subprocess.run(["python3", "tools/qmp.py", SOCK,
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
-                        "sleep 0.12",
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
-                        "gsleep 0.4"],
-                       check=True, capture_output=True)
+        # compare birth ticks in a 9-tick window - four confirmed edges
+        os88qemu.mouse_dblclick(self.q, S, self.q.hmp, x, y)
+        os88qemu.ui_done(self.q, S, cap=0.4)
 
 
 def frontmost(m):
@@ -172,38 +166,25 @@ def state(m, seg, cell):
 
 
 def boot():
-    """A plain `make test` - the default images, VGA, the apps disk in B:."""
-    if os.path.exists("build/qemu.pid"):
-        try:
-            pid = int(open("build/qemu.pid").read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)
-        except (OSError, ValueError):
-            pass
-    for f in ("build/qmp.sock", "build/qemu.pid"):
-        if os.path.exists(f):
-            os.remove(f)
-    # `make test` DAEMONISES the emulator, so it outlives this script
-    # unless somebody kills it - and the somebody is us (os88qemu).
-    os88qemu.own()
-    # THROUGH os88fixture.make: `make test` is a LAUNCHER, and the only thing
-    # it leaves under build/ is the buildnum stamp the parse rewrites - this
-    # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
-    # as this row's `wants=`, so the runner has them current and nothing is
-    # built here either.
-    r = os88fixture.make("test")
-    if r.returncode:
-        sys.exit("minesrc: make test failed:\n" + r.stdout + r.stderr)
-    q = Qemu()
+    """`make test`'s machine - the default images, VGA, the apps disk in B:,
+    the OPL2 its DEVCARD adds - as an os88qemu.Private in a directory of its
+    own: the make would rebuild a build/ that is behind its sources, and its
+    fixed socket kept two QEMU rows from running at once."""
+    import tempfile
+    import os88build
+    tmp = tempfile.mkdtemp(prefix="mnsrc-")     # short: a socket path
+    p = os88qemu.Private(tmp, os88build.at("build/os8088.img"),
+                         os88build.at("build/apps.img"),
+                         extra=["-audiodev", "none,id=devsnd", "-device",
+                                "adlib,audiodev=devsnd"])
+    q = Qemu(p.sock)
     # dispcp scrolls a Disk window with the ARROWS and calls `m.key` with
     # MartyPC's W3C names, which is the only thing it needs that the QEMU
     # harness does not already have. Two names reach it, and QEMU's sendkey
     # spells them differently - so the mapping lives here rather than in
     # dispcp, whose caller is otherwise MartyPC's.
-    q.key = lambda name: subprocess.run(
-        ["python3", "tools/qmp.py", SOCK,
-         "sendkey " + {"ArrowUp": "up", "ArrowDown": "down"}[name]],
-        check=True, capture_output=True)
+    q.key = lambda name: q.hmp(
+        "sendkey " + {"ArrowUp": "up", "ArrowDown": "down"}[name])
     return q
 
 
@@ -219,8 +200,8 @@ def launch_mines(m, mo):
     # The package's WINDOW is the launch having landed - in the guest's own
     # seconds (tests/os88qemu.py) - and one more for the board's first paint.
     if os88qemu.acted(m, lambda: dispapps.pkg_seg(m, 0) is not None, secs=30,
-                      what="the Minesweeper window", poll=0.25):
-        os88qemu.pace(m, 1)
+                      what="the Minesweeper window", poll=0.05):
+        os88qemu.ui_done(m, S, cap=1)   # (the board's first paint)
     got = dispapps.pkg_seg(m, 0)
     if got is None:
         sys.exit("minesrc: MINES.O88 did not open")
@@ -257,11 +238,11 @@ def _run(m):
             return dispcp.drive_ordinal(m, S, "B") is not None
         except Exception:                                   # noqa: BLE001
             return False
-    if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.4):
+    if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.05):
         sys.exit("minesrc: drive B: never got a desktop zone - the guest did "
                  "not reach a desktop")
     os88qemu.ui_done(m, S, cap=8.0, what="the first desktop")
-    mo = Mouse()
+    mo = Mouse(m)
     slot, seg, games = launch_mines(m, mo)
     rect = dispcp.win_rect(m, S, slot)
     grect = dispcp.win_rect(m, S, games)
@@ -358,6 +339,12 @@ def _run(m):
               raised and got["mn_flags"] == before,
               "cell (0,%d) at (%d,%d) raised=%s -> %r"
               % (row, cx, cy, raised, got))
+        # ...and the RAISE FINISHED before the next press: frontmost is set
+        # at the top of the raise and its repaint runs after it, and on QEMU
+        # a starved guest's 20 quiet ticks were not the whole of that - the
+        # next press arrived mid-raise and flagged nothing
+        # (docs/plans/SOAK-PARALLEL.md 17.5). The UI going idle is the end
+        os88qemu.ui_done(m, S, cap=10.0, what="the raise")
         mo.rclick(cx, cy)                                   # now frontmost
         acted(m, lambda: w()["mn_flags"] != before)
         got = w()

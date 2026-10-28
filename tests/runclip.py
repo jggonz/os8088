@@ -47,7 +47,9 @@ def main():
     a = ap.parse_args()
     bad = []
     with os88ui.boot(a.kernel, apps=a.apps,
-                     machine=os88marty.machine(a.machine)) as ui:
+                     machine=os88marty.machine(a.machine),
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         dk = ui.open_drive("B")         # first: on CGA the Task Manager is
         tm = ui.path("A:/SYSTEM/TASKMGR.O88")   # two columns wide and would

@@ -9,7 +9,7 @@
 
 **IT EXISTS BECAUSE THE OTHER TRACER LIVES IN THE GUEST.**
 `tools/os88dosdbg.py` is the instrument for *why a program behaves
-differently* under this box, and its method - align two traces on
+differently* under os8088's DOS, and its method - align two traces on
 (function, CALL SITE) - is the thing that finds defects nothing else finds.
 What it costs is RAM on both sides: our arm carries a ring in a part of
 `DOS.O88`, and the real-DOS arm carries a TSR. For a program that wants the
@@ -27,7 +27,7 @@ ALREADY going, including one a person is driving by hand.
   WHY THE BREAKPOINT IS `int` AND NOT THE HANDLER
 
 An exec breakpoint on the handler needs the handler's address, which means
-reading the IVT, which differs between this box and IBM DOS and moves when a
+reading the IVT, which differs between our DOS and IBM DOS and moves when a
 TSR hooks it. An `{"type": "int"}` breakpoint fires at the `INT` instruction
 itself, so:
 
@@ -320,7 +320,7 @@ def _time_one(m, base, r, rec=None):
     # **THE RETURN SITE IS IN THE FRAME, NOT AT CS:IP+2** - and getting that
     # wrong is why every `--time` figure this tool ever printed was 20 cycles.
     # MartyPC's INT breakpoint stops INSIDE the handler, with the vector
-    # already fetched: `cs:ip` is the handler's entry (the DOS box's own, at
+    # already fetched: `cs:ip` is the handler's entry (DOS's own, at
     # 9060:05C9 windowed and 0060:05C9 under kern_dos - the same IP for every
     # call, which is the tell), so `+2` is an address two bytes into the
     # handler and the guest reaches it at once. What the program will come

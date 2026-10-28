@@ -57,7 +57,7 @@
 0 1 kernel/disk.inc  # the boot overlay (.ovl): mount-time setup, before mega_enter
 13 1 kernel/spinner.inc  # the boot spinner's %macro state, drawn from IRQ0 inside int 13h (SPEC.md 15.3.8) during the boot
 37 3 kernel/splash.inc  # the loading screen's state, all of it in stage 2 (SPEC.md 2.9.4)
-3 2 kernel/vidsel.inc  # the adapter pick, in stage 2 and the boot overlay
+3 1 kernel/vidsel.inc  # the adapter pick, in stage 2 and the boot overlay
 0 4 kernel/desksc.inc  # the boot half's scan (.boot2), in real mode before mega_enter; CTRL.DRV's half is PUSH_CSDATA/CSDO now
 
 # --- .mod*: an on-demand module writing its own image -----------------------

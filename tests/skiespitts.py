@@ -83,7 +83,8 @@ def main(argv):
         return dispapps.bss_off("skies", n)
     sg = lambda v: v - 0x10000 if v >= 0x8000 else v        # noqa: E731
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)

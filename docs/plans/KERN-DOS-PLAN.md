@@ -151,7 +151,7 @@ losses in §10.
 
 ## 3. The second finding: `dos_be_*` is the whole port
 
-The DOS box reaches the file system through **twenty `dos_k_*` back-end
+DOS reaches the file system through **twenty `dos_k_*` back-end
 targets** behind `dos_be_*` doors (§96.4.1). That layer exists for a reason
 that has nothing to do with this plan — a kernel file slot must run on the UI
 task's stack, because `dsk_secbuf` is `.lowbss` and reached through SS
@@ -249,7 +249,7 @@ disk layer and the DOS core from where they already live — and ships as
 | system-disk bytes | ~22 KB packed | ~13 KB packed | **0** |
 | new load mechanism | a loader | a loader + a mini-ABI | **none — `OP_ASSET` already** |
 | DOS core shipped twice | no | no | no |
-| versions with the box | no | half | **yes** |
+| versions with `DOS.O88` | no | half | **yes** |
 
 `apps/c64` is the worked example: 20,480 bytes of KERNAL, BASIC and CHARGEN as
 part 0 of `C64.O88`, *"a sidecar a file copy could separate from the program"*
@@ -257,7 +257,7 @@ made part of it. A `kern_dos` image is the same thing and the same size class.
 
 #### 4.1.1 The part costs NOTHING during an in-OS run, and nothing at the handoff either
 
-**The requirement:** arms 1 and 2 are an ordinary windowed DOS box, and the
+**The requirement:** arms 1 and 2 are an ordinary windowed DOS, and the
 `kern_dos` part must not be in RAM while one runs. §20.12 has lazy parts for
 exactly that, so the floor is *loaded only on the arm-3 handoff*.
 
@@ -269,7 +269,7 @@ off the disk.
 
 So the part is **never loaded as a part at all**: not during a windowed run,
 not during the handoff, and not into a scratch claim that has to be found on a
-heap the launch is about to give away. What the box holds is the part's file
+heap the launch is about to give away. What `DOS.O88` holds is the part's file
 offset and length — which §20.12 puts in the *image*, so reading them costs no
 disk at all.
 
@@ -346,13 +346,13 @@ KB of every system disk, for ever**, on top of §4.1.2's 14,622:
 
 | | clusters on a 360KB system disk |
 |---|---:|
-| the part as W5a builds it, the box left in | +43 |
-| the box cut from the part | +32 |
+| the part as W5a builds it, the window half left in | +43 |
+| the window half cut from the part | +32 |
 | …and the core extracted to its own part | **+20** |
 
-**THE SEAM IS ONE-DIRECTIONAL AND THAT IS WHY IT IS WORTH DOING.** Box → core
+**THE SEAM IS ONE-DIRECTIONAL AND THAT IS WHY IT IS WORTH DOING.** Package → core
 is 46 transfers at 33 entry points, the busiest being five call sites and
-none in a per-character path. **Core → box is ZERO** — not luck but §3: the
+none in a per-character path. **Core → package is ZERO** — not luck but §3: the
 one edge that exists is `dos_be_go`'s `jmp word [dos_betgt]`, the door table
 this plan already built and `kerndos/kdback.inc` already re-implements.
 
@@ -370,7 +370,7 @@ are the launch block** — `kerndos/kdlaunch.inc` already marshals seven of them
 across a segment boundary and is the shape the rest take.
 
 **The shape**: one assembly, `OP_SEG | OP_COMP`, far-called with its own bss,
-in BOTH hosts — the box reaching it through `op_load`/`op_seg`, `kern_dos`'s
+in BOTH hosts — the windowed DOS reaching it through `op_load`/`op_seg`, `kern_dos`'s
 stub reading the same part's extents into a segment of its own and far-calling
 the same 33 entry points. **One ABI, because it is the same ABI.**
 `apps/skies/csload.asm` is the worked example: a package whose part 0 is a
@@ -395,7 +395,7 @@ shape measured:
 | **part 2** | `kern_dos` — the FAT, the mouse, the kernel bits | `OP_SEG, OP_COMP` |
 
 **Part 1 joins to EITHER part 0 or part 2 and never both**, because the two
-hosts are alternatives: one is the windowed box and the other is the machine
+hosts are alternatives: one is the windowed DOS and the other is the machine
 after the handoff. Every mechanism it needs is built — `OSAPI_PKG_REHOME` is
 six bytes on an ordinary launch, and `apps/skies/csload.asm`'s loader measures
 **2,000 bytes**, so the ~2 KB estimate is exact.
@@ -424,7 +424,7 @@ Its near join rests on one sentence — *"the two hosts measure 19,556 and
 18,959 bytes, within 600 of each other"* — and W8 spent the next wave cutting
 **14,622 bytes out of one of them**. The two are not within 600 any more and
 never will be again: `kern_dos` carries `disk.inc` and `diskw.inc` (11,935)
-and no window, the box carries the window half (12,033) and no disk layer, so
+and no window, the windowed DOS carries the window half (12,033) and no disk layer, so
 the difference is *structural* rather than a coincidence that drifted.
 
 MEASURED on this tree (`tools/os88doscost.py` for the core, symbol spans for
@@ -432,7 +432,7 @@ the rest):
 
 | | image | less the core | |
 |---|---:|---:|---|
-| the box | 33,619 | **18,389** | window half + the shell + the container |
+| the windowed DOS | 33,619 | **18,389** | window half + the shell + the container |
 | `kern_dos` | 28,991 | **13,761** | the disk layer + the shim + the refusal wall |
 | the core | — | 15,230 | +3,846 of bss, identical in both |
 | | | **4,628** | the margin §4.1.3.1 costed at 600 |
@@ -454,11 +454,11 @@ costs is only what it is.
 | | what is below `CORE_ORG` | wasted |
 |---|---|---:|
 | `kern_dos` | the 8-byte header and §96.40.2's refusal wall, which END AT 0x05A8 and cannot move — `apps/os88api.inc` owns those offsets | ~8 |
-| the box | the package header, 0x70, which `OSAPI_PKG_REHOME` step 8 dispatches through and which therefore cannot move either | ~1,344 |
+| the windowed DOS | the package header, 0x70, which `OSAPI_PKG_REHOME` step 8 dispatches through and which therefore cannot move either | ~1,344 |
 
-So `CORE_ORG = 0x05B0` and the trade is **1,344 bytes of the box's heap
+So `CORE_ORG = 0x05B0` and the trade is **1,344 bytes of the windowed DOS's heap
 region against 4,671 of `kern_dos`'s arena** — and those are not the same
-kind of byte. The box's region is heap on a machine with 437 KB free; the
+kind of byte. The windowed DOS's region is heap on a machine with 437 KB free; the
 arena is the 586 KB this whole plan is a budget for.
 
 **What it costs instead is a budget with ONE claimant**, which is the other
@@ -469,8 +469,8 @@ was not. `CORE_MAX` is a `KERN_BUDGET`-shaped rung the CORE alone spends,
 the hosts read it, and slack is one number in one place: at 15,360 the core
 has 130 bytes of it.
 
-The box's 1,344 is not even certain to be waste — it is exactly the kind of
-room the box's own header, icon and association table already want — but it
+The windowed DOS's 1,344 is not even certain to be waste — it is exactly the kind of
+room the package's own header, icon and association table already want — but it
 is costed as waste here so the decision does not rest on finding a use.
 
 One thing to keep straight: **part 2 is not loaded by the parts loader.**
@@ -559,7 +559,7 @@ each file and `kern_dos` wants part of it.
 | `diskw.inc` — the FAT write path | 5,077 | less the batch/undo machinery |
 | `dskwin.inc` — the mount buffers | 2,336 | `.lowbss`, needed as-is |
 | `mouse.inc` — serial mouse | 3,538 | **the cursor half is not wanted** |
-| the DOS core from `apps/dos/` | ~12,000 | ESTIMATE; the box's image is 30,731 and most of it is window |
+| the DOS core from `apps/dos/` | ~12,000 | ESTIMATE; `DOS.O88`'s image is 30,731 and most of it is window |
 | PSP, environment, MCB chain, `dos_load` | ~1,500 | existing source |
 | the shim (§5) | ? | **the unknown** |
 | | **~31 KB + shim** | against 39 |
@@ -585,7 +585,7 @@ each file and `kern_dos` wants part of it.
    exists because os8088's file API is by-name and whole-file. Under
    `kern_dos` the FAT chain is right there, so `AH=3Fh` reads straight into the
    program's buffer. **−8 KB of buffer and ~−3 KB of code**, and it makes the
-   box *more* like DOS rather than less. This is the single biggest lever and
+   our DOS *more* like IBM's rather than less. This is the single biggest lever and
    it should be taken first.
    **MEASURED: the 8 KB is a heap CLAIM** (`dos_wseg` holds a segment), so it
    is not in the floor at all and comes off the *budget*; the code half is
@@ -664,7 +664,7 @@ floppy arm (§9), and the fresh kernel's own `hb_probe` finds the pointer and
 resumes it without asking. There is no second stub, no second extent walk and
 no second copy of the transport facts inside `kern_dos`.
 
-1. The box asks for arm 3 on a machine with a fixed disk, so the record it
+1. `DOS.O88` asks for arm 3 on a machine with a fixed disk, so the record it
    posts says *hibernate first*.
 2. `hbm_dosrun` writes the image and the pointer — `hbm_hib` steps 1 to 6,
    factored — with a byte in `HIBERNAT.PTR` meaning *this was not the user
@@ -780,12 +780,12 @@ Arm 3 is **not a superset of arm 2**, and the Memory page has to say so:
 | **W1** | **DONE** — docs/reports/KERN-DOS-BUDGET-2026-09-13.md. Arms 1 and 2 confirmed at 449/481 KB with a 32 KB cache between them, the floor re-derived at **35.5 KB against 38.5**, and the hibernate round trip at **~4 s on iron** (§2.2 — the 43.4 s this first reported is MartyPC's XT-IDE PIO and not the field's controller). | the report, and `tools/os88doscost.py` to re-derive it |
 | **W2** | **DONE, and the seam held with three breaches to fix** (§3, SPEC.md 96.4.2). Two new doors, +24 package bytes and no kernel byte; `tests/unit/t_dosseam.py` is the gate and walks the CALL GRAPH. | `soak -k dosseam` — **soak and not the fast this row first said**, by docs/WRITING-TESTS.md §2.1 rule 1 |
 | **W3** | **DONE, and the reuse pays by a factor of 130** (SPEC.md 96.37). The shim is **92 bytes** against 11,935 of kernel disk code; `kerndos/kerndos.asm` mounts a FAT12 floppy and reads a file with no scheduler, no window manager and no API table under it. | `soak -k kerndos`, checked against `os88fat.py` |
-| **W4** | **DONE, and the core needed no splitting** (SPEC.md 96.38). `kerndos/kdos.asm` is W3's root plus `apps/dos/dos.asm` **whole and unedited** plus `kerndos/kdback.inc`'s twenty-two doors; `KDHELLO.COM` reads **500 KB above its own PSP** against the windowed box's 449, and exits AH=4Ch back into `kern_dos`. | `soak -k kdos`, `-k kdfar` |
+| **W4** | **DONE, and the core needed no splitting** (SPEC.md 96.38). `kerndos/kdos.asm` is W3's root plus `apps/dos/dos.asm` **whole and unedited** plus `kerndos/kdback.inc`'s twenty-two doors; `KDHELLO.COM` reads **500 KB above its own PSP** against the windowed DOS's 449, and exits AH=4Ch back into `kern_dos`. | `soak -k kdos`, `-k kdfar` |
 | **W5** | **DONE — a DOS program runs with the whole machine and gives it back** (SPEC.md 96.40, 96.40.1, 96.40.2). §7 steps 2–8, ending in `int 19h`; no hibernate yet. The measurement is one comparison: **560 KB above the PSP against 438 in the window** (589 against 437 since W8), same program, same disk, same DOS core. W5a is the launch block's ABI and `kern_dos`'s real entry, W5b the disk measurement (docs/reports/KERN-DOS-PART-COST-2026-09-14.md), W5c the handoff itself — four resident kernel bytes, everything else in `HIBER.DRV` — and W5d the gate. **Seven defects were found by building the gate and every one is in its header**; §11.2 is what they came to, because five of the seven are one shape. | `soak -k kdhand -k kdapi -k kdos -k kdfar -k kdpart` |
-| **W6** | **DONE — the machine goes away, runs DOS, and comes back** (SPEC.md 96.41). §8's reboot route, not §8.1's direct restore, which is ~1,200 bytes of the program's own arena. **EIGHT RESIDENT BYTES, measured**: `.bss` +2 for `hb_doscode` (which lives between `hbm_ask` reading the BDA at the boot and `hbm_res` staging it for the wake, two separate loads of the image with a posted restart between them, so it cannot be module data) and `.cold` +6 for the one line in `hb_probe` that defaults it. Everything else is `HIBER.DRV`'s, the box's, or a field in a record that already existed. The exit code rides in `0040:00F0` and `HS_DOSCODE` needs no stub code at all, `hbm_wake` already reading that segment. §8.2 answers open question 3 and the answer got EASIER when the route changed. | `soak -k kdreturn -k kdhand -k hibernate -k hibernatedrv` |
+| **W6** | **DONE — the machine goes away, runs DOS, and comes back** (SPEC.md 96.41). §8's reboot route, not §8.1's direct restore, which is ~1,200 bytes of the program's own arena. **EIGHT RESIDENT BYTES, measured**: `.bss` +2 for `hb_doscode` (which lives between `hbm_ask` reading the BDA at the boot and `hbm_res` staging it for the wake, two separate loads of the image with a posted restart between them, so it cannot be module data) and `.cold` +6 for the one line in `hb_probe` that defaults it. Everything else is `HIBER.DRV`'s, `DOS.O88`'s, or a field in a record that already existed. The exit code rides in `0040:00F0` and `HS_DOSCODE` needs no stub code at all, `hbm_wake` already reading that segment. §8.2 answers open question 3 and the answer got EASIER when the route changed. | `soak -k kdreturn -k kdhand -k hibernate -k hibernatedrv` |
 | **W7** | **DONE, and it is OFFERED rather than greyed** (SPEC.md 96.42). §9's second bullet won over its first: the memory is a real want and the machine really can deliver it, so a greyed control would be refusing a capability rather than reporting a fact. What the question names is the fact — there is nothing to come back to — at the moment the user commits. `OS88UI_ADANGER` is a fourth alert set (SPEC.md 75.3.3), **Cancel at index 0** so the ring and Enter are the safe answer; sixteen bytes of any package that opts into the alert and **no kernel bytes at all**. The shipped `DOS.O88` is BYTE-IDENTICAL — the whole of it is `%ifdef DOSKPART`. | `soak -k kdhand`, and the alert rows beside it |
 | **W8** | **559 → 589 KB, and §6.1's list was aimed at the wrong question** (SPEC.md 96.43, 96.43.1, 96.43.2). It asks which FEATURES `kern_dos` does not want; the one that pays is *which code could not do anything even if it were called* — `KERNEL_SEG` is `KD_SEG` there, so every surviving `OSAPI_*` lands in 96.40.2's refusal table. The **packet driver and the cable translation** (−4,684), the **console** (−12,247, 6,863 of it `.bss`), the **FORMAT module** (−1,297), the **window half of `dos.asm` with `os88ui`/`os88line` and twenty-nine `DBSS` rows** (−8,374) and `disk.inc`'s four **`.ovlw` spans** (−762): `KD_IMG_KB` **61 → 34**. Then **`KD_LOW_KB` 8 → 5 on a measurement** — the stack's water mark is **134 bytes** of 4,864 (`KDSTKDIAG=1`, `tools/kdstkwater.py`). **The shipped `dos.o88` is md5-IDENTICAL and both kernels are byte-identical**, which is what a gate-only change owes. **600 KB is NOT reached**; §11.5 is the arithmetic and what is left is one trade and a long tail. | `soak -k kdhand -k kdreturn -k 'dos*'` |
-| **W9** | **W9a IS BUILT** (SPEC.md 96.44, 96.44.1): the core is one file behind two defines and NOTHING WAS MOVED. §96.43's gating turned out to do both jobs — `%ifndef KD_BACKEND` is the window half, `%ifndef DOS_EXTCORE` is the core, and what is marked neither is the container every build wants. **141 spans marked**, and the marking is CHECKED twice: `dos.o88` came out md5-identical through it, and `build/doscore.bin` is in `all` so a span marked wrong fails where neither host would notice. **The core is 14,409 bytes and names THREE things outside itself** — `os88_image_end`, `DVOL_MAX` and `dos_bevec` — which is §4.1.3's *core → box is ZERO* made good. The doors store a `DBE_*` ORDINAL now and `dos_be_go` resolves it (96.44.1), nine bytes once; `dos_be` was DEAD and was the table that change needed. **W9b** is `org CORE_ORG`, the entry table and the `CORE_ORG` budget; **W9c** the loader and the three parts, and **BOTH ARE BUILT** (SPEC.md 96.44.4, 96.44.5). The core goes LOW rather than above both hosts - 4.1.3.1's measurement was overtaken by W8, and the correction is 4.1.3.1.1. `DOS.O88` is **42,962** bytes against 53,789, the program is handed **585 KB**, and `kdhand`, `kdreturn`, `kdmix` and `kdpart` are the four gates. The disk case is measured twice and the second reading is what SHIPPED: a parted package's image is RAW (`os88pkg.py` refuses `--compress` with parts), so §96.44.4's two-piece shape cost the 360KB system disk **30 of its 50 free clusters** and **+932 ms a launch**, and the four-piece one costs **17 and +750 ms**. `$(SYSROOT)` points at it now, so arm 3 is LIVE on every shipped disk rather than on a gate disk — and the two gate disks are deleted, having built byte-identical to `$(IMG360)` and `$(IMG)` the moment it flipped (SPEC.md 96.40.3). | the box and `kern_dos` both run against one core part; `soak -k 'dos*'` |
+| **W9** | **W9a IS BUILT** (SPEC.md 96.44, 96.44.1): the core is one file behind two defines and NOTHING WAS MOVED. §96.43's gating turned out to do both jobs — `%ifndef KD_BACKEND` is the window half, `%ifndef DOS_EXTCORE` is the core, and what is marked neither is the container every build wants. **141 spans marked**, and the marking is CHECKED twice: `dos.o88` came out md5-identical through it, and `build/doscore.bin` is in `all` so a span marked wrong fails where neither host would notice. **The core is 14,409 bytes and names THREE things outside itself** — `os88_image_end`, `DVOL_MAX` and `dos_bevec` — which is §4.1.3's *core → package is ZERO* made good. The doors store a `DBE_*` ORDINAL now and `dos_be_go` resolves it (96.44.1), nine bytes once; `dos_be` was DEAD and was the table that change needed. **W9b** is `org CORE_ORG`, the entry table and the `CORE_ORG` budget; **W9c** the loader and the three parts, and **BOTH ARE BUILT** (SPEC.md 96.44.4, 96.44.5). The core goes LOW rather than above both hosts - 4.1.3.1's measurement was overtaken by W8, and the correction is 4.1.3.1.1. `DOS.O88` is **42,962** bytes against 53,789, the program is handed **585 KB**, and `kdhand`, `kdreturn`, `kdmix` and `kdpart` are the four gates. The disk case is measured twice and the second reading is what SHIPPED: a parted package's image is RAW (`os88pkg.py` refuses `--compress` with parts), so §96.44.4's two-piece shape cost the 360KB system disk **30 of its 50 free clusters** and **+932 ms a launch**, and the four-piece one costs **17 and +750 ms**. `$(SYSROOT)` points at it now, so arm 3 is LIVE on every shipped disk rather than on a gate disk — and the two gate disks are deleted, having built byte-identical to `$(IMG360)` and `$(IMG)` the moment it flipped (SPEC.md 96.40.3). | the windowed DOS and `kern_dos` both run against one core part; `soak -k 'dos*'` |
 
 **W0 and W1 land before anything is designed further.** W2 is the go/no-go for
 the whole shape; W3 is the go/no-go for §4's reuse.
@@ -849,10 +849,10 @@ the same handoff in the other direction and every one of these questions has a
 mirror: what segment is that pointer in, what did the outgoing side leave in
 that memory, and what does the ROM think it is holding.
 
-### 11.4 W7's finding is about a WAKE, and it is the box's own idiom biting
+### 11.4 W7's finding is about a WAKE, and it is `DOS.O88`'s own idiom biting
 
 **`[dos_wok]` has three states and not two.** A launch is a posted wake and a
-wake is a KICK (SPEC.md 74.1): tearing the alert down repaints, and the box is
+wake is a KICK (SPEC.md 74.1): tearing the alert down repaints, and `DOS.O88` is
 still `DST_READY` when the next wake lands — so a flag that only recorded
 *confirmed* put the question straight back up, and **Cancel could not be
 answered at all**. It is the same shape as `dos_wake`'s own comment about
@@ -871,7 +871,7 @@ nothing asked.
 
 **The flag was set in the STAGE and the stage is filled forty lines later.**
 `hbm_dosrun` ORed `KDLF_HIBER` into `KDS_LB` at step 3b and step 5's
-`rep movsw` then wrote the box's own block over it. It read as the whole
+`rep movsw` then wrote `DOS.O88`'s own block over it. It read as the whole
 return working and `kd_leave` posting nothing — a machine that comes back with
 no exit code in it. The record's copy is the one to patch.
 
@@ -1085,7 +1085,7 @@ W1, which is the wave that measures it.
    intra-application area, set up at POST and never touched again, `int 19h`
    is the bootstrap and not POST, and os8088's own boot writes nothing below
    `0x0600`. **Verified on the machine**, byte for byte, at a settled desktop.
-4. **XMS.** The box publishes `OSAPI_XMEM_*` to DOS programs today. Does
+4. **XMS.** The windowed DOS publishes `OSAPI_XMEM_*` to DOS programs today. Does
    `kern_dos` carry an XMS provider, or does arm 3 lose extended memory too?
    §87.7 already owes extended memory to hibernate, so the two are related.
 5. **Which volumes does the program see?** A: and B: from the BIOS is the
@@ -1138,7 +1138,7 @@ the numbers. **The unit is BYTES and not a ratio** — the owner's correction,
 and CLAUDE.md's own banner: *"2.5KB is 2.5KB… These are not ratios against how
 fat we got."*
 
-### 14.1 What the box actually costs
+### 14.1 What `DOS.O88` actually costs
 
 `DOS.O88` is a loader plus three parts:
 
@@ -1159,7 +1159,7 @@ Its own routines are 274 bytes (`dos_paint_env` 56, `dos_click_env` 68,
 plus 196 of buffer and 80 of line records — **~550 bytes**, because §96.32.2
 had already made the page cheap (its env box IS Setup's, one buffer and two
 rects). Re-priced at the owner's wider scope — *the whole setup area, counting
-every widget as if it were setup-only* — it is **~3.5 KB**: box-side setup
+every widget as if it were setup-only* — it is **~3.5 KB**: package-side setup
 routines 1,589, `os88line_*` 974, `os88ui_rad*` 376, the glyph family 321.
 And `os88line_*` is NOT setup-only (`dosc.inc` calls `os88line_resync`/`_draw`
 for the console's input line), so the honest figure is **~2.5 KB**, one 4 KB
@@ -1195,7 +1195,7 @@ See 14.3.
 
 **5. The disk-cache dropdown — AGREED, with the rungs corrected.** See 14.4.
 
-### 14.3 The driver checkboxes are the biggest lever in the box
+### 14.3 The driver checkboxes are the biggest lever in `DOS.O88`
 
 **`drv_suspend_x` skips THREE classes, not two** — and the third is the
 finding:
@@ -1224,7 +1224,7 @@ And the kernel already knows every figure. `drv_memk` is one word per
 | `DRVC_FILE` | `RAMDISK.DRV` | **21 KB+** (`DRVM_PLUS`) | no |
 | `DRVC_NET` | `NET.DRV` | 7 KB | no |
 
-Three checkboxes are worth **~85 KB** against the 34 the box reaches now.
+Three checkboxes are worth **~85 KB** against the 34 DOS reaches now.
 
 **The kernel bill is ~55 resident bytes**, in two pieces:
 
@@ -1236,13 +1236,13 @@ Three checkboxes are worth **~85 KB** against the 34 the box reaches now.
 - **a class-keyed info slot** — `AL` = a `DRVC_*`, out `AX` = the KB its
   LOADED drivers hold (`DRVM_PLUS` carried in bit 15) and `CX` = how many.
   **Class-keyed and not row-keyed on purpose**: it is the question the
-  checkbox asks, it hides `drv_tab` from the box, and `DRVC_NET` has TWO
+  checkbox asks, it hides `drv_tab` from `DOS.O88`, and `DRVC_NET` has TWO
   drivers so a row-keyed slot would make the Network box lie. **~40 bytes of
   `.cold` + a cell, 6 bytes if it is rare (SPEC.md 20.3).**
 
 **Two constraints to design around, both real**: unloading `DRVC_DISK` while
 the program is ON a hard disk loses the program, and the same for `DRVC_FILE`
-and the RAM disk. So the box takes those classes only after the load, or greys
+and the RAM disk. So DOS takes those classes only after the load, or greys
 the box when `[dos_vol]` names that transport.
 
 ### 14.4 The page itself
@@ -1269,7 +1269,7 @@ The owner's layout, with what each part costs:
   no serial mouse… nothing is hooked, `[kdm_base]` stays zero, and
   `kd_mou_read` answers the still pointer §96.10 already defines"*. What is
   needed is a way to SAY it: the kernel patches `KDL_MOUBASE` into the staged
-  block at §87.5 step 5, so the box's zero would be overwritten. A
+  block at §87.5 step 5, so `DOS.O88`'s zero would be overwritten. A
   `KDLF_NOMOUSE` bit in `KDL_FLAGS`, tested by `hbm_dosrun` before that patch,
   is ~8 bytes of the hibernate MODULE and nothing resident.
 - **The hibernate check box is REFUSED**, and the owner's question is the

@@ -234,7 +234,7 @@ def main():
                         os.path.join(tmp, "PALBAD.V88")], check=True,
                        capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             # --- 0: the hostile table refused at open
             wb_ = ui.path("B:/PALBAD.V88")
@@ -245,7 +245,7 @@ def main():
             # as its default while it runs - loaded, or the card opened)
             os88marty.until(m, lambda mm: m.read(bb + syms["vp_loaded"], 1)
                             [0] == 1 or m.read(bb + syms["vp_card"], 1)[0]
-                            == 1, "the hostile file's open", poll=0.3,
+                            == 1, "the hostile file's open", poll=0.05,
                             limit=300.0, guest=60.0)
             okb = m.read(bb + syms["vp_loaded"], 1)[0] or \
                 u16(m.read(bb + syms["vp_msg"], 2)) != syms["vp_s_bad"]
@@ -268,7 +268,7 @@ def main():
                 m.write(base + syms[n], struct.pack("<H", v))
 
             def until(cond, what, guest=90.0):
-                os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                 guest=guest)
 
             until(lambda mm: rb("vp_loaded") == 1, "the header", 30.0)
@@ -292,7 +292,25 @@ def main():
                 fw, fh, rgb = m.fbuf(0)
                 sx, sy = fw / 640, fh / 480
                 wrong, box = 0, [640, 480, -1, -1]
-                for y in range(480):
+                try:                    # (numpy: the loop below, at once -
+                    import numpy as np  # the same pixels, the same count
+                except ImportError:     # and box)
+                    np = None
+                if np is not None:
+                    full = np.zeros((480, 640), np.intp)
+                    full[ty0:ty0 + H, tx0:tx0 + W] = np.frombuffer(
+                        bytes(ref), np.uint8).reshape(H, W)
+                    ry_ = ((np.arange(480) + 0.5) * sy).astype(np.intp)
+                    rx_ = ((np.arange(640) + 0.5) * sx).astype(np.intp)
+                    gl = np.frombuffer(bytes(rgb), np.uint8).reshape(
+                        fh, fw, 3)[ry_][:, rx_].astype(int)
+                    bad_ = (np.abs(np.array(pal8)[full] - gl).max(2) > 6)
+                    wrong = int(bad_.sum())
+                    if wrong:
+                        yy, xx = np.nonzero(bad_)
+                        box = [int(xx.min()), int(yy.min()), int(xx.max()),
+                               int(yy.max())]
+                for y in range(480 if np is None else 0):
                     ry = int((y + 0.5) * sy)
                     for x in range(640):
                         cy, cx = y - ty0, x - tx0

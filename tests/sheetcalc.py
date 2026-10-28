@@ -43,7 +43,8 @@ from paintmove import pkg_syms                                # noqa: E402
 from os88geom import WIN_SIZE, W_SEG                          # noqa: E402
 
 WORK = "build/sheetcalc"                # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetcalc.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetcalc.img")        # the run's tree, so a soak lane finds it
 NAME = "SHIN.SLK"                       # the fixture's shared name. It was
                                         # NOT "CALC.SLK" because the rows
                                         # clicked the third row of a SORTED
@@ -79,8 +80,7 @@ def build_disk():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
+                    "--size", "360", "APPS:build/sheet.o88", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

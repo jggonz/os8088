@@ -22,18 +22,17 @@ QEMU by name, vesa's reason.
 """
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88geom                                             # noqa: E402
 import os88qemu                                             # noqa: E402
 import shot                                                 # noqa: E402
 import vesa                                                 # noqa: E402
 import vesafsx                                              # noqa: E402
-from os88geom import VID_VESA                               # noqa: E402
 import os88sym                                              # noqa: E402
 from pxsyms import instance                                 # noqa: E402
 import subprocess                                           # noqa: E402
@@ -101,6 +100,41 @@ def field(pix, sw, sh):
     return bw, bh, sky, best
 
 
+def keypath(q, kb0, B, W, seg, image):
+    """WHERE AN ENTER WENT, off the guest: the BIOS buffer either side (a
+    press the ROM never stored leaves the tail where it was, one the UI task
+    never fetched leaves the head behind it), the kernel's key-state map's
+    Alt and Enter bits and its Alt+Enter latch (SPEC.md 9.7, 9.7.1), the
+    ROM's shift flags, the fsx bracket, the screen saver, whether Gorillas'
+    window is the frontmost, and whether the instance is still where this row
+    reads it."""
+    S = os88sym.linear
+    kb = q.read(0x41A, 4)
+    dn = q.read(S("kbd_dnmap"), 16)
+    top = os88geom.top(q, S)
+    now = instance(q, S, image)
+    return ("buffer head/tail %d/%d -> %d/%d, map Alt %d Enter %d, latch "
+            "%02X, shift flags %02X, gr_fs %d, fsx_task %02X, saver %d, "
+            "front window %s, instance %s, state %d field %d"
+            % (kb0[0] | kb0[1] << 8, kb0[2] | kb0[3] << 8,
+               kb[0] | kb[1] << 8, kb[2] | kb[3] << 8,
+               dn[0x38 >> 3] >> (0x38 & 7) & 1, dn[0x1C >> 3] >> (0x1C & 7) & 1,
+               q.read(S("kbd_ae"), 1)[0], q.read(0x417, 1)[0], B("gr_fs"),
+               q.read(S("fsx_task"), 1)[0], q.read(S("blk_on"), 1)[0],
+               "Gorillas'" if top == W("gr_win") + (os88sym.KERNEL_SEG << 4)
+               else "%05X" % top,
+               "unmoved" if now == seg else "now at %s" % now,
+               B("gr_state"), B("gr_setupfield")))
+
+
+def shot_fail(q, out_png):
+    """The glass as the row gave up, kept where a person can look at it."""
+    sw, sh, pix = vesa.screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+    path = out_png or os.path.join(ROOT, "build", "vesagor-fail-%d.png" % os.getpid())
+    shot.png(path, sw, sh, pix)
+    print("vesagor: the screen as it failed: %s" % os.path.relpath(path, ROOT))
+
+
 def main():
     out_png = None
     img = "build/vesafsx.img"
@@ -116,12 +150,7 @@ def main():
     fails = []
     try:
         q_ = heapmap.Qmp(vesa.SOCK)
-        t0 = time.time()
-        while vesa.byte(q_, "vid_kind") != VID_VESA:
-            if time.time() - t0 > 60:
-                fails.append("the desktop never reached VID_VESA")
-                break
-            time.sleep(0.5)
+        vesa.desk_up(q_, fails, autostart=False)    # (guest clock: vesa.py)
         # --- Gorillas' instance, and its setup read off its own state ------
         # (not off the glass: the caret blinks, so a panel is never still,
         # and the splash and the first question are both a blue page - the
@@ -135,25 +164,60 @@ def main():
             fails.append("no Gorillas instance: the autostart link did not open it")
             raise SystemExit(0)
         B = lambda n: q_.read(seg * 16 + syms[n], 1)[0]            # noqa: E731
-        os88qemu.acted(q_, lambda: B("gr_state") == 5, 60.0, "the setup page")
+        W = lambda n: int.from_bytes(q_.read(seg * 16 + syms[n], 2),  # noqa: E731
+                                     "little")
+        if not os88qemu.acted(q_, lambda: B("gr_state") == 5, 60.0,
+                              "the setup page"):
+            fails.append("Gorillas never reached its setup page (state %d)"
+                         % B("gr_state"))
+            raise SystemExit(0)
+        # ...and the UI FINISHED with the launch before the first Enter: the
+        # worker writes state 5 and THEN paints the page, under the lock the
+        # key's dispatch takes, so this is a wait the key would make anyway
+        os88qemu.ui_done(q_, os88sym.linear, cap=5.0, what="the setup page")
+        # EACH ENTER IS ONE QUESTION, CONFIRMED BEFORE THE NEXT GOES - and a
+        # miss stops the row there and names where the key went. The loop
+        # waited `gr_setupfield > i` and carried on either way, so ONE lost
+        # Enter failed all seven waits and read as "not one of the seven
+        # reached Gorillas" (docs/plans/SOAK-PARALLEL.md 17.11: one Enter
+        # dropped on purpose reproduces that line exactly)
         for i in range(7):                  # the seven questions, at their defaults
+            want = i + 1
+            kb0 = q_.read(0x41A, 4)
             q_.hmp("sendkey ret")
-            os88qemu.acted(q_, lambda: B("gr_setupfield") > i or B("gr_state") == 6,
-                           15.0, "question %d answered" % (i + 1))
+            if not os88qemu.acted(
+                    q_, lambda: B("gr_setupfield") >= want or B("gr_state") != 5,
+                    15.0, "question %d answered" % want):
+                fails.append("Enter %d of 7 did not answer question %d: %s"
+                             % (want, want, keypath(q_, kb0, B, W, seg, image)))
+                shot_fail(q_, out_png)
+                raise SystemExit(0)
+            if B("gr_state") == 5 and B("gr_setupfield") != want:
+                fails.append("Enter %d of 7 answered %d questions: a key was "
+                             "taken twice" % (want, B("gr_setupfield")))
+                raise SystemExit(0)
         if B("gr_state") != 6:
             fails.append("after seven Enters the state is %d, not the choice page (6)"
                          % B("gr_state"))
+            raise SystemExit(0)
+        kb0 = q_.read(0x41A, 4)
         q_.hmp("sendkey ret")               # ...and Play, which draws the skyline
-        os88qemu.acted(q_, lambda: B("gr_state") < 4, 15.0, "the game")
+        if not os88qemu.acted(q_, lambda: B("gr_state") < 4, 15.0, "the game"):
+            fails.append("the eighth Enter did not start the game: %s"
+                         % keypath(q_, kb0, B, W, seg, image))
+            shot_fail(q_, out_png)
+            raise SystemExit(0)
         # ...band by band, under a loaded host for longer than one pace: read
         # the field until the buildings are there, or 30 s have gone, and
         # judge what is on the glass then (the comb never satisfies this)
-        t0 = time.time()
+        # (30 GUEST seconds: it was the host's, which a loaded box gave
+        # the guest less of)
+        c = os88qemu.Clock(q_)
         while True:
             os88qemu.pace(q_, 3.0)
             sw, sh, pix = vesa.screendump(q_, os.path.join(ROOT, "build", "vesa-shot"))
             bw, bh, sky, run = field(pix, sw, sh)
-            if run >= 32 or time.time() - t0 > 30:
+            if run >= 32 or c.secs() > 30 or c.stalled():
                 break
         if out_png:
             shot.png(out_png, sw, sh, pix)
@@ -171,6 +235,10 @@ def main():
             fails.append("the longest solid run of a building colour in the lower "
                          "third is %d px, want 32 or more: the buildings are a comb "
                          "(2-bit rows blitted as 4-bit)" % run)
+        if fails and not out_png:           # ...and the picture they are about
+            path = os.path.join(ROOT, "build", "vesagor-fail-%d.png" % os.getpid())
+            shot.png(path, sw, sh, pix)
+            print("vesagor: the screen as it failed: %s" % os.path.relpath(path, ROOT))
     except SystemExit:
         pass
     finally:

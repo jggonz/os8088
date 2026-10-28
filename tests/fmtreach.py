@@ -100,7 +100,7 @@ def arm(wrong, tmp):
     open(fix, "wb").write(img)                  # and NO BPB (see the top)
     tag = "B (cylinder 79's read sent to 78)" if wrong else "A"
     print("== arm %s ==" % tag)
-    with os88ui.boot(SYS, apps=fix, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=fix, machine=MACHINE, quick=True) as ui:
         m = ui.m
         try:
             ui.open_drive("B")          # random bytes mount nothing; the

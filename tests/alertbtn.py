@@ -53,21 +53,25 @@ def main(argv):
     os.chdir(ROOT)
 
     fails = []
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
-        os88marty.settle(m)
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()                         # the boot gate on STATE: every read
+        os88marty.kernel_up(m)          # below is guest memory, so every
+        os88marty.no_saver(m)           # wait is ui_done
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         disk = dispcp.win_list(m, S)[-1]
         wx, wy = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "APPS")
         wx, wy = dispcp.win_rect(m, S, disk)[:2]
         rows = [r[0] for r in dispcp.listing(m, S)]
-        row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy,
+        row = dispcp.scroll_to(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy,
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        os88marty.until(m, lambda mm: dispapps.pkg_seg(mm, 0) is not None,
+                        "Paint to be running", poll=0.05, guest=60.0)
+        os88marty.ui_done(m, "Paint's first paint")
         os88marty.no_saver(m)
         seg = dispapps.pkg_seg(m, 0)[1]
         pw = dispcp.win_list(m, S)[-1]
@@ -87,19 +91,23 @@ def main(argv):
         cx0 = int.from_bytes(m.read(boff("pt_cx0"), 2), "little")
         cy0 = int.from_bytes(m.read(boff("pt_cy0"), 2), "little")
         mo.to(cx0 + 30, cy0 + 25)                   # ink, so the close ASKS
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo._edge(True)
         for _ in range(4):
             m.mouse(dx=8, dy=6, l=True)
             m.advance(frames=3)
             m.run()
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m, "the stroke")
         wr = dispcp.win_rect(m, S, pw)
         mo.click(wr[0] + 8, wr[1] + 9)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        try:                            # the close ASKS: a window arrives
+            os88marty.until(m, lambda mm: [w for w in dispcp.win_list(mm, S)
+                                           if w not in (pw, disk)],
+                            "the close's alert", poll=0.05, guest=30.0)
+        except os88marty.MartyError:
+            pass                        # ...SETUP below says so
+        os88marty.ui_done(m, "the alert's paint")
         al = [w for w in dispcp.win_list(m, S) if w not in (pw, disk)]
         if not al:
             print("alertbtn: SETUP - no alert came up to press")

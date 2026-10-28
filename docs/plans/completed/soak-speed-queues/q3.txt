@@ -1,0 +1,197 @@
+# family  row  declared_secs  script  (work top-down; a script shared by several rows is optimized once)
+DONE vidp	vidpage8n	180	tests/vidpage.py
+DONE vidp	vidpage6n	150	tests/vidpage.py
+DONE vidp	vidpagefv4	145	tests/vidpage.py
+DONE vidp	vidpagepoolf	145	tests/vidpage.py
+DONE vidp	vidposter	135	tests/vidposter.py
+DONE vidp	vidpagepool4v	130	tests/vidpage.py
+DONE vidp	vidpal	110	tests/vidpal.py
+DONE vidp	vidpage4v	100	tests/vidpage.py
+DONE(script changed, row not re-run) vidp	vidpagetextf	95	tests/vidpagetext.py
+DONE(script changed, row not re-run) vidp	vidplaybigvga	85	tests/vidplay.py
+DONE(script changed, row not re-run) vidp	vidpallayer	80	tests/vidpal.py
+DONE vidp	vidpageherc	75	tests/vidpage.py
+DONE vidp	vidpreview	72	tests/vidpreview.py
+DONE(script changed, row not re-run) vidp	vidprevherc	72	tests/vidpreview.py
+DONE(script changed, row not re-run) vidp	vidkpartpv	72	tests/vidpreview.py
+DONE(script changed, row not re-run) vidp	vidprevshd	70	tests/vidpreview.py
+DONE vidp	vidpagefmx3	70	tests/vidpage.py
+DONE vidp	vidpagefmx4	70	tests/vidpage.py
+DONE vidp	vidpagefmx3o	70	tests/vidpage.py
+DONE vidp	vidpagefmx4o	70	tests/vidpage.py
+DONE vidp	vidkpart3mx	70	tests/vidpage.py
+DONE vidp	vidkpart	61	tests/vidpage.py
+DONE vidp	vidpage4mx	60	tests/vidpage.py
+DONE vidp	vidpage3mx	56	tests/vidpage.py
+DONE vidp	vidplayvga	50	tests/vidplay.py
+DONE vidp	vidpagely	50	tests/vidpage.py
+DONE vidp	vidpagebn	50	tests/vidpage.py
+DONE vidp	vidpage	47	tests/vidpage.py
+DONE(script changed, row not re-run) vidp	vidplayshd	45	tests/vidplay.py
+DONE(script changed, row not re-run) vidp	vidplaycompvga	45	tests/vidplay.py
+DONE vidp	vidpagetext4	45	tests/vidpagetext.py
+DONE(script changed, row not re-run) vidp	vidplay	40	tests/vidplay.py
+DONE(script changed, row not re-run) vidp	vidplayring	40	tests/vidplay.py
+DONE(script changed, row not re-run) vidp	vidplay3	40	tests/vidplay.py
+DONE(script changed, row not re-run) vidp	vidplayherc	40	tests/vidplay.py
+DONE(script changed, row not re-run) vidp	vidplaycomp	40	tests/vidplay.py
+DONE(script changed, row not re-run) vidp	vidpagetext	40	tests/vidpagetext.py
+DONE vidp	vidpagehercno	40	tests/vidpage.py
+DONE(script changed, row not re-run) vidp	vidplaybig	35	tests/vidplay.py
+DONE vidp	vidkparth	35	tests/vidpage.py
+DONE vidp	vidpagelymx	35	tests/vidpage.py
+DONE vidp	vidpagebnmx	35	tests/vidpage.py
+DONE vidp	vidpagemx	31	tests/vidpage.py
+DONE(script changed, row not re-run) vidp	vidpalloop	30	tests/vidpal.py
+DONE(script changed, row not re-run) vidp	vidpalrep0	30	tests/vidpal.py
+DONE skie	skieshaze	187	tests/skieshaze.py
+DONE skie	skiessound	120	tests/skiessound.py
+DONE skie	skiesface	105	tests/skiesface.py
+DONE skie	skiesset	90	tests/skiesset.py
+DONE skie	skiesui	90	tests/skiesui.py
+DONE skie	skiesdrag	65	tests/skiesdrag.py
+DONE skie	skiesflat	62	tests/skiesflat.py
+DONE skie	skieshz	52	tests/skieshz.py
+DONE skie	skieskfz	50	tests/skieskfz.py
+DONE skie	skiesrwy	50	tests/skiesrwy.py
+DONE skie	skiesgeom	48	tests/skiesgeom.py
+DONE skie	skiesvga	45	tests/skies.py
+DONE skie	skiesfleet	44	tests/skiesfleet.py
+DONE skie	skieslod	40	tests/skieslod.py
+DONE skie	skiestap	40	tests/skiestap.py
+DONE skie	skiesthr	40	tests/skiesthr.py
+DONE skie	skiesmode	40	tests/skiesmode.py
+DONE skie	skiesmodevga	40	tests/skiesmode.py
+DONE skie	skies	35	tests/skies.py
+DONE skie	skiescga	35	tests/skies.py
+DONE skie	skies160	35	tests/skies160.py
+DONE skie	skiespitts	34	tests/skiespitts.py
+DONE skie	skiesease	34	tests/skiesease.py
+DONE skie	skiesrad	34	tests/skiesrad.py
+DONE skie	skiespanel	32	tests/skiespanel.py
+DONE skie	skiesbody	30	tests/skiesbody.py
+DONE skie	skiesfacing	30	tests/skiesfacing.py
+DONE skie	skiesadi	30	tests/skiesadi.py
+DONE skie	skiesultravga	29	tests/skiesultra.py
+DONE skie	skiesinv	27	tests/skiesinv.py
+DONE skie	skiesocc	26	tests/skiesocc.py
+DONE skie	skiescrash	26	tests/skiescrash.py
+DONE skie	skiesworlds	25	tests/skiesworlds.py
+DONE skie	skiesticks	25	tests/skiesticks.py
+DONE skie	skiesstale	25	tests/skiesstale.py
+DONE skie	skiesspan	25	tests/skiesspan.py
+DONE skie	skiesbank	22	tests/skiesbank.py
+DONE skie	skieswater	20	tests/skieswater.py
+DONE skie	skiesdiag	20	tests/skiesdiag.py
+DONE skie	skiesmap	20	tests/skiesmap.py
+DONE skie	skiesultra	19	tests/skiesultra.py
+inst	install	400	tests/install.py
+inst	instcross	240	tests/instcross.py
+inst	instkeep	200	tests/instkeep.py
+inst	instimg	145	tests/instimg.py
+inst	inststate	135	tests/inststate.py
+inst	instdeep	120	tests/instdeep.py
+inst	instrest	120	tests/instrest.py
+inst	instassoc	85	tests/instassoc.py
+midi	midirackend	120	tests/midirack.py
+midi	midirackcovoxpoll	75	tests/midirack.py
+midi	midiracksbmem	70	tests/midirack.py
+midi	midirackwt	70	tests/midirack.py
+midi	midirackfm	60	tests/midirack.py
+midi	midiracksb	60	tests/midirack.py
+midi	midiracksbrate	60	tests/midirack.py
+midi	midirackspk	60	tests/midirack.py
+midi	midirackmpu	60	tests/midirack.py
+midi	midirackcovox	60	tests/midirack.py
+midi	midiracktone	50	tests/midirack.py
+pxss	pxssim	200	tests/pxssim.py
+pxss	pxssim-herc	195	tests/pxssim.py
+pxss	pxsshots	145	tests/pxsshots.py
+pxss	pxsstate	70	tests/pxsstate.py
+pxss	pxsscale	26	tests/pxsscale.py
+wire	wirefleetsystem	120	tests/wirefleetsystem.py
+wire	wireballvideo	100	tests/wireball.py
+wire	wirefleetdeploy	80	tests/wirefleet.py
+wire	wireballmono	80	tests/wireball.py
+wire	wireballfront	75	tests/wireball.py
+wire	wireballphysics	65	tests/wireball.py
+wire	wireflick	30	tests/wireflick.py
+mult	msegz	60	tests/multiseg.py
+mult	msegz360	60	tests/multiseg.py
+mult	msegw	60	tests/multiseg.py
+mult	msegw360	60	tests/multiseg.py
+mult	msegwz	60	tests/multiseg.py
+mult	msegwz360	60	tests/multiseg.py
+mult	mseg360	40	tests/multiseg.py
+mult	multiseg	20	tests/multiseg.py
+mrdr	mrdraw	200	tests/mrdraw.py
+mrdr	mrdrawvga	200	tests/mrdraw.py
+asso	assocflush	170	tests/assocflush.py
+asso	assocsweep	50	tests/assocsweep.py
+asso	assocopen	40	tests/assocopen.py
+asso	assocglyph	30	tests/assocglyph.py
+asso	assocwake	30	tests/assocwake.py
+asso	assocvol	21	tests/assocvol.py
+asso	assocfind	18	tests/assocfind.py
+asso	assocstale	15	tests/assocstale.py
+lzbi	lzbig	330	tests/lzbig.py
+tpdr	tpdraw	300	tests/tpdraw.py
+mixe	mixercga	100	tests/mixer.py
+mixe	mixerherc	65	tests/mixer.py
+mixe	mixervga	65	tests/mixer.py
+wdmo	wdmove	210	tests/wdmove.py
+wdme	wdmenusu	190	tests/wdmenusu.py
+ftpd	ftpdflick	120	tests/ftpdflick.py
+ftpd	ftpdfocus	60	tests/ftpdfocus.py
+dosa	dosargs	90	tests/dosargs.py
+dosa	dosarena	35	tests/dosarena.py
+dosa	dosattr	25	tests/dosattr.py
+dosa	dosaltenter	20	tests/dosaltenter.py
+frpr	frpromise	150	tests/frpromise.py
+zoom	zoomsave	150	tests/zoomsave.py
+aler	alertbtn	80	tests/alertbtn.py
+aler	alertanim	60	tests/alertanim.py
+regm	regmove	130	tests/regmove.py
+time	timerbounce	90	tests/timerbounce.py
+time	timerrace	30	tests/timerrace.py
+brli	brlink	120	tests/brlink.py
+sbar	sbar	60	tests/sbar.py
+sbar	sbardlg	60	tests/sbar.py
+pacc	paccman	100	tests/paccman.py
+dosg	dosglyph	75	tests/dosglyph.py
+dosg	dosgap	25	tests/dosgap.py
+wmar	wmartifact	92	tests/wmartifact.py
+sock	socktest	90	tests/socktest.py
+netp	netpromise	90	tests/netpromise.py
+btnc	btncp	75	tests/btncp.py
+hdno	hdnoclaim	75	tests/hdnoclaim.py
+regr	regrowshed	70	tests/regrowshed.py
+win	win1bpp	70	tests/win1bpp.py
+pxs	pxs160	45	tests/pxs160.py
+pxs	pxs256	20	tests/pxs256.py
+lzdr	lzdrv	45	tests/lzdrv.py
+lzdr	lzdrv-nohint	16	tests/lzdrv.py
+extd	extdmod	60	tests/extdmod.py
+drvu	drvup	60	tests/drvup.py
+fmpa	fmpatch	60	tests/fmpatch.py
+wimg	wimgtrip	56	tests/wimgtrip.py
+mart	martyresume	30	tests/martyresume.py
+mart	martyconc	20	tests/martyconc.py
+auto	autostart	50	tests/autostart.py
+dmgc	dmgcull	50	tests/dmgcull.py
+atme	atmenusu	45	tests/atmenusu.py
+gbst	gbstate	40	tests/gbstate.py
+cycw	cycweb	40	tests/cycweb.py
+ddsm	ddsmall	40	tests/ddsmall.py
+mono	monoink	40	tests/monoink.py
+gbde	gbdemo	30	tests/gbdemo.py
+c	c64part	30	tests/c64part.py
+path	pathcost	30	tests/pathcost.py
+whee	wheel	30	tests/wheel.py
+dosx	dosxms	28	tests/dosxms.py
+dosi	dosirq	25	tests/dosirq.py
+gblo	gblog	20	tests/gblog.py
+evqf	evqfull	20	tests/evqfull.py
+mouw	mouwheel	20	tests/mouwheel.py
+gbsh	gbship	15	tests/gbship.py
+dskw	dskwstage	15	tests/dskwstage.py

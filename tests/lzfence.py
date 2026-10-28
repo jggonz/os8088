@@ -50,16 +50,19 @@ def main():
     fails = []
     with os88marty.launch("build/os8088-360.img",
                           apps="build/lzfence360.img",
-                          machine=MACHINE[a.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE[a.adapter], boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
+        # every read below is guest memory: the UI pass is the whole wait
+        done_ = lambda mm, **k: os88marty.ui_done(mm)
 
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done_, "B")
         wins = dispcp.win_list(m, S)
         if not wins:
             sys.exit("lzfence: no Disk window after double-clicking B:")
         wx, wy = dispcp.win_rect(m, S, wins[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "LZFENCE.O88")
+        dispcp.open_named(m, mo, S, done_, wx, wy, "LZFENCE.O88")
         wins2 = dispcp.win_list(m, S)
         if len(wins2) <= len(wins):
             sys.exit("lzfence: LZFENCE.O88 did not open a window - the entry "

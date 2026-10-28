@@ -21,20 +21,22 @@ THE TEXT SCREEN IS READ OUT OF 0xB8000, because there is no os88ui for QEMU
 and the guest is in the fsx bracket's 80x25 text mode - so the framebuffer IS
 the output, char and attribute byte about.
 """
+import atexit
 import os
-import subprocess
+import shutil
 import sys
-import time
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+import dispcp                                                # noqa: E402
+import heapmap                                               # noqa: E402
+import os88build                                             # noqa: E402
 import os88qemu                                              # noqa: E402
-import os88fixture                                           # noqa: E402
+import os88sym                                               # noqa: E402
 
-SOCK = os.path.join(ROOT, "build", "qmp.sock")
-PID = os.path.join(ROOT, "build", "qemu.pid")
-IMG = os.path.join(ROOT, "build", "dosxmsq.img")
+IMG = os.path.join(ROOT, os88build.at("build/dosxmsq.img"))
 DISKB = (610, 110)                  # tests/xmcheck.py's, and for its reason
 ROW = (180, 128)
 TEXTBASE = 0xB8000                  # the fsx bracket's 80x25, on a VGA guest
@@ -45,27 +47,9 @@ def fail(msg):
     sys.exit(1)
 
 
-def qmp(*cmds):
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "qmp.py"),
-                        SOCK, *cmds], capture_output=True, text=True, cwd=ROOT)
-    if r.returncode:
-        fail("qmp failed:\n" + (r.stderr or r.stdout)[-500:])
-    return r.stdout
-
-
-def read_bytes(addr, n):
-    data = bytearray()
-    for line in qmp("xp /%dxb 0x%X" % (n, addr)).splitlines():
-        if ":" in line:
-            for tok in line.split(":", 1)[1].split():
-                if tok.startswith("0x"):
-                    data.append(int(tok, 16) & 0xFF)
-    return data
-
-
-def screen():
+def screen(q):
     """The 80x25 text screen, as 25 stripped lines."""
-    raw = read_bytes(TEXTBASE, 80 * 25 * 2)
+    raw = q.read(TEXTBASE, 80 * 25 * 2)
     if len(raw) < 80 * 25 * 2:
         return []
     out = []
@@ -76,53 +60,47 @@ def screen():
     return out
 
 
-def dblclick(x, y):
-    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"),
-                    SOCK, "to", str(x), str(y)], capture_output=True, cwd=ROOT)
-    qmp("mouse_button 1", "sleep 0.08", "mouse_button 0",
-        "sleep 0.08", "mouse_button 1", "sleep 0.08", "mouse_button 0")
-
-
 def boot():
-    if os.path.exists(PID):
-        try:
-            os.kill(int(open(PID).read().strip()), 15)
-            time.sleep(1.0)
-        except (OSError, ValueError):
-            pass
-    for f in (SOCK, PID):
-        if os.path.exists(f):
-            os.remove(f)
-    os88qemu.own()
-    r = os88fixture.make("test", "TESTAPPS=" + IMG)
-    if r.returncode:
-        fail("make test failed:\n" + r.stdout + r.stderr)
-    for _ in range(150):
-        if os.path.exists(SOCK):
-            return
-        time.sleep(0.2)
-    fail("QMP never came up")
+    """`make test TESTAPPS=build/dosxmsq.img`'s machine WITHOUT make
+    (os88qemu.launch_test: its own socket, copies of both floppies)."""
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    atexit.register(shutil.rmtree, tmp, True)   # (after the kill: LIFO)
+    sock, _ = os88qemu.launch_test(tmp, apps=IMG)
+    return heapmap.Qmp(sock)
 
 
 def main():
     if not os.path.exists(IMG):
         fail("%s is missing - `make doscom` builds the gate disks" % IMG)
-    boot()
-    time.sleep(22)                  # ...to a desktop
+    q = boot()
+    S = os88sym.linear
+    hmp = lambda *c: [q.hmp(x) for x in c]                  # noqa: E731
+
+    # EVERY WAIT ON THE GUEST'S STATE AND CLOCK (SOAK-SPEED 14), where it
+    # was a host sleep: 22 s to a desktop, 7 s for a window, a 1 s poll
+    def zone():
+        try:
+            return dispcp.drive_ordinal(q, S, "B") is not None
+        except Exception:                                   # noqa: BLE001
+            return False
+    if not os88qemu.acted(q, zone, secs=90, what="drive B's zone"):
+        fail("drive B: never got a desktop zone - no desktop")
+    os88qemu.ui_done(q, S, cap=1.0)
 
     print("dosxmsq: opening Disk B and launching DOSXMSQ.COM")
-    dblclick(*DISKB)
-    time.sleep(7)
-    dblclick(*ROW)
+    os88qemu.mouse_dblclick(q, S, hmp, *DISKB)      # closed-loop (15)
+    if not os88qemu.acted(q, lambda: bool(dispcp.win_list(q, S, check=False)),
+                          secs=20, what="the Disk B window"):
+        fail("double-clicking B:'s zone opened no window")
+    os88qemu.ui_done(q, S, cap=7.0)                 # ...its rows listed
+    os88qemu.mouse_dblclick(q, S, hmp, *ROW)
 
     rows = []
-    end = time.time() + 180.0
-    while time.time() < end:
-        rows = screen()
-        if any("READY" in r for r in rows):
-            break
-        time.sleep(1.0)
-    else:
+
+    def ready():
+        rows[:] = screen(q)
+        return any("READY" in r for r in rows)
+    if not os88qemu.acted(q, ready, secs=180.0, what="READY"):
         fail("the program never finished; the text screen was %r"
              % ([r for r in rows if r.strip()][:12],))
 

@@ -37,7 +37,7 @@ kd_dos_entry:
     ; block's ABI is built on are THIS routine's to establish and nobody
     ; else's: `KDL_DPT`, `KDL_NVOL` and `KDLF_RAHSH` each spell *"I could not
     ; fill this"* as 0, which is a sentence a sender only says by writing it.
-    ; The other producer never had to - the box's block is `rep movsw`'d whole
+    ; The other producer never had to - DOS.O88's block is `rep movsw`'d whole
     ; out of an image the package loader zeroed (SPEC.md 21 step 5) - and this
     ; one is filled a field at a time into a buffer nothing cleared.
     ;
@@ -94,9 +94,9 @@ kd_dos_entry:
                                 ; loader and the blob raw and has no volume
 
     ; --- and the fields, which on this arm are two constants and five zeros ---
-    ; The gather the BOX does is kdlaunch.inc's table walked the other way;
-    ; here there is no box, so the two that matter are written by hand and the
-    ; rest are the zeros the clear above put there. That clear is why this
+    ; The gather DOS.O88 does is kdlaunch.inc's table walked the other way;
+    ; here there is no DOS.O88, so the two that matter are written by hand and
+    ; the rest are the zeros the clear above put there. That clear is why this
     ; paragraph can say "the rest": it used to say the same thing about zeros
     ; nobody had written, which was true of the machine and not of the code.
     add di, KDL_BODY

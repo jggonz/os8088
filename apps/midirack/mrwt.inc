@@ -280,6 +280,44 @@ mwt_load:
 
 %include "os88rseq.inc"            ; os88_rseq, for mwt_load
 
+; mwt_pin / mwt_decl - the bank and the mix claim PINNED for a wavetable play
+; (mro_play, once mwt_load has the bank) and MOVABLE again once none is open
+; (mro_close, and a refused start). Between the two the mixer's voices hold
+; segments DERIVED from the bank (mwt_sseg, mwt_place) across the worker's
+; park, so a move then would leave them stale; outside it no voice sounds and
+; mwt_open silences them all before the next. A claim not held is 0, which
+; OSAPI_MEM_MOVABLE refuses harmlessly. SPEC.md 105.10.1. Keep all but flags
+mwt_pin:
+    push ax
+    xor ax, ax
+    jmp short mwt_set
+mwt_decl:
+    push ax
+    mov ax, mwt_move
+mwt_set:
+    push dx
+    mov dx, [mwt_bseg]
+    call OSAPI_MEM_MOVABLE
+    mov dx, [mwt_xseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
+    ret
+
+; mwt_move - the bank or the mix claim MOVED (SPEC.md 66.3: BX = was, DX =
+; now): one word each, and nothing derived from either is live while they
+; may move (mwt_pin's note)
+mwt_move:
+    cmp bx, [mwt_bseg]
+    jne .x
+    mov [mwt_bseg], dx
+.x:
+    cmp bx, [mwt_xseg]
+    jne .r
+    mov [mwt_xseg], dx
+.r:
+    ret
+
 ; mwt_free - the bank and the mix claim back (the window is closing)
 mwt_free:
     push dx

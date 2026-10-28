@@ -51,7 +51,7 @@ XS_TOFF     equ X3T_P43M_OFF
 
 ; --- the header (x3gran.inc section 2) --------------------------------------
     db 'X3', X3G_ABI, X3K_STD, X3V_COUNT, 0
-    dw xs_caps, xs_open, xs_reset, xs_granule, xs_stats, xs_close
+    dw xs_caps, xs_open, xs_reset, xs_granule, xs_stats, xs_close, xs_reseg
 
 ; =============================================================================
 ; THE ARITHMETIC OF THE GENERATED SYNTHESIS (build/x3sgen.inc)
@@ -692,6 +692,11 @@ xs_reset:
 
 xs_close:
     mov byte [xs_isopen], 0
+    clc
+    retf
+
+; RESEG - STANDARD has no work segments (SPEC.md 121.10): nothing to re-read
+xs_reseg:
     clc
     retf
 

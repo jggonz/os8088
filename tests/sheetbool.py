@@ -46,7 +46,8 @@ from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
 WORK = "build/sheetbool"                # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetbool.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetbool.img")        # the run's tree, so a soak lane finds it
 TR, FA = ('bool', True), ('bool', False)
 CRLF = "\r\n"
 # SHEET claims .SLK, .DIF and .BIF (SPEC.md 54.6), so the first file opens on a
@@ -129,7 +130,7 @@ def build_disk():
     for n, data in FILES.items():
         open(os.path.join(WORK, n), "wb").write(data)
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL"]
+                    "360", "build/sheet.o88"]
                    + [os.path.join(WORK, n) for n in FILES],
                    check=True, stdout=subprocess.DEVNULL)
 

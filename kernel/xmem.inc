@@ -281,7 +281,8 @@ xm_boot_x:
     cmp byte [xm_row+DRVR_WANT], 0
     je .out                     ; no store on this machine: not one sector
     mov bx, xm_row
-    call COLD_SEG:drvf_drv_load_at            ; loaded and validated, NOT attached
+    call bvs_cgo                ; loaded and validated, NOT attached
+    dw drv_load_at
     jc .out
     mov bp, [bx+DRVR_ENT]
     mov al, DRVV_ATTACH
@@ -366,7 +367,8 @@ xm_boot_x:
                                 ; but a debugger reading the row should find
                                 ; the truth rather than the DRVE_OK the load
                                 ; stamped on its way past
-    call COLD_SEG:drvf_drv_release            ; BX = the row; the claim goes back and
+    call bvs_cgo            ; BX = the row; the claim goes back and
+    dw drv_release              ; (the blob's hop: drvf_drv_release went)
     jmp short .out              ; nothing was hooked
 %endif
 
@@ -505,11 +507,9 @@ xm_caps:
 ; -----------------------------------------------------------------------------
 osapi_xmem_walk:
     call xm_have
-    jne .go
-    mov ax, 1
-    stc
-    ret
-.go:
+    mov ax, 1                   ; the refusal's AX, set either way: AX is no
+    je xm_alloc.stc             ; input, and the walk writes its own (size
+                                ; pass 14: xm_free's two-byte `stc / ret`)
     push bp
     push dx
     mov dx, es                  ; xm_dsp hands the image ES = KERNEL_SEG, so
@@ -714,11 +714,8 @@ xm_copy:
 ; slot and this will never free it. Claim from a callback (SPEC.md 41.5.1).
 ; -----------------------------------------------------------------------------
 xm_release_rec:
-    push ax
-    push bx
-    push cx
-    push bp
-    push es
+    call kent_bp                ; KENT: push ax..bp (the teardown's, once per
+    push es                     ; instance: kernel size pass 14, -4)
     call inst_idx               ; AL = the instance slot, ONCE for the two
     push ax                     ; releases below (the driver eats AX)
     KES                         ; FIRST, AND ON EVERY MACHINE: the instance's
@@ -731,17 +728,17 @@ xm_release_rec:
                                 ; AX and BX for this verb; it is HERE and not
                                 ; in inst_rel_rec because this has the fourth
                                 ; caller, ld_unreserve's abort sweep
+    push ax
+    KES                         ; ...AND THE NETWORK CARD'S, the same shape
+    mov bx, DRVC_NET * 256 + NETV_GONE ; (SPEC.md 72.13.4): ETHER.DRV drops the
+    call drv_pkg_call_x         ; instance's sockets and, if it was the last
+    pop ax                      ; instance using it, gives its ring pool back
     call xm_have
     je .out                     ; no overlay, so no table and nothing to free
     mov bp, [xm_svc+XMV_RELINST]
     call xm_dsp                 ; (sets its own ES)
 .out:
-    pop es
-    pop bp
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_es
 
 section .bss
 

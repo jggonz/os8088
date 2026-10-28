@@ -218,13 +218,18 @@ def main(argv):
 
     fail = []
     say = lambda s: print("  " + s)
-    settle = os88marty.settle
+    # EVERY ASSERTION BUT LEG C's IS A WINDOW RECORD OR A PACKAGE'S BSS, so
+    # the wait after an action is the UI task saying it has finished
+    # (os88marty.ui_done), not a still screen - that reaches the dispcp verbs
+    # too. Leg C diffs captures and keeps `pix`, the screen settle.
+    settle = lambda m, card=None, gate=None: os88marty.ui_done(m)
+    pix = os88marty.settle
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         if len(m.cards()) != 2:
             sys.exit("dispsize: %s is not a two-card machine" % a.machine)
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
         extend(m, mo, settle)
 
@@ -383,13 +388,14 @@ def main(argv):
         # CAPTURE's, not the kernel's idea of the display's. And the POINTER
         # has to be in the same place for both, because dispcorner.repaint
         # parks it before the second one.
+        pix(m, card=sec)
         before = steady(m, sec)[2]
         mo.drag(x3 + w3 // 2, y3 + TITLE_H // 2, seam + 30 + w3 // 2,
                 y3 + TITLE_H // 2)
         settle(m, card=sec)
         x4, y4, w4, h4 = dispcp.win_rect(m, S, sl)
         mo.to(*PARK)
-        settle(m, card=sec)
+        pix(m, card=sec)
         cw, _, inc = steady(m, sec)
         dispcorner.repaint(m, mo, pri)
         fullshot = steady(m, sec)[2]

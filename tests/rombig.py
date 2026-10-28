@@ -21,14 +21,18 @@ Five boots of the shipped 360KB disks:
   A. CGA 5150 (GLaBIOS), the ROM `tools/os88rom.py kernel` cuts from build/:
      [api_coldseg] = RCS - F400 less (COLD_VSTART - 0x10)/16, EE01 since
      kern_big's `.cold` starts at HMA_COLD_AT (SPEC.md 2.10.2) - [mem_base] =
-     COLD_RAM (no VGA: the `.vgabuf` arm has already taken its rung, and the
-     cold rung goes too), rom_mfp = F400:x (the tail's own segment), the
-     Control Panel opens and CTRL.DRV's listed words say RCS.
-  B. CGA, no ROM: [api_coldseg] = COLD_HOME, [mem_base] = HEAP_SEG - VGABUF_PARA.
+     VGA_RAM rounded up (no VGA and no EGA: the VGA rung, the cold rung and
+     `.vgabuf` all go - MOVABLE-COLD-PLAN 2), rom_mfp = F400:x (the tail's own
+     segment), the Control Panel opens and CTRL.DRV's listed words say RCS -
+     re-pointed by the kernel's mod_cfix now, not by the ROM.
+  B. CGA, no ROM: `.cold` SLID down over the VGA rung - [api_coldseg] =
+     COLD_HOME - VGA_PARA, [mem_base] = MONO_FLOOR (MOVABLE-COLD-PLAN 2).
   C. CGA, a ROM whose `.cold` is one byte off this kernel's: refused, exactly B
      - the negative control (docs/WRITING-TESTS.md 1).
   D. the VGA XT (GLaBIOS XT), with the ROM: RCS, [mem_base] = COLD_RAM +
-     VGABUF_PARA, the decoder's segment word reads COLD_RAM - and the decoder
+     VGABUF_PARA rounded up (SPEC.md 2.10.9's packed top), the decoder's
+     segment word - a `.text` word since the decoder joined the VGA rung -
+     reads COLD_RAM - and the decoder
      is DRIVEN: Paint repaints a dithered picture off the byte grid
      (tests/blitplane.py's scene), a breakpoint on vga_blit_prow's
      `mov ds, ax` must see AX = COLD_RAM on every row it decodes, and the
@@ -130,9 +134,11 @@ def boot_vga(rom, site, apps):
             seen.append(rec["regs"]["ax"])
             return None
 
-        # the instruction AFTER the load: `mov ax, imm16` is three bytes and
-        # `site` is its immediate, so AX here is the segment the decoder uses
-        with os88marty.bp_trace(m, kbase + site + 2, regs=True, on_hit=hit):
+        # the instruction AFTER the load: the decoder reads the segment out
+        # of the `.text` word at `site` and the local label `.segld` follows
+        # it (vga12.inc), so AX here is the segment the decoder uses
+        with os88marty.bp_trace(m, kbase + os88sym.syms()["vga_blit_prow.segld"],
+                                regs=True, on_hit=hit):
             m.pause()
             m.write(S("wm_wins") + pw.i * dispcp.WIN_SIZE + 2,
                     (pw.x - 1).to_bytes(2, "little"))
@@ -159,6 +165,7 @@ def main():
     cold_ram, heap = eq["COLD_RAM"], eq["HEAP_SEG"]
     vgap = eq["VGABUF_PARA"]
     vgab_ram = eq["VGABUF_RAM"]
+    up = lambda seg: (seg + 31) // 32 * 32  # mem_floor_ax's round-up
     fails = []
 
     def want(cond, what):
@@ -188,8 +195,9 @@ def main():
         a = boot_cga(good, sites=sites)
         want(a["cs"] == RCS, "[api_coldseg] = %04X, `.cold` runs in ROM (%04X)"
              % (a["cs"], RCS))
-        want(a["base"] == cold_ram, "[mem_base] = %04X: past BOTH rungs, onto "
-             "COLD_RAM (%04X)" % (a["base"], cold_ram))
+        want(a["base"] == up(eq["VGA_RAM"]), "[mem_base] = %04X: past the VGA "
+             "rung, `.cold`'s and `.vgabuf`, onto VGA_RAM rounded (%04X)"
+             % (a["base"], up(eq["VGA_RAM"])))
         want(a["mfp"][0] == F400, "rom_mfp = %04X:%04X" % a["mfp"])
         want(a.get("panel"), "the Control Panel opened")
         cs = a.get("ctrlsites", [])
@@ -199,15 +207,18 @@ def main():
 
         print("B: no ROM, CGA")
         b = boot_cga(False)     # False: $OS88_ROM must not reach it
-        want(b["cs"] == eq["COLD_HOME"], "[api_coldseg] = %04X (COLD_HOME)" % b["cs"])
-        want(b["base"] == heap - vgap, "[mem_base] = %04X (HEAP_SEG less the "
-             "`.vgabuf` rung)" % b["base"])
+        slid = eq["COLD_HOME"] - eq["VGA_PARA"]
+        want(b["cs"] == slid, "[api_coldseg] = %04X: slid over the VGA rung "
+             "(COLD_HOME - VGA_PARA = %04X)" % (b["cs"], slid))
+        want(b["base"] == eq["MONO_FLOOR"], "[mem_base] = %04X (MONO_FLOOR, "
+             "%04X)" % (b["base"], eq["MONO_FLOOR"]))
         want(b.get("panel"), "the Control Panel opened")
 
         print("C: a ROM one byte away from this kernel's, CGA")
         c = boot_cga(bad)
-        want(c["cs"] == eq["COLD_HOME"], "[api_coldseg] = %04X - refused" % c["cs"])
-        want(c["base"] == heap - vgap, "[mem_base] = %04X" % c["base"])
+        want(c["cs"] == slid, "[api_coldseg] = %04X - refused, and slid as B"
+             % c["cs"])
+        want(c["base"] == eq["MONO_FLOOR"], "[mem_base] = %04X" % c["base"])
         want(c.get("panel"), "the Control Panel opened")
 
         if vg:
@@ -217,9 +228,9 @@ def main():
             print("D: the ROM, VGA")
             d = boot_vga(good, vg[0], apps)
             want(d["cs"] == RCS, "[api_coldseg] = %04X" % d["cs"])
-            want(d["base"] == cold_ram + vgap, "[mem_base] = %04X: the cold "
-                 "rung back, the buffers kept under it (%04X)"
-                 % (d["base"], cold_ram + vgap))
+            want(d["base"] == up(cold_ram + vgap), "[mem_base] = %04X: the "
+                 "cold rung back, the buffers kept under it (%04X)"
+                 % (d["base"], up(cold_ram + vgap)))
             want(d["word"] == cold_ram, "the decoder's segment word = %04X "
                  "(COLD_RAM)" % d["word"])
             want(d["ax"] and set(d["ax"]) == {cold_ram},

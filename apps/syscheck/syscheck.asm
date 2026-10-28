@@ -79,6 +79,7 @@ SCK_PKG     equ 5
 SCF_ROOT    equ 0
 SCF_SYSTEM  equ 1
 SCF_STIK    equ 2
+SCF_OPT     equ 0x80            ; OR'd in: not on every system disk (118.2.3)
 
 DRV_VER     equ 11                  ; drivers/os88drv.inc - the ABI lock binds
 MOD_VER     equ 5                   ; kernel/mod.inc       it to PKG_FMT's era
@@ -167,6 +168,7 @@ sc_onwake:
     je .more                        ; still inside the tick we started in
 .draw:
     call OSAPI_GFX_LOCK
+    call sc_regeo                   ; dragged since the paint? (11.96.12.0)
     mov bx, [sc_win]
     call sc_drawowed                ; arms the clip; draws only the owed
     call OSAPI_GFX_UNLOCK
@@ -254,6 +256,7 @@ sc_repaint:
 ; in:  AX = the key (AH scan code, AL character), SI = window, lock held
 ; -----------------------------------------------------------------------------
 sc_onkey:
+    call sc_regeo                   ; the rects where the window IS (sc_regeo)
     cmp byte [sc_btrec+OS88UI_BT_N], 0
     jne .live
     jmp sc_abdown                   ; any key takes the About card down
@@ -350,6 +353,7 @@ sc_ondrag:
 
 ; sc_onup - W_ONMOUSEUP: a button fires on the release
 sc_onup:
+    call sc_regeo                   ; the rects where the window IS (sc_regeo)
     call sc_owe
     mov bx, sc_btrec
     call os88ui_btnup               ; AX = index + 1, 0 = cancelled
@@ -438,6 +442,7 @@ sc_act_details:
 ; out: CF = 1 the press was ours
 ; -----------------------------------------------------------------------------
 sc_onclick:
+    call sc_regeo                   ; the rects where the window IS (sc_regeo)
     call sc_owe
     cmp byte [sc_btrec+OS88UI_BT_N], 0
     jne .live
@@ -519,7 +524,7 @@ sc_s_quit:  db 'Quit', 0
 sc_btlbl:   dw sc_s_scan, sc_s_det, sc_s_save, sc_s_clean, sc_s_quit
 sc_btw:     dw 56, 72, 104, 104, 48 ; each button's width, left to right
 SC_BTROW    equ 56 + 72 + 104 + 104 + 48 + 4 * 8
-    OS88UI_BTNREC sc_btrec, sc_rects, sc_btlbl, sc_bflags, SC_NB
+    OS88UI_BTNREC sc_btrec, sc_rects, sc_btlbl, sc_bflags, SC_NB, sc_place
 
 sc_ablines:
     dw sc_ab1, sc_ab2, sc_ab3, 0

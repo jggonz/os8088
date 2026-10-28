@@ -5,7 +5,7 @@
 ; seeking to 0x180 on it while it is still empty, writing the body there, then
 ; seeking back to 0 and laying the 384-byte header it had left room for.  That
 ; is the ordinary shape of a format with a header it can only fill in once the
-; body is written, and this box refused the FIRST of those two writes with
+; body is written, and this DOS refused the FIRST of those two writes with
 ; `access denied` - so Works reported `Cannot write file` about a disk with
 ; 42 free clusters on it.
 ;
@@ -246,7 +246,7 @@ start:
     int 0x21
     jnc .gfail                      ; it is not there, so it cannot succeed
     cmp ax, 2
-    jne .gfail                      ; ...and 5 is what this box used to say
+    jne .gfail                      ; ...and 5 is what this DOS used to say
     call ok
 
     mov si, s_pass

@@ -204,7 +204,12 @@ def _park(m, mo, vidw, vidh):
     extra band was the one the mouse had stopped over. Parking is cheaper and
     far clearer than stripping the cursor out of every read."""
     mo.to(vidw - 4, vidh - 4)
-    os88marty.settle(m)
+    # `ui_done`, not a settle: the arrow is drawn by the mouse ISR, `mo.to`
+    # has proven its arrival, and every caller reads VIDEO MEMORY next. A
+    # Weave card without a <canvas> draws only on the UI task (its bytecode
+    # runs in OSAPI_WM_ONWAKE slices there, WEAVE-SPEC 1.2), so the UI task
+    # asleep with no wake pending is the card finished.
+    os88marty.ui_done(m, "the card with the pointer parked")
 
 
 def _band_pixels(rows, cx, cy, row, cells):
@@ -260,7 +265,7 @@ def _agree(got, want):
 def session(machine, card, vidw, vidh, png_dir=None):
     S = os88sym.linear
     weavesmoke.BUNDLE = BUNDLE
-    with os88marty.launch("build/os8088-360.img", apps=DISK,
+    with weavesmoke.booted("build/os8088-360.img", apps=DISK,
                           machine=machine) as m:
         try:
             _drive(machine, card, vidw, S, m, png_dir)
@@ -347,13 +352,13 @@ def _drive(machine, card, vidw, S, m, png_dir):
     # --- 3: the FORMULA BAR path -------------------------------------------
     # A cell, then its bar, then 6.9.2's compiler and a 5.6 kind-6 pool slot.
     _click_cell(mo, cx, cy, gr0, TYPE_R, TYPE_C)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     mo.click(cx + 8, cy + (gr0 * 8) + 4)        # the bar, to arm it
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     m.type_text(TYPE_SRC)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     m.key("Enter")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     _park(m, mo, vidw, vh)
     vw, vh, rows = m.vram(card)
     m2 = _cardrows(card, "click btnBump\nselect g %d %d\nedit g %d %d %s\n"
@@ -385,7 +390,7 @@ def _drive(machine, card, vidw, S, m, png_dir):
         m.key("ArrowUp")
     for _ in range(TYPE_R - 1):
         m.key("ArrowDown")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     _park(m, mo, vidw, vh)
     vw, vh, rows = m.vram(card)
     full = [_band_pixels(rows, cx, cy, gr0 + WG_CHROME + k, ncells)
@@ -402,7 +407,7 @@ def _drive(machine, card, vidw, S, m, png_dir):
 
     # --- 5: and the guest is still EXECUTING --------------------------------
     t0 = m.read(0x46C, 4)
-    os88marty.settle(m, quiet=0.6, stable=1)
+    os88marty.guest_sleep(m, 0.3)        # six ticks of a live machine
     check(m.read(0x46C, 4) != t0, "%s: the guest is still running" % machine,
           "a task frozen holding the gfx lock draws a perfect window and "
           "never draws another (SPEC.md 59.7)",
@@ -441,7 +446,7 @@ def _press(m, mo, card, cx, cy, label):
         if mm:
             mo.click(cx + (mm.start() + len(label) // 2) * 8 + 4,
                      cy + row * 8 + 4)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             return
     raise RuntimeError("weavesim --render: no %r on the card" % label)
 

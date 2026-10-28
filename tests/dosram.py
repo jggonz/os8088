@@ -134,19 +134,24 @@ def main():
     fixture()
 
     m = M.launch(None, apps=FLOPPY, machine=a.machine,
-                 extra=["--mount", "hd:0:" + VHD])
+                 extra=["--mount", "hd:0:" + VHD], boot=False)
     try:
-        ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        m.run()                         # the boot gate on STATE: every read
+        ui = os88ui.UI(m)               # in this row is the DOS package's
+        ui.up(limit=240)                # bss or the text screen, so every
+        M.no_saver(m)                   # wait after an input is ui_done
+        M.ui_done(m)
         mo = os88mouse.Mouse(marty=m)
-        # **OPEN THE PROGRAM, NOT THE BOX** (SPEC.md 54): a double click on a
+        # **OPEN THE PROGRAM, NOT DOS** (SPEC.md 54): a double click on a
         # .COM opens a DOS window already pointed at it, which is what every
         # kd* row does - typing a path into the arguments field opens nothing
         # and the Run below then has no program.
         if not ui.path("C:/" + PROG):
             fail("double-clicking %s on the fixed disk opened no window"
                  % PROG)
-        M.settle(m)
+        # (no wait here: the open RUNS the program, inside its own fsx
+        # bracket, so the UI does not idle until the key below - the
+        # `inbr` until is the wait)
         dm = dosmap.package()
         ps = dosmap.instance(m)
 
@@ -172,11 +177,11 @@ def main():
                 fail("the arena row reads %r and should be digits and a KB - "
                      "the page has never been painted (SPEC.md 96.36.3)" % raw)
 
-        # **AN ASSOCIATION OPEN OF A `.COM` RUNS IT** (SPEC.md 54), so the box
+        # **AN ASSOCIATION OPEN OF A `.COM` RUNS IT** (SPEC.md 54), so DOS
         # arrives inside its own fsx bracket with the program's output on the
-        # screen - no window, no page, and every read below would be of a box
+        # screen - no window, no page, and every read below would be of a DOS
         # that has not painted one.  DOSHELLO waits on AH=08h so its screen
-        # can be read; a key dismisses it and leaves the box with the program
+        # can be read; a key dismisses it and leaves DOS with the program
         # still NAMED, which is exactly the state arm 3 wants.
         def inbr(_=None):
             return m.read(pb() + dm["dos_inbr"], 1)[0]
@@ -184,10 +189,10 @@ def main():
         M.until(m, inbr, "%s to be running" % PROG, limit=120.0, guest=240.0)
         m.type_text(" ")
         M.until(m, lambda _=None: not inbr(), "%s to exit" % PROG, limit=120.0)
-        M.settle(m)
+        M.ui_done(m)
 
         mo.click(*dosmap.centre(m, ps, dm, "dos_erect"))
-        M.settle(m)
+        M.ui_done(m)
         if byte("dos_page") != dm["DOS_PAGE_SET"]:
             fail("the bar's button left [dos_page] = %d and Setup is %d"
                  % (byte("dos_page"), dm["DOS_PAGE_SET"]))
@@ -208,7 +213,7 @@ def main():
         before = arena()
         r = rect("dos_mhdd")
         mo.click(r[0] + 4, r[1] + 5)
-        M.settle(m)
+        M.ui_done(m)
         if m.read(pb() + dm["dos_mhdd"] + CK_ON, 1)[0]:
             fail("a press inside the Hard drives box did not clear it - the "
                  "box is live on this machine (SPEC.md 96.36.7)")
@@ -221,7 +226,7 @@ def main():
         print("dosram: clearing the box moved the row %d -> %d, exactly its "
               "own %d K" % (before, after, hdkb))
         mo.click(r[0] + 4, r[1] + 5)            # ...and back
-        M.settle(m)
+        M.ui_done(m)
         if arena() != before:
             fail("re-ticking the box left the arena at %d and it was %d"
                  % (arena(), before))
@@ -301,10 +306,10 @@ def main():
         lim = before - 11
         fr = rect("dos_mln")
         mo.click((fr[0] + fr[2]) // 2, (fr[1] + fr[3]) // 2)
-        M.settle(m)
+        M.ui_done(m)
         for ch in str(lim):
             m.type_text(ch)
-        M.settle(m)
+        M.ui_done(m)
         if word("dos_memkb") != lim:
             fail("typing %d into the limit field left [dos_memkb] = %d - the "
                  "keystroke never reached dos_mem_parse (SPEC.md 96.36.10)"
@@ -319,20 +324,20 @@ def main():
               % (lim, before, arena()))
         for _ in str(lim):
             m.type_text("\b")
-        M.settle(m)
+        M.ui_done(m)
         if word("dos_memkb") or arena() != before:
             fail("clearing the limit left [dos_memkb] = %d and the row at %d, "
                  "where an empty field means NO cap and the row should be "
                  "back at %d" % (word("dos_memkb"), arena(), before))
         for ch in str(lim):                     # ...and set again, STANDING,
             m.type_text(ch)                     # for 2a below
-        M.settle(m)
+        M.ui_done(m)
 
         # --- 2: ARM 1's estimate, against what the machine really hands over --
         rr = rect("dos_mrad")
         pitch = int.from_bytes(m.read(pb() + dm["dos_mrad"] + 14, 2), "little")
         mo.click((rr[0] + rr[2]) // 2, rr[1] + pitch + pitch // 2)
-        M.settle(m)
+        M.ui_done(m)
         if byte("dos_keepc") != 1:
             fail("clicking the Shut down the OS arm left the pick at %d"
                  % byte("dos_keepc"))
@@ -363,7 +368,7 @@ def main():
         # ...and a press on it belongs to the ARM under it, not to the field
         fr = rect("dos_mln")
         mo.click((fr[0] + fr[2]) // 2, (fr[1] + fr[3]) // 2)
-        M.settle(m)
+        M.ui_done(m)
         if m.read(pb() + dm["dos_mln"] + LN_FOCUS, 1)[0]:
             fail("a press on the greyed limit field took the caret - a greyed "
                  "control says nothing more, and the press belongs to the arm "
@@ -374,7 +379,7 @@ def main():
                  "the way a press on a greyed check box does (SPEC.md 96.36.4)"
                  % byte("dos_keepc"))
         mo.click((rr[0] + rr[2]) // 2, rr[1] + pitch + pitch // 2)   # back
-        M.settle(m)
+        M.ui_done(m)
         if byte("dos_keepc") != 1:
             fail("could not get back to arm 1 after the fall-through test")
         print("dosram: the limit greys with its arm, keeps no caret, and "
@@ -384,7 +389,7 @@ def main():
         print("dosram: the page promises ~%d K on arm 1" % promised)
 
         mo.click(*dosmap.centre(m, ps, dm, "dos_trect"))         # Return
-        M.settle(m)
+        M.ui_done(m)
         mo.click(*dosmap.centre(m, ps, dm, "dos_rrect"))         # ...and Run
 
         # The handoff tears the whole machine down and `kern_dos` boots in its

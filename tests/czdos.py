@@ -44,6 +44,52 @@ import os88build                                        # noqa: E402
 import os88cz                                           # noqa: E402
 import os88lz                                           # noqa: E402
 import t_lzfmt                                          # noqa: E402
+import os88fixture                                      # noqa: E402
+
+# What the packed fixtures' bytes depend on: the packers under test, the
+# text generator and this file's own recipe (SOAK-SPEED technique 16).
+PACKERS = ("tools/os88cz.py", "tools/os88lz.py", "tests/unit/t_lzfmt.py",
+           "tests/czdos.py")
+
+
+def packed(hsets, czs):
+    """{file name: bytes} for the COMPRESSED fixtures - ~4.5 host s of pure
+    Python packing, so made once per packer source and cached. The files are
+    a length-prefixed concatenation in one cache entry."""
+    import struct
+    import tempfile as _tf
+
+    def produce(dest):
+        out = []
+        for base, (data, m, size) in hsets.items():
+            for k, p in enumerate(os88cz.split(data, base + ".BIN", size, m,
+                                               jobs=1), 1):
+                out.append(("%s.%03d" % (base, k), bytes(p)))
+        for name, (fmt, data) in czs.items():
+            z, did = os88lz.cz_wrap(data, fmt)
+            if not did:
+                sys.exit("czdos: %s would not pack - the fixture is wrong"
+                         % name)
+            out.append((name, bytes(z)))
+        with open(dest, "wb") as f:
+            for name, blob in out:
+                n = name.encode()
+                f.write(struct.pack("<HI", len(n), len(blob)) + n + blob)
+
+    fd, t = _tf.mkstemp()
+    os.close(fd)
+    try:
+        os88fixture.cached(t, ("czdos-packed", 1), produce, sources=PACKERS)
+        raw = open(t, "rb").read()
+    finally:
+        os.unlink(t)
+    files, k = {}, 0
+    while k < len(raw):
+        ln, lb = struct.unpack_from("<HI", raw, k)
+        k += 6
+        files[raw[k:k + ln].decode()] = raw[k + ln:k + ln + lb]
+        k += ln + lb
+    return files
 
 fails = []
 
@@ -67,7 +113,10 @@ def dosbox(d, batch, limit=300):
         "\r\n".join(batch + ["EXIT"]) + "\r\n")
     env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
     try:
+        # cycles=max: the emulated CPU's SPEED, which no assertion is about
+        # (~8 -> ~2 host s; SOAK-SPEED technique 21)
         subprocess.run(["dosbox", "-c", "mount c %s" % d, "-c", "c:",
+                        "-c", "config -set cpu cycles=max",
                         "-c", "RUN.BAT", "-c", "exit", "-noconsole"],
                        cwd=d, env=env, timeout=limit,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -143,16 +192,8 @@ def main():
         open(os.path.join(d, "MIX.DAT"), "wb").write(mix)
         open(os.path.join(d, "STO.DAT"), "wb").write(store)
         open(os.path.join(d, "ESC.TXT"), "wb").write(b"\x1b")
-        for base, (data, m, size) in hsets.items():
-            for k, p in enumerate(os88cz.split(data, base + ".BIN", size, m,
-                                               jobs=1), 1):
-                open(os.path.join(d, "%s.%03d" % (base, k)), "wb").write(p)
-        for name, (fmt, data) in czs.items():
-            z, did = os88lz.cz_wrap(data, fmt)
-            if not did:
-                sys.exit("czdos: %s would not pack - the fixture is wrong"
-                         % name)
-            open(os.path.join(d, name), "wb").write(z)
+        for name, blob in packed(hsets, czs).items():
+            open(os.path.join(d, name), "wb").write(blob)
         dmg = os88cz.split(t_lzfmt.half_text(70000, 19), "DMG.BIN", 40000,
                            os88cz.M_STORE, jobs=1)
         dmg[1] = bytearray(dmg[1])

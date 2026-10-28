@@ -549,7 +549,7 @@ kxp_reloc:
 ; out: DOES NOT RETURN on success - it reads part 3 of DOS.O88, relocates it
 ;      to 0060:0000 where the low image runs, copies the launch block and the
 ;      core in, and far-jumps into it exactly as the kernel's loader stub
-;      would (kernel/hiber.inc). RETURNS when it could not - a field the box
+;      would (kernel/hiber.inc). RETURNS when it could not - a field DOS.O88
 ;      did not fill, a mount or a read that failed - and kd_xpack then falls
 ;      back to 14.23's floor raise. Every register may be clobbered.
 ;
@@ -570,7 +570,7 @@ kxp_reloc:
 section .text
 kd_tolow:
     mov si, [kd_lbp]
-    cmp word [si+KDL_L3OFF], 0          ; the box filled part 3's row...
+    cmp word [si+KDL_L3OFF], 0          ; DOS.O88 filled part 3's row...
     je .ret
     cmp word [si+KDL_L3ZB], 0
     je .ret

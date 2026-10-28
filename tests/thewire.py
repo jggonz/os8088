@@ -23,7 +23,7 @@ be run side by side; a bound port is a gate reading the other one's answers.
 the machine asks the host for it and every byte under test is a byte this file
 chose.
 
-SIXTEEN ASSERTIONS.
+EIGHTEEN ASSERTIONS.
 
 1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 5, `wr_state` is WS_DONE
    and `wr_nodrv` is 0 - which is the whole stack under it (ARP, a handshake,
@@ -119,6 +119,16 @@ SIXTEEN ASSERTIONS.
    for another os8088 version`; Add to Disk reads the header it downloaded
    and refuses before writing, so OLDHELLO.O88 is on no disk afterwards.
 
+17-18. THE CATALOG AND THE TRANSFER CLAIM MOVE (NO-PINNING, SPEC.md 66).
+   A compaction is POSTED from outside - `[mem_cpq]` and `[mem_cpq_lvl]`,
+   written through QEMU's GDB stub (`os88qemu.poke`; the monitor has no
+   memory write) - once with the catalog on the glass and every half second
+   while the archive chain of assertion 9 holds its claim. Each claim is
+   read back DECLARED, the catalog MOVED with its bytes and the list counted
+   again out of it, the transfer claim moved at least once - and everything
+   after runs against the moved claims, so a relocation proc that left a word
+   behind fails there too. The red run is `wr_reloc` made a bare `ret`.
+
 **THE LAUNCH IS THE DESKTOP ZONE** (SPEC.md 26.7). `ETHER.DRV` registers it,
 so the ethertest-shaped disk that already asks for the driver has the icon on
 it, and this file double-clicks the icon rather than a row in a Disk window.
@@ -151,12 +161,18 @@ import os88geom                                            # noqa: E402
 import os88wire                                            # noqa: E402
 import os88build                                       # noqa: E402
 import os88parts                                       # noqa: E402
+import os88fixture                                    # noqa: E402
+import shutil                                          # noqa: E402
 
 S = os88sym.linear
-SOCK = "build/qmp.sock"
+# THIS PROCESS'S socket (tests/os88qemu.py RUNDIR) - main() points it at the
+# machine os88qemu.make_test launches, and every helper reads it at call time
+SOCK = os88qemu.SOCK
 PORT = 8092
 SYSIMG = "build/thewire360.img"
-DATIMG = "build/thewiredata.img"
+# ...and the scratch B: is THIS RUN'S COPY of the built blank disk, booted in
+# place and read back on the host after (docs/plans/SOAK-PARALLEL.md 17)
+DATIMG = os.path.join(os88qemu.RUNDIR, "thewiredata.img")
 
 WS_DONE, WS_FAIL = 7, 8                 # thewire.asm's WS_*, and WS_PAUSE
                                         # (SPEC.md 92.14) went in at 6 between
@@ -592,7 +608,8 @@ W_SEG = 22                              # the package's own segment, and
 # QEMU over QMP - tests/ethernet.py's class, one connection at a time
 # =============================================================================
 class Qemu:
-    def __init__(self, path=SOCK):
+    def __init__(self, path=None):
+        path = path or SOCK
         self.path = path
         self.tmp = tempfile.mkdtemp()
         for _ in range(150):
@@ -604,6 +621,15 @@ class Qemu:
         raise RuntimeError("no QMP socket at %s" % path)
 
     def hmp(self, cmd):
+        # a plain `sendkey` is CONFIRMED by tools/qmp.py (its `key`): HMP's
+        # release follows 100 ms of HOST time later and a starved guest
+        # lost the key (docs/plans/SOAK-PARALLEL.md 17.5)
+        if re.match(r"^sendkey \S+$", cmd):
+            import qmp as _qmpc
+            _o, _e, _rc = _qmpc.run(self.path, [cmd])
+            if _rc:
+                raise RuntimeError("sendkey: " + _e)
+            return ""
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.path)
         f = s.makefile("rw")
@@ -657,26 +683,20 @@ class Qemu:
             pass
 
 
-class Mouse:
-    def run(self, *args):
-        subprocess.run(["python3", "tools/mouse.py", SOCK] + list(args),
-                       check=True, capture_output=True)
+class Mouse(object):
+    """tests/ethernet.py's Mouse - CLOSED LOOP on the kernel's mouse_x and
+    mouse_btn, tools/mouse.py only where they cannot be read - on THIS
+    row's socket. It was a copy of the dead-reckoned one, which pins against
+    the clamp and walks back on paced moves (docs/plans/SOAK-PARALLEL.md
+    17.5, 17.9)."""
 
-    def click(self, x, y):
-        self.run("click", str(x), str(y))
-        gsleep(0.4)
+    def __new__(cls):
+        import ethernet as _eth
 
-    def dblclick(self, x, y):
-        # TWO `click`s ARE NOT A DOUBLE-CLICK (CLAUDE.md): the detectors
-        # compare birth ticks in a 9-tick window and two processes are far too
-        # slow. Position, then both presses down one QMP connection.
-        self.run("to", str(x), str(y))
-        subprocess.run(["python3", "tools/qmp.py", SOCK,
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
-                        "sleep 0.12",
-                        "mouse_button 1", "sleep 0.08", "mouse_button 0",
-                        "gsleep 0.4"],
-                       check=True, capture_output=True)
+        class _Wire(_eth.Mouse):
+            def _sock(self):
+                return SOCK
+        return _Wire()
 
 
 def gsleep(secs):
@@ -694,6 +714,36 @@ def u16(b, i=0):
 
 
 # =============================================================================
+# THE HEAP, read from outside, and a compaction POSTED from outside
+# (tests/pkgmove.py's two halves, on QEMU)
+# =============================================================================
+def claims(m):
+    """{base: (paragraphs, MC_RLOC)} for every live record of mem_tab."""
+    raw = m.read(S("mem_tab"), os88geom.MEM_MAX * os88geom.MC_SIZE)
+    z = os88geom.MC_SIZE
+    return {u16(raw, i * z): (u16(raw, i * z + 2), u16(raw, i * z + 8))
+            for i in range(os88geom.MEM_MAX) if u16(raw, i * z)}
+
+
+def heapmap(m):
+    for base, (para, rloc) in sorted(claims(m).items()):
+        say("     %04X %4dKB %s" % (base, para // 64,
+                                     "MOVABLE" if rloc else ""))
+
+
+def post(m, win):
+    """Post a compaction at the TRIVIAL rank and wait until ui_task has spent
+    it. [mem_cpq_lvl] first and [mem_cpq] LAST: the second is what ui_task
+    tests, so it must not see a post with a stale rank. QEMU's monitor writes
+    no memory, so both go through its GDB stub (os88qemu.poke)."""
+    wp = os88geom.winptr(m, win, S)
+    os88qemu.poke(m.hmp, S("mem_cpq_lvl"), bytes([0xFC]))
+    os88qemu.poke(m.hmp, S("mem_cpq"), bytes([wp & 0xFF, (wp >> 8) & 0xFF]))
+    return os88qemu.acted(m, lambda: u16(m.read(S("mem_cpq"), 2)) == 0,
+                          secs=10, what="the posted compaction", poll=0.1)
+
+
+# =============================================================================
 # THE HOST'S WIRE - one catalog, two packages, and it remembers what was asked
 # =============================================================================
 class Server(threading.Thread):
@@ -703,6 +753,7 @@ class Server(threading.Thread):
         self.asked = []
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        os88qemu.lease_port(PORT)       # (SOAK-PARALLEL.md 17.3)
         self.s.bind(("0.0.0.0", PORT))
         self.s.listen(4)
 
@@ -828,19 +879,25 @@ def main():
 
     off = bss_offsets()
 
-    # **THE DISKS ARE REBUILT, NOT CHECKED.** QEMU mounts both writable and
-    # assertion 6 WRITES to the data disk, so a run that inherited the last
+    # **THE DISKS ARE FRESH COPIES, NOT REBUILT.** QEMU mounts both writable
+    # and assertion 6 WRITES to the data disk, so a run that inherited the last
     # run's B: would find the two files already there and pass having proved
-    # nothing. Staleness is not the hazard here - a dirty image is - and
-    # `make` cannot see the difference, because the guest's write leaves the
-    # image NEWER than everything it was built from (tests/ethernet.py's note,
-    # one disk along).
-    for f in (SYSIMG, DATIMG):
-        if os.path.exists(f):
-            os.remove(f)
-    r = subprocess.run(["make", "thewiretest"], capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("thewire: make thewiretest failed:\n" + r.stdout + r.stderr)
+    # nothing. That used to be answered by deleting both built images and
+    # running `make thewiretest` here, under every row beside it; now the
+    # built images are this row's `wants=`, make_test boots a COPY of the
+    # system disk, and the data disk is copied into this process's directory
+    # (docs/plans/SOAK-PARALLEL.md 17) - fresher than a rebuild, and nothing
+    # the next row reads is ever dirtied.
+    os88fixture.need(SYSIMG, "build/thewiredata.img", "build/mseg.o88")
+    shutil.copyfile(os88build.at("build/thewiredata.img"), DATIMG)
+    # THE PACKER'S DIRECTORY IS THIS RUN'S TOO: it read the fixture archives,
+    # the sidecars and a format-7 .o88 out of build/, written there by this
+    # row and deleted again - three kinds of file in the shared tree, one of
+    # which t_pkg's sweep of build/*.o88 rightly refuses
+    pkgdir = os.path.join(os88qemu.RUNDIR, "pkg")
+    os.makedirs(pkgdir, exist_ok=True)
+    for f in ("hello.o88", "mines.o88"):
+        shutil.copyfile(os88build.at("build/" + f), os.path.join(pkgdir, f))
 
     # --- the fixture the host will serve ------------------------------------
     tmp = tempfile.mkdtemp()
@@ -862,7 +919,7 @@ def main():
         wpk = os88wire.archive(src, home=ARC_HOME, program=ARC_PROG)
     except os88wire.Refused as e:
         sys.exit("thewire: the fixture tree will not pack: %s" % e)
-    open(os.path.join("build", ARC_STEM + ".WPK"), "wb").write(wpk)
+    open(os.path.join(pkgdir, ARC_STEM + ".WPK"), "wb").write(wpk)
     bsrc = os.path.join(tmp, "bigtree")
     os.makedirs(bsrc, exist_ok=True)
     bigtree = fixture_big(bsrc)
@@ -874,7 +931,7 @@ def main():
         sys.exit("thewire: the big fixture packed as version %d and not 2 - "
                  "its HUGE.BIN is past WIRE_FILEMAX, so the writer has to "
                  "make it version 2 (SPEC.md 92.13.1)" % bwpk[os88wire.WA_VER])
-    open(os.path.join("build", BIG_STEM + ".WPK"), "wb").write(bwpk)
+    open(os.path.join(pkgdir, BIG_STEM + ".WPK"), "wb").write(bwpk)
     say("archive %s: %d bytes on the wire, version 2, %d entries"
         % (BIG_STEM + ".WPK", len(bwpk), len(bigtree)))
     say("archive %s: %d bytes on the wire, %d entries, %d files unpacked"
@@ -885,17 +942,17 @@ def main():
                  "- without that the dword Content-Length and the 32-bit "
                  "byte count are never read with a high word in them"
                  % len(wpk))
-    for name, data in XSIDE.items():    # the packer sizes them out of build/
-        open(os.path.join("build", name.lower()), "wb").write(data)
+    for name, data in XSIDE.items():    # the packer sizes them out of pkgdir
+        open(os.path.join(pkgdir, name.lower()), "wb").write(data)
     try:
         hello0 = open(os88build.at("build/hello.o88"), "rb").read()
         oldhello = hello0[:2] + bytes([hello0[2] - 1]) + hello0[3:]
-        # IN build/ ONLY FOR AS LONG AS THE PACKER READS IT: a format-7 .o88
-        # left there is one t_pkg's sweep of build/*.o88 rightly refuses
-        oldpath = os.path.join("build", "oldhello.o88")
+        # in the packer's private directory, never in build/: a format-7
+        # .o88 there is one t_pkg's sweep of build/*.o88 rightly refuses
+        oldpath = os.path.join(pkgdir, "oldhello.o88")
         open(oldpath, "wb").write(oldhello)
         try:
-            cat = bytearray(os88wire.pack(json.load(open(man)), "build",
+            cat = bytearray(os88wire.pack(json.load(open(man)), pkgdir,
                                           pics))
         finally:
             os.remove(oldpath)
@@ -927,25 +984,13 @@ def main():
     say("http server on 10.0.2.2:%d, catalog %d bytes, %d records"
         % (PORT, len(cat), len(FIXTURE["entries"])))
 
-    # A SURVIVOR KEEPS THE SOCKET, so the new machine cannot bind and every
-    # read below would come from the OLD one - which reads as a change that
-    # did nothing (CLAUDE.md). Kill it by PID out of the pidfile and never
-    # with `pkill -f qemu`, whose pattern matches the calling shell.
-    if os.path.exists("build/qemu.pid"):
-        try:
-            pid = int(open("build/qemu.pid").read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)      # a HOST wait: the process, not a guess
-        except (OSError, ValueError):
-            pass
-    for f in ("build/qmp.sock", "build/qemu.pid"):
-        if os.path.exists(f):
-            os.remove(f)
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "ETHER=1", "TESTIMG=" + SYSIMG,
-                        "TESTAPPS=" + DATIMG], capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("thewire: make test failed:\n" + r.stdout + r.stderr)
+    # A PRIVATE MACHINE (tests/os88qemu.py make_test): its own socket and
+    # pidfile, so there is no survivor of an earlier run to kill first; the
+    # system disk copied, and DATIMG - already this run's - booted in place
+    global SOCK
+    inst = os88qemu.make_test("ETHER=1", "TESTIMG=" + SYSIMG,
+                              "TESTAPPS=" + DATIMG)
+    SOCK = inst.sock
 
     m = Qemu()
     mo = Mouse()
@@ -1069,18 +1114,31 @@ def main():
         if not 0 < kb0 < os88wire.WIRE_CATMAX // 1024:
             no("[wr_catkb] is %d: the accepted catalog's claim was not shrunk "
                "to the catalog" % kb0)
-        cell = m.read(S("menu_bar") + 1 * os88geom.MB_ENTSZ,
-                      os88geom.MB_ENTSZ)
-        fx = (u16(cell, os88geom.MB_XL) + u16(cell, os88geom.MB_XL + 2)) // 2
-        nasked = len(srv.asked)
-        mo.run("down", str(fx), "8")        # a menu is press, drag, release
-        time.sleep(0.5)
-        mo.run("to", str(fx), "26")         # File > Refresh, item 0
-        time.sleep(0.4)
-        mo.run("up")
-        os88qemu.acted(m, lambda: len(srv.asked) > nasked and w("wr_n") == NREC
-                       and b("wr_state")[0] == WS_DONE,
-                       secs=40, what="the refreshed catalog", poll=0.5)
+        def refresh():
+            """File > Refresh through the real menu; the Wire must be in front.
+            Answers the menu cell's x and how many requests the host had."""
+            cell = m.read(S("menu_bar") + 1 * os88geom.MB_ENTSZ,
+                          os88geom.MB_ENTSZ)
+            fx = (u16(cell, os88geom.MB_XL)
+                  + u16(cell, os88geom.MB_XL + 2)) // 2
+            nasked = len(srv.asked)
+            # a menu is press, drag, release - each step WAITED FOR on the
+            # kernel's own menu state (tools/os88ui.py's gesture), where it
+            # was two host sleeps between three dead-reckoned edges
+            mo.run("down", str(fx), "8")
+            os88qemu.acted(m, lambda: m.read(S("menu_dropd"), 1)[0],
+                           secs=10, what="the File pull-down", poll=0.05)
+            mo.run("to", str(fx), "26")     # File > Refresh, item 0
+            os88qemu.acted(m, lambda: u16(m.read(S("menu_sel"), 2)) == 0,
+                           secs=10, what="Refresh highlighted", poll=0.05)
+            mo.run("up")
+            os88qemu.acted(m, lambda: len(srv.asked) > nasked
+                           and w("wr_n") == NREC
+                           and b("wr_state")[0] == WS_DONE,
+                           secs=40, what="the refreshed catalog", poll=0.5)
+            return fx, nasked
+
+        fx, nasked = refresh()
         kb1 = b("wr_catkb")[0]
         say("after Refresh: asked %d -> %d, wr_n = %d, claim %d KB"
             % (nasked, len(srv.asked), w("wr_n"), kb1))
@@ -1232,7 +1290,7 @@ def main():
             return (rgt + 5 + os88geom.FM_BTN_W // 2,
                     cy + 2 + 20 * k + os88geom.FM_BTN_H // 2)
 
-        def save_to_b(tag, base):
+        def save_to_b(tag, base, churn=None):
             """Add to Disk..., walk the Save chooser to B:, and press Save.
 
             The chooser is a Disk window in a chooser role (SPEC.md 38.1), and
@@ -1287,9 +1345,17 @@ def main():
             os88qemu.acted(m, lambda: len(srv.asked) > nasked
                            or b("wr_job")[0] != 0, secs=2.0,
                            what="the Add chain to start", poll=0.1)
-            os88qemu.acted(m, lambda: b("wr_job")[0] == 0
-                           and b("wr_state")[0] in (WS_DONE, WS_FAIL),
-                           secs=120, what="the Add chain", poll=0.5)
+            def ended():
+                if churn is not None:           # assertion 18's compactions
+                    f = w("wr_fseg")
+                    if f and (not churn or churn[-1][0] != f):
+                        churn.append((f, claims(m).get(f, (0, 0))[1]))
+                    if f and u16(m.read(S("mem_cpq"), 2)) == 0:
+                        post(m, ww)
+                return b("wr_job")[0] == 0 \
+                    and b("wr_state")[0] in (WS_DONE, WS_FAIL)
+            os88qemu.acted(m, ended, secs=120, what="the Add chain",
+                           poll=0.5)
             shot(tag + "-added")
             say("after the chain: wr_job = %d, wr_state = %d, wr_msg = %04X"
                 % (b("wr_job")[0], b("wr_state")[0], w("wr_msg")))
@@ -1414,7 +1480,28 @@ def main():
                "WF_FLOPPY with WF_ARC on purpose (SPEC.md 92.2) and a reader "
                "that knows bit 4 must ignore bit 3 on it - this is that "
                "reader failing to (wr_grey = %d)" % b("wr_grey")[0])
-        arc_added = save_to_b("07", dispcp.win_list(m, S))
+        # --- 18: ...AND THE TRANSFER CLAIM MOVES UNDER IT (NO-PINNING) -----
+        # The archive's one claim is held for the whole chain, across every
+        # entry's pause, so the chain is run with a compaction POSTED every
+        # half second while the claim exists: [wr_fseg] must be declared
+        # (MC_RLOC) each time it is read, and must have MOVED at least once -
+        # every move after that is the worker's next pass re-reading
+        # [wr_dseg], and the host-side read-back of the whole tree at the
+        # bottom of this file is what says no byte went to the old place
+        # (the red run: wr_reloc made a bare `ret`)
+        moves = []
+        arc_added = save_to_b("07", dispcp.win_list(m, S), churn=moves)
+        say("the archive's claim while the chain ran: %s"
+            % " -> ".join("%04X%s" % (f, "" if r else " PINNED")
+                          for f, r in moves))
+        if not any(r for f, r in moves):
+            no("the transfer claim was never declared movable while the "
+               "chain held it (MC_RLOC = 0 at every reading; one taken "
+               "inside a file call's pin is expected, all of them is not)")
+        if len(moves) < 2:
+            no("the transfer claim never moved under the archive chain, so "
+               "assertion 18 proved nothing - the heap map follows")
+            heapmap(m)
         if not arc_added:
             no("the archive chain ended in WS_FAIL: wr_msg = %04X, and the "
                "candidates are wr_s_badarc (a field wr_ahdrck or wr_aentck "
@@ -1446,6 +1533,56 @@ def main():
                "(wr_ahdrck, wr_aentck); wr_s_wrote is a piece the disk "
                "refused - the first is OSAPI_FILE_WRITE, the rest "
                "OSAPI_FILE_APPEND" % w("wr_msg"))
+
+        # --- 17: THE CATALOG MOVES (NO-PINNING, SPEC.md 66) ----------------
+        # TAKEN HERE AND NOT AT THE FIRST CATALOG, because there it cannot
+        # move: it is claimed straight after the boot's own claims, and
+        # nothing below it is ever freed. By now the chains have put claims
+        # directly ABOVE it, so this Refresh's REGROW to the ceiling cannot
+        # extend in place and lands it high (mem_regrow's path 3) - and the
+        # shrink after the fetch leaves it there, over a hole.
+        # Its claim is held for as long as the window is open, so it is
+        # declared movable (wr_reloc). A compaction is POSTED from outside at
+        # the TRIVIAL rank - [mem_cpq] and [mem_cpq_lvl], the door
+        # OSAPI_MEM_COMPACT posts through (SPEC.md 66.4.3), written through
+        # QEMU's GDB stub because its monitor has no memory write
+        # (os88qemu.poke) - and the claim must be DECLARED (MC_RLOC, read
+        # from the kernel's own table), have MOVED, be named by [wr_catseg]
+        # afterwards and hold the same bytes. Everything below then runs
+        # against the MOVED catalog: the filter's count, the picture's
+        # record, the names Add to Disk writes and the image Load Program
+        # runs are all read through [wr_catseg], so a proc that left the
+        # word behind (the red run: wr_reloc made a bare `ret`) fails here
+        # and again at every one of them.
+        raise_wire()
+        refresh()
+        c0 = w("wr_catseg")
+        held = claims(m)
+        rloc = held.get(c0, (0, 0))[1]
+        kb2 = b("wr_catkb")[0]
+        cbytes = m.read(c0 * 16, kb2 * 1024)
+        post(m, ww)
+        os88qemu.poke(m.hmp, S("cp_dirty"), b"\x01")  # repaint it all, so the
+        os88qemu.pace(m, 1.5)          # list is counted again out of the claim
+        c1 = w("wr_catseg")
+        held = claims(m)
+        say("catalog claim: %04X -> %04X after a posted compaction, MC_RLOC "
+            "%04X, %s" % (c0, c1, rloc, "live" if c1 in held else "STALE"))
+        if not rloc:
+            no("the catalog claim is not declared movable (MC_RLOC = 0)")
+        if c1 not in held:
+            no("[wr_catseg] = %04X names no claim after the compaction: the "
+               "relocation proc left the word behind" % c1)
+        elif c1 == c0:
+            no("the catalog did not move, so assertion 17 proved nothing - "
+               "the heap map follows")
+            heapmap(m)
+        elif m.read(c1 * 16, kb2 * 1024) != cbytes:
+            no("the catalog's bytes changed in the move")
+        os88qemu.acted(m, lambda: shown() == NREC, secs=3,
+                       what="the list after the move", poll=0.1)
+        if shown() != NREC:
+            no("after the move the list shows %d rows" % shown())
 
         # --- 10: AN ARCHIVE, RUN FROM RAM (SPEC.md 92.14) -------------------
         vols0 = live_vols(m)
@@ -1749,7 +1886,7 @@ def main():
             # ...and QEMU GONE before the data disk is read back on the host:
             # a host wait, on the process, rather than a second and a half
             try:
-                qpid = int(open("build/qemu.pid").read().strip())
+                qpid = int(open(os88qemu.PIDFILE).read().strip())
             except (OSError, ValueError):
                 qpid = None
             m.quit()

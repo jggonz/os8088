@@ -960,7 +960,18 @@ mru_flags:
     pop ax
     ret
 
-    OS88UI_BTNREC mru_btrec, mru_rect, mru_blabs, mru_bflg, MRU_NB
+; mru_place - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): BX = the record, SI = the
+; window; draws nothing, keeps every register (all three callees do). The
+; painter's own three calls, run by the library before the press, the drag
+; and the release - a window dragged by its title is REPLAYED and never
+; painted, and mru_aim is also what points the record at the rack's buttons,
+; at none under a card, or at the Settings dialog's pair
+mru_place:
+    call mru_layout
+    call mru_origin
+    jmp mru_aim
+
+    OS88UI_BTNREC mru_btrec, mru_rect, mru_blabs, mru_bflg, MRU_NB, mru_place
 mru_blabs:
     dw mru_l_add, mru_l_rem, mru_l_dir
     dw mru_i_prev, mru_i_play, mru_i_pause, mru_i_stop, mru_i_next

@@ -83,7 +83,8 @@ def main(argv):
     if "CSM_RAD" not in E or "CSM_NV" not in E:
         sys.exit("skiesrad: skies.asm no longer defines CSM_RAD/CSM_NV")
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)

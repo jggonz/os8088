@@ -18,7 +18,7 @@
 ;   nasm -f bin -DNOPEN=1 -DNREAD=4  -DCHUNK=8192 -o D4.COM  diskcost.asm
 ;
 ; Every run carries the same fixed cost - the shell or the file manager
-; loading this program, the DOS box claiming its arena - so that cost cancels
+; loading this program, DOS claiming its arena - so that cost cancels
 ; in (D2-D1)/3 and (D4-D3)/3 and neither has to be known.
 ;
 ; IT WAITS FOR A KEY at the end, and that is not a courtesy: under os8088 the

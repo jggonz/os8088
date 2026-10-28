@@ -217,7 +217,7 @@ def main():
         bad = []
         with os88ui.boot(os88build.at("build/os8088.img" if big144 else
                                       "build/os8088-360.img"), apps=disk,
-                         machine=machine) as ui:
+                         machine=machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -234,7 +234,7 @@ def main():
                 m.write(base + syms[n], struct.pack("<H", v))
 
             os88marty.until(m, lambda mm: rb("vp_loaded") == 1,
-                            "the clip's header to be read", poll=0.5,
+                            "the clip's header to be read", poll=0.05,
                             limit=300.0, guest=30.0)
             if rb("vp_ok") != 1:
                 sys.exit("vidplay: the player will not play the clip here")
@@ -271,7 +271,7 @@ def main():
                     rb("vp_end"), rb("vp_err"), rb("vp_eof"), rb("vp_held"),
                     rb("vp_ready"))
 
-            def until(cond, what, guest, poll=0.3):
+            def until(cond, what, guest, poll=0.05):
                 try:
                     os88marty.until(m, cond, what, poll=poll, limit=600.0,
                                     guest=guest)
@@ -290,7 +290,7 @@ def main():
                       # (the first FINELY: its toast lasts 1.5 guest s and a
                       # 0.3 host s poll is as much as 1.4 of them, so a
                       # coarse read found it gone about one run in two)
-                      0.02 if toast1 is None else 0.3)
+                      0.02 if toast1 is None else 0.05)
                 if toast1 is None:
                     toast1 = rb("vo_toast")
                     if toast1:              # ...and taken off the picture,
@@ -331,7 +331,7 @@ def main():
                             guest=60.0)
             c1 = int(m.status().get("cycles", 0))
             os88marty.until(m, lambda mm: rb("vp_played") == 1,
-                            "the bracket to return", poll=0.5, limit=120.0,
+                            "the bracket to return", poll=0.05, limit=120.0,
                             guest=30.0)
             done2, err2 = rw("vp_done"), rb("vp_err")
             stall, late, dt, k2 = (rw("vp_stall"), rw("vp_late"), rw("vp_dt"),

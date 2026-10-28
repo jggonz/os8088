@@ -2061,6 +2061,8 @@ av_start:
     xor ax, ax
     rep stosw
     pop es
+    mov ax, [px_mrelp]              ; IT MOVES between passes (px_mreloc;
+    call OSAPI_MEM_MOVABLE          ; pinned for each one, below)
 .have:
     PSV SV_RINGCL
     jc .nomem
@@ -2086,6 +2088,10 @@ av_start:
     PSV SV_PUMPINIT
     PSV SV_SPAWN
     jc .nwork
+    mov dx, [px_anseg]              ; PINNED FOR THE PASS: the worker reads
+    xor ax, ax                      ; the global table into it with ES held
+    call OSAPI_MEM_MOVABLE          ; across a ring wait (pa_job), and parks
+                                    ; there; av_wake lets it go
     xor ax, ax
     mov [px_abort], al
     mov [px_ango], al
@@ -2139,6 +2145,9 @@ av_wake:
     jz .w0
     call OSAPI_MEM_FREE
 .w0:
+    mov dx, [px_anseg]              ; THE PASS IS OVER: the animation's claim
+    mov ax, [px_mrelp]              ; may move again until the next one
+    call OSAPI_MEM_MOVABLE
     xor ax, ax
     mov [px_wbase], ax
     mov [px_wseg], ax
@@ -2187,6 +2196,8 @@ av_wake:
     call OSAPI_MEM_FREE
     pop dx
     mov [px_anseg], dx
+    mov ax, [px_mrelp]              ; (the bigger claim moves as the first
+    call OSAPI_MEM_MOVABLE          ; did, between the passes)
     mov ax, [px_anneed]
     mov [px_ankb], ax
     jmp short .x

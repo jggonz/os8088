@@ -88,10 +88,12 @@ syms, image = pkg_syms()
 DISK = "build/wdcourier.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    M.settle(m); mo = Mouse(marty=m); S = lambda n: m.sym(n)
+with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
+              boot=False) as m:
+    m.run(); M.kernel_up(m); M.no_saver(m)    # the boot gate on STATE
+    mo = Mouse(marty=m); S = lambda n: m.sym(n)
     print("== Word: a seeded walk and the row above it (SPEC.md 68.6.2) ==")
-    dispcp.open_drive(m, mo, S, M.settle, "B")
+    dispcp.open_drive(m, mo, S, lambda mm, **k: M.ui_done(mm), "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
     M.ui_done(m, "Word to open WELCOME.DOC"); M.settle(m)

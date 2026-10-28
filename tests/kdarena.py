@@ -188,7 +188,9 @@ def main():
     print("kdarena: the map is this kern_dos's own (%d bytes)"
           % os.path.getsize(KDBIN))
 
-    with os88ui.boot(SYS, apps=COM, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=COM, machine=MACH,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         if not ui.path("B:/DOSHELLO.COM"):
             fail("DOSHELLO.COM did not open a DOS window")
@@ -271,7 +273,7 @@ def main():
         # allocator and the cache could sit above `[kd_top]` with the window
         # and the program below it. Then the design's own figure got measured
         # and it is worth keeping: `KD_RAH_KEEP` rungs take Test Drive III's
-        # load from 75 seconds to 16, which beats the DOS this box imitates.
+        # load from 75 seconds to 16, which beats the DOS it imitates.
         #
         # So what is asserted is the SEPARATION rather than the absence, and
         # the two failures below are different bugs: a ladder that overshoots

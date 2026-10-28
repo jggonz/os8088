@@ -248,7 +248,10 @@ def main():
     check(sb >= 1.3 * sa, "scene B's turn delta-fill is >= 1.3x scene A's on the "
           "host (%d vs %d stores)" % (sb, sa))
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # open_game's first act is a click
         g = pxslib.open_game(m)
         st = g.state()
         print("   PXSTEIN.O88: window %d, part 0 at %04x, tier %d, handoff %s"

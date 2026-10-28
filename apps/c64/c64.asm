@@ -86,6 +86,13 @@
                                     ; status row and three greyed menu items
                                     ; to say so when it went missing. A part
                                     ; cannot go missing
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned, unsigned) -
+                                    ; the 64KB RAM and Paste's 2KB are MOVABLE
+                                    ; (C64-SPEC 3.1.1), and so is...
+%define CC_ONMOVE_PARTS             ; ...the parts carve, ROM and overlay
+                                    ; together (SPEC.md 73.14.2.1): os88_onmove
+                                    ; re-reads c64_m.romseg through
+                                    ; os88_part_seg, so crt0 declares it
 
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the
@@ -120,6 +127,14 @@
 
 %include "c64.gen.asm"              ; the compiled C, found through -I build/
 
+section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
+    times (($ - $$) + 1) & 1 db 0     ; core and the composers below stay at
+                                    ; the byte parity they were measured at
+                                    ; whatever the compiled C above them
+                                    ; grows by - an odd shift re-prices every
+                                    ; word fetch on a 16-bit bus (an 8086, a
+                                    ; V30, a 286), where an 8088 does not care
+                                    ; (PERFORMANCE.md Part 7, os88rdiff.py)
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is assembly):
 %include "c64/c64cpu.inc"           ; the 6510 core - _c64_run(cycles). Wave 1
                                     ; is the register file, the 256-entry

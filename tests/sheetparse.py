@@ -50,7 +50,8 @@ import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
 
 WORK = "build/sheetparse"               # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetparse.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetparse.img")        # the run's tree, so a soak lane finds it
 NAME = "SHIN.SLK"
 DATA = (311, 45)                        # the Data menu, sheetsort's own
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
@@ -78,8 +79,7 @@ def build_disk():
     cells = {(r, 0): v for r, v in enumerate(ROWS)}
     open(src, "wb").write(F.write_sylk(cells))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "build/sheet.o88",
-                    "build/CHART.OVL", "build/MACRO.OVL", src],
+                    "--size", "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

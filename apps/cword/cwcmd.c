@@ -566,6 +566,11 @@ void os88_onclick(int x, int y, void *win)
     cw_dragging = 0;                    /* every path below that is not a
                                          * press in the text leaves it clear */
 
+    /* THE ORIGIN IS READ NOW, not trusted from the last paint: a window
+     * dragged by its title is replayed without one (SPEC.md 11.96.12.0), and
+     * every rect tested below is measured from it. */
+    (void)cw_layout(win);
+
     /* A dialog owns every click while it is up (SPEC.md 38's modality, done
      * here rather than by the kernel because these panels are ours). */
     if (cw_dlg) {
@@ -669,6 +674,7 @@ void os88_onmouseup(int x, int y, void *win)
     cw_dragging = 0;
     if (cw_dlg || cw_m_open >= 0)
         return;
+    (void)cw_layout(win);               /* the live origin (SPEC.md 11.96.12.0) */
 
     /* ONLY IF THE PRESS STARTED IN THE TEXT, which is what cw_dragging
      * records. A release is delivered wherever it happens, including outside
@@ -723,6 +729,7 @@ void os88_oncmd(int item, int menu, void *win)
  * menus are the window's own (SPEC.md 12.2, 65.2). */
 void os88_about(void *win)
 {
+    (void)cw_layout(win);               /* the panel centres on the live box */
     ovl_dlg_open(win, CW_DLG_ABOUT);
 }
 
@@ -815,6 +822,10 @@ void os88_onkey(int ascii, int scan, void *win)
     int was;
     int i;
 
+    (void)cw_layout(win);               /* the caret, a menu and a dialog are
+                                         * where the window is NOW, which a
+                                         * drag does not tell us (SPEC.md
+                                         * 11.96.12.0) */
     if (cw_dlg) {
         if (!ovl_dlg_key(win, ascii, scan))
             cw_dlg = 0;

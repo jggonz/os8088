@@ -57,6 +57,7 @@ import argparse
 import tempfile
 import os
 import struct
+import socket
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -96,8 +97,12 @@ def expect(w):
     return out
 
 
-def arm(label, name, w, want_fast, machine, refuse=False):
+def arm(m, label, name, w, want_fast, refuse=False):
     """Open one fixture; establish WHICH path drew it, and that it is right.
+
+    `m` is a machine at the desktop with B:MEDIA open in a Disk window - a
+    restore of `main`'s one snapshot, so every arm starts from the same fresh
+    boot without paying for one.
 
     `refuse` pokes `stc / ret` over the kernel's gfx_blit1 thunk once Paint
     is up, so the kernel answers CF = 1 the way kern_small does (SPEC.md
@@ -110,28 +115,16 @@ def arm(label, name, w, want_fast, machine, refuse=False):
     def w16(m, seg, n, k=2):
         return int.from_bytes(m.read(off(seg, n), k), "little")
 
-    apps = os88marty.scratch_disk(tempfile.gettempdir() + "/p1b_%d.img" % w,
-                                  "APPS:build/paint.o88",
-                                  "MEDIA:" + fixture(w, name))
-    with os88marty.launch("build/os8088-360.img", apps=apps,
-                          machine=machine) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        os88marty.no_saver(m)
+    if True:
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         disk = dispcp.win_list(m, S)[-1]
-        bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "MEDIA")
-        os88marty.settle(m)
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         rx, ry = dispcp.row_xy(bx, by,
                                dispcp.scroll_to(m, mo, S, os88marty.settle,
                                                 bx, by,
                                                 dispcp.row_of(m, S, name)))
-        mo.dblclick(rx, ry)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        mo.dblclick(rx, ry)             # ...whose own wait is the load
+        os88marty.ui_done(m, "Paint to open the picture")
         got = dispapps.pkg_seg(m, 0)
         if got is None:
             FAILS.append("%s: %s did not open Paint" % (label, name))
@@ -162,22 +155,20 @@ def arm(label, name, w, want_fast, machine, refuse=False):
         m.run()
         sx, sy = cx0 + 24, cy0 + 24
         mo.to(sx, sy)
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # every read here is memory, not glass
         if mo.where()[2] & 1:
             mo._edge(False)
         mo._edge(True)
         mo.to(sx + 100, sy + 30, l=True)
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # every read here is memory, not glass
         mo.to(4, 4)
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # every read here is memory, not glass
         m.write(LINE, SENT)
         m.advance(frames=2)
         m.run()
         m.ctrl("KeyZ")                          # undo: repaints out of the canvas
-        m.advance(frames=300)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m, "the undo's repaint")
         fell_back = m.read(LINE, 64) != SENT
         # ...and the canvas is now the UNDONE state, which is the picture as
         # loaded. Comparing after a redo instead would differ from the file by
@@ -185,7 +176,7 @@ def arm(label, name, w, want_fast, machine, refuse=False):
         # of it, identically in both arms, which reads like a decoder bug and
         # is the test marking its own homework.
         mo.to(4, 4)
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # every read here is memory, not glass
 
         # --- ...AND THAT THE PICTURE IS THE FILE. The oracle is the CANVAS
         # rather than the screen, deliberately: Paint's window shares the
@@ -228,9 +219,41 @@ def main(argv):
     a = ap.parse_args(argv)
     os.chdir(ROOT)
 
-    arm("byte grid", "PAT8.BMP", 208, True, a.machine)
-    arm("off grid", "PAT7.BMP", 204, True, a.machine)
-    arm("refused", "PAT7.BMP", 204, False, a.machine, refuse=True)
+    # ONE BOOT, THREE ARMS: both fixtures on one disk, the machine booted and
+    # B:MEDIA opened once, snapshotted, and each arm run on a restore of it
+    # (SOAK-SPEED technique 3) - three boots' worth of identical fresh state
+    apps = os88marty.scratch_disk(tempfile.gettempdir() + "/p1b.img",
+                                  "APPS:build/paint.o88",
+                                  "MEDIA:" + fixture(208, "PAT8.BMP"),
+                                  "MEDIA:" + fixture(204, "PAT7.BMP"))
+    arms = (("byte grid", "PAT8.BMP", 208, True, False),
+            ("off grid", "PAT7.BMP", 204, True, False),
+            ("refused", "PAT7.BMP", 204, False, True))
+    with os88marty.launch("build/os8088-360.img", apps=apps,
+                          machine=a.machine) as m:
+        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.no_saver(m)
+        mo = os88mouse.Mouse(marty=m)
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        disk = dispcp.win_list(m, S)[-1]
+        bx, by = dispcp.win_rect(m, S, disk)[:2]
+        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "MEDIA")
+        os88marty.ui_done(m)
+        snap = m.snapshot()["id"]
+        for label, name, w, fast, refuse in arms:
+            with socket.socket() as sk:
+                sk.bind(("127.0.0.1", 0))
+                port = sk.getsockname()[1]
+            m2 = m.restore(snap, port)
+            try:
+                if m2.status().get("state") != "running":
+                    m2.run()
+                arm(m2, label, name, w, fast, refuse=refuse)
+            finally:
+                try:
+                    m2.cmd(cmd="quit")
+                except os88marty.MartyError:
+                    pass
 
     for f in FAILS:
         print("paint1blit: " + f)

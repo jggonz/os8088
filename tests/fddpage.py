@@ -174,11 +174,10 @@ def qemu_boot(img, apps):
     QEMU because its CPU is a 286 and up: the one machine here on which
     18.93.2's gate leaves the canary unrun."""
     os88qemu.kill()
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "TESTIMG=" + img, "TESTAPPS=" + apps],
-                       capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("fddpage: make test failed:\n" + r.stdout + r.stderr)
+    # a PRIVATE machine (os88qemu.make_test): its own socket and pidfile and
+    # copies of both floppies - `make test` was the shared build/qmp.sock,
+    # which kept the row in the one-at-a-time lane (SOAK-PARALLEL.md 17)
+    os88qemu.make_test("TESTIMG=" + img, "TESTAPPS=" + apps)
     from ethernet import Qemu
     q = Qemu()
     entry = S("cold_entry")

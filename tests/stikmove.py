@@ -114,7 +114,7 @@ def move_leg(tmp, machine, template, drag, screen):
     image = image_size()
     STIK_ST, HDR = state_off()
 
-    with os88ui.boot(sysimg, machine=machine) as ui:
+    with os88ui.boot(sysimg, machine=machine, quick=True) as ui:
         m = ui.m
         print("A: open it, and it registers")
         w = ui.path("A:/STIKAPPS/DESKCAL.O88")
@@ -209,7 +209,7 @@ def anchor_leg(tmp):
                    check=True, stdout=subprocess.DEVNULL,
                    env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
 
-    with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(sysimg, machine="os8088_xt_vga", quick=True) as ui:
         m = ui.m
         print("D: a place saved on 720x348, opened on 640x480")
         w = ui.path("A:/STIKAPPS/DESKCAL.O88")

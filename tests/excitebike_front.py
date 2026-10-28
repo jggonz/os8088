@@ -176,7 +176,7 @@ def save_png_mono(name, w, h, rows):
 def shot(ui, tag, name):
     """The desktop as pixels: EGA indices for VGA, 0/1 rows for the 1-bit desktops."""
     ui.mo.to(2, 2)
-    ui.settle()
+    ui.still()
     return grab(ui.m, tag, name)
 
 
@@ -245,7 +245,7 @@ def help_text_box(tag):
 def revealed(ui, p):
     M.until(ui.m, lambda _: p.w("reveal") >= p.w("frontheight") and p.w("frontheight") > 0,
             "the window shade finishes", guest=20)
-    ui.settle()
+    ui.still()
 
 
 # ---------------------------------------------------------------------------
@@ -423,13 +423,13 @@ def arm(tag, sym, art, sp):
         tree = os88build.tree("VIDEO=ega").apply()
         system = tree.img("os8088-360.img")
     disk = at("build/excitebike360.img")
-    with os88ui.boot(system, apps=disk, machine=machine) as ui:
+    with os88ui.boot(system, apps=disk, machine=machine, quick=True) as ui:
         m = ui.m
         ui.open_drive("B")
-        ui.settle()
+        ui.still()
         c_before = claims(m)
         ui.open("EXCBIKE.O88")
-        ui.settle()
+        ui.still()
         p = Probe(ui, sym)
         revealed(ui, p)
         assert p.w("artseg"), "the splash art did not load"
@@ -492,7 +492,7 @@ def arm(tag, sym, art, sp):
             box = menu_box(art, tag)
             key(ui, "Enter")
             M.pace(m, 1)
-            ui.settle()
+            ui.still()
             assert not p.b("fs") and not p.b("error"), "a refused adapter entered fullscreen"
             assert p.w("gfxseg") == 0
             s3 = shot(ui, tag, "refused")
@@ -508,7 +508,7 @@ def arm(tag, sym, art, sp):
                        if s3[2][y][x] != 0)
             assert last > 0, "the refusal label is the 17-character playable one"
             ui.close(ui.window("Excitebike"))
-            ui.settle()
+            ui.still()
             assert claims(m) == c_before or paras(claims(m)) == paras(c_before), (
                 "the heap after closing is not the heap before opening",
                 paras(claims(m)), paras(c_before))
@@ -517,7 +517,7 @@ def arm(tag, sym, art, sp):
 
         # ---- a drag: the click target and the art move together
         ui.move_window(ui.window("Excitebike"), 127, 21 if tag == "cga" else 28)
-        ui.settle()
+        ui.still()
         revealed(ui, p)
         w = ui.window("Excitebike")
         fx, fy = w.x + 1, w.y + G.TITLE_H
@@ -604,7 +604,7 @@ def arm(tag, sym, art, sp):
         # Esc leaves; the desktop is whole and the heap is where it was
         key(ui, "Escape", False)
         M.until(m, lambda _: p.b("fs") == 0, "the bracket ends", guest=30)
-        ui.settle()
+        ui.still()
         assert not p.b("error")
         assert p.w("gfxseg") == 0
         c_post = claims(m)
@@ -626,7 +626,7 @@ def arm(tag, sym, art, sp):
         M.pace(m, .3)
         m.alt("Enter", hold=.15)
         M.until(m, lambda _: p.b("fs") == 0, "Alt+Enter leaves", guest=30)
-        ui.settle()
+        ui.still()
         assert claims(m) == c_pre, "second visit leaked"
         assert not (m.read(0x417, 1)[0] & 8), "Alt release lost across the mode switch"
         print(tag, "Alt+Enter in and out: PASS", flush=True)
@@ -639,10 +639,10 @@ def arm(tag, sym, art, sp):
         m.run()
         key(ui, "Escape", False)
         M.until(m, lambda _: p.b("fs") == 0, "Esc after a click launch", guest=30)
-        ui.settle()
+        ui.still()
         # close: the heap returns to what the desktop had before the package
         ui.close(ui.window("Excitebike"))
-        ui.settle()
+        ui.still()
         c_end = claims(m)
         assert paras(c_end) == paras(c_before), (
             "closing the window left the heap changed", paras(c_end), paras(c_before))

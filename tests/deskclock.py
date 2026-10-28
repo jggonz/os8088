@@ -130,14 +130,17 @@ class Clock(object):
         w = self.find()
         return w.x + 1, w.y
 
-    def key(self, name, wait=3.0):
+    def key(self, name, wait=None):
+        """A key, and the UI done with it (`ui.still`: ui_task asleep for a
+        tick, the card a frame on). `wait` was a fixed guest sleep per key -
+        84 guest seconds of the row - and is ignored."""
         self.m.key(name)
-        os88marty.guest_sleep(self.m, wait)
+        self.ui.still()
 
     def activate(self):
         w = self.find()
         self.ui.mo.click(w.x + w.w // 2, w.y + 20, settle=0)
-        os88marty.pace(self.m, 1.0)
+        self.ui.still()
 
     def raw(self, path):
         out = os.path.join(self.tmp, "flushed.img")
@@ -187,7 +190,7 @@ def region(fb, x0, y0, w, h):
 def vga(tmp):
     img = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
-    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         c = Clock(ui, tmp)
         m = c.m
         print("A: launched, a desk window, the ground composed")
@@ -196,7 +199,7 @@ def vga(tmp):
         check(c.word(S.DESKCLOK_BSS_CW) == 128,
               "Medium Classic: a 128-px card (%d)" % c.word(S.DESKCLOK_BSS_CW))
         ui.mo.to(620, 460)
-        os88marty.pace(m, 1.0)
+        ui.still()
         fb = m.fbuf()
         fx, fy = c.face()
         corner, out2 = px(fb, fx, fy + 2), px(fb, fx - 2, fy + 2)
@@ -213,7 +216,7 @@ def vga(tmp):
         c.activate()
         c.key("KeyS", 1.5)
         ui.mo.to(620, 460)
-        os88marty.pace(m, 0.5)
+        ui.still()
         a = region(m.fbuf(), fx + 16, fy + 16, 96, 80)
         os88marty.guest_sleep(m, 2.2)
         b = region(m.fbuf(), fx + 16, fy + 16, 96, 80)
@@ -224,9 +227,9 @@ def vga(tmp):
         print("C: Face > Red LED")
         c.activate()
         ui.menu_pick("Face", "  Red LED")
-        os88marty.guest_sleep(m, 4.0)
+        ui.still()
         ui.mo.to(620, 460)
-        os88marty.pace(m, 0.5)
+        ui.still()
         fb = m.fbuf()
         fx, fy = c.face()
         reds = sum(1 for p in region(fb, fx, fy, 128, 64) if p == RED)
@@ -246,7 +249,7 @@ def vga(tmp):
               % (sw.x, sw.x + sw.w, cw.x, cw.x + cw.w))
         cx, cy = sw.content[:2]
         ui.mo.click(cx + 248 + 56, cy + 80 + 40, settle=0)     # Neon '90
-        os88marty.guest_sleep(m, 8.0)
+        ui.still()
         check(c.pay()[S.DESKCLOK_FACE] == 2, "the Neon tile is the face now")
         fb = m.fbuf()
         fx, fy = c.face()
@@ -261,9 +264,9 @@ def vga(tmp):
         sw = win(ui, "Desk Clock Settings")
         cx, cy = sw.content[:2]
         ui.mo.click(cx + 8 + 56, cy + 80 + 40, settle=0)       # Classic
-        os88marty.guest_sleep(m, 6.0)
+        ui.still()
         ui.mo.click(cx + 308 + 26, cy + 364 + 9, settle=0)     # OK
-        os88marty.guest_sleep(m, 4.0)
+        ui.still()
         check(win(ui, "Desk Clock Settings") is None, "OK closes it")
         st = c.saved("OK's save")
         check(st is not None and st["face"] == 0,
@@ -278,7 +281,7 @@ def vga(tmp):
         check(c.word(S.DESKCLOK_BSS_CH) == 112,
               "...the card is the dial alone (%d)" % c.word(S.DESKCLOK_BSS_CH))
         ui.mo.to(620, 460)
-        os88marty.pace(m, 1.5)
+        ui.still()
         fb = m.fbuf()
         fx, fy = c.face()
         ty = w.y + w.h - 6                       # the tag row's middle
@@ -300,7 +303,7 @@ def vga(tmp):
         c.clock(6, 59, 52)                      # eight seconds to go
         ui._wait(lambda: c.byte(S.DESKCLOK_BSS_RING) == 1, "the alarm to ring",
                  60, snapshot=lambda: "ring %d" % c.byte(S.DESKCLOK_BSS_RING))
-        os88marty.guest_sleep(m, 3.0)
+        ui.still()
         w = c.find()
         check(w.h > hq, "ringing, the face-only frame grows for its rows "
               "(%d -> %d)" % (hq, w.h))
@@ -317,7 +320,8 @@ def vga(tmp):
         m.run()
         ui._wait(lambda: struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
                  < t0, "the BIOS tick to restart", 60)
-        ui.ready()
+        ui.up()                 # the clock ticks: a settle would wait it out
+        os88marty.no_saver(m)
         ui._wait(lambda: c.find() is not None, "the clock's relaunch", 120,
                  snapshot=ui.titles)
         c.bind()
@@ -331,7 +335,7 @@ def vga(tmp):
 def herc(tmp):
     img = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
-    with os88ui.boot(img, machine="os8088_5150_herc") as ui:
+    with os88ui.boot(img, machine="os8088_5150_herc", quick=True) as ui:
         c = Clock(ui, tmp)
         m = c.m
         print("H: the Red LED face on 1bpp")
@@ -341,7 +345,7 @@ def herc(tmp):
             c.key("ArrowRight", 4.0)
         check(c.pay()[S.DESKCLOK_FACE] == 6, "six faces on: Red LED")
         ui.mo.to(700, 330)
-        os88marty.pace(m, 1.0)
+        ui.still()
         wd, h, rows = m.vram("herc")
         fx, fy = c.face()
         faceh = 64 * 165 // 256

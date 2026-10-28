@@ -270,7 +270,8 @@ def main():
     with M.launch("build/os8088-360.img", apps=DISK,
                   machine=a.machine, boot=False) as m:
         m.run()
-        M.settle(m, gate=M.desktop_up)
+        M.kernel_up(m)          # the boot gate on STATE
+        M.no_saver(m)
         M.no_saver(m)
         mo = Mouse(marty=m)
 
@@ -330,10 +331,11 @@ def main():
             % (slot, wx, wy, ww, wh, seg))
 
         # The memory page (the heap page merged into it, SPEC.md 28.4.10):
-        # one click cycles 0 -> 1. Then its SYSTEM view, where each driver is
-        # a group of its own, and +ALL, so the driver's group is open and its
-        # claims are rows - both switches are on the header, off the page's
-        # own origin and rise.
+        # one click cycles 0 -> 1. Then +ALL, so System and the driver's group
+        # nested in it are open and its claims are rows - the switch is on
+        # the header, off the page's own origin and rise. (The PROGRAMS /
+        # SYSTEM switch this pressed first is gone, KERN-MEGA-PLAN 14.70.3:
+        # every driver is a group inside System in the one tree.)
         cx, cy = wx + 40, wy + 36            # the captions, above the list
         for _ in range(2):
             if tm.byte("tm_view") == 1:
@@ -345,19 +347,13 @@ def main():
                      "the click cycles 0 -> 1 -> 0"):
             return report()
         hy = tm.word("tm_cy") + TMM_HDR_Y - tm.word("tm_xoff") + 4
-        if tm.byte("tm_mview") != 1:
-            mo.click(tm.word("tm_cx") + TM_PEN + 12, hy)        # SYSTEM
-            tick(m, 40)
         if u32(tm.blob("tm_exp", 4)) != 0xFFFFFFFF:
             mo.click(tm.word("tm_cx") + TM_PEN + 22 * 8 + 4, hy)  # +ALL
             tick(m, 40)
         tick(m, SLOW_FRAMES)        # one unattended walk of the open list
-        if not check(tm.byte("tm_mview") == 1
-                     and u32(tm.blob("tm_exp", 4)) == 0xFFFFFFFF,
-                     "the header's switches give the SYSTEM view, every group "
-                     "open",
-                     got="view %d, groups %08X" % (tm.byte("tm_mview"),
-                                                   u32(tm.blob("tm_exp", 4)))):
+        if not check(u32(tm.blob("tm_exp", 4)) == 0xFFFFFFFF,
+                     "the header's +ALL opens every group",
+                     got="groups %08X" % u32(tm.blob("tm_exp", 4))):
             return report()
 
         # --- 2: every live record is in a group, the driver's in ITS group --

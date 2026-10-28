@@ -166,7 +166,11 @@ def run(machine, tag, fbseg, fbsize, verbose, dump=None,
     bad = []
     with os88marty.launch(os.path.join(ROOT, "build", "os8088-360.img"),
                           apps=os.path.join(ROOT, "build", "apps360.img"),
-                          machine=machine, label="icoclip") as m:
+                          machine=machine, label="icoclip",
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         m.pause()
         stride = u16(m, "vid_stride")
         mono = m.read(os88sym.linear("vid_mono"), 1)[0]

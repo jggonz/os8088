@@ -67,7 +67,7 @@ class Q(object):
         if os.path.exists(self.sock):
             os.remove(self.sock)
         pid = os.path.join(tmp, "qemu.pid")
-        subprocess.run(
+        os88qemu.start(
             ["qemu-system-i386", "-machine", "pc,vmport=off", "-m", "128",
              "-audiodev", "none,id=snd", "-device", "sb16,audiodev=snd",
              "-drive", "file=%s,format=raw,if=ide,index=0,media=disk" % hd,
@@ -158,7 +158,7 @@ def main():
         sysimg, apps, hd = disks(tmp, img)
         q = Q(tmp, sysimg, apps, hd)
         xmcheck.wait_desktop(q.sock, "p2hiber")
-        os88qemu.pace(q, 2)
+        os88qemu.ui_done(q, S, cap=2.0)         # (was pace(2): capped at it)
         m0, wz0 = master_imr(q), byte(q, "mou_p2wz")
         print("   before: master %s, mou_p2 %d, mou_p2wz %d" % (
             m0 is not None and "%02X" % m0, byte(q, "mou_p2"), wz0))
@@ -169,21 +169,26 @@ def main():
         ui = hmacold.QUI(q, mouse=hmacold.QMouse(q), sym=S, verbose=False)
         ui.menu_pick("Apple", "Hibernate...")
         ui.wait_window("Hibernate")
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
         xmcheck.qmp(q.sock, "sendkey ret")
         if not os88qemu.acted(q, lambda: q.read(0x449, 1)[0] in (3, 7),
                               secs=180, what="the hibernated sentence"):
             q.close()
             sys.exit("p2hiber: the hibernate never reached text mode (toast "
                      "%r)" % (ui.toast(),))
-        os88qemu.pace(q, 3)
+        # (was pace(3)): text mode is the hibernate's last step, so what is
+        # left to wait for is the image reaching the HOST file
+        import hmahiber
+        want(hmahiber.host_wait(lambda: {"HIBERNAT.PTR", "HIBERNAT.IMG"}
+                                <= hmahiber.on_c(hd)),
+             "0. both hibernate files are on C: before the power-off")
         q.close()                               # the power-off
         q = Q(tmp, sysimg, apps, hd)
         if not os88qemu.acted(q, lambda: byte(q, "hb_mode") == HB_M_RESUME,
                               secs=120, what="the resume question"):
             q.close()
             sys.exit("p2hiber: the fresh boot never asked the question")
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
         xmcheck.qmp(q.sock, "sendkey ret")      # Resume
         ok = os88qemu.acted(q, lambda: word(q, "hb_resumes") == 1, secs=180,
                             what="[hb_resumes] to reach 1")
@@ -192,7 +197,7 @@ def main():
         if ok:
             os88qemu.acted(q, lambda: byte(q, "sch_lock") == 0, secs=20,
                            what="the wake's last step")
-            os88qemu.pace(q, 2)
+            os88qemu.ui_done(q, S, cap=2.0)     # (was pace(2): capped at it)
             m1, wz1 = master_imr(q), byte(q, "mou_p2wz")
             want(m1 == m0, "2. the master 8259's mask came home %s, as it "
                  "hibernated (%s)" % (m1 is not None and "%02X" % m1,
@@ -202,7 +207,11 @@ def main():
             xy0 = (word(q, "mouse_x"), word(q, "mouse_y"))
             for _ in range(5):
                 xmcheck.qmp(q.sock, "mouse_move 20 15")
-                os88qemu.pace(q, 0.3)
+            # was 5 x pace(0.3) after the moves: the same 1.5 guest s, now
+            # ended by the word moving
+            os88qemu.acted(q, lambda: (word(q, "mouse_x"),
+                                       word(q, "mouse_y")) != xy0,
+                           secs=1.5, what="the pointer to move")
             xy1 = (word(q, "mouse_x"), word(q, "mouse_y"))
             want(xy1 != xy0, "4. the PS/2 pointer moves after the resume: "
                  "%s -> %s" % (xy0, xy1))

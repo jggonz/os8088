@@ -150,9 +150,14 @@ def main():
 
     global PLANAR
     bad = 0
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
         vt = m.video()["type"]
         PLANAR = vt not in ("cga", "mda", "hercules")
+        m.run()                         # the boot gate on STATE, then the
+        os88marty.kernel_up(m)          # three frames fbuf lags the memory by
+        if PLANAR:
+            os88marty.guest_sleep(m, 0.05)
         sv = m.sym("blk_sv")
         on = m.sym("blk_on")
         seg = m.sym("ss_row") + 2                   # DRVR_SEG
@@ -171,13 +176,24 @@ def main():
             m.write(m.sym("ss_secs"), b"\xc8")      # one long turn: no re-pick
             m.write(m.sym("ss_idle"), IDLE_SOON)
             m.key("Space")                          # the idle clock from HERE
-            os88marty.guest_sleep(m, 0.4)
             if not wait(m, sv, 1):
                 print("  %-10s NEVER STARTED" % name)
                 bad += 1
                 continue
             image = int.from_bytes(m.read(seg, 2), "little")
-            os88marty.guest_sleep(m, 2.5)
+            # Not a fixed 2.5 s: the bar's block (check 4) is painted at the
+            # END of the hold that READ the image, so once the drive is quiet
+            # it is there or it never will be (ui_done cannot say: a session
+            # wakes ui_task every tick); then the mode has to have DRAWN
+            # (lit > 10), within the old 2.5.
+            os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=0.3,
+                              stable=2, what="the image read to finish")
+            try:
+                os88marty.until(m, lambda mm: lit(mm)[0] > 10,
+                                "the %s mode to draw" % name, poll=0.05,
+                                guest=2.5)
+            except os88marty.MartyError:
+                pass                                # ...and lit= says so
             total, bar = lit(m)
             # A MODE MAY LEGITIMATELY DRAW IN THE BAR'S ROWS - a figure is
             # placed anywhere and a fish swims at any height - so the bar
@@ -192,7 +208,19 @@ def main():
 
             m.write(m.sym("ss_idle"), IDLE_NEVER)
             m.key("Space")
-            os88marty.guest_sleep(m, 2.5)
+            # the wake is over when the session is off AND its image freed
+            # (within the old fixed 2.5 s), and the repaint's pass is done
+            try:
+                os88marty.until(
+                    m, lambda mm: mm.read(on, 1)[0] == 0
+                    and mm.read(sv, 1)[0] == 0
+                    and mm.read(seg, 2) == b"\0\0",
+                    "the wake to free the image", poll=0.05, guest=2.5)
+            except os88marty.MartyError:
+                pass                                # ...asserted below
+            os88marty.ui_done(m, "the wake's repaint")
+            if PLANAR:
+                os88marty.guest_sleep(m, 0.05)      # fbuf: the glass lags
             back, backbar = lit(m)
             image = int.from_bytes(m.read(seg, 2), "little")
             ok = (m.read(on, 1)[0] == 0 and m.read(sv, 1)[0] == 0
@@ -229,7 +257,6 @@ def main():
             setup()
             m.write(m.sym("ss_idle"), IDLE_SOON)
             m.key("Space")
-            os88marty.guest_sleep(m, 0.4)
             started = wait(m, on, 1)
             os88marty.guest_sleep(m, 1.0)
             total = memlit(m)
@@ -255,7 +282,7 @@ def main():
             bad += not ok
             m.write(m.sym("ss_idle"), IDLE_NEVER)
             m.key("Space")
-            os88marty.guest_sleep(m, 1.5)
+            wait(m, on, 0)                          # (was a fixed 1.5 s)
 
         m.write(m.sym("ss_idle"), b"\x00\x00")      # zero minutes = OFF
         m.key("Space")

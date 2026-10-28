@@ -7,13 +7,13 @@
 refused with the rest - rightly, because entering 30KB of package image as a
 `.COM` wedges the machine.  What was missing was not a fourth extension to
 allow but something else to do with one, and `OSAPI_PKG_START` (§21.5) is it:
-the box hands the name to the kernel and the package opens in its own window,
-*not inside the box*, which is the distinction that matters.
+DOS hands the name to the kernel and the package opens in its own window,
+*not inside DOS*, which is the distinction that matters.
 
 FOUR STEPS, and the third and fourth are the ones that break silently:
 
   1  `CALC.O88` at the prompt opens a window titled `Calculator`, and the DOS
-     box is STILL THERE - a launch that replaced the box would be the `.COM`
+     window is STILL THERE - a launch that replaced it would be the `.COM`
      path back again.
   1b THE BARE NAME REACHES IT TOO (SPEC.md 96.33.7).  `PIANO` with no
      extension opens `Piano`, because a bare name is a SEARCH and `.O88` is
@@ -31,7 +31,7 @@ FOUR STEPS, and the third and fourth are the ones that break silently:
      look at and AL is the only thing that knows why.
   3  IT IS POSTED, NOT CALLED.  The slot wants the gfx lock FREE and the
      console runs under W_ONKEY, which holds it - so the launch goes through
-     `dos_wake`.  Step 3 is what proves the post survives: the box is asked
+     `dos_wake`.  Step 3 is what proves the post survives: DOS is asked
      for a SECOND package and gets it, which a one-shot flag or a name left
      in the shell's scratch would not deliver.
   4  FROM THE FULL SCREEN the console's bracket comes down first (§96.33.16's
@@ -43,7 +43,7 @@ FOUR STEPS, and the third and fourth are the ones that break silently:
 
 WHY IT IS NOT ASSERTED ON PIXELS: a window's TITLE is what the kernel's own
 window table holds, so the reads are of guest state and not of the glass -
-`wm_wins` for the titles, the box's own `con_scr` for the console text.
+`wm_wins` for the titles, DOS's own `con_scr` for the console text.
 """
 import os
 import struct
@@ -55,10 +55,11 @@ import dosmap                                                  # noqa: E402
 import os88geom                                                # noqa: E402
 import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
+import os88fixture                                             # noqa: E402
 
 SYS = "build/os8088-360.img"
 APPS = "build/apps360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 fails = []
 
 
@@ -74,10 +75,14 @@ def main():
     if fails:
         return 1
 
-    with os88ui.boot(SYS, apps=APPS, machine="os8088_5150_herc_gla") as ui:
+    # PIANO.O88 left apps360.img (SPEC.md 24.6.1) and step 1b types a bare
+    # `PIANO`: the shipped disk plus it, on a disk of this run's own, as
+    # tests/dosopen.py has it
+    apps = os88fixture.apps360_plus("APPS:build/piano.o88", tag="dospkg")
+    with os88ui.boot(SYS, apps=apps, machine="os8088_5150_herc_gla") as ui:
         m = ui.m
-        if not ui.path(BOX):
-            fail("could not launch the DOS box")
+        if not ui.path(DOSPKG):
+            fail("could not launch DOS")
             return 1
         dm = dosmap.package()
 
@@ -93,7 +98,7 @@ def main():
                                .decode("latin-1"))
             return out
 
-        def boxseg():
+        def dosseg():
             for sl in range(8):
                 wp = os88geom.winptr(m, sl, m.sym)
                 ws = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
@@ -103,7 +108,7 @@ def main():
             return 0
 
         def console():
-            seg = boxseg()
+            seg = dosseg()
             if not seg:
                 return []
             scr = m.read((seg << 4) + dm["con_scr"], 80 * 25 * 2)
@@ -114,9 +119,9 @@ def main():
                                    for i in range(0, 160, 2)).rstrip())
             return [r for r in out if r.strip()]
 
-        def to_box():
+        def to_dos():
             """The last launch took the focus; the console only takes keys
-            while the box is the active window."""
+            while DOS is the active window."""
             w = ui.window("DOS")
             if w:
                 ui.raise_window(w)
@@ -136,14 +141,14 @@ def main():
 
         def launch(line, want, limit=16.0):
             """Type it, then wait for `want` to appear among the titles."""
-            to_box()
+            to_dos()
             typ(line + "\n")
             wait(lambda: want in titles() or
                  any("Cannot open" in r for r in console()[-3:]),
                  "%r to open %r or be refused" % (line, want), limit)
             return want in titles()
 
-        to_box()
+        to_dos()
         typ("B:\n")
         typ("CD APPS\n")
         if not console()[-1].endswith("APPS>"):
@@ -152,7 +157,7 @@ def main():
                  % console()[-1])
             return 1
 
-        # --- 1: it opens, and the box survives -------------------------------
+        # --- 1: it opens, and DOS survives -----------------------------------
         if not launch("CALC.O88", "Calculator"):
             fail("CALC.O88 at the prompt opened no window titled "
                  "'Calculator'. The console hands a .O88 to OSAPI_PKG_START "
@@ -161,8 +166,8 @@ def main():
         else:
             print("dospkg: CALC.O88 -> %r" % titles())
         if "DOS" not in titles():
-            fail("the DOS box is gone after the launch - a package opens "
-                 "BESIDE the box, not inside it (SPEC.md 96.33.17)")
+            fail("DOS is gone after the launch - a package opens "
+                 "BESIDE DOS, not inside it (SPEC.md 96.33.17)")
 
         # --- 1b: ...and the BARE name finds it (SPEC.md 96.33.7) -------------
         # A bare name is a search and `.O88` is its third probe. A DIFFERENT
@@ -182,7 +187,7 @@ def main():
         # instruction earlier it would be unconditional, and every unresolved
         # word typed on this machine would go to the package launcher and come
         # back `Cannot open` instead of `Bad command or file name`.
-        to_box()
+        to_dos()
         before = len(titles())
         typ("NOSUCHPG\n")
         os88marty.settle(m)
@@ -206,7 +211,7 @@ def main():
                  "%r" % titles())
 
         # --- 2: a name that is not there -------------------------------------
-        to_box()
+        to_dos()
         before = len(titles())
         typ("NOSUCH.O88\n")
         os88marty.settle(m)
@@ -236,17 +241,17 @@ def main():
         # come down before the window can appear AND before the wake can even
         # be dispatched, so a machine that got this wrong shows 80x25 text with
         # a package running behind it.
-        to_box()
+        to_dos()
         ui.menu_pick("Program", "Full Screen")
         os88marty.settle(m)
-        if not m.read((boxseg() << 4) + dm["dos_fsxup"], 1)[0]:
+        if not m.read((dosseg() << 4) + dm["dos_fsxup"], 1)[0]:
             fail("Program > Full Screen did not raise [dos_fsxup], so step 4 "
                  "is not testing the full screen at all")
         else:
             typ("PAINT.O88\n")
-            wait(lambda: not m.read((boxseg() << 4) + dm["dos_fsxup"], 1)[0],
+            wait(lambda: not m.read((dosseg() << 4) + dm["dos_fsxup"], 1)[0],
                  "the console's bracket to come down", 25.0)
-            up = m.read((boxseg() << 4) + dm["dos_fsxup"], 1)[0]
+            up = m.read((dosseg() << 4) + dm["dos_fsxup"], 1)[0]
             if up:
                 fail("the console's bracket is STILL up after a .O88 was "
                      "typed into the full screen - [dos_fsxgo] is what brings "
@@ -259,7 +264,7 @@ def main():
             else:
                 print("dospkg: full screen -> PAINT.O88 -> %r" % titles())
 
-    print("dospkg: %s" % ("ok - a package opens beside the box, by name, "
+    print("dospkg: %s" % ("ok - a package opens beside DOS, by name, "
                           "from the window and from the full screen"
                           if not fails else "%d failed" % len(fails)))
     return 1 if fails else 0

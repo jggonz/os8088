@@ -13,7 +13,7 @@ drive's own audio output under a CD Player. SPEC.md §119 is the contract.
 - [x] **Kernel row (wave 1):** as a user with a CD-ROM drive, I can tick
   **CD-ROM** in the Control Panel's Drivers page. `DRVC_CD` = 9, a third file
   class beside the cable and the RAM disk, row 7 / SYSTEM.CFG bit 8, not
-  wanted by default; the DOS box keeps it. **No rung crossed** on either
+  wanted by default; DOS keeps it. **No rung crossed** on either
   kernel; kern_small unchanged.
 - [x] **Data discs (wave 1):** as a user, I open the CD-ROM drive on the
   desktop and see the disc's files and folders with sensible 8.3 names; I

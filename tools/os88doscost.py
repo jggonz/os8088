@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What the DOS box is MADE OF, split the way `kern_dos` would split it.
+"""What DOS.O88 is MADE OF, split the way `kern_dos` would split it.
 
     python3 tools/os88doscost.py              # the image and the bss
     python3 tools/os88doscost.py --procs      # ...every proc, largest first
@@ -7,7 +7,7 @@
 
 docs/plans/KERN-DOS-PLAN.md §4.1.2 splits `apps/dos/dos.asm` into a CORE that
 `kern_dos` assembles and a WINDOW half that only the package root pulls in,
-and §6's largest row was an estimate of the first: *"~12,000; the box's image
+and §6's largest row was an estimate of the first: *"~12,000; `DOS.O88`'s image
 is 30,731 and most of it is window"*.  It is not most of it, and this is the
 instrument that says so - wave 1 measured 14,623 of image and 3,031 of bss
 against that 12,000 (docs/reports/KERN-DOS-BUDGET-2026-09-13.md).
@@ -257,11 +257,11 @@ def image_split(show_procs):
 def bss_split():
     sys.path.insert(0, os.path.join(ROOT, "tests"))
     import dosmap
-    # **THE WHOLE BOX, AS ONE IMAGE** - `shipped=False`, which is the one
+    # **THE WHOLE PACKAGE, AS ONE IMAGE** - `shipped=False`, which is the one
     # caller in the tree that wants it. `dosmap.package()`'s default is the
     # PARTED package $(SYSROOT) ships (SPEC.md 96.40.3), and that build has
     # already done this split: `-DDOS_EXTCORE` takes the core's image and bss
-    # out, so `DOS_BSS_SIZE` reads 1,676 against the box's ~3,031 and the core
+    # out, so `DOS_BSS_SIZE` reads 1,676 against the package's ~3,031 and the core
     # bucket comes out at 123.6% of it. A percentage over 100 is the tell.
     dm = dosmap.package(shipped=False)
     total = dm.get("DOS_BSS_SIZE")

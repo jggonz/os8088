@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 import os88qemu                                             # noqa: E402
 import os88build                                            # noqa: E402
+import os88fixture                                          # noqa: E402
 import os88geom as geom                                     # noqa: E402
 import os88ui                                               # noqa: E402
 import os88vid as vid                                       # noqa: E402
@@ -59,20 +60,27 @@ from pxswin import qpoke                                    # noqa: E402
 SKIP = 77
 
 
+SRC = ["-f", "lavfi", "-i",
+       "life=s=640x200:mold=10:r=15:ratio=0.4:seed=5088:death_color=#000000:"
+       "life_color=#ffffff,trim=duration=6", "-c:v", "ffv1"]
+ENC = ["--quiet", "--preset", "cga", "--profile", "5150-st225", "--audio",
+       "none", "--fps", "15", "--disk", "12000", "--reserve", "32",
+       "--layer-disk", "40000", "--layer-memory", "64",
+       "--layer-bank", "512", "--layer-prefill", "all"]
+
+
 def clip(tmp):
-    src = os.path.join(tmp, "life.mkv")
-    subprocess.run(
-        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-         "life=s=640x200:mold=10:r=15:ratio=0.4:death_color=#000000:"
-         "life_color=#ffffff,trim=duration=6", "-c:v", "ffv1", src],
-        check=True)
     out = os.path.join(tmp, "CLIP.V88")
-    subprocess.run(
-        [sys.executable, "tools/os88venc.py", src, out, "--quiet",
-         "--preset", "cga", "--profile", "5150-st225", "--audio", "none",
-         "--fps", "15", "--disk", "12000", "--reserve", "32",
-         "--layer-disk", "40000", "--layer-memory", "64",
-         "--layer-bank", "512", "--layer-prefill", "all"], check=True)
+
+    def make(out):
+        src = os.path.join(tmp, "life.mkv")
+        subprocess.run(["ffmpeg", "-v", "error"] + SRC + [src], check=True)
+        subprocess.run([sys.executable, "tools/os88venc.py", src, out] + ENC,
+                       check=True)
+    # THE ENCODE ONCE PER INPUT (os88fixture.cached), as vidlysplit's. The
+    # life source is SEEDED (unseeded, ffmpeg draws a fresh board each run),
+    # and every assertion is relative to the file read either way
+    os88fixture.cached(out, ("vidlybank", SRC, ENC), make, tools=("ffmpeg",))
     vid.verify_v88(out)
     return out
 
@@ -124,8 +132,8 @@ def main():
                 raise SystemExit("vidlybank: timed out waiting for %s (%s)"
                                  % (what, state()))
         box = {}
-        x, y = geom.drive_pt(q, "B", S)
-        xmcheck.dblclick(q.sock, x, y)
+        dbl = lambda x, y: os88qemu.mouse_dblclick(q, S, q.hmp, x, y)  # noqa
+        dbl(*geom.drive_pt(q, "B", S))
 
         def diskwin():
             for w in ui.windows():
@@ -135,11 +143,11 @@ def main():
             return False
         state = lambda: "(no window yet)"           # noqa: E731
         wait(diskwin, "drive B's window", 30)
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1)       # (the listing: read in the pass)
         w = box["w"]
         i, _ = ui.entry("CLIP.V88", w)
         before = set(o.i for o in ui.windows())
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        dbl(*ui.row_xy(w, i - ui.scroll(w)))
 
         def player():
             for o in ui.windows():

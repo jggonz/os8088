@@ -103,7 +103,7 @@ def main():
                         "--size", "360", pkg, v88], check=True,
                        capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,

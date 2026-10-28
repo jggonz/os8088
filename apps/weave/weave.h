@@ -466,6 +466,8 @@ void wd_lcaroff(int *blk);
 #define WSS_SLEEP   2
 #define WSS_FRAME   6
 #define WSS_CVSEG   8
+#define WSS_BSEG   12               /* the bundle claim, which a move of it
+                                     * rewrites here too (1.2.6) */
 #define WSS_BLITS  18
 #define WSS_FRAMES 20
 #define WSS_OVF    22
@@ -488,6 +490,10 @@ int      wcv_kb(void);              /* the module's claim, in KB (10.1) */
 unsigned wcv_stateoff(unsigned seg);
 int      w_partfetch(int part);     /* a lazy part, from HOME: 0 / -1
                                      * (apps/weave/wfetch.inc) */
+void     w_partmv(int part, unsigned seg);  /* ...and where it MOVED to:
+                                     * the row's zkb (1.2.6) */
+void     w_asmmoved(unsigned was, unsigned now);    /* the cores' copies of
+                                     * a moved base (apps/weave/wui.inc) */
 void     wcv_ops(int spent);        /* 4.12's banner: one exhausted slice */
 unsigned wcv_opsps(void);           /* ...and the last window's answer */
 

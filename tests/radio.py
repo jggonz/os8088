@@ -121,7 +121,7 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         disk = dispcp.win_list(m, S)[-1]

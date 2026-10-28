@@ -323,7 +323,7 @@ A package also gets `APP_MAX_SIZE` = **60KB** of image + bss (MEASURED from
 the SDK's own `equ`), against ~11KB for `ETHER.DRV` — a complete NE2000 plus
 a TCP/IP stack — and ~22KB for Paint. A DOS shim is comfortably inside it.
 
-So: **`DOSBOX.O88`** (name to be decided), in `apps/dosbox/`, shipping on the
+So: **`DOS.O88`**, in `apps/dos/`, shipping on the
 apps floppy, declaring `COM` and `EXE` in its header's association block.
 Zero kernel bytes for wave 1 is the target, and nothing found in this
 investigation says it cannot be met.
@@ -602,7 +602,7 @@ reset, `54h` verify flag, `38h` country info (a stub).
 **Character I/O — `01h`, `02h`, `06h`, `07h`, `08h`, `09h`, `0Ah`, `0Bh`,
 `0Ch`.** Under a fullscreen bracket these go straight to `int 10h` TTY and
 `int 16h` and are nearly free. They are also the functions a *windowed*
-DOS box would have to intercept instead (§10).
+DOS would have to intercept instead (§10).
 
 **Process control — `00h`, `4Ch`, `31h`, `4Dh`, and `INT 20h`, `INT 27h`.**
 Terminate is the interesting one: it has to unwind back to the runner's
@@ -674,7 +674,7 @@ unusable. **Reads work well; writes work badly.**
 internally. That makes the DOS side thin and fast, and it is a capability
 the whole system lacks and would benefit from — but it is resident kernel
 bytes, it needs a design of its own, and it is a much bigger conversation
-than a DOS box.
+than a DOS package.
 
 **Recommendation: (a) for wave 1, with writes restricted to
 create/append/replace, and the in-place-write case refused honestly** in
@@ -683,7 +683,7 @@ measure which real programs that loses, and let that decide whether (b) is
 worth a kernel design.
 
 **But (b) is wanted on its own merits, and that changes who should pay for
-it.** This is not a DOS-box problem for a DOS box to solve privately: the
+it.** This is not `DOS.O88`'s problem to solve privately: the
 whole-file API costs os8088's own programs the same thing, and the sharpest
 number on the table is **TANK ATTACK taking 2-4 seconds to load or write a
 high-score file of a few bytes**. No amount of buffering inside a DOS shim
@@ -741,14 +741,14 @@ them, but the re-mount at exit is what we promise and nothing more.
 
 Already built, and needs **no kernel change**:
 
-1. `DOSBOX.O88` carries an association block in its header declaring the
+1. `DOS.O88` carries an association block in its header declaring the
    extensions `COM` and `EXE` (SPEC.md 54.5 — the block carries extensions
    only, and the program's stem comes from the file it was harvested from,
    which is what makes this work on any disk).
 2. `disk_mount` harvests it; `.COM` and `.EXE` files get the runner's icon
    marked as documents (SPEC.md 54.1) — so they *look* runnable in a Disk
    window, which is the whole user-visible half of the ask.
-3. Double-click → `assoc_locate` finds `DOSBOX.O88` → `ld_run_name` launches
+3. Double-click → `assoc_locate` finds `DOS.O88` → `ld_run_name` launches
    it → the new instance reads `OSAPI_ARG_FILE` and learns which file it was
    opened on.
 4. It is launched standing in the clicked file's own directory (SPEC.md
@@ -759,7 +759,7 @@ Two consequences worth stating.
 - **This is `kern_big` only.** SPEC.md 54.0 gates the whole association
   feature out of `kern_small`. That is the right answer anyway: a 128KB
   machine has ~31KB of heap and cannot host a DOS program.
-- **A second entry point is wanted**: launching `DOSBOX.O88` directly, with
+- **A second entry point is wanted**: launching `DOS.O88` directly, with
   no argument, should give a command prompt rather than an error. That is
   where a `COMMAND.COM`-ish shell would live if one is ever wanted — and the
   honest first answer is a file-picker, not a shell, because a shell means
@@ -877,7 +877,7 @@ So there is no IRQ to arbitrate and no ISR to hand over.
 > 1. **There is no transmit verb.** `ETHER.DRV`'s table is fifteen verbs and
 >    every one is a SOCKET; `ne_tx`/`ne_rx` are internal and reachable from no
 >    package. Wave 4 had to add three raw verbs first (SPEC.md 72.22).
-> 2. **The box unloads the network driver on the way in.** §51.11's
+> 2. **DOS unloads the network driver on the way in.** §51.11's
 >    `drv_suspend_x` skips only `DRVC_DISK` and `DRVC_FILE`, so wave 3's own
 >    door took the card away before a packet driver could reach it.
 
@@ -926,7 +926,7 @@ confused with the above.)
 
 A section written now so it does not have to be discovered later.
 
-- **A windowed DOS box for arbitrary programs.** A program that does all its
+- **A windowed DOS for arbitrary programs.** A program that does all its
   output through `INT 21h` character functions or `int 10h` TTY **can** be
   rendered into a window, and RunCPM's terminal (SPEC.md 74.2) is the working
   precedent for the rendering half — that is the windowed text mode §11 now
@@ -1000,7 +1000,9 @@ they are recorded with their reasoning because each will look arbitrary later.
 *emulator* and nothing here is emulated; not `RUNDOS`, because the same
 package will eventually be launched with **no argument** and go to a command
 prompt (wave 7), and a name built around *running a file* would be wrong for
-half of what it does.
+half of what it does. Later documents and agents slipped into calling the
+package "the DOS box" or "the box" all the same, and that name was purged from
+the tree for the same reason.
 
 **2. It is a `SYSAPPS` package** — `SYSTEM/` on all four system-disk
 geometries, on no apps disk. `apps360.img` has too little room to carry a
@@ -1074,7 +1076,7 @@ Three ways to answer, and the choice is real:
 letter you type, or the feature is confusing in a way nothing can explain
 away — and SPEC.md 18.7.4 already took that trade for os8088's own UI, in its
 own words: *"a letter that always means the same kind of device is worth more
-than contiguity"*. A DOS box inheriting it is consistent rather than a second
+than contiguity"*. DOS inheriting it is consistent rather than a second
 decision. The programs it loses fail by **not seeing a drive**, which is the
 safe direction.
 
@@ -1086,7 +1088,7 @@ first-**cluster** word and there is no path string anywhere in the tree:
 that calls `47h`, builds a path from the answer and opens it will fail, and
 the failure will look like a file error.
 
-**This is not a DOS-box problem.** It is the same missing capability that makes
+**This is not `DOS.O88`'s problem.** It is the same missing capability that makes
 TANK ATTACK walk the directory tree to reach its own save file, which is
 §6.3's Tank Attack number in a second form: the first was the cost of *writing*
 a few bytes, this is the cost of *finding* where to write them.
@@ -1510,9 +1512,9 @@ dispatch rather than against memory.
 
   **`CX=0` was the third question and it SPLIT** (96.11.6.2). Writing zero
   bytes is how DOS spells *"the file ends HERE"*, and the table was measured
-  on a real IBM DOS 3.30 and on this box with one `.COM` run unchanged on both
+  on a real IBM DOS 3.30 and on this DOS with one `.COM` run unchanged on both
   (`tests/dostrap/cx0.asm`): DOS moves the length in **either** direction and
-  this box moved it in neither, **both answering `CF=0` with `AX=0`**, so the
+  this DOS moved it in neither, **both answering `CF=0` with `AX=0`**, so the
   program could not tell. The EXTENDING half is now built and cost **26
   package bytes** — it is 96.11.6.1's gap with the data write empty, and all
   it needed was the gap test moved to the top of the loop, where a count of
@@ -1638,7 +1640,7 @@ QEMU twin (`tests/dosxmsq.py`, SPEC.md §96.15.3) and the Sound Blaster row is
    enough is a mount away from the disk.** `drv_load` reads the `.DRV` back
    off the boot volume at the resume, which is fine on a machine that still
    has that volume in the drive and is a refusal on one that does not. The DOS
-   box's own resume path treats a failed reload as "the driver is gone" and
+   package's own resume path treats a failed reload as "the driver is gone" and
    carries on, which is the only answer available inside a bracket, but it
    means **a user who swaps the system disk during a DOS program loses the
    sound driver for the session**. Nothing measured has hit it; it wants a
@@ -1651,7 +1653,7 @@ QEMU twin (`tests/dosxmsq.py`, SPEC.md §96.15.3) and the Sound Blaster row is
 
 **1. §9.4 costed the wrong half, and the wave table's "0 kernel bytes" was
 right by luck.** Both of that section's premises were false (corrected in
-place above): there was no transmit verb to call, and the box was unloading
+place above): there was no transmit verb to call, and DOS was unloading
 `ETHER.DRV` at the bracket. What that actually cost is small — **4 bytes of
 kernel `.text`** for the `DRVC_NET` skip, exact, plus three verbs in a
 driver, whose bytes are never resident. But it was found by reading the verb
@@ -1707,7 +1709,7 @@ hard disk.
 **A comment that was true when it was written, one section away from the
 change that made it false.** `dos_fh_name` dropped a drive letter under
 *"a program that names its own drive is naming ours"*, which is correct for a
-box with one volume. §96.6.1 made `AH=0Eh` really switch drives three waves
+DOS with one volume. §96.6.1 made `AH=0Eh` really switch drives three waves
 later, and nothing re-read the line above it. SPEC.md 96.6.2 is the fix and
 `tests/dostrap/drvname.asm` the measurement.
 
@@ -1848,7 +1850,7 @@ package**, and neither is wave 7's:
    (§96.6.3.1). §96.6.3 had already fixed this once — a sentinel meaning *no
    drive* cannot be `.bss`'s zero, because zero is A: — and the console reaches
    the package down the `.idle` arm, which skipped the one store. So a program
-   started by typing its name ran with the box believing it had come from A:,
+   started by typing its name ran with DOS believing it had come from A:,
    asked `AH=19h` which drive it was on, was told the wrong one, and printed
    *"Please insert Prince of Persia Disk 1 into Drive A:"*. **The same symptom
    §96.6.3 is named after, through the door that skipped its fix.** Visible
@@ -1863,10 +1865,10 @@ package**, and neither is wave 7's:
    when it took the 64KB page head off `MEM_P_DIRW`, and `mem_cp_plan` reaches
    `mem_cp_drop` only from its `.pinned` arm — so a cache that can move is
    moved, never dissolved, and `OSAPI_MEM_AVAIL_LVL` answered identically at
-   every rank. §50.6.6's floor, which this box is the only consumer of, had
+   every rank. §50.6.6's floor, which DOS is the only consumer of, had
    never once done anything. Fixed with a third walk mode (`mem_cp_room`) for
    **+18 bytes of `.text`**, and the DOS arena on a 640KB machine goes
-   **453K → 485K** when the box is told to take the cache.
+   **453K → 485K** when DOS is told to take the cache.
 
    **The failed first attempt is the part to keep.** Making the *plan* dissolve
    what the *run* packs is the obvious spelling and it **hangs the machine**:
@@ -1881,7 +1883,7 @@ package**, and neither is wave 7's:
 (docs/DOS-DEBUGGING.md, *Traps*, first entry). A `DOSTRACE` build claims 21 KB
 of heap for its ring, **before** the arena, so a program near the edge refuses
 under the tracer and runs perfectly without it. That had been mis-diagnosed as
-*"the box is short of memory"* **eight** separate times, with the cost written
+*"DOS is short of memory"* **eight** separate times, with the cost written
 down in three places each of which was read *after* the wrong conclusion — so
 `tools/os88dosdbg.py` prints it on stderr at the top of every `trace` and
 `build` now. A line the run emits cannot be left unopened.
@@ -1895,7 +1897,7 @@ the door that fit was not a slot of its own but `OSAPI_FILE_WRITE_AT` with a
 count of 0, which is DOS's own spelling and which that body was already
 refusing *after* doing every part of the lookup a truncate needs. So the 271
 bytes below were mostly a second copy of `dskw_wabody`'s front, and the 14 of
-cell and thunk are not spent at all. `kern_big` only, like the door. **The DOS box
+cell and thunk are not spent at all. `kern_big` only, like the door. **DOS
 uses it** (SPEC.md 96.11.6.2): the new end rounded down to a cluster, the file
 cut there, the kept part of that cluster appended back — 52 package bytes, no
 temporary and no free space - and on `kern_small` or a redirected volume the
@@ -1903,7 +1905,7 @@ cut refuses before touching the file and the copy below still runs. The
 costing below is kept as written.
 
 `AH=40h` with `CX=0` is *"the file ends HERE"* (SPEC.md 96.11.6.2), and the
-shrinking direction is the one thing in the DOS box's file layer that no
+shrinking direction is the one thing in DOS's file layer that no
 published slot can do: `OSAPI_FILE_WRITE_AT` grows a file to the end of what
 it has allocated, `OSAPI_FILE_APPEND` grows it further, and **nothing on this
 machine can make a file smaller.** Neither can any of our own programs — a
@@ -1936,8 +1938,8 @@ taken — noted because whoever revisits this should have the fact, not because
 it decides anything (CLAUDE.md's byte rule).
 
 **It is refused on the ledger and not on the merits.** 285 resident bytes on
-every machine for ever, so that a DOS box can answer one call the way DOS
-does, is a bad trade *while there is a package-side answer* — and a DOS box
+every machine for ever, so that DOS can answer one call the way DOS
+does, is a bad trade *while there is a package-side answer* — and a DOS
 that grows the kernel two hundred bytes at a time is how a machine that boots
 on 128KB stops doing so. What shipped instead is `dos_fh_shrink`: the kept
 prefix copied out under a temporary name and the two swapped, **336 package
@@ -1951,7 +1953,7 @@ cheap arms (nothing kept, and a prefix that fits the window).
 **What would reopen it** is a second consumer. The moment anything else on
 this machine wants to shorten a file — a text editor saving over a longer
 document, a log that rolls, the FTP server's `ALLO`/`STOR` — the 271 bytes
-stop being the DOS box's and start being the file system's, and the package
+stop being DOS's and start being the file system's, and the package
 copy stops being the cheaper answer. It is written here rather than in SPEC.md
 for that reason: SPEC.md says what the machine does, and this is a price tag
 somebody may want to pay later.

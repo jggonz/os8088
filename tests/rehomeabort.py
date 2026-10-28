@@ -52,19 +52,26 @@ def claims(m, S):
     return heapmap.Map(m, {n: S(n) for n in
                            ("mem_base", "mem_top", "spl_live", "mem_tab")})
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+def UD(m, **_):            # every read below is guest memory
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     S = m.sym
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, UD, "B")
     disk = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
 
     before = claims(m, S)
     wins_before = dispcp.win_list(m, S)
     try:
-        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="REHOMEX.O88")
+        dispcp.open_named(m, mo, S, UD, *disk, name="REHOMEX.O88")
     except Exception as e:
         say("open refused (expected): %s" % str(e).splitlines()[-1].strip())
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
     # --- 1. the refusal was taken -------------------------------------------
     status = m.read(S("ld_status"), 1)[0]

@@ -354,7 +354,8 @@ vmm_boot_x:
                                 ; drive either
     cmp word [bx+DRVR_SEG], 0   ; ...and hand the image straight back - on the
     je  .out                    ; CPU path only if drv_boot_x read it anyway,
-    call COLD_SEG:drvf_drv_release  ; which has no tier test of its own
+    call bvs_cgo  ; which has no tier test of its own
+    dw drv_release              ; (the blob's hop: drvf_drv_release went)
 .out:
     pop es
     pop bp

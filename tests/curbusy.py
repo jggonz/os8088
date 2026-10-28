@@ -96,7 +96,9 @@ def main(argv):
     say = lambda s: print("  " + s, flush=True)
     bad = []
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         shape = m.sym("cur_shape")
 

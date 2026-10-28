@@ -1,10 +1,10 @@
-; DOSREF.COM - put the questions os8088's DOS box has to answer to a DOS, and
+; DOSREF.COM - put the questions os8088's DOS has to answer to a DOS, and
 ; print what it said. OURS, MIT with the rest of the tree.
 ;
 ; THE POINT IS THAT ONE BINARY RUNS ON BOTH. A rule read out of a reference
 ; book is an argument; the same program run under IBM DOS 3.30 and under the
-; box, printing the same table, is a measurement - and the two columns diff
-; line for line with nothing to interpret.
+; windowed DOS, printing the same table, is a measurement - and the two columns
+; diff line for line with nothing to interpret.
 ;
 ; It asks about the calls where the two have been seen to disagree, and about
 ; the ones where a disagreement would be silent:
@@ -12,7 +12,7 @@
 ;   4E/4F  what a search that matched NOTHING answers, three ways: a name that
 ;          is not there, a DIRECTORY that is not there, and a VOLUME LABEL on
 ;          a disk that has none - which is the one Prince of Persia asks, and
-;          which DOS answers 12h and this box answered 2h
+;          which DOS answers 12h and this DOS answered 2h
 ;   4E/4F  ...and what an enumeration that RAN OUT answers, which is the code
 ;          the three above are so easily confused with
 ;   35     INT 33h, the mouse presence test every program of the era makes by
@@ -182,7 +182,7 @@ start:
     call eol
 
     ; IT WAITS, and that is not a courtesy to the reader. Under os8088 the
-    ; DOS box's bracket ENDS when the program does and the desktop comes
+    ; DOS's bracket ENDS when the program does and the desktop comes
     ; straight back, so a program that prints and exits leaves nothing on the
     ; screen to read - the answers were there for a few milliseconds. Under a
     ; real DOS the prompt would scroll them off in its own time.

@@ -29,8 +29,7 @@ hard disk answers its host's VK_FIXED, so neither was found.
 BREAK IT ON PURPOSE: `--from` names the system floppy step 2 installs, and so
 the HDDTOOL.DRV that step 3 runs. A system disk built before 52.10.17 (or with
 hd_iapps_cand's image arm taken out) finds no system disk, writes nothing, and
-the commit never comes - `--limit 300` turns that into a five-minute failure
-rather than the default ten.
+the wizard ends on its Stopped page, which fails the row by name.
 """
 import os
 import shutil
@@ -112,26 +111,16 @@ def mount(ui, win, name, n):
 
 
 def install(m):
-    """instdeep's run_install with a limit of our own: the failure this row
-    exists to catch is a commit that never comes."""
-    mo, ix, iy = ID.open_installer(m)
-    bx = ix + ID.HIW_B0X + ID.HIW_BW0 // 2
-    by = iy + ID.HIW_BY + ID.HIW_BH // 2
-    mo.click(bx, by, settle=3.0)                # Install: arms
-    mo.click(bx, by, settle=0)                  # Install: goes
-    disk = ID.vhd(m)
-    base = open(disk, "rb").read(446)
+    """The wizard from the Control Panel's Install, with a limit of our own:
+    the failure this row exists to catch is an install that finds no system
+    disk. Both disks are images, so the apps phase must need no swap: Done,
+    and not the apps-disk question."""
     try:
-        took = M.until(m, lambda _: open(disk, "rb").read(446) != base,
-                       "the installer to commit its MBR", limit=LIMIT)
+        ID.open_installer(m).run(expect=("P_DONE",), limit=LIMIT)
     except M.MartyError:
         sys.exit("instimg: FAIL - the install from the mounted images never "
-                 "committed: the installer found no system disk on them "
+                 "finished: the installer found no system disk on them "
                  "(SPEC.md 52.10.17)")
-    print("  MBR committed after %.0fs" % took)
-    M.quiesce(m, lambda: __import__("hashlib").sha1(
-                  open(disk, "rb").read(8 << 20)).digest(),
-              guest=2.0, stable=8, budget=480.0, what="the drive to go quiet")
 
 
 def main():
@@ -147,10 +136,9 @@ def main():
     # 2. an ordinary install, from the floppies, keeping the partition's
     #    files - which keeps the two images
     with M.launch(SYS_FLOPPY, apps=APPS_FLOPPY, machine=ID.MACHINE,
-                  run_dir=run_dir) as m:
-        M.settle(m)
-        mo, ix, iy = ID.open_installer(m)
-        ID.run_install(m, mo, ix, iy)
+                  run_dir=run_dir, boot=False) as m:
+        m.run(); M.kernel_up(m)       # a state gate: every act is a click
+        ID.run_install(m, ID.open_installer(m))
     tree = ID.partition(vhd).tree()
     for p in ("SYS.IMG", "APPS.IMG", "KERNEL.SYS"):
         if p not in tree:

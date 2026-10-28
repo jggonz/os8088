@@ -71,8 +71,17 @@ def ui_passes(m, secs=2.0):
     is `n == 0` and a duplicate needs a real pass to duplicate - but the number
     beside it is read as a rate, and a pass the machine did not make is not
     one."""
+    # A LIVE MACHINE ENDS THE WINDOW EARLY: three passes and a moved kernel
+    # tick are already the ALIVE verdict, so only a frozen, reset or rebooted
+    # one - no passes, or no tick - spends the whole `secs` (the old fixed
+    # window paid it on every green run, ~4 guest s of stops each).
+    t0 = ticks(m)
     with os88marty.bp_trace(m, {"type": "mem", "addr": S("ui_rebootq")}) as tr:
-        os88marty.pace(m, secs)         # the window is GUEST time
+        try:                            # the window is GUEST time
+            os88marty.until(m, lambda _: tr.n >= 3 and ticks(m) != t0,
+                            "three ui_task passes", poll=0.05, guest=secs)
+        except os88marty.MartyError:
+            pass                        # the window ran out: the verdict says
     return tr.n
 
 
@@ -99,7 +108,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     cards = {c["idx"]: c for c in m.cards()}
     pri = [i for i, c in cards.items() if c["type"] == "vga"][0]
     sec = [i for i, c in cards.items() if c["type"] == "mda"][0]
-    m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+    m.run(); os88marty.kernel_up(m)   # the first act is a click
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_panel(m, mo, S, os88marty.settle)
     dispcp.set_mode(m, mo, S, os88marty.settle, "right")
@@ -150,10 +159,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     for (px, py, what) in seq:
         print("clicking %s at (%d,%d)" % (what, px, py))
         try:
-            mo.to(px, py)                    # POSITION FIRST, then settle:
-            os88marty.settle(m, card=pri)    # a straddling repaint on a
-            mo.click(px, py)                 # 4.77MHz 8088 is SECONDS, and a
-            os88marty.settle(m, card=pri)    # move sent into it is dropped by
+            mo.to(px, py)                    # POSITION FIRST, then wait for
+            os88marty.ui_done(m)             # the UI: a straddling repaint on
+            mo.click(px, py)                 # a 4.77MHz 8088 is SECONDS, and a
+            os88marty.ui_done(m)             # move sent into it is dropped by
         except Exception as e:               # the 1200-baud UART - which reads
             print("   click raised: %s" % str(e)[:90])   # as a cursor clamp
             dead = True

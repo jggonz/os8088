@@ -110,17 +110,19 @@ tk_r_setup:
     ret
 .shadow:
     mov byte [tk_npage], 1
-    mov dx, [tk_shseg]              ; ...AND ONCE FOR THE INSTANCE, NOT ONCE
-    or dx, dx                       ; PER BRACKET. This routine runs at every
-    jnz .haveshadow                 ; Play, and a claim taken there and never
-                                    ; given back is 16KB a game: eight rounds
-                                    ; on a 1bpp machine - which is the only
-                                    ; kind that takes this path, Mode X having
-                                    ; two VRAM pages - and the ninth is refused
-                                    ; for the life of the app, on the machines
-                                    ; with the least heap to lose. The claim is
-                                    ; not movable (nothing declares it so), so
-                                    ; the segment is still good next time
+    mov dx, [tk_shseg]              ; A CLAIM ALREADY HELD IS REUSED: this
+    or dx, dx                       ; routine runs at every Play, and a claim
+    jnz .haveshadow                 ; taken here and never given back is the
+                                    ; leak SPEC.md 85.3 names. The SHIPPED arm
+                                    ; holds it for the bracket alone - it is
+                                    ; zeroed at every entry (tk_clearall) and
+                                    ; no desktop path reads it, so tk_shfree
+                                    ; gives it back on the way out and the
+                                    ; desktop is not 32KB of wall (SPEC.md
+                                    ; 85.3.5.2). APP_SMALL keeps it for the
+                                    ; instance: the 128KB machine has no
+                                    ; compactor and its next Play must not be
+                                    ; refused by a heap it no longer owns
 %ifdef APP_SMALL
     mov ax, TK_SHKB                 ; THE LADDER (SPEC.md 85.3.5.1): the rung
     call OSAPI_MEM_CLAIM            ; it would like, then the two it will
@@ -198,6 +200,32 @@ tk_r_setup:
 %else
     call OSAPI_MEM_FREE             ; no template: the shadow back, and the
     jmp short .noshadow             ; bracket refused as for no shadow at all
+%endif
+
+%ifndef APP_SMALL
+; -----------------------------------------------------------------------------
+; tk_shfree - the shadow (and on kern_mega the template's own claim) back to
+;             the heap as the bracket ends (SPEC.md 85.3.5.2). Clobbers DX
+;
+; Bucket C of docs/plans/NO-PINNING-PLAN.md rather than a declaration: the
+; claim is in use only while the bracket runs, where ES holds it across every
+; span, so the honest pin is the bracket's own length. Clear Skies frees its
+; shadow the same way (88.10.9). Nothing per frame: one free per Play.
+; -----------------------------------------------------------------------------
+tk_shfree:
+    xor dx, dx
+    xchg dx, [tk_shseg]
+    or dx, dx
+    jz .out                         ; Mode X, or the claim was refused
+    call OSAPI_MEM_FREE
+    test dl, 4                      ; a SELECTOR (85.3.10): the template is a
+    jz .tm                          ; claim of its own - otherwise it was the
+    mov dx, [tk_tmseg]              ; shadow's second half, freed just now
+    call OSAPI_MEM_FREE
+.tm:
+    mov word [tk_tmseg], 0
+.out:
+    ret
 %endif
 
 ; -----------------------------------------------------------------------------

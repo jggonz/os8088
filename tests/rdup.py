@@ -112,8 +112,10 @@ def quiet(m, s=12.0):
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()                             # the boot gate on STATE (it settled
+    M.kernel_up(m)                      # twice: launch's and this one)
+    M.no_saver(m)
     mo = Mouse(marty=m)
     mono = m.video()["type"] in ("cga", "mda", "herc")
     print(f"== {MACHINE} : the Ram Disk page fires on the release ==")

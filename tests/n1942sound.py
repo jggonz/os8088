@@ -42,7 +42,7 @@ def guest(backend,off,code):
     machine='os8088_xt_vga' if backend=='speaker' else 'os8088_xt_vga_sb'
     try:
         with adlib_run(backend) as kw, N.os88ui.boot('build/os8088-360.img',
-                apps='build/1942-360.img',machine=machine,**kw) as ui:
+                apps='build/1942-360.img',machine=machine,**kw,quick=True) as ui:
             m=ui.m;ui.open_drive('B');ui.open('1942.O88');g=N.Game(ui,off,code)
             m.key('Enter');g.frame()
             assert g.get('audiofm',1)==(backend!='speaker')

@@ -140,10 +140,11 @@ def units(args_):
 
 
 # A file whose program has another stem: {file name: the program's stem}.
-# SHEET reads both modules out of the folder it was launched from (SPEC.md
-# 82.16), so a split that put either on another disk would refuse charts or
-# macros with no build error - and CHART.OVL's own stem is CHART.O88's.
-COMPANIONS = {"CHART.OVL": "SHEET", "MACRO.OVL": "SHEET"}
+# EMPTY, and meant to stay so: SHEET's two modules were CHART.OVL and
+# MACRO.OVL here until they became parts of SHEET.O88 (SPEC.md 82.16.12), and
+# a program that is one file cannot be split across two disks.
+# tests/unit/t_noovl.py fails a shipped disk with an .OVL beside a package.
+COMPANIONS = {}
 
 
 def stem_groups(entries):

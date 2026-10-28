@@ -15,8 +15,8 @@
 ;   bit 6  ...and with port 92h's gate SHUT, three ticks went by and the XMS
 ;          entry answered AH=00h - which a direct FFFF address cannot survive
 ;
-; So the exit code is 071 (47h) on a fixed HMA run. Under a box that is not
-; in the HMA, bits 0-2 are set by construction and bit 6 still holds. A box
+; So the exit code is 071 (47h) on a fixed HMA run. Under a DOS that is not
+; in the HMA, bits 0-2 are set by construction and bit 6 still holds. A DOS
 ; that sends any of them astray hangs instead of exiting.
 ; =============================================================================
     cpu 8086

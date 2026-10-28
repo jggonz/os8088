@@ -33,7 +33,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
-import os88marty   # noqa: E402
+import os88marty
+import os88sym   # noqa: E402
 import os88ui      # noqa: E402
 import os88stik    # noqa: E402
 
@@ -71,9 +72,31 @@ def main():
     with os88marty.launch(floppy, machine="os8088_xt_hdd", boot=False,
                           extra=["--mount", "hd:0:" + vhd]) as m:
         print("A: stik_boot meets the posted question")
-        m.bp_exec("stik_boot")
+        # `.cold` MAY SLIDE AT BOOT (docs/plans/MOVABLE-COLD-PLAN.md 2): on a
+        # machine with neither a VGA nor an EGA kmain_o moves it down by
+        # VGA_PARA before stik_boot runs, and m.sym() can only follow that
+        # once [api_coldseg] says so - which, armed before the boot, it does
+        # not yet. So both addresses are armed and a stop counts only where
+        # m.sym() (now reading the live segment) puts stik_boot: once the
+        # rung slid, the unslid address is some OTHER `.cold` routine's
+        home = os88sym.linear("stik_boot")
+        eq = os88sym.equates()
+        arms = [home]
+        if "VGA_PARA" in eq:
+            arms.append(home - eq["VGA_PARA"] * 16)
+        m.bp_exec(*arms)
         m.run()
-        hit = m.wait_stop(120)
+        hit = None
+        for _ in range(64):
+            hit = m.wait_stop(120)
+            if hit != "breakpoint":
+                break
+            r = m.regs()
+            if (r["cs"] << 4) + r["ip"] == m.sym("stik_boot"):
+                break
+            m.run()
+        else:
+            hit = None
         check(hit == "breakpoint", "stik_boot was entered (%r)" % hit)
         q = m.read(m.sym("ui_rebootq"), 1)[0]
         check(q == UI_RBQ_ASK, "[ui_rebootq] = UI_RBQ_ASK when it ran (%d)" % q)

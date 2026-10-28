@@ -50,11 +50,13 @@ sys.path.insert(0, os.path.join(HERE, "unit"))
 import os88fixture                                           # noqa: E402
 import os88ui                                                # noqa: E402
 import os88geom                                              # noqa: E402
+import os88marty                                             # noqa: E402
 import os88sheetfmt as F                                     # noqa: E402
 from harness import check, done                              # noqa: E402
 from paintmove import pkg_syms                               # noqa: E402
 
-DISK = "build/chartexp.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/chartexp.img")        # the run's tree, so a soak lane finds it
 CH_E10_MAX, CH_E10_MIN = 4, -9          # os88chart.inc's own, mirrored
 
 # name, column, the exponent 82.13's rule gives it, and why that one
@@ -115,7 +117,7 @@ def main():
                      apps=DISK, machine="os8088_xt_vga") as ui:
         m = ui.m
         w = ui.path("B:/CHART.O88")
-        seg = u16(m.read(os88geom.winptr(m, w.i, ui.sym) + os88geom.W_SEG, 2))
+        seg = os88marty.pkg_live(m, w, ui.sym)
         ui.settle()
 
         rd = lambda s: s16(u16(m.readseg(seg, S[s], 2)))

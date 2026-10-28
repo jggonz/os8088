@@ -214,8 +214,8 @@ longer where it was launched from.
 §10.1's `ask` when and only when `WABF_CANVAS` is set. While the fetch runs
 the claim is briefly the read's window - the packed 3,205 bytes sitting above
 where they expand, cluster-rounded (SPEC.md §20.12.7.4) - and it is shrunk to
-the 5KB as soon as the part is in. The claim is not declared movable, as the
-file's never was: the worker runs inside it.
+the 5KB as soon as the part is in. The claim MOVES until the worker is hired
+and is pinned from then on, because the worker runs inside it (§1.2.6).
 
 #### 1.2.3 The editor transplant is `cword`'s, not `notepad.asm`'s
 
@@ -428,6 +428,91 @@ the two stamps and `cc_ovneed`'s file path - and about the same on the disk,
 part-padding and all. What the disks gain is the second runtime: 44 clusters
 at 360KB and 720KB, 86 at 1.2MB and 1.44MB, seven files fewer.
 
+#### 1.2.6 Every claim moves - and every copy of its base is put right at move time
+
+The heap compacts (SPEC.md §66), and a claim nobody declares is a wall in
+the middle of the arena for as long as it is held. Both packages declare
+every long-lived claim they make (docs/plans/NO-PINNING-PLAN.md, item C3),
+and what makes that more than one line each is that a base is rarely kept
+in one place: the cores that read these claims bank their segments in their
+own `.bss`, because inside a slice DS and ES ARE the claims. So each package
+has ONE relocation proc, `os88_onmove` (SPEC.md §73.14.2.1, `CC_HAS_ONMOVE`),
+and it rewrites every word naming `was` to `now`. **No dispatch loop,
+composer or band gains an instruction**: they go on loading the same words,
+which are simply right again.
+
+**WEAVE** (`apps/weave/wload.c`'s `os88_onmove`, `apps/weave/wui.inc`'s
+`w_asmmoved` table):
+
+| claim | holders, all rewritten by the proc | movable |
+|---|---|---|
+| the bundle (§2.1) | `w_seg`; the WJS VM's `wvm_bseg`; the canvas core's `WSS_BSEG` (§6.10.3's state block, banked at `WSMV_BIND`); a static string descriptor's segment (`wvm_sa`/`wvm_sb`) | from the end of the open |
+| the VM claim (§4.7) | `w_vmseg`; `wvm_vmseg` | from the end of the open |
+| the grid claim (§5.6) | `w_gseg`; the FX VM's `wfx_gseg` | from the end of the open |
+| the canvas claim (§6.10.4) | `w_cseg`; the core's `WSS_CVSEG` | from the end of the open |
+| the canvas core, part 0 (§1.2.2) | `w_cmseg`; the parts row's `zkb` (`os88_part_seg`'s answer, `w_partmv`); `wcv_vec` (its CODE selector, re-derived from crt0's banked `cc_cpuf`, since a proc may not call the kernel) | until the worker is hired - then **pinned, bucket C**, for the rest of the instance |
+| the region | `wvm_ourds`, the DS a slice hands a native - **`CC_ONMOVE_REGION`** (SPEC.md §73.14.2.1) has the region's proc call `os88_onmove` too | always (crt0 declares it; the worker is restartable, `w_chire`) |
+| the overlay, part 1 | crt0's `cc_ovreloc` (§73.14.2.1) | always |
+| `saveState`/`loadState`'s 8KB | - | **pinned, bucket C**: claimed, filled, written (or read) and freed inside one native |
+
+The declarations are made ONCE, at the end of the open, after the VM claim -
+not as each claim is taken - because the bundle's base has been handed to
+the VM and to the canvas core by then, and a claim declared before the next
+one is taken could move under the very calls that copy it. A refused VM
+claim frees everything (`w_free`), so `w_vmseg` is the test.
+
+Three places needed more than a declaration:
+
+- **The native bridge re-reads, it does not pop.** `wvm_nat` used to push the
+  slice's DS (the VM claim) and ES (the bundle) across `wvm_native` and pop
+  them after. A native may claim - `alert()` makes a window, `saveState()`
+  takes 8KB and writes a file - and a claim may compact, so the two come
+  back from `[cs:wvm_vmseg]` and `[cs:wvm_bseg]` instead. Per native call,
+  never per op, and no dearer than the two pops.
+- **The canvas core is pinned BEFORE the worker is spawned.** The worker
+  parks inside it - `OSAPI_TASK_ALIVE`'s return address is a CS of the core
+  and its DS is the core - and a DATA claim's move does not restart a worker
+  the way the region's does (SPEC.md §66.6.2). It is the one claim here the
+  program is executing in for good, which is the owner's bucket C. A spawn
+  the kernel refuses declares it movable again.
+- **The worker READS two moved claims every frame and it is safe.** It parks
+  only at `OSAPI_TASK_ALIVE` (the package does not declare
+  `os88_mem_parksafe`), past `wsm_doframe`, holding nothing derived: every
+  frame begins `mov es, [wsm_cvseg]` and the sprite reads take `[wsm_bseg]`,
+  and those are the two words the proc rewrites in the core's state block.
+  While it RUNS the kernel pins the instance's claims itself
+  (`inst_seg_parked`), and a compaction parks it first.
+
+**LOOM** (`apps/loom/lmprev.c`'s `os88_onmove`):
+
+| claim | holders | movable |
+|---|---|---|
+| the source claim (§11.4, 29KB) | `lm_srcseg` - a slot is an OFFSET (`lm_soff`), the glass shadow too | from the end of the project open; **pinned across each save's write** (`lm_save`, SPEC.md §66.3 rule 5) and declared again after |
+| Preview's output and scratch claims (62KB + 50KB) | `lm_outseg`, `lm_workseg`; `WPVV_PAINT` is handed `lm_outseg` afresh on every paint and the module keeps nothing past the call | while the Preview pane is up - they are held across callbacks only there |
+| Pack's same two claims | - | **pinned, bucket C**: claimed, filled, written and freed inside one command |
+| the preview module, part 0 (§1.2.4) | `lm_pvseg`; the row's `zkb`; `lpv_vec` | from its fetch: it runs only inside `lpv_call`, which claims nothing, and re-banks the caller's DS at every entry |
+| the overlay, part 1 | crt0's `cc_ovreloc` | always |
+
+**What it cost** (this tree, `make weave loom`): `WEAVE.O88` image 43,794 ->
+44,044 resident (+250: the proc, the asm table, the thunk, the C SDK's
+`cc_onmove`), overlay +108, bss +0; `LOOM.O88` image 42,092 -> 42,316
+(+224), overlay +14, bss +0; neither module changed. No kernel byte.
+
+**What it changes on the floor machine** (§1.4): on a 256KB XT the second
+WEAVE's REGION now fits - the first instance's claims are packed out of its
+way - and the second launch refuses one step later, in its own window, for
+want of its overlay. `weaveone` asserts either shape.
+
+**The gates** are `soak -k weavemove -k loommove` (`tests/weavemove.py`),
+c64move's layout on MartyPC: every claim declared, moved, every word live and
+every COPY agreeing with its word, the bytes intact (the bundle claim IS the
+`.WAB`, LOOM's output claim IS the packed `PONG.WAB`), both windows and the
+Preview pane redrawing the same; then PONG is served through the moved words
+and a second pass moves its bundle UNDER THE RUNNING WORKER, and LOOM saves
+out of the moved source claim. Red with either `os88_onmove` emptied, and -
+the finding - red with `CC_ONMOVE_REGION` taken out: the region was movable
+before this and `wvm_ourds` went stale on its first move.
+
 ---
 
 ### 1.3 The languages, and where compilation lives
@@ -502,18 +587,26 @@ authority per docs/KERNEL-MEMORY.md:
   once, or two plus Loom. Loom + one WEAVE + Finder leaves ~250KB spare.
 - **256KB XT, ~140.5KB heap:** exactly **ONE** Weave app at a time. A full
   spreadsheet instance (~110KB) fits with ~30KB slack; the second launch
-  refuses **before any I/O** — and it is the **kernel's loader** that
-  refuses, not the runtime. A package's region is claimed by the loader
+  refuses **before any I/O** — and until §1.2.6 it was the **kernel's
+  loader** that refused, not the runtime. A package's region is claimed by the loader
   before the package runs at all (SPEC.md §20.1, §21), WEAVE's is ~60KB, and
   with one instance up there is not that much left — so `loader_run` answers
   `LD_ENOMEM` and the Finder says `Out of memory` in the Disk window's status
   row and in a toast (SPEC.md §22.9, §59). §10.1's sentence is what a
   **single** instance sees when its own bundle, VM, grid and canvas asks do
   not fit, which a 256KB machine reaches with one large bundle rather than
-  with two small ones. `tests/weaveone.py` (§12.3) asserts the byte
-  (`[ld_status]` = 5 on the second double-click), that no second window
-  opens, and that the first app is still running, on a 256KB MartyPC;
-  `make xt-weave-256` is the same machine on 86Box, to look at.
+  with two small ones. **Since §1.2.6 the second REGION fits**: the first
+  instance's claims move, so the compactor packs them under the ceiling and
+  the loader gets its ~53KB run; what the second instance then cannot have is
+  its own overlay (~15KB), `op_fetch` toasts `Not enough memory`, and its
+  window carries §10.3's `WEAVE could not load its overlay; no bundle can
+  open.` with no bundle, VM or grid claimed. Still one Weave APP at a time,
+  still before any bundle I/O - the refusal has moved back from the loader
+  to the runtime. `tests/weaveone.py` (§12.3) accepts either shape - the
+  loader's (`[ld_status]` = 5, no second window) or the runtime's (one
+  window, `W_ST_ERR`, no VM claim) - says which, and asserts the first app is
+  still running, on a 256KB MartyPC; `make xt-weave-256` is the same machine
+  on 86Box, to look at.
 - **128KB machine, kern_small, ~22KB heap:** WEAVE refuses at launch with
   the arithmetic. kern_small also refuses `GFX_BLIT1`, `WM_TIMER` and
   `WM_ONDRAG` by CF=1, so the floor machine for the family is **256KB**.
@@ -639,8 +732,8 @@ deliberately outside the gfx lock.
 
 ### 2.1 The rules that shape the format
 
-- **One packed 8.3 file** (`MYAPP.WAB`), read whole into a single pinned
-  heap claim. A claim base is KB-aligned, so SPEC.md §2.1.1's 512-alignment
+- **One packed 8.3 file** (`MYAPP.WAB`), read whole into a single heap claim
+  (movable once the open has finished, §1.2.6). A claim base is KB-aligned, so SPEC.md §2.1.1's 512-alignment
   rule for the read is met by construction.
 - **Size-refused BEFORE any disk I/O**: the directory-entry size, plus the
   header-declared claim asks (§2.2), against `OSAPI_MEM_AVAIL` — the Frotz
@@ -1588,7 +1681,7 @@ values anywhere else — passing, storing or comparing one is a pack error.
 
 ### 4.7 The VM claim layout
 
-One claim per instance, pinned, default 16KB, header-declared 16–32KB.
+One claim per instance, movable (§1.2.6), default 16KB, header-declared 16–32KB.
 `S` = claim size in bytes. All offsets from the claim base:
 
 | offset | size | region |
@@ -1655,7 +1748,8 @@ Handle-table entry, 4 bytes: arena offset word (0xFFFF = free), type byte
 (0 free, 1 string, 2 array, 3 static string), flags byte (bit 0 = mark).
 Type 3 names an ATOMS-pool string in the bundle claim: `PUSHA` binds atoms
 to static handles on first use — never copied, never collected, never
-compacted (the bundle is pinned).
+compacted by the collector (the bundle is read-only; when the HEAP moves it,
+`wvm_bseg` is rewritten and the handle's offset is unchanged, §1.2.6).
 
 Arena objects carry a 4-byte header: total size word (header + payload,
 rounded even), handle byte, flags byte. String payload: length byte + up
@@ -2084,7 +2178,7 @@ the store carries a dirty bit rather than the painter carrying a compare.
 
 ### 5.6 The grid claim — the cell store
 
-A dedicated pinned claim, header-declared (§2.2), one grid per app in v1
+A dedicated claim, movable (§1.2.6), header-declared (§2.2), one grid per app in v1
 (the 8-claims-per-owner cap, SPEC.md §50.2, is why). Layout:
 
 | offset | size | region |
@@ -2122,7 +2216,7 @@ computed it.
 | 6 | **runtime formula** | pool offset of a slot: RPN length word, the 4-byte cached value, the 4-byte pre-walk value, then `len` bytes of §5.3 RPN — the resident compiler's output (§6.9.2) |
 
 Kinds 4 and 6 are one cell kind wearing two addresses. The RPN a bundle
-carried is in the BUNDLE claim, which is pinned and read-only (§2.1); the RPN
+carried is in the BUNDLE claim, which is read-only (§2.1); the RPN
 a user typed into the formula bar has nowhere to be but the grid claim's own
 pool; a formula bar that wrote it anywhere else would be writing into a
 read-only section. The FX VM therefore takes a
@@ -2682,7 +2776,7 @@ instruction is the module's.
 
 #### 6.10.4 The canvas claim, byte by byte
 
-KB-aligned, pinned, zeroed at birth. `nspr` is the number of `<sprite>`
+KB-aligned, movable (§1.2.6), zeroed at birth. `nspr` is the number of `<sprite>`
 records inside the canvas, 0–16.
 
 ```
@@ -4157,9 +4251,9 @@ NOT promising:
 - **A kernel launch-by-name slot** — an owner conversation; the Reload loop
   (§1.7) dissolves the IDE's need at zero kernel cost, so this is an upgrade
   path, never a dependency.
-- **MOVABLE claims** (SPEC.md §66) — every claim is pinned; handle
-  indirection (§4.8) and base-relative addressing keep adoption a
-  per-claim, three-word decision later.
+- ~~**MOVABLE claims**~~ — BUILT (§1.2.6): every long-lived claim of both
+  packages moves, and handle indirection (§4.8) and base-relative addressing
+  were what kept it a proc of rewrites rather than a re-architecture.
 - **Syntax highlighting in Loom** — zero precedent in the tree; the CHP
   substrate (SPEC.md §68.3) doubles document memory.
 - **FSX fullscreen games** (SPEC.md §53) — the canvas is windowed,

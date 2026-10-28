@@ -34,8 +34,8 @@ def run():
                           apps=ROOT + "/build/apps360.img",
                           machine="os8088_5150_herc_gla", boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        os88marty.no_saver(m)
+        os88marty.kernel_up(m)          # the boot gate on STATE; the settle
+        os88marty.no_saver(m)           # after the panel opens is the glass's
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
         os88marty.settle(m)

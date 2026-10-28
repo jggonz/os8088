@@ -715,6 +715,8 @@ zi_dlg_save:
     mov byte [zf_reqres], ZRES_FAIL
     cmp word [zi_savseg], 0
     je .done
+    xor ax, ax
+    call zi_savpin                  ; pinned for the write (zi_savpin's header)
     push es
     mov es, [zi_savseg]
     xor bx, bx
@@ -723,6 +725,8 @@ zi_dlg_save:
     mov si, zi_name
     call OSAPI_FILE_WRITE           ; out CF=0 AX=0, else AX = FERR_*
     pop es
+    mov ax, zf_reloc                ; ...and free to move again, CF kept
+    call zi_savpin
     jc .failed
     mov byte [zf_reqres], ZRES_OK
     jmp short .done
@@ -754,12 +758,18 @@ zi_dlg_restore:
     ja .toobig
 .fits:
     mov cx, ax
+    xor ax, ax
+    call zi_savpin                  ; pinned for the read (zi_savpin's header)
     push es
     mov es, [zi_savseg]
     xor bx, bx
     mov si, zi_name
     call OSAPI_FILE_READ            ; DX:CX = capacity in, DX:AX = size out
     pop es
+    push ax
+    mov ax, zf_reloc                ; ...and free to move again, CF kept
+    call zi_savpin
+    pop ax
     jc .failed
     mov [zi_savlen_l], ax
     mov [zi_savlen_h], dx
@@ -889,6 +899,12 @@ zi_load:
     call OSAPI_MEM_CLAIM
     jc .nosave
     mov [zi_savseg], dx
+    mov ax, zf_reloc            ; ...AND IT MOVES (NO-PINNING A3): the worker
+    call OSAPI_MEM_MOVABLE      ; stages into it and parses out of it with ES
+                                ; loaded from the word and gives ES back to
+                                ; the story before zi_request's wait, and the
+                                ; UI task pins it round its file call
+                                ; (zi_savpin)
     jmp short .undo
 .nosave:
     mov word [zi_savkb], 0
@@ -1024,23 +1040,29 @@ zf_reloc:
     mov ax, dx
     sub ax, bx                      ; AX = the paragraph delta
     add [zf_sdelta], ax
+    add [zx_seglim], ax             ; zx_step's upper bound follows the story
+                                    ; (zbss.inc); before zx_boot it is a value
+                                    ; zx_boot overwrites, so adding is harmless
     cmp word [zf_pcseg], 0          ; 0 = no PC yet: a story claimed but not
     je .nopc                        ; booted, and zx_boot writes it shortly.
     add [zf_pcseg], ax              ; Adding to 0 would invent an address
 .nopc:
     pop ax
     ret
-.stack:
-    cmp bx, [zf_stkseg]
-    jne .undo
-    mov [zf_stkseg], dx
+.stack:                         ; EVERY OTHER CLAIM IS ONE WORD, so a table:
+    mov si, zf_rltab            ; the Z-stack and the undo snapshot (66.5.9),
+.w:                             ; and since NO-PINNING A3 the scrollback, the
+    mov di, [si]                ; save staging and the transcript (66.5.9.2)
+    inc si
+    inc si
+    cmp [di], bx
+    jne .n
+    mov [di], dx
+.n:
+    cmp si, zf_rltab_end
+    jb .w
     ret
-.undo:
-    cmp bx, [zi_undoseg]
-    jne .out
-    mov [zi_undoseg], dx
-.out:
-    ret
+
 
 ; -----------------------------------------------------------------------------
 ; zi_free_all - UI task: hand every claim back
@@ -1176,6 +1198,10 @@ zi_isterm:
 ; turn of the wait goes through zi_yield, so the close box still works while a
 ; story is sitting at a "press any key" prompt.
 ; =============================================================================
+zi_readchar_rsm:                    ; zexec.inc's zx_restart: this frame and
+    push ax                         ; the wait, nothing else - [zi_want] is
+    push ax                         ; still ZIW_CHAR, and the harness marker
+    jmp short zi_readchar.wait      ; is not owed twice
 zi_readchar:
     push bx
     push es                         ; the PC's segment; see zi_yield
@@ -1228,6 +1254,14 @@ zi_readchar:
 ; bytes land. Text is reduced to lower case in both, which the Standard asks
 ; for so the story can print the command back tidily.
 ; =============================================================================
+zi_readline_rsm:                    ; zexec.inc's zx_restart: the frame and
+    push ax                         ; the wait, NOT the set-up below - the
+    push ax                         ; story's buffers, the cap and the line
+    push ax                         ; typed so far are all in bss and still
+    push ax                         ; right, and re-running the set-up would
+    push ax                         ; zero [zi_linen] under an echo already
+    push ax                         ; on the glass
+    jmp short zi_readline.wait
 zi_readline:
     push bx
     push cx
@@ -1404,6 +1438,10 @@ zi_commit:
 ; delivers the keypress is the thing that raises the dialog. Cancelling means
 ; pressing RETURN again.
 ; -----------------------------------------------------------------------------
+zi_request_rsm:                     ; zexec.inc's zx_restart: back into the
+    push ax                         ; wait with [zf_req]/[zf_reqres] AS THEY
+    push ax                         ; STAND - answered or not. Nothing is
+    jmp short zi_request.wait       ; posted again and no second prompt drawn
 zi_request:
     push ax
     push si
@@ -1528,8 +1566,14 @@ zi_save:
     mov si, zi_id_stks
     mov cx, 4
     rep movsb
-    mov [zi_fixup+2-2], di          ; (see the patch below; kept in a word)
-    push di
+    push di                         ; where the Stks length goes, ON THE
+                                    ; STACK. It went into [zi_fixup] as well,
+                                    ; which is the FORM length's - so the
+                                    ; back-patch below wrote the FORM length
+                                    ; over this chunk's and left FORM's 0, and
+                                    ; zi_parse then found a Stks body running
+                                    ; past the end of the image, skipped it,
+                                    ; and @restore answered 0 with no reason
     xor ax, ax
     xor dx, dx
     call zi_wd
@@ -1710,6 +1754,11 @@ zi_wframe:
     call zi_zsw                     ; AL = nlocals, AH = store variable
     mov dl, al
     and al, 0Fh
+    cmp word [zi_cur], 0            ; THE DUMMY FRAME (zx_boot's, at 0) is
+    jne .real                       ; written 0/0 as Frotz writes it: its 0x10
+    xor ax, ax                      ; "discard" bit is what the real Frotz
+    jmp short .stores               ; refuses a save over ("Error reading save
+.real:                              ; file"), and nothing ever returns into it
     cmp ah, 0FFh
     jne .stores
     or al, 10h
@@ -1763,6 +1812,19 @@ zi_wwords:
 .done:
     ret
 
+; zi_restore_rsm - zexec.inc's zx_restart: zi_restore's own seven pushes, the
+; wait, and then its parse and apply exactly as if the frame had survived
+zi_restore_rsm:
+    push ax
+    push ax
+    push ax
+    push ax
+    push ax
+    push ax
+    push ax
+    call zi_request_rsm
+    jmp zi_restore.post
+
 ; =============================================================================
 ; zi_restore - worker: @restore
 ; out: CF = 0 restored, and the new PC is in [zf_pcseg]/[zf_pcoff] for the
@@ -1790,6 +1852,7 @@ zi_restore:
     je .refuse
     mov al, ZREQ_RESTORE
     call zi_request
+.post:                              ; zi_restore_rsm lands here
     jc .refuse
     mov es, [zi_savseg]
     call zi_parse
@@ -2073,13 +2136,19 @@ zi_rstks:
     call zi_zsp
     mov [zi_cur], di
     mov [zf_fp], di
-    ; locals, then the evaluation stack
+    ; THE EVALUATION-STACK COUNT COMES FIRST, then the locals, then the
+    ; stack (Quetzal 4.11, and zi_wframe writes it so). This read the locals
+    ; first, so a frame's first local was taken for... nothing - the count
+    ; was read from its LAST local - and @restore failed outright ("That save
+    ; is for another story", with dynamic memory ALREADY copied) whenever the
+    ; last local was not small, and restored wrong locals when it was
+    call zi_rw                      ; the evaluation-stack word count
+    push ax
     mov bx, di
     add bx, ZI_FR_SIZE
-    call zi_rwords
+    call zi_rwords                  ; CX = the locals
+    pop cx
     jc .over
-    call zi_rw                      ; the evaluation-stack word count
-    mov cx, ax
     call zi_rwords
     jc .over
     mov [zf_sp], bx
@@ -2368,6 +2437,32 @@ ZI_SCRKB    equ 16                  ; 16,384 characters - about 250 lines of
 %define zi_scrlen  (os88_image_end + ZIO_SLACK + 80)  ; word: bytes buffered
 %define zi_scrfull (os88_image_end + ZIO_SLACK + 82)  ; byte: it filled up
 
+; (zf_reloc's table and the two pins sit HERE, below zi_scrseg's %define: a
+; %define expands at its use, but NASM reads this file top to bottom.)
+zf_rltab:
+    dw zf_stkseg, zi_undoseg, zw_sbseg, zi_savseg, zi_scrseg
+zf_rltab_end:
+
+; zi_savpin / zi_scrpin - AX = 0 PINS the save staging / the transcript, AX =
+; zf_reloc lets it move again (NO-PINNING A3). Around the UI task's
+; OSAPI_FILE_READ/WRITE whose ES:BX it is: the kernel holds that pointer
+; across claims of its own before its transfer pin applies (SPEC.md 66.3 rule
+; 5), so the claim is bucket C for the call. Preserve every register and the
+; flags.
+zi_savpin:
+    push dx
+    mov dx, [zi_savseg]
+    jmp short zi_pinb
+zi_scrpin:
+    push dx
+    mov dx, [zi_scrseg]
+zi_pinb:
+    pushf
+    call OSAPI_MEM_MOVABLE
+    popf
+    pop dx
+    ret
+
 ; -----------------------------------------------------------------------------
 ; zi_script_open - claim the transcript buffer (UI TASK)
 ; in:  nothing; out: CF=1 refused - which is normal and not fatal
@@ -2382,6 +2477,10 @@ zi_script_open:
     call OSAPI_MEM_CLAIM
     jc .no
     mov [zi_scrseg], dx
+    mov ax, zf_reloc                ; ...AND IT MOVES (NO-PINNING A3): the
+    call OSAPI_MEM_MOVABLE          ; worker loads it per character
+                                    ; (zi_script_putc) and the flush pins it
+                                    ; round its write (zi_scrpin)
 .ok:
     xor ax, ax                      ; (CF = 0)
     mov [zi_scrlen], ax
@@ -2497,12 +2596,16 @@ zi_script_flush:
     jz .out
     cmp word [zi_scrseg], 0
     je .out
+    xor ax, ax
+    call zi_scrpin                  ; pinned for the write (zi_savpin's header)
     mov es, [zi_scrseg]
     xor bx, bx
     xor dx, dx                      ; DX:CX = the count; DX is an INPUT here
     mov si, zi_scrname
     call OSAPI_FILE_WRITE           ; creates or REPLACES - so it has to be
                                     ; the whole transcript every time
+    mov ax, zf_reloc
+    call zi_scrpin                  ; ...and free to move again
 .out:
     pop es                          ; back to KERNEL_SEG for the caller's
     jmp zf_pop5                 ; [es:bx+W_*] reads

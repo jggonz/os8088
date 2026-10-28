@@ -107,6 +107,7 @@ import os88sym                                              # noqa: E402
 import os88ui                                               # noqa: E402
 import dispapps                                             # noqa: E402
 import os88flush                                             # noqa: E402
+import os88fat                                               # noqa: E402
 
 ARM = ("KERN_SMALL",)
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_128k"
@@ -203,6 +204,57 @@ shutil.copyfile(_T.img("small360.img"), _BOOT)
 _LINE = b"regrowshed: a file Note Pad must refuse as TOO BIG, not load.\r\n"
 with open(_FIX, "wb") as f:
     f.write((_LINE * (BIG_BYTES // len(_LINE) + 1))[:BIG_BYTES])
+
+
+# ...AND THE DISK HAS TO HAVE ROOM FOR IT, which it stopped having. The small
+# system disk carries the WHOLE apps payload (SPEC.md 24.5.6), so its spare is
+# whatever this cycle's packages left - 12 clusters when WireFleet joined
+# GAMES/, against the 24 this file needs - and `os88fat.py add` died with
+# "need 24 cluster(s), 12 free" before the machine booted. The row opens
+# nothing under GAMES/, so the largest games come off THIS COPY until the
+# fixture fits: the subject is Note Pad's ceiling, not the disk's margin, and
+# the next package to grow the payload must not take the row down again.
+# os88fat.py edits the ROOT only, on purpose (its `entries`), so the
+# subdirectory walk is here and uses its FAT and chain primitives.
+def _make_room(img, need_bytes, folder="GAMES"):
+    v = os88fat.Fat12(img)
+    csz = v.spc * v.bps
+    need = (need_bytes + csz - 1) // csz
+    _, _, d = v.find(folder)
+    if d is None or not d[11] & 0x10:
+        sys.exit("regrowshed: %s has no %s/ to make room in" % (img, folder))
+    slots = []                              # (size, offset, first cluster)
+    for c in v.chain(int.from_bytes(d[26:28], "little")):
+        for o in range(v.cluster_off(c), v.cluster_off(c) + csz, 32):
+            e = v.img[o:o + 32]
+            if e[0] == 0:
+                break
+            if e[0] in (0xE5, 0x2E) or e[11] & 0x18:
+                continue
+            slots.append((int.from_bytes(e[28:32], "little"), o,
+                          int.from_bytes(e[26:28], "little")))
+    gone = []
+    for size, o, first in sorted(slots, reverse=True):
+        if len(v.free_clusters()) >= need:
+            break
+        for c in (v.chain(first) if first else []):
+            v.put(c, 0)
+        gone.append(_pretty(v.img[o:o + 11]))
+        v.img[o] = 0xE5
+    if len(v.free_clusters()) < need:
+        sys.exit("regrowshed: emptying %s/ still leaves %d of the %d clusters "
+                 "%s needs" % (folder, len(v.free_clusters()), need, BIG_NAME))
+    v.save()
+    if gone:
+        print("regrowshed: made room on the scratch boot disk - %s/%s off it"
+              % (folder, ", ".join(gone)))
+
+
+def _pretty(raw):
+    return os88fat.Fat12.pretty(bytes(raw))
+
+
+_make_room(_BOOT, BIG_BYTES)
 subprocess.check_call([sys.executable, os.path.join(os.path.dirname(
     os.path.abspath(__file__)), "..", "tools", "os88fat.py"), "add", _BOOT,
     _FIX, BIG_NAME], stdout=subprocess.DEVNULL)

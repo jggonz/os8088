@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
+import os88fixture                                          # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88pkg
 import os88parts                                              # noqa: E402
@@ -94,6 +95,10 @@ def _map(app, defines=()):
                                         # too. Harmless for every other app -
                                         # nasm only reaches a -I when an
                                         # %include misses
+           "-I", os.path.join(ROOT, "drivers", "sound") + os.sep,
+                                        # ...and apps/realdmg sndpkg.inc from
+                                        # SOUND.DRV, on the same argument
+                                        # (tests/rdgmove.py maps its bss)
            "-I", os.path.join(ROOT, "build") + os.sep]
                                         # A C PACKAGE'S SHIM %includes THE
                                         # COMPILED C out of build/ (SPEC.md
@@ -387,7 +392,16 @@ def img_size(app, small=False):
 
 
 def pkg_seg(m, want):
-    """The segment of a visible PACKAGE window, newest last."""
+    """(slot, seg) of a visible PACKAGE window, newest last - or None.
+
+    `seg` is an os88marty.LiveSeg: an int with the value W_SEG held when this
+    was asked, which also carries the kernel word it came from. words() and
+    dosmap.rect() read THROUGH that word in one compactor-safe snapshot
+    (os88marty.seg_snap), so a seg banked here and read after a compaction
+    reads the region where it is now. Doing `seg << 4` yourself gets the old
+    snapshot and the torn pair with it - read through a helper, or through
+    os88marty.pkg_read(m, slot, off, n).
+    """
     b = m.read(S("wm_wins"), os88geom.MAX_WIN * os88geom.WIN_SIZE)
     out = []
     for i in range(os88geom.MAX_WIN):
@@ -395,7 +409,8 @@ def pkg_seg(m, want):
         fl = int.from_bytes(b[o + os88geom.W_FLAGS:o + os88geom.W_FLAGS + 2], "little")
         seg = int.from_bytes(b[o + os88geom.W_SEG:o + os88geom.W_SEG + 2], "little")
         if fl & 3 == 3 and seg:
-            out.append((i, seg))
+            out.append((i, os88marty.LiveSeg(
+                seg, m, S("wm_wins") + o + os88geom.W_SEG)))
     return out[want] if len(out) > want else None
 
 
@@ -407,25 +422,34 @@ BYTES = set(["mc_mono", "mc_ecoarse", "mc_expfr", "ark_bpp", "sol_bpp",
 
 
 def words(m, seg, app, names):
+    """{name: value} of the package's bss words (or BYTES), all from ONE
+    snapshot - re-resolved through the window record when `seg` is
+    pkg_seg's LiveSeg (os88marty.live_reads)."""
     base = img_size(app)
-    out = {}
-    for n in names:
-        n_b = 1 if n in BYTES else 2
-        out[n] = int.from_bytes(
-            m.read((seg << 4) + base + bss_off(app, n), n_b), "little")
-    return out
+    spans = [(base + bss_off(app, n), 1 if n in BYTES else 2) for n in names]
+    raw = os88marty.live_reads(m, seg, spans)
+    return {n: int.from_bytes(r, "little") for n, r in zip(names, raw)}
 
 
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default=None,
+                    help="default: apps360.img plus PIANO.O88, MISSILE.O88 (SPEC.md 24.6.1 "
+                    "took it off), on a disk of this run's own")
     a = ap.parse_args(argv)
+    if a.apps is None:
+        a.apps = os88fixture.apps360_plus(
+            "APPS:build/piano.o88", "GAMES:build/missile.o88", tag="dispapps")
 
     fail = []
     say = lambda s: print("  " + s)
-    settle = os88marty.settle
+    # EVERY ASSERTION IS A PACKAGE'S BSS OR A WINDOW RECORD, with three games
+    # drawing on their own clocks the whole time - so the wait after an
+    # action is ui_task's pass ending, lock not asked (ui_done lock=False),
+    # and the facts a switch changes are QUIESCED where they are read.
+    settle = lambda m, card=None, gate=None: os88marty.ui_done(m, lock=False)
     watch = {"taskmgr": ["tm_cols", "tm_colrows", "tm_col2rows", "tm_maxrow"],
              "arkanoid": ["ark_bw", "ark_bh", "ark_rows", "ark_pw0",
                           "ark_bpp"],
@@ -433,7 +457,10 @@ def main(argv):
                            "sol_bpp"],
              "missile": ["mc_mono", "mc_ecoarse", "mc_expfr", "mc_caps"],
              "piano": ["pn_kby2", "pn_bky2"]}
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the first act is a click
         mo = os88mouse.Mouse(marty=m)
         if dispfit.kind(m) != VID_VGA:
             sys.exit("dispapps: %s did not come up on the VGA" % a.machine)
@@ -515,6 +542,8 @@ def main(argv):
 
         dispcp.open_panel(m, mo, S, settle)
         dispfit.switch_to(m, mo, settle, 1, VID_CGA)
+        allw = lambda: [words(m, segs[a], a, watch[a]) for a in sorted(segs)]
+        os88marty.quiesce(m, allw, guest=0.5, what="the packages' facts")
         after = dict((a, words(m, segs[a], a, watch[a])) for a in segs)
         for a in sorted(after):
             say("CGA  %-10s %r" % (a, after[a]))
@@ -561,6 +590,7 @@ def main(argv):
                         % (before["piano"]["pn_kby2"], PN_KB_Y2_FULL))
 
         dispfit.switch_to(m, mo, settle, 0, VID_VGA)
+        os88marty.quiesce(m, allw, guest=0.5, what="the packages' facts")
         back = dict((a, words(m, segs[a], a, watch[a])) for a in segs)
         for a in sorted(back):
             say("VGA  %-10s %r" % (a, back[a]))

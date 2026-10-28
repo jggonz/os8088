@@ -94,7 +94,7 @@ def main():
     with M.launch("build/os8088-360.img", apps=DISK,
                   machine=a.machine, boot=False) as m:
         m.run()
-        M.settle(m, gate=M.desktop_up)
+        M.kernel_up(m)                  # SOAK-SPEED technique 12
         M.no_saver(m)
         mo = Mouse(marty=m)
 
@@ -144,7 +144,7 @@ def main():
         # SBTEST fits, and it is on the disk anyway to hook the vector.
         def panel():
             mo.menu(8, 8, 8, 40)                # chip menu -> Control Panel
-            heaphi.quiet(m)
+            M.ui_done(m)
             cps = [w for w in heaphi.wins(m) if w[3] >= 280 and w[4] >= 100]
             if not cps:
                 print("FAIL: no Control Panel")
@@ -153,7 +153,7 @@ def main():
             x0, y0 = cp[1] + 1, cp[2] + 18
             mo.click(x0 + 40,
                      y0 + heaphi.CP_I0Y + heaphi.CP_IDRV * heaphi.CP_IROWH + 7)
-            heaphi.quiet(m)
+            M.ui_done(m)
             return cp, x0, y0
 
         def drvrow(r):
@@ -165,10 +165,10 @@ def main():
             try:                                # a load is a floppy read,
                 M.until(m, lambda _: seg(r) != was,     # which a screen
                         "driver row %d to (un)mount" % r,   # settle takes
-                        poll=0.25, limit=60)                # for "done"
+                        limit=60)                # for "done"
             except M.MartyError:
                 pass                            # ...judged by the caller
-            heaphi.quiet(m)
+            M.ui_done(m)
             try:
                 mo.click(cp[1] + 8, cp[2] + 9)  # close the panel: CTRL.DRV is
             except M.MartyError:                # a module and would be a wall
@@ -186,7 +186,7 @@ def main():
                          m.read(S("mouse_btn"), 1)[0], M._ktick(m),
                          mo.where(), seg(r)), flush=True)
                 raise
-            heaphi.quiet(m)
+            M.ui_done(m)
 
         drvrow(SND_ROW)                         # unmount sound
         if seg(SND_ROW):
@@ -194,23 +194,24 @@ def main():
             return 1
 
         # --- SBTEST into the ceiling -----------------------------------------
-        dispcp.open_drive(m, mo, S, M.settle, "B")
+        done = lambda m, **k: M.ui_done(m)     # noqa: E731 - every read is memory
+        dispcp.open_drive(m, mo, S, done, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
         mo.drag(wx + 60, wy + 9, wx + 60 + 215, wy + 9)
-        M.settle(m)
+        M.ui_done(m)
         disk = dispcp.win_rect(m, S, dslot)[:2]
 
         def open_named(name, secs):
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
-            dispcp.open_named(m, mo, S, M.settle, *disk, name=name)
+            dispcp.open_named(m, mo, S, done, *disk, name=name)
             try:
                 M.until(m, lambda _: any(w.visible and w.i not in before
                                          for w in os88geom.windows(m, S)),
-                        "%s's window" % name, poll=0.25, limit=secs * 10)
+                        "%s's window" % name, limit=secs * 10)
             except M.MartyError:
                 pass                            # ...reported just below
-            M.settle(m)
+            M.ui_done(m)
             new = [w for w in os88geom.windows(m, S)
                    if w.visible and w.i not in before]
             if not new:
@@ -256,7 +257,7 @@ def main():
         except M.MartyError:
             pass
         mo.click(sbw.x + 8, sbw.y + 9)                       # ...and the app:
-        M.settle(m)                                          # the hole opens
+        M.ui_done(m)                                          # the hole opens
         sndseg = seg(SND_ROW)                   # a claim of sbtest's could
         if not sndseg:                          # have moved the image already
             print("FAIL: the sound driver is gone after SBTEST")
@@ -330,7 +331,7 @@ def main():
             print("FAIL: the filler's title bar is wholly covered")
             return 1
         mo.click(*pt)
-        M.settle(m)
+        M.ui_done(m)
 
         def dump(tag):
             base = u16(m.read(S("mem_base"), 2))
@@ -366,11 +367,11 @@ def main():
             m.key("KeyS")
             try:
                 M.until(m, lambda _: seg(SND_ROW) not in (sndseg, 0),
-                        "the sound image to move", poll=0.25,
+                        "the sound image to move",
                         guest=6 * M.GUEST_PACE)
             except M.MartyError:
                 pass                            # ...ask again
-            M.settle(m)
+            M.ui_done(m)
             if seg(SND_ROW) not in (sndseg, 0):
                 break
         dump("after")

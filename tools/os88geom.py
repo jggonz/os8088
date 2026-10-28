@@ -156,6 +156,7 @@ _MIRROR = {
     # read back out of [fcp_err] by tests/fcpcopy.py and tests/fcproom.py.
     "FERR_FULL": ("kernel/diskw.inc", 6),
     "DRVR_SEG": ("kernel/driver.inc", 2),
+    "DRVR_SIZE": ("kernel/driver.inc", 16),     # os88marty.drv_read's stride
     "W_FLAGS": ("kernel/wm.inc", 0),
     "W_X": ("kernel/wm.inc", 2),
     "W_Y": ("kernel/wm.inc", 4),
@@ -879,11 +880,34 @@ def close_xy(wx, wy, ww=None, m=None, sym=None):
             wy + (WM_BOX_Y0 + WM_BOX_Y1) // 2)
 
 
+def _segs(raw):
+    return [struct.unpack_from("<H", raw, i * WIN_SIZE + W_SEG)[0]
+            for i in range(MAX_WIN)]
+
+
 def windows(m, sym=None):
-    """Every USED window record."""
-    raw = m.read(_sym(m, sym)("wm_wins"), MAX_WIN * WIN_SIZE)
-    return [Win(m, i, raw, sym) for i in range(MAX_WIN)
-            if struct.unpack_from("<H", raw, i * WIN_SIZE)[0] & WF_USED]
+    """Every USED window record.
+
+    A PACKAGE window's title lives in the package's own segment, which the
+    compactor moves (SPEC.md 66) - bytes first, W_SEG after - so a title read
+    through W_SEG as a second round trip can be the old base's shifted bytes.
+    The table is checked again afterwards with [mem_cp_busy]: unchanged and
+    idle is a consistent read (os88marty.seg_snap's argument, one table at a
+    time), and otherwise it is taken again off a paused guest. One extra
+    round trip, and only when some window has a package segment.
+    """
+    at, n = _sym(m, sym)("wm_wins"), MAX_WIN * WIN_SIZE
+
+    def take(mm, raw):
+        return [Win(mm, i, raw, sym) for i in range(MAX_WIN)
+                if struct.unpack_from("<H", raw, i * WIN_SIZE)[0] & WF_USED]
+    raw = m.read(at, n)
+    if not any(_segs(raw)):             # kernel windows only: nothing moves
+        return take(m, raw)
+    import os88marty
+    return os88marty.table_snap(m, at, n, take, _segs,
+                                "the window table's titles", first=raw,
+                                sym=sym, step=False)
 
 
 def winptr(m, win, sym=None):

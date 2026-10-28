@@ -5421,7 +5421,7 @@ vp_lycarve:
     mov [vp_kr], ax
     mov [vp_lyb], bl
     add ax, [vp_msl]                ; past the mirror...
-    call vp_xmsbk                   ; ...and the base bank's bounce
+    call vp_bncq                    ; ...and the base's bounce
     jz .nb
     cmp byte [vp_livem], 0
     jne .nb
@@ -6258,6 +6258,66 @@ vp_xend:
     clc
     ret
 
+; vp_xlag - THE HOLD BEHIND THE PLAY (98.3.18): the stream already past the
+; hold's end - a play started before the loader got that far, from the first
+; frame after key 0 or from a seek - so vp_xput finds a gap before every
+; chunk and keeps none of them. The loader's next chunk instead, as the
+; timer's, while the ring has no room (the timer does not fire in here) and
+; through the BOUNCE the claim keeps for it (vp_bncq) - the bracket has the
+; heap - until the hold reaches the stream and vp_xput carries it on. A step
+; that put nothing up is not asked again this play. CF=0 a chunk went up.
+; Every register kept
+vp_xlag:
+    cmp byte [vp_snd], VP_SPK       ; (vp_xquiet: no copy under the speaker)
+    je .no
+    cmp byte [vp_xlno], 0
+    jne .no
+    call vp_bncq
+    jz .no                          ; (a bank's, or no hold filling)
+    push ax
+    push dx
+    mov ax, [vp_xhave]
+    mov dx, [vp_xhave+2]
+    cmp dx, [vp_cur+FSEQ_OFF+2]
+    jne .c
+    cmp ax, [vp_cur+FSEQ_OFF]
+.c:
+    jae .stc                        ; no gap: vp_xput's
+    call vp_bbnc
+    mov [vp_xsbnc], dx              ; vp_xstep's buffer, unclaimed
+    call vp_xstep                   ; CF=1 nothing left, or no hold
+    mov word [vp_xsbnc], 0          ; (flags kept)
+    jc .stc
+    cmp ax, [vp_xhave]
+    jne .out                        ; (CF=0)
+    mov byte [vp_xlno], 1           ; nothing went up
+.stc:
+    stc
+.out:
+    pop dx
+    pop ax
+    ret
+.no:
+    stc
+    ret
+
+; vp_bncq - ZF=0: the session's claim has a BOUNCE slot (vp_bbnc) - an XMS
+; bank's, or a hold still filling's (vp_xlag) - and a bank IN PLACE is a
+; bank, not a hold filling: [vp_xbank] is 0 for that play and so is
+; [vp_xfull], and vp_xlag would vp_xstep the file into the slots the ring
+; has in place. Preserves all but flags
+vp_bncq:
+    cmp byte [vp_einp], 0           ; in place: vp_xmsbk's no ([vp_xbank] 0)
+    jne .bk
+    cmp byte [vp_xbank], 0
+.bk:
+    jne vp_xmsbk                    ; a bank: XMS's (EMS reads into its frame)
+    cmp byte [vp_xon], 0
+    je .r                           ; (ZF=1: no hold)
+    cmp byte [vp_xfull], 1          ; ZF=0: still filling
+.r:
+    ret
+
 ; vp_xstep - the next chunk into the hold, through a claim of its own, on its
 ; own cursor. out CF=1 nothing is left to load (or the hold is gone)
 vp_xstep:
@@ -6274,6 +6334,9 @@ vp_xstep:
     push si
     push di
     push es
+    mov dx, [vp_xsbnc]              ; vp_xlag's BOUNCE: no claim
+    or dx, dx
+    jnz .nal
     mov ax, VP_CHUNK / 1024
     call vp_xgpad                   ; (+ THE GAP's slack, BX)
     call vp_mclaim
@@ -6361,6 +6424,8 @@ vp_xstep:
     call vp_xfree
 .fr:
     mov dx, [vp_xsclm]              ; (the claim, not where the read began)
+    cmp word [vp_xsbnc], 0          ; (the bounce is the ring claim's)
+    jne .later
     call OSAPI_MEM_FREE
 .later:
     pop es
@@ -8528,9 +8593,22 @@ vp_pstep:
     jne .no
     cmp byte [vp_ready], 0          ; (a bracket running reads its own)
     jne .no
-    cmp byte [vp_einp], 0           ; (in place, the ring is the bank)
-    jne vp_fill
-    jmp vp_bstep
+    push ax                         ; THE SESSION PINNED FOR THE CHUNK
+    xor ax, ax                      ; (SPEC.md 66.5.7.1): its read lands in
+    call vp_smov                    ; the ring's claim - the bank's bounce,
+    cmp byte [vp_einp], 0           ; or the bounce placed at THE GAP in
+    jne .f                          ; place - and the kernel holds ES:BX on
+    call vp_bstep                   ; it across its own claims; movable
+    jmp short .m                    ; again after, as between brackets
+.f:
+    call vp_fill                    ; (in place, the ring is the bank)
+.m:
+    pushf
+    mov ax, vp_smove
+    call vp_smov
+    popf
+    pop ax
+    ret
 .no:
     stc
     ret
@@ -8612,7 +8690,7 @@ vp_bseek:
     ret
 
 ; vp_bbnc - DX = the bounce slot: the claim's last, after the ring's K slots
-; and its mirror (vp_sstart claims it with them when there is a bank). From
+; and its mirror (vp_sstart claims it with them when vp_bncq asks). From
 ; [vp_ring] at its use, the claim being movable between brackets (98.3.19.2).
 ; Every other register kept
 vp_bbnc:
@@ -11168,7 +11246,14 @@ vp_sstart:
     jnc .tor
     jmp .memf
 .tor:                               ; (.ring, where the tests above reach
-    jmp .ring                       ; it with a short jump)
+    mov [vp_rclm], dx               ; it with a short jump) - THE KEY'S
+                                    ; RECORD is the session's claim, as
+                                    ; vp_fseek's is: vp_sfree gives back
+                                    ; [vp_rclm] and not [vp_ring], so stored
+                                    ; only in [vp_ring] it was never freed,
+                                    ; and vp_smov declares it movable between
+                                    ; brackets (98.3.19.2). 0 with no key
+    jmp .ring
 .strm:
     call vp_lyclaim                 ; THE LAYER's slots first (98.1.9)
     ; --- the ring: K slots and the mirror (SPEC.md 98.3). IN THE BRACKET,
@@ -11278,7 +11363,7 @@ vp_sstart:
 %endif
     mov ax, cx
     add ax, [vp_msl]
-    call vp_xmsbk                   ; (+ the bank's bounce, vp_bbnc)
+    call vp_bncq                    ; (+ the bounce, vp_bbnc)
     jz .rkb
     cmp byte [vp_livem], 0
     jne .rkb
@@ -11298,7 +11383,15 @@ vp_sstart:
     add ax, [vp_lymkb]
     inc byte [vp_lymx]
 .rmx:
+%ifdef PKG_MEGA
+    call vp_rclaim                  ; ITS SLOTS INSIDE 64 KB PAGES (14.73)...
+    jnc .rgot
+    call vp_rclk1                   ; ...or so, a slot fewer...
+    jnc .rgot
+    call vp_mclaim                  ; ...or anywhere, as before
+%else
     call vp_mclaim
+%endif
     jnc .rgot
     sub ax, bx                      ; no room for the slack: without it
     xor bx, bx
@@ -11431,9 +11524,9 @@ vp_kres:
 .a:
     sub ax, [vp_kekb]
     jc .z
-    call vp_xmsbk                   ; ...and THE BANK'S BOUNCE, a slot after
-    jz .r                           ; the mirror (vp_bbnc) - XMS's: EMS reads
-                                    ; into its frame
+    call vp_bncq                    ; ...and THE BOUNCE, a slot after the
+    jz .r                           ; mirror (vp_bbnc): an XMS bank's, or a
+                                    ; hold's still filling (vp_xlag)
     sub ax, VP_CHUNK / 1024
     jc .z
 .r:
@@ -11864,8 +11957,9 @@ vp_cptry:
     pop ax
     ret
 
-; vp_smov - AX = vp_smove, or 0: the SESSION's claims - the ring, the keeper
-; and the page copy - movable between brackets, or pinned for one (SPEC.md
+; vp_smov - AX = vp_smove, or 0: the SESSION's claims - the ring (or a
+; RESIDENT play's key record), the keeper, the page copy, the layer's own
+; claim and VPDIAG's profile - movable between brackets, or pinned for one (SPEC.md
 ; 98.3.19.2). A bracket's hook reads them at interrupt time, which no
 ; relocation can reach (66.3); on the desktop nothing does. A LIVE session
 ; keeps them pinned: its worker decodes out of them on the desktop.
@@ -11888,6 +11982,16 @@ vp_smov:
     call vp_mmovz
     mov dx, [vp_bseg]               ; (and the block decoder, 98.3.23)
     call vp_mmovz
+    cmp byte [vp_lyb], 0            ; (and THE LAYER's own claim, in place -
+    jne .nly                        ; 98.1.9: a flip's slots are the ring
+    mov dx, [vp_lyseg]              ; claim's top, and move with it)
+    call vp_mmovz
+.nly:
+%ifdef VP_DIAG
+    mov dx, [vp_prseg]              ; (and THE PLAY'S PROFILE, 98.3.22)
+    call vp_mmovz
+    nop                             ; (VPDIAG's own parity)
+%endif
     nop                             ; (the play's routines' parity)
     pop dx
     ret
@@ -11908,6 +12012,11 @@ vp_mmovz:
 ; those claims holds its BASE - every other segment is derived at its use -
 ; so a word equal to the old base is the one to move. Clobbers AX, SI
 vp_smove:
+    cmp [vp_lyseg], bx              ; THE LAYER's own claim (in place). Asked
+    jne .ly                         ; FIRST: a flip's [vp_lyseg] lies strictly
+    mov [vp_lyseg], dx              ; inside the ring's claim, so it is no
+.ly:                                ; claim's base before the ring moves it -
+                                    ; and after, it may be the old one
     cmp [vp_rclm], bx               ; THE RING may start inside its claim
     jne .s                          ; (THE GAP, os88xgap.inc): it moves by
     mov ax, [vp_ring]               ; what the claim does
@@ -11937,7 +12046,11 @@ vp_smove:
     ret
 
 vp_smtab:     dw vp_rclm, vp_keep, vp_prevseg, vp_shseg, vp_pseg, vp_kshd
-              dw vp_pevseg, vp_p8seg, vo_s1seg, vp_bseg, 0
+              dw vp_pevseg, vp_p8seg, vo_s1seg, vp_bseg
+%ifdef VP_DIAG
+              dw vp_prseg           ; (the profile: vp_prmark and the read
+%endif                              ; log load it at each use)
+              dw 0
 
 ; -----------------------------------------------------------------------------
 ; vp_spos - DX = the ring (or, resident, the key's claim, or 0): the session
@@ -13535,8 +13648,20 @@ vp_rhtry:
     shl ax, cl                      ; (slots) x 32 KB
     mov cx, ax
     mov ax, VP_CHUNK / 1024         ; THE BOUNCE, conventional, first
+%ifdef PKG_MEGA
+    push cx                         ; ...and INSIDE ONE 64 KB PAGE: the kernel
+    mov cx, ax                      ; cuts a run at a page's edge (dsk_runcap),
+    call OSAPI_MEM_CLAIM_DMA        ; so a straddling bounce made every chunk
+    pop cx                          ; TWO int 13h calls - on a BIOS-served disk
+    jnc .bok                        ; two reflections, a 286's CPU reset each
+    call vp_mclaim                  ; (KERN-MEGA-PLAN 14.73). Anywhere, as
+    jc .no                          ; before, when no page-safe run is free
+    nop                             ; (the decode after this at the parity it
+.bok:                               ; had - tools/os88rdiff.py --hot)
+%else
     call vp_mclaim
     jc .no
+%endif
     mov [vp_dbnc], dx
     mov ax, cx
     mov bx, 0x8000                  ; a window every 32 KB
@@ -14553,6 +14678,7 @@ vp_main:
     call vp_acur
     call vp_sopen                   ; the card, started with the picture
 .go:
+    mov byte [vp_xlno], 0           ; (vp_xlag asks again, each play)
     call OSAPI_GET_TICKS
     mov [vp_t0], ax
     call vp_rsay                    ; (said before the first frame)
@@ -14618,6 +14744,8 @@ vp_main:
     jnc .loop                       ; (VIDEO-XMS-PLAN 4.1)
 .nbk:
     call vp_lyread                  ; THE LAYER, with the disk free (98.1.9)
+    jnc .loop
+    call vp_xlag                    ; ...or the HOLD, behind the stream
     jnc .loop
     call vp_wthumb                 ; (in the window, the thumb moves)
     mov al, FSXW_FRAME              ; nothing to read yet: give the period
@@ -17769,6 +17897,10 @@ vp_prend:
     push si
     push di
     push es
+    mov dx, [vp_prseg]              ; PINNED for the rest of it (SPEC.md
+    xor ax, ax                      ; 66.5.7.1): the write holds ES:BX on it
+    call vp_mmov                    ; across the file layer's own claims, and
+    nop                             ; it is freed at the end (nop: parity)
     mov al, [vp_pr61]               ; the gate as it was
     out 0x61, al
     mov es, [vp_prseg]              ; THE HEADER, in the claim's first 48
@@ -21748,6 +21880,70 @@ vp_mfree:                           ; OSAPI_MEM_FREE
     call OSAPI_MEM_FREE
     ret
 %ifdef PKG_MEGA
+; vp_rclaim - the RING's claim (AX = KB, BX = the gap's slack in KB) with its
+; slots inside 64 KB physical pages: CF=0 DX = it, CF=1 the heap has no such
+; run. The kernel cuts a read at a page's edge (dsk_runcap), the straddling
+; sector then staged through the sector cache as a fill of its own, so a
+; slot across one was two or three int 13h a chunk - on a BIOS-served disk
+; as many reflections, each a 286's CPU reset (KERN-MEGA-PLAN 14.73). With
+; no gap the head is the first 64 KB: the ring then starts on a page and
+; every 32 KB slot is inside one. With a gap the slots are G off that grid
+; on purpose (98.3.18.12), and the head is slot 0 and the slack - the slot
+; the bank in place reads every chunk into, and every EVEN one with it,
+; which is where the copying bank's bounce sits when K + the mirror is even.
+; Every other register kept
+vp_rclaim:
+    push cx
+    mov cx, 64
+    or bx, bx
+    jnz .s0                         ; (a gap: slot 0 and the slack)
+    cmp ax, cx
+    jb .s0
+    call OSAPI_MEM_CLAIM_DMA        ; every slot on the page grid...
+    jnc .r
+.s0:
+    mov cx, bx                      ; ...or slot 0 at least
+    add cx, VP_CHUNK / 1024
+    cmp cx, ax
+    jbe .h
+    mov cx, ax
+.h:
+    call OSAPI_MEM_CLAIM_DMA
+.r:
+    pop cx
+    ret
+
+; vp_rclk1 - vp_rclaim one slot fewer, for a COPYING BANK's ring, whose
+; claim is sized to what conventional memory has and so finds no page-safe
+; run of it: the bank is that play's burst buffer and the ring a few chunks
+; past it, so a slot is worth less than two int 13h every chunk. [vp_k] and
+; [vp_kr] follow it. AX = KB, BX = the slack; CF=0 DX = the ring, CF=1 not
+; taken (AX as it was). Every other register kept
+vp_rclk1:
+    cmp byte [vp_xbank], 0
+    je .no
+    cmp byte [vp_einp], 0           ; (in place the ring is the least one
+    jne .no                         ; already)
+    cmp byte [vp_xip], 0
+    jne .no
+    push cx
+    mov cx, [vp_msl]
+    inc cx
+    inc cx
+    cmp [vp_k], cx                  ; ...and the least one must be left
+    pop cx
+    jb .no
+    sub ax, VP_CHUNK / 1024
+    call vp_rclaim
+    jc .back
+    dec word [vp_k]
+    dec word [vp_kr]
+    ret
+.back:
+    add ax, VP_CHUNK / 1024
+.no:
+    stc
+    ret
 vp_mclaim:                          ; OSAPI_MEM_CLAIM, IN CONVENTIONAL MEMORY:
     push cx                         ; the DMA door with no head IS the plain
     xor cx, cx                      ; claim (os88api.inc), and OS88_HIGHMEM
@@ -22787,6 +22983,8 @@ vp_hxp:       dw 0                  ; ...and its prefill, KB (0: 10 s at its
                                     ; mean, FFFFh: the bank whole)
 vp_pfok:      db 0                  ; 1: the next ring fill is a session's first
 vp_pfwait:    db 0                  ; 1: the prefill holds when done (a gate's)
+vp_xlno:      db 0                  ; 1: vp_xlag put nothing up, this play
+vp_xsbnc:     dw 0                  ; vp_xstep's buffer: vp_xlag's bounce
 vp_bhold:     db 0                  ; 1: the bracket's loop banks no further,
                                     ; the prefill and a pause still do (a gate's)
 vp_pfn:       dw 0                  ; the prefill's slots

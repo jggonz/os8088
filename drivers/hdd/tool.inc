@@ -101,11 +101,12 @@ HTA_FMT      equ 0              ; hd_tw_confirm/hd_tw_arm's action in AL
 HTA_DELETE   equ 1
 
 HTS_FREE     equ 0              ; nothing in this slot
-HTS_RAW      equ 1              ; a FAT-typed extent with no volume in it
+HTS_RAW      equ 1              ; used, and no volume we can reach in it
 HTS_VOL      equ 2              ; a volume
-HTS_ALIEN    equ 3              ; foreign type, or over FAT16's 2GB
-                                ; ceiling (SPEC.md 18.7.5) - either way this
-                                ; kernel will never mount it
+                                ; (3 was HTS_ALIEN, a foreign type or one
+                                ; over FAT16's ceiling: it is HTS_RAW now,
+                                ; the State column saying which - SPEC.md
+                                ; 52.2.2.1)
 HTS_GEOM     equ 5              ; a FAT-typed extent whose OWN CHS does not
                                 ; correspond to its LBA at this device's
                                 ; geometry - so the platter was laid out at a
@@ -174,16 +175,6 @@ hd_tw_open:
     jmp os88_r_bp
 
 ; -----------------------------------------------------------------------------
-; hd_tw_scan - work out all four slots' states (module internal)
-; in:  DI = the device row; hd_mbr holds the table
-; out: hd_tstate[0..3] filled
-; clobbers: flags
-;
-; The order of the tests is the order of the certainties: over the ceiling and
-; a type we do not mount are facts about the TABLE, so neither costs a read;
-; only a slot that could carry a volume is asked whether it does.
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
 ; hd_tw_geomok - does this entry's own CHS agree with its LBA? (internal)
 ; in:       SI = the partition entry, DI = the device row it is on
 ; out:      CF = 0 they agree, or the entry declines to say; CF = 1 they differ
@@ -237,38 +228,61 @@ hd_tw_geomok:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; hd_tw_scan - work out all four slots' states (module internal)
+; in:  DI = the device row; hd_mbr holds the table
+; out: hd_tstate[0..3] filled, and the engine's State column for each
+; clobbers: flags
+;
+; THE INSTALL ENGINE'S SCAN, not one of our own (SPEC.md 52.2.2.1): the rows
+; say what a slot IS in the wizard's words - `C: FAT16`, `Linux`, `FAT16,
+; Too Big` - where this window's own five words said less, and two scans of
+; one table were two sets of the same reads. hd_tstate is what our BUTTONS
+; ask, so it is derived here from the engine's facts; the one fact that is
+; not a formatter's, `Too Small` (an install's 2MB floor, HIW_MINSEC), is
+; cleared from the reasons this window shows.
+;
+; [hd_idev] and [hd_isel] are BANKED around it: a wizard run waiting on its
+; apps disk (HII_SYSDONE) holds the engine's device and slot, and this window
+; can be opened while it waits.
+; -----------------------------------------------------------------------------
 hd_tw_scan:
     call os88_ent
+    mov al, [hd_tdev]
+    mov ah, [hd_isel]
+    xchg al, [hd_idev]
+    push ax
+    call hd_iw_scant            ; the table already in hd_mbr: no second read
+    pop ax
+    mov [hd_idev], al
+    mov [hd_isel], ah
     xor bx, bx                  ; BX = the slot, BH = 0 to index hd_tstate
 .slot:
+    shl bx, 1
+    cmp word [bx+hd_irsn], hd_s_ismall
+    jne .rsn
+    mov word [bx+hd_irsn], 0    ; an install's floor, not a formatter's
+.rsn:
+    mov dl, HTS_RAW
+    cmp word [bx+hd_irsn], hd_s_tgeom
+    jne .half
+    mov dl, HTS_GEOM
+.half:
+    shr bx, 1
     mov al, bl
     call hd_part_ent
-    mov al, HTS_FREE
     call hd_part_used
-    jc .store
-    mov al, HTS_ALIEN
-    call hd_part_big
-    jc .store                   ; longer than any FAT16 (SPEC.md 18.7.5)
-    call hd_part_isfat
-    jc .store                   ; a type this driver does not mount
-    call hd_tw_geomok           ; ...and BEFORE the read, because the read is
-    mov al, HTS_GEOM            ; the thing a geometry fault corrupts: ask the
-    jc .store                   ; table, which cannot be pointed at the wrong
-    mov al, HTS_VOL             ; sector (SPEC.md 52.2.6)
-    call hd_fmt_isfat
-    jnc .store
-    mov al, HTS_RAW
-.store:
-    cmp al, HTS_FREE            ; ...unless it is the one we are RUNNING FROM
-    je .put                     ; (SPEC.md 52.10.4.1). Last, after every fact
-    push ax                     ; about the TABLE, and skipped for a free slot,
-    mov al, [hd_tdev]           ; which has no base to compare. The DEVICE is
-    call hd_kvol                ; hd_tdev and never [hd_sel]: the panel
-    pop ax                      ; underneath stays clickable while this window
-    jc .put                     ; is up, which is the same reason every write
-    mov al, HTS_LIVE            ; in here uses it
-.put:
-    mov [bx+hd_tstate], al
+    mov al, HTS_FREE
+    jc .put
+    mov al, HTS_LIVE
+    cmp byte [bx+hd_istate], HIS_LIVE
+    je .put
+    mov al, HTS_VOL
+    cmp byte [bx+hd_ivol], 0
+    jne .put
+    mov al, dl                  ; HTS_GEOM, or HTS_RAW: every other used slot,
+.put:                           ; foreign included - our buttons ask nothing
+    mov [bx+hd_tstate], al      ; that tells those two apart
     inc bx
     cmp bl, 4
     jb .slot
@@ -478,50 +492,24 @@ hd_tw_rowtext:
     add al, '1'
     mov [di], al
     inc di
-    mov si, hd_s_four
+    mov si, hd_s_four + 1       ; four spaces: the digit to the size column
     call hd_scat
     mov al, bl
     call hd_part_ent            ; SI = its entry
     mov ah, [bx+hd_tstate]      ; AH = what it is
     cmp ah, HTS_FREE
     jne .size
-    push si
     mov si, hd_s_four           ; nothing claims it: the size column blank
     call hd_scat
-    pop si
     jmp short .state
 .size:
     call hd_tw_size             ; '31M', or '600K' under a megabyte
 .state:
-    push si
-    mov si, hd_s_two
+    mov si, hd_s_four + 4       ; one space, then the engine's words
     call hd_scat
-    pop si
-    cmp ah, HTS_VOL
-    je .vol
-    mov bl, ah                  ; every other state is one fixed word
-    shl bx, 1
-    mov si, [bx+hd_tsname]
-    jmp short .tname
-.vol:
-    cmp byte [si+HP_TYPE], HPT_FAT12    ; the TYPE byte's name: what the
-    mov si, hd_s_f16name                ; table says, as the installer's
-    jne .tname                          ; State column says it
-    mov si, hd_s_f12name
-.tname:
-    call hd_scat
-    mov byte [di], 0
+    mov [hd_irow], bl
+    call hd_iw_rowtdi           ; ...which end the line
     jmp os88_r_bp
-
-hd_tsname:  dw hd_s_traw        ; HTS_FREE: never shown - a free row says
-            dw hd_s_traw        ; HTS_RAW              what the drive map does
-            dw 0                ; HTS_VOL: the type's name, above
-            dw hd_s_talien      ; HTS_ALIEN
-            dw hd_s_tlive       ; HTS_LIVE
-            dw hd_s_tgeom       ; HTS_GEOM
-%if HTS_FREE != 0 || HTS_RAW != 1 || HTS_VOL != 2 || HTS_ALIEN != 3 || HTS_LIVE != 4 || HTS_GEOM != 5
-%error "hd_tsname is indexed by HTS_* - one word per state, in order"
-%endif
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_size - one entry's size, in the unit that does not read as zero
@@ -811,7 +799,7 @@ hd_tw_up:
 hd_tw_drag:
     call os88_ent
     mov bx, hd_tdown
-hd_xdrag:                       ; (the installer's too: BX = its block)
+
     call os88ui_armed           ; PEEK: the arm is the release's to spend
     or ax, ax
     jz .done
@@ -1623,12 +1611,10 @@ hd_s_tszall:  db 'all of it - under 1 MB', 0
 hd_s_tszty:   db ' - type a number', 0
 hd_s_mfree:   db 'Free ', 0
 hd_s_mlarge:  db 'M, largest ', 0
-hd_s_thdr:    db 'Slot  Size   State', 0
+hd_s_thdr:    db 'Slot Size  State', 0
 hd_s_four:    db '     ', 0     ; slot digit -> size column
 hd_s_traw:    db 'Not Formatted', 0
-hd_s_talien:  db 'Unmountable', 0
-hd_s_tgeom:   db 'Wrong Geometry', 0   ; 14 chars, the longest of the five -
-                                       ; hd_s_traw is 13 and the column fits
+hd_s_tgeom:   db 'Wrong Geometry', 0   ; the engine's reasons too (inst.inc)
 hd_s_tlive:   db 'Booted From', 0   ; the installer's word for the same fact
                                     ; (SPEC.md 52.10.4.1): two windows, one
                                     ; thing to learn

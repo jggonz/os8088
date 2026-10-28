@@ -1,4 +1,4 @@
-# What `INT 21h` gives back — os8088's DOS box against IBM DOS 3.30
+# What `INT 21h` gives back — os8088's DOS against IBM DOS 3.30
 
 **A measurement, not a description.** Taken 2026-09-15 on a four-core cloud
 container, `nasm` 2.16.01, MartyPC at its pinned commit, at `2d08d51` on
@@ -22,7 +22,7 @@ SPEC.md 96.7.1.2 is what was concluded from it.
 ## The answer in four lines
 
 1. **44 of the 45 calls, and all four device-word readings, now agree to the
-   character.** The one that does not is `AH=57h`, which this box does not
+   character.** The one that does not is `AH=57h`, which this DOS does not
    implement.
 2. **Going in, the open question was `BX` and `CX`, and they were very nearly
    clean**: of 45 calls exactly one gave a register back that DOS preserves —
@@ -117,7 +117,7 @@ set, `0Ea`/`0Eb` the drive switch out and back.
 
 ## What is NOT in the table, and why
 
-Four functions the box dispatches cannot be asked this way, and one group is
+Four functions our DOS dispatches cannot be asked this way, and one group is
 left out on purpose:
 
 - **`AH=4Bh`** needs a child program; `dosexec` is its gate.
@@ -140,7 +140,7 @@ number it rests on is in this file: **one handler in 45**.
 
 ## Finding 2 — the device word, twice
 
-Bit 6 is *"this handle has NOT been written through"*, and this box had no
+Bit 6 is *"this handle has NOT been written through"*, and this DOS had no
 per-handle flag to answer it from — which is exactly what SPEC.md 96.7.1.1
 recorded rather than guessing at. `FH_FLAGS` had a spare bit. The three
 readings are what a single one could not have distinguished: **`0041`
@@ -155,11 +155,11 @@ A:, the file's drive and not the program's.
 
 ## Finding 3 — `AH=57h` is not implemented
 
-DOS answers `CX` = time, `DX` = date for an open handle. This box falls to the
+DOS answers `CX` = time, `DX` = date for an open handle. This DOS falls to the
 invalid-function arm: `CF=1`, `AX=0001h`. **Not fixed here, and the reason is
 a fact about a different layer**: `OSAPI_FILE_FIND`'s 24-byte record
 (SPEC.md 19.7.1) carries no timestamp, so answering `AH=57h` is a published
-kernel ABI change rather than a DOS-box change. The row is kept in
+kernel ABI change rather than a `DOS.O88` change. The row is kept in
 `tests/dosregs.py` as a KNOWN gap, so that implementing it fails that gate and
 forces the expectation to be updated — the opposite of a gap nobody holds.
 

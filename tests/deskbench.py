@@ -303,7 +303,7 @@ def raise_win(m, mo, slot, settle, why):
         raise RuntimeError("cannot raise %04x for %s - its title bar is "
                            "wholly buried: %r" % (slot, why, [r for _, r in zs]))
     mo.click(*pt)
-    settle(m)
+    os88marty.ui_done(m)                # the next reads are guest state
 
 
 def build(m, mo, settle, cp_fallback, say):
@@ -361,7 +361,7 @@ def build(m, mo, settle, cp_fallback, say):
                                "buried: %r" % (why, slot, [r for _, r in zs]))
         rx, ry, rw, rh = zs[i[0]][1]
         mo.drag(pt[0], pt[1], pt[0] + (x - rx), top + TITLE_H // 2)
-        settle(m)
+        os88marty.ui_done(m)            # win_rect is guest state
         got = dispcp.win_rect(m, S, slot)
         say("  %-8s %3d x %3d -> x %3d y %3d" % (why, got[2], got[3],
                                                  got[0], got[1]))
@@ -793,7 +793,6 @@ def run_one(a, label, machine, say):
     settle = os88marty.settle
     with os88marty.launch(a.image, apps=a.apps, machine=machine,
                           timeout=a.timeout) as m:
-        settle(m)
         mo = os88mouse.Mouse(marty=m)
         say("building the scene on %s" % machine)
         sc = build(m, mo, settle, a.cp_page_fallback, say)

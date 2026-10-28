@@ -92,6 +92,7 @@ sys.path.insert(0, HERE)
 import os88build
 import os88pkg
 import os88marty                                             # noqa: E402
+import os88fixture                                          # noqa: E402
 import os88mouse                                             # noqa: E402
 import os88sym                                               # noqa: E402
 import os88geom as geom                                      # noqa: E402
@@ -362,11 +363,19 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default=None,
+                    help="default: apps360.img plus TIMER.O88, BOUNCE.O88 (SPEC.md 24.6.1 "
+                    "took it off), on a disk of this run's own")
     a = ap.parse_args(argv)
+    if a.apps is None:
+        a.apps = os88fixture.apps360_plus(
+            "APPS:build/timer.o88", "APPS:build/bounce.o88", tag="heapscrl")
     os.chdir(ROOT)
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
 
         # THE SCREEN NEVER STOPS ON THIS PAGE, so os88marty.settle cannot be

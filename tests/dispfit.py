@@ -184,12 +184,24 @@ def main(argv):
         # nothing reads: wm_refit visits used records only, wm_create banks
         # into the one slot it fills, wm_destroy clears the one it frees. Do
         # not open more windows after this point.
+        # ...AND WHEN THE RUNG IS PACKED TIGHT, the kernel's own top: the
+        # ladder since movable `.cold` (SPEC.md 2.10.9) sizes the cold rung
+        # to the paragraph, leaving it no slack, but KERN_END is a 512-byte
+        # rung edge and `.vgabuf` ends short of it - and on this VGA machine
+        # the heap floor IS KERN_END (SPEC.md 39.22), so those bytes are
+        # nobody's either, and well inside COLD_SEG's reach
         eq = os88sym.equates()
         cold = eq["COLD_SEG"] << 4
         code_lin = (eq["COLD_RAM"] << 4) + ((eq["COLD_SIZE"] + 15) & ~15)
         if (eq["COLD_RAM"] << 4) + (eq["COLD_PARA"] << 4) - code_lin < 16:
-            sys.exit("dispfit: the cold rung has no 16 bytes of slack left "
-                     "for the handler - put it somewhere COLD_SEG can name")
+            code_lin = (eq.get("VGABUF_RAM", 0) + eq.get("VGABUF_PARA", 0)) << 4
+            if not eq.get("VGABUF_PARA") or (eq["KERN_END"] << 4) - code_lin < 16:
+                sys.exit("dispfit: neither the cold rung nor the kernel's top "
+                         "has 16 bytes of slack left for the handler - put it "
+                         "somewhere COLD_SEG can name")
+            if int.from_bytes(m.read(S("mem_base"), 2), "little") != eq["KERN_END"]:
+                sys.exit("dispfit: the heap floor is not KERN_END, so the "
+                         "kernel's top slack may be the heap's")
         code_at = code_lin - cold                    # the offset wm_cbd calls
         if not 0 <= code_at < 0x10000:
             sys.exit("dispfit: the cold rung's slack is not inside "

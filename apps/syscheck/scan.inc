@@ -546,6 +546,8 @@ sc_man_drvhdr:
 ; sc_man_missing - a manifest file is not on the volume
 sc_man_missing:
     mov si, [sc_mp]
+    test byte [si+1], SCF_OPT       ; shipped on some system disks, not all:
+    jnz sc_man_next                 ; its absence is no finding (118.2.3)
     mov al, [si]
     cmp al, SCK_KERNEL
     jne .notk
@@ -635,6 +637,7 @@ sc_manaddf:
 sc_manpath:
     mov si, [sc_mp]
     mov al, [si+1]
+    and al, ~SCF_OPT
     xor dx, dx
     mov di, sc_cpath
     call sc_drive                   ; "C:\"
@@ -660,8 +663,8 @@ sc_manpath:
     or dx, dx                       ; the root, or a folder that was found
     jnz .ok
     mov si, [sc_mp]
-    cmp byte [si+1], SCF_ROOT
-    je .ok
+    test byte [si+1], ~SCF_OPT      ; SCF_ROOT, optional or not
+    jz .ok
     stc
     ret
 .ok:

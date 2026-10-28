@@ -2,9 +2,9 @@
 ; os8088 - HDDTOOL.DRV
 ;
 ; The hard-disk driver's OTHER half (SPEC.md 52.11): the partitioner, the
-; formatter and the installer. It is read off the system volume when somebody
-; clicks Format or Install on the Control Panel's Hard Drive page, and its
-; memory goes back when the driver detaches.
+; formatter and the install engine. It is read off the system volume when
+; somebody opens the Control Panel's Hard Drive page or INSTALL.O88 asks for
+; the engine, and its memory goes back when it is finished with.
 ;
 ; **IT IS NOT A DRIVER.** Same header, same org 0, same three-byte dispatcher,
 ; same one-claim load - and no class the kernel knows, no row in drv_tab, and
@@ -147,8 +147,11 @@ hd_tinit:
 ; pad. The claim is whole KB (HDTOOL_KB), so the tuning is worth a KB exactly
 ; when it carries the image under a KB boundary. It did until INSTALL's log
 ; (SPEC.md 117.4.1, its call sites in inst.inc) took the image to 17,810
-; bytes and an 18KB claim: the pad is 82 bytes today and is LEFT, because
-; closing it is 82 bytes off a load and no KB - 17,728 is still over 17,408.
+; bytes and an 18KB claim. The Install window's removal (SPEC.md 52.10.4)
+; took it to 17,038 and a 17KB claim with a pad of 199, which is LEFT:
+; closing it is 199 bytes off a load and no KB (16,839 is still over
+; 16,384), and on the disk a run of zeros costs the compressed file nearly
+; nothing.
 ; =============================================================================
 ; -----------------------------------------------------------------------------
 ; hd_tshut - HDT_SHUT: nothing of ours left on screen, nothing of ours held
@@ -163,26 +166,22 @@ hd_tinit:
 ; tool is finished with, an open/close cycle that leaked one would run the
 ; table out inside a session.
 ;
-; hd_iw_shut runs FIRST for whatever else the installer holds; destroying a
-; window it has already hidden is fine - wm_destroy tests the visible bit and
-; passes an empty damage rect when it is clear.
+; hd_ia_rel runs FIRST for the ASSOC.DAT hold an abandoned install keeps;
+; destroying a window already hidden is fine - wm_destroy tests the visible
+; bit and passes an empty damage rect when it is clear. The launch window
+; (cppage.inc's hd_inst_post) is never shown at all.
 ; -----------------------------------------------------------------------------
 hd_tshut:
     push ax
     push bx
-    call hd_iw_shut
+    call hd_ia_rel              ; an install abandoned at its apps prompt
     mov bx, [hd_twin]
     or bx, bx
-    jz .inst
+    jz .launch
     call OSAPI_WM_DESTROY
     mov word [hd_twin], 0
-.inst:
-    mov bx, [hd_iwin]
-    or bx, bx
-    jz .done
-    call OSAPI_WM_DESTROY
-    mov word [hd_iwin], 0
-.done:
+.launch:
+    call hd_lkill               ; a posted wizard launch that never ran
     pop bx
     pop ax
     clc
@@ -202,15 +201,12 @@ hd_tshut:
 ; -----------------------------------------------------------------------------
 hd_tbusy:
     push bx
-    cmp byte [hd_ipkg], 0       ; A PACKAGE'S RUN waiting on its apps disk
-    je .wins                    ; (SPEC.md 117.4): it holds ASSOC.DAT's
-    cmp byte [hd_iw_st], HII_SYSDONE    ; writer and its stage is in this
-    je .busy                    ; image, which no window shows
-.wins:
+    cmp byte [hd_iw_st], HII_SYSDONE    ; A RUN waiting on its apps disk
+    je .busy                    ; (SPEC.md 117.4): it holds ASSOC.DAT's
+                                ; writer and its stage is in this image
+    cmp word [hd_lwin], 0       ; a wizard launch posted and not yet run
+    jne .busy                   ; (cppage.inc's hd_inst_post)
     mov bx, [hd_twin]
-    call hd_win_live
-    jc .busy
-    mov bx, [hd_iwin]
     call hd_win_live
     jc .busy
     pop bx
@@ -244,7 +240,7 @@ hd_win_live:
 
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
-%define OS88UI_CHK              ; the installer's Erase box (SPEC.md 52.10.15)
+; %define OS88UI_CHK              ; the installer's Erase box (SPEC.md 52.10.15)
 %define OS88UI_ARM              ; os88ui_arm/fire/armed: the press/release
 %define OS88UI_NOGEST           ; ...and all three windows drive their own buttons
                                 ; through arm/fire/armed - the record-based

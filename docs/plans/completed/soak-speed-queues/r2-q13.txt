@@ -1,0 +1,26 @@
+# ROUND 2, queue 13: the bottom half of r2-q9's remaining rows (non-MartyPC). family  row  declared_secs  script  needs
+SKIP build/lemmings.img absent (fetched data + make lemmingsdisk would write build/; row also launches via `make test`) lemm	lemmings	100	tests/lemmings.py	qemu,cc
+DONE vidl	vidlysplitinplace	90	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlysplitinplacebase	90	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlyorder	90	tests/vidlyorder.py	qemu,nasm,ffmpeg
+DONE vidl	vidlyorderbank	90	tests/vidlyorder.py	qemu,nasm,ffmpeg
+DONE netc	netcoexist	90	tests/netcoexist.py	qemu
+SKIP build/redline.img absent (runner SKIPs it: would not build; it also boots through `make test`) rltu	rltune	81	tests/rltune.py	nasm,qemu
+DONE vgad	vgadirty	80	tests/vgadirty.py	qemu,nasm
+DONE mine	minesrc	80	tests/minesrc.py	qemu,nasm
+DONE vidc	vidclose	75	tests/vidclose.py	qemu,nasm
+DONE dosx	dosxlat	75	tests/dosxlat.py	qemu
+DONE colo	colorpresets	72	tests/colorpresets_qemu.py	qemu,nasm,pil
+SKIP build/wireball.img absent (runner SKIPs: would not build) wire	wireball	65	tests/wireball.py	qemu,nasm,pil
+DONE pxsw	pxswin-qemu	65	tests/pxswin.py	qemu
+DONE hmad	hmadrv	62	tests/hmadrv.py	qemu,nasm
+DONE vidl	vidlysplit	60	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlysplitbase	60	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlysplituntimed	60	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlybank	60	tests/vidlybank.py	qemu,nasm,ffmpeg
+DONE vidl	vidlybankcopy	60	tests/vidlybank.py	qemu,nasm,ffmpeg
+DONE vidl	vidlybanknone	60	tests/vidlybank.py	qemu,nasm,ffmpeg
+DONE vidx	vidxmslive	60	tests/vidxms.py	qemu,nasm
+DONE vidx	vidxmsliverep	60	tests/vidxms.py	qemu,nasm
+DONE gifd	gifdrag	56	tests/gifdrag.py	
+DONE whee	wheelps2	56	tests/wheelps2.py	qemu,nasm

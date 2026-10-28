@@ -137,7 +137,10 @@ def run():
                          "- the package carries a module other than the one "
                          "its vectors were assembled against")
 
-    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         os88marty.no_saver(m)           # the KERNAL's boot is a MINUTE of
                                         # guest time on this machine, and the

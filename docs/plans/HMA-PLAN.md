@@ -112,7 +112,7 @@ AH=87h). The 286 machines in `vm/` are where it can be looked at.
 
 * **A DOS program that closes A20 itself** (DOS.O88, SPEC.md 96) would strand
   `.cold`. A program that calls int 15h AH=87h directly, or writes port 92h
-  or the keyboard controller, is the case. Nothing in the box hooks that
+  or the keyboard controller, is the case. Nothing in DOS hooks that
   today; it is the same class of hazard as a DOS program writing to kernel
   memory. **It cannot reach the resumed session**: the handoff sums `.cold`
   and the tail's code, `kd_resume` sums them again, and a shut gate or a
@@ -311,6 +311,36 @@ with the stream.
 with 848 to spare, and **a `.cold` that grows takes that spare first** -
 past it, `tools/os88rom.py` refuses the build and `HMA_COLD_AT` comes down,
 which is a driver that no longer fits rather than a machine that breaks.
+
+**That spare is gone, and the buffer is the one that loses** (re-read
+2026-10-25, build 540, against `os88rom.py`'s own line): section 6 put the
+quick-volume UI in SOUND.DRV, which is 11,924 bytes now, so the three images
+take 20,208 of the 24,560 after paragraph rounding and 4,352 are left - under
+the 8,192 the double buffer asks for. The images go in at boot and the
+buffer at the first stream, so on a machine wanting all three the buffer
+always takes `sbl_dma_get`'s heap fallback; SPEC.md 28.4.13's QEMU reading
+shows exactly that. SOUND and HDD alone, or SOUND and NET alone, still fit it
+with 336 and 256 to spare.
+
+**...and on a machine with no mixer it is back** (same date, SPEC.md
+51.1.3.1): SOUND.DRV now cuts its own pool block to its `DRV_H_KEEP` at
+attach, through `OSAPI_MEM_HMA`'s `MEMHMA_KEEP` form - 7,376 bytes with no
+mixer, 10,928 with one. A first cut placed everything lowest-first, so HDD.DRV
+sat on the cut's bytes and a hibernate's sweep-and-reload of SOUND.DRV found
+a gap a KB short and fell to the heap. So the pool fills from TWO ENDS: an
+`OS88_DRV_FOOT` image (SOUND.DRV) lowest-first, every other image and every
+buffer highest-first, and the cut is the foot of the one free run - a reload
+lands where the boot put it. Measured under QEMU: an AdLib machine's free run
+is 8,912, room for the double buffer; an SB16's 5,360 still sends it to the
+heap. `tests/hmapool.py` is the reload's gate.
+
+**XMEM.DRV in the pool was asked for and does not fit either** (same date):
+its 2,042-byte image (SPEC.md 41.12.6) is two KB of every 286's heap that
+the pool could hold, but only on a machine wanting SOUND alone; with HDD or
+NET beside it the image would take what the buffer needs. The tail's spare
+above `.cold`, 1,349 bytes, is too small and is `.cold`'s room to grow. So
+it stays a heap claim. It would also have to move ITSELF after attach,
+being the thing that installs the tail.
 
 Not driven by any row: unloading and reloading an HMA driver from the
 Drivers page (`drv_release`'s ROMF_HDROP, then a fresh placement); and tier

@@ -153,7 +153,7 @@ ch_v_end       equ ch_v_dec_u16 + 4
 ; --- the loader's own state (82.16) ------------------------------------------
 ; Package-side, not module-side: the module never reads these. They sit in the
 ; shared block anyway so the two packages cannot disagree about them either.
-ch_ovseg       equ ch_v_end          ; word: CHART.OVL's claim, 0 = not loaded
+ch_ovseg       equ ch_v_end          ; word: the chart module's claim, 0 = not loaded
 ch_ovfar       equ ch_ovseg + 2      ; 4: the (offset, segment) ch_ovcall
                                      ; far-calls - offset is always 0
 ch_ovdir       equ ch_ovfar + 4      ; word } the folder this package was

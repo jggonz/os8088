@@ -21,7 +21,9 @@ rule) - they go to docs/reports/ with the date and the machine.
 THE SAMPLES ARE NOT IN THE TREE. They are XDC streams the owner supplied
 (VIDEO-PLAN section 13) and are copyrighted, so `--samples DIR` (or
 $OS88_XDC_SAMPLES) names a directory holding BADAPPLE.XDV, THUNDERC.XDV,
-TRONDISC.XDV and BBBB_BW.XDV; the row SKIPS without it.
+TRONDISC.XDV and BBBB_BW.XDV; it SKIPS without it. That is why it is a hand
+instrument and in no tier (tests/unit/t_registry.py's UNREGISTERED): with the
+streams never in the tree, a row only ever SKIPPED.
 
 THE MACHINE: a GLaBIOS twin by default, because nothing
 measured here goes through the ROM - it is the CPU and the card's memory.
@@ -46,7 +48,7 @@ HZ = 4772727.0                  # the 5150's 8088, PERFORMANCE.md Part 2
 MAXF = 32                       # VB_MAXF
 NKIND = 3                       # VB_NKIND
 NRES = 8 + MAXF * NKIND         # VB_NRES
-STREAMS = os88build.XDC_STREAMS   # the suite probes for the same four
+STREAMS = ("BADAPPLE.XDV", "THUNDERC.XDV", "TRONDISC.XDV", "BBBB_BW.XDV")
 RAW = ("movsb 8000 to screen", "movsw 8000 to screen",
        "movsb 8000 to RAM", "movsw 8000 to RAM",
        "movsb 8000 screen->RAM", "latch copy 8000 (VGA)",

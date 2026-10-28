@@ -115,7 +115,9 @@ def main():
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         img = build(tmp)
         with os88ui.boot("build/os8088-360.img", apps=img,
-                         machine=MACHINE) as ui:
+                         machine=MACHINE,
+                         quick=True) as ui:
+            ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
             m = ui.m
             w = ui.path("B:/SPKFX.O88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,

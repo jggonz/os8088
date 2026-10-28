@@ -192,12 +192,12 @@ def main():
     print("== PiXEL: drawing calls a gesture, %s (SPEC.md 106.15) =="
           % a.machine)
     with os88ui.boot("build/os8088-360.img", apps=disk,
-                     machine=a.machine) as ui:
+                     machine=a.machine, quick=True) as ui:
         m = ui.m
         S = ui._S
         ui.path("B:/CITY.PCX")
         M.until(m, lambda _: instance(m, S, image), "PiXEL's instance",
-                poll=0.3, limit=120)
+                poll=0.05, limit=120)
         base = instance(m, S, image) * 16
         B = lambda n: m.read(base + syms[n], 1)[0]
         W = lambda n: u16(m.read(base + syms[n], 2))
@@ -210,21 +210,21 @@ def main():
             measured from still"""
             return idle() and B("px_hmode") == 0
         M.until(m, lambda _: W("px_ndone") and still(), "the decode",
-                poll=0.3, limit=900)
-        ui.settle()
+                poll=0.05, limit=900)
+        ui.still()
         ui.mo.to(2, 2)
-        ui.settle()
+        ui.still()
         addrs = {KSEG * 16 + off: n for n, off in CELLS.items()}
 
         def measure(what, act, wait=None):
             M.until(m, lambda _: still(), "still, before " + what,
-                    poll=0.3, limit=900)
+                    poll=0.05, limit=900)
             M.ui_done(m, "still")
             with M.bp_trace(m, *addrs.keys(), cap=50000, regs=True,
                             on_hit=caller) as tr:
                 act()
                 if wait:
-                    M.until(m, lambda _: wait(), what, poll=0.3, limit=900)
+                    M.until(m, lambda _: wait(), what, poll=0.05, limit=900)
                 M.ui_done(m, what)
                 M.guest_sleep(m, 0.3)
             by, fn, n_ = {}, {}, 0
@@ -349,9 +349,9 @@ def main():
         ui.menu_pick("View", "Hide Panels")
         ui.menu_pick("View", "Show Panels")
         ui.mo.to(2, 2)
-        ui.settle()
+        ui.still()
         M.until(m, lambda _: still(), "still, before the identity",
-                poll=0.3, limit=900)
+                poll=0.05, limit=900)
         # (and the free-memory field's look past: it is a five-second look,
         # PX_MEMT, and the repaint draws it as it is now)
         M.guest_sleep(m, 6.0)
@@ -374,7 +374,7 @@ def main():
         key("F1")
         try:
             M.until(m, lambda _: B("px_helpon") == 1, "the key card up",
-                    poll=0.3, limit=60)     # (an Esc before it would
+                    poll=0.05, limit=60)     # (an Esc before it would
         except Exception:
             print("the key card did not come up: the toast %r" % (
                 ui.toast(),))
@@ -412,7 +412,7 @@ def main():
         n0 = W("px_ndone")
         m.ctrl("KeyR")
         M.until(m, lambda _: W("px_ndone") != n0 and B("px_anon") == 1
-                and W("px_anfr") >= 3, "BOUNCE.GIF playing", poll=0.3,
+                and W("px_anfr") >= 3, "BOUNCE.GIF playing", poll=0.05,
                 limit=900)
         f0 = W("px_anfr")
         with M.bp_trace(m, *addrs.keys(), cap=50000, regs=True,
@@ -444,13 +444,13 @@ def main():
         # here as the ball's old places left on the sand
         m.key("KeyA")
         M.until(m, lambda _: B("px_anon") == 0 and B("px_anjob") == 0,
-                "the animation stopped", poll=0.2, limit=60)
+                "the animation stopped", poll=0.05, limit=60)
         M.ui_done(m, "A")
         M.guest_sleep(m, 6.0)           # (the free-memory field's look)
         ga = content()
         key("F1")
         M.until(m, lambda _: B("px_helpon") == 1, "the key card up",
-                poll=0.3, limit=60)
+                poll=0.05, limit=60)
         M.ui_done(m, "the card")
         M.guest_sleep(m, 1.0)
         key("Escape")
@@ -498,7 +498,7 @@ def main():
         ui.mo.click(ix + u16(v, 12) // 2, iy + u16(v, 14) // 2)
         try:
             M.until(m, lambda _: B("px_dirty") == 1 and idle(),
-                    "the turn made", poll=0.2, limit=300)
+                    "the turn made", poll=0.05, limit=300)
             good = B("px_anon") == 0 and B("px_anjob") == 0
         except Exception:
             good = False
@@ -514,7 +514,7 @@ def main():
         if good:
             m.ctrl("KeyO")
             M.until(m, lambda _: u16(m.read(base + syms["os88ui_awin"], 2)),
-                    "Save changes?", poll=0.2, limit=60)
+                    "Save changes?", poll=0.05, limit=60)
             M.ui_done(m, "asked")
             m.key("Enter")
             M.ui_done(m, "Save")

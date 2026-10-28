@@ -399,6 +399,22 @@ static int ovl_open(void *win, const char *name, unsigned size_lo,
                                          * app's own code, and 2.6.2's
                                          * module-init function must not run
                                          * against a half-built card */
+    /* ...AND NOW EVERY CLAIM MAY MOVE (WEAVE-SPEC 1.2.6), declared here and
+     * not as each was taken: the bundle's segment has been handed to the VM
+     * and to the canvas core by now, and a claim declared before the next
+     * one is taken could move under the very calls that copy it. A refused
+     * VM claim has freed everything (w_short -> w_free), so w_vmseg is the
+     * test. The canvas core moves only until a worker stands in it. */
+    if (w_vmseg) {
+        os88_mem_movable(w_seg, 1);
+        os88_mem_movable(w_vmseg, 1);
+        if (w_gseg)
+            os88_mem_movable(w_gseg, 1);
+        if (w_cseg)
+            os88_mem_movable(w_cseg, 1);
+        if (w_cmseg && !w_cworker)
+            os88_mem_movable(w_cmseg, 1);
+    }
     return 1;
 }
 
@@ -631,4 +647,31 @@ static void w_reload(void *win)
         return;
     }
     w_find_open(win);
+}
+
+/* ============================================================================
+ * THE RELOCATION PROC (WEAVE-SPEC 1.2.6, SPEC.md 66.2)
+ *
+ * The compactor moved a claim from `was` to `now`, or moved our REGION
+ * (CC_ONMOVE_REGION). Every word that names a base is put right HERE, once,
+ * so no dispatch loop, composer or band ever re-reads anything: the C's own
+ * statics and the cores' copies (w_asmmoved's table), the canvas core's row
+ * and vector, and the two words the core banked in its state block at
+ * WSMV_BIND. Assignments only - SPEC.md 66.3 rule 3: no claim, no draw, no
+ * file, no yield, and w_w/w_pw/wcv_bindmod/w_partmv are stores.
+ * ==========================================================================*/
+void os88_onmove(unsigned was, unsigned now)
+{
+    if (w_cmseg == was) {               /* the canvas core itself */
+        w_cmseg = now;
+        w_partmv(W_WSMPART, now);
+        wcv_bindmod(now);
+    }
+    w_asmmoved(was, now);               /* ...and every other word: w_seg,
+                                         * w_vmseg, w_gseg and w_cseg in its
+                                         * table with the cores' copies, then
+                                         * the core's WSS_CVSEG and WSS_BSEG
+                                         * through the w_cmseg just put right
+                                         * - a byte-cheap loop instead of a
+                                         * dozen C compares */
 }

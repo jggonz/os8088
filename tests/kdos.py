@@ -137,8 +137,9 @@ def main():
         if want not in syms:
             fail("nasm's map has no `%s`" % want)
     with M.launch(DISK_A, apps=DISK_B, machine="os8088_5150_cga_gla",
-                  boot=2) as m:
-        seen = {"text": ""}
+                  boot=False) as m:
+        m.run()                         # (was boot=2: a blind 2 s pace -
+        seen = {"text": ""}             # the wait below IS the gate)
 
         def said(_):
             rows = m.screen() or []
@@ -151,7 +152,7 @@ def main():
             return ("restart" in text or "kern_dos: " in text
                     or "FAILED" in text)
         try:                            # a GUEST-time budget; a miss is
-            M.until(m, said, "kern_dos to report", poll=0.4,  # judged on
+            M.until(m, said, "kern_dos to report", poll=0.05,  # judged on
                     limit=120.0)                              # the text below
         except M.MartyError:
             pass

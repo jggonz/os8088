@@ -9,7 +9,6 @@ while keeping source and formatted text small. This isolates the line arena
 from NE2000 traffic and tests the same local-file path users have.
 """
 import os
-import subprocess
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +18,8 @@ import dispcp
 import os88build
 import os88qemu
 import os88sym
-from ethernet import Qemu, Mouse, settle, SOCK
+import os88fixture
+from ethernet import Qemu, Mouse, settle
 
 S = os88sym.linear
 PAGE = "LINARENA.HTM"
@@ -30,12 +30,13 @@ WIDE_LINK = b"HIGH-OFFSET-LINK"
 
 
 def main():
-    os88qemu.own()
-    os88qemu.kill()
-    subprocess.run(["make", "browsertest"], check=True)
-    subprocess.run(["make", "test", "TESTAPPS=build/brtest360.img"],
-                   check=True)
-    m = Qemu(SOCK)
+    # NOTHING SHARED (docs/plans/SOAK-PARALLEL.md 17): brtest360.img is this
+    # row's `wants=`, and every machine below is private (os88qemu.make_test:
+    # its own socket and pidfile, a copy of each floppy) - where this was
+    # `make browsertest` and `make test` on build/qmp.sock
+    os88fixture.need("build/brtest360.img")
+    os88qemu.make_test("TESTAPPS=build/brtest360.img")
+    m = Qemu()
     try:
         os88qemu.acted(m, lambda: os88qemu.ui_idle(m, S), secs=30,
                        what="desktop UI idle")
@@ -55,7 +56,7 @@ def main():
         image = os.path.getsize(os88build.at("build/browser.bin"))
 
         def symbol(name):
-            with open("build/browser.map", encoding="ascii") as f:
+            with open(os88build.at("build/browser.map"), encoding="ascii") as f:
                 for line in f:
                     fields = line.split()
                     if len(fields) >= 3 and fields[-1] == name:
@@ -116,9 +117,8 @@ def main():
         # spans at the renderer boundary rather than only inspecting storage.
         m.quit()
         os88qemu.kill()
-        subprocess.run(["make", "test", "TESTAPPS=build/brtest360.img"],
-                       check=True)
-        m = Qemu(SOCK)
+        os88qemu.make_test("TESTAPPS=build/brtest360.img")
+        m = Qemu()
         os88qemu.acted(m, lambda: os88qemu.ui_idle(m, S), secs=30,
                        what="desktop UI idle for wide-document fixture")
         mo = Mouse()
@@ -264,9 +264,8 @@ def main():
         # proves br_submit remaps its retained-source attribute tag.
         m.quit()
         os88qemu.kill()
-        subprocess.run(["make", "test", "TESTAPPS=build/brtest360.img"],
-                       check=True)
-        m = Qemu(SOCK)
+        os88qemu.make_test("TESTAPPS=build/brtest360.img")
+        m = Qemu()
         os88qemu.acted(m, lambda: os88qemu.ui_idle(m, S), secs=30,
                        what="desktop UI idle for high-offset submit fixture")
         mo = Mouse()
@@ -325,9 +324,8 @@ def main():
         # cursor, remapped writer and 10-byte line spans on a real local page.
         m.quit()
         os88qemu.kill()
-        subprocess.run(["make", "test", "TESTAPPS=build/brtest360.img"],
-                       check=True)
-        m = Qemu(SOCK)
+        os88qemu.make_test("TESTAPPS=build/brtest360.img")
+        m = Qemu()
         os88qemu.acted(m, lambda: os88qemu.ui_idle(m, S), secs=30,
                        what="desktop UI idle for table fixture")
         mo = Mouse()

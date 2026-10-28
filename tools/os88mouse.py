@@ -70,6 +70,7 @@ units the kernel compares, so the check is the kernel's rather than a guess
 about host timing. Too slow, or an edge that never arrived, RAISES.
 """
 import argparse
+import contextlib
 import os
 import sys
 import time
@@ -88,7 +89,14 @@ TAG_MOUSE = 0x4F4D              # 'MO'
 STEP = 100
 # 1200 baud, 3 bytes: ~25 ms of guest time. Below this the server blocks and
 # the client times out, which reads exactly like a hung emulator.
-GAP = 0.12
+#
+# IT IS A pace() ARGUMENT, so it is IDLE-BOX HOST SECONDS and costs GAP x
+# GUEST_PACE of the guest's time: 0.12 was 0.54 guest seconds a packet, twenty
+# times the 25 ms the UART needs, and `to` then proves arrival with `_landed`
+# anyway. 0.012 is 54 ms - two packet times. Measured on an idle CGA desktop,
+# six moves cost 5.32 guest seconds at 0.12 and 1.15 here, every one arriving
+# exactly (docs/plans/completed/SOAK-SPEED.md, harness changes).
+GAP = 0.012
 # WHAT ONE PACKET IS ALLOWED, in GUEST seconds. `to` used to sleep a fixed
 # 0.25 HOST seconds after each one - about 0.9 guest seconds on an idle box
 # here and 0.25 on a full one, so the same click bought the machine four times
@@ -97,6 +105,10 @@ GAP = 0.12
 # milliseconds; this is only the deadline, and reaching it means the packet
 # was dropped - which `to`'s loop handles by sending another.
 PKT_GUEST = 1.0
+# WHAT A DRAG'S PRESS IS GIVEN to be taken before the pointer moves, in GUEST
+# seconds (_press_drag_release): the raise a press on a background window
+# starts. It ends early on ui_done, so a quiet desktop pays ~a tick.
+PRESS_GUEST = 3.0
 BUSY = 6.0                      # ...and how long a repaint may hold the guest
                                 # before `to` gives up on it - GUEST seconds
                                 # now, for the same reason. A window
@@ -184,7 +196,7 @@ def _ui_wait(m, dflt, why):
 
     A guest that is not executing ends it at once, as `pace` does - the
     caller armed a breakpoint or paused the machine, and nothing more will
-    happen until it acts. A kernel whose map cannot be read here (a DOS box,
+    happen until it acts. A kernel whose map cannot be read here (kern_dos,
     a private build this process cannot resolve) takes the old pause, and so
     does every call under OS88_SETTLE_UI=0, the A/B for both halves."""
     if os88marty.GUEST_PACE <= 0 or m is None or not os88marty.SETTLE_UI:
@@ -491,11 +503,27 @@ class Mouse:
         while self.ticks() - self._last_edge <= DBL_TICKS:
             time.sleep(0.01)
 
-    def _edge(self, down, tries=60, resend=20, btn=1):
+    # WHAT ONE BUTTON EDGE IS GIVEN, in GUEST seconds, and how far apart its
+    # re-sends are. Both were HOST quantities - 60 polls of `where()` plus a
+    # 20 ms sleep, with a re-send every 20 polls - so the same edge bought the
+    # guest ~6 seconds and three packets spread across them on an idle box,
+    # and on a loaded one three packets bunched into a guest second or less.
+    # What drops a packet is the GUEST not reading the 8250 in time (no FIFO:
+    # a byte arriving before the last is read overruns it), and that is a
+    # property of what the guest is doing - RealDMG's core runs with
+    # interrupts off a budget at a time - so it is the guest's clock that has
+    # to spread the attempts. rdgmove's `ui.close(calc)` lost its press in a
+    # four-lane soak and passed alone. The re-send spacing is ten packet
+    # times, so a re-send is never queued on top of one still being clocked
+    # out; a press that lands first time costs exactly what it did.
+    EDGE_GUEST = BUSY
+    EDGE_RESEND = 0.25
+
+    def _edge(self, down, tries=None, resend=None, btn=1):
         """One button edge, PROVEN: send the packet, then wait until the
         published mouse_btn agrees. A packet clocked into the UART while the
-        previous one is still in flight is simply dropped, and the only
-        difference a caller can see is that the guest did nothing.
+        guest is not servicing it is simply lost, and the only difference a
+        caller can see is that the guest did nothing.
 
         AND A DROPPED PACKET IS RE-SENT RATHER THAN WAITED FOR, which is what
         the paragraph above asks for and this routine did not do: it sent once
@@ -509,25 +537,42 @@ class Mouse:
         a retry - and the loop still requires the guest's own published
         mouse_btn to agree before it returns, so a re-send cannot turn a
         genuinely stuck button into a pass.
+
+        BOTH THE BUDGET AND THE RE-SEND SPACING ARE GUEST TIME (EDGE_GUEST,
+        EDGE_RESEND above): `tries` is the budget in units of the old 20 ms
+        poll's worth of an idle box and `resend` is ignored - kept so a caller
+        that names them still runs.
         """
         want = btn if down else 0
+        budget = self.EDGE_GUEST if tries is None else tries * 0.1
         seen = []
-        for i in range(tries):
-            if i % resend == 0:
+        c0 = sent = None
+        i = 0
+        while True:
+            c = int(self.m.status().get("cycles", 0))
+            if c0 is None:
+                c0 = c
+            if sent is None or (c - sent) / os88marty.GUEST_HZ >= self.EDGE_RESEND:
                 self.m.mouse(0, 0, l=down and btn == 1, r=down and btn == 2)
+                sent = c
             if (self.where()[2] & btn) == want:
                 self._last_edge = self.ticks()   # ...for _sep above
                 return
+            if (c - c0) / os88marty.GUEST_HZ >= budget:
+                break
             # ...and the raise below blames the UART, which is the wrong
             # answer for a guest that is not executing at all.
             if i % 4 == 3:
                 _alive(self.m, seen, "the button edge to be decoded")
+            i += 1
             time.sleep(0.02)
         raise MartyError(
-            "the %s %s was never decoded (mouse_btn = %02x). The 1200-baud "
-            "UART drops a packet sent while the previous one is in flight."
+            "the %s %s was never decoded across %.1f GUEST seconds with the "
+            "packet re-sent every %.2f (mouse_btn = %02x) - the guest is "
+            "running, so it is not servicing the 1200-baud UART at all."
             % ("right" if btn == 2 else "left",
-               "press" if down else "release", self.where()[2]))
+               "press" if down else "release", budget, self.EDGE_RESEND,
+               self.where()[2]))
 
     # A DOUBLE-CLICK'S TWO PRESSES ARE SPACED IN GUEST CYCLES, NOT HOST ROUND
     # TRIPS. `_edge` proves an edge by polling the guest while it runs freely,
@@ -547,24 +592,42 @@ class Mouse:
                                     # a packet still in flight (see `_edge`)
     DBL_TRIES = 240                 # ~1 guest second an edge before it is lost
 
-    def _gedge(self, down, btn=1):
+    @staticmethod
+    def _service(traces, st):
+        """Hand a breakpoint stop met while stepping to the bp_trace that
+        armed it (the one that knows the address, else the innermost) - the
+        record its pump would have made had it been allowed to run."""
+        flat = ((st.get("cs", 0) << 4) + st.get("ip", 0)) & 0xFFFFF
+        own = [t for t in traces if flat in t._by_addr] or traces[-1:]
+        own[0].service(st)
+
+    def _gedge(self, down, btn=1, traces=()):
         """`_edge`, with the guest PAUSED and advanced by cycles between polls.
 
         The same proof - the published mouse_btn agrees - and the same
         idempotent re-send, but no guest time passes that the loop did not
-        hand out itself.
+        hand out itself. Inside bp_trace blocks (`traces`, held - see
+        dblclick) a breakpoint stop is recorded for its trace and stepped
+        past; outside one it is a mistake and raises. The budget is CYCLES,
+        so a stop that cuts an advance short does not spend a whole try.
         """
         want = btn if down else 0
-        for i in range(self.DBL_TRIES):
-            if i % self.DBL_RESEND == 0:
+        spent, since = 0, None
+        while spent < self.DBL_TRIES * self.DBL_STEP:
+            if since is None or since >= self.DBL_RESEND * self.DBL_STEP:
                 self.m.mouse(0, 0, l=down and btn == 1, r=down and btn == 2)
+                since = 0
             st = self.m.advance(cycles=self.DBL_STEP)
+            n = int(st.get("advanced_cycles", self.DBL_STEP))
+            spent, since = spent + n, since + n
             if st.get("state") == "breakpoint":
-                raise MartyError(
-                    "a breakpoint stopped the guest inside a double-click at "
-                    "%04X:%04X - arm it inside a bp_trace block, whose pump "
-                    "services it, or after the gesture"
-                    % (st.get("cs", 0), st.get("ip", 0)))
+                if not traces:
+                    raise MartyError(
+                        "a breakpoint stopped the guest inside a double-click "
+                        "at %04X:%04X - arm it inside a bp_trace block, whose "
+                        "stops the gesture records, or after the gesture"
+                        % (st.get("cs", 0), st.get("ip", 0)))
+                self._service(traces, st)
             if (self.where()[2] & btn) == want:
                 self._last_edge = self.ticks()
                 return
@@ -619,28 +682,37 @@ class Mouse:
         self._sep()                     # ...the FIRST press is separated from
                                         # whatever came before; the second is
                                         # deliberately not (see _sep)
-        if getattr(self.m, "_pumping", 0):
-            # A bp_trace pump resumes breakpoint stops from its own thread,
-            # and a paused guest would take its stops away from it. Inside a
-            # pump the edges run free, as they always did.
-            self._edge(True)
-            t1 = self.ticks()
-            self._edge(False)
-            self._edge(True)
-            t2 = self.ticks()
-            self._edge(False)
-        else:
-            was = self.m.status().get("state")
-            self.m.pause()
+        # INSIDE A bp_trace BLOCK THE PRESSES ARE STEPPED TOO. They used to
+        # run free there, because the block's pump resumes breakpoint stops
+        # from its own thread and a paused guest would have taken its stops
+        # away from it - which left the span between the presses a quantity
+        # of the BOX again: one more status round trip per poll (212b6e42)
+        # moved int0sweep's spans from a mode of 3 ticks to 4-5 with a tail at
+        # 8, and int0sweep and assocsweep then read 9 and failed on a loaded
+        # box. So the gesture HOLDS each pump (BpTrace.hold) for its few
+        # dozen advances and records any stop it meets itself.
+        traces = list(getattr(self.m, "_traces", ()))
+        with contextlib.ExitStack() as held:
+            for tr in traces:
+                held.enter_context(tr.hold())
+            st = self.m.status()
+            was = st.get("state")
+            if was == "breakpoint" and traces:
+                # a stop no pump has seen yet (a pass records AND resumes
+                # under the lock it is held by): record it, and the first
+                # advance steps past it, as the pump's `run` would have
+                self._service(traces, st)
+            else:
+                self.m.pause()
             try:
-                self._gedge(True)
+                self._gedge(True, traces=traces)
                 t1 = self.ticks()
-                self._gedge(False)
-                self._gedge(True)
+                self._gedge(False, traces=traces)
+                self._gedge(True, traces=traces)
                 t2 = self.ticks()
-                self._gedge(False)
+                self._gedge(False, traces=traces)
             finally:
-                if was == "running":
+                if was == "running" or traces:
                     self.m.go()
         span = (t2 - t1) & 0xFFFFFFFF
         if span >= DBL_TICKS:
@@ -721,6 +793,14 @@ class Mouse:
             self._edge(False, btn=btn)
         self._sep()                     # a drag OPENS with a press, and two
         self._edge(True, btn=btn)       # of them in a row are a double-click
+        # ...AND THE PRESS IS TAKEN before the pointer moves. A press on a
+        # BACKGROUND window raises it first, which is a repaint of seconds on
+        # a 4.77MHz 8088; a move-and-release sent into it arrives as a click
+        # and the window stays put (dispsave's back window, once GAP stopped
+        # being half a guest second a packet). Bounded: a drag loop that
+        # never lets ui_task sleep costs PRESS_GUEST and no more.
+        os88marty.ui_done(self.m, "the press to be taken", cap=PRESS_GUEST,
+                          lock=False)
         self.to(x1, y1, l=btn == 1, r=btn == 2)
         self._edge(False, btn=btn)
         _wait(self.m, settle, "drag/menu", dflt)

@@ -124,33 +124,15 @@ ap_onclick:                        ; CX = x, DX = y (SCREEN); SI = window
     mov byte [ap_abon], 0          ; a click anywhere dismisses the About card
     jmp .rep
 .noab:
-    call ap_reap
-    push cx
-    push dx
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; AX = left, DX = top
-    mov [apu_ox], ax
-    mov [apu_oy], dx
-    pop dx
-    pop cx
-    call apu_layout
-    call apu_baim                   ; the rects the press is about to be tested
-                                    ; against, from the origin just read
-                                    ; machine is doing, so a mis-aimed press
-                                    ; must be cancellable. ap_onup has the
-                                    ; action
-    or ax, ax
-    jnz .out                        ; **ARMED, DRAWN DOWN, AND THAT IS ALL.**
-                                    ; The blanket apu_repaint below used to run
-                                    ; on EVERY click - it was how the old press
-                                    ; path put the transport back - and it
-                                    ; repaints the whole window, which is
-                                    ; PERFORMANCE.md's rule 1 with a full
-                                    ; redraw behind it. os88ui_btnpress draws
-                                    ; the ONE button that changed
-    sub cx, [apu_ox]                ; CX/DX are SCREEN until here, because the
-    sub dx, [apu_oy]                ; record's rects are; everything below
-                                    ; wants them content-relative
+    call ap_reap                    ; **AND NOTHING ELSE.** This is reached
+    jmp short .out                  ; only for a press the library MISSED
+                                    ; (SPEC.md 20.5.1.3.3), and apu_place laid
+                                    ; the transport out from where the window
+                                    ; IS before it tested (20.5.1.3.5). The
+                                    ; re-layout that sat here ran too late for
+                                    ; the buttons, and the blanket apu_repaint
+                                    ; a miss used to earn is PERFORMANCE.md's
+                                    ; rule 1 with a full redraw behind it
 .rep:
     call apu_repaint
 .out:

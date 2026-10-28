@@ -101,8 +101,7 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        slot, seg, base = open_game(m)
+        slot, seg, base = open_game(m)      # (its `up` is the boot gate)
         r = Bss(m, seg, base)
         mp = dispapps._map("skies")
         # HOW MANY, off the guest's own layout: cs_apnames is one WORD per

@@ -2,11 +2,11 @@
 ; rdgjitp.asm - RealDMG's recompiler as a PART of REALDMG.O88 (REALDMG-SPEC
 ; 16.9): rdgjit.inc's code and its templates, assembled on their own at org 0
 ; and read by the package into the tail of the recompiler's own claim
-; (rw_jitpart) - so an 8088, which never translates, never holds them, and a
-; 286 holds them only while it has a cache.
+; (rw_jitpart) - so a machine holds them only while it has a cache.
 ;
-; The package far-calls the four entries below, DS = the view. Inside, CS is
-; this part's segment, which is all rdgjit.inc's `[cs:rt_tab + ...]` needs.
+; The package far-calls the four entries below (five in kern_mega's arm), DS
+; = the view. Inside, CS is this part's segment, which is all rdgjit.inc's
+; `[cs:rt_tab + ...]` needs.
 ; The core reaches rdg_jit through [S_JITVEC], which rt_init points here; and
 ; rdg_jit leaves through this file's own rdg_ret, rdgsys.inc's, reading the view
 ; from this file's own word. The bare harness (tests/rdgcore/rdghost.asm) still
@@ -17,6 +17,8 @@ bits 16
 org 0
 
 %include "rdgdefs.inc"
+%define RDG_CSEL                        ; (the code selectors' pairs: rt_d2c,
+                                        ;   REALDMG-SPEC 16.2.4)
 
 ; --- the entries: far, each `call` and `retf` (offsets fixed: RWJ_* in
 ; realdmg.asm) --------------------------------------------------------------
@@ -36,6 +38,12 @@ pt_preload:                             ; 20: rt_preload, AX = the count
 pt_dispatch:                            ; 30: rt_dispatch, AL as its
     call rt_dispatch
     retf
+%ifdef RDG_XTIER                        ; (kern_mega's arm, -DRDG_XTIER: the
+    times 40-($-$$) nop                 ;   extra tiers, REALDMG-SPEC 16.2.5)
+pt_more:                                ; 40: rt_more, AX and DX as its
+    call rt_more
+    retf
+%endif
 
 rdg_viewseg  dw 0                        ; the view, for RDG_TOHOST and rdg_ret
 

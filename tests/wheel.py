@@ -134,7 +134,9 @@ def main():
     say = (lambda s: None) if a.quiet else (lambda s: print("   ", s, flush=True))
     bad = []
     with os88ui.boot(IMG, apps=APPS, machine=a.machine,
-                     verbose=not a.quiet) as ui:
+                     verbose=not a.quiet,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         for name, leg in (("D", leg_d), ("N", leg_n)):
             why = leg(ui, say)
             if why:

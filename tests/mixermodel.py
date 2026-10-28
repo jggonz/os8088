@@ -107,8 +107,17 @@ class Driver:
 
     def put(self,name,data): self.mu.mem_write(BASE+self.s[name],data)
     def read(self,name,n=1): return bytes(self.mu.mem_read(BASE+self.s[name],n))
+    # The three package verbs go in through snd_pkg, the door the kernel and
+    # Mixer use: the no-mixer refusal is ITS (SPEC.md 34.15.1), because with
+    # no mixer the verb bodies themselves may have left the claim. BX is the
+    # verb and BP the table index, which OSAPI_DRV_CALL banks for it.
+    VERBS={'mix_info':7,'mix_get':8,'mix_set':9}
+
     def call(self,name,**kw):
         mu=self.mu
+        verb=self.VERBS.get(name)
+        if verb is not None:
+            name='snd_pkg'; kw=dict(kw,bx=verb)
         for r in (UC_X86_REG_CS,UC_X86_REG_DS): mu.reg_write(r,SEG)
         mu.reg_write(UC_X86_REG_ES,0x60)
         mu.reg_write(UC_X86_REG_SS,STACK)
@@ -121,7 +130,7 @@ class Driver:
         assert mu.reg_read(UC_X86_REG_EFLAGS)&0x200, f'{name}: IF not restored'
         out={k:mu.reg_read(r) for k,r in REGS.items()}
         out['cf']=mu.reg_read(UC_X86_REG_EFLAGS)&1
-        for k in ('si','di','bp'):
+        for k in ('si','di') if verb is not None else ('si','di','bp'):
             assert out[k]==kw.get(k,0x7575),f'{name} clobbers {k}'
         return out
 

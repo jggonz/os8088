@@ -60,7 +60,10 @@ def state(m, br):
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()                             # the boot gate on state: the first
+    os88marty.kernel_up(m)              # act is a verb that confirms
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     w = dispcp.win_list(m, S)

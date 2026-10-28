@@ -2479,7 +2479,7 @@ overlays = [
 
 # ...and with an ADLIB and no Sound Blaster. An OPL2 at 388h and no DSP
 # anywhere, which is the configuration SPEC.md 51.11.2.1 is about: the driver
-# ATTACHES here, so it is still mounted when the DOS box suspends it and is
+# ATTACHES here, so it is still mounted when DOS suspends it and is
 # still asked DRVV_HWINFO - where the speaker machine's sound driver is never
 # loaded at all. The two reach the same empty environment by different routes,
 # which is why both exist rather than just the speaker one.

@@ -388,6 +388,9 @@ br_entry:
     mov ax, br_onwake               ; SPEC.md 54.10: the kernel calls this once
     call OSAPI_WM_ONWAKE            ; our window is on the glass, and the launch
                                     ; document loads in front of it
+    mov ax, br_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls the
+    call OSAPI_WM_ONWHEEL           ; page. Flags preserved, so wm_create's CF
+                                    ; still rides out; a no-op on kern_small
     call br_arg                     ; launched ON a document? then BANK it -
                                     ; br_onwake above is what opens it
                                     ; WF_SNAP is the DEFAULT now (SPEC.md
@@ -1882,6 +1885,39 @@ br_scroll_by:
 .out:
     ret
 
+; -----------------------------------------------------------------------------
+; br_onwheel - W_ONWH (SPEC.md 13.18)
+; in:  AX = signed notches (positive = toward the user = the view moves DOWN),
+;      SI = window ptr; gfx lock held. Preserves every register
+;
+; WHEEL_STEPS LINES A NOTCH - a line here is br_top's own unit, one 8px text
+; line - and the move is br_scroll_by's two halves without its br_coalesce.
+; That skip exists for a BURST of queued events, and the kernel has already
+; summed every notch since the last UI pass into this ONE call (SPEC.md 10.4),
+; so the burst is gone before we see it; asking OSAPI_EVQ_PENDING here would
+; only skip the draw on some unrelated queued click, and with no further
+; scroll behind it to draw it, the page would stand stale (SPEC.md 13.4's
+; trap). br_flush draws nothing at an end stop, so a wheel past the top or
+; the bottom paints nothing. The About card comes down first and swallows the
+; turn, as it does a key: a blit under it would smear the card.
+; -----------------------------------------------------------------------------
+br_onwheel:
+    call br_abdismiss
+    jc .out
+    push ax
+    push dx
+    mov dx, WHEEL_STEPS
+    imul dx                         ; AX = lines, signed (DX = its sign)
+    call br_measure                 ; the live box: a dragged window is
+                                    ; replayed, not painted (SPEC.md
+                                    ; 11.96.12.0), and br_flush draws from it
+    call br_advance                 ; [br_top] moved and clamped...
+    call br_flush                   ; ...and the glass made to agree, once
+    pop dx
+    pop ax
+.out:
+    ret
+
 %ifdef OS88UI_SBDRAG
 br_nodrag:  db 0                    ; 0xFF = this kernel has no tracking edge
                                     ; (SPEC.md 13.8.2/13.10.7.1)
@@ -2465,6 +2501,12 @@ br_onkey:
     pop ax                          ; POP preserves CF from br_abdismiss
     jc .out                         ; and is swallowed, so a reader cannot type
                                     ; into a bar they cannot see
+    call br_measure                 ; THE LIVE CONTENT BOX before anything is
+                                    ; drawn: a window dragged by its title is
+                                    ; replayed and never painted (SPEC.md
+                                    ; 11.96.12.0), so the bar's rect and the
+                                    ; strip's from the last pass name where
+                                    ; it WAS. Every register kept
     cmp ah, KSC_TAB                 ; Tab belongs to the window-wide focus ring,
     jne .location                  ; including while the address field is active
     call br_tabnext
@@ -3426,7 +3468,16 @@ br_inrect:
 ; pass by br_btn1, from the very predicate that decides the refusal.
 br_btlbl: dw br_s_back, br_s_fwd, br_s_rel
 br_btflg: dw OS88UI_FILL, OS88UI_FILL, OS88UI_FILL
-    OS88UI_BTNREC br_btrec, br_r1, br_btlbl, br_btflg, 3
+    OS88UI_BTNREC br_btrec, br_r1, br_btlbl, br_btflg, 3, br_measure
+                                    ; ...and br_measure is its PLACE proc
+                                    ; (SPEC.md 20.5.1.3.5): a window dragged
+                                    ; by its title is replayed and never
+                                    ; painted, so br_r1..br_r3 are laid out
+                                    ; again from the live content box before
+                                    ; each hit test. It draws nothing - a
+                                    ; width change relays the LINE TABLE and
+                                    ; clamps the view, both data - and keeps
+                                    ; every register but the flags
 
 br_btn1:
     push bx
@@ -5129,9 +5180,10 @@ br_srcclaim:
     call br_memroom
     jc .out
     mov [br_srckb], ax
-    call OSAPI_MEM_CLAIM
+    call br_claim
     jc .out
     mov [br_srcseg], dx
+    jmp br_movable                  ; ...AND IT MOVES (NO-PINNING A3)
 .out:
     ret
 
@@ -5160,7 +5212,7 @@ br_srcgrow:
     mov ax, bx
     add ax, [br_srckb]
     mov dx, [br_srcseg]
-    call OSAPI_MEM_REGROW
+    call br_regrow
     jc .spill
     mov [br_srcseg], dx
     mov [br_srckb], ax
@@ -5356,6 +5408,145 @@ br_srcems_ensure:
     ret
 
 ; -----------------------------------------------------------------------------
+; br_movable - declare the claim at DX movable (NO-PINNING A3, SPEC.md 71.14.1)
+; in:  DX = one of the page claims (or the download buffer), just stored in
+;      its word
+; out: CF = 0. AX, DX and the other registers preserved.
+;
+; EVERY PAGE CLAIM MOVES - the source, the document, the line table, the link
+; arena and the Download Manager's buffer - and br_reloc is the whole of it,
+; because each is named by ONE word and nothing else holds its segment between
+; two uses:
+;   * the UI task loads ES from the word for one parse, one layout or one band.
+;     Browser 1.6 (SPEC.md 71.18) GROWS these claims mid-parse - br_linkensure
+;     claims the arena under a parse holding the source window in ES,
+;     br_docensure and the line table re-grow under a layout - so every claim
+;     and re-grow on this task goes through br_claim/br_regrow, which PIN the
+;     lot for the call (bucket C) and let them move again after: a segment
+;     held across it cannot have gone anywhere. A file call whose ES:BX is one
+;     of them is pinned round the same way (br_srcpin, br_pagepin);
+;   * the WORKER (br_take, br_finish's parse, br_dl_step) loads ES from the
+;     word each pass and claims nothing (SPEC.md 71.18), and a running worker
+;     pins every claim of ours (inst_seg_parked). It parks only inside
+;     OSAPI_TASK_ALIVE at the top of br_worker, where br_nstep has returned and
+;     holds nothing - no OSAPI_MEM_PARKSAFE; a yield inside a layout slice is
+;     not a park;
+;   * NO SOCKET BUFFER IS ONE OF THESE (SPEC.md 72): every NETV_* verb is given
+;     br_rxb/br_reqb in our own segment, and br_take copies out of br_rxb;
+;   * an EMS-backed store is a FRAME, not a claim: [br_emsseg] is the page
+;     frame and nothing here moves it.
+; -----------------------------------------------------------------------------
+br_movable:
+    push ax
+    mov ax, br_reloc
+    call OSAPI_MEM_MOVABLE
+    pop ax
+    clc
+    ret
+
+; br_reloc - a page claim moved (SPEC.md 66.2): BX = where it was, DX = where
+; it is now. Every word that can name one is tested - three in a row, the
+; link arena and the download buffer.
+br_reloc:
+    mov si, br_srcseg
+    call .one
+    call .one
+    call .one
+    mov si, br_lnkseg
+    call .one
+    mov si, br_dl_bufseg
+.one:
+    cmp [si], bx
+    jne .n
+    mov [si], dx
+.n:
+    inc si
+    inc si
+    ret
+
+; br_pagepin - AX = 0 PINS every claim br_reloc names, AX = br_reloc lets them
+; move again (br_pageunpin is that second half). Bucket C: the stretch of one
+; call that can claim while a segment of ours is held. A word that is 0 names
+; no claim and is skipped. Preserves every register and the flags.
+br_pageunpin:
+    push ax
+    mov ax, br_reloc
+    call br_pagepin
+    pop ax
+    ret
+br_pagepin:
+    pushf
+    push cx
+    push dx
+    push si
+    push di
+    mov di, br_pinw
+    mov cx, BR_PINN
+.next:
+    mov si, [di]
+    mov dx, [si]
+    or dx, dx
+    jz .skip
+    call OSAPI_MEM_MOVABLE
+.skip:
+    inc di
+    inc di
+    loop .next
+    pop di
+    pop si
+    pop dx
+    pop cx
+    popf
+    ret
+br_pinw:    dw br_srcseg, br_docseg, br_lseg, br_lnkseg, br_dl_bufseg
+BR_PINN     equ ($ - br_pinw) / 2
+
+; br_claim / br_regrow - OSAPI_MEM_CLAIM and OSAPI_MEM_REGROW with every page
+; claim pinned for the call (br_movable's header): a claim may COMPACT first
+; (SPEC.md 66.4), and Browser 1.6 claims while a parse or a layout still
+; holds a segment it loaded. The same contracts as the slots - CLAIM: AX = KB,
+; out CF and DX; REGROW: DX = the claim, AX = KB, out CF and DX, and a claim
+; that MOVED has its word put right before the others are let go, so the
+; unpin declares the new base and not a freed one.
+br_claim:
+    push ax
+    xor ax, ax
+    call br_pagepin
+    pop ax
+    call OSAPI_MEM_CLAIM
+    jmp short br_pageunpin
+br_regrow:
+    push ax
+    xor ax, ax
+    call br_pagepin
+    pop ax
+    push bx
+    push si
+    mov bx, dx                      ; BX = where it was
+    call OSAPI_MEM_REGROW
+    jc .back
+    call br_reloc                   ; its word follows it (DX = where it is)
+    clc                             ; (br_reloc's compares leave CF anywhere)
+.back:
+    pop si
+    pop bx
+    jmp short br_pageunpin
+
+; br_srcpin - AX = 0 PINS the source claim, AX = br_reloc lets it move again.
+; Around a FILE_READ or FILE_WRITE whose ES:BX it is: the kernel holds that
+; pointer across claims of its own before its transfer pin applies (SPEC.md
+; 66.3 rule 5), so the claim is bucket C for the call. Preserves every
+; register and the flags.
+br_srcpin:
+    pushf
+    push dx
+    mov dx, [br_srcseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; br_claimrest - the document, the line table and the link arena, sized from
 ; [br_srckb], for whichever load path is claiming
 ; out: CF=1 = the document or the line table was refused, and br_free_all has
@@ -5401,15 +5592,17 @@ br_claimpage:
     call br_memroom
     jc .fail
     mov ax, 1
-    call OSAPI_MEM_CLAIM
+    call br_claim
     jc .faildoc
     mov [br_docseg], dx
+    call br_movable                 ; ...AND IT MOVES (NO-PINNING A3)
     mov ax, 1                       ; likewise, reserve one line-table page
     call br_memroom
     jc .fail
-    call OSAPI_MEM_CLAIM
+    call br_claim
     jc .failline
     mov [br_lseg], dx
+    call br_movable                 ; (CF = 0)
     mov word [br_linecap], 1024
     mov word [br_linekb], 1
     clc
@@ -5466,7 +5659,7 @@ br_docensure:
     mov ax, bx
     add ax, [br_dockb]              ; target claim in KB
     mov dx, [br_docseg]
-    call OSAPI_MEM_REGROW
+    call br_regrow
     jc .expansion
     mov [br_docseg], dx
     mov [br_dockb], ax
@@ -5859,7 +6052,7 @@ br_lineensure:
     mov cl, 10
     shr ax, cl
     mov dx, [br_lseg]
-    call OSAPI_MEM_REGROW
+    call br_regrow
     jc .expansion
     mov [br_lseg], dx
     mov [br_linekb], ax
@@ -6060,15 +6253,16 @@ br_linkensure:
     cmp word [br_lnkseg], 0
     jne .grow
     push dx
-    call OSAPI_MEM_CLAIM
+    call br_claim
     jc .claimfail
     mov [br_lnkseg], dx
+    call br_movable                 ; the arena moves too (NO-PINNING A3)
     pop cx
     jmp short .size
 .grow:
     push dx
     mov dx, [br_lnkseg]
-    call OSAPI_MEM_REGROW
+    call br_regrow
     jc .growfail
     mov [br_lnkseg], dx
     pop cx
@@ -6136,7 +6330,7 @@ br_frameclaim:
     mov word [br_nlines], 0
     mov ax, 1                       ; next child grows its source as it arrives
     mov dx, [br_srcseg]
-    call OSAPI_MEM_REGROW           ; a GROW may move - fine, nothing holds
+    call br_regrow                   ; a GROW may move - fine, nothing holds
     jnc .grown                      ; the old base - or fail where it stands
 .regrowfail:
     mov si, br_srcseg
@@ -6291,8 +6485,12 @@ br_saved:
     xor bx, bx
     mov cx, [br_srclen]
     mov dx, [br_srclen_hi]          ; **DX:CX IS THE COUNT**, not a 16-bit
+    xor ax, ax
+    call br_srcpin                  ; pinned for the write (br_srcpin's header)
     call OSAPI_FILE_WRITE           ; 32-bit: a 16-bit one here writes whatever
-    jc .failed                      ; was in DX as the high word
+    mov ax, br_reloc                ; was in DX as the high word
+    call br_srcpin                  ; ...and free to move again, CF kept
+    jc .failed
     mov si, br_s_saved
     mov al, BN_DONE                 ; ...and it FINISHED, which is not the same
     jmp short .say                  ; as it failed
@@ -6590,7 +6788,14 @@ br_load:
     mov ax, 1024
     mul cx
     mov cx, ax                      ; capacity = what we actually claimed
+    xor ax, ax
+    call br_srcpin                  ; pinned for the read (br_srcpin's header);
+                                    ; DX:CX is mul's capacity, kept by it
     call OSAPI_FILE_READ
+    push ax
+    mov ax, br_reloc                ; ...and free to move again, CF kept. ES
+    call br_srcpin                  ; stays the source for br_parse below:
+    pop ax                          ; nothing between here and it claims
     jc .fail
     mov [br_srclen], ax             ; the file's REAL size, from the read
     mov [br_srclen_hi], dx
@@ -8676,7 +8881,8 @@ br_select:
 .selected:
     push si
     push di
-    xor ax, ax
+    push dx                         ; br_srcabs returns its high word in DX,
+    xor ax, ax                      ; which is the option's end below
     mov al, [br_fn]
     shl ax, 1
     shl ax, 1
@@ -8686,6 +8892,7 @@ br_select:
     call br_srcabs
     mov [di], ax
     mov [di+2], dx
+    pop dx
     pop di
     pop si
     push si
@@ -9595,7 +9802,7 @@ br_layout:
     cmp byte [br_docems], 0
     jne .return                      ; EMS pages stay owned until navigation
     mov dx, [br_docseg]
-    call OSAPI_MEM_REGROW           ; §50.3.1: shrinking succeeds in place
+    call br_regrow                   ; §50.3.1: shrinking succeeds in place
     mov [br_docseg], dx
     mov [br_dockb], ax
 .return:
@@ -13901,6 +14108,7 @@ br_s_bad:   db 'Cannot open page', 0
                                 ; so a package that draws no bar pays none of
                                 ; its bytes
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
+%define OS88UI_1BPP             ; OSAPI_SAVEU_1BPP: a greyed caption keeps its ink (SPEC.md 13.8.11)
 %include "os88ui.inc"           ; the standard button (SPEC.md 20.5.1)...
 %include "os88line.inc"         ; ...and the one-line field the bar is
 %include "br15.inc"              ; Browser 1.5 clipboard, context and bookmarks

@@ -58,7 +58,7 @@
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; CH_OVERLAY - the chart module goes in CHART.OVL rather than in this image.
+; CH_OVERLAY - the chart module goes in the chart module rather than in this image.
 ;
 ; THIS HAS TO BE THE FIRST LINE OF THE FILE AND IT IS NOT A STYLE POINT.
 ; NASM's preprocessor runs top to bottom in one pass, so every %ifdef below -
@@ -90,7 +90,7 @@
 ; its own header says so.
 ; =============================================================================
 
-%define CH_OVERLAY                  ; the chart module goes to CHART.OVL
+%define CH_OVERLAY                  ; the chart module goes to the chart module
 
 %include "os88api.inc"
 
@@ -107,9 +107,10 @@
 %define SH_SBRATE286 2              ; ...and on a 286 or better
 %endif
 
-    OS88_HEADER 'SHEET', sh_entry, 3   ; packs it, and an indirected one comes
-                                        ; bit 0 = icon, bit 1 = the
-                                        ; association block below
+    OS88_HEADER 'SHEET', sh_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_PARTS
+                                        ; the icon, the association block
+                                        ; below, and the two modules carried
+                                        ; INSIDE the file as parts (82.16.12)
 
 ; --- embedded 16x16 icon: a blank page with a 3x3 grid on it -------------------
     OS88_ICON16
@@ -892,12 +893,15 @@ SH_M_NONE    equ 0xFF
 ; directly - and SPEC.md 66.1 is the record of a design that failed on exactly
 ; that, "the pair that killed the word-poke design".
 ;
-; SH_STGSEG IS NOT IN THE TABLE AND IS NOT DECLARED. It is the ES:BX of every
-; one of this package's seven OSAPI_FILE_READ/WRITE calls (SPEC.md 66.9 reason
-; 4), and a file call claims, so a compaction inside one would move the buffer
-; out from under a transfer the kernel has already been given the address of.
-; SPEC.md 66.5.7.1's pin/unpin pair is what it would take; 67KB of the 99 move
-; without it.
+; SH_STGSEG IS IN THE TABLE SINCE NO-PINNING 1, and was the last of the six.
+; It is the ES:BX of every one of this package's OSAPI_FILE_READ/WRITE calls
+; (SPEC.md 66.9 reason 4), and a file call claims, so a compaction inside one
+; would move the buffer out from under a transfer the kernel has already been
+; given the address of. So it is pinned for exactly those calls and no longer:
+; sh_k_file_read/sh_k_file_write are the only doors to them and sh_stgpin's
+; pair brackets each (SPEC.md 66.5.7.1). Every other use holds its segment in
+; a register across no call that can claim (the CLIP_PUT is the kernel's to
+; pin, 66.3 rule 5), and os88chart.inc's borrowed copies are in this table.
 ;
 ; Everything else in this package is an OFFSET into one of these segments -
 ; a cell record, a formula's text, a note - so nothing else needs fixing.
@@ -928,10 +932,10 @@ sh_reloc:
     pop cx
     ret
 
-; The words that name a movable claim: cellseg, txtseg, bordseg, chartseg and
-; undoseg are the claims themselves, and ch_srcseg, ch_stgseg and ch_srcseg2
-; are os88chart.inc's borrowed copies, taken inside ch_bars_draw/ch_bmp_write
-; and dead between calls - they cost two bytes each and they close the one
+; The words that name a movable claim: cellseg, txtseg, bordseg, chartseg,
+; undoseg and stgseg are the claims themselves, and ch_srcseg, ch_stgseg and
+; ch_srcseg2 are os88chart.inc's borrowed copies (of chartseg and stgseg),
+; taken inside ch_bars_draw/ch_bmp_write and dead between calls - they cost two bytes each and they close the one
 ; window where a chart export could be holding a stale segment across the
 ; OSAPI_FILE_WRITE in the middle of it. The note table's segment is NOT here:
 ; it is derived from bordseg's carve, which sh_reloc recomputes after its
@@ -942,7 +946,8 @@ sh_segw:
     dw sh_chartseg
     dw ch_srcseg, ch_stgseg, ch_srcseg2
     dw sh_undoseg
-SH_NSEGW equ 8
+    dw sh_stgseg
+SH_NSEGW equ 9
 
 ; =============================================================================
 ; sh_entry - package entry point (SPEC.md 20.2). Claims run here, and only
@@ -976,6 +981,16 @@ SH_NSEGW equ 8
 %macro SHOUT 1
     call far [sh_v_%1]
 %endmacro
+; CHX - the body of each shim a vector names: a near call to
+; apps/os88chartovl.inc's ch_xthunk, and the routine's offset after it. The
+; thunk calls the routine and rebuilds the far return from the CALLING
+; MODULE's segment as it is now, so a module that moved under the routine
+; is returned into where it went (82.16.11). Defined here, above the shims;
+; the include defines it only for an includer that has not
+%macro CHX 1
+    call ch_xthunk
+    dw %1
+%endmacro
 ; 81.111: the button gesture's macros - the doors and the record of six dialog
 ; engines, which sh_btfix attaches from each engine's own open routine
 ; SH_BTDOORS eng, verb - the two gesture doors of a dialog's record: the
@@ -1004,25 +1019,44 @@ sh_%1_ondrag_r:
     pop bx
     ret
 %endmacro
-; SH_BTREC eng, n, labels - the record and its n rects
+; SH_BTREC eng, n, labels - the record and its n rects. Every one carries
+; sh_<eng>_place as its OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): a window dragged
+; by its title is REPLAYED and never painted (11.96.12.0), so rects the
+; overlay's painter laid out name where it WAS until the place proc moves them
 %macro SH_BTREC 3
-    OS88UI_BTNREC sh_%1_btrec, sh_%1_btrects, %3, sh_dlg_bflags, %2
+    OS88UI_BTNREC sh_%1_btrec, sh_%1_btrects, %3, sh_dlg_bflags, %2, sh_%1_place
 sh_%1_btrects: times 4 * %2 dw 0
 %endmacro
 ; SH_BTRECF eng, n, labels, flags - the same with a flags array of its own
 %macro SH_BTRECF 4
-    OS88UI_BTNREC sh_%1_btrec, sh_%1_btrects, %3, %4, %2
+    OS88UI_BTNREC sh_%1_btrec, sh_%1_btrects, %3, %4, %2, sh_%1_place
 sh_%1_btrects: times 4 * %2 dw 0
 %endmacro
-; CHOUT - MACRO.OVL's calls into CHART.OVL (81.94): a verb, through the far
-; pointer the resident half already keeps. BP carries it, as ch_ovcall's does
+; CHOUT - the macro module's calls into the chart module (81.94): a verb, BP carrying it as
+; ch_ovcall's does. THROUGH ch_ovcall, by a vector like any other call out,
+; and not `call far [ch_ovfar]` straight across (82.16.11): that left
+; the macro module's own CS on the stack for the chart module's retf, and either module may
+; move while the other runs. Routed, the stack holds a tag for the macro module and
+; the REGION's CS for the chart module - the region is pinned while a callback stands
 %macro CHOUT 1
     push bp
     mov bp, %1
-    call far [ch_ovfar]
+    SHOUT ch_ovcall
     pop bp
 %endmacro
-SHM2_PMACRO  equ 0                  ; MACRO.OVL's verbs: the macro functions,
+; SHK - a MODULE's call to a kernel slot that can CLAIM, and so compact: a
+; window created, shown or destroyed (raise caches, SPEC.md 11.96), any file
+; call (the sector cache, the FAT window, a mount). A direct `call OSAPI_*`
+; from module code leaves the module's CS for the kernel's retf; this goes
+; out through a vector and a resident stub (sh_k_*), so ch_xthunk holds a tag
+; instead (82.16.11). The slots a module calls DIRECTLY are the ones that
+; cannot reach mem_claim: drawing, the font, the colour, WM_CONTENT, VIDEO,
+; KEY_DOWN, WM_KEEPH, WM_ONWHEEL and MEM_AVAIL (which plans and moves
+; nothing). One byte SHORTER a site than the far call it replaces
+%macro SHK 1
+    SHOUT k_%1
+%endmacro
+SHM2_PMACRO  equ 0                  ; the macro module's verbs: the macro functions,
 SHM2_MRESUME equ 1                  ; and a run starting or carrying on
 SHM2_DPAINT  equ 2                  ; 81.96: DIALOG.BOX's window - its paint,
 SHM2_DKEY    equ 3                  ; its keys and its clicks, through the
@@ -1030,11 +1064,11 @@ SHM2_DCLICK  equ 4                  ; resident thunks (sh_dbx_*)
 SHM2_DFIRE   equ 5                  ; 81.111: the released button fires
 SHM2_N       equ 6
 SH_DBX_EDLEN equ 33                 ; 81.96: an edit box's text, with its NUL
-SH_M2KB      equ 28                 ; MACRO.OVL's claim, KB: the module and the
+SH_M2KB      equ 28                 ; the macro module's claim, KB: the module and the
                                      ; text files' tail (81.91.1)
 
   %define SH_MODSEC .modc
-  %define SH_MODSEC2 .modm           ; 81.94: MACRO.OVL, the macro language
+  %define SH_MODSEC2 .modm           ; 81.94: the macro module, the macro language
 %define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
 SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
 SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
@@ -1043,7 +1077,7 @@ SHM_FIN    equ 6                    ; 82.16.10: the financial family
 SHM_TEXT   equ 7                    ; 81.62: the text functions,
 SHM_TRANS  equ 8                    ; the logarithms and trigonometry,
 SHM_INFO   equ 9                    ; and ISBLANK...ERROR.TYPE
-SHM_IDAPPLY equ 10                 ; 81.94: MACRO.OVL's ways into this module:
+SHM_IDAPPLY equ 10                 ; 81.94: the macro module's ways into this module:
 SHM_BDAPPLY equ 11                 ; the one-line and Border dialogs' applies
 SHM_DATABASE equ 12                 ; 81.65: DAVERAGE...DVARP
 SHM_CELL   equ 13                   ; 81.66: CELL
@@ -1103,8 +1137,8 @@ SHM_BDBTN  equ 53                   ; ...and the Border dialog's (and
 SHM_FIND   equ 58                   ; Formula > Find, moved out for room
 SHM_TBLRUN equ 59                   ; 81.114.8: re-run every Data > Table
 SHM_TBLADJ equ 60                   ; 81.114.9: ...and shift their rectangles
-SHM_TBLCMD equ 61                   ; 81.114.11: TABLE() - MACRO.OVL's way to
-                                     ; the engine, which is CHART.OVL's
+SHM_TBLCMD equ 61                   ; 81.114.11: TABLE() - the macro module's way to
+                                     ; the engine, which is the chart module's
 SHM_DFDEL  equ 62                   ; 81.71.5.1: the Form's Delete alert's
 SHM_LWHEEL equ 63                   ; completion and the list's W_ONWH - two
                                      ; more addresses something else calls
@@ -1120,10 +1154,7 @@ SHM_N      equ 61                   ; a COUNT, not a max: sh_modc_ext does
 
 section .modc vstart=0 align=1
 sh_modc0:
-    jmp near ch_modc                ; NEAR, so the stamp is at a fixed +3
-sh_modc_stamp:                      ; THE BUILD STAMP ch_ovneed holds a read
-    dw sh_modc_end, os88_image_end  ; file to: this module's length and the
-                                    ; resident image's, crt0.asm's pair (73.14)
+    jmp near ch_modc                ; the dispatcher, at the part's offset 0
 
 ; ch_modc falls through to here for any verb past CHM_MAX (82.16.8).
 sh_modc_ext:
@@ -1214,7 +1245,7 @@ sh_m_pinfo:
     call shm_pinfo
     clc
     retf
-sh_m_idapply:                       ; 81.94: MACRO.OVL's ways in. The two
+sh_m_idapply:                       ; 81.94: the macro module's ways in. The two
     call sh_idlg_apply              ; applies say nothing in CF, and CLC is
     clc                             ; the module-presence answer as above;
     retf                            ; shm_mname and sh_read_rc ANSWER in CF,
@@ -1301,9 +1332,9 @@ sh_m_mfind:                         ; macro plan wave 0: AX = the id or 0xFF
     retf
 
 ; =============================================================================
-; MACRO.OVL (81.94): the macro language's own module, a second segment after
-; CHART.OVL in the same assembly. Its offset 0 is ITS dispatcher, the way
-; .modc's is CHART.OVL's, and the eight bytes after the jump are the mark
+; the macro module (81.94): the macro language's own module, a second segment after
+; the chart module in the same assembly. Its offset 0 is ITS dispatcher, the way
+; .modc's is the chart module's, and the eight bytes after the jump are the mark
 ; tools/os88ovl.py cuts the file at - so the boundary is IN the image and not
 ; in a second place to keep in step.
 ; =============================================================================
@@ -1311,8 +1342,6 @@ section .modm vstart=0 align=1 follows=.modc
 sh_modm0:
     jmp short sh_modm_disp
     db 'SHMACRO2'                     ; os88ovl.py's cut mark: exactly once
-sh_modm_stamp:                        ; ...and sh_m2need's build stamp, after
-    dw shm_m2end, os88_image_end      ; the mark so the cut is unaffected
 sh_modm_disp:
     cmp bp, SHM2_N
     jae .bad
@@ -1419,8 +1448,8 @@ sh_m_find:
     clc
     retf
 ; -----------------------------------------------------------------------------
-; sh_docmd_find - Formula > Find... (in CHART.OVL since 81.111, reached
-; from MACRO.OVL as SHM_FIND): move the selection to the next cell whose
+; sh_docmd_find - Formula > Find... (in the chart module since 81.111, reached
+; from the macro module as SHM_FIND): move the selection to the next cell whose
 ; DISPLAYED TEXT contains what was typed.
 ;
 ; Displayed text, not stored value, and that is the useful definition rather
@@ -1719,7 +1748,7 @@ sh_dowrite:
 ; cells hold STORED VALUES, so `inc word [sh_pass]` - this app's whole
 ; recalculation - does nothing for them; they have to be computed again.
 ;
-; CF IS NOT READ, and must not be: a machine with no room for CHART.OVL is a
+; CF IS NOT READ, and must not be: a machine with no room for the chart module is a
 ; machine that never opened the Data > Table dialog either, so there are no
 ; tables for this to miss (82.16.3 is the same argument for the chart).
 ; -----------------------------------------------------------------------------
@@ -1815,7 +1844,7 @@ sh_difbbox:
     ret
 
 ; sh_pfin - the financial family's door (82.16.10). The body is shm_pfin in
-; CHART.OVL; its contract is unchanged - AX the id, SI just past '(', the answer
+; the chart module; its contract is unchanged - AX the id, SI just past '(', the answer
 ; in sh_acc, SI past ')', AX 0, BX CX DX DI kept.
 ;
 ; THE ONE STUB HERE THAT HAS TO ANSWER A REFUSAL ITSELF. The other three hand
@@ -1844,7 +1873,7 @@ sh_pinfo:
     push bp
     mov bp, SHM_INFO
     jmp short sh_pdoor
-sh_pmacro:                          ; 81.63: the macro functions - MACRO.OVL's
+sh_pmacro:                          ; 81.63: the macro functions - the macro module's
     push bp                         ; since 81.94, through its own door
     mov bp, SHM2_PMACRO
     call sh_m2call
@@ -1884,13 +1913,17 @@ sh_pdoor:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_m2call - far-call MACRO.OVL (81.94). in: BP = its verb (SHM2_*), the rest
-; as the verb documents. out: as the verb; CF=1 the module is not there.
-; sh_m2need - make sure it is: CHART.OVL first, because the macro module calls
-; into it (CHOUT), then MACRO.OVL read into its own claim, from the folder
-; SHEET was launched from - ch_ovneed's recipe, and its banked folder words.
-; Taken at the entry proc with the other claims (SPEC.md 50.3); this lazy path
-; runs only if that one failed, and a failure is remembered, not retried
+; sh_m2call - far-call the macro module (81.94). in: BP = its verb (SHM2_*),
+; the rest as the verb documents. out: as the verb; CF=1 the module is not
+; there.
+; sh_m2need - make sure it is: the chart module first, because the macro
+; module calls into it (CHOUT), then the macro module fetched - part
+; SH_PART_MACRO of this file (82.16.12) - from the folder SHEET was launched
+; from: ch_ovneed's recipe, and its banked folder words. Taken at the entry
+; proc with the other claims (SPEC.md 50.3); this lazy path runs only if that
+; one failed, and a failure is remembered, not retried. Asked before it is
+; fetched (op_lazyok), for ch_ovneed's reason: a heap too small for it is
+; ordinary and is not toasted at every launch
 ; -----------------------------------------------------------------------------
 sh_m2call:
     call sh_m2need
@@ -1910,6 +1943,7 @@ sh_m2need:
     push cx
     push dx
     push si
+    push di
     push es
     call OSAPI_FILE_HERE                ; where the USER is, to be put back
     mov [ch_ovwas], dx
@@ -1917,28 +1951,24 @@ sh_m2need:
     mov dx, [ch_ovdir]                  ; ...and off to where we were launched
     mov bl, [ch_ovdrv]
     call OSAPI_FILE_GOTO
-    mov ax, SH_M2KB
-    call OSAPI_MEM_CLAIM
-    jc .nomem
-    mov es, dx
-    xor bx, bx
-    mov cx, SH_M2KB * 1024
-    push dx
-    xor dx, dx
-    mov si, sh_m2name
-    call OSAPI_FILE_READ
-    pop dx
-    jc .noread
-    mov ax, [es:SH_M2STAMP]             ; THIS build's module, or none: one
-    cmp ax, shm_m2end - sh_modm0        ; from another build reads our bss at
-    jne .noread                         ; stale offsets (sh_modm_stamp)
-    mov ax, [es:SH_M2STAMP + 2]
-    cmp ax, os88_image_end
-    jne .noread
-    mov word [sh_m2far], 0              ; the dispatcher is at the claim's 0
-    mov [sh_m2far + 2], dx
+    mov al, SH_PART_MACRO
+    call op_lazyok                      ; would it fit? (no toast)
+    jc .nofit
+    mov al, SH_PART_MACRO
+    call op_fetch                       ; claims, reads, expands (20.12.4)
+.nofit:
+    pushf
     call ch_ovback
+    popf
+    jc .nomod
+    mov al, SH_PART_MACRO
+    call op_seg                         ; AX = its claim's base
+    mov word [sh_m2far], 0              ; the dispatcher is at the part's 0
+    mov [sh_m2far + 2], ax
+    mov al, SH_PART_MACRO               ; READ: now it may move (82.16.11,
+    call op_movable                     ; ch_ovneed's rule)
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -1947,11 +1977,9 @@ sh_m2need:
 .ok:
     clc
     ret
-.noread:
-    call OSAPI_MEM_FREE                 ; DX is the claim: a half-loaded
-.nomem:                                 ; module is worse than none
-    call ch_ovback
+.nomod:
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -1962,8 +1990,18 @@ sh_m2need:
 .no:
     stc
     ret
-sh_m2name: db 'MACRO.OVL', 0
-SH_M2STAMP equ sh_modm_stamp - sh_modm0   ; the stamp's offset in the claim
+
+; -----------------------------------------------------------------------------
+; sh_rgnreloc - THE REGION MOVED (SPEC.md 66.6.1, NO-PINNING P1). BX = where it
+; was, DX = where it is; DS = CS = the new one. Every word the kernel holds for
+; it the kernel has already put right; what is ours is the CS stamped into the
+; two vector tables the modules far-call back through, so both binds run again.
+; Nothing else holds this segment between callbacks (the region is pinned
+; while one stands - SHEET has no worker).
+; -----------------------------------------------------------------------------
+sh_rgnreloc:
+    call sh_ovbind
+    jmp ch_ovbind
 
 ; -----------------------------------------------------------------------------
 ; sh_ovbind - fill the vector table: this package's shim offsets and its own
@@ -1995,469 +2033,442 @@ sh_ovbind:
     pop ax
     ret
 
-; Each shim is a near call to the real routine and then the FAR return the
-; module's `call far` is waiting for. Registers and flags pass through both
+; Each shim is CHX: apps/os88chartovl.inc's ch_xthunk calls the real routine
+; and then makes the FAR return the module's `call far` is waiting for -
+; through that module's segment AS IT IS NOW, because the module may have
+; moved under the routine (82.16.11). Registers and flags pass through both
 ; ways untouched, so every routine keeps its own contract.
 
 sh_x_sh_itoa:
-    call sh_itoa
-    retf
+    CHX sh_itoa
 sh_x_sh_unpackrow:
-    call sh_unpackrow
-    retf
+    CHX sh_unpackrow
 sh_x_sh_pint:
-    call sh_pint
-    retf
+    CHX sh_pint
 sh_x_sh_setvald:
-    call sh_setvald
-    retf
+    CHX sh_setvald
 sh_x_sh_rw_emit:
-    call sh_rw_emit
-    retf
+    CHX sh_rw_emit
 sh_x_sh_settext:
-    call sh_settext
-    retf
+    CHX sh_settext
 sh_x_sh_findcell:
-    call sh_findcell
-    retf
+    CHX sh_findcell
 sh_x_sh_acc_store:
-    call sh_acc_store
-    retf
+    CHX sh_acc_store
 sh_x_sh_cellval_to_acc_si:
-    call sh_cellval_to_acc_si
-    retf
+    CHX sh_cellval_to_acc_si
 sh_x_sh_nameends:
-    call sh_nameends
-    retf
+    CHX sh_nameends
 sh_x_sh_acc_load_a:
-    call sh_acc_load_a
-    retf
+    CHX sh_acc_load_a
 sh_x_sh_name_def:
-    call sh_name_def
-    retf
+    CHX sh_name_def
 sh_x_sh_acc_int:
-    call sh_acc_int
-    retf
+    CHX sh_acc_int
 sh_x_sh_identcol:
-    call sh_identcol
-    retf
+    CHX sh_identcol
 sh_x_sh_setformula:
-    call sh_setformula
-    retf
+    CHX sh_setformula
 sh_x_sh_errname:
-    call sh_errname
-    retf
+    CHX sh_errname
 sh_x_sh_streq:
-    call sh_streq
-    retf
+    CHX sh_streq
 sh_x_sh_isletter_at:
-    call sh_isletter_at
-    retf
+    CHX sh_isletter_at
 sh_x_sh_psheetpfx:
-    call sh_psheetpfx
-    retf
+    CHX sh_psheetpfx
 sh_x_sh_getcell2:
-    call sh_getcell2
-    retf
+    CHX sh_getcell2
 sh_x_sh_funcid:
-    call sh_funcid
-    retf
+    CHX sh_funcid
 sh_x_sh_colname:
-    call sh_colname
-    retf
+    CHX sh_colname
 sh_x_sh_strcpy_to_di:
-    call sh_strcpy_to_di
-    retf
+    CHX sh_strcpy_to_di
 sh_x_fp_unpack_a:
-    call fp_unpack_a
-    retf
+    CHX fp_unpack_a
 sh_x_fp_cmpab:
-    call fp_cmpab
-    retf
+    CHX fp_cmpab
 sh_x_fp_unpack_b:
-    call fp_unpack_b
-    retf
+    CHX fp_unpack_b
 sh_x_fp_atof:
-    call fp_atof
-    retf
+    CHX fp_atof
 sh_x_fp_i2a:
-    call fp_i2a
-    retf
+    CHX fp_i2a
 sh_x_fp_a2i:
-    call fp_a2i
-    retf
+    CHX fp_a2i
 sh_x_fp_ftoa:
-    call fp_ftoa
-    retf
+    CHX fp_ftoa
 sh_x_fp_div:
-    call fp_div
-    retf
+    CHX fp_div
 sh_x_fp_i2b:
-    call fp_i2b
-    retf
+    CHX fp_i2b
 sh_x_fp_norm:
-    call fp_norm
-    retf
+    CHX fp_norm
 sh_x_sh_bios_ymd:
-    call sh_bios_ymd
-    retf
+    CHX sh_bios_ymd
 sh_x_sh_bt_get:
-    call sh_bt_get
-    retf
+    CHX sh_bt_get
 sh_x_sh_bt_addcell:
-    call sh_bt_addcell
-    retf
+    CHX sh_bt_addcell
 sh_x_fp_a_to_b:
-    call fp_a_to_b
-    retf
+    CHX fp_a_to_b
 sh_x_fp_add:
-    call fp_add
-    retf
+    CHX fp_add
 sh_x_fp_azero:
-    call fp_azero
-    retf
+    CHX fp_azero
 sh_x_fp_iszero:
-    call fp_iszero
-    retf
+    CHX fp_iszero
 sh_x_fp_ln:
-    call fp_ln
-    retf
+    CHX fp_ln
 sh_x_fp_mul:
-    call fp_mul
-    retf
+    CHX fp_mul
 sh_x_fp_pack_a:
-    call fp_pack_a
-    retf
+    CHX fp_pack_a
 sh_x_fp_pow:
-    call fp_pow
-    retf
+    CHX fp_pow
 sh_x_fp_sub:
-    call fp_sub
-    retf
+    CHX fp_sub
 sh_x_sh_pargref:
-    call sh_pargref
-    retf
+    CHX sh_pargref
 sh_x_sh_pcmp:
-    call sh_pcmp
-    retf
+    CHX sh_pcmp
 sh_x_sh_skipargs:
-    call sh_skipargs
-    retf
+    CHX sh_skipargs
 sh_x_sh_trcopy:
-    call sh_trcopy
-    retf
+    CHX sh_trcopy
 sh_x_sh_setbool:                        ; 81.51's logical value, for the
-    call sh_setbool                     ; readers and writers in the module
-    retf
+    CHX sh_setbool                      ; readers and writers in the module
 sh_x_sh_setlabel:
-    call sh_setlabel
-    retf
+    CHX sh_setlabel
 sh_x_sh_boolname:
-    call sh_boolname
-    retf
+    CHX sh_boolname
 sh_x_sh_bt_getw:                        ; 81.55: the writer's number formats
-    call sh_bt_getw
-    retf
+    CHX sh_bt_getw
 sh_x_sh_colwidth:                       ; 81.56: column widths, for the
-    call sh_colwidth                    ; readers and writers
-    retf
+    CHX sh_colwidth                     ; readers and writers
 sh_x_sh_colw_set:
-    call sh_colw_set
-    retf
+    CHX sh_colw_set
 sh_x_sh_colw_clear:
-    call sh_colw_clear
-    retf
+    CHX sh_colw_clear
 sh_x_sh_rowh_set:                       ; 81.60: row heights, for the reader
-    call sh_rowh_set
-    retf
+    CHX sh_rowh_set
 sh_x_sh_seterr:                         ; 81.61: resident, for Fill
-    call sh_seterr
-    retf
+    CHX sh_seterr
 ; 81.63: the macro engine's hands on the package
 sh_x_sh_commit:
-    call sh_commit
-    retf
+    CHX sh_commit
 sh_x_sh_drawstatus:
-    call sh_drawstatus
-    retf
+    CHX sh_drawstatus
 sh_x_sh_macro_alertup:
-    call sh_macro_alertup
-    retf
+    CHX sh_macro_alertup
 sh_x_sh_macro_beep:
-    call sh_macro_beep
-    retf
+    CHX sh_macro_beep
 sh_x_sh_macro_clear:
-    call sh_macro_clear
-    retf
+    CHX sh_macro_clear
 sh_x_sh_macro_cmd:
-    call sh_macro_cmd
-    retf
+    CHX sh_macro_cmd
 sh_x_sh_macro_inputup:
-    call sh_macro_inputup
-    retf
+    CHX sh_macro_inputup
 sh_x_sh_name_lookup:
-    call sh_name_lookup
-    retf
+    CHX sh_name_lookup
 sh_x_sh_recalc_all:
-    call sh_recalc_all
-    retf
+    CHX sh_recalc_all
 sh_x_sh_repaint:
-    call sh_repaint
-    retf
+    CHX sh_repaint
 sh_x_sh_scrollto:
-    call sh_scrollto
-    retf
+    CHX sh_scrollto
 sh_x_sh_str_want:
-    call sh_str_want
-    retf
+    CHX sh_str_want
 sh_x_sh_undo_drop:
-    call sh_undo_drop
-    retf
+    CHX sh_undo_drop
 ; 81.62: the text, transcendental and information families went to the
 ; module, and these are the resident routines they call
 sh_x_fp_atan:
-    call fp_atan
-    retf
+    CHX fp_atan
 sh_x_fp_cos:
-    call fp_cos
-    retf
+    CHX fp_cos
 sh_x_fp_exp:
-    call fp_exp
-    retf
+    CHX fp_exp
 sh_x_fp_sin:
-    call fp_sin
-    retf
+    CHX fp_sin
 sh_x_fp_sqrt:
-    call fp_sqrt
-    retf
+    CHX fp_sqrt
 sh_x_fp_tan:
-    call fp_tan
-    retf
+    CHX fp_tan
 sh_x_sh_acc_toint:
-    call sh_acc_toint
-    retf
+    CHX sh_acc_toint
 sh_x_sh_binop_ld:
-    call sh_binop_ld
-    retf
+    CHX sh_binop_ld
 sh_x_sh_fmtcode:
-    call sh_fmtcode
-    retf
+    CHX sh_fmtcode
 sh_x_sh_group3:
-    call sh_group3
-    retf
+    CHX sh_group3
 sh_x_sh_ins_at:
-    call sh_ins_at
-    retf
+    CHX sh_ins_at
 sh_x_sh_matchat:
-    call sh_matchat
-    retf
+    CHX sh_matchat
 sh_x_sh_numdp:
-    call sh_numdp
-    retf
+    CHX sh_numdp
 sh_x_sh_parg:
-    call sh_parg
-    retf
+    CHX sh_parg
 sh_x_sh_pcellref:
-    call sh_pcellref
-    retf
+    CHX sh_pcellref
 sh_x_sh_pstrarg:
-    call sh_pstrarg
-    retf
+    CHX sh_pstrarg
 sh_x_sh_spop:
-    call sh_spop
-    retf
+    CHX sh_spop
 sh_x_sh_spush:
-    call sh_spush
-    retf
+    CHX sh_spush
 sh_x_sh_srestore:
-    call sh_srestore
-    retf
+    CHX sh_srestore
 sh_x_sh_sslot:
-    call sh_sslot
-    retf
+    CHX sh_sslot
 sh_x_sh_str_cat:
-    call sh_str_cat
-    retf
+    CHX sh_str_cat
 sh_x_sh_strcpy:
-    call sh_strcpy
-    retf
+    CHX sh_strcpy
 sh_x_sh_strlen:
-    call sh_strlen
-    retf
+    CHX sh_strlen
 sh_x_sh_foldvalue:                     ; 81.65
-    call sh_foldvalue
-    retf
+    CHX sh_foldvalue
 sh_x_sh_funcfinish:
-    call sh_funcfinish
-    retf
+    CHX sh_funcfinish
 sh_x_sh_cell_totext:                ; 81.71: Data ▸ Delete/Extract move whole
-    call sh_cell_totext             ; RECORDS, and totext+commit is how this
-    retf                            ; app already moves one (Sort's own carry,
+    CHX sh_cell_totext              ; RECORDS, and totext+commit is how this
+                                    ; app already moves one (Sort's own carry,
 sh_x_sh_clearcell:                  ; and the block clipboard, 81.18)
-    call sh_clearcell
-    retf
+    CHX sh_clearcell
 sh_x_sh_formula_copyshift:          ; ...and a moved formula's own references
-    call sh_formula_copyshift       ; follow it, Sort's own rule (81.61)
-    retf
+    CHX sh_formula_copyshift        ; follow it, Sort's own rule (81.61)
 sh_x_os88line_set:                  ; 81.71.5: the widgets Data ▸ Form draws
 
-    call os88line_set
-    retf
+    CHX os88line_set
 sh_x_os88line_draw:
-    call os88line_draw
-    retf
+    CHX os88line_draw
 sh_x_os88line_key:
-    call os88line_key
-    retf
+    CHX os88line_key
 sh_x_os88line_click:
-    call os88line_click
-    retf
+    CHX os88line_click
 sh_x_os88ui_btn:
-    call os88ui_btn
-    retf
+    CHX os88ui_btn
 sh_x_os88ui_ask:
-    call os88ui_ask
-    retf
+    CHX os88ui_ask
 sh_x_os88ui_glyph:                  ; 81.71.5.1: the Border dialog's radios
-    call os88ui_glyph               ; and check boxes, and the sparse border
-    retf                            ; table it is the only writer of
+    CHX os88ui_glyph                ; and check boxes, and the sparse border
+                                    ; table it is the only writer of
 sh_x_os88ui_sbar:                   ; 81.71.6: the list dialog's scroll bar,
-    call os88ui_sbar                ; the number-format table it shows and
-    retf                            ; the two edit-mode entry points it uses
+    CHX os88ui_sbar                 ; the number-format table it shows and
+                                    ; the two edit-mode entry points it uses
 sh_x_os88ui_sbhit:
-    call os88ui_sbhit
-    retf
+    CHX os88ui_sbhit
 sh_x_sh_cell_nfid:
-    call sh_cell_nfid
-    retf
+    CHX sh_cell_nfid
 sh_x_sh_editstart:
-    call sh_editstart
-    retf
+    CHX sh_editstart
 sh_x_sh_flkey:
-    call sh_flkey
-    retf
+    CHX sh_flkey
 sh_x_sh_name_list:
-    call sh_name_list
-    retf
+    CHX sh_name_list
 sh_x_sh_nf_apply:
-    call sh_nf_apply
-    retf
+    CHX sh_nf_apply
 sh_x_sh_acc_toudw:                  ; 81.72: Data ▸ Series' calendar arms -
-    call sh_acc_toudw               ; fp_a2i is signed and a date serial is
-    retf                            ; not, which sh_acc_toudw's header is about
+    CHX sh_acc_toudw                ; fp_a2i is signed and a date serial is
+                                    ; not, which sh_acc_toudw's header is about
 sh_x_sh_ser_to_ymd:
-    call sh_ser_to_ymd
-    retf
+    CHX sh_ser_to_ymd
 sh_x_sh_ymd_to_ser:
-    call sh_ymd_to_ser
-    retf
+    CHX sh_ymd_to_ser
 ; 81.74.2: everything the two remaining dialog engines reach back for, now
 ; that they are in the module too
 sh_x_sh_chart_paint:
-    call sh_chart_paint
-    retf
+    CHX sh_chart_paint
 sh_x_sh_chart_render:
-    call sh_chart_render
-    retf
+    CHX sh_chart_render
 sh_x_sh_dlg:
-    call sh_dlg
-    retf
+    CHX sh_dlg
 sh_x_sh_docmd_paste:
-    call sh_docmd_paste
-    retf
+    CHX sh_docmd_paste
 sh_x_sh_geom:
-    call sh_geom
-    retf
+    CHX sh_geom
 sh_x_sh_new:
-    call sh_new
-    retf
+    CHX sh_new
 sh_x_sh_pnum_at:
-    call sh_pnum_at
-    retf
+    CHX sh_pnum_at
 sh_x_sh_prot_blocked:
-    call sh_prot_blocked
-    retf
+    CHX sh_prot_blocked
 sh_x_sh_ptwips:
-    call sh_ptwips
-    retf
+    CHX sh_ptwips
 sh_x_sh_rec_cmd:
-    call sh_rec_cmd
-    retf
+    CHX sh_rec_cmd
 sh_x_sh_rec_start:
-    call sh_rec_start
-    retf
+    CHX sh_rec_start
 sh_x_sh_rowcol_op:
-    call sh_rowcol_op
-    retf
+    CHX sh_rowcol_op
 sh_x_sh_rowtw:
-    call sh_rowtw
-    retf
+    CHX sh_rowtw
 sh_x_sh_select:
-    call sh_select
-    retf
+    CHX sh_select
 sh_x_sh_ser_setstep:
-    call sh_ser_setstep
-    retf
+    CHX sh_ser_setstep
 sh_x_sh_twpts:
-    call sh_twpts
-    retf
+    CHX sh_twpts
 sh_x_sh_undo_begin:
-    call sh_undo_begin
-    retf
+    CHX sh_undo_begin
 sh_x_sh_upcase_at:
-    call sh_upcase_at
-    retf
+    CHX sh_upcase_at
 sh_x_sh_docmd_dbrun:
-    call sh_docmd_dbrun
-    retf
+    CHX sh_docmd_dbrun
 sh_x_sh_undo_end:
-    call sh_undo_end
-    retf
+    CHX sh_undo_end
 sh_x_sh_idlg_after:
-    call sh_idlg_after
-    retf
+    CHX sh_idlg_after
 sh_x_sh_acc_fromudw:                ; ...and back: fp_i2a is signed, so a
-    call sh_acc_fromudw             ; serial past 32767 came out NEGATIVE
-    retf
+    CHX sh_acc_fromudw              ; serial past 32767 came out NEGATIVE
 sh_x_sh_monlen:                     ; ...and the day clamp needs the target
-    call sh_monlen                  ; month's own length
-    retf
+    CHX sh_monlen                   ; month's own length
 sh_x_sh_bt_findcell:
-    call sh_bt_findcell
-    retf
+    CHX sh_bt_findcell
 sh_x_sh_bt_removecell:
-    call sh_bt_removecell
-    retf
+    CHX sh_bt_removecell
 sh_x_sh_pnow:                       ; 81.86: WAIT's clock
-    call sh_pnow
-    retf
+    CHX sh_pnow
 sh_x_sh_macro_arm:                  ; ...and its timer
-    call sh_macro_arm
-    retf
+    CHX sh_macro_arm
 sh_x_sh_nt_get:                     ; 81.87: GET.NOTE
-    call sh_nt_get
-    retf
+    CHX sh_nt_get
 sh_x_sh_macro_mfire:                ; 81.88: a menu item, from a macro
-    call sh_macro_mfire
-    retf
+    CHX sh_macro_mfire
 sh_x_sh_note_load:                  ; 81.102: the Note dialog's open
-    call sh_note_load
-    retf
+    CHX sh_note_load
 sh_x_sh_btfix:                      ; 81.111: a dialog engine's window made
-    call sh_btfix
-    retf
+    CHX sh_btfix
 sh_x_os88ui_sbwheel:                ; 13.18: the WHEEL, for the Paste list -
-    call os88ui_sbwheel             ; os88ui.inc is resident and sh_ldlg_* is
-    retf                            ; not, so this is os88ui_sbar's own route
+    CHX os88ui_sbwheel              ; os88ui.inc is resident and sh_ldlg_* is
+                                    ; not, so this is os88ui_sbar's own route
 sh_x_sh_nt_set:                     ; 81.89: NOTE
-    call sh_nt_set
-    retf
+    CHX sh_nt_set
 sh_x_sh_mtab_calc:                  ; 81.95: the bar's titles, re-measured
-    call sh_mtab_calc
-    retf
+    CHX sh_mtab_calc
 sh_x_sh_dbx_open:                   ; 81.96: DIALOG.BOX's window
-    call sh_dbx_open
-    retf
+    CHX sh_dbx_open
+sh_x_ch_ovcall:                     ; 82.16.11: CHOUT, the macro module into
+    CHX ch_ovcall                   ; the chart module through resident code
+
+; 82.16.11: THE KERNEL SLOTS A MODULE CALLS THAT CAN CLAIM (SHK), each a CHX
+; shim and a two-instruction stub - so it is ch_xthunk, not the kernel, that
+; holds the module's return. The stub is near and resident: the far call it
+; makes pushes the REGION's CS, which the kernel pins while a callback stands
+sh_x_k_wm_create:
+    CHX sh_k_wm_create
+sh_x_k_wm_show:
+    CHX sh_k_wm_show
+sh_x_k_wm_destroy:
+    CHX sh_k_wm_destroy
+sh_x_k_file_read:
+    CHX sh_k_file_read
+sh_x_k_file_write:
+    CHX sh_k_file_write
+sh_x_k_file_here:
+    CHX sh_k_file_here
+sh_x_k_file_goto_qm:
+    CHX sh_k_file_goto_qm
+sh_x_k_file_find:
+    CHX sh_k_file_find
+sh_x_k_file_delete:
+    CHX sh_k_file_delete
+sh_x_k_m2read:
+    CHX sh_k_m2read
+sh_x_k_m2write:
+    CHX sh_k_m2write
+sh_k_wm_create:
+    call OSAPI_WM_CREATE
+    ret
+sh_k_wm_show:
+    call OSAPI_WM_SHOW
+    ret
+sh_k_wm_destroy:
+    call OSAPI_WM_DESTROY
+    ret
+; sh_k_file_read / sh_k_file_write - EVERY OSAPI_FILE_READ/WRITE this package
+; makes from its own data is one of these two (the module's twelve SHK sites
+; and CH_FWRITE, the BMP export's), and the ES:BX of every one of them is
+; sh_stgseg. The kernel pins a transfer's destination only for each transfer
+; (SPEC.md 66.3 rule 5), not the directory walk between them, which claims -
+; so the staging is pinned for the call and declared again after, the
+; sh_m2pin pair below with the staging's word (SPEC.md 66.5.7.1, NO-PINNING
+; 1). One place for all thirteen, so a new file call cannot forget its pin.
+; Flags and every register preserved round the call: its CF is the verdict
+sh_k_file_read:
+    call sh_stgpin
+.go:                                    ; tests/sheetmove.py stops here: the
+    call OSAPI_FILE_READ                ; staging is PINNED for this one call
+    jmp short sh_stgunpin
+sh_k_file_write:
+    call sh_stgpin
+.go:
+    call OSAPI_FILE_WRITE
+sh_stgunpin:
+    pushf
+    push ax
+    mov ax, sh_reloc                    ; movable again
+    jmp short sh_stgmov
+sh_stgpin:
+    pushf
+    push ax
+    xor ax, ax                          ; pinned
+sh_stgmov:
+    push dx
+    mov dx, [sh_stgseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
+    popf
+    ret
+sh_k_file_here:
+    call OSAPI_FILE_HERE
+    ret
+sh_k_file_goto_qm:
+    call OSAPI_FILE_GOTO_QM
+    ret
+sh_k_file_find:
+    call OSAPI_FILE_FIND
+    ret
+sh_k_file_delete:
+    call OSAPI_FILE_DELETE
+    ret
+; sh_k_m2read / sh_k_m2write - a file call whose ES:BX is the macro module'S OWN
+; CLAIM (its text-file channels, 81.91.1: `push cs / pop es`). The kernel pins
+; a transfer's destination only for each transfer (SPEC.md 66.3 rule 5), not
+; the directory walk between them, which claims - so the module is pinned for
+; the call and declared again after, Note Pad's np_dmov pair (SPEC.md
+; 66.5.7.1). Flags and every register preserved round the call: its CF is
+; the verdict
+sh_k_m2read:
+    call sh_m2pin
+    call OSAPI_FILE_READ
+    jmp short sh_m2unpin
+sh_k_m2write:
+    call sh_m2pin
+    call OSAPI_FILE_WRITE
+sh_m2unpin:
+    pushf
+    push ax
+    push dx
+    mov al, SH_PART_MACRO
+    call op_movable                     ; movable again (sh_partmv the hook)
+    jmp short sh_m2mov
+sh_m2pin:
+    pushf
+    push ax
+    push dx
+    mov al, SH_PART_MACRO
+    call op_pin                         ; pinned
+sh_m2mov:
+    pop dx
+    pop ax
+    popf
+    ret
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -2516,15 +2527,26 @@ sh_ovshims:
     dw sh_x_sh_note_load                                             ; 81.102
     dw sh_x_sh_btfix                                                 ; 81.111
     dw sh_x_os88ui_sbwheel                                           ; 13.18
+    dw sh_x_ch_ovcall, sh_x_k_wm_create, sh_x_k_wm_show              ; 82.16.11
+    dw sh_x_k_wm_destroy, sh_x_k_file_read, sh_x_k_file_write
+    dw sh_x_k_file_here, sh_x_k_file_goto_qm, sh_x_k_file_find
+    dw sh_x_k_file_delete, sh_x_k_m2read, sh_x_k_m2write
+SH_OVSHIMS_N equ ($ - sh_ovshims) / 2  ; ...asserted against SH_NVEC there
 sh_entry:
     push ax
     push dx
     push si
     push di
+    push es
+    call op_load                        ; FIRST (os88parts.inc rule 1): it
+    pop es                              ; copies our file's name, which both
+                                        ; modules are fetched out of - and
+                                        ; with every row lazy it is only that
+                                        ; copy, so it cannot refuse
     call OSAPI_FILE_HERE                ; where this package was LAUNCHED from,
     mov [ch_ovdir], dx                  ; banked before anything can navigate
-    mov [ch_ovdrv], bl                  ; away - it is where CHART.OVL lives
-                                        ; (82.16, the shape SPEC.md 68.10 sets)
+    mov [ch_ovdrv], bl                  ; away - it is the folder SHEET.O88
+                                        ; is in (82.16.12)
     call fp_init                      ; before the first claim, because every
     call sh_ovbind                      ; ...and the file-format module's
                                         ; (82.16.9), the same shape
@@ -2553,8 +2575,11 @@ sh_entry:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_stgseg], dx
+    mov ax, sh_reloc                   ; ...MOVABLE too (NO-PINNING 1): every
+    call OSAPI_MEM_MOVABLE             ; file call's ES:BX, so sh_stgpin pins
+                                       ; it round each one (sh_k_file_read)
     ; THE BORDER AND NOTE TABLES ARE ONE CLAIM, CARVED (81.94): MEM_OWNER_MAX
-    ; is eight claims an owner and SHEET held eight, so MACRO.OVL's claim had
+    ; is eight claims an owner and SHEET held eight, so the macro module's claim had
     ; nowhere to come from. The note table is the claim's second part, and
     ; sh_reloc derives its segment from the border table's after a move
     mov ax, SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB + SH_CLAIM_TBL_KB
@@ -2584,10 +2609,10 @@ sh_entry:
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
 .noundo:
-    call sh_m2need                      ; 81.94: MACRO.OVL's, with CHART.OVL's
+    call sh_m2need                      ; 81.94: the macro module's, with the chart module's
                                         ; before it (sh_m2need asks for that
                                         ; one first) - CF not read, as below
-    call ch_ovneed                      ; CHART.OVL's CH_OVKB claim is taken
+    call ch_ovneed                      ; the chart module's claim is taken
                                         ; HERE, with every other claim, because
                                         ; SPEC.md 50.3 is not advice. CF is not
                                         ; read - a machine too small for it
@@ -2599,23 +2624,27 @@ sh_entry:
                                         ; now: sh_reloc patches the WORD, never
                                         ; this register, and the BMP header copy
                                         ; below writes through DX as ES
-    ; THE REGION ITSELF IS NOT DECLARED MOVABLE IN THIS TREE, and that is the
-    ; one place this proc departs from upstream's (SPEC.md 66.6.1). Upstream's
-    ; case for it is that SHEET "stores its own segment nowhere", which is
-    ; true of a package with no overlay and false of this one twice over:
+    ; THE REGION IS DECLARED MOVABLE, below, where the window exists
+    ; (SPEC.md 66.6.1.1; NO-PINNING P1). It was pinned for two stated reasons
+    ; and only the first was a reason:
     ;
-    ;  - ch_ovbind stamps CS into CHART.OVL's vector table, and every SHOUT
-    ;    reaches back through a far pointer holding it. A moved image leaves
-    ;    all of them naming the old one.
-    ;  - the module makes ELEVEN file calls (every format's reader and
-    ;    writer, 82.16.9), each while this package's far return address is on
-    ;    the stack - and a file call claims, so it can compact. The module's
-    ;    retf would pop a segment the kernel has no record of.
+    ;  - ch_ovbind and sh_ovbind stamp CS into the two vector tables the
+    ;    modules reach back through (ch_v_*, sh_v_*). Both tables are in OUR
+    ;    data, so they move with the region and only their stamps go stale -
+    ;    sh_rgnreloc re-runs both binds after a move, which is the whole fix.
+    ;  - "the module makes file calls with this package's far return address
+    ;    on the stack, and a file call can compact". True, and it never
+    ;    reached the REGION: SHEET has no worker, so every module call is
+    ;    inside a callback, and mem_in_nest pins a region for exactly as long
+    ;    as a callback stands in it (SPEC.md 66.6.1). What that argument does
+    ;    bind is the MODULES' OWN claims - and those move too since 82.16.11,
+    ;    every module->resident call and claim-capable kernel slot going out
+    ;    through ch_xthunk, which leaves no module CS on the stack.
     ;
     ; The data claims above DO move: every file transfer stages through
-    ; sh_stgseg, which is pinned, and every copy of a movable segment is
-    ; either in sh_segw or dead across no compaction point. The image and
-    ; CHART.OVL are what stay put.
+    ; sh_stgseg, which is pinned for each file call and only then
+    ; (sh_k_file_read), and every copy of a movable segment is either in
+    ; sh_segw or dead across no compaction point.
     mov word [sh_chartwin], 0
     mov word [sh_chart_cnt], 0
     mov word [ch_type], CH_T_COLUMN
@@ -2645,6 +2674,9 @@ sh_entry:
     mov si, sh_tpl
     call OSAPI_WM_CREATE
     jc .fail
+    OS88_REGION_MOVABLE sh_rgnreloc   ; THE REGION MOVES (NO-PINNING P1): see
+                                      ; sh_rgnreloc for the one thing that
+                                      ; names this segment between callbacks
     push ax
     mov ax, sh_onclose                ; the close negotiator (81.118, SPEC.md
     call OSAPI_WM_ONCLOSE             ; 75.1): a changed workbook asks first
@@ -7407,7 +7439,7 @@ sh_drawstatus:
 ; were written first and taken out: they are 27 more one-pixel fills on a
 ; ten-by-fifteen viewport, they are not what the look report asked for, and
 ; the routine did not FIT - 129 bytes is what the package has (81.115), and
-; this engine cannot move to CHART.OVL the way the dialogs did, because a
+; this engine cannot move to the chart module the way the dialogs did, because a
 ; repaint may not depend on an on-demand overlay being loaded.
 ;
 ; TWO fills on a full repaint, at the 608.61 us Set 163 measured: ~1.2 ms
@@ -9110,7 +9142,7 @@ sh_refmark:
     pop ax
     popf
     ret
-sh_refcyc_r:                          ; its door into CHART.OVL
+sh_refcyc_r:                          ; its door into the chart module
     push bp
     mov bp, SHM_REFCYC
     call ch_ovcall
@@ -11364,7 +11396,7 @@ sh_docmd_chart:
     call sh_chart_paint
                                         ; sh_chart_render owns [sh_msg] now:
                                         ; setting "Charted." here overwrote its
-                                        ; CHART.OVL refusal, so a chart that
+                                        ; the chart module refusal, so a chart that
                                         ; never drew still reported success
     mov si, [sh_ownwin]                ; repaint OUR OWN window too - this
     call sh_repaint                    ; only ever painted the chart window
@@ -12069,7 +12101,7 @@ sh_s_critname: db 'CRITERIA', 0
 ; instead of from a formula, and they add no matching logic of their own -
 ; every one of them is `sh_dbrowmatch` in a loop.
 ;
-; THE WHOLE FAMILY RUNS IN CHART.OVL, behind one new verb (SHM_DBCMD), for
+; THE WHOLE FAMILY RUNS IN the chart module, behind one new verb (SHM_DBCMD), for
 ; the reason §81.65 put the engine there: sh_dbrowmatch, sh_dbrowok,
 ; sh_dbtest and sh_dbcmp are all .modc and none of them is exported, so a
 ; resident command would have to duplicate the matcher rather than call it.
@@ -12285,7 +12317,7 @@ sh_chartexp_ondlg:
 sh_s_chartbmp: db 'CHART.BMP', 0
 sh_s_nochart:  db 'No chart to export.', 0
 sh_s_experr:   db 'Chart export failed.', 0
-sh_s_noovl:    db 'CHART.OVL not found.', 0
+sh_s_noovl:    db 'Not enough memory.', 0
 sh_s_exported: db 'Chart exported.', 0
 
 ; -----------------------------------------------------------------------------
@@ -12297,7 +12329,7 @@ sh_s_exported: db 'Chart exported.', 0
 ;
 ; sh_sort_vof - in: BX = entry index, out: DI = its offset in sh_stgseg
 ; -----------------------------------------------------------------------------
-section SH_MODSEC                      ; 81.71.6: Data > Sort's worker, CHART.OVL
+section SH_MODSEC                      ; 81.71.6: Data > Sort's worker, the chart module
 sh_sort_vof:
     push ax
     push cx
@@ -13143,7 +13175,7 @@ sh_docmd_sortcol:
 ; that Undo, the clipboard and every file write also use. Refusing costs the
 ; user one Column Width away from the same result and costs no data.
 ; =============================================================================
-section SH_MODSEC                      ; 81.81: Format > Justify, CHART.OVL
+section SH_MODSEC                      ; 81.81: Format > Justify, the chart module
 
 SH_JU_LMAX equ SH_EDITMAX              ; a line is a label, and this is a label
 
@@ -13842,7 +13874,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5/6 retired) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 4, 3, 2, 7, 6, 5, 4, 2, 6
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 4, 2, 7, 6, 5, 4, 2, 6
 
 ; 81.114.8: Options > Calculation's three MODES, in Excel's own order, and
 ; the dialog row after them that is this app's folded-in Calculate Now.
@@ -13871,7 +13903,7 @@ SH_FDK_SERIES equ 16                  ; 81.72: Data ▸ Series..., part one of
 SH_FDK_N     equ 17                   ; two (the step value follows)
     times (sh_ud_kind_end - sh_ud_kind - SH_FDK_N) db 0  ; sh_ud_kind (81.57)
     times (SH_FDK_N - (sh_ud_kind_end - sh_ud_kind)) db 0 ; has a kind each
-section SH_MODSEC                      ; 81.74.2: the radio dialog engine, CHART.OVL
+section SH_MODSEC                      ; 81.74.2: the radio dialog engine, the chart module
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -14068,7 +14100,7 @@ sh_fdlg_open:
 .placed:
     mov [sh_fdlg_tpl + WT_Y], bx
     mov si, sh_fdlg_tpl
-    call OSAPI_WM_CREATE
+    SHK wm_create
     jc .out
     mov [sh_fdlg_win], bx
     push ax                           ; a FIXED layout, taller than a CGA's
@@ -14078,7 +14110,7 @@ sh_fdlg_open:
                                       ; Hang over the dock instead (SPEC.md
                                       ; 11.93, 81.100) - 28 + 171 still fits
                                       ; the 200 rows the display has
-    call OSAPI_WM_SHOW
+    SHK wm_show
     SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop di
@@ -14853,7 +14885,7 @@ sh_fdlg_close:
     or bx, bx
     jz .out
     mov word [sh_fdlg_win], 0
-    call OSAPI_WM_DESTROY               ; NOT OSAPI_WM_CLOSE. Close means
+    SHK wm_destroy                      ; NOT OSAPI_WM_CLOSE. Close means
                                         ; "quit the instance owning this
                                         ; window" (app_close_win); a dialog
                                         ; has no owning instance, so that path
@@ -14945,7 +14977,7 @@ sh_bdlg_i4:    db 'Bottom', 0
 sh_bdlg_i5:    db 'Shade', 0
 
 ; the resident thunks (81.71.5.1) - sh_bdlg_open_r is the menu's, and it is
-; what forces CHART.OVL in before any window exists, so neither callback can
+; what forces the chart module in before any window exists, so neither callback can
 ; be the call that has to read a disk
     SH_BTREC bdlg, 2, sh_dlg_blfd           ; 81.111
     SH_BTDOORS bdlg, SHM_BDBTN
@@ -14980,7 +15012,7 @@ sh_bdlg_close_r:                       ; the gate-lock recovery's own door
     call ch_ovcall
     pop bp
     ret
-; --- in CHART.OVL (81.71.5.1), Data ▸ Form's own reason: a dialog nobody
+; --- in the chart module (81.71.5.1), Data ▸ Form's own reason: a dialog nobody
 ; opens twice a session was 900 bytes of a package with 46 to spare. Its
 ; data stays resident because the kernel and os88ui both read it through
 ; DS, and sh_bdlg_open_r forces the module in before the window exists.
@@ -15052,14 +15084,14 @@ sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
 .placed:
     mov [sh_bdlg_tpl + WT_Y], bx
     mov si, sh_bdlg_tpl
-    call OSAPI_WM_CREATE
+    SHK wm_create
     jc .out
     mov [sh_bdlg_win], bx
     push ax                           ; over the dock rather than cut on a
     mov al, 1                         ; CGA - sh_fdlg_open's reason (81.100)
     call OSAPI_WM_KEEPH
     pop ax
-    call OSAPI_WM_SHOW
+    SHK wm_show
     SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop si
@@ -15458,7 +15490,7 @@ sh_bdlg_close:
     or bx, bx
     jz .out
     mov word [sh_bdlg_win], 0
-    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
+    SHK wm_destroy                      ; see sh_fdlg_close on why not CLOSE
 .out:
     pop bx
     pop ax
@@ -15584,10 +15616,10 @@ sh_s_id_named: db 'Name defined.', 0
 sh_s_id_nofnd: db 'Not found.', 0
 sh_s_idlg_ok:  db 'OK', 0
 sh_s_idlg_can: db 'Cancel', 0
-section SH_MODSEC                      ; 81.74.2: the one-line input dialog, CHART.OVL
+section SH_MODSEC                      ; 81.74.2: the one-line input dialog, the chart module
 
 ; =============================================================================
-; sh_table_run - Data > Table (SPEC.md 81.114). CHART.OVL's, near-called from
+; sh_table_run - Data > Table (SPEC.md 81.114). the chart module's, near-called from
 ; sh_idlg_apply's second half.
 ; in:  [sh_tbl_ir]/[sh_tbl_ic]   the ROW input cell, or SH_TBL_NONE
 ;      [sh_tbl_ir2]/[sh_tbl_ic2] the COLUMN input cell, or SH_TBL_NONE
@@ -17225,10 +17257,10 @@ sh_idlg_open:
 .placed:
     mov [sh_idlg_tpl + WT_Y], bx
     mov si, sh_idlg_tpl
-    call OSAPI_WM_CREATE
+    SHK wm_create
     jc .out
     mov [sh_idlg_win], bx
-    call OSAPI_WM_SHOW
+    SHK wm_show
     SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop di
@@ -17569,7 +17601,7 @@ sh_idlg_apply:
     mov [sh_tbl_ic2], ax
     mov [sh_tbl_ir2], bx
 .tblgo:
-    call sh_table_run                  ; CHART.OVL's own, so a near call
+    call sh_table_run                  ; the chart module's own, so a near call
     jc .tblbad
     mov word [sh_msg], sh_s_id_tbldone
     jmp .redraw
@@ -17775,7 +17807,7 @@ sh_idlg_close:
     or bx, bx
     jz .out
     mov word [sh_idlg_win], 0
-    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
+    SHK wm_destroy                      ; see sh_fdlg_close on why not CLOSE
 .out:
     pop bx
     pop ax
@@ -18061,7 +18093,7 @@ sh_ldlg_tpl:
 ; create a window at all if it cannot, so no paint holding the gfx lock is
 ; ever the call that has to read a disk.
 ; macro plan wave 0: sh_ident is not a resident function - is it one of the
-; EXTENSION macro functions, whose names live in CHART.OVL? AX = the id
+; EXTENSION macro functions, whose names live in the chart module? AX = the id
 ; (SH_FID_MX..) or 0xFF, and 0xFF too when there is no module to ask, which
 ; leaves the word #NAME? exactly as it was.
 sh_mfind_r:
@@ -18086,7 +18118,7 @@ sh_justify_r:                       ; NOT sh_justify, which is 81.13's
 ; =============================================================================
 ; THE BUTTON GESTURE (SPEC.md 20.5.1.3, 81.111) - upstream's os88ui_btn takes a
 ; RECORD now and fires on the RELEASE, and a package's dialogs attach to it
-; with os88ui_btninit. In this tree the dialog ENGINES run from CHART.OVL, so
+; with os88ui_btninit. In this tree the dialog ENGINES run from the chart module, so
 ; everything the kernel calls is RESIDENT: the record (initialised data, so the
 ; overlay's first paint already finds it whole), the release and drag doors
 ; (SH_BTDOORS) and the attach (sh_btattach, from each open door once the
@@ -18103,7 +18135,7 @@ sh_dlg_blfd:   dw sh_s_fd_ok, sh_s_fd_cancel   ; every dialog here: the flags
 ; a dialog made its record's NEXT point at ITSELF, and a click whose walk had
 ; to pass it never returned. Preserves all registers
 ; sh_btfix - attach the record of EVERY dialog engine whose window is up.
-; The engines' open routines run in CHART.OVL and are reached two ways - the
+; The engines' open routines run in the chart module and are reached two ways - the
 ; resident door, and each other (Sort's key dialog opens its order dialog,
 ; Series and Extract likewise, File Format's OK the Save As), so the attach
 ; is the open routine's own last act rather than the door's. Attaching a
@@ -18166,6 +18198,127 @@ sh_btattach:
     call os88ui_btninit
     ret
 
+; -----------------------------------------------------------------------------
+; THE PLACE PROCS (SPEC.md 20.5.1.3.5) - OS88UI_BT_PLACE for each SH_BTREC
+; record: in BX = the record, SI = its window; draw nothing, keep everything.
+;
+; The painters are the chart module's and lay every rect out from the content origin
+; they bank in [sh_<eng>_ox/oy], so the resident half does not describe the
+; layout a second time: it MOVES what the painter laid out by however far the
+; window has gone since that origin, and banks the new one. That keeps the
+; overlay's own reads of the origin - its click work, a key's redraw - in step
+; with the window too. The library calls it before the press, the drag and
+; the release; the two dialogs with a field, and the Form, call it before a
+; key as well (sh_btreplace), so a field is drawn where the window IS.
+; -----------------------------------------------------------------------------
+sh_fdlg_place:
+    push di
+    mov di, sh_fdlg_ox
+    jmp short sh_btplace
+sh_bdlg_place:
+    push di
+    mov di, sh_bdlg_ox
+    jmp short sh_btplace
+sh_ldlg_place:
+    push di
+    mov di, sh_ldlg_ox
+    jmp short sh_btplace
+sh_df_place:
+    push di
+    mov di, sh_df_ox
+sh_btplace:                            ; DI pushed by the entry, the origin in it
+    push ax
+    push dx
+    call sh_btmove
+    pop dx
+    pop ax
+    pop di
+    ret
+sh_idlg_place:                         ; ...and the one-line field with them
+    push di
+    mov di, sh_idlg_ox
+    push ax
+    push dx
+    call sh_btmove
+    push si
+    push cx
+    mov si, sh_idlg_line               ; LN_X1..LN_Y2: a rect, the same shape
+    jmp short sh_btfield
+sh_ndlg_place:                         ; ...and the Note's text box
+    push di
+    mov di, sh_ndlg_ox
+    push ax
+    push dx
+    call sh_btmove
+    push si
+    push cx
+    mov si, sh_notebox                 ; TX_X1..TX_Y2, likewise
+sh_btfield:
+    mov cx, 1
+    call sh_btshift
+    pop cx
+    pop si
+    pop dx
+    pop ax
+    pop di
+    ret
+
+; sh_btmove - in: BX = the record, SI = its window, DI = the painter's banked
+; origin (x, then y). out: AX/DX = how far the window has moved since that
+; origin (0 when there is no window or no paint yet), the origin re-banked,
+; the record's live rects moved by it. Keeps every other register
+sh_btmove:
+    xor ax, ax
+    xor dx, dx
+    or si, si
+    jz .out                            ; no window: nothing to ask
+    cmp [di], ax
+    jne .ask
+    cmp [di+2], ax
+    je .out                            ; never painted: nothing laid out
+.ask:
+    push bx
+    mov bx, si
+    call OSAPI_WM_CONTENT              ; AX = content left, DX = top, NOW
+    pop bx
+    xchg ax, [di]                      ; bank NOW; AX/DX = THEN
+    xchg dx, [di+2]
+    neg ax
+    add ax, [di]                       ; AX/DX = NOW - THEN
+    neg dx
+    add dx, [di+2]
+    push cx
+    push si
+    mov si, [bx+OS88UI_BT_RECTS]
+    mov cx, [bx+OS88UI_BT_N]
+    call sh_btshift
+    pop si
+    pop cx
+.out:
+    ret
+
+; sh_btshift - CX rects at SI moved by AX, DX; CX and SI are spent
+sh_btshift:
+    jcxz .out
+.l:
+    add [si], ax
+    add [si+2], dx
+    add [si+4], ax
+    add [si+6], dx
+    add si, 8
+    loop .l
+.out:
+    ret
+
+; sh_btreplace - in: BX = a record; run its place proc on its window, for a
+; key that draws a field (a drag replays the window and never paints it)
+sh_btreplace:
+    push si
+    mov si, [bx+OS88UI_BT_WIN]
+    call [bx+OS88UI_BT_PLACE]
+    pop si
+    ret
+
 
     SH_BTREC fdlg, 2, sh_dlg_blfd
     SH_BTDOORS fdlg, SHM_FDBTN
@@ -18204,7 +18357,7 @@ sh_fdlg_apply_r:
     ret
 ; SH_ONCLOSE win_word - install AX, a resident negotiator, on the dialog the
 ; open just made, if it made one. HERE and not in the module's open: the proc
-; is a near pointer in the WINDOW's segment (SPEC.md 75.1), and CHART.OVL runs
+; is a near pointer in the WINDOW's segment (SPEC.md 75.1), and the chart module runs
 ; banked (81.71.5.1). pushf: an open door's caller may read CF
 %macro SH_ONCLOSE 1
     pushf
@@ -18267,6 +18420,10 @@ sh_idlg_paint_r:
     pop bp
     ret
 sh_idlg_key_r:
+    push bx                            ; the field where the window IS, not
+    mov bx, sh_idlg_btrec              ; where the last paint left it
+    call sh_btreplace                  ; (SPEC.md 20.5.1.3.5)
+    pop bx
     push bp
     mov bp, SHM_IDKEY
     call ch_ovcall
@@ -18320,7 +18477,7 @@ sh_s_ld_tname: db 'Paste Name', 0
 sh_s_ld_pfunc: db 'Paste function:', 0
 sh_s_ld_pname: db 'Paste name:', 0
 sh_s_ld_none:  db '(none defined)', 0
-; --- in CHART.OVL (81.71.6): the scrolling LIST dialog - Paste Function,
+; --- in the chart module (81.71.6): the scrolling LIST dialog - Paste Function,
 ; Paste Name and Format Number's code list. Its data stays resident for
 ; 81.71.5.1's reason, and sh_ldlg_open_r forces the module in first.
 section SH_MODSEC                      ; 81.71.6: the list dialog
@@ -18393,14 +18550,14 @@ sh_ldlg_open:
 .placed:
     mov [sh_ldlg_tpl + WT_Y], bx
     mov si, sh_ldlg_tpl
-    call OSAPI_WM_CREATE               ; the window comes back in BX, NOT SI -
+    SHK wm_create                      ; the window comes back in BX, NOT SI -
     jc .out                            ; SI is still the template - and it is
     mov [sh_ldlg_win], bx
     push ax
     mov ax, sh_ldlg_wheel_r            ; the wheel scrolls the list (13.18)
     call OSAPI_WM_ONWHEEL
     pop ax
-    call OSAPI_WM_SHOW                 ; created HIDDEN, so the show is not
+    SHK wm_show                        ; created HIDDEN, so the show is not
     SHOUT sh_btfix                     ; the gesture (81.111), from here
                                        ; optional. No WF_KEEPH: 147 rows from
                                        ; y 28 ends at 175, inside a CGA's
@@ -18716,7 +18873,7 @@ sh_ldlg_onwheel:
     call sh_ldlg_sbset                ; total, fit and pos (the rect is not
     mov bx, sh_ldsb                   ; read)
     mov cx, 1
-    SHOUT os88ui_sbwheel              ; resident: this body is in CHART.OVL
+    SHOUT os88ui_sbwheel              ; resident: this body is in the chart module
     jc .out
     mov [sh_ldlg_top], ax
     call sh_ldlg_paint                ; SI: W_ONWH names this window
@@ -18844,7 +19001,7 @@ sh_ldlg_close:
     or bx, bx
     jz .out
     mov word [sh_ldlg_win], 0
-    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
+    SHK wm_destroy                      ; see sh_fdlg_close on why not CLOSE
 .out:
     pop bx
     pop ax
@@ -18873,7 +19030,7 @@ sh_ldlg_close:
 ; text, so the brackets themselves do not shift the columns they mark - which
 ; is why sh_parse_fields counts non-bracket characters as it walks.
 ; =============================================================================
-section SH_MODSEC                      ; 81.82: Data > Parse, CHART.OVL
+section SH_MODSEC                      ; 81.82: Data > Parse, the chart module
 
 SH_PA_MAXF equ 8                       ; fields, and so columns written. Eight
                                        ; is what fits SH_EDITMAX at a useful
@@ -19629,7 +19786,7 @@ sh_ndlg_tpl:
 sh_s_ndlg_title: db 'Note', 0
 sh_s_ndlg_cell:  db 'Cell:', 0
 
-; 81.102: THE ENGINE IS IN CHART.OVL, with os88text.inc - the box's only
+; 81.102: THE ENGINE IS IN the chart module, with os88text.inc - the box's only
 ; consumer - and these are its resident doors. The template, its strings
 ; (the kernel and FONT_STR read them through DS) and sh_note_load (Paste
 ; uses it too) stay here. The open door forces the module in before the
@@ -19659,6 +19816,10 @@ sh_ndlg_paint_r:
     pop bp
     ret
 sh_ndlg_onkey_r:
+    push bx                            ; the field where the window IS, not
+    mov bx, sh_ndlg_btrec              ; where the last paint left it
+    call sh_btreplace                  ; (SPEC.md 20.5.1.3.5)
+    pop bx
     push bp
     mov bp, SHM_NKEY
     call ch_ovcall
@@ -19684,7 +19845,7 @@ sh_ndlg_cls_r:
     stc
     ret
 
-section SH_MODSEC                      ; 81.102: the Note dialog, CHART.OVL
+section SH_MODSEC                      ; 81.102: the Note dialog, the chart module
 
 ; -----------------------------------------------------------------------------
 ; sh_ndlg_open - load the selected cell's note into the edit buffer and put
@@ -19729,11 +19890,11 @@ sh_ndlg_open:
 .placed:
     mov [sh_ndlg_tpl + WT_Y], bx
     mov si, sh_ndlg_tpl
-    call OSAPI_WM_CREATE
+    SHK wm_create
     jc .out
     mov [sh_ndlg_win], bx
     mov byte [sh_noteopen], 1
-    call OSAPI_WM_SHOW
+    SHK wm_show
     SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop es
@@ -19970,7 +20131,7 @@ sh_ndlg_close:
     jz .out
     mov word [sh_ndlg_win], 0
     mov byte [sh_noteopen], 0
-    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
+    SHK wm_destroy                      ; see sh_fdlg_close on why not CLOSE
 .out:
     pop bx
     pop ax
@@ -20258,11 +20419,11 @@ sh_s_df_close: db 'Close', 0
 sh_s_df_nodb:  db 'Set Database first.', 0
 sh_s_df_noroom: db 'The row below the database is not empty.', 0
 sh_s_df_delq:  db 'Delete the displayed record?', 0
-sh_s_df_noovl: db 'CHART.OVL is not beside SHEET.O88.', 0
+sh_s_df_noovl: db 'Not enough memory for the form.', 0
 
 ; -----------------------------------------------------------------------------
 ; The four resident entry points. sh_docmd_form_r is the menu's, and it is
-; also what FORCES THE MODULE IN: if ch_ovcall cannot read CHART.OVL it says
+; also what FORCES THE MODULE IN: if ch_ovcall cannot read the chart module it says
 ; so and no window is ever created, so the three callbacks below can never be
 ; the call that has to touch a disk - which, holding the gfx lock inside a
 ; paint, is the one thing this arrangement must not do. Once read, ch_ovneed
@@ -20290,6 +20451,10 @@ sh_df_paint_r:                         ; SI = the window, the gfx lock held
     ret
 
 sh_df_onkey_r:                         ; AL = ascii, AH = scan
+    push bx                            ; the field where the window IS, not
+    mov bx, sh_df_btrec              ; where the last paint left it
+    call sh_btreplace                  ; (SPEC.md 20.5.1.3.5)
+    pop bx
     push bp
     mov bp, SHM_FKEY
     call ch_ovcall
@@ -20319,13 +20484,13 @@ sh_df_ondel_r:                         ; Delete's alert completion: os88ui_adone
 ; sh_docmd_form - Data ▸ Form.... Pins the database rectangle the way
 ; Extract pins its own selection, and for the same reason (81.6).
 ; -----------------------------------------------------------------------------
-; --- the engine itself lives in CHART.OVL (81.71.5.1): it is ~2.2KB of
+; --- the engine itself lives in the chart module (81.71.5.1): it is ~2.2KB of
 ; code that runs only while the form is open, and SHEET had 1,806 bytes
 ; less resident room than it needed. What stays behind is the DATA the
 ; kernel reads (the template and its title) and four thunks - the module
 ; is forced in by sh_docmd_form_r BEFORE the window exists, so no paint
 ; can ever be the call that has to read the file.
-section SH_MODSEC                      ; 81.71.5: Data ▸ Form, CHART.OVL
+section SH_MODSEC                      ; 81.71.5: Data ▸ Form, the chart module
 sh_docmd_form:
     push ax
     push bx
@@ -20369,10 +20534,10 @@ sh_docmd_form:
 .placed:
     mov [sh_df_tpl + WT_Y], bx
     mov si, sh_df_tpl
-    call OSAPI_WM_CREATE
+    SHK wm_create
     jc .out
     mov [sh_df_win], bx
-    call OSAPI_WM_SHOW
+    SHK wm_show
     SHOUT sh_btfix                     ; the gesture (81.111), from here
     jmp .out
 .nodb:
@@ -21276,7 +21441,7 @@ sh_df_close:
     or bx, bx
     jz .out
     mov word [sh_df_win], 0
-    call OSAPI_WM_DESTROY
+    SHK wm_destroy
     SHOUT sh_recalc_all                 ; a form can have rewritten any cell
     mov si, [sh_ownwin]
     SHOUT sh_repaint
@@ -21406,7 +21571,13 @@ sh_new:
     mov word [sh_nbord], 0           ; the discarded document's borders and
     mov word [sh_ntbl], 0            ; 81.114.7: ...and its TABLES
     mov word [sh_nnote], 0           ; notes go with it - a note record holds
-    SHOUT sh_colw_clear                ; ...and every column's width (81.56)
+    call sh_colw_clear                 ; ...and every column's width (81.56).
+                                     ; NEAR, never SHOUT: this is .text, and
+                                     ; ch_xthunk takes a caller CS that is not
+                                     ; the chart module's for the macro module's, so the
+                                     ; far return landed in that module at a
+                                     ; .text offset - File > New hung the
+                                     ; machine (NO-PINNING P1b's tag)
     mov word [sh_nnames], 0          ; ...and its NAMES, which used to survive
                                      ; into the next document and go on
                                      ; pointing at cells no longer there
@@ -21417,7 +21588,7 @@ sh_new:
     cmp byte [sh_dockind], 2           ; worksheet, which shows values -
     mov byte [sh_dockind], 0           ; unless they were the user's own
     jne .wsheet                        ; (sh_kindreset's rule, inline: this
-    mov byte [sh_showformulas], 0      ; is resident and that is CHART.OVL's)
+    mov byte [sh_showformulas], 0      ; is resident and that is the chart module's)
 .wsheet:
     mov word [sh_cursheet], 0
     mov cx, SH_SHEETS * 6            ; 6 words per sheet: sel/row/scl/scr,
@@ -21468,7 +21639,7 @@ sh_new:
 ;
 ; THIS IS MAIN'S 81.23, ported at the 2026-10-20 merge rather than written
 ; again - the arrangement, the words and the refusal cases are its, and what
-; changed is where the pieces live: sh_fdlg_open is CHART.OVL's here, so
+; changed is where the pieces live: sh_fdlg_open is the chart module's here, so
 ; sh_proceed takes the resident thunk, and the whole family is `.text` because
 ; a close negotiator must answer with the module unmounted.
 ; =============================================================================
@@ -21556,7 +21727,7 @@ sh_proceed:
     cmp al, SH_PEND_CLOSE
     je .close
     mov al, SH_FDK_NEW                ; New asks which KIND first (.donew).
-    call sh_fdlg_open_r               ; the dialog engine is CHART.OVL's here
+    call sh_fdlg_open_r               ; the dialog engine is the chart module's here
     jmp short .out
 .open:
     mov al, FDLG_OPEN
@@ -22327,7 +22498,7 @@ sh_dowrite_sylk:
     mov cx, [sh_stagelen]
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_WRITE
+    SHK file_write
     jc .werr
     mov word [sh_msg], sh_m_saved
     cmp byte [sh_trunc], 0            ; cells dropped for room must not be
@@ -22610,7 +22781,7 @@ sh_doread_sylk:
     mov cx, SH_STAGE_MAX
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_READ              ; out: DX:AX = bytes read, or CF=1
+    SHK file_read                     ; out: DX:AX = bytes read, or CF=1
     jc .rerr
 
     mov word [sh_ncells], 0
@@ -22950,7 +23121,7 @@ sh_dowrite_dif:
     mov cx, [sh_stagelen]
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_WRITE
+    SHK file_write
     jc .werr
     mov word [sh_msg], sh_m_saved
     cmp byte [sh_trunc], 0            ; cells dropped for room must not be
@@ -23021,7 +23192,7 @@ sh_doread_dif:
     mov cx, SH_STAGE_MAX
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_READ               ; out: DX:AX = bytes read, or CF=1
+    SHK file_read                      ; out: DX:AX = bytes read, or CF=1
     jc .rerr
 
     mov word [sh_ncells], 0
@@ -23675,7 +23846,7 @@ sh_dowrite_biff:
     mov cx, [sh_stagelen]
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_WRITE
+    SHK file_write
     jc .werr
     mov word [sh_msg], sh_m_saved
     mov byte [sh_modified], 0         ; BIFF writes the WORKBOOK, so a plain
@@ -24446,7 +24617,7 @@ sh_biff_workbook:
     mov cx, [sh_stagelen]
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_WRITE
+    SHK file_write
     jc .err
     mov word [sh_msg], sh_m_saved
     mov byte [sh_modified], 0         ; the whole workbook went out: clean,
@@ -26096,7 +26267,7 @@ sh_doread_biff:
     mov cx, SH_STAGE_MAX
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_READ               ; out: AX = bytes read, or CF=1
+    SHK file_read                      ; out: AX = bytes read, or CF=1
     jc .rerr
 
     mov word [sh_ncells], 0
@@ -28548,8 +28719,8 @@ sh_bt_get:
 ;
 ; SHEET HOLDS 8 OF MEM_OWNER_MAX's 8, and the kernel refuses a ninth. The
 ; eight: cellseg, txtseg, stgseg, bordseg (the border table with this note
-; table carved into it, 81.94), chartseg, undoseg, CHART.OVL's and, on the
-; first macro, MACRO.OVL's. THE REGION IS NOT ONE OF THEM, which this comment
+; table carved into it, 81.94), chartseg, undoseg, the chart module's and, on the
+; first macro, the macro module's. THE REGION IS NOT ONE OF THEM, which this comment
 ; and three others said it was until 81.102: its record's owner is the
 ; INSTANCE SLOT, while every data claim's owner word is the region's SEGMENT
 ; (kernel/memory.inc's mem_own), and the cap counts owner words that match.
@@ -30554,7 +30725,7 @@ sh_binop_pre:
     pop word [sh_lhs+6]
     push ax
 ; sh_binop_ld - fp A = the banked left operand, fp B = sh_acc: sh_binop_pre's
-; half that touches no stack, which CHART.OVL's copy calls back to (81.62)
+; half that touches no stack, which the chart module's copy calls back to (81.62)
 sh_binop_ld:
     push si
     mov si, sh_lhs
@@ -32842,7 +33013,7 @@ sh_ppowcont:
 ; One counter charges every recursion point, with the cell depth folded in;
 ; over SH_PNEST_MAX the parse refuses with #VALUE! - the same refusal shape
 ; sh_eval_cell's .toodeep already has. A LEVEL IS NOT A SIZE, though: a '('
-; is 12 bytes and a CHART.OVL door call 72, and a pending operator charges
+; is 12 bytes and a the chart module door call 72, and a pending operator charges
 ; nothing, so the stack itself is the first test - SP against [sh_pstk0],
 ; SH_PSTK_MAX bytes down, as the kernel's LNK_SPMIN reads it (26.10).
 ; out: CF=1 refused (sh_evalerr raised, NOTHING charged - do not leave),
@@ -34173,7 +34344,7 @@ sh_pfunc:
     call sh_funcid                    ; sh_pident only routes one here once
     xor ah, ah                        ; sh_name_lookup has already declined it
     cmp ax, 0xFF                      ; macro plan wave 0: not resident - then
-    jne .knownfn                      ; ask CHART.OVL, where every macro
+    jne .knownfn                      ; ask the chart module, where every macro
     call sh_mfind_r                   ; function after the first twenty lives
     cmp ax, 0xFF
     jne .knownfn
@@ -34880,7 +35051,7 @@ sh_pargclass:
     ret
 
 ; =============================================================================
-; THE FINANCIAL FAMILY IS CHART.OVL'S THIRD TENANT (SPEC.md 82.16.10): from
+; THE FINANCIAL FAMILY IS the chart module'S THIRD TENANT (SPEC.md 82.16.10): from
 ; here to sh_trcopy it is module code, bracketed where it stands the way the
 ; file formats were (82.16.9) - and since 81.62 sh_pargclass above and
 ; sh_ptrans below are in the same block. Every call out is SHOUT; the one way in is the
@@ -37030,7 +37201,7 @@ sh_lkup:
 .out:
     ret
 
-section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, the chart module
 ; =============================================================================
 ; sh_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
 ; question about what an argument IS rather than what it is worth, so each is
@@ -37351,7 +37522,7 @@ sh_numdp:
     pop ax
     ret
 
-section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, the chart module
 ; -----------------------------------------------------------------------------
 ; sh_dollar_ins - '$' in front of sh_numbuf's digits but AFTER a leading '-',
 ; so -123 in a currency format is "-$123" and not "$-123".
@@ -37417,7 +37588,7 @@ sh_padzero:
     pop ax
     ret
 
-section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, the chart module
 ; -----------------------------------------------------------------------------
 ; sh_upcase - AL and AH both to upper case, for SEARCH's folded compare
 ; -----------------------------------------------------------------------------
@@ -37472,7 +37643,7 @@ sh_matchat:
     pop ax
     ret
 
-section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, the chart module
 ; -----------------------------------------------------------------------------
 ; sh_strfind - in: SI = haystack, DI = needle, AX = 0-based start,
 ;              DL = 0 exact / 1 case-folded (which is FIND vs SEARCH, and the
@@ -37684,7 +37855,7 @@ sh_pstrarg:
     call sh_str_want
     ret
 
-section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, the chart module
 
 ; shm_vpush / shm_binop_pre - sh_vpush and sh_binop_pre for the module (81.62).
 ; Those two move sh_acc on and off their CALLER's stack past their own return
@@ -39638,7 +39809,7 @@ sh_pabs:
 ; =============================================================================
 ; MACROS, the package's half (SPEC.md 81.63): the Run dialog, the door, and
 ; the two ways a paused run comes back. The engine and every macro function
-; are CHART.OVL's - the module's own header, at shm_pmacro, is the design.
+; are the chart module's - the module's own header, at shm_pmacro, is the design.
 ; =============================================================================
 SH_MACRO_MAXSTEPS equ 10000          ; a runaway loop ENDS rather than hangs:
                                      ; the system is cooperative and the step
@@ -39663,7 +39834,7 @@ SH_MF_ACTCELL  equ 14                ; ...and ACTIVE.CELL's, counted from it
 ; SHEET-MACRO-PLAN wave 0: EXTENSION macro functions. The twenty above stay in
 ; the resident sh_functab at SH_FID_MACRO.. - moving them would renumber the
 ; twenty database/CELL/matrix ids after them for ~300 bytes - and every new
-; one lives in CHART.OVL instead, NAME AND ALL, with a WORD id from 0x100.
+; one lives in the chart module instead, NAME AND ALL, with a WORD id from 0x100.
 ; The evaluator's ids were always words (sh_pfid); only sh_funcid's AL return
 ; is a byte, which is why an extension name is found by a second lookup and
 ; never by sh_funcid itself - its byte callers (bare TRUE/FALSE) cannot see
@@ -39795,7 +39966,7 @@ sh_macro_onbtn:                      ; ...and hears which one: AL, 0-based,
 
 ; sh_macro_arm - arm WAIT's timer: AX = ticks. CF=1 there is no timer on
 ; this kernel (kern_small). RESIDENT, and it has to be: OSAPI_WM_ONTIMER takes
-; a near proc in the CALLER's segment, and a call from CHART.OVL names the
+; a near proc in the CALLER's segment, and a call from the chart module names the
 ; module's - the timer then fires into the module at a package offset
 sh_macro_arm:
     push ax
@@ -40183,10 +40354,10 @@ sh_macro_clear:                      ; AX = Edit > Clear's row, SI = the
 ; resumes it (sh_macro_onalert, sh_idlg_after) - the next cell for ALERT, the
 ; SAME cell for INPUT, whose second evaluation answers what was typed.
 ;
-; The engine and every macro function are CHART.OVL's (82.16): the package
+; The engine and every macro function are the chart module's (82.16): the package
 ; keeps the names, the door (sh_pmacro), the Run dialog and the resumptions.
 ; =============================================================================
-section SH_MODSEC2                     ; 81.63 - MACRO.OVL since 81.94
+section SH_MODSEC2                     ; 81.63 - the macro module since 81.94
 
 ; shm_pmacro - the macro functions, ids SH_FID_MACRO and up. in: AX = the id,
 ; SI just past '('. out: SI past ')', the answer in sh_acc/sh_curtype, AX 0
@@ -40376,7 +40547,7 @@ shm_mkind:
 shm_mkind_end:
 
 section SH_MODSEC                      ; 81.94: the NAMES and BIFF rows stay in
-                                       ; CHART.OVL - the evaluator's lookup and
+                                       ; the chart module - the evaluator's lookup and
                                        ; the BIFF writer read them there
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
 shm_mxnames:
@@ -40680,7 +40851,7 @@ section SH_MODSEC2
 ; take without running what is in it (81.63).
 ;
 ; ALL OF THIS STATE IS THE MODULE'S OWN, addressed through CS. APP_MAX_SIZE
-; left 2,475 resident bytes and this is ~1 KB; CHART.OVL is loaded once and
+; left 2,475 resident bytes and this is ~1 KB; the chart module is loaded once and
 ; kept (ch_ovneed), so it lives as long as a run does. Every access names CS
 ; (os88ovlchk's rule for module data).
 ; =============================================================================
@@ -41277,7 +41448,7 @@ shm_mdefname:
     pop ax
     ret
 
-section SH_MODSEC                      ; 81.94: CHART.OVL's too - a lookup
+section SH_MODSEC                      ; 81.94: the chart module's too - a lookup
 ; shm_mfind - is the name in sh_ident (DS, uppercase) an EXTENSION macro
 ; function? out: AX = its id, SH_FID_MX.., or 0xFF. Preserves the rest.
 shm_mfind:
@@ -41412,7 +41583,7 @@ shm_mref:
 .out:
     ret
 
-section SH_MODSEC                      ; 81.94: CHART.OVL's - the database
+section SH_MODSEC                      ; 81.94: the chart module's - the database
                                        ; functions gather names with it too
 ; shm_mname - SI at a word that is a DEFINED NAME and nothing else, before a
 ; ',' or ')': CF=1, AX/BX its near corner, CX/DX its far corner (equal to
@@ -43477,7 +43648,7 @@ shm_mdirectory:
 .answer:
     push dx
     push bx
-    call OSAPI_FILE_HERE              ; DX = the folder, BL = the drive
+    SHK file_here                     ; DX = the folder, BL = the drive
     cmp byte [cs:shm_dirtxt], 0
     je .root
     cmp dx, [cs:shm_dirclu]
@@ -43518,7 +43689,7 @@ shm_dirwalk:
     push es
     push ds
     pop es                            ; FILE_FIND fills ES:DI - ours
-    call OSAPI_FILE_HERE
+    SHK file_here
     mov [cs:shm_dhere], dx
     mov [cs:shm_dhdrv], bl
     mov si, sh_sacc
@@ -43672,7 +43843,7 @@ shm_dgoto:
     push cx
     push si
     push di
-    call OSAPI_FILE_GOTO_QM
+    SHK file_goto_qm
     pop di
     pop si
     pop cx
@@ -43689,7 +43860,7 @@ shm_dfind:
     xor cx, cx
 .l:
     mov di, sh_clipbuf                ; OSAPI_FIND_SZ bytes, ES = DS
-    call OSAPI_FILE_FIND              ; CX = the next ordinal
+    SHK file_find                     ; CX = the next ordinal
     jc .no
     cmp word [sh_clipbuf + 14], OSAPI_FT_DIR
     jne .l
@@ -44126,7 +44297,7 @@ shm_mdisplay:
     SHOUT sh_skipargs
     push si                           ; one repaint whatever changed: no
     mov si, [sh_ownwin]               ; "dirty" byte, because a byte defined
-    SHOUT sh_repaint                  ; here would sit in MACRO.OVL's segment
+    SHOUT sh_repaint                  ; here would sit in the macro module's segment
     pop si                            ; and DS is the package's
     jmp shm_mtrue
 
@@ -44255,7 +44426,7 @@ shm_mffind:
 shm_mffnext:
     SHOUT sh_skipargs
     push si
-    CHOUT SHM_FIND                     ; in CHART.OVL since 81.111
+    CHOUT SHM_FIND                     ; in the chart module since 81.111
     pop si
     mov byte [sh_macro_dirty], 1
     jmp shm_mtrue
@@ -44276,7 +44447,7 @@ shm_mprevno:
 ; refuses that the same way it refuses it from the dialog.
 ;
 ; THE SELECTION IS THE RECTANGLE, as it is for the command - a macro selects
-; first. The engine is CHART.OVL's and this is MACRO.OVL, so it goes through
+; first. The engine is the chart module's and this is the macro module, so it goes through
 ; a verb rather than a near call.
 ; =============================================================================
 shm_mtable:
@@ -45047,7 +45218,7 @@ shm_mfdelete:
     SHOUT sh_skipargs
     push si
     mov si, sh_delname
-    call OSAPI_FILE_DELETE            ; CF=0 AX=0, else FERR_*
+    SHK file_delete                   ; CF=0 AX=0, else FERR_*
     pop si
     jc .gone
     jmp shm_mtrue
@@ -45288,7 +45459,8 @@ shm_mseries:
 ; changed.
 ;
 ; THE MEMORY IS THE TAIL OF THIS MODULE'S OWN CLAIM - between the end of
-; CHART.OVL's image and CH_OVKB KB - and not a claim of its own, for two
+; the macro module's image and SH_M2KB KB, zeros carried in the part itself
+; (82.16.12) - and not a claim of its own, for two
 ; reasons that are both rules: SPEC.md 50.3 takes a package's claims in its
 ; entry proc and nowhere else, and MEM_OWNER_MAX is eight claims an owner,
 ; which SHEET already holds. So a file a macro opens is as big as its share of
@@ -45401,7 +45573,7 @@ shm_mfopen:
     mov si, sh_delname
     mov cx, SHM_FEACH
     xor dx, dx
-    call OSAPI_FILE_READ
+    SHK m2read
     pop di
     pop es
     jc .na
@@ -45440,7 +45612,7 @@ shm_fsize0:
     xor cx, cx
 .l:
     mov di, sh_clipbuf
-    call OSAPI_FILE_FIND
+    SHK file_find
     jc .no
     cmp word [sh_clipbuf + 14], OSAPI_FT_DIR
     jae .l                            ; a folder is not a file
@@ -45518,7 +45690,7 @@ shm_fflush:
     or al, al
     jnz .nm
     mov si, sh_delname
-    call OSAPI_FILE_WRITE
+    SHK m2write
     pop di
     pop es
     jc .out
@@ -49169,10 +49341,18 @@ shm_mword:
     pop si
     pop ax
     ret
-shm_m2end:                            ; 81.94: MACRO.OVL's last byte + 1 - the
-                                       ; text files' buffers are its claim's tail
+shm_m2end:                            ; 81.94: the macro module's last byte + 1
+                                       ; - the text files' buffers are its
+                                       ; claim's tail, and the tail is IN the
+                                       ; part (82.16.12): op_fetch claims a
+                                       ; part's own length, so these zeros are
+                                       ; what make that SH_M2KB. They cost a
+                                       ; few bytes packed, and a module that
+                                       ; outgrows SH_M2KB drives the count
+                                       ; negative, which is the build failing
+    times (SH_M2KB * 1024 - (shm_m2end - sh_modm0)) db 0
 
-section SH_MODSEC                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
+section SH_MODSEC                      ; 81.65: DAVERAGE...DVARP, the chart module
 ; =============================================================================
 ; THE DATABASE FUNCTIONS (81.65): DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT
 ; DSTDEV DSTDEVP DSUM DVAR DVARP, ids SH_FID_DATABASE and up. Every one takes
@@ -55926,7 +56106,7 @@ sh_dowrite_dbf:
     mov cx, [sh_stagelen]
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_WRITE
+    SHK file_write
     jc .werr
     mov word [sh_msg], sh_m_saved
     cmp byte [sh_trunc], 0
@@ -56314,7 +56494,7 @@ sh_doread_dbf:
     mov cx, SH_STAGE_MAX
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_READ
+    SHK file_read
     jc .rerr
     mov [sh_sepend], ax
     cmp ax, SH_DBF_HDR + 1
@@ -56693,7 +56873,7 @@ sh_dowrite_sep:
     mov cx, [sh_stagelen]
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_WRITE
+    SHK file_write
     jc .werr
     mov word [sh_msg], sh_m_saved
     cmp byte [sh_trunc], 0
@@ -56772,7 +56952,7 @@ sh_doread_sep:
     mov cx, SH_STAGE_MAX
     xor dx, dx
     mov si, sh_name
-    call OSAPI_FILE_READ
+    SHK file_read
     jc .rerr
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0           ; "replacing the sheet", the same three
@@ -57006,7 +57186,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; conventions (caller owns the block, passed in SI; no storage of its own).
 ; First consumer: Formula > Note..., which is Excel 2.1's cell notes and the
 ; first place in this app where free text can be typed at all.
-section SH_MODSEC                      ; 81.102: CHART.OVL, with its only
+section SH_MODSEC                      ; 81.102: the chart module, with its only
 %include "os88text.inc"                ; consumer, the Note dialog
 section .text
 
@@ -57030,9 +57210,43 @@ section .text
 %define DEC_S16
 %include "os88dec.inc"
 
+; THE TWO MODULES ARE PARTS OF SHEET.O88 (82.16.12) - the chart and file
+; formats module, and the macro language's - each lazy and compressed, fetched
+; into a claim of its own by the parts standard (SPEC.md 20.12.4) when it is
+; first wanted and far-called there. They were CHART.OVL and MACRO.OVL, two
+; files beside the package that a user browsing the folder saw as programs
+; and a copy could leave behind. The Makefile cuts both out of sheet.bin
+; exactly as before (tools/os88ovl.py) and hands them to os88pkg.py as parts.
+; Their claims MOVE (82.16.11): op_movable declares each one with the
+; standard's own proc, which puts the row right and jumps here.
+%define OP_ONMOVE sh_partmv
+%include "os88parts.inc"
+SH_PART_CHART equ 0                 ; .modc: the chart, file formats, dialogs
+SH_PART_MACRO equ 1                 ; .modm: the macro language (81.94)
+CH_OVPART     equ SH_PART_CHART     ; os88chartovl.inc's name for its row
+    OS88_PARTS_BEGIN 2
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 0 the chart module
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 1 the macro module
+    OS88_PARTS_END
+
+; sh_partmv - A MODULE'S CLAIM MOVED (OP_ONMOVE, SPEC.md 20.12.12): BX = where
+; it was, DX = where it is, op_lazymv having already put the row right. Each
+; module is named by one word here - CHART's two in ch_ovreloc, MACRO's
+; segment in sh_m2far - and its run state is in its own claim, so it moves
+; with it. Called inside the allocator: it may not claim, draw or yield
+sh_partmv:
+    call ch_ovreloc
+    cmp [sh_m2far + 2], bx
+    jne .x
+    mov [sh_m2far + 2], dx
+.x:
+    ret
+
 %define CH_MODC_EXT sh_modc_ext     ; 82.16.8's hook, before ch_modc is emitted
-CH_OVSTAMP equ sh_modc_stamp - sh_modc0  ; ...and the build stamp ch_ovneed
-CH_OVLEN   equ sh_modc_end               ; checks: where it is, and the length
+%define CH_OV2SEG sh_m2far + 2      ; 82.16.11: the macro module is
+                                    ; ch_xthunk's second, its segment this word
+%define CH_FWRITE call far [sh_v_k_file_write]  ; ...and the BMP export's
+                                    ; write is SHK file_write (os88chart.inc)
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
 
@@ -57041,7 +57255,7 @@ CH_OVLEN   equ sh_modc_end               ; checks: where it is, and the length
 %endif
 
 %include "os88chart.inc"
-section SH_MODSEC                      ; CHART.OVL's last byte + 1, shm_m2end's
+section SH_MODSEC                      ; the chart module's last byte + 1, shm_m2end's
 sh_modc_end:                           ; twin: os88chart.inc is the last .modc
 section .text                          ; fragment, so nothing lands after this
 
@@ -57049,7 +57263,7 @@ section .text                          ; fragment, so nothing lands after this
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9337                     ; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, CHART.OVL's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9487                     ; +102 for 82.16.12: the parts standard's own OP_BSS, at the chain's head (the two modules are parts of SHEET.O88 now); +48 for 82.16.11: twelve vectors, CHOUT and the SHK kernel slots; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, the chart module's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in the chart module, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -57064,7 +57278,7 @@ section .text                          ; fragment, so nothing lands after this
                                        ; +476 for 81.95's custom menus: the
                                        ; bar pointer and length, the custom
                                        ; bar's table, three records;
-                                       ; +5 for 81.94's MACRO.OVL pointer and
+                                       ; +5 for 81.94's the macro module pointer and
                                        ; its failure byte;
                                        ; +25 for 81.92's ON.KEY table and
                                        ; ON.TIME's flag;
@@ -57097,17 +57311,14 @@ section .text                          ; fragment, so nothing lands after this
                                        ; new vectors)
     OS88_IMAGE_END
 
-; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
-; not a tidy-up: apps/os88chart.inc is about to become an OVERLAY shared by
-; both callers (82.16), the module keeps DS = the package's segment (SPEC.md
-; 68.10), so every ch_* reference in it assembles to THIS package's address.
-; One binary can serve both only if both put the block at the same offset, and
-; offset zero is the only one neither package has to negotiate for.
-%define CH_BSS_BASE (os88_image_end + 0)
+; THE PARTS STANDARD'S OP_BSS BYTES COME FIRST (os88parts.inc: ours first,
+; yours after), and the ch_* block follows them. It used to be pinned at bss
+; offset 0 so that one module binary could serve both SHEET and CHART; 82.16.1
+; already says that sharing cannot happen (the module is cut from SHEET alone,
+; and every ch_* reference in it assembles to THIS package's address), so the
+; offset is whatever this chain says it is.
+%define CH_BSS_BASE (os88_image_end + OP_BSS)
 %include "os88chartbss.inc"
-%if CH_BSS_BASE != os88_image_end
-  %error "the ch_* block must start at bss offset 0 - see 82.16"
-%endif
 
 sh_selcol     equ CH_BSS_END
 sh_selrow     equ sh_selcol + 2
@@ -58147,7 +58358,7 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 151
+SH_NVEC       equ 163                  ; +12 for 82.16.11 (CHOUT, SHK)
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
@@ -58158,7 +58369,25 @@ sh_v_sh_dbx_open             equ sh_v_sh_mtab_calc + 4
 sh_v_sh_note_load            equ sh_v_sh_dbx_open + 4
 sh_v_sh_btfix                equ sh_v_sh_note_load + 4
 sh_v_os88ui_sbwheel          equ sh_v_sh_btfix + 4
-sh_v_end      equ sh_v_os88ui_sbwheel + 4
+sh_v_ch_ovcall               equ sh_v_os88ui_sbwheel + 4  ; 82.16.11
+sh_v_k_wm_create             equ sh_v_ch_ovcall + 4
+sh_v_k_wm_show               equ sh_v_k_wm_create + 4
+sh_v_k_wm_destroy            equ sh_v_k_wm_show + 4
+sh_v_k_file_read             equ sh_v_k_wm_destroy + 4
+sh_v_k_file_write            equ sh_v_k_file_read + 4
+sh_v_k_file_here             equ sh_v_k_file_write + 4
+sh_v_k_file_goto_qm          equ sh_v_k_file_here + 4
+sh_v_k_file_find             equ sh_v_k_file_goto_qm + 4
+sh_v_k_file_delete           equ sh_v_k_file_find + 4
+sh_v_k_m2read                equ sh_v_k_file_delete + 4
+sh_v_k_m2write               equ sh_v_k_m2read + 4
+sh_v_end      equ sh_v_k_m2write + 4
+%if (sh_v_end - sh_v_first) != SH_NVEC * 4
+  %error "SH_NVEC must count the sh_v_* chain (sh_ovbind fills SH_NVEC)"
+%endif
+%if SH_OVSHIMS_N != SH_NVEC
+  %error "sh_ovshims and SH_NVEC disagree - a vector with no shim, or one past"
+%endif
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -58438,7 +58667,7 @@ sh_macro_btn  equ sh_macro_aset + 1          ; byte: ...the button it answered
 sh_macro_esc  equ sh_macro_btn + 1           ; byte: Esc cut a WAIT short
 sh_macro_ontp equ sh_macro_esc + 1           ; byte: ON.TIME has a request
 sh_macro_keys equ sh_macro_ontp + 1          ; SH_MKEYS * SH_MKREC: ON.KEY
-sh_m2far      equ sh_macro_keys + SH_MKEYS * SH_MKREC ; 4: MACRO.OVL's
+sh_m2far      equ sh_macro_keys + SH_MKEYS * SH_MKREC ; 4: the macro module's
                                              ; (offset, segment), 0 = not loaded
 sh_m2fail     equ sh_m2far + 4               ; byte: ...and it could not be
 sh_mtabp      equ sh_m2fail + 1              ; 81.95: the bar's table...

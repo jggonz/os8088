@@ -235,7 +235,8 @@ def main(argv):
     SIN = sintab()
     bad = []
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:   # open_game boots it on state
         slot, seg, base = tanktest.open_game(m)
         g = Game(m, seg, base)
         print("  TANK.O88: window %d, segment %04x, bss at %04x"

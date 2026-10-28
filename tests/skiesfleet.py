@@ -132,7 +132,7 @@ def main(argv):
     # without converging. os88ui's `up` waits for the boot to END, and every
     # step after it is confirmed off guest state.
     with os88ui.boot(a.image, apps=a.apps, machine=a.machine, saver=True,
-                     settle=False) as ui:
+                     settle=False, quick=True) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)

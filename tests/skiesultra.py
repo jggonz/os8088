@@ -83,7 +83,8 @@ def main(argv):
     def off(n):
         return dispapps.bss_off("skies", n)
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
         slot, seg, base = skies.open_game(m)
         lin = seg << 4
 

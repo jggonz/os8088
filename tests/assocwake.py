@@ -124,10 +124,10 @@ def dbl_at_handover(m, mo, wx, wy, name, before_wins):
              "toast": bytes or None}.
     """
     entry = dispcp.row_of(m, S, name)
-    row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
+    row = dispcp.scroll_to(m, mo, S, UD, wx, wy, entry)
     x, y = dispcp.row_xy(wx, wy, row)
     mo.to(x, y)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
     if mo.where()[2] & 1:
         mo._edge(False)
@@ -169,11 +169,22 @@ def dbl_at_handover(m, mo, wx, wy, name, before_wins):
     return seen
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+# every read below is guest memory (or the framebuffer after the UI is
+# done), so the boot gate is the kernel's STATE and the dispcp verbs settle
+# on ui_done (docs/plans/completed/SOAK-SPEED.md 4)
+def UD(m, **_):
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "A")
+    dispcp.open_drive(m, mo, S, UD, "A")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MEDIA")
+    dispcp.open_named(m, mo, S, UD, wx, wy, "MEDIA")
     names = [n for n, _ in dispcp.listing(m, S)]
     say("A:\\MEDIA = %r" % names)
     if DOC not in names:
@@ -235,7 +246,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                      "the end of the load (SPEC.md 54.10)" % WANT)
     else:
         say("the load ended saying %r" % said)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
     # --- 3. ...and the picture arrives --------------------------------------
     wins = dispcp.win_list(m, S)

@@ -1,12 +1,12 @@
 ; =============================================================================
 ; os8088 - tests/dosirq/irq.asm
 ;
-; CAN A DOS PROGRAM DRIVE THE HARDWARE IN THE BOX? (SPEC.md 96.18)
+; CAN A DOS PROGRAM DRIVE THE HARDWARE UNDER OS8088'S DOS? (SPEC.md 96.18)
 ;
 ; Every other DOS gate here asks a question about INT 21h, which is OUR code
 ; answering. This one asks about the machine: a program inside the fsx bracket
 ; hooks a real IRQ vector, unmasks a real line at a real 8259, and asks a real
-; card to pull it. If the count comes back zero the DOS box can host only
+; card to pull it. If the count comes back zero DOS can host only
 ; programs that poll, which rules out most of what a Sound Blaster is for.
 ;
 ; THE SOUND BLASTER'S DSP COMMAND 0F2h IS THE CHEAPEST HARDWARE INTERRUPT ON

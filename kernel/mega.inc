@@ -63,7 +63,7 @@
 %ifdef KERN_MEGA
 
 MEGA_GDT_LIN    equ 0x110000        ; above the HMA, which KERN-MEGA-PLAN 2.7
-MEGA_LDT_LIN    equ 0x120000        ; keeps free for the DOS box's real-mode
+MEGA_LDT_LIN    equ 0x120000        ; keeps free for DOS's real-mode
 MEGA_IDT_LIN    equ 0x124000        ; half
 MEGA_GDT_N      equ 8192            ; the CPU's maximum: 64KB
 MEGA_LDT_N      equ 2048            ; 1MB / 512 bytes: 16KB
@@ -192,7 +192,36 @@ mega_enter:
     les ax, [sch_old08]             ; the BIOS's own handlers, kept for the
     mov [mega_old08], ax            ; reflection's IVT...
     mov [mega_old08+2], es
+%ifndef KBD_I15
     les ax, [kbm_old9]
+%else
+    ; ...UNLESS mouse_init hooked int 15h AH=4Fh INSTEAD (SPEC.md 9.7.2).
+    ; Protected mode needs the int 09h shape whatever the ROM offers: the IDT
+    ; is built FROM the IVT (mega_idt_build), so IVT 09h must be kbm_isr or
+    ; IRQ1 becomes the EOI stub - a dead keyboard, and an 8042 nobody reads,
+    ; which stops the PS/2 mouse too (Bochs, measured) - and a reflection
+    ; runs the BIOS's int 09h on the IVT, whose 4Fh must not land in kbm_i15,
+    ; whose KDS would load a protected-mode selector. So it becomes that
+    ; shape here: the ROM's int 15h back, kbm_isr into int 09h, the ROM's
+    ; int 09h into kbm_old9, and [kbm_ivec] int 09h's
+    cmp byte [kbm_ivec], 0x54
+    jne .k9
+    xor ax, ax
+    mov es, ax
+    mov ax, [kbm_old9]
+    mov dx, [kbm_old9+2]
+    mov [es:0x54], ax
+    mov [es:0x56], dx
+    mov ax, kbm_isr
+    xchg ax, [es:0x24]
+    mov dx, KERNEL_SEG
+    xchg dx, [es:0x26]
+    mov [kbm_old9], ax
+    mov [kbm_old9+2], dx
+    mov byte [kbm_ivec], 0x24
+.k9:
+    les ax, [kbm_old9]          ; the ROM's int 09h, either way
+%endif
     mov [mega_old09], ax
     mov [mega_old09+2], es
     push ds
@@ -782,7 +811,7 @@ section .text                   ; (KERN-MEGA-SEGMENTS-PLAN: back from .mega)
 ; `pushf / call far [sch_old08]` exactly as the ROM was: the tick at 40:6C and
 ; its midnight wrap, the floppy motor-off count at 40:40, the EOI, iret.
 ; int 1Ch, which the ROM calls from here, is NOT called: nothing in the tree
-; hooks it outside the DOS box, which is real mode (KERN-MEGA-PLAN 2.7).
+; hooks it outside DOS, which is real mode (KERN-MEGA-PLAN 2.7).
 ; -----------------------------------------------------------------------------
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
 mega_t08:
@@ -1067,9 +1096,11 @@ mega_pit:
 mega_k09:
     pusha
     push ds
-    mov ax, MEGA_BDA
-    mov ds, ax
-    in al, 0x60
+    push MEGA_SEL_KDATA             ; NOT port 60h: kbm_isr, the IDT's IRQ1
+    pop ds                          ; gate, read it already and left the byte
+    mov al, [kbm_kbyte]             ; here (SPEC.md 9.7.2) - one read, so an
+    push MEGA_BDA                   ; emulated 8042 that loads its next byte
+    pop ds                          ; on a read cannot lose one
     cmp al, 0xE0
     jne .note0
     or byte [0x96], 0x02            ; the ROM's own E0 flag (40:96 bit 1)
@@ -2783,9 +2814,20 @@ mega_svc_back:
     and word [ss:bp+28], ~0x08D5
     or [ss:bp+28], ax
     cmp byte [mega_fdpend], 0       ; a native floppy fallback: did the BIOS
-    je .out                         ; do what it could not? (mega_fdjudge)
+    je .rh                          ; do what it could not? (mega_fdjudge)
     call mega_fdjudge
-.out:
+.rh:
+    cmp word [sch_rpend], 0         ; THE PERIODS THE ROM TOOK, TO THE HOOK
+    je .out                         ; NOW (KERN-MEGA-PLAN 14.73): every IRQ0
+    cmp byte [sch_fast], SCH_RATE   ; that fell in the call was the ROM's, so
+    jne .out                        ; an FSXF_RATE hook (SPEC.md 53.2.2) ran
+    pusha                           ; at none of them - where a real-mode
+    mov bp, sch_rhook               ; kernel's runs through the same read. A
+    call KERNEL_SEG:mega_tcall      ; caller that chained reads back to back
+    popa                            ; starved it outright: the next tick fell
+.out:                               ; in the next reflection. sch_rhook's
+                                    ; own guards (busy, the ROM's chain, a
+                                    ; stack not a task's) still decide
     pop es
     pop ds
     popa
@@ -4531,7 +4573,10 @@ mega_bhex2:
 ; The line stays masked when the mouse has not settled, when a DRIVER feeds
 ; it (its ISR may be an image above 1MB), when the vector is not the kernel's
 ; (a thief the theft repair has not been synced from), and for int 10h - the
-; arrow must not draw in the middle of a mode set or a font load.
+; arrow must not draw in the middle of a mode set or a font load. A line whose
+; real-mode vector is an OPTION ROM's is left open as well, on every service
+; (KERN-MEGA-PLAN 14.73): a PicoMEM's multiplexer copies its Sound Blaster's
+; blocks there, and its disk is one of those services.
 ; in: BP = mega_svc's frame, DS = KDATA. out: BX. Clobbers AX
 ; -----------------------------------------------------------------------------
 section .cold
@@ -4575,6 +4620,36 @@ mega_rmaskf:
 .k:
     pop es
 .out:
+    push es                         ; ...AND EVERY LINE AN OPTION ROM OWNS
+    push dx                         ; (KERN-MEGA-PLAN 14.73): its handler is
+    push si                         ; real-mode code in a ROM, which runs in
+    mov ax, MEGA_SEL_IDT            ; the reflection as it is - and a
+    mov es, ax                      ; PicoMEM's multiplexer (SPEC.md 34.10.1)
+    mov si, 0x20*8                  ; is how its Sound Blaster's every block
+    mov dx, 1                       ; is copied, and how its sample clock's
+.rl:                                ; IRQs arrive: masked for a whole
+    test bx, dx                     ; reflected int 13h - its own disk's -
+    jz .rn                          ; the card played nothing it was not
+    cmp word [es:si+2], MEGA_SEL_CODE   ; given and dropped the block IRQs.
+    jne .rn                         ; THE KERNEL'S OWN VERDICT, not the
+    mov ax, [es:si]                 ; vector's value: an IVT cell can hold
+    sub ax, mega_irv                ; a SELECTOR (a driver's ISR, any value
+    cmp ax, 14*6                    ; at all), so the test is the line's
+    jae .rn                         ; gate - a reflecting stub (mega_irv),
+    not dx                          ; which mega_irqrom builds only where the
+    and bx, dx                      ; IVT cell named an option ROM. The SB's
+    not dx                          ; own line stays masked, and that bit is
+.rn:                                ; what the multiplexer reads before it
+    add si, 8                       ; raises a software int
+    cmp dx, 0x80                    ; (the master's last: the slave's gates
+    jne .rs                         ; are at 70h)
+    mov si, 0x70*8
+.rs:
+    shl dx, 1
+    jnz .rl
+    pop si
+    pop dx
+    pop es
     mov [mega_rmask], bx
     retf
 
@@ -9253,8 +9328,12 @@ mega_t86    db "real mode: 8086-class CPU", 0
 mega_tmem   db "real mode: no 82KB for kern_mega's tables", 0
 mega_ta20   db "real mode: A20 will not open", 0
 mega_ttask  db "real mode: a task predates it", 0
+%ifdef MEGA_DIAG                    ; the field build names the way BACK
 mega_mtoast db "protected, 286 reset", 0
 mega_mtoast3 db "protected, 386 CR0", 0
+%else                               ; ...a shipped one only that it got in,
+mega_mtoast db "Entered protected mode", 0 ; which is true on any CPU
+%endif
 
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
 ; mega_pmtail - the rest of the switch, once `.mega` is where MEGA_SEL_CODE
@@ -9317,10 +9396,12 @@ mega_pmtail:
     push ds                         ; with no debug port: the menu bar says it
     pop es                          ; for a few seconds (toast_show only
     mov si, mega_mtoast             ; stages; the UI task's first idle pass
+%ifdef MEGA_DIAG
     cmp byte [cpu_tier], CPU_386    ; ...naming the way BACK it will use,
     jb .t286                        ; which is the thing a field run is for
     mov si, mega_mtoast3
 .t286:
+%endif
     mov cx, 146                     ; draws it), for eight seconds: long enough
                                     ; to photograph
     call KERNEL_SEG:cw_toast_show
@@ -9376,6 +9457,63 @@ mega_ivt_syncm:
 mega_xmwalkf:
     call mega_xmwalk
     retf
+; mega_imgnf - FAR (osapi_img_name's BX = 1 arm, KERN-MEGA-PLAN 14.70.3): AX =
+; a pool block's KB offset -> CF = 0, SI = the segment word of the drv_tab,
+; ss_row or mod_tab row whose image is based there, AL = 0 a driver / 1 a
+; module; CF = 1 none. mega_xmcls's match - the row's selector, its LDT base,
+; mx_rel - over every row that names an image. DS = KDATA. Keeps the rest
+mega_imgnf:
+    push bx
+    push cx
+    push dx
+    mov bx, ax                      ; BX = the offset wanted
+    mov si, drv_tab + DRVR_SEG
+.d:
+    call .is
+    je .drv
+    add si, DRVR_SIZE
+    cmp si, drv_tab + DRVR_SEG + DRV_MAX * DRVR_SIZE
+    jb .d
+    mov si, ss_row + DRVR_SEG
+    call .is
+    je .drv
+    mov si, mod_tab + MODR_SEG
+.m:
+    call .is
+    je .mod
+    add si, MODR_SIZE
+    cmp si, mod_tab_end
+    jb .m
+    mov ax, bx
+    stc
+    jmp short .out
+.drv:
+    mov al, 0
+    jmp short .ok
+.mod:
+    mov al, 1
+.ok:
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    retf
+; .is - ZF = 1 the selector at [SI] names an image based at BX KB from the
+; pool's base. Clobbers AX, CL, DX
+.is:
+    mov ax, [si]
+    test al, 4                      ; an LDT selector: an image above 1MB
+    jz .isno
+    call mega_selbase               ; DX:AX = its base (CL spent)
+    jc .isno
+    call mx_rel                     ; AX = KB from the pool's base
+    jc .isno
+    cmp ax, bx
+    ret
+.isno:
+    or si, si                       ; (SI is never 0: ZF = 0)
+    ret
 mega_codeself:
     call mega_codesel
     retf
@@ -9384,7 +9522,7 @@ mega_bpcall:                        ; xm_dsp's: BP = a `.mega` routine
     retf
 section .text
 
-%include "megados.inc"          ; M6: the DOS box's park (KERN-MEGA-DOS-PLAN)
+%include "megados.inc"          ; M6: DOS's park (KERN-MEGA-DOS-PLAN)
 
 section .bss
 mega_nmi61  resb 1                  ; port 61h at the last latched NMI

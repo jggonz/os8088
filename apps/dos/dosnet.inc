@@ -160,7 +160,7 @@ dn_init_x:
 ; is not a single frame on the wire to infer it from - unlike the outbound
 ; direction, where the client's own SYN carries everything we need.
 ;
-; So the box has to be TOLD, and the place it is told is the one that already
+; So DOS has to be TOLD, and the place it is told is the one that already
 ; exists: the ENVIRONMENT PAGE (SPEC.md 96.20). `OS88LISTEN=80` in a row the
 ; user has typed anyway, beside the `MTCPCFG=` the program needs. No new
 ; dialog, no new file, and the DOS program sees it as a variable it ignores.
@@ -1942,7 +1942,7 @@ dn_pump:
                                     ; waits a whole one before anything looks
                                     ; at it. It refuses itself when a frame is
                                     ; already staged, so it costs a listening
-                                    ; box one compare and a box with no
+                                    ; DOS one compare and a DOS with no
                                     ; listener at all one more
     cmp word [dn_pend], 0
     jne .out                        ; ...and if it staged the SYN, that IS

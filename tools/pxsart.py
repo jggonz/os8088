@@ -330,7 +330,23 @@ def write_png_rgb(path, w, h, rows):
 
 # --- the masters ----------------------------------------------------------------
 
+_NEAREST = {}
+
+
 def nearest_index(rgb, tol=None):
+    """The palette index nearest `rgb` (first of equals), or None past
+    `tol`. Memoised: a sprite set asks ~1.8 million times about a few dozen
+    colours, which was 80 s of tests/pxssim.py"""
+    key = (tuple(rgb), tol)
+    try:
+        return _NEAREST[key]
+    except KeyError:
+        pass
+    _NEAREST[key] = got = _nearest_index(rgb, tol)
+    return got
+
+
+def _nearest_index(rgb, tol=None):
     best, bd = 0, None
     for i, c in enumerate(PALETTE):
         d = sum((a - b) ** 2 for a, b in zip(rgb, c))
@@ -876,6 +892,20 @@ def load_sprite(stem, w, h):
     raises with the reason: the size, an alpha that is not 0 or 255, a
     colour off the sixteen, the key inside an opaque pixel."""
     path = sprite_path(stem)
+    st = os.stat(path)                  # (memoised on the file's identity:
+    key = (path, st.st_mtime_ns, st.st_size, w, h)  # a row loads the set
+    if key in _SPRITES:                 # thousands of times; a copy, since
+        idx, alpha = _SPRITES[key]      # a caller may edit what it gets)
+        return [list(r) for r in idx], [list(r) for r in alpha]
+    idx, alpha = _load_sprite(path, w, h)
+    _SPRITES[key] = ([list(r) for r in idx], [list(r) for r in alpha])
+    return idx, alpha
+
+
+_SPRITES = {}
+
+
+def _load_sprite(path, w, h):
     pw, ph, rows = read_png(path)
     if (pw, ph) != (w, h):
         raise ValueError("%s: %dx%d, this master is %dx%d" % (path, pw, ph, w, h))

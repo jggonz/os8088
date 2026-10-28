@@ -148,12 +148,19 @@ def run():
             "disk `--fatcap 1` and keep part %d off a cluster boundary"
             % (clb, slack, LAZY))
 
-    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+    # Every read below is guest state (the window list, MSEG's bss, the
+    # claim table, the sector count): the boot gates on the kernel's desktop
+    # state and every wait is `ui_done`, never a picture settle.
+    done = lambda mm, **k: os88marty.ui_done(mm)
+    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEG.O88")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, done, wx, wy, "MSEG.O88")
+        os88marty.ui_done(m)
 
         seg = 0
         for i in dispcp.win_list(m, S):
@@ -179,8 +186,8 @@ def run():
         before = claims(m)
 
         # --- 2. the key fetches it, and it is right ----------------------
-        m.key("KeyL")
-        os88marty.settle(m)
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         ps = part_seg()
         t = title_of(m, seg, wrec)
         lz = chr(m.read((seg << 4) + sym("ms_lazy"), 1)[0])
@@ -228,8 +235,8 @@ def run():
                          "(SPEC.md 20.12.4): %r" % (len(new), new))
 
         # --- 4. the second key gives it back, exactly ----------------------
-        m.key("KeyL")
-        os88marty.settle(m)
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         ps2 = part_seg()
         final = claims(m)
         say("after the drop: op_seg(%d) = %04X, claims %d -> %d"

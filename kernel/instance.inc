@@ -707,7 +707,11 @@ inst_seg_parked:
     ; slot count. The byte walks in DI, which inst_of_seg's refusal left as
     ; nothing and the `pop di` below puts back.)
     push bx
-    mov bx, sch_tasks
+%ifdef OS88_COMPACT
+    cmp byte [wm_tcnt], 0       ; A PACKAGE WORKER INSIDE A DRIVER VERB (K9):
+    jne .svcbusy                ; ETHER.DRV's run on FTPD's, Telnet's and the
+%endif                          ; Browser's workers, which hold its pool in ES
+    mov bx, sch_tasks           ; mid-copy - and are no TF_SERVICE task
     mov di, sch_parked
 .svc:
     cmp byte [bx+T_STATE], 0
@@ -727,6 +731,13 @@ inst_seg_parked:
 .cf:
     pop di
     retf
+%ifdef KERN_MEGA
+    nop                         ; PARITY PAD, never executed: K9's test above
+%endif                          ; is 7 bytes and the routines below keep an
+                                ; EVEN shift (t_hotpar.py) - on kern_mega; the
+                                ; other compacting kernels are back even by
+                                ; mem_rr_tab's four new rows less menu_reloc
+                                ; (kernel size pass 14)
 ; -----------------------------------------------------------------------------
 ; inst_svc_parked - has every DRIVER worker parked? (SPEC.md 66.5.5) - INLINE,
 ; in inst_seg_parked's .drv arm above (size pass 9)
@@ -871,8 +882,6 @@ inst_rel_rec:
 
 ; -----------------------------------------------------------------------------
 ; inst_of_win - find the instance owning a window
-; PARITY: serial's teardown call adds three bytes before the UI hot entry.
-    db 0
 ; in:  BX = window ptr (record-aligned)
 ; out: CF = 0, DI = instance record ptr; CF = 1 if the window is unowned
 ;      (DI undefined). BX preserved.
@@ -1674,11 +1683,9 @@ app_close_win:
 .out:
     pop di
     ret
-%ifndef KERN_SMALL
-    db 0                        ; PARITY PAD, never executed (kernel size pass
-                                ; 13): ui_task and everything to the end of
-                                ; .text back at an even shift on kern_big
-%endif                          ; (kern_small's pad is after dskw_batch)
+                                ; (kern_big's parity pad here and menu.inc's
+                                ; before menu_popup cancelled, with nothing
+                                ; hot between them: kernel size pass 14)
 
 ; -----------------------------------------------------------------------------
 ; inst_minimize - send a window's instance to the dock
@@ -2063,12 +2070,13 @@ inst_pkg_spawn:
     pop dx
     pop cx
     pop bx
-    ret
-    nop                         ; PARITY PAD, never executed: the class mask
-                                ; above is one byte longer than the bit-7
-                                ; shift it replaced, and ui_task and the hot
-                                ; routines after it keep the parity t_hotpar
-                                ; measured them at
+    ret                         ; (the class mask above is one byte longer
+                                ; than the bit-7 shift it replaced, and
+                                ; serial's teardown call in inst_rel_rec three:
+                                ; the two are an even four together, so
+                                ; ui_task keeps the parity t_hotpar pins
+                                ; without the pad each once carried - kernel
+                                ; size pass 14)
 
 ; -----------------------------------------------------------------------------
 ; inst_pkg_alive - the worker's liveness check, and its only way to die

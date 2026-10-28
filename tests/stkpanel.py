@@ -50,8 +50,11 @@ def main(argv):
     low, bot = eq["LOW_SEG"], eq["STK0_BOT"]
     t_sp = eq["T_SP"]
     bad = []
-    with os88marty.launch(a.image, machine=a.machine) as m:
-        os88marty.settle(m)
+    with os88marty.launch(a.image, machine=a.machine,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         m.pause()
         canary = (low << 4) + bot
         was = m.read(canary, 2)

@@ -83,7 +83,7 @@ def main():
             m.write(base + syms["vp_rep"], b"\1")
             m.type_text("p")
             os88marty.until(m, lambda mm: rb("vp_lsess") == 1, "a live "
-                            "session", poll=0.3, limit=600.0, guest=30.0)
+                            "session", poll=0.05, limit=600.0, guest=30.0)
             got = (rb("vp_flive"), rb("vp_rend"))
             print("   live %d, rendition %d (want 1, 2: the VGA's)" % got)
             if got != (1, 2):

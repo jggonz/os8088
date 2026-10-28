@@ -55,6 +55,7 @@ import os88ui               # noqa: E402
 import os88geom as geom     # noqa: E402
 
 HZ = os88marty.GUEST_HZ
+IDLE = 0.5          # guest seconds of ui_task asleep that end an armed trace
 PHASES = [("wm_paint_dmg", "setup"), ("wm_dmg_gray", "ground"),
           ("desk_paint_mask_x", "cells"), ("dock_paint", "dock+bar"),
           ("wm_dmg_wins", "windows"), ("wm_dmg_wins.wdone", "promote")]
@@ -98,6 +99,15 @@ def occ(w):
     return (w.x, w.y, w.x + w.w, w.y + w.h)
 
 
+def still(ui):
+    """The UI has finished drawing (`os88marty.ui_done`: ui_task asleep,
+    nothing queued, the lock free, for a tick) and the card has rasterised
+    it - three frames, for VGA's `fbuf`, which is the RENDERED glass and lags
+    the framebuffer by up to one. What `settle` was standing in for before a
+    guest read or a pixel grab, at a fraction of its 2-host-second floor."""
+    ui.still()
+
+
 def isect(a, b):
     r = (max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3]))
     return r if r[0] <= r[2] and r[1] <= r[3] else None
@@ -109,7 +119,7 @@ def shrink(ui, w, dx, dy):
     w = ui._refresh(w)
     gx, gy = w.x + w.w - 4, w.y + w.h - 4
     ui.mo.drag(gx, gy, gx + dx, gy + dy)
-    ui.settle()
+    still(ui)
     return ui._refresh(w)
 
 
@@ -146,7 +156,15 @@ def armed(ui, trigger, quiet=3.0, first=40.0, names=None):
         # QUIET IS MEASURED FROM THE LAST PASS'S END, not from the last hit:
         # a Task Manager on its performance page draws every TM_INT for ever
         # (SPEC.md 28.11.2), so "no hits at all" never arrives with one open
+        # ...OR FROM THE UI TASK GOING TO SLEEP AND STAYING THERE. `quiet` is
+        # 13.5 guest seconds by default, and a pass's follow-ups are all
+        # ui_task's own (a posted cell repaint, a promotion, a one-tick
+        # deferral): `os88marty.ui_idle` reads asleep only once it has run out
+        # of them, so idle across IDLE guest seconds - nine ticks - with every
+        # pass closed is the same verdict at a twentieth of the price. The
+        # Task Manager case above never holds idle that long and keeps `quiet`
         c0 = cyc()
+        idle0 = None
         while True:
             if tr.error is not None:
                 raise tr.error
@@ -156,6 +174,13 @@ def armed(ui, trigger, quiet=3.0, first=40.0, names=None):
             if outs and len(outs) >= len(ins):
                 if (now - outs[-1]["cycles"]) / per > quiet:
                     break
+                if os88marty.ui_idle(m):
+                    if idle0 is None:
+                        idle0 = now
+                    elif (now - idle0) / HZ > IDLE:
+                        break
+                else:
+                    idle0 = None
             elif not ins and (now - c0) / per > first:
                 break
             time.sleep(0.05)
@@ -341,7 +366,7 @@ def sc_close(ui):
     w = ui.move_window(w, cell[0] + 40 - (w.w - 1), 20)
     v = ui.move_window(v, geom.word(m, "vid_w") - v.w - 10, w.y + w.h + 6)
     ui.mo.to(4, 4)
-    ui.settle()
+    still(ui)
     LAST["spared"] = (w.i, isect(occ(w), cell))
     print("  W %r over the cell at %r; V %r"
           % ((w.x, w.y, w.w, w.h), isect(occ(w), cell), (v.x, v.y, v.w, v.h)))
@@ -390,7 +415,7 @@ def sc_cell(ui):
     b = ui.move_window(b, cb[0] + 48 - b.w, cb[1] + 24)
     a = ui.move_window(a, 0, 24)
     ui.mo.to(4, 4)
-    ui.settle()
+    still(ui)
     LAST["spared"] = (b.i, isect(occ(b), cb))
     print("  parked %r over B:'s cell (cell %d) at %r"
           % ((b.x, b.y, b.w, b.h), cell, isect(occ(b), cb)))
@@ -472,7 +497,7 @@ def verify(ui, png=None, only=None):
     count of differing pixels."""
     m = ui.m
     ui.mo.to(4, 4)
-    ui.settle()
+    still(ui)
     print("  windows after: %s" % " ".join(
         "%s(%d,%d,%d,%d)" % (w.title[:8], w.x, w.y, w.w, w.h)
         for w in ui.windows()))
@@ -491,7 +516,9 @@ def verify(ui, png=None, only=None):
         return w, h, [bytes(r) for r in rows]
     w, h, got = grab()
     m.write(m.sym("cp_dirty"), b"\x01")
-    ui.settle()
+    os88marty.until(m, lambda _: not m.read(m.sym("cp_dirty"), 1)[0],
+                    "ui_task to take the forced whole repaint", guest=30.0)
+    still(ui)
     _, _, ref = grab()
     if png:
         os88marty.write_png(png + "-got.png", w, h, got)

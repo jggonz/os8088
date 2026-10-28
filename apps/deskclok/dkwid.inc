@@ -660,6 +660,24 @@ dk_cprep:
     pop ax
     ret
 
+; dk_creloc - the face cache moved (SPEC.md 66.2, 110.14.10): BX = where it
+; was, DX = where it is now. [dk_cseg] names it, and the composer's [ck_bseg]
+; borrows it for dk_cbuild alone (ck_ourband puts it back to DS at the end of
+; the build and at every ck_setband) - put right here too, sh_reloc's rule for
+; a borrowed copy. Every use loads it for one build or one slab copy and claims
+; nothing while holding it; there is no worker and no file call. The settings
+; page's tall band ([dk_sbseg]) stays undeclared: it lives inside one paint.
+dk_creloc:
+    cmp bx, [dk_cseg]
+    jne .b
+    mov [dk_cseg], dx
+.b:
+    cmp bx, [ck_bseg]
+    jne .o
+    mov [ck_bseg], dx
+.o:
+    ret
+
 ; dk_cbuild - compose the static layer into the claim (claimed, or grown, as
 ; the face needs). Keeps everything
 dk_cbuild:
@@ -699,6 +717,10 @@ dk_cbuild:
     jc .x
     mov [dk_cseg], dx
     mov [dk_ckb], al
+    push ax                     ; ...AND IT MOVES (NO-PINNING A3, SPEC.md
+    mov ax, dk_creloc           ; 110.14.10): dk_creloc's header
+    call OSAPI_MEM_MOVABLE
+    pop ax
 .have:
     mov ax, [dk_cseg]           ; the composer, onto the claim: the face's own
     mov [ck_bseg], ax           ; canvas, one slab its whole height

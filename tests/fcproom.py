@@ -101,7 +101,7 @@ def select(ui, name, win):
     i, _ = ui.entry(name, win)
     row = ui.scroll_to(i, win=win)
     ui.mo.click(*ui.row_xy(win, row))
-    ui.settle(limit=10.0)
+    M.ui_done(m=ui.m)                   # the next act is a menu verb
 
 
 def arm(kind):
@@ -111,10 +111,12 @@ def arm(kind):
     try:
         vhd, flop = fixture(tmp, kind, data)
         m = M.launch(None, apps=flop, machine=MACHINE,
-                     extra=["--mount", "hd:0:" + vhd])
+                     extra=["--mount", "hd:0:" + vhd], boot=False)
         try:
+            m.run()
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)            # the first act is an os88ui verb
+            M.no_saver(m)
             src = ui.open_drive("B")
             select(ui, NAME, src)
             ui.menu_pick("Edit", "Copy")
@@ -124,7 +126,7 @@ def arm(kind):
             with M.bp_trace(m, *bps, regs=True, cap=2000) as tr:
                 ui.menu_pick("Edit", "Paste")
                 M.until(m, lambda mm: mm.read(mm.sym("fcp_busy"), 1)[0] == 0,
-                        "the paste to finish", guest=120.0, poll=0.5)
+                        "the paste to finish", guest=120.0, poll=0.05)
             err = m.read(m.sym("fcp_err"), 1)[0]
             ui.settle(limit=60)
         finally:

@@ -1030,19 +1030,21 @@ br_bmservice:
     cmp byte [br_bmopwork], 1
     jne .remove
     cmp byte [br_bmsaved], 0
-    jne .restore
-    call br_bmaddmem
+    jne .saved                      ; already in the file: it IS saved, and
+    call br_bmaddmem                ; the request's "Saving..." must not stand
     jc .failed
     call br_bmwrite
     jc .failed
+.saved:
     mov word [br_nmsg], br_s_bmsaved
     jmp .success
 .remove:
     cmp byte [br_bmsaved], 0
-    je .restore
+    je .removed                     ; not in the file: it IS removed
     call br_bmremove
     call br_bmwrite
     jc .failed
+.removed:
     mov word [br_nmsg], br_s_bmremoved
 .success:
     mov byte [br_nstate], BN_DONE
@@ -1279,6 +1281,13 @@ br_sourcetoggle:
     jmp .layout
 .rendered:
     mov byte [br_viewsrc], 0
+    mov byte [br_parse_started], 0  ; A FRESH PARSE, not a resume: br_parse
+    mov byte [br_parse_final], 1    ; resumes at the saved source cursor when
+                                    ; this is set, and that cursor is at the
+                                    ; END - so Close Source re-parsed nothing
+                                    ; and left the raw-source projection as
+                                    ; the document, with every form and link
+                                    ; record pointing into it
     call br_parse
 .layout:
     mov word [br_cols], 0

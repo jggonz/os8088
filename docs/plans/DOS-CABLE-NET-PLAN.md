@@ -1,7 +1,7 @@
 # DOS-CABLE-NET-PLAN.md — a DOS program on the wire, over a parallel cable
 
 **A machine with a parallel port and no network card is the machine `NET.DRV`
-exists for.** SPEC.md §96.23 gave the DOS box a packet driver over
+exists for.** SPEC.md §96.23 gave DOS a packet driver over
 `ETHER.DRV`'s raw verbs, which is a *card* feature: on a cable-only machine a
 DOS program gets nothing, because mTCP speaks packet driver and nothing else.
 
@@ -52,7 +52,7 @@ The translation is **an `OP_SEG | OP_LAZY | OP_COMP` part of `DOS.O88`**
 the disk.
 
 **Not in `NET.DRV`.** A driver is resident while mounted, so ~2KB there is
-paid by every user of the cable — for a feature only the DOS box can reach.
+paid by every user of the cable — for a feature only DOS can reach.
 That is the objection that decided this file, and it is `XMEM.DRV`'s argument
 word for word (SPEC.md §41.12): *a machine with no XMS was reserving about
 1.2KB of kernel image forever for a feature it can never reach.*
@@ -97,7 +97,7 @@ heap left — which is already why §96.23.7's frame buffer is claimed in front
 of the sizing call.
 
 So the part cannot be fetched when the program asks for it. The question the
-box asks instead, at `dos_run` entry, is **"is there a cable and no card?"**,
+DOS asks instead, at `dos_run` entry, is **"is there a cable and no card?"**,
 and `net_find` already answers it: it tries `DRVC_NET` first and falls back to
 `DRVC_FILE` (SPEC.md §72, and it prefers the card for this exact reason).
 
@@ -234,9 +234,9 @@ connection we refuse with `RST`, which is what a client understands.
 |---|---|---|
 | 1 | **DONE, and it changed the plan**: measure S. §3.1 is the result — 2,277 for a `SEG\|LAZY` row, against a 2,000-byte translation, so the part is REFUSED for now and waves 2–4 build inline | `S` is a number in §3.1 |
 | 2 | ARP, IP, and the DNS hijack | the client's ARP is answered and a DNS query gets a synthetic A record |
-| 3 | **DONE, and the route on the cable is now this** (SPEC.md 96.26.3) — no knob. One connection reads `FLAGS 12 10 10 18 11`: the `SYN\|ACK`, the handshake, 235 bytes of HTTP and a clean close, with the host's own log recording the `GET`. All three defects were REGISTERS, not protocol (§7.2) | `tests/dosxlat.py`, registered — and it reads the CLIENT's record of every segment, because nothing outside the client can tell "the box opened a socket" from "the client ever heard about it" |
+| 3 | **DONE, and the route on the cable is now this** (SPEC.md 96.26.3) — no knob. One connection reads `FLAGS 12 10 10 18 11`: the `SYN\|ACK`, the handshake, 235 bytes of HTTP and a clean close, with the host's own log recording the `GET`. All three defects were REGISTERS, not protocol (§7.2) | `tests/dosxlat.py`, registered — and it reads the CLIENT's record of every segment, because nothing outside the client can tell "DOS opened a socket" from "the client ever heard about it" |
 | — | **the bss went with it** (SPEC.md 96.26.6): 4,299 bytes of every DOS program's arena, on every machine, for a wire that may not be there. `image + bss` **25,586 → 21,287**, and `DS` is the claim inside every `dn_*` | `t_appsmall`-style A/B: the stock arm's figures are in §7.3 |
-| 4 | **DONE, and it passed first time** (SPEC.md 96.26.7). `tests/doscable.py`: a real Crynwr client, in the real DOS box, over a real `NET.DRV`, over MartyPC's parallel port a nibble at a time, to a real host socket - with NO knob, `net_find` picking the cable because `NETV_RAW` is one of the three verbs it refuses. `FLAGS 12 10 10 18 11`, the same five segments as the card arm, and the partner's own log reads `o ssssssssss w s r s c` | `tests/doscable.py`, registered |
+| 4 | **DONE, and it passed first time** (SPEC.md 96.26.7). `tests/doscable.py`: a real Crynwr client, in the real DOS, over a real `NET.DRV`, over MartyPC's parallel port a nibble at a time, to a real host socket - with NO knob, `net_find` picking the cable because `NETV_RAW` is one of the three verbs it refuses. `FLAGS 12 10 10 18 11`, the same five segments as the card arm, and the partner's own log reads `o ssssssssss w s r s c` | `tests/doscable.py`, registered |
 | — | *below here is optional and separately revertible* | |
 | 8 | `OSAPI_PKG_REHOME` — give **S** back. **BEHIND A DEPENDENCY, and deliberately parked** (§7.5) | `kernsize`-style A/B on the region |
 | 9 | inbound (`NW_LISTEN`/`NW_ACCEPT` exist) | `ftpsrv` serves across the cable |
@@ -278,7 +278,7 @@ method, not a far side.
 **The one thing built is `Partner.idle_until_wire`.** `_await_strobe` steps
 400 cycles a debug round trip, which is one round trip per 84 microseconds of
 guest time - fine while a nibble is in flight and terrible for a phase where
-the guest is not using the cable at all. The DOS box's launch is exactly that
+the guest is not using the cable at all. DOS's launch is exactly that
 phase: a floppy mount and two programs, **13.2 million cycles**, which is
 33,000 round trips spent watching a line nothing is driving. Stepping it in
 25,600-cycle chunks until the data register moves is **516**. It is safe for
@@ -288,7 +288,7 @@ deadline in this transport is in TICKS (docs/plans/completed/NET-PLAN.md 9.1), a
 
 **It is still the slow row in the tree, and that is the instrument and not the
 subject.** `tests/socktest.py` - the same arrangement one layer down, fetching
-a page from an ALREADY-RUNNING package - takes ~13 minutes; this adds the box's
+a page from an ALREADY-RUNNING package - takes ~13 minutes; this adds DOS's
 launch in front of it. The payload is 45 bytes on purpose.
 
 Two things noticed in passing and not chased, because neither is this branch's
@@ -341,7 +341,7 @@ listener was taken* rather than *nothing arrived*.
 Which is the other half of the lesson and is about the TEST. `LSN 0` is one
 message for three different bugs in three different files — the environment
 never read, `NETV_LISTEN` refused, or a connection that never came — so the
-row now reads the box's own `dn_lsn` rows out of the network claim and checks
+row now reads DOS's own `dn_lsn` rows out of the network claim and checks
 them **first**. `tests/dosmap.py` had to learn to see them: nasm's map writes
 absolute equates under a `---- No Section ----` heading as two fields where a
 section's symbols are three, so an offset into a heap claim was invisible to a
@@ -357,12 +357,12 @@ beside it, so the ordinary case was the broken one.
 
 ### 7.6 …and then FOUR more, and every one was in the harness or the probe
 
-The box needed one more line after that (nothing, in the end — the register
-fix was the whole of the box's share). What stood between a listening DOS
+DOS needed one more line after that (nothing, in the end — the register
+fix was the whole of DOS's share). What stood between a listening DOS
 program and a served request was four defects in the *test*, and they are
 written down because each is a general shape rather than this row's bad luck.
 
-**1. The box accepts EARLY, and the probe threw the evidence away.**
+**1. DOS accepts EARLY, and the probe threw the evidence away.**
 `dn_accept` accepts the moment it knows where the client is — `[dn_cip]`,
 which any IP frame teaches — so a connection already waiting is accepted
 *during* the probe's outbound leg, and `receiver` banks its SYN there.
@@ -374,9 +374,9 @@ carries and runs once per launch.
 **2. `rxbuf` is whatever arrived LAST, and `do_listen` read two of the SYN's
 four address fields out of it.** With the SYN early, `rxbuf` held the
 outbound connection's FIN by the time the roles swapped, so the reply went
-out on the wrong source port and address — and the box, correctly, read it as
+out on the wrong source port and address — and DOS, correctly, read it as
 a *new outbound connection*: `NETV_OPEN 10.88.0.255:49152` in the far side's
-log, the box's own invented pool address being dialled by the box. All four
+log, DOS's own invented pool address being dialled by DOS. All four
 fields are banked with the SYN now (`isyn_dport`, `isyn_dst` are new). The
 same mistake one line along made `[ldata]` count the outbound leg's own
 45-byte answer as the request: `LDATA 45 LFIRST 4854` — `HT` of our own
@@ -384,7 +384,7 @@ reply — so the payload counter takes the port as well as `[isyn]`.
 
 **3. The host end timed out in 20 seconds** against a leg that is minutes of
 host wall clock, closed its socket, and the far side went `NSK_CLOSING` — so
-the box closed the flow before the DOS program's reply was ever sent, and the
+DOS closed the flow before the DOS program's reply was ever sent, and the
 row failed with *"the host got nothing back"* about a program that had
 answered perfectly. `docs/WRITING-TESTS.md` names this family; the read now
 gets the whole deadline and the connect keeps a short one so retries work.
@@ -398,7 +398,7 @@ loop takes a 5-second tail for a split one and keeps what it has.
 **The reason all four were invisible is that the row said `LSN 0`** — one
 message for the environment never read, `NETV_LISTEN` refused, a SYN staged
 and refused, a SYN staged and never collected, and a connection that never
-came. It reads the box's own `dn_lsn` rows, `dn_flows`, `[dn_pend]` and the
+came. It reads DOS's own `dn_lsn` rows, `dn_flows`, `[dn_pend]` and the
 driver's dropped counter now, and checks them in that order, so each of those
 is a different sentence. That is what turned a week's worth of guessing into
 four runs.
@@ -408,7 +408,7 @@ four runs.
 Worth its own entry because it is not about this row. `partner.py` drives
 MartyPC one debug round trip per `STEP` = 400 guest cycles, so the cost of a
 cable row is **guest cycles ÷ 400** — an idle guest tick is 262,000 cycles,
-which is **655 round trips spent watching a line nobody is driving**. The box
+which is **655 round trips spent watching a line nobody is driving**. DOS
 polls `NETV_ACCEPT` once a tick while a listener is open, so the inbound leg
 is almost entirely gap, and it ran past twenty minutes.
 
@@ -435,7 +435,7 @@ client IP frame to learn `[dn_cip]` — a `/L` argument on the second run
 
 ### 7.3 …and the memory, which was the owner's call and the bigger win
 
-Asked mid-wave: *every byte of RAM the DOS box uses is one a DOS program
+Asked mid-wave: *every byte of RAM DOS uses is one a DOS program
 cannot use*. Correct, and it lands hardest on this feature — §96.3 hands the
 program `OSAPI_MEM_AVAIL`'s whole answer, and the package's image plus bss
 comes off the same heap first.
@@ -517,7 +517,7 @@ again against the part. §20.12.9 measured what it is for — **a package that i
 nothing but a reader spends 2KB of a 640KB machine on a program that has
 finished its job.**
 
-Applied here, `DOS.O88` becomes a thin loader whose part 0 is the DOS box and
+Applied here, `DOS.O88` becomes a thin loader whose part 0 is the windowed DOS and
 part 1 is this translation, and **S is freed after launch**: the resident cost
 of the whole feature goes to about zero. The loader fetches part 1
 conditionally — the `net_find` question of §3 is answerable before the rehome —

@@ -102,9 +102,18 @@ def full_repaint(m):
                         "ui_task to drain [cp_dirty]", poll=0.05, limit=10)
     except os88marty.MartyError:
         raise RuntimeError("ui_task never drained [cp_dirty]")
-    os88marty.settle(m)
+    still(m)
     m.cmd(cmd="pause")
 
+
+def still(m):
+    """The UI has finished drawing (ui_done: every repaint is inside a pass,
+    under the lock) and the card has shown it (three guest frames: `fbuf` is
+    the rendered glass) - os88ui.UI.still, without a 2-host-second floor.
+    NOT after `type_text`: the keys arrive one at a time and the UI can sleep
+    between two of them, so that one keeps the screen settle."""
+    os88marty.ui_done(m)
+    os88marty.guest_sleep(m, 0.05)
 
 def agrees(m, mo, what):
     """0 = the incremental drawing and a full repaint are the same pixels."""
@@ -148,7 +157,7 @@ def agrees(m, mo, what):
         fails.append("%s: %d pixels a full repaint disagrees with"
                      % (what, len(d)))
     m.cmd(cmd="run")
-    os88marty.settle(m)
+    still(m)
     return len(d)
 
 
@@ -164,14 +173,18 @@ def main(argv):
 
     with os88marty.launch(os.path.join(ROOT, "build/os8088-360.img"),
                           apps=os.path.join(ROOT, "build/apps360.img"),
-                          machine=MACHINE) as m:
+                          machine=MACHINE, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the first act is open_drive
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda m, card=None, gate=None: os88marty.ui_done(m), "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MEDIA")
+        dispcp.open_named(m, mo, S, lambda m, card=None, gate=None: os88marty.ui_done(m), wx, wy, "MEDIA")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "PAPER.TEX")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, lambda m, card=None, gate=None: os88marty.ui_done(m), wx, wy, "PAPER.TEX")
+        os88marty.settle(m)             # NOT still(): the launch finishes the
+                                        # menu bar a while after the UI first
+                                        # idles (282 px at y 6..13 differed)
         tx, ty, tw, th = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])
         print("   TeXPad window %d,%d %dx%d" % (tx, ty, tw, th))
         if tw < 400:
@@ -200,7 +213,7 @@ def main(argv):
             fails.append("the source pane is empty: PAPER.TEX did not load")
 
         mo.click(col(10), row(6))
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "click into the source")
 
         m.type_text("HELLO")
@@ -208,24 +221,24 @@ def main(argv):
         agrees(m, mo, "type five characters")
 
         m.key("Tab")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "Tab")
 
         m.key("Backspace")
         m.key("Backspace")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "Backspace inside a line")
 
         m.key("Delete")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "Delete inside a line")
 
         m.key("Enter")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "Return mid-document")
 
         m.key("Backspace")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "Backspace joins two lines")
 
         # ...and enough Returns that the bar's TOTAL moves its thumb's HEIGHT
@@ -235,24 +248,24 @@ def main(argv):
         # a thumb-only redraw leaves the old thumb's tail behind on the track
         for _ in range(24):
             m.key("Enter")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "Returns that resize the thumb")
 
         for k in ("ArrowDown", "ArrowDown", "ArrowUp", "ArrowRight",
                   "ArrowLeft", "Home", "End"):
             m.key(k)
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "caret keys")
 
         m.key("PageDown")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "PageDown")
         m.key("PageUp")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "PageUp")
         for _ in range(6):
             m.key("ArrowDown")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "ArrowDown into a scroll")
 
         # the source bar's two arrow cells (SPEC.md 13.10's shared element),
@@ -260,35 +273,35 @@ def main(argv):
         sb_x = cx0 + TP_SPLIT0 - 7
         sb_p = tx + tw - 2 - 14 // 2 - 2
         mo.click(sb_x, cy0 + TP_BAR_H + 6)
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "scroll bar up arrow")
         mo.click(sb_x, ty + th - TP_STAT_H - TP_BAR_H)
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "scroll bar down arrow")
 
         # a bar button, which acts on the RELEASE (SPEC.md 13.7)
         mo.click(cx0 + 40, cy0 + 10)
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "bar button on the release")
 
         # --- the PREVIEW pane: its scroll is a blit and a band too ---------
         mo.click(sb_p, cy0 + TP_BAR_H + 6)          # its up arrow
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "preview bar up arrow")
         mo.click(sb_p, ty + th - TP_STAT_H - TP_BAR_H)
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "preview bar down arrow")
         mo.click(sb_p, ty + th - TP_STAT_H - TP_BAR_H)
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "preview bar down again")
         mo.click(sb_p, (cy0 + TP_BAR_H + ty + th) // 2)   # the track: a page
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "preview bar track")
         m.key("PageDown")                            # the preview has focus
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "preview PageDown")
         m.key("PageUp")
-        os88marty.settle(m)
+        still(m)
         agrees(m, mo, "preview PageUp")
         shot(m, "tpdraw-preview.png")
 
@@ -296,7 +309,7 @@ def main(argv):
         # moves every row below it, so this is the leg that catches an
         # incremental path claiming an edit it cannot describe
         mo.drag(col(2), row(3), col(20), row(5))
-        os88marty.settle(m)
+        still(m)
         shot(m, "tpdraw-selection.png")
         m.type_text("X")
         os88marty.settle(m)

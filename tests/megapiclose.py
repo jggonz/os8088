@@ -39,13 +39,10 @@ whole return. Then, per trip, it asserts
         `kern_mega: 8042 edge lost` at least once, so the watchdog DID take
         a stranded byte rather than the trips merely being lucky.
 
-Each debugger break releases Bochs's mouse grab, so every probe is followed by
-a re-capture. It writes only under build/trees/ and build/bochs-megapiclose*/.
+Each debugger break releases Bochs's mouse grab; os88bochs re-captures inside
+the next input after one (docs/BOCHS.md). It writes only under build/trees/ and build/bochs-megapiclose*/.
 """
-import contextlib
-import io
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -64,15 +61,6 @@ LEGS = ((sys.argv[sys.argv.index("--leg") + 1],) if "--leg" in sys.argv
         else ("red", "green"))
 KNOB = {"red": "PICLOSE=2", "green": "PICLOSE=1"}
 LOST = "kern_mega: 8042 edge lost"
-
-
-def lin(mapf, name):
-    with open(mapf) as f:
-        for line in f:
-            p = line.split()
-            if len(p) == 3 and p[2] == name:
-                return 0x600 + int(p[1], 16)    # KERNEL_SEG, by identity
-    raise SystemExit("megapiclose: no %s in %s" % (name, mapf))
 
 
 class Leg(object):
@@ -95,39 +83,39 @@ class Leg(object):
             for k, n in zip(keys, before):
                 if t.count(k) > n:
                     return k
-            time.sleep(0.5)
+            time.sleep(0.1)
         return None
 
     def pointer(self):
-        mx = lin(self.mapf, "mouse_x")
-        n = os.path.getsize(self.box.e9)
-        with contextlib.redirect_stdout(io.StringIO()):
-            ob.dbg(self.box.out, ["xp /2hx 0x%x" % mx])
-        with open(self.box.e9, "rb") as f:
-            f.seek(n)
-            t = f.read().decode("latin-1")
-        self.box.capture()
-        m = re.search(r"0x0*%x <bogus\+\s*\d+>:\s+(0x[0-9a-f]+)\s+(0x[0-9a-f]+)"
-                      % mx, t)
-        return (int(m.group(1), 16), int(m.group(2), 16)) if m else None
+        """(mouse_x, mouse_y) off the Box (its read re-captures the mouse
+        inside the next input, so no capture() toggle follows it)"""
+        try:
+            return self.box.mouse()
+        except RuntimeError:
+            return None
 
-    def command(self, n_ready):
+    def command(self, n_ready, secs=90):
         """KBTRIP typed into the DOS window: True when it STARTED."""
-        ob.xd("key", "--delay", 30, *(["BackSpace"] * 12))
-        ob.xd("type", "--delay", 120, "KBTRIP")
-        ob.xd("key", "Return")
-        return self.wait(["KBTRIP ready"], [n_ready], 90) is not None
+        self.box.xd("key", "--delay", 30, *(["BackSpace"] * 12))
+        self.box.xd("type", "--delay", 60, "KBTRIP")
+        self.box.xd("key", "Return")
+        return self.wait(["KBTRIP ready"], [n_ready], secs) is not None
 
 
-def wiggle(stop):
+def wiggle(box, stop):
     while not stop[0]:
-        ob.rel(6, 0)
-        ob.rel(-6, 0)
+        box.xd("mousemove_relative", "--", 6, 0)
+        time.sleep(0.04)
+        box.xd("mousemove_relative", "--", -6, 0)
+        time.sleep(0.04)
 
 
-def leg(name, keep):
-    t = os88build.tree(KNOB[name], targets=("mega.img", "megarun.o88",
-                                            "mbr.bin"))
+def tree(name):
+    return os88build.tree(KNOB[name], targets=("mega.img", "megarun.o88",
+                                               "mbr.bin"))
+
+
+def leg(name, keep, t, display=None):
     out = os.path.join(ROOT, "build", "bochs-megapiclose-" + name)
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
@@ -139,34 +127,34 @@ def leg(name, keep):
                     "-o", disk, "--size", "1440", com],
                    check=True, stdout=subprocess.DEVNULL)
     t0 = time.time()
-    box = ob.Box(out, [], bimg=disk, btype="1_44", build=t.dir)
+    box = ob.Box(out, [], bimg=disk, btype="1_44", build=t.dir,
+                 display=display)
     lg = Leg(box, os.path.join(t.dir, "megak", "kernel.map"))
     dead = None
     done = 0
     try:
         if not box.wait_for("kern_mega: protected mode", 300):
             return None, 0, 0, "kern_mega never reached protected mode"
-        time.sleep(25)
+        box.up()                        # the desktop, off kernel state
         box.capture()
-        ob.dbl(591, 105)                # B:
-        time.sleep(10)
+        box.dbl(591, 105, "B:'s Disk window")
         for i in range(1, TRIPS + 1):
             before = lg.counts("KBTRIP ready", "KBTRIP key", "unparked")
             if i == 1:
-                ob.goto(165, 123)       # the Disk window's one row
-                ob.xd("click", "--repeat", 2, "--delay", 120, 1)
+                box.goto(165, 123)      # the Disk window's one row
+                box.xd("click", "--repeat", 2, "--delay", 120, 1)
                 ok = lg.wait(["KBTRIP ready"], before[:1], 90) is not None
             else:
                 ok = lg.command(before[0])
             if not ok:
                 dead = ("trip %d: KBTRIP never started - the desktop's "
                         "keyboard did not reach the DOS window" % i)
-                ob.shot(os.path.join(out, "dead%02d.png" % i))
+                box.shot(os.path.join(out, "dead%02d.png" % i))
                 break
             time.sleep(1.5)
             stop = [False]
-            th = threading.Thread(target=wiggle, args=(stop,))
-            ob.xd("key", "k")
+            th = threading.Thread(target=wiggle, args=(box, stop))
+            box.xd("key", "k")
             th.start()                  # ...the pointer moving from the key
             back = lg.wait(["unparked"], before[2:], 90)
             time.sleep(4)               # ...through the whole return
@@ -175,9 +163,17 @@ def leg(name, keep):
             if not back:
                 return None, done, 0, "trip %d: the session never came " \
                     "back" % i
-            time.sleep(4)
+            # the desktop back (was 4 s slept), then the pointer CLOSED-
+            # LOOP: a goto that cannot move it raises, which is DEAD
+            try:
+                box.ui_done("the desktop after the return")
+            except RuntimeError as e:
+                print("megapiclose: %-5s %s" % (name, e))
             a = lg.pointer()
-            ob.goto(200 + 40 * (i % 3), 300)
+            try:
+                box.goto(200 + 40 * (i % 3), 300)
+            except RuntimeError:
+                pass
             b = lg.pointer()
             moved = a is not None and b is not None and a != b
             print("megapiclose: %-5s trip %2d  pointer %s -> %s%s  (%d lost "
@@ -186,10 +182,12 @@ def leg(name, keep):
             if not moved:
                 dead = ("trip %d: the pointer did not move after the return "
                         "(%s -> %s)" % (i, a, b))
-                ob.shot(os.path.join(out, "mouse%02d.png" % i))
+                box.shot(os.path.join(out, "mouse%02d.png" % i))
                 # ...and the KEYBOARD, which a stranded byte silences with it:
                 # said rather than asserted, the pointer having failed already
-                kb = lg.command(lg.counts("KBTRIP ready")[0])
+                # (20 s, not the 90 a trip may take: a live keyboard starts
+                # KBTRIP in ~2, and this line is a report, not the verdict)
+                kb = lg.command(lg.counts("KBTRIP ready")[0], 20)
                 dead += (", and the keyboard %s" %
                          ("still reached the DOS window" if kb else
                           "was dead too"))
@@ -200,7 +198,7 @@ def leg(name, keep):
                 dead = ("after the last trip: the desktop's keyboard did "
                         "not reach the DOS window")
             else:
-                ob.xd("key", "k")
+                box.xd("key", "k")
                 time.sleep(3)
     finally:
         box.stop()
@@ -217,8 +215,26 @@ def main():
     keep = "--keep" in sys.argv
     ob.BOCHSRC = ob.BOCHSRC.replace("type=ps2", "type=imps2")
     fails = []
+    # THE TWO LEGS ARE TWO MACHINES (two trees), run AT ONCE - one X display
+    # each (os88bochs.take_display); the trees are asked for first, one at
+    # a time, since each ask is a make
+    trees = {name: tree(name) for name in LEGS}
+    res = {}
+
+    def run(name, disp):
+        try:
+            res[name] = leg(name, keep, trees[name], disp)
+        except Exception as e:          # (reported, never swallowed)
+            res[name] = (None, 0, 0, repr(e))
+    ths = [threading.Thread(target=run, args=(name, None if i == 0 else
+                                              ob.take_display()))
+           for i, name in enumerate(LEGS)]
+    for th in ths:
+        th.start()
+    for th in ths:
+        th.join()
     for name in LEGS:
-        dead, done, hits, err = leg(name, keep)
+        dead, done, hits, err = res[name]
         if err:
             fails.append("%s: %s" % (name, err))
         elif name == "red":

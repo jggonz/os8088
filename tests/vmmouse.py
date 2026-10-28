@@ -90,8 +90,9 @@ import os88qemu                                             # noqa: E402
 _B.use_build("build/emuk")
 os.environ.setdefault("OS88_DEFINES", "KERN_EMU")
 
-SOCK = os.path.join(ROOT, "build", "vmm.sock")
-PIDFILE = os.path.join(ROOT, "build", "vmm.pid")
+# THIS PROCESS'S pair (tests/os88qemu.py RUNDIR), never a fixed file under
+# build/, and the images snapshot=on - docs/plans/SOAK-PARALLEL.md 17
+SOCK, PIDFILE = os88qemu.paths("vmm")
 
 QEMU_ABS_MAX = 0x7FFF          # QEMU's INPUT_EVENT_ABS_MAX
 TOL = 2                        # px. Two fixed-point scalings, each rounding
@@ -126,7 +127,7 @@ def launch():
     # target name that `wants=` can carry.
     os88fixture.need("build/vmmouse.img")
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=on"
         # build/vmmouse.img and NOT os8088.img: VMMOUSE.DRV is DRVC_OVL with a
         # drv_tab row, so nothing loads it unless SYSTEM.CFG asks (SPEC.md
@@ -134,8 +135,8 @@ def launch():
         # driver's bit set, exactly as ether360.img does for the card - so the
         # pointer is up before the first paint and this reads state instead of
         # driving the Control Panel through a scripted mouse.
-        " -drive file=%s,format=raw,if=floppy -boot a"
-        " -drive file=%s,format=raw,if=floppy,index=1"
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
         " -serial none"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (_B.at("build/vmmouse.img"),
@@ -294,7 +295,10 @@ def main():
                 fails.append("press not seen: mouse_btn 0 after btn-down")
             for yy in range(200, 280, 8):        # drag it
                 abs_to(200, yy, w, h)
-                time.sleep(0.05)
+                time.sleep(0.05)    # spacing only, HOST time is fine: the
+                # position is ABSOLUTE, so a step the guest polls late is
+                # overtaken rather than lost, and the wait below is the
+                # guest's
             os88qemu.acted(q, lambda: word(q, "mouse_y") >= 250, 1.0, "drag")
             gy = word(q, "mouse_y")
             if gy < 250:

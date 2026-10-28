@@ -49,7 +49,7 @@ def run():
     a previous profile left behind can flatter or fail the next."""
     out = []
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine="os8088_5150_herc_gla") as m:
+                          machine="os8088_5150_herc_gla", boot=False) as m:
         slot, seg, base = skiestest.open_game(m); lin = seg << 4
         off = lambda n: MP[n] - MP["os88_image_end"]
         poke = lambda n, d: m.write(lin + base + off(n), d)

@@ -92,8 +92,8 @@ def main():
 
     with os88marty.launch("build/os8088-360.img", apps=a.apps,
                           machine=a.machine, boot=False) as m:
-        m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run()                         # the boot gate on STATE: the first
+        os88marty.kernel_up(m)          # act is a verb that confirms
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy, _, _ = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])
@@ -102,7 +102,7 @@ def main():
         entry = dispcp.row_of(m, S, "CYCLONE.O88")
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
         x, y = dispcp.row_xy(wx, wy, row)
-        mo.dblclick(x, y)
+        mo.dblclick(x, y, settle=0)     # the launch is waited on below
 
         def cyclone():
             for w in os88geom.windows(m, S):
@@ -112,7 +112,7 @@ def main():
             return None, None
         try:
             os88marty.until(m, lambda _m: cyclone()[1], "Cyclone's window",
-                            poll=0.3, limit=60)
+                            poll=0.05, limit=60)
         except os88marty.MartyError:
             pass                            # the check below says so
         win, seg = cyclone()
@@ -138,11 +138,11 @@ def main():
             m.key("Enter")
             try:
                 os88marty.until(m, lambda _m: p.rb("cy_state") != CYS_TITLE,
-                                "the title to take Enter", poll=0.25, limit=3)
+                                "the title to take Enter", poll=0.05, limit=3)
             except os88marty.MartyError:
                 pass                        # ...and press it again
         os88marty.until(m, lambda _m: p.rb("cy_state") == CYS_PLAY,
-                        "the warp to finish", poll=0.5, limit=90)
+                        "the warp to finish", poll=0.05, limit=90)
         quiet(m, p)
         # FREEZE THE SHOTS: cy_s_act stops being what is in flight and becomes
         # what was fired. Everything below reads that table.
@@ -202,7 +202,7 @@ def main():
         # bracket does not count as that edge.
         m.key("KeyF")
         os88marty.until(m, lambda _m: p.rb("cy_fsx") == 1,
-                        "the bracket to open", poll=0.5, limit=60)
+                        "the bracket to open", poll=0.05, limit=60)
         clear(m, p)
         w = os88geom.word(m, "vid_w", S)
         h = os88geom.word(m, "vid_h", S)
@@ -221,7 +221,7 @@ def main():
             bad.append("the bracket's own edge did not arm cy_mheld")
         m.key("Escape")
         os88marty.until(m, lambda _m: p.rb("cy_fsx") == 0,
-                        "the bracket to close", poll=0.5, limit=60)
+                        "the bracket to close", poll=0.05, limit=60)
         # the desktop's repaint on the way out; the game's worker may keep
         # the lock busy, so it is capped at the pause this was
         os88marty.ui_done(m, "the desktop to come back", cap=9.0)

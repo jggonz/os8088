@@ -8,16 +8,16 @@
 ; is a far call whose target DOS builds so that segment x 16 + offset is the
 ; PSP's own dispatcher. For a program loaded in the first 64KB the segment
 ; wraps, and with A20 OPEN - kern_mega's kern_dos lives in the HMA, so it is
-; open for the whole run - an unfixed box lands inside kern_dos's image.
+; open for the whole run - an unfixed DOS lands inside kern_dos's image.
 ;
 ; It prints "C5" through function 2 (CL = 2, DL = the character) twice, then
 ; asks function 19h (current drive) the same way and exits with ITS answer:
 ; run from C: that is exit code 002, which only a call that dispatched on CL
-; and came back to the program can produce. A box that sends the call astray
+; and came back to the program can produce. A DOS that sends the call astray
 ; hangs or faults instead; under a real DOS it runs unchanged.
 ;
 ; It reaches dos_cpm three ways, and tests/call5.py drives the first two on
-; kern_big from B: (exit 001): the windowed box, whose segment fits a word;
+; kern_big from B: (exit 001): the windowed DOS, whose segment fits a word;
 ; kern_dos low in memory, through the 1MB wrap; and kern_mega's HMA run,
 ; under Bochs.
 ; =============================================================================

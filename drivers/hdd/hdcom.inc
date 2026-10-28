@@ -57,12 +57,6 @@ hd_mntmask:  db 0               ; ...and bit n = device n has a mounted volume.
                                 ; resident's table and stays there: the page
                                 ; asked it ONE question and a byte answers it
 
-hd_rowslot:  db 0               ; a row painter's loop index
-; The pair every label on this driver's two surfaces is lettered in (SPEC.md
-; 52.12): AL = ink, AH = the ground under it. A driver cannot read [gfx_color]
-; back any more than a package can - there is no OSAPI_GET_COLOR - so a row
-; whose pen is chosen at a branch keeps its pair here instead.
-hd_pair:     dw (CWHITE << 8) | CBLACK
 hd_line:     times 64 db 0      ; one line of text under construction
 hd_lineptr:  dw 0               ; ...and where hd_scat/hd_utoa left off
 

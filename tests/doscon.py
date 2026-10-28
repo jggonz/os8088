@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""THE DOS BOX'S CONSOLE, AND THE PROMPT IN IT (SPEC.md 96.33).
+"""DOS'S CONSOLE, AND THE PROMPT IN IT (SPEC.md 96.33).
 
 The band below the top bar carried three lines of status text until this wave
 and now carries an 80x25 screen. What that is worth is a list of things a
 person can DO, so the row drives them in the order a person would - and every
 one of them is a separate thing that can be missing:
 
-  1  a box launched with NO document opens on a PROMPT, not on an error, and
+  1  DOS launched with NO document opens on a PROMPT, not on an error, and
      the prompt names the drive it was launched from (96.33.2). It read `A:\\>`
      on a machine standing on C: until OSAPI_FILE_HERE was asked.
   2  typing ECHOES, and costs ONE ROW of redraw and not twenty-five - the
@@ -22,7 +22,7 @@ one of them is a separate thing that can be missing:
      `SOUND.DRV`, at the volume root. It was `DOS.O88` until 96.33.17 made a
      `.O88` at the prompt OPEN THE PACKAGE, which is a window rather than a
      refusal; tests/dospkg.py owns that. This is the wedge's
-     guard: without the rule the box runs 30KB of package image as a `.COM`
+     guard: without the rule DOS runs 30KB of package image as a `.COM`
      and the machine never comes back, so the row fails by HANGING.
   7  ...and a name that is neither says `Bad command or file name`, which is
      DOS's sentence and not "It could not be read." about a file the user
@@ -39,10 +39,10 @@ one of them is a separate thing that can be missing:
      posts cannot be dispatched while the UI task is inside the bracket.
 
 ...and two more between them, both reported from the console and both the same
-shape - a thing COMMAND.COM answers BEFORE its table and this box did not.
+shape - a thing COMMAND.COM answers BEFORE its table and this DOS did not.
 5b: a bare `B:` is a DRIVE CHANGE and not a verb (96.33.6), `Z:` is refused AND
 does not move. 5c: a bare name with no extension is a SEARCH, `.COM` then
-`.EXE` (96.33.7) - typed `PRINCE`, the box refused a folder holding PRINCE.EXE.
+`.EXE` (96.33.7) - typed `PRINCE`, DOS refused a folder holding PRINCE.EXE.
 
 **IT READS THE BUFFER AND NOT THE GLASS**, with one exception. con_scr is
 2,000 cells of (character, attribute) and every assertion above is about
@@ -68,7 +68,7 @@ SYS = "build/os8088-360.img"
 # package on those is a `.O88`. It costs nothing else: the only other thing B:
 # is for here is being a drive to switch to.
 APPS = "build/doscom360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 BARE = "DOSHELLO"                    # ...and DOSHELLO.COM is what it finds
 
 
@@ -77,14 +77,14 @@ def fail(msg):
     sys.exit(1)
 
 
-class Box(object):
+class Dos(object):
     """The live instance, and the two reads every assertion is made of.
 
     **THE SEGMENT IS RESOLVED PER ACCESS AND NOT CACHED** (SPEC.md 66.6.1.2).
     It used to be taken once in `__init__`, which was safe for exactly as long
-    as the DOS box's region could not move - and since 66.6.1.2 unpinned the
+    as DOS's region could not move - and since 66.6.1.2 unpinned the
     re-homed carve it moves like any other region, at any compaction, which is
-    every time the box claims the arena. A banked base then names the bytes the
+    every time DOS claims the arena. A banked base then names the bytes the
     package USED to occupy: `doslnk` read `[dos_path]` and got nine bytes of
     machine code, and `doscon` and `dosdirsw` read a console that had moved out
     from under them. A stale base decodes as plausible rubbish rather than as
@@ -220,21 +220,21 @@ def main():
 
     with os88ui.boot(SYS, apps=APPS, machine="os8088_5150_herc_gla") as ui:
         m = ui.m
-        if not ui.path(BOX):
-            fail("could not launch %s" % BOX)
-        bx = Box(m)
+        if not ui.path(DOSPKG):
+            fail("could not launch %s" % DOSPKG)
+        bx = Dos(m)
 
         # --- 1: a prompt, and it names the drive we came from ----------------
         rows = bx.live()
-        print("doscon: the box opens on:")
+        print("doscon: DOS opens on:")
         for r in rows[:6]:
             print("   | %s" % r)
         if not rows or not rows[-1].endswith(">"):
-            fail("a box launched with no document should open on a PROMPT and "
+            fail("DOS launched with no document should open on a PROMPT and "
                  "the last live row is %r" % (rows[-1] if rows else None))
         want = "%s:\\>" % chr(ord("A") + bx.b("dos_vol"))
         if rows[-1] != want:
-            fail("the prompt is %r and the box is standing on volume %d, so "
+            fail("the prompt is %r and DOS is standing on volume %d, so "
                  "$P$G is %r (SPEC.md 96.33.2)"
                  % (rows[-1], bx.b("dos_vol"), want))
 
@@ -307,13 +307,13 @@ def main():
         print("doscon: ...and the prompt follows CD: %r" % rows[-1])
 
         # --- 5b: a bare X: changes DRIVE, which is not a verb ---------------
-        # DOS answers it before the table, and the box did not answer it at
+        # DOS answers it before the table, and DOS did not answer it at
         # all: `B:` came back `Bad command or file name` (SPEC.md 96.33.6).
         here = bx.b("dos_vol")
         other = "B" if here == 0 else "A"
         bx.type("%s:\n" % other)
         if bx.b("dos_vol") != (1 if here == 0 else 0):
-            fail("%s: left the box on volume %d - a bare drive letter is a "
+            fail("%s: left DOS on volume %d - a bare drive letter is a "
                  "DRIVE CHANGE and not a verb (SPEC.md 96.33.6)"
                  % (other, bx.b("dos_vol")))
         if not bx.live()[-1].startswith("%s:" % other):
@@ -326,17 +326,17 @@ def main():
                  "`Invalid drive specification`, and the band says %r"
                  % rows[-3:])
         if bx.b("dos_vol") != (1 if here == 0 else 0):
-            fail("a REFUSED drive change moved the box anyway, to volume %d"
+            fail("a REFUSED drive change moved DOS anyway, to volume %d"
                  % bx.b("dos_vol"))
         print("doscon: ...and %s: changes drive while Z: is refused without "
               "moving" % other)
         # --- 5c: a BARE NAME is a search, .COM then .EXE (96.33.7) ---------
-        # Typed `PRINCE`, the box answered `Bad command or file name` for a
+        # Typed `PRINCE`, DOS answered `Bad command or file name` for a
         # folder holding PRINCE.EXE: it took the word as a whole file name,
         # where COMMAND.COM treats a name with no extension as a SEARCH.
         bx.type("%s\n" % BARE)
-        # **AND THE BOX IS FULLY QUALIFIED** since SPEC.md 96.33.10: it held
-        # the name as typed, which is only true while the box is still
+        # **AND DOS IS FULLY QUALIFIED** since SPEC.md 96.33.10: it held
+        # the name as typed, which is only true while DOS is still
         # standing where it was typed - one CD and it names a different file.
         got = bx.text("dos_path", 32).upper()
         if not got.endswith(BARE + ".COM"):
@@ -380,9 +380,9 @@ def main():
                      "its last screen in (SPEC.md 96.34). The band says %r"
                      % (want, rows[-8:]))
         if not any("exit code 042" in r for r in rows):
-            fail("the box's own exit line is not in the band under the "
+            fail("DOS's own exit line is not in the band under the "
                  "captured screen: %r" % rows[-4:])
-        # ...and the CURSOR came across, so the box's line is BELOW the
+        # ...and the CURSOR came across, so DOS's line is BELOW the
         # program's output rather than on top of its first row - which is
         # exactly what a clobbered DX looked like (96.34.3).
         prog = [i for i, r in enumerate(bx.rows()) if "os8088 DOS gate" in r]
@@ -392,7 +392,7 @@ def main():
                  "%d - the cursor did not come across (SPEC.md 96.34.3)"
                  % (ended[0], prog[0]))
         print("doscon: ...and its last screen is in the band, %d rows of it, "
-              "with the box's exit line under it" % len(rows))
+              "with DOS's exit line under it" % len(rows))
 
         bx.type("%s:\n" % chr(ord("A") + here))
 
@@ -412,20 +412,20 @@ def main():
         # OPENING IT (SPEC.md 96.33.15).
         #
         # **THIS STEP IS THE WEDGE'S GUARD AND IT FAILS BY HANGING.** Before
-        # 96.33.15 the box ran what it was given - a package image's OP_ header
+        # 96.33.15 DOS ran what it was given - a package image's OP_ header
         # and org-0 code entered at PSP:0100 - and the machine did not come
         # back: the bracket up, the gfx lock held, no pointer and no menu bar.
         # So [dos_inbr] is asserted as well as the sentence.
         #
         # **IT USED TO TYPE `DOS.O88` AND IT CANNOT ANY MORE** (SPEC.md
         # 96.33.17): a `.O88` at the prompt OPENS THE PACKAGE now, which is a
-        # window appearing rather than a refusal - and typing the box's own
+        # window appearing rather than a refusal - and typing DOS's own
         # name here would put a second DOS window in front of every step
         # below. tests/dospkg.py owns that behaviour and asserts it four ways.
         # What is left for this step is the rule itself, and `SOUND.DRV` at
         # the volume root is the sharper subject anyway: a REAL FILE that
         # really is not a program, where DOS.O88 was a real file that has
-        # since become one this box can start.
+        # since become one this DOS can start.
         #
         # The path box is NOT rewritten, which is the other half of the rule:
         # nothing was resolved, so there is nothing to qualify. 5c above is
@@ -439,7 +439,7 @@ def main():
                  "and DOS answers `Bad command or file name` without opening "
                  "it (SPEC.md 96.33.15); the band says %r" % rows[-3:])
         if bx.b("dos_inbr"):
-            fail("the box ENTERED a bracket for SOUND.DRV - a driver image "
+            fail("DOS ENTERED a bracket for SOUND.DRV - a driver image "
                  "run as a .COM, which is a machine that does not come back "
                  "(SPEC.md 96.33.15)")
         if bx.text("dos_path", 32) != was:
@@ -448,7 +448,7 @@ def main():
                  % bx.text("dos_path", 32))
         bx.type("CD APPS\n")
         print("doscon: ...and SOUND.DRV is refused by its extension, with the "
-              "box and the machine untouched")
+              "DOS and the machine untouched")
 
         # --- 8: FULL SCREEN, and Esc back out of it (SPEC.md 96.33.5) -------
         # The assertion is TEXT VRAM's own bytes, read out of the guest at the
@@ -539,7 +539,7 @@ def main():
                  "from the full screen" % BARE)
         m.type_text("x")
         # **ONE LOOP FOR BOTH, and the exit line is POLLED rather than read
-        # once.** The flags flip when the bracket is back up; the box's exit
+        # once.** The flags flip when the bracket is back up; DOS's exit
         # line is written after that, so a single read the instant they flip
         # is a race - and it is a race that only loses UNDER LOAD, which is
         # the worst shape a gate can have: docs/plans/SOAK-PARALLEL.md §1
@@ -565,7 +565,7 @@ def main():
                  % (BARE, bx.b("dos_fsxup"), bx.b("dos_inbr")))
         rows = [r for r in (m.screen() or []) if r.strip()]
         if not seen:
-            fail("the box's exit line is not on the full screen it came back "
+            fail("DOS's exit line is not on the full screen it came back "
                  "to: %r" % rows[-4:])
         print("doscon: ...and a program typed at the full screen runs in its "
               "OWN bracket and hands the screen back")

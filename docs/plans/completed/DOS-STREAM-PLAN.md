@@ -1,4 +1,4 @@
-# The DOS box on the stream reader and the stream writer
+# DOS on the stream reader and the stream writer
 
 **Status: BUILT - SPEC.md 96.52, 96.53, 96.53.1, 18.4.9.1 and 18.4.9.2 are
 the contract, and this is the design record behind them.** Branch
@@ -10,13 +10,13 @@ the same day on the owner's three answers: HELD, `kern_dos` included, and
 the part to read first: two of its five defects were the kernel's.
 
 **The one-paragraph version.** A DOS program's every data byte goes through
-ONE 8 KB, cluster-aligned window in the box (`dos_wseg`). Reading refills it
+ONE 8 KB, cluster-aligned window in DOS (`dos_wseg`). Reading refills it
 with `OSAPI_FILE_READ_AT`, which re-stats the name and walks the chain from
 the front on every refill; writing drains it with one `OSAPI_FILE_WRITE` and
 then one `OSAPI_FILE_APPEND` per window, and every append walks the whole
 chain and commits the FAT and the entry. Both are quadratic in the file's
 length. The two slots that fix exactly that shipped this cycle (SPEC.md
-18.4.8, 18.4.9) and the box uses neither. The design keeps the window, keeps
+18.4.8, 18.4.9) and DOS uses neither. The design keeps the window, keeps
 every `int 21h` handler's shape, and changes what the window's two edges
 call: a 16-byte READ_SEQ cursor and a WRITE_SEQ token live **in the handle
 record**, where the record's own zeroing gives the "cursor names no file"
@@ -29,12 +29,12 @@ arithmetic on a measured rate and wave 0 exists to replace it.
 
 ---
 
-## 1. What the box does today
+## 1. What DOS does today
 
 Every file call goes through a `dos_be_*` door (22 of them, `DBE_NENT`,
 `apps/dos/dos.asm:5017-5053`). A door stores an ordinal and jumps to
 `dos_be_go`, which runs the host's `dos_k_*` body on the UI task's stack
-(SPEC.md 96.4.1, 96.4.1.1). There are two hosts: the box's own bodies
+(SPEC.md 96.4.1, 96.4.1.1). There are two hosts: the windowed DOS's own bodies
 (`dos.asm` under `%ifndef KD_BACKEND`, through `OSAPI_*` cells) and
 `kern_dos`'s (`kerndos/kdback.inc`, straight into the kernel's disk layer). The
 core that calls the doors is one source, assembled once and joined to either
@@ -79,7 +79,7 @@ The shell's COPY (`dsh_stream`, `apps/dos/dosh.inc:1044`) and TYPE
 
 ### 1.4 Context
 
-The box has **no worker**. A program runs inside `OSAPI_FSX_RUN` on the UI
+DOS has **no worker**. A program runs inside `OSAPI_FSX_RUN` on the UI
 task **with the gfx lock held from launch to exit** (`dos_run`,
 `dos.asm:1451-1464`), and every file call is made on that task. So SPEC.md
 20.6 rule 7 is met trivially - and, for this plan, a HELD WRITE_SEQ stream
@@ -188,7 +188,7 @@ not 144:
 
 ### 4.2 Two new doors, two bodies each
 
-| door | registers | box body | kern_dos body |
+| door | registers | windowed body | kern_dos body |
 |---|---|---|---|
 | `DBE_RSEQ` | READ_AT's (`SI` name, `ES:BX` buffer, `CX`, `DX:AX` offset) + `DI` = the cursor in the core's `DS` | `call os88_rseq` - it IS this contract, and its `FERR_NAME` fallback covers `kern_small` | `dskw_read_at_x`, `DI` ignored, until wave 5 |
 | `DBE_WSEQ` | APPEND's (`SI`, `ES:BX`, `CX`) + `AL` flags + `DI` token in/out | `OSAPI_FILE_WRITE_SEQ`; on `FERR_NAME` (the small kernel) `OSAPI_FILE_APPEND` | `dskw_append_x`, `DI` passed back unchanged, until wave 5 |
@@ -259,7 +259,7 @@ has not updated it yet. That is left as DOS has it.
 | event | READ_SEQ cursor | WRITE_SEQ hold |
 |---|---|---|
 | a refill of the same file, same volume | hot: one FAT link | - |
-| the box's own `WRITE_SEQ` flushes to another file | hot (a held call moves no generation) | - |
+| DOS's own `WRITE_SEQ` flushes to another file | hot (a held call moves no generation) | - |
 | a PLAIN write, `WRITE_AT` or `DELETE` anywhere | cold once (one READ_AT's walk) | committed first, then cold |
 | a hop to another floppy and back, outside a batch | cold (the mount re-reads a boot sector) | banked across the hop (SPEC.md 18.8.5) |
 | the floppy swapped under the file | re-seeds by name on the NEW disk and reads what that disk has, as READ_AT would today | lost -> DOS error 5 |
@@ -275,7 +275,7 @@ READ_AT or APPEND it replaces.
 |---|---|---|---|
 | core bss | `FH_DIR`, `FH_TOK`, `FH_CUR` x 8 | **+160** (MEASURED arithmetic; the budget has **0** slack - `CORE_BSS_SIZE` 3,328 is exact) | the DOS program, in both hosts |
 | core code | two door stubs, the refill and flush edits, the close points, `68h`/`6Ah`, the exit sweep, the folder stand | ESTIMATE ~150-200, against **131** of `CORE_MAX` slack (16,253 of 16,384) | the DOS program, in both hosts, if `CORE_MAX` moves |
-| box host | two bodies + `os88_rseq` (76) | ESTIMATE ~110 | the box's region |
+| windowed host | two bodies + `os88_rseq` (76) | ESTIMATE ~110 | DOS.O88's region |
 | kern_dos host, waves 1-4 | two bodies that fall back | ESTIMATE ~15 | `KD_IMG_KB` |
 | kern_dos, wave 5 | READ_SEQ (~190) + WRITE_SEQ's gated code (**418 + 21 bss**, MEASURED off the kern_big listing) + the disk-layer hooks | ESTIMATE ~650-750 | `KD_IMG_KB` |
 | kern_big resident | nothing - every slot already ships | **0** | - |
@@ -366,7 +366,7 @@ new section and into this document's section 2 as MEASURED; this plan to
 2. **`kern_dos`: wave 5 or the kilobyte.** ~700 bytes of stream slots in
    `kern_dos`, against returning `KD_IMG_KB` to 34 now (section 5).
    Recommended: take the kilobyte now, and do wave 5 only if W6's numbers on
-   the box say the stream is worth more to a `kern_dos` program than 1 KB of
+   the windowed DOS say the stream is worth more to a `kern_dos` program than 1 KB of
    its memory.
 3. **`CORE_MAX`**: if the core edits come to more than the 131 bytes of
    slack, the constant moves, and both hosts' programs pay those bytes. Wave 2
@@ -393,7 +393,7 @@ new section and into this document's section 2 as MEASURED; this plan to
 ## 9. What building it found
 
 **The result, measured** (`tests/dosseq.py`, SPEC.md 96.53's table): on a
-1 MB file off an XT-IDE C:, the box's write 29.9 -> 16.4 s and read 19.8 ->
+1 MB file off an XT-IDE C:, the windowed DOS's write 29.9 -> 16.4 s and read 19.8 ->
 10.5 s, `kern_dos`'s 29.3 -> 16.4 and 19.1 -> 9.9, every block flat where it
 climbed; on a 360 KB floppy the write 51.4 -> 28.2 s and the read unchanged,
 the drive being the whole of it. Section 2's estimate of the read walk was
@@ -407,7 +407,7 @@ resident +13. Section 5 had estimated the core's code at 150-200 and the
 `kern_dos` arm at 650-750: the core came in under, the arm over, because
 the FAT bank had to come with it (SPEC.md 96.53.1 says why).
 
-**Five defects, three the box's and two the kernel's**:
+**Five defects, three DOS's and two the kernel's**:
 
 1. **The folder** (section 3.1): worse than predicted. The refill that
    re-resolved the bare name ran at the very FIRST read, not the first
@@ -435,7 +435,7 @@ the FAT bank had to come with it (SPEC.md 96.53.1 says why).
 4 and 5 are the stream writer's own, from the cycle before, and were
 invisible to every writer that shipped then because none of them deletes
 its own file mid-stream or streams onto a full disk. A DOS program does
-both as a matter of course - which is the argument for putting the box on
+both as a matter of course - which is the argument for putting DOS on
 a new kernel mechanism early rather than late.
 
 **The rows**: `dosfix` (1-3), `dosfull` (4-5, verified red on each),

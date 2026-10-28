@@ -54,13 +54,31 @@ bits 16
 %ifdef FRAME_SUM
 %define NO_MODE13
 %endif
-HOST_SEG        equ 0x0760                  ; (35,328 bytes under the core: the
+%ifdef LOSSY_BW                          ; THE LOSSY PICTURE (REALDMG-SPEC 13.4,
+%define RDG_HLOSSY                      ;   docs/reports/REALDMG-LOSSY-2026-10-22.md):
+%endif                                  ;   its code, appended to rdgppu.inc, is
+%ifdef LOSSY_COARSE                     ;   ~1.6KB the harness has no room for,
+%define RDG_HLOSSY                      ;   so a lossy harness sits 2.5KB lower -
+%endif                                  ;   every offset in it the same, so the
+%ifdef RDG_LOSSY                        ;   composer's code is where it is in
+%define RDG_HLOSSY                      ;   the plain one - its stack over
+%endif                                  ;   FRAME_SEG and PRF_SEG: MODES 1, 3,
+%ifdef RDG_HLOSSY                       ;   4, 7 and 12 only, and no Static
+HOST_SEG        equ 0x0680
+HOST_STK        equ 0x6800
+%else
+HOST_SEG        equ 0x0720                  ; (36,352 bytes under the core: the
                                             ;   boot sector moves itself out of the
                                             ;   way first, BOOT_SEG, and the stack
-                                            ;   is HOST_STK's, under the harness)
+                                            ;   is HOST_STK's, under the harness.
+                                            ;   512-ALIGNED: `load` reads a sector
+                                            ;   a call, and one that straddles
+                                            ;   10000h is int 13h's error 09h)
+HOST_STK        equ 0x7200                  ; 0:7200 down, over FRAME_SEG's end
+                                            ;   (6F20h: 736 bytes of stack)
+%endif
 BOOT_SEG        equ 0x2000                  ; the boot sector's copy, at 2000:7C00
                                             ;   (the view, not loaded from disk)
-HOST_STK        equ 0x7600                  ; 0:7600 down, over FRAME_SEG's end
 CORE_SEG        equ 0x1000
 VIEW_SEG        equ 0x2000
 ROM_SEG         equ 0x3000
@@ -81,9 +99,9 @@ JF_SEG2         equ 04h                     ;   2 Static; a second segment; both
 JF_SQZ          equ 10h                     ;   squeezed to JIT2_LIM's 1KB;
 JF_SMALL        equ 08h                     ;   the block table at 16KB;
 JF_NOCORE       equ 20h                     ;   no core tier (REALDMG-SPEC 16.2.2)
-PRF_SEG         equ 0x05A0                  ; Static's profile, 4KB (not MODES 5-9,
+PRF_SEG         equ 0x058A                  ; Static's profile, 4KB (not MODES 5-9,
                                             ;   which compose into FRAME_SEG)
-FRAME_SEG       equ 0x05A0                  ; rdg_render's 5,760 bytes, above the
+FRAME_SEG       equ 0x058A                  ; rdg_render's 5,760 bytes, above the
                                             ;   damage memory's RDG_DMG_SIZE (to 5896h:
                                             ;   INTERLACE writes its end) and under the
                                             ;   harness's stack (HOST_STK): the harness
@@ -283,7 +301,7 @@ host_main:
     mov word [S_PRFSEG],PRF_SEG         ;   the first pass
     mov word [S_PRFMASK],1023
     push es                             ; ...over 4KB cleared first: nothing
-    mov ax,PRF_SEG                      ;   else does, and at 05A0h the BIOS
+    mov ax,PRF_SEG                      ;   else does, and at 058Ah the BIOS
     mov es,ax                           ;   has left bytes there - rdgstatic's
     xor di,di                           ;   "empty profile" preloaded 2 blocks
     mov cx,2048                         ;   out of them

@@ -189,7 +189,9 @@ def run(machine, image, apps):
     S = os88sym.linear
     eq = os88sym.equates()
     bad = []
-    with os88ui.boot(image, apps=apps, machine=machine) as ui:
+    with os88ui.boot(image, apps=apps, machine=machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         disk = ui.open_drive("B")
         heal = Heal(m, S, eq)

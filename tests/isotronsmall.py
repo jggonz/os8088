@@ -137,7 +137,9 @@ def main():
     t = os88build.tree(targets=("small", "smallapps"))
     image, apps = t.img("small360.img"), t.img("smallapps360.img")
     print("== %s: kern_small, the 128KB floor machine ==" % MACHINE, flush=True)
-    with os88ui.boot(image, apps=apps, machine=MACHINE) as ui:
+    with os88ui.boot(image, apps=apps, machine=MACHINE,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         # --- A: the loader places it ---------------------------------------
         # the two API cells traced across the launch, each hit with the CS

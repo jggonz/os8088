@@ -222,6 +222,7 @@ dhcp_start:
     push cx
     push si
     push di
+    mov byte [dns_cnm], 0               ; a new lease: names asked again
     call OSAPI_RAND                     ; a fresh transaction: a reply to the
     mov [dhcp_xid], ax                  ; PREVIOUS one must not be mistaken for
     call OSAPI_RAND                     ; an answer to this
@@ -694,6 +695,14 @@ dns_in:
     call sk_ptr
     lea di, [bx+SKO_RIP]
     call mem_cp4
+    push si                             ; ...and REMEMBERED, the name and its
+    mov di, dns_cip                     ; address (SPEC.md 72.5.1)
+    call mem_cp4
+    lea si, [bx+SKO_HOST]
+    mov di, dns_cnm
+    mov cx, NET_HOSTMAX
+    call mem_copy
+    pop si
     call dns_unres              ; ...it is resolved, and the resolver is free
     call tcp_syn
     jmp short .out
@@ -715,6 +724,35 @@ dns_in:
     call dns_fail
 .out:
     jmp ep_di
+
+; -----------------------------------------------------------------------------
+; dns_cached - socket BX's SKO_HOST is the name answered last: its address
+;              into SKO_RIP. out: CF=0 it was; CF=1 ask the server
+; clobbers: CX, SI, DI, flags
+;
+; ONE ENTRY, and that is the case it is for: a program that reconnects to
+; the same host over and over - the HTTP drive's GET per file (SPEC.md
+; 121.8), The Wire's per picture - paid a whole DNS exchange before every
+; handshake. dhcp_start empties it, so Renew re-resolves everything.
+; -----------------------------------------------------------------------------
+dns_cached:
+    lea si, [bx+SKO_HOST]
+    mov di, dns_cnm
+    mov cx, NET_HOSTMAX
+    push es
+    push ds
+    pop es
+    cld
+    repe cmpsb
+    pop es
+    stc
+    jne .out                            ; (an empty cache's NUL never equals
+    mov si, dns_cip                     ; a name: ip_parse refused "" above)
+    lea di, [bx+SKO_RIP]
+    call mem_cp4
+    clc
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; dns_fail - the name did not resolve: the socket says so

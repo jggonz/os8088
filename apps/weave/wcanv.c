@@ -131,8 +131,17 @@ static int w_chire(void)
         return 0;
     if (w_cworker)
         return 1;
-    if (os88_task_spawn(w_win) != 0)
+    /* THE CANVAS CORE STOPS MOVING HERE (WEAVE-SPEC 1.2.6): the worker parks
+     * inside it - OSAPI_TASK_ALIVE's return address is a CS of the module,
+     * and its DS is the module - and a DATA claim's move does not restart a
+     * worker the way the region's does (SPEC.md 66.6.2). Pinned BEFORE the
+     * spawn, so there is no instant the worker stands in a movable claim;
+     * bucket C for the rest of the instance. */
+    os88_mem_movable(w_cmseg, 0);
+    if (os88_task_spawn(w_win) != 0) {
+        os88_mem_movable(w_cmseg, 1);
         return 0;
+    }
     w_cworker = 1;
     /* ...AND OUR REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2). crt0.asm
      * declared it movable before os88_main returned and the spawn above just

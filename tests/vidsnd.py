@@ -79,11 +79,13 @@ def main():
              "--file", "SOUND.DRV=" + os88build.at("build/sound.drv"),
              "--file", "VIDSND.O88=" + os88build.at("build/vidsnd.o88")],
             check=True, capture_output=True)
-        m = os88marty.launch(None, machine=a.machine,
+        m = os88marty.launch(None, machine=a.machine, boot=False,
                              extra=["--mount", "hd:0:" + vhd])
         try:
-            ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            m.run()                     # (quick: every step after is
+            ui = os88ui.UI(m)           # a verb or a guest read)
+            ui.up(limit=240)
+            os88marty.no_saver(m)
             w = ui.path("C:/VIDSND.O88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
@@ -94,7 +96,7 @@ def main():
 
             m.type_text("r")
             os88marty.until(m, lambda mm: rw("vs_done") != 0,
-                            "the sound bench to finish", poll=1.0,
+                            "the sound bench to finish", poll=0.05,
                             limit=1500.0, guest=300.0)
             r = [u16(m.read(base + syms["vs_res"], 32), 2 * i)
                  for i in range(16)]

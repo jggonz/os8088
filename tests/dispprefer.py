@@ -103,6 +103,11 @@ def switch(m, mo, settle, avail, kind):
     dispcp.open_panel(m, mo, S, settle)
     dispcp.set_primary(m, mo, S, settle, dispcp.adapter_row(avail, kind))
     dispcp.close_panel(m, mo, S, settle)
+    # THE SWITCH IS CONFIRMED, not settled: set_primary's button press is
+    # the one click dispcp cannot check, and [vid_kind] is what it changes.
+    os88marty.until(m, lambda _: m.read(S("vid_kind"), 1)[0] == kind,
+                    "the primary adapter to become VID_* %d" % kind,
+                    poll=0.05, guest=20.0)
     settle(m)
 
 
@@ -224,11 +229,15 @@ def main(argv):
 
     fail = []
     say = lambda s: print("  " + s)
-    settle = os88marty.settle
+    # NOTHING HERE READS A PIXEL - every assertion is a window record, a
+    # kernel word or a package's bss - so the wait after an action is the UI
+    # task saying it has finished (os88marty.ui_done), not a still screen.
+    # That reaches the dispcp verbs too, which take this as their `settle`.
+    settle = lambda m, card=None, gate=None: os88marty.ui_done(m)
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
         avail = m.read(S("vid_avail"), 1)[0]
         if not (avail & (1 << VID_CGA)) or m.read(S("vid_kind"), 1)[0] != VID_VGA:

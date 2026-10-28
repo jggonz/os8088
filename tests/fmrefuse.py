@@ -105,7 +105,9 @@ def main():
     bad = []
 
     with os88ui.boot("build/os8088-360.img", apps=DISK,
-                     machine=a.machine) as ui:
+                     machine=a.machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m, S = ui.m, ui.m.sym
 
         # --- 1. nothing is published, so the refusal path is the one run ----

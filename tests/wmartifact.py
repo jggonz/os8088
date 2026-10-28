@@ -200,7 +200,10 @@ def part_shadow(machine):
     print("\n=== part 1: the drop shadow's bottom-left corner (%s) ===\n"
           % machine)
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine=machine) as m:
+                          machine=machine, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         wx, wy, ww, wh = open_apps(m, mo)
 
@@ -314,7 +317,10 @@ def part_shadow(machine):
 def part_seam():
     print("\n=== part 2: a drag across the seam (os8088_5150_both_gla) ===\n")
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine="os8088_5150_both_gla") as m:
+                          machine="os8088_5150_both_gla", boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         avail = m.read(S("vid_avail"), 1)[0]
         print("   adapters available: %#04x (bit1 Hercules, bit2 CGA)" % avail)

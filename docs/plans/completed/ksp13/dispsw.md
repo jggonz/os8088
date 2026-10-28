@@ -308,7 +308,7 @@ and `.cold` bodies. The `apps/os88ui.inc` change is comments only.
     `bvs_switch`, with CTRL.DRV unloaded.
   * The base tree gives the same values. The screenshots of every leg are
     **0 pixels different** from the base on `both_gla` and on `vga_herc`.
-* `fsxh.py` runs Extend Right, closes the panel, takes the DOS box full screen
+* `fsxh.py` runs Extend Right, closes the panel, takes DOS full screen
   and back. It ran on `os8088_5150_both_gla` (CGA primary) and `_mono`
   (Hercules primary). **PASS**:
   * CTRL.DRV is unloaded throughout.

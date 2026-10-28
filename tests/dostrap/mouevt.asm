@@ -1,10 +1,10 @@
 ; MOUEVT.COM - does INT 33h's EVENT HANDLER ever get called?
 ; OURS, MIT with the rest of the tree.  docs/DOS-DEBUGGING.md is the manual.
 ;
-; SPEC.md 96.10.4.  Microsoft Works has a mouse and, under this box, had none.
+; SPEC.md 96.10.4.  Microsoft Works has a mouse and, under this DOS, had none.
 ; The DOSTRACE histogram (96.10.3) says why in one line: Works calls INT 33h
 ; function 00h, 08h, 0Ah and 0Ch - SET EVENT HANDLER - and then NOTHING. It
-; never polls function 3. A box that answers 0Ch with `not supported` and
+; never polls function 3. A DOS that answers 0Ch with `not supported` and
 ; makes no callbacks has told a program there is a mouse and then never
 ; mentions it again, which is indistinguishable from no mouse at all.
 ;
@@ -14,7 +14,7 @@
 ;
 ; It runs under os8088 AND under a real DOS unchanged - and under a DOS with
 ; no mouse driver it SAYS SO and stops rather than failing, because INT 33h
-; not being there is not this box's defect. Compare it against a DOS with
+; not being there is not this DOS's defect. Compare it against a DOS with
 ; CuteMouse loaded and the answers are the reference's.
 ;
 ;   A  AX=0000h                 - a mouse is installed (AX=FFFF)

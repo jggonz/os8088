@@ -90,6 +90,14 @@ def cfgfile(bits):
     return p
 
 
+def scanline(m, kind, y):
+    """Row `y` of the 1bpp framebuffer, raw: CGA's 640x200 is two 0x2000
+    banks of 80-byte rows, Hercules' 720x348 four of 90."""
+    if kind == "cga":
+        return m.read(0xB8000 + (y & 1) * 0x2000 + (y >> 1) * 80, 80)
+    return m.read(0xB0000 + (y & 3) * 0x2000 + (y >> 2) * 90, 90)
+
+
 def image(bits):
     """build/ether360.img's own recipe, with our settings file in it.
 
@@ -181,6 +189,7 @@ def run(img, machine, kind, want):
                                              # when the blob is NOT published
 
     lines, bands, last, prev = [], set(), None, None
+    h = 200 if kind == "cga" else 348
     with os88marty.launch(img, machine=machine, boot=0) as m:
         started = False
         for _ in range(4000):
@@ -239,11 +248,14 @@ def run(img, machine, kind, want):
                     else:
                         lines.append(txt)
 
-            w, h, rows = m.vram(kind)
             msg = (int.from_bytes(m.readseg(seg, off_msg, 2), "little")
                    if seg and seg != cold else 0)      # the same word, and the
                                                        # same two dead windows
-            band = bytes(rows[msg + 3]) if 0 < msg < h - 3 else b""
+            # ONE SCANLINE, read as video memory: the band's bytes are the
+            # bits `vram` would decode, so distinctness and "any ink" are the
+            # same questions - and a whole decoded frame per displayed frame
+            # was most of this row's host time.
+            band = scanline(m, kind, msg + 3) if 0 < msg < h - 3 else b""
             if sum(band):
                 d = hashlib.md5(band).hexdigest()
                 if d != last:
@@ -253,7 +265,11 @@ def run(img, machine, kind, want):
         else:
             raise SystemExit("%s: the splash never handed the screen over"
                              % machine)
-        m.advance(frames=240)
+        # the desktop's first pass finished (ui_task asleep, nothing queued),
+        # then the frames the glass lags by - not a blind 240 of them
+        m.run()                         # (advance leaves it paused)
+        os88marty.ui_done(m, "the desktop's first paint")
+        os88marty.guest_sleep(m, 0.1)
         screen = os88marty._Screen(m)
 
     print("  %-22s lines %r" % (machine, lines))

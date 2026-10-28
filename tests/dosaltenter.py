@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Does Alt+Enter take the DOS box into full screen, and back out again?
+"""Does Alt+Enter take DOS into full screen, and back out again?
 (SPEC.md 96.33.5.1, 9.7.1)
 
     make && python3 tests/dosaltenter.py
@@ -21,7 +21,7 @@ are not testing.
 
 THE ASSERTION IS THE KERNEL'S OWN `fsx_cur`, not a screenshot. §53's bracket
 is either up or it is not: 0xFF is "no mode set" and anything else is the
-FSXM_* the app asked for, so "did the box go full screen" is one byte and
+FSXM_* the app asked for, so "did DOS go full screen" is one byte and
 needs no pixels squinted at. A screenshot of an 80x25 text mode and a
 screenshot of a desktop with a DOS window on it differ in ten thousand ways
 that have nothing to do with this key.
@@ -34,7 +34,7 @@ written:
   2. Alt+Enter from full screen takes it DOWN - and STAYS down. The first
      build bounced here: the press that ends the bracket is still held when
      `fsx_restore` runs, and the kernel's latch was still set from it, so
-     `ui_task` handed the window a synthesised Alt+Enter and the box went
+     `ui_task` handed the window a synthesised Alt+Enter and DOS went
      straight back in. That is why `fsx_restore` clears `[kbd_ae]`.
   3. Esc still leaves, because §96.33.3 says it does and this row must not be
      the thing that quietly took it away
@@ -132,7 +132,7 @@ def leg0_bios(ui):
 
 def main():
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                     machine=MACHINE) as ui:
+                     machine=MACHINE, quick=True) as ui:
         m = ui.m
         ok = leg0_bios(ui)
 
@@ -156,7 +156,7 @@ def main():
             # HELD, and the hold is the test rather than padding: inside the
             # bracket ui_task is not dispatching (SPEC.md 53.1), so this
             # direction is read off a LEVEL poll once a frame - 55 ms here,
-            # the box asking for no FSXF_FASTTICK - and a press and release
+            # DOS asking for no FSXF_FASTTICK - and a press and release
             # inside one interval is invisible to it. No finger produces one;
             # the debug server does, and that is the difference being paid
             # for. 0.08 host seconds is ~0.3 guest, five frames, and stays
@@ -207,9 +207,9 @@ def main():
         # taken out, which is a green leg testing nothing.
         #
         # It is visible on the way BACK. Leaving full screen on a press that
-        # is still held puts the box in the window with Enter repeating and
+        # is still held puts DOS in the window with Enter repeating and
         # Alt down, and `fsx_restore` has just cleared the latch - so every
-        # repeat is a fresh chance to set it again. Without the guard the box
+        # repeat is a fresh chance to set it again. Without the guard DOS
         # is thrown straight back into full screen by a key the user is
         # merely slow to let go of; with it, a hold is one toggle.
         if _bracket(ui) == FSX_NONE:
@@ -220,7 +220,7 @@ def main():
                 m.alt("Enter", hold=0.6)            # ...and back out, HELD
                 got = _settle_bracket(ui, FSX_NONE) # well past the ~0.5s
                 if got != FSX_NONE:                 # typematic delay
-                    ok = _fail("leg 4: a HELD Alt+Enter never showed the box "
+                    ok = _fail("leg 4: a HELD Alt+Enter never showed DOS "
                                "windowed ([fsx_cur]=%02X). With the guard out "
                                "this is what a re-entry looks like from here: "
                                "each repeat re-arms the latch, so the very "
@@ -240,7 +240,7 @@ def main():
                         print("  leg 4: a HELD Alt+Enter is ONE toggle - its "
                               "repeats do not put it back")
         else:
-            ok = _fail("leg 4: the box was still full screen going in")
+            ok = _fail("leg 4: DOS was still full screen going in")
 
     print("dosaltenter: " + ("ok" if ok else "FAILED"))
     return 0 if ok else 1

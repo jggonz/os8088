@@ -11,7 +11,7 @@ message"*.  What it really said was worse than nothing:
     C:\\NOSUCH.COM ended, exit code 255 (Arena: 597KB)
 
 The machine handed over, `kern_dos` could not open the file, and came home with
-255 - which the box printed as **a program that ran and exited 255**.  A
+255 - which DOS printed as **a program that ran and exited 255**.  A
 refusal wearing a result's clothes is worse than silence: `[dos_state]` read
 `DST_RAN`, `[dos_err]` read 0, and there is nothing in that line to act on.
 
@@ -28,7 +28,7 @@ floppy.
 
 WHAT IT ASSERTS, and each is a separate thing that can be missing:
 
-  1 the box reaches `DST_ERR` and not `DST_RAN`.  This is the whole defect:
+  1 DOS reaches `DST_ERR` and not `DST_RAN`.  This is the whole defect:
     255 is a legal `INT 21h AH=4Ch` code, so a run that returns it and a
     refusal that never ran are indistinguishable unless something else carries
     the difference.
@@ -125,11 +125,14 @@ def main():
     a = ap.parse_args()
     fixture()
 
-    m = M.launch(None, machine=a.machine,
+    m = M.launch(None, machine=a.machine, boot=False,
                  extra=["--mount", "hd:0:" + os.path.abspath(at(VHD))])
     try:
+        m.run()
         ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        ui.up(limit=240)                # the boot gate on STATE: the first
+        M.no_saver(m)                   # act is a verb that confirms
+        M.ui_done(m, "the desktop's first pass")
         mo = os88mouse.Mouse(marty=m)
         if not ui.path("C:/DOS.O88"):
             fail("double-clicking DOS.O88 on the fixed disk opened no window")
@@ -188,10 +191,10 @@ def main():
             # second line naming it, whichever way it went.
             return len([r for r in band() if "NOSUCH" in r.upper()]) >= 2
 
-        M.until(m, answered, "the box to come back and say what happened",
+        M.until(m, answered, "DOS to come back and say what happened",
                 limit=300.0, guest=900.0)
         st, er = byte("dos_state"), byte("dos_err")
-        print("kdnoprog: the box came back with state=%d err=%d" % (st, er))
+        print("kdnoprog: DOS came back with state=%d err=%d" % (st, er))
         # **THE BAND, BEFORE ANY VERDICT.** A failure here is about what the
         # machine SAID, so printing it after the first `fail()` would be
         # printing it never - and the whole report this row exists for was
@@ -200,18 +203,18 @@ def main():
         for r in live[-5:]:
             print("kdnoprog:   | %s" % r)
         if st == DST_RAN:
-            fail("the box is at DST_RAN for a program that was never on the "
+            fail("DOS is at DST_RAN for a program that was never on the "
                  "disk, so the console says `ended, exit code 255` about a run "
                  "that did not happen. 255 is a legal INT 21h AH=4Ch code, so "
                  "kern_dos has to carry the REASON home - KDC_FAIL in "
                  "KDH_CODE's high byte (SPEC.md 96.40.7)")
         if st != DST_ERR:
-            fail("the box is at state %d, which is neither DST_RAN nor "
+            fail("DOS is at state %d, which is neither DST_RAN nor "
                  "DST_ERR - the handoff never came back at all" % st)
 
         # --- 2: ...and it is the RIGHT refusal ------------------------------
         if er != DER_READ:
-            fail("the box reports DER_%d and the program could not be READ "
+            fail("DOS reports DER_%d and the program could not be READ "
                  "(DER_READ = %d). kd_entry has five refusal arms and they "
                  "used to report ONE value between them (SPEC.md 96.40.7), so "
                  "a row that took any non-zero here would pass on the day they "

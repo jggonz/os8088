@@ -607,7 +607,7 @@ prints them through the low writer (`mega_putsf`). That is a review rule:
   Tracker and Sheet cleanly.
 * The DOS park and return works, twice in one session. `KDHELLO.COM` is
   parked at the new pool base, `kern_mega: parked 008AK at 140000`, and the
-  session comes back through `.mega`'s wake (`unparked`). The box reports
+  session comes back through `.mega`'s wake (`unparked`). DOS reports
   `ended, exit code 042 (Arena: 621KB)` with every window back, and the
   console takes keys.
 

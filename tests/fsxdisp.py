@@ -221,7 +221,7 @@ def main(argv):
                          if c["type"] == ("mda" if a.primary == "herc"
                                           else "cga")][0]["idx"]
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up, card=gate_card)
+        os88marty.kernel_up(m)          # the boot gate on STATE
         cards = m.cards()
 
         # SPEC.md 39.19.1's default is Single, so ask for the extended desktop

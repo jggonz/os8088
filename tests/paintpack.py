@@ -85,20 +85,17 @@ def main():
     img = knob.img(os.path.basename(a.image))
     print("   NOPLANE=1 kernel: %s" % os.path.relpath(knob.dir, ROOT))
     env = knob.env
+    # ONE BOOT FOR BOTH HALVES: paintbig's `--pair` asks tests/blitpair.py's
+    # question (the canvas pt_topacked produced IS the file - blitpair's own
+    # check_canvas, not a copy of it) on the load, and then, with Paint
+    # holding nibbles, drives the PACKED clipboard: a planar canvas is what
+    # tests/paintbig.py normally drives, and this is the only kernel on which
+    # the other half of pt_copy and pt_paste runs at all without a second
+    # monitor (SPEC.md 42.13.3). It was two subprocesses and two boots.
     rc = subprocess.call(
-        [sys.executable, os.path.join(HERE, "blitpair.py"),
+        [sys.executable, os.path.join(HERE, "paintbig.py"),
          "--image", img, "--machine", a.machine,
-         "--gif", gif, "--apps", apps], env=env)
-    # ...and once Paint is holding nibbles, the PACKED clipboard: a
-    # planar canvas is what tests/paintbig.py normally drives, and this
-    # is the only kernel on which the other half of pt_copy and pt_paste
-    # runs at all without a second monitor (SPEC.md 42.13.3).
-    if not rc:
-        print("   ...and the packed clipboard, through gfx_blit4:")
-        rc = subprocess.call(
-            [sys.executable, os.path.join(HERE, "paintbig.py"),
-             "--image", img, "--machine", a.machine,
-             "--apps", apps, "--blit", "gfx_blit4"], env=env)
+         "--apps", apps, "--blit", "gfx_blit4", "--pair"], env=env)
     if rc:
         sys.exit("paintpack: the canvas pt_topacked produced is NOT the "
                  "picture (or it never got there)")

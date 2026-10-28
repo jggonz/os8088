@@ -71,7 +71,10 @@ def typed(m, text):
 
 rows = []
 with os88marty.launch("build/os8088-360.img", apps=APPS,
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()                             # the boot gate on STATE: the first
+    os88marty.kernel_up(m)              # act is a verb, and the glass is
+    os88marty.no_saver(m)               # settled before every measurement
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     w = dispcp.win_list(m, S)

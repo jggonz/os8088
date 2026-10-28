@@ -11,19 +11,20 @@
 # ONE LINE PER FILE: <sites> <path>  # <reason>
 
 # --- real mode by construction: the boot, before mega_enter -------------------
-3 kernel/mouse.inc  # mouse_init's port probe and identify window (.boot2)
+2 kernel/mouse.inc  # mouse_init's port probe and identify window (.boot2) - the int 09h hook's own ES = 0 went with SPEC.md 9.7.2 (ES was already 0)
 1 kernel/sched.inc  # sched_init's vector install (.boot2)
 2 kernel/splash.inc  # the loading screen (.boot2)
 2 kernel/disk.inc  # the boot overlay's mount-time setup (.ovl)
 1 kernel/desksc.inc  # sc_walk's ES = 0 "no document" SENTINEL (.cold), which nothing reads through
 1 kernel/font.inc  # FONT_PICK, font_init's int 10h AH=11h probe at boot (ES = 0 for "no answer")
 4 kernel/kernel.asm  # kmain's boot timer, read at the first desktop frame - before mega_enter - and BOOT_MARK=1's three (a knob)
-3 kernel/mega.inc  # mega_a20t, the A20 probe mega_enter runs before it switches; and mega_capon/mega_capoff, which swap IVT entries inside an IRQ reflection's real-mode window
+4 kernel/mega.inc  # mega_a20t, the A20 probe mega_enter runs before it switches; mega_enter's own int 15h give-back (SPEC.md 9.7.2), also before the switch; and mega_capon/mega_capoff, which swap IVT entries inside an IRQ reflection's real-mode window
 1 kernel/hbstub.inc  # the hibernate resume stub, run with no kernel at all
 4 kernel/hiber.inc  # HIBER.DRV (.modh), real mode by design and replaced on kern_mega (KERN-MEGA-PLAN 2.6) - -1 for hbm_wake's ROM tick, which kern_mega reads in protected mode at every return from a DOS trip (MEGA_SEG0), and +1 for hbm_xwconv's first CLUSTER of the hibernate's picture, which is the only way to the IVT a file write has: segment 0 with LOW0 stretched over the cluster, 1,024 fixups where the whole first 64KB took 32,512 (KERN-MEGA-PLAN 14.46)
 
 # --- sentinels: ES = 0 as "none", never read through ----------------------------
 1 kernel/stikmenu.inc  # stm_a_launch: ES = 0, no document, for ldf_ld_pkg_start
+1 drivers/hdd/cppage.inc  # hd_lwake: ES = 0, no document, for OSAPI_PKG_START (INSTALL.O88)
 1 drivers/net/pktdrv.inc  # pk_recv's refusal: ES:DI = 0:0 is the packet-driver ABI's "no buffer"
 
 # --- knob-only ---------------------------------------------------------------------

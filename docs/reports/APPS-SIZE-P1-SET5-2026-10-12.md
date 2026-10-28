@@ -41,7 +41,7 @@ ran the union of the eight agents' rows, plus the shared rows their changes
 can reach (the `disp*` display set, the region/compaction rows `reg*`,
 `heapcheck`, `small128`, `smallboot`, `smallreq`, `appsmall`, `ddsmall`,
 `shedrelist`, the `blit*` and `alert*` rows, `curdisk`, `curbusy`,
-`trkbigmod`, `wmchrome`, the DOS box's `dospkg`/`dosopen` and the C
+`trkbigmod`, `wmchrome`, DOS's `dospkg`/`dosopen` and the C
 toolchain's `ccmake`/`ctoolchain`/`cpmcache`/`allapps`), through
 `tools/os88soak.py` at lane 4: **163/164 ok in 56:47** - every `paint*`,
 `px*`, `pxs*`, `pixelstein*` and `redline*` row, `recorder`, `scsize`,

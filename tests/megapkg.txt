@@ -62,6 +62,15 @@ apps/os88partsbody.inc 1        # op_cseg (OP_WANT_CSEG, PiXEL alone): a
 apps/cc/crt0.asm 1              # the C runtime's overlay vectors through
     # the overlay claim's code alias (cc_ovbind), OS88_CODESEL - a no-op in
     # real mode - in every C package with an overlay
+apps/realdmg/realdmg.asm 1      # rw_csel: the core's, the recompiler's
+    # two cache segments' and its part's far-jump selectors (REALDMG-SPEC
+    # 16.2.4), OSAPI_MEM_CODESEL - DX itself in real mode. On kern_mega it is
+    # CORRECTNESS and not only speed: every far jump into the core through
+    # its data segment was a #GP whose frame the CPU pushed on the core's SP,
+    # which is the GAME BOY's stack in its own WRAM or HRAM - cpu_instrs
+    # looped in test 01 under the recompiler - and a speed fix besides
+    # (87,703 traps in cpu_instrs against 96, all at init). +115 bytes of
+    # REALDMG.O88 on disk, the S_*CS indirection the arm would need anyway
 apps/loom/lmpv.inc 1            # LOOM's preview module far-called through
     # its code alias, OS88_CODESEL; LOOM rides its own disk, no apps disk
 apps/pixelstein/pxgame.asm 2    # px_hseg: OSAPI_MEM_SUBSEG and its code

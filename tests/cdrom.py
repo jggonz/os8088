@@ -71,7 +71,7 @@ class QH(object):
         atexit.register(self.close)
         os88qemu.own(self.pid, self.sock)
         cd = ("file=%s,format=raw," % iso) if iso else ""
-        subprocess.run(
+        os88qemu.start(
             ["qemu-system-i386", "-machine", "pc,vmport=off", "-m", "4",
              "-drive", "file=%s,format=raw,if=floppy" % sysimg,
              "-drive", "file=%s,format=raw,if=floppy,index=1" % bimg,
@@ -110,8 +110,12 @@ class QH(object):
         os88qemu.ui_done(self, xmcheck.sym, cap=cap)
 
     def click(self, x, y, cap=2.0):
-        self.mouse("click", x, y)
+        # closed-loop, each edge confirmed off mouse_btn (SOAK-SPEED 15)
+        os88qemu.mouse_click(self, xmcheck.sym, self.hmp, x, y)
         self.done(cap)
+
+    def dblclick(self, x, y):
+        os88qemu.mouse_dblclick(self, xmcheck.sym, self.hmp, x, y)
 
     def need(self, cond, what, secs=30):
         if not os88qemu.acted(self, cond, secs=secs, what=what, poll=0.1):
@@ -148,7 +152,7 @@ def compare(bad, tag, ui, w, iso, folder):
 def open_row(q, ui, w, name, drv, what):
     """Double-click `name` in Disk window `w`; wait for a mounted listing."""
     i, _ = ui.entry(name, w)
-    xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+    q.dblclick(*ui.row_xy(w, i - ui.scroll(w)))
     q.need(lambda: front_on(ui, drv) is not None and
            (what is None or what(front_on(ui, drv))), "%s to open" % name)
     q.done()
@@ -196,7 +200,7 @@ def disc_leg(bad):
             return
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
         x, y = geom.drive_pt(q, chr(ord("A") + vol), S)
-        xmcheck.dblclick(q.sock, x, y)
+        q.dblclick(x, y)
         q.need(lambda: front_on(ui, vol) is not None, "the CD's window", 60)
         q.done()
         w = front_on(ui, vol)
@@ -219,7 +223,7 @@ def disc_leg(bad):
         # --- 4: a package off the CD --------------------------------------
         before = set(o.i for o in ui.windows())
         i, _ = ui.entry("MINES.O88", w)
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        q.dblclick(*ui.row_xy(w, i - ui.scroll(w)))
         opened = os88qemu.acted(
             q, lambda: any(o.i not in before and o.visible
                            for o in ui.windows()), secs=30,
@@ -236,7 +240,7 @@ def disc_leg(bad):
         q.click(*ui.row_xy(w, i - ui.scroll(w)))
         rdxms.menu_pick(q, ui, "Edit", "Copy")
         bx, by = geom.drive_pt(q, "B", S)
-        xmcheck.dblclick(q.sock, bx, by)
+        q.dblclick(bx, by)
         q.need(lambda: front_on(ui, 1) is not None, "B:'s window", 30)
         q.done()
         rdxms.menu_pick(q, ui, "Edit", "Paste")
@@ -279,7 +283,7 @@ def bring(q, ui, w, i, rows=6):
         if 0 <= i - ui.scroll(w) <= rows:
             return
         q.hmp("sendkey down")
-        os88qemu.pace(q, 0.3)
+        os88qemu.ui_done(q, xmcheck.sym, cap=0.3)   # (was pace(0.3))
     raise RuntimeError("entry %d never came on screen" % i)
 
 
@@ -359,7 +363,7 @@ def sim_leg(bad):
         seg = struct.unpack_from("<H", row, geom.DRVR_SEG)[0]
         vol = q.read(geom.drv_base(seg) + syms["cd_vol"], 1)[0]
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
-        xmcheck.dblclick(q.sock, *geom.drive_pt(q, chr(ord("A") + vol), S))
+        q.dblclick(*geom.drive_pt(q, chr(ord("A") + vol), S))
         q.need(lambda: front_on(ui, vol) is not None, "the CD's window", 60)
         q.done()
         w = front_on(ui, vol)
@@ -372,7 +376,7 @@ def sim_leg(bad):
             bad.append("S1. root: guest %r, want %r" % (got, want))
         i, _ = ui.entry("TRACK02.CDA", w)
         bring(q, ui, w, i)
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        q.dblclick(*ui.row_xy(w, i - ui.scroll(w)))
         box = {}
 
         def up():
@@ -382,8 +386,13 @@ def sim_leg(bad):
                 return q.read(r[1] + r[2], 4) == b"RIFF"
             return False
         q.need(up, "CDRack to read TRACK02.CDA", 40)
-        os88qemu.pace(q, 2)
         b = box["b"]
+        # (was pace(2)): the player's verdict on the drive, then the UI idle
+        # - capped at the old pause, so a state that never comes reads as
+        # before
+        os88qemu.acted(q, lambda: q.read(b, 1)[0] == 4, secs=2.0,
+                       what="CPS_NOAUD")
+        q.done(2.0)
         st = q.read(b, 6)
         lens = [40 * 75, 30 * 75, 20 * 75]
         starts = [data_end, data_end + lens[0], data_end + lens[0] + lens[1]]
@@ -442,15 +451,18 @@ def empty_leg(bad):
         vol = q.read(geom.drv_base(seg) + syms["cd_vol"], 1)[0]
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
         x, y = geom.drive_pt(q, chr(ord("A") + vol), S)
-        xmcheck.dblclick(q.sock, x, y)
-        os88qemu.pace(q, 8)
+        q.dblclick(x, y)
+        # NOT a blind 8 guest s (SOAK-SPEED 5): the mount attempt runs in the
+        # UI task's handler, so the UI idle is the attempt over - capped at
+        # the old pause, then the old settle
+        q.done(8.0)
         q.done(6.0)
         mounted = front_on(ui, vol) is not None
         print("   E1. the empty drive's zone: mounted %s" % mounted)
         if mounted:
             bad.append("E1. an empty drive mounted a volume")
         ax, ay = geom.drive_pt(q, "A", S)
-        xmcheck.dblclick(q.sock, ax, ay)
+        q.dblclick(ax, ay)
         alive = os88qemu.acted(q, lambda: front_on(ui, 0) is not None,
                                secs=30, what="A:'s window")
         print("   E2. the machine carries on (A: opens): %s" % alive)

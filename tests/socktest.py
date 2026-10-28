@@ -178,19 +178,22 @@ def main():
     ft = tree()
     with os88marty.launch("build/os8088-360.img",
                           apps="build/socktest360.img",
-                          machine=MACHINE) as m:
+                          machine=MACHINE, boot=False) as m:
         srv.m = m
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run()                         # the boot gate on STATE; every wait
+        os88marty.kernel_up(m)          # up to the fetch is ui_done, the
+        os88marty.no_saver(m)           # reads after each being guest state
+        done = lambda mm, **k: os88marty.ui_done(mm)    # noqa: E731
         mo = os88mouse.Mouse(marty=m)
         p = P.Partner(m)
 
         # --- launch the package first, while the wire is quiet -------------
         # It comes up IDLE and touches nothing: the fetch does not begin until
         # it is clicked, which is what lets that click be a PAUSED one.
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wins = dispcp.win_list(m, S)
         wx, wy = dispcp.win_rect(m, S, wins[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "SOCKTEST.O88")
+        dispcp.open_named(m, mo, S, done, wx, wy, "SOCKTEST.O88")
         wins2 = dispcp.win_list(m, S)
         if len(wins2) <= len(wins):
             sys.exit("socktest: SOCKTEST.O88 did not open a window")
@@ -219,7 +222,7 @@ def main():
         # keeps the press-only form - a package's W_ONCLICK still fires on
         # MDOWN.
         mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         cp = None
         for w in dispcp.win_list(m, S):
             x, y, ww, hh = dispcp.win_rect(m, S, w)
@@ -230,13 +233,13 @@ def main():
         cx, cy = cp
         x0, y0 = cx + 1, cy + 18
         mo.click(x0 + 40, y0 + CP_I0Y + CP_IDRV * CP_IROWH + 7)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         # ROW 4 IS BELOW THE FOLD (SPEC.md 31.1.1): the pane shows four and
         # os88net is the fifth, so the list is scrolled to it first and what
         # is clicked is its VISIBLE index.
         vis = dispcp.drv_show(mo, x0, y0, NET_ROW,
-                              lambda: os88marty.settle(m))
+                              lambda: os88marty.ui_done(m))
         mo.to(x0 + CP_RX + 40, dispcp.drv_row_y(y0, vis))
         m.pause()
         p.sync()
@@ -259,7 +262,7 @@ def main():
         # commands and NET.DRV has no worker, so nothing touches it here.
         m.run()
         mo.click(cx + 8, cy + 9)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         # --- and now the fetch ---------------------------------------------
         # The same paused-click trick: the worker's very next turn after the

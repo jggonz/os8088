@@ -73,7 +73,10 @@ def claim_of(m, slot):
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     w = dispcp.win_list(m, S)

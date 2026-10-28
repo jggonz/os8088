@@ -125,9 +125,11 @@ wc_onwake:
     jz .unlock
     call OSAPI_WM_CLIP_SET
     jc .unlock
-    call wc_flush
-    mov bx, [wc_win]
-    call OSAPI_WM_GROW                  ; a self-initiated repaint ends with it
+    call wc_flush                       ; and NO OSAPI_WM_GROW: nothing a
+                                        ; flush draws reaches the grow box,
+                                        ; and restoring it anyway was a white
+                                        ; fill and three frames in the corner
+                                        ; on every change (SPEC.md 113.5.1)
 .unlock:
     call OSAPI_GFX_UNLOCK
 .out:
@@ -362,9 +364,7 @@ wc_cbflush:
     mov bx, [wc_win]
     call OSAPI_WM_CLIP_SET
     jc .out
-    call wc_flush
-    mov bx, [wc_win]
-    call OSAPI_WM_GROW
+    call wc_flush                       ; ...and no OSAPI_WM_GROW, as above
 .out:
     ret
 
@@ -838,6 +838,13 @@ wc_onkey:
     call wc_popdown
     jmp wc_repaint
 .npop:
+    call wc_geom                        ; THE LIVE ORIGIN FIRST: the field and
+                                        ; Send are drawn below from wc_ln and
+                                        ; wc_brects, and a window dragged by
+                                        ; its title is replayed and never
+                                        ; painted (SPEC.md 11.96.12.0), so the
+                                        ; rects of the last pass name where it
+                                        ; WAS. wc_geom keeps every register
     cmp al, 9                           ; Tab: an @nick, or the next room
     je .tab
     mov byte [wc_cpl], 0                ; any other key ends a completion run

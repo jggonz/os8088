@@ -660,8 +660,12 @@ wc_about:
 %include "wcact.inc"
 
 ; the buttons' record (SPEC.md 20.5.1.3): rects and flags in the bss, filled
-; by wc_layout; labels in wctxt.inc
-    OS88UI_BTNREC wc_btrec, wc_brects, wc_btown, wc_bflags, WB_N
+; by wc_layout; labels in wctxt.inc. wc_geom is its PLACE proc (SPEC.md
+; 20.5.1.3.5): a window dragged by its title is replayed and never painted,
+; so the library has wc_layout run from where the window IS before every
+; press, drag and release it tests - wc_geom draws nothing and keeps every
+; register, which is the contract as it stands
+    OS88UI_BTNREC wc_btrec, wc_brects, wc_btown, wc_bflags, WB_N, wc_geom
 
 ; --- wc_btn - draw button AL (its index PLUS ONE, os88ui_btn's convention) -
 ; The one call site, beside the record it draws from: the painters in

@@ -127,7 +127,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing" % p)
 
-    with os88ui.boot(SYS, apps=APPS, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=APPS, machine=MACHINE, quick=True) as ui:
         m = ui.m
         sym = ui.sym
         # A DISK WINDOW IN FRONT: File/Folder/View/Special is the widest menu

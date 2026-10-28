@@ -43,18 +43,25 @@ something on Tuesday and not on Wednesday is a bug report nobody can act on.
 Change or add a seed to search somewhere new, and leave the old ones alone.
 """
 import argparse
+import contextlib
+import io
 import os
 import random
 import shutil
 import subprocess
 import sys
+import tempfile
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
 from harness import check, done                                # noqa: E402
 
-BUILD = os.path.join(ROOT, "build")
+# A PRIVATE directory, not build/ (t_lmpack's reason): the row needs its own
+# generated header, host binary and scratch project, and rewriting
+# build/lmfoldc.h would make the next `make` rebuild LOOM in a shared tree.
+BUILD = tempfile.mkdtemp(prefix="weavefuzz-")
 HOST = os.path.join(BUILD, "lmhost")
 TMP = os.path.join(BUILD, "lmfuzz")
 
@@ -125,11 +132,39 @@ def lastline(s):
     return s.split("\n")[-1].replace("weavesim: ", "")
 
 
+def py_pack(wsim, wml, out):
+    """`weavesim --pack wml -o out` IN THIS PROCESS: (packed?, last line).
+
+    A spawned interpreter per case was 0.1 s of the row's ~0.12 s a case
+    (docs/plans/completed/SOAK-SPEED.md technique 10). The verdict is main()'s: a
+    PackError or BundleError is a refusal with its message, and anything else
+    is the traceback a spawned run would have died on - so its LAST LINE, the
+    exception, is what `lastline` read off stderr. `--spawn` is the old path,
+    and the two were checked equal case for case (verdict, bytes, message)."""
+    sink = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(sink):
+            wsim.cmd_pack(wml, out, False)
+        return True, ""
+    except (wsim.PackError, wsim.BundleError) as ex:
+        return False, lastline(str(ex))
+    except KeyboardInterrupt:
+        raise
+    except BaseException as ex:                 # what a traceback would end
+        return False, lastline("".join(          # the spawned run with
+            traceback.format_exception_only(type(ex), ex)))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", default="7,11,23,99")
     ap.add_argument("--cases", type=int, default=250)
+    ap.add_argument("--spawn", action="store_true",
+                    help="run weavesim as a subprocess per case (the old, "
+                         "slower path - for checking py_pack against it)")
     args = ap.parse_args()
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import weavesim as wsim                     # noqa: E402
 
     cc = os.environ.get("CC") or which("cc") or which("gcc") or which("clang")
     if not cc:
@@ -144,7 +179,7 @@ def main():
         done("weavefuzz")
         return
     open(os.path.join(BUILD, "lmfoldc.h"), "w").write(r.stdout)
-    r = subprocess.run([cc, "-std=c89", "-O1", "-w", "-I", "build", "-o",
+    r = subprocess.run([cc, "-std=c89", "-O1", "-w", "-I", BUILD, "-o",
                         HOST, "apps/loom/hosttest/lmhost.c"], cwd=ROOT,
                        capture_output=True, text=True)
     if not check(r.returncode == 0, "the LOOM compilers build with the host cc",
@@ -163,13 +198,21 @@ def main():
             if wml is None:
                 continue
             n += 1
-            r1 = subprocess.run(["python3", "tools/weavesim.py", "--pack",
-                                 wml, "-o", a_p], cwd=ROOT,
-                                capture_output=True, text=True)
+            if args.spawn:
+                r1 = subprocess.run(["python3", "tools/weavesim.py",
+                                     "--pack", wml, "-o", a_p], cwd=ROOT,
+                                    capture_output=True, text=True)
+                ok1, msg1 = r1.returncode == 0, lastline(r1.stderr)
+            else:
+                ok1, msg1 = py_pack(wsim, wml, a_p)
             r2 = subprocess.run([HOST, wml, b_p], cwd=ROOT,
                                 capture_output=True, text=True)
-            ok1 = r1.returncode == 0
             ok2 = r2.returncode == 0
+            if os.environ.get("WEAVEFUZZ_TRACE"):
+                tr = open(os.environ["WEAVEFUZZ_TRACE"], "a")
+                tr.write("%d %d %d %s %s\n" % (seed, case, ok1, msg1,
+                         open(a_p, "rb").read().hex() if ok1 else ""))
+                tr.close()
             if ok1 != ok2:
                 verdicts += 1
                 keep = os.path.join(BUILD, "lmfuzz-%d-%d" % (seed, case))
@@ -181,7 +224,7 @@ def main():
                       "failure this family has - the kept copy is at %s"
                       % keep,
                       got="weavesim %s / LOOM %s"
-                          % ("packed" if ok1 else lastline(r1.stderr),
+                          % ("packed" if ok1 else msg1,
                              "packed" if ok2 else lastline(r2.stdout
                                                            + r2.stderr)),
                       want="the same verdict")
@@ -200,7 +243,7 @@ def main():
                           "`python3 tools/lmdiff.py` names the section; the "
                           "project is kept at %s" % keep,
                           got=b, want=a)
-            elif lastline(r1.stderr) != lastline(r2.stdout + r2.stderr):
+            elif msg1 != lastline(r2.stdout + r2.stderr):
                 msgs += 1
 
     check(verdicts == 0, "%d mutated projects, and the two packers never "
@@ -212,6 +255,13 @@ def main():
           "not asserted; see the module docstring" % (n, msgs,
                                                       (100 * msgs) // max(n, 1)))
     shutil.rmtree(TMP, ignore_errors=True)
+    for f in (a_p, b_p, HOST, os.path.join(BUILD, "lmfoldc.h")):
+        if os.path.exists(f):
+            os.remove(f)
+    try:
+        os.rmdir(BUILD)                         # kept failure copies stay
+    except OSError:
+        pass
     done("weavefuzz")
 
 

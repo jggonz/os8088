@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88sym  # noqa: E402
 
 KSYMS = ("drv_tab", "drv_wcnt", "drv_fseg6")
-KEQUS = ("DRV_MAX", "DRVC_POINT", "DRVC_SOUND", "DRVC_DISK", "DRVR_SIZE", "DRVR_SEG", "DRVR_TITLE", "DRVR_ENT",
+KEQUS = ("DRV_MAX", "DRVC_POINT", "DRVC_SOUND", "DRVC_DISK", "DRVR_SIZE", "DRVR_SEG", "DRVR_FILE", "DRVR_ENT",
          "DRVR_CLASS", "DRVR_WANT", "DRVR_ERR")
 USYMS = ("um_pm", "um_alive", "um_stop", "um_btn")
 # SOUND.DRV's stream record and counters, for the S key: the field report is a

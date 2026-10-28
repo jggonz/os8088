@@ -81,3 +81,22 @@ _w_partfetch:
     pop si
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; void w_partmv(int part, unsigned seg) - a fetched lazy part MOVED (WEAVE-SPEC
+; 1.2.6): store its new base where op_fetch banked the old one, the row's zkb
+; (SPEC.md 20.12.7.4), so os88_part_seg() and op_drop keep answering for it.
+; Called from os88_onmove, inside the compaction: a store and nothing else.
+; cdecl; AX BX CX DX are the caller's to lose, SI is kept.
+; -----------------------------------------------------------------------------
+_w_partmv:
+    push bp
+    mov bp, sp
+    push si
+    mov al, [bp+4]
+    call op_row                     ; SI -> the row, AX kept
+    mov ax, [bp+6]
+    mov [si+OP_R_ZKB], ax
+    pop si
+    pop bp
+    ret

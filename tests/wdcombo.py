@@ -129,7 +129,8 @@ syms, image = pkg_syms()
 DISK = "build/wdcombo.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 
-with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
+with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine,
+                 quick=True) as ui:
     m, mo = ui.m, ui.mo
     S = lambda n: m.sym(n)
     print("== Word's combos are drop-downs (SPEC.md 68.2.3) on %s ==" % a.machine)

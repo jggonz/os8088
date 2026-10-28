@@ -94,7 +94,35 @@ static int lm_pv_need(void)
         return 0;
     lm_pvseg = os88_part_seg(LM_WPVPART);
     lpv_bindmod(lm_pvseg);
+    /* IT MOVES BETWEEN CALLS (WEAVE-SPEC 1.2.6). The module runs only inside
+     * lpv_call(), which claims nothing, and holds no segment of its own or
+     * ours past the call (it re-banks the caller's DS at every entry); its
+     * three names - lm_pvseg, the row's zkb and lpv_vec - are os88_onmove's. */
+    os88_mem_movable(lm_pvseg, 1);
     return 1;
+}
+
+/* ============================================================================
+ * THE RELOCATION PROC (WEAVE-SPEC 1.2.6, SPEC.md 66.2)
+ *
+ * The source buffer, Preview's two pack claims and the preview module each
+ * have exactly one word naming them; the module has two more - the parts
+ * row's zkb, which is os88_part_seg's answer, and the far vector lpv_call
+ * goes through. Assignments only (SPEC.md 66.3 rule 3).
+ * ==========================================================================*/
+void os88_onmove(unsigned was, unsigned now)
+{
+    if (lm_srcseg == was)
+        lm_srcseg = now;
+    if (lm_outseg == was)
+        lm_outseg = now;
+    if (lm_workseg == was)
+        lm_workseg = now;
+    if (lm_pvseg == was) {
+        lm_pvseg = now;
+        w_partmv(LM_WPVPART, now);
+        lpv_bindmod(now);
+    }
 }
 
 /* lm_pv_why - the status row's sentence, WEAVE-SPEC 10.3's shape. The REASON
@@ -160,6 +188,13 @@ static void lm_prev_on(void)
     }
     lm_packlen = lm_outlen();
     lm_state = LM_ST_PREVIEW;
+    /* THE PANE HOLDS BOTH CLAIMS ACROSS CALLBACKS, so both may move while it
+     * is up (WEAVE-SPEC 1.2.6): the compile that filled them is over, and
+     * WPVV_PAINT is handed lm_outseg afresh on every paint. A Pack's own
+     * claims stay pinned - claimed, filled, written and freed in one
+     * command (bucket C). lm_pack_free's free ends the declaration. */
+    os88_mem_movable(lm_outseg, 1);
+    os88_mem_movable(lm_workseg, 1);
     lm_ed_invalidate();
     lm_menusync();
 }

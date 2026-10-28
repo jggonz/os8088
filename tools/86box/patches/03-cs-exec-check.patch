@@ -1,0 +1,44 @@
+--- a/src/cpu/x86seg.c
++++ b/src/cpu/x86seg.c
+@@ -600,6 +600,13 @@
+         if (cpu_state.abrt)
+             return;
+         if (segdat[2] & 0x1000) {
++            /* os8088: a DATA segment is not executable - a 286 raises #GP
++               here (Intel 80286 PRM, JMP/CALL far: "code segment"). Without
++               this a far transfer through a data selector just works */
++            if (!(segdat[2] & 0x0800)) {
++                x86gpf("loadcs(): Not a code segment", seg & 0xfffc);
++                return;
++            }
+             /* Normal code segment */
+             if (!(segdat[2] & 0x0400)) {
+                 /* Not conforming */
+@@ -735,6 +742,13 @@
+             return;
+         x86seg_log("%04X %04X %04X %04X\n", segdat[0], segdat[1], segdat[2], segdat[3]);
+         if (segdat[2] & 0x1000) {
++            /* os8088: a DATA segment is not executable - a 286 raises #GP
++               here (Intel 80286 PRM, JMP/CALL far: "code segment"). Without
++               this a far transfer through a data selector just works */
++            if (!(segdat[2] & 0x0800)) {
++                x86gpf("loadcsjmp(): Not a code segment", seg & 0xfffc);
++                return;
++            }
+             /* Normal code segment */
+             if (!(segdat[2] & 0x0400)) {
+                 /* Not conforming */
+@@ -1046,6 +1060,13 @@
+ 
+         x86seg_log("Code seg call - %04X - %04X %04X %04X\n", seg, segdat[0], segdat[1], segdat[2]);
+         if (segdat[2] & 0x1000) {
++            /* os8088: a DATA segment is not executable - a 286 raises #GP
++               here (Intel 80286 PRM, JMP/CALL far: "code segment"). Without
++               this a far transfer through a data selector just works */
++            if (!(segdat[2] & 0x0800)) {
++                x86gpf("loadcscall(): Not a code segment", seg & 0xfffc);
++                return;
++            }
+             if (!(segdat[2] & 0x0400)) { /* Not conforming */
+                 if ((seg & 0x0003) > CPL) {
+                     x86gpf("loadcscall(): Non-conforming RPL > CPL", seg & 0xfffc);

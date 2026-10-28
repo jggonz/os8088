@@ -92,8 +92,10 @@ def watch_toast(m, addr, limit=8.0, unless=None):
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)          # the boot gate on STATE
+    M.no_saver(m)
     mo = Mouse(marty=m)
     hdr, toast = m.sym("fm_hdrbuf"), m.sym("toast_buf")
     print("== %s : a module's own strings (SPEC.md 2.8.6) ==" % MACHINE)

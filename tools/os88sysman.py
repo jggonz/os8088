@@ -18,6 +18,9 @@ tests/unit/t_sysman.py holds against every built system disk.
 
 `sums()` is the one definition of the sum on the host; the package's
 sc_sum is the other, and t_sysman compares them through the manifest.
+
+`--optional PATH` (repeatable) marks a file named among the inputs as one not
+every system disk carries (SPEC.md 118.2.3).
 """
 
 import argparse
@@ -39,6 +42,10 @@ SCK_PKG = 5
 KINDS = {SCK_KERNEL: "kernel", SCK_BOOT: "boot file", SCK_DRV: "driver",
          SCK_MOD: "module", SCK_PKG: "package"}
 FOLDERS = {"": 0, "SYSTEM": 1, "STIKAPPS": 2}
+# OR'd into the folder byte: a file the release ships on SOME system disks and
+# not all - the 360KB one leaves off what an 8088 cannot use (SPEC.md 118.2.3)
+# - so its absence is not a finding. Present, it is judged like any other.
+SCF_OPT = 0x80
 
 MAGIC = b"O8"
 
@@ -91,8 +98,9 @@ def split(arg):
     return folder.upper(), path
 
 
-def build(kernel, files, retired):
+def build(kernel, files, retired, optional=()):
     rows, seen = [], set()
+    opt = {name83(p) for p in optional}
     blob = open(kernel, "rb").read()
     rows.append((SCK_KERNEL, 0, "KERNEL.SYS", len(blob), sums(blob)))
     seen.add((0, "KERNEL.SYS"))
@@ -106,8 +114,12 @@ def build(kernel, files, retired):
         if name == "SYSCHECK.O88":
             fail("SYSCHECK.O88 cannot be in its own manifest (SPEC.md 118.2)")
         blob = open(path, "rb").read()
-        rows.append((classify(name, blob), FOLDERS[folder], name, len(blob),
-                     sums(blob)))
+        rows.append((classify(name, blob),
+                     FOLDERS[folder] | (SCF_OPT if name in opt else 0),
+                     name, len(blob), sums(blob)))
+    unnamed = opt - {r[2] for r in rows}
+    if unnamed:
+        fail(f"--optional names a file that is not an input: {sorted(unnamed)}")
     names = []
     for line in open(retired):
         line = line.split("#", 1)[0].strip()
@@ -180,6 +192,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--kernel")
     ap.add_argument("--retired")
+    ap.add_argument("--optional", action="append", default=[])
     ap.add_argument("-o", "--out")
     ap.add_argument("--selfcheck", action="store_true")
     ap.add_argument("files", nargs="*")
@@ -188,7 +201,7 @@ def main():
         return selfcheck()
     if not (a.kernel and a.retired and a.out):
         fail("--kernel, --retired and -o are all required")
-    rows, names = build(a.kernel, a.files, a.retired)
+    rows, names = build(a.kernel, a.files, a.retired, a.optional)
     text = emit(rows, names)
     tmp = a.out + ".tmp"
     with open(tmp, "w") as f:

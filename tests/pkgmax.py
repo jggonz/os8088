@@ -68,7 +68,8 @@ def main():
         sys.exit("pkgmax: %s is missing - run `make pkgbig`" % APPS_IMG)
     fails = []
     with os88ui.boot(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
-                     settle=False) as ui:
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m, S = ui.m, ui.sym
         w = ui.path("B:/PKGMAX.O88")
         st = m.read(S("ld_status"), 1)[0]

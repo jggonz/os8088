@@ -130,7 +130,8 @@ def main():
     with os88marty.launch(hdoff.image(), apps="build/apps360.img",
                           machine=a.machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE: the first
+        os88marty.no_saver(m)           # act is the chip menu
         mo = os88mouse.Mouse(marty=m)
         ui = os88ui.UI(m, mouse=mo, verbose=False)
 

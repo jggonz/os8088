@@ -212,7 +212,7 @@ HEAD = 2 * (512 + NEXTRA) + 16   # then the core's holes', the free ranges',
 # the rest to the interpreter (rdggen.rmw_lines). LD (C),A is 83 bytes since
 # it guards itself (rdggen.self_guard), and a store that does takes no guard.
 TMAX = 84
-EXPORT = ("tr_enter", "tr_link", "tr_lsite", "tr_stale", "tr_int", "idle_yes", "cnt_ff", "add_ff", "cpy_ff", "stat_ff", "RDG_DISPATCH",
+EXPORT = ("tr_enter", "tr_link", "tr_lsite", "tr_stale", "tr_int", "idle_yes", "tr_evfar", "cnt_ff", "add_ff", "cpy_ff", "cpc_ff", "fill_ff", "w16_ff", "stat_ff", "RDG_DISPATCH",
           "tr_hm0", "tr_hm1", "tr_hm2")
 
 

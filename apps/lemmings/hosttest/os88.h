@@ -164,6 +164,7 @@ int  os88_fsx_key(int wait);
 /* memory beyond the region, and the two far accessors (SPEC.md 50.3) */
 unsigned os88_mem_claim(int kb);
 int      os88_mem_free(unsigned seg);
+int      os88_mem_movable(unsigned seg, int on);
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
 int      os88_peek(unsigned seg, unsigned off);

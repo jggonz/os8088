@@ -104,7 +104,7 @@ def main():
                               what="C:'s window"):
             bad.append("C:'s window never opened")
             return report(bad)
-        os88qemu.pace(q, 1)
+        q.done(1.0)                             # (was pace(1): the listing)
         w = box["c"]
         i, _ = ui.entry("VIDDISK.O88", w)
         before = set(o.i for o in ui.windows())
@@ -119,7 +119,7 @@ def main():
 
         def rw(n):
             return u16(q.read(base + syms[n], 2))
-        os88qemu.pace(q, 1)
+        q.done(1.0)                             # (was pace(1): VIDDISK idle)
         q.hmp("sendkey c")
         if not os88qemu.acted(q, lambda: rw("vk_cpdone") != 0, secs=600,
                               what="C to finish"):

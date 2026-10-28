@@ -42,6 +42,9 @@
 ; once.
 ; =============================================================================
 
+%define SND_SPLIT                ; the attach-only bodies (MPU_ONCE, CVX_ONCE,
+                                ; PM_ONCE, MIX_ONCE) are expanded past
+                                ; snd_keepmix, not where their files put them
 %define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
                                 ; (KERN-MEGA-PLAN item 82: no paragraph
                                 ; arithmetic on its own segment, no BIOS or
@@ -51,6 +54,9 @@
                                 ; (SPEC.md 34.12)
 
 OS88_DRIVER 'Sound', DRVC_SOUND, snd_entry
+OS88_DRV_FOOT                   ; it cuts its HMA block at attach (the
+                                ; MEMHMA_KEEP call below), so the tail puts
+                                ; it at the pool's foot (SPEC.md 51.1.3.1)
 
 OPL_NCH     equ 18              ; channels the allocator knows: an OPL3's
                                 ; two banks of nine, of which an OPL2 has
@@ -363,6 +369,23 @@ snd_entry:
                                 ; ends in snd_upnm itself
     cmp byte [drv_up], 0
     je .nohw
+    mov ax, snd_keepmix         ; WHAT THIS MACHINE KEEPS (SPEC.md 34.15.1):
+    cmp byte [mix_kind], 0      ; never the attach-only code past snd_keepmix,
+    jne .keep                   ; and with NO MIXER nothing past snd_keep
+    mov ax, snd_keep            ; either - the mixer verbs and the volume
+.keep:                          ; popup. The kernel shrinks the claim to it.
+    mov [DRV_H_KEEP], ax        ; Settled HERE and only here: mix_probe runs
+                                ; at attach alone, so a tier change cannot
+                                ; bring a mixer into existence
+    sub ax, strict word $$      ; ...and IN THE HMA, where there is no claim
+    or ah, MEMHMA_KEEP >> 8     ; to shrink, the pool block is cut the same
+    call OSAPI_MEM_HMA          ; (SPEC.md 51.1.3.1) - before HDD.DRV and
+                                ; NET.DRV are placed above it, so the freed
+                                ; run is the pool's free middle, not a hole.
+                                ; CF = 1 in the heap: the kernel's shrink.
+                                ; STRICT WORD: `$$` is 0 at org 0 and C000 at
+                                ; DRV_HMA_ORG, and the two assemblies must be
+                                ; byte-parallel for the relocation diff
 .ready:
     mov si, snd_services
     clc
@@ -436,7 +459,10 @@ snd_detach:
     push cx
     cmp byte [drv_up], 0
     je .out
-    call mix_detach             ; restore only exposed mixer registers
+    cmp byte [mix_kind], 0      ; the test is HERE and not in mix_detach:
+    je .nomix                   ; with no mixer that code may not be in the
+    call mix_detach             ; claim any more (SPEC.md 34.15.1). Restores
+.nomix:                         ; only the exposed mixer registers
     call mpu_detach             ; a module that was playing, silenced
     call sbl_detach             ; the Sound Blaster FIRST: it is the tier
                                 ; with an interrupt vector and a worker task
@@ -1070,6 +1096,15 @@ opl_xrelease:
 .out:
     ret
 
+; opl_tmrst - 04h <- 60h (mask both timers), then 04h <- 80h (reset the IRQ
+; flags): the state a cold chip is in. Clobbers AX. RESIDENT:
+; snd_detach calls it too, so it is not the probe's (SPEC.md 34.15.1)
+opl_tmrst:
+    mov ax, 0x0460
+    call opl_wr
+    mov ax, 0x0480
+    jmp opl_wr
+
 ; opl_defpat - the default patch onto channels 0..CH-1 (opl_init's nine,
 ; opl_xrelease's eight). Every register preserved but CL
 opl_defpat:
@@ -1096,10 +1131,19 @@ opl_defpat:
 snd_pkg:
     cmp bl, SNDV_MIXICON_THEME
     ja .bad
-    mov bp, bx                  ; a table through BP, which the kernel's
+    cmp bl, SNDV_MIXINFO
+    jb .go
+    cmp byte [mix_kind], 0      ; EVERY mixer verb is refused HERE when there
+    je .nomix                   ; is no mixer, before its body is reached:
+.go:                            ; the body is past snd_keep and the kernel
+    mov bp, bx                  ; may have dropped it (SPEC.md 34.15.1)                  ; a table through BP, which the kernel's
     and bp, 0x00FF              ; OSAPI_DRV_CALL banks: BX comes back as it
     shl bp, 1                   ; came, as it always did
     jmp [ds:snd_ptab+bp]
+.nomix:
+    mov ax, SNDE_NOMIX          ; ...and SNDV_MIXPOP's CF = 1 is "not on the
+    stc                         ; speaker", which is true: none is drawn
+    ret
 .bad:                           ; a verb we do not know: CF=1, AX=0
     xor ax, ax
     stc
@@ -1335,6 +1379,78 @@ snd_fill:
     pop es
     ret
 
+
+%include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
+%include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
+%include "covox.inc"            ; ...and the Covox's port (SPEC.md 34.14)
+
+%ifdef PICOMEM
+%include "picomem.inc"          ; ...and the PicoMEM's side of getting one to
+                                ; exist at all (SPEC.md 34.10). In by default;
+                                ; `make NOPICOMEM=1` is the driver without it
+                                ; (SPEC.md 34.10.3)
+%endif
+
+; =============================================================================
+; State - ALL OF IT, and all of it LAST and ZERO. A driver has no .bss of its
+; own: os88drv.py strips the image's trailing zero paragraphs off the file and
+; the kernel zeroes them again at load (drivers/os88drv.inc), so this whole
+; block costs RAM and not disk. That is why no cell here starts non-zero: the
+; ones that mean "nobody" as 0xFF (opl_own[], opl_xown, sbl_irq...) are stored
+; by opl_state_init and sbl_state_init, which every attach runs first.
+; =============================================================================
+
+drv_up:     db 0                ; 1 = attached, so detach knows there is work
+opl_own:    times OPL_NCH db 0  ; per-channel owner instance (0xFF = none).
+                                ; 9..17 are an OPL3's second bank
+opl_xown:   db 0                ; the instance holding the CHIP (SND_FM_CLAIM),
+                                ; 0xFF = nobody - SNDV_OPLW's gate. MUST
+                                ; follow opl_own[]: opl_state_init fills the
+                                ; two as one run
+opl_b0:     times OPL_NCH db 0  ; per-channel B0h image: the single-write
+                                ; key-off's source (SPEC.md 8.2/34.3). Follows
+                                ; opl_xown for the same fill
+opl_kind:   db 0                ; 0 none / SND_OPL2 / SND_OPL3 (opl_probe)
+opl_xmode:  db 0                ; the mode it was granted: SND_OPL2 / SND_OPL3
+%if (opl_xown - opl_own != OPL_NCH) || (opl_b0 - opl_xown != 1)
+  %error "opl_state_init fills opl_own[], opl_xown and opl_b0[] as one run"
+%endif
+MPU_STATE
+SBL_STATE
+mix_kind:   db 0                ; 0 = no mixer: 1/2/3 the CT1335/1345/1745.
+                                ; It is the CORE's byte and not MIX_STATE's,
+                                ; because it is what says whether anything
+                                ; below snd_keep exists (SPEC.md 34.15.1)
+
+; =============================================================================
+; snd_keep - THE END OF WHAT A MACHINE WITH NO MIXER KEEPS (SPEC.md 34.15.1).
+; Everything below is the hardware mixer and the menu bar's volume popup, code
+; first and its state last, and is reached ONLY through snd_pkg's verbs 7..12
+; and snd_detach - both of which test [mix_kind] above before they call in.
+; With no mixer the attach writes this offset into the header's DRV_H_KEEP and
+; the kernel shrinks the claim to it. Neither this state nor the mixer's below
+; is the file's trailing zero run any more - the attach-only code past
+; snd_keepmix is - so both ship on the disk as zeros.
+; =============================================================================
+snd_keep:
+%include "volume.inc"           ; the loaded driver's quick-volume popup
+%include "mixer.inc"            ; hardware mixer verbs (SPEC.md 34.15)
+
+MIX_STATE                       ; (zero, and SHIPPED now: they are no longer
+VOLUME_STATE                    ; the file's trailing run - see snd_keepmix)
+
+; =============================================================================
+; snd_keepmix - THE END OF WHAT A MACHINE WITH A MIXER KEEPS (SPEC.md 34.15.1).
+; Everything below runs inside DRVV_ATTACH and never again - the probes, the
+; OPL's one-time init, the PicoMEM's bring-up and the mixer's own probe - so
+; the attach hands it back on EVERY machine: DRV_H_KEEP is this offset with a
+; mixer and snd_keep without one. NOT the Sound Blaster's probe: DRVV_TIER
+; re-runs sbl_attach all session, so sb.inc stays whole above. Nothing above
+; may call down here after the attach returns, and t_sndonce is what says so.
+; The price is that the state above is no longer the file's trailing zero
+; run, so ~1.3KB of zeros ship - a few bytes under PKGZ, 1.3KB under PKGZ=.
+; =============================================================================
+snd_keepmix:
 ; =============================================================================
 ; opl_probe - the OPL2 timer-flag dance (SPEC.md 34.2, binding)
 ;
@@ -1388,13 +1504,6 @@ opl_probe:
     pop ax
     ret
 
-; opl_tmrst - 04h <- 60h (mask both timers), then 04h <- 80h (reset the IRQ
-; flags): the state a cold chip is in. Clobbers AX
-opl_tmrst:
-    mov ax, 0x0460
-    call opl_wr
-    mov ax, 0x0480
-    jmp opl_wr
 
 ; -----------------------------------------------------------------------------
 ; opl_kind_probe - OPL2 or OPL3? (SPEC.md 34.12)
@@ -1489,48 +1598,13 @@ opl_init:
     pop ax
     ret
 
-%include "volume.inc"           ; the loaded driver's quick-volume popup
-%include "mixer.inc"            ; hardware mixer verbs (SPEC.md 34.15)
-%include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
-%include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
-    OS88_PIN                    ; ...whose port the Ports view may pin
-                                ; (SPEC.md 51.9.2)
-%include "covox.inc"            ; ...and the Covox's port (SPEC.md 34.14)
-
+    MPU_ONCE                    ; mpu.inc: mpu_probe and its three helpers
+    OS88_PIN                    ; ...and os88_pin, whose one caller is
+                                ; mpu_probe (SPEC.md 51.9.2)
+    CVX_ONCE                    ; covox.inc: cvx_probe, falling into snd_upnm
 %ifdef PICOMEM
-%include "picomem.inc"          ; ...and the PicoMEM's side of getting one to
-                                ; exist at all (SPEC.md 34.10). In by default;
-                                ; `make NOPICOMEM=1` is the driver without it
-                                ; (SPEC.md 34.10.3)
+    PM_ONCE                     ; picomem.inc: the card's bring-up and undo
 %endif
-
-; =============================================================================
-; State - ALL OF IT, and all of it LAST and ZERO. A driver has no .bss of its
-; own: os88drv.py strips the image's trailing zero paragraphs off the file and
-; the kernel zeroes them again at load (drivers/os88drv.inc), so this whole
-; block costs RAM and not disk. That is why no cell here starts non-zero: the
-; ones that mean "nobody" as 0xFF (opl_own[], opl_xown, sbl_irq...) are stored
-; by opl_state_init and sbl_state_init, which every attach runs first.
-; =============================================================================
-
-drv_up:     db 0                ; 1 = attached, so detach knows there is work
-opl_own:    times OPL_NCH db 0  ; per-channel owner instance (0xFF = none).
-                                ; 9..17 are an OPL3's second bank
-opl_xown:   db 0                ; the instance holding the CHIP (SND_FM_CLAIM),
-                                ; 0xFF = nobody - SNDV_OPLW's gate. MUST
-                                ; follow opl_own[]: opl_state_init fills the
-                                ; two as one run
-opl_b0:     times OPL_NCH db 0  ; per-channel B0h image: the single-write
-                                ; key-off's source (SPEC.md 8.2/34.3). Follows
-                                ; opl_xown for the same fill
-opl_kind:   db 0                ; 0 none / SND_OPL2 / SND_OPL3 (opl_probe)
-opl_xmode:  db 0                ; the mode it was granted: SND_OPL2 / SND_OPL3
-%if (opl_xown - opl_own != OPL_NCH) || (opl_b0 - opl_xown != 1)
-  %error "opl_state_init fills opl_own[], opl_xown and opl_b0[] as one run"
-%endif
-MPU_STATE
-SBL_STATE
-MIX_STATE
-VOLUME_STATE
+    MIX_ONCE                    ; mixer.inc: mix_probe
 
 OS88_DRV_END

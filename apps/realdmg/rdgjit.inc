@@ -70,6 +70,15 @@ RT_PEND         equ JIT_BUF + 98h   ; word: M-cycles of PURE templates not yet
 RT_LOOP         equ JIT_BUF + 0A0h  ; 16: a spin-wait's body, for rt_idle
 RT_P0           equ JIT_BUF + 0B0h  ; word: RT_PEND as rt_ctl found it, each
                                     ;   arm's own (rt_subbp, rt_pend0)
+RT_TDI          equ JIT_BUF + 0B2h  ; word: DI before the last template
+RT_LZ           equ JIT_BUF + 0B4h  ; byte: a lazy DEC's taken arm to write
+RT_LZR          equ JIT_BUF + 0B5h  ; byte: its dec r's ModRM (C8h + r)
+RT_LZD          equ JIT_BUF + 0B6h  ; byte: ...and its not-taken arm
+RT_TOP          equ JIT_BUF + 0B7h  ; byte: the last template's opcode
+RT_HTB          equ JIT_BUF + 0B8h  ; 6: its F fix-up after LAHF, cut off
+RT_HTL          equ JIT_BUF + 0BEh  ; byte: ...its length (rt_hoist)
+RT_BARE         equ JIT_BUF + 0E0h  ; 16: a bit an instruction's place in
+                                    ;   JIT_BUF, its template without F
 
 RT_HFREE        equ RDGT_HFREE       ; the table's free ranges: offset, count
 RT_CFREE        equ RDGT_CFREE       ; ...the CORE's holes, the second tier
@@ -87,7 +96,13 @@ rt_tab:
 ; claim of the host's, BX the block table's, CX a second 64KB cache segment
 ; or 0 (REALDMG-SPEC 16.2.1) - 64KB too, since a template reaches every
 ; tail by a near jump - and DL the table's mask (S_HMASK): 31, 64KB, or 7,
-; 16KB. The core's three `and bh,mask` take it before the tails are copied. The core's helper tails copied into
+; 16KB. The core's three `and bh,mask` take it before the tails are copied.
+; [S_JITCSA] and [S_JITCSB] are the host's, set before the call: the code
+; selectors of AX and CX (REALDMG-SPEC 16.2.4), or 0 for "the same" - which a
+; host without code selectors leaves them, rdg_init having zeroed the view,
+; and which rt_d2c reads as such at every look (a host that moves
+; S_JITSEGA without rt_init, as the static recompiler's does, stays right).
+; The core's helper tails copied into
 ; each at their own
 ; offsets, the cache empty, and the core's two doors pointed at it -
 ; tr_enter's miss at rdg_jit, and rdgsys's resume (after every event) at
@@ -103,14 +118,16 @@ rt_init:
     mov [S_JITSEGA],ax
     mov [S_JITSEGB],cx
     mov [S_JITHSEG],bx
+%ifdef RDG_XTIER
+    mov byte [S_JITXN],0            ; (the extra tiers: rt_more's, after)
+%endif
     mov [S_HMASK],dl
     push es
-    mov es,[S_DISP+2]               ; the core's masks, which the copies
+    mov es,[S_COREDS]               ; the core's masks, which the copies
     mov [es:RDGC_TR_HM0],dl          ;   below take with them
     mov [es:RDGC_TR_HM1],dl
     mov [es:RDGC_TR_HM2],dl
     pop es
-    mov [S_JITOUT+2],ax
     mov word [S_JITVEC],rdg_jit
     mov [S_JITVEC+2],cs
     mov word [S_RESVEC],RDGC_TR_ENTER
@@ -122,6 +139,8 @@ rt_init:
     call .tails
 .one:
     call rt_flush
+    mov ax,[S_JITCS]                ; (cache A's code selector: rt_flush's
+    mov [S_JITOUT+2],ax             ;   rt_tier took it, 16.2.4)
     mov byte [S_JITON],1
     mov al,1
     call rt_dispatch                ; the interpreter's sites look again
@@ -144,13 +163,49 @@ rt_init:
     mov di,ax
     mov cx,128
     push ds
-    mov ds,[S_DISP+2]               ; the core
+    mov ds,[S_COREDS]               ; the core
     rep movsw
     pop ds
     inc bx
     dec dx
     jnz .slot
     ret
+
+%ifdef RDG_XTIER
+; rt_more - DS = the view, after rt_init: AX = one more 64KB cache segment,
+; DX its code selector or 0 (REALDMG-SPEC 16.2.5) - tier 3, 4... in the turn
+; rt_room takes them, after the second - the core's tails copied into it.
+; CF = 1: RT_XMAX already, and nothing done. Keeps every register
+rt_more:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov bl,[S_JITXN]
+    cmp bl,RT_XMAX
+    cmc
+    jc .r
+    inc byte [S_JITXN]
+    xor bh,bh
+    shl bx,1
+    shl bx,1
+    mov [S_JITXT+bx],ax
+    mov [S_JITXT+bx+2],dx
+    call rt_init.tails
+    clc
+.r:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; rt_resume - DS = the view: the recompiler back on over the cache it had
 ; when it was turned off (the package's rw_jitoff), nothing forgotten - the
@@ -170,14 +225,14 @@ rt_resume:
 ; translated code (JDISPATCH as built); AL = 0: they DISPATCH, as the
 ; interpreter did before there was a recompiler - each site's first five
 ; bytes, cmp si,8000h / jae, become mov dh,[si] / inc si / jmp dx, so a
-; machine that never translates (an 8088) pays nothing for one. DS = view.
+; machine that is not translating pays nothing for one. DS = view.
 rt_dispatch:
     push ax
     push bx
     push cx
     push si
     push es
-    mov es,[S_DISP+2]               ; the core
+    mov es,[S_COREDS]               ; the core
     mov si,[cs:rt_tab + RT_HJD]
     mov cx,[cs:rt_tab + RT_HJD + 2]
 .s:
@@ -245,6 +300,10 @@ rt_tier:
     push si
     push es
     mov [S_JITSEG],ax
+    push ax
+    call rt_d2c
+    mov [S_JITCS],ax                ; (what a jump to it loads, 16.2.4)
+    pop ax
     mov es,ax                       ; its generation: the newest (16.2.3)
     inc word [S_JITGNX]
     mov si,[S_JITGNX]
@@ -349,14 +408,93 @@ rt_tseg:
     xor ax,ax
     cmp byte [S_JITNOC],0
     jne .r
-    mov ax,[S_DISP+2]               ; the core
+    mov ax,[S_COREDS]               ; the core
 .r:
     ret
 .b:
+%ifdef RDG_XTIER
+    cmp al,2
+    jne .x
+%endif
     mov ax,[S_JITSEGB]
     ret
+%ifdef RDG_XTIER
+.x:                                 ; 3 on: rt_more's (16.2.5)
+    sub al,3
+    cmp al,[S_JITXN]
+    jae .none
+    push bx
+    mov bl,al
+    xor bh,bh
+    shl bx,1
+    shl bx,1
+    mov ax,[S_JITXT+bx]
+    pop bx
+    ret
+.none:
+    xor ax,ax
+    ret
+%endif
 
-; rt_unlink - AX = the segment of the tier being recycled (REALDMG-SPEC
+; rt_d2c - DS = the view, AX = a tier's DATA segment: AX = its CODE selector
+; (REALDMG-SPEC 16.2.4) - a cache segment's or the core's, off the three
+; pairs at rt_pairs - or AX itself, for anything else or a pair whose other
+; half the host left 0. rt_c2d: the same, CODE to DATA. Keeps every register
+; but AX
+%ifdef RDG_CSEL                         ; (a host with code selectors: the
+rt_c2d:
+    push bx
+    mov bx,2
+    jmp short rt_xlat
+rt_d2c:
+    push bx
+    xor bx,bx
+rt_xlat:                            ; BX = 0 data to code, 2 code to data
+    push si
+    push di
+    mov si,rt_pairs
+.l:
+    mov di,[cs:si+bx]               ; the half AX is
+    cmp ax,[di]
+    jne .n
+    xor bx,2
+    mov di,[cs:si+bx]               ; ...and the other
+    mov di,[di]
+    or di,di
+    jz .r                           ; (0: none - AX itself)
+    mov ax,di
+    jmp short .r
+.n:
+    add si,4
+    cmp si,rt_pairs + 12
+    jb .l
+%ifdef RDG_XTIER
+    mov si,S_JITXT - 4              ; ...and the extra tiers' pairs, in the
+.x:                                 ;   view (16.2.5): any, the stale past
+    add si,4                        ;   S_JITXN as right as the rest - a
+    cmp si,S_JITXT + RT_XMAX * 4    ;   code selector names its segment
+    jae .r
+    cmp ax,[si+bx]
+    jne .x
+    xor bx,2
+    mov di,[si+bx]
+    or di,di
+    jz .r
+    mov ax,di
+%endif
+.r:
+    pop di
+    pop si
+    pop bx
+    ret
+rt_pairs:       dw S_JITSEGA, S_JITCSA, S_COREDS, S_DISP+2, S_JITSEGB, S_JITCSB
+%else                                   ;   package's part. Any other - the
+rt_c2d:                                 ;   bare harness, the static
+rt_d2c:                                 ;   recompiler's - has every pair one
+    ret                                 ;   value, and both are AX itself)
+%endif
+
+; rt_unlink - AX = the CODE selector of the tier being recycled (REALDMG-SPEC
 ; 16.2.3): every link the log holds into it undone, and every logged site
 ; IN it dropped, its code about to go. The log is RT_LOG in the first cache
 ; segment, 4 bytes an entry - a site's offset and segment - written by
@@ -374,8 +512,8 @@ rt_unlink:
     push di
     push ds
     push es
-    mov dx,ax                       ; DX = the tier going
-    mov cx,[S_JITLN]
+    mov dx,ax                       ; DX = the tier going, as the log and
+    mov cx,[S_JITLN]                ;   the far jumps name it
     mov es,[S_JITSEGA]
     mov si,RT_LOG
     mov di,si
@@ -388,11 +526,16 @@ rt_unlink:
     add si,4
     cmp ax,dx
     je .l                           ; in the tier: gone with it
+    push ax                         ; (the site's code selector, logged)
+    call rt_c2d                     ; its bytes written through its DATA
+    push ds                         ;   segment (16.2.4)
     mov ds,ax
     call rt_undo
+    pop ds
+    pop ax
     jnc .l                          ; undone: dropped
     mov [es:di],bx
-    mov [es:di+2],ds                ; (rt_undo took AX)
+    mov [es:di+2],ax
     add di,4
     jmp short .l
 .e:
@@ -476,7 +619,7 @@ rt_undo:
     inc ah
     ret
 
-; rt_forget - AX = a tier's segment: every block in it out of the table
+; rt_forget - AX = a tier's CODE selector: every block in it out of the table
 ; (REALDMG-SPEC 16.2.3) - its entry cleared, so its PC counts again from
 ; nothing. Links into it are undone first (rt_unlink). Keeps every register
 rt_forget:
@@ -704,7 +847,14 @@ rt_preone:
     mov si,[es:bx]
     mov dl,[es:bx+2]
     cmp si,8000h
+%ifdef RT_AOTSTOP                       ; (the full static recompiler's host:
+    jb .rom                             ;   an HRAM PC too, from the HRAM the
+    cmp si,0FF80h                       ;   host put there, guarded -
+    jb .no                              ;   REALDMG-SPEC 20.5)
+.rom:
+%else
     jae .no
+%endif
     mov ax,[S_BANK]                 ; the bank as it is, put back after
     push ax
     push word [S_ROMX]
@@ -832,14 +982,32 @@ rt_translate:
     call rt_room
     jc .restart
     mov [RT_START],di
+    push di                         ; (no instruction without F yet)
+    push es
+    push ds
+    pop es
+    mov di,RT_BARE
+    xor ax,ax
+    mov cx,8
+    rep stosw
+    pop es
+    pop di
     mov word [RT_IX],0
     mov word [RT_CNT],0
     mov word [RT_PEND],0
     mov byte [RT_GLEN],0
+    mov byte [RT_HTL],0
 .next:
     mov bx,[RT_IX]
     cmp word [RT_CNT],RT_MAXI
     jae .fall
+%ifdef RT_AOTSTOP                       ; (the full static recompiler's host,
+    cmp word [RT_CNT],0                 ;   tools/gbaot/aothost.asm: a block ends
+    je .nost                            ;   where another begins, falling through
+    call rt_aotstop                     ;   to it, so no code is translated
+    jc .fall                            ;   twice - REALDMG-SPEC 20.3)
+.nost:
+%endif
     lea ax,[bx+3]
     cmp ax,[RT_N]
     ja .fall
@@ -858,13 +1026,26 @@ rt_translate:
     jmp short .tm
 .nf:
     call rt_deadf                   ; INC/DEC r, ADD HL,rr: without F when
-.tm:                                ;   the next instruction overwrites it
+    or ah,ah                        ;   the next instruction overwrites it
+    jz .tm
+    push ax                         ; (and so marked, for rt_lazy)
+    push cx
+    push bx
+    call rt_barebit
+    or [bx],al
+    pop bx
+    pop cx
+    pop ax
+.tm:
     shl ax,1
     xchg ax,si
     mov si,[cs:rt_tab + si]
     or si,si
     jz .ctl
     mov [RT_REC],si
+    mov [RT_TDI],di
+    mov al,[RT_OP]
+    mov [RT_TOP],al
     call rt_tmpl
     jc .restart
     inc word [RT_CNT]
@@ -885,6 +1066,22 @@ rt_translate:
     jc .restart
     mov ax,[RT_IX]
     add ax,[RT_PC0]
+    cmp word [RT_CNT],0             ; nothing fits before 4000h (an
+    jne .fn                         ;   instruction at 3FFE across it,
+    call rt_movsi                   ;   REALDMG-SPEC 3.1): the interpreter
+    mov ax,RDGC_TR_INT              ;   takes it, where a block that exits
+    call rt_jmp                     ;   to its own start would spin
+    jmp short .done
+.fn:
+%ifdef RT_AOTSTOP
+    call rt_flushbp                     ; a cut - where another block begins,
+    push ax                             ;   or RT_MAXI's - is NOT a branch, and
+    mov ax,0E439h                       ;   the interpreter checks for an event
+    stosw                               ;   only at one: on with SF clear, cmp
+    pop ax                              ;   sp,sp, so the event waits for the
+    call rt_exit                        ;   next branch as it would interpreted
+    jmp short .done                     ;   (REALDMG-SPEC 20.3)
+%endif
     cmp word [RT_PEND],0            ; on to the next PC, checking BP: the
     je .fo                          ;   flush's sub bp sets the sign itself
     call rt_flushbp
@@ -918,7 +1115,8 @@ rt_translate:
     mov ax,[RT_ENT]
     mov [es:JIT_HASH+bx+4],ax
     mov [S_JITOUT],ax
-    mov ax,[S_JITSEG]               ; ...in the segment it was written in
+    mov ax,[S_JITCS]                ; ...in the segment it was written in,
+                                    ;   as a jump names it (16.2.4)
     mov [es:JIT_HASH+bx+6],ax
     mov [S_JITOUT+2],ax
     inc word [S_JITNB]
@@ -937,6 +1135,61 @@ rt_translate:
     mov [JIT_BUF+0C2h+bx],al
 %endif
     ret
+
+%ifdef RT_AOTSTOP
+; rt_aotstop - BX = an instruction's place in JIT_BUF: CF = 1 when its PC is a
+; place the host says another block begins (REALDMG-SPEC 20.3). The host's
+; bitmap is the segment at [cs:RT_AOTBMP]: a byte a bank key at 0 (its
+; bitmap's index, 0 none), then 2KB bitmaps from 100h - index 0 is
+; 0000-3FFF's, index n a bank's 4000-7FFF. Keeps every register but the flags
+rt_aotstop:
+    push ax
+    push bx
+    push cx
+    push es
+    mov es,[cs:RT_AOTBMP]
+    mov ax,bx
+    add ax,[RT_PC0]                 ; AX = the PC
+    mov bx,100h
+    cmp ax,4000h
+    jb .b
+    cmp ax,8000h
+    jae .no
+    push ax
+    mov bl,[S_JITBK]
+    xor bh,bh
+    mov al,[es:bx]                  ; the bank's bitmap
+    xor ah,ah
+    or al,al
+    jz .nob
+    mov cl,11
+    shl ax,cl
+    add ax,100h
+    mov bx,ax
+    pop ax
+    and ah,3Fh
+.b:
+    mov cl,al
+    and cl,7
+    shr ax,1
+    shr ax,1
+    shr ax,1
+    add bx,ax
+    mov al,[es:bx]
+    shr al,cl
+    shr al,1                        ; CF = the bit
+    jmp short .r
+.nob:
+    pop ax
+.no:
+    clc
+.r:
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; rt_deadf - AX = the main opcode at JIT_BUF+BX, whose own record it is: its
 ; record WITHOUT F (rdggen.nof_lines) when it has one and the instructions after
@@ -977,34 +1230,12 @@ rt_deadf:
     lea si,[bx+3]
     cmp si,[RT_N]
     ja .live
+%ifdef RT_AOTSTOP                       ; (a block's end the host cut: an event
+    call rt_aotstop                     ;   may be taken there, and its handler
+    jc .live                            ;   may PUSH AF)
+%endif
     push cx
-    mov al,[JIT_BUF+bx]
-    xor ah,ah
-    mov si,ax
-    mov ch,[cs:rt_tab + RDGT_FLG + si]
-    cmp al,0CBh
-    jne .m
-    mov al,[JIT_BUF+bx+1]           ; a CB op: its record 256 on, and its
-    inc ah                          ;   masks the group's rule - RL and RR
-    mov si,ax                       ;   read C, the shifts and rotates
-    mov ch,0                        ;   write all four, BIT Z, N and H
-    cmp al,80h
-    jae .m
-    mov ch,7
-    cmp al,40h
-    jae .m
-    mov ch,0Fh
-    cmp al,10h
-    jb .m
-    cmp al,20h
-    jae .m
-    mov ch,8Fh
-.m:
-    mov cl,ch
-    shr cl,1
-    shr cl,1
-    shr cl,1
-    shr cl,1
+    call rt_fmask
     and cl,dh                       ; it reads one: live
 %ifndef RT_DEADBUG                  ; (tests/gbcpu.py's control: what reads
     jnz .livec                      ;   a flag, ADC or RLA, not seen to)
@@ -1037,6 +1268,52 @@ rt_deadf:
     pop dx
 .r0:
     pop ax
+    ret
+
+; rt_fmask - the instruction at JIT_BUF+BX: SI = its record's index, CH =
+; what it writes (low nibble) and reads (high), CL = what it reads. A CB op's
+; record is 256 on, and its masks the group's rule - RL and RR read C, the
+; shifts and rotates write all four, BIT Z, N and H. AX lost
+rt_fmask:
+    mov al,[JIT_BUF+bx]
+    xor ah,ah
+    mov si,ax
+    mov ch,[cs:rt_tab + RDGT_FLG + si]
+    cmp al,0CBh
+    jne .m
+    mov al,[JIT_BUF+bx+1]
+    inc ah
+    mov si,ax
+    mov ch,0
+    cmp al,80h
+    jae .m
+    mov ch,7
+    cmp al,40h
+    jae .m
+    mov ch,0Fh
+    cmp al,10h
+    jb .m
+    cmp al,20h
+    jae .m
+    mov ch,8Fh
+.m:
+    mov cl,ch
+    shr cl,1
+    shr cl,1
+    shr cl,1
+    shr cl,1
+    ret
+
+; rt_barebit - BX = an instruction's place in JIT_BUF: BX = its byte of
+; RT_BARE, AL = its bit. CL lost
+rt_barebit:
+    mov cl,bl
+    and cl,7
+    mov al,1
+    shl al,cl
+    mov cl,3
+    shr bx,cl
+    add bx,RT_BARE
     ret
 
 ; rt_nofx - AX = a main opcode: CF = 0 and AX = the record of it without F
@@ -1128,7 +1405,11 @@ rt_guard:
     mov dx,di                       ; the stale way: mov si,PC / jmp tr_stale
     mov ax,[RT_PC0]
     call rt_movsi
-    mov ax,RDGC_TR_STALE
+%ifdef RT_AOTSTOP
+    mov ax,RDGC_TR_INT              ; (a FIXED table: tr_stale would forget
+%else                               ;   the slot's - or its neighbour's -
+    mov ax,RDGC_TR_STALE            ;   entry, which may be another block's;
+%endif                              ;   the interpreter, every time, 20.5)
     call rt_jmp
     mov [RT_ENT],di
     xor bx,bx
@@ -1371,7 +1652,13 @@ rt_room:
     mov cl,[S_JITTIER]              ;   turn: 0, the core's holes, 2, 0...
 .nt:                                ;   over those there are
     inc cl
+%ifdef RDG_XTIER
+    mov al,[S_JITXN]                ; (and rt_more's after them, 16.2.5)
+    add al,3
+    cmp cl,al
+%else
     cmp cl,3
+%endif
     jb .t
     xor cl,cl
 .t:
@@ -1390,8 +1677,11 @@ rt_room:
     jnz .full0
     cmp word [S_JITGNX],0FFF0h      ; (the generations near a wrap: a flush)
     jae .flush
-    call rt_unlink                  ; its links undone, its blocks out of
-    call rt_forget                  ;   the table
+    push ax
+    call rt_d2c                     ; (both name it by its CODE selector,
+    call rt_unlink                  ;   16.2.4) its links undone, its blocks
+    call rt_forget                  ;   out of the table
+    pop ax
     inc word [S_JITRCY]
     inc word [S_JITFL]
 .fresh:
@@ -1724,7 +2014,7 @@ rt_exit:
     pop es
     or bx,bx
     jz .link
-    cmp dx,[S_JITSEG]               ; the other segment's: tr_link makes it
+    cmp dx,[S_JITCS]                ; the other segment's: tr_link makes it
     jne .link                       ;   a far jump (16.2.1)
     mov ax,0378h                    ; js +3 / jmp near the block
     stosw
@@ -1756,12 +2046,8 @@ rt_exit:
     push ax                         ;   on that need one set it themselves
     call rt_movsi
 .ev2:
-    mov ax,0FF36h                   ; jmp far [ss:S_EVVEC]
-    stosw
-    mov al,2Eh
-    stosb
-    mov ax,S_EVVEC
-    stosw
+    mov ax,RDGC_TR_EVFAR            ; jmp tr_evfar: jmp far [ss:S_EVVEC]
+    call rt_jmp
     pop ax
     pop dx
     pop bx
@@ -1874,8 +2160,11 @@ rt_ctl:
     mov ax,RDGC_TR_INT
     jmp rt_jmp
 .cond:                              ; SAHF and the Jcc that skips: BX = its
-    mov al,9Eh                      ;   displacement's place
+    call rt_hoist                   ;   displacement's place - or no SAHF,
+    jnc .cj                         ;   the flags the instruction before
+    mov al,9Eh                      ;   left (rt_hoist)
     stosb
+.cj:
     mov bl,[RT_OP]
     mov cl,3
     shr bl,cl
@@ -1887,12 +2176,26 @@ rt_ctl:
     call rt_jrt
     ret
 .jrcc:
+    call rt_lazy                    ; a countdown closing its own block:
+    jc .jrn                         ;   dec r and the Jcc on its ZF
+    mov al,RT_SKIP_NZ
+    call rt_skip
+    jmp short .jrb
+.jrn:
     call .cond
+.jrb:
     push bx
+    call rt_htail
     lea ax,[si+2]
     call rt_jrt
     pop bx
     call rt_land
+    call rt_htail2
+    cmp byte [RT_LZD],0             ; ...and its fall-through's F
+    je .jrf
+    mov byte [RT_LZD],0
+    call rt_lzmat
+.jrf:
     call rt_pend0                   ; (the other arm's pending too)
     mov al,2
     call rt_subbp
@@ -1906,12 +2209,14 @@ rt_ctl:
 .jpcc:
     call .cond
     push bx
+    call rt_htail
     mov al,4
     call rt_subbp
     mov ax,[RT_IMM]
     call rt_exit
     pop bx
     call rt_land
+    call rt_htail2
     call rt_pend0                   ; (the other arm's pending too)
     mov al,3
     call rt_subbp
@@ -1927,6 +2232,7 @@ rt_ctl:
 .callcc:
     call .cond
     push bx
+    call rt_htail
     lea ax,[si+3]
     call rt_push
     mov al,6
@@ -1935,6 +2241,7 @@ rt_ctl:
     call rt_exit
     pop bx
     call rt_land
+    call rt_htail2
     call rt_pend0                   ; (the other arm's pending too)
     mov al,3
     call rt_subbp
@@ -1946,10 +2253,12 @@ rt_ctl:
 .retcc:
     call .cond
     push bx
+    call rt_htail
     mov al,5
     call rt_ret
     pop bx
     call rt_land
+    call rt_htail2
     call rt_pend0                   ; (the other arm's pending too)
     mov al,2
     call rt_subbp
@@ -2046,16 +2355,223 @@ rt_retds:
     stosw
     mov ax,RDGC_TR_ENTER
     call rt_jmp
-    mov ax,0FF36h
-    stosw
-    mov al,2Eh
-    stosb
-    mov ax,S_EVVEC
-    stosw
-    ret
+    mov ax,RDGC_TR_EVFAR
+    jmp rt_jmp
 
 ; rt_jrt - a taken JR whose next PC is AX: its target from [RT_IMM]'s low
 ; byte, and a spin-wait to it skipped as the interpreter skips one
+; -----------------------------------------------------------------------------
+; rt_lazy - the control transfer is a JR NZ at SI back to its own block's
+; start, after DEC r (B, C, H, L or A): a countdown loop (REALDMG-SPEC
+; 16.1.3). CF = 0 and the DEC's template (sahf / dec r / lahf / or ah,20h)
+; rewritten as the bare dec r, RT_LZ and RT_LZD set, when nothing from the
+; block's start to the DEC reads the Z, N or H that leaves stale in AH, and
+; nothing that may leave the block or take an interrupt runs before all
+; three are written again. CF = 1 otherwise, nothing written. Keeps SI
+; -----------------------------------------------------------------------------
+rt_lazy:
+    cmp byte [RT_OP],20h
+    jne .no
+    cmp word [RT_PC0],8000h         ; (HRAM: entered through its guard)
+    jae .no
+    mov al,[RT_IMM]
+    cbw
+    add ax,si
+    inc ax
+    inc ax
+    cmp ax,[RT_PC0]
+    jne .no
+    cmp word [RT_IX],0
+    je .no
+    mov ax,di                       ; the last template DEC B, C, H, L or
+    sub ax,[RT_TDI]                 ;   A's, as written: nothing else is
+    cmp ax,7                        ;   these seven bytes (D's and E's go
+    jne .no                         ;   through DX, and (HL)'s to memory)
+    mov bx,[RT_TDI]
+    cmp word [es:bx],0FE9Eh         ; sahf / dec r
+    jne .no
+    cmp word [es:bx+3],809Fh        ; lahf / or ah,20h
+    jne .no
+    cmp word [es:bx+5],20CCh
+    jne .no
+    mov al,[es:bx+2]
+    mov [RT_LZR],al
+    push si
+    xor bx,bx
+    mov dh,7                        ; DH = Z, N, H: stale from the 2nd pass
+.s:
+    mov ax,[RT_IX]
+    dec ax
+    cmp bx,ax
+    je .ok
+    ja .f
+    call rt_fmask
+    and cl,dh                       ; it reads a stale one
+    jnz .f
+    shl si,1
+    mov si,[cs:rt_tab + si]
+    or si,si
+    jz .f
+    or dh,dh                        ; a store or a way out while one is
+    jz .w                           ;   stale
+    test byte [cs:rt_tab + si + 4],1+2+4+16+64
+    jnz .f
+.w:
+    push bx                         ; ...and what it writes, unless it was
+    call rt_barebit                 ;   written without F (RT_BARE)
+    test [bx],al
+    pop bx
+    jnz .nx
+    and ch,0Fh
+    not ch
+    and dh,ch
+.nx:
+    mov al,[cs:rt_tab + si + 3]
+    cbw
+    add bx,ax
+    jmp .s
+.ok:
+    pop si
+    mov di,[RT_TDI]                 ; the DEC again, bare
+    mov al,0FEh
+    mov ah,[RT_LZR]
+    stosw
+    mov byte [RT_LZ],1
+    mov byte [RT_LZD],1
+    clc
+    ret
+.f:
+    pop si
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; rt_hoist - a conditional transfer's Z or C straight from the x86 flags the
+; instruction before it left (REALDMG-SPEC 16.1.4): the ALU on A and INC/DEC
+; r, whose ZF and CF ARE the Game Boy's Z and C at their LAHF. CF = 0 and what
+; follows that LAHF - its or/and fix-up of AH, 0 to 6 bytes - cut off into
+; RT_HTB/RT_HTL for each arm to write (rt_htail); CF = 1, nothing done.
+; Keeps SI
+; -----------------------------------------------------------------------------
+rt_hoist:
+    cmp word [RT_IX],0
+    je .no
+    mov al,[RT_TOP]
+    cmp al,0C0h
+    jae .imm
+    cmp al,80h
+    jae .yes
+    cmp al,40h
+    jae .no
+    mov ah,al                       ; INC/DEC r, but (HL)'s (a store after)
+    and ah,6
+    cmp ah,4
+    jne .no
+    cmp al,34h
+    je .no
+    cmp al,35h
+    je .no
+    jmp short .yes
+.imm:
+    and al,0C7h                     ; ADD A,n ... CP n
+    cmp al,0C6h
+    jne .no
+.yes:
+    mov bx,di
+    dec bx
+    xor cx,cx
+.l:
+    cmp bx,[RT_TDI]
+    jb .no
+    cmp byte [es:bx],9Fh            ; LAHF
+    je .got
+    cmp cl,6
+    jae .no
+    dec bx                          ; ...after or ah,n / and ah,n alone
+    dec bx
+    cmp byte [es:bx],80h
+    jne .no
+    mov al,[es:bx+1]
+    cmp al,0CCh
+    je .t
+    cmp al,0E4h
+    jne .no
+.t:
+    add cl,3
+    dec bx
+    jmp short .l
+.got:
+    mov [RT_HTL],cl
+    inc bx
+    mov di,bx                       ; the fix-up, off the template...
+    push si
+    push ds
+    push es
+    push ds
+    push es
+    pop ds
+    pop es
+    mov si,bx
+    mov di,RT_HTB
+    rep movsb                       ; ...into RT_HTB
+    pop es
+    pop ds
+    pop si
+    mov di,bx
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; rt_htail - the cut fix-up at ES:DI, for an arm; rt_htail2 the same for the
+; second arm, which ends it. Every register kept
+rt_htail2:
+    call rt_htail
+    mov byte [RT_HTL],0
+    ret
+rt_htail:
+    push cx
+    push si
+    mov cl,[RT_HTL]
+    xor ch,ch
+    mov si,RT_HTB
+    rep movsb
+    pop si
+    pop cx
+    ret
+
+; rt_lzpre - a lazy DEC's F, if rt_jrt is to write anything but its own
+; taken arm: rt_lzmat, and RT_LZ cleared. Every register kept
+rt_lzpre:
+    cmp byte [RT_LZ],0
+    je .r
+    mov byte [RT_LZ],0
+    call rt_lzmat
+.r:
+    ret
+
+; rt_lzmat - the DEC's F as its template makes it, from AH's C and the
+; register: inc r / sahf / dec r / lahf / or ah,20h. Every register kept
+rt_lzmat:
+    push ax
+    mov ah,[RT_LZR]
+    sub ah,8
+    mov al,0FEh
+    stosw
+    mov al,9Eh
+    stosb
+    mov al,0FEh
+    mov ah,[RT_LZR]
+    stosw
+    mov ax,809Fh
+    stosw
+    mov ax,20CCh
+    stosw
+    pop ax
+    ret
+
 rt_jrt:
     mov dl,[RT_IMM]
     mov dh,dl
@@ -2089,6 +2605,7 @@ rt_jrt:
 .cnt:
     mov bx,RDGC_CNT_FF
 .ff:                                ; BX = the tail, DX what it is told
+    call rt_lzpre                   ; (a lazy DEC's F made first)
     call rt_flushbp                 ; (it reads BP: charged first)
     mov al,0BEh                     ; mov si,T
     stosb
@@ -2111,6 +2628,58 @@ rt_jrt:
     call rt_jmp
     jmp .plain                      ; FALLBACK: the taken JR as usual
 .nocnt:
+    cmp byte [RT_OP],20h            ; -8 or -7, a JR NZ closing a 16-bit
+    jne .now                        ;   countdown's LD A,r / OR r: the
+    mov bx,[RT_IX]                  ;   delay, copy and fill (w16_ff,
+    cmp dx,0FFF8h                   ;   REALDMG-SPEC 16.6), AH the shape
+    je .w8
+    cmp dx,0FFF9h
+    jne .now
+    cmp bx,5
+    jb .now
+    cmp word [JIT_BUF+bx-4],0B22h   ; LD (HL+),A / DEC BC
+    jne .now
+    mov al,[JIT_BUF+bx-5]
+    cmp word [JIT_BUF+bx-2],0B178h  ; LD A,B / OR C
+    je .w7
+    cmp word [JIT_BUF+bx-2],0B079h  ; LD A,C / OR B
+    jne .now
+    cmp al,7Bh                      ; ...after LD A,E
+    mov ah,5
+    je .w
+    jmp short .now
+.w7:
+    cmp al,0AFh                     ; ...after XOR A
+    mov ah,3
+    je .w
+    cmp al,7Ah                      ; ...after LD A,D
+    mov ah,4
+    je .w
+    jmp short .now
+.w8:
+    cmp bx,6
+    jb .now
+    cmp word [JIT_BUF+bx-2],0B37Ah  ; NOP x3 / DEC DE / LD A,D / OR E
+    jne .w82
+    cmp word [JIT_BUF+bx-4],1B00h
+    jne .now
+    cmp word [JIT_BUF+bx-6],0000h
+    jne .now
+    mov ah,1
+    jmp short .w
+.w82:
+    cmp word [JIT_BUF+bx-2],0B178h  ; LD A,(HL+) / LD (DE),A / INC DE /
+    jne .now                        ;   DEC BC / LD A,B / OR C
+    cmp word [JIT_BUF+bx-4],0B13h
+    jne .now
+    cmp word [JIT_BUF+bx-6],122Ah
+    jne .now
+    mov ah,2
+.w:
+    mov dl,ah                       ; (DL alone: w16_ff reads no DH)
+    mov bx,RDGC_W16_FF
+    jmp .ff
+.now:
     cmp dx,0FFFCh                   ; -4, a JR NZ after ADD HL,DE / DEC B
     jne .noadd                      ;   or C: a map row stepped through
     cmp byte [RT_OP],20h            ;   (add_ff, REALDMG-SPEC 16.6)
@@ -2118,8 +2687,12 @@ rt_jrt:
     mov bx,[RT_IX]
     cmp bx,2
     jb .noadd
-    cmp byte [JIT_BUF+bx-2],19h
+    mov al,[JIT_BUF+bx-2]           ; ADD HL,DE - or LD (HL+),A, a fill
+    cmp al,19h                      ;   (fill_ff, REALDMG-SPEC 16.6)
+    je .ad1
+    cmp al,22h
     jne .noadd
+.ad1:
     mov dl,[JIT_BUF+bx-1]
     cmp dl,05h
     je .add
@@ -2129,6 +2702,9 @@ rt_jrt:
     jmp short .noadd
 .add:
     mov bx,RDGC_ADD_FF
+    cmp al,19h
+    je .ff
+    mov bx,RDGC_FILL_FF
     jmp .ff
 .noadd:
     cmp dx,0FFFAh                   ; -6, a JR NZ after a copy's four (cpy_ff,
@@ -2140,7 +2716,25 @@ rt_jrt:
     jb .nocpy
     mov ax,[JIT_BUF+bx-4]           ; (what follows takes T from RT_T)
     cmp word [JIT_BUF+bx-2],0513h
+    je .cp4
+    mov dl,0E2h                     ; ...or through (C) (cpc_ff): LD A,(HL+)
+    cmp ax,0E22Ah                   ;   / LD (C),A / INC C / DEC B, or LD
+    jne .cc2                        ;   A,(C) / INC C / LD (HL+),A / DEC B
+    cmp word [JIT_BUF+bx-2],050Ch
+    je .cpc
+.cc2:
+    mov dl,0F2h
+    cmp ax,0CF2h
     jne .stat
+    cmp word [JIT_BUF+bx-2],0522h
+    jne .stat
+.cpc:
+%ifdef RT_CPCBUG
+    xor dl,10h                      ; (tests/gbcpu.py's control: the wrong way)
+%endif
+    mov bx,RDGC_CPC_FF
+    jmp .ff
+.cp4:
     cmp ax,122Ah
     je .cpy
     cmp ax,221Ah
@@ -2179,6 +2773,7 @@ rt_jrt:
     call rt_idle
     cmp byte [RT_IDLE],0
     je .plain
+    call rt_lzpre                   ; (a lazy DEC's F made first)
     cmp byte [RT_IDLE],1
     je .yes
     ; HL's: only while HL is WRAM or HRAM (rdggen's idle_hl)
@@ -2221,10 +2816,39 @@ rt_jrt:
     mov ax,RDGC_IDLE_YES
     jmp rt_jmp
 .plain:
+    cmp byte [RT_LZ],0
+    jne .lzp
     mov al,3
     call rt_subbp
     mov ax,[RT_T]
     jmp rt_exit
+.lzp:                               ; a lazy DEC's taken arm (16.1.3): back
+    mov byte [RT_LZ],0              ;   to the block's own start while BP
+    mov al,3                        ;   holds, F made only for the event
+    call rt_subbp
+    mov ax,[RT_START]
+    sub ax,di
+    dec ax
+    dec ax
+    cmp ax,-128
+    jl .lzn
+    mov ah,al                       ; jns START
+    mov al,79h
+    stosw
+    jmp short .lze
+.lzn:
+    mov ax,0378h                    ; js +3 / jmp near START
+    stosw
+    mov ax,[RT_START]
+    call rt_jmp
+.lze:
+%ifndef RT_LAZYBUG                  ; (tests/gbcpu.py's control: the event
+    call rt_lzmat                   ;   taken with F stale)
+%endif
+    mov ax,[RT_T]
+    call rt_movsi
+    mov ax,RDGC_TR_EVFAR
+    jmp rt_jmp
 
 ; -----------------------------------------------------------------------------
 ; rt_idle - is the loop from [RT_T] to the JR at [RT_T]+len a spin-wait?

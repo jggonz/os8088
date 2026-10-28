@@ -125,13 +125,12 @@ class Box:
                 self.int13_calls += 1
                 int13(self)
 
-        def hcode(uc, addr, size, ud):
-            if uc.mem_read(addr, 1) == b"\xf4":
-                uc.emu_stop()
+        # a `hlt` ends emu_start by itself (Unicorn 2), one instruction past
+        # it; a per-instruction hook asking "is this a hlt?" was 40% of the
+        # row's host time
         self.mu.hook_add(UC_HOOK_INSN, hin, None, 1, 0, UC_X86_INS_IN)
         self.mu.hook_add(UC_HOOK_INSN, hout, None, 1, 0, UC_X86_INS_OUT)
         self.mu.hook_add(UC_HOOK_INTR, hint)
-        self.mu.hook_add(UC_HOOK_CODE, hcode)
 
     def go(self, entry):
         mu = self.mu
@@ -774,8 +773,24 @@ def kslice(tmp):
     # the ramp both restarts expand (the desktop's and kern_dos's kd_leave)
     cut("%macro DSK_PMEM_WARM", lambda l: l.startswith("%endmacro"))
     out.append("%endmacro")
-    cut("dsk_fdd_pmemu:", lambda l: l.startswith("%endif"))
-    cut("dsk_fdd_park_x:", lambda l: l.startswith("%endif"))
+    # each body runs to the %endif that closes the conditional it sits in -
+    # NESTING-aware, since dsk_fdd_park_x carries a %ifdef KERN_MEGA arm of
+    # its own and the first %endif after the label is that one's
+    def closing():
+        depth = [0]
+
+        def stop(l):
+            w = l.split(";")[0].strip()
+            if w.startswith("%if"):
+                depth[0] += 1
+            elif w.startswith("%endif"):
+                if depth[0] == 0:
+                    return True
+                depth[0] -= 1
+            return False
+        return stop
+    cut("dsk_fdd_pmemu:", closing())
+    cut("dsk_fdd_park_x:", closing())
     with open(os.path.join(tmp, "kslice.inc"), "w") as f:
         f.write("\n".join(out) + "\n")
 
@@ -1328,8 +1343,8 @@ def leg_pmdma(tmp):
                 uc.mem_write(0x46C, ((t + 1) & 0xFFFF).to_bytes(2, "little"))
             if pm.auto and pm.icount % 400 == 0 and pm.stream(uc):
                 pm.irq_due += 1
-            fl = uc.reg_read(UC_X86_REG_EFLAGS)
-            if pm.irq_due and not pic["imr"] & 0x80 and fl & 0x200:
+            if pm.irq_due and not pic["imr"] & 0x80 and \
+                    (fl := uc.reg_read(UC_X86_REG_EFLAGS)) & 0x200:
                 # the multiplexer's software `int 0Fh` - the SB on IRQ 7, the
                 # card on 5 - delivered at this instruction boundary
                 pm.irq_due -= 1
@@ -1547,7 +1562,12 @@ def leg_pmdma(tmp):
             mem = bytes(mu.mem_read(PDSEG * 16, 0x10000))
             tx = [t.decode() for t in re.findall(rb"[ -~]{4,}",
                                                   mem[len(image):])]
-            hd = [i for i, t in enumerate(tx) if t.startswith("A  THE CARD")]
+            # benchlib's banner (the report's first commit) parks the
+            # half-built header in bl_draw and emits itself; that parked copy
+            # is the one followed by the banner, the report's own is not
+            hd = [i for i, t in enumerate(tx) if t.startswith("A  THE CARD")
+                  and not "".join(tx[i + 1:i + 2]).startswith(
+                      "THIS REPORT SAVES")]
             md = tx[hd[0] + 1:hd[0] + 3] if hd else []
             check(len(md) == 2 and md[0].startswith("B: copies") and
                   "(stock)" in md[0] and

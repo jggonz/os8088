@@ -20,7 +20,7 @@
 ; buffer.  A plain sum of bytes is blind to every one of them, and a file
 ; delivered in the wrong order is exactly what a stale read window looks like.
 ;
-; IT READS IN 512-BYTE CHUNKS, which is smaller than the box's read window on
+; IT READS IN 512-BYTE CHUNKS, which is smaller than DOS's read window on
 ; purpose: a whole-file read would take one path through apps/dos and hide the
 ; window's own refill, which is the code most likely to be wrong.
     org 0x100

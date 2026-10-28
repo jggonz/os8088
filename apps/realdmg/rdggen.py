@@ -69,18 +69,17 @@ class Slot:
         M-cycle of the instruction the hardware reads in, counted from 0: a
         register read is answered as of then (REALDMG-SPEC section 6.2)."""
         g = self.tag()
-        if JIT:
+        if JIT:                                 # (TEST takes 0000-3FFF and
             self.a(f"""
-cmp bh,40h
-jb .{g}v
-cmp bh,80h
-jb .{g}s
+test bh,0C0h
+jz .{g}v
+jns .{g}s
 cmp bh,0FFh
 jne .{g}v
 cmp bl,80h
 jae .{g}v
 .{g}s:
-""")
+""")                                            #   4000-7FFF in one: ZF, SF)
             if at:                              # (rd_sw takes BP back by
                 self.a(f"""
 mov word [ss:S_RET],.{g}k
@@ -98,10 +97,9 @@ mov dh,[ss:bx]
 """)
             return
         self.a(f"""
-cmp bh,40h
-jb .{g}v
-cmp bh,80h
-jb .{g}s
+test bh,0C0h
+jz .{g}v
+jns .{g}s
 cmp bh,0FFh
 jne .{g}v
 cmp bl,80h
@@ -293,6 +291,9 @@ def gen_main(op):
     s = Slot()
     hi, lo = op >> 4, op & 15
     if op == 0xDD:                                  # the dispatch stub's slot
+        return s
+    if op == 0xD3:                                  # the bank seam's trap,
+        s.a("jmp seam_trap")                        #   REALDMG-SPEC 3.1
         return s
     if op in INVALID:
         s.a(f"""
@@ -754,6 +755,47 @@ def gen_cb(op):
 # --- the shared tails, placed after a main half with room: an invalid -----
 # --- opcode's, or a short handler's (idle_tst follows PUSH HL) --------------
 TAILS = {
+    0x5B: """
+; seam_trap: op_D3, the byte the view holds where code cannot be fetched from
+; it (REALDMG-SPEC 3.1). The view's 0000-3FFF is bank 0 and its 4000 the
+; state block, so code run on past 3FFF reads rdgsys's data: 4000 is the
+; trap while the core runs (S_AF's byte, rdg_resume), and so is an
+; instruction across 3FFF (rdg_seaminit). SI = the trap's address + 1
+seam_trap:
+    mov dx,ds
+    cmp dx,[ss:S_VIEW]
+    jne .bad                    ; (a real D3, in 4000-7FFF)
+    cmp si,4001h
+    jb .in
+    cmp si,8000h
+    ja .bad
+    mov byte [4000h],0D3h       ; run on into 4000-7FFF: the bank's, from
+    dec si                      ;   where it got to (and the trap back)
+    mov ds,[ss:S_ROMX]
+    xor dl,dl
+    DISPATCH
+.in:
+    cmp si,[ss:S_SEAMPC]
+    jne .bad
+    cmp byte [ss:S_SEAMJR],0
+    jne seam_jr
+    mov ds,[ss:S_ROMX]          ; the instruction across 3FFF: the bank's
+    mov dx,[4000h]              ;   4000-4001 where its operand reads them,
+    mov ds,[ss:S_VIEW]          ;   a trap where it ends - and it, as the
+    mov [4000h],dx              ;   ROM has it, with SI past its opcode
+    mov [ss:S_SEAMSV],bx
+    mov bx,[ss:S_SEAMEND]
+    mov byte [bx],0D3h
+    mov bx,[ss:S_SEAMSV]
+    mov dh,[ss:S_SEAMOP]
+    xor dl,dl
+    jmp dx
+.bad:
+    mov byte [ss:S_BADOP],0D3h
+    mov byte [ss:S_EXIT],RDGX_BADOP
+    dec si
+    jmp far [ss:S_EVVEC]
+""",
     0x0B: """
 ; vr_new: vr_wr's block BX marked for the first time - and its PAIR (block
 ; / 2) put on RDG_VLIST, so the damage scan visits what was written and does
@@ -857,6 +899,29 @@ tr_miss:
     mov word [ss:S_RET],tr_back
     mov [ss:S_RETFAR+2],cs       ; rdgsys comes back to THIS copy
     jmp far [ss:S_JITVEC]
+; tr_lpes - tr_lpatch's: ES = the site's tier, CS, as DATA (REALDMG-SPEC
+; 16.2.4) - the pair whose code selector CS is, or CS itself for a host with
+; no code selectors (its pairs 0, or each one value) - and back. It is not
+; a word in the tier: a host that builds code at one place and runs it at
+; another (the full static recompiler's) would carry it over stale
+tr_lpes:
+    mov dx,cs
+    cmp dx,[ss:S_JITCSA]
+    jne .b
+    mov es,[ss:S_JITSEGA]
+    jmp tr_lpok
+.b:
+    cmp dx,[ss:S_JITCSB]
+    jne .c
+    mov es,[ss:S_JITSEGB]
+    jmp tr_lpok
+.c:
+    cmp dx,[ss:S_DISP+2]
+    jne .d
+    mov es,[ss:S_COREDS]
+    jmp tr_lpok
+.d:
+    jmp tr_lpx                  ; ...or an extra tier's (slot 45's CB half)
 """,
     0x42: """
 ; tr_link: tr_enter for an exit that may be CHAINED (REALDMG-SPEC 16.4). DX =
@@ -931,22 +996,25 @@ tr_off:                         ; tr_enter with no translator: the
     jmp dx
 ; tr_ljmp: tr_lpatch's and tr_rpatch's jump, at CS:BX, to the block
 ; [S_JITOUT]: jmp near in the same cache segment, jmp far in the other
-; (16.2.1) - and on to it
+; (16.2.1) - and on to it. ES = the site's tier as DATA (tr_lpatch's .ok):
+; the bytes are written through it, never through CS - on kern_mega a write
+; through a code selector is a #GP, and its frame lands on SP, the Game
+; Boy's stack, in its own memory (REALDMG-SPEC 16.2.4)
 tr_ljmp:
     mov dx,cs
     cmp dx,[ss:S_JITOUT+2]
     mov dx,[ss:S_JITOUT]
     jne .far
-    mov byte [cs:bx],0E9h
+    mov byte [es:bx],0E9h
     sub dx,bx
     sub dx,3
-    mov [cs:bx+1],dx
+    mov [es:bx+1],dx
     jmp short .go
 .far:
-    mov byte [cs:bx],0EAh
-    mov [cs:bx+1],dx
+    mov byte [es:bx],0EAh
+    mov [es:bx+1],dx
     mov dx,[ss:S_JITOUT+2]
-    mov [cs:bx+3],dx
+    mov [es:bx+3],dx
 .go:
 tr_lgo:
     mov bx,[ss:S_SAVBX]
@@ -961,27 +1029,29 @@ tr_lpatch:
     jae .ok                     ;   the site's - the same tier, or a newer
     mov bx,[ss:S_JITLN]         ; into an OLDER one: logged, so that the
     cmp bx,1F0h                 ;   recycling of it undoes the link
-    jae .no                     ;   (rt_unlink), or not made when the
+    jae tr_lpno                 ;   (rt_unlink), or not made when the
     add word [ss:S_JITLN],4     ;   log is full
     mov es,[ss:S_JITSEGA]
     mov dx,[ss:S_LINK]
     mov [es:bx+0FE00h],dx       ; RT_LOG: the site, and its segment
     mov [es:bx+0FE02h],cs
 .ok:
+    jmp tr_lpes                 ; ES = the site's tier as DATA (slot 41's)
+tr_lpok:
     mov bx,[ss:S_LINK]
     cmp byte [cs:bx],81h        ; a RET's site: cmp si,PC (rt_ret)
     je tr_rpatch
     cmp si,4000h                ; bank 0: the six bytes, the jump
     jb tr_ljmp
-    mov word [cs:bx],8036h      ; a bank: cmp byte [ss:S_BANK],B / jne +5
-    mov byte [cs:bx+2],3Eh      ;   (onto the exit's own jmp tr_enter) /
-    mov word [cs:bx+3],S_BANK   ;   the jump, near or far
+    mov word [es:bx],8036h      ; a bank: cmp byte [ss:S_BANK],B / jne +5
+    mov byte [es:bx+2],3Eh      ;   (onto the exit's own jmp tr_enter) /
+    mov word [es:bx+3],S_BANK   ;   the jump, near or far
     mov dl,[ss:S_BANK]
-    mov [cs:bx+5],dl
-    mov word [cs:bx+6],0575h
+    mov [es:bx+5],dl
+    mov word [es:bx+6],0575h
     add bx,8
     jmp tr_ljmp
-.no:                            ; (not chained: the lookup each time)
+tr_lpno:                        ; (not chained: the lookup each time)
     jmp tr_lgo
 """,
     0x49: """
@@ -1117,9 +1187,13 @@ tr_new2:
     jmp tr_go
 .both:                          ; in neither: a FIXED table takes no
     cmp byte [ss:S_JITFIX],0    ;   slot but for HRAM, the miss is the
-    je .free                    ;   interpreter's (REALDMG-SPEC 16.8)
+%ifdef RDG_AOTCORE                  ;   interpreter's (REALDMG-SPEC 16.8) -
+    jne .aot                    ;   or, PRECOMPILED, every miss is the
+%else                               ;   host's sorted list's first, HRAM's
+    je .free                    ;   too (REALDMG-SPEC 20.9)
     test si,si
     jns .keep
+%endif
 .free:                          ; else the one to give way is a
     cmp word [es:bx+JIT_HASH+4],0   ; counting entry before a
     jne .tn                     ;   translated one, of two counting the colder
@@ -1149,6 +1223,10 @@ tr_new2:
     mov [es:bx+JIT_HASH+4],dx
 .keep:
     jmp tr_kint
+%ifdef RDG_AOTCORE
+.aot:
+    jmp far [ss:S_AOTVEC]
+%endif
 """,
     0x7F: """
 ; add_ff: ADD HL,DE / DEC r / JR NZ,-4 - a row of a background map stepped
@@ -1254,6 +1332,7 @@ cpy_ff:
     add dx,[ss:S_TMP2]
     jnc cpy_de
 .no:
+    xor dl,dl
     jmp word [ss:S_RET]
 """,
     0x64: """
@@ -1269,6 +1348,7 @@ cpy_de:
     cmp dx,0FF00h
     jna .go
 .no:
+    xor dl,dl
     jmp word [ss:S_RET]
 .h2:
     add dx,[ss:S_TMP2]
@@ -1296,7 +1376,7 @@ cpy_de:
 .hl:
     mov bx,si
     and ah,RDGF_C
-    or ah,RDGF_Z|RDGF_N
+    or ah,RDGF_Z|RDGF_N|06h         ; (DEC 1 -> 0's LAHF: PF and bit 1 too)
     mov si,[ss:S_TMP4]
     add si,6
     xor dl,dl
@@ -1464,32 +1544,33 @@ cnt_ff:
 ; displacement 19 less, a jmp far's as it was), and PC and BLOCK become the
 ; first's, its bank check this block's bank - or a jmp short over it, for a
 ; block in bank 0 - and its jump near or far (tr_ljmp, 16.2.1)
-tr_rpatch:
-    mov dx,[cs:bx+2]
-    mov [cs:bx+21],dx
-    mov dx,[cs:bx+6]
-    mov [cs:bx+25],dx
-    mov dl,[cs:bx+11]
-    mov [cs:bx+30],dl
-    mov dx,[cs:bx+14]
-    mov [cs:bx+33],dx
-    mov dx,[cs:bx+16]
-    mov [cs:bx+35],dx
-    mov dl,[cs:bx+18]
-    mov [cs:bx+37],dl
-    cmp byte [cs:bx+14],0E9h
+tr_rpatch:                      ; (ES = the site's tier as data, tr_ljmp's
+                                ;   note)
+    mov dx,[es:bx+2]
+    mov [es:bx+21],dx
+    mov dx,[es:bx+6]
+    mov [es:bx+25],dx
+    mov dl,[es:bx+11]
+    mov [es:bx+30],dl
+    mov dx,[es:bx+14]
+    mov [es:bx+33],dx
+    mov dx,[es:bx+16]
+    mov [es:bx+35],dx
+    mov dl,[es:bx+18]
+    mov [es:bx+37],dl
+    cmp byte [es:bx+14],0E9h
     jne .f
-    sub word [cs:bx+34],19
+    sub word [es:bx+34],19
 .f:
-    mov [cs:bx+2],si            ; cmp si,PC
+    mov [es:bx+2],si            ; cmp si,PC
     cmp si,4000h
     jae .bank
-    mov word [cs:bx+6],06EBh    ; jmp short +6, over the bank check
+    mov word [es:bx+6],06EBh    ; jmp short +6, over the bank check
     jmp short .blk
 .bank:
-    mov word [cs:bx+6],8036h    ; cmp byte [ss:S_BANK],B
+    mov word [es:bx+6],8036h    ; cmp byte [ss:S_BANK],B
     mov dl,[ss:S_BANK]
-    mov [cs:bx+11],dl
+    mov [es:bx+11],dl
 .blk:
     add bx,14
     jmp tr_ljmp
@@ -1803,7 +1884,7 @@ io_wr:
     jmp short .st
 .snd:
     cmp bl,27h                  ; FF01-FF26, the sound registers with
-    jb .host                    ;   them: rdgsys follows the four channels'
+    jb .nr                      ;   them: rdgsys follows the four channels'
     cmp bl,40h                  ;   triggers, envelopes and lengths and
     jb .st                      ;   stores the rest (REALDMG-SPEC 17) - a
                                 ;   translated store to one it only
@@ -1818,6 +1899,12 @@ io_wr:
 .z:
     xor dl,dl
     jmp word [ss:S_RET]
+.nr:                            ; ...and through (C) or (HL), where no
+    cmp bl,10h                  ;   translator knew the address, the same
+    jb .host                    ;   rule here: a register rdgsys only
+    cmp byte [cs:bx+io_sndtab-0FF10h],0     ; stores is stored, where
+    je .st                      ;   rdgsys was ~95 instructions away
+    jmp short .host
 .lcd:                           ; FF40-FF4B: a write of what is there
     cmp bl,46h                  ;   already changes nothing and is no
     je .host                    ;   raster write (rdg_rlog would log it,
@@ -1901,7 +1988,8 @@ idle_yes:
     mov [ss:S_IDLEPC],si
     xor dl,dl
     sub bp,3
-    jmp far [ss:S_EVVEC]
+tr_evfar:                       ; (every exit's event way, SI set: a near
+    jmp far [ss:S_EVVEC]        ;   jump here is two bytes under this one)
 idle_no:
     mov [ss:S_IDLENO],si
     xor dl,dl
@@ -2044,7 +2132,7 @@ def main():
     L.append("%endif")
     L.append("%endmacro")
     L.append("%assign JDN 0")
-    L.append("%macro JDISPATCH 0")         # a control transfer's: the
+    L.append("%macro JDISPATCH 0-1 tr_ejf")  # a control transfer's: the
     L.append("%ifdef RDG_TRACE")            #   translated code at the target
     L.append("    jmp far [ss:S_TRACEVEC]")  # if there is any (tr_enter) -
     L.append("%else")                      #   but never in RAM, which runs
@@ -2052,7 +2140,11 @@ def main():
     L.append("%assign JDN JDN+1")          #   own (REALDMG-SPEC 16.3). Each
     L.append("    cmp si,8000h")           #   site is LABELLED: with no
     L.append("    jae %%d")                #   recompiler its first five bytes
-    L.append("    jmp tr_ejd")             #   become the plain dispatch
+    L.append("%ifdef RDG_AOTCORE")         #   become the plain dispatch;
+    L.append("    jmp %1")                 #   PRECOMPILED, the filter first
+    L.append("%else")
+    L.append("    jmp tr_ejd")
+    L.append("%endif")
     L.append("%%d:")
     L.append("    mov dh,[si]")
     L.append("    inc si")
@@ -2066,7 +2158,8 @@ def main():
         L.append("op_%02X:" % op)               #   REALDMG-SPEC 16.2.2)
         lines = gen_main(op).text()
         if op in CONTROL:                       # REALDMG-SPEC section 16.4
-            lines = [ln.replace("DISPATCH", "JDISPATCH") if ln.strip() == "DISPATCH"
+            jd = "JDISPATCH tr_ejd" if op in JD_NOFILTER else "JDISPATCH"
+            lines = [ln.replace("DISPATCH", jd) if ln.strip() == "DISPATCH"
                      else ln for ln in lines]
         L += lines
         if op in TAILS:
@@ -2123,9 +2216,512 @@ EXTRA += [("INC (HL) of RAM", rmw_lines(0x34, False), 1),
 EXTRA += [("CB %02X of RAM" % b, rmw_lines(b, True), 2) for b in RMW_CB]
 
 
+# The control transfers whose JDISPATCH asks the table before tr_ejf's filter
+# under a precompiled machine (REALDMG-SPEC 20.9): RET and RETI, which land on
+# a block far more often than the others - the place after a CALL is one, and
+# an interrupt returns into the code it interrupted
+JD_NOFILTER = {0xC9, 0xD9}
+
+
 # --- tails after a TAIL page's CB handler: the translator copies a tail -----
 # --- page whole, so its CB half's room is as reachable as its main half's --
 CBTAILS = {
+    0xFD: """
+; io_sndtab: FF10-FF26, 1 where rdgsys follows the register (a channel's
+; envelope, trigger or DAC, NR52) - rdgjit's rt_snd's list - and 0 where it
+; only stores it, for io_wr (REALDMG-SPEC 17)
+io_sndtab:
+    db 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1
+""",
+    0xE3: """
+%ifdef RDG_AOTCORE
+; tr_ejm: tr_ejf's PC that the filter names, on to the table as before
+tr_ejm:
+    mov bx,si
+    mov dl,dh
+    jmp tr_ekey
+tr_ebits:   db 1, 2, 4, 8, 16, 32, 64, 128
+%endif
+""",
+    0x5B: """
+; seam_jr: a JR at 3FFF (REALDMG-SPEC 3.1), its displacement the BANK's
+; 4000 - run here whole, since where it lands may be either side of 4000h
+; and a JR chooses no DS: SI = 4000h, the opcode in S_SEAMOP
+seam_jr:
+    mov ds,[ss:S_ROMX]
+    mov dl,[4000h]              ; the displacement
+    mov dh,[ss:S_SEAMOP]
+    cmp dh,18h
+    je .tk
+    cmp dh,28h
+    jb .nz
+    je .z
+    cmp dh,30h
+    je .nc
+    sahf                        ; 38h: JR C (F's Z and C are ZF and CF)
+    jc .tk
+    jmp short .nt
+.nz:
+    sahf
+    jnz .tk
+    jmp short .nt
+.z:
+    sahf
+    jz .tk
+    jmp short .nt
+.nc:
+    sahf
+    jnc .tk
+.nt:
+    inc si                      ; on into the bank's 4001, DS its
+    xor dl,dl
+    sub bp,2
+    js .ev
+    jmp tr_enter
+.tk:
+    inc si
+    cmp dl,80h
+    cmc
+    sbb dh,dh
+    add si,dx                   ; 4001h + d, and DS for it
+    cmp si,4000h
+    jae .b
+    mov ds,[ss:S_VIEW]
+.b:
+    xor dl,dl
+    sub bp,3
+    js .ev
+    jmp tr_enter
+.ev:
+    jmp far [ss:S_EVVEC]
+""",
+    0x7C: """
+%ifdef RDG_AOTCORE
+; tr_ejf: JDISPATCH's way in under a PRECOMPILED machine (REALDMG-SPEC 20.9):
+; the filter of every (PC, key) that has a block, table or list, asked
+; BEFORE the table. A PC it does not name - the walk's misses, an image
+; left on the disk - is dispatched here, DS being the jump's own, in about
+; twenty instructions where the table, its neighbour and rdg_aotmiss took
+; fifty. One it names goes to tr_ekey as before
+tr_ejf:
+    cmp byte [ss:S_JITFIX],0    ; (the dynamic arm: no filter)
+    je tr_ejd
+    mov [ss:S_SAVBX],bx
+    mov bx,si
+    mov dh,0FFh
+    mov ds,[ss:S_VIEW]          ; DS for SI as tr_int chooses it, on the
+    cmp bh,40h                  ;   key's own branch: a JR's DS may be the
+    jb .k                       ;   wrong side of 4000h (REALDMG-SPEC 3.1)
+    mov dh,[ss:S_BANK]
+    and dh,[ss:S_BMASK]
+    mov ds,[ss:S_ROMX]
+.k:
+    xor bh,dh                   ; PC ^ key << 8, as rdg_aotattach's
+    mov dl,bl
+    and dl,7
+    shr bx,1
+    shr bx,1
+    shr bx,1
+    mov [ss:S_AOTMID],bx
+    mov bl,dl
+    xor bh,bh
+    mov dl,[cs:tr_ebits+bx]
+    mov bx,[ss:S_AOTMID]
+    mov es,[ss:S_AOTFSEG]
+    test [es:bx],dl
+    jz .no
+    jmp tr_ejm
+.no:
+    mov bx,[ss:S_SAVBX]
+    xor dl,dl
+    mov dh,[si]
+    inc si
+    jmp dx
+%endif
+""",
+    0xDD: """
+; cpc_ff: a copy through (C), between RAM and HRAM - LD A,(HL+) / LD (C),A
+; / INC C / DEC B / JR NZ,-6 (DL = E2h) or LD A,(C) / INC C / LD (HL+),A /
+; DEC B / JR NZ,-6 (DL = F2h): Looney Tunes' objects, 32 bytes out to HRAM
+; and back, eight a frame (REALDMG-SPEC 16.6). SI = the head, the JR NZ
+; about to be taken and its 3 M-cycles not charged, B = r passes left. Only
+; when FF00+C..+r-1 lies in HRAM, HL's range in 8000-FEFF or FF80-FFFE, and
+; no event falls inside: 9r + 2 M-cycles
+cpc_ff:
+    mov [ss:S_TMP],dl
+    mov dl,ch
+    xor dh,dh                   ; r
+    mov [ss:S_TMP2],dx
+    mov [ss:S_TMP4],dx
+    shl dx,1
+    shl dx,1
+    shl dx,1
+    add dx,[ss:S_TMP4]
+    inc dx
+    inc dx                      ; 9r + 2
+    cmp bp,dx
+    jl cpc_no
+    mov [ss:S_TMP4],dx
+    cmp cl,80h                  ; C's range: HRAM, never I/O or IE
+    jb cpc_no
+    mov dl,cl
+    add dl,ch
+    jc cpc_no
+    mov dl,bh                   ; HL's starting in VRAM: the damage scan
+    sub dl,80h                  ;   compares it all (cpy_ff's)
+    cmp dl,20h
+    jae .x
+    mov byte [ss:RDG_VALL],1
+.x:
+    mov dx,bx
+    cmp dh,80h
+    jb cpc_no
+    cmp dx,0FF80h
+    jae .h
+    add dx,[ss:S_TMP2]
+    jc cpc_no
+    cmp dx,0FF00h
+    ja cpc_no
+    jmp cpc_go
+.h:
+    add dx,[ss:S_TMP2]
+    jnc cpc_go
+cpc_no:
+    xor dl,dl
+    jmp word [ss:S_RET]
+""",
+    0xE1: """
+; cpc_ff's second half: the bytes, then C, B, A, HL and F as the loop leaves them
+cpc_go:
+    sub bp,[ss:S_TMP4]
+    mov [ss:S_TMP4],si          ; (the loop's head)
+    mov [ss:S_TMP6],di          ; (DE)
+    mov dx,ss                   ; DS and ES the view
+    mov ds,dx
+    mov es,dx
+    mov dh,0FFh
+    mov dl,cl                   ; FF00 + C
+    add cl,ch
+    mov [ss:S_TMP+1],cl         ; C after
+    mov cx,[ss:S_TMP2]
+    mov si,bx
+    mov di,dx
+    cmp byte [ss:S_TMP],0E2h
+    je .cp
+    xchg si,di                  ; HRAM to HL
+.cp:
+    rep movsb
+    mov al,[di-1]               ; A, the last byte
+    cmp byte [ss:S_TMP],0E2h
+    je .hl
+    xchg si,di
+.hl:
+    mov bx,si                   ; HL += r
+    mov cl,[ss:S_TMP+1]         ; (B = 0: CX ran out)
+    mov di,[ss:S_TMP6]
+    and ah,RDGF_C
+    or ah,RDGF_Z|RDGF_N|06h     ; DEC 1 -> 0's, as fill_ff's
+    mov si,[ss:S_TMP4]
+    add si,6
+    xor dl,dl
+    jmp tr_enter
+""",
+    0x40: """
+; w16_ff: a 16-bit countdown closed by LD A,r / OR r / JR NZ - the delay,
+; copy and fill that cartridges carry from one library (REALDMG-SPEC 16.6).
+; Shapes: 1 NOP x3 / DEC DE / LD A,D / OR E (P 10); 2 LD A,(HL+) / LD (DE),A
+; / INC DE / DEC BC / LD A,B / OR C (13); 3, 4, 5 XOR A, LD A,D or LD A,E /
+; LD (HL+),A / DEC BC / LD A,B / OR C (or LD A,C / OR B) (10). SI = the
+; head, DL = the shape, the JR NZ about to be taken and its 3 M-cycles not
+; charged; n = the count left, not 0. P x k M-cycles carry the loop k passes
+; to its next taken JR, and every event check between saw BP at or above
+; BP - P x k: with that not negative the k passes are the loop's own and
+; the JR as usual follows ([S_RET]); all n, P x n + 2, leave past the loop
+w16_ff:
+    mov [ss:S_TMP],dl           ; the shape
+    mov [ss:S_TMP6],ax          ; (A and F: DIV and MUL take AX)
+    mov ax,di                   ; n: DE for the delay, BC for the rest
+    cmp dl,1
+    je .n
+    mov ax,cx
+.n:
+    mov [ss:S_TMP2],ax
+    mov ax,13                   ; P
+    cmp dl,2
+    je .p
+    mov ax,10
+.p:
+    mov [ss:S_TMP4],ax
+    jmp w16_div
+""",
+    0x48: """
+; w16_ff's second slot: how many passes the budget takes
+w16_div:
+    mov ax,bp
+    or ax,ax
+    jle w16_no
+    xor dx,dx
+    div word [ss:S_TMP4]        ; AX = BP div P, DX = BP mod P
+    cmp ax,[ss:S_TMP2]          ; all n when P x n + 2 <= BP
+    ja .full
+    jb .part
+    cmp dx,2
+    jae .full
+.part:
+    mov dx,[ss:S_TMP2]          ; else k <= n - 1: the JR is taken
+    dec dx
+    cmp ax,dx
+    jbe .k
+    mov ax,dx
+.k:
+    or ax,ax
+    jz w16_no
+    mov byte [ss:S_TMP+1],0
+    jmp w16_go
+.full:
+    mov ax,[ss:S_TMP2]
+    mov byte [ss:S_TMP+1],1
+    jmp w16_go
+w16_no:
+    mov ax,[ss:S_TMP6]
+    xor dl,dl                   ; (the taken JR's way: DL 0)
+    jmp word [ss:S_RET]
+""",
+    0x42: """
+; w16_ff's third slot: AX = k. The stores must lie where translated code
+; takes memory itself, 8000-FEFF or FF80-FFFE, or the loop runs as it was
+w16_go:
+    mov [ss:S_TMP2],ax          ; k
+    cmp byte [ss:S_TMP],1
+    je .t
+    mov dx,bx                   ; the stores: DE for the copy, HL a fill
+    cmp byte [ss:S_TMP],2
+    jne .d
+    mov dx,di
+.d:
+    cmp dh,80h
+    jb w16_no
+    cmp dh,0A0h                 ; starting in VRAM: the damage scan
+    jae .nv                     ;   compares it all, these stores marking
+    mov byte [ss:RDG_VALL],1    ;   no block (vr_wr), as cpy_ff's
+.nv:
+    cmp dx,0FF80h
+    jae .dh
+    cmp dh,0FFh
+    je w16_no
+    add dx,ax
+    jc w16_no
+    cmp dx,0FF00h
+    ja w16_no
+    jmp w16_src
+.dh:
+    add dx,ax
+    jc w16_no
+    jmp w16_src
+.t:
+    jmp w16_tm
+""",
+    0x49: """
+; w16_ff's fourth slot: a copy's source, HL, in one region - 8000-FEFF,
+; FF80-FFFE, or one 16KB half of 0000-7FFF (bank 0, or the bank at S_ROMX)
+w16_src:
+    cmp byte [ss:S_TMP],2
+    jne w16_tm
+    mov dx,bx
+    cmp dx,0FF80h
+    jae .sh
+    cmp dh,0FFh
+    je .no
+    cmp dh,80h
+    jae .sr
+    add dx,ax
+    jc .no
+    dec dx
+    xor dh,bh
+    test dh,0C0h
+    jnz .no
+    jmp short w16_tm
+.sr:
+    add dx,ax
+    jc .no
+    cmp dx,0FF00h
+    ja .no
+    jmp short w16_tm
+.sh:
+    add dx,ax
+    jnc w16_tm
+.no:
+    jmp w16_no
+w16_tm:
+    mul word [ss:S_TMP4]        ; AX = P x k, off BP (+ 2 leaving)
+    cmp byte [ss:S_TMP+1],0
+    je .c
+    add ax,2
+.c:
+    sub bp,ax
+    jmp w16_mv
+""",
+    0x43: """
+; w16_ff's fifth slot: the k passes, the registers as the loop leaves them
+; at its k-th JR (or past it)
+w16_mv:
+    mov dx,[ss:S_TMP2]          ; k
+    cmp byte [ss:S_TMP],1
+    jne .mem
+    sub di,dx                   ; the delay: DE -= k
+    mov ax,di
+    or al,ah                    ; A = D | E
+    jmp w16_end
+.mem:
+    sub cx,dx                   ; BC -= k
+    mov [ss:S_TMP4],si          ; (the loop's head)
+    mov [ss:S_TMP6],cx
+    mov cx,dx                   ; CX = k
+    mov dx,ss
+    mov es,dx
+    cmp byte [ss:S_TMP],2
+    jne w16_fill
+    jmp w16_cpy
+""",
+    0x52: """
+; w16_ff's sixth slot: a copy's bytes, from the view or the bank at S_ROMX
+w16_cpy:
+    mov ds,dx
+    cmp bh,40h
+    jb .src
+    cmp bh,80h
+    jae .src
+    mov ds,[ss:S_ROMX]
+.src:
+    mov si,bx
+    rep movsb                   ; forward, a byte at a time, as the loop
+    mov bx,si                   ; HL and DE += k
+    jmp w16_rest
+""",
+    0x44: """
+; w16_ff's seventh slot: a fill's stores, then BC, SI and A
+w16_fill:
+    mov ax,di                   ; the value: E, D or 0
+    cmp byte [ss:S_TMP],5
+    je .v
+    mov al,ah
+    cmp byte [ss:S_TMP],4
+    je .v
+    xor al,al
+.v:
+    mov [ss:S_TMP2],di          ; (DE)
+    mov di,bx
+    rep stosb
+    mov bx,di                   ; HL += k
+    mov di,[ss:S_TMP2]
+w16_rest:
+    mov cx,[ss:S_TMP6]          ; BC, k on
+    mov si,[ss:S_TMP4]
+    mov al,ch
+    or al,cl                    ; A = B | C
+    jmp w16_end
+""",
+    0x64: """
+; w16_ff's last slot: F as the OR's template leaves it (Z alone), then on
+w16_end:
+    mov ah,0
+    or al,al
+    jnz .f
+    mov ah,40h
+.f:
+    xor dl,dl
+    cmp byte [ss:S_TMP+1],0
+    jne .out
+    jmp word [ss:S_RET]         ; k passes: on to the JR, as the loop
+.out:
+    add si,7                    ; all n: past the loop, 8 bytes or 7
+    cmp byte [ss:S_TMP],3
+    jae .o7
+    inc si
+.o7:
+    jmp tr_enter
+""",
+    0x7F: """
+; fill_ff: LD (HL+),A / DEC r / JR NZ,-4, a fill - the OAM buffer cleared
+; every frame (Metroid II's 0376 and Super Mario Land 2's 0322, B = A0h; the
+; rest of it in Wario Land's 11EB) - in one step when the budget covers it
+; and the range lies wholly where a translated store writes memory directly,
+; 8000-FEFF or FF80-FFFE (REALDMG-SPEC 16.6). SI = the loop's head, DL = its
+; DEC (05h B, 0Dh C), the JR NZ about to be taken and its 3 M-cycles not
+; charged. From here r more passes: 3 + 3r + 3(r - 1) + 2 = 6r + 2
+; M-cycles; [HL .. HL + r - 1] = A, HL += r, r = 0, and DEC's flags for
+; 1 -> 0 (Z, N; H clear; C kept). Anything else goes on at [S_RET].
+fill_ff:
+    mov dh,ch
+    cmp dl,05h
+    je .go
+    mov dh,cl
+    cmp dl,0Dh
+    je .go
+.no:
+    xor dl,dl                   ; (the taken JR's way: DL 0, as a template
+    jmp word [ss:S_RET]         ;   leaves it, for a dispatch after it)
+.go:
+    mov [ss:S_TMP],dl           ; (the DEC, for the register to zero)
+    mov dl,dh
+    xor dh,dh
+    mov [ss:S_TMP2],dx          ; r
+    mov [ss:S_TMP4],dx
+    shl dx,1
+    add dx,[ss:S_TMP4]
+    shl dx,1
+    add dx,2                    ; 6r + 2
+    cmp bp,dx
+    jl .no
+    mov [ss:S_TMP4],dx
+    mov dx,bx                   ; HL's range: 8000-FEFF...
+    cmp dh,80h
+    jb .no
+    cmp dx,0FF80h
+    jae .h
+    cmp dh,0FFh
+    je .no
+    add dx,[ss:S_TMP2]
+    cmp dx,0FF00h
+    ja .no
+    jmp fill_go
+.h:
+    add dx,[ss:S_TMP2]          ; ...or FF80-FFFE (FFFF is IE)
+    jc .no
+    jmp fill_go
+""",
+    0x7D: """
+; fill_ff's other half (page 7F's CB half): the fill itself
+fill_go:
+    mov dl,bh                   ; a range starting in VRAM: the damage scan
+    sub dl,80h                  ;   compares it all, these stores marking
+    cmp dl,20h                  ;   no block (vr_wr), as cpy_ff's
+    jae .nv
+    mov byte [ss:RDG_VALL],1
+.nv:
+    sub bp,[ss:S_TMP4]
+    mov [ss:S_TMP4],di          ; (DE)
+    mov [ss:S_TMP6],cx
+    mov dx,ss
+    mov es,dx                   ; (ES is every helper's to load)
+    mov di,bx
+    mov cx,[ss:S_TMP2]
+    rep stosb                   ; A, r times
+    mov bx,di                   ; HL += r
+    mov di,[ss:S_TMP4]
+    mov cx,[ss:S_TMP6]
+    and ah,RDGF_C               ; F as DEC's template leaves it for 1 -> 0:
+    or ah,RDGF_Z|RDGF_N|06h     ;   LAHF's PF (the parity of 0) and bit 1
+    add si,4                    ;   too, so the AF word is the one the loop
+    xor dl,dl                   ;   would have stored (past the loop; DX for
+    cmp byte [ss:S_TMP],05h     ;   tr_enter's dispatch)
+    jne .c
+    xor ch,ch
+    jmp tr_enter
+.c:
+    xor cl,cl
+    jmp tr_enter
+""",
     0x47: """
 ; cnt_ff's CP (HL) / JR NZ,-3: with HL on LY (FF44h) it waits for line A -
 ; Donkey Kong Land's form, which the compatibility sweep found at 12% of
@@ -2141,6 +2737,24 @@ cnt_cph:
     jmp stat_ff
 .no:
     jmp word [ss:S_RET]
+""",
+    0x45: """
+; tr_lpes's last: DX = CS, an extra tier's code selector (REALDMG-SPEC
+; 16.2.5) - all RT_XMAX of the pairs, as one past S_JITXN names its own
+; segment as rightly - or CS itself, for any other host
+tr_lpx:
+    mov bx,S_JITXT
+.x:
+    cmp dx,[ss:bx+2]
+    je .xh
+    add bx,4
+    cmp bx,S_JITXT + RT_XMAX * 4
+    jb .x
+    mov es,dx
+    jmp tr_lpok
+.xh:
+    mov es,[ss:bx]
+    jmp tr_lpok
 """,
     0x41: """
 ; POP's slow path, SP below C000h (REALDMG-SPEC 5): DX = the word at SP and

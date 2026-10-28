@@ -147,12 +147,15 @@ def covox(a):
         os.environ["MARTYPC_WAV"] = cap
         try:
             m = os88marty.launch("build/covoxsys720.img", apps=img,
-                                 machine="os8088_5150_herc_covox_720_gla")
+                                 machine="os8088_5150_herc_covox_720_gla",
+                                 boot=False)
         finally:
             os.environ.pop("MARTYPC_WAV", None)
         try:
-            ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            m.run()                     # (quick: every step after is
+            ui = os88ui.UI(m)           # a verb or a guest read)
+            ui.up(limit=240)
+            os88marty.no_saver(m)
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
@@ -160,7 +163,7 @@ def covox(a):
             rw = lambda n_: u16(m.read(base + syms[n_], 2))
             rb = lambda n_: m.read(base + syms[n_], 1)[0]
             os88marty.until(m, lambda mm: rb("vp_loaded") == 1, "the header",
-                            poll=0.3, limit=300.0, guest=30.0)
+                            poll=0.05, limit=300.0, guest=30.0)
             if rb("vp_mute"):
                 bad.append("0: opened MUTED (why %d) - a Covox play at %d Hz "
                            "is not too fast for an 8088" % (rb("vp_mwhy"),
@@ -242,8 +245,7 @@ def cp_speaker(m, ui, bad):
     cx, cy = w.content[0], w.content[1]
     for ordinal in range(8):            # the Sound row, FOUND: [cp_hide] can
         ui.mo.click(cx + 40, cy + CP_I0Y + ordinal * CP_IROWH + 7, settle=0)
-        os88marty.until(m, lambda mm: True, "a beat", poll=0.2, limit=30.0,
-                        guest=0.5)
+        os88marty.ui_done(m, "the click on a row")
         if m.read(m.sym("cp_sel"), 1)[0] == CP_SOUND:
             break
     else:
@@ -251,7 +253,7 @@ def cp_speaker(m, ui, bad):
     rt0 = m.read(m.sym("snd_route"), 1)[0]
     ui.mo.click(cx + CP_RX + CP_PGX + 6, cy + CP_PR0Y + 6, settle=0)
     os88marty.until(m, lambda mm: mm.read(mm.sym("snd_route"), 1)[0] == 1,
-                    "the route to become PC Speaker", poll=0.3, limit=120.0,
+                    "the route to become PC Speaker", poll=0.05, limit=120.0,
                     guest=10.0)
     caps = u16(m.read(m.sym("drv_svc"), 2))
     print("   0: the panel moved the route %d -> 1 (PC Speaker); the driver's "
@@ -347,11 +349,14 @@ def main():
         os.environ["MARTYPC_WAV"] = cap
         m = os88marty.launch(None, machine=MACHINE_SB if a.route_spk
                              or a.cp_spk else MACHINE,
-                             extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
+                             extra=["--mount", "hd:0:" + os.path.abspath(vhd)],
+                             boot=False)
         os.environ.pop("MARTYPC_WAV", None)
         try:
-            ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            m.run()                     # (quick: every step after is
+            ui = os88ui.UI(m)           # a verb or a guest read)
+            ui.up(limit=240)
+            os88marty.no_saver(m)
             if a.cp_spk:                # THE OWNER'S GESTURE: Control Panel,
                 cp_speaker(m, ui, bad)  # Sound, PC Speaker - then the play
             w = ui.path("C:/CLIP.V88")
@@ -361,7 +366,7 @@ def main():
             rw = lambda n_: u16(m.read(base + syms[n_], 2))
             rb = lambda n_: m.read(base + syms[n_], 1)[0]
             os88marty.until(m, lambda mm: rb("vp_loaded") == 1, "the header",
-                            poll=0.3, limit=300.0, guest=30.0)
+                            poll=0.05, limit=300.0, guest=30.0)
             if a.route_spk:
                 rt = m.read(m.sym("snd_route"), 1)[0]
                 caps = u16(m.read(m.sym("drv_svc"), 2))
@@ -379,12 +384,12 @@ def main():
             if a.silent or a.fs_on:
                 m.type_text("s")
                 os88marty.until(m, lambda mm: rb("vp_mute") == 1,
-                                "S to choose silence", poll=0.3,
+                                "S to choose silence", poll=0.05,
                                 limit=120.0, guest=10.0)
             if a.unmute:
                 m.type_text("m")
                 os88marty.until(m, lambda mm: rb("vp_mute") == 0,
-                                "M to unmute", poll=0.3, limit=120.0,
+                                "M to unmute", poll=0.05, limit=120.0,
                                 guest=10.0)
             m.write(base + syms["vp_played"], b"\0")
             # ONE TRACE, three phases the callback walks: the door's open
@@ -413,7 +418,7 @@ def main():
                 import os88sym
                 m.type_text("p")
                 os88marty.until(m, lambda mm: rb("vp_ready") == 1, "play",
-                                poll=0.1, limit=300.0, guest=60.0)
+                                poll=0.05, limit=300.0, guest=60.0)
                 ksy = sorted((v, k) for k, v in os88sym.syms().items()
                              if isinstance(v, int) and v < 0x10000)
                 kkv = [v for v, k in ksy]
@@ -454,7 +459,7 @@ def main():
             if os.environ.get("VIDSPK_ISR"):      # the fast path, cycles
                 m.type_text("p")
                 os88marty.until(m, lambda mm: rb("vp_ready") == 1, "play",
-                                poll=0.1, limit=300.0, guest=60.0)
+                                poll=0.05, limit=300.0, guest=60.0)
                 ent = base + syms["os88spk_isr"]
                 ext = base + syms["os88spk_isr.ev"] - 1     # its iret
                 t = []
@@ -478,7 +483,7 @@ def main():
             if os.environ.get("VIDSPK_APUT"):     # vp_aput, entry to exit
                 m.type_text("p")
                 os88marty.until(m, lambda mm: rb("vp_ready") == 1, "play",
-                                poll=0.1, limit=300.0, guest=60.0)
+                                poll=0.05, limit=300.0, guest=60.0)
                 pseg = base
                 ent, ext = pseg + syms["vp_aput"], pseg + syms["vp_aput.cp"] - 1
                 t = []

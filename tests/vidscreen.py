@@ -46,6 +46,8 @@ import subprocess
 import sys
 import tempfile
 
+import numpy as np
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
@@ -95,19 +97,16 @@ def clip(tmp, scr):
     return out
 
 
-def one(scr, machine, syms, pkg, tmp, bad):
+def one(ui, scr, v88, syms, bad):
+    """One screen's clip, opened off B: on the machine `main` booted ONCE for
+    every screen (a boot each was ~70% of the row); the window is closed after
+    the play, so each screen's player is a fresh instance as it was."""
     name, SW, SH, _ = vid.SCREENS[scr]
-    v88 = clip(tmp, scr)
     r = vid.Reader(v88)
     g = r.g
     pal8 = [tuple((v * 255 + 31) // 63 for v in c) for c in PAL]
-    disk = os.path.join(tmp, "vidscr%d.img" % scr)
-    subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
-                    "--size", "360", pkg, v88], check=True,
-                   capture_output=True)
     print("  %s:" % name)
-    with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                     machine=machine) as ui:
+    if True:
         m = ui.m
         w = ui.path("B:/" + os.path.basename(v88))
         rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)
@@ -123,7 +122,7 @@ def one(scr, machine, syms, pkg, tmp, bad):
             m.write(base + syms[n], struct.pack("<H", v))
 
         def until(cond, what, guest=90.0):
-            os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+            os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                             guest=guest)
 
         until(lambda mm: rb("vp_loaded") == 1, "the header", 30.0)
@@ -173,17 +172,19 @@ def one(scr, machine, syms, pkg, tmp, bad):
             if sy < sx * 0.99:      # (a 480-line retime, scanned into 400)
                 sy = sx
             shown = min(SH, int(fh / sy))
-            wrong = 0
-            for y in range(shown):
-                ry = int((y + 0.5) * sy)
-                for x in range(SW):
-                    cy, cx = y - ty0, x - tx0
-                    v = ref[cy * W + cx] if 0 <= cy < H and 0 <= cx < W \
-                        else 0
-                    o = 3 * (ry * fw + int((x + 0.5) * sx))
-                    c = pal8[v]
-                    if max(abs(rgb[o + j] - c[j]) for j in range(3)) > 6:
-                        wrong += 1
+            # every mode pixel against the decode, as arrays (the per-pixel
+            # Python loop this replaces was most of the row's host CPU)
+            ry = ((np.arange(shown) + 0.5) * sy).astype(int)
+            rx = ((np.arange(SW) + 0.5) * sx).astype(int)
+            gl = np.frombuffer(bytes(rgb), np.uint8)[:fh * fw * 3].reshape(
+                fh, fw, 3)[ry][:, rx].astype(int)
+            v = np.zeros((shown, SW), int)
+            refa = np.frombuffer(bytes(ref), np.uint8).reshape(H, W)
+            y0, y1 = max(0, ty0), min(shown, ty0 + H)
+            if y1 > y0:
+                v[y0:y1, tx0:tx0 + W] = refa[y0 - ty0:y1 - ty0]
+            want = np.array(pal8, int)[v]
+            wrong = int((np.abs(gl - want).max(axis=2) > 6).sum())
             print("   hold before frame %2d: %d of %d mode pixels wrong "
                   "(%dx%d rendered, %d rows shown)"
                   % (n, wrong, SW * shown, fw, fh, shown))
@@ -199,6 +200,7 @@ def one(scr, machine, syms, pkg, tmp, bad):
         until(lambda mm: rb("vp_played") == 1, "the play's end", 60.0)
         if rb("vp_err"):
             bad.append("%s: the play ended in an error" % name)
+        ui.close(w)
 
 
 def main():
@@ -220,8 +222,16 @@ def main():
     bad = []
     names = a.screen or wide
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        for nm in names:
-            one(vid.SCREEN_BY_NAME[nm], a.machine, syms, pkg, tmp, bad)
+        scrs = [vid.SCREEN_BY_NAME[nm] for nm in names]
+        clips = [clip(tmp, scr) for scr in scrs]
+        disk = os.path.join(tmp, "vidscr.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
+                        "--size", "360", pkg] + clips, check=True,
+                       capture_output=True)
+        with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
+                         machine=a.machine) as ui:
+            for scr, v88 in zip(scrs, clips):
+                one(ui, scr, v88, syms, bad)
     for b in bad:
         print("   FAIL: %s" % b)
     if not bad:

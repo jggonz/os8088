@@ -96,7 +96,7 @@ def main():
         disk = M.scratch_disk(os.path.join(d, "imgtest.img"), *files,
                               size=360)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=MACHINE) as ui:
+                         machine=MACHINE, quick=True) as ui:
             ui.path("B:/APPS/IMGTEST.O88")
             w = ui.wait_window("os88img self-test", limit=120.0)
             m = ui.m

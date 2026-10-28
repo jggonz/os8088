@@ -111,7 +111,7 @@ BIFF_MACRO_FUNCS = {
     0xAD: ('BREAK'      , (0, 0)  , (0, 0)),
     0xAE: ('NEXT'       , (0, 0)  , (0, 0)),
     # SHEET-MACRO-PLAN wave 1: the EXTENSION functions, whose names live in
-    # CHART.OVL (shm_mxnames). Arities from the Excel 2.0 manual's own
+    # the chart module (shm_mxnames). Arities from the Excel 2.0 manual's own
     # signatures - ARGUMENT(name_text,data_type_num,ref), RESULT(type_number)
     0x51: ('ARGUMENT'   , (1, 3)  , (1, 3)),
     0x60: ('RESULT'     , (0, 1)  , (0, 1)),

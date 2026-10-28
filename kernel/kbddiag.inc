@@ -59,7 +59,8 @@ KR_ISR      equ 12              ; PIC1 in-service
 KR_IRR      equ 13              ; PIC1 request
 KR_IMR      equ 14              ; PIC1 mask
 KR_X        equ 15              ; 'I': bit 0 [kbd_armed], bit 1 a mouse has
-                                ; spoken, bit 2 a PS/2 aux port; 'E': the
+                                ; spoken, bit 2 a PS/2 aux port, bit 3 the
+                                ; ROM hands the byte over (9.7.2); 'E': the
                                 ; bracket's CX flags
 
 ; -----------------------------------------------------------------------------
@@ -79,6 +80,9 @@ kbg_st:
 ; Preserves every other register
 ; -----------------------------------------------------------------------------
 kbg_new:
+%ifdef KBD_I15
+    call kbg_late               ; the 'I' row a 4Fh ROM still owes, first
+%endif
     push ax
     push cx
     push es
@@ -157,6 +161,12 @@ kbg_pre:
     or al, 4
 .na:
 %endif
+%ifdef KBD_I15
+    cmp byte [kbm_ivec], 0x54   ; bit 3: SPEC.md 9.7.2's int 15h AH=4Fh path,
+    jne .n4                     ; so KR_DAT is the byte the ROM HANDED us and
+    or al, 8                    ; not a re-read of port 60h
+.n4:
+%endif
     mov [bx+KR_X], al
     inc word [kbg_n1]
     test byte [bx+KR_FLG], 1
@@ -172,13 +182,51 @@ kbg_pre:
 ; IF = 0. Every register preserved
 ; -----------------------------------------------------------------------------
 kbg_post:
+%ifdef KBD_I15
+    cmp byte [kbm_ivec], 0x54   ; SPEC.md 9.7.2: kbg_4f already has the byte,
+    jne .rd                     ; and on an 8042 that loads its NEXT byte on a
+    mov byte [kbg_owe], 1       ; read, a re-read would take that one - and
+    ret                         ; the ROM STORES after its int 15h returns, so
+.rd:                            ; the aftermath is kbg_late's to take
+%endif
     push ax
     push bx
-    push si
-    push es
     mov bx, [kbg_cur]
     in al, 0x60                 ; the byte the ROM just took: a re-read
     mov [bx+KR_DAT], al
+    call kbg_aft
+    pop bx
+    pop ax
+    ret
+
+%ifdef KBD_I15
+; -----------------------------------------------------------------------------
+; kbg_late - kbg_new's and kbg_irq0's head, DS = KERNEL_SEG, IF = 0: on the
+; int 15h AH=4Fh path, complete the 'I' record kbg_post left owed, the ROM
+; having stored (or not) since. Every register and the flags preserved
+; -----------------------------------------------------------------------------
+kbg_late:
+    cmp byte [kbg_owe], 0
+    je .ret
+    pushf
+    push bx
+    mov byte [kbg_owe], 0
+    mov bx, [kbg_cur]
+    call kbg_aft
+    pop bx
+    popf
+.ret:
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; kbg_aft - BX = an 'I' record: port 64h, the tail and the stored word AFTER
+; the ROM's handler. DS = KERNEL_SEG, IF = 0. Every register preserved
+; -----------------------------------------------------------------------------
+kbg_aft:
+    push ax
+    push si
+    push es
     call kbg_st
     mov [bx+KR_ST2], al
     xor ax, ax
@@ -199,9 +247,21 @@ kbg_post:
 .out:
     pop es
     pop si
-    pop bx
     pop ax
     ret
+
+%ifdef KBD_I15
+; -----------------------------------------------------------------------------
+; kbg_4f - kbm_i15's, KBDDIAG=1 only: AL = the scancode it was handed (the ROM's, on
+; SPEC.md 9.7.2's path). DS = KERNEL_SEG; every register preserved
+; -----------------------------------------------------------------------------
+kbg_4f:
+    push bx
+    mov bx, [kbg_cur]
+    mov [bx+KR_DAT], al
+    pop bx
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; kbg_irq0 - sch_isr's head, DS = KERNEL_SEG, IF = 0: inside a bracket, count
@@ -209,6 +269,9 @@ kbg_post:
 ; that changes. Outside one, nothing. Every register preserved
 ; -----------------------------------------------------------------------------
 kbg_irq0:
+%ifdef KBD_I15
+    call kbg_late               ; a 4Fh ROM's 'I' row, at the latest a tick on
+%endif
     cmp byte [fsx_task], 0xFF
     je .ret
     push ax
@@ -567,4 +630,5 @@ kbg_tisr:   dw 0                ; ...with IRQ1 in service
 kbg_tmsk:   dw 0                ; ...with IRQ1 masked
 kbg_dlast:  dw 0                ; [ticks] at the last redraw
 kbg_last:   db 0xFF             ; the last sample's packed state
+kbg_owe:    db 0                ; kbg_post left kbg_cur to kbg_late (4Fh)
 %endif

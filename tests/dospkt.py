@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The DOS box's packet driver, over a real card (SPEC.md 96.23, 72.22).
+"""DOS's packet driver, over a real card (SPEC.md 96.23, 72.22).
 
     make && make ethertest && make dospkt && python3 tests/dospkt.py
 
@@ -10,7 +10,7 @@ none is about speed.
 
 WHAT IT ASSERTS, AND WHY IT READS THE DRIVER RATHER THAN THE SCREEN.
 
-The box has no windowed text yet (wave 6), so a DOS program's output dies with
+DOS has no windowed text yet (wave 6), so a DOS program's output dies with
 the bracket - and the text screen under the bracket is the desktop's own
 framebuffer read as characters, which is unreadable whether or not the program
 worked. So the evidence is `ETHER.DRV`'s own counters, read out of the running
@@ -70,33 +70,37 @@ def main():
             fail("%s is not in the driver map - SPEC.md 72.22's verbs are the "
                  "thing under test and this build has not got them" % n)
 
-    if os.path.exists("build/qemu.pid"):
-        try:
-            pid = int(open("build/qemu.pid").read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)
-        except (OSError, ValueError):
-            pass
-    for f in ("build/qmp.sock", "build/qemu.pid"):
-        if os.path.exists(f):
-            os.remove(f)
-
-    # `make test` DAEMONISES the emulator, so it outlives this script unless
-    # somebody kills it - and the somebody is us (tests/os88qemu.py).
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "ETHER=1", "TESTIMG=" + SYS,
-                        "TESTAPPS=" + PKT], capture_output=True, text=True)
-    if r.returncode:
-        fail("make test failed:\n" + r.stdout + r.stderr)
-
-    m = eth.Qemu()
-    mouse = eth.Mouse()
+    # A PRIVATE QEMU (os88qemu.Private): what `make test ETHER=1 TESTIMG=
+    # TESTAPPS=` launched, without the `make` in the shared tree or the kill
+    # of whatever build/qemu.pid named; the mouse is closed-loop
+    # (docs/plans/completed/SOAK-SPEED.md technique 15).
+    import tempfile
+    import xmcheck
+    import atexit
+    import shutil
+    # dospkt.asm's segment goes to 10.0.2.2:8099, which is tests/dosxlat.py's
+    # listener: a dosxlat beside this row would ANSWER it, so the port is
+    # held for the run (SOAK-PARALLEL.md 17.3) and the row `locks=` it too
+    os88qemu.lease_port(8099)
+    work = tempfile.mkdtemp(prefix="dpk-")      # short: a QMP socket path
+    atexit.register(shutil.rmtree, work, True)  # (runs after q's close)
+    q = os88qemu.Private(work, os88build.at(SYS), os88build.at(PKT),
+                         ether=True)
+    eth.SOCK = q.sock
+    m = eth.Qemu(q.sock)
+    mouse = os88qemu.Mouse(m, eth.S, lambda *c: xmcheck.qmp(q.sock, *c))
     try:
         # --- the card, before anything is asked of it ----------------------
         # Every wait in this row is in the GUEST's seconds (tests/os88qemu.py).
         def drvseg():
             return eth.u16(m.read(eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
                                   + eth.DRVR_SEG, 2))
+        # THE BOOT FIRST (os88qemu.kernel_up): drv_tab is .bss, and until
+        # stage 2 has expanded the packed kernel those bytes are the LZ4
+        # stream - a non-zero JUNK word satisfied this poll at 0.7 s and the
+        # row reported "never attached" off the cleared one (SOAK-PARALLEL
+        # 17.5)
+        os88qemu.kernel_up(m, eth.S, secs=120)
         os88qemu.acted(m, lambda: drvseg() != 0, secs=60,
                        what="ETHER.DRV's drv_tab row", poll=0.4)
         seg = drvseg()
@@ -106,7 +110,7 @@ def main():
         say("dospkt: ETHER.DRV at %04X" % seg)
 
         # **THE SEGMENT IS RE-READ ON EVERY READ.** A driver image is a
-        # movable claim (SPEC.md 66.6.3), and the DOS box's arena is exactly
+        # movable claim (SPEC.md 66.6.3), and DOS's arena is exactly
         # the claim that moves it: read once at the top, every counter below
         # came out of the image's VACATED copy - eth_raw 199, 21,254 frames
         # "received" against the probe's own STATS of two - which satisfied
@@ -135,6 +139,12 @@ def main():
         # MTCPDIR= puts DHCP.EXE in front of it alphabetically (SPEC.md 19.4
         # sorts by name), so the row launched the wrong program and reported
         # it as the packet driver never being found.
+        # THE DESKTOP, NOT THE DRIVER. drv_boot_x fills ETHER.DRV's row
+        # during the loading screen and desk_rowcalc lays the zones out AFTER
+        # it (kernel.asm's kmain), so a row that is there says nothing about
+        # B:'s zone - a loaded box landed in that window and open_drive read
+        # "no desktop zone". Drive B's zone is the condition, as dosxlat's.
+        xmcheck.wait_desktop(q.sock, "dospkt")
         dispcp.open_drive(m, mouse, eth.S, eth.settle, "B")
         wins = dispcp.win_list(m, eth.S)
         wx, wy = dispcp.win_rect(m, eth.S, wins[-1])[:2]
@@ -152,7 +162,7 @@ def main():
         # The door-call count is what tells "the driver answered wrongly"
         # from "nobody is calling it", and the two are indistinguishable from
         # inside the guest. It is printed rather than asserted: the poll rate
-        # is a property of the host's speed here, not of the box.
+        # is a property of the host's speed here, not of DOS.
         say("dospkt: door calls %d, frames off the ring %d, dropped %d"
             % (dw("eth_ncall"), dw("eth_nrx"), dw("eth_ndrop")))
 

@@ -30,7 +30,9 @@ import os88ui                                               # noqa: E402
 def main():
     bad = []
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                     machine="os8088_5150_cga_gla") as ui:
+                     machine="os8088_5150_cga_gla",
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         with M.bp_trace(m, "fpg_lit", "fpg_step", "fpg_begin") as tr:
             calc = ui.path("B:/APPS/CALC.O88")

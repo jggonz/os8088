@@ -2,7 +2,7 @@
 """Can a DOS program be given ARGUMENTS? (SPEC.md 96.19)
 
 Half the DOS software worth running is configured by its command line, and
-until this wave the box wrote an EMPTY tail and every program got its
+until this wave DOS wrote an EMPTY tail and every program got its
 defaults.  Creative's own card test prints "run this program again and select
 the other options manually" and there was no way to say `/M`.
 
@@ -218,7 +218,8 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=ARGS, machine="os8088_5150_herc_gla") as ui:
+    with os88ui.boot(SYS, apps=ARGS, machine="os8088_5150_herc_gla",
+                     quick=True) as ui:
         m = ui.m
 
         # --- 1: no arguments -------------------------------------------------
@@ -321,7 +322,7 @@ def main():
         # not call the paint callback** - the window manager carries the
         # pixels - so every screen-coordinate rect this package caches stays
         # at the old position until something paints or clicks. dos_click and
-        # dos_key both call dos_place first, so the box itself is never wrong;
+        # dos_key both call dos_place first, so DOS itself is never wrong;
         # a reader that takes the rects out of bss and then clicks them is.
         w = ui.window("DOS")
 

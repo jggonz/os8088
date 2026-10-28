@@ -56,17 +56,20 @@ def main(argv):
     os.chdir(ROOT)
 
     fails = []
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
-        os88marty.settle(m)
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()                         # the boot gate on STATE: every read
+        os88marty.kernel_up(m)          # below is guest memory, so every
+        os88marty.no_saver(m)           # wait is ui_done
         mo = os88mouse.Mouse(marty=m)
         anim = S("wm_anim")
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         disk = dispcp.win_list(m, S)[-1]
         wx, wy = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "APPS")
         wx, wy = dispcp.win_rect(m, S, disk)[:2]
         rows = [r[0] for r in dispcp.listing(m, S)]
-        row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy,
+        row = dispcp.scroll_to(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy,
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
 
@@ -84,7 +87,7 @@ def main(argv):
                          "say anything about the alert - the theme's zoom is "
                          "off (SPEC.md 76.11), the kernel is ANIMOFF, or the "
                          "breakpoint never armed")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         os88marty.no_saver(m)
         seg = dispapps.pkg_seg(m, 0)[1]
         pw = dispcp.win_list(m, S)[-1]
@@ -96,20 +99,20 @@ def main(argv):
         cx0 = int.from_bytes(m.read(boff("pt_cx0"), 2), "little")
         cy0 = int.from_bytes(m.read(boff("pt_cy0"), 2), "little")
         mo.to(cx0 + 30, cy0 + 25)               # ink it, so the close ASKS
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo._edge(True)
         for _ in range(4):
             m.mouse(dx=8, dy=6, l=True)
             m.advance(frames=3)
             m.run()
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         wr = dispcp.win_rect(m, S, pw)
 
         # B - the SUBJECT. The close box the user meant as a close.
         n = os88marty.bp_count(m, anim,
                                lambda: mo.click(wr[0] + 8, wr[1] + 9, settle=0))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         up = [w for w in dispcp.win_list(m, S) if w not in (pw, disk)]
         print("   close box -> the alert       wm_anim x%d   alert up: %s"
               % (n, bool(up)))

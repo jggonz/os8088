@@ -92,12 +92,12 @@ TICK_HZ_N, TICK_HZ_B = _e("IT_SND_TICK"), _e("IT_SND_TICKB")
 
 def boot():
     system, apps, machine = T.boot_for(TAG)
-    return os88ui.boot(system, apps=apps, machine=machine)
+    return os88ui.boot(system, apps=apps, machine=machine, quick=True)
 
 
 def open_game(ui):
     g = L.open_game(ui)
-    M.until(ui.m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+    M.until(ui.m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.05, guest=20)
     T.presented(ui, g)
     return g
 
@@ -236,6 +236,15 @@ class Tones:
                     S_ = self.g.ui.sym if hasattr(self.g.ui, "sym") else None
                     e["why"] = dict((n, bytes(mm.read(mm.sym(n), 2)).hex()) for n in
                                     ("snd_town_act", "snd_town_pri", "snd_ch2mode", "snd_live"))
+            if self.pressed is not None and "gate1" not in self.pressed:
+                # THE GATE THE ARMED ENTRY LEFT, read at the stop after its call
+                # returned: the sweep sounding, on the guest's own clock. It
+                # used to be read from the main thread as soon as `pressed`
+                # appeared - which it does INSIDE the stop before the call,
+                # while the pump is still in this callback - so on a loaded
+                # box the read landed on a guest that had not made the call
+                # yet and found the last wall tick's lease out: 61h & 3 = 0
+                self.pressed["gate1"] = mm.inb(0x61) & 3
             return None
         if rec["addr"] != self.at:
             return None
@@ -266,8 +275,8 @@ class Tones:
         g = self.g
         n = self.armed[0] if self.armed else 0
         try:
-            M.until(g.m, lambda _: self.pressed is not None, "a crash's sweep %d entries in" % n,
-                    poll=0.01, guest=30)
+            M.until(g.m, lambda _: self.pressed is not None and "gate1" in self.pressed,
+                    "a crash's sweep %d entries in" % n, poll=0.01, guest=30)
         except M.MartyError:
             raise AssertionError("no crash's sweep: state %d paused %d snd %d fsm %d iter %d p %d "
                                  "player (%d, %d) alive %d; the last calls %r"
@@ -275,7 +284,7 @@ class Tones:
                                     g.b("it_fsm"), g.w("it_iter"), g.b("it_pspeed"),
                                     ph(g, L.H_U), ph(g, L.H_D), ph(g, H_ALIVE), self.log[-5:]))
         k = len(self.log)
-        self.pressed["gate"] = gate(g.m)        # the sweep sounding as the key goes
+        self.pressed["gate"] = self.pressed["gate1"]    # the sweep sounding as the key goes
         self.pressed["n"] = sum(1 for e in self.log[self.pressed["k"] - 1:]
                                 if e["pri"] == PRI_HIGH and e["hz"])
         left = 15 - self.pressed["n"]
@@ -693,6 +702,17 @@ def capture(w, seg):
             # the guest's grant in hand is the emulated speaker's to explain,
             # not the package's (the wave log says what is known). One is
             # tolerated and named; a second fails.
+            #
+            # IT WAS THE EMULATOR'S 8253, and it is fixed there
+            # (tools/martypc/patches/16-pit-mode3-parity.patch): an EVEN
+            # divisor written in the PIT clock after an ODD one's reload
+            # stuck channel 2's output high until the next odd divisor -
+            # 734 -> 688 Hz is odd -> even, and so is 1081 -> 1014, entry 5,
+            # whose two-tick hole a loaded soak made likely (the keys land
+            # elsewhere in the guest's history, and one in four histories
+            # put entry 5 in that clock). The port's 61h read 4Fh and the
+            # owner record held the grant through it. A MartyPC built
+            # before patch 16 still shows it.
             drop.append(k)
             got.append(None)
             continue

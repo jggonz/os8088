@@ -142,10 +142,17 @@ class Flushes(object):
             bad.append("no flush: %s (%s)" % (what, e))
             return False
 
-    def settle(self, guest=6.0):
+    def settle(self, tail=1.0):
         """No wait to time out on when the answer is NO flush: give the UI
-        task the passes it would have spent and let the count stand."""
-        os88marty.pace(self.m, guest)
+        task the passes it would have spent and let the count stand.
+
+        A flush is POSTED ([assoc_dapp]) and run by ui_task's own deferred
+        step, inside a pass and on the drive, so `ui_done` - asleep, nothing
+        queued, no disk read across its hold - is past any flush the
+        navigation set off; `tail` guest seconds more cover a tick-late one.
+        It was pace(6.0): 27 guest seconds, every time, whatever happened."""
+        os88marty.ui_done(self.m, "the UI after the navigation")
+        os88marty.guest_sleep(self.m, tail)
 
 
 NAPP, NEXT = 16, 32                 # ASSOC_NAPP, ASSOC_NEXT (kernel/assoc.inc)
@@ -171,7 +178,7 @@ def leg_write(bad):
     fat.delete("ASSOC.DAT")
     fat.save()
     after = scratch("after")
-    with os88ui.boot(SYS, apps=img, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=img, machine=MACHINE, quick=True) as ui:
         fl = os88flush.Flush(marty=ui.m)
         with Flushes(ui.m) as w:
             ui.path("B:/APPS")
@@ -242,7 +249,7 @@ def leg_one(bad, all_flush):
     fat.add(os88build.at("build/mines.o88"), "MINES2.O88")
     fat.save()
     after = scratch("oneafter")
-    with os88ui.boot(SYS, apps=img, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=img, machine=MACHINE, quick=True) as ui:
         fl = os88flush.Flush(marty=ui.m)
         with Flushes(ui.m) as w:
             ui.path("B:/")
@@ -279,7 +286,7 @@ def leg_one(bad, all_flush):
 
 def leg_reboot(bad, after):
     """REBOOT: the next boot knows what the last one learned."""
-    with os88ui.boot(SYS, apps=after, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=after, machine=MACHINE, quick=True) as ui:
         with Flushes(ui.m) as w:
             ui.path("B:/MEDIA")
             e = ext_map(ui)
@@ -328,7 +335,7 @@ def leg_locate(bad):
         pos += n
     fat.save()
     after = scratch("locafter")
-    with os88ui.boot(sysimg, apps=img, machine=MACHINE) as ui:
+    with os88ui.boot(sysimg, apps=img, machine=MACHINE, quick=True) as ui:
         fl = os88flush.Flush(marty=ui.m)
         with Flushes(ui.m) as w:
             ui.path("A:")
@@ -367,7 +374,7 @@ def leg_refused(bad):
         f.write(b"\0" * free)
     fat.add(fill, "FILL.BIN")
     fat.save()
-    with os88ui.boot(SYS, apps=img, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=img, machine=MACHINE, quick=True) as ui:
         fl = os88flush.Flush(marty=ui.m)
         with Flushes(ui.m) as w:
             ui.path("B:/APPS")

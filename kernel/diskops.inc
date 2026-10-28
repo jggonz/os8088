@@ -2957,6 +2957,9 @@ clo_unmnt:
     CSDO mov [CSEG clo_mvol], al
     mov ax, [bx+IMG_DVSEG]
     CSDO mov [CSEG clo_mseg], ax
+    mov [mem_pinimg], ax        ; held across clo_mhost's disk calls, which
+                                ; can claim (NO-PINNING-PLAN K2); clo_mfree
+                                ; lets go
     push ds
     pop es                      ; ES = the kernel's DS...
     mov si, IMG_M_NAME
@@ -2979,6 +2982,7 @@ clo_unmnt:
 clo_umount:
     CSDO mov [CSEG clo_mvol], al
     CSDO mov [CSEG clo_mseg], es
+    mov [mem_pinimg], es        ; clo_unmnt's pin, for the eject
 .drop:                          ; (clo_unmnt's: both cells already stored)
     call clo_mdrop
     mov si, clo_s_mun           ; 'TEST.IMG unmounted': the name, the tail,
@@ -3081,13 +3085,14 @@ clo_mount:
     push word [dskw_raw+DE_ATTR]    ; the attribute and byte 12, read while
     mov ax, IMG_KB              ; the stat's entry is the one staged
     mov bx, MEM_K_IMG
-    CLO_KCALL mem_claim_hi_x    ; DX = the claim, top-down and pinned
+    CLO_KCALL mem_claim_hi_x    ; DX = the claim, top-down, pinned until .marked
     pop di                      ; DI = the attribute word
     pop bx
     pop si                      ; SI = the sectors, from here to the row
     jc .nomem
     mov es, dx
-    CSDO mov [CSEG clo_mseg], dx
+    CSDO mov [CSEG clo_mseg], dx    ; (born pinned, MC_RLOC = 0, until
+                                ; .marked declares it: no [mem_pinimg] needed)
     xchg ax, di                 ; AL = the attribute, AH = byte 12
     mov cx, ax                  ; CX = IMG_FLG: the attribute's read-only
     and cx, IMGF_RO             ; bit IS IMGF_RO (asserted below), so the
@@ -3152,6 +3157,17 @@ clo_mount:
     mov byte [dskw_raw+DE_RES], 0
     call clo_mstore
 .marked:
+    mov dx, [cs:clo_mseg]       ; MOUNTED: the table may MOVE from here
+    mov ax, img_reloc           ; (NO-PINNING-PLAN K2). It was top-down and
+    mov bx, MEM_K_IMG           ; pinned for the mount's life, which made a
+    call COLD_SEG:mmf_mem_movable   ; mid-session mount a wall; img_reloc
+                                ; re-points IMG_DVSEG. A refusal only pins it.
+                                ; [mem_pinimg] is 0 here and needs no store:
+                                ; a mount never sets it, every operation that
+                                ; does leaves through clo_mfree, and
+                                ; dsk_xfer's is pushed and popped (kernel size
+                                ; pass 14: it was the mount's own pin's
+                                ; release, which NO-PINNING-PLAN 5 #9 took out)
     mov si, clo_s_mis
     call clo_msay2              ; 'TEST.IMG is drive D:'
     jmp .out
@@ -3291,6 +3307,7 @@ clo_mfree:
     mov dx, [cs:clo_mseg]
     mov bx, MEM_K_IMG
     call COLD_SEG:mmf_mem_free
+    mov word [mem_pinimg], 0    ; ...and the operation's pin with it
     ret
 
 ; clo_msay2 - '<file><SI><letter>:' as a toast, composed in fm_hdrbuf

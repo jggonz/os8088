@@ -84,7 +84,7 @@ def main():
     shutil.rmtree(out, ignore_errors=True)
     t0 = time.time()
     os88bochs.sweep([t.img(p + ".o88") for p in PKGS], batch=BATCH,
-                    out=out, build=t.dir, linger=LINGER)
+                    out=out, build=t.dir, linger=LINGER, parallel=True)
     logs = sorted(os.path.join(out, d, "e9.out") for d in os.listdir(out)
                   if d.startswith("boot"))
     text = ""

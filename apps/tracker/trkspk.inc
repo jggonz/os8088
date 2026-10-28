@@ -186,7 +186,9 @@ tsp_ring:
     call OSAPI_MEM_CLAIM
     jc .no
     mov [tsp_rseg], dx
-    pop dx
+    mov ax, tsp_rmove               ; MOVABLE while no play runs (45.25.6):
+    call OSAPI_MEM_MOVABLE          ; tsp_start pins it, tsp_halt declares
+    pop dx                          ; it again
     pop ax
 .ok:
     clc
@@ -778,6 +780,7 @@ tsp_start:
     mov byte [trk_ended], 0
     mov byte [trk_pause], 0
     mov byte [tsp_open], 0
+    call tsp_rpin                   ; pinned until tsp_halt (45.25.6)
     mov byte [tsp_run], 1
     call trk_transport
     mov al, [mp_playing]            ; ...and the frame told the transport has
@@ -795,11 +798,46 @@ tsp_start:
     pop es
     ret
 
-; tsp_halt - the door shut and the play over (preserves all)
+; tsp_halt - the door shut and the play over, and the ring MOVABLE again
+; (SPEC.md 45.25.6). Preserves all
 tsp_halt:
     call tsp_leave
+    cmp byte [tsp_run], 0
+    je .out
     mov byte [tsp_run], 0
+    push ax
+    mov ax, tsp_rmove
+    jmp short tsp_rset
+.out:
     ret
+
+; tsp_rpin - THE RING PINNED for a play (45.25.6): from tsp_start, before
+; tsp_run says a play is on, to tsp_halt - the door (os88spk's ISR, which
+; holds its own copy of the segment) opens and shuts inside that, and so do
+; the brackets the play crosses. Never per span. Preserves all
+tsp_rpin:
+    push ax
+    xor ax, ax
+tsp_rset:
+    push dx
+    pushf
+    mov dx, [tsp_rseg]
+    call OSAPI_MEM_MOVABLE
+    popf
+    pop dx
+    pop ax
+    ret
+
+; tsp_rmove - the ring MOVED (SPEC.md 66.3: BX = was, DX = now). Our word
+; alone: the library's copy, os88spk_rseg, is live only inside a play, and
+; os88spk_init writes it at every start (tsp_start -> tsp_tables) - the
+; one segment this proc can be handed is the ring's
+tsp_rmove:
+    mov [tsp_rseg], dx
+    ret
+    db 0x90                         ; PARITY: never run - the producer below
+                                    ; (tsp_poll, tsp_fill) keeps the even
+                                    ; shift it was measured at (os88rdiff)
 
 ; tsp_leave - the door shut at a bracket's end, CONS exact (preserves all)
 tsp_leave:

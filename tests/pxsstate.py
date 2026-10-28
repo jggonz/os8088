@@ -267,7 +267,7 @@ def main():
     fd, saved = tempfile.mkstemp(prefix="pxsstate", suffix=".img")
     os.close(fd)
     try:
-        with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+        with os88marty.launch(a.image, apps=a.apps, machine=a.machine, boot=False) as m:
             g = pxslib.open_game(m, play=False)
             # --- (a) ATTRACT ----------------------------------------------------
             ticks(g, 6)
@@ -648,7 +648,7 @@ def main():
             m.run()
             f.save(1, saved)
         # --- (k) after a restart ----------------------------------------------
-        with os88marty.launch(a.image, apps=saved, machine=a.machine) as m:
+        with os88marty.launch(a.image, apps=saved, machine=a.machine, boot=False) as m:
             g = pxslib.open_game(m, play=False)
             rows = hs_rows(g)
             print("   after a restart: %s" % rows[:3])

@@ -165,7 +165,7 @@ def main():
     with os88marty.launch("build/os8088-360.img", apps="build/heapfrag360.img",
                           machine=a.machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE
         mo = os88mouse.Mouse(marty=m)
 
         def hmap(tag):

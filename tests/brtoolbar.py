@@ -66,13 +66,16 @@ def main():
 
     sy, fails = browser_syms(), []
     with os88marty.launch("build/os8088-360.img", apps="build/brtest360.img",
-                          machine=MACHINE[a.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+                          machine=MACHINE[a.adapter], boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on state (brreload's
+        os88marty.no_saver(m)           # shape): every read below is guest
+        done = lambda mm, **k: os88marty.ui_done(mm)   # noqa: E731  state or
+        mo = os88mouse.Mouse(marty=m)                  # VIDEO MEMORY
+        dispcp.open_drive(m, mo, S, done, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
         before = dispcp.win_list(m, S)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "DEMO.HTM")
+        dispcp.open_named(m, mo, S, done, wx, wy, "DEMO.HTM")
         wins = dispcp.win_list(m, S)
         if len(wins) <= len(before):
             sys.exit("brtoolbar: DEMO.HTM opened no window")
@@ -83,7 +86,7 @@ def main():
         # read straight after the open and this is an empty browser
         os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
                         limit=120)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         def rect(n):
             return [u16(m.readseg(pseg, sy[n] + i * 2, 2)) for i in range(4)]

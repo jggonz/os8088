@@ -605,7 +605,9 @@ x3c_wavchk:
     mov cx, [ap_clu]
     xor ax, ax
     xor dx, dx
+    call x3_lpin                    ; (ES:BX the ring's claim)
     call OSAPI_FILE_READ_AT         ; DX:AX = bytes
+    call x3_ldecl
     pop si
     push ds
     pop es
@@ -1359,6 +1361,23 @@ x3c_bset:
     mov cl, 3
 .lay:
     mov [x3c_btrec+OS88UI_BT_N], cl
+    call x3c_blay
+.draw:
+    mov cl, [x3c_btrec+OS88UI_BT_N]
+    mov al, 1
+.d:
+    cmp al, cl
+    ja .out
+    mov bx, x3c_btrec
+    call os88ui_btn
+    inc al
+    jmp short .d
+.out:
+    ret
+
+; x3c_blay - the button row's rects, from the banked content origin
+; in:  CL = the live count. clobbers AX, BX, CX, DX, SI
+x3c_blay:
     ; the row: from the right, XD_BW wide, 8 apart, XD_BH tall, 6 from the foot
     mov bx, [x3c_dwin]
     push cx
@@ -1377,7 +1396,7 @@ x3c_bset:
     mov si, x3c_brect
 .b:
     or cl, cl
-    jz .draw
+    jz .done
     mov [si+4], ax
     mov dx, ax
     sub dx, XD_BW - 1
@@ -1390,17 +1409,31 @@ x3c_bset:
     add si, 8
     dec cl
     jmp short .b
-.draw:
+.done:
+    ret
+
+; x3c_btplace - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): a dialog dragged by its
+; title is replayed, not painted, so the rects are laid out again from where
+; the window IS before every hit test - and the origin x3c_dclick's rows are
+; read against with them. BX = the record, SI = the window. Draws nothing,
+; keeps every register
+x3c_btplace:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    mov [x3c_dox], ax
+    mov [x3c_doy], dx
     mov cl, [x3c_btrec+OS88UI_BT_N]
-    mov al, 1
-.d:
-    cmp al, cl
-    ja .out
-    mov bx, x3c_btrec
-    call os88ui_btn
-    inc al
-    jmp short .d
-.out:
+    call x3c_blay
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; the gesture: a button fires on the RELEASE
@@ -1841,7 +1874,9 @@ x3c_start:
     xor bx, bx
     mov cx, [x3c_clu]
     xor dx, dx
+    call x3_lpin                    ; (the stage: the ring's claim)
     call OSAPI_FILE_WRITE
+    call x3_ldecl
     push ds
     pop es
     jc .wrerr
@@ -2255,7 +2290,9 @@ x3c_write:
     mov al, WSEQF_HELD | WSEQF_KEEP
     mov di, [x3c_tok]
     push cx
+    call x3_lpin                    ; (the stage: the ring's claim)
     call OSAPI_FILE_WRITE_SEQ
+    call x3_ldecl
     pop cx
     push ds
     pop es
@@ -2271,7 +2308,7 @@ x3c_write:
     cmp byte [x3c_one], 0
     jne .h
     xor byte [x3c_wh], 1
-    jmp short .h
+    jmp .h
 .gone:
     mov ax, FERR_NODISK
 .err:
@@ -2721,7 +2758,9 @@ x3c_final:
     mov cx, [x3c_clu]
     xor ax, ax
     xor dx, dx
+    call x3_lpin                    ; (the stage: the ring's claim)
     call OSAPI_FILE_WRITE_AT
+    call x3_ldecl
     push ds
     pop es
     jc .wr
@@ -3237,7 +3276,7 @@ x3c_t_drive: db 'Decode First', 0
 x3c_t_prog:  db 'Decoding to Disk', 0
 x3c_t_files: db 'Decoded Files', 0
 
-    OS88UI_BTNREC x3c_btrec, x3c_brect, x3c_blbl, x3c_bflg, 3
+    OS88UI_BTNREC x3c_btrec, x3c_brect, x3c_blbl, x3c_bflg, 3, x3c_btplace
 
 x3c_s_need1: db 'This computer needs to decode this track before playing.', 0
 x3c_s_need2: db 'Choose a hard drive for the decoded audio.', 0

@@ -17,7 +17,7 @@
 ;           3BC/378/278, deduped and latch-probed - because the two ends of
 ;           this cable are at different addresses on the two machines it was
 ;           written for (NET-PLAN 1.4.1: the 5150's GB101 is at 3BC and the
-;           DOS box's DIO-500 at 378).
+;           DOS machine's DIO-500 at 378).
 ;   /RO     refuse every write. THE DEFAULT FOR A FIRST RUN, and the honest
 ;           setting for anything you would mind losing. Phase 1 serves no
 ;           write verb at all, so it is presently the only behaviour.
@@ -2327,7 +2327,7 @@ str_cpy16:
 ; /RO IS ENFORCED HERE AND NOWHERE ELSE, which is the point of putting the
 ; test in one routine every one of them calls first: a verb added later gets
 ; the refusal by construction rather than by its author remembering. The
-; machine at this end may be somebody's real DOS box - docs/FIELD-MACHINES.md
+; machine at this end may be somebody's real DOS machine - docs/FIELD-MACHINES.md
 ; keeps a live DOS 3.3 install on the calibration machine's C: - so the switch
 ; has to mean it.
 ; =============================================================================

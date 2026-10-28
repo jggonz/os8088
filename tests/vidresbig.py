@@ -135,7 +135,7 @@ def main():
                             "--size", "360", pkg, v88], check=True,
                            capture_output=True)
             with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                             machine="os8088_5150_herc_gla") as ui:
+                             machine="os8088_5150_herc_gla", quick=True) as ui:
                 m, base = session(ui, "B:/BIG.V88")
                 rw = lambda n: u16(m.read(base + syms[n], 2))
                 rb = lambda n: m.read(base + syms[n], 1)[0]
@@ -303,7 +303,7 @@ def keeper(tmp, pkg, syms, waiter, session, bad):
                    check=True, capture_output=True)
     r = vid.Reader(os.path.join(tmp, "GOOD.V88"))
     with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                     machine="os8088_5150_herc_gla") as ui:
+                     machine="os8088_5150_herc_gla", quick=True) as ui:
         for name in files:
             m, base = session(ui, "B:/%s.V88" % name)
             rw = lambda n: u16(m.read(base + syms[n], 2))

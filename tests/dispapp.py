@@ -60,7 +60,7 @@ def stub(m, entry):
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                       machine="os8088_xt_vga_herc", boot=False) as m:
     cards = {c["idx"]: c for c in m.cards()}
-    m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+    m.run(); os88marty.kernel_up(m)
     mo = os88mouse.Mouse(marty=m)
     pri = [i for i, c in cards.items() if c["type"] == "vga"][0]
     sec = [i for i, c in cards.items() if c["type"] == "mda"][0]

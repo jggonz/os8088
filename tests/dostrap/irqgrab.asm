@@ -6,7 +6,7 @@
 ; Battle Chess does exactly this and does it unconditionally: its serial link
 ; writes `int 0Ch`'s vector DIRECTLY and its handler chains to nobody - LSR,
 ; data register, keep the byte, EOI, iret. On `kern_dos` that stopped
-; `kd_mou_isr` for the whole session until `kd_mou_rearm`; in the WINDOWED box
+; `kd_mou_isr` for the whole session until `kd_mou_rearm`; in the WINDOWED DOS
 ; the displaced ISR is the KERNEL's `mou_isr`, and this probe is how that half
 ; is measured rather than reasoned about.
 ;
@@ -16,7 +16,7 @@
 ; pointer and reads the kernel's own `mouse_x` while the vector is stolen.
 ;
 ; It puts the vector back before it exits, so a machine that runs this is not
-; left broken by it - the box restores the whole IVT at the bracket's end
+; left broken by it - DOS restores the whole IVT at the bracket's end
 ; anyway (`dos_restore_machine`), but a probe that relies on that is a probe
 ; that cannot be run twice in one session.
 ;
@@ -52,7 +52,7 @@ start:
     int 0x21
 
     ; --- ...and BLOCK, which is the harness's window ------------------------
-    ; AH=08h goes through the box's own key poll, which samples the mouse -
+    ; AH=08h goes through DOS's own key poll, which samples the mouse -
     ; so a re-arm that lives on that path gets its chance here.
     mov ah, 0x08
     int 0x21

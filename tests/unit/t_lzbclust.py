@@ -73,10 +73,25 @@ def clusters(n, size):
     return (n + size - 1) // size
 
 
+# A parted package's --part arguments, in table order, as its Makefile rule
+# passes them: a re-pack without them is refused by os88pkg.py, and the
+# shipped file's size includes them, so LZB and LZ4 are compared like for like.
+# SHEET's two modules are parts since SPEC.md 82.16.12; the Browser's
+# Download Manager is one too, packed LZ4 whatever the image is.
+PARTS = {"sheet": ("sheet.chart.bin", "sheet.macro.bin"),
+         "browser": ("browser.part.bin",)}
+PART_ARGS = {"browser": ("--part-compress", "lz4")}
+
+
 def pack(binp, fmt, tmp):
     out = os.path.join(tmp, os.path.basename(binp) + "." + fmt)
+    stem = os.path.basename(binp).split(".")[0]
+    parts = []
+    for f in PARTS.get(stem, ()):
+        parts += ["--part", os.path.join(os.path.dirname(binp), f)]
+    parts += list(PART_ARGS.get(stem, ()))
     r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88pkg.py"),
-                        binp, "-o", out, "--compress-if=" + fmt],
+                        binp, "-o", out, "--compress-if=" + fmt] + parts,
                        capture_output=True, text=True)
     if r.returncode or not os.path.exists(out):
         return None, (r.stderr or r.stdout).strip().splitlines()[-1:]
@@ -88,6 +103,13 @@ def check_list(names, tmp):
     for name in names:
         o88 = os.path.join(BUILD, name + ".o88")
         binp = os.path.join(BUILD, name + ".bin")
+        # (the SAME input the Makefile packs: a package whose overlays
+        # tools/os88ovl.py splits off ships `<name>.trim.bin`, the image
+        # without them - Sheet 2.1's two modules, its PARTS now (PARTS above)
+        # - and the whole .bin's image field is not that file's size)
+        trim = os.path.join(BUILD, name + ".trim.bin")
+        if os.path.exists(trim):
+            binp = trim
         if not harness.check(os.path.exists(o88) and os.path.exists(binp),
                              "%s: build/%s.o88 and .bin exist" % (name, name),
                              why="a name in LZBPKGS with nothing built is a list "

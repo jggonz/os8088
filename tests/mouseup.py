@@ -112,8 +112,10 @@ def armw(m):
 need("build/muptest.img")          # `all` builds nothing under tests/
 
 with M.launch("build/os8088-360.img", apps="build/muptest.img",
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()                             # the boot gate on STATE (it settled
+    M.kernel_up(m)                      # twice: launch's and this one)
+    M.no_saver(m)
     mo = Mouse(marty=m)
     if BREAK:
         at = m.sym("ui_task.content_front")

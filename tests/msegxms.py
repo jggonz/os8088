@@ -101,37 +101,24 @@ def u16(b, i=0):
 
 
 def boot():
-    """xmcheck's boot, with MSEG's disk in B: instead of xmtest's."""
-    import time
-    if os.path.exists(xmcheck.PID):
-        try:
-            pid = int(open(xmcheck.PID).read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)
-        except (OSError, ValueError):
-            pass
-    for f in (xmcheck.SOCK, xmcheck.PID):
-        if os.path.exists(f):
-            os.remove(f)
-    # `make test` DAEMONISES the emulator, so it outlives this script
-    # unless somebody kills it - and the somebody is us (os88qemu).
-    os88qemu.own()
-    # THROUGH os88fixture.make: `make test` is a LAUNCHER, and the only thing
-    # it leaves under build/ is the buildnum stamp the parse rewrites - this
-    # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
-    # as this row's `wants=`, so the runner has them current and nothing is
-    # built here either.
-    r = os88fixture.make("test", "TESTAPPS=" + IMG)
-    if r.returncode:
-        raise SystemExit("msegxms: make test failed:\n" + r.stdout + r.stderr)
-    for _ in range(150):
-        if os.path.exists(xmcheck.SOCK):
-            break
-        time.sleep(0.2)
-    else:
-        raise SystemExit("msegxms: QEMU never opened " + xmcheck.SOCK)
-    xmcheck.wait_desktop(xmcheck.SOCK, "msegxms")   # guest time, not 12s
-    return xmcheck.SOCK
+    """xmcheck's machine, with MSEG's disk in B: - `make test TESTAPPS=`'s
+    command line WITHOUT make (os88qemu.launch_test: its own socket, copies
+    of both floppies, no kill through build/qemu.pid)."""
+    import atexit
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    atexit.register(shutil.rmtree, tmp, True)   # (after the kill: LIFO)
+    sock, _ = os88qemu.launch_test(tmp, apps=IMG)
+    xmcheck.wait_desktop(sock, "msegxms")       # guest time, not 12s
+    return sock
+
+
+def dblclick(sock, m, x, y):
+    """closed-loop on mouse_x/mouse_btn, every edge confirmed (SOAK-SPEED
+    15), where xmcheck.dblclick walks tools/mouse.py blind"""
+    os88qemu.mouse_dblclick(m, xmcheck.sym,
+                            lambda *c: xmcheck.qmp(sock, *c), x, y)
 
 
 class Mem(object):
@@ -177,12 +164,12 @@ def open_pkg(sock, m):
     row = dispcp.row_of(m, xmcheck.sym, PKG)
     x, y = dispcp.row_xy(wx, wy, row)
     say("%s is row %d, at (%d,%d)" % (PKG, row, x, y))
-    xmcheck.dblclick(sock, x, y)
+    dblclick(sock, m, x, y)
     # MSEG creates its window AFTER its checks, with the verdict already in
     # the title (tests/multiseg/mseg.asm) - so the window IS the answer, and
     # it is waited for in GUEST seconds (tests/os88qemu.py).
     os88qemu.acted(m, lambda: mseg_window(sock)[0] is not None, secs=30,
-                   what="the MSEG window", poll=0.3)
+                   what="the MSEG window", poll=0.05)
 
 
 def mseg_window(sock, show=False):
@@ -210,7 +197,7 @@ def run(sock):
 
     # The Disk window, and MSEG in its listing: the thing open_pkg reads next,
     # waited for on the GUEST's clock rather than a host `time.sleep(7)`.
-    xmcheck.dblclick(sock, *xmcheck.DISKB)
+    dblclick(sock, m, *xmcheck.DISKB)
 
     def listed():
         try:
@@ -219,8 +206,8 @@ def run(sock):
         except Exception:                   # noqa: BLE001 - no window yet
             return False
     os88qemu.acted(m, lambda: bool(dispcp.win_list(m, xmcheck.sym))
-                   and listed(), secs=20, what="%s listed" % PKG, poll=0.3)
-    os88qemu.pace(m, 1)                     # ...and the rows painted
+                   and listed(), secs=20, what="%s listed" % PKG, poll=0.05)
+    os88qemu.ui_done(m, xmcheck.sym, cap=1.0)   # ...and the rows painted
     open_pkg(sock, m)
 
     st = xmcheck.read_bytes(sock, xmcheck.sym("ld_status"), 1)[0]

@@ -227,17 +227,38 @@ def qpoke(q, writes, port=None):
 # QEMU: WIN4 by default, read only
 # =============================================================================
 def qemu_leg(a):
-    import os88fixture, os88geom, os88qemu                  # noqa: E401,E402
-    from ethernet import Qemu, SOCK, settle, Mouse          # noqa: E402
+    import os88build, os88geom, os88qemu                    # noqa: E401,E402
+    import ethernet                                         # noqa: E402
+    import xmcheck                                          # noqa: E402
+    import tempfile, atexit, shutil                         # noqa: E401,E402
+    from ethernet import Qemu, settle                       # noqa: E402
     import shot as shotlib                                  # noqa: E402
 
-    def mouse(*args):
-        subprocess.run(["python3", "tools/mouse.py", SOCK] + [str(x) for x in args],
-                       check=True, capture_output=True)
+    # A PRIVATE QEMU (os88qemu.Private) - `make test`'s machine, its DEVCARD
+    # OPL2 too - and not `make test`, whose parse rebuilds a shared build/
+    # that is behind HEAD; its own socket, so nothing else's is killed
+    work = tempfile.mkdtemp(prefix="pxw-")      # short: a QMP socket path
+    atexit.register(shutil.rmtree, work, True)
+    pq = os88qemu.Private(work, os88build.at("build/os8088.img"),
+                          os88build.at("build/apps.img"),
+                          extra=["-audiodev", "none,id=devsnd", "-device",
+                                 "adlib,audiodev=devsnd"])
+    SOCK = ethernet.SOCK = pq.sock
+
+    def hmp(*cmds):
+        return xmcheck.qmp(SOCK, *cmds)
+
+    def mouse(verb, *xy):
+        """tools/mouse.py's verbs CLOSED-LOOP (SOAK-SPEED technique 15), with
+        the 0.15 guest s it left after every gesture: the game's worker holds
+        the gfx lock nearly always, so ui_done cannot say a press was taken,
+        and a drag whose move and release land before the UI has seen the
+        press does not move the window (q3b and q4 went red without it)."""
+        omo.run(verb, *xy)
+        os88qemu.pace(q, 0.15)
 
     def keys(*cmds):
-        subprocess.run(["python3", "tools/qmp.py", SOCK] + list(cmds), check=True,
-                       capture_output=True)
+        hmp(*cmds)
 
     def dump(q):
         p = os.path.join(q.tmp, "d.ppm")
@@ -254,12 +275,8 @@ def qemu_leg(a):
         subprocess.run(args, check=True, capture_output=True)
         print("   shot", os.path.join("build/pxs-shots", name))
 
-    os88qemu.kill()
-    os88qemu.own()
-    r = os88fixture.make("test")
-    if r.returncode:
-        sys.exit("pxswin: make test failed:\n" + r.stdout + r.stderr)
-    q = Qemu()
+    q = Qemu(SOCK)
+    omo = os88qemu.Mouse(q, S, hmp, after=0)
 
     # EVERY WAIT IN THIS LEG IS ON THE GUEST'S CLOCK (tests/os88qemu.py: the
     # BIOS tick, which only guest code advances). It was thirteen host sleeps
@@ -272,8 +289,8 @@ def qemu_leg(a):
             return os88qemu.ui_idle(q, S)
         except OSError:
             return False
-    os88qemu.acted(q, idle, secs=90, what="the desktop's UI task, idle", poll=0.3)
-    mo = Mouse()
+    os88qemu.acted(q, idle, secs=90, what="the desktop's UI task, idle", poll=0.05)
+    mo = os88qemu.Mouse(q, S, hmp)              # (dispcp's verbs: after 0.4)
     settle(q)
     dispcp.open_drive(q, mo, S, settle, "B")
     wx, wy = dispcp.win_rect(q, S, dispcp.win_list(q, S)[-1])[:2]
@@ -317,7 +334,7 @@ def qemu_leg(a):
         os88qemu.ui_done(q, S, cap=2.5, what=what)
 
     os88qemu.acted(q, lambda: w("px_frames") >= 1, secs=30, what="the first frame",
-                   poll=0.3)
+                   poll=0.05)
     print("   QEMU: tier %d, the window's display %d bpp, backend %s, Colour %d"
           % (b("px_tier"), b("px_bpp"), pxslib.PXB.get(b("px_back")), b("px_colour")))
     check(b("px_tier") != 0 and b("px_bpp") == 4,

@@ -63,10 +63,10 @@ def bp_open(m, mo, wx, wy, name):
     decodes nothing and `_edge` could only ever time out.
     """
     entry = dispcp.row_of(m, S, name)
-    row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
+    row = dispcp.scroll_to(m, mo, S, UD, wx, wy, entry)
     x, y = dispcp.row_xy(wx, wy, row)
     mo.to(x, y)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
     if mo.where()[2] & 1:       # a button left down by something else would
         mo._edge(False)         # make the first press no edge at all
@@ -86,9 +86,27 @@ def bp_open(m, mo, wx, wy, name):
         mo._edge(True)          # ...the double-click
         t2 = mo.ticks()
         m.mouse(0, 0, l=False)
-        tr.wait(1, limit=30.0)
+        # A hit, or the UI task asleep with nothing pending across a whole
+        # tick: the open's pass is over, so a repaint it owed would have
+        # stopped the machine already. (It was `tr.wait(1, limit=30)`, whose
+        # PASS for a document was its whole 90-guest-second budget -
+        # docs/plans/completed/SOAK-SPEED.md 5.)
+        quiet = [None]
+
+        def over():
+            if tr.n:
+                return True
+            if not os88marty.ui_idle(m):
+                quiet[0] = None
+                return False
+            t = os88marty._ktick(m)
+            if quiet[0] is None:
+                quiet[0] = t
+            return t != quiet[0]
+        tr.until(over, "fm_repaint, or the open's pass to end", limit=30.0,
+                 required=False)
     state = tr.n > 0
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     span = (t2 - t1) & 0xFFFFFFFF
     if span >= os88mouse.DBL_TICKS:
         sys.exit("assocopen: the two presses were %d ticks apart and the "
@@ -98,9 +116,20 @@ def bp_open(m, mo, wx, wy, name):
     return state, span
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+# every read below is guest memory (or the framebuffer after the UI is
+# done), so the boot gate is the kernel's STATE and the dispcp verbs settle
+# on ui_done (docs/plans/completed/SOAK-SPEED.md 4)
+def UD(m, **_):
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "A")
+    dispcp.open_drive(m, mo, S, UD, "A")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
     say("A:\\ = %r" % [n for n, _ in dispcp.listing(m, S)])
 

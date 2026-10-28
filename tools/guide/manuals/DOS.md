@@ -19,7 +19,7 @@ os8088 machine.
 Inside `SYSTEM` on the software disks, the network disk and the second disk
 of the everything set.
 
-They are meant for the other PC. Double-clicking one here runs it in the
-DOS box, which is a handy way to read its help (type `/?` after its name at
-the DOS box's prompt), but OS88NET does its work on the DOS machine at the
+They are meant for the other PC. Double-clicking one here runs it in
+os8088's DOS, which is a handy way to read its help (type `/?` after its name
+at the DOS prompt), but OS88NET does its work on the DOS machine at the
 far end of the cable.

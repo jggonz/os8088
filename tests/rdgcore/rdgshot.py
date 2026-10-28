@@ -42,7 +42,7 @@ def capture(img, timeout):
             if b"RDGHOST BADOP" in data:     # the core stopped: no picture coming
                 time.sleep(0.3)
                 break
-            time.sleep(0.3)
+            time.sleep(0.05)                # (was 0.3: a floor per capture)
     finally:
         p.kill()
         p.wait()

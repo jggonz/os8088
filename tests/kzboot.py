@@ -208,7 +208,9 @@ def main():
                             bad[0] - head, (bad[0] - head) // 0xF000))
         m.bp_exec()                     # ...and let it finish booting, so a
         m.run()                         # kernel that expanded right but cannot
-        os88marty.settle(m, gate=os88marty.desktop_up)   # RUN is still a
+        os88marty.kernel_up(m)          # RUN is still a failure. The STATE
+                                        # gate - desk_rows, menu_nbar, the
+                                        # splash done - is the kernel running
         say("kzboot: %s: ...and it reaches a desktop" % geom)  # failure
 
     # ...AND THE OTHER FLOPPY BOOT SECTOR. build/boot.bin is 18 sectors a
@@ -216,8 +218,9 @@ def main():
     # packed tail's 512-aligned R was got wrong against once - is a different
     # set of immediates that nothing else here boots.
     with os88marty.launch(t.img("os8088.img"), apps=t.img("apps.img"),
-                          machine=a.machine144) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=a.machine144, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
         say("kzboot: 1.44MB: a desktop, through the OTHER boot sector")
 
     return report(fails)

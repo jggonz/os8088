@@ -189,9 +189,9 @@ DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
 ; sits - so the next raise raises this number and there is nothing to split.
 ;
 ; **AND IT IS PER-BUILD SINCE SPEC.md 22.6.2**: 64 on kern_big, 32 on
-; kern_small. Sixty-four was taken for the DOS box - "DOS directories are
+; kern_small. Sixty-four was taken for DOS - "DOS directories are
 ; busier than ours ever were: LEMMINGS 68 entries, F15 66, TD1 41" - and
-; kern_small has no DOS box: the plan to run one there was not realised, and
+; kern_small has no DOS: the plan to run one there was not realised, and
 ; `build/small.img` / `build/small360.img` carry 12 root entries with 8 in the
 ; busiest folder. So on that kernel the second 768 bytes of `disk_dir` list
 ; nothing any disk it ships has, while `.lowbss` is the tightest rung in the

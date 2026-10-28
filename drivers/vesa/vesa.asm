@@ -125,19 +125,24 @@ vx_entry:
 ; -----------------------------------------------------------------------------
 ; vx_detach - DRVV_DETACH: disarm the kernel's pointer and the availability bit.
 ;             Cannot fail (SPEC.md 51.2). The caller has already put the
-;             desktop back on the VGA (SPEC.md 120.4); if it has not, vx_go's
-;             guard draws nothing rather than calling a freed image.
+;             desktop back on the VGA (SPEC.md 120.4); if it has not (the
+;             shutdown's drv_shutdown_x), the hook reaches the kernel's
+;             vx_null, which draws nothing, rather than a freed image.
 ; -----------------------------------------------------------------------------
 vx_detach:
     cmp word [vx_kseg], 0
     je .out                     ; never initialised: nothing was armed
     push es
     push bx
+    push ax
     mov es, [vx_kseg]
     mov bx, [vx_p_ep]
-    mov word [es:bx+2], 0       ; the far pointer's segment half: vx_go's guard
+    mov ax, [vx_p_null]         ; the far pointer, to the kernel's vx_null:
+    mov [es:bx], ax             ; a hook that fires after this draws nothing
+    mov [es:bx+2], es           ; and goes back the way this image would have
     mov bx, [vx_p_avail]
     and byte [es:bx], ~VXA_BIT
+    pop ax
     pop bx
     pop es
 .out:
@@ -591,27 +596,33 @@ vx_mkpal:
     ret
 
 ; -----------------------------------------------------------------------------
-; vx_init - VXV_INIT: SI = the kernel's block (ES = KERNEL_SEG). Bank the
-;           kernel's segment and every pointer, and fill vid_tab row VID_VESA.
+; vx_init - VXV_INIT: DX:SI = the kernel's block, which lives in its boot blob
+;           (ES = KERNEL_SEG). Bank the kernel's segment and every pointer -
+;           the block is gone once the boot ends - and fill vid_tab row
+;           VID_VESA.
 ; out: CF = 0; CF = 1 = a block of another vintage, nothing banked
 ; -----------------------------------------------------------------------------
 vx_init:
-    cmp word [es:si+VXB_VER], VX_ABI_VER
+    push ds
+    mov ds, dx                  ; DS:SI = the block, in the kernel's boot blob
+    cmp word [si+VXB_VER], VX_ABI_VER
     jne .bad
+    pop ds
     mov [vx_kseg], es
     push si
+    push es
+    push ds
+    push ds
+    pop es                      ; ES = ours (DS still is): the bank
+    mov ds, dx
     mov di, vx_p_tabrow         ; the pointer words, in VXB_* order from +2
     inc si
     inc si
     mov cx, (VXB_SIZE - 2) / 2
-.p:
-    mov ax, [es:si]
-    mov [di], ax
-    inc si
-    inc si
-    inc di
-    inc di
-    loop .p
+    cld
+    rep movsw
+    pop ds
+    pop es
     pop si
     call vx_geom
     mov word [vx_win], 0xFFFF   ; no window is current until a mode set
@@ -619,6 +630,7 @@ vx_init:
     clc
     ret
 .bad:
+    pop ds
     stc
     ret
 
@@ -746,17 +758,22 @@ vx_next:
 ; =============================================================================
 ; THE PRIMITIVE ENTRY (SPEC.md 120.3.1)
 ;
-; Far-called by the kernel's vx_go / vx_call / vx_goc with, on the stack above
-; the far return, a FAR POINTER to the selector byte. Every register is saved
-; into a frame BP addresses (SS), the selector is read through that pointer,
-; DS becomes ours, and the body runs with the caller's registers intact. On
-; the way out every register comes back from the frame, so a body may clobber
-; anything and a body that owes an output writes the frame.
+; Far-called by the kernel's hook itself, `call far [vx_ep]` with the selector
+; byte after it, so the FAR RETURN IS THE SELECTOR'S ADDRESS. Every register is
+; saved into a frame BP addresses (SS), the selector is read through the
+; return, DS becomes ours, and the body runs with the caller's registers
+; intact. Before the body runs, the return is pointed where the kernel goes
+; on: past the byte for a VX_CONT selector, and to VXB_KRET's kernel `ret`
+; otherwise - which pops the hooked body's own return, so a VIDEXT body
+; returns to its caller. Nothing after the body touches a flag but the pops,
+; so its CF is the answer. On the way out every register comes back from the
+; frame, so a body may clobber anything and a body that owes an output writes
+; the frame.
 ;
 ;   [bp+0]  caller's BP     [bp-2]  DS   [bp-4]  ES   [bp-6]  AX   [bp-8]  BX
-;   [bp+2]  ret off         [bp-10] CX   [bp-12] DX   [bp-14] SI   [bp-16] DI
+;   [bp+2]  ret off = the   [bp-10] CX   [bp-12] DX   [bp-14] SI   [bp-16] DI
+;           selector's
 ;   [bp+4]  ret seg
-;   [bp+6]  selector off    [bp+8] selector seg
 ; =============================================================================
 F_DS    equ -2
 F_ES    equ -4
@@ -778,10 +795,17 @@ vx_prim:
     push dx
     push si
     push di
-    lds bx, [bp+6]              ; DS:BX = the selector pointer
+    lds bx, [bp+2]              ; DS:BX = the selector: the far return
     mov al, [bx]
     push cs
     pop ds                      ; DS = ours from here
+    inc word [bp+2]             ; a VX_CONT hook goes on past the byte...
+    test al, VX_CONT
+    jnz .on
+    mov bx, [vx_p_kret]         ; ...any other to the kernel's `ret`, which
+    mov [bp+2], bx              ; pops the hooked body's own return
+.on:
+    and al, VX_SELM
     mov [vx_sel], al
     mov ax, [bp+F_AX]           ; the two registers the read spent, back
     mov bx, [bp+F_BX]
@@ -2461,6 +2485,8 @@ vx_p_scroll dw 0
 vx_p_spans  dw 0
 vx_p_fontfg dw 0
 vx_p_cfgve  dw 0
+vx_p_kret   dw 0                ; a kernel `ret`: where a tail hook goes back
+vx_p_null   dw 0                ; ...and the kernel's draw-nothing entry
 %if $ - vx_p_tabrow != VXB_SIZE - 2
   %error "the pointer bank has drifted from vxabi.inc's VXB_* layout"
 %endif

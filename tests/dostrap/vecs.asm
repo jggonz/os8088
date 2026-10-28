@@ -3,9 +3,9 @@
 ; ONE BINARY, TWO DOSES - dosref.asm's shape and docs/DOS-DEBUGGING.md's
 ; method.  "DOS installs the whole 20h..2Fh block" is a sentence out of a
 ; reference book; the same program printing the same five lines under IBM DOS
-; 3.30 and under the box is a measurement, and the finding is the DIFF.
+; 3.30 and under DOS is a measurement, and the finding is the DIFF.
 ;
-; It exists because the box shipped with fourteen of DOS's own vectors at
+; It exists because DOS shipped with fourteen of DOS's own vectors at
 ; 0000:0000, which is not "unimplemented" - an `int` through a null vector
 ; EXECUTES THE VECTOR TABLE, and a program cannot test for it beforehand
 ; because the probe IS the call.  BOLOBALL asked `int 2Ah AH=00h` (is a
@@ -33,10 +33,10 @@
 ;             handler is wrong (SPEC.md 96.5.2.2).
 ;   EXIT=..   it leaves through `INT 21h AH=00h` with a NON-ZERO AL, because
 ;             AH=00h's exit code is ZERO and AL is an argument to no part of
-;             it.  The host reads the code the box recorded; 96.5.2.3 is the
+;             it.  The host reads the code DOS recorded; 96.5.2.3 is the
 ;             field's `Exit code 002` coming from exactly this.
 ;
-; It waits for a key before exiting - not a courtesy: the box's fsx bracket
+; It waits for a key before exiting - not a courtesy: DOS's fsx bracket
 ; ends when the program does and the desktop comes straight back.
     org 0x100
     cpu 8086
@@ -145,7 +145,7 @@ start:
 ; --- the vectors a real IBM DOS 3.30 fills ------------------------------------
 ; Measured off the machine, not listed out of a book.  1Fh and everything from
 ; 40h up ARE zero under DOS, so they are not here: an unused vector being zero
-; is DOS's own rule and this box keeps it.
+; is DOS's own rule and this DOS keeps it.
 tab:
     db 0x20, 0x21, 0x22, 0x23, 0x24 ; the ones that were always installed
     db 0x25, 0x26, 0x27, 0x28, 0x29

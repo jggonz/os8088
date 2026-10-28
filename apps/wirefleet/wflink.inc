@@ -57,16 +57,17 @@ wf_link_new:
     mov [wf_line+LN_VIEW], ax
     mov [wf_line+LN_FOCUS], al
     mov [wf_chatcount], ax
-    mov byte [wf_lastout], 0xff
-    mov byte [wf_chatline], 0
-    mov byte [wf_chatlog], 0
-    mov byte [wf_chatlog+40], 0
-    mov byte [wf_chatlog+80], 0
+    mov [wf_chatline], al       ; AX is still the 0 stored above
+    mov [wf_chatlog], al
+    mov [wf_chatlog+40], al
+    mov [wf_chatlog+80], al
     mov [wf_rlen], al
     mov [wf_rescape], al
     mov [wf_txlen], ax
     mov [wf_txpos], ax
-    mov word [wf_hash], 0xffff
+    dec ax                      ; 0xffff
+    mov [wf_lastout], al
+    mov [wf_hash], ax
     mov word [wf_chatseq], 1
     mov byte [wf_urgent], 1
     ret
@@ -80,8 +81,15 @@ wf_connect:
     mov byte [wf_cands], cl     ; COM1 = bit 0 = 1, COM2 = bit 1 = 2
     call wf_disconnect
     mov al, [wf_wantport]
+    or al, 0x80                 ; the user NAMED it: not the mouse (115.1.1)
     call wf_lease
-    jc .failed
+    jnc .ok
+    cmp ax, 4                   ; a SERIAL.DRV older than 115.1.1 reads the
+    jne .failed                 ; flag as a port number and says "absent":
+    mov al, [wf_wantport]       ; ask again as it understands, so this
+    call wf_lease               ; package on an older system disk does what
+    jc .failed                  ; the WireFleet before it did
+.ok:
     mov word [wf_message], wf_searching
     jmp wf_update
 .failed:
@@ -97,10 +105,14 @@ wf_autostart:
     mov [wf_retry], ax          ; due now
     ret
 
-; AL=port. Opens, or MOVES a lease this instance already holds (115.1).
-; CF=refused with AX=error and the lease closed; else the port is live.
+; AL=port, bit 7 set when the user chose it. Opens, or MOVES a lease this
+; instance already holds (115.1). CF=refused with AX=error and the lease
+; closed; else the port is live.
 wf_lease:
+    push ax
+    and al, 0x7f
     mov [wf_curport], al
+    pop ax
     cmp byte [wf_linkopen], 0
     jne .open
     push ax
@@ -117,11 +129,12 @@ wf_lease:
     jc .refused
     mov byte [wf_linkopen], 1
     mov byte [wf_urgent], 1
-    mov byte [wf_heard], 0
-    mov byte [wf_rlen], 0
-    mov byte [wf_rescape], 0
-    mov word [wf_txlen], 0
-    mov word [wf_txpos], 0
+    xor ax, ax                  ; AX is reloaded by OSAPI_GET_TICKS below
+    mov [wf_heard], al
+    mov [wf_rlen], al
+    mov [wf_rescape], al
+    mov [wf_txlen], ax
+    mov [wf_txpos], ax
     call OSAPI_GET_TICKS
     mov [wf_seen], ax
     sub ax, WF_BEAT
@@ -146,7 +159,7 @@ wf_lease:
 
 ; AX=lease error -> the line that says what to do about it.
 wf_leaseerror:
-    cmp ax, 8
+    cmp ax, 9
     jbe .known
     mov ax, 5
 .known:
@@ -214,12 +227,14 @@ wf_autolink:
     mov [wf_cands], al
     ret
 
-; AX=refusal during a search. 3/4: this port is not a candidate. 1/2:
+; AX=refusal during a search. 3/4/9: this port is not a candidate. 1/2:
 ; wait and retry. Anything else ends the search with its line.
 wf_refusal:
     cmp ax, 3                   ; the mouse's or no UART: a candidate fewer,
     je .drop                    ; which a search expects - said only when
     cmp ax, 4                   ; none is left (.drop's end)
+    je .drop
+    cmp ax, 9                   ; a UART the BIOS does not list (115.1)
     je .drop
     push ax
     call wf_leaseerror
@@ -1192,12 +1207,13 @@ wf_crc:
     loop .byte
     ret
 
-wf_linkerrors: dw wf_searching,wf_linkbusy,wf_movemouse,wf_mouseport,wf_noport,wf_badbuffer,wf_searching,wf_searching,wf_needsserial
+wf_linkerrors: dw wf_searching,wf_linkbusy,wf_movemouse,wf_mouseport,wf_noport,wf_badbuffer,wf_searching,wf_searching,wf_needsserial,wf_nobios
 wf_searching: db 'Looking for your opponent on the null-modem cable...',0
 wf_linkbusy: db 'Another program is using the serial port. Trying again...',0
-wf_movemouse: db 'Move the mouse once so the OS can tell it from the cable.',0
+wf_movemouse: db 'Choose Link > Connect COM1/COM2, or move the mouse.',0
 wf_mouseport: db 'That COM port is the mouse. Connect using the other port.',0
-wf_noport: db 'No supported BIOS-advertised UART on that port.',0
+wf_noport: db 'The OS found no UART on that port when it started.',0
+wf_nobios: db 'That port is not in the BIOS list: enable it in SETUP.',0
 wf_badbuffer: db 'Serial lease refused this application buffer.',0
 wf_needsserial: db 'Linking needs SERIAL.DRV: insert the system disk, Link > Automatic.',0
 wf_nofreeport: db 'No free serial port for the cable. Link menu: choose a port.',0

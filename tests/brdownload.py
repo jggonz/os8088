@@ -28,8 +28,10 @@ import brclick                                      # noqa: E402
 import dispcp                                       # noqa: E402
 import ethernet                                     # noqa: E402
 import os88build                                    # noqa: E402
+import os88fixture                                  # noqa: E402
 import os88flush                                    # noqa: E402
 import os88sym                                      # noqa: E402
+import shot                                         # noqa: E402
 
 S = os88sym.linear
 PORT = 8090
@@ -58,6 +60,7 @@ class Server(threading.Thread):
         super().__init__(daemon=True)
         self.sock = socket.socket()
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ethernet.os88qemu.lease_port(PORT)  # (SOAK-PARALLEL.md 17.3)
         self.sock.bind(("0.0.0.0", PORT))
         self.sock.listen(4)
         self.requests = []
@@ -119,27 +122,83 @@ def manager_rect(m, pseg, sy, S):
     raise RuntimeError("Download Manager window pointer is not in wm_wins")
 
 
+# --- WHAT THE ETA FIELD SHOWS, read off the glass ----------------------------
+# The completed assertion read `br_dl_disptxt`, which is not the ETA's buffer:
+# it is ONE scratch line that br_dl_drawcut (the File, Source, Destination and
+# Status rows), the Speed field and the ETA field each compose into and draw
+# from at once (apps/browser/brdownload_paint.inc). Every painter runs on the
+# UI task and draws what it composed before the next one writes, so the SCREEN
+# is never wrong - but the buffer is only "the ETA" once a paint has finished,
+# and br_dl_onwake writes DL_DONE and THEN repaints the whole manager. The
+# row polls that state byte, so it read the buffer INSIDE the repaint whenever
+# the guest was between drawcut(br_dl_url) and drawcut(br_dl_dest): one pass
+# at two lanes failed `completed ETA display is b'http://10.0.2.2:8090/
+# download-te'` - the Source row (docs/plans/SOAK-PARALLEL.md 17.7). The
+# field's own pixels are the answer the row was asking for.
+FONT_FIRST, FONT_N = 32, 95
+
+
+def eta_cells(width):
+    """br_dl_setetawidth's arithmetic: the cells the ETA value is drawn in."""
+    n = ((width - 264) & 0xFFFF) >> 3
+    return max(7, min(n, 10))
+
+
+def glass_eta(m, pseg, sy, mo):
+    """The ETA value as the GLASS shows it - each 8x8 cell of the field read
+    off a screendump and matched against the kernel's own glyphs
+    ([font_seg]:[font_base], tests/glass.py's reason), trailing blanks dropped.
+    A cell no glyph matches reads '?'. The pointer is moved off the field
+    first: it is drawn into the framebuffer, so it would read as ink."""
+    x0 = word(m, pseg, sy["br_dl_x"]) + 200
+    y0 = word(m, pseg, sy["br_dl_y"]) + word(m, pseg, sy["br_dl_yspeed"])
+    n = eta_cells(word(m, pseg, sy["br_dl_w"]))
+    px, py, _ = ethernet.os88qemu.mouse_where(m, S)
+    if x0 - 16 <= px < x0 + n * 8 and y0 - 20 <= py < y0 + 8:
+        mx, my, mw, _ = manager_rect(m, pseg, sy, S)
+        mo.run("to", str(mx + mw // 2), str(my + 4))    # the title: inert
+    seg = word(m, 0, S("font_seg"))
+    base = word(m, 0, S("font_base"))
+    raw = m.read(seg * 16 + base, FONT_N * 8)
+    glyphs = {bytes(8): " "}
+    for i in range(FONT_N):
+        glyphs.setdefault(bytes(raw[i * 8:i * 8 + 8]), chr(FONT_FIRST + i))
+    ppm = os.path.join(ethernet.os88qemu.RUNDIR, "eta.ppm")
+    m.hmp('screendump "%s"' % ppm)
+    w, _h, pix = shot.read_ppm(ppm)
+    os.unlink(ppm)
+    out = ""
+    for c in range(n):
+        cell = bytearray(8)
+        for r in range(8):
+            for b in range(8):
+                o = ((y0 + r) * w + x0 + c * 8 + b) * 3
+                if sum(pix[o:o + 3]) < 384:         # ink: black on white
+                    cell[r] |= 0x80 >> b
+        out += glyphs.get(bytes(cell), "?")
+    return out.rstrip()
+
+
+# ONE PATH FOR THE IMAGE THIS ROW WRITES AND READS BACK, and it is THIS
+# PROCESS'S (tests/os88qemu.py RUNDIR): os88qemu.make_test boots an image
+# inside RUNDIR in place and copies the shared one (ether360.img), so the
+# guest never dirties a built image and the row builds nothing - where it was
+# `make -B browsertest`, `make ethertest` and `make test` on build/qmp.sock,
+# which kept all three brdownload rows out of every shared lane
+# (docs/plans/SOAK-PARALLEL.md 17). The three share PORT, and say so in their
+# `locks=`; the lease in Server is the cross-runner half.
 def main():
     if SHOTDIR:
         os.makedirs(SHOTDIR, exist_ok=True)
-    subprocess.run(["make", "-B", "browsertest"], check=True,
-                   stdout=subprocess.DEVNULL)
-    if os.path.exists(os88build.at("build/ether360.img")):
-        os.remove(os88build.at("build/ether360.img"))
-    subprocess.run(["make", "ethertest"], check=True,
-                   stdout=subprocess.DEVNULL)
+    os88fixture.need("build/browser.o88", "build/ether360.img")
+    dlimg = os.path.join(ethernet.os88qemu.RUNDIR, "brdownload360.img")
     subprocess.run(["python3", "tools/os88disk.py", "-o",
-                    "build/brdownload360.img", "--size", "360",
-                    "--folder", "SYSTEM/APPDATA", "build/browser.o88"],
+                    dlimg, "--size", "360",
+                    "--folder", "SYSTEM/APPDATA",
+                    os88build.at("build/browser.o88")],
                    check=True, stdout=subprocess.DEVNULL)
-    for filename in (os88build.at("build/qmp.sock"),
-                     os88build.at("build/qemu.pid")):
-        if os.path.exists(filename):
-            os.remove(filename)
-    ethernet.os88qemu.own()
-    subprocess.run(["make", "test", "ETHER=1", "TESTIMG=build/ether360.img",
-                    "TESTAPPS=build/brdownload360.img"], check=True,
-                   stdout=subprocess.DEVNULL)
+    ethernet.os88qemu.make_test("ETHER=1", "TESTIMG=build/ether360.img",
+                                "TESTAPPS=" + dlimg)
 
     server = Server()
     server.start()
@@ -155,7 +214,14 @@ def main():
             m, lambda: int.from_bytes(
                 m.read(dr + ethernet.DRVR_SEG, 2), "little") != 0,
             secs=60, what="ETHER.DRV to attach", poll=0.4)
-        eseg = int.from_bytes(m.read(dr + ethernet.DRVR_SEG, 2), "little")
+        # ...TAKEN ONCE THE BOOT IS OVER AND IT HAS HELD STILL: the row's
+        # segment is armed before the image is read and moves once more
+        # after the desktop is up (os88qemu.kernel_up; tests/ethernet.py)
+        ethernet.os88qemu.kernel_up(m, S, secs=120)
+        eseg = ethernet.os88qemu.quiesce(
+            m, lambda: int.from_bytes(m.read(dr + ethernet.DRVR_SEG, 2),
+                                      "little"),
+            secs=0.5, stable=3, what="ETHER.DRV's segment")
         ethernet.os88qemu.acted(
             m, lambda: m.readseg(eseg, esy["dhcp_st"], 1)[0]
             == ethernet.DH_BOUND, secs=60, what="DHCP to bind", poll=0.4)
@@ -184,6 +250,14 @@ def main():
         page_history_count = int.from_bytes(m.readseg(
             pseg, sy["br_histn"], 2), "little")
 
+        # ...AND THE LAYOUT FINISHED (brcapacity's lesson, one page along):
+        # state 6 is the fetch's, and the line table is still being built
+        # behind it - a starved guest was read with the page in and no line
+        # holding the link yet (docs/plans/SOAK-PARALLEL.md 17.5)
+        ethernet.os88qemu.quiesce(
+            m, lambda: (word(m, pseg, sy["br_nlines"]),
+                        word(m, pseg, sy["br_doclen"])),
+            secs=0.5, stable=3, what="the page's layout")
         # Locate the anchor from the Browser's formatted marker and line table.
         doclen = word(m, pseg, sy["br_doclen"])
         docseg = word(m, pseg, sy["br_docseg"])
@@ -265,16 +339,33 @@ def main():
                     subprocess.run(["python3", "tools/mouse.py", ethernet.SOCK,
                                     "rclick", str(px), str(py)], check=True,
                                    stdout=subprocess.DEVNULL)
-                    if m.readseg(pseg, sy["br_ctxopen"], 1)[0] != 1:
+                    # the menu is OPENED by the Browser's click handler, so
+                    # it is waited for rather than read the instant the
+                    # tool returns, and painted before its row is clicked
+                    if not ethernet.os88qemu.acted(
+                            m, lambda: m.readseg(
+                                pseg, sy["br_ctxopen"], 1)[0] == 1,
+                            secs=15, what="the link menu", poll=0.2):
                         failures.append("right-click did not open the link menu")
                     else:
+                        ethernet.settle(m)
                         mx = word(m, pseg, sy["br_cx"]) + word(
                             m, pseg, sy["br_ctxx"]) + 8
                         my = word(m, pseg, sy["br_cy"]) + word(
                             m, pseg, sy["br_ctxy"]) + 30
                         mo.click(mx, my)  # third row: Save Link As...
-                        ethernet.gsleep(1.0)
 
+                if not failures:
+                    # ...and the Enter goes to the CHOOSER, so it waits for
+                    # one: DL_PICK is written before OSAPI_FILE_DLG opens it,
+                    # and a guest second of pause was what stood in for
+                    # that (a pause on QEMU's clock buys a starved guest
+                    # less of the machine, docs/plans/SOAK-PARALLEL.md 17.5)
+                    if not ethernet.os88qemu.acted(
+                            m, lambda: word(m, 0, S("fdlg_win")) != 0,
+                            secs=15, what="the Save chooser", poll=0.2):
+                        failures.append("no Save file chooser opened for the link")
+                    ethernet.settle(m)
                 if not failures:
                     m.key("Enter")  # prefilled 8.3 name, default Save
                     if CANCEL_MODE in ("--cancel-active", "--close-active"):
@@ -343,7 +434,7 @@ def main():
                                 pseg, sy["br_dl_cancel_req"], 1)[0]:
                             failures.append("closing active manager did not request cancellation")
                         volume = os88flush.Volume(open(
-                            os88build.at("build/brdownload360.img"), "rb").read())
+                            dlimg, "rb").read())
                         try:
                             volume.read("DOWNLOAD.BIN")
                         except os88flush.FlushError:
@@ -382,6 +473,12 @@ def main():
                         if active:
                             active_ui["rate"] = True
                             if WITH_LENGTH:
+                                # the shared scratch line (glass_eta's note),
+                                # which is sound HERE and only here: nothing
+                                # but br_dl_eta composes a " sec" into it,
+                                # and it draws what it composed before any
+                                # other painter writes - so the suffix is a
+                                # measured ETA having been put on the glass
                                 display = bytes(m.readseg(
                                     pseg, sy["br_dl_disptxt"], 32)).split(b"\0", 1)[0]
                                 if display.endswith(b" sec"):
@@ -428,7 +525,7 @@ def main():
                             secs=10, what="completed manager to close", poll=0.1)
                         m.quit()
                         volume = os88flush.Volume(open(
-                            os88build.at("build/brdownload360.img"), "rb").read())
+                            dlimg, "rb").read())
                         if volume.read("DOWNLOAD.BIN") != PAYLOAD:
                             failures.append("closing completed manager changed the downloaded file")
                         if failures:
@@ -474,8 +571,25 @@ def main():
                                         % (got_received, len(PAYLOAD)))
                     got_speed = int.from_bytes(m.readseg(
                         pseg, sy["br_dl_speed"], 2), "little")
-                    display = bytes(m.readseg(
-                        pseg, sy["br_dl_disptxt"], 32)).split(b"\0", 1)[0]
+                    display = None
+                    if WITH_LENGTH and state == 11:
+                        # ...AT A MOMENT THE GUEST SAYS IS AFTER THE PAINT:
+                        # DL_DONE is written before br_dl_onwake's repaint,
+                        # so the UI task finishing with it comes first, and
+                        # the glass is then read until the field holds - a
+                        # timer pass still armed from the transfer repaints
+                        # it once more, and a screendump inside that white
+                        # fill is a blank and not an answer
+                        ethernet.settle(m)
+                        seen = [None]
+
+                        def eta_shown():
+                            seen[0] = glass_eta(m, pseg, sy, mo)
+                            return seen[0] == "0 sec"
+                        ethernet.os88qemu.acted(
+                            m, eta_shown, secs=10, poll=0.3,
+                            what="the completed ETA on the glass")
+                        display = seen[0]
                     if got_speed < 1 or got_speed > 999:
                         failures.append("completed download speed is %d KiB/s, expected 1..999"
                                         % got_speed)
@@ -488,8 +602,9 @@ def main():
                                         % sorted(active_ui["frames"]))
                     elif SHOTDIR:
                         print("animation frames observed: 0..7")
-                    if WITH_LENGTH and display != b"0 sec":
-                        failures.append("completed ETA display is %r, expected '0 sec'"
+                    if WITH_LENGTH and state == 11 and display != "0 sec":
+                        failures.append("the completed ETA field shows %r on "
+                                        "the glass, expected '0 sec'"
                                         % display)
                     barx = word(m, pseg, sy["br_dl_barx"])
                     barx2 = word(m, pseg, sy["br_dl_barx2"])
@@ -566,7 +681,7 @@ def main():
 
     try:
         volume = os88flush.Volume(open(
-            os88build.at("build/brdownload360.img"), "rb").read())
+            dlimg, "rb").read())
         got = volume.read("DOWNLOAD.BIN")
         if got != PAYLOAD:
             first = next((i for i, (a, b) in enumerate(zip(got, PAYLOAD))

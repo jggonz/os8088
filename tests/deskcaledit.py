@@ -259,11 +259,11 @@ class Cal(object):
         a shifted character is two."""
         for i in range(0, len(s), 4):
             self.m.type_text(s[i:i + 4])
-            os88marty.pace(self.m, 0.6)
+            os88marty.ui_done(self.m)   # the four out of the BIOS ring
 
     def press(self, pt):
         self.ui.mo.click(pt[0], pt[1], settle=0)
-        os88marty.pace(self.m, 1.0)
+        self.ui.still()
 
     def click_line(self, k):
         self.press(self.line(k))
@@ -295,7 +295,7 @@ class Cal(object):
                                         # and a press disarms
         else:
             self.ui.menu_pick("Calendar", "Delete Item")
-        os88marty.pace(self.m, 1.0)
+        os88marty.ui_done(self.m)
         return self.bss(DC_BSS_ASK)[0]
 
     def field_shut(self, what):
@@ -341,7 +341,7 @@ def boot_damaged(tmp):
     pay[0] = 60                 # past the 48-record table
     fixture = os88stik.dat(bytes(pay), x=335, y=40, screen=(640, 480))
     img = disk_with(tmp, "damaged.img", fixture)    # a v1 place: converted
-    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         c = Cal(ui, tmp)
         print("A: a DAMAGED file opens empty, says so, and is replaced")
         check(c.st() & STIK_S_DAMAGED, "the load called it damaged (stik_st %#x)"
@@ -395,7 +395,7 @@ def boot_damaged(tmp):
         check(buf == "09:30 Dentist", "the field holds %r" % buf)
         for _ in range(7):
             c.m.key("Backspace")
-            os88marty.pace(c.m, 0.2)
+            os88marty.ui_done(c.m)
         c.type("Doctor")
         c.key("Enter")
         c.field_shut("the field to shut")
@@ -410,7 +410,7 @@ def boot_damaged(tmp):
         txt = ui.wait_toast(says="again")
         check(txt == "Delete again to confirm", "...and says %r" % txt)
         c.m.key("KeyX")                  # a key that does nothing...
-        os88marty.pace(c.m, 1.0)
+        os88marty.ui_done(c.m)
         check(c.delete_once() == 2, "...after another key, Del only arms "
               "again")
         os88marty.guest_sleep(c.m, 3.0)
@@ -439,7 +439,7 @@ def boot_damaged(tmp):
         c.select_appt(0)
         c.key("Enter")
         ui._wait(lambda: c.ed() != 0, "the field to open on line 0", 30)
-        os88marty.pace(c.m, 1.0)
+        os88marty.ui_done(c.m)
         check(c.delete_once("menu") == 2, "the pick armed the latch")
         check(c.ed() == 0, "...and shut the field (dc_ed %d)" % c.ed())
         check(c.delete_once("menu") == 0, "picked again it goes off")
@@ -506,7 +506,7 @@ def boot_full(tmp):
     fixture = os88stik.dat(os88stik.deskcal(appts), x=335, y=40,
                           screen=(640, 480))
     img = disk_with(tmp, "full.img", fixture)
-    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         c = Cal(ui, tmp)
         print("F: %d appointments: New Appointment greyed, N refused"
               % os88stik.DESKCAL_NAPPT)
@@ -521,7 +521,7 @@ def boot_full(tmp):
         txt = ui.wait_toast(says="full")
         check(txt == "Calendar is full (%d)" % os88stik.DESKCAL_NAPPT,
               "N says %r" % txt)
-        os88marty.pace(c.m, 1.0)
+        os88marty.ui_done(c.m)
         check(c.ed() == 0, "and opened no field")
 
 

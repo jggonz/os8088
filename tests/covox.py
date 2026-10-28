@@ -105,19 +105,19 @@ def cp(ui, shots):
 
     def click(x, y, what, want):
         ui.mo.click(x, y, settle=0)
-        M.until(m, lambda mm: state() == want, what, poll=0.3, limit=60.0,
+        M.until(m, lambda mm: state() == want, what, poll=0.05, limit=60.0,
                 guest=5.0)
     ui.menu_pick("Apple", "Control Panel")
     w = ui.wait_window("Control Panel")
     cx, cy = w.content[0], w.content[1]
     for ordinal in range(8):
         ui.mo.click(cx + 40, cy + CP_I0Y + ordinal * CP_IROWH + 7, settle=0)
-        M.until(m, lambda mm: True, "a beat", poll=0.2, limit=30.0, guest=.5)
+        M.ui_done(m, "the list click")
         if m.read(m.sym("cp_sel"), 1)[0] == CP_SOUND:
             break
     else:
         fail("cp: no row of the list is the Sound page")
-    M.guest_sleep(m, 1.0)
+    ui.still()
     snap("0-auto", w)
     px = cx + CP_RX
     ly = cy + CPS_LY + 6
@@ -129,7 +129,8 @@ def cp(ui, shots):
           (SND_RT_LPT + 1, SND_CAP_LPTDAC))
     snap("2-lpt2", w)
     ui.mo.click(px + CPS_LX0 + 2 * CPS_LDX + 6, ly, settle=0)
-    M.guest_sleep(m, 2.0)
+    M.ui_done(m, "the LPT3 click (its probe is in the handler)")
+    M.guest_sleep(m, 0.3)
     if state() != (SND_RT_LPT + 1, SND_CAP_LPTDAC):
         fail("cp: LPT3, which did not answer, moved the tier to %r"
              % (state(),))
@@ -142,7 +143,8 @@ def cp(ui, shots):
     t0 = u16(m.read(0x46C, 2))
     with M.bp_trace(m, {"type": "int", "addr": 0}) as tr:
         ui.mo.click(px - 4, ly, settle=0)
-        M.guest_sleep(m, 1.0)
+        M.ui_done(m, "the gutter click")
+        M.guest_sleep(m, 0.3)        # and the clock moves past it
     if tr.n:
         fail("cp: a click in the gutter left of the Covox row raised INT 0 "
              "%d time(s) - a divide overflow in cp_snd_click" % tr.n)
@@ -166,7 +168,7 @@ def main():
     ap.add_argument("--shots", help="keep the cp arm's pictures here")
     a = ap.parse_args()
     machine, img = ARMS[a.arm]
-    with os88ui.boot(img, machine=machine, settle=False) as ui:
+    with os88ui.boot(img, machine=machine, quick=True) as ui:
         m = ui.m
         if a.arm == "cp":
             return cp(ui, a.shots)

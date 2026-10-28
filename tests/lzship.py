@@ -150,10 +150,16 @@ def main():
     P = pkg_syms("apps/tracker/tracker.asm")
     plain = open("apps/tracker/beverly.mod", "rb").read()
 
-    with os88marty.launch(sysimg, apps=appsimg, machine=a.machine) as m:
+    # Every read below is guest state (drv_tab, the window list, the
+    # listing, the module's claim), so the boots gate on the kernel's desktop
+    # STATE and the verbs end on `ui_done` - no picture settle anywhere.
+    done = lambda mm, **k: os88marty.ui_done(mm)
+    with os88marty.launch(sysimg, apps=appsimg, machine=a.machine,
+                          boot=False) as m:
         # 1. it boots - which IS the drivers expanding, nine of them, during a
         #    boot that has not finished laying out the heap
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run()
+        os88marty.kernel_up(m)
         say("  boot       ok  (a desktop, so every driver expanded)")
 
         # 2. ...and they ATTACHED. drv_tab and not the screen: a driver that
@@ -177,7 +183,7 @@ def main():
             fails.append("no driver attached: drv_tab is empty")
 
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wins = dispcp.win_list(m, S)
         if not wins:
             sys.exit("lzship: no Disk window after double-clicking B:")
@@ -187,12 +193,12 @@ def main():
 
         # 3. a compressed PACKAGE opens, out of APPS/
         n0 = len(wins)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
-        os88marty.settle(m)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
+        dispcp.open_named(m, mo, S, done, wx, wy, "APPS")
+        os88marty.ui_done(m)
+        dispcp.open_named(m, mo, S, done, wx, wy, "CALC.O88")
         try:
             os88marty.until(m, lambda mm: len(dispcp.win_list(mm, S)) > n0,
-                            "CALC.O88's window", poll=0.2, guest=30.0)
+                            "CALC.O88's window", poll=0.05, guest=30.0)
         except os88marty.MartyError:
             pass
         if len(dispcp.win_list(m, S)) > n0:
@@ -236,17 +242,19 @@ def main():
         t.img("lzship-mod360-" + a.fmt + ".img"),
         "APPS:" + t.img("tracker.o88"),
         "MEDIA:" + t.img("zdata-" + a.fmt + "/BEVERLY.MOD"), size=360)
-    with os88marty.launch(sysimg, apps=modimg, machine=a.machine) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+    with os88marty.launch(sysimg, apps=modimg, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
         os88marty.no_saver(m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wins2 = dispcp.win_list(m, S)
         wx, wy = dispcp.win_rect(m, S, wins2[-1])[:2]
         # MEDIA/ on this disk too: $(MEDIAARGS360) prefixes it, so the
         # module sits in the same folder it does on the roomier geometries
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MEDIA")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, done, wx, wy, "MEDIA")
+        os88marty.ui_done(m)
         # THE MODULE IS READ AT mp_load's ENTRY, WITH THE GUEST STOPPED.
         # That is the one moment the claim holds exactly what the transparent
         # read expanded: mp_load is what parses it, and with no sound card

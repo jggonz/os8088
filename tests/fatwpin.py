@@ -196,11 +196,12 @@ def boot(m, defs=()):
             return False
         return live == 0
     try:                                # a GUEST-time budget
-        os88marty.until(m, desk, "the splash to end", poll=0.2, limit=300)
+        os88marty.until(m, desk, "the splash to end", poll=0.05, limit=300)
     except os88marty.MartyError:
         raise SystemExit("fatwpin: never reached a desktop - nothing below "
                          "would mean what it says")
-    os88marty.settle(m)                 # the desktop's first paint
+    os88marty.ui_done(m)                # the desktop's first paint: every
+                                        # read after this is guest state
 
 
 def sample(m, defs=()):
@@ -211,7 +212,8 @@ def sample(m, defs=()):
     def key():
         st = State(m, defs)
         return (str(st), tuple(st.ww), tuple(st.fatw_claims))
-    os88marty.quiesce(m, key, guest=1.0,
+    os88marty.ui_done(m)                # (the verbs before it are ui_done'd
+    os88marty.quiesce(m, key, guest=0.3,  # too, so this only proves it)
                       what="the FAT-window state to stop changing")
     return State(m, defs)
 
@@ -242,7 +244,7 @@ def phase(label, defs, maxheap, expect_move, tree=None):
 
         wins0 = len(dispcp.win_list(m, S))
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle)
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm))
         after = sample(m, defs)
         wins1 = len(dispcp.win_list(m, S))
         print("  after B: mounts: %s ; windows %d -> %d"
@@ -278,7 +280,7 @@ def phase(label, defs, maxheap, expect_move, tree=None):
 HEAPFRAG = "build/heapfrag360.img"
 
 
-def phase_shed():
+def phase_shed(t):
     """The live window SHED, and what the volume is left holding (18.8.4).
 
     tests/heapfrag builds a comb that fills the heap, claiming at the ordinary
@@ -291,13 +293,13 @@ def phase_shed():
     """
     print("\n--- the live window, shed ---")
     S = os88sym.linear
-    t = os88build.tree(targets=("os8088-360.img", "heapfrag360.img")).apply()
+    t.apply()
     with os88marty.launch(t.img("os8088-360.img"),
                           apps=t.img("heapfrag360.img"),
                           machine=MACHINE, boot=False) as m:
         boot(m)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         before = sample(m)
         print("  B: mounted     : %s" % before)
         check(len(before.fatw_claims) == 1
@@ -311,11 +313,11 @@ def phase_shed():
 
         w = dispcp.win_list(m, S)
         wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "HEAPFRAG.O88")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "HEAPFRAG.O88")
         try:                            # heapfrag's comb, then the shed -
             os88marty.until(            # bounded by what an idle box's
                 m, lambda _: not State(m).fatw_claims,      # pause gave it
-                "heapfrag's comb to shed the FAT window", poll=0.2,
+                "heapfrag's comb to shed the FAT window", poll=0.05,
                 guest=6.0 * os88marty.GUEST_PACE)
         except os88marty.MartyError:
             pass                        # ...the first check below says so
@@ -337,13 +339,36 @@ def phase_shed():
               "mounts into FAT_SEG without demoting whoever holds it",
               got="dsk_fatwc[%d] = %04X" % (after.drive, after.wc[after.drive]),
               want="%04X (FAT_SEG)" % after.fat_seg)
-        check(after.fatw0 == 0xFFFF,
-              "shed: [dsk_fatw0] says nothing is resident",
-              "The second word the protocol does not carry. Left alone, "
-              "dsk_fat_window finds the sector it wants already resident and "
-              "returns without loading - and then every read and write goes "
-              "to a segment somebody else owns now",
-              got="%04X" % after.fatw0, want="FFFF")
+        # [dsk_fatw0] is the second word the protocol does not carry, and it
+        # may say one of TWO true things since SPEC.md 18.8.4.1. A shed
+        # inside mem_shed_one's cli DROPS the bytes and must say 0xFFFF;
+        # the compactor's walk (IF set - heapfrag's claim compacts before it
+        # sheds) CARRIES them into the pin and keeps the word. Either is
+        # right; what is wrong is a word that names a sector the pin does
+        # not hold, so the carried case is checked against the DISK.
+        carried = None
+        if after.fatw0 != 0xFFFF:
+            S = os88sym.linear
+            n = m.read(S("dsk_fatwn"), 1)[0]
+            got_fat = m.read(after.fat_seg * 16, n * 512)
+            img = open(t.img("heapfrag360.img"), "rb").read()
+            rsvd = int.from_bytes(img[14:16], "little")
+            at = (rsvd + after.fatw0) * 512
+            carried = got_fat == img[at:at + n * 512]
+            print("  carried        : %d sector(s) from FAT sector %d, %s"
+                  % (n, after.fatw0, "the disk's bytes" if carried
+                     else "NOT the disk's bytes"))
+        check(after.fatw0 == 0xFFFF or carried,
+              "shed: [dsk_fatw0] says nothing is resident, or the pin holds "
+              "exactly what it says",
+              "Left alone, dsk_fat_window finds the sector it wants already "
+              "resident and returns without loading - and then every read and "
+              "write goes to a segment somebody else owns now. 18.8.4.1's "
+              "carry keeps the word only because it copied those sectors "
+              "into FAT_SEG; a word kept without the copy is that defect",
+              got="fatw0 %04X, pin %s" % (after.fatw0, {None: "not checked",
+                  True: "matches the disk", False: "DIFFERS from the disk"}[carried]),
+              want="FFFF, or the pin holding the disk's FAT at fatw0")
         invariants(after, "shed, after", 0)
 
 
@@ -352,7 +377,11 @@ def main():
     # build the plain kernel into build/, then the knob kernel over the top of
     # it, then the plain one back in a `finally` - FOUR full builds for two
     # phases, and the shared tree carrying a FATWNONE kernel in between.
-    plain_t = os88build.tree()
+    # ONE plain tree for both plain arms (SOAK-SPEED technique 11): each ask
+    # is a make over the tree, and the shed phase's heapfrag disk is one more
+    # target of the same kernel rather than a second tree
+    plain_t = os88build.tree(targets=("os8088-360.img", "apps360.img",
+                                      "heapfrag360.img"))
     plain = kernel_md5(plain_t.dir)
     phase("default", (), maxheap=1, expect_move=False, tree=plain_t)
 
@@ -367,7 +396,7 @@ def main():
           "FATWNONE rows below would be asserting nothing",
           got="md5 %s twice" % knob[:12], want="two different kernels")
     phase("FATWNONE=1", ("FATW_NONE",), maxheap=0, expect_move=True, tree=knob_t)
-    phase_shed()
+    phase_shed(plain_t)
     return done("fatwpin")
 
 

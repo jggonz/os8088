@@ -93,7 +93,13 @@ class Chains:
         while c >= 0 and c > lo and k < depth:
             k += 1
             if src[c + best_l] == src[pos + best_l]:      # cheap reject
+                # the common prefix, 16 bytes a slice compare and then a
+                # byte at a time - the same `l` the byte loop alone finds,
+                # at a fraction of the interpreter's cost on a long match
                 l = 0
+                while l + 16 <= limit and \
+                        src[c + l:c + l + 16] == src[pos + l:pos + l + 16]:
+                    l += 16
                 while l < limit and src[c + l] == src[pos + l]:
                     l += 1
                 if l > best_l:
@@ -372,11 +378,15 @@ def lzb_compress(src, depth=128):
         # bracket ends can win: try every length up to LZB_DENSE exactly, then
         # one candidate per bracket above it.
         if ml:
+            # _lzb_cost(k, off) with the offset's part hoisted out of the loop
+            base = 9 + _gamma_bits((off >> 8) + 2) - 2
+            best = dp[i]
             for k in _lzb_lengths(ml):
-                c = _lzb_cost(k, off) + dp[i + k]
-                if c < dp[i]:
-                    dp[i] = c
+                c = base + 2 * k.bit_length() + dp[i + k]
+                if c < best:
+                    best = c
                     nxt[i] = (k, off)
+            dp[i] = best
     ch.insert_to(n)
     w = _BitOut()
     w.buf += b"\0\0"                     # the T word, filled in by _cut
@@ -733,9 +743,19 @@ def _selfcheck(paths):
     marg = 0
     for f in files:
         d = open(f, "rb").read()
+        # the FILE is not the image any more (SPEC.md 20.13): a shipped
+        # package or driver is already packed, and packing a packed stream
+        # again round-trips nothing the build does - and refuses outright
+        # once the packed file is over 64KB (SHEET.O88 with its parts)
+        if f.endswith(".o88"):
+            import os88pkg
+            d = os88pkg.image_unwrap(d)
+        elif f.endswith(".drv"):
+            d = cz_unwrap(d)
         raw += len(d)
+        zs = {}
         for fmt in (LZ4, LZB):
-            z = compress(d, fmt)
+            z = zs[fmt] = compress(d, fmt)  # second compress of the same bytes
             tot[fmt] += len(z)
             try:
                 if decompress(z, fmt, len(d)) != d:
@@ -744,8 +764,8 @@ def _selfcheck(paths):
             except Exception as e:
                 print(f"os88lz: {NAMES[fmt]} {f}: {e}")
                 bad += 1
-        for fmt in (LZ4, LZB):
-            marg = max(marg, in_place_margin(d, fmt))
+        for fmt in (LZ4, LZB):          # the streams just checked, not a
+            marg = max(marg, in_place_margin(d, fmt, packed=zs[fmt]))
     if marg:
         print(f"os88lz: A STREAM NEEDED {marg} BYTES OF IN-PLACE MARGIN - the "
               "tail (SPEC.md 20.13.7) is meant to make that zero")

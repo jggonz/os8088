@@ -17,7 +17,7 @@ preserves a register it was supposed to ANSWER in.
 
 THE `57 ` ROW IS RED ON PURPOSE and named as such: AH=57h is not implemented
 here, because OSAPI_FILE_FIND's record carries no timestamp (SPEC.md 19.7.1),
-so answering it is a kernel ABI change rather than a DOS-box one.  It is in
+so answering it is a kernel ABI change rather than a DOS one.  It is in
 the table as a KNOWN row rather than left out, so that implementing it fails
 this gate and makes somebody update the expectation - which is the opposite of
 a gap nobody is holding.
@@ -57,7 +57,7 @@ WANT = {
     "3Ex": "......../0",   "0Eb": "......../0",
 }
 
-# ...and the one row this box deliberately does not match.  The value is OURS,
+# ...and the one row this DOS deliberately does not match.  The value is OURS,
 # with what DOS says beside it, so that the day AH=57h is implemented this row
 # fails and is updated rather than quietly passing on the old answer.
 KNOWN = {"57 ": ("......../1", ".CD...../0",
@@ -93,7 +93,7 @@ def main():
         if not os.path.exists(os.path.join(ROOT, os88build.at(p))):
             fail("%s is missing - `make build/dosregs360.img` builds it" % p)
 
-    with os88ui.boot(SYS, apps=GATE) as ui:
+    with os88ui.boot(SYS, apps=GATE, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/REGS.COM"):
             fail("double-clicking REGS.COM opened no window")
@@ -103,7 +103,7 @@ def main():
             seen["rows"] = m.screen() or []
             return any("REGS READY" in r for r in seen["rows"])
         try:                            # a GUEST-time budget
-            os88marty.until(m, ready, "REGS.COM to finish", poll=0.3,
+            os88marty.until(m, ready, "REGS.COM to finish", poll=0.05,
                             limit=180.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
@@ -145,7 +145,7 @@ def main():
                        "answers - the gap is CLOSED and this row's "
                        "expectation is stale (%s)" % (label, theirs, why))
         elif got[label] != ours:
-            bad.append("%r answered %s; this box answers %s and IBM DOS 3.30 "
+            bad.append("%r answered %s; this DOS answers %s and IBM DOS 3.30 "
                        "answers %s (%s)" % (label, got[label], ours, theirs, why))
 
     for k in sorted(DEV):

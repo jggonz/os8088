@@ -213,8 +213,11 @@ OPEN = {"word": "WELCOME.DOC", "frotz": "ZOPS.Z5"}.get(APP, DOC[0])
 
 S = lambda n: m.sym(n)
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
-    M.settle(m)
+with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE,
+        boot=False) as m:
+    m.run()
+    M.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    M.no_saver(m)
     mo = Mouse(marty=m)
     print(f"== {MACHINE} : {APP}'s thumb drag (SPEC.md 13.10.7) ==")
 

@@ -60,7 +60,7 @@ hd_pkg:
     mov al, HDT_PKG             ; forwarded by the page callbacks' own thunk,
     jmp hd_cp_thunk             ; which loads the tool and banks the registers
 .no:                            ; across the load. Still no sector: the tool's
-    xor ax, ax                  ; verbs are the Install window's, never hd_raw
+    xor ax, ax                  ; verbs are the install engine's, never hd_raw
     stc                         ; (OSAPI_DRV_CALL's own refusal: AX = 0)
     ret
 

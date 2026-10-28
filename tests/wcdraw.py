@@ -22,7 +22,7 @@ Wired, SPEC.md 113.5.2), --cga the 5150's CGA. All
 three take the 360KB system disk and network360.img, whose root carries
 WIRECHAT.O88.
 
-TWO ASSERTIONS, mrdraw's:
+THREE ASSERTIONS, mrdraw's two and one of WireChat's own:
 
   ceilings  each gesture's calls under a number a FULL repaint (~400 on a
             VGA window) or a whole-pane pass would blow straight through:
@@ -31,7 +31,12 @@ TWO ASSERTIONS, mrdraw's:
             repaint is forced (the status popup up and down) and captured
             again, and the two must be IDENTICAL: the caches are only sound
             if drawing through them arrives at the picture a paint from
-            nothing does
+            nothing does. Taken with the window QUIET (the activity lamp
+            out, nothing dirty) and never across a turn of the header's
+            minute, the two things that change the picture on their own
+  grow      no gesture restores the grow box (OSAPI_WM_GROW): nothing a
+            flush draws reaches the corner, and the restore is a white fill
+            and three frames there - the corner flashing on every change
 
 --theme N picks the Theme menu's item N first (wirechat.asm's TH_*); the VGA
 leg's default is Blue. --vga --theme 0 is Wired on a colour display: its
@@ -128,6 +133,13 @@ CELLS = {"pixel": 0x20, "hline": 0x28, "vline": 0x30, "fill": 0x38,
          "frame": 0x40, "gray": 0x48, "xor": 0x58, "blit4": 0x182,
          "blit1": 0x320, "text": 0x1E5, "textx": 0x68, "icon": 0x39D,
          "blitp": 0x3A4, "scroll": 0x19C}
+# OSAPI_WM_GROW: the grow box's restore, which is the kernel drawing a white
+# fill and three frames in the content's corner. Counted APART from the
+# drawing calls and held at ZERO for every gesture: nothing a flush draws
+# reaches the corner (the status bar stops WC_GROWC cells short of it), so
+# a restore after one is the corner flashing on every change - SPEC.md
+# 113.5.1, Note Pad's 27.2.1
+GROW = 0xFD
 
 SYMS = []
 
@@ -141,7 +153,9 @@ def body(t, old):
 
 
 def cell_addrs():
-    return {M.KERNEL_SEG * 16 + off: name for name, off in CELLS.items()}
+    d = {M.KERNEL_SEG * 16 + off: name for name, off in CELLS.items()}
+    d[M.KERNEL_SEG * 16 + GROW] = "grow"
+    return d
 
 
 def caller(m, rec):
@@ -173,19 +187,24 @@ def measure(ui, p, what, act, settle):
                     on_hit=caller) as tr:
         act()
         M.guest_sleep(ui.m, settle)
-    by, fn, n_ = {}, {}, 0
+    by, fn, n_, gr = {}, {}, 0, 0
     for h in tr.hits:
         ss, sp, ip, cs = h.get("hit") or (0, 0, 0, 0)
         if cs != p.seg:
             continue
-        n_ += 1
         n = addrs.get(h["addr"], "?")
+        if n == "grow":
+            gr += 1
+            continue
+        n_ += 1
         by[n] = by.get(n, 0) + 1
         f = nearest(ip)
         fn[f] = fn.get(f, 0) + 1
-    row = {"gesture": what, "calls": n_, "by": by, "callers": fn}
-    print("%-26s %4d  %s" % (what, n_, " ".join(
-        "%s %d" % kv for kv in sorted(by.items()))), flush=True)
+    row = {"gesture": what, "calls": n_, "by": by, "callers": fn,
+           "grow": gr}
+    print("%-26s %4d  %s%s" % (what, n_, " ".join(
+        "%s %d" % kv for kv in sorted(by.items())),
+        "  GROW %d" % gr if gr else ""), flush=True)
     if fn:
         print("      " + ", ".join("%s %d" % kv for kv in sorted(
             fn.items(), key=lambda kv: -kv[1])[:10]), flush=True)
@@ -204,6 +223,45 @@ def content(ui, p):
     for y in range(y0, y0 + ch):
         out += px[(y * w + x0) * 3:(y * w + x0 + cw) * 3]
     return cw, ch, bytes(out)
+
+
+def quiet(ui, p):
+    """Nothing of the window's own clock is about to draw: the activity
+    lamp out and no region dirty. The identity's two pictures are only
+    comparable when neither was taken across a change the package made on
+    its own - the lamp going out a second or two after a reply."""
+    M.until(ui.m, lambda _: p.b("wc_act") == 0 and p.w("wc_dirty") == 0,
+            "the window quiet", poll=.1, limit=20)
+
+
+def clk(ui):
+    """(minute, second) of the kernel's clock - OSAPI_CLK_GET's fields, the
+    ones the header's second band shows the minute of."""
+    return (ui.m.read(ui.m.sym("clk_min"), 1)[0],
+            ui.m.read(ui.m.sym("clk_sec"), 1)[0])
+
+
+def minute_clear(ui, p, margin=30):
+    """The header's clock is redrawn when the minute turns, and a turn
+    between the identity's two captures is a picture that LEGITIMATELY
+    changed. The identity takes a few guest seconds, so it starts only with
+    `margin` of them left in the minute: past that, wait for the turn and
+    for the header to show it (wc_clkm is the minute it drew)."""
+    if p.w("wc_hy2") == 0:
+        # a one-band header (under 200 rows: the CGA) has no clock in the
+        # content - the menu bar's is the time - so there is no turn to fear
+        quiet(ui, p)
+        return None
+    mn, sec = clk(ui)
+    if sec >= 60 - margin:
+        print("clock at :%02d, waiting for the minute to turn" % sec,
+              flush=True)
+        M.until(ui.m, lambda _: clk(ui)[0] != mn, "the minute turned",
+                poll=.2, limit=90)
+    M.until(ui.m, lambda _: p.b("wc_clkm") == clk(ui)[0],
+            "the header's clock current", poll=.2, limit=20)
+    quiet(ui, p)
+    return clk(ui)[0]
 
 
 def park(mo, ui):
@@ -305,6 +363,10 @@ def main():
         rows.append(measure(ui, p, "Notifications: a press",
                             lambda: mo.click(*notify_xy(p)), 1.0))
         for r in rows:
+            if r["grow"]:
+                print("FAIL %s: %d grow-box restores, none drew there"
+                      % (r["gesture"], r["grow"]), flush=True)
+                ok = False
             c = CEIL.get(r["gesture"])
             if c is not None and r["calls"] > c:
                 print("FAIL %s: %d drawing calls, ceiling %d"
@@ -312,6 +374,7 @@ def main():
                 ok = False
         # THE IDENTITY: the picture the caches drew, against a repaint
         park(mo, ui)
+        mn = minute_clear(ui, p)
         before = content(ui, p)
         rect = [int.from_bytes(p.data("wc_brects", 8)[i:i + 2], "little")
                 for i in (0, 2, 4, 6)]
@@ -323,7 +386,16 @@ def main():
                 poll=.1, limit=10)
         park(mo, ui)
         M.guest_sleep(ui.m, 1.5)
+        quiet(ui, p)
         after = content(ui, p)
+        if mn is not None and clk(ui)[0] != mn:
+            # minute_clear's margin is what makes this impossible; if it
+            # ever happens the margin is wrong, and the gate says so rather
+            # than blaming the slots
+            print("FAIL identity: the minute turned between the captures "
+                  "(%d -> %d) - minute_clear's margin is too small"
+                  % (mn, clk(ui)[0]), flush=True)
+            ok = False
         cw, ch, ap_ = before
         bad = [(i // 3 % cw, i // 3 // cw) for i in range(0, len(ap_), 3)
                if ap_[i:i + 3] != after[2][i:i + 3]]

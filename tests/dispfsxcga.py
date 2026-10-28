@@ -5,7 +5,7 @@
     make && python3 tests/dispfsxcga.py
 
 Reported off an XT with a CGA and a Hercules in it, the **Hercules primary**:
-open the DOS box on the Hercules, Alt+Enter into full screen, come back out,
+open DOS on the Hercules, Alt+Enter into full screen, come back out,
 and *"the second cga display turns green and flickers and has corrupted gfx"*.
 
 **IT IS ONE BYTE AND IT IS THE ROM'S.** 40:65h is the BIOS's shadow of the CRT
@@ -162,7 +162,7 @@ def main():
                      "about the CGA arm of vid_unblank_kind"
                      % (CGA, a.machine, cards[CGA]["type"]))
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
 
         # --- the extended desktop, which is what puts the CGA in mode 6 ----
@@ -172,7 +172,7 @@ def main():
         if m.read(S("vid_ndisp"), 1)[0] != 2:
             sys.exit("dispfsxcga: the Control Panel did not turn Extend on")
 
-        # --- the DOS box, on the PRIMARY (the display the bracket runs on) --
+        # --- DOS, on the PRIMARY (the display the bracket runs on) --
         dispcp.open_drive(m, mo, S, settle, "A", card=0)
         w = dispcp.win_list(m, S)
         if not w:
@@ -196,13 +196,13 @@ def main():
         # --- into full screen ----------------------------------------------
         m.alt("Enter")
         if wait_bracket(m, 0) == FSX_NONE:          # FSXM_TEXT80 is 0
-            sys.exit("dispfsxcga: Alt+Enter did not take the DOS box full "
+            sys.exit("dispfsxcga: Alt+Enter did not take DOS full "
                      "screen ([fsx_cur]=%02X) - nothing below is testable"
                      % bracket(m))
         inside_shadow = shadow(m)
         print("  leg 1: full screen up, 40:65h=%02X" % inside_shadow)
 
-        # [fsx_cur] is set by fsx_mode, which is the FIRST thing the box does
+        # [fsx_cur] is set by fsx_mode, which is the FIRST thing DOS does
         # inside the bracket - so the poll loop that reads the leaving key is
         # not running yet, and a key pressed here is pressed at nothing. Let
         # the fullscreen screen come up first.

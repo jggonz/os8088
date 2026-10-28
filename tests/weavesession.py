@@ -214,7 +214,7 @@ def session(machine, card, vidw, vidh, png_dir=None):
     S = os88sym.linear
     want_val, want_max = _oracle_meter()
     cells = _oracle_meter_cells(card)
-    with os88marty.launch("build/os8088-360.img", apps=DISK,
+    with weavesmoke.booted("build/os8088-360.img", apps=DISK,
                           machine=machine) as m:
         try:
             _drive(machine, card, vidw, S, m, want_val, want_max, cells,
@@ -246,19 +246,25 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
     # The field is the first <input> in UISTREAM order, so Tab arms it - which
     # is cheaper and far more robust than finding its rect: WEAVE-SPEC 6.7
     # makes Tab the platform's own way to the next field.
+    # EVERY WAIT BELOW IS `ui_done`, NOT `settle`: a callback only enqueues
+    # into the VM's ring and posts a wake, and the WVM drains it in
+    # OSAPI_WM_ONWAKE slices ON THE UI TASK (WEAVE-SPEC 1.2) - so the UI task
+    # asleep with nothing queued and no wake pending IS the bytecode done and
+    # its paint finished. FORM has no <canvas>, so no worker draws. Every read
+    # is video memory (`m.vram`), which needs no glass settle.
     mo.click(cx + 4, cy + 4)            # the card, to give the window focus
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     m.key("Tab")                        # MartyKey names are W3C
                                         # KeyboardEvent.code, not ASCII
     m.type_text(NAME)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     ink_typed = _lit(m.vram(card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
 
     _press_button(m, mo, S, cx, cy, card, "Greet")
     _press_button(m, mo, S, cx, cy, card, "Greet")
     _press_check(m, mo, S, cx, cy, card)
     _press_button(m, mo, S, cx, cy, card, "Greet")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
     fill, interior = _meter_fill(m, card, S, slot, vidw, cells)
     want = (interior * want_val) // want_max
@@ -276,7 +282,7 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
     _press_button(m, mo, S, cx, cy, card, "Reset")
     os88marty.until(m, lambda mm: set(dispcp.win_list(mm, S)) - wins,
                     "alert()'s window to open", limit=20.0)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     alert = sorted(set(dispcp.win_list(m, S)) - wins)
     if check(len(alert) == 1, "%s: alert() raised a window" % machine,
              "8.2: alert() returns immediately and the dialog is a window of "
@@ -294,7 +300,7 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
         os88marty.until(m,
                         lambda mm: not (set(dispcp.win_list(mm, S)) - wins),
                         "the alert to close", limit=20.0)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
     # --- 3: the callback ran, so the card CHANGED again --------------------
     ink_end = _lit(m.vram(card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
@@ -332,7 +338,7 @@ def _press_button(m, mo, S, cx, cy, card, label):
     """
     x, y = _find_label(m, card, cx, cy, label)
     mo.click(x, y)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
 
 def _press_check(m, mo, S, cx, cy, card):

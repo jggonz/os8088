@@ -164,13 +164,13 @@ class Probe:
 def open_clone(m, mo):
     """Disk > Clone Disk..., and settle."""
     mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_ICLONE * ITEM_H)
-    M.settle(m)
+    M.ui_done(m)                        # every read after is guest state
 
 
 def open_wimg(m, mo):
     """Disk > Write Image..., and settle."""
     mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_IWIMG * ITEM_H)
-    M.settle(m)
+    M.ui_done(m)
 
 
 def toast(m):
@@ -222,11 +222,22 @@ def disks_agree(m, tag):
     return serial(db)
 
 
-with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
-    M.settle(m)
+def key(m, name, limit=60.0):
+    """The key TAKEN (it is in flight in MartyPC's keyboard model for a few
+    ms, so a bare ui_done can end before it lands), then the UI finished with
+    it: every assertion after one is guest state or a disk flush"""
+    M.key_taken(m, name)
+    M.ui_done(m, "the %s key to be handled" % name, limit=limit)
+
+
+with M.launch(SRC, apps=APPS, machine=MACHINE, boot=False) as m:
+    m.run()                             # the boot gate on STATE
+    M.kernel_up(m)
+    M.no_saver(m)
     mo = Mouse(marty=m)
     p = Probe(m)
-    dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="A")
+    dispcp.open_drive(m, mo, lambda n: m.sym(n),
+                      lambda mm, **k: M.ui_done(mm), letter="A")
     print("== %s : Clone Disk... (SPEC.md 18.99/22.21) ==" % MACHINE)
 
     # --- 1. cross drive ------------------------------------------------------
@@ -246,8 +257,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
           got=(p.job(CL_SRC), p.job(CL_TGT)), want=(0, 1))
 
     t0 = time.time()
-    m.key("Enter")
-    M.settle(m, limit=180)
+    key(m, "Enter", limit=180.0)
     print("   cross-drive clone: %.1fs of wall clock" % (time.time() - t0))
     check(p.edit() == 0, "the mode ended", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...the claim went back (SPEC.md 22.21.2)", "",
@@ -257,32 +267,27 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
 
     # --- 2. same drive, and the disk was never swapped -----------------------
     open_clone(m, mo)
-    m.key("Space")                          # B: -> IMG ...
-    M.settle(m)
+    key(m, "Space")                          # B: -> IMG ...
     check(p.job(CL_TGT) == CLE_IMG, "Space offers the image file",
           "IMG is one more stop on the target ring rather than a mode "
           "(SPEC.md 22.21.5), so it sits between the last drive and the wrap",
           got=p.job(CL_TGT), want=CLE_IMG)
-    m.key("Space")                          # ... -> A:, wrapping
-    M.settle(m)
+    key(m, "Space")                          # ... -> A:, wrapping
     check(p.job(CL_TGT) == 0, "...and then walks round to A:",
           "clo_nextvol wraps past the free rows (SPEC.md 22.21.1)",
           got=p.job(CL_TGT), want=0)
-    m.key("Enter")
-    M.settle(m)
+    key(m, "Enter")
     check(p.job(CL_STEP) == CLS_SRC, "a same-drive clone asks for the source",
           "the two drives being one is what makes the swap prompts necessary",
           got=p.job(CL_STEP), want=CLS_SRC)
 
     t0 = time.time()
-    m.key("Enter")                          # the read pass
-    M.settle(m, limit=180)
+    key(m, "Enter", limit=180.0)       # the read pass
     print("   read pass: %.1fs of wall clock" % (time.time() - t0))
     check(p.job(CL_STEP) == CLS_TGT, "...then for the target", "",
           got=p.job(CL_STEP), want=CLS_TGT)
 
-    m.key("Enter")                          # ...and it was never swapped
-    M.settle(m, limit=120)
+    key(m, "Enter", limit=120.0)       # ...and it was never swapped
     check(p.job(CL_STEP) == CLS_SAME,
           "the identity check FIRES on an un-swapped disk",
           "SPEC.md 18.99.3: the boot sector in the drive is the one just read, "
@@ -310,8 +315,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     before = os.path.join(OUT, "before.img")
     m.flush(0, before)
     t0 = time.time()
-    m.key("KeyY")
-    M.settle(m, limit=180)
+    key(m, "KeyY", limit=180.0)
     print("   write pass: %.1fs of wall clock" % (time.time() - t0))
     check(p.edit() == 0, "Y completes the clone", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...and gives the claim back", "",
@@ -338,8 +342,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     # --- 4. Esc, at a prompt -------------------------------------------------
     open_clone(m, mo)
     check(p.edit() == 7, "a second clone arms", "", got=p.edit(), want=7)
-    m.key("Escape")
-    M.settle(m)
+    key(m, "Escape")
     check(p.edit() == 0, "Esc ends it where it stands", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...the claim goes back", "", got=p.claim(), want=0)
     check(p.image() == 0, "...and DISKOPS.DRV with it",
@@ -381,8 +384,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     # that is the point: cancelling must return the machine to exactly what
     # opening the dialog left.
     was = toast(m)
-    m.key("Escape")
-    M.settle(m)
+    key(m, "Escape")
     check(word(m, m.sym("fdlg_win")) == 0, "Esc closes it",
           "SPEC.md 38.2: fdlg_close, and [fdlg_win] is the modal latch",
           got=word(m, m.sym("fdlg_win")), want=0)

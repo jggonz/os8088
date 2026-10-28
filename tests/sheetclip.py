@@ -44,7 +44,8 @@ from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
 WORK = "build/sheetclip"
-DISK = "build/sheetclip.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetclip.img")        # the run's tree, so a soak lane finds it
 NAME = "CLIP.SLK"
 TITLES = ["File", "Edit", "Formula", "Format", "Data", "Options", "Macro",
           "Sheets", "Help"]
@@ -58,8 +59,7 @@ def main():
     open(src, "wb").write(F.write_sylk({(0, 0): 30.0, (1, 0): 80.0,
                                         (2, 0): 50.0}))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL",
-                    "build/MACRO.OVL", src], check=True,
+                    "360", "build/sheet.o88", src], check=True,
                    stdout=subprocess.DEVNULL)
     S = os88sym.linear
     got = {}

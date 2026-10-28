@@ -50,6 +50,11 @@ import dispcp                                               # noqa: E402
 TITLE_H = 18
 UI_ABW, UI_ABG, UI_ABTNY, UI_ABH = 72, 12, 46, 13   # apps/os88ui.inc
 S = os88sym.linear
+# NOTHING HERE READS THE GLASS - every assertion is guest memory (window
+# records, a package's bss, `m.vram`'s framebuffer bytes, files) - so the
+# wait after an action is the UI task finishing (os88marty.ui_done), and that
+# is also the `settle` the dispcp verbs take.
+_done = lambda m, card=None, gate=None: os88marty.ui_done(m)
 FAIL = []
 
 
@@ -126,7 +131,7 @@ def wait_launch(m, before, tries=30):
         new = set(dispcp.win_list(m, S)) - before
         if new:
             return sorted(new)[-1]
-        os88marty.settle(m)
+        os88marty.ui_done(m)
     return None
 
 
@@ -179,16 +184,16 @@ def main(argv):
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the first act is open_drive
         mo = os88mouse.Mouse(marty=m)
 
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, _done, "B")
         d = dispcp.win_list(m, S)[-1]
         dx, dy = dispcp.win_rect(m, S, d)[:2]
 
         # --- 1. a CLEAN Note Pad closes as it always did ---------------------
         before = set(dispcp.win_list(m, S))
-        dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "NOTEPAD.O88")
+        dispcp.open_named(m, mo, S, _done, dx, dy, "NOTEPAD.O88")
         np = wait_launch(m, before)
         if np is None:
             check(False, "Note Pad did not launch")
@@ -197,22 +202,22 @@ def main(argv):
         nx, ny, nw, nh = dispcp.win_rect(m, S, np)
         print("  Note Pad at (%d,%d) %dx%d" % (nx, ny, nw, nh))
         mo.click(nx + 9, ny + 9)                       # the close box
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         check(np not in dispcp.win_list(m, S),
               "a clean note closes with no alert")
         check(alert_slot(m, (d,)) is None, "...and no alert was raised")
 
         # --- 2. a DIRTY one refuses and asks ---------------------------------
         before = set(dispcp.win_list(m, S))
-        dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "NOTEPAD.O88")
+        dispcp.open_named(m, mo, S, _done, dx, dy, "NOTEPAD.O88")
         np = wait_launch(m, before)
         known = (d, np)
         nx, ny, nw, nh = dispcp.win_rect(m, S, np)
         mo.click(nx + 60, ny + TITLE_H + 12)
         type_text(m, "HELLO")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.click(nx + 9, ny + 9)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         ask = alert_slot(m, known)
         check(np in dispcp.win_list(m, S), "a dirty note REFUSES to close")
         check(ask is not None, "...and an alert is up")
@@ -230,12 +235,12 @@ def main(argv):
         # something to be on top of: wm_zord's last entry is the front window.
         mo.drag(nx + nw // 2, ny + TITLE_H // 2, nx + nw // 2 - 30,
                 ny + TITLE_H // 2)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         zn = m.read(S("wm_zn"), 1)[0]
         check(m.read(S("wm_zord"), zn)[zn - 1] == np,
               "the note is in front of its own alert")
         mo.click(nx + 9 - 30, ny + 9)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         zn = m.read(S("wm_zn"), 1)[0]
         check(alert_slot(m, known) == ask, "a second close click raises no "
                                            "NEW alert")
@@ -246,19 +251,19 @@ def main(argv):
         # --- 4. Cancel: still open, and still closable -----------------------
         bx, by = btn_xy(m, ask, 2, 3)
         mo.click(bx, by)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         check(alert_slot(m, known) is None, "Cancel takes the alert down")
         check(np in dispcp.win_list(m, S), "...and leaves the note open")
 
         # --- 5. dismissing it is the same answer, through its own W_ONCLOSE --
         mo.click(nx + 9, ny + 9)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         ask = alert_slot(m, known)
         check(ask is not None, "it asks again - [np_asking] was cleared")
         if ask is not None:
             ax, ay = dispcp.win_rect(m, S, ask)[:2]
             mo.click(ax + 9, ay + 9)                   # the alert's close box
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             check(alert_slot(m, known) is None,
                   "its own close box dismisses it")
             check(np in dispcp.win_list(m, S),
@@ -270,21 +275,21 @@ def main(argv):
         # that on the way out over whatever the user already had is the thing
         # this leg proves does not happen.
         mo.click(nx + 9, ny + 9)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         ask = alert_slot(m, known)
         if ask is None:
             check(False, "no alert for the Save leg")
             return report()
         bx, by = btn_xy(m, ask, 0, 3)
         mo.click(bx, by)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         check(alert_slot(m, known) is None, "Save takes the alert down")
         check(u16(m.read(S("fdlg_win"), 2)) != 0,
               "...and an UNNAMED note gets the Save As dialog")
         check(np in dispcp.win_list(m, S),
               "...with the note still open behind it")
         m.key("Enter")                      # the dialog's default button, on
-        os88marty.settle(m)                 # the name Note Pad handed it
+        os88marty.ui_done(m)                 # the name Note Pad handed it
         check(u16(m.read(S("fdlg_win"), 2)) == 0, "the dialog commits")
         check(np not in dispcp.win_list(m, S),
               "...and the SAVE AS was a quit (SPEC.md 27.15.2)")
@@ -293,24 +298,24 @@ def main(argv):
         # Ctrl-S makes the note a file; the alert's Save then writes it with no
         # dialog at all, which is the other half of [np_named].
         before = set(dispcp.win_list(m, S))
-        dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "NOTEPAD.O88")
+        dispcp.open_named(m, mo, S, _done, dx, dy, "NOTEPAD.O88")
         np = wait_launch(m, before)
         known = (d, np)
         nx, ny, nw, nh = dispcp.win_rect(m, S, np)
         mo.click(nx + 60, ny + TITLE_H + 12)
         type_text(m, "WORLD")
         m.ctrl("KeyS")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         type_text(m, " AGAIN")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.click(nx + 9, ny + 9)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         ask = alert_slot(m, known)
         check(ask is not None, "a named note that changed again still asks")
         if ask is not None:
             bx, by = btn_xy(m, ask, 0, 3)
             mo.click(bx, by)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             check(u16(m.read(S("fdlg_win"), 2)) == 0,
                   "a NAMED note needs no dialog")
             check(np not in dispcp.win_list(m, S), "...and it closes")

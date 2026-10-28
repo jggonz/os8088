@@ -279,8 +279,18 @@ def boots():
     """The headline: two machines reach a desktop at the same time."""
     print("two instances, booted:")
     t0 = time.time()
-    with M.launch(IMG, apps=APPS, machine=MACHINE, label="conc-boot-a") as a, \
-            M.launch(IMG, apps=APPS, machine=MACHINE, label="conc-boot-b") as b:
+    with M.launch(IMG, apps=APPS, machine=MACHINE, boot=False,
+                  label="conc-boot-a") as a, \
+            M.launch(IMG, apps=APPS, machine=MACHINE, boot=False,
+                     label="conc-boot-b") as b:
+        # BOTH RUNNING BEFORE EITHER IS WAITED ON - the pair boots at the
+        # same time, which a settle per launch never did (b started once a
+        # had finished). Gated on state; the glass is then a frame behind.
+        a.run()
+        b.run()
+        for m in (a, b):
+            M.kernel_up(m)
+            M.guest_sleep(m, 0.05)
         took = time.time() - t0
         for name, m in (("a", a), ("b", b)):
             check(M.desktop_up(M._Screen(m)),

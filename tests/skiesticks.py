@@ -124,14 +124,14 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        # (open_game's `up` is the boot gate, and it turns the saver off
+        # itself, after `up`, which is where it sticks - SO:)
         # THE SAVER GOES OFF: this row moves the BIOS tick count by half an
         # hour (leg B), and the saver's idle test is ticks since the last
         # input - so the jump can raise it between the poke and the `f`, the
         # `f` wakes it and is swallowed, and the leg reads "Fly did nothing".
         # One soak lane in nine did exactly that, in 17.9s against ~33.
         # os88ui.boot does this by default; this row boots by hand
-        os88marty.no_saver(m)
         slot, seg, base = open_game(m)
         r = Bss(m, seg, base)
         if r.byte("cs_want") == 0:      # CSB_NONE - the Fly button is greyed

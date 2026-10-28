@@ -166,9 +166,8 @@ def main(argv):
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy,
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
-        mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        mo.dblclick(x, y)               # ...whose own wait is the load
+        os88marty.ui_done(m, "Paint to open")
         os88marty.no_saver(m)
         seg = dispapps.pkg_seg(m, 0)[1]
 
@@ -179,14 +178,14 @@ def main(argv):
         cx0, cy0 = _bss(m, seg, "pt_cx0"), _bss(m, seg, "pt_cy0")
         for (ox, oy) in ((30, 20), (150, 130)):
             mo.to(cx0 + ox, cy0 + oy)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             mo._edge(True)
             for _ in range(6):
                 m.mouse(dx=5, dy=4, l=True)
                 m.advance(frames=3)
                 m.run()
             mo._edge(False)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
 
         w0, h0 = _bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")
         ink = _ink(m, seg)
@@ -207,7 +206,7 @@ def main(argv):
             if box:
                 by += E["PT_SZ_DY"]
             mo.click(bxm, by)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             if _bss(m, seg, "pt_fbox", 1) != box + 1:
                 return False
             for ch in str(value):
@@ -215,9 +214,7 @@ def main(argv):
                 m.advance(frames=2)
                 m.run()
             m.key("Enter")
-            m.advance(frames=900)
-            m.run()
-            os88marty.settle(m)
+            os88marty.ui_done(m, "the resize")
             return True
 
         def check(what, before):
@@ -245,9 +242,16 @@ def main(argv):
                                ("width UP (backward)",   0, w0 - 16),
                                ("height DOWN (forward)", 1, h0 - 60),
                                ("height UP (backward)",  1, h0 - 8)):
+            was = (_bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch"))
             if not apply(box, val):
                 fails.append("SETUP: the %s box did not take focus" % nm)
                 break
+            # the wait after Enter is the UI going idle now, not 900 blind
+            # frames - so a resize that has not happened yet must not pass as
+            # one that kept every pixel
+            if (_bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")) == was:
+                fails.append("SETUP: %s left the canvas %dx%d - no resize "
+                             "was under test" % ((nm,) + was))
             ink = check(nm, ink)
 
         # --- and both at once, which is what the two passes are for ---------
@@ -257,16 +261,14 @@ def main(argv):
         gx, gy = px + pww - 5, py + pwh - 5     # the grow box, inside the
                                                 # bottom-right corner
         mo.to(gx, gy)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo._edge(True)
         for _ in range(10):
             m.mouse(dx=6, dy=-4, l=True)     # wider AND shorter, together
             m.advance(frames=3)
             m.run()
         mo._edge(False)
-        m.advance(frames=900)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m, "the grow box's resize")
         wa, ha = _bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")
         if wa == wb and ha == hb:
             print("   grow box drag moved neither axis (%dx%d) - the MIXED "

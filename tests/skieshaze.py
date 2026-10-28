@@ -97,7 +97,8 @@ def main(argv):
     def off(n):
         return dispapps.bss_off("skies", n)
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)
@@ -172,7 +173,13 @@ def main(argv):
             m.pause()
             poke("cs_roll", (int(roll * DEG) & 0xFFFF).to_bytes(2, "little"))
             poke("cs_pitch", (int(pitch * DEG) & 0xFFFF).to_bytes(2, "little"))
-            m.bp_exec(lin + mp["cs_render"], lin + mp["cs_hzfill"])
+            # (cs_hzfill is armed only until it is SEEN once: the check is
+            # that it runs at all, and a stop per split row was most of the
+            # row's time)
+            if seen["fill"]:
+                m.bp_exec(lin + mp["cs_render"])
+            else:
+                m.bp_exec(lin + mp["cs_render"], lin + mp["cs_hzfill"])
             n = 0
             while True:
                 m.run()
@@ -181,6 +188,7 @@ def main(argv):
                 ip = m.status()["ip"]
                 if ip == mp["cs_hzfill"]:
                     seen["fill"] += 1
+                    m.bp_exec(lin + mp["cs_render"])
                     continue
                 n += 1
                 if n == 3:                  # a frame drawn at the pose, and

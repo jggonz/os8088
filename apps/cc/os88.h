@@ -133,7 +133,7 @@
  *     caller of one has to test CF.
  *   OSAPI_DSK_CACHE                       commands the kernel's directory
  *     read-ahead window to a width, for a program about to claim the whole
- *     arena. No C package does that - the DOS box is NASM - so it is listed
+ *     arena. No C package does that - DOS.O88 is NASM - so it is listed
  *     rather than wrapped; adding it is a thunk of a dozen lines.
  *   OSAPI_SYS_SNAPSHOT / CLAIM_SNAPSHOT / SYS_KB   buffer layouts that the
  *     kernel renumbers; for the Task Manager, not for applications.
@@ -1260,7 +1260,16 @@ unsigned os88_mem_total_kb(void);
  *
  * The kernel will not move it while a WORKER of yours could be running in it
  * (SPEC.md 66.5), so a package with no worker gets this for free and one with
- * a worker gets it whenever that worker is parked. */
+ * a worker gets it whenever that worker is parked.
+ *
+ * YOUR REGION moves too (crt0 declares it), and your C needs telling of that
+ * only if your ASSEMBLY banked your own DS somewhere - a VM that hands a
+ * callback its segment back, say. Then add
+ *
+ *     %define CC_ONMOVE_REGION         (beside CC_HAS_ONMOVE)
+ *
+ * and os88_onmove() is called with the region's two bases as well (SPEC.md
+ * 73.14.2.1, WEAVE-SPEC 1.2.6's wvm_ourds). */
 int os88_mem_movable(unsigned seg, int on);   /* on: 1 = movable, 0 = pin.
                                                * 0 = the kernel took it,
                                                * -1 = refused. ALWAYS take
@@ -1331,6 +1340,25 @@ int os88_task_restartable(int on);            /* on: 1 = you may restart my
  * There is deliberately no os88_part_lin(): an OP_XMS part's base is a 32-bit
  * linear address and this dialect has no `long` (docs/C-TOOLCHAIN.md). */
 unsigned os88_part_seg(int i);       /* base segment; 0 = it is not here */
+/* THE CARVE CAN MOVE, if you say so (SPEC.md 73.14.2.1). The eager parts live
+ * in ONE claim, and os88_part_seg's answer is arithmetic on its base - so a
+ * copy of it you keep (a ROM's segment in a machine record, a table's) is
+ * stale the moment the compactor moves that claim, and by default it never
+ * does: the carve is pinned. To let it move, say in your shim
+ *
+ *     %define CC_HAS_ONMOVE
+ *     %define CC_ONMOVE_PARTS
+ *
+ * and make os88_onmove() RE-READ every part segment you keep, on EVERY call:
+ *
+ *     void os88_onmove(unsigned was, unsigned now)
+ *     {   rom_seg = os88_part_seg(0);  ...your other claims, by was/now... }
+ *
+ * crt0 declares the carve after os88_main() returns, and when it moves calls
+ * os88_onmove with the CARVE's two bases, op_seg already answering for the new
+ * one - so `was`/`now` match none of your own claims and the re-read is what
+ * does the work. os88_part_seg touches no heap and is legal inside the
+ * handler. An eager overlay in the carve is re-stamped by crt0 first. */
 int os88_part_fetch(int i);          /* an OP_LAZY part, now. 0 ok, -1 refused */
 void os88_part_drop(int i);          /* ...and give it back */
 int os88_part_lazyok(int i);         /* would it fit right now? (SPEC.md 47) */

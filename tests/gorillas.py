@@ -173,23 +173,26 @@ def wait(m, pred, what):
 
 
 def key(m, name):
-    m.key(name)
-    M.pace(m, .15)
-    # An active worker takes the drawing lock every tick; waiting for a
-    # sustained idle UI can accidentally wait for the entire shot to end.
+    # Ends when the guest has TAKEN the key (os88marty.key_taken) rather
+    # than after a fixed pace(.15), 0.675 guest s a key and ~260 keys an arm.
+    # In the window ui_task dispatches it and then sleeps; the gfx lock is
+    # not asked, because every screen of this package draws on the tick
+    # (setup's included, ~5 ms under the lock each one), so `ui_done`'s idle
+    # lock was never reliably seen and cost up to its cap a key. Fullscreen
+    # reads keys in the package's own loop: there the read is the signal and
+    # a few frames follow it for the loop to act on what it read.
+    # [gr_fs] clears before the kernel's fsx_restore has finished, and that
+    # DRAINS the BIOS key ring - so a windowed key waits for the bracket to
+    # be disarmed ([fsx_task] = 0xFF, after the drain) or it can be eaten.
     p = m.gorillas_probe
-    computer = (p.b('state') == 0 and p.b('players') == 1
-                and p.b('turn') == 1 and not p.b('paused'))
-    if not p.b('fs') and p.b('state') not in (1, 4, 7) and not computer:
-        # BOUNDED IN GUEST TIME. Every screen of this package draws on the
-        # tick - setup's included, ~5 ms under the lock each one - so
-        # ui_done's "idle for 60 ms AND a whole tick" is never true of the
-        # guest and ended only when the host's polls happened to miss the
-        # blips: 0.1 to 67 guest seconds a key, by luck, and the row 534 s
-        # against the 88 it was measured at. A keystroke is handled inside
-        # one pass, so half a guest second covers it on any host, and an
-        # earlier idle still ends it sooner.
-        M.ui_done(m, cap=.5)
+    if p.b('fs'):
+        M.key_taken(m, name, ui=False, tail=.05)
+    else:
+        fsx = getattr(m, '_gor_fsx', None) or m.sym('fsx_task')
+        m._gor_fsx = fsx
+        M.until(m, lambda _: m.read(fsx, 1)[0] == 0xFF,
+                'the fullscreen bracket to be over', poll=.005, limit=30)
+        M.key_taken(m, name)
 
 
 def setup(m, points=5, music='', guide=''):
@@ -283,11 +286,10 @@ def capture(m, p, path):
 
 def arm(tag, off, disk, out):
     with os88ui.boot(os88build.at('build/os8088-360.img'), apps=str(disk),
-                     machine=ARMS[tag]) as ui:
+                     machine=ARMS[tag], quick=True) as ui:
         m = ui.m
         ui.open_drive('B')
         ui.open('GORILLAS.O88')
-        M.pace(m, .3)
         p = Probe(ui, off)
         m.gorillas_probe = p
         setup(m)
@@ -407,7 +409,7 @@ def arm(tag, off, disk, out):
             else:
                 m.alt('Enter', hold=.15)
             wait(m, lambda: p.b('fs') == 0, 'fullscreen exit')
-            ui.settle()
+            M.ui_done(m)
             assert p.b('cga') == 0
             assert p.data('scene', 16384) == scene
             key(m, 'KeyP')

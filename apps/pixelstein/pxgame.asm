@@ -442,6 +442,8 @@ px_entry:
     cmp word [px_shseg], 0
     je .noraster                    ; no shadow: no backend to set up either
     call px_r_setup_win             ; the window's own backend, from the start
+    mov ax, px_shmv                 ; ...and the shadow MOVES on the desktop
+    call px_shdecl                  ; (SPEC.md 97.9.2): px_go_fsx pins it
 .noraster:
     call px_auto_start              ; ...and the rung a window starts at on
                                     ; this tier (97.8): px_apply runs here,
@@ -618,6 +620,33 @@ px_hsegs:
 ; [wm_pkgs], which pins us. Above 1MB it is never called at all: a pool block
 ; moves with no proc, its selectors unchanged (KERN-MEGA-PLAN 14.38.3)
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; px_shmv - THE SHADOW's relocation proc (SPEC.md 66.2, 97.9.2): its 16 KB is
+; a claim of the program's own, and two words name it - [px_shseg], and
+; [px_dseg] while the window's backend composes into it (a bracket's Mode X
+; points px_dseg at VRAM instead, and the shadow is pinned for the bracket
+; anyway). No compiled scaler or patched immediate carries it: the driver
+; and the draw routines take DS/ES from [px_dseg] at each pass. It moves only
+; with the worker PARKED in OSAPI_TASK_ALIVE, outside its compose (a running
+; worker pins the package's claims, SPEC.md 66.3), and every UI-task reader
+; loads the word where it uses it and claims nothing while it holds it
+; -----------------------------------------------------------------------------
+px_shmv:
+    cmp bx, [px_dseg]
+    jne .sh
+    mov [px_dseg], dx
+.sh:
+    mov [px_shseg], dx
+    ret
+
+; px_shdecl - AX = px_shmv, or 0 to pin the shadow. Preserves all but flags
+px_shdecl:
+    push dx
+    mov dx, [px_shseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    ret
+
 px_reloc:
     inc byte [px_moved]             ; the gate reads this: a proc declared and
                                     ; never called is 66.2's own failure

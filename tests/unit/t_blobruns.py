@@ -84,7 +84,14 @@ IMAGES = {
                           "blob"),
     "os8088.img":     (2, "3 + 5 at 8, and 21 is the last size that is two "
                           "calls here - the next one is not free"),
+    # the 128KB machine's (SPEC.md 24.5.7): kern_small's disks put KERNEL.SYS
+    # at LBA 12, two sectors earlier than the 360KB and 720KB disks above
+    "small360.img":   (2, "6 + 7 at 13: the data area starts at LBA 12"),
+    "small720.img":   (2, "6 + 7 at 13, the 360KB small disk's shape"),
 }
+# ...whose kernel is build/smallk's, so its stage-2 read is priced off that
+# kernel's own packed layout and not the big one's
+SMALL = {"small360.img", "small720.img"}
 
 
 def boot2_secs():
@@ -153,8 +160,8 @@ def runs(path, nsec):
 KERNEL_SEG = 0x0060
 
 
-def kz():
-    path = os.path.join(ROOT, "build", "kernel.kz.json")
+def kz(sub=""):
+    path = os.path.join(ROOT, "build", sub, "kernel.kz.json")
     if not os.path.exists(path):
         return None                         # NOKZIP: the plain read
     import json
@@ -206,6 +213,8 @@ STAGE2 = {
     "os8088-720.img": 11,
     "os8088-120.img": 8,
     "os8088.img": 7,
+    "small360.img": 7,      # kern_small, 108 sectors packed
+    "small720.img": 7,
 }
 
 
@@ -244,7 +253,7 @@ def main():
                         "(SPEC.md 15.3.8.5, 2.9.12)"
                         % (img, len(r), cap, why, r[-1][3]))
 
-        k = kz()
+        k = kz("smallk" if img in SMALL else "")
         n2 = stage2_calls(start, spt, heads, nsec, k)
         if n2 is not None:
             cap2 = STAGE2[img]
@@ -263,7 +272,7 @@ def main():
     for f in fail:
         print("FAIL: %s" % f)
     print("blobruns: %s" % ("FAILED" if fail else
-                            "the blob is %s int 13h call(s), 360/720/1.2/1.44"
+                            "the blob is %s int 13h call(s), 360/720/1.2/1.44/small360/small720"
                             % "/".join(str(n) for n in seen)))
     return 1 if fail else 0
 

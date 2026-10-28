@@ -31,7 +31,7 @@ instructive: **"THE REGION MOVED UP BY 5,120 BYTES" never happened.**
 
 §1's two middle rows are two different *launches*. Opening `A:/APPS/DOS.O88` by
 hand leaves the heap floor clear, so the bottom-up carve lands at 0x2540;
-reaching the box through `DOSHELLO.COM`'s association means **drive B: has been
+reaching DOS through `DOSHELLO.COM`'s association means **drive B: has been
 opened first**, and its 5,120-byte FAT window is already standing at 0x2480, so
 the carve is claimed above it at 0x2680. The equality of the two 5,120s is not
 a coincidence — it is the *same cache*, counted once as the gap between the two
@@ -83,7 +83,7 @@ forced to `OSAPI_MEM_CLAIM` at `apps/os88partsbody.inc:656`:
 > `build/kdos360.img` below is `build/os8088-360.img` today, and the snippet
 > in §5 runs unchanged with that one substitution.
 
-| moment | the box's region | interior hole | the arena |
+| moment | DOS's region | interior hole | the arena |
 |---|---|---:|---:|
 | `A:/APPS/DOS.O88` open, **nothing run** | 0x2540 | **0** | — |
 | a `.COM` has been run | 0x2680 | **5,120** | 450,560 |
@@ -124,7 +124,7 @@ region may move. Its refusals, each checked:
 
 | refusal | evidence it does not apply |
 |---|---|
-| `I_TASK != 0xFF` without a restart declaration | the box spawns no worker at all — `apps/dos/dos.asm` has no `OSAPI_TASK_SPAWN`, no `OSAPI_DRV_TASK`, no `inst_restart` |
+| `I_TASK != 0xFF` without a restart declaration | DOS spawns no worker at all — `apps/dos/dos.asm` has no `OSAPI_TASK_SPAWN`, no `OSAPI_DRV_TASK`, no `inst_restart` |
 | `cmp bx, [ld_base]` — the loader is standing in it | `[ld_base]` reads **0x0000** after the launch, read off the machine |
 | `mem_in_nest` — a callback frame is in the region | the pass runs at `ui_task` step 0, where the asker's callback has returned; this is exactly what §5's design rests on |
 | the feature compiled out | `OS88_COMPACT` is defined (§2 above) |
@@ -152,7 +152,7 @@ that would have helped.
    was that two sweeps in the wrong ORDER wall each other in, so the order is
    the first thing to check.
 3. **The arena claim's retry path.** `mem_claim`'s refusal is compact → shed →
-   retry (SPEC.md §66.4), and the box claims with `DOS_PG_FLOOR` =
+   retry (SPEC.md §66.4), and DOS claims with `DOS_PG_FLOOR` =
    `MEM_PG_HIGH`. The `MEM_P_WSAVE` cache (6,144, rank `MEM_PG_TRIV`) sits
    directly above the region before the run and is gone after, so a shed
    happened. 6,144 and 5,120 are not the same number, but a failed first
@@ -211,7 +211,7 @@ with os88ui.boot("build/kdos360.img", apps="build/doscom360.img",
 ## 6. Traps
 
 * **Opening a `.COM` RUNS IT.** `ui.open("DOSHELLO.COM")` on B: launches the
-  box *and* the program through the association, so a dump taken after it is
+  DOS *and* the program through the association, so a dump taken after it is
   already past the Run path. To see the *before* state, open
   `A:/APPS/DOS.O88` directly — that is the one difference between the first
   and second rows of §1's table and it cost an hour of reading the same

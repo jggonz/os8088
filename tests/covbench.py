@@ -54,7 +54,9 @@ def main():
     syms, _ = pkg_syms("tests/covbench/covbench.asm", ("apps/", "tests/"),
                        a.define)
     bad = []
-    with os88ui.boot(a.sys, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.sys, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         w = ui.path("B:/COVBENCH.O88")
         rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE, geom.WIN_SIZE)

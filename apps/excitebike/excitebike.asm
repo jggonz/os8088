@@ -407,6 +407,7 @@ VAR xb_rep,1                    ; repeats of the last course so far (the qualify
 VAR xb_attract,1
 VAR xb_nai,1
 VAR xb_paused,1
+VAR xb_enth,1                    ; an Enter was taken and is still held: its repeats are dropped (flow.inc xb_rdkey)
 VAR xb_result,1
 VAR xb_end,1                     ; the frame loop's exit request: result + 1
 VAR xb_rank,1

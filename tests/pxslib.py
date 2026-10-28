@@ -153,14 +153,14 @@ def find(m, S=None, guest=0.0, title=TITLE):
     if isinstance(m, os88marty.Marty):
         try:
             os88marty.until(m, lambda mm: _window(mm, S, title) is not None,
-                            what, poll=0.3, guest=guest)
+                            what, poll=0.05, guest=guest)
         except os88marty.MartyError as e:
             print("   pxslib: %s" % str(e).split("\n")[0])  # budget or a stop,
             return None                                     # and it says which
     else:
         import os88qemu                                     # noqa: E402
         os88qemu.acted(m, lambda: _window(m, S, title) is not None,
-                       secs=guest, what=what, poll=0.3)
+                       secs=guest, what=what, poll=0.05)
     return _window(m, S, title)
 
 
@@ -473,6 +473,64 @@ class Game:
         self.force_all_poke()
         self.m.run()
 
+    # --- STILL GLASS: frames counted by where the worker IS, not by a count --
+    # wait_frames counts px_frames from a mark read at the poke, so a frame
+    # already IN FLIGHT when the poke lands answers the wait: the poke's own
+    # frame is still to come, and a picture read then is the pose before it
+    # - or TORN, half one frame's present and half the next. With the sim
+    # running a guard's step owes a frame every few seconds, which is how
+    # tests/pxs160.py read a windowed Textured Full view (7,425 RGB bytes)
+    # and a C160 one (666) as "differing" one run in two while the renderer
+    # drew both pictures correctly. These two stop the guest at the worker's
+    # own frame boundaries instead, so a poke lands BETWEEN frames and a
+    # read sees a present that FINISHED with nothing owed.
+    OWED = ("px_pend", "px_force", "px_dirty", "px_cardd", "px_mapd",
+            "px_hudd", "px_mapfa", "px_demoreq")     # px_frame_begin's reads
+
+    def owed(self):
+        """The px_frame_begin flags still set (and a floor still to load)."""
+        out = [n for n in self.OWED if self.byte(n)]
+        if self.byte("px_levnext") != 0xFF:
+            out.append("px_levnext")
+        return out
+
+    def hold(self, limit=60.0):
+        """Stop the guest at the entry to px_frame_begin - BETWEEN two frames,
+        nothing composing or presenting - and leave it STOPPED, breakpoints
+        cleared. Pokes made now are the next frame's whole input."""
+        m = self.m
+        m.bp_exec(self.addr("px_frame_begin"))
+        m.run()
+        r = m.wait_stop(limit)
+        m.bp_exec()
+        if r is None:
+            raise os88marty.MartyError("px_frame_begin was not reached in %.0f "
+                                       "guest-budget seconds" % limit)
+
+    def drawn(self, limit=60.0):
+        """From a STOPPED guest with work poked: run frame by frame (a stop at
+        every px_frame_end, which is after the present) until a frame ends
+        with NOTHING owed - so every poke has been taken by a frame that is
+        now wholly on the glass, and nothing has been owed since. Left
+        STOPPED there, breakpoints cleared: the glass is that frame, and a
+        poke made now is the next frame's (px_frame_end, then the loop's
+        steps, then px_frame_begin). Answers the frames it took."""
+        m = self.m
+        m.bp_exec(self.addr("px_frame_end"))
+        n = 0
+        try:
+            while True:
+                m.run()
+                if m.wait_stop(limit) is None:
+                    raise os88marty.MartyError(
+                        "no frame ended in %.0f guest-budget seconds (owed: %s)"
+                        % (limit, ", ".join(self.owed()) or "nothing"))
+                n += 1
+                if not self.owed():
+                    return n
+        finally:
+            m.bp_exec()
+
     def ticks(self):
         """The BIOS tick count (0040:006C), the clock the steps are owed by."""
         return int.from_bytes(self.m.read(0x46C, 4), "little")
@@ -532,14 +590,14 @@ class Game:
             f0 = self.f0 if self.f0 is not None else self.word("px_frames")
         self.f0 = None
         os88marty.until(self.m, lambda mm: (self.word("px_frames") - f0) & 0xFFFF >= n,
-                        "%d frame(s)" % n, poll=0.2, limit=limit, guest=guest)
+                        "%d frame(s)" % n, poll=0.05, limit=limit, guest=guest)
         return self.word("px_frames")
 
     def enter_fsx(self, limit=60.0):
         self.m.type_text("f")
         os88marty.until(self.m, lambda mm: self.byte("px_inbr") == 1 and
                         self.byte("px_back") not in WINDOWED, "the bracket",
-                        poll=0.3, limit=limit)
+                        poll=0.05, limit=limit)
 
     def leave_fsx(self, limit=60.0):
         """Esc, then PAST the exit path: px_inbr clears at the top of it, and
@@ -553,7 +611,7 @@ class Game:
         n = self.word("px_brn")
         self.m.key("Escape")
         os88marty.until(self.m, lambda mm: self.word("px_brn") != n,
-                        "the desktop", poll=0.3, limit=limit)
+                        "the desktop", poll=0.05, limit=limit)
 
     # --- reading the frame back ---------------------------------------------
     def columns(self):
@@ -917,7 +975,11 @@ def open_game(m, apps_root=True, S=None, play=True):
     were written against. tests/pxsstate.py passes play=False: the states
     are its subject."""
     S = S or os88sym.linear
-    os88marty.settle(m)
+    if int(m.status().get("cycles", 1)) == 0:   # launch(boot=False): the boot
+        m.run()                     # gate is the kernel's STATE, not a
+        os88marty.kernel_up(m)      # picture settle (every next step is a
+    else:                           # verb or a guest read)
+        os88marty.settle(m)
     os88marty.no_saver(m)           # every PIXELSTEIN row drives for guest
                                     # MINUTES with no key: the idle saver
                                     # came up mid-row (px_hidden set by an
@@ -927,7 +989,7 @@ def open_game(m, apps_root=True, S=None, play=True):
                                folder=None if apps_root else "GAMES")
     g = Game(m, win, seg)
     os88marty.until(m, lambda mm: g.word("px_frames") >= 1, "the first frame",
-                    poll=0.3, limit=120.0)
+                    poll=0.05, limit=120.0)
     ui.mo.to(4, 4)                          # the pointer parked off the window
     if play:
         g.start()

@@ -51,7 +51,7 @@ DN_S_SYNSENT equ 5                  ; **THE INBOUND DIRECTION** (SPEC.md
                                     ; and the CLIENT is what has not
 
 ; --- a LISTENER (SPEC.md 96.26.8) --------------------------------------------
-; One per port the box was told to forward. A listener is not a flow: it
+; One per port DOS was told to forward. A listener is not a flow: it
 ; outlives every connection accepted through it (netpkg.inc's own note on why
 ; NETV_LISTEN and NETV_ACCEPT are separate verbs), so it has a row of its own.
 DN_NLSN     equ 4                   ; ports at once. Four is a server plus the
@@ -77,7 +77,7 @@ DN_LSN_PORT0 equ 0xC000
 ; --- a remembered name (SPEC.md 96.26.2) -------------------------------------
 DN_N_USED   equ 0                   ; byte: 1 = taken
 DN_N_NAME   equ 1                   ; DN_NAMEMAX, NUL-terminated
-DN_NAMEMAX  equ 48                  ; longer than any host this box will meet,
+DN_NAMEMAX  equ 48                  ; longer than any host this DOS will meet,
                                     ; and NET_HOSTMAX bounds the far side
 DN_N_SIZE   equ DN_N_NAME + DN_NAMEMAX
 

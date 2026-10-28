@@ -124,6 +124,9 @@ tk_fsx_main:
     call OSAPI_FSX_WAIT
     jmp .loop
 .out:
+%ifndef APP_SMALL
+    call tk_shfree                  ; THE SHADOW GOES WITH THE BRACKET
+%endif                              ; (SPEC.md 85.3.5.2)
     ret
 
 ; -----------------------------------------------------------------------------

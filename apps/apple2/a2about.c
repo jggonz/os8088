@@ -185,6 +185,16 @@ static int ovl_about_geom(void)
     a2_abt_y = a2_goy + (a2_gh - A2_STATH - a2_abt_h) / 2;
     if (a2_abt_y < a2_goy)
         a2_abt_y = a2_goy;
+    /* THE BUTTONS ARE ovl_about_draw's and a paint that does not reach the
+     * card does not redraw them, so they move with the origin here exactly as
+     * a2_pan_reorg moves them - or a drag followed by a partial expose would
+     * leave them at the old place with the origin already brought up to date */
+    a2_cfm_bx[0] += a2_gox - a2_abt_ox;
+    a2_cfm_bx[1] += a2_gox - a2_abt_ox;
+    a2_cfm_by += a2_goy - a2_abt_oy;
+    a2_abt_ox = a2_gox;                     /* the origin the rects are
+                                             * about (a2_pan_reorg) */
+    a2_abt_oy = a2_goy;
     /* ...AND AT 2x IT IS SNAPPED TO THE APPLE LINE GRID, top and height both,
      * so that "the lines it covers" and "the lines it covers WHOLLY" are the
      * same set. Without it the card's last screen row is half of an Apple
@@ -359,8 +369,37 @@ static int ovl_about_paint(void *win)
  * THE CLOSE IS DRAWN AS DAMAGE AND NOT AS A REPAINT: exactly the scan lines
  * the panel held are forced, and the flush draws them. A full repaint here
  * would be ~200 ms on the target for a rectangle 122 pixels tall. */
+/* a2_pan_reorg - RESIDENT, and the card's half of SPEC.md 11.96.12.0.
+ *
+ * A DRAGGED WINDOW IS REPLAYED: its pixels - the card's among them - land at
+ * the new place and no paint runs, so the rects ovl_about_geom and
+ * ovl_about_draw banked still name the OLD place. A click there would miss
+ * Yes and answer No, and the close would hand the wrong rect on as damage.
+ * So they move by however far the content origin went since they were laid
+ * out, and a2_geom refreshes the band geometry the close's a2_blank_rect
+ * measures them against. It draws nothing. */
+static void a2_pan_reorg(void *win)
+{
+    static struct os88_pt org;
+    int dx, dy;
+
+    os88_wm_content(win, &org);
+    dx = org.x - a2_abt_ox;
+    dy = org.y - a2_abt_oy;
+    a2_abt_ox = org.x;
+    a2_abt_oy = org.y;
+    a2_abt_x += dx;
+    a2_abt_y += dy;
+    a2_cfm_bx[0] += dx;
+    a2_cfm_bx[1] += dx;
+    a2_cfm_by += dy;
+    (void)a2_geom(win);
+}
+
 static void a2_panel_close(void *win, int yes)
 {
+    a2_pan_reorg(win);                      /* the rect it hands on as damage
+                                             * is where the card IS */
     /* THE THREE STATEMENTS ARE a2_about_gone's (a2scr.c), because every route
      * out of the panel owes exactly them: the latch down, the hold range
      * emptied (l0 > l1, which is what the flush tests) and the panel's rect

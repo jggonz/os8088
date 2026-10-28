@@ -40,14 +40,19 @@ turns that into a red suite would be reporting on the box instead of on the
 tree.
 """
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, done                                # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BUILD = os.path.join(ROOT, "build")
+# A PRIVATE directory, not build/: the row only needs its own copy of the
+# generated header, the host binary and two scratch bundles, and rewriting
+# build/lmfoldc.h would make the next `make` rebuild LOOM in a shared tree.
+BUILD = tempfile.mkdtemp(prefix="t_lmpack-")
 HOST = os.path.join(BUILD, "lmhost")
 
 SEC = {1: "UISTREAM", 2: "PROPS", 3: "CODE", 4: "ATOMS", 5: "FXCODE",
@@ -119,7 +124,6 @@ def main():
         done("t_lmpack")
         return
 
-    os.makedirs(BUILD, exist_ok=True)
     r = run(["python3", "tools/weavesim.py", "--emit-foldtab-c"])
     if not check(r.returncode == 0, "weavesim --emit-foldtab-c runs",
                  why="the fold table is GENERATED from tools/htmsim.py's one "
@@ -130,7 +134,7 @@ def main():
     with open(os.path.join(BUILD, "lmfoldc.h"), "w") as f:
         f.write(r.stdout)
 
-    r = run([cc, "-std=c89", "-O1", "-w", "-I", "build", "-o", HOST,
+    r = run([cc, "-std=c89", "-O1", "-w", "-I", BUILD, "-o", HOST,
              "apps/loom/hosttest/lmhost.c"])
     if not check(r.returncode == 0, "the LOOM compilers build with the host cc",
                  why="lmhost.c #includes the SHIPPING sources; a C error here "
@@ -197,4 +201,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        shutil.rmtree(BUILD, ignore_errors=True)

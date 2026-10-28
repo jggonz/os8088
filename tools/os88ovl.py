@@ -50,7 +50,7 @@ def main():
     ap.add_argument('--trim', required=True,
                     help='the resident image to write (what os88pkg.py takes)')
     ap.add_argument('--second', metavar='OVL',
-                    help='a SECOND module after the first (SHEET\'s MACRO.OVL, '
+                    help='a SECOND module after the first (SHEET\'s macro module, '
                          'SPEC.md 81.94): it starts two bytes before the one '
                          'occurrence of --mark, its dispatcher\'s short jump '
                          'being those two')

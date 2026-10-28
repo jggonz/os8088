@@ -90,10 +90,20 @@ STANDARD = {
 # recipe that loses its `--spc` fails here rather than shipping a fuller disk.
 CLUSTERS = {
     "os8088-360.img": (1, 3),   # 512-byte clusters: 11KB free -> 22KB
+    # kern_small's FAT window is TWO sectors (DSK_FAT_SECS, SPEC.md 2.5.3) and
+    # 18.2 rule 10 refuses a floppy FAT larger than it, so the small 720KB disk
+    # takes 2KB clusters to bring its FAT to 2 sectors (`--fatcap 2`, SPEC.md
+    # 24.5.7). A standard 720KB disk is one kern_small cannot mount at all
+    "small720.img": (4, 2),
 }
 
 SYSTEM_IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img",
                  "os8088-360.img"]
+# ...and the 128KB machine's (SPEC.md 24.5.7), shipped since 2026-10-25. They
+# are system disks with a DIFFERENT kernel - build/smallk's - and no
+# BOOTHD.SYS, kern_small having no hard-disk install, so they are read against
+# their own kernel and the installer's check does not apply.
+SMALL_SYSTEM_IMAGES = ["small360.img", "small720.img"]
 DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
                "media360.img",
                # ...and the CATEGORY DISKS (SPEC.md 24.6), which are 360KB
@@ -103,7 +113,10 @@ DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
                # about a bootable volume - have nothing to say about them and
                # do not list them.
                "office360.img", "network360.img", "games360.img",
-               "emu360.img"]
+               "emu360.img", "util360.img",
+               # ...and the 720KB geometry's second apps disk (SPEC.md 24.7),
+               # a DATA image for the same reason
+               "more720.img"]
 
 
 class Vol:
@@ -340,7 +353,9 @@ def main():
     kernel = read(os.path.join(build, "kernel.sys"))
     vbr = read(os.path.join(build, "boothd.bin"))
     seen = mp3s = 0
+    small = read(os.path.join(build, "smallk", "kernel.sys"))
     for img, is_system in ([(i, True) for i in SYSTEM_IMAGES] +
+                           [(i, "small") for i in SMALL_SYSTEM_IMAGES] +
                            [(i, False) for i in DATA_IMAGES]):
         p = os.path.join(build, img)
         if not os.path.exists(p):
@@ -350,12 +365,14 @@ def main():
         v = Vol(read(p), img)
         check_geometry(v)
         check_chains(v)
-        check_attrs(v, is_system)
+        check_attrs(v, bool(is_system))
         mp3s += check_mp3(v)
-        if is_system:
+        if is_system == "small":
+            check_kernel(v, small)
+        elif is_system:
             check_kernel(v, kernel)
             check_hdboot(v, vbr)
-    check(seen == len(SYSTEM_IMAGES) + len(DATA_IMAGES),
+    check(seen == len(SYSTEM_IMAGES) + len(SMALL_SYSTEM_IMAGES) + len(DATA_IMAGES),
           "every shipped image was read", got=seen)
     print("t_image: %d images, kernel %d bytes (%d sectors), %d .MP3 plain"
           % (seen, len(kernel), (len(kernel) + 511) // 512, mp3s))

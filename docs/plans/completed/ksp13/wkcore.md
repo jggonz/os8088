@@ -170,7 +170,7 @@ which is the label and not a byte. Cells: untouched (offsets are ABI).
 ## WANTS THE OWNER
 
 1. **HIBER.DRV's claim 6 KB -> 7 KB, for TAKEN 1's -266 resident.** A
-   hibernate, a wake and `OSAPI_DRV_SUSPEND`'s two halves (the DOS box) load
+   hibernate, a wake and `OSAPI_DRV_SUSPEND`'s two halves (DOS) load
    HIBER.DRV for the call and drop it after, so nothing is resident - but each
    of those now needs 1 KB more free heap at that moment, and on a heap with
    between 6 and 7 KB free it refuses where it did not. The image is 5,819

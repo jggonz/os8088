@@ -64,12 +64,13 @@ def check(ok, what):
 
 def compare(g, lv, label, px, py, head, n, rung, lowres, size):
     """The guest's arrays and shadow against the host's cast and render of
-    (px, py, head): the checks, with the guest paused only to read."""
-    g.m.pause()
+    (px, py, head): the checks. The guest is STOPPED where drawn() left it,
+    at px_frame_end after a frame that ended with nothing owed, so the
+    arrays and the shadow are one finished frame's and nothing is composing
+    under the read (it stays stopped: the next poke is the next frame's)."""
     st = g.state()
     cols = g.columns()
     sh = g.shadow()
-    g.m.run()
     backend = BACKEND[st["back"]]
     st["sprok"] = g.byte("px_sprok")
     check(cols["cols"] == n and st["rung"] == pxslib.PXR[rung] and
@@ -123,15 +124,47 @@ def step_to(lv, px, py, head, k):
     return nx, ny
 
 
+def pose_poke(g, px, py, head):
+    """The eye, its cell mark and NOTHING LATCHED that would move it (a
+    typematic arrow left in the BIOS buffer becomes a tap, SPEC.md 97.8) -
+    pxslib's scene() and turn() without their pause and run. The guest must
+    be STOPPED between frames (hold, or where drawn() left it)."""
+    g.eye_poke(px, py, head)
+    g.pcell_poke(px, py)
+    for k in ("px_tap", "px_kturn", "px_kfwd", "px_kstr"):
+        g.poke_byte(k, 0)
+
+
+def pin_poke(g, rung, lowres, size):
+    """pxslib's pin() without its pause and run: the pick, taken by px_apply
+    at the next px_frame_begin (px_pend), exactly as the menu's is."""
+    g.poke_byte("px_detail", pxslib.PXD[rung])
+    g.poke_byte("px_res", 1 if lowres else 0)
+    g.poke_byte("px_sizeix", pxslib.SIZES.index(size))
+    g.poke_byte("px_pend", 1)
+
+
 def one(g, lv, scene, rung, lowres, turns, size=64, steps=0):
-    g.pin(rung=rung, lowres=lowres, size=size)
-    px, py, head = g.scene(scene)
-    g.wait_frames(1)
-    g.force()                       # a second whole frame (a full repaint,
-    g.wait_frames(1)                # px_force_all's memory), so the settings
-                                    # were in force for all of this one
+    """EVERY POKE IS MADE WITH THE GUEST STOPPED BETWEEN TWO FRAMES AND
+    EVERY READ AFTER A FRAME THAT ENDED WITH NOTHING OWED (pxslib's
+    hold/drawn, tests/pxs160.py's fix). The first cut counted px_frames from
+    a mark taken at the poke and read the shadow after the count moved: a
+    frame already in flight answered the wait, the frame the poke owed then
+    started, and the read paused it MID-COMPOSE - caught in the generated
+    Textured column code with scene C's sprites erased and not yet redrawn
+    (00 where the host has the sprite), about one run in five, on whichever
+    scene and backend the race happened to land."""
     n = size // 2 if lowres else size
     label = "%s %s %s %d" % (scene.upper(), rung, "low" if lowres else "full", size)
+    px, py, head = pxslib.scene_at(scene)
+    g.hold()
+    pin_poke(g, rung, lowres, size)
+    pose_poke(g, px, py, head)
+    g.force_all_poke()
+    g.drawn()
+    g.force_all_poke()              # a second whole frame (a full repaint,
+    g.drawn()                       # px_force_all's memory), so the settings
+                                    # were in force for all of this one
     compare(g, lv, label, px, py, head, n, rung, lowres, size)
     # ...and then INCREMENTALLY: `turns` turn frames, each composed against
     # the memory of the one before with nothing forced, and the shadow must
@@ -140,8 +173,9 @@ def one(g, lv, scene, rung, lowres, turns, size=64, steps=0):
     # one two back - the same rule, read off the page the flip showed
     for k in range(1, turns + 1):
         head = (head + pxslib.PX_TURN) & 0xFFF
-        g.turn(px, py, head)
-        g.wait_frames(1)
+        pose_poke(g, px, py, head)
+        g.poke_byte("px_dirty", 1)
+        g.drawn()
     if turns:
         compare(g, lv, label + " +%d turns" % turns, px, py, head, n, rung, lowres, size)
     # ...and then FORWARD: `steps` steps along the heading the turns left,
@@ -149,11 +183,13 @@ def one(g, lv, scene, rung, lowres, turns, size=64, steps=0):
     # the Textured skip's sixth byte (px_lh) exists for
     for k in range(1, steps + 1):
         sx, sy = step_to(lv, px, py, head, k)
-        g.turn(sx, sy, head)
-        g.wait_frames(1)
+        pose_poke(g, sx, sy, head)
+        g.poke_byte("px_dirty", 1)
+        g.drawn()
     if steps:
         sx, sy = step_to(lv, px, py, head, steps)
         compare(g, lv, label + " +%d steps" % steps, sx, sy, head, n, rung, lowres, size)
+    g.m.run()
 
 
 def door_sweep(g, lv, rung):
@@ -164,18 +200,14 @@ def door_sweep(g, lv, rung):
         for lowres in (True, False):
             size = 48
             n = size // 2 if lowres else size
-            g.pin(rung=rung, lowres=lowres, size=size)
-            g.m.pause()
-            g._mark()
-            g.eye_poke(ex, ey, 0)
-            g.pcell_poke(ex, ey)
+            g.hold()                # (one()'s rule: poke between frames,
+            pin_poke(g, rung, lowres, size)     # read after one that ended
+            pose_poke(g, ex, ey, 0)             # with nothing owed)
             g.door_poke(0, pos=pos, state=2, timer=0)
             g.force_all_poke()
-            g.m.run()
-            g.wait_frames(1)
+            g.drawn()
             compare(g, lv, "door 0 at %d %s %s %d" % (pos, rung, "low" if lowres else "full", size),
                     ex, ey, 0, n, rung, lowres, size)
-    g.m.pause()
     g.door_poke(0, pos=0, state=0, timer=0)
     g.m.run()
 
@@ -193,7 +225,7 @@ def main():
     a = ap.parse_args()
     os.chdir(ROOT)
     lv = pxslevel.parse(os.path.join(pxslevel.DEFAULT_DIR, "e1m1.txt"))
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine, boot=False) as m:
         g = pxslib.open_game(m)
         print("   PXSTEIN.O88: window %d, part 0 at %04x, handoff %s"
               % (g.win, g.seg, g.handoff()))

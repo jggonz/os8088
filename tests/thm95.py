@@ -131,14 +131,14 @@ def leg_a(eq):
     print("A: VGA, Windows booted")
     t = os88build.tree("THEMEDARK=3").apply()
     with os88ui.boot(t.img("os8088-360.img"), apps=t.img("apps360.img"),
-                     machine=VGA) as ui:
+                     machine=VGA, quick=True) as ui:
         m, mo = ui.m, ui.mo
         if kind(m) != THM_WIN or not hooked(m, eq, "A boot"):
             fail("A: the THEMEDARK=3 kernel did not boot Windows (kind %d)"
                  % kind(m))
             return
         disk = ui.open_drive("B")
-        os88marty.settle(m)
+        ui.still()
         a_pixels(m, disk, "default")
         a_pixels95(m, ui)
         a_cost(m, ui, disk)
@@ -188,7 +188,7 @@ def a_pixels95(m, ui):
     was = m.read(bits, 1)[0]
     m.write(bits, bytes([was | 2]))
     a = ui.open_drive("A")
-    os88marty.settle(m)
+    ui.still()
     a_pixels(m, a, "95")
     ui.close(a)
     m.write(bits, bytes([was]))
@@ -214,13 +214,13 @@ def a_cost(m, ui, disk):
             mm.breakpoints([{"type": "exec", "addr": ent}])
 
     a = ui.open_drive("A")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     with os88marty.bp_trace(m, ent, regs=True, on_hit=hit):
         for _ in range(2):
             ui.raise_window(disk)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             ui.raise_window(a)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
     ui.close(a)
     if not spans:
         fail("A cost: no title bar was traced")
@@ -257,7 +257,7 @@ def a_menus(m, mo, ui, disk):
     # A CLICK OFF THE MENU GOES NO FURTHER: aimed at the Disk window's title,
     # which a delivered press would raise
     a = ui.open_drive("A")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     top0 = geom.zorder(m, ui.sym)[-1]
     disk = ui._refresh(disk)
     mo.click(14, 9)
@@ -268,7 +268,7 @@ def a_menus(m, mo, ui, disk):
         fail("A menus: no part of the Disk title bar is clear of the menu")
     mo.click(tx, disk.y + 8)
     wait(m, lambda: dropd() == 0, "a click off the menu to close it")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     if geom.zorder(m, ui.sym)[-1] != top0:
         fail("A menus: the click that closed the menu ALSO raised the window "
              "under it - wn_stick's drain did not eat it")
@@ -338,7 +338,7 @@ def a_buttons(m, mo, ui, disk):
     mo.menu(14, 9, 30, os88geom_item(0))
     wait(m, lambda: "About os8088" in ui.titles(), "About to open")
     other = ui.window("About os8088")
-    os88marty.settle(m)
+    ui.still()
     disk = ui.move_window(disk, 316, 100)
     other = ui._refresh(other)
     other = ui.move_window(other, disk.x - 4 - other.w + geom.WN_CLOSE,
@@ -372,7 +372,7 @@ def a_buttons(m, mo, ui, disk):
         wait(m, lambda: m.read(m.sym("ui_armlit"), 1)[0] == 0,
              "the light to go out when the pointer leaves")
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if all(o.i != other.i for o in ui.windows()):
             fail("A clip: sliding off a held X still closed the window")
 
@@ -412,14 +412,14 @@ def leg_b(eq):
     print("B: Hercules, Windows booted")
     t = os88build.tree("THEMEDARK=3").apply()
     with os88ui.boot(t.img("os8088-360.img"), apps=t.img("apps360.img"),
-                     machine=HERC) as ui:
+                     machine=HERC, quick=True) as ui:
         m, mo = ui.m, ui.mo
         if kind(m) != THM_WIN or not hooked(m, eq, "B boot"):
             fail("B: Windows did not survive a 1bpp primary (kind %d)"
                  % kind(m))
             return
         w = ui.open_drive("B")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         _, _, rows = m.vram()           # the framebuffer, in guest pixels:
         x1, y1 = w.x + w.w - geom.WN_CLOSE, w.y + geom.WN_BTY   # the RENDERED
         for xy, lit, what in (((x1 + 2, y1 + 2), True, "the white face"),  # frame
@@ -484,7 +484,7 @@ def customize(m, mo, ui, eq):
     mo.click(wx + 1 + dispcp.CP_RX + eq["CPH_CZX"] + 20,
              wy + geom.TITLE_H + 1 + eq["CPH_CZY"] + 8, settle=0)
     wait(m, lambda: "Color Theme" in ui.titles(), "the Customize window")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     return ui.window("Color Theme")
 
 
@@ -503,10 +503,10 @@ def shipped():
 def leg_c(eq, folder):
     shipped()
     print("C: the Theme page mounts and drops WIN95.DRV")
-    with os88ui.boot(fixture(folder, "c", True, False), machine=VGA) as ui:
+    with os88ui.boot(fixture(folder, "c", True, False), machine=VGA, quick=True) as ui:
         m, mo = ui.m, ui.mo
         at_rest(m, "C boot")
-        dispcp.open_panel(m, mo, m.sym, os88marty.settle, page=5)
+        dispcp.open_panel(m, mo, m.sym, lambda mm, **k: os88marty.ui_done(mm), page=5)
         ch = customize(m, mo, ui, eq)
         style_win(mo, ch)
         wait(m, lambda: kind(m) == THM_WIN, "the Windows style to take")
@@ -514,7 +514,7 @@ def leg_c(eq, folder):
         m.key("Enter")                      # Return keeps it (tv_key)
         wait(m, lambda: "Color Theme" not in ui.titles(),
              "Return to close the chooser")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if kind(m) != THM_WIN:
             fail("C: Return did not keep Windows (kind %d)" % kind(m))
         pick(m, mo, 0)
@@ -540,9 +540,9 @@ def leg_c(eq, folder):
 def leg_d(eq, folder):
     shipped()
     print("D: Windows with no WIN95.DRV on the disk")
-    with os88ui.boot(fixture(folder, "d", False, False), machine=VGA) as ui:
+    with os88ui.boot(fixture(folder, "d", False, False), machine=VGA, quick=True) as ui:
         m, mo = ui.m, ui.mo
-        dispcp.open_panel(m, mo, m.sym, os88marty.settle, page=5)
+        dispcp.open_panel(m, mo, m.sym, lambda mm, **k: os88marty.ui_done(mm), page=5)
         ch = customize(m, mo, ui, eq)
         before = m.read(m.sym("toast_buf"), 24).split(b"\0")[0]
         style_win(mo, ch)
@@ -563,7 +563,7 @@ def leg_d(eq, folder):
 def leg_e(eq, folder):
     shipped()
     print("E: Windows saved, no WIN95.DRV, at boot")
-    with os88ui.boot(fixture(folder, "e", False, True), machine=VGA) as ui:
+    with os88ui.boot(fixture(folder, "e", False, True), machine=VGA, quick=True) as ui:
         m = ui.m
         if kind(m) != THM_COLOR:
             fail("E: the boot came up kind %d, not Color" % kind(m))

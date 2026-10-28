@@ -353,7 +353,7 @@ eth_setdown:
 ; release-fired; what changed is that the DRAW goes through the control.
 eu_btlbl: dw 0
 eu_btflg: dw 0
-eu_btrec: dw 0, eu_btlbl, eu_btflg, 1, 0, 0, 0, 0, 0, 0, 0, 0
+eu_btrec: dw 0, eu_btlbl, eu_btflg, 1, 0, 0, 0, 0, 0
 
 eth_draw_btns:
     push bx
@@ -694,26 +694,34 @@ eu_s_nosrv: db 'No server', 0
 eu_s_renew: db 'Renew', 0
 eu_s_setup: db 'Set Up', 0
 eu_s_manual: db 'Manual', 0
-eu_s_b1:    db 'Buf 1K', 0    ; the socket rings (SPEC.md 72.13.2), and the
-eu_s_b4:    db 'Buf 4K', 0    ; caption is the LIVE size rather than the
-eu_s_b8:    db 'Buf 8K', 0    ; request: a machine that could not fund what
-eu_s_bnone: db 'Buf --', 0    ; was asked says so here and nowhere else
+eu_s_b1:    db 'Buf 1K', 0    ; the socket rings (SPEC.md 72.13.2): the
+eu_s_b4:    db 'Buf 4K', 0    ; LIVE size while the pool is held, so a
+eu_s_b8:    db 'Buf 8K', 0    ; machine that could not fund what was asked
+eu_s_bnone: db 'Buf --', 0    ; says so - and the REQUEST while it is not
+                              ; (72.13.4), '--' being auto
 
 ; -----------------------------------------------------------------------------
-; eu_bufcap - SI = the caption for the buffer button, from the LIVE rings
+; eu_bufcap - SI = the caption for the buffer button
 ; -----------------------------------------------------------------------------
 eu_bufcap:
-    mov si, eu_s_bnone
-    cmp word [sk_seg], 0        ; no claim at all: the driver attached without
-    je  .out                    ; rings, so every socket verb is refusing
+    push ax
+    mov ax, [sk_rxcap]
+    cmp word [sk_seg], 0
+    jne .size                   ; held: what the ladder actually got
+    mov si, eu_s_bnone          ; not held (no package is using the network):
+    mov ax, [sk_want]           ; what the next claim will ask for, and auto
+    or  ax, ax                  ; reads '--' because no rung is decided yet
+    jz  .out
+.size:
     mov si, eu_s_b1
-    cmp word [sk_rxcap], SK_RXCAP0
-    je  .out
+    cmp ax, SK_RXCAP0
+    jbe .out
     mov si, eu_s_b4
-    cmp word [sk_rxcap], SK_RXMID
-    je  .out
+    cmp ax, SK_RXMID
+    jbe .out
     mov si, eu_s_b8
 .out:
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

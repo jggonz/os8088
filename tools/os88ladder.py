@@ -21,7 +21,7 @@ will still open, still animate, and still be confidently wrong.
 `--selfcheck` AND FIX WHAT IT SAYS - before regenerating, and before
 believing a number on the page you already have.** The check is not a
 formality: this tool reads fifteen constants out of five source files by
-name, resolves the seven symbols the probe reads out of the guest, and maps
+name, resolves the eight symbols the probe reads out of the guest, and maps
 a measured phase list onto a fixed model of the boot. Every one of those is a thing the tree is allowed to
 change without telling anybody, and each has its own refusal below naming
 the file to go and look at. A rename fails the check; it does not quietly
@@ -223,9 +223,22 @@ def ladder(build="build", defines=()):
     k["fat_seg"], k["low_seg"] = k["fats"], k["lows"]
     k["cold_ram"], k["vgabuf_seg"] = k["colds"], k["vgas"]
     k["blob_seg"] = k["blobseg"]
+    # THE VGA RUNG (SPEC.md 2.10.9): `.vga`, the code only a VGA or an EGA
+    # runs, between LOW and `.cold`. kernsize reports where it starts and how
+    # many BYTES it holds; its paragraphs are the distance to `.cold`, which
+    # is also how far a machine with neither card slides `.cold` down.
+    k["vga_seg"] = k.get("vgars") or 0
+    k["vgapara"] = (k["colds"] - k["vga_seg"]) if k["vga_seg"] else 0
+    k.setdefault("vga", 0)
+    # ...and LADDER_PACK's one rounding (SPEC.md 2.10.9): LOW, `.vga`,
+    # `.cold` and `.vgabuf` pack to the paragraph and KERN_END alone rounds
+    # to 512, so the top of the kernel carries a few paragraphs of slack that
+    # belong to no section. A kernel with rungs (kern_mega, NO_LADDER_PACK)
+    # has none, and slack anywhere but the top is still a refusal.
     rungs = sorted([(k["kseg"], k["imgpara"]), (k["fats"], k["fatpara"]),
                     (k["lows"], k["lowpara"]), (k["colds"], k["coldpara"]),
-                    (k["vgas"], k["vgabufpara"])])
+                    (k["vgas"], k["vgabufpara"])]
+                   + ([(k["vga_seg"], k["vgapara"])] if k["vgapara"] else []))
     p = k["kseg"]
     for seg, para in rungs:
         if seg != p:
@@ -235,6 +248,9 @@ def ladder(build="build", defines=()):
                         "a rung was inserted or removed - teach ladder() and "
                         "regions() the new one")
         p = seg + para
+    k["slack_seg"] = p
+    k["slackpara"] = (k["kend"] - p) if k.get("toppara") else 0
+    p += k["slackpara"]
     if p != k["kend"]:
         raise Stale("the ladder does not add up: it ends at %#x, not kend %#x"
                     % (p, k["kend"]),
@@ -243,7 +259,48 @@ def ladder(build="build", defines=()):
                     "one, in kernel.asm's own order")
     k["order"] = [n for _, n in sorted([(k["fats"], "fat"), (k["lows"], "low"),
                                         (k["colds"], "cold"),
-                                        (k["vgas"], "vgabuf")])]
+                                        (k["vgas"], "vgabuf")]
+                                       + ([(k["vga_seg"], "vga")]
+                                          if k["vgapara"] else []))]
+    # `.cfx`, the kernel's own list of the words naming `.cold`'s segment and
+    # the slide that rewrites them (SPEC.md 2.10.9). It has no rung: it is
+    # the FILE's last section before the modules, so stage 2's one read lands
+    # it straight past `.cold`, across `.vgabuf`'s RAM and the top's slack,
+    # where nothing claims it until mem_unblob. Placed out of the build's own
+    # map and equates; a kernel without it (kern_small, kern_mega,
+    # NO_COLD_SLIDE) simply has no band.
+    k["cfx_seg"], k["cfx"], k["cold_home"] = 0, 0, None
+    import os88sym
+    import os88cfx
+    mapf = os.path.join(ROOT, build, "kernel.map")
+    try:
+        eq = os88sym.equates(defines)
+    except Exception as e:                              # noqa: BLE001
+        raise Stale("tools/os88sym.py would not give the kernel's equates "
+                    "(%s)" % e, "tools/os88sym.py equates()",
+                    "run `make` first; the page places `.cfx` and reads "
+                    "COLD_HOME through it")
+    k["cold_home"] = eq.get("COLD_HOME")
+    if k["vgapara"] and os.path.exists(mapf):
+        sec = os88cfx.sections(open(mapf).read()).get(".cfx")
+        if sec and "CFX_RAM" in eq:
+            k["cfx_seg"], k["cfx"] = eq["CFX_RAM"], sec[1] - sec[0]
+            # ...and how many words the list names, read off the stamped
+            # table itself (its three groups: `.text`, `.ovl`, the blob)
+            mt = open(mapf).read()
+            t0 = os88cfx.symbol(mt, ".cfx", "cfx_tab")
+            full = os.path.join(ROOT, build, "kernel-full.bin")
+            if t0 is not None and os.path.exists(full):
+                img, at, n = open(full, "rb").read(), sec[0] + t0 - sec[2], []
+                for _ in range(3):
+                    offs, at = os88cfx.decode(img, at)
+                    n.append(len(offs))
+                k["cfx_words"] = n
+    if k["vgapara"] and k["cold_home"] is None:
+        raise Stale("the kernel has a VGA rung and no COLD_HOME",
+                    "kernel/kernel.asm's ladder",
+                    "the page tells a slid `.cold` from one at home by "
+                    "comparing [api_coldseg] with it; find what replaced it")
     return k
 
 
@@ -343,11 +400,12 @@ PROBE_BLOB = ("spl_done", "spl_total", "spl_tick")   # offsets inside the blob
 PROBE_OPT = ("kz_all",)                               # ...and one a plain kernel
                                                       # (NOKZIP=1) does not have
 PROBE_KERN = ("kmain",)                               # KERNEL_SEG offsets
-PROBE_LIN = ("mem_base", "mem_top", "mem_tab")        # linear, wherever they are
+PROBE_LIN = ("mem_base", "mem_top", "mem_tab",       # linear, wherever they are
+             "api_coldseg")                         # ...and where `.cold` runs
 
 
 def probe_symbols(defines):
-    """The seven symbols the walk reads out of the guest, resolved - or a
+    """The eight symbols the walk reads out of the guest, resolved - or a
     refusal naming the one that is gone. Called by the Probe, and by
     `--selfcheck` BEFORE any emulator is started, so a rename is a second's
     failure and not a walk's."""
@@ -385,6 +443,13 @@ class Probe(object):
         self.mem_base = self.sym["mem_base"]
         self.mem_top = self.sym["mem_top"]
         self.mem_tab = self.sym["mem_tab"]
+        self.coldseg_at = self.sym["api_coldseg"]
+
+    def coldseg(self):
+        """Where `.cold` runs NOW - its home, or slid down over the VGA rung
+        (SPEC.md 2.10.9). Read rather than inferred from the adapter, because
+        a ROM that adopted the kernel stops the slide too."""
+        return u16(self.m.read(self.coldseg_at, 2))
 
     # `.boot2` has no fixed segment (os88sym refuses to place it), and it does
     # not need one here: the boot sector reads the blob to BLOB_SEG_AT, which
@@ -622,18 +687,42 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
                 sys.stderr.write("  %-16s %8.1f ms\n" % (name, ev[-1]["ms"]))
 
         # --- kmain, one row per call, os88boot's own list -------------------
-        for addr, name, n in sites:
-            m.bp_exec(addr)             # FLAT: kmain_o's are in the blob
-            m.run()
-            if m.wait_stop(limit) is None:
-                raise Stale("kmain never returned from %s" % name,
-                            "kernel/kernel.asm's kmain",
-                            "the call list and the boot disagree - regenerate "
-                            "after `make`, and see os88boot.callsites()")
+        # A CALL CAN BE GATED AND NOT TAKEN. `cfx_slide` runs only on a
+        # machine with neither a VGA nor an EGA (SPEC.md 2.10.9); its skip
+        # target happens to BE its return address, so a colour machine stops
+        # there anyway and assign() reads [api_coldseg] to tell the two apart.
+        # A gated call whose skip lands anywhere else would never be reached,
+        # and a walk that armed it alone would sit there until the timeout -
+        # so the NEXT call's return is armed beside it: stopping there first
+        # means this one was skipped, and it gets no row.
+        skip = None
+        for i, (addr, name, n) in enumerate(sites):
+            if skip == addr:
+                skip = None
+                hit = addr
+            else:
+                nxt = sites[i + 1][0] if i + 1 < len(sites) else None
+                m.breakpoints([{"type": "exec", "addr": a}
+                               for a in (addr, nxt) if a is not None])
+                m.run()             # FLAT: kmain_o's are in the blob
+                if m.wait_stop(limit) is None:
+                    raise Stale("kmain never returned from %s" % name,
+                                "kernel/kernel.asm's kmain",
+                                "the call list and the boot disagree - "
+                                "regenerate after `make`, and see "
+                                "os88boot.callsites()")
+                hit = m.status()["flat_ip"]
+            if hit != addr:
+                if verbose:
+                    sys.stderr.write("  %-22s  not taken on this machine\n"
+                                     % name)
+                skip = hit
+                continue
             row = close("kernel", name if n == 1 else "%s x%d" % (name, n),
                         m.status()["cycles"], m.disk())
             row["bar"] = p.bar()
             row["heap"] = p.heap(cons["MC_SIZE"], cons["MEM_MAX"])
+            row["coldseg"] = p.coldseg()
             # WATCH THE FAT WINDOW. `.ovl` is boot-overlay CODE that rides
             # the kernel's own read onto FAT_SEG and is forfeit at the first
             # mount (SPEC.md 2.5.3) - so somewhere in this walk those bytes
@@ -724,10 +813,18 @@ STAGES = [
                            "xm_sniff", "dsk_dpt_init_x", "sched_init",
                            "sch_idle_start", "clk_init", "vid_init",
                            "vid_ctx_init", "vid_probe_avail", "vid_disp_init"])),
+    # THE SLIDE EXISTS ONLY ON A MACHINE WITH NEITHER A VGA NOR AN EGA
+    # (SPEC.md 2.10.9), and only when no ROM has taken `.cold` already.
+    # assign() drops it when the walk saw no `cfx_slide`, as it drops the
+    # unpack rung on a plain kernel - a colour machine has nothing to show.
+    dict(id="slide", short="slide", title="Code for a colour card this machine lacks is overwritten",
+         moved="{coldkb} of code, {vgakb} lower - over the colour-card code, which this machine can never run",
+         focus=["kcold"],
+         take=dict(phases=["cfx_slide"])),
     dict(id="heap", short="memory pool", title="The memory pool opens",
          moved="everything above the loader becomes available to ask for",
          focus=["free*"],
-         take=dict(phases=["mem_init_x", "mod_init_x"])),
+         take=dict(phases=["mem_init_x"])),
     dict(id="ui", short="typeface + windows", title="Typeface, windows and the menu bar",
          moved="the window manager's tables - and, only on a machine with a slow ROM, the letterforms",
          focus=["ktext"],
@@ -749,7 +846,7 @@ STAGES = [
                            "hb_probe_x", "thm_set"])),
     dict(id="autostart", short="autostart", title="The loading screen ends, and Autostart runs",
          moved="nothing on this disk - a program's memory for each shortcut in AUTOSTRT",
-         take=dict(phases=["spl_finish", "as_boot"])),
+         take=dict(phases=["spl_finish", "vx_boot_x", "as_boot"])),
     dict(id="unblob", short="space back", title="The loader's space is given back",
          moved="{blobkb} returned to the pool, and the pool packed down onto it",
          focus=["free*"],
@@ -850,6 +947,25 @@ def assign(events, defines=("KERN_BIG",), build="build"):
             if st["id"] == "kernel":
                 st["take"] = dict(until="stage 2: loop")
                 st["moved"] = "everything from its code to its start-up code"
+    # THE SLIDE IS DECIDED BY WHAT THE WALK READ, not by whether the call's
+    # return was reached: `.noslide` IS that return address, so a colour
+    # machine stops there too, having moved nothing. [api_coldseg] changing
+    # across the call is the slide; anything else is a row that did nothing,
+    # and it goes to the hand-over stage, marked as not taken.
+    slid = False
+    for i, e in enumerate(events):
+        if basename(e["name"]) == "cfx_slide":
+            before = events[i - 1].get("coldseg") if i else None
+            slid = (e.get("coldseg") is not None and before is not None
+                    and e["coldseg"] != before)
+            if not slid:
+                e["skipped"] = True
+    if not slid:
+        stages = [st for st in stages if st["id"] != "slide"]
+        for st in stages:
+            if st["id"] == "kmain":
+                st["take"] = dict(st["take"],
+                                  phases=st["take"]["phases"] + ["cfx_slide"])
     out = [dict(st, events=[]) for st in stages]
     i = 0
     for s, st in enumerate(out):
@@ -933,7 +1049,7 @@ def _claim_name(tag):
 
 
 def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
-            fill_view=False):
+            fill_view=False, coldseg=None):
     """The memory map AFTER this stage - a list of spans over 640KB.
 
     Everything here is an address the tree computes for itself: the ladder
@@ -975,6 +1091,8 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
              "ovl": "Start-up code", "ovl": "Start-up code",
              "fatwin": "Room for the index", "fatw": "Disk index",
              "lowbss": "Stacks + buffers", "vgabuf": "Graphics scratch",
+             "kvga": "Colour-card code", "kcoldold": "Left behind",
+             "cfx": "Slide list", "slack": "Rounding",
              "blob": "Loader", "pending": "Still on the floppy",
              "packed": "Packed system", "unclaimed": "Not spoken for",
              "reserved": "Reserved for the unpacked system",
@@ -1115,9 +1233,17 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
         rung = {
             "fat": (lad["fat_seg"], lad["fatpara"]),
             "low": (lad["low_seg"], lad["lowpara"]),
+            "vga": (lad["vga_seg"], lad["vgapara"]),
             "cold": (lad["cold_ram"], lad["coldpara"]),
             "vgabuf": (lad["vgabuf_seg"], lad["vgabufpara"]),
         }
+        # HAS `.cold` SLID? Read, not inferred from the adapter: the walk
+        # reads [api_coldseg] at every stop, and the slide is exactly that
+        # word gaining -VGA_PARA (SPEC.md 2.10.9). A ROM that adopted the
+        # kernel stops the slide too, so the adapter alone would be a guess.
+        slid = bool(lad["vgapara"] and coldseg is not None
+                    and lad["cold_home"] is not None
+                    and coldseg == lad["cold_home"] - lad["vgapara"])
         parts = [(kstart, lad["fat_seg"] * 16, "ktext",
                   "Operating system code and working storage",
                   "kern", "%s bytes of code and %s of scratch. They share one "
@@ -1151,19 +1277,65 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                               "room for the disk index, so the start-up code "
                               "there can run on into them and be thrown away by "
                               "the same mount that needs the room."))
+            elif name == "vga" and para:
+                if not slid:
+                    parts.append((a, b, "kvga", "Colour-card code", "kern",
+                                  "%s bytes of code only a colour graphics "
+                                  "card - a VGA or an EGA - ever runs: its "
+                                  "picture copies, its fills, its pointer. It "
+                                  "sits inside the first block's 64KB "
+                                  "[[segment]], so the code below reaches it "
+                                  "the short way, exactly as if it were still "
+                                  "part of that block. A machine with neither "
+                                  "card cannot run a byte of it, and whether a "
+                                  "card is fitted never changes while the "
+                                  "machine is on - so there, the block above "
+                                  "is moved down over it and these bytes go "
+                                  "to the [[memory pool]]."
+                                  % "{:,}".format(lad["vga"])))
             elif name == "cold":
-                parts.append((a, b, "kcold",
-                              "Operating system code, second block", "kern",
-                              "%s bytes of code that lives in a [[segment]] of "
-                              "its own and is reached the long way round, so "
-                              "none of it counts against the 64KB ceiling at "
-                              "the bottom. It is always resident. It sits at "
-                              "the TOP of the operating system on purpose: on "
-                              "a machine that has this same code in a ROM, or "
-                              "in memory above the first megabyte, the copy "
-                              "here is never used, and the [[memory pool]]'s "
-                              "floor drops straight down onto it."
-                              % "{:,}".format(lad["cold"])))
+                if slid:
+                    d = lad["vgapara"] * 16
+                    parts.append((a - d, b - d, "kcold",
+                                  "Operating system code, second block - "
+                                  "moved down", "kern",
+                                  "%s bytes of code in a [[segment]] of its "
+                                  "own, now %s bytes lower than it arrived: "
+                                  "it has been copied down over the "
+                                  "colour-card code, which this machine has "
+                                  "no card to run. Every place in the "
+                                  "operating system that names this block's "
+                                  "segment was rewritten in the same step, "
+                                  "from a list the loading brought in for "
+                                  "exactly that."
+                                  % ("{:,}".format(lad["cold"]),
+                                     "{:,}".format(d))))
+                    parts.append((b - d, b, "kcoldold",
+                                  "Left behind by the move", "dead",
+                                  "The top %s bytes of the block's old "
+                                  "place. The copy went DOWN, so nothing "
+                                  "overwrote them; they are simply no longer "
+                                  "anybody's, and once the loader's space "
+                                  "comes back the [[memory pool]] opens over "
+                                  "them - all but the few bytes its floor "
+                                  "rounds past." % "{:,}".format(d)))
+                else:
+                    parts.append((a, b, "kcold",
+                                  "Operating system code, second block", "kern",
+                                  "%s bytes of code that lives in a [[segment]] "
+                                  "of its own and is reached the long way "
+                                  "round, so none of it counts against the "
+                                  "64KB ceiling at the bottom. It is always "
+                                  "resident. It sits at the TOP of the "
+                                  "operating system on purpose: on a machine "
+                                  "that has this same code in a ROM, or in "
+                                  "memory above the first megabyte, the copy "
+                                  "here is never used, and the [[memory "
+                                  "pool]]'s floor drops straight down onto it. "
+                                  "On a machine with no colour graphics card "
+                                  "it moves down instead, over the colour-card "
+                                  "code underneath it."
+                                  % "{:,}".format(lad["cold"])))
             elif name == "vgabuf" and para:
                 parts.append((a, b, "vgabuf", "Graphics scratch", "kern",
                               "%s bytes the colour picture-drawing code "
@@ -1172,11 +1344,45 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                               "graphics card never needs them, and its "
                               "[[memory pool]] starts underneath them instead."
                               % "{:,}".format(lad["vgabuf"])))
+        # ...and the few paragraphs that belong to no section: the top of
+        # the kernel packs to the paragraph and rounds to 512 once, at its
+        # very end, so this is what that one rounding costs.
+        if lad.get("slackpara"):
+            a = lad["slack_seg"] * 16
+            parts.append((a, a + lad["slackpara"] * 16, "slack",
+                          "Rounding to a whole sector's worth", "dead",
+                          "%s bytes that belong to nothing. The operating "
+                          "system's end is rounded up to a multiple of 512 "
+                          "bytes, so that everything a disk read lands on "
+                          "above it starts on such a boundary - and this is "
+                          "the rounding. It is done ONCE, here at the top, "
+                          "rather than under every block."
+                          % "{:,}".format(lad["slackpara"] * 16)))
         for a, b, rid, lab, cls, note in parts:
             if a >= img_end and not since("kernel"):
                 continue
             add(a, min(b, img_end) if not since("kernel") else b,
                 rid, lab, cls, note)
+        # THE SLIDE'S LIST, ON A LAYER OF ITS OWN. `.cfx` is the file's last
+        # section before the modules, so it lands straight past `.cold` -
+        # across the graphics scratch and the top's rounding, onto memory the
+        # pool does not hand out until the loader's space comes back. It is
+        # read once, by the slide; on a machine that does not slide, never.
+        if lad.get("cfx") and unpacked and not since("unblob"):
+            cf_a = lad["cfx_seg"] * 16
+            cf_b = cf_a + lad["cfx"]
+            if since("kernel") or img_end > cf_a:
+                add(cf_a, min(cf_b, img_end) if not since("kernel") else cf_b,
+                    "cfx", "The slide's list - borrowed space",
+                    "dead" if since("heap") else "ovl",
+                    "%s bytes: a list of every place in the operating system "
+                    "that names the second block's [[segment]], and the "
+                    "short routine that moves that block down and rewrites "
+                    "every one of them. It is needed once, before the "
+                    "[[memory pool]] opens, and only on a machine with no "
+                    "colour graphics card - so it rides in on the same read "
+                    "as everything else, past the end of the system, and is "
+                    "never kept." % "{:,}".format(lad["cfx"]), layer=1)
         # ...AND THE OVERLAY, ON A LAYER OF ITS OWN. `.ovl` is longer than the
         # FAT window it is read onto, so it runs on into the bottom of
         # `.lowbss`, where SPEC.md 2.1.2 deliberately put the three
@@ -1702,6 +1908,20 @@ NOTES = {
         'If the machine has both monochrome cards, program the second '
         'one as well. It claims nothing and draws nothing, so the '
         'second monitor comes up scanning and black.',
+    'cfx_slide':
+        'THIS MACHINE HAS NO COLOUR GRAPHICS CARD, and never will while it '
+        'is switched on - so the code written for one is of no use to it. '
+        "The operating system's second block of code sits directly above "
+        'that code, and is copied down over it in one [[block copy]], '
+        'bottom first, so that the copy can never overtake itself. Then '
+        'every place in the system that names the second block\'s '
+        '[[segment]] - {cfxwords} of them, in the first block, the '
+        'start-up code and the loader - is moved by the same amount, read '
+        'off a list the loading brought in for exactly this. Nothing has '
+        'stored that segment anywhere else yet, which is why it can happen '
+        'here and only here. The colour-card code is not lost: the space '
+        'it held is the first thing the [[memory pool]] will hand out. A '
+        'machine with a colour card skips this step altogether.',
     'mem_init_x':
         'The [[memory pool]]: everything from the end of the operating '
         'system to the top of memory. The loader is still running at '
@@ -1710,10 +1930,6 @@ NOTES = {
         'why the loader was put there: when its space is given back it '
         'rejoins one long free run, instead of leaving a hole with '
         'everything else stranded above it.',
-    'mod_init_x':
-        'Point every optional-module slot at a safe stub. Nothing '
-        'clears this memory, so until this runs those slots hold '
-        'whatever happened to be there - and they are jump targets.',
     'font_init':
         'Find the 8-by-8 letterforms. They are read straight out of the '
         "machine's own ROM, where the firmware keeps them - after timing "
@@ -1816,6 +2032,13 @@ NOTES = {
         'The bar to 100% and the screen handed back, and the animation '
         'stops. The desktop drawn shortly covers every pixel of it, so '
         'the loading screen needs no erasing.',
+    'vx_boot_x':
+        'Attach the VESA display driver, if the settings file asked for '
+        'it, and switch the desktop onto it - after the loading screen '
+        'has stopped, so the mode change wipes nothing the first paint '
+        'is not about to cover, and before Autostart, so a program it '
+        'opens finds the display it will live on. From the loader, so '
+        'it costs no permanent memory.',
     'as_boot':
         "AUTOSTART: open every shortcut in the boot disk's AUTOSTRT "
         'folder, exactly as a double-click would. It runs only now, '
@@ -1829,7 +2052,8 @@ NOTES = {
         "the [[memory pool]]'s floor simply drops back to where it "
         'really starts - under the loader and the small clearance below '
         'it, and on a machine with no colour graphics card under the '
-        'unused graphics scratch too. Then the pool is packed: every '
+        'unused graphics scratch and the bytes the second block of code '
+        'left behind when it moved down. Then the pool is packed: every '
         '[[claim]] that may be moved is slid down onto the space just '
         'returned, so it all becomes one long free run rather than a '
         'hole. That copy is most of what this step costs.',
@@ -1883,8 +2107,8 @@ TITLES = {
     "vid_ctx_init": "Record the display's geometry",
     "vid_probe_avail": "Look for other display cards",
     "vid_disp_init": "Programme the second monitor",
+    "cfx_slide": "Slide the second block of code down",
     "mem_init_x": "Open the memory pool",
-    "mod_init_x": "Make the optional-module slots safe",
     "font_init": "Load the typeface",
     "ovl_font_init": "Load the typeface",
     "wm_init": "Start the window manager",
@@ -1907,6 +2131,7 @@ TITLES = {
     "hb_probe_x": "Is there a hibernation to resume?",
     "thm_set": "Resolve the colour scheme",
     "spl_finish": "Finish the loading screen",
+    "vx_boot_x": "Attach the VESA display",
     "as_boot": "Autostart",
     "mem_unblob_x": "Give the loader's space back",
     "ui_lcall": "Draw the desktop",
@@ -1919,6 +2144,7 @@ SECTION_REGION = {
     ".text": "ktext", ".bss": "ktext", ".cold": "kcold",
     ".ovl": "ovl", ".boot2": "blob",
     ".lowbss": "lowbss", ".vgabuf": "vgabuf",
+    ".vga": "kvga", ".cfx": "cfx",
 }
 
 
@@ -1986,7 +2212,8 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
     # wording. The last stage opens with the bar full and the hand-over
     # caption still on the glass - `spl_finish` fills the bar and nothing
     # rewrites the caption until the desktop paints over it.
-    MSG = {"splash": "kern", "kernel": "kern", "kmain": "kern", "heap": "kern",
+    MSG = {"splash": "kern", "kernel": "kern", "kmain": "kern", "slide": "kern",
+           "heap": "kern",
            "ui": "kern", "mouse": "mouse", "desk": "fdd", "drvboot": "cfg",
            "autostart": "boot", "unblob": "boot", "paint": "boot"}
     # Two of the stages' one-line summaries carry a size, which is the
@@ -2001,9 +2228,12 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
     if len(hb) == 2 and hb[0] and hb[1]:
         back = (hb[0] - hb[1]) * 16
     sizes = {"ovlkb": "%.1fKB" % (lad["ovl"] / 1024.0),
+             "coldkb": "%.1fKB" % (lad["cold"] / 1024.0),
+             "vgakb": "%s bytes" % "{:,}".format(lad["vgapara"] * 16),
              "blobkb": "%.1fKB" % (back / 1024.0)}
 
     heap, loaded, out, t0, running = None, 0, [], 0.0, None
+    coldseg = None
     for st in stages:
         ev = st["events"]
         start_regs = None               # a rung that opens on a map of its own
@@ -2013,6 +2243,8 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
                 loaded = e["arg_done"]
             if e.get("heap", {}).get("base"):
                 heap = e["heap"]
+            if e.get("coldseg") is not None:
+                coldseg = e["coldseg"]
         if st["id"] not in ("post", "reloc", "dpt", "blob", "splash"):
             loaded = ksecs
         # THE BAR AS IT STANDS WHEN THE STAGE OPENS, not when it closes: the
@@ -2037,7 +2269,7 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
                            "total": e["arg_total"] + cons["SPL_POST"]}
                     break
         regs = regions(st["id"], lad, cons, vol, walkdata["ram_kb"], heap,
-                       loaded, None)
+                       loaded, None, coldseg=coldseg)
         for r in regs:
             r["note"] = mark(r["note"])
 
@@ -2071,6 +2303,10 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
                 mem.append("vbrtop")
             elif base.startswith("stage 2") or base == "splash tick":
                 mem.append("blob")
+            if base == "cfx_slide":
+                # the copy's source and destination are the step's subject,
+                # not the routine's own bytes alone
+                mem += ["kcold", "kcoldold"]
             if e["kind"] == "disk":
                 mem.append("vbrtop" if st["id"] == "blob" else "blob")
                 if e.get("dest"):
@@ -2078,13 +2314,22 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
                     if d:
                         mem.append(d)
             label = TITLES.get(base, base)
+            if e.get("skipped"):
+                label = "No slide: this machine has a colour card"
             if e.get("fn") == 2:
                 label = "%d sector%s \u2192 %04X:0000" % (
                     e["want"], "" if e["want"] == 1 else "s", e["dest"])
             elif "arg_done" in e:
                 label = "bar: %d of %d sectors" % (e["arg_done"],
                                                    e["arg_total"])
-            note = notes.get(base, "")
+            note = notes.get(base, "").replace(
+                "{cfxwords}", "{:,}".format(sum(lad.get("cfx_words") or [0])))
+            if e.get("skipped"):
+                note = ("This machine has a colour graphics card, so the "
+                        "code written for one is code it will run, and the "
+                        "operating system's second block of code stays where "
+                        "it arrived. The step costs one test of what the "
+                        "display survey found.")
             if base == "int 13h read" and e["want"] == 1:
                 note += (" THIS ONE IS A SINGLE SECTOR because the place it "
                          "was going was about to cross a [[64 KB boundary]]. "
@@ -2234,6 +2479,7 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
         "cons": cons, "vol": vol, "strings": strs,
         "ladder": {k: lad[k] for k in
                    ("kseg", "cold_ram", "fat_seg", "low_seg", "vgabuf_seg",
+                    "vga_seg", "vgapara", "vga", "cfx_seg", "cfx",
                     "kend", "blob_seg", "text", "bss", "cold", "lowbss", "vgabuf", "ovl",
                     "boot2", "ksize", "minramkb")},
         "ksecs": ksecs,
@@ -3746,10 +3992,11 @@ def selfcheck(image, defines, build="build"):
     try_("constants scraped from source",
          lambda: "%d found" % len(constants(build)))
     try_("the ladder, out of tools/kernsize.py",
-         lambda: "KERNEL %04X  FAT %04X  LOW %04X  COLD %04X  VGABUF %04X  "
-                 "HEAP %04X  BLOB %04X" % tuple(ladder(build, defines)[k] for k in
-                                     ("kseg", "fat_seg", "low_seg", "cold_ram",
-                                      "vgabuf_seg", "kend", "blob_seg")))
+         lambda: "KERNEL %04X  FAT %04X  LOW %04X  VGA %04X  COLD %04X  "
+                 "VGABUF %04X  HEAP %04X  BLOB %04X  .cfx %04X+%d"
+                 % tuple(ladder(build, defines)[k] for k in
+                         ("kseg", "fat_seg", "low_seg", "vga_seg", "cold_ram",
+                          "vgabuf_seg", "kend", "blob_seg", "cfx_seg", "cfx")))
     try_("the image's BPB and KERNEL.SYS",
          lambda: "%d sectors at LBA %d, %d SPT x %d heads"
                  % (volume(image)["kernel"]["sectors"],
@@ -3770,7 +4017,7 @@ def selfcheck(image, defines, build="build"):
     try_("heap claim tags in kernel/memory.inc",
          lambda: "%d tags" % len(owner_tags()))
 
-    try_("the seven symbols the walk reads out of the guest",
+    try_("the eight symbols the walk reads out of the guest",
          lambda: "  ".join("%s=%05X" % (k, v) for k, v in
                            sorted(probe_symbols(defines).items())))
 

@@ -76,30 +76,34 @@ def main():
         if not box.wait_for("kern_mega: protected mode", 300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
-        time.sleep(25)
+        # the desktop, B:'s window and every step below end on the GUEST's
+        # state (os88bochs.Box.up / ui_done: PiXEL decodes and animates on
+        # its UI task, no worker) - each step used to wait out QUIET s of no
+        # E9 line, 12 s a step on a clean run. The trap windows still tile
+        # the whole run end to end, and the last one has a tail.
+        box.up()
         box.capture()
-        os88bochs.dbl(591, 105)          # B:
-        time.sleep(10)
+        box.dbl(591, 105, "B:'s Disk window")
         prev = [None]
+        pos = [os.path.getsize(box.e9)]
 
-        def step(name, act, picture=True):
-            a = os.path.getsize(box.e9)
+        def step(name, act, picture=True, tail=0.0):
             act()
-            end, last, lt = time.time() + LIMIT, a, time.time()
-            while time.time() < end:
-                time.sleep(1)
-                n = os.path.getsize(box.e9)
-                if n != last:
-                    last, lt = n, time.time()
-                elif time.time() - lt >= QUIET:
-                    break
+            try:
+                box.ui_done("PiXEL to finish " + name, secs=LIMIT)
+            except RuntimeError as e:   # a FAULT: reported below, from E9
+                print("pxmega: %s" % e)
+            time.sleep(tail)
             with open(box.e9, "rb") as f:
-                f.seek(a)
-                new = f.read().decode("latin-1").splitlines()
+                f.seek(pos[0])
+                t = f.read()
+            t = t[:t.rfind(b"\n") + 1]     # (whole lines; the windows TILE)
+            pos[0] += len(t)
+            new = t.decode("latin-1").splitlines()
             traps = [l for l in new if l.startswith("T ")]
             fault = [l for l in new if l.startswith("kern_mega FAULT")]
             shot = os.path.join(out, name + ".png")
-            os88bochs.shot(shot)
+            box.shot(shot)
             px, pic = canvas(shot)
             print("pxmega: %-24s %5d traps%s, picture %2.0f%% of the canvas"
                   % (name, len(traps), " FAULT" if fault else "", 100 * pic))
@@ -116,13 +120,14 @@ def main():
                              if px == prev[0] else ""))
             prev[0] = px
 
-        step(SAMPLES[0], lambda: os88bochs.dbl(165, 123))
+        step(SAMPLES[0], lambda: box.dbl(165, 123))
         for s in SAMPLES[1:]:
             step(s, lambda: os88bochs.xd("key", "space"))
         step("Rotate (clockwise)", lambda: (os88bochs.xd("key", "r"),
-                                            os88bochs.goto(240, 250),
+                                            box.goto(240, 250),
                                             os88bochs.xd("click", 1)))
-        step("Rotate (anticlockwise)", lambda: os88bochs.xd("click", 3))
+        step("Rotate (anticlockwise)", lambda: os88bochs.xd("click", 3),
+             tail=QUIET / 4)
     finally:
         box.stop()
     print("pxmega: %d steps, %.0fs under Bochs" % (len(SAMPLES) + 2,

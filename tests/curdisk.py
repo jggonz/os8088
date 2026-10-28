@@ -251,23 +251,28 @@ def leg(tree, label, which):
     say("\n=== %s: %s ===\n" % (label, why))
     with os88marty.launch(tree.img(os.path.basename(IMAGE)),
                           apps=tree.img(os.path.basename(APPS)),
-                          machine=MACHINE) as m:
-        mo = os88mouse.Mouse(marty=m)
-        os88marty.no_saver(m)
+                          machine=MACHINE, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE: setup is
+        mo = os88mouse.Mouse(marty=m)   # clicks and guest reads, and the
+        os88marty.no_saver(m)           # measurement is watch()'s own
+
+        def uset(mm, **k):              # dispcp's settle: each verb confirms
+            return os88marty.ui_done(mm)    # off the guest (technique 4)
 
         # Setup: a Disk window on B:, and a row inside it.  A row is used
         # rather than the desktop's drive zone because a row is far below the
         # menu bar, and SPEC.md 7.4.2's widget test refuses a move near it -
         # measuring there would report the guard as the defect.  The sweep in
         # watch() is bounded for the same reason.
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, uset, "B")
         disk = dispcp.win_list(m, S)[-1]
         dx, dy, _, _ = dispcp.win_rect(m, S, disk)
         for step in path[:-1]:
-            dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, step)
+            dispcp.open_named(m, mo, S, uset, dx, dy, step)
             dx, dy, _, _ = dispcp.win_rect(m, S, disk)
         entry = dispcp.row_of(m, S, path[-1])
-        row = dispcp.scroll_to(m, mo, S, os88marty.settle, dx, dy, entry)
+        row = dispcp.scroll_to(m, mo, S, uset, dx, dy, entry)
         rx, ry = dispcp.row_xy(dx, dy, row)
 
         s = watch(m, S, mo, rx, ry)

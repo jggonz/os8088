@@ -94,7 +94,7 @@ def main():
                         "--size", "360", pkg, v88], check=True,
                        capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/COLOR16.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -111,7 +111,7 @@ def main():
                 m.write(base + syms[n], struct.pack("<H", v))
 
             def until(cond, what, guest=90.0):
-                os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                 guest=guest)
 
             def glass():

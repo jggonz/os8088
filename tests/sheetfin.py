@@ -58,7 +58,8 @@ SYS = SF.SYS
 # name. The file keeps the name SHIN.SLK ON THE FLOPPY, because that is what
 # puts it in the same listing row sheetfmt.py's coordinates double-click.
 WORK = "build/sheetfin"
-DISK = "build/sheetfin.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetfin.img")        # the run's tree, so a soak lane finds it
 WRONG = -999.0
 
 # IRR's range: Excel's own worked example, a 70,000 outlay and five inflows.
@@ -204,8 +205,7 @@ def build_disk():
     src = os.path.join(WORK, "SHIN.SLK")
     open(src, "wb").write(F.write_sylk(cells()))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
+                    "--size", "360", "APPS:build/sheet.o88", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

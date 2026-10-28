@@ -60,13 +60,13 @@ def main():
                    check=True, capture_output=True)
     try:
         with os88ui.boot(os88build.at("build/os8088-720.img"), apps=disk,
-                         machine=MACHINE) as ui:
+                         machine=MACHINE, quick=True) as ui:
             m = ui.m
 
             def content(w):
                 w = ui._as_win(w.i)
                 ui.mo.to(700, 12)
-                M.guest_sleep(m, 1.0)
+                M.ui_done(m, "the window's paint")   # vram is the framebuffer
                 _, _, rows = m.vram()
                 return [bytes(r[w.x + 2:w.x + w.w - 2])
                         for r in rows[w.y + 20:w.y + w.h - 2]]
@@ -97,7 +97,7 @@ def main():
                 ui.open(name, expect=None)
                 M.until(m, lambda mm: len([t for t in ui.titles()
                                            if "Video" in t]) > len(players),
-                        "%s to open a player" % name, poll=0.3, limit=300.0,
+                        "%s to open a player" % name, poll=0.05, limit=300.0,
                         guest=120.0)
                 w = [w for w in ui.windows() if "Video" in w.title and
                      w.i not in players][0]
@@ -109,7 +109,7 @@ def main():
                 rw = lambda n: struct.unpack(
                     "<H", bytes(m.read(base + syms[n], 2)))[0]
                 M.until(m, lambda mm: rw("vp_msg") != syms["vp_s_none"],
-                        "%s's status" % name, poll=0.3, limit=120.0,
+                        "%s's status" % name, poll=0.05, limit=120.0,
                         guest=60.0)
                 M.guest_sleep(m, 1.0)
                 msg = rw("vp_msg")

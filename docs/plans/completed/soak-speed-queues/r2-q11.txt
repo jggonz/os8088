@@ -1,0 +1,40 @@
+# ROUND 2, queue 11: the bottom of r2-q9's open rows (non-MartyPC). family  row  declared_secs  script  needs
+DONE os	lzfmt-all	55	tools/os88lz.py	
+DONE kdmi	kdmix	55	tests/kdmix.py	
+DONE gbcp	gbcpu	50	tests/gbcpu.py	qemu,nasm
+DONE mseg	msegxms	50	tests/msegxms.py	qemu
+DONE xmch	xmcheck	50	tests/xmcheck.py	qemu,nasm
+DONE vidx	vidxmsgap	50	tests/vidxms.py	qemu,nasm
+DONE vidx	vidxmslivevga4	50	tests/vidxms.py	qemu,nasm
+DONE trkc	trkclick	47	tests/trkclick.py	qemu,nasm
+DONE cdro	cdrom	45	tests/cdrom.py	qemu,nasm
+DONE vmmo	vmmouse	45	tests/vmmouse.py	qemu,nasm
+DONE dosx	dosxmsq	45	tests/dosxmsq.py	qemu
+SKIP fails at base (first play does not fill the hold) vidx	vidxms	45	tests/vidxms.py	qemu,nasm
+DONE vidx	vidxmsbios	45	tests/vidxms.py	qemu,nasm
+DONE vidx	vidxmsidle	45	tests/vidxms.py	qemu,nasm
+DONE vidx	vidxmsnox	45	tests/vidxms.py	qemu,nasm
+DONE vidx	vidxmslivenox	45	tests/vidxms.py	qemu,nasm
+DONE kdre	kdreturnf	42	tests/kdreturn.py	
+DONE vidb	vidbankspkfast	40	tests/vidbank.py	qemu,nasm
+DONE kdha	kdhand	40	tests/kdhand.py	
+DONE kdre	kdreturngfx	40	tests/kdreturn.py	
+DONE vids	vidspkat	40	tests/vidspkat.py	qemu,nasm
+DONE vidb	vidbankauto	40	tests/vidbankauto.py	ffmpeg
+DONE mixe	mixersb16	40	tests/mixer.py	qemu,nasm
+DONE kdre	kdreturnmode	38	tests/kdreturn.py	
+DONE kdre	kdreturnpit	38	tests/kdreturn.py	
+DONE trks	trkscrl	38	tests/trkscrl.py	qemu,nasm
+DONE kdre	kdreturn	37	tests/kdreturn.py	
+DONE kdre	kdreturnm	36	tests/kdreturn.py	
+DONE kdre	kdreturncx	36	tests/kdreturn.py	
+DONE vidl	vidlysplitdisk	35	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlysplitflip	35	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlysplitflipcmp	35	tests/vidlysplit.py	qemu,nasm,ffmpeg
+DONE vidl	vidlag	35	tests/vidlag.py	ffmpeg
+DONE kdre	kdreturncm	32	tests/kdreturn.py	
+DONE hmac	hmacold	30	tests/hmacold.py	qemu,nasm
+DONE t	bmshare	30	tests/unit/t_bmshare.py	
+DONE t	kernmods	30	tests/unit/t_kernmods.py	nasm
+DONE hdta	hdtakeboot	30	tests/hdtake.py	qemu,nasm
+DONE cdro	cdromsim	30	tests/cdrom.py	qemu,nasm

@@ -292,11 +292,14 @@ def cardcounts(a):
              "--file", "SOUND.DRV=" + os88build.at("build/sound.drv"),
              "--file", "AUDIO.O88=" + os88build.at("build/audio.o88"),
              "--file", "T0.WAV=" + path], check=True, capture_output=True)
-        m = os88marty.launch(None, machine=MACHINE_SB, extra=[
+        m = os88marty.launch(None, machine=MACHINE_SB, boot=False, extra=[
             "--mount", "hd:0:" + os.path.abspath(vhd)])
         try:
+            m.run()
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)            # the boot gate on STATE: the first
+            os88marty.no_saver(m)       # act is a verb that confirms
+            os88marty.ui_done(m, "the desktop's first pass")
             k_st, k_spk = m.sym("osapi_snd_stream"), m.sym("osapi_fsx_spk")
             ev = {"half": None, "spk": 0, "base": None}
 
@@ -348,10 +351,14 @@ def card(a):
              "--file", "SOUND.DRV=" + os88build.at("build/sound.drv"),
              "--file", "AUDIO.O88=" + os88build.at("build/audio.o88"),
              "--file", "T0.WAV=" + path], check=True, capture_output=True)
-        m = os88marty.launch(None, machine=MACHINE_SB, extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
+        m = os88marty.launch(None, machine=MACHINE_SB, boot=False,
+                             extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
         try:
+            m.run()
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)            # the boot gate on STATE: the first
+            os88marty.no_saver(m)       # act is a verb that confirms
+            os88marty.ui_done(m, "the desktop's first pass")
             ev = {"stream": 0, "spk": 0}
             k_st, k_spk = m.sym("osapi_snd_stream"), m.sym("osapi_fsx_spk")
 
@@ -411,11 +418,14 @@ def pause(a):
              "--mbr", os88build.at("build/mbr.bin"),
              "--file", "AUDIO.O88=" + os88build.at("build/audio.o88"),
              "--file", "T0.WAV=" + path], check=True, capture_output=True)
-        m = os88marty.launch(None, machine=MACHINE,
+        m = os88marty.launch(None, machine=MACHINE, boot=False,
                              extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
         try:
+            m.run()
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)                # the boot gate on STATE: the first
+            os88marty.no_saver(m)                   # act is a verb that confirms
+            os88marty.ui_done(m, "the desktop's first pass")
             k_open, k_off = m.sym("osapi_fsx_spk"), m.sym("spk_off")
             ev = {"open": [], "close": [], "w": [], "cap": 0}
 
@@ -530,10 +540,14 @@ def covox(a):
                         "--size", "720", os88build.at("build/audio.o88"),
                         path], check=True, capture_output=True)
         m = os88marty.launch("build/covoxsys720.img", apps=img,
-                             machine="os8088_5150_herc_covox_720_gla")
+                             machine="os8088_5150_herc_covox_720_gla",
+                             boot=False)
         try:
+            m.run()
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)            # the boot gate on STATE: the first
+            os88marty.no_saver(m)       # act is a verb that confirms
+            os88marty.ui_done(m, "the desktop's first pass")
             k_open = m.sym("osapi_fsx_spk")
             ev = {"open": 0, "w": []}
 
@@ -654,11 +668,14 @@ def main():
              "--mbr", os88build.at("build/mbr.bin"),
              "--file", "AUDIO.O88=" + os88build.at("build/audio.o88")]
             + files, check=True, capture_output=True)
-        m = os88marty.launch(None, machine=MACHINE,
+        m = os88marty.launch(None, machine=MACHINE, boot=False,
                              extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
         try:
+            m.run()
             ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            ui.up(limit=240)                # the boot gate on STATE: the first
+            os88marty.no_saver(m)                   # act is a verb that confirms
+            os88marty.ui_done(m, "the desktop's first pass")
             k_open, k_off = m.sym("osapi_fsx_spk"), m.sym("spk_off")
             syms, _ = pkg_syms("apps/audio/audio.asm", ("apps/", "apps/audio/"))
             ex_o = {"type": "exec", "addr": k_open}

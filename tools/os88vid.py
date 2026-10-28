@@ -5691,6 +5691,9 @@ def _tokens(d, n):
     return out, i + 1
 
 
+_PBM_INV = bytes(255 - i for i in range(256))
+
+
 def read_frame(path):
     """(width px, height, 1bpp rows packed MSB first, 1 = WHITE) from a PBM
     (P4 or P1), a PGM (P5, >= 128 is white) or an uncompressed BMP of 1, 8
@@ -5702,6 +5705,13 @@ def read_frame(path):
         (w, h), o = _tokens(d, 2)
         if d[:2] == b"P4":
             rb = (w + 7) // 8
+            if len(d) >= o + rb * h:    # the rows ARE the answer, inverted
+                rows = bytearray(d[o:o + rb * h].translate(_PBM_INV))
+                if w % 8:               # (and the pad bits cleared)
+                    keep = (0xFF << (8 - w % 8)) & 0xFF
+                    for y in range(rb - 1, rb * h, rb):
+                        rows[y] &= keep
+                return w, h, bytes(rows)
             px = [255 * (1 - ((d[o + y * rb + x // 8] >> (7 - x % 8)) & 1))
                   for y in range(h) for x in range(w)]
         else:
@@ -5979,6 +5989,7 @@ def _adpcm4_viterbi(pcm, start, zeros, chunk=2048, end=None):
     nibs = np.zeros(n, np.uint8)
     states = np.zeros(n, np.int32)
     win = [0, []]                   # the window's first sample, backpointers
+    lim = chunk                     # ...and the window size the next commit
 
     def trace(t, S, all_agree):
         w0, bp = win
@@ -6010,12 +6021,19 @@ def _adpcm4_viterbi(pcm, start, zeros, chunk=2048, end=None):
         best[dead] = INF            # renormalised, and the dead stay dead
         cost[:1024] = best.reshape(1024)
         win[1].append(j.reshape(1024).astype(np.uint8))
-        if len(win[1]) >= chunk:
+        if len(win[1]) >= lim:
             live = np.nonzero(cost[:1024] < INF)[0]
             path = trace(t + 1, live, True)
             if path is not None:    # decided before `path`: drop it
                 win[1] = win[1][path - win[0]:]
                 win[0] = path
+                lim = chunk
+            else:                   # NOT YET: try again a chunk later, not
+                lim = len(win[1]) + chunk   # at every sample - noise can
+                # keep its survivors apart for thousands of samples, and a
+                # failed walk is the whole window. The commits are the same
+                # path either way (whatever is decided is on every
+                # survivor's), so only the memory and the time differ
     if end is not None:
         if cost[end] >= INF:
             raise V88Error("ADPCM4: no path ends in state %d (sample %d, "
@@ -6989,7 +7007,7 @@ def _fixture_canvases(wb, h, n, rnd):
 
 def _write_pbm(path, wb, h, cv):
     with open(path, "wb") as f:
-        f.write(b"P4\n%d %d\n" % (wb * 8, h) + bytes(255 - b for b in cv))
+        f.write(b"P4\n%d %d\n" % (wb * 8, h) + bytes(cv).translate(_PBM_INV))
 
 
 def _write_wav(path, rate, samples):

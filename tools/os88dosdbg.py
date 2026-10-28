@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Debug a DOS program under os8088 by comparing it with a REAL DOS.
 
-    python3 tools/os88dosdbg.py syms  [NAME...]            # what the box's bss offsets are
+    python3 tools/os88dosdbg.py syms  [NAME...]            # what DOS's bss offsets are
     python3 tools/os88dosdbg.py build                      # a DOSTRACE system disk
     python3 tools/os88dosdbg.py trace PROG.EXE --disk D    # our INT 21h traffic
     python3 tools/os88dosdbg.py ref   PROG.EXE --disk D --dos-disk A   # ...and a real DOS's
@@ -11,8 +11,8 @@
 docs/DOS-DEBUGGING.md is the manual.  What follows is why the shape is this
 shape, because the shape is the whole value.
 
-THE METHOD.  A DOS program that misbehaves under this box is not debuggable
-from one side.  Our own trace says what we were asked and what we answered,
+THE METHOD.  A DOS program that misbehaves under os8088's DOS is not
+debuggable from one side.  Our own trace says what we were asked and what we answered,
 and both look right - they looked right through four separate defects.  What
 is missing is what a REAL DOS answers to the SAME questions, and the only
 place that exists is a machine running one.  So: log both, in one format, and
@@ -31,7 +31,7 @@ WHAT IT NEEDS.  `trace` needs a kernel and a disk this tree builds.  `ref`
 needs a bootable DOS floppy you supply: no DOS is in this repository and none
 can be.  `diff` needs neither and runs anywhere.
 
-EVERY CONSTANT IS DERIVED, none transcribed.  The box's bss offsets come from
+EVERY CONSTANT IS DERIVED, none transcribed.  DOS's bss offsets come from
 assembling `apps/dos/dos.asm` with a marker appended and reading the words
 back; the TSR's come from a `DOSTRAP1` signature inside its own `.COM`.  That
 is not fastidiousness - both layouts moved three times in the session that
@@ -80,7 +80,7 @@ def _dos_incs():
 DOS_INCS = _dos_incs()
 TRAP_ASM = os.path.join(ROOT, "tests", "dostrap", "trap.asm")
 
-# The AH names, for reading.  Everything the box answers plus the handful it
+# The AH names, for reading.  Everything DOS answers plus the handful it
 # refuses that a program is still likely to try.
 AH = {
     0x00: "term", 0x01: "getce", 0x02: "putc", 0x06: "dconio", 0x07: "getc",
@@ -386,7 +386,7 @@ def trace_costs(kb=None):
     program that is near the edge REFUSES UNDER THE TRACER AND RUNS PERFECTLY
     WITHOUT IT.
 
-    **That has been mis-diagnosed as "the box is short of memory" eight
+    **That has been mis-diagnosed as "DOS is short of memory" eight
     separate times**, which is the whole reason this function exists rather
     than another paragraph: the cost was already written down in `dos.asm`, in
     SPEC.md 96.29.1 and in this file's own docstring, and every one of those
@@ -403,11 +403,11 @@ def trace_costs(kb=None):
             kb = 0                                  # banner
     much = ("%d KB" % kb) if kb else "tens of KB"
     return (
-        "os88dosdbg: **THIS DISK IS NOT THE SHIPPED BOX.**  The trace part is\n"
+        "os88dosdbg: **THIS DISK IS NOT THE SHIPPED DOS.**  The trace part is\n"
         "            %s of heap claimed at launch, so the DOS arena here is\n"
         "            that much SMALLER than a plain build's.  A program that\n"
         "            refuses on this disk and runs on build/os8088-360.img is\n"
-        "            refusing the TRACER and not the box: re-check it WITHOUT\n"
+        "            refusing the TRACER and not DOS: re-check it WITHOUT\n"
         "            --build before concluding anything about memory.\n"
         "            (docs/DOS-DEBUGGING.md, Traps - this has cost eight\n"
         "            wrong diagnoses, every one of them about the arena.)"
@@ -450,8 +450,8 @@ def build_trace_disk(system_img, out_img, verbose=True):
     **THE TRACED PACKAGE IS A PLAIN ONE AND THE THIRD RADIO ARM IS GREYED ON
     THIS DISK.**  A DOSTRACE build is one image with no part table, so
     `dos_mem_whole` reads zero and refuses (SPEC.md 96.36.1) - which is right:
-    the ring this tool reads lives in the box's own bss, and there is no box
-    on the other side of the handoff.  Tracing a program under `kern_dos` is a
+    the ring this tool reads lives in DOS.O88's own bss, and there is no
+    DOS.O88 on the other side of the handoff.  Tracing a program under `kern_dos` is a
     different instrument, not this one with a flag.
     """
     say = (lambda *a: print(*a)) if verbose else (lambda *a: None)
@@ -536,7 +536,7 @@ def drive(m, script, label):
     **THE MOUSE IS HERE BECAUSE A TRACE WITHOUT ONE ASKS THE WRONG QUESTION.**
     Microsoft Works installs an INT 33h event handler (SPEC.md 96.10.4) and
     then waits, so a script that only types drives a program that has been
-    told nothing: its mouse histogram (96.10.3) reads the same whether the box
+    told nothing: its mouse histogram (96.10.3) reads the same whether DOS
     makes callbacks or not, because no event ever happens. The first run of
     this file's `--keys` measured exactly that and the answer looked like a
     finding.
@@ -679,7 +679,7 @@ def cmd_trace(a):
             trseg = w16(sym["dos_trseg"])
             if total and not trseg:
                 raise SystemExit(
-                    "os88dosdbg: the box has traced %d call(s) and its trace "
+                    "os88dosdbg: DOS has traced %d call(s) and its trace "
                     "part is not loaded, which cannot both be true - "
                     "[dos_trseg] is 0 (SPEC.md 96.29.1)" % total)
             if total:
@@ -776,7 +776,7 @@ INT33_ARGS = {
 }
 
 
-def mouse_lines(mou, sym, n=None, sz=None, cb=None, who="the box",
+def mouse_lines(mou, sym, n=None, sz=None, cb=None, who="DOS",
                 seq=None, nseq=0, cbseq=False):
     """What the program asked INT 33h for, with what, and what we answered.
 
@@ -826,7 +826,7 @@ def _dump_state(m, base, sym, psp, a):
 
     These are the places a difference hides where no trace can see it: the PSP
     (eight fields were zero here and DOS fills all eight - SPEC.md 96.21.4),
-    the BDA, the interrupt vectors, and the box's own handle table.  Dumped as
+    the BDA, the interrupt vectors, and DOS's own handle table.  Dumped as
     raw binary beside the trace so `cmp` says everything.
     """
     stem = os.path.splitext(a.out)[0]
@@ -973,7 +973,7 @@ def cmd_ref(a):
                 dos_answered(m, was, "the CD")
             # **THE SAME ENVIRONMENT, OR THE TWO SIDES RUN DIFFERENT
             # PROGRAMS** (SPEC.md 96.44.13.1).  COMMAND.COM hands out
-            # `COMSPEC=` and nothing else; the box hands out `BLASTER=` when a
+            # `COMSPEC=` and nothing else; our DOS hands out `BLASTER=` when a
             # sound card was unloaded on the way in.  Prince of Persia PICKS
             # ITS SOUND DEVICE off that row, so the reference opened
             # `MIDISND1.DAT` where our side opened `DIGISND1.DAT` - at the same
@@ -1211,13 +1211,13 @@ def cmd_diff(a):
     if ans:
         i, j, why, x, y, k, bi = ans
         print("the first ANSWER that differs - same instruction, same arguments,")
-        print("%s.  THIS IS THE BOX BEING WRONG:" % why)
+        print("%s.  THIS IS OUR DOS BEING WRONG:" % why)
         print("  %-*s %3d %s" % (w, na, i, _row(x, ap)))
         print("  %-*s %3d %s" % (w, nb, j, _row(y, bp)))
         edge_note(k, bi)
     else:
         print("no call was answered differently where both sides asked the same")
-        print("thing - so nothing this box SAYS is the difference.")
+        print("thing - so nothing our DOS SAYS is the difference.")
     if qst:
         i, j, why, x, y, k, bi = qst
         print("")
@@ -1281,14 +1281,14 @@ def selfcheck():
            lay.get("n33") == sym["DOS_TR33_N"] and
            lay.get("sz33") == sym["DOS_TR33_SZ"],
            "" if lay.get("sz33") == sym["DOS_TR33_SZ"] else
-           "TSR %sx%s vs box %dx%d - one reader cannot decode both, which is "
+           "TSR %sx%s vs DOS %dx%d - one reader cannot decode both, which is "
            "the whole point of recording the reference at all"
            % (lay.get("n33"), lay.get("sz33"),
               sym["DOS_TR33_N"], sym["DOS_TR33_SZ"]))
         ck("both sides agree on the entry size",
            lay["entsz"] == sym["DOS_TRACE_SZ"],
            "" if lay["entsz"] == sym["DOS_TRACE_SZ"] else
-           "TSR %d vs box %d - one reader cannot decode both"
+           "TSR %d vs DOS %d - one reader cannot decode both"
            % (lay["entsz"], sym["DOS_TRACE_SZ"]))
         ck("the TSR's ring fits inside its own .COM",
            lay["ring"] - 0x100 + lay["nent"] * lay["entsz"] <= os.path.getsize(com))
@@ -1418,7 +1418,7 @@ def main():
                                 "never edited")
             p.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
                            help="a SET to type before the program, so the "
-                                "reference gets the environment the box would "
+                                "reference gets the environment our DOS would "
                                 "have given it (BLASTER=... is the one that "
                                 "matters: a program picks its sound device off "
                                 "it and then reads different FILES)")
@@ -1434,7 +1434,7 @@ def main():
         # dump of one side alone answers nothing. `cmp` is the reader.
         p.add_argument("--state", action="store_true",
                        help="also dump the PSP, IVT and BDA (and, on `trace`, "
-                            "the box's handle table) beside the JSON")
+                            "DOS's handle table) beside the JSON")
         p.set_defaults(fn=fn)
 
     p = sub.add_parser("diff", help="align two traces; say where they part")

@@ -183,13 +183,16 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        # every read below is guest state (window list, directory rows), so
+        # the UI pass being over is the whole wait - no picture settle
+        done_ = lambda mm, **k: os88marty.ui_done(mm)
+        dispcp.open_drive(m, mo, S, done_, "B")
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         rx, ry = dispcp.row_xy(bx, by,
-                               dispcp.scroll_to(m, mo, S, os88marty.settle,
+                               dispcp.scroll_to(m, mo, S, done_,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
                                                               "MCBENCH.O88")))
@@ -202,7 +205,7 @@ def main():
             return None
         try:
             os88marty.until(m, lambda _: missile(), "MCBENCH's window",
-                            poll=0.3, limit=180)
+                            poll=0.05, limit=180)
         except os88marty.MartyError:
             pass                            # the check below says so
         seg = missile()
@@ -213,12 +216,13 @@ def main():
         # mouse every frame in every mode, so a pointer that moved between the
         # two runs would move the crosshair and the runs would not be the same
         # game - which is the one nondeterminism the seed cannot cover.
-        mo.to(4, 4)
-        os88marty.settle(m)
+        mo.to(4, 4)                 # `to` confirms the arrival in mouse_x/y,
+        os88marty.ui_done(m, lock=False)    # which is all mc_do_cross reads
 
         base = seg << 4
         shot_hash = None
         TOP, END = base + syms["mc_b_top"], base + syms["mc_b_end"]
+        SHOW = base + syms["mc_bshow"]
         out, dsc, ptr = [], None, None
         for run in range(a.runs):
             # THE REQUEST IS POKED, NOT TYPED. `m.key` put the game through
@@ -229,13 +233,34 @@ def main():
             # [mc_breq] is one request, and the key stays for a person at a
             # real machine.
             done = p.rw("mc_bdone")
-            with os88marty.bp_trace(m, TOP, END, cap=4 * FRAMES + 64) as tr:
+            # TOP and END are LOGGED (the server notes the cycles and runs
+            # on): 800 pumped stops a run were most of this row. The one STOP
+            # is mc_bshow on the last run - the 400th frame is drawn and the
+            # result message (whose tick count differs per arm) is not yet -
+            # which is the screen the hash below is of, read off video memory
+            # while the guest is stopped there.
+            last = run == a.runs - 1
+            grab = []
+
+            def at_end(mm, rec):
+                if last and rec["addr"] == SHOW and not grab:
+                    try:
+                        _w, _h, rows_ = mm.vram()
+                        raw = b"".join(bytes(r) for r in rows_)
+                    except os88marty.MartyError:    # a planar card
+                        raw = shot(mm)[2]
+                    grab.append(hashlib.sha1(raw).hexdigest()[:16])
+                return None
+            with os88marty.bp_trace(m, TOP, END, SHOW, cap=4 * FRAMES + 64,
+                                    log=[TOP, END], on_hit=at_end) as tr:
                 m.write(base + syms["mc_breq"], b"\x0A\x00")   # 10 = nine
                 #     ordinary frames of grace, so the arming above
                 #     cannot lose the start of the run
                 tr.until(lambda: p.rw("mc_bdone") > done,
                          "the %d-frame run to finish" % FRAMES, 900)
             hits = tr.hits
+            if grab:
+                shot_hash = grab[0]
             # A FRAME IS A TOP FOLLOWED BY THE NEXT END, paired in order. The
             # two markers strictly alternate - they are the loop's own top and
             # bottom - so anything else means stops were dropped and the row
@@ -305,11 +330,10 @@ def main():
                     i += 1
             dsc = (calls, cyc, blk, empty, span, pix)
 
-        # --- the screen the run ended on, hashed ----------------------------
-        mo.to(4, 4)                 # the arrow parked: it is the kernel's
-        os88marty.settle(m)         # pixels and it moves with the harness
-        _w, _h, _px = shot(m)
-        shot_hash = hashlib.sha1(bytes(bytearray(_px))).hexdigest()[:16]
+        # --- the screen the run ended on: hashed at mc_bshow above, which is
+        # the 400th frame and not whatever live play reached a settle later
+        # (that was ~55 guest s of a game no seed governs). The arrow is
+        # parked at (4, 4) the whole time. ---------------------------------
 
         # --- WHAT gfx_points IS ACTUALLY HANDED, in the real caller ---------
         # PERFORMANCE.md Set 140 measured this slot on gfxbench's geometry -

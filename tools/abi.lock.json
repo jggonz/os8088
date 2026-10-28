@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "34ce76939e8b6651befe73d2e02d4f34a9ad94b61e35b9f70a52265825cd9478",
+  "fingerprint": "152833002b519c8ad7ae9acd7800c6b18c947cd16b00ef27ca6110932454465c",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "7baa5b851b7711acc0ee1618c4c85df93824615ad25408d92580c281623c7bfc",
+  "fingerprint": "efc429ec1fc929ce523b5a82a3008e52f8c9e303fa2d04d7862b46895b62a03c",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -871,6 +871,153 @@
    "to": 11
   },
   {
+   "fingerprint": "a119fd3f55ae66e63e8e56f7088881f81164e192c31662b0f6a58cf0fe24c752",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_IMG_NAME appended at 0x04CF: an image segment or pool offset -> its driver's or module's 8.3 name (KERN-MEGA-PLAN 14.70.3). A cell added at the end; every package built before still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "9d24ec5aa18e94bd50f45acae9e82429d2b164ab7eab87c29a43b642f7dafbd3",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_IMG_NAME appended at 0x04CF: an image segment or pool offset -> its driver's or module's 8.3 name (KERN-MEGA-PLAN 14.70.3). A cell added at the end; every package built before still runs",
+   "to": 11
+  },
+  {
+   "fingerprint": "1766f9b3bfffad49c00caa2094427bdfb15b0d34093bef922a082c8eab345fad",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SERIAL Open: BL bit 7 = the user named the port, taken before the mouse contest settles (SPEC.md 115.1.1); old callers unchanged",
+   "to": 10
+  },
+  {
+   "fingerprint": "360080b9e6aeaef1a283eb0f62cd59a6134263f33c5c7a4b621b286226b34d23",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SERIAL Open: BL bit 7 = the user named the port, taken before the mouse contest settles (SPEC.md 115.1.1); old callers unchanged",
+   "to": 11
+  },
+  {
+   "fingerprint": "6bcf4e0ba4b9c048b73b69383a201191a6d094e8c17ce45b2ccb0183979b08ce",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "os88ui button record: OS88UI_BT_OX..FY (the drag rebase bank) replaced by OS88UI_BT_PLACE, the package's own layout proc run before every hit test; the record is each package's own and only its own copy of the library reads it, so nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "a5fb5455a73e10b9f0489ab5221c9acac470f72e70ead5f8471210b0bd3ee55e",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "os88ui button record: OS88UI_BT_OX..FY (the drag rebase bank) replaced by OS88UI_BT_PLACE, the package's own layout proc run before every hit test; the record is each package's own and only its own copy of the library reads it, so nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "02235e92df0657eb1ad4c9c6703b2d6c8a753a743e9d8a21343c20d82cbcd1e1",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge network-mount into elendilon: DRVC_HTTP = 10 appended, DQ_MAXREC 9 -> 10 for kern_emu's tenth row (SPEC.md 120.1), over elendilon's OS88UI_BT_PLACE record change - both additions, nothing built before moves",
+   "to": 10
+  },
+  {
+   "fingerprint": "09a7e1b51d3ed04cdcbb96ba377514f538d9f53112df683ad5500e08ed155583",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge network-mount into elendilon: DRVC_HTTP = 10 appended, DQ_MAXREC 9 -> 10 for kern_emu's tenth row (SPEC.md 120.1), over elendilon's OS88UI_BT_PLACE record change - both additions, nothing built before moves",
+   "to": 11
+  },
+  {
+   "fingerprint": "4af7b11e5626d27c1c9509067c60f4d2ff512b3128a4243f92a31be1ff7cbc75",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "comment-only: os88api.inc contract comments call the DOS package DOS",
+   "to": 10
+  },
+  {
+   "fingerprint": "d7c87702ffffdb423e17ba541a16526a5ce9ef77506e6fc052fbf3a4c3455112",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "comment-only: os88api.inc contract comments call the DOS package DOS",
+   "to": 11
+  },
+  {
+   "fingerprint": "592515ce8b58af48f65d0834bcbf5d475b996002689e82af6b252b9a0e8b8294",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of network-mount: OSAPI_ARG_TEXT at the table's end, HDI_GO's CH names a source; nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "8abb2facb5e077f3f6c653f6fff1f82f465756c6b94a0d8e0e13ed0367dc27d7",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge of network-mount: OSAPI_ARG_TEXT at the table's end, HDI_GO's CH names a source; nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "8a1fa51adc1d5fb021ba7c6c9d0e696df5cc8e03536de15560b710d5f8738ba4",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "elendilon-next (main #299 squash + elendilon): OSAPI_IMG_NAME and OSAPI_ARG_TEXT, which have never shipped on main, move up past main's OSAPI_GFX_BLITD to 0x04D7/0x04DD; DQ_MAXREC 10 -> 11 for kern_emu's eleventh row (HTTPFS.DRV beside VESA.DRV); both suspend-sweep-kept, so older buffers stay safe",
+   "to": 10
+  },
+  {
+   "fingerprint": "c727df0cd99ae05d1a740eb14581271243781aef5fbf52a4788c656ed05f6ba3",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "elendilon-next (main #299 squash + elendilon): OSAPI_IMG_NAME and OSAPI_ARG_TEXT, which have never shipped on main, move up past main's OSAPI_GFX_BLITD to 0x04D7/0x04DD; DQ_MAXREC 10 -> 11 for kern_emu's eleventh row (HTTPFS.DRV beside VESA.DRV); both suspend-sweep-kept, so older buffers stay safe",
+   "to": 11
+  },
+  {
+   "fingerprint": "e795883cf944ed5d3a6cd9f50a65cf8e34f22b58a6b972990cc954e01497262f",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SERIAL: refusal 9 = a UART no BIOS COM slot lists, split from 4 (SPEC.md 115.1); old callers unchanged",
+   "to": 10
+  },
+  {
+   "fingerprint": "3657e5029f46b904773021944fbe6b194861e175608b6b14825ad2b22058509e",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SERIAL: refusal 9 = a UART no BIOS COM slot lists, split from 4 (SPEC.md 115.1); old callers unchanged",
+   "to": 11
+  },
+  {
+   "fingerprint": "2f7c91493636933cbda58fff94a970b7ba6f35b48a3558577e5de52f5eb5edfe",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_XMEM_WALK: kern_big names the HMA's contents under XMW_FIXED (XMW_HMAK/HMAI/HMAB), additive",
+   "to": 10
+  },
+  {
+   "fingerprint": "1bf777a93bde9f1ca5ac89b0512729670e5912413db590189daf5b77e0c99bbc",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_XMEM_WALK: kern_big names the HMA's contents under XMW_FIXED (XMW_HMAK/HMAI/HMAB), additive",
+   "to": 11
+  },
+  {
+   "fingerprint": "cb2da1b8468a75b9cdd324ff08b207a353b9e03d653dbbaaae93018c0f01bb37",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge soak-run: MEM_K_MTBL (0xFF13) mirrored into apps/os88api.inc; a constant added, nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "10c42a6dc84de9cdfddf7887590affc10cb6ef38a186d6b4303de7e7d11da237",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge soak-run: MEM_K_MTBL (0xFF13) mirrored into apps/os88api.inc; a constant added, nothing built before changes",
+   "to": 11
+  },
+  {
+   "fingerprint": "611f800fdb8a9856989ff48380fcddd3b15faf3aef30320631c65c46183066a8",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "DRV_H_KEEP (SPEC.md 51.1.3): the header's link word, which the loader holds to 0, may be written by an attach to hand the end of its image back. An older driver writes nothing and keeps its claim; an older kernel ignores the word - everything built before still runs, so no DRV_VER bump",
+   "to": 11
+  },
+  {
    "fingerprint": "7baa5b851b7711acc0ee1618c4c85df93824615ad25408d92580c281623c7bfc",
    "from": 10,
    "guard": "PKG_FMT",
@@ -882,6 +1029,41 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "SPEC.md 34.5.5: OSAPI_SND_STREAM verb 11 (SND_V_FMT), SND_FMT_STEREO/SND_FMT_16 and SND_CAP_STEREO/SND_CAP_PCM16 added. Additive: verbs 0-10, every open flag and every existing cap keep their meaning, a driver older than the verb answers 7 to it, so PKG_FMT stays",
+   "to": 11
+  },
+  {
+   "fingerprint": "f6c74b82caa784886afa1fdb1d37d6f917e8cc377641b1d9f96f65ad41335721",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge main into elendilon: main's SND_V_FMT/SND_FMT_*/SND_CAP_STEREO/PCM16 (SPEC.md 34.5.5) over elendilon's SDK - constants added on both sides, no cell moved, nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "bba9ddbeb3671a028283149cfef2eb739f62edb843273877b9242b163ada5ba2",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge main into elendilon: main's SND_V_FMT/SND_FMT_*/SND_CAP_STEREO/PCM16 (SPEC.md 34.5.5) over elendilon's SDK - constants added on both sides, no cell moved, nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "efc429ec1fc929ce523b5a82a3008e52f8c9e303fa2d04d7862b46895b62a03c",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_HMA gains MEMHMA_KEEP's form (AX = 8000h | bytes, a driver's own image in the HMA cut to its DRV_H_KEEP; SPEC.md 51.1.3.1) - additive: the tail refused that range before, and every driver built earlier never sends it",
+   "to": 10
+  },
+  {
+   "fingerprint": "a4e879e3fbf5ad9bf15ebac55e884c896e55fcdc8babffd6a8c2c4aceff2e39b",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_HMA gains MEMHMA_KEEP's form (AX = 8000h | bytes, a driver's own image in the HMA cut to its DRV_H_KEEP; SPEC.md 51.1.3.1) - additive: the tail refused that range before, and every driver built earlier never sends it",
+   "to": 11
+  },
+  {
+   "fingerprint": "152833002b519c8ad7ae9acd7800c6b18c947cd16b00ef27ca6110932454465c",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OS88_DRV_FOOT (drivers/os88drv.inc): a zero-byte declaration that a driver cuts its HMA block, read by tools/os88rom.py off its map - additive (SPEC.md 51.1.3.1)",
    "to": 11
   }
  ]

@@ -162,7 +162,8 @@ def main(argv):
     print("    cs_diag_isr %04x  cs_dtick %04x  cs_doff %04x"
           % (sym["cs_diag_isr"], sym["cs_dtick"], sym["cs_doff"]))
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)
@@ -283,7 +284,9 @@ def main(argv):
                    if cs != kseg and cs < 0xF000]
         if strayed:                 # only NOW is it worth assembling the
             import os88sym          # kernel to place a `.cold` sample
-            cold = os88sym.equates().get("COLD_SEG")
+            # (where `.cold` RUNS - [api_coldseg], not COLD_SEG: on a machine with no VGA and no EGA it slid down at boot, docs/plans/MOVABLE-COLD-PLAN.md 2)
+            cold = int.from_bytes(m.read(os88sym.linear("api_coldseg"), 2),
+                                  "little")
             strayed = [x for x in strayed if x[0] != cold]
         check(not strayed,
               "...and every sample banked with another names the kernel"

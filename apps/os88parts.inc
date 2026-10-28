@@ -68,6 +68,15 @@
 ;    rule 7 forbids a worker both. The entry proc and every window callback
 ;    qualify; your worker does not.
 ;
+; --- and the claims may MOVE, if you say so (SPEC.md 20.12.12) --------------
+;
+; The carve and every fetched lazy part are born pinned, like every claim. A
+; package that `%define OP_ONMOVE my_hook` before this include gets op_movable
+; and op_pin (AL = a fetched lazy part, or OP_CARVE): the standard's proc puts
+; [op_base] or the row right, then jumps to my_hook (BX = was, DX = now), whose
+; job is to ask op_seg again for every segment it banked. Without the define
+; nothing below changes by a byte.
+;
 ; --- what it costs -----------------------------------------------------------
 ;
 ; ONE claim for every part that shares the carve, because MEM_OWNER_MAX is 8

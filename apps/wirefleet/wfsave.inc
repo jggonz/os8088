@@ -79,26 +79,30 @@ wf_filedone:
     jmp .restore
 .restored:
     mov word [wf_buttons+OS88UI_BT_N], 5
-    mov byte [wf_chatlog], 0
-    mov byte [wf_chatlog+40], 0
-    mov byte [wf_chatlog+80], 0
-    mov byte [wf_chatline], 0
-    mov byte [wf_input], 0
-    mov byte [wf_line+LN_FOCUS], 0
-    mov word [wf_line+LN_LEN], 0
-    mov word [wf_line+LN_CAR], 0
-    mov byte [wf_connected], 0
-    mov byte [wf_conflict], 0
-    mov byte [wf_linkopen], 0
-    mov byte [wf_lastout], 0xff
+    xor ax, ax                  ; the zeros through AX: 3 bytes a store, not 5/6
+    mov [wf_chatlog], al
+    mov [wf_chatlog+40], al
+    mov [wf_chatlog+80], al
+    mov [wf_chatline], al
+    mov [wf_input], al
+    mov [wf_line+LN_FOCUS], al
+    mov [wf_line+LN_LEN], ax
+    mov [wf_line+LN_CAR], ax
+    mov [wf_connected], al
+    mov [wf_conflict], al
+    mov [wf_linkopen], al
+    dec ax
+    mov [wf_lastout], al        ; 0xff
     call wf_autostart           ; the saved port first (114.9)
-    mov byte [wf_chatmode], 0
-    mov byte [wf_abon], 0
-    mov byte [wf_rlen], 0
-    mov byte [wf_rescape], 0
-    mov word [wf_peerturn], 0xffff
-    mov word [wf_txlen], 0
-    mov word [wf_txpos], 0
+    xor ax, ax                  ; (wf_autostart returns the tick count in AX)
+    mov [wf_chatmode], al
+    mov [wf_abon], al
+    mov [wf_rlen], al
+    mov [wf_rescape], al
+    mov [wf_txlen], ax
+    mov [wf_txpos], ax
+    dec ax
+    mov [wf_peerturn], ax       ; 0xffff
     mov byte [wf_urgent], 1
     mov word [wf_message], wf_loadedmessage
     jmp wf_repaint

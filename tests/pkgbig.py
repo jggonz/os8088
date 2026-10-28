@@ -86,7 +86,11 @@ def name_of(v):
     return NAMES[v] if v < len(NAMES) else "?%d" % v
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                      boot=False) as m:
+    m.run()                             # the boot gate on STATE: the first
+    os88marty.kernel_up(m)              # act is a verb that confirms
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]

@@ -1,10 +1,10 @@
 ; =============================================================================
 ; os8088 - apps/dos/dosload.asm
 ;
-; **THE DOS BOX'S LOADER - the IMAGE of DOS.O88, and the whole of what the
-; kernel launches** (SPEC.md 96.44.4, 20.12.10). It reads the box out of part
-; 0, tells it where `kern_dos` sits in the file, and asks the kernel to treat
-; the box as the program. Then its region is freed and it is gone: what runs
+; **DOS'S LOADER - the IMAGE of DOS.O88, and the whole of what the kernel
+; launches** (SPEC.md 96.44.4, 20.12.10). It reads the windowed DOS out of
+; part 0, tells it where `kern_dos` sits in the file, and asks the kernel to
+; treat it as the program. Then its region is freed and it is gone: what runs
 ; is `apps/dos/dos.asm`, at part 0, with a window and an instance and no idea
 ; any of this happened.
 ;
@@ -29,8 +29,8 @@
 ; whole argument is that the handoff walks the part's bytes into EXTENTS while
 ; the file layer is alive and a stub reads them with `int 13h` - by then the
 ; heap has been given away and there is nowhere to `op_load` to. So what the
-; box needs off this row is three numbers, and the loader copies them into the
-; box's own bss before it disappears.
+; windowed DOS needs off this row is three numbers, and the loader copies
+; them into the DOS's own bss before it disappears.
 ;
 ; **`OP_COMP` BESIDE `OP_LAZY` WAS REFUSED AND IS NOT ANY MORE** (SPEC.md
 ; 20.12.7.4). The refusal was right about the mechanism - one `zkb` word, two
@@ -44,7 +44,7 @@
 ;
 ; IT MUST NOT CREATE A WINDOW (SPEC.md 20.12.10.6): its region is about to be
 ; freed, so a window whose `W_SEG` named it would far-call a dead claim on its
-; first repaint. The box's window is the one the user sees.
+; first repaint. The windowed DOS's window is the one the user sees.
 ; =============================================================================
 cpu 8086
 bits 16
@@ -54,7 +54,7 @@ bits 16
     OS88_HEADER 'DOS', dsl_entry, 3 | OS88_F_GLYPH | OS88_F_PARTS
 
 %include "dosicon.inc"          ; ...and the SAME icon, association block and
-                                ; document glyph the box carries: all are read out
+                                ; document glyph part 0 carries: all read out
                                 ; of the IMAGE - the Disk window draws this
                                 ; one before the launch, and `assoc.inc` reads
                                 ; the three extensions off it to decide that a
@@ -67,19 +67,19 @@ bits 16
                                     ; grey ahead of it (SPEC.md 20.12.9.2)
 %include "os88parts.inc"
 
-DOS_PART_BOX  equ 0             ; the box - a whole .o88 image (20.12.10)
+DOS_PART_PKG  equ 0             ; windowed DOS: a whole .o88 image (20.12.10)
 DOS_PART_CORE equ 1             ; ...the INT 21h core, which goes INSIDE it
 DOS_PART_KD   equ 2             ; ...and kern_dos, which nothing here reads
 %ifdef DOS_MEGA
 DOS_PART_KDL  equ 3             ; ...and kern_mega's LOW kern_dos (SPEC.md
 %endif                          ; 96.40.9.2), which nothing here reads either
 
-; --- the handoff, at the head of the BOX's bss (SPEC.md 20.12.10.2) ---------
+; --- the handoff, at the head of the DOS's bss (SPEC.md 20.12.10.2) ---------
 ; ONE PACKAGE, TWO SOURCES: `apps/dos/dos.asm` declares these and this file is
 ; the other end of them. The kernel is not involved and has no opinion; it
 ; does not zero a part, which is the whole of what makes this work.
 ;
-; IT IS AN `OP_ROW` AND NOT A STRUCT OF OUR OWN, deliberately: the box already
+; IT IS AN `OP_ROW` AND NOT A STRUCT OF OUR OWN, deliberately: the DOS already
 ; read `[dos_kdrow + OP_R_OFF]` out of the part table when the table was in
 ; its own image, so copying the row VERBATIM leaves all four of its read sites
 ; spelled exactly as they were and moves only the base.
@@ -107,7 +107,7 @@ dsl_row:
 ; in:  DS:SI = the row, ES:DI = where it goes
 ; **BYTE BY BYTE and not `movsw`**: ES is the destination and DS is ours, so
 ; the string form would want both set, and the stash below is read with ES
-; pointing at the BOX.
+; pointing at the windowed DOS.
 dsl_cpy:
     mov cx, OP_ROW
 .b:
@@ -121,15 +121,15 @@ dsl_cpy:
 
 ; -----------------------------------------------------------------------------
 ; dsl_core - put the INT 21h core into the hole reserved for it (SPEC.md 96.44.5)
-; in:  DX = the box's segment, the parts already loaded
+; in:  DX = the windowed DOS's segment, the parts already loaded
 ; out: CF=0; CF=1 = it could not be had, and op_fetch has said why
 ; clobbers: AX, BX, CX, SI, DI, ES, flags. DX preserved.
 ;
 ; **op_load CANNOT PUT IT THERE**, which is why this proc exists. The carve
 ; lays its parts out one after another, and the core has to land at CORE_ORG
-; *inside* the box's own segment - the one address both hosts agree on, which
-; is what makes every `call dos_load` in the box a near call into the table
-; (apps/dos/doscall.inc). So the core is a LAZY part: op_fetch claims it, reads
+; *inside* the windowed DOS's own segment - the one address both hosts agree
+; on, which is what makes every `call dos_load` in the DOS a near call into the
+; table (apps/dos/doscall.inc). So the core is a LAZY part: op_fetch claims it, reads
 ; it and expands it somewhere of its own, this copies it into place, and
 ; op_drop gives the claim straight back.
 ;
@@ -141,7 +141,7 @@ dsl_cpy:
 ; THE COPY IS ~41 ms on a 4.77MHz 8088 (`rep movsw` at 13.3 cycles a byte,
 ; PERFORMANCE.md Set 117.2) and it happens once, at a launch that is already
 ; reading 40KB off a floppy. The core's bss needs no zeroing: it is inside the
-; box's own image, which ships those bytes as zeros.
+; windowed DOS's own image, which ships those bytes as zeros.
 ; -----------------------------------------------------------------------------
 dsl_core:
     mov al, DOS_PART_CORE
@@ -157,13 +157,13 @@ dsl_core:
     or ax, ax
     jz .no
     push ax
-    ; **THE BOX'S SEGMENT IS READ HERE AND NOT BY THE CALLER**, because
-    ; op_fetch CLAIMS - and a claim may compact, which moves the carve the box
+    ; **THE DOS'S SEGMENT IS READ HERE AND NOT BY THE CALLER**, because
+    ; op_fetch CLAIMS - and a claim may compact, which moves the carve the DOS
     ; is sitting in (SPEC.md 66.4). Read before the fetch, it is a segment the
     ; heap has since moved out from under, and the copy below lands on whoever
     ; owns those paragraphs now. It cost a launch that reported SUCCESS and put
     ; up no window, with 14.5KB written into the middle of nothing.
-    mov al, DOS_PART_BOX
+    mov al, DOS_PART_PKG
     call op_seg
     or ax, ax
     jz .nopop
@@ -197,7 +197,7 @@ dsl_core:
 dsl_entry:
 %ifdef DOS_MEGA
     ; **A kern_mega DOS.O88 ON ANY OTHER KERNEL REFUSES** (docs/plans/
-    ; KERN-MEGA-DOS-PLAN.md 12.1 item 4): its box has no windowed arm and its
+    ; KERN-MEGA-DOS-PLAN.md 12.1 item 4): its DOS has no windowed arm and its
     ; only route parks the machine above 1MB, which only kern_mega can do.
     ; Asked first, so nothing is read before the answer.
     call OSAPI_CPU_INFO             ; AH = CPU_F_*; every register but AX kept
@@ -230,17 +230,17 @@ dsl_pmok:
     mov al, DOS_PART_CORE
     call dsl_row
 
-    call dsl_core                   ; the core, into the hole inside the box -
+    call dsl_core                   ; the core, into the hole inside the DOS -
     jc .no                          ; and it CLAIMS, so nothing may hold the
-                                    ; box's segment across it
+                                    ; DOS's segment across it
 
-    mov al, DOS_PART_BOX
+    mov al, DOS_PART_PKG
     call op_seg                     ; ...read AFTER every claim this proc makes
     or ax, ax
     jz .no
-    mov dx, ax                      ; DX = where the box is
+    mov dx, ax                      ; DX = where the DOS is
 
-    ; --- the row, into the head of the box's bss ---------------------------
+    ; --- the row, into the head of the DOS's bss ---------------------------
     mov es, dx
     mov di, [es:LD_H_IMG]           ; the bss begins here, which the part's own
     add di, DSLH_KDROW              ; header says
@@ -252,7 +252,7 @@ dsl_pmok:
     call dsl_cpy                    ; 96.44.5.4): kern_dos's image has a hole
 %ifdef DOS_MEGA
     mov di, [es:LD_H_IMG]
-    add di, DSLH_KDLROW             ; ...and the LOW kern_dos's, which the box
+    add di, DSLH_KDLROW             ; ...and the LOW kern_dos's, which the DOS
     mov al, DOS_PART_KDL            ; posts instead of part 2's when its HMA
     call dsl_row                    ; box is unticked (SPEC.md 96.40.9.2)
 %endif
@@ -282,7 +282,7 @@ dsl_pmok:
 %else
     OS88_PARTS_BEGIN 4
 %endif
-      OS88_PART OP_SEG,   OP_COMP   ; 0 THE BOX: a whole .o88 image, its bss
+      OS88_PART OP_SEG,   OP_COMP   ; 0 THE DOS: a whole .o88 image, its bss
                                     ;   shipped inside it because the kernel
                                     ;   does not zero a part (20.12.10).
                                     ;   OP_COMP is the whole point of this
@@ -300,7 +300,7 @@ dsl_pmok:
                                     ;   above), and never fetched at all
                                     ;   because the handoff reads it by extent
                                     ;   list with the heap already gone - what
-                                    ;   the box wants off this row is three
+                                    ;   the DOS wants off this row is three
                                     ;   numbers. COMP because it is 29KB of a
                                     ;   360KB system disk otherwise, and the
                                     ;   pairing is what SPEC.md 20.12.7.4 had

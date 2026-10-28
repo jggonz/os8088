@@ -154,7 +154,7 @@ def map_pair(m, g, out, ftag, wtag):
 
 def shoot(machine, out):
     with os88marty.launch("build/os8088-360.img", apps="build/games360.img",
-                          machine=machine) as m:
+                          machine=machine, boot=False) as m:
         g = pxslib.open_game(m)
         g.sim(False)
         g.god(True)

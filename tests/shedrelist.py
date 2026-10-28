@@ -48,7 +48,9 @@ def main():
     os.chdir(ROOT)
     eq = os88sym.equates(("KERN_SMALL",))
     with os88ui.boot("build/small360.img", apps="build/smallapps360.img",
-                     machine=MACHINE) as ui:
+                     machine=MACHINE,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         ui.open_drive("B")
         ui.open("GAMES")

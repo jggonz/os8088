@@ -15,6 +15,9 @@ build-*/
 # every nvr/ is gitignored; this is what makes that true, and true for the next
 # machine as well. vm/*/screenshots/ below has always been this shape.
 vm/*/nvr/
+# ...and the demo disks `make viddemo-<adapter>` links into its profile
+# (vm/viddemo-*/nvr-seed/ is the TRACKED CMOS; nvr/ above stays ignored)
+vm/viddemo-*/*.VHD
 # ...and 86Box's own screenshot directory. The collapse above dropped it by
 # accident - the comment has named it as present ever since, and main still
 # carried it, so the merge is where it comes back.

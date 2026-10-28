@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
+import os88ui                                               # noqa: E402
 import os88sym                                              # noqa: E402
 import dispapps                                             # noqa: E402
 import dispcp                                               # noqa: E402
@@ -64,22 +65,17 @@ def lit(fb):
 
 
 def open_game(m):
-    """Boot to the desktop and get SKIES.O88 open. Returns (slot, seg, bss)."""
-    S = os88sym.linear
-    os88marty.settle(m)
-    mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
-    disk = dispcp.win_list(m, S)[-1]
-    wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "GAMES")
-    wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    rows = [r[0] for r in dispcp.listing(m, S)]
-    if "SKIES.O88" not in rows:
-        sys.exit("skies: SKIES.O88 is not on the apps disk")
-    row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy,
-                           rows.index("SKIES.O88"))
-    x, y = dispcp.row_xy(wx, wy, row)
-    mo.dblclick(x, y)
+    """Boot to the desktop and get SKIES.O88 open. Returns (slot, seg, bss).
+
+    Through os88ui's verbs, each confirmed off guest state, so no settle:
+    the boot gate is the kernel's desktop state (`ui.up`), and a machine
+    launched PAUSED (`boot=False`, cycles 0) is started here."""
+    if not int(m.status().get("cycles", 0)):
+        m.run()
+    ui = os88ui.UI(m, verbose=False)
+    ui.up()
+    os88marty.no_saver(m)
+    ui.path("B:/GAMES/SKIES.O88")
     m.advance(frames=200)
     m.run()
     got = dispapps.pkg_seg(m, 0)
@@ -211,7 +207,8 @@ def main(argv):
     os.chdir(ROOT)
     bad = []
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
         slot, seg, base = open_game(m)
         r = Bss(m, seg, base)
         print("  SKIES.O88: window %d, segment %04x, bss at %04x"

@@ -44,7 +44,7 @@ sys.path.insert(0, "tests")
 import os88marty as M                                       # noqa: E402
 from os88mouse import Mouse                                 # noqa: E402
 import instdeep as ID                                       # noqa: E402
-import instrest as IR                                       # noqa: E402
+import glyphread as IR                                      # noqa: E402
 import bigvol as BV                                         # noqa: E402
 
 SECTOR = 512
@@ -86,12 +86,12 @@ def open_tool(m):
     x0, y0 = ID.content(cp[0])
     mo.click(x0 + 40, y0 + ID.CP_I0Y + ID.CP_IDRV * ID.CP_IROWH + 7)
     mo.click(x0 + ID.CP_RX + 40,
-             y0 + ID.CP_DBY1 + ID.CP_DROWH + ID.CP_DROWH // 2, settle=8.0)
+             y0 + ID.CP_DBY1 + ID.CP_DROWH + ID.CP_DROWH // 2, settle=0); M.ui_done(m, cap=36.0)
     nst = m.read(m.sym("cp_nst"), 1)[0]
-    mo.click(x0 + 40, y0 + ID.CP_I0Y + nst * ID.CP_IROWH + 7, settle=3.0)
+    mo.click(x0 + 40, y0 + ID.CP_I0Y + nst * ID.CP_IROWH + 7, settle=0); M.ui_done(m, cap=13.5)
     known = {w[0] for w in ID.wins(m)}
     mo.click(x0 + ID.CP_RX + HDP_B0X + HDP_BW0 // 2,
-             y0 + ID.HDP_BY + ID.HDP_BH // 2, settle=8.0)
+             y0 + ID.HDP_BY + ID.HDP_BH // 2, settle=0); M.ui_done(m, cap=36.0)
     tw = next((w for w in ID.wins(m) if w[0] not in known), None)
     if tw is None:
         sys.exit("hdsize: the disk tool never opened")
@@ -128,7 +128,7 @@ def line_says(m, mo, tx, ty, tab, box, typed, total, shot=None):
 def format_slot(m, mo, tx, ty, vhd, slot):
     bx, by = tx + HTW_B0X + HTW_BW0 // 2, ty + HTW_BY + HTW_BH // 2
     base = open(vhd, "rb").read(SECTOR)
-    mo.click(bx, by, settle=3.0)                # arms
+    mo.click(bx, by, settle=0); M.ui_done(m, cap=13.5)                # arms
     mo.click(bx, by, settle=0)                  # goes
     M.until(m, lambda _: open(vhd, "rb").read(SECTOR) != base,
             "Format to write slot %d's entry" % (slot + 1), limit=300.0)
@@ -155,8 +155,9 @@ def main():
     stage(vhd)
     bad = []
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=ID.MACHINE, run_dir=run_dir) as m:
-        M.settle(m)
+                  machine=ID.MACHINE, run_dir=run_dir, boot=False) as m:
+        m.run()
+        M.kernel_up(m)                  # reads and clicks follow, no capture
         tab = IR.glyph_table(m)
         mo, tx, ty = open_tool(m)
         if not line_says(m, mo, tx, ty, tab, "321", False, 321, "open"):
@@ -184,7 +185,7 @@ def main():
         if bad:                                 # slot 2 would only wait out
             sys.exit("hdsize: " + "; ".join(bad))   # a Format with no room
 
-        mo.click(tx + 40, ty + HTW_R0Y + HTW_ROWH + 4, settle=2.0)  # slot 2
+        mo.click(tx + 40, ty + HTW_R0Y + HTW_ROWH + 4, settle=0); M.ui_done(m, cap=9.0)  # slot 2
         rest = C * CYL - (63 + want)
         if not line_says(m, mo, tx, ty, tab, str(rest >> 11), False,
                          rest >> 11, "slot2"):

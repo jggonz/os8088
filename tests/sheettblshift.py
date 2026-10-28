@@ -66,7 +66,8 @@ from paintmove import pkg_syms                                # noqa: E402
 from os88geom import WIN_SIZE, W_SEG                          # noqa: E402
 
 WORK = "build/sheettblshift"
-DISK = "build/sheettblshift.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheettblshift.img")        # the run's tree, so a soak lane finds it
 NAME = "SHIN.SLK"
 
 # A TWO-INPUT table at B1:D3, with both input cells BELOW it at A5 and A6.
@@ -95,8 +96,7 @@ def main():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "build/sheet.o88", "build/CHART.OVL",
-                    "build/MACRO.OVL", src],
+                    "--size", "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
     S = os88sym.linear
     sym = pkg_syms("apps/sheet/sheet.asm")

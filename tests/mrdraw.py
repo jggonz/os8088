@@ -158,7 +158,7 @@ def main():
     img, apps, machine, path = VGA if a.vga else HERC
     rows = []
     ok = True
-    with os88ui.boot(img, apps=apps, machine=machine) as ui:
+    with os88ui.boot(img, apps=apps, machine=machine, quick=True) as ui:
         ui.path(path)
         p = mrprobe.attach(ui)
         M.until(ui.m, lambda _: p.b("mr_loaded") == 1, "the autoload",

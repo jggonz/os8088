@@ -93,10 +93,10 @@ kd_resume:
     jc .no                      ; record's own 26 (SPEC.md 96.37.1 item 4) -
     mov [kdr_clus], bx          ; and DX:CX = the size
     ; **AND ITS LENGTH, WHICH IS THE FILE'S AND NOT MEMORY'S.** The first
-    ; version sized the walk from `[kd_top]` - the box's banked BDA figure -
+    ; version sized the walk from `[kd_top]` - DOS.O88's banked BDA figure -
     ; because that is what `hbm_extents` does with `[mem_top]` over there.
     ; They are two different quantities: the kernel writes `[mem_top]`
-    ; paragraphs and this host's idea of the top of memory is a cap the BOX
+    ; paragraphs and this host's idea of the top of memory is a cap DOS.O88
     ; banked, so a machine where they disagree restores SHORT. It presented
     ; as a session that came back with the kernel intact and the package heap
     ; full of rubbish - a window whose title was 24 bytes of 0x86 - because a
@@ -302,7 +302,7 @@ kd_resume:
                                     ; two-route field would go stale
     mov ax, [dos_akb]           ; ...AND THE ARENA IT WAS GIVEN (SPEC.md
     mov [es:HS_DOSAKB], ax      ; 96.41.1). `kd_arena` worked it out off
-                                ; `[kd_top]` and the box cannot: over there
+                                ; `[kd_top]` and DOS.O88 cannot: over there
                                 ; the figure is what OSAPI_MEM_AVAIL_MAX said
                                 ; about a HEAP, and this program had the
                                 ; machine. Staged in the cell `hbm_res` uses
@@ -436,7 +436,7 @@ kd_stageseg:
 ;
 ; THE IMAGE IS AS LONG AS THE FILE SAYS, which is the one quantity both sides
 ; agree on: the kernel wrote `[mem_top]` paragraphs of it and this host knows
-; only `[kd_top]`, a cap the box banked out of the BDA, and a machine where
+; only `[kd_top]`, a cap DOS.O88 banked out of the BDA, and a machine where
 ; those differ restores SHORT and silently.
 ; -----------------------------------------------------------------------------
 kd_extents:

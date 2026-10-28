@@ -111,6 +111,28 @@ def hooks(body):
     return out
 
 
+# ...AND `dos_hslot`, kern_mega's slot maker (KERN-MEGA-DOS-PLAN 10.5 defect
+# 4): dos_hvec's `call [dos_hslot]` reaches whatever the HOST stored there,
+# and the one host that stores anything is kern_dos, binding its own HMA
+# trampoline (`mov word [cs:dos_hslot], kdh_vslot` in kerndos/). That is the
+# far side of the seam exactly as a door's target is, so the call is exempt -
+# but only while every binding in the tree names something that is NOT a
+# proc of the core, which is checked rather than assumed.
+HSLOTBIND = re.compile(r"mov\s+word\s+\[(?:cs:)?dos_hslot\]\s*,"
+                       r"\s*([A-Za-z_]\w*)")
+
+
+def hslot_bound_outside(body):
+    names = []
+    for top in ("apps", "kerndos", "kernel"):
+        for dp, _dn, fns in os.walk(os.path.join(ROOT, top)):
+            for fn in fns:
+                if fn.endswith((".asm", ".inc")):
+                    with open(os.path.join(dp, fn), errors="replace") as fh:
+                        names += HSLOTBIND.findall(fh.read())
+    return bool(names) and not any(n in body for n in names)
+
+
 def reach(body):
     """Every proc the roots can reach, and the path to each."""
     stop = {"dos_be_go"} | {p for p in body
@@ -160,6 +182,13 @@ def main():
                   "at. This is the check that makes the rest mean anything")
     seen, prev = reach(body)
 
+    hslot_ok = hslot_bound_outside(body)
+    check(hslot_ok, "dosseam: dos_hslot is bound only to host code",
+          why="the core's one other indirect call, dos_hvec's `call "
+              "[dos_hslot]`, is exempt below ONLY because kern_dos binds it "
+              "to its own HMA trampoline outside apps/dos - a binding to a "
+              "core proc would put a reach behind it this walk cannot see")
+
     fs, other, indirect = [], collections.Counter(), []
     for p in sorted(seen):
         for f, i, c in body[p]:
@@ -169,7 +198,8 @@ def main():
                     fs.append((f, i, p, m.group(1)))
                 else:
                     other.update([m.group(1)])
-            if INDIRECT.search(c) and "dos_hkv" not in c:
+            if (INDIRECT.search(c) and "dos_hkv" not in c
+                    and not ("dos_hslot" in c and hslot_ok)):
                 indirect.append((f, i, p, c.strip()))
 
     # --- rule 1: a hard zero ------------------------------------------------

@@ -33,7 +33,7 @@
 ; ABOVE both hosts, on a measurement that they were within 600 bytes of each
 ; other - and W8 then cut 14,622 bytes out of one of them. They differ by
 ; 4,628 now and always will: `kern_dos` carries the disk layer and no window,
-; the box carries the window and no disk layer. Core-above turns that
+; DOS.O88 carries the window and no disk layer. Core-above turns that
 ; difference into a HOLE in `kern_dos`'s address space, which is 4.7 KB off
 ; `KD_IMG_KB` and so 4.7 KB off the DOS program - the one quantity the whole
 ; plan is a budget for. Core-LOW has no hole at all: each host's own code
@@ -49,7 +49,7 @@
 ; `tests/unit/t_kdapi.py` scans both images for the opcode rather than
 ; reserving address space against it.
 ;
-; What is left to clear is the BOX's own low bytes - the package header at
+; What is left to clear is DOS.O88's own low bytes - the package header at
 ; 0x00, the 16x16 icon at 0x20, the association block at 0x60, which
 ; `OS88_ASSOC16_END` pads to 112, and the document glyph at 0x70, which
 ; `OS88_DOCGLYPH8_END` pads to **128** (SPEC.md 54.3.2) - and `kern_dos`'s
@@ -159,7 +159,7 @@ CORE_BSS_AT equ CORE_ORG + CORE_MAX
 
 ; --- A `DBSS` ROW'S SIZE IS PART OF THE LAYOUT (SPEC.md 96.44.2.1) ----------
 ; `DOS_B_DVCWD` is a word per drive and was written `2 * DVOL_MAX` - which is
-; the box's per-drive REACH, and that one is `%ifndef KD_BACKEND` so a host
+; DOS.O88's per-drive REACH, and that one is `%ifndef KD_BACKEND` so a host
 ; bringing its own disk layer keeps that layer's number (96.38).  The window
 ; said 6, the core said 8, and every core cell after the table was then FOUR
 ; BYTES APART in the two halves - the exact failure 96.44.2's rule is about,

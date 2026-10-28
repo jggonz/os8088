@@ -87,6 +87,7 @@ class Guest:
             for _ in range(100):
                 try:
                     self.q = socket.create_connection(('127.0.0.1', qp), timeout=2)
+                    self.q.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     break
                 except OSError:
                     if self.proc.poll() is not None:
@@ -98,9 +99,37 @@ class Guest:
             self.f.readline()
             self.qmp('qmp_capabilities')
             self.g = socket.create_connection(('127.0.0.1', gp), timeout=10)
+            # NO NAGLE: every command is the ack '+' then the next packet, two
+            # small writes, and Nagle held the second for the stub's delayed
+            # ACK - 44 ms an RSP command, whatever it moved (174 of 213 s)
+            self.g.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.gf = self.g.makefile('rb')     # (read a reply BUFFERED: a
+                                                # recv(1) a byte was 8 s)
             self.rsp('?')
             self.qmp('cont')
-            time.sleep(3)
+            # The boot on STATE, not a 3 host-s sleep: the desktop's tables
+            # written, [spl_live] = 0 (kmain's last act) and the BIOS tick
+            # moving past it (os88marty.kernel_up's gate), read over QMP while
+            # the guest runs; then the UI idle. Budgeted in GUEST seconds.
+            up = (os88sym.linear('desk_rows'), os88sym.linear('menu_nbar'),
+                  os88sym.linear('spl_live'))
+            seen = [None]
+            def booted():
+                if not (any(self.peek(up[0], 2)) and any(self.peek(up[1], 2))
+                        and not self.peek(up[2], 1)[0]):
+                    seen[0] = None
+                    return False
+                t = os88qemu.ticks(self)
+                if seen[0] is None:
+                    seen[0] = t
+                return t != seen[0]
+            mem, self.read = self.read, self.peek    # os88qemu reads `m.read`
+            try:
+                if not os88qemu.acted(self, booted, secs=120, what='the desktop'):
+                    raise RuntimeError('the kernel never reached the desktop')
+                os88qemu.ui_done(self, os88sym.linear, cap=3.0, what='the boot')
+            finally:
+                self.read = mem
             self.qmp('stop')
             # Enter on the UI task's normal stack, outside the graphics lock.
             # Injecting disk/UI work on the idle task trips its stack guard.
@@ -116,7 +145,7 @@ class Guest:
         self.proc.terminate()
         self.proc.wait(timeout=10)
         Path(self.pidfile).unlink(missing_ok=True)
-        for name in ('f','q','g'):
+        for name in ('f','gf','q','g'):
             resource = getattr(self,name,None)
             if resource is not None:
                 resource.close()
@@ -134,26 +163,37 @@ class Guest:
     def rsp(self, command):
         data = command.encode()
         self.g.sendall(b'$'+data+b'#'+f'{sum(data)&255:02x}'.encode())
+        gf = self.gf
         while True:
-            c = self.g.recv(1)
+            c = gf.read(1)
             if not c:
                 raise EOFError('GDB disconnected before reply')
             if c == b'$':
                 break
         reply = bytearray()
         while True:
-            c = self.g.recv(1)
+            c = gf.read(1)
             if not c:
                 raise EOFError('GDB disconnected during reply')
             if c == b'#':
                 break
             reply += c
-        self.g.recv(2)
+        gf.read(2)
         self.g.sendall(b'+')
         result = reply.decode()
         if result.startswith('E'):
             raise RuntimeError(f'GDB {command[:50]}: {result}')
         return result
+
+    def peek(self, address, size):
+        """Guest memory over QMP's `xp`, which works while the guest RUNS
+        (`read` is the gdb stub's and needs it stopped)."""
+        out = self.qmp('human-monitor-command',
+                       **{'command-line': 'xp /%dxb 0x%x' % (size, address)})
+        b = bytearray()
+        for line in out.splitlines():
+            b += bytes(int(x, 16) for x in line.split(':', 1)[1].split())
+        return bytes(b[:size])
 
     def read(self, address, size):
         return bytes.fromhex(self.rsp(f'm{address:x},{size:x}'))

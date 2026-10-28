@@ -205,6 +205,15 @@ def scan():
             # verbatim runs and collapses each line leader to one space;
             # `segs` records where each run started in both texts, so a match
             # offset is turned into a line by two bisects rather than a scan.
+            # The flat text alone is one C-speed `sub` (it is exactly what the
+            # loop below joins); the map back to lines is built only for a
+            # file in which some pattern matched - most match nothing.
+            text = leader.sub(" ", raw)
+            found = [(kind, m) for kind, pats in (("task0", TASK0),
+                                                  ("worker", WORKER))
+                     for pat in pats for m in pat.finditer(text)]
+            if not found:
+                continue
             parts, segs, flat_len, pos = [], [], 0, 0
             for m in leader.finditer(raw):
                 chunk = raw[pos:m.start()]
@@ -217,7 +226,7 @@ def scan():
                 pos = m.end()
             segs.append((flat_len, pos))
             parts.append(raw[pos:])
-            text = "".join(parts)
+            assert "".join(parts) == text
 
             nl = [m.start() for m in _NL.finditer(raw)]
             fstarts = [f for f, _ in segs]
@@ -229,19 +238,17 @@ def scan():
 
             srclines = raw.split("\n")
             seen = set()
-            for kind, pats in (("task0", TASK0), ("worker", WORKER)):
-                for pat in pats:
-                    for m in pat.finditer(text):
-                        no = lineof(m.start())
-                        val = int(m.group(1).replace(",", ""))
-                        if (no, val) in seen:
-                            continue
-                        seen.add((no, val))
-                        # the SOURCE line, not the matched fragment: HISTORY
-                        # registers a snippet of the line a reader sees, and
-                        # after normalisation m.group(0) is neither.
-                        src = srclines[no - 1] if no <= len(srclines) else ""
-                        hits.append((rel, no, val, kind, src.strip()))
+            for kind, m in found:
+                no = lineof(m.start())
+                val = int(m.group(1).replace(",", ""))
+                if (no, val) in seen:
+                    continue
+                seen.add((no, val))
+                # the SOURCE line, not the matched fragment: HISTORY
+                # registers a snippet of the line a reader sees, and
+                # after normalisation m.group(0) is neither.
+                src = srclines[no - 1] if no <= len(srclines) else ""
+                hits.append((rel, no, val, kind, src.strip()))
     return hits
 
 

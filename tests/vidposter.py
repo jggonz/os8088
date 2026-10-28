@@ -207,7 +207,7 @@ def main():
                            [f[1] for f in files], check=True,
                            capture_output=True)
             with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                             machine=machine) as ui:
+                             machine=machine, quick=True) as ui:
                 m = ui.m
                 for name, v88, how, wps, w4 in files:
                     arm += 1
@@ -224,7 +224,7 @@ def main():
                         return m.read(_b + syms[n], 1)[0]
 
                     def until(cond, what):
-                        os88marty.until(m, cond, what, poll=0.3,
+                        os88marty.until(m, cond, what, poll=0.05,
                                         limit=600.0, guest=90.0)
 
                     until(lambda mm: rw("vp_ploads") >= 1, "the poster")

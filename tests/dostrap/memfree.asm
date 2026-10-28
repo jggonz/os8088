@@ -9,7 +9,7 @@
 ; happens to refuse out loud.  This asks the same question with nothing loaded
 ; on top of it, so the answer pairs directly with the `(Arena: NNNKB)` the
 ; console now prints (SPEC.md 96.33.19) and the difference between the two is
-; the box's own overhead and nothing else.
+; DOS's own overhead and nothing else.
 ;
 ;   nasm -f bin -o MEMFREE.COM tests/dostrap/memfree.asm
 ;

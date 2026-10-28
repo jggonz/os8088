@@ -139,15 +139,17 @@ def main():
             check=True, capture_output=True)
         m0 = os88marty.launch(None, apps=img,
                               machine="os8088_5150_herc_hdd_sb_gla",
-                              extra=["--mount", "hd:0:" + vhd])
-        ui0 = os88ui.UI(m0, verbose=False)
-        ui0.ready(limit=240)
+                              extra=["--mount", "hd:0:" + vhd], boot=False)
+        m0.run()                        # (quick: every step is a verb or
+        ui0 = os88ui.UI(m0, verbose=False)  # a guest read)
+        ui0.up(limit=240)
+        os88marty.no_saver(m0)
         ctx = _Hold(m0, ui0)
         tgt = 0x80
         vt = os88flush.vhd_volume(vhd)
     else:
         ctx = os88ui.boot(os88build.at("build/os8088.img"), apps=img,
-                          machine=MACHINE, verbose=False)
+                          machine=MACHINE, verbose=False, quick=True)
         tgt = 0
         vt = None
     with ctx as ui:
@@ -165,21 +167,21 @@ def main():
                           else "SET.001", win)
         x, y = ui.row_xy(win, ui.scroll_to(idx, win=win))
         ui.mo.click(x, y)
-        ui.settle()
+        os88marty.ui_done(m)
         m.write(S("toast_buf"), bytes(25))
         if a.verb == "to":
             ui.menu_pick("File", "Uncompress To...")
             os88marty.until(m, lambda mm: int.from_bytes(
                 m.read(S("fdlg_win"), 2), "little") != 0,
-                "the Save box to open", poll=0.1, guest=30.0)
-            ui.settle()
+                "the Save box to open", poll=0.05, guest=30.0)
+            os88marty.ui_done(m)
         elif a.verb in ("copy", "copyb"):
             ui.menu_pick("Edit", "Copy")
             if a.verb == "copy":
                 ui.open_drive("C" if a.hdd else "A")
             else:
                 ui.open("..")
-            ui.settle()
+            os88marty.ui_done(m)
         tally = {}
         seq = []
         at = S("dsk_xfer.attempt")
@@ -226,10 +228,10 @@ def main():
             m.write(sig, b"\0\0")      # A: is volume 0
             m.run()
             os88marty.until(m, lambda mm: done(), "the join to end",
-                            poll=0.5, guest=900.0)
+                            poll=0.05, guest=900.0)
         elif a.nobp:
             os88marty.until(m, lambda mm: done(), "the join to finish",
-                            poll=0.5, guest=900.0)
+                            poll=0.05, guest=900.0)
         else:
             m.bp_exec(pre, i13)
             t_in = None
@@ -269,7 +271,7 @@ def main():
         if a.verb in ("copy", "copyb"):
             t = "Uncompressed" if m.read(S("fcp_err"), 1)[0] == 0 else \
                 "fcp_err %d" % m.read(S("fcp_err"), 1)[0]
-        ui.settle()
+        os88marty.ui_done(m)
         if a.hdd:
             m.close()
             tv = os88flush.vhd_volume(vhd)

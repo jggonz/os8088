@@ -43,18 +43,23 @@ def main():
     a = ap.parse_args()
     rom = subprocess.check_output([sys.executable, os.path.join(ROOT, "tools", "gbours.py"),
                                    "gbbank"], text=True).strip().splitlines()[-1]
-    o = argparse.Namespace(rom=rom, vm=a.vm, keep="", mem=4096, press="", fs=False)
+    o = argparse.Namespace(rom=rom, vm=a.vm, keep="", mem=4096, press="", fs=False,
+                           quick=True)
     b = rdgwin.boot(o)
     fails = []
     try:
-        b.cmd("step 60000")                     # the 1MB load, off a floppy
-        seg, view, core = rdgwin.find(b)
+        seg, view, core = rdgwin.find(b)        # the 1MB load, off a floppy
+        # ...and the cartridge running: its own "checked a switch" byte (it
+        # was a fixed 60 emulated s; a cartridge that never checks one still
+        # fails below, at the same byte)
+        b.until(lambda: wram(b, view)[3] == 0xA5, "the first switch checked",
+                60000, 500, need=False)
         n0, bad0, first0, ok0 = wram(b, view)
         b.cmd("step %d" % int(a.secs * 1000))
         n1, bad1, first1, ok1 = wram(b, view)
         bk = rdgwin.bankstat(b, seg)
     finally:
-        b.cmd("quit")
+        b.quit(remove=True)
     done = (n1 - n0) & 0xFFFF
     print("gbbank: %s; %d switches checked in %.0f emulated s, %d wrong%s"
           % ("cache %d slots, %d banks fetched" % bk if bk else "ONE CLAIM",

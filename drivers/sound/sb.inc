@@ -969,22 +969,59 @@ sbl_isr:
     pop ax
     iret
 
-.direct:                        ; DIRECT (SPEC.md 34.5.2): one block of the
-    mov ax, [sbl_half]          ; ring played, and the DMA has already gone on
-    add [sbl_consumed], ax      ; into the next - so the one question is
+.direct:                        ; DIRECT (SPEC.md 34.5.2): the blocks of the
+    push cx                     ; ring played, and the DMA has already gone on
+    call sbl_dleft              ; into the next. HOW MANY is the 8237's to
+    mov bx, [sbl_rmask]         ; say, not this IRQ's (SPEC.md 34.5.2.1): a
+    lea ax, [bx+1]              ; block end that came while the line was
+    sub ax, cx                  ; masked - kern_mega's reflected int 13h,
+    and ax, bx                  ; a long cli - latched the SAME edge as the
+    xchg ax, [sbl_dpos]         ; next, and counting one an IRQ lost it for
+    cmp ax, [sbl_dpos]          ; good. AX = the offset the chip reads next;
+    mov ax, [sbl_half]          ; a count that has not moved since the last
+    je .dblk                    ; IRQ is no count at all: one block, as ever
+    mov ax, [sbl_dpos]
+    mov cx, [sbl_consumed]      ; ...else the whole blocks it is past
+    and cx, bx                  ; consumed's own offset, the one it started
+    sub ax, cx                  ; the finished block at
+    and ax, bx
+    inc bx
+    dec bh                      ; past it by RL - 256 or more is BEHIND it -
+    cmp ax, bx                  ; a count read ahead of the 128-byte copy
+    jb .dfl                     ; that moves it (a PicoMEM 1.x), with room
+    xor ax, ax                  ; to spare - and nothing
+.dfl:
+    mov cx, [sbl_half]          ; (a power of two)
+    neg cx
+    and ax, cx                  ; 0 too: a block the count has not reached
+.dblk:                          ; yet is the next IRQ's
+    pop cx
+    add [sbl_consumed], ax
     cmp byte [sbl_ext], 0       ; EXTERNAL (SPEC.md 34.5.3): the package's
     je .dfed                    ; total is ITS word and the consumed count is
     les bx, [sbl_extctl]        ; published back, so a producer that may call
     mov ax, [es:bx+SND_EXT_TOTAL]   ; nothing feeds by writing memory
     mov [sbl_total], ax
-    mov ax, [sbl_consumed]
-    mov [es:bx+SND_EXT_CONS], ax
 .dfed:                          ; whether that block was all fed. Same answer
                                 ; as the double buffer's valid flag, asked of
     mov ax, [sbl_total]         ; the counters: total - consumed >= half. No
     sub ax, [sbl_consumed]      ; is the underrun contract below, word for
-    cmp ax, [sbl_half]          ; word, and verb 1 is what resumes it - there
-    jae .eoi                    ; is no refill task to do it
+    mov dx, [sbl_rmask]         ; word, and verb 1 is what resumes it - there
+    inc dx                      ; is no refill task to do it. A whole ring
+    cmp ax, dx                  ; fed is verb 1's bound; MORE than the
+    jbe .dpub                   ; ring is NEGATIVE: the chip passed the total
+    add [sbl_consumed], ax      ; in a masked stretch, and what it played
+    xor ax, ax                  ; past it was stale - consumed stops at the
+.dpub:                          ; total, and the next IRQ's count takes it on
+    cmp byte [sbl_ext], 0
+    je .dchk
+    push ax
+    mov ax, [sbl_consumed]
+    mov [es:bx+SND_EXT_CONS], ax
+    pop ax
+.dchk:
+    cmp ax, [sbl_half]
+    jae .eoi
 .under:                         ; the underrun contract (SPEC.md 34.5)
     cmp byte [sbl_auto], 0
     je .nohalt                  ; single-cycle: nothing in flight to halt
@@ -996,7 +1033,7 @@ sbl_isr:
     dec ax
     mov [sbl_expect], al
     inc word [sbl_under]
-    jmp short .eoi              ; back up: .eoi sits after .input
+    jmp .eoi                    ; back up: .eoi sits after .input
 
 .spur:
     cmp byte [sbl_irq], 7       ; line 7: real or spurious? only the 8259
@@ -1013,7 +1050,7 @@ sbl_isr:
     in al, dx                   ; so 2xEh) and tell verb 0, which is waiting
     mov byte [sbl_prime], 0     ; on this byte
 .eoij:                          ; (.xin's way back: .eoi is out of its reach)
-    jmp short .eoi
+    jmp .eoi
 
 .xin:                           ; AN EXTERNAL RECORD RING (SPEC.md 34.6.4):
     mov ax, [sbl_half]          ; one block captured, and the DMA has gone on
@@ -1664,8 +1701,10 @@ sbl_v_open:
     jz .pin
     mov byte [sbl_ext], 1       ; EXTERNAL (SPEC.md 34.5.3): the control words
     mov ax, si                  ; sit after the ring, in the package's claim,
-    add ax, [sbl_rmask]         ; which an MC_DMA claim keeps still with no
-    inc ax                      ; pin of ours - and there is no pool to pin
+    add ax, [sbl_rmask]         ; which THE PACKAGE keeps still until close
+    inc ax                      ; (SND_OPENF_EXT, os88api.inc; the kernel no
+                                ; longer pins MC_DMA, SPEC.md 66.6.4) - and
+                                ; there is no pool of ours to pin
     mov [sbl_extctl], ax
     mov [sbl_extctl+2], di
     jmp short .dset
@@ -1697,6 +1736,7 @@ sbl_v_open:
     mov [sbl_str_off], si       ; the stream record (not yet published)
     mov [sbl_total], cx
     xor ax, ax
+    mov [sbl_dpos], ax          ; the chip starts at the ring's offset 0
     mov [sbl_fed], ax
     mov [sbl_consumed], ax
     mov [sbl_play], al
@@ -2263,15 +2303,7 @@ sbl_v_ppos:
     cmp byte [sbl_expect], 0
     je .out
     push ax
-    test byte [sbl_fmt], SND_FMT_16
-    jnz .w16
-    out 0x0C, al                ; flip-flop clear (any value)
-    in al, 0x03                 ; channel 1's count: lo...
-    mov cl, al
-    in al, 0x03                 ; ...hi. It is LEFT - 1, and FFFFh at
-    mov ch, al                  ; terminal count
-    inc cx                      ; CX = bytes left in this DMA cycle
-.left:
+    call sbl_dleft              ; CX = bytes left in this DMA cycle
     cmp byte [sbl_direct], 0
     je .dbuf
     mov bx, [sbl_rmask]         ; DIRECT (SPEC.md 34.5.2): the cycle is the
@@ -2313,10 +2345,27 @@ sbl_v_ppos:
     popf
     clc
     ret
-.w16:                           ; THE 16-BIT CHANNEL (SPEC.md 34.5.5) counts
-    push dx                     ; WORDS: its count register, at C2h + 4 x its
-    out 0xD8, al                ; index, is words left - 1, so the bytes
-    mov dl, [sbl_hdma]          ; left are twice that plus one
+
+; sbl_dleft - CX = the bytes left in the open stream's DMA cycle, off the
+; 8237's count register: channel 1's, which is bytes left - 1 (FFFFh at
+; terminal count), or THE 16-BIT CHANNEL's (SPEC.md 34.5.5), which counts
+; WORDS - its register, at C2h + 4 x its index, is words left - 1. IF = 0:
+; the flip-flop is shared state (verb 9, and the block IRQ's direct ring).
+; Clobbers AL
+sbl_dleft:
+    test byte [sbl_fmt], SND_FMT_16
+    jnz .w16
+    out 0x0C, al                ; flip-flop clear (any value)
+    in al, 0x03                 ; channel 1's count: lo...
+    mov cl, al
+    in al, 0x03                 ; ...hi
+    mov ch, al
+    inc cx
+    ret
+.w16:
+    push dx
+    out 0xD8, al                ; flip-flop clear (any value)
+    mov dl, [sbl_hdma]
     and dx, 3
     shl dx, 1
     shl dx, 1
@@ -2328,7 +2377,7 @@ sbl_v_ppos:
     inc cx
     shl cx, 1
     pop dx
-    jmp short .left
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sbl_v_read - verb 5: copy recorded (or staged) bytes out of a grant
@@ -3931,6 +3980,8 @@ sbl_total:    dw 0              ;   valid bytes (grows via verb 1);
 sbl_fed:      dw 0              ;   bytes copied into the double buffer
 sbl_consumed: dw 0              ;   bytes played (capped at sbl_total);
                                 ;   input: bytes drained into the grant
+sbl_dpos:     dw 0              ;   DIRECT: the ring offset the 8237 read
+                                ;   next at the last block IRQ (34.5.2.1)
 sbl_play:     db 0              ;   the half the DSP sounds (input:
                                 ;   captures into) next
 sbl_valid:    db 0, 0           ;   per-half: refilled since last consumed

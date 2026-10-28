@@ -59,10 +59,10 @@ A package's prefix is the header, the icon, the association block and - when
 flags bit 5 says so - the 16-byte DOCUMENT GLYPH (SPEC.md 54.3.2), and
 Compress and Uncompress must agree on it to the byte: the stream starts where
 the prefix ends. CALC.O88 above has no glyph (flags 0x09), so the main row
-cannot reach the glyph rung of the ladder at all. DOS.O88 and VIDEO.O88 are
-the shipped packages that have one (flags 0x2B), and they go on a scratch B:
-EXACTLY AS THE BUILD SHIPS THEM - LZ4, which is what a user has - and each is
-taken round the whole loop:
+cannot reach the glyph rung of the ladder at all. DOS.O88 is the shipped
+package that has one with no parts (flags 0x2B), and it goes on a scratch B:
+EXACTLY AS THE BUILD SHIPS IT - LZ4, which is what a user has - and is taken
+round the whole loop:
 
   unz    Uncompress the shipped file: the result must be
          os88pkg.image_unwrap() of it, byte for byte, and say `Uncompressed`
@@ -72,6 +72,17 @@ taken round the whole loop:
   unz2   Uncompress that: the image again
   run2   ...and it launches again
 
+VIDEO.O88 WAS THE SECOND SUBJECT until it gained PARTS (its block decoder,
+flags 0x2F), and a parted package is one neither verb takes: cmz_pkg refuses
+it at Compress, and at Uncompress the stream does not end at the file's end
+(SPEC.md 20.13.8's link word, which only the loader reads) so it does not
+decode. Neither is a defect - Compress of a parted image is os88pkg's
+fixed-point loop, which is host-side only - but a verb that WROTE something
+there would write the image without its parts, so it stays on the row for
+that: both verbs must answer `Cannot ...`, the file must be byte-identical to
+what shipped, and it must still launch. pkg_want is never asked about it,
+os88pkg.compress_image refusing a parted image by design.
+
 RED (docs/WRITING-TESTS.md 1). `cmz_cpre` is the ONE ladder both verbs ask
 (kernel/compress.inc, which rides in DISKOPS.DRV), and Uncompress once carried a
 copy of it that stopped at the association block. To put that back: in a copy
@@ -79,11 +90,14 @@ of the tree, give Uncompress's call site (the one under `.rplain`, beside the
 comment naming DOS.O88 and VIDEO.O88) `and al, 0xDF` in front of its `call
 cmz_cpre`, so that one ask sees no glyph bit; `make os8088-360.img` there, and
 run `python3 <copy>/tests/lzcomp.py --glyph` FROM that tree, so the kernel, the
-module and the symbol map all agree. Both packages then answer `Cannot expand
+module and the symbol map all agree. DOS.O88 then answers `Cannot expand
 this one` at `unz` with the file left as it was, `cz` answers `Already
-compressed` over the same LZ4 file, and `unz2` fails as `unz` did - six byte
-legs red. The two launch legs stay GREEN, and must: the file is left exactly
-as it shipped, which runs. Measured: 34s red, 63s green.
+compressed` over the same LZ4 file, and `unz2` fails as `unz` did - three byte
+legs red (six, measured, while VIDEO.O88 was a second unparted subject). The
+launch legs stay GREEN, and must: the file is left exactly as it shipped,
+which runs; so do VIDEO.O88's refusal legs, which never reach cmz_cpre.
+Measured: 34s red, 63s green with two subjects; 57s green with DOS.O88 and
+VIDEO.O88's refusals.
 """
 import argparse
 import os
@@ -355,10 +369,16 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
     return ""
 
 
-GLYPHS = ("DOS.O88", "VIDEO.O88")     # the shipped packages whose flags
+GLYPHS = ("DOS.O88",)                 # the shipped packages whose flags
                                         # carry LD_HF_GLYPH (0x2B) - checked
                                         # in glyph(), so a build that drops
                                         # the glyph from one stops the row
+PARTED = ("VIDEO.O88",)                 # ...and the ones that carry it WITH
+                                        # PARTS (0x2F): both verbs refuse a
+                                        # parted package (cmz_pkg; SPEC.md
+                                        # 20.13.8 is os88pkg's alone), so these
+                                        # are asked for the REFUSAL and an
+                                        # untouched file, and launched after
                                         # rather than quietly testing the
                                         # ladder's other rungs
 LD_HF_GLYPH, LD_HF_LZ = 0x20, 0x08
@@ -396,14 +416,16 @@ def glyph(a):
     """The `lzglyph` row: Uncompress, launch, Compress, Uncompress, launch,
     on both shipped flags-0x2B packages (the docstring's last section)."""
     ship = {n: open(os88build.at("build/%s" % n.lower()), "rb").read()
-            for n in GLYPHS}
-    for n in GLYPHS:
+            for n in GLYPHS + PARTED}
+    for n in GLYPHS + PARTED:
         want_flags = LD_HF_GLYPH | LD_HF_LZ
-        if ship[n][3] & want_flags != want_flags:
+        parts = 4 if n in PARTED else 0
+        if ship[n][3] & (want_flags | 4) != want_flags | parts:
             sys.exit("lzglyph: build/%s has flags %#x - it must carry the "
-                     "document glyph (0x20) AND be compressed (0x08), or the "
-                     "leg it is here for tests nothing"
-                     % (n.lower(), ship[n][3]))
+                     "document glyph (0x20) AND be compressed (0x08), %s "
+                     "parts (0x04), or the leg it is here for tests nothing"
+                     % (n.lower(), ship[n][3],
+                        "WITH" if parts else "WITHOUT"))
     image = {n: os88pkg.image_unwrap(f) for n, f in ship.items()}
     want = {n: pkg_want(image[n]) for n in GLYPHS}
     for n in GLYPHS:
@@ -417,7 +439,7 @@ def glyph(a):
     try:                                           # its disk (main's reason)
         disk = os88marty.scratch_disk(
             os.path.join(work, "b.img"),
-            *[stage(work, n, ship[n]) for n in GLYPHS], size=360)
+            *[stage(work, n, ship[n]) for n in GLYPHS + PARTED], size=360)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
                          machine=MACHINE[a.adapter], verbose=False) as ui:
             m, mo = ui.m, ui.mo
@@ -452,6 +474,26 @@ def glyph(a):
                 leg("cz", FM_ICOMP, 180, want[n], "")
                 leg("unz2", FM_IUNCOMP, 120, image[n], "Uncompressed")
                 launches(ui, wx, wy, n, tag + "-run2", fails)
+            for n in PARTED:
+                tag = n.split(".")[0].lower()
+                for sub, item, quiet, said in (
+                        ("unz", FM_IUNCOMP, 120, "Cannot expand"),
+                        ("cz", FM_ICOMP, 120, "Cannot compress")):
+                    t = compress(m, mo, wx, wy, n, fails, quiet=quiet,
+                                 item=item)
+                    got = fl.volume(1).read(n)
+                    ok = t.startswith(said) and got == ship[n]
+                    say("  %-10s %s  %r (%d bytes, shipped %d - a refusal "
+                        "and the file untouched)"
+                        % (tag + "-" + sub, "ok " if ok else "BAD", t,
+                           len(got), len(ship[n])))
+                    if not ok:
+                        fails.append(
+                            "%s %s: %r and %d bytes against the shipped %d "
+                            "- a parted package must be REFUSED and left "
+                            "exactly as it was, or its parts are lost"
+                            % (n, sub, t, len(got), len(ship[n])))
+                launches(ui, wx, wy, n, tag + "-run", fails)
             rc, why = fl.verify(1)
             say("  fsck       %s  %s" % ("ok " if rc == 0 else "BAD", why))
             if rc:

@@ -69,11 +69,12 @@ M.scratch_disk(DISK, "build/pixel.o88", "PICS:" + a.picture,
 EGA = {c: i for i, c in enumerate(P.EGA16)}
 
 print("== PiXEL on the glass: %s on %s (SPEC.md 106.11) ==" % (pic, a.machine))
-with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
+with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine,
+                 quick=True) as ui:
     m = ui.m
     S = ui._S
     ui.path("B:/PICS/" + pic)
-    M.until(m, lambda _: instance(m, S, image), "PiXEL's instance", poll=0.3,
+    M.until(m, lambda _: instance(m, S, image), "PiXEL's instance", poll=0.05,
             limit=90)
     seg = instance(m, S, image)
     base = seg * 16
@@ -84,9 +85,9 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
 
     def idle():
         return B("px_busy") == 0 and B("px_job") == 0
-    M.until(m, lambda _: W("px_ndone") and idle(), "the decode", poll=0.3,
+    M.until(m, lambda _: W("px_ndone") and idle(), "the decode", poll=0.05,
             limit=900)
-    ui.settle()
+    M.ui_done(m)
     vt = m.cmd(cmd="video")["type"]
     depth = B("px_bpp")
     kind = B("px_rkind")
@@ -121,7 +122,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
 
     def compare(leg, ground=True):
         ui.mo.to(2, 2)              # the pointer off the canvas: it is drawn
-        ui.settle()                 # into the frame the card rasterises
+        ui.still()                 # into the frame the card rasterises
         r = m.read(base + syms["px_cur"], 48)
         mw, mh, mseg = u16(r, 32), u16(r, 34), u16(r, 38)
         master = m.read(mseg * 16, mw * mh)
@@ -171,16 +172,16 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     compare("B")
     for leg, key in (("C", "Equal"), ("C", "Equal")):   # '=' is zoom in
         m.key(key)
-        ui.settle()
+        M.ui_done(m)
     compare("C (zoomed in twice)", ground=False)
     oy0 = sW("px_oy")
     m.key("ArrowDown")              # the picture moves UP: content scrolls
-    ui.settle()
+    M.ui_done(m)
     check("D: the pan moved the picture", sW("px_oy") != oy0, "")
     compare("D (scrolled)", ground=False)
     ox0 = sW("px_ox")
     m.key("ArrowRight")
-    ui.settle()
+    M.ui_done(m)
     check("E: the pan moved it across", sW("px_ox") != ox0,
           "the picture may be no wider than the canvas")
     compare("E (shifted)", ground=False)
@@ -190,7 +191,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     m.write(base + syms["px_cur"], sec.encode().ljust(13, b"\0"))
     m.ctrl("KeyR")
     M.until(m, lambda _: W("px_ndone") != n0 and idle(), "the second open",
-            poll=0.3, limit=900)
+            poll=0.05, limit=900)
     r = m.read(base + syms["px_cur"], 48)
     p2 = P.decode(open(a.second, "rb").read(), sec.rsplit(".", 1)[1])
     sm2, _, _, _, pal2 = P.emit(p2, r[36])

@@ -21,16 +21,15 @@ start with an empty workbook, or double-click a spreadsheet file (`.SLK`,
 `.DIF`, `.BIF` or `.XLS`) to open Sheet on that file. The Office disk has a
 sample in its `MEDIA` folder, [[SALES.SLK]].
 
-Two more files sit beside SHEET.O88 and must stay in the same folder:
-[[CHART.OVL]], which holds Sheet's dialogs, its file formats, its charts and
-many of its functions, and [[MACRO.OVL]], which runs macros. Sheet reads both
-when it starts.
+Sheet is one file. Its dialogs, file formats, charts, many of its functions
+and its macros are kept inside SHEET.O88 and loaded when Sheet starts, so
+copying SHEET.O88 copies all of Sheet.
 
 Sheet needs about 100KB of free memory to open, and about 100KB more for
-CHART.OVL, MACRO.OVL and Undo. If the machine cannot spare the first 100KB,
-Sheet does not open. If it cannot spare the rest, Sheet opens without the
-parts that did not fit: without room for Undo, the Edit menu says `Can't
-Undo`; without CHART.OVL, see "Good to know" below.
+those parts and Undo. If the machine cannot spare the first 100KB, Sheet
+does not open. If it cannot spare the rest, Sheet opens without the parts
+that did not fit: without room for Undo, the Edit menu says `Can't Undo`;
+without room for the rest, see "Good to know" below.
 
 ## The window
 
@@ -509,11 +508,11 @@ and in other spreadsheets that read these formats.
 - A workbook too large for Undo's memory cannot be undone, and Undo reads
   `Can't Undo`.
 - An empty cell counts as 0 in a formula.
-- Without CHART.OVL beside SHEET.O88, you can still type and calculate, but
-  Sheet cannot open or save files, open its dialogs or draw charts, and says
-  `CHART.OVL not found.` The text, logarithm and trigonometry, finance,
-  database, information and matrix functions then show `#VALUE!`. Without
-  MACRO.OVL, macros do not run.
+- Without memory for its dialogs and charts, you can still type and
+  calculate, but Sheet cannot open or save files, open its dialogs or draw
+  charts, and says `Not enough memory.` The text, logarithm and
+  trigonometry, finance, database, information and matrix functions then
+  show `#VALUE!`. Without memory for macros, macros do not run.
 - Each dialog can be closed with its Cancel button. The one-line dialogs,
   such as Goto, Find and Column Width, also take **Enter** for OK and
   **Esc** for Cancel.

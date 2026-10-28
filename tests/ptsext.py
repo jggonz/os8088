@@ -130,7 +130,9 @@ def check(m, ui, label, card=None):
 def main():
     S = os88sym.linear
     bad = 0
-    with os88ui.boot(SYS, apps=APP, machine="os8088_5150_both_gla_mono") as ui:
+    with os88ui.boot(SYS, apps=APP, machine="os8088_5150_both_gla_mono",
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         ui.path("B:/PTSTEST.O88")
         ui.settle()

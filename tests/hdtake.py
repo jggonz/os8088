@@ -66,7 +66,7 @@ class QH(object):
         self.pidn = None
         atexit.register(self.close)
         os88qemu.own(self.pid, self.sock)   # (the launch site's teardown)
-        subprocess.run(
+        os88qemu.start(
             ["qemu-system-i386", "-machine", "pc,vmport=off", "-m", "4",
              "-drive", "file=%s,format=raw,if=floppy" % sysimg,
              "-drive", "file=%s,format=raw,if=floppy,index=1" % appsimg,
@@ -105,7 +105,8 @@ class QH(object):
         os88qemu.ui_done(self, xmcheck.sym, cap=cap)
 
     def click(self, x, y, cap=2.0):
-        self.mouse("click", x, y)
+        # closed-loop, each edge confirmed off mouse_btn (SOAK-SPEED 15)
+        os88qemu.mouse_click(self, xmcheck.sym, self.hmp, x, y)
         self.done(cap)
 
     def need(self, cond, what, secs=30):
@@ -116,7 +117,7 @@ def launch(q, ui, S, bad, tag):
     """C:'s window, CALC.O88 in it, and the Calculator opened off it"""
     try:
         before = set(o.i for o in ui.windows())
-        xmcheck.dblclick(q.sock, *geom.drive_pt(q, "C", S))
+        os88qemu.mouse_dblclick(q, S, q.hmp, *geom.drive_pt(q, "C", S))
         box = {}
 
         def disk():
@@ -128,10 +129,10 @@ def launch(q, ui, S, bad, tag):
         if not os88qemu.acted(q, disk, secs=30, what="C:'s window"):
             raise RuntimeError("C:'s window never opened")
         w = box["w"]
-        os88qemu.pace(q, 1)
+        q.done(1.0)                             # (was pace(1): the listing)
         i, _ = ui.entry("CALC.O88", w)
         before = set(o.i for o in ui.windows())
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        os88qemu.mouse_dblclick(q, S, q.hmp, *ui.row_xy(w, i - ui.scroll(w)))
         opened = os88qemu.acted(
             q, lambda: any(o.i not in before and o.visible
                            for o in ui.windows()), secs=30,

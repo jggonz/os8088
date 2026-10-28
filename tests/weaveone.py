@@ -23,7 +23,15 @@ free run is <M>KB.` - is the RUNTIME refusing its own bundle's claims, which
 is one step later and needs the package to be resident to say. Both are
 "before any I/O" and the kernel's is earlier; 1.4 now says which.
 
-SO WHAT IS ASSERTED IS [ld_status] AND NOT A SENTENCE, and that is the
+AND SINCE NO-PINNING C3 IT IS THE RUNTIME AGAIN (WEAVE-SPEC 1.2.6, 1.4). The
+first instance's claims MOVE now, so the compactor packs them and the second
+region fits; what cannot be had is the second instance's overlay (~15KB),
+op_fetch toasts `Not enough memory`, and the window carries 10.3's sentence
+with no bundle, VM or grid behind it. So the second fact below takes EITHER
+shape - no window and LD_ENOMEM, or one window in W_ST_ERR with no VM claim -
+and prints which; 1.4's promise, one Weave APP at a time, is what both keep.
+
+SO WHAT IS ASSERTED (in the loader's shape) IS [ld_status] AND NOT A SENTENCE, and that is the
 stronger reading rather than a weaker one: the verdict is a kernel byte
 (kernel/loader.inc, LD_OK..LD_ENOMEM), the toast that draws it is a ~3s
 transient this harness cannot catch reliably at any polling rate worth having,
@@ -33,7 +41,8 @@ whole claim:
   1. the FIRST bundle opens - so the machine is one that runs Weave apps at
      all, and a failure below is about the second launch rather than about
      256KB being unusable;
-  2. the SECOND opens NO window and [ld_status] is LD_ENOMEM;
+  2. the SECOND opens NO window and [ld_status] is LD_ENOMEM - or opens one
+     that refuses in W_ST_ERR holding no bundle (see above);
   3. the first app IS STILL THERE. kernel/loader.inc's own opening promise is
      that "a package that cannot fit fails while running instances stay", and
      a refusal that took the running app down with it would pass 1 and 2.
@@ -65,6 +74,8 @@ import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
+import os88geom                                             # noqa: E402
+from cmemmove import pkg_syms                               # noqa: E402
 import weavesmoke                                           # noqa: E402
 from harness import check, done                             # noqa: E402
 
@@ -77,6 +88,7 @@ DISK = "build/weave360.img"
 # kernel/loader.inc's own enum. LD_ENOMEM is "the instance table or pool
 # exhausted", which on this machine is the heap and not the table.
 LD_OK, LD_ENOMEM = 0, 5
+W_ST_DECK, W_ST_RUN, W_ST_ERR = 0, 1, 2     # apps/weave/weave.h
 
 FIRST = "SHEET.WAB"     # the biggest instance the demo disk carries: a <grid>
                         # bundle takes the grid claim as well (WEAVE-SPEC 5.6)
@@ -125,10 +137,11 @@ def _drive(m, png_dir):
 
     live = set(dispcp.win_list(m, S))
     try:
-        # THE SECOND LAUNCH IS SUPPOSED TO REFUSE (WEAVE-SPEC 1.4) - that is
-        # the whole row - so it is declared rather than waited out.
+        # THE SECOND LAUNCH IS SUPPOSED TO GET NO BUNDLE OPEN (WEAVE-SPEC
+        # 1.4) - that is the whole row - and there are two honest shapes of
+        # that, so the click confirms nothing and the outcome is read below.
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, SECOND,
-                          expect="refusal")
+                          expect=None)
     except os88marty.MartyError as e:
         check(False, "%s: the second double-click reached %s"
               % (MACHINE, SECOND),
@@ -136,32 +149,55 @@ def _drive(m, png_dir):
               "say anything about a launch it never asked for",
               got=str(e)[:200], want="a double-click on the row")
         return
+    os88marty.ui_done(m)
     os88marty.settle(m)
+    C = pkg_syms("apps/weave/weave.asm")
 
-    now = set(dispcp.win_list(m, S))
-    check(now == live, "%s: %s opened NO second window"
-          % (MACHINE, SECOND),
-          "WEAVE-SPEC 1.4: exactly ONE Weave app at a time on a 256KB "
-          "machine. A second window here would mean the arithmetic in 1.4 is "
-          "wrong in the other direction and the machine holds two",
-          got=sorted(now - live) or "none", want="no new window")
+    def wword(win, name):
+        seg = int.from_bytes(m.read(os88geom.winptr(m, win, S)
+                                    + os88geom.W_SEG, 2), "little")
+        return int.from_bytes(m.read(seg * 16 + C[name], 2), "little")
 
+    new2 = sorted(set(dispcp.win_list(m, S)) - live)
     st = m.read(S("ld_status"), 1)[0]
-    check(st == LD_ENOMEM,
-          "%s: the second launch answered LD_ENOMEM" % MACHINE,
-          "the KERNEL's loader refuses it before WEAVE runs at all - a "
-          "package region is claimed before the package (SPEC.md 20.1, 21) "
-          "and WEAVE's is 60,320 bytes. `Out of memory` is what the Finder "
-          "draws from this byte (SPEC.md 22.9) and what the toast says "
-          "(SPEC.md 59)",
-          got=st, want="%d (LD_ENOMEM)" % LD_ENOMEM)
+    if not new2:
+        # SHAPE A, the loader's: the region did not fit, no window at all.
+        print("      second launch: the LOADER refused (no window)")
+        check(st == LD_ENOMEM,
+              "%s: the second launch answered LD_ENOMEM" % MACHINE,
+              "the kernel's loader refused the region before WEAVE ran "
+              "(SPEC.md 20.1, 21) - `Out of memory` is drawn from this byte",
+              got=st, want="%d (LD_ENOMEM)" % LD_ENOMEM)
+    else:
+        # SHAPE B, the runtime's - and the one a 256KB machine takes since
+        # NO-PINNING C3 (WEAVE-SPEC 1.2.6, 1.4): the first instance's claims
+        # MOVE now, so the compactor packs them and the second 53KB region
+        # fits; it is the second instance's own overlay that then cannot be
+        # had, op_fetch toasts why, and its window carries 10.3's sentence.
+        # What 1.4 promises is still true: no second BUNDLE is open.
+        w2 = new2[0]
+        os88marty.until(m, lambda _: wword(w2, "_w_state") != W_ST_DECK,
+                        "the second instance's verdict", poll=0.5, guest=60)
+        print("      second launch: the RUNTIME refused (its window, "
+              "w_state %d)" % wword(w2, "_w_state"))
+        check(len(new2) == 1 and wword(w2, "_w_state") == W_ST_ERR
+              and wword(w2, "_w_vmseg") == 0,
+              "%s: the second instance opened NO bundle" % MACHINE,
+              "WEAVE-SPEC 1.4: exactly ONE Weave app at a time on a 256KB "
+              "machine. The second region may fit (its neighbour's claims "
+              "move, 1.2.6), but its overlay cannot, so it refuses in its "
+              "own window and holds no bundle, VM or grid",
+              got="%d window(s), w_state %d, w_vmseg %04x"
+              % (len(new2), wword(w2, "_w_state"), wword(w2, "_w_vmseg")),
+              want="one window, W_ST_ERR, no VM claim")
 
-    check(app in dispcp.win_list(m, S),
+    check(app in dispcp.win_list(m, S) and wword(app, "_w_state") == W_ST_RUN,
           "%s: the app that was already running is still there" % MACHINE,
           "kernel/loader.inc's own opening promise - 'a package that cannot "
           "fit fails while running instances stay'. A refusal that took the "
           "running app down with it would pass both assertions above",
-          got=dispcp.win_list(m, S), want="the first app's slot, %d" % app)
+          got=dispcp.win_list(m, S), want="the first app's slot, %d, "
+          "running its bundle" % app)
 
     if png_dir:
         vw, vh, rows = m.vram(CARD)
@@ -179,7 +215,7 @@ def main():
         # it before any row starts. That is what lets this row drop
         # builds=True and share the emulator lane.
         os88fixture.need(DISK)
-    with os88marty.launch("build/os8088-360.img", apps=DISK,
+    with weavesmoke.booted("build/os8088-360.img", apps=DISK,
                           machine=MACHINE) as m:
         try:
             _drive(m, a.png)

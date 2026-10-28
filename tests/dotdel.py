@@ -673,7 +673,7 @@ def leg_i(tag, ui, p, say, floor=0.15):
 def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
     fail = []
     names = bss()
-    with os88ui.boot(a.image, apps=a.apps, machine=machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=machine, quick=True) as ui:
         m = ui.m
         ui.path(PKG)
         p = Probe(ui, names)

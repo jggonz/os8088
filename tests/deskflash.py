@@ -101,7 +101,40 @@ def frames_after(m, trig, n):
 
 def flashes(a, frames, w, box, skip=None):
     """(changed, flashed) over box: a pixel FLASHES when it takes more than two
-    values, or ends where it began after changing."""
+    values, or ends where it began after changing.
+
+    In NUMPY when it is there: the loop below is a Python set per pixel per
+    frame over a whole screen, which was most of this row's host time
+    (`flashes_loop` is the same answer, and OS88_FLASHCHECK=1 asserts so)."""
+    try:
+        import numpy as np
+    except ImportError:
+        return flashes_loop(a, frames, w, box, skip)
+    h = len(a) // (3 * w)
+    x0, y0, x1, y1 = box
+
+    def px(b):
+        v = np.frombuffer(bytes(b), np.uint8)[:h * w * 3].reshape(h, w, 3)
+        v = v[y0:y1 + 1, x0:x1 + 1].astype(np.uint32)
+        return (v[..., 0] << 16) | (v[..., 1] << 8) | v[..., 2]
+    st = np.stack([px(a)] + [px(f) for f in frames])     # (F+1, bh, bw)
+    srt = np.sort(st, axis=0)
+    nval = 1 + (srt[1:] != srt[:-1]).sum(axis=0)
+    keep = np.ones(nval.shape, bool)
+    if skip:
+        ys = np.arange(y0, y1 + 1)[:, None]
+        xs = np.arange(x0, x1 + 1)[None, :]
+        keep &= ~((skip[0] <= xs) & (xs <= skip[2])
+                  & (skip[1] <= ys) & (ys <= skip[3]))
+    ch = keep & (nval > 1)
+    fl = ch & ((nval > 2) | (st[0] == st[-1]))
+    got = (int(ch.sum()), int(fl.sum()))
+    if os.environ.get("OS88_FLASHCHECK"):
+        assert got == flashes_loop(a, frames, w, box, skip), got
+    return got
+
+
+def flashes_loop(a, frames, w, box, skip=None):
     fin = frames[-1]
     changed = flashed = 0
     for y in range(box[1], box[3] + 1):
@@ -128,18 +161,18 @@ def run(machine):
     print("%s" % machine)
     with os88ui.boot(os.path.join(BDIR, "os8088-360.img"),
                      apps=os.path.join(BDIR, "apps360.img"),
-                     machine=machine) as ui:
+                     machine=machine, quick=True) as ui:
         m = ui.m
         vw, vh = geom.word(m, "vid_w"), geom.word(m, "vid_h")
         whole = (0, 0, vw - 1, vh - 1)
         ui.mo.to(vw // 2, vh // 2)
-        ui.settle()
+        ui.still()
         cell = geom.drive_ordinal(m, "A")
         for sel in (False, True):
             if sel:
                 m.write(m.sym("desk_sel"), bytes([cell]))
                 post_cell(m, cell)
-                ui.settle()
+                ui.still()
             a, fr = frames_after(m, lambda: post_cell(m, cell), 30)
             ch, fl = flashes(a, fr, vw, whole)
             check(fl == 0 and (sel or ch == 0),
@@ -151,7 +184,7 @@ def run(machine):
         w = ui.open_drive("A")
         w = ui.move_window(w, 16, vh // 3)
         ui.mo.to(4, vh - 20)
-        ui.settle()
+        ui.still()
         cr = dc.cell_rect(m, 0)
         rows = geom.word(m, "desk_rows")
         col = (cr[0], cr[1], cr[2], dc.cell_rect(m, rows - 1)[3])
@@ -176,7 +209,6 @@ def run(machine):
             # ...and RIGHT, not only quiet: an under-drawn sliver is stale
             # rather than flashing. Right of the window only - the whole
             # repaint is not a perfect reference for a title (deskclip)
-            ui.settle()
             bad = dc.verify(ui, only=(w.x + w.w + 1, col[1], col[2], col[3]))
             check(bad == 0, "%s: the column matches a whole repaint (%d px "
                   "differ)" % (name, bad))

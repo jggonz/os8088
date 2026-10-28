@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Can a DOS program drive the HARDWARE in the box? (SPEC.md 96.18)
+"""Can a DOS program drive the HARDWARE under os8088's DOS? (SPEC.md 96.18)
 
 Every other DOS row here asks a question about INT 21h, which is OUR code
 answering our own program.  This one asks about the machine underneath: a
@@ -7,7 +7,7 @@ program inside the fsx bracket hooks a real interrupt vector, unmasks a real
 line at a real 8259, and runs a real transfer on the same 8237 os8088's own
 floppy uses.
 
-IT IS THE ROW THAT SAYS WHAT THE DOS BOX IS FOR.  A box that can only host
+IT IS THE ROW THAT SAYS WHAT DOS IS FOR.  A DOS that can only host
 programs which poll can host almost no DOS software worth running - every
 sound card, every comms program and every mouse driver in the era is built on
 a hardware interrupt - so "the bracket hands the machine over" is a claim that
@@ -70,7 +70,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=IRQ, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=IRQ, machine=MACHINE, quick=True) as ui:
         m = ui.m
         row0 = m.sym("drv_tab")
 
@@ -142,7 +142,7 @@ def main():
             fail("NO HARDWARE INTERRUPT REACHED THE DOS PROGRAM. It reset the "
                  "DSP, read version %s back, hooked INT 0Fh, unmasked IRQ7 and "
                  "asked the card for an interrupt, and over %s BIOS ticks the "
-                 "handler never ran. A DOS box that can only host programs "
+                 "handler never ran. A DOS that can only host programs "
                  "which poll can host almost nothing (SPEC.md 96.18)"
                  % (dsp, ticks))
         if int(hits) != 1:

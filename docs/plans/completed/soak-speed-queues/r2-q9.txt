@@ -1,0 +1,210 @@
+# ROUND 2, queue 9: the NON-MartyPC soak rows (QEMU, ffmpeg, host-only) - never queued in round 1. family  row  declared_secs  script  needs
+DONE vide	videnc	1300	tests/videnc.py	ffmpeg
+DONE t	frcyclefull	900	tests/unit/t_frcycle.py	
+DONE t	frinsetfull	900	tests/unit/t_frinset.py	
+DONE vidl	vidlayer	320	tests/vidlayer.py	ffmpeg
+SKIP builds=True (writes build/; not runnable in the shared tree) telz	telzm	300	tests/telzm.py	qemu
+DONE rega	regapp	210	tests/regapp.py	
+SKIP builds=True (writes build/; not runnable in the shared tree) tela	telansi	210	tests/telansi.py	qemu
+DONE venc	vencgui	200	tests/vencguitest.py	ffmpeg
+SKIP builds=True (writes build/; not runnable in the shared tree) t	buildmatrix	180	tests/unit/t_buildmatrix.py	
+DONE weav	weavefuzz	180	tests/weavefuzz.py	
+DONE drvm	drvmove	170	tests/drvmove.py	
+DONE regw	regwork	170	tests/regwork.py	
+DONE rdxm	rdxms	170	tests/rdxms.py	qemu,nasm
+DONE regp	regpin	160	tests/regpin.py	
+DONE sndm	sndmove	150	tests/sndmove.py	
+DONE dosn	dosnetarena	150	tests/dosnetarena.py	qemu
+DONE vidb	vidbank	150	tests/vidbank.py	qemu,nasm
+DONE vidx	vidxiphd	150	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxiphdnoharm	150	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxipbankbig	150	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxipbankdry	150	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxipbankdrysnd	150	tests/vidxip.py	qemu,nasm
+DONE gbtr	gbtrace	130	tests/gbtrace.py	qemu,nasm
+DONE vidx	vidxipsnd	130	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxipahead	130	tests/vidxip.py	qemu,nasm
+DONE dosp	dospkt	120	tests/dospkt.py	qemu
+DONE vidx	vidxip	120	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxipbank	120	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxiphdhold	120	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxipxspeed	120	tests/vidxip.py	qemu,nasm
+DONE vidx	vidxipbankwrap	120	tests/vidxip.py	qemu,nasm
+DONE sysc	syscheck	120	tests/syscheck.py	qemu,mtools
+SKIP builds=True (writes build/; not runnable in the shared tree) wire	wirechat	120	tests/wirechat.py	qemu
+DONE vidb	vidbankgap	115	tests/vidbank.py	qemu,nasm
+SKIP builds=True (writes build/; not runnable in the shared tree) thew	thewire	110	tests/thewire.py	qemu
+DONE vidx	vidxipbanksnd	110	tests/vidxip.py	qemu,nasm
+DONE wire	wirefleetlink	100	tests/wirefleetlink.py	qemu,nasm,pil
+MOVED->r2-q13 lemm	lemmings	100	tests/lemmings.py	qemu,cc
+MOVED->r2-q13 vidl	vidlysplitinplace	90	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlysplitinplacebase	90	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlyorder	90	tests/vidlyorder.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlyorderbank	90	tests/vidlyorder.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 netc	netcoexist	90	tests/netcoexist.py	qemu
+SKIP builds=True (writes build/; not runnable in the shared tree) ethc	ethcfg	90	tests/ethcfg.py	qemu
+MOVED->r2-q13 rltu	rltune	81	tests/rltune.py	nasm,qemu
+MOVED->r2-q13 vgad	vgadirty	80	tests/vgadirty.py	qemu,nasm
+MOVED->r2-q13 mine	minesrc	80	tests/minesrc.py	qemu,nasm
+MOVED->r2-q13 vidc	vidclose	75	tests/vidclose.py	qemu,nasm
+MOVED->r2-q13 dosx	dosxlat	75	tests/dosxlat.py	qemu
+DONE vidb	vidbankwin	75	tests/vidbank.py	qemu,nasm
+DONE vidb	vidbankspk	75	tests/vidbank.py	qemu,nasm
+DONE vidl	vidlayerpal	75	tests/vidlayer.py	ffmpeg
+MOVED->r2-q13 colo	colorpresets	72	tests/colorpresets_qemu.py	qemu,nasm,pil
+MOVED->r2-q13 wire	wireball	65	tests/wireball.py	qemu,nasm,pil
+MOVED->r2-q13 pxsw	pxswin-qemu	65	tests/pxswin.py	qemu
+MOVED->r2-q13 hmad	hmadrv	62	tests/hmadrv.py	qemu,nasm
+DONE vidb	vidbankspkbank	60	tests/vidbank.py	qemu,nasm
+MOVED->r2-q13 vidl	vidlysplit	60	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlysplitbase	60	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlysplituntimed	60	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlybank	60	tests/vidlybank.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlybankcopy	60	tests/vidlybank.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidl	vidlybanknone	60	tests/vidlybank.py	qemu,nasm,ffmpeg
+MOVED->r2-q13 vidx	vidxmslive	60	tests/vidxms.py	qemu,nasm
+MOVED->r2-q13 vidx	vidxmsliverep	60	tests/vidxms.py	qemu,nasm
+MOVED->r2-q13 gifd	gifdrag	56	tests/gifdrag.py	
+MOVED->r2-q13 whee	wheelps2	56	tests/wheelps2.py	qemu,nasm
+MOVED->r2-q11 os	lzfmt-all	55	tools/os88lz.py	
+MOVED->r2-q11 kdmi	kdmix	55	tests/kdmix.py	
+MOVED->r2-q11 gbcp	gbcpu	50	tests/gbcpu.py	qemu,nasm
+MOVED->r2-q11 mseg	msegxms	50	tests/msegxms.py	qemu
+SKIP builds=True (writes build/; not runnable in the shared tree) wire	wirezone	50	tests/wirezone.py	qemu,nasm
+MOVED->r2-q11 xmch	xmcheck	50	tests/xmcheck.py	qemu,nasm
+MOVED->r2-q11 vidx	vidxmsgap	50	tests/vidxms.py	qemu,nasm
+MOVED->r2-q11 vidx	vidxmslivevga4	50	tests/vidxms.py	qemu,nasm
+MOVED->r2-q11 trkc	trkclick	47	tests/trkclick.py	qemu,nasm
+MOVED->r2-q11 cdro	cdrom	45	tests/cdrom.py	qemu,nasm
+MOVED->r2-q11 vmmo	vmmouse	45	tests/vmmouse.py	qemu,nasm
+MOVED->r2-q11 dosx	dosxmsq	45	tests/dosxmsq.py	qemu
+MOVED->r2-q11 vidx	vidxms	45	tests/vidxms.py	qemu,nasm
+MOVED->r2-q11 vidx	vidxmsbios	45	tests/vidxms.py	qemu,nasm
+MOVED->r2-q11 vidx	vidxmsidle	45	tests/vidxms.py	qemu,nasm
+MOVED->r2-q11 vidx	vidxmsnox	45	tests/vidxms.py	qemu,nasm
+MOVED->r2-q11 vidx	vidxmslivenox	45	tests/vidxms.py	qemu,nasm
+MOVED->r2-q11 kdre	kdreturnf	42	tests/kdreturn.py	
+MOVED->r2-q11 vidb	vidbankspkfast	40	tests/vidbank.py	qemu,nasm
+MOVED->r2-q11 kdha	kdhand	40	tests/kdhand.py	
+MOVED->r2-q11 kdre	kdreturngfx	40	tests/kdreturn.py	
+MOVED->r2-q11 vids	vidspkat	40	tests/vidspkat.py	qemu,nasm
+MOVED->r2-q11 vidb	vidbankauto	40	tests/vidbankauto.py	ffmpeg
+MOVED->r2-q11 mixe	mixersb16	40	tests/mixer.py	qemu,nasm
+SKIP builds=True (writes build/; not runnable in the shared tree) ethe	ethernet	40	tests/ethernet.py	qemu
+MOVED->r2-q11 kdre	kdreturnmode	38	tests/kdreturn.py	
+MOVED->r2-q11 kdre	kdreturnpit	38	tests/kdreturn.py	
+MOVED->r2-q11 trks	trkscrl	38	tests/trkscrl.py	qemu,nasm
+MOVED->r2-q11 kdre	kdreturn	37	tests/kdreturn.py	
+MOVED->r2-q11 kdre	kdreturnm	36	tests/kdreturn.py	
+MOVED->r2-q11 kdre	kdreturncx	36	tests/kdreturn.py	
+SKIP builds=True (writes build/; not runnable in the shared tree) exci	excitebikeg1	35	tests/excitebike_video.py	qemu,nasm
+MOVED->r2-q11 vidl	vidlysplitdisk	35	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q11 vidl	vidlysplitflip	35	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q11 vidl	vidlysplitflipcmp	35	tests/vidlysplit.py	qemu,nasm,ffmpeg
+MOVED->r2-q11 vidl	vidlag	35	tests/vidlag.py	ffmpeg
+MOVED->r2-q11 kdre	kdreturncm	32	tests/kdreturn.py	
+MOVED->r2-q11 hmac	hmacold	30	tests/hmacold.py	qemu,nasm
+MOVED->r2-q11 t	bmshare	30	tests/unit/t_bmshare.py	
+MOVED->r2-q11 t	kernmods	30	tests/unit/t_kernmods.py	nasm
+MOVED->r2-q11 hdta	hdtakeboot	30	tests/hdtake.py	qemu,nasm
+MOVED->r2-q11 cdro	cdromsim	30	tests/cdrom.py	qemu,nasm
+MOVED->r2-q10 heap	heapmap	30	tests/heapmap.py	qemu,nasm
+MOVED->r2-q10 rdgs	rdgstatic	24	tests/rdgstatic.py	qemu,nasm
+MOVED->r2-q10 fmtp	fmtpair	21	tests/fmtpair.py	qemu,nasm
+MOVED->r2-q10 cdro	cdromempty	20	tests/cdrom.py	qemu,nasm
+MOVED->r2-q10 t	lzfmt	17.6	tests/unit/t_lzfmt.py	
+MOVED->r2-q10 vidd	viddiskcpu	16	tests/viddiskcpu.py	qemu,nasm
+MOVED->r2-q10 vidf	vidfmt	16	tests/vidfmt.py	
+MOVED->r2-q10 hdta	hdtake	15	tests/hdtake.py	qemu,nasm
+MOVED->r2-q10 redl	redlinemodern	15	tests/redline.py	nasm,qemu
+MOVED->r2-q10 venc	vencbundle	15	tests/vencbundle.py	ffmpeg
+MOVED->r2-q10 isot	isotronsim	11	tools/isotronsim.py	
+MOVED->r2-q10 t	lowwin	10	tests/unit/t_lowwin.py	nasm
+MOVED->r2-q10 t	stackprose	10	tests/unit/t_stackprose.py	
+MOVED->r2-q10 t	lmpack	10	tests/unit/t_lmpack.py	
+MOVED->r2-q10 weav	weavevm	10	tests/weavevm.py	qemu,nasm
+MOVED->r2-q10 weav	weavecanvas	10	tests/weavecanvas.py	qemu,nasm
+MOVED->r2-q10 hdta	hdtakeblank	10	tests/hdtake.py	qemu,nasm
+MOVED->r2-q10 os	coldpic	9	tools/os88romfix.py	nasm
+MOVED->r2-q10 exci	excitebikeassets	9	tests/excitebike_assets.py	nasm
+MOVED->r2-q10 wire	wirefleetart	8	tests/wirefleet.py	pil
+MOVED->r2-q10 t	t_pxsscale	6	tests/unit/t_pxsscale.py	
+MOVED->r2-q10 os	dosdbg	4.7	tools/os88dosdbg.py	nasm
+MOVED->r2-q10 exci	excitebikegeomhost	4	tests/excitebike_geom.py	
+MOVED->r2-q10 t	resident	3.7	tests/unit/t_resident.py	
+MOVED->r2-q10 t	bootfloor	3.5	tests/unit/t_bootfloor.py	nasm
+MOVED->r2-q10 t	bsssentinel	3.5	tests/unit/t_bsssentinel.py	
+MOVED->r2-q10 t	mlen	3.4	tests/unit/t_mlen.py	
+MOVED->r2-q10 t	vbrseg	3.4	tests/unit/t_vbrseg.py	
+MOVED->r2-q10 rdga	gbacid	3	tests/rdgcore/rdgacid.py	qemu,nasm
+MOVED->r2-q10 exbs	excitebikesim	3	tools/exbsim.py	nasm
+MOVED->r2-q10 t	cz	3	tests/unit/t_cz.py	
+MOVED->r2-q10 t	pxs-level	3	tests/unit/t_pxslevel.py	
+MOVED->r2-q10 t	t_pxsmap	3	tests/unit/t_pxsmap.py	
+MOVED->r2-q10 vida	vidavsync	3	tests/vidavsync.py	ffmpeg
+MOVED->r2-q10 t	wire	2.5	tests/unit/t_wire.py	
+MOVED->r2-q10 t	ccmake	2.1	tests/unit/t_ccmake.py	
+MOVED->r2-q10 t	csworld	2	tests/unit/t_csworld.py	
+MOVED->r2-q10 t	csrad	2	tests/unit/t_csrad.py	
+MOVED->r2-q10 t	csworlds	2	tests/unit/t_csworlds.py	
+MOVED->r2-q10 exci	excitebikeselfcheck	2	tools/excitebike_assets.py	nasm
+MOVED->r2-q10 t	t_pxsart	2	tests/unit/t_pxsart.py	
+MOVED->r2-q10 vids	vidspkshape	2	tests/vidspkshape.py	ffmpeg
+MOVED->r2-q10 t	frinset	1.9	tests/unit/t_frinset.py	
+MOVED->r2-q10 t	dosbss	1.7	tests/unit/t_dosbss.py	
+MOVED->r2-q10 trkf	trkface	1.5	tools/trkface.py	
+MOVED->r2-q10 t	drmarcoart	1.5	tests/unit/t_drmarcoart.py	pil
+MOVED->r2-q10 pix	pixjpegref	1.5	sh -c python3 tools/pixjpeg.py --verify && python3 tools/pix	
+MOVED->r2-q10 t	lzbclust	1.2	tests/unit/t_lzbclust.py	
+MOVED->r2-q10 t	invariants	1.2	tests/unit/t_invariants.py	
+MOVED->r2-q10 exci	excitebikeaudiohost	1	tests/excitebike_audio.py	
+MOVED->r2-q10 t	cspanel	1	tests/unit/t_cspanel.py	
+MOVED->r2-q10 t	csamph	1	tests/unit/t_csamph.py	
+MOVED->r2-q10 redl	redlinehost	1	tests/redline.py	nasm
+MOVED->r2-q10 kdpa	kdpart	1	tests/kdpart.py	
+MOVED->r2-q10 t	dosseam	1	tests/unit/t_dosseam.py	
+MOVED->r2-q10 pxsd	pxsdisk	1	tests/pxsdisk.py	
+MOVED->r2-q10 t	pxs-gen	0.9	tests/unit/t_pxsgen.py	
+MOVED->r2-q10 t	frcycle	0.8	tests/unit/t_frcycle.py	
+MOVED->r2-q10 t	appsmall	0.8	tests/unit/t_appsmall.py	
+MOVED->r2-q10 t	allapps	0.7	tests/unit/t_allapps.py	
+MOVED->r2-q10 t	buildlock	0.7	tests/unit/t_build_lock.py	
+MOVED->r2-q10 t	csart	0.6	tests/unit/t_csart.py	
+MOVED->r2-q10 t	frstepv	0.4	tests/unit/t_frstepv.py	
+MOVED->r2-q10 t	hddgeom	0.4	tests/unit/t_hddgeom.py	
+MOVED->r2-q10 t	sfx	0.4	tests/unit/t_sfx.py	
+MOVED->r2-q10 pixc	pixcorpus	0.4	tools/pixcorpus.py	
+MOVED->r2-q10 stkd	stknosave	0.4	tools/stkdepth.py	
+MOVED->r2-q10 t	kdapi	0.4	tests/unit/t_kdapi.py	
+MOVED->r2-q10 t	p2restore	0.3	tests/unit/t_p2restore.py	
+MOVED->r2-q10 t	csink	0.3	tests/unit/t_csink.py	
+MOVED->r2-q10 t	csplane	0.3	tests/unit/t_csplane.py	
+MOVED->r2-q10 t	cssin	0.3	tests/unit/t_cssin.py	
+MOVED->r2-q10 t	pmcrom	0.3	tests/unit/t_paccman.py	
+MOVED->r2-q10 os	imgcases	0.3	tools/os88imgcase.py	
+MOVED->r2-q10 pixa	pixart	0.3	tools/pixart.py	
+MOVED->r2-q10 t	kdfar	0.3	tests/unit/t_kdfar.py	
+MOVED->r2-q10 t	excitebikeclean	0.2	tests/unit/t_excitebike_clean.py	
+MOVED->r2-q10 t	midtab	0.2	tests/unit/t_midtab.py	
+MOVED->r2-q10 t	csterrain	0.2	tests/unit/t_csterrain.py	
+MOVED->r2-q10 t	inktab	0.2	tests/unit/t_inktab.py	
+MOVED->r2-q10 t	cpmcache	0.2	tests/unit/t_cpmcache.py	
+MOVED->r2-q10 t	wakedrain	0.2	tests/unit/t_wakedrain.py	
+MOVED->r2-q10 pixs	pixsamples	0.2	tools/pixsamples.py	
+MOVED->r2-q10 pixe	pixelsim	0.2	tools/pixelsim.py	
+MOVED->r2-q10 dseg	dsegaudit	0.2	tools/dsegaudit.py	
+MOVED->r2-q10 t	ddmaze	0.2	tests/unit/t_ddmaze.py	nasm
+MOVED->r2-q10 os	rdiffself	0.2	tools/os88rdiff.py	nasm
+MOVED->r2-q10 t	blobruns	0.1	tests/unit/t_blobruns.py	nasm
+MOVED->r2-q10 t	spkfxtab	0.1	tests/unit/t_spkfx.py	
+MOVED->r2-q10 t	csair	0.1	tests/unit/t_csair.py	
+MOVED->r2-q10 t	drvclaim	0.1	tests/unit/t_drvclaim.py	
+MOVED->r2-q10 t	smallreq	0.1	tests/unit/t_smallreq.py	
+MOVED->r2-q10 t	ktags	0.1	tests/unit/t_ktags.py	
+MOVED->r2-q10 t	dirwsize	0.1	tests/unit/t_dirwsize.py	
+MOVED->r2-q10 t	pgrank	0.1	tests/unit/t_pgrank.py	
+MOVED->r2-q10 t	imager	0.1	tests/unit/t_imager.py	
+MOVED->r2-q10 t	assocpage	0.1	tests/unit/t_assocpage.py	
+MOVED->r2-q10 t	wab	0.1	tests/unit/t_wab.py	
+MOVED->r2-q10 pixj	pixjpeg	0.1	tools/pixjpeg.py	
+MOVED->r2-q10 os	dosfat	0.1	tools/os88fat.py	

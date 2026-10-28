@@ -101,7 +101,7 @@ def main():
     syms, _ = pkg_syms(a.src)
     tmp = tempfile.mkdtemp(prefix="rectest-", dir=os.path.join(ROOT, "build"))
     img = build(tmp, a.o88)
-    with os88ui.boot(IMG, apps=img, machine=MACHINE) as ui:
+    with os88ui.boot(IMG, apps=img, machine=MACHINE, quick=True) as ui:
         m = ui.m
         ui.path("B:/RECORDER.O88")
         seg = None

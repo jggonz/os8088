@@ -39,7 +39,8 @@ from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
 WORK = "build/sheetdel"                 # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetdel.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetdel.img")        # the run's tree, so a soak lane finds it
 DOC, JUNK = "SHIN.SLK", "ZJUNK.SLK"
 
 FILE_MENU = (75, 45)
@@ -61,8 +62,7 @@ def build_disk():
     open(doc, "wb").write(F.write_sylk({(0, 0): 1.0}))
     open(junk, "wb").write(F.write_sylk({(0, 0): 9.0}))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + doc, junk],
+                    "--size", "360", "APPS:build/sheet.o88", "APPS:" + doc, junk],
                    check=True, stdout=subprocess.DEVNULL)
 
 

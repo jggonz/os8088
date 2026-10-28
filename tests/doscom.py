@@ -71,11 +71,11 @@ def main():
             if r.strip():
                 print("   | %s" % r.rstrip())
 
-        # 3.30 and not 3.31: the box reports the version of the DOS it is
+        # 3.30 and not 3.31: DOS reports the version of the DOS it is
         # measured against (SPEC.md 96.21.7), so that a trace diffed against a
         # real IBM DOS 3.30 does not lead with a permanent disagreement on
         # call 2.  Spelled out here because this string is the ONLY place the
-        # published version is asserted, and changing it in the box alone is a
+        # published version is asserted, and changing it in DOS alone is a
         # change nothing else notices.
         for want in ("os8088 DOS gate", "DOS version 3.30"):
             if want not in text:

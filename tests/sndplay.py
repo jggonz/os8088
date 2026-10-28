@@ -67,16 +67,44 @@ def build(tmp):
     return img
 
 
-def outs(m, rec):
+def outs(m, rec, irq=None):
     """An io stop: (port, AL) if it was an OUT to 40h/42h/43h, else None.
     The stop is AFTER the instruction, so the `out imm8, al` is the two
-    bytes behind IP"""
+    bytes behind IP.
+
+    ...EXCEPT WHEN AN INTERRUPT WAS TAKEN AT THAT BOUNDARY. MartyPC flags an
+    io breakpoint inside the OUT and reports it at the start of the NEXT
+    step, and an INTR pending when the OUT ends is serviced in between
+    (step_finish), so the stop arrives at the ISR's first instruction with
+    the OUT's address only in the frame the CPU just pushed. The clip's
+    `out 0x42, al` is the one traced I/O it makes with IF = 1, so an IRQ0
+    landing in those few cycles lost that sample's stop: "differs at OUT 127
+    ... 299 pulses", the guest having written all 300. How often is a
+    HOST-timing quantity - the key that starts the clip reaches the guest
+    between the emulator's batches, so the clip's phase against the tick
+    takes a handful of values - 0 runs in 22 alone, 5 in 40 four at a time,
+    every one at the same cycle, and the same with MartyPC patch 16 out. Nothing has
+    executed since the OUT, so AL is still its value; `irq`, when given, is
+    a list the recovered stops are counted in."""
     r = m.regs()
     ip = (r["cs"] << 4) + r["ip"]
     for at in (ip - 2, ip):
         op = m.read(at, 2)
         if op[0] == 0xE6 and op[1] in (0x40, 0x42, 0x43):
             return (op[1], r["ax"] & 0xFF)
+        if at == ip - 2 and op[0] == 0xE4:
+            return None                 # an IN, stopped where it was made
+    # an ISR entry? CS:IP is a vector's, and SS:SP the frame it pushed
+    ivt = m.read(0, 1024)
+    vecs = {(u16(ivt, 4 * v + 2), u16(ivt, 4 * v)) for v in range(256)}
+    if (r["cs"], r["ip"]) not in vecs:
+        return None
+    fr = m.read((r["ss"] << 4) + r["sp"], 4)
+    op = m.read(((u16(fr, 2) << 4) + u16(fr, 0) - 2) & 0xFFFFF, 2)
+    if op[0] == 0xE6 and op[1] in (0x40, 0x42, 0x43):
+        if irq is not None:
+            irq.append((op[1], r["ax"] & 0xFF, rec["cycles"]))
+        return (op[1], r["ax"] & 0xFF)
     return None
 
 
@@ -110,7 +138,7 @@ def main():
         cap = os.path.join(tmp, "cap")
         os.environ["MARTYPC_WAV"] = cap
         booted = os88ui.boot("build/os8088-360.img", apps=img,
-                             machine=MACHINE)
+                             machine=MACHINE, quick=True)
         os.environ.pop("MARTYPC_WAV", None)
         with booted as ui:
             m = ui.m
@@ -123,6 +151,7 @@ def main():
                                         # check: where the kernel's clip
                                         # engine used to be entered
             ev = []                     # ("run", cyc) / ("fmark", ...) / port
+            irq = []                    # OUTs whose stop an IRQ moved
 
             def hit(mm, r):
                 if r["addr"] == k_run:
@@ -131,7 +160,7 @@ def main():
                     ev.append(("fmark", mm.read(mm.sym("sch_fast"), 1)[0],
                                ch2of(mm)))
                 else:
-                    o = outs(mm, r)
+                    o = outs(mm, r, irq)
                     if o and o != (0x43, 0x00):     # a latch, not a program
                         ev.append((o, r["cycles"]))
             io = [{"type": "io", "addr": p} for p in (0x40, 0x42, 0x43)]
@@ -165,6 +194,9 @@ def main():
             bad.append("1: %s answered AL %d CF %d" % (nm, al, cf))
 
     # --- 2: the ports, per clip ----------------------------------------------
+    for port, al, cyc in irq:
+        print("   2: OUT %02Xh <- %d at cycle %d stopped at an ISR's entry; "
+              "read off its frame" % (port, al, cyc))
     runs = [i for i, e in enumerate(ev) if e[0] == "run"]
     if len(runs) != 2:
         bad.append("2: the clip granted %d times, want 2" % len(runs))

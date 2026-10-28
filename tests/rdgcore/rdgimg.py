@@ -66,6 +66,7 @@ def build_core(trace, out_dir):
 def build_host(out_dir, defines=()):
     out_dir = private(out_dir)
     binf = os.path.join(out_dir, "rdghost.bin")
+    defines = list(defines) + [d for d in os.environ.get("RDG_DEFS", "").split(",") if d]
     subprocess.check_call(["nasm", "-f", "bin", "-w+error"] + ["-D" + d for d in defines] +
                           (["-DRT_DEBUG"] if os.environ.get("RT_DEBUG") else []) +
                           (["-DDMG_DEBUG"] if os.environ.get("DMG_DEBUG") else []) +

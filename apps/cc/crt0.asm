@@ -171,7 +171,7 @@
 ;
 ; CC_OVDEPTH is the depth of cc_ovthunk's return stash in WORDS (SPEC.md 73.14).
 CC_STACK    equ SCH_STACK
-CC_OVDEPTH  equ 16
+CC_OVDEPTH  equ 32
 
 %ifndef CC_PKG_NAME
   %fatal "cc/crt0.asm: define CC_PKG_NAME (e.g. %define CC_PKG_NAME 'CWORD') before including this file"
@@ -218,6 +218,29 @@ CC_OVDEPTH  equ 16
 ; to keep in step with the first. Every `[cc_ovseg]` below - the binder, the
 ; thunk's retf, the relocation proc - IS that row word.
   %define cc_ovseg (cc_ovrow + OP_R_ZKB)
+%endif
+; CC_ONMOVE_PARTS - THE PARTS CARVE MOVES TOO (SPEC.md 73.14.2.1, docs/plans/
+; NO-PINNING-PLAN.md C2). A carve holding MORE than the module alone - C64's
+; and the Apple II's ROM - holds parts whose segments the program read with
+; os88_part_seg() and may have kept, and nothing could tell it they moved, so
+; it stayed pinned. With this define the package ASSERTS that its os88_onmove()
+; re-reads os88_part_seg() for every part segment it keeps (and translates any
+; copy of one it made): cc_entry then declares the carve movable after
+; os88_main() returns, and the carve's proc calls os88_onmove(was, now) with
+; the carve's two bases once op_base is the new one. Opt-in, so a package that
+; does not define it assembles byte for byte as it did.
+%ifdef CC_ONMOVE_REGION
+  %ifndef CC_HAS_ONMOVE
+    %fatal "CC_ONMOVE_REGION without CC_HAS_ONMOVE: os88_onmove is how the program is told its region moved"
+  %endif
+%endif
+%ifdef CC_ONMOVE_PARTS
+  %ifndef CC_HAS_ONMOVE
+    %fatal "CC_ONMOVE_PARTS without CC_HAS_ONMOVE: os88_onmove is how the program is told its parts moved"
+  %endif
+  %ifndef CC_HAS_PARTS
+    %fatal "CC_ONMOVE_PARTS without CC_HAS_PARTS: there is no carve to move"
+  %endif
 %endif
 
 ; --- the layout, pinned by SPEC.md 73.2 ---------------------------------------
@@ -442,9 +465,18 @@ cc_entry:
                                     ; and refuse - silently, see below
     mov ax, cc_regreloc
     call OSAPI_MEM_MOVABLE          ; a refusal is not worth reporting: it can
-    pop dx                          ; only mean the region is not ours, which
-    pop bx                          ; cannot happen from here, and the cost is
-    pop ax                          ; a compaction that achieves less
+                                    ; only mean the region is not ours, which
+                                    ; cannot happen from here, and the cost is
+                                    ; a compaction that achieves less
+%ifdef CC_ONMOVE_PARTS
+    mov dx, [op_base]               ; ...AND THE PARTS CARVE (SPEC.md
+    mov ax, cc_partsmv              ; 73.14.2.1), AFTER os88_main: the part
+    call OSAPI_MEM_MOVABLE          ; segments the C keeps are banked by now,
+%endif                              ; and its os88_onmove re-reads them. No
+                                    ; carve (op_base 0) matches no claim
+    pop dx
+    pop bx
+    pop ax
 .noreg:
     pop es
     pop di
@@ -1318,16 +1350,72 @@ cc_ovthunk:
     pop dx                          ; ...and its segment, which is [cc_ovcs]:
                                     ; discarded rather than stashed
     mov si, [cc_ovrsp]              ; AX, DX and SI are all dead here - the ABI
+    cmp si, CC_OVDEPTH * 2          ; A FULL STASH REFUSES THE CALL rather than
+    jae .full                       ; write past it into the program's bss: the
+                                    ; convention change needs the slot, so
+                                    ; there is no direct fallback here (there is
+                                    ; in cc_ovmthunk). AX = 0 and the call did
+                                    ; not happen - cc_ovneed's refusal, SPEC.md
+                                    ; 47. The stash is shared with module-to-
+                                    ; module calls now, so a deep parser can
+                                    ; reach it (NO-PINNING review finding 4)
     mov [cc_ovrst+si], ax           ; has no callee-saved register, so nothing
     add si, 2                       ; is live in one across a call, which is
     mov [cc_ovrsp], si              ; the same fact the push-imm lowering rests
     call bx                         ; on (tools/cc8086.py)
+.back:
     mov si, [cc_ovrsp]
     sub si, 2
     mov [cc_ovrsp], si
     push word [cc_ovcs]             ; AX is the answer and nothing above
     push word [cc_ovrst+si]         ; touches it. [cc_ovcs], not [cc_ovseg]:
     retf                            ; see cc_ovbind
+.full:
+    push dx                         ; the module's [IP][CS] back as they were,
+    push ax                         ; and AX = 0 for the call that did not
+    xor ax, ax                      ; happen
+    retf
+
+; -----------------------------------------------------------------------------
+; cc_ovmthunk - the module calling ANOTHER MODULE FUNCTION, through the same
+; stash, so that no stack ever holds the module's CS (SPEC.md 73.14.2.1).
+;
+; in:  BX = the callee's cc_ovm_* vector; the stack is [ret IP][ret CS][args]
+;      as the module's `call far [cc_ovvmm]` left it (tools/cc8086.py)
+; out: whatever the callee answered, in AX, back in the module
+;
+; A plain `call far [cc_ovm_*]` pushes the module's CS for the callee's `retf`
+; to pop, and nothing re-reads it - so a claim anywhere under that call that
+; compacted the carve returned into whatever block took the module's place.
+; LEMMINGS found it three such frames deep (ovl_launch -> ovl_level_load ->
+; ovl_claim_all) and the carve was PINNED for it, which is the wrong half to
+; fix: a pinned carve is a wall in the arena for the program's whole life. The
+; shape here is cc_ovthunk's exactly - the four bytes come off, the offset goes
+; to the stash, the callee is far-called from RESIDENT code (the region, which
+; mem_in_nest pins while any callback stands in it) and the return is rebuilt
+; from [cc_ovcs], which cc_ovbind re-stamps on every move. The callee's frame
+; is the same four bytes above its arguments either way, so no compiled offset
+; changes.
+;
+; A FULL STASH falls back to the direct far call, which is the old behaviour
+; and is still correct unless something under that frame compacts - so the
+; depth is a margin, not a correctness limit, and no frame is ever lost.
+; -----------------------------------------------------------------------------
+cc_ovmthunk:
+    pop ax                          ; the module's return offset...
+    pop dx                          ; ...and its CS, discarded on the stash path
+    mov si, [cc_ovrsp]
+    cmp si, CC_OVDEPTH * 2
+    jae .full
+    mov [cc_ovrst+si], ax
+    add si, 2
+    mov [cc_ovrsp], si
+    call far [bx]                   ; into the module; it retf's back HERE
+    jmp short cc_ovthunk.back
+.full:
+    push dx                         ; [IP][CS] back as they were, and go: the
+    push ax                         ; callee's retf returns straight to the
+    jmp far [bx]                    ; caller, as before cc_ovmthunk existed
 
 ; -----------------------------------------------------------------------------
 ; cc_ovbind - stamp the segments into both vector tables. Preserves all.
@@ -1357,23 +1445,21 @@ cc_ovthunk:
 ;     rather than stashed`) and re-reads [cc_ovcs] to build the `retf`, at
 ;     every level of the nest, so a move inside the resident routine is
 ;     invisible to the return;
-;   - the module calling ANOTHER MODULE FUNCTION. tools/cc8086.py emits that
-;     as `call far [cc_ovm_*]`, and the CS it pushes is the module's own and is
-;     popped by the callee's `retf` - nothing re-reads it. If anything under
-;     that call claims (a heap claim, or a file read's sector cache, SPEC.md
-;     18.95) and the claim compacts, the callee returns into whatever block
-;     now sits where the module was. LEMMINGS' ovl_launch -> ovl_level_load ->
-;     ovl_claim_all -> os88_mem_claim is exactly that chain (SPEC.md 116.6).
+;   - the module calling ANOTHER MODULE FUNCTION. That used to be a plain
+;     `call far [cc_ovm_*]`, whose pushed CS is the module's own and is popped
+;     by the callee's `retf` - nothing re-read it, so a claim under that call
+;     that compacted returned into whatever block took the module's place
+;     (LEMMINGS' ovl_launch -> ovl_level_load -> ovl_claim_all, SPEC.md
+;     116.6). tools/cc8086.py emits it through cc_ovmthunk now, which is the
+;     first bullet's shape: the CS comes off, the offset goes to the stash,
+;     and the return is rebuilt from [cc_ovcs].
 ;
-; So the EAGER part's carve is PINNED (cc_ovinit, below) - it was declared
-; movable with this property as its argument, and the argument was the first
-; half of the list above only. The two arms that still declare the module
-; movable - this proc, for the lazy part and for the <NAME>.OVL sidecar - are
-; safe ONLY while no module function that another module function calls can
-; claim; that is not checked by anything, and is recorded as open in
-; SPEC.md 116.6. A resident routine calling INTO the module goes through
-; cc_ovm_*, which this routine re-stamps, and a worker never enters at all
-; (cc_ovneed's first instruction).
+; So with both bullets closed no stack holds the module's CS, and the module
+; is movable on every arm: this proc for the lazy part and the <NAME>.OVL
+; sidecar, cc_ovcarve for the eager carve. A resident routine calling INTO the
+; module goes through cc_ovm_*, which this routine re-stamps; the CS that call
+; pushes is the region's, which mem_in_nest pins while the callback stands;
+; and a worker never enters at all (cc_ovneed's first instruction).
 ; -----------------------------------------------------------------------------
 %ifndef CC_OVL_EAGER
 cc_ovreloc:                         ; ON THE LAZY ARM [cc_ovseg] IS THE PART
@@ -1381,8 +1467,7 @@ cc_ovreloc:                         ; ON THE LAZY ARM [cc_ovseg] IS THE PART
 %endif                              ; this one store keeps op_seg, op_drop and
 cc_ovbind:                          ; the thunk's retf in step - there is no
                                     ; second copy (SPEC.md 73.14.2.1). The
-                                    ; eager arm's carve is pinned and has
-                                    ; no proc (cc_ovinit)
+                                    ; eager arm's proc is cc_ovcarve
     push ax
     push bx
     mov ax, [cc_ovseg]
@@ -1480,7 +1565,21 @@ section .text
 ; vectors from [cc_ovseg], which a region move does not touch, so it costs a
 ; few stores and is right either way.
 ; -----------------------------------------------------------------------------
-%ifdef CC_HAS_OVL
+%ifdef CC_ONMOVE_REGION
+; CC_ONMOVE_REGION - ...AND THE PROGRAM IS TOLD (docs/plans/NO-PINNING-PLAN.md,
+; WEAVE-SPEC 1.2.6). A package whose ASSEMBLY banks its own data segment - the
+; WJS VM's wvm_ourds, the DS a slice puts back for a native - holds a word that
+; names the region, and nothing above puts it right: mem_region_reloc fixes
+; the kernel's words and cc_ovbind the overlay's. With this define the region's
+; proc calls os88_onmove(was, now) as well, AFTER the vectors, so the C (or an
+; asm helper it calls) can translate every banked copy at move time instead of
+; re-reading DS at every entry. Opt-in: without it this assembles as before.
+cc_regreloc:
+  %ifdef CC_HAS_OVL
+    call cc_ovbind
+  %endif
+    jmp cc_onmove                   ; every register preserved, BX/DX passed
+%elifdef CC_HAS_OVL
 cc_regreloc equ cc_ovbind
 %else
 cc_regreloc:
@@ -1722,23 +1821,71 @@ cc_ovinit:
     call op_seg                     ; the vectors to where it landed, once
     mov [cc_ovseg], ax
     call cc_ovbind
-    ; THE CARVE STAYS PINNED, on every package. It used to be declared
-    ; movable when the module was the only part, on the argument that only
-    ; cc_ovthunk's re-read retf ever held the module's CS - but a module
-    ; function calling another is a `call far [cc_ovm_*]` whose pushed CS is
-    ; the MODULE's, popped by a plain `retf`, and LEMMINGS claims ~321 KB
-    ; three such frames deep (ovl_launch -> ovl_level_load -> ovl_claim_all).
-    ; A claim that compacted would move the carve under that stack and the
-    ; `retf` would land in whatever block took its place (the header of
-    ; cc_ovreloc above has the whole argument). It was claimed top-down by
-    ; op_claim (SPEC.md 20.12.10.8), so a pinned carve is at least not in
-    ; the middle of the arena.
+  %if OS88_PART_N == 1
+    ; THE CARVE MOVES (SPEC.md 73.14.2.1). It was pinned for a cycle after
+    ; LEMMINGS' wave 4 found that a module function calling another left the
+    ; module's CS on the stack for a plain retf; that call goes through
+    ; cc_ovmthunk now, so the only place the module's CS lives is [cc_ovcs]
+    ; and the vectors, which cc_ovcarve re-stamps. Declared AFTER the bind:
+    ; the vectors must name where the module is before anything may move it.
+    ;
+    ; ONE PART ONLY here: with more rows the carve holds parts whose
+    ; segments a program may have read through os88_part_seg and kept, so
+    ; it moves only when the package says CC_ONMOVE_PARTS - and then
+    ; cc_entry declares it, after os88_main, with this same proc
+    ; (docs/plans/NO-PINNING-PLAN.md item C2).
+    mov dx, [op_base]
+    mov ax, cc_ovcarve
+    call OSAPI_MEM_MOVABLE          ; a refusal leaves it pinned: no unwind
+  %endif
   %else
     call OSAPI_FILE_HERE            ; the LAZY arm: where we were launched
     mov [cc_ovhome], dx             ; from, which is where <NAME>.O88 is and
     mov [cc_ovhvol], bl             ; so where every fetch reads (cc_ovneed)
   %endif
     ret
+  %ifdef CC_OVL_EAGER
+    %assign CC_OVCARVE (OS88_PART_N == 1)
+    %ifdef CC_ONMOVE_PARTS
+      %assign CC_OVCARVE 1
+    %endif
+    %if CC_OVCARVE
+; cc_ovcarve - the eager carve's RELOCATION PROC (SPEC.md 66.2): BX = where it
+; was, DX = where it is. Re-derives the module's segment through op_seg - the
+; slack in front of it is the read's, and op_seg is the one place that knows
+; it - and re-stamps the vectors. With CC_ONMOVE_PARTS it then tells the C,
+; through cc_onmove with the same BX/DX, so the program re-reads the other
+; parts' segments (op_base is already the new one). Every register preserved.
+cc_ovcarve:
+    mov [op_base], dx
+    push ax
+    mov al, cc_ovidx
+    call op_seg                     ; AX only, and touches no heap
+    mov [cc_ovseg], ax
+    pop ax
+      %ifdef CC_ONMOVE_PARTS
+    call cc_ovbind                  ; the vectors first: the C may call a
+    jmp cc_onmove                   ; module function after it returns
+      %else
+    jmp cc_ovbind
+      %endif
+    %endif
+  %endif
+%endif
+%ifdef CC_ONMOVE_PARTS
+; cc_partsmv - THE PARTS CARVE'S RELOCATION PROC, declared by cc_entry after
+; os88_main (SPEC.md 73.14.2.1): op_base is the one word every op_seg answer
+; is arithmetic on, so storing it is the whole of the runtime's half, and the
+; program's half - every part segment it banked - is its os88_onmove's, told
+; with the carve's own two bases. An eager overlay's carve is cc_ovcarve,
+; which re-stamps the module's vectors as well.
+  %ifdef CC_OVL_EAGER
+cc_partsmv equ cc_ovcarve
+  %else
+cc_partsmv:
+    mov [op_base], dx
+    jmp cc_onmove                   ; every register preserved, BX/DX passed
+  %endif
 %endif
 %define CC_THUNK_GATED              ; THE API BRIDGE, here and not at the top:
 %include "cc/os88thunk.asm"         ; the compiled C has been read, so its use

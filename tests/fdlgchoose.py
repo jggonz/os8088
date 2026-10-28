@@ -109,17 +109,17 @@ def ink(ui, w, k):
     return n
 
 
-with os88ui.boot(SYS, apps=APPS) as ui:
+with os88ui.boot(SYS, apps=APPS, quick=True) as ui:
     m = ui.m
     ui.path(NP)
-    ui.settle()                 # a menu picked while the app is still
+    os88ui.os88marty.ui_done(ui.m)                 # a menu picked while the app is still
                                 # coming up is lost, on the base tree too
     print("== the Standard File chooser (%s) ==" % SYS)
 
     # --- 1: first Open: MEDIA, 'Open', the default button greyed --------------
     ui.menu_pick("File", "Open")
     w = ui.chooser()
-    ui.settle()                     # the column is the paint's LAST part
+    ui.still()                     # the column is the paint's LAST part
     rows = [r[0] for r in ui.listing(w)]
     check("captioned Open", w.title == "Open", "(%r)" % w.title)
     check("lands on MEDIA (38.10)", "GUIDE.TEX" in rows, "(%r)" % rows)
@@ -127,22 +127,22 @@ with os88ui.boot(SYS, apps=APPS) as ui:
 
     # --- 2: a click selects, Enter answers; the arrows only scroll ----------
     m.key("ArrowDown")
-    ui.settle()
+    os88ui.os88marty.ui_done(ui.m)
     check("Down with nothing selected selects nothing (22.26)",
           fs_sel(ui) == 0xFFFF, "(FS_SEL %04X)" % fs_sel(ui))
     want = ui.chooser_select("GUIDE.TEX", w)
-    ui.settle()
+    ui.still()
     live = ink(ui, w, ui.CH_OPEN)
     check("Open goes live on a selection (47)", live > grey,
           "(ink %d -> %d)" % (grey, live))
     check("a click selects the row", fs_sel(ui) == want, "(%d)" % fs_sel(ui))
     if "KERN_SMALL" not in os.environ.get("OS88_DEFINES", ""):
         m.key("ArrowUp")
-        ui.settle()
+        os88ui.os88marty.ui_done(ui.m)
         check("Up moves the selection (22.26)", fs_sel(ui) == want - 1,
               "(%d)" % fs_sel(ui))
         m.key("ArrowDown")
-        ui.settle()
+        os88ui.os88marty.ui_done(ui.m)
         check("...and Down brings it back", fs_sel(ui) == want,
               "(%d)" % fs_sel(ui))
     m.key("Enter")
@@ -198,7 +198,7 @@ with os88ui.boot(SYS, apps=APPS) as ui:
     w = ui.chooser()
     ui.open("..", expect="nav", win=w)
     ui.open("APPS", expect="nav", win=w)
-    ui.settle()
+    os88ui.os88marty.ui_done(ui.m)
     n, fit, s0 = len(ui.listing(w)), ui._word("fm_fit"), ui.scroll(w)
     check("APPS pages in the chooser", n > fit, "(%d rows, %d fit)"
           % (n, fit))
@@ -232,7 +232,7 @@ with os88ui.boot(SYS, apps=APPS) as ui:
         ui.chooser_gone()
     except os88ui.UIError:
         pass                        # ...the checks below say what is up
-    ui.settle()
+    os88ui.os88marty.ui_done(ui.m)
     after = sorted(o.i for o in ui.windows())
     check("the chooser is reaped (38.2)", ui._word("fdlg_win") == 0
           and ui._word("fdlg_blk") == 0,
@@ -251,7 +251,7 @@ with os88ui.boot(SYS, apps=APPS) as ui:
     w = ui.chooser()
     drv0 = m.read(blk(ui) + geom.FS_DRV, 1)[0]
     ui.chooser_button(ui.CH_DRIVE, w)
-    ui.settle()
+    os88ui.os88marty.ui_done(ui.m)
     drv1 = m.read(blk(ui) + geom.FS_DRV, 1)[0]
     check("Drive moves to another volume (38.11)", drv1 != drv0,
           "(%d -> %d)" % (drv0, drv1))
@@ -264,7 +264,7 @@ with os88ui.boot(SYS, apps=APPS) as ui:
         # ACTING window and there is none until one is raised
         ui.raise_window(ui.window("APPS"))
         ui.menu_pick("Nav", "New Window")
-        ui.settle()
+        os88ui.os88marty.ui_done(ui.m)
     disks = [t for t in ui.titles() if t != "Note Pad"]
     check("the user holds four Disk windows, and no more",
           len(disks) == 4, "(%d)" % len(disks))

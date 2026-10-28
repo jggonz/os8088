@@ -5,6 +5,8 @@
                                            pin, with AUTOMATION and GDBSTUB on
     os88box.py launch VM [opts]            boot a machine and leave it running
     os88box.py list                        what is running
+    os88box.py reap [--all]                remove stopped TEMP instances' run
+                                           directories (--all: every stopped one)
     os88box.py NAME status|info|regs       one line of JSON each
     os88box.py NAME step MS                run MS of emulated time
     os88box.py NAME shot OUT.png           the last frame, as the card drew it
@@ -19,6 +21,10 @@
                                            closing the loop on the kernel's
                                            own mouse_x/mouse_y
     os88box.py NAME pointer | sym NAME     where it is; a symbol's address
+    os88box.py NAME up [TEXT=KEY ...]      run (held) until os8088's desktop
+                                           is up, answering BIOS prompts
+                                           ("bypass MEMORY test=esc")
+    os88box.py NAME ui-done                run until the UI task is idle
     os88box.py NAME memr ADDR LEN          physical memory, hex
     os88box.py NAME wait-text MS TEXT      run until TEXT is on a text screen
     os88box.py NAME fdd DRIVE IMG          change a floppy (0 = A:)
@@ -46,6 +52,8 @@ launch options:
     --set SECTION.KEY=VALUE
                 any other config line (repeatable)
     --hold      start held: no emulated time passes until a step
+    --turbo     floppy turbo on every drive (no rotation or seek time)
+    --temp      a disposable run directory (`reap` removes it once stopped)
     --window    a real window on $DISPLAY instead of Qt's offscreen platform
     --fresh     delete the run directory first (and so its CMOS)
     --clear-cmos
@@ -75,6 +83,22 @@ BUILD = os.path.join(ROOT, "build", "86box")
 BIN = os.environ.get("OS88_86BOX", os.path.join(BUILD, "86Box"))
 ROMS = os.environ.get("OS88_86BOX_ROMS", os.path.join(BUILD, "roms"))
 RUNS = os.path.join(BUILD, "run")
+# OS88_BOXLOG=<file>: one line per automation request - instance, verb, host
+# seconds, the emulated ms it advanced, and the caller's file:line - so a
+# row's host time can be charged to what it asked for (docs/86BOX.md)
+BOXLOG = os.environ.get("OS88_BOXLOG")
+
+
+def _log(box, line, host, ms):
+    f = sys._getframe(2)
+    while f and f.f_code.co_filename == __file__:
+        f = f.f_back
+    site = "%s:%d" % (os.path.basename(f.f_code.co_filename), f.f_lineno) if f else "?"
+    dms = (ms - box._ms) if (ms is not None and box._ms is not None) else 0
+    with open(BOXLOG, "a") as g:
+        g.write("%s\t%s\t%.4f\t%d\t%s\n" % (box.name, line.split(" ")[0] + (
+            " " + line.split(" ")[1] if line.startswith(("wait", "key")) else ""),
+            host, dms, site))
 
 
 # --- keys ---------------------------------------------------------------------
@@ -127,6 +151,42 @@ class Box(object):
         self.sock = os.path.join(self.run, "auto.sock")
         self._s = None
         self._f = None
+        self._ms = None             # the emulated clock as the last reply had it
+        self._syms = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.quit(remove=bool((state(self.name) or {}).get("temp")))
+        return False
+
+    def ms(self):
+        """emulated milliseconds since power-on (one round trip)"""
+        return self.cmd("status")["ms"]
+
+    def quit(self, remove=False, timeout=15.0):
+        """Power off and WAIT for the process to be gone - 86Box writes the
+        floppy images and the CMOS at exit, so a caller reading fdd2.img
+        after this reads what the guest wrote (no fixed sleep). REMOVE
+        deletes the run directory after (a temp instance's default under
+        `with`)."""
+        st = state(self.name)
+        try:
+            self.cmd("quit")
+        except SystemExit:
+            pass
+        self.close()
+        if st:
+            t0 = time.time()
+            while alive(st["pid"]):
+                if time.time() - t0 > timeout:
+                    os.kill(st["pid"], signal.SIGTERM)
+                    time.sleep(0.2)
+                    break
+                time.sleep(0.02)
+        if remove:
+            shutil.rmtree(self.run, ignore_errors=True)
 
     def _conn(self):
         if self._s is None:
@@ -145,14 +205,19 @@ class Box(object):
 
     def cmd(self, line):
         f = self._conn()
+        t0 = time.time() if BOXLOG else 0
         self._s.sendall((line + "\n").encode())
         reply = f.readline()
         if not reply:
             self.close()
             raise SystemExit("os88box: %s closed the connection on %r" % (self.name, line))
         r = json.loads(reply)
+        if BOXLOG:
+            _log(self, line, time.time() - t0, r.get("ms"))
         if not r.get("ok"):
             raise SystemExit("os88box: %r -> %s" % (line, r.get("error")))
+        if "ms" in r:
+            self._ms = r["ms"]
         return r
 
     # convenience ---------------------------------------------------------------
@@ -203,6 +268,135 @@ class Box(object):
     def memr(self, addr, n):
         return bytes.fromhex(self.cmd("memr 0x%X %d" % (addr, n))["data"])
 
+    def sym(self, name):
+        """A .text/.bss kernel symbol's LINEAR address, cached (ksym's). Raises SystemExit naming the
+        map when it is not there."""
+        a = self._syms.get(name)
+        if a is None:
+            a = self._syms[name] = self.ksym(name)
+        return a
+
+    def word(self, name):
+        b = self.memr(self.sym(name), 2)
+        return b[0] | b[1] << 8
+
+    def byte(self, name):
+        return self.memr(self.sym(name), 1)[0]
+
+    # --- waits on the guest, not the host -----------------------------------
+    def until(self, cond, what="the condition", guest_ms=60000, step_ms=50,
+              need=True):
+        """Run the HELD machine STEP_MS at a time until cond() is true, at
+        most GUEST_MS of emulated time; answer the emulated ms it took. A
+        miss raises SystemExit naming WHAT (need=False: answers None). The
+        budget is the guest's clock, so a loaded host cannot shorten it.
+        cond() is tested first, so a condition already true costs nothing."""
+        t0 = self.ms()
+        now = t0
+        while True:
+            if cond():
+                return now - t0
+            if now - t0 >= guest_ms:
+                if need:
+                    raise SystemExit("os88box: %s: %s did not happen in %.1f emulated s"
+                                     % (self.name, what, guest_ms / 1000.0))
+                return None
+            now = self.cmd("step %d" % min(step_ms, max(1, guest_ms - (now - t0))))["ms"]
+
+    def wait_mem(self, addr, data, guest_ms):
+        """Run until physical ADDR holds DATA (bytes), checked by 86Box every
+        emulated millisecond - no host round trip a step. True if it did."""
+        return bool(self.cmd("wait mem %d 0x%X %s" % (guest_ms, addr, bytes(data).hex()))
+                    .get("matched"))
+
+    def wait_text(self, text, guest_ms):
+        """Run until TEXT is in one row of the text screen (86Box's check,
+        every emulated ms). True if it appeared."""
+        return bool(self.cmd("wait text %d %s" % (guest_ms, text)).get("matched"))
+
+    def screen_text(self):
+        """The text screen as one string, or None in a graphics mode."""
+        try:
+            return "".join(bytes.fromhex(x).decode("cp437")
+                           for x in self.cmd("text").get("chars", []))
+        except SystemExit:
+            return None
+
+    def kernel_up(self, guest_ms=120000, prompts=(), step_ms=250, idle=True):
+        """THE BOOT GATE ON KERNEL STATE (os88ui.UI.up's test): desk_rows and
+        menu_nbar written, [spl_live] 0 - kmain_o's last act - and [ticks]
+        MOVING across two reads, so loader junk and a warm reboot's stale
+        bytes do not pass; then `ui_done`. PROMPTS is ((text, key), ...): a
+        BIOS screen to answer on the way (an AT's fresh CMOS stops in setup:
+        (("EXIT FOR BOOT", "return"),)), looked for on the text screen at
+        each step. Answers the emulated ms the boot took."""
+        seen = [None]
+        t0 = self.ms()
+
+        def up():
+            if prompts:
+                t = self.screen_text()
+                for text, key in prompts if t else ():
+                    if text in t:
+                        self.tap(key)
+            if not (self.word("desk_rows") and self.word("menu_nbar")
+                    and not self.byte("spl_live")):
+                seen[0] = None
+                return False
+            tk = self.word("ticks")
+            if seen[0] is None:
+                seen[0] = tk
+                return False
+            return tk != seen[0]
+        self.until(up, "the kernel to reach the desktop", guest_ms, step_ms)
+        if idle:
+            self.ui_done(limit_ms=guest_ms)
+        return self.ms() - t0
+
+    def ui_idle(self, lock=True):
+        """os88marty.ui_idle's five bytes: task 0 (ui_task) SLEEPING, no
+        event queued, no wake pending, the gfx lock free (lock=False skips
+        it, for a worker that draws all the time), the BIOS key ring empty."""
+        st = self.memr(self.sym("sch_tasks"), 1)[0]
+        if st != 2:
+            return False
+        if self.byte("evq_count") or self.byte("sch_uiwake") or \
+                (lock and self.byte("gfx_lock_flag")):
+            return False
+        kb = self.memr(0x41A, 4)
+        return kb[0:2] == kb[2:4]
+
+    def ui_done(self, hold_ms=60, limit_ms=60000, cap_ms=None, lock=True,
+                step_ms=10, max_step_ms=80):
+        """Run until `ui_idle` holds for HOLD_MS of emulated time (about a
+        tick: a one-tick follow-up is seen) - what a fixed `step` after a
+        click or a key stands in for. CAP_MS makes it a bounded pause (no
+        longer than the old fixed one, quietly); otherwise LIMIT_MS raises.
+        Answers the emulated ms it took. A busy UI is stepped STEP_MS
+        doubling to MAX_STEP_MS (a round trip is a host floor per step); an
+        idle one is stepped through the hold."""
+        t0 = self.ms()
+        now, since, st = t0, None, step_ms
+        while True:
+            if self.ui_idle(lock):
+                if since is None:
+                    since = now
+                elif now - since >= hold_ms:
+                    return now - t0
+                st = step_ms
+                d = min(30, hold_ms - (now - since))
+            else:
+                since = None
+                d, st = st, min(st * 2, max_step_ms)
+            if cap_ms is not None:
+                if now - t0 >= cap_ms:
+                    return now - t0
+                d = min(d, cap_ms - (now - t0))
+            if now - t0 >= limit_ms:
+                raise SystemExit("os88box: %s: the UI was still busy after %.1f emulated s"
+                                 % (self.name, limit_ms / 1000.0))
+            now = self.cmd("step %d" % max(1, d))["ms"]
+
     def kmap(self):
         """The nasm map of the kernel this instance booted (state.json's
         `map`, chosen at launch from the A: image's name, or --map)."""
@@ -215,21 +409,23 @@ class Box(object):
         m = self.kmap()
         if not m or not os.path.isfile(m):
             raise SystemExit("os88box: no kernel map for %s (launch --map)" % self.name)
-        for sec in (".text", ".bss"):
-            for a, n in load_map(m).get(sec, []):
-                if n == sym:
-                    return 0x600 + a
-        raise SystemExit("os88box: %s is not a .text/.bss symbol in %s" % (sym, m))
+        a = map_index(m).get(sym)
+        if a is None:
+            raise SystemExit("os88box: %s is not a .text/.bss symbol in %s" % (sym, m))
+        return 0x600 + a
 
     def pointer(self):
-        b = self.memr(self.ksym("mouse_x"), 4)
+        b = self.memr(self.sym("mouse_x"), 4)
         return b[0] | b[1] << 8, b[2] | b[3] << 8
 
-    def to(self, x, y, tries=40, buttons=0):
+    def to(self, x, y, tries=40, buttons=0, settle_ms=60):
         """Move os8088's pointer to (x, y) by relative packets, reading its
         position back out of the kernel each round - 86Box's serial mouse is
         relative and the OS may scale it, so the loop closes on the guest.
-        BUTTONS are held throughout: 1 drags down a pull-down menu."""
+        BUTTONS are held throughout: 1 drags down a pull-down menu. Held, each
+        packet waits until the pointer has MOVED (10 ms steps, SETTLE_MS at
+        most - the old fixed pause) and then until it stops moving."""
+        held = self.held()
         for _ in range(tries):
             px, py = self.pointer()
             dx, dy = x - px, y - py
@@ -237,7 +433,17 @@ class Box(object):
                 return px, py
             step = lambda v: max(-100, min(100, v))
             self.mouse(step(dx), step(dy), buttons)
-            self.pause(60)
+            if not held:
+                self.pause(settle_ms)
+                continue
+            last, t = (px, py), 0
+            while t < settle_ms:            # moved, then still for a step
+                self.cmd("step 10")
+                t += 10
+                now = self.pointer()
+                if now != (px, py) and now == last:
+                    break
+                last = now
         raise SystemExit("os88box: pointer stuck at %r on the way to %r" % (self.pointer(), (x, y)))
 
     def watch(self, secs, every, out):
@@ -354,6 +560,21 @@ def state(name):
         return None
 
 
+def reap(all_stopped=False):
+    """Remove the run directories of TEMP instances whose 86Box is gone
+    (all_stopped: every stopped one - a --keep machine's CMOS goes too).
+    A live instance is never touched, whoever started it. Answers the names."""
+    out = []
+    for n in sorted(os.listdir(RUNS)) if os.path.isdir(RUNS) else ():
+        st = state(n)
+        if not st or alive(st.get("pid", 0)):
+            continue
+        if st.get("temp") or all_stopped:
+            shutil.rmtree(os.path.join(RUNS, n), ignore_errors=True)
+            out.append(n)
+    return out
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -364,7 +585,15 @@ def free_port():
 
 def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
            hold=False, window=False, fresh=False, clear_cmos=False, inplace=False,
-           gdb_wait=False, kmap=None, cd=None):
+           gdb_wait=False, kmap=None, cd=None, temp=False, turbo=False):
+    """Boot VM under NAME (see the module's launch options). TEMP marks the
+    run directory disposable: `with launch(...) as b:` removes it after the
+    quit, and `reap()` removes it once its process is gone - a row's copies
+    of its disks do not pile up in build/86box/run/. TURBO sets 86Box's
+    per-drive floppy turbo (`fdd_0N_turbo`): a sector costs no rotation or
+    seek, so a boot off a floppy is ~4 emulated s shorter and half the host
+    time, and a 1MB load is seconds - for a row whose subject is not the
+    floppy's timing."""
     if not os.path.isfile(BIN):
         raise SystemExit("os88box: no 86Box at %s - run `python3 tools/os88box.py build` "
                          "(or set OS88_86BOX)" % BIN)
@@ -372,6 +601,7 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
         raise SystemExit("os88box: no ROM set at %s (OS88_86BOX_ROMS)" % ROMS)
     src = find_cfg(vm)
     name = name or os.path.basename(os.path.dirname(src)) or "box"
+    reap()                                      # earlier temp runs, dead
     run = os.path.join(RUNS, name)
     st = state(name)
     if st and alive(st["pid"]):
@@ -418,6 +648,9 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
     cfg_set(order, secs, "General", "gdbstub_port", str(gdb))
     if mem:
         cfg_set(order, secs, "Machine", "mem_size", str(mem))
+    if turbo:
+        for n in range(1, 5):
+            cfg_set(order, secs, "Floppy and CD-ROM drives", "fdd_%02d_turbo" % n, "1")
     for s in sets:
         m = re.match(r"^([^.=]+(?: [^.=]+)*)\.([^=]+)=(.*)$", s)
         if not m:
@@ -453,7 +686,7 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
         kdir = "megak" if a_name.startswith("mega") else ""
         kmap = os.path.join(ROOT, "build", kdir, "kernel.map")
     json.dump({"pid": p.pid, "vm": src, "started": time.time(), "gdb": gdb,
-               "map": os.path.abspath(kmap)},
+               "map": os.path.abspath(kmap), "temp": bool(temp)},
               open(os.path.join(run, "state.json"), "w"))
     t0 = time.time()
     while not os.path.exists(sock):
@@ -462,7 +695,7 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
                              % (p.returncode, run))
         if time.time() - t0 > 30:
             raise SystemExit("os88box: no automation socket after 30s; see %s/86box.log" % run)
-        time.sleep(0.2)
+        time.sleep(0.02)
     box = Box(name)
     box.cmd("status")
     return box
@@ -493,6 +726,24 @@ def load_map(path):
     for v in syms.values():
         v.sort()
     return syms
+
+
+_MAPIDX = {}
+
+
+def map_index(path):
+    """{name: offset} of a map's .text and .bss symbols, parsed once per
+    (path, mtime) - a parse is ~15 ms, and `pointer` used to pay it a read."""
+    key = (path, os.path.getmtime(path))
+    idx = _MAPIDX.get(key)
+    if idx is None:
+        syms = load_map(path)
+        idx = {}
+        for sec in (".bss", ".text"):       # (.text wins a clash, as before)
+            for a, n in syms.get(sec, []):
+                idx[n] = a
+        _MAPIDX[key] = idx
+    return idx
 
 
 def resolve(syms, cs, ip, segmap):
@@ -558,6 +809,10 @@ def main(argv):
         return 0
     if argv[0] == "build":
         return subprocess.call([os.path.join(ROOT, "tools", "86box", "build.sh")])
+    if argv[0] == "reap":
+        for n in reap("--all" in argv[1:]):
+            print("os88box: removed %s" % n)
+        return 0
     if argv[0] == "list":
         for n in sorted(os.listdir(RUNS)) if os.path.isdir(RUNS) else ():
             st = state(n)
@@ -573,12 +828,13 @@ def main(argv):
             ap.add_argument(o)
         ap.add_argument("--mem", type=int)
         ap.add_argument("--set", action="append", default=[])
-        for o in ("--hold", "--window", "--fresh", "--clear-cmos", "--inplace", "--gdb-wait"):
+        for o in ("--hold", "--window", "--fresh", "--clear-cmos", "--inplace", "--gdb-wait",
+              "--turbo", "--temp"):
             ap.add_argument(o, action="store_true")
         o = ap.parse_args(argv[1:])
         box = launch(o.vm, o.name, o.a, o.b, o.c, o.d, o.mem, o.set, o.hold, o.window,
                      o.fresh, o.clear_cmos, o.inplace, o.gdb_wait, o.map,
-                     os.path.abspath(o.cd) if o.cd else None)
+                     os.path.abspath(o.cd) if o.cd else None, o.temp, o.turbo)
         print("os88box: %s running, %s, gdb on 127.0.0.1:%d" % (box.name, box.run, state(box.name)["gdb"]))
         print(json.dumps(box.cmd("info")))
         return 0
@@ -604,6 +860,11 @@ def main(argv):
         print(json.dumps(box.mouse(int(rest[0]), int(rest[1]), int(rest[2]) if len(rest) > 2 else 0)))
     elif verb == "to":
         print(box.to(int(rest[0]), int(rest[1])))
+    elif verb == "up":
+        pr = tuple(tuple(x.split("=", 1)) for x in rest)
+        print("os88box: desktop up, %d emulated ms" % box.kernel_up(prompts=pr))
+    elif verb == "ui-done":
+        print("os88box: UI idle after %d emulated ms" % box.ui_done())
     elif verb == "pointer":
         print(box.pointer())
     elif verb == "sym":

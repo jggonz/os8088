@@ -126,8 +126,10 @@ DISK = "build/wdscrollgate.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    M.settle(m); mo = Mouse(marty=m)
+with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
+              boot=False) as m:
+    m.run(); M.kernel_up(m); M.no_saver(m)  # (a state gate, not a picture)
+    mo = Mouse(marty=m)
     print("== Word's scroll (SPEC.md 27.7.2) on %s ==" % a.machine)
     dispcp.open_drive(m, mo, S, M.settle, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
@@ -154,13 +156,15 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     # under the gfx lock, so the work is done when [wd_top] and the lock have
     # both held still and the lock is free.
     def quiet():
-        M.quiesce(m, lambda: (rw("wd_top"), m.read(lock, 1)[0]), guest=0.5,
-                  what="Word's scroll to finish")
+        M.ui_done(m, "Word's scroll")       # (the pass that scrolls, ended;
+        M.quiesce(m, lambda: (rw("wd_top"), m.read(lock, 1)[0]), guest=0.25,
+                  what="Word's scroll to finish")   # ...and still after it)
         M.until(m, lambda mm: mm.read(lock, 1)[0] == 0,
-                "the gfx lock to be free", poll=0.1, limit=30)
+                "the gfx lock to be free", poll=0.05, limit=30)
 
     def tap(y, lead=0.25, hold=0.08):
-        mo.to(sbx, y); M.pace(m, lead)
+        mo.to(sbx, y)                   # (the move dealt with, or the old
+        M.ui_done(m, "the move", cap=lead * M.GUEST_PACE)   # pause at most)
         m.mouse(l=True); M.pace(m, hold); m.mouse(l=False)
 
     # THE HEIGHT COUNT MUST BE FINISHED FIRST. [wd_drows] is a lower bound

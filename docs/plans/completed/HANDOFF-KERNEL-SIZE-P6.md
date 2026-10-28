@@ -87,7 +87,7 @@ which the brief allowed, and which is where the remaining easy bytes were.
   and `OSAPI_PKG_START`, neither of which loads a module.
 * **compress (23%)**: the input-crossing decoder serves the transparent read
   of any compressed file of 64KB or more, not only Compress, and the truncate
-  IS `OSAPI_FILE_WRITE_AT` with a count of 0 (the DOS box's `AH=40h CX=0`
+  IS `OSAPI_FILE_WRITE_AT` with a count of 0 (DOS's `AH=40h CX=0`
   calls it). Decoder cycles unchanged or better (BEVERLY.MOD LZ4 6,454,875 →
   6,391,011).
 * **small (12% own)**: the mouse re-arm's vector, MCR, IER and 8259 writes

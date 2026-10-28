@@ -33,7 +33,7 @@
 %include "x3stub.inc"
 
     db 'X3', X3G_ABI, X3SB_KIND, X3V_COUNT, 0
-    dw sb_caps, sb_open, sb_reset, sb_gran, sb_stats, sb_close
+    dw sb_caps, sb_open, sb_reset, sb_gran, sb_stats, sb_close, sb_reseg
     times X3SB_RUNG - ($ - $$) db 0
     db 0, 0                         ; X3SB_RUNG (and a pad)
     times X3SB_CFGSZ db 0           ; X3SB_CFG
@@ -137,6 +137,11 @@ sb_rst:
 
 sb_close:
     mov byte [sb_open_], 0
+    clc
+    retf
+
+; RESEG - the stub keeps no work segment of its own: nothing to re-read
+sb_reseg:
     clc
     retf
 

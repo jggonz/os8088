@@ -50,7 +50,11 @@ REGISTRY = os.path.join(ROOT, "tests", "btnsites.txt")
 # tomorrow and hide it again. `<MACRO> os88ui_btn` is the whole pattern, so
 # the rule is "the symbol appears as the first operand of a statement",
 # whatever verb precedes it.
-REC = re.compile(r"^\s*(?:call (?:\w+:)?|[A-Z][A-Z0-9_]* +)"
+# ...EXCEPT the BODY macros (kernel size pass 14): `OS88UI_BTN_BODY os88ui_btn`
+# and `OS88UI_KBTN_BODY os88ui_kbtn, os88ui_btn` DEFINE the routine under that
+# name - os88ui.inc's one expansion for packages and kern_big, fdlg.inc's two
+# into kern_small's CTRL.DRV and FDLG.DRV - and call nothing
+REC = re.compile(r"^\s*(?:call (?:\w+:)?|(?![A-Z0-9_]*_BODY\b)[A-Z][A-Z0-9_]* +)"
                  r"(?:os88ui_btn|os88ui_kbtn|os88ui_btn_f)\b", re.M)
 # THE FAR ENTRY COUNTS. os88ui_btn_f is how an on-demand module reaches the
 # control (SPEC.md 2.6) - ctrl.inc and hiber.inc have a CS of their own - and
@@ -160,7 +164,8 @@ def main():
     CNT = re.compile(r"OS88UI_BT_N\]|OS88UI_BTNREC\s+\w+\s*,|"
                      + r"^\w+:\s*dw\s+[^;\n]*?,[^;\n]*?,[^;\n]*?,\s*[1-9]\d*\s*,",
                      re.M)
-    KBTN = re.compile(r"^\s*(?:call|[A-Z][A-Z0-9_]*) +os88ui_kbtn\b", re.M)
+    KBTN = re.compile(r"^\s*(?:call|(?![A-Z0-9_]*_BODY\b)[A-Z][A-Z0-9_]*) "
+                      r"+os88ui_kbtn\b", re.M)
     for path, (rec, raw) in sorted(live.items()):
         if not rec or path.endswith("os88ui.inc"):
             continue
@@ -171,7 +176,8 @@ def main():
         # nothing of its own to aim.
         FAR = re.compile(r"^\s*call \w+:os88ui_btn_f\b", re.M)
         if (KBTN.search(t0) or FAR.search(t0)) and \
-           not re.search(r"^\s*(?:call|[A-Z][A-Z0-9_]*) +os88ui_btn\b", t0, re.M):
+           not re.search(r"^\s*(?:call|(?![A-Z0-9_]*_BODY\b)[A-Z][A-Z0-9_]*) "
+                         r"+os88ui_btn\b", t0, re.M):
             continue                # reaches the control through the kernel's
                                     # staging, which aims the record itself
         t = open(os.path.join(ROOT, path), encoding="utf-8",
@@ -197,7 +203,7 @@ def main():
     # a record, and the registry counted the call as "the library's own" and
     # asked nothing else about it. The live count came out of the rect's y2,
     # the flags pointer out of its x2, OS88UI_BT_DOWN out of os88ui_asets'
-    # first word - so the DOS box's "Open windows are lost. Proceed?" filled
+    # first word - so DOS's "Open windows are lost. Proceed?" filled
     # the whole screen with a PRESSED button's black interior, at a rect read
     # from four arbitrary words of the package's own image.
     #
@@ -258,7 +264,7 @@ def main():
     # A reservation given as a SYMBOL is accepted: the assembler guards those
     # (`%if WD_BTREC_SZ != OS88UI_BT_SIZE`, DOS_BTREC_SZ's own mirror), and a
     # symbol is what a fixed one looks like.
-    SIZE = 24                   # OS88UI_BT_SIZE, mirrored - and checked below
+    SIZE = 18                   # OS88UI_BT_SIZE, mirrored - and checked below
     m = re.search(r"^OS88UI_BT_SIZE\s+equ\s+(\d+)", ui, re.M)
     if not m or int(m.group(1)) != SIZE:
         bad.append("apps/os88ui.inc's OS88UI_BT_SIZE is %s and this check "

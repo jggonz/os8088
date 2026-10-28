@@ -115,8 +115,14 @@ FM_WITNESS = ("fm_choose", "fm_find_view", "fm_front_win", "fm_bar_gate_x",
 _pad = 0x400                                    # ...enough to cover the last
                                                 # witness's body, not just its
                                                 # entry
-LO = max(0, (min(SY[n] for n in FM_WITNESS) - _pad) & ~0xFF)
-HI = min(COLD_LEN, (max(SY[n] for n in FM_WITNESS) + _pad + 0xFF) & ~0xFF)
+# Both bounds are COLD_SEG OFFSETS, like the witnesses, so the section ends at
+# COLD_VST + COLD_LEN and not at COLD_LEN: clamping to the bare length put HI
+# BELOW LO once .cold's offsets started at COLD_VSTART, and the carpet was an
+# empty range - zero breakpoints, every click "caught nothing" by construction.
+LO = max(COLD_VST, (min(SY[n] for n in FM_WITNESS) - _pad) & ~0xFF)
+HI = min(COLD_VST + COLD_LEN,
+         (max(SY[n] for n in FM_WITNESS) + _pad + 0xFF) & ~0xFF)
+assert LO < HI, "dispcold: an empty carpet %04X..%04X" % (LO, HI)
 
 
 def u16(b, i=0): return b[i] | (b[i + 1] << 8)
@@ -162,7 +168,10 @@ def video(m):
     return " ".join(out)
 
 
-QUIET = 5.0                 # guest seconds of a free gfx lock that end a watch
+QUIET = 1.0                 # guest seconds of an IDLE UI task that end a watch
+                            # (os88marty.ui_idle: asleep, nothing queued, the
+                            # gfx lock free). It was 5 of a free lock alone,
+                            # which a pass between two draws also satisfies.
 
 
 def pump(m, mo, px, py, secs=30.0):
@@ -170,7 +179,7 @@ def pump(m, mo, px, py, secs=30.0):
     machine or the click has plainly finished. Returns the regs dict on a
     catch, None otherwise."""
     mo.to(px, py)
-    os88marty.settle(m, card=0)
+    os88marty.ui_done(m)
     m.mouse(0, 0, l=True)
     # GUEST time on both clocks: the button is held for what 0.6 s gave on an
     # idle box, and the watch lasts what `secs` did - so a loaded box neither
@@ -179,7 +188,6 @@ def pump(m, mo, px, py, secs=30.0):
     # the gfx lock - which every drawing path holds - free for QUIET guest
     # seconds on end. What draws into .cold draws, so it holds the lock.
     hz, rate = os88marty.GUEST_HZ, os88marty.GUEST_PACE or 4.5
-    lock = S("gfx_lock_flag")
     c0 = last = busy = int(m.status()["cycles"])
     moved = time.time()
     up = False
@@ -191,7 +199,7 @@ def pump(m, mo, px, py, secs=30.0):
         g = (c - c0) / hz
         if g >= secs * rate:
             break
-        if m.read(lock, 1)[0] or not up:
+        if not up or not os88marty.ui_idle(m):
             busy = c
         elif (c - busy) / hz >= QUIET:
             break
@@ -217,22 +225,25 @@ def main():
         sec = [i for i, c in cards.items() if c["type"] == "mda"][0]
         m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle)
-        dispcp.set_mode(m, mo, S, os88marty.settle, "right")
-        dispcp.close_panel(m, mo, S, os88marty.settle)
+        # NOTHING BELOW READS A PIXEL - the seam, the window rects, .cold
+        # itself - so every wait is the UI task finishing, not a still screen.
+        done = lambda m, card=None, gate=None: os88marty.ui_done(m)
+        dispcp.open_panel(m, mo, S, done)
+        dispcp.set_mode(m, mo, S, done, "right")
+        dispcp.close_panel(m, mo, S, done)
         ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
         seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
         print("seam at x=%d" % seam)
         print("video (desktop): %s" % video(m))
 
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
+        dispcp.open_drive(m, mo, S, done, "B", card=pri)
         w = dispcp.win_list(m, S); disk = w[-1]
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
-        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "APPS", card=pri)
+        dispcp.open_named(m, mo, S, done, bx, by, "APPS", card=pri)
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
-        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "NOTEPAD.O88",
+        dispcp.open_named(m, mo, S, done, bx, by, "NOTEPAD.O88",
                           card=pri)
-        os88marty.settle(m, card=pri)       # its first paint, before the drag
+        done(m)       # its first paint, before the drag
         wins = dispcp.win_list(m, S)
         if len(wins) < 2:
             sys.exit("notepad did not launch")
@@ -240,7 +251,7 @@ def main():
         nx, ny, nw, nh = dispcp.win_rect(m, S, np)
         mo.drag(nx + nw // 2, ny + TITLE_H // 2,
                 ((seam - nw // 2) & ~7) + nw // 2, ny + TITLE_H // 2)
-        os88marty.settle(m, card=sec)
+        done(m)
         nx, ny, nw, nh = dispcp.win_rect(m, S, np)
         print("notepad x %d..%d (seam %d) %s"
               % (nx, nx + nw - 1, seam,

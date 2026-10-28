@@ -4,62 +4,61 @@
     make ftpdtest && python3 tests/ftpdpix.py
 
 Drives the SAME scripted session through both builds and compares the window's
-pixels. `make FTPDSLOW=1` is the reference - every change redraws the whole
+pixels. `FTPDSLOW=1` is the reference - every change redraws the whole
 content box, which is what this window did before the dirty mask and the
 scrolled log.
+
+The reference is built into a PRIVATE tree (`os88build.tree`,
+docs/WRITING-TESTS.md 5.2) and the optimised face is the run's own
+`build/ftpapps.img` - the row's `wants=` - so nothing here writes build/.
+Both arms boot COPIES of their disks (make_test), the server being able to
+write the one it serves.
 """
+import os
 import subprocess
-import tempfile
 import sys
 
-sys.path.insert(0, 'tools')
-sys.path.insert(0, 'tests')
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_ROOT, 'tools'))
+sys.path.insert(0, os.path.join(_ROOT, 'tests'))
 import dispcp                                          # noqa: E402
 import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
 import os88build                                       # noqa: E402
 import importlib.util
 import os88qemu                                              # noqa: E402
+import os88fixture                                     # noqa: E402
 
-spec = importlib.util.spec_from_file_location("g", "tests/ftpd.py")
+spec = importlib.util.spec_from_file_location(
+    "g", os.path.join(_ROOT, "tests", "ftpd.py"))
 G = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(G)
 
 S = os88sym.linear
-SOCK = "build/qmp.sock"
+SOCK = os88qemu.SOCK
 
 
-def build(slow):
-    for f in ("build/ftpapps.img", "build/ftpd.o88", "build/ftpd.bin"):
-        subprocess.run(["rm", "-f", f], check=True)
-    cmd = ["make", "ftpdtest"] + (["FTPDSLOW=1"] if slow else [])
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("build failed:\n" + r.stdout + r.stderr)
+def arm(slow):
+    """Point this process at one arm's build, and answer its (system, apps)
+    disks. `apply()` is what makes S() and `os88build.at("build/ftpd.o88")`
+    below describe THAT arm's kernel and package."""
+    if slow:
+        t = os88build.tree("FTPDSLOW=1",
+                           targets=("ether360.img", "ftpapps.img")).apply()
+        return t.img("ether360.img"), t.img("ftpapps.img")
+    os88build.plain().apply()
+    os88fixture.need("build/ether360.img", "build/ftpapps.img")
+    return "build/ether360.img", "build/ftpapps.img"
 
 
-def boot():
-    import os
-    if os.path.exists("build/qemu.pid"):
-        try:
-            pid = int(open("build/qemu.pid").read().strip())
-            os.kill(pid, 15)
-            os88qemu.gone(pid)
-        except (OSError, ValueError):
-            pass
-    for f in ("build/qmp.sock", "build/qemu.pid"):
-        if os.path.exists(f):
-            os.remove(f)
-    # `make test` DAEMONISES the emulator, so it outlives this script
-    # unless somebody kills it - and the somebody is us (os88qemu).
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "ETHER=1", "ETHFWD=1",
-                        "TESTIMG=build/ether360.img",
-                        "TESTAPPS=build/ftpapps.img"],
-                       capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("boot failed:\n" + r.stdout + r.stderr)
-    return G.Qemu(SOCK), eth.Mouse()
+def boot(disks):
+    # The machine is PRIVATE (tests/os88qemu.py make_test): its own socket
+    # and pidfile, so nothing of build/qmp.sock is shared and ethernet.py's
+    # Mouse, which drives os88qemu.SOCK, drives this machine. Both disks are
+    # COPIED into this process's own directory (make_test's default).
+    inst = os88qemu.make_test("ETHER=1", "ETHFWD=1", "TESTIMG=" + disks[0],
+                              "TESTAPPS=" + disks[1])
+    return inst, G.Qemu(SOCK), eth.Mouse()
 
 
 def log_state(m):
@@ -77,9 +76,9 @@ def log_state(m):
     return None
 
 
-def session(tag):
+def session(tag, disks):
     """The same steps both times, ending on a settled window."""
-    m, mo = boot()
+    inst, m, mo = boot(disks)
     G.wait_dhcp(m)
     G.launch(m, mo)
     import ftplib
@@ -110,14 +109,11 @@ def session(tag):
     # RAW PIXELS, cropped to the WINDOW - a PNG's bytes differ for reasons
     # that are not pixels, and the menu bar carries a clock that moves between
     # two runs minutes apart.
-    out = tempfile.gettempdir() + "/%s.ppm" % tag
+    out = os.path.join(os88qemu.RUNDIR, "%s.ppm" % tag)
     subprocess.run(["python3", "tools/qmp.py", SOCK,
                     'screendump %s' % out], check=True, capture_output=True)
     rect = G.ftp_win(m)
-    try:
-        pid = int(open("build/qemu.pid").read().strip())
-    except (OSError, ValueError):
-        pid = None
+    pid = inst.pid
     m.quit()
     if pid:
         os88qemu.gone(pid)          # a host wait: the process, not a guess
@@ -153,15 +149,19 @@ def crop(path, xy):
     return b"".join(out)
 
 
-build(True)
-a = session("ref")
-build(False)
-b = session("opt")
-n = sum(1 for x, y in zip(a, b) if x != y)
-print("window pixels compared: %d bytes" % len(a))
-print("DIFFERING BYTES: %d" % n)
-same = n == 0 and len(a) == len(b)
-print("IDENTICAL" if same else "*** THEY DIFFER ***")
-# An A/B gate that prints its verdict and exits 0 either way is a gate that
-# cannot fail - which is how it shipped. The exit code IS the assertion.
-sys.exit(0 if same else 1)
+def main():
+    a = session("ref", arm(True))
+    b = session("opt", arm(False))
+    n = sum(1 for x, y in zip(a, b) if x != y)
+    print("window pixels compared: %d bytes" % len(a))
+    print("DIFFERING BYTES: %d" % n)
+    same = n == 0 and len(a) == len(b)
+    print("IDENTICAL" if same else "*** THEY DIFFER ***")
+    # An A/B gate that prints its verdict and exits 0 either way is a gate
+    # that cannot fail - which is how it shipped. The exit code IS the
+    # assertion.
+    return 0 if same else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

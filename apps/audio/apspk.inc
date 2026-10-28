@@ -388,10 +388,11 @@ aps_say:
 
     APBUF aps_cvxs, 40              ; the sentence, told for the Covox
 
-; aps_close - the session over. The ring's claim is kept for the next
+; aps_close - the session over. The ring's claim is kept for the next, and
+; both rings may move until it (SPEC.md 86.5.3). Keeps all but flags
 aps_close:
     mov byte [aps_on], 0
-    ret
+    jmp ap_rdecl
 
 ; aps_free - ...and given back
 aps_free:

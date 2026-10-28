@@ -635,15 +635,16 @@ vid_reboot:
 ; the bar was the only thing a Hercules or a CGA ever saw.
 ;
 ; **The overlay may not reach its own data through DS** (SPEC.md 2.5), so the
-; buffer and the three strings below are read `cs:` - and the string the
-; DRIVER supplies is a .text one read through DS, which is why there are two
-; walkers (spl_mcs / spl_mds) rather than one.
+; buffer and the three strings below are read `cs:` - and so is a driver
+; row's title, which is the blob's own copy of DRV_TITLES (driver.inc) since
+; kernel size pass 14 took the titles out of resident. One walker (spl_mcs);
+; the second, spl_mds, read a .text title through DS and went with it.
 ;
 ; **No entry takes a pointer across the boundary.** A caller in .cold naming
 ; a label in this section would assemble and would be a cross-address-space
 ; reference os88ovlchk cannot see, so the two literal lines are zero-argument
-; entries of their own and the only pointer that ever crosses is DS:SI, which
-; is a kernel string by contract.
+; entries of their own, and the title's pointer comes from drv_boot_x - which
+; is in this section too.
 ;
 ; The gfx lock is not held, exactly as spl_paint does not hold it: nothing
 ; else in the machine draws yet. The UI task does not exist, the cursor is not
@@ -652,11 +653,14 @@ vid_reboot:
 ; =============================================================================
 section .boot2
 
-SPL_MSG_CELLS equ 32            ; the reserved width, in 8px cells. 32 because
+SPL_MSG_CELLS equ 37            ; the reserved width, in 8px cells. 37 because
                                 ; the longest line the tree can compose is
-                                ; 'Loading Driver 1/5 (Hard Drive)' = 31, and
-                                ; 32 cells is 256px - byte-aligned arithmetic
-                                ; on every adapter this runs on
+                                ; 'Loading Driver NN/NN (' + DRV_TITLES'
+                                ; longest, 'Absolute mouse' (kern_emu), + ')'
+                                ; = 37 - it was 32 and cut those lines off
+                                ; (kernel size pass 14, ksp14/api.md defect 2).
+                                ; Cells, so byte-aligned arithmetic on every
+                                ; adapter this runs on
 SPL_MSG_Y     equ 288           ; VGA: under the bar trough (rows 262..281) and
                                 ; above spl_pct's text row 19 (y 304). Mono
                                 ; computes its own from the live geometry
@@ -707,7 +711,7 @@ ovl_spl_msg_fdd:                ; 'Looking for Drives' - SPEC.md 18.97's TRACK
     pop si
     retf
 
-ovl_spl_msg_drv:                ; AL = ordinal, AH = total, DS:SI = DRVR_TITLE
+ovl_spl_msg_drv:                ; AL = ordinal, AH = total, CS:SI = the title
     call spl_msg_drv            ; ...and near too - see above
     ret
 
@@ -736,7 +740,7 @@ spl_msg_cs:
 ; -----------------------------------------------------------------------------
 ; spl_msg_drv - 'Loading Driver n/N (Title)'
 ; in:  AL = the 1-based ordinal, AH = how many are being loaded,
-;      DS:SI -> the row's DRVR_TITLE string
+;      CS:SI -> the row's title, in the blob's own DRV_TITLES (driver.inc)
 ; -----------------------------------------------------------------------------
 spl_msg_drv:
     pushf
@@ -760,7 +764,8 @@ spl_msg_drv:
     call spl_mput
     mov al, '('
     call spl_mput
-    call spl_mds                ; the title, through DS - it is a .text string
+    call spl_mcs                ; the title - the blob's own copy, through CS
+                                ; (kernel size pass 14: no title is resident)
     mov al, ')'
     call spl_mput
     call spl_mend
@@ -801,18 +806,6 @@ spl_mcs:                        ; CS:SI ASCIIZ -> the line (one of ours)
 .next:
     mov al, [cs:si]
     inc si
-    or al, al
-    jz .out
-    call spl_mput
-    jmp short .next
-.out:
-    pop ax
-    ret
-
-spl_mds:                        ; DS:SI ASCIIZ -> the line (a kernel string)
-    push ax
-.next:
-    lodsb
     or al, al
     jz .out
     call spl_mput
@@ -1105,7 +1098,7 @@ section .text
 
     mov [vid_kind], al          ; 2. republish the geometry
     call %1 %+ _equip           ; (this image's own: VSW_EQUIP)
-    %2 vid_apply
+    call %1 %+ _apply           ; (this image's own: viddet.inc's VID_APPLY)
     %2 vid_setmode
 
 %ifdef KERN_BIG
@@ -1152,6 +1145,8 @@ section .text
 %endmacro
 section .modu                   ; the Display page's Set Primary (KSW_SECT)
 VSW_SWITCH vid, KSWK, wm
+VID_APPLY vid, KSWK             ; ...and vid_apply, which only the panel, the
+                                ; boot and EXTD.DRV reach (viddet.inc)
 section .text
 
 ; =============================================================================
@@ -1713,18 +1708,18 @@ vid_ctx_act:
 ; docs/plans/LAST-DROP-BYTES.md row 13) - and a stale comment naming a runtime caller
 ; is exactly how a later session would add the one that breaks it silently.
 ;
-; Its two outbound calls go through cw_ shims, which is `.boot2`'s discipline
-; unchanged from `.cold`'s: CS is the blob's, DS is still KERNEL_SEG, so the
-; body reads [vid_ndisp] and [vid_ox] exactly as it did.
+; Its two outbound calls go through spw_near's `call bp`, which is `.boot2`'s
+; discipline unchanged from `.cold`'s: CS is the overlay's, DS is still
+; KERNEL_SEG, so the body reads [vid_ndisp] and [vid_ox] exactly as it did.
 ; -----------------------------------------------------------------------------
 section .ovl
 vid_ctx_init:
     push ax
-    push cx
     push di
     push es
-    mov cx, KERNEL_SEG
-    mov es, cx
+    push ds                     ; ES = DS = KERNEL_SEG (real mode: the boot),
+    pop es                      ; and nothing here touches CX (kernel size
+                                ; pass 14, which needed the bytes)
     mov word [vid_ndisp], 1     ; one display, display 0 current (a pair)
     xor al, al
     mov bp, vid_ctx_ptr         ; (spw_near's `call bp`: kmain_o, the one
@@ -1734,11 +1729,12 @@ vid_ctx_init:
     mov [es:di+VID_CTX_VY], ax
     mov [vid_ox], ax            ; ...and it is current, so vid_ctx_act - which
     mov [vid_oy], ax            ; is what normally publishes these - never runs
-    xor al, al
-    call KERNEL_SEG:cw_vid_ctx_capture
+    mov bp, vid_ctx_capture     ; ...and capture display 0 (AL = 0 already).
+    call KERNEL_SEG:spw_near    ; spw_near and not a cw_ shim since kernel
+                                ; size pass 14: EXTD.DRV, the shim's other
+                                ; caller, has its own EXK hop
     pop es
     pop di
-    pop cx
     pop ax
     retf                        ; FAR: kmain reaches this through SPLGATE1
 section .text
@@ -2139,7 +2135,7 @@ vid_dual_ok:
                                 ; display, and display 0 current (vid_cur is
                                 ; the byte after, the %error beside them)
     mov [vid_kind], ah          ; (a no-op unless a caller moved it)
-    %2 vid_apply                ; republishes the chrome extent AND re-homes
+    call %1 %+ _apply           ; republishes the chrome extent AND re-homes
 .cap:
     xor al, al                  ; the pointer onto display 0 - which is what
     %2 vid_ctx_capture          ; a shrinking desktop owes it

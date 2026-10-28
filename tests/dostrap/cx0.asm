@@ -13,7 +13,7 @@
 ;   nasm -f bin -w+error -o CX0.COM tests/dostrap/cx0.asm
 ;   python3 tools/os88disk.py -o cx0.img --size 360 CX0.COM
 ;
-; ...then double-click it off B: in the box, and boot your own DOS floppy with
+; ...then double-click it off B: in DOS, and boot your own DOS floppy with
 ; the same image in B: for the other column. NOTHING HERE IS THIRD-PARTY: it
 ; is ours, MIT with the rest of the tree.
 ; =============================================================================

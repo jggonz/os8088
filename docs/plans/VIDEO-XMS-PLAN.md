@@ -648,7 +648,7 @@ not need to: its XMS is the fast unreal-mode copy.
 ### 10.6 What else could use it, later
 
 Each is a decision of its own, and none is in this plan's waves:
-- **The DOS box's `int 67h`.** docs/plans/DOS-EXEC-PLAN.md 2.4 says EMS
+- **DOS's `int 67h`.** docs/plans/DOS-EXEC-PLAN.md 2.4 says EMS
   "should be refused rather than faked" - with a real board it is not faked:
   LIM 3.2's functions (40h-4Eh) over the driver's verbs would give a DOS
   program real expanded memory on an 8088, which is where most DOS software

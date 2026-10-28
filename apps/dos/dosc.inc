@@ -35,11 +35,11 @@ dos_con_start:
     ; constant nor a guess - OSAPI_FILE_HERE answers the instance's own volume
     ; with no disk I/O at all, and [dos_vol] is zero out of bss where zero is
     ; drive A: (SPEC.md 96.6.3's sentinel trap one file along), so an installed
-    ; machine's box stood on C: and printed `A:\>`.
+    ; machine's DOS stood on C: and printed `A:\>`.
     ;
     ; **AND THE FOLDER IS DELIBERATELY NOT THE ONE IT ANSWERS.** That is
     ; `APPS\` - where this package's file happens to live - and a user opening
-    ; a DOS box has come for a machine, not for our installation layout. A
+    ; DOS has come for a machine, not for our installation layout. A
     ; prompt that opens `A:\APPS>` is one they have to `CD \` out of before
     ; anything they type means what it looks like.
     ;
@@ -101,7 +101,7 @@ dos_prompt:
     call OSAPI_FILE_PATH            ; this, which runs on the UI task between
     mov si, dos_pbuf                ; launches
     jnc .say
-    mov si, dos_lnk_root            ; no answer: the root, which is where a box
+    mov si, dos_lnk_root            ; no answer: the root, which is where a DOS
 .say:                               ; with nothing mounted would be standing
     call con_say
     mov al, '>'
@@ -218,7 +218,7 @@ dos_con_key:
 .esc:
     mov word [dos_cmdn], 0          ; DOS draws a `\` and opens a new line;
     mov byte [dsh_line], 0          ; this clears the line in place, which is
-    call dos_con_clrline            ; what a windowed box with a visible cursor
+    call dos_con_clrline            ; what a windowed DOS with a visible cursor
     jmp short .done                 ; should do. Esc in FULL SCREEN is the way
                                     ; out of it instead (§96.33.3), and that is
                                     ; tested before this proc is reached
@@ -371,7 +371,7 @@ dos_con_prog:
     ; kern_mega's kern_dos is in the HMA, so a program loads ~33KB lower than
     ; anywhere else and A20 is open: exactly the case EXEPACK's unpacker gets
     ; wrong ("Packed file is corrupt"). DOS 5 answered with LOADFIX, and so
-    ; does this box - the window side's verb, OPEN's and HELP's room, so the
+    ; does this DOS - the window side's verb, OPEN's and HELP's room, so the
     ; core pays nothing. The rest of the line runs again as the line.
     mov byte [dos_lfix], 0
     mov si, dsh_verb
@@ -512,7 +512,7 @@ dos_con_prog:
     ; This was dos_swap, which is a full ground FILL and then a full PAINT -
     ; two whole-window passes, which is what a PAGE CHANGE costs and is right
     ; for one (96.20.1). A launch from the console is not a page change when
-    ; the box is already on the main page: what changed is this box's text and
+    ; DOS is already on the main page: what changed is the path box's text and
     ; one line of the band, and the band has its own painter.
     cmp byte [dos_fsxup], 0
     je .wind                        ; **THE CONSOLE HAS THE SCREEN** (SPEC.md
@@ -595,7 +595,7 @@ dosc_ceq:
 ; KEYBOARD is not: `open readme.txt` found no association for `.txt` while
 ; `OPEN README.TXT` opened Note Pad. The kernel folded it there for one cycle,
 ; in 44 resident bytes of every machine ever booted - .cold is resident, so
-; they came off the heap and off this box's own arena - on behalf of one
+; they came off the heap and off this DOS's own arena - on behalf of one
 ; caller, and the caller is this one.
 ;
 ; It comes free HERE because the walk already existed: this copy was written
@@ -840,7 +840,7 @@ dos_pkg_go:
     mov si, dos_pgdoc
     mov di, dsh_pat
     call dsh_to11                   ; the same 11-byte form every other match
-    mov word [dsh_skip], 0          ; in this box is decided on
+    mov word [dsh_skip], 0          ; in this DOS is decided on
     call dsh_nth
     jc .nodoc
 .nocheck:
@@ -863,7 +863,7 @@ dos_pkg_go:
     call OSAPI_PKG_START
     pushf                           ; **COME BACK** - a path may have stood the
     push ax                         ; machine on another volume, and every
-    push ds                         ; later DOS call resolves where the BOX
+    push ds                         ; later DOS call resolves where DOS
     pop es                          ; thinks it is
     mov dx, [dos_curdir]
     mov bl, [dos_vol]
@@ -911,7 +911,7 @@ dos_pkg_go:
     mov si, dos_s_nopkg
     cmp byte [dos_ispkg], 2         ; ...a stem the FOLDER did not hold and
     jne .sayname                    ; the tables did not either is a name the
-    mov si, dsh_s_bad               ; box does not know, whatever followed it
+    mov si, dsh_s_bad               ; DOS does not know, whatever followed it
 .sayname:                           ; (SPEC.md 96.33.21.2)
     call con_say
     mov si, dos_pkgn
@@ -948,7 +948,7 @@ dos_pkg_go:
     ; OSAPI_WM_OBSCURED is the published gate for exactly this (SPEC.md
     ; 11.3.1) and it answers the hidden case too, so it is the whole test. A
     ; skipped draw loses NOTHING: con_say has already marked the rows, and
-    ; the next real paint - which is what raising the box does - spends them.
+    ; the next real paint - which is what raising the window does - spends them.
     mov bx, [dos_win]
     call OSAPI_WM_OBSCURED
     jc .out
@@ -978,7 +978,7 @@ dos_pkg_go:
 ; **DOS TRIES `.COM` THEN `.EXE` THEN `.BAT`, AND THE ORDER IS THE CONTRACT** -
 ; a folder holding both `FOO.COM` and `FOO.EXE` runs the `.COM`. There is no
 ; `.BAT` here because there is no batch interpreter, and no PATH search because
-; this box has no PATH: what is searched is the current directory, which is
+; this DOS has no PATH: what is searched is the current directory, which is
 ; where somebody who typed a bare name is standing.
 ;
 ; A NAME THAT ALREADY CARRIES A DOT IS NOT SEARCHED ON - DOS does not probe
@@ -986,7 +986,7 @@ dos_pkg_go:
 ; file they mean - BUT IT IS STILL CHECKED (SPEC.md 96.33.15). COMMAND.COM's
 ; rule has two halves and this routine had one: no extension is a search, and
 ; an extension MUST be `.COM`, `.EXE` or `.BAT` or the answer is `Bad command
-; or file name`. Left alone, `DOS.O88` typed in the folder the box was launched
+; or file name`. Left alone, `DOS.O88` typed in the folder DOS was launched
 ; from loaded 30KB of package image as a `.COM` and the machine never came
 ; back. There is no `.BAT` here for the reason above - no batch interpreter -
 ; and refusing one by name beats entering it.
@@ -1056,7 +1056,7 @@ dos_con_ext:
     ; --- ...AND `.O88` LAST, AFTER DOS'S OWN TWO (SPEC.md 96.33.7) ----------
     ; 96.33.17 gave the DOTTED door a third answer and left the bare one with
     ; two, so `CALC.O88` opened Calculator and `CALC` beside it in the same
-    ; folder said `Bad command or file name` - which reads as the box not
+    ; folder said `Bad command or file name` - which reads as DOS not
     ; having the program rather than as the user owing an extension the `.COM`
     ; case does not ask for. A bare name IS a search; this is the third answer
     ; reaching the door that means it.
@@ -1220,7 +1220,7 @@ dos_con_starting:
     mov si, dos_path                ; ...with dos_con_ended's own fallback:
     cmp byte [si], 0                ; dos_path_make leaves the bare name when
     jne .said                       ; it cannot resolve one, and an EMPTY one
-    mov si, dos_name                ; is a box that has never launched
+    mov si, dos_name                ; is a DOS that has never launched
 .said:
     call con_say
     mov si, dos_c_crlf
@@ -1265,12 +1265,12 @@ dos_con_ended:
     call con_say                    ; the user never had is a sentence that
     jmp short .out                  ; sends them looking at the drive
 .name:
-    ; **THE FULLY QUALIFIED PATH** (SPEC.md 96.33.20), which is what the box's
+    ; **THE FULLY QUALIFIED PATH** (SPEC.md 96.33.20), which is what DOS's
     ; own path field holds and what Save Shortcut writes: a bare `PRINCE.EXE`
     ; in a log line is ambiguous the moment the console has stood anywhere
     ; else, and this line is most often about a program on the OTHER drive.
     ; `dos_path_make` fills it on both launch doors and leaves the bare name
-    ; there when it cannot resolve one, so the fallback is for a box that has
+    ; there when it cannot resolve one, so the fallback is for a DOS that has
     ; never launched at all.
     mov si, dos_path
     cmp byte [si], 0
@@ -1311,7 +1311,7 @@ dos_con_ended:
 ; it loaded itself, and only the ones that refuse say anything at all.
 ; `prince.EXE ended, exit code 001` with `Requires 318 KBytes… 146 KBytes is
 ; Available` above it takes two numbers and an assumption about the image's
-; size to turn into the one figure that is this box's business (SPEC.md
+; size to turn into the one figure that is this DOS's business (SPEC.md
 ; 96.25.1): what the arena was.
 ;
 ; It is the RAN path only. `[dos_akb]` is banked at `.unmount` and again at
@@ -1463,14 +1463,14 @@ dos_s_noopen: db 'No program is associated with that file.', 0
 ;
 ;   the mode      FSXM_TEXT80, which every adapter here can set
 ;   the worker    THERE IS NONE. Telnet passes FSXF_KEEPWORKER because its
-;                 worker owns the socket; this box's console is written by the
+;                 worker owns the socket; this DOS's console is written by the
 ;                 UI task alone, so a kept worker would be a task with nothing
 ;                 to do and one more thing to be wrong about
 ;   the key out   ESC, and Telnet's is Ctrl+] - see below
 ;   the hint      ours names Esc, so the string is ours too
 ;
 ; **ESC IS OURS ONLY WHILE THE CONSOLE HAS THE SCREEN.** A DOS program reads
-; Esc for its own purposes and a box that ate it could not run half the
+; Esc for its own purposes and a DOS that ate it could not run half the
 ; software it exists for - so this bracket is entered from the menu, ends
 ; before any program is launched, and the program's own bracket (96.2) is a
 ; different one with no key of ours in it at all. SPEC.md 11.2.1 asks for `F`
@@ -1498,7 +1498,7 @@ dos_fsx:
     mov byte [dos_fsxup], 1         ; ...BEFORE the bracket, so nothing between
     mov ax, dos_fsx_con             ; here and the mode set can reach a drawing
     mov bx, si                      ; slot either
-    xor cx, cx                      ; NO FSXF_KEEPWORKER: this box has no worker
+    xor cx, cx                      ; NO FSXF_KEEPWORKER: this DOS has no worker
     call OSAPI_FSX_RUN
     mov byte [dos_fsxup], 0         ; ...and again on the refusal path, where
 .out:                               ; dos_fsx_con never ran
@@ -1554,7 +1554,7 @@ dos_fsx_con:
     jmp short .loop
 .done:
     mov byte [dos_fsxup], 0         ; ...INSIDE the bracket, so fsx_restore's
-    call con_markall                ; repaint finds the box windowed and the
+    call con_markall                ; repaint finds DOS windowed and the
     pop es                          ; whole band owed, and dos_con_draw is
     pop di                          ; whole band owed
     pop si
@@ -1812,7 +1812,7 @@ dos_snap_any:
     push dx                         ; **DX IS THE CURSOR THIS PROC'S CALLER IS
     push si                         ; HOLDING**, and `mul` writes it: measured
     mov ax, cx                      ; as a captured screen whose cursor came
-    mov cx, CON_ROWS                ; back 0,0, so the box's own `ended, exit
+    mov cx, CON_ROWS                ; back 0,0, so DOS's own `ended, exit
     mul cx                          ; code` line landed on the program's FIRST
     mov cx, ax                      ; row. A register an instruction owns
 .c:

@@ -76,7 +76,7 @@ def main():
     with os88marty.launch(a.image, apps=a.apps,
                           machine="os8088_5150_cga_gla", boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
         mo = os88mouse.Mouse(marty=m)
         shots = session(m, mo)
 

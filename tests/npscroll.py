@@ -550,7 +550,9 @@ def main():
     say = (lambda s: None) if a.quiet else (lambda s: print("   ", s, flush=True))
 
     bad = []
-    with os88ui.boot(IMG, machine=a.machine, verbose=not a.quiet) as ui:
+    with os88ui.boot(IMG, machine=a.machine, verbose=not a.quiet,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         ui.open_drive("A")
         ui.open("README.TXT")                   # SPEC.md 54's association
         ui.settle()

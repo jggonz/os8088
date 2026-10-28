@@ -1542,33 +1542,34 @@ atou32:
     stc
     ret
 
-; sizekb - 360/720/1200/1440 as a fresh disk's data area; anything else is
-;          already bytes. DX:AX in and out
+; sizekb - 360/720/1200/1440 as a fresh disk's data area less 2KB (room
+;          for what an OS hides on a disk - os88cz.py's SIZES); anything
+;          else is already bytes. DX:AX in and out
 sizekb:
     or dx, dx
     jnz .b
     cmp ax, 360
     jne .a
-    mov ax, 354 * 1024 & 0xFFFF
-    mov dx, (354 * 1024) >> 16
+    mov ax, 352 * 1024 & 0xFFFF
+    mov dx, (352 * 1024) >> 16
     ret
 .a:
     cmp ax, 720
     jne .c
-    mov ax, (713 * 1024) & 0xFFFF
-    mov dx, (713 * 1024) >> 16
+    mov ax, (711 * 1024) & 0xFFFF
+    mov dx, (711 * 1024) >> 16
     ret
 .c:
     cmp ax, 1200
     jne .d
-    mov ax, (2371 * 512) & 0xFFFF
-    mov dx, (2371 * 512) >> 16
+    mov ax, (2367 * 512) & 0xFFFF
+    mov dx, (2367 * 512) >> 16
     ret
 .d:
     cmp ax, 1440
     jne .b
-    mov ax, (2847 * 512) & 0xFFFF
-    mov dx, (2847 * 512) >> 16
+    mov ax, (2843 * 512) & 0xFFFF
+    mov dx, (2843 * 512) >> 16
 .b:
     ret
 

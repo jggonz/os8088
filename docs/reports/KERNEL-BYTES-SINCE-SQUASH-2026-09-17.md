@@ -118,7 +118,7 @@ image.
 **The sign change is worth stating plainly because it reverses this file's own
 headline.** On 2026-09-18 `kern_big` was two rungs ABOVE the squash and the
 honest summary was *"we spent a rung, `main` spent a rung"*. At G it is one
-rung BELOW, having added a DOS box, an icon store, a glyph column, a button
+rung BELOW, having added DOS, an icon store, a glyph column, a button
 control and two of `main`'s features on the way. Nothing was reverted to get
 there; one data structure stopped being global.
 
@@ -137,7 +137,7 @@ there; one data structure stopped being global.
 | spare of `KERN_SMALL_BUDGET` | 31,744 | 31,744 | 31,744 | 32,256 | 32,768 | **33,280** | | | | |
 
 **The floor machine is a full KILOBYTE and a HALF smaller than it was at the
-squash** — three 512-byte rungs — after a cycle that added a DOS box, an icon
+squash** — three 512-byte rungs — after a cycle that added DOS, an icon
 store and a document-glyph column to the tree. It was 512 on 2026-09-17, 1,024
 on 2026-09-18, and **the third rung came with G**: §22.6.3 took 800 bytes of
 `.lowbss` here as it took 1,600 on `kern_big`, and `6c4bff0c` then sent six
@@ -212,7 +212,7 @@ is a merge's own follow-on, and `kern_big` figures unless a row says otherwise.
 
 | lane | `.text` | `.cold` | `.bss` | `.lowbss` | code |
 |---|---:|---:|---:|---:|---:|
-| **A→E** the DOS box's kernel surface, the read-ahead, the compactor | −216 | +855 | −24 | 0 | **+639** |
+| **A→E** DOS's kernel surface, the read-ahead, the compactor | −216 | +855 | −24 | 0 | **+639** |
 | **E→B** the icon store, the document glyph, the late work | +93 | +1,046 | +14 | −1,216 | **+1,139** |
 | **D→F** the passes this file asked for, the button control, the soak lane | +91 | −230 | +14 | 0 | **−139** |
 | **F→G** the global listing retired, the HDD claim with it, `gfx_points` virtual | +162 | +173 | +7 | **−1,600** | **+335** |
@@ -224,9 +224,9 @@ Every other lane in this file can be read off its code column; this one cannot,
 because what it moved is `.lowbss` and `.lowbss` is not code. A reader who
 skims the `code` column will conclude lane 4 cost bytes. It gave back 1,536.
 
-### Lane 1 — what the DOS box asked the kernel for (A→E, +639)
+### Lane 1 — what DOS asked the kernel for (A→E, +639)
 
-The DOS box itself is `kerndos/` and `apps/dos/` — a package and a module
+DOS itself is `kerndos/` and `apps/dos/` — a package and a module
 image, not resident kernel. What it cost the KERNEL is the doors it needed.
 
 | concept | modules | code |
@@ -246,7 +246,7 @@ image, not resident kernel. What it cost the KERNEL is the doors it needed.
 | a package may **ship its 8x8 document glyph** (SPEC.md 54.3.2) | `assoc.inc` | **+197** | 0 |
 | `ld_pkg_byname` — the DOS shell's `open <document>` arm (SPEC.md 21.5.3) | `loader.inc` | **+159** | 0 |
 | **Alt+Enter** into and out of full screen (SPEC.md 96.33.5.1, 9.7.1) and the mouse work beside it | `mouse.inc` +42, `ui.inc` +25, `fsx.inc` +5 | **+72** | 0 |
-| the DOS box's Memory page: a suspend mask and a class figure (SPEC.md 51.12) | `driver.inc` +29, `memory.inc` +10, `files.inc` +18 | **+57** | 0 |
+| DOS's Memory page: a suspend mask and a class figure (SPEC.md 51.12) | `driver.inc` +29, `memory.inc` +10, `files.inc` +18 | **+57** | 0 |
 
 **The `.lowbss` line is the one to read twice.** `.lowbss` sits BELOW `HEAP_SEG`
 in the ladder, so every byte there comes off the heap and therefore off the DOS
@@ -355,7 +355,7 @@ bytes of `dsk_icoix`, one reference byte an entry. `LOW_PARA` goes 8,704 →
 list `DSK_VENT` = 64 entries where a floppy got 32, and **two unrelated changes
 had already taken that reason away without anyone looking at it**: the icon
 store (25.9) moved four fifths of the claim's contents out, and 22.6.2 then
-raised `DSK_NENT` to 64 for the DOS box, so the floor became the same cap the
+raised `DSK_NENT` to 64 for DOS, so the floor became the same cap the
 claim funded. It held 24KB on a four-partition machine with at most one of the
 four ever in use. What went with it: `HDD_LISTKB`, `HDV_LSEG`, `hd_lst_reloc`,
 `DV_SEG`, `dsk_list_pick`, `dsk_list_floor`, both `mem_rr_tab` rows, `DSK_VENT`,
@@ -403,8 +403,8 @@ cells off the API table's tail. The five passes of 2026-09-17 took a further
 - **`main`** spent **+1,004 bytes of section and one rung** on `kern_big` for
   three concepts, of which the Dock is 571 and `.ovl` +166 on top. On
   `kern_small` it spent **12 bytes and no rung**.
-- **We** spent **+584 bytes of section and two rungs** on `kern_big` to B for a
-  DOS box's worth of kernel surface, an icon store and a glyph column — while
+- **We** spent **+584 bytes of section and two rungs** on `kern_big` to B for
+  DOS's worth of kernel surface, an icon store and a glyph column — while
   giving back 1,216 bytes of `.lowbss` and taking `.text` DOWN on both kernels.
   On `kern_small`, **+103 bytes and no rung**. The 124 commits from D to F then
   took **139 bytes of `kern_big` back** and a second rung off `kern_small`,
@@ -423,7 +423,7 @@ cells off the API table's tail. The five passes of 2026-09-17 took a further
   BELOW the squash on `kern_big`** — −537 resident against +116 of overlay —
   and **−1,615 bytes and three rungs below it on `kern_small`**. Both shipped
   kernels are now smaller than they were at #179, after a cycle that added a
-  DOS box, an icon store, a glyph column, a button control and `main`'s Dock
+  DOS, an icon store, a glyph column, a button control and `main`'s Dock
   and USB mouse.
 
 ## Where that leaves the two kernels

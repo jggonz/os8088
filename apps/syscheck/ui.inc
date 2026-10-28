@@ -342,6 +342,40 @@ sc_layout:
     ret
 
 ; -----------------------------------------------------------------------------
+; sc_regeo - lay out again when the window is no longer where sc_geo was laid
+;            out: a title-bar drag REPLAYS the window and never calls W_PAINT
+;            (SPEC.md 11.96.12.0), so every rect banked at paint is stale until
+;            this runs. Every handler that hit-tests or draws calls it first.
+; in:  nothing ([sc_win]); out: nothing; keeps every register
+; -----------------------------------------------------------------------------
+sc_regeo:
+    cmp byte [sc_laid], 0
+    je .ret                         ; no paint yet: nothing laid out to move
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [sc_win]
+    call OSAPI_WM_CONTENT           ; AX = left, DX = top, as it is NOW
+    cmp ax, [sc_geo+SCG_CX]
+    jne .lay
+    cmp dx, [sc_geo+SCG_CY]
+    je .out
+.lay:
+    call sc_layout                  ; draws nothing; keeps BX
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
 ; sc_drawall - everything, once (W_PAINT: the content is white, the clip armed)
 ; in:  BX = window ptr; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
@@ -1331,12 +1365,32 @@ sc_drawfline:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_buttons - the five buttons' rects and greying, then the buttons
-;              (keeps SI)
+; sc_place - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): the buttons' rects where
+;            the window IS. The library's press, drag and release hit-test the
+;            record before any handler of ours runs, so sc_regeo's call at the
+;            top of each one is too late for them; this is that call, made
+;            where the library makes its own.
+; in:  BX = the record, SI = the window; out: nothing; keeps every register
 ; -----------------------------------------------------------------------------
-sc_buttons:
+sc_place:
+    cmp byte [sc_laid], 0
+    je .ret                         ; no paint yet: no buttons to place
+    call sc_regeo                   ; sc_geo from the live origin
+    jmp short sc_brects             ; a tail call: it keeps them all
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; sc_brects - the five buttons' inclusive screen rects, from sc_geo: the ONE
+;             description sc_buttons draws from and sc_place hit-tests from.
+;             Draws nothing, keeps every register
+; -----------------------------------------------------------------------------
+sc_brects:
+    push ax
+    push cx
+    push dx
     push si
-    push bp
+    push di
     mov ax, [sc_geo+SCG_CX]
     add ax, 8
     mov dx, [sc_geo+SCG_BTY]
@@ -1344,8 +1398,6 @@ sc_buttons:
     add cx, SC_BTH - 1
     mov di, sc_rects
     mov si, sc_btw
-    mov bx, sc_bflags
-    xor bp, bp                      ; BP = the button
 .r:
     mov [di+0], ax
     mov [di+2], dx
@@ -1354,7 +1406,29 @@ sc_buttons:
     mov [di+4], ax
     mov [di+6], cx
     add ax, 9                       ; the next one, 8 pixels along
-    push ax
+    add di, 8
+    inc si
+    inc si
+    cmp si, sc_btw + 2 * SC_NB
+    jb .r
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sc_buttons - the five buttons' rects and greying, then the buttons
+;              (keeps SI)
+; -----------------------------------------------------------------------------
+sc_buttons:
+    push si
+    push bp
+    call sc_brects
+    mov bx, sc_bflags
+    xor bp, bp                      ; BP = the button
+.r:
     mov ax, bp
     call sc_bok                     ; CF = 1: greyed (SPEC.md 47)
     mov ax, OS88UI_FILL
@@ -1362,10 +1436,6 @@ sc_buttons:
     or ax, OS88UI_DIS
 .live:
     mov [bx], ax
-    pop ax
-    add di, 8
-    inc si
-    inc si
     inc bx
     inc bx
     inc bp

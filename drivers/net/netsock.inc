@@ -547,7 +547,7 @@ nsk_reply_h:
 ; NETV_ADDR - out ES:DI = four IP bytes; CF=1 / NETE_NOLINK if there is none
 ;
 ; **THE ADDRESS IS THE PARTNER'S AND THAT IS THE TRUE ANSWER**, not a stand-in
-; for one we do not have. The DOS box owns the IP, an inbound connection
+; for one we do not have. The DOS machine owns the IP, an inbound connection
 ; arrives there and is forwarded down the cable, so the address an FTP client
 ; must dial for a passive transfer really is the far end's
 ; (docs/plans/completed/NET-STACK-PLAN.md 1.5).

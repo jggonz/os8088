@@ -96,7 +96,7 @@ def main(argv):
                               and m.read(entry, 1)[0] == 0xE9)
                 return False
             return m.read(live, 1)[0] == 0
-        os88marty.until(m, booted, "the splash to end", poll=0.1, limit=60)
+        os88marty.until(m, booted, "the splash to end", poll=0.05, limit=60)
         m.pause()
         regs = m.regs()
         ss, sp0 = regs["ss"], regs["sp"]

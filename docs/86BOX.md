@@ -44,7 +44,8 @@ installs the two dozen packages itself (the same gating as
 `OS88_86BOX` and `OS88_86BOX_ROMS` point the driver at a binary and ROM set
 somewhere else.
 
-The two patches, both inert unless asked for:
+The patches - the first two inert unless asked for, the third a CORRECTION
+of the CPU model:
 
 - **`01-fault-log.patch`** - with `OS88_FAULTLOG=1` (the driver always sets
   it), every exception the CPU raises is printed to stderr *before it is
@@ -57,6 +58,16 @@ The two patches, both inert unless asked for:
   `"stopped":"debugger"` having run nothing. Now it stops only with
   `OS88_GDBWAIT=1` (`launch --gdb-wait`), and it binds loopback rather than
   every interface.
+- **`03-cs-exec-check.patch`** - a far JMP or CALL (and `loadcs`) through a
+  DATA descriptor raises #GP(selector), as an 80286 does. Upstream tests the
+  descriptor's S bit and then treats ANY non-system segment as code, so a
+  far transfer through a data selector simply worked - and kern_mega's most
+  common completed fault (`mega_gpfix`, a package far-jumping into a claim
+  by its identity segment) cost NOTHING here. That made this machine BLIND
+  to a whole class of kern_mega slowness: RealDMG's base build ran Kirby's
+  Dream Land at 101.5% of real time on `286-mega` while Bochs counted ~35,000
+  of those faults a second (docs/REALDMG-SPEC.md section 16.2.4). Bochs
+  always had the check; `pmoderetf` and `pmodeiret` had it here already.
 
 ## Use
 
@@ -114,6 +125,37 @@ again until they agree. On the mr286 a 200-pixel packet stream moved the
 pointer 198 pixels, so it converges in a round or two. `sym NAME` prints the
 linear address of any `.text`/`.bss` kernel symbol, for `memr`; anything in
 `.cold` or `.lowbss` wants `tools/os88sym.py`.
+
+### Waiting on the guest, not on the host
+
+A held machine runs only when asked, so every wait is a `step` - and a
+fixed one is paid in full whether the guest needed it or not. `Box` has the
+gates `tools/os88marty.py` grew (docs/plans/completed/SOAK-SPEED.md, round 3):
+
+| | |
+|---|---|
+| `kernel_up(prompts=)` | the boot gate on KERNEL STATE: `desk_rows`, `menu_nbar`, `[spl_live]` 0 and `[ticks]` moving, then `ui_done`. PROMPTS answer a BIOS on the way - the ami286 from a fresh CMOS is `(("bypass MEMORY test", "esc"), ("to RESUME", "f1"), ("EXIT FOR BOOT", "return"))` (`rdgwin.BIOS_PROMPTS`), up at ~18 emulated s where a fixed 80 was spent |
+| `ui_idle()` / `ui_done(cap_ms=)` | os88marty's: ui_task asleep, nothing queued, the gfx lock free, the key ring empty - held 60 ms. `cap_ms` bounds it at the old fixed step, so a modal popup or a busy worker costs no more than before |
+| `until(cond, what, guest_ms, step_ms, need=)` | any guest condition, budgeted in EMULATED ms (a loaded host cannot shorten it); `need=False` answers None where the assertion after it is the judge |
+| `wait_mem(addr, data, ms)` / `wait_text(text, ms)` | upstream's `wait mem` / `wait text`, checked by 86Box every emulated ms with no round trip a step |
+| `to(x, y)` | each packet waits for the pointer to MOVE and stop (10 ms steps) rather than a fixed 60 |
+| `quit(remove=)` | waits for the process to be GONE - the floppy images are written at exit, so a read of `fdd2.img` after it needs no sleep |
+| `sym` / `word` / `byte` | kernel symbols, the map parsed once per process (it was ~15 ms a `pointer`) |
+
+`launch(turbo=True)` (`--turbo`) sets 86Box's floppy turbo on every drive:
+no rotation or seek, so the boot's floppy phase and a package load cost a
+fraction of the emulated AND the host time (floppy emulation is the slow
+part to emulate: ~2.4x real time against ~7x at an idle desktop). For a row
+whose subject is not the floppy's timing. **Not under kern_mega**: there the
+speaker's quick-volume module load failed with `Needs Sys Disk A:` under
+turbo and loads without it (`tests/megacdrom.py`) - unexplained, and a
+candidate defect in the protected-mode floppy path rather than the row's.
+
+`launch(temp=True)` (`--temp`) marks a run directory disposable: `with
+launch(...) as b:` quits and removes it, and every `launch` first `reap`s
+the dead temp ones (`os88box.py reap`), so a row's disk copies do not pile up.
+`OS88_BOXLOG=<file>` logs every request - instance, verb, host seconds,
+emulated ms advanced, caller's file:line - which is where a row's time goes.
 
 ### `faults`: the instrument for "it reboots"
 
@@ -214,9 +256,11 @@ LINEAR address (`0xfef1d` with `cs 0xf000`), not an offset.
   86Box has never been measured against it here. A number off `step` is
   emulated milliseconds of 86Box's machine. docs/TESTING.md's rule stands: a
   disk number lands on the 5150.
-- **Not a suite tier yet.** No row in `tests/suite.py` launches 86Box; the
-  first one that does owes docs/WRITING-TESTS.md the usual things - and a
-  `wants=` for the build, since nothing in `make` builds 86Box.
+- **Not in a gating tier.** Six soak rows launch 86Box (`gbreplay`,
+  `gbbank`, `gbhifreq`, `megacdrom`, `hma286` - XMEM.DRV's LOADALL and the
+  HMA's pool on vm/286-hma, through an os88ui adapter in the row that other
+  rows can lift - and `rdgspeed286`, which needs the owner's cartridges); `needs=("86box",)` skips them on a box without the
+  build, since nothing in `make` builds 86Box.
 - **Host-timed devices are not deterministic**, even held: networking and some
   sound paths run on host threads (upstream's *Determinism notes*).
 - The machines under `make xt` / `make 286` / ... still launch the macOS app

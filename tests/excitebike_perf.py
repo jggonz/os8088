@@ -60,11 +60,12 @@ PARTS = {"vga": ["erase", "columns", "sprites", "hud", "flip"],
 PARTS["herc"] = PARTS["cga"]
 
 
-def open_game(ui, tag, sym, ref, sim=False, course=0, mute=False):
-    ui.open_drive("B")
-    ui.settle()
+def open_game(ui, tag, sym, ref, sim=False, course=0, mute=False, ready=None):
+    """The package opened off B: and entered.  `ready(g)` is called at the
+    splash, before the mute byte or the bracket: the audio A/B snapshots the
+    machine there, so both of its laps start from the one launch."""
+    ui.open_drive("B")                      # (both verbs CONFIRM: no settle needed)
     ui.open("EXCBIKE.O88")
-    ui.settle()
     g = V.Game(ui, tag, sym, ref)
     g.cids = ref.course_cids(course)
     if course:
@@ -72,6 +73,8 @@ def open_game(ui, tag, sym, ref, sim=False, course=0, mute=False):
     M.until(ui.m, lambda _: g.w("xb_reveal") >= g.w("xb_frontheight") > 0,
             "the splash reveal finishes", guest=30)
     ui.settle()
+    if ready is not None:
+        g = ready(g)
     if mute:
         g.put("xu_mute", 1)                 # sound off: the A/B of what the sound costs a frame (wave 5)
     g.enter(sim=sim)
@@ -84,7 +87,7 @@ def trace_frames(g, tag, frames, marks=True):
     m = g.m
     names = (MARKS[tag] if marks else []) + ["xb_presented"] + ([COLLBL[tag]] if marks else [])
     addr = {("%05X" % g.a(n)): n for n in names}
-    with M.bp_trace(m, *[g.a(n) for n in names], cap=frames * (len(names) + 4) + 50) as tr:
+    with M.bp_trace(m, *[g.a(n) for n in names], cap=frames * (len(names) + 4) + 50, log=True) as tr:
         tr.until(lambda: tr.count("%05X" % g.a("xb_presented")) >= frames + 1,
                  "%d frames" % frames, limit=240)
     hits = [(addr.get(h["name"], h["name"]), h["cycles"]) for h in tr.hits]
@@ -119,7 +122,7 @@ def stats(xs):
     return {"mean": sum(xs) / n, "min": xs[0], "max": xs[-1], "p99": xs[min(n - 1, int(n * .99))]}
 
 
-def scroll(tag, frames):
+def scroll(tag, frames, governor_too=False):
     ref = exbsim.Ref()
     sym = V.symbols()
     with os88ui.boot(V.at("build/os8088-360.img"), apps=V.at("build/excitebike360.img"),
@@ -188,6 +191,8 @@ def scroll(tag, frames):
         assert not bad, ("component(s) over the plan's table by more than 25%%: %s" % bad)
         assert st["mean"] <= HARD_MEAN, "mean period over the 27.3 Hz gate"
         assert sprite <= HARD_SPRITE[tag], "sprite draw + erase over its gate"
+        if governor_too:                        # the governor gate starts from this same state:
+            governor_body(g, tag)               # one boot for both
         return {"period": st, "parts": {k: stats(v)["mean"] for k, v in parts.items()},
                 "sprite": sprite, "n": n1}
 
@@ -211,7 +216,7 @@ IRQ_SLOP = 1500                 # the fit's uncertainty (a stop lands on an inst
 def fasttick_fit(m, n=300):
     """The fast tick on the CPU cycle counter: (first, period) from a least-squares line through `n` stops at the
     kernel's IRQ0 entry (a breakpoint on it ALL the time is too hot for the pump, a few seconds of it is not)."""
-    with M.bp_trace(m, m.sym("sch_isr"), cap=n + 8) as tr:
+    with M.bp_trace(m, m.sym("sch_isr"), cap=n + 8, log=True) as tr:
         tr.until(lambda: tr.n >= n, "%d ticks" % n, limit=120)
     cs = [h["cycles"] for h in tr.hits][:n]
     k0 = cs[0]
@@ -230,12 +235,16 @@ def tick_inside(fit, t0, t1):
     return first + k * period <= t1 + IRQ_SLOP
 
 
-def lap(tag, course=0, limit_steps=None, mute=False):
+def lap(tag, course=0, limit_steps=None, mute=False, ab=False):
     """Selection A, a whole course at turbo: the reference rider (exbsim.bot_input, closed
     loop against the model) drives the guest through both laps, the lap change and the
     finish.  The frame period is the cycle counter between successive frame marks
     (`xb_presented`), the simulation's price a step the gap between `xm_s0` and `xm_s1`
-    (breakpoints cost the guest no cycle).  Rendering is on, so this is the real frame."""
+    (breakpoints cost the guest no cycle).  Rendering is on, so this is the real frame.
+
+    `ab` is the sound A/B (wave 5): the lap muted and then on, from ONE launch - the
+    machine is snapshotted at the splash, before the mute byte, the muted lap runs on it,
+    and the snapshot is restored for the lap with the sound on.  Returns (muted, on)."""
     import excitebike_ref as R
     art = exbsim.X.Art()
     ref = exbsim.Ref(art)
@@ -245,10 +254,42 @@ def lap(tag, course=0, limit_steps=None, mute=False):
         script = script[:limit_steps]
     with os88ui.boot(V.at("build/os8088-360.img"), apps=V.at("build/excitebike360.img"),
                      machine=V.MACHINE[tag]) as ui:
-        g = open_game(ui, tag, sym, ref, sim=True, course=course, mute=mute)
+        if not ab:
+            g = open_game(ui, tag, sym, ref, sim=True, course=course, mute=mute)
+            return lap_run(g, tag, course, script, mute)
+        snap = {}
+
+        def ready(g):
+            snap["id"] = ui.m.snapshot()["id"]
+            return g
+        g = open_game(ui, tag, sym, ref, sim=True, course=course, mute=True, ready=ready)
+        off = lap_run(g, tag, course, script, True)
+        import socket
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            port = sk.getsockname()[1]
+        m2 = ui.m.restore(snap["id"], port)
+        try:
+            if m2.status().get("state") != "running":
+                m2.run()
+            ui2 = os88ui.UI(m2)
+            g2 = V.Game(ui2, tag, sym, ref)
+            g2.cids = ref.course_cids(course)
+            g2.enter(sim=True)                  # open_game's tail, sound on
+            on = lap_run(g2, tag, course, script, False)
+        finally:
+            try:
+                m2.cmd(cmd="quit")
+            except M.MartyError:
+                pass
+        return off, on
+
+
+def lap_run(g, tag, course, script, mute, log=True):
+    if True:
         m = g.m
         # a fresh rider, the harness feeding the steps: the script is a ring of RING bytes
-        # that the on-hit callback keeps ahead of the game
+        # that the harness keeps ahead of the game
         g.put("xb_tmode", 1)
         g.put("xb_tsn", 0, 2)
         g.put("xb_tsi", 0, 2)
@@ -262,6 +303,10 @@ def lap(tag, course=0, limit_steps=None, mute=False):
 
         def feed(mm):
             tsi = struct.unpack("<H", mm.read(g.a("xb_tsi"), 2))[0]
+            # the feed runs from the body while the guest runs (no stop at all): the guest
+            # must never have read past what was fed, or it raced stale ring bytes
+            assert tsi <= fed[0] or fed[0] >= len(script), (
+                "the harness fell behind the game's script reads (read %d, fed %d)" % (tsi, fed[0]))
             while fed[0] < len(script) and fed[0] < tsi + RING - 8:
                 n = min(len(script) - fed[0], tsi + RING - 8 - fed[0],
                         RING - (fed[0] % RING), 64)
@@ -275,14 +320,30 @@ def lap(tag, course=0, limit_steps=None, mute=False):
         irq_phase = fasttick_fit(m)
         m.pause()                                 # (the machine was paused here; the lap starts from its own trace)
 
-        def on_hit(mm, rec):
-            if addr.get(rec["name"]) == "xb_presented":
-                feed(mm)
-            return None
+        def done():
+            return g.b("xb_tpause") == 1 or tr.overflowed
         g.put("xb_tpause", 0)
-        with M.bp_trace(m, *[g.a(n) for n in names], on_hit=on_hit,
+        # every mark but ONE is a LOGGING breakpoint: the server notes the cycle count and the
+        # guest never stops, so the lap runs at the emulator's own speed (the pumped trace
+        # stopped seven times a frame and ran it at half that).
+        #
+        # **THE FRAME MARK STOPS, AND THE FEED HAPPENS THERE** (docs/plans/SOAK-PARALLEL.md
+        # 17.5). The feed used to run from the body while the guest ran free, so the script
+        # ring stayed ahead of the game only for as long as the HOST did: 256 steps is about a
+        # host second of a MartyPC running at 3.4x, and a loaded box that delayed the body's
+        # next poll by more than that failed the assertion above - "the harness fell behind"
+        # - which is a row that fails under contention for a reason that has nothing to do
+        # with the frame rate it measures. A frame takes at most XB_STEPS_MAX steps, so a
+        # feed at EVERY frame keeps the ring ahead by construction, on any box; the stop costs
+        # the guest no cycle (the debug server's breakpoints are free in guest time), only a
+        # little host time a frame.
+        logged = [g.a(n) for n in names if n != "xb_presented"] if log else log
+
+        def on_frame(mm, rec):
+            feed(mm)
+        with M.bp_trace(m, *[g.a(n) for n in names], log=logged, on_hit=on_frame,
                         cap=len(script) * 8 + 8000) as tr:
-            tr.until(lambda: g.b("xb_tpause") == 1 or tr.overflowed, "the lap", limit=900)
+            tr.until(done, "the lap", limit=900)
         assert not tr.overflowed, "the trace buffer overflowed"
         hits = [(addr.get(h["name"], h["name"]), h["cycles"]) for h in tr.hits]
         pres = [c for n, c in hits if n == "xb_presented"]
@@ -385,10 +446,8 @@ def selfb(tag, course=0, nai=None, mute=False, seed=None):
     sym = V.symbols()
     with os88ui.boot(V.at("build/os8088-360.img"), apps=V.at("build/excitebike360.img"),
                      machine=V.MACHINE[tag]) as ui:
-        ui.open_drive("B")
-        ui.settle()
+        ui.open_drive("B")                  # (both verbs CONFIRM: no settle needed)
         ui.open("EXCBIKE.O88")
-        ui.settle()
         g = V.Game(ui, tag, sym, ref)
         if course:
             g.put("xb_track", course)
@@ -467,7 +526,11 @@ def governor(tag):
     sym = V.symbols()
     with os88ui.boot(V.at("build/os8088-360.img"), apps=V.at("build/excitebike360.img"),
                      machine=V.MACHINE[tag]) as ui:
-        g = open_game(ui, tag, sym, ref)
+        return governor_body(open_game(ui, tag, sym, ref), tag)
+
+
+def governor_body(g, tag):
+    if True:
         m = g.m
         g.put("xb_tspeed", 0x0366, 2)
         g.put("xb_tpause", 0)
@@ -533,14 +596,13 @@ def main():
         model()
     if a.scroll:
         for t in tags:
-            scroll(t, a.frames)
-    if a.governor:
+            scroll(t, a.frames, governor_too=a.governor)
+    if a.governor and not a.scroll:
         for t in tags:
             governor(t)
     if a.lap and a.audio_ab:
         for t in tags:
-            off = lap(t, a.course - 1, mute=True)
-            on = lap(t, a.course - 1)
+            off, on = lap(t, a.course - 1, ab=True)
             d_mean = on["period"]["mean"] - off["period"]["mean"]
             print("%s sound A/B over the lap: period mean %.0f muted, %.0f on: the sound adds %.0f clk a frame "
                   "(p99 %.0f -> %.0f); the sound itself costs mean %.0f, p99 %d, max %d, all in the idle time"

@@ -143,7 +143,10 @@ def show(what, r):
 
 
 print(f"drvscroll: {MACHINE} on {IMG}\n")
-with M.launch(IMG, machine=MACHINE) as m:
+with M.launch(IMG, machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)          # the boot gate on STATE
+    M.no_saver(m)
     mo = Mouse(marty=m)
     if m.read(m.sym("vid_kind"), 1)[0] == 0:      # VID_VGA: four planes, so
         sys.exit("drvscroll reads the 1bpp framebuffer: "   # no flat vram

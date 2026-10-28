@@ -82,7 +82,11 @@ KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
 # A file joining this list is saying "nothing of this is in KERNEL.SYS".
 # ascw.inc (SPEC.md 54.7.6.4) is the third: FORMAT.DRV's ASSOC.DAT flush,
 # whose resident half is the one `dw ascw_flush_x` on diskw.inc's row.
-IMAGE_ONLY = ("compress.inc", "dockmod.inc", "ascw.inc")
+# extmod.inc (SPEC.md 39.19.6) is the fourth: EXTD.DRV, whose last resident
+# shim (`cw_vid_ctx_capture`) went in kernel size pass 14 - the image reaches
+# it by EXK now - so its resident half is EXTCALL in kernel.asm and the
+# `mod_tab` row on mod.inc's.
+IMAGE_ONLY = ("compress.inc", "dockmod.inc", "ascw.inc", "extmod.inc")
 
 # ...and a THIRD reason for a zero row, which is neither a knob nor an image:
 # a file whose whole contribution is a MACRO.  `mouproto.inc` (SPEC.md 9.5) is

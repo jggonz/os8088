@@ -87,7 +87,7 @@ start:
     call put_crlf
 
     ; --- 1c. A VOLUME LABEL SEARCH must not answer with a FILE -------------
-    ; AH=4Eh's CX is an attribute mask and this box used to ignore it, so a
+    ; AH=4Eh's CX is an attribute mask and this DOS used to ignore it, so a
     ; program asking "what is this disk called" was handed the first ordinary
     ; file on it. Prince of Persia asks exactly that to check it is running
     ; from its own floppy, and refused to start (SPEC.md 96.12.1).

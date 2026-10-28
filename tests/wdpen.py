@@ -64,12 +64,23 @@ syms, image = pkg_syms()
 DISK = "build/wdpengate.img"
 M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 
-with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    M.settle(m); mo = Mouse(marty=m); S = lambda n: m.sym(n)
+with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
+              boot=False) as m:
+    m.run(); M.kernel_up(m); M.no_saver(m)      # the boot gate on STATE
+    mo = Mouse(marty=m); S = lambda n: m.sym(n)
+
+    def pic():
+        """before an ink count: `shot` reads VIDEO MEMORY on CGA/MDA, final
+        at ui_done; elsewhere it reads the rendered glass, which settles"""
+        if m.cards()[0]["type"] in ("cga", "mda"):
+            M.ui_done(m, "Word to finish drawing")
+        else:
+            M.settle(m)
+    _done = lambda mm, **k: M.ui_done(mm)   # noqa: E731
     print("== Word: the disabled pen belongs to the hold (SPEC.md 68.2.5) ==")
-    dispcp.open_drive(m, mo, S, M.settle, "B")
+    dispcp.open_drive(m, mo, S, _done, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
-    dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
+    dispcp.open_named(m, mo, S, _done, dx, dy, "WELCOME.DOC")
     # The window is up; what is left is the document read, which ends when
     # the floppy goes quiet.
     M.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
@@ -98,7 +109,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
         if rb("wd_hdirty") == 0:
             break
         m.advance(cycles=2_000_000)
-    M.settle(m)
+    pic()
 
     GD = S("gfx_dis")
     cl, ct = rw("wd_cl"), rw("wd_ct")
@@ -144,7 +155,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
             return 1
         with M.bp_trace(m, base + syms[sym], on_hit=on_hit, cap=4000):
             act()
-        M.settle(m)
+        pic()
         print("      armed the pen at %s %d time(s) (%s)" % (sym, hits[0], what))
         return hits[0]
 

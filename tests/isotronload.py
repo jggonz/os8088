@@ -64,13 +64,27 @@ def ms(c):
 # LAUNCH
 # =============================================================================
 
-def launch_leg(tag):
+def launch_leg(tag, rate=False):
+    """The launch; with `rate`, the RATE leg after it on the SAME boot - the
+    launch ends in a player's round, which the rate leg's `to_title` ends
+    (one boot a machine where there were two: the boot and the double-click
+    are the same on both)."""
     system, apps, machine = T.boot_for(tag)
     _, code = L.syms()
     with os88ui.boot(system, apps=apps, machine=machine) as ui:
+        r = launch_body(ui, code)
+        print_launch(tag, r)
+        if rate:
+            g = L.Game(ui)
+            T.to_title(g)
+            r["rate"] = rate_body(ui, g, tag)
+    return r
+
+
+def launch_body(ui, code):
+    if True:
         m = ui.m
-        ui.open_drive("B")
-        ui.settle()
+        ui.open_drive("B")              # (confirms the listing: no settle)
         m.bp_exec("ld_run_body_x")
         ui.open(L.FILE, expect=None)
         assert m.wait_stop(60) == "breakpoint", "the loader was never entered"
@@ -297,9 +311,15 @@ def rate_case(g, fs, name, tier, poke_p, secs=2.0):
 
 def rate_leg(tag):
     system, apps, machine = T.boot_for(tag)
-    out = []
     with os88ui.boot(system, apps=apps, machine=machine) as ui:
         g = L.open_game(ui)
+        return rate_body(ui, g, tag)
+
+
+def rate_body(ui, g, tag):
+    print("%s: the rate" % tag, flush=True)
+    out = []
+    if True:
         M.until(ui.m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2,
                 guest=20)
         T.presented(ui, g)
@@ -445,11 +465,12 @@ def main():
     res = {}
     for tag in (TAGS if a.tag == "all" else (a.tag,)):
         if a.launch or both:
-            r = launch_leg(tag)
-            print_launch(tag, r)
+            r = launch_leg(tag, rate=both)
+            rr = r.pop("rate", None)
             res["launch_" + tag] = r
-        if a.rate or both:
-            print("%s: the rate" % tag, flush=True)
+            if rr is not None:
+                res["rate_" + tag] = rr
+        if a.rate and not both:
             res["rate_" + tag] = rate_leg(tag)
     if a.json:
         json.dump(res, open(a.json, "w"), indent=1)

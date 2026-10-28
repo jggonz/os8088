@@ -227,7 +227,7 @@ dkb_geom:
 ; (SPEC.md 30.5). That is what took this body from six pushes and a rep movsw
 ; to one push, and it is instantiated TWICE - the boot overlay's copy and the
 ; Control Panel's - so each byte here is two.
-%macro DOCK_GEOM 1
+%macro DOCK_GEOM 2             ; %2: the image's hop into `.text`
 %1 %+ _geom:
     push ax
     xor ax, ax
@@ -251,15 +251,22 @@ dkb_geom:
     add ax, 2
     mov [dock_c0], ax
     mov word [dock_thk], DOCK_H
-    call KERNEL_SEG:cw_dock_band
-    pop ax
+    %2 dock_band                ; (each image's own hop: no resident shim -
+    pop ax                      ; kernel size pass 14)
     ret
 %endmacro
 section .boot2
+; BDKGO - the blob's KGO_PAIR hop (driver.inc's BSWK, which is defined after
+; this file): ovl_dock_geom runs from kmain_o through spl_gate, long after
+; the splash's first tick, so cw_kretf is aboard
+%macro BDKGO 1
+    call bvs_kgo
+    dw %1
+%endmacro
 ovl_dock_geom:
     call ovd_geom
     retf
-DOCK_GEOM ovd
+DOCK_GEOM ovd, BDKGO
 section .text
 
 ; Fullscreen return has no settings module and never reads a disk.
@@ -956,9 +963,9 @@ db_erase_tile:
     push cx
     push dx
     call db_tile_rect         ; AX/BX/CX/DX = the whole tile
-    call thm_bg                 ; ("clobbers: nothing", so the rect survives)
-    call gfx_fill
-    jmp kret_dx
+    jmp wm_grow_erase.fill      ; ...and wm_grow_erase's own last three lines:
+                                ; the ground pen, the fill, the same four pops
+                                ; (kernel size pass 14, -6)
 
 ; -----------------------------------------------------------------------------
 ; db_xor_ring - toggle tile CX's ACTIVE mark   (the inner frame)

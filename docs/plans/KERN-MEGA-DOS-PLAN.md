@@ -1,10 +1,10 @@
-# kern_mega M6: the DOS box beside protected mode, and hibernate
+# kern_mega M6: DOS beside protected mode, and hibernate
 
 **Status: W0-W7 BUILT (2026-10-18, branch `protected-mode-7`), with 10.4's
 review answered at the second merge and the park cut to the runs in use
 (10.6); W2, W6's prime, W5 on a BIOS-only C:, the runs park on a real 1MB AT
 and whether the Victory's ROM keeps extended memory over a warm boot (W7's
-premise) are untested off the Victory 286.** Section 1 now records what really happened when the box was run
+premise) are untested off the Victory 286.** Section 1 now records what really happened when DOS was run
 under kern_mega, sections 10.1-10.3 what each wave measured. **W5 departs
 from section 8.3**: the resume never leaves protected mode (10.3). Written 2026-10-18 on branch
 `protected-mode-5`, cut from `protected-mode` at `62dfe2c0`, as Track 5 of
@@ -27,7 +27,7 @@ today, that is a prediction from reading the source, and section 1 says so.
 
 ## 0. The answer, in ten lines
 
-1. **On kern_mega the DOS box has exactly one route: the whole-machine handoff
+1. **On kern_mega DOS has exactly one route: the whole-machine handoff
    (arm 3, SPEC.md 96.40), with EXTENDED MEMORY standing in for the hard
    disk.** The kernel copies conventional memory above 1MB (the "park"),
    leaves protected mode once, runs `kern_dos` as it does today, and comes
@@ -45,7 +45,7 @@ today, that is a prediction from reading the source, and section 1 says so.
    which goes in the text framebuffer as SPEC.md 87.5's does.
 5. **The high claims survive because nothing of ours touches them and a
    checksum proves the DOS program did not.** `int 15h AH=88h` reads 0,
-   `AH=87h` is filtered to the box's own arena, and a mismatch on the way
+   `AH=87h` is filtered to DOS's own arena, and a mismatch on the way
    back refuses to resume and says so, rather than running a damaged kernel.
 6. **The XMS door becomes `kern_dos`'s own**: one arena block the kernel
    carves out of its pool before the drop, handed over in the launch block,
@@ -68,7 +68,7 @@ today, that is a prediction from reading the source, and section 1 says so.
 
 ---
 
-## 1. What kern_mega does with the box today
+## 1. What kern_mega does with DOS today
 
 Read off the source at `62dfe2c0`; **nothing in this section was run**.
 
@@ -85,11 +85,11 @@ Read off the source at `62dfe2c0`; **nothing in this section was run**.
   completes a far transfer only to a 512-aligned identity selector below
   A000h (KERN-MEGA-PLAN 10.1 item 14), so this one goes to the fault reporter.
   **Predicted: arm 3 on kern_mega ends in `kern_mega FAULT` at that `retf`.**
-* **The windowed arms are worse.** The box far-jumps into the program with
+* **The windowed arms are worse.** The windowed DOS far-jumps into the program with
   CS = the program's segment, which is a data selector in protected mode. And
   a DOS program's `int 21h` goes through IDT vector 21h, which is IRQ1's gate
   (`MEGA_PIC_BASE` = 20h, `kernel/mega.inc:91`): the keyboard ISR. The IVT
-  writes the box makes at `dos_hook_vectors` (`apps/dos/dos.asm:2254`) do not
+  writes `DOS.O88` makes at `dos_hook_vectors` (`apps/dos/dos.asm:2254`) do not
   reach the IDT, because `mega_ivt_sync` follows only IVT 08h-0Fh and 70h-77h
   (`kernel/mega.inc:2731`). **Predicted: any DOS program on kern_mega faults
   or vectors into the keyboard ISR on its first instruction or call.**
@@ -106,11 +106,11 @@ Run before any change, with kern_big's `DOS.O88` on `mega.img` and
 **Both predictions were right about the outcome and wrong about the
 instruction.**
 
-* **The windowed arm faults inside the BOX, before the program's first
+* **The windowed arm faults inside DOS.O88, before the program's first
   instruction**: `kern_mega FAULT 0D err 1A70 at 2464:0106`. 2464h is the LDT
   code alias of segment 9180h, which is `DOS.O88`'s own image (its `'O8'`
   header is at 9180:0000), and offset 0106h is `mov ax, [4149h] / add ax,
-  10h / mov es, ax`: the box computes the program's segment as an arena base
+  10h / mov es, ax`: `DOS.O88` computes the program's segment as an arena base
   plus 10h, and 1A72h is not on the 8-paragraph grid, so it is no selector
   (#GP with the selector as the error code). IDT 21h IS IRQ1's gate
   (`0060:3307`, `kbm_isr`), as predicted - the program never got as far as
@@ -134,15 +134,15 @@ instruction.**
 
 ## 2. The shape: arm 3, with extended memory as the disk
 
-### 2.1 Why not the windowed box
+### 2.1 Why not the windowed DOS
 
-The windowed box (arms 1 and 2, SPEC.md 96.36) runs the program inside the
+The windowed DOS (arms 1 and 2, SPEC.md 96.36) runs the program inside the
 kernel's session: `int 21h` enters `dos_int21` in `DOS.O88`, which calls the
 kernel's file slots through `dos_be_*` (SPEC.md 96.4.1), and the kernel's
 tick, mouse and keyboard ISRs keep running under the program.
 
 Under kern_mega those kernel services are protected-mode code and the program
-is real-mode code. Keeping the windowed box means switching mode on every
+is real-mode code. Keeping the windowed DOS means switching mode on every
 `int 21h` and on every kernel IRQ that arrives while the program runs. Going
 up costs little (`lmsw`). Coming back down costs a CPU reset on a 286, **~1.2
 ms a round trip on the Victory** (`RFL 002B/s 04CA`, KERN-MEGA-PLAN 10.3 item 25).
@@ -152,7 +152,7 @@ add a reset. It would also need a second, bimodal entry for every ISR the
 kernel owns, which KERN-MEGA-PLAN 2.2 already refuses ("a lifetime
 discipline").
 
-**Refused for M6.** The windowed DOS box on a protected-mode kernel is the
+**Refused for M6.** The windowed DOS on a protected-mode kernel is the
 386 tier's job: a V86 task (KERN-MEGA-PLAN 8, the "later" row of its section
 10). On kern_mega the radio's first two arms grey with their reason.
 
@@ -225,7 +225,7 @@ resume (or `int 19h`). On kern_mega in protected mode:
 11. `hbm_wake` (`kernel/hiber.inc:2777`) runs as it does for the live resume:
     the PIT back to mode 2 and `[sch_pit_last]` re-seeded, the speaker off,
     the clock caught up from 40:6C (SPEC.md 96.49.5), the caches discarded,
-    the drivers reloaded from `[hb_drvmask]`, the exit code to the box, the
+    the drivers reloaded from `[hb_drvmask]`, the exit code to `DOS.O88`, the
     locks down. One addition: it frees the park and the arena blocks.
 
 ### 2.4 What it buys, and what it gives up
@@ -343,7 +343,7 @@ itself (a DPMI or VCPI extender); it has left it by the time it exits through
 ### 3.3 The ledger
 
 What has to be saved and put back, and where it lives across the bracket.
-SPEC.md 96.5 is the windowed box's ledger and this is its counterpart. Every
+SPEC.md 96.5 is the windowed DOS's ledger and this is its counterpart. Every
 row marked "built" is existing code reused.
 
 | item | out | during | back |
@@ -511,7 +511,7 @@ already have. It is a lever for after wave 1, not part of it.
 | | may | how |
 |---|---|---|
 | conventional memory above `kern_dos` | yes | it is the arena, as on DOS |
-| the XMS arena | yes | through the box's XMS door (section 6), or `int 15h AH=87h` with that end inside it |
+| the XMS arena | yes | through DOS's XMS door (section 6), or `int 15h AH=87h` with that end inside it |
 | the HMA | no | XMS reports none (SPEC.md 96.15.2), unchanged. From wave 4 it is `kern_dos` |
 | everything else above 1MB | **no** | `int 15h AH=88h` answers 0. `AH=87h` with an extended end outside the arena is refused (CF = 1, AH = 03h, the BIOS's own "A20 failed" code, which programs treat as no memory) |
 
@@ -535,7 +535,7 @@ software side. This is why the sum is not optional.
 
 ### 5.3 What else writes above 1MB during the bracket
 
-Only the BIOS, inside `int 15h AH=87h` on the box's behalf and the program's.
+Only the BIOS, inside `int 15h AH=87h` on DOS's behalf and the program's.
 The BIOS builds its own GDT in the caller's buffer and its own empty IDT, and
 on a 286 it returns by shutdown code 09h, so it touches neither our tables
 nor 40:67 in a way that outlasts the call. Nothing of ours runs: no ISR of the
@@ -576,12 +576,12 @@ would fall back to that instead.
 
 ## 6. The XMS door (KERN-MEGA-PLAN 12.2)
 
-12.2's table leaves one row open: "DOS box | the box's XMS door | the cells -
-and M6's question". On kern_mega the windowed box does not exist (section
+12.2's table leaves one row open: "DOS (`apps/dos`) | DOS's XMS door | the cells -
+and M6's question". On kern_mega the windowed DOS does not exist (section
 2.1), so the door is only ever `kern_dos`'s, and the cells are gone for the
 length of the bracket with the kernel that serves them.
 
-**What it is today.** In the window, the box's `int 2Fh AX=4300h/4310h`
+**What it is today.** In the window, DOS's `int 2Fh AX=4300h/4310h`
 (`apps/dos/dos.asm:14022`) answers over `OSAPI_XMEM_*`: a handle table of
 `XMS_NH` = 8, a move needing one conventional end, no HMA (SPEC.md 96.15).
 Under `kern_dos` the four back-end doors are `stc`/`ret`
@@ -672,7 +672,7 @@ wave of its own.
   counted the read-ahead out too, and that stays low.
 * **Its risk** is the classic DOS=HIGH one. A program that relies on the 1MB
   wrap with A20 open (EXEPACK's "Packed file is corrupt" class) addresses
-  `kern_dos` instead. DOS answered with LOADFIX, and so could the box (load
+  `kern_dos` instead. DOS answered with LOADFIX, and so could `DOS.O88` (load
   the program 64 KB up). Section 12 asks whether that is wanted.
 
 ---
@@ -893,7 +893,7 @@ on both (open question 4).
 
 | wave | content | cost (ESTIMATE) | Bochs | Victory 286 |
 |---|---|---|---|---|
-| **W0** | refuse the DOS box in protected mode: arms 1-2 greyed `(PM)` in `DOS.O88` on `CPU_F_PM`, arm 3 refused by `osapi_dos_handoff_x` under `%ifdef KERN_MEGA` until W1 | ~10 B kernel `.text`; ~50 B `DOS.O88` (right on both kernels: the bit is never set on kern_big) | before: double-click a `tests/dostrap` probe, expect section 1's FAULT on E9 (the break-on-purpose). After: the refusal sentence, screenshotted | one photograph of the greyed radio |
+| **W0** | refuse DOS in protected mode: arms 1-2 greyed `(PM)` in `DOS.O88` on `CPU_F_PM`, arm 3 refused by `osapi_dos_handoff_x` under `%ifdef KERN_MEGA` until W1 | ~10 B kernel `.text`; ~50 B `DOS.O88` (right on both kernels: the bit is never set on kern_big) | before: double-click a `tests/dostrap` probe, expect section 1's FAULT on E9 (the break-on-purpose). After: the refusal sentence, screenshotted | one photograph of the greyed radio |
 | **W1** | the park on the 386 path: section 2.3 steps 3-11, `mega_dropr`/`mega_dwake`, the park stub in HIBER.DRV, `kd_leave`'s fetch, the sum | kernel `.text` ~300 B; HIBER.DRV ~700 B; `kern_dos` ~100 B | see below | - |
 | **W2** | the 286 drop: `[mega_drop]` and the branch in `mega_r286`; section 3.4's masks-first landing; a `mega_tell` line for the trip | ~30 B | not testable (A.3 limit 2) | see below |
 | **W3** | the XMS door (section 6) | `kern_dos` ~500 B; kernel ~40 B for the arena claim | a `tests/dosxmsq.py`-shaped probe: allocate, move out, wipe conventional memory with a third value, move back, compare, free. Negative control: a raw `AH=87h` aimed at the park is refused | the same probe, for 87h's real cost |
@@ -906,7 +906,7 @@ on both (open question 4).
 
 * An About box open as the witness (SPEC.md 87.8's idea). Launch a probe
   through arm 3. It prints its arena and waits for a key, and exits with code
-  7. Expect the desktop back with the About box live, `7` in the box's
+  7. Expect the desktop back with the About box live, `7` in DOS's
   window, and on E9 `kern_mega: parked 640K sum xxxxxxxx` and `unparked`.
 * **Break it on purpose** (docs/WRITING-TESTS.md §1): while the probe waits,
   `os88bochs.py dbg "setpmem 0x140000 4 0"` corrupts the park. Expect the
@@ -1039,7 +1039,7 @@ loader stub's own trace is on the glass too, after a `D` at column 0 from
 only `FAT_SEG` and `LOW_SEG` at 0060h. So the off switch is not a second
 kern_dos: it is **LOADFIX's answer itself** - the thing a program "hates"
 about DOS=HIGH is being loaded below 64KB with A20 open (EXEPACK's *Packed file
-is corrupt*), and `LOADFIX <program>` at the box's prompt (a window-side verb,
+is corrupt*), and `LOADFIX <program>` at DOS's prompt (a window-side verb,
 OPEN's room, so the core pays nothing) sets `KDLF_LOADFIX` and kern_dos starts
 the arena at 64KB. The trampolines are `kerndos/kdhma.inc`: after
 `dos_hook_vectors`, every IVT vector whose segment is FFFFh gets an 8-byte low
@@ -1179,7 +1179,7 @@ by the CPU, and it is consumed on sight.
 
 | measured (Bochs) | |
 |---|---|
-| KDHELLO waiting in kern_dos, Ctrl-Alt-Del | E9: `a park survived the reset`, `unparked`; the DOS window back, its line without an exit code - and since the second merge with *C:\RUN\KDHELLO.COM: The machine was restarted while it ran.* and its prompt: the probe stages `MPK_RESETCODE`, a refusal code with DOS_MEGA's `DER_RESET`, where it staged "no code" and the box was never woken |
+| KDHELLO waiting in kern_dos, Ctrl-Alt-Del | E9: `a park survived the reset`, `unparked`; the DOS window back, its line without an exit code - and since the second merge with *C:\RUN\KDHELLO.COM: The machine was restarted while it ran.* and its prompt: the probe stages `MPK_RESETCODE`, a refusal code with DOS_MEGA's `DER_RESET`, where it staged "no code" and `DOS.O88` was never woken |
 | the same with 64 bytes of the park overwritten from the debugger first | the stub's *KDHELLO.COM wrote over the parked session*; a key; an ORDINARY boot, the anchor gone. (Four zero bytes were not caught: the sum samples one word per line, the trade 12.1 item 3 chose) |
 | cost | kern_mega `.text` **+60** (the anchor written and cleared), `.boot2` **+494** - the blob, freed when the desktop is up. Section 10 estimated ~300 |
 
@@ -1268,7 +1268,7 @@ read-ahead and drops the FAT windows, and the kernel's own pool blocks
   ICW1.
 * `mx_tab` has 8 rows (`XM_MAX_BLKS`): with the table full, `mega_dosclaimf`
   walks down to 128KB and says "No room above 1MB" whatever the free KB.
-* kern_mega without PM runs no DOS box at all (kern_mega's DOS.O88 refuses
+* kern_mega without PM runs no DOS at all (kern_mega's DOS.O88 refuses
   and `mega_pkgok` refuses kern_big's), so `hbm_dosrun`'s `.kbimg`/`.kbhand`
   arms are unreachable there - answer 4 may intend that; say so if so.
 
@@ -1327,7 +1327,7 @@ read-ahead and drops the FAT windows, and the kernel's own pool blocks
 * **`mx_tab` is 24 rows** (`MX_NBLK = XM_MAX_BLKS + 16`, the kernel's own
   blocks having rows of their own since the region-list merge), so the "8
   rows" finding no longer holds; a package can hold at most XMEM.DRV's eight.
-* **kern_mega without protected mode runs no DOS box, and that is the
+* **kern_mega without protected mode runs no DOS, and that is the
   intent**: kern_mega's DOS.O88 refuses there (it is built for the park) and
   `mega_pkgok` refuses kern_big's on kern_mega, so `hbm_dosrun`'s
   `.kbimg`/`.kbhand` arms are unreachable on that build. A machine that
@@ -1420,7 +1420,7 @@ until 1-4 are, and W5 wants 5.** 1 is the one that loses data.
 
 ### 10.5.1 What has been fixed since (2026-10-18)
 
-Each one is kern_mega only; kern_big's KERNEL.SYS, DOS core and box are
+Each one is kern_mega only; kern_big's KERNEL.SYS, DOS core and `DOS.O88` are
 byte-identical across all of them.
 
 1. **Defect 1, FIXED (`ac55f667`).** `kdh_dptsync` (kerndos/kdhma.inc)
@@ -1437,7 +1437,7 @@ byte-identical across all of them.
    which is paragraph-aligned IN THE CORE. It is not in kern_dos, because
    the core is assembled apart from both hosts, so a kern_dos label is not
    visible to it. The PSP builder picks it at RUN time, when `CS = FFFFh`,
-   because the core is shared with the windowed box, which is not in the
+   because the core is shared with the windowed DOS, which is not in the
    HMA. `dos_cpm` takes CL rather than AH and returns to the program's own
    near return; PSP:0050's gate did neither, so CALL 5 had never served
    CP/M on any kernel. `tests/dostrap/call5.asm` prints through function 2
@@ -1446,7 +1446,7 @@ byte-identical across all of them.
    **kern_big's CALL 5 was still the PSP:0050 gate**, and the owner's
    answer to that question was to fix it too: `dos_cpm` is in every build of
    the core now and PSP:5 is `CS + dos_cpm/16 - size/16` wherever the core
-   runs (SPEC.md 96.21.4) - a word in the windowed box, a wrap under
+   runs (SPEC.md 96.21.4) - a word in the windowed DOS, a wrap under
    kern_dos low in memory, the old field only for an HMA block too small to
    reach. **48 bytes of the core, on both hosts** (`CORE_MAX` 15,344 ->
    15,392, 15,391 used; kern_mega's 16,064 unchanged). `tests/call5.py`
@@ -1467,7 +1467,7 @@ byte-identical across all of them.
    targets. A full pool falls back to the direct address.
    The packet driver's vector is deliberately NOT a slot: a client finds
    the driver by reading `PKT DRVR` at the target + 3. It is also never
-   published on this host, because `dos_pkt_start` is the windowed box's.
+   published on this host, because `dos_pkt_start` is the windowed DOS's.
    `tests/dostrap/a20pub.asm` checks each address's segment, shuts port
    92h, lets three ticks pass and calls the XMS entry. It reads **exit 071**
    in Bochs at 4MB and **hangs without the fix**. A20SHUT 032, XMSPROBE
@@ -1628,9 +1628,9 @@ a hibernate round; and the refusal on every one of them without the fix.
 
 ## 12. Open questions only the owner can settle
 
-1. **Should kern_mega's DOS box be the park and nothing else?** That is,
+1. **Should kern_mega's DOS be the park and nothing else?** That is,
    grey the windowed arms for good on this kernel, with the 386 V86 tier as
-   the only way back to a windowed box, and drop the Memory page's radio to
+   the only way back to a windowed DOS, and drop the Memory page's radio to
    one arm here.
 2. **Durability against speed.** On a machine with a BIOS fixed disk, should
    the handoff ALSO write a hibernation image (~2 s each way on iron, SPEC.md
@@ -1652,7 +1652,7 @@ a hibernate round; and the refusal on every one of them without the fix.
    in the stub?
 6. **Is the HMA worth a third `kern_dos`** (section 7: ~30 KB for the program,
    one more assembly arm to keep correct, and DOS=HIGH's A20 and EXEPACK
-   hazards)? If it is, should the box offer LOADFIX's answer?
+   hazards)? If it is, should DOS offer LOADFIX's answer?
 7. **The XMS arena's size**: everything the pool has left (the default here),
    or a figure on the Memory page so a program that grabs all XMS cannot
    starve one launched from it?
@@ -1663,7 +1663,7 @@ a hibernate round; and the refusal on every one of them without the fix.
 
 1. **The park and nothing else on kern_mega.** "Windowed" today is the fsx
    bracket, which to the user looks the same as handing the machine over and
-   taking it back; a TopView-style box is a later idea, not this plan. The
+   taking it back; a TopView-style windowed DOS is a later idea, not this plan. The
    Memory page shows one choice on kern_mega, or is not drawn.
 2. **Durability is an OPTION, in place of the Memory page**, if the time it
    costs is worth offering: "also save the session to the hard disk before

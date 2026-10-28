@@ -38,7 +38,8 @@ import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
 
 WORK = "build/sheetundo"                # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetundo.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetundo.img")        # the run's tree, so a soak lane finds it
 CELLS = {(0, 0): 1.0, (1, 0): 2.0, (0, 1): 'x'}
 EDIT = (123, 45)
 ITEM = lambda i: (140, 57 + 12 * i + 2)     # the Edit menu's rows, measured
@@ -50,8 +51,7 @@ def build_disk():
     src = os.path.join(WORK, "SHIN.SLK")
     open(src, "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
+                    "--size", "360", "APPS:build/sheet.o88", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

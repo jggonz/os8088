@@ -138,7 +138,9 @@ def leg(defines, label, image=None, apps=None):
     S = (lambda n: os88sym.linear(n, defines))
     say("\n=== %s ===" % label)
     with os88marty.launch(image or IMAGE, apps=apps or APPS,
-                          machine=MACHINE) as m:
+                          machine=MACHINE, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # every act after is a read or a click
         mo = os88mouse.Mouse(marty=m)
         os88marty.no_saver(m)
 
@@ -151,19 +153,19 @@ def leg(defines, label, image=None, apps=None):
         # opened inside it, both read through dsk_* and int 13h. A host-driven
         # SEEK would be a shorter route to the same cylinder and would prove
         # less - the claim is about what a SESSION leaves behind.
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda m, card=None, gate=None: os88marty.ui_done(m), "B")
         win = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, win)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
+        dispcp.open_named(m, mo, S, lambda m, card=None, gate=None: os88marty.ui_done(m), wx, wy, "APPS")
         m.pause()
         dirty = show("after a Disk window read B:", st3(m))
 
         # THE RESTART. The BYTE and not the menu: ui_reboot_post's whole job is
-        # to set it (SPEC.md 20.10), the installer's Restart sets it to exactly
+        # to set it (SPEC.md 20.10), the install wizard's Restart sets it to exactly
         # this value, and ui_task spends it at the top of its next pass with
-        # nothing held. tests/instrest.py owns the click; this row owns the
-        # tail, and driving it from the byte keeps a menu's item order out of
-        # an FDC test.
+        # nothing held. tests/netinst.py presses the wizard's Restart; this
+        # row owns the tail, and driving it from the byte keeps a menu's item
+        # order out of an FDC test.
         # 18.100's park now ENDS in the int 19h, so on the default arm the
         # GUI's last instruction is dsk_rb_go in .cold; NOFDDPARK=1 keeps
         # ui_rb_go in .text.

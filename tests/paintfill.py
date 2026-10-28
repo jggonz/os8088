@@ -43,10 +43,9 @@ def idle(m):
     """Until Paint - or whatever the gesture started - has finished: the
     drive quiet, the gfx lock free (a canvas operation can hold it for
     seconds with nothing new on the glass), and then the screen still."""
-    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
-                      what="the drive to go quiet")
-    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
-                    "the gfx lock to be free", poll=0.2, limit=60)
+    # ui_done is all three of the first: idle, the lock free and the drive
+    # unmoved across its hold - and it opens settle's short window
+    os88marty.ui_done(m, "the gesture's work")
     os88marty.settle(m)
 
 
@@ -157,9 +156,9 @@ def main():
         mo.click(tx, ty)
         idle(m)
         mo.click(ox + seed[0], oy + seed[1])
-        os88marty.settle(m)
         idle(m)                     # the fill itself: CPU work under the lock
         mo.to(4, 4)                 # the arrow is drawn INTO the framebuffer
+        os88marty.ui_done(m)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
 

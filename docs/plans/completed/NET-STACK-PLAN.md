@@ -3,7 +3,7 @@
 **Research document, not a contract.** SPEC.md is the binding contract for what
 the kernel *is*; this is the study of what it would take to give os8088 **TCP
 sockets from two completely different directions** — forwarded over the
-parallel cable from mTCP on a DOS box, and terminated locally on an 8-bit
+parallel cable from mTCP on a DOS machine, and terminated locally on an 8-bit
 Ethernet card — and to have a package see one thing. Every interface named
 here lands in SPEC.md *before* its code.
 
@@ -23,7 +23,7 @@ TCP terminates, and that single fact sets the price of each.**
 
 | | the cable | the card |
 |---|---|---|
-| where TCP terminates | **the DOS box**, inside mTCP | **os8088** |
+| where TCP terminates | **the DOS machine**, inside mTCP | **os8088** |
 | protocol code in os8088 | **none** | ARP, IP, ICMP, UDP, TCP, DNS, DHCP |
 | kernel change | **~60 bytes, one cell** | the same ~60 bytes, and nothing more |
 | driver | ~1.5 KB added to `NET.DRV` | **~9–10 KB, a new `ETHER.DRV`** |
@@ -89,7 +89,7 @@ web is essentially all HTTPS. Nothing in this plan reaches a site on the
 public internet directly. What it reaches is a LAN server, a period service,
 or **a transcoding proxy**, and docs/plans/completed/BROWSER-PLAN.md §8.3 treats that as a
 first-class configuration rather than a workaround, because over the cable the
-DOS box is already in the room running mTCP and is the obvious place to put
+DOS machine is already in the room running mTCP and is the obvious place to put
 one.
 
 ---
@@ -248,7 +248,7 @@ four things have to be true from the start and three of them are free.
 connection, and passive mode needs a second listener; §1.2's four-handle floor
 covers it.
 
-**Over the cable, the 5150 has no address of its own.** mTCP on the DOS box
+**Over the cable, the 5150 has no address of its own.** mTCP on the DOS machine
 owns the IP, so an inbound connection arrives *there* and the DOS side
 forwards it — which works, and which means the server is reachable at the DOS
 box's address. On a card the stack is local and the question does not arise.
@@ -430,7 +430,7 @@ SPEC.md §20.11's door was for, one level up.
 
 **What it does NOT change is the browser's schedule.** Stage D was always
 fetch-bound over the cable and is now fetch-bound over `partner.py`, which is
-a *better* harness than a DOS box for everything except the wire's verdict:
+a *better* harness than a DOS machine for everything except the wire's verdict:
 it can serve a page byte-exactly, split a write to force a partial read, and
 refuse a connection on demand.
 

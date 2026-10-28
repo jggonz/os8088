@@ -59,6 +59,7 @@
 
 ; --- THE DECODER'S PARTS (SPEC.md 121.3, 20.12): the STANDARD track's ------------
 %define OP_WANT_CSEG                ; a part is far-called through its CODE
+%define OP_ONMOVE x3_partsmv        ; THE PARTS MOVE (SPEC.md 20.12.12, 121.10.1)
 %include "os88parts.inc"            ; selector (op_cseg), read through op_seg
 X3PART_FRONT equ 0                  ; the shared front end, eager
 X3PART_ART   equ 1                  ; the face's pictures and fonts, eager
@@ -167,6 +168,41 @@ X3_WORKSZ   equ 2720                ; the band / canvas: the knob's 80 x 68 at
 X3F_NKEYS   equ 24                  ; element keys: FULL's 17, with room
 X3F_FACESZ  equ (X3ART_DIALF_W / 2) * X3ART_DIALF_H  ; a colour dial face
 
+; -----------------------------------------------------------------------------
+; x3_partsmv - OP_ONMOVE: the carve or a fetched backend MOVED (BX = was, DX =
+; now; the standard has put op_seg right). Every segment banked from an op_seg
+; or op_cseg answer is asked for again - FRONT's pair, ART's, the backend's
+; and its three far vectors' - whichever claim it was. Safe because nothing
+; far-called in a part ever calls the kernel (x3gran.inc section 2, x3pars.inc)
+; so no claim is made under a far call into one, and the worker - the other
+; caller - is parked at OSAPI_TASK_ALIVE, outside every part, when anything
+; moves. A relocation proc: registers are the kernel's to restore
+; -----------------------------------------------------------------------------
+x3_partsmv:
+    mov al, X3PART_FRONT
+    call op_seg
+    mov [x3p_fds], ax
+    mov al, X3PART_FRONT
+    call op_cseg
+    mov [x3p_fcs], ax
+    mov al, X3PART_ART
+    call op_seg
+    mov [x3_artseg], ax
+    mov al, [x3_bpart]
+    cmp al, 0xFF
+    je .out
+    call op_seg
+    or ax, ax
+    jz .out
+    mov [x3_bseg], ax
+    mov al, [x3_bpart]
+    call op_cseg
+    mov [x3_bvec+2], ax
+    mov [x3_bgran+2], ax
+    mov [x3_bresg+2], ax
+.out:
+    ret
+
 ; =============================================================================
 ; ENTRY
 ; =============================================================================
@@ -196,6 +232,8 @@ x3_entry:
     jmp x3_ret
 .parts:
     call x3f_artseg                 ; the face's pictures' segment
+    mov al, OP_CARVE                ; THE CARVE MAY MOVE: FRONT and ART are
+    call op_movable                 ; banked, x3_partsmv re-reads them
     ; ---
     call OSAPI_ARG_FILE             ; an .MP3? CF = 1: launched empty
     jc .plain
@@ -1576,7 +1614,7 @@ x3_ds%1:    dw x3art_%1_tab, x3art_%1_col, X3ART_%2_GAP, X3ART_%2_W
     X3DSET nm, NM, 1
     X3DSET nc, NC, 1
 
-    OS88UI_BTNREC x3_btrec, x3_rects, x3_blbl, x3_bflags, X3_NB
+    OS88UI_BTNREC x3_btrec, x3_rects, x3_blbl, x3_bflags, X3_NB, x3d_btplace
 x3_blbl:    times X3_NB dw x3f_bpaint   ; every key is XTMP3's to paint
 
 ; the keys: a scan code, or 80h + an upper-cased ASCII; then the command

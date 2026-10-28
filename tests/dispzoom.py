@@ -74,7 +74,7 @@ def main(argv):
             sys.exit("dispzoom: %s has %d video card(s), not 2"
                      % (a.machine, len(m.cards())))
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         slot = dispcp.win_list(m, S)[-1]

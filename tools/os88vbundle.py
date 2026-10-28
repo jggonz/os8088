@@ -5,7 +5,8 @@
     python3 tools/os88vbundle.py OUT.zip --player build/video.o88
 
 One folder, `os8088-encoder/`, holding the encoder window, everything it
-imports or runs, VIDEO.O88 and a README.TXT. Unpacked anywhere and run with
+imports or runs, VIDEO.O88, a README.TXT and GUIDE.HTML - the user's guide,
+with its screenshots in guide/. Unpacked anywhere and run with
 `python3 os88vencgui.py`, it encodes, previews and makes disks: floppies
 with the player on them, and - with `--boot`, which `make vencbundle`
 passes - hard disks that BOOT, the kernel, the boot records and the
@@ -19,6 +20,11 @@ starts to need tomorrow is in tomorrow's bundle with nothing to remember,
 and a third-party import is reported (THIRD_PARTY says which are expected,
 and the README names them) rather than silently left for a user to find.
 
+THE GUIDE'S PICTURES ARE COMPUTED TOO (`guide_files`): GUIDE.HTML is read
+and every guide/ file it names goes in, and only those - a picture the page
+names that is not there stops the build, and one left in the folder that
+the page no longer names does not ship.
+
 The zip is DETERMINISTIC, as the rest of the toolchain is: the entries in
 sorted order, every timestamp 1980-01-01, the same modes - so the same tree
 makes the same bytes.
@@ -26,6 +32,7 @@ makes the same bytes.
 import argparse
 import ast
 import os
+import re
 import sys
 import zipfile
 
@@ -36,6 +43,10 @@ THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
 # (tools/os88txtfont.py looks beside itself first, then in fonts/)
 DATA = {"os88txtfont.py": (("tallx.f8", os.path.join("..", "fonts",
                                                       "tallx.f8")),)}
+# THE USER'S GUIDE (docs/encoder-guide/): the page, and the guide/ pictures
+# it names
+GUIDE = os.path.join(HERE, "..", "docs", "encoder-guide")
+GUIDE_PAGE = "GUIDE.HTML"
 FOLDER = "os8088-encoder"
 STAMP = (1980, 1, 1, 0, 0, 0)
 
@@ -46,6 +57,11 @@ Turns a video file into an os8088 .V88, previews it as the target screen
 shows it, and puts it on a disk.
 
     python3 os88vencgui.py
+
+GUIDE.HTML, in this folder, is the full guide: open it in a web browser.
+It shows what every "Made for" choice looks like, explains the budget that
+every setting is about, and goes through each tab saying when a setting is
+worth changing and why, with recipes for common machines.
 
 NEEDS
   Python 3 with Tk (python.org's installer has it; on Linux the python3-tk
@@ -101,6 +117,19 @@ def closure(roots=ROOTS):
     return sorted(seen), other
 
 
+def guide_files(base=GUIDE):
+    """[(name in the bundle, path)]: GUIDE.HTML and every guide/ file it
+    names in a src= or an href=, which must exist"""
+    page = os.path.join(base, GUIDE_PAGE)
+    text = open(page, encoding="utf-8").read()
+    names = sorted(set(re.findall(r'(?:src|href)="(guide/[^"#?]+)"', text)))
+    miss = [n for n in names if not os.path.isfile(os.path.join(base, n))]
+    if miss:
+        sys.exit("os88vbundle: %s names %s, which %s not there" % (
+            GUIDE_PAGE, ", ".join(miss), "is" if len(miss) == 1 else "are"))
+    return [(GUIDE_PAGE, page)] + [(n, os.path.join(base, n)) for n in names]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out")
@@ -124,6 +153,8 @@ def main():
             files.append((name, open(os.path.join(HERE, src), "rb").read(),
                           0o644))
     files.append(("VIDEO.O88", open(a.player, "rb").read(), 0o644))
+    for name, path in guide_files():     # the user's guide and its pictures
+        files.append((name, open(path, "rb").read(), 0o644))
     if a.boot:                  # THE BOOT FILES, from the window's own lists
         sys.path.insert(0, HERE)  # so the two cannot drift (boot_dir)
         import os88vencgui as gui

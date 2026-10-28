@@ -232,7 +232,7 @@ def guest_leg(machine):
         fl = os88flush.Flush(marty=m)
         ui.path("B:/CITY.PCX")
         M.until(m, lambda _: instance(m, S, image), "PiXEL's instance",
-                poll=0.3, limit=120)
+                poll=0.05, limit=120)
         seg = instance(m, S, image)
         base = seg * 16
         B = lambda n, k=0: m.read(base + syms[n] + k, 1)[0]      # noqa
@@ -241,7 +241,7 @@ def guest_leg(machine):
         def idle():
             return B("px_busy") == 0 and B("px_job") == 0
         M.until(m, lambda _: W("px_ndone") and idle(), "the decode",
-                poll=0.3, limit=600)
+                poll=0.05, limit=600)
         M.ui_done(m, "decoded")
 
         def rec():
@@ -280,7 +280,7 @@ def guest_leg(machine):
         def wait_idle(what, limit=1800):
             M.ui_done(m, what)
             M.until(m, lambda _: idle() and B("px_pcon") == 0
-                    and B("px_lvpend") == 0, what, poll=0.5, limit=limit)
+                    and B("px_lvpend") == 0, what, poll=0.05, limit=limit)
             M.ui_done(m, what)
 
         def menu(mn, item):
@@ -316,7 +316,7 @@ def guest_leg(machine):
             M.ui_done(m, "the dialog's OK")
             if replace is not None:
                 M.until(m, lambda _: W("os88ui_awin"), "Replace?",
-                        poll=0.3, limit=60)
+                        poll=0.05, limit=60)
                 M.ui_done(m, "asked")
                 m.key("Enter" if replace else "Escape")
                 M.ui_done(m, "replace answered")
@@ -423,19 +423,19 @@ def guest_leg(machine):
             not only its record named (the decode starts after)."""
             return W("px_ndone") != n0 and idle()
         m.key("Space")
-        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.3,
+        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.05,
                 limit=60)
         m.key("Escape")
         M.ui_done(m, "Cancel")
         check("Next with an edit, Cancel: here, the edit kept",
               rec()["name"] == name0 and B("px_dirty") == 1)
         m.key("Space")
-        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.3,
+        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.05,
                 limit=60)
         n0 = W("px_ndone")
         alert_btn(1)                                    # Discard
         M.until(m, lambda _: opened(n0) and rec()["name"] != name0,
-                "the next picture", poll=0.5, limit=600)
+                "the next picture", poll=0.05, limit=600)
         check("Next with an edit, Discard: on to the next picture, clean",
               B("px_dirty") == 0)
         name1 = rec()["name"]
@@ -445,12 +445,12 @@ def guest_leg(machine):
         mm, pl, r = master(), pal(), rec()
         ext = name1.rsplit(".", 1)[1]
         m.key("Space")
-        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.3,
+        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.05,
                 limit=60)
         n0 = W("px_ndone")
         m.key("Enter")                                  # Save
         M.until(m, lambda _: opened(n0) and rec()["name"] != name1,
-                "the save, then the next picture", poll=0.5, limit=1800)
+                "the save, then the next picture", poll=0.05, limit=1800)
         M.ui_done(m, "the next picture")
         fmt = {"PNG": "PNG", "GIF": "GIF", "BMP": "BMP", "PCX": "PCX",
                "PIX": "PIX"}.get(ext)
@@ -462,7 +462,7 @@ def guest_leg(machine):
         wait_idle("Invert")
         w = ui.window("PiXEL")
         ui.mo.click(w.x + 8, w.y + 8)                   # the close box
-        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.3,
+        M.until(m, lambda _: alert_up(), "Save changes?", poll=0.05,
                 limit=60)
         m.key("Escape")
         M.ui_done(m, "Cancel")
@@ -523,18 +523,18 @@ def full_leg(machine):
         fl = os88flush.Flush(marty=m)
         ui.path("B:/CITY.PCX")
         M.until(m, lambda _: instance(m, S, image), "PiXEL's instance",
-                poll=0.3, limit=120)
+                poll=0.05, limit=120)
         base = instance(m, S, image) * 16
         B = lambda n, k=0: m.read(base + syms[n] + k, 1)[0]      # noqa
         W = lambda n, k=0: u16(m.read(base + syms[n] + k, 2))    # noqa
         idle = lambda: B("px_busy") == 0 and B("px_job") == 0   # noqa
         M.until(m, lambda _: W("px_ndone") and idle(), "the decode",
-                poll=0.3, limit=600)
+                poll=0.05, limit=600)
         M.ui_done(m, "decoded")
         old = bytes(fl.volume(1).read("CITY.PCX"))
         ui.menu_pick("Image", "Invert")
         M.until(m, lambda _: B("px_dirty") == 1 and idle(), "Invert",
-                poll=0.3, limit=300)            # (its plans: the worker's)
+                poll=0.05, limit=300)            # (its plans: the worker's)
         M.ui_done(m, "Invert")
         ui.menu_pick("File", "Save As...")
         M.ui_done(m, "card")
@@ -546,11 +546,11 @@ def full_leg(machine):
         m.type_text("\b" * 12 + "CITY.PCX")
         m.key("Enter")
         M.until(m, lambda _: W("os88ui_awin"), "Replace CITY.PCX?",
-                poll=0.3, limit=60)
+                poll=0.05, limit=60)
         M.ui_done(m, "asked")
         m.key("Enter")                                  # Replace? Yes
         said = ui.wait_toast(says="not saved", limit=600)
-        M.until(m, lambda _: idle(), "the save", poll=0.5, limit=1800)
+        M.until(m, lambda _: idle(), "the save", poll=0.05, limit=1800)
         M.ui_done(m, "said")
         names = set(fl.volume(1).names())
         check("Disk full: said", said == "Disk full: not saved",

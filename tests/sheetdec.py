@@ -54,7 +54,8 @@ import sheetfmt as SF                                        # noqa: E402
 import sheetfin as FN                                        # noqa: E402
 
 WORK = "build/sheetdec"                 # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetdec.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetdec.img")        # the run's tree, so a soak lane finds it
 WRONG = -999.0
 MFLOWS = FN.MFLOWS
 
@@ -212,7 +213,7 @@ def build_disk():
     for n, data in files.items():
         open(os.path.join(WORK, n), "wb").write(data)
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL"]
+                    "360", "build/sheet.o88"]
                    + [os.path.join(WORK, n) for n in files],
                    check=True, stdout=subprocess.DEVNULL)
     return files

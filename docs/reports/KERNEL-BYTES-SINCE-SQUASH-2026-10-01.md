@@ -208,7 +208,7 @@ appendix has each commit.
 | **split sets and File > Uncompress To** (SPEC.md 20.17), almost all of it in `CLONE.DRV` | `f6280f2c` | **+124** | 0 | 0 | 0 |
 | **a failing disk looks alive**, Write Img's two messages | `1774795f` `85514c4a` `2a205da3` | **+40** | 0 | **+41** | 0 |
 | **the Control Panel's Floppy page** (SPEC.md 31.14), most of it in `CTRL.DRV` and the boot overlay | `52e77031` | **+17** | +127 | 0 | 0 |
-| **the DOS box on `READ_SEQ` and held `WRITE_SEQ`** (SPEC.md 96.53) | `d112890e` | **+13** | 0 | 0 | 0 |
+| **DOS on `READ_SEQ` and held `WRITE_SEQ`** (SPEC.md 96.53) | `d112890e` | **+13** | 0 | 0 | 0 |
 | among the kernel-touching commits that measure 0: Format lays the tracks down (all of it in `FORMAT.DRV`), the clone's failure report, the join's error path, every chunked reader on `READ_SEQ`, STACK-SLOTS-PLAN 13 | `a294a88` `f57ef3a` `fd3bd19` `ce37bef` `ed611e2` | 0 | 0 | 0 | 0 |
 | **added** | | **+2,580** | **+429** | **+281** | **+22** |
 
@@ -262,7 +262,7 @@ and −3,584.
 
 Pass 8 was cut at `4d104041` and merged at `c459871f`. **What landed after
 that merge has not had a pass**, measured `c459871f` → B: on `kern_big`
-**+1,322 resident** (the desktop +1,309 with its fix, the DOS box +13) and on
+**+1,322 resident** (the desktop +1,309 with its fix, DOS +13) and on
 `kern_small` **+158** (the desktop), plus **+302 / +22 of overlay** and
 **+1,613 bytes of `CTRL.DRV`** (the shortcuts +1,522, one desktop +103, the
 core −12), all committed 2026-10-01 and 2026-10-02. Against the 50% target the
@@ -407,7 +407,7 @@ read in the ROM rather than copied (SPEC.md 6), the largest single item.
 - **We** added **2,580 resident bytes on `kern_big` and 281 on
   `kern_small`**: the stream writer (1,077 as it came in), shortcuts and one
   desktop (1,309, of which 349 is the regression fix), split sets (124), a failing disk that looks alive (40), the
-  Floppy page (17) and the DOS box on the stream calls (13). **Three size
+  Floppy page (17) and DOS on the stream calls (13). **Three size
   passes took 4,780 and 3,327 back out**, every one confirmed against its own
   record.
 - **Together**, the PR tip is **2,560 bytes and five rungs smaller than the
@@ -520,7 +520,7 @@ exactly; the `KERN_SIZE` columns do not, which is the point made above.
 | `5ded3e24` | vga12: the VGA latch pairs are one xchg; cur_shape_pass through ui_lcall | −32 | 0 | 0 | 0 | 0 | **−32** | 0 | **−3** | 0 | 0 |
 | `41e71469` | font: the planar 8x8 table when it is the BIOS's glyphs, a heap copy when it i... | 0 | 0 | 0 | 0 | +72 | **0** | 0 | **0** | +72 | 0 |
 | `4bacfb22` | font: the 8x8 table picked by the PIT - the blob grows a sector to hold it | 0 | 0 | 0 | 0 | +111 | **0** | 0 | **0** | +112 | 0 |
-| `d112890e` | DOS box on READ_SEQ and HELD WRITE_SEQ, both hosts (SPEC.md 96.53) | 0 | 0 | +13 | 0 | 0 | **+13** | 0 | **0** | 0 | 0 |
+| `d112890e` | DOS on READ_SEQ and HELD WRITE_SEQ, both hosts (SPEC.md 96.53) | 0 | 0 | +13 | 0 | 0 | **+13** | 0 | **0** | 0 | 0 |
 | `40a017f3` | **main:** Add desktop shortcuts with no static kernel memory growth (#211) | +349 | +44 | +111 | 0 | 0 | **+504** | 0 | **0** | 0 | 0 |
 | `e9da2dcd` | Revert main's desktop shortcuts (#211), ahead of unified-desktop | −349 | −44 | −111 | 0 | 0 | **−504** | −512 | **0** | 0 | 0 |
 | `7158c446` | Desktop shortcuts (SPEC.md 26.8) | +68 | +10 | +924 | 0 | +293 | **+1,002** | +512 | **0** | 0 | 0 |

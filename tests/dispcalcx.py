@@ -36,6 +36,11 @@ from os88geom import MBAR_H     # the bar's height, from the one copy
                                 # checked against kernel.asm at import
 
 S = os88sym.linear
+# NOTHING HERE READS THE GLASS - every assertion is guest memory (window
+# records, a package's bss, `m.vram`'s framebuffer bytes, files) - so the
+# wait after an action is the UI task finishing (os88marty.ui_done), and that
+# is also the `settle` the dispcp verbs take.
+_done = lambda m, card=None, gate=None: os88marty.ui_done(m)
 KERNEL_SEG = 0x0060
 CAL_BASE_H, CAL_ROW_H, CAL_HIST_N = 118, 9, 8
 TITLE_H = 18
@@ -66,7 +71,7 @@ def full_repaint(m):
     m.write(S("cp_dirty"), b"\x01")
     os88marty.until(m, lambda mm: mm.read(S("cp_dirty"), 1)[0] == 0,
                     "ui_task to drain [cp_dirty]", poll=0.05, limit=10.0)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     m.cmd(cmd="pause")
 
 
@@ -118,7 +123,7 @@ def both_diff(m, what, corner, soft=False):
                 fails.append("%s: %d pixels on the %s a full repaint "
                              "disagrees with" % (what, len(d), nm))
     m.cmd(cmd="run")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     return out
 
 
@@ -145,23 +150,25 @@ def typed(m, text):
     for ch in text:
         m.key(PLAIN[ch]) if ch in PLAIN else m.type_text(ch)
         os88marty.pace(m, 0.15)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine="os8088_5150_both_gla") as m:
+                      machine="os8088_5150_both_gla", boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)              # the first acts are reads and clicks
     mo = os88mouse.Mouse(marty=m)
     avail = m.read(S("vid_avail"), 1)[0]      # a BYTE: reading a word
     print("adapters available: %#04x (bit1 = Hercules, bit2 = CGA)"
           % avail)                            # picks up the next field
 
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, _done, "B")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
+    dispcp.open_named(m, mo, S, _done, wx, wy, "APPS")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
+    dispcp.open_named(m, mo, S, _done, wx, wy, "CALC.O88")
     os88marty.ui_done(m, "the Calculator to open")
     slot = dispcp.win_list(m, S)[-1]
     r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
@@ -173,20 +180,20 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     typed(m, "c7+7=")
     typed(m, "c9/2=")
     typed(m, "h")                           # ...and fold it down
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     cx, cy, cw, ch = check(m, seg, cal, slot, "on the primary, folded down")
     both_diff(m, "folded down", (cx, cy + ch))
 
     # --- 1. the ADAPTER changes under it (SPEC.md 39.11.2) --------------------
     print("\n-- Activate Mode: the same window on the other adapter --")
-    dispcp.open_panel(m, mo, S, os88marty.settle)
+    dispcp.open_panel(m, mo, S, _done)
     row = dispcp.adapter_row(avail, VID_CGA)
-    dispcp.set_primary(m, mo, S, os88marty.settle, row)
+    dispcp.set_primary(m, mo, S, _done, row)
     os88marty.ui_done(m, "the adapter change")
-    os88marty.settle(m)
-    dispcp.close_panel(m, mo, S, os88marty.settle)
+    os88marty.ui_done(m)
+    dispcp.close_panel(m, mo, S, _done)
     os88marty.pace(m, 1)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     dock = u16(m.read(S("vid_dock_y0"), 2))
     cx, cy, cw, ch = check(m, seg, cal, slot, "after the adapter changed")
     print("      the dock now starts at %d; the window ends at %d"
@@ -197,24 +204,24 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     # ...and back, which SPEC.md 39.11.2.1 says restores the size it asked for
     print("\n-- ...and back again --")
-    dispcp.open_panel(m, mo, S, os88marty.settle)
-    dispcp.set_primary(m, mo, S, os88marty.settle,
+    dispcp.open_panel(m, mo, S, _done)
+    dispcp.set_primary(m, mo, S, _done,
                        dispcp.adapter_row(avail, VID_HERC))
     os88marty.ui_done(m, "the adapter change back")
-    os88marty.settle(m)
-    dispcp.close_panel(m, mo, S, os88marty.settle)
+    os88marty.ui_done(m)
+    dispcp.close_panel(m, mo, S, _done)
     os88marty.pace(m, 1)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     cx, cy, cw, ch = check(m, seg, cal, slot, "back on the tall adapter")
     both_diff(m, "back on the tall adapter", (cx, cy + ch))
 
     # --- 2. EXTENDED, and dragged across the seam (SPEC.md 39.16.3) ----------
     print("\n-- extended right, then dragged onto the short display --")
-    dispcp.open_panel(m, mo, S, os88marty.settle)
-    dispcp.set_mode(m, mo, S, os88marty.settle, "right")
-    dispcp.close_panel(m, mo, S, os88marty.settle)
+    dispcp.open_panel(m, mo, S, _done)
+    dispcp.set_mode(m, mo, S, _done, "right")
+    dispcp.close_panel(m, mo, S, _done)
     os88marty.pace(m, 1)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     pw = u16(m.read(S("vid_pw"), 2))
     vw = u16(m.read(S("vid_w"), 2))
     print("   the seam is at x = %d; the virtual desktop is %d wide" % (pw, vw))
@@ -223,7 +230,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # ...drag the title bar well past the seam, so the ORIGIN is on the CGA
     tx, ty = cx + cw // 2, cy + TITLE_H // 2
     mo.drag(tx, ty, pw + 200, 40)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     cx, cy, cw, ch = check(m, seg, cal, slot, "dragged onto the CGA")
     if cx < pw:
         print("      (it did not cross: nothing to judge)")
@@ -245,10 +252,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dw = [s for s in dispcp.win_list(m, S) if s != slot][-1]
     dx0, dy0, dw0, dh0 = dispcp.win_rect(m, S, dw)
     mo.click(dx0 + dw0 // 2, dy0 + TITLE_H // 2)      # raise it first
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     dx0, dy0, dw0, dh0 = dispcp.win_rect(m, S, dw)
     mo.drag(dx0 + dw0 // 2, dy0 + TITLE_H // 2, pw + 210, 60)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     dx1, dy1, dw1, dh1 = dispcp.win_rect(m, S, dw)
     print("   the Disk window is now at (%d,%d) %dx%d" % (dx1, dy1, dw1, dh1))
     ctl = both_diff(m, "CONTROL: a Disk window dragged over the seam",

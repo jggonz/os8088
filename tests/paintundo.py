@@ -93,8 +93,7 @@ def main(argv):
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
         got = dispapps.pkg_seg(m, 0)
         if got is None:
             sys.exit("paintundo: PAINT.O88 did not open")
@@ -111,6 +110,7 @@ def main(argv):
         m.run()
 
         mo.to(4, 4)
+        os88marty.ui_done(m)
         os88marty.settle(m)
         blank = _hash(m, cx0 + RX, cy0 + RY, RW, RH)
         print("   blank canvas      %s  (%d ink)" % blank)
@@ -119,7 +119,7 @@ def main(argv):
         # its banked y path and the per-step path the gate refuses all run
         sx, sy = cx0 + 40, cy0 + 40
         mo.to(sx, sy)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if mo.where()[2] & 1:
             mo._edge(False)
         mo._edge(True)
@@ -127,8 +127,9 @@ def main(argv):
                          (sx + 190, sy + 160)):
             mo.to(tx, ty, l=True)
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.to(4, 4)
+        os88marty.ui_done(m)
         os88marty.settle(m)
         drawn = _hash(m, cx0 + RX, cy0 + RY, RW, RH)
         print("   after the stroke  %s  (%d ink)" % drawn)
@@ -136,19 +137,17 @@ def main(argv):
         undone, redone = blank, drawn
         if not a.no_undo:
             m.ctrl("KeyZ")
-            os88marty.settle(m)
-            m.advance(frames=60)
-            m.run()
+            os88marty.ui_done(m)    # was advance(60): the UI going idle IS the work done
             mo.to(4, 4)
+            os88marty.ui_done(m)
             os88marty.settle(m)
             undone = _hash(m, cx0 + RX, cy0 + RY, RW, RH)
             print("   after Ctrl+Z      %s  (%d ink)" % undone)
 
             m.ctrl("KeyZ")
-            os88marty.settle(m)
-            m.advance(frames=60)
-            m.run()
+            os88marty.ui_done(m)    # was advance(60): the UI going idle IS the work done
             mo.to(4, 4)
+            os88marty.ui_done(m)
             os88marty.settle(m)
             redone = _hash(m, cx0 + RX, cy0 + RY, RW, RH)
             print("   after Ctrl+Z x2   %s  (%d ink)" % redone)

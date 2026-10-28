@@ -218,7 +218,7 @@ def main():
     with os88marty.launch("build/os8088-360.img", apps=a.apps,
                           machine=a.machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy, _, _ = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])

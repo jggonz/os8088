@@ -97,7 +97,8 @@ def main(argv):
     hx, hz = math.sin(math.radians(30)), math.cos(math.radians(30))
     eye = (int(150 - D * hx), 300 + D // 8, int(-900 - D * hz), 30, -5)
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                     quick=True) as ui:
         m = ui.m
         ui.path("B:/GAMES/SKIES.O88")
         slot, seg = dispapps.pkg_seg(m, 0)

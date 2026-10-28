@@ -3,7 +3,7 @@
 
     make kdostest && make dosmou360.img && python3 tests/kdmouse.py
 
-`tests/dosmouse.py` is this question in the WINDOW, where the box fills
+`tests/dosmouse.py` is this question in the WINDOW, where DOS fills
 `DHK_MOUSE` from `OSAPI_MOUSE` and the kernel owns the hardware. This is the
 same program on the other arm, where there is no kernel at all: the handoff's
 step 6 calls `mouse_unhook` - it must, or a live IRQ4 vectors into kern_dos's
@@ -89,7 +89,7 @@ def wait_line(m, prefix, limit=60.0):
     try:
         os88marty.until(m, lambda _: row() is not None,
                         "the %s line to appear" % prefix,
-                        guest=limit, poll=0.2)
+                        guest=limit, poll=0.05)
     except os88marty.MartyError as e:
         fail("no %r line appeared: %s  The last text screen was %r"
              % (prefix, str(e).split("\n")[0][:200],
@@ -126,18 +126,18 @@ def main():
             fail("%s is missing - `make kdostest` and `make dosmou360.img` "
                  "build the pair" % p)
 
-    with os88ui.boot(SYS, apps=MOU, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=MOU, machine=MACH, quick=True) as ui:
         m = ui.m
 
         # --- 1. hand the machine over, the way kdmix does -------------------
-        # **THE BOX AND NOT THE PROGRAM**, which is a flow correction and not
+        # **DOS AND NOT THE PROGRAM**, which is a flow correction and not
         # a style one: a program launched by association is RUNNING in the
         # window, and the Memory page cannot be re-armed underneath one. Open
         # DOS.O88 itself, pick the arm, then name the program - which is also
         # the sequence a user takes to reach arm 3 at all.
         if not ui.path("A:/APPS/DOS.O88"):
             fail("could not open DOS.O88 off the system disk")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         # **CHANGE DRIVE FIRST, then name the program without one**, which is
         # tests/kdmix.py's sequence and is what a user does. This row used to
         # type a drive-QUALIFIED path into the box instead, and SPEC.md 96.48
@@ -145,15 +145,14 @@ def main():
         # to another volume, so `B:\DOSMOUSE.COM` typed while standing on A:
         # is a path the walk roots on A:. The fresh window has the box
         # focused; Enter on a bare drive letter changes drive and clears it.
-        m.type_text("B:\n")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "B:\n")
         dm = dosmap.package()
         pseg = dosmap.instance(m)
         base = pseg << 4
         mo = os88mouse.Mouse(marty=m)
 
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"))
-        os88marty.settle(m)
+        mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"), settle=0)
+        os88marty.ui_done(m)
         dis = kdhand.rec(m, pseg, dm, kdhand.RD_DIS)
         if dis & (1 << kdhand.WHOLE):
             fail("the Shut down the OS arm is GREYED - this build does not carry "
@@ -161,7 +160,7 @@ def main():
         x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
         pitch = kdhand.rec(m, pseg, dm, kdhand.RD_PITCH)
         mo.click((x1 + x2) // 2, y1 + kdhand.WHOLE * pitch + pitch // 2)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if kdhand.rec(m, pseg, dm, kdhand.RD_SEL) != kdhand.WHOLE:
             fail("clicking the Shut down the OS arm did not pick it")
         if NOMOUSE:
@@ -169,21 +168,20 @@ def main():
             # pick (SPEC.md 96.36.9): one press ticks it.
             bx1, by1, _, _ = dosmap.rect(m, pseg, dm, "dos_mmou")
             mo.click(bx1 + 4, by1 + 5)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             if m.read(base + dm["dos_mmou"] + CK_ON, 1)[0] != 1:
                 fail("pressing Disable the mouse did not tick it")
         # --- ...back to the main page, and the program's name ---------------
         # The path box has to be CLICKED first and the extension is part of
         # the name - tests/kdmix.py carries both reasons, and both fail as a
         # message about the wrong subject.
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_trect"))
-        os88marty.settle(m)
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_pln"))
-        os88marty.settle(m)
-        m.type_text("DOSMOUSE.COM")
-        os88marty.settle(m)
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
-        os88marty.settle(m)
+        mo.click(*dosmap.centre(m, pseg, dm, "dos_trect"), settle=0)
+        os88marty.ui_done(m)
+        mo.click(*dosmap.centre(m, pseg, dm, "dos_pln"), settle=0)
+        os88marty.ui_done(m)
+        os88marty.text_taken(m, "DOSMOUSE.COM")
+        mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"), settle=0)
+        os88marty.ui_done(m)
         if kdhand.alert_up(m, base, dm):
             mo.click(*kdhand.alert_button(m, base, dm, 1))      # Proceed
 

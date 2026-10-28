@@ -154,7 +154,7 @@ def button(m, ui, base, rw, rb, bad):
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
 
     def until(cond, what, guest=20.0):
-        os88marty.until(m, cond, what, poll=0.1, limit=300.0, guest=guest)
+        os88marty.until(m, cond, what, poll=0.05, limit=300.0, guest=guest)
 
     def at():                       # (the rect is re-read: a play moves it)
         x1, y1, x2, y2 = struct.unpack(
@@ -249,11 +249,29 @@ def captured_bytes(path):
     comparison is made on. tools/sndcheck.py's reader, because the capture's
     size fields may be left zero"""
     rate, vals, _ = sndcheck.load(path)
+    try:                                # (numpy: the same rounding - half
+        import numpy as np              # to even - a hundred times faster)
+        a = np.clip(np.rint(np.asarray(vals, dtype=np.float64) * 128.0)
+                    + 128, 0, 255).astype(np.uint8)
+        return a.tobytes(), rate
+    except ImportError:
+        pass
     return bytes(max(0, min(255, int(round(v * 128.0)) + 128))
                  for v in vals), rate
 
 
 def runs(b):
+    try:
+        import numpy as np
+        a = np.frombuffer(b, dtype=np.uint8)
+        if not len(a):
+            return b""
+        keep = np.empty(len(a), dtype=bool)
+        keep[0] = True
+        np.not_equal(a[1:], a[:-1], out=keep[1:])
+        return a[keep].tobytes()
+    except ImportError:
+        pass
     out = bytearray()
     last = None
     for x in b:
@@ -378,11 +396,13 @@ def main():
              "--file", "CLIP.V88=" + v88], check=True, capture_output=True)
         cap = os.path.join(tmp, "cap")
         os.environ["MARTYPC_WAV"] = cap
-        m = os88marty.launch(None, machine=a.machine,
+        m = os88marty.launch(None, machine=a.machine, boot=False,
                              extra=["--mount", "hd:0:" + vhd])
         try:
-            ui = os88ui.UI(m)
-            ui.ready(limit=240)
+            m.run()                     # (no picture settle: every step
+            ui = os88ui.UI(m)           # after is a verb or a guest read)
+            ui.up(limit=240)
+            os88marty.no_saver(m)
             if a.dsp4:                  # A CARD THAT ANSWERS 4.xx: the
                 dseg = u16(m.read(m.sym("drv_tab") + 2, 2)) << 4   # driver's
                 m.write(dseg + snd_sym("sbl_verhi"), b"\x04")  # row 0, and
@@ -405,7 +425,7 @@ def main():
                 return m.read(base + syms[n], 1)[0]
 
             os88marty.until(m, lambda mm: rb("vp_loaded") == 1,
-                            "the clip's header", poll=0.5, limit=300.0,
+                            "the clip's header", poll=0.05, limit=300.0,
                             guest=30.0)
             if rb("vp_ok") != 1:
                 sys.exit("vidsound: the player will not play the clip here")
@@ -422,20 +442,20 @@ def main():
                 if a.unmute:            # ...and the user's to undo
                     m.type_text("m")
                     os88marty.until(m, lambda mm: rb("vp_mute") == 0,
-                                    "M to unmute", poll=0.2, limit=120.0,
+                                    "M to unmute", poll=0.05, limit=120.0,
                                     guest=10.0)
             for _ in range(a.seek):             # Right to the keyframe
                 n0 = rw("vp_sel")
                 m.key("ArrowRight")
                 os88marty.until(m, lambda mm: rw("vp_sel") == n0 + 1,
-                                "Right to pick a key", poll=0.3,
+                                "Right to pick a key", poll=0.05,
                                 limit=300.0, guest=30.0)
             if a.button:
                 return button(m, ui, base, rw, rb, bad)
             m.write(base + syms["vp_played"], b"\0")
             m.type_text("f" if a.fs else "p")
             os88marty.until(m, lambda mm: rb("vp_ready") == 1,
-                            "the play to start", poll=0.1, limit=300.0,
+                            "the play to start", poll=0.05, limit=300.0,
                             guest=60.0)
             if a.live and (rb("vp_lsess"), rb("vp_winm")) != (1, 0):
                 bad.append("the play is not LIVE (session %d, bracket in "
@@ -453,32 +473,32 @@ def main():
             if a.swap:                  # LIVE -> the full screen -> LIVE,
                 at = nf // 3            # the card paused and resumed at each
                 os88marty.until(m, lambda mm: rw("vp_done") >= at,
-                                "frame %d" % at, poll=0.1, limit=600.0,
+                                "frame %d" % at, poll=0.05, limit=600.0,
                                 guest=a.secs + 30)
                 m.type_text("f")
                 os88marty.until(m, lambda mm: rb("vp_lrun") == 0 and
                                 rb("vp_ready") == 1 and rb("vp_upause") == 0
                                 and rb("vp_winm") == 0,
-                                "F to the full screen, playing", poll=0.1,
+                                "F to the full screen, playing", poll=0.05,
                                 limit=120.0, guest=10.0)
                 f0 = rw("vp_done")
                 os88marty.until(m, lambda mm: rw("vp_done") > f0 + 10,
-                                "the full screen's frames", poll=0.1,
+                                "the full screen's frames", poll=0.05,
                                 limit=120.0, guest=10.0)
                 m.type_text("f")
                 os88marty.until(m, lambda mm: rb("vp_lsess") == 1 and
                                 rb("vp_lrun") == 1, "F back to live",
-                                poll=0.1, limit=120.0, guest=10.0)
+                                poll=0.05, limit=120.0, guest=10.0)
                 print("   F at frame %d to the full screen, and F back at %d"
                       % (f0, rw("vp_done")))
             if a.pause:
                 at = base0 + (nf - base0) // 3
                 os88marty.until(m, lambda mm: rw("vp_done") >= at,
-                                "frame %d" % at, poll=0.3, limit=600.0,
+                                "frame %d" % at, poll=0.05, limit=600.0,
                                 guest=a.secs + 30)
                 m.type_text(" ")
                 os88marty.until(m, lambda mm: rb("vp_upause") == 1,
-                                "Space to pause", poll=0.1, limit=120.0,
+                                "Space to pause", poll=0.05, limit=120.0,
                                 guest=10.0)
                 aseg = rw("vp_aseg") << 4
                 os88marty.pace(m, 0.3)          # a block already under way
@@ -488,7 +508,7 @@ def main():
                         c0a)
                 m.type_text(" ")
                 os88marty.until(m, lambda mm: rb("vp_upause") == 0,
-                                "Space to resume", poll=0.1, limit=120.0,
+                                "Space to resume", poll=0.05, limit=120.0,
                                 guest=10.0)
 
             def state():
@@ -511,11 +531,11 @@ def main():
                                 limit=1200.0, guest=a.secs * 4 + 30)
                 m.type_text("r")
                 os88marty.until(m, lambda mm: rb("vp_rep") == 0,
-                                "R to turn Repeat off", poll=0.2,
+                                "R to turn Repeat off", poll=0.05,
                                 limit=120.0, guest=10.0)
             try:
                 os88marty.until(m, lambda mm: rb("vp_ready") == 0,
-                                "the play to end", poll=1.0, limit=1200.0,
+                                "the play to end", poll=0.05, limit=1200.0,
                                 guest=a.secs * (2 + 2 * laps) + 30)
             except os88marty.MartyError:
                 print("   STUCK: " + state())
@@ -523,11 +543,11 @@ def main():
             c1 = int(m.status().get("cycles", 0))
             if a.live:                  # (no bracket to return from)
                 os88marty.until(m, lambda mm: rb("vp_lsess") == 0,
-                                "the live session to end", poll=0.5,
+                                "the live session to end", poll=0.05,
                                 limit=120.0, guest=30.0)
             else:
                 os88marty.until(m, lambda mm: rb("vp_played") == 1,
-                                "the bracket to return", poll=0.5,
+                                "the bracket to return", poll=0.05,
                                 limit=120.0, guest=30.0)
             st = {k: rw(k) for k in (
                 "vp_done", "vp_stall", "vp_late", "vp_pause", "vp_skmax", "vp_gap",

@@ -9,7 +9,7 @@ tests/gbreplay.py) and GBHBLANK.GB (Pokemon Gold's frame - an HBlank
 interrupt every line - for tests/rdgcore/rdgbench.py --rom,
 docs/REALDMG-SPEC.md section 6.3).
 
-    python3 tools/gbours.py [gbtone|gbsave|gbdemo|gbbank|gbrmw|gbjoy|gbpop|gbpad|gbhblank]
+    python3 tools/gbours.py [gbtone|gbsave|gbdemo|gbbank|gbbank8|gbrmw|gbjoy|gbpop|gbpad|gbhblank]
 
 tools/gbprof/gbtone.asm says what it plays (tests/gbsound.py listens to it),
 tools/gbprof/gbsave.asm what it counts (tests/gbsave.py reads it), and
@@ -24,14 +24,32 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import gbclock  # noqa: E402
 
+# a ROM assembled out of ANOTHER's source: its source and rgbasm's defines
+VARIANTS = {"gbbank8": ("gbbank", ["-DNBITS=3", "-DPERFRAME=16"]),
+            "gbseam2": ("gbseam", ["-DSEAMKIND=2"]),
+            "gbseam3": ("gbseam", ["-DSEAMKIND=3"]),
+            "gbseam4": ("gbseam", ["-DSEAMKIND=4"]),
+            "gbseam5": ("gbseam", ["-DSEAMKIND=5"])}
+
 # name: the rgbfix arguments past the title (the cartridge's header)
 ROMS = {
     "gbtone": [],
     "gbsave": ["-m", "0x10", "-r", "3"],    # MBC3+TIMER+RAM+BATTERY, 32KB
     "gbdemo": [],
     "gbbank": ["-m", "0x19"],               # MBC5, 1MB: every bank there
+    "gbbank8": ["-m", "0x1B", "-r", "3"],   # gbbank.asm at 8 banks, 128KB:
+                                            #   MBC5+RAM+BATTERY, 32KB of RAM
+                                            #   (tests/rdgmove.py's claims)
     "gbrmw": [],
     "gbflags": [],                          # (generated: tools/gbprof/gbflags.py)
+    "gblazy": [],                           # (generated: tools/gbprof/gblazy.py)
+    "gbcpc": [],                            # (generated: tools/gbprof/gbcpc.py)
+    "gbseam": ["-m", "0x01"],               # code across 3FFF into the bank
+    "gbseam2": ["-m", "0x01"],              #   (gbcpu.py, REALDMG-SPEC 3.1)
+    "gbseam3": ["-m", "0x01"],              # ...and JRs across it, both ways
+    "gbseam4": ["-m", "0x01"],
+    "gbseam5": ["-m", "0x01"],
+    "gblcdoff": [],                         # the LCD off for seconds (gbaot.py)
     "gbjoy": [],                            # the joypad interrupt (gbheader.py)
     "gbfm": [],                             # all four channels (gbfm.py)
     "gbpop": ["-m", "0x01"],                # POPs out of a ROM bank (gbcpu.py)
@@ -43,8 +61,9 @@ ROMS = {
 def build(name="gbtone"):
     asm, link, fix = gbclock.rgbds()
     os.makedirs(gbclock.OUT, exist_ok=True)
-    src = os.path.join(ROOT, "tools", "gbprof", name + ".asm")
-    gen = os.path.join(ROOT, "tools", "gbprof", name + ".py")
+    base, defs = VARIANTS.get(name, (name, []))
+    src = os.path.join(ROOT, "tools", "gbprof", base + ".asm")
+    gen = os.path.join(ROOT, "tools", "gbprof", base + ".py")
     if os.path.exists(gen):                 # a generated source: into OUT
         src = os.path.join(gbclock.OUT, name + ".%d.asm" % os.getpid())
         subprocess.check_call([sys.executable, gen, src])
@@ -55,7 +74,7 @@ def build(name="gbtone"):
     obj = os.path.join(gbclock.OUT, name + tag + ".o")
     rom = os.path.join(gbclock.OUT, name.upper() + ".GB")
     tmp = rom + tag
-    subprocess.check_call([asm, "-o", obj, src])
+    subprocess.check_call([asm] + defs + ["-o", obj, src])
     subprocess.check_call([link, "-o", tmp, obj])
     subprocess.check_call([fix, "-v", "-p", "0xFF", "-t", name.upper()] + ROMS[name] + [tmp])
     os.remove(obj)

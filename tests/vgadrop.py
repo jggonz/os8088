@@ -2,7 +2,9 @@
 """SPEC.md 39.22: the heap floor starts UNDER .vgabuf on a machine with no VGA.
 
 Reads [mem_base] out of a booted machine on a VGA adapter and on both mono
-ones and asserts they differ by exactly VGABUF_PARA. Reading the WORD and not
+ones and asserts they differ by exactly VGABUF_PARA - or, on a kernel with
+the VGA rung (SPEC.md 2.10.9), that the mono floor is MONO_FLOOR, `.cold`
+having slid over the rung too. Reading the WORD and not
 a KB figure is the point: a KB total rounds, and rounding is where an
 off-by-a-rung hides.
 
@@ -13,7 +15,8 @@ here and parts company the moment somebody switches a VGA machine to mono
 
 And the same answer as osapi_sys_kb reports it: [vga_skkern] is SK_KERN,
 stored once at boot (kernel size pass 12), and must read KERN_KB on VGA and
-KERN_KB - SK_VGAB_KB on both mono adapters.
+KERN_KB - SK_VGAB_KB on both mono adapters (KERN_KB - SK_MONO_KB with the
+rung).
 """
 import os, sys
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,8 +36,9 @@ for mach, name in (("os8088_xt_vga", "vga"),
                    ("os8088_5150_cga_gla", "cga"),
                    ("os8088_5150_herc_gla", "herc")):
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine=mach) as m:
-        os88marty.settle(m)
+                          machine=mach, boot=False) as m:
+        m.run()                         # the boot gate on STATE: what is
+        os88marty.kernel_up(m)          # read next is mem_base
         base = int.from_bytes(m.read(S("mem_base"), 2), "little")
         avail = m.read(S("vid_avail"), 1)[0]
         got[name] = base
@@ -44,26 +48,35 @@ for mach, name in (("os8088_xt_vga", "vga"),
               f"vga_skkern={kb[name]}",
               flush=True)
 
+# A KERNEL WITH THE VGA RUNG (COLD_SLIDE, SPEC.md 2.10.9) gives a machine
+# with neither card MORE than .vgabuf: kmain_o slides `.cold` down over the
+# rung as well, so the floor is MONO_FLOOR and the kernel row has both rungs
+# off it (SK_MONO_KB) - tests/coldslide.py's numbers. Without the rung the
+# floor is the old one, KERN_END less .vgabuf alone
+slide = "VGA_PARA" in E and "MONO_FLOOR" in E
+mono = E["MONO_FLOOR"] if slide else kend - want
 ok = True
 if got["vga"] != kend:
     print(f"  FAIL: a VGA machine must reserve .vgabuf - mem_base "
           f"{got['vga']:#06x} != KERN_END {kend:#06x}")
     ok = False
 for n in ("cga", "herc"):
-    if got[n] != kend - want:
+    if got[n] != mono:
         print(f"  FAIL: {n} must start UNDER it - {got[n]:#06x} != "
-              f"{kend - want:#06x}")
+              f"{mono:#06x}")
         ok = False
     elif got[n] % 32:
         # guard 2d proves this at assembly time; proving it again on the
         # BOOTED machine is what says the constant and the subtraction agree
         print(f"  FAIL: {n}'s floor {got[n]:#06x} is not 512-aligned")
         ok = False
-kkb, vkb = E["KERN_KB"], E["SK_VGAB_KB"]
+kkb = E["KERN_KB"]
+vkb = E["SK_MONO_KB"] if slide else E["SK_VGAB_KB"]
 for n, w in (("vga", kkb), ("cga", kkb - vkb), ("herc", kkb - vkb)):
     if kb[n] != w:
         print(f"  FAIL: {n}'s SK_KERN [vga_skkern] = {kb[n]}, not {w} "
-              f"(KERN_KB {kkb}, SK_VGAB_KB {vkb})")
+              f"(KERN_KB {kkb}, {'SK_MONO_KB' if slide else 'SK_VGAB_KB'} "
+              f"{vkb})")
         ok = False
 print("  vgadrop: PASS" if ok else "  vgadrop: FAIL")
 sys.exit(0 if ok else 1)

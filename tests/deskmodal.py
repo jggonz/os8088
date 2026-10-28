@@ -63,7 +63,7 @@ def main():
         # dc_spread is what puts Dentist on line 0
         img = disk_with(tmp, "modal.img", os88stik.dat(os88stik.deskcal_pack(
             os88stik.deskcal([(TODAY, 600, "Dentist")]))))
-        with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+        with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
             c = Cal(ui, tmp, check=check)
             disk = ui.open_drive("A")
             disk = ui.move_window(disk, 20, 150)    # clear of the widget's

@@ -149,7 +149,7 @@ def ticks(g, n, limit=120.0):
     """Let the guest run n BIOS ticks."""
     t0 = g.ticks()
     os88marty.until(g.m, lambda mm: (g.ticks() - t0) & 0xFFFFFF >= n,
-                    "%d ticks" % n, poll=0.1, limit=limit)
+                    "%d ticks" % n, poll=0.02, limit=limit)
 
 
 def watch(g, n, key, want, step=6, actor=0):
@@ -522,7 +522,9 @@ def main():
         g.force_all_poke()
         m.run()
         g.wait_frames(1)
-        aim = g.byte("px_aim")
+        # (c)'s frame in flight, the same way: its aim the old pose's 255, and
+        # the poked pose's frame after it - read once, a soak saw the first
+        aim = aim_seen(m, g, 2)
         check(aim == 2, "the guard a tile ahead is under the crosshair (px_aim %d)" % aim)
         wn = []
         for _ in range(8):

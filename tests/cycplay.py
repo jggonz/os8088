@@ -38,7 +38,7 @@ def main():
                           apps=os.path.join(_R, "build/apps360.img"),
                           machine="os8088_5150_herc_gla", boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)      # the first act is a click: no picture
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy, _, _ = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])

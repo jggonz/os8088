@@ -128,12 +128,18 @@ def run(image, apps, machine, defines, tree=None):
     def S(n):
         return os88sym.linear(n, defines)
 
-    settle = os88marty.settle
+    # EVERY WAIT BEFORE THE FINAL CAPTURE IS `ui_done`: the panel, the Disk
+    # window, Paint's load and the drags are all handled on the UI task and
+    # confirmed by the guest reads that follow them (dispcp's verbs, the
+    # window rect's quiesce). Only the two framebuffers at the end are the
+    # rendered glass, and they get the frames it lags by.
+    def settle(mm, **k):
+        return os88marty.ui_done(mm)
     with os88marty.launch(image, apps=apps, machine=machine, boot=False) as m:
         if len(m.cards()) != 2:
             sys.exit("blitcut: %s is not a two-card machine" % machine)
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         # THE SAVER, OFF, before the 240-second wait below. no_saver's own
         # rule is "any gate that drives for more than ~5 guest minutes", and
         # this one sits still for 240 HOST seconds waiting for a straddling
@@ -160,7 +166,6 @@ def run(image, apps, machine, defines, tree=None):
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         dispcp.open_named(m, mo, S, settle, bx, by, "MEDIA", card=0)
-        settle(m, card=0)
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         rx, ry = dispcp.row_xy(bx, by,
                                dispcp.scroll_to(m, mo, S, settle, bx, by,
@@ -168,8 +173,8 @@ def run(image, apps, machine, defines, tree=None):
                                                               gifname()),
                                                 card=0))
         mo.dblclick(rx, ry)
-        # Paint's window, the drive going quiet, then the glass - a decode
-        # holds the screen still, so a settle alone can end inside one
+        # Paint's window, the drive going quiet, then the UI task idle - a
+        # decode holds the screen still, so a settle alone can end inside one
         try:
             os88marty.until(m, lambda _: any(w != disk for w in
                                              dispcp.win_list(m, S)),
@@ -290,13 +295,13 @@ def run(image, apps, machine, defines, tree=None):
         # the same rectangle, with the pointer parked off it.
         mo.drag(wx2 + ww // 2 + 16, wy2 + TITLE_H // 2,
                 wx2 + ww // 2, wy2 + TITLE_H // 2)
-        settle(m, card=0, limit=300.0)
+        settle(m)
         mo.to(4, 4)
-        settle(m, card=0, limit=200.0)
-        # ...and the FAR card too: both framebuffers are read below, and the
-        # settles above only watched card 0.
-        for c in m.cards():
-            settle(m, card=c["idx"], limit=200.0)
+        # The repaint is finished in BOTH framebuffers once the UI task is
+        # idle (every repaint is inside a pass, under the lock); the glass of
+        # each card lags its framebuffer by up to a frame, so six of them.
+        os88marty.ui_done(m, "the drag back and the parked pointer")
+        os88marty.guest_sleep(m, 0.1)
         fbs = []
         for c in m.cards():
             fw, fh, fb = m.fbuf(card=c["idx"])   # what the card RASTERISED:

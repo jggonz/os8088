@@ -320,7 +320,7 @@ lnk_is:
 ; out: CF = 0 it was OURS and is dealt with: what it names is opened as its
 ;      Disk window would open it, or `Shortcut not found (B:)`, or - a newer
 ;      version, a volume no row has, a chain too deep - nothing, silently.
-;      CF = 1 it is NOT ours: no file this size, or not 'LK' - the DOS box's
+;      CF = 1 it is NOT ours: no file this size, or not 'LK' - DOS's
 ;      shortcuts are .LNK too, in Microsoft's format (SPEC.md 96.21), and the
 ;      caller carries on to the association that opens those
 ; clobbers: AX..DI, ES, flags
@@ -352,6 +352,9 @@ lnk_open:
                                 ; tail is stack bytes that can only fail to
                                 ; name anything (5 bytes, kept out). SS:BP =
                                 ; the record, which needs no segment prefix
+    sub cx, ax                  ; CX = 0: the whole record was read (the read
+                                ; clobbers AX/DX alone) - and only then is
+                                ; there a parameter to arm, below
     cmp word [bp+LNK_SIG], 'LK'
     jne .notours
     cmp byte [bp+LNK_VER], LNK_V
@@ -365,7 +368,28 @@ lnk_open:
     jae .pop                    ; the file is hostile: no row has that index
     lea di, [bp+LNK_PATH]       ; ABOVE SP: sc_walk reads it through SS
     mov byte [bp+LNK_PATH+SC_PATHMAX-1], 0  ; ...terminated, whatever it said
+    cmp ah, 1                   ; A PROGRAM'S LINK MAY CARRY A PARAMETER
+    jne .walk                   ; (SPEC.md 26.10.7): the text after the
+    push ax                     ; path's NUL, armed for OSAPI_ARG_TEXT. It
+    push di                     ; stays where it is - this record outlives
+                                ; the launch - and a link to a document
+                                ; carries none to whichever program its
+                                ; extension names. ES is still SS: the read
+                                ; above was handed ES:BX and keeps ES
+    or cx, cx                   ; A SHORT FILE carries none: its tail is the
+    jnz .noarg                  ; stack's bytes, not the file's
+    xor al, al
+    mov cx, SC_PATHMAX - 1
+    repne scasb                 ; past the path's NUL - or onto the forced
+    cmp [es:di], al             ; one, a path of 44 having no room for any
+    je .noarg
+    mov [lnk_argo], di
+.noarg:
+    pop di
+    pop ax
+.walk:
     call sc_walk
+    mov word [lnk_argo], 0      ; SPENT OR NOT, it dies with the launch
 .pop:
     add sp, LNK_SIZE
 .done:
@@ -375,6 +399,23 @@ lnk_open:
     add sp, LNK_SIZE
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; osapi_arg_text - a link's parameter for the program it started (0x04DD,
+;                  SPEC.md 26.10.7). api_rsc's far body: DS = KDATA
+; in:  nothing
+; out: CF=1 none - every launch but a link's; CF=0 with DX:SI -> the NUL text,
+;      in the link's record on task 0's stack, alive until the entry returns
+; clobbers: DX, SI
+;
+; READ-AND-CLEAR, OSAPI_ARG_FILE's shape: the first proc to ask spends it
+; -----------------------------------------------------------------------------
+osapi_arg_text_x:
+    xor si, si
+    xchg si, [lnk_argo]
+    cmp si, 1                   ; CF = 1: it was 0, nothing armed
+    mov dx, ss                  ; the stack's segment - a selector on kern_mega
+    retf
 
 ; -----------------------------------------------------------------------------
 ; sc_modcall - run one of CTRL.DRV's desktop operations (SPEC.md 26.8.7)
@@ -519,42 +560,8 @@ sc_rclick_x:
     stc
     retf
 
-; -----------------------------------------------------------------------------
-; vgcf_boot - Force Color at boot (SPEC.md 39.28), from drv_boot_x
-; in:  the box is ticked (drv_boot_x tests [drv_cfg+CFG_VGC]); the system
-;      volume mounted
-; out: nothing; AX clobbered (drv_boot_x reloads it on the next line), every
-;      other register preserved
-;
-; THE BOX'S TEST IS AT THE CALL SITE, which is the boot BLOB and is given
-; back once the machine is up, and AX is not banked - so what stays resident
-; is only the part that has to be reached far (kernel size pass 12: 28 -> 14
-; bytes; it was here when the call site was the full boot overlay, SPEC.md
-; 39.28).
-;
-; FAR, for the blob, and NOT sc_modcall: that one's refusal is `Needs Sys
-; Disk A:` as a toast, and there is no desktop yet to say it on. A core that
-; cannot be read here leaves the BIOS's palette as it was - the machine boots
-; grey, exactly as it would with the box clear.
-; -----------------------------------------------------------------------------
-vgcf_boot:
-    test byte [drv_cfg+CFG_VGC], 1  ; THE BOX'S TEST IS HERE AGAIN (SPEC.md
-    jz .out                     ; 120.4): seven bytes the blob could not hold
-                                ; once the packed display's class joined the
-                                ; 'VM' record - kernel size pass 12 put them
-                                ; at the call site when the blob had room, and
-                                ; the blob is the scarcer of the two now
-    mov ax, (SC_OP_VGC << 8) | MOD_SETS ; AL the module, AH the operation:
-    call mod_need               ; every register kept. Its CF is NOT TESTED:
-    call far [SETFP]            ; a core that could not be read leaves this
-    call mod_drop               ; slot on mod_gone (`stc / retf`, nothing
-.out:
-    retf                        ; done) and its row empty, which mod_drop
-                                ; passes over - so a refusal costs nothing
-                                ; here and needs no branch (kernel size pass
-                                ; 12). CPE_SC's SC_OP_VGC keeps AL: modc_e_sc
-                                ; counts AH down and cp_vgc_force banks AX, so
-                                ; AL is still MOD_SETS for the drop
+; (vgcf_boot - Force Color at boot - is drv_boot_x's own lines in the blob
+; since kernel size pass 14: the blob was its one caller, driver.inc)
 
 ; =============================================================================
 section .text
@@ -594,6 +601,9 @@ section .bss
 ; =============================================================================
 sc_seg      resw 1              ; the table's claim, 0 = no shortcuts
 sc_nrows    resb 1              ; rows the claim holds, 0..SC_MAX
+lnk_argo    resw 1              ; a link's parameter for OSAPI_ARG_TEXT: an
+                                ; offset into its record on task 0's stack,
+                                ; 0 = none (SPEC.md 26.10.7)
 
 ; =============================================================================
 section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
@@ -1024,8 +1034,13 @@ sc_m_lnk:
     stosb
     PUSH_CSDATA                 ; ...and the RECORD in the image, ES = CS from
     pop es                      ; here to the write (its DATA segment)
-    lea di, [cs:cpc_buf + LNK_PATH] ; the path, sc_m_new's: dsk_path's leading
-    call sc_m_wpath             ; `\` lands on the kind byte, written after it
+    lea di, [cs:cpc_buf + LNK_PATH] ; the field ZEROED first, AL still 0: the
+    mov cx, SC_PATHMAX          ; buffer is the settings file's and never
+    rep stosb                   ; cleared, and a byte after the path's NUL is
+    sub di, SC_PATHMAX          ; a PARAMETER (SPEC.md 26.10.7), which this
+                                ; writes none of
+    call sc_m_wpath             ; the path, sc_m_new's: dsk_path's leading
+                                ; `\` lands on the kind byte, written after it
     jc .nopath
     lea di, [cs:cpc_buf]        ; (`lea` with `cs:` - the pointer is the
                                 ; IMAGE's, ES = CS, and os88ovlchk is told so)
@@ -1860,7 +1875,7 @@ ovl_sc_load:
 ;   an empty folder  that, and its first directory sector
 ;   a link           opened AS A DOUBLE-CLICK WOULD: assoc_run_x with nothing
 ;                    posted, standing in the folder, so a link of ours is
-;                    followed and the DOS box's (SPEC.md 96.21) goes to the
+;                    followed and DOS's (SPEC.md 96.21) goes to the
 ;                    program that reads it. Anything not *.LNK is not started
 ;
 ; EITHER SHIFT, HELD AT THE FIRST LINK, SKIPS THE LOT and says so - read off

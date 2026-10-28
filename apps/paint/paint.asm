@@ -10864,15 +10864,16 @@ pt_oncmd:
     mov si, [pt_msgp]
     call pt_msg_show
     ret
-.save_go:
-    mov si, pt_s_saving             ; an encode runs before the floppy does and
-    call pt_msg_show                ; the file-activity widget cannot see it;
-                                    ; SPEC.md 59.4 gets this on the glass
+.save_go:                           ; no toast BEFORE the save: the write is
+                                    ; the file widget's to report, and a toast
+                                    ; up through it would outrank the bar that
+                                    ; says how long is left (SPEC.md 12.8.7).
+                                    ; A GIF's encode says itself (pt_gif_out)
     call pt_save                    ; pt_save only SETS its toast: the dialog's
     mov si, [pt_msgp]               ; completion callback is what shows it on the
     or si, si                       ; Save As path, and this path has none
     jz .out
-    call pt_msg_show                ; (which replaces "Saving..." )
+    call pt_msg_show
     ret
 .open:
     mov al, FDLG_OPEN
@@ -13103,11 +13104,7 @@ pt_onask:
                                     ; on. Ask WHERE instead - .saveas already
                                     ; sets [pt_qclose], so the close still
                                     ; finishes once the file is named
-    push si
-    mov si, pt_s_saving             ; a GIF encodes 125,000 pixels BEFORE the
-    call pt_msg_show                ; floppy starts and the file-activity
-    pop si                          ; widget cannot report that (SPEC.md 59.4)
-    call pt_save
+    call pt_save                    ; (a GIF's encode says itself: pt_gif_out)
     cmp byte [pt_dirty], 0          ; pt_save clears it if and only if it
     jne .failed                     ; believes it wrote (SPEC.md 42.16), so
 .close:                             ; there is no second success test to keep
@@ -13512,16 +13509,11 @@ pt_ondlg:
 .toobig:
     mov word [pt_msgp], pt_s_bigpic
     jmp short .draw
-.save:
-    mov si, pt_s_saving             ; ...but a save is not the mirror of it: a
-    call pt_msg_show                ; GIF encodes 125,000 pixels BEFORE the
-                                    ; floppy starts, and the file-activity
-                                    ; widget cannot report work that has not
-                                    ; reached the disk. SPEC.md 59.4's
-                                    ; toast_now is what puts this on the glass
-                                    ; before the machine goes quiet, and is
-                                    ; why the pt_wait that used to be here for
-                                    ; the lock round trip is gone
+.save:                              ; ...and a save is the mirror of it: a GIF
+                                    ; says `Encoding GIF` for the encode the
+                                    ; widget cannot see, then retires it so
+                                    ; the write shows the bar (pt_gif_out,
+                                    ; SPEC.md 42.14)
     call pt_save
 .draw:
     cmp byte [pt_wchg], 0           ; a load that resized the window has to
@@ -16019,12 +16011,20 @@ pt_gif_out:
     mov [pt_gcap], cx
     mov word [pt_gout], 0
     mov byte [pt_govf], 0
-    call pt_ghdr
+    push si                         ; **THE ENCODE SAYS ITSELF** (SPEC.md
+    mov si, pt_s_encgif             ; 42.14): 125,000 pixels go through LZW
+    call pt_msg_show                ; before the floppy starts, and the file
+    pop si                          ; widget cannot see work that has not
+    call pt_ghdr                    ; reached the disk
     call pt_genc
     xor al, al                      ; the LZW block terminator...
     call pt_gwr
     mov al, 0x3B                    ; ...and the trailer
     call pt_gwr
+    push si                         ; ...and is RETIRED before the write, so
+    mov si, pt_s_none               ; the widget has the bar for it: a toast
+    call pt_msg_show                ; up and within its time outranks the bar
+    pop si                          ; that says how long is left (12.8.7)
     cmp byte [pt_govf], 0
     jne .toobig                     ; the ENCODER's own ceiling, not the file
     mov cx, [pt_gout]               ; API's: pt_gout is a 16-bit offset into
@@ -16082,7 +16082,6 @@ pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 %endif
 pt_s_crop:   db 'Would crop artwork', 0
 pt_s_noram:  db 'No memory to resize', 0
-pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
 pt_s_apply:  db 'Apply', 0
@@ -16208,6 +16207,8 @@ pt_s_opened:  db 'Opened', 0
 pt_s_decbmp:  db 'Decoding BMP', 0   ; SPEC.md 42.15: the half of an open that
 %ifdef PTF_GIF
 pt_s_decgif:  db 'Decoding GIF', 0   ; SPEC.md 12.8's widget cannot see
+pt_s_encgif:  db 'Encoding GIF'      ; ...nor the encode before a save
+pt_s_none:    db 0                 ; an empty toast RETIRES one (59.3)
 %endif   ; PTF_GIF
 %ifdef PTF_GIF
 pt_s_nofmt:   db 'Only BMP and GIF', 0

@@ -44,6 +44,8 @@ import tempfile
 
 from unicorn import (Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE,
                      UC_HOOK_INTR, UC_HOOK_INSN)
+from unicorn.x86_const import (UC_X86_REG_IDTR, UC_X86_REG_GDTR,
+                               UC_X86_REG_CR0)
 from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_BX, UC_X86_REG_CX,
                                UC_X86_REG_DX, UC_X86_REG_SI, UC_X86_REG_DI,
                                UC_X86_REG_BP, UC_X86_REG_SP, UC_X86_REG_IP,
@@ -58,6 +60,11 @@ SEG = 0x1000                    # the harness's CS = DS = ES = SS
 BASE = SEG << 4
 POOL_HI = 0x0011                # the pool above the HMA: 0x110000
 MSW, IDT, GDT = 0xFFF0, (0, 0x3FF), (0x0F4500, 0x0037)
+# ...what seed_capture puts in the box's CPU for la_capture to take. Unicorn
+# starts with all three ZERO, and a table field the borrow never wrote reads
+# back zero too, so unseeded those three checks could not fail. CR0's ET bit
+# alone for the MSW: a 386 in real mode accepts no 286-style FFF0
+SEED_MSW, SEED_IDT, SEED_GDT = 0x0010, IDT, GDT
 FAILS = []
 
 
@@ -116,6 +123,7 @@ class Box:
         self.caches = None
         self.borrows = []           # bytes moved under each borrow
         self.errs = []
+        seed_capture(self)
         mu.hook_add(UC_HOOK_CODE, self.code)
         mu.hook_add(UC_HOOK_INTR, self.intr)
         mu.hook_add(UC_HOOK_INSN, lambda uc, p, sz, ud: 0, None, 1, 0,
@@ -249,7 +257,13 @@ class Box:
 def seed_capture(box):
     """la_capture's three 286 instructions run under a 386 as legal ones,
     with the 386's answers - so the box's MSW/IDTR/GDTR are what the table
-    is checked against, read back from what la_capture stored"""
+    is checked against, read back from what la_capture stored. Seeded with
+    values no zeroed field can equal (SEED_*); IDTR's base stays 0, because
+    INT 6 and int 15h are taken through the vectors at 0:0"""
+    mu = box.mu
+    mu.reg_write(UC_X86_REG_CR0, SEED_MSW)
+    mu.reg_write(UC_X86_REG_IDTR, (0, SEED_IDT[0], SEED_IDT[1], 0))
+    mu.reg_write(UC_X86_REG_GDTR, (0, SEED_GDT[0], SEED_GDT[1], 0))
 
 
 def run(mode, image, syms):
@@ -272,6 +286,8 @@ def run(mode, image, syms):
            struct.unpack_from("<H", idt, 4)[0])
     GDT = (gdt[0] | gdt[1] << 8 | gdt[2] << 16,
            struct.unpack_from("<H", gdt, 4)[0])
+    check((MSW, IDT, GDT) == (SEED_MSW, SEED_IDT, SEED_GDT),
+          "attach: la_capture took the MSW, IDTR and GDTR the CPU has")
     if mode == "ok":
         # the init's own table was checked against the zeros before the
         # reference was known: run it again now that it is

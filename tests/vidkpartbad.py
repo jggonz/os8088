@@ -91,12 +91,12 @@ def main():
                         "--size", "360", pkg, v88], check=True,
                        capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=vidplay.MACHINE["herc"]) as ui:
+                         machine=vidplay.MACHINE["herc"], quick=True) as ui:
             m = ui.m
 
             def wait(cond, what, guest=60.0):
                 try:
-                    os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                    os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                     guest=guest)
                 except os88marty.MartyError as e:
                     raise Stop("%s never happened (%s)" % (

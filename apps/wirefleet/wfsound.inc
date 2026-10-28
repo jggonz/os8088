@@ -127,16 +127,18 @@ wf_soundnote:
 .out:
     ret
 .done:
-    mov word [wf_soundseq], 0
-    mov byte [wf_soundactive], 0
-    mov word [wf_soundhz], 0
+    xor ax, ax                  ; (both callers keep no AX: wf_sfx saves it)
+    mov [wf_soundseq], ax
+    mov [wf_soundactive], al
+    mov [wf_soundhz], ax
     ret
-wf_soundquiet:
-    mov word [wf_soundseq], 0
-    mov byte [wf_soundwait], 0
-    mov byte [wf_soundactive], 0
-    mov word [wf_soundhz], 0
-    mov byte [wf_cueq], 0
+wf_soundquiet:                  ; clobbers AX, as wf_pcm_halt always could
+    xor ax, ax
+    mov [wf_soundseq], ax
+    mov [wf_soundwait], al
+    mov [wf_soundactive], al
+    mov [wf_soundhz], ax
+    mov [wf_cueq], al
     ; Every note is finite (at most three ticks). An unconditional off could
     ; silence another instance that has since won the same-priority router.
     ; Close's instance teardown releases only our own actual grant.
@@ -408,39 +410,48 @@ wf_pcm_open:
     rep movsw
     add di, WF_PCM_STEP-4096
     dec dx
-    jnz .clip
+    jnz .clip                   ; (out with ZF = 1: copied)
+.wrong:                         ; ZF = 0: not this file's - dropped either way
     pop ds
     pop es
+    pushf
     mov al, WF_P_SFX
     call op_drop
-.out:
+    popf
+    jnz .bad
+    mov ax, wf_pcmmv            ; filled: MOVABLE while no clip plays, and
+    jmp short wf_pcmset         ; pinned for each one (wf_pcm_play to
+.out:                           ; wf_pcm_halt) - SPEC.md 114.11.1
     ret
-.wrong:
-    pop ds
-    pop es
-    mov al, WF_P_SFX
-    call op_drop
 .bad:
     jmp wf_pcm_close
 
 wf_pcm_halt:
     cmp byte [wf_pcmactive], 0
-    je .out
+    je wf_pcmmv.out
     mov ah, [wf_pcmhandle]
     mov al, 2
-    call OSAPI_SND_STREAM
-    mov byte [wf_pcmactive], 0
+    call OSAPI_SND_STREAM       ; the card's channel masked: nothing reads
+    mov byte [wf_pcmactive], 0  ; the ring now...
+    mov ax, wf_pcmmv            ; ...so it may move again (114.11.1)
+wf_pcmset:
+    mov dx, [wf_pcmseg]
+    call OSAPI_MEM_MOVABLE
+    ret
+
+; wf_pcmmv - the ring MOVED (SPEC.md 66.3: BX = was, DX = now). One word: a
+; clip hands the card its segment at verb 0 and the driver forgets it at the
+; close, which is why the ring is pinned for exactly that stretch
+wf_pcmmv:
+    mov [wf_pcmseg], dx
 .out:
     ret
 
 wf_pcm_close:
     call wf_pcm_halt
-    mov dx, [wf_pcmseg]
-    or dx, dx
-    jz .out
-    call OSAPI_MEM_FREE
+    mov dx, [wf_pcmseg]         ; (0, none: OSAPI_MEM_FREE refuses it
+    call OSAPI_MEM_FREE         ; harmlessly, a free record never matching)
     mov word [wf_pcmseg], 0
-.out:
     ret
 
 ; Halt a clip that has played to its end.
@@ -471,9 +482,19 @@ wf_pcm_play:
     mov bx, WF_PCM_STEP
     mul bx
     mov si, ax
-    mov es, [wf_pcmseg]
-    mov word [es:si+4096+SND_EXT_TOTAL], 4096
-    mov word [es:si+4096+SND_EXT_CONS], 0
+    lea di, [si+4096+SND_EXT_TOTAL]
+    xor ax, ax                  ; PINNED from here: the card is armed on it
+    call wf_pcmset              ; until wf_pcm_halt (SPEC.md 114.11.1)
+    mov es, [wf_pcmseg]         ; (AX = 0 still: MEM_MOVABLE keeps it)
+    mov cx, 4096                ; TOTAL - and verb 0's CX, what is staged,
+    mov [es:di], cx             ; which it REFUSES as 0 (7). It was never
+    scasw                       ; loaded here, so a clip played on whatever
+    stosw                       ; CX its caller left (SPEC.md 114.11.1).
+                                ; scasw steps DI past TOTAL (the compare is
+                                ; not read), stosw writes CONS = 0
+%if SND_EXT_CONS != SND_EXT_TOTAL + 2
+  %error "wf_pcm_play stores TOTAL and CONS as one pair"
+%endif
     mov di, es
     mov dx, 8000
     mov ah, [wf_pcmflags]

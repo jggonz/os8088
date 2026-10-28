@@ -2004,6 +2004,7 @@ cs_repaint:
     push ax
     mov ax, cs_paint
 cs_clipdo:                      ; AX = the painter, the caller's AX pushed
+    call cs_regeo                   ; the rects where the window IS
     push bx
     mov bx, [cs_win]
     call OSAPI_WM_CLIP_SET
@@ -2040,9 +2041,9 @@ cs_artdraw:
     mov bx, [cs_win]
     call OSAPI_WM_CLIP_SET
     jc .out                         ; (BX is still [cs_win]: CLIP_SET keeps it)
-    call OSAPI_WM_CONTENT           ; AX/DX, read again rather than remembered:
-    mov [cs_winox], ax              ; a window that moved moved the picture
-    mov [cs_winoy], dx
+    call cs_regeo                   ; read again rather than remembered: a
+    mov ax, [cs_winox]              ; window that moved moved the picture
+    mov dx, [cs_winoy]
     mov si, [cs_plane]
     mov si, [si + CSP_ART]
     call cs_artes                   ; the band, expanded if this aeroplane's
@@ -2063,6 +2064,54 @@ cs_artdraw:
     pop cx
     pop bx
     pop ax
+    ret
+
+; cs_regeo - put every control's rect where the window IS NOW. Preserves all.
+;
+; A window dragged by its title is REPLAYED, not painted (SPEC.md 11.96.12.0),
+; so the screen rects cs_paint laid out name where the window WAS - the Fly
+; button and both drop-downs answered nothing after a drag until a minimize
+; and restore. Every rect is a content-coordinate constant plus the origin it
+; was laid out against ([cs_winox]/[cs_winoy]), so the live origin less that
+; one is exactly what every rect owes. Called at the top of every handler
+; that hit-tests or draws a control (the press, the drag, the release, a key,
+; cs_clipdo) - the pattern SPEC.md 11.96.12.0's rule 1 asks for, from the
+; window's origin every time rather than from a rect banked at a paint.
+cs_regeo:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [cs_win]
+    call OSAPI_WM_CONTENT           ; AX/DX = the content origin, NOW
+    sub ax, [cs_winox]              ; ...less the one the rects were laid
+    sub dx, [cs_winoy]              ; out against
+    add [cs_winox], ax
+    add [cs_winoy], dx
+    mov cx, ax
+    or cx, dx
+    jz .out                         ; not moved: nothing owed
+    mov si, cs_alldrops             ; the title page's two drop-downs, the
+    mov cx, CS_NRECTS               ; settings page's four and its four
+.r:                                 ; boxes: ten records, one table, every
+    mov di, [si]                    ; one with its rect at +0
+    call cs_rshift
+    inc si
+    inc si
+    loop .r
+    mov di, cs_flyrect
+    call cs_rshift
+    mov di, cs_donerect
+    call cs_rshift
+.out:
+    jmp cs_pop6
+cs_rshift:                          ; DI -> a rect, moved by AX/DX
+    add [di], ax
+    add [di+2], dx
+    add [di+4], ax
+    add [di+6], dx
     ret
 
 ; cs_at_left - SI = string, BX = content y, CX = content x, AL = ink, on the
@@ -2163,6 +2212,7 @@ cs_onclick:
     push dx
     push si
     push di
+    call cs_regeo                   ; the rects where the window IS (cs_regeo)
     call cs_abdismiss               ; the card takes the click
     jc .out
     cmp byte [cs_page], 0
@@ -2211,6 +2261,7 @@ cs_onup:
     push dx
     push si
     push di
+    call cs_regeo                   ; the rects where the window IS (cs_regeo)
     cmp byte [cs_page], 2
     jne .title
     call cs_setup2                  ; the Settings page's own controls
@@ -2252,6 +2303,7 @@ cs_ondrag:
     push dx
     push si
     push di
+    call cs_regeo                   ; the rects where the window IS (cs_regeo)
     cmp byte [cs_page], 2
     jne .title
     call cs_nsets                   ; ...however many this display HAS
@@ -2400,6 +2452,7 @@ cs_drcloseall:
 cs_onkey:
     push ax
     push bx
+    call cs_regeo                   ; the rects where the window IS (cs_regeo)
     call cs_abdismiss               ; any key takes the credits down, and is
     jc .out                         ; spent doing it
     cmp byte [cs_page], 0
@@ -2520,6 +2573,8 @@ CS_NSETALL   equ ($ - cs_setdrops) / 2  ; ...and MODE IS LAST, which is what
                                     ; fewer (88.13.11)
 cs_setboxes: dw cs_ckterr, cs_ckbld, cs_ckhaze, cs_ckgtex ; ...a BIT each,
 CS_NFILL     equ ($ - cs_setboxes) / 2              ; Terrain's first (cs_setsync)
+CS_NRECTS    equ ($ - cs_alldrops) / 2  ; cs_regeo walks all three tables as
+                                    ; one: they must stay ADJACENT
 cs_boxpos:   dw CS_SETFX, CS_SETFY              ; ...and where each one is:
              dw CS_SETFX + CS_SETFW, CS_SETFY   ; the fills across, and the
              dw CS_SETFX, CS_SETF2Y             ; two looks under them, a grid

@@ -52,6 +52,9 @@ SNDV_MIXICON    equ 10         ; sndpkg.inc, held equal by t_mirror
 SNDV_MIXPOP     equ 11         ; kernel-private mixer UI verbs (34.15)
 SNDV_MIXICON_THEME equ 12      ; themed icon, legacy verb 10 remains available
 SND_CAP_MIXER    equ 0200h      ; physical mixer, independent of sound tier
+%if SND_CAP_MIXER & 0FFh
+  %error "menu_sound (menu.inc) takes DL - this bit's low byte - as a zero"
+%endif
 SND_CAP_LPTDAC   equ 0100h      ; a Covox, announced by the user's tier -
                                 ; the driver's bit, read by the Sound page's
                                 ; dot (ctrl.inc) and nothing resident (34.14)

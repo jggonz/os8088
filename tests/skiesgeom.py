@@ -306,7 +306,8 @@ def main(argv):
     windall = 0                         # faces whose winding was checked, over
                                         # every scene: a run that examined none
                                         # must not pass
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
         slot, seg, base = skiestest.open_game(m)
         lin = seg << 4
 

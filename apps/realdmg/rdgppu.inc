@@ -150,6 +150,7 @@ rdg_render:
     pop di
     pop es
 .st2:
+..@lk_rpal:
     call ppu_pal
     call ppu_oam                        ; (the frame's LCDC and log known)
     mov byte [PPU_WLINE],0
@@ -162,6 +163,7 @@ rdg_render:
 .nolog:
     call ppu_line
     mov si,[PPU_OSRC]                   ; out: the 20 bytes of each plane
+..@lk_rcpy:
     mov cx,10
     rep movsw
     add si,0Ch                          ; bit 1 is at +20h
@@ -264,7 +266,9 @@ rdg_dvga         dw 0                    ; the host's: a changed line goes to VG
                                         ;   too, its two shade planes to planes
                                         ;   0 and 1 of this segment at 40 a
                                         ;   line (ppu_dvga), or 0
-rdg_dvmm         db 0                    ; ...the plane the map mask holds
+                                        ;   (the plane the map mask holds is
+                                        ;   RDG_DVMM, in the view: a write
+                                        ;   through CS is kern_mega's #GP)
 
 rdg_renderd:
     cmp word [cs:rdg_dmgseg],0
@@ -282,13 +286,14 @@ rdg_renderd:
     push ds
     push es
     cld
-    mov byte [cs:rdg_dvmm],0FFh          ; (the host's mask: not known)
     mov ds,[cs:rdg_viewseg]
+    mov byte [RDG_DVMM],0FFh             ; (the host's mask: not known)
     mov ax,es
     mov es,[cs:rdg_dmgseg]
     mov [es:RDG_DOUT],di
     mov [es:RDG_DOUT+2],ax
     mov word [es:RDG_DCNT],0
+..@lk_dscr:
     mov byte [es:RDG_DSCR],0             ; (the claim is not zeroed)
     cmp byte [cs:rdg_ilace],0
     je .par
@@ -343,6 +348,7 @@ rdg_renderd:
     mov ax,[0FF4Ah]
     mov [PPU_REGS+6],ax
 .st2:
+..@lk_dpal:
     call ppu_pal
     mov byte [es:RDG_DFAST],0
     call ppu_logsame                    ; ZF = 1: the same log (and kept)
@@ -355,6 +361,9 @@ rdg_renderd:
     ; changes, so the scan of VRAM would only say what is composed anyway.
     ; Composed whole instead (RDG_DFULL: the shadows copied, not compared),
     ; which a scrolling Super Mario Land paid ~5 ms a frame of a 286 for
+%ifdef LOSSY_NOBG
+    jmp .scan                           ; (LOSSY: a scroll moves nothing drawn)
+%endif
     mov ax,[PPU_REGS+1]
     cmp ax,[es:RDG_DREG0+1]
     jne .full
@@ -403,6 +412,9 @@ rdg_renderd:
     je .nohk
     call [cs:rdg_dhook]
 .nohk:
+%ifdef LOSSY_NOSPR
+    jmp .oamk
+%endif
     cmp byte [es:RDG_DFULL],0            ; the sprites' line lists: kept while
     jne .oam                            ;   OAM is and their height, as
     cmp byte [es:RDG_DOCH],0             ;   nothing else moves them
@@ -641,6 +653,7 @@ ppu_logsame:
     jne .keep
     jcxz .r                             ; none, as before: ZF = 1
     push cx
+..@lk_lsame:
     mov si,RDG_RLOG
     mov di,RDG_DLOG
     repe cmpsw
@@ -840,6 +853,9 @@ ppu_dscan:
     or cx,cx
     jnz .m
 .oam:
+%ifdef LOSSY_NOSPR
+    ret                                 ; (LOSSY: OAM never looked at)
+%endif
     cmp byte [es:RDG_DSCR],0             ; a scroll's: every line is composed,
     je .oam1                            ;   so no line is marked - OAM's
     mov si,0FE00h                       ;   shadow taken whole (a scroll
@@ -1266,6 +1282,7 @@ ppu_dput:
     les di,[es:RDG_DOUT]                 ;   the screen shows (2, a scroll's,
     je .all                             ;   is: compared as ever)
     add di,ax                           ; ES:DI = the line in the buffer
+..@lk_dput:
     mov cx,10
     repe cmpsw
     jne .d0
@@ -1293,6 +1310,7 @@ ppu_dput:
     jmp short .vga
 .all:
     add di,ax
+..@lk_dall:
     mov cx,10
     rep movsw
     add si,0Ch
@@ -1334,9 +1352,9 @@ ppu_dvga:
     mov es,[cs:rdg_dvga]
     mov dx,3C4h
     mov si,[PPU_OSRC]
-    cmp byte [cs:rdg_dvmm],1
+    cmp byte [RDG_DVMM],1
     je .one
-    cmp byte [cs:rdg_dvmm],0
+    cmp byte [RDG_DVMM],0
     je .z
     mov ax,0102h
     out dx,ax
@@ -1349,7 +1367,7 @@ ppu_dvga:
     out dx,ax
     mov cl,10
     rep movsw
-    mov byte [cs:rdg_dvmm],1
+    mov byte [RDG_DVMM],1
     pop dx
     ret
 .one:
@@ -1362,7 +1380,7 @@ ppu_dvga:
     out dx,ax
     mov cl,10
     rep movsw
-    mov byte [cs:rdg_dvmm],0
+    mov byte [RDG_DVMM],0
     pop dx
     ret
 
@@ -1700,6 +1718,7 @@ ppu_log:
     mov al,[RDG_RLOG+si]                 ; its line
     cmp al,[PPU_LY]
     ja .r
+..@lk_log:
     mov bl,[RDG_RLOG+si+1]               ; the register, 40-4B
     mov al,[RDG_RLOG+si+2]
     inc byte [PPU_LOGI]
@@ -1819,8 +1838,10 @@ ppu_line:
     rep stosw
     jmp .done
 .on:
+%ifndef LOSSY_NOBG
     test al,01h
     jnz .bg
+%endif
     xor ax,ax                           ; BG and window off: colour 0, and
     mov di,PPU_BL                       ;   every sprite above it
     mov cx,12
@@ -1830,6 +1851,9 @@ ppu_line:
     rep stosw
     jmp .pal
 .bg:
+%ifdef LOSSY_NOWIN
+    and al,0DFh                         ; (LOSSY: no window)
+%endif
     cmp byte [PPU_RCH],0                ; (no register written since the
     je .tm                              ;   last background's setup: the tile
     mov ah,al                           ;   mode it saw)
@@ -1895,6 +1919,7 @@ ppu_line:
     je .uni                             ;   by the fine scroll, 20 times (44%
     or cl,cl                            ;   of Super Mario Land's lines under
     jz .b0                              ;   its status bar are a sky)
+..@lk_fsh:
     call ppu_fshift
     jmp short .win
 .uni:
@@ -1919,10 +1944,14 @@ ppu_line:
     rep stosw
     jmp short .win
 .b0:
+..@lk_fcb:
     call ppu_fcopyb
 .win:
     ; the window, over the background from X = WX - 7 on
     mov al,[PPU_REGS+0]
+%ifdef LOSSY_NOWIN
+    and al,0DFh
+%endif
     test al,20h
     jz .pal
     mov ah,[PPU_LY]
@@ -1958,6 +1987,9 @@ ppu_line:
     cmp byte [PPU_REGS+3],0E4h
     jne .anf
     mov word [PPU_OSRC],PPU_BL
+%ifdef LOSSY_NOSPR
+    jmp .done
+%endif
     test byte [PPU_REGS+0],02h
     jz .done
     mov al,[PPU_LY]
@@ -1977,6 +2009,9 @@ ppu_line:
     mov di,PPU_OH
     call ppu_anf
 .spr:
+%ifdef LOSSY_NOSPR
+    jmp .done
+%endif
     test byte [PPU_REGS+0],02h
     jz .done
     call ppu_sprites
@@ -2426,6 +2461,7 @@ ppu_sprites:
     mov bl,ch
     mov ch,[PPU_REV+bx]
 .nx:
+..@lk_nx:
     mov al,[si+1]
     mov [di],al                         ; X
     mov [di+1],cl
@@ -2473,11 +2509,15 @@ ppu_sprites:
     add si,4
     loop .is
 .draw:
+%ifdef LOSSY_OPAQUE
+    jmp short .dc
+%endif
     ; the claimed mask starts empty
     xor ax,ax
     mov di,PPU_CL
     mov cx,12
     rep stosw
+.dc:
     mov si,PPU_SPR
     cmp word [PPU_OSRC],PPU_BL          ; (over the background's own planes)
     je .db
@@ -2536,9 +2576,13 @@ ppu_sprites:
     and dl,[ds:bp+5]
     xor ah,dl                           ; AH = shade bit 1
     mov di,ax                           ; DI = the shades
+%ifdef LOSSY_OPAQUE
+    mov ax,00FFh                        ; (LOSSY: every pixel of the box)
+%else
     mov al,[si+1]
     or al,[si+2]                        ; opaque: colour not 0
     xor ah,ah
+%endif
     ror ax,cl                           ; AL = byte B's part, AH = B+1's
     mov dx,ax                           ; DL, DH = opaque, both halves
     mov ax,di
@@ -2551,6 +2595,9 @@ ppu_sprites:
     mov bp,ax                           ; BP = shade bit 1, both halves
     cmp bx,19                           ; both bytes on the line (0-18, all
     jae .edge                           ;   but the edges): one word each
+%ifdef LOSSY_OPAQUE
+    jmp short .w                        ; (LOSSY: nothing claimed - the last
+%endif                                  ;   drawn wins - and no priority bit)
     test byte [si+3],80h
     jnz .wb
     mov ax,[PPU_CL+bx]                  ; over the background: a pixel another
@@ -2632,3 +2679,408 @@ ppu_sprites:
 ; background only where nothing is claimed, so what it reads is unchanged
 PPU_SPRITE ppu_sprite, ppu_put, PPU_OL, PPU_OH
 PPU_SPRITE ppu_spriteb, ppu_putb, PPU_BL, PPU_BH
+
+%ifdef RDG_LOSSY
+; =============================================================================
+; THE LOSSY PICTURE (REALDMG-SPEC 13.4): Screen > Two Shades (F10) and Scroll
+; by 8 (F11), assembled under RDG_LOSSY - the package's always, the bare
+; harness's with LOSSY_BW or LOSSY_COARSE. None of it is on the composer's
+; path while both are off, not even a test: each place they change holds its
+; ORIGINAL instruction then, and rdg_lpatch writes a CALL or JMP of the same
+; length over it (NOPs after) into a stub below when one is turned on, and
+; the original back when it is turned off. The stubs do the instruction
+; they replaced. rdg_lpatch is the caller's to run where no task is inside
+; the composer: the worker between frames (rw_keys), and rdg_init
+; =============================================================================
+rdg_lstart:
+RDG_LBW          equ 01h                 ; rdg_lossy: TWO SHADES - shade bit 1
+RDG_LCOARSE      equ 06h                 ;   alone; the CAMERA IN STEPS - a
+RDG_LCO8         equ 02h                 ;   level, not a bit: of 8, of 4 or
+RDG_LCO4         equ 04h                 ;   of 2 (F11 cycles Off, 2, 4, 8)
+RDG_LCO2         equ 06h
+%ifdef LOSSY_BW
+%define RDG_L0_BW RDG_LBW
+%else
+%define RDG_L0_BW 0
+%endif
+%ifdef LOSSY_COARSE2
+%define RDG_L0_CO RDG_LCO2
+%elifdef LOSSY_COARSE4
+%define RDG_L0_CO RDG_LCO4
+%elifdef LOSSY_COARSE
+%define RDG_L0_CO RDG_LCO8
+%else
+%define RDG_L0_CO 0
+%endif
+rdg_lossy        db RDG_L0_BW | RDG_L0_CO ; the host's: what the picture leaves
+                                        ;   out (then rdg_lpatch)
+rdg_lpdone       db 0                    ; rdg_lhooks' originals are kept
+rdg_csd          db 0                    ; SCROLL BY 8: the fine scroll the
+rdg_csig         db 0                    ;   sprites are moved by, and the
+                                        ;   frame's set of them
+rdg_cmask        db 0F8h                 ; the step's: SCX AND this snaps it,
+rdg_cfine        db 7                    ;   AND this is what the sprites
+                                        ;   take (rdg_lpatch, from the level)
+                                        ; (TWO SHADES left the buffer's bit 0
+                                        ;   stale under VGA's own writer:
+                                        ;   RDG_BWST, in the view)
+
+; LHOOK site, length, bit, opcode (E8h call, E9h jmp), stub - and room for
+; the site's original bytes, kept by rdg_lpatch's first call
+%macro LHOOK 5
+    dw %1
+    db %2, %3, %4
+    dw %5
+    times 6 db 0
+%endmacro
+RDG_LHSZ         equ 13
+rdg_lhooks:
+    LHOOK ..@lk_dscr,  6, RDG_LBW,     0E8h, rdg_lk_dscr
+    LHOOK ..@lk_fsh,   3, RDG_LBW,     0E8h, rdg_lk_fsh
+    LHOOK ..@lk_fcb,   3, RDG_LBW,     0E8h, rdg_lk_fcb
+    LHOOK ..@lk_dput,  3, RDG_LBW,     0E9h, rdg_lk_dput
+    LHOOK ..@lk_dall,  3, RDG_LBW,     0E9h, rdg_lk_dall
+    LHOOK ..@lk_rcpy,  3, RDG_LBW,     0E9h, rdg_lk_rcpy
+    LHOOK ..@lk_dpal,  3, RDG_LCOARSE, 0E8h, rdg_lk_dpal
+    LHOOK ..@lk_rpal,  3, RDG_LCOARSE, 0E8h, rdg_lk_rpal
+    LHOOK ..@lk_lsame, 6, RDG_LCOARSE, 0E8h, rdg_lk_lsame
+    LHOOK ..@lk_log,   4, RDG_LCOARSE, 0E8h, rdg_lk_log
+    LHOOK ..@lk_nx,    3, RDG_LCOARSE, 0E8h, rdg_lk_nx
+    LHOOK ..@lk_rlog,  4, RDG_LCOARSE, 0E8h, rdg_lk_rlog
+rdg_lhend:
+
+; rdg_lpatch - every hook made what rdg_lossy says. Every register kept
+rdg_lpatch:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov al,[cs:rdg_lossy]               ; the step: 8 for level 1 (and off),
+    and al,RDG_LCOARSE                  ;   4 for 2, 2 for 3
+    shr al,1
+    mov cl,al
+    mov al,0F8h
+    cmp cl,2
+    jb .m
+    mov al,0FCh
+    je .m
+    mov al,0FEh
+.m:
+    mov [cs:rdg_cmask],al
+    not al
+    mov [cs:rdg_cfine],al
+    mov si,rdg_lhooks
+.e:
+    mov di,[cs:si]                      ; DI = the site, CX its length
+    mov cl,[cs:si+2]
+    xor ch,ch
+    lea bx,[si+7]                       ; BX = its original bytes
+    cmp byte [cs:rdg_lpdone],0
+    jne .kept
+    push cx
+    push di
+.k:
+    mov al,[cs:di]
+    mov [cs:bx],al
+    inc di
+    inc bx
+    loop .k
+    pop di
+    pop cx
+    lea bx,[si+7]
+.kept:
+    mov al,[cs:si+3]
+    test [cs:rdg_lossy],al
+    jz .off
+    mov al,[cs:si+4]                    ; on: CALL or JMP the stub
+    mov [cs:di],al
+    mov ax,[cs:si+5]
+    sub ax,di
+    sub ax,3
+    mov [cs:di+1],ax
+    sub cx,3
+    jz .n
+    add di,3
+.nop:
+    mov byte [cs:di],90h
+    inc di
+    loop .nop
+    jmp short .n
+.off:
+    mov al,[cs:bx]                      ; off: the original
+    mov [cs:di],al
+    inc bx
+    inc di
+    loop .off
+.n:
+    add si,RDG_LHSZ
+    cmp si,rdg_lhend
+    jb .e
+    mov byte [cs:rdg_lpdone],1
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- TWO SHADES --------------------------------------------------------------
+; shade bit 1 alone: shades 0 and 1 white, 2 and 3 black. With BGP the
+; identity the background fetches its tile rows' high plane alone (another
+; BGP's shade bit 1 needs both of a pixel's colour bits, and composes as
+; ever); ppu_dput compares bit 1 alone and writes it as both planes
+
+rdg_lk_dscr:                            ; rdg_renderd's entry: a draw that
+    mov byte [es:RDG_DSCR],0            ;   reads the buffer after VGA's own
+    cmp word [cs:rdg_dvga],0            ;   writer left its bit 0 stale is
+    jne .r                              ;   whole
+    cmp byte [RDG_BWST],0
+    je .r
+    mov byte [RDG_BWST],0
+    mov byte [es:RDG_DFULL],1
+.r:
+    ret
+
+rdg_lk_fsh:                             ; ppu_line's background, CALLed
+    cmp byte [PPU_REGS+3],0E4h
+    jne ppu_fshift
+    jmp ppu_fshifth
+rdg_lk_fcb:
+    cmp byte [PPU_REGS+3],0E4h
+    jne ppu_fcopyb
+    jmp ppu_fcopybh
+
+rdg_lk_dput:                            ; ppu_dput, JMPed to: bit 1 compared
+    ; STKBALANCE-OK: never called - ppu_dput's own continuation, JMPed to by
+    ; its patched site with its ES on the stack, and left to ppu_dput's own
+    ; exits, which take it off
+    push si                             ;   alone (SI the line, ES:DI the
+    push di                             ;   buffer's, AX 40 x the line)
+    add si,20h
+    add di,20
+    mov cx,10
+    repe cmpsw
+    pop di
+    pop si
+    je ppu_dput.same
+rdg_lk_dall:                            ; ...and written, as both planes
+    ; STKBALANCE-OK: never called - ppu_dput's continuation, as rdg_lk_dput
+    add si,20h
+    cmp word [cs:rdg_dvga],0
+    je .both
+    mov byte [RDG_BWST],1            ; VGA's own writer: plane 1 kept in
+    add di,20                           ;   the buffer, written to planes 0
+    mov cx,10                           ;   and 1 at once
+    rep movsw
+    call ppu_dvgabw
+    jmp ppu_dput.mk
+.both:
+    mov cx,10                           ; (a writer that reads both: bit 1
+    rep movsw                           ;   as both)
+    sub si,20
+    mov cl,10
+    rep movsw
+    jmp ppu_dput.mk
+
+rdg_lk_rcpy:                            ; rdg_render's line out, JMPed to:
+    ; STKBALANCE-OK: never called - rdg_render's continuation, JMPed to by
+    ; its patched site with its registers on the stack, back to its loop
+    add si,20h                          ;   bit 1 as both
+    mov cx,10
+    rep movsw
+    sub si,20
+    mov cl,10
+    rep movsw
+    jmp rdg_render.nextl
+
+; ppu_dvgabw: ppu_dvga for TWO SHADES - bit 1 to planes 0 and 1 at once
+; (map mask 3). AX = 40 x the line
+ppu_dvgabw:
+    push dx
+    mov di,ax
+    mov es,[cs:rdg_dvga]
+    mov dx,3C4h
+    mov si,[PPU_OSRC]
+    add si,20h
+    cmp byte [RDG_DVMM],3
+    je .b1
+    mov ax,0302h
+    out dx,ax
+    mov byte [RDG_DVMM],3
+.b1:
+    mov cx,10
+    rep movsw
+    pop dx
+    ret
+
+; ppu_fshifth / ppu_fcopybh: ppu_fshift and ppu_fcopyb for the high plane
+; alone, into PPU_BH (PPU_BL is left as it was: nothing reads it)
+%macro PPU_FSHIFTH 2
+%assign ppu_k 0
+%rep 10
+    mov bx,[si+2*ppu_k+2]
+    mov dh,[bx+di+1]
+    mov bh,ah
+    mov bl,dh
+    %1 bx,cl
+    mov [PPU_BH+ppu_k],%2
+    mov bx,[si+2*ppu_k+4]
+    mov ah,[bx+di+1]
+    mov bh,dh
+    mov bl,ah
+    %1 bx,cl
+    mov [PPU_BH+ppu_k+1],%2
+%assign ppu_k ppu_k+2
+%endrep
+    ret
+%endmacro
+ppu_fshifth:
+    mov al,dl
+    xor ah,ah
+    shl ax,1
+    mov di,ax
+    mov bx,[si]
+    mov ax,[bx+di]
+    cmp cl,4                            ; (both ways, as ppu_fshift: one way
+    ja .right                           ;   alone cost Super Mario Land 7%)
+    PPU_FSHIFTH shl, bh
+.right:
+    neg cl
+    add cl,8
+    PPU_FSHIFTH shr, bl
+ppu_fcopybh:
+    mov al,dl
+    xor ah,ah
+    shl ax,1
+    mov di,ax
+%assign ppu_k 0
+%rep 21
+    mov bx,[si+2*ppu_k]
+    mov al,[bx+di+1]
+    mov [PPU_BH+ppu_k],al
+%assign ppu_k ppu_k+1
+%endrep
+    ret
+
+; --- SCROLL BY 8, 4 OR 2 -----------------------------------------------------
+; SCX snapped to a multiple of the step (rdg_cmask) and the rest added to
+; every sprite's X, so the picture stays together and the camera moves in
+; steps of 8, 4 or 2. A raster
+; write's SCX is logged snapped, the rest in its entry's fourth byte, which
+; ppu_logsame then does not compare: a status bar's split stays the same
+; log every frame
+
+rdg_lk_rlog:                            ; rdg_rlog's store of the value
+    mov byte [RDG_RLOG+si+3],0
+    cmp ch,43h
+    jne .s
+    push ax
+    mov al,cl
+    and al,[cs:rdg_cfine]
+    mov [RDG_RLOG+si+3],al
+    pop ax
+    and cl,[cs:rdg_cmask]
+.s:
+    mov [RDG_RLOG+si+2],cl
+    ret
+
+rdg_lk_rpal:                            ; rdg_render's frame: SCX snapped,
+    push ax                             ;   the rest the sprites'
+    mov al,[PPU_REGS+2]
+    mov ah,al
+    and al,[cs:rdg_cmask]
+    mov [PPU_REGS+2],al
+    and ah,[cs:rdg_cfine]
+    mov [cs:rdg_csd],ah
+    pop ax
+    jmp ppu_pal
+
+rdg_lk_dpal:                            ; rdg_renderd's frame: the same, and
+    push ax                             ;   when its set of fine scrolls
+    push cx                             ;   moved every sprite has: OAM's
+    push dx                             ;   shadow made to differ in X, so the
+    push si                             ;   scan marks their lines
+    push di
+    mov al,[PPU_REGS+2]
+    mov ah,al
+    and al,[cs:rdg_cmask]
+    mov [PPU_REGS+2],al
+    and ah,[cs:rdg_cfine]
+    mov [cs:rdg_csd],ah
+    mov dl,ah                           ; DL = the frame's fine scrolls
+    xor ch,ch
+    mov cl,[PPU_LOGN]
+    cmp cl,RDG_RLOG_MAX
+    jbe .m
+    mov cl,RDG_RLOG_MAX
+.m:
+    jcxz .n
+    mov si,RDG_RLOG
+.l:
+    cmp byte [si+1],43h
+    jne .x
+    shl dl,1
+    shl dl,1
+    shl dl,1
+    xor dl,[si+3]
+.x:
+    add si,4
+    loop .l
+.n:
+    cmp dl,[cs:rdg_csig]
+    je .k
+    mov [cs:rdg_csig],dl
+    mov di,RDG_DOAM+1
+    mov cx,40
+.i:
+    xor byte [es:di],80h
+    add di,4
+    loop .i
+.k:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    jmp ppu_pal
+
+rdg_lk_lsame:                           ; ppu_logsame's compare: CX entries
+    mov si,RDG_RLOG                     ;   x 2 words - each entry's first
+    mov di,RDG_DLOG                     ;   three bytes. CX = 0 back, so its
+    shr cx,1                            ;   REPE CMPSW does nothing and the
+.l:                                     ;   flags stay these
+    cmpsw
+    jne .x
+    cmpsb
+    jne .x
+    inc si
+    inc di
+    loop .l
+    cmp al,al
+.x:
+    mov cx,0
+    ret
+
+rdg_lk_log:                             ; ppu_log's register: SCX's entry
+    mov bl,[RDG_RLOG+si+1]              ;   sets the sprites' fine scroll
+    cmp bl,43h                          ;   from its line on
+    jne .r
+    push ax
+    mov al,[RDG_RLOG+si+3]
+    mov [cs:rdg_csd],al
+    pop ax
+.r:
+    ret
+
+rdg_lk_nx:                              ; ppu_sprites' X: where the snapped
+    mov al,[si+1]                       ;   camera puts it
+    add al,[cs:rdg_csd]
+    jnc .r
+    mov al,0FFh
+.r:
+    ret
+    ; (the code after this - the bare harness's recompiler - on the 16 bytes
+    ; it had)
+    times (16 - (($ - rdg_lstart) % 16)) % 16 db 0
+%endif

@@ -14,6 +14,12 @@ mix_1745:
     db 36h,37h,3,31, 38h,39h,3,31, 3Ah,0,3,31
     db 3Bh,0,6,3, 46h,47h,4,15, 44h,45h,4,15
 
+; --- MIX_ONCE: ATTACH-ONLY (SPEC.md 34.15.1) ------------------------------
+; mix_probe runs inside the attach and never after.
+; Defined as a macro and expanded HERE unless SND_SPLIT is set; SOUND.DRV
+; sets it and expands MIX_ONCE past snd_keepmix, the end of what the driver
+; keeps once its attach has answered, so these bytes leave the claim.
+%macro MIX_ONCE 0
 ; Probe after the first successful DSP attach; own the base independently of
 ; stream tier teardown. Test two patterns so a floating/stuck bus cannot pass.
 mix_probe:
@@ -114,17 +120,15 @@ mix_probe:
     pop ax
     ret
 
-mix_info:
-    cmp byte [mix_kind], 0
-    je mix_none
-    xor ax, ax
+%endmacro
+%ifndef SND_SPLIT
+    MIX_ONCE
+%endif
+mix_info:                       ; (no mix_kind test in any verb here:
+    xor ax, ax                  ; snd_pkg refuses them all without a mixer)
     mov al, [mix_kind]
     mov cx, [mix_mask]
     clc
-    ret
-mix_none:
-    mov ax, SNDE_NOMIX
-    stc
     ret
 mix_arg:
     mov ax, SNDE_MIXARG
@@ -133,8 +137,6 @@ mix_arg:
 
 ; AL=channel -> SI=descriptor, CF. Callers bank SI.
 mix_desc:
-    cmp byte [mix_kind], 0
-    je mix_none
     cmp al, MIX_NCHAN
     jae mix_arg
     xor ah, ah
@@ -320,9 +322,7 @@ mix_detach:
     push ax
     push cx
     push si
-    push di
-    cmp byte [mix_kind], 0
-    je .out
+    push di                     ; (snd_detach tests mix_kind for us)
     mov si, [mix_table]
     mov di, mix_orig
     mov cx, MIX_NCHAN
@@ -355,8 +355,7 @@ mix_detach:
     pop ax
     ret
 
-%macro MIX_STATE 0
-mix_kind:  db 0
+%macro MIX_STATE 0               ; (mix_kind is the core's: sound.asm)
 mix_base:  dw 0
 mix_mask:  dw 0
 mix_table: dw 0

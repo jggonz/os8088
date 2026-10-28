@@ -1122,10 +1122,11 @@ br_take:
     shl ax, cl                      ; one segment paragraph window per 64 KiB
     add ax, [br_srcseg]
     pop cx                          ; NETV_RECV's byte count drives LOOP below
-    mov es, ax                      ; contiguous claim; its base is pinned
-    mov dx, es                      ; move under us - and ZERO means br_go has
-    or dx, dx                       ; freed it: segment 0 is the kernel image
-    jz .done                        ; and every task's stack
+    mov es, ax                      ; contiguous claim, MOVABLE (br_movable)
+    mov dx, es                      ; but not while this worker RUNS, which
+    or dx, dx                       ; pins it (inst_seg_parked) - and ZERO
+    jz .done                        ; means br_go has freed it (the alias of 0
+                                    ; is the kernel image and every task stack)
     mov di, [br_nlen]
 .mapped:
     mov si, br_rxb
@@ -2222,7 +2223,7 @@ br_netclaim:
     cmp word [br_srcemshnd], 0
     jne .keep                        ; EMS source has no conventional claim to shrink
     mov dx, [br_srcseg]
-    call OSAPI_MEM_REGROW           ; a SHRINK, which always succeeds in place
+    call br_regrow                  ; a SHRINK, which always succeeds in place
     jc .keep                        ; ...and if it did not, the ceiling stands
     mov [br_srcseg], dx
     mov [br_srckb], ax

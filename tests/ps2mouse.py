@@ -67,11 +67,12 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
 import os88fixture                                       # noqa: E402
+import os88build                                         # noqa: E402
 import os88sym                                              # noqa: E402
 import os88qemu                                              # noqa: E402
 
-SOCK = os.path.join(ROOT, "build", "ps2.sock")
-PIDFILE = os.path.join(ROOT, "build", "ps2.pid")
+# THIS PROCESS'S pair (os88qemu.paths), never a fixed file under build/
+SOCK, PIDFILE = os88qemu.paths("ps2")
 
 # The BIOS keyboard buffer's head and tail (0040:001A), which is where "did a
 # keystroke survive the handshake" is answered. Two bytes a key.
@@ -118,13 +119,18 @@ def launch():
     so the only pointing device on the machine is the PS/2 mouse the `pc`
     machine has anyway (docs/TESTING.md)."""
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=off"    # ...or the VMware backdoor (SPEC.md
-        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # 9.11)
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"    # wins
+        # SNAPSHOT: the SHARED images, which this row never reads back. It
+        # booted them WRITABLE, and QEMU then refuses every other open of
+        # the same file, even a snapshot=on one - wheelps2 and vmmouse died
+        # in 0.3 s beside it (docs/plans/SOAK-PARALLEL.md 17.10)
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"   # 9.11)
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"   # wins
         " -serial none"                  # the contest and this tests the PS/2
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
-        % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
+        % (os88build.at("build/os8088.img"), os88build.at("build/apps.img"),
+           SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
     # ...and it is DAEMONISED, so it outlives this script unless
     # somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own(PIDFILE, SOCK)

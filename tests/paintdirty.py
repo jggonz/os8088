@@ -80,8 +80,7 @@ def main(argv):
                                rows.index("PAINT.O88"))
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        m.advance(frames=250)
-        m.run()
+        os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
         os88marty.no_saver(m)
         seg = dispapps.pkg_seg(m, 0)[1]
         pw = _wins(m)[-1]
@@ -95,14 +94,10 @@ def main(argv):
 
         wr = dispcp.win_rect(m, S, pw)                  # maximize and restore
         mo.dblclick(wr[0] + 60, wr[1] + 9)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
         big = dispcp.win_rect(m, S, pw)
         mo.dblclick(big[0] + 60, big[1] + 9)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
         note("maximized and restored")
         if big[2] == dispcp.win_rect(m, S, pw)[2]:
             fails.append("SETUP: the title double-click did not resize the "
@@ -110,21 +105,19 @@ def main(argv):
 
         cx0, cy0 = _bss(m, seg, "pt_cx0"), _bss(m, seg, "pt_cy0")
         mo.to(cx0 + 40, cy0 + 30)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo._edge(True)
         for _ in range(6):
             m.mouse(dx=8, dy=8, l=True)
             m.advance(frames=3)
             m.run()
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         note("one stroke")
 
         wr = dispcp.win_rect(m, S, pw)                  # ...and the close box
         mo.click(wr[0] + 8, wr[1] + 9)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
         after = _wins(m)
         still = pw in after
         extra = len(after) - nwin
@@ -145,9 +138,7 @@ def main(argv):
                 print("   the alert: x=%d y=%d w=%d, Discard at %d,%d"
                       % (ax_, ay_, aw_, bx_, by_))
                 mo.click(bx_, by_)
-                m.advance(frames=400)
-                m.run()
-                os88marty.settle(m)
+                os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
                 closed = pw not in _wins(m)
 
     for (what, d) in seen:

@@ -92,13 +92,16 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         os88marty.no_saver(m)       # SPEC.md 79 DRAWS, so nothing armed below
                                     # could ever settle - and every bp_trace
                                     # would be watching the saver's fish
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
-        os88marty.settle(m)
+        # the reads up to the first capture are guest state: the UI pass
+        # being over is the whole wait (SOAK-SPEED technique 4)
+        done_ = lambda mm, **k: os88marty.ui_done(mm)
+        dispcp.open_panel(m, mo, S, done_, page=None)
+        os88marty.ui_done(m)
         wx, wy = dispcp._cp_win(m, S)
         hide = m.read(S("cp_hide"), 1)[0]
         shown = [r for r in range(8) if not (hide & (1 << r))]
@@ -112,7 +115,7 @@ def main():
         selrow = shown.index(sel) if sel in shown else 0
         target = 0 if selrow != 0 else 1        # a DIFFERENT row
         mo.to(4, 4)
-        os88marty.settle(m)
+        os88marty.ui_done(m)        # nothing left in flight to be traced
 
         # --- the click, with every drawing call recorded ---------------------
         pane = wx + 1 + CP_DIVX
@@ -143,15 +146,13 @@ def main():
         # quiet, so the row died in the harness rather than at an assertion.
         # What settle is FOR is a screen that has stopped moving, and two
         # identical reads say that directly.
-        W = H = None
-        last = None
-        for _ in range(8):
-            os88marty.pace(m, 0.5)
-            W, H, cur = shot(m)
-            if cur == last:
-                break
-            last = cur
-        px = last
+        # ...and two identical captures were themselves 2 x 0.5 host-paced
+        # seconds. The trace is gone by here, so `ui_done` answers (every
+        # repaint is inside a UI pass) and three frames is the glass catching
+        # up with the framebuffer - os88ui's `still`.
+        os88marty.ui_done(m)
+        os88marty.guest_sleep(m, 0.05)
+        W, H, px = shot(m)
 
         # THE LEFT PANE ONLY: cp_page redraws the whole right-hand pane on a
         # selection and is SUPPOSED to - the page really did all change.
@@ -177,9 +178,9 @@ def main():
         # --- 2. THE DATE/TIME PAGE, same question (SPEC.md 31.5.3) -----------
         # A field's caret is a black box round it, and moving it used to erase
         # the whole date-and-time band. Two fields change, so two runs.
-        dispcp.open_panel(m, mo, S, os88marty.settle, page=CP_ITIME)
+        dispcp.open_panel(m, mo, S, done_, page=CP_ITIME)
         mo.to(4, 4)
-        os88marty.pace(m, 1.0)
+        os88marty.ui_done(m)        # the page's own fills over before the trace
         wx, wy = dispcp._cp_win(m, S)
         fld = m.read(S("cp_tsel"), 1)[0]
         tgt = 3 if fld != 3 else 0          # a field on the OTHER row

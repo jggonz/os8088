@@ -29,7 +29,7 @@ The six spellings, all of the same program, in one boot:
   DOSARGS.COM/M            runs, with them        in front of it (96.33.15.2)
   DOSARGS.DAT              REFUSED              - the rule's own half
 
-96.33.15.3 records the one spelling DOS still takes and this box does not -
+96.33.15.3 records the one spelling DOS still takes and this DOS does not -
 a path with the extension left off - so a reader who finds it refused knows it
 was measured rather than missed.
 """
@@ -46,7 +46,7 @@ import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
 ARGS = "build/dosargs360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 
 # (what is typed, what the program must report as its arguments, or None for
 #  "the console must refuse this line")
@@ -73,10 +73,11 @@ def main():
             fail("%s is missing - `make %s` builds the gate disk"
                  % (p, os.path.basename(p).split(".")[0]))
 
-    with os88ui.boot(SYS, apps=ARGS, machine="os8088_5150_herc_gla") as ui:
+    with os88ui.boot(SYS, apps=ARGS, machine="os8088_5150_herc_gla",
+                     quick=True) as ui:
         m = ui.m
-        if not ui.path(BOX):
-            fail("could not launch the DOS box")
+        if not ui.path(DOSPKG):
+            fail("could not launch DOS")
         dm = dosmap.package()
 
         def seg():

@@ -806,9 +806,14 @@ KSPECS = {
 }
 
 
+PFX = (0x26, 0x2E, 0x36, 0x3E, 0xF0, 0xF2, 0xF3)
+_IF_SITES = {}
+
+
 class Rig:
     def __init__(self, img, syms, board_cls, *a, tier=1, rom=None, **kw):
         self.syms = syms
+        self.img, self.img_len = img, len(img)
         mu = self.mu = Uc(UC_ARCH_X86, UC_MODE_16)
         mu.mem_map(0, 0x100000)
         mu.mem_write(0x100, img)
@@ -843,22 +848,76 @@ class Rig:
         mu.mem_write(0xFFF0, s["h_ret"].to_bytes(2, "little"))
         mu.reg_write(UC_X86_REG_AX, ax)
         mu.reg_write(UC_X86_REG_EFLAGS, 0x202)
-        h = None
+        hs = []
         if watch_if:
             b, prev = self.b, [1]
+
+            def flag(uc):
+                b.bad.append("interrupts on with the board reading wrong "
+                             "(R4 %d, T %d)" % (b.r4, b.T))
 
             def code(uc, addr, size, user):
                 f = uc.reg_read(UC_X86_REG_EFLAGS) & 0x200
                 if f and not prev[0] and b.wrong:
-                    b.bad.append("interrupts on with the board reading wrong "
-                                 "(R4 %d, T %d)" % (b.r4, b.T))
+                    flag(uc)
                 prev[0] = f
-            h = mu.hook_add(UC_HOOK_CODE, code)
+
+            # In real mode only sti, popf and iret RAISE IF, and the IF each
+            # leaves is known before it runs (1; the word at SS:SP; at
+            # SS:SP+4) while no port is touched in between, so `wrong` cannot
+            # move. Hooking just those instructions is the per-instruction
+            # watch above, exactly, at a fraction of its cost (it was 70% of
+            # the row). Code run OUTSIDE the image keeps the full watch.
+            def edge(uc, addr, size, user):
+                a = addr
+                op = uc.mem_read(a, 1)[0]
+                while op in PFX:
+                    a += 1
+                    op = uc.mem_read(a, 1)[0]
+                if op not in (0xFB, 0x9D, 0xCF):
+                    return
+                fl = uc.reg_read(UC_X86_REG_EFLAGS)
+                if fl & 0x200 or not b.wrong:
+                    return
+                if op == 0xFB:
+                    after = 1
+                else:
+                    ss = uc.reg_read(UC_X86_REG_SS)
+                    sp = uc.reg_read(UC_X86_REG_SP)
+                    sp = (sp + (4 if op == 0xCF else 0)) & 0xFFFF
+                    after = int.from_bytes(uc.mem_read(ss * 16 + sp, 2),
+                                           "little") & 0x200
+                if after:
+                    flag(uc)
+            for a in self.if_sites():
+                hs.append(mu.hook_add(UC_HOOK_CODE, edge, None, a, a))
+            lo, hi = 0x100, 0x100 + self.img_len
+            hs.append(mu.hook_add(UC_HOOK_CODE, code, None, 0, lo - 1))
+            hs.append(mu.hook_add(UC_HOOK_CODE, code, None, hi, 0xFFFFF))
+            # what the full watch's `prev` would hold on (re-)entering it
+            prev[0] = 1
         mu.emu_start(s[name], s["h_ret"], count=20_000_000)
-        if h is not None:
+        for h in hs:
             mu.hook_del(h)
         return (mu.reg_read(UC_X86_REG_AX),
                 mu.reg_read(UC_X86_REG_EFLAGS) & 1)
+
+    def if_sites(self):
+        """every image address an instruction that can raise IF could start
+        at: a byte FB/9D/CF and any run of prefixes in front of it"""
+        img = self.img
+        key = id(img)
+        if key not in _IF_SITES:
+            out = set()
+            for i, c in enumerate(img):
+                if c in (0xFB, 0x9D, 0xCF):
+                    out.add(0x100 + i)
+                    j = i - 1
+                    while j >= 0 and img[j] in PFX:
+                        out.add(0x100 + j)
+                        j -= 1
+            _IF_SITES[key] = (img, sorted(out))
+        return _IF_SITES[key][1]
 
     def rb(self, name, n=1):
         return bytes(self.mu.mem_read(self.syms[name], n))

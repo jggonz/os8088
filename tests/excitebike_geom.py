@@ -139,13 +139,13 @@ def boot_geometry(g):
         "720": ("build/os8088-720.img", "build/excitebike720.img", "os8088_5150_herc_sb_720_gla"),
         "1440": ("build/os8088.img", "build/excitebike.img", "os8088_xt_vga_144")}[g]
     system, disk = at(system), at(disk)
-    with os88ui.boot(system, apps=disk, machine=machine) as ui:
+    with os88ui.boot(system, apps=disk, machine=machine, quick=True) as ui:
         m = ui.m
         ui.open_drive("B")
-        ui.settle()
+        ui.still()
         before = F.paras(F.claims(m))
         ui.open("EXCBIKE.O88")
-        ui.settle()
+        ui.still()
         p = F.Probe(ui, sym)
         F.revealed(ui, p)
         assert p.w("artseg"), "the splash art did not load from the %s floppy" % g
@@ -166,10 +166,10 @@ def boot_geometry(g):
         assert p.b("fs") and not p.b("error")
         F.key(ui, "Escape", False)
         M.until(m, lambda _: p.b("fs") == 0, "Esc leaves the race", guest=30)
-        ui.settle()
+        ui.still()
         assert not p.b("error") and F.claims(m) == c_pre, "the claim map after Esc differs"
         ui.close(ui.window("Excitebike"))
-        ui.settle()
+        ui.still()
         assert F.paras(F.claims(m)) == before, "closing the window left the heap changed"
         print("boot %s: disk opens, splash art loads, the race runs (%d frames), Esc and close restore the heap: PASS"
               % (g, f0), flush=True)
@@ -190,19 +190,19 @@ def lowmem():
     emu_imports()
     sym = F.symbols()
     with os88ui.boot(at("build/os8088-360.img"), apps=at("build/excitebike360.img"),
-                     machine="os8088_5150_cga_gla_256k") as ui:
+                     machine="os8088_5150_cga_gla_256k", quick=True) as ui:
         m = ui.m
         # the first window: it plays (the floor machine holds ONE)
         ui.open_drive("B")
-        ui.settle()
+        ui.still()
         ui.open("EXCBIKE.O88")
-        ui.settle()
+        ui.still()
         first = F.Probe(ui, sym)
         F.revealed(ui, first)
         ui.open_drive("B")
-        ui.settle()
+        ui.still()
         ui.open("EXCBIKE.O88")                  # the second window: the code is shared, the bss and art are not
-        ui.settle()
+        ui.still()
 
         class Front(F.Probe):
             def __init__(self, ui, sym):
@@ -217,7 +217,7 @@ def lowmem():
         F.key(ui, "Enter", False)
         M.until(m, lambda _: p.b("error") != 0, "the refusal", guest=90)
         M.until(m, lambda _: p.b("fs") == 0, "the bracket ends", guest=30)
-        ui.settle()
+        ui.still()
         err, nomem = p.b("error"), p.b("nomem")
         assert err == 3 and nomem == 1, ("the refusal is not XB_ERR_MEM", err, nomem)
         assert p.w("gfxseg") == 0 and p.w("sprseg") == 0 and p.w("xc_dseg") == 0, "a claim survived the refusal"

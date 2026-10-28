@@ -97,7 +97,7 @@ def row(ui, m):
 def leg_board(syms, machine=BOARD, frame=0xE000, port=0x260):
     bad = []
     print("\n== leg board: %s" % machine)
-    with os88ui.boot(IMG, machine=machine) as ui:
+    with os88ui.boot(IMG, machine=machine, quick=True) as ui:
         m = ui.m
         seg, err = row(ui, m)
         want(bad, "EMS.DRV loaded", seg != 0, True)
@@ -147,7 +147,7 @@ def leg_board(syms, machine=BOARD, frame=0xE000, port=0x260):
 def leg_none(syms):
     bad = []
     print("\n== leg none: %s" % NONE)
-    with os88ui.boot(IMG, machine=NONE) as ui:
+    with os88ui.boot(IMG, machine=NONE, quick=True) as ui:
         m = ui.m
         seg, err = row(ui, m)
         want(bad, "EMS.DRV not loaded", seg, 0)

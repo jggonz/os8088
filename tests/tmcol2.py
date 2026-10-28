@@ -128,7 +128,7 @@ def main():
     C = consts()
     pitch, rw, colw = C["TM_ROW_H"], C["TM_RW"], C["TM_COLW"]
 
-    with os88ui.boot(KERNEL, apps=APPS, machine=MACHINE) as ui:
+    with os88ui.boot(KERNEL, apps=APPS, machine=MACHINE, quick=True) as ui:
         m = ui.m
         # THE REPORTED REPRO, in the order the harness can drive it: a Disk
         # window, a package, a second Disk window, then the Task Manager.
@@ -165,9 +165,11 @@ def main():
         # are cut from the FRAME - which is what SPEC.md 28.1.2 is about.
         pcolrows = (w.h - (C["TITLE_H"] + 1 + C["TM_ROW_Y"])) // pitch
         col2rows = (w.h - (C["TITLE_H"] + 1 + C["TM_C2_ROW_Y"])) // pitch
-        # A screen too short for every row folds IVT+Pad into System
-        # (SPEC.md 28.4.7), so the list it draws is one row shorter.
-        whole = C["TM_PROWS"]
+        # TM_PROWS counts System HMA's row, which an 8088 never draws: it has
+        # no RAM above 1MB (SPEC.md 28.4.14). A screen too short for every
+        # row also folds IVT+Pad into System (SPEC.md 28.4.7), so the list it
+        # draws is one row shorter again.
+        whole = C["TM_PROWS"] - 1
         if pcolrows + col2rows < whole:
             whole -= 1
         col2rows = min(col2rows, whole - pcolrows)
@@ -207,8 +209,10 @@ def main():
         drawn = sum(1 for v in c0 + c1[:col2rows] if v > 0)
         check(drawn == whole,
               "LIST: both columns together show the WHOLE process list",
-              "TM_PROWS is IVT+Pad, System and one row per instance slot, "
-              "less IVT+Pad where the screen is short (SPEC.md 28.4.7), and a short "
+              "TM_PROWS is IVT+Pad, System, System HMA and one row per "
+              "instance slot, less System HMA on a machine with nothing above "
+              "1MB (28.4.14) and IVT+Pad where the screen is short (SPEC.md "
+              "28.4.7), and a short "
               "screen is exactly where the list has to wrap rather than be "
               "truncated - it drew 3 of 13 before SPEC.md 28.1.2",
               got=drawn, want=whole)

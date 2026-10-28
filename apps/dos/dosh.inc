@@ -102,7 +102,7 @@ dsh_run:
     mov byte [dsh_quiet], 0         ; one cannot be read as this one's - which
                                     ; goes DOUBLE for the quiet flag, whose
                                     ; stale one is not a wrong diagnosis but a
-                                    ; box that never speaks again (96.30.7):
+                                    ; DOS that never speaks again (96.30.7):
                                     ; it is bss, so one `> NUL` silenced every
                                     ; dsh_say for the life of the instance,
                                     ; and a DIR then keeps printing NAMES
@@ -1637,7 +1637,7 @@ dsh_c_dir:
 ; --- dsh_dirsw - take DIR's switches out of the tail at SI ------------------
 ; in:  SI = the tail cursor
 ; out: CF=0 with [dsh_dsw] set and every `/X` REMOVED from the string in
-;      place; CF=1 = a switch this box has not got, nothing else promised
+;      place; CF=1 = a switch this DOS has not got, nothing else promised
 ; clobbers: flags (SI is preserved, and it is still the cursor)
 ;
 ; SPEC.md 96.33.9. DOS takes them ANYWHERE in the tail - `DIR /P *.COM` and
@@ -2381,7 +2381,7 @@ dsh_tab:
 ; --- DIR's switches, in [dsh_dsw] (SPEC.md 96.33.9) -------------------------
 ; The DOS 3.30 set is these TWO and nothing else, measured: /B answers
 ; `Invalid parameter` on the real thing exactly as /Z does, having arrived
-; with DOS 5, and this box reports 3.31.
+; with DOS 5, and this DOS reports 3.31.
 DSW_P       equ 1               ; pause a page at a time
 DSW_W       equ 2               ; five columns of names, no size and no date
 
@@ -2415,7 +2415,7 @@ dsh_s_rderr:    db 'Error reading file', 13, 10, 0
                                 ; (SPEC.md 96.30.7): the real thing answers a
                                 ; TYPE that cannot read through the CRITICAL
                                 ; ERROR handler - `Abort, Retry, Fail?` - and
-                                ; this box has none at the prompt. What it must
+                                ; this DOS has none at the prompt. What it must
                                 ; not do is keep saying `File creation error`
                                 ; about a verb that creates nothing
 dsh_s_toobig:   db 'File too large', 13, 10, 0
@@ -2425,9 +2425,8 @@ dsh_s_toobig:   db 'File too large', 13, 10, 0
 
 dsh_s_nodrv:    db 'Invalid drive specification', 13, 10, 0
 dsh_s_ver:      db 13, 10, 'os8088 DOS Version 3.31', 13, 10, 0
-                                ; **NOT "box" AND NOT "MS-DOS"** - this is not
-                                ; a box to the person typing at it and it is
-                                ; not Microsoft's. The VERSION stays 3.31
+                                ; **NOT "MS-DOS"** - this DOS is not
+                                ; Microsoft's. The VERSION stays 3.31
                                 ; because that is what AH=30h answers
                                 ; (SPEC.md 96.7), and a machine whose VER and
                                 ; whose programs disagree is worse than either

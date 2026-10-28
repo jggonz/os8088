@@ -149,7 +149,12 @@ cpu_detect:
     pop ax
     and ax, 0xF000
     cmp ax, 0xF000
-    je .is8086                  ; they came back set: nothing can clear them
+    mov al, CPU_8086            ; (a mov leaves the flags alone, so each
+    je .store                   ; verdict is loaded AHEAD of the jump that
+                                ; takes it: four bytes of `.ovl` against the
+                                ; two jumps-to-a-load this was, which SPEC.md
+                                ; 9.7.2's int 15h question spent) - they came
+                                ; back set: nothing can clear them
     mov ax, cx
     or ax, 0xF000               ; try to set bits 12..15
     push ax
@@ -157,15 +162,12 @@ cpu_detect:
     pushf
     pop ax
     and ax, 0xF000
-    jz .is286                   ; all four forced to zero: 286 in real mode
-    mov al, CPU_386
-    jmp short .store            ; the verdict travels in AL and is stored ONCE
-.is286:                         ; - three `mov byte [cpu_tier], imm8` were 5
-    mov al, CPU_286             ; bytes each where `mov al, imm8` is 2. AL is
-    jmp short .store            ; the caller's and is popped at .out; nothing
-.is8086:                        ; between here and the pad write reads it
-    xor al, al                  ; CPU_8086 = 0, so this is the 2-byte form too
-.store:
+    mov al, CPU_286             ; the verdict travels in AL and is stored ONCE
+    jz .store                   ; - all four forced to zero: 286 in real mode.
+    mov al, CPU_386             ; Three `mov byte [cpu_tier], imm8` were 5
+.store:                         ; bytes each where `mov al, imm8` is 2. AL is
+                                ; the caller's and is popped at .out; nothing
+                                ; between here and the pad write reads it
     mov [cpu_tier], al          ; A2 disp16, the accumulator form
 
     ; --- is a coprocessor socketed? (SPEC.md 41.1) ---------------------------

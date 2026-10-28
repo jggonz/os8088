@@ -62,7 +62,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine, quick=True) as ui:
         m = ui.m
         if not ui.path(PROG):
             fail("double-clicking %s opened no window" % PROG)
@@ -73,7 +73,7 @@ def main():
             rows[:] = mm.screen() or []
             return any("KEY" in r for r in rows)
         try:            # a GUEST budget: a loaded box cannot shorten it
-            os88marty.until(m, done, "the program's closing KEY line", poll=0.3, limit=180.0)
+            os88marty.until(m, done, "the program's closing KEY line", poll=0.05, limit=180.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:12],))

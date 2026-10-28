@@ -98,17 +98,25 @@ class Box:
 
 def run(kind, disk, viewoff, mapoff):
     img = os.path.join(ROOT, "build", "os8088-720.img")
-    with os88ui.boot(img, apps=disk, machine=MACHINES[kind]) as ui:
+    with os88ui.boot(img, apps=disk, machine=MACHINES[kind], quick=True) as ui:
         m = ui.m
         ui.path("B:/ACID2.GB")
-        seg, view = None, 0
-        for _ in range(60):
-            M.guest_sleep(m, 2)
-            seg = seg or find_seg(m, b"REALDMG", viewoff)
-            if seg:
-                view = int.from_bytes(m.read(seg * 16 + viewoff, 2), "little")
-            if view and int.from_bytes(m.read(view * 16 + S_FRAMES, 2), "little") >= 30:
-                break
+        st = {"seg": None, "view": 0}
+
+        def started(_):                 # polled, not slept: the same 30-frame
+            if not st["seg"]:           # condition, read as it happens
+                st["seg"] = find_seg(m, b"REALDMG", viewoff)
+            if st["seg"]:
+                st["view"] = int.from_bytes(
+                    m.read(st["seg"] * 16 + viewoff, 2), "little")
+            return bool(st["view"]) and int.from_bytes(
+                m.read(st["view"] * 16 + S_FRAMES, 2), "little") >= 30
+        try:
+            M.until(m, started, "the game's first 30 frames", poll=0.25,
+                    guest=120.0)
+        except M.MartyError:
+            pass
+        seg, view = st["seg"], st["view"]
         if not view:
             return "the package never started a game"
         keymap = lambda: bytes(m.read(seg * 16 + mapoff, 8))

@@ -16,10 +16,10 @@ under it is not a 4.77 MHz 8088, and the pixels are what is asserted.
 WHAT IT ASSERTS, after [vid_kind] settles on VID_VESA (4):
 
   vid_kind    4            vx_boot_x attached the image and bvs_switch took it
-  vid_ext     1            every planar body far-calls the driver (120.3)
   vid_cw/ch   1024 x 768   the mode Auto chose on this card (120.2.3)
   vid_planes  16           the DEPTH, which is what the save-under sizers
-                           multiply by (120.4)
+                           multiply by (120.4) - and what every planar
+                           body's hook tests, above 4 (120.3.1)
   vesa_row    DRVR_SEG != 0, DRVR_ERR == 0
 
 then a 1024 x 768 screendump: the menu bar's band at the top is not black
@@ -52,8 +52,9 @@ import os88qemu                                             # noqa: E402
 import shot                                                 # noqa: E402
 from os88geom import VID_VESA                               # noqa: E402
 
-SOCK = os.path.join(ROOT, "build", "vesa8.sock")
-PIDFILE = os.path.join(ROOT, "build", "vesa8.pid")
+# THIS PROCESS'S pair (tests/os88qemu.py RUNDIR), never a fixed file under
+# build/, and the images snapshot=on - docs/plans/SOAK-PARALLEL.md 17
+SOCK, PIDFILE = os88qemu.paths("vesa8")
 
 WANT_W, WANT_H, WANT_BPP = 800, 600, 8
 
@@ -74,10 +75,10 @@ def launch():
     """The standard VGA (QEMU's default, spelled out) and the gate disk."""
     os88fixture.need("build/vesa8.img", "build/apps.img")
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=off -vga std"
-        " -drive file=%s,format=raw,if=floppy -boot a"
-        " -drive file=%s,format=raw,if=floppy,index=1"
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
         " -serial msmouse"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (_B.at("build/vesa8.img"), _B.at("build/apps.img"), SOCK, PIDFILE),
@@ -190,9 +191,6 @@ def main():
                          % (kind, VID_VESA, seg, err))
             raise SystemExit("\n".join(fails))
 
-        ext = byte(q, "vid_ext")
-        if ext != 1:
-            fails.append("vid_ext %d, want 1" % ext)
         w, h = word(q, "vid_cw"), word(q, "vid_ch")
         if (w, h) != (WANT_W, WANT_H):
             fails.append("vid_cw x vid_ch %d x %d, want %d x %d (Auto on QEMU's "

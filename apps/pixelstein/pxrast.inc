@@ -189,10 +189,14 @@ px_go_fsx:
     call OSAPI_TASK_YIELD
     jmp short .spin
 .quiet:
+    xor ax, ax                      ; THE SHADOW IS PINNED FOR THE BRACKET
+    call px_shdecl                  ; (SPEC.md 97.9.2), LEMMINGS' shape
     mov ax, px_fsx_main
     mov bx, [px_win]
     xor cx, cx                      ; no worker kept: this loop IS the game
     call OSAPI_FSX_RUN
+    mov ax, px_shmv                 ; ...and movable on the desktop again
+    call px_shdecl
     inc word [px_brn]               ; brackets left: the gates wait on this
                                     ; word, because px_inbr clears at the
                                     ; TOP of the exit path and 0.9 s of

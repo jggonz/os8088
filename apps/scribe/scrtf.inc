@@ -1356,7 +1356,7 @@ sc_rpfin:
     mov ax, [sc_npic]               ; the CHP byte IS the index (88.9), and
     inc word [sc_npic]              ; the character carries no other format.
     call sc_rputp                   ; AL is that index and sc_rputp wants it
-    jnc .out                        ; there - the character it writes is
+    jnc .kept                       ; there - the character it writes is
     dec word [sc_npic]              ; SC_PICCH, which is the routine's own
     mov byte [sc_dtrunc], 1         ; business and not an argument to it.
     jmp short .drop                 ; CF=1 is a FULL document: no character
@@ -1367,6 +1367,10 @@ sc_rpfin:
 .drop:
     mov dx, [sc_rpseg]
     call OSAPI_MEM_FREE
+    jmp short .out
+.kept:
+    mov dx, [sc_rpseg]              ; registered, and named by its slot alone:
+    call sc_picmov                  ; it MOVES (SPEC.md 95.14)
 .out:
     mov word [sc_rpseg], 0
     pop di

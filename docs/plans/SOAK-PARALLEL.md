@@ -1757,3 +1757,536 @@ for it, which is also why only `/dev/null` was ever wrong and never `zero` or
 node's BIRTH time (`stat -c %w /dev/null`) laid against the soak's own row
 order, and then a `mknod` of our own to test nasm against without breaking
 the box.
+
+---
+
+## 17. THE LAST ONE-AT-A-TIME LANE — 85 rows, and why each one was in it
+
+**BUILT.** The question was the owner's: in a full soak 85 of 1,401 rows ran
+one at a time, and that lane was **3,866 measured seconds** of the run on
+2026-10-25 (`build/soak/20261025-140933`: 1,953 s of QEMU rows, 1,524 s of
+`builds=True` rows, 389 s of `alone=True` rows) — over an hour in which three
+of four cores did nothing of the soak's. Each row was asked why it had to,
+and the only answers accepted were *it uses every core itself* or *its answer
+is a host rate*. "It fails under contention" was not one: an emulator row
+runs in guest time, so a row that fails under load is doing something on the
+host's clock, and the fix is the row.
+
+### 17.1 What each row was there for, and the verdict
+
+| rows | why it ran alone | verdict | now |
+|---|---|---|---|
+| 45 QEMU rows already launching privately - `xtmp3live`, `hdtake*`, `cdrom*`, `httpmount*`, `httpinstall`, `netinst*`, `msegxms`, `dosxmsq`, `xmcheck`, `trkscrl`, `trkclick`, `dos*`, `minesrc`, `pxswin-qemu`, `vidclose`, `vidly*`, `rdxms`, `viddiskcpu`, `netcoexist`, `syscheck`, `fmtpair`, `weavevm`, `weavecanvas`, `colorpresets` | the runner put a row in the concurrent lane only if it needed `marty` - nothing about the row | HARNESS | the lane takes `qemu` rows (§17.2) |
+| 11 QEMU rows on a FIXED socket or a SHARED image in place - `vgadirty`, `heapmap`, `wheelps2`, `vesa*` (8), `vmmouse` | `build/qmp.sock`, `build/vesa.sock`; `build/apps.img` booted writable (the second machine on it is `Failed to get "write" lock`) | HARNESS | `os88qemu.paths()`, `snapshot=on`, a private blank disk for heapmap's IDE |
+| 16 QEMU rows booting through `make test` (or, for `wirezone`, building its disk with `make ethertest` first) - `thewire`, `wirezone`, `brarena`, `brcapacity`, `fddpage`, `wirechat`, `telansi`, `ethernet`, `brdownload` (3), `brmem`, `ethcfg`, `telzm`, `lemmings`, `excitebikeg1` | `build/qmp.sock` and `build/qemu.pid` spelled into the Makefile; the shared images write-locked; a `make` parse in the shared tree; and `builds=True` for the `make ethertest`/`browsertest`/`telnettest` each ran first, often after DELETING the built image because the guest dirtied it | HARNESS | `os88qemu.make_test(...)` with disk COPIES (so nothing is ever dirtied and nothing needs deleting) and `wants=` for the artefacts - 15 `builds=True` flags gone, `buildmatrix` the 16th |
+| `buildmatrix` | `builds=True` | LEGIT for the cores, HARNESS for the tree | its 99 knobs already build in `build/bm-<name>/`; its one shared-tree `make` (`associco.inc`, which under a frozen run rebuilt the OPERATOR's build/ while the row read the run's) is a `wants=`. It stays ALONE: it runs itself at `-j4`, so it saturates the box and sharing it buys no wall |
+| `excitebikeperf`, `-selfb`, `-perfherc`, `-selfbherc`, `pxsbench` | "A RATE, so it wants the machine to itself" | WRONG FLAG | the rate is MartyPC's cycle counter between frame marks, which no host load moves; nothing in them is host-timed. Shared the lane, passed at 8+ emulators on 4 cores |
+| `excitebikelap`, `-lapherc`, `-audiolap` | the same | TEST BUG | the reference rider's script is a 256-step ring the harness fed FROM THE BODY while the guest ran free, asserting it stayed ahead - about a host second of slack at MartyPC's 3.4x. The frame mark now STOPS and the feed runs there (a frame is at most `XB_STEPS_MAX` steps), so the ring is ahead by construction; the stop costs the guest no cycle |
+| `excitebikeaudiocap` | heard 3 of 4 engine tones in two parallel soaks | TEST BUG, already fixed | the capture is guest time (the debug server drains the speaker per emulated batch); the row had since stopped depending on the segmentation that moved. Shares the lane, passed under load |
+| `xtmp3eng` | `serial` | SPLIT | its RATE legs are `xtmp3rate`, ALONE: `ladder`, `slowdown` and `rungfail` (the stub's cost is spun on the PIT, so the verdict is guest CPU against QEMU's HOST clock: 1.05x has 5% headroom, and `rungfail`'s 4x Half calibrated at 0.87x under load), and the four that assert NO UNDERRUN on the SB16 (`playwav`, `pause`, `wavdirs`, `xtpeak` - the card drains its ring on the host's clock, and `playwav` underran under load). The other 21 legs are behaviour and share the lane. **Since 17.8 `xtmp3rate` shares it too**, its legs on an instruction-counted clock (`-icount shift=4`). `xtmp3live` asserts no underrun too and stays in the lane on evidence: its decode has QEMU's whole headroom over an XT, and it never underran in four loaded runs - it is the row to move first if it ever does |
+| `vidbankspkbank`, `vidbankspkfast` | `serial` | LEGIT host rate | the player benches key 1's decode on the PIT, which without `-icount` is the host's clock; at eight emulators on four cores it timed nothing and muted. ALONE - **until 17.8**: `-icount shift=6`, and the lane |
+
+So **the one-at-a-time lane was four rows**: `buildmatrix` (~540 s),
+`xtmp3rate` (~250 s) and the two speaker benches (~50 s) - about 840 s where
+it was 3,866. **Since 17.8 it is ONE**, `buildmatrix`, which runs itself at
+`-j4`: the three QEMU rate rows run on a fixed-speed guest and share the lane.
+
+### 17.2 What made QEMU shareable: MartyPC's answer, one emulator along
+
+`os88marty.launch` solved this for MartyPC long ago - a port, a directory and
+disks per instance. `tests/os88qemu.py` is the same thing:
+
+* **`RUNDIR`** is a directory per process, under `$OS88_QEMU_DIR` when the
+  runner hands the row one (else `/tmp/os88q-*`), and it owns the default
+  `SOCK`/`PIDFILE`. `/tmp` by NAME: the runner points a row's `TMPDIR` at
+  `build/tmp/`, and a worktree's path left no room in a socket's 108 bytes -
+  the first run failed exactly that way.
+* **`make_test(*knobs)`** is the Makefile's `test:` recipe (`TESTIMG`,
+  `TESTAPPS`, `TESTHD`, `ETHER`, `ETHDUMP`, `ADLIB`, `SB16`, `NOCARD`,
+  `VMPORT`, `MOUSEPORT=ps2`; a kernel knob is REFUSED by name rather than
+  ignored), on copies of the floppies - an image already inside `RUNDIR` is
+  the row's own scratch and boots in place (`scratch()` makes one, for a row
+  that reads its disk back). It points `os88qemu.SOCK` and
+  `tests/ethernet.py`'s `SOCK` at the machine, so every helper that defaulted
+  to "the" socket drives this one. The Makefile's pidfile is `$(QEMU_PID)`
+  now as well, for two machines started by hand.
+* **The runner sweeps a timed-out row's OWN directory**, never `build/*.pid`
+  (which in a shared lane could be any row's), and **charges a QEMU row's
+  timeout in its emulators' CPU too** - found by the pidfiles in that
+  directory, since `-daemonize` reparents them out of the row's tree. Before
+  that a QEMU row's timeout was wall seconds, and `vidlysplitbase` timed out
+  at 150 having done ~40 s of work on a box running eight emulators.
+* **`t_qemuown`** counts `make_test(` as a launch that owns its instance.
+
+### 17.3 The one thing that cannot be private: a fixed host port
+
+A slirp guest reaches the host at the gateway - `10.0.2.2:<n>` is the host's
+`127.0.0.1:<n>` - and the port is baked into fixtures: `WIRE.CFG` (8092),
+`HTTPDRV.CFG` (8095), `install-gate.o88`'s `IN_URL` (8096), `dospkt.asm`'s
+segment (8099), the browser fixture's links (8090). The remap that would make
+it private is `guestfwd`, and libslirp refuses it on the gateway:
+
+    -netdev user,id=n0,guestfwd=tcp:10.0.2.2:8090-cmd:cat
+    ... Conflicting/invalid host:port in guest forwarding rule
+
+So the port is TAKEN IN TURN. `Row(locks=("port:8090",))` names it, and the
+concurrent lane (`_locked_lane`) never runs two rows holding one name -
+picking another row meanwhile, lock groups and long rows first, rather than
+parking a lane on the wait. `os88qemu.lease_port(n)` is the cross-runner half
+(an flock on `/tmp/.os88port-<n>.lock`): another checkout's soak serving the
+port is waited for, where it used to be an `Address already in use` dressed
+as the feature. A row whose GUEST dials a port holds it even with no server
+of its own - dospkt's SYN to 8099 would otherwise be accepted by dosxlat's
+listener - and `telzm` moved from 8095 to 8098, having shared httpmount's.
+
+| lock | rows |
+|---|---|
+| `port:8090` | `ethernet`, `brdownload` (3), `brmem` |
+| `port:8092` | `thewire` |
+| `port:8093` / `8094` / `8097` / `8098` | `wirechat` / `telansi` / `httpinstall` / `telzm` |
+| `port:8095` | `httpmount`, `httpmountname` (+ `port:53`, its DNS stub), `netinst`, `netinstbad` (the drive their disk names) |
+| `port:8096` | `netinst`, `netinstbad` |
+| `port:8099` | `dosxlat`, `dospkt`, `dosnetarena` |
+
+### 17.4 The builds=True half
+
+Every QEMU `builds=True` row was building an artefact `wants=` can name -
+`make ethertest`, `browsertest`, `telnettest`, `wirechattest`, `thewiretest`
+- and most deleted the built image first, because the guest wrote to it.
+Booting a COPY ends that hazard outright, so the image is never dirty and the
+row declares it. **`builds=True` is on two rows now** (`ctoolchain`, full
+tier, and the fast `brcapacity-fixtures`, which the registry reads through a
+shared script), where it was 16 in the soak.
+
+### 17.5 What load found, and the shape of each fix
+
+Every converted row was run four wide with this box ALSO running another
+checkout's whole soak (four MartyPCs) and, for the last passes, two CPU hogs
+started and killed by PID - load averages of 11 to 18 on four cores, about
+twice the oversubscription a real soak runs at. Rows that had passed alone
+failed there, a different handful each pass, and every one was a host-timed
+step:
+
+* **HMP `sendkey` loses a key to a starved guest** - its release follows the
+  press by 100 ms of host time, and a guest that has not run in that window
+  takes both at one IRQ1. `telansi` typed `10..2.2:8094`; `lemmings` lost
+  its F11 pause, so the walking lemmings read as a save-under defect;
+  `excitebikeg1` never reached the race; `vidlybankcopy`'s Play never
+  started. The fix is in the CLIENTS rather than in 29 scripts: a plain
+  `sendkey <keys>` is CONFIRMED by `tools/qmp.py` (and so by
+  `xmcheck.qmp`, which is it in process) and by the four hand-rolled HMP
+  clients (`ethernet`, `telansi`, `thewire`, `wirechat`'s `Qemu.hmp`, and
+  `tools/heapmap.py`'s `Qmp`) - the press, then the release only once the
+  BIOS buffer's tail has moved, or after 0.3 guest seconds (inside the 500 ms typematic delay) for a key the ROM
+  stores nothing for, modifiers held across it. `os88qemu.key` was that
+  already, for one row; `type_text` is it for a string, and three copies
+  of a typing loop are one.
+* **A dead-reckoned click lands somewhere else.** `xmcheck.goto` - under
+  every `xmcheck.click`/`dblclick` - was `tools/mouse.py`, which pins
+  against the clamp and walks back on host sleeps; `httpmountname` and
+  `rdxms` timed out waiting for a listing the double-click never asked
+  for. It drives `os88qemu.mouse_to` now, closed loop on `mouse_x`, and
+  falls back to `tools/mouse.py` only where the kernel's words cannot be
+  read.
+* **A driver's segment read mid-boot.** `brmem` and `ethcfg` read
+  `eth_mode 211`, `dhcp_st 194` and an address of `195.249.195.80` for the
+  whole row: `drv_tab`'s segment is armed BEFORE the image is read, and
+  measured it moves once more 0.2 s AFTER the desktop is up
+  (39040 -> 39296). `os88qemu.kernel_up` gates on the boot and the segment
+  is taken once it has held still (`quiesce`), in `ethernet`, `ethcfg` and
+  `brdownload`. Earlier still is worse: `drv_tab` is `.bss`, and until stage
+  2 has expanded the packed kernel those bytes are the LZ4 stream - a junk
+  word satisfied `dosnetarena`'s poll and the row reported "never attached"
+  off the cleared one, in 0.7 s. The three DOS NIC rows gate on the boot too.
+* **A fetch is not a layout.** `brdownload` read the line table the moment
+  the page's state said loaded, and a starved guest had no line holding the
+  link yet; it waits for `br_nlines`/`br_doclen` to hold still
+  (`brcapacity` had already learned this).
+* **A raise is not finished when the window is frontmost.** `minesrc` case G
+  (red once before, in the 2026-09-21 soak) pressed again after 20 quiet
+  ticks; it waits for the UI to go idle.
+* **A fixed pause as a load's whole budget.** `lemmings` gave a C package
+  three paced seconds to open its window; on QEMU those are the host's, so
+  a starved guest did less of the load in them. It waits on the window.
+  `xtmp3eng`'s `Rig.until` was `time.time()` and its 29 pauses
+  `time.sleep` - `XTMP3's window` stopped arriving inside 20 host seconds;
+  both are the guest's clock now (`gpace`), but for one 45-second WALL
+  soak that is about QEMU's own IRQ0 rate.
+* **`xtmp3live`'s seek** read the clock after a host `time.sleep(0.5)` meant
+  to clear a 14 ms transient; it waits for the same second on two readings a
+  guest tick apart.
+* **A ceiling that was too low to be one.** `telansi` gave the Ctrl+]
+  bracket 5 guest seconds; it has 30, and ends the moment the byte is set.
+* **The Excitebike lap feed** (17.1).
+* **A QEMU row's wall-clock timeout** (17.2).
+* **`xtmp3eng`'s rate legs and the vidbank speaker benches** are the
+  honest kind: QEMU's guest clock is the host's, so a starved guest IS a
+  slower machine (17.1) - until `-icount` made the guest's clock its own
+  (17.8).
+
+**The lesson under all of these is QEMU's and not MartyPC's**, and
+`tests/os88qemu.py`'s clock note says it now: without `-icount` a QEMU tick
+is the HOST's, so a tick budget cannot be shortened by load the way a
+`time.sleep` is - but it buys a starved guest less of the machine. On
+MartyPC a guest second is a fixed amount of work; on QEMU it is not. So on
+QEMU a budget is a generous CEILING on a wait for state, never a pause that
+something is assumed to have finished inside, and an answer that IS the
+guest's speed against that clock is a host rate.
+
+### 17.6 The runs, and what is still unconfirmed
+
+All four wide, all on a four-core box ALSO running another checkout's whole
+soak; "hogs" is two `python3 -c 'while 1: pass'` started and killed by PID.
+The rows are every `serial` QEMU soak row plus the nine former `alone=True`
+MartyPC rows; each pass ran the code as it stood, so the failures shrink as
+the fixes in 17.5 landed.
+
+| pass | load | rows | wall | passed | failed, and what each one was |
+|---|---|---|---|---|---|
+| 1 | soak only | 77 QEMU | 995 s | 70 | xtmp3live (seek sleep), vidbankspk x2 (host rate), vidlysplitbase (wall timeout), xtmp3eng (slowdown leg), lemmings (sendkey), telansi (sendkey) |
+| 2 | soak only | 43 (excitebike set + fixed rows) | 1,247 s | 41 | excitebikeg1 (sendkey); excitebikeflowherc (MartyPC, already concurrent - 17.7) |
+| 3 | + 2 hogs | 87 | 1,525 s | 80 | httpmountname (dead-reckoned click), brmem + ethcfg (driver segment), xtmp3eng (host waits), lemmings (window pause), rdxms (click), vidlybankcopy (sendkey) |
+| 4 | + 2 hogs | 87 | 1,414 s | 80 | vidbankspkfast (host rate), brdownload-length, telansi (5 s ceiling), httpinstall + vidclose + vidlysplituntimed (double-click split), xtmp3live (window) |
+| 5 | + 2 hogs | 87 | 1,309 s | 84 | xtmp3eng (playwav underrun), minesrc + trkscrl (a one-argument `hmp` the burst double-click called with four) |
+| 6 | + 2 hogs, + buildmatrix | 88 | 3,979 s | 84 | brdownload-auto (layout), dosnetarena (boot-time `.bss`), xtmp3eng (rungfail), minesrc (case G). buildmatrix passed, 2,445 s at load 16 against its 540 alone |
+
+**The fixes for pass 6's four failures are NOT confirmed under load** -
+they landed after it, and a seventh pass was stopped at the owner's word
+because the passes were slowing the soak beside them. The next full soak is
+their test. Nothing here has run at the soak's own width on an otherwise idle
+box, which is the condition the lane will actually see; every pass above was
+at roughly twice that oversubscription.
+
+### 17.7 What is left
+
+* ~~**`-icount` for the QEMU rate rows.**~~ DONE - 17.8. `xtmp3rate` and
+  `vidbankspk*` run on an instruction-counted clock and share the lane; the
+  one-at-a-time lane is `buildmatrix` alone.
+* ~~**`trkscrl`'s own QMP client**~~ DONE - 17.9: its one `sendkey` is the
+  confirmed press-then-release over its own connection. `sendkey <keys>
+  <hold>` with an explicit hold time is still deliberately left alone
+  everywhere.
+* ~~**Host sleeps in the other QEMU rows.**~~ DONE for every registered row
+  that had one doing a guest's job - 17.9 is the list, and what was LEFT
+  as a host sleep says why at the site.
+* ~~**A shared image booted writable.**~~ DONE - 17.10: `ps2mouse` and
+  `vesashut` held `build/os8088.img`/`apps.img` writable and locked every
+  other row out of them; every daemonised launch now raises QEMU's own
+  words and names the holder.
+* ~~**`brdownload-length`**~~ DONE - 17.11: the row read a scratch line
+  INSIDE the completion's repaint; it reads the ETA field off the glass.
+* **`vesagor`** - 17.11. The "not one of the seven Enters" reading was the
+  loop's, and one way an Enter is lost here is found and closed (the key
+  helpers released a key the ROM had not yet stored); the failing run's
+  full-screen field reading is NOT explained, and the row now keeps the
+  picture and names where a lost Enter went. The other half of the loss is
+  gone at its source: SPEC.md 9.7.2 takes the key through `int 15h AH=4Fh`
+  wherever the ROM offers it (SeaBIOS does), so `kbm_isr` no longer reads
+  port 60h ahead of the ROM and QEMU's 8042 has no byte to drop.
+* ~~**`excitebikeflow` / `excitebikeflowherc`**~~ DONE - 17.12. Two
+  different causes. `excitebikeflow`'s 2026-10-25 failure (`state 2 (it is
+  3)`, the held Enter) was the GAME's and was already fixed by dc527c99,
+  which landed on the integration branch the same afternoon this bullet was
+  written on another. `excitebikeflowherc`'s `Up flips the mode` was the
+  HARNESS: the key's release was sent on the host's clock, a stalled client
+  held Up past the keyboard's 0.5 s typematic delay and the repeat flipped
+  the mode back. Every key is now held an exact number of guest cycles.
+* **`ftpd.py`/`ftpkeep.py`** are unregistered (`t_registry`'s exemptions),
+  and each runs `make ftpdtest`/`ftpkeeptest` in the tree - ftpd.py deleting
+  and rebuilding `build/ether360.img`, a `wants=` of the browser rows - and
+  boots its images `copy=False`. Harmless by hand; not lane material.
+
+### 17.8 The rate rows on a fixed-speed guest: `-icount`
+
+`os88qemu.icount(shift)` is `-icount shift=N,align=off,sleep=on`. Every
+guest instruction costs 2^N ns of VIRTUAL time, and QEMU's PIT, the BIOS
+tick, the SB16's DMA and the wav audiodev all run on that clock, so a bench
+spun on the 8253 counts instructions, and a starved host stretches the wall
+time and moves no answer. `align=off` runs as fast as the host can;
+`sleep=on` keeps an IDLE guest (`hlt`) on real time, which a disk waiting
+on the host needs (with `sleep=off` virtual time warps to the next timer
+while the I/O is still in flight). `OS88_QEMU_ICOUNT=0` is the A/B and `=N`
+forces a shift. The two known catches were real and neither bit: the SB16
+DOES move to virtual time, which is the point - its ring drains in
+instructions, against the decoder's own - and the disk throttle stays on
+real time, where neither row's answer is a disk rate. `vidlysplit`'s
+slow-disk rows ARE about one, so they stay off icount, and must.
+
+**xtmp3eng's ladder, the same fixtures, the stub's measured speed a rung:**
+
+| arm | capable 4.00 | middling 1.00 / 2.00 / 4.00 | slower 0.60 / 1.00 / 2.00 | xt44 0.80 / 2.00 | xt 0.50 / 0.80 |
+|---|---|---|---|---|---|
+| no icount, idle box | 3.91 | 0.98 / 1.89 / 3.90 | 0.59 / 0.99 / 1.92 | 0.78 / 1.91 | 0.49 / 0.78 |
+| no icount, 2 CPU hogs | 3.39 | 0.94 / 1.83 / 3.37 | 0.50 / 0.83 / 1.71 | 0.78 / 1.73 | 0.47 / 0.76 |
+| shift 4, idle | 3.72 | 0.98 / 1.93 / 3.73 | 0.59 / 0.98 / 1.93 | 0.78 / 1.93 | 0.49 / 0.78 |
+| shift 4, 2 CPU hogs | 3.72 | 0.98 / 1.93 / 3.73 | 0.59 / 0.98 / 1.93 | 0.78 / 1.93 | 0.49 / 0.78 |
+| shift 6, idle | 3.08 | 0.93 / 1.75 / 3.12 | 0.57 / 0.93 / 1.75 | 0.75 / 1.75 | 0.48 / 0.75 |
+
+Without icount two hogs take 13% off the capable machine and 15% off the
+slower one's 0.60x - more than the 1.05x leg's 5% of headroom. With it the
+loaded figures are the idle ones TO THE DIGIT. The SHIFT is the trade: the
+stub's own work costs 2^N ns an instruction, so a larger shift is a slower
+guest under the configured rung, and at 6 a configured 1.05x reads under
+1.0 - the slowdown leg would underrun by construction. **Shift 4** (62.5
+MIPS) reads a configured 1.00x as 0.98, as the idle box did, and costs the
+seven legs **295 s against 198** idle; under two hogs (load to 12) **342,
+369, 347 and 327 s, every leg passing**, four passes of four.
+
+**vidbank's speaker benches take shift 6.** A speaker play is a PIT write a
+sample, icount ends a translation block at every I/O instruction, and at
+shift 4 the play ran ~20 host seconds a guest second (`30 frames`: 18 ticks
+in 20.6 s) - `spkbank` 80 to 217 s against 26 without icount. At 6 the bench
+reads 52 (520 us a decode; 12 at shift 4, and 266-387 without icount, whose
+cost there is MMIO the icount model makes nearly free) against yardsticks of
+1 and 65,535 - margins of 26x and 630x. `spkbank` 50-52 s and `spkfast`
+17-22 s under two hogs, every run green from the fix below on.
+
+**And it found the row's real flake, which was not the clock.** The first
+pass under hogs failed `spkbank` *from key 1 the bench timed nothing*. One
+`sendkey right` is TWO keystrokes at the player on QEMU (the extended key's
+E0 prefix; `tests/trkscrl.py` had measured arrows 2, every ASCII key 1), so
+the step to key 1 went 0 -> 2 and the step back 2 -> 0, and the loop reached
+key 1 only by reading it BETWEEN the two strokes - after which the second
+stroke moved the selection under the Play. Waited out properly it
+oscillated, 15 steps in one run. The keypad's 6 and 4 are the same scan
+codes with no prefix (NumLock off: the ROM's Right and Left) and step once.
+
+What icount CHANGES, and why it is these rows only: the cost model. An I/O
+or MMIO instruction costs what a register move does, where without icount
+QEMU's device emulation is most of the host time - so a bench's absolute
+number is a different machine's, and the verdicts survive because they are
+relative (rungs against each other, a decode against a yardstick). A row
+ABOUT host behaviour, or whose throttle is the rate it compares, cannot use
+it.
+
+### 17.9 The host sleeps, row by row
+
+Prioritised by the soaks' FAIL lines (`build/soak/*/run.log` in both
+checkouts - `vesafsx`, `rltune` and `brdownload*` had failed) and by the
+count of sleeps. Every one below waited in HOST time for GUEST work; on an
+idle box each conversion is the same wait, and on a loaded one it is the
+same amount of the machine.
+
+| row(s) | what it was | what it is |
+|---|---|---|
+| `rltune`, `brarena`, `brcapacity`, `brdownload*`, `ethcfg`, `lemmings`, `excitebikeg1`, `thewire`, ftpd.py, ftpkeep.py | `ethernet.Mouse`: tools/mouse.py per gesture, pin-and-walk on paced moves. `rltune` died in it in the 2026-10-25 soak (`to 592 54`, exit 1, in `dispcp.open_drive`) | closed loop on `mouse_x`/`mouse_btn` (`os88qemu.mouse_to`/`mouse_button`/`mouse_dblclick`), tools/mouse.py only where those words cannot be read; each verb's guest pauses kept, in guest seconds. `thewire`'s own copy of the dead-reckoned class is now this one on its socket |
+| the browser fixtures (`ethernet`) | twelve `while len(srv.requests) < N and time.time() < deadline` | `os88qemu.acted`: the deadline in guest seconds |
+| `vesafsx` (red 2026-10-25: Alt+Enter took no bracket), `vesapref`, `vesablit4`, `vesagor` | a 60 s host deadline on `vid_kind`, then `pace(12)` "for the autostart's load and first paint"; `pace(4)`/`pace(5)` around Alt+Enter and Esc | `vesa.desk_up`: `kernel_up`, `vid_kind`, the autostart's instance live, `ui_done`; `vesafsx` waits on `fsx_task` in and out and on the card's mode. Declared 90 s and running in 3-25, they are re-declared |
+| `rltune` | `until`: a host deadline | `acted` |
+| `thewire` | File > Refresh as down / `sleep 0.5` / to / `sleep 0.4` / up | each step waited on `menu_dropd`, then `menu_sel` |
+| `trkscrl` | `sendkey` raw over its one QMP connection (the last unconfirmed client); a dead `goto`/`click` on a host PACE | the press, the ROM's tail moving, the release - over that connection; the dead code deleted |
+| `netinst` | `sendkey` + `sleep 0.3`; `sleep 3` and a four-second HOST quiesce of C: across the Restart; `sleep 4` for the autostart | guest pauses and `os88qemu.quiesce` (the POST's tick re-set counts as one tick) |
+| `netcoexist` | `system_reset`, `sleep(1.0)`, then a desktop wait the OLD kernel's RAM could satisfy | `desk_rows`/`menu_nbar` zeroed (`os88qemu.poke`) before the reset, `kernel_up` after |
+| `httpmount`, `httpmountname` | `QH.click`: tools/mouse.py | `mouse_click` |
+| `lemmings` | `pace(8)` after the boot | `kernel_up` |
+| ftpd.py (unregistered) | 35 sleeps; a 200 x 0.4 s HOST poll for DHCP; a host window poll; a STOR-after-LIST timed in host seconds | `gpace`; DHCP after `kernel_up`, on guest seconds; the STOR timed in guest seconds (a starved guest is not a SYN backoff). 387 s, all assertions passing |
+| ftpkeep.py (unregistered) | host settles and pauses; a 120 s host deadline for 1.2 MB on the disk | `ui_done`, `gpace`, `acted`; all assertions passing |
+
+Left as host sleeps, each with its reason at the site: a SERVER's pacing
+(`ethernet`'s chunk delay, `brdownload`'s, `brnav`'s `_slow`, `netinstbad`'s
+hold); a socket or file appearing, a process exiting; `lemmings`' relative
+walk (the msmouse line's pacing - the chardev queues a step, none is lost);
+`vmmouse`'s drag (absolute positions: a step polled late is overtaken, not
+lost); `telansi`/`telzm`'s 0.3/0.6 s around a host listener; `hmahiber`'s
+`host_wait` (sectors QEMU has that the file does not yet). `vesabench` still
+polls its report on a 300 s host deadline: a bench, nothing in it failed.
+
+**The runs.** Two lanes, no hogs: the 22 converted rows, 21 green
+(`brdownload-length`, 17.7). Two lanes and two CPU hogs started and killed
+by PID, other agents' emulators beside them (load to 7.9): 28 rows - every
+converted one, 17.10's two victims and the three rate rows - 27 green
+(`vesagor`, 17.7).
+
+### 17.10 A shared image booted writable locks everyone else out
+
+In a four-lane pass `wheelps2` and `vmmouse` died ~0.3 s after launch,
+`exit 1`, and passed alone. Both boot the TREE's images `snapshot=on` -
+read-only - and QEMU refuses even that while ANOTHER QEMU holds the same
+file writable:
+
+    qemu-system-i386: Failed to get shared "write" lock
+    Is another process using the image [build/apps.img]?
+
+Two rows did: **`ps2mouse`** (full tier; `build/os8088.img` and `apps.img`,
+in place) and **`vesashut`** (`build/vesa.img` and `apps.img` - and the Shut
+Down it presses WRITES to them, so it was dirtying the tree's images too).
+Both boot `snapshot=on` now, on `os88qemu.paths()` sockets in place of fixed
+`build/*.sock`. Every other launcher was checked: `cdrom`, `vidxms` (and its
+`Q`'s callers), `p2hiber`, `redline`, `syscheck`, `vidspkat`, `hdtake`,
+`httpinstall`, `httpmount`, `colorpresets`, `fmtpair`, `heapmap`,
+`vesabench` and the xtmp3 rigs boot private copies or `snapshot=on`, and
+`make_test(copy=False)` has two callers, ftpd.py and ftpkeep.py, booting
+images they built themselves.
+
+**`os88qemu.start(cmd, ...)`** is `subprocess.run` for a daemonised QEMU
+that raises `QemuRefused` with QEMU's own stderr and, for a lock, every live
+QEMU whose command line names the file, with its pidfile - which names the
+row's own directory. All 24 daemonising files use it, and `t_qemuown`
+(fast) fails a file that daemonises any other way, mutation-tested.
+**The proof**: `wheelps2` and `vmmouse` started 1.5 s after a writer, all
+three at once:
+
+| writer | wheelps2 | vmmouse | what the victims said |
+|---|---|---|---|
+| `ps2mouse` as it was | exit 1 | exit 1 | `held by: pid 17501 (pidfile .../build/ps2.pid): file=build/apps.img,format=raw,if=floppy,index=1` |
+| `vesashut` as it was | exit 1 | exit 1 | the same shape, `build/apps.img` and `build/os8088.img` |
+| `ps2mouse` now, 3 rounds | ok x3 | ok x3 | |
+| `vesashut` now, 3 rounds | ok x3 | ok x3 | |
+
+### 17.11 A scratch line read mid-paint, and a key released before it was taken
+
+**`brdownload-length`.** `br_dl_disptxt` is not the ETA's buffer. It is one
+scratch line that `br_dl_drawcut` (the File, Source, Destination and Status
+rows), the Speed field and the ETA field each compose into and draw at once
+(`apps/browser/brdownload_paint.inc`), and `br_dl_onwake` writes `DL_DONE`
+and THEN repaints the whole manager. The row polls that state byte, so it
+read the buffer inside the repaint. Sampled as fast as QMP allows after
+`DL_DONE` on an IDLE box, the line reads
+
+    '0 sec' -> 'DOWNLOAD.BIN' -> 'http://10.0.2.2:8090/download-te' ->
+    'B:\DOWNLOAD.BIN' -> 'Download complete.' -> '5 KB/s' -> '0 sec'
+
+so the failure needed no load at all, only a read landing between the Source
+row's drawcut and the Destination row's. **It is not a product bug**: every
+painter runs on the UI task and draws what it composed before the next one
+writes, so the screen never shows another field's text. The assertion now
+waits for the UI task to finish with the completion (`ui_done`) and reads
+the ETA field's cells off a screendump, matched against the kernel's own
+glyphs (`[font_seg]:[font_base]`, `tests/glass.py`'s reason), until it
+holds - a timer pass still armed from the transfer repaints the manager once
+more, and a dump inside that white fill is a blank, not an answer. **Broken
+on purpose** (the ETA drawn at x+208 instead of x+200) it fails `the
+completed ETA field shows ' 0 sec' on the glass` - and the buffer read
+passed that build, the buffer still saying `0 sec`. Two waits on the same
+path were pauses and are state now: the link menu was read the instant
+`tools/mouse.py` returned (`br_ctxopen`), and the Enter into the Save chooser
+went one guest second after the click (`fdlg_win`). Two lanes and two CPU
+hogs, the other lane `vesagor`: 22 of 22.
+
+**`vesagor`.** Four findings, and the last is what is still open.
+
+1. *The reading was the loop's.* It waited `gr_setupfield > i` and carried
+   on either way, so ONE lost Enter fails all seven waits. Dropping Enter 1
+   on purpose reproduces the failing line exactly - `after seven Enters the
+   state is 5`, six questions answered. "None of the seven reached
+   Gorillas" was never established.
+2. *How an Enter is lost on this row.* Gorillas' entry proc arms the
+   key-state map (`OS88_ALTENTER_SEED`) and no mouse ever speaks here
+   (`mou_ptr` 0 for the whole row: the msmouse is attached and never moved),
+   so `kbm_isr` peeks port 60h on every IRQ1 - and QEMU's 8042 loses a press
+   queued together with its release (SPEC.md 9.7). Sent as one pair at the
+   setup page: 7 of 7 Enters lost, the buffer's tail never moving.
+3. *The helpers made that pair whenever the guest was late.* `tools/qmp.py`'s
+   `key` and `os88qemu.sendkey` released ANY key after 0.3 guest seconds,
+   seven ticks, stored or not - the ceiling meant for a key the ROM keeps
+   no buffer entry for applied to every key. Press-to-store on this row
+   over 203 Enters, two lanes and two hogs, in ticks as a QMP poll sees
+   them: 157 within the tick, 37 one, 7 two, 2 four - so seven is a margin
+   and not a guarantee. **A/B**, IRQ1
+   masked at the master 8259 for one host second while IRQ0 runs (HMP `o
+   /b 0x21`): the old `tools/qmp.py` lost 3 of 3, the new one and
+   `os88qemu.sendkey` delivered 3 of 3. A FLAG key (shift, alt, ctrl, the
+   locks) is still confirmed by 0040:0017 inside `secs`; every other key
+   waits for the tail up to 10 guest seconds - `os88qemu.key`'s own default
+   and `type_text`'s, a ceiling left the moment the tail moves - and a tail
+   that never moves is said on stderr. Once the kernel takes the scancode
+   from `int 15h AH=4Fh` instead of the peek (branch `kbd4f`, SPEC.md
+   9.7.2), a queued pair stops being a loss on QEMU at all; the helper is
+   right either way.
+4. *What is NOT explained.* The failing run's field read `blue region
+   1023x743, 0 sky rows, longest solid building run 847 px`: blue at both
+   screen edges, the menu bar to the dock. The setup page and the choice
+   page read 527x263 in the window whether or not an Enter was lost; so do
+   a stuck map Alt bit (Gorillas enters `gr_exclusive` and waits in
+   `gr_release_chord`, the seven Enters left in the buffer) and a ROM Alt
+   flag (every Enter is fetched, and Gorillas ignores what it is handed),
+   each poked in to see. Something blue was on the glass outside Gorillas'
+   window, and that is not a key. It did not recur in 36 runs of the old
+   Enter loop (without the `ui_done` guess) nor in 10 of the new, all two
+   lanes wide under two hogs, and the run left no picture. The row now
+   confirms each Enter answered exactly one question before the next goes,
+   stops at the first that did not with the buffer's head and tail either
+   side, the
+   map's Alt and Enter bits and latch, the ROM's shift flags, `gr_fs`, the
+   fsx bracket, the saver, the front window and whether the instance moved,
+   and saves the screen to `build/vesagor-fail-<pid>.png`, as it does when
+   the field check fails. A test that dropped Enter 3 on purpose stops
+   there: `buffer head/tail 34/34 -> 34/34 ... state 5 field 2`.
+
+That pass ran `vesagor` in the HOST pool beside `rltune` alone: it declared
+no `needs` and no `serial`, so `os88test` put it with `par` rather than in
+the emulator lane, and it would not have skipped on a box without QEMU. It
+declares `needs=("qemu", "nasm"), serial=True` now, as its siblings on the
+same disk do (`vesasu` has the same gap and is not changed here). The same
+pass rules out a shared file for that run, though the file was real:
+`vesa.screendump` wrote every `vesa*` row's dump to the one
+`build/vesa-shot.ppm` and unlinked it, so two of them in the lane's two
+slots could read each other's screen. It writes into the process's `RUNDIR`
+now.
+
+**What the key helpers reach, run once.** Every QEMU row whose script sends
+a plain `sendkey` through `tools/qmp.py` or `os88qemu`, plus the `vesa*`
+rows `vesa.screendump` serves - 75 rows, two lanes, no hogs: 71 passed,
+three skipped (`hmahiber`, `p2hiber`, `hmadosret` want QEMU 9) and
+`ps2mouse`, the full tier's, passed on its own. **`hmadrv` failed once**,
+`...and gave the block back with the stream`, and passed alone four times -
+a third flake with its cause in the code: `sbl_stop` publishes
+`[sbl_str_act]` = 0 FIRST and frees the double buffer afterwards
+(`sbl_unpin` -> `sbl_dma_put`, which zeroes `[sbl_seg]` last), and the row
+waited for the flag and then read the block. It waits for the flag AND the
+buffer now; a driver that never frees it still fails ten guest seconds on.
+
+### 17.12 Excitebike's flow rows: one game bug, and a key released on the host's clock
+
+**`excitebikeflow`, 2026-10-25 soak** (`/home/user/wt`, e01d797d): `state 2
+(it is 3)` in `item_menus` - the mode screen's Enter, held ~2.7 guest seconds
+on purpose, ran the course screen straight into a race. That was the GAME:
+`xb_rdkey` takes one Enter per press, and a typematic repeat and the break
+after it can land inside one 18 ms frame, so the next poll read Enter up and
+took the repeat still in the BIOS buffer as a new press. dc527c99 (SPEC.md
+102's paragraph) drops the Enters at the buffer's head when the release is
+seen; its own sweep was 5-6 of 24 release phases red before and 0 after. It
+was on the integration branch before 17.7's bullet was written on this one,
+which is why the bullet said "not diagnosed".
+
+**`excitebikeflowherc`, pass 2 of 17.6** (`Up flips the mode`, 36.9 s in, a
+fifth MartyPC on the four-core box): the HARNESS. The mode screen's Up and
+Down TOGGLE the selection (`flow.inc` `.flip`), so a key that repeats is two
+presses. `Flow.key` held a key with `key(up=False)`, `pace(.05)`,
+`key(down=False)`: the press and the release were separate commands with the
+guest running free between them, so the hold was whatever the client's
+polling made it. And MartyPC's 83-key keyboard repeats a key held past
+**500 ms** (`keyboard_common.rs`), in guest time.
+
+* **The holds, measured** off the cycle counts the debug server answers each
+  `key` with: 2,106 short keys across one idle run and seventeen loaded ones
+  (three, six and eight lanes, two hogs, load to 8.6) were 0.267-0.317 guest
+  seconds - all within 0.2 s of the delay, none past it. That is the margin a
+  host stall eats: the guest runs ~4.5x real time, so 45 ms of the client
+  not running is 0.2 guest seconds.
+* **A host stall, injected** (the client sleeping before it sends the
+  release, nothing else changed): 60 ms put Down at 0.533 guest s and the row
+  failed `Down flips it back` - the same assertion's twin; 150 ms put every
+  arrow at 0.62-0.93 and it failed later, in `to_race`'s `the mode cursor`,
+  because the parity of the repeats decides which line sees it.
+* **Exactly, with no host in it**: Up held 0.45 guest s passes, 0.55 fails
+  `Up flips the mode` - the soak's own line.
+
+**The fix** is `os88marty.keystroke(m, name, hold)`: pause, press,
+`advance` by the hold's cycles, release, `go`. The machine is stopped while
+the host decides anything, so no stall reaches the hold; every key in
+`excitebike_flow.py` goes through it (`Flow.key`, 0.2 guest seconds, and the
+re-entry Enter in `item_leave`; the deliberate long Enter is 2.7). It is
+`tests/isotronlive.py`'s `tap_exact`, which isoTron found the same way. With
+the same 150 ms stall injected the whole Hercules flow passes and all 28
+arrow holds read exactly 0.200. Loaded, both rows twice at once under two
+hogs (four MartyPCs and two hogs on four cores), two passes: 8 of 8. Alone
+the Hercules row is 67.5 s, as before.
+
+**What is NOT swept.** The pattern is everywhere a test holds a key:
+`key(up=False)` appears in 67 files under `tests/`, `excitebike_front.key`
+is the same three lines for `excitebikefront` and its siblings, and
+`Marty.alt`'s `hold` is a `pace`. A key whose repeat is harmless (Enter into
+a reader that drops repeats, an arrow at a list's end) cannot fail this way;
+one that toggles, counts or navigates can, and that is the next row to look
+at when one of those goes red under load.

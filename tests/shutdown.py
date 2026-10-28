@@ -30,7 +30,7 @@ def run(card, machine, image):
     offsets, eq = S.syms(), S.equates()
     slot = S.linear("CPFP") + eq["CPE_SHUTDOWN"] * 4
     with os88ui.boot(image, apps="build/apps360.img", machine=machine,
-                     settle=False) as ui:
+                     quick=True) as ui:
         m = ui.m
 
         def seg():

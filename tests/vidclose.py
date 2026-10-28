@@ -59,7 +59,7 @@ def main():
                         os88build.at("build/video.o88")],
                        check=True, capture_output=True)
         # a SLOW disk, so the bank is still filling when the close lands
-        q = Q(tmp, sysimg, disk, 4, bps=65536)
+        q = Q(tmp, sysimg, disk, 4, bps=65536, keep=True)
         os88qemu.acted(q, lambda: os.path.exists(q.sock), secs=30,
                        what="the QMP socket")
         xmcheck.wait_desktop(q.sock, "vidclose")
@@ -67,7 +67,8 @@ def main():
         xbase = xmcheck.table_base(q.sock)
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
         x, y = geom.drive_pt(q, "B", S)
-        xmcheck.dblclick(q.sock, x, y)
+        dbl = lambda x, y: os88qemu.mouse_dblclick(q, S, q.hmp, x, y)  # noqa
+        dbl(x, y)
         box = {}
 
         def diskwin():
@@ -79,12 +80,12 @@ def main():
         if not os88qemu.acted(q, diskwin, secs=30, what="Disk B"):
             bad.append("Disk B never opened")
             return report(bad)
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1)       # (the listing: read in the pass)
         for it in range(ROUNDS):
             w = box["w"]
             i, _ = ui.entry("CLIP.V88", w)
             before = set(o.i for o in ui.windows())
-            xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+            dbl(*ui.row_xy(w, i - ui.scroll(w)))
 
             def player():
                 for o in ui.windows():
@@ -106,7 +107,7 @@ def main():
                 return u16(q.read(base + syms[n], 2))
             os88qemu.acted(q, lambda: rb("vp_loaded") == 1, secs=30,
                            what="the file loaded")
-            os88qemu.pace(q, 0.5)
+            os88qemu.ui_done(q, S, cap=0.5)
             q.hmp("sendkey p")
             if not os88qemu.acted(q, lambda: rb("vp_ready") == 1, secs=60,
                                   what="the play"):
@@ -120,7 +121,7 @@ def main():
                                   what="the bracket's end"):
                 bad.append("round %d: Esc did not end the bracket" % it)
                 break
-            os88qemu.pace(q, 0.3)
+            os88qemu.ui_done(q, S, cap=0.3)
             sess, xon, xfull = rb("vp_sess"), rb("vp_xon"), rb("vp_xfull")
             have = u16(q.read(base + syms["vp_xhave"], 4)) | \
                 u16(q.read(base + syms["vp_xhave"] + 2, 2)) << 16
@@ -132,7 +133,7 @@ def main():
                 bad.append("round %d: the close does not land on a hold "
                            "still loading - this tests nothing" % it)
             pw = [o for o in ui.windows() if o.i == p.i][0]
-            xmcheck.click(q.sock, *geom.close_xy(pw.x, pw.y))
+            os88qemu.mouse_click(q, S, q.hmp, *geom.close_xy(pw.x, pw.y))
             if not os88qemu.acted(
                     q, lambda: all(o.i != p.i for o in ui.windows()),
                     secs=20, what="the close"):
@@ -157,7 +158,7 @@ def main():
             if not alive:
                 bad.append("round %d: the machine stopped ticking" % it)
                 break
-            os88qemu.pace(q, 0.5)
+            os88qemu.ui_done(q, S, cap=0.5)
     finally:
         if q is not None:
             q.close()

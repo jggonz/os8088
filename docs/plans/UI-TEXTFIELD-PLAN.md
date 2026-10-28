@@ -9,7 +9,7 @@ question already asked, the carriers already counted, and the one decision
 that must not be taken casually already written down. The work is a study with
 a survey in front of it, and the survey has not been done.
 
-It was opened while planning the DOS box's arguments-and-environment page
+It was opened while planning DOS's arguments-and-environment page
 (docs/plans/DOS-EXEC-PLAN.md). That page needs a single-line field and decided
 to **copy** one rather than invent a shared control, deliberately — see §4.
 
@@ -75,7 +75,7 @@ field that came out byte-neutral would still be worth having.
 
 ## 1.1 FOLLOW-ON: three carriers still repaint the whole field per keystroke
 
-`os88line_edit` was added to the include while building the DOS box's
+`os88line_edit` was added to the include while building DOS's
 arguments row (SPEC.md 96.19.1) and **only that row calls it**. `apps/ftpd`,
 `apps/browser` and `apps/telnet` still call `os88line_draw` after every
 keystroke, which repaints every visible character: ~18ms a key on a 4.77MHz
@@ -135,9 +135,9 @@ shared body can serve it at all:
    23 copies, and it is the number that decided that plan. Nothing here is
    decidable without the equivalent.
 
-## 4. Why the DOS box is copying instead of converging
+## 4. Why DOS is copying instead of converging
 
-Recorded so it is not re-litigated. The DOS box needs a field NOW and this
+Recorded so it is not re-litigated. DOS needs a field NOW and this
 study is not started. Converging twelve carriers is a study, a conversion and
 a look at every one of them on three adapters; doing it under a wave that is
 about something else would be the tail wagging the dog, and doing it badly
@@ -152,7 +152,7 @@ cell, and it is the only field in the tree with **rows that keep it honest** -
 reaches. Copying it brings those two rows along as copies rather than as new
 thinking.
 
-When this study happens, the DOS box is therefore a carrier like any other and
+When this study happens, DOS is therefore a carrier like any other and
 its conversion is not a special case.
 
 ## 5. What is explicitly NOT decided here

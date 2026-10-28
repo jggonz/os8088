@@ -98,7 +98,7 @@ def click(ui, w, row, x=None):
     if x is not None:
         cx = w.x + 1 + x
     ui.mo.click(cx, cy, settle=0)
-    ui.settle()
+    ui.still()
 
 
 def state(ui, blk, w, fit, want, what):
@@ -119,11 +119,11 @@ def names(ui, w):
 
 
 with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
-                 apps=os.path.join(BUILD, "apps360.img")) as ui:
+                 apps=os.path.join(BUILD, "apps360.img"), quick=True) as ui:
     m = ui.m
     S = ui._S
     w = ui.path("B:/APPS")
-    ui.settle()
+    ui.still()
     blk = ui._fsblk(w)
     n = word(ui, blk, geom.FS_N)
     fit = ui._word("fm_fit")
@@ -145,18 +145,18 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
 
     # --- 3: Shift+Down, Shift+Up ---------------------------------------------
     def sdown():
-        m.key("ArrowDown")
-        ui.settle()
+        os88marty.key_taken(m, "ArrowDown")
+        ui.still()
     held(ui, "ShiftLeft", sdown)
     state(ui, blk, w, fit, [0, 1, 2, 3, 4, 5], "Shift+Down")
     def sup2():
-        m.key("ArrowUp")
-        m.key("ArrowUp")
-        ui.settle()
+        os88marty.key_taken(m, "ArrowUp")
+        os88marty.key_taken(m, "ArrowUp")
+        ui.still()
     held(ui, "ShiftLeft", sup2)
     state(ui, blk, w, fit, [0, 1, 2, 3], "Shift+Up twice")
     ui.scroll_to(0, win=w)              # back to the top: rows ARE entries
-    ui.settle()
+    ui.still()
 
     # --- 4: a plain click collapses; Ctrl+A takes everything ------------------
     click(ui, w, 1)
@@ -164,7 +164,7 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
           and word(ui, blk, geom.FS_SEL) == 1)
     check("...and one band", bands(ui, w, fit) == [1],
           "(%r)" % bands(ui, w, fit))
-    held(ui, "ControlLeft", lambda: (m.key("KeyA"), ui.settle()))
+    held(ui, "ControlLeft", lambda: (os88marty.key_taken(m, "KeyA"), ui.still()))
     state(ui, blk, w, fit, list(range(n)), "Ctrl+A")
     click(ui, w, 0)
 
@@ -172,11 +172,11 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
     x0, y0 = ui.row_xy(w, 1)
     x1, y1 = ui.row_xy(w, 3)
     ui.mo.drag(w.x + 1 + 200, y0, w.x + 1 + 230, y1, settle=0)
-    ui.settle()
+    ui.still()
     state(ui, blk, w, fit, [1, 2, 3], "a drag select down rows 1..3")
     ui.mo.drag(w.x + 1 + 200, y1, w.x + 1 + 200, y0 - geom.FM_ROW_H,
                settle=0)
-    ui.settle()
+    ui.still()
     state(ui, blk, w, fit, [0, 1, 2, 3], "a drag select UP rows 3..0")
     click(ui, w, 2, x=200)
     check("a press right of the names that does not move selects that row",
@@ -201,7 +201,7 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
     print("  copying %s (%d) and %s (%d)" % (n1, _s1, n2, _s2))
     click(ui, w, i1)
     held(ui, "ControlLeft", lambda: click(ui, w, i2))
-    held(ui, "ControlLeft", lambda: (m.key("KeyC"), ui.settle()))
+    held(ui, "ControlLeft", lambda: (os88marty.key_taken(m, "KeyC"), ui.still()))
     check("Copy put a LIST of two on the clipboard",
           ui._word("fcp_lcnt") == 2 * 16 and ui._word("fcp_lseg") != 0
           and ui._byte("fcp_cbop") == 1,
@@ -222,7 +222,7 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
                                     ui._byte("fcp_cbop"),
                                     ui._byte("mem_pg_floor")))
         raise
-    ui.settle()
+    ui.still()
     check("Paste copied BOTH into B:\\", True, "(%r)" % names(ui, w))
     check("...and the list is CLEARED on paste",
           ui._word("fcp_lcnt") == 0 and ui._word("fcp_lseg") == 0
@@ -242,7 +242,7 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
     j2 = [i for i, (nm, _t) in enumerate(root) if nm == n2][0]
     g = [i for i, (nm, _t) in enumerate(root) if nm == "GAMES"][0]
     ui.scroll_to(max(j1, j2, g), win=w)
-    ui.settle()
+    ui.still()
     top = ui.scroll(w)
     if not all(top <= i < top + fit for i in (j1, j2, g)):
         raise SystemExit("msel: B:\\ entries %d, %d and GAMES (%d) do not fit "
@@ -256,13 +256,13 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
              "both gone from B:\\", 120.0)
     check("a drag of one member moved BOTH out of B:\\", True)
     w = ui.path("B:/GAMES")
-    ui.settle()
+    ui.still()
     blk = ui._fsblk(w)
     got = names(ui, w)
     check("...into GAMES", n1 in got and n2 in got, "(%r)" % got)
 
     w = ui.path("B:/GAMES")
-    ui.settle()
+    ui.still()
     blk = ui._fsblk(w)
     got = names(ui, w)
 
@@ -276,8 +276,8 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
     held(ui, "ControlLeft", lambda: click(ui, w, k2 - s0))
     check("the set is the two copies", bits(ui, blk) == sorted([k1, k2]),
           "(%r)" % bits(ui, blk))
-    m.key("Delete")
-    ui.settle()
+    os88marty.key_taken(m, "Delete")
+    ui.still()
     onam = bytes(m.read(S("fm_onam"), 13)).split(b"\0")[0].decode()
     check("Delete asks about '2 items'", onam == "2 items", "(%r)" % onam)
     os88marty.pace(m, 0.6)              # SPEC.md 22: a typematic repeat is
@@ -303,7 +303,7 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
     # as Ctrl+drag not copying. Once leg 8 has given those clusters back, n1
     # fits whenever leg 6's two copies did.
     w = ui.path("B:/APPS")
-    ui.settle()
+    ui.still()
     rows = ui.listing(w)
     up = [i for i, (_n, t) in enumerate(rows) if t == 3]
     src = [i for i, (nm, _t) in enumerate(rows) if nm == n1]
@@ -312,11 +312,11 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
         ux_, uy_ = ui.row_xy(w, up[0])
         held(ui, "ControlLeft", lambda: ui.mo.drag(ax_, ay_, ux_, uy_,
                                                     settle=0))
-        ui.settle()
+        ui.still()
         check("Ctrl+drag left the source where it was", n1 in names(ui, w),
               "(%r)" % names(ui, w))
         w = ui.path("B:/")
-        ui.settle()
+        ui.still()
         check("...and put a COPY in B:\\", n1 in names(ui, w),
               "(%r, toast %r)" % (names(ui, w), ui.toast()))
     else:

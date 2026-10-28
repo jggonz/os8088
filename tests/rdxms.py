@@ -149,11 +149,23 @@ class Machine(Q):
             n -= k
         return bytes(out)
 
-    def mouse(self, *args):
-        subprocess.run([sys.executable, os.path.join(ROOT, "tools",
-                                                     "mouse.py"), self.sock]
-                       + [str(a) for a in args], check=True,
-                       capture_output=True, cwd=ROOT)
+    def mouse(self, verb, *xy):
+        """tools/mouse.py's verbs, CLOSED-LOOP (os88qemu.mouse_to): the
+        pointer is read back off mouse_x/mouse_y and each button edge off
+        mouse_btn, where mouse.py pinned, walked and slept - 88 of this
+        row's 111 host seconds were its clicks."""
+        hmp = self.hmp
+        if xy:
+            os88qemu.mouse_to(self, S, hmp, *xy,
+                              btn=os88qemu.mouse_where(self, S)[2])
+        if verb == "click":
+            os88qemu.mouse_click(self, S, hmp, *xy)
+        elif verb == "down":
+            os88qemu.mouse_button(self, S, hmp, 1)
+        elif verb == "up":
+            os88qemu.mouse_button(self, S, hmp, 0)
+        elif verb != "to":
+            raise ValueError(verb)
 
     def done(self, cap=2.0):
         os88qemu.ui_done(self, S, cap=cap)
@@ -256,6 +268,7 @@ def main():
         if not os.path.exists(os88build.at(p)):
             sys.exit("rdxms: no %s - run `make`" % p)
     R = rp.drv_syms(a.src)
+    P = rp.page_syms(a.src)
     data = rp.payload()
     work = tempfile.mkdtemp(prefix="rdxms-")    # short: a QMP socket path
     try:                                        # has a ~107-byte limit
@@ -268,7 +281,7 @@ def main():
                 break
             time.sleep(0.2)             # the socket appearing is a HOST event
         xmcheck.wait_desktop(q.sock, "rdxms")
-        session(q, a, R, data, bimg)
+        session(q, a, R, P, data, bimg)
         q.close()
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -278,7 +291,7 @@ def main():
     return 1 if fails else 0
 
 
-def session(q, a, R, data, bimg):
+def session(q, a, R, P, data, bimg):
     ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
     xm_kb, tier = u16(q.read(S("xm_kb"), 2)), q.read(S("cpu_tier"), 1)[0]
     say("rdxms: QEMU -m %d, xm_kb %d, cpu_tier %d, a %dKB store, %d bytes of "
@@ -301,6 +314,9 @@ def session(q, a, R, data, bimg):
 
     def db(n):
         return q.read(rd_seg() * 16 + R[n], 1)[0]
+
+    def pb(n):                      # a byte of the page, RAMPAGE.DRV, at
+        return q.read(dw("rd_pseg") * 16 + P[n], 1)[0]  # rd_pseg AS IT IS
 
     def fdlg_up():
         return u16(q.read(S("fdlg_win"), 2)) not in (0, 0xFFFF)
@@ -428,10 +444,22 @@ def session(q, a, R, data, bimg):
     check("X", db("rd_loc") == RDL_XMS, "the Store radio selected Xms",
           "[rd_loc] = %d - the radio is greyed, or the click missed"
           % db("rd_loc"))
+    # THE CARET FIRST, THEN THE KEYS. ui_task takes the BIOS key ring AHEAD
+    # of the event queue in a pass, and rp_key drops a key the box has no
+    # caret for, so keys sent while the click is still queued are typed at
+    # nobody - which is what a loaded box did when `done`'s cap ran out
+    # before the click was handled ([rd_kb] stayed 64). So each step waits
+    # on the page's own state: the caret (`rp_edit`), every digit landing
+    # in `rp_elen`, and the commit (`rp_edit` cleared, [rd_kb] the size).
     press(px, py, rp.R_SBOX)
-    for c in str(a.kb):
+    q.need(lambda: pb("rp_edit") == 1, "the size box's caret", 15)
+    for i, c in enumerate(str(a.kb)):
         q.key(c)
+        q.need(lambda: pb("rp_elen") == i + 1, "digit %d in the box" % (i + 1),
+               10)
     q.key("ret")
+    q.wait(lambda: pb("rp_edit") == 0 and dw("rd_kb") == a.kb,
+           "the size to commit", 15)
     q.done(4.0)
     check("K", dw("rd_kb") == a.kb, "the size box took %dKB" % a.kb,
           "[rd_kb] = %d" % dw("rd_kb"))

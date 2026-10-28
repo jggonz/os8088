@@ -3,7 +3,7 @@
 ;
 ; THIS FILE IS A MODULE IN SHEET ONLY (82.16). Under CH_OVERLAY - which only
 ; sheet.asm defines - everything below sits in `section .modc vstart=0`, is cut
-; out by tools/os88ovl.py, ships as CHART.OVL beside the package, and is
+; out by tools/os88ovl.py, ships as the chart module beside the package, and is
 ; far-called through the dispatcher at its offset 0. chart.asm defines neither
 ; CH_ symbol and assembles the whole file straight into `.text`.
 ;
@@ -125,6 +125,11 @@
   %endif
 %endmacro
 
+%ifdef CH_OVERLAY
+  %ifndef CH_FWRITE                ; 82.16.11: the module's one kernel call
+    %error "CH_OVERLAY needs CH_FWRITE: OSAPI_FILE_WRITE through a resident stub, never a direct far call from the module"
+  %endif
+%endif
 %ifndef CH_OVERLAY
   %define ch_res_unpacka fp_unpack_a
   %define ch_res_unpackb fp_unpack_b
@@ -219,7 +224,7 @@ ch_m_bmpwrite:
 
 ; The BMP header template and palette are the module's only DATA the resident
 ; half reads: SHEET's entry proc copies all 118 bytes into the chart buffer
-; once, long before CHART.OVL is loaded (82.16). So they stay RESIDENT in both
+; once, long before the chart module is loaded (82.16). So they stay RESIDENT in both
 ; builds - a module-relative address handed to resident code copies whatever
 ; happens to sit at that offset in the package, which is a wrong BMP header
 ; and no error anywhere.
@@ -2794,7 +2799,11 @@ ch_bmp_write:
     xor bx, bx                          ; bytes to write
     mov cx, CH_HDRSZ + (CH_STRIDE * CH_H)   ; 19318, fits one word
     xor dx, dx
-    call OSAPI_FILE_WRITE
+%ifdef CH_OVERLAY                       ; 82.16.11: in the module the write
+    CH_FWRITE                           ; goes out through the includer's
+%else                                   ; resident stub, so the kernel's retf
+    call OSAPI_FILE_WRITE               ; never holds the module's own CS
+%endif
     pop es                              ; caller's real es, restored
     pop dx
     pop cx

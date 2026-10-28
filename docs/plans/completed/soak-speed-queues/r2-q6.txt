@@ -1,0 +1,151 @@
+# ROUND 2, queue 6: the small (<60s-ish) open rows of r2-q1 (its agent finished) and r2-q3 (its agent keeps its >=60 s rows). family  row  declared_secs  script
+DONE isot	isotronsmall	40	tests/isotronsmall.py
+DONE doss	dosshrink	30	tests/dosshrink.py
+DONE doss	dossnd	30	tests/dossnd.py
+DONE mult	mseg360	40	tests/multiseg.py
+DONE mult	multiseg	20	tests/multiseg.py
+DONE asso	assocsweep	50	tests/assocsweep.py
+DONE asso	assocopen	40	tests/assocopen.py
+DONE asso	assocglyph	30	tests/assocglyph.py
+DONE asso	assocwake	30	tests/assocwake.py
+DONE asso	assocvol	21	tests/assocvol.py
+DONE asso	assocfind	18	tests/assocfind.py
+DONE asso	assocstale	15	tests/assocstale.py
+DONE dosd	dosdrv	40	tests/dosdrv.py
+DONE dosd	dosdir	35	tests/dosdir.py
+DONE dosd	dosdev	25	tests/dosdev.py
+DONE dosm	dosmouse	60	tests/dosmouse.py
+DONE dosm	dosmouevt	60	tests/dosmouevt.py
+DONE dosm	dosmcb	30	tests/dosmcb.py
+DONE reho	rehome	45	tests/rehome.py
+DONE reho	rehomeabort	40	tests/rehomeabort.py
+DONE vide	videms	45	tests/videms.py
+DONE vide	videmshyb	45	tests/videms.py
+DONE vide	videmsslow	45	tests/videms.py
+DONE vide	videmswrap	45	tests/videms.py
+DONE covo	covoxcp	45	tests/covox.py
+DONE covo	covoxdrv	30	tests/covox.py
+DONE covo	covoxauto	30	tests/covox.py
+DONE covo	covoxnolpt	30	tests/covox.py
+DONE time	timerrace	30	tests/timerrace.py
+DONE sbar	sbar	60	tests/sbar.py
+DONE sbar	sbardlg	60	tests/sbar.py
+DONE dosg	dosgap	25	tests/dosgap.py
+DONE vidh	vidhdmake	65	tests/vidhdmake.py
+DONE int	int0sweep	60	tests/int0sweep.py
+DONE spla	splashbar	40	tests/splashbar.py
+DONE spla	splashspin	20	tests/splashspin.py
+DONE span	spantest	30	tests/spantest.py
+DONE span	spantest-vga	30	tests/spantest.py
+DONE sbra	sbrate286	60	tests/sbrate286.py
+DONE rdpr	rdpreserve	60	tests/rdpreserve.py
+DONE uidr	uidrdis	55	tests/uidrdis.py
+SKIP(fails at base: os88rom 'file offset 0x54 is a site but the plain kernel does not hold COLD_SEG' - rombig's failure) roms	romsmall	45	tests/romsmall.py
+DONE roms	romsock	5	tests/romsock.py
+DONE dtfi	dtfield	50	tests/dtfield.py
+DONE mine	minexflag	50	tests/minexflag.py
+DONE tpsa	tpsaveu	50	tests/tpsaveu.py
+DONE cpna	cpnameshdd	25	tests/cpnames.py
+DONE cpna	cpnames	20	tests/cpnames.py
+DONE atcl	atclip	45	tests/atclip.py
+DONE trkr	trkrate	45	tests/trkrate.py
+DONE cycw	cycweb	40	tests/cycweb.py
+DONE fscl	fsclass	40	tests/fsclass.py
+DONE icoc	icoclip	40	tests/icoclip.py
+DONE mono	monoink	40	tests/monoink.py
+DONE usbm	usbmouse	35	tests/usbmouse.py
+DONE alte	altenter	33	tests/altenter.py
+DONE c	c64part	30	tests/c64part.py
+DONE asca	ascabsorb	30	tests/ascabsorb.py
+DONE curb	curbusy	30	tests/curbusy.py
+DONE npsc	npscroll	30	tests/npscroll.py
+DONE glyp	glyphcost	30	tests/glyphcost.py
+DONE blob	blobsum	27	tests/blobsum.py
+DONE audh	audhand	26	tests/audhand.py
+DONE spkf	spkfx	25	tests/spkfx.py
+DONE fpgc	fpgcold	20	tests/fpgcold.py
+DONE shed	shedrelist	20	tests/shedrelist.py
+DONE fill	fillpat	20	tests/fillpat.py
+DONE uibl	uiblock	20	tests/uiblock.py
+DONE xorr	xorrect	20	tests/xorrect.py
+DONE pkgm	pkgmax	15	tests/pkgmax.py
+DONE fpgn	fpgnotch	13	tests/fpgnotch.py
+DONE tick	tickzero	10	tests/tickzero.py
+DONE kdos	kdos	10	tests/kdos.py
+DONE(by agent 3, a8 below) vidf	vidfskeysvga4m3	55	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysvga4pl	55	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysvga4	45	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysink	45	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysmodex	40	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysflip	40	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidkpartfs	40	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysc160	35	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeystext	35	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysvga8	35	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeys	30	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeyscga4	30	tests/vidfskeys.py
+DONE(by agent 3, a8 below) vidf	vidfskeysc512	25	tests/vidfskeys.py
+DONE redl	redlinechipcga	40	tests/redline.py
+DONE redl	redlinechipherc	40	tests/redline.py
+DONE redl	redlinechipvga	40	tests/redline.py
+DONE redl	redlinev20	10	tests/redline.py
+DONE dosf	dosfile	35	tests/dosfile.py
+DONE dosf	dosfcb	30	tests/dosfcb.py
+DONE pkgt	pkgthumb-np	50	tests/pkgthumb.py
+DONE pkgt	pkgthumb-br	50	tests/pkgthumb.py
+DONE pkgt	pkgthumb-wd	50	tests/pkgthumb.py
+DONE pkgt	pkgthumb-tp	50	tests/pkgthumb.py
+DONE dosr	dosrange	45	tests/dosrange.py
+DONE dosr	dosren	30	tests/dosren.py
+DONE dosr	dosregs	25	tests/dosregs.py
+DONE kdmo	kdnomouse	45	tests/kdmouse.py
+DONE lzmo	lzmod-lz4big	40	tests/lzmod.py
+DONE lzmo	lzmod	30	tests/lzmod.py
+DONE lzmo	lzmod-dialog	30	tests/lzmod.py
+DONE lzmo	lzmod-nohint	30	tests/lzmod.py
+DONE lzmo	lzmod-lzb	30	tests/lzmod.py
+DONE vidm	vidmove	45	tests/vidmove.py
+DONE lzlo	lzload	30	tests/lzload.py
+DONE gfxp	gfxpoints	45	tests/gfxpoints.py
+DONE pxsm	pxsmove	30	tests/pxsmove.py
+DONE uila	uilayer	50	tests/uilayer.py
+DONE uila	uilat	30	tests/uilat.py
+DONE mous	mousess	20	tests/mousess.py
+DONE pxsh	pxshud-vga	45	tests/pxshud.py
+DONE pxsh	pxshud	30	tests/pxshud.py
+SKIP(needs xdc, absent here) vidb	vidbench	34	tests/vidbench.py
+DONE vidb	vidbigclus	30	tests/vidbigclus.py
+DONE wimg	wimgtrip	56	tests/wimgtrip.py
+DONE fcpa	fcpapi	55	tests/fcpapi.py
+DONE vidg	vidgrey	30	tests/vidgrey.py
+DONE vidg	vidgreyherc	25	tests/vidgrey.py
+DONE auto	autostart	50	tests/autostart.py
+DONE su	su1bpp	50	tests/su1bpp.py
+SKIP(needs rgbds, absent here) gbhe	gbheader	45	tests/gbheader.py
+DONE dirw	dirwshed	45	tests/dirwshed.py
+DONE covb	covbench	45	tests/covbench.py
+DONE tmow	tmowner	45	tests/tmowner.py
+SKIP(needs rgbds, absent here) gbsa	gbsave	40	tests/gbsave.py
+DONE kdar	kdarena	40	tests/kdarena.py
+DONE vgac	vgacolor	40	tests/vgacolor.py
+DONE b	b4walk	40	tests/b4walk.py
+DONE runc	runclipcga	20	tests/runclip.py
+DONE runc	runclip	16	tests/runclip.py
+SKIP(needs rgbds, absent here) gbsp	gbspeed	32	tests/gbspeed.py
+DONE ptse	ptsext	31	tests/ptsext.py
+DONE kbdb	kbdburst	30	tests/kbdburst.py
+DONE cfgt	cfgtrip	30	tests/cfgtrip.py
+DONE whee	wheel	30	tests/wheel.py
+DONE appd	appdata	30	tests/appdata.py
+DONE wdpa	wdparts	27	tests/wdparts.py
+DONE fmre	fmrefuse	25	tests/fmrefuse.py
+DONE kdhd	kdhdd	25	tests/kdhdd.py
+DONE fsxc	fsxclip	22	tests/fsxclip.py
+DONE ovlh	ovlhigh	20	tests/ovlhigh.py
+DONE fmar	fmarrows	20	tests/fmarrows.py
+DONE spkb	spkbench	20	tests/spkbench.py
+DONE v	v20boot	17	tests/v20boot.py
+DONE drag	dragui	15	tests/dragui.py
+DONE stkp	stkpanel	15	tests/stkpanel.py
+DONE cylr	cylrun	10	tests/cylrun.py
+DONE pitn	pitnow	5	tests/pitnow.py

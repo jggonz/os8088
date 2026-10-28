@@ -63,7 +63,7 @@ def systems():
     from PIL import Image
     sy = dispapps._map('wirefleet')
     with os88ui.boot(artifact('os8088-360.img'), apps=artifact('wireflet360.img'),
-                    machine='os8088_5150_cga_gla') as ui:
+                    machine='os8088_5150_cga_gla', quick=True) as ui:
         m = ui.m
         # Before the game opens: SPEC.md 114.9 leases a free port by itself
         # on the window's first tick, so "as it was" has to be read first -
@@ -78,13 +78,13 @@ def systems():
         assert m.inb(0x2ff)!=0x5a,'needs original 8250'
         m.run()
         w = ui.path('B:/WIREFLET.O88')
-        ui.settle()
+        ui.still()
         seg = dispapps.pkg_seg(m,0)[1]
         def data(name,n): return m.readseg(dispapps.pkg_seg(m,0)[1],sy['wf_'+name],n)
         def val(name,n=1): return int.from_bytes(data(name,n),'little')
         def key(name):
             m.key(name)
-            ui.settle()
+            ui.still()
         def wait(cond,what): M.until(m,lambda _:cond(),what,guest=10,poll=.02)
         wait(lambda:val('linkopen')==1 and val('curport')==2,'automatic search leased the free COM2')
         ui.menu_pick('Link','Connect COM1')
@@ -100,10 +100,10 @@ def systems():
         ui.mo.to(120,100)
         assert struct.unpack('<HH',m.read(m.sym('mouse_x'),4))==(120,100)
         other=ui.open('WIREFLET.O88')
-        ui.settle()
+        ui.still()
         otherseg=dispapps.pkg_seg(m,1)[1]
         ui.menu_pick('Link','Connect COM2')
-        ui.settle()
+        ui.still()
         assert m.readseg(otherseg,sy['wf_linkopen'],1)==b'\0','second captain stole lease'
         assert int.from_bytes(m.readseg(otherseg,sy['wf_message'],2),'little')==sy['wf_linkbusy']
         ui.close(other)
@@ -158,7 +158,7 @@ def systems():
         m.run()
         m.key('KeyF')
         wait(lambda:val('infs')==0 and m.read(m.sym('fsx_task'),1)==b'\xff','fullscreen restoration')
-        ui.settle()
+        ui.still()
         assert data('board',100)==board and val('ready')==1
         ui.menu_pick('Link','Disconnect')
         m.pause()
@@ -168,7 +168,7 @@ def systems():
         # Actual file dialog/write/read, followed by semantic negative controls.
         key('KeyS')
         m.key('Enter')
-        ui.settle()
+        ui.still()
         assert val('message',2)==sy['wf_savedmessage']
         record=data('savebuf',512)
         assert record[:8]==b'WFLT\1\0\0\2'
@@ -178,7 +178,7 @@ def systems():
         key('KeyO')
         ui.chooser_select('FLEET.WFL')
         m.key('Enter')
-        ui.settle()
+        ui.still()
         assert val('message',2)==sy['wf_loadedmessage'], (
             [k for k,v in sy.items() if v==val('message',2)], val('linkmode'), val('linkopen'), val('cands'))
         assert data('board',100)==board and val('ready')==1 and val('connected')==0
@@ -229,25 +229,39 @@ def sounds():
             ('adlib','os8088_5150_herc_adlib_720_gla','720'),
             ('sb','os8088_5150_herc_sb_gla','360')):
         with os88ui.boot(artifact('os8088-'+size+'.img'),
-                        apps=artifact('wireflet'+size+'.img'),machine=machine) as ui:
+                        apps=artifact('wireflet'+size+'.img'),machine=machine,quick=True) as ui:
             w=ui.path('B:/WIREFLET.O88')
-            ui.settle()
+            ui.still()
             m=ui.m
             sy=dispapps._map('wirefleet')
             seg=dispapps.pkg_seg(m,0)[1]
             def val(name,n=1):return int.from_bytes(m.readseg(seg,sy['wf_'+name],n),'little')
             m.key('KeyA')
-            ui.settle()
+            ui.still()
             # SPEC.md 114.11's music calls the tone router too; the cue checks
             # below want the router to themselves, so U silences the track
             # first and the music is checked on its own after them.
             m.key('KeyU')
-            ui.settle()
+            ui.still()
             assert val('musicoff')==1
+            # the placement cue KeyA started must be over before Ready's is
+            # priced (a settle used to outwait it; `still` does not)
+            M.until(m,lambda _:val('soundactive')==0 and
+                    m.read(m.sym('snd_town_act'),1)==b'\0',
+                    'the placement cue to finish',guest=10,poll=.02)
             M.pace(m,.5)
             m.pause()
             returned=(seg<<4)+sy['wf_soundnote.out']
-            m.bp_exec(m.sym('osapi_snd_tone'),returned)
+            # The grant is read INSIDE the router, at the point its IF=0
+            # window has stamped the owner record and keyed the hardware -
+            # not at the return. A note is 1-2 ticks (SPEC.md 34.3's
+            # self-expiry), and on a card the grant's own window is OPL
+            # register writes long enough that IRQ0 is often PENDING when it
+            # closes: the tick is taken at the router's popf and a 1-tick
+            # note has expired, correctly, before control reaches the caller.
+            # Read at the return, that legal expiry looked like a refusal.
+            granted=m.sym('snd_tone_req.granted')
+            m.bp_exec(m.sym('osapi_snd_tone'),granted,returned)
             m.key('KeyY')
             m.run()
             notes=[]
@@ -257,7 +271,9 @@ def sounds():
                 notes.append(r['ax'])
                 assert r['ax']==hz and r['cx'] in (1,2),r
                 m.run()
-                assert m.wait_stop(20)=='breakpoint' and m.regs()['cs']==seg
+                assert m.wait_stop(20)=='breakpoint'
+                # a refusal never reaches .granted: it stops at the return
+                assert m.regs()['cs']!=seg,'router refused cue'
                 assert m.read(m.sym('snd_town_act'),1)==b'\1','router refused cue'
                 if backend=='speaker':
                     assert m.inb(0x61)&3==3,'speaker gate never opened'
@@ -268,11 +284,14 @@ def sounds():
                     assert driverseg,'sound driver not loaded'
                     assert m.readseg(driverseg,ds['opl_b0']+8,1)[0]&32,'FM tone never keyed'
                 m.run()
+                assert m.wait_stop(20)=='breakpoint' and m.regs()['cs']==seg
+                assert not m.regs()['flags']&1,'router refused cue'
+                m.run()
             m.pause()
             m.bp_exec()
             m.run()
             M.pace(m,.6)
-            ui.settle()
+            ui.still()
             assert val('soundactive')==0,'cue did not finish'
             assert m.read(m.sym('snd_town_act'),1)==b'\0','sound route retained tone'
             caps=int.from_bytes(m.read(m.sym('drv_svc'),2),'little')
@@ -280,7 +299,7 @@ def sounds():
             # The track: three FM voices with a card, the melody on the
             # speaker, and it rows on by itself; mute stops it outright.
             m.key('KeyU')
-            ui.settle()
+            ui.still()
             M.pace(m,1.5)
             want=2 if backend=='speaker' else 1
             assert val('musicoff')==0 and val('bgmmode')==want,(backend,val('bgmmode'))
@@ -288,18 +307,18 @@ def sounds():
             M.pace(m,1.0)
             assert val('bgmptr',2)!=first,'the music did not advance'
             m.key('KeyM')
-            ui.settle()
+            ui.still()
             assert val('muted')==1
             M.pace(m,.3)
             assert val('bgmmode')==0 and val('bgmsound')==0,'mute left the music on'
             m.key('KeyN')
             m.key('KeyA')
-            ui.settle()
+            ui.still()
             assert val('soundactive')==0,'muted placement sounded'
             ui.close(w)
             assert m.read(m.sym('snd_town_act'),1)==b'\0'
             print('wirefleetsystem:',backend,'Ready tones',notes,'finite; music',
-                  ('melody','FM')[want-1],'rows on; mute and close')
+                  ('FM','melody')[want-1],'rows on; mute and close')
 
 
 if __name__=='__main__':

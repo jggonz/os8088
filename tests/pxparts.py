@@ -145,7 +145,8 @@ def dir_cluster(img, name):
             return u16(e, 26)
     raise SystemExit("no folder %s on %s" % (name, img))
 
-with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
+with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine,
+                 quick=True) as ui:
     m = ui.m
     S = ui._S
     ui.open_drive("B")

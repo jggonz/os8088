@@ -172,6 +172,71 @@ def gif_pixels(path):
     return iw, ih, out
 
 
+def check_canvas(m, mo, r, iw, ih, px, who="blitpair"):
+    """THE CANVAS IS THE FILE: `r` is the register set of the first blit as
+    wide as the picture (`wide_blit(..., regs=True)`), taken while Paint was
+    loading it. Waits out the rest of the load, parks the pointer, and
+    compares the rendered framebuffer against `px` pixel for pixel; exits on
+    any difference. One copy, so tests/paintbig.py's `--pair` (which is how
+    tests/paintpack.py runs this check and the packed clipboard on ONE boot)
+    asks exactly the question this row asks."""
+    x, y, bw, bh = r["ax"], r["bx"], r["cx"], r["dx"]
+    print("   blit x=%d y=%d w=%d h=%d" % (x, y, bw, bh))
+    # the rest of the load: the drive going quiet here, and the rows it
+    # blits after the first going still in the settle below - this was a
+    # blind six guest seconds in front of that settle
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the picture to finish loading")
+    mo.to(4, 4)
+    # ui_done first: settle's short window only opens while the UI task is
+    # idle, so a settle begun mid-repaint pays a whole `quiet` per sample
+    os88marty.ui_done(m, "the picture to finish drawing")
+    os88marty.settle(m)
+    w, h, fb = m.fbuf(card=0)
+    # **THE CANVAS'S SIZE COMES FROM PAINT**, not from a blit's CX and DX.
+    # SPEC.md 42.6.5 letterboxes a picture the heap cannot hold, and a
+    # cropped canvas compared against a whole file is two different things
+    # - so this has to be asked, and [pt_cw]/[pt_ch] are where Paint keeps
+    # the answer.
+    pseg = pkg[1] if (pkg := dispapps.pkg_seg(m, 0)) else None
+    if pseg is None:
+        sys.exit("%s: Paint's window is gone - nothing to ask" % who)
+    cv = dispapps.words(m, pseg, "paint", ("pt_cw", "pt_ch"))
+    if (cv["pt_cw"], cv["pt_ch"]) != (iw, ih):
+        sys.exit("%s: the canvas is %dx%d and the picture %dx%d - Paint "
+                 "letterboxed it (SPEC.md 42.6.5), so this row would be "
+                 "comparing two things"
+                 % (who, cv["pt_cw"], cv["pt_ch"], iw, ih))
+    bh = ih
+    bad = [(c, rw)
+           for rw in range(bh) for c in range(bw)
+           if (fb[((y + rw) * w + x + c) * 3] < 128) != (px[rw * iw + c] == 1)]
+    print("   canvas %dx%d on %dx%d: %d pixels differ from the file"
+          % (bw, bh, w, h, len(bad)))
+    if bad:
+        print("   row 0 want %s" % "".join("1" if px[c] == 1 else "0"
+                                           for c in range(32)))
+        print("   row 0 got  %s" % "".join(
+            "1" if fb[(y * w + x + c) * 3] < 128 else "0" for c in range(32)))
+        xs = [b[0] for b in bad]
+        ys = [b[1] for b in bad]
+        print("   box x %d..%d  y %d..%d, first 12: %r"
+              % (min(xs), max(xs), min(ys), max(ys), bad[:12]))
+        sys.exit("%s: FAILED" % who)
+
+
+def ink_floor(path, iw, ih, px, who="blitpair"):
+    """Exit unless the picture has ink in BOTH colours (see main)."""
+    black = sum(1 for v in px if v == 1)
+    print("   %s: %dx%d, %d black of %d" % (path, iw, ih, black, iw * ih))
+    floor = iw * ih // 5
+    if black < floor or (iw * ih - black) < floor:
+        sys.exit("%s: %s is %d black of %d - too flat to compare. An "
+                 "all-one-colour picture is matched by an all-one-colour "
+                 "canvas, including one nothing ever drew"
+                 % (who, path, black, iw * ih))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
@@ -214,8 +279,6 @@ def main():
                                "MEDIA:" + a.gif)
 
     iw, ih, px = gif_pixels(a.gif)
-    black = sum(1 for v in px if v == 1)
-    print("   %s: %dx%d, %d black of %d" % (a.gif, iw, ih, black, iw * ih))
     # THE SUBJECT HAS TO HAVE INK IN IT, and in both colours. Every check
     # below is "the canvas equals the file", which a BLANK canvas satisfies
     # perfectly against a blank file - so the one thing this comparison cannot
@@ -223,32 +286,29 @@ def main():
     # picture is the floor rather than a measurement: OS8088.GIF's ground is
     # SPEC.md 63's 50% dither, so it is near half, and a --gif that fell below
     # a fifth either way would be too flat to prove a decoder either.
-    floor = iw * ih // 5
-    if black < floor or (iw * ih - black) < floor:
-        sys.exit("blitpair: %s is %d black of %d - too flat to compare. An "
-                 "all-one-colour picture is matched by an all-one-colour "
-                 "canvas, including one nothing ever drew"
-                 % (a.gif, black, iw * ih))
+    ink_floor(a.gif, iw, ih, px)
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        os88marty.kernel_up(m)          # the boot gate on STATE: every act
+        mo = os88mouse.Mouse(marty=m)   # below is a guest read or a click
+
+        def uset(mm, **k):              # dispcp's settle: each verb confirms
+            return os88marty.ui_done(mm)    # off guest reads (technique 4)
+        dispcp.open_drive(m, mo, S, uset, "B")
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "MEDIA")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, uset, bx, by, "MEDIA")
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         rx, ry = dispcp.row_xy(bx, by,
-                               dispcp.scroll_to(m, mo, S, os88marty.settle,
+                               dispcp.scroll_to(m, mo, S, uset,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
                                                               os.path.basename(
                                                                   a.gif))))
         mo.to(rx, ry)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         # The geometry is ASKED rather than computed: the canvas x depends on
         # the window template and the adapter, and a rect this test guessed
@@ -269,49 +329,9 @@ def main():
         if r is None:
             sys.exit("blitpair: Paint never blitted a canvas through %s"
                      % " or ".join(BLITS))
-        x, y, bw, bh = r["ax"], r["bx"], r["cx"], r["dx"]
-        print("   blit x=%d y=%d w=%d h=%d" % (x, y, bw, bh))
         m.bp_exec()
         m.run()
-        # the rest of the load: the drive going quiet here, and the rows it
-        # blits after the first going still in the settle below - this was a
-        # blind six guest seconds in front of that settle
-        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
-                          what="the picture to finish loading")
-        mo.to(4, 4)
-        os88marty.settle(m)
-        w, h, fb = m.fbuf(card=0)
-        # **THE CANVAS'S SIZE COMES FROM PAINT**, not from a blit's CX and DX.
-        # SPEC.md 42.6.5 letterboxes a picture the heap cannot hold, and a
-        # cropped canvas compared against a whole file is two different things
-        # - so this has to be asked, and [pt_cw]/[pt_ch] are where Paint keeps
-        # the answer.
-        pseg = pkg[1] if (pkg := dispapps.pkg_seg(m, 0)) else None
-        if pseg is None:
-            sys.exit("blitpair: Paint's window is gone - nothing to ask")
-        cv = dispapps.words(m, pseg, "paint", ("pt_cw", "pt_ch"))
-
-    if (cv["pt_cw"], cv["pt_ch"]) != (iw, ih):
-        sys.exit("blitpair: the canvas is %dx%d and the picture %dx%d - Paint "
-                 "letterboxed it (SPEC.md 42.6.5), so this row would be "
-                 "comparing two things"
-                 % (cv["pt_cw"], cv["pt_ch"], iw, ih))
-    bh = ih
-    bad = [(c, rw)
-           for rw in range(bh) for c in range(bw)
-           if (fb[((y + rw) * w + x + c) * 3] < 128) != (px[rw * iw + c] == 1)]
-    print("   canvas %dx%d on %dx%d: %d pixels differ from the file"
-          % (bw, bh, w, h, len(bad)))
-    if bad:
-        print("   row 0 want %s" % "".join("1" if px[c] == 1 else "0"
-                                           for c in range(32)))
-        print("   row 0 got  %s" % "".join(
-            "1" if fb[(y * w + x + c) * 3] < 128 else "0" for c in range(32)))
-        xs = [b[0] for b in bad]
-        ys = [b[1] for b in bad]
-        print("   box x %d..%d  y %d..%d, first 12: %r"
-              % (min(xs), max(xs), min(ys), max(ys), bad[:12]))
-        sys.exit("blitpair: FAILED")
+        check_canvas(m, mo, r, iw, ih, px)
     print("blitpair: the canvas IS the picture, %d pixels" % (iw * ih))
     return 0
 

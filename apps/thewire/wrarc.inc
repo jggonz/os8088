@@ -532,6 +532,9 @@ wr_arcbase:
     mov [wr_fseg], dx               ; ...and wr_freefile gives it back, so the
     mov [wr_dseg], dx               ; archive leaks nothing an ordinary chain
                                     ; does not
+    call wr_fmov                    ; ...and it MOVES between the pauses
+                                    ; (thewire.asm's wr_reloc), pinned only
+                                    ; across the file calls that hold it
     cmp byte [wr_ahdr + WA_HOME], 0
     je .bank
     mov si, wr_ahdr + WA_HOME       ; --- `home`, made and entered first, so
@@ -613,6 +616,7 @@ wr_arcwrite:
     mov es, [wr_dseg]
     xor bx, bx
     mov cx, [wr_asize]
+    call wr_fpin                    ; PINNED for the call (wr_fpin's reason)
     call OSAPI_FILE_APPEND
     jmp short .wrote
 .first:
@@ -665,9 +669,11 @@ wr_arcwrite:
     xor bx, bx
     mov cx, [wr_asize]
     xor dx, dx
+    call wr_fpin                    ; PINNED for the call (wr_fpin's reason)
     call OSAPI_FILE_WRITE
 .wrote:
-    jc .no
+    call wr_fmov                    ; ...and free to move again, CF kept: the
+    jc .no                          ; claim takes the next entry
     ret                             ; CF = 0: the jc fell through
 .no:
     call wr_wrfail                  ; 'Could not write <name>' - a failure

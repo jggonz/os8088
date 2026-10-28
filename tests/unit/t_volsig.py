@@ -27,8 +27,6 @@ asserted to: they are the same disk, and nothing on the machine could act on a
 difference that does not exist. That half is not a concession - it is what
 makes the row also a reproducibility check.
 """
-import glob
-import re
 import struct
 import sys
 from pathlib import Path
@@ -49,36 +47,11 @@ def sig(bs):
     return ax or 1
 
 
-def ship_images():
-    """The basenames $(SHIPIMGS) expands to, read out of the Makefile.
-
-    Derived rather than restated, for fork rule 3's reason one level along: the
-    set grew by three when the category disks landed, and a second copy of the
-    list is one that goes stale without failing.
-    """
-    # BACKSLASH CONTINUATIONS JOINED FIRST: $(SHIPIMGS) is three lines, and a
-    # line-at-a-time read finds four of the twelve and reports a green row over
-    # a third of the set.
-    mk = re.sub(r"\\\n\s*", " ", (ROOT / "Makefile").read_text())
-    var = {}
-    for m in re.finditer(r"^([A-Z0-9_]+)\s*:?=\s*(.+?)\s*$", mk, re.M):
-        var.setdefault(m.group(1), m.group(2))
-    out, seen = [], set()
-
-    def expand(text, depth=0):
-        if depth > 8:
-            return
-        for tok in text.split():
-            m = re.fullmatch(r"\$\(([A-Z0-9_]+)\)", tok)
-            if m:
-                if m.group(1) in var and m.group(1) not in seen:
-                    seen.add(m.group(1))
-                    expand(var[m.group(1)], depth + 1)
-            elif tok.endswith(".img"):
-                out.append(Path(tok).name)
-
-    expand(var.get("SHIPIMGS", ""))
-    return sorted(set(out))
+# $(SHIPIMGS)'s reader lives in tools/os88ship.py now, because os88disk.py
+# needs the same list to hand out signature slots (SPEC.md 18.8.2.2). The name
+# is re-exported here for tools/os88soak.py, which imports it from this file.
+sys.path.insert(0, str(ROOT / "tools"))
+from os88ship import ship_images                                # noqa: E402,F401
 
 
 def main():
@@ -110,6 +83,21 @@ def main():
 
     print("t_volsig: %d shipped volume(s) compared" % len(imgs))
 
+    # EVERY SHIPPED IMAGE SIGNS IN ITS OWN SLOT (SPEC.md 18.8.2.2). This is
+    # what makes the collision check below deterministic: without it a set
+    # built with no steering at all passes in 839 trees of 840, and the row
+    # goes red at random on whichever commit rolls the pair.
+    slots = {n: i for i, n in enumerate(names, 1)}
+    for name, raw in sorted(imgs.items()):
+        harness.check(
+            sig(raw[:512]) & 0x3F == slots[name],
+            "%s signs in its slot" % name,
+            why="os88disk.py steers each $(SHIPIMGS) member's signature to "
+                "its 1-based place in the sorted list (SPEC.md 18.8.2.2); an "
+                "image off its slot was built without it - stale from before "
+                "a $(SHIPIMGS) change, or rewritten after os88disk.py",
+            got=sig(raw[:512]) & 0x3F, want=slots[name])
+
     by_sig = {}
     for name, raw in imgs.items():
         by_sig.setdefault(sig(raw[:512]), []).append(name)
@@ -125,9 +113,11 @@ def main():
                 "so SPEC.md 18.95's sector cache and SPEC.md 18.8's FAT window "
                 "stay valid across a swap between them - the new disk is read "
                 "with the old one's directory and FAT, and a write commits the "
-                "old FAT onto it. os88disk.vol_id derives the serial from the "
-                "volume's own content; a collision here means that derivation "
-                "stopped reaching these images",
+                "old FAT onto it. os88disk.py steers every $(SHIPIMGS) "
+                "member into a slot of its own (SPEC.md 18.8.2.2), so a "
+                "collision here means an image was built without its slot - "
+                "a stale image from before a $(SHIPIMGS) change, or a recipe "
+                "that rewrote sector 0 after os88disk.py",
             got="%d different volumes" % len(bodies), want="1")
 
     # ...and the other half: identical content MUST still sign alike, which is

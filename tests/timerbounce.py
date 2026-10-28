@@ -40,6 +40,7 @@ sys.path.insert(0, HERE)
 import os88build                                             # noqa: E402
 import os88pkg                                               # noqa: E402
 import os88marty                                             # noqa: E402
+import os88fixture                                          # noqa: E402
 import os88mouse                                             # noqa: E402
 import os88sym                                               # noqa: E402
 import os88geom as geom                                      # noqa: E402
@@ -200,8 +201,13 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default=None,
+                    help="default: apps360.img plus TIMER.O88, BOUNCE.O88 (SPEC.md 24.6.1 "
+                    "took it off), on a disk of this run's own")
     a = ap.parse_args(argv)
+    if a.apps is None:
+        a.apps = os88fixture.apps360_plus(
+            "APPS:build/timer.o88", "APPS:build/bounce.o88", tag="timerbounce")
     os.chdir(ROOT)
     tm, bn = Pkg(*TIMER), Pkg(*BOUNCE)
 

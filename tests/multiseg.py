@@ -104,9 +104,16 @@ def say(s):
     print("  " + s)
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+def UD(m, **_):            # every read below is guest memory
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, UD, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
     rows = dispcp.listing(m, S)
     if not any(n.upper() == "MSEG.O88" for n, _ in rows):
@@ -123,8 +130,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                      "launchable, and nothing below ran" % have["MSEG.O88"])
 
     before = dispcp.win_list(m, S)
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEG.O88")
-    os88marty.settle(m)
+    dispcp.open_named(m, mo, S, UD, wx, wy, "MSEG.O88")
+    os88marty.ui_done(m)
     status = m.read(S("ld_status"), 1)[0]
     after = dispcp.win_list(m, S)
     say("%s: ld_status = %d, windows %r -> %r" % (GEOM, status, before, after))

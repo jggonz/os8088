@@ -514,7 +514,9 @@ zf_paint:
 ; promise, and it does not need to. Its claims move at the ordinary
 ; OSAPI_TASK_ALIVE park instead, which zx_worker reaches once per 64-opcode
 ; burst - and zi_yield, the only other place ALIVE is called with a story
-; segment live, repairs its own ES from [zf_sdelta].
+; segment live, repairs its own ES from [zf_sdelta]. Those same two places
+; are the only ones the REGION can move at, which is what makes the restart
+; point declared below a closed list rather than a hope (SPEC.md 66.5.9.3).
 ; -----------------------------------------------------------------------------
 zf_hire:
     push ax
@@ -524,6 +526,13 @@ zf_hire:
     call OSAPI_TASK_SPAWN           ; CF=1 refused, nothing was created
     jc .out
     mov byte [zf_hired], 1
+    OS88_WORKER_RESTARTABLE_NOKEEP zx_restart  ; ...AND IT GIVES THE WORKER
+                                    ; BACK (SPEC.md 66.6.2, 66.5.9.3): the kernel
+                                    ; may throw its stack away wherever it
+                                    ; parks and re-enter zx_restart, which
+                                    ; resumes the wait it was in rather than
+                                    ; re-executing the opcode. Without this
+                                    ; the region declared above is INERT.
 .out:
     pop ax
     ret

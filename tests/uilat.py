@@ -95,8 +95,11 @@ def main(argv):
     S = os88sym.linear
     bad = 0
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
-        os88marty.settle(m)
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         mo.to(*CHIP)
         m.advance(frames=40)

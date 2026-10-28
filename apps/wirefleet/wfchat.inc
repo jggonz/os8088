@@ -18,6 +18,9 @@ wf_chat_begin:
     jmp wf_chat_draw
 
 wf_chat_key:
+    call wf_btnplace            ; the live origin: wf_line is drawn below, and
+                                ; a window dragged by its title is replayed and
+                                ; never painted (SPEC.md 11.96.12.0)
     cmp al, 27
     je wf_chat_end
     cmp al, 13

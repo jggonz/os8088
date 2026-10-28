@@ -24,7 +24,7 @@
 ;
 ; MEASURED, one probe, three machines - the `int 09h` vector:
 ;
-;   os8088 desktop, and the WINDOWED box   0060:3986   = `kbm_isr`, guarded
+;   os8088 desktop, and the WINDOWED DOS   0060:3986   = `kbm_isr`, guarded
 ;   kern_dos, before this file             F000:E987   = the ROM, unguarded
 ;   IBM DOS 3.30 at its own prompt         F000:E987   = the ROM, unguarded
 ;

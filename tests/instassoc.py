@@ -130,8 +130,8 @@ def main():
             sys.exit("no %s - `make` first" % img)
 
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=ID.MACHINE) as m:
-        M.settle(m)
+                  machine=ID.MACHINE, boot=False) as m:
+        m.run(); M.kernel_up(m)       # a state gate: every act is a click
         ID.install(m)
         v = ID.partition(ID.vhd(m))     # inside the `with`: the media go with it
 

@@ -145,7 +145,8 @@ def main():
                           os.path.join(tmp, "SCBIG.BMP"), size=360)
     print("== SCRIBE's claims and shared scratch (SPEC.md 95.13), %s, %s =="
           % (a.machine, a.src))
-    with os88ui.boot("build/os8088-360.img", apps=disk, machine=a.machine) as ui:
+    with os88ui.boot("build/os8088-360.img", apps=disk, machine=a.machine,
+                     quick=True) as ui:
         m = ui.m
         S = ui._S
 
@@ -163,7 +164,7 @@ def main():
             return None
 
         ui.path("B:/SCRIBE.O88")
-        M.until(m, lambda _: instance(), "SCRIBE's instance", poll=0.3,
+        M.until(m, lambda _: instance(), "SCRIBE's instance", poll=0.05,
                 limit=120)
         base = instance() * 16
         W = lambda n, k=0: u16(m.read(base + syms[n] + k, 2))   # noqa: E731
@@ -211,7 +212,7 @@ def main():
             menu("KeyF", "KeyA")
             ui.chooser_save(name)
             M.until(m, lambda _: W("sc_dirty") == 0 and W("sc_stgseg") == 0,
-                    "the save of " + name, poll=0.3, limit=600)
+                    "the save of " + name, poll=0.05, limit=600)
             idle("save " + name)
 
         idle("launch")
@@ -268,7 +269,7 @@ def main():
         before = mine()
         menu("KeyI", "KeyP")
         ui.chooser_open("SCP.BMP")
-        M.until(m, lambda _: W("sc_npic") == 1, "the picture", poll=0.3,
+        M.until(m, lambda _: W("sc_npic") == 1, "the picture", poll=0.05,
                 limit=600)
         idle("insert")
         rec = bytes(m.read(base + syms["sc_pictab"], 8))

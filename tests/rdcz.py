@@ -143,7 +143,7 @@ def select(ui, name, win=None):
     row = ui.scroll_to(i, win=win)
     w = win if win is not None else ui.disk_window()
     ui.mo.click(*ui.row_xy(w, row))
-    ui.settle(limit=10.0)
+    os88marty.ui_done(ui.m, limit=10.0)
 
 
 def note_len(ui):
@@ -159,7 +159,7 @@ def note_len(ui):
             ui.m,
             lambda mm: int.from_bytes(mm.readseg(pseg, P["np_len"], 2),
                                       "little"),
-            "Note Pad to hold the file", poll=0.1, guest=30.0)
+            "Note Pad to hold the file", poll=0.05, guest=30.0)
     except os88marty.MartyError:
         pass
     return int.from_bytes(ui.m.readseg(pseg, P["np_len"], 2), "little")
@@ -187,23 +187,23 @@ def mount_ramdisk(ui):
     """
     m, mo = ui.m, ui.mo
     mo.menu(8, 8, 8, 40)
-    ui.settle(limit=15.0)
+    os88marty.ui_done(ui.m, limit=15.0)
     cp = ui.window("Control Panel")
     x0, y0 = cp.x + 1, cp.y + TITLE_H
     mo.click(x0 + 40, y0 + CP_I0Y + CP_IDRV * CP_IROWH + 7)     # Drivers
-    ui.settle(limit=15.0)
+    os88marty.ui_done(ui.m, limit=15.0)
     mo.click(x0 + CP_RX + 40,                                   # tick Ram Disk
              y0 + CP_DBY1 + RD_ROW * CP_DROWH + CP_DROWH // 2)
-    ui.settle(limit=25.0)
+    os88marty.ui_done(ui.m, limit=25.0)
     if not int.from_bytes(
             m.read(ui.sym("drv_tab") + RD_ROW * DRVR_SZ + DRVR_SEG, 2),
             "little"):
         sys.exit("rdcz: the RAM disk driver did not load")
     nst = m.read(ui.sym("cp_nst"), 1)[0]        # its page, then Mount
     mo.click(x0 + 40, y0 + CP_I0Y + nst * CP_IROWH + 7)
-    ui.settle(limit=25.0)
+    os88marty.ui_done(ui.m, limit=25.0)
     mo.click(x0 + CP_RX + RP_MNTX + RP_MNTW // 2, y0 + RP_B0Y + RP_BH // 2)
-    ui.settle(limit=25.0)
+    os88marty.ui_done(ui.m, limit=25.0)
     ui.close(cp)
 
 
@@ -233,7 +233,7 @@ def run(a, src, want, img):
     say("rdcz: %s is %d packed bytes, its own header says %d, the host file "
         "is %d; hint struck" % (DOC, packed, unpacked, want))
 
-    with os88ui.boot(img, machine=MACHINE[a.adapter]) as ui:
+    with os88ui.boot(img, machine=MACHINE[a.adapter], quick=True) as ui:
         if a.half in ("fat", "both"):
             ui.open_drive("A")
             verdict("FAT", note_len(ui), want, packed)
@@ -245,7 +245,7 @@ def run(a, src, want, img):
             ui.menu_pick("Edit", "Copy")
             dst_w = ui.open_drive("D")
             ui.menu_pick("Edit", "Paste")
-            ui.settle(limit=40.0)
+            os88marty.ui_done(ui.m, limit=40.0)
             ui.raise_window(dst_w)
             verdict("RAM", note_len(ui), want, packed)
 

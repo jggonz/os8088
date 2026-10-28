@@ -60,7 +60,10 @@ def main():
     a = ap.parse_args()
     os.chdir(ROOT)
     sizes = [int(v) for v in a.sizes.split(",")]
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # open_game's first act is a click
         g = pxslib.open_game(m)
         g.sim(False)                    # the world frozen and the player safe
         g.god(True)                     # (wave 3): 48 brackets of guest time

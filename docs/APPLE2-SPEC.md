@@ -273,6 +273,41 @@ LATCH, where a refusal is legal - the foreign-frame shadow (section 13).
 and is reached by segment arithmetic in `a2mem.inc` and never by a near
 pointer.
 
+#### 3.1.1 The long-lived claims MOVE
+
+**The RAM, the parts carve and Paste's queue are movable** (SPEC.md 66.2,
+docs/plans/NO-PINNING-PLAN.md C3 and C2). The shim says `CC_HAS_ONMOVE` and
+`CC_ONMOVE_PARTS`, and `os88_onmove` (`apple2.c`) puts right every word that
+names one:
+
+| claim | the words that name it | declared |
+|---|---|---|
+| the 49KB RAM | `a2_m.ramseg` - the record `a2cpu.inc` and `a2mem.inc` load DS/ES from | at the end of `os88_main` |
+| the parts carve (the ROM alone) | `a2_m.romseg`, re-read through `os88_part_seg(0)` on EVERY call; `op_base` is crt0's (`cc_partsmv`, which stores it and calls `os88_onmove` with the carve's two bases). The chargen was decoded into `a2_chr` at launch, so no other copy of the ROM's segment exists | by crt0, after `os88_main` returns and after its shrink (section 1.5) |
+| Paste's 2KB queue | `a2_paste_seg` (`a2io.c`), which `a2_paste_take` peeks through at each use | once `os88_clip_get_seg` has filled it |
+
+The overlay part is a claim of its own with crt0's own proc (SPEC.md
+73.14.2.1). **The 53KB foreign-frame shadow stays pinned and that is bucket
+C**: `a2_fsx_enter` claims it, runs the whole fullscreen bracket inside
+`os88_fsx_run`, and frees it before it returns, so it never outlives the
+call that uses it. Load and Save Program's claims are the same shape.
+
+**THE CORE IS UNTOUCHED.** `a2_run` loads DS from `a2_m.ramseg` at its door
+and zeroes the fetch `BOUND` there, so its first fetch re-derives the cached
+fetch ES from both words. It runs on the UI task - the only task that
+compacts (SPEC.md 66.3.1) - and nothing inside it claims, so a move lands
+between two runs and never inside one. `tools/os88rdiff.py` reads all 141
+routines of `a2cpu.inc`, `a2mem.inc`, `a2band.inc`, `a2nib.inc` and
+`a2fsx.inc` instruction-identical at an EVEN shift, the shim's parity pad
+holding it there. Cost: `.text` +141, `.modc` +14, `.data` +4 bytes.
+
+**Gated** by `hosttest/a2uitest.c` (the RAM and Paste's queue declared, and
+`os88_onmove` following the RAM and the carve - red with the `romseg` re-read
+taken out) and by `tests/emumove.py --pkg apple2` (`soak -k a2move`), the only
+row that runs crt0's `cc_partsmv` path: RAM down, region and carve up, the ROM
+at the new `romseg` and the 6502 still running - red, and stuck at one PC,
+with the re-read taken out.
+
 ### 3.2 The address map
 
 | range | what it is | read | write |

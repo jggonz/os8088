@@ -240,6 +240,11 @@ px_fsgo:
     call px_pcall
     jc .bad
     mov byte [px_fsin], 1
+    mov al, PXPART_FULL             ; STOOD IN FOR THE WHOLE BRACKET (px_pin):
+    mov bx, px_pum                  ; px_fsmain far-calls it every frame, and
+    push word [px_pum]              ; one pin here is what keeps each of those
+    push ax                         ; calls from pinning and declaring again
+    call px_pin
     mov byte [px_fschg], 0
     mov ax, [px_ncur]
     mov [px_fsidx], ax
@@ -260,6 +265,8 @@ px_fsgo:
     mov [px_fsmode], al
     jmp short .again
 .after:
+    pop dx                          ; (the part is given back next, so no
+    pop word [px_pum]               ; px_unpin: its claim goes, pinned)
     mov byte [px_fsin], 0
     mov al, PXPART_FULL
     call px_pdrop
@@ -273,6 +280,9 @@ px_fsgo:
     call px_toast
 .out:
     jmp px_ld_6
+    nop                             ; PARITY PAD, never executed: the bracket's
+                                    ; stand-in above is an odd count, and what
+                                    ; follows keeps its even shift (os88rdiff)
 
 ; px_vfree - the view claim given back, its tables and thumbnail with it
 ; (SPEC.md 106.23: 30 KB, and one claim of §50.2's eight while a hidden

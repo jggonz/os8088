@@ -42,9 +42,10 @@ import os88marty                                               # noqa: E402
 import os88mouse                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 import kdhand                                                  # noqa: E402
+import os88build                                               # noqa: E402
 
-SYS = "build/os8088-360.img"
-BIG = "build/doscom144.img"
+SYS = os88build.at("build/os8088-360.img")
+BIG = os88build.at("build/doscom144.img")
 MACH = "os8088_5150_cga_gla_mix"
 
 
@@ -58,11 +59,11 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - run `make kdostest`" % p)
 
-    with os88ui.boot(SYS, apps=BIG, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=BIG, machine=MACH, quick=True) as ui:
         m = ui.m
         if not ui.path("A:/APPS/DOS.O88"):
             fail("could not open DOS.O88 off the system disk")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         dm = dosmap.package()
         pseg = dosmap.instance(m)
@@ -73,8 +74,7 @@ def main():
         # The package reaches B: through the kernel's own mounted volume, so
         # this half passing and the kern_dos half failing is exactly the shape
         # the field reported: the same disk, readable by one and not the other.
-        m.type_text("B:\n")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "B:\n")    # (was type_text + settle)
         vol = m.read(base + dm["dos_vol"], 1)[0]
         if vol != 1:
             fail("typing B: left [dos_vol] at %d - the WINDOW cannot reach "
@@ -84,7 +84,7 @@ def main():
 
         # --- 2. the Shut down the OS arm ------------------------------------------------
         mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         dis = kdhand.rec(m, pseg, dm, kdhand.RD_DIS)
         if dis & (1 << kdhand.WHOLE):
             fail("the Shut down the OS arm is GREYED - this build does not carry "
@@ -92,7 +92,7 @@ def main():
         x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
         pitch = kdhand.rec(m, pseg, dm, kdhand.RD_PITCH)
         mo.click((x1 + x2) // 2, y1 + kdhand.WHOLE * pitch + pitch // 2)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if kdhand.rec(m, pseg, dm, kdhand.RD_SEL) != kdhand.WHOLE:
             fail("clicking the Shut down the OS arm did not pick it")
 
@@ -104,24 +104,23 @@ def main():
         # `type_text` goes nowhere at all. The failure is silent and lands two
         # steps later: Run with an empty path does nothing, and the row reports
         # "never reached READY" about a machine that never left the desktop.
-        # **AND THE EXTENSION IS PART OF THE NAME**: the box does not append
+        # **AND THE EXTENSION IS PART OF THE NAME**: DOS does not append
         # `.COM`, so `DOSHELLO` gets as far as kern_dos and comes back "the
         # program could not be loaded" - which reads exactly like the mount
         # defect this row is about and is not it.
         mo.click(*dosmap.centre(m, pseg, dm, "dos_trect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.click(*dosmap.centre(m, pseg, dm, "dos_pln"))
-        os88marty.settle(m)
-        m.type_text("DOSHELLO.COM")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
+        os88marty.text_taken(m, "DOSHELLO.COM")
         ln = base + dm["dos_pln"]
         if int.from_bytes(m.read(ln + 12, 2), "little") != 12:
             fail("the path box did not take the program's name - LN_LEN is %d"
                  % int.from_bytes(m.read(ln + 12, 2), "little"))
         mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if kdhand.alert_up(m, base, dm):
-            mo.click(*kdhand.alert_button(m, base, dm, 1))    # Proceed
+            mo.click(*kdhand.alert_button(m, base, dm, 1), settle=0)  # Proceed
 
         # --- 4. AND THE ASSERTION, which is the mount ------------------------
         seen = {"rs": []}
@@ -132,7 +131,7 @@ def main():
                        for r in seen["rs"])
         try:                            # a GUEST-time budget
             os88marty.until(m, ended, "the program to mount and reach READY",
-                            poll=0.25, limit=150.0)
+                            poll=0.05, limit=150.0)
         except os88marty.MartyError:
             fail("the program never reached READY under kern_dos. The last "
                  "screen was %r"

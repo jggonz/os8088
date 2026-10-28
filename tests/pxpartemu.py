@@ -52,23 +52,31 @@ def available():
     return HAVE
 
 
+_PARSED = {}      # (kind, path, mtime) -> dict: a part per case re-read
+                  # both files, and that was over a quarter of a host row
+
+
+def _parsed(kind, path, pat, base):
+    key = (kind, path, os.stat(path).st_mtime_ns)
+    if key not in _PARSED:
+        out = {}
+        rx = re.compile(pat)
+        for line in open(path):
+            m = rx.match(line)
+            if m:
+                out[m.group(1)] = int(m.group(2), base)
+        _PARSED[key] = out
+    return dict(_PARSED[key])
+
+
 def link_syms(path=None):
     path = path or os.path.join(ROOT, "build", "pxlink.inc")
-    syms = {}
-    for line in open(path):
-        m = re.match(r"\s*(\w+)\s+equ\s+(0x[0-9A-Fa-f]+|\d+)", line)
-        if m:
-            syms[m.group(1)] = int(m.group(2), 0)
-    return syms
+    return _parsed("link", path, r"\s*(\w+)\s+equ\s+(0x[0-9A-Fa-f]+|\d+)", 0)
 
 
 def api_cells():
-    cells = {}
-    for line in open(os.path.join(ROOT, "apps", "os88api.inc")):
-        m = re.match(r"%define\s+(OSAPI_\w+)\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)", line)
-        if m:
-            cells[m.group(1)] = int(m.group(2), 16)
-    return cells
+    return _parsed("api", os.path.join(ROOT, "apps", "os88api.inc"),
+                   r"%define\s+(OSAPI_\w+)\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)", 16)
 
 
 class PxPart:

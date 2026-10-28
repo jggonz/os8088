@@ -170,17 +170,26 @@ if not os.path.exists(DISK):
                            "-o", DISK, "--size", "360"] + names)
 
 with M.launch("build/os8088-360.img", apps=DISK,
-              machine=MACHINE) as m:
-    M.settle(m)
+              machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)
     mo = Mouse(marty=m)
     mono = m.video()["type"] in ("cga", "mda", "herc")
+
+    def drawn():
+        """The gesture handled: on 1bpp `sig` reads video MEMORY, which the
+        UI pass has written when it is over; VGA reads the rendered frame,
+        which lags it, so that arm keeps a settle."""
+        M.ui_done(m)
+        if not mono:
+            M.settle(m)
     print(f"== {MACHINE} : the thumb drag (SPEC.md 13.10.5) ==")
 
     mo.dblclick(*os88geom.drive_pt(m, "B"))     # B:, the 30-file disk
                                             # above (zone 0 is A:, whose root
                                             # lists six things and cannot make
                                             # a thumb worth dragging)
-    M.settle(m)
+    M.ui_done(m)
     slot, w = disk_win(m)
     check("a Disk window opened", w is not None, f"{w}")
     if not w:
@@ -203,7 +212,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     was = scrl(m)
     mo.to(cx, top + h // 2)
     mo._edge(True)
-    M.pace(m, 0.8)
+    drawn()
     check("a press on the thumb does not PAGE", scrl(m) == was,
           f"(FS_SCRL {scrl(m)}, was {was})")
     check("...and the gesture is live", dragon(m) == 1)
@@ -216,7 +225,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     # (pos 24 of 25 on the 30-file disk, measured), where the bottom row
     # clamps the wanted top AT the travel and the commit is exactly total-fit
     mo.to(cx, target, l=True)
-    M.pace(m, 1.2)
+    drawn()
     after_pos = dragpos(m)
     blk2 = ksb(m)
     t2 = thumb(blk2)
@@ -243,18 +252,18 @@ with M.launch("build/os8088-360.img", apps=DISK,
 
     # --- D: x is never read ------------------------------------------------
     mo.to(cx - 150, target, l=True)
-    M.pace(m, 1.2)
+    M.ui_done(m)
     check("x is never read: 150px off the bar is the same pos",
           dragpos(m) == after_pos, f"({dragpos(m)} vs {after_pos})")
     mo.to(cx + 60, target, l=True)
-    M.pace(m, 1.2)
+    M.ui_done(m)
     check("...on the other side too", dragpos(m) == after_pos,
           f"({dragpos(m)} vs {after_pos})")
 
     # --- E: the release commits -------------------------------------------
     want = dragpos(m)
     mo._edge(False)
-    M.settle(m)
+    M.ui_done(m)
     check("the release commits the dragged pos", scrl(m) == want,
           f"(FS_SCRL {scrl(m)}, wanted {want})")
     check("...and the gesture is over", dragon(m) == 0)

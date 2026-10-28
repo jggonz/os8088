@@ -35,7 +35,7 @@ MARK      equ 0x5A                  ; step 4b's rewrite is offset+MARK, which
                                     ; the file cannot already hold anywhere
 SZ4D      equ BLK * NBLK + 16 + BLK * 2   ; what 4a..4d leave behind
 TRN1      equ 12000                 ; 4g shrinks to this - MORE than the DOS
-                                    ; box's window, so it is the copying arm
+                                    ; read window, so it is the copying arm
 TRN2      equ 100                   ; ...and then to this, which fits it
 GAP       equ 5000                  ; ...and how far past it 4e seeks: bigger
                                     ; than a cluster on every geometry here,
@@ -258,7 +258,7 @@ start:
     int 0x21
     jc .wfail
     cmp ax, 16
-    jne .eshort                     ; a SHORT count here is the box refusing
+    jne .eshort                     ; a SHORT count here is DOS refusing
     mov ah, 0x3E                    ; to grow the file
     mov bx, [handle]
     int 0x21
@@ -464,8 +464,8 @@ start:
     int 0x21
 
     ; --- 4f. ...and CX=0 past the end is "the file ends HERE" (96.11.6.2) ---
-    ; Writing ZERO bytes is how DOS sets a file's length, and both DOS and this
-    ; box answer CF=0 with AX=0 whatever happens - so the SIZE is the only
+    ; Writing ZERO bytes is how DOS sets a file's length, and both DOS and
+    ; os8088's answer CF=0 with AX=0 whatever happens - so the SIZE is the only
     ; assertion there can be. Only the extending direction is built; the
     ; shortening one is still a no-op and is not asserted here.
     mov ax, 0x3D02

@@ -1,0 +1,13 @@
+# ROUND 4: the Unicorn rows (pip install unicorn, done). row  declared_secs  script  needs
+DONE csprobe	45	tests/csprobe.py	nasm,unicorn
+DONE picomem	35	tests/picomem.py	nasm,unicorn
+DONE vblkemupm	16	tests/vblkemu.py	nasm,unicorn
+DONE pxsavehost	14	tests/pxsave.py	nasm,unicorn
+DONE pxedithost	13	tests/pxedit.py	nasm,unicorn
+DONE vblkemu	10	tests/vblkemu.py	nasm,unicorn
+DONE pxextraemu	5	tests/pxextraemu.py	nasm,unicorn
+DONE pxanimemu	3	tests/pxanimemu.py	nasm,unicorn
+DONE mixerhost	2	tests/mixermodel.py	nasm,unicorn
+DONE xmla	2	tests/xmla.py	nasm,unicorn
+DONE decfmt	1	tests/decfmt.py	nasm,unicorn
+DONE m83	1	tests/m83.py	nasm,unicorn

@@ -18,7 +18,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -62,10 +61,10 @@ def equ(name, src):
 def launch(img):
     os88fixture.need(img, "build/apps.img")
     em = "qemu" + "-system-i386"
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=off -vga std"
-        " -drive file=%s,format=raw,if=floppy -boot a"
-        " -drive file=%s,format=raw,if=floppy,index=1"
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
         " -serial msmouse"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (_B.at(img), _B.at("build/apps.img"), vesa.SOCK, vesa.PIDFILE),
@@ -89,13 +88,7 @@ def main():
     fails = []
     try:
         q = heapmap.Qmp(vesa.SOCK)
-        t0 = time.time()
-        while vesa.byte(q, "vid_kind") != VID_VESA:
-            if time.time() - t0 > 60:
-                fails.append("the desktop never reached VID_VESA")
-                break
-            time.sleep(0.5)
-        os88qemu.pace(q, 12.0)
+        vesa.desk_up(q, fails)              # the autostart's load and first paint
         sw, sh, pix = vesa.screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
         if out_png:
             shot.png(out_png, sw, sh, pix)

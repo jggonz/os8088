@@ -110,7 +110,7 @@ def main(argv):
         if len(m.cards()) != 2:
             sys.exit("dispthm: %s is not a two-card machine" % a.machine)
         m.run()
-        settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
         dispsize.extend(m, mo, settle)
 

@@ -82,14 +82,17 @@ def main():
     with os88marty.launch("build/os8088-360.img", apps=DISK,
                           machine=a.machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)  # SOAK-SPEED 12
+        # every read below is guest MEMORY (claims, bss), so the UI being
+        # done with a gesture is the wait (SOAK-SPEED technique 4)
+        done = lambda m, **k: os88marty.ui_done(m, lock=False)  # noqa: E731
         mo = os88mouse.Mouse(marty=m)
 
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
         mo.drag(wx + 60, wy + 9, wx + 60 + 215, wy + 9)
-        os88marty.settle(m)
+        done(m)
         disk = dispcp.win_rect(m, S, dslot)[:2]
 
         def raise_disk():
@@ -97,37 +100,37 @@ def main():
             pt = uncovered(m, S, dw)
             if pt is None:
                 raise RuntimeError("the Disk window is wholly covered")
-            mo.click(*pt)
-            os88marty.settle(m)
+            mo.click(*pt, settle=0)
+            done(m)
 
         def front(win, what):
             pt = uncovered(m, S, win, prefer_title=True)
             if pt is None:
                 print("FAIL: %s is wholly covered; cannot raise it" % what)
                 raise SystemExit(1)
-            mo.click(*pt)
-            os88marty.settle(m)
+            mo.click(*pt, settle=0)
+            done(m)
 
         def open_named(name, secs, at):
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
-            dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=name)
+            dispcp.open_named(m, mo, S, done, *disk, name=name)
             try:                            # a load freezes the UI, which a
                 os88marty.until(            # screen settle takes for "done"
                     m, lambda _: any(w.visible and w.i not in before
                                      for w in os88geom.windows(m, S)),
-                    "%s's window" % name, poll=0.25, limit=secs * 10)
+                    "%s's window" % name, limit=secs * 10)
             except os88marty.MartyError:
                 pass                        # ...reported just below
-            os88marty.settle(m)
+            done(m)
             new = [w for w in os88geom.windows(m, S)
                    if w.visible and w.i not in before]
             if not new:
                 print("FAIL: %s never opened a window" % name)
                 raise SystemExit(1)
             w = new[0]
-            seg = u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
+            seg = os88marty.pkg_live(m, w, S)
             mo.drag(w.x + 60, w.y + 9, at[0] + 60, at[1] + 9)
-            os88marty.settle(m)
+            done(m)
             w = [x for x in os88geom.windows(m, S) if x.i == w.i][0]
             return seg, w
 
@@ -151,11 +154,11 @@ def main():
         m.key("KeyR")                       # ...and THIS is the whole difference
         try:                                # from tests/regpin.py
             os88marty.until(m, lambda _: bss(m, pm_seg, PM_RST, 1)[0] == 1,
-                            "PinMe's restart declaration", poll=0.25,
+                            "PinMe's restart declaration",
                             limit=10)
         except os88marty.MartyError:
             pass                            # a refusal: judged below
-        os88marty.settle(m)
+        done(m)
 
         def slot_of(seg):
             """The instance slot whose region is `seg`, or None. The side
@@ -191,8 +194,8 @@ def main():
 
         for w, what in ((p1, "Paint #1"), (p2, "Paint #2")):
             front(w, what)
-            mo.click(w.x + 8, w.y + 9)
-            os88marty.settle(m)
+            mo.click(w.x + 8, w.y + 9, settle=0)
+            done(m)
             if any(x.i == w.i and x.visible for x in os88geom.windows(m, S)):
                 print("FAIL: %s did not close, so its hole never opened" % what)
                 return 1
@@ -207,11 +210,11 @@ def main():
                 os88marty.until(
                     m, lambda _: pkg_seg(m, S, "PinMe")[0] not in (pm_seg,
                                                                    None),
-                    "PinMe's region to move", poll=0.25,
+                    "PinMe's region to move",
                     guest=6 * os88marty.GUEST_PACE)
             except os88marty.MartyError:
                 pass                        # ...press again
-            os88marty.settle(m)
+            done(m)
             if pkg_seg(m, S, "PinMe")[0] not in (pm_seg, None):
                 break
 

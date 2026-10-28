@@ -16,7 +16,7 @@ in the middle of that band. Its own header carries the table.
 WHAT IT WOULD CATCH:
 
   - `.loadtry` deleted, so a refusal    -> the program never loads at all and
-    stands                                 the box stays in DST_ERR. THIS IS
+    stands                                 DOS stays in DST_ERR. THIS IS
                                            THE BREAK-ON-PURPOSE CHECK: the row
                                            passes only because the retry is
                                            there
@@ -41,7 +41,7 @@ WHAT IT WOULD CATCH:
                                              [7, 4, 2, 0]
 
 THE WINDOWED RUN IS THE CONTROL and it is expected to FAIL: 586KB does not fit
-the windowed box's ~437KB arena, so the box lands in DST_ERR before the third
+the windowed DOS's ~437KB arena, so DOS lands in DST_ERR before the third
 arm is ever picked. That is what makes this fixture a fair question rather than
 a program that would have run anywhere.
 
@@ -224,7 +224,7 @@ def main():
         base = pseg << 4
         mo = os88mouse.Mouse(marty=m)
 
-        # --- the control: it does NOT fit the windowed box -------------------
+        # --- the control: it does NOT fit the windowed DOS -------------------
         st = m.read(base + dm["dos_state"], 1)[0]
         if st != DST_ERR:
             fail("the windowed run left [dos_state] at %d and this fixture is "
@@ -232,7 +232,7 @@ def main():
                  "against a %d-byte file). If it now FITS, the fixture has "
                  "drifted small and the row is no longer asking anything"
                  % (st, size))
-        print("kdbigexe: 1/5 the windowed box refused it, which is the control")
+        print("kdbigexe: 1/5 windowed DOS refused it, which is the control")
 
         # --- the Shut down the OS arm ---------------------------------------------------
         mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"))

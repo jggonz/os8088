@@ -107,6 +107,12 @@
 %define OP_NO_LAZYOK                ; ...and nothing here asks "would it fit"
                                     ; before a fetch (SPEC.md 20.12.9.2): the
                                     ; canvas's own 10.1 arithmetic asks first
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned, unsigned) -
+                                    ; the bundle, VM, grid and canvas claims
+                                    ; and the canvas core all MOVE (WEAVE-SPEC
+                                    ; 1.2.6), and it puts every copy right
+%define CC_ONMOVE_REGION            ; ...told of the REGION's moves as well:
+                                    ; wvm.inc banks our DS for its natives
 %define CC_HAS_WORKER               ; void os88_worker(void *) - WEAVE-SPEC
 
 %define CC_STACK_CLASS OS88_STACK_192 | OS88_HIGH | OS88_HIGHMEM ; ...AND HOW MUCH STACK IT WANTS
@@ -281,6 +287,9 @@
 %endif
 %if WSMF_DESC != 7 || WSMF_NFRAME != 6 || WSMF_COLOR != 8
   %error "wsmabi.inc's sprite fields moved; weave.h's WSMF_* must follow"
+%endif
+%if WSS_CVSEG != 8 || WSS_BSEG != 12
+  %error "wsmabi.inc's state block moved; weave.h's WSS_CVSEG/WSS_BSEG must follow"
 %endif
 %if WSS_RUN != 0 || WSS_FRAME != 6 || WSS_BLITS != 18 || WSS_FRAMES != 20
   %error "wsmabi.inc's state block moved; weave.h's WSS_* must follow"

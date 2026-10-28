@@ -102,9 +102,16 @@ def claims(m, S):
 
 def run():
     S = lambda n: os88sym.linear(n, defines=DEFINES)     # noqa: E731
-    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+    # Every read below is guest state (the window list, MSEG's bss, the
+    # claim table, the sector count): the boot gates on the kernel's desktop
+    # state and every wait is `ui_done`, never a picture settle.
+    done = lambda mm, **k: os88marty.ui_done(mm)
+    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
         rows = dispcp.listing(m, S)
         have = [n.upper() for n, _ in rows]
@@ -125,9 +132,9 @@ def run():
         # open. `expect="refusal"` requires no window and reports ld_status
         # as the answer - a stronger statement than the blind settle it
         # replaces, which could not tell a refusal from a slow launch.
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEGBIG.O88",
+        dispcp.open_named(m, mo, S, done, wx, wy, "MSEGBIG.O88",
                           expect="refusal")
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         c1 = struct.unpack_from("<H", m.read(i13, 2), 0)[0]
         big_secs = (struct.unpack_from("<H", m.read(secs, 2), 0)[0] - s0) & 0xFFFF
         big_status = m.read(S("ld_status"), 1)[0]
@@ -176,8 +183,8 @@ def run():
         # --- and the SUCCESS on the same disk, for the difference ----------
         c0 = struct.unpack_from("<H", m.read(i13, 2), 0)[0]
         s0 = struct.unpack_from("<H", m.read(secs, 2), 0)[0]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEG.O88")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, done, wx, wy, "MSEG.O88")
+        os88marty.ui_done(m)
         c1 = struct.unpack_from("<H", m.read(i13, 2), 0)[0]
         ok_secs = (struct.unpack_from("<H", m.read(secs, 2), 0)[0] - s0) & 0xFFFF
         ok_status = m.read(S("ld_status"), 1)[0]

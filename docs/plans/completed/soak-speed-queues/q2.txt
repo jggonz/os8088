@@ -1,0 +1,120 @@
+# family  row  declared_secs  script  (work top-down; a script shared by several rows is optimized once)
+DONE exci	excitebikeaudiolap	400	tests/excitebike_perf.py
+DONE exci	excitebikeaudio	300	tests/excitebike_audio.py
+DONE exci	excitebikeaudiofm	300	tests/excitebike_audio.py
+DONE exci	excitebikevideoherc	245	tests/excitebike_video.py
+DONE exci	excitebikeai	180	tests/excitebike_flow.py
+DONE exci	excitebikevideo	170	tests/excitebike_video.py
+DONE exci	excitebikeref	170	tests/excitebike_ref.py
+DONE exci	excitebikevideocga	150	tests/excitebike_video.py
+DONE exci	excitebikelap	150	tests/excitebike_perf.py
+DONE exci	excitebikeaudiocap	150	tests/excitebike_audio.py
+exci	excitebikeega	120	tests/excitebike_front.py
+DONE exci	excitebikeflow	120	tests/excitebike_flow.py
+DONE exci	excitebikeselfb	120	tests/excitebike_perf.py
+DONE exci	excitebikelapherc	120	tests/excitebike_perf.py
+exci	excitebikeload	120	tests/excitebike_load.py
+DONE exci	excitebikesmallclaim	110	tests/excitebike_video.py
+exci	excitebikefront	90	tests/excitebike_front.py
+DONE exci	excitebikeperf	90	tests/excitebike_perf.py
+DONE exci	excitebikeaiherc	90	tests/excitebike_flow.py
+DONE exci	excitebikecustom	70	tests/excitebike_flow.py
+exci	excitebikeboot720	70	tests/excitebike_geom.py
+exci	excitebikeboot1440	70	tests/excitebike_geom.py
+exci	excitebikelowmem	70	tests/excitebike_geom.py
+DONE exci	excitebikeflowherc	60	tests/excitebike_flow.py
+exci	excitebikeboot360	60	tests/excitebike_geom.py
+DONE exci	excitebikecustomherc	55	tests/excitebike_flow.py
+DONE exci	excitebikeselfbherc	50	tests/excitebike_perf.py
+DONE exci	excitebikeperfherc	40	tests/excitebike_perf.py
+gori	gorillas	370	tests/gorillas.py
+gori	gorillasfront	305	tests/gorillasfront.py
+gori	gorillasreactions	300	tests/gorillasreactions.py
+gori	gorillasinput	300	tests/gorillasinput.py
+gori	gorillasmusic	253.5	tests/gorillasmusic.py
+gori	gorillasmenu	160	tests/gorillasmenu.py
+gori	gorillascity	100	tests/gorillascity.py
+n	1942sound	751.5	tests/n1942sound.py
+n	1942	216.1	tests/n1942.py
+n	1942front	180	tests/n1942front.py
+pxsa	pxsave	600	tests/pxsave.py
+pxsa	pxsauto	65	tests/pxsauto.py
+pxsa	pxsact	65	tests/pxsact.py
+pxed	pxedit	600	tests/pxedit.py
+boot	bootfloor-ab	420	tests/bootfloor.py
+boot	bootstatus	90	tests/bootstatus.py
+fddp	fddpark	300	tests/fddpark.py
+fddp	fddpage	120	tests/fddpage.py
+dotd	dotdel	150	tests/dotdel.py
+dotd	dotdelpen	90	tests/dotdelpen.py
+dotd	dotdelwin	75	tests/dotdelwin.py
+dotd	dotdelmd	60	tests/dotdelmd.py
+heap	heapscrl	120	tests/heapscrl.py
+heap	heaphi	90	tests/heaphi.py
+heap	heapcheck	60	tests/heapcheck.py
+heap	heapdrv	60	tests/heapdrv.py
+pxop	pxopenpng	120	tests/pxopen.py
+pxop	pxopen	90	tests/pxopen.py
+pxop	pxopencga	90	tests/pxopen.py
+dosf	dosfull	120	tests/dosfull.py
+dosf	dosfix	60	tests/dosfix.py
+dosf	dosfile	35	tests/dosfile.py
+dosf	dosfcb	30	tests/dosfcb.py
+lzco	lzcomp	150	tests/lzcomp.py
+lzco	lzglyph	65	tests/lzcomp.py
+lzsh	lzship-lzb	120	tests/lzship.py
+lzsh	lzship	80	tests/lzship.py
+pxsw	pxswin	120	tests/pxswin.py
+pxsw	pxswin-price	65	tests/pxswin.py
+wmch	wmchrome	180	tests/wmchrome.py
+mseg	mseglazy	50	tests/mseglazy.py
+mseg	mseglzslack	50	tests/mseglzslack.py
+mseg	msegnomem	40	tests/msegnomem.py
+mseg	msegplslack	20	tests/mseglzslack.py
+wddr	wddrag	150	tests/wddrag.py
+brto	brtoolbar	145	tests/brtoolbar.py
+icos	icoshed	75	tests/icoshed.py
+icos	icostore	60	tests/icostore.py
+wdcl	wdclick	130	tests/wdclick.py
+dost	dostype	120	tests/dostype.py
+disk	diskclone	120	tests/diskclone.py
+lzlo	lzload-lz4	80	tests/lzload.py
+lzlo	lzload	30	tests/lzload.py
+bigv	bigvol	110	tests/bigvol.py
+btna	btnall	95	tests/btnall.py
+brfe	brfetch	95	tests/brfetch.py
+mcse	mcseg	90	tests/mcseg.py
+drvs	drvscroll	80	tests/drvscroll.py
+tmre	tmrepair	80	tests/tmrepair.py
+pxsh	pxshud-vga	45	tests/pxshud.py
+pxsh	pxshud	30	tests/pxshud.py
+fcpr	fcproom	70	tests/fcproom.py
+rdcz	rdcz	70	tests/rdcz.py
+hdma	hdmap	65	tests/hdmap.py
+vidb	vidbench	34	tests/vidbench.py
+vidb	vidbigclus	30	tests/vidbigclus.py
+line	linecar	60	tests/linecar.py
+wdpe	wdpen	60	tests/wdpen.py
+rdup	rdup	60	tests/rdup.py
+uidr	uidrdis	55	tests/uidrdis.py
+roms	romsmall	45	tests/romsmall.py
+roms	romsock	5	tests/romsock.py
+kdcw	kdcwd	50	tests/kdcwd.py
+tpsa	tpsaveu	50	tests/tpsaveu.py
+atcl	atclip	45	tests/atclip.py
+vgad	vgadrop	40	tests/vgadrop.py
+gbsa	gbsave	40	tests/gbsave.py
+brpr	brpromise	40	tests/brpromise.py
+b	b4walk	40	tests/b4walk.py
+ptse	ptsext	31	tests/ptsext.py
+appl	apple2part	30	tests/apple2part.py
+curb	curbusy	30	tests/curbusy.py
+medi	mediadisk	30	tests/mediadisk.py
+blob	blobsum	27	tests/blobsum.py
+dosv	dosvec	25	tests/dosvec.py
+fpgc	fpgcold	20	tests/fpgcold.py
+ovlh	ovlhigh	20	tests/ovlhigh.py
+uibl	uiblock	20	tests/uiblock.py
+v	v20boot	17	tests/v20boot.py
+cylr	cylrun	10	tests/cylrun.py
+kdos	kdos	10	tests/kdos.py

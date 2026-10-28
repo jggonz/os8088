@@ -16,8 +16,9 @@ the capture must hold
     (the length counter), with silence between the two (the DAC off);
   * and nothing after it.
 
-Durations are not asserted tightly: the 8088 interprets, and the game may run
-at less than its own speed. Breaking the length counter (rdg_sqframe never
+Durations are not asserted tightly: the game may run at less than its own
+speed on an 8088, and its launch there reads the recompiler's part (~1.5-1.9
+s, REALDMG-SPEC 16.10), so the capture runs 10 s past the open. Breaking the length counter (rdg_sqframe never
 counting down) leaves the 880 Hz tone running to the end of the capture, and
 the row fails naming that.
 """
@@ -97,7 +98,7 @@ def main():
             os.environ.pop("MARTYPC_WAV", None)
             M.guest_sleep(ui.m, 2)          # the boot's own beep, behind us
             ui.path("B:/GBTONE.GB")
-            M.guest_sleep(ui.m, 8)
+            M.guest_sleep(ui.m, 10)
     finally:
         os.environ.pop("MARTYPC_WAV", None)
     wav = [os.path.join(tmp, f) for f in sorted(os.listdir(tmp))

@@ -64,7 +64,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=PT, machine="os8088_5150_herc_gla") as ui:
+    with os88ui.boot(SYS, apps=PT, machine="os8088_5150_herc_gla", quick=True) as ui:
         m = ui.m
         S = m.sym
 
@@ -114,7 +114,7 @@ def main():
                 pass
 
         # --- arm A, in TWO brackets: cold, then warm ------------------------
-        os88marty.settle(m)
+        os88marty.ui_done(m)            # no read in flight before the bracket
         m.disk(reset=True)
         m.type_text("p")
         wait(lambda: b(R_MARK), "the first OSAPI_FILE_PATH", 0.05)

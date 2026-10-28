@@ -60,6 +60,7 @@ if SMALL:
     os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
 
 import os88build            # noqa: E402
+import os88marty            # noqa: E402
 import os88sym              # noqa: E402
 import os88ui               # noqa: E402
 import deskclip as dc       # noqa: E402
@@ -97,40 +98,49 @@ def check(cond, what):
         fails.append(what)
 
 
-for machine, sc in RUNS:
-    with os88ui.boot(IMAGE, apps=APPS, machine=machine) as ui:
-        print("== %s %s / %s" % ("kern_small" if SMALL else "kern_big",
-                                 machine, sc))
-        trig, done = dc.SCENARIOS[sc](ui)
-        slot, rect = dc.LAST["spared"]
-        if rect is None:
-            check(False, "SETUP: the spared window lies over the cell")
-            continue
-        hits = dc.armed(ui, trig, names=MARKS)
-        ui.settle()
-        check(done(), "SETUP: the gesture happened")
-        ps = dc.passes(hits)
-        check(bool(ps), "a damage pass ran")
-        names = [h["name"] for p in ps for h in p]
-        drawn = [h["hit"]["slot"] for p in ps for h in p
-                 if h["name"] == "wm_draw_win"]
-        if SMALL and sc == "cell":
-            pass                # B draws a partly visible cell WHOLE: the
-                                # window over it is owed, as it always was
-        else:
-            check(slot not in drawn,
-                  "(a) window %d over the cell is not redrawn (drawn: %r)"
-                  % (slot, drawn))
-        if SMALL and sc == "drag":
-            n = names.count("desk_draw_zone")
-            check(n == 0, "the covered cells are not drawn (%d draws)" % n)
-        if sc == "cell":
-            n = sum(promoted(p) for p in ps)
-            check(n == 0, "(c) nothing moved, so nothing is promoted "
-                          "(%d title bars drawn after the window pass)" % n)
-        bad = dc.verify(ui, only=rect)
-        check(bad == 0, "(b) window %d over the cell, %r, matches a whole "
-                        "repaint (%d pixels differ)" % (slot, rect, bad))
+def leg(ui, machine, sc):
+    print("== %s %s / %s" % ("kern_small" if SMALL else "kern_big",
+                             machine, sc))
+    trig, done = dc.SCENARIOS[sc](ui)
+    slot, rect = dc.LAST["spared"]
+    if rect is None:
+        check(False, "SETUP: the spared window lies over the cell")
+        return
+    hits = dc.armed(ui, trig, names=MARKS)
+    dc.still(ui)
+    check(done(), "SETUP: the gesture happened")
+    ps = dc.passes(hits)
+    check(bool(ps), "a damage pass ran")
+    names = [h["name"] for p in ps for h in p]
+    drawn = [h["hit"]["slot"] for p in ps for h in p
+             if h["name"] == "wm_draw_win"]
+    if SMALL and sc == "cell":
+        pass                # B draws a partly visible cell WHOLE: the
+                            # window over it is owed, as it always was
+    else:
+        check(slot not in drawn,
+              "(a) window %d over the cell is not redrawn (drawn: %r)"
+              % (slot, drawn))
+    if SMALL and sc == "drag":
+        n = names.count("desk_draw_zone")
+        check(n == 0, "the covered cells are not drawn (%d draws)" % n)
+    if sc == "cell":
+        n = sum(promoted(p) for p in ps)
+        check(n == 0, "(c) nothing moved, so nothing is promoted "
+                      "(%d title bars drawn after the window pass)" % n)
+    bad = dc.verify(ui, only=rect)
+    check(bad == 0, "(b) window %d over the cell, %r, matches a whole "
+                    "repaint (%d pixels differ)" % (slot, rect, bad))
+
+
+# ONE BOOT PER MACHINE: each scenario starts from a fork snapshot of the same
+# settled desktop (os88marty.Forks), not from a boot of its own
+for machine in sorted({mc for mc, _ in RUNS}, key=[mc for mc, _ in RUNS].index):
+    with os88ui.boot(IMAGE, apps=APPS, machine=machine, quick=True) as ui0, \
+            os88marty.Forks(ui0.m) as fk:
+        for sc in [s for mc, s in RUNS if mc == machine]:
+            with fk.restore() as r:
+                leg(os88ui.UI(r), machine, sc)
 
 print()
 if fails:

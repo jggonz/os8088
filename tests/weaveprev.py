@@ -140,7 +140,6 @@ def _menu_pick(m, mo, S, cell, item):
     t = m.read(S("menu_bar") + cell * MB_ENTSZ, MB_ENTSZ)
     x = _u16(t, MB_XL) + 6
     mo.menu(x, 8, x, MBAR_H + 1 + item * MENU_ITEM_H + 8)
-    os88marty.settle(m)
 
 
 def _pane(cx, cy, cw, ch):
@@ -202,10 +201,15 @@ def _drive(machine, card, vidw, vidh, S, m, stem, wab, known, png_dir):
         return
 
     _menu_pick(m, mo, S, VIEW_CELL, PREVIEW_ITEM)   # View > Preview
-    os88marty.settle(m)
-    os88marty.settle(m)                 # the pack is a claim and a compile;
-                                        # the module read is a disk revolution
-    weavegrid._park(m, mo, vidw, vidh)
+    # THE UI TASK IS THE WITNESS, not the picture: the Preview is a claim, a
+    # compile and a module read run from the menu's handler, all on the UI
+    # task, and the pane is painted inside that pass under the lock - so
+    # `ui_done` is the end of it (its hold catches a disk read in flight).
+    # Every read below is VIDEO MEMORY (`m.vram`), not the rendered glass,
+    # so no settle is owed for the card to show it.
+    os88marty.ui_done(m, "LOOM's Preview of %s" % stem)
+    mo.to(vidw - 4, vidh - 4)           # weavegrid._park's reason: the
+    os88marty.ui_done(m, "the parked pointer")  # cursor is in the framebuffer
     vw, vh, rows = m.vram(card)
 
     cx, cy, cw, ch = weavegrid._content(m, S, win, vidw)
@@ -281,21 +285,27 @@ def _drive(machine, card, vidw, vidh, S, m, stem, wab, known, png_dir):
 
 def session(machine, card, vidw, vidh, png_dir=None, only=None):
     S = os88sym.linear
-    for stem, wab, known in CARDS:
-        if only and stem != only:
-            continue
-        weavesmoke.BUNDLE = "%s.WML" % stem
-        weavesmoke.FOLDER = "LOOM"          # the sources' folder (11.2)
-        with os88marty.launch("build/os8088-360.img", apps=DISK,
-                              machine=machine) as m:
-            try:
-                _drive(machine, card, vidw, vidh, S, m, stem, wab, known,
-                       png_dir)
-            except os88marty.MartyError as e:
-                check(False, "%s/%s: the session broke off" % (machine, stem),
-                      "the machine booted, so this is the harness losing its "
-                      "grip on it rather than the tree being wrong",
-                      got=str(e)[:200], want="a driven session")
+    # ONE BOOT A MACHINE, A FORK A PROJECT: each project starts from the
+    # same booted desktop bytes (os88marty.Forks), so the three sessions
+    # stay independent - a module or a .bss left behind by the previous
+    # Preview cannot be what this one reads - for one boot instead of three.
+    with weavesmoke.booted("build/os8088-360.img", apps=DISK,
+                           machine=machine) as m0, os88marty.Forks(m0) as fk:
+        for stem, wab, known in CARDS:
+            if only and stem != only:
+                continue
+            weavesmoke.BUNDLE = "%s.WML" % stem
+            weavesmoke.FOLDER = "LOOM"          # the sources' folder (11.2)
+            with fk.restore() as m:
+                try:
+                    _drive(machine, card, vidw, vidh, S, m, stem, wab, known,
+                           png_dir)
+                except os88marty.MartyError as e:
+                    check(False, "%s/%s: the session broke off"
+                          % (machine, stem),
+                          "the machine booted, so this is the harness losing "
+                          "its grip on it rather than the tree being wrong",
+                          got=str(e)[:200], want="a driven session")
 
 
 def main():

@@ -6,7 +6,7 @@
 ; of a Game Boy, its eight buttons boxes that name the key each has. Click
 ; one and the screen says to press a key; the next key typed is that
 ; button's, and a key another button had changes places with it. Esc, Alt,
-; F1-F9, F12 and 1-9 are RealDMG's own (F5, F8 and 1-9 the save states',
+; F1-F12 and 1-9 are RealDMG's own (F5, F8 and 1-9 the save states',
 ; rwstate.inc) and are refused, the screen says so, and it waits on. Default puts the keys back as they shipped. The map is
 ; rw_keymap, the worker's to read every look (rw_keys), and REALDMG.CFG
 ; keeps it (rw_cfgsave).
@@ -539,13 +539,13 @@ rw_konkey:
     je .no
     cmp al, 54h                     ; (SysRq and a shifted F-key's codes)
     jb .fk
-    cmp al, 57h
+    cmp al, 58h
     jb .no
 .fk:
     cmp al, 3Bh                     ; F1-F4: RealDMG's own, F5 and F8 the
     jb .ok                          ;   save states', F6 and F7 the
-    cmp al, 43h                     ;   replays' and F9 Sound's
-    jbe .no
+    cmp al, 44h                     ;   replays', F9 Sound's and F10
+    jbe .no                         ;   two shades (F11, 57h, the camera's)
 .ok:
     xor bh, bh                      ; BX = the button
     mov si, rw_keymap               ; a button that has it takes this one's

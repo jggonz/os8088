@@ -56,6 +56,9 @@ IMG = "build/os8088-360.img"
 APPS = "build/apps360.img"
 
 
+_TREES = {}
+
+
 def tree(*knobs):
     """One configuration's PRIVATE build (tools/os88build.py).
 
@@ -64,10 +67,19 @@ def tree(*knobs):
     floor and floor-1, plus a probe build to read the sector's own number), so
     it was six full builds and the shared tree carried a RAMKB kernel through
     all of them. The trees are keyed and cached, so a re-run costs none.
+
+    **AND ASKED ONCE PER PROCESS.** A cached tree still costs a `make` over
+    it to prove it is up to date - ~17 host seconds on a loaded box - and
+    this file asks for the same five trees twelve times, which was most of
+    the row. Nothing edits the source while it runs, so the first answer
+    stands for the rest of it.
     """
-    return os88build.tree(*knobs,
-                          targets=("os8088-360.img", "apps360.img",
-                                   "boot360.bin"))
+    if knobs not in _TREES:
+        _TREES[knobs] = os88build.tree(*knobs,
+                                       targets=("os8088-360.img",
+                                                "apps360.img",
+                                                "boot360.bin"))
+    return _TREES[knobs]
 
 
 def floor_kb(bdir):
@@ -94,18 +106,57 @@ def floor_kb(bdir):
 
 
 def boots(kb, extra):
-    """(reached_a_desktop, the text on screen) for one RAMKB build."""
+    """(reached_a_desktop, the text on screen) for one RAMKB build.
+
+    ONE LAUNCH AND NO TIMEOUT ON EITHER SIDE. This used to wait for a desktop
+    and, on the refusal, wait out launch's whole boot budget before booting a
+    SECOND time to read the screen. Now one machine runs until it says which:
+    the kernel's desktop STATE (desk_rows and menu_nbar written, [spl_live] =
+    0 - the tree's own map, so it is that kernel's words) or the sector's own
+    message on the text screen.
+
+    THE MESSAGE IS A LINE ENDING IN `RAM`, NOT `RAM` ANYWHERE: GLaBIOS's
+    POST leaves `RAM    [ 640 KB OK ]` on every screen it boots, so the bare
+    substring was true of a machine that hung after the POST as of one that
+    refused - the sector's `msg_mem` is printed at the cursor after it.
+    """
     t = tree("RAMKB=%d" % kb, *extra)
+    t.apply()                           # m.sym resolves against THIS kernel
     img, apps = t.img("os8088-360.img"), t.img("apps360.img")
-    try:
-        with os88marty.launch(img, apps=apps, machine=MACHINE) as m:
-            return True, "\n".join(m.screen())
-    except os88marty.MartyError:
-        # No desktop. Come back with no gate and read what IS on the screen:
-        # `RAM` is the assertion, and a machine that hung on a blank screen
-        # would be a different defect wearing the same verdict.
-        with os88marty.launch(img, apps=apps, machine=MACHINE, boot=10) as m:
+    with os88marty.launch(img, apps=apps, machine=MACHINE, boot=False) as m:
+        m.run()
+        a = (m.sym("desk_rows"), m.sym("menu_nbar"), m.sym("spl_live"))
+        seen = {}
+
+        # A VERDICT COUNTS ONLY ONCE IT HAS HELD FOR A GUEST SECOND. RAM
+        # comes up holding whatever it holds - those three words read
+        # "desktop" at reset often enough to have answered this in 1.5 guest
+        # seconds - and the kernel's own zeroing passes through states that
+        # read the same for a few microseconds. A desktop, and a sector
+        # halted on its message, stay.
+        def which(_):
+            if (any(m.read(a[0], 2)) and any(m.read(a[1], 2))
+                    and not m.read(a[2], 1)[0]):
+                v, text = True, None
+            else:
+                text = m.screen()
+                v = (False if any(ln.rstrip().endswith("RAM") for ln in text)
+                     else None)
+            cyc = int(m.status()["cycles"])
+            if v is None or seen.get("v") is not v:
+                seen.update(v=v, c0=cyc)
+                return False
+            if (cyc - seen["c0"]) / os88marty.GUEST_HZ < 1.0:
+                return False
+            seen["up"] = v
+            seen["text"] = "\n".join(text) if text else ""
+            return True
+        try:
+            os88marty.until(m, which, "a desktop or the sector's RAM",
+                            poll=0.05, guest=120.0)
+        except os88marty.MartyError:
             return False, "\n".join(m.screen())
+        return seen["up"], seen.get("text", "")
 
 
 for label, extra in (("kern_big", ()), ("kern_small", ("KERN_SMALL=1",))):
@@ -161,7 +212,8 @@ for label, extra in (("kern_big", ()), ("kern_small", ("KERN_SMALL=1",))):
           "the compare, which would make the check above pass for no "
           "reason at all",
           got="a desktop", want="a refusal")
-    check("RAM" in text, "...and says RAM", "the sector should reach its "
+    check(any(ln.rstrip().endswith("RAM") for ln in text.splitlines()),
+          "...and says RAM", "the sector should reach its "
           "own message rather than hanging: a blank screen here is a "
           "different defect with the same verdict",
           got=text.strip()[:120] or "(a blank screen)", want="RAM")

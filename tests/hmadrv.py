@@ -127,11 +127,12 @@ def boot(tmp, mem, sysimg, apps, hd):
             break
         time.sleep(0.2)
     xmcheck.wait_desktop(q.sock, "hmadrv")
-    floors = (EQ["HEAP_SEG"], EQ["COLD_RAM"] + EQ["VGABUF_PARA"])
+    floors = (EQ["HEAP_SEG"],                  # (rounded: SPEC.md 2.10.9)
+              (EQ["COLD_RAM"] + EQ["VGABUF_PARA"] + 31) // 32 * 32)
     if not os88qemu.acted(q, lambda: u16(q.read(S("mem_base"), 2)) in floors,
                           secs=120, what="the blob to be given back"):
         raise SystemExit("hmadrv: the boot never finished (-m %d)" % mem)
-    os88qemu.pace(q, 1)
+    os88qemu.ui_done(q, S, cap=1.0)         # (was pace(1): capped at it)
     return q
 
 
@@ -206,6 +207,17 @@ def record_play(q, ui, snd_seg, want, hma):
         at = u16(q.readseg(seg, syms["rc_msg"], 2))
         return bytes(q.readseg(seg, at, 32)).split(b"\0")[0] \
             .decode("latin-1")
+    # THE APP'S BAR, before the pick: the window is up a pass before its
+    # menu set is (the bar read Apple..Disk + Locator, or + Recorder alone)
+    def bar():
+        try:
+            return any(c[0] == "Sound" for c in ui.menus())
+        except Exception:                           # noqa: BLE001
+            return False
+    if not os88qemu.acted(q, bar, secs=10, what="Recorder's Sound menu"):
+        want(False, "Recorder's Sound menu on the bar (%r)"
+             % [c[0] for c in ui.menus()])
+        return
     ui.menu_pick("Sound", "Demo")
     if not os88qemu.acted(q, lambda: msg().startswith("DEMO STAGED"),
                           secs=20, what="the demo staged"):
@@ -213,6 +225,12 @@ def record_play(q, ui, snd_seg, want, hma):
         return
     under0 = u16(drv("sbl_under", 2))
     ui.menu_pick("Sound", "Play")
+    # (the pick's release is handled; the command it posts is the NEXT pass,
+    # so the stream is waited for rather than read at once - which read
+    # 'DEMO STAGED' still, or a stream already flagged)
+    os88qemu.acted(q, lambda: msg() == "PLAYING (SB)" and
+                   drv("sbl_str_act")[0] == 1, secs=5, what="the stream",
+                   poll=0.02)
     want(msg() == "PLAYING (SB)" and drv("sbl_str_act")[0] == 1,
          "Play opened a stream on the card (%r)" % msg())
     sbase = u16(drv("sbl_sbase", 2))
@@ -274,8 +292,16 @@ def record_play(q, ui, snd_seg, want, hma):
     # ...and the stream closes on the package's next poll: a menu command
     # that does nothing else asks for one (tests/recorder.py)
     ui.menu_pick("Sound", "Stop")
-    os88qemu.acted(q, lambda: drv("sbl_str_act")[0] == 0, secs=10,
-                   what="the stream closed", poll=0.2)
+    # ...CLOSED, which is the buffer given back and not the flag down:
+    # sbl_stop publishes [sbl_str_act] = 0 FIRST and only then frees the
+    # buffer through the kernel (sbl_unpin -> sbl_dma_put, which zeroes
+    # [sbl_seg] last), so a read the moment the flag dropped found the
+    # block still held - red once beside 70 other rows, green alone twice
+    # (docs/plans/SOAK-PARALLEL.md 17.11). A driver that never frees it
+    # still fails below, ten guest seconds on
+    os88qemu.acted(q, lambda: drv("sbl_str_act")[0] == 0
+                   and u16(drv("sbl_seg", 2)) == 0, secs=10,
+                   what="the stream closed and its buffer freed", poll=0.2)
     if hma:
         blk = [b for b in blocks(q) if b[2] == snd_seg and b[1] == 8192]
         want(not blk and u16(drv("sbl_seg", 2)) == 0,
@@ -342,6 +368,10 @@ def hd_page(q, hdd_seg, want, hma):
         want(False, "the Hard Disk page loaded HDDTOOL.DRV")
         return
     tool = lambda name, n=1: q.read((tseg << 4) + tl[name], n)
+    # (hd_tseg is set when the image is in; HDT_INIT and the paint that
+    # makes the call are the tool's next acts - waited for, not raced)
+    os88qemu.acted(q, lambda: any(tool("hd_rdisp", 4)), secs=10,
+                   what="HDT_INIT's dispatcher pointer", poll=0.02)
     disp = tool("hd_rdisp", 4)
     want(u16(disp) == org + 12 and u16(disp, 2) == hdd_seg,
          "HDDTOOL.DRV at %04X calls the resident through %04X:%04X"
@@ -361,50 +391,35 @@ def hd_install(q, hdd_seg, hdimg, want):
     file copies read into the tool's own heap image - so this is the whole of
     the split's crossing, run from the pool. Asserted off the disk: the
     installer's SYSTEM folder, with the driver and its tool in it."""
-    import hashlib
     import instdeep
     hd = {"syms": drv_syms("hdd"), "base": (hdd_seg << 4) + ORG}
     click, x0, y0, tseg = open_hd_page(q, hd)
     if not tseg:
         want(False, "the Hard Disk page loaded HDDTOOL.DRV for Install")
         return
+    import instwiz
     known = {w.i for w in os88geom.windows(q, S)}
     click(x0 + instdeep.CP_RX + instdeep.HDP_B2X + instdeep.HDP_BW2 // 2,
           y0 + instdeep.HDP_BY + instdeep.HDP_BH // 2)
     box = {}
 
-    def opened():
-        new = [w for w in os88geom.windows(q, S) if w.i not in known]
+    def opened():                   # Install starts the wizard (SPEC.md
+        new = [w for w in os88geom.windows(q, S)    # 52.10.4.4): a posted
+               if w.i not in known and w.visible]   # launch off the boot disk
         if new:
             box["w"] = new[0]
         return bool(new)
-    if not os88qemu.acted(q, opened, secs=30, what="the installer window"):
-        want(False, "Install opened the installer window")
+    if not os88qemu.acted(q, opened, secs=60, what="the wizard"):
+        want(False, "Install started the INSTALL.O88 wizard")
         return
-    iw = box["w"]
-    ix, iy = iw.x + 1, iw.y + TITLE_H
-    bx = ix + instdeep.HIW_B0X + instdeep.HIW_BW0 // 2
-    by = iy + instdeep.HIW_BY + instdeep.HIW_BH // 2
-    click(bx, by)                               # Install: arms
-    os88qemu.pace(q, 2)
-    click(bx, by)                               # Install: goes
+    wz = instwiz.qemu(q, S, click, box["w"])
+    wz.run(limit=300.0)             # its log's end IS the install's end
 
     def tree():
         try:
             return instdeep.partition(hdimg).tree()
         except SystemExit:
             return {}
-    digest = lambda: hashlib.sha1(open(hdimg, "rb").read()).digest()
-    if not os88qemu.acted(q, lambda: "SYSTEM" in tree(), secs=300,
-                          what="the installer's SYSTEM folder"):
-        want(False, "the install wrote SYSTEM/ on C: (%s)" % sorted(tree()))
-        return
-    last, still = digest(), 0
-    while still < 8:                            # the drive going quiet
-        os88qemu.pace(q, 2)
-        d = digest()
-        still = still + 1 if d == last else 0
-        last = d
     t = tree()
     got = [p for p in ("KERNEL.SYS", "HDD.DRV", "HDDTOOL.DRV", "COLDHMA.SYS",
                        "SYSTEM/TASKMGR.O88") if p in t]

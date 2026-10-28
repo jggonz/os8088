@@ -155,7 +155,11 @@ def wake_latency(m, n=24):
 def main(argv):
     os.chdir(ROOT)
     with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                          machine="os8088_5150_cga_gla") as m:
+                          machine="os8088_5150_cga_gla",
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
 
         slot = m.readseg(0x60, S("sch_idleslot") - 0x600, 1)[0]
         check(slot != 0xFF,

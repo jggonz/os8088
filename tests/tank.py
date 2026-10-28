@@ -40,6 +40,7 @@ import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispapps                                             # noqa: E402
 import dispcp                                               # noqa: E402
+import os88geom                                             # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES = 40                             # displayed frames sampled for the floor
@@ -77,17 +78,23 @@ def lit(fb):
 def open_game(m):
     """Boot to the desktop and get TANK.O88 open. Returns (slot, seg, bss)."""
     S = os88sym.linear
-    os88marty.settle(m)
+    if int(m.status().get("cycles", 1)) == 0:   # launch(boot=False): the
+        m.run()                     # boot gate is the kernel's STATE (the
+        os88marty.kernel_up(m)      # next steps read window records and
+        settle = lambda mm, **k: os88marty.ui_done(mm)   # the listing)
+    else:
+        os88marty.settle(m)
+        settle = os88marty.settle
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, settle, "B")
     disk = dispcp.win_list(m, S)[-1]
     wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "GAMES")
+    dispcp.open_named(m, mo, S, settle, wx, wy, "GAMES")
     wx, wy = dispcp.win_rect(m, S, disk)[:2]
     rows = [r[0] for r in dispcp.listing(m, S)]
     if "TANK.O88" not in rows:
         sys.exit("tank: TANK.O88 is not on the apps disk")
-    row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy,
+    row = dispcp.scroll_to(m, mo, S, settle, wx, wy,
                            rows.index("TANK.O88"))
     x, y = dispcp.row_xy(wx, wy, row)
     # NOT open_named: it settles, and a window whose game is running never
@@ -117,7 +124,8 @@ def main(argv):
     os.chdir(ROOT)
     bad = []
 
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
         slot, seg, base = open_game(m)
         print("  TANK.O88: window %d, segment %04x, bss at %04x"
               % (slot, seg, base))
@@ -399,6 +407,32 @@ def main(argv):
         if again != 0 or lives != TK_LIVES:
             bad.append("N did not start a fresh game (over=%d lives=%d)"
                        % (again, lives))
+
+        # --- THE SHADOW GOES WITH THE BRACKET (SPEC.md 85.3.5.2) ------------
+        # NO-PINNING A4: the 32 KB claim is the bracket's alone, so F gives
+        # it back - a TANK window on the desktop is not a wall in the heap.
+        # Red with tk_shfree's call taken out of tk_fsx_main: the word stands
+        sh0 = word(m, seg, base, "tk_shseg")
+        m.type_text("f")
+        try:
+            os88marty.until(m, lambda _: word(m, seg, base, "tk_shseg") == 0,
+                            "the shadow given back", poll=0.3, guest=30.0)
+        except os88marty.MartyError:
+            pass
+        sh1 = word(m, seg, base, "tk_shseg")
+        raw = m.read(os88sym.linear("mem_tab"),
+                     os88geom.MEM_MAX * os88geom.MC_SIZE)
+        held = [int.from_bytes(raw[i:i + 2], "little")
+                for i in range(0, len(raw), os88geom.MC_SIZE)]
+        print("  after F: tk_shseg %04x -> %04x, its claim %s"
+              % (sh0, sh1, "still held" if sh0 and sh0 in held else "freed"))
+        if sh0 == 0:
+            bad.append("no shadow was held in the bracket (tk_shseg 0): the "
+                       "leg proves nothing on this backend")
+        elif sh1 != 0 or sh0 in held:
+            bad.append("the shadow outlived the bracket (tk_shseg %04x, "
+                       "claim at %04x %s)" % (sh1, sh0, "held" if sh0 in held
+                                              else "freed"))
 
     if bad:
         for b in bad:

@@ -40,7 +40,8 @@ import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
 
 WORK = "build/sheetfreeze"              # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetfreeze.img"
+import os88build                                         # noqa: E402
+DISK = os88build.at("build/sheetfreeze.img")        # the run's tree, so a soak lane finds it
 NAME = "FRZ.SLK"
 OPTIONS = (371, 45)                     # the Options menu, tests/sheetside.py's
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
@@ -61,7 +62,7 @@ def build_disk():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk(cells))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL", src],
+                    "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

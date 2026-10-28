@@ -84,6 +84,19 @@ cr_origin:
     pop ax
     ret
 
+; cr_place - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): BX = the record, SI = the
+; window; draws nothing, keeps every register. cr_origin for the library,
+; which runs it before the press, the drag and the release: a window dragged
+; by its title is REPLAYED and never painted, so the rects come from where
+; it IS. The layout itself ([cr_lp]) only changes with the content box, and
+; that is a resize, which does paint
+cr_place:
+    push bx
+    mov bx, si
+    call cr_origin
+    pop bx
+    ret
+
 ; cr_rv - SI = a role -> SI = its byte in this theme (0..15, or 80h + a
 ; pattern). Keeps everything else
 cr_rv:

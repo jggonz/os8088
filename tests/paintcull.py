@@ -76,8 +76,7 @@ def _open_paint(m, mo):
                            rows.index("PAINT.O88"))
     x, y = dispcp.row_xy(wx, wy, row)
     mo.dblclick(x, y)
-    m.advance(frames=250)
-    m.run()
+    os88marty.ui_done(m)    # was advance(250): the UI going idle IS the work done
 
 
 def main(argv):
@@ -90,7 +89,7 @@ def main(argv):
 
     fails, steps, why = [], [], None
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo = os88mouse.Mouse(marty=m)
         _open_paint(m, mo)
         os88marty.no_saver(m)
@@ -128,21 +127,19 @@ def main(argv):
         note("opened")
         cx0, cy0 = _bss(m, seg, "pt_cx0"), _bss(m, seg, "pt_cy0")
         mo.to(cx0 + 40, cy0 + 30)                   # ONE STROKE, and 42.15 is
-        os88marty.settle(m)                         # why it has to be here
+        os88marty.ui_done(m)                        # why it has to be here
         mo._edge(True)
         for _ in range(6):
             m.mouse(dx=8, dy=8, l=True)
             m.advance(frames=3)
             m.run()
         mo._edge(False)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         note("after a stroke")
 
         wr = dispcp.win_rect(m, S, pw)
         mo.dblclick(wr[0] + 60, wr[1] + 9)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
         note("maximized")
 
         # THE RESTORE, with pt_topacked watched. A breakpoint stops the guest
@@ -174,11 +171,13 @@ def main(argv):
         with os88marty.bp_trace(m, base + pm["pt_topacked"],
                                 on_hit=guards) as tr:
             mo.dblclick(big[0] + 60, big[1] + 9)
+            # STAY IN THE BLOCK until the restore's repaint is done: the
+            # dblclick returns when it is decoded, and a pt_topacked that ran
+            # after the trace ended would be a pass nobody watched
+            os88marty.ui_done(m, "the restore's repaint")
         print("   pt_topacked entered %d time(s) across the restore" % tr.n)
         why = next((h["hit"] for h in tr.hits if h.get("hit")), None)
-        m.advance(frames=400)
-        m.run()
-        os88marty.settle(m)
+        os88marty.ui_done(m)    # was advance(400): the UI going idle IS the work done
         note("restored")
 
     for (what, planar, cx0, iall) in steps:

@@ -46,7 +46,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=FIL) as ui:
+    with os88ui.boot(SYS, apps=FIL, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/DOSFILE.COM"):
             fail("double-clicking DOSFILE.COM opened no window")
@@ -60,7 +60,7 @@ def main():
             rows[:] = mm.screen() or []
             return any("READY" in r for r in rows)
         try:            # a GUEST budget: a loaded box cannot shorten it
-            os88marty.until(m, done, "the program's READY line", poll=0.5, limit=240.0)
+            os88marty.until(m, done, "the program's READY line", poll=0.05, limit=240.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:12],))
@@ -96,8 +96,7 @@ def main():
               "SEEK's gap and deleted"
               % NBYTES)
 
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")      # taken, and the bracket left
         titles = ui.titles()
         if "Disk" not in titles:
             fail("the desktop did not come back after the bracket: %r"

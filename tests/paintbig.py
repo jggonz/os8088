@@ -81,6 +81,10 @@ def main():
     # NOPLANE kernel every gfx_blitp refuses, Paint falls back to nibbles
     # (SPEC.md 42.13.1) and draws through gfx_blit4 instead.
     ap.add_argument("--blit", default="gfx_blitp")
+    # tests/blitpair.py's question - is the canvas as LOADED the file? -
+    # asked on this boot before the grow, which is how tests/paintpack.py
+    # runs both halves of the refusal path on one machine instead of two
+    ap.add_argument("--pair", action="store_true")
     a = ap.parse_args()
 
     # A COLOUR PICTURE, and it has to be said now: SPEC.md 42.23.6 opens a GIF
@@ -97,6 +101,8 @@ def main():
                                "MEDIA:" + gif)
 
     iw, ih, px = gif_pixels(gif)
+    if a.pair:
+        blitpair.ink_floor(gif, iw, ih, px, "paintbig")
     sym = pkg_syms("apps/paint/paint.asm")
     print("   %s: %dx%d" % (gif, iw, ih))
 
@@ -141,12 +147,17 @@ def main():
         if r is None:
             sys.exit("paintbig: no %s as wide as the picture" % a.blit)
         pkgbase = got["base"]
+        if a.pair:
+            blitpair.check_canvas(m, mo, r, iw, ih, px, "paintbig")
+            print("   the loaded canvas IS the picture, %d pixels" % (iw * ih))
 
         def words(*names):
             """Paint's own words, for a wait on the state an action moves."""
             return tuple(bytes(m.read(pkgbase + sym[n], 2)) for n in names)
 
-        os88marty.settle(m)             # the rest of the load, off the glass
+        # the rest of the load: the window list is guest memory, so the UI
+        # task saying it is done is the wait, not a still screen
+        os88marty.ui_done(m, "the rest of the load")
         pw = [w for w in dispcp.win_list(m, S) if w != disk][-1]
         wx, wy, ww, wh = dispcp.win_rect(m, S, pw)
 
@@ -154,8 +165,8 @@ def main():
         r = blitpair.wide_blit(m, lambda: mo.drag(wx + ww - 6, wy + wh - 6,
                                                   636, 476),
                                iw, syms=(a.blit,), regs=True)
-        os88marty.settle(m)
-        os88marty.quiesce(m, lambda: words("pt_cw", "pt_ch"), guest=1.0,
+        os88marty.ui_done(m, "the grow's repaint")
+        os88marty.quiesce(m, lambda: words("pt_cw", "pt_ch"), guest=0.3,
                           what="the canvas size after the grow")
         if r is None:
             sys.exit("paintbig: the picture never blitted after the grow, so "
@@ -180,6 +191,9 @@ def main():
             sys.exit("paintbig: the canvas did not grow, so nothing here is "
                      "under test")
         mo.to(4, 4)
+        # ui_done FIRST: settle's short window is only open while the UI task
+        # is idle, so a settle that starts mid-repaint pays a whole `quiet`
+        os88marty.ui_done(m)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
         kept = [(c, rw) for rw in range(ih) for c in range(iw)
@@ -207,46 +221,47 @@ def main():
 
         tx, ty = tool_xy(ox, oy, PT_T_SEL)
         mo.click(tx, ty)
-        os88marty.settle(m)
-        os88marty.quiesce(m, lambda: words("pt_tool"), guest=0.5,
+        os88marty.ui_done(m, "the Select tool's click")
+        os88marty.quiesce(m, lambda: words("pt_tool"), guest=0.3,
                           what="the Select tool")
         mo.drag(ox + SRC_X, oy + SRC_Y,
                 ox + SRC_X + SEL_W - 1, oy + SRC_Y + SEL_H - 1)
-        os88marty.settle(m)
-        os88marty.quiesce(m, selrect, guest=1.0, what="the marquee")
+        os88marty.ui_done(m, "the source marquee")
+        os88marty.quiesce(m, selrect, guest=0.3, what="the marquee")
         sx1, sy1, sx2, sy2 = selrect()
         print("   source selection (%d,%d)-(%d,%d), %dx%d, x phase %d"
               % (sx1, sy1, sx2, sy2, sx2 - sx1 + 1, sy2 - sy1 + 1, sx1 & 7))
         m.key("ControlLeft", down=True, up=False)
         m.key("KeyC")
         m.key("ControlLeft", down=False, up=True)
-        os88marty.settle(m)
+        os88marty.ui_done(m, "the Copy")
         os88marty.quiesce(m, lambda: words("pt_cbw", "pt_cbh", "pt_cbseg",
                                            "pt_cbparas"),
-                          guest=1.0, what="the Copy's clipboard")
+                          guest=0.3, what="the Copy's clipboard")
 
         # --- the destination: a marquee in the blank ground BELOW the
         # picture, so nothing here is comparing the block against itself.
         mo.drag(ox + DST_X, oy + DST_Y, ox + DST_X + 8, oy + DST_Y + 8)
-        os88marty.settle(m)
-        os88marty.quiesce(m, selrect, guest=1.0, what="the marquee")
+        os88marty.ui_done(m, "the destination marquee")
+        os88marty.quiesce(m, selrect, guest=0.3, what="the marquee")
         dx1, dy1 = selrect()[:2]
         print("   destination corner (%d,%d), x phase %d" % (dx1, dy1, dx1 & 7))
         m.key("ControlLeft", down=True, up=False)
         m.key("KeyV")
         m.key("ControlLeft", down=False, up=True)
-        os88marty.settle(m)
-        os88marty.quiesce(m, selrect, guest=1.0, what="the Paste")
+        os88marty.ui_done(m, "the Paste")
+        os88marty.quiesce(m, selrect, guest=0.3, what="the Paste")
         # The marquee is a LATCHED XOR (SPEC.md 11.90.2) and pt_paste re-shows
         # it over the block it just laid down, so the outline is in the
         # framebuffer and 4n-4 pixels of the compare below are it. Picking a
         # tool drops the selection, which XORs it back off.
         tx, ty = tool_xy(ox, oy, PT_T_PENCIL)
         mo.click(tx, ty)
-        os88marty.settle(m)
-        os88marty.quiesce(m, lambda: words("pt_tool"), guest=0.5,
+        os88marty.ui_done(m, "the Pencil tool's click")
+        os88marty.quiesce(m, lambda: words("pt_tool"), guest=0.3,
                           what="the Pencil tool")
         mo.to(4, 4)
+        os88marty.ui_done(m)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
 

@@ -57,13 +57,8 @@ def main():
     lines = []
     try:
         if box.wait_for("kern_mega:", 240):
-            time.sleep(15)              # the desktop's first frame
-            box.capture()
-            os88bochs.dbl(591, 160)     # C:
-            time.sleep(10)
-            os88bochs.dbl(150, 123)     # RUN
-            time.sleep(8)
-            os88bochs.dbl(160, 139)     # 0RUN.O88
+            box.up()                    # the desktop, off kernel state
+            box.megarun()               # C:, RUN, 0RUN.O88
             end = time.time() + 200
             while time.time() < end:
                 lines = box.lines()
@@ -71,7 +66,7 @@ def main():
                        l.startswith("MEGAOWN: after") or
                        l.startswith("MEGAOWN: no") for l in lines):
                     break
-                time.sleep(1)
+                time.sleep(0.2)
             time.sleep(2)
             os88bochs.shot(os.path.join(out, "after.png"))
             lines = box.lines()

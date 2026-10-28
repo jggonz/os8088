@@ -445,29 +445,38 @@ wb_onkey:
     jmp wb_frontsoundupdate
 
 wb_buttonup:
-    push cx
-    push dx
-    call wb_frontgeom           ; current origin, even after a window move
-    pop dx
-    pop cx
-    mov bx, wb_btrec
+    mov bx, wb_btrec            ; the rects are wb_place's, laid out at the
+                                ; release's own hit test
     call os88ui_btnup           ; AX = fired button + 1, or 0
     xchg bx, ax
     mov al, [bx+wb_btnkeys]     ; a fired button is its own key's action
     jmp wb_onkey.key
 wb_btnkeys: db 0,'slhm'
 wb_buttondrag:
+    mov bx, wb_btrec
+    jmp os88ui_btndrag
+
+; wb_place - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): the front screen's button
+; rects from where the window IS. A window dragged by its title is replayed
+; and never painted, so the press, the drag and the release each lay them out
+; first - through wb_frontgeom, the painter's own layout, so the drawn and the
+; clickable buttons stay one description. Draws nothing, keeps every register.
+wb_place:
+    push ax
+    push bx
     push cx
     push dx
+    push di
     call wb_frontgeom
+    pop di
     pop dx
     pop cx
-    mov bx, wb_btrec
-    call os88ui_btndrag
+    pop bx
+    pop ax
     ret
 
 wb_bflags: dw OS88UI_FILL,OS88UI_FILL,OS88UI_FILL,OS88UI_FILL
-    OS88UI_BTNREC wb_btrec, wb_brects, wb_blabels, wb_bflags, 4
+    OS88UI_BTNREC wb_btrec, wb_brects, wb_blabels, wb_bflags, 4, wb_place
 wb_prefs: dw 418,295, 418,295, 418,154
 wb_seriallabel: db 'Serial Match [S]',0
 wb_practicelabel: db 'Practice [L]',0

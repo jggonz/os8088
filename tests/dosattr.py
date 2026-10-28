@@ -26,7 +26,7 @@ and what every caller tests is CF and bit 4.  Copying an uninitialised byte
 would be copying a bug and calling it a contract.
 
 ATTRDIR.COM makes its own subdirectory and removes it again, so the disk needs
-nothing but the program - and it runs under this box AND under a real DOS
+nothing but the program - and it runs under this DOS AND under a real DOS
 unchanged, which is how the table above was taken.
 
 WHAT IT WOULD CATCH, MEASURED rather than reasoned about: built against the
@@ -43,7 +43,7 @@ kernel with the fix taken back out, this row reads
 the missing name, so it fails on the DEFECT and not merely on a change.
 
 **AND THE PROBE ITSELF PASSES UNDER IBM DOS 3.30**, which is the check that
-says the assertion is not one only this box could satisfy: DOS answers the
+says the assertion is not one only this DOS could satisfy: DOS answers the
 two roots 0074 where we answer 0010, and `ATTRDIR PASS` comes up on both
 machines because what is asserted is CF and bit 4.
 
@@ -83,7 +83,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine, quick=True) as ui:
         m = ui.m
         if not ui.path(PROG):
             fail("double-clicking %s opened no window" % PROG)

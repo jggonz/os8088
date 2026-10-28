@@ -122,7 +122,7 @@ def mem_claims(m):
     return out
 
 
-with os88ui.boot(a.sys, apps=a.bench, machine=a.machine) as ui:
+with os88ui.boot(a.sys, apps=a.bench, machine=a.machine, quick=True) as ui:
     m = ui.m
     ui.path("B:/FACETEST.O88")
     os88marty.settle(m)

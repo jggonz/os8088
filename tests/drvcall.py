@@ -97,8 +97,10 @@ def main():
     img = os.path.getsize(os88build.at("build/drvcall.bin"))
     with os88marty.launch("build/os8088-360.img",
                           apps="build/drvcall360.img",
-                          machine=MACHINE[a.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE[a.adapter], boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on STATE
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")

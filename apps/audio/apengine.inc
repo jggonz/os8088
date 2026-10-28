@@ -102,21 +102,65 @@ ap_upcase:
     ret
 
 ; =============================================================================
-; ap_ensure_bufs - claim the 32 KB look-ahead buffer once, held for our life
-; out: CF = 1 if the heap could not fund it
+; ap_ensure_bufs - claim the 32 KB look-ahead buffer once, held for our life,
+;                  and PIN both rings: a play is opening (NO-PINNING A6)
+; out: CF = 1 if the heap could not fund it.  clobbers AX
+;
+; THE TWO RINGS MOVE BETWEEN PLAYS AND ARE PINNED FOR ONE (SPEC.md 86.5.3).
+; The look-ahead is the file reads' ES:BX for the whole play - os88_rseq's
+; READ_SEQ walks between transfers, which dsk_xfer's own pin does not cover
+; (66.5.7.1) - and the speaker ring is what os88spk's ISR reads and holds a
+; copy of (os88spk_rseg). So both are pinned here, before the parse's first
+; read, and declared again (ap_rdecl) by ap_stream_close, by the bracket's
+; stop and by a refused open: never per buffer, never in the play path.
 ; =============================================================================
 ap_ensure_bufs:
     cmp word [ap_la_seg], 0
-    jne .ok
+    jne ap_rpin
     mov ax, 32                     ; AP_LA_SZ / 1024
     call OSAPI_MEM_CLAIM           ; out CF, DX = base segment
     jc .fail
     mov [ap_la_seg], dx
-.ok:
+    jmp short ap_rpin              ; (born pinned; the speaker ring may not be)
+.fail:
+    ret                            ; CF = 1, the claim's
+
+; ap_rpin / ap_rdecl - both rings pinned (a play opens) / movable again (no
+; play is open). A ring not held is 0, which OSAPI_MEM_MOVABLE refuses
+; harmlessly (mem_find_own skips free records). Keep every register but CF,
+; which is 0
+ap_rpin:
+    push ax
+    xor ax, ax
+    jmp short ap_rset
+ap_rdecl:
+    push ax
+    mov ax, ap_rmove
+ap_rset:
+    push dx
+    mov dx, [ap_la_seg]
+    call OSAPI_MEM_MOVABLE
+    mov dx, [aps_rseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
     clc
     ret
-.fail:
-    stc
+
+; ap_rmove - a ring MOVED (SPEC.md 66.3: BX = was, DX = now). One word each:
+; every reader of the look-ahead loads [ap_la_seg] (the worker's ap_la_get
+; too), and the library's copy of the speaker ring's, os88spk_rseg, is live
+; only inside a play - os88spk_init writes it at every one (aps_setup), a
+; paused session keeps the play open, and no play is open while this can run
+ap_rmove:
+    cmp bx, [ap_la_seg]
+    jne .spk
+    mov [ap_la_seg], dx
+.spk:
+    cmp bx, [aps_rseg]
+    jne .out
+    mov [aps_rseg], dx
+.out:
     ret
 
 ; =============================================================================
@@ -227,14 +271,21 @@ ap_open_track:
     call OSAPI_SND_CAPS           ; THE TIER NOW, not at launch: the
     test ax, SND_CAP_PCM_BG       ; Control Panel's, and it may have moved
     jnz .card                     ; (the Covox's turns streams off, 34.14).
-    jmp aps_open                  ; NO CARD: THE SPEAKER, or the Covox (SPEC.md
-                                  ; 86.21, 86.21.3) - sound and nothing else
+    call aps_open                 ; NO CARD: THE SPEAKER, or the Covox (SPEC.md
+    jmp short .chk                ; 86.21, 86.21.3) - sound and nothing else
                                   ; is better than no sound. CF its own
 .card:
-    jmp ap_open_card
+    call ap_open_card
+.chk:
+    jnc .out
 .refuse:
-    stc
+    call ap_rdecl                 ; nothing plays: the rings ap_prep_track
+    stc                           ; pinned are movable again (86.5.3)
+.out:
     ret
+    db 0x90                       ; PARITY: never run - the feed and the
+                                  ; speaker's play path below keep the even
+                                  ; shift they were measured at (os88rdiff)
 
 ; =============================================================================
 ; ap_prep_track - the current entry opened, parsed and adopted, the look-ahead
@@ -595,7 +646,8 @@ ap_calc_duration:                  ; (all three outputs arrive 0: the
 ; =============================================================================
 ap_stream_close:
     push ax
-    call aps_close                 ; a speaker session ends with it
+    mov byte [aps_on], 0           ; a speaker session ends with it (aps_close,
+                                   ; whose declaration is the tail below)
     cmp byte [ap_sopen], 0
     je .drain
     mov al, 2
@@ -616,7 +668,7 @@ ap_stream_close:
     mov [ap_played+2], ax
     mov [ap_elapsed_s], ax
     pop ax
-    ret
+    jmp ap_rdecl                   ; no play open: the rings may move (86.5.3)
 
 ; =============================================================================
 ; ap_reap - if the worker latched "track ended", close it and move on.

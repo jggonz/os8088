@@ -9,7 +9,7 @@
 ; It exists because there are about to be THREE of these. apps/telnet had the
 ; only one - a real terminal screen with an attribute per cell, a dirty-row
 ; bitmap and a composer that writes eight bytes a cell and calls nothing - and
-; SPEC.md 96.32's DOS box needs the same thing for its console band, and the
+; SPEC.md 96.32's DOS needs the same thing for its console band, and the
 ; wave after that needs it again for a DOS program's captured output. A second
 ; copy would have drifted from the first the day either grew a feature, which
 ; is what the header of every file in this directory says.
@@ -1304,7 +1304,7 @@ con_scrollup:
 ; instead.
 ;
 ; `%define CON_NOSCROLLDOWN` leaves it out, for a carrier that never scrolls
-; down - the DOS box's teletype only ever scrolls up (SPEC.md 96.44.16.1).
+; down - DOS's teletype only ever scrolls up (SPEC.md 96.44.16.1).
 ; The default emits it, so a carrier that does not say so is unchanged.
 ; -----------------------------------------------------------------------------
 %ifndef CON_NOSCROLLDOWN
@@ -1348,7 +1348,7 @@ con_scrolldown:
 ;
 ; con_putc takes a GLYPH and nothing else, because Telnet's controls are the
 ; ANSI parser's (SPEC.md 70.9) and a console with a parser over it wants no
-; second opinion about what 0x0A means. A carrier with NO parser - the DOS box's
+; second opinion about what 0x0A means. A carrier with NO parser - DOS's
 ; command line, and the wave after it that captures a DOS program's output -
 ; wants exactly the ROM teletype's five: CR, LF, BS, TAB and BEL, with
 ; everything else a CP437 glyph.
@@ -1471,7 +1471,7 @@ con_open:
 ; which mode it asks for, whether it keeps a worker, which key leaves, what it
 ; puts on the bottom row - because those are the four things two carriers do
 ; not agree about: Telnet keeps a worker and leaves on `^]` (every telnet
-; client since 4.2BSD), and the DOS box has no worker and leaves on Esc
+; client since 4.2BSD), and DOS has no worker and leaves on Esc
 ; (SPEC.md 96.33.5).
 ;
 ; --- WHAT YOU OWE IT ---------------------------------------------------------

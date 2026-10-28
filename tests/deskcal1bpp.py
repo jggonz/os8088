@@ -81,11 +81,11 @@ def leg(tmp, machine, kind, shots):
     fx = os88stik.dat(os88stik.deskcal([((2026, 10, 20), 600, "Review")],
                                      lead=0))
     img = disk_with(tmp, "1bpp-%s.img" % kind, fx)
-    with os88ui.boot(img, machine=machine) as ui:
+    with os88ui.boot(img, machine=machine, quick=True) as ui:
         m = ui.m
         c = Cal(ui, tmp, check=check)
         w = ui.window(TITLE)
-        os88marty.pace(m, 2.0)
+        ui.still()
         G = os88stik.DESKCAL_GEO[c.li()]
         fx0, fy0 = c.face()
         grid = list(c.bss(os88stik.DESKCAL_BSS_GRID, 42))
@@ -113,7 +113,7 @@ def leg(tmp, machine, kind, shots):
 
         def frame():
             ui.mo.to(8, 100)            # the pointer is drawn INTO the
-            os88marty.pace(m, 1.0)      # framebuffer: keep it off the window
+            ui.still()                  # framebuffer: keep it off the window
             return m.vram(kind)[2]
 
         rows = frame()
@@ -192,7 +192,7 @@ def leg(tmp, machine, kind, shots):
 
         print("F: a greyed item is legible, on the widget's own bar")
         c.front()
-        os88marty.pace(m, 1.0)
+        os88marty.ui_done(m)
         cal = [mm for mm in ui.menus() if mm[0] == "Calendar"]
         check(bool(cal), "%s: the widget owns the bar: a Calendar menu on it"
               % kind)

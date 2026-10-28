@@ -4,12 +4,12 @@
     python3 tests/dosmouevt.py [--machine NAME]
 
 SPEC.md 96.10.4, and the row exists because of what the histogram found:
-Microsoft Works - the first program anyone ran on this box from outside the
+Microsoft Works - the first program anyone ran on this DOS from outside the
 project - "had a mouse" and had none.  96.10.3's INT 33h histogram says why in
 one line: Works calls 00h, 08h, 0Ah and **0Ch SET EVENT HANDLER**, and then
 nothing.  It never polls function 3.
 
-So a box whose functions 3, 5, 6 and 0Bh are all exact and which answers 0Ch
+So a DOS whose functions 3, 5, 6 and 0Bh are all exact and which answers 0Ch
 with `not supported` has told a program a mouse exists and then never mentions
 it again - which a program cannot tell from no mouse at all.
 
@@ -18,10 +18,10 @@ the whole of that report.  It is that OUR CODE RUNS: a far handler installed
 through 0Ch, called from the chained IRQ0 (96.10.4.1), with a position that
 tracks the mouse the harness is moving.
 
-MOUEVT.COM runs under this box AND under a real DOS unchanged
+MOUEVT.COM runs under this DOS AND under a real DOS unchanged
 (docs/DOS-DEBUGGING.md).  Under a DOS with no mouse driver it prints SKIP and
 stops, which is the honest answer: INT 33h not being installed is not this
-box's defect.
+DOS's defect.
 
 WHAT IT WOULD CATCH: 0Ch falling back to `.none`, which is the defect itself
 (B, then C); the IRQ0 hook not going in, or going in twice (C); a dispatcher
@@ -64,7 +64,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine) as ui:
+    with os88ui.boot(SYS, apps=FLOPPY, machine=a.machine, quick=True) as ui:
         m = ui.m
         if not ui.path(PROG):
             fail("double-clicking %s opened no window" % PROG)
@@ -76,12 +76,12 @@ def main():
         def handler_in(mm):
             rows[:] = [r.rstrip() for r in (mm.screen() or []) if r.strip()]
             if any("MOUEVT SKIP" in r for r in rows):
-                fail("the probe found no INT 33h at all, which on THIS box is "
+                fail("the probe found no INT 33h at all, which on THIS DOS is "
                      "the mouse vector not being installed (SPEC.md 96.10)")
             return any(r.startswith("B handler in") and "ok" in r
                        for r in rows)
         try:
-            os88marty.until(m, handler_in, "step B's handler", poll=0.5,
+            os88marty.until(m, handler_in, "step B's handler", poll=0.05,
                             limit=120.0)
         except os88marty.MartyError:
             fail("the probe never got its handler in; the last screen was %r"
@@ -116,7 +116,7 @@ def main():
             rows[:] = [r.rstrip() for r in (mm.screen() or []) if r.strip()]
             return any("MOUEVT PASS" in r or "MOUEVT FAIL" in r for r in rows)
         try:
-            os88marty.until(m, done, "MOUEVT's verdict", poll=0.5, limit=180.0)
+            os88marty.until(m, done, "MOUEVT's verdict", poll=0.05, limit=180.0)
         except os88marty.MartyError:
             fail("MOUEVT.COM never reported; the last screen was %r"
                  % rows[:12])

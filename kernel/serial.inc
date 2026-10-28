@@ -12,87 +12,73 @@ section .text
 ser_row: dw 0xffff
 
 ; X cell: ES is the caller's package segment. UI task only. Preserve all
-; but AX/CF. The instance stamp is the OS's, never a caller-supplied owner.
+; but AX/CF. The instance stamp is the OS's, never a caller-supplied owner:
+; DH = the caller's slot, which ser_api_x refuses past INST_MAX and the module
+; turns into its record (srl_open) - so DI is never spent here (kernel size
+; pass 14: inst_ptr and its AX/DI banks lived here, -20 resident)
 osapi_serial:
     push dx
-    push di
     call inst_caller
-    cmp dh, INST_MAX
-    jae .bad
-    push ax
-    mov al, dh
-    call inst_ptr
-    pop ax
     call COLD_SEG:ser_api_x
-.out:
-    pop di
     pop dx
     ret
-.bad:
-    mov ax, 5
-    stc
-    jmp short .out
 
-; AL=instance being torn down. Release before its region can be freed.
+; AL=instance being torn down, or FFh (mouse_unhook's reboot sweep). Release
+; before its region can be freed. Clobbers AX and FLAGS: both callers pop or
+; overwrite AX next and read no flag (inst_rel_rec, mouse_unhook)
 ser_release_inst:
     cmp word [ser_row], 0xffff
     je .out
-    pushf
-    push ax
     call far [SERFP+SER_RELEASE]
-    jc .done
-    call COLD_SEG:ser_drop_x
-.done:
-    pop ax
-    popf
+    call COLD_SEG:ser_tidy      ; drops the module iff that closed the lease
 .out:
     ret
 
 section .cold
+; DH = the caller's slot (osapi_serial). No lease is held exactly when the
+; module is not loaded (ser_tidy drops it on the call that ends one), so only
+; Open with no lease reads the disk; with one, every verb goes straight to it
 ser_api_x:
-    cmp al, 0
-    jne .existing
+    cmp dh, INST_MAX
+    jae .bad
+    cmp word [ser_row], 0xffff
+    jne .call
+    cmp al, 1
+    jb .open
+    mov ax, 0                   ; Close with nothing open: CF = 0 from the
+    je .r                       ; compare (AL = 1), done
+    inc ax                      ; any other verb: busy
+    stc
+.r:
+    retf
+.bad:
+    mov ax, 5
+    stc
+    retf
+.open:
     push ax
     mov al, MOD_SER
     call mod_need
     pop ax
-    jc .nodisk
-.existing:
-    cmp word [ser_row], 0xffff
-    jne .call
-    cmp al, 0
-    je .call
-    cmp al, 1
-    je .closed
-    mov ax, 1
-    stc
-    retf
-.closed:
-    xor ax, ax
+    jnc .call
+    mov ax, 8                   ; CF = 1 from mod_need
     retf
 .call:
     call far [SERFP+SER_API]
+                                ; ...and on into ser_tidy, whose retf is ours
+; ser_tidy - far: drop SERIAL.DRV unless a lease is held. Every register and
+; the FLAGS kept, so the verb's AX/CF answer comes back through it
+ser_tidy:
     pushf
     cmp word [ser_row], 0xffff
     jne .keep
-    call ser_drop
-.keep:
-    popf
-    retf
-.nodisk:
-    mov ax, 8
-    stc
-    retf
-
-ser_drop_x:
-    call ser_drop
-    retf
-ser_drop:
     push ax
     mov al, MOD_SER
     call mod_drop
     pop ax
-    ret
+.keep:
+    popf
+    retf
 
 section .mods
 mods_ser_header:
@@ -116,8 +102,9 @@ srl_mcr: db 0
 srl_div: db 12
 srl_pic: db 0
 srl_mask: db 0
+srl_seen: db 0                 ; [mou_seen] when the lease was taken
 
-; Module API. DI=stamped instance record, DH=instance slot, ES=caller.
+; Module API. DH=the stamped instance slot (< INST_MAX), ES=caller.
 srl_api:
     push bx
     push cx
@@ -226,6 +213,11 @@ srl_open:
     mov bh, 12
 .div:
     CSDO mov [CSEG srl_div], bh
+    mov al, dh                  ; DI = the caller's record: inst_ptr's sum,
+    mov ah, I_RECSZ             ; done here so that no resident byte does it
+    mul ah                      ; (DH < INST_MAX: ser_api_x refused the rest)
+    add ax, inst_tab
+    xchg ax, di
     cmp byte [di+I_STATE], 0
     je srl_body.bad
     mov ax, es
@@ -236,6 +228,8 @@ srl_open:
     jc srl_body.bad
     cmp ax, [di+I_SIZE]
     ja srl_body.bad
+    mov ch, bl                  ; bit 7: the USER named this port (115.1.1)
+    and bl, 0x7f
     cmp bl, 1
     jb .absent
     cmp bl, 2
@@ -243,23 +237,37 @@ srl_open:
     dec bl
     xor bh, bh
     shl bx, 1
+    mov ax, [bx+mou_bases]
+    or ax, ax
+    jz .absent
+    push es                     ; ADVERTISED, in ANY of the four BIOS COM
+    mov bp, 0x40                ; slots: a Compaq lists them in its SETUP's
+    mov es, bp                  ; order, not IBM's 3F8-then-2F8 (115.1)
+    xor bp, bp
+.bda:
+    cmp ax, [es:bp]
+    je .listed
+    inc bp
+    inc bp
+    cmp bp, 8
+    jb .bda
+    pop es
+    mov ax, 9                   ; a UART the BIOS does not list (115.1)
+    stc
+    ret
+.listed:
+    pop es
     cmp byte [mou_hpst], 2
     jne .unsettled
     cmp bl, [mou_port]
     je .mouse
-    mov ax, [bx+mou_bases]
-    or ax, ax
-    jz .absent
-    push es
-    mov bp, 0x40
-    mov es, bp
-    cmp ax, [es:bx]
-    pop es
-    jne .absent
+.take:
     CSDO mov [CSEG srl_base], ax
     CSDO mov [CSEG srl_seg], es
     CSDO mov [CSEG srl_buf], si
     CSDO mov [CSEG srl_owner], dh
+    mov dl, [mou_seen]          ; settled or not, as the lease begins: what
+    CSDO mov [CSEG srl_seen], dl ; srl_close asks of the contest
     mov [ser_row], bx
     mov dl, [bx+mou_masks]
     CSDO mov [CSEG srl_mask], dl
@@ -321,7 +329,23 @@ srl_open:
     out dx, al
     xor ax, ax
     ret
-.unsettled:
+.unsettled:                     ; no mouse has spoken yet (115.1.1): this
+    cmp byte [bx+mou_ident], 0  ; port answered the reset edge LIKE one, so
+    jne .mouse                  ; it is one, whoever says otherwise
+    test ch, 0x80               ; the user said "not the mouse": the machine
+    jnz .take                   ; may have no serial mouse at all
+    mov cl, [mou_ident]         ; a mouse identified on the OTHER port
+    or cl, [mou_ident+2]
+    jnz .take
+    push dx                     ; DSR or DCD driven: a modem, or a null
+    mov dx, ax                  ; modem whose far end holds DTR. A serial
+    add dx, 6                   ; mouse drives neither line
+    in al, dx
+    sub dx, 6
+    xchg ax, dx                 ; AX = the base again, DL = the MSR
+    test dl, 0xa0
+    pop dx
+    jnz .take
     mov ax, 2
     stc
     ret
@@ -336,6 +360,19 @@ srl_open:
 
 srl_close:
     mov word [ser_row], 0xffff ; withdraw IRQ routing before state is released
+    cmp byte [cs:srl_seen], 0   ; THE CONTEST SETTLED WHILE THIS WAS LEASED
+    jne .put                    ; (115.1.1), and mou_lockon skipped the row: it
+    cmp byte [mou_seen], 0      ; is a loser now, so it goes back as mou_lockon
+    je .put                     ; leaves one - IER 0, and its line masked
+    CSDO mov byte [CSEG srl_ier], 0 ; unless it is the mouse's (or unknown) -
+    mov al, [mou_line]          ; and not as the open found it, which was the
+    or al, al                   ; contest's armed state (SPEC.md 115.2)
+    jz .put
+    mov ah, [cs:srl_mask]
+    cmp al, ah
+    je .put
+    CSDO mov [CSEG srl_pic], ah
+.put:
     mov dx, [cs:srl_base]
     add dx, 3
     mov al, 0x80
@@ -369,8 +406,10 @@ srl_close:
     xor ax, ax
     ret
 
-; The mouse ISR has saved all registers and owns EOI. At most 16 RX bytes
-; per entry, then one TX byte; original 8250s normally have one waiting.
+; The mouse ISR has saved all registers and owns EOI - all but BX, its scan
+; index, which srl_pump leaves alone (the ring is addressed through SI) so
+; the ISR need not bank it. At most 16 RX bytes per entry, then one TX byte;
+; original 8250s normally have one waiting.
 srl_irq:
     call srl_pump
     retf
@@ -380,7 +419,7 @@ srl_pump:
     in al, dx                  ; acknowledge THRE before queuing its next byte
     mov ax, [cs:srl_seg]
     mov es, ax
-    mov bx, [cs:srl_buf]
+    mov si, [cs:srl_buf]
     mov bp, 16
 .rx:
     mov dx, [cs:srl_base]
@@ -388,25 +427,25 @@ srl_pump:
     in al, dx
     mov ah, al
     and al, 0x1e
-    or [es:bx+2], al
+    or [es:si+2], al
     test ah, 1
     jz .tx
     sub dx, 5
     in al, dx
-    mov dl, [es:bx]
+    mov dl, [es:si]
     mov dh, dl
     inc dh
-    cmp dh, [es:bx+1]
+    cmp dh, [es:si+1]
     je .overflow
     xor dh, dh
-    mov di, bx
+    mov di, si
     add di, dx
     mov [es:di+SER_RX], al
     inc dl
-    mov [es:bx], dl
+    mov [es:si], dl
     jmp short .more
 .overflow:
-    or byte [es:bx+2], 0x80
+    or byte [es:si+2], 0x80
 .more:
     dec bp
     jnz .rx
@@ -417,16 +456,16 @@ srl_pump:
 .tx:
     test ah, 0x20
     jz .out
-    mov dl, [es:bx+4]
-    cmp dl, [es:bx+3]
+    mov dl, [es:si+4]
+    cmp dl, [es:si+3]
     je .idle
     xor dh, dh
-    mov di, bx
+    mov di, si
     add di, dx
     mov al, [es:di+SER_TX]
     mov dx, [cs:srl_base]
     out dx, al
-    inc byte [es:bx+4]
+    inc byte [es:si+4]
 .out:
     ret
 .idle:

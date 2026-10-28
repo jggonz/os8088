@@ -23,10 +23,10 @@ def one(tag):
     ref = exbsim.Ref()
     sym = V.symbols()
     with os88ui.boot(V.at("build/os8088-360.img"), apps=V.at("build/excitebike360.img"),
-                     machine=V.MACHINE[tag]) as ui:
+                     machine=V.MACHINE[tag], quick=True) as ui:
         m = ui.m
         ui.open_drive("B")
-        ui.settle()
+        ui.still()
         # the loader's entry, then (with the package's segment known) the package's own milestones,
         # each a breakpoint that costs the guest no cycle
         m.bp_exec("ld_run_body_x")

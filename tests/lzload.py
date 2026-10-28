@@ -99,10 +99,14 @@ def main():
     fails = []
     with os88marty.launch(t.img("os8088-360.img"),
                           apps=t.img("lzload360.img"),
-                          machine=MACHINE[a.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE[a.adapter], boot=False) as m:
+        m.run()                         # the boot gate on STATE; every read
+        os88marty.kernel_up(m)          # is guest memory. FRACTAL draws for
+        os88marty.no_saver(m)           # ever once open, so the waits after
+        done = lambda mm, **k: os88marty.ui_done(mm, lock=False)  # noqa: E731
+                                        # it cannot ask for the lock idle
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wins = dispcp.win_list(m, S)
         if not wins:
             sys.exit("lzload: no Disk window after double-clicking B:")
@@ -116,7 +120,7 @@ def main():
             reads OK from the PREVIOUS load, which is what this looked like
             the first time."""
             mo.click(wx + 40, wy + 5)          # its title bar
-            os88marty.settle(m)
+            done(m)
 
         # THE REFERENCE COMES OUT OF THE SAME TREE as the disk under it. On
         # the plain arm that is build/; on --lz4only it is the private one,
@@ -151,7 +155,7 @@ def main():
         for name, src in (("CALC.O88", None),
                           ("FRACTAL.O88", t.img("lzc/fractal.o88"))):
             before = dispcp.win_list(m, S)
-            dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name)
+            dispcp.open_named(m, mo, S, done, wx, wy, name)
             after = dispcp.win_list(m, S)
             st = m.read(S("ld_status"), 1)[0]
             if len(after) <= len(before):
@@ -196,7 +200,7 @@ def main():
         # having just proved the exact thing it exists to prove
         # (ld_status = 2, LD_EBAD, in the error's own last line).
         before = dispcp.win_list(m, S)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "PIANO.O88",
+        dispcp.open_named(m, mo, S, done, wx, wy, "PIANO.O88",
                           expect="refusal" if a.lz4only else "window")
         after = dispcp.win_list(m, S)
         st = m.read(S("ld_status"), 1)[0]

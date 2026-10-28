@@ -63,7 +63,7 @@ def main():
             bad.append(what)
 
     with os88ui.boot(a.system, apps=a.games,
-                     machine=tgplay.CARDS[a.card]) as ui:
+                     machine=tgplay.CARDS[a.card], quick=True) as ui:
         m = ui.m
         w = ui.path("B:/TAMEGRAM.O88")
         seg = tgplay.u16(m.read(os88geom.winptr(m, w.i, ui.sym)

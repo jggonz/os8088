@@ -185,8 +185,10 @@ class Game:
         m.run()
         M.until(m, lambda _: self.b("xb_tpause") == 1, "%d frames rendered" % frames,
                 guest=limit)
-        M.guest_sleep(m, .12)
+        # 0.12 guest seconds for the card, run by the SERVER and ending paused (`advance`):
+        # exact, where a polled guest_sleep and a pause after it overran by the poll
         m.pause()
+        m.advance(cycles=int(.12 * M.GUEST_HZ))
 
     def jump(self, col):
         self.put("xb_tcol", col, 2)
@@ -396,10 +398,8 @@ def run(tag, quick, small=False):
     disk = at("build/excitebike360.img")
     with os88ui.boot(system, apps=disk, machine=MACHINE[tag]) as ui:
         m = ui.m
-        ui.open_drive("B")
-        ui.settle()
+        ui.open_drive("B")                  # (both verbs confirm: no settle needed)
         ui.open("EXCBIKE.O88")
-        ui.settle()
         g = Game(ui, tag, sym, ref)
         g.cids = ref.course_cids(0)
         M.until(m, lambda _: g.w("xb_reveal") >= g.w("xb_frontheight") > 0,
@@ -819,10 +819,11 @@ def qemu_g1():
     import os88qemu as Q
     import os88sym
     import dispcp
-    os88qemu.own()
-    subprocess.run(["make", "test", "TESTIMG=build/os8088-360.img",
-                    "TESTAPPS=build/excitebike360.img"], cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+    # a PRIVATE machine (os88qemu.make_test): its own socket and pidfile and
+    # copies of both floppies, so this row needs neither the tree nor the
+    # lane to itself (docs/plans/SOAK-PARALLEL.md 17)
+    os88qemu.make_test("TESTIMG=build/os8088-360.img",
+                       "TESTAPPS=build/excitebike360.img")
     m = E.Qemu()
     mo = E.Mouse()
     S = os88sym.linear
@@ -838,21 +839,24 @@ def qemu_g1():
         raw = m.read(S("wm_wins"), G.MAX_WIN * G.WIN_SIZE)
         base = struct.unpack_from("<H", raw, win.i * G.WIN_SIZE + G.W_SEG)[0] << 4
         E.settle(m)
-        m.hmp("sendkey ret")
+        # EVERY KEY CONFIRMED (os88qemu.key), never HMP sendkey: its release
+        # follows the press by 100 ms of HOST time, a starved guest took both
+        # at one IRQ1, and the row stopped short of the race - "not in the
+        # race" at eight emulators on four cores (SOAK-PARALLEL.md 17.5)
+        Q.key(m, "ret", secs=0.3)
         Q.pace(m, 4)
         assert m.read(base + sym["xb_fs"], 1) == b"\x01", "QEMU did not enter the bracket"
         assert m.read(base + sym["xb_error"], 1) == b"\x00"
         # the game's own front end: Enter on the title, on the mode, on the course; then
         # the race's countdown, and `p` pauses it (xb_paused) so the display is static
         for _ in range(3):
-            m.hmp("sendkey ret")
+            Q.key(m, "ret", secs=0.3)
             Q.pace(m, 2)
         assert m.read(base + sym["xb_state"], 1) == b"\x03", "not in the race"
-        m.hmp("sendkey p")
+        Q.key(m, "p", secs=0.3)
         Q.pace(m, 1.2)
         assert m.read(base + sym["xb_paused"], 1) == b"\x01"
-        path = os.path.join(ROOT, "build", "excitebike-proof", "vga-qemu.ppm")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        path = os.path.join(os88qemu.RUNDIR, "vga-qemu.ppm")
         m.hmp('screendump "%s"' % path)
         w, h, px = read_ppm(path)
         Sx = struct.unpack("<H", m.read(base + sym["xb_shownS"], 2))[0]

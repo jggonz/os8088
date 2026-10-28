@@ -333,7 +333,33 @@ tp_claim_src:
     jc .bad
     mov [tp_srcseg], dx
     mov word [tp_srccap], TP_SRC_KB0 * 1024
-.bad:
+    mov ax, tp_srcreloc         ; ...AND IT MOVES (NO-PINNING A3): one word
+    call OSAPI_MEM_MOVABLE      ; names it and every other use loads it into
+    clc                         ; ES for one copy. A regrow keeps the
+.bad:                           ; declaration (SPEC.md 50.3.1)
+    ret
+
+; tp_srcreloc - the source claim moved (SPEC.md 66.2): BX = where it was, DX =
+; where it is now. [tp_srcseg] is the one word that names it.
+tp_srcreloc:
+    cmp bx, [tp_srcseg]
+    jne .o
+    mov [tp_srcseg], dx
+.o:
+    ret
+
+; tp_srcpin - AX = 0 PINS the source claim, AX = tp_srcreloc lets it move
+; again. Around a FILE_READ or FILE_WRITE whose ES:BX is the claim: the kernel
+; holds that pointer across claims of its own before its transfer pin applies
+; (SPEC.md 66.3 rule 5), so the claim is bucket C for the call. Preserves every
+; register and the flags.
+tp_srcpin:
+    pushf
+    push dx
+    mov dx, [tp_srcseg]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    popf
     ret
 
 ; AX = the bytes the document is about to need: CF=0 once the claim holds
@@ -4530,11 +4556,17 @@ tp_load:
     jbe .cap
     mov cx, TP_SRC_MAX
 .cap:
+    xor ax, ax
+    call tp_srcpin              ; pinned for the read (tp_srcpin's header)
     mov es, [tp_srcseg]
     xor bx, bx
     xor dx, dx
     mov si, tp_fname
     call OSAPI_FILE_READ
+    push ax
+    mov ax, tp_srcreloc         ; ...and free to move again, CF kept
+    call tp_srcpin
+    pop ax
     jc .err
     cmp ax, TP_SRC_MAX
     jbe .ok
@@ -4633,7 +4665,13 @@ tp_save:
 .len:
     xor dx, dx
     mov si, tp_fname
+    xor ax, ax
+    call tp_srcpin              ; pinned for the write (tp_srcpin's header)
     call OSAPI_FILE_WRITE
+    push ax
+    mov ax, tp_srcreloc
+    call tp_srcpin
+    pop ax
     jc .err
     mov byte [tp_dirty], 0
     call tp_retitle

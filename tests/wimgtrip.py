@@ -143,7 +143,9 @@ flush = os.path.abspath(os88build.at("build/wimgtrip-%d.a" % os.getpid()))
 flushb = os.path.abspath(os88build.at("build/wimgtrip-%d.b" % os.getpid()))
 
 try:
-    with os88ui.boot(SYS, apps=FIX, machine=MACHINE) as ui:
+    with os88ui.boot(SYS, apps=FIX, machine=MACHINE,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
         print("== %s : Write Img... round trip (SPEC.md 18.99.8) ==" % MACHINE)
         dw = ui.open_drive("A")

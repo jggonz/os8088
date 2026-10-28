@@ -268,7 +268,7 @@ or HOW MUCH heap is held, so they want a row that measures a claim
   shared epilogue, and in drivers as `wr_sv`/`hd_ent`/`tm_pop_*`/`ep_*`/
   `kentm_*`. A near `jmp` into the tail costs no stack (HANDOFF-KERNEL-SIZE
   passes); a `call`ed push-helper costs ~100 cycles, so cold paths only. Set
-  2 adds the DOS box's host code (~35 routines end in one 6-register
+  2 adds DOS's host code (~35 routines end in one 6-register
   epilogue, ~250-400 B) and Dot Delirium's eight-register callback wrappers
   (~10 B a site) — and one MEASURED warning: Cyclone built a pop ladder and
   it was image -22 but **file +23**, because a repeated epilogue is exactly
@@ -514,7 +514,7 @@ And set 2's:
   `cy_full_repaint`, which never did. And set 2 changed the high-score
   load/save path (read and written in place, format unchanged) and **no row
   exercises it** - it was not driven.
-- **DOS box**: `apps/dos/doscents.inc` names a `tests/unit/t_doscore.py` that
+- **DOS**: `apps/dos/doscents.inc` names a `tests/unit/t_doscore.py` that
   does not exist; `kerndos/kdmouse.inc`'s comment still says `KD_IMG_KB` 35
   (it is 33); `dos_k_copy` is a back-end door nothing calls, kept because the
   slot numbers are an ABI.

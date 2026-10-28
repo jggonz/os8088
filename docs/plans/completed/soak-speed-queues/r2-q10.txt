@@ -1,0 +1,101 @@
+# ROUND 2, queue 10: the bottom half of r2-q9 (non-MartyPC rows). family  row  declared_secs  script  needs
+SKIP runs `make -n -B` in the shared tree (os88fixture.recipe) heap	heapmap	30	tests/heapmap.py	qemu,nasm
+DONE rdgs	rdgstatic	24	tests/rdgstatic.py	qemu,nasm
+DONE fmtp	fmtpair	21	tests/fmtpair.py	qemu,nasm
+SKIP needs build/cdromtest.img, not built cdro	cdromempty	20	tests/cdrom.py	qemu,nasm
+DONE t	lzfmt	17.6	tests/unit/t_lzfmt.py	
+DONE vidd	viddiskcpu	16	tests/viddiskcpu.py	qemu,nasm
+DONE vidf	vidfmt	16	tests/vidfmt.py	
+DONE hdta	hdtake	15	tests/hdtake.py	qemu,nasm
+DONE redl	redlinemodern	15	tests/redline.py	nasm,qemu
+DONE venc	vencbundle	15	tests/vencbundle.py	ffmpeg
+DONE isot	isotronsim	11	tools/isotronsim.py	
+DONE t	lowwin	10	tests/unit/t_lowwin.py	nasm
+DONE t	stackprose	10	tests/unit/t_stackprose.py	
+DONE t	lmpack	10	tests/unit/t_lmpack.py	
+DONE weav	weavevm	10	tests/weavevm.py	qemu,nasm
+DONE weav	weavecanvas	10	tests/weavecanvas.py	qemu,nasm
+DONE hdta	hdtakeblank	10	tests/hdtake.py	qemu,nasm
+DONE os	coldpic	9	tools/os88romfix.py	nasm
+DONE exci	excitebikeassets	9	tests/excitebike_assets.py	nasm
+DONE wire	wirefleetart	8	tests/wirefleet.py	pil
+DONE t	t_pxsscale	6	tests/unit/t_pxsscale.py	
+DONE os	dosdbg	4.7	tools/os88dosdbg.py	nasm
+SKIP needs build/excitebike120.img, not built exci	excitebikegeomhost	4	tests/excitebike_geom.py	
+DONE t	resident	3.7	tests/unit/t_resident.py	
+DONE t	bootfloor	3.5	tests/unit/t_bootfloor.py	nasm
+DONE t	bsssentinel	3.5	tests/unit/t_bsssentinel.py	
+DONE t	mlen	3.4	tests/unit/t_mlen.py	
+DONE t	vbrseg	3.4	tests/unit/t_vbrseg.py	
+DONE rdga	gbacid	3	tests/rdgcore/rdgacid.py	qemu,nasm
+DONE exbs	excitebikesim	3	tools/exbsim.py	nasm
+DONE t	cz	3	tests/unit/t_cz.py	
+DONE t	pxs-level	3	tests/unit/t_pxslevel.py	
+DONE t	t_pxsmap	3	tests/unit/t_pxsmap.py	
+DONE vida	vidavsync	3	tests/vidavsync.py	ffmpeg
+DONE t	wire	2.5	tests/unit/t_wire.py	
+DONE t	ccmake	2.1	tests/unit/t_ccmake.py	
+DONE t	csworld	2	tests/unit/t_csworld.py	
+DONE t	csrad	2	tests/unit/t_csrad.py	
+DONE t	csworlds	2	tests/unit/t_csworlds.py	
+DONE exci	excitebikeselfcheck	2	tools/excitebike_assets.py	nasm
+DONE t	t_pxsart	2	tests/unit/t_pxsart.py	
+DONE vids	vidspkshape	2	tests/vidspkshape.py	ffmpeg
+DONE t	frinset	1.9	tests/unit/t_frinset.py	
+DONE t	dosbss	1.7	tests/unit/t_dosbss.py	
+DONE trkf	trkface	1.5	tools/trkface.py	
+DONE t	drmarcoart	1.5	tests/unit/t_drmarcoart.py	pil
+DONE pix	pixjpegref	1.5	sh -c python3 tools/pixjpeg.py --verify && python3 tools/pix	
+DONE t	lzbclust	1.2	tests/unit/t_lzbclust.py	
+DONE t	invariants	1.2	tests/unit/t_invariants.py	
+DONE exci	excitebikeaudiohost	1	tests/excitebike_audio.py	
+DONE t	cspanel	1	tests/unit/t_cspanel.py	
+DONE t	csamph	1	tests/unit/t_csamph.py	
+SKIP needs build/redline*.img, not built redl	redlinehost	1	tests/redline.py	nasm
+DONE kdpa	kdpart	1	tests/kdpart.py	
+SKIP fails at base: call [dos_hslot] apps/dos/dos.asm:2950 t	dosseam	1	tests/unit/t_dosseam.py	
+DONE pxsd	pxsdisk	1	tests/pxsdisk.py	
+DONE t	pxs-gen	0.9	tests/unit/t_pxsgen.py	
+DONE t	frcycle	0.8	tests/unit/t_frcycle.py	
+SKIP fails at base: taskmgr -DTMF_MEM arm does not assemble t	appsmall	0.8	tests/unit/t_appsmall.py	
+DONE t	allapps	0.7	tests/unit/t_allapps.py	
+DONE t	buildlock	0.7	tests/unit/t_build_lock.py	
+DONE t	csart	0.6	tests/unit/t_csart.py	
+DONE t	frstepv	0.4	tests/unit/t_frstepv.py	
+DONE t	hddgeom	0.4	tests/unit/t_hddgeom.py	
+DONE t	sfx	0.4	tests/unit/t_sfx.py	
+DONE pixc	pixcorpus	0.4	tools/pixcorpus.py	
+DONE stkd	stknosave	0.4	tools/stkdepth.py	
+DONE t	kdapi	0.4	tests/unit/t_kdapi.py	
+DONE t	p2restore	0.3	tests/unit/t_p2restore.py	
+DONE t	csink	0.3	tests/unit/t_csink.py	
+DONE t	csplane	0.3	tests/unit/t_csplane.py	
+DONE t	cssin	0.3	tests/unit/t_cssin.py	
+DONE t	pmcrom	0.3	tests/unit/t_paccman.py	
+DONE os	imgcases	0.3	tools/os88imgcase.py	
+DONE pixa	pixart	0.3	tools/pixart.py	
+DONE t	kdfar	0.3	tests/unit/t_kdfar.py	
+DONE t	excitebikeclean	0.2	tests/unit/t_excitebike_clean.py	
+DONE t	midtab	0.2	tests/unit/t_midtab.py	
+DONE t	csterrain	0.2	tests/unit/t_csterrain.py	
+DONE t	inktab	0.2	tests/unit/t_inktab.py	
+DONE t	cpmcache	0.2	tests/unit/t_cpmcache.py	
+DONE t	wakedrain	0.2	tests/unit/t_wakedrain.py	
+DONE pixs	pixsamples	0.2	tools/pixsamples.py	
+DONE pixe	pixelsim	0.2	tools/pixelsim.py	
+DONE dseg	dsegaudit	0.2	tools/dsegaudit.py	
+DONE t	ddmaze	0.2	tests/unit/t_ddmaze.py	nasm
+DONE os	rdiffself	0.2	tools/os88rdiff.py	nasm
+DONE t	blobruns	0.1	tests/unit/t_blobruns.py	nasm
+DONE t	spkfxtab	0.1	tests/unit/t_spkfx.py	
+DONE t	csair	0.1	tests/unit/t_csair.py	
+DONE t	drvclaim	0.1	tests/unit/t_drvclaim.py	
+SKIP fails at base: SERIAL.DRV on build/small*.img t	smallreq	0.1	tests/unit/t_smallreq.py	
+SKIP fails at base: MEM_K_MTBL not mirrored in os88api.inc/tm_ktab t	ktags	0.1	tests/unit/t_ktags.py	
+DONE t	dirwsize	0.1	tests/unit/t_dirwsize.py	
+DONE t	pgrank	0.1	tests/unit/t_pgrank.py	
+DONE t	imager	0.1	tests/unit/t_imager.py	
+DONE t	assocpage	0.1	tests/unit/t_assocpage.py	
+DONE t	wab	0.1	tests/unit/t_wab.py	
+DONE pixj	pixjpeg	0.1	tools/pixjpeg.py	
+DONE os	dosfat	0.1	tools/os88fat.py	

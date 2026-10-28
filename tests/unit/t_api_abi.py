@@ -39,6 +39,11 @@ can simply be decoded:
     OSAPI_ICELL  2E <mov with one memory operand> [98] CB
                                                the INLINE cell: the routine
                                                itself, through CS (5 or 6)
+    (FIXED)      B8 01 00 3C 02 CB | 89 D0 83 F8 01 CB
+                                               an inline cell with NO memory
+                                               operand - kern_mega's protected-
+                                               mode questions, answered in
+                                               registers off kern_mega (6)
 
 AN INLINE CELL HAS NO TARGET, AND THAT IS WHAT CHECK 6 HAS TO GET ROUND.
 Since kernel size pass 4's C3 (SPEC.md 20.3) fifteen cells whose routine was
@@ -223,9 +228,7 @@ ALIAS = {
     "OSAPI_XMEM_ALLOC":   "xm_alloc",
     "OSAPI_XMEM_FREE":    "xm_free",
     "OSAPI_XMEM_COPY":    "xm_copy",
-    "OSAPI_WM_ONDRAG":    "wm_ondrag_c",
     "OSAPI_WM_TIMER":     "wm_timer_c",
-    "OSAPI_WM_ONTIMER":   "wm_ontimer_c",
     "OSAPI_TASK_PARK":    "inst_task_park",
     "OSAPI_WM_TITLE":     "wm_title_set",
     "OSAPI_GFX_PEN":      "gfx_pen_cf",
@@ -255,7 +258,7 @@ def slots():
     return out
 
 
-SHAPES = "1E0E1F E8.. 1FCB | 1E0E1F EA.. ssss | 55E8.. tttt | 55BD.. E9.. | E9.. | 9A.. ssss CB | 2E <mov> [98] CB"
+SHAPES = "1E0E1F E8.. 1FCB | 1E0E1F EA.. ssss | 55E8.. tttt | 55BD.. E9.. | E9.. | 9A.. ssss CB | 2E <mov> [98] CB | FIXED"
 
 # The INLINE cells (SPEC.md 20.3): published name -> (direction, register,
 # operand, trailing ops). The operand is a kernel variable's label, or
@@ -278,7 +281,39 @@ INLINE = {
     "OSAPI_GFX_BLIT1_PEN": ("store", "ax", "gfx_b1ink", ()),  # AH -> gfx_b1pap, adjacent
     "OSAPI_ICON_PEN":      ("store", "ax", "ico_c1", ()),     # AH -> ico_c2, adjacent
     "OSAPI_WM_ONCLICK":    ("store", "ax", "[bx+W_ONCLICK]", ()),
+    # kernel size pass 14: two more window-record setters whose body was the
+    # store and a `ret`. Word displacements, OSAPI_WM_ONWHEEL's six bytes;
+    # kern_mega keeps both as rare cells (its store needs the data alias)
+    "OSAPI_WM_ONMOUSEUP":  ("store", "ax", "[bx+W_ONMOUSEUP]", ()),
+    "OSAPI_WM_ONCLOSE":    ("store", "ax", "[bx+W_ONCL]", ()),
+    # ...and two whose contract is CF = 0 as well (SPEC.md 13.8.2, 13.9: the
+    # kern_big answer to kern_small's refusal), so a `clc` before the retf
+    "OSAPI_WM_ONDRAG":     ("store", "ax", "[bx+W_ONDRAG]", ("clc",)),
+    "OSAPI_WM_ONTIMER":    ("store", "ax", "[bx+W_ONTIMER]", ("clc",)),
 }
+
+
+# ...and the INLINE cells with NO memory operand (kernel size pass 14): a
+# protected-mode question kern_mega answers through a rare cell, which every
+# other kernel answers with registers alone, in the cell. There is nothing to
+# resolve, so the ledger is the BYTES themselves - this kernel's, which is why
+# a FIXED cell may differ on kern_mega (where these are RSLOT cells to bodies
+# of their own and this table is not read). A cell that should be one of
+# these and has become anything else fails as an INLINE cell with no row.
+FIXED = {
+    "OSAPI_XMEM_SEL":    "b801003c02cb",   # mov ax, 1 / cmp al, 2: AX = 1, CF = 1
+    "OSAPI_XMEM_RUN":    "b801003c02cb",   # ...the same refusal
+    "OSAPI_MEM_CODESEL": "89d083f801cb",   # mov ax, dx / cmp ax, 1: CF iff DX = 0
+}
+
+
+def fixed(c):
+    """(length, hex) when the cell is one of FIXED's byte strings, else None."""
+    for want in set(FIXED.values()):
+        b = bytes.fromhex(want)
+        if bytes(c[:len(b)]) == b:
+            return len(b), want
+    return None
 
 
 def inline(c):
@@ -315,6 +350,8 @@ def inline(c):
     extra = ()
     if n < len(c) and c[n] == 0x98:
         extra, n = ("cbw",), n + 1
+    elif n < len(c) and c[n] == 0xF8:       # a setter whose answer is CF = 0
+        extra, n = ("clc",), n + 1
     if n >= len(c) or c[n] != 0xCB:
         return None
     return n + 1, (d, reg, opd, extra)
@@ -383,6 +420,9 @@ def decode(blob, addr, bodies, cold_seg):
     il = inline(c)
     if il is not None:
         return "INLINE", il, None
+    fx = fixed(c)
+    if fx is not None:
+        return "FIXED", fx, None
     return None, c.hex(), None
 
 
@@ -440,7 +480,7 @@ def main():
         if not check(k is not None, "the table does not decode at 0x%04X" % a, "a cell of no known shape", got=t):
             break
         starts.append(a)
-        a += t[0] if k == "INLINE" else LEN[k]
+        a += t[0] if k in ("INLINE", "FIXED") else LEN[k]
     check(a == tend, "the table walk ends at 0x%04X, not osapi_table_end 0x%04X" % (a, tend), "cell lengths disagree")
     startset = set(starts)
 
@@ -484,7 +524,14 @@ def main():
         if kind == "INLINE":
             check_inline(name, addr, tgt[1], label_at, equ)
             continue
-        if name in INLINE:
+        if kind == "FIXED":
+            check(FIXED.get(name) == tgt[1],
+                  "%s (0x%04X) is the fixed cell %s" % (name, addr, tgt[1]),
+                  "an inline cell of no memory operand that is not this name's "
+                  "own bytes - the answer the SDK publishes for it has changed",
+                  got=tgt[1], want=FIXED.get(name, "no FIXED row"))
+            continue
+        if name in INLINE or name in FIXED:
             check(False, "%s (0x%04X) is in INLINE but its cell is a %s" % (name, addr, kind),
                   "the ledger names an inline cell that is not one - remove the row, "
                   "or the cell lost its inline body")
@@ -523,7 +570,7 @@ def main():
     for name in ALIAS:
         check(name in by_name, "ALIAS names %s, which no SDK publishes" % name,
               "remove the row - a stale exception silently exempts nothing")
-    for name in INLINE:
+    for name in list(INLINE) + list(FIXED):
         check(name in by_name, "INLINE names %s, which no SDK publishes" % name,
               "remove the row - a stale exception silently exempts nothing")
 

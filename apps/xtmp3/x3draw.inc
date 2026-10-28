@@ -79,6 +79,16 @@ X3P_C4      equ 0                   ; the 4bpp canvas, colour [x3d_pcol]
 X3P_SET     equ 1                   ; the band: ink
 X3P_CLR     equ 2                   ; the band: paper
 
+; x3d_btplace - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): x3d_origin before every
+; hit test, so the keys are where the window IS after a drag that replayed it
+; without a paint. BX = the record, SI = the window. Keeps every register
+x3d_btplace:
+    push bx
+    mov bx, si
+    call x3d_origin
+    pop bx
+    ret
+
 ; -----------------------------------------------------------------------------
 ; x3d_origin - bank the content origin, and the button rects from it
 ; in:  BX = the window

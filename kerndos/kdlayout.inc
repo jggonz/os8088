@@ -186,7 +186,7 @@ KDB_SIG     equ 0x3158444B      ; 'KDX1', little-endian
 KDB_CODE    equ 4               ; dw the program's exit code, behind the magic
 KDB_AKB     equ 6               ; dw ...and the ARENA it was given, in KB
                                 ;    (SPEC.md 96.41.1). It rides here for
-                                ;    KDB_CODE's own reason: the box cannot
+                                ;    KDB_CODE's own reason: DOS.O88 cannot
                                 ;    work it out - the arena is THIS host's
                                 ;    arithmetic off [kd_top] - and `int 19h`
                                 ;    plus a whole boot is between the two

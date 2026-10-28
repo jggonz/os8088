@@ -113,7 +113,7 @@ X3G_SIZE    equ X3G_PL + 576        ; 5,228 bytes
 ; 2. A BACKEND PART: ITS HEADER AND VERB TABLE (X3K_*)
 ; =============================================================================
 ;
-; A backend is an OP_SEG part (SPEC.md 20.12) whose first 18 bytes are:
+; A backend is an OP_SEG part (SPEC.md 20.12) whose first 20 bytes are:
 X3K_SIG     equ 0       ; db 'X3'
 X3K_ABI     equ 2       ; db X3G_ABI
 X3K_KIND    equ 3       ; db X3K_STD / X3K_XT (X3K_FRONT is the FRONT part,
@@ -123,14 +123,18 @@ X3K_FRONT   equ 2
 X3K_NV      equ 4       ; db verbs in the table (X3V_COUNT)
 X3K_FLAGS   equ 5       ; db 0
 X3K_VEC     equ 6       ; dw near offsets INSIDE THE PART, one per verb, in
-X3K_SIZE    equ 18      ;    X3V_* order; each verb ends in RETF
+X3K_SIZE    equ 20      ;    X3V_* order; each verb ends in RETF
 X3V_CAPS    equ 0
 X3V_OPEN    equ 1
 X3V_RESET   equ 2
 X3V_GRANULE equ 3
 X3V_STATS   equ 4
 X3V_CLOSE   equ 5
-X3V_COUNT   equ 6
+X3V_RESEG   equ 6       ; ES:DI -> the OPEN record: its work segments re-read
+                        ; into the part (a compaction MOVED one, SPEC.md
+                        ; 121.10.1); nothing else changes. A part with no
+                        ; work, or not OPEN, answers CF = 0 and does nothing
+X3V_COUNT   equ 7
 X3K_SIGVAL  equ 0x3358  ; 'X','3' as a word
 ;
 ; CALLING A VERB (the engine does this; apps/pixel's px_pcall is the shape):
@@ -155,7 +159,8 @@ X3K_SIGVAL  equ 0x3358  ; 'X','3' as a word
 ;        the far call's own four included (a worker's stack is 384 bytes and
 ;        interrupts take up to ~80 of them, docs/KERNEL-MEMORY.md "Task
 ;        stacks"); and keeps NO far pointer across calls except the work
-;        segments OPEN was handed (the package region MOVES, SPEC.md 66)
+;        segments OPEN was handed - and those it takes again from RESEG,
+;        because they MOVE too (the package region MOVES, SPEC.md 66)
 X3_VSTACK   equ 64
 X3_MAXSEG   equ 6       ; work segments a backend may ask for
 

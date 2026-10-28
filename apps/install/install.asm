@@ -13,12 +13,13 @@
 ;   OSAPI_DRV_USE (SPEC.md 117.3)  the Drivers page's tick - CTRL.DRV's own
 ;                                  cdl_load - which brings HDD.DRV up, and
 ;                                  at the end gives its tool back
-;   HDD.DRV's HDV_TOOL (117.4)     HDDTOOL.DRV's Install window, driven from
+;   HDD.DRV's HDV_TOOL (117.4)     HDDTOOL.DRV's install engine, driven from
 ;                                  here: its device table, its State column,
 ;                                  its hd_inst_step
 ;
-; So a fix to the installer is a fix to both faces, and an install made from
-; either is the same bytes on the disk.
+; This is the ONLY face that engine has. The Control Panel's Install button
+; starts this package (SPEC.md 52.10.4); HDDTOOL.DRV carried a dialog of its
+; own as well until it was the same stage machine twice.
 ;
 ; ONE WINDOW, PAGES IN IT. in_build sets what a page shows - a heading, up to
 ; IN_NL lines, a radio group, three buttons - and in_paint draws it. A page
@@ -34,6 +35,54 @@
 ; =============================================================================
 
 %include "os88api.inc"
+%include "hfpkg.inc"                ; HTTPFS.DRV's package door (SPEC.md 122.4)
+%include "netpkg.inc"               ; ...and the socket verbs, for the check
+
+%ifndef IN_REL                      ; the release, OS88VER.TXT's first line, and
+  %define IN_REL '00000000'         ; where the published tree is (SPEC.md
+%endif                              ; 117.10.1-2): the Makefile passes both
+%ifndef IN_URL
+  %define IN_URL 'http://os8088.com/net/big/'
+%endif
+
+; IN_URL CUT INTO ITS PARTS HERE, BY THE ASSEMBLER (SPEC.md 117.10.3): the
+; check asks for one file with one GET of its own, so it wants the host, the
+; port and the path apart - and they are constants, so nothing parses them on
+; the machine. 'http://' is seven characters, so the host starts at the 8th
+IN_HOSTMAX  equ 64                  ; NETV_OPEN's NET_HOSTMAX
+%strlen in_ul IN_URL
+%assign in_i 8
+%assign in_hend 0
+%assign in_pbeg 0
+%rep in_ul
+  %if in_i > in_ul
+    %exitrep
+  %endif
+  %substr in_c IN_URL in_i
+  %ifidn in_c, ':'
+    %if in_hend = 0
+      %assign in_hend in_i
+    %endif
+  %elifidn in_c, '/'
+    %if in_hend = 0
+      %assign in_hend in_i
+    %endif
+    %assign in_pbeg in_i
+    %exitrep
+  %endif
+  %assign in_i in_i + 1
+%endrep
+%if in_pbeg = 0 || in_hend < 9 || in_hend - 8 >= IN_HOSTMAX
+  %error "IN_URL must be http://host[:port]/path/"
+%endif
+%substr IN_HOST IN_URL 8, in_hend - 8
+%if in_pbeg > in_hend
+  %substr in_pstr IN_URL in_hend + 1, in_pbeg - in_hend - 1
+  %deftok IN_PORT in_pstr
+%else
+  %define IN_PORT 80
+%endif
+%substr IN_PATH IN_URL in_pbeg, in_ul - in_pbeg + 1
 
     OS88_HEADER 'Install', in_entry, 1, OS88_HIGH | OS88_HIGHMEM
     OS88_ICON16                     ; an arrow onto a hard disk
@@ -113,12 +162,65 @@ P_DONE      equ 6
 P_STOP      equ 7
 P_BUSY      equ 8                   ; drawn before a copy, never clicked on
 
+; --- what the network said (SPEC.md 117.10.3) ---------------------------------
+NET_NONE    equ 0                   ; no Ethernet driver is loaded
+NET_LOOK    equ 1                   ; being asked
+NET_FAIL    equ 2                   ; no HTTP drive, no answer, no version
+NET_OLD     equ 3                   ; it answered with an OLDER release...
+NET_SAME    equ 4                   ; ...the same one...
+NET_NEW     equ 5                   ; ...or a newer one
+IN_VBUFSZ   equ 768                 ; the reply, headers and all: Apache's
+                                    ; run to ~250 bytes before the file
+IN_NEWS     equ 4                   ; lines of what is new shown
+IN_ARGT     equ 0x04DD              ; OSAPI_ARG_TEXT's cell, and OSAPI_ARG_FILE's:
+IN_ARGF     equ 0x0249              ; in_entry's gate compares the two (117.10.6)
+
 ; =============================================================================
 ; in_entry - package entry point (SPEC.md 20.2)
 ; in:  DS = CS = ours, ES = KERNEL_SEG; gfx lock NOT held
 ; out: BX = window ptr, CF clear
 ; =============================================================================
 in_entry:
+    call OSAPI_FILE_HERE            ; where we were started: the floppy source
+    mov [in_home], dx               ; comes back here (SPEC.md 117.10.5)
+    mov [in_home+2], bl
+    cmp word [es:IN_ARGT], 0xE855   ; IS THE CELL THERE? (SPEC.md 117.10.6): a
+    jne .plain                      ; kernel before it ends its table at 0x04DD
+    mov ax, [es:IN_ARGT+2]          ; and runs on into data. `push bp` / `call`
+    sub ax, [es:IN_ARGF+2]          ; landing where OSAPI_ARG_FILE's does - the
+    cmp ax, IN_ARGF - IN_ARGT       ; same OSAPI_RCSLOT - is the cell; no older
+    jne .plain                      ; kernel can have started us from a link
+    call OSAPI_ARG_TEXT             ; STARTED AT BOOT? (SPEC.md 117.10.6): the
+    jc .plain                       ; link's parameter is CHECK
+    push ds
+    mov ds, dx
+    cmp word [si], 'CH'
+    jne .notck
+    cmp word [si+2], 'EC'
+    jne .notck
+    cmp word [si+4], 'K'            ; 'K' and its NUL
+.notck:
+    pop ds
+    jne .plain
+    mov byte [in_auto], 1
+    call in_netck                   ; ...asked BEFORE any window
+    cmp byte [in_net], NET_NEW
+    je .plain                       ; newer: the wizard, on the source page
+    mov si, in_s_tuptodate
+    cmp byte [in_net], NET_OLD      ; the same or older: nothing to do
+    jae .say
+    mov si, in_s_tnonet
+    cmp byte [in_net], NET_NONE
+    je .say
+    mov si, in_s_tnoans
+.say:
+    push ds
+    pop es
+    xor cx, cx
+    call OSAPI_TOAST                ; the toast stands and `Load failed` is not
+    stc                             ; said: an entry's own refusal (20.12.4)
+    ret
+.plain:
     mov si, in_tpl
     call OSAPI_WM_CREATE
     jc in_ret
@@ -137,6 +239,17 @@ in_entry:
     sbb al, al
     neg al                          ; 1 = a hard disk: this is an UPGRADE
     mov [in_sysboot], al
+    mov byte [in_src], 1            ; the floppy row, until the network says
+    cmp byte [in_auto], 0
+    je .ask
+    mov byte [in_src], 0            ; ...or has said already: newer
+    jmp short .built
+.ask:
+    mov al, DRVC_NET                ; a card: ask it once the window is up
+    call OSAPI_DRV_CLASSK
+    jc .built                       ; (in_net = NET_NONE, the bss's 0)
+    mov byte [in_net], NET_LOOK
+.built:
     mov byte [in_page], P_WELCOME
     call in_build
     pop ax                          ; AX = the window
@@ -148,9 +261,29 @@ in_entry:
     xchg ax, bx
     mov ax, in_press                ; ...and OURS goes in front of the
     call OSAPI_WM_ONCLICK           ; library's: see in_press
+    cmp byte [in_net], NET_LOOK
+    jne .noask
+    mov ax, in_ontimer              ; the network is asked from a timer, a tick
+    call OSAPI_WM_ONTIMER           ; after the first paint, so the page says
+    mov ax, 1                       ; what is happening while it waits
+    call OSAPI_WM_TIMER
+.noask:
     clc
 in_ret:
     ret
+
+; in_ontimer - the network, asked; the source page again with its answer
+; in:  SI = the window, the gfx lock held (W_ONCLICK's environment)
+in_ontimer:
+    call in_netck
+    cmp byte [in_page], P_WELCOME
+    jne in_ret
+    cmp byte [in_net], NET_NEW
+    jne .keep
+    mov byte [in_src], 0            ; newer: the network row is the default
+.keep:
+    mov al, P_WELCOME
+    jmp in_go
 
 ; -----------------------------------------------------------------------------
 ; in_press - W_ONCLICK: the rects again, from the LIVE content box, and then
@@ -162,10 +295,13 @@ in_ret:
 ; in_layout wrote at the last paint still name where the window WAS. Reported
 ; as "Finished - click Next, and Next does nothing" - the window had been
 ; moved since the page was drawn, and minimizing and restoring it was the
-; repaint that put the rects back. The library now moves a record's rects
-; with a dragged window by itself (SPEC.md 20.5.1.3.5), so for the BUTTONS
-; this is belt and braces; it stays for the RADIO rows, whose rect
-; (in_rad's OS88UI_RD_RECT) is ours and which the library cannot see.
+; repaint that put the rects back. The library does NOT move a record's
+; rects by itself: it calls a record's OS88UI_BT_PLACE proc before each hit
+; test (SPEC.md 20.5.1.3.5), and in_btrec has none because this proc already
+; IS that - in_layout writes in_rects as well as the RADIO rows' rect
+; (in_rad's OS88UI_RD_RECT, which is ours and which the library cannot see),
+; and it runs the instant before os88ui_btnclick tests either. The drag and
+; the release need nothing more: a window cannot move while a press is held.
 ; -----------------------------------------------------------------------------
 in_press:
     push cx
@@ -452,16 +588,79 @@ in_text:
 .out:
     ret
 
+; --- the source: the network or the floppies (SPEC.md 117.10.4) ------------
 in_b_welcome:
-    mov si, in_t_welcome
     mov word [in_head], in_h_welcome
     cmp byte [in_sysboot], 0
     je .fl
-    mov si, in_t_upgrade
     mov word [in_head], in_h_upgrade
 .fl:
     or byte [in_bdis], 1 << IN_BBACK
-    jmp in_text
+    mov word [in_rady], IN_L0
+    mov word [in_rad+OS88UI_RD_N], 2
+    mov di, in_ib                   ; row 0: 'Network: release 20261101, newer'
+    mov [in_items+0], di
+    mov word [in_items+2], in_s_floppy
+    mov si, in_s_netpfx
+    call in_cat
+    mov bl, [in_net]
+    cmp bl, NET_OLD
+    jb .why
+    mov si, in_s_rel
+    call in_cat
+    mov si, in_vbuf
+    mov cx, 8
+.d:
+    lodsb
+    mov [di], al
+    inc di
+    loop .d
+    mov si, in_s_older
+    cmp bl, NET_SAME
+    jb .tail
+    mov si, in_s_same
+    je .tail
+    mov si, in_s_newer
+    jmp short .tail
+.why:
+    xor bh, bh                      ; NONE, LOOK or FAIL: why not, greyed
+    shl bx, 1
+    mov si, [in_netwhy+bx]
+    or byte [in_rad+OS88UI_RD_DIS], 1
+    mov byte [in_src], 1
+.tail:
+    call in_cat
+    mov byte [di], 0
+    mov al, [in_src]
+    xor ah, ah
+    mov [in_rad+OS88UI_RD_SEL], ax
+    mov word [in_hline], 3          ; the help line, under the rows
+    mov si, in_s_hlook
+    cmp byte [in_net], NET_LOOK
+    je .help
+    mov si, in_s_hnet
+    or ax, ax
+    jz .help
+    mov si, in_s_hflop
+.help:
+    mov di, in_lb2
+    call in_cat
+    call in_pad
+    mov word [in_lines+6], in_lb2
+    cmp byte [in_src], 0            ; ...and what is new, whatever release it
+    jne .out                        ; is, while the network is the pick: .why
+                                    ; moved the pick off a row with no answer
+    mov si, in_news
+    mov di, in_lines + 8
+    mov cx, IN_NEWS
+.n:
+    lodsw
+    mov [di], ax                    ; not stosw: ES is the kernel's
+    inc di
+    inc di
+    loop .n
+.out:
+    ret
 
 ; --- the drive: the driver's state, then the devices ------------------------
 in_b_drive:
@@ -572,6 +771,10 @@ in_b_confirm:
     mov si, in_t_confirm
     call in_text
     mov word [in_lines+2], in_lb1   ; built: '  disk 1, slot 1 (31 MB, C:),'
+    cmp byte [in_netsrc], 0
+    je .fl
+    mov word [in_lines+6], in_s_cfnet
+.fl:
     mov si, in_s_cfkeep
     cmp byte [in_wipe], 0
     je .k
@@ -613,6 +816,13 @@ in_b_done:
     mov word [in_head], in_h_done
     mov si, in_t_done
     call in_text
+    mov word [in_rady], IN_L0 + 2 * IN_LP + 2  ; the startup check (117.10.6)
+    mov word [in_rad+OS88UI_RD_N], 2
+    mov word [in_items+0], in_s_chk0
+    mov word [in_items+2], in_s_chk1
+    mov al, [in_chk]
+    xor ah, ah
+    mov [in_rad+OS88UI_RD_SEL], ax
     cmp byte [in_skip], 0
     je .all
     mov word [in_lines+12], in_s_skipped
@@ -748,7 +958,7 @@ in_devlabel:
 
 ; -----------------------------------------------------------------------------
 ; in_slotlabel - BX = a slot: 'Slot 1  31 MB  C: FAT16' (the State column is
-; the Install window's own words, HDIS_TEXT) into its item buffer; greyed
+; the engine's own words, HDIS_TEXT) into its item buffer; greyed
 ; unless an install may take it (HDS_OK, or HDS_LIVE kept). Keeps BX
 ; -----------------------------------------------------------------------------
 in_slotlabel:
@@ -953,6 +1163,10 @@ in_ret2:                            ; again: the release above is what it would
 ; in_go - [in_page] = AL: build it and draw it. SI = the window
 in_go:
     mov [in_page], al
+    cmp al, P_DONE                  ; the Done page's row is what the target
+    jne .b                          ; already says (SPEC.md 117.10.6)
+    call in_autoread
+.b:
     push si
     call in_build
     pop si
@@ -971,7 +1185,7 @@ in_back:
 in_next:
     mov al, [in_page]
     cmp al, P_WELCOME
-    je in_todrive
+    je in_fromsrc
     cmp al, P_DRIVE
     je in_toslot
     cmp al, P_SLOT
@@ -995,6 +1209,392 @@ in_next:
     call in_cfline
     mov al, P_CONFIRM
     jmp short in_go
+
+; =============================================================================
+; THE NETWORK (SPEC.md 117.10)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; in_netck - [in_net] = what the published tree says about its release, and
+; [in_news] its lines of what is new. Asks only when a DRVC_NET driver is up,
+; and asks the SOCKETS: one GET of SYSTEM/OS88VER.TXT (in_vget). The HTTP
+; drive is not touched - bringing it up reads CTRL.DRV and HTTPFS.DRV off the
+; system disk and fetches the tree's whole index, for one 151-byte file - and
+; is mounted only when the network is picked (in_netgo). Keeps SI (the window)
+; -----------------------------------------------------------------------------
+in_netck:
+    push si
+    mov byte [in_net], NET_LOOK     ; ...until the answer is final: a reader
+    mov bl, NET_NONE                ; of this byte never sees a half-way one
+    mov al, DRVC_NET
+    call OSAPI_DRV_CLASSK           ; never loads ETHER.DRV: that is a DHCP wait
+    jc .set
+    call in_vget                    ; in_vbuf = the file, NUL-ended
+    mov bl, NET_FAIL                ; AFTER the call, never before it: in_vget
+    jc .set                         ; spends BL on its socket verbs, and a
+                                    ; refusal stored the last NETV_* as the
+                                    ; answer - RECV is 5, NET_NEW, which is
+                                    ; how a 404 read 'release HTTP/1.1, newer'
+    call in_vparse                  ; BL = the answer
+.set:
+    mov [in_net], bl
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; in_vget - GET IN_PATH SYSTEM/OS88VER.TXT from IN_HOST:IN_PORT, the body to
+; in_vbuf NUL-ended. CF = 1: no link, no connection, not 200, or no answer
+; within IN_WAIT ticks (from the open, across the whole exchange - a file this
+; small has no business taking longer). HTTP/1.0 and no keep-alive, so the
+; server's close is the end of the body; the handle is ABORTED, never
+; closed, for hf_abort's reason: a close we start holds a slot through
+; FIN-WAIT, and ETHER.DRV has four. Spends every register but BP
+; -----------------------------------------------------------------------------
+IN_WAIT     equ 182                 ; ticks: ten seconds, HTTPFS.DRV's bound
+in_vget:
+    call net_find                   ; CF = 1 no socket driver, ZF = 1 no link
+    jc in_vno
+    jz in_vno
+    call OSAPI_GET_TICKS
+    mov [in_tbase], ax
+.o:
+    mov si, in_s_host
+    mov cx, IN_PORT
+    mov bl, NETV_OPEN
+    call in_nc
+    jnc .op
+    cmp ax, NETE_BUSY               ; the only refusal worth waiting out
+    jne in_vno
+    call in_twait
+    jnc .o
+    jmp in_vno
+.op:
+    mov [in_sock], al
+.c:
+    mov bl, NETV_STATUS
+    call in_ncs
+    jc .cw
+    cmp ah, NSK_UP
+    je .up
+    cmp ah, NSK_CONNECT             ; (or still resolving the name)
+    jne in_vfail
+.cw:
+    call in_twait
+    jnc .c
+    jmp in_vfail
+.up:
+    mov si, in_s_req
+    mov cx, IN_REQLEN
+.s:
+    push cx
+    mov bl, NETV_SEND
+    call in_ncs                     ; CX = how many it took
+    mov ax, cx
+    pop cx
+    jnc .took
+    xor ax, ax                      ; refused: none taken, and the clock
+.took:                              ; decides
+    add si, ax
+    sub cx, ax
+    jz .rx
+    call in_twait
+    jnc .s
+    jmp short in_vfail
+.rx:
+    mov di, in_vbuf
+.r:
+    mov cx, in_vbuf + IN_VBUFSZ - 1
+    sub cx, di
+    jz .got                         ; full: what fits is what is read
+    mov bl, NETV_RECV
+    call in_ncs                     ; CX = delivered. 0 is NOT the end
+    jc .st
+    add di, cx
+    jcxz .st
+    jmp short .r
+.st:
+    mov bl, NETV_STATUS
+    call in_ncs
+    jc .rw
+    cmp ah, NSK_UP
+    je .rw
+    cmp ah, NSK_CLOSING
+    jne .got                        ; CLOSED, FAILED: nothing more comes
+    jcxz .got                       ; closing with nothing left: the end
+    jmp short .r
+.rw:
+    call in_twait
+    jnc .r
+    jmp short in_vfail
+.got:
+    mov byte [di], 0
+    call in_abort
+    cmp word [in_vbuf+9], '20'      ; 'HTTP/1.x 200'
+    jne in_vno
+    cmp byte [in_vbuf+11], '0'
+    jne in_vno
+    mov si, in_vbuf
+.h:                                 ; ...then the blank line: an LF with
+    lodsb                           ; another LF, or a CR LF, straight after
+    or al, al
+    jz in_vno
+    cmp al, 10
+    jne .h
+    cmp byte [si], 10
+    je .lf
+    cmp word [si], 0x0A0D
+    jne .h
+    inc si
+.lf:
+    inc si                          ; SI = the body: down to the buffer's
+    push es                         ; start, its NUL with it
+    push ds
+    pop es
+    sub di, si
+    mov cx, di
+    inc cx
+    mov di, in_vbuf
+    rep movsb
+    pop es
+    clc
+    ret
+in_vfail:
+    call in_abort
+in_vno:
+    stc
+    ret
+
+; in_twait - CF = 1 once IN_WAIT ticks have passed since [in_tbase]. Spends AX
+in_twait:
+    call OSAPI_GET_TICKS
+    sub ax, [in_tbase]
+    cmp ax, IN_WAIT
+    cmc
+    ret
+
+; in_ncs / in_nc - one socket verb, BL = the NETV_*: in_ncs on our handle,
+; in_nc with AL, CX, SI and DI as they are. ES:SI and ES:DI are OUR segment by
+; the X stub. out the verb's AX, CX and flags; keeps SI, DI and DX
+in_ncs:
+    mov al, [in_sock]
+in_nc:
+    push dx
+    push si
+    push di
+    mov bh, [net_cls]
+    call OSAPI_DRV_CALL
+    pop di
+    pop si
+    pop dx
+    ret
+
+; in_abort - give the handle back now, if there is one. Keeps every register
+in_abort:
+    push ax
+    push bx
+    push cx
+    pushf
+    xor al, al
+    xchg al, [in_sock]
+    or al, al
+    jz .out
+    mov bl, NETV_ABORT
+    call in_nc
+.out:
+    popf
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; in_gohome - stand where INSTALL was started. Keeps every register but flags
+in_gohome:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, [in_home]
+    mov bl, [in_home+2]
+    call OSAPI_FILE_GOTO_QM
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; in_hf - one HTTPFS.DRV door verb, BL = the HFV_*; ES = ours by the X stub
+in_hf:
+    mov bh, DRVC_HTTP
+    call OSAPI_DRV_CALL             ; CALLED: a cell returns far
+    ret
+
+; -----------------------------------------------------------------------------
+; in_netmount - the HTTP drive up, its address and state banked the first
+; time, and IN_URL mounted and its index fetched. CF = 1 any of it failed
+; -----------------------------------------------------------------------------
+in_netmount:
+    cmp byte [in_hfmod], 0
+    jne .mount                      ; banked already: ours is what is mounted
+    mov al, DRVC_HTTP
+    call OSAPI_DRV_CLASSK           ; up already: the tick would read CTRL.DRV
+    jnc .up                         ; off the system disk to find that out
+    mov ax, (DRVU_UP << 8) | DRVC_HTTP
+    call OSAPI_DRV_USE              ; the Drivers page's tick, for the session
+    jc .out
+.up:
+    mov di, in_ourl
+    mov bl, HFV_URL
+    call in_hf                      ; the user's own address...
+    jc .out
+    mov bl, HFV_STATE
+    call in_hf
+    jc .out
+    mov [in_ovol], al               ; ...and whether it was mounted
+    mov byte [in_hfmod], 1
+.mount:
+    mov si, in_s_url
+    mov bl, HFV_MOUNT
+    call in_hf
+    jc .out
+    mov bl, HFV_FETCH
+    call in_hf
+.out:
+    ret
+
+; in_hfback - the HTTP drive as the user had it: their address mounted again
+; (lazy, as a boot leaves it), or unmounted if none was. HTTPDRV.CFG is never
+; written here. Keeps every register
+in_hfback:
+    cmp byte [in_hfmod], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [in_hfmod], 0
+    mov bl, HFV_UNMOUNT
+    cmp byte [in_ovol], 0xFF
+    je .go
+    cmp byte [in_ourl], 0
+    je .go
+    mov si, in_ourl
+    mov bl, HFV_MOUNT
+.go:
+    call in_hf
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; in_vparse - OS88VER.TXT (in_vbuf, NUL-ended) into [in_net] and [in_news]:
+; eight digits, compared with IN_REL as text; then up to IN_NEWS lines, each
+; cut at 40 characters. Anything else is a release that is not known
+; -----------------------------------------------------------------------------
+in_vparse:
+    mov si, in_vbuf
+    mov di, in_rel
+    mov cx, 8
+    mov bl, NET_SAME                ; until a digit differs
+.dig:
+    lodsb
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    cmp bl, NET_SAME
+    jne .next                       ; decided: only the shape is checked now
+    cmp al, [di]
+    je .next
+    mov bl, NET_NEW
+    ja .next
+    mov bl, NET_OLD
+.next:
+    inc di
+    loop .dig
+    push bx                         ; the answer, kept for the caller
+    mov di, in_news                 ; --- the lines after it ---
+    xor cx, cx                      ; CX = characters in this line, 0 = between
+.ch:
+    mov al, [si]
+    or al, al
+    jz .end
+    cmp al, 13
+    je .eol
+    cmp al, 10
+    je .eol
+    jcxz .start
+    cmp cx, 40
+    jb .keep
+    mov byte [si], 0                ; the 41st: cut there
+    jmp short .skip
+.start:
+    cmp di, in_news + 2 * IN_NEWS
+    jae .end                        ; the fifth line and on are not shown
+    mov [di], si
+    inc di
+    inc di
+.keep:
+    inc cx
+.skip:
+    inc si
+    jmp short .ch
+.eol:
+    mov byte [si], 0
+    xor cx, cx
+    inc si
+    jmp short .ch
+.end:
+    pop bx
+    ret
+.bad:
+    mov bl, NET_FAIL
+    ret
+
+; -----------------------------------------------------------------------------
+; in_netgo - the source page's Next with the network picked: IN_URL mounted
+; again and its volume kept, which HDI_GO then NAMES as the source (SPEC.md
+; 117.10.5); CF = 1 it would not mount, and the page says so
+; -----------------------------------------------------------------------------
+in_netgo:
+    push si
+    call in_netmount
+    jc .out
+    mov bl, HFV_STATE
+    call in_hf
+    mov [in_nvol], al
+.out:
+    pop si
+    ret
+
+; in_fromsrc - the source page's Next: the network stood on, or the floppy
+; INSTALL came from; then the drives
+in_fromsrc:
+    mov byte [in_netsrc], 0
+    cmp byte [in_src], 0
+    jne .floppy
+    call in_netgo
+    jnc .net
+    mov byte [in_net], NET_FAIL     ; it answered a moment ago and not now
+    mov byte [in_src], 1
+    mov al, P_WELCOME
+    jmp in_go
+.net:
+    mov byte [in_netsrc], 1
+    jmp short in_todrive
+.floppy:
+    call in_hfback
+    call in_gohome
 
 ; -----------------------------------------------------------------------------
 ; in_todrive - switch the driver on and ask for the drives (SPEC.md 117.1)
@@ -1048,10 +1648,10 @@ in_toslot:
     jc .refused
     mov al, P_SLOT
     jmp in_go
-.refused:                           ; the tool would not come in, or the
-    push di                         ; Control Panel's Install window is open
-    mov byte [in_page], P_DRIVE     ; and owns the engine's state: say so on
-    push si                         ; the drive page's hint line
+.refused:                           ; the tool would not come in, or (an
+    push di                         ; OLDER HDDTOOL.DRV's) Install window is
+    mov byte [in_page], P_DRIVE     ; open and owns the engine's state: say so
+    push si                         ; on the drive page's hint line
     call in_build
     pop si
     pop di
@@ -1069,8 +1669,9 @@ in_scan:
     mov di, in_s_notool2
     jc .bad
     mov di, in_s_cpopen
-    cmp al, 0xFD
-    je .bad
+    cmp al, 0xFD                    ; only a tool built before SPEC.md 52.10.4
+    je .bad                         ; lost its window answers this - an upgrade
+                                    ; booted from C: reaches C:'s HDDTOOL.DRV
     mov [in_eslot], al              ; the engine's own pick, 0FFh none
     call in_probe                   ; in_osmask: which carry KERNEL.SYS
     ; --- the default: os8088 found on a usable slot, else the engine's ---
@@ -1242,7 +1843,14 @@ in_install:
     mov si, [in_win]
     mov dl, [in_dev]
     mov dh, [in_slot]
-    mov ch, [in_wipe]
+    xor ch, ch                      ; CH bits 7..1: the source + 1, 0 = the
+    cmp byte [in_netsrc], 0         ; engine's own (SPEC.md 117.10.5)...
+    je .src
+    mov ch, [in_nvol]
+    inc ch
+    shl ch, 1
+.src:
+    or ch, [in_wipe]                ; ...and bit 0 erase / keep
     mov cl, HDI_GO
     jmp short in_stage
 
@@ -1269,15 +1877,19 @@ in_stage:
     pop si
     xor al, al
 .ran:
+    mov byte [in_wait], 0           ; nothing of ours waits, until it does
     mov word [in_lhead], in_h_bdone
     mov bl, P_DONE
     mov di, in_s_ldone
     cmp al, HDG_DONE
     je .end
+    cmp al, HDG_APPS
+    jne .fail
+    mov byte [in_wait], 1           ; the run waits on its apps disk
     mov bl, P_APPS
     mov di, in_s_lapps
-    cmp al, HDG_APPS
-    je .end
+    jmp short .end
+.fail:
     call in_capline                 ; HDG_FAIL: the engine's own words
     mov word [in_lhead], in_h_bstop
     mov bl, P_STOP
@@ -1484,22 +2096,155 @@ in_skipapps:
     jmp in_go
 
 in_restart:
+    call in_autolink
     call in_release
     mov al, 1                       ; NOT the flushing kind: the page has just
     call OSAPI_REBOOT               ; told the user to take the floppy out
     ret                             ; (SPEC.md 52.10.6.1) - and it is POSTED
 
 ; -----------------------------------------------------------------------------
+; in_autolink - \AUTOSTRT\OSCHECK.LNK on the INSTALLED volume: written when
+; the Done page's check is picked, deleted when it is not (SPEC.md 117.10.6).
+; The volume is the slot's letter as the engine left it, asked again: an
+; erase install may have made the partition the run mounted. Keeps nothing
+; it does not need; silent about failing - the machine is about to restart
+; -----------------------------------------------------------------------------
+in_autolink:
+    push si
+    call in_tgtroot
+    jc .back
+    mov bp, in_s_auto
+    call in_dive                    ; \AUTOSTRT, if it is there...
+    jnc .in
+    cmp byte [in_chk], 0
+    je .back                        ; ...and not made just to delete from
+    mov si, in_s_auto
+    call OSAPI_FILE_MKDIR
+    jc .back
+    call in_dive                    ; (BP is the name still)
+    jc .back
+.in:
+    mov si, in_s_lnk
+    cmp byte [in_chk], 0
+    je .del
+    push es
+    push ds
+    pop es
+    mov bx, in_lnkrec
+    mov cx, 50                      ; LNK_SIZE (SPEC.md 26.10.1)
+    xor dx, dx
+    call OSAPI_FILE_WRITE
+    pop es
+    jmp short .back
+.del:
+    call OSAPI_FILE_DELETE
+.back:
+    call in_gohome
+    pop si
+    ret
+
+; in_autoread - [in_chk] = 1 when the target's \AUTOSTRT\OSCHECK.LNK is
+; already ours, CHECK and all: a re-install keeps the user's answer. One
+; read of the 50-byte link into in_vbuf - FILE_READ refuses a buffer smaller
+; than the file - which the source page alone uses. Keeps AX and SI
+in_autoread:
+    push ax
+    push si
+    mov byte [in_chk], 0
+    call in_tgtroot
+    jc .home
+    mov bp, in_s_auto
+    call in_dive
+    jc .home
+    push es
+    push ds
+    pop es
+    mov bx, in_vbuf
+    mov cx, IN_VBUFSZ
+    xor dx, dx
+    mov si, in_s_lnk
+    call OSAPI_FILE_READ
+    jc .pe
+    mov si, in_vbuf
+    mov di, in_lnkrec
+    mov cx, IN_LNKCMP
+    repe cmpsb
+    jne .pe
+    mov byte [in_chk], 1
+.pe:
+    pop es
+.home:
+    call in_gohome
+    pop si
+    pop ax
+    ret
+
+; in_tgtroot - stand in the installed volume's root: the slot's letter as the
+; engine has it now (an erase may have made the partition this run mounted),
+; banked in [in_tdrv]. CF = 1 it has none. Spends SI
+in_tgtroot:
+    mov di, in_slots
+    mov dl, [in_dev]
+    mov cl, HDI_SLOTS
+    call in_tool
+    jc .r
+    mov bx, [in_slot]
+    call in_srec
+    mov al, [si+HDIS_LET]
+    sub al, 'A'
+    jb .r                           ; no letter: nothing to stand on
+    mov [in_tdrv], al
+    mov bl, al
+    xor dx, dx
+    call OSAPI_FILE_GOTO_QM         ; its root
+.r:
+    ret
+
+; in_dive - into the folder BP names, in the folder we stand in on [in_tdrv]:
+; CF = 1 it is not there
+in_dive:
+    xor cx, cx
+.each:
+    push es
+    push ds
+    pop es
+    mov di, in_find
+    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    pop es
+    jc .out
+    cmp word [in_find+14], OSAPI_FT_DIR
+    jne .each
+    mov si, bp
+    mov di, in_find
+.cmp:
+    mov al, [si]
+    cmp al, [di]
+    jne .each
+    inc si
+    inc di
+    or al, al
+    jnz .cmp
+    mov dx, [in_find+16]            ; its first cluster
+    mov bl, [in_tdrv]
+    call OSAPI_FILE_GOTO_QM
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; in_quit / in_release - abandon a run waiting on its apps disk, then give the
 ; tool back (DRVU_DONE). Both keep every register
 ; -----------------------------------------------------------------------------
 in_quit:
-    push ax
-    push cx
+    cmp byte [in_wait], 0           ; NOTHING WAITS: no verb. HDI_QUIT is
+    je .out                         ; HDD.DRV's door, which reads HDDTOOL.DRV
+    mov byte [in_wait], 0           ; in before it forwards anything - 36
+    push ax                         ; sectors off A: to be told there was
+    push cx                         ; nothing to abandon
     mov cl, HDI_QUIT
     call in_tool                    ; CF = 1: no driver - nothing to abandon
     pop cx
     pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1523,6 +2268,7 @@ in_tool:
 
 in_release:
     call in_quit
+    call in_hfback
     push ax
     mov ax, (DRVU_DONE << 8) | DRVC_DISK
     call OSAPI_DRV_USE
@@ -1576,6 +2322,16 @@ in_onclick:
 in_picked:
     mov ax, [in_rad+OS88UI_RD_SEL]
     mov bl, [in_page]
+    cmp bl, P_WELCOME
+    jne .done
+    mov [in_src], al
+    jmp short .re
+.done:
+    cmp bl, P_DONE
+    jne .drive
+    mov [in_chk], al
+    jmp short .re
+.drive:
     cmp bl, P_DRIVE
     jne .slot
     mov [in_dev], al
@@ -1591,6 +2347,10 @@ in_picked:
     push si
     call in_build
     pop si
+    cmp byte [in_page], P_WELCOME   ; the source page's news comes and goes
+    jne .m                          ; with the pick
+    call in_newsp
+.m:
     cmp byte [in_page], P_MODE      ; the mode page's two explanation lines
     jne .h                          ; change with the pick as well
     mov bx, si
@@ -1605,6 +2365,48 @@ in_picked:
     pop si
 .h:
     jmp in_hint
+
+; in_newsp - the source page's news lines (4..7) after a pick: drawn onto the
+; ground they left, or that ground put back. One write a pixel either way
+; (PERFORMANCE.md rule 2): a hidden band was blanked, a shown one is text over
+; nothing. SI = the window, the clip armed; keeps SI
+in_newsp:
+    push si
+    mov bx, si
+    call OSAPI_WM_CONTENT
+    mov cx, ax
+    add cx, IN_LX
+    add dx, IN_L0 + 4 * IN_LP
+    mov si, in_lines + 8
+    cmp word [si], 0
+    je .blank
+    mov di, IN_NEWS
+.l:
+    push si
+    mov si, [si]
+    or si, si
+    jz .n
+    call in_ink
+    call in_run
+.n:
+    pop si
+    inc si
+    inc si
+    add dx, IN_LP
+    dec di
+    jnz .l
+    pop si
+    ret
+.blank:
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov bx, dx
+    mov ax, cx
+    add cx, IN_CW - 2 * IN_LX - 1
+    add dx, IN_NEWS * IN_LP - 1
+    call OSAPI_GFX_FILL
+    pop si
+    ret
 
 ; -----------------------------------------------------------------------------
 ; in_onkey - W_ONKEY: Enter is the default button, Escape is Cancel, the
@@ -1658,13 +2460,18 @@ in_onkey:
     pop cx
     test [in_rad+OS88UI_RD_DIS], bx
     jnz .step
-    mov [in_rad+OS88UI_RD_SEL], ax
+    mov di, ax                      ; THE TWO DOTS, as a click redraws them
+    xchg di, [in_rad+OS88UI_RD_SEL] ; (SPEC.md 13.17.4): os88ui_rad repaints
+    push si                         ; rings and the new dot and never takes
+    push ax                         ; the old one off, so the group read as
+    push di                         ; two picks after an arrow key
     mov bx, si
-    push si
     call in_layout
     mov bx, in_rad
-    xor di, di
-    call os88ui_rad                 ; the group as it now stands
+    pop si
+    call os88ui_raddot              ; the row that lost it...
+    pop si
+    call os88ui_raddot              ; ...and the row that has it
     pop si
     jmp in_picked
 
@@ -1790,95 +2597,77 @@ in_h_done:    db 'os8088 is installed', 0
 in_h_stop:    db 'The install stopped', 0
 
 ; --- fixed lines: [line, string] pairs, 0FFh ends ---
-in_t_welcome:
-    db 0
-    dw in_w0
-    db 1
-    dw in_w1
-    db 3
-    dw in_w3
-    db 4
-    dw in_w4
-    db 5
-    dw in_w5
-    db 7
-    dw in_w7
-    db 0xFF
-in_t_upgrade:
-    db 0
-    dw in_u0
-    db 1
-    dw in_u1
-    db 2
-    dw in_u2
-    db 3
-    dw in_u3
-    db 4
-    dw in_u4
-    db 6
-    dw in_u6
-    db 7
-    dw in_u7
-    db 0xFF
 in_t_confirm:
     db 0
     dw in_c0
     db 3
     dw in_c3
     db 5
-    dw in_c5
-    db 7
     dw in_c7
     db 0xFF
 in_t_apps:
     db 0
     dw in_a0
-    db 1
-    dw in_a1
-    db 3
+    db 2
     dw in_a3
-    db 4
+    db 3
     dw in_a4
-    db 6
+    db 5
     dw in_a6
     db 0xFF
 in_t_done:
     db 0
     dw in_d0
-    db 2
+    db 1
     dw in_d2
-    db 3
-    dw in_d3
-    db 4
-    dw in_d4
     db 0xFF
 
-in_w0:  db 'This puts os8088 on your hard disk, so', 0
-in_w1:  db 'the machine starts without a floppy.', 0
-in_w3:  db 'You need the system disk - it is in now -', 0
-in_w4:  db 'and the apps disk. On an XT the copy', 0
-in_w5:  db 'takes several minutes.', 0
-in_w7:  db 'Click Next to look for hard disks.', 0
-in_u0:  db 'This machine started from its hard disk,', 0
-in_u1:  db 'and INSTALL can bring it up to this', 0
-in_u2:  db 'release. Put the NEW system disk in a', 0
-in_u3:  db 'floppy drive, and the apps disk when it', 0
-in_u4:  db 'is asked for.', 0
-in_u6:  db 'Your own files and settings are kept.', 0
-in_u7:  db 'Click Next to look at the hard disk.', 0
 in_c0:  db 'INSTALL is ready. It will use', 0
 in_c3:  db '  and copy both floppies onto it.', 0
-in_c5:  db 'The machine is busy while it copies.', 0
-in_c7:  db 'Click Install to start.', 0
-in_a0:  db 'The system is on the hard disk, and the', 0
-in_a1:  db 'machine will start from it.', 0
+in_c7:  db 'The machine is busy while it copies.', 0
+in_a0:  db 'The system is on: the hard disk boots.', 0
 in_a3:  db 'Now take the system disk out of drive A:', 0
 in_a4:  db 'put the APPS disk in, and click Continue.', 0
 in_a6:  db 'Skip leaves them off the hard disk.', 0
 in_d0:  db 'os8088 is installed on the hard disk.', 0
-in_d2:  db 'Take the floppy out of the drive, then', 0
-in_d3:  db 'click Restart: the machine will start', 0
-in_d4:  db 'from the hard disk.', 0
+in_d2:  db 'Take the floppy out, then click Restart.', 0
+
+; --- the network (SPEC.md 117.10) ---
+in_s_netpfx:  db 'Network: ', 0
+in_s_rel:     db 'release ', 0
+in_s_newer:   db ', newer', 0
+in_s_same:    db ', the same', 0
+in_s_older:   db ', older', 0
+in_netwhy:    dw in_s_wnone, in_s_wlook, in_s_wfail
+in_s_wnone:   db 'no network card', 0
+in_s_wlook:   db 'looking...', 0
+in_s_wfail:   db 'no answer', 0
+in_s_floppy:  db 'Floppy disks', 0
+in_s_hlook:   db 'Looking for a newer os8088...', 0
+in_s_hnet:    db 'Downloads the system and all the apps.', 0
+in_s_hflop:   db 'Uses the system disk, then the apps disk.', 0
+in_s_cfnet:   db '  and copy os8088 from the network.', 0
+in_s_chk0:    db 'Do not check for updates', 0
+in_s_chk1:    db 'Check for updates at startup', 0
+in_s_tuptodate: db 'os8088 is up to date', 0     ; toasts: 24 characters at most
+in_s_tnonet:  db 'Update check: no network', 0
+in_s_tnoans:  db 'Update check: no answer', 0
+in_s_auto:    db 'AUTOSTRT', 0
+in_s_lnk:     db 'OSCHECK.LNK', 0
+in_s_url:     db IN_URL, 0
+in_s_host:    db IN_HOST, 0
+in_s_req:     db 'GET ', IN_PATH, 'SYSTEM/OS88VER.TXT HTTP/1.0', 13, 10
+              db 'Host: ', IN_HOST, 13, 10, 13, 10
+IN_REQLEN   equ $ - in_s_req
+in_rel:       db IN_REL
+%if $ - in_rel != 8
+  %error "IN_REL is a release, YYYYMMDD: eight characters"
+%endif
+in_lnkrec:                          ; SPEC.md 26.10.1 and 26.10.7: 'LK', LNK_V,
+    db 'LK', 1, 0xFF, 1             ; the link's own volume, a package...
+    db 'INSTALL.O88', 0, 'CHECK', 0 ; ...in the root, with its parameter
+IN_LNKCMP equ $ - in_lnkrec        ; what in_autoread compares
+    times 50 - ($ - in_lnkrec) db 0
 
 in_s_loff:    db 'Do not switch the machine off.', 0
 in_s_ldone:   db 'Finished.', 0
@@ -1997,6 +2786,8 @@ in_ab3:     db 'Contributed by Jorge Gonzalez', 0
 %define OS88UI_RAD
 %define OS88UI_NOGCHECK
 %include "os88ui.inc"
+%define OS88SOCK_STATE              ; ...and net_find asks NSTF_SOCK as well
+%include "os88sock.inc"
 
 IN_IBSZ     equ 44
     OS88_BSS IN_BSS
@@ -2033,4 +2824,21 @@ in_lnext    equ in_lhead + 2                    ; ...and the page Next goes to
 in_logend   equ in_lnext + 1                    ; 1 = the verb has answered
 in_logn     equ in_logend + 1                   ; lines kept, 0..IN_LOGN
 in_log      equ in_logn + 1                     ; IN_LOGN * IN_LOGW
-IN_BSS      equ in_log + IN_LOGN * IN_LOGW - os88_image_end
+in_auto     equ in_log + IN_LOGN * IN_LOGW      ; 1 = started with CHECK
+in_net      equ in_auto + 1                     ; NET_*
+in_src      equ in_net + 1                      ; the source row: 0 network
+in_netsrc   equ in_src + 1                      ; 1 = this install's source
+in_hfmod    equ in_netsrc + 1                   ; 1 = the HTTP drive is ours
+in_ovol     equ in_hfmod + 1                    ; its volume as we found it
+in_chk      equ in_ovol + 1                     ; the Done page's row
+in_tdrv     equ in_chk + 1                      ; the installed volume
+in_wait     equ in_tdrv + 1                     ; 1 = a run waits on its apps
+in_nvol     equ in_wait + 1                     ; the network volume
+in_sock     equ in_nvol + 1                     ; the check's socket, 0 = none
+in_tbase    equ in_sock + 1                     ; ...and its clock
+in_home     equ in_tbase + 2                    ; where we started: dw, db
+in_news     equ in_home + 3                     ; IN_NEWS line pointers
+in_find     equ in_news + 2 * IN_NEWS           ; OSAPI_FIND_SZ
+in_ourl     equ in_find + OSAPI_FIND_SZ         ; HF_URLMAX: the user's address
+in_vbuf     equ in_ourl + HF_URLMAX             ; IN_VBUFSZ: OS88VER.TXT
+IN_BSS      equ in_vbuf + IN_VBUFSZ - os88_image_end

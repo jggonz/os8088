@@ -6,7 +6,7 @@
 SPEC.md 96.10.5.  A DOS mouse driver draws its own pointer - there is no
 compositor and no arrow the machine keeps for it, so `01h` means *put a cursor
 on the screen and keep it under the mouse*, and if the driver does not,
-nothing does.  This box answered `01h` and `02h` with a shrug, on the
+nothing does.  this DOS answered `01h` and `02h` with a shrug, on the
 reasoning that the kernel owns the pointer - which is right in the WINDOWED
 host and wrong under `kern_dos`, where the program owns every pixel and the
 kernel is not running at all.
@@ -14,7 +14,7 @@ kernel is not running at all.
 **SO THE ROW IS TWO ARMS AND BOTH ARE ASSERTIONS.**  Under `kern_dos` the
 cursor must be drawn; in the window it must NOT be, because there `B800` is
 the kernel's framebuffer and writing to it is corruption rather than a
-feature.  A row that only ran arm 3 would pass just as happily with a box
+feature.  A row that only ran arm 3 would pass just as happily with a DOS
 that scribbled on the desktop.
 
 **THE ASSERTION IS ARITHMETIC, NOT A PHOTOGRAPH.**  A text cursor is not a
@@ -41,7 +41,7 @@ WHAT THE FIVE LETTERS CHECK, each a different way for this to be broken:
   E  ...and the fourth call brings it back
   F  **A FUNCTION WITH NO RETURN VALUE LEAVES `AX` ALONE** (SPEC.md 96.10.6)
      - Microsoft Works's own test, instruction for instruction: it sets the Y
-     range with `08h` and stores `AL` as its `mouse present` flag, so a box
+     range with `08h` and stores `AL` as its `mouse present` flag, so a DOS
      that zeroes `AX` there has told it there is no mouse at the end of an
      init it answered correctly. That is what the first version of this
      feature shipped, and A-E could not see it: the program then never calls
@@ -133,7 +133,7 @@ def arm_window():
 
     A DOS program is never outside the fullscreen bracket: `dos_fsx_main`
     calls `OSAPI_FSX_MODE` with `FSXM_TEXT80` before the program is entered
-    and the kernel hands back the surface in `dos_fsi` - the screen the box's
+    and the kernel hands back the surface in `dos_fsi` - the screen DOS's
     own console already writes into. So both arms draw, and what differs is
     only where the hook reads the surface FROM.
     """
@@ -144,7 +144,7 @@ def arm_window():
         said, got = verdict(m)
         if said == "SKIP":
             fail("the probe SKIPPED in the window - it found no INT 33h or no "
-                 "text mode, and under THIS box both are the thing under test")
+                 "text mode, and under THIS DOS both are the thing under test")
         if said != "PASS":
             bad = ", ".join("%s got %s want %s" % (k, v[0], v[1])
                             for k, v in sorted(got.items()) if v[0] != v[1])
@@ -161,14 +161,14 @@ def arm_whole():
 
     **A BOOT OF ITS OWN, and that is not laziness.** The two arms cannot share
     one: MCURSOR.COM ends on `AH=08h` waiting for a key, so the window arm
-    leaves a program RUNNING in the box - and the Memory page cannot be
+    leaves a program RUNNING in DOS - and the Memory page cannot be
     re-armed underneath one (tests/kdmouse.py carries the same rule). Tearing
     that down is more moving parts than a second boot, and every one of them
     fails as a message about the wrong subject.
     """
     with os88ui.boot(SYS, apps=CUR, machine=MACH) as ui:
         m = ui.m
-        # `tests/kdmouse.py`'s sequence, and for its reasons: open the BOX and
+        # `tests/kdmouse.py`'s sequence, and for its reasons: open DOS and
         # not the program (a program launched by association is running in the
         # window and the Memory page cannot be re-armed underneath it), change
         # drive first, then name the program without one (SPEC.md 96.48).

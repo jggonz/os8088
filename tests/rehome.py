@@ -114,10 +114,17 @@ def claims(m, S):
     return heapmap.Map(m, {n: S(n) for n in
                            ("mem_base", "mem_top", "spl_live", "mem_tab")})
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+def UD(m, **_):            # every read below is guest memory
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     S = m.sym
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, UD, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
     rows = dispcp.listing(m, S)
     if not any(n.upper() == "REHOME.O88" for n, _ in rows):
@@ -126,8 +133,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
 
     before = claims(m, S)
     wins_before = dispcp.win_list(m, S)
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "REHOME.O88")
-    os88marty.settle(m)
+    dispcp.open_named(m, mo, S, UD, wx, wy, "REHOME.O88")
+    os88marty.ui_done(m)
     status = m.read(S("ld_status"), 1)[0]
     after = dispcp.win_list(m, S)
     say("ld_status = %d, windows %r -> %r" % (status, wins_before, after))
@@ -347,7 +354,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     import os88ui
     ui = os88ui.UI(m, mouse=mo, sym=S)
     ui.menu_pick("REHOMED", "Close")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     end = claims(m, S)
     say("free runs before %r, after close %r"
         % ([(b, p) for b, p in before.runs()], [(b, p) for b, p in end.runs()]))

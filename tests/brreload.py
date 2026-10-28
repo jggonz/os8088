@@ -64,13 +64,16 @@ def main():
     sy, fails = browser_syms(), []
 
     with os88marty.launch("build/os8088-360.img", apps="build/brtest360.img",
-                          machine=MACHINE[a.adapter]) as m:
-        os88marty.settle(m, gate=os88marty.desktop_up)
+                          machine=MACHINE[a.adapter], boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the boot gate on state, then every
+        os88marty.no_saver(m)           # wait is ui_done: all reads below
+                                        # are guest state or VIDEO MEMORY
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
         before = dispcp.win_list(m, S)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "DEMO.HTM")
+        dispcp.open_named(m, mo, S, lambda mm, **k: os88marty.ui_done(mm), wx, wy, "DEMO.HTM")
         wins = dispcp.win_list(m, S)
         if len(wins) <= len(before):
             sys.exit("brreload: DEMO.HTM opened no window")
@@ -81,7 +84,7 @@ def main():
         # read straight after the open and this is an empty browser
         os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
                         limit=120)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         def state():
             txt = bytes(m.readseg(pseg, sy["br_ubuf"], 64)).split(b"\0")[0]
@@ -97,7 +100,7 @@ def main():
             # framebuffer, so a frame taken with it over the button compares
             # a cursor against a button and fails for the wrong reason.
             mo.to(4, 190)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             w, h, rows = m.vram(card)
             return w, h, [bytes(r) for r in rows]
 
@@ -118,9 +121,7 @@ def main():
 
         # --- the repro: click Reload with nothing fetched ----------------
         mo.click((r3[0] + r3[2]) // 2, (r3[1] + r3[3]) // 2)
-        os88marty.settle(m)
-        os88marty.pace(m, 1)
-        os88marty.settle(m)
+        os88marty.ui_done(m, "Reload's click")
         txt1, len1 = state()
         say("after Reload: bar=%r LN_LEN=%d" % (txt1, len1))
 
@@ -168,9 +169,7 @@ def main():
             os88marty.pace(m, 0.5)          # TIME: let the saver draw a while
             os88marty.no_saver(m)
             m.key("Escape")
-            os88marty.settle(m)
-            os88marty.pace(m, 1)
-            os88marty.settle(m)
+            os88marty.ui_done(m, "the wake's repaint")
             txt2, len2 = state()
             say("after wake:   bar=%r LN_LEN=%d" % (txt2, len2))
             # ...and the REPAINT half, against the frame taken just before
@@ -198,7 +197,7 @@ def main():
             ymid = (bar[1] + bar[3]) // 2
             for cell in (1, 3, 5):
                 mo.click(bar[0] + 4 + cell * 8, ymid)
-                os88marty.settle(m)
+                os88marty.ui_done(m)
             _, _, fbs = frame()
             inks = sum(1 for y in range(bar[1] + 1, bar[3])   # INTERIOR only:
                        for px in fbs[y][bar[0] + 1:bar[2]]    # the rect's own
@@ -211,10 +210,10 @@ def main():
                              "left is caret bars in cells the redraw does not "
                              "paint (the field's `cursor copies`)" % inks)
             m.key("End")
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             for _ in range(len2 + 2):
                 m.key("Backspace")
-                os88marty.settle(m)
+                os88marty.ui_done(m)
             txt3, len3 = state()
             say("after %d backspaces: bar=%r LN_LEN=%d"
                 % (len2 + 2, txt3, len3))

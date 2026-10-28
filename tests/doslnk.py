@@ -20,7 +20,7 @@ one - so the row asserts BOTH halves of that decision:
   4  ...AND THE MEMORY SETTINGS, which are a SECOND ExtraData block (SPEC.md
      96.25.2).  They are the one thing in the file that changes what the
      program is HANDED rather than what it is told, so the last assertion is
-     not that the bytes came back - it is that the arena the box claimed obeys
+     not that the bytes came back - it is that the arena DOS claimed obeys
      the limit the link carried.  A setting that round-trips and is then
      ignored looks identical to one that works, from the file.  The same
      block carries the page's three BOXES (SPEC.md 96.25.2.1) - Hard drives,
@@ -28,7 +28,7 @@ one - so the row asserts BOTH halves of that decision:
      saved with the mouse disabled came back with it enabled.
   5  THE SECOND TRY, when the disk has moved (SPEC.md 96.21.2.1).
      `WORKING_DIR` is written QUALIFIED now - `B:\BIN` - which is right until
-     the floppy turns up in a different drive, so the box tries the drive the
+     the floppy turns up in a different drive, so DOS tries the drive the
      link NAMES and then the drive the link IS ON.  The row forges that: one
      byte of a copy of the link is patched from `B` to `A`, and the copy is
      put in the ROOT of the same floppy rather than beside the program.  So
@@ -36,7 +36,7 @@ one - so the row asserts BOTH halves of that decision:
      walks `B:\BIN`, which does.  **THE PLACEMENT IS THE WHOLE TEST**: a link
      sitting beside its program resolves whether or not the fallback exists,
      because the folder it falls back to is the one it was already in.  From
-     the root, a box with no second try looks for DOSARGS.COM in `B:\` and
+     the root, a DOS with no second try looks for DOSARGS.COM in `B:\` and
      does not find it.
 
 The disk is a SCRATCH image because step 1 writes to it.
@@ -56,7 +56,7 @@ import os88build                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 # **`os88dosdbg` IS NOT IMPORTED ANY MORE**, and the deletion is the point:
 # it was here for `dos_bss` and `package_image_size`, which between them read
-# the DOS box's settings at an address belonging to a package that is not on
+# DOS's settings at an address belonging to a package that is not on
 # the disk (see `dos_state`). One map of the running package answers both.
 
 SYS = "build/os8088-360.img"
@@ -86,8 +86,8 @@ LIMIT = 96                          # KB, comfortably over DOS_MIN_KB's 64 and
                                     # far under anything a machine here has, so
                                     # "the cap was applied" cannot be confused
                                     # with "the machine was small"
-# os88ui.inc's records and the box's own values (SPEC.md 96.36).  The offsets
-# are the SDK's, not the box's.  **THE ARM IS NOT THE CACHE ANY MORE**
+# os88ui.inc's records and DOS's own values (SPEC.md 96.36).  The offsets
+# are the SDK's, not DOS's.  **THE ARM IS NOT THE CACHE ANY MORE**
 # (96.36.5): `Keep the disk cache` and `Take the disk cache too` were one mode
 # with a dial set two ways, so the dial is its own drop-down and the two arms
 # are where the program RUNS.  Both are carried in the .LNK's memory block,
@@ -143,9 +143,9 @@ def dos_state(m, ui):
     the assembler for `name - os88_image_end` and then adds the image size off
     the DOS.O88 on the system disk - two right answers about two DIFFERENT
     packages since SPEC.md 96.40.3 put the PARTED one there: it was mapping
-    `dos.asm` with no defines (the box is `-DDOSKPART -DDOS_EXTCORE` now, so
+    `dos.asm` with no defines (DOS is `-DDOSKPART -DDOS_EXTCORE` now, so
     every offset past the core's reservation moves ~1,800 bytes) and adding
-    the LOADER's 2,092-byte image where the box's own bss begins.  It read
+    the LOADER's 2,092-byte image where DOS's own bss begins.  It read
     `memkb=25971 keep=116` - two characters of a string.  `dosmap.package()`
     is one map of the package that is actually running, its default is the
     shipped build (see that file), and the offsets it answers are from the
@@ -165,7 +165,7 @@ def dos_state(m, ui):
         fail("no DOS window to read the settings out of")
     missing = [n for n in want if n not in dm]
     if missing:
-        fail("dosmap has no %s - the box's map does not carry the cells this "
+        fail("dosmap has no %s - DOS's map does not carry the cells this "
              "row is about" % ", ".join(missing))
     def w16(o):
         return struct.unpack("<H", bytes(m.read(base + o, 2)))[0]
@@ -187,7 +187,7 @@ def wait_ready(m, limit=120.0, why=None):
     except os88marty.MartyError:
         pass
     # **`why` NAMES THE MECHANISM, because a program that never started looks
-    # the same from here whatever stopped it.** Step 5's own failure is a box
+    # the same from here whatever stopped it.** Step 5's own failure is a DOS
     # that found no program to run, and "never reached READY" points at the
     # program rather than at the folder it was looked for in.
     fail(why or "the program never reached READY")
@@ -260,18 +260,18 @@ def main():
         # --- 0: THE ASSOCIATION DOOR FILLS THE PATH BOX (SPEC.md 96.33.10.1) -
         # This row already came in through the door the field reported - a
         # .COM double-clicked, opening DOS.O88 by association - and asserted
-        # nothing about the box, so it watched an empty field for as long as
+        # nothing about DOS, so it watched an empty field for as long as
         # it has existed.
         #
         # **THE ASSERTION IS THE FIELD'S LN_LEN AND NOT THE BUFFER**, which is
         # the whole shape of the defect: [dos_path] held a perfect
-        # `B:\BIN\DOSARGS.COM` while the box drew NOTHING, because
+        # `B:\BIN\DOSARGS.COM` while DOS drew NOTHING, because
         # dos_fld_init had left LN_LEN at 0 and dos_path_make wrote the buffer
         # without re-measuring. A check that read the buffer would have been
         # green throughout.
         # **THE MAP FIRST, THE SEGMENT SECOND** (SPEC.md 66.6.1.2).
         # `dosmap.package()` shells out to nasm, which is seconds of host time
-        # with the guest free-running - and the DOS box's region MOVES now, so
+        # with the guest free-running - and DOS's region MOVES now, so
         # a segment taken before that call can be stale by the time it is
         # used. It read nine bytes of machine code out of `[dos_path]`.
         # **AND THE VERB CONFIRMS ON THE WINDOW, WHICH THE ENTRY PROC REACHES
@@ -284,7 +284,7 @@ def main():
         # in a loaded lane and passes alone every time, which is the signature
         # (docs/WRITING-TESTS.md 59, 60).
         #
-        # BOTH FIELDS EVERY ROUND, and the segment with them: the box's region
+        # BOTH FIELDS EVERY ROUND, and the segment with them: DOS's region
         # is movable (SPEC.md 66.6.1.2), so re-reading one of a pair against a
         # base taken before the other is its own race.
         _dm = dosmap.package()
@@ -440,7 +440,7 @@ def main():
              "unticked and Disable the mouse ticked - %#04x (SPEC.md "
              "96.25.2.1)" % (got["boxes"], BX_NONET | BX_NOMOU))
     # **AND WORKING_DIR CARRIES THE DRIVE** (SPEC.md 96.21.2.1).
-    # OSAPI_FILE_PATH answers no drive letter by design (19.2.4), so the box
+    # OSAPI_FILE_PATH answers no drive letter by design (19.2.4), so DOS
     # wrote `\BIN` and the link resolved against whichever volume it happened
     # to be READ from - right exactly as often as the shortcut and its program
     # sit on one disk, and silently wrong otherwise.
@@ -485,7 +485,7 @@ def main():
             fail("double-clicking the shortcut opened no window - the .LNK "
                  "association is dos.o88's third (SPEC.md 96.21)")
         # --- 3a. ...AND THE CONSOLE SAYS WHICH DRIVE IT IS ON ---------------
-        # (SPEC.md 96.33.2.1) The prompt is the first line the box writes and
+        # (SPEC.md 96.33.2.1) The prompt is the first line DOS writes and
         # the last thing a user reads to find out where they are, and
         # `dos_con_start` wrote it BEFORE `OSAPI_ARG_FILE` and `dos_lnk_open`
         # had said which drive that is - so a shortcut on B: opened `A:\>`.
@@ -498,7 +498,7 @@ def main():
         if first != want:
             fail("the console opened on %r and the shortcut is on %s: - the "
                  "prompt names the drive DOS.O88 came off, not the one the "
-                 "box is standing on (SPEC.md 96.33.2.1)" % (first, where[0]))
+                 "DOS is standing on (SPEC.md 96.33.2.1)" % (first, where[0]))
         print("doslnk: the console opened on %r" % first)
         out = wait_ready(m)
         print("doslnk: the shortcut ran:")
@@ -513,7 +513,7 @@ def main():
             fail("the shortcut ran without %r in its environment; the set is "
                  "%r" % (ENVVAR, field(out, "SET")))
         # **AND IT CARRIES THE DRIVE** (SPEC.md 96.19.3.1): DOS's program path
-        # is fully qualified, this box wrote it drive-less, and a program that
+        # is fully qualified, this DOS wrote it drive-less, and a program that
         # reads its own path to find its FILES then has no drive to look on.
         if field(out, "MYPATH") != "B:\\BIN\\DOSARGS.COM":
             fail("the program thinks it is %r - a shortcut must make the "
@@ -522,12 +522,12 @@ def main():
 
         # --- 4: ...AND THE SETTINGS WERE OBEYED, not merely carried ---------
         # The bss is read from OUTSIDE because no DOS program can report what
-        # the box decided before it was loaded, and because the three numbers
-        # have to agree: what the link said, what the box believes, and what it
+        # DOS decided before it was loaded, and because the three numbers
+        # have to agree: what the link said, what DOS believes, and what it
         # actually claimed. A limit that round-trips and is then ignored looks
         # identical to one that works, from the file alone.
         memkb, keep, cache, akb = dos_state(m, ui)
-        print("doslnk: the relaunched box has memkb=%d keep=%d cache=%d, "
+        print("doslnk: the relaunched DOS has memkb=%d keep=%d cache=%d, "
               "arena %dK" % (memkb, keep, cache, akb))
         if memkb != LIMIT or keep != DOS_MEM_IN or cache != DOS_CA_OFF_IN:
             fail("the shortcut ran with memkb=%d arm=%d cache=%d and the link "
@@ -535,14 +535,14 @@ def main():
                  "and not read"
                  % (memkb, keep, cache, LIMIT, DOS_MEM_IN, DOS_CA_OFF_IN))
         if akb > LIMIT:
-            fail("the box claimed %dK against a %dK limit - the setting "
+            fail("DOS claimed %dK against a %dK limit - the setting "
                  "reached [dos_memkb] and dos_run ignored it (SPEC.md 96.25.1)"
                  % (akb, LIMIT))
         dm = dosmap.package()
         pseg = dosmap.instance(m)
         boxes = [m.read((pseg << 4) + dm[n] + CK_ON, 1)[0]
                  for n in ("dos_mhdd", "dos_mnet", "dos_mmou")]
-        print("doslnk: the relaunched box's boxes: hard drives %d, network "
+        print("doslnk: the relaunched DOS's boxes: hard drives %d, network "
               "%d, disable the mouse %d" % tuple(boxes))
         if boxes != [1, 0, 1]:
             fail("the shortcut reopened with hard drives %d, network %d and "
@@ -553,7 +553,7 @@ def main():
 
     # --- 5: THE SECOND TRY, when the disk has moved (SPEC.md 96.21.2.1) -----
     # A fresh boot, because this is a second double-click from the desktop and
-    # a second box on the same screen would make `wait_ready` ambiguous about
+    # a second DOS on the same screen would make `wait_ready` ambiguous about
     # which console it is reading.
     with os88ui.boot(SYS, apps=FLUSHED_AT,
                      machine="os8088_5150_herc_gla") as ui:
@@ -564,16 +564,16 @@ def main():
             "a shortcut naming A:\\BIN, sitting in the ROOT of B:, started no "
             "program at all. The drive it NAMES is not there, so the second "
             "try is the drive it IS ON - B: - with the same path (SPEC.md "
-            "96.21.2.1). Without that try the box keeps the link's own "
+            "96.21.2.1). Without that try DOS keeps the link's own "
             "folder, which is B:\\ here, and DOSARGS.COM is not in it"))
         if field(out, "ARGS") != TYPED:
             fail("the moved shortcut ran with ARGS %r and it carries %r"
                  % (field(out, "ARGS"), TYPED))
         if field(out, "MYPATH") != "B:\\BIN\\DOSARGS.COM":
             fail("a shortcut naming A:\\BIN, sitting in the ROOT of B:, made "
-                 "the box become %r. The drive it NAMES is not there, so the "
+                 "DOS become %r. The drive it NAMES is not there, so the "
                  "second try is the drive it IS ON - B: - with the same path "
-                 "(SPEC.md 96.21.2.1). Without that try the box keeps the "
+                 "(SPEC.md 96.21.2.1). Without that try DOS keeps the "
                  "link's own folder, which is B:\\ here, and DOSARGS.COM is "
                  "not in it" % field(out, "MYPATH"))
         print("doslnk: the moved shortcut ran from %s - the second try found "
@@ -585,7 +585,7 @@ def main():
 
 
 def con_prompt(m, ui):
-    """The FIRST prompt in the box's console, as `X:\\...>`.
+    """The FIRST prompt in DOS's console, as `X:\\...>`.
 
     `con_scr` is the 80x25 char/attr buffer the band renders (apps/os88con.inc),
     so this reads the same cells the user does - a screenshot would need a

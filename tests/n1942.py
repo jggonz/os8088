@@ -216,18 +216,23 @@ class Game:
     def key(self,k):
         self.m.key(k);self.frame(2)
     def call(self,k):
+        # Three round trips around the call, not ~20: os88marty's `batch`
+        # pipelines each stopped-machine sequence (one request a register
+        # on a server that cannot pipeline - the old cost, the same result).
         m=self.m;saved=m.regs();sp=(saved['sp']-2)&65535
-        old=m.readseg(saved['ss'],sp,2)
-        m.write((saved['ss']<<4)+sp,struct.pack('<H',saved['ip']))
-        m.cmd(cmd='park',cs=self.base>>4,ip=self.code[k])
-        for reg in REGS:m.setreg(reg,saved[reg])
-        m.setreg('sp',sp)
-        m.bp_exec((saved['cs']<<4)+saved['ip']);m.run()
+        at=(saved['ss']<<4)+sp
+        r=m.batch([dict(cmd='read',addr=at,len=2),
+                   dict(cmd='write',addr=at,data=struct.pack('<H',saved['ip']).hex()),
+                   dict(cmd='park',cs=self.base>>4,ip=self.code[k])]
+                  +[dict(cmd='setreg',reg=reg,value=saved[reg]) for reg in REGS]
+                  +[dict(cmd='setreg',reg='sp',value=sp),
+                    dict(cmd='bp',list=[{'type':'exec','addr':(saved['cs']<<4)+saved['ip']}]),
+                    dict(cmd='run')])
+        old=bytes.fromhex(r[0]['data'])
         assert m.wait_stop(30)=='breakpoint',k+' did not return'
-        result=m.regs()
-        m.write((saved['ss']<<4)+sp,old)
-        for r,v in saved.items():
-            if r in REGS:m.setreg(r,v)
+        result,_=m.batch([dict(cmd='regs'),dict(cmd='write',addr=at,data=old.hex())])
+        m.batch([dict(cmd='setreg',reg=r,value=v) for r,v in saved.items()
+                 if r in REGS and result.get(r)!=v])   # only what it changed
         return result
     def fixture(self):
         self.put('stage',1)
@@ -752,7 +757,7 @@ def combat_bench(g,tag):
 
 def run(tag,off,code):
     machine={'vga':'os8088_xt_vga','cga':'os8088_5150_cga_gla'}[tag]
-    with os88ui.boot('build/os8088-360.img',apps='build/1942-360.img',machine=machine) as ui:
+    with os88ui.boot('build/os8088-360.img',apps='build/1942-360.img',machine=machine,quick=True) as ui:
         m=ui.m;ui.open_drive('B');ui.open('1942.O88');g=Game(ui,off,code)
         desktop_mode=m.video()['mode']
         m.bp_exec(g.base+code['n_readbank']);m.key('Enter');m.run()

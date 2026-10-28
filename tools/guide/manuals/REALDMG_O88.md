@@ -16,8 +16,11 @@ something to run straight away.
 
 RealDMG comes on a disk of its own, in a folder called `REALDMG`. The folder
 holds the program, **REALDMG.O88**, the demo, **GBDEMO.GB**, and
-[[README.TXT]], which has notes on the program. The everything set and the
-live USB image and CD carry the same folder.
+[[README.TXT]], which has notes on the program. The 1.44MB and 1.2MB
+software disks, the second 720KB software disk, the everything set and the
+live USB image and CD carry RealDMG too, in `GAMES`, with the demo in
+`MEDIA`. The 360KB emulators disk has it at the top of the disk, with the
+demo in `MEDIA`.
 
 There are two ways to start a game:
 
@@ -91,7 +94,7 @@ key back as RealDMG came. Press `Esc` when nothing is waiting, or click the
 close box, to put the window away.
 
 Some keys belong to RealDMG itself and cannot be given to a button: `Esc`,
-`Alt`, `F1` to `F9`, `F12` and the number keys `1` to `9`. Press one and the
+`Alt`, `F1` to `F12` and the number keys `1` to `9`. Press one and the
 screen says **That key is RealDMG's own: press another**.
 
 The keys you choose are kept for every game, and stay chosen the next time
@@ -133,9 +136,9 @@ RealDMG's short messages, such as a new Speed setting.
 
 ## Making a game faster
 
-Three settings trade looks or speed for smoothness.
+Five settings trade looks or speed for smoothness.
 
-**Interlace.** **Machine > Interlace**, or `F2`, steps through four
+**Interlace.** **Screen > Interlace**, or `F2`, steps through four
 settings. They give RealDMG less to draw when the picture moves.
 
 | Setting | What it does |
@@ -145,16 +148,29 @@ settings. They give RealDMG less to draw when the picture moves.
 | Scrolling | Like On, but only while the picture scrolls |
 | Doubled | While the picture scrolls, the even lines are drawn and each one is repeated below it. A moving edge stays clean, without the comb that Scrolling leaves. The status bar at the bottom of a game stays whole |
 
+**Two Shades.** **Screen > Two Shades**, or `F10`, draws the picture in
+black and white only: the light greys turn white and the dark ones black.
+There is less to draw, about a tenth.
+
+**Scroll.** **Screen > Scroll**, or `F11`, steps through Smooth, By 2,
+By 4 and By 8. Anything but Smooth moves the picture in steps of that many
+pixels instead of one at a time. Everything on the screen moves together, so
+the game still lines up, but a smooth scroll becomes a jump every few frames.
+By 8 saves the most while a game scrolls, about a quarter of the drawing, and
+is the hardest to play; By 4 and By 2 are gentler and save less.
+
+RealDMG remembers Two Shades and Scroll for each game.
+
 **Speed.** **CPU > Speed**, or `F4`, holds the game at 100%, 90%, 75% or 50%
 of a Game Boy's speed. The time the game does not use goes to the picture,
 so a game too slow for its machine is smoother a little slower. RealDMG
 remembers the Speed for each game.
 
-**The recompiler.** On a 286 or later, RealDMG can translate the game's
-program into the PC's own instructions, which runs it much faster. The CPU
-menu has three ways to run a game, and `F3` steps through them:
+**The recompiler.** RealDMG can translate the game's program into the PC's
+own instructions, which runs it about twice as fast, on an 8088 as on a 286.
+The CPU menu has three ways to run a game, and `F3` steps through them:
 
-- **Recompiler** translates the game as it runs. It is the setting a 286
+- **Recompiler** translates the game as it runs. It is the setting RealDMG
   starts with. A game may slow for a moment while new parts of it are
   translated.
 - **Static Recompiler** translates the game before it runs, and never again,
@@ -162,18 +178,41 @@ menu has three ways to run a game, and `F3` steps through them:
   `NAME.RDP` beside it. To make one, play the game first with **Recompiler**
   chosen and **CPU > Profile for Static** turned on. Choosing Static turns
   Profile for Static on and reads the profile.
-- **Interpreter** does no translating. It is the only way on an 8088, and on
-  a 286 it gives the recompiler's memory back to the system.
-
-On an 8088 the recompiler's items read **Recompiler (286+)**, **Static
-(286+)**, **Profile (286+)** and **Cache (286+)** and are greyed, and `F3`
-does nothing.
+- **Interpreter** does no translating, and gives the recompiler's memory
+  back to the system.
 
 **CPU > Cache: 128K** gives the recompiler 64K more room for the code it
 translates, which helps a big game that otherwise slows while its code is
 translated again. It is kept for every game after. Turned on during a game,
 it starts at once when there is room, or with the next game when there is
 not.
+
+## Precompiled games
+
+A game can also come as a program of its own: a package such as
+**LOONEY.O88**, made on another computer by translating the whole cartridge
+ahead of time. It is RealDMG with that game's program already in the PC's
+own instructions, so nothing is translated while you play, and it is the
+fastest way to run that game.
+
+Put the package in a folder with its cartridge, under the cartridge's name
+the package was made with. Double-click the package and the game starts. If
+the cartridge is not there, RealDMG says **REALDMG: no** and the name it
+looked for, such as **REALDMG: no LOONEY.GB**. Some packages carry the
+cartridge inside them and need nothing beside them.
+
+**Machine > Load Game...** opens the cartridge under any name, but only the
+game the package was made for: any other cartridge is refused with
+**REALDMG: not this game**.
+
+The CPU menu of a precompiled game has one way to run it, **Precompiled**,
+and the Speed settings. The speed line ends in **P** and two numbers, such
+as **P2/8**: how many parts of the translated program are in memory, out
+of how many there are. A machine with less memory free keeps fewer of them,
+and the game runs the rest without translating, more slowly. Closing other
+programs before starting the game leaves it more room.
+
+The saves, save states, replays and log work as they do in RealDMG.
 
 ## Sound
 
@@ -263,18 +302,27 @@ the same as the item.
 | Full Screen | `Alt+Enter` | Play on the whole screen |
 | Sound: On | `F9` | Step through On, At 100% only and Off |
 | Show Stats | `F1` | Show or hide the speed line |
-| Interlace: Off | `F2` | Step through Off, On, Scrolling and Doubled |
 | Log | `F12` | Keep a log of the game, or stop and write it |
 | Controls... | | Choose the key for each button |
 
-## The CPU menu
+## The Screen menu
 
-![The CPU menu on an 8088, where only the Interpreter can be chosen.](shot:realdmg-cpu){right}
+![The Screen menu.](shot:realdmg-screen){right}
 
 | Item | Key | What it does |
 |---|---|---|
-| Recompiler | `F3` | Translate the game as it runs. Needs a 286 or later |
-| Static Recompiler | `F3` | Translate the game before it runs, from its profile. Needs a 286 or later |
+| Interlace: Off | `F2` | Step through Off, On, Scrolling and Doubled |
+| Two Shades | `F10` | Draw in black and white only, for speed. Kept for each game |
+| Scroll | `F11` | Smooth, or move the picture in steps of 8, 4 or 2 pixels, for speed. Kept for each game |
+
+## The CPU menu
+
+![The CPU menu.](shot:realdmg-cpu){right}
+
+| Item | Key | What it does |
+|---|---|---|
+| Recompiler | `F3` | Translate the game as it runs |
+| Static Recompiler | `F3` | Translate the game before it runs, from its profile |
 | Interpreter | `F3` | Run the game without translating |
 | Profile for Static | | Keep what the Recompiler translated as `NAME.RDP`, for the Static Recompiler. Off as RealDMG comes |
 | Cache: 128K | | Give the recompiler 64K more room |
@@ -314,8 +362,9 @@ window.
 | `NAME.SS1` to `NAME.SS9` | beside the game | Save states, one for each slot |
 | `NAME.RP1` to `NAME.RP9` | beside the game | Replays, one for each slot |
 | `NAME.RDP` | beside the game | The game's profile, for the Static Recompiler |
+| `NAME.O88` | beside the game | A precompiled game. Double-click it to play |
 | `XXXXXXnn.LOG` | beside REALDMG.O88 | The log |
-| `REALDMG.CFG` | in `SYSTEM\APPDATA` on RealDMG's own disk | Your keys, the Cache setting, and each game's Speed and Sound |
+| `REALDMG.CFG` | in `SYSTEM\APPDATA` on the disk RealDMG was started from | Your keys, the Cache setting, and each game's Speed and Sound |
 
 A battery save is the usual `.SAV` format. For a cartridge with a clock, the
 clock is saved with it the way other Game Boy emulators save it, so a save
@@ -339,8 +388,11 @@ that is not write-protected and has some room.
   to keep it in.
 - **REALDMG: no room for ROM** or **no room for RAM** means the system does
   not have the memory free. Close other programs, or choose CPU >
-  Interpreter on a 286 to give the recompiler's memory back, and load the
-  game again.
+  Interpreter to give the recompiler's memory back, and load the game
+  again.
+- A precompiled game does not run on the protected-mode build of os8088
+  for the 286 and later: it says **PRE: not on kern_mega**. **REALDMG: bad
+  precompile** means the package itself is damaged: copy it again.
 - If a game stops on an instruction a Game Boy does not have, the window
   says **The game stopped: an invalid opcode**. Machine > Reset starts it
   again.

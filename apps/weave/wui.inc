@@ -255,3 +255,62 @@ _wd_lcaroff:
     pop si
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; void w_asmmoved(unsigned was, unsigned now) - THE CORES' COPIES OF A MOVED
+; BASE (WEAVE-SPEC 1.2.6), translated once, at move time.
+;
+; The C's four claim words (wload.c, wgrid.c, wcanv.c), and then what the two
+; VMs bank in their own .bss because inside a slice DS and ES are the claims: wvm.inc's VM and bundle claims and the region it hands back
+; to a native (wvm_ourds), the segment halves of its two string descriptors,
+; and wfx.inc's grid claim. os88_onmove calls this for EVERY move, the
+; region's included (CC_ONMOVE_REGION), and a word that names `was` is
+; rewritten to `now` - and so are the canvas core's WSS_CVSEG and WSS_BSEG,
+; once os88_onmove has put w_cmseg itself right. Nothing in a dispatch loop changes: the loops go on
+; loading the same words, which are simply right again.
+;
+; Called inside the compaction: stores only. cdecl, SI kept.
+; -----------------------------------------------------------------------------
+_w_asmmoved:
+    push bp
+    mov bp, sp
+    push si
+    mov ax, [bp+4]                  ; was
+    mov dx, [bp+6]                  ; now
+    mov si, w_amtab
+.next:
+    mov bx, [si]
+    or bx, bx
+    jz .done
+    cmp [bx], ax
+    jne .skip
+    mov [bx], dx
+.skip:
+    inc si
+    inc si
+    jmp short .next
+.done:
+    mov bx, [_w_cmseg]              ; ...and the two words the canvas core
+    or bx, bx                       ; banked at WSMV_BIND, in ITS state block
+    jz .out                         ; (wsmabi.inc), through the w_cmseg
+    push es                         ; os88_onmove has already put right
+    mov es, bx
+    mov bx, [_w_cso]
+    cmp [es:bx+WSS_CVSEG], ax
+    jne .nocv
+    mov [es:bx+WSS_CVSEG], dx
+.nocv:
+    cmp [es:bx+WSS_BSEG], ax
+    jne .nobs
+    mov [es:bx+WSS_BSEG], dx
+.nobs:
+    pop es
+.out:
+    pop si
+    pop bp
+    ret
+
+w_amtab:                            ; the C's statics are named here too,
+    dw _w_seg, _w_vmseg, _w_gseg, _w_cseg   ; which makes renaming one an
+    dw wvm_vmseg, wvm_bseg, wvm_ourds, wvm_sa, wvm_sb, wfx_gseg, 0
+                                    ; assembly error rather than a stale word

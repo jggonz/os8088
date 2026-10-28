@@ -23,7 +23,7 @@ all three (§21.5.3 - `OSAPI_PKG_START` takes a DOCUMENT beside the name):
 WHY THE VOLUME IS NEVER BROWSED IN A DISK WINDOW HERE, and it is the sharp
 part: the association tables are filled by the mount HARVEST, and every path
 a program reaches this slot by is a QUIET mount, which skips it (§21.5.3.1).
-The DOS box seeds nothing at all - `dos_drv_sel` does no mount (§96.48) and
+DOS seeds nothing at all - `dos_drv_sel` does no mount (§96.48) and
 the mount at the next name is `GOTO_QM`'s quiet one.  So the kernel seeds the
 cache itself, and this test proves it by never opening B: in a Disk window:
 before that seed existed, every lookup below missed.
@@ -77,10 +77,11 @@ import dosmap                                                  # noqa: E402
 import os88geom                                                # noqa: E402
 import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
+import os88fixture                                          # noqa: E402
 
 SYS = "build/os8088-360.img"
 APPS = "build/apps360.img"
-BOX = "A:/APPS/DOS.O88"
+DOSPKG = "A:/APPS/DOS.O88"
 fails = []
 
 
@@ -96,12 +97,16 @@ def main():
     if fails:
         return 1
 
-    with os88ui.boot(SYS, apps=APPS, machine="os8088_5150_herc_gla") as ui:
+    # PIANO.O88 left apps360.img (SPEC.md 24.6.1): the shipped disk plus it,
+    # on a disk of this run's own
+    apps = os88fixture.apps360_plus("APPS:build/piano.o88", tag="dosopen")
+    with os88ui.boot(SYS, apps=apps, machine="os8088_5150_herc_gla",
+                     quick=True) as ui:
         m = ui.m
         # B: IS DELIBERATELY NEVER OPENED IN A DISK WINDOW. See the docstring:
         # that is what makes every lookup below a test of the kernel's own seed.
-        if not ui.path(BOX):
-            fail("could not launch the DOS box")
+        if not ui.path(DOSPKG):
+            fail("could not launch DOS")
             return 1
         dm = dosmap.package()
 
@@ -116,7 +121,7 @@ def main():
                                .decode("latin-1"))
             return out
 
-        def boxseg():
+        def dosseg():
             for sl in range(8):
                 wp = os88geom.winptr(m, sl, m.sym)
                 ws = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
@@ -126,7 +131,7 @@ def main():
             return 0
 
         def console():
-            seg = boxseg()
+            seg = dosseg()
             if not seg:
                 return []
             scr = m.read((seg << 4) + dm["con_scr"], 80 * 25 * 2)
@@ -137,19 +142,22 @@ def main():
                                    for i in range(0, 160, 2)).rstrip())
             return [r for r in out if r.strip()]
 
-        def to_box():
+        def to_dos():
             w = ui.window("DOS")
             if w:
                 ui.raise_window(w)
 
-        def typ(s):
+        def typ(s, wait=True):
             m.type_text(s)
-            os88marty.settle(m)
+            if wait:            # what is read next is the console, in guest
+                os88marty.quiesce(      # memory, and a command mid-read can
+                    m, lambda: (console(), m.disk().get("reads")),  # sit still
+                    guest=0.5, stable=3, what="DOS's console")
 
         REFUSALS = ("Cannot open", "Bad command", "no program on this disk")
 
         def clear():
-            """Close every window but the box.
+            """Close every window but DOS's.
 
             TWO REASONS, and both bit this row before it was written down.
             The window table is EIGHT slots (SPEC.md 11), so cases that each
@@ -176,14 +184,14 @@ def main():
                         ui.close(w)
                     except Exception:
                         pass
-            os88marty.settle(m)
-            to_box()
+            os88marty.ui_done(m)    # ui.close confirmed each; reads follow
+            to_dos()
 
         def launch(line, want, limit=30.0):
             """Type it; True once a window whose title CONTAINS `want` is up.
             A refusal on the console ends the wait at once, so a failure costs
             a second rather than the whole limit."""
-            to_box()
+            to_dos()
             typ(line + "\n")
             res = []
 
@@ -195,7 +203,7 @@ def main():
                 return bool(res)
             try:                # `limit` is budgeted on the GUEST's clock
                 os88marty.until(m, answered, "%r to open %r or be refused"
-                                % (line, want), poll=0.3, limit=limit)
+                                % (line, want), poll=0.05, limit=limit)
                 return res[-1]
             except os88marty.MartyError:
                 pass
@@ -203,18 +211,18 @@ def main():
 
         def says(line, want, limit=15.0):
             """Type it and wait for `want` among the last console lines."""
-            to_box()
+            to_dos()
             typ(line + "\n")
             try:                # `limit` is budgeted on the GUEST's clock
                 os88marty.until(m, lambda _: any(want in c
                                                  for c in console()[-3:]),
-                                "%r on the console" % want, poll=0.3,
+                                "%r on the console" % want, poll=0.05,
                                 limit=limit)
                 return True
             except os88marty.MartyError:
                 return False
 
-        to_box()
+        to_dos()
         # THE OPENING HINT NAMES HELP, which is how anybody finds it at all.
         # Checked HERE and not beside the HELP case below: the console is a
         # 25-row SCREEN and not a log, so by then the banner has scrolled off
@@ -312,10 +320,10 @@ def main():
             print("dosopen: -  NOTPAD -> Bad command or file name")
         # ...and the WORDING no longer tells the two arms apart (both say
         # `Bad command or file name: NOTPAD` now), so which arm ran is read
-        # off the box itself: [dos_ispkg] is 2 only on the lookup arm, and a
+        # off DOS itself: [dos_ispkg] is 2 only on the lookup arm, and a
         # bare word that reached the launcher would leave it 2 here
         def ispkg():
-            return m.read((boxseg() << 4) + dm["dos_ispkg"], 1)[0]
+            return m.read((dosseg() << 4) + dm["dos_ispkg"], 1)[0]
         if ispkg() != 0:
             fail("a typo with NO tail reached the package launcher "
                  "([dos_ispkg] = %d, want 0) - the stem is looked up only "
@@ -335,7 +343,7 @@ def main():
 
         # --- CASE (SPEC.md 21.5.3.2), which is the reported bug ------------
         # A:\README.TXT with NOTEPAD.O88 in A:\APPS\ - the exact sequence.
-        to_box()
+        to_dos()
         typ("A:\n")
         for line, why in (("notepad readme.txt", "both names lower"),
                           ("OPEN readme.txt", "document lower"),
@@ -380,7 +388,7 @@ def main():
 
         # --- ...AND IT MAY NOT DRAW OVER WHAT IT JUST OPENED (96.33.17.2) --
         # The prompt above is printed AFTER OSAPI_PKG_START returns, so the
-        # package's window is already in front of the box - and a repaint from
+        # package's window is already in front of DOS's - and a repaint from
         # the wake handler has NO CLIP REGION, the kernel arming one in front
         # of W_PAINT and nowhere else. Reported off the glass as Note Pad with
         # a black band cut through it and console text down its left edge.
@@ -390,18 +398,18 @@ def main():
         # what "the draw was skipped" means. A pixel diff would have to know
         # where the other window landed; this does not.
         clear()
-        to_box()
+        to_dos()
         typ("OPEN README.TXT\n")
         try:
             os88marty.until(m, lambda _: any("Note Pad" in t
                                              for t in titles()),
-                            "Note Pad to open", poll=0.3, limit=25.0)
+                            "Note Pad to open", poll=0.05, limit=25.0)
         except os88marty.MartyError:
             pass
         if not any("Note Pad" in t for t in titles()):
             fail("the launch for the overdraw check did not happen")
         else:
-            b = boxseg()
+            b = dosseg()
             drb = struct.unpack("<I", m.read((b << 4) + dm["con_drb"], 4))[0]
             if drb == 0:
                 fail("the console SPENT its marks with a package window in "
@@ -411,18 +419,18 @@ def main():
             else:
                 print("dosopen: #  covered by the launch -> marks KEPT "
                       "(con_drb=0x%08x), nothing drawn over it" % drb)
-            # ...and raising the box spends them, so the prompt is not lost
+            # ...and raising DOS spends them, so the prompt is not lost
             w = ui.window("DOS")
             if w:
                 ui.raise_window(w)
             os88marty.settle(m)
             tail = console()[-1]
             if not tail.endswith(">"):
-                fail("after raising the box the prompt is not there: %r - a "
+                fail("after raising DOS the prompt is not there: %r - a "
                      "skipped draw must cost nothing, the next real paint "
                      "spending the marks (SPEC.md 96.33.17.2)" % tail)
             else:
-                print("dosopen: #  ...and raising the box spends them: %r"
+                print("dosopen: #  ...and raising DOS spends them: %r"
                       % tail)
         clear()
 
@@ -431,7 +439,7 @@ def main():
         # asserts that it PRINTS, whole, and leaves a prompt - the built-in's
         # own half of 96.33.17.1.
         clear()
-        to_box()
+        to_dos()
         typ("help\n")
         scr = console()
         for want in ("CD [path]", "OPEN file", "cmd > NUL"):
@@ -483,8 +491,8 @@ def main():
         # association, and the extensionless/unclaimed ones in the root
         # (KERNEL.SYS, the .DRVs, ASSOC.DAT) are HIDDEN, which DIR does not
         # list either and which this check agrees with. So one is MADE, with
-        # the box's own COPY, onto the scratch B: the harness gives us.
-        to_box()
+        # DOS's own COPY, onto the scratch B: the harness gives us.
+        to_dos()
         typ("COPY A:\\README.TXT B:\\NOCLAIM.ZZZ\n")
         os88marty.settle(m)
         if not says("OPEN B:\\NOCLAIM.ZZZ",

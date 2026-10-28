@@ -194,7 +194,11 @@ def main(argv=None):
 
     # --- 4: no VGA, so the box is greyed and refuses --------------------------
     with os88marty.launch(a.image, apps=a.apps,
-                          machine=os88marty.machine(a.grey_machine)) as m:
+                          machine=os88marty.machine(a.grey_machine),
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, settle, page=page)
         settle(m)

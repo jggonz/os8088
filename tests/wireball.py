@@ -34,6 +34,8 @@ from telansi import Qemu
 
 S = os88sym.linear
 DISK_OVERRIDE = None
+# The rate test's figure is a MEAN over this many rallies (see mono()).
+WB_RALLIES = 8
 
 
 def artifact(name):
@@ -486,9 +488,9 @@ def mono(adapters=('cga', 'herc')):
         if adapter not in adapters:
             continue
         with os88ui.boot(artifact('os8088-360.img'), apps=DISK_OVERRIDE or artifact('wireball360.img'),
-                        machine=machine) as ui:
+                        machine=machine, quick=True) as ui:
             ui.path('B:/WIREBALL.O88')
-            ui.settle()
+            ui.still()
             m = ui.m
             seg = dispapps.pkg_seg(m, 0)[1]
             sy = dispapps._map('wireball')
@@ -538,7 +540,7 @@ def mono(adapters=('cga', 'herc')):
             key('Escape')
             M.until(m, lambda _: m.read(m.sym('fsx_task'), 1) == b'\xff',
                     'serial match returns to desktop', guest=8, poll=0.03)
-            ui.settle()
+            ui.still()
             m.pause()
             check([uart(base) for base in (0x3f8, 0x2f8)] == saved,
                   adapter + ' serial exit restores both UARTs including their original divisors')
@@ -570,41 +572,115 @@ def mono(adapters=('cga', 'herc')):
                   adapter + ' uses a pixel graphics court')
             check(val('wv_pages') == (1 if adapter in ('cga','herc-dual') else 2),
                   adapter + ' uses the available VRAM pages')
-            key('KeyP')
-            M.until(m, lambda _: not val('flags') & 1, 'live physics before timing', guest=3, poll=0.03)
+            # THE RALLY IS PRICED FROM A PINNED STATE, AND OVER SEVERAL PHASES.
+            # It used to start wherever the host-paced lead-in left the game
+            # and read Hercules anywhere from 44 to 49 fps on the same build,
+            # for three reasons, the first two of which are fixed here:
+            #  - the UNPAUSE ('Paused' -> 'Rally!') redraws the HUD on each
+            #    VRAM page at 2-3 refreshes apiece, and the host-paced wait
+            #    for the flag let that land inside the window or before it;
+            #  - each half-second hold raced the keyboard's 500 ms typematic
+            #    delay, and which of the repeat and the break reached the
+            #    8255 first was the keyboard model's 5 ms scan phase;
+            #  - and what no poke can fix: whether a frame makes its retrace
+            #    hangs on where physics steps (a 582 Hz PIT clock) fall
+            #    against the CPU and the raster. Restored from ONE snapshot
+            #    the rally is bit-exact, frame for frame; moved by 1 to 20
+            #    INSTRUCTIONS against the clock it read 86 to 93 Hercules
+            #    frames (a frame is near a 20 ms refresh there, and a miss
+            #    hands the next one a physics backlog). The anchor below
+            #    pins the clock to the CPU exactly and the CPU to the raster
+            #    to within one poll of the retrace wait - and one poll is
+            #    already more than an instruction.
+            # So each rally starts from the same scene, launched at a retrace
+            # with the clock restarted on that instruction, rally k's motion
+            # step is moved k rate periods against the frame, and the figure
+            # is the MEAN of WB_RALLIES of them: that is the number the 45 fps
+            # floor is about, and it is the one that repeats (Hercules five
+            # runs 48.8-49.5, VGA and CGA to the frame; PERFORMANCE.md Set
+            # 160).
+            paged = val('wv_pages') >= 2
+            anchor = (seg << 4) + sy['wv_draw.out' if paged else 'wv_draw.start']
+            rdiv = m.read(m.sym('sch_rdiv'), 2)
+            def rate(count):
+                m.outb(0x43, 0x34)      # sch_pit0's mode 2: reloading the
+                m.outb(0x40, count[0])  # count restarts the period here
+                m.outb(0x40, count[1])
+                for name in ('sch_racc', 'sch_rpend'):
+                    m.write(m.sym(name), b'\0\0')
+            def present(least):
+                # Stop just after the retrace wait: the flip's return on a
+                # paged adapter (on page 0), the VSYNC wait's on a one-page one.
+                for shown in range(least + 4):
+                    m.run()
+                    assert m.wait_stop(5) == 'breakpoint'
+                    if shown + 1 >= least and (val('wv_page') == 0 or not paged):
+                        return
+                raise AssertionError(adapter + ' never presented page 0')
             m.pause()
-            m.bp_exec((seg << 4) + sy['wb_main.loop'])
-            m.run()
-            assert m.wait_stop(5) == 'breakpoint'
-            m.bp_exec()
-            # Start a repeatable live rally far enough from the local paddle
-            # to exclude score/serve delays from this two-second motion price.
-            for name,value,size in [('ballx',156,2),('bally',39,2),('vx',8,1),('vy',2,1),
-                                    ('fracx',0,1),('fracy',0,1),('count',0,1),('returns',0,1),
-                                    ('left',32,1),('right',32,1)]:
-                m.write((seg << 4) + sy['wb_'+name],value.to_bytes(size,'little'))
-            first, subs = val('wv_frames',2), val('subtick',2)
-            begin=m.status()['cycles']
-            # Price moving sprites and live collisions, not a paused court.
-            # Exact bounded advances keep input/RPC overhead out of the rally
-            # duration and make the held-key trajectory repeatable.
-            for direction in ('ArrowDown','ArrowUp','ArrowDown','ArrowUp'):
-                m.key(direction,up=False)
-                m.advance(cycles=round(M.GUEST_HZ/2))
-                m.key(direction,down=False)
-                # The XT keyboard has a one-byte latch. Deliver its break
-                # before queuing the opposite make, which would overwrite it.
-                m.advance(cycles=50000)
-            duration=(m.status()['cycles']-begin)/M.GUEST_HZ
-            check(not val('flags') & 1 and val('count') == 0,
-                  adapter + ' timing includes an active rally without serve delays')
+            samples = []
+            for rally in range(WB_RALLIES):
+                m.bp_exec((seg << 4) + sy['wb_main.loop'])
+                m.run()
+                assert m.wait_stop(5) == 'breakpoint'
+                # The live court with the ball STILL, left of centre so the AI
+                # has nothing to chase: the HUD reaches every page, the
+                # backlog drains, and nothing else changes.
+                for name,value,size in [('ballx',155,2),('bally',39,2),('vx',0,1),('vy',0,1),
+                                        ('fracx',0,1),('fracy',0,1),('count',0,1),('returns',0,1),
+                                        ('left',32,1),('right',32,1),('padold',32,1),
+                                        ('scorel',0,1),('scorer',0,1),('lspin',0,1),('rspin',0,1),
+                                        ('spinage',4,1),('flags',0,1)]:
+                    m.write((seg << 4) + sy['wb_'+name],value.to_bytes(size,'little'))
+                m.bp_exec(anchor)
+                present(6)
+                # The guest saw retrace begin a poll ago - or a poll and an
+                # interrupt, if IRQ0 landed in the spin. Stretch the rate
+                # period to 65,536 counts (262,144 CPU cycles, more than two
+                # refreshes of any adapter here) and take the NEXT anchor,
+                # which no interrupt can reach; restart the real rate there.
+                rate(b'\0\0')
+                present(1)
+                m.bp_exec()
+                rate(rdiv)
+                # A live rally far enough from the local paddle to exclude
+                # score/serve delays from this motion price.
+                for name,value,size in [('ballx',156,2),('vx',8,1),('vy',2,1),('subtick',0,2)]:
+                    m.write((seg << 4) + sy['wb_'+name],value.to_bytes(size,'little'))
+                # ...and stratify the one phase that is ours to choose: the
+                # motion step falls every 8 rate periods, so rally k owes its
+                # first step k periods early and the set covers the whole
+                # step against the frame instead of wherever it happened to be.
+                clock = int.from_bytes(m.readseg(seg, sy['wv_clock'], 2), 'little')
+                m.write((seg << 4) + sy['wv_last'], ((clock - rally % 8) & 0xffff).to_bytes(2, 'little'))
+                first, subs = val('wv_frames',2), val('subtick',2)
+                begin=m.status()['cycles']
+                # Price moving sprites and live collisions, not a paused
+                # court. Exact bounded advances keep input/RPC overhead out of
+                # the rally duration. Each hold is SHORTER than the keyboard's
+                # 500 ms typematic delay, so no repeat can race its break.
+                for direction in ('ArrowDown','ArrowUp','ArrowDown','ArrowUp'):
+                    m.key(direction,up=False)
+                    m.advance(cycles=round(M.GUEST_HZ*0.45))
+                    m.key(direction,down=False)
+                    # The XT keyboard has a one-byte latch. Deliver its break
+                    # before queuing the opposite make, which would overwrite it.
+                    m.advance(cycles=50000)
+                duration=(m.status()['cycles']-begin)/M.GUEST_HZ
+                check(not val('flags') & 1 and val('count') == 0,
+                      adapter + ' timing rally %d is active, without serve delays' % (rally+1))
+                samples.append(((val('wv_frames',2)-first) & 65535,
+                                (val('subtick',2)-subs) & 65535, duration))
             if adapter == 'herc-dual':
                 check(m.read(0xb8000,0x4000) == secondary,
                       'dual-card Hercules keeps the color adapter VRAM intact')
-            frames = (val('wv_frames',2)-first) & 65535
-            steps = (val('subtick',2)-subs) & 65535
-            check(frames/duration >= 45 and steps/duration >= 68,
-                  adapter + ' runs smoothly on the 8088: %.1f display fps, %.1f physics steps/s' % (frames/duration,steps/duration))
+            fps = [f/d for f,_,d in samples]
+            sps = [st/d for _,st,d in samples]
+            fps_mean, sps_mean = sum(fps)/len(fps), sum(sps)/len(sps)
+            check(fps_mean >= 45 and sps_mean >= 68,
+                  adapter + ' runs smoothly on the 8088: %.1f display fps (%.1f-%.1f over %d rallies:'
+                  ' %s frames), %.1f physics steps/s' % (fps_mean, min(fps), max(fps), len(fps),
+                                                         ','.join(str(f) for f,_,_ in samples), sps_mean))
             m.run()
             key('KeyP')
             M.until(m, lambda _: val('flags') & 1, 'pause after timing', guest=3, poll=0.03)
@@ -672,7 +748,7 @@ def mono(adapters=('cga', 'herc')):
             key('Escape')
             M.until(m, lambda _: m.read(m.sym('fsx_task'), 1) == b'\xff',
                     'practice returns to desktop', guest=8, poll=0.03)
-            ui.settle()
+            ui.still()
             ui.mo.to(100, 90)
             xy = struct.unpack('<HH', m.read(m.sym('mouse_x'), 4))
             check(xy == (100, 90), adapter + ' desktop pointer works after practice')
@@ -686,9 +762,9 @@ def front():
                              ('cga', 'os8088_5150_cga_gla'),
                              ('herc', 'os8088_5150_herc_gla')]:
         with os88ui.boot(artifact('os8088-360.img'),
-                        apps=DISK_OVERRIDE or artifact('wireball360.img'), machine=machine) as ui:
+                        apps=DISK_OVERRIDE or artifact('wireball360.img'), machine=machine, quick=True) as ui:
             ui.path('B:/WIREBALL.O88')
-            ui.settle()
+            ui.still()
             m = ui.m
             seg = dispapps.pkg_seg(m, 0)[1]
             sy = dispapps._map('wireball')
@@ -701,7 +777,7 @@ def front():
                 M.guest_sleep(m, 0.12, poll=0.005)
             def shot(label):
                 ui.mo.to(2, 2)
-                ui.settle()
+                ui.still()
                 w, h, rgb = m.fbuf()
                 path = artifact('wireball-' + adapter + '-' + label + '.png')
                 M.write_png_rgb(path, w, h, rgb)
@@ -745,7 +821,7 @@ def front():
             key('Escape')
             M.until(m, lambda _: m.read(m.sym('fsx_task'), 1) == b'\xff',
                     'return to illustrated splash', guest=8, poll=0.03)
-            ui.settle()
+            ui.still()
             check(val('soundactive') == 0, adapter + ' returning to splash releases game sound')
 
 
@@ -754,9 +830,9 @@ def physics():
     import os88marty as M
     import os88ui
     with os88ui.boot(artifact('os8088-360.img'),
-                    apps=DISK_OVERRIDE or artifact('wireball360.img'), machine='os8088_5150_cga_gla') as ui:
+                    apps=DISK_OVERRIDE or artifact('wireball360.img'), machine='os8088_5150_cga_gla', quick=True) as ui:
         ui.path('B:/WIREBALL.O88')
-        ui.settle()
+        ui.still()
         m = ui.m
         seg = dispapps.pkg_seg(m, 0)[1]
         sy = dispapps._map('wireball')

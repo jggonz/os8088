@@ -55,15 +55,18 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88build                                            # noqa: E402
+import os88fixture                                          # noqa: E402
 import os88sym                                              # noqa: E402
 import os88qemu                                             # noqa: E402
 import dispcp                                               # noqa: E402
 import os88geom as geom                                     # noqa: E402
 import shot                                                 # noqa: E402
 
-SOCK = os.path.join(ROOT, "build", "wirezone.sock")
-PIDFILE = os.path.join(ROOT, "build", "wirezone.pid")
-PPM = os.path.join(ROOT, "build", "wirezone.ppm")
+# THIS PROCESS'S pair (tests/os88qemu.py RUNDIR), never a fixed file under
+# build/, and the images snapshot=on - docs/plans/SOAK-PARALLEL.md 17
+SOCK, PIDFILE = os88qemu.paths("wirezone")
+PPM = os.path.join(os88qemu.RUNDIR, "wirezone.ppm")
 
 # kernel/desk.inc and kernel/disk.inc, mirrored - the geometry is derived from
 # the kernel's own published words below and only these constants are copied.
@@ -94,23 +97,28 @@ def kill_stale():
 
 
 def build():
-    """The kernel under test, the shipped disk and the gate's own. The row is
-    builds=True (tests/suite.py) precisely so this may write build/, and a
-    reader running the script by hand should not have to know the target."""
-    subprocess.run(["make", "-s", "build/os8088.img", "ethertest"], cwd=ROOT,
-                   check=True, stdout=subprocess.DEVNULL)
+    """The kernel under test, the shipped disk and the gate's own. Declared in
+    the row's `wants=`, so the runner builds them before any row starts; a
+    reader running the script by hand still need not know the targets."""
+    # DECLARED, NOT BUILT HERE (docs/plans/SOAK-PARALLEL.md 17): the row's
+    # `wants=` in tests/suite.py, so under the runner this does nothing and
+    # the row shares the emulator lane instead of having the tree to itself
+    os88fixture.need("build/os8088.img", "build/ether360.img",
+                     "build/apps.img")
 
 
 def launch(img, nic):
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     card = (" -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=3"
             if nic else "")
-    subprocess.run(
+    os88qemu.start(
         em +
-        " -drive file=%s,format=raw,if=floppy -boot a"
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s%s"
-        % (img, SOCK, PIDFILE, card), cwd=ROOT, shell=True, check=True)
+        % (os88build.at(img), os88build.at("build/apps.img"), SOCK, PIDFILE,
+           card),
+        cwd=ROOT, shell=True, check=True)
     os88qemu.own(PIDFILE, SOCK)
     q = heapmap.Qmp(SOCK)
     for _ in range(300):

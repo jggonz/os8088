@@ -74,7 +74,7 @@ def main():
     needk = (modsz + 1023) // 1024
 
     with os88ui.boot("build/os8088-360.img", apps="build/trackmove360.img",
-                     machine=a.machine) as ui:
+                     machine=a.machine, quick=True) as ui:
         m = ui.m
         S = ui.sym                      # os88ui's own resolver, so a row that
                                         # names a kernel word and one that

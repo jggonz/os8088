@@ -112,7 +112,10 @@ def fbuf(m):
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",
-              machine=MACHINE) as m:
+              machine=MACHINE, boot=False) as m:
+    m.run()
+    M.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    M.no_saver(m)
     M.settle(m)
     mo = Mouse(marty=m)
     print(f"== {MACHINE} : the Date/Time editor from inside CTRL.DRV (37.93) ==")

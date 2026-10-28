@@ -99,8 +99,9 @@ def boot(img, machine, vhd=None):
     m = os88marty.launch(img, apps=APPS, machine=machine, boot=False,
                          extra=extra)
     m.run()
-    os88marty.settle(m, gate=os88marty.desktop_up)
-    return m
+    os88marty.kernel_up(m)              # the boot gate on STATE: every read
+    return m                            # after a boot is guest memory or a
+                                        # flushed SYSTEM.CFG
 
 
 def cfg_keys(data):
@@ -127,7 +128,8 @@ def save_cfg(m, out, poke=True):
     f = os88flush.Flush(marty=m)
     if poke:
         m.write(S("cp_wdirty"), b"\x01")
-    dispcp.close_panel(m, os88mouse.Mouse(marty=m), S, os88marty.settle)
+    dispcp.close_panel(m, os88mouse.Mouse(marty=m), S,
+                       lambda mm, **k: os88marty.ui_done(mm))
     if m.read(S("cp_dsave"), 1)[0]:
         _fail.append("cp_cfg_save refused")
     data = f.volume(0).read("SYSTEM.CFG")
@@ -156,13 +158,14 @@ def main():
 
             print("-- E: untick it on the Drivers page")
             mo = os88mouse.Mouse(marty=m)
-            dispcp.open_panel(m, mo, S, os88marty.settle, page=CP_IDRV)
+            dispcp.open_panel(m, mo, S, lambda mm, **k: os88marty.ui_done(mm),
+                              page=CP_IDRV)
             wx, wy = dispcp._cp_win(m, S)
             mo.click(wx + 1 + CP_RX + 40, wy + TITLE_H + 1 + CP_DBY1
                      + HDD_ROW * CP_DROWH + CP_DROWH // 2)
             os88marty.until(m, lambda mm: row(mm, HDD_ROW)["seg"] == 0,
                             "the click to unload HDD.DRV", guest=60.0)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             r = row(m, HDD_ROW)
             check(r["ans"] == 1 and r["want"] == 0,
                   "E: the click is an answer (DRVR_ANS 1, want 0)", r)
@@ -191,7 +194,8 @@ def main():
                   "C: the row never tried", r)
             print("-- D: save SYSTEM.CFG here")
             dispcp.open_panel(m, os88mouse.Mouse(marty=m), S,
-                              os88marty.settle, page=CP_IDRV)
+                              lambda mm, **k: os88marty.ui_done(mm),
+                              page=CP_IDRV)
             keys = save_cfg(m, os.path.join(tmp, "nodisk.img"))
             da, dw = keys.get("DA"), keys.get("DW")
             check(da is not None and word(da[1]) >> BIT_HDD & 1 == 0,

@@ -102,10 +102,15 @@ class Trk:
         self.tmp = tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build"))
         vhd = vhd_for(self.tmp.name, files)
         self.m = os88marty.launch(
-            None, machine=machine,
+            None, machine=machine, boot=False,
             extra=list(extra) + ["--mount", "hd:0:" + os.path.abspath(vhd)])
+        self.m.run()
         self.ui = os88ui.UI(self.m)
-        self.ui.ready(limit=240)
+        # THE BOOT GATE ON STATE (the first act is `ui.path`, which confirms
+        # off the guest): `up`, the saver off, the first pass finished
+        self.ui.up(limit=240)
+        os88marty.no_saver(self.m)
+        os88marty.ui_done(self.m, "the desktop's first pass")
         w = self.ui.path("C:/" + mod)
         rec = self.m.read(self.ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                           geom.WIN_SIZE)
@@ -126,7 +131,7 @@ class Trk:
         return u16(d), u16(d, 2)
 
     def until(self, f, what, limit=300.0):
-        os88marty.until(self.m, lambda mm: f(), what, poll=0.2,
+        os88marty.until(self.m, lambda mm: f(), what, poll=0.05,
                         limit=limit, guest=limit)
 
     def kernel_clean(self):
@@ -252,11 +257,15 @@ class TrkCovox(Trk):
         try:
             self.m = os88marty.launch("build/covoxsys720.img",
                                       apps="build/apps720.img",
-                                      machine="os8088_5150_herc_covox_720_gla")
+                                      machine="os8088_5150_herc_covox_720_gla",
+                                      boot=False)
         finally:
             os.environ.pop("MARTYPC_WAV", None)
+        self.m.run()
         self.ui = os88ui.UI(self.m)
-        self.ui.ready(limit=240)
+        self.ui.up(limit=240)               # the boot gate on state, as above
+        os88marty.no_saver(self.m)
+        os88marty.ui_done(self.m, "the desktop's first pass")
         w = self.ui.path("B:/MEDIA/BEVERLY.MOD")
         rec = self.m.read(self.ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                           geom.WIN_SIZE)

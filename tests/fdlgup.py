@@ -60,7 +60,7 @@ def check(name, cond, note=""):
 need("build/muptest.img")          # `all` builds nothing under tests/
 
 with os88ui.boot("build/os8088-360.img", apps="build/muptest.img",
-                 machine=MACHINE) as ui:
+                 machine=MACHINE, quick=True) as ui:
     m, mo = ui.m, ui.mo
     mono = m.video()["type"] in ("cga", "mda", "herc")
     print("== %s : the chooser fires on the release (SPEC.md 13.8.3) =="
@@ -90,7 +90,7 @@ with os88ui.boot("build/os8088-360.img", apps="build/muptest.img",
         ui._wait(cond, what, os88ui.T_NAV)
 
     ui.path("B:/MUPTEST.O88")
-    ui.settle()
+    ui.still()
     cx, cy = ui.window("MupTest").content[:2]
     ui.raise_window(ui.window("MupTest"))
     mo.click(cx + 100 + 31, cy + 40 + 9, settle=0)   # muptest's Two
@@ -104,12 +104,12 @@ with os88ui.boot("build/os8088-360.img", apps="build/muptest.img",
 
     # --- E: the press DRAWS it down ----------------------------------------
     mo.to(cancel[0], cancel[1] - 40)        # park off the column first
-    ui.settle()                             # ...the next reads are PIXELS
+    ui.still()                             # ...the next reads are PIXELS
     upright = lit(rect)
     mo.to(*cancel)
     mo._edge(True)
     wait(lambda: dbtn() == FM_BCANCEL, "Cancel to be drawn pressed")
-    ui.settle()
+    ui.still()
     down = lit(rect)
     check("a press draws Cancel DOWN", down != upright,
           "([fm_dbtn]=%d; %d lit held, %d upright)" % (dbtn(), down, upright))
@@ -117,7 +117,7 @@ with os88ui.boot("build/os8088-360.img", apps="build/muptest.img",
     # --- B: it comes back UP while still held, off the button --------------
     mo.to(cancel[0] - 90, cancel[1], l=True)        # l=True: STILL HELD
     wait(lambda: dbtn() == 0, "Cancel to be drawn upright again")
-    ui.settle()
+    ui.still()
     off = lit(rect)
     check("...and back UP when the pointer slides off it", off == upright,
           "(%d lit, upright is %d)" % (off, upright))

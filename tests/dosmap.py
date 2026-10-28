@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Symbol offsets for the DOS box and for a probe running INSIDE it.
+"""Symbol offsets for DOS and for a probe running INSIDE it.
 
     import dosmap
     dm = dosmap.package()                   # DOS.O88's own near offsets
@@ -19,7 +19,7 @@ loaded at PSP:0100 with CS = DS = the PSP, and the file is assembled `org
 0x100` - so a map value already carries the 0x100 and the base is the PSP
 itself, not PSP+0x10. With the segment biased by a paragraph-of-0x100 the
 first reading of this was `lastflags=0000` for a program that had recorded a
-SYN|ACK, which points at the box and is a bug in the reader.
+SYN|ACK, which points at DOS and is a bug in the reader.
 """
 import io
 import os
@@ -83,7 +83,7 @@ def _map(src, defines, incs):
     return out
 
 
-# **THE SHIPPED BOX IS TWO DEFINES AND NOT NONE** (SPEC.md 96.44.5, 96.40.3).
+# **THE SHIPPED DOS IS TWO DEFINES AND NOT NONE** (SPEC.md 96.44.5, 96.40.3).
 # `$(SYSROOT)` is the PARTED package now, so the DOS.O88 in APPS/ of every
 # system disk is `apps/dos/dos.asm` assembled `-DDOSKPART -DDOS_EXTCORE` - and
 # the second define moves EVERY offset in the map: the core comes out of the
@@ -91,13 +91,13 @@ def _map(src, defines, incs):
 # hanging off it shift by about 1,800 bytes.
 #
 # **SO IT IS THE DEFAULT AND NOT AN OPT-IN.** It was a constant three rows
-# passed by hand while `package()` with no arguments meant the plain box, and
+# passed by hand while `package()` with no arguments meant the plain DOS, and
 # the moment the shipped package changed that default became a map of
 # something no disk carries - which does not fail, it reads a rect of rubble
 # and CLICKS AT A COORDINATE THAT DOES NOT EXIST, hanging in `os88mouse`
 # waiting for a cursor that can never arrive, or (`dosmedia`, which is how
-# this was caught) reports `the box is on volume 16`. A caller with a knob of
-# its own passes it ON TOP: `package("DOSNET_CARD")` is the shipped box plus
+# this was caught) reports `DOS is on volume 16`. A caller with a knob of
+# its own passes it ON TOP: `package("DOSNET_CARD")` is the shipped DOS plus
 # that, which is what `make DOSNETCARD=1` builds.
 SHIPPED = ("DOSKPART", "DOS_EXTCORE")
 
@@ -110,7 +110,7 @@ def package(*defines, shipped=True):
     since `dos_pkt_xl` and friends are `equ os88_image_end + N`.
 
     `SHIPPED` is in the define set unless `shipped=False`: see the block
-    above. **Pass `shipped=False` only to ask about the box as ONE image** -
+    above. **Pass `shipped=False` only to ask about DOS as ONE image** -
     `tools/os88doscost.py` does, because its whole subject is splitting the
     core from the window and `-DDOS_EXTCORE` has already taken the core's
     image and bss out. Nothing on a disk is built that way, so a row that
@@ -128,7 +128,7 @@ def rect(m, pseg, dm, name):
     """The four words at `name` in a live DOS instance, as x1, y1, x2, y2.
 
     **A CONTROL IS RESOLVED OUT OF THE GUEST, never recomputed here.** Every
-    rect this box draws - the bar's two buttons, the setup area's four, the
+    rect DOS draws - the bar's two buttons, the setup area's four, the
     memory check box - is four words in the package's bss, and an os88line
     block starts with LN_X1..LN_Y2, which is the same four. So one reader
     covers both and a test never carries a copy of the layout.
@@ -139,8 +139,9 @@ def rect(m, pseg, dm, name):
     rows that clicked them at `content + DOS_BTNY + 7` went on clicking an
     empty part of the window.
     """
-    at = (pseg << 4) + dm[name]
-    return [int.from_bytes(m.read(at + i * 2, 2), "little") for i in range(4)]
+    import os88marty
+    b = os88marty.live_reads(m, pseg, [(dm[name], 8)])[0]
+    return [int.from_bytes(b[i * 2:i * 2 + 2], "little") for i in range(4)]
 
 
 def instance(m, slot=0):
@@ -152,7 +153,7 @@ def instance(m, slot=0):
 
     **ASK AT THE POINT OF USE, AND NEVER BANK IT ACROSS A DELAY** (SPEC.md
     66.6.1.2). "Never relocated" is about the package's own near offsets and
-    not about where its segment IS: the DOS box's region MOVES under the
+    not about where its segment IS: DOS's region MOVES under the
     compactor, at every arena claim, since the re-homed carve was unpinned.
     A base taken earlier names the bytes the package used to occupy - and a
     heap block the compactor copied DOWN is not scrubbed, so a stale base
@@ -164,6 +165,15 @@ def instance(m, slot=0):
     nine bytes of machine code out of `[dos_path]`. All five resolve per
     access now. It is one window-record lookup - cheap beside the debug round
     trip every read already costs.
+
+    **AND THE ANSWER IS A os88marty.LiveSeg**, so even a banked one is safe
+    in the helpers: rect() and centre() read through the window record it
+    came from, the base and the four words in one compactor-safe snapshot
+    (os88marty.seg_snap) - a move caught between mem_bcopy and
+    mem_reloc_call cannot hand them the old base's shifted bytes. What is
+    NOT safe is `instance(m) << 4` followed by a read of your own: that is a
+    torn pair however soon it is taken (call5's 161, dirwshed's 29,888 KB).
+    Read through os88marty.pkg_read(m, slot, dm[name], n) instead.
     """
     import dispapps
     g = dispapps.pkg_seg(m, slot)

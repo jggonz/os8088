@@ -197,7 +197,7 @@ on the GLaBIOS twins, `rltune` on QEMU (its AT path):
 |---|---|---|
 | `autostart` | ok 35.4s | `as_boot` (a link at boot, a root `CALC.LNK`, the Shift skip through `int 16h`, a non-`.LNK` ignored), `lnk_open` -> `sc_walk` above SP, the Alt-drop (`fm_dgdrop` -> `sc_m_lnk`, `sc_m_go`, `sc_m_wpath`) |
 | `rltune` | ok 82.8s | Apply on boot's link, and a reboot following it |
-| `doslnk`, `dosopen` | ok 48.0s, 140.4s | `assoc_run_x`'s hook falling through for the DOS box's own `.LNK` |
+| `doslnk`, `dosopen` | ok 48.0s, 140.4s | `assoc_run_x`'s hook falling through for DOS's own `.LNK` |
 | `stikboot`, `stikmiss`, `stikshort`, `stikregister`, `stikmove` | ok 18.0 / 30.1 / 11.6 / 56.2 / 33.1s | `sc_open` -> `sc_walk` below SP from `stik_boot`, `sc_m_add`/`sc_m_dfind` (the `cmpsb`), `sc_m_pdel` |
 | `desksc` | **FAIL** 66.6s, leg G - **PRE-EXISTING** | legs A-F pass: a desktop drop (`fm_dgdrop`'s `.desk` -> the shared `.dsc`, `sc_m_new` through `sc_m_go`/`sc_m_wpath`/`sc_m_kind`: whole path, kind, header caption, the Cut disarmed), a shortcut's open, a move, a reboot, a Delete |
 

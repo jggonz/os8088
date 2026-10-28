@@ -18,7 +18,7 @@ FIRST `AH=40h` on ANY handle set `FHF_WROTE` and so make that handle read as
 a character DEVICE for ever after: every later read answers end of file, and
 every later write is ACCEPTED AND DISCARDED with its full count reported.
 Microsoft Works saved a document whose 384-byte header was all zeroes and
-said nothing, on the first program anyone ran on this box from outside the
+said nothing, on the first program anyone ran on this DOS from outside the
 project.
 
 THE LIST MAINTAINS ITSELF, which is the whole point and is why this is not a

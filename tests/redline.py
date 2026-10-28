@@ -133,7 +133,9 @@ def native(machine):
     out = ROOT / ('build/redline-test-' + machine)
     out.mkdir(exist_ok=True)
     with os88ui.boot(str(ROOT / 'build/os8088-360.img'),
-                     apps=str(ROOT / 'build/redline360.img'), machine=machine) as ui:
+                     apps=str(ROOT / 'build/redline360.img'), machine=machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         ui.open_drive('B')
         ui.open('REDLINE.O88')
         original_frame = (ui.window('REDLINE').w, ui.window('REDLINE').h)
@@ -307,9 +309,17 @@ def native(machine):
         ui.mo.to((x1+x2)//2, (y1+y2)//2)
         ui.mo._sep()
         ui.mo._edge(True)
-        ui.m.advance(frames=8)
+        # the press is taken by the UI task's next pass, which no fixed frame
+        # count promises (8 frames came up short in a soak): step until the
+        # button reads pressed, bounded at 2 guest seconds
+        pressed = lambda: struct.unpack(
+            '<H', ui.m.read(p.addr('ru_buttons')+10, 2))[0] == 2
+        for _ in range(60):
+            if pressed():
+                break
+            ui.m.advance(frames=2)
         assert p.data('ru_view') == b'\0', 'Detailed fired on press'
-        assert struct.unpack('<H', ui.m.read(p.addr('ru_buttons')+10, 2))[0] == 2
+        assert pressed(), 'the press never reached the Detail button'
         ui.m.run()
         ui.mo.to(x1, y1-12)
         ui.mo._edge(False)
@@ -392,7 +402,9 @@ def scene():
     out = ROOT/'build/redline-scene'
     out.mkdir(exist_ok=True)
     with os88ui.boot(str(ROOT/'build/os8088-360.img'),
-                     apps=str(ROOT/'build/redline360.img'), machine='os8088_redline_vga_gla') as ui:
+                     apps=str(ROOT/'build/redline360.img'), machine='os8088_redline_vga_gla',
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         ui.open_drive('B')
         ui.open('REDLINE.O88')
         p = R.Probe(ui,sym)
@@ -703,7 +715,9 @@ def chipset(machine):
     import os88marty as M
     sym = R.symbols()
     with os88ui.boot(str(ROOT / 'build/os8088-360.img'),
-                     apps=str(ROOT / 'build/redline360.img'), machine=machine) as ui:
+                     apps=str(ROOT / 'build/redline360.img'), machine=machine,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         ui.open_drive('B')
         ui.open('REDLINE.O88')
         p = R.Probe(ui, sym)

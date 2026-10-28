@@ -172,10 +172,14 @@ _wcv_bindmod:
     mov ax, [bp+4]
     or ax, ax                       ; 0 = forget it, and stays 0: the callers'
     jz .set                         ; test for "no module"
-    mov dx, ax                      ; THE CODE SELECTOR, not the claim's data
-    call OSAPI_CPU_INFO             ; segment - the same word off kern_mega,
-    OS88_CODESEL dx, ah             ; and a fault per far call through it on
-    mov ax, dx                      ; it (os88api.inc, KERN-MEGA-PLAN M4)
+    OS88_CODESEL ax, byte [cc_cpuf] ; THE CODE SELECTOR, not the claim's data
+                                    ; segment - the same word off kern_mega,
+                                    ; and a fault per far call through it on
+                                    ; it (os88api.inc, KERN-MEGA-PLAN M4).
+                                    ; crt0's banked CPU_INFO and not a fresh
+                                    ; one: this is also called from inside
+                                    ; the relocation proc (WEAVE-SPEC 1.2.6),
+                                    ; which may not call the kernel
 .set:
     mov [wcv_vec + 2], ax
     mov word [wcv_vec], WSM_ENTRY

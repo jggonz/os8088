@@ -195,8 +195,8 @@ X3_C2H      equ 172
 %define X3_ARTFLAGS OP_COMP
 
 ; x3f_artseg - [x3_artseg] = the art part's segment: once, from the entry
-; proc after op_load. The part's claim is the carve's, and a claim is born
-; pinned (SPEC.md 66), so the segment never moves. clobbers AX
+; proc after op_load. The part's claim is the carve's, which MOVES (SPEC.md
+; 121.10.1): x3_partsmv asks again. clobbers AX
 x3f_artseg:
     mov al, X3PART_ART              ; its row in xtmp3.asm's part table
     call op_seg

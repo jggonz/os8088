@@ -54,6 +54,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -105,11 +106,11 @@ def tailclip(tmp, lay):
         W.frame, W.write, W.__init__ = frames, write, init
 
 
-def tap(key, n=1, gap=1.0):
+def tap(box, key, n=1, gap=1.0):
     for _ in range(n):
-        os88bochs.xd("keydown", key)
+        box.xd("keydown", key)
         time.sleep(0.15)
-        os88bochs.xd("keyup", key)
+        box.xd("keyup", key)
         time.sleep(gap)
 
 
@@ -124,17 +125,19 @@ def differ(a, b):
         return -1
 
 
-def still(d, tag):
-    """shots 3 s apart until two are the same picture: the tail. The last
-    one's path, or None"""
+def still(box, d, tag):
+    """shots STEP s apart until two are the same picture: the tail. The last
+    one's path, or None (it was 3 s apart; a play still running changes
+    every frame, so 1.5 s is a stricter test of standing still, not a
+    looser one)"""
     prev, end, i = None, time.time() + STILL, 0
     while time.time() < end:
         p = os.path.join(d, "%s-%02d.png" % (tag, i))
-        os88bochs.shot(p)
+        box.shot(p)
         if prev and differ(prev, p) == 0:
             return p
         prev, i = p, i + 1
-        time.sleep(3)
+        time.sleep(1.0)
     return None
 
 
@@ -160,7 +163,9 @@ def pkg(out, src, part0):
     return stage
 
 
-def leg(t, out, lay, video):
+def prep(out, lay, video):
+    """The leg's B: - made BEFORE any leg starts, since tailclip patches
+    os88vid.Writer for the length of one clip and the legs run at once"""
     d = os.path.join(out, lay)
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
@@ -170,42 +175,55 @@ def leg(t, out, lay, video):
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88disk.py"),
                     "-o", disk, "--size", "1440", video, blk],
                    check=True, stdout=subprocess.DEVNULL)
-    os88bochs.MEGS = 16
-    box = os88bochs.Box(d, [], bimg=disk, btype="1_44", build=t.dir)
+    return d, disk
+
+
+def leg(t, out, lay, video, display=None):
+    d, disk = out
+    box = os88bochs.Box(d, [], bimg=disk, btype="1_44", build=t.dir,
+                        display=display, megs=16)
     fails, counts, tails = [], collections.OrderedDict(), []
+    pos = [0]
     try:
         if not box.wait_for("kern_mega: protected mode", 300):
             return ["%s: kern_mega never reached protected mode" % lay], []
 
-        def step(what, act, settle=False, tail=None):
-            n0 = os.path.getsize(box.e9)
+        def step(what, act, settle=False, tail=None, out_of_fsx=False):
+            # SETTLE was QUIET s of no E9 line (8 s on a clean run): it is
+            # the UI task done now, and an Esc out of the fullscreen play
+            # waits for [fsx_task] to close and the window after it - not
+            # the 4 s that was slept. The keys INSIDE a play keep their
+            # gaps: where the pause lands in the clip is the scenario.
             act()
-            if settle:
-                end, last, lt = time.time() + 120, n0, time.time()
-                while time.time() < end:
-                    time.sleep(1)
-                    n = os.path.getsize(box.e9)
-                    if n != last:
-                        last, lt = n, time.time()
-                    elif time.time() - lt >= QUIET:
-                        break
+            try:
+                if out_of_fsx:
+                    box.until(lambda: not box.in_fsx(), "the play to close",
+                              120)
+                if settle or out_of_fsx:
+                    box.ui_done("the player after " + what, secs=120,
+                                lock=False)
+            except RuntimeError as e:   # a FAULT: reported from E9 below
+                print("megavidv2: %-6s %s" % (lay, e))
             if tail:
-                p = still(d, tail)
+                p = still(box, d, tail)
                 if p:
                     tails.append(p)
                 else:
                     fails.append("%s %s: the picture never stood still"
                                  % (lay, what))
             with open(box.e9, "rb") as f:
-                f.seek(n0)
-                new = f.read().decode("latin-1").splitlines()
+                f.seek(pos[0])
+                t = f.read()
+            t = t[:t.rfind(b"\n") + 1]     # whole lines: the windows TILE
+            pos[0] += len(t)
+            new = t.decode("latin-1").splitlines()
             traps = [ln for ln in new if ln.startswith("T ")]
             fault = [ln for ln in new if ln.startswith("kern_mega FAULT")]
             sites = collections.Counter(" ".join(ln.split()[2:3] +
                                                  ln.split()[5:6])
                                         for ln in traps)
-            os88bochs.shot(os.path.join(d, "%02d-%s.png"
-                                        % (len(counts), what.split()[0])))
+            box.shot(os.path.join(d, "%02d-%s.png"
+                                  % (len(counts), what.split()[0])))
             counts[what] = len(traps)
             print("megavidv2: %-6s %-30s %6d traps%s %s" % (
                 lay, what, len(traps), " FAULT" if fault else "",
@@ -217,23 +235,30 @@ def leg(t, out, lay, video):
                              "(tools/megatraps.py %s)"
                              % (lay, what, len(traps), traps[0], box.e9))
 
-        time.sleep(25)
+        box.up()                             # the desktop, off kernel state
         box.capture()
-        os88bochs.dbl(591, 105)              # B:
-        time.sleep(10)
-        step("open (BLK.V88)", lambda: os88bochs.dbl(170, 123), settle=True)
+        box.dbl(591, 105, "B:'s Disk window")
+        pos[0] = os.path.getsize(box.e9)
+        step("open (BLK.V88)", lambda: box.dbl(170, 123), settle=True)
         step("repeat, play, paused in the blocks",
-             lambda: (tap("r", gap=1.0), tap("space", gap=1.0),
-                      tap("space", gap=2.0)))
-        step("three steps round the box", lambda: tap("period", 3, gap=1.5))
-        step("on, into the tail", lambda: tap("space", gap=2.0),
+             lambda: (tap(box, "r", gap=1.0), tap(box, "space", gap=1.0),
+                      tap(box, "space", gap=2.0)))
+        step("three steps round the box",
+             lambda: tap(box, "period", 3, gap=1.5))
+        step("on, into the tail", lambda: tap(box, "space", gap=2.0),
              tail="tail1")
         step("back, the first key, the card",
-             lambda: (tap("Escape", gap=4.0), tap("r", gap=1.0),
-                      tap("Left", 25, gap=0.4), tap("i", gap=3.0)))
-        step("again (held: in place)", lambda: tap("space", gap=2.0),
+             lambda: (tap(box, "Escape", gap=0.0),
+                      box.until(lambda: not box.in_fsx(),
+                                "the play to close", 120),
+                      box.ui_done("the window", lock=False),
+                      tap(box, "r", gap=0.3),
+                      tap(box, "Left", 25, gap=0.2), tap(box, "i", gap=0.0)),
+             settle=True)
+        step("again (held: in place)", lambda: tap(box, "space", gap=2.0),
              tail="tail2")
-        step("back to the card", lambda: tap("Escape", gap=4.0))
+        step("back to the card", lambda: tap(box, "Escape", gap=0.0),
+             out_of_fsx=True)
     finally:
         box.stop()
     return fails, tails
@@ -243,6 +268,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--lay", action="append", choices=sorted(LAYS))
+    ap.add_argument("--serial", action="store_true", help="the legs one "
+                    "at a time, on the one display")
     ap.add_argument("--part0", action="store_true", help="the failing case: "
                     "part 0 fetched under protected mode too")
     a = ap.parse_args()
@@ -255,8 +282,31 @@ def main():
                                   "video.o88"), a.part0)
     t0 = time.time()
     fails = []
-    for lay in a.lay or ("lin320", "modex", "vga4"):
-        f, tails = leg(t, out, lay, video)
+    lays = a.lay or ("lin320", "modex", "vga4")
+    # THE LEGS ARE THREE MACHINES AND RUN AT ONCE, one X display each (the
+    # row's own, then os88bochs.take_display's): nothing passes between
+    # them, and each counts only its own E9. --serial is one at a time.
+    res = {}
+    made = {lay: prep(out, lay, video) for lay in lays}
+
+    def run(lay, disp):
+        try:
+            res[lay] = leg(t, made[lay], lay, video, disp)
+        except Exception as e:      # (reported, never swallowed)
+            res[lay] = (["%s: %r" % (lay, e)], [])
+    if a.serial:
+        for lay in lays:
+            run(lay, None)
+    else:
+        ths = [threading.Thread(target=run, args=(lay, None if i == 0 else
+                                                   os88bochs.take_display()))
+               for i, lay in enumerate(lays)]
+        for th in ths:
+            th.start()
+        for th in ths:
+            th.join()
+    for lay in lays:
+        f, tails = res[lay]
         fails += f
         if len(tails) == 2:
             n = differ(*tails)

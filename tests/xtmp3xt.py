@@ -38,6 +38,17 @@ Legs:
           (= = = - - -) and stamped at READY; Q to XT FAST, D: the
           conversion, bit-exact
   speech  ...Q to XT SPEECH (divisor 2: 5,512 Hz), bit-exact
+
+  --move (the std leg, SPEC.md 121.10.1): AT THE DECODE-FIRST DIALOG - the
+          XT part, its work segments, the ring and the carve all held
+          through a user wait - a compaction is posted from outside at the
+          trivial rank ([mem_cpq_lvl] = 0FCh + [mem_cpq], tests/ringmove.py's
+          door). Every claim is declared movable (MC_RLOC read from mem_tab),
+          at least one MOVES, every word names a live claim and every moved
+          claim's bytes hash the same at both addresses. Then the conversion
+          runs as before, so its BIT-EXACT WAV is the proof that x3_rmove,
+          x3_partsmv and the XT part's RESEG put every banked segment right:
+          a stale work segment decodes into somebody else's memory
   spk     THE SPEAKER: tests/apspk.py's card-less 5150 (Hercules, XT-IDE)
           converts the 11 kHz track and plays the FINISHED WAV through the
           Audio Player's bracket; port 42h's first 800 writes must be
@@ -63,6 +74,7 @@ share here is a floor.
 """
 import argparse
 import bisect
+import hashlib
 import json
 import os
 import random
@@ -370,6 +382,7 @@ class Rig(object):
 
 SHOTS = [None]
 CALONLY = [False]
+MOVE = [False]
 
 
 def shot(r, name):
@@ -803,6 +816,70 @@ def opened(r, leg):
                  r.b("x3_md") == MD_IDLE, "md %d" % r.b("x3_md"))
 
 
+def claims(r):
+    S = geom._sym(r.m, None)
+    raw = r.m.read(S("mem_tab"), geom.MEM_MAX * geom.MC_SIZE)
+    u = lambda o: raw[o] | raw[o + 1] << 8                  # noqa: E731
+    return {u(i * geom.MC_SIZE): (u(i * geom.MC_SIZE + 2),
+                                  u(i * geom.MC_SIZE + 8))
+            for i in range(geom.MEM_MAX) if u(i * geom.MC_SIZE)}
+
+
+def move_words(r):
+    """every claim XTMP3 holds at the dialog, by the word that names it"""
+    out = {"ap_la_seg": r.w("ap_la_seg"), "op_base": r.w("op_base"),
+           "x3_bseg": r.w("x3_bseg")}
+    for i in range(r.b("x3_nws")):
+        out["x3_ws+%d" % (2 * i)] = struct.unpack(
+            "<H", bytes(r.m.read(r.a("x3_ws") + 2 * i, 2)))[0]
+    return out
+
+
+def compact(r, leg):
+    """SPEC.md 121.10.1 at the dialog: declared, moved, followed, intact"""
+    m = r.m
+    m.pause()
+    w0 = move_words(r)
+    held = claims(r)
+    hashes = {n: hashlib.md5(bytes(m.read(c * 16, held[c][0] * 16))).digest()
+              for n, c in w0.items() if c in held}
+    decl = [n for n, c in w0.items() if c in held and held[c][1]]
+    check(leg, "--move: every claim XTMP3 holds at the dialog is declared "
+          "movable", len(decl) == len(w0) and len(w0) >= 4,
+          "%d of %d: %s" % (len(decl), len(w0), " ".join(
+              "%s=%04x" % kv for kv in sorted(w0.items()))))
+    S = geom._sym(m, None)
+    wins = m.read(S("wm_wins"), geom.MAX_WIN * geom.WIN_SIZE)
+    wptr = None
+    for i in range(geom.MAX_WIN):
+        o = i * geom.WIN_SIZE
+        if struct.unpack_from("<H", wins, o + geom.W_SEG)[0] == r.seg:
+            wptr = S("wm_wins") + o
+    m.write(S("mem_cpq_lvl"), bytes([0xFC]))
+    m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+    m.run()
+    os88marty.until(m, lambda _: bytes(m.read(S("mem_cpq"), 2)) == b"\0\0",
+                    "the posted compaction", poll=0.1, guest=30)
+    os88marty.guest_sleep(m, 1.5)
+    m.pause()
+    r.seg = r.find()                    # the region is movable too
+    w1 = move_words(r)
+    held = claims(r)
+    moved = [n for n in w1 if w1[n] != w0[n]]
+    stale = [n for n, c in w1.items() if c not in held]
+    print("     --move: %s" % (", ".join(
+        "%s %04x -> %04x" % (n, w0[n], w1[n]) for n in moved) or "nothing"))
+    check(leg, "--move: a posted compaction MOVED XTMP3's claims (else the "
+          "run proves nothing)", bool(moved or stale), "%d moved" % len(moved))
+    check(leg, "--move: every word names a live claim afterwards", not stale,
+          "stale: %s" % stale)
+    bad = [n for n in moved if n in hashes and w1[n] in held and hashlib.md5(
+        bytes(m.read(w1[n] * 16, held[w1[n]][0] * 16))).digest() != hashes[n]]
+    check(leg, "--move: every moved claim's bytes survived", not bad,
+          "changed: %s" % bad)
+    check(leg, "--move: still at the dialog", r.st()["md"] == MD_CHOOSE)
+
+
 def leg_auto(leg, fixture, out, convert_too=True):
     res = out.setdefault(leg, {"fixture": fixture})
     r = Rig(leg, fixture)
@@ -826,6 +903,8 @@ def leg_auto(leg, fixture, out, convert_too=True):
               "HALF" not in probed, str(probed))
         if not convert_too or CALONLY[0]:
             return
+        if MOVE[0] and leg == "std":
+            compact(r, leg)
         rung = r.b("x3c_rung")
         check(leg, "Auto's offline rung is %s" % QNAME[OFFLINE[leg]],
               rung == OFFLINE[leg], QNAME[rung])
@@ -1010,6 +1089,9 @@ def main():
     ap.add_argument("--json", help="write every figure here")
     ap.add_argument("--shots", help="save the VGA's screen at the dialog, "
                     "mid-conversion and mid-play into this folder")
+    ap.add_argument("--move", action="store_true",
+                    help="std: a compaction posted at the decode-first "
+                    "dialog, the claims moved, then the conversion")
     ap.add_argument("--calonly", action="store_true",
                     help="std and c128: stop at the decode-first dialog")
     ap.add_argument("--expect", choices=("std", "fast", "speech"),
@@ -1021,6 +1103,7 @@ def main():
                          "speech": Q_XTSPEECH}[a.expect]
     SHOTS[0] = a.shots
     CALONLY[0] = a.calonly
+    MOVE[0] = a.move
     maps()
     out = {"machine": MACHINE, "guest_hz": HZ}
     for leg in a.leg or ["std", "fast", "speech", "c128", "spk"]:

@@ -74,7 +74,7 @@ def main():
             fail("%s is missing - `make` and `make kdostest`" % p)
     syms = kdsyms(WANT)
 
-    with os88ui.boot(SYS, apps=COM, machine=MACH) as ui:
+    with os88ui.boot(SYS, apps=COM, machine=MACH, quick=True) as ui:
         m = ui.m
 
         # --- the KERNEL's own finding, before the machine is handed over -----
@@ -90,8 +90,7 @@ def main():
         if not ui.path("B:/DOSHELLO.COM"):
             fail("double-clicking DOSHELLO.COM opened no window")
         wait_text(m, "READY", what="the windowed run")
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")
 
         dm = dosmap.package()
         pseg = dosmap.instance(m)
@@ -99,22 +98,22 @@ def main():
         mo = os88mouse.Mouse(marty=m)
 
         mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if rec(m, pseg, dm, RD_DIS) & (1 << WHOLE):
             fail("the Shut down the OS arm is greyed - this build carries no kern_dos "
                  "part, so there is nothing to measure (SPEC.md 96.36.1)")
         x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
         pitch = rec(m, pseg, dm, RD_PITCH)
         mo.click((x1 + x2) // 2, y1 + WHOLE * pitch + pitch // 2)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if rec(m, pseg, dm, RD_SEL) != WHOLE:
             fail("clicking the Shut down the OS arm left OS88UI_RD_SEL at %d"
                  % rec(m, pseg, dm, RD_SEL))
 
         mo.click(*dosmap.centre(m, pseg, dm, "dos_trect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         if not alert_up(m, base, dm):
             fail("Run on the Shut down the OS arm asked nothing (SPEC.md 96.42)")
         mo.click(*alert_button(m, base, dm, 1))         # Proceed

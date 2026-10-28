@@ -14820,19 +14820,42 @@ dots' loop is ~0.06 s of it by count. The image load (~1.4 s, 30 sectors) is the
 ### Set 160 — WireBall: local serial collisions and pixel movement on the XT (SPEC.md §109.5)
 
 Measured 2026-10-14 with `python3 tests/wireball.py --video`, MartyPC's
-cycle-accurate 4.77 MHz 8088, native adapter modes and the ordinary big kernel.
+cycle-accurate 4.77 MHz 8088, native adapter modes and the ordinary big kernel;
+the method and the figures were re-taken on 2026-10-23 (below).
 The measurement starts a controlled live practice rally at X=156, Y=39,
 VX=8, VY=2 with no serve countdown, then alternates held Down/Up keys over four
-exact half-second CPU advances, with 10 ms advances to deliver each key release.
+exact 0.45-second CPU advances, with 10 ms advances to deliver each key release.
 Rates use the actual elapsed guest cycles. It includes the AI paddle and actual wall/paddle collisions;
 paused-screen frame rates are not the price of movement.
 
 | Adapter | Display frames/s | Physics steps/s | Drawing |
 | --- | ---: | ---: | --- |
-| VGA | 59.2 | 72.9 | Mode X, two VRAM pages |
-| CGA | 59.2 | 72.9 | One page, masked byte/word spans |
-| Lone Hercules | 46.0 | 72.9 | Two 32KB VRAM pages |
-| Hercules + CGA | 48.5 | 72.4 | One Hercules page; color VRAM unchanged |
+| VGA | 59.1 | 72.5 | Mode X, two VRAM pages |
+| CGA | 59.6 | 72.7 | One page, masked byte/word spans |
+| Lone Hercules | 48.8-49.5 (one rally: 46.7-50.5) | 72.3 | Two 32KB VRAM pages |
+| Hercules + CGA | 49.8-50.4 (one rally: 48.8-51.0) | 72.7 | One Hercules page; color VRAM unchanged |
+
+**THE FIGURE IS A MEAN OVER EIGHT RALLIES, and a single rally is not a
+repeatable number on Hercules.** The first version timed one rally from
+wherever the host-paced lead-in left the game and read Hercules anywhere from
+44.1 to 49.0 fps on one build, which failed the 45 fps floor in a soak. Three
+things moved it. Two were the harness's and are gone: the unpause before the
+window redraws the HUD on each VRAM page at two to three refreshes apiece, and
+a host-paced wait decided whether that landed inside the window; and each
+half-second hold raced the keyboard's 500 ms typematic delay, so which of the
+repeat and the break reached the 8255 first was the keyboard model's 5 ms scan
+phase. The third is the machine's: a Hercules frame is close enough to a
+20 ms refresh that one missed retrace hands the next frame a physics backlog,
+so the count hangs on where the 582 Hz rate clock's motion steps fall against
+the CPU and the raster. Restored from one MartyPC snapshot a rally is bit-exact
+(three restores, 90 frames each); moved by 1 to 20 INSTRUCTIONS against the
+clock the same rally read 86 to 93 frames. The debugger pins the clock to the
+CPU exactly (PIT channel 0 restarted on the anchor instruction) and the CPU to
+the raster only to within one poll of the retrace wait, so each rally now
+starts from the same scene launched at a retrace, rally *k* owes its first
+motion step *k* rate periods early, and the eight cover a whole motion step
+against the frame. Five runs gave 49.1, 49.1, 48.8, 49.5 and 49.1 on Hercules;
+VGA and CGA repeat to the frame.
 
 The renderer keeps overlapping paddle pixels, clears only
 exposed strips and paints newly covered strips. It caches each page's HUD
@@ -14851,8 +14874,8 @@ callback across retrace waits, then decoded in the foreground. The small
 kernel keeps the text court and foreground UART polling.
 
 `--video` checks the complete sprite mask after movement, quarter-row paddle
-steps, page counts, UART/PIC restoration and at least 45 display frames/s and
-68 physics steps/s. CGA's exact mask is read from banked VRAM because the
+steps, page counts, UART/PIC restoration and a mean of at least 45 display
+frames/s and 68 physics steps/s over its eight rallies. CGA's exact mask is read from banked VRAM because the
 emulator raster includes red diagnostic pixels during subcycle status-port
 catch-up; sprite centers are also checked in the rendered raster. Hercules
 raster checks account for its documented (-16,+2) porch displacement. The

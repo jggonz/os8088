@@ -136,7 +136,7 @@ def guest(backend,source):
     out=D.ROOT/'build/drmario-proof';out.mkdir(exist_ok=True)
     os.environ['MARTYPC_WAV']=str(out/('audio-'+backend))
     with adlib_run(backend) as kw, D.os88ui.boot(str(D.ROOT/'build/os8088-360.img'),
-            apps=str(D.ROOT/'build/drmario360.img'),machine=machine,**kw) as ui:
+            apps=str(D.ROOT/'build/drmario360.img'),machine=machine,**kw,quick=True) as ui:
         m=ui.m;ui.open_drive('B');ui.open('DRMARCO.O88');ui.settle()
         p=D.Probe(ui,s)
         assert p.data('setting',33)==b'Level 00  Speed LOW  Music FEVER\0'

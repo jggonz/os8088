@@ -86,10 +86,10 @@ Three shapes, the part `OP_COMP` in all of them:
 | | on disk | clusters | over today |
 |---|---:|---:|---:|
 | `DOS.O88` today, no `kern_dos` at all | 26,443 | 26 | |
-| **1.** the part as W5a builds it, the box left in | image 32,256 + part 38,400 | **69** | **+43** |
-| **2.** the box CUT from the part (14,622 bytes) | image 32,256 + part ~26,000 | **58** | **+32** |
+| **1.** the part as W5a builds it, the UI left in | image 32,256 + part 38,400 | **69** | **+43** |
+| **2.** the UI CUT from the part (14,622 bytes) | image 32,256 + part ~26,000 | **58** | **+32** |
 | **3.** …and the shared core extracted to its own part | image ~19,456 + core ~10,600 + `kern_dos` ~15,700 | **46** | **+20** |
-| *for comparison: a `KERNDOS.SYS` file, box left in* | 26,443 + 38,257 | *64* | *+38* |
+| *for comparison: a `KERNDOS.SYS` file, UI left in* | 26,443 + 38,257 | *64* | *+38* |
 
 Shape 3 is **12 clusters better than shape 2 and 23 better than shape 1**. The
 comparison row is the container question and it is a wash: five clusters
@@ -106,14 +106,14 @@ against portability.
 | `DOS.O88` keeps whole-file compression | yes, worth 5,425 | no |
 | the part or file itself compresses | yes | yes (`OP_COMP`) |
 | what the stub does | walk its extents, expand | walk the same extents, expand |
-| versions with the box | yes | yes |
+| versions with `DOS.O88` | yes | yes |
 
 The stub is the same either way, which is what makes this a packaging choice
 rather than an engineering one: docs/plans/KERN-DOS-PLAN.md §4.1.1's argument
 is that the part is never loaded AS a part — the handoff walks its bytes into
 extents and the stub reads them with `int 13h` — so a file's bytes and a
 part's bytes walk identically. The only difference at the code is the part
-table read first, out of an image the box is already holding.
+table read first, out of an image `DOS.O88` is already holding.
 
 ---
 
@@ -129,26 +129,26 @@ with the built-in command table's **indirect** edges added as roots, because
 | | bytes | of 31,868 | procs |
 |---|---:|---:|---:|
 | **CORE** — what `kern_dos` needs | **12,812** | 40.2% | 171 |
-| **BOX** — the window, the pages, the prompt, the packet driver | 13,075 | 41.0% | 268 |
+| **UI** — the window, the pages, the prompt, the packet driver | 13,075 | 41.0% | 268 |
 | shared libraries and data (`os88con.inc`, `os88ui.inc`, `os88line.inc`) | 5,981 | 18.8% | |
 
 **Adding the indirect edges moved 2,911 bytes across the line**, and that is
 worth recording: the first pass put the thirteen built-in command bodies in
-BOX, which is the same failure `tests/unit/t_dosseam.py`'s own header records
+UI, which is the same failure `tests/unit/t_dosseam.py`'s own header records
 one wave earlier, for the same reason.
 
 ### 4.2 The code seam is ONE-DIRECTIONAL
 
 | | transfers | distinct targets |
 |---|---:|---:|
-| BOX → CORE | **46** | **33** |
-| CORE → BOX | **0** | **0** |
+| UI → CORE | **46** | **33** |
+| CORE → UI | **0** | **0** |
 
 The busiest entry point is five call sites (`dos_upc`), and nothing is in a
 per-character path — `dos_tty` becomes internal to the core once the built-in
 commands join it.
 
-**CORE → BOX being zero is not luck, it is W2.** The one edge that exists is
+**CORE → UI being zero is not luck, it is W2.** The one edge that exists is
 `dos_be_go`'s `jmp word [dos_betgt]`, which is the seam
 docs/plans/KERN-DOS-PLAN.md §3 built and which `kerndos/kdback.inc` already
 re-implements — so the direction that would have been hard is the direction
@@ -159,7 +159,7 @@ that was designed.
 | | sites | where |
 |---|---:|---|
 | `OSAPI_MOUSE` | 1 | `dos_mou_read`, INT 33h |
-| `OSAPI_DRV_CALL` | 1 | `dos_pkt_poll` — BOX-side in a split (§10: arm 3 has no packet driver) |
+| `OSAPI_DRV_CALL` | 1 | `dos_pkt_poll` — UI-side in a split (§10: arm 3 has no packet driver) |
 | `OSAPI_MEM_CLAIM` | 1 | `dsh_sbuild`, the built-ins' scratch |
 | `OSAPI_MEM_FREE` | 1 | `dsh_sfree` |
 | `con_write` | 1 | `dos_tty`'s windowed arm |
@@ -176,14 +176,14 @@ the shape the other twenty-two have.
 The six library calls are all in three procs and all on the **windowed** arm,
 which W4 established `kern_dos` never takes: `[dos_inbr]` is 1 for ever there
 (SPEC.md 96.38). So they are three more doors, or three procs that move to the
-BOX side outright.
+UI side outright.
 
 ### 4.4 The state seam: 46 of 251 cells, and it is the launch block
 
 | | cells |
 |---|---:|
 | bss cells the CORE alone touches | 139 |
-| …the BOX alone | 66 |
+| …the UI alone | 66 |
 | …**both** | **46** |
 
 Twelve of the 46 fall away without a decision: `dos_trace*`, `dos_trnm*` and
@@ -208,7 +208,7 @@ involved.
 So the core is **one assembly, `OP_SEG | OP_COMP`, far-called, with its own
 bss, in BOTH hosts**:
 
-- `DOS.O88`'s box loads it with `op_load`/`op_seg` and far-calls the 33 entry
+- `DOS.O88`'s UI part loads it with `op_load`/`op_seg` and far-calls the 33 entry
   points;
 - `kern_dos` has no part loader, so its stub reads the core part's extents
   into a segment of its own and far-calls the same 33.
@@ -224,11 +224,11 @@ touch at all.
 - **The far-call bill.** 46 sites at 46.7 µs is ~2 ms of a launch, which is
   nothing — but `dos_be_goto` (4 sites) and `dos_upc` (5) have not been
   checked against a real workload.
-- **Splitting the `DBSS` chain.** The core's bss and the box's become two
+- **Splitting the `DBSS` chain.** The core's bss and the UI's become two
   chains and `os88_image_end` means a different thing in each. Mechanical, and
   it touches every one of 251 declarations.
-- **Whether the 66 box-only cells really are.** They were classified by USE
-  and not by intent, and a cell only the box touches today may be the core's
+- **Whether the 66 UI-only cells really are.** They were classified by USE
+  and not by intent, and a cell only the UI touches today may be the core's
   tomorrow.
 - **The order of the work.** Extraction is a refactor of a package that ships
   and works, and W5c's handoff does not depend on it. Doing them the other way
@@ -252,7 +252,7 @@ The proposal:
 | **part 2** | `kern_dos` — the FAT, the mouse, the kernel bits | `OP_SEG, OP_COMP` |
 
 …with **part 1 joining to EITHER part 0 or part 2**, never both, because the
-two hosts are alternatives: one is the windowed box and the other is the
+two hosts are alternatives: one is the windowed DOS and the other is the
 machine after the handoff.
 
 **Every mechanism it needs already exists.** `OSAPI_PKG_REHOME` (0x0530) is an
@@ -276,8 +276,8 @@ program's bss, which ships inside the part and which the kernel does not zero
 | | | | **45** |
 
 **+19 clusters over today's 26**, against +43 for the shape W5a builds and +32
-with only the box cut. It is also ~900 bytes better than section 2.1's shape 3
-and **2 KB better in RAM**, because shape 3 kept the box as the uncompressed
+with only the UI cut. It is also ~900 bytes better than section 2.1's shape 3
+and **2 KB better in RAM**, because shape 3 kept the UI as the uncompressed
 image and this drops a 2 KB loader instead.
 
 ### 6.2 The join can be NEAR, and the reason is a coincidence worth checking yearly
@@ -288,8 +288,8 @@ whichever host is smaller. **Measured, there is almost no hole:**
 
 | | bytes |
 |---|---:|
-| part 0, the UI (13,075 of box code + 5,981 of libraries + a header) | 19,556 |
-| part 2, the `kern_dos` bits (`.text` + `.cold` + `.ovlw` + `.modf`, less the core, less the box that came along) | 18,959 |
+| part 0, the UI (13,075 of UI code + 5,981 of libraries + a header) | 19,556 |
+| part 2, the `kern_dos` bits (`.text` + `.cold` + `.ovlw` + `.modf`, less the core, less the UI that came along) | 18,959 |
 | `CORE_ORG`, 512-aligned above the larger | **19,968** |
 | the hole in part 0 | 412 |
 | the hole in part 2 | 1,009 |

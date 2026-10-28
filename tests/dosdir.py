@@ -37,7 +37,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=DIR) as ui:
+    with os88ui.boot(SYS, apps=DIR, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/DOSDIR.COM"):
             fail("double-clicking DOSDIR.COM opened no window")
@@ -48,7 +48,7 @@ def main():
             rows[:] = m.screen() or []
             return any("READY" in r for r in rows)
         try:                        # GUEST time: `limit` is idle-box seconds
-            os88marty.until(m, _seen, "DOSDIR.COM to finish", poll=0.3,
+            os88marty.until(m, _seen, "DOSDIR.COM to finish", poll=0.05,
                             limit=180.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
@@ -84,7 +84,7 @@ def main():
         print("dosdir: AH=0Eh selects, comes back, and refuses what is not there")
 
         # A VOLUME LABEL SEARCH MUST NOT ANSWER WITH A FILE (SPEC.md
-        # 96.12.1). AH=4Eh's CX is an attribute mask and this box ignored it,
+        # 96.12.1). AH=4Eh's CX is an attribute mask and this DOS ignored it,
         # so "what is this disk called" was answered with the first ordinary
         # file on it - which is how Prince of Persia was told it was not
         # running from its own floppy.
@@ -117,7 +117,7 @@ def main():
 
         # --- the date and the time (SPEC.md 96.13) --------------------------
         # MartyPC's 5150 has no clock chip and neither does the machine this
-        # project targets, so both the kernel and the DOS box fall back - and
+        # project targets, so both the kernel and DOS fall back - and
         # the assertion is that they fall back to the SAME DAY. 2026-07-04 is
         # a Saturday, which is DOS's day-of-week 6, and getting Sakamoto's
         # table or its January/February shift wrong moves only that digit.
@@ -169,8 +169,7 @@ def main():
         if "DIR ok" not in text:
             fail("the mkdir/chdir/rmdir round trip did not complete")
 
-        m.type_text("x")
-        os88marty.settle(m)
+        os88marty.text_taken(m, "x")      # taken, and the bracket left
         if "Disk" not in ui.titles():
             fail("the desktop did not come back after the bracket")
 

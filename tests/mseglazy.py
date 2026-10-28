@@ -171,12 +171,19 @@ def run():
     say("part %d: sector %d, %d bytes, %d sectors"
         % (LAZY, row["off"], row["len"], lazy_secs))
 
-    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+    # Every read below is guest state (the window list, MSEG's bss, the
+    # claim table, the sector count): the boot gates on the kernel's desktop
+    # state and every wait is `ui_done`, never a picture settle.
+    done = lambda mm, **k: os88marty.ui_done(mm)
+    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEG.O88")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, done, wx, wy, "MSEG.O88")
+        os88marty.ui_done(m)
 
         slots = dispcp.win_list(m, S)
         seg = 0
@@ -243,8 +250,8 @@ def run():
 
         # --- 3. the key, and the disk goes HERE ---------------------------
         c0 = struct.unpack_from("<H", m.read(secs, 2), 0)[0]
-        m.key("KeyL")
-        os88marty.settle(m)
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         fetch_secs = moved(c0)
         ps = part_seg(m, seg, LAZY)
         lz = chr(byte(m, seg, "ms_lazy"))
@@ -281,8 +288,8 @@ def run():
                 % (t, want, bad()))
 
         # --- 4. ...and the second key gives it back ------------------------
-        m.key("KeyL")
-        os88marty.settle(m)
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         ps = part_seg(m, seg, LAZY)
         lz = chr(byte(m, seg, "ms_lazy"))
         after = claims(m, S)
@@ -305,8 +312,8 @@ def run():
                 "of the instance" % (before, after))
 
         # --- 5. and again ---------------------------------------------------
-        m.key("KeyL")
-        os88marty.settle(m)
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         ps = part_seg(m, seg, LAZY)
         t = title_of(m, S, seg, wrec)
         say("and again: op_seg(%d) = %04X, %r" % (LAZY, ps, t))

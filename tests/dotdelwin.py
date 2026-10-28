@@ -276,7 +276,7 @@ def main(argv):
 
     names = bss()
     fail = 0
-    with os88ui.boot(a.img, apps=a.apps, machine=a.machine) as ui:
+    with os88ui.boot(a.img, apps=a.apps, machine=a.machine, quick=True) as ui:
         ui.path(PKG)
         p = Probe(ui, names)
         changed(p, (0,), "dd_fulls")
@@ -292,7 +292,7 @@ def main(argv):
     # 8x9 with a bigger window round it. Leg D's test is exactly the right one
     # and it had simply never run on the adapter that failed it.
     if a.machine == MACHINE:
-        with os88ui.boot(a.img, apps=a.apps, machine="os8088_xt_vga") as ui:
+        with os88ui.boot(a.img, apps=a.apps, machine="os8088_xt_vga", quick=True) as ui:
             ui.path(PKG)
             p = Probe(ui, bss())
             changed(p, (0,), "dd_fulls")

@@ -11,9 +11,9 @@
 ; NOT A DEFECT - IT IS WHAT A REAL DRIVER DOES.**  This file was written to
 ; prove the opposite and measured the other way round: CuteMouse 1.9.1 under
 ; IBM DOS 3.30, on the same machine, answers all four of these IDENTICALLY to
-; this box.  A serial mouse that is not moving raises no interrupt, so there
+; this DOS.  A serial mouse that is not moving raises no interrupt, so there
 ; is nothing to repaint from; every DOS program of the era was written against
-; drivers that behave exactly like this, and a box that "improved" on it would
+; drivers that behave exactly like this, and a DOS that "improved" on it would
 ; be diverging from the thing it exists to imitate.
 ;
 ;   A  the cursor is drawn on the cell to start with            (the control)
@@ -24,7 +24,7 @@
 ;   D  the pointer never moved, so B and C are about the cell they claim
 ;
 ; So this is a COMPATIBILITY ratchet and not a bug report: it goes red if this
-; box ever starts repainting where CuteMouse does not.  C is the half that is
+; DOS ever starts repainting where CuteMouse does not.  C is the half that is
 ; easy to get wrong in the other direction - re-saving on every call banks the
 ; driver's OWN inverted cell as the thing to restore, after which the
 ; inversion is permanent and travels with the pointer - and two paints of one
@@ -201,7 +201,7 @@ judge:
 ; --- waitticks: let the TIMER have its chance ------------------------------
 ; **AND IT MUST NOT HANG WAITING FOR ONE.**  The BDA tick is the ROM's, so a
 ; machine that does not keep it would spin here for ever and the row would
-; report a timeout - a sentence about the harness for a defect in the box.
+; report a timeout - a sentence about the harness for a defect in DOS.
 ; The bound is per tick and generous: ~65k times round a ~25-cycle loop is
 ; several ticks of a 4.77MHz 8088.
 waitticks:

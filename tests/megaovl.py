@@ -18,7 +18,7 @@ in the way) claims everything OSAPI_MEM_AVAIL says a compaction would leave,
 which the ascending run alone cannot hold - the compactor has to slide the
 carve UP into the hole. MEGALOWB prints every claim before and after.
 
-The carve (CWORD's 20KB, owned by CWORD's region) must be at a HIGHER
+The carve (CWORD's overlay, ~21KB, owned by CWORD's region) must be at a HIGHER
 segment after the claim; then the host types into CWORD and uses File > Save
 As (the overlay's dialog and its save path) onto C:, and C:\\DOC.RTF must
 hold the typed line. No kern_mega FAULT or CLOSED.
@@ -71,30 +71,23 @@ def main():
     lines = []
     try:
         if box.wait_for("kern_mega:", 240):
-            time.sleep(15)
-            box.capture()
-            os88bochs.dbl(591, 160)     # C:
-            time.sleep(10)
-            os88bochs.dbl(150, 123)     # RUN
-            time.sleep(8)
-            os88bochs.dbl(160, 139)     # 0RUN.O88
+            box.up()                    # the desktop, off kernel state
+            box.megarun()               # C:, RUN, 0RUN.O88
             if not box.wait_for("MEGALOWB: done", 200):
                 fails.append("MEGALOWB never finished")
-            time.sleep(5)
-            os88bochs.goto(300, 200)    # CWORD's text, the front window now
-            os88bochs.xd("click", 1)
-            os88bochs.xd("type", "--delay", 150, LINE)
+            # every step below ends when the UI task is done with it (the
+            # guest's own state, os88bochs.Box.ui_done) instead of the 5, 2,
+            # 4, 8 and 15 s that were slept; what proves the steps worked is
+            # still the line in C:\DOC.RTF, read off the disk afterwards
+            box.ui_done("MEGALOWB's exit")
+            box.click(300, 200, "CWORD's text taking the click")
+            os88bochs.xd("type", "--delay", 60, LINE)
             os88bochs.xd("key", "Return")
-            time.sleep(2)
-            os88bochs.goto(44, 60)      # File
-            os88bochs.xd("click", 1)
-            time.sleep(4)
-            os88bochs.goto(80, 113)     # Save As...
-            os88bochs.xd("click", 1)
-            time.sleep(8)
-            os88bochs.goto(400, 118)    # Save, onto C:\ as DOC.RTF
-            os88bochs.xd("click", 1)
-            time.sleep(15)
+            box.ui_done("CWORD to take the typed line")
+            box.click(44, 60, "the File menu")
+            box.click(80, 113, "Save As...'s dialog")
+            box.click(400, 118, "the save onto C:\\DOC.RTF")
+            box.ui_done("the save", hold=1.0)
             os88bochs.shot(os.path.join(out, "after.png"))
         else:
             fails.append("no kern_mega line in 240s")
@@ -106,14 +99,24 @@ def main():
                 "kern_mega CLOSED"):
             fails.append(l)
     before, after = claims(lines, 0), claims(lines, 1)
-    # the carve: the 20KB block whose owner is a selector (CWORD's region
-    # above 1MB), the same owner on both sides
-    pick = lambda cs: [c for c in cs if c[1] == 0x500 and c[2] & 4]
+    # the carve: the block whose owner is a selector (CWORD's region above
+    # 1MB), the same owner AND size on both sides. Not MEGALOWB's own claim,
+    # which is selector-owned too and is at the segment its 'got' line
+    # printed. The size is not pinned here: the carve is the overlay's
+    # bytes rounded up, and the overlay grows with CWORD (cc_ovmthunk's
+    # module-to-module call made it 20KB -> 21KB), which a hard 0x500 read
+    # as "no carve at all"
+    got = [int(m.group(1), 16) for m in
+           (re.match(r"MEGALOWB: got (\w{4})$", l) for l in lines) if m]
+    sel = lambda cs: [c for c in cs if c[2] & 4 and c[0] not in got]
+    keys = set((c[1], c[2]) for c in sel(before)) & \
+        set((c[1], c[2]) for c in sel(after))
+    pick = lambda cs: [c for c in sel(cs) if (c[1], c[2]) in keys]
     b, a = pick(before), pick(after)
     print("megaovl: carve before %s after %s" % (
         ["%04X" % c[0] for c in b], ["%04X" % c[0] for c in a]))
     if len(b) != 1 or len(a) != 1:
-        fails.append("could not find CWORD's 20KB carve in both snapshots "
+        fails.append("could not find CWORD's carve in both snapshots "
                      "(%d, %d)" % (len(b), len(a)))
     elif a[0][0] <= b[0][0]:
         fails.append("CWORD's carve did not move up: %04X before, %04X "

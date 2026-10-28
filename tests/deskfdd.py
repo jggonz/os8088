@@ -129,7 +129,8 @@ def check_zone(ui, letter, want_525, want_guess, fails):
 
 def machine(name, img, apps, want, fails, learn_b=False):
     say("%s (%s, %s)" % (name, img, apps))
-    with os88ui.boot(img, apps=apps, machine=name, verbose=False) as ui:
+    with os88ui.boot(img, apps=apps, machine=name, verbose=False, quick=True) as ui:
+        ui.still()                      # the zones are read off the glass too
         for letter, (w525, wguess) in want.items():
             check_zone(ui, letter, w525, wguess, fails)
         if learn_b:

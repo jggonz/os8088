@@ -1,5 +1,5 @@
 ; =============================================================================
-; kerndos/kdback.inc - the DOS box's back end, SECOND implementation
+; kerndos/kdback.inc - DOS.O88's back end, SECOND implementation
 ;
 ; **THIS FILE IS docs/plans/KERN-DOS-PLAN.md §3's WHOLE CLAIM, made good.**
 ; That section says the port is *"a second implementation of twenty-two doors
@@ -72,7 +72,7 @@ dos_k_wrat:
     ret
 
 ; in: dos_k_rdat's + DI = the READ_SEQ cursor in DS (SPEC.md 96.53.1). The
-; box's os88_rseq with no small kernel to fall back to: the offset stays the
+; DOS.O88's os88_rseq with no small kernel to fall back to: the offset stays the
 ; core's, and a cursor standing anywhere else is re-seeded there - generation
 ; 0 being "not seeded", which is the layer's own rule and this is its source
 dos_k_rseq:
@@ -164,7 +164,7 @@ dos_k_here:
 
 ; in: CX = ordinal, ES:DI = an OSAPI_FIND_SZ buffer
 ;
-; **`AL` AND `[dsk_fdraw]` ARE INPUTS, AND THE BOX'S DOOR SETS BOTH**
+; **`AL` AND `[dsk_fdraw]` ARE INPUTS, AND DOS.O88'S DOOR SETS BOTH**
 ; (SPEC.md 96.44.12). `dsk_find_x` takes `AL = 1 if the caller may see hidden
 ; and system entries` - the fence SPEC.md 19.6.1 puts between a package and a
 ; driver - and `api_file_find` computes it from `dvf_drv_owns_seg` before it
@@ -215,7 +215,7 @@ dos_k_vkind:
     ret
 
 ; in: ES:DI = a buffer, CX = its size; out CX = the length
-; **ES = OUR DS, WHICH THE BOX'S DOOR GETS FOR FREE** (SPEC.md 96.44.10).
+; **ES = OUR DS, WHICH DOS.O88'S DOOR GETS FOR FREE** (SPEC.md 96.44.10).
 ; `OSAPI_FILE_PATH` is an **X** cell - one of exactly two among the twenty-two
 ; doors, the other being `OSAPI_FILE_FIND` - so `api_x` puts the caller's DS in
 ; ES before the stub runs, and the core's callers pass a plain DS offset in DI
@@ -286,7 +286,7 @@ kd_k_refuse:
 ; kdb_bevec - the twenty-two doors, as addresses (SPEC.md 96.44.1)
 ; in:  nothing; out: nothing, every register preserved
 ;
-; kern_dos's half of what `dos_be_bind` is for the box: the core stores a
+; kern_dos's half of what `dos_be_bind` is for DOS.O88: the core stores a
 ; `DBE_*` ORDINAL and `dos_be_go` turns it into an address through `dos_bevec`,
 ; so the core is ONE object and the back end under it is whichever host bound
 ; itself. `kd_entry` calls this before the mount.

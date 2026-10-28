@@ -53,7 +53,7 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=GATE) as ui:
+    with os88ui.boot(SYS, apps=GATE, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/RENREF.COM"):
             fail("double-clicking RENREF.COM opened no window")
@@ -63,7 +63,7 @@ def main():
             rows[:] = m.screen() or []
             return any("RENREF READY" in r for r in rows)
         try:                        # GUEST time: `limit` is idle-box seconds
-            os88marty.until(m, _seen, "RENREF.COM to finish", poll=0.3,
+            os88marty.until(m, _seen, "RENREF.COM to finish", poll=0.05,
                             limit=180.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"

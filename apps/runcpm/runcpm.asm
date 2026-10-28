@@ -73,10 +73,14 @@
                                     ; DIR or .COM load is an F_OPEN/F_SFIRST.
                                     ; Lazy would only move the read a quarter
                                     ; of a second later. The CCP rides in it
-                                    ; (below), so it is the only part. The
-                                    ; carve is PINNED since SPEC.md 73.14.2.1
-                                    ; (114.6): crt0 declares no eager carve
-                                    ; movable any more
+                                    ; (below), so it is the only part - and
+                                    ; so the carve MOVES (SPEC.md 73.14.2.1:
+                                    ; crt0 declares a one-row carve itself)
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned, unsigned) -
+                                    ; the 64KB Z80 claim and the open-file
+                                    ; table's buffers are MOVABLE (SPEC.md
+                                    ; 74.3.2): rc_zseg, rc_z.seg and o->seg
+                                    ; are the words it puts right
 %define CC_ICON "runcpm/icon.inc"   ; RunCPM.ico, 16x16 at 1bpp (SPEC.md 20.2,
                                     ; 74.5) - crt0 puts it at file offset 32
                                     ; and checks the length
@@ -100,8 +104,8 @@
 ; sector-aligned, so a second row is a sector of the file on the 512-byte
 ; geometries (2,048 bytes is four sectors packed or plain, and LZ4 takes it
 ; only to 1,762), and a carve holding the package's own part beside the
-; module stays pinned (SPEC.md 73.14.2.1), where the RUNCPM.OVL claim it
-; replaces was movable. Inside the module it is packed in one LZ4 stream with
+; module stayed pinned until CC_ONMOVE_PARTS (SPEC.md 73.14.2.1), where the
+; RUNCPM.OVL claim it replaces was movable. Inside the module it is packed in one LZ4 stream with
 ; the code, costs no row, and moves with it. It is never executed there: it is
 ; Z80 code, copied out, and the module's DS is still the package's.
 section .modc
@@ -116,6 +120,14 @@ section .text                       ; negative, so an error, on the wrong side
 
 %include "runcpm.gen.asm"           ; the compiled C, found through -I build/
 
+section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
+    times (($ - $$) + 1) & 1 db 0     ; core and the composers below stay at
+                                    ; the byte parity they were measured at
+                                    ; whatever the compiled C above them
+                                    ; grows by - an odd shift re-prices every
+                                    ; word fetch on a 16-bit bus (an 8086, a
+                                    ; V30, a 286), where an 8088 does not care
+                                    ; (PERFORMANCE.md Part 7, os88rdiff.py)
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is assembly):
 %include "runcpm/rcz80.inc"         ; the Z80 core - _rc_run(n) (wave 2)
 %include "runcpm/rcmem.inc"         ; the Z80-RAM movers (wave 2)

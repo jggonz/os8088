@@ -43,8 +43,6 @@ Each debugger break releases Bochs's mouse grab (the prompt takes the
 pointer), so every probe is followed by a re-capture. It reads build/
 (wants=) and writes only under build/bochs-megap2hiber/.
 """
-import contextlib
-import io
 import os
 import re
 import shutil
@@ -109,28 +107,33 @@ def probe(box):
     take Bochs's grab back, which the prompt released."""
     n = os.path.getsize(box.e9)
     mx, wz = lin("mouse_x"), lin("mou_p2wz")
-    with contextlib.redirect_stdout(io.StringIO()):
-        ob.dbg(box.out, ["xp /2hx 0x%x" % mx, "xp /1bx 0x%x" % wz,
-                         "info device pic"])
-    t = since(box, n)
-    box.capture()
-    xy = xp(t, mx, 2)
+    box.dbg(["xp /2hx 0x%x" % mx, "xp /1bx 0x%x" % wz, "info device pic"])
+    t = since(box, n)               # (the Box re-captures inside the next
+    xy = xp(t, mx, 2)               # input, so no capture() toggle here)
     w = xp(t, wz, 1)
     return (tuple(xy) if len(xy) == 2 else None,
             w[0] if w else None, pic(t))
 
 
-def menu_hibernate():
-    ob.goto(10, 5)                  # System menu > Hibernate... (megahiber's)
-    ob.xd("mousedown", 1)
+def menu_hibernate(box):
+    box.goto(10, 5)                 # System menu > Hibernate... (megahiber's)
+    box.xd("mousedown", 1)
     for _ in range(5):
-        ob.rel(0, 30)
-    ob.rel(0, 16)
+        box.xd("mousemove_relative", "--", 0, 30)
+        time.sleep(0.04)
+    box.xd("mousemove_relative", "--", 0, 16)
     time.sleep(0.5)
-    ob.xd("mouseup", 1)
-    time.sleep(10)
-    ob.goto(225, 225)               # Hibernate
-    ob.xd("click", 1)
+    box.xd("mouseup", 1)
+    box.ui_done("the Hibernate dialog")     # (was 10 s slept)
+    box.goto(225, 225)              # Hibernate
+    box.xd("click", 1)
+
+
+def off(box):
+    """The hibernate's end: its sentence on the TEXT screen (it has no E9
+    line of its own) - where 30 s of E9 silence was waited out"""
+    return "hibernated" in box.read(0xB8000, 160 * 6)[0::2].decode(
+        "latin-1")
 
 
 def main():
@@ -147,9 +150,9 @@ def main():
         if not box.wait_for("kern_mega: protected mode", 300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
-        time.sleep(20)
+        box.up()                        # the desktop, off kernel state
         box.capture()
-        ob.goto(100, 100)
+        box.goto(100, 100)
         _, wz0, (m0, s0) = probe(box)
         print("megap2hiber: before - master %s slave %s wz %s" % (
             m0 is not None and "%02X" % m0, s0 is not None and "%02X" % s0,
@@ -157,16 +160,12 @@ def main():
         if wz0 != 3:
             fails.append("the boot's knock did not take (mou_p2wz %s, not 3)"
                          " - is Bochs's mouse an IntelliMouse?" % wz0)
-        menu_hibernate()
-        end = time.time() + 400         # the off screen has no E9 line of
-        last, lt = None, time.time()    # its own: the lines stop
-        while time.time() < end:
-            n = len(box.lines())
-            if n != last:
-                last, lt = n, time.time()
-            elif time.time() - lt > 30:
-                break
-            time.sleep(2)
+        menu_hibernate(box)
+        try:
+            box.until(lambda: off(box), "the hibernate's sentence", 400,
+                      poll=1.0)
+        except RuntimeError as e:
+            fails.append(str(e))
         lines = box.lines()
     finally:
         box.stop()
@@ -184,21 +183,17 @@ def main():
         if not box.wait_for("kern_mega: protected mode", 300):
             fails.append("the second boot never reached protected mode")
             return report(fails, keep, t0)
-        time.sleep(20)
+        box.up()                        # the desktop and its Resume card
         box.capture()
-        with contextlib.redirect_stdout(io.StringIO()):
-            ob.dbg(box.out, ["lb 0x%x" % bp])
-        box.capture()
-        ob.goto(225, 225)               # Resume
-        ob.xd("click", 1)
+        box.dbg(["lb 0x%x" % bp])
+        box.goto(225, 225)              # Resume
+        box.xd("click", 1)
         if not box.wait_for("Breakpoint 1", 180):
             fails.append("hbm_wake's .nowz (linear %X) never reached" % bp)
         else:
-            n = os.path.getsize(box.e9)
-            with open(os.path.join(box.out, "dbg.fifo"), "w") as fh:
-                fh.write("info device pic\nd 1\nc\n")
-            time.sleep(3)
-            _, s = pic(since(box, n))
+            # stopped there: read the masks, delete it, go on - on the
+            # prompts, where a 3 s sleep was
+            _, s = pic(box.at_prompt(["info device pic", "d 1"]))
             print("megap2hiber: at .nowz - slave %s" % (
                 s is not None and "%02X" % s))
             if s is None or not s & P2SL:
@@ -208,13 +203,18 @@ def main():
                                  s is not None and "%02X" % s))
         if not box.wait_for("kern_mega: resumed", 120):
             fails.append("no `kern_mega: resumed`")
-        time.sleep(20)
-        box.capture()
-        ob.goto(100, 100)
+        box.ui_done("the resumed desktop")     # (was 20 s slept)
+        try:                            # CLOSED-LOOP: one that cannot move
+            box.goto(100, 100)          # the pointer raises - and a == b
+        except RuntimeError:            # below says so
+            pass
         a, wz1, (m1, s1) = probe(box)
-        ob.goto(300, 200)
+        try:
+            box.goto(300, 200)
+        except RuntimeError:
+            pass
         b, _, _ = probe(box)
-        ob.shot(os.path.join(OUT, "resumed.png"))
+        box.shot(os.path.join(OUT, "resumed.png"))
         print("megap2hiber: after - master %s slave %s wz %s, pointer %s "
               "then %s" % (m1 is not None and "%02X" % m1,
                            s1 is not None and "%02X" % s1, wz1, a, b))

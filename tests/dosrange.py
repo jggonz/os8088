@@ -2,7 +2,7 @@
 """INT 33h's COORDINATE WINDOW (SPEC.md 96.10.7).
 
 `07h` and `08h` are a program telling the driver what its own screen is, and
-every `03h` after that is an answer in those units. This box answered them as
+every `03h` after that is an answer in those units. this DOS answered them as
 no-ops for as long as they were in the dispatcher at all - *"we clamp nothing,
 the host's pointer is already inside the screen"* - and the pointer being
 inside THE SCREEN is not the claim the program made.
@@ -67,7 +67,7 @@ def pos(m, label):
 
 def run(machine):
     print("dosrange: --- %s ---" % machine)
-    with os88ui.boot(SYS, apps=DISK, machine=machine) as ui:
+    with os88ui.boot(SYS, apps=DISK, machine=machine, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/MOURANGE.COM"):
             fail("double-clicking MOURANGE.COM opened no window")
@@ -133,7 +133,7 @@ def run(machine):
 
         # --- 5. ...and opening the window again is LIVE ---------------------
         # A real driver clamped its own stored position and cannot give the
-        # overshoot back (§96.10.7, POS5 of the reference run). This box holds
+        # overshoot back (§96.10.7, POS5 of the reference run). this DOS holds
         # no position at all - it maps the host's - so widening the window
         # answers the pointer where it actually is, immediately.
         x5, y5 = pos(m, "POS5")

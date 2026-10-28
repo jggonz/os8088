@@ -120,7 +120,7 @@ def rec_bad(gl, x, y, rec, w):
 
 def park(ui):
     ui.mo.to(20, 30)
-    os88marty.guest_sleep(ui.m, 1.0)
+    ui.still()
 
 
 def run(leg):
@@ -128,7 +128,8 @@ def run(leg):
     tmp = tempfile.mkdtemp(prefix="deskcalcards-")
     try:
         img = disk_with(tmp, "cards.img", fixture())
-        with os88ui.boot(img, machine=os88marty.machine(machine)) as ui:
+        with os88ui.boot(img, machine=os88marty.machine(machine),
+                         quick=True) as ui:
             m = ui.m
             m.write(ui._S("clk_sec"), bytes([0, 58, 20]))
             c = Cal(ui, tmp, check=check, today=T)

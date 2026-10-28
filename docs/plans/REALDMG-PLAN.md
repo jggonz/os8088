@@ -1101,6 +1101,16 @@ speed. Its two hard parts are known from that report: computed jumps
 (`JP HL`, jump tables) need the interpreter as a fallback, and a cartridge
 is larger than any cache, so it wants the tiers of 16.2.3 or a format the
 recompiler pages in by bank.
+**Studied 2026-10-25** (docs/reports/REALDMG-FULLSTATIC-2026-10-25.md):
+feasible per game with a host tool; the interpreter leaves the hot path but
+stays as a cold fallback for RAM code and unresolved computed jumps, and the
+options are a complete host-made profile for today's Static, a per-game
+`GAME.O88` built from emitted assembly, or a precompiled file the package
+loads. The owner's answers the same day chose its section 11: every
+instruction the walk finds translated on the host in a COMPACT grade (no
+play, no profile, no slow form), hot code promoted from counters the game
+keeps, a per-game `GAME.O88` first because that is what fits a 256 KB
+cartridge in 640 KB.
 
 ### The scroll round - research, the field probe, and the plan (2026-10-21)
 
@@ -1404,6 +1414,188 @@ Gates to write with it: `tests/rdgstatic.py`'s squeezed second half
 generalised to three tiers, with its negative control; `rdgbench.py --rom`
 on Kirby's Dream Land (flushes and ms a frame, base+holes against base and
 against two segments); and Super Mario Land, which must not move.
+
+### The background line cache - the plan (2026-10-22, NOT BUILT)
+
+**The owner's ask**: try a cache once more, because the gains always look
+large - but a LINE cache, which nobody has tried. Four whole-background
+designs were built or measured before this one and every time the
+bookkeeping ate the gain (REALDMG-SPEC 13.3): the rolling background image
+(the scan every scrolled frame, +2.4 ms against ~1.5-2 ms taken away), the
+same fill a segment at a time (both games slower), the sorted sprite list
+cache twice (the check every frame cost what the hits saved), and a
+one-tile line signed per line (Super Mario Land +3-5 ticks, Kirby's Dream
+Land -7-11). The lesson of all four is the same: **a cache pays only where
+its check is free on the frames it does not help.** This plan is written
+around that.
+
+#### Why a line cache, and where the time is
+
+docs/reports/REALDMG-LOSSY-2026-10-22.md measured it without meaning to.
+On `286-victory`, drawing every frame, Kirby's Dream Land with Scroll by 8
+and Two Shades is 28.65 ms a frame and **13.18 with the sprites off**,
+where the CPU alone is 11.08: of ~17 ms of drawing, **~15 ms is lines
+composed because a sprite moved on them**. A dirty line is composed WHOLE -
+21 tile addresses, the fine shift of both planes, the window - and only
+then are its one or two sprites drawn. The profile of that build has the
+background's line composition (`ppu_fcopyb`, `ppu_fshift`, `ppu_line`,
+`ppu_blist`) at ~27% of the samples against the sprites' own ~13%. A line
+whose background did not change but a sprite did is the case: keep each
+line's composed background and window, and on such a line copy it back
+(40 bytes) and draw the sprites over it.
+
+Where it can and cannot help:
+- **A scrolled frame is composed whole** and every line's background
+  changed with it, so the cache cannot help it - and must cost it nearly
+  nothing (below).
+- **A still frame** composes the lines a sprite crossed: Kirby's Dream Land
+  carries a sprite on 35% of its lines (`tools/gblossy.py --flap`), Super
+  Mario Land on 11%, Looney Tunes on 31%. Kirby's still frames are 58% of
+  them under the bench's input, Super Mario Land's 37%.
+- **With Scroll by 8 on, seven scrolled frames in eight become still
+  frames**, so the cache meets Kirby's ~15 ms almost every frame. That is
+  the best case, and the reason to build it now that Scroll by 8 has
+  shipped.
+
+#### The design
+
+- **The cache**: 144 lines x 40 bytes (`PPU_BL`/`PPU_BH`, 20 each: the
+  background and window composed, before the palette pass and the
+  sprites) = 5,760 bytes, plus a byte a line saying it is valid. In the
+  damage memory: `RDG_DMG_SIZE` 0x3B96 -> ~0x5290, the claim 15KB -> 21KB.
+  **That 6KB is heap on every machine** - two bank-cache slots on a tight
+  640KB 286 - so it is a cost the measurement has to beat, not a detail.
+  (Two Shades needs only `PPU_BH`: 2,880 bytes; a first build may keep
+  both planes and halve later.)
+- **Stored only where it can be read**: a line's entry is written when the
+  line is composed AND it has a sprite on it (its `PPU_LSPR` count), which
+  is the only line a sprite can later dirty without its background: a
+  sprite that leaves a line was on it at the last composition, so that
+  line was stored then. Super Mario Land stores on 11% of its lines, not
+  144 a scrolled frame - that is the "free on the frames it does not help"
+  rule, made a design choice. A scrolled frame (`RDG_DFULL` = 2) stores
+  nothing and invalidates everything (one `rep stosw` of 72 words).
+- **The reasons split**: `RDG_DLD` today means "compose this line" for two
+  reasons - a sprite moved over it (`ppu_dlines`), and on a FAST frame a
+  background or window map row under it changed (`ppu_dfast`'s `.mark`).
+  It becomes two bits: 1 a sprite's, 2 the background's. `ppu_ldirty`
+  then calls a line **sprite-only** when its registers and window line are
+  the last call's, `ppu_bgdirty` and `ppu_wdirty` say clean, and the only
+  reasons are bit 1 and `ppu_sdirty` (a sprite's tile changed). Today a set
+  `RDG_DLD` jumps to `.regs` before the background is judged at all, so
+  judging it is new work - but it is judged once a map row and kept
+  (`ppu_rowdirty`), so a line's share is a table read.
+- **The restore** in `ppu_line`: a sprite-only line with a valid entry
+  copies its 40 bytes into `PPU_BL`/`PPU_BH` and goes straight to `.pal`
+  (the palette pass and the sprites, as now). Every line composed the slow
+  way stores at `.pal`'s entry, before `ppu_spriteb` draws into the
+  background's planes.
+- **The state a skipped composition must keep** - the trap that would make
+  the first build wrong in ways only some games show:
+  - the window's line counter (`PPU_WLINE`) counts the lines the window was
+    DRAWN on, so a restored line under the window still counts;
+  - the background's carried state - `PPU_BNEXT`/`PPU_BROW`, the 7-in-8
+    reuse of the last line's 21 tile addresses (13.3) - assumes the line
+    before was composed: a restore sets `PPU_RCH` so the next composed
+    line builds its list afresh;
+  - the raster log is applied per line as now (`ppu_log` before
+    `ppu_line`), and a line whose registers changed is never sprite-only.
+- **Hooked, not tested**: the restore and the store go in as Screen's
+  options did (REALDMG-SPEC 13.4) only if a menu item is wanted; a cache
+  that pays everywhere is simply the composer, and one that pays only with
+  Scroll by 8 can ride that option's patch table and cost nothing
+  elsewhere. Which one is the measurement's answer.
+
+#### Scrolling - what a line cache can and cannot reach
+
+Scrolling is where the frames die, so it was asked whether the cache can
+help there without bookkeeping eating it. The answer splits by direction.
+
+- **A smooth horizontal scroll: NO, and nothing cached can help.** Every
+  line's pixels move sideways by a non-multiple of 8, so every byte of
+  `PPU_BL`/`PPU_BH` is new: the work left on that line is the shift
+  (`ppu_fshift`/`ppu_fcopyb`), and the shift IS the floor. The tile lookups a
+  cache would save are already cached per map row (`ppu_blist`, `RDG_DLC`) and
+  reused seven lines in eight (`PPU_BNEXT`). A cache keyed any way at all
+  hands back bytes in the wrong bit position, and re-shifting them costs what
+  composing them did. This is the case the four whole-background caches were
+  built against, and it is why they came out even.
+- **A vertical scroll: YES, if the cache is keyed by BACKGROUND row and not
+  screen line.** Picture line L at SCY shows background row (SCY+L) & 255,
+  and at SCX unchanged that row's 160 pixels are exactly the bytes composed
+  last frame for screen line L-dy. So key the entry by the background row:
+  the store keeps `(SCY+L)&255` and SCX beside the bytes, and the restore asks
+  "is row (SCY+L)&255 cached at this SCX?" A vertical scroll then reuses
+  every line but the dy new ones. The costs: the cache becomes 256 rows x 40
+  bytes = **10,240 bytes plus a valid byte and an SCX byte a row (~10.7KB)
+  against 5.76KB**; a VRAM write to a map row or a tile invalidates every
+  cached row that row touches (the write marks already say which, so it is a
+  bounded walk, not a scan); and the window and sprites are never in the
+  entry (the store is taken before `.pal`, as above, and a line the window
+  covers is not cached at all). Storing becomes "every composed
+  window-free line", not only lines with sprites, which is the bookkeeping
+  to watch: a store is a 40-byte copy, ~4% of a line's composition.
+- **A Scroll-by-8 step: YES, cheaply.** With Scroll by 8 on, the eighth
+  frame's step moves the picture by a whole byte, so the cached bytes for
+  line L are the new line's bytes at a byte offset: one `rep movsw` of 19
+  words plus the one new byte column composed from its tile. That is the
+  rolling background revived in the one case it is free - no shift, and the
+  write marks make the "did a tile change" scan cheap - and it turns the
+  only frame in eight that still pays a full composition into a copy.
+  It rides Scroll by 8's patch table, so it costs nothing with the option
+  off.
+- **And a gentler F11 is a separate, nearly free option**: Scroll by 2 or
+  by 4 is the same code with a different snap mask (`and al,0F8h` in the snap stubs becomes
+  `0FEh`/`0FCh`), giving a smoother picture for games Scroll by 8 makes hard
+  to play, at half or a quarter of its saving. It is a menu choice, not a
+  cache, and is worth offering whatever the cache comes to.
+
+So the plan builds the STILL cache first, as designed above, and step 1
+below also counts what decides the rest: **frames with a vertical scroll
+(SCY changed, SCX not) and their dy, and Scroll-by-8 step frames**. If
+vertical scrolls are a real share of Kirby's or another game's frames, the
+key becomes the background row and the cache 10.7KB; if not, it stays the
+5.76KB screen-line cache, and the byte-step copy is built only behind Scroll
+by 8.
+
+#### The measurement, BEFORE any of it is built
+
+Every earlier cache was built and then measured. This one is bounded
+first, and each step can stop it:
+
+1. **Count** (bare harness, `RDG_DEFS`): per frame, lines composed,
+   lines sprite-only by the split above, and lines composed with a sprite
+   on them (the stores). Super Mario Land, Kirby's Dream Land, both
+   interlace-off and with `LOSSY_COARSE`. Free to take, and it says
+   whether the case exists at the size the sprites-off bound suggests.
+   Also counted: frames whose SCY moved with SCX unchanged (and by how
+   many lines), and Scroll-by-8 step frames - the two scrolling cases
+   above, which decide the cache's key and size.
+2. **The upper bound**: a harness-only build that SKIPS a sprite-only
+   line's background composition and leaves whatever `PPU_BL`/`PPU_BH`
+   held - a wrong picture, the right cost: the gain with no copy, no
+   store, no split. `rdgbench --vga` on both games, with and without
+   Scroll by 8. **If the bound is under ~3% without Scroll by 8 and ~10%
+   with it, stop here** and write the number down beside the other four.
+3. **The overheads alone**, the other way: stores and the split's
+   judging with no restore, so the picture is right and only the costs are
+   paid. Bound minus this is the most the cache can be.
+4. Only then the cache itself, timed exactly as above.
+
+#### What gates it
+
+- `FRAME_SUM` (REALDMG-SPEC 13.3's scroll round): the bare harness sums
+  every picture it composes, and the cache must read the same sums as the
+  composer without it over 3,000 frames of Super Mario Land, Kirby's Dream
+  Land and Dr. Mario, in all four interlace modes, with Two Shades and
+  Scroll by 8 each on and off. `gbdamage` cannot see a cache defect - its
+  reference shares `ppu_line` - so the sums are the gate.
+- The negative control: a restore that forgets `PPU_WLINE` must fail the
+  sums on Kirby's Dream Land (the window is its status bar), and one that
+  leaves `PPU_RCH` alone must fail on a game whose line after a restored
+  one is composed.
+- `tests/rdgcore/rdgacid.py` (dmg-acid2) unchanged, and the package rows
+  `gb*`.
 
 ### Wave 8 - the 5150 demo, disks and the Wire record
 

@@ -81,6 +81,16 @@ la_dsv:     dw 0
 la_esv:     dw 0
 la_csacc:   db 0x93
 la_fault:   db 0
+    LA_ORDER
+%endmacro
+
+; LA_ORDER - la_borrow reads la_msw through la_esv as ONE walk of SI, so a
+; caller laying the data out itself (XMEM.DRV's equs) states the order after
+; it: the assembly fails here, never the borrow
+%macro LA_ORDER 0
+    times ((la_idt - la_msw != 2) | (la_gdt - la_idt != 6) | \
+           (la_dsc - la_gdt != 6) | (la_esc - la_dsc != 4) | \
+           (la_dsv - la_esc != 4) | (la_esv - la_dsv != 2)) * -1 db 0
 %endmacro
 
 ; -----------------------------------------------------------------------------
@@ -175,15 +185,20 @@ la_lin:
     ret
 
 ; la_cache - AX = a segment -> the cache entry at ES:DI: base AX * 16,
-; access BL, limit FFFFh. Clobbers AX
+; access BL, limit FFFFh. DF = 0. Clobbers AX, and DI goes past the entry
 la_cache:
     push dx
     call la_lin
-    mov [es:di], ax
-    mov [es:di + 2], dl
-    mov [es:di + 3], bl
-    mov word [es:di + 4], 0xFFFF
+    stosw                           ; +0 base 15..0
+    mov al, dl
+    mov ah, bl
     pop dx
+; la_cend - AX = base 23..16 and the access byte -> +2, then the limit FFFFh:
+; the rest of an entry at ES:DI, whichever way its base arrived
+la_cend:
+    stosw
+    mov ax, 0xFFFF
+    stosw
     ret
 
 ; -----------------------------------------------------------------------------
@@ -224,17 +239,34 @@ la_borrow:
     xor ax, ax
     rep stosw                       ; everything not named below: 0 (the
                                     ; general registers come off the stack)
-    mov ax, [la_msw]
-    mov [es:LT_MSW], ax
-    mov si, la_idt
+    ; THE CALLER'S FIELDS IN ONE WALK OF SI: la_msw, la_idt, la_gdt, la_dsc,
+    ; la_esc, la_dsv and la_esv are consecutive - LA_DATA lays them out so,
+    ; XMEM.DRV's equs too, and LA_DATA asserts it - so each table field is
+    ; one `mov di` and its moves rather than an absolute load and store
+    mov si, la_msw
+    mov di, LT_MSW
+    movsw
     mov di, LT_IDT
     movsw
     movsw
     movsw
-    mov si, la_gdt
     mov di, LT_GDT
     movsw
     movsw
+    movsw
+    mov di, LT_DSC                  ; SI = la_dsc: DS's cache, base 24 and
+    movsw                           ; access 93h (the base's high byte is
+    lodsw                           ; the table's), limit FFFFh
+    mov ah, 0x93
+    call la_cend
+    mov di, LT_ESC                  ; SI = la_esc: ES's, the same
+    movsw
+    lodsw
+    mov ah, 0x93
+    call la_cend
+    mov di, LT_DS                   ; SI = la_dsv: the selectors shown
+    movsw
+    mov di, LT_ES
     movsw
     mov bl, [la_csacc]
     mov ax, cs
@@ -246,22 +278,6 @@ la_borrow:
     mov [es:LT_SS], ax
     mov di, LT_SSC
     call la_cache
-    mov ax, [la_dsv]
-    mov [es:LT_DS], ax
-    mov ax, [la_esv]
-    mov [es:LT_ES], ax
-    mov ax, [la_dsc]
-    mov [es:LT_DSC], ax
-    mov ax, [la_dsc + 2]
-    mov ah, 0x93
-    mov [es:LT_DSC + 2], ax
-    mov word [es:LT_DSC + 4], 0xFFFF
-    mov ax, [la_esc]
-    mov [es:LT_ESC], ax
-    mov ax, [la_esc + 2]
-    mov ah, 0x93
-    mov [es:LT_ESC + 2], ax
-    mov word [es:LT_ESC + 4], 0xFFFF
     pushf
     pop ax
     and ax, 0xF8FF                  ; IF, TF and DF clear

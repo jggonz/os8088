@@ -170,7 +170,7 @@ def main():
     with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine=a.machine, boot=False) as m:
         cards = {c["idx"]: c for c in m.cards()}
-        m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+        m.run(); os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
 
         # A ONE-CARD MACHINE IS A LEGAL RUN, and it is the REGRESSION leg:

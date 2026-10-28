@@ -300,7 +300,7 @@ owner's rule: soak and `test-full` run ONCE, after the last batch):
   pass since). Expect little; say so rather than reach.
 - **Skies**: very performance-optimised. Frame, raster, 3D and flight code
   moves only on equal-or-better MartyPC cycle counts.
-- **DOS** (`apps/dos`, SPEC.md 96): the box is debugged against a real IBM
+- **DOS** (`apps/dos`, SPEC.md 96): it is debugged against a real IBM
   DOS (docs/DOS-DEBUGGING.md); a behaviour change there is invisible from
   one side, so prefer layout and data wins over logic rewrites.
 - **The Wire, Task Manager, RLAPPLY**: system apps on every system disk

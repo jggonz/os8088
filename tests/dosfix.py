@@ -1,7 +1,7 @@
 """The two handle defects docs/plans/completed/DOS-STREAM-PLAN.md 3 found, as a row.
 
 tests/dostrap/dosfix.asm opens SUB\\X.DAT from the ROOT and reads it past the
-box's 8KB window, with a DECOY X.DAT in the root whose bytes are all 0xEE -
+DOS's 8KB window, with a DECOY X.DAT in the root whose bytes are all 0xEE -
 so a refill that looks the bare name up where the program STANDS, rather
 than in the folder the name was opened in, reads the decoy and the probe
 prints `FDIR BAD at <offset>`. Then it writes 3,000 bytes to NOCLOSE.DAT and
@@ -11,7 +11,7 @@ handle of a terminating process, so all 3,000 must be on the disk.
 WHAT IT WOULD CATCH: the handle forgetting its folder (FDIR BAD at 8192, the
 first refill), an interleaved writer refused at its second round (ILV BAD,
 DOS error 5), and the window left dirty at exit (NOCLOSE.DAT missing or
-empty - the box never flushed it). All three failed before SPEC.md 96.52.
+empty - DOS never flushed it). All three failed before SPEC.md 96.52.
 """
 import os
 import shutil
@@ -39,7 +39,7 @@ def main():
             fail("%s is missing - `make build/dosfix360.img`" % p)
     shutil.copyfile(GATE, SCRATCH)
     bad = []
-    with os88ui.boot(SYS, apps=SCRATCH) as ui:
+    with os88ui.boot(SYS, apps=SCRATCH, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/DOSFIX.COM"):
             fail("double-clicking DOSFIX.COM opened no window")
@@ -49,7 +49,7 @@ def main():
             rows[:] = mm.screen() or []
             return any(r.startswith("READY") for r in rows)
         try:
-            os88marty.until(m, done, "the probe's READY line", poll=0.5,
+            os88marty.until(m, done, "the probe's READY line", poll=0.1,
                             limit=240.0)
         except os88marty.MartyError:
             fail("the probe never finished; the last text screen was %r"
@@ -76,7 +76,7 @@ def main():
                        % [r for r in text if r.startswith("ILV")])
         m.type_text("x")                    # ...and it exits, unclosed
         os88marty.until(m, lambda mm: "Disk" in ui.titles(),
-                        "the desktop to come back", guest=60.0, poll=0.5)
+                        "the desktop to come back", guest=60.0, poll=0.1)
         os88marty.quiesce(m, lambda: (m.disk().get("writes"),
                                       m.disk().get("write_sectors")),
                           guest=2.0, what="the floppy's writes to stop")

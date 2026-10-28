@@ -264,8 +264,13 @@ fdx_go:                         ; ovlchk: builds its own far frame
     push bp
     mov bp, sp                  ; [bp+2] offset, [bp+4] segment, [bp+6] the
     push bx                     ; near return, [bp+8] the far return's offset
-    mov word [bp+4], COLD_SEG   ; and [bp+10] the call's own return, which
-    mov bx, cold_kretf          ; becomes the far return's CS
+%ifdef ROM_ADOPT                ; and [bp+10] the call's own return, which
+    push word [api_coldseg]     ; becomes the far return's CS. Where `.cold`
+    pop word [bp+4]             ; RUNS and not COLD_SEG: a module names it
+%else                           ; only as a far call's segment, which is what
+    mov word [bp+4], COLD_SEG   ; mod_cfix finds (MOVABLE-COLD-PLAN 4)
+%endif
+    mov bx, cold_kretf
 .t:
     mov [bp+6], bx
     mov bx, [bp+10]
@@ -1097,7 +1102,11 @@ fdlg_drawbtn:
     or di, OS88UI_DOWN
 .up:
     mov bx, os88ui_krect
+%ifdef FDLG_MOD
+    call fdb_kbtn               ; this image's own (kern_small, below)
+%else
     call COLD_SEG:os88ui_btn_f  ; os88ui_kbtn's own far entry (SPEC.md 2.6)
+%endif
     pop di
     pop si
     pop bx
@@ -1126,7 +1135,11 @@ fdlg_h_click:
     mov al, FM_BGO
 .l:
     call fdlg_brect
+%ifdef FDLG_MOD
+    call fdb_bhit               ; this image's own (kern_small, below)
+%else
     FDX os88ui_bhit
+%endif
     jnc .hit
     inc ax
     cmp al, FM_BDRIVE
@@ -1162,7 +1175,11 @@ fdlg_h_up:
     FDX fm_layout               ; the layout cache, for THIS window
     call fdlg_drawbtn           ; up again - and os88ui_krect is left holding
     mov bx, os88ui_krect        ; its rect, which the hit test wants
+%ifdef FDLG_MOD
+    call fdb_bhit
+%else
     FDX os88ui_bhit
+%endif
     jc .out                     ; slid off: thought better of
     mov bx, [fdlg_blk]          ; what fdlg_hook hands every other handler
     call fdlg_btn
@@ -1234,6 +1251,9 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
 ; far-calls in through fdx_go (and os88ui_btn_f), and tools/os88ovlchk.py's own
 ; `EXTRA` table - which files this include as `.cold` - stays true.
 %define OS88UI_KERNEL
+%ifdef FDLG_MOD
+ %define OS88UI_KBTNIMG        ; kern_small: the BUTTON is expanded into the two
+%endif                         ; images that are its only callers - below
 %define OS88UI_KGLYPH .modu    ; ...and the glyph is CTRL.DRV's alone on both
                                ; kernels, so it goes into that image's section
                                ; (os88ui.inc says how; kernel size pass 13 -
@@ -1247,6 +1267,30 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
 %include "os88ui.inc"
 %if OS88UI_DEF != 2 || OS88UI_DIS != 1 || OS88UI_FILL & 3
   %error "fdlg_blabel adds OS88UI_DEF and OS88UI_DIS to OS88UI_FILL with inc"
+%endif
+
+%ifdef OS88UI_KBTNIMG
+; --- kern_small's BUTTON, in the two images that draw one (kernel size pass
+; 14, at the owner's word: CTRL.DRV's claim 5 KB -> 6 KB) ---------------------
+; Nothing resident draws a button on kern_small: the callers are the Control
+; Panel and its shutdown card (CTRL.DRV) and this dialog (FDLG.DRV). So
+; os88ui.inc's button, its one-button staging and (this image's alone) its hit
+; test are expanded HERE, once per image, with OS88UI_KFAR's far primitives,
+; and resident `.cold` carries none of them - nor os88ui_btn_f. The include is
+; still assembled once; what is assembled twice is OS88UI_BTN_BODY, which is
+; how pass 13's "the include cannot be assembled twice into one image pair"
+; is answered. os88ui_krect and the staging record stay in `.bss`: the body
+; reads them through DS, which is KERNEL_SEG in both images.
+section .modu
+ %define OS88UI_KFAR
+OS88UI_BTN_BODY os88ui_btn             ; CTRL.DRV's: cp_bemit, sd_button
+OS88UI_KBTN_BODY os88ui_kbtn, os88ui_btn
+section .modd
+OS88UI_BTN_BODY fdb_btn                ; FDLG.DRV's: fdlg_drawbtn
+OS88UI_KBTN_BODY fdb_kbtn, fdb_btn
+OS88UI_BHIT_BODY fdb_bhit              ; ...and fdlg_h_click/fdlg_h_up's test
+ %undef OS88UI_KFAR
+section .cold
 %endif
 
 fdf_fdlg_open:          call fdlg_open_x

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The windowed DOS box's PROMPT on kern_mega with no #GP fixup per character
+"""The windowed DOS's PROMPT on kern_mega with no #GP fixup per character
 (docs/plans/KERN-MEGA-PLAN.md 14.54).
 
     python3 tests/megadosp.py                the row
@@ -9,8 +9,8 @@
                                              reports, does not gate
 
 kern_mega COMPLETES a store through a code selector (mega_gpw) instead of
-faulting, and each completion is an exception - ~880 clocks on a 286. The
-box's console hook, dos_hk_tty, entered with `push cs / pop ds`, so every
+faulting, and each completion is an exception - ~880 clocks on a 286.
+DOS's console hook, dos_hk_tty, entered with `push cs / pop ds`, so every
 byte the prompt printed - a DIR row, an ECHO, a TYPE - was one completed
 #GP at con_markc's first store (and con_write's, for a CR): 20,002 for a
 20,000-byte TYPE, and 4.0 s against 5.6 s on 86Box's mr286. megatrap0 counts
@@ -83,33 +83,36 @@ def main():
         if not box.wait_for("kern_mega: protected mode", 300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
-        time.sleep(25)
+        box.up()                         # the desktop, off kernel state
         box.capture()
-        os88bochs.dbl(591, 105)          # B:
-        time.sleep(10)
+        box.dbl(591, 105, "B:'s Disk window")
+        pos = [os.path.getsize(box.e9)]
 
-        def step(name, act, allow=0):
-            n0 = os.path.getsize(box.e9)
+        def step(name, act, allow=0, tail=0.0):
+            # each step ends when the UI task is done with it - the DOS window
+            # runs its program in the UI task's wakes, no worker - where it
+            # waited QUIET s of no E9 line (8 s a step on a clean run). The
+            # windows TILE the run: one running offset, whole lines.
             act()
-            end, last, lt = time.time() + LIMIT, n0, time.time()
-            while time.time() < end:
-                time.sleep(1)
-                n = os.path.getsize(box.e9)
-                if n != last:
-                    last, lt = n, time.time()
-                elif time.time() - lt >= QUIET:
-                    break
+            try:
+                box.ui_done("DOS to finish " + name, secs=LIMIT)
+            except RuntimeError as e:   # a FAULT: reported below, from E9
+                print("megadosp: %s" % e)
+            time.sleep(tail)
             with open(box.e9, "rb") as f:
-                f.seek(n0)
-                new = f.read().decode("latin-1").splitlines()
-            # every trap from the prompt on is the box's: the one image
+                f.seek(pos[0])
+                t = f.read()
+            t = t[:t.rfind(b"\n") + 1]
+            pos[0] += len(t)
+            new = t.decode("latin-1").splitlines()
+            # every trap from the prompt on is DOS's: the one image
             # running is DOS, and api_x.done's `pop es` (CS 0060) is the
             # kernel returning to it - so none is set aside by name
             traps = [l for l in new if l.startswith("T ")]
             fault = [l for l in new if l.startswith("kern_mega FAULT")]
             sites = collections.Counter(" ".join(l.split()[2:3] + l.split()[5:6])
                                         for l in traps)
-            os88bochs.shot(os.path.join(out, "%02d-%s.png"
+            box.shot(os.path.join(out, "%02d-%s.png"
                                         % (len(counts), name.split()[0])))
             counts[name] = len(traps)
             print("megadosp: %-22s %6d traps%s %s" % (
@@ -124,17 +127,18 @@ def main():
 
         def cmd(text):
             def go():
-                os88bochs.xd("type", "--delay", 120, text)
-                time.sleep(1)
+                os88bochs.xd("type", "--delay", 60, text)
+                box.ui_done("the line typed")   # (was a 1 s pause)
                 os88bochs.xd("key", "Return")
             return go
 
-        step("launch (double-click)", lambda: os88bochs.dbl(165, 123))
-        time.sleep(10)                   # the prompt's first paint
+        # (the prompt's first paint, slept 10 s OUTSIDE any window, is the
+        # launch step's own ui_done now - and counted)
+        step("launch (double-click)", lambda: box.dbl(165, 123))
         step("ECHO (60 characters)", cmd("ECHO " + "x" * 60))
         step("DIR", cmd("DIR"))
         step("TYPE SMALL.TXT (%d B)" % SMALL, cmd("TYPE SMALL.TXT"),
-             allow=TYPE_ALLOW)
+             allow=TYPE_ALLOW, tail=2.0)
     finally:
         box.stop()
     print("megadosp: %d steps, %d trap lines, %.0fs under Bochs"

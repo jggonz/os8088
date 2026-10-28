@@ -33,6 +33,7 @@ three agreeing.
 NO THIRD-PARTY IMPORTS, for os88lz.py's reason.
 """
 import os
+import re
 import struct
 import sys
 import zlib
@@ -54,12 +55,17 @@ MNAMES = {v: k for k, v in METHODS.items()}
 
 # A part fits a FRESH disk of its geometry: the whole data area, in clusters,
 # of a volume with one file on it (the n/354, n/713 ... os88disk.py prints).
+# a fresh disk's data area LESS 2KB: the host OS that writes the image to a
+# real disk hides things on it (System Volume Information, a .Trashes), and a
+# disk that has been on os8088 carries its own SYSTEM/ASSOC.DAT - a part cut
+# to the whole data area fitted the image and then did not fit the disk
 SIZES = {
-    "360k": 354 * 1024,
-    "720k": 713 * 1024,
-    "1.2m": 2371 * 512,
-    "1.44m": 2847 * 512,
+    "360k": 352 * 1024,
+    "720k": 711 * 1024,
+    "1.2m": 2367 * 512,
+    "1.44m": 2843 * 512,
 }
+PART_MAX = 0xFFFFFFFF
 
 _OK83 = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'()-@^_`{}~")
 
@@ -194,15 +200,27 @@ def _header(k, count, total, offset, setid, name):
 
 
 def part_size(size):
-    """'720k' and friends, or a byte count"""
-    s = str(size).lower()
+    """'720k' and friends (a disk, less SIZES' 2KB), or any size: bytes,
+    or a number with k or m after it (500k, 1.5m - binary, as a disk is)"""
+    s = str(size).strip().lower().replace(" ", "")
     if s in SIZES:
         return SIZES[s]
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)(k|kb|m|mb)?", s)
     try:
-        v = int(s, 0)
+        if m:
+            v = int(float(m.group(1)) *
+                    {None: 1, "k": 1024, "kb": 1024,
+                     "m": 1 << 20, "mb": 1 << 20}[m.group(2)])
+        else:
+            v = int(s, 0)
     except ValueError:
+        v = None
+    if v is None:
         raise CZError(f"a part size of {size!r} - give 360k, 720k, 1.2m, "
-                      "1.44m or bytes")
+                      "1.44m, bytes, or a size like 500k or 1.1m")
+    if v > PART_MAX:
+        raise CZError(f"a part of {v:,} bytes is over the 4GB a part's "
+                      "sizes can say")
     if v < CS_HDR + REC_MAX:
         raise CZError(f"a part of {v} bytes cannot hold a block - the "
                       f"smallest is {CS_HDR + REC_MAX}")
@@ -393,15 +411,28 @@ def split_file(path, outdir=None, size="720k", method=M_LZ4, name=None,
 GEOM_KB = {"360k": 360, "720k": 720, "1.2m": 1200, "1.44m": 1440}
 
 
+def image_geom(size):
+    """the floppy a part of `size` goes on: the named one, or for any other
+    size the smallest disk that holds it - None when no disk does"""
+    s = str(size).strip().lower()
+    if s in GEOM_KB:
+        return s
+    v = part_size(size)
+    fits = [g for g in GEOM_KB if SIZES[g] >= v]
+    return min(fits, key=SIZES.get) if fits else None
+
+
 def make_images(paths, size, outdir=None):
     """one FAT12 floppy image per part, `BIG-001.IMG` for `BIG.001`, of the
-    geometry the parts were cut for - so a set crosses to the machine as N
-    images written to N disks, with nothing to copy by hand. Built by
-    tools/os88disk.py, which is what builds every shipped floppy."""
+    geometry the parts were cut for (image_geom) - so a set crosses to the
+    machine as N images written to N disks, with nothing to copy by hand.
+    Built by tools/os88disk.py, which is what builds every shipped floppy."""
     import subprocess
-    kb = GEOM_KB.get(str(size).lower())
-    if not kb:
-        raise CZError("disk images want a named size: " + ", ".join(GEOM_KB))
+    g = image_geom(size)
+    if not g:
+        raise CZError(f"a part of {part_size(size):,} bytes fits no floppy "
+                      f"- the largest takes {max(SIZES.values()):,}")
+    kb = GEOM_KB[g]
     tool = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "os88disk.py")
     out = []
@@ -571,14 +602,16 @@ def main():
     p = sub.add_parser("split", help="cut a file into NAME.001 ... parts")
     p.add_argument("file")
     p.add_argument("--size", default="720k",
-                   help="360k, 720k (default), 1.2m, 1.44m, or bytes")
+                   help="360k, 720k (default), 1.2m, 1.44m - a disk less "
+                        "2KB - or any size: bytes, 500k, 1.1m")
     p.add_argument("--name", help="the 8.3 name it rejoins as (default: "
                    "the file's own)")
     p.add_argument("-o", "--outdir")
     p.add_argument("-j", "--jobs", type=int, help="encoder processes")
     p.add_argument("--images", action="store_true",
-                   help="also write each part to a floppy image of its size "
-                        "(NAME-001.IMG ...), ready to write to a disk")
+                   help="also write each part to a floppy image (NAME-001.IMG "
+                        "...) - the size's own disk, or the smallest that "
+                        "holds it - ready to write to a disk")
     meth(p)
     p = sub.add_parser("join", help="rejoin a set from any of its parts")
     p.add_argument("part")

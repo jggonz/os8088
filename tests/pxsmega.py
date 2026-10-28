@@ -91,31 +91,41 @@ def main():
         if not box.wait_for("kern_mega: protected mode", 300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
-        time.sleep(25)
+        box.up()                         # the desktop, off kernel state
         box.capture()
-        os88bochs.dbl(591, 105)          # B:
-        time.sleep(10)
+        box.dbl(591, 105, "B:'s Disk window")
+        pos = [os.path.getsize(box.e9)]
 
-        def step(name, act, settle=True):
-            n0 = os.path.getsize(box.e9)
+        def step(name, act, settle=True, run=0.0, fsx=None):
+            # SETTLE was QUIET s of no E9 line - 8 s a step on a clean run,
+            # whatever the game was doing. It is the UI task done with the
+            # input now (the game's worker draws for ever, so the gfx lock is
+            # not asked); RUN keeps a fixed window where the frames ARE the
+            # census (the timedemo). The windows tile the whole run.
+            # Into or out of the fullscreen bracket (FSX), ui_task is
+            # frozen: the gate is [fsx_task] itself, then (out) the UI done.
             act()
-            if settle:
-                end, last, lt = time.time() + LIMIT, n0, time.time()
-                while time.time() < end:
-                    time.sleep(1)
-                    n = os.path.getsize(box.e9)
-                    if n != last:
-                        last, lt = n, time.time()
-                    elif time.time() - lt >= QUIET:
-                        break
+            try:
+                if fsx is not None:
+                    box.until(lambda: box.in_fsx() == fsx, "the bracket to "
+                              + ("open" if fsx else "close"), LIMIT)
+                if settle and not fsx:
+                    box.ui_done("the game to take " + name, secs=LIMIT,
+                                lock=False)
+            except RuntimeError as e:       # a FAULT: reported from E9
+                print("pxsmega: %s" % e)
+            time.sleep(run)
             with open(box.e9, "rb") as f:
-                f.seek(n0)
-                new = f.read().decode("latin-1").splitlines()
+                f.seek(pos[0])
+                t = f.read()
+            t = t[:t.rfind(b"\n") + 1]
+            pos[0] += len(t)
+            new = t.decode("latin-1").splitlines()
             traps = [l for l in new if l.startswith("T ")]
             fault = [l for l in new if l.startswith("kern_mega FAULT")]
             sites = collections.Counter(" ".join(l.split()[2:3] + l.split()[5:6])
                                         for l in traps)
-            os88bochs.shot(os.path.join(out, "%02d-%s.png"
+            box.shot(os.path.join(out, "%02d-%s.png"
                                         % (len(counts), name.split()[0])))
             counts[name] = len(traps)
             print("pxsmega: %-34s %6d traps%s %s" % (
@@ -128,20 +138,22 @@ def main():
                              "(tools/megatraps.py %s)"
                              % (name, len(traps), traps[0], box.e9))
 
-        step("launch (double-click)", lambda: os88bochs.dbl(165, 123))
-        step("timedemo (T, fullscreen)", lambda: tap("t"))
-        step("leave the bracket (Esc)", lambda: tap("Escape"))
+        step("launch (double-click)", lambda: box.dbl(165, 123, lock=False))
+        step("timedemo (T, fullscreen)", lambda: tap("t"), run=QUIET,
+             fsx=True)
+        step("leave the bracket (Esc)", lambda: tap("Escape"), fsx=False)
         step("new game (Space, window)", lambda: tap("space"))
         step("walk (Up 4s)", lambda: held("Up", 4.0), settle=False)
         step("turn (Left 3s, Right 2s)",
              lambda: (held("Left", 3.0), held("Right", 2.0)), settle=False)
         step("shoot (Ctrl x3)", lambda: tap("Control_L", 3), settle=False)
-        step("fullscreen (F)", lambda: tap("f"))
+        step("fullscreen (F)", lambda: tap("f"), fsx=True, run=1.0)
         step("walk fullscreen (Up 3s)", lambda: held("Up", 3.0), settle=False)
         step("turn fullscreen (Left 3s)", lambda: held("Left", 3.0), settle=False)
         step("shoot fullscreen (Ctrl x3)", lambda: tap("Control_L", 3),
              settle=False)
-        step("back to the window (Esc)", lambda: tap("Escape"))
+        step("back to the window (Esc)", lambda: tap("Escape"), run=2.0,
+             fsx=False)
     finally:
         box.stop()
     print("pxsmega: %d steps, %d trap lines, %.0fs under Bochs"

@@ -112,6 +112,24 @@ def modex_weapon(g, page):
     return sum(1 for b in out if b != 0x08), bytes(out)
 
 
+def still_weapons(g):
+    """modex_weapon for BOTH pages, read with the worker STOPPED BETWEEN
+    FRAMES and nothing owed (pxslib's hold/drawn), then run on. Read off a
+    running guest, a frame in flight - the ammo poke's own bar change
+    (px_hudd), or the catch-up frame px_weapon_draw owes the other page -
+    is caught half composed: the page being drawn shows the walls and
+    ground re-laid under the weapon and not yet the weapon over them. That
+    read 3 to 43 cells "off the reference" on whichever page px_spg named,
+    about one run in three on every tree back to the row's own, while both
+    pages were right once the frame ended."""
+    g.hold()
+    if g.owed():
+        g.drawn()
+    out = [modex_weapon(g, p) for p in (0, 1)]
+    g.m.run()
+    return out
+
+
 def rest_weapon(g):
     """{offset in modex_weapon's rect: byte} for the cells the pistol's REST
     frame writes, off the reference renderer (tools/pxssim.py draw_weapon,
@@ -167,8 +185,9 @@ def main():
     ap.add_argument("--apps", default="build/games360.img")
     a = ap.parse_args()
     os.chdir(ROOT)
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
-        g = pxslib.open_game(m)
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        g = pxslib.open_game(m)         # runs it, gates on kernel_up
         g.sim(False)
         g.god(True)
         g.scene("a")
@@ -257,12 +276,12 @@ def main():
             g.force()                       # ...and on the OTHER: both show
             g.wait_frames(1)                # the weapon at rest
             ticks(g, 6)
-            before = [modex_weapon(g, p) for p in (0, 1)]
+            before = still_weapons(g)
             g.m.key("ControlLeft", down=True, up=False)
             ticks(g, 3)
             g.m.key("ControlLeft", down=False, up=True)
             ticks(g, 40)
-            after = [modex_weapon(g, p) for p in (0, 1)]
+            after = still_weapons(g)
             print("   Mode X, a shot then 40 still ticks: the weapon's lit bytes page 0 "
                   "%d -> %d, page 1 %d -> %d (ammo %d)" % (before[0][0], after[0][0],
                                                         before[1][0], after[1][0],

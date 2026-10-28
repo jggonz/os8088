@@ -212,6 +212,7 @@ mro_play:
     jne .nsb                        ; then the card exactly as the synth has
     call mwt_load                   ; it - mrb_start opens whichever
     jc .no
+    call mwt_pin                    ; ...pinned for the play (105.10.1)
 .card:
     call mrb_start
     jc .no
@@ -230,6 +231,7 @@ mro_play:
     clc
     jmp short .out
 .no:
+    call mwt_decl                   ; nothing plays: movable again
     mov byte [mr_out], MRO_NONE
     mov byte [mr_state], MR_ST_STOP
     stc
@@ -410,11 +412,15 @@ mro_close:
     mov byte [mrk_on], 0            ; the speaker's (or Covox's) session is
     call mrk_rfree                  ; over, and its ring given back (a PAUSED
 .done:                              ; one still held it)
+    call mwt_decl                   ; no play open: the bank may move
     mov byte [mr_out], MRO_NONE
     mov byte [mr_ended], 0
     mov byte [mr_tail], 0
     pop ax
     ret
+    db 0x90                         ; PARITY: never run - the worker, the
+                                    ; sequencer and the synth below keep the
+                                    ; even shift they were measured at
 
 ; mro_clock0 - the FM/tone clock starts now
 mro_clock0:

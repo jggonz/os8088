@@ -73,7 +73,7 @@ def check(ok, what, saw=""):
 
 
 def main():
-    with os88ui.boot(SYS, apps=APPS) as ui:
+    with os88ui.boot(SYS, apps=APPS, quick=True) as ui:   # gate on state
         m = ui.m
         if "stops" not in m.status():
             print("  FAIL this martypc_headless predates the stop sequence "

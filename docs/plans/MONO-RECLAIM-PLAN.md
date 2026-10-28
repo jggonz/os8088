@@ -1,5 +1,14 @@
 # The VGA code a mono machine cannot use — reclaimed on `kern_small`, reused on `kern_big`
 
+> **kern_big's half is now ANSWERED THE OTHER WAY - by
+> docs/plans/MOVABLE-COLD-PLAN.md (SPEC.md 2.10.9).** §3 below refused a rung
+> of its own because it made every call to the VGA code far. A rung placed
+> between LOW and `.cold` is inside KERNEL_SEG's window, so the calls stay
+> near, and a machine with neither a VGA nor an EGA slides `.cold` down over
+> it at boot: 2,048 bytes back on CGA, Hercules and MDA at build 474. The
+> "no customer" question below is therefore moot on kern_big - the bytes go
+> back to the heap instead of being reused in place.
+>
 > **STILL OPEN - and "nothing here is built" below is no longer true.** The
 > RECLAIM half happened; the REUSE half is what is outstanding, and it is the
 > half this file is still open for.

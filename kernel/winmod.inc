@@ -168,8 +168,19 @@ wnx_set:
 .l:
     cs lodsw
     cmp ax, WN_SELF             ; the pad table names THIS segment by a token,
+%ifdef ROM_ADOPT
+    jne .nself                  ; because no `dw` can know where the image
+%else
     jne .w                      ; because no `dw` can know where the image
+%endif
     mov ax, cs                  ; will be loaded
+%ifdef ROM_ADOPT
+    jmp short .w
+.nself:
+    cmp ax, WN_COLD             ; ...and the kernel's table names `.cold` by
+    jne .w                      ; one, because it may not be where it was
+    mov ax, [api_coldseg]       ; built (mod_cfix's rule, MOVABLE-COLD-PLAN 4)
+%endif
 .w:
     mov [di], ax
     inc di
@@ -183,6 +194,7 @@ wnx_set:
     retf
 
 WN_SELF     equ 0xFFFF          ; a segment no claim can have: the IVT's top
+WN_COLD     equ 0xFFFE          ; ...and `.cold`'s, whatever [api_coldseg] says
 wnp_tab:
     dw wn_title,  WN_SELF
     dw wn_hit,    WN_SELF
@@ -194,7 +206,11 @@ wnr_tab:
     dw wm_hit_ttl_b,        KERNEL_SEG
     dw wm_grow_paint.glyph, KERNEL_SEG
     dw cw_kretf,            KERNEL_SEG
+%ifdef ROM_ADOPT
+    dw wmz_crect_b,         WN_COLD
+%else
     dw wmz_crect_b,         COLD_SEG
+%endif
 %if (wnr_tab - wnp_tab) != THV_N * 4 || ($ - wnr_tab) != THV_N * 4
   %error "WIN95.DRV's two tables and thv disagree"
 %endif

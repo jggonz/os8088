@@ -124,7 +124,7 @@ def main():
         tx0 = (tg.stride - g.wb) // 2
         rows_at = [tg.base[y + ty0] + tx0 for y in range(g.h)]
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=machine) as ui:
+                         machine=machine, quick=True) as ui:
             m = ui.m
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
@@ -142,7 +142,7 @@ def main():
 
             def wait(cond, what, guest=60.0):
                 try:
-                    os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                    os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                     guest=guest)
                 except os88marty.MartyError as e:
                     raise Stop("%s never happened (%s)" % (

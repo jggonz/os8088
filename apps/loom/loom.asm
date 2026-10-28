@@ -85,6 +85,10 @@
 %define CC_HAS_FDLG                 ; void os88_onfile(...) - File > Open and
                                     ; File > New Project..., which are the two
                                     ; halves of WEAVE-SPEC 1.5's second route
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned, unsigned) -
+                                    ; the source buffer, Preview's two pack
+                                    ; claims and the preview module MOVE
+                                    ; (WEAVE-SPEC 1.2.6)
 %define CC_HAS_ONCLOSE              ; int os88_onclose(void *) - SPEC.md 75.1's
                                     ; negotiator. A modified source is the one
                                     ; thing in this program that cannot be

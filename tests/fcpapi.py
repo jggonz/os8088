@@ -124,7 +124,9 @@ def main():
     # boot the shipped one would see it.
     shutil.copyfile(_at(GATE), _at(SCRATCH))
 
-    with os88ui.boot(SYS, apps=SCRATCH) as ui:
+    with os88ui.boot(SYS, apps=SCRATCH,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         # A LONGER WAIT, WITH THE REASON THE MESSAGE ASKS FOR: this package
         # does every one of its checks INSIDE ITS ENTRY, and a window is not
         # up until the entry returns. Five copies, reads and writes is tens of

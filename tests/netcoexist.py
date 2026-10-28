@@ -71,6 +71,7 @@ import os88build                                            # noqa: E402
 import os88geom as geom                                     # noqa: E402
 import os88ui                                               # noqa: E402
 import xmcheck                                              # noqa: E402
+import os88qemu                                             # noqa: E402
 import ethernet                                             # noqa: E402
 import rdpreserve as rp                                     # noqa: E402
 from rdxms import Machine, menu_pick                        # noqa: E402
@@ -184,8 +185,18 @@ def pin_session(q, arm, row_seg, sysimg):
     check(arm, rec == (1, bytes([PIN_2A0])),
           "SYSTEM.CFG, read on the host, carries 'EP' ver 1 = %02Xh (%r)"
           % (PIN_2A0, rec))
+    # THE RESET, AND PROOF OF IT. RAM survives a reset, so the old kernel's
+    # desktop words still read "up" until the new boot writes them - and
+    # this was a host `time.sleep(1.0)` and then wait_desktop, which on a
+    # starved guest could find the OLD desktop still standing and read the
+    # old drv_tab (docs/plans/SOAK-PARALLEL.md 17.9). So the two words
+    # os88qemu.kernel_up gates on are zeroed first (os88qemu.poke holds the
+    # guest for the write), and the caller's wait is kernel_up's.
+    for name in ("desk_rows", "menu_nbar"):
+        os88qemu.poke(q.hmp, S(name), b"\0\0")
     q.hmp("system_reset")
-    time.sleep(1.0)
+    if not os88qemu.kernel_up(q, S, what="the desktop after the reset"):
+        check(arm, False, "the machine came back to a desktop after the reset")
 
 
 def cfg_record(raw, key):

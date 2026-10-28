@@ -776,6 +776,11 @@ sc_entry:
     pop es
     pop di
     pop cx
+    push ax                         ; ...and all three MOVE (SPEC.md 95.14,
+    mov ax, sc_reloc                ; WORD's 68.3.2). Declared once all three
+    call sc_dmov                    ; exist: nothing points into any of them
+    pop ax                          ; yet, and a compaction inside the second
+                                    ; or third claim found the first pinned
     mov word [sc_papn], 1
     mov word [sc_capkb], SC_KB0
     mov word [sc_cap], SC_KB0 * 1024
@@ -1880,6 +1885,59 @@ sc_ctcalc:
     ret
 
 ; -----------------------------------------------------------------------------
+; sc_rebase - move every SCREEN rect Scribe banked to where the window IS NOW
+; in:  AX/DX = the live content origin, [sc_cl]/[sc_ct] = the one the rects
+;      were laid out against (sc_bounds, before it banks the new one);
+;      preserves all registers
+;
+; A window dragged by its title is REPLAYED, not painted (SPEC.md 11.96.12.0),
+; so the About card and its OK, a dialog's corner, an open menu's or combo's
+; panel and its anchor all named where the window WAS - a press on any of
+; them answered nothing, or the wrong thing, until something repainted.
+; Every one of them was laid out against the origin sc_bounds banked, and
+; sc_bounds is the first thing every handler runs, so the live origin less
+; that one is exactly what each owes - the same delta skies' cs_regeo takes.
+; Closed ones shift too and harmlessly: each is rewritten whole when it next
+; opens or paints.
+; -----------------------------------------------------------------------------
+sc_rebase:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    sub ax, [sc_cl]
+    sub dx, [sc_ct]
+    mov cx, ax
+    or cx, dx
+    jz .out                         ; not moved: nothing owed
+    mov si, sc_rbrects
+    mov cx, SC_RBN
+.r:
+    mov di, [si]                    ; a 4-word inclusive rect: x1 y1 x2 y2
+    add [di], ax
+    add [di+2], dx
+    add [di+4], ax
+    add [di+6], dx
+    inc si
+    inc si
+    loop .r
+    add [sc_dlgx], ax               ; the open dialog's corner...
+    add [sc_dlgy], dx
+    add [sc_max], ax                ; ...and where a combo's dropdown hangs
+    add [sc_may], dx
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+sc_rbrects:
+    dw sc_mrx1, sc_mabox, sc_abrect, sc_abok, sc_dlrect
+SC_RBN equ ($ - sc_rbrects) / 2
+
+; -----------------------------------------------------------------------------
 ; sc_bounds - the content rectangle and the text origin, from the live record
 ; in:  SI = window ptr, ES = KERNEL_SEG (as every callback is entered)
 ; out: [sc_tx] = the wrap column and left margin, [sc_ty] = the first text
@@ -1897,6 +1955,7 @@ sc_bounds:
     push dx
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    call sc_rebase                  ; the rects banked at the OLD one follow
     mov [sc_cl], ax                 ; the content box, banked for every chrome
     mov [sc_ct], dx                 ; painter and hit test (SPEC.md 68.2) -
                                     ; read here once, exactly like sc_tx/sc_ty
@@ -4749,10 +4808,19 @@ sc_itinit:
     push si
     push di
     push es
+    xor ax, ax                      ; PIN THE DOCUMENT across this claim
+    call sc_dmov                    ; (SPEC.md 95.14, 68.3.2): we are inside
+                                    ; a sc_walk, which holds ES = [sc_dseg]
+                                    ; for the whole of its pass, and the
+                                    ; claim below may compact
     mov ax, SC_ITKB                 ; the table AND the staging area
     call OSAPI_MEM_CLAIM
-    jc .fail
+    jc .let
     mov [sc_iseg], dx
+.let:
+    mov ax, sc_reloc                ; ...and let them all move again, the
+    call sc_dmov                    ; table with them. Flags kept: CF is the
+    jc .fail                        ; claim's verdict
     call OSAPI_FONT_GLYPHS          ; DX:SI = the kernel's table (NOT in
     mov [sc_itsg], dx               ; KERNEL_SEG - read through ES = DX)
     mov [sc_itso], si
@@ -6962,6 +7030,96 @@ sc_hirechk:
 ; =============================================================================
 ; The document claim (SPEC.md 27.6/50.3)
 ; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sc_reloc - the compactor moved one of the document's claims (SPEC.md 95.14)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing (mem_reloc_call banks every register, SPEC.md 66.3 rule 1)
+;
+; WORD's wd_reloc (SPEC.md 68.3.2) plus what the fork added: the PICTURES.
+; Each picture is a claim of its own, named by the segment word of its
+; sc_pictab slot and by nothing else - the CHP byte of its SC_PICCH is the
+; INDEX, so a move is one store there too. Every slot is visited, live or
+; not: a slot past [sc_npic] holds a freed picture's old segment, and
+; patching one is harmless where stopping at it would miss the live one.
+;
+; THREE COPIES OF A PICTURE'S SEGMENT ARE NOT HERE, on purpose: [sc_dpicsg]
+; (the .DOC reader's and writer's picture in hand), [sc_rpg] (the RTF
+; writer's) and sc_imgblk's IMG_DSTSEG (Insert > Picture's decode target).
+; Each is live only across a stretch that claims nothing - the reader stores
+; [sc_dpicsg] AFTER its claim returns, and the two writers run inside a save
+; whose only claim is the staging buffer, made before either is loaded - so
+; no compaction can fall inside one (SPEC.md 95.14).
+; -----------------------------------------------------------------------------
+sc_reloc:
+    mov si, sc_rltab
+.n:
+    mov di, [si]
+    inc si
+    inc si
+    or di, di
+    jz .pics
+    cmp bx, [di]
+    jne .n
+    mov [di], dx
+.pics:
+    mov si, sc_pictab + 6           ; each slot's segment word (w, h, stride,
+    mov cx, SC_PICMAX               ; SEGMENT - SC_PICREC)
+.p:
+    cmp bx, [si]
+    jne .pn
+    mov [si], dx
+.pn:
+    add si, SC_PICREC
+    loop .p
+    ret
+
+sc_rltab:   dw sc_dseg, sc_cseg, sc_pseg, sc_iseg, sc_useg, sc_cuseg, 0
+
+; -----------------------------------------------------------------------------
+; sc_dmov - AX = sc_reloc to let the document's claims move, AX = 0 to PIN
+;           them (SPEC.md 95.14; wd_dmov's twin, 68.3.2)
+; out: nothing; every register AND the flags preserved
+;
+; The six fixed claims only. The pictures are not pinned here because the
+; one place this is used - sc_itinit, inside a walk - holds the DOCUMENT in
+; ES and no picture: sc_picdraw loads a picture's segment, blits it and is
+; done before anything else runs.
+; -----------------------------------------------------------------------------
+sc_dmov:
+    pushf
+    push dx
+    push si
+    push di
+    mov si, sc_rltab
+.n:
+    mov di, [si]
+    inc si
+    inc si
+    or di, di
+    jz .out
+    mov dx, [di]
+    or dx, dx
+    jz .n
+    call OSAPI_MEM_MOVABLE          ; preserves every register but the CF
+    jmp short .n
+.out:
+    pop di
+    pop si
+    pop dx
+    popf
+    ret
+
+; sc_picmov - DX = a picture claim just entered in sc_pictab: it MOVES
+; (SPEC.md 95.14). Every register and the flags preserved.
+sc_picmov:
+    pushf
+    push ax
+    mov ax, sc_reloc
+    call OSAPI_MEM_MOVABLE
+    pop ax
+    popf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sc_resize - make the document claim AX kilobytes
@@ -11242,6 +11400,12 @@ sc_ugrow:
     jc .cfail0
     mov [sc_cuseg], dx
     mov [sc_ukb], ax
+    push ax                     ; ...and both MOVE (SPEC.md 95.14): every
+    mov ax, sc_reloc            ; record indexes them by OFFSET, and a regrow
+    call OSAPI_MEM_MOVABLE      ; below carries the declaration with the
+    mov dx, [sc_useg]           ; block (SPEC.md 50.3.1), so this is the
+    call OSAPI_MEM_MOVABLE      ; only place it is made
+    pop ax
     jmp short .yes
 .cfail0:
     mov dx, [sc_useg]           ; the half-claimed pair is no arena at all
@@ -16523,6 +16687,7 @@ sc_mkey:
     push di
     cmp word [sc_dlg], 0            ; the dialog is modal (SPEC.md 68.3):
     je .nodlg                       ; Enter fires OK, Esc cancels, a letter
+    call sc_bounds                  ; (where the window IS: sc_rebase)
     call sc_dgkey                   ; toggles its box, and nothing leaks
     jmp .cons
 .nodlg:
@@ -16536,6 +16701,7 @@ sc_mkey:
     je .abx
     jmp .cons                       ; everything else bounces off the modal
 .abx:
+    call sc_bounds                  ; the card's rect where the window IS
     call sc_abclose
     jmp .cons
 .noab:
@@ -16564,6 +16730,7 @@ sc_mkey:
     call sc_mopenm                  ; opened sticky, no highlight yet
     jmp .cons
 .open:
+    call sc_bounds                  ; the panel's rect where the window IS
     cmp al, 27
     je .close
     cmp al, 13
@@ -16937,6 +17104,7 @@ sc_pictkeep:
     mov [bx+sc_pictab+4], ax
     mov [bx+sc_pictab+6], dx
     inc word [sc_npic]
+    call sc_picmov                  ; the picture's now, and it MOVES (95.14)
     clc
     jmp short .out
 .no:
@@ -20232,7 +20400,7 @@ section .text
 ; is not defined yet. DOS_BTREC_SZ in apps/dos/dos.asm is the same
 ; mirror for the same reason; the %if below the include is what stops
 ; either copy drifting.
-SC_BTREC_SZ equ 24
+SC_BTREC_SZ equ 18
 
 %macro SCVAR 2                      ; name, size in bytes
     %1 equ os88_image_end + SCB

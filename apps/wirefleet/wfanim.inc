@@ -34,7 +34,9 @@ wf_fx_need:
     mov al, WF_P_FX
     call op_seg
     mov [wf_fxseg], ax
-    cmp byte [wf_monochrome], 0
+    mov al, WF_P_FX             ; ...and it may MOVE now that the word is
+    call op_movable             ; banked (SPEC.md 20.12.12): wf_partsmv
+    cmp byte [wf_monochrome], 0 ; re-reads it
     jne .out
     call wf_fxplanarinit
 .out:
@@ -95,6 +97,9 @@ wf_fxplanarinit:
     pop cx
     loop .row
     pop word [wf_pdest]
+    mov dx, [wf_fxpseg]         ; FILLED, so it may move (SPEC.md 66.2):
+    mov ax, wf_fxpmv            ; [wf_fxpseg] is the only word naming it
+    call OSAPI_MEM_MOVABLE
 .done:
     pop es
     pop di
