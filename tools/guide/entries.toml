@@ -835,6 +835,54 @@ kind = "music"
 summary = "A ten-second original demo song as an MP3, 22.05 kHz stereo at 40 kbps. Plays in XTMP3."
 short = "XTMP3 demo, half-rate stereo"
 
+["FURELISE.WAV"]
+title = "Für Elise"
+kind = "music"
+summary = "Beethoven's Für Elise, the opening twelve seconds, played by V Gao and released into the public domain (CC0). 8-bit mono at 11,025 Hz. Opens in WaveRack."
+short = "Beethoven, for WaveRack"
+
+["MAPLELF.WAV"]
+title = "Maple Leaf Rag"
+kind = "music"
+summary = "Twelve seconds of Scott Joplin's Maple Leaf Rag as the United States Marine Band recorded it in 1906, one of its earliest recordings. Public domain. 8-bit mono at 11,025 Hz. Opens in WaveRack."
+short = "Joplin, 1906, for WaveRack"
+
+["GYMNO.WAV"]
+title = "Gymnopédie No. 1"
+kind = "music"
+summary = "Twelve seconds of Erik Satie's first Gymnopédie, released into the public domain (CC0) by its performer. 8-bit mono at 11,025 Hz. Opens in WaveRack."
+short = "Satie, for WaveRack"
+
+["MARCH.WAV"]
+title = "The Stars and Stripes Forever"
+kind = "music"
+summary = "Twenty-four seconds of Sousa's march played by the United States Air Force Band of Mid-America, a public-domain recording. 8-bit mono at 11,025 Hz. Opens in WaveRack."
+short = "Sousa, for WaveRack"
+
+["NOCTURNE.WAV"]
+title = "Nocturne Op. 9 No. 2"
+kind = "music"
+summary = "Eight seconds of Chopin's E-flat nocturne, recorded by Peter Johnston for Musopen (CC0), at 22,050 Hz to show WaveRack playing a faster rate. Opens in WaveRack."
+short = "Chopin, 22 kHz, for WaveRack"
+
+["PRELUDE.WAV"]
+title = "Prelude in C major"
+kind = "music"
+summary = "Three seconds of Bach's first prelude from Kimiko Ishizaka's Open Well-Tempered Clavier (CC0), in 16-bit stereo: WaveRack mixes it down as it plays. Opens in WaveRack."
+short = "Bach, 16-bit stereo, for WaveRack"
+
+["CREDITS.TXT"]
+title = "WaveRack clip credits"
+kind = "document"
+summary = "Where each of WaveRack's demo clips comes from: the work, the composer, the performer, the licence (public domain or CC0) and the Wikimedia Commons page it was taken from."
+short = "Sources and licences of the clips"
+
+["CLIPS.TXT"]
+title = "WaveRack clips on this disk"
+kind = "document"
+summary = "Which of WaveRack's demo clips this size of disk carries, and which only the larger disks have."
+short = "The clips on this disk"
+
 ["AFTERHRS.MP3"]
 title = "After Hours"
 kind = "music"

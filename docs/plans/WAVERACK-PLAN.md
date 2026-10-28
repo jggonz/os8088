@@ -918,16 +918,18 @@ microphone and the sound itself are hardware (US-12's last table).
 make                         # every image; WAVERACK.O88 on the 1.44 MB and 1.2 MB apps disks (APPS/)
 make waverack                # the package alone (build/waverack.o88)
 make waverackfix             # build/wrfix.img: WaveRack and every wrsim fixture WAV in MEDIA/
+make waverackdisk            # build/waverack{,120,720,360}.img: WaveRack's own disk, six PD/CC0 music clips
 make waverackhd              # build/WAVERACK-MFM.img: the whole install on an ST-225 + long WAVs in MEDIA/
 make xt-waverack             # 86Box: a 4.77 MHz XT, that disk on a Xebec, a Sound Blaster 2.0 on IRQ 7
 make KERN_SMALL=1 BUILD=...  # kern_small leaves WaveRack off (SMALLOMIT: no SOUND.DRV there)
 ```
 
 **The disks that carry it**: the 1.44 MB and 1.2 MB apps disks, the
-everything set (`make allapps`) and the live media (`make live`). Not the
-720 KB apps disk (full, §24.6.1's 2026-10-25 note) and **no 360 KB disk**:
-§123.13's 360 KB note says what does not fit where and leaves the choice to
-the owner. An XT reaches it through a hard disk: `make waverackhd`.
+everything set (`make allapps`), the live media (`make live`, with the six
+clips in MEDIA/) and **its own disk in all four geometries** (`make
+waverackdisk`, wave 7: the 360 KB one is its 360 KB home, two clips and room
+to record). Not the 720 KB or 360 KB apps disks. An XT also reaches it
+through a hard disk: `make waverackhd`, whose MEDIA/ carries the clips too.
 
 **The machine to listen on**: `make xt-waverack`. It is `vm/xt-mfm`
 (an ibmxt86 at 4.77 MHz, 640 KB, VGA, an ST-225 on a Xebec) with
@@ -1002,6 +1004,27 @@ declaration, exempted with the code that would break.
 **The listening machine** runs its disk at 86Box's `ST225` speed preset
 (`vm/pc5150`'s): real seek and rotation, where the owner first heard the
 stall.
+
+## Wave 7 — its own disk, with real music
+
+The owner asked for a dedicated application disk with demo WAVs from online
+music clips. Six excerpts of Wikimedia Commons recordings whose file pages
+say Public Domain or CC0 (each page read on 2026-10-28; nothing CC-BY-SA,
+nothing whose licence covers only the composition): Für Elise (V Gao,
+PD/CC0), the Maple Leaf Rag (US Marine Band, 1906, PD-USGov), Satie's first
+Gymnopédie (Teknopazzo, CC0), The Stars and Stripes Forever (USAF Band of
+Mid-America, PD-USGov), Chopin's Op. 9 No. 2 (Peter Johnston for Musopen,
+CC0) and Bach's BWV 846 prelude (Kimiko Ishizaka, CC0). `tools/os88wrdemo.py`
+fetches them at pinned SHA-256s, decodes with lame and cuts, decimates,
+normalises and dithers them deterministically; the 970 KB of results are
+committed in `apps/waverack/demo/` with CREDITS.TXT, so `make` needs no
+network. `make waverackdisk` builds the disk in four geometries (§123.13); the
+360 KB one answers the 360 KB question, `vm/xt-waverack` carries it in B:,
+and the live media and `make waverackhd`'s disk carry the clips in MEDIA/.
+The merge of `origin/main` (#313-#316) came first; the final pass was run
+again on the merged tree.
+
+![MARCH.WAV open in WaveRack: 24 s of the USAF Band's Stars and Stripes Forever](../waverack/waverack-w7-music.png)
 
 ## Known risks
 

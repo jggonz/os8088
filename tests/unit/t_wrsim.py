@@ -50,4 +50,13 @@ art = subprocess.run([sys.executable, os.path.join(HERE, "..", "..", "tools",
 harness.check(art.returncode == 0, "tools/os88wrart.py --selfcheck",
               why="the art, the layouts, the small caps or a status "
                   "message's length: " + (art.stdout + art.stderr).strip())
+# ...and the DEMO CLIPS (apps/waverack/demo/, tools/os88wrdemo.py): the
+# committed WAVs are the format and length the table pins, and CREDITS.TXT is
+# what the table writes - so a clip re-made or a source re-pinned without its
+# credit fails here, not on somebody's disk (wave 7)
+demo = subprocess.run([sys.executable, os.path.join(HERE, "..", "..", "tools",
+                                                    "os88wrdemo.py"),
+                       "--selfcheck"], capture_output=True, text=True)
+harness.check(demo.returncode == 0, "tools/os88wrdemo.py --selfcheck",
+              why=(demo.stdout + demo.stderr).strip())
 harness.done("t_wrsim")

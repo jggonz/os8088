@@ -313,6 +313,7 @@ make weavedisk                        # weave*.img -- the Weave family's disk,
 make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
 make 1942disk midirackdisk            # 1942*.img, midirack*.img
+make waverackdisk                     # waverack*.img -- WaveRack and its clips
 make pixeldisk                        # pixel.img -- PiXEL with its whole
                                       # gallery, which no software disk has
                                       # room for; the 1.44MB disk alone is

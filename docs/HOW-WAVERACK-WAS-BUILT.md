@@ -825,3 +825,45 @@ the owner spins its ST-225 at 86Box's modelled speed, seeks and rotation
 included, which is where the stall was first heard. What remains is what
 only hardware can say: a microphone's sound, the gain heard, and a real
 drive's write speed.
+
+## Wave 7 - a disk of its own, with real music
+
+**The story.** The owner asked for WaveRack to have its own floppy, with
+demo WAV files made from real music found online. A recorder with nothing
+to open is a hard thing to show off on a machine that may not have a
+microphone plugged in.
+
+**The licence rule came first.** Only recordings on Wikimedia Commons whose
+file page says Public Domain or CC0 - and the page is read, not just the
+search result. That rule turned some down: a pianola recording of the Maple
+Leaf Rag was marked public domain, but the page's licence was about the 1899
+composition, and the recording itself was taken from a modern YouTube video.
+What qualified was a 1906 recording of the same rag by the United States
+Marine Band, which as a work of the US government is public domain; the
+Stars and Stripes Forever by the US Air Force Band of Mid-America, for the
+same reason; and four performers who gave their recordings away under CC0 -
+V Gao's Für Elise, a Satie Gymnopédie, Peter Johnston's Chopin nocturne for
+Musopen, and Kimiko Ishizaka's Bach prelude from the Open Well-Tempered
+Clavier, a project made to be free.
+
+**No ffmpeg, so the conversion is the tool's own.** The build machine has
+lame, which decodes MP3, and Commons serves an MP3 of every recording. A
+small Python tool fetches each one, checks it against a pinned fingerprint,
+decodes it, and does the rest itself: picks the excerpt, mixes stereo to
+mono, filters and drops to 11,025 or 22,050 samples a second, fades the
+ends, raises the level until the loudest moment is just under full scale,
+and writes 8-bit samples with a touch of random dither so that quiet piano
+does not crunch. The randomness is seeded, so running it again gives the
+same bytes. The finished clips - 970 KB - are committed with a CREDITS.TXT,
+so building os8088 never needs the network.
+
+![A Sousa march, really recorded, open in WaveRack](waverack/waverack-w7-music.png)
+
+**Six clips, four disk sizes.** Four are 8-bit mono at 11,025 Hz, the
+format an XT streams off a floppy without a gap. One is at 22,050 Hz, and
+one is 16-bit stereo, short enough that an XT loads it into memory first
+and plays it from there. The 1.44 MB and 1.2 MB disks carry all six, the
+720 KB disk four (one of each format), and the 360 KB disk two - with 52 KB
+left over to record a short take, at the 8,000 Hz a floppy can keep up
+with. That 360 KB disk is the answer to a question two waves had left open:
+WaveRack finally has a home on the XT's own floppy size.

@@ -6537,6 +6537,19 @@ $(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
 $(BUILD)/waverack.o88: $(BUILD)/waverack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/waverack.bin -o $@
 
+# ...and its DEMO CLIPS (SPEC.md 123.13): real music, short excerpts of
+# Wikimedia Commons recordings whose pages say Public Domain or CC0, made by
+# tools/os88wrdemo.py (fetch + lame + numpy) and COMMITTED in
+# apps/waverack/demo/ with CREDITS.TXT - the Video Player's shape for demo
+# media, so `make` needs no network and no lame. WRCLIPS are all six; a
+# geometry that cannot hold them takes WRCLIPS720 / WRCLIPS360, and its
+# CLIPS.TXT says which (RUNCPM's GAMES.TXT shape)
+WRDEMO := apps/waverack/demo
+WRCLIPS := FURELISE MAPLELF GYMNO MARCH NOCTURNE PRELUDE
+WRCLIPS720 := FURELISE MAPLELF NOCTURNE PRELUDE
+WRCLIPS360 := FURELISE MAPLELF
+WRDEMOWAVS := $(addprefix $(WRDEMO)/,$(addsuffix .WAV,$(WRCLIPS)))
+
 # ...and its FIXTURE DISK (ON DEMAND: `make waverackfix`, never in `all`):
 # a 1.44MB scratch floppy with WAVERACK.O88 at the root and every WAV
 # tools/wrsim.py makes - the reference's fixtures, uncompressed, in MEDIA/
@@ -13504,7 +13517,8 @@ waverackhd: $(WRHD)
 	@ls -l $(WRHD)
 $(WRHD): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
-	$(FACES) $(FACELIC) $(LOGOVID) $$(APPS) tools/wrsim.py tools/os88disk.py
+	$(FACES) $(FACELIC) $(LOGOVID) $$(APPS) $(WRDEMOWAVS) $(WRDEMO)/CREDITS.TXT \
+	tools/wrsim.py tools/os88disk.py
 	rm -rf $(BUILD)/wrhd && mkdir -p $(BUILD)/wrhd/fx
 	python3 tools/wrsim.py --disk-fixtures $(BUILD)/wrhd
 	python3 tools/wrsim.py --fixtures $(BUILD)/wrhd/fx
@@ -13513,7 +13527,8 @@ $(WRHD): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
 		$(VIDDEMO_INSTALL) \
 		$(addprefix MEDIA:$(BUILD)/wrhd/,BIG22.WAV MID11.WAV ST22S.WAV ST22L.WAV) \
-		MEDIA:$(BUILD)/wrhd/fx/LONG.WAV MEDIA:$(BUILD)/wrhd/fx/GOOD/STEREO16.WAV
+		MEDIA:$(BUILD)/wrhd/fx/LONG.WAV MEDIA:$(BUILD)/wrhd/fx/GOOD/STEREO16.WAV \
+		$(addprefix MEDIA:,$(WRDEMOWAVS) $(WRDEMO)/CREDITS.TXT)
 	python3 tools/os88disk.py --verify-hdd $@
 	rm -rf $(BUILD)/wrhd
 
@@ -16998,13 +17013,14 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # everything-floppy's RunCPM fill would pay for them.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
                $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3) \
+               $(WRDEMOWAVS) \
                $(PX_SAMPLES)
 # PiXEL's whole gallery rides the live volume in PICTURES/ (SPEC.md 106.7):
 # the everything sets carry the 360KB selection, which $(ALLAPPSARGS) does not
 # name, so the ten pictures are here once and not twice.
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
-               $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3)) \
+               $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3) $(WRDEMOWAVS)) \
                $(MIDISONGARGS) $(PX_GALLERY)
 $(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
      empty - $(SYSAPPS) and $(APPSYS) no longer differ, so THEWIRE.O88 is \
@@ -18136,7 +18152,7 @@ xt-midirack: $(IMG360) $(BUILD)/midirack360.img $(MIDISF2)
 # THE CARD IS ON IRQ 7, not xt-sound's 5: the Xebec takes IRQ 5, and SOUND.DRV
 # refuses a Sound Blaster there on an XT (SPEC.md 34.5.6) - xt-sound's keys
 # copied as they stand would toast 'IRQ 5 is the hard disk's' and play nothing
-xt-waverack: $(WRHD)
+xt-waverack: $(WRHD) $(BUILD)/waverack360.img
 	@$(UNPROTECT) $(VMXTWR)/86box.cfg
 	$(BOX) -P $(VMXTWR) -N
 
@@ -18178,6 +18194,41 @@ $(BUILD)/midirack360.img: $(MIDIRACKDISKDEPS)
 .PHONY: midirackdisk
 midirackdisk: $(BUILD)/midirack.img $(BUILD)/midirack120.img \
               $(BUILD)/midirack720.img $(BUILD)/midirack360.img
+
+# WAVERACK'S OWN DISK, in all four geometries (SPEC.md 123.13): WAVERACK.O88
+# at the root, the demo clips in MEDIA\ (RAW - WaveRack reads a WAV with
+# READ_SEQ and READ_AT, which deliver a file as it lies, so no clip is
+# wrapped), CREDITS.TXT and a CLIPS.TXT saying which clips this geometry
+# carries, and SYSTEM\APPDATA for the take's recovery table. The 360KB one is
+# WaveRack's 360KB home: the program, two clips and ~50KB left to record a
+# take at 8,000 Hz (a floppy's rate, SPEC.md 123.7); 720KB takes four, the
+# 1.2 and 1.44MB all six. On demand, like midirackdisk
+WRDISKDEPS := $(BUILD)/waverack.o88 $(WRDEMOWAVS) $(WRDEMO)/CREDITS.TXT \
+              tools/os88wrdemo.py tools/os88disk.py tools/checkreadme.py
+# $(call WRDISK,size,clips) - the CLIPS.TXT, then the disk, then its fsck
+define WRDISK
+	@mkdir -p $(BUILD)/wrdisk$(1)
+	python3 tools/os88wrdemo.py clips $(BUILD)/wrdisk$(1)/CLIPS.TXT \
+	    $(addsuffix .WAV,$(2))
+	python3 tools/checkreadme.py $(BUILD)/wrdisk$(1)/CLIPS.TXT
+	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/waverack.o88 \
+	    $(BUILD)/wrdisk$(1)/CLIPS.TXT $(WRDEMO)/CREDITS.TXT \
+	    $(addprefix MEDIA:$(WRDEMO)/,$(addsuffix .WAV,$(2))) \
+	    --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+endef
+$(BUILD)/waverack.img: $(WRDISKDEPS)
+	$(call WRDISK,1440,$(WRCLIPS))
+$(BUILD)/waverack120.img: $(WRDISKDEPS)
+	$(call WRDISK,1200,$(WRCLIPS))
+$(BUILD)/waverack720.img: $(WRDISKDEPS)
+	$(call WRDISK,720,$(WRCLIPS720))
+$(BUILD)/waverack360.img: $(WRDISKDEPS)
+	$(call WRDISK,360,$(WRCLIPS360))
+
+.PHONY: waverackdisk
+waverackdisk: $(BUILD)/waverack.img $(BUILD)/waverack120.img \
+              $(BUILD)/waverack720.img $(BUILD)/waverack360.img
 
 # THE WIRE'S MACHINE (SPEC.md 92): xt-sound's XT - the 1986 board, 640KB, an
 # OTI-067 and the SB 2.0 - with a Novell NE1000 on 86Box's slirp. The NE1000

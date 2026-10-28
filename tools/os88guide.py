@@ -105,6 +105,7 @@ BLURB = {
     "1942": "Air combat after the arcade game. Needs VGA or CGA.",
     "REDLINE": "A benchmark that scores your PC against a 4.77 MHz IBM PC.",
     "MIDIRack": "A MIDI music player with ten songs.",
+    "WaveRack": "A sound recorder and WAV editor with six clips of real music.",
     "PiXEL": "An image viewer and editor, with sample pictures.",
     "XTMP3": "An MP3 player for every PC, with three demo songs.",
     "Weave": "Weave apps, ready to run.",

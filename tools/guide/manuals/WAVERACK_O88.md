@@ -15,8 +15,13 @@ and nothing you edit changes the original file until you save.
 
 ## Starting WaveRack
 
-WaveRack is in the `APPS` folder of the 1.44MB and 1.2MB software disks.
-Double-click **WAVERACK.O88**; several can be open at once. Open a WAV with
+WaveRack is in the `APPS` folder of the 1.44MB and 1.2MB software disks,
+and on a disk of its own at every size, with clips of real music to open in
+its `MEDIA` folder: Für Elise, the Maple Leaf Rag, a Gymnopédie, a Sousa
+march, a Chopin nocturne and a Bach prelude, all public domain or CC0 (the
+disk's `CREDITS.TXT` says where each comes from). The 360KB and 720KB disks
+carry fewer of them, and their `CLIPS.TXT` says which. Double-click
+**WAVERACK.O88**; several can be open at once. Open a WAV with
 **File > Open...** or the **OPEN** key. Double-clicking a `.WAV` file opens
 the Audio Player, not WaveRack.
 
@@ -206,8 +211,8 @@ a one-colour screen the theme is black and white.
 
 ## Good to know
 
-- WaveRack is on the 1.44MB and 1.2MB software disks, not on the 720KB or
-  360KB ones.
+- WaveRack is on the 1.44MB and 1.2MB software disks and on its own disk
+  at every size; the 720KB and 360KB software disks do not carry it.
 - Recording at 11,025 Hz onto a hard disk leaves an XT more than half its
   time, so the desktop stays usable while you record.
 - A take on a hard disk keeps going while you open menus and other windows;

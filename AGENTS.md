@@ -374,6 +374,14 @@ make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   demo bundles and the demo SOURCES on one floppy in all
                 #   four geometries, in the same two folders as `make
                 #   weavedisk`, which is the same shape plus `CATALOG.TXT`
+make waverackdisk # WAVERACK (§123.13): its own floppy in all four
+                  #   geometries - WAVERACK.O88, six public-domain and CC0
+                  #   music clips in MEDIA/ (COMMITTED in apps/waverack/demo/,
+                  #   made by tools/os88wrdemo.py from Wikimedia Commons with
+                  #   lame and numpy), CREDITS.TXT and a CLIPS.TXT per
+                  #   geometry; the 360KB one is WaveRack's 360KB home.
+                  #   `make waverackhd` is the XT's hard disk that
+                  #   `make xt-waverack` boots
 make viddemo    # the VIDEO PLAYER (§98, apps/video/): VIDEO.O88 ships on
 make vencbundle #   every apps disk and plays `.V88` files, made on the host
                 #   by tools/os88venc.py or by the encoder's own window,
@@ -728,7 +736,7 @@ midirackdisk`'s floppy - player, wavetable bank, songs - in B:),
 `xt-waverack` (WaveRack's, SPEC.md §123.6-123.7: `xt-mfm`'s 4.77MHz XT
 and ST-225 on a Xebec with `xt-sound`'s Sound Blaster 2.0 added - on IRQ 7,
 the Xebec owning 5 (§34.5.6) - and A: empty, booting `make waverackhd`'s raw disk - the whole install plus long
-WAVs in `MEDIA/` - to LISTEN to a play going on through disk reads and to
+WAVs and the demo clips in `MEDIA/` - with `make waverackdisk`'s 360KB disk in B:, to LISTEN to a play going on through disk reads and to
 record onto a hard disk, with the disk at 86Box's `ST225` speed preset, so
 seeks and rotation are real where `xt-mfm`'s `ramdisk` has none),
 `xt-xtmp3`, `286-xtmp3`, `386-xtmp3`, `486-xtmp3` and `pentium-xtmp3`
