@@ -556,6 +556,29 @@ FAST = [
         wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
                "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
                "build/sound.drv", "build/mixercfg/SYSTEM.CFG")),
+    Row("waverackrec", "soak", py("tests/waverackrec.py"), 2400.0,
+        "WaveRack RECORDS (SPEC.md 123.7) on MartyPC, whose SB 2.01 ADC "
+        "records a flat 80h, because a take is time: the card writes the "
+        "ring by DMA while disk.inc holds sch_lock across every int 13h. "
+        "Every take is read back off the disk on the host and held to "
+        "tools/wrsim.py's take_header byte for byte, its frames = what "
+        "WaveRack wrote = the card's own count, every byte 80h, no "
+        "overrun. HARD DISK first: 60 s at 11,025 Hz (the tick priced by "
+        "breakpoints; INPUT GAIN's table read out of the ring claim against "
+        "wrsim) and at 15,000 Hz on a VHD of small clusters, a take while a "
+        "second WaveRack scans 2 MB (and does not offer the live take), "
+        "Pause and Record again (the frames are the two streams summed), "
+        "and a take killed with the machine: unfinished on the VHD, then "
+        "File > Recover Take on the next boot opens it dirty and marks "
+        "WAVERACK.TAK done. 32 KB CLUSTERS (a VGA XT, os88hdd.py --spc 64): "
+        "both rates, the header one cluster, the face photographed. FLOPPY "
+        "second: 30 s onto 1.44 MB, then DISK FULL (the take kept, whole "
+        "writes). And QEMU's SB16: 'No input from the card', no file left",
+        needs=("marty", "qemu", "nasm"), serial=True, timeout=5400,
+        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
+               "build/wrfix.img")),
     Row("xtmp3eng", "soak", py("tests/xtmp3eng.py"), 1200.0,
         "XTMP3's engine (SPEC.md 121.5-121.7, docs/xtmp3/ENGINE.md) over the "
         "STUB backend (`make xtmp3stub`: a tone whose cost a rung is set by "

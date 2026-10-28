@@ -87,7 +87,7 @@ BUTTONS = ['REC', 'STOP', 'PAUSE', 'PLAY', 'OPEN', 'SAVE', 'ZOUT', 'ZIN',
 
 # --- the drop-downs: Input, Rate, Bits, Channels; how many items each holds
 DROPS = ['IN', 'RATE', 'BITS', 'CH']
-DROP_N = [1, 2, 1, 1]
+DROP_N = [1, 3, 1, 1]
 
 # --- the layout record: (field, words), in order. WL_<field> is its offset
 FIELDS = [
@@ -317,7 +317,7 @@ def build_cmp(art, bm):
     # footer row 2: Input, rate, bits, channels, VOLUME, status
     L.text(4, 123, 'Input:')
     drop_set(L, art, 122, 131, [(56, 107), (112, 183), (188, 247), (252, 303)],
-             items=[['Mic'], ['8 kHz', '11 kHz'], ['8-bit'], ['Mono']])
+             items=[['Mic'], ['8 kHz', '11 kHz', '15 kHz'], ['8-bit'], ['Mono']])
     L.caps(312, 124, 'VOL')
     L.f['VSL'] = R(332, 122, 431, 131)
     L.ctl('volume slider', L.f['VSL'])
@@ -431,7 +431,7 @@ def format_row(L, art, y1, y2, loop_txt, input_lbl, drops):
     if input_lbl:
         L.text(166, ty, 'Input:')
     drop_set(L, art, y1, y2, drops,
-             items=[['Microphone'], ['8,000 Hz', '11,025 Hz'], ['8-bit'], ['Mono']])
+             items=[['Microphone'], ['8,000 Hz', '11,025 Hz', '15,000 Hz'], ['8-bit'], ['Mono']])
 
 
 def drop_set(L, art, y1, y2, xs, items):

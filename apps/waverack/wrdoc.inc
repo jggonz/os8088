@@ -921,6 +921,10 @@ wo_div32:
 ; -----------------------------------------------------------------------------
 wo_time:
     mov cx, [wo_rate]
+    ; (falls into wo_timec)
+
+; wo_timec - wo_time at the rate CX (a take's, while there is no document)
+wo_timec:
     jcxz .zero
     mov bx, ax                      ; the seconds: DX:AX / rate, high first
     mov ax, dx

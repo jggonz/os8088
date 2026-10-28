@@ -168,6 +168,7 @@ wr_entry:
     mov byte [wr_vol], 75
     call wt_vbuild                  ; VOLUME's table (SPEC.md 123.6)
     mov byte [wr_rate], 1           ; the next take at 11,025 Hz
+    call wc_probe                   ; a take that never ended: Recover Take
     mov si, wr_s_ready
     call wr_say
     mov word [wd_lp], wrart_l_cmp   ; a layout to stand on before the paint
@@ -272,6 +273,21 @@ wr_prefset:
 ; SPEC.md 123.9, 123.10). Record is a later wave's, refused until it lands.
 ; -----------------------------------------------------------------------------
 wr_cmdok:
+    call wc_active                  ; A TAKE HELD (SPEC.md 123.7): Stop,
+    jc .notake                      ; Pause, Record (pause or resume), the
+    cmp al, C_STOP                  ; theme and the layout; nothing else
+    je .yes
+    cmp al, C_PAUSE
+    je .yes
+    cmp al, C_RECORD
+    je .yes
+    cmp al, C_THEME
+    je .theme
+    cmp al, C_LAYOUT
+    je .layout
+    stc
+    ret
+.notake:
     cmp al, C_LOOP
     je .yes
     cmp al, C_RATE
@@ -298,14 +314,14 @@ wr_cmdok:
     je .pause
     cmp al, C_COPY                  ; Copy: a selection, even under a play
     je .copy
-    cmp al, C_RECORD                ; (Record, Recover Take: wave 5's)
-    je .no
-    cmp al, C_RECOVER
-    je .no
     call wr_asking                  ; every other command waits for a
     jnc .no                         ; question to be answered (the alerts
     cmp byte [ws_busy], 0           ; are not modal: wave 4's review, H2)...
     jne .no                         ; ...and for a save
+    cmp al, C_RECORD                ; Record: a card that captures, the
+    je .record                      ; transport idle, no scan running
+    cmp al, C_RECOVER               ; Recover Take: a take the marker names
+    je .recover
     cmp al, C_PLAY
     je .play
     cmp al, C_PLAYK
@@ -413,6 +429,19 @@ wr_cmdok:
     ret
 .pause:
     jmp wt_active                   ; Pause: a play held
+.record:
+    test word [wr_caps], SND_CAP_PCM_IN
+    jz .no
+    call wt_active
+    jnc .no
+    cmp byte [we_busy], 1
+    je .no
+    clc
+    ret
+.recover:
+    cmp byte [wc_rec], 0
+    je .no
+    jmp wt_idle
 .play:
     call wt_active                  ; Play: a play held (pause, resume)...
     jnc .yes
@@ -420,7 +449,7 @@ wr_cmdok:
     jz .no
     call we_ready
     jc .no
-    jmp short .frames
+    jmp .frames
 .zin:
     call we_ready
     jc .no
@@ -501,6 +530,11 @@ wr_canbig:
 ;              rule 6, 123.2), in wr_cmdok's order. clobbers SI
 ; -----------------------------------------------------------------------------
 wr_explain:
+    call wc_active                  ; a take held: everything but its own
+    jc .notake                      ; keys waits for it
+    mov si, wc_s_stopt              ; 'Stop the take first'
+    jmp .say
+.notake:
     mov si, wr_s_bwonly
     cmp al, C_THEME
     je .say
@@ -515,9 +549,16 @@ wr_explain:
     je .nosel
     cmp al, C_RECORD
     je .rec
-    mov si, wr_s_notyet
-    cmp al, C_RECOVER
+    mov si, wc_s_norec              ; 'No take to recover' (or a question,
+    cmp al, C_RECOVER               ; a save, a play first)
+    jne .nrc
+    cmp byte [wc_rec], 0
     je .say
+    call wr_asking
+    jnc .answer
+    mov si, wr_s_stopfirst
+    jmp .say
+.nrc:
     cmp al, C_CURSOR
     je .nodoc
     cmp al, C_ZIN
@@ -624,10 +665,18 @@ wr_explain:
     mov si, wr_s_nocard
     jmp short .say
 .rec:
-    mov si, wr_s_notyet
-    test word [wr_caps], SND_CAP_PCM_IN
-    jnz .say
-    mov si, wr_s_nocap
+    mov si, wr_s_nocap              ; Record: no capture, a question, a save,
+    test word [wr_caps], SND_CAP_PCM_IN ; a play, a scan
+    jz .say
+    call wr_asking
+    jnc .answer
+    mov si, wr_s_saving
+    cmp byte [ws_busy], 0
+    jne .say
+    mov si, wr_s_stopfirst
+    call wt_active
+    jnc .say
+    mov si, wr_s_busy
     jmp .say
 .view:
     cmp byte [wo_doc], 0            ; no document, still scanning, or the
@@ -651,6 +700,33 @@ wr_explain:
 ; in:  BX = the window. clobbers AX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wr_cmd:
+    call wc_active                  ; A TAKE: Stop ends it, Pause and Record
+    jc .notake                      ; pause and resume it
+    cmp al, C_STOP
+    jne .tk1
+    jmp wc_stop
+.tk1:
+    cmp al, C_THEME
+    je .notake
+    cmp al, C_LAYOUT
+    je .notake
+    cmp byte [wt_state], WT_RPAUSE  ; Pause or Record: the other state
+    jne .tk2
+    jmp wc_resume
+.tk2:
+    jmp wc_pause
+.notake:
+    cmp al, C_RECORD                ; Record: an edited document is asked
+    jne .nrec                       ; about first, as for New and Open
+    mov al, WRQ_REC
+    call wr_ask
+    jc .out
+    jmp wc_go
+.nrec:
+    cmp al, C_RECOVER
+    jne .nrcv
+    jmp wc_recover
+.nrcv:
     mov ah, WRQ_NEW                 ; New and Open: an edited document is
     cmp al, C_NEW                   ; asked about first (wr_ask)
     je .ask
@@ -773,8 +849,12 @@ wr_cmd:
 .n1:
     cmp al, C_RATE
     jne .n2
-    mov al, [wr_rate]
-    xor al, 1
+    mov al, [wr_rate]               ; 8,000 -> 11,025 -> 15,000 -> 8,000
+    inc al
+    cmp al, 3
+    jb .r3
+    xor al, al
+.r3:
     jmp wr_setrate
 .n2:
     cmp al, C_THEME
@@ -961,8 +1041,13 @@ wr_ontimer:
     jmp short .draw
 .play:
     cmp byte [wt_state], WT_PLAY
-    jne .scan
+    jne .rec
     call wt_tick
+    jmp short .draw
+.rec:
+    cmp byte [wt_state], WT_REC     ; a take's tick (wrrec.inc)
+    jne .scan
+    call wc_tick
     jmp short .draw
 .scan:
     cmp byte [we_busy], 1
@@ -1008,6 +1093,13 @@ wr_onwake:
 ; stream closed, so the card is never left running. CF = 0 lets it close
 wr_onclose:
     push si
+    call wc_active                  ; a take: ended, kept, the stream closed
+    jc .notake                      ; before the window goes
+    mov byte [wc_noopen], 1
+    push bx
+    call wc_stop
+    pop bx
+.notake:
     call ws_cancel
     mov al, WRQ_CLOSE
     call wr_ask
@@ -1034,6 +1126,7 @@ wr_onclose:
 WRQ_NEW     equ 1
 WRQ_OPEN    equ 2
 WRQ_CLOSE   equ 3
+WRQ_REC     equ 4                   ; Record replaces the document too
 
 ; -----------------------------------------------------------------------------
 ; wr_ask - AL = WRQ_*: CF = 0 the document is not edited, go ahead; CF = 1 it
@@ -1122,8 +1215,15 @@ wr_onask:
 ; -----------------------------------------------------------------------------
 wr_qrun:
     cmp al, WRQ_OPEN
-    jne .n1
+    jne .n0
     jmp wr_open
+.n0:
+    cmp al, WRQ_REC
+    jne .n1
+    push bx
+    call wc_go
+    pop bx
+    ret
 .n1:
     cmp al, WRQ_CLOSE
     je .close
@@ -1287,17 +1387,16 @@ wr_wcol:
 .in:
     ret
 
-; wr_setrate - the next take's rate, AL = 0 (8,000 Hz) or 1 (11,025 Hz):
-; the drop-down's pick and the status bar follow. clobbers AX, SI
+; wr_setrate - the next take's rate, AL = 0 (8,000 Hz), 1 (11,025 Hz) or 2
+; (15,000 Hz, verb 4's top on a DSP 2.00 or later - SPEC.md 123.7): the
+; drop-down's pick and the status bar follow. clobbers AX, SI
 wr_setrate:
     mov [wr_rate], al
     xor ah, ah
     mov [wr_drops + OS88UI_DR_SIZE + OS88UI_DR_SEL], ax
-    mov si, wr_s_rate8
-    or al, al
-    jz .s
-    mov si, wr_s_rate11
-.s:
+    mov si, ax
+    shl si, 1
+    mov si, [wr_ratesay + si]
     jmp wr_say
 
 ; wr_dropdis - SI = a drop-down 0..3 -> DI = its flags: Input, Bits and
@@ -1368,6 +1467,7 @@ wr_selsaid:
 ; wr_gainset - INPUT GAIN to AL (0..12), said in dB. clobbers AX, SI
 wr_gainset:
     mov [wr_gain], al
+    call wc_gbuild                  ; a take's table follows (keeps all)
     mov si, wr_s_gain               ; 'Input gain +nn dB'
     mov di, wr_tbuf2
     call wr_put
@@ -1514,16 +1614,25 @@ wr_regrey:
 wr_bflag:
     push ax
     mov bx, OS88UI_OWN
-    cmp al, B_PLAY                  ; Play latched while playing, Pause while
-    jne .np                         ; paused (SPEC.md 123.6)
-    cmp byte [wt_state], WT_PLAY
+    cmp al, B_PLAY                  ; Play latched while playing, Record while
+    jne .nr                         ; recording, Pause while either is paused
+    cmp byte [wt_state], WT_PLAY    ; (SPEC.md 123.6, 123.7)
+    jne .nr
+    or bx, OS88UI_LATCH
+.nr:
+    cmp al, B_REC
+    jne .np
+    cmp byte [wt_state], WT_REC
     jne .np
     or bx, OS88UI_LATCH
 .np:
     cmp al, B_PAUSE
     jne .cmd
     cmp byte [wt_state], WT_PPAUSE
+    je .lt
+    cmp byte [wt_state], WT_RPAUSE
     jne .cmd
+.lt:
     or bx, OS88UI_LATCH
 .cmd:
     call wr_bcmd
@@ -1561,6 +1670,7 @@ wr_redraw:
     call wd_origin
     xor dl, dl
     call wf_update
+    call wc_draw                    ; a take's strip: the new columns
 .out:
     ret
 
@@ -1596,6 +1706,7 @@ wr_paint:
     call wf_forget
     mov dl, 1
     call wf_update
+    call wc_drawall                 ; a take's strip, the page again
     pop si
     cmp byte [wr_mode], WRM_ABOUT   ; ...and the About card LAST
     jne .out
@@ -1805,7 +1916,10 @@ wr_hit:
 wr_try:
     call wr_cmdok
     jc .why
-    jmp wr_cmd
+    push bx                         ; (the take's commands clobber BX)
+    call wr_cmd
+    pop bx
+    ret
 .why:
     jmp wr_explain
 
@@ -2074,11 +2188,10 @@ wr_menulive:
     mov si, wr_m_loop1
 .lp:
     mov [wr_items + 2 * C_LOOP], si
-    mov si, wr_m_rate8
-    cmp byte [wr_rate], 0
-    je .rt
-    mov si, wr_m_rate11
-.rt:
+    mov bl, [wr_rate]
+    xor bh, bh
+    shl bx, 1
+    mov si, [wr_ratemenu + bx]
     mov [wr_items + 2 * C_RATE], si
     xor al, al                      ; ...and every item's greying
     mov bx, wr_items
@@ -2193,6 +2306,7 @@ wr_num:
 %include "wrxport.inc"
 %include "wredit.inc"
 %include "wrsave.inc"
+%include "wrrec.inc"
 
 ; =============================================================================
 ; TEXT HELPERS (numbers)
@@ -2416,6 +2530,8 @@ wr_m_loop1: db 'Loop: On  L', 0
 wr_m_rate8: db 'Rate: 8,000 Hz', 0
             db MENU_DIS
 wr_m_rate11: db 'Rate: 11,025 Hz', 0
+            db MENU_DIS
+wr_m_rate15: db 'Rate: 15,000 Hz', 0
 
 ; --- strings ---------------------------------------------------------------------
 wr_s_nofile: db 'NO FILE', 0
@@ -2423,6 +2539,11 @@ wr_s_zero:   db '00:00.00', 0
 wr_s_total:  db '/ 00:00.00', 0
 wr_s_fmt8:   db '8,000 Hz  8-bit  Mono', 0
 wr_s_fmt11:  db '11,025 Hz  8-bit  Mono', 0
+wr_s_fmt15:  db '15,000 Hz  8-bit  Mono', 0
+wr_ratesay:  dw wr_s_rate8, wr_s_rate11, wr_s_rate15
+wr_ratemenu: dw wr_m_rate8, wr_m_rate11, wr_m_rate15
+wr_ratefmt:  dw wr_s_fmt8, wr_s_fmt11, wr_s_fmt15
+wr_rates:    dw 8000, 11025, 15000     ; the take's rate by [wr_rate]
 ; the status bar's (22 characters at most: tools/os88wrlay.py STATUS_MAX)
 wr_s_ready:  db 'Ready', 0
 wr_s_notyet: db 'Not in this build yet', 0
@@ -2436,6 +2557,7 @@ wr_s_loop0:  db 'Loop off', 0
 wr_s_loop1:  db 'Loop on', 0
 wr_s_rate8:  db 'Next take 8,000 Hz', 0
 wr_s_rate11: db 'Next take 11,025 Hz', 0
+wr_s_rate15: db 'Next take 15,000 Hz', 0
 wr_s_gain:   db 'Input gain ', 0
 wr_s_db:     db ' dB', 0
 wr_s_volume: db 'Volume ', 0
@@ -2451,6 +2573,8 @@ wr_s_noplay: db 'Not playing', 0
 wr_s_nosel:  db 'No selection', 0
 wr_s_paused: db 'Paused', 0
 wr_s_stopped: db 'Stopped', 0
+wc_s_stopt:  db 'Stop the take first', 0
+wc_s_norec:  db 'No take to recover', 0
 wr_s_answer: db 'Answer the question', 0
 wr_s_end:    db 'End of the sound', 0
 wr_s_unders: db ' underruns', 0
@@ -2509,6 +2633,8 @@ wr_ab3:     db 'edits WAV sound', 0
 %define DEC_U16                     ; the numbers: os88dec.inc (SPEC.md 20.5.2)
 %define DEC_U32
 %include "os88dec.inc"
+%define OD_BOOTVOL                  ; WAVERACK.TAK: the BOOT volume's
+%include "os88data.inc"             ; SYSTEM\APPDATA (SPEC.md 123.7, 19.9.1)
 %include "os88rseq.inc"             ; os88_rseq: every read a stream (wrdoc.inc)
 
 %define OS88UI_ABOUT
@@ -2827,6 +2953,62 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_zero1, 0                 ; ...to here
     WRV wt_vtab, 256                ; VOLUME's table
     WRV wt_hbuf, WT_HALF            ; the half being converted
+    ; --- the take (wrrec.inc) ---------------------------------------------------
+    WRV wc_sopen, 1                 ; the record stream is open...
+    WRV wc_hand, 1                  ; ...its handle
+    WRV wc_rcode, 1                 ; the ring's RL code
+    WRV wc_made, 1                  ; the take's file exists (ours)
+    WRV wc_mstate, 1                ; WAVERACK.TAK's state to write
+    WRV wc_odst, 1                  ; ...and os88data.inc's byte for it
+    WRV wc_rec, 1                   ; a take to recover (the marker said)
+    WRV wc_page, 1                  ; the strip's page: the copier moves it...
+    WRV wc_dpage, 1                 ; ...and the drawing follows it
+    WRV wc_uiown, 1                 ; the UI owns the copy (the worker aside)
+    WRV wc_mixing, 1                ; the worker is in a pass
+    WRV wc_nu, 1                    ; staging units held
+    WRV wc_fixed, 1                 ; the take's volume is a fixed disk
+    WRV wc_vol, 1                   ; the take's volume and folder
+    WRV wc_dir, 2
+    WRV wc_rseg, 2                  ; the ring's claim, its length, mask
+    WRV wc_rl, 2
+    WRV wc_rmask, 2
+    WRV wc_useg, WC_NU * 2          ; the staging units, each [wc_osz]
+    WRV wc_osz, 2
+    WRV wc_clu, 2                   ; the take's volume's cluster
+    WRV wc_rate, 2                  ; the take's rate
+    WRV wc_tok, 2                   ; OSAPI_FILE_WRITE_SEQ's token
+    WRV wc_t0, 2                    ; the stream's first tick
+    WRV wc_n, 2                     ; wc_name's number
+    WRV wc_cleft, 2                 ; the strip's column: frames left...
+    WRV wc_cmin, 1                  ; ...its smallest and largest (one word:
+    WRV wc_cmax, 1                  ; wc_colend stores it whole)
+    WRV wc_mmin, 1                  ; the meter's, since its last look
+    WRV wc_mmax, 1
+    WRV wc_free, 4                  ; DFREE's answer at Record
+    WRV wc_zero0, 0                 ; wc_go zeroes from here...
+    WRV wc_rcap, 4                  ; bytes captured, this stream
+    WRV wc_rrd, 4                   ; bytes read out of the ring, this stream
+    WRV wc_frames, 4                ; the take's frames: written and staged
+    WRV wc_wrote, 4                 ; ...written
+    WRV wc_puto, 2                  ; the unit being filled: its bytes...
+    WRV wc_putu, 1                  ; ...and which (the copier's)
+    WRV wc_getu, 1                  ; the next unit to write (the UI's)
+    WRV wc_nfull, 1                 ; full units not yet written (both: inc/dec)
+    WRV wc_over, 1                  ; the copy stopped at an overrun
+    WRV wc_cdead, 1                 ; the card stopped (seen by the copier)
+    WRV wc_ncol, 2                  ; the strip's columns this page, drawn
+    WRV wc_drawn, 2
+    WRV wc_lastc, 2                 ; the ring's count at the last fold
+    WRV wc_why, 2                   ; why the take ended (a sentence)
+    WRV wc_dead, 1                  ; a write failed
+    WRV wc_noopen, 1                ; the window is closing: no open after
+    WRV wc_nw, 1                    ; writes left this drain
+    WRV wc_lagmax, 2                ; the ring's fullest, bytes (the record)
+    WRV wc_zero1, 0                 ; ...to here
+    WRV wc_name0, 14                ; VOICEnnn.WAV
+    WRV wc_msg, 24                  ; 'Overrun: kept to 1:23'
+    WRV wc_mk, WC_MKSZ              ; WAVERACK.TAK's bytes
+    WRV wc_cols, WC_MAXCOL * 2      ; the strip's page: (min, max) a column
 %ifdef WR_CALLS
     WRV wr_ncalls, 2                ; -DWR_CALLS: drawing primitives called
 %endif

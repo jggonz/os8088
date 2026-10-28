@@ -626,6 +626,10 @@ def emit(bm):
     t = db_table()
     for i in range(0, len(t), 16):
         lines.append("    db " + ", ".join(str(v) for v in t[i:i + 16]))
+    import wrsim                    # INPUT GAIN's multipliers (SPEC.md 123.7)
+    lines.append("wrart_gainm:                        ; INPUT GAIN: Q8, 2 dB a step")
+    lines.append("    dw " + ", ".join(str(wrsim.gain_q8(k))
+                                    for k in range(wrsim.GAIN_STEPS)))
     lines.append("%macro WRART_ICON16 0")
     lines.append("    dw " + ", ".join("0xFFFF" for _ in range(8)))
     lines.append("    dw " + ", ".join("0xFFFF" for _ in range(8)))

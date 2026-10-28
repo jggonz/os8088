@@ -27,8 +27,8 @@ the evidence column says what was actually seen.
 | US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Implemented — verification pending | `docs/waverack/waverack-cga-compact.png` (native 640 x 200) and `-3x.png`; all 15 controls clicked with `--screen 640x200`, each answered; the layout measurement below |
 | US-04 | Open a WAV and inspect it without loading it into RAM | US-01 | Implemented — verification pending | `wrwav.inc`/`wrdoc.inc`/`wrenv.inc`; `tools/wrsim.py` reference + fast row `wrsim`; soak row `waverack` (every fixture through File > Open, bss vs the reference, the view cache column for column, zoom to fpp 1, identity); screenshots `docs/waverack/waverack-w2-*.png`; see Wave 2 below |
 | US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§123.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. **Wave 4b** (play through disk reads, see below): our own external ring, convert before read, bounded sequential reads per medium, the hold; soak row `waverackdisk` (MartyPC, XT-IDE + SB 2.0, a 1.44 MB floppy and a 321 MB volume of 32 KB clusters, before/after): BIG22 0.00 s silent of 30.2 (Wave 4: 17.67 of 30.3), and 0.00 of 40.3 with a second WaveRack scanning the disk (26.91 of 40.0); LONG off the floppy 0.07 of 30.2 (18.71 of 30.4); 16-bit stereo HELD on an 8088; 32 KB clusters open, play and save (Wave 4: refused). Not heard on 86Box or iron |
-| US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | In progress | driver half shipped: 1a027a77, SPEC §34.6.4, soak row `sndcap` passed on MartyPC SB DSP 2.01 (flat 80h - not a microphone); app side is Wave 5 |
-| US-07 | See the active level; set input gain separately from volume | US-05, US-06 | In progress | the PLAYBACK half shipped in wave 3 (§123.8): the played half's peak before the volume through `wrart_db`, the hold, PEAK at a rail, `LEVEL  PLAY`, only the changed cells drawn; the soak row reads the lit cells for STEREO16's tone and PEAK at its 16-bit spike. The record meter and the gain are wave 5's |
+| US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | Implemented — verification pending | driver half 1a027a77 (§34.6.4, `sndcap`); **app side wave 5** (`wrrec.inc`, §123.7 shipped): VOICEnnn.WAV with a one-cluster header patched at Stop, the worker copying ring to 64 KB of staging units and the UI writing whole clusters, Pause/resume, Stop opening the take clean, disk full / write error / overrun / no input each with its sentence, WAVERACK.TAK and File > Recover Take, a DSP 1.x refused, a floppy at 8,000 Hz. Soak row `waverackrec` (MartyPC XT-IDE + SB 2.0 and a VGA XT on 32 KB clusters, a 1.44 MB floppy, QEMU): every take read back off the disk against `wrsim.take_header`, frames = the card's count, 0 overruns, the recovery after a kill. **Not here: a real microphone's content, a real disk's write speed** |
+| US-07 | See the active level; set input gain separately from volume | US-05, US-06 | Implemented — verification pending | the PLAYBACK half in wave 3 (§123.8); **the capture half in wave 5**: `LEVEL  REC` from the extremes of what is WRITTEN (after the gain), INPUT GAIN (DIGITAL) -12..+12 dB in 13 steps through a saturating table built from `wrsim.gain_q8` (selfcheck against `20 log10`; the soak row reads the table out of the ring claim at +4 dB against `wrsim.gain_table`), the slider live during a take, VOLUME untouched. **Not here: the gain heard, the lit cells of a real signal** (MartyPC's input is a flat 80h) |
 | US-08 | Select a precise range, audition it, loop it | US-05 | Implemented — verification pending | §123.9's selection half shipped in wave 3: drag, handles, Shift+click, Shift+Left/Right, Select All / None, `[s, e)` clamped, the field's two formats, the inverted span (B&W) / its own ground (colour) drawn by changed columns only; Loop seamless; the soak row drags a range, loops it and holds verb 9's count to `play_pos` and the capture to the selection repeated; identity checks with a selection on VGA colour, B&W, COMPACT and the CGA knob tree |
 | US-09 | Trim, delete, cut, copy, paste, undo and redo | US-08 | Implemented — verification pending | `wredit.inc` (§123.3, §123.9 shipped): piece lists built and coalesced, the 64-piece refusal, a 9-state undo ring in a 6 KB claim, the 16-piece clipboard kept across New and Open (format refusal, adopted by an empty document), sources swept; edits grey while a play is held (§123.6's table); the dirty mark is the window title; `tools/wrsim.py`'s `Editor` against a flat model in the fast `wrsim` row; soak row `waverackedit` (every edit's piece table, selection and history against the reference); identity `None` after a cut at Fit and at fpp 1; screenshots `docs/waverack/waverack-w4-*.png`; see Wave 4 below |
 | US-10 | Save, Save As, Save Selection As without losing the source | US-09 | Implemented — verification pending | `wrsave.inc` (§123.10 shipped): `WRSAVE.$$$`, DFREE first, the canonical header, a gulp a tick through a 16 KB output claim (`OSAPI_FILE_WRITE` then `OSAPI_FILE_WRITE_SEQ`), Escape cancels, delete + rename, `Replace NAME?`, the rebase over a source, the save-changes question; `wrsim.write_wav` read back by `wave` and `parse()`; soak row `waverackedit` (each saved file read back off the guest's floppy, byte for byte; the cancel, the rebase, the disk-full refusal, the close question); see Wave 4 below. Not seen: a write-protected or full disk MID-write (the refusal before writing is tested), a real XT's save time **Wave 4c** (wave 4's review, folded into the disk-read wave): the temp is `WRSAVnn.$$$`, the first name not on disk, made empty at once (H1, M1); the save-changes and Replace questions grey the document's commands and re-front on refusal, their answers re-check (H2); upper-case source names (M2); L1-L8; clusters to 32 KB with a cluster-sized output claim. `waverackedit` gains the `temp` and `asked` legs, edited and not run; `waverackdisk`'s `bigclu` leg saves on 32 KB clusters byte for byte |
@@ -56,7 +56,8 @@ The stories land as six waves on one branch and one draft PR:
    the hold, hard disk first.
 5. **Capture** — US-06, US-07's capture half: SOUND.DRV's external record
    ring, the take file and its header, gain, the meter while recording,
-   the recovery marker, the short-take fallback.
+   the recovery marker, the short-take fallback (wave 5 refused it with a
+   reason instead, §123.7).
 6. **Acceptance** — US-11, US-12: XT measurements, the guide entry, the
    test matrix, screenshots, the final soak union and `test-full`.
 
@@ -111,7 +112,7 @@ and zoomed). It names the suite rows it adds or touches. **Soak rows and
 | US-03 | COMPACT chosen by content box; fits 640x200 with readable 8x8/5x7 text; two footer rows; every control reachable | a 640x200 framebuffer screenshot at integer zoom; every control clicked with `tools/mouse.py --screen 640x200`; label widths asserted by a host check over the layout table |
 | US-04 | robust RIFF walk; frame timeline; real min/max envelopes, stereo lanes; zoom/scroll/fit/overview; bounded, cancelable scan | host fixtures from `tools/wrsim.py --fixtures` (tones, impulses, odd chunks, extensible, malformed, truncated) checked by the fast row `wrsim` against the Python reference reader and `wave`; the soak row `waverack` opening each on the guest and reading the parsed fields and the view cache back by symbol |
 | US-05 | Play/Pause/Stop rules; synchronised playhead; explicit conversion; volume not in the data; EOF/underrun/errors | a soak row on QEMU's SB16 capturing the speaker/SB output (`make test-snd`-style) and checking duration and dominant frequency of a known tone at three rates; state transitions read by symbol; MartyPC for underruns at 4.77 MHz |
-| US-06 | capture capability honest; take file valid; pause/resume continuity; disk full, overrun, no input; no monitoring | MartyPC SB 2.0 (flat 80h) for rate, frame count and header; QEMU for the no-input path; injected-count unit checks on the host; **real-microphone recording: pending on hardware** |
+| US-06 | capture capability honest; take file valid; pause/resume continuity; disk full, overrun, no input; no monitoring | MartyPC SB 2.0 (flat 80h) for rate, frame count and header; QEMU for the no-input path; the take file modelled in `tools/wrsim.py` (`take_header`, the fast `wrsim` row); **real-microphone recording: pending on hardware**. Wave 5: `waverackrec` |
 | US-07 | one meter, dB table, peak hold, clip; source shown; digital gain labelled and applied with saturation; gain ≠ volume | host check of the generated table against `20·log10`; fixture playback of fixed-amplitude tones reading the lit-cell count; gain applied to a known take on MartyPC |
 | US-08 | `[s,e)` frames, clamps, single-frame and empty; loop sample counts; stable across zoom and layout | a host model of the selection/loop arithmetic; a soak row looping a selection and counting played bytes by verb 9 |
 | US-09 | trim/delete/cut/copy/paste/undo/redo; format refusal; no full copy; transport stopped first | host reference model of the piece table run against the same command scripts as the guest; saved results compared byte for byte |
@@ -809,16 +810,86 @@ figure for `os8088_xt_hdd`'s XT-IDE is 38 KB/s read, the figure this wave
 was planned against), which moved ST22S from "streams if the disk keeps up"
 to "held because the CPU cannot".
 
+## Wave 5 — capture (US-06, US-07's capture half): what shipped and what was measured
+
+**What shipped** (SPEC.md §123.7, §123.8's capture half, §123.12, §123.13's
+wave 5 table):
+
+- [x] **Record / Pause / Stop** through `wr_cmdok`, keys, menu and keyboard;
+  a take greys everything but Stop, Pause, Record, the theme and the layout
+  (`Stop the take first`); Record asks about an edited document first.
+- [x] **The take file**: `VOICEnnn.WAV`, DFREE first (`B: 312 KB free - 28
+  s`, MB and minutes past 9,999 KB and 999 s, ` free` dropped past 22
+  characters), the one-cluster header (`JUNK` to the cluster), whole-cluster
+  appends, the header cluster patched with `OSAPI_FILE_WRITE_AT` at Stop.
+- [x] **The worker copies, the UI writes** (a change from the pinned design,
+  §123.7): ring -> staging units through the gain table on the play's
+  worker every tick; the UI writes full units. **The first build copied in
+  the UI's tick alone and overran at 0:13** when a second WaveRack opened:
+  the UI task was gone 3.4 s for its paint and 4.7 s for a menu held down.
+- [x] **Staging units**: max(16 KB, a cluster) on a fixed disk, 32 KB on a
+  floppy, 64 KB in all - a single-producer, single-consumer queue whose
+  shared count changes by one `inc`/`dec`.
+- [x] **Pause/resume** continuous (the soak row: frames = the two streams'
+  counts summed); **Stop** opens the take clean.
+- [x] **Disk full, write error, overrun, no input, card stopped** each with
+  its sentence; a take with nothing on the disk is deleted, the empty
+  document redrawn.
+- [x] **WAVERACK.TAK** in `\SYSTEM\APPDATA` (state, place, recorder's
+  segment), marked done at Stop; **File > Recover Take** at launch unless
+  the take is live in another window (`OSAPI_SYS_SNAPSHOT`), re-read before
+  acting.
+- [x] **INPUT GAIN (DIGITAL)**: 13 Q8 steps from `wrsim.gain_q8`, the
+  saturating table in the ring claim, live during a take.
+- [x] **The record meter** (`LEVEL  REC`) and **the live strip** (a column a
+  1,024 frames, only the new ones drawn).
+- [x] **15,000 Hz** (verb 4's top on a DSP 2.00+) as a third rate.
+- [x] **A DSP 1.x is refused** (`Needs a DSP 2.00+ card`), not given the
+  pinned short take; **a floppy takes 8,000 Hz** (`Floppy: use 8,000 Hz`).
+
+**The four questions** (the brief's), answered with numbers:
+
+1. **Clusters vs. the ring**: the ring is never the write's unit - the
+   staging units are, max(16 KB, a cluster), so a 32 KB cluster is written
+   from staging. The one-cluster header stands at 32 KB on a 32 KB-cluster
+   volume (a 32 KB patch at Stop, 0.37 s once).
+2. **Write time vs. the ring**: XT-IDE 16 KB 0.227-0.247 s, 32 KB 0.369 s
+   (taken once, MartyPC); 1.44 MB floppy 16 KB 1.734 s, 32 KB 2.41-2.95 s
+   (traced). The ring (2.90 s at 11,025 Hz) must outlast a write's block
+   and the writes must keep up: a fixed disk does both at both rates, a
+   floppy only at 8,000 Hz.
+3. **The CPU**: the copy **92.3 cycles a byte** - 21.5% of an 8088 at
+   11,025 Hz, 29.3% at 15,000; the XT-IDE's CPU-driven writes another 16.8%
+   / 22.8%; about 62% / 48% left.
+4. **The live strip**: 1.34 ms a tick (median), 24-44 ms at a page's clear.
+
+**Measured by `waverackrec`** (MartyPC, the final full run; the floppy leg
+re-run alone on the final build): XT-IDE 2 KB clusters 60 s at 11,025 Hz
+(high water 3,072 bytes) and 15,000 Hz (4,608); 203 s at 11,025 Hz while a
+second WaveRack launched, opened and scanned 2 MB (8,704); a VGA XT on 32 KB
+clusters 60 s at each rate (5,120, 6,656); 1.44 MB floppy 30 s at 8,000 Hz
+(27,648) then disk full with the take kept; 0 overruns; every take read back
+against `wrsim.take_header` with frames = the card's count; a take killed
+with the machine recovered dirty on the next boot. QEMU: `No input from the
+card`, no file left; 11,025 Hz onto its floppy refused.
+
+**Not here**: a real microphone's content, the gain heard, a real disk's
+write speed (MartyPC's XT-IDE has no mechanical model; its floppy is the
+only timed medium here).
+
 ## Known risks
 
 - **Capture content cannot be observed here.** No emulator in this tree
   delivers a real microphone signal (QEMU: no capture IRQ; MartyPC: flat
   80h). The pipeline, the counts and the files are testable; what a
   microphone sounds like is a field run.
-- **The floppy may not keep up with a take.** 11,025 B/s is ~40% of an XT
-  floppy's write rate. The 32 KB ring buys ~3 s of slack per write; the
-  overrun path keeps what was written. Measured in US-11; 8,000 Hz is the
-  floppy's rate if it must be.
+- **The floppy does not keep up at 11,025 Hz** - measured in wave 5: a 32 KB
+  write blocks the copy 2.41-2.95 s against a ring of 2.90 s and sustains
+  11-13 KB/s against 11.1, and one run overran at the first write. So a
+  floppy takes 8,000 Hz (`Floppy: use 8,000 Hz`), where it held 30 s with
+  the ring's high water at 27,648 of 32,256 bytes - a 14% margin, thin. A
+  real drive may be faster or slower than MartyPC's; a field run on the
+  5150's floppy is the measurement this needs.
 - **The DMA ring must be page-safe** (§50.3), and a 32 KB head is the
   hardest claim to place; the tiers fall to 16 and 8 KB.
 - **XT redraw cost.** The waveform band is the design's answer; a full

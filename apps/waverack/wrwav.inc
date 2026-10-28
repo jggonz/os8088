@@ -52,6 +52,8 @@ N_IGNORED   equ 2
 N_RECOVER   equ 3
 N_REBASE    equ 4                   ; (not a file's: a save over a source's
 N_KEPT      equ 5                   ; rescan says these when it ends - 123.10)
+N_TAKE      equ 6                   ; (a take's end said after its open's
+                                    ; scan: wrrec.inc's [wc_why] - 123.7)
 
 ; -----------------------------------------------------------------------------
 ; ww_peek - CX (1..48) bytes of the file [wo_nbuf] at offset DX:AX
@@ -604,6 +606,9 @@ ww_say:
     je .tail
     mov si, ws_kmsg                 ; ('Kept as WRSAV07.$$$': wrsave.inc)
     cmp al, N_KEPT
+    je .tail
+    mov si, [wc_why]                ; (why a take ended: wrrec.inc)
+    cmp al, N_TAKE
     je .tail
 .n3:
     cmp al, N_IGNORED

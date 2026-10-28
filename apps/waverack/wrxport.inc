@@ -633,18 +633,9 @@ wt_open:
 .opened:
     mov [wt_hand], ah
     mov byte [wt_sopen], 1
-    cmp byte [wt_wk], 0             ; THE WORKER, hired once and kept
-    jne .run
-    mov ax, wt_worker
-    mov bx, [wr_win]
-    call OSAPI_TASK_SPAWN           ; CF: refused (transient, SPEC.md 20.6)
+    call wt_hire                    ; THE WORKER, hired once and kept
     mov si, wr_s_notask
     jc .no
-    mov byte [wt_wk], 1
-    ; ...AND IT MAY BE RESTARTED (SPEC.md 66.6.2): its whole state is in
-    ; statics, and it parks only in OSAPI_TASK_ALIVE / OSAPI_TASK_SLEEP at
-    ; the top of its loop, so a restart there loses nothing
-    OS88_WORKER_RESTARTABLE_NOKEEP wt_worker
 .run:
     call wr_arm                     ; the UI's tick: the playhead, the meter
     mov byte [wt_req], 1            ; ...and the rest of the fill at once:
@@ -1713,19 +1704,42 @@ wt_lacopy:
     ret
 
 ; =============================================================================
-; THE WORKER (SPEC.md 20.6): lock-free, no file, no drawing
+; THE WORKER (SPEC.md 20.6): lock-free, no file, no drawing - the play's feed
+; and the take's copy (wrrec.inc's wc_feed), one task for both
 ; =============================================================================
+
+; wt_hire - the worker, hired once and kept (a play's or a take's first
+; open). CF = 1 refused (transient, SPEC.md 20.6). clobbers AX, BX
+wt_hire:
+    cmp byte [wt_wk], 0
+    jne .ok
+    mov ax, wt_worker
+    mov bx, [wr_win]
+    call OSAPI_TASK_SPAWN
+    jc .out
+    mov byte [wt_wk], 1
+    ; ...AND IT MAY BE RESTARTED (SPEC.md 66.6.2): its whole state is in
+    ; statics, and it parks only in OSAPI_TASK_ALIVE / OSAPI_TASK_SLEEP at
+    ; the top of its loop, so a restart there loses nothing
+    OS88_WORKER_RESTARTABLE_NOKEEP wt_worker
+.ok:
+    clc
+.out:
+    ret
+
 wt_worker:
 .loop:
     mov bx, [wr_win]
     call OSAPI_TASK_ALIVE           ; (dies here when the window closes)
     mov ax, WT_SLPIDLE
-    cmp byte [wt_sopen], 0
-    je .slp
+    mov bl, [wt_sopen]
+    or bl, [wc_sopen]
+    jz .slp
     mov ax, WT_SLPFEED
 .slp:
     call OSAPI_TASK_SLEEP
     call wt_feed
+    call wc_feed
     jmp short .loop
 
 ; -----------------------------------------------------------------------------

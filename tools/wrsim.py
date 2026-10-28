@@ -359,6 +359,73 @@ def sel_text(s, e, rate):
 
 
 # =============================================================================
+# THE TAKE (wrrec.inc - SPEC.md 123.7)
+# =============================================================================
+GAIN_STEPS, GAIN_UNITY, GAIN_DB = 13, 6, 2      # -12..+12 dB, 2 dB a step
+
+
+def gain_q8(step):
+    """INPUT GAIN's Q8 multiplier at STEP (0..12): round(256 x 10^(dB/20)),
+    dB = (step - 6) x 2. tools/os88wrart.py emits these as wrart_gainm"""
+    return int(round(256 * 10 ** ((step - GAIN_UNITY) * GAIN_DB / 20.0)))
+
+
+def gain_table(step):
+    """wc_gbuild's 256-byte table: 80h + ((in - 80h) x m) >> 8 (floored,
+    the 8086's imul then bits 8..23), saturated to 00h..FFh"""
+    m = gain_q8(step)
+    return bytes(max(0, min(255, 128 + (((i - 128) * m) >> 8)))
+                 for i in range(256))
+
+
+def take_header(rate, clu, data_len):
+    """the take's header, ONE CLUSTER long: RIFF (the file's bytes - 8, or 0
+    while unfinished), WAVE, a 16-byte fmt (PCM, mono, RATE, 8-bit), JUNK of
+    zeros to 8 bytes short of the cluster, data (DATA_LEN, 0 unfinished)"""
+    riff = (clu + data_len - 8) if data_len else 0
+    h = b"RIFF" + struct.pack("<I", riff) + b"WAVE"
+    h += b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate, 1, 8)
+    h += b"JUNK" + struct.pack("<I", clu - 52) + bytes(clu - 52)
+    h += b"data" + struct.pack("<I", data_len)
+    assert len(h) == clu
+    return h
+
+
+def take_selfcheck(ok):
+    """the gain against 20 log10, the table's saturation, and the take file
+    read back by parse() both finished and unfinished (the recovery path)"""
+    for k in range(GAIN_STEPS):
+        db = 20 * math.log10(gain_q8(k) / 256.0)
+        ok(abs(db - (k - GAIN_UNITY) * GAIN_DB) < 20 * math.log10(1 + 0.5 / gain_q8(k)) + 1e-9,
+           "gain step %d: %.3f dB, want %d" % (k, db, (k - 6) * 2))
+    ok(gain_table(GAIN_UNITY) == bytes(range(256)), "unity is the identity")
+    t = gain_table(12)
+    ok(t[0] == 0 and t[255] == 255 and t[128] == 128 and t[200] == 255,
+       "+12 dB saturates at the rails and keeps 80h")
+    t = gain_table(0)
+    ok(t[0] == 96 and t[255] == 159 and t[128] == 128, "-12 dB: a quarter")
+    ok(all(a <= b for a, b in zip(t, t[1:])), "the table is monotonic")
+    audio = bytes((128 + (i * 7) % 60 - 30) & 255 for i in range(5000))
+    for clu in (512, 2048, 16384, 32768):
+        fin = take_header(11025, clu, len(audio)) + audio
+        r = parse(fin)
+        ok(r["err"] == E_OK and r["dataoff"] == clu and r["frames"] ==
+           len(audio) and r["note"] == N_NONE and r["rate"] == 11025,
+           "a take on %d-byte clusters opens: data at the cluster" % clu)
+        unf = take_header(15000, clu, 0) + audio
+        r = parse(unf)
+        ok(r["err"] == E_OK and r["frames"] == len(audio) and
+           r["note"] == N_RECOVER and r["dirty"],
+           "an unfinished take on %d-byte clusters is RECOVERED" % clu)
+    for s_ in ("No input from the card", "Disk full: take kept",
+               "Cannot write: kept", "Needs a DSP 2.00+ card",
+               "Overrun: kept to 59:59", "Stop the take first",
+               "No take to recover", "C: 2047 MB - 3247 min",
+               "B: 312 KB free - 28 s", "Next take 15,000 Hz"):
+        ok(len(s_) <= 22, "'%s' fits 22" % s_)
+
+
+# =============================================================================
 # PLAYING THROUGH DISK READS (wrdoc.inc, wrxport.inc - SPEC.md 123.6)
 # =============================================================================
 RD_FIX, RD_HD, RD_DD = 16384, 12288, 9216       # wo_rdsize's reads
@@ -1240,6 +1307,7 @@ def selfcheck(quiet=False):
     for s_ in XSAY.values():
         ok(len(s_) <= 22, "'%s' fits 22" % s_)
     disk_selfcheck(ok)
+    take_selfcheck(ok)
     if not quiet or bad:
         for b in bad:
             print("wrsim: FAIL " + b)

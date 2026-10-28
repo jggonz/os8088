@@ -219115,7 +219115,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 §123.7 is the one driver extension it needs. Pure NASM, for Audio's reason
 (§86): the C SDK does not wrap the stream verbs.
 
-### 123.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`, wave 3 `wrxport.inc`, wave 4 `wredit.inc` and `wrsave.inc`)
+### 123.1 Files and prefixes (pinned; wave 1 ships the first three and build/wrart.inc, wave 2 `wrwav.inc`, `wrdoc.inc` and `wrenv.inc`, wave 3 `wrxport.inc`, wave 4 `wredit.inc` and `wrsave.inc`, wave 5 `wrrec.inc`)
 
 | file | holds | prefix |
 |---|---|---|
@@ -219127,7 +219127,7 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 | `wredit.inc` | the edits, undo/redo, the clipboard and the source sweep (wave 4: split from `wrdoc.inc`, which would have doubled; its piece-list state keeps `wo_` where it is the document's - `wo_clip`, `wo_useg`, `wo_sweep`) | `wx_` |
 | `wrenv.inc` | the coarse envelopes, the view cache and its refinement, the waveform band | `we_` |
 | `wrxport.inc` | the transport state machine, the external ring, the look-ahead, the hold, the worker, conversion, volume, the playhead, the meter's state (wave 3; pinned as `wrplay.inc`, renamed when it was written; the ring and the hold wave 4b's) | `wt_` |
-| `wrrec.inc` | capture: the external record ring, the take file, gain, the recovery marker | `wc_` |
+| `wrrec.inc` | capture: the external record ring, the staging units and the worker's copy (`wc_feed`, on `wrxport.inc`'s worker), the take file, gain, the live strip, the record meter's half, the recovery marker | `wc_` |
 | `wrsave.inc` | Save, Save As, Save Selection As, the temp file, the replace and the rebase (lower-case `ws_` labels; the upper-case `WS_*` are `wrdoc.inc`'s source-record fields - NASM is case-sensitive, and no name differs only by case) | `ws_` |
 | `build/wrart.inc` | the pictures, fonts, meter table, role tables and the three layouts as data, made and measured by `tools/os88wrart.py` with `tools/os88wrlay.py` (§123.11) | `wrart_`, `WRART_`, `WL_`, `WO_`, `R_`, `B_` |
 
@@ -219139,8 +219139,8 @@ stream (§34.5); capture is a client of the same slot's record stream, and
 |---|---|---|
 | open, inspect, edit, save | nothing | always available |
 | play | `SND_CAP_PCM_BG` - SOUND.DRV's Sound Blaster tier | Play, Pause and the loop audition grey; a press on one says `Needs a Sound Blaster` on the status bar |
-| record, long take | `SND_CAP_PCM_IN` and the external record ring (§123.7) - an auto-init DSP, 2.00 or later | - |
-| record, short take | `SND_CAP_PCM_IN` on a DSP 1.x (verb 4 refuses the external ring with 7) | a take is one grant, `20 KB` at most (§34.6.3): the status bar names the limit in seconds before Record |
+| record | `SND_CAP_PCM_IN` and the external record ring (§123.7) - an auto-init DSP, 2.00 or later | on a DSP 1.x verb 4 answers 7 and Record says `Needs a DSP 2.00+ card` (wave 5 refused the pinned short take, §123.7) |
+| record onto a floppy | a removable volume | above 8,000 Hz Record says `Floppy: use 8,000 Hz` (§123.7's write-time rule) |
 | record at all | `SND_CAP_PCM_IN` | Record greys; a press on it says `No capture device` |
 
 **Every status message is at most 22 characters** - COMPACT's status field
@@ -219312,7 +219312,9 @@ row, and the soak row `waverackedit` holds the guest's table to them):
   or cancelled save leaves the document here, still edited, and a save
   begun from a key or a menu carries no action. A close is deferred
   (`OSAPI_WM_CLOSE`, §75.2), so nothing draws after it (`[wr_closing]`).
-  Record and Recover Take, which the pinned list also names, are wave 5's.
+  Record and Recover Take, which the pinned list also names, shipped in
+  wave 5 (§123.7): Record asks first about an edited document (`WRQ_REC`),
+  since the take replaces it.
 
 ### 123.4 Reading and writing WAV (the reader shipped in wave 2; the writer in wave 4)
 
@@ -219386,15 +219388,17 @@ reads each saved file back off the guest's floppy and holds it to
 `write_wav()` byte for byte, and the selfcheck reads `write_wav`'s output
 back with Python's `wave` and with `parse()`.
 
-### 123.5 The waveform: coarse envelopes, the view cache and the band (shipped in wave 2; the take's live envelope and the selection's split pinned)
+### 123.5 The waveform: coarse envelopes, the view cache and the band (shipped in wave 2; the take's live strip in wave 5; the selection's split pinned)
 
 **A coarse envelope per source**: the block is the smallest power of two
 `B` >= 16 frames for which `ceil(frames / B)` <= 2,048, and each block stores, per
 channel, its minimum and maximum as signed 8-bit (an 8-bit sample - 80h; a
 16-bit sample's high byte). Mono is 4 KB at most, stereo 8 KB, one heap claim
 each. It is built by a SCAN at open - 16 KB a pass on the UI task, the status
-bar showing `Scanning 45%`, Escape or another Open cancelling it - and live,
-block by block, while a take records.
+bar showing `Scanning 45%`, Escape or another Open cancelling it. A take
+builds no envelope while it records: the lanes show §123.7's LIVE STRIP
+(a column's extremes per 1,024 frames, from the copy), and Stop opens the
+take through the scan like any file.
 
 **The view** is a first frame and a zoom, frames per pixel `fpp`, a power of
 two from 1 (one frame a column: sample detail) up to the smallest that fits
@@ -219496,7 +219500,7 @@ re-blits the byte column it left from the band, and draws the line again.
   overview centres the view; the wheel over either scrolls an eighth of the
   view a notch (elsewhere it still turns VOLUME).
 
-### 123.6 Playback and the transport (shipped in wave 3; RECORDING and REC_PAUSED pinned for wave 5)
+### 123.6 Playback and the transport (shipped in wave 3; RECORDING and REC_PAUSED in wave 5)
 
 **One state machine** (`wt_state`), and every command's greying is a
 function of it and of §123.2's capabilities (one predicate, §47 rule 2):
@@ -219550,8 +219554,8 @@ pair unreachable, and SOUND.DRV refuses it besides (§34.3).
 `out_rate`, `vtab`, `mono`, `convert`, `frames_played` and `play_pos` are
 the reference, in the fast `wrsim` row):
 
-- **The states** are `wt_state`: IDLE 0, PLAYING 1, PLAY_PAUSED 2, and 3 and
-  4 reserved for RECORDING and REC_PAUSED (wave 5). BUSY is `[we_busy]` = 1,
+- **The states** are `wt_state`: IDLE 0, PLAYING 1, PLAY_PAUSED 2, RECORDING
+  3 and REC_PAUSED 4 (wave 5, §123.7). BUSY is `[we_busy]` = 1,
   a scan, which `wr_cmdok` reads. The predicate follows the table: Play
   (Space, the Play key, Sound > Play/Pause) with `SND_CAP_PCM_BG` and a
   scanned document with frames; Space pauses a play and resumes a paused
@@ -219819,7 +219823,7 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   reads are the option ROM's PIO, 148 KB/s as WaveRack times them, so the
   counts are exact and the milliseconds are not a field figure.
 
-### 123.7 Capture: the external record ring and the take file (pinned)
+### 123.7 Capture: the external record ring and the take file (shipped in wave 5)
 
 **The driver extension (shipped - §34.6.4).** `OSAPI_SND_STREAM` verb 4 accepts
 `SND_OPENF_EXT` in AH, as verb 0 does (§34.5.3): `DI:SI` is a ring in the
@@ -219830,63 +219834,208 @@ block IRQ adds the block to a free-running 16-bit count and writes it to
 `[DI:SI + RL + SND_EXT_CONS]`. There is no drain task, no grant and no
 overrun pause: the reader owns the ring and judges its own lag. The rest is
 verb 4's: the rate range (4,000..15,000, 13,000 on a single-cycle DSP),
-half-duplex, verb 3's state, verb 2's close. A single-cycle DSP answers 7,
-and WaveRack falls back to a short take. The kernel already routes an
-external ring on verb 4 (`osapi_snd_stream`'s kern_mega test names it).
-`apps/os88api.inc` documents the bit; `tools/abilock.py --update` without a
-`DRV_VER` bump, because nothing built before is affected.
+half-duplex, verb 3's state, verb 2's close. A single-cycle DSP answers 7.
+The kernel already routes an external ring on verb 4 (`osapi_snd_stream`'s
+kern_mega test names it). `apps/os88api.inc` documents the bit;
+`tools/abilock.py --update` without a `DRV_VER` bump, because nothing built
+before is affected.
 
 **Why it is needed**: verb 4's record stream is linear into ONE grant of the
 driver's pool, 20 KB at most - 1.9 s at 11,025 Hz - and its drain is a kernel
-task, which a disk transfer stops (a read or write holds `sch_lock`, §86.5)
-for up to ~400 ms on an XT while the DMA ring is 372 ms deep. With the card
-writing a 32 KB ring directly, a 400 ms write is 4.4 KB of a ring that holds
-2.97 s, and a long take is bounded by the disk, not by RAM.
+task, which a disk transfer stops (a read or write holds `sch_lock`, §86.5).
+With the card writing a 32 KB ring directly, the card captures on through
+every `int 13h` the machine makes, and a take is bounded by the disk, not by
+RAM.
+
+**A DSP 1.x is refused, not given a short take** (a change from the pinned
+design, which offered "the short take into the grant"). Verb 4 answers 7 to
+an external ring on a single-cycle DSP, and a take there would be one 20 KB
+grant - at most 1.9 s at 11,025 Hz, through the legacy drain task and a
+second capture path of its own. That is a second recorder for a card the
+driver can only feed 1.9 s of, so Record says `Needs a DSP 2.00+ card` and
+leaves nothing on the disk. It is said at the press rather than greyed
+because nothing the driver publishes ahead of the open (`SND_CAP_*`) tells
+a single-cycle DSP from an auto-init one; verb 4's own answer is the fact.
 
 **The take is the file.** Record writes `VOICEnnn.WAV` (the first free
 001..999) in the folder the instance stands in, after `OSAPI_FILE_DFREE`
-says it holds at least 2 s at the take's rate - the status bar names the
-volume and the seconds it holds (`B: 312 KB free - 28 s`). The file begins
-with a header ONE CLUSTER long: `RIFF`, `WAVE`, `fmt `, a `JUNK` chunk
-filling the cluster to 8 bytes short, and `data`, so the audio starts on a
-cluster boundary, every append is a whole number of clusters until the last
-(`OSAPI_FILE_WRITE_SEQ`'s rule), and the header is patched in place at Stop
-with one `OSAPI_FILE_WRITE_AT` at offset 0. The UI task writes from the ring
-in place, in gulps of half the ring, on `OSAPI_WM_ONWAKE`; the worker only
-polls the count, computes the meter, extends the live envelope and wakes it.
+says it holds 2 s at the take's rate and two clusters more (`Not enough disk
+space` otherwise). The status bar then names the volume, its room and the
+seconds it holds at the take's rate - `B: 312 KB free - 28 s`, 22 characters
+at most: KB becomes MB past 9,999 KB, seconds become minutes past 999 s, and
+` free` is dropped when the line would still be longer (`C: 2047 MB - 3245
+min`). The file begins with a header ONE CLUSTER long - `RIFF`, `WAVE`, a
+16-byte `fmt ` (PCM, mono, the rate, 8 bits), a `JUNK` chunk of zeros to 8
+bytes short of the cluster, `data` - made with `OSAPI_FILE_WRITE`, so the
+audio starts on a cluster boundary and every append but the last is whole
+clusters (`OSAPI_FILE_WRITE_SEQ`'s rule). Until Stop, `RIFF` and `data` say
+0, which §123.4's reader opens as an UNFINISHED take (the recovery path).
+At Stop the whole header cluster is rebuilt with the sizes and put back with
+one `OSAPI_FILE_WRITE_AT` at offset 0: the whole cluster because WRITE_AT's
+offset is a cluster multiple and the `data` chunk's size sits at the
+cluster's end (§18.4.7: inside the file, so no cluster, no FAT). On a 32 KB
+cluster that is a 32 KB `JUNK` chunk per take and a 32 KB patch at Stop
+(0.37 s once on MartyPC's XT-IDE) - it stands: the alternative, a header
+written short and the audio unaligned, breaks the rule every append depends
+on, and WaveRack's reader and any other WAV reader skip `JUNK` by its size.
+`tools/wrsim.py`'s `take_header` is the reference, and the soak row reads
+every take back against it byte for byte.
 
-- **Pause** stops the stream (verb 2) and Record resumes with a new stream
-  appending to the same file; no frame is duplicated or lost across it.
-- **Stop** writes the rest, closes the sequence, patches the header and
-  opens the take as the document - saved already, not dirty.
-- **Disk full or a write error** stops the take, keeps what was written,
-  patches the header to it, and says so.
-- **Overrun** - the reader more than one ring behind - stops the take at
-  the last good frame, keeps it, and says `The disk could not keep up - take
-  kept to M:SS`.
-- **No input** - the count still 0 after one second - stops with `No input
-  from the card`, which is what QEMU's SB16 does (§35).
+**The worker copies, the UI writes, and the card needs no task** (a change
+from the pinned design, which had the UI task write gulps of half the ring
+IN PLACE on `OSAPI_WM_ONWAKE`, the worker only polling the count, computing
+the meter and extending the live envelope). Two reasons. The ring's largest
+size code is 32 KB, so half a ring is 16 KB - smaller than a 32 KB cluster,
+and a write from the ring in place cannot be whole clusters there. And the
+UI task is not always there: measured on MartyPC's 5150 during a take, a
+second WaveRack's first paint held it **3.4 s**, a menu held down **4.7 s**
+(`menu_track` polls inside it) and the package loader 0.8-1.35 s at a time,
+against a ring of 2.95 s - the first version, which copied in the UI's tick
+alone, overran at 0:13 on exactly that. So the copy is the WORKER's: every
+tick (`WT_SLPFEED`) it folds the ring's count into 32 bits and COPIES what
+the card captured into STAGING through INPUT GAIN's table, noting the
+extremes for the meter and the live strip in the same pass (`wc_feed`); it
+touches no file and draws nothing (§20.6 rule 7), and it runs through a
+menu, a paint and a load - everything but an `int 13h`, which the card's DMA
+runs through on its own. The UI's tick takes the copy for itself while it
+runs (`wc_uiown` first, then the worker's pass waited out - `wt_topup`'s
+handshake, §123.6), gives it back, and then WRITES the full units, one plain
+`OSAPI_FILE_WRITE_SEQ` each (committed: a crash keeps every write), two at
+most a tick - so the worker copies in the gaps between a write's own `int
+13h` calls. The worker is the play's (`wt_hire`: one task for both).
+
+**The staging units are the write's unit, sized per medium** - max(16 KB,
+one cluster) on a fixed disk, **32 KB on a floppy** - four of them when a
+unit is 16 KB and two when it is larger, 64 KB either way (as many as the
+heap gives, one at the least). They are a single-producer, single-consumer
+queue: the copier fills one and alone moves to the next, the UI writes the
+oldest full one and alone moves on, and the count of full units is the only
+byte both change, each change ONE `inc` or `dec`, which no task switch
+splits. So every write is whole clusters on any volume to 32 KB clusters
+(§123.6's ceiling), and a take survives the UI's absence for the ring and
+the staging together: **8.8 s at 11,025 Hz, 6.4 s at 15,000**.
+
+**The write-time rule** (question 2, on numbers taken on MartyPC's 5150 -
+the first two design-deciding, taken once, the rest the soak row's): the
+ring must outlast the longest time the copy is stopped - a disk write
+holds `sch_lock` across each `int 13h`, so the worker does not run inside
+one - and the writes must keep up. A 32 KB ring less a block holds **2.90
+s** at 11,025 Hz (the card's time constant records 11,111), **2.13 s** at
+15,000 (15,152) and **4.03 s** at 8,000.
+
+| medium (MartyPC) | one write | sustains | 11,025 Hz | 15,000 Hz | 8,000 Hz |
+|---|---|---|---|---|---|
+| XT-IDE, 2 KB clusters: 16 KB `WRITE_SEQ` | 0.247 s (median of 5; 0.227 taken alone) | 66 KB/s | keeps up | keeps up | keeps up |
+| XT-IDE, 32 KB clusters: 32 KB | 0.369 s | 89 KB/s | keeps up | keeps up | keeps up |
+| 1.44 MB floppy: 16 KB | 1.734 s (the commit ~0.8 s of it) | 9.2 KB/s | no | no | thin (1.15x) |
+| 1.44 MB floppy: 24 KB | ~2.2 s (0.81 s + 0.058 s a KB) | ~10.9 KB/s | no | no | **yes: 1.36x, the copy stopped ~55% of the ring** |
+| 1.44 MB floppy: 32 KB | 2.41-2.95 s (traced; the first pays the motor) | 11-13 KB/s | **no: one run overran at the first write** | no | yes, 1.5x, but 86% of the ring |
+
+So a fixed disk writes 16 KB units (one cluster when that is larger) and a
+floppy **24 KB**, and **a floppy takes 8,000 Hz**: Record onto a removable
+volume at a higher rate says `Floppy: use 8,000 Hz` and makes nothing. A
+floppy's write blocks the copy for longer than the ring holds at 11,025 Hz
+and barely out-writes the card; at 8,000 Hz the ring holds 4.0 s and a
+24 KB write keeps up a third over. The volume's kind is a fact
+(`OSAPI_VOL_KIND`); the rate stays the user's to choose. **Measured by the
+soak row** (`waverackrec`), the ring's high water a take - the reader's
+greatest lag - against the 32,256 bytes an overrun begins at: XT-IDE 2 KB
+clusters **3,072** bytes at 11,025 Hz and **4,608** at 15,000; **8,704**
+while a second WaveRack launched, opened and scanned a 2 MB file for 182 s
+of the take (0.78 s of the ring - the worker copying through the UI's
+absences); a VGA XT on 32 KB clusters **5,120** and **6,656**; a 1.44 MB
+floppy at 8,000 Hz **27,648** (3.46 s of the ring's 4.03; 32 KB units - 24 KB units, tried on an estimate, overran at 0:24 and were taken back). No overrun in any of them, and every
+take's frames equal to the card's own count.
+
+- **Pause** takes the copy from the worker, stops the stream (verb 2),
+  copies out every byte it captured, writes every full unit and keeps the
+  partial one for the next stream; Record (or Pause) again opens a new stream appending to the
+  same file - its count and the ring's place start at 0, so no frame is
+  duplicated or lost across it. The soak row holds the file's frames to the
+  two streams' counts summed.
+- **Stop** takes the copy from the worker for good, closes the stream -
+  before the ring is freed - copies and writes the rest (the partial unit
+  last, any length), closes the write sequence (CX = 0), patches the header,
+  frees the ring and the units, marks the marker done, and opens the take
+  as the document - saved already, not dirty. A take with nothing on the
+  disk is deleted.
+- **Disk full or a write error** ends the take, keeps what was written (the
+  writes are whole, so the file is valid), patches the header to it and
+  says `Disk full: take kept` or `Cannot write: kept` - the open's status
+  then carries the reason.
+- **Overrun** - the reader within one block of a whole ring behind (the
+  block the card is filling is the ring's oldest) - ends the take at the
+  last good frame, keeps it, and says `Overrun: kept to M:SS` (the pinned
+  `The disk could not keep up - take kept to M:SS` was 46 characters against
+  the status bar's 22).
+- **No input** - the count still 0 after one second, or the card stopped
+  before a byte came, which is what QEMU's SB16 does (§35: its watchdog ends
+  the stream at ~12 ticks) - ends with `No input from the card` and no file.
+  A card that stops mid-take says `Sound card stopped`, and the take is kept.
+- **Every exit path** - Stop, an error, the window's close (`wc_noopen`:
+  ended and kept, not opened), a refusal at Record - closes the stream
+  before it frees the ring. An instance that dies has its stream released
+  by SOUND.DRV's `DSV_RELINST` (§34) and leaves an unfinished take, which is
+  what the marker is for.
 - **The recovery marker**: Record writes `WAVERACK.TAK` to the boot volume's
-  `\SYSTEM\APPDATA` (§19.9) naming the take, and Stop deletes it. A launch
-  that finds it offers File > Recover Take, which opens the take through
-  §123.4's unfinished-header path.
+  `\SYSTEM\APPDATA` (`os88data.inc`, `OD_BOOTVOL`, §19.9.1): `WRTK`, a state
+  byte (1 = a take is running), the take's volume, folder and name, and the
+  segment of the instance recording it - 24 bytes. Stop marks it DONE
+  (state 0) rather than deleting it: `os88data.inc` has no delete, and the
+  rewrite of an unchanged length is one sector. A launch that finds state 1
+  offers File > Recover Take - **unless a live WaveRack other than this one
+  stands at the recorder's segment** (`OSAPI_SYS_SNAPSHOT`, read into the
+  strip's page): that take is running in another window, not lost. Recover
+  re-reads the marker before acting (another window may have begun a take
+  since the offer), marks it done, stands in the take's folder and opens it
+  through §123.4's unfinished-header path: its frames from the file's
+  length, dirty, `Recovered; save to fix`.
 
 **INPUT GAIN is digital, and says so.** No card SOUND.DRV drives exposes a
 capture gain (§34.15 never writes the recording route), so the slider is a
-software gain, `-12 .. +12 dB` in 13 steps with unity in the middle, applied
-to each gulp through a saturating 256-byte table before it is written. The
-panel's caption reads `INPUT GAIN (DIGITAL)`. It cannot undo clipping in the
-converter, and it does not change audio already recorded.
+software gain, `-12 .. +12 dB` in 13 steps of 2 dB with unity at step 6. Each
+step is a Q8 multiplier `m = round(256 x 10^(dB/20))` (`tools/wrsim.py`'s
+`gain_q8`, emitted by `tools/os88wrart.py` as `wrart_gainm`; the selfcheck
+holds each to `20 log10` within the Q8 rounding's half a step), and the
+table is `out = 80h + ((in - 80h) x m) >> 8`, floored, saturated to
+00h..FFh - 256 bytes built in the ring's claim past its words (`wc_gbuild`),
+so the copy is one `xlat` a byte. Unity is the identity. The slider moving
+during a take rebuilds it, and the next byte copied takes the new gain;
+nothing already written changes. The panel's caption reads `INPUT GAIN
+(DIGITAL)`. It cannot undo clipping in the converter. The soak row reads
+the table out of the ring claim at +4 dB against `wrsim.gain_table`.
+
+**The live strip** (§123.7's question 4): while a take runs, the waveform's
+lanes show the take as it grows - one column per 1,024 frames (93 ms at
+11,025 Hz), each column the extremes of what was WRITTEN in it (after the
+gain) drawn as one vertical line in the wave colour. The tick draws only the
+columns completed since the last draw; a full page (the lanes' width, 640
+columns at most) starts a new one, cleared once. A paint draws the page
+again from its stored extremes (two bytes a column, 1,280 bytes of bss).
+Its cost: **1.34 ms** a tick (median, MartyPC's 5150 on Hercules, the soak row's breakpoints), **24-44 ms** at the tick that clears a new page - one column a tick at 11,025 Hz, so a column is one `wd_vl`.
+
+**The CPU** (question 3): the copy is the per-frame work - `lodsb`, `xlat`,
+`stosb` and two compares a byte - **92.3 cycles a byte** measured (152 copies, 89,088 bytes, the soak row's breakpoints on `wc_copy`): **21.5%** of a 4.77 MHz 8088 at 11,025 Hz (the card's 11,111), **29.3%** at 15,000, **15.5%** at 8,000. The common byte falls through both compares; the first version took the branches and cost 109.8 (25.6%). The rest of a tick (the fold,
+verb 3, the meter, the time) is fixed per tick, not per frame: the worker's pass **10.3 ms** median (most of it the copy of a tick's bytes), the UI's tick **0.70 ms** median without a write, and a 16 KB write on the XT-IDE **247 ms** (a tick that writes is 283 ms at most). The writes are the other share: MartyPC's XT-IDE moves every byte by CPU in its option ROM, so 0.68 writes of 16 KB a second at 11,025 Hz cost **16.8%** and 0.92 at 15,000 cost **22.8%** (a DMA controller's would cost the wait, not the CPU). So a 4.77 MHz 8088 recording onto an XT-IDE keeps about **62%** of itself at 11,025 Hz and **48%** at 15,000 for the UI and the other windows.
 
 **The format row is the next take's**: Input names the card's one input,
-`Microphone` (greyed - nothing to choose); the rate offers the standard rates
-the driver accepts, 8,000 and 11,025 Hz; bits and channels show `8-bit` and
-`Mono`, greyed, because that is all verb 4 records. An opened file's own
-format is the LCD's line, never the row's.
+`Microphone` (greyed - nothing to choose); Rate offers **8,000, 11,025 and
+15,000 Hz** (15,000 is verb 4's top on a DSP 2.00 or later, and Sound > Rate
+cycles the three); bits and channels show `8-bit` and `Mono`, greyed,
+because that is all verb 4 records. An opened file's own format is the LCD's
+line, never the row's.
 
 **Monitoring through the speaker is never offered**: the card is half-duplex.
 
-### 123.8 The level meter (shipped in wave 3, the playback half; the capture half pinned)
+**What a take greys** (`wr_cmdok`, one predicate): while a take is held -
+RECORDING or REC_PAUSED - only Stop, Pause, Record (which pauses and
+resumes), the theme and the layout are live, plus VOLUME and INPUT GAIN,
+which are not commands; every other command says `Stop the take first`.
+Record itself wants a card with `SND_CAP_PCM_IN`, the transport idle, no
+scan running and no question or save in progress, and asks first about an
+edited document, as New and Open do (the take replaces it).
+
+### 123.8 The level meter (shipped: the playback half in wave 3, the capture half in wave 5)
 
 One horizontal bar of 24 cells over the gain slider, -30 to 0 dBFS at 1.25 dB
 a cell: cells 0..17 green, 18..21 yellow, 22..23 red in colour; lit, outlined
@@ -219916,6 +220065,19 @@ length and the hold; the cells are two 24-bit masks - shown and wanted - and
 each run of changed cells of one state is one `wf_cells`, so a step of the
 bar is one to three calls. PLAYING shows `LEVEL  PLAY`; PLAY_PAUSED keeps the
 caption with every cell dark; IDLE is `LEVEL` and dark.
+
+**Shipped in wave 5, the capture half**: the take's copy (`wc_copy`, §123.7)
+notes the smallest and largest byte it WRITES - after INPUT GAIN, so the bar
+shows what is going into the file - folded into the meter's pair as it goes.
+At most every 3 ticks the UI turns the pair into the peak `|u - 80h|` of
+everything written SINCE THE LAST LOOK and maps it through the same
+`wrart_db`; the hold and `PEAK` (a written 00h or FFh - which, after a gain
+above unity, is the gain's saturation as well as the converter's) follow the
+playback half's rules, and the same element and cell masks draw it.
+RECORDING shows `LEVEL  REC`; REC_PAUSED keeps the caption with every cell
+dark. The time element shows the take's length while it runs. MartyPC's
+flat 80h lights nothing, so the lit cells of a real signal are a field
+observation, not a row's.
 
 ### 123.9 Selection and editing (shipped: the selection in wave 3, the edits in wave 4)
 
@@ -220234,7 +220396,8 @@ Hercules is the orchestrator's MartyPC look (QEMU cannot show it).
 Take. **Edit**: Undo, Redo, Cut, Copy, Paste, Delete, Trim, Select All,
 Select None. **View**: Zoom In, Zoom Out, Fit, Compact Layout / Full Layout,
 Theme: Color / Theme: Black and White. **Sound**: Play/Pause, Stop, Record,
-Loop: Off / Loop: On, Rate: 8,000 Hz / Rate: 11,025 Hz. About is the
+Loop: Off / Loop: On, Rate: 8,000 Hz / 11,025 Hz / 15,000 Hz (wave 5: one
+item that cycles the three). About is the
 application menu's (`OSAPI_ABOUT_SET` and os88ui's card); there is no Help
 menu and no check mark - a toggle names its state (§12.2).
 
@@ -220258,7 +220421,14 @@ edits and the saves live** (§123.9, §123.10): T, Delete, X, C, V, U, Y, the
 TRIM, DELETE, SAVE and SAVE AS keys, Edit's Undo to Trim, File's Save, Save
 As... and Save Selection As...; New and Open ask first about an edited
 document, and so does the close box. Record and Recover Take stay greyed
-for wave 5.
+for wave 5. **Wave 5 makes capture live** (§123.7): Record (`R`, the
+RECORD key, Sound > Record) begins a take - asking first about an edited
+document - and during one Record and Pause (the RECORD and PAUSE keys,
+`R` again) pause and resume it, Stop (`S`, Escape, the STOP key) ends it,
+and every other command says `Stop the take first`; the RECORD key latches
+while recording and PAUSE while paused. File > Recover Take is live when
+the marker names a take that is not running (`No take to recover`
+otherwise). INPUT GAIN's slider and `<` `>` work during a take.
 
 | key | does | key | does |
 |---|---|---|---|
@@ -220278,7 +220448,8 @@ drag, the value in bss), and says its value on the status bar (`Volume 75%`,
 
 **The format row** is four os88ui drop-downs (§13.14, the library's gesture:
 press, drag, release; or press, press): Input (`Microphone`, COMPACT `Mic`),
-Rate (`8,000 Hz` / `11,025 Hz`, COMPACT `8 kHz` / `11 kHz`), Bits (`8-bit`)
+Rate (`8,000 Hz` / `11,025 Hz` / `15,000 Hz`, COMPACT `8 kHz` / `11 kHz` /
+`15 kHz`), Bits (`8-bit`)
 and Channels (`Mono`). Input, Bits and Channels hold one choice each and are
 greyed (§123.7); Rate is live. While a list is open the key record has no
 keys (BT_N = 0), so a press on a list that covers a key is the list's.
@@ -220289,7 +220460,7 @@ launch with a document (`OSAPI_PKG_START`'s document form, §21.5.3) copies
 its name and folder at entry and opens it from the first timer tick, after
 standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
-### 123.13 Where it ships, and what it costs (waves 1, 2, 3, 4 and 4b measured)
+### 123.13 Where it ships, and what it costs (waves 1, 2, 3, 4, 4b and 5 measured)
 
 | | wave 1 | wave 2 | wave 3 | wave 4 |
 |---|---|---|---|---|
@@ -220314,5 +220485,13 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 | disks | the 1.44 MB apps disk **2,579** of 2,847 clusters, the 1.2 MB **2,086** of 2,371 (both fit; nothing moved). `make waverackfix` gains ODD46.WAV (17,686 bytes: data at 46); `waverackdisk` builds its own VHDs and floppy, one of them 321 MB of 32 KB clusters (`tools/os88hdd.py --spc 64`) |
 | CPU, measured | an 8088's cycles a FRAME in each conversion loop (MartyPC's 5150, cycle-exact): 8-bit mono d = 1 **114** (the general loop it replaces was ~227), 8-bit stereo d = 1 **205**, 16-bit mono **276**, 16-bit stereo **456**, 8-bit mono at d = 2 **413**. So a 4.77 MHz 8088 converts 8-bit mono at 22,050 Hz in 53% of its time and 16-bit stereo not at all (2.1x) |
 
-To be measured and written here as the later waves land: the heap claims
-while recording, and the sustained record rate on MartyPC's XT.
+**Wave 5** (capture, §123.7 and §123.8's capture half):
+
+| | wave 5 |
+|---|---|
+| image | **42,999** bytes (packed **33,735** - 34 clusters at 1 KB), +4,190 on wave 4c's 38,809: the take (`wrrec.inc`: the ring and the units, the worker's copy and the UI's writes, the file and its header, the marker and Recover Take, gain, the live strip and the record meter), the third rate, the commands' greying during a take |
+| bss | **7,706** bytes, +1,430: the strip's page (640 columns x 2 bytes, 1,280 - also `wc_live`'s snapshot buffer), the marker's 24, the take's name and sentence, the four unit segments and the queue's bytes |
+| heap, recording | WaveRack's band 10 KB (the document is emptied at Record) + the RING 33 KB (`OSAPI_MEM_CLAIM_DMA_HI`: 32 KB, its words and the gain table; 17 KB tier) + the STAGING UNITS, 64 KB: four of 16 KB on a fixed disk of clusters to 16 KB, two of 32 KB on a 32 KB-cluster volume or a floppy (fewer when the heap refuses; one at the least). Read on the claim map by the soak row: XT-IDE, 2 KB clusters `[10, 16, 16, 16, 16, 33]` = **107 KB**; 32 KB clusters `[10, 32, 32, 33]` = **107 KB**. Stop, an error and the close give every claim back; the take then opens as any document (`[4, 4, 10, 17]` for a 60 s 11,025 Hz take) |
+| disks | the 1.44 MB apps disk **2,585** of 2,847 clusters, the 1.2 MB **2,092** of 2,371 (both fit; nothing moved). `waverackrec` builds its own VHDs (with `SYSTEM\APPDATA`, as an installed disk has it) and floppies |
+| CPU, measured | the copy **92.3** cycles a byte (21.5% of an 8088 at 11,025 Hz, 29.3% at 15,000); the worker's pass 10.3 ms median, the UI's tick 0.70 ms without a write, the live strip 1.34 ms; a 16 KB XT-IDE write 247 ms (16.8% of the machine at 11,025 Hz on a disk the CPU transfers) |
+| record rate, measured | XT-IDE (2 KB and 32 KB clusters): 60 s at 11,025 and 15,000 Hz with no overrun, the ring's high water 3,072-6,656 bytes of 32,256; 203 s at 11,025 Hz while a second WaveRack launched, opened and scanned 2 MB, high water 8,704. 1.44 MB floppy: 8,000 Hz, 30 s, high water 27,648; 11,025 Hz refused there (§123.7's write-time rule) |

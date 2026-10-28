@@ -6312,7 +6312,7 @@ $(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
 # of those never reaches a disk
 .PHONY: waverack
 waverack: $(BUILD)/waverack.o88
-$(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py | $(BUILD)
+$(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py tools/wrsim.py | $(BUILD)
 	python3 tools/os88wrart.py --selfcheck --quiet
 	python3 tools/os88wrart.py --out $@
 
@@ -6320,8 +6320,8 @@ $(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
                        apps/waverack/wrface.inc apps/waverack/wrwav.inc \
                        apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
                        apps/waverack/wrxport.inc apps/waverack/wredit.inc \
-                       apps/waverack/wrsave.inc \
-                       $(BUILD)/wrart.inc apps/os88dec.inc apps/os88rseq.inc \
+                       apps/waverack/wrsave.inc apps/waverack/wrrec.inc \
+                       $(BUILD)/wrart.inc apps/os88dec.inc apps/os88rseq.inc apps/os88data.inc \
                        apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \
 		-o $@ apps/waverack/waverack.asm

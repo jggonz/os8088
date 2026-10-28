@@ -551,6 +551,9 @@ wf_e_fname:
     mov ax, [wo_gen]                ; the document's name, or NO FILE
     call wf_ek
     jc .out
+    mov si, wc_name0                ; a take's name while it runs
+    call wc_active
+    jnc .none
     mov si, wr_s_nofile
     cmp byte [wo_doc], 0
     je .none
@@ -575,13 +578,20 @@ wf_e_time:
     jc .out                         ; holds a play (SPEC.md 123.6)
     mov ax, [wo_cur]
     mov dx, [wo_cur+2]
-    call wt_active
-    jc .t
+    cmp byte [wt_state], WT_IDLE    ; a play's playhead, or a take's length
+    je .t                           ; (wc_meter puts it in wt_ph)
     mov ax, [wt_ph]
     mov dx, [wt_ph+2]
 .t:
     mov di, wr_tbuf2
+    mov cx, [wc_rate]               ; a take's frames at ITS rate (the
+    call wc_active                  ; document is empty while it runs)
+    jnc .tc
     call wo_time
+    jmp short .td
+.tc:
+    call wo_timec
+.td:
     mov si, wr_tbuf2
     mov di, [wd_lp]
     mov di, [di+WL_DSET]
@@ -637,10 +647,9 @@ wf_e_fmt:
     mov si, wr_tbuf2
     jmp short .s
 .take:
-    mov si, wr_s_fmt8
-    or al, al
-    jz .s
-    mov si, wr_s_fmt11
+    mov si, ax                      ; (AH = 0: the key was the rate alone)
+    shl si, 1
+    mov si, [wr_ratefmt + si]
 .s:
     mov di, [wd_lp]
     mov cx, [di+WL_FMTCH]

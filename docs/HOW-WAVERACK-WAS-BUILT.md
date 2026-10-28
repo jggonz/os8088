@@ -627,3 +627,118 @@ time. Each was fixed; the final run passes every leg.
 **Still not heard.** No `vm/` machine here is an XT with both a hard disk and
 a Sound Blaster. `vm/xt-mfm` - the ST-225 on a Xebec, the machine to install
 on - needs one line, `sndcard = sb2.0`; `vm/286-video` has both today.
+
+## Wave 5 - recording (US-06, US-07's capture half)
+
+**The story.** Press Record and talk; press Stop and the take is there, a
+file on the disk and the document in the window, already saved. Pause in
+between and nothing is lost or doubled. If the disk fills, the machine
+crashes or the window is killed, what was recorded is still a WAV file. And
+the owner's word from the last wave stood: WaveRack will live on hard disks,
+so design the take for a fixed disk first.
+
+**The card was already free of the disk.** The driver half had shipped
+before this wave: verb 4 records into an *external* ring, WaveRack's own 32
+KB of DMA-safe memory, and each block interrupt writes a running count into
+it. So the card captures on through every disk call the machine makes, with
+no task of WaveRack's in the way. What was left was getting the bytes from
+that ring into a file before the card came round again - 2.9 seconds at
+11,025 Hz.
+
+**Four questions, settled before the code.** How does a take work on a
+volume of 32 KB clusters, when half the ring is 16 KB and every append must
+be whole clusters? (The ring stops being the write's unit: bytes are copied
+out of it into staging units of max(16 KB, a cluster), and a unit is the
+write.) How long does a write take against the ring? (Measured once on
+MartyPC: 0.23 s for 16 KB on its XT-IDE, 0.37 s for 32 KB on 32 KB clusters,
+1.7 s for 16 KB on a 1.44 MB floppy - most of that the commit.) What does it
+cost an 8088? (The copy, through the gain table and noting the meter's
+extremes, is **92 cycles a byte** - 21% of the machine at 11,025 Hz.) And
+what does the live picture cost? (One column a tick, 1.3 ms.)
+
+**The take file** is `VOICE001.WAV` onwards, in the folder WaveRack stands
+in. Its header is exactly one cluster long - a `JUNK` chunk pads it - so the
+sound starts on a cluster boundary and every append is whole clusters. Until
+Stop the header says "length 0", which WaveRack's own reader opens as an
+unfinished take; at Stop the header cluster is written again with the real
+sizes, in place. On a volume of 32 KB clusters that is a 32 KB header for
+every take, and it stands: the alternative breaks the rule every append
+depends on.
+
+![WaveRack recording on a VGA XT: LEVEL REC, the RECORD key lit, the take's time running and the live strip growing](waverack/waverack-w5-rec-vga.png)
+
+**The first version overran at thirteen seconds.** It did the copying in
+the window's own timer tick and nothing else, which looked enough: the copy
+takes milliseconds. Then the test opened a second WaveRack while the first
+recorded, and the take stopped at 0:13 - `Overrun: kept to 0:13`. One trace
+of every tick said why: the UI task, the one task that runs every window's
+code, was simply *gone* for 3.4 seconds while the second window painted its
+face on a 4.77 MHz machine, and for 4.7 seconds while a menu was held down,
+because the menu code waits inside it. The ring holds 2.9.
+
+**So the copy moved to a worker** - the same background task that feeds the
+card during playback. A task keeps running through a menu, a paint or a
+package loading; the only thing that stops it is a disk call, and the card's
+DMA runs through those on its own. Every tick the worker copies what the
+card captured into the staging units; when the window's tick comes round it
+writes the full ones. The units are 64 KB in all, so a take survives about
+8.8 seconds of the UI's absence at 11,025 Hz instead of 2.9. The rerun:
+**203 seconds of take while a second WaveRack launched, opened and scanned a
+2 MB file, and the ring never more than 8.7 KB full.**
+
+**The floppy said no to 11,025 Hz.** On a floppy no task runs during a
+write at all - its disk calls come back to back - and a 32 KB write took
+2.4 to 2.9 seconds against a ring of 2.9: one run overran at the very first
+write, which also pays for spinning the motor up. At 8,000 Hz the ring holds
+4.0 seconds and a 32 KB write keeps up half again over, so that is a
+floppy's rate: Record on a floppy at a higher rate says `Floppy: use 8,000
+Hz` and makes nothing. A tidier idea - 24 KB writes, to stop the copy for
+less time - was tried on a back-of-envelope model of the floppy and overran
+at 24 seconds; the measured 32 KB came back.
+
+![The status bar refusing 11,025 Hz on a floppy](waverack/waverack-w5-floppy.png)
+
+**Pause and Stop take the copy back.** The window's code raises a flag, waits
+for the worker to finish the pass it is in, stops the card, copies out every
+byte the card counted and writes it. The test holds the file's length to the
+sum of the card's own counts across a pause - exact, not approximate.
+
+![Paused: the PAUSE key lit, the time held](waverack/waverack-w5-paused-vga.png)
+
+![Stop: the take opened as the document - VOICE001.WAV, 13.42 s, saved and not dirty](waverack/waverack-w5-take-vga.png)
+
+**Surviving a crash.** At Record a 24-byte marker, `WAVERACK.TAK`, goes into
+the boot disk's `\SYSTEM\APPDATA`: a take is running, here, by this window.
+At Stop it is marked done. The test killed the emulator in the middle of a
+take, booted the same disk again and launched WaveRack: File > Recover Take
+was live, and it opened the take with every frame that had reached the disk,
+marked unsaved - `Recovered; save to fix`. The marker also carries the
+recording window's memory segment, because a second WaveRack opened during
+a take would otherwise have offered to "recover" a take that was still
+being recorded next door.
+
+![After a killed take: File > Recover Take is live (MartyPC 5150, Hercules)](waverack/waverack-w5-recover-herc.png)
+
+**Input gain is honest about being digital.** No card the sound driver
+drives exposes a recording gain, so the slider is software: 13 steps of
+2 dB, each a multiplier computed on the host and checked against
+`20·log10`, applied through a 256-byte table that saturates instead of
+wrapping. The test reads the table back out of the machine's memory at +4 dB
+and compares it to the host's.
+
+**What QEMU could say.** Its Sound Blaster records nothing - no block
+interrupt ever comes - so Record there ends after a second with `No input
+from the card` and leaves no file behind. That was the first look at the
+whole thing, and it found two small bugs on the glass: the LCD kept the
+dead take's name, and the waveform lanes the live strip had cleared stayed
+black.
+
+![QEMU: No input from the card, NO FILE, the empty waveform redrawn](waverack/waverack-w5-noinput.png)
+
+**What it cost.** 4,190 bytes of package (42,999 in all), 1,430 of bss, and
+107 KB of heap while recording - the 33 KB ring and 64 KB of staging beside
+WaveRack's 10 KB band. **What it does not show**: what a real microphone
+sounds like through it (every emulator here records silence or nothing), the
+gain heard, and a real disk's write speed - MartyPC's hard disk has no
+mechanics, and its floppy, the one timed medium, is the reason the floppy
+rate is 8,000 Hz until the 5150's own drive says otherwise.
