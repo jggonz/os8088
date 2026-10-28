@@ -224592,3 +224592,151 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 | WaveRack's disk (wave 7) | `make waverackdisk`, all four geometries, on demand like `midirackdisk`: WAVERACK.O88 at the root, the demo clips RAW in MEDIA/ (WaveRack reads with READ_SEQ/READ_AT, which deliver a file as it lies), CREDITS.TXT, CLIPS.TXT per geometry, SYSTEM/APPDATA. **1.44 MB 1,975 of 2,847 clusters** (all six clips); **1.2 MB 1,975 of 2,371** (all six); **720 KB 605 of 713** (FURELISE, MAPLELF, NOCTURNE, PRELUDE: every format shown); **360 KB 302 of 354** (two). THE CLIPS (`apps/waverack/demo/`, committed, 970 KB): excerpts of Wikimedia Commons recordings whose pages say Public Domain or CC0, read 2026-10-28 - FURELISE (Beethoven, V Gao, PD/CC0), MAPLELF (Joplin, US Marine Band 1906, PD-USGov), GYMNO (Satie, Teknopazzo, CC0), MARCH (Sousa, USAF Band of Mid-America, PD-USGov), all 8-bit mono 11,025 Hz, 12 s (MARCH 24 s); NOCTURNE (Chopin, Peter Johnston for Musopen, CC0) 8-bit mono 22,050 Hz, 8 s; PRELUDE (Bach, Kimiko Ishizaka, CC0) 16-bit stereo 11,025 Hz, 3 s - held in memory on an 8088. `tools/os88wrdemo.py` fetches each source at a pinned SHA-256, decodes it with lame and cuts, decimates, normalises (peak 0.9) and dithers it deterministically; the fast `wrsim` row holds the committed clips and CREDITS.TXT to its table. The live media carries the six in MEDIA/ (XTMP3's songs' ground, §80.6); `make waverackhd`'s disk too |
 | final pass (wave 6b) | `waverackrec` on the final code: XT-IDE 60 s at 11,025 and 15,000 Hz, high water 3,072 / 4,096; 204 s beside a second WaveRack's 2 MB scan 16,384; 32 KB clusters 5,120 / 6,656; floppy 8,000 Hz 27,648; 0 overruns, every take = the card's count. The copy 97.8 cycles a byte. Drawing on the 5150 + Hercules (`calls`): idle 0 a tick, recording 0.99, playing at Fit 1.02, one cut 16, a full repaint 1,122-1,459 ms (77-90 primitives); `wr_redraw` while recording 60.4 ms a tick median. Image **43,625** bytes after the review's fixes (packed 34,249 - 34 clusters at 1 KB), bss **7,774** |
 | record rate, measured | XT-IDE (2 KB and 32 KB clusters): 60 s at 11,025 and 15,000 Hz with no overrun, the ring's high water 3,072-6,656 bytes of 32,256; 203 s at 11,025 Hz while a second WaveRack launched, opened and scanned 2 MB, high water 8,704. 1.44 MB floppy: 8,000 Hz, 30 s, high water 27,648; 11,025 Hz refused there (§123.7's write-time rule) |
+
+## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
+
+**Status: PLANNED. Nothing in this section is built.** The delivery record
+is `docs/plans/WIN16-PLAN.md` and the diary `docs/HOW-WIN16-WAS-BUILT.md`.
+Each subsection says *(pinned)* until the story that builds it marks it
+*(shipped)* with what was measured. Until then it is a design, not a fact
+about the system. The first story (S1, the census) can change any decision
+marked **gate** in the plan.
+
+**Premise.** A Windows 1.x–3.x program is an NE executable of 16-bit x86 code,
+and Windows 3.0 and earlier ran such programs in 8086 real mode. This machine
+is an 8086 in real mode. So the layer emulates no CPU:
+
+1. it loads the program's segments;
+2. it applies the program's relocations;
+3. it resolves the program's `KERNEL`/`USER`/`GDI`/`SHELL` imports to
+   far-callable code of its own;
+4. it calls the program's entry point.
+
+The two programs it is built for are the original Minesweeper (`WINMINE.EXE`)
+and Calculator (`CALC.EXE`).
+
+### 124.1 What it is, in one table *(pinned)*
+
+| | |
+|---|---|
+| home | a package, `WIN16.O88`, in `apps/win16/`. **Zero resident kernel bytes** is the target, checked with `tools/kernsize.py` |
+| launch | `EXE` stays DOS.O88's (§54, §96). DOS.O88 reads `e_lfanew` at offset 3Ch; a file whose header there says `NE` is handed to `WIN16.O88` with `OSAPI_PKG_START`'s document form (§21.5.3) instead of running its DOS stub |
+| instances | one `WIN16.O88` instance per Windows program, multi-instance as any package is (§20) |
+| on demand | the dialog manager and controls, the floating-point emulator and the loader are package PARTS (§20.12), each fetched when first needed and dropped after |
+| kernels | `kern_big` and `kern_emu`. `kern_small` omits it (§24.5): it has no `OSAPI_WM_TIMER` (§13.9). `kern_mega` refuses with `OS88_MEGA_REFUSE` (§20.18) |
+| binaries | **no Microsoft file is ever in the tree.** The user supplies them: `make win16census WIN3X=<dir>` and `make win16disk WIN3X=<dir>` |
+| sources | clean-room MIT 8086 assembly. Wine (LGPL-2.1+) and winevdm (GPL-2) are read as references at the commits the plan pins; formats, ordinals and constants are interoperability facts |
+
+### 124.2 Execution — the program's stack and the coroutine *(pinned)*
+
+A Windows program runs with `SS = DS = DGROUP` and is compiled to assume it.
+os8088 tasks share `SS = LOW_SEG` and a switch saves only SP (§8). Three
+existing behaviours make the program's own stack safe without a kernel change:
+
+- `sch_switch` declines to switch whenever `SS != LOW_SEG` (§8.5);
+- the mouse ISR banks SS:SP before moving to its private stack (§9.10.1);
+- the tick's ROM chain runs in place off `LOW_SEG` (§8.5).
+
+So while the program's code runs it is not pre-empted, which is Windows 3.x's
+own cooperative contract. The layer itself runs on the program's stack, as
+Windows' USER and GDI did. **Every `OSAPI_*` call goes through one gate that
+switches to the task's own `LOW_SEG` stack for the call and back after it.**
+So the kernel always runs on `LOW_SEG`, and pre-emption resumes inside each
+call.
+
+The program runs as a **coroutine of the UI task**:
+
+1. An os8088 callback (`W_PAINT`, a click, a key, `W_ONTIMER`) queues its
+   Windows message.
+2. The layer switches to the program's stack and resumes it.
+3. When the program asks `GetMessage` for a message and the queue is empty,
+   the layer switches back and the callback returns.
+
+The consequences:
+
+- **Paint:** `WM_PAINT` is delivered inside `W_PAINT`, under the gfx lock and
+  the damage clip (§11.90).
+- **Files:** profile writes happen on the UI task.
+- **Modal dialogs:** a modal dialog is a nested loop inside the coroutine.
+- **Re-entry:** a callback that arrives while the program is not waiting in
+  `GetMessage` is queued and delivered later. It is never re-entered.
+
+### 124.3 The NE image as the loader reads it *(pinned)*
+
+These are the fields the loader reads, the rules it applies, and its
+refusals.
+
+**Header fields:** `ne_flags`, `ne_autodata`, `ne_heap`, `ne_stack`,
+`ne_csip`, `ne_sssp`, the segment, resource, module-reference and
+imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
+
+**Segments:**
+
+- every segment is loaded **fixed**, into ONE arena claim (§50.3);
+- MOVEABLE and DISCARDABLE are honoured as fixed;
+- a segment marked ITERATED is expanded.
+
+**Relocations:**
+
+- types 0 (internal, including the movable-entry form `target1 = 0xFF`),
+  1 (import by ordinal) and 2 (import by name) are applied, additive or
+  chained;
+- type 3 (OS fixup) goes to the floating-point rule of §124.5.
+
+**Prologs:**
+
+- an exported entry whose prolog is `1E 58 90` or `8C D8 90` is patched as
+  Windows' loader patched it;
+- callers of a callback set `AX = DGROUP`;
+- `hInstance` is the DGROUP paragraph.
+
+**Task start:**
+
+- the program starts with DS = SS = DGROUP, SI = hPrevInstance (0),
+  DI = hInstance, BX = stack size, CX = heap size, ES = a PSP-shaped block
+  carrying the command line;
+- `InitTask` (KERNEL.91) answers in registers.
+
+**Refusals, each worded on the glass:**
+
+- a SELFLOAD or library module;
+- an import the layer does not provide, named as `MODULE.ordinal` plus the
+  name;
+- a CPU the census rules out (§124.4);
+- a program larger than the heap can hold.
+
+### 124.4 The CPU census *(pinned; the tiers are a gate)*
+
+Before relocation, each code segment is swept from its entry points for
+80186/80286 and x87 opcodes. An 8088 does not fault on them. It executes
+something else (`0x60`–`0x6F` alias the conditional jumps, `0x0F` is
+`pop cs`), so running such a program unchecked is a silent wrong answer, not
+a crash.
+
+The census result is matched against `OSAPI_CPU_INFO` (§60.1), plus a V20/186
+test shared as source from `apps/redline/detect.inc`:
+
+- **186 opcodes:** a V20/V30/186 or better;
+- **286 opcodes:** a 286 or better;
+- **no new opcodes:** every machine;
+- **no match:** a refusal that names the CPU required.
+
+`__WINFLAGS` reports `WF_CPU086`, `WF_CPU186` or `WF_CPU286`, never
+`WF_PMODE`, plus `WF_80x87` when a coprocessor is present. `__AHINCR` is
+0x1000 and `__AHSHIFT` is 12, the real-mode values.
+
+### 124.5 Floating point *(pinned; the subset is a gate)*
+
+Relocation type 3 marks the MS C emulator sequences (`int 34h`–`3Dh`):
+
+- **with an x87 present:** they are patched to native instructions;
+- **without one:** they are served by an emulator part covering exactly the
+  opcodes the census found.
+
+### 124.6 What it will not do *(pinned)*
+
+- No 32-bit or protected-mode-only program, and no DLL of the program's own.
+- No WinHelp: it greys itself with the reason (§47).
+- No DDE, OLE, printing or MMSYSTEM.
+- No program that writes selectors or walks the LDT.
+- No segment moving or discarding.

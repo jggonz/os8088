@@ -561,6 +561,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 121 | XTMP3 — an adaptive MP3 player (`apps/xtmp3/`, `XTMP3.O88`) |
 | 122 | HTTPFS.DRV — a read-only drive over HTTP (`drivers/httpfs/`) |
 | 123 | WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`) |
+| 124 | WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`) |
 
 ## docs/
 
