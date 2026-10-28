@@ -224595,12 +224595,11 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
 ## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
 
-**Status: PLANNED. Nothing in this section is built.** The delivery record
-is `docs/plans/WIN16-PLAN.md` and the diary `docs/HOW-WIN16-WAS-BUILT.md`.
-Each subsection says *(pinned)* until the story that builds it marks it
-*(shipped)* with what was measured. Until then it is a design, not a fact
-about the system. The first story (S1, the census) can change any decision
-marked **gate** in the plan.
+**Status: PLANNED, owner decisions taken 2026-10-28. Nothing in this section
+is built.** The delivery record is `docs/plans/WIN16-PLAN.md` and the diary
+`docs/HOW-WIN16-WAS-BUILT.md`. Each subsection says *(pinned)* until the story
+that builds it marks it *(shipped)* with what was measured. Until then it is a
+design, not a fact about the system.
 
 **Premise.** A Windows 1.x–3.x program is an NE executable of 16-bit x86 code,
 and Windows 3.0 and earlier ran such programs in 8086 real mode. This machine
@@ -224612,8 +224611,9 @@ is an 8086 in real mode. So the layer emulates no CPU:
    far-callable code of its own;
 4. it calls the program's entry point.
 
-The two programs it is built for are the original Minesweeper (`WINMINE.EXE`)
-and Calculator (`CALC.EXE`).
+The two programs it is built for are the original Minesweeper (`WINMINE.EXE`,
+Duff Software's WinMine 2.9 of July 1990, which became Microsoft's) and
+Calculator (`CALC.EXE`, Windows 3.0's).
 
 ### 124.1 What it is, in one table *(pinned)*
 
@@ -224624,8 +224624,10 @@ and Calculator (`CALC.EXE`).
 | instances | one `WIN16.O88` instance per Windows program, multi-instance as any package is (§20) |
 | on demand | the dialog manager and controls, the floating-point emulator and the loader are package PARTS (§20.12), each fetched when first needed and dropped after |
 | kernels | `kern_big` and `kern_emu`. `kern_small` omits it (§24.5): it has no `OSAPI_WM_TIMER` (§13.9). `kern_mega` refuses with `OS88_MEGA_REFUSE` (§20.18) |
+| CPU | the layer's own code is `cpu 8086`. The programs it runs are checked by §124.4's census: an 8086-clean program runs on every machine, and a 186 program needs a V20/V30/186 or better |
 | binaries | **no Microsoft file is ever in the tree.** The user supplies them: `make win16census WIN3X=<dir>` and `make win16disk WIN3X=<dir>` |
-| sources | clean-room MIT 8086 assembly. Wine (LGPL-2.1+) and winevdm (GPL-2) are read as references at the commits the plan pins; formats, ordinals and constants are interoperability facts |
+| sources and licence | code and data are brought in from Wine (LGPL-2.1+) and winevdm (GPL-2, any version) at the commits the plan pins: the `.spec` ordinal tables vendored in `apps/win16/spec/`, Wine's System bitmap font, and the loader, dialog and control logic translated into 8086 assembly. **`apps/win16/` is therefore GPL-2.0-or-later**, and `COPYING` and `README.TXT` ship beside `WIN16.O88`, `apps/apple2`'s footing (docs/APPLE2-SPEC.md section 1.3). The rest of the tree is unaffected |
+| look | what Windows 3.0 showed on that display: the program's menu bar inside its window (`OS88UI_MENU`, §13.16), controls drawn as Windows drew them, and text in that adapter's Windows System font (§124.7) |
 
 ### 124.2 Execution — the program's stack and the coroutine *(pinned)*
 
@@ -224705,7 +224707,7 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
 - a CPU the census rules out (§124.4);
 - a program larger than the heap can hold.
 
-### 124.4 The CPU census *(pinned; the tiers are a gate)*
+### 124.4 The CPU census *(pinned)*
 
 Before relocation, each code segment is swept from its entry points for
 80186/80286 and x87 opcodes. An 8088 does not fault on them. It executes
@@ -224716,16 +224718,25 @@ a crash.
 The census result is matched against `OSAPI_CPU_INFO` (§60.1), plus a V20/186
 test shared as source from `apps/redline/detect.inc`:
 
-- **186 opcodes:** a V20/V30/186 or better;
-- **286 opcodes:** a 286 or better;
 - **no new opcodes:** every machine;
+- **186 opcodes:** a V20/V30/186 or better;
+- **286 opcodes** (protected-mode system instructions, which applications do
+  not issue): a 286 or better;
 - **no match:** a refusal that names the CPU required.
+
+No translation of 186 opcodes for the 8088 is planned: the floor is a V20.
+MEASURED on the samples: WinMine 2.6–2.9 are 186; Windows 3.0's CALC, CLOCK,
+REVERSI, NOTEPAD and SOL are 8086-clean.
 
 `__WINFLAGS` reports `WF_CPU086`, `WF_CPU186` or `WF_CPU286`, never
 `WF_PMODE`, plus `WF_80x87` when a coprocessor is present. `__AHINCR` is
 0x1000 and `__AHSHIFT` is 12, the real-mode values.
 
 ### 124.5 Floating point *(pinned; the subset is a gate)*
+
+MEASURED on CALC 3.00: 288 `wait`+ESC instructions, `WIN87EM.__FPMATH`
+imported, and 348 OS fixups (types 5, 6 and 3).
+
 
 Relocation type 3 marks the MS C emulator sequences (`int 34h`–`3Dh`):
 
@@ -224740,3 +224751,18 @@ Relocation type 3 marks the MS C emulator sequences (`int 34h`–`3Dh`):
 - No DDE, OLE, printing or MMSYSTEM.
 - No program that writes selectors or walks the LDT.
 - No segment moving or discarding.
+
+### 124.7 Fonts — the System font Windows showed on that display *(pinned)*
+
+`GetTextMetrics`, `GetTextExtent` and dialog units answer from the System font
+Windows 3.0 used on the adapter the program's window is on. Text is drawn
+proportionally through `os88type.inc` (§6.3) from an `.F88` face built on the
+host:
+
+| adapter | face | source |
+|---|---|---|
+| VGA | System 10 pt, 16 px high, average width 7, maximum 14, ascent 13 (MEASURED from Windows 3.0's `VGASYS.FON`) | Wine's `fonts/system.sfd` 16 px strike |
+| EGA, CGA, Hercules | the sizes Windows' `EGASYS`, `CGASYS` and `HERCSYS.FON` carry | measured from the owner's setup disks when supplied (they are not in the archive.org install); otherwise os8088 strikes drawn to those metrics from source art |
+
+A Windows `.FON` the user puts in the `WIN16` folder is preferred over the
+built-in face.
