@@ -501,8 +501,9 @@ def leg_hdd(o88, syms, tmp, fx):
           raw[clu:].count(b"\x80") == kept,
           "len %s, wrote %d" % (len(raw) if raw else None, killed["wrote"]))
     tak = vhd_read(vhd, "SYSTEM/APPDATA/WAVERACK.TAK")
-    check("hdd recover: WAVERACK.TAK says a take is running",
-          tak is not None and tak[:5] == b"WRTK\x01", repr(tak))
+    check("hdd recover: WAVERACK.TAK names the take, running",
+          tak is not None and tak[:5] == b"WRT2\x01" and
+          tak[10:22] == rk_name.encode(), repr(tak))
     # --- the machine again: File > Recover Take -----------------------------
     m = os88marty.launch(None, machine=MACHINE_HDD,
                          extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
@@ -543,8 +544,9 @@ def leg_hdd(o88, syms, tmp, fx):
     finally:
         m.close()
     tak = vhd_read(vhd, "SYSTEM/APPDATA/WAVERACK.TAK")
-    check("hdd recover: WAVERACK.TAK marked done",
-          tak is not None and tak[:5] == b"WRTK\x00", repr(tak))
+    check("hdd recover: WAVERACK.TAK's entry cleared (after the open)",
+          tak is not None and tak[:4] == b"WRT2" and
+          all(tak[4 + 20 * k] == 0 for k in range(4)), repr(tak))
 
 
 def leg_bigclu(o88, syms, tmp):

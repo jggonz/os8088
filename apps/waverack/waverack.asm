@@ -436,7 +436,9 @@ wr_cmdok:
     jnc .no
     cmp byte [we_busy], 1
     je .no
-    clc
+    push si                         ; a DSP 1.x, or a floppy above 8,000 Hz:
+    call wc_canrec                  ; refused BEFORE the document is asked
+    pop si                          ; about or emptied (the review, L3)
     ret
 .recover:
     cmp byte [wc_rec], 0
@@ -676,6 +678,8 @@ wr_explain:
     mov si, wr_s_stopfirst
     call wt_active
     jnc .say
+    call wc_canrec                  ; SI = the card's or the floppy's reason
+    jc .say
     mov si, wr_s_busy
     jmp .say
 .view:
@@ -2958,7 +2962,13 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wc_hand, 1                  ; ...its handle
     WRV wc_rcode, 1                 ; the ring's RL code
     WRV wc_made, 1                  ; the take's file exists (ours)
-    WRV wc_mstate, 1                ; WAVERACK.TAK's state to write
+    WRV wc_slot, 1                  ; this instance's slot (wc_myslot)
+    WRV wc_dsp1, 1                  ; verb 4 answered 7: a DSP 1.x (L3)
+    WRV wc_fmax, 2                  ; ticks a count may go unfolded (L1)
+    WRV wc_ftick, 2                 ; ...and the last fold's tick
+    WRV wc_mki, 1                   ; this take's entry in WAVERACK.TAK
+    WRV wc_reci, 1                  ; the entry Recover Take would open...
+    WRV wc_rslot, 1                 ; ...and its recorder's slot
     WRV wc_odst, 1                  ; ...and os88data.inc's byte for it
     WRV wc_rec, 1                   ; a take to recover (the marker said)
     WRV wc_page, 1                  ; the strip's page: the copier moves it...

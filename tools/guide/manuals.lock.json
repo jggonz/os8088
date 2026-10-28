@@ -1208,9 +1208,9 @@
   "sources": [
    "apps/waverack"
   ],
-  "stamped": "c8c92aa96",
-  "strings": "0564075a8fcd5fef",
-  "why": "New manual, written from apps/waverack's menus, key table and status strings and SPEC 123: open, view, select, play, record (rates, gain, pause, the take's endings, Recover Take, the floppy's 8,000 Hz), edit, save, the four menus, layouts, files"
+  "stamped": "45eeb8dd7",
+  "strings": "f2f678d1c518c94a",
+  "why": "Checked against the review fixes: 'Take still recording' on a save over a live take, Record greyed on a floppy above 8,000 Hz and after a DSP 1.x answers once, the take's endings without 'kept' when nothing was written - all said; the overrun's minutes form is below the page's detail"
  },
  "WEAVE": {
   "sources": [],

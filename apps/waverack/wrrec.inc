@@ -53,8 +53,10 @@ WC_MAXW     equ 2                   ; writes a tick, at most
 WC_NU       equ 4                   ; staging units of 16 KB (2 if larger)
 WC_FPP      equ 1024                ; frames a column of the live strip
 WC_MAXCOL   equ 640                 ; the strip's columns, at most
-WC_MKSZ     equ 24                  ; WAVERACK.TAK's bytes...
-WC_MKSEG    equ 21                  ; ...the recorder's segment at +21
+WC_MKN      equ 4                   ; WAVERACK.TAK's entries, one a take...
+WC_MKE      equ 20                  ; ...of 20 bytes: +0 state, +1 the slot,
+                                    ; +2 volume, +4 folder, +6 name (13)
+WC_MKSZ     equ 4 + WC_MKN * WC_MKE ; 'WRT2' and the four
 
 ; -----------------------------------------------------------------------------
 ; wc_active - CF = 0 while a take is held: RECORDING or REC_PAUSED.
@@ -159,8 +161,7 @@ wc_go:
     jnc .made
     jmp .free
 .made:
-    mov byte [wc_mstate], 1         ; the marker: a take is running
-    call wc_mark
+    call wc_mark1                   ; the marker: a take is running
     xor ax, ax                      ; the take at nought
     mov di, wc_zero0
     mov cx, wc_zero1 - wc_zero0
@@ -182,8 +183,7 @@ wc_go:
 .nowk:
     push si
     call wc_unmake                  ; nothing recorded: no file left, and
-    mov byte [wc_mstate], 0         ; no take for the marker to name
-    call wc_mark
+    call wc_mark0                   ; no take for the marker to name
     pop si
     jmp short .free
 .rec:
@@ -206,6 +206,42 @@ wc_go:
 .say:
     call wr_say
     stc
+    ret
+
+; wc_canrec - CF = 1 Record is refused before anything happens, SI = why: a
+; DSP 1.x that verb 4 already answered 7 ('Needs a DSP 2.00+ card'), or the
+; folder on a floppy and the next take's rate above 8,000 Hz ('Floppy: use
+; 8,000 Hz'). Facts, no disk I/O (OSAPI_FILE_HERE, OSAPI_VOL_KIND) - so the
+; one predicate greys on them (the review, L3). keeps all but SI and flags
+wc_canrec:
+    push ax
+    push bx
+    push dx
+    mov si, wc_s_dsp1
+    cmp byte [wc_dsp1], 0
+    jne .no
+    mov bl, [wr_rate]
+    xor bh, bh
+    shl bx, 1
+    cmp word [wr_rates + bx], WC_FLOPHZ
+    jbe .yes
+    call OSAPI_FILE_HERE            ; BL = the volume
+    mov al, bl
+    call OSAPI_VOL_KIND
+    jc .flop
+    cmp al, VK_FIXED
+    je .yes
+.flop:
+    mov si, wc_s_flop
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -277,11 +313,17 @@ wc_end:
     call wc_wlast                   ; the partial unit, any length
 .written:
     call wc_seqend                  ; the stream's sequence closed
-    call wc_patch                   ; the sizes, at offset 0
+    call wc_patch                   ; the sizes, at offset 0 (CF: refused)
+    pushf
     call wc_release                 ; the stream is closed: the ring may go
     mov byte [wc_uiown], 0
-    mov byte [wc_mstate], 0         ; the marker: done
-    call wc_mark
+    popf
+    jnc .patched
+    mov word [wc_why], wc_s_wfail   ; the header not patched: the take is
+    jmp short .marked               ; unfinished, so its marker STAYS (L5)
+.patched:
+    call wc_mark0                   ; the marker: done
+.marked:
     mov byte [wt_state], WT_IDLE
     call wt_quiet
     mov ax, [wc_wrote]
@@ -290,9 +332,22 @@ wc_end:
     call wc_unmake                  ; nothing on the disk: no file
     cmp byte [wc_noopen], 0
     jne .out
-    mov si, [wc_why]
+    mov si, [wc_why]                ; ...and no '... kept' about it (L4): a
+    cmp si, wc_s_full               ; full disk says so, a write error says
+    jne .nf                         ; so, an overrun before the first write
+    mov si, wr_s_dfull2             ; is nothing recorded
+    jmp short .say
+.nf:
+    cmp si, wc_s_wfail
+    jne .nw
+    mov si, wr_s_wfail
+    jmp short .say
+.nw:
+    cmp si, wc_msg
+    je .emp
     or si, si
     jnz .say
+.emp:
     mov si, wc_s_empty
 .say:
     call wo_moved                   ; the empty document again: NO FILE, and
@@ -466,16 +521,7 @@ wc_own:
 wc_fold:
     cmp byte [wc_sopen], 0
     je .ok
-    push es
-    mov es, [wc_rseg]
-    mov bx, [wc_rl]
-    mov ax, [es:bx+SND_EXT_CONS]
-    pop es
-    mov dx, ax
-    sub ax, [wc_lastc]
-    mov [wc_lastc], dx
-    add [wc_rcap], ax
-    adc word [wc_rcap+2], 0
+    call wc_refold
     mov al, 3
     mov ah, [wc_hand]
     call OSAPI_SND_STREAM           ; AX = the state
@@ -490,6 +536,33 @@ wc_fold:
     stc
     ret
 
+; wc_refold - the ring's 16-bit count read and folded into [wc_rcap] - a word
+; read, no driver call: wc_fold's first half, and wc_pull's after every chunk
+; (M1). A count that has not been folded for longer than it takes the card to
+; fill 65,536 - RL bytes ([wc_fmax] ticks) may have lapped itself, which no
+; fold can see: that is an overrun, said rather than trusted (the review, L1).
+; clobbers AX, BX, DX
+wc_refold:
+    push es
+    mov es, [wc_rseg]
+    mov bx, [wc_rl]
+    mov ax, [es:bx+SND_EXT_CONS]
+    pop es
+    mov dx, ax
+    sub ax, [wc_lastc]
+    mov [wc_lastc], dx
+    add [wc_rcap], ax
+    adc word [wc_rcap+2], 0
+    call OSAPI_GET_TICKS
+    mov dx, ax
+    sub ax, [wc_ftick]
+    mov [wc_ftick], dx
+    cmp ax, [wc_fmax]
+    jbe .ok
+    mov byte [wc_over], 1
+.ok:
+    ret
+
 ; -----------------------------------------------------------------------------
 ; wc_pull - everything captured and not yet copied: an OVERRUN first (the
 ;           reader within a block of a ring behind: the block the card is
@@ -499,6 +572,8 @@ wc_fold:
 ;           worker's or the UI's, never both. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wc_pull:
+    cmp byte [wc_over], 0           ; (an overrun already found: stopped)
+    jne .over
     mov ax, [wc_rcap]               ; the lag: captured - copied, this stream
     mov dx, [wc_rcap+2]
     sub ax, [wc_rrd]
@@ -538,6 +613,22 @@ wc_pull:
     mov cx, [wc_cleft]
 .c3:
     call wc_copy                    ; CX bytes from ring SI, extremes noted
+    push cx                         ; THE COUNT AGAIN, after the copy (M1): a
+    call wc_refold                  ; block the card began over the chunk
+    pop cx                          ; while it was copied - a stall in the
+    cmp byte [wc_over], 0           ; middle of a pass - makes the chunk bad,
+    jne .over                       ; so it is not kept: the take ends at the
+    mov ax, [wc_rcap]               ; last good frame
+    mov dx, [wc_rcap+2]
+    sub ax, [wc_rrd]                ; (the lag from the chunk's FIRST byte)
+    sbb dx, [wc_rrd+2]
+    jnz .over
+    push cx
+    mov cx, [wc_rl]
+    sub cx, 2048 >> WC_BLKSH
+    cmp ax, cx
+    pop cx
+    ja .over
     add [wc_rrd], cx
     adc word [wc_rrd+2], 0
     add [wc_frames], cx
@@ -671,6 +762,9 @@ wc_colend:
 ; [wc_why]). clobbers AX, BX, CX, DX, SI, DI
 wc_wfull:
     mov byte [wc_nw], WC_MAXW
+    cmp byte [wc_fixed], 0          ; a floppy: ONE write a tick (2.4-2.9 s
+    jne .again                      ; each against a ring of 4 s - L2)
+    mov byte [wc_nw], 1
 .again:
     cmp byte [wc_nfull], 0
     je .done
@@ -796,8 +890,8 @@ wc_patch:
     mov si, wc_name0
     xor ax, ax
     xor dx, dx
-    call OSAPI_FILE_WRITE_AT
-    pop es
+    call OSAPI_FILE_WRITE_AT        ; CF: refused - the caller keeps the
+    pop es                          ; marker (L5)
 .out:
     ret
 
@@ -1072,6 +1166,14 @@ wc_release:
 ;           SI, DI
 ; -----------------------------------------------------------------------------
 wc_open:
+    mov ax, 0                       ; [wc_fmax]: the ticks the card takes to
+    sub ax, [wc_rl]                 ; fill 65,536 - RL bytes, (65,536 - RL)
+    mov dx, 18                      ; x 18 / rate - 18, not 18.2, says it a
+    mul dx                          ; little early (wc_refold, L1)
+    div word [wc_rate]
+    mov [wc_fmax], ax
+    call OSAPI_GET_TICKS
+    mov [wc_ftick], ax
     xor ax, ax
     mov [wc_lastc], ax
     mov [wc_rcap], ax
@@ -1095,9 +1197,12 @@ wc_open:
     clc
     ret
 .no:
-    mov si, wc_s_dsp1               ; 7: a single-cycle DSP (SPEC.md 34.6.4)
-    cmp al, 7
-    je .say
+    mov si, wc_s_dsp1               ; 7: a single-cycle DSP (SPEC.md 34.6.4),
+    cmp al, 7                       ; remembered: the next Record is refused
+    jne .n7                         ; BEFORE it asks or empties (L3)
+    mov byte [wc_dsp1], 1
+    jmp short .say
+.n7:
     mov si, wr_s_cbusy              ; 1: busy
     cmp al, 1
     je .say
@@ -1350,8 +1455,7 @@ wc_roomsay:
     mov [di], ax
     mov byte [di+2], ' '
     add di, 3
-    mov ax, [wc_free]               ; KB, or MB past 9,999 KB
-    mov dx, [wc_free+2]
+    call wc_room                    ; KB, or MB past 9,999 KB
     call wc_k1024
     mov si, wc_s_kb
     or dx, dx
@@ -1367,8 +1471,7 @@ wc_roomsay:
     push di                         ; (where ' free' would go)
     mov si, wc_s_freed
     call wr_put
-    mov ax, [wc_free]               ; the seconds: free / rate, 32 bits
-    mov dx, [wc_free+2]
+    call wc_room                    ; the seconds: free / rate, 32 bits
     mov cx, [wc_rate]
     call wc_div32
     mov si, wc_s_sec
@@ -1401,6 +1504,19 @@ wc_roomsay:
 .ok:
     mov si, wr_tbuf2
     jmp wr_say
+
+; wc_room - DX:AX = the room now: DFREE's answer at Record less what the take
+; has written since (Resume says it again - L6). keeps the rest
+wc_room:
+    mov ax, [wc_free]
+    mov dx, [wc_free+2]
+    sub ax, [wc_wrote]
+    sbb dx, [wc_wrote+2]
+    jnc .ok
+    xor ax, ax
+    xor dx, dx
+.ok:
+    ret
 
 ; wc_k1024 - DX:AX >> 10. keeps the rest
 wc_k1024:
@@ -1442,7 +1558,9 @@ wc_mmss:
     xor dx, dx
     mov cx, 60
     div cx
-    push dx
+    cmp ax, 99                      ; past 99 minutes, minutes alone: '140m'
+    ja .mins                        ; (22 characters with the sentence, to
+    push dx                         ; 9999m - L7)
     call dec_u16
     mov byte [di], ':'
     inc di
@@ -1453,54 +1571,115 @@ wc_mmss:
     inc di
 .two:
     jmp dec_u16
-
-; =============================================================================
-; THE RECOVERY MARKER (SPEC.md 123.7): WAVERACK.TAK in the boot volume's
-; SYSTEM\APPDATA - 'WRTK', the state (1: a take is running), its volume,
-; folder and name, and the segment of the instance recording it
-; =============================================================================
-
-; wc_mark - WAVERACK.TAK written with [wc_mstate] and the take's place (a
-; full write the first time a session, one sector after: os88data.inc).
-; keeps nothing
-wc_mark:
-    mov di, wc_mk
-    mov word [di], 'WR'
-    mov word [di+2], 'TK'
-    mov al, [wc_mstate]
-    mov [di+4], al
-    mov al, [wc_vol]
-    mov [di+5], al
-    mov ax, [wc_dir]
-    mov [di+6], ax
-    mov si, wc_name0
-    add di, 8
-    mov cx, 13
-    push es
-    push ds
-    pop es
-    cld
-    rep movsb
-    pop es
-    mov [wc_mk+WC_MKSEG], ds        ; the recorder: this instance's segment
-    mov si, wc_s_tak
-    push es
-    push ds
-    pop es
-    mov bx, wc_mk
-    mov cx, WC_MKSZ
-    mov di, wc_odst
-    call od_write                   ; (a refusal: no marker - not the take's)
-    pop es
+.mins:
+    cmp ax, 9999
+    jbe .mok
+    mov ax, 9999
+.mok:
+    call dec_u16
+    mov byte [di], 'm'
+    inc di
     ret
 
-; -----------------------------------------------------------------------------
-; wc_probe - at launch: WAVERACK.TAK read; a take it says was running and
-;            never ended makes File > Recover Take live ([wc_rec] = 1).
-;            keeps nothing
-; -----------------------------------------------------------------------------
-wc_probe:
-    mov byte [wc_rec], 0
+; =============================================================================
+; THE RECOVERY MARKERS (SPEC.md 123.7): WAVERACK.TAK in the boot volume's
+; SYSTEM\APPDATA - 'WRT2' and WC_MKN entries, one a take: its state (1: a
+; take is running, or died running), the INSTANCE SLOT recording it, its
+; volume, folder and name. THE SLOT IS THE RECORDER'S NAME because a region
+; move cannot change it: WaveRack's region is movable, so its segment names
+; nothing (the review of waves 4b and 5, H1). One file, every change a
+; read-modify-write inside ONE UI callback - and every instance's file calls
+; are UI-task callbacks, so no two interleave (M2). An entry is LIVE when its
+; slot holds a live WaveRack that is not this one: that take may still be
+; growing, so it is never offered, and a save onto it is refused.
+; =============================================================================
+
+; wc_snap - OSAPI_SYS_SNAPSHOT into the strip's page, which no take is
+; drawing whenever this runs (launch, Record before the strip, Stop after it,
+; Recover, a save - all refused during this instance's take but Stop).
+; out BX = INST_MAX. clobbers AX, DI
+wc_snap:
+    push es
+    push ds
+    pop es
+    mov di, wc_cols
+    call OSAPI_SYS_SNAPSHOT
+    pop es
+    ret
+%if SYS_SNAPSHOT_SIZE > WC_MAXCOL * 2
+%error "wc_snap's snapshot does not fit the strip's page"
+%endif
+
+; wc_myslot - the snapshot taken and [wc_slot] = this instance's slot: the
+; record whose region is DS (inside one callback the region cannot move).
+; clobbers AX, BX, CX, DX, SI, DI
+wc_myslot:
+    call wc_snap
+    mov cx, bx
+    mov si, wc_cols + SS_INST
+    xor dl, dl
+    mov ax, ds
+.r:
+    cmp byte [si+SSI_STATE], 1
+    jne .n
+    cmp [si+SSI_SEG], ax
+    jne .n
+    mov [wc_slot], dl
+    ret
+.n:
+    add si, SSI_RECSZ
+    inc dl
+    loop .r
+    mov byte [wc_slot], 0xFF
+    ret
+
+; wc_elive - SI = an entry: CF = 1 it is LIVE - its slot holds a live
+; WaveRack that is not this one (wc_myslot's snapshot). keeps all but flags
+wc_elive:
+    push bx
+    push cx
+    mov bl, [si+1]
+    cmp bl, [wc_slot]
+    je .no
+    cmp bl, [wc_cols + SS_NINST]
+    jae .no
+    xor bh, bh
+    mov cl, 5                       ; SSI_RECSZ = 32
+    shl bx, cl
+    add bx, wc_cols + SS_INST
+    cmp byte [bx+SSI_STATE], 1
+    jne .no
+    cmp word [bx+SSI_NAME], 'Wa'
+    jne .no
+    cmp word [bx+SSI_NAME+2], 've'
+    jne .no
+    cmp word [bx+SSI_NAME+4], 'Ra'
+    jne .no
+    cmp word [bx+SSI_NAME+6], 'ck'
+    jne .no
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop cx
+    pop bx
+    ret
+%if SSI_RECSZ != 32
+%error "wc_elive shifts by 5 for SSI_RECSZ"
+%endif
+
+; wc_ent - AL = an entry's index -> SI = the entry. clobbers AX
+wc_ent:
+    mov ah, WC_MKE
+    mul ah
+    add ax, wc_mk + 4
+    mov si, ax
+    ret
+
+; wc_tread - the table read; a missing, short or foreign file reads as an
+; empty table. clobbers AX, BX, CX, DX, SI, DI
+wc_tread:
     push es
     push ds
     pop es
@@ -1510,90 +1689,237 @@ wc_probe:
     xor dx, dx
     call od_read
     pop es
-    jc .out
+    jc .empty
     or dx, dx
-    jnz .out
+    jnz .empty
     cmp ax, WC_MKSZ
-    jne .out
+    jne .empty
     cmp word [wc_mk], 'WR'
+    jne .empty
+    cmp word [wc_mk+2], 'T2'
+    je .out
+.empty:
+    push es
+    push ds
+    pop es
+    mov di, wc_mk
+    mov cx, WC_MKSZ
+    xor al, al
+    cld
+    rep stosb
+    pop es
+.out:
+    ret
+
+; wc_twrite - the table written back. clobbers AX, BX, CX, DX, SI, DI
+wc_twrite:
+    mov word [wc_mk], 'WR'
+    mov word [wc_mk+2], 'T2'
+    push es
+    push ds
+    pop es
+    mov si, wc_s_tak
+    mov bx, wc_mk
+    mov cx, WC_MKSZ
+    mov di, wc_odst
+    call od_write                   ; (a refusal: no marker - not the take's)
+    pop es
+    ret
+
+; wc_ematch - SI = an entry, AL = the slot it must name: ZF = 1 it is state 1
+; and names that slot and the take at [wc_vol], [wc_dir], [wc_name0].
+; keeps all but flags
+wc_ematch:
+    push cx
+    push si
+    push di
+    cmp byte [si], 1
     jne .out
-    cmp word [wc_mk+2], 'TK'
+    cmp [si+1], al
     jne .out
-    cmp byte [wc_mk+4], 1
+    push ax
+    mov al, [si+2]
+    cmp al, [wc_vol]
+    pop ax
     jne .out
-    call wc_live                    ; ...and is not another window's, live
-    jc .out
-    mov byte [wc_rec], 1
+    push ax
+    mov ax, [si+4]
+    cmp ax, [wc_dir]
+    pop ax
+    jne .out
+    add si, 6
+    mov di, wc_name0
+    mov cx, 13
+    push es
+    push ds
+    pop es
+    cld
+    repe cmpsb
+    pop es
+.out:
+    pop di
+    pop si
+    pop cx
+    ret
+
+; wc_mark1 - Record: the take entered in the first free entry (state 1, this
+; slot, its place) - all four taken, it records unmarked. [wc_mki] = the
+; entry or 0FFh. clobbers AX, BX, CX, DX, SI, DI
+wc_mark1:
+    mov byte [wc_mki], 0xFF
+    call wc_myslot
+    call wc_tread
+    xor al, al
+.f:
+    push ax
+    call wc_ent
+    pop ax
+    cmp byte [si], 0
+    je .put
+    inc al
+    cmp al, WC_MKN
+    jb .f
+    ret
+.put:
+    mov [wc_mki], al
+    mov byte [si], 1
+    mov al, [wc_slot]
+    mov [si+1], al
+    mov al, [wc_vol]
+    mov [si+2], al
+    mov byte [si+3], 0
+    mov ax, [wc_dir]
+    mov [si+4], ax
+    lea di, [si+6]
+    mov si, wc_name0
+    mov cx, 13
+    push es
+    push ds
+    pop es
+    cld
+    rep movsb
+    pop es
+    jmp wc_twrite
+
+; wc_mark0 - the take ended or was refused: ITS entry cleared - only if the
+; entry still names this take from this slot. clobbers AX, BX, CX, DX, SI, DI
+wc_mark0:
+    mov al, [wc_mki]
+    cmp al, 0xFF
+    je .out
+    mov byte [wc_mki], 0xFF
+    push ax
+    call wc_tread
+    pop ax
+    call wc_ent
+    mov al, [wc_slot]
+    call wc_ematch
+    jne .out
+    mov byte [si], 0
+    jmp wc_twrite
 .out:
     ret
 
 ; -----------------------------------------------------------------------------
-; wc_live - CF = 1 the take WAVERACK.TAK names is RUNNING in another window:
-;           a live WaveRack at the segment the take was recorded from, not
-;           this one (a WaveRack that died left its take to recover; one at
-;           our own segment is us, launched after it). OSAPI_SYS_SNAPSHOT
-;           into the strip's page, which no take is using. clobbers AX, BX,
-;           CX, SI, DI
+; wc_probe - at launch and before Recover: the table read, and a state-1
+;            entry that is not LIVE makes File > Recover Take live ([wc_rec]
+;            = 1, [wc_reci] its index). clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
-wc_live:
-    mov ax, [wc_mk+WC_MKSEG]
-    mov bx, ds
-    cmp ax, bx
-    je .no
+wc_probe:
+    mov byte [wc_rec], 0
+    call wc_myslot
+    call wc_tread
+    xor al, al
+.e:
+    push ax
+    call wc_ent
+    pop ax
+    cmp byte [si], 1
+    jne .n
+    call wc_elive
+    jc .n
+    mov byte [wc_rec], 1
+    mov [wc_reci], al
+    ret
+.n:
+    inc al
+    cmp al, WC_MKN
+    jb .e
+    ret
+
+; -----------------------------------------------------------------------------
+; wc_tbusy - the save's destination ([ws_tname] in [ws_ddir] on [ws_dvol]) is
+;            a take ANOTHER window is recording: CF = 1. Saved over, that
+;            take's next append would land in the new file and its Stop
+;            would patch its header over it (the review, H1).
+;            clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+wc_tbusy:
+    call wc_myslot
+    call wc_tread
+    xor al, al
+.e:
+    push ax
+    call wc_ent
+    pop ax
+    cmp byte [si], 1
+    jne .n
+    call wc_elive
+    jnc .n
+    mov ah, [si+2]
+    cmp ah, [ws_dvol]
+    jne .n
+    mov bx, [si+4]
+    cmp bx, [ws_ddir]
+    jne .n
+    push si
+    add si, 6
+    mov di, ws_tname
+    mov cx, 13
     push es
     push ds
     pop es
-    mov di, wc_cols
-    call OSAPI_SYS_SNAPSHOT         ; BX = INST_MAX
+    cld
+    repe cmpsb
     pop es
-    mov cx, bx
-    mov si, wc_cols + SS_INST
-.r:
-    cmp byte [si+SSI_STATE], 1
-    jne .n
-    mov ax, [si+SSI_SEG]
-    cmp ax, [wc_mk+WC_MKSEG]
-    jne .n
-    cmp word [si+SSI_NAME], 'Wa'
-    jne .n
-    cmp word [si+SSI_NAME+2], 've'
-    jne .n
-    cmp word [si+SSI_NAME+4], 'Ra'
-    jne .n
-    cmp word [si+SSI_NAME+6], 'ck'
+    pop si
     jne .n
     stc
     ret
 .n:
-    add si, SSI_RECSZ
-    loop .r
-.no:
+    inc al
+    cmp al, WC_MKN
+    jb .e
     clc
     ret
-%if SYS_SNAPSHOT_SIZE > WC_MAXCOL * 2
-%error "wc_live's snapshot does not fit the strip's page"
-%endif
 
 ; -----------------------------------------------------------------------------
-; wc_recover - File > Recover Take: the take the marker names opened, in its
-;              folder, through SPEC.md 123.4's unfinished-header path (its
-;              data from the file's length: it opens dirty, 'Recovered; save
-;              to fix'); the marker marked done whatever the open says.
+; wc_recover - File > Recover Take: the table read AGAIN (since the offer
+;              another window may have begun or ended a take), the entry's
+;              take opened in its folder through SPEC.md 123.4's
+;              unfinished-header path (its frames from the file's length,
+;              dirty, 'Recovered; save to fix'). The entry is cleared only
+;              when the open SUCCEEDED, or when the take is not there; any
+;              other refusal keeps it for a later try.
 ;              in: BX = the window. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wc_recover:
-    call wc_probe                   ; the marker AGAIN: since the offer, another
-    cmp byte [wc_rec], 0            ; window may have begun a take of its own
+    call wc_probe
+    cmp byte [wc_rec], 0
     jne .still
     mov si, wc_s_norec              ; 'No take to recover'
     jmp wr_say
 .still:
     mov byte [wc_rec], 0
-    mov al, [wc_mk+5]               ; the take's place, out of the marker
+    mov al, [wc_reci]
+    call wc_ent
+    mov al, [si+1]                  ; the take's recorder and place
+    mov [wc_rslot], al
+    mov al, [si+2]
     mov [wc_vol], al
-    mov ax, [wc_mk+6]
+    mov ax, [si+4]
     mov [wc_dir], ax
-    mov si, wc_mk+8
+    add si, 6
     mov di, wc_name0
     mov cx, 13
     push es
@@ -1603,10 +1929,9 @@ wc_recover:
     rep movsb
     pop es
     mov byte [wc_name0+12], 0
-    mov byte [wc_mstate], 0
-    call wc_mark
     call wc_stand
     jnc .there
+    call wc_rdone                   ; its folder is gone: so is the take
     mov si, wc_s_gone               ; 'The take is not there'
     jmp wr_say
 .there:
@@ -1620,7 +1945,25 @@ wc_recover:
     rep movsb
     pop es
     mov bx, [wr_win]
-    jmp wo_open                     ; (it says why when it refuses)
+    call wo_open                    ; (it says why when it refuses)
+    jnc wc_rdone
+    cmp byte [ww_err], E_NOFILE     ; the file is gone: the entry with it
+    je wc_rdone
+    ret
+
+; wc_rdone - Recover's entry cleared, if it still names that take from that
+; recorder. clobbers AX, BX, CX, DX, SI, DI
+wc_rdone:
+    call wc_tread
+    mov al, [wc_reci]
+    call wc_ent
+    mov al, [wc_rslot]
+    call wc_ematch
+    jne .out
+    mov byte [si], 0
+    jmp wc_twrite
+.out:
+    ret
 
 ; --- strings -------------------------------------------------------------------
 wc_s_voice:  db 'VOICE', 0
@@ -1637,6 +1980,7 @@ wc_s_over:   db 'Overrun: kept to ', 0
 wc_s_full:   db 'Disk full: take kept', 0
 wc_s_wfail:  db 'Cannot write: kept', 0
 wc_s_dsp1:   db 'Needs a DSP 2.00+ card', 0
+wc_s_live:   db 'Take still recording', 0
 wc_s_flop:   db 'Floppy: use 8,000 Hz', 0
 wc_s_names:  db 'No free VOICE name', 0
 wc_s_gone:   db 'The take is not there', 0

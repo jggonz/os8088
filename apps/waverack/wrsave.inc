@@ -230,6 +230,13 @@ ws_issame:
 ; out: CF = 1 refused (said). clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 ws_match:
+    call wc_tbusy                   ; a take ANOTHER window is recording:
+    jnc .free                       ; never saved over (the review, H1)
+    mov si, wc_s_live               ; 'Take still recording'
+    call ws_no
+    stc
+    ret
+.free:
     xor dx, dx
     xor bx, bx
     mov si, wo_src

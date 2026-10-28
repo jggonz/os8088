@@ -107,13 +107,16 @@ and the waveform grows as you record.
 If the disk fills, WaveRack stops and keeps what it wrote: **Disk full:
 take kept**. If the disk falls behind, it keeps the take up to that point:
 **Overrun: kept to 1:23**. A card that delivers nothing ends with **No
-input from the card** and leaves no file. On a floppy, rates above 8,000 Hz
-say **Floppy: use 8,000 Hz**: a floppy cannot write faster than that while
-it records. An original Sound Blaster 1.0 or 1.5 cannot record into
-WaveRack and says **Needs a DSP 2.00+ card**.
+input from the card** and leaves no file. On a floppy, **Record** is greyed
+at rates above 8,000 Hz and says **Floppy: use 8,000 Hz**: a floppy cannot
+write faster than that while it records. An original Sound Blaster 1.0 or
+1.5 cannot record into WaveRack: the first try says **Needs a DSP 2.00+
+card**, and **Record** stays greyed after that.
 
 If the machine stops in the middle of a take, the file is still there.
-The next time you start WaveRack, **File > Recover Take** opens it.
+The next time you start WaveRack, **File > Recover Take** opens it. A take
+that another WaveRack window is still recording is never offered, and
+saving over it says **Take still recording**.
 
 ## Editing
 

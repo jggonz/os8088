@@ -219928,15 +219928,18 @@ s** at 11,025 Hz (the card's time constant records 11,111), **2.13 s** at
 | XT-IDE, 2 KB clusters: 16 KB `WRITE_SEQ` | 0.247 s (median of 5; 0.227 taken alone) | 66 KB/s | keeps up | keeps up | keeps up |
 | XT-IDE, 32 KB clusters: 32 KB | 0.369 s | 89 KB/s | keeps up | keeps up | keeps up |
 | 1.44 MB floppy: 16 KB | 1.734 s (the commit ~0.8 s of it) | 9.2 KB/s | no | no | thin (1.15x) |
-| 1.44 MB floppy: 24 KB | ~2.2 s (0.81 s + 0.058 s a KB) | ~10.9 KB/s | no | no | **yes: 1.36x, the copy stopped ~55% of the ring** |
-| 1.44 MB floppy: 32 KB | 2.41-2.95 s (traced; the first pays the motor) | 11-13 KB/s | **no: one run overran at the first write** | no | yes, 1.5x, but 86% of the ring |
+| 1.44 MB floppy: 24 KB (tried, taken back) | estimated ~2.2 s | estimated ~10.9 KB/s | no | no | **overran at 0:24** on the soak row: the estimate was wrong |
+| 1.44 MB floppy: **32 KB (the unit)** | 2.41-2.95 s (traced; the first pays the motor) | 11-13 KB/s | **no: one run overran at the first write** | no | **yes**: 1.5x, the ring's high water 86% |
 
 So a fixed disk writes 16 KB units (one cluster when that is larger) and a
-floppy **24 KB**, and **a floppy takes 8,000 Hz**: Record onto a removable
-volume at a higher rate says `Floppy: use 8,000 Hz` and makes nothing. A
-floppy's write blocks the copy for longer than the ring holds at 11,025 Hz
-and barely out-writes the card; at 8,000 Hz the ring holds 4.0 s and a
-24 KB write keeps up a third over. The volume's kind is a fact
+floppy **32 KB**, ONE a tick (two 32 KB floppy writes back to back would
+outlast the ring - the review of waves 4b and 5, L2), and **a floppy takes
+8,000 Hz**: Record onto a removable volume at a higher rate says `Floppy:
+use 8,000 Hz` and makes nothing - greyed by `wr_cmdok` before the document
+is asked about or emptied (L3), as is Record after a DSP 1.x has answered 7
+once. A floppy's write blocks the copy for longer than the ring holds at
+11,025 Hz and barely out-writes the card; at 8,000 Hz the ring holds 4.0 s
+and a 32 KB write keeps up half again over. The volume's kind is a fact
 (`OSAPI_VOL_KIND`); the rate stays the user's to choose. **Measured by the
 soak row** (`waverackrec`), the ring's high water a take - the reader's
 greatest lag - against the 32,256 bytes an overrun begins at: XT-IDE 2 KB
@@ -219965,9 +219968,16 @@ take's frames equal to the card's own count.
   then carries the reason.
 - **Overrun** - the reader within one block of a whole ring behind (the
   block the card is filling is the ring's oldest) - ends the take at the
-  last good frame, keeps it, and says `Overrun: kept to M:SS` (the pinned
-  `The disk could not keep up - take kept to M:SS` was 46 characters against
-  the status bar's 22).
+  last good frame, keeps it, and says `Overrun: kept to M:SS` (`140m` past
+  99 minutes, so it stays inside 22 characters; the pinned `The disk could
+  not keep up - take kept to M:SS` was 46). **The count is read again after
+  every chunk** (a word read): a chunk the card began a block over while it
+  was being copied - a stall in the middle of a pass, an `int 13h` landing
+  between two reads of the count - is discarded rather than kept as older
+  audio, so `kept to` is exact (the review, M1). **And a count left unfolded
+  for longer than the card takes to fill 65,536 - RL bytes** (`[wc_fmax]`
+  ticks: 39 at 15,000 Hz, 73 at 8,000) may have lapped its 16 bits unseen,
+  so that is an overrun too (L1).
 - **No input** - the count still 0 after one second, or the card stopped
   before a byte came, which is what QEMU's SB16 does (§35: its watchdog ends
   the stream at ~12 ticks) - ends with `No input from the card` and no file.
@@ -219977,19 +219987,44 @@ take's frames equal to the card's own count.
   before it frees the ring. An instance that dies has its stream released
   by SOUND.DRV's `DSV_RELINST` (§34) and leaves an unfinished take, which is
   what the marker is for.
-- **The recovery marker**: Record writes `WAVERACK.TAK` to the boot volume's
-  `\SYSTEM\APPDATA` (`os88data.inc`, `OD_BOOTVOL`, §19.9.1): `WRTK`, a state
-  byte (1 = a take is running), the take's volume, folder and name, and the
-  segment of the instance recording it - 24 bytes. Stop marks it DONE
-  (state 0) rather than deleting it: `os88data.inc` has no delete, and the
-  rewrite of an unchanged length is one sector. A launch that finds state 1
-  offers File > Recover Take - **unless a live WaveRack other than this one
-  stands at the recorder's segment** (`OSAPI_SYS_SNAPSHOT`, read into the
-  strip's page): that take is running in another window, not lost. Recover
-  re-reads the marker before acting (another window may have begun a take
-  since the offer), marks it done, stands in the take's folder and opens it
-  through §123.4's unfinished-header path: its frames from the file's
-  length, dirty, `Recovered; save to fix`.
+- **The recovery markers**: `WAVERACK.TAK` in the boot volume's
+  `\SYSTEM\APPDATA` (`os88data.inc`, `OD_BOOTVOL`, §19.9.1) is `WRT2` and
+  FOUR entries of 20 bytes, one a take: a state byte (1 = a take is running,
+  or died running), the **instance slot** recording it, its volume, folder
+  and name - 84 bytes. THE RULE (the review of waves 4b and 5, H1 and M2):
+  - **The recorder is named by its instance slot** - its index in the
+    kernel's instance table, found in `OSAPI_SYS_SNAPSHOT` as the record
+    whose region is DS - because a region move cannot change it. WaveRack's
+    region is movable, so the segment the first build stored named nothing:
+    a compaction mid-take made a live take look dead.
+  - **Every change is a read-modify-write of the one file inside one UI
+    callback**; every instance's file calls are UI-task callbacks, so none
+    interleave. Record enters its take in the first free entry (all four
+    taken: it records unmarked); Stop clears ITS entry only if the entry
+    still names that take from that slot. A second window's refused Record
+    therefore never clears the first window's protection - the first build's
+    single marker did exactly that.
+  - **An entry is LIVE when its slot holds a live WaveRack that is not this
+    one**: that take may still be growing. A live entry is never offered,
+    and **a save onto its file is refused** (`Take still recording`,
+    `ws_match`): saved over, the recorder's next append would land in the
+    new file and its Stop would patch its header over it.
+  - A launch that finds a state-1 entry that is not live offers File >
+    Recover Take. Recover reads the table again, stands in the take's folder
+    and opens it through §123.4's unfinished-header path (its frames from
+    the file's length, dirty, `Recovered; save to fix`), and **clears the
+    entry only when the open succeeded** - or when the take is gone (its
+    folder, or `File not found`); any other refusal keeps it for a later try.
+  - Stop marks an entry done (0) rather than deleting anything:
+    `os88data.inc` has no delete, and a rewrite of an unchanged length is
+    one sector. **A header patch that fails keeps the entry** - the file is
+    still an unfinished take - and says `Cannot write: kept` (L5).
+- **A take with nothing on the disk** says why without `kept`: `Disk is
+  full`, `Cannot write the file`, or `Nothing was recorded` (L4).
+- **Resume says the room again**, DFREE's answer at Record less what the
+  take has written since (L6).
+- **The data is always an even length** - the card counts whole 512-byte
+  blocks - so the RIFF pad byte (L8) never arises and is not written.
 
 **INPUT GAIN is digital, and says so.** No card SOUND.DRV drives exposes a
 capture gain (§34.15 never writes the recording route), so the slider is a
