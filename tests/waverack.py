@@ -132,6 +132,31 @@ class WR(object):
         self.seg = None
 
     # --- the guest ------------------------------------------------------------
+    # THE SEGMENT IS READ, NOT KEPT. WaveRack's region is movable
+    # (OS88_REGION_MOVABLE_NOKEEP) and main's complete compaction (#313) moves
+    # it when an open makes room: a segment taken at launch then reads the
+    # region's OLD place - zeros for a format, a stranger's view cache - which
+    # is how the first run on the merged tree failed ODD46 and TONE8K. So
+    # once the window is known, every use reads its window record's W_SEG,
+    # and a move is said once, as evidence
+    @property
+    def seg(self):
+        wi = getattr(self, "_wi", None)
+        if wi is None:
+            return getattr(self, "_seg", None)
+        s = u16(self.q.read(xmcheck.sym("wm_wins") + wi * geom.WIN_SIZE +
+                            geom.W_SEG, 2))
+        if s and s != self._seg:
+            say("      (WaveRack's region moved: %04X -> %04X)" % (self._seg, s))
+            self._seg = s
+        return s or self._seg
+
+    @seg.setter
+    def seg(self, v):
+        self._seg = v
+        if v is None:
+            self._wi = None
+
     def rd(self, name, n=1, off=0):
         return self.q.read((self.seg << 4) + self.syms[name] + off, n)
 
@@ -195,7 +220,7 @@ class WR(object):
         for _ in range(3):
             xmcheck.dblclick(self.sock, *self.ui.row_xy(w, i - self.ui.scroll(w)))
             if until(lambda: self.wrseg()[0] is not None, "WaveRack", 20):
-                self.seg = self.wrseg()[0]
+                self.seg, self._wi = self.wrseg()
                 # the bss is read by THIS source's map: the package running
                 # must be build/waverack.bin's bytes, not a stale floppy's
                 # (its CODE: the data after wr_tpl is written as it runs -
@@ -324,11 +349,46 @@ class WR(object):
         time.sleep(0.3)
         if not self.chooser_open(path):
             return False
-        return until(lambda: self.w("wo_gen") != g and self.b("we_busy") == 0,
-                     "the open and its scan", 120)
+        # THE OPEN'S END, not a moment inside it (waverackdisk's open_doc
+        # learned this first): wo_open EMPTIES the document - the generation
+        # moves, nothing is busy - before it lays the piece and starts the
+        # scan, so "moved and not busy" can be met in that gap. The first run
+        # on the merged tree read TONE8K's format as zeros there. So: the
+        # document open with its view cache built, or the open refused
+        # (and HELD for 0.5 s at one generation: a refusal is decided inside
+        # the open's one callback, which QMP can read in the middle of, and
+        # [ww_err] still holds the LAST refusal until the parse writes it)
+        seen = {"g": None, "t": None}
+
+        def done():
+            ok = (self.w("wo_gen") != g and self.b("we_busy") == 0 and
+                  ((self.b("wo_doc") and self.b("wv_ok")) or
+                   self.b("ww_err")))
+            gen = self.w("wo_gen")
+            if not ok:
+                seen["t"] = None
+                return False
+            if gen != seen["g"] or seen["t"] is None:
+                seen["g"], seen["t"] = gen, time.time()
+                return False
+            return time.time() - seen["t"] >= 0.5
+        return until(done, "the open and its scan", 120, 0.05)
 
     def settled(self, secs=60):
-        return until(lambda: self.b("we_busy") == 0, "the refinement", secs)
+        """the refinement done: we_busy 0 and STAYING 0 for 0.6 s (eleven
+        ticks) - the scan's end and the refinement's first pass are separate
+        ticks, and a read between them compared a coarse cache (DATA1ST.WAV,
+        on the merged tree's second run)"""
+        quiet = {"t": None}
+
+        def still():
+            if self.b("we_busy") != 0:
+                quiet["t"] = None
+                return False
+            if quiet["t"] is None:
+                quiet["t"] = time.time()
+            return time.time() - quiet["t"] >= 0.6
+        return until(still, "the refinement", secs, 0.05)
 
     def shot(self, path, w=None):
         w = w or self.window()

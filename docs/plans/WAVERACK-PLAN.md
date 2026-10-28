@@ -1022,7 +1022,15 @@ network. `make waverackdisk` builds the disk in four geometries (§123.13); the
 360 KB one answers the 360 KB question, `vm/xt-waverack` carries it in B:,
 and the live media and `make waverackhd`'s disk carry the clips in MEDIA/.
 The merge of `origin/main` (#313-#316) came first; the final pass was run
-again on the merged tree.
+again on the merged tree: the soak union 5 of 6, `waverack` failing on two
+HARNESS races the merged kernel's timing exposed (an open read in the gap
+before its scan began, a cache compared before its refinement began) -
+fixed in `tests/waverack.py` and passing alone; `test-full` 75 passed, one
+skipped (no `cc`), and `pins` - main's NO-PINNING gate, new to this branch -
+failed until WaveRack's thirteen claim sites were registered in
+`tests/pins.txt`: the two rings D, the three the worker touches lock-free X,
+and eight UI-only claims N, a backlog for the owner (a relocation proc each
+would retire them).
 
 ![MARCH.WAV open in WaveRack: 24 s of the USAF Band's Stars and Stripes Forever](../waverack/waverack-w7-music.png)
 

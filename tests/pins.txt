@@ -365,6 +365,31 @@ X apps/realdmg/rwaot.inc rw_aseg+bx      # a precompiled cartridge's CODE IMAGES
                                          # image is, so they stack under each
                                          # other and wall nothing (REALDMG-SPEC 20.10)
 
+D apps/waverack/wrxport.inc wt_rseg    # the play's external ring, page-safe
+                                         # (OSAPI_MEM_CLAIM_DMA_HI): the Sound
+                                         # Blaster DMAs out of it for one play,
+                                         # freed at the stop (SPEC.md 123.6)
+D apps/waverack/wrrec.inc wc_rseg      # the take's external RECORD ring, page-
+                                         # safe: the card DMAs INTO it for the
+                                         # take, freed after the stream's close
+                                         # (SPEC.md 123.7)
+X apps/waverack/wrxport.inc wt_laseg   # the play's look-ahead, which the
+                                         # WORKER task converts out of between
+                                         # the UI's ticks with no lock (SPEC.md
+                                         # 20.6): a move needs the worker parked
+                                         # mid-pass, and nothing parks it; held
+                                         # for one play
+X apps/waverack/wrxport.inc wt_hseg    # the play's HOLD, which the worker reads
+                                         # the same way, lock-free, for the length
+                                         # of one play; and wt_hoff walks it by
+                                         # paragraph (it can pass 64KB)
+X apps/waverack/wrrec.inc wc_useg+bx   # a take's staging units, which the
+                                         # WORKER copies the ring into between the
+                                         # UI's ticks with no lock (SPEC.md 123.7)
+                                         # while the UI writes the full ones: a
+                                         # move needs the worker parked; held for
+                                         # one take
+
 # --- packages: bucket N - pinned with no valid reason yet (the backlog) --------
 
 N apps/pixelstein/pxstein.asm op:PX_PART_ART  # the 37KB art masters: the loader
@@ -381,3 +406,24 @@ N apps/browser/brdownload.inc br_dl_partpaint+2  # the Download Manager's
                                          # Selection claims under that far call, so
                                          # op_movable's rule (SPEC.md 20.12.12)
                                          # refuses it; held while the manager is up
+N apps/waverack/waverack.asm wr_bseg   # WaveRack's composing band (10KB),
+                                         # claimed at entry and held for the
+                                         # window's life; UI-only, so a relocation
+                                         # proc that rewrites wr_bseg would retire
+                                         # this line
+N apps/waverack/wrdoc.inc di+WS_ENV    # a source's coarse envelope (1-8KB),
+                                         # held while the source is; UI-only
+N apps/waverack/wrsave.inc di+WS_ENV   # the same envelope, re-claimed by the
+                                         # rebase after a save over its source
+N apps/waverack/wrdoc.inc we_vseg      # the view cache (4KB), held while a
+                                         # document is open; UI-only
+N apps/waverack/wredit.inc we_vseg     # the same view cache, claimed for a
+                                         # document an edit adopts
+N apps/waverack/wrdoc.inc wo_ioseg     # the read window (17-33KB), held while
+                                         # a document is open; file calls hold
+                                         # its segment only inside one call
+N apps/waverack/wredit.inc wo_useg     # the undo history (6KB), held while a
+                                         # document has edits; UI-only
+N apps/waverack/wrsave.inc ws_oseg     # a save's output claim (16-32KB), held
+                                         # across the save's ticks; each write
+                                         # holds its segment only inside its call
