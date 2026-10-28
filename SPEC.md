@@ -219226,7 +219226,11 @@ elsewhere), answering ES:DI = the frame and CX = the frames there, all in
 one piece; the claim remembers the run it holds, so a second read of it is
 free. Since wave 4b every read is a STREAM - `os88_rseq` (§18.4.8.1) with a
 cursor in the source's record, and a frame inside the held run keeping the
-overlap and reading only what follows (§123.6's last part). The 32-bit arithmetic is `wo_muldiv` (DX:AX x BX / CX through a 48-bit
+overlap and reading only what follows (§123.6's last part) - and a source may
+live on a volume of clusters up to 32 KB (FAT16 past 1 GB), its record's name
+upper-cased at Open so the save's self-reference test cannot miss it (wave
+4's review, M2). A file is immutable only within one instance (§123.10's
+last part). The 32-bit arithmetic is `wo_muldiv` (DX:AX x BX / CX through a 48-bit
 product), `wo_div32` (shift and subtract) and `wo_time`, the LCD's
 `MM:SS.cc`, divided in TWO steps (the seconds, then the remainder's
 hundredths) so 2^31 frames never overflow, `--:--.--` past 99 minutes.
