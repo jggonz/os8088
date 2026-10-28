@@ -39,6 +39,12 @@ WaveRack counted.
             are counted
   floppy  os8088_5150_herc_sb_gla_144: LONG.WAV (8-bit mono 11,025 Hz, 1.1
           MB) off a 1.44 MB floppy in B:, 30 s of play
+  bigclu  the HDD machine on a 321 MB VHD of 32 KB CLUSTERS (os88hdd.py
+          --spc 64, TotSec32 - what HDD.DRV formats past 1 GB): BEFORE must
+          refuse it (`Cluster too large`); AFTER opens BIG22 (the I/O claim
+          33 KB), plays 15 s with no underrun, and saves MID11.WAV as
+          OUT32.WAV through a 32 KB output claim - read back off the VHD on
+          the host and held to wrsim.write_wav byte for byte, no temp left
 
 AFTER's legs are asserted (no underrun and no silence past the stream's own
 start where the medium keeps up; the hold; the gaps said); BEFORE's are
@@ -159,8 +165,16 @@ def open_doc(ui, rk, name, scan_s):
     c0 = cyc(m)
     g = rk.w_("wo_gen")
     ui.chooser_open(name)
+    # the open's END, not a moment inside it: wo_open empties the document
+    # first (the generation moves, nothing is busy) and only then lays the
+    # piece and starts the scan - a fourth run caught that gap and pressed
+    # Play into 'Scanning 4%'. So: the document IS this file and its view
+    # cache built ([wv_ok], which the scan's end sets), or the open refused
     os88marty.until(m, lambda mm: rk.w_("wo_gen") != g and
-                    rk.b("we_busy") == 0, "%s's scan" % name, poll=0.5,
+                    rk.b("we_busy") == 0 and
+                    ((rk.b("wo_doc") and rk.text("wo_name") == name and
+                      rk.b("wv_ok")) or rk.b("ww_err")),
+                    "%s's scan" % name, poll=0.05,
                     guest=scan_s)
     return (cyc(m) - c0) / os88marty.GUEST_HZ
 
@@ -180,11 +194,30 @@ def measure_play(ui, rk, label, secs=PLAY_S, more=None):
         n = rk.d("wt_played")
         return (rk.b("wt_state") == WT_PLAY and n > 0 and n != stale and
                 not (rk.has("wt_hload") and rk.b("wt_hload")))
-    os88marty.until(m, started, label + " to sound", poll=0.25, guest=240.0)
+    try:
+        os88marty.until(m, started, label + " to sound", poll=0.05,
+                        guest=240.0)
+    except os88marty.MartyError:
+        say("     %s never sounded: state %d, status %r, said %r, windows %r"
+            % (label, rk.b("wt_state"), rk.text("wr_stbuf"),
+               sorted(loaded["said"]), ui.titles()))
+        raise
     c0 = cyc(m)
     loaded["load_s"] = (c0 - t_key) / os88marty.GUEST_HZ
+    held0 = rk.b("wt_held") if rk.has("wt_held") else None
     if more:
-        more()                          # (the window starts once it is done)
+        # the second window's launch takes the guest a minute and more under
+        # a play (the UI task is the play's too), long enough for BIG22 to
+        # END inside it - which a third run measured as a 0.1 s window. So
+        # once it is up, the first play SEEKS back to its start (Home) and
+        # the window begins from that new stream's first sample
+        more()
+        loaded["more_s"] = (cyc(m) - c0) / os88marty.GUEST_HZ
+        ui.raise_window(rk.w)
+        m.key("Home" if rk.b("wt_state") == WT_PLAY else "Space")
+        os88marty.until(m, lambda mm: rk.b("wt_state") == WT_PLAY and
+                        0 < rk.d("wt_played") < 22050, label + ", sought",
+                        poll=0.05, guest=60.0)
         c0 = cyc(m)
     p0 = rk.d("wt_played")
     end = c0 + secs * os88marty.GUEST_HZ
@@ -193,7 +226,10 @@ def measure_play(ui, rk, label, secs=PLAY_S, more=None):
     def done(mm):
         seen.add(rk.text("wr_stbuf"))
         return cyc(mm) >= end or rk.b("wt_state") != WT_PLAY
-    os88marty.until(m, done, label + " to play", poll=0.5, guest=secs + 60)
+    # (poll is HOST seconds, and MartyPC runs ~6x: 0.05 s is ~0.3 of the
+    # guest's - at 0.5 the window overshot by three guest seconds, enough
+    # to run a 4 s play to its end and count the silence after it)
+    os88marty.until(m, done, label + " to play", poll=0.05, guest=secs + 60)
     c1, p1 = cyc(m), rk.d("wt_played")
     st = rk.b("wt_state")
     out = card_rate(rk.w_("wt_out"))
@@ -201,7 +237,8 @@ def measure_play(ui, rk, label, secs=PLAY_S, more=None):
     r = dict(dt=dt, played=p1 - p0, out=out, under=rk.w_("wt_nunder"),
              silence=max(0.0, dt - (p1 - p0) / out), ended=st != WT_PLAY,
              said=loaded["said"] | seen, load_s=loaded["load_s"],
-             status=rk.text("wr_stbuf"))
+             status=rk.text("wr_stbuf"), held0=held0,
+             more_s=loaded.get("more_s"))
     for k in ("wt_held", "wt_slow", "wt_rdsz", "wt_ext"):
         if rk.has(k):
             r[k] = rk.w_(k) if k == "wt_rdsz" else rk.b(k)
@@ -276,8 +313,25 @@ def leg_hdd(tag, o88, syms, tmp, fx):
             # window's File > Open closed
             dw = [x for x in ui.windows()
                   if x.visible and ui.fs_of(x) == (2, 0, 1)]
-            w2 = ui.open("WAVERACK.O88", win=dw[0]) if dw else \
+            if dw:
+                ui.open("WAVERACK.O88", win=dw[0])
+            else:
                 ui.path("C:/WAVERACK.O88")
+            # the NEW WaveRack by what it is - a window titled WaveRack that
+            # is not the first - and not by what open() answered, which a
+            # third run saw be the Disk window (its File menu, not ours)
+            box = {}
+
+            def second_up(mm):
+                for x in ui.windows():
+                    if x.visible and x.i != rk.w.i and \
+                            x.title.startswith("WaveRack"):
+                        box["w"] = x
+                        return True
+                return False
+            os88marty.until(m, second_up, "the second WaveRack", poll=0.25,
+                            guest=120.0)
+            w2 = box["w"]
             rk2 = Rack(m, ui, w2, syms)
             other["rk"] = rk2
             ui.raise_window(w2)
@@ -289,11 +343,13 @@ def leg_hdd(tag, o88, syms, tmp, fx):
         rk2 = other.get("rk")
         res["comp_scanning"] = rk2 is not None and rk2.b("we_busy") == 1
         report(tag, "BIG22 + another's scan", res["comp"])
+        say("     %-6s (the second WaveRack's launch and Open took %.1f s "
+            "under the play)" % (tag, res["comp"]["more_s"] or 0))
         if rk2 is not None:
             ui.close(rk2.w)             # (its scan would disturb what follows)
         # --- 16-bit stereo: past an 8088's conversion ----------------------
         open_doc(ui, rk, "ST22S.WAV", 300.0)
-        res["sts"] = measure_play(ui, rk, "ST22S", secs=3.5)
+        res["sts"] = measure_play(ui, rk, "ST22S", secs=3.0)
         report(tag, "ST22S (4 s, 88 KB/s)", res["sts"])
         open_doc(ui, rk, "ST22L.WAV", 600.0)
         res["stl"] = measure_play(ui, rk, "ST22L", secs=15.0)
@@ -333,9 +389,73 @@ def leg_floppy(tag, o88, syms, tmp):
     return res
 
 
+def leg_bigclu(tag, o88, syms, tmp, fx):
+    """a FAT16 volume of 32 KB CLUSTERS - what HDD.DRV formats past 1 GB
+    (SPEC.md 18.7.5): os88hdd.py --spc 64 on a 654/16/63 VHD (321 MB, a
+    geometry MartyPC's XT-IDE takes, tests/bigvol.py's). Wave 4 refused it
+    (`Cluster too large`); this one opens, plays and saves on it"""
+    say("waverackdisk: bigclu %s - a FAT16 volume of 32 KB clusters" % tag)
+    vhd = os.path.join(tmp, "c32-%s.vhd" % tag)
+    args = [sys.executable, "tools/os88hdd.py", "--out", vhd,
+            "--cyls", "654", "--heads", "16", "--spt", "63", "--spc", "64",
+            "--kernel", os88build.at("build/kernel.sys"),
+            "--vbr", os88build.at("build/boothd.bin"),
+            "--mbr", os88build.at("build/mbr.bin"),
+            "--file", "SOUND.DRV=" + os88build.at("build/sound.drv"),
+            "--file", "WAVERACK.O88=" + o88]
+    for n in ("BIG22.WAV", "MID11.WAV"):
+        args += ["--file", "%s=%s" % (n, os.path.join(fx, n))]
+    subprocess.run(args, check=True, capture_output=True)
+    res = {}
+    m = os88marty.launch(None, machine=MACHINE_HDD,
+                         extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
+    try:
+        ui = os88ui.UI(m, verbose=False)
+        ui.ready(limit=240)
+        w = ui.path("C:/WAVERACK.O88")
+        rk = Rack(m, ui, w, syms)
+        res["scan_s"] = open_doc(ui, rk, "BIG22.WAV", 900.0)
+        res["status"] = rk.text("wr_stbuf")
+        res["frames"] = rk.d("wo_frames")
+        if tag == "before":
+            say("     before open BIG22: %r, %d frames" % (res["status"],
+                                                          res["frames"]))
+            return res
+        src = rk.rd("wo_src", 64)
+        res["clu"] = int.from_bytes(src[30:32], "little")
+        res["iokb"] = rk.w_("wo_iokb")
+        say("     after  open BIG22: %.1f s, cluster %d, I/O claim %d KB, "
+            "heap %s" % (res["scan_s"], res["clu"], res["iokb"],
+                         "(see the claim map)"))
+        res["play"] = measure_play(ui, rk, "BIG22 on 32 KB clusters",
+                                   secs=15.0)
+        report(tag, "BIG22 (32 KB clusters)", res["play"])
+        open_doc(ui, rk, "MID11.WAV", 300.0)
+        ui.raise_window(rk.w)
+        ui.menu_pick("File", "Save As...")
+        ui.chooser()
+        ui.chooser_save("OUT32.WAV")
+        os88marty.until(m, lambda mm: rk.b("ws_busy") == 0 and
+                        rk.text("wr_stbuf").startswith("Saved"),
+                        "the save", poll=0.5, guest=300.0)
+        res["osz"] = rk.w_("ws_osz")
+        res["saved"] = rk.text("wr_stbuf")
+    finally:
+        m.close()
+    vol = os88flush.vhd_volume(vhd)
+    res["names"] = [n for n in vol.names()]
+    try:
+        res["out"] = vol.read("OUT32.WAV")
+    except Exception as e:                              # noqa: BLE001
+        res["out"] = None
+        res["outerr"] = str(e)
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--leg", action="append", choices=("hdd", "floppy"))
+    ap.add_argument("--leg", action="append",
+                    choices=("hdd", "floppy", "bigclu"))
     ap.add_argument("--before", default=BEFORE)
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
@@ -359,7 +479,7 @@ def main():
         for n in wrsim.DISK_FX:
             open(os.path.join(fx, n), "wb").write(wrsim.disk_fixture(n))
         after = os88build.at("build/waverack.o88")
-        legs = a.leg or ["hdd", "floppy"]
+        legs = a.leg or ["hdd", "floppy", "bigclu"]
         if "hdd" in legs:
             hb = leg_hdd("before", bo88, bsyms, tmp, fx)
             ha = leg_hdd("after", after, syms, tmp, fx)
@@ -382,7 +502,7 @@ def main():
                                                     big["silence"]))
             sts = ha["sts"]
             check("ST22S after: HELD - 'Loading' said, read from memory",
-                  sts.get("wt_held") == 1 and
+                  sts.get("held0") == 1 and
                   any(s.startswith("Loading") for s in sts["said"]),
                   repr(sorted(sts["said"])))
             check("ST22S after: no underrun (before: %d, %.2f s silent)"
@@ -412,6 +532,33 @@ def main():
                   lg["under"] == 0 and lg["silence"] < 0.25,
                   "%d underruns, %.2f s silent" % (lg["under"],
                                                     lg["silence"]))
+        if "bigclu" in legs:
+            cb = leg_bigclu("before", bo88, bsyms, tmp, fx)
+            ca = leg_bigclu("after", after, syms, tmp, fx)
+            check("32 KB clusters before: refused (%r)" % cb["status"],
+                  cb["status"] == "Cluster too large" and cb["frames"] == 0)
+            check("32 KB clusters after: BIG22 opens (%d frames), cluster "
+                  "%d, I/O claim %d KB" % (ca["frames"], ca.get("clu", 0),
+                                          ca.get("iokb", 0)),
+                  ca["frames"] == 22050 * 95 and ca.get("clu") == 32768 and
+                  ca.get("iokb") == 33)
+            pl = ca.get("play")
+            check("32 KB clusters after: 15 s played, no underrun (%s)"
+                  % (pl and "%.2f s silent" % pl["silence"]),
+                  pl is not None and pl["under"] == 0 and
+                  pl["silence"] < 0.25)
+            mid = wrsim.disk_fixture("MID11.WAV")
+            r = wrsim.parse(mid)
+            want = wrsim.write_wav([(0, 0, r["frames"])],
+                                   {0: mid[r["dataoff"]:]}, (11025, 8, 1))
+            check("32 KB clusters after: OUT32.WAV is wrsim.write_wav of "
+                  "MID11, byte for byte (%d), %r, a %d-byte output claim"
+                  % (len(want), ca.get("saved"), ca.get("osz", 0)),
+                  ca.get("out") == want and ca.get("osz") == 32768,
+                  ca.get("outerr", "%r bytes" % (len(ca.get("out") or b""),)))
+            check("32 KB clusters after: no temp file left (%s)"
+                  % ca.get("names"), not any("WRSAV" in n.upper()
+                                             for n in ca.get("names", [])))
     finally:
         if a.keep:
             say("waverackdisk: kept %s" % tmp)

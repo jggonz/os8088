@@ -119,11 +119,12 @@ def chs(lba, spt, heads):
     return bytes([h & 0xFF, (s & 0x3F) | ((c >> 2) & 0xC0), c & 0xFF])
 
 
-def pick_layout(tot):
+def pick_layout(tot, force=None):
     """A FAT16 layout for `tot` sectors: the smallest cluster that keeps the
     count inside FAT16's range, which is the shape drivers/hdd/fmt.inc's own
-    capacity table produces."""
-    for spc in (4, 8, 16, 32, 64):
+    capacity table produces - or, with FORCE, exactly FORCE sectors a
+    cluster (--spc), refused when FAT16's count range does not hold it."""
+    for spc in ((force,) if force else (4, 8, 16, 32, 64)):
         rsvd, nfats, root_ent = 1, 2, 512
         root_secs = (root_ent * 32 + SECTOR - 1) // SECTOR
         fatsz = 1
@@ -136,7 +137,8 @@ def pick_layout(tot):
             fatsz = need
         if 4085 <= nclus < 65525:
             return spc, rsvd, nfats, root_ent, root_secs, fatsz, nclus
-    fail("no FAT16 layout fits %d sectors" % tot)
+    fail("no FAT16 layout fits %d sectors%s" % (
+        tot, " at %d sectors a cluster" % force if force else ""))
 
 
 def the_file(path):
@@ -277,6 +279,12 @@ def main():
     ap.add_argument("--spt", type=int, default=26)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--cyls", type=int, default=615)
+    ap.add_argument("--spc", type=int, choices=(4, 8, 16, 32, 64),
+                    help="format with exactly N sectors a cluster (N = 64: "
+                         "FAT16's 32 KB cluster) instead of the smallest that "
+                         "fits; the volume may then pass 65,535 sectors - "
+                         "TotSec32, SPEC.md 18.7.5 - and must hold FAT16's "
+                         "4,085 clusters (64 sectors: 128 MB at least)")
     ap.add_argument("--raw", action="store_true",
                     help="a flat image of exactly the geometry, no VHD footer")
     ap.add_argument("--st11", action="store_true",
@@ -355,9 +363,12 @@ def main():
     # era convention drivers/hdd/part.inc follows) to the end of the disk.
     base = a.spt
     psecs = total - base
-    if psecs > 65535:
+    if psecs > 65535 and not a.spc:
         psecs = (65535 // a.spt) * a.spt        # the kernel's volume ceiling
-    spc, rsvd, nfats, root_ent, root_secs, fatsz, nclus = pick_layout(psecs)
+                                                # before SPEC.md 18.7.5 (a
+                                                # forced cluster passes it)
+    spc, rsvd, nfats, root_ent, root_secs, fatsz, nclus = pick_layout(
+        psecs, a.spc)
     fat_lba = rsvd
     root_lba = rsvd + nfats * fatsz
     data_lba = root_lba + root_secs
@@ -369,6 +380,7 @@ def main():
     vbr[16] = nfats
     struct.pack_into("<H", vbr, 17, root_ent)
     struct.pack_into("<H", vbr, 19, psecs if psecs < 0x10000 else 0)
+    struct.pack_into("<I", vbr, 32, 0 if psecs < 0x10000 else psecs)
     vbr[21] = 0xF8                              # fixed disk
     struct.pack_into("<H", vbr, 22, fatsz)
     struct.pack_into("<H", vbr, 24, a.spt)

@@ -302,8 +302,10 @@ wr_cmdok:
     je .no
     cmp al, C_RECOVER
     je .no
-    cmp byte [ws_busy], 0           ; every other command waits for a save
-    jne .no
+    call wr_asking                  ; every other command waits for a
+    jnc .no                         ; question to be answered (the alerts
+    cmp byte [ws_busy], 0           ; are not modal: wave 4's review, H2)...
+    jne .no                         ; ...and for a save
     cmp al, C_PLAY
     je .play
     cmp al, C_PLAYK
@@ -463,6 +465,19 @@ wr_cmdok:
     je .yes
     jmp wr_canbig
 
+; wr_asking - CF = 0 while a question of ours is up: Save changes (its
+; action in [wr_qact]) or Replace ([ws_rq]). keeps all
+wr_asking:
+    cmp byte [wr_qact], 0
+    jne .yes
+    cmp byte [ws_rq], 0
+    jne .yes
+    stc
+    ret
+.yes:
+    clc
+    ret
+
 ; wt_idle - CF = 0 when the transport is idle (wr_cmdok's). keeps all
 wt_idle:
     call wt_active
@@ -513,14 +528,17 @@ wr_explain:
     je .view
     cmp al, C_SELALL
     je .view
-    cmp al, C_PLAY
+    cmp al, C_COPY
+    je .copy
+    call wr_asking                  ; the document's commands and Play: a
+    jnc .answer                     ; question up, first (wr_cmdok's order);
+    cmp al, C_PLAY                  ; then a save, a play, no document, a
+                                    ; scan - then their own
     je .play
     cmp al, C_PLAYK
     je .play
-    cmp al, C_COPY
-    je .copy
-    mov si, wr_s_saving             ; the document's commands: a save, a play,
-    cmp byte [ws_busy], 0           ; no document, a scan - then their own
+    mov si, wr_s_saving
+    cmp byte [ws_busy], 0
     jne .say
     mov si, wr_s_stopfirst
     call wt_active
@@ -549,6 +567,16 @@ wr_explain:
     jmp wr_say
 .nodoc:
     mov si, wr_s_nodoc
+    jmp short .say
+.answer:
+    push bx                         ; ...and the question put back in front:
+    mov bx, [os88ui_awin]           ; a click into WaveRack can bury it whole,
+    or bx, bx                       ; and an alert has no dock tile (os88ui's
+    jz .an                          ; own re-front, OSAPI_WM_SHOW)
+    call OSAPI_WM_SHOW
+.an:
+    pop bx
+    mov si, wr_s_answer
     jmp short .say
 .open:
     mov si, ww_e17                  ; 'Clipboard uses 4 files'
@@ -600,7 +628,7 @@ wr_explain:
     test word [wr_caps], SND_CAP_PCM_IN
     jnz .say
     mov si, wr_s_nocap
-    jmp short .say
+    jmp .say
 .view:
     cmp byte [wo_doc], 0            ; no document, still scanning, or the
     je .nodoc                       ; zoom at its end
@@ -1038,8 +1066,11 @@ wr_ask:
     mov al, OS88UI_ASAVE
     call os88ui_ask
     pop ax
-    jc .o
-    mov [wr_qact], al
+    jnc .q
+    cmp al, WRQ_CLOSE               ; refused - a question is up already: a
+    jne .o                          ; close takes it over, closing being the
+.q:                                 ; stronger intent (SPEC.md 69.12; review,
+    mov [wr_qact], al               ; L1)
 .o:
     pop es
     pop di
@@ -1056,10 +1087,19 @@ wr_onask:
     mov ah, [wr_qact]
     mov byte [wr_qact], 0
     mov bx, si
+    cmp al, 1
+    ja .out                         ; Cancel / dismissed: nothing happens
+    push ax                         ; THE STATE ASKED AGAIN (review, H2): the
+    push bx                         ; alert was not modal, so a save or a play
+    call ws_cancel                  ; begun under it ends before New, Open,
+    call wt_active                  ; Close or Save act on the document
+    jc .idle
+    call wt_stop
+.idle:
+    pop bx
+    pop ax
     or al, al
     jz .save
-    cmp al, 1
-    jne .out                        ; Cancel / dismissed: nothing happens
     mov al, ah                      ; Discard
     call wr_qrun
     jmp short .draw
@@ -1092,9 +1132,10 @@ wr_qrun:
     jmp wr_say
 .close:
     push bx
-    call wt_release
-    pop bx
-    mov byte [wr_closing], 1
+    call ws_cancel                  ; a save under way: its temp file goes
+    call wt_release                 ; (the negotiator is retired, SPEC.md
+    pop bx                          ; 75.2: wr_onclose will not run; review,
+    mov byte [wr_closing], 1        ; H2)
     call OSAPI_WM_CLOSE
     ret
 
@@ -2410,6 +2451,7 @@ wr_s_noplay: db 'Not playing', 0
 wr_s_nosel:  db 'No selection', 0
 wr_s_paused: db 'Paused', 0
 wr_s_stopped: db 'Stopped', 0
+wr_s_answer: db 'Answer the question', 0
 wr_s_end:    db 'End of the sound', 0
 wr_s_unders: db ' underruns', 0
 wr_s_under1: db ' underrun', 0
@@ -2448,7 +2490,7 @@ wr_s_wprot:  db 'Disk write-protected', 0
 wr_s_dirfull: db 'Folder is full', 0
 wr_s_wfail:  db 'Cannot write the file', 0
 wr_s_norepl: db 'Cannot replace file', 0
-wr_s_kept    equ ww_s_kept
+wr_s_kept    equ ws_kmsg
 wr_s_hz:     db ' Hz', 0
 wr_s_b8:     db '  8-bit', 0
 wr_s_b16:    db ' 16-bit', 0
@@ -2519,6 +2561,11 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV ww_arg, 2                   ; the number the refusal names
     WRV ww_clu, 2                   ; the volume's cluster in bytes
     WRV ww_wl, 2                    ; the window's bytes
+    WRV ww_wofs, 2                  ; ...where it starts in the I/O claim
+    WRV ww_head, 2                  ; ww_peek: the head, the bytes' end,
+    WRV ww_need, 2                  ; T (those across a cluster's end)
+    WRV ww_tl, 2
+    WRV ww_tbuf, 48
     WRV ww_tag, 2                   ; fmt: 1 = PCM, else the tag
     WRV ww_ch, 2
     WRV ww_ba, 2
@@ -2569,7 +2616,12 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV we_vseg, 2                  ; ...the view cache
     WRV wv_ww, 2                    ; the width the cache is for
     WRV wo_csrc, 2                  ; the run the I/O claim holds
-    WRV wo_ccap, 2
+    WRV wo_rcap, 2                  ; wo_srcread: this call's read, bytes
+    WRV wo_cofs, 2                  ; ...and where its window starts in it
+    WRV wo_iokb, 2                  ; the I/O claim's KB (wo_iofit)
+    WRV wo_ceof, 1                  ; the window ends at the file's end
+    WRV wo_ntry, 1                  ; wo_srcread's reads left this call
+    WRV wo_x, 4                     ; ...and the byte it wants
     WRV wo_clen, 2
     WRV wo_rmax, 2
     WRV wo_cbase, 4
@@ -2590,6 +2642,7 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wo_useg, 2                  ; ...its claim (WX_UKB)
     WRV wx_tn, 2                    ; the list being built: pieces, too many
     WRV wx_tov, 1
+    WRV wx_adopted, 1               ; this Paste adopted an empty document
     WRV wx_es, 2                    ; wx_emit's piece
     WRV wx_ef, 4
     WRV wx_ec, 4
@@ -2613,6 +2666,7 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV ws_dclu, 2
     WRV ws_oseg, 2                  ; the output claim, its bytes
     WRV ws_fill, 2
+    WRV ws_osz, 2                   ; ...and its size: 16 KB or a cluster
     WRV ws_tok, 2                   ; OSAPI_FILE_WRITE_SEQ's token
     WRV ws_tmask, 2                 ; the source records that ARE the target
     WRV ws_bytes, 4                 ; the data's bytes
@@ -2620,6 +2674,11 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV ws_f0, 4
     WRV ws_f1, 4
     WRV ws_tname, 14                ; the target's name
+    WRV ws_tmp, 14                  ; the temp's name (ws_tmpmake)
+    WRV ws_kmsg, 22                 ; 'Kept as WRSAV07.$$$'
+    WRV ws_tn, 1                    ; ws_tmpmake's number, and tries left
+    WRV ws_tcnt, 1
+    WRV ws_rq, 1                    ; the Replace question is up
     WRV wr_qact, 1                  ; the question's action (WRQ_*)
     WRV wr_closing, 1               ; OSAPI_WM_CLOSE asked: draw nothing
     WRV wr_stsel, 1                 ; the status is 'No selection'
@@ -2660,6 +2719,7 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV we_bleft, 4
     WRV we_acc, 4
     WRV we_racc, 4
+    WRV we_cacc, 4                  ; the refinement's column, so far
     WRV we_f0, 4
     WRV we_f1, 4
     WRV we_n, 4
@@ -2697,6 +2757,7 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wt_rcode, 1                 ; ...its RL code (SND_OPENF_RLSH)
     WRV wt_uiown, 1                 ; the UI is topping the ring up
     WRV wt_inui, 1                  ; ...and the pass running is the UI's
+    WRV wt_ntop, 1                  ; ...and its halves at most
     WRV wt_lsh, 1                   ; the look-ahead's frame shift
     WRV wt_held, 1                  ; the play reads from the hold...
     WRV wt_hload, 1                 ; ...which is loading

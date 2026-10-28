@@ -482,6 +482,8 @@ DISK_FX = {     # name -> (rate, bits, ch, seconds, why): tests/waverackdisk.py
     "BIG22.WAV": (22050, 8, 1, 95, "2 MB of 8-bit mono 22,050 Hz: streams "
                   "off a fixed disk - 15% of an XT's second the disk's, 53% "
                   "the conversion's"),
+    "MID11.WAV": (11025, 8, 1, 9, "99 KB of 8-bit mono 11,025 Hz: saved on "
+                  "a volume of 32 KB clusters, four of them"),
     "ST22S.WAV": (22050, 16, 2, 4, "4 s of 16-bit stereo 22,050 Hz: 88 KB/s, "
                   "past MartyPC's disk - held"),
     "ST22L.WAV": (22050, 16, 2, 20, "20 s of the same: past the disk AND the "
@@ -911,6 +913,15 @@ def fixtures():
     f["NONWHOLE.WAV"] = (riff([chunk(b"fmt ", fmt_body(2, 11025, 16)),
                                chunk(b"data", st + b"\x01\x02\x03")]), "GOOD",
                          "a data size not a whole number of frames: floored")
+    # an 18-byte fmt (cbSize 0, as many writers make it): the data at byte
+    # 46, so with 4-byte frames one straddles every whole-cluster read's end
+    # - the reader's slide (wrdoc.inc) carries it, sequentially
+    st46 = pcm16(interleave(tone(4410, 11025, 700, 22000),
+                            tone(4410, 11025, 1100, 15000)))
+    f["ODD46.WAV"] = (riff([chunk(b"fmt ", fmt_body(2, 11025, 16) + b"\0\0"),
+                            chunk(b"data", st46)]), "GOOD",
+                      "stereo 16-bit 11,025 Hz, 0.4 s, an 18-byte fmt: data "
+                      "at 46, a frame across the 16 KB read's end")
     body = riff([chunk(b"fmt ", fmt_body(1, 11025, 8))]) + b"data" + \
         struct.pack("<I", 0) + pcm8(tone(8000, 11025, 800, 25000))
     f["UNFIN.WAV"] = (body, "GOOD",
@@ -960,6 +971,8 @@ EXPECT = {      # name -> (err, arg) or the accepted file's facts
     "DATA1ST.WAV": dict(rate=8000, bits=8, ch=1, frames=4000, note=N_NONE,
                         dataoff=20),
     "EXTENS.WAV": dict(rate=11025, bits=16, ch=1, frames=5000, note=N_NONE),
+    "ODD46.WAV": dict(rate=11025, bits=16, ch=2, frames=4410, note=N_NONE,
+                      dataoff=46),
     "PASTEND.WAV": dict(rate=8000, bits=8, ch=1, frames=3000, note=N_CLAMP),
     "NONWHOLE.WAV": dict(rate=11025, bits=16, ch=2, frames=1000,
                          note=N_IGNORED, notearg=3),

@@ -10,10 +10,11 @@
 ; code for refusal code ([ww_err], the E_* below and wrsim.py's).
 ;
 ; NOTHING HERE ASSUMES WHERE A CHUNK STARTS: ww_peek hands back any 1..48
-; bytes of the file at any offset, reading the cluster-aligned window that
-; holds them into the document's I/O claim when the window it has does not
-; (READ_AT wants a cluster multiple for both the offset and the length - two
-; clusters at most, so a header costs one read whatever its shape).
+; bytes of the file at any offset, reading the cluster that holds them into
+; the document's I/O claim when the window it has does not (READ_AT wants a
+; cluster multiple for both the offset and the length). Bytes across a
+; cluster's end take that cluster and the next, each ONE cluster - two 32 KB
+; clusters are more than a word and the claim (SPEC.md 123.4, wave 4b).
 ;
 ; Accepted: WAVE_FORMAT_PCM, and WAVE_FORMAT_EXTENSIBLE whose sub-format is
 ; PCM's GUID; 8 or 16 bits; 1 or 2 channels; the block align that implies;
@@ -78,8 +79,9 @@ ww_peek:
     jc .read0
     cmp ax, [ww_wl]
     ja .read0
+    add si, [ww_wofs]               ; (where the window starts in the claim)
     clc
-    jmp short .out
+    jmp .out
 .read0:
     pop di                          ; (the offset back)
     pop dx
@@ -92,35 +94,81 @@ ww_peek:
     push dx
     push di
 .read:
-    mov bx, [ww_clu]                ; the window: the cluster holding off...
-    dec bx
+    mov byte [ww_wv], 0
+    mov bx, [ww_clu]                ; the cluster holding off (a cluster is
+    dec bx                          ; at most 32 KB: the low word's mask)
     not bx
     mov di, ax
-    and di, bx                      ; DI = off & ~(clu - 1) (clu <= 8 KB: the
-    mov [ww_wb], di                 ; mask is the low word's)
+    and di, bx                      ; DX:DI = its offset
+    sub ax, di
+    mov [ww_head], ax               ; the head
+    add ax, cx
+    mov [ww_need], ax               ; ...and where the bytes end in it
+    mov [ww_wb], di
     mov [ww_wb+2], dx
-    sub ax, di                      ; AX = the head
-    mov si, ax
-    add ax, cx                      ; AX = the head + the bytes wanted
-    push ax
-    mov cx, [ww_clu]                ; ...and two clusters of it
-    shl cx, 1
+    mov word [ww_wofs], 0
     mov ax, di
-    xor bx, bx
-    push si
-    mov si, wo_nbuf
-    call OSAPI_FILE_READ_AT         ; out DX:AX = delivered
-    pop si
-    pop cx                          ; CX = what must be there
-    mov es, [wo_ioseg]
-    mov byte [ww_wv], 0
+    xor bx, bx                      ; the cluster, at the claim's front
+    call ww_rdclu                   ; AX = delivered
     jc .io
-    or dx, dx
-    jnz .io                         ; more than asked: not this slot's answer
     mov [ww_wl], ax
     mov byte [ww_wv], 1
+    mov cx, [ww_need]
+    cmp cx, [ww_clu]                ; all inside it: there
+    ja .two
     cmp ax, cx
     jb .io                          ; the file ended inside the bytes
+    mov si, [ww_head]
+    clc
+    jmp .out
+.two:
+    mov byte [ww_wv], 0             ; ACROSS ITS END: the cluster whole...
+    cmp ax, [ww_clu]
+    jb .io
+    sub cx, [ww_clu]
+    mov [ww_need], cx               ; (what the next must hold)
+    mov cx, [ww_clu]
+    mov si, [ww_head]
+    sub cx, si                      ; ...its last T bytes, the ones wanted,
+    mov [ww_tl], cx                 ; set aside...
+    push dx
+    push di
+    push ds
+    pop es                          ; (ES = ours)
+    mov di, ww_tbuf
+    push ds
+    mov ds, [wo_ioseg]              ; (DS = the claim)
+    cld
+    rep movsb
+    pop ds
+    mov es, [wo_ioseg]
+    pop ax
+    pop dx
+    add ax, [ww_clu]                ; ...the next cluster, read at the claim's
+    adc dx, 0                       ; 512 (a sector boundary, as every disk-
+    push ax                         ; visible base is)...
+    push dx
+    mov bx, 512
+    call ww_rdclu                   ; AX = delivered
+    pop dx
+    pop bx
+    jc .io
+    cmp ax, [ww_need]
+    jb .io
+    mov cx, [ww_tl]                 ; ...and the T bytes put back before it:
+    sub bx, cx                      ; the window is [off, ...) from 512 - T
+    sbb dx, 0
+    mov [ww_wb], bx
+    mov [ww_wb+2], dx
+    add ax, cx
+    mov [ww_wl], ax
+    mov di, 512
+    sub di, cx
+    mov [ww_wofs], di
+    mov si, ww_tbuf
+    rep movsb                       ; (DS ours, ES the claim)
+    mov byte [ww_wv], 1
+    mov si, [ww_wofs]
     clc
     jmp short .out
 .io:
@@ -132,6 +180,23 @@ ww_peek:
     pop cx
     pop bx
     pop ax
+    ret
+
+; ww_rdclu - ONE CLUSTER of [wo_nbuf] at DX:AX (a cluster multiple) into the
+; I/O claim at BX. out: CF = 0, AX = delivered; CF = 1 a read error.
+; clobbers CX, DX, SI
+ww_rdclu:
+    mov cx, [ww_clu]
+    mov si, wo_nbuf
+    push es
+    mov es, [wo_ioseg]
+    call OSAPI_FILE_READ_AT         ; out DX:AX = delivered
+    pop es
+    jc .out
+    or dx, dx                       ; (CF = 0)
+    jz .out
+    stc
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -537,7 +602,7 @@ ww_say:
     mov si, ww_s_rebase
     cmp al, N_REBASE
     je .tail
-    mov si, ww_s_kept
+    mov si, ws_kmsg                 ; ('Kept as WRSAV07.$$$': wrsave.inc)
     cmp al, N_KEPT
     je .tail
 .n3:
@@ -588,6 +653,5 @@ ww_s_chans: db ' channels unsupported', 0
 ww_s_clamp: db 'Data clamped to file', 0
 ww_s_recov: db 'Recovered; save to fix', 0
 ww_s_rebase: db 'Saved; undo cleared', 0
-ww_s_kept:  db 'Kept as WRSAVE.$$$', 0
 ww_s_byte:  db ' byte', 0
 ww_s_ign:   db ' ignored at end', 0

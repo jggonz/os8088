@@ -36,8 +36,10 @@
 
 WO_NSRC     equ 4
 WO_NPC      equ 64
-WO_IOKB     equ 16                  ; the I/O claim: a scan gulp (SPEC.md 123.5)
-WO_MAXCLU   equ 8192                ; a cluster two of which fit the claim
+WO_IOKB     equ 16                  ; the I/O claim's floor: a scan gulp
+                                    ; (SPEC.md 123.5) - + 1 KB, and a cluster
+                                    ; past 16 KB sizes it (wo_iofit)
+WO_MAXCLU   equ 32768               ; FAT16's largest cluster at <= 2 GB
 WO_RDTMAX   equ 4096                ; a source's read ticks before halving
 WO_RDFIX    equ 16384               ; a play's read: a fixed disk (SPEC.md
 WO_RDHD     equ 12288               ; 123.6), a 512-byte-cluster floppy
@@ -240,10 +242,11 @@ wo_open:
     mov bl, E_MEM
     cmp word [wr_bseg], 0           ; the waveform band, claimed at entry
     je .refuse
-    mov ax, WO_IOKB
-    call OSAPI_MEM_CLAIM
+    mov ax, [ww_clu]                ; the I/O claim, for this file's cluster
+    call wo_maxclu                  ; and every source the clipboard keeps
+    call wo_iofit
+    mov bl, E_MEM
     jc .refuse
-    mov [wo_ioseg], dx
     call ww_parse                   ; CF = 1: [ww_err]
     jnc .parsed
     mov bl, [ww_err]
@@ -255,7 +258,9 @@ wo_open:
     mov cx, 13
 .name:
     lodsb
-    mov [di], al
+    call wr_upper                   ; upper case, as [ws_tname] is: the save's
+    mov [di], al                    ; self-reference test compares bytes
+                                    ; (wave 4's review, M2)
     inc di
     loop .name
     mov di, [we_ssrc]
@@ -443,10 +448,21 @@ wo_read:
     ; (falls into wo_srcread)
 
 ; -----------------------------------------------------------------------------
-; wo_srcread - READ SOURCE FRAMES: source SI, its frame DX:AX, at most CX, in
-;              one read of BP bytes (see wo_read). The I/O claim remembers
-;              the run it holds, so a second read of it costs nothing.
-; out: as wo_read. clobbers AX, BX, DX, SI
+; wo_srcread - READ SOURCE FRAMES: source SI, its frame DX:AX, at most CX.
+;              THE I/O CLAIM IS A WINDOW ON THE FILE: bytes [cbase, cbase +
+;              clen) of source [wo_csrc], cbase any byte, and its end where
+;              the source's cursor stands (a cluster boundary) unless the
+;              file ended inside it ([wo_ceof]). A frame wholly inside the
+;              window is served from it with no read. A frame at its end -
+;              or across it, the last few bytes of one, which a data offset
+;              that is not a multiple of the block align makes of every read's
+;              end - keeps those bytes, moves them to the claim's front and
+;              reads ON from the cursor (one FAT link: the file's next
+;              clusters); any other frame is a fresh read from the cluster
+;              holding it. A read is whole clusters - at least one, up to
+;              BP bytes and the claim less 1 KB, so a 32 KB cluster reads one
+;              a call (SPEC.md 123.6, 18.4.4).
+; out: as wo_read. clobbers AX, BX, DX (keeps SI)
 ; -----------------------------------------------------------------------------
 wo_srcread:
     push bp
@@ -454,19 +470,19 @@ wo_srcread:
     mov di, [si+WS_FRM+2]
     sub bx, ax
     sbb di, dx
-    jc .end0
+    jnc .left
+.endj:
+    jmp .end0
+.left:
     or di, di
     jnz .keep
     cmp bx, cx
     jae .keep
     mov cx, bx
 .keep:
-    or cx, cx
-    jnz .some
-    jmp .end0
-.some:
+    jcxz .endj
     mov [wo_rmax], cx
-    mov cl, [si+WS_SH]              ; the byte offset: doff + frame << shift
+    mov cl, [si+WS_SH]              ; X, the byte: doff + frame << shift
     xor ch, ch
     jcxz .noshift
 .sh:
@@ -476,60 +492,75 @@ wo_srcread:
 .noshift:
     add ax, [si+WS_DOFF]
     adc dx, [si+WS_DOFF+2]
-    mov bx, [si+WS_CLU]             ; the cluster holding it, and the head
-    dec bx
-    mov di, ax
-    and di, bx                      ; DI = the head (< a cluster)
-    sub ax, di                      ; DX:AX = the cluster's offset
-    mov cx, [si+WS_CLU]             ; the read: BP bytes, two clusters at
-    shl cx, 1                       ; least (a head of almost one, and a frame)
-    cmp bp, cx
-    jbe .cap
-    mov cx, bp
-.cap:
-    cmp byte [wo_cv], 0             ; the claim holds a run of this source,
-    je .read                        ; read at this size?
+    mov [wo_x], ax
+    mov [wo_x+2], dx
+    mov bx, [wo_iokb]               ; a read: whole clusters of the least of
+    dec bx                          ; BP and the claim less 1 KB (the bytes
+    mov cl, 10                      ; a slide keeps), one cluster at least
+    shl bx, cl
+    cmp bp, bx
+    jae .c
+    mov bx, bp
+.c:
+    mov cx, [si+WS_CLU]
+    dec cx
+    not cx
+    and bx, cx
+    jnz .c1
+    mov bx, [si+WS_CLU]
+.c1:
+    mov [wo_rcap], bx
+    mov byte [wo_ntry], 3           ; (a fresh read and a slide at most)
+.look:
+    cmp byte [wo_cv], 0
+    je .fresh
     cmp si, [wo_csrc]
-    jne .read
-    cmp cx, [wo_ccap]
-    jne .read
-    mov bx, ax                      ; k = the cluster's offset - the run's
-    push dx
-    sub bx, [wo_cbase]
+    jne .fresh
+    mov ax, [wo_x]                  ; k = X - cbase, inside [0, clen]?
+    mov dx, [wo_x+2]
+    sub ax, [wo_cbase]
     sbb dx, [wo_cbase+2]
-    pop dx
-    jnz .read                       ; (before it, or far past it)
-    or bx, bx
-    jnz .inside
-    mov ax, [wo_clen]               ; k = 0: the run is there already
-    jmp short .got
-.inside:
-    cmp bx, [wo_clen]               ; INSIDE it, and it was a whole read:
-    jae .read                       ; THE SLIDE - the overlap kept, and only
-    mov ax, [wo_clen]               ; what follows the run read, from where
-    cmp ax, [wo_ccap]               ; the cursor stands
-    jne .read
-    call wo_slide                   ; CF: a read error
+    jnz .fresh
+    cmp ax, [wo_clen]
+    ja .fresh
+    mov di, ax                      ; DI = k
+    mov ax, [wo_clen]
+    sub ax, di
+    mov cl, [si+WS_SH]
+    shr ax, cl                      ; the whole frames from there
+    jz .short
+    add di, [wo_cofs]               ; (where the window starts in the claim)
+    jmp short .serve
+.short:
+    cmp byte [wo_ceof], 0           ; under a frame left, and the file ends
+    jne .end0                       ; there: the end
+    dec byte [wo_ntry]
+    jz .end0
+    call wo_slide                   ; ...else read on from the cursor
     jc .err
-    jmp short .got
-.read:
+    jmp short .look
+.fresh:
+    dec byte [wo_ntry]
+    jz .end0
     mov byte [wo_cv], 0
+    mov ax, [wo_x]                  ; the cluster holding X (a cluster is at
+    mov dx, [wo_x+2]                ; most 32 KB: the low word's mask)
+    mov cx, [si+WS_CLU]
+    dec cx
+    not cx
+    and ax, cx
     mov [wo_csrc], si
     mov [wo_cbase], ax
     mov [wo_cbase+2], dx
-    mov [wo_ccap], cx
     xor bx, bx                      ; into the claim's front
+    mov [wo_cofs], bx
+    mov cx, [wo_rcap]
     call wo_rdrun                   ; out DX:AX = delivered
     jc .err
-    or dx, dx
-    jnz .err
-    mov [wo_clen], ax
-    mov byte [wo_cv], 1
-.got:
-    sub ax, di                      ; the bytes from the frame on
-    jbe .end0
-    mov cl, [si+WS_SH]
-    shr ax, cl
+    call wo_got
+    jc .err
+    jmp .look
+.serve:
     cmp ax, [wo_rmax]
     jbe .n
     mov ax, [wo_rmax]
@@ -554,60 +585,142 @@ wo_rdend:
     clc
     ret
 
+; wo_got - a read of capacity CX landed at the claim's BX: delivered DX:AX
+; (CF = 1: more than a word, which no read gives). The window runs from
+; [wo_cofs] to BX + AX, valid, and at the file's end when the read came up
+; short. keeps all but AX
+wo_got:
+    or dx, dx
+    jnz .bad
+    push bx
+    add bx, ax
+    sub bx, [wo_cofs]
+    mov [wo_clen], bx
+    pop bx
+    cmp ax, cx
+    sbb al, al                      ; short: FFh
+    and al, 1
+    mov [wo_ceof], al
+    mov byte [wo_cv], 1
+    clc
+    ret
+.bad:
+    stc
+    ret
+
 ; -----------------------------------------------------------------------------
-; wo_slide - the run the claim holds is [cbase, cbase + clen), a whole read of
-;            [wo_ccap], and the cluster BX bytes into it is wanted: the bytes
-;            from there to the run's end move to the claim's front, and the
-;            rest of the capacity is read at the run's end - exactly where
-;            the source's cursor stands, so the read is one FAT link and not a
-;            walk. in: SI = the source, BX = k (a cluster multiple, 0 < k <
-;            clen), DX:AX = cbase + k. out: CF = 0, AX = the new run's length
-;            (the claim's run now [cbase + k, ...)); CF = 1 a read error.
-;            keeps SI, DI
+; wo_slide - the window [cbase, cbase + clen) holds under a frame from k = DI
+;            on: those clen - k bytes (T, fewer than four) move to just
+;            before the claim's 512th byte and [wo_rcap] more are read AT
+;            it - exactly where the source's cursor stands, so the read is
+;            one FAT link and not a walk - and the window is then [cbase +
+;            k, ...) from offset 512 - T. The read lands SECTOR-ALIGNED in
+;            the claim, as every disk-visible base must (CLAUDE.md: a read
+;            two bytes in came back wrong). in: SI = the source. out: CF = 1
+;            a read error. clobbers AX, BX, CX, DX, DI
 ; -----------------------------------------------------------------------------
 wo_slide:
-    push di
-    push si
     mov byte [wo_cv], 0
-    push ax                         ; the run's new base
+    mov ax, [wo_cbase]              ; the read: at the window's end
+    mov dx, [wo_cbase+2]
+    add ax, [wo_clen]
+    adc dx, 0
+    push ax
     push dx
+    add [wo_cbase], di              ; the window's new base: cbase + k
+    adc word [wo_cbase+2], 0
     mov cx, [wo_clen]
-    sub cx, bx                      ; L = what is kept (a cluster multiple)
+    sub cx, di                      ; T, the bytes kept
+    add di, [wo_cofs]               ; (from where they are in the claim)
+    mov ax, 512
+    sub ax, cx
+    push ax                         ; the window's new start: 512 - T
+    push si
     push ds
     push es
     mov es, [wo_ioseg]
     push es
     pop ds
-    mov si, bx
-    xor di, di
+    mov si, di
+    mov di, ax
     cld
-    shr cx, 1
-    rep movsw                       ; (L is even: a cluster multiple)
+    rep movsb
     pop es
     pop ds
-    mov bx, di                      ; BX = L: the read lands after it
-    mov ax, [wo_cbase]              ; ...from the run's end
-    mov dx, [wo_cbase+2]
-    add ax, [wo_clen]
-    adc dx, 0
-    pop word [wo_cbase+2]
-    pop word [wo_cbase]
     pop si
-    push si
-    mov cx, [wo_ccap]
-    sub cx, bx                      ; the capacity left (a cluster multiple)
+    pop word [wo_cofs]
+    mov bx, 512                     ; the read: at the claim's sector 1
+    pop dx
+    pop ax
+    mov cx, [wo_rcap]
     call wo_rdrun
     jc .out
-    or dx, dx
-    stc
-    jnz .out
-    add ax, bx                      ; the run: L + what came
-    mov [wo_clen], ax
-    mov byte [wo_cv], 1
+    call wo_got
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wo_iofit - the I/O claim made big enough for a source of AX-byte clusters:
+;            max(16 KB, a cluster) + 1 KB (a slide's kept bytes), and never
+;            smaller than it is. A claim that must grow is made again - it
+;            is a cache, so its window is dropped. out: CF = 1 no memory
+;            (the old claim, if any, kept). clobbers AX, DX
+; -----------------------------------------------------------------------------
+wo_iofit:
+    push cx
+    mov cl, 10
+    shr ax, cl
+    cmp ax, WO_IOKB
+    jae .k
+    mov ax, WO_IOKB
+.k:
+    inc ax                          ; the KB wanted
+    cmp word [wo_ioseg], 0
+    je .claim
+    cmp ax, [wo_iokb]
+    jbe .ok
+    push ax                         ; bigger: the new one first, then the old
+    call OSAPI_MEM_CLAIM            ; one back (refused: kept as it was)
+    pop ax
+    jc .out
+    push dx
+    mov dx, [wo_ioseg]
+    call wo_free
+    pop dx
+    jmp short .got
+.claim:
+    push ax
+    call OSAPI_MEM_CLAIM
+    pop ax
+    jc .out
+.got:
+    mov [wo_ioseg], dx
+    mov [wo_iokb], ax
+    mov byte [wo_cv], 0
+.ok:
     clc
 .out:
+    pop cx
+    ret
+
+; wo_maxclu - AX = the largest cluster any live source record reads, or AX
+; as it came if that is larger. keeps all but AX
+wo_maxclu:
+    push si
+    push cx
+    mov si, wo_src
+    mov cx, WO_NSRC
+.s:
+    cmp byte [si+WS_USED], 0
+    je .n
+    cmp ax, [si+WS_CLU]
+    jae .n
+    mov ax, [si+WS_CLU]
+.n:
+    add si, WS_SIZE
+    loop .s
+    pop cx
     pop si
-    pop di
     ret
 
 ; -----------------------------------------------------------------------------

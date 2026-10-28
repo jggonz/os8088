@@ -329,12 +329,26 @@ wx_cut:
 ; clipboard's format is adopted (SPEC.md 123.3).
 ; -----------------------------------------------------------------------------
 wx_paste:
+    mov ax, [wo_frames]             ; the document stays under 2^31 frames
+    mov dx, [wo_frames+2]           ; (SPEC.md 123.3's invariant: wave 4's
+    add ax, [wo_cfr]                ; review, L4) - asked of the whole
+    adc dx, [wo_cfr+2]              ; clipboard, a selection replaced or not
+    jc .long
+    test dh, 0x80
+    jz .short
+.long:
+    mov si, wx_s_long               ; 'Document too long'
+    jmp wr_say
+.short:
+    mov byte [wx_adopted], 0
     cmp byte [wo_doc], 0
     jne .have
     call wx_adopt
-    jnc .have
+    jnc .adopt
     mov si, ww_e15                  ; 'Not enough memory'
     jmp wr_say
+.adopt:
+    mov byte [wx_adopted], 1
 .have:
     mov ax, [wo_cur]                ; a, b: the selection, or the cursor twice
     mov dx, [wo_cur+2]
@@ -382,16 +396,24 @@ wx_paste:
     mov [wx_nb], ax
     mov [wx_nb+2], dx
     mov si, wr_s_pasted
-    jmp wx_commit
+    call wx_commit
+    jnc .out
+    cmp byte [wx_adopted], 0        ; refused into a document only just
+    je .out                         ; adopted: no empty UNTITLED.WAV left
+    call wo_new                     ; behind (review, L5; the status bar
+.out:                               ; keeps the refusal)
+    ret
+
+wx_s_long:  db 'Document too long', 0
 
 ; wx_adopt - an empty document takes the clipboard's format and is named
 ; UNTITLED.WAV: its claims made, no frames yet. CF = 1 no memory (nothing
 ; held). clobbers AX, CX, DX, SI, DI
 wx_adopt:
-    mov ax, WO_IOKB
-    call OSAPI_MEM_CLAIM
+    xor ax, ax                      ; the I/O claim, for the clusters of the
+    call wo_maxclu                  ; sources the clipboard names
+    call wo_iofit
     jc .out
-    mov [wo_ioseg], dx
     mov ax, WE_VKB
     call OSAPI_MEM_CLAIM
     jnc .vc

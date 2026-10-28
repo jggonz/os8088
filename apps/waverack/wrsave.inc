@@ -37,7 +37,8 @@
 WSM_SAVE    equ 0                   ; [ws_mode]: Save - the document's file
 WSM_AS      equ 1                   ; Save As - the whole, a new name
 WSM_SEL     equ 2                   ; Save Selection As - [s, e)
-WS_OUT      equ WO_IOKB * 1024      ; the output claim, bytes
+WS_OUTKB    equ WO_IOKB             ; the output claim's floor, KB: a
+                                    ; cluster past it sizes it ([ws_osz])
 
 ; -----------------------------------------------------------------------------
 ; ws_save - File > Save, the SAVE key: to the document's own file; an
@@ -139,7 +140,10 @@ ws_dlgdone:
     mov al, OS88UI_ADANGER          ; Cancel / Proceed: Enter is Cancel
     call os88ui_ask
     pop es
-    jnc .rep
+    jc .noq
+    mov byte [ws_rq], 1             ; up: the document's commands grey
+    jmp short .rep                  ; until it is answered (review, H2)
+.noq:
     mov byte [ws_qact], 0
     jmp short .rep
 .go:
@@ -152,13 +156,21 @@ ws_dlgdone:
 
 ; ws_onrep - 'Replace NAME?' answered: AL = 1 Proceed; SI = the window
 ws_onrep:
+    mov byte [ws_rq], 0
     mov bx, si
     cmp al, 1
     je .go
+.drop:
     mov byte [ws_qact], 0           ; Cancel, or dismissed: nothing written
     ret
 .go:
+    cmp byte [ws_busy], 0           ; ASKED AGAIN (review, H2): another save
+    jne .drop                       ; running is not the one approved
     push bx
+    call wt_active                  ; a play under it stops first (L3)
+    jc .idle
+    call wt_stop
+.idle:
     call ws_go
     pop bx
     jmp wr_redraw
@@ -320,10 +332,10 @@ ws_go:
     shl ax, cl
     mov [ws_dclu], ax
     pop ax
-    mov si, ww_e13                  ; 'Cluster too large': the output claim
-    cmp word [ws_dclu], 0           ; must be a whole number of them
+    mov si, ww_e13                  ; 'Cluster too large': 0 is a 64 KB one,
+    cmp word [ws_dclu], 0           ; past FAT16's 32 KB at <= 2 GB
     je ws_no
-    cmp word [ws_dclu], WS_OUT
+    cmp word [ws_dclu], WO_MAXCLU
     ja ws_no
     sub ax, [ws_bytes]              ; free - bytes - 45 - a cluster
     sbb dx, [ws_bytes+2]
@@ -338,15 +350,34 @@ ws_go:
     mov si, wr_s_dfull
     jmp ws_no
 .room:
-    mov ax, WO_IOKB                 ; the output claim
-    call OSAPI_MEM_CLAIM
-    mov si, ww_e15                  ; 'Not enough memory'
+    mov ax, [ws_dclu]               ; the I/O claim fit for the destination's
+    call wo_iofit                   ; cluster too - a document rebased onto
+    mov si, ww_e15                  ; the save reads it ('Not enough memory')
     jc ws_no
+    mov ax, [ws_dclu]               ; the output claim: whole clusters, so
+    mov cl, 10                      ; every write but the last is (16 KB,
+    shr ax, cl                      ; or one 32 KB cluster)
+    cmp ax, WS_OUTKB
+    jae .okb
+    mov ax, WS_OUTKB
+.okb:
+    push ax
+    call OSAPI_MEM_CLAIM
+    pop ax
+    mov si, ww_e15
+    jc ws_no
+    mov cl, 10
+    shl ax, cl                      ; (32 KB at most: a word)
+    mov [ws_osz], ax
     mov [ws_oseg], dx
+    call ws_tmpmake                 ; the temp file: a name of its own, made
+    jnc .made                       ; empty now (CF: SI = why)
+    call ws_end
+    jmp ws_no
+.made:
     call ws_header
     mov word [ws_fill], 44
     xor al, al
-    mov [ws_made], al
     mov [ws_padded], al
     mov byte [ws_pct], 0FFh
     mov byte [ws_busy], 1
@@ -449,7 +480,8 @@ ws_header:
 ;           in: BX = the window. clobbers AX, BX, CX, DX, SI, DI, BP, ES
 ; -----------------------------------------------------------------------------
 ws_step:
-    cmp word [ws_fill], WS_OUT
+    mov ax, [ws_fill]
+    cmp ax, [ws_osz]
     jb .read
     call ws_flush                   ; full: written (one call)
     jc .out
@@ -462,7 +494,7 @@ ws_step:
     mov cx, ax
     or ax, dx
     jz .last
-    mov ax, WS_OUT
+    mov ax, [ws_osz]
     sub ax, [ws_fill]
     push cx
     mov cl, [wo_sh]
@@ -477,7 +509,7 @@ ws_step:
 .n:
     mov ax, [ws_f]
     mov dx, [ws_f+2]
-    mov bp, WS_OUT
+    mov bp, [ws_osz]
     call wo_read                    ; ES:DI = the frames, CX = how many
     jc .rerr
     jcxz .rerr                      ; nothing, short of the range's end
@@ -530,19 +562,10 @@ ws_step:
 ws_flush:
     call ws_dest
     jc .io
-    mov si, ws_tmpname
-    mov es, [ws_oseg]
+    mov si, ws_tmp                  ; (made empty by ws_tmpmake: every
+    mov es, [ws_oseg]               ; write appends)
     xor bx, bx
     mov cx, [ws_fill]
-    cmp byte [ws_made], 0
-    jne .seq
-    xor dx, dx
-    call OSAPI_FILE_WRITE           ; creates (or replaces a stale one)
-    jc .err
-    mov byte [ws_made], 1
-    mov word [ws_tok], 0
-    jmp short .ok
-.seq:
     jcxz .ok
     mov di, [ws_tok]
     xor al, al                      ; committed every call: a crash keeps
@@ -586,15 +609,26 @@ ws_fail:
     push si
     cmp byte [ws_made], 0
     je .nt
-    call ws_dest
-    mov si, ws_tmpname
+    mov byte [ws_made], 0
+    call ws_dest                    ; (the folder gone: no delete wherever
+    jc .nt                          ; the instance stands - review, L7)
+    mov si, ws_tmp
     call OSAPI_FILE_DELETE
 .nt:
     call ws_end
     mov byte [ws_qact], 0
     pop si
     call wr_say
-    jmp wt_reref
+    ; (falls into ws_rearm)
+
+; ws_rearm - a scan or a refinement the save held back goes on: the timer
+; is the scan's too (review, L2: wt_reref re-arms only a refinement)
+ws_rearm:
+    cmp byte [we_busy], 0
+    je .out
+    call wr_arm
+.out:
+    ret
 
 ; ws_end - not saving: the output claim back. keeps all but flags
 ws_end:
@@ -624,35 +658,51 @@ ws_cancel:
 ; -----------------------------------------------------------------------------
 ws_finish:
     call ws_end
-    call ws_dest
+    call ws_dest                    ; the folder gone: the temp is kept where
+    mov si, wr_s_wfail              ; it was written, nothing deleted (L7)
+    jc .fail
     mov si, ws_tname
     call OSAPI_FILE_DELETE
     jnc .ren
     cmp ax, FERR_NOENT
     je .ren
-    mov byte [ws_made], 1           ; it cannot go (read-only): the original
-    mov si, wr_s_norepl             ; stands and the temp file goes
+    mov si, wr_s_norepl             ; it cannot go (read-only): the original
+.fail:                              ; stands and the temp file goes
     jmp ws_fail
 .ren:
-    mov si, ws_tmpname
-    mov di, ws_tname
+    mov byte [ws_made], 0           ; (the temp is the save from here on)
+    mov byte [wo_cv], 0             ; a file under a name may be new bytes
+    mov si, ws_tmp                  ; (review, H1: the failure path left the
+    mov di, ws_tname                ; window stale)
     call OSAPI_FILE_RENAME
     jnc .named
     mov byte [ws_qact], 0           ; between the delete and the rename:
-    mov si, ws_tmpname              ; WRSAVE.$$$ is the save, and is KEPT -
-    call ws_rebase                  ; a document that read the deleted file
-    mov byte [ww_note], N_KEPT      ; reads it instead (its rescan says so)
-    cmp byte [ws_rb], 0
-    jne .out
+    mov di, ws_kmsg                 ; the temp is the save, and is KEPT -
+    mov si, ws_s_kept               ; 'Kept as WRSAV07.$$$' - and a document
+    call wr_put                     ; that read the deleted file reads it
+    mov si, ws_tmp                  ; instead
+    call wr_put
+    mov byte [di], 0
+    mov si, ws_tmp
+    call ws_rebase
+    cmp byte [ws_rb], 1             ; reads it instead (its rescan says so)
+    jne .kept
+    mov byte [ww_note], N_KEPT      ; ...and is NAMED after it: never titled
+    mov si, ws_tmp                  ; with a file that is gone (review, H1)
+    jmp short .name
+.kept:
     mov si, wr_s_kept
-    jmp wr_say
+    call wr_say
+    jmp ws_rearm
 .named:
-    mov byte [wo_cv], 0             ; the file under a name may be new bytes
     mov si, ws_tname
     call ws_rebase
+    cmp byte [ws_rb], 2             ; its envelope had no room: the document
+    je .out                         ; went, and the status says so (L6)
     cmp byte [ws_mode], WSM_SEL
     je .said
     mov si, ws_tname                ; the whole document: its file now
+.name:
     mov di, wo_name
     mov cx, 13
     push es
@@ -680,7 +730,7 @@ ws_finish:
     mov byte [di], 0
     mov si, wr_tbuf2
     call wr_say
-    call wt_reref
+    call ws_rearm
 .act:
     mov al, [ws_qact]               ; New, Open or Close, asked before the
     mov byte [ws_qact], 0           ; save and waiting for it
@@ -783,8 +833,9 @@ ws_rebase:
     call OSAPI_MEM_CLAIM
     jnc .env
     call wo_new                     ; no room for its envelope: nothing to
-    mov si, ww_e15                  ; show it with
-    jmp wr_say
+    mov byte [ws_rb], 2             ; show it with - and ws_finish must not
+    mov si, ww_e15                  ; name and clean the empty document over
+    jmp wr_say                      ; this (review, L6)
 .env:
     mov [di+WS_ENV], dx
 .noenv:
@@ -853,4 +904,76 @@ ws_pctsay:
 .out:
     ret
 
-ws_tmpname: db 'WRSAVE.$$$', 0
+ws_tmpbase: db 'WRSAV00.$$$', 0     ; the temp's shape: two digits at +5
+ws_s_kept:  db 'Kept as ', 0
+ws_s_notmp: db 'No free temp name', 0
+
+; -----------------------------------------------------------------------------
+; ws_tmpmake - THE TEMP FILE (wave 4's review, H1 and M1): WRSAVnn.$$$ in the
+;              destination, nn counted on from the window's own number, the
+;              first name that is not the target and NOT THERE - so a save
+;              never replaces a file it did not make: not another instance's
+;              temp, not a kept one a document still reads - made EMPTY at
+;              once (OSAPI_FILE_WRITE, DX:CX = 0) so nothing else can take
+;              the name between this and the first write; [ws_made] = 1.
+; out: CF = 1 none made, SI = why. clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+ws_tmpmake:
+    call ws_dest
+    mov si, wr_s_wfail
+    jc .no
+    mov ax, [wr_win]                ; the window's record: its own number
+    shr ax, 1
+    shr ax, 1
+    xor dx, dx
+    mov cx, 100
+    div cx
+    mov [ws_tn], dl
+    mov byte [ws_tcnt], 100
+.try:
+    mov si, ws_tmpbase
+    mov di, ws_tmp
+    call wr_put
+    mov byte [di], 0
+    mov al, [ws_tn]
+    aam                             ; AH = tens, AL = units
+    add ax, '00'
+    mov [ws_tmp+5], ah
+    mov [ws_tmp+6], al
+    mov si, ws_tmp                  ; not the target...
+    call ws_issame
+    je .next
+    mov si, ws_tmp                  ; ...and not there
+    mov di, wo_nbuf
+    call wr_put
+    mov byte [di], 0
+    call wo_find
+    jnc .next
+    push es
+    mov si, ws_tmp
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FILE_WRITE           ; made, empty: ours
+    pop es
+    jc .err
+    mov byte [ws_made], 1
+    mov word [ws_tok], 0
+    clc
+    ret
+.next:
+    inc byte [ws_tn]
+    cmp byte [ws_tn], 100
+    jb .n
+    mov byte [ws_tn], 0
+.n:
+    dec byte [ws_tcnt]
+    jnz .try
+    mov si, ws_s_notmp
+.no:
+    stc
+    ret
+.err:
+    call ws_werr
+    stc
+    ret

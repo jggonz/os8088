@@ -73,6 +73,7 @@ WT_GRANTKB2 equ 8                   ; 7), and its tier
 WT_PREROLL  equ 6                   ; halves staged before the open, at most
 WT_MAXFEED  equ 4                   ; halves a worker's pass stages, at most
 WT_TOPMAX   equ 16                  ; ...and the UI's top-up (a whole ring)
+WT_TICKTOP  equ 2                   ; ...its tick's (the UI stays the user's)
 WT_HMARGKB  equ 16                  ; the hold leaves this free beside the
                                     ; play's own claims
 WT_HLOADT   equ 2                   ; a load pass: two ticks (~110 ms)
@@ -1237,7 +1238,8 @@ wt_tick:
     call wt_hstep                   ; (it opens the stream when it is done)
     jmp wr_arm
 .play:
-    call wt_topup                   ; the ring as full as the look-ahead goes
+    mov byte [wt_ntop], WT_TICKTOP  ; a few halves topped up (wt_topupn)
+    call wt_topupn
     cmp byte [wt_ended], 0
     jne .fin
     cmp byte [wt_err], 0
@@ -1750,6 +1752,14 @@ wt_feed:
 ;            clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 wt_topup:
+    mov byte [wt_ntop], WT_TOPMAX
+    ; (falls into wt_topupn)
+
+; wt_topupn - wt_topup with [wt_ntop] halves at most: the UI's TICK takes
+; WT_TICKTOP, so a 4.77 MHz 8088 is not held converting a whole ring (16
+; halves, ~0.8 s at 22 kHz) between two of the user's clicks - the worker
+; keeps the ring full in between, and a read still finds it full
+wt_topupn:
     cmp byte [wt_sopen], 0
     je .out
     mov byte [wt_uiown], 1          ; FIRST: the worker stands aside...
@@ -1759,7 +1769,8 @@ wt_topup:
     call OSAPI_TASK_YIELD
     jmp short .w
 .go:
-    mov byte [wt_nfeed], WT_TOPMAX
+    mov al, [wt_ntop]
+    mov [wt_nfeed], al
     mov byte [wt_inui], 1
     call wt_pass
     mov byte [wt_uiown], 0          ; LAST

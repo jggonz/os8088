@@ -219095,7 +219095,7 @@ third-party audio in them.
 
 ## 123. WaveRack — a sound recorder, WAV player and waveform editor (`apps/waverack/`, `WAVERACK.O88`)
 
-**Status: PINNED; wave 1 (the face) SHIPPED - §123.11 to §123.13; wave 2 (the document) SHIPPED - §123.3 to §123.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §123.6, §123.8's playback half and §123.9's selection half; wave 4 (editing, undo, the clipboard, saving) SHIPPED - §123.3's edits, §123.4's writer, §123.9's edits and §123.10; wave 4b (playing through disk reads: our own external ring, convert before read, bounded sequential reads, the hold) SHIPPED - §123.6's last part and §123.13.** Every subsection below is the contract the
+**Status: PINNED; wave 1 (the face) SHIPPED - §123.11 to §123.13; wave 2 (the document) SHIPPED - §123.3 to §123.5, marked per part; wave 3 (the transport, the selection, the play meter) SHIPPED - §123.6, §123.8's playback half and §123.9's selection half; wave 4 (editing, undo, the clipboard, saving) SHIPPED - §123.3's edits, §123.4's writer, §123.9's edits and §123.10; wave 4b (playing through disk reads: our own external ring, convert before read, bounded sequential reads, the hold; clusters to 32 KB; wave 4's review's save fixes) SHIPPED - §123.6's last part, §123.10's last part and §123.13.** Every subsection below is the contract the
 implementation is written against; each says *(pinned)* until the wave that
 builds it marks it *(shipped)* with what was measured. The delivery record is
 `docs/plans/WAVERACK-PLAN.md` and the diary `docs/HOW-WAVERACK-WAS-BUILT.md`.
@@ -219357,7 +219357,7 @@ is this walk in Python, the reference the soak row holds the package to:
 | 10 | `File over 2 GB` |
 | 11 | `File is compressed` (a packed file's raw bytes are not its sound: READ_AT is raw, SPEC.md 20.14.3; the size comes from `OSAPI_FILE_FIND_RAW` and its `CZ` bit) |
 | 12 | `Cannot read the file` |
-| 13 | `Cluster too large` (more than 8 KB: two must fit the 16 KB I/O claim) |
+| 13 | `Cluster too large` (more than 32 KB: FAT16's largest at up to 2 GB, §18.7.5. It was 8 KB until wave 4b, two of which had to fit a fixed 16 KB I/O claim - which refused every FAT16 volume past 512 MB) |
 | 14 | `File not found` |
 | 15 | `Not enough memory` (a claim refused) |
 | 16 | `Bad fmt chunk` (under 16 bytes, or an extensible one under 40) |
@@ -219683,7 +219683,11 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   read of WaveRack's starts, the ring holds all the look-ahead can give it.
   A read is taken only when the look-ahead has room for ALL of it, so the
   next read follows it on the disk. The UI's timer tops the ring up every
-  tick too. **The worker stays**: it feeds between the UI's passes - while
+  tick too - two halves at most (`WT_TICKTOP`), so an 8088 is not held
+  converting a whole ring (~0.8 s) between two of the user's clicks. (A
+  read is not partial-copy-proof by that rule alone: frames a read brought
+  that the look-ahead had no room for stay in the I/O window and are the
+  next step's, with no read.) **The worker stays**: it feeds between the UI's passes - while
   another window's callback holds the UI task, which a timer cannot see -
   and it is what notices the end and asks for a read. The two never convert
   at once: `[wt_uiown]` and `[wt_mixing]`, each set by its owner before it
@@ -219703,15 +219707,37 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
   at 11 kHz.
 - **Every read a stream** (`wrdoc.inc`): `os88_rseq` (§18.4.8.1) with a
   16-byte cursor in each source's record, zeroed whenever the record names
-  a new file (`wo_srcnew`: an open, a save's rebase). A frame INSIDE the run
-  the I/O claim holds keeps the overlap and reads only what follows, from
-  the cursor (`wo_slide`) - without it a data offset that is not a multiple
-  of the block align (46: an 18-byte `fmt `, common) puts a frame across
-  every read's end and re-seeds the cursor every gulp. The play, the
-  envelope SCAN and the save's reads all come through `wo_srcread`. Each
-  read is TIMED: its bytes and ticks are added to the source's `WS_RDB` /
-  `WS_RDT` (both halved together past 4,096 ticks), which is what the
-  medium is judged by.
+  a new file (`wo_srcnew`: an open, a save's rebase). This is the case the
+  SDK prices: `READ_AT` re-walks the chain from the file's front on every
+  call, **142 ms a MB of offset on a fixed disk** - so 16 KB gulps of a
+  2 MB WAV paid a walk averaging 1 MB, ~140 ms, on each of 128 reads, and a
+  20 MB one ~1.4 s a read, longer than the ring at 22 kHz. **The I/O claim is
+  a WINDOW on the file** (`wo_srcread`): bytes `[cbase, cbase + clen)` of
+  one source, `cbase` any byte, its end where the cursor stands. A frame
+  wholly inside it is served with no read; a frame at its end - or across
+  it, which a data offset that is not a multiple of the block align (46: an
+  18-byte `fmt `, common; `ODD46.WAV` in the fixtures) makes of every read's
+  end - keeps those few bytes and reads ON from the cursor (`wo_slide`),
+  landing the read sector-aligned at the claim's 512th byte; any other frame
+  is a fresh read from the cluster holding it. A read is whole clusters - up
+  to the caller's size and the claim less 1 KB, ONE at least - so **a 32 KB
+  cluster reads one a call** (FAT16 past 1 GB, §18.7.5), and the claim is
+  max(16 KB, the largest cluster any live source reads) + 1 KB
+  (`wo_iofit`, made again when a source or a save's destination needs more):
+  17 KB, or 33 KB on 32 KB clusters. The play, the envelope SCAN, the
+  refinement, the hold's load and the save's reads all come through it.
+  Each read is TIMED: its bytes and ticks are added to the source's
+  `WS_RDB` / `WS_RDT` (both halved together past 4,096 ticks), which is
+  what the medium is judged by. Reading straight into the look-ahead
+  instead of copying was weighed and not taken: the look-ahead is a ring of
+  FRAMES with free-running counters, and a read is clusters from a cluster
+  boundary - a copy at ~9 cycles a byte (4% of an 8088 at 22 kHz) is the
+  price of keeping the two apart.
+- **A refinement column keeps its own range** (`we_cacc`, §123.5): a column
+  whose frames span two reads waits a tick between them, and a draw in that
+  tick ran `we_range`, whose answer is `[we_racc]` - the column's first
+  part was replaced by some other range. `ODD46.WAV`'s refined columns at
+  each read's end found it; Wave 4's build has it too.
 - **The plan** (`wt_plan`, at every Play, resume and seek): a play's share
   of a second, in 256ths, is the MEDIUM's - `(R << shift) x 256 / B`, B the
   bytes a second the slowest source's reads have sustained (18.2 x bytes /
@@ -219768,16 +219794,23 @@ added (WAVERACK-PLAN.md's Wave 4b section says when one would earn it):
 
   | play | before (Wave 4) | after |
   |---|---|---|
-  | BIG22.WAV, 2 MB 8-bit mono 22,050 Hz, off the fixed disk, ~31 s | 19.33 s of 33.0 silent | **0.00 s of 30.8 silent, 0 underruns** |
-  | LONG.WAV, 1.1 MB 8-bit mono 11,025 Hz, off a 1.44 MB floppy, 32 s | 19.91 s of 32.1 silent | **0.09 s of 32.0 silent, 0 underruns** |
-  | ST22S.WAV, 4 s 16-bit stereo 22,050 Hz | 5.43 s of 6.8 silent, 1 underrun | **HELD** ('Loading', 0 underruns); its silence NOT measured - the row read the last play's count during the load (fixed in the row afterwards, not re-run) |
-  | ST22L.WAV, 20 s of the same (past the heap) | 13.25 s of 16.6 silent | `CPU too slow: gaps`, 11.08 s of 15.8 silent, 26 underruns |
-  | BIG22 while a second WaveRack launches and scans ST22L | 26.58 s of 46.6 silent, 2 underruns | 10.41 s of 103.7 silent, 2 underruns (the window ran from the play's start through the second window's launch to BIG22's end: not the same span as before's) |
-  | the 2 MB scan | 94.0 s guest; int 13h FAT 18, dir 2, data 168 | **80.0 s** guest (-15%); FAT 18, dir 1, data 168 |
-  | LONG.WAV's scan off the floppy | 108.2 s | **85.5 s** (-21%) |
+  | BIG22.WAV, 2 MB 8-bit mono 22,050 Hz, off the fixed disk, 30 s | 17.67 s of 30.3 silent | **0.00 s of 30.2 silent, 0 underruns** |
+  | BIG22 while a SECOND WaveRack scans ST22L (1.7 MB) off the same disk, 40 s | 26.91 s of 40.0 silent, 5 underruns | **0.00 s of 40.3 silent, 0 underruns** |
+  | LONG.WAV, 1.1 MB 8-bit mono 11,025 Hz, off a 1.44 MB floppy, 30 s | 18.71 s of 30.4 silent | **0.07 s of 30.2 silent, 0 underruns** |
+  | ST22S.WAV, 4 s 16-bit stereo 22,050 Hz, 3.3 s of it | 2.62 s silent, 2 underruns | **HELD** ('Loading'), 0.00 s silent, 0 underruns |
+  | ST22L.WAV, 20 s of the same (past the heap), 15 s | 11.76 s silent | `CPU too slow: gaps`, 10.18 s silent, 24 underruns |
+  | BIG22 on a 321 MB volume of **32 KB clusters**, 15 s | refused: `Cluster too large` | opens (I/O claim 33 KB), **0.00 s silent**; MID11.WAV saved as OUT32.WAV through a 32 KB output claim, byte for byte, no temp left |
+  | the 2 MB scan | 93.8 s guest; int 13h FAT 18, dir 2, data 168 | **77.7 s** guest (-17%); FAT 18, dir 1, data 168 |
+  | LONG.WAV's scan off the floppy | 108.1 s | **85.4 s** (-21%) |
+
+  The second window's launch and Open took 106 s of guest time under the
+  play (124 s on Wave 4's): an XT converting 22 kHz in software is a slow
+  machine to click on, which the tick's top-up being two halves at most
+  (`WT_TICKTOP`) - not a whole ring, ~0.8 s - is there to soften.
 
   The scan's FAT reads do not move - the kernel's FAT window holds a 2 MB
-  file's chain - so what READ_SEQ saves there is the walk's CPU, 14 s of 94.
+  file's chain - so what READ_SEQ saves there is the walk's CPU, 16 s of 94:
+  the SDK's 142 ms a MB of offset, paid on 128 gulps averaging 1 MB.
   MartyPC's hard disk has no mechanical model (docs/MARTYPC-DEBUG.md): its
   reads are the option ROM's PIO, 148 KB/s as WaveRack times them, so the
   counts are exact and the milliseconds are not a field figure.
@@ -219953,12 +219986,13 @@ to go to. A refusal changes nothing. The status bar says `Trimmed`,
 ### 123.10 Saving (shipped in wave 4)
 
 **Save never writes over a file until the new one is whole.** It writes
-`WRSAVE.$$$` in the destination folder, checks `OSAPI_FILE_DFREE` first
+a temp file (`WRSAVnn.$$$` since wave 4b, below) in the destination folder,
+checks `OSAPI_FILE_DFREE` first
 (the document's bytes + 44 + one cluster), streams the pieces through, and
 only then deletes the target and renames the temp file to it. A failure or
 a cancel before the rename leaves the original untouched and deletes the
-temp file; a failure between the delete and the rename leaves
-`WRSAVE.$$$` - complete - and says so. Save As asks the Standard File dialog
+temp file; a failure between the delete and the rename leaves the temp
+file - complete - and says so. Save As asks the Standard File dialog
 (§38) for a name, and before replacing an existing file that is not the
 document's own, asks. Save Selection As writes `[s, e)` the same way.
 
@@ -219986,10 +220020,12 @@ delivery offers no conversion on save.
   use` - asked BEFORE the replace question, so the user is never asked to
   replace what cannot be), data past 2^31 bytes (`File over 2 GB`), a
   destination folder gone or no answer from `OSAPI_FILE_DFREE` (`Cannot
-  write the file`), a cluster over 16 KB (`Cluster too large`: the output
-  claim must hold a whole number of them), the free space under the data +
-  45 + one cluster (`Not enough disk space`), and no 16 KB claim (`Not
-  enough memory`).
+  write the file`), a cluster over 32 KB (`Cluster too large`), the free
+  space under the data + 45 + one cluster (`Not enough disk space`), and no
+  room for the output claim - 16 KB, or one cluster where that is larger
+  (wave 4b), so every write but the last is whole clusters - or for the
+  I/O claim grown to the destination's cluster, which a rebased document
+  reads (`Not enough memory`).
 - **The write is the UI task's, one disk call a tick** (`ws_step` from the
   window's one-shot timer; §20.6 rule 7): the frames come through `wo_read`
   (the I/O claim, restood in each source's folder) and are COPIED into a
@@ -220014,12 +220050,13 @@ delivery offers no conversion on save.
   cursor hot for the whole save; it is not taken in wave 4b.
 - **The replace**: the target deleted (absent is fine; one that will not
   go - read-only - stops the save with `Cannot replace file`, the original
-  standing and the temp deleted), then `WRSAVE.$$$` renamed to it. A rename
-  that fails after the delete keeps `WRSAVE.$$$` - complete - and says
-  `Kept as WRSAVE.$$$`; a document that read the deleted file is rebased
-  onto `WRSAVE.$$$` instead (below), so nothing is left naming a file that
-  is gone. A whole-document save names the document after its file, clears
-  dirty and retitles; `Saved NAME`.
+  standing and the temp deleted), then the temp renamed to it. A rename
+  that fails after the delete keeps the temp - complete - and says `Kept
+  as WRSAV07.$$$`; a document that read the deleted file is rebased onto
+  the temp instead (below) and, since wave 4b, NAMED after it - titled,
+  clean, its folder the destination - so nothing is left naming a file
+  that is gone. A whole-document save names the document after its file,
+  clears dirty and retitles; `Saved NAME`.
 - **The rebase** (`ws_rebase`): every live source record whose name,
   folder and volume ARE the target (one file can be two records) is stale
   once the rename lands. With any, the history is cleared (its claim given
@@ -220034,6 +220071,57 @@ delivery offers no conversion on save.
   it - that document is saved and stays.
 - **The question's action** (§123.3) runs after a successful save: New,
   the Open dialog, or the close.
+
+**Corrected in wave 4b, from wave 4's review** (all were data-loss or claim
+bugs in the save; each verified in the code first):
+
+- **(H1, M1) The temp file has a name of its own and never replaces
+  anything.** Wave 4's was always `WRSAVE.$$$`, CREATED with
+  `OSAPI_FILE_WRITE` - which replaces - so a save could truncate a file the
+  document still read: a kept temp opened and saved past, a Save after the
+  kept path (whose document stayed titled with the deleted target), Save As
+  named `WRSAVE.$$$`, or a second WaveRack saving into the same folder
+  (two instances appending to one file). `ws_tmpmake` now takes
+  `WRSAVnn.$$$`, nn counted on from the window's own number, the first
+  name that is NOT the target and NOT THERE, and makes it EMPTY at once so
+  nothing can take the name before the first write; every write appends.
+  The rename's failure path clears the I/O claim's window before the
+  rebase (it was left serving the deleted file's bytes at the new layout's
+  offsets) and names the document after the kept file. `No free temp name`
+  after 100 tries. `waverackedit`'s temp leg opens a kept `WRSAV00.$$$`
+  and saves past it.
+- **(H2) A question's commands grey.** os88ui's alert is not modal, and its
+  answer was carried out without asking the state again: a SAVE pressed
+  under `Save changes to A.WAV?` and then Discard + Open replaced A.WAV
+  with another document's audio. While `Save changes?` (`[wr_qact]`) or
+  `Replace NAME?` (`[ws_rq]`) is up, every command but the view's, Stop,
+  Pause, Copy and the theme/layout greys with `Answer the question` - and
+  the refusal puts the question back in front (`OSAPI_WM_SHOW`, os88ui's own
+  re-front): a click into a full-screen WaveRack buries the alert whole,
+  and an alert has no dock tile. The answers re-check: `wr_onask` cancels a
+  save and stops a play before New, Open, Close or Save act; `ws_onrep`
+  drops a Proceed while another save runs and stops a play first; and the
+  close (`wr_qrun`'s, the negotiator being retired) cancels a save, so its
+  temp is deleted. `waverackedit`'s asked leg drives it.
+- **(M2)** a source record's name is upper-cased at Open, as `[ws_tname]`
+  is, so the save's self-reference test (a byte compare) cannot miss it.
+- **(L1)** a close while New's or Open's question is up takes the question
+  over (SPEC.md 69.12's rule: closing is the stronger intent). **(L2)** a
+  save that fails or is cancelled re-arms a scan as well as a refinement.
+  **(L3)** a play is stopped before a question's Save begins (the save's
+  tick would have starved the play's). **(L4)** Paste refuses a result past
+  2^31 frames (`Document too long`). **(L5)** a Paste refused into a document
+  it had just adopted leaves no empty UNTITLED.WAV. **(L6)** a rebase whose
+  envelope finds no room says `Not enough memory` and does not name and
+  clean the emptied document over it. **(L7)** with the destination folder
+  gone, nothing is deleted wherever the instance happens to stand.
+  **(L8)** the temp name is 13 bytes, which the rebase copies; and the
+  design note below.
+- **A file is immutable only within one instance**: another WaveRack can
+  save over a file this one reads, and nothing detects it - the document
+  then reads the new bytes at the old pieces' offsets. A cross-instance
+  lock would need a kernel facility; the temp-name rule above only keeps
+  two SAVES from colliding.
 
 ### 123.11 The face: layouts, themes, art (shipped, wave 1)
 
@@ -220214,11 +220302,12 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
 | | wave 4b |
 |---|---|
-| image | **37,981** bytes (packed **29,573** - 29 clusters at 1 KB): + the external ring, convert-before-read, the plan and its medium and CPU shares, the hold and its load, READ_SEQ with the slide and the timed reads, the d = 1 8-bit loops |
-| bss | **6,163** bytes: + the ring's and the hold's state, a source record of 64 bytes (40: + its read size, its 16-byte cursor, its read bytes and ticks - 96 bytes for the four), the meter's slots 32 + 32 (16 + 16) |
-| heap, playing or paused | the idle document's + the look-ahead **32 KB** (16 KB tier) + the RING, now a claim of WaveRack's: **33 KB** (`OSAPI_MEM_CLAIM_DMA_HI`, 32 KB and its words; 17 KB tier). Read on the claim map (QEMU): STEREO16.WAV playing `[4, 6, 10, 16, 32, 33]` = **101 KB**, LONG.WAV `[3, 4, 10, 16, 32, 33]` = 98 KB; the most a document can hold while streaming is 38 + 32 + 33 = **103 KB**. SOUND.DRV's pool grant is no longer used, except on a card that refuses an external ring. Paused: the ring is freed (`[4, 6, 10, 16, 32]`) |
-| heap, held | + the HOLD, one byte a frame of the region rounded up to a KB - STEREO16.WAV held is `[4, 6, 10, 16, 22, 32, 33]` = 123 KB (22,050 frames: 22 KB, against 87 KB of 16-bit stereo); it is claimed only when the heap's largest run holds it beside the ring, the look-ahead and **16 KB** more, so the most is the machine's |
-| disks | the 1.44 MB apps disk **2,577** of 2,847 clusters, the 1.2 MB **2,084** of 2,371 (both fit; nothing moved). `make waverackfix` unchanged; `waverackdisk` builds its own VHD and floppy |
+| image | **38,582** bytes (packed **30,110** - 30 clusters at 1 KB): + the external ring, convert-before-read, the plan and its medium and CPU shares, the hold and its load, READ_SEQ through the I/O window and the timed reads, the d = 1 8-bit loops, clusters to 32 KB, and wave 4's review's save fixes (the temp maker, the questions' greying and re-checks) |
+| bss | **6,219** bytes: + the ring's and the hold's state, a source record of 64 bytes (40: + its read size, its 16-byte cursor, its read bytes and ticks - 96 bytes for the four), the meter's slots 32 + 32 (16 + 16), the window's state, the temp's name and the kept sentence |
+| heap, by cluster size | the I/O claim is max(16 KB, the largest live source's cluster) + 1 KB and the save's output claim max(16 KB, the destination's cluster): **clusters to 16 KB - 17 KB and 16 KB** (a document open is `[4, 6, 10, 17]`, one KB over wave 4); **32 KB clusters - 33 KB and 32 KB**. So a document on a 32 KB-cluster volume costs 17 KB more open than wave 4's (55 KB at most, idle) and 16 KB more saving; a playing one there is the most, 55 + 32 + 33 = **120 KB** |
+| heap, playing or paused | the idle document's + the look-ahead **32 KB** (16 KB tier) + the RING, now a claim of WaveRack's: **33 KB** (`OSAPI_MEM_CLAIM_DMA_HI`, 32 KB and its words; 17 KB tier). Read on the claim map (QEMU, the I/O claim 17 KB since the cluster change): STEREO16.WAV playing `[4, 6, 10, 17, 32, 33]` = **102 KB**, LONG.WAV `[3, 4, 10, 17, 32, 33]` = 99 KB; the most a document can hold while streaming is 39 + 32 + 33 = **104 KB** (120 on 32 KB clusters, below). SOUND.DRV's pool grant is no longer used, except on a card that refuses an external ring. Paused: the ring is freed (`[4, 6, 10, 17, 32]`) |
+| heap, held | + the HOLD, one byte a frame of the region rounded up to a KB - STEREO16.WAV held is `[4, 6, 10, 17, 22, 32, 33]` = 124 KB (22,050 frames: 22 KB, against 87 KB of 16-bit stereo); it is claimed only when the heap's largest run holds it beside the ring, the look-ahead and **16 KB** more, so the most is the machine's |
+| disks | the 1.44 MB apps disk **2,578** of 2,847 clusters, the 1.2 MB **2,085** of 2,371 (both fit; nothing moved). `make waverackfix` gains ODD46.WAV (17,686 bytes: data at 46); `waverackdisk` builds its own VHDs and floppy, one of them 321 MB of 32 KB clusters (`tools/os88hdd.py --spc 64`) |
 | CPU, measured | an 8088's cycles a FRAME in each conversion loop (MartyPC's 5150, cycle-exact): 8-bit mono d = 1 **114** (the general loop it replaces was ~227), 8-bit stereo d = 1 **205**, 16-bit mono **276**, 16-bit stereo **456**, 8-bit mono at d = 2 **413**. So a 4.77 MHz 8088 converts 8-bit mono at 22,050 Hz in 53% of its time and 16-bit stereo not at all (2.1x) |
 
 To be measured and written here as the later waves land: the heap claims

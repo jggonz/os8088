@@ -862,11 +862,11 @@ we_refstep:
     push cx
     push ax
     mov cx, ax
-    mov dx, [we_racc]
-    mov bx, [we_racc+2]
+    mov dx, [we_cacc]
+    mov bx, [we_cacc+2]
     call we_mm
-    mov [we_racc], dx
-    mov [we_racc+2], bx
+    mov [we_cacc], dx
+    mov [we_cacc+2], bx
     pop ax
     pop cx
     sub cx, ax
@@ -993,8 +993,8 @@ we_rnext:
 .first:
     mov [we_rf], ax
     mov [we_rf+2], dx
-    mov word [we_racc], WE_EMPTY
-    mov word [we_racc+2], WE_EMPTY
+    mov word [we_cacc], WE_EMPTY
+    mov word [we_cacc+2], WE_EMPTY
     mov byte [we_rcs], 1
     pop es
     pop cx
@@ -1008,7 +1008,12 @@ we_rnext:
     ret
 
 ; we_rput - the column made: into the cache, exact; the next column next.
-; keeps every register
+; Its range is [we_cacc], the refinement's own: a column whose frames span
+; two reads waits a tick between them, and a draw in that tick runs
+; we_range, whose answer is [we_racc] - which is what a column spanning a
+; read's end lost, its first part replaced by some other range (found by
+; ODD46.WAV, an 18-byte fmt putting a frame across every read's end, in the
+; disk-read wave; wave 2's build has it too). keeps every register
 we_rput:
     push ax
     push di
@@ -1018,9 +1023,9 @@ we_rput:
     mov byte [es:di + WE_EXACT], 1
     shl di, 1
     shl di, 1
-    mov ax, [we_racc]
+    mov ax, [we_cacc]
     mov [es:di], ax
-    mov ax, [we_racc+2]
+    mov ax, [we_cacc+2]
     mov [es:di+2], ax
     inc word [we_rcol]
     mov byte [we_rcs], 0

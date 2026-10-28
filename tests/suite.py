@@ -548,7 +548,10 @@ FAST = [
         "memory, no underrun) or, past the heap too, 'Disk too slow: gaps' "
         "with the gaps counted; and a play while a SECOND WaveRack scans "
         "1.7 MB - what the ring covers. FLOPPY second: LONG.WAV off a 1.44 "
-        "MB floppy for 30 s with no underrun",
+        "MB floppy for 30 s with no underrun. And a 321 MB VHD of 32 KB "
+        "CLUSTERS (os88hdd.py --spc 64): Wave 4 refused it; this one opens, "
+        "plays and saves on it, the saved file read back off the VHD byte "
+        "for byte",
         needs=("marty", "nasm"), serial=True, timeout=3600,
         wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
                "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",

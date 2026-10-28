@@ -40,8 +40,19 @@ pieces:
   pieces   a one-column clip pasted at columns ten apart until the table
            would pass WO_NPC = 64: refused (`Too many edits; save`), the
            table unchanged
+  temp     WRSAV00.$$$, a temp file a save KEPT, opened and saved past (Save
+           As OUT3.WAV in the same folder): OUT3.WAV byte for byte, the kept
+           file byte for byte, the save's own temp another name and gone
+           (wave 4's review, H1, M1)
+  asked    an edited document's 'Save changes?' up, WaveRack raised under it:
+           File > Save greyed, Undo saying 'Answer the question' and
+           putting the question back in front, Cancel
+           giving the document back (wave 4's review, H2)
   close    the close box on an edited document asks; Discard closes, and no
            claim of the region is left
+
+Not driven: a rename that fails after the target's delete (H1's first path:
+nothing here can make OSAPI_FILE_RENAME fail at that instant).
 
 Break on purpose: take the coalescing out of wx_emit and the edits leg fails
 at its first paste-back; drop ws_header's pad term and SEL1.WAV's RIFF size
@@ -73,6 +84,11 @@ from vidxms import Q                                          # noqa: E402
 check, say, until, u16, u32 = WRT.check, WRT.say, WRT.until, WRT.u16, WRT.u32
 FAIL = WRT.FAIL
 FREE_KB = 300                           # what FILL.BIN leaves on the floppy
+WS_SIZE = 64                            # wrdoc.inc's source record
+TEMP0 = "WRSAV00.$$$"                   # a KEPT temp file on the floppy -
+TEMP0_AS = "WRSAV00.XXX"                # os88disk.py takes no '$', so it is
+                                        # written as this and its directory
+                                        # entry renamed in the image
 
 
 def fat12_files(path):
@@ -146,7 +162,7 @@ class ED(WRT.WR):
         return [struct.unpack_from("<HII", raw, i * 10) for i in range(n)]
 
     def srcname(self, k):
-        return self.rd("wo_src", 13, 40 * k).split(b"\0")[0].decode(
+        return self.rd("wo_src", 13, WS_SIZE * k).split(b"\0")[0].decode(
             "latin-1")
 
     def sel(self):
@@ -270,6 +286,12 @@ def disk(tmp):
     subprocess.run([sys.executable, "tools/wrsim.py", "--fixtures", fx],
                    check=True)
     good = sorted(os.listdir(os.path.join(fx, "GOOD")))
+    # a temp file a save KEPT (SPEC.md 123.10): a WAV - TONE8.WAV's bytes -
+    # named as WaveRack names its temps, for the temp leg to open and save
+    # past (wave 4's review, H1)
+    shutil.copy(os.path.join(fx, "GOOD", "TONE8.WAV"),
+                os.path.join(fx, "GOOD", TEMP0_AS))
+    good = sorted(os.listdir(os.path.join(fx, "GOOD")))
     # MEDIA/ with room to SAVE into: the kernel never grows a directory
     # (SPEC.md 18.5), and a folder built to fit its 12 fixtures is ONE
     # cluster, 16 slots - OUT1.WAV and SEL1.WAV filled it, and the rebase's
@@ -288,15 +310,23 @@ def disk(tmp):
     open(fp, "wb").write(b"\xA5" * fill)
     subprocess.run(base[:2] + ["-o", out] + base[2:] + [fp], check=True,
                    capture_output=True)
-    return out, dict((g, open(os.path.join(fx, "GOOD", g), "rb").read())
-                     for g in good)
+    raw = bytearray(open(out, "rb").read())
+    at = raw.find(b"WRSAV00 XXX")
+    assert at > 0 and raw.find(b"WRSAV00 XXX", at + 1) < 0
+    raw[at:at + 11] = b"WRSAV00 $$$"
+    open(out, "wb").write(bytes(raw))
+    got = dict((g, open(os.path.join(fx, "GOOD", g), "rb").read())
+               for g in good)
+    got[TEMP0] = got.pop(TEMP0_AS)
+    return out, got
 
 
 def sources(ed, fx):
     """the guest's live source records, as the reference's {index: data}"""
     out = {}
     for k in range(4):
-        if ed.q.read((ed.seg << 4) + ed.syms["wo_src"] + 40 * k + 27, 1)[0]:
+        if ed.q.read((ed.seg << 4) + ed.syms["wo_src"] + WS_SIZE * k + 27,
+                     1)[0]:
             name = ed.srcname(k)
             data = fx.get(name)
             if data is not None:
@@ -377,7 +407,8 @@ def leg_saves(ed, fx, ref, fmt):
     check("OUT1.WAV is wrsim.write_wav of the pieces, byte for byte (%d)"
           % len(want), fs.get("MEDIA/OUT1.WAV") == want,
           "%r bytes" % (len(fs.get("MEDIA/OUT1.WAV") or b""),))
-    check("no WRSAVE.$$$ left", not any("WRSAVE" in k for k in fs))
+    check("no temp file left", not any("WRSAV" in k and TEMP0 not in k
+                                       for k in fs))
     check("TONE8.WAV untouched", fs.get("MEDIA/TONE8.WAV") ==
           before["MEDIA/TONE8.WAV"])
     check("the document is OUT1.WAV and clean (%r)" % ed.text("wr_ttlbuf"),
@@ -507,6 +538,80 @@ def leg_pieces(ed):
           len(before) <= wrsim.WO_NPC, "after %d pastes" % n)
 
 
+def leg_temp(ed, fx):
+    """WAVE 4'S REVIEW, H1: a temp file a save kept, opened and saved past.
+    Wave 4's fixed WRSAVE.$$$ was CREATED OVER whatever had the name - the
+    document's own source among them. A temp is now WRSAVnn.$$$, the first
+    name that is not there: TEMP0 opened, Save As OUT3.WAV in the same
+    folder, and TEMP0 must come through byte for byte"""
+    say(" temp: %s (a kept save) opened, Save As OUT3.WAV beside it" % TEMP0)
+    before = ed.files()
+    ed.menu("File", "Open...")
+    until(lambda: ed.alert() is not None or ed.chooser() is not None,
+          "the question", 10)
+    if ed.alert():                      # the edited document: discarded
+        ed.alert_btn(1)
+    until(lambda: ed.chooser() is not None, "the dialog", 15)
+    time.sleep(0.3)
+    g = ed.w("wo_gen")
+    ed.chooser_open("MEDIA/" + TEMP0)
+    until(lambda: ed.w("wo_gen") != g and ed.b("we_busy") == 0, TEMP0, 60)
+    check("%s opens (%d frames, %r)" % (TEMP0, ed.d("wo_frames"),
+                                        ed.text("wo_name")),
+          ed.d("wo_frames") == 11025 and ed.text("wo_name") == TEMP0)
+    ed.menu("File", "Save As...")
+    ed.name_in("OUT3.WAV")
+    ed.saved()
+    fs = ed.files()
+    data = fx["TONE8.WAV"]
+    r = wrsim.parse(data)
+    want = wrsim.write_wav([(0, 0, r["frames"])],
+                           {0: data[r["dataoff"]:r["dataoff"] + r["datalen"]]},
+                           (11025, 8, 1))
+    check("OUT3.WAV is the document byte for byte (%d)" % len(want),
+          fs.get("MEDIA/OUT3.WAV") == want)
+    check("%s came through byte for byte (the save took %r)"
+          % (TEMP0, ed.text("ws_tmp")),
+          fs.get("MEDIA/" + TEMP0) == before.get("MEDIA/" + TEMP0) and
+          ed.text("ws_tmp") != TEMP0)
+    check("no other temp file left", not any(
+        "WRSAV" in k and TEMP0 not in k for k in fs), repr(sorted(fs)))
+
+
+def leg_asked(ed):
+    """WAVE 4'S REVIEW, H2: the alerts are not modal, so while 'Save changes
+    to NAME?' is up the document's commands GREY - File > Save refused, Undo
+    saying `Answer the question` - and Cancel gives them back"""
+    say(" asked: the document's commands while the question is up")
+    ed.menu("File", "Open...")
+    asked = until(lambda: ed.alert() is not None, "the question", 10)
+    check("an edited document: 'Save changes to ...?' asked", asked,
+          ed.text("wr_qbuf"))
+    if not asked:
+        return
+    w = ed.window()                     # back to WaveRack, the alert up
+    xmcheck.click(ed.sock, w.x + w.w // 2, w.y + 6)
+    time.sleep(0.8)
+    check("File > Save is greyed under the question",
+          not ed.menu("File", "Save"))
+    before = (ed.pieces(), ed.b("wo_upos"))
+    ed.key("u")                         # Undo: live a moment ago
+    time.sleep(0.8)
+    check("Undo says 'Answer the question' and changes nothing (%r)"
+          % ed.status(), ed.status() == "Answer the question" and
+          (ed.pieces(), ed.b("wo_upos")) == before and
+          ed.b("ws_busy") == 0)
+    front = ed.ui.front()
+    a = ed.alert()
+    check("...and the refusal put the question back in front", a is not None
+          and front is not None and front.i == a.i)
+    if a:
+        ed.alert_btn(2)                 # Cancel
+    check("Cancel: the question gone, the document kept (%r)"
+          % ed.text("wo_name"), ed.b("wr_qact") == 0 and
+          ed.b("wo_dirty") == 1)
+
+
 def leg_close(ed):
     say(" close: the close box on an edited document")
     w = ed.window()
@@ -556,7 +661,9 @@ def main():
         if pieces is not None:
             leg_rebase(ed, fx, pieces)
             leg_full(ed, fx)
+        leg_temp(ed, fx)
         leg_pieces(ed)
+        leg_asked(ed)
         leg_close(ed)
     finally:
         if ed is not None:

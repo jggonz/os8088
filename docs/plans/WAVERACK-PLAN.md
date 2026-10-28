@@ -26,7 +26,7 @@ the evidence column says what was actually seen.
 | US-02 | The same WaveRack in colour and black and white | US-01 | Implemented — verification pending | `docs/waverack/waverack-vga-color-full.png`, `waverack-vga-bw-full.png`, `waverack-ega-mid.png`; identity check `None` on VGA colour, VGA B&W, EGA and across a layout round trip; Hercules MID and COMPACT seen on MartyPC's 5150 + Hercules (`docs/waverack/waverack-herc-mid.png`, `waverack-herc-compact.png`, captured from VRAM at 038ea5ed) |
 | US-03 | A real 640 x 200 CGA layout with every control reachable | US-02 | Implemented — verification pending | `docs/waverack/waverack-cga-compact.png` (native 640 x 200) and `-3x.png`; all 15 controls clicked with `--screen 640x200`, each answered; the layout measurement below |
 | US-04 | Open a WAV and inspect it without loading it into RAM | US-01 | Implemented — verification pending | `wrwav.inc`/`wrdoc.inc`/`wrenv.inc`; `tools/wrsim.py` reference + fast row `wrsim`; soak row `waverack` (every fixture through File > Open, bss vs the reference, the view cache column for column, zoom to fpp 1, identity); screenshots `docs/waverack/waverack-w2-*.png`; see Wave 2 below |
-| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§123.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. **Wave 4b** (play through disk reads, see below): our own external ring, convert before read, bounded sequential reads per medium, the hold; soak row `waverackdisk` (MartyPC, XT-IDE + SB 2.0 and a 1.44 MB floppy, before/after): BIG22 0.00 s silent of 30.8 (Wave 4: 19.3 of 33.0), LONG off the floppy 0.09 of 32.0 (19.9 of 32.1); 16-bit stereo HELD on an 8088. Not heard on 86Box or iron |
+| US-05 | Play, pause, stop, seek and set volume at the right pitch | US-04 | Implemented — verification pending | `wrxport.inc` (§123.6 shipped): Audio's pipeline over the document, the conversion `R / d` with the box filter, VOLUME's table, Pause closing the stream, Stop restoring the playhead; `tools/wrsim.py`'s `convert`/`play_pos` in the fast `wrsim` row; soak row `waverackplay` (QEMU SB16, the capture sample for sample at 22,050 Hz and at d = 2 on a DSP 2.01); screenshots `docs/waverack/waverack-w3-*.png`; see Wave 3 below. **Wave 4b** (play through disk reads, see below): our own external ring, convert before read, bounded sequential reads per medium, the hold; soak row `waverackdisk` (MartyPC, XT-IDE + SB 2.0, a 1.44 MB floppy and a 321 MB volume of 32 KB clusters, before/after): BIG22 0.00 s silent of 30.2 (Wave 4: 17.67 of 30.3), and 0.00 of 40.3 with a second WaveRack scanning the disk (26.91 of 40.0); LONG off the floppy 0.07 of 30.2 (18.71 of 30.4); 16-bit stereo HELD on an 8088; 32 KB clusters open, play and save (Wave 4: refused). Not heard on 86Box or iron |
 | US-06 | Record from a Sound Blaster into a take that survives | US-04, driver ext | In progress | driver half shipped: 1a027a77, SPEC §34.6.4, soak row `sndcap` passed on MartyPC SB DSP 2.01 (flat 80h - not a microphone); app side is Wave 5 |
 | US-07 | See the active level; set input gain separately from volume | US-05, US-06 | In progress | the PLAYBACK half shipped in wave 3 (§123.8): the played half's peak before the volume through `wrart_db`, the hold, PEAK at a rail, `LEVEL  PLAY`, only the changed cells drawn; the soak row reads the lit cells for STEREO16's tone and PEAK at its 16-bit spike. The record meter and the gain are wave 5's |
 | US-08 | Select a precise range, audition it, loop it | US-05 | Implemented — verification pending | §123.9's selection half shipped in wave 3: drag, handles, Shift+click, Shift+Left/Right, Select All / None, `[s, e)` clamped, the field's two formats, the inverted span (B&W) / its own ground (colour) drawn by changed columns only; Loop seamless; the soak row drags a range, loops it and holds verb 9's count to `play_pos` and the capture to the selection repeated; identity checks with a selection on VGA colour, B&W, COMPACT and the CGA knob tree |
@@ -707,56 +707,83 @@ size below is a fixed disk's first.
   SB16) has both and can be listened on once WAVERACK.O88 and a WAV are on
   its VHD. Not edited here.
 
-**The measurement** - soak row `waverackdisk`, run once and once more after
-a test fix (its first run died on a stale `[fm_vinst]` in the row's second
-launch; the second run's one failure is a second TEST bug, below, fixed and
-not re-run). Verbatim:
+**Folded into the wave afterwards, at the orchestrator's word:**
+
+- [x] **Clusters to 32 KB** (FAT16 past 512 MB uses 16 KB, past 1 GB 32
+  KB, and Wave 4 refused anything over 8 KB: most real hard disks). The I/O
+  claim became a WINDOW on the file, sized max(16 KB, the largest live
+  source's cluster) + 1 KB; a read is whole clusters, one at least; the
+  header reader takes one cluster a read (two across a cluster's end); the
+  save's output claim is max(16 KB, the destination's cluster).
+  `tools/os88hdd.py --spc` formats the 321 MB VHD of 32 KB clusters the
+  `bigclu` leg runs on, on MartyPC.
+- [x] **Wave 4's review** (`review-wave4.md`: 2 high, 2 medium, 8 low, every
+  one verified in the code first and fixed): the per-instance temp name
+  that never replaces a file (H1, M1), the questions' greying with the
+  re-front and the answers' re-checks and the close's cancel (H2), the
+  upper-case source names (M2), and L1-L8 (SPEC.md 123.10's last part).
+  `waverackedit` gained the `temp` and `asked` legs - edited, NOT run (the
+  final pass runs it); H1's first path, a rename failing after the delete,
+  is not drivable here.
+- [x] **Found on the way**: a refined column spanning two reads lost its
+  first part to a draw in between ([we_racc] shared with we_range; Wave 4's
+  build has it too) - `ODD46.WAV`, data at byte 46, joins the fixtures and
+  found it; the tick's top-up bounded to two halves so the UI stays the
+  user's.
+
+**The measurement** - soak row `waverackdisk`, its final run (all legs,
+both builds, verbatim; the runs before it found three TEST bugs - a stale
+`[fm_vinst]`, a window computed before a long launch, an open waited on
+mid-way - and one PACKAGE bug, the header reader's two 32 KB clusters, each
+fixed before the run below):
 
 ```
-FAIL waverackdisk                 196.2s  exit 1
+ ok  waverackdisk                 266.8s
        | waverackdisk: hdd before - .../WAVERACK.O88 on XT-IDE + SB 2.0
-       |      before BIG22 scan: 94.0 s guest, int 13h {'fat': 18, 'dir': 2, 'data': 168}
-       |      before BIG22 (2 MB, 22 kHz)    33.0 s: silent 19.33 s,   0 underruns,  302716 samples
-       |      before BIG22 + another's scan  46.6 s: silent 26.58 s,   2 underruns,  444417 samples
-       |      before ST22S (4 s, 88 KB/s)     6.8 s: silent  5.43 s,   1 underruns,   31282 samples
-       |      before ST22L (20 s, 88 KB/s)   16.6 s: silent 13.25 s,   3 underruns,   73783 samples
+       |      before BIG22 scan: 93.8 s guest, int 13h {'fat': 18, 'dir': 2, 'data': 168}
+       |      before BIG22 (2 MB, 22 kHz)    30.3 s: silent 17.67 s,   0 underruns,  280820 samples
+       |      before BIG22 + another's scan  40.0 s: silent 26.91 s,   5 underruns,  291294 samples
+       |      before (the second WaveRack's launch and Open took 124.2 s under the play)
+       |      before ST22S (4 s, 88 KB/s)     3.3 s: silent  2.62 s,   2 underruns,   14688 samples
+       |      before ST22L (20 s, 88 KB/s)   15.1 s: silent 11.76 s,   2 underruns,   73482 samples
        | waverackdisk: hdd after - build/waverack.o88 on XT-IDE + SB 2.0
-       |      after  BIG22 scan: 80.0 s guest, int 13h {'fat': 18, 'dir': 1, 'data': 168}
-       |      after  BIG22 (2 MB, 22 kHz)    30.8 s: silent  0.00 s,   0 underruns,  688742 samples, held=0 slow=0 rdsz=16384 ext=1
-       |      after  BIG22 + another's scan 103.7 s: silent 10.41 s,   2 underruns, 2073274 samples, ended, held=0 slow=0 rdsz=16384 ext=1
-       |      after  ST22S (4 s, 88 KB/s)     6.8 s: silent 101.05 s,   0 underruns, -2094508 samples, held=1 slow=0 rdsz=2048 ext=1
-       |      after  ST22L (20 s, 88 KB/s)   15.8 s: silent 11.08 s,  26 underruns,  104448 samples, held=0 slow=2 rdsz=16384 ext=1
+       |      after  BIG22 scan: 77.7 s guest, int 13h {'fat': 18, 'dir': 1, 'data': 168}
+       |      after  BIG22 (2 MB, 22 kHz)    30.2 s: silent  0.00 s,   0 underruns,  671157 samples, held=0 slow=0 rdsz=16384 ext=1
+       |      after  BIG22 + another's scan  40.3 s: silent  0.00 s,   0 underruns,  897696 samples, held=0 slow=0 rdsz=16384 ext=1
+       |      after  (the second WaveRack's launch and Open took 106.3 s under the play)
+       |      after  ST22S (4 s, 88 KB/s)     3.3 s: silent  0.00 s,   0 underruns,   75962 samples, held=1 slow=0 rdsz=2048 ext=1
+       |      after  ST22L (20 s, 88 KB/s)   15.0 s: silent 10.18 s,  24 underruns,  107894 samples, held=0 slow=2 rdsz=16384 ext=1
        | waverackdisk: hdd, before -> after
-       |    BIG22 scan: guest seconds 94.0 -> 80.0, no slower            ok
+       |    BIG22 scan: guest seconds 93.8 -> 77.7, no slower            ok
        |    BIG22 scan: FAT reads 18 -> 18                               ok
        |    BIG22 after: streamed (held 0), the external ring (1)        ok
-       |    BIG22 after: no underrun in 31 s (before: 0, 19.33 s silent) ok
+       |    BIG22 after: no underrun in 30 s (before: 0, 17.67 s silent) ok
        |    ST22S after: HELD - 'Loading' said, read from memory         ok
-       |    ST22S after: no underrun (before: 1, 5.43 s silent)          FAIL  0 underruns, 101.05 s silent
-       |    ST22L after: 'CPU too slow: gaps' said, the gaps counted (26 underruns, 11.08 s silent) ok
-       |      another window reading: before 2 underruns / 26.58 s silent, after 2 / 10.41 s (its scan still running at the end: True)
+       |    ST22S after: no underrun (before: 2, 2.62 s silent)          ok
+       |    ST22L after: 'CPU too slow: gaps' said, the gaps counted (24 underruns, 10.18 s silent) ok
+       |      another window reading: before 5 underruns / 26.91 s silent, after 0 / 0.00 s (its scan still running at the end: True)
        | waverackdisk: floppy before - LONG.WAV off a 1.44 MB floppy
-       |      before LONG scan: 108.2 s guest
-       |      before LONG (1.1 MB, 11 kHz)   32.1 s: silent 19.91 s,   0 underruns,  135122 samples
+       |      before LONG scan: 108.1 s guest
+       |      before LONG (1.1 MB, 11 kHz)   30.4 s: silent 18.71 s,   1 underruns,  130080 samples
        | waverackdisk: floppy after - LONG.WAV off a 1.44 MB floppy
-       |      after  LONG scan: 85.5 s guest
-       |      after  LONG (1.1 MB, 11 kHz)   32.0 s: silent  0.09 s,   0 underruns,  354534 samples, held=0 slow=0 rdsz=12288 ext=1
-       |    LONG after: no underrun in 32 s off the floppy (before: 0, 19.91 s silent) ok
-       |   FAIL: ST22S after: no underrun (before: 1, 5.43 s silent)
-       | waverackdisk: FAILED (1)
+       |      after  LONG scan: 85.4 s guest
+       |      after  LONG (1.1 MB, 11 kHz)   30.2 s: silent  0.07 s,   0 underruns,  335018 samples, held=0 slow=0 rdsz=12288 ext=1
+       |    LONG after: no underrun in 30 s off the floppy (before: 1, 18.71 s silent) ok
+       | waverackdisk: bigclu before - a FAT16 volume of 32 KB clusters
+       |      before open BIG22: 'Cluster too large', 0 frames
+       | waverackdisk: bigclu after - a FAT16 volume of 32 KB clusters
+       |      after  open BIG22: 70.0 s, cluster 32768, I/O claim 33 KB, heap (see the claim map)
+       |      after  BIG22 (32 KB clusters)  15.1 s: silent  0.00 s,   0 underruns,  335656 samples, held=0 slow=0 rdsz=16384 ext=1
+       |    32 KB clusters before: refused ('Cluster too large')         ok
+       |    32 KB clusters after: BIG22 opens (2094750 frames), cluster 32768, I/O claim 33 KB ok
+       |    32 KB clusters after: 15 s played, no underrun (0.00 s silent) ok
+       |    32 KB clusters after: OUT32.WAV is wrsim.write_wav of MID11, byte for byte (99270), 'Saved OUT32.WAV', a 32768-byte output claim ok
+       |    32 KB clusters after: no temp file left (['KERNEL.SYS', 'SOUND.DRV', 'WAVERACK.O88', 'BIG22.WAV', 'MID11.WAV', 'OUT32.WAV']) ok
+       | waverackdisk: ok
+os88test: 1 passed, 0 failed, 0 skipped in 266.8s, 261.4s charged (budget none)
 ```
 
-**The one FAIL is the row's, not WaveRack's**: `-2094508 samples` - the row
-took "the play has begun" from `[wt_played] > 0` while the hold LOADED, and
-`wt_played` still held the previous play's count until `wt_open` zeroed it,
-so the window's start was the old count and its silence nonsense. The
-underrun counter (0) and the hold (`held=1`, `Loading` said) stand; ST22S's
-silence is NOT measured. The row now waits for a count that is not the last
-play's and for the load to be over, and starts the second-window leg's
-window when that window's launch is done (its two spans above differ:
-46.6 s against 103.7). Re-running it is the final pass's.
-
-**Before's `0 underruns` beside 19 s of silence** is Wave 4's counter, which
+**Before's `0 underruns` beside 17 s of silence** is Wave 4's counter, which
 saw an underrun only when a poll caught the stream paused; the silence -
 verb 9's count against the guest clock - is the measure that cannot miss
 one, and is why the row asserts on it.

@@ -570,23 +570,59 @@ the samples the card says it played:
 
 | | Wave 4 | wave 4b |
 |---|---|---|
-| a 2 MB 8-bit mono 22 kHz WAV off the hard disk, ~31 s | 19.3 s silent | **0.00 s**, no underrun |
-| a 1.1 MB 11 kHz WAV off a 1.44 MB floppy, 32 s | 19.9 s silent | **0.09 s**, no underrun |
-| 4 s of 16-bit stereo 22 kHz | 5.4 s of 6.8 silent | held, no underrun |
-| 20 s of it (past the heap) | 13.3 s of 16.6 silent | `CPU too slow: gaps`, 11.1 of 15.8 |
-| the 2 MB file's envelope scan | 94.0 s | **80.0 s** |
+| a 2 MB 8-bit mono 22 kHz WAV off the hard disk, 30 s | 17.7 s silent | **0.00 s**, no underrun |
+| the same while a second WaveRack scans a 1.7 MB file off that disk, 40 s | 26.9 s silent | **0.00 s**, no underrun |
+| a 1.1 MB 11 kHz WAV off a 1.44 MB floppy, 30 s | 18.7 s silent | **0.07 s**, no underrun |
+| 4 s of 16-bit stereo 22 kHz | 2.6 s of 3.3 silent | held, **0.00 s**, no underrun |
+| 20 s of it (past the heap) | 11.8 s of 15.1 silent | `CPU too slow: gaps`, 10.2 of 15.0 |
+| a volume of 32 KB clusters | `Cluster too large` | opens, plays, saves |
+| the 2 MB file's envelope scan | 93.8 s | **77.7 s** |
 
 The scan's FAT reads did not change (18 either way - the kernel's FAT window
-holds a 2 MB file's chain), so what the cursor saved there was CPU: the walk
-from the front, gulp after gulp.
+holds a 2 MB file's chain), so what the cursor saved there was CPU: the
+SDK's 142 ms a megabyte of offset, paid on every one of 128 gulps.
 
-**What the row got wrong, twice.** Its first run died launching a second
-WaveRack: the harness's "acting Disk window" still named the file dialog the
-first window had just closed. Its second run reported 101 seconds of silence
-in a 6.8-second held play - it had taken the previous play's sample count,
-still sitting in memory while the hold loaded, as the start. WaveRack's own
-counter said no underrun; the row was fixed, and the silence of that one
-play is the number this wave did not take.
+**Then the hard disks themselves.** The orchestrator read the open path and
+found the blocker hiding behind the whole wave: WaveRack refused any volume
+whose cluster was over 8 KB, because two clusters had to fit its 16 KB read
+buffer - and FAT16 uses 16 KB clusters past 512 MB and 32 KB past 1 GB. Most
+real hard disks. The read buffer became a *window* on the file: any byte
+range, sized from the largest cluster in use plus a kilobyte, reading whole
+clusters - one at a time when a cluster is 32 KB. The header reader learned
+to take one cluster at a time too, and the save writes 32 KB at a time on
+such a disk. `tools/os88hdd.py` gained `--spc` to format the 321 MB test
+volume of 32 KB clusters that MartyPC then booted, opened, played and saved
+on - the saved file read back off the disk image on the host, byte for byte.
+
+**And wave 4's review: data loss in the save.** Every save wrote a temp file
+called `WRSAVE.$$$` - *created* over whatever already had that name, which
+could be the very file the document was reading (a kept temp, opened by the
+user; a second WaveRack saving into the same folder). Each save now takes
+`WRSAVnn.$$$`, the first name not already there, and makes it empty
+immediately so nothing else can take it. The other high finding was that
+the save-changes question is a separate window and not modal: press SAVE
+underneath it, answer Discard and Open, and the user's original file could
+end up holding another document's audio. While a question is up the
+document's commands now grey with `Answer the question` - and the refusal
+brings the question back to the front, because a click into a full-screen
+WaveRack buries the alert completely and an alert has no dock tile. That
+last part was found by the test harness, which could not get back to the
+alert either.
+
+**A third bug fell out of a new fixture.** `ODD46.WAV` puts its sound data
+at byte 46 (an 18-byte `fmt ` chunk, which many programs write), so a
+4-byte frame straddles the end of every read. Its zoomed waveform came out
+wrong at exactly those columns - in Wave 4's build too. The column's running
+range lived in a variable the screen-drawing code also used, and a column
+that spans two reads waits a tick in between, during which the screen gets
+drawn.
+
+**What the row got wrong, on the way.** Its runs died or lied four times for
+reasons of its own: a stale "acting Disk window", a measured window that
+began before a second program's minute-long launch, an open waited on in the
+gap between emptying the old document and scanning the new one, and a poll
+interval in host seconds on an emulator running six times faster than real
+time. Each was fixed; the final run passes every leg.
 
 **Still not heard.** No `vm/` machine here is an XT with both a hard disk and
 a Sound Blaster. `vm/xt-mfm` - the ST-225 on a Xebec, the machine to install
