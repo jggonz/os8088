@@ -690,6 +690,18 @@ def leg_calls(tmp, fx):
             say("     calls  %-28s %6.2f a tick (%d in %.0f ticks)" % (
                 label, n / t, n, t))
             return n / t
+        # WHAT FOLLOWS A LAUNCH IS NOT IDLE: the first run counted 91
+        # primitives in its idle window (192 ticks) and the second counted
+        # 87 in the five seconds after the raise - with NO wr_paint entry
+        # among them (the breakpoint below), so a one-off update after the
+        # launch's paint, not a repaint and not a steady draw: the 188 ticks
+        # after it drew nothing. So that window is counted apart and idle is
+        # the SECOND one
+        paints = []
+        with os88marty.bp_trace(m, rk.base + syms["wr_paint"],
+                                on_hit=lambda mm, rec: paints.append(1)):
+            per_tick("the 5 s after the launch", 5.0)
+        say("     calls  (%d wr_paint entries among them)" % len(paints))
         idle = per_tick("idle, no document", 10.0)
         check("calls: idle draws nothing", idle == 0.0, "%.2f" % idle)
         check("calls: the next take is 11,025 Hz", set_rate(ui, rk, 1))

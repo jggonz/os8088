@@ -236,23 +236,6 @@ class ED(WRT.WR):
         time.sleep(0.5)
         return ok
 
-    def alert(self):
-        ptr = self.w("os88ui_awin")
-        if not ptr:
-            return None
-        i = (ptr - xmcheck.sym("wm_wins") + (geom.KERNEL_SEG << 4)) \
-            // geom.WIN_SIZE
-        return next((o for o in self.ui.windows() if o.i == i), None)
-
-    def alert_btn(self, k, n=3):
-        """button K of the alert (os88ui's row: n buttons of 72 + 12)"""
-        w = self.alert()
-        row = n * 84 - 12
-        xmcheck.click(self.sock, w.x + (w.w - row) // 2 + 84 * k + 36,
-                      w.y + 18 + 46 + 6)
-        until(lambda: not self.w("os88ui_awin"), "the alert answered", 10)
-        time.sleep(0.5)
-
     def name_in(self, name):
         """the Save dialog: its name box emptied, NAME typed, Enter"""
         if not until(lambda: self.chooser() is not None, "the dialog", 15):
@@ -477,7 +460,7 @@ def leg_rebase(ed, fx, pieces):
     check("the document is ONE piece of the saved file (%r)" % (p,),
           len(p) == 1 and p[0][1:] == (0, frames) and
           ed.srcname(p[0][0]) == "STEREO16.WAV" and
-          ed.q.read((ed.seg << 4) + ed.syms["wo_src"] + 40 * p[0][0] + 16,
+          ed.q.read((ed.seg << 4) + ed.syms["wo_src"] + WS_SIZE * p[0][0] + 16,
                     4) == struct.pack("<I", 44))
     check("the history is empty, its claim given back",
           ed.b("wo_un") == 0 and ed.w("wo_useg") == 0)

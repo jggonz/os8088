@@ -288,10 +288,37 @@ class WR(object):
             self.key("up" if i < top else "down")
             until(lambda: self.ui.scroll(w) != top, "the scroll", 2)
 
+    def alert(self):
+        """os88ui's alert window (a question), or None"""
+        ptr = self.w("os88ui_awin")
+        if not ptr:
+            return None
+        i = (ptr - xmcheck.sym("wm_wins") + (geom.KERNEL_SEG << 4)) \
+            // geom.WIN_SIZE
+        return next((o for o in self.ui.windows() if o.i == i), None)
+
+    def alert_btn(self, k, n=3):
+        """button K of the alert (os88ui's row: n buttons of 72 + 12)"""
+        w = self.alert()
+        row = n * 84 - 12
+        xmcheck.click(self.sock, w.x + (w.w - row) // 2 + 84 * k + 36,
+                      w.y + 18 + 46 + 6)
+        until(lambda: not self.w("os88ui_awin"), "the alert answered", 10)
+        time.sleep(0.5)
+
     def open(self, path):
         g = self.w("wo_gen")
         if not self.menu_pick("File", "Open"):
             return False
+        # AN EDITED DOCUMENT IS ASKED ABOUT FIRST (wave 4, SPEC.md 123.3) -
+        # and a recovered take opens dirty (123.4), so after UNFIN.WAV the
+        # next Open raised 'Save changes to UNFIN.WAV?' and this waited for
+        # a dialog that the question stood in front of: Discard it
+        if not until(lambda: self.chooser() is not None or
+                     self.alert() is not None, "the dialog", 15):
+            return False
+        if self.chooser() is None and self.alert() is not None:
+            self.alert_btn(1)               # Discard
         if not until(lambda: self.chooser() is not None, "the dialog", 15):
             return False
         time.sleep(0.3)

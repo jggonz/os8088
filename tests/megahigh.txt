@@ -52,7 +52,24 @@ high apps/browser/browser.asm     # THE APP RETAINS CLAIM SEGMENTS: br_srcclaim
     # Keep it conventional until kern_mega verifies these handles across
     # worker dispatch, regrowth and cleanup.
 
+high apps/waverack/waverack.asm   # ITS OWN DS COMPARED AS A PARAGRAPH: wc_myslot
+    # (apps/waverack/wrrec.inc) finds the instance's slot - the recovery
+    # markers' name for the recorder (SPEC.md 123.7) - as the
+    # OSAPI_SYS_SNAPSHOT record whose SSI_SEG equals DS, a real-mode paragraph
+    # comparison. WaveRack is kern_big only (SPEC.md 123.13; no PKG_MEGA arm)
+    # and has never run on kern_mega. Retired by a snapshot field that names
+    # the caller's own instance, or a run on kern_mega showing SSI_SEG is DS.
+
 # --- highmem -----------------------------------------------------------------
+
+highmem apps/waverack/waverack.asm   # A CLAIM STEPPED BY PARAGRAPH: wt_hoff
+    # (apps/waverack/wrxport.inc) addresses the playback HOLD - one byte a
+    # frame, more than 64KB for a long region - as [wt_hseg] plus the offset
+    # >> 4, segment arithmetic on a claim's segment; and the record and play
+    # rings are OSAPI_MEM_CLAIM_DMA_HI claims handed to SOUND.DRV for DMA.
+    # Never run on kern_mega (kern_big only, SPEC.md 123.13). Retired by
+    # OSAPI_MEM_HUGE's step for the hold (KERN-MEGA-PLAN 14.67) and a run on
+    # kern_mega.
 
 highmem apps/sheet/sheet.asm    # FAR-CALLS CODE IN A CLAIM: CHART.OVL and MACRO.OVL
     # are read into claims and entered with `call far [ch_ovfar]` /

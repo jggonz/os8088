@@ -17624,7 +17624,9 @@ xt-midirack: $(IMG360) $(BUILD)/midirack360.img $(MIDISF2)
 # SPEC.md 123.6's play go on through disk reads (the stall the owner heard on
 # 86Box) and 123.7's takes onto a hard disk; nothing here can key 86Box, so
 # it is for LISTENING - the gates are MartyPC's (waverackdisk, waverackrec).
-# The disk is `hdd_01_speed = ramdisk`, xt-mfm's: no seek or rotation time.
+# The disk is `hdd_01_speed = ST225` (vm/pc5150's preset, where xt-mfm has
+# `ramdisk`): REAL seek and rotation times, which is where the owner first
+# heard the stall - ramdisk reproduces only its CPU half.
 # THE CARD IS ON IRQ 7, not xt-sound's 5: the Xebec takes IRQ 5, and SOUND.DRV
 # refuses a Sound Blaster there on an XT (SPEC.md 34.5.6) - xt-sound's keys
 # copied as they stand would toast 'IRQ 5 is the hard disk's' and play nothing

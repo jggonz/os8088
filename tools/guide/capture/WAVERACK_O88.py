@@ -19,16 +19,22 @@ def capture(ui, shot):
     os88marty.guest_sleep(ui.m, 4.0)
     ui.menu_pick("File", "Open...")
     ui.chooser()
-    ui.chooser_open("MEDIA/LONG.WAV")
+    ui.chooser_open("LONG.WAV")              # (the chooser opens on MEDIA)
     os88marty.guest_sleep(ui.m, 120.0)      # the scan of 1.1 MB
     ui.mo.to(636, 470)
     shot("waverack-window", window=TITLE, pad=4)
 
-    ui.m.key("Home")                         # a selection: Shift+Right
-    for _ in range(80):
-        ui.m.key("ShiftLeft", up=False)
-        ui.m.key("ArrowRight")
-        ui.m.key("ShiftLeft", down=False)
+    # a selection DRAGGED across the waveform, as a user makes one (Shift
+    # held through MartyPC's key events did not register: the first capture
+    # moved the cursor and selected nothing)
+    x, y, w, h = ui._rect(ui.window(TITLE).i)
+    ly = y + 255                        # mid-lane, FULL's waveform
+    ui.mo.to(x + 140, ly)
+    ui.mo._edge(True)
+    ui.mo.to(x + 260, ly, l=True)       # (the button held through the move)
+    ui.mo.to(x + 330, ly, l=True)
+    ui.mo._edge(False)
+    ui.mo.to(636, 470)
     os88marty.guest_sleep(ui.m, 3.0)
     shot("waverack-selection", window=TITLE, pad=4)
 

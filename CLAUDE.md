@@ -711,7 +711,8 @@ midirackdisk`'s floppy - player, wavetable bank, songs - in B:),
 and ST-225 on a Xebec with `xt-sound`'s Sound Blaster 2.0 added - on IRQ 7,
 the Xebec owning 5 (§34.5.6) - and A: empty, booting `make waverackhd`'s raw disk - the whole install plus long
 WAVs in `MEDIA/` - to LISTEN to a play going on through disk reads and to
-record onto a hard disk),
+record onto a hard disk, with the disk at 86Box's `ST225` speed preset, so
+seeks and rotation are real where `xt-mfm`'s `ramdisk` has none),
 `xt-xtmp3`, `286-xtmp3`, `386-xtmp3`, `486-xtmp3` and `pentium-xtmp3`
 (XTMP3's ladder, SPEC.md §121.11.5: the tree's sound machines booting `make
 xtmp3field`'s disks, whose `\AUTOSTRT` opens the `-DX3REPORT` build on one

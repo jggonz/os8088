@@ -777,9 +777,51 @@ disk's" and plays nothing. The card sits on IRQ 7 in `vm/xt-waverack`, and
 `make waverackhd` builds its hard disk: the whole install, with WaveRack and
 a handful of long WAVs.
 
-**No 360 KB home yet.** WaveRack is 33 clusters on a 360 KB disk. The disk
+**No 360 KB home yet.** WaveRack is 34 clusters on a 360 KB disk. The disk
 whose subject it shares, the media disk, has 19 free. Two category disks
 have room, but they are the network and emulator disks, and a sound
 recorder on either would break the rule that a 360 KB disk is chosen by its
 subject. That decision is the owner's, and the specification says exactly
 what would make room.
+
+## Wave 6b - the review, and the last run
+
+**An outside reader found what the tests could not.** An independent review
+of the last two waves, reading the code against the specification, found a
+High: the crash marker named the recording window by its memory segment,
+and WaveRack's memory can be moved by the system to make room. A second
+WaveRack opened during a take could then decide the take was abandoned,
+offer to "recover" it, and - if the user saved the recovery as told - leave
+the recording window appending to a different file. The fix names the
+recorder by its slot in the system's table of running programs, which never
+moves, keeps one entry per take, refuses to save over a take that is still
+being recorded, and only clears an entry once its recovery has opened.
+
+**The subtler one was about time.** The copy out of the card's ring trusted
+a count it had read before copying; a disk call landing in the middle could
+let the card lap the bytes being copied, splicing newer sound into older
+without a word. Now the count is read again after every piece. No emulator
+can stage that stall - stopping the copy stops the whole machine - so the
+evidence is the other direction: every take of the final run still counts
+zero overruns with the check in place.
+
+**The last run.** All six WaveRack test rows ran once; three passed and
+three failed, every failure in a test, not the program: a test that never
+answered "Save changes?" (added after it was written), a test reading a
+record at its old size, and a new measurement that counted the program's
+first drawing after launch as idle. Fixed and run again, all three passed.
+The full test tier then found that WaveRack had never declared whether it
+can live above 1 MB on the protected-mode kernel; it now says why not, with
+the two places in the code that would break.
+
+**The measured XT, in the end.** On MartyPC's 4.77 MHz 5150: idle, WaveRack
+draws nothing; a take draws about one thing a tick; a full repaint takes
+1.1 to 1.5 seconds; the copy is 98 cycles a byte, 23% of the machine at
+11 kHz; and a 60-second take onto the hard disk never had the card more
+than 4 KB ahead of it.
+
+**And the machine to listen on now has a real disk.** The XT profile for
+the owner spins its ST-225 at 86Box's modelled speed, seeks and rotation
+included, which is where the stall was first heard. What remains is what
+only hardware can say: a microphone's sound, the gain heard, and a real
+drive's write speed.
