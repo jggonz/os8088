@@ -446,8 +446,11 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/kdos/DOS.O88",
                "build/recorder.o88", "build/DOSHELLO.COM",
                "build/DOSHMA.COM")),
-    Row("wrsim", "fast", py("tests/unit/t_wrsim.py"), 0.2,
-        "WaveRack's host reference (SPEC.md 123.3-123.5, tools/wrsim.py): "
+    Row("wrsim", "fast", py("tests/unit/t_wrsim.py"), 0.3,
+        "WaveRack's host reference (SPEC.md 123.3-123.5, tools/wrsim.py) "
+        "and its art's selfcheck (tools/os88wrart.py: the pictures, the "
+        "layouts, the small caps complete for every caption, every status "
+        "message at most 22 characters, the gain against 20 log10): "
         "every fixture the soak row opens parses to its expectation - "
         "tones, impulses, stereo 16-bit, odd and unknown chunks, data "
         "before fmt, the extensible format, clamped, floored and unfinished "
@@ -573,7 +576,10 @@ FAST = [
         "WAVERACK.TAK done. 32 KB CLUSTERS (a VGA XT, os88hdd.py --spc 64): "
         "both rates, the header one cluster, the face photographed. FLOPPY "
         "second: 30 s onto 1.44 MB, then DISK FULL (the take kept, whole "
-        "writes). And QEMU's SB16: 'No input from the card', no file left",
+        "writes). And QEMU's SB16: 'No input from the card', no file left. "
+        "CALLS (US-11, written in wave 6a): a -DWR_CALLS build counts the "
+        "drawing primitives a tick idle, recording, playing and for one cut "
+        "on the XT, and prices wr_redraw's tick while recording",
         needs=("marty", "qemu", "nasm"), serial=True, timeout=5400,
         wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
                "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",

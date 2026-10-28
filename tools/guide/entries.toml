@@ -361,6 +361,13 @@ kind = "program"
 summary = "Plays standard MIDI song files with a channel rack, on an FM chip, a Sound Blaster, MIDI out or the PC speaker."
 short = "MIDI song player with rack"
 
+["WAVERACK.O88"]
+title = "WaveRack"
+kind = "program"
+summary = "Records, plays and edits WAV sound files behind the face of an 80s digital recorder: a level meter, the waveform you can zoom into, select and cut, and a take recorded straight onto the disk, ideally a hard disk. Opens 8- and 16-bit mono and stereo WAVs of any length; saves without ever writing over the original until the new file is whole."
+short = "Sound recorder and WAV editor"
+needs = "A Sound Blaster to play and record; editing needs nothing"
+
 ["XTMP3.O88"]
 title = "XTMP3"
 kind = "program"

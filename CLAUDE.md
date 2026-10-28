@@ -707,6 +707,11 @@ song, a module and a WAV for each; an XT cannot read a 1.44MB disk), `xt-midirac
 whose SB16 carries one, each sending MIDI to 86Box's FluidSynth with the
 GeneralUser GS soundfont `make midibank` fetches, and each with `make
 midirackdisk`'s floppy - player, wavetable bank, songs - in B:),
+`xt-waverack` (WaveRack's, SPEC.md §123.6-123.7: `xt-mfm`'s 4.77MHz XT
+and ST-225 on a Xebec with `xt-sound`'s Sound Blaster 2.0 added - on IRQ 7,
+the Xebec owning 5 (§34.5.6) - and A: empty, booting `make waverackhd`'s raw disk - the whole install plus long
+WAVs in `MEDIA/` - to LISTEN to a play going on through disk reads and to
+record onto a hard disk),
 `xt-xtmp3`, `286-xtmp3`, `386-xtmp3`, `486-xtmp3` and `pentium-xtmp3`
 (XTMP3's ladder, SPEC.md §121.11.5: the tree's sound machines booting `make
 xtmp3field`'s disks, whose `\AUTOSTRT` opens the `-DX3REPORT` build on one

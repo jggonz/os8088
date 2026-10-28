@@ -988,9 +988,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "32e6dce5",
-  "strings": "d5ccec072faf56ae",
-  "why": "Document smooth requested volume and one-percent keys; speaker uses menu-bar theme colors"
+  "stamped": "c8c92aa96",
+  "strings": "84884b633231227c",
+  "why": "Checked against drivers/sound since 32e6dce5: the IRQ 5 refusal on an XT (its toast, the jumper cure) added to Good to know; WaveRack and XTMP3 named among the programs, recording into WaveRack's own memory (verb 4's external ring) said in user terms; volume panel, pages, ports and memory figure unchanged (image 11,273 bytes, about 11K)"
  },
  "SPACEJAM_MID": {
   "sources": [],
@@ -1203,6 +1203,14 @@
   "stamped": "6151b2e8",
   "strings": "4095e5c86a5e295a",
   "why": "the driver passes wheel notches to the kernel (SPEC.md 9.12.8), so the wheel scrolls the front window"
+ },
+ "WAVERACK_O88": {
+  "sources": [
+   "apps/waverack"
+  ],
+  "stamped": "c8c92aa96",
+  "strings": "0564075a8fcd5fef",
+  "why": "New manual, written from apps/waverack's menus, key table and status strings and SPEC 123: open, view, select, play, record (rates, gain, pause, the take's endings, Recover Take, the floppy's 8,000 Hz), edit, save, the four menus, layouts, files"
  },
  "WEAVE": {
   "sources": [],

@@ -593,8 +593,46 @@ def selfcheck(bm, art):
             print("role %s: the black-and-white theme uses only 0, 15 and "
                   "patterns" % n)
             bad += 1
+    bad += status_check(report)
     if "--quiet" not in __import__('sys').argv:
         print("\n".join(report))
+    return bad
+
+
+# THE STATUS BAR'S 22 CHARACTERS, held to every message the source carries
+# (SPEC.md 123.2): each literal a status label names - wr_s_, wc_s_, ww_s_,
+# ww_e, wt_s_, we_s_, ws_s_, wx_s_ - read out of apps/waverack/ itself. A
+# message built from a literal and a number ('Overrun: kept to ' + 'M:SS')
+# is its own builder's to keep short; this holds every literal
+STATUS_PFX = ('wr_s_', 'wc_s_', 'ww_s_', 'ww_e', 'wt_s_', 'we_s_', 'ws_s_',
+              'wx_s_')
+
+
+def status_check(report):
+    import glob
+    import os
+    import re
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
+                       'apps', 'waverack')
+    pat = re.compile(r"^(\w+):\s+db\s+'([^']*)'\s*,\s*0")
+    n, longest, bad = 0, 0, 0
+    for f in sorted(glob.glob(os.path.join(src, '*.asm')) +
+                    glob.glob(os.path.join(src, '*.inc'))):
+        for ln in open(f, encoding='latin-1'):
+            m = pat.match(ln)
+            if not m or not m.group(1).startswith(STATUS_PFX):
+                continue
+            n += 1
+            longest = max(longest, len(m.group(2)))
+            if len(m.group(2)) > STATUS_MAX:
+                print("status message %s %r is %d characters, past %d"
+                      % (m.group(1), m.group(2), len(m.group(2)), STATUS_MAX))
+                bad += 1
+    if not n:
+        print("no status messages found under %s" % src)
+        bad += 1
+    report.append("status messages: %d in the source, the longest %d of %d"
+                  % (n, longest, STATUS_MAX))
     return bad
 
 

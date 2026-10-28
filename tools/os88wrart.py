@@ -749,6 +749,23 @@ def selfcheck():
             bad += 1
             break
     bad += LAY.selfcheck(bm, sys.modules[__name__])
+    # THE SMALL CAPS ARE COMPLETE for everything drawn in them: wd_bcaps
+    # upper-cases and draws a character with no glyph as a blank advance, and
+    # caps_text above does the same, so a missing glyph is silent on both
+    # sides. Every caption a layout's CAPS ops draw, the meter's captions and
+    # the COMPACT format line (the rates' and a document's format)
+    texts = set(LAY.MCAPS_FULL + LAY.MCAPS_CMP + [LAY.FMT_TEXT] +
+                ['8,000 Hz  8-bit  Mono', '11,025 Hz  8-bit  Mono',
+                 '15,000 Hz  8-bit  Mono', '44,100 Hz 16-bit Stereo'])
+    for L in LAY.layouts(sys.modules[__name__], bm):
+        for op in L.ops:
+            if op[0] == LAY.OP['CAPS'] and isinstance(op[8], tuple):
+                texts.add(op[8][1])
+    for t in sorted(texts):
+        miss = sorted(set(c for c in t.upper() if c not in CAPS))
+        if miss:
+            print("small caps: %r needs %r, which have no glyph" % (t, miss))
+            bad += 1
     if emit(bm) != emit(all_bitmaps()):
         print("two runs differ")
         bad += 1

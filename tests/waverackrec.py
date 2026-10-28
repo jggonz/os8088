@@ -50,6 +50,10 @@ against the ring.
            write blocks the copy longer than the ring holds at 11 kHz): the
            first read back whole, the second DISK FULL - 'Disk full: take
            kept', the take kept with whole writes
+  calls    (US-11, written in wave 6a) a -DWR_CALLS build on the HDD machine:
+           drawing primitives a tick idle, recording, playing the take, and
+           one cut; wr_redraw's cycles a tick while recording; a full
+           repaint (a layout switch each way) in primitives and milliseconds
   noinput  QEMU (an SB16 that captures nothing, SPEC.md 35): 11,025 Hz onto
            the B: floppy is refused ('Floppy: use 8,000 Hz'); at 8,000 Hz
            Record answers 'No input from the card', and no VOICE file is left
@@ -647,6 +651,125 @@ def leg_floppy(o88, syms, tmp):
           b"\x80" * n, "wrote %d, file %s" % (n, len(d2) if d2 else None))
 
 
+def leg_calls(tmp, fx):
+    """US-11's redraw cost (docs/plans/WAVERACK-PLAN.md): a -DWR_CALLS build -
+    every drawing primitive WaveRack calls counted into [wr_ncalls] - on the
+    5150 + Hercules + XT-IDE + SB 2.0, read per tick IDLE, RECORDING (11,025
+    Hz, the strip and the meter), PLAYING the take (the ring pipeline wave 4b
+    made, at Fit), and for one CUT at Fit; and the guest cycles of wr_redraw a
+    tick while recording. Waves 3 and 4 counted these by hand on QEMU's VGA
+    (idle 0, playing 1.70, an edit 34-37, a full repaint 120-126); this is the
+    row that takes them on the target, and the recording figure for the first
+    time. WRITTEN IN WAVE 6a, first run in the final pass"""
+    say("waverackrec: calls - drawing primitives a tick (-DWR_CALLS)")
+    syms, img = pkg_syms("apps/waverack/waverack.asm",
+                         ("apps/", "apps/waverack/",
+                          os88build.at("build") + "/"), defines=("WR_CALLS",))
+    b = os.path.join(tmp, "wrcalls.bin")
+    open(b, "wb").write(img)
+    o88 = os.path.join(tmp, "WAVERACK.O88")
+    subprocess.run([sys.executable, "tools/os88pkg.py", "--compress-if=lz4",
+                    b, "-o", o88], check=True, capture_output=True)
+    vhd = hdd_vhd(tmp, o88, "calls.vhd")
+    m = os88marty.launch(None, machine=MACHINE_HDD,
+                         extra=["--mount", "hd:0:" + os.path.abspath(vhd)])
+    try:
+        ui = os88ui.UI(m, verbose=False)
+        ui.ready(limit=240)
+        rk = launch(ui, "C:/WAVERACK.O88", syms)
+        ui.raise_window(rk.w)
+
+        def per_tick(label, secs):
+            n0, c0 = rk.w_("wr_ncalls"), cyc(m)
+            os88marty.until(m, lambda mm: cyc(mm) - c0 >= secs * HZ, label,
+                            poll=0.1, guest=secs + 60.0)
+            n = (rk.w_("wr_ncalls") - n0) & 0xFFFF
+            t = (cyc(m) - c0) / HZ * 18.2065
+            say("     calls  %-28s %6.2f a tick (%d in %.0f ticks)" % (
+                label, n / t, n, t))
+            return n / t
+        idle = per_tick("idle, no document", 10.0)
+        check("calls: idle draws nothing", idle == 0.0, "%.2f" % idle)
+        check("calls: the next take is 11,025 Hz", set_rate(ui, rk, 1))
+        m.key("KeyR")
+        os88marty.until(m, lambda mm: rk.b("wt_state") == WT_REC,
+                        "recording", poll=0.05, guest=60.0)
+        guest_wait(m, 2.0, "the take under way")
+        cost = []
+        pair = (rk.base + syms["wr_redraw"], rk.base + syms["wr_redraw.out"])
+
+        def hit(mm, rec):
+            if rec["addr"] == pair[0]:
+                cost.append([rec["cycles"], None])
+            elif cost and cost[-1][1] is None:
+                cost[-1][1] = rec["cycles"]
+        with os88marty.bp_trace(m, *pair, on_hit=hit):
+            rec = per_tick("recording, 11,025 Hz", 10.0)
+        v = sorted(b - a for a, b in cost if b is not None)
+        if v:
+            say("     calls  wr_redraw while recording: %d ticks, median %.2f "
+                "ms, max %.1f ms" % (len(v), 1000.0 * v[len(v) // 2] / HZ,
+                                     1000.0 * v[-1] / HZ))
+        check("calls: a recording tick draws at most 4 primitives (the time, "
+              "a strip column, the meter's runs)", 0 < rec <= 4.0,
+              "%.2f" % rec)
+        m.key("Escape")
+        os88marty.until(m, lambda mm: rk.b("wt_state") == 0 and
+                        rk.b("we_busy") == 0 and rk.b("wv_ok"),
+                        "the take opened", poll=0.1, guest=300.0)
+        guest_wait(m, 2.0, "quiet")
+        m.key("Space")
+        os88marty.until(m, lambda mm: rk.b("wt_state") == 1, "playing",
+                        poll=0.05, guest=60.0)
+        guest_wait(m, 1.0, "the play under way")
+        play = per_tick("playing the take, Fit", 8.0)
+        check("calls: a playing tick at Fit draws under 3 primitives "
+              "(wave 3: 1.70 on QEMU)", 0 < play < 3.0, "%.2f" % play)
+        m.key("Escape")
+        os88marty.until(m, lambda mm: rk.b("wt_state") == 0, "stopped",
+                        poll=0.05, guest=30.0)
+        guest_wait(m, 2.0, "quiet")
+        n0 = rk.w_("wr_ncalls")         # one CUT at Fit: select all, X
+        m.key("KeyA")
+        guest_wait(m, 2.0, "selected")
+        n1 = rk.w_("wr_ncalls")
+        m.key("KeyX")
+        os88marty.until(m, lambda mm: rk.b("wo_dirty"), "the cut",
+                        poll=0.05, guest=30.0)
+        guest_wait(m, 3.0, "drawn")
+        n2 = rk.w_("wr_ncalls")
+        say("     calls  select all %d, one cut %d (wave 4 on QEMU: 34-37)" % (
+            (n1 - n0) & 0xFFFF, (n2 - n1) & 0xFFFF))
+        check("calls: a cut at Fit is under 60 primitives, never a full "
+              "repaint (126)", 0 < ((n2 - n1) & 0xFFFF) < 60,
+              "%d" % ((n2 - n1) & 0xFFFF))
+        # A FULL REPAINT, priced: View > Compact Layout and back each paint
+        # the whole window (wr_paint, entry to its ret), with the document
+        # open - PERFORMANCE.md's measure of a redraw, on the target
+        span = []
+        pp = (rk.base + syms["wr_paint"], rk.base + syms["wr_paint.out"])
+
+        def phit(mm, rec):
+            if rec["addr"] == pp[0]:
+                span.append([rec["cycles"], None, rk.w_("wr_ncalls")])
+            elif span and span[-1][1] is None:
+                span[-1][1] = rec["cycles"]
+                span[-1].append(rk.w_("wr_ncalls"))
+        for item in ("Compact Layout", "Full Layout"):
+            with os88marty.bp_trace(m, *pp, on_hit=phit):
+                ui.menu_pick("View", item)
+                guest_wait(m, 6.0, "the repaint")
+            done = [x for x in span if x[1] is not None]
+            if done:
+                c0, c1, k0, k1 = done[-1]
+                say("     calls  a full repaint after %-16s %4d primitives, "
+                    "%.0f ms" % (item, (k1 - k0) & 0xFFFF,
+                                 1000.0 * (c1 - c0) / HZ))
+            check("calls: %s repainted the window once" % item, bool(done))
+    finally:
+        m.close()
+
+
 def leg_noinput(syms, img, tmp):
     say("waverackrec: noinput - QEMU's SB16 captures nothing")
     import waverackplay as P                                  # (QEMU's)
@@ -687,7 +810,7 @@ def main():
     global SHOTS
     ap = argparse.ArgumentParser()
     ap.add_argument("--leg", action="append",
-                    choices=("hdd", "bigclu", "floppy", "noinput"))
+                    choices=("hdd", "bigclu", "floppy", "noinput", "calls"))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--shots", default=os88build.at("build/waverackrec"))
     a = ap.parse_args()
@@ -712,7 +835,7 @@ def main():
         os.makedirs(fx)
         open(os.path.join(fx, "BIG22.WAV"), "wb").write(
             wrsim.disk_fixture("BIG22.WAV"))
-        legs = a.leg or ("hdd", "bigclu", "floppy", "noinput")
+        legs = a.leg or ("hdd", "bigclu", "floppy", "noinput", "calls")
         for leg in legs:
             t0 = time.time()
             try:
@@ -722,6 +845,8 @@ def main():
                     leg_bigclu(o88, syms, tmp)
                 elif leg == "floppy":
                     leg_floppy(o88, syms, tmp)
+                elif leg == "calls":
+                    leg_calls(tmp, fx)
                 else:
                     q = os.path.join(tmp, "q")
                     os.makedirs(q)

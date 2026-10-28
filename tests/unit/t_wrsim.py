@@ -37,4 +37,17 @@ for code, s in sorted(wrsim.SENTENCE.items()):
     harness.check(frag in src, "wrwav.inc spells E_%d's sentence %r" % (code, s),
                   why="the status bar and the reference must say the same "
                       "words; the soak row compares them on the glass")
+# ...and the ART's selfcheck (tools/os88wrart.py, with os88wrlay.py's): it
+# runs at build only when build/wrart.inc is rebuilt, which a string edited
+# in apps/waverack/ never causes - and two of its checks read that source:
+# every status message at most 22 characters, and every caption drawn in the
+# 5x7 small caps with a glyph for each character (US-11, wave 6a)
+import subprocess                                             # noqa: E402
+art = subprocess.run([sys.executable, os.path.join(HERE, "..", "..", "tools",
+                                                   "os88wrart.py"),
+                      "--selfcheck", "--quiet"], capture_output=True,
+                     text=True)
+harness.check(art.returncode == 0, "tools/os88wrart.py --selfcheck",
+              why="the art, the layouts, the small caps or a status "
+                  "message's length: " + (art.stdout + art.stderr).strip())
 harness.done("t_wrsim")

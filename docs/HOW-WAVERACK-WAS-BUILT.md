@@ -742,3 +742,44 @@ sounds like through it (every emulator here records silence or nothing), the
 gain heard, and a real disk's write speed - MartyPC's hard disk has no
 mechanics, and its floppy, the one timed medium, is the reason the floppy
 rate is 8,000 Hz until the 5150's own drive says otherwise.
+
+## Wave 6a - the paperwork, and one jumper
+
+**The story.** Before the last review and the last test run, WaveRack needed
+its papers: a table of what it costs and how fast it is on an XT, with a
+source for every number; a page in the user's guide; a way for a maintainer
+to build, install and test it from the pull request; and a machine for the
+owner to *listen* on, since the original stall was heard, not measured.
+
+**Most of the numbers already existed.** Five waves had measured sizes, heap
+in every state, the cycles a frame of every conversion loop, the copy's
+cycles a byte, the play's silence and the take's ring high water on several
+media. The table in the plan names where each came from. Two things had
+never been measured on the target: how many drawing calls a tick a take
+costs, and how long a full repaint takes on an XT. Those became a new leg of
+the recording test, written now and first run in the final pass.
+
+**A check that was missing.** The art generator's selfcheck promised "fonts
+complete", but a character with no glyph in the 5x7 small caps was quietly
+drawn as a space - by the generator and by the 8086 code alike. It now fails
+the build, and so does any status message longer than the 22 characters the
+compact face has room for. Both checks read the package's own source, and
+they run in the fast test on every build rather than only when the art
+changes.
+
+**The listening machine nearly could not make a sound.** The obvious recipe
+was the XT with the ST-225 hard disk plus the Sound Blaster settings from
+the XT with the card. But an IBM XT's hard disk controller uses IRQ 5, and
+a recent driver change makes os8088 refuse a Sound Blaster on IRQ 5 on such
+a machine - otherwise it plays one block and falls silent. Copied as they
+stood, the settings would have given a machine that says "IRQ 5 is the hard
+disk's" and plays nothing. The card sits on IRQ 7 in `vm/xt-waverack`, and
+`make waverackhd` builds its hard disk: the whole install, with WaveRack and
+a handful of long WAVs.
+
+**No 360 KB home yet.** WaveRack is 33 clusters on a 360 KB disk. The disk
+whose subject it shares, the media disk, has 19 free. Two category disks
+have room, but they are the network and emulator disks, and a sound
+recorder on either would break the rule that a 360 KB disk is chosen by its
+subject. That decision is the owner's, and the specification says exactly
+what would make room.

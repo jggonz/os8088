@@ -213,6 +213,7 @@ VM386PS2 := $(CURDIR)/vm/386-ps2
 VMXTSND := $(CURDIR)/vm/xt-sound
 VMXTSND144 := $(CURDIR)/vm/xt-sound-1.44
 VMXTMIDI := $(CURDIR)/vm/xt-midirack
+VMXTWR := $(CURDIR)/vm/xt-waverack
 VMXTCOVOX := $(CURDIR)/vm/xt-covox
 VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
@@ -13101,6 +13102,36 @@ $(BUILD)/VIDDEMO-%-IDE.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--cyls 1024 --heads 16 --spt 63 --out $@
 	rm -f $(BUILD)/viddemo/$*.img
 
+# WAVERACK'S LISTENING DISK (SPEC.md 123.6, 123.7; docs/plans/WAVERACK-PLAN.md
+# US-12), ON DEMAND: the whole install - VIDDEMO_INSTALL's derived list, so
+# WAVERACK.O88 rides in APPS/ with everything else - on the ST-225 that
+# vm/xt-waverack puts on its Xebec (615/4/17, a RAW image of exactly that
+# geometry, mfm20.img's shape, because 86Box refuses one that disagrees),
+# with tools/wrsim.py's long WAVs in MEDIA/: BIG22.WAV (2 MB, 8-bit mono
+# 22,050 Hz - wave 4b's stall, streamed off the disk), ST22S/ST22L (16-bit
+# stereo: held, or 'CPU too slow: gaps' on an 8088), MID11, LONG.WAV (104 s
+# at 11,025 Hz) and STEREO16. Play one and open another WAV in a second
+# WaveRack: the play goes on. Record onto C: at 11,025 or 15,000 Hz.
+# NO SYSTEM.CFG: SOUND.DRV mounts the card on the defaults (viddemo's rule).
+WRHD := $(BUILD)/WAVERACK-MFM.img
+.PHONY: waverackhd
+waverackhd: $(WRHD)
+	@ls -l $(WRHD)
+$(WRHD): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(FACES) $(FACELIC) $(LOGOVID) $$(APPS) tools/wrsim.py tools/os88disk.py
+	rm -rf $(BUILD)/wrhd && mkdir -p $(BUILD)/wrhd/fx
+	python3 tools/wrsim.py --disk-fixtures $(BUILD)/wrhd
+	python3 tools/wrsim.py --fixtures $(BUILD)/wrhd/fx
+	python3 tools/os88disk.py -o $@ --hdd \
+		--geometry 615/4/17 --mbr $(BUILD)/mbr.bin \
+		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(VIDDEMO_INSTALL) \
+		$(addprefix MEDIA:$(BUILD)/wrhd/,BIG22.WAV MID11.WAV ST22S.WAV ST22L.WAV) \
+		MEDIA:$(BUILD)/wrhd/fx/LONG.WAV MEDIA:$(BUILD)/wrhd/fx/GOOD/STEREO16.WAV
+	python3 tools/os88disk.py --verify-hdd $@
+	rm -rf $(BUILD)/wrhd
+
 # THE REALDMG HARD DISK (docs/REALDMG-SPEC.md section 18), ON DEMAND: the
 # whole install, VIDDEMO_INSTALL's derived list, plus RealDMG's disk in a
 # REALDMG folder and the user's cartridges in GAMEBOY (GAMES is the apps
@@ -15785,7 +15816,8 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # ...AND WAVERACK IS NOT ON IT (SPEC.md 123.13, 24.6.1's rule, dated
 # 2026-10-25): its first wave alone is 12 clusters and took this disk from
 # 701 to 713 of 713 - the last cluster - before a single later wave of it
-# exists. Every other apps disk carries it, and media360.img at 360KB.
+# exists. The 1.44MB and 1.2MB apps disks carry it; no 360KB disk does since
+# wave 3 left media360.img (SPEC.md 123.13's 360 KB note, 2026-10-27).
 APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
              $(RDG_SHIP) $(RDG_DEMO),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
@@ -17585,6 +17617,20 @@ VM386MIDI := $(CURDIR)/vm/386-midirack
 xt-midirack: $(IMG360) $(BUILD)/midirack360.img $(MIDISF2)
 	@$(UNPROTECT) $(VMXTMIDI)/86box.cfg
 	$(BOX) -P $(VMXTMIDI) -N
+
+# WAVERACK'S XT TO LISTEN ON (docs/plans/WAVERACK-PLAN.md US-12): vm/xt-mfm's
+# 4.77 MHz XT and ST-225 on a Xebec - with xt-sound's Sound Blaster 2.0 added
+# and A: left empty, so it boots `make waverackhd`'s disk. The machine to hear
+# SPEC.md 123.6's play go on through disk reads (the stall the owner heard on
+# 86Box) and 123.7's takes onto a hard disk; nothing here can key 86Box, so
+# it is for LISTENING - the gates are MartyPC's (waverackdisk, waverackrec).
+# The disk is `hdd_01_speed = ramdisk`, xt-mfm's: no seek or rotation time.
+# THE CARD IS ON IRQ 7, not xt-sound's 5: the Xebec takes IRQ 5, and SOUND.DRV
+# refuses a Sound Blaster there on an XT (SPEC.md 34.5.6) - xt-sound's keys
+# copied as they stand would toast 'IRQ 5 is the hard disk's' and play nothing
+xt-waverack: $(WRHD)
+	@$(UNPROTECT) $(VMXTWR)/86box.cfg
+	$(BOX) -P $(VMXTWR) -N
 
 386-midirack: $(IMG) $(BUILD)/midirack.img $(MIDISF2)
 	@$(UNPROTECT) $(VM386MIDI)/86box.cfg

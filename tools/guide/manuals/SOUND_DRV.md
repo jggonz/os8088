@@ -23,8 +23,11 @@ The driver knows these kinds of sound hardware:
   driver switches those sounds on for you, which on DOS needs a separate
   program.
 
-Programs that use it include the Audio Player, Tracker, MIDIRack and the
-Video Player, and several games play their music through it.
+Programs that use it include the Audio Player, Tracker, MIDIRack, XTMP3,
+WaveRack and the Video Player, and several games play their music through
+it. WaveRack records through it too: the card writes the sound straight
+into WaveRack's own memory while the disk is busy, so a take keeps going
+while it is saved.
 
 ## Why it is on the system disk
 
@@ -106,3 +109,8 @@ loaded** and os8088 stops trying at every start.
   The small system for 128KB machines loads no drivers and leaves it off.
 - A Covox cannot be detected, so it is used only when you choose it on the
   Sound page.
+- On an XT, a Sound Blaster set to IRQ 5 cannot play digital sound when
+  the hard disk controller already uses IRQ 5, as the IBM XT's does. The
+  first time a program tries, the driver says **IRQ 5 is the hard disk's**,
+  and the program carries on as if there were no card. FM music still
+  works. Move the card's IRQ jumper to 7.
