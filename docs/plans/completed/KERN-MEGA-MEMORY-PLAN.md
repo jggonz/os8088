@@ -1449,7 +1449,10 @@ build that is MEANT TO GROW.
     fixer, `osapi_vol_fence`, `osapi_mem_movable_x`, `mem_reloc_call`,
     DESK.DRV's library selector, and the SDK's `OS88_CODESEL`, which is
     `value - 8` under CPU_F_PM now (the ABI lock moved without a bump: a
-    no-op on every real-mode kernel).
+    no-op on every real-mode kernel, but a binary built before this step
+    that inlined the alias - `OS88_CODESEL` or `op_cseg` - names an
+    unrelated LDT entry on kern_mega and must be rebuilt for it; kern_mega
+    pairs with its own release's apps disk, SPEC.md 20.18).
   - **Sized, not grown.** The plan asked for an LDT that starts at 2K and
     grows. What shipped is sized once, at the switch, from `[mega_extkb]`:
     `MEGA_LDT_FREE0 + 512 + one entry per 16KB of extended memory` (to 15MB),

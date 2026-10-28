@@ -26,8 +26,10 @@
 #
 # The rows launch `qemu-system-i386` by NAME, so the build is used by putting
 # its bin directory first on PATH - the script prints the line. Idempotent,
-# and a few milliseconds when the qemu-system-i386 on PATH is already 9+
-# (Homebrew's is).
+# and a few milliseconds once build/qemu9 holds a build carrying the patches
+# below. A stock QEMU 9 on PATH (Homebrew's is) answers only --check's and
+# --print-path's `qemu9` question; install mode builds the patched QEMU that
+# `qemuvt` needs whatever is on PATH, on a Mac as on Linux.
 #
 # THE PATCHES (tools/qemu9/*.patch) go into every build, and the pkgversion
 # says which: `--version` reads "(os8088-<12 hex of their SHA-256>)", the
@@ -122,17 +124,23 @@ fi
 
 # --- what a QEMU build needs that a fresh container lacks ------------------
 need=()
-command -v ninja >/dev/null || need+=(ninja-build)
-command -v flex >/dev/null || need+=(flex)
-command -v bison >/dev/null || need+=(bison)
-pkg-config --exists glib-2.0 2>/dev/null || need+=(libglib2.0-dev)
-pkg-config --exists pixman-1 2>/dev/null || need+=(libpixman-1-dev)
-pkg-config --exists slirp 2>/dev/null || need+=(libslirp-dev)
-python3 -c 'import venv' 2>/dev/null || need+=(python3-venv)
+brew=()                              # the same set by Homebrew's names
+command -v ninja >/dev/null || { need+=(ninja-build); brew+=(ninja); }
+command -v flex >/dev/null || { need+=(flex); brew+=(flex); }
+command -v bison >/dev/null || { need+=(bison); brew+=(bison); }
+command -v pkg-config >/dev/null || brew+=(pkg-config)
+pkg-config --exists glib-2.0 2>/dev/null || { need+=(libglib2.0-dev); brew+=(glib); }
+pkg-config --exists pixman-1 2>/dev/null || { need+=(libpixman-1-dev); brew+=(pixman); }
+pkg-config --exists slirp 2>/dev/null || { need+=(libslirp-dev); brew+=(libslirp); }
+python3 -c 'import venv' 2>/dev/null || { need+=(python3-venv); brew+=(python); }
 if [ ${#need[@]} -gt 0 ]; then
     if [ "$(id -u)" = 0 ] && command -v apt-get >/dev/null; then
         echo "setup-qemu9: installing ${need[*]}"
         apt-get install -y "${need[@]}" >/dev/null
+    elif [ "$(uname -s)" = Darwin ]; then
+        echo "setup-qemu9: needs ${brew[*]} - \`brew install ${brew[*]}\`" \
+             "and run this again" >&2
+        exit 1
     else
         echo "setup-qemu9: needs ${need[*]} - install them and run this again" >&2
         exit 1
@@ -159,7 +167,9 @@ if [ ! -f build.ninja ]; then
 else                                 # a build from before: the version only
     ./pyvenv/bin/meson configure -Dpkgversion="$pv" >/dev/null
 fi
-ninja -j"$(nproc)"
+jobs="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null \
+        || sysctl -n hw.ncpu 2>/dev/null || echo 4)"  # macOS has no nproc
+ninja -j"$jobs"
 ninja install >/dev/null
 is_ours "$inst/bin/qemu-system-i386" || {
     echo "setup-qemu9: the build did not produce a QEMU 9 carrying $pv" >&2; exit 1; }

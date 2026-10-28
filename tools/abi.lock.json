@@ -1168,14 +1168,14 @@
    "fingerprint": "8718ddba83de4337e9f9bc24c6058e96b91f29ebfd6bdfe90efd54320aa4ad50",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OS88_CODESEL is a pair's code half (value - 8) under CPU_F_PM: kern_mega's static LDT aliases and its identity map above .cold are gone (KERN-MEGA-MEMORY-PLAN MC7's step 6). A no-op on every real-mode kernel, so nothing built before stops running there",
+   "reason": "OS88_CODESEL is a pair's code half (value - 8) under CPU_F_PM: kern_mega's static LDT aliases and its identity map above .cold are gone (KERN-MEGA-MEMORY-PLAN MC7's step 6). A no-op on every real-mode kernel, so nothing built before stops running there. NOT a no-op on kern_mega: a package built before this that converts with OS88_CODESEL or op_cseg (a C package with an overlay, PIXELSTEIN 3D, LOOM, WEAVE) still computes the retired alias (S >> 2) | 4, which names an unrelated LDT entry with no fault, so it must be rebuilt for kern_mega and kern_mega pairs with its own release's apps disk (SPEC.md 20.18, 41.16). No bump, on 14.67's precedent: a bump would refuse those binaries on every real-mode kernel too, where they still run",
    "to": 10
   },
   {
    "fingerprint": "052e6bf9ad446cccb617fea95e78728da06c2f082b54729174e6c9398b016d8f",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "OS88_CODESEL is a pair's code half (value - 8) under CPU_F_PM: kern_mega's static LDT aliases and its identity map above .cold are gone (KERN-MEGA-MEMORY-PLAN MC7's step 6). A no-op on every real-mode kernel, so nothing built before stops running there",
+   "reason": "OS88_CODESEL is a pair's code half (value - 8) under CPU_F_PM: kern_mega's static LDT aliases and its identity map above .cold are gone (KERN-MEGA-MEMORY-PLAN MC7's step 6). A no-op on every real-mode kernel, so nothing built before stops running there. NOT a no-op on kern_mega: a package built before this that converts with OS88_CODESEL or op_cseg (a C package with an overlay, PIXELSTEIN 3D, LOOM, WEAVE) still computes the retired alias (S >> 2) | 4, which names an unrelated LDT entry with no fault, so it must be rebuilt for kern_mega and kern_mega pairs with its own release's apps disk (SPEC.md 20.18, 41.16). No bump, on 14.67's precedent: a bump would refuse those binaries on every real-mode kernel too, where they still run",
    "to": 11
   },
   {
