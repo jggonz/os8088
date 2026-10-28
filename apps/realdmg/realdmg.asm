@@ -2596,6 +2596,12 @@ rw_unload:
 .go:
     call rw_onclose                 ; (it turns rw_closing on: back off -
     mov byte [rw_closing], 0        ;   this window stays)
+    xor dx, dx                      ; a replay's buffer rw_rpdrop left: let
+    xchg dx, [rw_rpseg]             ;   go while the slots it may be lent
+    or dx, dx                       ;   from are still the game's (10.3.3),
+    jz .nrp                         ;   or the next replay frees a stale one
+    call rw_mrel
+.nrp:
     mov byte [rw_state], 0
     mov byte [rw_pause], 0
     mov byte [rw_ntc], 0

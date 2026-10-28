@@ -1349,8 +1349,8 @@ mpp_reloc:
 .chnext:
     add si, MPM_CHSZ
     loop .ch
-    mov si, mpm_pwin                ; ...and the four pattern windows
-    mov cl, 4                       ; (CH = 0: the loop above ran CX out)
+    mov si, mpm_pwin                ; ...and the eight pattern windows
+    mov cl, 8                       ; (CH = 0: the loop above ran CX out)
 .pw:
     add [si], ax
     inc si

@@ -18,11 +18,11 @@ and this row plays each one on kern_mega under Bochs with a Sound Blaster 16:
           listing: no `kern_mega FAULT` or `CLOSED` line, the module loaded
           and playing, the song position moving
   wide    the shipped TRACKER.O88 on a GENERATED module of 130 patterns
-          whose orders play 0, 64, 128, 1, 65, 129 - so all three pattern
-          windows are read - and whose samples sit past 128KB. Each played
+          whose orders play 0, 64, 128, 1, 65, 129 - so three of its five
+          pattern windows are read - and whose samples sit past 128KB. Each played
           pattern p sets channel 0's volume to 2 + p % 61 on its row 0, so the
           volume the replayer holds while it says it is on pattern p is read
-          back out of the guest: a window that names the wrong 64 patterns
+          back out of the guest: a window that names the wrong 32 patterns
           plays another pattern's row 0, and the pairs disagree
   trkarm  the kern_mega ARM's TRACKER.O88 (build/megak/apps/) on BEVERLY.MOD
   mpp     MODPLUG.O88 (retired: `make modplug`) on BEVERLY.MOD, through its
@@ -337,11 +337,11 @@ def windows(leg, box, t, base, mod, pre):
     u16 = lambda b, i: b[i] | b[i + 1] << 8
     blob = u16(t.rd(pre + "blobseg", 2, base), 0)
     b0 = box.sel_base(blob)
-    pw = t.rd(pre + "pwin", 8, base)
+    pw = t.rd(pre + "pwin", 16, base)
     bad = []
-    for w in range((npat + 63) // 64):
+    for w in range((npat + 31) // 32):
         got = box.sel_base(u16(pw, 2 * w)) - b0
-        if got != 1024 + 65536 * w:
+        if got != 1024 + 32768 * w:
             bad.append("pattern window %d at +%X" % (w, got))
     tab = t.rd(pre + "smptab", 31 * 12, base)
     start, n = 1084 + 1024 * npat, 0
@@ -357,7 +357,7 @@ def windows(leg, box, t, base, mod, pre):
         start += 2 * (data[20 + 30 * i + 22] << 8 | data[20 + 30 * i + 23])
     return want(not bad, "%s: %d pattern window(s) and %d sample windows "
                 "based where the file puts them (the last sample at +%X)%s"
-                % (leg, (npat + 63) // 64, n, start, "".join(
+                % (leg, (npat + 31) // 32, n, start, "".join(
                     " | " + x for x in bad[:4])))
 
 
@@ -427,7 +427,7 @@ def leg_tracker(leg, out, pkg, mapsyms, mod, check_wide=False):
                 v = seen.get(p, [])
                 good = sum(1 for x in v if x == wide_vol(p))
                 print("   %s: pattern %3d (window %d) volume %r, want %d"
-                      % (leg, p, p >> 6, sorted(set(v)), wide_vol(p)))
+                      % (leg, p, p >> 5, sorted(set(v)), wide_vol(p)))
             hit = [p for p in WIDE_ORDERS if seen.get(p)]
             wrong = [p for p in hit
                      if sum(1 for x in seen[p] if x == wide_vol(p)) * 2

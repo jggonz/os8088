@@ -354,11 +354,11 @@ def main():
         ch0 = m.read(L(tk_seg, P["mp_chans"]), MP_CHSZ * 4)
         ds0 = [delta(u16(smp0, i * MS_SZ + MS_SEG), base) for i in range(31)]
         dc0 = [delta(u16(ch0, i * MP_CHSZ + MP_SEG), base) for i in range(4)]
-        # THE PATTERN WINDOWS (KERN-MEGA-MEMORY-PLAN MC7): ceil(P / 64) SEG_SUBs
+        # THE PATTERN WINDOWS (KERN-MEGA-MEMORY-PLAN MC7): ceil(P / 32) SEG_SUBs
         # of the blob, the claim plus a constant on this real-mode kernel - the
         # ones the replayer reads, as deltas, like the sample bases
-        nwin = (tword("mp_npat") + 63) // 64
-        pw0 = m.read(L(tk_seg, P["mp_pwin"]), 8)
+        nwin = (tword("mp_npat") + 31) // 32
+        pw0 = m.read(L(tk_seg, P["mp_pwin"]), 16)
         dw0 = [delta(u16(pw0, 2 * i), base) for i in range(nwin)]
         row0 = tword("mp_row")
         print("module md5 %s  blobseg %04x  row %d"
@@ -470,7 +470,7 @@ def main():
         ds1 = [delta(u16(smp1, i * MS_SZ + MS_SEG), nb) for i in range(31)]
         print("  5 31 sample bases     %s" % ("OK" if ds0 == ds1 else "STALE"))
         bad += ds0 != ds1
-        pw1 = m.read(L(tk_seg, P["mp_pwin"]), 8)
+        pw1 = m.read(L(tk_seg, P["mp_pwin"]), 16)
         dw1 = [delta(u16(pw1, 2 * i), nb) for i in range(nwin)]
         okw = dw0 == dw1 and dw0 and dw0[0] == 64
         print("  5b %d pattern windows %s  (%s)"

@@ -1746,9 +1746,10 @@ build that is MEANT TO GROW.
   **TRACKER, MODPLUG and MIDIRACK (2026-10-25) - DONE (item 6), one shared
   path, no `PKG_MEGA` arm.** A module or bank past 64KB is reached through
   `SEG_SUB` windows made once at load (a real-mode kernel answers the sum
-  they replace). Tracker and ModPlug: four pattern windows of 64 patterns
-  each (`mp_pwin`; pattern p is window p >> 6 at 60 + 1024 x (p & 63)) and
-  one SUB per PLAYABLE sample at start >> 4 - at most 35 LDT entries an
+  they replace). Tracker and ModPlug: eight pattern windows of 32 patterns
+  each (`mp_pwin`; pattern p is window p >> 5 at 60 + 1024 x (p & 31), since
+  64 a window wrapped the 64th pattern's last rows onto the order table) and
+  one SUB per PLAYABLE sample at start >> 4 - at most 39 LDT entries an
   instance, none for an unplayable sample, freed with the claim; a refused
   SUB refuses the load as "Out of memory". MIDIRack: a window every 32KB of
   the bank, 64KB long, a note playing from window A >> 15 at A & 7FFFh

@@ -27,13 +27,14 @@
 ; caller swaps `call OSAPI_SND_PLAY` for `call os88pcm_play` and nothing else.
 ; A rate outside the range is ERR 2, NEVER A SILENT CLAMP (SPEC.md 34.4).
 ;
-; WHAT IT COSTS: ~180 bytes of code and one word of state. The rescale table
+; WHAT IT COSTS: ~180 bytes of code and no state of its own. The rescale table
 ; is the CALLER'S 256 bytes (BX), not the library's: it is rebuilt every clip
 ; and dead between clips, so it belongs in a buffer the caller already has
 ; idle while the desktop is frozen - Recorder's is its demo stage buffer. It
 ; was a `times 256 db 0` here, 256 bytes of every includer's image (SPEC.md
-; 34.4). The labels are os88pcm_; the state is in the package's own image,
-; written through DS and read through CS.
+; 34.4). The labels are os88pcm_; N and the button byte's address are patched
+; into the loop's own operands, written through DS and read through CS, and
+; the click baseline is on the stack.
 ; =============================================================================
 
 os88pcm_play:
@@ -79,7 +80,8 @@ os88pcm_play:
     jc .out                         ; deadline); CF = 1 AX = its refusal
     mov [.mbd], bx                  ; the mouse button byte, KERNEL_SEG:BX -
                                     ; into the abort check's own displacement
-    mov [os88pcm_n], bp             ; ...and N, read back through CS below.
+    mov [.pn1], bp                  ; ...and N into the loop's two immediates,
+    mov [.pn2], bp                  ; not a word it would read every sample.
     push es                         ; THROUGH DS, the package's, while it still
     pop ds                          ; is: under kern_mega CS is a read-only code
     mov ax, KERNEL_SEG              ; half and a store through it is a #GP per
@@ -119,13 +121,15 @@ os88pcm_play:
     neg dx                          ; the phase, rising at 1,193,182 Hz...
     sub dx, di                      ; ...less the deadline, wrap-safe signed
     js .wait                        ; early: poll again
-    cmp dx, [cs:os88pcm_n]          ; late by more than a period? THE RESYNC
-    jbe .emit                       ; RULE: the deadline to now - samples
-    add di, dx                      ; dropped, never a burst (34.4)
+    cmp dx, strict word 0xFFFF      ; late by more than a period (N, .pn1)?
+.pn1 equ $ - 2
+    jbe .emit                       ; THE RESYNC RULE: the deadline to now -
+    add di, dx                      ; samples dropped, never a burst (34.4)
 .emit:
     mov al, ah
     out 0x42, al                    ; the pulse
-    add di, [cs:os88pcm_n]          ; the next deadline
+    add di, strict word 0xFFFF      ; the next deadline (N, .pn2)
+.pn2 equ $ - 2
 .mb:
     mov al, [es:0xFFFF]             ; (the button byte: .mbd, patched above)
 .mbd equ $ - 2
@@ -156,5 +160,3 @@ os88pcm_play:
     pop cx
     pop bx
     ret
-
-os88pcm_n:      dw 0                ; N, PIT counts a sample (the loop's)

@@ -68,11 +68,11 @@
 ; selector and `blobseg + N` names some other descriptor, so every base past
 ; the first 64KB is an OSAPI_SEG SEG_SUB made once at load, which a real-mode
 ; kernel answers with DX + AX: one path on every kernel. The header is within
-; blobseg's first 1084 bytes; pattern p is window p >> 6 of mpm_pwin (a
-; SEG_SUB at paragraph MPM_PSEG + 4096w) at offset MPM_POFF + 1024(p & 63);
+; blobseg's first 1084 bytes; pattern p is window p >> 5 of mpm_pwin (a
+; SEG_SUB at paragraph MPM_PSEG + 2048w) at offset MPM_POFF + 1024(p & 31);
 ; each PLAYABLE sample gets a SEG_SUB at paragraph start >> 4, off = start &
 ; 15, with its play length capped at MPM_MAXSMP bytes so off + position (+
-; one mix step) can never wrap a 16-bit offset. At most 31 + 4 LDT entries an
+; one mix step) can never wrap a 16-bit offset. At most 31 + 8 LDT entries an
 ; instance, freed with the claim at the next load.
 ;
 ; Timing (research-ft2-reference): tick rate = BPM*2/5 Hz, speed = ticks
@@ -273,7 +273,7 @@ mpm_load:
                                  ; app refused any file over 128KB, because
                                  ; 1084 + 1024*P <= 131072 forces P <= 126 -
                                  ; a byte held it only by way of that cap
-    ; -- the pattern windows: ceil(P / 64) SEG_SUBs, 64KB each or to the end
+    ; -- the pattern windows: ceil(P / 32) SEG_SUBs, 64KB each or to the end
     xchg ax, cx                  ; CX = P
     mov si, mpm_pwin
     mov ax, MPM_PSEG
@@ -284,8 +284,8 @@ mpm_load:
     mov [si], dx
     inc si
     inc si
-    add ax, 4096
-    sub cx, 64
+    add ax, 2048
+    sub cx, 32
     ja .pw
     ; -- 7..10: the 31 sample headers -> mpm_smptab ---------------------------
     mov word [mpm_t1], 0         ; sample index 0..30
@@ -1499,7 +1499,7 @@ mpm_nextrow:
 ; -----------------------------------------------------------------------------
 ; mpm_patseg - pattern AX's window, and the offset of its first cell
 ; (KERN-MEGA-MEMORY-PLAN MC7; Tracker's mp_patseg, whose note is the long
-; form): window p >> 6 of mpm_load's four, offset MPM_POFF + 1024(p & 63).
+; form): window p >> 5 of mpm_load's eight, offset MPM_POFF + 1024(p & 31).
 ; THE OFFSET COMES BACK IN A REGISTER - the UI task (mpm_cell2txt) and the
 ; worker (mpm_readrow) both ask, and a shared word would hand one of them
 ; the other's pattern after a switch.
@@ -1507,13 +1507,15 @@ mpm_nextrow:
 ; out: ES = its window, AX = row 0 channel 0's offset in it; clobbers BX
 mpm_patseg:
     shl ax, 1
-    shl ax, 1                   ; AH = p >> 6, AL = (p & 63) x 4
+    shl ax, 1
+    shl ax, 1                   ; AH = p >> 5, AL = (p & 31) x 8
     mov bl, ah
     xor bh, bh
     shl bx, 1
     mov es, [mpm_pwin + bx]
     mov ah, al
-    mov al, MPM_POFF            ; AX = (p & 63) x 1024 + MPM_POFF
+    shr ah, 1
+    mov al, MPM_POFF            ; AX = (p & 31) x 1024 + MPM_POFF
     ret
 
 ; mpm_sub - DX = the blob (or any segment of ours), AX = a PARAGRAPH offset
@@ -2399,7 +2401,7 @@ mpme_song:   db 'Bad song data', 0
     MPPW mpm_chunk                   ; current mix chunk, samples
     MPPW mpm_crec                    ; current channel record
     MPPW mpm_pbase                   ; mpm_readrow's pattern's first cell
-    MPPBUF mpm_pwin, 8               ; the four pattern windows (mpm_load)
+    MPPBUF mpm_pwin, 16              ; the eight pattern windows (mpm_load)
     MPPW mpm_climit                  ; mixer scratch: position limit
     MPPW mpm_cloopl                  ;   loop length
     MPPW mpm_cstepi                  ;   step int

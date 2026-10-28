@@ -28,15 +28,17 @@
 ; once at load - and a real-mode kernel answers SEG_SUB with DX + AX, the
 ; very sum this file used to do itself, so it is one path on every kernel.
 ; The header is within blobseg's first 1084 bytes. The patterns are read
-; through four WINDOWS (mp_pwin), 64 patterns each: window w is a SEG_SUB at
-; paragraph MP_PSEG + 4096w, and pattern p is window p >> 6 at offset
-; MP_POFF + 1024 * (p & 63) (1084 + 1024p = ((64 + 4096w) << 4) + 60 +
-; 1024(p & 63)), its last byte 64,571 into the window. Each PLAYABLE sample
+; through eight WINDOWS (mp_pwin), 32 patterns each: window w is a SEG_SUB at
+; paragraph MP_PSEG + 2048w, and pattern p is window p >> 5 at offset
+; MP_POFF + 1024 * (p & 31) (1084 + 1024p = ((64 + 2048w) << 4) + 60 +
+; 1024(p & 31)), its last byte 32,827 into the window. Not 64 a window: 64
+; patterns are the whole 64KB, so with a 60-byte origin the 64th would wrap
+; the 16-bit cell offset onto the order table. Each PLAYABLE sample
 ; gets a SEG_SUB of its own at paragraph start >> 4, off = start & 15, with
 ; its play length capped at MP_MAXSMP bytes so off + position (+ one mix
 ; step) can never wrap a 16-bit offset - nor reach past the window, which
 ; runs 64KB or to the claim's end, and the sample's bytes are in the file.
-; At most 31 + 4 LDT entries an instance, and fewer: an unplayable sample
+; At most 31 + 8 LDT entries an instance, and fewer: an unplayable sample
 ; takes none, and two samples at one paragraph share one (SEG_SUB answers
 ; the same window asked again). They go with the claim, at the next load.
 ;
@@ -51,7 +53,7 @@
 
 MP_PSEG    equ 64               ; pattern window 0, paragraphs into the blob,
 MP_POFF    equ 60               ; and pattern 0's offset in it (1084 = 64 x 16
-                                ; + 60); window w is 4096w paragraphs on
+                                ; + 60); window w is 2048w paragraphs on
 MP_MAXSMP  equ 60000            ; per-sample play-length cap, bytes: keeps
                                 ; off + pos + step*chunk < 65536 in the mixer
                                 ; even at a 4000 Hz mix rate (step int <= 7)
@@ -286,7 +288,7 @@ mp_load:
                                 ; app refused any file over 128KB, because
                                 ; 1084 + 1024*P <= 131072 forces P <= 126 -
                                 ; a byte held it only by way of that cap
-    ; -- the pattern windows: ceil(P / 64) SEG_SUBs, 64KB each or to the end
+    ; -- the pattern windows: ceil(P / 32) SEG_SUBs, 64KB each or to the end
     mov si, mp_pwin
     mov ax, MP_PSEG
 .pw:
@@ -296,8 +298,8 @@ mp_load:
     mov [si], dx
     inc si
     inc si
-    add ax, 4096
-    sub bp, 64                  ; (BP = P is spent: mp_npat holds it)
+    add ax, 2048
+    sub bp, 32                  ; (BP = P is spent: mp_npat holds it)
     ja .pw
     ; -- 7..10: the 31 sample headers -> mp_smptab ---------------------------
     mov si, 20                  ; SI = the header in the blob, 30 bytes each
@@ -996,10 +998,10 @@ mp_cellp:
     ret
 
 ; mp_patseg - pattern AX's window, and the offset of its first cell
-; (KERN-MEGA-MEMORY-PLAN MC7): window p >> 6 of mp_load's four, offset
-; MP_POFF + 1024 * (p & 63). One shape on every kernel - the windows are
-; SEG_SUBs, today's sums on a real-mode kernel - and no slower on the XT than
-; the sum it replaces (eighteen bytes against nineteen; it runs once a row).
+; (KERN-MEGA-MEMORY-PLAN MC7): window p >> 5 of mp_load's eight, offset
+; MP_POFF + 1024 * (p & 31). One shape on every kernel - the windows are
+; SEG_SUBs, today's sums on a real-mode kernel - and next to no slower on the
+; XT than the sum it replaces (22 bytes against 19; it runs once a row).
 ; THE OFFSET COMES BACK IN A REGISTER and each caller keeps its own: the UI
 ; task (mp_cellp, mp_timeat) and the worker (mp_readrow) both ask, and a
 ; shared word would hand one of them the other's pattern after a switch.
@@ -1007,13 +1009,15 @@ mp_cellp:
 ; out: ES = its window, AX = row 0 channel 0's offset in it; clobbers BX
 mp_patseg:
     shl ax, 1
-    shl ax, 1                   ; AH = p >> 6, AL = (p & 63) x 4
+    shl ax, 1
+    shl ax, 1                   ; AH = p >> 5, AL = (p & 31) x 8
     mov bl, ah
     xor bh, bh
     shl bx, 1
     mov es, [mp_pwin + bx]
     mov ah, al
-    mov al, MP_POFF             ; AX = (p & 63) x 1024 + MP_POFF
+    shr ah, 1
+    mov al, MP_POFF             ; AX = (p & 31) x 1024 + MP_POFF
     ret
 
 ; mp_sub - DX = the blob (or any segment of ours), AX = a PARAGRAPH offset ->
@@ -2576,7 +2580,7 @@ mpe_song:   db 'Bad song data', 0
     TRKW mp_crec                    ; current channel record
     TRKW mp_pbase                   ; mp_readrow's pattern's first cell
     TRKW mp_tbase                   ; ...and mp_timeat's (mp_patseg's note)
-    TRKBUF mp_pwin, 8               ; the four pattern windows (mp_load)
+    TRKBUF mp_pwin, 16              ; the eight pattern windows (mp_load)
     TRKW mp_climit                  ; mixer scratch: position limit
     TRKW mp_cloopl                  ;   loop length
     TRKW mp_cstepi                  ;   step int

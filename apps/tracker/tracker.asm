@@ -3560,9 +3560,9 @@ trk_s_txxt:   db 'Windowed only: Esc first', 0
 ;                        segment is addressed at all
 ;   mp_chans[4].MP_SEG   ...and the window of the sample each channel is
 ;                        PLAYING, which the mixer walks every chunk
-;   mp_pwin[4]           the four pattern windows (mp_patseg)
+;   mp_pwin[8]           the eight pattern windows (mp_patseg)
 ;
-; so forty words, all of them blobseg plus a constant on the real-mode kernel
+; so forty-four words, all of them blobseg plus a constant on the real-mode kernel
 ; this proc runs on, all fixed by adding the delta. (Under kern_mega's
 ; protected mode a move is a REBASE: every one of them is a selector that
 ; moves with the claim, and no proc is called - KERN-MEGA-MEMORY-PLAN MC7.)
@@ -3617,9 +3617,9 @@ trk_reloc:
     loop .ch                    ; channels sit at 0 and every one of them came
                                 ; out pointing outside the module
     mov si, mp_pwin
-    mov cl, 4                   ; (CH = 0: the loop above ran CX out)
+    mov cl, 8                   ; (CH = 0: the loop above ran CX out)
 .pw:
-    add [si], ax                ; all four, the unused ones too: those are
+    add [si], ax                ; all eight, the unused ones too: those are
     inc si                      ; never read (a pattern is < [mp_npat])
     inc si
     loop .pw
