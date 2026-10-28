@@ -19,9 +19,10 @@ Click the chip at the left end of the menu bar and choose **Task Manager**.
 This works from any program. If Task Manager is already open, the menu brings
 it to the front rather than opening a second one.
 
-Task Manager is a program on the system disk, in the `SYSTEM` folder, so the
-system disk has to be in drive A: when you open it. If it is not, the menu
-bar says **No system disk in A:**. If the program has gone from the folder it
+Task Manager is a program in the `SYSTEM` folder of the disk os8088 started
+from: drive A: after a floppy boot, or the hard-disk partition it booted
+from. That disk has to be there when you open it. If it is not, the menu bar
+says **No system disk in A:**, with that drive's letter. If the program has gone from the folder it
 says **Not in SYSTEM**, and if memory is too short, **Out of memory**. You
 can also double-click **TASKMGR.O88** in the `SYSTEM` folder, which opens a
 new one each time.

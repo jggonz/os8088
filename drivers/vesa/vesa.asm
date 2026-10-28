@@ -2338,10 +2338,11 @@ vxp_scroll:
     mov [vx_sstep], di
     mov [vx_rows], si
     mov [vx_sdy], dx
-    mov cl, 3
-    shl ax, cl                  ; x = col * 8
-    mov [vx_bx0], ax
-    mov ax, cx
+    mov dx, cx                  ; DX = nb, out of CX before CL is the shift:
+    mov cl, 3                   ; reading nb back out of CX after this took
+    shl ax, cl                  ; its low byte as 3, so every row moved 24
+    mov [vx_bx0], ax            ; pixels and the rest of the band stayed put
+    mov ax, dx
     shl ax, cl                  ; pixels a row = nb * 8
     mov [vx_w], ax
     cmp word [vx_rows], 0

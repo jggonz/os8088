@@ -1,0 +1,219 @@
+WaveRack — coding-agent implementation prompt
+Native os8088 sound recorder, WAV player, and waveform editor
+
+Implement WaveRack in the existing os8088 operating-system repository associated with os8088.com. Build the real native application, not a web prototype, screenshot viewer, DOS-only program, or plan-only deliverable. Use the bundled screenshots as the visual specification. Organize implementation into the user stories below. Open a draft PR containing the implementation plan BEFORE functional implementation, then update that same PR as each story is built and verified. Continue working after opening the PR; do not wait for another instruction to begin implementation.
+
+DESIGN REFERENCES
+
+The package includes:
+  designs/WaveRack-color.png
+  designs/WaveRack-monochrome.png
+  designs/WaveRack-compact-CGA.png
+
+The color and monochrome references use the final design with a segmented LED level bar stacked ABOVE a horizontal INPUT GAIN slider, plus a separate horizontal VOLUME slider at the bottom. Do not restore the earlier analog meters or rotary knobs. The compact reference is the shallow 640x200 layout. Inspect all three images before planning layout or assets.
+
+These are concept images, not exact raster-resolution exports. Reconstruct their hierarchy and styling as functional native controls. Do not downscale a screenshot and call it an implementation. In particular, the compact app must actually render within a 640x200 framebuffer with readable text and correctly positioned hit targets.
+
+PRODUCT AND TECHNICAL CONTRACT
+
+WaveRack records from a supported sound input, plays sound, displays an editable waveform, and saves WAV files. It is a compact, hardware-inspired companion to XTMP3 in the os8088 desktop. Its styling combines native striped title bars and bitmap typography with a silver faceplate, recessed black instruments, tactile transport keys, white/green segmented digits, cyan/white selection handles, and restrained pixel bevels.
+
+Target original 8088/8086-class real-mode hardware, including a 4.77 MHz XT, using existing repository conventions. No x87/8087 dependency and no 80186+ opcodes in the baseline package. Host tools may use modern libraries or floating point; target audio, rendering, and editing paths must work with integer arithmetic. If optional newer-CPU optimizations are justified later, keep them isolated and guarded so the original XT still works.
+
+Inspect AGENTS.md, build scripts, package format, examples, UI/event APIs, file dialogs, filesystem, allocation and segment rules, timer/scheduler behavior, and sound drivers. Use the actual native APIs; do not assume DOS services, a C runtime, an available ADC, full duplex, stereo, DMA, or Sound Blaster support. A digital recording input requires capture-capable hardware and a working driver. Detect this capability and provide honest read-only/playback behavior when it is absent.
+
+Start with uncompressed PCM WAV: 8-bit unsigned and 16-bit signed little-endian; mono and stereo files. Default recording to 11,025 Hz, 8-bit mono only when the device supports it. Offer actual supported input rates and formats rather than arbitrary options. Full quality on a capable device is welcome; on slow machines use explicit, correctly timed playback conversion when necessary. Do not change pitch by playing a file at a different clock without resampling. Compressed WAV codecs and MP3 encoding are outside the initial scope; reject unsupported codecs clearly rather than interpreting them as PCM.
+
+Use a streaming document design so useful recordings are not limited to free RAM. Keep bounded audio buffers, waveform caches, and edit metadata; use disk-backed temporary storage and undo as appropriate. Establish a measured code/data/stack budget after inspecting the OS. Do not assume the separate XTMP3 project's 400 KB budget is available here. Preserve desktop responsiveness, minimize redraws, and never perform filesystem I/O or UI rendering in an audio interrupt.
+
+PR AND STORY WORKFLOW — REQUIRED
+
+1. Inspect repository state, existing branches/PRs, remote/base branch, and contribution instructions. Preserve unrelated work. Reuse an existing WaveRack draft PR only if it is clearly the appropriate work in progress; otherwise create an isolated branch using repository conventions.
+2. Commit a real plan file, such as docs/plans/waverack.md, before functional changes. Include discovery findings, proposed modules, resource/device assumptions, all story IDs below, dependencies, acceptance criteria, verification methods, and known risks.
+3. Push that planning commit and open a DRAFT PR immediately. Suggested title: “WaveRack: native recording, playback, and waveform editing”. Link the plan and list all stories as unchecked, with a concise description of the resulting user experience. This initial PR must precede functional implementation, not be reconstructed afterward.
+4. Work through the stories in dependency order. Make coherent commits with story IDs. After EACH story, update the plan and the SAME PR body: implementation summary, story status, tests actually run, target/emulator details, measured resource costs where applicable, visual evidence for UI changes, and any remaining gaps.
+5. Use a compact story table: ID | user outcome | status | evidence/commit. Statuses: Planned, In progress, Implemented—verification pending, Verified, or Blocked. Do not mark hardware-dependent acceptance verified from a mock or synthetic source. Distinguish code completion from real-device validation.
+6. Keep the PR reviewable: rewrite the summary as scope evolves, link relevant files/commits, and include current instructions to build and exercise WaveRack. Commit actual rendered screenshots or use repository-supported attachments; do not present the supplied mockups as screenshots of working code. Use structured API bodies or temporary files with gh --body-file so Markdown/newlines remain intact.
+7. If authentication, remote permissions, or the hosting service prevents draft creation/update, record the actual failure and prepare the exact plan/PR text locally. Continue authorized implementation that does not depend on that service, and clearly report that the requested remote PR action is incomplete. Do not fake a PR URL or claim success. A normal working PR path should not pause for plan approval.
+8. Keep the PR in draft at the end. Do not merge, release, or mark ready for review unless separately requested. End with the PR URL, completed/remaining stories, verification, screenshots, measured limitations, and how to build/run.
+
+PHASE 0 — DISCOVERY AND PUBLIC IMPLEMENTATION PLAN
+
+US-00 — As the project owner, I can review the implementation plan in a draft PR before application code is built.
+
+Acceptance:
+- Repository-specific integration points, package location, supported display modes, available sound capabilities, filesystem limitations, and build/test commands are identified.
+- The committed plan maps every story below to dependencies and evidence requirements.
+- A draft PR containing that planning commit is open before functional implementation, or the actual external blocker is explicitly documented.
+- The PR body links the plan and accurately states the supported/unknown hardware assumptions.
+
+Verification: inspect the planning commit and PR state. Then immediately begin Phase 1.
+
+PHASE 1 — NATIVE PACKAGE, VISUAL SYSTEM, AND THREE LAYOUTS
+
+US-01 — As an os8088 user, I can install and launch WaveRack like any other native application.
+
+Acceptance:
+- Build a real package with metadata, icon, executable, required assets/fonts, and install/launch integration using established conventions.
+- Open a native WaveRack window, handle focus, redraw/expose, move/resize where supported, and close cleanly.
+- File/Edit/View/Sound menus exist and meaningful state is visible. Unsupported/incomplete commands are disabled rather than fake-working.
+- Closing returns audio devices, handles, temporary files, memory, and system state safely; unsaved work is handled once document support exists.
+- Build integration does not break unrelated packages.
+
+Verification: native launch/close smoke check, package install, resource cleanup, baseline opcode/disassembly audit where tooling permits.
+
+US-02 — As a user, I recognize the same WaveRack application in color and monochrome.
+
+Acceptance:
+- Match the supplied color and monochrome screenshots: striped native title bar; WaveRack / DIGITAL SOUND RECORDER branding; recessed filename/time display; segmented level bar over input gain; Record/Stop/Pause/Play/Open/Save/zoom keys; main waveform and overview; selection actions; format/source controls; separate volume slider and status.
+- No analog VU needles, stereo INPUT/OUTPUT gauge pair, or rotary controls. A single meter represents the active recording/monitoring or playback level, with its context made clear.
+- Color uses a limited palette: silver/gray surfaces, black instruments, green readout/waveform, cyan selection, yellow playhead, red record/peak accents. Map to actual supported VGA/EGA palettes.
+- Monochrome conveys all state through black/white, outlines, inversion, and sparse ordered dithering. Active/inactive LED cells, clipping, selection, focus, and disabled states remain distinguishable without color.
+- Controls respond to mouse and keyboard and use real state; no full-window bitmap masquerading as an interactive UI.
+- Static decoration is drawn once. Meter, timer, playhead, and slider updates use dirty rectangles.
+
+Verification: actual app renders in color and 1-bit monochrome, keyboard/mouse activation, focus/disabled states, screenshot comparisons against the references with justified adaptations.
+
+US-03 — As a CGA user, I can use WaveRack within a real 640x200 screen without losing access to essential controls.
+
+Acceptance:
+- Select the compact layout based on available client geometry/display capability, not only adapter name. Render within the actual drawable bounds after system/window chrome.
+- Use the compact reference's shallow arrangement: short menu/title areas; filename/time at upper left; LED level bar above input-gain slider at upper right; one short transport row; wide main waveform; narrow overview; condensed editing/settings/status rows.
+- Remove the oversized branding strip, excessive margins, large screws, and decorative grilles before sacrificing waveform readability. Controls must be reflowed, not proportionally squashed.
+- Keep Record/Stop/Pause/Play, Open/Save, zoom, selection/Trim/Delete/Save As, Loop, source/format settings, gain, volume, and status accessible. Less-used options may move to native menus/dialogs if the final measured layout requires it; document that choice.
+- Use legible 8x8-style text or a deliberately designed compact 6x8 font; measure every label, truncation rule, control rectangle, and mouse hit target. Split dense footer content into two short rows rather than overlapping it.
+- Waveform, input gain, and volume are still usable. No control or required text extends outside 640x200. Test actual text/glyph metrics, not just nominal mockup proportions.
+- Show time ticks aligned to the waveform's visible range and selection values. Changing resolution preserves document, selection, playhead, and audio state where the OS allows it.
+
+Verification: render/export an actual 640x200 monochrome framebuffer screenshot and inspect it at integer scale. A CRT-aspect-corrected preview may also be supplied, labeled separately; a resized 640x480 screenshot is not proof of compact-mode support. Exercise every compact control and menu with mouse and keyboard.
+
+PHASE 2 — DOCUMENTS, WAVEFORMS, AND PLAYBACK
+
+US-04 — As a user, I can open a WAV file and inspect the sound without loading the entire recording into RAM.
+
+Acceptance:
+- Native New/Open dialogs, file identity, dirty indicator, duration, rate, bit depth, channels, and current position are accurate. A filename dropdown may hold recent documents if consistent with the OS.
+- Parse RIFF/WAVE chunks robustly, including extra/unknown chunks, arbitrary valid chunk order, odd-byte padding, and bounded lengths. Validate PCM format, block alignment, data size, and overflow in sample/byte arithmetic. Reject truncated, malformed, unsupported, or excessive-size inputs safely.
+- Use integer sample-frame indices as the canonical timeline unit. A frame contains one sample per channel; selection/edit/export offsets must respect block alignment.
+- Display real amplitude data and an overview. Use cached min/max envelopes so transients are visible when many samples map to one pixel. At close zoom, display sample detail rather than a fabricated waveform.
+- A mono file has one genuine waveform; stereo display or a clearly labeled combined envelope must not silently discard one channel. Do not fake a second channel.
+- Zoom in/out, fit-to-window, overview navigation, and horizontal scrolling preserve appropriate time focus and readable ticks. Generate/update envelope data in bounded work units.
+- Long file loading remains cancelable and responsive, with measured bounded memory.
+
+Verification: generated mono/stereo fixtures, odd-sized chunks, unknown metadata, malformed bounds, large-file streaming, known impulse/tone envelopes, exact sample-frame/timeline mapping.
+
+US-05 — As a user, I can play, pause, stop, seek, and adjust listening volume at the correct pitch and speed.
+
+Acceptance:
+- Play starts from the cursor or selected range according to clear documented rules. Pause retains position; resume continues; Stop stops output and restores a documented cursor position.
+- The readout, waveform cursor, overview, and actual audio output remain synchronized. Seeking resets/flushes output buffers safely.
+- Use supported audio-output formats and buffer scheduling. Convert format/rate explicitly where necessary and show actual output capabilities; never silently reinterpret source bytes or change pitch.
+- The VOLUME slider affects playback/monitor loudness, not stored samples. Prefer a driver mixer where available; use a measured bounded software path otherwise.
+- Handle EOF, pause/resume, device unavailable/busy, read failure, and underrun without stale samples or loud DC steps. Count/report underruns in diagnostics.
+- Keep audio servicing isolated from painting and file-dialog work. No file reads, large copies, or waveform processing in interrupt handlers.
+
+Verification: generated audio with known duration/frequency, sample-count checks, playback state transitions, seek edges, silence conventions, volume independence from document data, and actual output on an available device. A mock backend verifies logic only and must be labeled as such.
+
+PHASE 3 — CAPTURE, LEVEL, AND INPUT GAIN
+
+US-06 — As a user with capture-capable hardware, I can record from a supported microphone or line input and retain the recording.
+
+Acceptance:
+- Query/report capture capability. List only supported sources, rates, channels, and depths. If capture is missing, disable Record with an explanation while preserving file playback/editing.
+- Add a minimal reusable OS capture abstraction/driver extension if needed and feasible from available hardware documentation; do not hide direct hardware access inside UI code or simulate recording as a finished feature.
+- Before recording, choose/confirm the destination or an appropriate disk-backed scratch policy and check free space. Do not assume the boot drive or that a whole recording fits RAM.
+- Default to a new take; if recording into an existing document is offered, explicitly define append/insert/overwrite behavior. Protect existing unsaved work through Save/Discard/Cancel.
+- Record, Pause, resume, and Stop have correct state transitions. Finalize frame counts/header lengths on Stop. Disk-full, write failure, overrun, cancellation, and device loss preserve an explicitly marked recoverable result where safe.
+- A recording updates the timer and waveform incrementally at a sustainable redraw rate. Capture continuity takes priority over decorative animation.
+- Do not require full duplex. Disable monitor-through-playback when the device cannot support it. Do not automatically enable live speaker monitoring that could cause feedback.
+
+Verification: capture-backed recording and WAV replay on available hardware; deterministic injected capture data for buffer/error tests; honest report of missing physical-device testing.
+
+US-07 — As a user, I can see the active signal level and set input gain independently of listening volume.
+
+Acceptance:
+- One horizontal segmented LED-style meter sits directly above the INPUT GAIN slider, matching all layouts. Use green/yellow/red in color and filled/outlined/patterned cells in monochrome.
+- Compute a lightweight documented peak level from actual active samples; use integer thresholds or a small lookup instead of runtime logarithms or floating point. Use consistent reference/units, normally a dBFS-style scale to 0, and a short peak-hold/clip indication.
+- Meter updates are throttled and not dependent on drawing once per sample. Its source is clear: capture when armed/recording, playback when playing, inactive when neither is running.
+- INPUT GAIN uses a hardware capture gain control when exposed by the driver. If software gain is supported, identify it clearly and apply it to the capture data path with saturation; it cannot undo or prevent ADC clipping. Disable unsupported gain controls instead of displaying a placebo.
+- Gain, volume, and source selections are separate settings. Changing gain does not retroactively alter existing audio; changing playback volume does not change the recording level or saved data.
+
+Verification: fixed amplitude and clipping fixtures, meter thresholds/peak reset, genuine gain-capability behavior, gain-volume independence, and mono/color visibility.
+
+PHASE 4 — SELECTION AND USEFUL EDITING
+
+US-08 — As a user, I can select a precise range, audition it, and loop it.
+
+Acceptance:
+- Click to place the cursor; drag to select; adjust handles; show start/end and length consistently in main waveform and overview. Allow keyboard adjustment and exact-value entry via a compact dialog if needed.
+- Define ranges as [start, end) sample-frame indices, clamp to document boundaries, and handle zero-length/full-file selections without off-by-one errors.
+- Loop selection repeats the selected sample range correctly, not the entire file. Define cursor/loop behavior when no range exists. Pause/Stop/seek remain reliable during looping.
+- Selection boundaries remain stable across zoom/layout changes. Text values and playhead reflect real sample times, not a fixed drawing from the mockup.
+
+Verification: ranges at start/end, single-frame and empty ranges, stereo alignment, zoom/resolution changes, and repeated loop sample counts.
+
+US-09 — As a user, I can remove unwanted audio, keep a selected excerpt, and undo mistakes.
+
+Acceptance:
+- Implement Trim (keep selection), Delete (remove selection and close the gap), Cut/Copy/Paste, Select All, and at least one reliable Undo/Redo step. A bounded multi-step disk-backed history is preferable if resource costs are reasonable.
+- Trim/Delete are direct buttons as shown; other editing commands can live in Edit. Disable commands when their preconditions are absent.
+- Preserve channel alignment, format, document duration, selection/cursor rules, and envelope-cache correctness after edits. Clipboard paste with incompatible audio must either perform a documented conversion or refuse with a clear reason; never reinterpret bytes.
+- Use bounded edit metadata/piece references or streaming rewrites rather than demanding a full memory copy of long files. Keep immutable source regions alive while undo still references them.
+- Stop or safely coordinate audio before an edit. Do not silently mutate the active playback buffer or write over uncommitted source content.
+- Optional silence insertion and fades may follow the required editing commands; do not let extra effects delay a complete recorder/editor.
+
+Verification: exact sample fixtures for edit/undo/redo, stereo boundary checks, long-file edits under constrained RAM, failures/cancellation, and envelope/selection invalidation.
+
+PHASE 5 — SAVING, FORMATS, AND RECOVERY
+
+US-10 — As a user, I can save the recording or edited selection as a valid WAV file without losing my source.
+
+Acceptance:
+- Save, Save As, and optional export-selection use native dialogs and accurate format/disk-size information. Prompt before replacing another existing file and never silently overwrite the source during an intermediate edit.
+- Write temporary output, stream edited regions, finalize RIFF/data lengths and padding, flush/close, and replace/rename safely using actual filesystem capabilities. If replacement cannot be atomic, document and handle the safest supported sequence.
+- Format controls have clear semantics: recording configuration for a new take, source metadata for an opened file, and explicit conversion/export choices. Changing “11k/8-bit/Mono” must not silently reinterpret existing sample data.
+- Offer only implemented conversion combinations. Include saturation and appropriate filtering for downsampling; show whether a conversion changes the saved document or only playback.
+- Check destination, writability, free space, filename rules, and file-size limits using overflow-safe arithmetic. Cancellation or failure leaves the original intact and incomplete output clearly identified.
+- Closing a dirty document uses Save/Discard/Cancel. Delete only scratch files owned by this job; preserve unrelated data. On restart, identify recoverable unfinished recordings if the implemented filesystem/process model permits it.
+
+Verification: reopen saved files with an independent host WAV reader, exact frame counts/format, export-selection, odd data length, replacement failure, disk-full mid-write, canceled save, source preservation, and dirty-close behavior.
+
+PHASE 6 — ASSETS, FONTS, AND XT PERFORMANCE
+
+US-11 — As a user, I get the reference design's personality without sacrificing readability or XT responsiveness.
+
+Acceptance:
+- Custom IN-PACKAGE bitmap fonts are allowed: a compact UI face and/or a seven-segment timer face. Native OS window/menu chrome should retain OS conventions. Load app fonts from its package; do not require global font installation.
+- Provide source glyph data, metrics, license/provenance, deterministic packing, and all necessary numerals, punctuation, filenames, and labels. Include a missing-glyph fallback. Verify 6x8/8x8 metrics and contrast at actual compact resolution. Do not rely on an image-generated alphabet being complete or correct.
+- You MAY use Codex image generation from the command line for small decorative/icon assets. First inspect installed Codex CLI help and any applicable imagegen skill to use a documented, supported invocation. Do not invent a “codex imagegen” subcommand or assume image generation is exposed by every CLI runtime. If available, invoke the supported Codex/imagegen workflow with explicit prompts; if unavailable, continue with procedural/manual bitmap assets and document that limitation.
+- Never ask the user to paste secret keys. Image-generation access is optional development tooling, not a target/runtime dependency. The normal package build must work offline from committed, licensed assets.
+- Generated imagery is a source for small sprites/icons or art direction, not an entire UI screenshot used as a background. Draw text, waveform, selection, meter, slider tracks/thumbs, and active states dynamically. Deterministic host conversion may crop/quantize/pack chosen assets to native 1-bit/limited-palette formats.
+- Keep asset prompts/source files, final packed resources, generation/packing scripts, and manifest/checksums where useful. Use original or properly licensed fonts/icons; do not casually bundle proprietary ROM/font dumps.
+- Integer sample processing, bounded buffers, precomputed waveform envelopes, dirty rectangles, throttled meter/timer updates, and cheap monochrome patterns take priority over animation. Measure interrupt latency and avoid long interrupt-disabled sections.
+- Show measured peak RAM/code/asset sizes and sustained record/play sample rates for the available target configurations. Under load, reduce UI refresh work before sacrificing audio continuity. When a requested rate cannot be sustained, offer a supported lower recording rate for the next take or an explicit playback conversion; do not silently alter a recording's rate midstream.
+
+Verification: deterministic asset/font build, target opcode audit, font coverage/layout checks, constrained-memory playback/edit/capture tests, redraw-cost and underrun/overrun measurements, and profile on credible XT hardware/emulation. Unrestricted host/QEMU speed is not proof of 4.77 MHz XT performance.
+
+PHASE 7 — COMPLETE THE APP AND KEEP THE PR REVIEWABLE
+
+US-12 — As a maintainer, I can review, reproduce, install, and test the complete WaveRack package from the draft PR.
+
+Acceptance:
+- Build/install instructions, source architecture, supported devices and WAV formats, keyboard shortcuts, format/gain/volume semantics, resource budgets, known limits, and recovery behavior are documented.
+- A concise test matrix covers color VGA/EGA, full-height monochrome, actual 640x200 CGA, no audio device, playback-only device, capture device, and unsupported/busy device states. Use additional EGA/Hercules modes actually supported by the repository when available.
+- Commit actual screenshots of the implemented color, monochrome, and compact views; include useful recording/playback/selection states. Distinguish generated design references from emulator screenshots.
+- Tests use generated tones, impulses, silence, speech-like signals, or redistributable samples. Cover parser bounds, frame-index/time mapping, edit/undo, streaming, device error paths, and save integrity; avoid large brittle tests that merely mirror implementation details.
+- All required repository checks relevant to the change pass, or their actual blockers are reported. No checked story hides an untested capture driver, missing compact layout, or nonfunctional control.
+- The same draft PR contains the up-to-date story table, final behavior summary, validation commands/results, screenshots, compatibility/resource measurements, and remaining hardware verification. Keep it DRAFT and do not merge it.
+
+IMPLEMENTATION GUIDANCE
+
+Use repository-appropriate modules with clear boundaries: native UI/layout/theme; bitmap-font/resource loader; document/edit/undo model; bounded RIFF/WAV parser/writer; waveform envelope/rendering; audio transport/capture/output; device capabilities; streaming/scratch management; and diagnostics/test harness. These are responsibilities, not a demand for an unnecessarily large abstraction hierarchy or predetermined filenames.
+
+Maintain a central transport state machine (Idle, Playing, Playback paused, Recording, Recording paused, Busy, Error) and document/dirty state separately. Define which commands are enabled in each state. Do not permit contradictory Record/Play states on a half-duplex device. Selection, view range, playback position, recording write position, gain, and volume are different values and should not overwrite one another.
+
+Keep data paths format-aware: 8-bit PCM silence is 128; signed 16-bit PCM silence is zero; stereo uses complete sample frames. Use wide/checked arithmetic for file sizes, sample counts, and timestamps, implemented using valid 8088 operations where needed. Avoid expensive conversion or division per painted pixel/audio sample when cached integer calculations suffice.
+
+A host-buildable model and mock device are valuable for fast deterministic tests, but they do not replace the native package or real driver integration. If physical capture hardware is unavailable, implement what can be established from actual APIs and documentation, mark that acceptance verification pending in the PR, and never label a generated waveform as a microphone recording.
+
+For every story: implement the smallest complete user outcome, verify the meaningful acceptance criteria, commit, update the plan and draft PR, then continue. Preserve the supplied visual language while making layout choices that genuinely fit hardware limits. Do not stop at scaffolding, a plan, or beautiful nonfunctional screenshots.

@@ -41,16 +41,20 @@ def main(argv):
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--out", default=OUT, help="where the PNGs go (default build/guide/shots)")
     a = ap.parse_args(argv)
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), a.key + ".py")
     spec = importlib.util.spec_from_file_location("cap", p)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    os.makedirs(OUT, exist_ok=True)
+    out_dir = os.path.abspath(a.out)
+    os.makedirs(out_dir, exist_ok=True)
+    if hasattr(mod, "OUT"):     # a script that writes its own PNGs (a
+        mod.OUT = out_dir       # game's scaled frame) writes them here too
     with os88ui.boot(os.path.join(ROOT, a.image), apps=os.path.join(ROOT, a.apps),
                      machine=a.machine) as ui:
         def shot(sid, window=None, pad=6, rect=None, settle=True):
-            """Write build/guide/shots/<sid>.png: the whole screen, the window
+            """Write <--out>/<sid>.png: the whole screen, the window
             whose title starts with `window` (plus `pad` pixels of desktop),
             or an explicit (x, y, w, h) `rect`."""
             if settle:
@@ -83,7 +87,7 @@ def main(argv):
             # shape the monitor shows.
             rep = 2 if h <= 200 else 1
             crop = b"".join(data[(yy * w + x0) * 3:(yy * w + x1) * 3] * rep for yy in range(y0, y1))
-            out = os.path.join(OUT, sid + ".png")
+            out = os.path.join(out_dir, sid + ".png")
             png(out, cw, (y1 - y0) * rep, crop)
             print("shot %s %dx%d" % (sid, cw, (y1 - y0) * rep))
         mod.capture(ui, shot)

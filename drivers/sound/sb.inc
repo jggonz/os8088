@@ -90,6 +90,12 @@
 ; The snd_tick watchdog covers input identically: block IRQs that stop
 ; arriving halt the stream as ended(2).
 ;
+; ...OR INTO THE CALLER'S OWN RING (SPEC.md 34.6.4, verb 4 with
+; SND_OPENF_EXT): the 8237's auto-init cycle IS the package's ring, there is
+; no record ring, no drain task and no grant, and the block IRQ only counts
+; the block and writes the count into the package's SND_EXT_CONS word. It
+; never pauses for an overrun: the reader owns the ring and its own lag.
+;
 ; Known bound, recorded: on single-cycle DSPs the re-arm programs the 8237
 ; from the ISR, and the 8237's byte-pair flip-flop is shared with the BIOS's
 ; channel-2 programming inside int 13h - a floppy read concurrent with a
@@ -503,13 +509,16 @@ sbl_hw_start:
 ; The input mirror of sbl_hw_start: speaker (DAC) OFF first - a live DAC
 ; feeds the output back into the capture path on real hardware - then the
 ; time constant, then the mode split: auto-init programs DMA once for the
-; whole 8KB ring (55h at SBL_RING) plus the DSP block size (48h, one 4KB
+; whole 4KB ring (55h at SBL_RING) plus the DSP block size (48h, one 2KB
 ; half) and 2Ch; single-cycle arms half 0 via sbl_arm_rec (SPEC.md 34.6).
+; An EXTERNAL record ring (SPEC.md 34.6.4, auto-init only) is the cycle
+; instead - [sbl_xoff]/[sbl_xpage], RL - 1 - and its block is [sbl_half].
 ; -----------------------------------------------------------------------------
 sbl_hw_start_in:
     push ax
     push bx
     push cx
+    push dx
     mov al, 0xD3                ; speaker (DAC) off for the capture path
     call sbl_dsp_wr
     mov al, 0x40                ; time constant
@@ -521,10 +530,19 @@ sbl_hw_start_in:
     mov ax, [sbl_dmaoff]        ; address = the ring, in its 8237 page
     add ax, SBL_RING
     mov bx, 2*SBL_RHALF-1       ; count = the whole ring - 1
-    mov cl, 0x55                ; auto-init, write (card -> memory), ch 1
     mov ch, [sbl_page]
+    mov dx, SBL_RHALF-1         ; DSP block size = one ring half
+    cmp byte [sbl_ext], 0       ; ...or the CALLER'S ring (SPEC.md 34.6.4),
+    je .dma                     ; where verb 4 found it, and its block
+    mov ax, [sbl_xoff]
+    mov bx, [sbl_rmask]
+    mov ch, [sbl_xpage]
+    mov dx, [sbl_half]
+    dec dx
+.dma:
+    mov cl, 0x55                ; auto-init, write (card -> memory), ch 1
     call sbl_dma_auto
-    mov bx, SBL_RHALF-1         ; DSP block size = one ring half
+    mov bx, dx
     mov al, 0x48
     call sbl_dsp_wr3
     mov al, 0x2C                ; auto-init 8-bit DMA input
@@ -534,6 +552,7 @@ sbl_hw_start_in:
     mov al, 0
     call sbl_arm_rec            ; half 0; the ISR re-arms from there
 .out:
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -918,6 +937,8 @@ sbl_isr:
                                 ; .spur` stays a relaxed pair: moving .spur up
                                 ; as well pushes .direct out of short range
 .input:                         ; the mirror half-swap (SPEC.md 34.6): the
+    cmp byte [sbl_ext], 0       ; (an EXTERNAL record ring has no halves to
+    jne .xin                    ; swap - SPEC.md 34.6.4)
     mov bl, [sbl_play]          ; half that just finished capturing...
     xor bh, bh
     mov byte [sbl_valid+bx], 1  ; ...holds data awaiting the drain task
@@ -1031,7 +1052,16 @@ sbl_isr:
     mov dx, [sbl_ackp]          ; nobody, ACK it SB-side (an 8-bit transfer,
     in al, dx                   ; so 2xEh) and tell verb 0, which is waiting
     mov byte [sbl_prime], 0     ; on this byte
+.eoij:                          ; (.xin's way back: .eoi is out of its reach)
     jmp .eoi
+
+.xin:                           ; AN EXTERNAL RECORD RING (SPEC.md 34.6.4):
+    mov ax, [sbl_half]          ; one block captured, and the DMA has gone on
+    add ax, [sbl_consumed]      ; into the next by itself. Count it and
+    mov [sbl_consumed], ax      ; publish the count in the caller's word -
+    les bx, [sbl_extctl]        ; and NOTHING ELSE: no flag, no pause. The
+    mov [es:bx+SND_EXT_CONS], ax    ; reader owns the ring and judges its
+    jmp short .eoij             ; own lag; the card never waits for it
 
 ; =============================================================================
 ; The IRQ-discovery candidate stubs (.text - interrupt handlers, so SPEC.md
@@ -1813,8 +1843,17 @@ sbl_v_open:
 ;           the caller's grant)
 ; out:      AL = 0 ok with AH = handle, else AX = 1 busy (half-duplex: any
 ;           open stream, or an exclusive clip) / 2 rate / 4 no sink or no
-;           IRQ found / 6 no task slot / 7 bad grant; CF mirrors the error
+;           IRQ found / 6 no task slot / 7 bad grant / 8 no page-safe 8KB
+;           for the record ring; CF mirrors the error
 ; clobbers: nothing else (flags)
+;
+; AH = SND_OPENF_EXT (SPEC.md 34.6.4) records into the CALLER'S ring
+; instead: DI:SI, RL = 4096 << AH bits 4-5, the control words after it, the
+; block SBL_RHALF >> AH bits 6-7. CX and SI's grant are not read, there is no
+; drain task and no 8KB buffer, the card writes the ring in place by
+; auto-init DMA and the block IRQ writes the free-running count of bytes
+; captured to [DI:SI+RL+SND_EXT_CONS]. A single-cycle DSP, or a ring whose
+; span crosses a 64KB page, answers 7.
 ;
 ; The mirror of sbl_v_open: same record, direction = in, the same deferred
 ; IRQ discovery, the same publish-then-pace order (act = 1 before the
@@ -1832,6 +1871,7 @@ sbl_v_open_in:
     push cx
     push dx
     push si
+    mov [sbl_oflags], ah        ; a TEMP, as verb 0's: EXT and its codes
     cmp byte [sbl_str_act], 0   ; ([sbl_up]: sbl_stream_op tested it)
     jne sbl_v_open.e1           ; half-duplex: one stream record, either
                                 ; direction (SPEC.md 34.3/34.6)
@@ -1846,12 +1886,49 @@ sbl_v_open_in:
 .ceil:
     cmp bx, ax
     ja sbl_v_open.e2
-    jcxz sbl_v_open.e7          ; zero capacity captures nothing
+    mov [sbl_str_inst], dh      ; (DH dies in sbl_ring_phys below)
+    test byte [sbl_oflags], SND_OPENF_EXT
+    jnz .ext
+    jcxz .e7                    ; zero capacity captures nothing
     call sbl_grant_chk          ; the capture range must sit in the caller's
-    jc sbl_v_open.e7            ; grant; out AX = bytes to the grant's end.
+    jc .e7                      ; grant; out AX = bytes to the grant's end.
                                 ; BX is still the rate (see above)
     mov [sbl_str_max], ax
-    mov [sbl_str_inst], dh
+    jmp short .disc
+.e7:
+    jmp sbl_v_open.e7
+.ext:                           ; AN EXTERNAL RECORD RING (SPEC.md 34.6.4):
+    cmp byte [sbl_auto], 0      ; captured in place by auto-init DMA or not
+    je .e7                      ; at all - a single-cycle DSP re-arms from
+    mov al, [sbl_oflags]        ; the ISR, which this path does not carry
+    mov cl, SND_OPENF_RLSH
+    shr al, cl
+    mov ah, al                  ; AH = the block code above the size code
+    and al, 3
+    mov cl, al
+    mov dx, 4096
+    shl dx, cl
+    dec dx
+    mov [sbl_rmask], dx         ; RL - 1, the DMA cycle's count
+    mov cl, 2                   ; (SND_OPENF_BLKSH - SND_OPENF_RLSH)
+    shr ah, cl
+    mov cl, ah
+    mov ax, SBL_RHALF
+    shr ax, cl
+    mov [sbl_half], ax          ; the block, as verb 0's external ring takes
+    lea ax, [si+1]              ; it; the control words after the ring
+    add ax, dx
+    mov [sbl_extctl], ax
+    mov [sbl_extctl+2], di
+    mov [sbl_rseg], di
+    call sbl_ring_phys          ; SI = the ring: AX/DL = where the chip sees it
+    jc .e7                      ; ...unless it straddles a 64KB page
+    mov [sbl_xoff], ax
+    mov [sbl_xpage], dl
+%if SND_OPENF_BLKSH - SND_OPENF_RLSH != 2
+  %error "verb 4 reads the block code two bits above the size code"
+%endif
+.disc:
     cmp byte [sbl_irq], 0xFF    ; IRQ discovery, deferred to first use
     jne .irqok                  ; (SPEC.md 34.5)
     call sbl_f_irqdisc           ; far orchestration; hooks the winner
@@ -1867,14 +1944,26 @@ sbl_v_open_in:
     mov dx, SBL_WD_IN >> 16     ; = (2*SBL_RHALF*18.2)/rate + 3, derived
     div bx
     add ax, 3
-    mov [sbl_wd_rst], ax
-    mov [sbl_wd], ax
+    mov [sbl_wd_rst], ax        ; (sized for SBL_RHALF: a smaller external
+    mov [sbl_wd], ax            ; block only makes it more patient)
+    test byte [sbl_oflags], SND_OPENF_EXT
+    jnz .xrec
     call sbl_dma_get            ; the record ring lives in the DMA buffer,
     jc sbl_v_open.e8            ; claimed for this stream (SPEC.md 34.5.2)
+    xor ax, ax                  ; neither direct nor external
+    jmp short .rec
+.xrec:
+    push es                     ; the caller's count starts at 0 with ours
+    les bx, [sbl_extctl]        ; (BX: the rate is spent)
+    mov word [es:bx+SND_EXT_CONS], 0
+    pop es
+    mov ax, 0x0101              ; DIRECT and EXTERNAL: sbl_unpin then frees
+.rec:                           ; nothing, sbl_v_pause still answers 7 (a
+    mov [sbl_direct], ax        ; record stream), and the ISR's input leg
+                                ; takes .xin
     mov [sbl_str_off], si       ; the stream record (not yet published)
     mov [sbl_total], cx         ; = the capture capacity (SPEC.md 34.6)
     xor ax, ax
-    mov [sbl_direct], al
     mov [sbl_fed], ax
     mov [sbl_consumed], ax      ; = bytes drained into the grant
     mov [sbl_play], al          ; the half the DSP captures into
@@ -1890,10 +1979,13 @@ sbl_v_open_in:
     mov [sbl_str_dir], al       ; an INPUT stream (SPEC.md 34.6)
     inc byte [sbl_gen]
     mov [sbl_str_act], al       ; publish, then pace: the DRIVER owns pacing
+    cmp [sbl_ext], al           ; (an external ring has no pace to keep: the
+    je .go                      ; reader owns it, SPEC.md 34.6.4)
     mov dh, [sbl_gen]           ; (SPEC.md 51.7), as for playback above
     mov ax, sbl_drain_task
     call OSAPI_DRV_TASK
     jc sbl_v_open.nospawn
+.go:
     mov byte [sbl_expect], 1    ; arm BEFORE the hardware starts - the
     call sbl_hw_start_in        ; sbl_v_open first-IRQ order, same race
     jmp sbl_v_open.opened       ; out: AH = handle, AL = 0

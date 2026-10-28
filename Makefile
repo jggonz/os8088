@@ -239,6 +239,7 @@ VM386PS2 := $(CURDIR)/vm/386-ps2
 VMXTSND := $(CURDIR)/vm/xt-sound
 VMXTSND144 := $(CURDIR)/vm/xt-sound-1.44
 VMXTMIDI := $(CURDIR)/vm/xt-midirack
+VMXTWR := $(CURDIR)/vm/xt-waverack
 VMXTCOVOX := $(CURDIR)/vm/xt-covox
 VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
@@ -6310,6 +6311,25 @@ $(BUILD)/sndfmtsys.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SY
 		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/sfmtlnk/SNDFMT.LNK \
 		--folder SYSTEM/APPDATA
 
+# SNDCAP: SPEC.md 34.6.4's gate - verb 4 into an EXTERNAL record ring, the
+# card capturing in place by auto-init DMA. Never shipped. It runs itself from
+# a window timer; tests/sndcap.py boots the mixer gate's 360KB system disk
+# (its SYSTEM.CFG wants SOUND.DRV) on MartyPC's 5150 + Sound Blaster and opens
+# it from this B: by name.
+#   make sndcaptest && python3 tests/sndcap.py
+.PHONY: sndcaptest
+sndcaptest: $(BUILD)/sndcap360.img $(BUILD)/mixer360.img
+
+$(BUILD)/sndcap.bin: tests/sndcap/sndcap.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/sndcap/sndcap.asm
+	@echo "sndcap: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sndcap.o88: $(BUILD)/sndcap.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sndcap.bin -o $@
+
+$(BUILD)/sndcap360.img: $(BUILD)/sndcap.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/sndcap.o88
+
 # The same fixture with 4.8 seconds staged: QMP and floppy activity must
 # leave audio still playing when the volume popup opens. Default SBTEST
 # remains byte-identical; this arm is only the mixer's background-service leg.
@@ -6499,6 +6519,65 @@ $(BUILD)/cdrack.bin: apps/cdrack/cdrack.asm apps/cdrack/crdraw.inc \
 
 $(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/cdrack.bin -o $@
+
+# WAVERACK (SPEC.md 123): the sound recorder, WAV player and waveform editor,
+# a retro-face package in CDRack's shape. build/wrart.inc is its pictures,
+# fonts, meter table, role tables AND its three layouts as data, made by
+# tools/os88wrart.py with tools/os88wrlay.py - after the --selfcheck, which
+# also MEASURES the layouts (nothing overlaps, nothing leaves its box, every
+# caption fits, COMPACT fits a 640 x 200 screen), so a layout that broke one
+# of those never reaches a disk
+.PHONY: waverack
+waverack: $(BUILD)/waverack.o88
+$(BUILD)/wrart.inc: tools/os88wrart.py tools/os88wrlay.py tools/wrsim.py | $(BUILD)
+	python3 tools/os88wrart.py --selfcheck --quiet
+	python3 tools/os88wrart.py --out $@
+
+$(BUILD)/waverack.bin: apps/waverack/waverack.asm apps/waverack/wrdraw.inc \
+                       apps/waverack/wrface.inc apps/waverack/wrwav.inc \
+                       apps/waverack/wrdoc.inc apps/waverack/wrenv.inc \
+                       apps/waverack/wrxport.inc apps/waverack/wredit.inc \
+                       apps/waverack/wrsave.inc apps/waverack/wrrec.inc \
+                       $(BUILD)/wrart.inc apps/os88dec.inc apps/os88rseq.inc apps/os88data.inc \
+                       apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/waverack/ -I $(BUILD)/ \
+		-o $@ apps/waverack/waverack.asm
+	@echo "waverack: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/waverack.o88: $(BUILD)/waverack.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/waverack.bin -o $@
+
+# ...and its DEMO CLIPS (SPEC.md 123.13): real music, short excerpts of
+# Wikimedia Commons recordings whose pages say Public Domain or CC0, made by
+# tools/os88wrdemo.py (fetch + lame + numpy) and COMMITTED in
+# apps/waverack/demo/ with CREDITS.TXT - the Video Player's shape for demo
+# media, so `make` needs no network and no lame. WRCLIPS are all six; a
+# geometry that cannot hold them takes WRCLIPS720 / WRCLIPS360, and its
+# CLIPS.TXT says which (RUNCPM's GAMES.TXT shape)
+WRDEMO := apps/waverack/demo
+WRCLIPS := FURELISE MAPLELF GYMNO MARCH NOCTURNE PRELUDE
+WRCLIPS720 := FURELISE MAPLELF NOCTURNE PRELUDE
+WRCLIPS360 := FURELISE MAPLELF
+WRDEMOWAVS := $(addprefix $(WRDEMO)/,$(addsuffix .WAV,$(WRCLIPS)))
+
+# ...and its FIXTURE DISK (ON DEMAND: `make waverackfix`, never in `all`):
+# a 1.44MB scratch floppy with WAVERACK.O88 at the root and every WAV
+# tools/wrsim.py makes - the reference's fixtures, uncompressed, in MEDIA/
+# (the folder the Standard File dialog opens on): GOOD/ the files it must
+# open, BAD/ the ones it must refuse, and LONG.WAV (~1.1MB) beside them to
+# prove the scan streams. `make test TESTAPPS=build/wrfix.img` swaps it into
+# B:; tests/waverack.py is the soak row that opens every one of them
+.PHONY: waverackfix
+waverackfix: $(BUILD)/wrfix.img
+$(BUILD)/wrfix.img: $(BUILD)/waverack.o88 tools/wrsim.py tools/os88disk.py
+	rm -rf $(BUILD)/wrfix && mkdir -p $(BUILD)/wrfix
+	python3 tools/wrsim.py --selfcheck --quiet
+	python3 tools/wrsim.py --fixtures $(BUILD)/wrfix
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/waverack.o88 \
+	    $$(for f in $(BUILD)/wrfix/GOOD/*.WAV; do printf 'MEDIA/GOOD:%s ' $$f; done) \
+	    $$(for f in $(BUILD)/wrfix/BAD/*.WAV; do printf 'MEDIA/BAD:%s ' $$f; done) \
+	    MEDIA:$(BUILD)/wrfix/LONG.WAV
+	@echo "wrfix: $@"
 
 # XTMP3 (SPEC.md 121): the adaptive MP3 player. Its face is the retro-face
 # skill's (CDRack's shape): every picture and font is build/x3art.bin, a PART
@@ -13480,6 +13559,38 @@ $(BUILD)/VIDDEMO-%-IDE.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--cyls 1024 --heads 16 --spt 63 --out $@
 	rm -f $(BUILD)/viddemo/$*.img
 
+# WAVERACK'S LISTENING DISK (SPEC.md 123.6, 123.7; docs/plans/WAVERACK-PLAN.md
+# US-12), ON DEMAND: the whole install - VIDDEMO_INSTALL's derived list, so
+# WAVERACK.O88 rides in APPS/ with everything else - on the ST-225 that
+# vm/xt-waverack puts on its Xebec (615/4/17, a RAW image of exactly that
+# geometry, mfm20.img's shape, because 86Box refuses one that disagrees),
+# with tools/wrsim.py's long WAVs in MEDIA/: BIG22.WAV (2 MB, 8-bit mono
+# 22,050 Hz - wave 4b's stall, streamed off the disk), ST22S/ST22L (16-bit
+# stereo: held, or 'CPU too slow: gaps' on an 8088), MID11, LONG.WAV (104 s
+# at 11,025 Hz) and STEREO16. Play one and open another WAV in a second
+# WaveRack: the play goes on. Record onto C: at 11,025 or 15,000 Hz.
+# NO SYSTEM.CFG: SOUND.DRV mounts the card on the defaults (viddemo's rule).
+WRHD := $(BUILD)/WAVERACK-MFM.img
+.PHONY: waverackhd
+waverackhd: $(WRHD)
+	@ls -l $(WRHD)
+$(WRHD): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(FACES) $(FACELIC) $(LOGOVID) $$(APPS) $(WRDEMOWAVS) $(WRDEMO)/CREDITS.TXT \
+	tools/wrsim.py tools/os88disk.py
+	rm -rf $(BUILD)/wrhd && mkdir -p $(BUILD)/wrhd/fx
+	python3 tools/wrsim.py --disk-fixtures $(BUILD)/wrhd
+	python3 tools/wrsim.py --fixtures $(BUILD)/wrhd/fx
+	python3 tools/os88disk.py -o $@ --hdd \
+		--geometry 615/4/17 --mbr $(BUILD)/mbr.bin \
+		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(VIDDEMO_INSTALL) \
+		$(addprefix MEDIA:$(BUILD)/wrhd/,BIG22.WAV MID11.WAV ST22S.WAV ST22L.WAV) \
+		MEDIA:$(BUILD)/wrhd/fx/LONG.WAV MEDIA:$(BUILD)/wrhd/fx/GOOD/STEREO16.WAV \
+		$(addprefix MEDIA:,$(WRDEMOWAVS) $(WRDEMO)/CREDITS.TXT)
+	python3 tools/os88disk.py --verify-hdd $@
+	rm -rf $(BUILD)/wrhd
+
 # THE REALDMG HARD DISK (docs/REALDMG-SPEC.md section 18), ON DEMAND: the
 # whole install, VIDDEMO_INSTALL's derived list, plus RealDMG's disk in a
 # REALDMG folder and the user's cartridges in GAMEBOY (GAMES is the apps
@@ -14006,7 +14117,11 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/audio.o88 $(BUILD)/mixer.o88 $(BUILD)/sheet.o88 \
              $(BUILD)/video.o88 \
              $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88 \
-             $(BUILD)/xtmp3.o88
+             $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88
+# WAVERACK (SPEC.md 123.2) is the AUDIO row's omission: it plays and records
+# through SOUND.DRV's stream (SPEC.md 34.5), which kern_small does not load,
+# so with no card tier it would be an editor whose every sound key is grey
+# on every machine the small disks are for.
 # XTMP3 (SPEC.md 121.12) is VIDEO's row and SHEET's at once. It streams:
 # OSAPI_FILE_READ_SEQ plays a track and OSAPI_FILE_WRITE_SEQ writes a decoded
 # one, and kern_small has neither (SPEC.md 18.4.8, 18.4.9), so the queue would
@@ -15586,7 +15701,14 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/wirechat.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
-              $(BUILD)/timer.o88 $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88
+              $(BUILD)/timer.o88 $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88 \
+              $(BUILD)/waverack.o88
+# WAVERACK.O88 (SPEC.md 123.13) is in this list, so it reaches every apps
+# disk but the 360KB one, the everything set and the live media. Three sites
+# take it OFF again: APPS_TOOLS_360 (the media disk carries it at that
+# geometry, MIDIRack's and XTMP3's ground), $(SMALLOMIT) (SOUND.DRV, a
+# requirement kern_small cannot meet) and $(COMBO_DROP) (not a calibration
+# instrument).
 # XTMP3.O88 (SPEC.md 121.12) is in this list, so it reaches the 1.44MB and
 # 1.2MB apps disks, the kern_mega apps disks (its PKG_MEGA arm), the
 # everything set and the live media. Four sites take it OFF again, each with
@@ -16180,7 +16302,8 @@ APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                     $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
                     $(BUILD)/piano.o88 $(BUILD)/wirechat.o88 \
                     $(BUILD)/mixer.o88 $(BUILD)/timer.o88 \
-                    $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88,$(APPS_TOOLS))
+                    $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88 \
+                    $(BUILD)/waverack.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -16244,10 +16367,16 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # single song. `make xtmp3disk`'s 720KB floppy carries it with all three demo
 # songs, and it is the obvious candidate for the third 720KB disk above - the
 # owner's call, like that disk's contents.
-APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 \
+# ...AND WAVERACK IS NOT ON IT (SPEC.md 123.13, 24.6.1's rule, dated
+# 2026-10-25): its first wave alone is 12 clusters and took this disk from
+# 701 to 713 of 713 - the last cluster - before a single later wave of it
+# exists. The 1.44MB and 1.2MB apps disks carry it; no 360KB disk does since
+# wave 3 left media360.img (SPEC.md 123.13's 360 KB note, 2026-10-27).
+APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88 \
              $(RDG_SHIP) $(RDG_DEMO),$(APPS))
 APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
                  APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
+                 APPS:$(BUILD)/waverack.o88 \
                  GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
 # ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
@@ -16291,6 +16420,14 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
 # is in the folder the Open dialog already opens on whichever disk is in the
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
+#
+# ...AND WAVERACK HAS LEFT IT (SPEC.md 123.13, 24.6.1's rule, dated
+# 2026-10-26): wave 2 took the disk to 354 of 354 clusters and wave 3's
+# transport grows the package past what is left, so no 360KB disk carries
+# WaveRack at this date. A 360KB home for it - a disk of its own, or a curation
+# that moves something else - is an OPEN DECISION for the owner
+# (docs/plans/WAVERACK-PLAN.md); nothing else was moved to make room. The
+# 1.44MB and 1.2MB apps disks, the everything set and the live media carry it.
 MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
                 $(addprefix MEDIA:,$(MEDIA_DISK_DATA) $(XTMP3MP3_360)) \
                 $(LOGOVIDARG) $(MIDISONGARGS)
@@ -16965,13 +17102,14 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # everything-floppy's RunCPM fill would pay for them.
 LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
                $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3) \
+               $(WRDEMOWAVS) \
                $(PX_SAMPLES)
 # PiXEL's whole gallery rides the live volume in PICTURES/ (SPEC.md 106.7):
 # the everything sets carry the 360KB selection, which $(ALLAPPSARGS) does not
 # name, so the ten pictures are here once and not twice.
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
-               $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3)) \
+               $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3) $(WRDEMOWAVS)) \
                $(MIDISONGARGS) $(PX_GALLERY)
 $(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
      empty - $(SYSAPPS) and $(APPSYS) no longer differ, so THEWIRE.O88 is \
@@ -17353,6 +17491,11 @@ imager:
 # WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
 # chat client is the network disk's subject, and network360.img carries it.
 #
+# WAVERACK (SPEC.md 123.13) goes on APPS360's ground, added 2026-10-25: a
+# recorder and editor and not a calibration instrument. media360.img carried
+# it at this geometry until 2026-10-26, when wave 3 outgrew that disk too
+# (MEDIAARGS360's note): no 360KB disk carries it now, an open decision.
+#
 # XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 97
 # clusters, a player and not a calibration instrument, and media360.img
 # carries it at this geometry. The 720KB and 1.44MB combos carry it.
@@ -17360,7 +17503,7 @@ COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
               $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
-              $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88
+              $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88 $(BUILD)/waverack.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -18086,6 +18229,22 @@ xt-midirack: $(IMG360) $(BUILD)/midirack360.img $(MIDISF2)
 	@$(UNPROTECT) $(VMXTMIDI)/86box.cfg
 	$(BOX) -P $(VMXTMIDI) -N
 
+# WAVERACK'S XT TO LISTEN ON (docs/plans/WAVERACK-PLAN.md US-12): vm/xt-mfm's
+# 4.77 MHz XT and ST-225 on a Xebec - with xt-sound's Sound Blaster 2.0 added
+# and A: left empty, so it boots `make waverackhd`'s disk. The machine to hear
+# SPEC.md 123.6's play go on through disk reads (the stall the owner heard on
+# 86Box) and 123.7's takes onto a hard disk; nothing here can key 86Box, so
+# it is for LISTENING - the gates are MartyPC's (waverackdisk, waverackrec).
+# The disk is `hdd_01_speed = ST225` (vm/pc5150's preset, where xt-mfm has
+# `ramdisk`): REAL seek and rotation times, which is where the owner first
+# heard the stall - ramdisk reproduces only its CPU half.
+# THE CARD IS ON IRQ 7, not xt-sound's 5: the Xebec takes IRQ 5, and SOUND.DRV
+# refuses a Sound Blaster there on an XT (SPEC.md 34.5.6) - xt-sound's keys
+# copied as they stand would toast 'IRQ 5 is the hard disk's' and play nothing
+xt-waverack: $(WRHD) $(BUILD)/waverack360.img
+	@$(UNPROTECT) $(VMXTWR)/86box.cfg
+	$(BOX) -P $(VMXTWR) -N
+
 386-midirack: $(IMG) $(BUILD)/midirack.img $(MIDISF2)
 	@$(UNPROTECT) $(VM386MIDI)/86box.cfg
 	$(BOX) -P $(VM386MIDI) -N
@@ -18124,6 +18283,41 @@ $(BUILD)/midirack360.img: $(MIDIRACKDISKDEPS)
 .PHONY: midirackdisk
 midirackdisk: $(BUILD)/midirack.img $(BUILD)/midirack120.img \
               $(BUILD)/midirack720.img $(BUILD)/midirack360.img
+
+# WAVERACK'S OWN DISK, in all four geometries (SPEC.md 123.13): WAVERACK.O88
+# at the root, the demo clips in MEDIA\ (RAW - WaveRack reads a WAV with
+# READ_SEQ and READ_AT, which deliver a file as it lies, so no clip is
+# wrapped), CREDITS.TXT and a CLIPS.TXT saying which clips this geometry
+# carries, and SYSTEM\APPDATA for the take's recovery table. The 360KB one is
+# WaveRack's 360KB home: the program, two clips and ~50KB left to record a
+# take at 8,000 Hz (a floppy's rate, SPEC.md 123.7); 720KB takes four, the
+# 1.2 and 1.44MB all six. On demand, like midirackdisk
+WRDISKDEPS := $(BUILD)/waverack.o88 $(WRDEMOWAVS) $(WRDEMO)/CREDITS.TXT \
+              tools/os88wrdemo.py tools/os88disk.py tools/checkreadme.py
+# $(call WRDISK,size,clips) - the CLIPS.TXT, then the disk, then its fsck
+define WRDISK
+	@mkdir -p $(BUILD)/wrdisk$(1)
+	python3 tools/os88wrdemo.py clips $(BUILD)/wrdisk$(1)/CLIPS.TXT \
+	    $(addsuffix .WAV,$(2))
+	python3 tools/checkreadme.py $(BUILD)/wrdisk$(1)/CLIPS.TXT
+	python3 tools/os88disk.py -o $@ --size $(1) $(BUILD)/waverack.o88 \
+	    $(BUILD)/wrdisk$(1)/CLIPS.TXT $(WRDEMO)/CREDITS.TXT \
+	    $(addprefix MEDIA:$(WRDEMO)/,$(addsuffix .WAV,$(2))) \
+	    --folder SYSTEM/APPDATA
+	python3 tools/os88disk.py --verify $@
+endef
+$(BUILD)/waverack.img: $(WRDISKDEPS)
+	$(call WRDISK,1440,$(WRCLIPS))
+$(BUILD)/waverack120.img: $(WRDISKDEPS)
+	$(call WRDISK,1200,$(WRCLIPS))
+$(BUILD)/waverack720.img: $(WRDISKDEPS)
+	$(call WRDISK,720,$(WRCLIPS720))
+$(BUILD)/waverack360.img: $(WRDISKDEPS)
+	$(call WRDISK,360,$(WRCLIPS360))
+
+.PHONY: waverackdisk
+waverackdisk: $(BUILD)/waverack.img $(BUILD)/waverack120.img \
+              $(BUILD)/waverack720.img $(BUILD)/waverack360.img
 
 # THE WIRE'S MACHINE (SPEC.md 92): xt-sound's XT - the 1986 board, 640KB, an
 # OTI-067 and the SB 2.0 - with a Novell NE1000 on 86Box's slirp. The NE1000

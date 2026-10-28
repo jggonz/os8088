@@ -71,7 +71,9 @@ them make a gallery, side by side. Nothing else (no HTML, no nested lists, no co
 
 boots the 360KB system disk with `build/apps360.img` in B: on a VGA XT under
 MartyPC (one boot, about a minute), runs your `capture(ui, shot)`, and writes
-the PNGs. `ui` is `tools/os88ui.py`'s UI: `ui.path("B:/APPS/NOTEPAD.O88")`
+the PNGs to `build/guide/shots/`, or to the folder `--out DIR` names. A
+script that writes a PNG of its own keeps the path in a module-level `OUT`,
+which the runner points at that same folder. `ui` is `tools/os88ui.py`'s UI: `ui.path("B:/APPS/NOTEPAD.O88")`
 opens a program, `ui.menu_pick("File", "Open...")` picks a menu item,
 `ui.m.type_text("hello")` and `ui.m.key("Enter")` type, `ui.window("Note Pad")`
 finds a window, `ui.mo` is the mouse (`tools/os88mouse.py`). Read

@@ -40,7 +40,8 @@ disk until you click **Install** on the last of the four steps.
 ![Step 2: the partitions of a 31 MB disk, and what is on each.](shot:install-slot)
 
 `C: FAT16` is a volume you can see on the desktop as C:,
-`Unpartitioned` is free space Install will make a partition of, and
+`Unpartitioned` is free space Install will make a partition of,
+`Empty, No Room` is a free slot with no space left on the disk behind it, and
 `Booted From` is the volume the machine is running from. A partition Install
 cannot use is greyed, and its line says why. The line under the list tells
 you what will happen to the one you picked, and says when os8088 is already

@@ -1,0 +1,46 @@
+WAVERACK DEMO CLIPS
+
+Every clip is a short excerpt of a recording on Wikimedia Commons whose file page says Public Domain or CC0. Each page was read on 2026-10-28 before its recording was taken. The excerpts were cut, mixed, resampled and normalised by tools/os88wrdemo.py in the os8088 source tree, from the MP3 Commons serves of each file.
+
+FURELISE.WAV
+Work: Fur Elise (Bagatelle in A minor, WoO 59), by Ludwig van Beethoven.
+Performer: V Gao (Wikipedia user Gaodifan), 2006.
+Licence: Public domain (PD-self) and CC0 1.0, by the performer.
+Excerpt: 12.0 s from 2.0 s, as 11,025 Hz, 8-bit mono.
+Source: https://commons.wikimedia.org/wiki/File:FurElise.ogg
+
+MAPLELF.WAV
+Work: Maple Leaf Rag (1899), by Scott Joplin.
+Performer: United States Marine Band, recorded October 1906.
+Licence: Public domain (PD-USGov-Military-Marine Corps; PD-old).
+Excerpt: 12.0 s from 0.2 s, as 11,025 Hz, 8-bit mono.
+Source: https://commons.wikimedia.org/wiki/File:1906_-_Scott_Joplin's_Maple_Leaf_Rag_(1899)_played_by_the_United_States_Marine_Band.ogg
+
+GYMNO.WAV
+Work: Gymnopedie No. 1 (1888), by Erik Satie.
+Performer: Teknopazzo (Wikimedia Commons user).
+Licence: CC0 1.0, by the performer.
+Excerpt: 12.0 s from 0.2 s, as 11,025 Hz, 8-bit mono.
+Source: https://commons.wikimedia.org/wiki/File:Gymnopedie_No._1..ogg
+
+MARCH.WAV
+Work: The Stars and Stripes Forever (1896), by John Philip Sousa.
+Performer: United States Air Force Band of Mid-America, 2002.
+Licence: Public domain (PD-USGov-Military-Air Force; composition PD-old).
+Excerpt: 24.0 s from 0.5 s, as 11,025 Hz, 8-bit mono.
+Source: https://commons.wikimedia.org/wiki/File:The_Stars_and_Stripes_Forever_(2002)_-_United_States_Air_Force_Band_of_Mid-America.mp3
+
+NOCTURNE.WAV
+Work: Nocturne in E-flat major, Op. 9 No. 2, by Frederic Chopin.
+Performer: Peter Johnston, for Musopen.
+Licence: CC0 1.0.
+Excerpt: 8.0 s from 2.8 s, as 22,050 Hz, 8-bit mono.
+Source: https://commons.wikimedia.org/wiki/File:Chopin_Nocturne_No._2_in_E_Flat_Major,_Op._9.ogg
+
+PRELUDE.WAV
+Work: Prelude No. 1 in C major, BWV 846 (Well-Tempered Clavier, Book 1), by Johann Sebastian Bach.
+Performer: Kimiko Ishizaka, the Open Well-Tempered Clavier, 2015.
+Licence: CC0 1.0.
+Excerpt: 3.0 s from 1.6 s, as 11,025 Hz, 16-bit stereo.
+Source: https://commons.wikimedia.org/wiki/File:Kimiko_Ishizaka_-_Bach_-_Well-Tempered_Clavier,_Book_1_-_01_Prelude_No._1_in_C_major,_BWV_846.ogg
+

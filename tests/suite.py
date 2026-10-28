@@ -486,6 +486,20 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/kdos/DOS.O88",
                "build/recorder.o88", "build/DOSHELLO.COM",
                "build/DOSHMA.COM")),
+    Row("wrsim", "fast", py("tests/unit/t_wrsim.py"), 0.3,
+        "WaveRack's host reference (SPEC.md 123.3-123.5, tools/wrsim.py) "
+        "and its art's selfcheck (tools/os88wrart.py: the pictures, the "
+        "layouts, the small caps complete for every caption, every status "
+        "message at most 22 characters, the gain against 20 log10): "
+        "every fixture the soak row opens parses to its expectation - "
+        "tones, impulses, stereo 16-bit, odd and unknown chunks, data "
+        "before fmt, the extensible format, clamped, floored and unfinished "
+        "data, six refusals each with its own code and a 22-character "
+        "sentence the package spells the same way, and a 1.1 MB file - read "
+        "back by Python's own `wave` wherever it can, and the impulses and "
+        "the stereo spike survive the coarse envelope at Fit. A drifted "
+        "reference would let tests/waverack.py compare the guest with the "
+        "wrong answer and pass. Standard library, milliseconds"),
     Row("x3xttab", "fast", py("tools/x3xttab.py", "--selfcheck"), 0.25,
         "XTMP3's XT table packs (SPEC.md 121.10, docs/xtmp3/XT-STUDY.md): "
         "every product row, encoder table, byte-split table and requantiser "
@@ -507,6 +521,110 @@ FAST = [
         "figures were measured on, entry for entry. Soak because it "
         "rebuilds the corpus with numpy (seconds, not a fast row)",
         needs=("numpy",)),
+    Row("waverack", "soak", py("tests/waverack.py"), 150.0,
+        "WaveRack's document (SPEC.md 123.3-123.5) on QEMU, because what "
+        "is asserted is behaviour: every tools/wrsim.py fixture on `make "
+        "waverackfix`'s floppy opened through File > Open and the Standard "
+        "File dialog's own rows; the bss read by the package's map and held "
+        "to wrsim.parse() - format, frames, data offset, note, dirty, the "
+        "status sentence, and each refusal's code and number with the "
+        "document left empty; the view cache at Fit against wrsim.columns() "
+        "column for column (the impulses at full zoom out, the stereo spike "
+        "on R alone, LONG.WAV streamed in 16 KB gulps); IMPULSE.WAV zoomed "
+        "to fpp 1 about the cursor and refined from the samples with each "
+        "span reaching the last column's sample; and the identity check - "
+        "the window after the zoom equal to a forced full repaint",
+        needs=("qemu", "nasm", "pil"), serial=True, timeout=600,
+        wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin")),
+    Row("waverackplay", "soak", py("tests/waverackplay.py"), 480.0,
+        "WaveRack's transport (SPEC.md 123.6, 123.8, 123.9) on QEMU's SB16, "
+        "its output captured by the wav audiodev at the rate the card plays "
+        "and each play a slice held to tools/wrsim.py's convert(): "
+        "STEREO16.WAV (16-bit stereo, the high byte and the average, VOLUME "
+        "75%) every sample, with the output line, LEVEL PLAY, the meter's "
+        "cells for its tone and PEAK at its 16-bit rail; a selection DRAGGED "
+        "in the waveform against the drag arithmetic, looped, paused after "
+        "two laps - the position from verb 9's count against "
+        "wrsim.play_pos, the capture the selection repeated sample for "
+        "sample - resumed and stopped (the playhead back where it began, the "
+        "cursor and selection kept, every claim and the grant back); TONE8 "
+        "and TONE8K by dominant frequency and length; the window closed "
+        "mid-play leaving no claim and the card free for a relaunch; and on "
+        "a DSP 2.01 (no PCM_HI) TONE44.WAV at d = 2 with VOLUME 50% from the "
+        "keys, every sample; and on an SB16 TONE44.WAV at d = 1 - 44,100 Hz, "
+        "the card's 4 KB block against eleven 2 KB halves - ending IDLE with "
+        "no underrun and every sample captured",
+        needs=("qemu", "nasm", "numpy"), serial=True, timeout=900,
+        wants=("build/os8088.img", "build/wrfix.img", "build/waverack.bin",
+               "build/mixercfg/SYSTEM.CFG")),
+    Row("waverackedit", "soak", py("tests/waverackedit.py"), 420.0,
+        "WaveRack's edits and saves (SPEC.md 123.3, 123.9, 123.10) on QEMU, "
+        "on a floppy the row builds (the fixtures in MEDIA/, a filler leaving "
+        "300 KB free): TONE8.WAV cut, pasted, pasted back where it came from "
+        "(one piece again), deleted, undone, redone, copied, pasted over a "
+        "selection, trimmed - each edit made with a DRAGGED selection and the "
+        "keys, and the piece table, selection, cursor and history read by the "
+        "package's map against tools/wrsim.py's Editor; Save As and Save "
+        "Selection As read back off the guest's floppy by a FAT12 reader of "
+        "the row's own and held to wrsim.write_wav() byte for byte, no "
+        "WRSAVE.$$$ left and the source untouched; a Save As cancelled with "
+        "Escape mid-write leaving the disk as it was; File > Save over the "
+        "file the document reads - the file the document byte for byte, the "
+        "document one piece of it, the history and the clipboard's pieces of "
+        "it gone; a Save As refused for want of space before a byte is "
+        "written; the 64-piece refusal; and the close box asking about an "
+        "edited document, Discard closing it with no claim left",
+        needs=("qemu", "nasm"), serial=True, timeout=900,
+        wants=("build/os8088.img", "build/waverack.o88",
+               "build/waverack.bin")),
+    Row("waverackdisk", "soak", py("tests/waverackdisk.py"), 1500.0,
+        "WaveRack PLAYING THROUGH DISK READS (SPEC.md 123.6) on MartyPC, "
+        "because the defect is time: disk.inc holds sch_lock across every "
+        "int 13h, so nothing converts while anything reads. Each leg runs "
+        "BEFORE (Wave 4's package, built out of git) and AFTER on one "
+        "machine and one set of files, and a play's SILENCE is its guest "
+        "seconds less verb 9's played samples over the card's real rate. "
+        "HARD DISK first (XT-IDE + SB 2.0, a VHD of tools/wrsim.py's "
+        "DISK_FX): the 2 MB BIG22.WAV's scan - guest seconds and the "
+        "kernel's int 13h by FAT/dir/data - then 30 s of play with no "
+        "underrun; 16-bit stereo past the disk HELD ('Loading', from "
+        "memory, no underrun) or, past the heap too, 'Disk too slow: gaps' "
+        "with the gaps counted; and a play while a SECOND WaveRack scans "
+        "1.7 MB - what the ring covers. FLOPPY second: LONG.WAV off a 1.44 "
+        "MB floppy for 30 s with no underrun. And a 321 MB VHD of 32 KB "
+        "CLUSTERS (os88hdd.py --spc 64): Wave 4 refused it; this one opens, "
+        "plays and saves on it, the saved file read back off the VHD byte "
+        "for byte",
+        needs=("marty", "nasm"), serial=True, timeout=3600,
+        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/sound.drv", "build/mixercfg/SYSTEM.CFG")),
+    Row("waverackrec", "soak", py("tests/waverackrec.py"), 2400.0,
+        "WaveRack RECORDS (SPEC.md 123.7) on MartyPC, whose SB 2.01 ADC "
+        "records a flat 80h, because a take is time: the card writes the "
+        "ring by DMA while disk.inc holds sch_lock across every int 13h. "
+        "Every take is read back off the disk on the host and held to "
+        "tools/wrsim.py's take_header byte for byte, its frames = what "
+        "WaveRack wrote = the card's own count, every byte 80h, no "
+        "overrun. HARD DISK first: 60 s at 11,025 Hz (the tick priced by "
+        "breakpoints; INPUT GAIN's table read out of the ring claim against "
+        "wrsim) and at 15,000 Hz on a VHD of small clusters, a take while a "
+        "second WaveRack scans 2 MB (and does not offer the live take), "
+        "Pause and Record again (the frames are the two streams summed), "
+        "and a take killed with the machine: unfinished on the VHD, then "
+        "File > Recover Take on the next boot opens it dirty and marks "
+        "WAVERACK.TAK done. 32 KB CLUSTERS (a VGA XT, os88hdd.py --spc 64): "
+        "both rates, the header one cluster, the face photographed. FLOPPY "
+        "second: 30 s onto 1.44 MB, then DISK FULL (the take kept, whole "
+        "writes). And QEMU's SB16: 'No input from the card', no file left. "
+        "CALLS (US-11, written in wave 6a): a -DWR_CALLS build counts the "
+        "drawing primitives a tick idle, recording, playing and for one cut "
+        "on the XT, and prices wr_redraw's tick while recording",
+        needs=("marty", "qemu", "nasm"), serial=True, timeout=5400,
+        wants=("build/os8088.img", "build/waverack.o88", "build/waverack.bin",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/sound.drv", "build/mixercfg/SYSTEM.CFG",
+               "build/wrfix.img")),
     Row("xtmp3rate", "soak", py("tests/xtmp3eng.py", "--leg", "ladder",
                                 "--leg", "slowdown", "--leg", "rungfail",
                                 "--leg", "playwav", "--leg", "pause",
@@ -5631,7 +5749,10 @@ SOAK = [
         "files, so the list draws its chevron band through the PATTERN body, "
         "and the desktop's left margin must still be the checkerboard after "
         "it (the body spent CX on its tile copy and drew 65,433 pixels a row; "
-        "found on the 86Box 486 by eye). QEMU "
+        "found on the 86Box 486 by eye); and one click on that list's down "
+        "arrow must move every row up 16 pixels through the SCROLL body (it "
+        "read the row width out of CX after `mov cl, 3` and moved 24 pixels "
+        "a row - the icons - leaving the names where they were). QEMU "
         "by name on CLAUDE.md's closed list: MartyPC and the 86Box XTs have "
         "no VBE, and are the negative control for free. SOAK and not full: a "
         "feature no 8088 can reach, on a disk of its own",
@@ -18194,6 +18315,17 @@ SOAK = [
         "opens then succeed as 8-bit mono",
         needs=("marty", "nasm"), timeout=600,
         wants=("build/mixer360.img", "build/sndfmt360.img")),
+    Row("sndcap", "soak", py("tests/sndcap.py"), 60.0,
+        "SPEC.md 34.6.4 on MartyPC's DSP 2.01: verb 4 records into an "
+        "EXTERNAL ring - a ring across a 64KB page answers 7; a 16KB "
+        "CLAIM_DMA_HI ring at 11,025 Hz opens, SND_EXT_CONS zeroed, and ~2 s "
+        "later counts the rate in whole 2,048-byte blocks with verb 3 still "
+        "PLAYING (no overrun pause) and every ring byte the card's 80h; verb "
+        "2 stops the DMA and the IRQ (count and a re-zeroed ring unmoved 10 "
+        "ticks on); the legacy grant capture is unchanged (6,000 bytes, "
+        "paused, 80h read back); and a single-cycle DSP answers 7",
+        needs=("marty", "nasm"), timeout=600,
+        wants=("build/mixer360.img", "build/sndcap360.img")),
     Row("mixerhost", "soak", py("tests/mixermodel.py"), 2.0,
         "SPEC.md 34.15: the shipped mixer assembly against independent Creative "
         "register maps, all percentages and asymmetric stereo, refusals before "

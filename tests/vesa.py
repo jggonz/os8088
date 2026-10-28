@@ -42,6 +42,13 @@ be the dither afterwards. The driver's pattern body spent CX on the tile
 copy before it cut the width from it, and the three chevron rows went
 65,433 pixels each across the desktop (found on the 86Box 486 by eye, then
 here).
+
+Last, that window SCROLLS: one click on its down arrow is gfx_scroll's blit
+through the driver's VX_SCROLL, and every pixel of the list band must then
+be the pixel 16 rows below it before the click. The driver set `cl, 3` for
+its shifts and then read the row width back out of CX, so every row moved
+24 pixels - the icons - and the names stayed where they were, the exposed
+row alone lettered right (reported on a VESA desktop; 1,973 pixels here).
 """
 import os
 import signal
@@ -399,6 +406,32 @@ def main():
                 fails.append("B:\\APPS open: the desktop's left margin is not "
                              "the dither on %d row pairs (first at y=%d) - a "
                              "fill ran past its rect" % (len(bad), bad[0]))
+            # ...and it SCROLLS: one click on the list's down arrow is
+            # fm_scrollpaint's blit (gfx_scroll, the driver's VX_SCROLL) of
+            # every row up FM_ROW_H = 16 and one row lettered at the bottom.
+            # The driver cut the row width from CX after `mov cl, 3`, so
+            # every row moved 24 pixels - the icons - and the names stayed
+            # where they were (reported on a VESA desktop, then here). The
+            # pointer is parked off the window for both dumps
+            m.run("to", "600", "400")
+            os88qemu.pace(q, 0.5)
+            sw, sh, before = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            m.click(432, 269)
+            m.run("to", "600", "400")
+            os88qemu.pace(q, 1.5)
+            sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            if out_png:
+                shot.png(out_png.replace(".png", "-scroll.png"), sw, sh, pix)
+            moved = sum(1 for y in range(140, 240) for x in range(128, 420)
+                        if px(pix, sw, x, y) != px(before, sw, x, y + 16))
+            if moved:
+                fails.append("B:\\APPS scrolled one row: %d pixels of the list "
+                             "band are not the band 16 rows below them before "
+                             "the click (the scroll blit did not move the "
+                             "rows)" % moved)
+            elif before == pix:
+                fails.append("B:\\APPS: the down arrow changed nothing - the "
+                             "click missed, so the scroll was not tested")
     finally:
         pass
     if fails:

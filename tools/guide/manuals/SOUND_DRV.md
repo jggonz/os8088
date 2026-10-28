@@ -10,8 +10,8 @@ machine has. With it, programs can use FM music, digital sound and MIDI.
 
 The driver knows these kinds of sound hardware:
 
-- **AdLib**, and the FM music chip that every Sound Blaster carries. FM music
-  costs the machine almost nothing while it plays, and system beeps move to
+- **AdLib**, and the compatible OPL FM music hardware on supported sound
+  cards. FM music costs the machine almost nothing while it plays, and system beeps move to
   the FM chip too.
 - **Sound Blaster**: digital sound such as WAV files and the voices of a
   module, and recording from the card's input.
@@ -23,15 +23,21 @@ The driver knows these kinds of sound hardware:
   driver switches those sounds on for you, which on DOS needs a separate
   program.
 
-Programs that use it include the Audio Player, Tracker, MIDIRack and the
-Video Player, and several games play their music through it.
+Programs that use it include the Audio Player, Tracker, MIDIRack, XTMP3,
+WaveRack and the Video Player, and several games play their music through
+it. WaveRack records through it too: the card writes the sound straight
+into WaveRack's own memory while the disk is busy, so a take keeps going
+while it is saved.
 
 ## Why it is on the system disk
 
 Most machines of the period had no sound card, so the driver is a file on
 the system disk and not part of the system itself. It costs memory only on a
-machine that loads it: about 11K for the driver, with additional memory while
-a program plays or records digital sound.
+machine that loads it: about 7K for the driver, or 10K with a sound card whose
+mixer it can set, with additional memory while a program plays or records
+digital sound. On a 286 or newer with memory above 1MB, the driver and its
+sound buffer load into the high memory area instead, so most of that comes
+out of conventional memory.
 
 It is not loaded unless it is wanted. The first time os8088 starts on a
 machine, it checks quickly for an FM chip. If it finds one, the driver loads
@@ -79,8 +85,8 @@ panel. The thumb follows the requested percentage smoothly; arrow keys move
 it by one percent. The card applies its nearest supported hardware level.
 Opening the panel starts at the card's current setting.
 
-Open [[MIXER.O88]] from the apps disk's `APPS` folder for individual sources
-and balance. The speaker's quick volume panel controls master volume.
+Open [[MIXER.O88]] from the `APPS` folder of the 720KB, 1.2MB or 1.44MB
+apps disk for individual sources and balance. The speaker's quick volume panel controls master volume.
 These controls adjust the sound card; they do not change the built-in PC
 speaker or a Covox.
 

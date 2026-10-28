@@ -384,6 +384,16 @@ ITEMS = [
      "everything set and the live media carry them.",
      [("midirack.img", "1.44MB", ""), ("midirack120.img", "1.2MB", ""),
       ("midirack720.img", "720KB", ""), ("midirack360.img", "360KB", "")]),
+    ("progs", "WaveRack", False,
+     "A sound recorder and WAV editor with the face of an 80s digital "
+     "recorder: it records from a Sound Blaster straight onto the disk, "
+     "plays and edits WAV files of any length, and shows the waveform. "
+     "With demo clips of real music in MEDIA -- Beethoven, Joplin, Satie, "
+     "Sousa, Chopin and Bach, all public domain or CC0, listed in "
+     "CREDITS.TXT. The 1.44MB and 1.2MB disks carry all six, the 720KB "
+     "four and the 360KB two, with room to record.",
+     [("waverack.img", "1.44MB", ""), ("waverack120.img", "1.2MB", ""),
+      ("waverack720.img", "720KB", ""), ("waverack360.img", "360KB", "")]),
     ("progs", "PiXEL", False,
      "An image viewer and editor. It opens JPEG, PNG, GIF, BMP, PCX, TIFF "
      "and six more formats, shows them dithered to the desktop's colours "
