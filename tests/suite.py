@@ -5672,7 +5672,10 @@ SOAK = [
         "files, so the list draws its chevron band through the PATTERN body, "
         "and the desktop's left margin must still be the checkerboard after "
         "it (the body spent CX on its tile copy and drew 65,433 pixels a row; "
-        "found on the 86Box 486 by eye). QEMU "
+        "found on the 86Box 486 by eye); and one click on that list's down "
+        "arrow must move every row up 16 pixels through the SCROLL body (it "
+        "read the row width out of CX after `mov cl, 3` and moved 24 pixels "
+        "a row - the icons - leaving the names where they were). QEMU "
         "by name on CLAUDE.md's closed list: MartyPC and the 86Box XTs have "
         "no VBE, and are the negative control for free. SOAK and not full: a "
         "feature no 8088 can reach, on a disk of its own",
