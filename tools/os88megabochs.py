@@ -88,6 +88,9 @@ from os88megacommon import (MegaMixin, mega_images,  # noqa: E402,F401
                             hd_geometry, row_disk, _blank)
 
 GUEST_HZ = om.GUEST_HZ
+# $OS88_BOCHS_EXACT=0: waits end on the polled clock again, not on Bochs's
+# time breakpoint (MegaBochs._run_exact) - the A/B
+EXACT = os.environ.get("OS88_BOCHS_EXACT", "1") != "0"
 _WIDEN = bytes(v | v >> 6 for v in range(256))
 
 # W3C KeyboardEvent.code (MartyKey's names) -> X keysym
@@ -286,7 +289,18 @@ class MegaBochs(MegaMixin, om.Marty):
         self.box.inp.taken(stopped=self._bp_hit)
         if self._state != "running" or self._bp_hit():
             return                      # (_bp_hit records the stop itself)
-        end, kick = time.time() + 20, time.time() + 1.0
+        # A SIGINT CAN BE LOST, and the kick is what finds it: Bochs echoes
+        # the `c` as readline reads it, and bx_dbg_continue_command then
+        # CLEARS bx_guard.interrupt_requested before it runs (dbg_main.cc),
+        # so a signal landing between the two is erased. A stop made just
+        # after a resume - every exact pace (_run_exact) makes one - lands
+        # in that window on a busy box, and the kick at 1 s it had was a
+        # host second of RUNNING guest: a whole guest second spent in one
+        # look of mega-vidfskeysvga4, 1.032 s in the trace, so 7 looks where
+        # 20 fit. A SIGINT at the prompt is harmless (that same `c` clears
+        # it), so the kick comes every KICK host seconds
+        end, kick = time.time() + 20, time.time() + self.KICK
+        kicks = 1
         os.kill(self.box.p.pid, signal.SIGINT)
         nap = 0.002
         while True:
@@ -295,13 +309,20 @@ class MegaBochs(MegaMixin, om.Marty):
                 break
             if time.time() > kick:
                 os.kill(self.box.p.pid, signal.SIGINT)
-                kick = time.time() + 1.0
+                kicks += 1
+                kick = time.time() + self.KICK
             if time.time() > end:
                 raise om.MartyError("os88megabochs: no debugger prompt in 20s"
                                     " - Bochs on %s is gone or wedged"
                                     % self.box.display)
             time.sleep(nap)
             nap = min(nap * 2, 0.02)
+        if kicks > 1:
+            # ...and a kick that reached the PROMPT ends its read as an
+            # empty line, which prints a prompt more: let it land before
+            # anything counts prompts (_do measures from after it)
+            time.sleep(0.03)
+            t = self._e9(self._bpmark)
         self._stopped_now("breakpoint" if re.search(r"Breakpoint \d+,", t)
                           else "paused", t)
 
@@ -575,6 +596,7 @@ class MegaBochs(MegaMixin, om.Marty):
         self._stopped_now("paused", t)
         return self._status()
 
+    KICK = 0.05                # s: _halt's SIGINT again, until a prompt
     TB_SENTINEL = 10 ** 15     # ticks: eight years of guest at 4M
 
     def _run_exact(self, secs, count=False):
@@ -597,7 +619,8 @@ class MegaBochs(MegaMixin, om.Marty):
         toast that fits 15. With the stop costing the guest nothing
         (os88bochs.bxclock), a wait ended this way is the same on any
         box."""
-        if ob.SYNC == "realtime" or self._pumping or self._bps or \
+        if not EXACT or ob.SYNC == "realtime" or self._pumping or \
+                self._bps or \
                 self._closed or self._proc.poll() is not None:
             return None
         n = int(round(secs * ob.IPS_N))
@@ -634,11 +657,22 @@ class MegaBochs(MegaMixin, om.Marty):
                 if ob._PROMPT.search(t) and t.rstrip(" ").endswith(">"):
                     break
                 if time.time() > end:
+                    # ...and SAY HOW FAR it got: stop it and read the clock,
+                    # which tells a breakpoint that never fired from a guest
+                    # that never ran
+                    got = "?"
+                    try:
+                        self._halt()
+                        self._gt_take(self._do(["ptime"]))
+                        got = "%d" % (self._gt - g0)
+                    except om.MartyError:
+                        pass
                     raise om.MartyError(
                         "os88megabochs: %.3f guest seconds (sb %d) had not "
-                        "run after %.0f host seconds - Bochs on %s is gone, "
-                        "wedged, or at under a tenth of real time"
-                        % (secs, n, time.time() - t0, self.box.display))
+                        "run after %.0f host seconds - %s instructions had "
+                        "- Bochs on %s; the transcript since: %r"
+                        % (secs, n, time.time() - t0, got, self.box.display,
+                           t[-400:]))
                 time.sleep(nap)
                 nap = min(nap * 2, 0.01)
             self._stopped_now("paused", t)

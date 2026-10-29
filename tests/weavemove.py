@@ -309,20 +309,28 @@ def weave(r):
     ui.mo.to(bx, by)
     ui.mo.click(bx, by, settle=0.0)
     m.advance(frames=6)
-    m.run()
     st = state(win)
     cm, so = st["_w_cmseg"], st["_w_cso"]
 
     def sw(off):
         return u16(m.readseg(cm, so + off, 2))
-    os88marty.until(m, lambda _: sw(WSS_RUN) & 0xFF,
-                    "start() to hire the worker", poll=0.3, guest=30)
+    # STEPPED, the machine stopped between steps, from the serve to the
+    # reading: the ball reaches the computer's end ~3 guest seconds after the
+    # serve and comes back, its paddle drifting home to 48 - so a wait whose
+    # length is the HOST's (a poll loop on a running guest) read y0 after
+    # the chase on a slow box, and y 48 -> 48 (mega-weavemove)
+    for _ in range(300):
+        if sw(WSS_RUN) & 0xFF:
+            break
+        m.advance(frames=6)
+    else:
+        raise os88marty.MartyError("start() never hired the worker in 30 "
+                                   "guest seconds")
     cv = st["_w_cseg"]
 
     def cpu_y():
         return u16(m.readseg(cv, WSC_SPR + 2 * WSR_SIZE + WSR_Y, 2))
     y0, f0 = cpu_y(), sw(WSS_FRAMES)
-    m.pause()
     m.advance(frames=60)
     m.run()
     y1, f1 = cpu_y(), sw(WSS_FRAMES)

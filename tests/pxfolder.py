@@ -275,10 +275,15 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     check("SLIDES: the button latched", flags & 32 != 0, "flags %04X" % flags)
     M.until(m, lambda _: W("px_ndone") >= n0 + 3, "three slides", poll=0.5,
             limit=300)
-    # the picture SHOWN: px_prev's while the next one decodes hidden
+    # the picture SHOWN: px_prev's while the next one decodes hidden - read
+    # with the machine STOPPED and the Esc sent before it runs again, so a
+    # hidden decode cannot finish and flip between the reading and the key
+    # (a host-timed gap: mega-pxfolder read G8.GIF and stopped on C8.PCX)
+    m.pause()
     rec = "px_prev" if B("px_hmode") else "px_cur"
     was = m.read(base + syms[rec], 13).split(b"\0")[0].decode()
     m.key("Escape")
+    m.run()
     M.until(m, lambda _: B("px_slon") == 0, "the slideshow to stop",
             poll=0.3, limit=60)
     wait_still("still, after the slideshow")

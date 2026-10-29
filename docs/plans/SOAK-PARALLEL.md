@@ -2500,3 +2500,143 @@ CPU the rows had under `realtime`, starved `mega-trkcompact`'s ten Trackers to
 `megakbtrip`, `megapiclose` (its green arm) and `megasheet` fail at the BASE
 too, unloaded and on either clock - trip 2's typed command never hands over,
 the macro's message never comes - so they are not this.
+
+## 19. A BOCHS ROW IS A QUARTER OF A LANE — the kern_mega pass ran at a load of one
+
+**BUILT** (`tools/os88test.py` `lane_weight`, `BOCHS_PER_CORE`,
+`BOCHS_WARM`, `BOCHS_IDLE`). 18 put the 307 Bochs ports into the shared
+lane, and 18.4 then capped every Bochs guest at real time (`sync=slowdown`,
+4M instructions a guest second, and `tools/bochs/bxclock.c` so a stop costs
+the guest nothing). Together they made a Bochs row a row that spends most of
+its life WAITING: `bochs-bin` sleeps in the slowdown timer whenever the guest
+is ahead of the wall clock, which on a desktop that HLTs is nearly always. A
+lane of four such rows on a four-core box sat at a load average of ~1, and a
+pass scoped to ~388 rows, mostly `mega-*`, took ~4 hours. The lane counted
+ROWS where the cost was CORES.
+
+### 19.1 What a Bochs row costs, measured
+
+Two instruments, both on the four-core container with another soak (and, it
+turned out, another agent's Bochs rows) on the box throughout:
+
+**The guest alone** - N machines booted at once, BIOS ticks read twice 30 host
+seconds apart, `bochs-bin` + `Xvfb` CPU off `/proc` (a scratch probe, not a
+row):
+
+| guests | idle desktop: ticks/real | core/guest | busy guest (a 4M-IPS loop, no HLT): ticks/real, min-median | core/guest | box busy |
+|---|---|---|---|---|---|
+| 1 | 0.999 | 0.036 | 0.999 | 0.128 | ~1 of 4 |
+| 8 | 0.996 | 0.033 | 0.994-1.001 | 0.132 | 2.2 |
+| 16 | 1.000 | 0.030 | 0.992-1.000 | 0.120 | 3.3 |
+| 24 | - | - | **0.633-0.731** | 0.104 | **3.95** |
+| 32 | 0.999 | 0.028 | **0.300-0.386** | 0.133 | **3.99** |
+
+So the guest itself is 3% of a core idle and 13% flat out, and it keeps real
+time until the BOX runs out - not before. Sixteen flat-out guests beside
+another soak still kept it; twenty-four did not.
+
+**The row** - a whole kern_mega row run by hand under a process-tree sampler
+(`mega-sheetdel`, `mega-vidgrey`): **0.1-0.25 of a core** steady (the
+harness's reads, `xdotool`, `xwd`), and **~0.5 for its first ~5 s** - the
+script's imports, the map, the disks it builds, Xvfb, Bochs starting.
+
+### 19.2 The rule
+
+The emulator lane is a BUDGET of `--marty-jobs` cores. A row needing Bochs
+and no other emulator weighs `cpus / BOCHS_PER_CORE`; every other row weighs
+1 exactly as before, so a lane of MartyPC, QEMU and 86Box rows is the old
+lane. Three refinements, each from a measurement:
+
+- **A starting row weighs a whole lane** for its first `BOCHS_WARM` = 15 host
+  seconds. The first pass admitted sixteen at once: the box held 4.0 of 4
+  cores for a minute while the lane filled, and in that minute two rows
+  failed that are host-sensitive (`mega-vidfskeysvga4`, `mega-dosmouevt` -
+  19.3 has what each turned out to be). A row's first seconds are its
+  dearest, so the warm-up fills the lane in four waves of four instead.
+- **A fractional row waits for `BOCHS_IDLE` = 0.75 idle cores** over the last
+  3 s, read off `/proc/stat`, so it counts EVERYBODY's load - another soak, a
+  `make`, an agent - and not only the lane's own weights. A lane with none of
+  our rows running always admits one, so the gate cannot stall a run.
+- **The pick is never passed over for size**: when the row the lane's order
+  chooses does not fit, the lane waits rather than filling the room with
+  lighter rows behind it, which would hold a whole-lane row out until the
+  last Bochs row had run.
+
+`BOCHS_WARM` and `BOCHS_IDLE` are HOST quantities and that is legitimate for
+exactly the reason a timeout is not: they decide WHEN a row starts, never
+what it does. `--bochs-per-core N` / `$OS88_BOCHS_PER_CORE` set the weight
+(`tools/os88soak.py` passes it through and records it in `meta.json`;
+`status` prints it), `$OS88_BOCHS_WARM` and `$OS88_BOCHS_IDLE` the other
+two, and **`--bochs-per-core 1` is the old lane**, which is the A/B.
+
+**Why 4 and not more.** The correctness argument is 18.4's: a guest capped at
+real time is the same machine on any box, so packing changes nothing a row
+asserts SO LONG AS EVERY GUEST STILL GETS ITS SHARE. Past that each guest
+runs slower than real time. The guest-clock waits absorb that, but not every
+wait is the guest's - `os88bochs.Box.until`'s and `up`'s budgets, `GLASS`,
+`ui_done`'s hold, `_run_exact`'s *"under a tenth of real time"* backstop and
+the serial mouse's fallback chain are host seconds - so the width
+must stay UNDER saturation, not merely near it. Four a core is sixteen rows
+on four cores: 1.6-4 cores of rows by 19.1 at the worst, sixteen FLAT-OUT
+guests kept real time in the probe, and the idle gate covers the rest. On
+the measured set it left three cores idle (19.3), and 6 a core passed too -
+but twenty-four flat-out guests is where the probe saturated, so 4 is the
+default that holds in the worst case rather than the typical one. 19.1's
+numbers predate b46662b5, which makes a halted guest's X-GUI `select` a
+poll; the post-fix runs in 19.3 read LOWER box load per row, not higher.
+
+### 19.3 The runs
+
+The validation set: 39 Bochs ports - `mega-stikmenu`, `-assocopen`, `-czto`,
+`-vidfskeysvga4`, `-redlinechipvga-tune`, `-tpdraw`, `-dosmouevt` and 32
+drawn at random - plus the standalone `lemmega`, `x3mega`, `pxmega` and
+`megasheet`, which are not `serial` and run in the HOST lane at `-j` as
+before (18.3), unchanged by this. `--marty-jobs 4 -j 4`, from a worktree.
+"Lane" is the emulator lane's own wall time, from the last host-lane row to
+the end; `mega-czto` is the set's longest row and so the lane's floor at any
+width.
+
+**On the tree with 8d57160d and b46662b5** (the serial mouse's paced
+double-click; bxclock's non-blocking X-GUI `select` and the 50 ms SIGINT
+re-kick), on an otherwise idle box:
+
+| `--bochs-per-core` | rows | lane | whole run | box busy, mean (of 4) | Bochs at once, max |
+|---|---|---|---|---|---|
+| 1 (the old lane) | 43/43 | 601 s | 701.4 s | 0.40 | 4 |
+| **4** | **43/43** | **320 s** | 427.2 s | 0.85 | 11 |
+| **4** | **43/43** | **304 s** | 404.2 s | 0.66 | 12 |
+| 6 | 43/43 | 260 s | 360.0 s | 0.74 | 14 |
+
+So 4 a core is **1.9x** on the lane and the box still has three cores idle;
+the lane is now bounded by `mega-czto` (~208 s) and the set's script
+groups, not by width - which is why 6 buys only another 15%. Every row's
+wall time is the same at every width (czto 203-210 s), which is the point:
+packing changed when rows ran and nothing about how.
+
+**Before those two fixes**, the same set beside another soak and another
+agent's Bochs rows: `--bochs-per-core 1` 43/43, lane 791 s; 4 a core 43/43
+(lane 392 s), 42/43, 43/43 and 42/43 over four runs. Every failure there was
+one of three things the fixes have since diagnosed, and each failed at
+`--bochs-per-core 1` and in that other soak too, so none was the width:
+`mega-trkcompact` (a halted CPU slept the host in the X GUI's `select`, so a
+Tracker guest at 8 kHz PIT ran at an eighth of real time; it failed at every
+width and was left out of the set), `mega-vidfskeysvga4` (a lost SIGINT
+let a 0.045 s look run a guest second), and the seven SERIAL-mouse rows
+(`OS88_BOCHS_MOUSE=serial`), whose double-click was the one input still
+spaced in host seconds - run as a set twice at each width they failed 4 of
+14 at 1 a core and 2 of 14 at 4. An attempt here to give those rows the
+lane to themselves doubled the lane's wall and still failed 2 of 7, and was
+reverted; 8d57160d is the real fix.
+
+### 19.4 What it buys the whole pass
+
+PREDICTED, not measured: the last full pass at the old lane, 388 rows mostly `mega-*`, took 4:03:54. Of it,
+the 307 Bochs ports declare 27,025 s, which four lanes take ~6,750 s at the
+least; sixteen take ~1,700 s, where the floor is the largest script group,
+`vidpage`'s 26 rows at 1,955 s declared (`lane_locks` runs a script's rows
+end to end). So that part of a pass goes from ~2 hours to ~35-40 minutes at
+the same pass rate (the 1.9x above, bounded by script groups), and the 41 standalone Bochs rows in the host lane are
+untouched - several of them run two to four machines in threads
+(`megavidv2`, `megavidring`, `megapiclose`, `megasweep`, ...) with
+`cpus=1`, so a fractional weight would undercount them; moving them wants a
+declared machine count first.

@@ -200,7 +200,7 @@ def bxclock():
     os.makedirs(d, exist_ok=True)
     tmp = "%s.%d.tmp" % (so, os.getpid())
     r = subprocess.run([cc, "-O2", "-Wall", "-shared", "-fPIC", "-o", tmp,
-                        BXCLOCK_SRC], capture_output=True, text=True)
+                        BXCLOCK_SRC, "-ldl"], capture_output=True, text=True)
     if r.returncode:
         raise RuntimeError("os88bochs: %s failed on %s:\n%s"
                            % (cc, BXCLOCK_SRC, r.stderr))
@@ -776,6 +776,9 @@ class Box(object):
                       " ".join(map(str, running(self.display)))))
         bld = build or os.path.join(ROOT, "build")
         self.build = bld
+        # THIS machine's instructions a guest second (guest_sleep)
+        self.ips = (ips if ips and not os.environ.get("OS88_BOCHS_IPS")
+                    else IPS_N)
         self._map = None
         self.captured = False
         self.inp.regrab = False
@@ -999,6 +1002,34 @@ class Box(object):
         if self._map is None:
             self._map = kmap(self.build)
         return self._map[name]
+
+    def ptime(self):
+        """Bochs's instruction clock, read in one stop of the guest."""
+        m = re.findall(r"ptime: (\d+)", self.dbg(["ptime"]))
+        if not m:
+            raise RuntimeError("os88bochs: no answer to `ptime`")
+        return int(m[-1])
+
+    def guest_sleep(self, secs, poll=0.05):
+        """Let the guest run SECS of ITS OWN seconds (`ptime` over this
+        machine's ips), however long the host takes to give them. A
+        time.sleep() between two inputs is a HOST interval, and how much of
+        the guest it holds is how much CPU this Bochs got meanwhile: with
+        four Bochs to a core megavidv2's "Space, then Space again a second
+        in, while the blocks are coming" paused before the first frame had
+        drawn, and both tails were wrong. Read every POLL host seconds, one
+        stop each, which costs the guest nothing (bxclock), so it overshoots
+        by at most a poll's worth of running. A backstop at 10x real time
+        plus 30 s names a machine that stopped running."""
+        want = int(secs * self.ips)
+        t0, end = self.ptime(), time.time() + 30 + 10 * secs
+        while True:
+            time.sleep(poll)
+            if self.ptime() - t0 >= want:
+                return
+            if time.time() > end:
+                raise RuntimeError("os88bochs: %.2f guest seconds not run in "
+                                   "%.0f host seconds" % (secs, 30 + 10 * secs))
 
     def at_prompt(self, cmds, timeout=20.0):
         """`dbg` for a machine that is ALREADY at the debugger's prompt -

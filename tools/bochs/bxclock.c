@@ -28,8 +28,11 @@
  * 0.59-0.61 with it, against 0.42-0.45 with no stop at all.
  */
 #define _GNU_SOURCE
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
 #include <time.h>
 
 static int64_t bx_base_real, bx_base_mono, bx_last, bx_off, bx_gap = -1;
@@ -59,4 +62,50 @@ time_t time(time_t *tp)
     if (tp)
         *tp = r;
     return r;
+}
+
+/* AND A HALTED CPU COSTS THE HOST NO SLEEP. Debian's Bochs is built with
+ * BX_USE_IDLE_HACK: every HLT (cpu/proc_ctrl.cc's enter_sleep_state) calls
+ * the X GUI's sim_is_idle, which waits up to a millisecond in select() for
+ * an X event. That millisecond is the HOST's and buys the guest only the
+ * ticks to its next timer event, so a guest that halts N times a guest
+ * second runs at most 1000/N of real time: kern_mega's idle task halts
+ * after every IRQ0, and a PIT reprogrammed to 8 kHz (Tracker's speaker
+ * player on a card-less machine) made the guest an eighth of real time -
+ * 0.35M instructions a host second at 4% CPU, mega-trkcompact's 4.5 guest
+ * seconds not run in 45 host seconds. The slowdown timer already caps the
+ * guest at real time and sleeps when it is ahead, so the idle hack's sleep
+ * is only ever a loss here: a select() called FROM the X GUI plugin with a
+ * timeout is made a poll. Every other caller's select() is untouched.
+ */
+static int bx_from_xgui(void *ra)
+{
+    static void *yes, *no;
+    Dl_info d;
+    if (ra == yes)
+        return 1;
+    if (ra == no)
+        return 0;
+    if (dladdr(ra, &d) && d.dli_fname && strstr(d.dli_fname, "x_gui")) {
+        yes = ra;
+        return 1;
+    }
+    no = ra;
+    return 0;
+}
+
+int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv)
+{
+    static int (*real)(int, fd_set *, fd_set *, fd_set *, struct timeval *);
+    static int keep = -1;           /* OS88_BXIDLE=1: the hack's sleep back */
+    struct timeval zero = {0, 0};
+    if (!real) {
+        real = (int (*)(int, fd_set *, fd_set *, fd_set *, struct timeval *))
+            dlsym(RTLD_NEXT, "select");
+        keep = getenv("OS88_BXIDLE") != NULL;
+    }
+    if (!keep && tv && (tv->tv_sec || tv->tv_usec) && !w && !e &&
+            bx_from_xgui(__builtin_return_address(0)))
+        tv = &zero;
+    return real(n, r, w, e, tv);
 }

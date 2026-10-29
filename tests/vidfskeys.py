@@ -459,10 +459,18 @@ def main():
                                        for q in range(3)) > 6:
                                     bad_ = True
                                     break
-                    finally:
+                    except BaseException:
                         m.run()
+                        raise
                     miss += bad_
-                    os88marty.pace(m, 0.01)
+                    # ...and ON from the look by an ADVANCE, the machine
+                    # stopped again at its end: what a look costs the guest
+                    # is then this and nothing the host spent around it (a
+                    # run, then a pace, ran the guest for every host
+                    # millisecond between them - 5 looks of 20 on a busy box)
+                    m.advance(cycles=int(0.01 * os88marty.GUEST_PACE *
+                                         os88marty.GUEST_HZ))
+                m.run()
                 return looks, miss, clip
 
             def mem():
