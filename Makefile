@@ -2298,7 +2298,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
         lemmings lemmingsdisk lemmings-data lembench xt-lemmings 386-lemmings \
-        checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
+        checkdocs test-fast test-full test-soak clean clean-cc clean-marty clean-watcom distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
 # below). The testing apps are on-demand only: `make bench`.
@@ -18653,6 +18653,11 @@ pentium: $(IMG) $(APPSIMG)
 # them - build/apple2-rom/APPLE2.ROM - is an output and goes, so a rebuild
 # still re-checks every SHA-256 and re-assembles the part.
 #
+# ...and build/watcom by the same test: Open Watcom, the compiler WIN16's
+# Windows 3.x test programs are built with (SPEC.md 124,
+# tools/setup-watcom.sh), is a ~150 MB FETCH of a pinned release.
+# `clean-watcom` is the escape hatch.
+#
 # ...and build/gbtest and build/rgbds, the Game Boy's, by the same test: the
 # test ROMs tools/getgbtest.py fetches at pinned SHA-256s and the assembler
 # tools/gbclock.py builds from a pinned clone. Thrown away, the rgbds rows
@@ -18660,6 +18665,7 @@ pentium: $(IMG) $(APPSIMG)
 clean:
 	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc ! -name cc \
 		! -name apple2-rom ! -name nasm3 ! -name gbtest ! -name rgbds \
+		! -name watcom \
 		-exec rm -rf {} + 2>/dev/null || true
 	@rm -f $(BUILD)/apple2-rom/APPLE2.ROM
 
@@ -18677,7 +18683,10 @@ clean-nasm3:
 clean-gb:
 	rm -rf $(BUILD)/gbtest $(BUILD)/rgbds
 
-distclean: clean clean-marty clean-cc clean-nasm3 clean-gb
+clean-watcom:
+	rm -rf $(BUILD)/watcom
+
+distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 
 # Standalone 1942: committed artwork, compiled into adapter-native banks.
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json

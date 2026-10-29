@@ -95,8 +95,10 @@ Six findings shape everything below.
    - **Windows 3.1 builds:** compiled `-G2` for the 286, but a real-mode 286
      program only adds 186-level instructions. The 286's own additions are
      protected-mode system instructions (`0F xx`, `arpl`) that an application
-     does not issue. So a 3.1 WINMINE or CALC is expected to run on a V20 too,
-     and S1 checks it when the owner supplies one.
+     does not issue. MEASURED: Microsoft's WINMINE.EXE 3.10 is 80186 with no
+     286 opcodes, so it runs on a V20. CALC.EXE 3.10 is 186 plus x87, and its
+     few `0F`/`66` hits sit in the x87 code's data, for S1's recursive sweep
+     to confirm.
 
 5. **Calculator needs floating point; Minesweeper does not.** MEASURED:
    - **CALC 3.00:** imports `WIN87EM.__FPMATH`, carries 288 `wait`+ESC x87
@@ -131,9 +133,10 @@ Six findings shape everything below.
 
 ## The programs, MEASURED
 
-The samples live outside the tree, in `~/Repos/win16-samples` (provenance and
-SHA-256 in its `README.txt`). **No Microsoft binary is ever committed.** The
-build takes them from `WIN3X=<dir>`.
+The samples live in the git-ignored `win16ref/`, which the win16-reference
+skill recreates from archive.org and minesweepergame.com, every file
+SHA-256-pinned. **No Microsoft binary is ever committed.** The build takes
+them from `WIN3X=<dir>`.
 
 | | WinMine 2.9 (Duff Software, July 1990) | CALC 3.00 (Windows 3.0) |
 |---|---|---|
@@ -155,8 +158,31 @@ shared: USER 77, KERNEL 30, GDI 16, SOUND 6 and WIN87EM 1. The exact lists
 are in the diary's 2026-10-28 entry, and S1 makes them a checked-in census
 report that the build regenerates from `WIN3X`.
 
-A Windows 3.1 `WINMINE.EXE` or `CALC.EXE` is welcome when the owner has one.
-The layer is not built for one release, and S1 censuses whatever it is given.
+**Windows 3.1's own programs** came out of a from-scratch install off the
+retail floppies (below). They are the same shapes, grown:
+
+| | WINMINE.EXE 3.10 | CALC.EXE 3.10 |
+|---|---|---|
+| SHA-256 | `633c1328…eb0c35f81b` | `09b5e717…a586468cf` |
+| file | 27,776 bytes, expected version 3.10 | 43,072 bytes, 3.10 |
+| CPU | **80186** | **80186** + x87 |
+| modules | KERNEL, GDI, USER, SOUND, **SHELL** | KERNEL, GDI, USER, WIN87EM, **SHELL** |
+| new over 3.0 | `ShellAbout`, `__WINFLAGS`, `DOS3Call`, `BitBlt`, `CreateDIBitmap`, `CreateCompatibleDC`, `SetPixel`, `GetPrivateProfileString`; **1bpp twins of all three bitmaps** (410/411, 420/421, 430/431) for monochrome displays | `ShellAbout`, `__WINFLAGS`, `DOS3Call` |
+| menus | Game: New, Beginner/Intermediate/Expert/**Custom…**, Marks (?), **Color**, **Best Times…**, Exit | as 3.0, shortcuts Ctrl+C/Ctrl+V |
+
+**The reference machines.** The skill `.claude/skills/win16-reference`
+recreates two QEMU machines from archive.org into the git-ignored
+`win16ref/`: MS-DOS 6.22 with **Windows 3.0 installed from its seven 720K
+disks** (run in real mode, `win /r`), and MS-DOS 6.22 with **Windows 3.1
+installed from its retail 1.44MB disks** (standard mode). Their screenshots
+are what S4–S10 are compared against. Three findings came off them already:
+
+- **Calculator's `2.01 - 2` is `0.00`** on both 3.0 and 3.1, so S9's oracle
+  is the real program's answer.
+- **A Windows menu check mark is a ✓ glyph**, not `os88ui.inc`'s solid
+  square (D8).
+- **WinMine 2.9 runs in real mode** exactly as WIN16 will run it, on an
+  8086-class layout of memory, so it is the closest reference there is.
 
 ---
 
@@ -206,10 +232,17 @@ they stand on.
   - `make win16census WIN3X=<dir>` runs it over every `.EXE` and `.FON` in
     the user's directory.
   - The vendored ordinal tables go in `apps/win16/spec/`.
-  - A committed **synthetic fixture**, `tests/win16/hello16.asm`: an NE
-    assembled by `nasm -f bin` with a hand-built header. It calls
-    MessageBox, registers a class, creates a window, paints and takes a
-    timer, so every gate has something to load without the user's files.
+  - **Fixtures, two kinds** (D10):
+    - **A minimal NE assembled by `nasm -f bin`**, `tests/win16/tiny16.asm`,
+      with a hand-built header. It needs no compiler, so the fast row can
+      always run.
+    - **Win16 programs in C**, `tests/win16/*.c`, built by Open Watcom
+      (`tools/setup-watcom.sh`, `-0 -bt=windows -l=windows`) with
+      `make win16fixtures`. Each covers one story's API: MessageBox; a class,
+      a window, a paint and a timer; a menu; a dialog; a profile; a bitmap.
+      Every fixture is run on the reference machines first, so its expected
+      picture is Windows' own.
+    - Without the user's files, every gate still has something to load.
   - *Verify:* a fast row over the fixture (`win16ne`). Over the samples it
     must reproduce this plan's table: WinMine 2.9 is 186, and CALC 3.00 is
     8086 plus x87.
@@ -275,9 +308,10 @@ they stand on.
     (SPEC.md §39).
   - **The cost rule:** priced in primitive calls, not pixels (PERFORMANCE.md
     Part 5).
-  - *Verify:* the fixture's test card, and a side-by-side against Windows 3.0
-    reference screenshots where those exist; a call counter on a full
-    Minesweeper repaint written into the diary.
+  - *Verify:* the fixture's test card, and a side-by-side against the
+    reference machines' screenshots (`win16ref/ref/`, the win16-reference
+    skill) on VGA, and on EGA and CGA after their `SETUP`; a call counter on a
+    full Minesweeper repaint written into the diary.
 
 - [ ] **S5: Resources and menus.** *As a user the program's menu bar sits in
   its window as it did on Windows, its shortcuts work, and its check marks
@@ -390,12 +424,13 @@ Taken by the owner on 2026-10-28 unless marked otherwise.
 | D1 | CPU floor | **V20.** The census at load decides per program: 8086-clean runs everywhere, 186 needs a V20/V30/186/286+, and an 8088 refuses a 186 program with the reason. No 8088 translation tier | Load-time translation of 186 opcodes for the 8088, or interpreting the program's code: not wanted |
 | D2 | Where the program runs | **A coroutine on the UI task** (finding 3) | A worker task (SPEC.md §20.6): no file access, and paint deferred out of `W_PAINT`, so every exposure draws twice |
 | D3 | Memory model (recommendation; not raised) | Every segment fixed in one arena claim; nothing moves or discards; `GlobalAlloc` sub-allocates inside a second claim (8 claims per owner, SPEC.md §50.3) | Real-mode Windows' movable segments: `INT 3Fh` loader stubs and BP-chain walking, for two programs that fit easily |
-| D4 | Fonts | **What Windows showed on that display**, so the programs look as they did on Windows. MEASURED from Windows 3.0's `VGASYS.FON`: VGA's System font is proportional, 10 pt, **16 px high, average width 7, maximum 14, ascent 13**. VGA uses Wine's System font's 16 px strike (`fonts/system.sfd`), converted on the host into an `.F88` face (SPEC.md §6.3) and drawn through `os88type.inc`. EGA, CGA and Hercules use their own Windows system-font sizes: those `.FON`s ship only on the Windows setup disks, which the archive.org install does not carry, so S1 measures them from the owner's disks when supplied, and S4 draws os8088 strikes to those metrics from source art (CLAUDE.md's artwork rule) where they are not. A user's own Windows `.FON` in the `WIN16` folder is preferred when present. Dialog units follow the font, as on Windows | os8088's 8x8 cell everywhere: dialogs half height on VGA and nothing like Windows |
+| D4 | Fonts | **What Windows showed on that display**, so the programs look as they did on Windows. MEASURED from Windows 3.0's setup disk 2 (`CGASYS`, `EGASYS`, `VGASYS.FON`), all proportional with maximum width 14: **CGA 8 px (average 7, ascent 7); EGA 12 px (7, 10); VGA 16 px (7, 13)**. **Hercules uses EGA's 12 px font**: `SETUP.INF` gives it EGA's resolution class, `133,96,72`. VGA's face comes from Wine's System font, whose 16 px strike matches (`fonts/system.sfd`). CGA's and EGA's come from Windows' own `.FON` when the user supplies their Windows directory, and otherwise from os8088 strikes drawn to those metrics from source art (CLAUDE.md's artwork rule). Each is converted on the host into an `.F88` face (SPEC.md §6.3) and drawn through `os88type.inc`. Dialog units follow the font, as on Windows | os8088's 8x8 cell everywhere: dialogs half height on VGA and nothing like Windows |
 | D5 **gate** | Floating point without a coprocessor | Emulate only the census's opcode subset, as a part. The subset comes from S1 | A whole x87 emulator, or refusing CALC on FPU-less machines |
 | D6 | Kernels | **`kern_big` and `kern_emu`.** `kern_mega` refuses (`OS88_MEGA_REFUSE`, SPEC.md §20.18). `kern_small` lacks `OSAPI_WM_TIMER` (SPEC.md §13.9), so its disks do not carry it (§24.5) | A kern_mega arm giving programs real selectors, winevdm's model: later |
 | D7 | Sources and licence | **Bring in whatever is needed from Wine and winevdm.** `apps/win16/` becomes GPL-2.0-or-later (finding 6), `apps/apple2`'s footing. Microsoft binaries are still never committed | Clean-room MIT: slower, and gains nothing the owner wants |
-| D8 | Menus and check marks | **The in-window bar, `OS88UI_MENU`** (SPEC.md §13.16): a Windows program's menu bar is inside its window, the element already draws a tick, and the package owns it, so it costs no kernel bytes. If the solid-square tick should become Windows' check glyph, that is an `os88ui.inc` option, shared source | The kernel's global bar: at most 5 menus, no check marks, and not where Windows put it |
+| D8 | Menus and check marks | **The in-window bar, `OS88UI_MENU`** (SPEC.md §13.16): a Windows program's menu bar is inside its window, and the package owns it, so it costs no kernel bytes. The element's tick is a solid square, and the reference machines show Windows drawing a ✓ glyph, so S5 adds a check-glyph option to `os88ui.inc` (shared source) | The kernel's global bar: at most 5 menus, no check marks, and not where Windows put it |
 | D9 | Name | **`WIN16.O88`**, `apps/win16/` | — |
+| D10 | Compiler for Win16 TEST programs | **Open Watcom v2** (`tools/setup-watcom.sh`): the dated `2026-10-01-Build` snapshot, SHA-256-pinned, ~150 MB, into `build/watcom/`, which `make clean` spares. It runs natively on this Mac (`armo64`) and builds genuine Win16 NE programs with 8086 code (`-0`). MEASURED: a 1,906-byte HELLO16.EXE built this way runs on the Windows 3.0 reference machine in real mode. The shipped layer stays 8086 assembly (D7) | gcc-ia16: no Win16 target, and harder to install here. SmallerC (SPEC.md §73): no `long`, so no Win16 API |
 
 ---
 
@@ -458,7 +493,7 @@ docs/INDEX.md was read first.
 | Wine (`github.com/wine-mirror/wine`) | `0738d528db522f52d9d75f2aec712688dd31d1d2` | LGPL-2.1+ | the `krnl386`, `user`, `gdi` and `shell` `.spec` ordinal tables (vendored); `fonts/system.sfd` (the System font); the logic of `dlls/krnl386.exe16/ne_segment.c` (relocations at lines 132–326, prolog patching at 510–574), `ne_module.c` (task start, 1062–1084), `task.c` (InitTask, MakeProcInstance), `dlls/user.exe16/dialog.c` (templates); `include/winnt.h` and `include/wine/winbase16.h` (structures and flags); `tools/winedump/ne.c`, to check `os88ne.py` against |
 | winevdm / otvdm (`github.com/otya128/winevdm`) | `b88d7f8736d77baa5710eb0c35f81b489540c1a0` | GPL-2 (any version); Wine-derived files LGPL-2.1+ | the `sound` and `win87em` modules and their `.spec`s; the behaviour of the Win16 USER and GDI on real programs; issues #181 (WinMine's width) and #60 (CALC) |
 | Microsoft KB Q11979, Q78326, Q79194, Q72540; *Windows Internals* (Pietrek); *Undocumented Windows* (Schulman) | — | references | prologs, real mode vs protected mode, `__AHINCR`, the CALC bug |
-| the sample binaries | SHA-256s in `~/Repos/win16-samples/README.txt` | Microsoft's and Duff Software's; never committed | census, testing and reference screenshots |
+| the sample binaries and the reference machines | archive.org `disk-1_202602` (MS-DOS 6.22), `microsoft-windows-3.0-3.5-720-k`, `windows-3.1-disks` (3.10.103), `w-3_20231227`; minesweepergame.com WinMine 2.6–2.9. Every file SHA-256-pinned in `.claude/skills/win16-reference/scripts/win16ref.py` | Microsoft's and Duff Software's; never committed, kept in the git-ignored `win16ref/` | census, testing, and the real Windows 3.0 and 3.1 to compare against |
 
 ---
 

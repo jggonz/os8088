@@ -895,6 +895,12 @@ band and one blit, cached element keys, and full / mid / compact layouts so
 every adapter gets a face — is `.claude/skills/retro-face`
 (`/retro-face <app> [mockups]`), whose `LESSONS.md` is what CDRack (SPEC.md
 §119.6) learned.
+The real Windows 3.0 and 3.1 that SPEC.md §124's layer is held to - MS-DOS
+6.22 and a from-scratch install of each under QEMU, built from archive.org
+floppies into the git-ignored `win16ref/`, with the sample programs and
+reference screenshots - is `.claude/skills/win16-reference`
+(`/win16-reference`); its script recreates the lot and its traps are what
+getting Windows to boot here cost.
 
 ## Shared agent skills
 

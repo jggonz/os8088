@@ -184,3 +184,84 @@ MS-DOS boot disk would be the other route. That is a question for the owner.
 run had passed only because the new plan was not yet tracked: `checkdocs`
 reads tracked files. A citation split across a line break failed it once the
 plan was tracked.
+
+## 2026-10-28 — the real Windows 3.0 and 3.1, installed from floppies
+
+**Asked:** "Use files from archive.org to get your Windows 3.0 reference
+running", then "install Windows 3.0 from scratch… or Windows 3.1", then
+"save the installed instance in a local .gitignored directory and create a
+skill that explains how to recreate this installation".
+
+**Why the first attempts hung.** Booting archive.org's pre-installed tree on
+genuine MS-DOS 6.22 hung exactly as it had on FreeDOS. QEMU's monitor said why:
+`VM status: paused`. QEMU's `fat:rw:` directory drive had hit a write error on
+Windows' first write, and QEMU pauses a guest on a disk error. On a raw
+FAT16 image the same tree reached the desktop at once. So the FreeDOS result
+in the previous entry was never really FreeDOS's.
+
+**From scratch, Windows 3.0.** The DOS disk was a blank 33.5 MB image
+partitioned and formatted by mtools, then made bootable by `FDISK /MBR` and
+`SYS C:` from a copy of DOS 6.22 disk 1. Setup ran off the seven 720K disks,
+swapped through QEMU's monitor:
+
+- the defaults (VGA, PS/2 mouse);
+- printers, application search and on-line documents unchecked;
+- Return to DOS.
+
+Its CALC.EXE is byte-identical to archive.org's pre-installed one.
+
+**From scratch, Windows 3.1** (3.10.103 retail, 1.44MB): Express Setup, the
+name `os8088`, disks 2–6, "No Printer Attached", Skip Tutorial. Express never
+asked for disk 7.
+
+**What they showed.**
+
+- **WinMine 2.9 under real-mode Windows 3.0** is titled "Win Mine", and its
+  Game menu marks Beginner, Sound and Marks with a ✓ glyph. That glyph is not
+  os88ui's square, which changes D8 from "if" to "S5 adds it".
+- **Calculator** draws its keys itself as colour `RoundRect`s, as the census
+  said. Scientific view's panel is the dialog template.
+- **`2.01 - 2 = 0.00` on 3.0 and on 3.1.** The famous bug is on the glass,
+  and it is S9's oracle.
+- **Microsoft's Minesweeper 3.10 is 80186**, so the V20 floor covers it. It
+  ships 1bpp twins of its three bitmaps, imports `SHELL.ShellAbout`, and adds
+  Custom…, Color and Best Times… to the Game menu.
+- **The adapters' system fonts** are on Windows 3.0's disk 2, SZDD-compressed:
+  CGA 8 px, EGA 12 px and VGA 16 px. `SETUP.INF` gives Hercules EGA's
+  resolution class, so EGA's font.
+
+**Kept.** Everything is in `win16ref/` (git-ignored, 170 MB): the downloads,
+both installs (each with a pristine copy), the samples and ten reference
+screenshots. The skill `.claude/skills/win16-reference` holds the script that
+recreates it end to end. Its first unattended run found a bug of its own (a
+missing parent directory before `unzip -d`), which is fixed.
+
+## 2026-10-28 — Open Watcom, for the test programs
+
+**Asked:** "is there a C toolchain that would help us get what we need if
+your C toolchain isn't enough?" Then: "Open Watcom works for me."
+
+**Why it was needed.** SmallerC (SPEC.md §73) has no `long`, and the Win16
+API is built on `LONG`. So it cannot build a Windows program, and S1's
+fixtures would have been NE headers assembled by hand.
+
+**What Open Watcom turned out to be.** Its release page offers installers
+for Linux, Windows, DOS and OS/2 only. The CI snapshot tarball also carries
+macOS builds: `armo64` for Apple Silicon and `bino64` for Intel. The
+monthly dated release (`2026-10-01-Build`) has the same tarball as a fixed
+asset, which makes a SHA-256 pin possible. `tools/setup-watcom.sh` fetches
+it, unpacks only this host's binaries, the headers and the 16-bit libraries,
+and proves the result with a canary: a MessageBox program that must link as
+a Windows NE importing USER.
+
+**First program.** `HELLO16.EXE` (1,906 bytes, `-0`, so 8086 code) registers
+a class, creates a window and paints a line of text. Run on the Windows 3.0
+reference machine in real mode:
+
+- **The first build** showed its window and an hourglass, and painted
+  nothing. Its `WndProc` was not `__export`ed, so Windows' loader never
+  patched the prologue that loads the program's DS. The callback ran on the
+  wrong data segment.
+- **Rebuilt with `__export`**, it painted "Hello from Open Watcom".
+
+That failure is exactly S2's prologue patching, seen from the other side.

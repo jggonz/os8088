@@ -224626,6 +224626,7 @@ Calculator (`CALC.EXE`, Windows 3.0's).
 | kernels | `kern_big` and `kern_emu`. `kern_small` omits it (§24.5): it has no `OSAPI_WM_TIMER` (§13.9). `kern_mega` refuses with `OS88_MEGA_REFUSE` (§20.18) |
 | CPU | the layer's own code is `cpu 8086`. The programs it runs are checked by §124.4's census: an 8086-clean program runs on every machine, and a 186 program needs a V20/V30/186 or better |
 | binaries | **no Microsoft file is ever in the tree.** The user supplies them: `make win16census WIN3X=<dir>` and `make win16disk WIN3X=<dir>` |
+| test programs | Win16 programs written in C under `tests/win16/` and built by Open Watcom v2 (`tools/setup-watcom.sh`, a pinned upstream instrument in `build/watcom/`, never committed), plus one NE assembled by NASM that needs no compiler |
 | sources and licence | code and data are brought in from Wine (LGPL-2.1+) and winevdm (GPL-2, any version) at the commits the plan pins: the `.spec` ordinal tables vendored in `apps/win16/spec/`, Wine's System bitmap font, and the loader, dialog and control logic translated into 8086 assembly. **`apps/win16/` is therefore GPL-2.0-or-later**, and `COPYING` and `README.TXT` ship beside `WIN16.O88`, `apps/apple2`'s footing (docs/APPLE2-SPEC.md section 1.3). The rest of the tree is unaffected |
 | look | what Windows 3.0 showed on that display: the program's menu bar inside its window (`OS88UI_MENU`, §13.16), controls drawn as Windows drew them, and text in that adapter's Windows System font (§124.7) |
 
@@ -224762,7 +224763,8 @@ host:
 | adapter | face | source |
 |---|---|---|
 | VGA | System 10 pt, 16 px high, average width 7, maximum 14, ascent 13 (MEASURED from Windows 3.0's `VGASYS.FON`) | Wine's `fonts/system.sfd` 16 px strike |
-| EGA, CGA, Hercules | the sizes Windows' `EGASYS`, `CGASYS` and `HERCSYS.FON` carry | measured from the owner's setup disks when supplied (they are not in the archive.org install); otherwise os8088 strikes drawn to those metrics from source art |
+| EGA and Hercules | System, 12 px high, average width 7, maximum 14, ascent 10 (MEASURED from `EGASYS.FON`; Hercules shares EGA's resolution class `133,96,72` in Windows' `SETUP.INF`, so it gets this font) | Windows' own `EGASYS.FON` from the user's Windows directory, otherwise an os8088 strike drawn to these metrics from source art |
+| CGA | System, 8 px high, average width 7, maximum 14, ascent 7 (MEASURED from `CGASYS.FON`) | Windows' own `CGASYS.FON` from the user's Windows directory, otherwise an os8088 strike drawn to these metrics |
 
 A Windows `.FON` the user puts in the `WIN16` folder is preferred over the
 built-in face.

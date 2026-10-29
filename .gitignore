@@ -46,3 +46,10 @@ docs/excelfileformat.pdf
 
 # User-supplied cartridge; extracted graphics are build outputs only.
 /1942.nes
+
+# The WIN16 reference machines (SPEC.md 124, .claude/skills/win16-reference):
+# MS-DOS 6.22 + Windows 3.0/3.1 installs, their archive.org downloads and the
+# sample programs. Microsoft's and Duff Software's, so NEVER committed;
+# `win16ref.py all` recreates the lot.
+/win16ref/
+/win16ref-*/
