@@ -157,7 +157,8 @@ if "" in built:
 
 # --- C: the Open Watcom fixtures ------------------------------------------
 WATCOM = {"MSGBOX": "8086", "WINDOW": "8086", "MENU": "8086", "DIALOG": "8086",
-          "PROFILE": "8086", "BITMAP": "8086", "FPU": "8086 + x87", "PUMP": "8086"}
+          "PROFILE": "8086", "BITMAP": "8086", "FPU": "8086 + x87", "PUMP": "8086",
+          "GDICARD": "8086"}
 have = [n for n in WATCOM if os.path.exists(os.path.join(BUILT, n + ".EXE"))]
 if not have:
     print("  note: build/win16/ has no Open Watcom fixtures - `make win16fixtures` "
@@ -213,5 +214,44 @@ eq((names[0x6A], names[0x0F], names[0x75], names[0xFF], names[0x2E]),
    ("T186", "OP0F", "BR8", "GRPFF", "PREFIX"), "the table's classes, spot-checked")
 eq((tab[0x9A] & 7, tab[0xC8] & 7, (tab[0x80] >> 3) & 1), (4, 3, 1),
    "the table's lengths: call far 4, enter 3, the 80 group's modrm")
+
+# --- F: the System font faces (SPEC.md 124.7, 124.7.1) ---------------------
+# apps/win16/fonts/ is committed art and tools/w16font.py builds the parts
+# WIN16.O88 carries; w16gdi.inc reads them at fixed offsets. The art must keep
+# Windows' metrics (D4) and one advance a character on every face, so a string
+# is as wide on CGA as on VGA; the part must be laid out where the assembly
+# looks; and a broken art file must be refused, not built.
+import io                                                   # noqa: E402
+import contextlib                                           # noqa: E402
+import w16font                                              # noqa: E402
+FONTS = os.path.join(ROOT, "apps", "win16", "fonts")
+with contextlib.redirect_stdout(io.StringIO()) as out:
+    bad = w16font.check(FONTS)
+eq(bad, 0, "apps/win16/fonts/: w16font.py check", )
+with open(os.path.join(ROOT, "apps", "win16", "w16gdi.inc")) as f:
+    gdi = f.read()
+import re                                                   # noqa: E402
+offs = dict(re.findall(r"^(W16F_[A-Z]+)\s+equ\s+(\d+)", gdi, re.M))
+for n, (rows, asc, il, el) in sorted(w16font.FACES.items()):
+    b = w16font.part(os.path.join(FONTS, "sys%02d.txt" % n))
+    eq(tuple(b[:8]), (rows, asc, 7, 14, il, el, 32, 95), "sys%02d: the part's header" % n)
+    off0 = int.from_bytes(b[int(offs["W16F_OFF"]):int(offs["W16F_OFF"]) + 2], "little")
+    eq(off0, int(offs["W16F_OFF"]) + 2 * 95, "sys%02d: the offsets start at W16F_OFF "
+       "and the first glyph right after them" % n)
+    eq(b[int(offs["W16F_ADV"])], 4, "sys%02d: the space's advance at W16F_ADV" % n)
+broken = os.path.join(tempfile.mkdtemp(), "bad.txt")
+with open(os.path.join(FONTS, "sys08.txt")) as f, open(broken, "w") as g:
+    g.write(f.read().replace("char 65 'A' 8\n........", "char 65 'A' 8\n.......", 1))
+try:
+    w16font.read_art(broken)
+    check(False, "NEGATIVE CONTROL: a row one pixel short is refused")
+except SystemExit:
+    check(True, "NEGATIVE CONTROL: a row one pixel short is refused")
+p = os.path.join(SAMPLES, "w3-archive/WINDOWS/SYSTEM/VGASYS.FON")
+if os.path.exists(p):
+    m, g = w16font.fon_fonts(p)[0]
+    _, _, art = w16font.read_art(os.path.join(FONTS, "sys16.txt"))
+    eq([art[c][0] for c in range(32, 127)], [g[c][0] for c in range(32, 127)],
+       "sys16.txt (Wine's): every advance is VGASYS.FON's")
 
 done("win16ne")

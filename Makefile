@@ -18705,7 +18705,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # first time, ~150 MB at a pinned SHA-256, which is why this is on demand.
 # The bitmaps bitmap.rc binds are generated (tests/win16/mkbmp.py), never
 # committed. tests/unit/t_win16ne.py reads the result when it is there.
-WIN16FIX := MSGBOX WINDOW MENU DIALOG PROFILE BITMAP FPU PUMP
+WIN16FIX := MSGBOX WINDOW MENU DIALOG PROFILE BITMAP FPU PUMP GDICARD
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc) \
             tests/win16/mkbmp.py
 
@@ -18741,13 +18741,23 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 # shipped image carries it yet and `all` does not build it.
 WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
 
-$(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc \
+$(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc \
                     apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -o $@ apps/win16/win16.asm
 	@echo "win16:  $(call FILESIZE,$@) bytes"
 
-$(BUILD)/win16.o88: $(BUILD)/win16.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/win16.bin -o $@
+# The System font, one part a display (SPEC.md 124.7.1): tools/w16font.py
+# builds each face from its committed art in apps/win16/fonts/, and they ride
+# in WIN16.O88 as lazy compressed parts in W16P_* order.
+W16FACES := $(BUILD)/win16/sys16.bin $(BUILD)/win16/sys12.bin $(BUILD)/win16/sys08.bin
+
+$(BUILD)/win16/sys%.bin: apps/win16/fonts/sys%.txt tools/w16font.py
+	@mkdir -p $(@D)
+	python3 tools/w16font.py build $< $@
+
+$(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/win16.bin -o $@ $(addprefix --part ,$(W16FACES)) \
+		--part-compress lz4
 
 win16: $(BUILD)/win16.o88
 

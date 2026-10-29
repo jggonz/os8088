@@ -418,28 +418,70 @@ they stand on.
     eye, not by counting primitive calls; Hercules, EGA and an XT. S13's
     final pass owns the measurements.
 
-- [ ] **S4: GDI and the Windows look.** *As a user the program's window looks
+- [x] **S4: GDI and the Windows look.** *As a user the program's window looks
   the way it did on Windows on that display, in colour on VGA/EGA and
   legibly on CGA and Hercules.*
-  - **DCs:** `BeginPaint`/`EndPaint`, `GetDC`/`ReleaseDC`.
-  - **Drawing:** stock and solid pens and brushes, `SetROP2`, `Rectangle`,
-    `RoundRect`, `FillRect`, `MoveTo`/`LineTo`.
-  - **Text:** `TextOut`, `SetTextColor`, `GetTextExtent` and
-    `GetTextMetrics`, in the **Windows System font for that adapter**, drawn
-    proportionally through `os88type.inc` (D4).
-  - **Bitmaps:** `SetDIBitsToDevice` from a DIB resource goes to
-    `OSAPI_GFX_BLIT4`, with rows flipped and the palette remapped to the 16
-    desktop colours, one call per visible cell.
-  - **`GetDeviceCaps`/`GetSystemMetrics`/`GetSysColor`:** answer what
-    Windows 3.0 answered on that adapter (VGA 640x480x16).
-  - **Mono:** a 1bpp mapping that follows the desktop's own grey rules
-    (SPEC.md §39).
-  - **The cost rule:** priced in primitive calls, not pixels (PERFORMANCE.md
-    Part 5).
-  - *Verify:* the fixture's test card, and a side-by-side against the
-    reference machines' screenshots (`win16ref/ref/`, the win16-reference
-    skill) on VGA, and on EGA and CGA after their `SETUP`; a call counter on a
-    full Minesweeper repaint written into the diary.
+  - **What shipped:**
+    - **DCs:** `BeginPaint`/`EndPaint`, `GetDC`/`ReleaseDC`; each open
+      resets the ROP, the text colour and the pen and brush.
+    - **Drawing:** stock and solid pens and brushes (`CreatePen`,
+      `CreateSolidBrush`, `SelectObject`, `DeleteObject`, `COLOR_x + 1`
+      brushes), `SetROP2` (R2_COPYPEN, R2_WHITE, R2_BLACK, R2_NOT and
+      R2_NOTXORPEN, the five the targets use), `Rectangle` (with Windows'
+      null-pen size quirk), `RoundRect`, `FillRect`, `MoveTo`/`LineTo`,
+      `SetPixel`, `SetRect`, `PtInRect`.
+    - **Text:** `TextOut`, `SetTextColor`, `GetTextExtent`,
+      `GetTextMetrics`, `lstrlen`, in the **System font for the display**
+      (D4): 16 px on VGA, 12 on EGA and Hercules, 8 on CGA. The faces are
+      committed art, `apps/win16/fonts/sys16/12/08.txt`, drafted by
+      `tools/w16font.py` from Wine's System font and fitted by hand, and
+      ride as three lz4 PARTS of `WIN16.O88`, fetched at launch (SPEC.md
+      124.7.1).
+    - **Bitmaps:** `SetDIBitsToDevice`, 1 and 4 bpp, info and core
+      headers, into `OSAPI_GFX_BLIT4`.
+    - **Questions:** `GetDeviceCaps`, `GetSystemMetrics` and `GetSysColor`
+      answer what Windows 3.0 answered: measured on the reference machine
+      for VGA, and read out of the Windows 3.0 EGA, CGA and Hercules
+      drivers' GDIINFO for the others (SPEC.md 124.8.2).
+    - **Mono:** a colour is reduced by luminance before the kernel sees
+      it: black, the desktop's grey dither, or white; text is lit at 160.
+    - `GDICARD.EXE` (`tests/win16/gdicard.c`), the test card, joins the
+      fixtures. `win16ne` checks the font art and the parts against the
+      gate's own offsets, with a negative control.
+    - `make win16` is 18,846 bytes of image and 20,962 on disk with the
+      three faces; the kernel is unchanged (`kernsize`: *unchanged*).
+  - **Seen on the glass** (QEMU):
+    - VGA: GDICARD prints the same numbers as on Windows 3.0, every one:
+      the text metrics, the extent of *Win Mine 2.01* (94 x 16), the caps,
+      all 36 system metrics and all 19 system colours. Aligned on the dark
+      pixels, the geometry of every shape is identical to Windows'
+      screenshot.
+    - EGA (`VIDEO=ega`): the 12 px face, caption 16, menu 14.
+    - CGA (`VIDEO=cga`): the 8 px face is legible; the red text is black,
+      as Windows' mono driver draws it; the greys dither.
+    - WINDOW.EXE and MSGBOX.EXE still work; PUMP.EXE still matches
+      Windows 3.0's screenshot exactly. The claim map after WINDOW and
+      after PUMP is the one taken before, byte for byte.
+  - **Not as the story first said, and why:**
+    - **No `.F88` face and no `os88type.inc`.** The text goes through a
+      composer of WIN16's own: the run is composed into one band and put
+      down in one `OSAPI_GFX_BLIT1` (`BLIT1_PEN` for the colour), which is
+      one primitive call a `TextOut` whatever its length.
+    - **`OSAPI_GFX_SPANS` refuses under an armed clip region** (SPEC.md
+      5.10), and a DC always has one. `RoundRect` and the rest coalesce
+      their rows into rectangles instead, so a straight edge is one fill.
+    - **The palette is os8088's, not Windows'.** Dark grey is 555555 here
+      and 808080 there, and light red FF5555 against FF0000.
+      `GetSysColor` still answers Windows' values.
+    - **No Windows EGA or CGA screenshots.** The reference machine was
+      not re-run through `SETUP` for those displays; their numbers are the
+      drivers' own GDIINFO, read from the files.
+    - The glyphs are Wine's shapes, not Microsoft's: `4`, `7` and `1`
+      differ by a pixel or two.
+  - **Not seen yet:** Hercules (QEMU has none); a call count on a full
+    Minesweeper repaint (WinMine needs S5's menus to start); the `.FON`
+    override; `BitBlt` and memory DCs, which WinMine 3.1 uses and 2.9 does
+    not. S13's final pass owns the measurements.
 
 - [ ] **S5: Resources and menus.** *As a user the program's menu bar sits in
   its window as it did on Windows, its shortcuts work, and its check marks
@@ -610,7 +652,8 @@ docs/INDEX.md was read first.
 - an INI parser (S7);
 - an x87 emulator (S9);
 - a Win16-shaped dialog manager and Windows-styled controls (S6);
-- the System font as an `.F88` face (S4).
+- the System font for each display (S4: shipped as WIN16's own parts,
+  not as an `.F88` face).
 
 ---
 

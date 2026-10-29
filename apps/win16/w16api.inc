@@ -51,6 +51,7 @@ W16X_SIZE equ 6
 W16EXPORT W16M_KERNEL,     3,       0,  w16k_getversion     ; GetVersion()
 W16EXPORT W16M_KERNEL,     30,      2,  w16k_waitevent      ; WaitEvent(word)
 W16EXPORT W16M_KERNEL,     49,      8,  w16k_getmodfn       ; GetModuleFileName(word ptr s_word)
+W16EXPORT W16M_KERNEL,     90,      4,  w16k_lstrlen        ; lstrlen(str)
 W16EXPORT W16M_KERNEL,     91,      -2, w16k_inittask       ; InitTask() -register
 W16EXPORT W16M_KERNEL,     132,     0,  w16k_getwinflags    ; GetWinFlags()
 W16EXPORT W16M_KERNEL,     207,     2,  w16k_isdbcs         ; IsDBCSLeadByte(word)
@@ -73,6 +74,9 @@ W16EXPORT W16M_USER,       56,      12, w16u_movewnd        ; MoveWindow(word wo
 W16EXPORT W16M_USER,       57,      4,  w16u_regclass       ; RegisterClass(ptr)
 W16EXPORT W16M_USER,       66,      2,  w16u_getdc          ; GetDC(word)
 W16EXPORT W16M_USER,       68,      4,  w16u_releasedc      ; ReleaseDC(word word)
+W16EXPORT W16M_USER,       72,      12, w16u_setrect        ; SetRect(ptr s_word s_word s_word s_word)
+W16EXPORT W16M_USER,       76,      8,  w16u_ptinrect       ; PtInRect(ptr long)
+W16EXPORT W16M_USER,       81,      8,  w16u_fillrect       ; FillRect(word ptr word)
 W16EXPORT W16M_USER,       107,     10, w16u_defproc        ; DefWindowProc(word word word long)
 W16EXPORT W16M_USER,       108,     10, w16u_getmsg         ; GetMessage(ptr word word word)
 W16EXPORT W16M_USER,       109,     12, w16u_peekmsg        ; PeekMessage(ptr word word word word)
@@ -85,15 +89,26 @@ W16EXPORT W16M_USER,       125,     8,  w16u_invalrect      ; InvalidateRect(wor
 W16EXPORT W16M_USER,       127,     6,  w16u_validrect      ; ValidateRect(word ptr)
 W16EXPORT W16M_USER,       173,     6,  w16u_loadcursor     ; LoadCursor(word str)
 W16EXPORT W16M_USER,       174,     6,  w16u_loadicon       ; LoadIcon(word str)
+W16EXPORT W16M_USER,       179,     2,  w16u_sysmet         ; GetSystemMetrics(s_word)
+W16EXPORT W16M_USER,       180,     2,  w16u_syscolor       ; GetSysColor(word)
 W16EXPORT W16M_USER,       232,     14, w16u_setwndpos      ; SetWindowPos(word word word word word word word)
+W16EXPORT W16M_GDI,        4,       4,  w16g_setrop2        ; SetROP2(word word)
+W16EXPORT W16M_GDI,        9,       6,  w16g_settextcol     ; SetTextColor(word long)
 W16EXPORT W16M_GDI,        19,      6,  w16g_lineto         ; LineTo(word s_word s_word)
 W16EXPORT W16M_GDI,        20,      6,  w16g_moveto         ; MoveTo(word s_word s_word)
 W16EXPORT W16M_GDI,        27,      10, w16g_rect           ; Rectangle(word s_word x4)
+W16EXPORT W16M_GDI,        28,      14, w16g_roundrect      ; RoundRect(word s_word x6)
+W16EXPORT W16M_GDI,        31,      10, w16g_setpixel       ; SetPixel(word s_word s_word long)
 W16EXPORT W16M_GDI,        33,      12, w16g_textout        ; TextOut(word s_word s_word str word)
 W16EXPORT W16M_GDI,        45,      4,  w16g_select         ; SelectObject(word word)
+W16EXPORT W16M_GDI,        61,      8,  w16g_createpen      ; CreatePen(s_word s_word long)
 W16EXPORT W16M_GDI,        66,      4,  w16g_solidbrush     ; CreateSolidBrush(long)
 W16EXPORT W16M_GDI,        69,      2,  w16g_delobj         ; DeleteObject(word)
+W16EXPORT W16M_GDI,        80,      4,  w16g_devcaps        ; GetDeviceCaps(word s_word)
 W16EXPORT W16M_GDI,        87,      2,  w16g_stock          ; GetStockObject(word)
+W16EXPORT W16M_GDI,        91,      8,  w16g_textext        ; GetTextExtent(word ptr s_word)
+W16EXPORT W16M_GDI,        93,      6,  w16g_textmet        ; GetTextMetrics(word ptr)
+W16EXPORT W16M_GDI,        443,     28, w16g_setdib         ; SetDIBitsToDevice(word s_word x6 word word ptr ptr word)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
 ; the callee's way back (SPEC.md 124.2.2): module 0FEh, which no program's
 ; module table can name, so the loader never binds an import to it
@@ -193,6 +208,20 @@ w16k_inittask:
     or byte [w16_rflags], W16R_SIDI
     mov ax, 1
     mov dx, 1                       ; SW_SHOWNORMAL
+    ret
+
+; lstrlen (KERNEL.90) - args: +0 lpString
+w16k_lstrlen:
+    call w16_args
+    les bx, [es:bx]
+    xor ax, ax
+.c:
+    cmp byte [es:bx], 0
+    je .out
+    inc ax
+    inc bx
+    jmp short .c
+.out:
     ret
 
 ; WaitEvent (KERNEL.30): no events are ever posted to a task here

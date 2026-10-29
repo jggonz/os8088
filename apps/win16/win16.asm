@@ -24,7 +24,7 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'WIN16', w16_entry, 0
+    OS88_HEADER 'WIN16', w16_entry, OS88_F_PARTS
 
 ; --- the states -------------------------------------------------------------
 W16S_IDLE    equ 0              ; launched empty
@@ -48,11 +48,22 @@ MSG_SIZE     equ 18             ; a Windows MSG
 W16_NSCAN    equ 0x59           ; scan codes with a virtual key
 W16_NPTS     equ 32             ; LineTo's point buffer
 W16_TXTMAX   equ 80             ; TextOut's longest run
+W16_NOBJ     equ 16             ; brushes and pens made at once
+W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
+                                ;   the spill, to even
+W16_GBUF     equ W16_BS * 16    ; the band (16 rows), and SetDIBitsToDevice's
+                                ;   4bpp block, never both at once
+W16_RRMAX    equ 64             ; RoundRect's largest corner radius
+
+; --- the parts (SPEC.md 20.12, 124.7.1): the System font, one face a display
+W16P_SYS16   equ 0              ; VGA
+W16P_SYS12   equ 1              ; EGA and Hercules
+W16P_SYS08   equ 2              ; CGA
 
 ; --- bss (SPEC.md 21 step 5: zeroed by the loader) ---------------------------
 %assign W16B 0
-%macro W16BSS 2
-%1 equ os88_image_end + W16B
+%macro W16BSS 2                 ; after the parts standard's OP_BSS (os88parts.inc)
+%1 equ os88_image_end + OP_BSS + W16B
 %assign W16B W16B + (%2)
 %endmacro
     W16BSS w16_win, 2           ; our window
@@ -159,8 +170,11 @@ W16_TXTMAX   equ 80             ; TextOut's longest run
     W16BSS w16_curx, 2
     W16BSS w16_cury, 2
     W16BSS w16_gcol, 1
-    W16BSS w16_brused, 8
-    W16BSS w16_brc, 8
+    W16BSS w16_objk, W16_NOBJ   ; each made object's W16K_*, 0 = free
+    W16BSS w16_objc, W16_NOBJ   ; ...and its colour
+    W16BSS w16_rop, 1           ; SetROP2's mode
+    W16BSS w16_tcol, 1          ; the text colour, and its COLORREF
+    W16BSS w16_trgb, 4
     W16BSS w16_rgb, 4
     W16BSS w16_lx1, 2
     W16BSS w16_ly1, 2
@@ -177,7 +191,52 @@ W16_TXTMAX   equ 80             ; TextOut's longest run
     W16BSS w16_tx, 2
     W16BSS w16_ty, 2
     W16BSS w16_txt, W16_TXTMAX + 2
-    OS88_BSS W16B
+    ; --- S4: the display, the face, text, RoundRect, DIBs ---
+    W16BSS w16_disp, 1          ; the window's VID_* kind (VESA reads as VGA)
+    W16BSS w16_mono, 1          ; 1 = a 1bpp display
+    W16BSS w16_scrw, 2          ; ...its size
+    W16BSS w16_scrh, 2
+    W16BSS w16_capn, 2          ; SM_CYCAPTION - 1: what CreateWindow takes off
+    W16BSS w16_home, 2          ; the folder WIN16.O88 is in, and its volume
+    W16BSS w16_homev, 1
+    W16BSS w16_face, 2          ; the System font part's segment, 0 = none
+    W16BSS w16_fpart, 1         ; ...which part, + 1
+    W16BSS w16_tn, 2            ; TextOut's characters
+    W16BSS w16_tnb, 2           ; ...the band's bytes a row
+    W16BSS w16_tb0, 2           ; ...the screen x of its bit 0
+    W16BSS w16_r0, 2            ; ...the glyph rows drawn
+    W16BSS w16_r1, 2
+    W16BSS w16_gbpr, 2          ; ...a glyph's bytes a row (the word's high
+                                ;   byte stays 0)
+    W16BSS w16_son, 1           ; w16_span's growing rectangle: 1 = one is
+    W16BSS w16_sx1, 2           ;   open, and its corners
+    W16BSS w16_sx2, 2
+    W16BSS w16_sy1, 2
+    W16BSS w16_sy2, 2
+    W16BSS w16_rrx, 2           ; RoundRect's radii, its pen, its insets
+    W16BSS w16_rry, 2
+    W16BSS w16_rpen, 1
+    W16BSS w16_rrin, W16_RRMAX
+    W16BSS w16_dres, 2          ; SetDIBitsToDevice: the rows drawn
+    W16BSS w16_dwid, 2          ; ...the DIB's width, height, depth, palette
+    W16BSS w16_dhgt, 2          ;   entry size and row stride
+    W16BSS w16_dbpp, 1
+    W16BSS w16_dpal, 2
+    W16BSS w16_dstride, 2
+    W16BSS w16_dx0, 2           ; ...the destination's top left, screen
+    W16BSS w16_dy0, 2
+    W16BSS w16_dsx, 2           ; ...the source column at its left, and row
+    W16BSS w16_dtop, 2          ;   at its top (bottom up)
+    W16BSS w16_dstart, 2        ; ...the rows lpBits holds
+    W16BSS w16_dlines, 2
+    W16BSS w16_dbits, 4
+    W16BSS w16_dvw, 2           ; ...the visible width, its 4bpp bytes, the
+    W16BSS w16_d4s, 2           ;   rows a block holds and the block's top
+    W16BSS w16_dband, 2
+    W16BSS w16_dby, 2
+    W16BSS w16_dmap, 16         ; ...its palette, as os8088 colours
+    W16BSS w16_gbuf, W16_GBUF
+    OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
 ; =============================================================================
@@ -186,12 +245,20 @@ W16_BSS_SIZE equ W16B
 ; out: BX = window ptr, CF clear; CF set = abort
 ; =============================================================================
 w16_entry:
+    push es
+    call op_load                    ; FIRST (os88parts.inc rule 1): our file's
+    pop es                          ;   name, which the faces are read out of;
+                                    ;   every row is lazy, so it cannot refuse
     call w16_pmcheck                ; SPEC.md 124.1, D6: real mode only
     jnc .real
     ret                             ; CF=1: the launch is torn down
 .real:
     push si
     push di
+    call OSAPI_FILE_HERE            ; the folder WIN16.O88 was launched from,
+    mov [w16_home], dx              ;   banked before anything navigates
+    mov [w16_homev], bl
+    mov word [w16_capn], 19         ; VGA's, until the display is read
     mov si, w16_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr
     jc .out
@@ -262,8 +329,12 @@ w16_wake:
     jne .out
     mov byte [w16_state], W16S_RUN
     call w16_load                   ; CF=1: refused, [w16_l1]/[w16_l2] say why
+    jc .refused
+    call w16_facein                 ; the System font for this display
     jnc .run
+.refused:
     mov byte [w16_state], W16S_REFUSED
+    call w16_freeprog               ; a face that failed leaves a loaded image
     call w16_repaint
     ret
 .run:
@@ -294,14 +365,75 @@ w16_after:
 .out:
     ret
 
-; w16_freeprog - give back the program's claim, once
+; w16_freeprog - give back the program's claim, and the face, once
 w16_freeprog:
     mov dx, [w16_pseg]
     or dx, dx
-    jz .out
+    jz .face
     call OSAPI_MEM_FREE
     mov word [w16_pseg], 0
+.face:
+    mov al, [w16_fpart]
+    or al, al
+    jz .out
+    dec al
+    call op_drop
+    mov byte [w16_fpart], 0
+    mov word [w16_face], 0
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_facein - read the display the window is on and fetch the System font
+; Windows showed there (SPEC.md 124.7): a part of WIN16.O88, read from the
+; folder it was launched from. CF=1: refused, with the reason in [w16_l2].
+; UI task, no lock (the wake handler).
+; -----------------------------------------------------------------------------
+w16_facein:
+    call w16_dispinit
+    call w16_facepart               ; AL = the part
+    push ax
+    call OSAPI_FILE_HERE            ; where the user is, to be put back
+    push dx
+    push bx
+    mov dx, [w16_home]
+    mov bl, [w16_homev]
+    call OSAPI_FILE_GOTO_QM         ; quietly, as w16_load stands in a folder
+    pop bx
+    pop dx
+    pop ax
+    push dx
+    push bx
+    push ax
+    call op_fetch                   ; claims, reads, expands; a toast if not
+    pop ax
+    pop bx
+    pop dx
+    pushf
+    push ax
+    call OSAPI_FILE_GOTO_QM
+    pop ax
+    popf
+    jc .no
+    inc al
+    mov [w16_fpart], al
+    dec al
+    call op_seg
+    mov [w16_face], ax
+    push es
+    mov es, ax
+    mov al, [es:W16F_ROWS]
+    pop es
+    xor ah, ah
+    add ax, 3
+    mov [w16_capn], ax              ; SM_CYCAPTION - 1: rows + 3
+    clc
+    ret
+.no:
+    mov si, w16_s_noface
+    mov di, w16_l2
+    call w16_strcpy
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -528,11 +660,22 @@ w16_s_idle1:    db 'WIN16 runs Windows 3.x programs.', 0
 w16_s_idle2:    db 'Double-click one in a Disk window.', 0
 w16_s_loading:  db 'Loading...', 0
 w16_s_running:  db 'Running', 0
+w16_s_noface:   db 'Its System font could not be read.', 0
 
 ; --- the alert (SPEC.md 75.3): MessageBox's face until S6 --------------------
 %define OS88UI_ALERT 1
 %define OS88UI_AEXTRA           ; OK / Cancel (MB_OKCANCEL)
 %define OS88UI_NOGLYPH
 %include "os88ui.inc"
+
+; --- the parts (SPEC.md 20.12, 124.7.1): the System font, one face a display,
+; each fetched for the display the program's window is on and dropped when it
+; ends. tools/w16font.py builds them from apps/win16/fonts/
+%include "os88parts.inc"
+    OS88_PARTS_BEGIN 3
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
+    OS88_PARTS_END
 
     OS88_IMAGE_END

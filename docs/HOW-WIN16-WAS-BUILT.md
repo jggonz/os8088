@@ -536,3 +536,72 @@ Whether WIN16 should have an "End Task" of its own is left for the owner.
 
 **Not measured:** how much a strip repaint costs, in primitive calls or on an
 XT. That is S13's.
+
+## 2026-10-29 — S4: GDI and the Windows look
+
+**The story.** *As a user the program's window looks the way it did on
+Windows on that display.* "The way it did" needed a reference before it
+could be checked, so the first thing written was a test card,
+`tests/win16/gdicard.c`. It prints the text metrics, an extent, the device
+caps, all 36 system metrics and all 19 system colours, and draws one of
+everything the two targets draw: CALC's round keys and its NOTXORPEN line,
+WinMine's grey bevels, a FillRect, dots, three DIBs. It ran on the Windows 3.0
+reference machine first. (Its first name was GDI.EXE, and Windows refused to
+run it: a program's module name may not be GDI.)
+
+**The font.** D4 says each display gets its Windows System font. Microsoft's
+.FON files cannot be committed, so the faces are drawn from Wine's System
+font (LGPL), whose 16 px strike already has Windows' VGA advances.
+`tools/w16font.py draft` turns it into text art, and resamples it to 12 and
+8 rows for EGA/Hercules and CGA. A naive resample loses thin strokes, so the
+draft chooses the rows it keeps per zone (above the caps, the caps, the
+x-height, the descenders) to keep the most ink. Then the art becomes the
+source. Sixteen CGA glyphs and three EGA ones were redrawn by hand: quotes,
+the caret, the tilde, descenders, `@` and `#`. `make` turns each file into a
+part of `WIN16.O88`, 1.2 to 2.2 KB each, lz4-packed, so only the face the
+display needs is read at launch.
+
+**Text is one call.** The plan said `.F88` and `os88type.inc`. What shipped is
+a composer of WIN16's own: a TextOut is composed into one band at the
+screen's byte grid and put down by one `OSAPI_GFX_BLIT1`, coloured by
+`BLIT1_PEN`. That is one primitive call a string, which is the price
+PERFORMANCE.md asks for. The first version clipped the left of every word:
+BLIT1's band starts at the byte column holding x and skips `x & 7` pixels,
+so the origin has to be aligned down first (SPEC.md 5.4.2.8).
+
+**What the kernel refused.** RoundRect was first written on
+`OSAPI_GFX_SPANS`, and its frame did not appear. SPANS refuses under an
+armed clip region, and a DC always has one. So shapes coalesce their rows:
+consecutive rows with the same left and right become one rectangle, and a
+round key is its corners plus four fills.
+
+**The numbers are Windows'.** On VGA, every number GDICARD prints here is the
+number it printed on Windows 3.0: `tm 16 13 3 3 0 7 14 700`, an extent of
+94 x 16, `caps 640 480 1 4 16`, the 36 metrics and the 19 colours. For EGA,
+CGA and Hercules the reference machine was not re-run through SETUP. The
+answers come from the GDIINFO block in each Windows 3.0 display driver,
+read with the same tool that reads the .FON files, so CGA answers 640 x 200,
+2 colours, LOGPIXELSY 48. Laid over the Windows screenshot on the dark
+pixels, every shape lands on the same pixels. What differs is the glyphs
+(Wine's `4`, `7` and `1` are not Microsoft's) and two palette entries.
+os8088's dark grey is 555555 and its light red FF5555; Windows' are 808080
+and FF0000.
+
+**Mono.** A 1bpp display gets a colour after WIN16 reduces it by luminance:
+black, the desktop's grey dither, or white. Text is lit at 160 and above. On
+CGA the test card's red text is black, the way Windows' own mono driver
+drew it, which was the open question S3 left.
+
+**Tested, on the glass (QEMU):**
+
+- GDICARD on VGA, EGA (`VIDEO=ega`) and CGA (`VIDEO=cga`), each with its
+  face and its numbers;
+- WINDOW.EXE, MSGBOX.EXE and PUMP.EXE unchanged in behaviour (PUMP still
+  matching Windows 3.0's screenshot line for line);
+- the claim map after WINDOW and after PUMP is the one taken before,
+  byte for byte. While a program runs, WIN16 holds 23 KB for the instance,
+  16 KB for the program and 3 KB for the face.
+
+**Not seen:** Hercules (QEMU has none); a call count on a whole Minesweeper
+repaint, which needs S5's menus before WinMine will start; BitBlt and memory
+DCs, which WinMine 3.1 uses and 2.9 does not.

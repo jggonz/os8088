@@ -224595,8 +224595,8 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
 ## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
 
-**Status: PLANNED, owner decisions taken 2026-10-28. Nothing in this section
-is built.** The delivery record is `docs/plans/WIN16-PLAN.md` and the diary
+**Status: BEING BUILT, owner decisions taken 2026-10-28. S0–S4 have shipped:
+the loader, the message pump and GDI.** The delivery record is `docs/plans/WIN16-PLAN.md` and the diary
 `docs/HOW-WIN16-WAS-BUILT.md`. Each subsection says *(pinned)* until the story
 that builds it marks it *(shipped)* with what was measured. Until then it is a
 design, not a fact about the system.
@@ -225004,21 +225004,89 @@ load with the instruction named.
 - No program that writes selectors or walks the LDT.
 - No segment moving or discarding.
 
-### 124.7 Fonts — the System font Windows showed on that display *(pinned)*
+### 124.7 Fonts — the System font Windows showed on that display *(shipped in S4)*
 
-`GetTextMetrics`, `GetTextExtent` and dialog units answer from the System font
-Windows 3.0 used on the adapter the program's window is on. Text is drawn
-proportionally through `os88type.inc` (§6.3) from an `.F88` face built on the
-host:
+`TextOut`, `GetTextExtent`, `GetTextMetrics` and (S6) dialog units answer
+from the System font Windows 3.0 used on the display the program's window is
+on. Windows' three faces have the same design and, but for seven glyphs, the
+same advances (all but six); they differ in height, for the pixel's aspect:
 
-| adapter | face | source |
+| display | face | rows, ascent, internal leading | from |
+|---|---|---|---|
+| VGA (and a VESA display, whose desktop is VGA's sixteen) | `sys16.txt` | 16, 13, 3 | Wine's System font, `fonts/system.sfd`'s 16 px strike, glyphs 32-126 as they are. **Its advances are `VGASYS.FON`'s, every one** (`win16ne` checks it) |
+| EGA and Hercules (`SETUP.INF` gives Hercules EGA's resolution class, `133,96,72`) | `sys12.txt` | 12, 10, 2 | the 16 px strike's rows resampled; three glyphs then drawn by hand |
+| CGA | `sys08.txt` | 8, 7, 1 | the same, to 8 rows |
+
+All three: average width 7, maximum 14, weight 700, as `VGASYS`, `EGASYS`
+and `CGASYS.FON` measure (D4). **No Microsoft glyph is in the tree.** The
+art is committed under `apps/win16/fonts/` and is the source from then on.
+`tools/w16font.py draft` made it once:
+
+- **Rows are kept zone by zone, one choice for the whole face.** The zones
+  are the internal leading, the capitals above the x-height, the x-height
+  and the descenders. So a stroke lands on the same row in every glyph, and
+  the x-height is where Windows' own face of that height has it: 6 of
+  EGA's 8 capital rows and 5 of CGA's 6.
+- **A zone squeezed to one row keeps each glyph's outermost ink:** the top
+  of a capital or a bracket, the foot of a descender or an underscore.
+- **Sixteen CGA glyphs and three EGA ones were then drawn by hand,** where a
+  quote, a caret, a tilde, a descender or a dense symbol came out wrong.
+
+**The advances are VGA's on every face**, so a string is as wide on CGA as
+on VGA. Windows' `EGASYS` and `CGASYS` narrow six glyphs (`Z`, `s`, `x`,
+`y` and `z` by a pixel, `v` by two), so an extent there can differ from
+Windows' by those.
+
+**Not `os88type.inc`.** That library refuses a face whose glyphs are wider
+than 8 pixels or whose advances are odd (§6.4), and Windows' System font is
+both: `W` is 14 wide and `a` 8, `!` 4 and `%` 11. So WIN16 composes text
+with its own composer, by §6.3's method:
+
+- the string goes into a 1bpp band in WIN16's own memory, then one
+  `OSAPI_GFX_BLIT1` puts it down, whatever its length;
+- the band starts on the screen's byte grid (§5.4.2.8) with two guard bytes,
+  so a glyph cut by the clip's left edge loses exactly the pixels outside it.
+
+**Text is opaque**, in the text colour on white: `SetBkColor` and
+`SetBkMode` are not provided, and WinMine and CALC import neither. On a 1bpp
+display a glyph is lit or dark. The ink is lit from luminance 160 (light
+grey, cyan, yellow, white), so CALC's red, blue and magenta digits are black
+on white, as Windows' mono drivers drew them.
+
+**One face for a program's life.** It is fetched for the display the window
+is on when the program starts, and kept if the window is dragged to another
+display. A Windows program measured its text once, too.
+
+**Not yet:** a Windows `.FON` the user puts beside WIN16 is not read. The
+built-in faces are what every machine gets.
+
+#### 124.7.1 The face part *(shipped in S4)*
+
+Each face is a lazy, compressed `OP_ASSET` part of `WIN16.O88` (§20.12), in
+`W16P_*` order: `W16P_SYS16`, `W16P_SYS12`, `W16P_SYS08`. Before the
+program's first instruction, the wake handler (`w16_facein`):
+
+1. reads the window's display (`OSAPI_WM_DISPLAY`);
+2. stands in the folder `WIN16.O88` was launched from (banked at entry);
+3. fetches that one face with `op_fetch`.
+
+It is dropped with the program's claim, so only the face in use is ever in
+memory: 3 KB at VGA. A machine that cannot fetch it refuses the program,
+saying so in the window.
+
+`tools/w16font.py build` writes a part as:
+
+| offset | size | field |
 |---|---|---|
-| VGA | System 10 pt, 16 px high, average width 7, maximum 14, ascent 13 (MEASURED from Windows 3.0's `VGASYS.FON`) | Wine's `fonts/system.sfd` 16 px strike |
-| EGA and Hercules | System, 12 px high, average width 7, maximum 14, ascent 10 (MEASURED from `EGASYS.FON`; Hercules shares EGA's resolution class `133,96,72` in Windows' `SETUP.INF`, so it gets this font) | Windows' own `EGASYS.FON` from the user's Windows directory, otherwise an os8088 strike drawn to these metrics from source art |
-| CGA | System, 8 px high, average width 7, maximum 14, ascent 7 (MEASURED from `CGASYS.FON`) | Windows' own `CGASYS.FON` from the user's Windows directory, otherwise an os8088 strike drawn to these metrics |
+| +0 | 4 bytes | rows, ascent, average width, maximum width |
+| +4 | 4 bytes | internal leading, external leading, the first character (32), the count (95) |
+| +8 | 95 bytes | each glyph's advance, 1..16, then a pad byte |
+| +104 | 95 words | each glyph's bitmap, as an offset from the part's start |
+| | | the bitmaps: `rows` rows of `(advance + 7) / 8` bytes, bit 7 leftmost, 1 = ink |
 
-A Windows `.FON` the user puts in the `WIN16` folder is preferred over the
-built-in face.
+A glyph is never wider than its advance, so a glyph's cell is its advance,
+and the composer needs no second width. A character outside 32-126 is drawn
+as `?`.
 
 ### 124.8 USER: windows, the queue and the pump *(shipped in S3)*
 
@@ -225158,30 +225226,68 @@ A non-NULL `lpfnTimer` is refused with 0 until a program needs it.
 **Ticks.** `GetTickCount` and `GetCurrentTime` are the BIOS tick count ×
 55 ms.
 
-#### 124.8.1 GDI, S3's subset *(shipped in S3)*
+#### 124.8.1 GDI *(shipped in S3 and S4)*
 
 One device context, `0x3002`, on the program's window, opened by
 `BeginPaint` or `GetDC` and closed by `EndPaint` or `ReleaseDC`. Opening it
 takes the gfx lock and arms the kernel's clip (`OSAPI_WM_CLIP_SET`), unless
 the resuming callback already holds the lock (it keeps it) or is our
 `W_PAINT` (the damage is already the clip). Each open resets the DC: the
-black pen, the white brush, the System font and the point (0, 0).
+black pen, the white brush, the System font, `R2_COPYPEN`, black text and the
+point (0, 0).
 
 **The clip is two clips.** The kernel's keeps every pixel inside what is
-visible of the content; WIN16's own, in screen coordinates, keeps it inside
+visible of the content. WIN16's own, in screen coordinates, keeps it inside
 `rcPaint`, so a `WM_PAINT` for a counter's strip repaints the strip and not
-the window. Fills and lines are cut exactly; text is cut by whole cells.
+the window. Everything is cut to the exact pixel.
 
 | call | what it does |
 |---|---|
 | `GetStockObject` | `0x3100 + i` for the 17 stock objects |
-| `CreateSolidBrush` | the nearest of Windows' sixteen colours (the sum of the three distances), which are os8088's `CBLACK`..`CWHITE` in another order; 8 at once, as `0x3200 + slot` |
+| `CreateSolidBrush`, `CreatePen` | the nearest of Windows' sixteen colours (the sum of the three distances), which are os8088's `CBLACK`..`CWHITE` in another order. Sixteen at once, as `0x3200 + slot`. Every pen style but `PS_NULL` draws solid, and every width one pixel |
 | `SelectObject` | swaps the brush, the pen or the font and answers the old one |
-| `DeleteObject` | frees a made brush; a stock object is never deleted |
-| `MoveTo` / `LineTo` | Bresenham up to, not including, the end point, plotted through `OSAPI_GFX_POINTS` 32 points a call |
-| `Rectangle` | the pen's frame outside, the brush's fill inside it, no pixel twice |
-| `TextOut` | black on white, opaque, one `OSAPI_FONT_RUN`; the 8 × 8 font until §124.7's System font arrives (S4) |
+| `DeleteObject` | frees a made object; a stock object is never deleted |
+| `SetROP2` | `R2_COPYPEN`, `R2_BLACK`, `R2_WHITE`, `R2_NOP`, `R2_NOT` and `R2_NOTCOPYPEN` exactly. The bit operations are on the hardware's IRGB index, which os8088's colour numbers are, so `R2_NOT` is the kernel's XOR fill. `R2_XORPEN` and `R2_NOTXORPEN` invert, except with the one pen colour that leaves the screen alone: exact for the black and white pens programs use them with. The rest copy. WinMine uses `R2_WHITE` and `R2_COPYPEN`, and CALC `R2_NOTXORPEN` |
+| `MoveTo` / `LineTo` | Bresenham up to, not including, the end point. Plotted through `OSAPI_GFX_POINTS` 32 points a call, or a point a call when inverting |
+| `Rectangle` | the pen's frame outside, the brush's fill inside it, no pixel twice. With no pen the fill stops one pixel short of the right and bottom edges, as Windows 3.0's does |
+| `RoundRect` | the corners are quarter ellipses of half the given width and height, at most 64. Each layer is drawn in rows top to bottom: the pen's left edge with the top and bottom rows, its right edge, then the brush. A row the same as the one above grows that rectangle, so a CALC key is 17 fills. `OSAPI_GFX_SPANS` would be one call a layer, but it refuses under a clip region (§5.10), and a DC always has one |
+| `FillRect` | the brush alone, and not under the ROP: Windows' `FillRect` is `PATCOPY` |
+| `SetPixel` | one pixel, not under the ROP; answers the colour drawn |
+| `SetTextColor` | the text colour, as the nearest of the sixteen; answers the old `COLORREF` |
+| `TextOut`, `GetTextExtent`, `GetTextMetrics` | §124.7. `GetTextExtent` is the advances summed, by the face's rows. `GetTextMetrics` is the face's: height, ascent, descent, the leadings, average 7 and maximum 14, weight 700, characters 32-255 with 128 the default and 32 the break, `FF_SWISS` and variable pitch, ANSI, digitized aspect 96 by `LOGPIXELSY` |
+| `SetDIBitsToDevice` | 1 and 4 bits a pixel, `BITMAPINFOHEADER` or the older `BITMAPCOREHEADER`, `DIB_RGB_COLORS`. A DIB's rows run bottom up, `ySrc` counts from its bottom, and `lpBits` holds `cScanLines` rows from `uStartScan`. The visible part (the clip, and the rows `lpBits` has) is converted to os8088's colours (each palette entry the nearest of the sixteen) in a 1,536-byte block, and drawn with one `OSAPI_GFX_BLIT4` per block: one for any of WinMine's cells. `DIB_PAL_COLORS` and 8 bits a pixel draw nothing and answer 0 |
+| `GetDeviceCaps` | §124.8.2 |
 
-A colour on a 1bpp adapter is the adapter's rounding of the os8088 colour,
-so Windows' red comes out white on CGA where Windows' own mono driver would
-draw it black. That and the font are S4's.
+**On a 1bpp display a colour is reduced the way Windows' mono drivers
+reduced it, before the kernel sees it** (`w16_monotab`). The rule is by
+luminance (0.30 R + 0.59 G + 0.11 B):
+
+- under 64 is black;
+- 64 to 207 is the kernel's 50% dither (§39.4);
+- 208 and over is white.
+
+The kernel's own map is os8088's UI's, and it turns bright red **white**. A
+Windows program's red is dark, so WIN16 reduces it first. Every pen, brush
+and DIB pixel goes through this map; text is §124.7's lit-or-dark.
+
+**Not provided:** `BitBlt`, `CreateCompatibleDC`, `CreateDIBitmap`,
+`DeleteDC` and `StretchBlt` (WinMine 3.1's memory-DC drawing and
+`BITMAP.EXE`). WinMine 2.9 draws with `SetDIBitsToDevice` alone.
+
+#### 124.8.2 What the system answered *(shipped in S4)*
+
+`GDICARD.EXE` (`tests/win16/gdicard.c`) prints every answer below. It was run
+on Windows 3.0 first, and its screenshot is the reference. For the other
+displays, the `GetDeviceCaps` table is each display driver's own `GDIINFO`,
+read off Windows 3.0's `VGA.DRV`, `EGA.DRV`, `CGA.DRV` and `HERCULES.DRV`.
+That method reproduces the VGA card's numbers exactly.
+
+| call | answer |
+|---|---|
+| `GetDeviceCaps` | `GDIINFO`'s first 23 words for the window's display: driver version 300h, a raster display, its millimetres, `BITSPIXEL` 1, `PLANES` 4 (VGA, EGA) or 1 (CGA, Hercules), `NUMCOLORS` 16 or 2, its caps words, and `ASPECTX`/`Y`/`XY`: VGA 36, 36, 51; EGA 38, 48, 61; CGA 5, 12, 13; Hercules 11, 16, 19. `LOGPIXELSX` is 96, and `LOGPIXELSY` is 96, 72, 48 and 72. `HORZRES` and `VERTRES` are the display's own size. Any other index is 0 |
+| `GetSystemMetrics` | Windows 3.0's VGA answers for all 36 indices: scroll bars 17, borders 1, dialog frame 4, icons and cursors 32, the minimums 102 by 26, size boxes 18, frame 4, a mouse. `SM_CXSCREEN`, `SM_CYSCREEN` and the full-screen pair are the display's own. **`SM_CYCAPTION` is the face's rows + 4 and `SM_CYMENU` its rows + 2**: VGA's measured 20 and 18, and 16 and 14 on EGA, 12 and 10 on CGA. The other displays' scroll-bar sizes are VGA's; Windows 3.0 has not been seen there |
+| `GetSysColor` | Windows 3.0's built-in defaults, `COLOR_SCROLLBAR` to `COLOR_BTNTEXT`. The reference machine's `WIN.INI` has no `[colors]` section, so these are what a fresh install shows. A class brush `COLOR_x + 1` is the nearest of the sixteen to `GetSysColor(x)` |
+
+**The caption is the face's.** `CreateWindow`, `MoveWindow` and
+`SetWindowPos` take `SM_CYCAPTION - 1` off a window's height to find its
+client (§124.8), so the sizing and the answer agree on every display.

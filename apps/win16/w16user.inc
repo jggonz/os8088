@@ -454,10 +454,11 @@ w16_cw_sized:
     ret
 
 ; w16_sizeto - give WIN16's window the client a Windows window of CX by DX
-; would have (SPEC.md 124.8): cx - 2 frame by cy - 19 - 2 frame, VGA's
-; metrics, the frame 4 when AX (the style's high word) has WS_THICKFRAME and
-; 1 otherwise. 19 is SM_CYCAPTION's 20 less the row it shares with the frame,
-; MEASURED on Windows 3.0 (PUMP.EXE: 320 x 180 is a 312 x 153 client).
+; would have (SPEC.md 124.8): cx - 2 frame by cy - caption - 2 frame, the
+; frame 4 when AX (the style's high word) has WS_THICKFRAME and 1 otherwise.
+; The caption is SM_CYCAPTION less the row it shares with the frame: 19 on
+; VGA, MEASURED on Windows 3.0 (PUMP.EXE: 320 x 180 is a 312 x 153 client),
+; and the System font's rows + 3 on every display (w16_capn).
 ; CW_USEDEFAULT keeps the size. Clobbers AX, BX, CX, DX, SI, ES.
 w16_sizeto:
     cmp cx, CW_USEDEFAULT
@@ -470,7 +471,7 @@ w16_sizeto:
     sub cx, bx                      ; the client Windows would have given
     jle .out
     sub dx, bx
-    sub dx, 19
+    sub dx, [w16_capn]
     jle .out
     push cx
     push dx
@@ -1866,7 +1867,7 @@ w16_ppaint:
     call w16_brcol
     cmp al, W16_NOCOL
     je .out
-    call OSAPI_SET_COLOR
+    call w16_ink
     mov ax, [w16_dmg]
     mov bx, [w16_dmg + 2]
     mov cx, [w16_dmg + 4]
@@ -1923,5 +1924,150 @@ w16_unlock:
     je .out
     mov byte [w16_ltook], 0
     call OSAPI_GFX_UNLOCK
+.out:
+    ret
+
+; =============================================================================
+; What the system answered (SPEC.md 124.8.2): GDICARD.EXE on Windows 3.0, VGA
+; =============================================================================
+
+; GetSystemMetrics (USER.179) - args: +0 nIndex. Windows 3.0's VGA answers,
+; with the screen this window is on and the caption and menu bar the System
+; font's (rows + 4 and rows + 2: VGA's 20 and 18).
+SM_CXSCREEN      equ 0
+SM_CYSCREEN      equ 1
+SM_CYCAPTION     equ 4
+SM_CYMENU        equ 15
+SM_CXFULLSCREEN  equ 16
+SM_CYFULLSCREEN  equ 17
+W16_NSM          equ 36
+
+w16u_sysmet:
+    call w16_args
+    mov bx, [es:bx]
+    cmp bx, W16_NSM
+    jae .zero
+    cmp bx, SM_CXSCREEN
+    je .w
+    cmp bx, SM_CXFULLSCREEN
+    je .w
+    cmp bx, SM_CYSCREEN
+    je .h
+    cmp bx, SM_CYCAPTION
+    je .cap
+    cmp bx, SM_CYMENU
+    je .menu
+    cmp bx, SM_CYFULLSCREEN
+    je .full
+    shl bx, 1
+    mov ax, [w16_smtab + bx]
+    ret
+.w:
+    mov ax, [w16_scrw]
+    ret
+.h:
+    mov ax, [w16_scrh]
+    ret
+.cap:
+    mov ax, [w16_capn]
+    inc ax
+    ret
+.menu:
+    mov ax, [w16_capn]
+    dec ax
+    ret
+.full:
+    mov ax, [w16_scrh]
+    sub ax, [w16_capn]
+    dec ax
+    ret
+.zero:
+    xor ax, ax
+    ret
+
+w16_smtab:                      ; SM_* 0-35, Windows 3.0 on VGA
+    dw 640, 480, 17, 17, 20, 1, 1, 4, 4, 17, 17, 32
+    dw 32, 32, 32, 18, 640, 460, 0, 1, 17, 17, 0, 0
+    dw 0, 1, 0, 0, 102, 26, 18, 18, 4, 4, 102, 26
+
+; GetSysColor (USER.180) - args: +0 nIndex. DX:AX = the COLORREF.
+COLOR_BTNFACE   equ 15
+W16_NSYSCOL     equ 19
+
+w16u_syscolor:
+    call w16_args
+    mov bx, [es:bx]
+    xor ax, ax
+    xor dx, dx
+    cmp bx, W16_NSYSCOL
+    jae .out
+    shl bx, 1
+    shl bx, 1
+    mov ax, [w16_sysrgb + bx]
+    mov dx, [w16_sysrgb + bx + 2]
+.out:
+    ret
+
+; w16_syscol - AL = a COLOR_* index (< W16_NSYSCOL) -> AL = the nearest of
+; the sixteen. Keeps all but AL.
+w16_syscol:
+    push bx
+    push dx
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1
+    mov ax, [w16_sysrgb + bx]
+    mov dl, [w16_sysrgb + bx + 2]
+    call w16_rgb2col
+    pop dx
+    pop bx
+    xor ah, ah
+    ret
+
+w16_sysrgb:                     ; COLOR_* 0-18, Windows 3.0's own defaults
+    dd 0xE0E0E0, 0xC0C0C0, 0x804000, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0x000000
+    dd 0x000000, 0x000000, 0xFFFFFF, 0x808080, 0xFFFFFF, 0xE8FFFF, 0x000000
+    dd 0xFFFFFF, 0xC0C0C0, 0x808080, 0xC0C0C0, 0x000000
+
+; SetRect (USER.72) - args: +0 bottom, +2 right, +4 top, +6 left, +8 lpRect
+w16u_setrect:
+    call w16_args
+    push ds
+    push si
+    push di
+    mov si, bx
+    push es
+    pop ds
+    les di, [si + 8]
+    mov ax, [si + 6]
+    stosw
+    mov ax, [si + 4]
+    stosw
+    mov ax, [si + 2]
+    stosw
+    mov ax, [si]
+    stosw
+    pop di
+    pop si
+    pop ds
+    ret
+
+; PtInRect (USER.76) - args: +0 the POINT (x, then y), +4 lpRect
+w16u_ptinrect:
+    call w16_args
+    mov cx, [es:bx]
+    mov dx, [es:bx + 2]
+    les bx, [es:bx + 4]
+    xor ax, ax
+    cmp cx, [es:bx]
+    jl .out
+    cmp cx, [es:bx + 4]
+    jge .out
+    cmp dx, [es:bx + 2]
+    jl .out
+    cmp dx, [es:bx + 6]
+    jge .out
+    inc ax
 .out:
     ret
