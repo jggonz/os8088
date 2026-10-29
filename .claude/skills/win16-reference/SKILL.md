@@ -87,6 +87,15 @@ python3 $S quit
 python3 $S run w31 "win /s calc"        # Windows 3.1 has no real mode; standard mode
 ```
 
+To try a program of your own, such as the WIN16 test programs
+`make win16fixtures` builds, copy it onto a STOPPED machine's disk and start
+it from `C:\FIX`:
+
+```sh
+python3 $S copy w30 build/win16/*.EXE   # into C:\FIX; refuses while a machine runs
+python3 $S run w30 'win /r c:\fix\menu'
+```
+
 `win /r PROGRAM` starts Windows with that program open. Restart between
 programs with `key esc` then a fresh `run`, or by sending `system_reset`
 yourself.
@@ -138,5 +147,7 @@ EGA's font: `SETUP.INF` gives it EGA's resolution class `133,96,72`.
 | CPU census | WinMine 2.9 is 80186; CALC 3.00 is 8086 + x87 | WINMINE 3.10 is 80186; CALC 3.10 is 186 + x87 |
 | check mark | a real check glyph, not os88ui's square | the same |
 | `2.01 - 2` in Calculator | `0.00` | `0.00` |
+| the WIN16 fixtures (`make win16fixtures`) | all eight run in real mode; `ref/w30-fix-*.png` | not yet run |
 
-The screenshots are in `win16ref/ref/`.
+The screenshots are in `win16ref/ref/`. `tools/os88ne.py` (`make win16census
+WIN3X=win16ref/samples`) is the census these verdicts come from.

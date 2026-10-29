@@ -15,6 +15,8 @@ committed: the downloads are Microsoft's and Duff Software's.
     win16ref.py key KEY...            QEMU sendkey names (ret, alt-g, esc, equal, ...)
     win16ref.py type TEXT             type text; \\n is Enter
     win16ref.py quit                  stop the running machine
+    win16ref.py copy w30|w31 FILE...  copy host files into C:\\FIX on a STOPPED machine's
+                                      disk (the WIN16 fixtures: `make win16fixtures`)
 
 Each install step screenshots into <root>/log/<install>/NN-<step>.png. LOOK at
 them: the key sequence is the one that worked on 2026-10-28, with fixed waits,
@@ -305,6 +307,17 @@ def install31():
     sh("mcopy", "-o", "c:/WINDOWS/WINMINE.EXE", "c:/WINDOWS/CALC.EXE", out, env=env)
 
 
+def copy(which, files):
+    """Put host files into C:\\FIX. The machine must be stopped: mtools
+    writing under a running guest's FAT is how a disk gets corrupted."""
+    if os.path.exists(os.path.join(ROOT, "q.pid")) and os.path.exists(SOCK):
+        sys.exit("copy: a machine is running - `quit` it first")
+    env = mtools_env(os.path.join(ROOT, which, "c.img"))
+    subprocess.run(["mmd", "c:/FIX"], env=env, capture_output=True)
+    sh("mcopy", "-o", *files, "c:/FIX/", env=env)
+    print("copied", len(files), "file(s) to", which, "C:\\FIX")
+
+
 def run(which, cmd=None):
     img = os.path.join(ROOT, which, "c.img")
     boot = os.path.join(ROOT, "dosboot.img")
@@ -331,6 +344,7 @@ def main(a):
     elif c == "key": q = Q(); q.key(*a[1:]); q.close()
     elif c == "type": q = Q(); q.type(" ".join(a[1:])); q.close()
     elif c == "quit": quit_qemu()
+    elif c == "copy": copy(a[1], a[2:])
     else: sys.exit(__doc__)
 
 

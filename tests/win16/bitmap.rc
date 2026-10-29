@@ -1,0 +1,5 @@
+/* bitmap.rc - the bitmaps of bitmap.c (WIN16 fixture, S4/S8), both made by
+ * tests/win16/mkbmp.py at build time: a 16-colour one and its 1bpp twin, the
+ * pair WinMine 3.10 ships for colour and monochrome displays */
+W16COLOR BITMAP "w16color.bmp"
+W16MONO  BITMAP "w16mono.bmp"

@@ -217,35 +217,62 @@ they stand on.
   draft PR, the owner's decisions, and the sample binaries censused.
   *Verify:* `make` passes (checkdocs, the index, the fast tier).
 
-- [ ] **S1: Census.** *As a developer I can point the build at my Windows
+- [x] **S1: Census.** *As a developer I can point the build at my Windows
   files and see exactly what each one needs before a line of the layer
-  exists.*
-  - `tools/os88ne.py` (host Python) reports:
-    - the NE header and segment table;
+  exists.* SHIPPED 2026-10-28.
+  - `tools/os88ne.py` (host Python, standard library only; SPEC.md 124.4.1)
+    reports:
+    - the NE header, the segment table and the loader's refusal flags;
     - every import as `MODULE.ordinal` plus its name, from the vendored
       `.spec` files;
-    - the resource directory with dialog control classes and menu items;
-    - the OS-fixup counts;
-    - an **instruction census per code segment by recursive descent from the
-      entry points**, so data in a code segment is not counted. Its verdict
-      is 8086, 186 or 286 plus x87.
-  - `make win16census WIN3X=<dir>` runs it over every `.EXE` and `.FON` in
-    the user's directory.
-  - The vendored ordinal tables go in `apps/win16/spec/`.
-  - **Fixtures, two kinds** (D10):
-    - **A minimal NE assembled by `nasm -f bin`**, `tests/win16/tiny16.asm`,
-      with a hand-built header. It needs no compiler, so the fast row can
-      always run.
-    - **Win16 programs in C**, `tests/win16/*.c`, built by Open Watcom
-      (`tools/setup-watcom.sh`, `-0 -bt=windows -l=windows`) with
-      `make win16fixtures`. Each covers one story's API: MessageBox; a class,
-      a window, a paint and a timer; a menu; a dialog; a profile; a bitmap.
-      Every fixture is run on the reference machines first, so its expected
-      picture is Windows' own.
-    - Without the user's files, every gate still has something to load.
-  - *Verify:* a fast row over the fixture (`win16ne`). Over the samples it
-    must reproduce this plan's table: WinMine 2.9 is 186, and CALC 3.00 is
-    8086 plus x87.
+    - the resources, with menus item by item (CHECKED, GRAYED), dialog
+      control classes, bitmaps, strings, accelerators and FONT metrics;
+    - the OS-fixup counts by kind;
+    - every `int` with its AH where a constant load sets it, and port I/O;
+    - an **instruction census per code segment by recursive descent** from
+      CS:IP, the entry table, internal relocations and switch tables, then
+      the prologue heuristic over what is still dark. It reports coverage
+      and the 186-looking bytes left in the dark. Its verdict is 8086, 186,
+      286 or 386, plus x87 and the x87 subset by mnemonic and operand.
+      A 286 instruction behind the standard `push sp` probe is reported as
+      guarded and does not count.
+  - `make win16census WIN3X=<dir>` runs it over every `.EXE`, `.DLL`, `.DRV`
+    and `.FON` in a directory; `--json` is what the gates read.
+  - The ordinal tables are vendored verbatim from winevdm in
+    `tools/win16spec/`, not `apps/win16/spec/`. They are host data the census
+    and the build read, and `apps/` holds only packages that ship
+    (`t_retired`, `t_livefull`).
+  - **Fixtures, two kinds** (D10), with every one run on the Windows 3.0
+    reference machine first (`win16ref/ref/w30-fix-*.png`):
+    - `tests/win16/tiny16.asm`, a minimal NE built by `nasm -f bin`. It calls
+      InitTask, WaitEvent, InitApp and MessageBox, and it is a census trap in
+      five `-D` variants: 186-looking data behind a jump, a switch table, a
+      procedure only its prologue finds, x87 with OS fixups, and Open
+      Watcom's guarded 286 probe.
+    - seven Win16 programs in C, `tests/win16/*.c`, built by Open Watcom with
+      `make win16fixtures` into `build/win16/`:
+      - `MSGBOX`: a message box;
+      - `WINDOW`: class, window, paint, timer, mouse, keys;
+      - `MENU`: popups, CHECKED, GRAYED, an accelerator;
+      - `DIALOG`: STATIC, EDIT, group box, radio, check box, LISTBOX,
+        buttons;
+      - `PROFILE`: a private .INI plus WIN.INI;
+      - `BITMAP`: 4bpp and 1bpp, BitBlt and StretchBlt;
+      - `FPU`: doubles.
+    - All eight are 8086 code (FPU.EXE + x87), and all eight run on Windows
+      3.0 in real mode.
+  - *Verified:*
+    - the `win16ne` fast row (`tests/unit/t_win16ne.py`), 52 checks;
+    - it fails when the prologue heuristic, the probe guard or the descent
+      itself is taken out (three sensitivity runs);
+    - over the samples it reproduces this plan's table: WinMine 2.9 and both
+      3.1 programs are 186, and CALC 3.00 is 8086 + x87;
+    - VGASYS.FON reads as D4's System 16 px.
+  - **Found on the way, carried into later stories:**
+    - the MS C runtime calls `int 21h` itself (S2);
+    - the x87 subset by name (D5);
+    - Windows' check glyph, grey text and separator on the menu fixture
+      (S5, `w30-fix-menu-open.png`).
 
 - [ ] **S2: Load or refuse.** *As a user, when I double-click a Windows
   program I get either the program, or one sentence saying why not, and never
@@ -266,6 +293,11 @@ they stand on.
     - a 186 program on an 8088: *"needs an NEC V20, 80186 or better"*;
     - a self-loading or library module;
     - out of memory.
+  - **DOS calls:** the MS C start-up and exit call `int 21h` directly, not
+    through `DOS3Call` (S1's census: CALC 3.00 uses AH = 25h, 30h, 35h, 3Eh,
+    40h, 44h, 4Ch; WinMine 2.9 uses 25h, 30h, 35h, 4Ch). WIN16 hooks
+    `int 21h` for the program's lifetime and answers these, with 4Ch ending
+    the program as the close box does (SPEC.md 124.3).
   - *Verify:*
     - the fixture reaches its WinMain;
     - a doctored fixture with an unknown import refuses with its name;
@@ -425,7 +457,7 @@ Taken by the owner on 2026-10-28 unless marked otherwise.
 | D2 | Where the program runs | **A coroutine on the UI task** (finding 3) | A worker task (SPEC.md §20.6): no file access, and paint deferred out of `W_PAINT`, so every exposure draws twice |
 | D3 | Memory model (recommendation; not raised) | Every segment fixed in one arena claim; nothing moves or discards; `GlobalAlloc` sub-allocates inside a second claim (8 claims per owner, SPEC.md §50.3) | Real-mode Windows' movable segments: `INT 3Fh` loader stubs and BP-chain walking, for two programs that fit easily |
 | D4 | Fonts | **What Windows showed on that display**, so the programs look as they did on Windows. MEASURED from Windows 3.0's setup disk 2 (`CGASYS`, `EGASYS`, `VGASYS.FON`), all proportional with maximum width 14: **CGA 8 px (average 7, ascent 7); EGA 12 px (7, 10); VGA 16 px (7, 13)**. **Hercules uses EGA's 12 px font**: `SETUP.INF` gives it EGA's resolution class, `133,96,72`. VGA's face comes from Wine's System font, whose 16 px strike matches (`fonts/system.sfd`). CGA's and EGA's come from Windows' own `.FON` when the user supplies their Windows directory, and otherwise from os8088 strikes drawn to those metrics from source art (CLAUDE.md's artwork rule). Each is converted on the host into an `.F88` face (SPEC.md §6.3) and drawn through `os88type.inc`. Dialog units follow the font, as on Windows | os8088's 8x8 cell everywhere: dialogs half height on VGA and nothing like Windows |
-| D5 **gate** | Floating point without a coprocessor | Emulate only the census's opcode subset, as a part. The subset comes from S1 | A whole x87 emulator, or refusing CALC on FPU-less machines |
+| D5 **gate** | Floating point without a coprocessor | Emulate only the census's opcode subset, as a part. S1 MEASURED it: CALC 3.00 reaches 35 kinds and CALC 3.10 40, all 8087 instructions; no 287 or 387 form appears (SPEC.md 124.5 lists them). The file carries NATIVE x87 code with the OS fixups on the `wait` bytes; the loader rewrites those to `int 34h`–`3Dh` only on a machine without a coprocessor, as Windows did. Still the owner's to take | A whole x87 emulator, or refusing CALC on FPU-less machines |
 | D6 | Kernels | **`kern_big` and `kern_emu`.** `kern_mega` refuses (`OS88_MEGA_REFUSE`, SPEC.md §20.18). `kern_small` lacks `OSAPI_WM_TIMER` (SPEC.md §13.9), so its disks do not carry it (§24.5) | A kern_mega arm giving programs real selectors, winevdm's model: later |
 | D7 | Sources and licence | **Bring in whatever is needed from Wine and winevdm.** `apps/win16/` becomes GPL-2.0-or-later (finding 6), `apps/apple2`'s footing. Microsoft binaries are still never committed | Clean-room MIT: slower, and gains nothing the owner wants |
 | D8 | Menus and check marks | **The in-window bar, `OS88UI_MENU`** (SPEC.md §13.16): a Windows program's menu bar is inside its window, and the package owns it, so it costs no kernel bytes. The element's tick is a solid square, and the reference machines show Windows drawing a ✓ glyph, so S5 adds a check-glyph option to `os88ui.inc` (shared source) | The kernel's global bar: at most 5 menus, no check marks, and not where Windows put it |

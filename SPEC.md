@@ -224627,7 +224627,7 @@ Calculator (`CALC.EXE`, Windows 3.0's).
 | CPU | the layer's own code is `cpu 8086`. The programs it runs are checked by §124.4's census: an 8086-clean program runs on every machine, and a 186 program needs a V20/V30/186 or better |
 | binaries | **no Microsoft file is ever in the tree.** The user supplies them: `make win16census WIN3X=<dir>` and `make win16disk WIN3X=<dir>` |
 | test programs | Win16 programs written in C under `tests/win16/` and built by Open Watcom v2 (`tools/setup-watcom.sh`, a pinned upstream instrument in `build/watcom/`, never committed), plus one NE assembled by NASM that needs no compiler |
-| sources and licence | code and data are brought in from Wine (LGPL-2.1+) and winevdm (GPL-2, any version) at the commits the plan pins: the `.spec` ordinal tables vendored in `apps/win16/spec/`, Wine's System bitmap font, and the loader, dialog and control logic translated into 8086 assembly. **`apps/win16/` is therefore GPL-2.0-or-later**, and `COPYING` and `README.TXT` ship beside `WIN16.O88`, `apps/apple2`'s footing (docs/APPLE2-SPEC.md section 1.3). The rest of the tree is unaffected |
+| sources and licence | code and data are brought in from Wine (LGPL-2.1+) and winevdm (GPL-2, any version) at the commits the plan pins: the `.spec` ordinal tables vendored in `tools/win16spec/`, Wine's System bitmap font, and the loader, dialog and control logic translated into 8086 assembly. **`apps/win16/` is therefore GPL-2.0-or-later**, and `COPYING` and `README.TXT` ship beside `WIN16.O88`, `apps/apple2`'s footing (docs/APPLE2-SPEC.md section 1.3). The rest of the tree is unaffected |
 | look | what Windows 3.0 showed on that display: the program's menu bar inside its window (`OS88UI_MENU`, §13.16), controls drawn as Windows drew them, and text in that adapter's Windows System font (§124.7) |
 
 ### 124.2 Execution — the program's stack and the coroutine *(pinned)*
@@ -224698,7 +224698,11 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
 - the program starts with DS = SS = DGROUP, SI = hPrevInstance (0),
   DI = hInstance, BX = stack size, CX = heap size, ES = a PSP-shaped block
   carrying the command line;
-- `InitTask` (KERNEL.91) answers in registers.
+- `InitTask` (KERNEL.91) answers in registers;
+- `int 21h` is WIN16's while the program runs: the MS C runtime calls DOS
+  directly, at least AH = 25h/35h (set/get vector), 30h (version), 3Eh,
+  40h and 44h (handles), and 4Ch (exit), which ends the program as the close
+  box does (§124.4.1).
 
 **Refusals, each worded on the glass:**
 
@@ -224708,7 +224712,7 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
 - a CPU the census rules out (§124.4);
 - a program larger than the heap can hold.
 
-### 124.4 The CPU census *(pinned)*
+### 124.4 The CPU census *(the census shipped, host side; the loader's match pinned)*
 
 Before relocation, each code segment is swept from its entry points for
 80186/80286 and x87 opcodes. An 8088 does not fault on them. It executes
@@ -224726,24 +224730,96 @@ test shared as source from `apps/redline/detect.inc`:
 - **no match:** a refusal that names the CPU required.
 
 No translation of 186 opcodes for the 8088 is planned: the floor is a V20.
-MEASURED on the samples: WinMine 2.6–2.9 are 186; Windows 3.0's CALC, CLOCK,
-REVERSI, NOTEPAD and SOL are 8086-clean.
 
 `__WINFLAGS` reports `WF_CPU086`, `WF_CPU186` or `WF_CPU286`, never
 `WF_PMODE`, plus `WF_80x87` when a coprocessor is present. `__AHINCR` is
 0x1000 and `__AHSHIFT` is 12, the real-mode values.
 
+#### 124.4.1 The census is recursive descent *(shipped: `tools/os88ne.py`)*
+
+`tools/os88ne.py` is the reference implementation, and the loader's census
+must agree with it on every fixture. A linear sweep is wrong: a code segment
+carries strings and tables, and ASCII text is exactly the range the 186
+opcodes live in. Open Watcom's 8086-only HELLO16.EXE sweeps as 25 "186 and
+386 instructions", every one of them in a string. Decoding starts where code
+is KNOWN to start, and follows the control flow:
+
+1. the program's CS:IP;
+2. every entry-table entry in a code segment (the exports: window and dialog
+   procedures);
+3. every INTERNAL relocation (far pointer or offset) that targets a code
+   segment;
+4. the entries of a `jmp cs:[bx+table]` switch table, read once the
+   straight-line code is known, until an entry leaves the segment or the
+   table runs into decoded code;
+5. last, the dark gaps are searched for the standard prologues
+   (`1E 58 90`, `8C D8 90`, `45 55 8B EC`, `55 8B EC` and Open Watcom's
+   `89 E5` forms). This is the one heuristic. It errs toward refusing, so a
+   procedure reached only through a near pointer in data still moves the
+   verdict.
+
+Two instructions end a path besides `ret`/`jmp`: a far call to
+`KERNEL.FatalExit`/`FatalAppExit`, and `int 21h` after `mov ah, 4Ch`.
+
+**One guard:** a 286-or-better instruction on the fall-through side of the
+standard probe (`push sp / pop r / cmp r, sp / jnz`) does not count, because
+an 8086 or 186 always takes the jump. Open Watcom's start-up code probes for
+`smsw` that way in every program it builds, so without the guard every
+Watcom program would refuse on an 8088. The guarded instruction is still
+REPORTED.
+
+**What it reports:** the per-segment coverage, and the 186-looking bytes left
+in the dark, so a verdict is never quieter than its evidence.
+
+MEASURED, 2026-10-28:
+
+| program | verdict | notes |
+|---|---|---|
+| WinMine 2.6, 2.8, 2.9 (Duff) | **186** | 2.9: 423 reached 186 instructions, `push imm` the most common (375) |
+| CALC 3.00 (Windows 3.0) | **8086 + x87** | its 11 dark 186-looking bytes are a table of powers of ten in segment 4 |
+| WINMINE 3.10 (Windows 3.1) | **186** | 455 reached |
+| CALC 3.10 (Windows 3.1) | **186 + x87** | 302 reached, in segments 1–3 |
+| CLOCK, REVERSI, NOTEPAD, SOL, CARDFILE, WRITE … 3.00 | 8086 | every Windows 3.0 accessory |
+| the Open Watcom fixtures (`-0`) | 8086 | FPU.EXE 8086 + x87; each carries one guarded `smsw` |
+
+**The C runtime calls DOS directly.** The census also lists every `int` and,
+where a constant load precedes it, its AH. CALC 3.00 issues `int 21h` with
+AH = 25h, 30h, 35h, 3Eh, 40h, 44h and 4Ch, and WinMine 2.9 with 25h, 30h,
+35h and 4Ch. These calls are the MS C start-up and exit, not
+`DOS3Call` (KERNEL.102). WIN16 therefore owns `int 21h` while a program
+runs, and answers at least these functions (§124.3).
+
 ### 124.5 Floating point *(pinned; the subset is a gate)*
 
-MEASURED on CALC 3.00: 288 `wait`+ESC instructions, `WIN87EM.__FPMATH`
-imported, and 348 OS fixups (types 5, 6 and 3).
+The file carries NATIVE x87 code. Every x87 instruction is `wait` + ESC,
+and an OS fixup (relocation type 3) sits on its `wait` byte. The fixup
+kinds are MS C's: 5 = FIDRQQ (a plain ESC), 6 = FIWRQQ (a lone `fwait`), and
+1–4 the segment-override forms. MEASURED on CALC 3.00: 288 type-5, 57
+type-6 and 3 type-3 fixups (348), and `WIN87EM.__FPMATH` imported. The
+loader decides per machine, as Windows' own loader did:
 
+- **with an x87 present:** the sites are left as they are;
+- **without one:** each site is rewritten into the emulator interrupt it
+  stands for (`int 34h`–`3Bh` for ESC `D8`–`DF`, `3Ch` for a
+  segment-override form, `3Dh` for `fwait`), and an emulator part answers
+  those interrupts, covering exactly the subset the census found.
 
-Relocation type 3 marks the MS C emulator sequences (`int 34h`–`3Dh`):
+The subset, MEASURED (`tools/os88ne.py`, reached code only):
 
-- **with an x87 present:** they are patched to native instructions;
-- **without one:** they are served by an emulator part covering exactly the
-  opcodes the census found.
+- **CALC 3.00, 35 kinds:**
+  - loads and stores: `fld`/`fst`/`fstp` m64, `fld`/`fstp` m80, `fstp` m32,
+    `fild` m16i/m32i, `fistp` m64i;
+  - register forms: `fld`/`fstp`/`fxch`/`fcomp` st(i);
+  - arithmetic: `fadd`/`fsub`/`fsubr`/`fmul`/`fdiv`/`fdivr`/`fcom` m64, and
+    `faddp`/`fsubp`/`fmulp`/`fdivp`/`fcompp`;
+  - the rest: `fabs`, `fchs`, `ftst`, `fxam`, `fprem`, `frndint`, `fclex`,
+    `fldcw`/`fstcw`/`fstsw`.
+- **CALC 3.10, 40 kinds:** the same less `fabs`, plus `fild` m64i, `fdivrp`, `fld1`,
+  `fldz`, `finit` and `fstenv`.
+
+All of these are 8087 instructions; no 287 or 387 form appears. A program
+that reaches an instruction outside the emulator's subset is refused at
+load with the instruction named.
 
 ### 124.6 What it will not do *(pinned)*
 

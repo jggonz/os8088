@@ -617,6 +617,11 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   floppy paying for a package out of RunCPM's drive A) is
               #   WITHDRAWN by the set; the lists stand until the owner
               #   decides
+make win16census WIN3X=<dir>  # WIN16 (SPEC.md 124): what each Windows 3.x
+              #   program in <dir> imports, holds and needs from the CPU, by
+              #   recursive descent (tools/os88ne.py). `make win16fixtures`
+              #   builds the Win16 TEST programs with Open Watcom
+              #   (tools/setup-watcom.sh fetches it). Both on demand
 make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   lists the attached USB flash drives (USB + external +
               #   never the boot disk), typed-identifier confirmation,

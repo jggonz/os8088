@@ -18688,6 +18688,56 @@ clean-watcom:
 
 distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 
+# --- WIN16: Windows 3.x programs (SPEC.md 124, docs/plans/WIN16-PLAN.md) ------
+# ON DEMAND and never in `all`: nothing here ships yet, and both targets read
+# things this tree does not carry.
+#
+# `make win16census WIN3X=<dir>` runs tools/os88ne.py over every .EXE, .DLL,
+# .DRV and .FON under a directory of the user's Windows files - what each
+# imports, its resources, and the CPU it needs by recursive descent (SPEC.md
+# 124.4). Microsoft's files are never in this tree, so WIN3X is required;
+# the win16-reference skill's win16ref/samples/ is one such directory.
+#
+# `make win16fixtures` builds the Win16 TEST programs into $(BUILD)/win16/
+# (WIN16-PLAN.md D10): tests/win16/tiny16.asm with nasm, and tests/win16/*.c
+# with Open Watcom (-0: 8086 code; -bt=windows -l=windows: a Windows NE).
+# The compiler is fetched by tools/setup-watcom.sh into build/watcom/ the
+# first time, ~150 MB at a pinned SHA-256, which is why this is on demand.
+# The bitmaps bitmap.rc binds are generated (tests/win16/mkbmp.py), never
+# committed. tests/unit/t_win16ne.py reads the result when it is there.
+WIN16FIX := MSGBOX WINDOW MENU DIALOG PROFILE BITMAP FPU
+WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc) \
+            tests/win16/mkbmp.py
+
+win16census:
+	@test -n "$(WIN3X)" || { echo "win16census: say where the Windows files are: make win16census WIN3X=<dir>"; exit 2; }
+	python3 -I tools/os88ne.py --dir "$(WIN3X)"
+
+win16fixtures: $(BUILD)/win16/TINY16.EXE $(BUILD)/win16/.watcom
+
+$(BUILD)/win16/TINY16.EXE: tests/win16/tiny16.asm
+	@mkdir -p $(@D)
+	$(NASM) -f bin -w+error -o $@ $<
+
+$(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
+	@mkdir -p $(@D)
+	tools/setup-watcom.sh --build-dir $(abspath $(BUILD)) >/dev/null
+	python3 tests/win16/mkbmp.py $(@D)
+	@cd $(@D) && eval "$$($(CURDIR)/tools/setup-watcom.sh --build-dir $(abspath $(BUILD)) --env)" && \
+	for p in $(WIN16FIX); do \
+	  l=$$(echo $$p | tr A-Z a-z); \
+	  wcl -q -0 -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	      -fe=$$p.EXE $(CURDIR)/tests/win16/$$l.c >/dev/null || exit 1; \
+	  if [ -f $(CURDIR)/tests/win16/$$l.rc ]; then \
+	    wrc -q -bt=windows -30 -r -i=$(CURDIR)/tests/win16 -i=. -fo=$$l.res \
+	        $(CURDIR)/tests/win16/$$l.rc && wrc -q -bt=windows -30 $$l.res $$p.EXE || exit 1; \
+	  fi; \
+	done
+	@touch $@
+	@echo "win16fixtures: TINY16 $(WIN16FIX) built into $(BUILD)/win16/"
+
+.PHONY: win16census win16fixtures
+
 # Standalone 1942: committed artwork, compiled into adapter-native banks.
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json
 N1942BANKS = $(addprefix $(BUILD)/,1942V.GFX 1942C.GFX 1942VX.GFX 1942CX.GFX 1942L.GFX $(N1942SCENES))

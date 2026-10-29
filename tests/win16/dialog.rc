@@ -1,0 +1,19 @@
+/* dialog.rc - the dialog of dialog.c (WIN16 fixture, S6): one control of
+ * each class WinMine and Calculator use, in dialog units */
+#include <windows.h>
+#include "dialog.h"
+
+W16DLG DIALOG 20, 20, 180, 110
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "WIN16 dialog"
+BEGIN
+    LTEXT           "&Name:", -1, 8, 10, 30, 8
+    EDITTEXT        IDC_NAME, 40, 8, 80, 12
+    GROUPBOX        "Size", -1, 8, 26, 60, 40
+    RADIOBUTTON     "&Small", IDC_SMALL, 14, 38, 50, 10
+    RADIOBUTTON     "&Large", IDC_LARGE, 14, 50, 50, 10
+    CHECKBOX        "S&ound", IDC_SOUND, 8, 72, 60, 10
+    LISTBOX         IDC_LIST, 76, 28, 44, 40, LBS_NOTIFY | WS_VSCROLL | WS_BORDER
+    DEFPUSHBUTTON   "OK", IDOK, 130, 8, 40, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 130, 26, 40, 14
+END

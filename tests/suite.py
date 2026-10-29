@@ -2118,6 +2118,19 @@ FAST = [
         "adopter passed `stkapps`), and the COUNTED rows ask for an exact "
         "number: Video seeded two broken jumps into one shared epilogue and "
         "the walker reported ONE, both ending at the same `ret`"),
+    Row("win16ne", "fast", py("tests/unit/t_win16ne.py"), 0.3,
+        "WIN16's census (tools/os88ne.py, SPEC.md 124.4) gives the CPU verdict "
+        "S2's loader refuses on, and it must come from code REACHED by "
+        "recursive descent: an 8088 running a 186 program does not fault, it "
+        "mis-executes (0x60-0x6F alias the Jcc, 0x0F is pop cs). "
+        "tests/win16/tiny16.asm is assembled in five variants with one right "
+        "answer each - 186-looking data behind a jmp (8086, and a linear sweep "
+        "over the same bytes still says 186: the negative control), a reached "
+        "push imm8 (186), a prologued procedure nothing calls (186), x87 with "
+        "OS fixups, and Open Watcom's guarded smsw probe (still 8086). Then "
+        "every prefix and some noise must not raise, and, when present, the "
+        "Open Watcom fixtures (`make win16fixtures`) and the reference "
+        "programs (the win16-reference skill) must give the plan's verdicts"),
 ]
 
 # --------------------------------------------------------------------------
