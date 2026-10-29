@@ -1,7 +1,8 @@
 # WIN16 — running Windows 3.x programs on os8088
 
-**STATUS: PLAN, with the owner's decisions taken (2026-10-28). Nothing here is
-built.** Every size is an ESTIMATE unless the line says MEASURED. The census
+**STATUS: BEING BUILT. S0–S4 have shipped; the owner's decisions were taken
+2026-10-28, and D3, D6 and D8 were revisited 2026-10-29 for the end goal
+below.** Every size is an ESTIMATE unless the line says MEASURED. The census
 figures below are MEASURED with a scratch script over the sample binaries; S1
 turns that script into the shipped tool. The binding contract is SPEC.md
 §124, pinned story by story as this plan's checkboxes are ticked. The diary is
@@ -11,6 +12,13 @@ The ask: double-click the original Windows **Minesweeper** or **Calculator**
 in a Disk window and play it in an os8088 window that looks the way it did on
 Windows, through a compatibility layer, "a Wine for os8088", that lives on
 disk until a Windows program is opened.
+
+**The end goal (the owner, 2026-10-29) is any Win16 program**, CD-ROM
+programs and their installers included. Minesweeper and Calculator remain the
+first two programs, and S0–S13 still deliver them. From S5 on, no choice may
+close the road to the rest: a mechanism shaped to those two programs alone
+counts as a defect, and *Beyond S13* below lists what stands between the
+layer and the end goal.
 
 ---
 
@@ -194,9 +202,9 @@ are what S4–S10 are compared against. Three findings came off them already:
 | 2 | The message model: queue, `GetMessage`/`DispatchMessage`, the coroutine | nobody | medium |
 | 3 | Windows: top-level and child windows, classes, `DefWindowProc` | **the window manager (SPEC.md §11)**, one os8088 window per top-level window | medium |
 | 4 | GDI: DCs, pens, brushes, text, bitmaps, `SetDIBitsToDevice` | **`OSAPI_GFX_*`**, the 4bpp blitter (SPEC.md §5.4.1.3), proportional type (`apps/os88type.inc`) | large |
-| 5 | Resources: menus, accelerators, strings, bitmaps, icons, dialog templates | nobody; read out of the in-memory image | medium |
+| 5 | Resources: menus, accelerators, strings, bitmaps, icons, dialog templates | nobody; the resource table is kept and each resource is read from the file when it is loaded (`OSAPI_FILE_READ_AT`, SPEC.md §18.4.4), as Windows read it | medium |
 | 6 | Dialogs and controls: BUTTON, STATIC, EDIT, LISTBOX, `MessageBox` | **`apps/os88ui.inc`** and `os88line.inc` (SPEC.md §13.8–§13.17, §83), restyled to Windows 3.0's look | large |
-| 7 | Menus | **`OS88UI_MENU`**, the in-window bar (SPEC.md §13.16), which already draws a tick (§13.16.2.1) | small |
+| 7 | Menus | nobody: WIN16's own menu manager after Wine's `menu.c` (D8, revised). `OS88UI_MENU` (SPEC.md §13.16) was judged and set aside: no nested popups, a one-byte action, os8088's 8x8 cell | medium |
 | 8 | Profiles: `GetProfileInt`, `WritePrivateProfileString` | **`SYSTEM\APPDATA`** (SPEC.md §19.9), but no INI parser | small |
 | 9 | Timers, capture, sound, clipboard, About | **`OSAPI_WM_TIMER`**, press tracking (SPEC.md §13.7), `OSAPI_SND_TONE`, `OSAPI_CLIP_*`, `OSAPI_ABOUT_SET` | small |
 | 10 | Floating point (CALC) | nobody; winevdm's `win87em` is the reference | medium–large |
@@ -483,18 +491,53 @@ they stand on.
     override; `BitBlt` and memory DCs, which WinMine 3.1 uses and 2.9 does
     not. S13's final pass owns the measurements.
 
-- [ ] **S5: Resources and menus.** *As a user the program's menu bar sits in
-  its window as it did on Windows, its shortcuts work, and its check marks
-  show.*
-  - `LoadMenu`/`SetMenu`/`GetMenu`/`GetSubMenu` → an `OS88UI_MENU` bar inside
-    the window (D8).
-  - `CheckMenuItem`/`EnableMenuItem`, and WinMine's old `ChangeMenu`.
-  - `GetSystemMenu` maps to nothing: the os8088 frame is the frame.
-  - `LoadAccelerators`/`TranslateAccelerator`, `LoadString`, `LoadIcon`
-    (the dock and About card), `LoadCursor`/`SetCursor`/`ShowCursor` (mapped
-    to the arrow), and `FindResource`/`LoadResource`/`LockResource`.
-  - *Verify:* WinMine's Game menu checks the level and Marks; F2 and F3 work;
-    CALC's View menu switches Standard and Scientific.
+- [ ] **S5: Memory, resources and menus.** *As a user the program's menu bar
+  sits in its window as it did on Windows, its shortcuts work, and its check
+  marks show.* Menus are resources, resources need memory, and both targets
+  need memory before their first window, so the story carries all three.
+  - **Unprovided imports no longer refuse the load** (Beyond S13, R1). Each
+    is bound to a stub that, when CALLED, ends the program with the sentence
+    S2 printed at load: *Needs USER.287 / which WIN16 does not provide yet.*
+    Real programs import far more than they call. The load-time refusal stays
+    for what cannot load at all.
+  - **The global heap:** `GlobalAlloc`/`ReAlloc`/`Free`/`Lock`/`Unlock`/
+    `Size`/`Compact`/`Handle`, `LockSegment`/`UnlockSegment`, sub-allocated
+    in arena claims (D3). A `GMEM_FIXED` handle IS its segment, as on real-
+    mode Windows; a moveable one is a handle-table entry, never a segment, so
+    a protected-mode arm can put a selector behind the same calls (R3).
+  - **The local heap:** `LocalInit` over DGROUP's heap at `InitTask`, then
+    `LocalAlloc`/`ReAlloc`/`Free`/`Lock`/`Unlock`/`Size`.
+  - **Resources, read on demand:** the NE resource table is kept;
+    `FindResource`/`LoadResource`/`LockResource`/`FreeResource`/
+    `SizeofResource` read a resource from the program's file with
+    `OSAPI_FILE_READ_AT` into a global block, shared until freed. No program
+    is limited by what fits at load (R2).
+  - `LoadString`, `LoadAccelerators`/`TranslateAccelerator`, and
+    `LoadIcon`/`LoadCursor`/`SetCursor`/`ShowCursor` (the arrow; the icon is
+    S12's).
+  - **Menus, WIN16's own (D8, revised):** `LoadMenu`/`LoadMenuIndirect`,
+    `CreateMenu`/`CreatePopupMenu`/`AppendMenu`/`InsertMenu`/`DeleteMenu`/
+    `ChangeMenu`, `SetMenu`/`GetMenu`/`GetSubMenu`/`DrawMenuBar`,
+    `CheckMenuItem`/`EnableMenuItem`/`GetMenuState`, and the class menu.
+    Nested popups and 16-bit IDs. Drawn as Windows 3.0 drew them, in the
+    display's System font, inside the window. `WM_INITMENU` and
+    `WM_INITMENUPOPUP` before a popup opens, `WM_COMMAND` posted on a pick.
+    Mouse (press-drag-release and click-click) and keyboard (Alt or F10,
+    mnemonics, arrows, Enter, Esc). `GetSystemMenu` answers a menu the frame
+    never shows: the os8088 frame is the frame.
+  - **The profile reads answer as an empty `WIN.INI` does** (their
+    defaults) until S7 gives them a file, so a program reaches its window.
+  - **End Task (the owner, 2026-10-29).** A second click on the close box,
+    while the program has not yet closed for the first, asks *It has not
+    closed. End it?* and Proceed ends it, its memory and its window. A program
+    that never yields cannot be reached; os8088 has nothing that can.
+  - *Verify:* MENU.EXE (a nested popup, checks, greys, an accelerator,
+    `LoadString`, the global and local heaps) against Windows 3.0's
+    screenshot; **WinMine 2.9 reaches its board**, its Game menu checks the
+    level and Marks, and F2 starts a new game; a doctored import ends the
+    program with its name when called; End Task on a program that refuses
+    `WM_CLOSE`; the claim map back to the pre-launch one after each. CALC's
+    View menu moves to S10, CALC needing S6's dialog window first.
 
 - [ ] **S6: Dialogs and controls.** *As a user the program's dialog boxes
   open, I can type in them, and OK/Cancel do what they say.*
@@ -585,6 +628,38 @@ they stand on.
 
 ---
 
+## Beyond S13: any Win16 program
+
+The owner's end goal is any Win16 program, CD-ROM programs and their
+installers included. This section is the road from the S13 layer to it. It
+is NOT authorised and NOT estimated; each row becomes stories when the owner
+says so. What S0–S13 must do meanwhile is not block it, and four properties
+are kept for that:
+
+- **The loader reads a file it can seek.** `OSAPI_FILE_READ_AT` serves S5's
+  resources, and the same call loads a segment at a time (R2).
+- **Imports go through a module table and stubs** (SPEC.md 124.2.1), so a
+  DLL's exports can join it (R4).
+- **`int 21h` is WIN16's while the program runs** (SPEC.md 124.3), so DOS's
+  file calls can be served there (R5).
+- **Memory is handles, not segments** (D3, revised): only a `GMEM_FIXED`
+  handle is its segment, which is what real-mode Windows did too, so a
+  protected-mode backend can supply selectors behind the same calls (R3).
+
+| # | what blocks | why | the way through |
+|---|---|---|---|
+| R1 | An import WIN16 does not provide refuses the load | Programs import far more than they call; an installer imports hundreds | **Taken in S5:** a stub that ends the program, naming the import, when it is called |
+| R2 | Files over 64 KB | S2 reads the whole file into one claim | Load segment by segment with `OSAPI_FILE_READ_AT`; S5's resource reads are the first user |
+| R3 | Protected-mode programs | Windows 3.1 has no real mode, so many 3.1-era programs set the protected-mode-only flag, or use selectors (`AllocSelector`, `__AHINCR` huge pointers) and DPMI `int 31h` | A `kern_mega` arm (KERN-MEGA-PLAN): the program's segments get selectors from the kernel's descriptor tables, which is winevdm's model. 286 or better only; the real-mode arm stays for the XT. **The largest fork, and the owner's to take** |
+| R4 | DLLs: the program's own, and system ones | Installers ship DLLs, and programs import COMMDLG, LZEXPAND, VER, SHELL, MMSYSTEM, TOOLHELP and DDEML | NE libraries loaded into the module table (`LibMain`, `WEP`, shared data). WIN16-provided COMMDLG (os8088's Standard File dialog), LZEXPAND (SZDD, which `tools/w16font.py` already expands host-side), VER, SHELL, and MMSYSTEM over `SOUND.DRV` and `CDROM.DRV` (SPEC.md §119) |
+| R5 | DOS breadth | Installers copy files, make directories and read CDs | `int 21h` file and directory calls from DOS.O88's subset (SPEC.md §96), shared as source; MSCDEX's `int 2Fh` over `CDROM.DRV` |
+| R6 | Discardable segments | A large program expects its code to be discarded and reloaded under memory pressure | `int 3Fh` loader stubs for discardable code segments, read with `OSAPI_FILE_READ_AT` on first call (D3, revisited) |
+| R7 | USER and GDI breadth | Child windows, MDI, COMBOBOX, SCROLLBAR, multi-line EDIT, `BitBlt` and memory DCs, more fonts, palettes | S4's GDI and S6's controls grow, each by the programs that need them; printing refuses with its reason |
+| R8 | The installer's environment | `WIN.INI`/`SYSTEM.INI` edits, and DDE to Program Manager to make a group | S7's INI files; a Program Manager DDE server that makes os8088 desktop links |
+| R9 | Programs that talk to each other | DDE, a DLL's shared data | One WIN16 instance hosting several tasks, instead of S12's one instance per program |
+
+---
+
 ## Decisions
 
 Taken by the owner on 2026-10-28 unless marked otherwise.
@@ -593,12 +668,12 @@ Taken by the owner on 2026-10-28 unless marked otherwise.
 |---|---|---|---|
 | D1 | CPU floor | **V20.** The census at load decides per program: 8086-clean runs everywhere, 186 needs a V20/V30/186/286+, and an 8088 refuses a 186 program with the reason. No 8088 translation tier | Load-time translation of 186 opcodes for the 8088, or interpreting the program's code: not wanted |
 | D2 | Where the program runs | **A coroutine on the UI task** (finding 3) | A worker task (SPEC.md §20.6): no file access, and paint deferred out of `W_PAINT`, so every exposure draws twice |
-| D3 | Memory model (recommendation; not raised) | Every segment fixed in one arena claim; nothing moves or discards; `GlobalAlloc` sub-allocates inside a second claim (8 claims per owner, SPEC.md §50.3) | Real-mode Windows' movable segments: `INT 3Fh` loader stubs and BP-chain walking, for two programs that fit easily |
-| D4 | Fonts | **What Windows showed on that display**, so the programs look as they did on Windows. MEASURED from Windows 3.0's setup disk 2 (`CGASYS`, `EGASYS`, `VGASYS.FON`), all proportional with maximum width 14: **CGA 8 px (average 7, ascent 7); EGA 12 px (7, 10); VGA 16 px (7, 13)**. **Hercules uses EGA's 12 px font**: `SETUP.INF` gives it EGA's resolution class, `133,96,72`. VGA's face comes from Wine's System font, whose 16 px strike matches (`fonts/system.sfd`). CGA's and EGA's come from Windows' own `.FON` when the user supplies their Windows directory, and otherwise from os8088 strikes drawn to those metrics from source art (CLAUDE.md's artwork rule). Each is converted on the host into an `.F88` face (SPEC.md §6.3) and drawn through `os88type.inc`. Dialog units follow the font, as on Windows | os8088's 8x8 cell everywhere: dialogs half height on VGA and nothing like Windows |
+| D3 | Memory model (recommendation; not raised; revisited 2026-10-29) | Every segment fixed in one claim; nothing moves or discards yet. `GlobalAlloc` sub-allocates in arena claims. **Handles, not segments:** a `GMEM_FIXED` handle is its segment, as on real-mode Windows, and a moveable one is a table entry, so a protected-mode arm (R3) and discardable segments (R6) stay reachable | Real-mode Windows' movable segments: `INT 3Fh` loader stubs and BP-chain walking, for two programs that fit easily |
+| D4 | Fonts | **What Windows showed on that display**, so the programs look as they did on Windows. MEASURED from Windows 3.0's setup disk 2 (`CGASYS`, `EGASYS`, `VGASYS.FON`), all proportional with maximum width 14: **CGA 8 px (average 7, ascent 7); EGA 12 px (7, 10); VGA 16 px (7, 13)**. **Hercules uses EGA's 12 px font**: `SETUP.INF` gives it EGA's resolution class, `133,96,72`. VGA's face comes from Wine's System font, whose 16 px strike matches (`fonts/system.sfd`). CGA's and EGA's come from Windows' own `.FON` when the user supplies their Windows directory, and otherwise from os8088 strikes drawn to those metrics from source art (CLAUDE.md's artwork rule). S4 shipped each as committed art drawn into a part of `WIN16.O88` and a composer of WIN16's own, not as an `.F88` face through `os88type.inc` (SPEC.md 124.7). Dialog units follow the font, as on Windows | os8088's 8x8 cell everywhere: dialogs half height on VGA and nothing like Windows |
 | D5 **gate** | Floating point without a coprocessor | Emulate only the census's opcode subset, as a part. S1 MEASURED it: CALC 3.00 reaches 35 kinds and CALC 3.10 40, all 8087 instructions; no 287 or 387 form appears (SPEC.md 124.5 lists them). The file carries NATIVE x87 code with the OS fixups on the `wait` bytes; the loader rewrites those to `int 34h`–`3Dh` only on a machine without a coprocessor, as Windows did. Still the owner's to take | A whole x87 emulator, or refusing CALC on FPU-less machines |
-| D6 | Kernels | **`kern_big` and `kern_emu`.** `kern_mega` refuses at entry, *WIN16 needs real mode* (not `OS88_MEGA_REFUSE`, whose words name a MEGA apps disk). `kern_small` lacks `OSAPI_WM_TIMER` (SPEC.md §13.9), so its disks do not carry it (§24.5) | A kern_mega arm giving programs real selectors, winevdm's model: later |
+| D6 | Kernels | **`kern_big` and `kern_emu`.** `kern_mega` refuses at entry, *WIN16 needs real mode* (not `OS88_MEGA_REFUSE`, whose words name a MEGA apps disk). `kern_small` lacks `OSAPI_WM_TIMER` (SPEC.md §13.9), so its disks do not carry it (§24.5) | A kern_mega arm giving programs real selectors, winevdm's model: later, and now the way to most Windows 3.1-era programs (Beyond S13, R3) |
 | D7 | Sources and licence | **Bring in whatever is needed from Wine and winevdm.** `apps/win16/` becomes GPL-2.0-or-later (finding 6), `apps/apple2`'s footing. Microsoft binaries are still never committed | Clean-room MIT: slower, and gains nothing the owner wants |
-| D8 | Menus and check marks | **The in-window bar, `OS88UI_MENU`** (SPEC.md §13.16): a Windows program's menu bar is inside its window, and the package owns it, so it costs no kernel bytes. The element's tick is a solid square, and the reference machines show Windows drawing a ✓ glyph, so S5 adds a check-glyph option to `os88ui.inc` (shared source) | The kernel's global bar: at most 5 menus, no check marks, and not where Windows put it |
+| D8 | Menus and check marks (revised 2026-10-29, for the end goal) | **WIN16's own menu manager, after Wine's `menu.c`, inside the program's window.** A Windows program's menu bar is in its window and the package owns it, so it costs no kernel bytes, which is what the first decision was for. It draws in the display's System font with Windows' ✓, nests popups, carries 16-bit IDs, and has room for `TrackPopupMenu` and owner-draw later | **`OS88UI_MENU`** (SPEC.md §13.16), the 2026-10-28 decision: no nested popups, a one-byte action per item and os8088's 8x8 cell, so a general Win16 program cannot be served by it. The kernel's global bar: at most 5 menus, no check marks, and not where Windows put it |
 | D9 | Name | **`WIN16.O88`**, `apps/win16/` | — |
 | D10 | Compiler for Win16 TEST programs | **Open Watcom v2** (`tools/setup-watcom.sh`): the dated `2026-10-01-Build` snapshot, SHA-256-pinned, ~150 MB, into `build/watcom/`, which `make clean` spares. It runs natively on this Mac (`armo64`) and builds genuine Win16 NE programs with 8086 code (`-0`). MEASURED: a 1,906-byte HELLO16.EXE built this way runs on the Windows 3.0 reference machine in real mode. The shipped layer stays 8086 assembly (D7) | gcc-ia16: no Win16 target, and harder to install here. SmallerC (SPEC.md §73): no `long`, so no Win16 API |
 

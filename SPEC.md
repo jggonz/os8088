@@ -224611,9 +224611,13 @@ is an 8086 in real mode. So the layer emulates no CPU:
    far-callable code of its own;
 4. it calls the program's entry point.
 
-The two programs it is built for are the original Minesweeper (`WINMINE.EXE`,
-Duff Software's WinMine 2.9 of July 1990, which became Microsoft's) and
-Calculator (`CALC.EXE`, Windows 3.0's).
+The two programs it is built for first are the original Minesweeper
+(`WINMINE.EXE`, Duff Software's WinMine 2.9 of July 1990, which became
+Microsoft's) and Calculator (`CALC.EXE`, Windows 3.0's). **The end goal is any
+Win16 program**, CD-ROM programs and their installers included (the owner,
+2026-10-29), so nothing here may be shaped to those two alone;
+docs/plans/WIN16-PLAN.md's *Beyond S13* is the road and §124.6 says where the
+layer stands on it.
 
 ### 124.1 What it is, in one table *(pinned)*
 
@@ -224628,7 +224632,7 @@ Calculator (`CALC.EXE`, Windows 3.0's).
 | binaries | **no Microsoft file is ever in the tree.** The user supplies them: `make win16census WIN3X=<dir>` and `make win16disk WIN3X=<dir>` |
 | test programs | Win16 programs written in C under `tests/win16/` and built by Open Watcom v2 (`tools/setup-watcom.sh`, a pinned upstream instrument in `build/watcom/`, never committed), plus one NE assembled by NASM that needs no compiler |
 | sources and licence | code and data are brought in from Wine (LGPL-2.1+) and winevdm (GPL-2, any version) at the commits the plan pins: the `.spec` ordinal tables vendored in `tools/win16spec/`, Wine's System bitmap font, and the loader, dialog and control logic translated into 8086 assembly. **`apps/win16/` is therefore GPL-2.0-or-later**, and `COPYING` and `README.TXT` ship beside `WIN16.O88`, `apps/apple2`'s footing (docs/APPLE2-SPEC.md section 1.3). The rest of the tree is unaffected |
-| look | what Windows 3.0 showed on that display: the program's menu bar inside its window (`OS88UI_MENU`, §13.16), controls drawn as Windows drew them, and text in that adapter's Windows System font (§124.7) |
+| look | what Windows 3.0 showed on that display: the program's menu bar inside its window, drawn by WIN16's own menu manager (§124.11), controls drawn as Windows drew them, and text in that adapter's Windows System font (§124.7) |
 
 ### 124.2 Execution — the program's stack and the coroutine *(pinned)*
 
@@ -224835,8 +224839,9 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
 **Refusals, each worded on the glass:**
 
 - a SELFLOAD or library module;
-- an import the layer does not provide, named as `MODULE.ordinal` plus the
-  name;
+- more than `W16_NMISS` (64) different imports the layer does not provide.
+  Fewer are not refused (§124.12): each is bound to a stub that ends the
+  program, naming the import, when it is called;
 - a CPU the census rules out (§124.4);
 - a program larger than the heap can hold.
 
@@ -224996,13 +225001,19 @@ All of these are 8087 instructions; no 287 or 387 form appears. A program
 that reaches an instruction outside the emulator's subset is refused at
 load with the instruction named.
 
-### 124.6 What it will not do *(pinned)*
+### 124.6 What it does not do yet *(pinned)*
 
-- No 32-bit or protected-mode-only program, and no DLL of the program's own.
-- No WinHelp: it greys itself with the reason (§47).
-- No DDE, OLE, printing or MMSYSTEM.
-- No program that writes selectors or walks the LDT.
-- No segment moving or discarding.
+Each of these is a row of docs/plans/WIN16-PLAN.md's *Beyond S13*, the road
+to the end goal, and none is a design decision against it:
+
+- no file over 64 KB (R2), no protected-mode-only program and no program that
+  writes selectors (R3), and no DLL, the program's own or a system one (R4);
+- DOS calls beyond what the C runtime makes (R5);
+- no segment moving or discarding (R6);
+- no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
+- no WinHelp: it greys itself with the reason (§47).
+
+Never: a 32-bit program. That is not Win16.
 
 ### 124.7 Fonts — the System font Windows showed on that display *(shipped in S4)*
 
@@ -225291,3 +225302,109 @@ That method reproduces the VGA card's numbers exactly.
 **The caption is the face's.** `CreateWindow`, `MoveWindow` and
 `SetWindowPos` take `SM_CYCAPTION - 1` off a window's height to find its
 client (§124.8), so the sizing and the answer agree on every display.
+
+### 124.9 Memory: the global and local heaps *(pinned for S5)*
+
+**The global heap** is WIN16's, sub-allocated inside ARENAS: claims of
+`W16_ARENAKB` (16) KB, or one claim the size of a larger request, at most
+`W16_NARENA` (6) at once. Each block is whole paragraphs behind a one-paragraph
+header (its size, its handle, its lock count, its flags), first fit, with free
+neighbours merged. Arenas are freed with the program.
+
+| | |
+|---|---|
+| `GMEM_FIXED` | **the handle IS the segment** (`DX:0` is the block), as real-mode Windows answered. Programs that skip `GlobalLock` on a fixed block work |
+| `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`017Eh`, `W16_NGH` 64 entries). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
+| `GlobalLock` | `DX:AX` = the block, the lock count raised; NULL for a discarded handle |
+| `GlobalReAlloc` | in place when the next block is free; otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. `GMEM_MODIFY` changes the flags alone |
+| `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD` |
+| `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
+| out of memory | unused resource blocks (§124.10) are discarded and the request is tried once more; then the answer is 0 |
+
+**The local heap** is the one in DGROUP, initialised by `InitTask` over
+`ne_heap` bytes after the stack (§124.3), with its descriptor's offset at
+`DS:0006`, as Windows kept `pLocalHeap`. `LocalInit(seg, start, end)` makes one
+anywhere, so a program can turn a global block into a heap. **Every `Local*`
+call works on the CALLER's DS**, read from the gate's frame, as Windows' did.
+A block is a word of size and flags followed by its bytes, first fit, merged on
+free.
+
+| | |
+|---|---|
+| `LMEM_FIXED` | the near pointer |
+| `LMEM_MOVEABLE` | a pointer to a two-word handle entry whose first word is the block, so `*(char **)h` reads what `LocalLock` answers, which some programs rely on |
+
+### 124.10 Resources, read from the file when loaded *(pinned for S5)*
+
+**The resource table is kept; the resources are not.** The loader copies the
+NE resource table (from `ne_rsrctab` to `ne_restab`) into the program's claim
+and frees the file as before. `LoadResource` reads one resource from the
+program's file with `OSAPI_FILE_READ_AT`, in its folder (`OSAPI_FILE_GOTO_QM`
+and back, §124.7.1's rule), into a moveable global block. That is the size of
+the resource, not of the program, which is what lets a large program run
+(WIN16-PLAN R2). The kernel's own folder open reads with the gfx lock held, so
+a load from inside a paint is legal.
+
+| call | |
+|---|---|
+| `FindResource` | a type and a name, each an integer (`MAKEINTRESOURCE`, or a string `"#123"`) or a case-blind string; the HRSRC is the entry's offset in the kept table, as real-mode Windows' was |
+| `LoadResource` | the entry's own `handle` and `usage` words (the NE NAMEINFO's, which is what Windows used them for) cache the block: a second load answers the same handle |
+| `LockResource`, `FreeResource`, `SizeofResource` | `GlobalLock`; the usage lowered, and at 0 the block is kept until memory is short (§124.9); the length |
+| `LoadString` | `RT_STRING` block `id / 16 + 1`, the string `id mod 16`; at most `cchMax - 1` bytes and a NUL; the length |
+| `LoadAccelerators`, `TranslateAccelerator` | the table's five-byte entries (flags, key, ID); a `WM_KEYDOWN` or `WM_SYSKEYDOWN` meets the `FVIRTKEY` entries with the Shift, Ctrl and Alt state the BIOS reports, a `WM_CHAR` the others. A match is SENT as `WM_COMMAND` with `lParam` high word 1, unless its ID is a greyed item of the window's menu |
+| `LoadIcon`, `LoadCursor`, `SetCursor`, `ShowCursor` | a handle that is not NULL, and the arrow; the icon is S12's |
+
+A file that cannot be read (its floppy taken out) answers `LoadResource`
+with 0, which every caller already has to handle.
+
+### 124.11 Menus *(pinned for S5)*
+
+**WIN16 has its own menu manager, after Wine's `menu.c`** (WIN16-PLAN D8,
+revised 2026-10-29). `OS88UI_MENU` (§13.16) was the first decision and was set
+aside for the end goal: it has no nested popup, a one-byte action and os8088's
+8x8 cell.
+
+- **Storage:** menus live in WIN16's USER heap, a moveable global block with
+  §124.9's local-heap format, as Windows kept them in USER's. An `HMENU` is a
+  menu's offset there.
+- **Calls:** `LoadMenu` (the Windows 3.x template: version, header size, then
+  items of flags, ID unless `MF_POPUP`, and text; `MF_END` closes a level),
+  `LoadMenuIndirect`, `CreateMenu`, `CreatePopupMenu`, `AppendMenu`,
+  `InsertMenu`, `DeleteMenu`, `RemoveMenu`, `DestroyMenu`, `ChangeMenu`,
+  `SetMenu`, `GetMenu`, `GetSubMenu`, `GetMenuItemCount`, `GetMenuItemID`,
+  `GetMenuState`, `GetMenuString`, `CheckMenuItem`, `EnableMenuItem`,
+  `DrawMenuBar`, and the class menu named in `WNDCLASS` or given to
+  `CreateWindow`. `GetSystemMenu` answers a menu that is never shown: the
+  os8088 frame is the frame.
+- **Where it is:** the bar is the top `SM_CYMENU + 1` rows of the os8088
+  window's content, and the client is below it, so every client coordinate
+  (mouse, paint, DC origin, `GetClientRect`, sizing) is offset by the bar.
+  The window is sized so that the client is what the program asked for.
+- **How it looks:** Windows 3.0's: `COLOR_MENU` ground, `COLOR_MENUTEXT` in
+  the display's System font, the selection in `COLOR_HIGHLIGHT` and
+  `COLOR_HIGHLIGHTTEXT`, a greyed item in `COLOR_GRAYTEXT` (on a 1bpp display
+  its lit pixels are dithered), ✓ in the left margin, `\t` text
+  right-aligned, the mnemonic underlined. A popup is a framed box with a
+  shadow, under its title, kept inside the window. The pixels it covers are
+  banked and put back, not repainted by the program.
+- **Use:** mouse press-drag-release and click-then-click; Alt or F10 and
+  then the arrows, a mnemonic, Enter or Esc. `WM_INITMENU` is sent when the
+  bar is entered and `WM_INITMENUPOPUP` before each popup opens, and both are
+  answered before it is drawn. A pick POSTS `WM_COMMAND`, as Windows does.
+  A greyed or disabled item does nothing.
+
+### 124.12 How a program ends *(pinned for S5)*
+
+- **It exits** (`int 21h` AH = 4Ch): its memory and its window go
+  (§124.8).
+- **It calls an import WIN16 does not provide:** the stub (§124.3) ends it in
+  the same way, with a toast naming the call, *Needs USER.287, which WIN16
+  does not provide yet.*
+- **The user asks it to close:** the close box posts `WM_CLOSE`, and the
+  program decides (§124.8).
+- **End Task (the owner, 2026-10-29):** a second click on the close box,
+  while the program has still not closed after the first, raises *It has not
+  closed. End it?* with Cancel and Proceed. Proceed ends it there: nothing of
+  the program runs again, and its memory, its face and its window go. It
+  reaches only a program that is waiting for a message. One that never yields
+  holds the UI task, and nothing on os8088 can stop it.
