@@ -56,7 +56,49 @@ W16EXPORT W16M_KERNEL,     132,     0,  w16k_getwinflags    ; GetWinFlags()
 W16EXPORT W16M_KERNEL,     207,     2,  w16k_isdbcs         ; IsDBCSLeadByte(word)
 W16EXPORT W16M_USER,       1,       12, w16u_msgbox         ; MessageBox(word str str word)
 W16EXPORT W16M_USER,       5,       2,  w16u_initapp        ; InitApp(word)
+W16EXPORT W16M_USER,       6,       2,  w16u_postquit       ; PostQuitMessage(word)
+W16EXPORT W16M_USER,       10,      10, w16u_settimer       ; SetTimer(word word word segptr)
+W16EXPORT W16M_USER,       12,      4,  w16u_killtimer      ; KillTimer(word word)
+W16EXPORT W16M_USER,       13,      0,  w16u_tickcount      ; GetTickCount()
+W16EXPORT W16M_USER,       15,      0,  w16u_tickcount      ; GetCurrentTime()
+W16EXPORT W16M_USER,       18,      2,  w16u_setcapture     ; SetCapture(word)
+W16EXPORT W16M_USER,       19,      0,  w16u_relcapture     ; ReleaseCapture()
+W16EXPORT W16M_USER,       33,      6,  w16u_clientrect     ; GetClientRect(word ptr)
+W16EXPORT W16M_USER,       39,      6,  w16u_beginpaint     ; BeginPaint(word ptr)
+W16EXPORT W16M_USER,       40,      6,  w16u_endpaint       ; EndPaint(word ptr)
+W16EXPORT W16M_USER,       41,      30, w16u_createwnd      ; CreateWindow(str str long s_word x4 word word word segptr)
+W16EXPORT W16M_USER,       42,      4,  w16u_showwnd        ; ShowWindow(word word)
+W16EXPORT W16M_USER,       53,      2,  w16u_destroywnd     ; DestroyWindow(word)
+W16EXPORT W16M_USER,       56,      12, w16u_movewnd        ; MoveWindow(word word word word word word)
+W16EXPORT W16M_USER,       57,      4,  w16u_regclass       ; RegisterClass(ptr)
+W16EXPORT W16M_USER,       66,      2,  w16u_getdc          ; GetDC(word)
+W16EXPORT W16M_USER,       68,      4,  w16u_releasedc      ; ReleaseDC(word word)
+W16EXPORT W16M_USER,       107,     10, w16u_defproc        ; DefWindowProc(word word word long)
+W16EXPORT W16M_USER,       108,     10, w16u_getmsg         ; GetMessage(ptr word word word)
+W16EXPORT W16M_USER,       109,     12, w16u_peekmsg        ; PeekMessage(ptr word word word word)
+W16EXPORT W16M_USER,       110,     10, w16u_postmsg        ; PostMessage(word word word long)
+W16EXPORT W16M_USER,       111,     10, w16u_sendmsg        ; SendMessage(word word word long)
+W16EXPORT W16M_USER,       113,     4,  w16u_translate      ; TranslateMessage(ptr)
+W16EXPORT W16M_USER,       114,     4,  w16u_dispatch       ; DispatchMessage(ptr)
+W16EXPORT W16M_USER,       124,     2,  w16u_updatewnd      ; UpdateWindow(word)
+W16EXPORT W16M_USER,       125,     8,  w16u_invalrect      ; InvalidateRect(word ptr word)
+W16EXPORT W16M_USER,       127,     6,  w16u_validrect      ; ValidateRect(word ptr)
+W16EXPORT W16M_USER,       173,     6,  w16u_loadcursor     ; LoadCursor(word str)
+W16EXPORT W16M_USER,       174,     6,  w16u_loadicon       ; LoadIcon(word str)
+W16EXPORT W16M_USER,       232,     14, w16u_setwndpos      ; SetWindowPos(word word word word word word word)
+W16EXPORT W16M_GDI,        19,      6,  w16g_lineto         ; LineTo(word s_word s_word)
+W16EXPORT W16M_GDI,        20,      6,  w16g_moveto         ; MoveTo(word s_word s_word)
+W16EXPORT W16M_GDI,        27,      10, w16g_rect           ; Rectangle(word s_word x4)
+W16EXPORT W16M_GDI,        33,      12, w16g_textout        ; TextOut(word s_word s_word str word)
+W16EXPORT W16M_GDI,        45,      4,  w16g_select         ; SelectObject(word word)
+W16EXPORT W16M_GDI,        66,      4,  w16g_solidbrush     ; CreateSolidBrush(long)
+W16EXPORT W16M_GDI,        69,      2,  w16g_delobj         ; DeleteObject(word)
+W16EXPORT W16M_GDI,        87,      2,  w16g_stock          ; GetStockObject(word)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
+; the callee's way back (SPEC.md 124.2.2): module 0FEh, which no program's
+; module table can name, so the loader never binds an import to it
+W16_CBROW equ W16NX
+W16EXPORT 0xFE,            0,       0,  w16_cbdone
 
 w16_exports:
 %assign k 0
@@ -337,7 +379,7 @@ w16_mbdone:
 .ans:
     push dx
     mov bx, [w16_win]
-    mov ax, w16_name                ; our own title back
+    mov ax, [w16_titleptr]          ; our own title back
     call OSAPI_WM_TITLE
     pop ax
     xor dx, dx

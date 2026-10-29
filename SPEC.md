@@ -224709,6 +224709,45 @@ instead of up.
 installs it and the gate's return to `LOW_SEG` restores it, both inside
 `cli`, so nothing else on the machine ever meets it.
 
+#### 124.2.2 Calling the program back *(shipped in S3)*
+
+**A call into the program is a continuation on the program's stack, never a
+nested frame on the host's.** A handler that must run a window procedure
+(`CreateWindow` sends `WM_CREATE`, `DispatchMessage` calls one,
+`DefWindowProc(WM_CLOSE)` destroys a window) pushes the following below the
+frame of the import it is serving, then lets the gate enter the callee
+instead of finishing the import:
+
+1. any EXTRA bytes the call points at, such as a `CREATESTRUCT` (`lParam` is
+   a far pointer into this block);
+2. an 8-byte CONTINUATION record: the WIN16 procedure that resumes the
+   import, the import's export row, one data word, and the extra bytes'
+   count;
+3. the callee's pascal arguments;
+4. a far return address at `w16_cbret`.
+
+The gate enters the callee with **AX = DS = DGROUP**, which is the contract
+§124.3's prolog fixup leaves an exported entry. The callee pops its own
+arguments and returns to `w16_cbret`. That is a stub which enters the gate as
+an import of its own: row `W16_CBROW`, no arguments, on module `0FEh`, which
+no program's module table can name, so the loader never binds an import to
+it. Its handler, `w16_cbdone`, then:
+
+- discards the stub's frame, the record and the extra bytes;
+- makes the served import current again (`[w16_idx]`, and `[w16_nargb]`
+  from its row);
+- calls the continuation procedure with DX:AX = what the callee returned.
+
+A continuation does what any handler does: it answers, waits, or calls back
+again.
+
+**So the host stack never holds a call into the program.** A window
+procedure that waits (a `MessageBox`, a modal dialog's loop) waits like any
+import, because everything it is in the middle of is on the program's
+stack, and the callback that resumed it returns. Depth is bounded by the
+program's own stack: each level costs 12 + 8 + the extra bytes + the
+arguments.
+
 ### 124.3 The NE image as the loader reads it *(pinned)*
 
 These are the fields the loader reads, the rules it applies, and its
@@ -224980,3 +225019,169 @@ host:
 
 A Windows `.FON` the user puts in the `WIN16` folder is preferred over the
 built-in face.
+
+### 124.8 USER: windows, the queue and the pump *(shipped in S3)*
+
+**Classes.** At most 8 (`W16_MAXCLS`). `RegisterClass` copies:
+
+- the name: at most 15 characters, compared without regard to case, as
+  Windows does;
+- the style, the window procedure and the background brush;
+- `cbWndExtra`: at most 16, and a class asking for more is refused with 0.
+
+**Windows.** At most 8 (`W16_MAXWND`). An `HWND` is `0x2000 + 4 × slot`, so
+it is never 0 and never a small integer that a program could confuse with
+something else.
+
+**The top-level window is WIN16's own os8088 window.** In S3 a program has
+one top-level window. `CreateWindow` retitles WIN16's window with the window
+text, and resizes it so that its CLIENT area is the size Windows would have
+given: `cx − 2·SM_CXFRAME` by `cy − 19 − 2·SM_CYFRAME`. The metrics are
+VGA's: frame 4 for `WS_THICKFRAME`, 1 otherwise. The 19 is `SM_CYCAPTION`'s
+20 less the row the caption shares with the frame, MEASURED on Windows 3.0:
+`tests/win16/pump.c` at 320 × 180 has a 312 × 153 client there and here.
+
+- `CW_USEDEFAULT` keeps the size WIN16's window already has.
+- The position is os8088's to choose, and so is the width's last few
+  pixels: `OSAPI_WM_RESIZE` keeps a window's width on os8088's 8-pixel
+  grid, so a 260-wide window has a 256-pixel client here where Windows
+  gives 252. WM_SIZE and `GetClientRect` report the client os8088 gave.
+- `CreateWindow` sends `WM_CREATE` (its `lParam` a CREATESTRUCT, which is
+  the call's own thirty argument bytes in order) and then `WM_SIZE`, as
+  Windows does.
+- **A window created `WS_MINIMIZE` keeps its restored size.** `MoveWindow`
+  and `SetWindowPos` on it move the icon on Windows and change nothing
+  here, and `ShowWindow(SW_SHOWNORMAL)` or `SW_RESTORE` restores it at the
+  size `CreateWindow` gave it, with `WM_SIZE`. That is Windows 3.0's
+  behaviour, measured with PUMP.EXE, and it is WinMine's start (winevdm
+  issue #181).
+- `MoveWindow`, and `SetWindowPos` without `SWP_NOSIZE`, resize the
+  top-level window the same way, invalidate it whole and send `WM_SIZE`.
+- A second top-level window, and every child window, returns NULL until the
+  story that needs them.
+
+**Coordinates.** Client coordinates are relative to the os8088 content
+origin (`OSAPI_WM_CONTENT`).
+
+**The queue.** 32 posted messages (`W16_QLEN`). A full queue drops the new
+message, and `PostMessage` answers 0. `GetMessage` and `PeekMessage` take
+messages in Windows' order:
+
+1. the posted messages, in order;
+2. `WM_QUIT`, once `PostQuitMessage` has been called;
+3. `WM_PAINT`, for a window with an invalid region;
+4. `WM_TIMER`, for a timer that has fired.
+
+A message's time is `GetTickCount`'s, and its point is the last mouse
+position in screen coordinates. `GetMessage` with nothing to give WAITS
+(§124.2.1), and the next os8088 callback that has something resumes it.
+**`PeekMessage` with nothing to give YIELDS**: the program waits for one
+os8088 UI pass (`OSAPI_WM_WAKE`) and is answered then, with a message if
+one arrived. A `PeekMessage` idle loop therefore gives the machine a pass a
+turn instead of owning it, which is also what Windows 3.x did, where it
+yielded to the other tasks; the Task Manager shows such a program near
+100% and the desktop stays live. S3 honours only the NULL filter (`hwnd`
+0, range 0–0); any other filter is treated as that one.
+
+**Input.** The os8088 callbacks become messages:
+
+| os8088 callback | Windows message |
+|---|---|
+| `W_ONCLICK` | `WM_LBUTTONDOWN` |
+| `W_ONMOUSEUP` | `WM_LBUTTONUP` |
+| `W_ONDRAG` | `WM_MOUSEMOVE`, with `MK_LBUTTON` |
+| `W_ONRCLICK` | `WM_RBUTTONDOWN` then `WM_RBUTTONUP` |
+| `W_ONKEY` | `WM_KEYDOWN` then `WM_KEYUP`, with the virtual key mapped from the scan code |
+
+- The keyboard has no release edge, so `WM_KEYUP` follows `WM_KEYDOWN` at
+  once. `TranslateMessage` posts `WM_CHAR` for a key-down that had an ASCII
+  code.
+- os8088 reports no movement without a button, so `WM_MOUSEMOVE` arrives
+  only while dragging.
+- `SetCapture` and `ReleaseCapture` record the window and answer the
+  previous one. os8088 already tracks a press until its release.
+
+**Paint.** Each window has one invalid rectangle (a union) and an erase
+flag.
+
+- `InvalidateRect` and `ValidateRect` edit it.
+- `BeginPaint` sends `WM_ERASEBKGND` when the erase flag is set (through
+  §124.2.2), fills the `PAINTSTRUCT`, and validates the window. It takes the
+  gfx lock and arms the clip, unless the resuming callback already holds
+  both. `EndPaint` gives back what `BeginPaint` took.
+- **`W_PAINT` is `OSAPI_WM_OWNBG`:** the kernel's damage
+  (`OSAPI_WM_DAMAGE`) is added to the invalid rectangle with erase. If the
+  program is waiting in `GetMessage`, it is resumed right there, inside
+  `W_PAINT` under the lock and the damage clip, so the `WM_PAINT` lands in
+  the same pass (§124.2).
+- If the program is waiting in anything else, the damage is filled with the
+  class brush and stays invalid until the program next asks for a message.
+
+**Timers.** At most 4. `SetTimer(hwnd, id, ms, NULL)`:
+
+- arms one os8088 one-shot (`OSAPI_WM_TIMER`) at the nearest deadline, in
+  ticks (`ms × 182 / 10000`, at least 1);
+- a timer that fires marks itself and re-arms;
+- `GetMessage` generates `WM_TIMER` when nothing else is pending, as Windows
+  does, so timers never fill the queue.
+
+A non-NULL `lpfnTimer` is refused with 0 until a program needs it.
+
+**`DefWindowProc`:**
+
+| message | what it does |
+|---|---|
+| `WM_CLOSE` | `DestroyWindow` |
+| `WM_ERASEBKGND` | fills the update area with the class brush; answers 1 |
+| `WM_PAINT` | erases with the class brush when the erase flag is set, without sending `WM_ERASEBKGND`, and validates |
+| `WM_SYSCOMMAND` `SC_CLOSE` | posts `WM_CLOSE` |
+| anything else | answers 0 |
+
+**Closing.** The close box is os8088's close negotiator:
+
+- With a program window standing, it posts `WM_CLOSE` and resumes a
+  program waiting in `GetMessage` there and then. The program's own
+  handling (`DefWindowProc`, then `DestroyWindow` sends `WM_DESTROY`, then
+  `PostQuitMessage`, then `GetMessage` answers 0) ends in AH=4Ch, and the
+  close goes ahead. A program that has not ended by then keeps its window:
+  the close is refused, and the `WM_CLOSE` waits in its queue.
+- Ending a waiting program needs nothing of WIN16 beyond freeing its claim:
+  the kernel frees the instance, `int 21h` is os8088's whenever the program
+  is not running (§124.2.1), and the timers die with the window. Measured:
+  the claim map after WINDOW.EXE and PUMP.EXE close is the one before they
+  were launched, byte for byte (`tools/heapmap.py`).
+- **os8088 has no other way to end a package.** The Task Manager is a
+  viewer (§28: nothing there can kill a task), so a program that refuses
+  `WM_CLOSE` keeps its window until it agrees. Whether WIN16 needs an
+  "End Task" of its own is open (docs/plans/WIN16-PLAN.md).
+
+**Ticks.** `GetTickCount` and `GetCurrentTime` are the BIOS tick count ×
+55 ms.
+
+#### 124.8.1 GDI, S3's subset *(shipped in S3)*
+
+One device context, `0x3002`, on the program's window, opened by
+`BeginPaint` or `GetDC` and closed by `EndPaint` or `ReleaseDC`. Opening it
+takes the gfx lock and arms the kernel's clip (`OSAPI_WM_CLIP_SET`), unless
+the resuming callback already holds the lock (it keeps it) or is our
+`W_PAINT` (the damage is already the clip). Each open resets the DC: the
+black pen, the white brush, the System font and the point (0, 0).
+
+**The clip is two clips.** The kernel's keeps every pixel inside what is
+visible of the content; WIN16's own, in screen coordinates, keeps it inside
+`rcPaint`, so a `WM_PAINT` for a counter's strip repaints the strip and not
+the window. Fills and lines are cut exactly; text is cut by whole cells.
+
+| call | what it does |
+|---|---|
+| `GetStockObject` | `0x3100 + i` for the 17 stock objects |
+| `CreateSolidBrush` | the nearest of Windows' sixteen colours (the sum of the three distances), which are os8088's `CBLACK`..`CWHITE` in another order; 8 at once, as `0x3200 + slot` |
+| `SelectObject` | swaps the brush, the pen or the font and answers the old one |
+| `DeleteObject` | frees a made brush; a stock object is never deleted |
+| `MoveTo` / `LineTo` | Bresenham up to, not including, the end point, plotted through `OSAPI_GFX_POINTS` 32 points a call |
+| `Rectangle` | the pen's frame outside, the brush's fill inside it, no pixel twice |
+| `TextOut` | black on white, opaque, one `OSAPI_FONT_RUN`; the 8 × 8 font until §124.7's System font arrives (S4) |
+
+A colour on a 1bpp adapter is the adapter's rounding of the os8088 colour,
+so Windows' red comes out white on CGA where Windows' own mono driver would
+draw it black. That and the font are S4's.

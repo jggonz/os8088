@@ -332,8 +332,9 @@ they stand on.
     self-loading, library and out-of-memory refusals; the census on a real
     8088 or MartyPC, and its time there. S13's final pass owns all of these.
 
-- [ ] **S3: The message pump.** *As a user I see the program's window, I can
-  move it, click in it, and close it with the close box.*
+- [x] **S3: The message pump.** *As a user I see the program's window, I can
+  move it, click in it, and close it with the close box.* SHIPPED
+  2026-10-29; SPEC.md 124.2.2 and 124.8 are the contract as built.
   - The API: `RegisterClass`, `CreateWindow`, `ShowWindow`, `UpdateWindow`,
     `MoveWindow`, `SetWindowPos`, `DestroyWindow`, `DefWindowProc`, the
     `GetMessage`/`PeekMessage`/`TranslateMessage`/`DispatchMessage` loop,
@@ -349,6 +350,73 @@ they stand on.
   - The close box and a Task Manager kill both tear down every claim.
   - *Verify:* the fixture's window opens, repaints only its damage, counts
     timer ticks and closes cleanly; `mem_tab` is back to its starting state.
+  - **What shipped:**
+    - **Calls into the program are continuations on its stack** (SPEC.md
+      124.2.2, `w16core.inc`): `w16_cbopen` pushes a record and any extra
+      bytes (WM_CREATE's CREATESTRUCT), `w16_cbcall` the arguments and a far
+      return to `w16_cbret`, and the gate enters the callee with AX = DS =
+      DGROUP. The callee's return is an import of its own, `W16_CBROW`,
+      whose handler runs the continuation. The host stack never holds a call
+      into the program, so a window procedure that waits waits like any
+      import.
+    - **USER** (`w16user.inc`, SPEC.md 124.8): 8 classes, 8 windows, one
+      top-level window that is WIN16's own os8088 window, a 32-message queue
+      taken in Windows' order, 4 timers on one os8088 one-shot, the input
+      table, `W_PAINT` as `OSAPI_WM_OWNBG` resuming a program waiting in
+      `GetMessage` inside the paint, and the close negotiator posting
+      `WM_CLOSE`. The rows: USER 6, 10, 12, 13, 15, 18, 19, 33, 39, 40, 41,
+      42, 53, 56, 57, 66, 68, 107-111, 113, 114, 124, 125, 127, 173, 174 and
+      232.
+    - **GDI's S3 subset** (`w16gdi.inc`, SPEC.md 124.8.1): one DC, the stock
+      objects, solid brushes, `MoveTo`/`LineTo`, `Rectangle` and `TextOut`,
+      with WIN16's own clip to `rcPaint` inside the kernel's.
+    - **A second fixture, `tests/win16/pump.c` (PUMP.EXE)**, for what
+      WINDOW.EXE does not reach: the `WS_MINIMIZE` start then `MoveWindow`,
+      `MoveWindow`/`SetWindowPos` on keys, a `PeekMessage` idle loop that
+      counts its empty turns, `SendMessage` (answers 7), `PostMessage`,
+      capture and `GetTickCount`. It was run on Windows 3.0 FIRST, and
+      matching it changed two things: the caption costs 19 rows, not 20,
+      and a window created minimized keeps its created size through
+      `MoveWindow` until `ShowWindow` restores it.
+    - `make win16` is 14,432 bytes; the kernel is unchanged.
+  - **Seen on the glass** (QEMU, `make test TESTAPPS=build/win16test.img`):
+    - WINDOW.EXE: its window is titled *WIN16 window* and sized to the
+      client asked for; the tick counter runs at 2 a second; a click reads
+      *clicks 1 at 170,62* in client coordinates; a key reads *key a*
+      (`WM_KEYDOWN`, then `TranslateMessage`'s `WM_CHAR`); covering it with
+      the Disk window and raising it again repaints everything; the close
+      box ends it (`WM_CLOSE`, `DestroyWindow`, `WM_DESTROY`,
+      `PostQuitMessage`, AH=4Ch).
+    - PUMP.EXE against Windows 3.0's own screenshots: *size 192 x 73*
+      after the minimized start, *sent 7*, *posted 2* after two `p`s, 312 ×
+      153 after `s`, *capture 1* while the button is held and 0 after, the
+      idle count climbing while the desktop stays live. Covered by the Task
+      Manager while it idles in `PeekMessage`, it repaints in full.
+    - The claim map (`tools/heapmap.py`) after each close is the one taken
+      before the launch, byte for byte, twice.
+    - On CGA (`VIDEO=cga`, 640 × 200): WINDOW.EXE runs, text is legible
+      and the grey brush dithers; the window is clamped to the screen, so
+      the bottom of the picture is cut off.
+    - MSGBOX.EXE still reaches its MessageBox, and OK ends it.
+  - **Not as the story first said, and why:**
+    - **There is no Task Manager kill.** os8088's Task Manager is a viewer
+      (SPEC.md 28: nothing there can kill a task), so the close box is the
+      only end a package has, and it is negotiated: a program that refuses
+      `WM_CLOSE` keeps its window. Whether WIN16 should offer an "End Task"
+      of its own (a second close click, say) is OPEN, for the owner.
+    - `WM_COMMAND` has no source until menus (S5, D8) and dialogs (S6);
+      `DispatchMessage` delivers it like any other message.
+    - **The width differs from Windows by up to 7 pixels.** os8088 keeps a
+      window's width on its 8-pixel grid: PUMP's `m` (260 wide) has a 256
+      client here and 252 on Windows 3.0.
+    - On a 1bpp adapter a colour is the adapter's rounding of the os8088
+      colour: WINDOW's red box is white on CGA, where Windows' mono driver
+      draws it black. With D4's System font, that belongs to S4.
+  - **Not seen yet:** WinMine's own start (it needs S4's GDI and S5's
+    menus to run at all; PUMP reproduces the sequence and the Windows 3.0
+    answer); "repaints only its damage" was checked by construction and by
+    eye, not by counting primitive calls; Hercules, EGA and an XT. S13's
+    final pass owns the measurements.
 
 - [ ] **S4: GDI and the Windows look.** *As a user the program's window looks
   the way it did on Windows on that display, in colour on VGA/EGA and

@@ -18705,7 +18705,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # first time, ~150 MB at a pinned SHA-256, which is why this is on demand.
 # The bitmaps bitmap.rc binds are generated (tests/win16/mkbmp.py), never
 # committed. tests/unit/t_win16ne.py reads the result when it is there.
-WIN16FIX := MSGBOX WINDOW MENU DIALOG PROFILE BITMAP FPU
+WIN16FIX := MSGBOX WINDOW MENU DIALOG PROFILE BITMAP FPU PUMP
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc) \
             tests/win16/mkbmp.py
 

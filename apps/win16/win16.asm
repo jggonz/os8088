@@ -36,6 +36,19 @@ W16S_ENDED   equ 4              ; it called int 21h AH=4Ch; the window closes
 W16_MAXSEG   equ 64             ; segments a program may have (WinMine has 2,
                                 ; CALC 5; the table is 4 bytes a segment)
 
+; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
+W16_MAXCLS   equ 8              ; classes (SPEC.md 124.8)
+W16_MAXWND   equ 8              ; windows
+W16_QLEN     equ 32             ; posted messages (a power of two)
+W16_MAXTMR   equ 4              ; timers
+W16C_SIZE    equ 26             ; a class record
+W16W_SIZE    equ 36             ; a window record
+W16T_SIZE    equ 10             ; a timer record
+MSG_SIZE     equ 18             ; a Windows MSG
+W16_NSCAN    equ 0x59           ; scan codes with a virtual key
+W16_NPTS     equ 32             ; LineTo's point buffer
+W16_TXTMAX   equ 80             ; TextOut's longest run
+
 ; --- bss (SPEC.md 21 step 5: zeroed by the loader) ---------------------------
 %assign W16B 0
 %macro W16BSS 2
@@ -88,6 +101,82 @@ W16_MAXSEG   equ 64             ; segments a program may have (WinMine has 2,
     W16BSS w16_mbtext, 64       ; MessageBox's text, one line, in OUR segment
     W16BSS w16_mbcap, 48        ; ...and its caption
     W16BSS w16_scratch, 16
+    ; --- calls into the program (w16core.inc, SPEC.md 124.2.2) ---
+    W16BSS w16_cbax, 2          ; the callee's answer, DX:AX
+    W16BSS w16_cbdx, 2
+    W16BSS w16_cbgo, 1          ; 1 = the gate enters the callee
+    ; --- USER (w16user.inc, SPEC.md 124.8) ---
+    W16BSS w16_inget, 1         ; 1 = waiting in GetMessage
+    W16BSS w16_inpeek, 1        ; 1 = ...in a PeekMessage, for the wake
+    W16BSS w16_mvcx, 2          ; MoveWindow's size and window
+    W16BSS w16_mvcy, 2
+    W16BSS w16_mvhwnd, 2
+    W16BSS w16_inpaint, 1       ; 1 = resumed inside our W_PAINT
+    W16BSS w16_ltook, 1         ; 1 = w16_lock took the gfx lock
+    W16BSS w16_top, 1           ; the top-level window's slot + 1, 0 = none
+    W16BSS w16_erase, 1
+    W16BSS w16_take, 1
+    W16BSS w16_titleptr, 2      ; what our title is when no alert is up
+    W16BSS w16_wtitle, 48       ; ...the program window's text
+    W16BSS w16_namebuf, 16      ; a class name, folded
+    W16BSS w16_cwargs, 2        ; CreateWindow's arguments, on its stack
+    W16BSS w16_cwslot, 2
+    W16BSS w16_cls, W16_MAXCLS * W16C_SIZE
+    W16BSS w16_wnd, W16_MAXWND * W16W_SIZE
+    W16BSS w16_q, W16_QLEN * MSG_SIZE
+    W16BSS w16_qhead, 1
+    W16BSS w16_qcount, 1
+    W16BSS w16_quit, 1          ; 1 = PostQuitMessage was called
+    W16BSS w16_quitcode, 2
+    W16BSS w16_tmr, W16_MAXTMR * W16T_SIZE
+    W16BSS w16_msg, MSG_SIZE    ; the message being delivered
+    W16BSS w16_mx, 2            ; the last pointer position, screen
+    W16BSS w16_my, 2
+    W16BSS w16_kascii, W16_NSCAN    ; each scan code's last ASCII
+    W16BSS w16_capture, 2
+    W16BSS w16_sm_hwnd, 2       ; the message being sent or posted
+    W16BSS w16_sm_msg, 2
+    W16BSS w16_sm_wp, 2
+    W16BSS w16_sm_lp, 4
+    W16BSS w16_dmg, 8           ; W_PAINT's damage, screen, inclusive
+    ; --- GDI (w16gdi.inc) ---
+    W16BSS w16_dcon, 1
+    W16BSS w16_dctook, 1        ; 1 = the DC took the gfx lock
+    W16BSS w16_dcclip, 1        ; 1 = ...and armed the kernel's clip
+    W16BSS w16_dchide, 1        ; 1 = nothing of the window is visible
+    W16BSS w16_dcpaint, 1
+    W16BSS w16_dcwnd, 2
+    W16BSS w16_ox, 2            ; the client's origin, screen
+    W16BSS w16_oy, 2
+    W16BSS w16_cl, 2            ; WIN16's clip, screen, inclusive
+    W16BSS w16_ct, 2
+    W16BSS w16_cr, 2
+    W16BSS w16_cb, 2
+    W16BSS w16_prc, 8           ; rcPaint, client
+    W16BSS w16_pen, 2
+    W16BSS w16_brush, 2
+    W16BSS w16_font, 2
+    W16BSS w16_curx, 2
+    W16BSS w16_cury, 2
+    W16BSS w16_gcol, 1
+    W16BSS w16_brused, 8
+    W16BSS w16_brc, 8
+    W16BSS w16_rgb, 4
+    W16BSS w16_lx1, 2
+    W16BSS w16_ly1, 2
+    W16BSS w16_ldx, 2
+    W16BSS w16_ldy, 2
+    W16BSS w16_lsx, 2
+    W16BSS w16_lsy, 2
+    W16BSS w16_npts, 2
+    W16BSS w16_pts, W16_NPTS * 4
+    W16BSS w16_rl, 2
+    W16BSS w16_rt, 2
+    W16BSS w16_rr, 2
+    W16BSS w16_rb, 2
+    W16BSS w16_tx, 2
+    W16BSS w16_ty, 2
+    W16BSS w16_txt, W16_TXTMAX + 2
     OS88_BSS W16B
 W16_BSS_SIZE equ W16B
 
@@ -111,6 +200,15 @@ w16_entry:
     call OSAPI_WM_ONWAKE
     mov ax, w16_onclose
     call OSAPI_WM_ONCLOSE
+    mov ax, w16_onup                ; the rest of SPEC.md 124.8's input table
+    call OSAPI_WM_ONMOUSEUP
+    mov ax, w16_ondrag
+    call OSAPI_WM_ONDRAG
+    mov ax, w16_onrclick
+    call OSAPI_WM_ONRCLICK
+    mov ax, w16_ontimer
+    call OSAPI_WM_ONTIMER
+    mov word [w16_titleptr], w16_name
     call w16_cputest                ; [w16_cpu186]: once, before anything runs
     call OSAPI_ARG_FILE             ; CF=1: launched empty
     jc .idle
@@ -156,6 +254,10 @@ w16_entry:
 ; work: a second wake finds W16S_RUN or W16S_REFUSED and does nothing.
 ; =============================================================================
 w16_wake:
+    cmp byte [w16_state], W16S_ENDED
+    je w16_after                    ; it ended inside a W_PAINT (w16_ppaint)
+    cmp byte [w16_inpeek], 0
+    jne w16_peekwake                ; a PeekMessage that found nothing
     cmp byte [w16_state], W16S_LOAD
     jne .out
     mov byte [w16_state], W16S_RUN
@@ -186,27 +288,33 @@ w16_wake:
 w16_after:
     cmp byte [w16_state], W16S_ENDED
     jne .out
-    mov dx, [w16_pseg]              ; the program's memory, now: the close is
-    or dx, dx                       ; deferred to the next UI pass
-    jz .nomem
+    call w16_freeprog               ; the program's memory, now: the close is
+    mov bx, [w16_win]               ;   deferred to the next UI pass
+    call OSAPI_WM_CLOSE
+.out:
+    ret
+
+; w16_freeprog - give back the program's claim, once
+w16_freeprog:
+    mov dx, [w16_pseg]
+    or dx, dx
+    jz .out
     call OSAPI_MEM_FREE
     mov word [w16_pseg], 0
-.nomem:
-    mov bx, [w16_win]
-    call OSAPI_WM_CLOSE
 .out:
     ret
 
 ; -----------------------------------------------------------------------------
 ; w16_onclose - the close negotiator (SPEC.md 75.1)
 ; in:  SI = our window, gfx lock held; out: CF=0 the close goes ahead
-; A program that is waiting is all on its own stack and in its own claim, and
-; the kernel frees both with the instance; int 21h is never ours between
-; resumes (SPEC.md 124.2.1). So there is nothing to negotiate.
+; A program with a window is asked, as Windows asks it: WM_CLOSE, and the
+; close is refused until the program has ended (w16_close, SPEC.md 124.8).
+; One without a window is all on its own stack and in its own claim, which
+; the kernel frees with the instance; int 21h is never ours between resumes
+; (SPEC.md 124.2.1).
 ; -----------------------------------------------------------------------------
 w16_onclose:
-    clc
-    ret
+    jmp w16_close
 
 ; =============================================================================
 ; The window: two lines on white
@@ -214,8 +322,13 @@ w16_onclose:
 W16_W   equ 320
 W16_H   equ 64
 
-; w16_paint - W_PAINT; in: SI = window, lock held; preserves everything
+; w16_paint - W_PAINT; in: SI = window, lock held; preserves everything.
+; Once the program has a window, the window is the program's (w16_ppaint).
 w16_paint:
+    cmp byte [w16_top], 0
+    je .lines
+    jmp w16_ppaint
+.lines:
     push ax
     push bx
     push cx
@@ -399,13 +512,15 @@ w16_cputest:
 %include "win16/w16load.inc"
 %include "win16/w16i21.inc"
 %include "win16/w16api.inc"
+%include "win16/w16user.inc"
+%include "win16/w16gdi.inc"
 %include "win16/w16cens.inc"
 %include "win16/w16optab.inc"
 
 ; --- the window template (SPEC.md 11) ----------------------------------------
 w16_tpl:
     dw 160, 120, W16_W, W16_H
-    dw w16_title, w16_paint, 0, 0
+    dw w16_title, w16_paint, w16_onkey, w16_onclick
 
 w16_title:      db 'WIN16', 0
 w16_s_pm:       db 'WIN16 needs real mode', 0

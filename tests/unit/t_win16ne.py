@@ -157,7 +157,7 @@ if "" in built:
 
 # --- C: the Open Watcom fixtures ------------------------------------------
 WATCOM = {"MSGBOX": "8086", "WINDOW": "8086", "MENU": "8086", "DIALOG": "8086",
-          "PROFILE": "8086", "BITMAP": "8086", "FPU": "8086 + x87"}
+          "PROFILE": "8086", "BITMAP": "8086", "FPU": "8086 + x87", "PUMP": "8086"}
 have = [n for n in WATCOM if os.path.exists(os.path.join(BUILT, n + ".EXE"))]
 if not have:
     print("  note: build/win16/ has no Open Watcom fixtures - `make win16fixtures` "

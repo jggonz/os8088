@@ -450,3 +450,89 @@ The negative control matters most: with the guard call taken out, MSGBOX
 refuses with *Needs an 80286 or better.* So the walk really does reach
 Watcom's `smsw`, and the guard is what admits the program. The census on a
 real 8088, and what it costs there, is S13's measurement.
+
+## 2026-10-29 — S3: the message pump
+
+**The story.** *As a user I see the program's window, I can move it, click in
+it, and close it with the close box.* WINDOW.EXE, the S1 fixture with a
+class, a timer, the mouse, the keyboard and a paint, was the bar: S2 had
+measured it as *Needs USER.10 and 31 more*.
+
+**The decision that shaped it: a call into the program lives on the
+program's stack.** A Windows program is called back all the time:
+CreateWindow sends WM_CREATE, DispatchMessage calls the window procedure,
+DestroyWindow sends WM_DESTROY. The obvious shape is a nested call from
+WIN16's code on the UI task's stack. But a window procedure can wait (a
+MessageBox in WM_CLOSE is ordinary), and a wait in the middle of a host-stack
+call has nowhere to go. So the handler pushes a small CONTINUATION record
+below the frame of the import it is serving, then the callee's arguments and
+a return address into WIN16, and lets the gate enter the callee as if the
+import were finishing. The callee's return is itself an import, row
+`W16_CBROW`, whose handler runs the continuation. Nothing is held on the host
+stack between two resumes, which is the property S2's coroutine already
+depended on (SPEC.md 124.2.2).
+
+**The pump.** GetMessage with nothing to give WAITS, and the os8088 callback
+that has something resumes it. A click, a key, the one-shot timer, the
+close box and the window's own W_PAINT each queue their message and call
+`w16_kick`. The W_PAINT case is the interesting one: the window is
+`OSAPI_WM_OWNBG`, the kernel's damage joins the invalid rectangle, and the
+program is resumed *inside the paint*, under the lock and the damage clip, so
+its WM_PAINT lands in the same pass and nothing flashes white first.
+
+**The bug that hid the first run.** The first boot showed *Running* and no
+window. The machine was idle: the program was waiting in GetMessage with no
+window, so CreateWindow had returned NULL. Reading WIN16's bss out of guest
+memory (QMP `pmemsave`, located by searching for the image's bytes, then
+the NASM map) showed the class registered and the window table empty. The
+class lookup compared sixteen bytes and then tested ZF, which the `inc di`
+after the last compare had already overwritten. A full match read as a
+mismatch. RegisterClass had gone through only because the same bug made
+"already registered" read as "not registered".
+
+**What Windows 3.0 said that the contract had wrong.** WINDOW.EXE does not
+reach MoveWindow, SetWindowPos or PeekMessage, so a second Watcom fixture,
+`tests/win16/pump.c`, was written for them and run on the Windows 3.0
+reference machine before it ran here. Two things changed because of it:
+
+- **The caption costs 19 rows, not 20.** At 320 × 180, Windows 3.0 gives a
+  312 × 153 client. SM_CYCAPTION is 20, but the caption shares a row with
+  the frame.
+- **A window created minimized keeps its created size.** PUMP creates its
+  window `WS_MINIMIZE` at 200 × 100 and then calls MoveWindow to 300 × 160.
+  On Windows 3.0 the window comes up 200 × 100, because MoveWindow on an
+  icon moves the icon, and ShowWindow restores the window to the size it
+  was created at. That is WinMine's start sequence too.
+
+(The Windows 3.0 screenshots are not committed: they are taken on the
+reference machine, `win16ref.py run w30 "win /r c:\fix\pump"`, into the
+git-ignored `win16ref/ref/`.)
+
+**PeekMessage yields.** An empty PeekMessage on Windows 3.x yields to the
+other tasks; a program that never yielded would own this machine, because
+the scheduler never switches away from the program's stack. Here an empty
+PeekMessage waits for one UI pass (`OSAPI_WM_WAKE`) and is answered then.
+PUMP's idle counter climbs, the Task Manager shows WIN16 at 99%, and the
+clock, the menus and the Task Manager itself all keep working.
+
+**What there is no way to do.** The story said "the close box and a Task
+Manager kill". os8088's Task Manager cannot kill anything; it is a viewer
+(SPEC.md 28). So the close box is the only end a package has, and here it is
+negotiated: it posts WM_CLOSE, and a program that refuses keeps its window.
+Whether WIN16 should have an "End Task" of its own is left for the owner.
+
+**Tested, on the glass (QEMU):**
+
+- WINDOW.EXE: the title, the size, two ticks a second, *clicks 1 at 170,62*,
+  *key a*, a full repaint after the Disk window covered it, and the close
+  box ending it;
+- PUMP.EXE: every line matching Windows 3.0's screenshots, except the
+  width after `m` (256 here, 252 there: os8088 keeps widths on 8 pixels);
+- the claim map after each close is the one before the launch, byte for
+  byte, twice;
+- CGA: legible, the grey dithered, the red box white where Windows' mono
+  driver would draw it black, and the window clamped to 200 lines. Those
+  last two belong to S4, with the System font.
+
+**Not measured:** how much a strip repaint costs, in primitive calls or on an
+XT. That is S13's.

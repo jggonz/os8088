@@ -177,6 +177,8 @@ w16_gate:
     je w16_tohost
     cmp byte [w16_pend], 0
     jne w16_tohost
+    cmp byte [w16_cbgo], 0          ; a call INTO the program (SPEC.md 124.2.2)
+    jne w16_cbenter
     pushf                           ; back to the program, finished
     pop bx
     cli
@@ -186,6 +188,126 @@ w16_gate:
     push bx
     popf
     jmp w16_epi
+
+; -----------------------------------------------------------------------------
+; w16_cbenter - enter the program's callee instead of finishing the import
+; (SPEC.md 124.2.2). The handler pushed the continuation, the callee's
+; arguments, w16_cbret and the callee's own address below [w16_psp_]; a retf
+; takes the last off, and the callee meets AX = DS = DGROUP.
+; -----------------------------------------------------------------------------
+w16_cbenter:
+    ; STKBALANCE-OK: it leaves on the PROGRAM's stack by retf into the callee;
+    ; the host frame stays for w16_tohost, like the gate's own return
+    mov byte [w16_cbgo], 0
+    pushf
+    pop bx
+    cli
+    call w16_i21_on
+    mov ss, [w16_pss]
+    mov sp, [w16_psp_]
+    push bx
+    popf
+    mov ax, [w16_dgroup]
+    mov ds, ax
+    retf
+
+; w16_cbret - where every callee returns: an import of its own (W16_CBROW), so
+; the gate's frame and the continuation take it from here. DX:AX is the
+; callee's answer, kept through CS because DS is the program's.
+w16_cbret:
+    ; STKBALANCE-OK: reached by the callee's retf, and left through the gate
+    mov [cs:w16_cbax], ax
+    mov [cs:w16_cbdx], dx
+    push cs                         ; a far return for the gate's frame, never
+    call w16_cbret2                 ; used: the handler discards the frame
+w16_cbret2:
+    ; STKBALANCE-OK: the near call above is only the frame's IP
+    mov ax, W16_CBROW
+    jmp w16_gate
+
+; -----------------------------------------------------------------------------
+; w16_cbdone - the W16_CBROW handler: discard the stub's frame, the record
+; and the extra bytes, make the served import current again, and run its
+; continuation with DX:AX = the callee's answer and CX = the record's word
+; -----------------------------------------------------------------------------
+w16_cbdone:
+    mov es, [w16_pss]
+    mov bx, [w16_psp_]
+    mov si, [es:bx + W16F_ARGS]     ; the continuation
+    mov ax, [es:bx + W16F_ARGS + 2] ; the served import's row
+    mov cx, [es:bx + W16F_ARGS + 4] ; its word
+    mov dx, [es:bx + W16F_ARGS + 6] ; the extra bytes
+    add bx, W16F_ARGS + 8
+    add bx, dx
+    mov [w16_psp_], bx              ; the served import's frame, again
+    mov [w16_idx], ax
+    mov bx, ax
+    shl bx, 1
+    mov dx, bx
+    shl bx, 1
+    add bx, dx                      ; * W16X_SIZE
+    mov al, [w16_exports + bx + W16X_ARGB]
+    cbw
+    mov [w16_nargb], ax
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov ax, [w16_cbax]
+    mov dx, [w16_cbdx]
+    jmp si
+
+; -----------------------------------------------------------------------------
+; w16_ppush - AX onto the program's stack, below [w16_psp_]. Keeps all.
+; -----------------------------------------------------------------------------
+w16_ppush:
+    push di
+    push es
+    sub word [w16_psp_], 2
+    mov di, [w16_psp_]
+    mov es, [w16_pss]
+    mov [es:di], ax
+    pop es
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_cbopen - begin a call into the program (SPEC.md 124.2.2)
+; in:  SI = the continuation, AX = its word, CX = the extra bytes (even)
+; out: ES:DI -> the extra block, zeroed (the program's stack segment)
+; -----------------------------------------------------------------------------
+w16_cbopen:
+    push ax
+    push cx
+    sub [w16_psp_], cx
+    mov di, [w16_psp_]
+    mov es, [w16_pss]
+    push di
+    shr cx, 1
+    xor ax, ax
+    rep stosw
+    pop di
+    pop ax                          ; the count ...
+    call w16_ppush
+    pop ax                          ; ...the word
+    call w16_ppush
+    mov ax, [w16_idx]               ; ...the import being served
+    call w16_ppush
+    mov ax, si                      ; ...and the continuation
+    jmp w16_ppush
+
+; w16_cbcall - the callee at DX:AX, its arguments already pushed: it runs
+; when the handler returns to the gate. Keeps all but AX.
+w16_cbcall:
+    push ax
+    mov ax, cs
+    call w16_ppush
+    mov ax, w16_cbret
+    call w16_ppush
+    mov ax, dx
+    call w16_ppush
+    pop ax
+    call w16_ppush
+    mov byte [w16_cbgo], 1
+    ret
 
 ; -----------------------------------------------------------------------------
 ; w16_tohost - return from w16_resume (we are on the host stack, at its SP)
