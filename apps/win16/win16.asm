@@ -54,6 +54,11 @@ W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
 W16_GBUF     equ W16_BS * 16    ; the band (16 rows), and SetDIBitsToDevice's
                                 ;   4bpp block, never both at once
 W16_RRMAX    equ 64             ; RoundRect's largest corner radius
+W16_NMISS    equ 64             ; different imports WIN16 lacks a program may
+                                ;   import before the load refuses it
+W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
+W16_NARENA   equ 6              ; global heap arenas at once (w16mem.inc)
+W16_NGH      equ 64             ; moveable global handles
 
 ; --- the parts (SPEC.md 20.12, 124.7.1): the System font, one face a display
 W16P_SYS16   equ 0              ; VGA
@@ -236,6 +241,40 @@ W16P_SYS08   equ 2              ; CGA
     W16BSS w16_dby, 2
     W16BSS w16_dmap, 16         ; ...its palette, as os8088 colours
     W16BSS w16_gbuf, W16_GBUF
+    ; --- S5: ending, memory, resources, menus ---
+    W16BSS w16_nmiss, 2         ; the missing imports bound (SPEC.md 124.12)
+    W16BSS w16_missi, 2         ; ...the one called
+    W16BSS w16_endmsg, 1        ; 1 = it ended with [w16_l1]/[w16_l2] to show
+    W16BSS w16_mtxt, W16_NMISS * W16_MTXT
+    W16BSS w16_heap, 2          ; ne_heap: InitTask's local heap
+    W16BSS w16_arena, 2 * W16_NARENA    ; the global heap (w16mem.inc)
+    W16BSS w16_arenae, 2 * W16_NARENA
+    W16BSS w16_ghseg, 2 * W16_NGH
+    W16BSS w16_ghf, 2 * W16_NGH
+    W16BSS w16_gflg, 1
+    W16BSS w16_gdisc, 1
+    W16BSS w16_gnp, 2
+    W16BSS w16_gold, 2
+    W16BSS w16_lflg, 1
+    W16BSS w16_lh, 2
+    W16BSS w16_clus, 2          ; the program's volume's cluster, bytes
+    W16BSS w16_rtab, 2          ; the kept resource table (w16res.inc)
+    W16BSS w16_rtlen, 2
+    W16BSS w16_rtk, 2           ; FindResource's keys and strings
+    W16BSS w16_rnk, 2
+    W16BSS w16_rtypb, 16
+    W16BSS w16_rnamb, 16
+    W16BSS w16_rlen, 2          ; w16_rread's resource and span
+    W16BSS w16_rpre, 2
+    W16BSS w16_roff, 4
+    W16BSS w16_rspanb, 4
+    W16BSS w16_rh, 2
+    W16BSS w16_rdat, 2
+    W16BSS w16_rback, 2
+    W16BSS w16_rbackv, 1
+    W16BSS w16_rdst, 4          ; LoadString's buffer, its size, its ID
+    W16BSS w16_rmax, 2
+    W16BSS w16_rsid, 2
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -359,14 +398,55 @@ w16_wake:
 w16_after:
     cmp byte [w16_state], W16S_ENDED
     jne .out
+    cmp byte [w16_endmsg], 0
+    jne w16_endshow
     call w16_freeprog               ; the program's memory, now: the close is
     mov bx, [w16_win]               ;   deferred to the next UI pass
     call OSAPI_WM_CLOSE
 .out:
     ret
 
-; w16_freeprog - give back the program's claim, and the face, once
+; w16_endshow - the program has ended with something to say (SPEC.md 124.12:
+; an import it called that WIN16 lacks): its windows, memory and face go, and
+; WIN16's window stays, its own again, with [w16_l1]/[w16_l2]
+w16_endshow:
+    mov byte [w16_endmsg], 0
+    mov bx, w16_wnd
+    mov cx, W16_MAXWND
+.w:
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .wn
+    push cx
+    call w16_wndfree
+    pop cx
+.wn:
+    add bx, W16W_SIZE
+    loop .w
+    mov byte [w16_qcount], 0
+    call w16_freeprog
+    mov byte [w16_state], W16S_REFUSED
+    mov bx, [w16_win]
+    mov ax, w16_name
+    call OSAPI_WM_TITLE
+    call OSAPI_WM_GEOM              ; CX/DX = the content now
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov ax, [es:bx + W_W]           ; the frame's cost, onto ours
+    sub ax, cx
+    mov si, [es:bx + W_H]
+    sub si, dx
+    mov cx, W16_W
+    add cx, ax
+    mov dx, W16_H
+    add dx, si
+    call OSAPI_WM_RESIZE            ; (it repaints everything)
+    ret
+
+; w16_freeprog - give back the program's claim, its global heap, and the
+; face, once
 w16_freeprog:
+    call w16_gfreeall
+    mov word [w16_rtlen], 0
     mov dx, [w16_pseg]
     or dx, dx
     jz .face
@@ -644,6 +724,8 @@ w16_cputest:
 %include "win16/w16load.inc"
 %include "win16/w16i21.inc"
 %include "win16/w16api.inc"
+%include "win16/w16mem.inc"
+%include "win16/w16res.inc"
 %include "win16/w16user.inc"
 %include "win16/w16gdi.inc"
 %include "win16/w16cens.inc"

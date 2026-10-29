@@ -1,4 +1,4 @@
-/* menu.rc - the menu and accelerators of menu.c (WIN16 fixture, S5) */
+/* menu.rc - the menu, accelerators and strings of menu.c (WIN16 fixture, S5) */
 #include <windows.h>
 #include "menu.h"
 
@@ -15,6 +15,11 @@ BEGIN
         MENUITEM "&Red",        IDM_RED, CHECKED
         MENUITEM "&Green",      IDM_GREEN
         MENUITEM "&Blue",       IDM_BLUE
+        POPUP "&More"
+        BEGIN
+            MENUITEM "&Cyan",       IDM_CYAN
+            MENUITEM "&Magenta",    IDM_MAGENTA
+        END
         MENUITEM SEPARATOR
         MENUITEM "&Unavailable", IDM_GREY, GRAYED
     END
@@ -23,4 +28,11 @@ END
 W16ACCEL ACCELERATORS
 BEGIN
     VK_F2, IDM_NEW, VIRTKEY
+    "^B", IDM_BLUE
+END
+
+STRINGTABLE
+BEGIN
+    IDS_HELLO, "strings from a resource"
+    IDS_SEVENTEEN, "the second block"
 END

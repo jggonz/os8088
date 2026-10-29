@@ -64,6 +64,15 @@ w16_load:
     mov si, w16_r_disk
     jmp .refuse0
 .there:
+    call OSAPI_FILE_DFREE           ; BX = sectors a cluster: READ_AT's unit
+    jc .c512                        ;   (SPEC.md 124.10), asked once, here
+    mov cl, 9
+    shl bx, cl
+    jnz .clus
+.c512:
+    mov bx, 512
+.clus:
+    mov [w16_clus], bx
     mov si, w16_name                ; the size probe: no room, so FERR_BIG
     xor bx, bx                      ; with DX = the KB the read needs
     mov es, bx
@@ -187,6 +196,8 @@ w16_load:
     call w16_layout                 ; sizes and the claim; CF=1 SI = reason
     jc .refuse
     call w16_copysegs               ; CF=1 SI = reason
+    jc .refuse
+    call w16_copyres                ; the resource table, kept (SPEC.md 124.10)
     jc .refuse
     call w16_modules                ; which of the imported modules are ours
     xor al, al
@@ -329,6 +340,9 @@ w16_layout:
     jb .seg
     mov [w16_psp], bp               ; then the PSP-shaped block, 16 paragraphs
     add bp, 16
+    mov [w16_rtab], bp              ; then the kept resource table (w16res.inc)
+    call w16_rlayout
+    add bp, ax
     mov ax, bp
     add ax, 63                      ; KB, rounded up
     mov cl, 6
@@ -385,6 +399,7 @@ w16_layout:
     cmp ax, [w16_nseg]
     jb .abs
     add [w16_psp], dx
+    add [w16_rtab], dx
     mov si, [w16_ne]
     mov bx, [es:si + NE_AUTODATA]
     dec bx
@@ -573,7 +588,6 @@ w16_relocs:
     push si
     push di
     mov [w16_rpass], al
-    mov word [w16_miss], 0
     mov si, [w16_ne]
     mov di, si
     add di, [es:si + NE_SEGTAB]
@@ -621,9 +635,7 @@ w16_relocs:
     shr ax, 1
     cmp ax, [w16_nseg]
     jb .seg
-    cmp word [w16_miss], 0          ; pass 0: anything missing is the refusal
-    je .ok
-    call w16_missmsg
+    jmp short .ok                   ; a missing import is bound, not refused
 .fail:
     stc
     jmp short .out
@@ -708,19 +720,30 @@ w16_reloc1:
     shl ax, 1
     add ax, w16_stubs
     mov dx, cs
-    jmp short .apply
-.missing:
-    cmp word [w16_miss], 0
-    jne .count
-    mov ax, [es:si + 4]             ; remember the first: module and target
+    jmp .apply
+.missing:                           ; SPEC.md 124.12: bound to a stub that
+    cmp byte [w16_rpass], 1         ;   ends the program, naming it, if it is
+    jne .ok                         ;   ever CALLED
+    mov ax, [es:si + 4]
     mov [w16_mmod], ax
     mov ax, [es:si + 6]
     mov [w16_mord], ax
     mov al, [es:si + 1]
+    and al, 3
     mov [w16_mkind], al
-.count:
-    inc word [w16_miss]
-    jmp .ok
+    call w16_missbind               ; -> DX:AX = the stub; CF=1 the table is full
+    jnc .apply
+    pop di
+    pop si
+    pop bx
+    mov si, w16_r_toomany
+    mov di, w16_l1
+    call w16_strcpy
+    mov si, w16_name
+    mov di, w16_l2
+    call w16_strcpy
+    stc
+    ret
 .internal:
     mov al, [es:si + 4]             ; target1's low byte: a segment, or 0xFF
     cmp al, 0xFF
@@ -1147,6 +1170,7 @@ w16_frame:
     mov bx, [es:si + NE_IP]
     mov cx, [es:si + NE_STACK]
     mov dx, [es:si + NE_HEAP]
+    mov [w16_heap], dx
     push es
     mov es, ax
     mov [es:di + W16F_DI], ax       ; hInstance = the DGROUP paragraph
@@ -1173,15 +1197,18 @@ w16_frame:
     ret
 
 ; -----------------------------------------------------------------------------
-; w16_missmsg - the refusal for imports WIN16 lacks: "Needs USER.287 and 52
-; more" / "which WIN16 does not provide yet." (SPEC.md 124.3). ES = the file.
+; w16_missbind - an import WIN16 does not provide (SPEC.md 124.12): its name,
+; "USER.287" or "COMMDLG.GETOPENFILENAME", into the next free slot of
+; w16_mtxt unless a slot already holds it, and that slot's stub
+; in:  [w16_mmod] (1-based), [w16_mord], [w16_mkind]; ES = the file
+; out: DX:AX = the stub (our CS); CF=1 W16_NMISS are already taken
 ; -----------------------------------------------------------------------------
-w16_missmsg:
+w16_missbind:
+    push bx
+    push cx
     push si
     push di
-    mov si, w16_r_needs
-    mov di, w16_l1
-    call w16_strcpy
+    mov di, w16_mbtext              ; the name, composed (at most 50), then cut
     mov bx, [w16_mmod]
     dec bx
     cmp bx, [w16_nmod]
@@ -1203,26 +1230,68 @@ w16_missmsg:
     add ax, [w16_mord]
     mov si, ax
     call w16_pcopy
-    jmp short .more
+    jmp short .named
 .ord:
     mov ax, [w16_mord]
     call w16_putdec
-.more:
-    mov ax, [w16_miss]
-    dec ax
-    jz .end
-    mov si, w16_r_and
-    call w16_strcpy
-    call w16_putdec
-    mov si, w16_r_more
-    call w16_strcpy
-.end:
+.named:
     mov byte [di], 0
-    mov si, w16_r_notyet
-    mov di, w16_l2
+    mov byte [w16_mbtext + W16_MTXT - 1], 0
+    xor bx, bx                      ; BX = the slot
+.find:
+    cmp bx, [w16_nmiss]
+    jae .new
+    mov si, w16_mbtext              ; the same name: the same stub
+    call w16_mslot                  ; DI -> slot BX's text
+.cmp:
+    mov al, [si]
+    cmp al, [di]
+    jne .next
+    inc si
+    inc di
+    or al, al
+    jnz .cmp
+    jmp short .stub
+.next:
+    inc bx
+    jmp short .find
+.new:
+    cmp bx, W16_NMISS
+    jae .full
+    inc word [w16_nmiss]
+    mov si, w16_mbtext
+    call w16_mslot
     call w16_strcpy
+.stub:
+    mov ax, bx                      ; w16_mstubs + 6 * slot
+    shl ax, 1
+    add ax, bx
+    shl ax, 1
+    add ax, w16_mstubs
+    mov dx, cs
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
     pop di
     pop si
+    pop cx
+    pop bx
+    ret
+
+; w16_mslot - DI -> missing-import slot BX's text (W16_MTXT = 24 bytes each)
+w16_mslot:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    add ax, bx                      ; * 3
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; * 24
+    add ax, w16_mtxt
+    mov di, ax
+    pop ax
     ret
 
 ; w16_pcopy - ES:SI pascal string -> DI (at most 24 characters), DI past it
@@ -1254,7 +1323,6 @@ w16_fend:   dw 0                    ; the file's last valid offset + 1
 w16_rpass:  db 0
 w16_mkind:  db 0
 w16_rseg:   dw 0
-w16_miss:   dw 0
 w16_mmod:   dw 0
 w16_mord:   dw 0
 
@@ -1277,7 +1345,4 @@ w16_r_dgbig:   db 'Its data segment is over 64KB.', 0
 w16_r_trunc:   db 'The file is damaged.', 0
 w16_r_reloc:   db 'A relocation WIN16 cannot apply.', 0
 w16_r_entry:   db 'Its entry point is not in it.', 0
-w16_r_needs:   db 'Needs ', 0
-w16_r_and:     db ' and ', 0
-w16_r_more:    db ' more', 0
-w16_r_notyet:  db 'which WIN16 does not provide yet.', 0
+w16_r_toomany: db 'It calls too much WIN16 lacks.', 0

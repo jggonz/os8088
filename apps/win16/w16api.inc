@@ -49,10 +49,43 @@ W16X_SIZE equ 6
 
 ;           module         ordinal  args  handler               the .spec line
 W16EXPORT W16M_KERNEL,     3,       0,  w16k_getversion     ; GetVersion()
+W16EXPORT W16M_KERNEL,     4,       6,  w16k_linit          ; LocalInit(word word word)
+W16EXPORT W16M_KERNEL,     5,       4,  w16k_lalloc         ; LocalAlloc(word word)
+W16EXPORT W16M_KERNEL,     6,       6,  w16k_lrealloc       ; LocalReAlloc(word word word)
+W16EXPORT W16M_KERNEL,     7,       2,  w16k_lfree          ; LocalFree(word)
+W16EXPORT W16M_KERNEL,     8,       2,  w16k_llock          ; LocalLock(word)
+W16EXPORT W16M_KERNEL,     9,       2,  w16k_lunlock        ; LocalUnlock(word)
+W16EXPORT W16M_KERNEL,     10,      2,  w16k_lsize          ; LocalSize(word)
+W16EXPORT W16M_KERNEL,     11,      2,  w16k_lhandle        ; LocalHandle(word)
+W16EXPORT W16M_KERNEL,     13,      2,  w16k_lcompact       ; LocalCompact(word)
+W16EXPORT W16M_KERNEL,     15,      6,  w16k_galloc         ; GlobalAlloc(word long)
+W16EXPORT W16M_KERNEL,     16,      8,  w16k_grealloc       ; GlobalReAlloc(word long word)
+W16EXPORT W16M_KERNEL,     17,      2,  w16k_gfree          ; GlobalFree(word)
+W16EXPORT W16M_KERNEL,     18,      2,  w16k_glock          ; GlobalLock(word)
+W16EXPORT W16M_KERNEL,     19,      2,  w16k_gunlock        ; GlobalUnlock(word)
+W16EXPORT W16M_KERNEL,     20,      2,  w16k_gsize          ; GlobalSize(word)
+W16EXPORT W16M_KERNEL,     21,      2,  w16k_ghandle        ; GlobalHandle(word)
+W16EXPORT W16M_KERNEL,     22,      2,  w16k_gflags         ; GlobalFlags(word)
+W16EXPORT W16M_KERNEL,     23,      2,  w16k_lockseg        ; LockSegment(word)
+W16EXPORT W16M_KERNEL,     24,      2,  w16k_lockseg        ; UnlockSegment(word)
+W16EXPORT W16M_KERNEL,     25,      4,  w16k_gcompact       ; GlobalCompact(long)
+W16EXPORT W16M_KERNEL,     57,      10, w16k_getprofint     ; GetProfileInt(str str s_word)
+W16EXPORT W16M_KERNEL,     58,      18, w16k_getprofstr     ; GetProfileString(str str str ptr word)
+W16EXPORT W16M_KERNEL,     59,      12, w16k_writeprof      ; WriteProfileString(str str str)
+W16EXPORT W16M_KERNEL,     60,      10, w16k_findres        ; FindResource(word str str)
+W16EXPORT W16M_KERNEL,     61,      4,  w16k_loadres        ; LoadResource(word word)
+W16EXPORT W16M_KERNEL,     62,      2,  w16k_lockres        ; LockResource(word)
+W16EXPORT W16M_KERNEL,     63,      2,  w16k_freeres        ; FreeResource(word)
+W16EXPORT W16M_KERNEL,     65,      4,  w16k_sizeres        ; SizeofResource(word word)
+W16EXPORT W16M_KERNEL,     88,      8,  w16k_lstrcpy        ; lstrcpy(segptr str)
+W16EXPORT W16M_KERNEL,     89,      8,  w16k_lstrcat        ; lstrcat(segstr str)
 W16EXPORT W16M_KERNEL,     30,      2,  w16k_waitevent      ; WaitEvent(word)
 W16EXPORT W16M_KERNEL,     49,      8,  w16k_getmodfn       ; GetModuleFileName(word ptr s_word)
 W16EXPORT W16M_KERNEL,     90,      4,  w16k_lstrlen        ; lstrlen(str)
 W16EXPORT W16M_KERNEL,     91,      -2, w16k_inittask       ; InitTask() -register
+W16EXPORT W16M_KERNEL,     127,     14, w16k_getpprofint    ; GetPrivateProfileInt(str str s_word str)
+W16EXPORT W16M_KERNEL,     128,     22, w16k_getpprofstr    ; GetPrivateProfileString(str str str ptr word str)
+W16EXPORT W16M_KERNEL,     129,     16, w16k_writepprof     ; WritePrivateProfileString(str str str str)
 W16EXPORT W16M_KERNEL,     132,     0,  w16k_getwinflags    ; GetWinFlags()
 W16EXPORT W16M_KERNEL,     207,     2,  w16k_isdbcs         ; IsDBCSLeadByte(word)
 W16EXPORT W16M_USER,       1,       12, w16u_msgbox         ; MessageBox(word str str word)
@@ -89,6 +122,7 @@ W16EXPORT W16M_USER,       125,     8,  w16u_invalrect      ; InvalidateRect(wor
 W16EXPORT W16M_USER,       127,     6,  w16u_validrect      ; ValidateRect(word ptr)
 W16EXPORT W16M_USER,       173,     6,  w16u_loadcursor     ; LoadCursor(word str)
 W16EXPORT W16M_USER,       174,     6,  w16u_loadicon       ; LoadIcon(word str)
+W16EXPORT W16M_USER,       176,     10, w16u_loadstr        ; LoadString(word word ptr s_word)
 W16EXPORT W16M_USER,       179,     2,  w16u_sysmet         ; GetSystemMetrics(s_word)
 W16EXPORT W16M_USER,       180,     2,  w16u_syscolor       ; GetSysColor(word)
 W16EXPORT W16M_USER,       232,     14, w16u_setwndpos      ; SetWindowPos(word word word word word word word)
@@ -110,10 +144,20 @@ W16EXPORT W16M_GDI,        91,      8,  w16g_textext        ; GetTextExtent(word
 W16EXPORT W16M_GDI,        93,      6,  w16g_textmet        ; GetTextMetrics(word ptr)
 W16EXPORT W16M_GDI,        443,     28, w16g_setdib         ; SetDIBitsToDevice(word s_word x6 word word ptr ptr word)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
+W16EXPORT W16M_SOUND,      1,       0,  w16s_open           ; OpenSound()
+W16EXPORT W16M_SOUND,      2,       0,  w16s_none           ; CloseSound()
+W16EXPORT W16M_SOUND,      4,       8,  w16s_none           ; SetVoiceNote(word word word word)
+W16EXPORT W16M_SOUND,      5,       10, w16s_none           ; SetVoiceAccent(word word word word word)
+W16EXPORT W16M_SOUND,      9,       0,  w16s_none           ; StartSound()
+W16EXPORT W16M_SOUND,      10,      0,  w16s_none           ; StopSound()
 ; the callee's way back (SPEC.md 124.2.2): module 0FEh, which no program's
 ; module table can name, so the loader never binds an import to it
 W16_CBROW equ W16NX
 W16EXPORT 0xFE,            0,       0,  w16_cbdone
+; an import WIN16 does not provide, called (SPEC.md 124.12): module 0FDh, never
+; bound by the loader either - the missing stubs below reach it
+W16_MISSROW equ W16NX
+W16EXPORT 0xFD,            0,       0,  w16_missed
 
 w16_exports:
 %assign k 0
@@ -140,6 +184,53 @@ w16_stubs:
 %if ($ - w16_stubs) != W16NX * 6
   %error "w16_stubs: every stub must be six bytes"
 %endif
+
+; The missing stubs (SPEC.md 124.12): slot k of w16_mtxt is `mov ax, k /
+; jmp near w16_missgate`, which banks k and enters the gate as W16_MISSROW.
+w16_mstubs:
+    ; STKBALANCE-OK: entered by the program's far call, like w16_stubs
+%assign k 0
+%rep W16_NMISS
+    mov ax, k
+    jmp near w16_missgate
+%assign k k + 1
+%endrep
+%if ($ - w16_mstubs) != W16_NMISS * 6
+  %error "w16_mstubs: every stub must be six bytes"
+%endif
+w16_missgate:
+    ; STKBALANCE-OK: the gate's frame, as w16_stubs
+    mov [cs:w16_missi], ax          ; DS is the program's: CS is ours
+    mov ax, W16_MISSROW
+    jmp w16_gate
+
+; w16_missed - the W16_MISSROW handler: the program called an import WIN16
+; does not provide. It ends as AH=4Ch ends it, but WIN16's window stays, back
+; to its own two lines, naming the call (w16_endshow): a toast would go with
+; the window that raised it (SPEC.md 59).
+w16_missed:
+    push si
+    push di
+    mov si, w16_r_needs
+    mov di, w16_l1
+    call w16_strcpy
+    push di
+    mov bx, [w16_missi]
+    call w16_mslot                  ; DI -> its name
+    mov si, di
+    pop di
+    call w16_strcpy
+    mov si, w16_r_notyet
+    mov di, w16_l2
+    call w16_strcpy
+    mov byte [w16_endmsg], 1
+    mov byte [w16_state], W16S_ENDED
+    pop di
+    pop si
+    ret
+
+w16_r_needs:   db 'Needs ', 0
+w16_r_notyet:  db 'which WIN16 does not provide yet.', 0
 
 ; -----------------------------------------------------------------------------
 ; w16_findexp - DL = module, AX = ordinal -> AX = the row; CF=1 not ours
@@ -206,6 +297,19 @@ w16k_inittask:
     mov ax, [w16_psp]
     mov [w16_res], ax
     or byte [w16_rflags], W16R_SIDI
+    mov dx, [w16_dgsize]            ; the local heap: ne_heap bytes after the
+    or dx, dx                       ;   stack, to DGROUP's end (SPEC.md 124.9)
+    jnz .dgend
+    mov dx, 0xFFFC
+.dgend:
+    mov bx, dx
+    sub bx, [w16_heap]
+    jbe .noheap
+    cmp word [w16_heap], 0
+    je .noheap
+    mov ax, [w16_dgroup]
+    call w16_linit
+.noheap:
     mov ax, 1
     mov dx, 1                       ; SW_SHOWNORMAL
     ret
@@ -226,6 +330,123 @@ w16k_lstrlen:
 
 ; WaitEvent (KERNEL.30): no events are ever posted to a task here
 w16k_waitevent:
+    xor ax, ax
+    ret
+
+; --- profiles, until S7 (SPEC.md 124.12's plan line): the reads answer as an
+; empty WIN.INI does, with their defaults; the writes are accepted and not yet
+; kept ---------------------------------------------------------------------------
+
+; GetProfileInt (KERNEL.57) - args: +0 nDefault, +2 lpKey, +6 lpApp
+w16k_getprofint:
+    call w16_args
+    mov ax, [es:bx]
+    ret
+
+; GetPrivateProfileInt (KERNEL.127) - args: +0 lpFile, +4 nDefault, ...
+w16k_getpprofint:
+    call w16_args
+    mov ax, [es:bx + 4]
+    ret
+
+; GetProfileString (KERNEL.58) - args: +0 nSize, +2 lpBuf, +6 lpDefault,
+; +10 lpKey, +14 lpApp. The default, cut to nSize - 1; AX = its length
+w16k_getprofstr:
+    call w16_args
+    jmp short w16_profdef
+
+; GetPrivateProfileString (KERNEL.128) - args: +0 lpFile, then as above
+w16k_getpprofstr:
+    call w16_args
+    add bx, 4
+    ; fall into w16_profdef
+
+; w16_profdef - ES:BX = GetProfileString's arguments: copy the default
+w16_profdef:
+    push si
+    push di
+    push ds
+    mov cx, [es:bx]
+    xor ax, ax
+    jcxz .out
+    dec cx
+    mov si, [es:bx + 6]
+    mov dx, [es:bx + 8]
+    les di, [es:bx + 2]
+    or dx, dx                       ; a NULL default is ""
+    jz .end
+    mov ds, dx
+.c:
+    jcxz .end
+    mov dl, [si]
+    or dl, dl
+    jz .end
+    mov [es:di], dl
+    inc si
+    inc di
+    inc ax
+    dec cx
+    jmp short .c
+.end:
+    mov byte [es:di], 0
+.out:
+    pop ds
+    pop di
+    pop si
+    ret
+
+; WriteProfileString (KERNEL.59), WritePrivateProfileString (KERNEL.129):
+; TRUE, and nothing kept until S7 gives them a file
+w16k_writeprof:
+w16k_writepprof:
+    mov ax, 1
+    ret
+
+; lstrcpy (KERNEL.88) - args: +0 lpSrc, +4 lpDst. DX:AX = lpDst
+w16k_lstrcpy:
+    call w16_args
+    xor cx, cx
+    jmp short w16_lstr
+; lstrcat (KERNEL.89) - args: as lstrcpy, the copy at lpDst's end
+w16k_lstrcat:
+    call w16_args
+    mov cx, 1
+    ; fall into w16_lstr
+w16_lstr:
+    push si
+    push di
+    push ds
+    mov ax, [es:bx + 4]
+    mov dx, [es:bx + 6]
+    push ax
+    push dx
+    lds si, [es:bx]
+    les di, [es:bx + 4]
+    jcxz .copy
+.end:
+    cmp byte [es:di], 0
+    je .copy
+    inc di
+    jmp short .end
+.copy:
+    lodsb
+    stosb
+    or al, al
+    jnz .copy
+    pop dx
+    pop ax
+    pop ds
+    pop di
+    pop si
+    ret
+
+; --- SOUND, until S8 plays it through OSAPI_SND_TONE: OpenSound answers
+; S_SERDVNA (-1), "the device is not available", which a Windows program
+; already handles - a machine with its sound driver unloaded said the same
+w16s_open:
+    mov ax, 0xFFFF
+    ret
+w16s_none:
     xor ax, ax
     ret
 

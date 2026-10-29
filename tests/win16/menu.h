@@ -5,3 +5,7 @@
 #define IDM_GREEN 201
 #define IDM_BLUE  202
 #define IDM_GREY  203
+#define IDM_CYAN  210
+#define IDM_MAGENTA 211
+#define IDS_HELLO 1
+#define IDS_SEVENTEEN 17
