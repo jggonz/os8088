@@ -49,6 +49,7 @@ w16_resume:
     push di
     push es
     push ds
+    mov byte [w16_inprog], 1        ; (w16_mkick: never from inside a run)
     mov [w16_rax], ax
     mov [w16_rdx], dx
     mov [w16_hss], ss
@@ -227,6 +228,7 @@ w16_resumecb:
     push di
     push es
     push ds
+    mov byte [w16_inprog], 1
     mov [w16_hss], ss
     mov [w16_hsp], sp
     pushf
@@ -349,6 +351,7 @@ w16_tohost:
     ; STKBALANCE-OK: returns from w16_resume on the stack w16_resume banked,
     ; reached by a jump from whichever side of the switch the program left by
     mov sp, [w16_hsp]
+    mov byte [w16_inprog], 0
     pop ds
     pop es
     pop di

@@ -688,3 +688,84 @@ black on a 1bpp display now.
 
 **Not seen:** Hercules (QEMU has none); WinMine's Marks toggle; its Custom
 field, which needs S6's dialogs.
+
+## 2026-10-29 — S6: dialogs and controls
+
+**The story.** *As a user the program's dialog boxes open, I can type in
+them, and OK/Cancel do what they say.* WinMine's About and Preferences are
+dialogs, and every installer the end goal names is a stack of them.
+
+**WIN16 draws its own controls.** os8088's own widgets are not Windows', and
+a program talks to its controls in Windows messages (`BM_SETCHECK`,
+`LB_ADDSTRING`, `EM_SETSEL`). So `w16dlg.inc` follows Wine's `dialog16.c`
+and the four control files, and each control is a child window of a class
+WIN16 registers. The look was laid over Windows 3.0's screenshots of a
+fixture: the push button's two-pixel bevel, the default button's black
+ring, the 12-pixel radio and check boxes, the group box's caption gap, the
+list's highlight, the EDIT's selection.
+
+**It is a part, not a bigger image.** WIN16's image and its bss share one
+64 KB segment, and every later story grows them. The dialog code is part 3
+of `WIN16.O88`, assembled in WIN16's own nasm run behind `vstart=0` and cut
+off by `os88ovl.py`, so it addresses WIN16's variables by the same offsets
+the image does. It is fetched when the first dialog, control or message box
+is made and dropped after the last. It is 12,761 bytes.
+
+**A modal dialog is the import waiting, again.** `DialogBox` builds the
+dialog, sends `WM_INITDIALOG`, disables the owner and then WAITS, as
+`GetMessage` and the menu loop already wait. os8088's callbacks run the
+dialog's loop: `IsDialogMessage`, then dispatch. A dialog procedure can
+open another dialog (WinMine's About opens Preferences), and each loop
+keeps its state in its own dialog's record.
+
+**Four bugs worth writing down.**
+
+- **A `BOOL` is AX.** The first dialog repainted forever. A dialog
+  procedure answers `BOOL`, a 16-bit value, but the code tested DX:AX, and
+  DX held whatever the procedure left in it. Every `WM_PAINT` looked
+  "handled" or "not handled" at random. Only AX is read now. The loop also
+  takes at most 32 messages a turn and then gives the task back, so a
+  procedure that posts itself a message every time cannot hold the machine.
+- **`SetFocus` overwrote the message being handled.** Clicking a list row
+  selected the wrong one. The click handler called `SetFocus`, which SENDS
+  `WM_KILLFOCUS` to the old control, and that send reused the same
+  variables as the click's `lParam`. `W16SMKEEP` now saves them around
+  every call that can send.
+- **The gfx lock deadlocked twice.** Both were "do I hold the lock" being
+  wrong in a nested call. First, a resize painted a window synchronously in
+  the middle of a callback and reset the flag to "not held". Second, a
+  program that exited inside a key callback freed its windows, which took
+  the lock it already held. The flag is now saved and restored around every
+  nested use, and the end-of-callback work runs with the lock still held.
+- **Message-box buttons sat off-centre** inside WIN16's own window,
+  because the client width was read before the window had been resized.
+  The width the layout computed is used instead.
+
+**A dialog can be the whole program.** The DIALOG fixture has no main
+window; its dialog is its first window. Rather than open an empty WIN16
+window with the dialog beside it, the first window a program shows, dialog
+or not, takes WIN16's own os8088 window.
+
+**Mono.** On CGA the button face (`COLOR_BTNFACE`, light grey) became the
+50% dither, and the captions on it were hard to read. Windows' monochrome
+drivers drew buttons white, so the controls do too on a 1bpp display, with
+a black shadow. `GetSysColor` still answers Windows' colours.
+
+**CALC waits.** Windows 3.0's Calculator imports `WIN87EM.__FPMATH`, the
+floating-point emulator, so it refuses before it opens anything. Its
+Scientific panel, the one `WS_CHILD` dialog in the plan, moves to S10,
+after S9 provides the emulator.
+
+**Tested, on the glass (QEMU):**
+
+- DIALOG.EXE on VGA against Windows 3.0's screenshot: radio buttons, check
+  box, list, Tab order, EDIT select-all and typing, Enter and Esc; its
+  values shown in a WIN16 `MessageBox`; a clean exit;
+- WinMine 2.9: About, then Preferences; Expert (24 x 24, 99 mines); a
+  custom 20 x 12 board with 30 mines typed into its EDITs;
+- MODELESS.EXE: `CreateDialog`, `IsDialogMessage`, `SetDlgItemInt` and
+  `GetDlgItemInt`;
+- CGA and EGA: DIALOG.EXE and its message box, each on its own grid.
+
+**Not seen:** Hercules (QEMU has none); CALC's Scientific panel (S10); the
+icons (S12); a call count on a dialog's first paint (S13's final pass).

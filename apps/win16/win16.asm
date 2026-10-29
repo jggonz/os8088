@@ -38,11 +38,18 @@ W16_MAXSEG   equ 64             ; segments a program may have (WinMine has 2,
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
 W16_MAXCLS   equ 8              ; classes (SPEC.md 124.8)
-W16_MAXWND   equ 8              ; windows
+W16_MAXWND   equ 48             ; windows: a dialog's controls are windows
+                                ;   (WinMine's Preferences is 20)
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16C_SIZE    equ 30             ; a class record
-W16W_SIZE    equ 38             ; a window record
+W16W_SIZE    equ 74             ; a window record
+W16_MAXTOP   equ 4              ; top-level windows in os8088 windows of
+                                ;   their own (dialogs, SPEC.md 124.8)
+W16_TTLSZ    equ 50
+W16D_SBUF    equ 256            ; the dialog part's text buffer
+W16D_NBUF    equ 16             ; ...and its number's             ; ...each one's title buffer: its os8088
+                                ;   window, then up to 47 characters
 W16T_SIZE    equ 10             ; a timer record
 MSG_SIZE     equ 18             ; a Windows MSG
 W16_NSCAN    equ 0x59           ; scan codes with a virtual key
@@ -70,6 +77,29 @@ MP_SIZE      equ 16             ; ...an open popup's record
 W16P_SYS16   equ 0              ; VGA
 W16P_SYS12   equ 1              ; EGA and Hercules
 W16P_SYS08   equ 2              ; CGA
+W16P_DLG     equ 3              ; the dialog manager and controls (SPEC.md
+                                ;   124.13): code, far-called both ways
+
+; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
+; sides of either, so a vector is one word written and one far call, and a
+; nested call reads its own vector before anything can write the next.
+%macro DCALL 1                  ; image -> part: %1 is a part routine that
+    mov word [w16_pfv], %1      ;   ends in retf
+    call far [w16_pfv]
+%endmacro
+%macro ICALL 1                  ; part -> image: %1 is an image routine that
+    mov word [w16_ifn], %1      ;   ends in ret, near-called by w16_ibgate
+    call far [w16_ibv]
+%endmacro
+%macro DCONT 1                  ; in the part: %1 is a CONTINUATION
+section .text                   ;   (SPEC.md 124.2.2), which the gate enters
+%1_c:                           ;   with a near jump in OUR segment - so SI
+    call w16_dlgin              ;   names its trampoline %1_c, and %1 ends in
+    DCALL %1                    ;   retf. The part is fetched again if it was
+    ret                         ;   dropped while the call it waits on ran
+section .w16dlg
+%1:
+%endmacro
 
 ; --- bss (SPEC.md 21 step 5: zeroed by the loader) ---------------------------
 %assign W16B 0
@@ -79,7 +109,8 @@ W16P_SYS08   equ 2              ; CGA
 %endmacro
     W16BSS w16_win, 2           ; our window
     W16BSS w16_state, 1         ; W16S_*
-    W16BSS w16_locked, 1        ; 1 = the callback that resumed holds the lock
+    W16BSS w16_locked, 2        ; 1 = the callback that resumed holds the lock
+                                ;   (a word: saved and put back whole)
     W16BSS w16_name, 14         ; the program's 8.3 name, NUL-terminated
     W16BSS w16_dir, 2           ; ...the folder it is in
     W16BSS w16_vol, 1           ; ...and the volume
@@ -121,7 +152,6 @@ W16P_SYS08   equ 2              ; CGA
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     W16BSS w16_exit, 1          ; AH=4Ch's AL
     W16BSS w16_mbtext, 64       ; MessageBox's text, one line, in OUR segment
-    W16BSS w16_mbcap, 48        ; ...and its caption
     W16BSS w16_scratch, 16
     ; --- calls into the program (w16core.inc, SPEC.md 124.2.2) ---
     W16BSS w16_cbax, 2          ; the callee's answer, DX:AX
@@ -348,6 +378,112 @@ W16P_SYS08   equ 2              ; CGA
     W16BSS w16_kmods, W16_NSCAN ; each scan code's shift state when pressed
     W16BSS w16_closeq, 1        ; 1 = a WM_CLOSE of ours is not taken yet
     W16BSS w16_ctop, 2          ; w16_ppaint: the client's top, screen
+    ; --- S6: the dialog part (w16dlg.inc, SPEC.md 124.13) ---
+    W16BSS w16_dseg, 2          ; its segment, 0 = not fetched
+    W16BSS w16_pfv, 4           ; DCALL's vector: a routine in it, its segment
+    W16BSS w16_ibv, 4           ; ICALL's: w16_ibgate and our CS
+    W16BSS w16_ifn, 2           ; ...and the image routine w16_ibgate calls
+    ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
+    W16BSS w16_focus, 2         ; the window with the keyboard focus, 0 none
+    W16BSS w16_kl, 2            ; w16_wclip's answer, screen, inclusive
+    W16BSS w16_kt, 2
+    W16BSS w16_kr, 2
+    W16BSS w16_kb, 2
+    W16BSS w16_hx, 2            ; w16_hittest's point, and the level's
+    W16BSS w16_hy, 2            ;   client origin and HWND
+    W16BSS w16_hox, 2
+    W16BSS w16_hoy, 2
+    W16BSS w16_hpar, 2
+    W16BSS w16_ivb, 2           ; w16_invaltree's child border
+    W16BSS w16_fdx, 2           ; os8088's frame round a content box
+    W16BSS w16_fdy, 2
+    W16BSS w16_fox, 2
+    W16BSS w16_foy, 2
+    W16BSS w16_nwx, 2           ; w16_newosw's client, screen
+    W16BSS w16_nwy, 2
+    W16BSS w16_nwcx, 2
+    W16BSS w16_nwcy, 2
+    W16BSS w16_otpl, 16         ; ...and its os8088 window template
+    W16BSS w16_ttab, W16_MAXTOP * W16_TTLSZ ; second windows' titles
+    W16BSS w16_pfosw, 2         ; the os8088 window being painted (w16_ppaint)
+    W16BSS w16_inmodal, 1       ; the innermost modal dialog's slot + 1
+    W16BSS w16_seq, 2           ; the next window's W16W_SEQ
+    W16BSS w16_inprog, 1        ; 1 = between a resume and its return
+    ; --- the dialog part's (w16dlg.inc): it has no bss of its own
+    W16BSS w16d_sbuf, W16D_SBUF ; a control's text, as drawn
+    W16BSS w16d_pbuf, 32        ; a picture, copied into our segment
+    W16BSS w16d_nbuf, W16D_NBUF ; SetDlgItemInt's / GetDlgItemInt's digits
+    W16BSS w16d_func, 4         ; the dialog being made: its procedure
+    W16BSS w16d_param, 4        ;   ...WM_INITDIALOG's lParam
+    W16BSS w16d_dsty, 4         ;   ...its style
+    W16BSS w16d_cls, 4          ;   ...its class, far
+    W16BSS w16d_ul, 2
+    W16BSS w16d_mcnt, 2
+    W16BSS w16d_mcw, 2
+    W16BSS w16d_ulx, 2
+    W16BSS w16d_n, 2
+    W16BSS w16d_sty, 2
+    W16BSS w16d_l, 2
+    W16BSS w16d_t, 2
+    W16BSS w16d_r, 2
+    W16BSS w16d_b, 2
+    W16BSS w16d_w, 2
+    W16BSS w16d_h, 2
+    W16BSS w16d_rec, 2
+    W16BSS w16d_il, 2
+    W16BSS w16d_it, 2
+    W16BSS w16d_ir, 2
+    W16BSS w16d_ib, 2
+    W16BSS w16d_lb, 2
+    W16BSS w16d_sh, 2
+    W16BSS w16d_pic, 2
+    W16BSS w16d_bh, 2
+    W16BSS w16d_by, 2
+    W16BSS w16d_bxx, 2
+    W16BSS w16d_e0, 2
+    W16BSS w16d_e1, 2
+    W16BSS w16d_hdlg, 2
+    W16BSS w16d_frec, 2
+    W16BSS w16d_code, 2
+    W16BSS w16d_mch, 2
+    W16BSS w16d_dlg, 2
+    W16BSS w16d_tseg, 2
+    W16BSS w16d_tp, 2
+    W16BSS w16d_rent, 2
+    W16BSS w16d_par, 2
+    W16BSS w16d_modal, 2
+    W16BSS w16d_cnt, 2
+    W16BSS w16d_tabq, 2
+    W16BSS w16d_mbt, 2
+    W16BSS w16d_mbk, 2
+    W16BSS w16d_mbn, 2
+    W16BSS w16d_mbrw, 2
+    W16BSS w16d_mbd, 2
+    W16BSS w16d_mbh, 2
+    W16BSS w16d_mtw, 2
+    W16BSS w16d_mtl, 2
+    W16BSS w16d_mth, 2
+    W16BSS w16_cwkind, 1        ; w16_mkwnd's arguments (SPEC.md 124.8)
+    W16BSS w16_cwcls, 1
+    W16BSS w16_cwproc, 4
+    W16BSS w16_cwhbr, 2
+    W16BSS w16_cwstyle, 4
+    W16BSS w16_cwx, 2
+    W16BSS w16_cwy, 2
+    W16BSS w16_cwcx, 2
+    W16BSS w16_cwcy, 2
+    W16BSS w16_cwpar, 2
+    W16BSS w16_cwid, 2
+    W16BSS w16_cwtext, 4
+    W16BSS w16_mvx, 2           ; MoveWindow's place, and SWP_NOSIZE/NOMOVE
+    W16BSS w16_mvy, 2
+    W16BSS w16_mvfl, 1
+    W16BSS w16_tpap, 1          ; text's paper colour (w16_txtdraw)
+    W16BSS w16_bmpp, 2          ; w16_bmp's picture
+    W16BSS w16_bxl, 2           ; w16_tbox's box, screen, inclusive
+    W16BSS w16_bxt, 2
+    W16BSS w16_bxr, 2
+    W16BSS w16_bxb, 2
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -371,6 +507,8 @@ w16_entry:
     mov [w16_home], dx              ;   banked before anything navigates
     mov [w16_homev], bl
     mov word [w16_capn], 19         ; VGA's, until the display is read
+    mov word [w16_ibv], w16_ibgate  ; the dialog part's way back (SPEC.md
+    mov [w16_ibv + 2], cs           ;   124.13)
     mov si, w16_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr
     jc .out
@@ -437,6 +575,8 @@ w16_wake:
     je w16_after                    ; it ended inside a W_PAINT (w16_ppaint)
     cmp byte [w16_inpeek], 0
     jne w16_peekwake                ; a PeekMessage that found nothing
+    cmp byte [w16_state], W16S_RUN
+    je .kick
     cmp byte [w16_state], W16S_LOAD
     jne .out
     mov byte [w16_state], W16S_RUN
@@ -461,6 +601,10 @@ w16_wake:
     call w16_after
 .out:
     ret
+.kick:
+    mov byte [w16_locked], 0        ; whatever the program waits for, if it
+    call w16_kick                   ;   is here now
+    jmp short w16_after
 
 ; -----------------------------------------------------------------------------
 ; w16_after - what every resume's caller does when the resume comes back
@@ -470,13 +614,23 @@ w16_wake:
 ; -----------------------------------------------------------------------------
 w16_after:
     cmp byte [w16_state], W16S_ENDED
-    jne .out
+    jne .trim
     cmp byte [w16_endmsg], 0
     jne w16_endshow
     call w16_freeprog               ; the program's memory, now: the close is
     mov bx, [w16_win]               ;   deferred to the next UI pass
     call OSAPI_WM_CLOSE
-.out:
+    ret
+.trim:
+    jmp w16_dlgtrim                 ; the dialog part, if nothing needs it
+
+; w16_afterl - w16_after from a callback that holds the gfx lock: marked
+; held while it runs, so its clean-up does not ask for the lock again
+w16_afterl:
+    push word [w16_locked]
+    mov byte [w16_locked], 1
+    call w16_after
+    pop word [w16_locked]
     ret
 
 ; w16_endshow - the program has ended with something to say (SPEC.md 124.12:
@@ -515,9 +669,14 @@ w16_endshow:
     call OSAPI_WM_RESIZE            ; (it repaints everything)
     ret
 
-; w16_freeprog - give back the program's claim, its global heap, and the
-; face, once
+; w16_freeprog - give back the program's claim, its global heap, the face
+; and the dialog part, once
 w16_freeprog:
+    call w16_killwins               ; its second windows, which are ours
+    mov byte [w16_inmodal], 0
+    mov word [w16_focus], 0
+    mov word [w16_capture], 0
+    call w16_dlgout
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
@@ -596,6 +755,64 @@ w16_facein:
     call w16_strcpy
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; w16_dlgin - the dialog part (SPEC.md 124.13), fetched from WIN16's own
+; folder if it is not here. CF=1: it could not be, and op_fetch has said why.
+; Keeps every register.
+; -----------------------------------------------------------------------------
+w16_dlgin:
+    cmp word [w16_dseg], 0
+    je .fetch
+    clc
+    ret
+.fetch:
+    push ax
+    push bx
+    push dx
+    call OSAPI_FILE_HERE            ; where the user is, to be put back
+    push dx
+    push bx
+    mov dx, [w16_home]
+    mov bl, [w16_homev]
+    call OSAPI_FILE_GOTO_QM
+    mov al, W16P_DLG
+    call op_fetch                   ; claims, reads, expands; a toast if not
+    pop bx
+    pop dx
+    pushf
+    call OSAPI_FILE_GOTO_QM
+    popf
+    jc .out
+    mov al, W16P_DLG
+    call op_seg
+    mov [w16_dseg], ax
+    mov [w16_pfv + 2], ax
+    clc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16_dlgout - drop the dialog part if it is here. Keeps every register.
+w16_dlgout:
+    cmp word [w16_dseg], 0
+    je .out
+    push ax
+    mov al, W16P_DLG
+    call op_drop
+    mov word [w16_dseg], 0
+    pop ax
+.out:
+    ret
+
+; w16_ibgate - the dialog part's one way back into the image: a far call
+; here near-calls [w16_ifn] (ICALL). CS = DS = ours. Every register and the
+; flags pass through both ways.
+w16_ibgate:
+    call [cs:w16_ifn]
+    retf
 
 ; -----------------------------------------------------------------------------
 ; w16_onclose - the close negotiator (SPEC.md 75.1)
@@ -808,10 +1025,12 @@ w16_cputest:
 %include "win16/w16mem.inc"
 %include "win16/w16res.inc"
 %include "win16/w16user.inc"
+%include "win16/w16wnd.inc"
 %include "win16/w16menu.inc"
 %include "win16/w16gdi.inc"
 %include "win16/w16cens.inc"
 %include "win16/w16optab.inc"
+%include "win16/w16dlg.inc"     ; part 3's code, and its trampolines here
 
 ; --- the window template (SPEC.md 11) ----------------------------------------
 w16_tpl:
@@ -836,10 +1055,11 @@ w16_s_noface:   db 'Its System font could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 3
+    OS88_PARTS_BEGIN 4
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_DLG: section .w16dlg
     OS88_PARTS_END
 
     OS88_IMAGE_END

@@ -575,7 +575,7 @@ they stand on.
     was not clicked; its Custom field, which needs S6's dialog; a call count
     on a full Minesweeper repaint (S13's final pass).
 
-- [ ] **S6: Dialogs and controls.** *As a user the program's dialog boxes
+- [x] **S6: Dialogs and controls.** *As a user the program's dialog boxes
   open, I can type in them, and OK/Cancel do what they say.*
   - `DialogBox`, `CreateDialog`, `IsDialogMessage`, `EndDialog`,
     `MapDialogRect`, and template parsing with the dialog units of D4.
@@ -590,6 +590,47 @@ they stand on.
     last.
   - *Verify:* WinMine's Preferences (custom height, width and mines) and
     About; CALC's Scientific panel.
+  - **Changed by what was found:** CALC 3.0 imports `WIN87EM.__FPMATH`, so
+    it refuses before its first window (*Needs WIN87EM.__FPMATH*) and its
+    Scientific panel, a `WS_CHILD` dialog, is checked in S10 behind S9's
+    emulator. `SS_ICON` and the message box's icons move to S12 with the
+    rest of the icons. SPEC.md 124.13 records what shipped where it differs
+    from what was pinned: the modal loop's turn cap, a dialog that is the
+    program's first window taking WIN16's own, the message box's measured
+    layout and 255-character limit, and the white button face on 1bpp.
+  - **Shipped** (one commit on PR #320):
+    - `apps/win16/w16dlg.inc`: the dialog manager after Wine's
+      `dialog16.c`/`dialog.c` and the four controls after `button.c`,
+      `static.c`, `edit.c` and `listbox.c`, as part 3 of `WIN16.O88`
+      (fetched on the first dialog, control or message box, dropped after
+      the last). WIN16-built `MessageBox` replaces S2's os8088 alert.
+    - The window tree grew a creation order (`W16W_SEQ`), hide, show,
+      front and free-tree helpers, a mouse that climbs from a disabled
+      control to its parent and brings a modal dialog to the front, and
+      paint picks that see a second os8088 window.
+    - `tests/win16/modeless.c`: `CreateDialog` with an `IsDialogMessage`
+      loop, `SetDlgItemInt(-42)` and `GetDlgItemInt` read back.
+    - `make win16`: a 38,243-byte image (32,201 at S5) and a 12,761-byte
+      dialog part, 46,787 bytes on disk with the faces, all parts lz4. The
+      kernel is unchanged.
+  - **Seen on the glass** (QEMU):
+    - VGA: DIALOG.EXE against Windows 3.0's screenshot: the radio buttons,
+      the check box, the list, Tab order, an EDIT selected whole on Tab,
+      typing, Enter for OK and Esc for Cancel. Its values reach a
+      `MessageBox` (*OK: name win, large, sound on, list 2*), Enter closes
+      that, and the program ends cleanly.
+    - **WinMine 2.9**: About, titled from its owner, then Preferences,
+      which matches Windows 3.0's but for the bomb (`SS_ICON`, S12).
+      Expert then OK gives 24 x 24 with 99 mines; a custom 12 high, 20
+      wide and 30 mines, typed into its three EDITs (WinMine clears the
+      skill radio itself on `EN_CHANGE`), gives a 20 x 12 board with the
+      counter at 030.
+    - MODELESS.EXE: *OK: "17" reads 17 (a number)*.
+    - CGA (`VIDEO=cga`) and EGA (`VIDEO=ega`): DIALOG.EXE and its message
+      box, each on its own unit grid. On CGA the button face is white:
+      the grey dithered the captions into noise.
+  - **Not seen:** Hercules (QEMU has none); CALC's Scientific panel (S10);
+    a call count on a dialog's first paint (S13's final pass).
 
 - [ ] **S7: Profiles.** *As a user my best times and my chosen difficulty are
   still there tomorrow.*
@@ -629,6 +670,8 @@ they stand on.
   os8088 clipboard, and use its Statistics Box.*
   - The clipboard through `OSAPI_CLIP_PUT`/`GET`
     (`OpenClipboard`, `GetClipboardData`, `IsClipboardFormatAvailable`).
+  - The Scientific panel is a `WS_CHILD` dialog (S6), first reached here,
+    after S9 lets CALC past `WIN87EM.__FPMATH`.
   - *Verify:* the `win16calc` row keys a calculation in each mode and reads
     the display, then pastes a number in from Note Pad.
 

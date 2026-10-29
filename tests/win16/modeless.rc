@@ -1,0 +1,2 @@
+/* modeless.rc - modeless.c's dialog is dialog.c's (WIN16 fixture, S6) */
+#include "dialog.rc"

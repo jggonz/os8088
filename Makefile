@@ -18705,7 +18705,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # first time, ~150 MB at a pinned SHA-256, which is why this is on demand.
 # The bitmaps bitmap.rc binds are generated (tests/win16/mkbmp.py), never
 # committed. tests/unit/t_win16ne.py reads the result when it is there.
-WIN16FIX := MSGBOX WINDOW MENU DIALOG PROFILE BITMAP FPU PUMP GDICARD
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE BITMAP FPU PUMP GDICARD
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc) \
             tests/win16/mkbmp.py
 
@@ -18755,8 +18755,17 @@ $(BUILD)/win16/sys%.bin: apps/win16/fonts/sys%.txt tools/w16font.py
 	@mkdir -p $(@D)
 	python3 tools/w16font.py build $< $@
 
-$(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/win16.bin -o $@ $(addprefix --part ,$(W16FACES)) \
+# ...and part 3 is the dialog manager and the controls (SPEC.md 124.13):
+# win16.asm assembles them after the image in `section .w16dlg vstart=0`, and
+# tools/os88ovl.py cuts them off at the image size the header records, Sheet's
+# and Word's way, into a part of their own segment, far-called both ways.
+$(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) tools/os88pkg.py tools/os88ovl.py \
+                    $(PKGZSTAMP)
+	@mkdir -p $(BUILD)/win16
+	python3 tools/os88ovl.py $(BUILD)/win16.bin -o $(BUILD)/win16/w16dlg.bin \
+		--trim $(BUILD)/win16/win16.trim.bin
+	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
+		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
 		--part-compress lz4
 
 win16: $(BUILD)/win16.o88

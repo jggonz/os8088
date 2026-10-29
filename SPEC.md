@@ -225108,9 +225108,10 @@ as `?`.
 - the style, the window procedure and the background brush;
 - `cbWndExtra`: at most 16, and a class asking for more is refused with 0.
 
-**Windows.** At most 8 (`W16_MAXWND`). An `HWND` is `0x2000 + 4 × slot`, so
-it is never 0 and never a small integer that a program could confuse with
-something else.
+**Windows.** At most 48 (`W16_MAXWND`, S6: a dialog is a window and so is
+each of its controls; WinMine's Preferences is 20). An `HWND` is
+`0x2000 + 4 × slot`, so it is never 0 and never a small integer that a
+program could confuse with something else.
 
 **The top-level window is WIN16's own os8088 window.** In S3 a program has
 one top-level window. `CreateWindow` retitles WIN16's window with the window
@@ -225136,8 +225137,42 @@ VGA's: frame 4 for `WS_THICKFRAME`, 1 otherwise. The 19 is `SM_CYCAPTION`'s
   issue #181).
 - `MoveWindow`, and `SetWindowPos` without `SWP_NOSIZE`, resize the
   top-level window the same way, invalidate it whole and send `WM_SIZE`.
-- A second top-level window, and every child window, returns NULL until the
-  story that needs them.
+- **A second top-level window is a second os8088 window** *(S6)*: one more
+  `OSAPI_WM_CREATE` with WIN16's own callbacks, which tell the windows apart
+  by the os8088 window they are handed. It is never bound to the instance,
+  so it has no dock tile, and it is taken down with `OSAPI_WM_DESTROY` and
+  never `OSAPI_WM_CLOSE` (§81.6). Its close box reaches WIN16's negotiator
+  like the first window's. The program's FIRST top-level window, dialog or
+  not, is WIN16's own window, so a program whose only window is a dialog
+  (the dialog fixture) shows one window.
+
+**Child windows** *(S6)*. A window with `WS_CHILD` is a rectangle of its
+parent's client, and nothing in os8088 knows it exists:
+
+- `x`, `y`, `cx`, `cy` are in the parent's client coordinates, as Windows'
+  are, and `hMenu` is its ID (`GetDlgCtrlID`).
+- It paints in its top-level window's os8088 window, AFTER its parent: a
+  `WM_PAINT` is never delivered for a window while its parent is invalid.
+  Its DC's origin is its client's top left, and its clip is its rectangle
+  cut by each ancestor's client.
+- Invalidating a window invalidates its children where they overlap it,
+  because a parent's paint covers them. `WS_CLIPCHILDREN` is not honoured:
+  WIN16's clip is one rectangle, and the children repaint after the parent
+  anyway.
+- A press goes to the deepest visible, enabled child under the pointer,
+  in its client coordinates, unless a window has the capture. A key goes
+  to the focus window when it is inside the os8088 window that has the
+  keyboard, and to that window's top-level window otherwise.
+- A disabled window (`EnableWindow`), or a window inside a disabled
+  window, gets no mouse or key input.
+- `SetFocus` and `GetFocus`. `WM_SETFOCUS` and `WM_KILLFOCUS` go to WIN16's
+  own controls (§124.13) and not yet to a program's own windows.
+- `GetWindowText`, `SetWindowText` (a top-level window's is the os8088
+  title), `GetWindowTextLength`, `GetParent`, `IsWindow`, `IsChild`,
+  `IsWindowVisible`, `IsWindowEnabled`, `GetWindowRect`, `ScreenToClient`
+  and `ClientToScreen` work on any window. A window's text is a block in the
+  USER heap (§124.11).
+- `DestroyWindow` takes its children with it, each told `WM_DESTROY`.
 
 **Coordinates.** Client coordinates are relative to the os8088 content
 origin (`OSAPI_WM_CONTENT`).
@@ -225430,3 +225465,161 @@ aside for the end goal: it has no nested popup, a one-byte action and os8088's
   - os8088 has one alert at a time (§13). While the program's own
     `MessageBox` is up the click raises that box instead, which is to be
     answered first.
+
+### 124.13 Dialogs and controls *(shipped in S6)*
+
+WIN16 has its own dialog manager and controls, after Wine's `dialog16.c`,
+`dialog.c`, `button.c`, `static.c`, `edit.c` and `listbox.c`, drawn as
+Windows 3.0 drew them and measured against its screenshots (the dialog
+fixture, WinMine 2.9's About and Preferences, a `MessageBox`).
+
+**Templates.** The Windows 3.x `DLGTEMPLATE`: the style (a dword), the
+item count (a byte), `x`, `y`, `cx`, `cy` (words), the menu, the class and
+the caption (each a string, or `FFh` and a word), and, with `DS_SETFONT`, a
+point size and a face name that are read and not used: every dialog is
+drawn in the display's System font (§124.7). Each item is `x`, `y`, `cx`,
+`cy`, its ID (words), its style (a dword), its class (a byte `80h`-`85h`
+for BUTTON, EDIT, STATIC, LISTBOX, SCROLLBAR, COMBOBOX, or a string), its
+text (a string, or `FFh` and a word) and a count of extra bytes, skipped.
+A control of a class WIN16 has not got (SCROLLBAR, COMBOBOX, or one of
+the program's own) refuses the dialog: `DialogBox` answers −1 and
+`CreateDialog` NULL. The DIALOG's own class may be the program's (one
+registered with `DLGWINDOWEXTRA`); a LISTBOX's height is inflated by its
+border and cut to whole items, as Windows cut it.
+
+**Units.** A dialog unit is a quarter of `cxBase` across and an eighth of
+`cyBase` down. `cxBase` is 8, the System font's average over the alphabet
+(429 / 52, rounded), and `cyBase` is the face's rows: **8 × 16 on VGA**,
+measured (the fixture's 180 × 110 dialog has a 360 × 220 client on
+Windows 3.0 and its EDIT lands on the unit grid), 8 × 12 on EGA and
+Hercules, 8 × 8 on CGA. `GetDialogBaseUnits` answers them and
+`MapDialogRect` converts with them.
+
+**The dialog window.** A dialog without `WS_CHILD` is a top-level window
+(§124.8) whose CLIENT is the template's `cx` × `cy`, its top left at the
+owner's client origin plus `x`, `y` (the screen's without an owner),
+moved to stay on the screen (`DS_ABSALIGN` measures from the screen's).
+Its caption is its os8088 title; one without `WS_CAPTION` (WinMine's)
+takes its owner's. **A dialog or message box that is the program's FIRST
+window** (a program whose whole interface is a dialog, as the fixture's is)
+is shown in WIN16's own os8088 window, sized to it, rather than in a
+second one beside an empty first. A dialog with `WS_CHILD`
+(CALC's Scientific panel) is a child window of its owner. The background is
+`COLOR_WINDOW`.
+
+**`DialogBox`, `DialogBoxParam`, `DialogBoxIndirect`,
+`DialogBoxIndirectParam`** are modal, which is §124.2's nested loop:
+
+1. the dialog and its controls are made, `WM_INITDIALOG` is sent with the
+   first `WS_TABSTOP` control and the parameter, and an answer that is not
+   0 puts the focus on that control;
+2. the owner is disabled, as Windows disabled it (a `WS_CHILD` dialog
+   disables nothing). A press on a disabled window brings the dialog to the
+   front, and a close click on it is held until the dialog has ended;
+3. the import WAITS, and every os8088 callback that brings a message runs
+   the loop over the queue, at most 32 messages a turn before it gives the
+   task back and carries on at the next (a dialog procedure that posts
+   itself a message each time would otherwise hold the machine):
+   `IsDialogMessage`, then
+   `TranslateMessage` and `DispatchMessage`. A dispatch to the program's own
+   procedure is a host send (§124.2.2), so its other windows keep their
+   `WM_PAINT` and `WM_TIMER` while the dialog is up, as on Windows;
+4. after `EndDialog` (which hides the dialog at once), at the next step:
+   the owner is enabled, the dialog is destroyed (`WM_DESTROY` to its
+   procedure) and the call answers `EndDialog`'s value.
+
+A dialog procedure's answer is a `BOOL` in `AX` alone: `DX` is whatever the
+procedure left there. The messages whose answer is the value itself
+(`WM_INITDIALOG`, `WM_CTLCOLOR`, `WM_COMPAREITEM`, `WM_VKEYTOASCII`,
+`WM_CHARTOITEM`, `WM_QUERYDRAGICON`) take it; the rest take
+`DWL_MSGRESULT`.
+
+A dialog procedure may open another (WinMine's About opens Preferences):
+the state of each loop is in its own dialog's record, and the program's
+stack holds the nesting.
+
+**`CreateDialog`, `CreateDialogParam`, `CreateDialogIndirect`,
+`CreateDialogIndirectParam`** make a modeless dialog, shown when it has
+`WS_VISIBLE`, and answer it. Its keys are the program's to pass to
+`IsDialogMessage`.
+
+**`DefDlgProc`** is the dialog window's procedure: it calls the dialog
+procedure and, when that answers 0, does Windows' default for the message:
+`WM_CLOSE` posts `WM_COMMAND` `IDCANCEL`, `WM_ERASEBKGND` fills
+`COLOR_WINDOW`, `WM_PAINT` validates, and the rest go to `DefWindowProc`.
+`EndDialog`, `GetDlgItem`, `GetDlgCtrlID`, `SetDlgItemText`,
+`GetDlgItemText`, `SetDlgItemInt`, `GetDlgItemInt` (signed or not, with its
+success flag), `CheckDlgButton`, `IsDlgButtonChecked`, `CheckRadioButton`,
+`SendDlgItemMessage`, `GetNextDlgTabItem` and `GetNextDlgGroupItem` are
+Windows'.
+
+**`IsDialogMessage`** takes the keys a dialog takes:
+
+| key | |
+|---|---|
+| Tab, Shift+Tab | the next or previous `WS_TABSTOP` control; an EDIT reached this way has all its text selected |
+| the arrows | the next or previous control of the group (`WS_GROUP` starts one); an automatic radio button is checked as it is reached |
+| Enter | `WM_COMMAND` with the default push button's ID, `IDOK` when there is none |
+| Esc | `WM_COMMAND` `IDCANCEL` |
+| a mnemonic | with Alt, or alone when the focus control does not take characters: a button is clicked, a STATIC moves the focus to the control after it |
+| Space | a focused button is clicked |
+
+Other messages for the dialog and its controls are dispatched, and the
+call answers 1; a message for any other window answers 0.
+
+**Controls.** Each is a child window of a class WIN16 registers, and its
+procedure is WIN16's:
+
+| class | styles | messages |
+|---|---|---|
+| BUTTON | push, default push, check box, automatic check box, 3-state, automatic 3-state, radio, automatic radio, group box; `BS_LEFTTEXT` | `BM_GETCHECK`, `BM_SETCHECK`, `BM_GETSTATE`, `BM_SETSTATE`, `BM_SETSTYLE`; a press is tracked until the release, and a release inside clicks |
+| STATIC | left, centre and right text, word-wrapped, `&` underlining the next letter unless `SS_NOPREFIX`; `SS_SIMPLE`, `SS_LEFTNOWORDWRAP`; `SS_ICON` (the text names the icon resource; its place is kept and left blank until S12 draws icons); the black, grey and white rectangles and frames | |
+| EDIT | one line: typing, Backspace, Delete, the arrows, Home, End, Shift with them to select, a click and a drag; `ES_LEFT`, `ES_CENTER` and `ES_RIGHT` all drawn left, `ES_UPPERCASE`, `ES_LOWERCASE`, `ES_PASSWORD`, `ES_AUTOHSCROLL` | `EM_GETSEL`, `EM_SETSEL`, `EM_REPLACESEL`, `EM_LIMITTEXT`, `EM_GETMODIFY`, `EM_SETMODIFY`, `EM_GETLINE`, `EM_LINELENGTH`; at most 255 characters |
+| LISTBOX | one selection, `LBS_NOTIFY`, `LBS_SORT`; Windows 3.0's scroll bar with `WS_VSCROLL` when the items overflow | `LB_ADDSTRING`, `LB_INSERTSTRING`, `LB_DELETESTRING`, `LB_RESETCONTENT`, `LB_SETCURSEL`, `LB_GETCURSEL`, `LB_GETTEXT`, `LB_GETTEXTLEN`, `LB_GETCOUNT`, `LB_FINDSTRING`, `LB_SELECTSTRING`, `LB_GETTOPINDEX`, `LB_SETTOPINDEX`, `LB_GETITEMDATA`, `LB_SETITEMDATA` |
+
+All four take `WM_SETTEXT`, `WM_GETTEXT`, `WM_GETTEXTLENGTH`, `WM_ENABLE`
+(a disabled control's text is `COLOR_GRAYTEXT`), `WM_SETFOCUS`,
+`WM_KILLFOCUS` (a focused button has Windows' dotted rectangle around its
+text) and `WM_GETDLGCODE`.
+
+- **Notifications are POSTED**, where Windows sends them: `WM_COMMAND`, its
+  `wParam` the ID and its `lParam` the control and the code (`BN_CLICKED`,
+  `EN_CHANGE`, `LBN_SELCHANGE`, `LBN_DBLCLK`). That is one message later
+  than Windows, which no program in the plan can tell, and it keeps a
+  control's procedure from ever calling the program.
+- `WM_CTLCOLOR` is not sent: every control has Windows' default colours.
+- The caret is a solid bar; it does not blink.
+- **On a 1bpp display a button's face is white and its shadow black**, as
+  Windows' monochrome drivers drew a button: `COLOR_BTNFACE`'s light grey
+  would be the 50% dither (§124.7), which makes a caption on it unreadable.
+  `GetSysColor` still answers Windows' colours; only the controls' own
+  drawing maps the two.
+
+**`MessageBox`** is a dialog WIN16 builds, laid out as Windows 3.0 laid it
+out: the text word-wrapped at five eighths of the screen's width less the
+margins, a 16-pixel margin, the buttons of `MB_OK` to `MB_RETRYCANCEL` 58
+pixels wide and the System font's rows plus 12 high, 12 apart and centred,
+with `MB_DEFBUTTON1`–`3`, and the box centred on the screen. It answers
+`IDOK` to `IDNO`. Esc and the close box answer `IDCANCEL` when the box
+has a Cancel button, `IDOK` when OK is all it has, and nothing otherwise
+(a Yes/No box must be answered), as on Windows. It is modal like `DialogBox`, so a program can have
+one up over another. Its text is at most 255 characters, the rest cut. The
+icons of `MB_ICONHAND`, `MB_ICONQUESTION`, `MB_ICONEXCLAMATION` and
+`MB_ICONASTERISK` are S12's (WIN16's own art then, `apps/win16/icons/`, not
+Microsoft's); until then the box is laid out without one. The os8088 alert
+it used to be (§75.3) is gone.
+
+**The code is a part.** The dialog manager, the controls and `MessageBox`
+are part 3 of `WIN16.O88`, `OP_SEG`, lazy and compressed (§20.12). It is
+fetched from WIN16's own folder when the first dialog, control or message
+box is made, and dropped when the last is destroyed; one that cannot be
+fetched answers as a dialog that could not be made. It is assembled in
+WIN16's own nasm run, after the image (`section .w16dlg vstart=0`), and
+cut off by `tools/os88ovl.py`, so every byte of WIN16's it names is at the
+address WIN16 uses, by construction. It runs with DS = WIN16's segment;
+calls into it are far through a vector WIN16 sets when it is fetched, and
+calls out of it go back through one far gate in WIN16's image. Its claim
+stays pinned (§20.12.12), so a far return is never stale. The kernel is
+handed no address in it. **The reason is room as well as memory**: WIN16's
+image and bss share one segment capped at 65,024 bytes (§20.1.1), and the
+stories after S6 grow it; the part has a segment of its own.

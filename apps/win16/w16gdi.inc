@@ -66,14 +66,19 @@ W16F_DEFCH  equ '?'             ; what a character the face has not is drawn as
 ; -----------------------------------------------------------------------------
 ; w16_dcopen - open the DC on a window. AL = 1 BeginPaint's (the clip is the
 ; invalid rectangle, and [w16_prc] its client-coordinate rcPaint) / 0 the
-; whole client. BX = the window. Takes the lock and arms the kernel's clip
-; unless the resuming callback holds both (SPEC.md 124.8). Keeps every register.
+; whole client. BX = the window: any of the tree (SPEC.md 124.8), its client
+; found by w16_origin and cut by its ancestors' (w16_wclip). Takes the lock
+; and arms the kernel's clip on its top-level's os8088 window unless the
+; resuming callback holds both - inside W_PAINT the damage is that clip, and
+; a window in another os8088 window than the one painting has no pixel to
+; draw. Keeps every register.
 ; -----------------------------------------------------------------------------
 w16_dcopen:
     push ax
     push bx
     push cx
     push dx
+    push si
     mov [w16_dcwnd], bx
     mov [w16_dcpaint], al
     cmp byte [w16_dcon], 0
@@ -85,6 +90,7 @@ w16_dcopen:
     mov byte [w16_rop], R2_COPYPEN
     xor ax, ax
     mov [w16_tcol], al              ; black text, its COLORREF 0
+    mov byte [w16_tpap], CWHITE     ; ...on white paper (SPEC.md 124.13)
     mov [w16_trgb], ax
     mov [w16_trgb + 2], ax
     mov [w16_curx], ax
@@ -97,30 +103,39 @@ w16_dcopen:
     call OSAPI_GFX_LOCK
     mov byte [w16_dctook], 1
 .held:
+    push bx
+    call w16_toplevel
+    mov bx, [bx + W16W_OSW]         ; BX = the os8088 window it is in
+    or bx, bx
+    jz .hide
     cmp byte [w16_inpaint], 0       ; inside W_PAINT the damage is the clip
-    jne .clip
-    mov bx, [w16_win]
-    call OSAPI_WM_CLIP_SET
-    jnc .armed
+    je .arm
+    cmp bx, [w16_pfosw]
+    je .armed0
+.hide:
     mov byte [w16_dchide], 1        ; not a pixel visible
-    jmp short .clip
-.armed:
+    jmp short .armed0
+.arm:
+    call OSAPI_WM_CLIP_SET
+    jc .hide
     mov byte [w16_dcclip], 1
+.armed0:
+    pop bx
 .clip:
-    mov bx, [w16_win]
-    call OSAPI_WM_CONTENT
+    mov bx, [w16_dcwnd]
+    call w16_origin                 ; AX/DX = the client's origin, CX/SI size
+    jc .empty
     mov [w16_ox], ax
     mov [w16_oy], dx
-    call OSAPI_WM_GEOM              ; CX/DX = the client's size
-    jc .empty
-    push ax                         ; ...under the menu bar (SPEC.md 124.11)
-    call w16_mbarh
-    add [w16_oy], ax
-    sub dx, ax
-    pop ax
+    mov dx, si
+    or dx, dx
+    jle .empty
+    or cx, cx
     jle .empty
     cmp byte [w16_dchide], 0
     jne .empty
+    call w16_wclip                  ; [w16_kl]..[w16_kb]: cut by its ancestors
+    jc .empty
     xor ax, ax
     mov [w16_prc], ax
     mov [w16_prc + 2], ax
@@ -128,7 +143,6 @@ w16_dcopen:
     mov [w16_prc + 6], dx
     cmp byte [w16_dcpaint], 0
     je .screen
-    mov bx, [w16_dcwnd]
     test byte [bx + W16W_FLAGS], W16WF_INVAL
     jz .empty                       ; nothing invalid: an empty rcPaint
     mov ax, [bx + W16W_UL]          ; rcPaint = the invalid rectangle cut to
@@ -151,19 +165,35 @@ w16_dcopen:
     jg .screen
     mov [w16_prc + 6], ax
 .screen:
-    mov ax, [w16_prc]               ; ...and in screen coordinates, inclusive
-    add ax, [w16_ox]
+    mov ax, [w16_prc]               ; ...and in screen coordinates, inclusive,
+    add ax, [w16_ox]                ;   cut by the ancestors
+    cmp ax, [w16_kl]
+    jge .sl
+    mov ax, [w16_kl]
+.sl:
     mov [w16_cl], ax
     mov ax, [w16_prc + 2]
     add ax, [w16_oy]
+    cmp ax, [w16_kt]
+    jge .st
+    mov ax, [w16_kt]
+.st:
     mov [w16_ct], ax
     mov ax, [w16_prc + 4]
     add ax, [w16_ox]
     dec ax
+    cmp ax, [w16_kr]
+    jle .sr
+    mov ax, [w16_kr]
+.sr:
     mov [w16_cr], ax
     mov ax, [w16_prc + 6]
     add ax, [w16_oy]
     dec ax
+    cmp ax, [w16_kb]
+    jle .sb
+    mov ax, [w16_kb]
+.sb:
     mov [w16_cb], ax
     jmp short .out
 .empty:
@@ -177,6 +207,7 @@ w16_dcopen:
     mov word [w16_ct], 1
     mov word [w16_cb], 0
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -1569,23 +1600,41 @@ w16_txtdraw:
     inc si
     pop cx
     loop .g
-    jmp short .blit
+    jmp short w16_bandblit
 .stop:
     pop cx
-.blit:
+    jmp short w16_bandblit
+.out:
+    pop es
+    ret
+
+; w16_bandblit - the tail w16_txtdraw and w16_bmp share: blit the band's
+; rows [w16_r0]..[w16_r1] from screen x [w16_rl] to [w16_rr], row [w16_ty]
+; + [w16_r0], in [w16_tcol] on [w16_tpap]. The caller pushed ES.
+w16_bandblit:
     ; --- the colours, and on a 1bpp display what lit means ---
     mov al, [w16_tcol]
-    mov ah, CWHITE
+    mov ah, [w16_tpap]
     cmp byte [w16_mono], 0
     je .pen
+    xor bh, bh                      ; a 1bpp display: the band's set bits
+    mov bl, ah                      ;   are what is lit
+    mov cl, [w16_monolit + bx]      ; CL = the paper lit
     mov bl, al
-    xor bh, bh
-    cmp byte [w16_monolit + bx], 0
-    jne .lit                        ; lit ink on white paper: all lit
-    call w16_bandnot                ; dark ink on white: the ink is the
+    mov ch, [w16_monolit + bx]      ; CH = the ink lit
+    or cl, cl
+    jz .dark
+    or ch, ch
+    jnz .lit                        ; lit ink on lit paper: all lit
+    call w16_bandnot                ; dark ink on lit paper: the ink is the
     jmp short .pen                  ;   band's clear bits
 .lit:
     call w16_bandfill
+    jmp short .pen
+.dark:
+    or ch, ch                       ; lit ink on dark paper: the glyphs as
+    jnz .pen                        ;   they are; dark on dark: none lit
+    call w16_bandclr
 .pen:
     call OSAPI_GFX_BLIT1_PEN        ; AL = ink, AH = paper (colour only)
     push ds
@@ -1605,6 +1654,113 @@ w16_txtdraw:
     sub dx, [w16_r0]
     inc dx
     call OSAPI_GFX_BLIT1
+.out:
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_bmp - a small 1bpp picture: CX rows of two bytes at DS:SI (the left
+; pixel the first byte's top bit), DX wide (at most 16), at most 20 rows, its top left
+; at [w16_tx], [w16_ty] (screen), in [w16_tcol] on [w16_tpap], cut to the
+; DC's clip - one band and one blit, as text is (SPEC.md 124.13: a check
+; box, a radio button, an arrow). Clobbers AX, BX, CX, DX, SI, DI, BP.
+; -----------------------------------------------------------------------------
+w16_bmp:
+    push es
+    mov [w16_bmpp], si
+    mov ax, [w16_tx]                ; R, cut to the clip
+    add ax, dx
+    dec ax
+    cmp ax, [w16_cr]
+    jle .r
+    mov ax, [w16_cr]
+.r:
+    mov [w16_rr], ax
+    mov ax, [w16_tx]                ; L
+    cmp ax, [w16_cl]
+    jge .l
+    mov ax, [w16_cl]
+.l:
+    mov [w16_rl], ax
+    cmp ax, [w16_rr]
+    jg .out
+    mov ax, cx
+    add ax, [w16_ty]
+    dec ax                          ; B
+    cmp ax, [w16_cb]
+    jle .b
+    mov ax, [w16_cb]
+.b:
+    sub ax, [w16_ty]
+    mov [w16_r1], ax
+    mov ax, [w16_ty]                ; T
+    cmp ax, [w16_ct]
+    jge .t
+    mov ax, [w16_ct]
+.t:
+    sub ax, [w16_ty]
+    mov [w16_r0], ax
+    cmp ax, [w16_r1]
+    jg .out
+    mov ax, [w16_rl]
+    and ax, 0xFFF8
+    sub ax, 16
+    mov [w16_tb0], ax
+    mov ax, [w16_rr]
+    sub ax, [w16_tb0]
+    add ax, 8 + 7
+    mov cl, 3
+    shr ax, cl
+    mov [w16_tnb], ax
+    push ds
+    pop es
+    mov ax, W16_BS                  ; DI = the band's first row drawn
+    mul word [w16_r0]
+    add ax, w16_gbuf
+    mov di, ax
+    mov si, [w16_r0]                ; SI = that row of the picture
+    shl si, 1
+    add si, [w16_bmpp]
+    mov ax, [w16_tx]
+    sub ax, [w16_tb0]
+    mov cl, al
+    and cl, 7
+    mov ch, 8
+    sub ch, cl                      ; CL = the shift, CH = 8 less it
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov bx, ax                      ; BX = the picture's byte in a row
+    mov dx, [w16_r1]
+    sub dx, [w16_r0]
+    inc dx
+.row:
+    push di
+    push cx
+    mov cx, [w16_tnb]
+    xor al, al
+    cld
+    rep stosb
+    pop cx
+    pop di
+    mov ah, [si]
+    mov al, [si + 1]
+    push dx
+    mov dl, al
+    shr ax, cl
+    xchg cl, ch
+    shl dl, cl
+    xchg cl, ch
+    or [di + bx], ah
+    or [di + bx + 1], al
+    or [di + bx + 2], dl
+    pop dx
+    inc si
+    inc si
+    add di, W16_BS
+    dec dx
+    jnz .row
+    jmp w16_bandblit
 .out:
     pop es
     ret
@@ -1682,6 +1838,10 @@ w16_bandnot:
 w16_bandfill:
     push cx
     mov cl, 0
+    jmp short w16_bandop
+w16_bandclr:
+    push cx
+    mov cl, 1
 w16_bandop:
     push ax
     push dx
@@ -1700,7 +1860,12 @@ w16_bandop:
 .b:
     or cl, cl
     jz .set
+    cmp cl, 1
+    je .clr
     not byte [di]
+    jmp short .n
+.clr:
+    mov byte [di], 0
     jmp short .n
 .set:
     mov byte [di], 0xFF

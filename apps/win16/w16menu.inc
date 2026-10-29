@@ -3207,8 +3207,9 @@ w16_mhpost:
     xor dx, dx
     call w16_resume
 .after:
+    call w16_after                  ; (the lock still marked held)
     mov byte [w16_locked], 0
-    jmp w16_after
+    ret
 .still:
     mov byte [w16_locked], 0
     ret

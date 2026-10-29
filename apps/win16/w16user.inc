@@ -35,12 +35,85 @@ W16W_UT     equ 14              ;   right and bottom exclusive as Windows'
 W16W_UR     equ 16
 W16W_UB     equ 18
 W16W_EXTRA  equ 20              ; cbWndExtra, at most 16
-W16W_MENU   equ 36              ; its HMENU, 0 = none (SPEC.md 124.11)
+W16W_MENU   equ 36              ; its HMENU, 0 = none (SPEC.md 124.11); a
+                                ;   child's ID
+W16W_PARENT equ 38              ; a child's parent; a top-level's owner
+W16W_X      equ 40              ; a child's window rectangle, in its parent's
+W16W_Y      equ 42              ;   client coordinates (SPEC.md 124.8)
+W16W_CX     equ 44
+W16W_CY     equ 46
+W16W_OSW    equ 48              ; a top-level's os8088 window
+W16W_TEXT   equ 50              ; its text, a block in the USER heap; 0 none
+W16W_KIND   equ 52              ; W16Q_*: 0 the program's class, else WIN16's
+W16W_F2     equ 53              ; W16W2_*
+W16W_CS     equ 54              ; 18 bytes: a control's or a dialog's own
+                                ;   state (w16dlg.inc)
+W16W_SEQ    equ 72              ; when it was made: siblings are in this
+                                ;   order, Windows' Z order (w16dlg.inc)
 
 W16WF_USED  equ 1
 W16WF_INVAL equ 2
 W16WF_ERASE equ 4
 W16WF_VIS   equ 8
+W16WF_DIS   equ 16              ; disabled (EnableWindow)
+W16WF_DYING equ 32              ; DestroyWindow has it
+
+W16W2_TTL   equ 7               ; a second top-level's title buffer, + 1
+
+W16Q_PROG   equ 0               ; the kinds: the program's own class ...
+W16Q_BUTTON equ 1               ; ...and WIN16's (SPEC.md 124.13), whose
+W16Q_EDIT   equ 2               ;   procedures are in the dialog part
+W16Q_STATIC equ 3
+W16Q_LIST   equ 4
+W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
+
+; a dialog's own state, in its W16W_CS (w16dlg.inc); the program's DWL_*
+; are its extra bytes, as on Windows
+WD_RESULT   equ W16W_CS + 0     ; EndDialog's value
+WD_FL       equ W16W_CS + 2     ; WDF_*
+WD_FOCUS    equ W16W_CS + 4     ; the control that had its focus
+WD_DEFID    equ W16W_CS + 6     ; DM_SETDEFID's
+WD_WIDX     equ W16W_CS + 8     ; a modal one's waiting DialogBox: its row,
+WD_WNARGB   equ W16W_CS + 10    ;   its argument bytes and its frame
+WD_WPSP     equ W16W_CS + 12
+WD_PREV     equ W16W_CS + 14    ; ...and the modal one it is inside, + 1
+WD_OWNER    equ W16W_CS + 16    ; the owner it disabled, 0 none
+WDF_ENDED   equ 1
+WDF_MODAL   equ 2
+DWL_MSGRESULT equ 0
+DWL_DLGPROC equ 4
+DWL_USER    equ 8
+
+; the style's high word
+WS_POPUP_HI    equ 0x8000
+WS_VISIBLE_HI  equ 0x1000
+WS_DISABLED_HI equ 0x0800
+WS_CAPTION_HI  equ 0x00C0
+WS_BORDER_HI   equ 0x0080
+WS_DLGFRAME_HI equ 0x0040
+WS_VSCROLL_HI  equ 0x0020
+WS_GROUP_HI    equ 0x0002
+WS_TABSTOP_HI  equ 0x0001
+
+; W16SMKEEP - at a routine's top: run the rest of it (its `.go`) with
+; [w16_sm_*] kept on the stack and put back after, flags and registers as it
+; leaves them. A message sent to a control while another is being handled
+; (WM_KILLFOCUS from a press's SetFocus) must not take the handled one's
+; place.
+%macro W16SMKEEP 0
+    push word [w16_sm_hwnd]
+    push word [w16_sm_msg]
+    push word [w16_sm_wp]
+    push word [w16_sm_lp]
+    push word [w16_sm_lp + 2]
+    call .go
+    pop word [w16_sm_lp + 2]
+    pop word [w16_sm_lp]
+    pop word [w16_sm_wp]
+    pop word [w16_sm_msg]
+    pop word [w16_sm_hwnd]
+    ret
+%endmacro
 
 ; --- a timer -------------------------------------------------------------------
 W16T_USED   equ 0
@@ -61,6 +134,14 @@ MSG_PT      equ 14
 WM_CREATE     equ 0x0001
 WM_DESTROY    equ 0x0002
 WM_SIZE       equ 0x0005
+WM_SETFOCUS   equ 0x0007
+WM_KILLFOCUS  equ 0x0008
+WM_ENABLE     equ 0x000A
+WM_SETTEXT    equ 0x000C
+WM_GETTEXT    equ 0x000D
+WM_GETTEXTLENGTH equ 0x000E
+WM_GETDLGCODE equ 0x0087
+WM_INITDIALOG equ 0x0110
 WM_PAINT      equ 0x000F
 WM_CLOSE      equ 0x0010
 WM_QUIT       equ 0x0012
@@ -85,6 +166,7 @@ WS_CHILD_HI   equ 0x4000        ; the style's high word
 WS_THICKFRAME_HI equ 0x0004
 WS_MINIMIZE_HI equ 0x2000
 SWP_NOSIZE    equ 0x0001
+SWP_NOMOVE    equ 0x0002
 PM_REMOVE     equ 0x0001
 
 ; =============================================================================
@@ -309,103 +391,120 @@ w16u_createwnd:
     push di
     call w16_args
     mov [w16_cwargs], bx
-    test word [es:bx + 20], WS_CHILD_HI
-    jnz .fail                       ; S3 has one top-level window and no
-    cmp byte [w16_top], 0           ;   children (SPEC.md 124.8)
-    jne .fail
     mov ax, [es:bx + 26]
     mov dx, [es:bx + 28]
     call w16_farname
     jc .fail
     call w16_findcls                ; BX = the class
-    jc .fail
-    mov di, bx
-    xor cx, cx                      ; a free window slot
-.slot:
-    call w16_slot2rec
-    test byte [bx + W16W_FLAGS], W16WF_USED
-    jz .take
-    inc cx
-    cmp cx, W16_MAXWND
-    jb .slot
-.fail:
-    xor ax, ax
-    jmp .out
-.take:
-    mov si, bx                      ; SI = the window, DI = its class
-    push cx
-    push di
-    mov di, si
-    mov cx, W16W_SIZE / 2
-    xor ax, ax
-    push ds
-    pop es
-    rep stosw
-    pop di
-    pop cx
-    mov byte [si + W16W_FLAGS], W16WF_USED | W16WF_INVAL | W16WF_ERASE
-    mov ax, di
+    jc .builtin
+    mov byte [w16_cwkind], W16Q_PROG
+    mov ax, bx
     sub ax, w16_cls
     mov dl, W16C_SIZE
     div dl
-    mov [si + W16W_CLS], al
-    mov ax, [di + W16C_PROC]
-    mov [si + W16W_PROC], ax
-    mov ax, [di + W16C_PROC + 2]
-    mov [si + W16W_PROC + 2], ax
-    mov ax, [di + W16C_HBR]
-    mov [si + W16W_HBR], ax
-    mov word [si + W16W_UR], 0x7FFF ; the whole client, erased
-    mov word [si + W16W_UB], 0x7FFF
+    mov [w16_cwcls], al
+    mov ax, [bx + W16C_PROC]
+    mov [w16_cwproc], ax
+    mov ax, [bx + W16C_PROC + 2]
+    mov [w16_cwproc + 2], ax
+    mov ax, [bx + W16C_HBR]
+    mov [w16_cwhbr], ax
+    jmp short .args
+.builtin:
+    call w16_builtin                ; one of WIN16's own (SPEC.md 124.13)
+    jc .fail
+    mov [w16_cwkind], al
+    mov byte [w16_cwcls], 0xFF
+    call w16_ctlstub
+    mov [w16_cwproc], ax
+    mov [w16_cwproc + 2], dx
+    mov word [w16_cwhbr], COLOR_WINDOW + 1
+.args:
     mov es, [w16_pss]
     mov bx, [w16_cwargs]
     mov ax, [es:bx + 18]
-    mov [si + W16W_STYLE], ax
+    mov [w16_cwstyle], ax
     mov ax, [es:bx + 20]
-    mov [si + W16W_STYLE + 2], ax   ; WS_MINIMIZE kept: ShowWindow restores
-    mov al, cl
-    inc al
-    mov [w16_top], al
+    mov [w16_cwstyle + 2], ax       ; WS_MINIMIZE kept: ShowWindow restores
+    mov ax, [es:bx + 22]
+    mov [w16_cwtext], ax
+    mov ax, [es:bx + 24]
+    mov [w16_cwtext + 2], ax
+    mov ax, [es:bx + 8]
+    mov [w16_cwpar], ax
+    mov ax, [es:bx + 6]
+    mov [w16_cwid], ax
+    mov ax, [es:bx + 16]
+    mov [w16_cwx], ax
+    mov ax, [es:bx + 14]
+    mov [w16_cwy], ax
+    mov ax, [es:bx + 12]
+    mov [w16_cwcx], ax
+    mov ax, [es:bx + 10]
+    mov [w16_cwcy], ax
+    test word [w16_cwstyle + 2], WS_CHILD_HI
+    jnz .mk
+    cmp byte [w16_top], 0           ; a second top-level: its client and
+    je .mk                          ;   where it goes
+    call w16_popclient
+.mk:
+    call w16_mkwnd                  ; BX = it, CX = its slot
+    jc .fail
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    je .prog
+    mov word [w16_sm_msg], WM_CREATE    ; one of WIN16's: created at once
+    mov word [w16_sm_wp], 0
+    mov ax, [w16_cwargs]
+    mov [w16_sm_lp], ax
+    mov ax, [w16_pss]
+    mov [w16_sm_lp + 2], ax
+    call w16_intproc
+    and ax, dx
+    inc ax
+    jz .refused
+    call w16_rec2hwnd
+    xor dx, dx
+    jmp .out
+.refused:
+    call w16_wndfree
+.fail:
+    xor ax, ax
+    xor dx, dx
+    jmp .out
+.prog:
     mov [w16_cwslot], cx
+    mov si, bx
+    mov es, [w16_pss]
+    mov bx, [w16_cwargs]
+    test word [si + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .create
     mov ax, [es:bx + 6]             ; hMenu, else the class's menu by name
     or ax, ax                       ;   (SPEC.md 124.11)
     jnz .menu
-    push bx
-    mov bx, di
-    mov ax, [bx + W16C_MENU]
-    mov dx, [bx + W16C_MENU + 2]
-    pop bx
+    mov al, [si + W16W_CLS]
+    mov ah, W16C_SIZE
+    mul ah
+    mov di, ax
+    add di, w16_cls
+    mov ax, [di + W16C_MENU]
+    mov dx, [di + W16C_MENU + 2]
     mov cx, ax
     or cx, dx
     jz .menu
     call w16_mload
     mov es, [w16_pss]
+    mov bx, [w16_cwargs]
 .menu:
     mov [si + W16W_MENU], ax
-
-    push si                         ; --- WIN16's window becomes the program's
-    mov si, [es:bx + 22]            ; the window text is the title
-    mov dx, [es:bx + 24]
-    mov di, w16_wtitle
-    mov cx, 40
-    mov ax, w16_s_empty
-    call w16_farline
-    mov word [w16_titleptr], w16_wtitle
-    call w16_lock
-    mov bx, [w16_win]
-    mov al, 1                       ; W_PAINT paints every pixel (SPEC.md 124.8)
-    call OSAPI_WM_OWNBG
-    mov ax, w16_wtitle
-    call OSAPI_WM_TITLE
-    call w16_unlock
-    pop si
-    mov es, [w16_pss]
-    mov bx, [w16_cwargs]
-    mov cx, [es:bx + 12]
+    mov ax, [si + W16W_OSW]
+    cmp ax, [w16_win]
+    jne .create
+    mov cx, [es:bx + 12]            ; WIN16's window takes the size
     mov dx, [es:bx + 10]
     mov ax, [es:bx + 20]
     call w16_sizeto
 
+.create:
     mov si, w16_cw_done             ; --- WM_CREATE, with its CREATESTRUCT
     mov ax, [w16_cwslot]
     mov cx, W16_CSSIZE
@@ -429,10 +528,7 @@ w16u_createwnd:
     mov [w16_sm_lp + 2], es
     mov cx, [w16_cwslot]
     call w16_slot2rec
-    mov ax, cx
-    shl ax, 1
-    shl ax, 1
-    add ax, W16_HWND0
+    call w16_rec2hwnd
     mov [w16_sm_hwnd], ax
     mov word [w16_sm_msg], WM_CREATE
     mov word [w16_sm_wp], 0
@@ -442,6 +538,57 @@ w16u_createwnd:
     pop si
     ret
 
+; w16_popclient - [w16_cwx]..[w16_cwcy] = a program's popup as CreateWindow
+; gave it (its window, on the screen) -> its client, on the screen: less the
+; frame (4 with WS_THICKFRAME, else 1 with a border) and the caption.
+; CW_USEDEFAULT puts it below and right of WIN16's window, 320 by 200.
+w16_popclient:
+    push ax
+    push bx
+    push dx
+    mov ax, CW_USEDEFAULT
+    cmp [w16_cwx], ax
+    jne .place
+    push ax
+    mov bx, [w16_win]
+    call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    add ax, 24
+    mov [w16_cwx], ax
+    add dx, 24
+    mov [w16_cwy], dx
+    pop ax
+.place:
+    cmp [w16_cwcx], ax
+    jne .size
+    mov word [w16_cwcx], 320
+    mov word [w16_cwcy], 200
+.size:
+    xor bx, bx                      ; BX = the frame
+    test word [w16_cwstyle + 2], WS_BORDER_HI | WS_DLGFRAME_HI | WS_THICKFRAME_HI
+    jz .f
+    inc bx
+    test word [w16_cwstyle + 2], WS_THICKFRAME_HI
+    jz .f
+    mov bx, 4
+.f:
+    add [w16_cwx], bx
+    add [w16_cwy], bx
+    shl bx, 1
+    sub [w16_cwcx], bx
+    sub [w16_cwcy], bx
+    mov ax, [w16_cwstyle + 2]
+    and ax, WS_CAPTION_HI
+    cmp ax, WS_CAPTION_HI
+    jne .out
+    mov ax, [w16_capn]
+    add [w16_cwy], ax
+    sub [w16_cwcy], ax
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 ; w16_cw_done - WM_CREATE answered: -1 refuses the window, anything else
 ; is followed by WM_SIZE, as Windows' CreateWindow follows it
 w16_cw_done:
@@ -449,10 +596,7 @@ w16_cw_done:
     inc ax
     jz .refused
     call w16_slot2rec
-    mov ax, cx
-    shl ax, 1
-    shl ax, 1
-    add ax, W16_HWND0
+    call w16_rec2hwnd
     call w16_sizemsg
     push si
     mov si, w16_cw_sized
@@ -466,12 +610,21 @@ w16_cw_done:
     xor ax, ax
     ret
 
-; w16_cw_sized - ...and CreateWindow answers the HWND
+; w16_cw_sized - ...a second top-level with WS_VISIBLE is shown, and
+; CreateWindow answers the HWND
 w16_cw_sized:
-    mov ax, cx
-    shl ax, 1
-    shl ax, 1
-    add ax, W16_HWND0
+    call w16_slot2rec
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .out
+    test word [bx + W16W_STYLE + 2], WS_VISIBLE_HI
+    jz .out
+    or byte [bx + W16W_FLAGS], W16WF_VIS
+    mov ax, [bx + W16W_OSW]
+    cmp ax, [w16_win]
+    je .out
+    call w16_oswshow
+.out:
+    call w16_rec2hwnd
     xor dx, dx
     ret
 
@@ -513,27 +666,19 @@ w16_sizeto:
 .out:
     ret
 
-; w16_sizemsg - [w16_sm_*] = WM_SIZE for the window AX, with the client's
-; size now
+; w16_sizemsg - [w16_sm_*] = WM_SIZE for the window BX (its HWND AX), with
+; the client's size now
 w16_sizemsg:
-    push bx
     push cx
     push dx
     mov [w16_sm_hwnd], ax
     mov word [w16_sm_msg], WM_SIZE
     mov word [w16_sm_wp], 0         ; SIZE_RESTORED
-    mov bx, [w16_win]
-    call OSAPI_WM_GEOM
-    jnc .have
-    xor cx, cx
-    xor dx, dx
-.have:
-    call w16_nobar
+    call w16_csize
     mov [w16_sm_lp], cx
     mov [w16_sm_lp + 2], dx
     pop dx
     pop cx
-    pop bx
     ret
 
 ; w16_nobar - DX = the content's height -> the client's: the menu bar's off,
@@ -551,17 +696,29 @@ w16_nobar:
 ; MoveWindow (USER.56) - args: +0 bRepaint, +2 cy, +4 cx, +6 y, +8 x, +10 hWnd
 w16u_movewnd:
     call w16_args
+    mov byte [w16_mvfl], 0          ; a move and a size
+    mov ax, [es:bx + 8]
+    mov [w16_mvx], ax
+    mov ax, [es:bx + 6]
+    mov [w16_mvy], ax
     mov cx, [es:bx + 4]
     mov dx, [es:bx + 2]
     mov ax, [es:bx + 10]
     jmp short w16_moveto
 
 ; SetWindowPos (USER.232) - args: +0 flags, +2 cy, +4 cx, +6 y, +8 x,
-; +10 hWndInsertAfter, +12 hWnd. The place and the Z order are os8088's.
+; +10 hWndInsertAfter, +12 hWnd. The Z order is os8088's.
 w16u_setwndpos:
     call w16_args
-    test word [es:bx], SWP_NOSIZE
-    jnz .one
+    mov al, [es:bx]
+    and al, SWP_NOSIZE | SWP_NOMOVE
+    mov [w16_mvfl], al
+    cmp al, SWP_NOSIZE | SWP_NOMOVE
+    je .one
+    mov ax, [es:bx + 8]
+    mov [w16_mvx], ax
+    mov ax, [es:bx + 6]
+    mov [w16_mvy], ax
     mov cx, [es:bx + 4]
     mov dx, [es:bx + 2]
     mov ax, [es:bx + 12]
@@ -570,8 +727,10 @@ w16u_setwndpos:
     mov ax, 1
     ret
 
-; w16_moveto - AX = the HWND, CX by DX its new outer size: the top-level
-; window takes it, is invalid and erased whole, and hears WM_SIZE. Answers 1.
+; w16_moveto - AX = the HWND, CX by DX its new outer size and [w16_mvx]/
+; [w16_mvy] its place, [w16_mvfl] = SWP_NOSIZE/SWP_NOMOVE: a child moves in
+; its parent, WIN16's own window takes the size, and either is invalid and
+; erased whole and hears WM_SIZE. Answers 1.
 w16_moveto:
     push si
     mov [w16_mvcx], cx
@@ -579,10 +738,13 @@ w16_moveto:
     mov [w16_mvhwnd], ax
     call w16_hwnd2rec               ; BX = the record, CX = the slot
     jc .no
-    mov al, [w16_top]
-    dec al
-    cmp al, cl
-    jne .one                        ; only the top-level window has a size
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .child
+    mov ax, [bx + W16W_OSW]
+    cmp ax, [w16_win]
+    jne .one                        ; a second top-level stays as it is made
+    test byte [w16_mvfl], SWP_NOSIZE
+    jnz .one
     test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
     jnz .one                        ; ...and a minimized one moves its icon,
     push bx                         ;   keeping the size it restores to
@@ -591,12 +753,29 @@ w16_moveto:
     mov dx, [w16_mvcy]
     call w16_sizeto
     pop bx
+    jmp short .inval
+.child:
+    call w16_uncover                ; where it was
+    test byte [w16_mvfl], SWP_NOMOVE
+    jnz .cs
+    mov ax, [w16_mvx]
+    mov [bx + W16W_X], ax
+    mov ax, [w16_mvy]
+    mov [bx + W16W_Y], ax
+.cs:
+    test byte [w16_mvfl], SWP_NOSIZE
+    jnz .inval
+    mov ax, [w16_mvcx]
+    mov [bx + W16W_CX], ax
+    mov ax, [w16_mvcy]
+    mov [bx + W16W_CY], ax
+.inval:
     xor ax, ax
     xor cx, cx
     mov dx, 0x7FFF
     mov si, dx
     mov byte [w16_erase], 1
-    call w16_inval
+    call w16_invaltree
     mov ax, [w16_mvhwnd]
     call w16_sizemsg
     mov si, w16_cont_one
@@ -613,42 +792,64 @@ w16_moveto:
     pop si
     ret
 
-; w16_wndfree - BX = a window record: release it, its timers, its capture
-; and the top-level window it was. Clobbers CX.
+; w16_wndfree - BX = a window record: release it - its text, its menu, a
+; second os8088 window it had, the focus, its timers and its capture - and
+; the top-level window it was. Nothing is sent. Clobbers CX.
 w16_wndfree:
     push ax
+    push dx
     push si
-    mov ax, bx
-    sub ax, w16_wnd
-    mov cl, W16W_SIZE
-    div cl
-    xor ah, ah                      ; AX = the slot
     mov byte [bx + W16W_FLAGS], 0
-    push ax
+    xor dx, dx
+    call w16_settext                ; its text
     xor ax, ax                      ; its menu goes with it, as Windows'
     xchg ax, [bx + W16W_MENU]
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .nomenu                     ;   (a child's is its ID)
     or ax, ax
     jz .nomenu
     call w16_mdestroy
 .nomenu:
-    pop ax
-    inc ax
+    xor ax, ax
+    xchg ax, [bx + W16W_OSW]
+    or ax, ax
+    jz .noosw
+    cmp ax, [w16_win]
+    je .noosw
+    call w16_ttlfree                ; a second os8088 window: destroyed
+    push bx
+    call w16_lock
+    mov bx, ax
+    call OSAPI_WM_DESTROY
+    call w16_unlock
+    pop bx
+.noosw:
+    call w16_rec2hwnd               ; AX = the HWND
+    cmp [w16_focus], ax
+    jne .nofocus
+    mov word [w16_focus], 0
+.nofocus:
+    push ax
+    mov ax, bx
+    sub ax, w16_wnd
+    mov cl, W16W_SIZE
+    div cl
+    inc al                          ; the slot + 1
     cmp al, [w16_top]
+    pop ax
     jne .timers
     mov byte [w16_top], 0           ; WIN16's window is its own again
     mov word [w16_titleptr], w16_name
     push ax
     push bx
+    call w16_lock
     mov bx, [w16_win]
     xor al, al
     call OSAPI_WM_OWNBG
+    call w16_unlock
     pop bx
     pop ax
 .timers:
-    dec ax
-    shl ax, 1
-    shl ax, 1
-    add ax, W16_HWND0               ; AX = the HWND
     mov si, w16_tmr
     mov cx, W16_MAXTMR
 .t:
@@ -664,6 +865,7 @@ w16_wndfree:
 .nocap:
     call w16_tarm
     pop si
+    pop dx
     pop ax
     ret
 
@@ -687,10 +889,44 @@ w16u_showwnd:
     jz .was
     inc di
 .was:
-    and byte [bx + W16W_FLAGS], ~W16WF_VIS
     or dx, dx                       ; SW_HIDE
-    jz .done
+    jnz .show
+    call w16_uncover                ; a child: its parent repaints there
+    and byte [bx + W16W_FLAGS], ~W16WF_VIS
+    call w16_ownosw
+    jc .done
+    push bx
+    call w16_lock
+    mov bx, [bx + W16W_OSW]
+    call OSAPI_WM_HIDE
+    call w16_unlock
+    pop bx
+    jmp short .done
+.show:
     or byte [bx + W16W_FLAGS], W16WF_VIS
+    or di, di
+    jnz .shown
+    push ax                         ; newly shown: all of it is invalid
+    push cx
+    push dx
+    xor ax, ax
+    xor cx, cx
+    mov dx, 0x7FFF
+    mov si, dx
+    mov byte [w16_erase], 1
+    call w16_invaltree
+    pop dx
+    pop cx
+    pop ax
+    call w16_ownosw
+    jnc .osw
+    cmp byte [bx + W16W_KIND], W16Q_DIALOG  ; a dialog in WIN16's own window
+    jne .shown                              ;   is fitted to it as well
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .shown
+.osw:
+    call w16_oswshow
+.shown:
     cmp dx, SW_SHOWNORMAL
     je .restore
     cmp dx, SW_RESTORE
@@ -713,6 +949,25 @@ w16u_showwnd:
     pop si
     ret
 
+; w16_ownosw - BX = a record: CF=0 it is a top-level window with an os8088
+; window of its own (not WIN16's). Keeps every register.
+w16_ownosw:
+    push ax
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .no
+    mov ax, [bx + W16W_OSW]
+    or ax, ax
+    jz .no
+    cmp ax, [w16_win]
+    je .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
 w16_sw_done:
     mov ax, cx
     ret
@@ -723,33 +978,145 @@ w16u_destroywnd:
     mov ax, [es:bx]
     ; fall into w16_destroy
 
-; w16_destroy - AX = the HWND: WM_DESTROY, then the slot. Serves any import
-; (DefWindowProc's WM_CLOSE reaches it too); answers 1, or 0 for no window.
+; w16_destroy - AX = the HWND: it, its children and the windows it owns go,
+; each told WM_DESTROY first, parents before children (SPEC.md 124.8).
+; Serves any import (DefWindowProc's WM_CLOSE reaches it too); answers 1,
+; or 0 for no window.
 w16_destroy:
+    mov si, w16_cont_ret
+    mov dx, 1
+    ; fall into w16_destroyx
+
+; -----------------------------------------------------------------------------
+; w16_destroyx - as w16_destroy, and when the last is gone the continuation
+; SI runs with AX = DX (the value it is handed). An import's handler.
+; -----------------------------------------------------------------------------
+w16_destroyx:
+    push dx
     call w16_hwnd2rec
+    pop dx
     jc .no
+    call w16_uncover                ; a visible child: its parent repaints
+    or byte [bx + W16W_FLAGS], W16WF_DYING
+.mark:                              ; every window inside it, or owned by
+    xor ah, ah                      ;   one that goes, goes too
+    mov di, w16_wnd
+.m:
+    mov al, [di + W16W_FLAGS]
+    and al, W16WF_USED | W16WF_DYING
+    cmp al, W16WF_USED
+    jne .mn
+    push ax
+    push dx
+    mov ax, [di + W16W_PARENT]
+    call w16_hwnd2rec
+    pop dx
+    pop ax
+    jc .mn
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jz .mn
+    or byte [di + W16W_FLAGS], W16WF_DYING
+    inc ah
+.mn:
+    add di, W16W_SIZE
+    cmp di, w16_wnd + W16_MAXWND * W16W_SIZE
+    jb .m
+    or ah, ah
+    jnz .mark
+    jmp short w16_dwnext
+.no:
+    xor ax, ax
+    xor dx, dx
+    ret
+
+; w16_dwnext - SI = the final continuation, DX = its value: the next window
+; marked to go whose parent is not going too. One of WIN16's controls is told
+; and freed at once; any other window is SENT WM_DESTROY and freed in its
+; continuation (w16_dw_one), which comes back here.
+w16_dwnext:
+    mov bx, w16_wnd
+.f:
+    mov al, [bx + W16W_FLAGS]
+    and al, W16WF_USED | W16WF_DYING
+    cmp al, W16WF_USED | W16WF_DYING
+    jne .fn
+    push bx
+    push dx
+    mov ax, [bx + W16W_PARENT]
+    call w16_hwnd2rec
+    pop dx
+    jc .top
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jz .top
+    pop bx
+.fn:
+    add bx, W16W_SIZE
+    cmp bx, w16_wnd + W16_MAXWND * W16W_SIZE
+    jb .f
+    mov ax, dx                      ; none left: the final answer
+    xor dx, dx
+    jmp si
+.top:
+    pop bx
+    call w16_rec2hwnd
     mov [w16_sm_hwnd], ax
     mov word [w16_sm_msg], WM_DESTROY
     xor ax, ax
     mov [w16_sm_wp], ax
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
+    call w16_isctl
+    jc .send
+    push dx
+    call w16_intproc                ; one of WIN16's: at once
+    pop dx
+    call w16_wndfree
+    jmp short w16_dwnext
+.send:
     push si
-    mov si, w16_dw_done
-    mov ax, cx
-    call w16_sendwnd
+    push dx
+    mov ax, bx
+    sub ax, w16_wnd
+    mov cl, W16W_SIZE
+    div cl
+    xor ah, ah                      ; AX = the slot
+    mov si, w16_dw_one
+    mov cx, 4
+    call w16_cbopen                 ; ES:DI = the four bytes
+    pop dx
     pop si
-    ret
-.no:
-    xor ax, ax
-    xor dx, dx
-    ret
+    mov [es:di], si                 ; the final continuation and its value
+    mov [es:di + 2], dx
+    jmp w16_sendgo
 
-w16_dw_done:
+; w16_dw_one - WM_DESTROY answered: the window goes, and the next is sent
+w16_dw_one:
+    mov es, [w16_pss]
+    mov bx, [w16_psp_]
+    mov si, [es:bx - 4]
+    mov dx, [es:bx - 2]
     call w16_slot2rec
     call w16_wndfree
-    mov ax, 1
-    xor dx, dx
+    jmp w16_dwnext
+
+; w16_isctl - BX = a record: CF=0 it is one of WIN16's controls and its
+; procedure is still WIN16's (it was not subclassed). Keeps every register.
+w16_isctl:
+    push ax
+    push dx
+    call w16_ctlstub
+    cmp [bx + W16W_PROC], ax
+    jne .no
+    cmp [bx + W16W_PROC + 2], dx
+    jne .no
+    pop dx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop ax
+    stc
     ret
 
 ; =============================================================================
@@ -759,13 +1126,27 @@ w16_dw_done:
 ; w16_sendwnd - BX = the window, SI = the continuation, AX = its word, and
 ; [w16_sm_*] the message: call the window's procedure
 w16_sendwnd:
+    call w16_isctl
+    jnc .ctl
     push di
     push es
     xor cx, cx
     call w16_cbopen
     pop es
     pop di
-    ; fall into w16_sendgo
+    jmp short w16_sendgo
+.ctl:
+    push es                         ; one of WIN16's controls: its procedure
+    push ax                         ;   at once, and the continuation with its
+    call w16_intproc                ;   answer (SPEC.md 124.13)
+    pop cx
+    push ax
+    mov ax, KERNEL_SEG
+    mov es, ax
+    pop ax
+    call si
+    pop es
+    ret
 
 ; w16_sendgo - push [w16_sm_*] as the procedure's arguments and enter it,
 ; BX = the window. The continuation is already open.
@@ -888,6 +1269,11 @@ w16u_dispatch:
 w16u_translate:
     call w16_args
     les bx, [es:bx]
+    ; fall into w16_xlatemsg
+
+; w16_xlatemsg - TranslateMessage on the MSG at ES:BX -> AX = 1 if a
+; character was posted
+w16_xlatemsg:
     mov ax, [es:bx + MSG_MSG]
     cmp ax, WM_KEYDOWN
     je .key
@@ -1030,12 +1416,15 @@ w16_nextmsg:
     jmp short .gen
 .paint:
     xor cx, cx                      ; 3. WM_PAINT, a window that is invalid
-.pw:
+.pw:                                ;   and shown, its parent before it
     call w16_slot2rec
     mov al, [bx + W16W_FLAGS]
-    and al, W16WF_USED | W16WF_INVAL
+    and al, W16WF_USED | W16WF_INVAL | W16WF_DYING
     cmp al, W16WF_USED | W16WF_INVAL
-    je .ispaint
+    jne .pn
+    call w16_pshown
+    jnc .ispaint
+.pn:
     inc cx
     cmp cx, W16_MAXWND
     jb .pw
@@ -1063,10 +1452,17 @@ w16_nextmsg:
     mov byte [si + W16T_FIRED], 0
     jmp short .gen
 .ispaint:
-    mov ax, cx
-    shl ax, 1
-    shl ax, 1
-    add ax, W16_HWND0
+    mov si, bx                      ; the highest invalid window it is in
+.up:
+    call w16_parent
+    jc .top
+    test byte [bx + W16W_FLAGS], W16WF_INVAL
+    jz .up
+    mov si, bx
+    jmp short .up
+.top:
+    mov bx, si
+    call w16_rec2hwnd
     mov bx, w16_msg
     mov [bx + MSG_HWND], ax
     mov word [bx + MSG_MSG], WM_PAINT
@@ -1079,6 +1475,35 @@ w16_nextmsg:
 .out:
     pop di
     pop si
+    ret
+
+; w16_pshown - BX = a window: CF=0 it can be painted now - it and every
+; window it is in visible, in an os8088 window, and inside W_PAINT the one
+; being painted (SPEC.md 124.8). Keeps every register.
+w16_pshown:
+    push ax
+    push bx
+.up:
+    test byte [bx + W16W_FLAGS], W16WF_VIS
+    jz .no
+    call w16_parent
+    jnc .up
+    mov ax, [bx + W16W_OSW]
+    or ax, ax
+    jz .no
+    cmp byte [w16_inpaint], 0
+    je .yes
+    cmp ax, [w16_pfosw]
+    jne .no
+.yes:
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop bx
+    pop ax
+    stc
     ret
 
 ; w16_putmsg - [w16_msg] into the waiting call's MSG, whose far pointer is
@@ -1170,7 +1595,7 @@ w16_peekwake:
 ; -----------------------------------------------------------------------------
 w16_kick:
     cmp byte [w16_inget], 0
-    je .out
+    je .modal
     mov al, 1
     call w16_nextmsg
     jc .out
@@ -1181,6 +1606,10 @@ w16_kick:
     call w16_resume
 .out:
     ret
+.modal:
+    cmp byte [w16_inmodal], 0       ; ...or waits in a DialogBox (SPEC.md
+    je .out                         ;   124.13 step 3)
+    jmp w16_mkick
 
 ; =============================================================================
 ; Paint (SPEC.md 124.8)
@@ -1253,7 +1682,7 @@ w16u_invalrect:
     mov dx, 0x7FFF
     mov si, dx
 .go:
-    call w16_inval
+    call w16_invaltree              ; its children with it (SPEC.md 124.8)
 .out:
     mov ax, 1
     pop si
@@ -1429,16 +1858,15 @@ w16u_releasedc:
 w16u_clientrect:
     push di
     call w16_args
-    les di, [es:bx]
-    push bx
-    mov bx, [w16_win]
-    call OSAPI_WM_GEOM
-    pop bx
-    jnc .have
-    xor cx, cx
-    xor dx, dx
+    mov ax, [es:bx + 4]
+    call w16_hwnd0
+    mov cx, 0
+    mov dx, cx
+    jc .have
+    call w16_csize                  ; CX/DX
 .have:
-    call w16_nobar
+    call w16_args
+    les di, [es:bx]
     xor ax, ax
     mov [es:di], ax
     mov [es:di + 2], ax
@@ -1749,34 +2177,69 @@ w16_mouse:
     push bx
     push cx
     push dx
+    push si
     mov [w16_mx], cx
     mov [w16_my], dx
     mov [w16_sm_msg], ax
     mov [w16_sm_wp], di
-    call w16_toprec
+    mov ax, [w16_capture]           ; the capture's, while there is one
+    or ax, ax
+    jz .hit
+    call w16_hwnd2rec
+    jnc .have
+.hit:
+    call w16_osw2rec                ; the window under it, in SI's
     jc .out
-    mov [w16_sm_hwnd], ax
     mov cx, [w16_mx]
-    mov bx, [w16_win]
-    push dx
-    call OSAPI_WM_CONTENT           ; AX = left, DX = top
-    mov bx, dx
-    pop dx
+    mov dx, [w16_my]
+    call w16_hittest
+.dis:
+    call w16_disabled               ; a disabled control's goes to the
+    jnc .have                       ;   window it is in; a disabled
+    call w16_parent                 ;   top-level's nowhere
+    jnc .dis
+    cmp word [w16_sm_msg], WM_LBUTTONDOWN
+    jne .out
+    call w16_modfront
+    jmp short .out
+.have:
+    call w16_origin                 ; AX/DX = its client's top left
+    jc .out
+    mov cx, [w16_mx]
     sub cx, ax
-    sub dx, bx
-    push ax
-    call w16_mbarh                  ; the client is under the menu bar
-    sub dx, ax
-    pop ax
     mov [w16_sm_lp], cx
-    mov [w16_sm_lp + 2], dx
+    mov cx, [w16_my]
+    sub cx, dx
+    mov [w16_sm_lp + 2], cx
+    call w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
     xor al, al
     call w16_post
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; w16_modfront - the innermost modal dialog in front: what a press on the
+; window it disabled gets. The gfx lock is held. Keeps every register.
+w16_modfront:
+    push bx
+    push cx
+    mov cl, [w16_inmodal]
+    xor ch, ch
+    jcxz .out
+    dec cx
+    call w16_slot2rec
+    push word [w16_locked]          ; held already, or held by us: as it was
+    mov byte [w16_locked], 1
+    call w16_frontwnd
+    pop word [w16_locked]
+.out:
+    pop cx
+    pop bx
     ret
 
 ; W_ONCLICK / ONMOUSEUP / ONDRAG / ONRCLICK: CX, DX = the screen point,
@@ -1845,6 +2308,8 @@ w16_onbar:
     push dx
     cmp byte [w16_state], W16S_RUN
     jne .no
+    cmp si, [w16_win]               ; the bar is WIN16's own window's
+    jne .no
     mov bx, [w16_win]
     call OSAPI_WM_CONTENT           ; DX = the content's top
     mov bx, dx
@@ -1879,6 +2344,8 @@ w16_barpress:
     mov [w16_sm_hwnd], ax
     pop ax
     jc .out
+    test byte [bx + W16W_FLAGS], W16WF_DIS
+    jnz .front                      ; a modal dialog has it disabled
     mov word [w16_sm_msg], WM_NCLBUTTONDOWN
     mov word [w16_sm_wp], HTMENU
     mov ax, [w16_mptx]
@@ -1888,6 +2355,8 @@ w16_barpress:
     xor al, al
     call w16_post
     jmp short w16_input_kick
+.front:
+    jmp w16_modfront
 .out:
     ret
 
@@ -1896,10 +2365,11 @@ w16_barpress:
 w16_input_kick:
     push si
     push di
+    push word [w16_locked]          ; held already, or held by us: as it was
     mov byte [w16_locked], 1
     call w16_kick
-    mov byte [w16_locked], 0
-    call w16_after
+    call w16_after                  ; (still marked held: its clean-up draws)
+    pop word [w16_locked]
     pop di
     pop si
     ret
@@ -1916,7 +2386,7 @@ w16_onkey:
 .nt:
     push di
     push ax
-    call w16_toprec
+    call w16_keywnd                 ; who gets it
     mov [w16_sm_hwnd], ax
     pop ax
     jc .out
@@ -1980,6 +2450,35 @@ w16_onkey:
     jmp w16_input_kick
 .out:
     pop di
+    ret
+
+; w16_keywnd - SI = the os8088 window a key came to -> AX = the window it is
+; for: the focus when the focus is in that os8088 window, else the
+; top-level window there. CF=1 none, or that window is disabled (a modal
+; dialog has it), and the dialog is brought to the front. Clobbers BX, CX.
+w16_keywnd:
+    mov ax, [w16_focus]
+    or ax, ax
+    jz .top
+    call w16_hwnd2rec
+    jc .top
+    push bx
+    call w16_toplevel
+    mov ax, [bx + W16W_OSW]
+    pop bx
+    cmp ax, si
+    jne .top
+    call w16_disabled
+    jc .top
+    jmp w16_rec2hwnd                ; (CF=0)
+.top:
+    call w16_osw2rec                ; BX, AX
+    jc .out
+    test byte [bx + W16W_FLAGS], W16WF_DIS
+    jz .out
+    call w16_modfront
+    stc
+.out:
     ret
 
 ; SetCapture (USER.18) - args: +0 hWnd. Recorded; os8088 already tracks a
@@ -2059,7 +2558,8 @@ w16_vktab:
 w16_ppaint:
     push si
     mov byte [w16_inwp], 1
-    mov bx, [w16_win]
+    mov [w16_pfosw], si
+    mov bx, si
     call OSAPI_WM_DAMAGE            ; AX/BX/CX/DX, absolute and inclusive
     cmp ax, cx
     jg .out
@@ -2069,16 +2569,19 @@ w16_ppaint:
     mov [w16_dmg + 2], bx
     mov [w16_dmg + 4], cx
     mov [w16_dmg + 6], dx
-    call w16_toprec
+    call w16_osw2rec
     jc .out
-    push bx                         ; the program's window
-    mov bx, [w16_win]
+    push bx                         ; the program's window in it
+    mov bx, si
     call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    cmp si, [w16_win]
+    jne .nobar
     push ax
     call w16_mbarh                  ; the client is under the menu bar
     add dx, ax
-    mov [w16_ctop], dx
     pop ax
+.nobar:
+    mov [w16_ctop], dx
     mov bx, dx
     mov si, [w16_dmg + 6]           ; client, right and bottom exclusive
     sub si, bx
@@ -2094,17 +2597,16 @@ w16_ppaint:
     cmp si, 0
     jle .bar                        ; the damage is all bar
     mov byte [w16_erase], 1
-    call w16_inval
+    call w16_invaltree              ; its children with it
     cmp byte [w16_mtrk], 0          ; the menu loop's banks are stale now
     je .kick
     mov byte [w16_mstale], 1
 .kick:
-    cmp byte [w16_inget], 0
-    je .fill
     mov byte [w16_inpaint], 1
+    push word [w16_locked]          ; held already, or held by us: as it was
     mov byte [w16_locked], 1
     call w16_kick
-    mov byte [w16_locked], 0
+    pop word [w16_locked]
     mov byte [w16_inpaint], 0
     cmp byte [w16_state], W16S_ENDED
     jne .fill
@@ -2112,7 +2614,8 @@ w16_ppaint:
     call OSAPI_WM_WAKE              ;   from inside a paint
     jmp short .out
 .fill:
-    call w16_toprec
+    mov si, [w16_pfosw]
+    call w16_osw2rec
     jc .out
     test byte [bx + W16W_FLAGS], W16WF_INVAL
     jz .bar
@@ -2133,6 +2636,9 @@ w16_ppaint:
     jg .bar
     call OSAPI_GFX_FILL
 .bar:
+    mov si, [w16_pfosw]
+    cmp si, [w16_win]
+    jne .out
     mov ax, [w16_dmg + 2]           ; the bar, if the damage reaches it, and
     cmp ax, [w16_ctop]              ;   the menu loop's popups over it all
     jge .pops
@@ -2152,10 +2658,41 @@ w16_ppaint:
 w16_close:
     cmp byte [w16_state], W16S_RUN
     jne .go
+    cmp si, [w16_win]
+    je .main
+    push si                         ; a second window: the program is asked,
+    call w16_osw2rec                ;   WM_CLOSE (a dialog's is Cancel), and
+    jc .sgone                       ;   the window goes when it destroys it
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_CLOSE
+    xor ax, ax
+    mov [w16_sm_wp], ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    push word [w16_locked]          ; held already, or held by us: as it was
+    mov byte [w16_locked], 1
+    call w16_kick
+    pop word [w16_locked]
+    pop si
+    stc
+    ret
+.sgone:
+    pop si
+    clc
+    ret
+.main:
     call w16_toprec
     jc .go
     cmp byte [w16_closeq], 0
     jne .endtask
+    test byte [bx + W16W_FLAGS], W16WF_DIS
+    jz .ask
+    mov byte [w16_closeq], 1        ; a modal dialog has it: the dialog comes
+    call w16_modfront               ;   forward, and the next close offers to
+    stc                             ;   end the program
+    ret
+.ask:
     push si
     cmp byte [w16_mtrk], 0          ; a menu open: it closes first, and the
     je .post                        ;   program returns to its loop
@@ -2205,9 +2742,10 @@ w16_closemsg:
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
     call w16_post
+    push word [w16_locked]          ; held already, or held by us: as it was
     mov byte [w16_locked], 1
     call w16_kick
-    mov byte [w16_locked], 0
+    pop word [w16_locked]
 .out:
     ret
 
@@ -2221,10 +2759,10 @@ w16_etdone:
     jne .again
     mov byte [w16_state], W16S_ENDED
     mov byte [w16_endmsg], 0
-    jmp w16_after
+    jmp w16_afterl
 .again:
     call w16_closemsg
-    jmp w16_after
+    jmp w16_afterl
 .no:
     ret
 
@@ -2314,6 +2852,7 @@ w16_smtab:                      ; SM_* 0-35, Windows 3.0 on VGA
     dw 0, 1, 0, 0, 102, 26, 18, 18, 4, 4, 102, 26
 
 ; GetSysColor (USER.180) - args: +0 nIndex. DX:AX = the COLORREF.
+COLOR_WINDOW    equ 5
 COLOR_BTNFACE   equ 15
 W16_NSYSCOL     equ 19
 

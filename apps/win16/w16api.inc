@@ -81,6 +81,8 @@ W16EXPORT W16M_KERNEL,     88,      8,  w16k_lstrcpy        ; lstrcpy(segptr str
 W16EXPORT W16M_KERNEL,     89,      8,  w16k_lstrcat        ; lstrcat(segstr str)
 W16EXPORT W16M_KERNEL,     30,      2,  w16k_waitevent      ; WaitEvent(word)
 W16EXPORT W16M_KERNEL,     49,      8,  w16k_getmodfn       ; GetModuleFileName(word ptr s_word)
+W16EXPORT W16M_KERNEL,     51,      6,  w16k_mkprocinst     ; MakeProcInstance(segptr word)
+W16EXPORT W16M_KERNEL,     52,      4,  w16k_freeprocinst   ; FreeProcInstance(segptr)
 W16EXPORT W16M_KERNEL,     90,      4,  w16k_lstrlen        ; lstrlen(str)
 W16EXPORT W16M_KERNEL,     91,      -2, w16k_inittask       ; InitTask() -register
 W16EXPORT W16M_KERNEL,     127,     14, w16k_getpprofint    ; GetPrivateProfileInt(str str s_word str)
@@ -97,12 +99,26 @@ W16EXPORT W16M_USER,       13,      0,  w16u_tickcount      ; GetTickCount()
 W16EXPORT W16M_USER,       15,      0,  w16u_tickcount      ; GetCurrentTime()
 W16EXPORT W16M_USER,       18,      2,  w16u_setcapture     ; SetCapture(word)
 W16EXPORT W16M_USER,       19,      0,  w16u_relcapture     ; ReleaseCapture()
+W16EXPORT W16M_USER,       22,      2,  w16u_setfocus       ; SetFocus(word)
+W16EXPORT W16M_USER,       23,      0,  w16u_getfocus       ; GetFocus()
+W16EXPORT W16M_USER,       28,      6,  w16u_c2s            ; ClientToScreen(word ptr)
+W16EXPORT W16M_USER,       29,      6,  w16u_s2c            ; ScreenToClient(word ptr)
+W16EXPORT W16M_USER,       32,      6,  w16u_getwrect       ; GetWindowRect(word ptr)
 W16EXPORT W16M_USER,       33,      6,  w16u_clientrect     ; GetClientRect(word ptr)
+W16EXPORT W16M_USER,       34,      4,  w16u_enable         ; EnableWindow(word word)
+W16EXPORT W16M_USER,       35,      2,  w16u_isenabled      ; IsWindowEnabled(word)
+W16EXPORT W16M_USER,       36,      8,  w16u_getwtext       ; GetWindowText(word segptr word)
+W16EXPORT W16M_USER,       37,      6,  w16u_setwtext       ; SetWindowText(word segstr)
+W16EXPORT W16M_USER,       38,      2,  w16u_getwtlen       ; GetWindowTextLength(word)
 W16EXPORT W16M_USER,       39,      6,  w16u_beginpaint     ; BeginPaint(word ptr)
 W16EXPORT W16M_USER,       40,      6,  w16u_endpaint       ; EndPaint(word ptr)
 W16EXPORT W16M_USER,       41,      30, w16u_createwnd      ; CreateWindow(str str long s_word x4 word word word segptr)
 W16EXPORT W16M_USER,       42,      4,  w16u_showwnd        ; ShowWindow(word word)
 W16EXPORT W16M_USER,       53,      2,  w16u_destroywnd     ; DestroyWindow(word)
+W16EXPORT W16M_USER,       46,      2,  w16u_getparent      ; GetParent(word)
+W16EXPORT W16M_USER,       47,      2,  w16u_iswindow       ; IsWindow(word)
+W16EXPORT W16M_USER,       48,      4,  w16u_ischild        ; IsChild(word word)
+W16EXPORT W16M_USER,       49,      2,  w16u_isvisible      ; IsWindowVisible(word)
 W16EXPORT W16M_USER,       56,      12, w16u_movewnd        ; MoveWindow(word word word word word word)
 W16EXPORT W16M_USER,       57,      4,  w16u_regclass       ; RegisterClass(ptr)
 W16EXPORT W16M_USER,       66,      2,  w16u_getdc          ; GetDC(word)
@@ -110,7 +126,39 @@ W16EXPORT W16M_USER,       68,      4,  w16u_releasedc      ; ReleaseDC(word wor
 W16EXPORT W16M_USER,       72,      12, w16u_setrect        ; SetRect(ptr s_word s_word s_word s_word)
 W16EXPORT W16M_USER,       76,      8,  w16u_ptinrect       ; PtInRect(ptr long)
 W16EXPORT W16M_USER,       81,      8,  w16u_fillrect       ; FillRect(word ptr word)
+W16EXPORT W16M_USER,       87,      12, w16u_dlgbox         ; DialogBox(word str word segptr)
+W16EXPORT W16M_USER,       88,      4,  w16u_enddlg         ; EndDialog(word s_word)
+W16EXPORT W16M_USER,       89,      12, w16u_credlg         ; CreateDialog(word str word segptr)
+W16EXPORT W16M_USER,       90,      6,  w16u_isdlgmsg       ; IsDialogMessage(word segptr)
+W16EXPORT W16M_USER,       91,      4,  w16u_getdlgitem     ; GetDlgItem(word word)
+W16EXPORT W16M_USER,       92,      8,  w16u_setdlgtext     ; SetDlgItemText(word word segstr)
+W16EXPORT W16M_USER,       93,      10, w16u_getdlgtext     ; GetDlgItemText(word word segptr word)
+W16EXPORT W16M_USER,       94,      8,  w16u_setdlgint      ; SetDlgItemInt(word word word word)
+W16EXPORT W16M_USER,       95,      10, w16u_getdlgint      ; GetDlgItemInt(word s_word ptr word)
+W16EXPORT W16M_USER,       96,      8,  w16u_checkradio     ; CheckRadioButton(word word word word)
+W16EXPORT W16M_USER,       97,      6,  w16u_checkdlg       ; CheckDlgButton(word word word)
+W16EXPORT W16M_USER,       98,      4,  w16u_isdlgcheck     ; IsDlgButtonChecked(word word)
+W16EXPORT W16M_USER,       101,     12, w16u_senddlgmsg     ; SendDlgItemMessage(word word word word long)
+W16EXPORT W16M_USER,       103,     6,  w16u_mapdlgrect     ; MapDialogRect(word ptr)
+W16EXPORT W16M_USER,       104,     2,  w16u_beep           ; MessageBeep(word)
 W16EXPORT W16M_USER,       107,     10, w16u_defproc        ; DefWindowProc(word word word long)
+W16EXPORT W16M_USER,       122,     14, w16u_callwndproc    ; CallWindowProc(segptr word word word long)
+W16EXPORT W16M_USER,       133,     4,  w16u_getwword       ; GetWindowWord(word s_word)
+W16EXPORT W16M_USER,       134,     6,  w16u_setwword       ; SetWindowWord(word s_word word)
+W16EXPORT W16M_USER,       135,     4,  w16u_getwlong       ; GetWindowLong(word s_word)
+W16EXPORT W16M_USER,       136,     8,  w16u_setwlong       ; SetWindowLong(word s_word long)
+W16EXPORT W16M_USER,       218,     10, w16u_dlgboxind      ; DialogBoxIndirect(word word word segptr)
+W16EXPORT W16M_USER,       219,     12, w16u_credlgind      ; CreateDialogIndirect(word segptr word segptr)
+W16EXPORT W16M_USER,       227,     6,  w16u_nextgroup      ; GetNextDlgGroupItem(word word word)
+W16EXPORT W16M_USER,       228,     6,  w16u_nexttab        ; GetNextDlgTabItem(word word word)
+W16EXPORT W16M_USER,       239,     16, w16u_dlgboxp        ; DialogBoxParam(word str word segptr long)
+W16EXPORT W16M_USER,       240,     14, w16u_dlgboxindp     ; DialogBoxIndirectParam(word word word segptr long)
+W16EXPORT W16M_USER,       241,     16, w16u_credlgp        ; CreateDialogParam(word str word segptr long)
+W16EXPORT W16M_USER,       242,     16, w16u_credlgindp     ; CreateDialogIndirectParam(word segptr word segptr long)
+W16EXPORT W16M_USER,       243,     0,  w16u_dlgunits       ; GetDialogBaseUnits()
+W16EXPORT W16M_USER,       277,     2,  w16u_ctrlid         ; GetDlgCtrlID(word)
+W16_DDPROW equ W16NX
+W16EXPORT W16M_USER,       308,     10, w16u_defdlgproc     ; DefDlgProc(word word word long)
 W16EXPORT W16M_USER,       108,     10, w16u_getmsg         ; GetMessage(ptr word word word)
 W16EXPORT W16M_USER,       109,     12, w16u_peekmsg        ; PeekMessage(ptr word word word word)
 W16EXPORT W16M_USER,       110,     10, w16u_postmsg        ; PostMessage(word word word long)
@@ -174,6 +222,10 @@ W16EXPORT W16M_SOUND,      4,       8,  w16s_none           ; SetVoiceNote(word 
 W16EXPORT W16M_SOUND,      5,       10, w16s_none           ; SetVoiceAccent(word word word word word)
 W16EXPORT W16M_SOUND,      9,       0,  w16s_none           ; StartSound()
 W16EXPORT W16M_SOUND,      10,      0,  w16s_none           ; StopSound()
+; a control's window procedure (SPEC.md 124.13), reached through its stub:
+; module 0FCh, which the loader never binds
+W16_CTLROW equ W16NX
+W16EXPORT 0xFC,            0,       10, w16_ctlrow
 ; the callee's way back (SPEC.md 124.2.2): module 0FEh, which no program's
 ; module table can name, so the loader never binds an import to it
 W16_CBROW equ W16NX
@@ -564,133 +616,6 @@ w16u_initapp:
     mov ax, 1
     ret
 
-; MessageBox (USER.1) - S2's face for it is os88ui's standard alert (SPEC.md
-; 75.3): one line of the text, the caption as the window's title while it is
-; up, and the button set nearest the style. S6 replaces it with a Windows
-; message box. It WAITS: the call stays pending until the alert is answered.
-; args: +0 type, +2 caption (off, seg), +6 text (off, seg), +10 hWnd
-MB_OKCANCEL equ 1
-MB_YESNO    equ 4
-IDOK        equ 1
-IDCANCEL    equ 2
-IDYES       equ 6
-IDNO        equ 7
-
-w16u_msgbox:
-    push si
-    push di
-    call w16_args
-    mov ax, [es:bx]
-    and al, 0x0F
-    mov [w16_mbtype], al
-    push bx
-    mov si, [es:bx + 2]             ; the caption, or "Error" for NULL
-    mov dx, [es:bx + 4]
-    mov di, w16_mbcap
-    mov cx, 40
-    mov ax, w16_s_error
-    call w16_farline
-    pop bx
-    mov si, [es:bx + 6]             ; the text's first line
-    mov dx, [es:bx + 8]
-    mov di, w16_mbtext
-    mov cx, OS88UI_AMAX             ; the alert's line; S6's MessageBox wraps
-    mov ax, w16_s_empty
-    call w16_farline
-    mov al, OS88UI_AOK
-    cmp byte [w16_mbtype], MB_OKCANCEL
-    jne .notoc
-    mov al, OS88UI_AOKCAN
-.notoc:
-    cmp byte [w16_mbtype], MB_YESNO
-    jne .set
-    mov al, OS88UI_AYESNO
-.set:
-    mov [w16_mbset], al
-    cmp byte [w16_locked], 0
-    jne .held
-    call OSAPI_GFX_LOCK
-.held:
-    mov bx, [w16_win]
-    mov ax, w16_mbcap               ; the alert is titled with ours
-    call OSAPI_WM_TITLE
-    mov al, [w16_mbset]
-    mov si, w16_mbtext
-    mov di, w16_mbdone
-    call os88ui_ask
-    pushf
-    cmp byte [w16_locked], 0
-    jne .held2
-    call OSAPI_GFX_UNLOCK
-.held2:
-    popf
-    mov ax, 0                       ; refused (one is already up): 0, which is
-    jc .out                         ; MessageBox's own failure answer
-    mov byte [w16_pend], 1          ; ...else wait for the answer
-.out:
-    pop di
-    pop si
-    ret
-
-; w16_mbdone - the alert's completion: AL = the button or OS88UI_ACANCEL;
-; SI = our window, the gfx lock HELD. Finish MessageBox and run on.
-w16_mbdone:
-    mov ah, [w16_mbset]
-    mov dx, IDOK
-    cmp ah, OS88UI_AOK
-    je .ans                         ; MB_OK has no cancel: a dismissal is OK
-    cmp ah, OS88UI_AYESNO
-    jne .okcan
-    mov dx, IDYES
-    or al, al
-    jz .ans
-    mov dx, IDNO
-    jmp short .ans
-.okcan:
-    or al, al
-    jz .ans
-    mov dx, IDCANCEL
-.ans:
-    push dx
-    mov bx, [w16_win]
-    mov ax, [w16_titleptr]          ; our own title back
-    call OSAPI_WM_TITLE
-    pop ax
-    xor dx, dx
-    mov byte [w16_locked], 1
-    call w16_resume
-    mov byte [w16_locked], 0
-    jmp w16_after
-
-; w16_farline - copy a far string's first line: DX:SI -> DI, at most CX
-; characters, stopping at NUL, CR or LF; a NULL pointer copies the string at
-; AX instead. DI ends at the NUL.
-w16_farline:
-    push es
-    mov es, dx
-    or dx, si
-    jnz .far
-    mov si, ax
-    call w16_strcpy
-    pop es
-    ret
-.far:
-    mov al, [es:si]
-    or al, al
-    jz .end
-    cmp al, 13
-    je .end
-    cmp al, 10
-    je .end
-    mov [di], al
-    inc si
-    inc di
-    loop .far
-.end:
-    mov byte [di], 0
-    pop es
-    ret
-
 ; =============================================================================
 ; KEYBOARD
 ; =============================================================================
@@ -700,7 +625,5 @@ w16kb_codepage:
     mov ax, 437
     ret
 
-w16_mbtype: db 0
-w16_mbset:  db 0
 w16_s_error: db 'Error', 0
 w16_s_empty: db 0
