@@ -113,6 +113,12 @@ w16_dcopen:
     mov [w16_oy], dx
     call OSAPI_WM_GEOM              ; CX/DX = the client's size
     jc .empty
+    push ax                         ; ...under the menu bar (SPEC.md 124.11)
+    call w16_mbarh
+    add [w16_oy], ax
+    sub dx, ax
+    pop ax
+    jle .empty
     cmp byte [w16_dchide], 0
     jne .empty
     xor ax, ax

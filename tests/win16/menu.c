@@ -11,7 +11,7 @@
 #include <string.h>
 #include "menu.h"
 
-static int colour = IDM_RED, news, inits, pops;
+static int colour = IDM_RED, news, inits, pops, stubborn;
 static char s1[40], s2[40], mem[48];
 
 static void memtest(void)
@@ -65,6 +65,10 @@ LRESULT __export CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     char buf[48];
 
     switch (msg) {
+    case WM_CLOSE:
+        if (stubborn)
+            return 0;
+        break;
     case WM_INITMENU:
         inits++;
         return 0;
@@ -79,6 +83,12 @@ LRESULT __export CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_EXIT:
             DestroyWindow(hwnd);
             return 0;
+        case IDM_STUB:                  /* a program that will not close */
+            stubborn = 1;
+            return 0;
+        case IDM_ASK:                   /* waits in MessageBox: a close now */
+            MessageBox(hwnd, "A question", "WIN16 menu", MB_OK);
+            return 0;                   /*   is not taken (End Task, 124.12) */
         case IDM_RED: case IDM_GREEN: case IDM_BLUE:
         case IDM_CYAN: case IDM_MAGENTA:
             CheckMenuItem(GetMenu(hwnd), colour, MF_UNCHECKED);

@@ -22,6 +22,7 @@ W16C_STYLE  equ 16
 W16C_PROC   equ 18              ; far
 W16C_HBR    equ 22
 W16C_WEXTRA equ 24
+W16C_MENU   equ 26              ; far: lpszMenuName (SPEC.md 124.11)
 
 ; --- a window ------------------------------------------------------------------
 W16W_FLAGS  equ 0               ; W16WF_*
@@ -34,6 +35,7 @@ W16W_UT     equ 14              ;   right and bottom exclusive as Windows'
 W16W_UR     equ 16
 W16W_UB     equ 18
 W16W_EXTRA  equ 20              ; cbWndExtra, at most 16
+W16W_MENU   equ 36              ; its HMENU, 0 = none (SPEC.md 124.11)
 
 W16WF_USED  equ 1
 W16WF_INVAL equ 2
@@ -67,6 +69,7 @@ WM_KEYDOWN    equ 0x0100
 WM_KEYUP      equ 0x0101
 WM_CHAR       equ 0x0102
 WM_SYSKEYDOWN equ 0x0104
+SC_CLOSE_KEY  equ 0xF060
 WM_TIMER      equ 0x0113
 WM_SYSCOMMAND equ 0x0112
 WM_MOUSEMOVE  equ 0x0200
@@ -278,6 +281,10 @@ w16u_regclass:
     mov [di + W16C_HBR], ax
     mov ax, [es:si + 8]
     mov [di + W16C_WEXTRA], ax
+    mov ax, [es:si + 18]            ; lpszMenuName
+    mov [di + W16C_MENU], ax
+    mov ax, [es:si + 20]
+    mov [di + W16C_MENU + 2], ax
     mov ax, di                      ; an atom-shaped non-zero answer
     sub ax, w16_cls
     or ax, 0xC000
@@ -360,6 +367,21 @@ w16u_createwnd:
     inc al
     mov [w16_top], al
     mov [w16_cwslot], cx
+    mov ax, [es:bx + 6]             ; hMenu, else the class's menu by name
+    or ax, ax                       ;   (SPEC.md 124.11)
+    jnz .menu
+    push bx
+    mov bx, di
+    mov ax, [bx + W16C_MENU]
+    mov dx, [bx + W16C_MENU + 2]
+    pop bx
+    mov cx, ax
+    or cx, dx
+    jz .menu
+    call w16_mload
+    mov es, [w16_pss]
+.menu:
+    mov [si + W16W_MENU], ax
 
     push si                         ; --- WIN16's window becomes the program's
     mov si, [es:bx + 22]            ; the window text is the title
@@ -506,11 +528,24 @@ w16_sizemsg:
     xor cx, cx
     xor dx, dx
 .have:
+    call w16_nobar
     mov [w16_sm_lp], cx
     mov [w16_sm_lp + 2], dx
     pop dx
     pop cx
     pop bx
+    ret
+
+; w16_nobar - DX = the content's height -> the client's: the menu bar's off,
+; never below 0 (SPEC.md 124.11). Keeps the rest.
+w16_nobar:
+    push ax
+    call w16_mbarh
+    sub dx, ax
+    jge .ok
+    xor dx, dx
+.ok:
+    pop ax
     ret
 
 ; MoveWindow (USER.56) - args: +0 bRepaint, +2 cy, +4 cx, +6 y, +8 x, +10 hWnd
@@ -589,6 +624,14 @@ w16_wndfree:
     div cl
     xor ah, ah                      ; AX = the slot
     mov byte [bx + W16W_FLAGS], 0
+    push ax
+    xor ax, ax                      ; its menu goes with it, as Windows'
+    xchg ax, [bx + W16W_MENU]
+    or ax, ax
+    jz .nomenu
+    call w16_mdestroy
+.nomenu:
+    pop ax
     inc ax
     cmp al, [w16_top]
     jne .timers
@@ -756,6 +799,12 @@ w16_cont_one:
     xor dx, dx
     ret
 
+; w16_cont_zero - ...and one that answers 0
+w16_cont_zero:
+    xor ax, ax
+    xor dx, dx
+    ret
+
 ; w16_smargs - [w16_sm_*] from SendMessage-shaped arguments at ES:BX:
 ; +0 lParam, +4 wParam, +6 msg, +8 hWnd. Out AX = the HWND.
 w16_smargs:
@@ -859,7 +908,9 @@ w16u_translate:
     mov [w16_sm_wp], ax
     mov ax, [es:bx + MSG_HWND]
     mov [w16_sm_hwnd], ax
-    mov word [w16_sm_msg], WM_CHAR
+    mov ax, [es:bx + MSG_MSG]
+    add ax, WM_CHAR - WM_KEYDOWN    ; WM_CHAR, or WM_SYSCHAR
+    mov [w16_sm_msg], ax
     mov ax, [es:bx + MSG_LP]
     mov [w16_sm_lp], ax
     mov ax, [es:bx + MSG_LP + 2]
@@ -1387,6 +1438,7 @@ w16u_clientrect:
     xor cx, cx
     xor dx, dx
 .have:
+    call w16_nobar
     xor ax, ax
     mov [es:di], ax
     mov [es:di + 2], ax
@@ -1406,6 +1458,55 @@ w16u_defproc:
     jne .notclose
     jmp w16_destroy
 .notclose:
+    cmp cx, WM_NCLBUTTONDOWN        ; the menu loop (SPEC.md 124.11)
+    jne .notnc
+    cmp word [w16_sm_wp], HTMENU
+    jne .zero
+    mov cx, [w16_sm_lp]             ; where it was pressed, on the screen
+    mov [w16_mptx], cx
+    mov cx, [w16_sm_lp + 2]
+    mov [w16_mpty], cx
+    call w16_hwnd2rec
+    jc .zero
+    xor dl, dl
+    jmp w16_mtbegin
+.notnc:
+    cmp cx, WM_SYSKEYUP
+    jne .notsku
+    cmp word [w16_sm_wp], VK_F10    ; F10: SC_KEYMENU, no character
+    jne .zero
+    xor dx, dx
+    jmp short .keymenu
+.notsku:
+    cmp cx, WM_SYSKEYDOWN
+    jne .notskd
+    cmp word [w16_sm_wp], VK_F4     ; Alt+F4: SC_CLOSE
+    jne .zero
+    test byte [w16_sm_lp + 3], 0x20
+    jz .zero
+    mov dx, SC_CLOSE
+    jmp short .syscmd
+.notskd:
+    cmp cx, WM_SYSCHAR
+    jne .notsc
+    mov dx, [w16_sm_wp]             ; Alt+letter: SC_KEYMENU with it
+    cmp dl, ' '
+    je .zero
+.keymenu:
+    mov [w16_sm_lp], dx
+    mov dx, SC_KEYMENU
+.syscmd:
+    mov word [w16_sm_lp + 2], 0
+    mov [w16_sm_wp], dx
+    mov word [w16_sm_msg], WM_SYSCOMMAND
+    call w16_hwnd2rec
+    jc .zero
+    push si
+    mov si, w16_cont_zero
+    call w16_sendwnd
+    pop si
+    ret
+.notsc:
     cmp cx, WM_ERASEBKGND
     jne .noterase
     call w16_hwnd2rec
@@ -1433,6 +1534,14 @@ w16u_defproc:
     jne .zero
     mov cx, [w16_sm_wp]
     and cx, 0xFFF0
+    cmp cx, SC_KEYMENU
+    jne .notkm
+    call w16_hwnd2rec
+    jc .zero
+    mov dl, 1
+    mov dh, [w16_sm_lp]
+    jmp w16_mtbegin
+.notkm:
     cmp cx, SC_CLOSE
     jne .zero
     mov word [w16_sm_msg], WM_CLOSE
@@ -1655,6 +1764,10 @@ w16_mouse:
     pop dx
     sub cx, ax
     sub dx, bx
+    push ax
+    call w16_mbarh                  ; the client is under the menu bar
+    sub dx, ax
+    pop ax
     mov [w16_sm_lp], cx
     mov [w16_sm_lp + 2], dx
     xor al, al
@@ -1668,22 +1781,50 @@ w16_mouse:
 
 ; W_ONCLICK / ONMOUSEUP / ONDRAG / ONRCLICK: CX, DX = the screen point,
 ; SI = our window, the gfx lock held. Each gives SI back.
+; While the menu loop runs they are its (w16menu.inc); a press on the bar is
+; the program's WM_NCLBUTTONDOWN, and that press's drags and release are the
+; menu's too (SPEC.md 124.11).
 w16_onclick:
+    cmp byte [w16_mtrk], 0
+    je .nt
+    jmp w16_mclick
+.nt:
+    call w16_onbar
+    jc w16_barpress
     push di
     mov ax, WM_LBUTTONDOWN
     mov di, MK_LBUTTON
     jmp short w16_mouse1
 w16_onup:
+    cmp byte [w16_mtrk], 0
+    je .nt
+    jmp w16_mup
+.nt:
+    cmp byte [w16_meat], 0
+    je .mine
+    mov byte [w16_meat], 0
+    ret
+.mine:
     push di
     mov ax, WM_LBUTTONUP
     xor di, di
     jmp short w16_mouse1
 w16_ondrag:
+    cmp byte [w16_mtrk], 0
+    je .nt
+    jmp w16_mdrag
+.nt:
+    cmp byte [w16_meat], 0
+    jne .eat
     push di
     mov ax, WM_MOUSEMOVE
     mov di, MK_LBUTTON
     jmp short w16_mouse1
+.eat:
+    ret
 w16_onrclick:
+    cmp byte [w16_mtrk], 0
+    jne .eat
     push di
     mov ax, WM_RBUTTONDOWN
     mov di, MK_RBUTTON
@@ -1693,7 +1834,62 @@ w16_onrclick:
 w16_mouse1:
     call w16_mouse
     pop di
-    ; fall into w16_input_kick
+    jmp short w16_input_kick
+w16_onrclick.eat:
+    ret
+
+; w16_onbar - CX, DX = a screen point: CF=1 on the program's menu bar
+w16_onbar:
+    push ax
+    push bx
+    push dx
+    cmp byte [w16_state], W16S_RUN
+    jne .no
+    mov bx, [w16_win]
+    call OSAPI_WM_CONTENT           ; DX = the content's top
+    mov bx, dx
+    pop dx
+    push dx
+    sub dx, bx
+    jl .no
+    call w16_mbarh
+    dec ax
+    cmp dx, ax
+    jge .no
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+.no:
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; w16_barpress - a press on the bar: WM_NCLBUTTONDOWN, HTMENU, the point on
+; the screen - which the program's DefWindowProc turns into the menu loop
+w16_barpress:
+    mov byte [w16_meat], 1
+    mov [w16_mptx], cx
+    mov [w16_mpty], dx
+    push ax
+    call w16_toprec
+    mov [w16_sm_hwnd], ax
+    pop ax
+    jc .out
+    mov word [w16_sm_msg], WM_NCLBUTTONDOWN
+    mov word [w16_sm_wp], HTMENU
+    mov ax, [w16_mptx]
+    mov [w16_sm_lp], ax
+    mov ax, [w16_mpty]
+    mov [w16_sm_lp + 2], ax
+    xor al, al
+    call w16_post
+    jmp short w16_input_kick
+.out:
+    ret
 
 ; w16_input_kick - a callback under the gfx lock has queued something: run the
 ; program if it was waiting for it, and close up after it if it ended
@@ -1710,7 +1906,14 @@ w16_input_kick:
 
 ; W_ONKEY - AL = ASCII, AH = the scan code, SI = our window, the lock held.
 ; The keyboard has no release edge here, so the key-up follows at once.
+; While the menu loop runs the key is its (w16menu.inc). Otherwise F10, and a
+; key with Alt held, are WM_SYSKEYDOWN / WM_SYSKEYUP with lParam's context bit,
+; and an Alt+letter's WM_SYSCHAR is the letter (SPEC.md 124.11).
 w16_onkey:
+    cmp byte [w16_mtrk], 0
+    je .nt
+    jmp w16_mkey
+.nt:
     push di
     push ax
     call w16_toprec
@@ -1722,6 +1925,13 @@ w16_onkey:
     cmp bl, W16_NSCAN
     jae .out
     mov [w16_kascii + bx], al       ; TranslateMessage's WM_CHAR, by scan
+    push es
+    xor cx, cx
+    mov es, cx
+    mov cl, [es:0x417]              ; the BIOS's shift state, as pressed
+    pop es
+    and cl, 0x0F
+    mov [w16_kmods + bx], cl
     mov al, [w16_vktab + bx]
     or al, al
     jz .out
@@ -1729,11 +1939,41 @@ w16_onkey:
     mov [w16_sm_wp], ax
     mov word [w16_sm_lp], 1         ; a repeat count of one, the scan code
     mov [w16_sm_lp + 2], bx
-    mov word [w16_sm_msg], WM_KEYDOWN
+    mov dx, WM_KEYDOWN
+    test cl, 8
+    jz .noalt
+    or byte [w16_sm_lp + 3], 0x20   ; the context bit: Alt is down
+    mov dx, WM_SYSKEYDOWN
+    cmp byte [w16_kascii + bx], 0
+    jne .sys
+    push ax                         ; Alt+letter: the ROM gave no character,
+    cmp al, 'A'                     ;   WM_SYSCHAR's is the letter's own
+    jb .nolet
+    cmp al, 'Z'
+    ja .nolet
+    add al, 'a' - 'A'
+    jmp short .let
+.nolet:
+    cmp al, '0'
+    jb .nochar
+    cmp al, '9'
+    ja .nochar
+.let:
+    mov [w16_kascii + bx], al
+.nochar:
+    pop ax
+    jmp short .sys
+.noalt:
+    cmp al, VK_F10
+    jne .post
+    mov dx, WM_SYSKEYDOWN
+.sys:
+.post:
+    mov [w16_sm_msg], dx
     xor al, al
     call w16_post
     or word [w16_sm_lp + 2], 0xC000 ; previous state and transition
-    mov word [w16_sm_msg], WM_KEYUP
+    inc word [w16_sm_msg]           ; WM_KEYUP / WM_SYSKEYUP
     xor al, al
     call w16_post
     pop di
@@ -1818,6 +2058,7 @@ w16_vktab:
 ; the resume comes back gets the class brush. SI = our window; gives SI back.
 w16_ppaint:
     push si
+    mov byte [w16_inwp], 1
     mov bx, [w16_win]
     call OSAPI_WM_DAMAGE            ; AX/BX/CX/DX, absolute and inclusive
     cmp ax, cx
@@ -1833,6 +2074,11 @@ w16_ppaint:
     push bx                         ; the program's window
     mov bx, [w16_win]
     call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    push ax
+    call w16_mbarh                  ; the client is under the menu bar
+    add dx, ax
+    mov [w16_ctop], dx
+    pop ax
     mov bx, dx
     mov si, [w16_dmg + 6]           ; client, right and bottom exclusive
     sub si, bx
@@ -1845,8 +2091,14 @@ w16_ppaint:
     neg ax
     add ax, [w16_dmg]
     pop bx
+    cmp si, 0
+    jle .bar                        ; the damage is all bar
     mov byte [w16_erase], 1
     call w16_inval
+    cmp byte [w16_mtrk], 0          ; the menu loop's banks are stale now
+    je .kick
+    mov byte [w16_mstale], 1
+.kick:
     cmp byte [w16_inget], 0
     je .fill
     mov byte [w16_inpaint], 1
@@ -1858,22 +2110,39 @@ w16_ppaint:
     jne .fill
     mov bx, [w16_win]               ; it ended: close up from the wake, not
     call OSAPI_WM_WAKE              ;   from inside a paint
+    jmp short .out
 .fill:
     call w16_toprec
     jc .out
     test byte [bx + W16W_FLAGS], W16WF_INVAL
-    jz .out
+    jz .bar
     mov ax, [bx + W16W_HBR]
     call w16_brcol
     cmp al, W16_NOCOL
-    je .out
+    je .bar
     call w16_ink
     mov ax, [w16_dmg]
     mov bx, [w16_dmg + 2]
+    cmp bx, [w16_ctop]              ; the client's part of the damage
+    jge .t
+    mov bx, [w16_ctop]
+.t:
     mov cx, [w16_dmg + 4]
     mov dx, [w16_dmg + 6]
+    cmp bx, dx
+    jg .bar
     call OSAPI_GFX_FILL
+.bar:
+    mov ax, [w16_dmg + 2]           ; the bar, if the damage reaches it, and
+    cmp ax, [w16_ctop]              ;   the menu loop's popups over it all
+    jge .pops
+    call w16_mbardraw
+.pops:
+    cmp byte [w16_mtrk], 0
+    je .out
+    call w16_mrepaint
 .out:
+    mov byte [w16_inwp], 0
     pop si
     ret
 
@@ -1885,17 +2154,22 @@ w16_close:
     jne .go
     call w16_toprec
     jc .go
+    cmp byte [w16_closeq], 0
+    jne .endtask
     push si
-    mov [w16_sm_hwnd], ax
-    mov word [w16_sm_msg], WM_CLOSE
-    xor ax, ax
-    mov [w16_sm_wp], ax
-    mov [w16_sm_lp], ax
-    mov [w16_sm_lp + 2], ax
-    call w16_post
-    mov byte [w16_locked], 1
-    call w16_kick
-    mov byte [w16_locked], 0
+    cmp byte [w16_mtrk], 0          ; a menu open: it closes first, and the
+    je .post                        ;   program returns to its loop
+    call w16_mhpre
+    jc .post
+    mov byte [w16_locked], 1        ; (the negotiator holds the lock)
+    call w16_mstop
+    call w16_mhpost
+    cmp byte [w16_state], W16S_RUN
+    jne .ended
+.post:
+    mov byte [w16_closeq], 1
+    call w16_closemsg
+.ended:
     pop si
     cmp byte [w16_state], W16S_ENDED
     jne .refuse
@@ -1906,6 +2180,55 @@ w16_close:
 .refuse:
     stc
     ret
+.endtask:
+    push si                         ; it did not close on the last one: offer
+    push di                         ;   to end it (SPEC.md 124.12)
+    mov al, OS88UI_ADANGER
+    mov bx, [w16_win]
+    mov si, w16_s_endtask
+    mov di, w16_etdone
+    call os88ui_ask                 ; refused: an alert is up (MessageBox's),
+    pop di                          ;   raised, to be answered first
+    pop si
+    stc
+    ret
+
+; w16_closemsg - post WM_CLOSE to the top-level window and run the program
+; if it waits for it. The gfx lock is held. Clobbers AX, BX, CX, DX.
+w16_closemsg:
+    call w16_toprec
+    jc .out
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_CLOSE
+    xor ax, ax
+    mov [w16_sm_wp], ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    mov byte [w16_locked], 1
+    call w16_kick
+    mov byte [w16_locked], 0
+.out:
+    ret
+
+; w16_etdone - the End Task alert's answer, the gfx lock held. Proceed (1):
+; the program ends where it is - its windows, its memory, WIN16's window.
+; Cancel, or the alert dismissed: the program is asked again, WM_CLOSE.
+w16_etdone:
+    cmp byte [w16_state], W16S_RUN
+    jne .no
+    cmp al, 1
+    jne .again
+    mov byte [w16_state], W16S_ENDED
+    mov byte [w16_endmsg], 0
+    jmp w16_after
+.again:
+    call w16_closemsg
+    jmp w16_after
+.no:
+    ret
+
+w16_s_endtask: db 'It has not closed. End it?', 0
 
 ; w16_lock / w16_unlock - the gfx lock around a call that needs it, unless a
 ; callback or an open DC already holds it. Preserve every register.

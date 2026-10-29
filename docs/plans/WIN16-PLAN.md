@@ -491,7 +491,7 @@ they stand on.
     override; `BitBlt` and memory DCs, which WinMine 3.1 uses and 2.9 does
     not. S13's final pass owns the measurements.
 
-- [ ] **S5: Memory, resources and menus.** *As a user the program's menu bar
+- [x] **S5: Memory, resources and menus.** *As a user the program's menu bar
   sits in its window as it did on Windows, its shortcuts work, and its check
   marks show.* Menus are resources, resources need memory, and both targets
   need memory before their first window, so the story carries all three.
@@ -538,6 +538,42 @@ they stand on.
     program with its name when called; End Task on a program that refuses
     `WM_CLOSE`; the claim map back to the pre-launch one after each. CALC's
     View menu moves to S10, CALC needing S6's dialog window first.
+  - **Shipped** (two commits on PR #320):
+    - Part 1: the global heap in 16 KB arenas with moveable handles, the
+      local heap in DGROUP, resources read on demand, `LoadString`, the
+      profile defaults, and the stub that ends a program at a missing import.
+    - Part 2: `apps/win16/w16menu.inc`, WIN16's menu manager after Wine's
+      `menu.c` - the USER heap, the template parser, 28 USER calls, the
+      layout and drawing, the loop and the accelerators. The loop is the
+      import waiting inside `DefWindowProc`, moved by os8088's mouse and key
+      callbacks, which SEND `WM_INITMENU` and `WM_INITMENUPOPUP` through a
+      new host send, `w16_resumecb` (SPEC.md 124.2.2). End Task in
+      `w16_close` (SPEC.md 124.12).
+    - `make win16` is 32,201 bytes of image and 31,714 on disk with the
+      three faces; the kernel is unchanged (`kernsize`: *unchanged* on
+      kern_big and kern_small).
+  - **Seen on the glass** (QEMU):
+    - VGA: MENU.EXE's bar, its File and Colour popups and the nested More
+      popup laid over Windows 3.0's screenshots: the same pixels, the
+      glyphs aside (D4). A pick closes the popups and puts the bank back
+      clean. F2 and Ctrl+B count `WM_INITMENU` and `WM_INITMENUPOPUP` as
+      Windows did. F10, the arrows, Enter, Alt+F and Esc work.
+    - **WinMine 2.9 reaches its board**, with its Game and Help menus, the
+      level's check and the accelerators. Intermediate resizes it to 16 x 16
+      with 40 mines, a cell click reveals and starts the clock, F2 starts a
+      new game, and the close box closes it.
+    - TINYUNK runs its `MessageBox` and is then ended at USER.287 with
+      *Needs USER.287 / which WIN16 does not provide yet.*
+    - End Task: MENU.EXE with F5 refuses `WM_CLOSE`, the second click asks,
+      and Proceed ends it and closes its window.
+    - The claim map after MENU.EXE's exit is the one taken before its
+      launch, line for line.
+    - CGA (`VIDEO=cga`) and EGA (`VIDEO=ega`): the bar, the popups, the
+      nested popup and a pick, each in its own face. On CGA the shadow is
+      drawn black; a dithered one-pixel line read as dots.
+  - **Not seen:** Hercules (QEMU has none); WinMine's Marks toggle, which
+    was not clicked; its Custom field, which needs S6's dialog; a call count
+    on a full Minesweeper repaint (S13's final pass).
 
 - [ ] **S6: Dialogs and controls.** *As a user the program's dialog boxes
   open, I can type in them, and OK/Cancel do what they say.*

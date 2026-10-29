@@ -225303,7 +225303,7 @@ That method reproduces the VGA card's numbers exactly.
 `SetWindowPos` take `SM_CYCAPTION - 1` off a window's height to find its
 client (§124.8), so the sizing and the answer agree on every display.
 
-### 124.9 Memory: the global and local heaps *(pinned for S5)*
+### 124.9 Memory: the global and local heaps *(shipped in S5)*
 
 **The global heap** is WIN16's, sub-allocated inside ARENAS: claims of
 `W16_ARENAKB` (16) KB, or one claim the size of a larger request, at most
@@ -225334,7 +225334,7 @@ free.
 | `LMEM_FIXED` | the near pointer |
 | `LMEM_MOVEABLE` | a pointer to a two-word handle entry whose first word is the block, so `*(char **)h` reads what `LocalLock` answers, which some programs rely on |
 
-### 124.10 Resources, read from the file when loaded *(pinned for S5)*
+### 124.10 Resources, read from the file when loaded *(shipped in S5)*
 
 **The resource table is kept; the resources are not.** The loader copies the
 NE resource table (from `ne_rsrctab` to `ne_restab`) into the program's claim
@@ -225357,16 +225357,20 @@ a load from inside a paint is legal.
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
 
-### 124.11 Menus *(pinned for S5)*
+### 124.11 Menus *(shipped in S5)*
 
 **WIN16 has its own menu manager, after Wine's `menu.c`** (WIN16-PLAN D8,
 revised 2026-10-29). `OS88UI_MENU` (§13.16) was the first decision and was set
 aside for the end goal: it has no nested popup, a one-byte action and os8088's
 8x8 cell.
 
-- **Storage:** menus live in WIN16's USER heap, a moveable global block with
-  §124.9's local-heap format, as Windows kept them in USER's. An `HMENU` is a
-  menu's offset there.
+- **Storage:** menus live in WIN16's USER heap, an 8 KB fixed global block
+  with §124.9's local-heap format, made at the first menu call, as Windows
+  kept them in USER's. A menu is a 14-byte record and each item 14 bytes
+  more, its label a block of its own. An `HMENU` is the record's offset there
+  plus `W16_HMB` (5000h), so a handle is never 0 and never a small command
+  ID. A window's menu is destroyed with the window, as Windows' was; one that
+  is in no window lives until the program ends.
 - **Calls:** `LoadMenu` (the Windows 3.x template: version, header size, then
   items of flags, ID unless `MF_POPUP`, and text; `MF_END` closes a level),
   `LoadMenuIndirect`, `CreateMenu`, `CreatePopupMenu`, `AppendMenu`,
@@ -225384,16 +225388,27 @@ aside for the end goal: it has no nested popup, a one-byte action and os8088's
   the display's System font, the selection in `COLOR_HIGHLIGHT` and
   `COLOR_HIGHLIGHTTEXT`, a greyed item in `COLOR_GRAYTEXT` (on a 1bpp display
   its lit pixels are dithered), ✓ in the left margin, `\t` text
-  right-aligned, the mnemonic underlined. A popup is a framed box with a
-  shadow, under its title, kept inside the window. The pixels it covers are
-  banked and put back, not repainted by the program.
+  right-aligned, the mnemonic underlined; matched to the pixel against
+  Windows 3.0 on VGA. Each item, and each bar line, is one band and one
+  `OSAPI_GFX_BLIT1`. A popup is a framed box with a one-pixel shadow (black
+  on a 1bpp display, where a dithered line reads as dots), under its title,
+  a nested one beside its item, all kept inside the window. The pixels a
+  popup covers are banked (`OSAPI_GFX_SAVE`) and put back
+  (`OSAPI_GFX_REST`), not repainted by the program, **unless the desktop
+  repainted the window while the menu was open**: the lock is not held
+  between two clicks, so such a bank is stale and is never written back;
+  the area is invalidated and the program paints it.
 - **Use:** mouse press-drag-release and click-then-click; Alt or F10 and
   then the arrows, a mnemonic, Enter or Esc. `WM_INITMENU` is sent when the
   bar is entered and `WM_INITMENUPOPUP` before each popup opens, and both are
-  answered before it is drawn. A pick POSTS `WM_COMMAND`, as Windows does.
-  A greyed or disabled item does nothing.
+  answered before it is drawn. They are SENT from os8088's mouse and key
+  callbacks while the program waits inside `DefWindowProc`, which is the
+  menu loop (§124.2.2's host send). A pick POSTS `WM_COMMAND`, as Windows
+  does. A greyed or disabled item does nothing. A click outside the menu,
+  or on the open title, closes it. Alt+F4 posts `WM_CLOSE` and Alt+Space is
+  does nothing (there is no system menu to open).
 
-### 124.12 How a program ends *(pinned for S5)*
+### 124.12 How a program ends *(shipped in S5)*
 
 - **It exits** (`int 21h` AH = 4Ch): its memory and its window go
   (§124.8).
@@ -225408,3 +225423,10 @@ aside for the end goal: it has no nested popup, a one-byte action and os8088's
   the program runs again, and its memory, its face and its window go. It
   reaches only a program that is waiting for a message. One that never yields
   holds the UI task, and nothing on os8088 can stop it.
+  - The first click posts `WM_CLOSE`; a program that answers it by staying
+    (returning 0, or asking *Save changes?*) has had its say, and the next
+    click asks. Cancel, or the alert dismissed, posts `WM_CLOSE` again.
+  - An open menu is closed before either, as Windows closed it.
+  - os8088 has one alert at a time (§13). While the program's own
+    `MessageBox` is up the click raises that box instead, which is to be
+    answered first.

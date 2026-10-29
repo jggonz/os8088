@@ -41,8 +41,8 @@ W16_MAXCLS   equ 8              ; classes (SPEC.md 124.8)
 W16_MAXWND   equ 8              ; windows
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
-W16C_SIZE    equ 26             ; a class record
-W16W_SIZE    equ 36             ; a window record
+W16C_SIZE    equ 30             ; a class record
+W16W_SIZE    equ 38             ; a window record
 W16T_SIZE    equ 10             ; a timer record
 MSG_SIZE     equ 18             ; a Windows MSG
 W16_NSCAN    equ 0x59           ; scan codes with a virtual key
@@ -51,14 +51,20 @@ W16_TXTMAX   equ 80             ; TextOut's longest run
 W16_NOBJ     equ 16             ; brushes and pens made at once
 W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
                                 ;   the spill, to even
-W16_GBUF     equ W16_BS * 16    ; the band (16 rows), and SetDIBitsToDevice's
-                                ;   4bpp block, never both at once
+W16_GBUF     equ W16_BS * 20    ; the band (20 rows: a menu item is the
+                                ;   System font's rows + 2), and
+                                ;   SetDIBitsToDevice's 4bpp block, never
+                                ;   both at once
 W16_RRMAX    equ 64             ; RoundRect's largest corner radius
 W16_NMISS    equ 64             ; different imports WIN16 lacks a program may
                                 ;   import before the load refuses it
 W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
 W16_NARENA   equ 6              ; global heap arenas at once (w16mem.inc)
 W16_NGH      equ 64             ; moveable global handles
+W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)
+W16_MLAB     equ 64             ; ...a menu label's characters, and an
+W16_MACC     equ 24             ;   accelerator text's
+MP_SIZE      equ 16             ; ...an open popup's record
 
 ; --- the parts (SPEC.md 20.12, 124.7.1): the System font, one face a display
 W16P_SYS16   equ 0              ; VGA
@@ -275,6 +281,73 @@ W16P_SYS08   equ 2              ; CGA
     W16BSS w16_rdst, 4          ; LoadString's buffer, its size, its ID
     W16BSS w16_rmax, 2
     W16BSS w16_rsid, 2
+    ; --- S5: menus and accelerators (w16menu.inc) ---
+    W16BSS w16_mseg, 2          ; the USER heap's segment, and its handle
+    W16BSS w16_mhh, 2
+    W16BSS w16_mstr, 4          ; an item's string, far
+    W16BSS w16_mtp, 2           ; a template being parsed
+    W16BSS w16_mtps, 2
+    W16BSS w16_mlab, W16_MLAB + 2   ; an item's label, prepared
+    W16BSS w16_mlabn, 2
+    W16BSS w16_macc, W16_MACC + 2   ; ...its accelerator text
+    W16BSS w16_maccn, 2
+    W16BSS w16_mmn, 1           ; ...its mnemonic's index, and the letter
+    W16BSS w16_mmch, 1
+    W16BSS w16_mhelp, 1
+    W16BSS w16_mlw, 2           ; layout: the width, a line's height
+    W16BSS w16_mlh, 2
+    W16BSS w16_msys, 2          ; GetSystemMenu's
+    W16BSS w16_mclip, 1         ; w16_mgon: the clip armed, the lock taken
+    W16BSS w16_mtook, 1
+    W16BSS w16_mcx0, 2          ; ...the content's origin
+    W16BSS w16_mcy0, 2
+    W16BSS w16_mbh, 2           ; the band's rows, ink and paper
+    W16BSS w16_mink, 1
+    W16BSS w16_mpap, 1
+    W16BSS w16_mbfb, 2
+    W16BSS w16_mblb, 2
+    W16BSS w16_mpidx, 1         ; w16_mpitem's item, the selection, places
+    W16BSS w16_mpsel, 1
+    W16BSS w16_mpcl, 2
+    W16BSS w16_mpct, 2
+    W16BSS w16_mx0, 2           ; a popup's frame on the screen
+    W16BSS w16_my0, 2
+    W16BSS w16_mx1, 2
+    W16BSS w16_my1, 2
+    W16BSS w16_mrec, 2
+    W16BSS w16_mpl, W16_MDEPTH * MP_SIZE    ; the open popups
+    W16BSS w16_mlev, 1          ; ...how many
+    W16BSS w16_mtrk, 1          ; 1 = the menu loop runs
+    W16BSS w16_mkbd, 1          ; ...entered from the keyboard, with this
+    W16BSS w16_mkch, 1
+    W16BSS w16_mbsel, 1         ; ...the title selected, 0FFh none
+    W16BSS w16_mstale, 1        ; ...a W_PAINT came: the banks are stale
+    W16BSS w16_meat, 1          ; 1 = this press is the menu's
+    W16BSS w16_inwp, 1          ; 1 = inside w16_ppaint
+    W16BSS w16_mhbar, 2         ; ...the bar, the window
+    W16BSS w16_mhwnd, 2
+    W16BSS w16_midx, 2          ; ...the DefWindowProc it waits in
+    W16BSS w16_mnargb, 2
+    W16BSS w16_mpsp, 2
+    W16BSS w16_mnmenu, 2        ; the popup to open next, its place, where
+    W16BSS w16_mnpos, 2
+    W16BSS w16_mnx, 2
+    W16BSS w16_mny, 2
+    W16BSS w16_mptx, 2          ; the press that began it, screen
+    W16BSS w16_mpty, 2
+    W16BSS w16_mhl, 1           ; w16_mhit's
+    W16BSS w16_mhx, 2
+    W16BSS w16_mhy, 2
+    W16BSS w16_ahwnd, 2         ; TranslateAccelerator's
+    W16BSS w16_aacc, 2
+    W16BSS w16_acmd, 2
+    W16BSS w16_asub, 2
+    W16BSS w16_apos, 2
+    W16BSS w16_arec, 2
+    W16BSS w16_ahm, 2
+    W16BSS w16_kmods, W16_NSCAN ; each scan code's shift state when pressed
+    W16BSS w16_closeq, 1        ; 1 = a WM_CLOSE of ours is not taken yet
+    W16BSS w16_ctop, 2          ; w16_ppaint: the client's top, screen
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -447,6 +520,14 @@ w16_endshow:
 w16_freeprog:
     call w16_gfreeall
     mov word [w16_rtlen], 0
+    push ax
+    xor ax, ax                      ; the USER heap went with the arenas
+    mov [w16_mseg], ax
+    mov [w16_msys], ax
+    mov [w16_mtrk], al
+    mov [w16_mlev], al
+    mov [w16_closeq], al
+    pop ax
     mov dx, [w16_pseg]
     or dx, dx
     jz .face
@@ -727,6 +808,7 @@ w16_cputest:
 %include "win16/w16mem.inc"
 %include "win16/w16res.inc"
 %include "win16/w16user.inc"
+%include "win16/w16menu.inc"
 %include "win16/w16gdi.inc"
 %include "win16/w16cens.inc"
 %include "win16/w16optab.inc"

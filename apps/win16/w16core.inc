@@ -211,6 +211,38 @@ w16_cbenter:
     mov ds, ax
     retf
 
+; -----------------------------------------------------------------------------
+; w16_resumecb - a HOST SEND (SPEC.md 124.2.2): from a callback, while the
+; program waits in an import, enter the callee a handler's code queued
+; (w16_sendwnd: the continuation, the arguments, w16_cbret, the callee). The
+; continuation runs as that import's handler again, so it can keep it waiting
+; ([w16_pend]) or finish it. The menu loop is the user: WM_INITMENUPOPUP sent
+; while DefWindowProc waits (w16menu.inc). Returns as w16_resume does.
+; -----------------------------------------------------------------------------
+w16_resumecb:
+    ; STKBALANCE-OK: w16_resume's switch, ending in w16_cbenter's retf into
+    ; the callee instead of w16_epi's; w16_tohost pops the host frame
+    push bp
+    push si
+    push di
+    push es
+    push ds
+    mov [w16_hss], ss
+    mov [w16_hsp], sp
+    pushf
+    pop bx
+    mov [w16_hflags], bx
+    cli
+    call w16_i21_on
+    mov byte [w16_cbgo], 0
+    mov ss, [w16_pss]
+    mov sp, [w16_psp_]
+    push bx
+    popf
+    mov ax, [w16_dgroup]
+    mov ds, ax
+    retf
+
 ; w16_cbret - where every callee returns: an import of its own (W16_CBROW), so
 ; the gate's frame and the continuation take it from here. DX:AX is the
 ; callee's answer, kept through CS because DS is the program's.

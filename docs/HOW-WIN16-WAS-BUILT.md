@@ -605,3 +605,86 @@ drew it, which was the open question S3 left.
 **Not seen:** Hercules (QEMU has none); a call count on a whole Minesweeper
 repaint, which needs S5's menus before WinMine will start; BitBlt and memory
 DCs, which WinMine 3.1 uses and 2.9 does not.
+
+## 2026-10-29 — S5: memory, resources and menus
+
+**The story.** *As a user the program's menu bar sits in its window as it did
+on Windows, its shortcuts work, and its check marks show.* Menus are
+resources, resources need memory, and WinMine needs all three before its
+first window, so they were one story in two commits.
+
+**Memory first.** The global heap is WIN16's, sub-allocated in 16 KB arena
+claims. A fixed block's handle is its segment, as on real-mode Windows. A
+moveable one is a handle-table entry at 0100h and up, which no RAM segment
+can be, so a protected-mode arm can put a selector behind the same handle
+later. The local heap is the one in DGROUP, and every `Local*` call reads the
+CALLER's DS off the gate's frame, as Windows did.
+
+**Resources stay in the file.** Only the NE resource table is kept. A
+`LoadResource` reads that one resource with `OSAPI_FILE_READ_AT` into a
+moveable block, so a program's size is never limited by what fits at load,
+which an installer will need.
+
+**A missing import is not a refusal any more.** Programs import far more than
+they call. Each unprovided import is bound to a stub, and the stub ends the
+program when it is CALLED, naming the import. TINYUNK shows it: its
+`MessageBox` comes up, then its call to USER.287 ends it with *Needs USER.287
+/ which WIN16 does not provide yet.*
+
+**The menu manager is WIN16's own.** The plan first said os8088's own menus
+(`OS88UI_MENU`). They have no nested popup, a one-byte action and os8088's
+8x8 cell, and the end goal is any Win16 program. So `w16menu.inc` follows
+Wine's `menu.c`: menus live in a USER heap, an HMENU is a record's offset
+there, IDs are 16 bits, and popups nest. The look was measured off Windows
+3.0 screenshots of the fixture and matched pixel for pixel: the bar's height
+and its line, the popup's box and one-pixel shadow, the separator, the 8 x 10
+check, the 5 x 9 arrow, the underline row, and where a nested popup goes
+(the parent's right border less 7, the item's top less 1).
+
+**The loop is the import waiting.** Windows' menu loop runs inside
+`DefWindowProc`. Here `DefWindowProc` starts it and then WAITS, as S3's
+`GetMessage` waits, and os8088's mouse and key callbacks move the selection.
+Two messages must be answered before a popup is drawn: `WM_INITMENU` and
+`WM_INITMENUPOPUP`, because the program may check or grey items there. So the
+callback SENDS them, through a new "host send", `w16_resumecb`: the program is
+resumed into its window procedure and comes back to the loop when it
+returns. A pick POSTS `WM_COMMAND`, as Windows does.
+
+**A deadlock, found with two counters.** The first build hung on the first
+click. The menu callbacks run with the gfx lock already held, but WIN16's
+"do I hold it" byte said no, so the first draw asked for the lock again. Two
+temporary counters at 0:4F0h, read over QMP, showed the call that went in
+and never came out. The callbacks now mark the lock as held.
+
+**A bank can go stale.** What a popup covers is banked with
+`OSAPI_GFX_SAVE` and put back with `OSAPI_GFX_REST`. The lock is not held
+between two clicks, so the desktop can repaint the window under an open menu.
+Such a bank is never written back: the area is invalidated and the program
+paints it.
+
+**End Task needed a second design.** The first version offered End Task only
+when the program had not taken `WM_CLOSE`. MENU.EXE's F3 puts up a
+`MessageBox`, and os8088 has one alert at a time, so the second click raised
+the message box and never asked. What shipped is simpler: the first click
+posts `WM_CLOSE`; if the program is still running at the next click, it has
+had its say, and the click asks *It has not closed. End it?* Proceed ends it
+where it waits.
+
+**Mono.** On CGA the popup's grey shadow dithered into a dotted line. It is
+black on a 1bpp display now.
+
+**Tested, on the glass (QEMU):**
+
+- MENU.EXE on VGA against Windows 3.0's screenshots; on EGA and CGA, the
+  bar, the popups, the nested popup and a pick;
+- the `WM_INITMENU` and `WM_INITMENUPOPUP` counts for a mouse pick and for
+  F2 and Ctrl+B, which match Windows';
+- the keyboard: F10, the arrows, Enter, Alt+F, Esc;
+- WinMine 2.9: its board, its menus, Intermediate (16 x 16, 40 mines), a
+  click that reveals and starts the clock, F2, and the close box;
+- TINYUNK ended at USER.287 with its name;
+- End Task on MENU.EXE refusing `WM_CLOSE`;
+- the claim map after MENU.EXE's exit is the one taken before its launch.
+
+**Not seen:** Hercules (QEMU has none); WinMine's Marks toggle; its Custom
+field, which needs S6's dialogs.
