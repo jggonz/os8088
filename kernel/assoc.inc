@@ -104,7 +104,17 @@ assoc_stem:
                                  ; .LNK (96.21),
                                  ; and it has to be a BUILT-IN rather than a
                                  ; declaration on the disk - see assoc_ext
-    times (ASSOC_NAPP - 5) * 8 db 0
+    db 'WIN16   '                ; SPEC.md 124.3: a program with NO extension
+                                 ; of its own - DOS.O88 hands it an NE .EXE by
+                                 ; name through OSAPI_PKG_START's document arm,
+                                 ; which finds a program by its stem here. Its
+                                 ; documents are on somebody else's disk, DOS's
+                                 ; reason exactly. Past ASSOC_NDEF, so it is
+                                 ; looked for as a declared program is (root,
+                                 ; the volume's cache, APPS, GAMES) and has no
+                                 ; baked glyph: it opens nothing by extension.
+                                 ; The row was padding, so it costs no byte
+    times (ASSOC_NAPP - 6) * 8 db 0
 
 ; The four defaults' glyphs are BAKED AT BUILD TIME by tools/os88mini.py out
 ; of each package's own .o88, so the kernel ships knowing what its own

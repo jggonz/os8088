@@ -7260,7 +7260,7 @@ $(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP) $(PKG
 # strings have to name.
 # --- DOS (SPEC.md 96) --------------------------------------------------------
 $(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                  apps/dos/dosc.inc apps/dos/dosnetabi.inc \
+                  apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                   apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                   apps/os88line.inc apps/os88sock.inc \
@@ -7354,7 +7354,7 @@ $(shell mkdir -p $(BUILD); \
 
 $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
                       apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosnetabi.inc \
+                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                       apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                       apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7372,7 +7372,7 @@ $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 # and the Memory page's `Load DOS in the HMA` picks; nothing else builds it.
 $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
                        apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                       apps/dos/dosc.inc apps/dos/dosnetabi.inc \
+                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                        apps/os88api.inc apps/dos/doscall.inc \
                        apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                        apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7389,7 +7389,7 @@ $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 # is never read by op_load - the handoff walks its bytes into extents and the
 # stub reads them with int 13h (docs/plans/KERN-DOS-PLAN.md §4.1.1).
 $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                   apps/dos/dosc.inc apps/dos/dosnetabi.inc \
+                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                    apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                    apps/os88line.inc apps/os88sock.inc \
@@ -7409,7 +7409,7 @@ $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
 # build - the two hosts each carry the other half and would never notice.
 # `all` builds it, because a check nobody runs is a check that rots.
 $(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosnet.inc \
+                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnet.inc \
                       apps/dos/dosnetabi.inc apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
@@ -18736,7 +18736,67 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 	@touch $@
 	@echo "win16fixtures: TINY16 $(WIN16FIX) built into $(BUILD)/win16/"
 
-.PHONY: win16census win16fixtures
+# `make win16` builds the layer itself, apps/win16/ (SPEC.md 124.2): a
+# `local` package in apps/RETIRED.txt until S12 decides its payload, so no
+# shipped image carries it yet and `all` does not build it.
+WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
+
+$(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc \
+                    apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -o $@ apps/win16/win16.asm
+	@echo "win16:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/win16.o88: $(BUILD)/win16.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/win16.bin -o $@
+
+win16: $(BUILD)/win16.o88
+
+# `make win16test` is S2's gate disk (WIN16-PLAN.md S2): a 1.44MB B: with
+# WIN16.O88, the TINY16 variants, whatever `make win16fixtures` has built,
+# and a DOS.O88 assembled -DDOS_WIN16 - the one that hands an NE to WIN16
+# (apps/dos/dosw16.inc). It sits in the ROOT beside the programs, so the
+# association's rung 2 (the document's own folder, SPEC.md 54.4.2) finds it
+# before the system disk's, and the shipped DOS.O88 stays byte-identical.
+$(BUILD)/win16/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
+                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                   apps/os88api.inc apps/dos/doscall.inc \
+                   apps/dos/doscents.inc apps/os88ui.inc \
+                   apps/os88line.inc apps/os88sock.inc \
+                   apps/os88con.inc apps/os88cp437.inc \
+                   apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
+                   kerndos/kdlaunch.inc drivers/net/netpkg.inc | $(BUILD)
+	@mkdir -p $(@D)
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
+	        -I kerndos/ -DDOSKPART -DDOS_EXTCORE -DDOS_WIN16 \
+	        -o $@ apps/dos/dos.asm
+
+$(BUILD)/win16/DOS.O88: $(BUILD)/dosload.bin $(BUILD)/win16/dosp.bin \
+                        $(BUILD)/doscore.bin $(BUILD)/kerndos.bin tools/os88pkg.py
+	$(OS88PKG) $(BUILD)/dosload.bin -o $@ \
+		--part $(BUILD)/win16/dosp.bin --part $(BUILD)/doscore.bin \
+		--part $(BUILD)/kerndos.bin --part-compress lz4
+
+WIN16TINY := TINY16 TINY186 TINYUNK
+$(BUILD)/win16/TINY186.EXE: tests/win16/tiny16.asm
+	@mkdir -p $(@D)
+	$(NASM) -f bin -w+error -DT16_186 -o $@ $<
+$(BUILD)/win16/TINYUNK.EXE: tests/win16/tiny16.asm
+	@mkdir -p $(@D)
+	$(NASM) -f bin -w+error -DT16_UNKNOWN -o $@ $<
+
+$(BUILD)/win16test.img: $(BUILD)/win16.o88 $(BUILD)/win16/DOS.O88 \
+                        $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
+                        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/win16.o88 \
+	    $(BUILD)/win16/DOS.O88 \
+	    $(sort $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
+	           $(wildcard $(BUILD)/win16/*.EXE))
+
+win16test: $(BUILD)/win16test.img
+	@echo "win16test: build/win16test.img - boot it as B: with"
+	@echo "           make test TESTAPPS=build/win16test.img"
+
+.PHONY: win16census win16fixtures win16 win16test
 
 # Standalone 1942: committed artwork, compiled into adapter-native banks.
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json

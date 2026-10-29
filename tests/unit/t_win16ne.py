@@ -200,4 +200,18 @@ else:
         eq([(d["face"], d["pixheight"], d["ascent"], d["avgwidth"], d["maxwidth"])
             for d in f], [("System", 16, 13, 7, 14)], "VGASYS.FON: D4's VGA System font")
 
+# --- E: the machine's opcode table is the host's (SPEC.md 124.4.1) --------
+# apps/win16/w16cens.inc decodes with w16optab.inc, which os88ne.py WRITES:
+# a committed file that differs is a machine census that has drifted from the
+# reference one. Regenerate with `python3 tools/os88ne.py --optab >
+# apps/win16/w16optab.inc`.
+OPTAB = os.path.join(ROOT, "apps", "win16", "w16optab.inc")
+with open(OPTAB) as f:
+    eq(f.read(), os88ne.optab_inc(), "apps/win16/w16optab.inc is os88ne.py --optab's")
+tab, names = os88ne.optab()
+eq((names[0x6A], names[0x0F], names[0x75], names[0xFF], names[0x2E]),
+   ("T186", "OP0F", "BR8", "GRPFF", "PREFIX"), "the table's classes, spot-checked")
+eq((tab[0x9A] & 7, tab[0xC8] & 7, (tab[0x80] >> 3) & 1), (4, 3, 1),
+   "the table's lengths: call far 4, enter 3, the 80 group's modrm")
+
 done("win16ne")

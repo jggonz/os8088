@@ -352,3 +352,101 @@ When present, the Watcom fixtures and the reference programs must give the
 verdicts above. Three sensitivity runs each broke the census once: no
 prologue heuristic, no probe guard, and a linear sweep in place of descent.
 They failed 2, 9 and 16 checks respectively.
+
+## 2026-10-28 — S2: load or refuse
+
+**Asked:** the same "yes", which covered S1, S2 and S3.
+
+**The shape.** WIN16 is one package, `apps/win16/`, and it is a coroutine
+on the UI task (D2):
+
+- The program's code runs on its own stack, SS = DS = DGROUP.
+- Every import is a six-byte stub, `mov ax, row / jmp near w16_gate`, so a
+  relocated far call lands in the gate with the export's row in AX.
+- The gate builds a frame on the program's stack, switches to the UI task's,
+  and runs the handler there.
+- A handler that has to wait for the user (MessageBox) sets one byte, and
+  the gate returns to the os8088 callback that resumed the program instead.
+- The program's frame is simply left where it is. That frame IS the waiting
+  program, and the alert's completion resumes it.
+
+**Wine was the logic, not the code.** The loader follows winevdm's
+`ne_segment.c`:
+
+- one claim for every segment;
+- relocations in two passes (count what is missing, then apply), with
+  winevdm's chain semantics: each site holds the next and is read before it
+  is written, and 0xFFFF or a site outside the segment ends the chain
+  silently;
+- `NE_FixupSegmentPrologs` for the exported entry points;
+- DGROUP = minalloc + stack + heap, as `NE_InitProcess` lays it out.
+
+InitTask's register contract is `task.c`'s.
+
+**The C runtime talks to DOS directly**, which S1's census had said. So
+`int 21h` belongs to the program only while its code runs. It answers the
+functions the census found and nothing else, and AH = 4Ch ends the program
+the way a close box will.
+
+**How a program gets there.** `.EXE` is DOS.O88's association, so DOS reads
+the header and hands an NE on. The hand-off is the document arm of
+`OSAPI_PKG_START` with the stem `WIN16`, a new built-in row in the kernel's
+stem table that went into a row of padding: zero bytes.
+
+**The forward is test-build only.** Until S12 decides where WIN16 ships, a
+stock machine has no WIN16.O88. A forward there would rebuild the
+association cache and toast *Needs WIN16.O88* with DOS's window already
+closed, which is worse than the stub's own sentence. So the forward is
+built only into the test disk's DOS.O88 (`-DDOS_WIN16`), and the shipped
+one was checked byte for byte against HEAD's.
+
+**On the glass,** in QEMU off `make win16test`'s disk:
+
+- Double-clicking TINY16.EXE in a Disk window opened DOS.O88 for an
+  instant, then WIN16's window and the program's MessageBox. That means
+  InitTask, WaitEvent, InitApp and MessageBox, through the gate and back.
+- MSGBOX, a C program whose runtime makes those `int 21h` calls, did the
+  same.
+- OK ended both, and WIN16's window closed behind them.
+- The doctored TINYUNK refused with *Needs USER.287*.
+- WINDOW.EXE, S3's fixture, refused with *Needs USER.10 and 31 more*: the
+  size of S3, measured.
+
+**Found on the way: os88ui's alert does not clip its message.** The SDK
+says the message "is CLIPPED by the window". TINY16's 43-character line was
+drawn straight across the alert's frame on both sides, and it left pixels on
+the desktop after the alert closed. WIN16 now cuts the line to
+`OS88UI_AMAX` (S6 brings a real MessageBox). The SDK's claim is not true,
+and it is noted here rather than fixed in a wave about something else.
+
+**The second wave: the census on the machine.**
+
+**Why it was needed.** D1 sets the floor at a V20, but a plain 8088 must
+still never be handed a 186 program: it would run something else silently.
+
+**What it is.** `apps/win16/w16cens.inc` is `tools/os88ne.py`'s recursive
+descent, decision for decision:
+
+- the three seeds, the third being a third pass of the relocator;
+- the switch tables, after the walk;
+- the prologue sweep;
+- the post-hoc guard for Open Watcom's `smsw` probe.
+
+It runs after relocation, so a far call's segment is either one of the
+program's or WIN16's own stub. The opcode table is the host's, written by
+`os88ne.py --optab` and held to it by the fast row.
+
+**What it costs.** About 2.5KB of the package, a transient claim of at most
+17KB, and only on a CPU that cannot run 186 code.
+
+**How it was tested without an 8088.** QEMU's CPU runs 186 code, so a test
+build that runs the census on any CPU (`-DW16_CENSUS_ALWAYS`) was booted:
+
+- TINY16 runs;
+- TINY186 refuses with *Needs a V20, 80186 or better.*;
+- MSGBOX runs.
+
+The negative control matters most: with the guard call taken out, MSGBOX
+refuses with *Needs an 80286 or better.* So the walk really does reach
+Watcom's `smsw`, and the guard is what admits the program. The census on a
+real 8088, and what it costs there, is S13's measurement.

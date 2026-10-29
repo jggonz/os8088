@@ -89,3 +89,9 @@ apps/taskmgr/taskmgr.asm 1      # the Task Manager telling the truth about
     # tm_s_rampm, the [tm_pm] arms of the RAM line and tm_sqox; measured off
     # the 9.4KB package's listing at PR #299's review). Without the tests the
     # shipped copy on the system disk would print a selector as a segment
+apps/win16/win16.asm 1          # WIN16 REFUSING TO START (SPEC.md 124.1,
+    # WIN16-PLAN.md D6): w16_pmcheck's `test ah, CPU_F_PM`. The layer runs a
+    # Windows program's real-mode code with its own segment arithmetic, so
+    # kern_mega refuses it outright, in WIN16's words rather than
+    # os88mega.inc's (whose toast names a MEGA apps disk WIN16 has no arm on).
+    # A correctness refusal and ~30 bytes, not kern_mega work

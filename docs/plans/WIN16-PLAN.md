@@ -274,9 +274,10 @@ they stand on.
     - Windows' check glyph, grey text and separator on the menu fixture
       (S5, `w30-fix-menu-open.png`).
 
-- [ ] **S2: Load or refuse.** *As a user, when I double-click a Windows
+- [x] **S2: Load or refuse.** *As a user, when I double-click a Windows
   program I get either the program, or one sentence saying why not, and never
-  a crash.*
+  a crash.* SHIPPED 2026-10-28, two waves (the loader, then the census); what
+  was NOT seen on the glass is listed at the end.
   - **Launch:** DOS.O88 sniffs `e_lfanew` → `NE` and forwards the document to
     `WIN16.O88` with `OSAPI_PKG_START`'s document form (SPEC.md §21.5.3).
   - **Loader:**
@@ -301,8 +302,35 @@ they stand on.
   - *Verify:*
     - the fixture reaches its WinMain;
     - a doctored fixture with an unknown import refuses with its name;
-    - `kern_mega` refuses with `OS88_MEGA_REFUSE`;
+    - `kern_mega` refuses at entry in WIN16's own words;
     - `kern_small`'s disks do not carry it (D6).
+  - **What shipped:**
+    - `apps/win16/` (`make win16`, 8,595 bytes): the loader
+      (`w16load.inc`), the coroutine and the gate (`w16core.inc`, SPEC.md
+      124.2.1), `int 21h` (`w16i21.inc`), the exports S2 needs
+      (`w16api.inc`: InitTask, WaitEvent, GetVersion, GetWinFlags,
+      IsDBCSLeadByte, GetModuleFileName, InitApp, MessageBox as os88ui's
+      alert until S6, GetKBCodePage) and the 8088 census (`w16cens.inc`,
+      with `w16optab.inc` written by `os88ne.py --optab`).
+    - The handover is `apps/dos/dosw16.inc`, assembled only under
+      `-DDOS_WIN16`, which `make win16test`'s DOS.O88 alone carries until
+      S12 decides where WIN16 ships. The shipped DOS.O88 is byte-identical
+      to the one before. The kernel's built-in stem row `WIN16` took a row
+      of `times` padding, so `kernsize` reads *unchanged*.
+    - WIN16 is a `local` package in `apps/RETIRED.txt`, and its region is
+      pinned in `tests/movable.txt` (the program holds its segment).
+  - **Seen on the glass** (QEMU, `make test TESTAPPS=build/win16test.img`):
+    - TINY16 and MSGBOX reach their MessageBox from a desktop double-click,
+      OK ends them, and WIN16's window closes;
+    - TINYUNK refuses *Needs USER.287 / which WIN16 does not provide yet.*,
+      and WINDOW.EXE *Needs USER.10 and 31 more*;
+    - with the census forced on (`-DW16_CENSUS_ALWAYS`): TINY186 refuses
+      *Needs a V20, 80186 or better.*, while TINY16 and MSGBOX run; with
+      the guard taken out, MSGBOX refuses *Needs an 80286 or better.*,
+      which is the negative control.
+  - **Not seen yet:** kern_mega's refusal on a kern_mega boot; the
+    self-loading, library and out-of-memory refusals; the census on a real
+    8088 or MartyPC, and its time there. S13's final pass owns all of these.
 
 - [ ] **S3: The message pump.** *As a user I see the program's window, I can
   move it, click in it, and close it with the close box.*
@@ -458,7 +486,7 @@ Taken by the owner on 2026-10-28 unless marked otherwise.
 | D3 | Memory model (recommendation; not raised) | Every segment fixed in one arena claim; nothing moves or discards; `GlobalAlloc` sub-allocates inside a second claim (8 claims per owner, SPEC.md §50.3) | Real-mode Windows' movable segments: `INT 3Fh` loader stubs and BP-chain walking, for two programs that fit easily |
 | D4 | Fonts | **What Windows showed on that display**, so the programs look as they did on Windows. MEASURED from Windows 3.0's setup disk 2 (`CGASYS`, `EGASYS`, `VGASYS.FON`), all proportional with maximum width 14: **CGA 8 px (average 7, ascent 7); EGA 12 px (7, 10); VGA 16 px (7, 13)**. **Hercules uses EGA's 12 px font**: `SETUP.INF` gives it EGA's resolution class, `133,96,72`. VGA's face comes from Wine's System font, whose 16 px strike matches (`fonts/system.sfd`). CGA's and EGA's come from Windows' own `.FON` when the user supplies their Windows directory, and otherwise from os8088 strikes drawn to those metrics from source art (CLAUDE.md's artwork rule). Each is converted on the host into an `.F88` face (SPEC.md §6.3) and drawn through `os88type.inc`. Dialog units follow the font, as on Windows | os8088's 8x8 cell everywhere: dialogs half height on VGA and nothing like Windows |
 | D5 **gate** | Floating point without a coprocessor | Emulate only the census's opcode subset, as a part. S1 MEASURED it: CALC 3.00 reaches 35 kinds and CALC 3.10 40, all 8087 instructions; no 287 or 387 form appears (SPEC.md 124.5 lists them). The file carries NATIVE x87 code with the OS fixups on the `wait` bytes; the loader rewrites those to `int 34h`–`3Dh` only on a machine without a coprocessor, as Windows did. Still the owner's to take | A whole x87 emulator, or refusing CALC on FPU-less machines |
-| D6 | Kernels | **`kern_big` and `kern_emu`.** `kern_mega` refuses (`OS88_MEGA_REFUSE`, SPEC.md §20.18). `kern_small` lacks `OSAPI_WM_TIMER` (SPEC.md §13.9), so its disks do not carry it (§24.5) | A kern_mega arm giving programs real selectors, winevdm's model: later |
+| D6 | Kernels | **`kern_big` and `kern_emu`.** `kern_mega` refuses at entry, *WIN16 needs real mode* (not `OS88_MEGA_REFUSE`, whose words name a MEGA apps disk). `kern_small` lacks `OSAPI_WM_TIMER` (SPEC.md §13.9), so its disks do not carry it (§24.5) | A kern_mega arm giving programs real selectors, winevdm's model: later |
 | D7 | Sources and licence | **Bring in whatever is needed from Wine and winevdm.** `apps/win16/` becomes GPL-2.0-or-later (finding 6), `apps/apple2`'s footing. Microsoft binaries are still never committed | Clean-room MIT: slower, and gains nothing the owner wants |
 | D8 | Menus and check marks | **The in-window bar, `OS88UI_MENU`** (SPEC.md §13.16): a Windows program's menu bar is inside its window, and the package owns it, so it costs no kernel bytes. The element's tick is a solid square, and the reference machines show Windows drawing a ✓ glyph, so S5 adds a check-glyph option to `os88ui.inc` (shared source) | The kernel's global bar: at most 5 menus, no check marks, and not where Windows put it |
 | D9 | Name | **`WIN16.O88`**, `apps/win16/` | — |

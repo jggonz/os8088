@@ -84,6 +84,19 @@ region apps/pixelstein/pxstein.asm  # csload's shape exactly: the launch image
                                  # freed inside that call (SPEC.md 97.9).
                                  # Retired by nothing; correct as it stands.
 
+region apps/win16/win16.asm      # THE PROGRAM HOLDS OUR SEGMENT (SPEC.md
+                                 # 124.2.1): every import a Windows program
+                                 # makes is relocated, in ITS code, to a far
+                                 # pointer at a stub in this region, and int
+                                 # 21h points here while it runs. A move would
+                                 # leave every call site naming the old
+                                 # segment, and the relocation records are
+                                 # gone by then. What retires it: the stubs in
+                                 # the program's own claim behind one far jump
+                                 # apiece, so a relocation proc patches ONE
+                                 # table - docs/plans/WIN16-PLAN.md S12,
+                                 # living with the desktop.
+
 # --- worker -------------------------------------------------------------------
 #
 # THE FOUR PARK-SAFE PACKAGES ARE GONE FROM THIS LIST and the reason they were

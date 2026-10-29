@@ -1250,6 +1250,10 @@ dos_wake:
 %endif
     cmp byte [dos_state], DST_READY
     jne .out
+%ifdef DOS_WIN16
+    call dos_w16_try            ; SPEC.md 124.3: a WINDOWS program is WIN16's,
+    jc .out                     ; asked before anything is claimed or taken
+%endif                          ; out - and before arm 3's question, too
 %ifdef DOSKPART
     call dos_wholeask           ; SPEC.md 96.42: arm 3 with nothing to come
     jc .out                     ; back to asks FIRST, and the answer comes back
@@ -18817,6 +18821,9 @@ DOS_BSS_SIZE equ HB
 %include "dosc.inc"                 ; ...AND THE PROMPT THAT TYPES INTO IT
                                     ; (SPEC.md 96.33): an input, an output and
                                     ; a prompt, and not one verb of its own
+%ifdef DOS_WIN16
+%include "dosw16.inc"               ; ...and the door a Windows program leaves
+%endif                              ; by, to WIN16 (SPEC.md 124.3)
 %endif
 
 ; os88ui.inc first (os88line.inc needs its UI_* macros), and both LAST -

@@ -224623,7 +224623,7 @@ Calculator (`CALC.EXE`, Windows 3.0's).
 | launch | `EXE` stays DOS.O88's (§54, §96). DOS.O88 reads `e_lfanew` at offset 3Ch; a file whose header there says `NE` is handed to `WIN16.O88` with `OSAPI_PKG_START`'s document form (§21.5.3) instead of running its DOS stub |
 | instances | one `WIN16.O88` instance per Windows program, multi-instance as any package is (§20) |
 | on demand | the dialog manager and controls, the floating-point emulator and the loader are package PARTS (§20.12), each fetched when first needed and dropped after |
-| kernels | `kern_big` and `kern_emu`. `kern_small` omits it (§24.5): it has no `OSAPI_WM_TIMER` (§13.9). `kern_mega` refuses with `OS88_MEGA_REFUSE` (§20.18) |
+| kernels | `kern_big` and `kern_emu`. `kern_small` omits it (§24.5): it has no `OSAPI_WM_TIMER` (§13.9). `kern_mega` refuses at entry in its own words, *WIN16 needs real mode* (`w16_pmcheck`): not `OS88_MEGA_REFUSE` (§20.18), whose toast sends the user to a MEGA apps disk WIN16 has no arm on |
 | CPU | the layer's own code is `cpu 8086`. The programs it runs are checked by §124.4's census: an 8086-clean program runs on every machine, and a 186 program needs a V20/V30/186 or better |
 | binaries | **no Microsoft file is ever in the tree.** The user supplies them: `make win16census WIN3X=<dir>` and `make win16disk WIN3X=<dir>` |
 | test programs | Win16 programs written in C under `tests/win16/` and built by Open Watcom v2 (`tools/setup-watcom.sh`, a pinned upstream instrument in `build/watcom/`, never committed), plus one NE assembled by NASM that needs no compiler |
@@ -224663,6 +224663,51 @@ The consequences:
 - **Modal dialogs:** a modal dialog is a nested loop inside the coroutine.
 - **Re-entry:** a callback that arrives while the program is not waiting in
   `GetMessage` is queued and delivered later. It is never re-entered.
+
+#### 124.2.1 The gate, the stubs and the two stacks *(pinned for S2)*
+
+**Every import is a six-byte stub in WIN16's own segment**, `mov ax, n` /
+`jmp w16_gate`. The loader points each import relocation at its stub. AX is
+free to clobber: no Win16 pascal function takes an argument in AX, and the
+one register-convention function the targets import (`InitTask`, KERNEL.91)
+reads BX, CX and DS only.
+
+**`w16_gate` is the one place the stacks change hands.** It is entered by a
+far call on the program's stack:
+
+1. It pushes the four registers a pascal callee preserves (BP, DS, SI, DI)
+   onto the program's stack, and banks the program's SS:SP.
+2. It moves to the UI task's `LOW_SEG` stack at the SP the resuming callback
+   left. Everything below that SP is free while the program runs.
+3. It runs the handler there, as ordinary package code, so every `OSAPI_*`
+   call happens on `LOW_SEG` and pre-emption is live inside it.
+4. It returns to the program's stack, moves the six-word frame up by the
+   import's argument bytes (the pascal callee pops), loads the results, and
+   `retf`s.
+
+Every stack switch is `pushf` / `cli` / load SS:SP / push the flags back /
+`popf`. An 8088 of the first steppings does not hold off an interrupt after
+`mov ss`.
+
+**A handler that must wait** (`MessageBox` until its alert is answered,
+`GetMessage` with nothing queued) does not wait. It marks the import
+*pending* and returns. The gate then leaves the program's frame standing on
+the program's stack and returns from `w16_resume` to the callback that
+resumed it. The program's whole context is that frame. A later callback
+calls `w16_resume` with the answer in AX:DX, and the frame completes.
+
+**The program's first run is a resume.** The loader builds the frame a
+completed call would leave: CS:IP = the entry point, DS = DGROUP, and the
+start registers of §124.3 in the bank the epilogue loads. So one epilogue
+starts the program and finishes every call.
+
+**`InitTask` returns with a zero pushed** (Wine's `InitTask16`: "0 (=%bp)
+is pushed on the stack"), so its epilogue moves the frame DOWN two bytes
+instead of up.
+
+**`int 21h` is WIN16's only while the program's code runs.** `w16_resume`
+installs it and the gate's return to `LOW_SEG` restores it, both inside
+`cli`, so nothing else on the machine ever meets it.
 
 ### 124.3 The NE image as the loader reads it *(pinned)*
 
@@ -224704,6 +224749,50 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
   40h and 44h (handles), and 4Ch (exit), which ends the program as the close
   box does (§124.4.1).
 
+**How a program reaches WIN16** *(pinned for S2)*:
+
+- **The handover:** `.EXE` stays DOS.O88's built-in association (§96.1).
+  Before it claims or takes out anything (and before §96.42's arm 3
+  question), DOS.O88's wake reads the file's first cluster with
+  `OSAPI_FILE_READ_AT`, and the cluster holding `e_lfanew` if that is a
+  later one. An `MZ` whose relocation-table offset is at least 40h and whose
+  `e_lfanew` names `NE` is handed to `WIN16.O88` through `OSAPI_PKG_START`'s
+  document arm (§21.5.3), with the program as WIN16's document
+  (`apps/dos/dosw16.inc`). A launch from the desktop closes DOS's window; one
+  typed at the prompt keeps the console and gets its prompt back. A
+  compressed file's raw bytes are its wrapper, so it stays DOS's.
+- **Only in WIN16's test build, until S12:** the forward is assembled under
+  `-DDOS_WIN16`, which only `make win16test`'s DOS.O88 carries. On a machine
+  without WIN16.O88 a forward ends in the association search's full rebuild
+  and a `Needs WIN16.O88` toast with DOS's window already gone, where the
+  stub's own sentence is the truer answer. So the shipped DOS.O88 is
+  byte-identical to the one before (verified: `dosp.bin` against HEAD's
+  source). The test disk puts its DOS.O88 in the ROOT beside the programs,
+  where the association's rung 2 (the document's own folder, §54.4.2) finds
+  it first. S12 decides where WIN16 ships, and the define goes with that.
+- **Finding the package:** `WIN16` is a BUILT-IN app stem in
+  `kernel/assoc.inc`, beside `DOS` and for DOS's reason: its documents sit on
+  somebody else's disk, so a declaration harvested at a full mount could not
+  find it. It claims no extension. The row was `times` padding, so it costs
+  no kernel bytes.
+- **Reading the file:** WIN16 reads the whole file into a temporary claim
+  with `OSAPI_FILE_READ`, so a program larger than 64KB is refused in S2.
+- **The claim:** the segments are laid out in ONE claim, each at a paragraph
+  boundary, at its `minalloc`. DGROUP is `minalloc + ne_stack + ne_heap`,
+  the stack directly after the static data and the local heap after the
+  stack (Wine's `NE_InitProcess`, `LocalInit16(…, 0, heap)`). A 256-byte
+  PSP-shaped block follows: `int 20h` at 0, the top of memory at 2, an empty
+  command tail at 80h. The temporary claim is freed before the program
+  runs.
+- **The CPU test:** the loader asks the CPU itself before trusting the
+  census. `OSAPI_CPU_INFO` answering CPU_286 or CPU_386 runs everything.
+  Otherwise one probe decides: `6Ah` is `push imm8` on a 186 or a V20, and
+  an alias of `jp` on an 8088. With PF clear, the probe moves SP on the first
+  and not on the second. A 186-capable CPU skips the census.
+- **The census runs AFTER relocation** on an 8088 only, so a far call's
+  target is a real segment: one of the program's (followed) or WIN16's own
+  (an import, not followed). Reaching a 186 instruction refuses the program.
+
 **Refusals, each worded on the glass:**
 
 - a SELFLOAD or library module;
@@ -224712,10 +224801,11 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
 - a CPU the census rules out (§124.4);
 - a program larger than the heap can hold.
 
-### 124.4 The CPU census *(the census shipped, host side; the loader's match pinned)*
+### 124.4 The CPU census *(shipped: host side, and on the machine for S2)*
 
-Before relocation, each code segment is swept from its entry points for
-80186/80286 and x87 opcodes. An 8088 does not fault on them. It executes
+On a CPU that cannot run 186 code, each code segment is swept from its entry
+points for 80186/80286 opcodes after relocation and before the program runs
+(§124.4.1). An 8088 does not fault on them. It executes
 something else (`0x60`–`0x6F` alias the conditional jumps, `0x0F` is
 `pop cs`), so running such a program unchecked is a silent wrong answer, not
 a crash.
@@ -224727,7 +224817,13 @@ test shared as source from `apps/redline/detect.inc`:
 - **186 opcodes:** a V20/V30/186 or better;
 - **286 opcodes** (protected-mode system instructions, which applications do
   not issue): a 286 or better;
-- **no match:** a refusal that names the CPU required.
+- **no match:** a refusal that names the CPU required: *Needs a V20, 80186
+  or better.*, *Needs an 80286 or better.* or *Needs an 80386 or better.*,
+  with the program's name under it.
+
+A CPU that runs 186 code skips the census (§124.3's probe), so a program
+with unguarded 286 instructions is not caught on a V20. Applications do not
+issue them: no sample in the census table above does.
 
 No translation of 186 opcodes for the 8088 is planned: the floor is a V20.
 
@@ -224735,7 +224831,7 @@ No translation of 186 opcodes for the 8088 is planned: the floor is a V20.
 `WF_PMODE`, plus `WF_80x87` when a coprocessor is present. `__AHINCR` is
 0x1000 and `__AHSHIFT` is 12, the real-mode values.
 
-#### 124.4.1 The census is recursive descent *(shipped: `tools/os88ne.py`)*
+#### 124.4.1 The census is recursive descent *(shipped: `tools/os88ne.py`, and `apps/win16/w16cens.inc` on the machine)*
 
 `tools/os88ne.py` is the reference implementation, and the loader's census
 must agree with it on every fixture. A linear sweep is wrong: a code segment
@@ -224770,6 +224866,46 @@ REPORTED.
 
 **What it reports:** the per-segment coverage, and the 186-looking bytes left
 in the dark, so a verdict is never quieter than its evidence.
+
+**On the machine** (`apps/win16/w16cens.inc`, S2) the same walk runs after
+relocation, so a far call's target is a real segment. One of the program's
+is followed; WIN16's own is an import stub, which is not followed, and whose
+row says whether it is FatalExit or FatalAppExit. The decisions are the
+host's, in the host's order:
+
+- the three seeds (CS:IP, the entry table, and the internal `RA_FARPTR` /
+  `RA_OFFSET` relocations as a third pass of the relocator);
+- the switch tables, after the walk;
+- the prologue sweep. A table found during the sweep is not read, as the
+  host's pending list is never revisited.
+
+**The verdict is post hoc:** every tiered instruction and every guarded
+range is recorded, and only an instruction outside every range counts.
+
+- **The decoder** is one byte an opcode, `class << 4 | modrm << 3 |
+  immediate`, in `apps/win16/w16optab.inc`. `os88ne.py --optab` WRITES that
+  file, and `tests/unit/t_win16ne.py` fails when the committed one differs.
+- **Its memory** is one claim for the walk, freed before the program runs:
+  a bit a byte of code, then a 2,048-entry work stack, 32 pending tables, 16
+  guarded ranges and 64 tiered instructions (≤ 17KB for 64KB of code).
+- **When a list fills:** a stack or table list that overflows refuses with
+  *Too large to check on an 8088.*, because a walk that did not see
+  everything cannot vouch for it. A full guard list guards nothing more,
+  which over-refuses. Tiered instructions past the list count as unguarded.
+
+VERIFIED on QEMU with a test build that runs the census on any CPU
+(`-DW16_CENSUS_ALWAYS`):
+
+- TINY16 runs: its trap bytes stay dark, and its switch table and lonely
+  prologue are 8086.
+- TINY186 refuses with *Needs a V20, 80186 or better.*
+- MSGBOX, whose Open Watcom start-up carries the guarded `smsw`, runs.
+- **Negative control:** with `w16c_guard` taken out, MSGBOX refuses *Needs
+  an 80286 or better.* So the walk reaches the `smsw`, and the guard is what
+  admits it.
+
+NOT YET MEASURED: the census on a real 8088 or MartyPC (its time, and the
+`6Ah` probe answering *no*), which is S13's.
 
 MEASURED, 2026-10-28:
 
