@@ -78,6 +78,8 @@ def main():
     with os88ui.boot(SYS, apps=APPS, quick=True) as ui:
         m = ui.m
         kseg, low = V("KERNEL_SEG"), V("LOW_SEG")
+        # a claim's linear base: an LDT selector under kern_mega
+        lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)
 
         def rows():
             return m.read((kseg << 4) + V("ico_n"), 1)[0]
@@ -102,7 +104,7 @@ def main():
                 vseg = int.from_bytes(
                     m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
             if vseg:
-                return list(m.read((vseg << 4) + n * V("DSK_DE_STRIDE"), n))
+                return list(m.read(lin(vseg, n * V("DSK_DE_STRIDE")), n))
 
             # **AND THERE IS NO FLOOR TO FALL BACK TO** (SPEC.md 22.6.3).
             # This arm read `LOW_SEG:dsk_icoix`, and that symbol no longer
@@ -124,7 +126,7 @@ def main():
             vp = int.from_bytes(m.read((kseg << 4) + V("fm_vp"), 2), "little")
             vseg = int.from_bytes(m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
             st = V("DSK_DE_STRIDE")
-            raw = m.read(vseg << 4, n * st)
+            raw = m.read(lin(vseg), n * st)
             return [(raw[i * st:i * st + 16].split(b"\0")[0],
                      int.from_bytes(raw[i * st + V("LD_DE_SIZE"):i * st + V("LD_DE_SIZE") + 2], "little"))
                     for i in range(n)]

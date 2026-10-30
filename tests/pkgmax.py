@@ -63,6 +63,17 @@ def claims(m, S):
             for i in range(MEM_MAX) if u16(raw, i * MC_SIZE)]
 
 
+MEGA = bool(os.environ.get("OS88_MEGA"))     # kern_mega under Bochs
+
+
+def pool(m, S):
+    """kern_mega's pool blocks as (KB offset, KB, owner) - mx_tab in
+    kernel/mega.inc: MX_OFF, MX_KB, MX_OWN, 96 records of 10 bytes."""
+    mx = m.read(S("mx_tab"), 96 * 10)
+    return [(u16(mx, k), u16(mx, k + 2), mx[k + 4])
+            for k in range(0, len(mx), 10) if u16(mx, k + 2)]
+
+
 def main():
     if not os.path.exists(APPS_IMG):
         sys.exit("pkgmax: %s is missing - run `make pkgbig`" % APPS_IMG)
@@ -91,13 +102,29 @@ def main():
                          "(SPEC.md 20.1.1)" % size)
 
         mine = [c for c in claims(m, S) if c[0] == seg]
+        if MEGA:
+            # kern_mega names the region by an LDT SELECTOR: a conventional
+            # claim's mem_tab record keeps its real PARAGRAPH (the selector
+            # in mem_sel beside it), and a claim above 1MB is a POOL block
+            # owned 80h|slot with no record at all (KERN-MEGA-MEMORY-PLAN 1.2,
+            # MC7.4) - the same question either way, in the same units
+            d = m.selector(seg)
+            para = d[0] >> 4 if d else -1
+            mine = [c for c in claims(m, S) if c[0] == para] + \
+                [(seg, kb * 64, own & 0x7F) for _, kb, own in pool(m, S)
+                 if own == 0x80 | slot]
+            print("  region selector %04x: %r" % (seg, d))
+            if not d or d[1] != 0xFFFF:
+                fails.append("the region's selector is %r, want a 64KB limit "
+                             "(0xFFFF)" % (d,))
         print("  claims on %04x: %r" % (seg, mine))
         if len(mine) != 1 or mine[0][1] != 0x1000 or mine[0][2] != slot:
             fails.append("the region's claim is %r, want one record of "
                          "4,096 paragraphs (64KB) owned by instance %d"
                          % (mine, slot))
 
-        mark = m.read(seg * 16 + APP_MAX_SIZE - 1, 1)[0]
+        lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+        mark = m.read(lin(seg, APP_MAX_SIZE - 1), 1)[0]
         print("  last bss byte (%04x:%04x) = %#04x"
               % (seg, APP_MAX_SIZE - 1, mark))
         if mark != PM_MARK:
@@ -117,6 +144,9 @@ def main():
             pass                        # the assertion below names it
         rec = m.read(S("inst_tab") + slot * I_RECSZ, I_RECSZ)
         left = [c for c in claims(m, S) if c[0] == seg]
+        if MEGA:
+            left += [c for c in claims(m, S) if c[0] == para]
+            left += [b for b in pool(m, S) if b[2] == 0x80 | slot]
         print("  after close: instance state %d, claims on %04x %r"
               % (rec[0], seg, left))
         if rec[0] != 0 or left:

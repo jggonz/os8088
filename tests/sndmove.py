@@ -97,10 +97,24 @@ def main():
         M.kernel_up(m)                  # SOAK-SPEED technique 12
         M.no_saver(m)
         mo = Mouse(marty=m)
+        mega = getattr(m, "bochs", False)
+
+        def key(v):
+            """A segment WORD as the claim map keys its block. On kern_mega
+            (KERN-MEGA-MEMORY-PLAN MC7.4) drv_tab, the owner words and an
+            IVT cell the driver stamped with its CS hold an LDT SELECTOR -
+            the data half, or the code half 8 below it - that a move
+            REBASES and never changes, so "it moved" and "names the old
+            image" are asked of the PARAGRAPH under it. Anything else (a
+            real segment, a slot, a tag, 0) is itself"""
+            if mega and v and v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
 
         def seg(r):
-            return u16(m.read(S("drv_tab") + r * heaphi.DRVR_SZ
-                              + heaphi.DRVR_SEG, 2))
+            return key(u16(m.read(S("drv_tab") + r * heaphi.DRVR_SZ
+                                  + heaphi.DRVR_SEG, 2)))
 
         # THE HARDWARE IRQ SLOTS AND NOT ALL 256, because that is exactly what
         # the kernel promises to patch (SPEC.md 66.6.3.1) and the difference
@@ -110,10 +124,14 @@ def main():
         # left the machine with no hard disk. A test that scanned all 256 here
         # would be asserting a promise the kernel must not make.
         IRQVEC = list(range(0x08, 0x10)) + list(range(0x70, 0x78))
+        if mega:                # ...and on kern_mega IVT 20h-27h, where an
+            IRQVEC += list(range(0x20, 0x28))   # IRQ lands in REAL mode -
+            # the PIC stays at 20h across a reflected BIOS call, and
+            # mega_ivt_sync keeps these a copy of 08h-0Fh for it
 
         def ivt_names(want):
             t = m.read(0, 1024)
-            return [v for v in IRQVEC if u16(t, v * 4 + 2) == want]
+            return [v for v in IRQVEC if key(u16(t, v * 4 + 2)) == want]
 
         # The sound driver is ALREADY UP on a machine with a card - measured:
         # drv_tab[0] reads 0x9E80 at the first desktop frame - so the first
@@ -239,7 +257,7 @@ def main():
             raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
             return [i for i in range(MEM_MAX)
                     if u16(raw, i * MC_SIZE) and
-                    u16(raw, i * MC_SIZE + 4) == seg(SND_ROW)]
+                    key(u16(raw, i * MC_SIZE + 4)) == seg(SND_ROW)]
 
         mo.click(sbw.x + sbw.w // 2, sbw.y + sbw.h - 20)     # open the stream
         try:        # the open hooks the card's vector (sbl_f_irqdisc)...
@@ -282,6 +300,18 @@ def main():
         print("a stream has been opened and closed: %d vector(s) into %04x"
               % (len(vec0), sndseg))
 
+        def gates():
+            """kern_mega: where each hooked IRQ's IDT GATE lands, as a linear
+            address. In protected mode the CPU takes an IRQ through the IDT
+            (IRQ0-7 at 20h-27h, IRQ8-15 at 70h-77h) and not the IVT, and the
+            gate names the image's CODE selector, which a move rebases"""
+            return {v: m._vector(v - 8 + 0x20 if v < 0x10 else v)
+                    for v in vec0 if not 0x20 <= v < 0x28}
+        if mega:
+            g0 = gates()
+            print("  IDT gates: %s" % ", ".join("%02x -> %06x" % kv
+                                               for kv in sorted(g0.items())))
+
         bad = 0
         # --- 1: AN IDLE CARD HOLDS NOTHING BUT ITS IMAGE (SPEC.md 34.5.2) ----
         # This assertion used to be "the ring is there": an 8KB MC_DMA claim
@@ -295,7 +325,7 @@ def main():
         held = []
         for i in range(MEM_MAX):
             r = raw[i * MC_SIZE:(i + 1) * MC_SIZE]
-            base, para, own = u16(r, 0), u16(r, 2), u16(r, 4)
+            base, para, own = u16(r, 0), u16(r, 2), key(u16(r, 4))
             if base and own == sndseg:
                 held.append((base, para))
         print("  1 idle, nothing held       %s"
@@ -402,6 +432,24 @@ def main():
                  + ("  <-- nothing pointed into the image, so this proves "
                     "nothing" if not vec0 else "")))
         bad += not ok5b
+
+        if mega and imoved:
+            # --- 5c: ...AND THE IDT, which is what a protected-mode IRQ takes.
+            # Its gate names the image's CODE selector, which mega_mpmovef
+            # rebased: the handler is where it was, moved by the image's own
+            # distance. (5b is the REAL-mode half - the IVT a reflected BIOS
+            # call and a DOS trip read, which only the rows patch: KERN-MEGA-
+            # PLAN 14.90.)
+            g1 = gates()
+            d = (img - sndseg) * 16
+            ok5c = bool(g0) and all(g1[v] == g0[v] + d for v in g0)
+            print("  5c the IDT gates followed  %s"
+                  % ("OK (%s)" % ", ".join("%02x -> %06x" % kv
+                                          for kv in sorted(g1.items()))
+                     if ok5c else
+                     "NO: before %s, after %s, the image moved %+d bytes"
+                     % (g0, g1, d)))
+            bad += not ok5c
 
         alive = True
         try:

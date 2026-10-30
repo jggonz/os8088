@@ -135,8 +135,26 @@ def main():
         # window, and the Memory page cannot be re-armed underneath one. Open
         # DOS.O88 itself, pick the arm, then name the program - which is also
         # the sequence a user takes to reach arm 3 at all.
-        if not ui.path("A:/APPS/DOS.O88"):
+        if getattr(m, "bochs", False) and not NOMOUSE:
+            # **kern_mega HAS NO MEMORY RADIO** (KERN-MEGA-PLAN 12.1 item 1):
+            # EVERY program runs on a kern_dos trip, so the arm this row
+            # picks is the only route there is and a plain launch is it. The
+            # machine needs a SERIAL mouse (tests/megaport.txt sets
+            # OS88_BOCHS_MOUSE=serial): kdmouse.inc serves nothing else.
+            if not ui.path("B:/DOSMOUSE.COM"):
+                fail("double-clicking DOSMOUSE.COM opened no window")
+        elif not ui.path("A:/APPS/DOS.O88"):
             fail("could not open DOS.O88 off the system disk")
+        else:
+            whole(ui, m)
+
+        # --- 2. the driver is THERE ------------------------------------------
+        rc = mouse_legs(m)
+        if rc is not None:
+            return rc
+
+
+def whole(ui, m):
         os88marty.ui_done(m)
         # **CHANGE DRIVE FIRST, then name the program without one**, which is
         # tests/kdmix.py's sequence and is what a user does. This row used to
@@ -148,29 +166,18 @@ def main():
         os88marty.text_taken(m, "B:\n")
         dm = dosmap.package()
         pseg = dosmap.instance(m)
-        base = pseg << 4
+        base = dosmap.lin(m, pseg)
         mo = os88mouse.Mouse(marty=m)
 
         mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"), settle=0)
         os88marty.ui_done(m)
-        dis = kdhand.rec(m, pseg, dm, kdhand.RD_DIS)
-        if dis & (1 << kdhand.WHOLE):
-            fail("the Shut down the OS arm is GREYED - this build does not carry "
-                 "kern_dos as a part (SPEC.md 96.36.1)")
-        x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
-        pitch = kdhand.rec(m, pseg, dm, kdhand.RD_PITCH)
-        mo.click((x1 + x2) // 2, y1 + kdhand.WHOLE * pitch + pitch // 2)
-        os88marty.ui_done(m)
-        if kdhand.rec(m, pseg, dm, kdhand.RD_SEL) != kdhand.WHOLE:
-            fail("clicking the Shut down the OS arm did not pick it")
-        if NOMOUSE:
-            # --- ...and Disable the mouse, which is live now the arm is the
-            # pick (SPEC.md 96.36.9): one press ticks it.
-            bx1, by1, _, _ = dosmap.rect(m, pseg, dm, "dos_mmou")
-            mo.click(bx1 + 4, by1 + 5)
-            os88marty.ui_done(m)
-            if m.read(base + dm["dos_mmou"] + CK_ON, 1)[0] != 1:
-                fail("pressing Disable the mouse did not tick it")
+        if getattr(m, "bochs", False):
+            # kern_mega's Memory page has NO RADIO (KERN-MEGA-PLAN 12.1 item
+            # 1): every launch is the trip, so the box is live as it stands
+            # (dos_mck_di's DOS_MEGA arm) and the tick is the whole of it
+            tick_nomouse(m, mo, pseg, dm, base)
+        else:
+            pick_whole(m, mo, pseg, dm, base)
         # --- ...back to the main page, and the program's name ---------------
         # The path box has to be CLICKED first and the extension is part of
         # the name - tests/kdmix.py carries both reasons, and both fail as a
@@ -181,11 +188,40 @@ def main():
         os88marty.ui_done(m)
         os88marty.text_taken(m, "DOSMOUSE.COM")
         mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"), settle=0)
+        if getattr(m, "bochs", False):
+            return              # no confirmation on kern_mega: Run IS the
+                                # trip, and the kernel it would ask is parked
         os88marty.ui_done(m)
         if kdhand.alert_up(m, base, dm):
             mo.click(*kdhand.alert_button(m, base, dm, 1))      # Proceed
 
-        # --- 2. the driver is THERE ------------------------------------------
+
+def tick_nomouse(m, mo, pseg, dm, base):
+    if NOMOUSE:
+        # --- ...and Disable the mouse, which is live now the arm is the
+        # pick (SPEC.md 96.36.9): one press ticks it.
+        bx1, by1, _, _ = dosmap.rect(m, pseg, dm, "dos_mmou")
+        mo.click(bx1 + 4, by1 + 5)
+        os88marty.ui_done(m)
+        if m.read(base + dm["dos_mmou"] + CK_ON, 1)[0] != 1:
+            fail("pressing Disable the mouse did not tick it")
+
+
+def pick_whole(m, mo, pseg, dm, base):
+        dis = kdhand.rec(m, pseg, dm, kdhand.RD_DIS)
+        if dis & (1 << kdhand.WHOLE):
+            fail("the Shut down the OS arm is GREYED - this build does not carry "
+                 "kern_dos as a part (SPEC.md 96.36.1)")
+        x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
+        pitch = kdhand.rec(m, pseg, dm, kdhand.RD_PITCH)
+        mo.click((x1 + x2) // 2, y1 + kdhand.WHOLE * pitch + pitch // 2)
+        os88marty.ui_done(m)
+        if kdhand.rec(m, pseg, dm, kdhand.RD_SEL) != kdhand.WHOLE:
+            fail("clicking the Shut down the OS arm did not pick it")
+        tick_nomouse(m, mo, pseg, dm, base)
+
+
+def mouse_legs(m):
         line = wait_line(m, "RESET")
         f = fields(line)
         if NOMOUSE:
@@ -253,9 +289,9 @@ def main():
             fail("INT 33h AX=6 answered n=%s after one click"
                  % fields(line).get("n"))
         print("kdmouse: ...and the release -> %s" % line)
-
-    print("kdmouse: ok - INT 33h tracks the hand with no kernel on the machine")
-    return 0
+        print("kdmouse: ok - INT 33h tracks the hand with no kernel on the "
+              "machine")
+        return 0
 
 
 if __name__ == "__main__":

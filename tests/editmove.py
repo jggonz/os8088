@@ -203,6 +203,37 @@ def disk_quiet(m, what):
     os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0, what=what)
 
 
+def _lin(m, seg, off=0):
+    """SEG:OFF linear: an LDT selector's base on kern_mega (docs/BOCHS.md)"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else seg * 16 + off
+
+
+def _key(m, v):
+    """A claim word as mem_tab keys its block: on kern_mega (KERN-MEGA-
+    MEMORY-PLAN MC7.4) a selector a move rebases and never changes, so "it
+    moved" is asked of the paragraph under it. Anything else is itself"""
+    if getattr(m, "bochs", False) and v and 0x100 <= v < 0xA000 and v & 4:
+        b = m.selector(v)
+        return b[0] >> 4 if b else v
+    return v
+
+
+def heapmap(m, S):
+    """The whole claim map, holes and all - so a claim that did not move can
+    be told apart from a compaction that never ran."""
+    base_p = u16(m.read(S("mem_base"), 2))
+    top_p = u16(m.read(S("mem_top"), 2))
+    fill = base_p
+    for bs, pa, ow, rl in sorted(claims(m, S)):
+        if bs > fill:
+            print("        %5d KB HOLE" % ((bs - fill) // 64))
+        print("   %04x %5d KB owner %04x%s"
+              % (bs, pa // 64, ow, "  MOVABLE" if rl else ""))
+        fill = max(fill, bs + pa)
+    if top_p > fill:
+        print("        %5d KB HOLE (to the top)" % ((top_p - fill) // 64))
+
+
 def heapfrag_ran(m, S):
     """heapfrag's suite has recorded every check: [hf_n] (bss +0) reaches
     HF_ROWS. It publishes no other "done", and the suite IS the claim that
@@ -212,8 +243,8 @@ def heapfrag_ran(m, S):
             sg, _ = pkg_seg(m, S, "Heap")
             if not sg:
                 return False
-            img = u16(m.read(sg * 16 + 8, 2))
-            return u16(m.read(sg * 16 + img, 2)) >= HF_ROWS
+            img = u16(m.read(_lin(m, sg, 8), 2))
+            return u16(m.read(_lin(m, sg, img), 2)) >= HF_ROWS
         except Exception:
             return False
     until_ok(m, done, "heapfrag's suite to finish")
@@ -320,8 +351,13 @@ def main():
         P = pkg_syms(cfg["src"], cfg["incs"],
                      cfg["words"] + cfg.get("extra", []))
 
+        mega = getattr(m, "bochs", False)
+
         def pword(name):
-            return u16(m.read(seg * 16 + P[name], 2))
+            return u16(m.read(_lin(m, seg, P[name]), 2))
+
+        def key(v):
+            return _key(m, v)
 
         # --- give it something to hold --------------------------------------
         cx0, cy0, cx1, cy1 = win.content
@@ -334,7 +370,7 @@ def main():
             # ...and the typing run CLOSED: half a second with no edit ends
             # an undo group (SPEC.md 27.9), and only then is a Backspace a
             # deletion with a blob to store rather than a shorter insert
-            ubyte = lambda: m.read(seg * 16 + P["np_uopen"], 1)[0]
+            ubyte = lambda: m.read(_lin(m, seg, P["np_uopen"]), 1)[0]
             until_ok(m, lambda: pword("np_len") == n0 + len(text)
                      and ubyte() == 0 and ui_idle(m, S),
                      "Note Pad to take the typing")
@@ -420,6 +456,7 @@ def main():
               % (cfg["title"], seg,
                  ["%04x/%dKB%s" % (b, p // 64, "*" if r else "")
                   for b, p, _, r in before]))
+        heapmap(m, S)
         if not any(r for _, _, _, r in before):
             print("FAIL: %s declared no claim movable" % cfg["title"])
             return 1
@@ -428,7 +465,7 @@ def main():
         sizes = {c[0]: c[1] for c in before}
         bank = {}
         for w in cfg["words"]:
-            base = pword(w)
+            base = key(pword(w))
             if base == 0:
                 print("  (%s is 0 - not claimed in this run)" % w)
                 continue
@@ -455,45 +492,51 @@ def main():
         # 30), so two clicks hide it and bring it back FRONTMOST - the one way
         # to raise a wholly-covered window that needs no geometry at all, and
         # the dock is the one strip nothing can cover.
-        tile = os88geom.tile_xy(m, hf_win, S)
+        def close_hf(hwin, hseg):
+            """Close a heapfrag window and prove its claims went with it."""
+            tile = os88geom.tile_xy(m, hwin, S)
 
-        def hf_state():
-            for w in os88geom.windows(m, S):
-                if w.i == hf_win.i:
-                    zn = m.read(S("wm_zn"), 1)[0]
-                    z = list(m.read(S("wm_zord"), zn))
-                    return w.visible, (z and z[-1] == w.i)
-            return False, False
+            def hf_state():
+                for w in os88geom.windows(m, S):
+                    if w.i == hwin.i:
+                        zn = m.read(S("wm_zn"), 1)[0]
+                        z = list(m.read(S("wm_zord"), zn))
+                        return w.visible, (z and z[-1] == w.i)
+                return False, False
 
-        # DRIVE THE TILE TO A STATE, do not count clicks. A tile click on a
-        # window that is not frontmost FRONTS it; on one that is, it
-        # minimizes - so "two clicks" lands somewhere different depending on
-        # what the app opened last, and the first version of this closed
-        # nothing while reporting success.
-        for _ in range(5):
+            # DRIVE THE TILE TO A STATE, do not count clicks. A tile click on
+            # a window that is not frontmost FRONTS it; on one that is, it
+            # minimizes - so "two clicks" lands somewhere different depending
+            # on what the app opened last, and the first version of this
+            # closed nothing while reporting success.
+            for _ in range(5):
+                vis, top = hf_state()
+                if vis and top:
+                    break
+                mo.click(*tile)
+                os88marty.settle(m)
             vis, top = hf_state()
-            if vis and top:
-                break
-            mo.click(*tile)
+            if not (vis and top):
+                print("FAIL: could not bring heapfrag to the front")
+                return False
+            mo.click(hwin.x + 8, hwin.y + 9)          # now its close box
             os88marty.settle(m)
-        vis, top = hf_state()
-        if not (vis and top):
-            print("FAIL: could not bring heapfrag to the front")
-            return 1
-        mo.click(hf_win.x + 8, hf_win.y + 9)          # now its close box
-        os88marty.settle(m)
+            # THE CLAIM MAP IS THE PROOF, not the window. A window that closed
+            # having freed nothing leaves the arena exactly as packed as it
+            # was, and then every later check passes vacuously - which is what
+            # the first version of this script did, reporting "still, no hole
+            # beneath it" about a heap that had never opened one.
+            if any(c[2] == hseg for c in claims(m, S)):
+                print("FAIL: heapfrag closed but still holds claims - no hole")
+                return False
+            return True
 
-        # THE CLAIM MAP IS THE PROOF, not the window. A window that closed
-        # having freed nothing leaves the arena exactly as packed as it was,
-        # and then every later check passes vacuously - which is what the
-        # first version of this script did, reporting "still, no hole beneath
-        # it" about a heap that had never opened one.
-        if any(c[2] == hf_seg for c in claims(m, S)):
-            print("FAIL: heapfrag closed but still holds claims - no hole")
+        if not close_hf(hf_win, hf_seg):
             return 1
         under = [c for c in claims(m, S)
                  if c[0] < min(b for b, _, _ in bank.values())]
         print("heapfrag freed; %d claims left below the app" % len(under))
+        heapmap(m, S)
 
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
@@ -504,26 +547,16 @@ def main():
 
         # heapfrag's OWN verdict plus the whole map, so a claim that did not
         # move can be told apart from a compaction that never ran
-        hf2_seg, _ = pkg_seg(m, S, "Heap")
+        hf2_seg, hf2_win = pkg_seg(m, S, "Heap")
         if hf2_seg:
-            img = u16(m.read(hf2_seg * 16 + 8, 2))
-            hb = m.read(hf2_seg * 16 + img, 128)
+            img = u16(m.read(_lin(m, hf2_seg, 8), 2))
+            hb = m.read(_lin(m, hf2_seg, img), 128)
             print("heapfrag#2: %d checks, %s  L1=%dK want=%dK moved=%d"
                   % (u16(hb, 0),
                      "".join("." if b == 0 else "X"
                              for b in hb[40:40 + u16(hb, 0)]),
                      u16(hb, 8), u16(hb, 10), u16(hb, 20)))
-        base_p = u16(m.read(S("mem_base"), 2))
-        top_p = u16(m.read(S("mem_top"), 2))
-        fill = base_p
-        for bs, pa, ow, rl in sorted(claims(m, S)):
-            if bs > fill:
-                print("        %5d KB HOLE" % ((bs - fill) // 64))
-            print("   %04x %5d KB owner %04x%s"
-                  % (bs, pa // 64, ow, "  MOVABLE" if rl else ""))
-            fill = max(fill, bs + pa)
-        if top_p > fill:
-            print("        %5d KB HOLE (to the top)" % ((top_p - fill) // 64))
+        heapmap(m, S)
 
         # **RE-RESOLVE THE APP'S OWN SEGMENT FIRST.** A package REGION is a
         # movable claim now, so the compaction this row provokes can move the
@@ -545,6 +578,53 @@ def main():
                   "too), so the words and the owner match below are read "
                   "against the new base" % (cfg["title"], seg, seg2))
             seg = seg2
+        # A WALL IS A LAYOUT, NOT A VERDICT - and the heap table says which.
+        # Nothing moved, and the claim directly beneath the app's lowest is
+        # one of heapfrag's own PINNED blocks, ending on the very paragraph
+        # the app's begins: no compactor may move a claim through a pin, so
+        # this run's compaction could not have moved them and saying "NO"
+        # about it would be a verdict on the setup. It is what kern_mega's
+        # 1MB arena lays out (tests/megaport.txt): a 32KB purgeable cache sat
+        # under Note Pad, the comb's LAST claim - which is check 4's pinned
+        # one, the highest even index - took its place once it was shed, and
+        # the comb's block size happened to fill the floor to the paragraph.
+        # kern_big's arena leaves 21KB between the same pin and Note Pad.
+        #
+        # So the wall is TAKEN AWAY and the compaction asked for again,
+        # through the kernel's own door - heapfrag closed (the pin goes with
+        # it, and the claim map proves it), then OSAPI_MEM_COMPACT's post
+        # (`[mem_cpq]`, serviced at ui_task step 0, "compact regardless",
+        # both passes - pkgmove.py's route) with the app still live. A wall
+        # of anybody else's, a hole left under the claims, or a movable
+        # neighbour is NOT excused: those are a compactor that should have
+        # moved them, and `claim moved` below says so.
+        def stuck():
+            return all(key(pword(w)) == base
+                       for w, (base, _, _) in bank.items())
+
+        low = min(key(pword(w)) for w in bank)
+        wall = [c for c in claims(m, S)
+                if c[0] + c[1] == low and not c[3] and c[2] == hf2_seg]
+        if stuck() and wall and hf2_seg:
+            print("  the claim under %s is heapfrag's PINNED block %04x/%dKB,"
+                  " flush against it: this layout cannot move them, so "
+                  "heapfrag goes and the compaction is POSTED"
+                  % (cfg["title"], wall[0][0], wall[0][1] // 64))
+            if not close_hf(hf2_win, hf2_seg):
+                return 1
+            wptr = os88geom.winptr(m, win, S)
+            m.write(S("mem_cpq_lvl"), bytes([0xFC]))   # pkgmove's rank
+            m.write(S("mem_cpq"), bytes([wptr & 0xFF, wptr >> 8]))
+            os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
+                            "the posted compaction", poll=0.2, limit=30)
+            os88marty.ui_done(m)
+            os88marty.settle(m)
+            heapmap(m, S)
+            seg2, _ = pkg_seg(m, S, cfg["title"])
+            if seg2 and seg2 != seg:
+                print("  %s ITSELF moved %04x -> %04x" % (cfg["title"], seg,
+                                                         seg2))
+                seg = seg2
         after = mine(claims(m, S), seg)
         held = [c[0] for c in after]
         print("%s now holds %s"
@@ -555,7 +635,7 @@ def main():
         anymoved = False
         for w, (base, para, h0) in bank.items():
             n += 1
-            new = pword(w)
+            new = key(pword(w))
             moved = new != base
             anymoved |= moved
             print("  %d [%s] %-9s %s"
@@ -581,10 +661,16 @@ def main():
         # to repair an ES pushed before the move.
         if a.app == "frotz" and "zf_sseg" in bank:
             oldb = bank["zf_sseg"][0]
-            newb = pword("zf_sseg")
+            newb = key(pword("zf_sseg"))
             d = (newb - oldb) & 0xFFFF
+            if mega:                    # KERN-MEGA-MEMORY-PLAN MC7.4: the
+                d = 0                   # proc that writes zf_sdelta is never
+                # called under protected mode - an ES pushed before the move
+                # names a SELECTOR the rebase has already re-aimed, so the
+                # delta zi_yield adds to one must be ZERO, or it re-aims it
+                # off the story
             n += 1
-            pc = pword("zf_pcseg")
+            pc = key(pword("zf_pcseg"))
             okpc = pc != 0 and newb <= pc < newb + (bank["zf_sseg"][1] >> 0)
             print("  %d [zf_pcseg] in story %s  (%04x, story %04x..%04x)"
                   % (n, "OK" if okpc else "OUTSIDE", pc,
@@ -636,9 +722,9 @@ def main():
             # is that it is still executing CORRECTLY through a base that
             # moved under it, which is what a stale PC would end.
             n += 1
-            err = m.read(seg * 16 + P["zf_err"], 1)[0]
-            dead = m.read(seg * 16 + P["zf_dead"], 1)[0]
-            op = m.read(seg * 16 + P["zx_badop"], 1)[0]
+            err = m.read(_lin(m, seg, P["zf_err"]), 1)[0]
+            dead = m.read(_lin(m, seg, P["zf_dead"]), 1)[0]
+            op = m.read(_lin(m, seg, P["zx_badop"]), 1)[0]
             okz = err == 0 and dead == 0 and op == 0
             print("  %d VM did not fault   %s  (err %02x dead %02x badop %02x)"
                   % (n, "OK" if okz else "HALTED", err, dead, op))

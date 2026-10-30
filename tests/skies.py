@@ -103,7 +103,9 @@ class Bss:
                               self.base + dispapps.bss_off("skies", name), 1)[0]
 
     def poke(self, name, data):
-        self.m.write((self.seg << 4) + self.base + dispapps.bss_off("skies", name),
+        # seg << 4, or the selector's base on kern_mega (megaport.txt)
+        lin = getattr(self.m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+        self.m.write(lin(self.seg, self.base + dispapps.bss_off("skies", name)),
                      data)
 
     def metres(self, name):

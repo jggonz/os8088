@@ -44,6 +44,9 @@ def main():
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
                      machine="os8088_5150_cga_gla", quick=True) as ui:
         m = ui.m
+        # a real segment, or kern_mega's selector (tools/os88megabochs.py)
+        lin = getattr(m, "lin",
+                      lambda seg, off=0: ((seg << 4) + off) & 0xFFFFF)
         w = ui.open_drive("B")
         rec = m.sym("wm_wins") + w.i * geom.WIN_SIZE
         m.pause()
@@ -56,7 +59,7 @@ def main():
         m.run()
         st = m.wait_stop(20)
         r = m.regs()
-        si_lin = ((r["ds"] << 4) + r["si"]) & 0xFFFFF
+        si_lin = lin(r["ds"], r["si"])
         print("   1. stopped at ui_timer_pass.locked: %s, SI the record's %s"
               % (st, si_lin == rec))
         if st is None or si_lin != rec:
@@ -70,7 +73,7 @@ def main():
             m.run()
             st = m.wait_stop(20)
             r = m.regs()
-            at = ((r["cs"] << 4) + r["ip"]) & 0xFFFFF
+            at = lin(r["cs"], r["ip"])
             where = "ui_bill" if at == m.sym("ui_bill") else \
                 "ui_timer_pass.gone" if at == m.sym("ui_timer_pass.gone") \
                 else "%05X" % at

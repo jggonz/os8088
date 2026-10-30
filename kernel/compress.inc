@@ -159,7 +159,16 @@ cmz_trk1:
     mov al, 1
 cmz_trkc:
     push ds
+%ifdef KERN_MEGA
+    pushf                       ; kern_mega: KERNEL_SEG is the kernel's CODE
+    push si                     ; in protected mode, and a write through it is
+    KDATAR_M si                 ; mega_gpw's to complete and log - so the DATA
+    mov ds, si                  ; selector, the flags kept across KDATAR_M's
+    pop si                      ; compare
+    popf
+%else
     mov ds, [cs:cmz_kseg]
+%endif
     mov [cur_inxfer], al
     pop ds
     pop ax
@@ -217,11 +226,19 @@ cmz_pack:
     push es
     push bp
 %ifdef CMZ_STREAM
-    CSDO mov [CSEG cmz_sp], sp   ; where a failed streamed read or write
+    CSDO_SP cmz_sp              ; where a failed streamed read or write
 %endif                          ; unwinds to, from however deep (cmz_ioerr)
     mov bp, ax                  ; the source segment, out of AX's way: the
     cld                         ; head clear below wants AX for the fill
     CSDO mov [CSEG cmz_mask], di
+%ifdef KERN_MEGA
+    push ax                     ; kern_mega: the tables through MEGA_SEL_K2,
+    mov ax, bx                  ; aimed ONCE - cmz_probe and cmz_fill load
+    mov di, MEGA_SEL_K2         ; [cmz_tseg] at every position, so it holds
+    call COLD_SEG:mega_kaimf    ; the selector (DI is reloaded below). The
+    mov bx, ax                  ; source is K0 and the output K1 (KSEG,
+    pop ax                      ; KERN-MEGA-MEMORY-PLAN MC7.6)
+%endif
     CSDO mov [CSEG cmz_tseg], bx
     CSDO mov [CSEG cmz_oseg], dx
     CSDO mov [CSEG cmz_sseg], ax
@@ -292,8 +309,8 @@ cmz_pack:
     mov ax, CMZ_NIL
     rep stosw
 
-    mov ds, bp                  ; the source...
-    mov es, dx                  ; ...and the output
+    KSEG ds, bp, MEGA_SEL_K0    ; the source...
+    KSEG es, dx, MEGA_SEL_K1    ; ...and the output
     CSDO mov byte [CSEG cmz_tbit], 0 ; no tag byte open yet
     CSDO mov word [CSEG cmz_nextp], CMZ_PSTEP
 %ifdef CMZ_STREAM
@@ -468,19 +485,19 @@ cmz_pack:
     cmp byte [cs:cmz_mode], 0
     jne .sfin
 %endif
-    mov es, [cs:cmz_oseg]
+    KSEG es, [cs:cmz_oseg], MEGA_SEL_K1
     mov [es:0], cx              ; the T word, at the stream's first byte
     mov ax, [cs:cmz_ksa]        ; ...and the tail, from the cut to the cut,
     mov dx, [cs:cmz_ksa+2]      ; as far pointers off the two FIRST segments
     mov bx, [cs:cmz_sseg]
     call cmz_far
-    mov ds, bx
+    KSEG ds, bx, MEGA_SEL_K0
     mov si, ax
     mov ax, [cs:cmz_koa]
     mov dx, [cs:cmz_koa+2]
     mov bx, [cs:cmz_oseg]
     call cmz_far
-    mov es, bx
+    KSEG es, bx, MEGA_SEL_K1
     mov di, ax
     call cmz_move               ; the tail, raw, however long
 .pop:
@@ -593,13 +610,18 @@ cmz_tio:
     push si
     push ds
     push es
-    mov si, es
 %ifdef KERN_MEGA
-    sub si, 8                   ; (ES-8):120, on the grid (cmz_oflush)
+    push ax                     ; (ES-8):120, on the grid (cmz_oflush) -
+    mov ax, es                  ; through MEGA_SEL_K3, the output's own K1
+    KPARA                       ; coming back off the stack unmoved
+    sub ax, 8
+    KSEG es, ax, MEGA_SEL_K3
+    pop ax
 %else
+    mov si, es
     dec si
-%endif
     mov es, si
+%endif
     KDATAR_M si
     mov ds, si
     mov si, fm_ebuf
@@ -666,7 +688,7 @@ cmz_move:
     jcxz .d
     mov ax, si
     call .norm
-    mov ds, ax
+    KSEG ds, ax, MEGA_SEL_K0
     mov si, dx
     mov ax, es
     push ds
@@ -674,7 +696,7 @@ cmz_move:
     mov ax, di
     call .norm
     pop ds
-    mov es, ax
+    KSEG es, ax, MEGA_SEL_K1
     mov di, dx
     mov ax, cx
     cmp ax, 0x8000
@@ -703,6 +725,11 @@ cmz_move:
     shr ax, cl
 %endif
     mov cx, ds
+%ifdef KERN_MEGA
+    xchg ax, cx                 ; kern_mega: DS's real paragraph, a K
+    KPARA                       ; scratch's base (KSEG)
+    xchg ax, cx
+%endif
     add ax, cx
     pop cx
     ret
@@ -792,7 +819,11 @@ cmz_sslide:
     mov cl, 4
     shr dx, cl
     mov ax, ds
+%ifdef KERN_MEGA
+    call KERNEL_SEG:mega_slidef ; kern_mega: K0 slides onto itself
+%else
     add ax, dx
+%endif
     mov ds, ax
     jmp cmz_sarm
 %ifdef CMZ_STREAM
@@ -841,11 +872,13 @@ cmz_oslide:
     sub cx, si                  ; what is still live, up to DI
     mov ax, es
 %ifdef KERN_MEGA
-    sub ax, 8                   ; kern_mega: ES:-8 as a granule back, 120 on
-    mov es, ax                  ; - one paragraph back is off the identity
-    mov di, 120                 ; grid
+    push ax                     ; kern_mega: ES:-8 as a granule back, 120 on,
+    KPARA                       ; through MEGA_SEL_K3 - and K1 itself back
+    sub ax, 8                   ; off the stack, never re-aimed
+    KSEG es, ax, MEGA_SEL_K3
+    mov di, 120
     rep movsb
-    add ax, 8
+    pop ax
 %else
     dec ax
     mov es, ax
@@ -862,7 +895,14 @@ cmz_oslide:
 .adj:
 %endif
     mov ax, es
+%ifdef KERN_MEGA
+    push dx                     ; kern_mega: K1 slides onto itself
+    mov dx, 0x0400
+    call KERNEL_SEG:mega_slidef
+    pop dx
+%else
     add ax, 0x0400
+%endif
     mov es, ax
 .base:
     mov ax, 0x4000
@@ -918,7 +958,7 @@ cmz_sfetch:
     push si
     push ds
     push es
-    mov es, [cs:cmz_sseg]
+    KSEG es, [cs:cmz_sseg], MEGA_SEL_K3
     KDATAR_M si
     mov ds, si
     mov si, fm_onam
@@ -968,8 +1008,9 @@ cmz_oflush:
     push es
     mov ax, es
 %ifdef KERN_MEGA
-    sub ax, 8                   ; (ES-8):120 - the same byte, on the grid
-    mov es, ax
+    KPARA                       ; (ES-8):120 - the same byte, on the grid,
+    sub ax, 8                   ; through MEGA_SEL_K3 (K1 comes back off the
+    KSEG es, ax, MEGA_SEL_K3    ; stack unmoved)
     mov bx, 120
 %else
     dec ax
@@ -1538,7 +1579,7 @@ cmz_compress:
     ; --- a PACKAGE keeps a clear prefix (SPEC.md 22.22.1) ------------------
     cmp word [fm_ftype], 1
     jne .notpkg
-    mov es, [cs:cmz_b]
+    KSEG es, [cs:cmz_b], MEGA_SEL_K4
     call cmz_pkg                ; CF=1 with AX = the string; else [cs:cmz_x]
     jc .rsay
 .notpkg:
@@ -1601,7 +1642,7 @@ cmz_compress:
 %ifndef KERN_MEGA
     add dx, 7                   ; the last paragraph before the stream, so the
 %endif                          ; eight bytes end exactly where it begins
-    mov es, dx                  ; (kern_mega: the granule before it, at 120)
+    KSEG es, dx, MEGA_SEL_K3    ; (kern_mega: the granule before it, at 120)
     call cmz_czhdr
     pop dx
     pop ax
@@ -1742,7 +1783,7 @@ cmz_stream:
     call cmz_rearm
     mov ax, [cs:cmz_b]          ; the 'CZ' header, in the paragraph in front
     add ax, CMZ_SBUF / 16       ; of the output window: the first 16KB out
-    mov es, ax                  ; carries it, and dskw_czstamp reads it there.
+    KSEG es, ax, MEGA_SEL_K3    ; carries it, and dskw_czstamp reads it there.
     call cmz_czhdr              ; T goes in at the end (cmz_pack's .sfin)
 
     CSDO mov byte [CSEG cmz_mode], 1 ; --- ONE pass, written as it goes --------
@@ -1909,7 +1950,7 @@ cmz_uncomp:
     CSDO mov [CSEG cmz_b], dx
     call cmz_uread              ; a package is not a container, so this is the
     jc .rferr                   ; same transparent read doing a plain one
-    mov es, [cs:cmz_b]
+    KSEG es, [cs:cmz_b], MEGA_SEL_K4
     mov al, [es:LD_H_FLAGS]
     test al, 8
     jz .rplain                  ; ...and this is where a plain package leaves
@@ -1933,7 +1974,7 @@ cmz_uncomp:
     CSDO mov [CSEG cmz_o], dx
     call cmz_upkg
     jc .rbad
-    mov es, [cs:cmz_o]
+    KSEG es, [cs:cmz_o], MEGA_SEL_K5
     and byte [es:LD_H_FLAGS], 0xE7  ; bits 3 and 4 off: what lands on the disk
     mov ax, [cs:cmz_u]              ; is a package ld_check_hdr reads with no
     xor dx, dx                      ; decoder at all
@@ -1981,6 +2022,11 @@ cmz_uclaim:
 cmz_mclaim:
     mov bx, MEM_K_CMPR
     call COLD_SEG:mmf_mem_claim
+%ifdef KERN_MEGA
+    jc .r                       ; kern_mega: the claim's REAL paragraph, which
+    call clo_kpara              ; this image's arithmetic and KSEG take
+.r:
+%endif
     ret
 
 ; cmz_kb - DX:AX bytes -> AX = KB, rounded UP (always one over at an exact
@@ -2012,7 +2058,7 @@ cmz_uread:
     mov ax, 1024                ; the claim as a 32-BIT byte count: 66 KB is
     mul word [cs:cmz_k]         ; over 64K and the capacity test is 32-bit
     xchg cx, ax
-    mov es, [cs:cmz_b]
+    KSEG es, [cs:cmz_b], MEGA_SEL_K4
     xor bx, bx                  ; a compressed file wants seg:0 and every
                                 ; caller in the tree hands over a claim's base
     mov si, fm_onam
@@ -2056,8 +2102,8 @@ cmz_upkg:
     mov di, [cs:cmz_b]
     push ds
     push ax
-    mov es, si
-    mov ds, di
+    KSEG es, si, MEGA_SEL_K5
+    KSEG ds, di, MEGA_SEL_K4
     xor si, si
     xor di, di
     cld
@@ -2107,7 +2153,11 @@ cmz_ufree:
     jz .none
     CSDO mov word [CSEG bx], 0
     mov bx, MEM_K_CMPR
+%ifdef KERN_MEGA
+    call clo_kfree
+%else
     call COLD_SEG:mmf_mem_free
+%endif
 .none:
     ret
 
@@ -2275,7 +2325,7 @@ cmz_jstart:
 %else
     CSDO mov [CSEG cmz_jto], al
 %endif
-    CSDO mov [CSEG cmz_jsp], sp
+    CSDO_SP cmz_jsp
     call cmz_jopen              ; a part, the claim, clusters a take reads whole
     jc cmz_jret                 ; nothing held: say why
     call cmz_jhdr               ; --- the SELECTION first: a plain file that
@@ -2427,8 +2477,8 @@ cmz_jloop:
     jne .dec
     push ds                     ; STORED: copied into the output block and
     push es                     ; written from there, NOT out of the window -
-    mov ds, ax                  ; a record starts anywhere in the window, and a
-    mov es, [cs:cmz_o]          ; write is DMA from a 512-aligned base or it
+    KSEG ds, ax, MEGA_SEL_K0    ; a record starts anywhere in the window, and a
+    KSEG es, [cs:cmz_o], MEGA_SEL_K1 ; write is DMA from a 512-aligned base or it
     xor di, di                  ; can straddle a 64KB page (CMZ_JHP's note).
     mov cx, [cs:cmz_jnn]        ; 32KB of rep movsb is ~0.1s against the
     cld                         ; floppy's seconds
@@ -2441,8 +2491,8 @@ cmz_jloop:
 .dec:
     CMZ_TRACK 1                 ; the decode draws nothing
     push ds
-    mov ds, ax
-    mov es, [cs:cmz_o]
+    KSEG ds, ax, MEGA_SEL_K0
+    KSEG es, [cs:cmz_o], MEGA_SEL_K1
     xor di, di                  ; lz_decomp_x's precondition
     xor bx, bx
     mov cx, [cs:cmz_js]
@@ -2455,7 +2505,7 @@ cmz_jloop:
     jc .bad
 .out:                           ; the N bytes are at [cmz_o]:0 either way
     push ds
-    mov ds, [cs:cmz_o]
+    KSEG ds, [cs:cmz_o], MEGA_SEL_K1
     xor si, si
     mov cx, [cs:cmz_jnn]
     call cmz_jsum               ; AX = A, DX = B
@@ -2466,7 +2516,7 @@ cmz_jloop:
     cmp dx, [es:di+8]
     jne .bad                    ; a damaged copy
     CMZ_GO dst                  ; --- out it goes ------------------------
-    mov es, [cs:cmz_o]
+    KSEG es, [cs:cmz_o], MEGA_SEL_K1
     xor bx, bx
     mov cx, [cs:cmz_jnn]
     mov si, fm_ebuf
@@ -2756,7 +2806,7 @@ cmz_jslice:
 ; cmz_jat - ES:DI = the input window at its read position ([cmz_jwin]:
 ;           [cmz_jpos]). clobbers: ES, DI
 cmz_jat:
-    mov es, [cs:cmz_jwin]
+    KSEG es, [cs:cmz_jwin], MEGA_SEL_K0
     mov di, [cs:cmz_jpos]
     ret
 
@@ -2781,7 +2831,7 @@ cmz_jneed:
     push ds
     mov cx, [cs:cmz_javl]
     mov si, [cs:cmz_jpos]
-    mov es, [cs:cmz_jwin]
+    KSEG es, [cs:cmz_jwin], MEGA_SEL_K0
     push es
     pop ds
     mov di, cx                  ; what is left moves to the floor - but so that
@@ -2808,7 +2858,7 @@ cmz_jneed:
     cmp byte [cs:cmz_jeof], 0
     jne .short
     CMZ_GO src
-    mov es, [cs:cmz_jwin]
+    KSEG es, [cs:cmz_jwin], MEGA_SEL_K0
     mov bx, [cs:cmz_jpos]
     add bx, [cs:cmz_javl]       ; a multiple of 512, by the compaction
     mov cx, CMZ_JRD
@@ -3010,7 +3060,7 @@ cmz_jsusp:
 cmz_jsave:
     push ds
     push es
-    mov es, [cs:cmz_b]
+    KSEG es, [cs:cmz_b], MEGA_SEL_K4
     PUSH_CSDATA
     pop ds
     mov si, cmz_jst
@@ -3019,7 +3069,7 @@ cmz_jsave:
 cmz_jload:
     push ds
     push es
-    mov ds, [clo_seg]
+    KSEG ds, [clo_seg], MEGA_SEL_K4
     PUSH_CSDATA
     pop es
     mov si, CMZ_JST
@@ -3060,12 +3110,12 @@ cmz_jgo:
     mov bx, cmz_jnam
     call cmz_jhname
     call COLD_SEG:dkf_dsk_batch_begin
-    CSDO mov [CSEG cmz_jsp], sp
+    CSDO_SP cmz_jsp
     call cmz_jopen              ; a part (checked once already), the claim,
     jc .say                     ; and the SOURCE's clusters
     mov ax, [cs:cmz_b]          ; the claim IS [clo_seg], marked as ours:
     mov [clo_seg], ax           ; mode 7's keys, lines and teardown come here
-    mov es, ax                  ; through clo_disp_x (SPEC.md 22.23.6)
+    KSEG es, ax, MEGA_SEL_K4    ; through clo_disp_x (SPEC.md 22.23.6)
     mov byte [es:CL_STEP], CLS_JOIN
     call cmz_jsave              ; the header is never garbage: k = 0 until a
                                 ; prompt saves the part it wants
@@ -3129,7 +3179,7 @@ cmz_jdisp:
     call cmz_jload              ; the paused state - clobbers CX SI DI
     mov cx, [clo_seg]
     CSDO mov [CSEG cmz_b], cx
-    CSDO mov [CSEG cmz_jsp], sp  ; a hop that fails lands in cmz_jerr
+    CSDO_SP cmz_jsp             ; a hop that fails lands in cmz_jerr
     cmp dl, CLV_KEY
     jne .abort                  ; CLV_FREE: the prompt was abandoned - a click
     cmp al, 13                  ; elsewhere, another prompt - and what was
@@ -3208,7 +3258,7 @@ cmz_jline:
     or al, al
     mov si, cmz_s_jkeys
     jnz .one
-    mov es, [clo_seg]
+    KSEG es, [clo_seg], MEGA_SEL_K4
     mov si, cmz_s_put
     call clo_cat
     mov si, CMZ_HSEL   ; the part's name, with the missing one's
@@ -3426,7 +3476,11 @@ cmz_drop:
     push dx
     mov bx, MEM_K_CMPR
     mov dx, [cs:cmz_b]
+%ifdef KERN_MEGA
+    call clo_kfree
+%else
     call COLD_SEG:mmf_mem_free
+%endif
     call KERNEL_SEG:fpg_end
     pop dx
     pop bx
@@ -3447,11 +3501,6 @@ cmz_drop:
 cmz_pkg:
     push bx
     push dx
-%ifdef KERN_MEGA
-    cmp byte [ss:mega_pm], 0    ; kern_mega in protected mode: the body
-    jne .no1                    ; starts cmz_x bytes in, a segment OFF the
-%endif                          ; identity grid, and the encoder wants its
-                                ; source at offset 0 (KERN-MEGA-PLAN 10.1)
     cmp word [cs:cmz_u+2], 0
     jne .no1                    ; over 64KB: not an image ld_check_hdr takes
     mov al, [es:LD_H_FLAGS]
@@ -3553,7 +3602,7 @@ cmz_hdr:
     and bx, 0FE00h
     add bx, ax                  ; R + file
     jc .no
-    mov es, [cs:cmz_b]
+    KSEG es, [cs:cmz_b], MEGA_SEL_K4
     mov cx, [es:LD_H_IMG]
     add cx, [es:LD_H_BSS]       ; cmz_pkg proved this is under
     add cx, 511                 ; APP_MAX_SIZE, so neither add can carry
@@ -3567,12 +3616,12 @@ cmz_hdr:
     mov bx, [cs:cmz_o]
     add bx, 8
     sub bx, ax                  ; ...so it ENDS where the stream begins
-    mov es, bx
+    KSEG es, bx, MEGA_SEL_K5
     mov cx, [cs:cmz_x]
     xor si, si
     xor di, di
     push ds                     ; DS is KERNEL_SEG everywhere else in this
-    mov ds, [cs:cmz_b]          ; file (SPEC.md 2.6), so the source segment is
+    KSEG ds, [cs:cmz_b], MEGA_SEL_K4 ; file (SPEC.md 2.6), so the source segment is
     cld                         ; borrowed for the length of the copy and put
     rep movsb                   ; straight back
     pop ds

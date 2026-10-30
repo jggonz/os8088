@@ -33,6 +33,8 @@ from cycweb import Pkg, u16
 MACHINES={'cga':'os8088_5150_sb_gla','herc':'os8088_5150_herc_sb_gla',
           'vga':'os8088_xt_vga_sb'}
 EVIDENCE=ROOT/'build'/'mixer-evidence'
+BOX86=(bool(__import__('os').environ.get('OS88_MEGA')) and
+       __import__('os').environ.get('OS88_MEGA_EMU','').lower()=='86box')
 
 
 def check(cond,what):
@@ -41,9 +43,13 @@ def check(cond,what):
 
 
 class Session:
-    def __init__(self,ui,adapter):
+    def __init__(self,ui,adapter,card=None):
         self.ui,self.m,self.mo,self.adapter=ui,ui.m,ui.mo,adapter
         self.qemu=adapter in ('sb16','vesa')
+        # THE CARD, which is not always the harness: on kern_mega under 86Box
+        # (BOX86) the SB16 leg runs on the Marty path, a VGA beside 86Box's
+        # SB16/CT1745, and every expectation about the CARD is QEMU's
+        self.sb16=(card or adapter) in ('sb16','vesa')
         self.seg=ui._word('drv_fseg')
         origin=os88sym.equates()['DRV_HMA_ORG'] if self.seg>=0xF000 else 0
         self.d=Pkg(self.m,self.seg+origin//16,os88drvsym.symbols('sound.bin'))
@@ -199,7 +205,12 @@ def toast(s,pw):
     hx=ui._word('vid_clk_hx')
     msg=b'Toast covers the speaker'           # TOAST_MAX characters
     s.m.write(ui._S('toast_buf'),msg+b'\0')
-    s.m.write(ui._S('toast_ttl'),struct.pack('<H',36))
+    # FIVE SECONDS, not two: the checks below come .3 s after `wait` SEES
+    # the strip, and `until` backs off to a quarter of a HOST second - a guest
+    # second and more on MartyPC, nearly two on kern_mega's 86Box running
+    # fast-forwarded, where a two-second toast had gone by the check 5 runs
+    # in 8 (toast_on 0, so toast_scov 0). Expiry is still waited for below
+    s.m.write(ui._S('toast_ttl'),struct.pack('<H',91))
     s.m.write(ui._S('toast_inst'),b'\0')
     s.m.write(ui._S('toast_want'),b'\1')
     s.wait(lambda:ui._byte('toast_on')==1,'toast is up')
@@ -218,9 +229,9 @@ def toast(s,pw):
     s.pace(.3);s.icon()
 
 
-def session(ui,adapter):
+def session(ui,adapter,card=None):
     if adapter not in ('sb16','vesa'): ui.still()   # (a quick boot: the desktop drawn)
-    s=Session(ui,adapter);d=s.d
+    s=Session(ui,adapter,card);d=s.d
     check(s.seg and d.rb('mix_kind')>0,'readable mixer publishes the speaker')
     pw=ui._word('vid_pw')
     check(s.hx==pw-32,'speaker sits right of the clock, at the bar margin')
@@ -282,7 +293,7 @@ def session(ui,adapter):
     s.open();s.key('end');s.close()
     s.wait(lambda:p.rb('mx_level')==100,'Mixer notices another control changing the hardware')
     s.key('end');s.wait(lambda:p.rb('mx_level')==100,'full Mixer keyboard reaches full volume')
-    if s.qemu:
+    if s.sb16:
         check(p.rw('mx_mask')==0x1FF,'SB16 exposes all nine channels')
         mark=(x0+136,y0+18,x0+143,y0+25)
         check(0 in s.crop(mark),'keyboard focus is visible beside Level')
@@ -310,7 +321,7 @@ def session(ui,adapter):
     s.wait(lambda:d.rb('volume_live')==0,'outside click dismisses')
     check(not s.owned(),'outside dismissal releases the save-under')
     if not s.qemu:s.themes()
-    print('mixer '+adapter+': PASS',flush=True)
+    print('mixer '+(card or adapter)+': PASS',flush=True)
 
 
 def absent():
@@ -320,9 +331,9 @@ def absent():
               'no mixer keeps the full clock field')
 
 
-def background(ui):
+def background(ui,adapter='sb16'):
     """A fully staged stream still drains while the modal popup owns the UI."""
-    s=Session(ui,'sb16');d=s.d
+    s=Session(ui,adapter,'sb16');d=s.d
     ui.path('B:/MIXPLAY.O88')
     w=ui.wait_window('SB Test')
     x,y,_,_=w.content
@@ -345,6 +356,19 @@ def background(ui):
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--adapter',choices=(*MACHINES,'sb16','vesa'),default='cga')
     a=ap.parse_args();EVIDENCE.mkdir(exist_ok=True)
+    if a.adapter=='sb16' and BOX86:
+        # KERN_MEGA ON 86BOX (tests/megaport.txt, OS88_MEGA_SND=sb16): the
+        # card QEMU stands in for is 86Box's own SB16 with its CT1745, so the
+        # leg runs on the Marty path with the VGA's pixels - the fixture's
+        # system disk rebuilt on mega.img (os88qmpmega.mega_twin), the
+        # driver's selector through m.lin (cycweb.Pkg)
+        import os88qmpmega
+        with os88ui.boot(os88qmpmega.mega_twin(os88build.at('build/mixer360.img')),
+                         apps=os88build.at('build/mixplay.img'),
+                         machine='os8088_xt_vga_sb',verbose=False,quick=True) as ui:
+            session(ui,'vga','sb16')
+            background(ui,'vga')
+        return
     if a.adapter in ('sb16','vesa'):
         # MartyPC has a raw register bank, not a CT1745. QEMU owns this leg.
         import hmacold,vidxms,xmcheck

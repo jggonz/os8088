@@ -6,30 +6,37 @@
 ; `package` writes. Included by realdmg.asm after rdgaot.inc.
 ;
 ; THE PARTS (realdmg.asm's table): 0 and 1 the core with the host's code in
-; its holes, 2 the view, 3 the block table (16KB, the tokens F000h + n in its
-; segment words), 4 the meta with the list after it, and from 5 each code
-; image's two 32KB halves, which are OP_SELF: rw_aread reads them into a
-; claim of 64KB each, through a bounce (rw_apart).
+; its holes, 2 the view, 3 the block table (16KB or 32KB, the tokens F000h +
+; n in its segment words), 4 the meta, from 5 the relocations' and the
+; list's parts (eager, in the carve), then each code image's two 32KB
+; halves, which are OP_SELF: rw_aread reads them into a claim of 64KB each,
+; through a bounce (rw_apart).
 ;
 ; THE META, part 4:
-;   0   'RDAOT1'
-;   6   db the code images past the core, 7 db the table's mask
+;   0   'RDAOT2'
+;   6   db the code images past the core, 7 db the table's mask (7 for
+;       16KB, 15 for 32KB: kern_mega's packages)
 ;   8   dw the list's entries, 10 dw the relocations
-;   12  dw the list's offset in the part, a multiple of 16
+;   12  db the relocations' first row, 0 for none, 13 db how many rows:
+;       each its own eager part, 4 bytes an entry - db the image the far
+;       jump is in (0 the core), db the image it jumps to | 80h when the
+;       site is a switchable bank's (`cmp byte [ss:S_BANK],B / jne +5`
+;       first, the jump 8 bytes on), dw the site: the `mov dx,SITE` the
+;       host linked over
 ;   14  the cartridge's header, 0134h-014Fh (28 bytes)
 ;   42  the ROM's file name, NUL-terminated (13 bytes)
-;   56  dw the list's filter's offset, a multiple of 16 (8KB of zeros:
-;       rdg_aotattach builds it)
+;   55  db kern_mega's package: the recompiler's part's row, the last, or 0
+;       (REALDMG-SPEC 20.16: the misses translated)
+;   56  db the list's first row, 57 db how many rows (1 to RDG_LXMAX): each
+;       its own eager part, sorted, the parts in key order, so the search
+;       picks a part by its first entry and bisects only that one
+;       (REALDMG-SPEC 20.17.1). The filter is after the table, in its part
 ;   58  db the first row of the ROM's pieces, 0 for none (REALDMG-SPEC
 ;       20.13): 32KB each, plain, so they lie back to back in the file
 ;   59  db the HOT images - the first so many hold what the counters ran
 ;       (REALDMG-SPEC 20.11), and they are claimed before the ROM, the rest
 ;       after it; 0 = all of them
 ;   60  dw the ROM's KB
-;   62  the relocations, 4 bytes each: db the image the far jump is in (0 the
-;       core), db the image it jumps to | 80h when the site is a switchable
-;       bank's (`cmp byte [ss:S_BANK],B / jne +5` first, the jump 8 bytes on),
-;       dw the site: the `mov dx,SITE` the host linked over
 ;
 ; AN IMAGE THE HEAP CANNOT HOLD IS LEFT ON THE DISK, and what it held is
 ; interpreted: its table and list entries get offset 0 (rdgaot.inc's miss
@@ -45,7 +52,6 @@
 ; =============================================================================
 
 RWA_TOKEN       equ 0F000h          ; a segment word the loader has to give
-RWA_RELOCS      equ 62
 
 ; rw_ameta - at the entry, after op_load: the meta checked against the table
 ; it came with, and every segment the run needs banked. CF = 1: it is not one
@@ -69,15 +75,12 @@ rw_ameta:
     jne .bad1
     cmp word [es:2], 'AO'
     jne .bad1
-    cmp word [es:4], 'T1'
-    jne .bad1
+    cmp word [es:4], 'T2'           ; (RDAOT2: the relocations and the
+    jne .bad1                       ;   list in parts of their own, 20.17)
     mov al, [es:6]
     cmp al, RWA_MAX
     ja .bad1
     mov [rw_ans], al
-    xor ah, ah                      ; the table the package was made with:
-    shl ax, 1                       ;   two rows an image...
-    add ax, RWA_CODE
     mov dl, [es:59]                 ; (the hot ones: all of them, unsaid)
     mov dh, [rw_ans]
     or dl, dl
@@ -88,6 +91,35 @@ rw_ameta:
     mov dl, dh
 .hset:
     mov [rw_ahot], dl
+    mov ax, RWA_CODE                ; the table the package was made with:
+    mov dl, [es:12]                 ;   the relocations' rows and the list's
+    mov dh, [es:13]                 ;   first, each where the last left off
+    mov [rw_arr], dl                ;   (20.17: the carve's, which come
+                                    ;   before every lazy row)...
+    mov [rw_arn], dh
+    or dh, dh
+    jz .nrel
+    cmp dl, al
+    jne .bad1
+    add al, dh
+.nrel:
+    mov dl, [es:56]
+    mov dh, [es:57]
+    cmp dh, RDG_LXMAX
+    ja .bad1
+    mov [rw_alrow], dl
+    mov [rw_alxn], dh
+    or dh, dh
+    jz .nlst
+    cmp dl, al
+    jne .bad1
+    add al, dh
+.nlst:
+    mov [rw_acode], al              ; ...two rows an image...
+    mov dl, [rw_ans]
+    xor dh, dh
+    shl dx, 1
+    add ax, dx
     mov dx, [es:60]                 ; ...and a row a 32KB of the ROM in it
     mov [rw_aromkb], dx
     cmp byte [es:58], 0
@@ -98,24 +130,62 @@ rw_ameta:
     shr dx, cl
     add ax, dx
 .nor:
+%ifdef PKG_MEGA
+    mov dl, [es:55]                 ; (20.16: the recompiler's part, the
+    or dl, dl                       ;   last row)
+    jz .noj
+    cmp dl, al
+    jne .bad1
+    inc ax
+.noj:
+    mov [rw_ajrow], dl
+%endif
     cmp al, [op_t_n]
     jne .bad1
     mov al, [es:7]
     mov [rw_ahm], al
-    mov ax, [es:8]
-    mov [rw_aln], ax
-    mov ax, [es:12]
-    mov cl, 4
-    shr ax, cl
-    add ax, [rw_amseg]
+    xor di, di                      ; the list's parts: each its own carve
+    mov dl, [rw_alrow]              ;   part (a segment, or a selector under
+    mov cl, [rw_alxn]               ;   CPU_F_PM), its entries its length / 8
+    xor ch, ch
+    jcxz .lxz
+.lx:
+    mov al, dl
+    call op_seg
+    or ax, ax
+    jz .bad1
+    mov [rw_alx + di], ax
+    mov al, dl
+    push si
+    call op_row
+    mov ax, [si + OP_R_LEN]
+    pop si
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    mov [rw_alx + di + 2], ax
+    inc dl
+    add di, 4
+    loop .lx
+.lxz:
+    mov ax, [rw_alx]                ; (part 0, or none: 0 entries)
     mov [rw_alseg], ax
+    mov ax, [rw_alx + 2]
+    mov [rw_aln], ax
     mov al, [rw_ahm]                ; the filter and the list's cache:
     xor ah, ah                      ;   after the table in ITS part, (mask
     inc ax                          ;   + 1) x 256 x 8 bytes on - where the
     mov cl, 7                       ;   meta part had them, a long list took
     shl ax, cl                      ;   it past 65,024 bytes (Link's
-    add ax, [rw_atseg]              ;   Awakening: 65,264)
+%ifdef PKG_MEGA                     ;   Awakening: 65,264)
+    mov dx, [rw_atseg]              ; (a selector under CPU_F_PM: the sum
+    call rw_sub                     ;   is OSAPI_SEG's, as the list's is)
+    jc .bad1
+    mov [rw_afseg], dx
+%else
+    add ax, [rw_atseg]
     mov [rw_afseg], ax
+%endif
     pop es
     clc
     ret
@@ -221,12 +291,23 @@ rw_aromrd:
     xor bx, bx                      ; BX = the bank
     mov bp, [rw_romseg]
 .b:
+%ifdef PKG_MEGA
+    mov ax, bx                      ; (BP = the claim + bank x 400h: a
+    mov cl, 10                      ;   window under CPU_F_PM, 20.15)
+    shl ax, cl
+    mov dx, [rw_romseg]
+    call rw_sub
+    jc .x
+    mov bp, dx
+%endif
     mov ax, bx
     push bx
     call rw_aebank1                 ; bank BX to BP:0
     pop bx
     jc .x
+%ifndef PKG_MEGA
     add bp, 400h
+%endif
     inc bx
     mov ax, [rw_aromkb]
     mov cl, 4
@@ -312,6 +393,9 @@ rw_aclaim:
     cmp byte [rw_afix], 0
     jne .r
     mov ah, al
+%ifdef PKG_MEGA
+    call rw_axclaim                 ; (CPU_F_PM: one pool block first, 20.15)
+%endif
 .l:
     mov al, [rw_anseg]
     cmp al, ah
@@ -329,6 +413,87 @@ rw_aclaim:
     jmp short .l
 .r:
     ret
+
+%ifdef PKG_MEGA
+; rw_axclaim - rw_aclaim's first, kern_mega's arm under CPU_F_PM (REALDMG-
+; SPEC 20.15): AH = images wanted. As many of them as the extended pool holds
+; - all of them, on most protected-mode machines - in ONE block
+; (OSAPI_XMEM_ALLOC: the claim records stay free, a package holds eight),
+; image n a SEG_SUBC pair at (n - 1) x 64KB through one OSAPI_XMEM_SEL
+; selector over the block's start, its data half in rw_aseg (rw_csel answers
+; the code half). The heap's claims take any it leaves, as before. Once:
+; [rw_axbase] says it is made. Keeps AX
+rw_axclaim:
+    cmp byte [rw_pm], 0
+    je .r
+    cmp word [rw_axbase + 2], 0
+    jne .r
+    cmp word [rw_axbase], 0
+    jne .r
+    cmp byte [rw_anseg], 0
+    jne .r
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cl, ah
+    xor ch, ch                      ; CX = images, from the most down
+    jcxz .x
+.try:
+    mov dx, cx                      ; DX:AX = CX x 64KB
+    xor ax, ax
+    call OSAPI_XMEM_ALLOC
+    jnc .got
+    loop .try
+    jmp short .x
+.got:
+    mov [rw_axbase], ax
+    mov [rw_axbase + 2], dx
+    push cx
+    xor cx, cx
+    call OSAPI_XMEM_SEL             ; AX = its first 64KB's selector
+    pop cx
+    jc .nosel
+    mov dx, ax
+    xor ax, ax                      ; AX = paragraphs into the block
+    xor bx, bx
+.p:
+    push dx
+    call rw_subc                    ; DX = image BX+1's data half
+    jc .pe
+    mov [rw_aseg + bx], dx
+    inc byte [rw_anseg]
+    inc byte [rw_axn]
+    pop dx
+    add ah, 10h                     ; (past 1MB of the block the paragraphs
+    jnz .pn                         ;   wrap: on from this image's own
+    mov dx, [rw_aseg + bx]          ;   selector, its base + 64KB - image
+    mov ah, 10h                     ;   17 was image 1's bytes again)
+.pn:
+    inc bx
+    inc bx
+    loop .p
+    jmp short .x
+.pe:
+    pop dx                          ; (no LDT entry: the rest stay out)
+    jmp short .x
+.nosel:
+    mov ax, [rw_axbase]
+    call OSAPI_XMEM_FREE
+    xor ax, ax
+    mov [rw_axbase], ax
+    mov [rw_axbase + 2], ax
+.x:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+rw_axbase       dw 0, 0             ; the images' pool block, or 0
+rw_axn          db 0                ; ...the images in it, the first ones
+%endif
 
 ; rw_aloose - the load's hold let go (rw_load pins every claim of ours):
 ; from the images' claims to the slots' (rw_bload) nothing holds one of our
@@ -365,6 +530,10 @@ rw_atight:
 rw_adrop:
     cmp byte [rw_afix], 0
     jne .no
+%ifdef PKG_MEGA
+    cmp word [rw_axbase + 2], 0     ; (the pool's block is not given back
+    jne .no                         ;   an image at a time)
+%endif
     cmp byte [rw_anseg], 0
     je .no
     dec byte [rw_anseg]
@@ -398,6 +567,14 @@ rw_aread:
     cmp bl, [rw_anseg]              ;   rw_afixup links heap it never read
     jae .fix                        ;   (rw_fgo freed the hold already)
     push bx
+%ifdef PKG_MEGA
+    cmp bl, [rw_axn]                ; (one of the pool block's: a window,
+    jae .zh                         ;   not a claim - zeroed, and it goes
+    shl bx, 1                       ;   with the block, as .lost's)
+    mov word [rw_aseg + bx], 0
+    jmp short .zn
+.zh:
+%endif
     shl bx, 1
     xor dx, dx
     xchg dx, [rw_aseg + bx]
@@ -419,16 +596,36 @@ rw_aread:
     shr bx, 1
     mov al, bl
     shl al, 1
-    add al, RWA_CODE
+    add al, [rw_acode]
     call rw_apart                   ; the first half...
     jc .lost
     inc al
+%ifdef PKG_MEGA
+    push ax                         ; (its second 32KB: a window under
+    push dx                         ;   CPU_F_PM, 20.15)
+    mov dx, bp
+    mov ax, 800h
+    call rw_sub
+    mov bp, dx
+    pop dx
+    pop ax
+    jc .lost
+%else
     add bp, 800h
+%endif
     call rw_apart                   ; ...and the second
     jnc .ok
 .lost:
     pop bx
     push bx
+%ifdef PKG_MEGA
+    cmp bl, [rw_axn]                ; (one of the pool block's: a window,
+    jae .lh                         ;   not a claim - it goes with the
+    shl bx, 1                       ;   block)
+    mov word [rw_aseg + bx], 0
+    jmp short .ok
+.lh:
+%endif
     shl bx, 1
     xor dx, dx
     xchg dx, [rw_aseg + bx]
@@ -438,6 +635,9 @@ rw_aread:
     inc bx
     jmp short .l
 .back:
+%ifdef PKG_MEGA
+    call rw_hyload                  ; (the misses' recompiler, 20.16)
+%endif
     call rw_fback
 .fix:
     call rw_afixup
@@ -598,6 +798,31 @@ rw_abounce:
     push dx
     mov byte [rw_abown], 0
     mov ax, [rw_aclb]
+%ifdef PKG_MEGA
+    cmp byte [rw_pm], 0             ; (kern_mega's arm: the frame buffers are
+    je .fb                          ;   OS88_HIGHMEM's, above 1MB, and a read
+    mov word [rw_abcap], 16384      ;   there bounces a sector at a time -
+    cmp ax, 16384                   ;   so a conventional bounce of its own,
+    jbe .dma                        ;   20.15)
+    mov [rw_abcap], ax
+.dma:
+    mov ax, [rw_abcap]
+    mov dl, ah
+    shr dl, 1
+    shr dl, 1
+    mov al, dl
+    xor ah, ah
+    push cx
+    xor cx, cx
+    call OSAPI_MEM_CLAIM_DMA        ; DX = its segment, conventional
+    pop cx
+    jc .r
+    mov [rw_abseg], dx
+    mov byte [rw_abown], 1
+    jmp short .r
+.fb:
+    mov ax, [rw_aclb]
+%endif
     cmp ax, 16384
     ja .own
     mov ax, [rw_pseg]
@@ -660,16 +885,82 @@ rw_aimg:
     xor ax, ax
     ret
 
+%ifdef PKG_MEGA
+; rw_acsset - kern_mega's arm (REALDMG-SPEC 20.15): rw_acs[n] = image n's
+; CODE selector (0 the core), rw_csel's answer for its data segment - the
+; segment itself on a real-mode kernel, a pair's code half under CPU_F_PM -
+; or 0 when it is not in memory. Asked once, with DS ours, before anything
+; is given one. Every register kept
+rw_acsset:
+    push ax
+    push bx
+    xor bx, bx
+.l:
+    mov al, bl
+    call rw_aimg
+    or ax, ax
+    jz .s
+    call rw_csel
+.s:
+    push bx
+    shl bx, 1
+    mov [rw_acs + bx], ax
+    pop bx
+    inc bx
+    cmp bx, RWA_MAX + 1
+    jb .l
+    pop bx
+    pop ax
+    ret
+
+; rw_aimgc - AL = an image, 0 the core: AX = its CODE selector, or 0 when it
+; is not in memory (rw_acsset's). Every other register kept
+rw_aimgc:
+    cmp al, RWA_MAX
+    ja .none
+    push bx
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov ax, [rw_acs + bx]
+    pop bx
+    ret
+.none:
+    xor ax, ax
+    ret
+
+rw_acs          times RWA_MAX + 1 dw 0
+%endif
+
 ; rw_afixup - the far jumps' segments given, or the exit put back where the
 ; image it jumps to is not here; then every token in the table and the list
 ; made a segment, or the entry emptied. S_JITSEGA's image chosen
 rw_afixup:
     push bp
     push es
-    mov es, [rw_amseg]
-    mov cx, [es:10]
-    mov si, RWA_RELOCS
-    jcxz .tab
+%ifdef PKG_MEGA
+    call rw_acsset                  ; (each image's CODE selector, 20.15)
+%endif
+    mov al, [rw_arr]                ; the relocations, a part at a time
+    mov [rw_arcur], al              ;   (20.17)
+    mov al, [rw_arn]
+    mov [rw_arleft], al
+.rr:
+    cmp byte [rw_arleft], 0
+    je .tab
+    dec byte [rw_arleft]
+    mov al, [rw_arcur]
+    inc byte [rw_arcur]
+    call op_row                     ; SI -> its row, AX kept
+    mov cx, [si + OP_R_LEN]
+    shr cx, 1
+    shr cx, 1                       ; CX = its relocations
+    call op_seg
+    or ax, ax
+    jz .rr
+    mov es, ax
+    xor si, si
+    jcxz .rr
 .rl:
     mov al, [es:si]                 ; the image the jump is in
     call rw_aimg
@@ -679,7 +970,11 @@ rw_afixup:
     mov al, [es:si + 1]
     mov dl, al                      ; DL = the form
     and al, 7Fh
+%ifdef PKG_MEGA
+    call rw_aimgc                   ; AX = the target's CODE selector, or 0
+%else
     call rw_aimg                    ; AX = the target's, or 0
+%endif
     mov di, [es:si + 2]             ; DI = the site
     push es
     mov es, bp
@@ -704,6 +999,7 @@ rw_afixup:
 .rn:
     add si, 4
     loop .rl
+    jmp short .rr
 .tab:
     mov es, [rw_atseg]              ; the table: (mask + 1) x 256 entries
     mov cl, [rw_ahm]
@@ -712,10 +1008,22 @@ rw_afixup:
     xchg cl, ch                     ; CX = x 256
     mov dl, 1                       ; (the table's: emptied out of reach)
     call .ents
-    mov es, [rw_alseg]              ; ...and the list
-    mov cx, [rw_aln]
+    xor bx, bx                      ; ...and the list, a part at a time
+.lp:                                ;   (20.17)
+    mov al, bl
+    cmp al, [rw_alxn]
+    jae .lpd
+    push bx
+    shl bx, 1
+    shl bx, 1
+    mov es, [rw_alx + bx]
+    mov cx, [rw_alx + bx + 2]
     xor dl, dl                      ; (the list's: kept in its order)
     call .ents
+    pop bx
+    inc bx
+    jmp short .lp
+.lpd:
     mov bx, 1                       ; S_JITSEGA: the first image here, or
 .sa:                                ;   the core
     cmp bl, [rw_anseg]
@@ -742,7 +1050,11 @@ rw_afixup:
     sub ax, RWA_TOKEN
     cmp ax, RWA_MAX
     ja .en                          ; (a segment already: a second load)
+%ifdef PKG_MEGA
+    call rw_aimgc                   ; (what tr_enter far-jumps through)
+%else
     call rw_aimg
+%endif
     or ax, ax
     jnz .es
     mov [es:di + 4], ax             ; not here: offset 0, interpreted -
@@ -773,6 +1085,52 @@ rw_aoton:
     mov ax, [cs:rw_asega]
     mov [S_JITSEGA], ax
     mov [S_JITSEG], ax
+%ifdef PKG_MEGA
+    push bx                         ; KERN_MEGA'S ARM (REALDMG-SPEC 20.15):
+    push si                         ;   what is JUMPED to by its code
+    push di                         ;   selector, and every image named to
+    xor bx, bx                      ;   the core as a pair, so a link made
+    mov di, S_JITXT                 ;   at run time into one (tr_lpatch)
+.xt:                                ;   is written through its data half
+    inc bx                          ;   (tr_lpx, 16.2.4) - S_JITXT's 55
+    cmp bx, RWA_MAX                 ;   pairs hold RWA_MAX's 14
+    ja .xd
+    mov si, bx
+    shl si, 1
+    mov ax, [cs:rw_acs + si]
+    or ax, ax
+    jz .xt
+    mov [di + 2], ax
+    mov ax, [cs:rw_aseg + si - 2]
+    mov [di], ax
+    add di, 4
+    jmp short .xt
+.xd:
+    mov ax, di
+    sub ax, S_JITXT
+    shr ax, 1
+    shr ax, 1
+    mov [S_JITXN], al
+    mov ax, [cs:rw_asega]           ; S_JITSEGA's code half: the image it
+    xor si, si                      ;   is (rw_afixup's first loaded), or
+.ca:                                ;   the core's
+    add si, 2
+    cmp si, RWA_MAX * 2
+    ja .c0
+    cmp ax, [cs:rw_aseg + si - 2]
+    jne .ca
+    mov ax, [cs:rw_acs + si]
+    jmp short .cs
+.c0:
+    mov ax, [cs:rw_acs]
+.cs:
+    mov [S_JITCSA], ax
+    mov [S_JITCS], ax
+    mov word [S_JITCSB], 0
+    pop di
+    pop si
+    pop bx
+%endif
     mov [S_JITOUT + 2], ax
     mov word [S_JITSEGB], 0
     mov ax, [cs:rw_atseg]
@@ -788,12 +1146,32 @@ rw_aoton:
     mov byte [S_JITPRE], 2
     mov word [S_JITEND], 0
     call rw_jdon
+    push si                         ; the list's parts to the core's own
+    push di                         ;   directory (20.17)
+    mov al, [cs:rw_alxn]
+    mov [S_AOTLX], al
+    xor si, si
+    xor di, di
+.lxd:
+    mov ax, [cs:rw_alx + si]
+    mov [S_AOTLXT + di], ax
+    mov ax, [cs:rw_alx + si + 2]
+    mov [S_AOTLXT + di + 6], ax
+    add si, 4
+    add di, 8
+    cmp si, RDG_LXMAX * 4
+    jb .lxd
+    pop di
+    pop si
     mov ax, [cs:rw_alseg]
     mov cx, [cs:rw_aln]
     push bx
     mov bx, [cs:rw_afseg]
     call rdg_aotattach
     pop bx
+%ifdef PKG_MEGA
+    call rw_hyon                    ; (the misses translated, 20.16)
+%endif
     pop cx
     pop ax
     ret
@@ -806,7 +1184,8 @@ rw_jdon:
     push cx
     push si
     push es
-    mov es, [S_DISP + 2]            ; the core
+    mov es, [S_COREDS]              ; the core, as DATA (16.2.4: S_DISP+2
+                                    ;   is its code selector on kern_mega)
     mov si, rw_jdtab
     mov cx, RDGC_JDN
 .s:
@@ -869,6 +1248,224 @@ rw_apre:
 .h:
     stosb
     ret
+
+%ifdef PKG_MEGA
+; MISSES TRANSLATED (REALDMG-SPEC 20.16), kern_mega's package alone: what the
+; host did not precompile - a jump table's targets, a stretch no replay ran
+; - is counted as the interpreter takes it, and at HY_HOT entries the
+; recompiler (the last part, rdgjitp.asm built RDG_HYB) makes it a block in
+; a RUNTIME tier, filed in a table of its own (rdgaot.inc's rdg_hyins). One
+; pool block holds it all: RWH_T tiers at most, the part, the table.
+RWH_T           equ 4
+
+; rw_hyload - in rw_aread, on the UI task in the package's folder: the pool
+; block claimed (as many tiers as fit, one at least) and the part read into
+; it. Nothing claimed when the package has no part or the machine is not
+; protected-mode; on any failure nothing is kept. Every register kept
+rw_hyload:
+    cmp byte [rw_pm], 0
+    je .r0
+    cmp byte [rw_ajrow], 0
+    je .r0
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    mov cx, RWH_T + 2               ; tiers, the part and the table
+.try:
+    mov dx, cx                      ; DX:AX = CX x 64KB
+    xor ax, ax
+    call OSAPI_XMEM_ALLOC
+    jnc .got
+    dec cx
+    cmp cx, 3
+    jae .try
+    jmp short .x
+.got:
+    mov [rw_hybase], ax
+    mov [rw_hybase + 2], dx
+    push cx
+    xor cx, cx
+    call OSAPI_XMEM_SEL             ; AX = its first 64KB's selector
+    pop cx
+    jc .free
+    mov dx, ax
+    xor ax, ax                      ; AX = paragraphs into the block
+    xor bx, bx
+.p:
+    push dx
+    call rw_subc                    ; DX = that 64KB's data half
+    jc .pe
+    mov [rw_hyseg + bx], dx
+    pop dx
+    add ah, 10h
+    inc bx
+    inc bx
+    loop .p
+    mov si, bx                      ; the last two: the part, the table
+    sub si, 4
+    mov ax, si
+    shr ax, 1
+    mov [rw_hyn], al                ; (the tiers before them)
+    mov bp, [rw_hyseg + si]
+    mov al, [rw_ajrow]
+    call rw_apart
+    jc .free
+    mov [rw_hyp], bp
+    mov ax, [rw_hyseg + si + 2]
+    mov [rw_hyh], ax
+    mov ax, bp                      ; the doors, by its code selector
+    call rw_csel
+    mov [rw_jhyon + 2], ax
+    mov [rw_jxlat + 2], ax
+    mov [rw_jmore + 2], ax
+    jmp short .x
+.pe:
+    pop dx
+.free:
+    mov ax, [rw_hybase]
+    call OSAPI_XMEM_FREE
+    xor ax, ax
+    mov [rw_hybase], ax
+    mov [rw_hybase + 2], ax
+    mov [rw_hyp], ax
+.x:
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r0:
+    ret
+
+; rw_hyon - DS = the view, at the end of rw_aoton (every machine start):
+; the runtime table emptied, the tiers past the first put in S_JITXT AHEAD
+; of the images (rt_room's turn reaches a precompiled image only when every
+; runtime tier is written, and stops there), the first made current
+; (rt_hyon) and the core told to count. Every register kept
+rw_hyon:
+    cmp word [cs:rw_hyp], 0
+    je .r0
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [cs:rw_hyh]             ; the table and the counts, empty
+    mov [S_HYSEG], ax
+    mov es, ax
+    xor di, di
+    mov cx, HY_SEGB / 2
+    xor ax, ax
+    cld
+    rep stosw
+    mov [S_HYN], ax
+    mov [S_HYMISS], ax
+    mov bl, [cs:rw_hyn]             ; BL = runtime tiers past the first
+    dec bl
+    jz .one
+    push ds                         ; the images' pairs moved up BL places
+    pop es
+    mov al, [S_JITXN]
+    xor ah, ah
+    mov cx, ax
+    shl cx, 1                       ; (CX = their words)
+    shl ax, 1
+    shl ax, 1
+    mov si, S_JITXT - 2
+    add si, ax                      ; SI = the last word
+    mov al, bl
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    mov di, si
+    add di, ax
+    std
+    rep movsw
+    cld
+    mov bh, [S_JITXN]
+    mov byte [S_JITXN], 0           ; ...and the tiers in front (rt_more:
+    mov si, rw_hyseg + 2            ;   their tails, no generation)
+    mov cl, bl
+    xor ch, ch
+.t:
+    mov ax, [cs:si]
+    push ax
+    call rw_csel
+    mov dx, ax
+    pop ax
+    call far [cs:rw_jmore]
+    inc si
+    inc si
+    loop .t
+    add [S_JITXN], bh
+    mov bl, [S_JITXN]               ; (the table's zero after them)
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov word [S_JITXT + bx], 0
+.one:
+    mov byte [S_HYON], 1            ; (first: rt_tier takes the images'
+    mov ax, [cs:rw_hyseg]           ;   generation when it is on)
+    push ax
+    call rw_csel
+    mov dx, ax
+    pop ax
+    call far [cs:rw_jhyon]
+    mov word [S_JITVEC], rw_hyjit
+    mov [S_JITVEC + 2], cs
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r0:
+    ret
+
+; rw_hyjit - the translator's door under S_HYON (rdgaot.inc's .cnt): the
+; miss at SI made a block (the part's rt_translate) and filed (rdg_hyins),
+; then back at the core's tr_back - into it, or the interpreter's when none
+; could be made
+rw_hyjit:
+    RDG_TOHOST
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    push es
+    push si
+    call far [cs:rw_jxlat]
+    pop si
+    push si
+    call rdg_hyins
+    pop si
+    pop es
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp rdg_ret
+
+rw_hybase       dw 0, 0             ; the pool block, or 0
+rw_hyseg        times RWH_T + 2 dw 0    ; its 64KBs' data halves
+rw_hyn          db 0                ; ...the runtime tiers among them
+rw_hyp          dw 0                ; the part's data half, 0: none loaded
+rw_hyh          dw 0                ; ...and the table's
+rw_ajrow        db 0                ; the part's row (the meta's byte 55)
+rw_jhyon        dw 50, 0            ; the part's rt_hyon, AX and DX as its
+rw_jxlat        dw 60, 0            ; ...and its rt_translate, SI the PC
+%endif
 
 ; the translator's door: nothing is translated, so a block asked for is the
 ; interpreter's (aothost.asm's h_jitstub)

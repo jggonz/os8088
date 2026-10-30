@@ -78,6 +78,19 @@ static unsigned lb_t;               /* the T claim: 125 KB, four world planes on
 static int lb_kindnow;
 static int lb_ready;
 
+/* THE WORDS lemblit.inc's relocation proc names (its lb_rlist) and T's plane
+ * table, which the shipped program keeps in lemload.c and lemgame.c: this
+ * bench declares no movable claim, so the proc never runs here, but the
+ * raster READS _lem_tpl - T's four planes by index (KERN-MEGA-MEMORY-PLAN
+ * MC7) - and the table must assemble. lem_tpl is made as the program makes
+ * it, through os88_seg_sub */
+static unsigned lem_cl_mask, lem_cl_bank, lem_cl_main, lem_cl_world;
+static unsigned lem_cl_shadow, lem_cl_rec, lem_cl_t;
+static unsigned lem_cl_kb[7];
+static unsigned lem_anseg, lem_mkseg, lem_ptseg, lem_far_seg;
+static unsigned lem_bwin[3];
+static unsigned lem_tpl[4];
+
 #define LB_ROWS 15
 static unsigned lb_ticks[LB_ROWS];
 static unsigned lb_iters[LB_ROWS];
@@ -519,6 +532,12 @@ void *os88_main(void)
     lb_data = os88_mem_claim(4);
     if (lb_kindnow == 0) {
         lb_t = os88_mem_claim(125);
+        if (lb_t) {
+            lem_tpl[0] = lb_t;
+            lem_tpl[1] = os88_seg_sub(lb_t, 2000u, 2000u);
+            lem_tpl[2] = os88_seg_sub(lb_t, 4000u, 2000u);
+            lem_tpl[3] = os88_seg_sub(lb_t, 6000u, 2000u);
+        }
         lem_r_tsetup(lb_t);         /* tload is a no-op without it, and the
                                      * first wave-3 run timed exactly that:
                                      * "0 us (512 in 0 ticks)" */

@@ -79,6 +79,9 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
     M.kernel_up(m)              # the boot gate on STATE (SOAK-SPEED 4)
     M.no_saver(m)
     mo = Mouse(marty=m)
+    # seg * 16 - or on kern_mega (tests/megaport.txt), where a package's
+    # region is an LDT selector, its descriptor's base
+    lin = getattr(m, "lin", lambda s_, o_=0: s_ * 16 + o_)
     dispcp.open_drive(m, mo, S, M.settle, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
@@ -89,7 +92,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
         for i in range(12):
             r = m.read(S("inst_tab") + i * os88geom.I_RECSZ, os88geom.I_RECSZ)
             c = u16(r, os88geom.I_SPTR)
-            if c and m.read(c*16 + syms["wd_mact"], 48) == \
+            if c and m.read(lin(c, syms["wd_mact"]), 48) == \
                     image[syms["wd_mact"]:syms["wd_mact"] + 48]:
                 return c, i, r
         return None, None, None
@@ -105,7 +108,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
           % m.read(S("ld_status"), 1)[0])
     if seg is None:
         sys.exit(1)
-    base = seg * 16
+    base = lin(seg)
     dlen = u16(m.read(base + syms["wd_len"], 2))
     check("A: ...and the document name survived the re-home", dlen > 0,
           "[wd_len] = 0: the program came up empty, so OSAPI_ARG_FILE was "
@@ -119,7 +122,10 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
 
     hm = heapmap.Map(m, {n: S(n) for n in ("mem_base", "mem_top", "spl_live",
                                           "mem_tab")})
-    cl = [c for c in hm.claims if c.seg == seg]
+    # (kern_mega: the region is a POOL block above 1MB, named by its
+    # selector - heapmap's `sel`, which IS c.seg on every other kernel)
+    cl = [c for c in hm.claims + getattr(hm, "pool", [])
+          if getattr(c, "sel", c.seg) == seg]
     need = (P1ORG + len(p1) + 15) // 16
     check("C: the region's claim holds part 1 too", cl and cl[0].para >= need,
           "claim at %04X is %s paragraphs, part 1 ends at paragraph %d"
@@ -132,7 +138,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine,
                                                      bad[0] if bad else 0))
 
     # E: Edit > Search..., type a word the document has, Enter.
-    note = m.read(u16(m.read(base + syms["wd_dseg"], 2)) * 16, dlen)
+    note = m.read(lin(u16(m.read(base + syms["wd_dseg"], 2))), dlen)
     word = b"flush"
     want = note.lower().find(word)
     check("the document has the word (case, not assertion)", want >= 0,

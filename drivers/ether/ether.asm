@@ -473,8 +473,17 @@ eth_pkg:
 .gone:
     mov si, es                  ; ES = KERNEL_SEG is what says the kernel is
     cmp si, KERNEL_SEG          ; asking: a package's call always has its own
-    jne .notk                   ; segment there (the X stub), so a package
-    call eth_v_gone             ; naming this verb is refused as any other
+    ja  .notk                   ; segment there (the X stub), so a package
+                                ; naming this verb is refused as any other.
+                                ; AT OR BELOW, NOT EQUAL: under kern_mega's
+                                ; protected mode the kernel's ES is its data
+                                ; alias MEGA_SEL_KDATA (10h), which `jne`
+                                ; refused - so no teardown ever reached
+                                ; eth_v_gone there and the 17KB pool outlived
+                                ; its last package (KERN-MEGA-PLAN 14.85;
+                                ; SOUND.DRV's volume.inc is the same fix). A
+                                ; package's ES is never at or below 60h
+    call eth_v_gone
     clc                         ; above NETV_MAX is - and without .err's
     jmp short .pop              ; path, which drops a card lock not taken
 .notk:

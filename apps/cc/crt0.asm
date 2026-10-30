@@ -1222,7 +1222,7 @@ cc_ovneed:
     mov di, ax                      ; worse trade than four instructions
     xor cx, cx                      ; the DMA door with no head: conventional
     call OSAPI_MEM_CLAIM_DMA_HI     ; on kern_mega for an OS88_HIGHMEM package
-                                    ; too, OS88_CODESEL shifting this segment
+                                    ; too, OS88_CODESEL converting this value
                                     ; (KERN-MEGA-PLAN 14.12).
                                     ; AX = KB; out DX = the segment. FROM THE
                                     ; TOP (SPEC.md 50.3.2), because this
@@ -1818,7 +1818,9 @@ section .text
 cc_ovinit:
   %ifdef CC_OVL_EAGER
     mov al, cc_ovidx                ; op_load has read and expanded it: bind
-    call op_seg                     ; the vectors to where it landed, once
+    mov byte [op_subv], OP_SUBV_C   ; the vectors to where it landed, once -
+    call op_seg                     ; as a code/data PAIR, so cc_ovbind's
+    mov byte [op_subv], 0           ; OS88_CODESEL is its code half (MC7)
     mov [cc_ovseg], ax
     call cc_ovbind
   %if OS88_PART_N == 1
@@ -1860,7 +1862,9 @@ cc_ovcarve:
     mov [op_base], dx
     push ax
     mov al, cc_ovidx
+    mov byte [op_subv], OP_SUBV_C   ; (a pair: cc_ovinit's note)
     call op_seg                     ; AX only, and touches no heap
+    mov byte [op_subv], 0
     mov [cc_ovseg], ax
     pop ax
       %ifdef CC_ONMOVE_PARTS

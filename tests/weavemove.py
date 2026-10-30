@@ -109,9 +109,23 @@ class Run(object):
             for c in sorted(claims(self.m, self.S)):
                 print("    claim %04x +%04x own %04x rloc %04x" % c)
 
+    def key(self, v):
+        """A segment word as the heap keys its block - itself on a real-mode
+        kernel. On kern_mega (KERN-MEGA-MEMORY-PLAN MC7.4) every one of
+        these is an LDT selector a move REBASES and never changes - the
+        region, each claim, the far vectors' CODE halves and the part rows -
+        so they are compared, moved and read as the PARAGRAPH under them,
+        and a code half and its data half are the same paragraph"""
+        if getattr(self.m, "bochs", False) and v and 0x100 <= v < 0xA000 \
+                and v & 4:
+            b = self.m.selector(v)
+            return b[0] >> 4 if b else v
+        return v
+
     def rseg(self, win):
-        return u16(self.m.read(os88geom.winptr(self.m, win.i, self.S)
-                               + os88geom.W_SEG, 2))
+        return self.key(u16(self.m.read(os88geom.winptr(self.m, win.i,
+                                                          self.S)
+                                        + os88geom.W_SEG, 2)))
 
     def md5(self, seg, held):
         c = held.get(seg)
@@ -163,6 +177,7 @@ class Run(object):
 
         def hf_rn():
             hseg, _ = pkg_seg(m, S, "Heap")
+            hseg = self.key(hseg)
             img = u16(m.read(hseg * 16 + 8, 2))
             return u16(m.read(hseg * 16 + img + 152, 2))   # heapfrag's hf_rn
         ui.close(np)
@@ -191,16 +206,17 @@ def weave(r):
     def state(win):
         reg = r.rseg(win)
         st = dict(reg=reg)
+        K = r.key
         for k in ("_w_seg", "_w_vmseg", "_w_gseg", "_w_cseg", "_w_cmseg",
-                  "_w_cso", "wvm_vmseg", "wvm_bseg", "wvm_ourds",
-                  "wfx_gseg"):
-            st[k] = w(reg, k)
-        st["vec"] = w(reg, "wcv_vec", 2)
-        st["zkb"] = w(reg, "op_table", OP_ROW0_ZKB)
+                  "wvm_vmseg", "wvm_bseg", "wvm_ourds", "wfx_gseg"):
+            st[k] = K(w(reg, k))
+        st["_w_cso"] = w(reg, "_w_cso")
+        st["vec"] = K(w(reg, "wcv_vec", 2))
+        st["zkb"] = K(w(reg, "op_table", OP_ROW0_ZKB))
         if st["_w_cmseg"]:
             cm, so = st["_w_cmseg"], st["_w_cso"]
-            st["cv"] = u16(m.readseg(cm, so + WSS_CVSEG, 2))
-            st["bs"] = u16(m.readseg(cm, so + WSS_BSEG, 2))
+            st["cv"] = K(u16(m.readseg(cm, so + WSS_CVSEG, 2)))
+            st["bs"] = K(u16(m.readseg(cm, so + WSS_BSEG, 2)))
         return st
 
     CLAIMS = ("_w_seg", "_w_vmseg", "_w_gseg", "_w_cseg", "_w_cmseg")
@@ -293,20 +309,28 @@ def weave(r):
     ui.mo.to(bx, by)
     ui.mo.click(bx, by, settle=0.0)
     m.advance(frames=6)
-    m.run()
     st = state(win)
     cm, so = st["_w_cmseg"], st["_w_cso"]
 
     def sw(off):
         return u16(m.readseg(cm, so + off, 2))
-    os88marty.until(m, lambda _: sw(WSS_RUN) & 0xFF,
-                    "start() to hire the worker", poll=0.3, guest=30)
+    # STEPPED, the machine stopped between steps, from the serve to the
+    # reading: the ball reaches the computer's end ~3 guest seconds after the
+    # serve and comes back, its paddle drifting home to 48 - so a wait whose
+    # length is the HOST's (a poll loop on a running guest) read y0 after
+    # the chase on a slow box, and y 48 -> 48 (mega-weavemove)
+    for _ in range(300):
+        if sw(WSS_RUN) & 0xFF:
+            break
+        m.advance(frames=6)
+    else:
+        raise os88marty.MartyError("start() never hired the worker in 30 "
+                                   "guest seconds")
     cv = st["_w_cseg"]
 
     def cpu_y():
         return u16(m.readseg(cv, WSC_SPR + 2 * WSR_SIZE + WSR_Y, 2))
     y0, f0 = cpu_y(), sw(WSS_FRAMES)
-    m.pause()
     m.advance(frames=60)
     m.run()
     y1, f1 = cpu_y(), sw(WSS_FRAMES)
@@ -410,9 +434,9 @@ def loom(r):
         reg = r.rseg(win)
         st = dict(reg=reg, state=w(reg, "_lm_state"))
         for k in WORDS:
-            st[k] = w(reg, k)
-        st["vec"] = w(reg, "lpv_vec", 2)
-        st["zkb"] = w(reg, "op_table", OP_ROW0_ZKB)
+            st[k] = r.key(w(reg, k))
+        st["vec"] = r.key(w(reg, "lpv_vec", 2))
+        st["zkb"] = r.key(w(reg, "op_table", OP_ROW0_ZKB))
         return st
 
     ui.open_drive("B")
@@ -524,7 +548,8 @@ def loom(r):
 
     def owned():
         reg = state(win)["reg"]
-        return sorted((c[0], c[1]) for c in claims(m, S) if c[2] == reg)
+        return sorted((c[0], c[1]) for c in claims(m, S)
+                      if r.key(c[2]) == reg)
     base = owned()
     ui.menu_pick("View", "Preview")
     os88marty.until(m, lambda _: state(win)["state"] == 2,

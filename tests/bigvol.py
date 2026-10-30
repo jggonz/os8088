@@ -134,7 +134,8 @@ def check(vhd, fsha):
         bad.append("FILLER.BIN was not kept")
     if v.read("USER.TXT") != USER_TXT:
         bad.append("USER.TXT was not kept")
-    src = ID.Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    src = ID.Vol(open(M.system_disk(os88build.at("build/os8088-360.img")),
+                      "rb").read())     # (mega.img on kern_mega)
     # A TYPEFACE ONLY WHERE THE FLOPPY HAS ONE (SPEC.md 24.3.1.5: the 360KB
     # system disk gave SYSTEM/FONTS to office360.img)
     fonts = any(q.startswith("SYSTEM/FONTS/") for q in src.tree())

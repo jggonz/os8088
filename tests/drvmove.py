@@ -82,6 +82,19 @@ def main():
         M.kernel_up(m)                          # a state gate, not a settle
         M.no_saver(m)
         mo = Mouse(marty=m)
+        mega = getattr(m, "bochs", False)
+
+        def key(v):
+            """A segment WORD as the claim map keys its block. On kern_mega
+            (KERN-MEGA-MEMORY-PLAN MC7.4) drv_tab, the class fast paths and
+            the owner words hold an LDT SELECTOR that a move REBASES and
+            never changes, so "it moved" and "still holds the old one" are
+            asked of the PARAGRAPH under it. Anything else (a slot, a tag,
+            0) is itself"""
+            if mega and v and v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
 
         mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel
         M.ui_done(m)
@@ -96,7 +109,7 @@ def main():
             M.ui_done(m)
 
         def seg(r):
-            return u16(m.read(S("drv_tab") + r * DRVR_SZ + DRVR_SEG, 2))
+            return key(u16(m.read(S("drv_tab") + r * DRVR_SZ + DRVR_SEG, 2)))
 
         # A load is a floppy read, which freezes the UI and so fools a screen
         # settle: wait for the row's segment to change, mount or unmount.
@@ -143,6 +156,12 @@ def main():
         # row was there the move left it on rd0, the copy the compactor had
         # just vacated: the card's next report ran there and its feed was
         # refused (docs/FIELD-NOTES.md 67)
+        #
+        # ON KERN_MEGA THE VECTOR IS PLANTED AS A PARAGRAPH, which is what
+        # the IVT holds there: its rows stay REAL - a reflected BIOS call and
+        # a DOS trip read them - and a protected-mode move is a rebase that
+        # tells nobody, so the rows are the one holder that must be walked
+        # (mem_ivt_relocf, KERN-MEGA-PLAN 14.90), and seg() answers one
         V33 = 0x33 * 4
         old33 = m.read(V33, 4)
         m.write(V33, struct.pack("<HH", 0x0123, rd0))
@@ -206,10 +225,10 @@ def main():
                  "drv_fseg4": 0, "drv_fseg5": 0, "drv_fseg6": 0,
                  "drv_fseg7": 0, "drv_fseg8": 0, "drv_blkseg": 0}
         for n in words:
-            words[n] = u16(m.read(S(n), 2))
+            words[n] = key(u16(m.read(S(n), 2)))
         rows = {"drv_tab[%d]" % r: seg(r) for r in range(7)}
         owners = {"claim owner %04x" % o: o
-                  for o in set(c[2] for c in claims(m, S))}
+                  for o in set(key(c[2]) for c in claims(m, S))}
         stale = sorted(k for k, v in
                        list(words.items()) + list(rows.items())
                        + list(owners.items()) if v == rd0)

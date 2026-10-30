@@ -52,13 +52,14 @@
 5 0 kernel/hbmark.inc  # DOSRMARK=1's resume trace (%macro), which no shipped kernel assembles
 
 # --- real mode by construction ----------------------------------------------
-1 4 kernel/mega.inc  # mega_svc's real-mode half and mega_r286, where a 286 comes back after its reset: DS = KERNEL_SEG while CR0.PE is clear, where it IS the segment; mega_capc, the capture stub an IRQ reflection installs in the IVT, which runs only in that real-mode window; and mega_strcal, which loads the CODE selector into ES ON PURPOSE so that its two probe writes fault (KERN-MEGA-PLAN 10.3 item 54.1) - neither one is ever made
+5 5 kernel/mega.inc  # mega_svc's real-mode half and mega_r286, where a 286 comes back after its reset: DS = KERNEL_SEG while CR0.PE is clear, where it IS the segment; mega_r15, the reflection's int 15h AH=4Fh, which only the ROM's int 09h calls and only in real mode (KERN-MEGA-PLAN 14.119); mega_capc and mega_cap33 (four), the capture stubs an IRQ reflection installs in the IVT, which run only in that real-mode window (KERN-MEGA-PLAN 14.117); and mega_strcal, which loads the CODE selector into ES ON PURPOSE so that its two probe writes fault (KERN-MEGA-PLAN 10.3 item 54.1) - neither one is ever made
 0 2 kernel/hbstub.inc  # the hibernate resume stub, staged in the text framebuffer and run with no kernel at all
+0 5 kernel/megares.inc  # kern_mega's streaming resume stub (KERN-MEGA-MEMORY-PLAN MC4.1 (b)): staged into the text page from HIBER.DRV and run in REAL MODE, at the top of conventional memory, with no kernel left at all
 0 1 kernel/disk.inc  # the boot overlay (.ovl): mount-time setup, before mega_enter
 13 1 kernel/spinner.inc  # the boot spinner's %macro state, drawn from IRQ0 inside int 13h (SPEC.md 15.3.8) during the boot
 37 3 kernel/splash.inc  # the loading screen's state, all of it in stage 2 (SPEC.md 2.9.4)
 3 1 kernel/vidsel.inc  # the adapter pick, in stage 2 and the boot overlay
-0 4 kernel/desksc.inc  # the boot half's scan (.boot2), in real mode before mega_enter; CTRL.DRV's half is PUSH_CSDATA/CSDO now
+0 1 kernel/desksc.inc  # the boot half's scan (.boot2), in real mode before mega_enter; CTRL.DRV's half is PUSH_CSDATA/CSDO now, and AUTOSTART's walk is `.cold` on kern_mega with no CS idiom in it (KERN-MEGA-MEMORY-PLAN MC8) - the blob's three stay in its %else arm, which kern_mega does not assemble
 
 # --- .mod*: an on-demand module writing its own image -----------------------
 28 10 kernel/hiber.inc  # HIBER.DRV (.modh); real mode by design and replaced on kern_mega (KERN-MEGA-PLAN 2.6) - -24 for the DOS trip's own path, which kern_mega DOES run in protected mode (hbm_dosrun step 3c, hbm_extat, hbm_sweep, hbm_drvsusp, hbm_xcap: ~310 mega_gpw fixups a trip, now CSDO, KERN-MEGA-PLAN 14.46). The hibernate's own nine (hbm_wrimg, hbm_ptrfix_set, the ask's paint) stay: one fixup each a hibernate, against the 77 bytes CSDO would add - which took the image's claim over a KB (MODH_UNPAD's dead zone, 10KB -> 11KB while it is loaded)
@@ -69,9 +70,7 @@
 0 1 drivers/hdd/ipkg.inc  # hd_il_send: ES = KERNEL_SEG for INSTALL's log proc, the package callback convention. On kern_mega 0x0060 is the kernel's CODE selector, readable and not writable, and in_onlog reads through ES and stores nothing; HDDTOOL.DRV has no way to name MEGA_SEL_KDATA, which is inst.inc's os88drv.inc decision again (KERN-MEGA-PLAN 14.67)
 0 3 drivers/net/pktdrv.inc  # pk_recv: DS = the driver's own receive buffer, for a packet driver calling in
 0 1 drivers/net/lplink.inc  # ES = the driver's own buffer
-0 1 drivers/usbmouse/usbmouse.asm  # the CH375 poll points DS at its own image
 0 1 drivers/thmpal/thmpal.asm  # the palette driver's own table, through DS
-16 4 drivers/vesa/vesa.asm  # VESA.DRV's state and verb buffers, through CS. kern_mega builds without VID_EXT (kernel.asm, SPEC.md 120.3), so it has no VESA row and never loads this image
 
 # --- apps/pixel: PiXEL, the package and its parts (KERN-MEGA-PLAN 14.40) ----
 # Zero writes through CS since 14.40: a part's own words go through

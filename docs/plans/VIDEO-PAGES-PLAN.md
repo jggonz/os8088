@@ -321,7 +321,8 @@ it is about is broken on purpose (docs/WRITING-TESTS.md §1).
    refuses at open. The player keeps the stride in LIN80's own row of
    `vp_laytab`, which every row address already read, so of the count's
    eight sites five changed and the flipped copy's three are never reached
-   (a NARROW file refuses byte 37 = 2). **Gates**: `vidpage8n` (seven scene
+   (a NARROW file refused byte 37 = 2 - until SPEC.md 98.1.3.2.5.1, which
+   gave those three the stride and lifted it). **Gates**: `vidpage8n` (seven scene
    changes three frames apart on eight pages, every hold exact, the CRTC's
    Offset 14h - red at 28h with the narrow Offset left out) and
    `vidpage6n`; `os88vid --selfcheck` writes an eight-page NARROW file and

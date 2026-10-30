@@ -3594,7 +3594,7 @@ fd_reset_xfer:
 
 ; -----------------------------------------------------------------------------
 ; fd_data_ready - is the data connection usable yet?
-; out: CF=0 = yes; CF=1 = not yet (or it failed, and [fd_xf] is FX_NONE)
+; out: CF=0 = yes; CF=1 = not yet (or it failed: 425 sent, [fd_xf] FX_NONE)
 ; -----------------------------------------------------------------------------
 fd_data_ready:
     push ax
@@ -3633,8 +3633,12 @@ fd_data_ready:
     je .isup
     cmp ah, NSK_CONNECT
     je .no
-    jmp short .failed
-.isup:
+    cmp ah, NSK_CLOSING             ; **CONNECTED, SENT AND CLOSED BEFORE WE
+    je .isup                        ; LOOKED** (SPEC.md 77.53): a small STOR's
+    jmp short .failed               ; client is done in one window, and its
+                                    ; FIN is its end-of-file - so the bytes
+                                    ; are readable and fd_recv_stage drains
+.isup:                              ; them to CX = 0 like any other close
     mov byte [fd_dmode], DM_UP
 .yes:
     pop cx
@@ -3646,8 +3650,10 @@ fd_data_ready:
     cmp ax, NETE_BUSY
     je .no
 .failed:
-    call fd_data_drop
-    mov byte [fd_xf], FX_NONE
+    push si                         ; **SAID, NOT SILENT** (SPEC.md 77.53):
+    mov si, fd_r425                 ; this dropped the socket and forgot the
+    call fd_xfail                   ; transfer with no reply, and the client
+    pop si                          ; waited for a 226 that could not come
 .no:
     pop cx
     pop bx

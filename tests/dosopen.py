@@ -117,7 +117,7 @@ def main():
                 seg = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
                 toff = struct.unpack("<H", m.read(wp + os88geom.W_TITLE, 2))[0]
                 if seg and toff:
-                    out.append(m.read(seg * 16 + toff, 32).split(b"\0")[0]
+                    out.append(m.read(dosmap.lin(m, seg, toff), 32).split(b"\0")[0]
                                .decode("latin-1"))
             return out
 
@@ -126,7 +126,7 @@ def main():
                 wp = os88geom.winptr(m, sl, m.sym)
                 ws = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
                 t = struct.unpack("<H", m.read(wp + os88geom.W_TITLE, 2))[0]
-                if ws and t and m.read(ws * 16 + t, 4).startswith(b"DOS\0"):
+                if ws and t and m.read(dosmap.lin(m, ws, t), 4).startswith(b"DOS\0"):
                     return ws
             return 0
 
@@ -134,7 +134,7 @@ def main():
             seg = dosseg()
             if not seg:
                 return []
-            scr = m.read((seg << 4) + dm["con_scr"], 80 * 25 * 2)
+            scr = m.read(dosmap.lin(m, seg, dm["con_scr"]), 80 * 25 * 2)
             out = []
             for r in range(25):
                 row = scr[r * 160:(r + 1) * 160]
@@ -323,7 +323,7 @@ def main():
         # off DOS itself: [dos_ispkg] is 2 only on the lookup arm, and a
         # bare word that reached the launcher would leave it 2 here
         def ispkg():
-            return m.read((dosseg() << 4) + dm["dos_ispkg"], 1)[0]
+            return m.read(dosmap.lin(m, dosseg(), dm["dos_ispkg"]), 1)[0]
         if ispkg() != 0:
             fail("a typo with NO tail reached the package launcher "
                  "([dos_ispkg] = %d, want 0) - the stem is looked up only "
@@ -410,7 +410,7 @@ def main():
             fail("the launch for the overdraw check did not happen")
         else:
             b = dosseg()
-            drb = struct.unpack("<I", m.read((b << 4) + dm["con_drb"], 4))[0]
+            drb = struct.unpack("<I", m.read(dosmap.lin(m, b, dm["con_drb"]), 4))[0]
             if drb == 0:
                 fail("the console SPENT its marks with a package window in "
                      "front of it - [con_drb] is 0, so dos_pkg_go drew "

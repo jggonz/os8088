@@ -195,7 +195,7 @@ x3h_read1:
     shr dx, 1
     rcr ax, 1
     loop .sh
-    add ax, [x3h_base]
+    call x3h_at                     ; (a window there: x3h_at, MC7)
     mov es, ax
     pop dx
     pop ax
@@ -343,16 +343,14 @@ x3_rseq:
     mov [es:di], al
     jmp short .ok
 .conv:
-    mov si, ax                      ; DS:SI = the hold at the offset, on
-    and si, 127                     ; kern_mega's 8-paragraph grid (KERN-MEGA-
-    mov cx, 7                       ; PLAN 14.39): its 128-byte step and the
-.sh:                                ; rest. (A conventional claim is the
-    shr dx, 1                       ; identity map's; this package is not
-    rcr ax, 1                       ; OS88_HIGHMEM, tests/megahigh.txt)
+    mov si, ax                      ; DS:SI = the hold at the offset: its
+    and si, 15                      ; paragraph through x3h_at's window, the
+    mov cx, 4                       ; offset under 16
+.sh:
+    shr dx, 1
+    rcr ax, 1
     loop .sh
-    mov cl, 3
-    shl ax, cl
-    add ax, [x3h_base]
+    call x3h_at
     mov di, bx
     mov cx, bp
     push ds
@@ -429,6 +427,32 @@ x3h_same:
     pop ax
 .no:
     stc
+    ret
+
+; x3h_at - AX = paragraphs into the CONVENTIONAL hold -> AX = a segment for
+; NOW. The sum [x3h_base] + AX, asked of the kernel first (OSAPI_SEG's
+; SEG_AT, apps/os88partsbody.inc's op_at): under kern_mega the hold is a
+; selector and a sum on it names some other descriptor, so one window is
+; re-aimed there (KERN-MEGA-MEMORY-PLAN MC7); every real-mode kernel refuses
+; the verb with every register kept and the sum is the answer. No 8086 has
+; a conventional hold (x3h_open), so the XT never pays the call. Every
+; other register kept
+x3h_at:
+    push bx
+    push cx
+    push dx
+    mov dx, [x3h_base]
+    mov cx, [x3h_win]               ; the window to re-aim, 0 = a new one
+    mov bl, SEG_AT
+    call OSAPI_SEG
+    jnc .w
+    add dx, ax                      ; refused: a real-mode kernel's sum
+.w:
+    mov [x3h_win], dx
+    xchg ax, dx
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; x3h_keyset - the key: this track's folder, volume and name

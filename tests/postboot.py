@@ -90,6 +90,9 @@ def main():
     fail = []
     with os88marty.launch(IMG, apps=APPS, machine=MACHINE, boot=False) as m:
         boot(m)
+        if getattr(m, "bochs", False):  # kern_mega's `Entered protected
+            m.toast_out()               # mode` toast is ink in the bar
+            os88marty.settle(m)
         before = os88marty._Screen(m)
         print("  desktop: %s" % before)
         if before.field < 0.9:

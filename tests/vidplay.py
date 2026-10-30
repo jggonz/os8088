@@ -40,6 +40,7 @@ K-1 into the mirror, computed on the host, and the row FAILS if the clip has
 none. Broken on purpose - vp_fill's mirror copy skipped - those holds FAIL.
 """
 import argparse
+import contextlib
 import os
 import random
 import struct
@@ -183,10 +184,16 @@ def main():
     if big144:
         machine = "os8088_xt_vga_144"
     os.chdir(ROOT)
-    syms, image = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    # kern_mega (tests/megaport.txt): the shipped player refuses under
+    # protected mode, so the row plays the ARM - build/megak/apps/, assembled
+    # -DPKG_MEGA - and reads the arm's symbols (tests/vidvga4.py's port)
+    mega = bool(os.environ.get("OS88_MEGA"))
+    syms, image = pkg_syms("apps/video/video.asm", ("apps/",),
+                           ("PKG_MEGA",) if mega else ())
+    pkg = os88build.at("build/megak/apps/video.o88" if mega
+                       else "build/video.o88")
     if not os.path.exists(pkg):
-        sys.exit("vidplay: no build/video.o88 - run `make`")
+        sys.exit("vidplay: no %s - run `make`" % pkg)
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         v88 = clip(tmp, a.layout, a.big)
         if a.big and not vid.Reader(v88).spcap > vid.SP_MAX:
@@ -222,7 +229,9 @@ def main():
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            # seg << 4, or on kern_mega the base in its LDT descriptor
+            lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+            base = lin(u16(rec, geom.W_SEG))
 
             def rw(n):
                 return u16(m.read(base + syms[n], 2))
@@ -240,6 +249,13 @@ def main():
                 sys.exit("vidplay: the player will not play the clip here")
             m.write(base + syms["vp_nowin"], b"\1")   # FULL SCREEN: the
                                             # window's play is tests/vidwin.py
+            if mega:
+                # kern_mega has XMS, so the window timer holds the clip whole
+                # and Play decodes it IN PLACE, whose ring is the least one by
+                # design (98.3.18.11): the ring questions below are about a
+                # STREAMED play, so the copying arm is asked for, as vidvga4's
+                # port does (megavidbig covers in place)
+                m.write(base + syms["vp_noinp"], b"\1")
             if rb("vp_shadow") != int(shadow):
                 bad.append("the player chose %s where the %s screen wants %s"
                            % ("the shadow" if rb("vp_shadow") else "native",
@@ -249,6 +265,13 @@ def main():
             mf = mirror_frames(r, rw("vp_clsec") * 512, a.k1)
             mf2 = mirror_frames(r, rw("vp_clsec") * 512, a.k1, 1)
             stops = tuple(sorted(set(STOPS) | {f + 1 for f in mf}))
+            if mega and stops[-1] == NF:
+                # the ARM's play ends at the stream's last frame without
+                # asking vp_frame again (eof, ready 0, held 0 with vp_done =
+                # NF), so a hold BEFORE frame NF - after the last one is
+                # drawn - never comes; the last frame's screen is read one
+                # frame earlier, and `drew NF of NF` below is the end
+                stops = tuple(sorted(set(stops[:-1]) | {NF - 1}))
             print("   frames whose video runs into the mirror slot: %s" % mf)
             if a.big:
                 print("   ...on into its SECOND slot (BIGSP): %s" % mf2)
@@ -320,16 +343,44 @@ def main():
             # --- 2: on time, the ring big enough for the whole clip
             ww("vp_kmax", a.ring)
             m.write(base + syms["vp_played"], b"\0")
-            m.type_text("p")
-            os88marty.until(m, lambda mm: rb("vp_ready") == 1,
-                            "the second play to start", poll=0.1,
-                            limit=300.0, guest=60.0)
-            c0 = int(m.status().get("cycles", 0))
-            toast2 = rb("vo_toast")
-            os88marty.until(m, lambda mm: rb("vp_ready") == 0,
-                            "the second play to end", poll=0.1, limit=300.0,
-                            guest=60.0)
-            c1 = int(m.status().get("cycles", 0))
+            # THE PLAY'S EDGES ARE TAKEN AT THE INSTRUCTION, not at a poll.
+            # c0 and c1 were the cycle counter read when a 0.1 host-second
+            # poll NOTICED [vp_ready] move, so each carried that poll's
+            # latency in guest cycles - 0.2 s alone and 0.4 s at a load of
+            # 6 on four cores, where the same play's own 93 ticks are 5.11 s
+            # (the soak read 5.52 against a 5.50 bound). A watch on the byte
+            # stops the guest at every access to it, and the stop's cycle
+            # count is the guest's own: the value read there is the store's
+            # (kern_mega's Bochs synthesises `cycles`, below, so its run
+            # keeps the polled pair and asserts nothing on them)
+            ready = (base + syms["vp_ready"]) & 0xFFFFF
+            with (contextlib.nullcontext() if mega else os88marty.bp_trace(
+                    m, {"type": "mem", "addr": ready},
+                    on_hit=lambda mm, rec: mm.read(ready, 1)[0])) as tr:
+                m.type_text("p")
+                os88marty.until(m, lambda mm: rb("vp_ready") == 1,
+                                "the second play to start", poll=0.1,
+                                limit=300.0, guest=60.0)
+                p0 = int(m.status().get("cycles", 0))
+                toast2 = rb("vo_toast")
+                os88marty.until(m, lambda mm: rb("vp_ready") == 0,
+                                "the second play to end", poll=0.1,
+                                limit=300.0, guest=60.0)
+                p1 = int(m.status().get("cycles", 0))
+                hits = list(tr.hits) if tr is not None else [
+                    {"hit": 1, "cycles": p0}, {"hit": 0, "cycles": p1}]
+            c0 = c1 = None
+            for h in hits:
+                if c0 is None and h.get("hit") == 1:
+                    c0 = h["cycles"]
+                elif c0 is not None and h.get("hit") == 0:
+                    c1 = h["cycles"]
+                    break
+            if c0 is None or c1 is None:
+                sys.exit("vidplay: the watch on vp_ready saw no play "
+                         "(%d stops)" % len(hits))
+            print("   (the watch on vp_ready stopped the guest %d times)"
+                  % len(hits))
             os88marty.until(m, lambda mm: rb("vp_played") == 1,
                             "the bracket to return", poll=0.05, limit=120.0,
                             guest=30.0)
@@ -382,7 +433,10 @@ def main():
     print("   the hook was held off at most %d periods" % gap)
     if abs(dt - want_t) > tol and not a.big:
         bad.append("%d ticks for %.1f s of video" % (dt, NF / FPS))
-    if abs(secs - NF / FPS) > 0.1 * NF / FPS and not a.big:
+    # (kern_mega's Bochs synthesises `cycles` from its running time - nothing
+    # measured in cycles is a measurement there, docs/BOCHS.md - so the
+    # guest's own BIOS ticks above are that run's clock)
+    if abs(secs - NF / FPS) > 0.1 * NF / FPS and not a.big and not mega:
         bad.append("the guest's clock says %.2f s" % secs)
     for b in bad:
         print("   FAIL: %s" % b)

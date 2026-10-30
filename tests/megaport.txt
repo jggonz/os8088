@@ -1,0 +1,427 @@
+# tests/megaport.txt - MartyPC soak rows PORTED to kern_mega.
+#
+# Each line registers `mega-<name>` (tests/suite.py's _mega_ports): the SAME
+# script as soak row <name>, run with OS88_MEGA=1, which makes
+# os88marty.launch() answer tools/os88megabochs.py - Bochs on build/mega.img
+# with build/megaapps.img in B: (docs/BOCHS.md, "Rows ported from MartyPC").
+#
+#     name[@alias] [secs=N] [timeout=N] [@VAR=VAL ...] [+arg ...] [-arg ...] [-flag=]   # why
+#
+# `name@alias` registers the same row a second time as `mega-<name>-<alias>`
+# - one line per machine where the row is a different question on each
+# (`tmselfsu` at 1MB, `tmselfsu@16m` at 16MB).
+#
+# `@VAR=VAL` puts VAR in the row's environment - `@OS88_BOCHS_MEGS=1` boots a
+# 1MB machine, which has no pool above 1MB, so every claim is conventional and
+# SELECTOR-named: the heap rows' scenarios are kern_big's arena there, and the
+# compactor they drive is kern_mega's (KERN-MEGA-MEMORY-PLAN MC7.4).
+#
+# `secs` is MEASURED on the port (Bochs runs the guest at real time, so a row
+# that is guest-heavy costs more than its MartyPC figure); without one it is
+# twice the base row's. A row is listed here only once it PASSES on kern_mega
+# - and was seen to go red when the thing it checks was broken - or once its
+# failure is a kern_mega defect that is fixed in the same change.
+
+sheetbtn secs=60   # Sheet's dialog buttons (Goto/Format) open, close and reuse their slot
+uilayer secs=120   # every os88ui verb confirmed off guest state, and confirm-vs-settle
+
+# DOS, CP/M AND THE NETWORK
+# On kern_mega EVERY DOS program runs on a kern_dos TRIP (the kernel parked
+# above 1MB, kern_dos in the HMA), so these are the trip's gates. The rows'
+# own fixture floppies ride B: as they are; tests/dosmap.py adds DOS_MEGA to
+# the map and resolves a region through m.lin.
+doscom secs=40   # a .COM runs on the trip: its output, PSP:0002, the desktop back
+dosexe secs=40   # an MZ .EXE with relocations and a short last page, on the trip
+dosexec secs=40   # AH=4Bh loads a child under kern_dos and control returns
+dosfile secs=40   # the handle layer under kern_dos: 20KB written, read, seeked, grown, deleted
+dosdir secs=45 @OS88_BOCHS_TIME0=1783180800   # find, vectors, and AH=2Ah = the KERNEL's RTC date (14.77: `mul bx` ate the month); the clock PINNED at 16:00 so DOSDIR's AH=2Dh 13:45:30 always sets it BACK, and the date must still come home unmoved (14.114)
+dosdrv secs=45   # a drive letter reaches the drive it names; A: is mega.img + AONLY.TXT
+dosregs secs=40   # INT 21h hands back every register it does not answer in
+dostype secs=150   # TYPE/COPY/VER at the windowed prompt, the console buffer by selector
+dosargs secs=120   # arguments typed on the Setup page reach the program (14.77: the press reached no field)
+dossnd secs=40   # a DOS program drives the Sound Blaster itself (Bochs's SB16)
+dosxms secs=40   # AX=4300h answers 80h: kern_dos's XMS arena is REAL on kern_mega (the row's own inversion)
+dosxmsq secs=40   # XMS allocate, move out, wipe, move back, every byte - under Bochs at 16MB
+dospkg secs=240   # a .O88 typed at the prompt opens the package, windowed and from full screen
+doslnk secs=150   # a .LNK's arguments, environment and memory block round-trip (one arm: the whole machine)
+call5 secs=60 +--leg +window   # CALL 5 dispatches on CL (the whole-machine leg IS the trip here)
+irqgrab secs=60 OS88_BOCHS_MOUSE=serial   # a program steals int 0Ch and kern_dos's kd_mou_rearm takes it back
+kdmouse secs=60 OS88_BOCHS_MOUSE=serial   # INT 33h under kern_dos tracks a serial mouse, edges and all
+kdarena secs=40   # the arena, the file window and the read-ahead do not overlap (kern_dos in the HMA)
+netpromise secs=150   # Telnet and FTPD promise per debt; FTPD's cache is a selector
+ftpdfocus secs=120   # FTPD's Setup page keeps no caret it cannot type into
+
+# PANEL, LOADER AND HEAP
+modstr secs=70   # DISKOPS.DRV and FORMAT.DRV letter their own strings through CS, and the formatted 1.44MB B: mounts
+rdcz secs=60   # a compressed README.TXT with its directory hint struck still reaches Note Pad unpacked, off FAT and off the RAM disk
+rdboot secs=150   # RAMDISK.DRV attached AT BOOT, before mega_enter, reads its seed out of its own image (14.112: CPU_F_PM banked at a real-mode attach)
+cpup secs=40   # the Control Panel acts on the RELEASE (sch_coop), and the held radio draws pressed on the VGA glass
+cpnames secs=50 +hdd   # every Control Panel list name and page heading letters (CTRL.DRV strings through CS), plus HDD.DRV's row ticked in on a Bochs ATA disk - cpnameshdd's whole run
+dtwrite secs=40   # the RTC write is spent by the panel's CLOSE - and on Bochs's MC146818 the stepped year reaches the CHIP at the close and not before
+dockmodule secs=80   # a missing or corrupt DOCK.DRV, or a saved advanced setting without it, leaves the basic Dock and every callback on the kernel's own body - fixtures built from megak/
+drvcall secs=60   # a package reaches RAMDISK.DRV through OSAPI_DRV_CALL: refusal first, then HELLO WORLD upper-cased in the package's own selector, then the bad verb refused
+lzdrv secs=50   # mega.img's compressed RAMDISK.DRV expands byte-exact (read at drv_load_at.attach, a .cold breakpoint) into a selector covering image + bss, and answers DRVCALL
+lzdrv-nohint secs=50   # ...and with its directory hint struck, as a host tool's copy leaves it
+fmrefuse secs=30   # OSAPI_SND_FM with no sound driver refuses (drv_svc_call_x's retf) and the desktop keeps the graphics lock free - Bochs with no SB16
+stiknodesk secs=60   # a Sticky App relaunched at boot with DESK.DRV absent refuses in its own words, present binds and drops it - all three legs; found and fixed KERN-MEGA-PLAN 14.78
+lzload secs=50   # compressed packages (lz4 and LZB) load from B: and FRACTAL expands byte-exact into its selector
+lzmod secs=40   # BEVERLY.MOD packed with lz4, double-clicked: Tracker's module claim holds all 116,085 bytes, read through the selectors' linear bases
+lzmod-lz4big secs=40   # ...and an LZ4 stream past 64KB (176,085 bytes) through the transparent read
+multiseg secs=50   # MSEG loads its own parts (7/7 checked three ways each) - and on kern_mega's store the OP_XMS part goes into the pool, op_seg 0, 'X', instance-owned: msegxms's facts too
+msegw secs=50   # ...the same with the carve past 64KB at both ends
+mseglazy secs=60   # an OP_LAZY part is outside the carve, fetched on a key (9 sectors counted off Bochs's FDC log), dropped and fetched again; the claims - mem_tab AND the pool - back as they were
+pkgmax secs=40   # a package of exactly APP_MAX_SIZE loads into one 64KB claim (its mem_tab record found by the selector's base), I_SIZE 0xFFFF, its last bss byte written, and closes clean
+pkgrun secs=50   # OSAPI_PKG_START: the image form runs one and refuses two, the by-name form runs two more (MSEG 7/7 OK), HELLO's region byte-equal to its file
+c64part secs=50   # C64.ROM and C64.OVL are parts of C64.O88: the ROM at op_seg(0) by linear base, its bytes and the overlay's right, and the 6510 runs on kern_mega
+tmload secs=40   # the Task Manager arm's CPU meter, its rows and sch_cycles tell one story: the idle bucket under protected-mode halt, and tm_worker sleeps
+heapscrl secs=150   # the Task Manager arm's memory page list scrolls: bar survives refreshes, a round-trip scroll returns the same pixels, end stops at total-fit and 0
+gifdrag secs=200   # the field's freeze recipe (memory page open, OS8088.GIF in Paint, eight drags): every stack slice and task 0 stay under 80% and the guest keeps retiring instructions (Bochs ptime)
+rehomeabort secs=60   # a re-homed program refusing itself leaves no window, no instance, the heap's free runs AND kern_mega's pool blocks exactly as before the launch
+pkgmove-texpad secs=50 @OS88_BOCHS_MEGS=1   # on the 1MB kern_mega (no pool): TeXPad's declared source claim MOVES in a posted compaction - its selector rebased, the word naming it live, its bytes and the window's picture identical
+
+# APPLICATIONS
+fptest secs=40   # the float library's 88 cases on the soft path AND the 386's FPU ("8087 0"); red on a wrong expectation (soft 1, 8087 1)
+imgtest secs=30   # every os88img decoder case's verdict out of its record; --break goes red on BDOWN.BMP
+minexflag secs=60   # a wrong flag is not pixel-identical to a mine, on the VGA glass (1bpp vram -> fbuf); red with the X drawn CBLACK
+cychs secs=80   # Cyclone's high-score table: a full write, an in-place write, a re-launch reads both back; red with od_write taken out
+tankaim secs=70   # TANK's aim assist inside the box and nowhere else, the turn untouched, the reticle honest (VGA: one step a frame)
+skiesui secs=110   # Clear Skies' title-page drop-downs, the pick changing the picture, the two forced refusals (region re-homed above 1MB)
+skiesworlds secs=80   # every Clear Skies location loads its world byte-exact and flies (re-homed region, overlay read through its selector)
+fontview secs=60   # F88 launches FONT VIEWER on the face, every face listed, typing, arrows, clicks; mega.img's own SYSTEM/FONTS is the first rung; red with a face deleted
+npscroll secs=70   # Note Pad scrolled while its height is still counted: no frozen UI, the count carried, the scroll bar untouched
+tgplay secs=90 +--card +vga   # TameGram's 600 seeded ticks play the expected game (THREAT 191, PURGES 18, grid); VGA, so no 1bpp matrix compare; red with the column pass skipped
+linecar secs=70   # DOS's path field: three histories to LEN 2 CAR 2 'AB' are one picture (dosmap takes -DDOS_MEGA, mega.img's DOS)
+tpdraw secs=140   # TeXPad's incremental source redraw against a forced wm_paint_all, 0 differing pixels per leg
+wdcombo secs=130   # Word's three combos are os88ui_drop records: drop, bank, drag, pick, restore exactly, Esc
+ddcorner secs=420   # no Dot Delirium wall pixel in an actor's colour at any dd_blit, windowed and full screen (Bochs's glass, VGA)
+vidvga4 secs=90   # the Video Player ARM (build/megak/apps) plays 16 colours in mode 12h in the window and full screen; the copying arm (vp_noinp) so the streamed ring is the one sized
+vidmodex secs=45   # the ARM plays Mode X sub-records under a map mask; red with vp_dac skipped
+recorder secs=45   # RECORDER on Bochs's SB16: PCM_BG plays and retires, the speaker path's chunks come from a claim of its own (heapmap's pool: above 1MB), Record/Stop; --break-sweep goes red
+weavesmoke secs=120   # WEAVE opens FORM.WAB at the standard rect with weavesim's VGA cell grid (80x52), title, edges, ink in bands - on the glass, thresholded (VGA leg only)
+weavepack secs=200   # LOOM packs every demo and template ON kern_mega byte-identical to weavesim --pack, read back off the guest's floppy
+weavesession secs=70   # a scripted WEAVE session (type, click, script, formula) against weavesim's oracle, VGA leg
+chartread secs=150   # CHART's SYLK, DIF and BIFF readers draw one chart (CHART and SHEET above 1MB)
+ovlhigh secs=60   # CWORD's overlay part claimed TOP-DOWN, packed under the ceiling, MOVABLE - unchanged on kern_mega's conventional arena
+sheetfmt secs=300   # SHEET's three file formats round-trip what they mean; the CGA-pinned menu/chooser/folder points moved by their windows' measured dy on Bochs's VGA (sheetfmt.mega_y)
+sheetfunc secs=70   # all 48 text/information/transcendental functions, saved and read back on the host
+sheeteval secs=80   # what SHEET's evaluator answers, 102 checks by the host
+sheetxl2 secs=90   # SHEET opens Excel 2.1's own BIFF2 files (arm A; arm B skips without the archive, as on MartyPC)
+scsize secs=130   # SCRIBE's parts and claims (heapmap's kern_mega pool: the region and its three claims above 1MB), round trips, picture, TOOBIG, sort, undo
+gbsave secs=160   # RealDMG's ARM: battery RAM and MBC3 clock saved on close (GBSAVE.SAV) and read back on a second boot; red with rw_onclose answering without writing
+wirefleetdeploy secs=60   # WireFleet deployment, refusals, rotation, removal, auto, Ready, button cancel, About - the VGA leg (Bochs has no CGA/Hercules)
+chartgal secs=600   # the Gallery draws seven different charts, unchanged on kern_mega's VGA (CHART above 1MB)
+
+# WINDOW MANAGER AND INPUT
+bptrace secs=70   # os88ui driven with breakpoints ARMED (bp_trace) - the shim's bp_exec, pump and stepped double-click
+sizesnap secs=20   # the SIZE snap keeps a maximized window at x=0, w=[vid_pw]
+btnmove secs=30   # a standard button answers where its window IS after a drag
+dragui secs=40   # every control Skies laid out answers after a drag replay
+fmarrows secs=50   # Disk-window arrows move a selection; click, Down, click stays inside FM_DBLCLK and opens nothing
+zonedmg secs=30   # a zone's damage owes the window over it a redraw (the glass is fbuf on Bochs's VGA)
+deskzoom secs=60 +--machine +os8088_xt_vga   # a zoom's restore and an overflowing drag leave a whole repaint - VGA leg only (no Hercules on Bochs)
+deskclip secs=90   # a desktop cell is drawn only where it shows (VGA legs; a boot a leg - no snapshot on Bochs)
+dmgcull secs=70   # a marked window does not paint under the mover (the Task Manager's PKG_MEGA arm read off its own map)
+zoomsave secs=170   # a zoom over another window banks it, the reveal comes off the cache
+clipkeep secs=70   # a wholly covered window keeps its raise cache when it arms a clip
+uidrdis secs=90   # a drop-down drawn disabled takes no press (two boots: Bochs runs patched code stale; --clobber-dis goes red)
+gfxlk secs=70   # nothing draws or banks with the arrow on the glass (a GFXAUDIT=1 kern_mega in a tree of its own)
+thm95 secs=240 +--legs +ACDE   # the Windows theme: buttons pixel by pixel, menus, the module's doors (no Hercules leg B; the title bar's 8088 cost skipped)
+fsxclip secs=60   # an fsx bracket entered from a click comes back to a whole desktop (--clobber-clip goes red)
+altenter secs=60   # Alt+Enter full screen by latch (ArtfulType) and bracket (Tracker) - the bracket entered with a human's hold, which found Tracker unseeded (KERN-MEGA-PLAN 14.79)
+evqfull secs=20   # a full event ring drops its OLDEST input, never a coalesced WAKE (the stub starts with cli: Bochs's park cannot clear IF)
+tnest secs=40   # a worker's call into an image is counted in wm_tcnt (.cold called through COLD_SEG's descriptor, DS the kernel's data selector)
+curbusy secs=60   # the hourglass while frozen, the arrow after (office360.img as it is, in B:)
+cfgtrip secs=40   # a setting survives the panel and a reboot (diffed against the image as MOUNTED)
+int0sweep secs=140   # does anything raise a divide error - the `int 0` breakpoint is #DE's IDT gate under protected mode
+stkpanel secs=20   # the stack-overflow death panel runs to .hang with all 41 characters and the parked SP
+kbdburst secs=80   # a key burst through kern_mega's REFLECTED int 09h (one X batch, 1 ms a key)
+mouseup secs=40   # 13.7's release, the os88ui arm and MOUSEUP-PLAN 4.2's guard (--break-si goes red)
+atmenusu secs=180 +--card +vga   # ArtfulType's pull-down banks what it covers and the close restores it exactly
+btngesture secs=60   # a standard button goes down, up on slide-off, down again; DOS's record aimed on paint (kern_mega's own DOS.O88)
+btncp secs=30   # the Control Panel's buttons through its FAR call
+ps2mouse secs=20   # the PS/2 handshake, an exact pointer and every bar title, and the keyboard intact (no UART: Bochs com1 off)
+wheelps2 secs=20   # the IntelliMouse knock and the wheel's Z summed and signed (Bochs imps2, m.wheel)
+c64move secs=80 @OS88_BOCHS_MEGS=1   # the C64's RAM and carve MOVE in a posted compaction on the 1MB kern_mega and the 6510 runs on (KERN-MEGA-PLAN 14.80: its ROM-bank windows had aliased)
+a2move secs=80 @OS88_BOCHS_MEGS=1   # ...the Apple II's, the same
+
+# FILES, DIALOGS AND THE DESK
+fpgnotch secs=30   # dsk_xfer asks once a run whether a bar is live; its .cold breakpoints run above 1MB here
+deskmodal secs=40   # a widget DELETE with a Disk window in front; scratch system disk off mega.img
+deskcalgrid secs=40   # the Desk Calendar grid out of its bss, the clock set through clk_*
+msel secs=150   # multi-select and set operations; the listing segment is a selector here
+fcpapi secs=30   # OSAPI_FILE_COPY both verbs, every answer read off the volume
+fcpcopy secs=90   # Cut/Copy/Paste moves a file and a folder tree, the volume verified on the host
+icostore secs=60   # two volumes, one icon-store body; the listing claim is a selector here
+desksc secs=150   # desktop shortcuts, every route on one boot, two reboots (a power cycle under Bochs)
+imgmount secs=200   # a .IMG mounted by double-click; Unmount Image sends the window to the host (KERN-MEGA-PLAN 14.82)
+diskclone secs=90   # Clone Disk end to end, both floppies diffed on the host; the same-drive identity check (KERN-MEGA-PLAN 14.83)
+czjoin secs=200   # Uncompress on a part joins the set; every refusal used to hang (KERN-MEGA-PLAN 14.84)
+fdlgchoose secs=120   # the Standard File chooser end to end through Note Pad
+fdlggrey secs=60   # the chooser's default button greyed with nothing selected; from the root of B: under Bochs, MEDIA overflowing the 1.44MB disk's list
+sbardlg secs=60   # the chooser's scroll bar at the list's right edge
+facescan144 secs=40   # ty_scan walks to SYSTEM/FONTS - the 1.44MB leg, which is kern_mega's only system disk (facescan's 360KB one has no faces and tests the other rung)
+assocopen secs=40   # opening a document draws no pixel of the Disk window; the double-click's second half one X chain under Bochs
+assocwake secs=60   # a document launch draws the program's window before reading the document; the glass is fbuf under Bochs
+assocfind secs=90   # an unclaimed extension is looked for, the search's disk reads counted
+assocflush secs=480   # what the machine learns is written back to ASSOC.DAT, across five boots; the .cold flush breakpoints above 1MB here
+autostart secs=150   # LINKS and AUTOSTART; the gate disk rebuilt on mega.img, Shift pressed on [spl_live] under Bochs
+deskitem secs=50   # OSAPI_DESK_ITEM from a package; the shortcut table and the package's bss through lin()
+savervga secs=60   # the saver on VGA, the planar blanker arm (AC 12h): kern_mega's own VGA, its memory peeked at A0000
+toastbar secs=40   # a maximum-width toast reaches the bar whole and touches no menu
+deskz secs=60   # the desk layer's z-order off stikdesk360.img, rebuilt on mega.img (tests/megafix.py); wm_top CALLED on the paused machine through the shim's park
+deskclose secs=40   # a widget closes by its own box; stikdesk360.img rebuilt on mega.img
+deskkeys secs=60   # keys reach the widget while Note Pad stays front; its W_ONKEY breakpoint through lin()
+deskcalremind secs=150   # reminders ring on card 3, the clock set through clk_*; its 22 cell breakpoints past Bochs's linear slots take physical ones
+deskclock secs=120   # the Desk Clock desk window, its faces, settings, alarm, and its relaunch after a reset (a power cycle under Bochs)
+stikboot secs=40   # a Sticky App comes back at boot; stikrestore360.img rebuilt on mega.img (tests/megafix.py)
+stikmenu secs=90   # Locator's Sticky Apps menu (STIKMENU.DRV, whose image is a selector here)
+stikhiber secs=40   # a pending RESUME stands the Sticky App relaunch down: HIBERNAT.PTR on the shim's C:, stik_boot asked for after mega_enter
+hdnoclaim secs=50   # a mounted hard-disk partition costs no heap - on kern_mega the image and any claim are XMEM-pool blocks, read off mx_tab
+
+# FIXED DISKS AND INSTALL (wave 2)
+# The row's OWN disk is Bochs's C: (tools/os88megabochs.py's row_disk): the
+# `--mount hd:0:` VHD MartyPC is handed, or a stage_run_dir's, written
+# through so an install in one launch is what the next one boots. Their red
+# checks broke HDDTOOL.DRV, HDD.DRV, INSTALL.O88 or kern_dos on a throwaway
+# mega.img (KERN-MEGA-PLAN 14.95).
+install secs=110   # the wizard erase-installs off mega.img, its progress widget ON THE GLASS (VGA via fbuf), gives HDDTOOL back, upgrades from C:, and C: boots
+instdeep secs=40   # the installed volume carries the whole tree and README.TXT's packed bytes (14.95: mega.img had no SYSTEM/APPDATA/NOTES)
+instassoc secs=40   # the installed ASSOC.DAT describes C: - every row's cluster a folder of that volume
+inststate secs=60   # the wizard's State column on three VHDs with slots 2-4 rewritten
+instkeep secs=100   # an install KEEPS a DOS 3.3 volume's files, the kernel one run past them, boots C:, upgrades in place, boots again
+bigvol secs=85   # a 321MB FAT16 kept, the kernel past 32MB (the LBA's high word), boots C:, the Disk window's M units, CALC off C:
+hdsize secs=60   # the disk tool's size line: a typed 100MB is 100MB on a cylinder, slot 2 the rest
+hdmap secs=65   # the disk tool's drive map: the bar, the underline, Free/largest, clicks pick slots
+hdauto secs=65   # HDD.DRV loads itself and a default never sticks: six legs over three boots of disk / blank disk / no disk
+hddcp secs=55   # the Hard Drive page, the tool's and the wizard's windows, and the tick that mounts
+hdtake secs=30   # Bochs's BIOS knows its ATA disk: HDD.DRV's rung 1 TAKES it (row 0 IDE 1F0h, HDD_BIOS 80h) and CALC launches off C:
+hdtakeblank secs=25   # ...and a disk with no 55AA at LBA 0 stays the BIOS's row
+hdtakeboot secs=35   # ...and on a machine BOOTED off it: C: handed to HDD.DRV, given back on untick, taken again
+dosram secs=35   # kern_mega's ONE arm (the trip): the page's promise is what kern_dos hands DOSHELLO (arm 0's legs have no controls here by design)
+kdhdd secs=35   # the fixed disk is a volume under kern_dos and a program on C: reads its own drive
+dosshell secs=50   # the built-in shell on the trip: eight exit codes, the files on the host; MOVE is kern_dos's stream path (no copy engine, by design)
+blitp secs=25   # gfx_blitp's 2,048 bytes are where it was given them, read PLANE by plane (the shim's guest-stub planes())
+gorillasreactions secs=130 +--arm +vga   # Gorillas' sun, banana patches, scoring dance and tune, VRAM compared plane by plane in the window and full screen
+
+# THE NETWORK (wave 2): QEMU's network rows on Bochs's NE2000, through
+# tests/os88qmpmega.py - the row's own QMP socket answered by a kern_mega Bochs
+ethernet secs=60   # ETHER.DRV, DHCP and a page over TCP; the pool's claim read off mx_tab; the teardown's NETV_GONE (KERN-MEGA-PLAN 14.85)
+brdownload secs=60   # Save Link As streams a binary into B:, read back mid-run through the live image
+ethcfg secs=120   # a manual address set in the Setup window survives a reboot; ether360.img's twin on mega.img
+wirezone secs=60   # the Wire's service zone arrives with ETHER.DRV and leaves with it (KERN-MEGA-PLAN 14.86)
+wirechat secs=90   # WireChat end to end against the fixture hub; WIRECHAT.CFG read back off B: after the run
+httpmount secs=150   # HTTPFS.DRV mounts the host's tree; BIG.BIN with and without Range: byte-identical on B:
+httpinstall secs=90   # INSTALL started off the HTTP drive onto the IDE disk (the shim's C:); HTTPFS's CPU flags (KERN-MEGA-PLAN 14.87)
+netinst secs=300   # INSTALL over the network onto C:, and the startup link across two boots; OSAPI_DRV_CLASSK (KERN-MEGA-PLAN 14.88)
+netinstbad secs=150   # INSTALL's release check refuses six non-release answers
+rdxms secs=120   # the RAM disk's store above 1MB: kern_mega's own pool (mx_tab, heapmap.pool) in place of XMEM.DRV's table
+netcoexist secs=60 +--arm +pinned   # the card at 2A0h pinned on the Ports view, SYSTEM.CFG read on the host, found after a reset; the MPU arms need QEMU's isa-debugcon latch and its NIC trace, which Bochs has not got
+
+# THE VESA DESKTOP (KERN-MEGA-PLAN 14.115): QEMU's row on Bochs's VBE
+# (`vga: extension=vbe`, the dispi bank register in protected mode), through
+# tests/os88qmpmega.py. Bochs's vgabios offers nothing above 800x600, so Auto
+# lands on 0114h and the rows expect it. Every row below goes red with
+# mega-vesa's two breaks: they all ride the same boot
+vesa secs=50   # VESA.DRV in protected mode: VID_VESA at 800x600x16, the chrome, the dither, a menu down and back, two Disk windows and the chevron band; red: the driver's int 10h on the caller's stack (boot never reaches protected mode) or mega_vxpm not called (#GP(A000) in the image)
+vesa8 secs=35   # the same desktop at 800x600x8 by SYSTEM.CFG's class: the DAC's first sixteen off the glass, the Disk window
+vesacp secs=50   # the Display page in protected mode: VXV_NEXT cycles the class, Set Primary switches to 640x480x8 (4F02h reflected)
+vesablit4 secs=20   # a package's OSAPI_GFX_BLIT4 on VID_VESA, WireBall's title art pixel for pixel (565 re-expanded QEMU's way, vesa.px)
+vesafsx secs=20   # Gorillas' BIOS-mode bracket from the VESA desktop and back: the mode restored through VX_SETMODE, the margin's dither whole
+vesashut secs=40   # Shut Down on the VESA desktop: every driver detached (vx_detach points [vx_ep] at KERNEL_SEG:vx_null, the code selector on kern_mega), mode 12h and the sentence drawn
+
+# MOVES AND THE HEAP (wave 2)
+# On a 1MB kern_mega (@OS88_BOCHS_MEGS=1: no pool) every claim is conventional
+# and SELECTOR-named, and a protected-mode move REBASES and tells nobody
+# (KERN-MEGA-MEMORY-PLAN MC7.4) - so "it moved" and "nothing names the old
+# block" are asked of the paragraph under each word (sheetmove.seg_key).
+regmove secs=100 @OS88_BOCHS_MEGS=1   # Note Pad's REGION moves in the descending pass: its selector rebased, W_SEG/I_SPTR/owners naming the new paragraph, image and picture intact (found tests/filler's BX: 14.90)
+drvmove secs=45 @OS88_BOCHS_MEGS=1   # the RAM disk's IMAGE moves; no kernel word names the old paragraph, and int 33h planted as a REAL vector follows it (mem_ivt_relocf, 14.90)
+sndmove secs=70 @OS88_BOCHS_MEGS=1   # SOUND.DRV's image moves on Bochs's SB16: the IVT's IRQ5 rows (0Dh and 25h) follow it - they did not before 14.90 - and the IDT gate lands the image's distance on
+regpin secs=110 @OS88_BOCHS_MEGS=1   # a worker-owning region with no restart point does NOT move (mem_can_move's pin, unchanged on kern_mega), Calc's beside it does
+regwork secs=100 @OS88_BOCHS_MEGS=1   # ...declared restartable it MOVES, no proc called and the worker RESUMED in place (its frame names a selector), still looping
+trackmove secs=80 @OS88_BOCHS_MEGS=1   # BEVERLY.MOD's 114KB claim MOVES under Tracker's ARM (trackmove.disk(): build/megak/apps/tracker.o88): bytes, blob, 31 sample and the pattern windows (SEG_SUBs) the same paragraphs into it, the replayer alive
+trkcompact secs=140 @OS88_BOCHS_MEGS=1   # ...and Tracker posts the compaction its exact requirement needs, says so, and loads (the ARM, ten instances stacked from the ceiling)
+ringmove-audio secs=70 @OS88_BOCHS_MEGS=1   # the Audio ARM's look-ahead ring moves between plays (Bochs's SB16) and is pinned for one (megafix.arm_disk: covoxlisten720.img with the arms)
+ringmove-tracker secs=70 @OS88_BOCHS_MEGS=1   # Tracker ARM's speaker ring moves idle, pinned while the ISR plays it, CONS moving after
+ringmove-midirack secs=70 @OS88_BOCHS_MEGS=1   # MIDIRack ARM's song, wavetable bank and mix claims move idle; bank and mix pinned while the card plays (mrwt720.img with the arm)
+rcmove secs=70 @OS88_BOCHS_MEGS=1   # RunCPM's 64KB Z80 claim moves at the A> prompt, rc_zseg and rc_z.seg name its new paragraph, 64KB hashed the same, and the CCP answers XYZZY? out of it
+zrestart secs=900 @OS88_BOCHS_MEGS=1   # Frotz's region moves at every park site and play goes on byte-identical to a no-move boot ([MORE] still pinned); the loop leg's park caught by a breakpoint, Bochs's 386 ending the loop between two polls
+editmove secs=90 @OS88_BOCHS_MEGS=1   # Note Pad's document and undo claims move under a live app, bytes and repaint identical - here heapfrag#2's pinned comb block lands flush under them, so the row reads that wall off mem_tab, closes heapfrag and POSTS the compaction
+editmove-frotz secs=90 @OS88_BOCHS_MEGS=1   # a running story's five claims move, zf_pcseg inside the moved story, zf_sdelta 0 (no proc runs: an ES pushed before the move is a selector), the VM answers
+weavemove secs=110 @OS88_BOCHS_MEGS=1   # two WEAVE instances' claims move and every copy names the same paragraph (a far vector's code half, a part row, the core's state block); PONG plays on, and its bundle moves under the running worker
+wdheapmove secs=70 @OS88_BOCHS_MEGS=1   # Word's six document claims all move, bytes intact, and three typed characters land in both the text and the CHP claim
+rehomemove secs=150 @OS88_BOCHS_MEGS=1   # a re-homed program's carve moves; no proc called (rp_moved 0) and its handoff's asset SUB lands one carve-delta on, reading 'RA' 5AA5
+heapmap secs=80   # the boot's claim maps under Bochs (SB16, NE2000, an ATA disk, every driver wanted): no overlap, no MEM_K_OVL, the caches rejoin one run - and kern_mega's POOL (mx_tab) never overlaps, the drivers' images in it
+tmowner secs=70   # a raise cache is Purgeable's whoever caused it - on a 16MB kern_mega the cache is a POOL block, read off the Task Manager arm's tm_xw/tm_xgid
+heaphi secs=60 @OS88_BOCHS_MEGS=1   # RAMPAGE.DRV's image goes top-down, so a compaction still buys the read-ahead's worth (kern_mega's panel list scrolls: its arrow brings the page in)
+heapdrv secs=60   # SOUND.DRV's buffers are in the SOUND group on the Task Manager arm's memory page (KERN-MEGA-PLAN 14.91: their owner, the driver's data selector, was read as a paragraph)
+pkgmove-browser secs=80 @OS88_BOCHS_MEGS=1   # the Browser's four claims (source, document, lines, links) move, live, bytes and picture identical
+tmselfsu secs=200 @OS88_BOCHS_MEGS=1   # the Task Manager arm keeps its OWN raise cache and still sees everyone else's - witnessed off tm_update's one door and the kernel's three wm_su_* (MegaOwn), not every font_run. At 1MB every cache is a conventional claim: the claim table's question, unchanged
+tmselfsu@16m secs=200 @OS88_BOCHS_MEGS=16   # ...and at 16MB, where its raise cache is a POOL block: tm_quiet leaves it out of the pool walk's key by the LONG record's tag (OSAPI_XMEM_WALK BX = XMW_LONG, KERN-MEGA-PLAN 14.92) - RED before it on QUIET and CELLS (six drops of six, TM holds 0000), and OTHERS red with tm_ownws answering "ours" for the whole range
+heapcheck secs=50 @OS88_BOCHS_MEGS=1   # heapfrag's 18 checks and the region suite on a 1MB kern_mega; check 13 asks for the ceiling block's OWN merged run (hf_ceilask, KERN-MEGA-PLAN 14.93) - red with HEAPCOMPACT=0 and with the descending pass taken out, on kern_big and kern_mega
+
+# DESKTOP RUNNERS-UP (wave 2)
+# The nearest duplicates of rows the first list chose. Every one was seen to
+# go red on kern_mega with the thing it checks broken, unless its line says
+# the break is not cheap (package or module code). The shim gained `mount`
+# (a floppy swapped under a running machine) and `setreg flags` through Bochs's
+# `set $eflags` - which used to be a silent no-op, so an injected CF never
+# reached the guest.
+tickzero secs=20   # the boot zeroes [ticks] (0x8000 planted at sched_init)
+postboot secs=30   # the first disk access after the desktop is survivable (the boot toast expired before the bar is judged)
+fpgcold secs=30   # a stopped motor arms the widget BEFORE the first int 13h (int 13h's bp is the IDT gate)
+toastfpg secs=90   # a toast in its time outranks the file widget, the widget has the bar back at its last tick
+timerrace secs=40   # ui_timer_pass asks again under the gfx lock whether the window still exists (DS:SI and CS:IP through m.lin)
+curshape secs=45   # the pointer's shape tracks the window under it (Missile's crosshair)
+fmcommit secs=130   # a committing keystroke (Delete, New Folder) reaches fm_repaint and a refused one does not
+cppromise secs=60   # the Control Panel promises per page and the clock page withdraws it (a four-plane bank on Bochs's VGA)
+cplistrow secs=40   # a Control Panel selection letters two rows and blanks no pane (the bar is black on Bochs's VGA, as on 1bpp)
+dtfield secs=90   # the Date/Time editor inside CTRL.DRV steps, wraps and clamps Feb through cw_clk_mlen
+radio secs=90   # os88ui_rad: no ink in a corner, three answers, two rows repainted (radtest, read off the VGA glass)
+sbar secs=50   # the Disk window's scroll bar: geometry, arrows, track paging, a thumb grab (sbardlg is the chooser's placement)
+fmthumb secs=30   # the thumb drag: x never read, the view follows, the release commits
+alertbtn secs=170   # the standard alert's button row: one press draws one button, and it tracks off and back on (Paint's region through m.lin)
+alertanim secs=150   # the 'Save changes?' alert does not zoom open, and a launch still does
+spantest-vga secs=45   # gfx_spans draws what a fill a row draws, and an armed clip region refuses (SPANTEST's region through m.lin)
+deskwhole secs=190 +--machine +os8088_xt_vga   # wm_dmg_gray's .whole reached on purpose, the drag and the restore against a whole repaint (VGA leg)
+clipgrow secs=90   # a caption beside a covering window's corner keeps every row (the Calculator covers on a 640 glass)
+dockpos secs=90 ---cga   # the Dock on every edge and hidden: band, rule, glass against a repaint, the hover strip and its linger (DOCK.DRV's claim found in the pool by linear base; the CGA leg is a 200-row question)
+btnall secs=200   # every converted button driven: aimed after a paint, sane rects, a press arms, a slide-off un-arms (DOS_MEGA / PKG_MEGA maps)
+sheetmtailvga secs=100   # SHEET's pulldown save-under on the four-plane path, and the repaint fallback beside it
+czto secs=260   # Uncompress To...: the join asks for each floppy, swapped under the running machine (the shim's `mount`), refusals, a CRC error by `setreg flags`
+imgswap secs=60   # an image on a floppy is swapped WITH that floppy: the stand re-reads it off the other disk and the write goes nowhere
+lzcomp secs=270   # File > Compress byte for byte against the host's LZB; an uncompressed package compressed and launched in protected mode too (KERN-MEGA-PLAN 14.116), an already-packed one 'Already compressed' (14.100)
+rdup secs=130   # the RAM disk's page acts on the RELEASE: +, Load, Mount, Preserve As
+rdpreserve secs=240   # the RAM disk's Preserve and Load round-tripped and read from the host (RAMDISK.DRV and its store through selectors)
+lzmod-dialog secs=40   # BEVERLY.MOD through Tracker's file dialog: the module claim holds all 116,085 bytes
+sheetdel secs=100   # SHEET's File > Delete: No keeps the file, Yes deletes it, the open document untouched (the CGA points moved to Bochs's VGA)
+msegz secs=30   # the seven parts with two COMPRESSED: op_unpack through kern_mega's selectors, the same three proofs a part
+mseglzslack secs=30   # a compressed lazy part keeps its own length at its claim's base (claims keyed by selector), and the drop gives it back
+pkgbig secs=110   # a package past 64KB is typed by PKG_FILE_HI and the loader reads 32 bits of its size
+pkgfence secs=110   # image + bss fenced in seventeen bits, neither wrap reaches a claim
+pkgfmt secs=70   # a package of another format is refused by name and the machine goes on loading its own
+lzfile secs=40   # a compressed file is read transparently, the write derives the hint from its bytes
+lzfence secs=30   # OSAPI_DECOMP refuses a hostile stream (truncated, zero offset, past the output, overlong) after a valid one
+rehome secs=30   # a loader hands its identity to a part and is freed; the carve trimmed to the program, the tail to the keep (paragraphs off the selector's base)
+assocvol secs=80   # a .V88 on a bare B: with the player on A: (a scratch mega.img carrying the PKG_MEGA arm): its glyph, a player that READS it, a junk one's reason
+dosglyph secs=50   # a shipped document glyph reaches every path that fills a slot (the icon store's claim through m.lin)
+stikshort secs=50   # three drag-made shortcuts each SHOWN, +3 still `\`, nothing launched (stikshort360 rebuilt on mega.img)
+deskdock secs=50   # an OS88_F_DESK package takes the top slot and gets no tile, and a click where it would be reaches nothing
+deskdrag secs=120   # the posted DRAG: the snap, no drag cache, one paint, no ghost, the place saved, the re-fit
+deskhover secs=100   # the hover edge wakes the widget once and the handle shows; clipped under a Disk window (DESK.DRV's entry through its code selector)
+deskground secs=90   # the theme in a widget's gaps: Bright, Dark, Color, and a Disk window laid over it and closed
+deskpen secs=90   # the gfx_blit1 pen is scoped to a callback (the package's CODE alias found by linear base)
+deskcalsnooze secs=190   # the Desk Calendar's snooze: one held, the re-fire with the chirp, across midnight, in the state file
+deskcaledit secs=210   # the Desk Calendar's editor, to 48 appointments and the refusal
+stikmiss secs=40   # a Sticky App whose package is gone is downgraded to a shortcut in memory, with one toast naming the drive
+stikmove secs=80   # a Sticky App dragged is saved and comes back where it was put after a reset (a power cycle; the kernel's [ticks] restarts)
+stikanchor secs=70   # a place saved on 800x600 anchors to the far edges on 640x480 and writes nothing
+stikregister secs=210   # a Sticky App registers, refuses a second launch with no write, its x saves and unregisters, a reset brings nothing back
+
+# DOS AND APPLICATION RUNNERS-UP (wave 2)
+# The DOS rows are the trip's again (every program runs under kern_dos in the
+# HMA). A row with two arms keeps its first: on kern_mega a plain launch IS
+# the whole machine, and the page draws no radio (KERN-MEGA-PLAN 12.1 item 1).
+dosshrink secs=30   # a free MCB 16 bytes under the program's SP survives five INT 21h calls - the HMA trampoline built a 7-word frame there until KERN-MEGA-PLAN 14.105
+dosfcb secs=30   # AH=29h parses a name into an FCB as IBM DOS 3.30 does; red with the wildcard fill made '*'
+dosvec secs=30   # INT 25h's stack balances and AH=00h exits 0, read through m.lin; red with `xor al, al` taken out
+dosmcb secs=30   # AH=4Ah grows a block back into what it gave up: the trip's allocator coalesces as DOS does
+dosren secs=30   # AH=56h renames where it stands, IBM DOS 3.30's table
+dosgap secs=30   # a write past the end lays a gap; a delete of nothing says 2
+doslong secs=30   # five spellings of one long name reach the one file
+dosdev secs=30   # CON is a device, twice over, and hands its slots back
+dosfix secs=40   # a handle keeps its folder past the 8KB window, an interleaved writer, and exit closes every handle (the floppy read back)
+dosfull secs=40   # a full disk is refused without losing a cluster, fsck'd on the host
+dosmouevt secs=60 OS88_BOCHS_MOUSE=serial   # INT 33h's event handler (0Ch) fires on move, press and release; red with no serial mouse (no INT 33h)
+dosrange secs=40 OS88_BOCHS_MOUSE=serial   # 07h/08h's window is the window 03h answers in; the host's pointer is kern_dos's kdm_x/kdm_y, moved by hand (one arm: no CGA/Hercules)
+dosdirsw secs=100   # DIR /P /W /B and a bare name in a subdirectory; the program's run is read by CR0.PE (the trip) where [dos_inbr] is the bracket's
+dosenvfold secs=50   # every environment row is on DOS_MEGA's Setup page and focusable, its bss through m.lin
+dosopen secs=200   # a .O88 by path, with a document, and OPEN at the DOS prompt; the window table through m.lin
+kdcwd secs=40   # the trip answers drive, directory, a bare-name open and its own path as the window does, and the read-ahead stays out of the program (HMA map); red with dos_k_path's push/pop es out
+kdkbd secs=40   # int 09h under the trip is kern_dos's guard, and a key on a FULL buffer is stored; red on a NOKDKBD=1 kern_mega (F000:E987)
+kdnoprog secs=50   # a name that opens nothing comes home from the trip a REFUSAL (DST_ERR, DER_READ) and says so - no fixed disk needed on kern_mega
+kdmcur secs=50 OS88_BOCHS_MOUSE=serial   # INT 33h draws, hides, remasks and nests the text cursor on the trip; red with no serial mouse (SKIP)
+kdmredraw secs=40 OS88_BOCHS_MOUSE=serial   # the program's own store over the cursor stands, as CuteMouse 1.9.1 leaves it; red with no serial mouse
+kdnomouse secs=50 OS88_BOCHS_MOUSE=serial   # Disable the mouse ticked on kern_mega's radio-less page: INT 33h AX=0 answers 0 (mega-kdmouse, the box unticked, answers FFFF)
+kdbigexe secs=60   # the read-ahead ladder under the LOAD in kern_dos's HMA image: a BIG.EXE re-sized to the HMA arena's band (615,424 bytes) loads on the 18 KB rung after the 32 KB one; red with the retry taken out of kd_entry.loadtry (never READY)
+# ...and the APPLICATION runners-up: a region, a claim and a view are LDT
+# selectors (m.lin); a package with a kern_mega ARM (VIDEO, MIDIRACK,
+# REALDMG, PIXEL) runs the arm out of build/megak/apps; a CGA-pinned point in
+# SHEET moves by its window's measured dy (sheetfmt.mega_y); a code patch
+# lands before the code first runs (Bochs keeps decoded pages).
+tpsaveu secs=60   # TeXPad, the biggest window, banks ONE plane and its raise is the repaint's picture; red with WF_1BPP cleared (no cache)
+wdparts secs=60   # Word's part 1 at WD_P1ORG inside the region's pool block, byte for byte, and it runs (Edit > Search); red with wd_pcomp a bare ret
+tankspawn secs=80   # no TANK round starts inside a piece, and a player poked inside one drives out
+timerbounce secs=50   # TIMER and BOUNCE as packages: seconds advance, digits on the glass, Stop/Start, Bounce's worker and square
+cycplay secs=40   # a kill scores what cy_kindsc says, the zapper recharges and says so, a death keeps the wave; red with shl bx,1 out (tanker 25,600) - the spawn tick patched at the TITLE on Bochs
+tgui secs=60 +--card +vga   # TameGram's every key, both menus and both panels, read out of its bss through m.lin
+chartname secs=100   # CHART charts the range Sheet NAMED (Data > a name), not the lowest column (CHART above 1MB)
+isotronrules secs=60   # six-tier seeded games round for round against tools/isotronsim.py, the script and the keyboard; the model's other rule must disagree (its own negative control)
+sheetsize secs=90   # SHEET resizes and its grid re-lays itself to the new box, the floor, and back
+sheetask secs=70   # SHEET asks before closing modified work, and Discard closes
+sheetsort secs=300   # Sort orders every kind of constant and an error constant stays one; Edit and Data at sheetfmt.mega_y
+sheetundo secs=300   # Edit > Undo and Redo, one level as Excel 2.1, read off the VGA glass and a SYLK save; Edit at sheetfmt.mega_y
+gbkeys secs=80 +--only +vga   # RealDMG's ARM: the key map rebinds, refuses a reserved key, swaps, saves to REALDMG.CFG and the game reads it
+gbstate secs=160 +--package   # RealDMG's ARM: F5/F8 save states in the window and full screen, CLOCK0.SS3/.SS7 read back off the floppy
+fmpatch secs=40   # OSAPI_SND_FM verb 2 hands the driver the channel it names (a .cold breakpoint above 1MB)
+minesrc secs=60   # Minesweeper's right button: flag, toggle, the strip, a flag blocking reveal, an open cell, a background window raised - the QEMU row on the Marty API; red with mn_onrclick a bare ret
+weavegrid secs=70   # WEAVE's SHEET grid against weavesim's vga model, the edit's damage exactly the changed rows
+weavegfx secs=110   # FORM's and SHEET's cards against weavesim's vga render (a boot a bundle: no snapshot on Bochs)
+vidplayvga secs=150   # the Video Player ARM plays lin80 full screen, every hold the decode, the ring K at 2 then 8, on its BIOS ticks (the copying arm; the last hold one frame early)
+vidvga8 secs=60   # the ARM's 256-colour lin320 play, every hold the decode and the rendered colours
+vidgrey secs=60   # a sixteen-colour desktop's poster sits on grey, WF_OWNBG set
+vidthumb secs=50   # the thumb on the bar walks with the play, read off plane 0
+vidresidentvga secs=50   # a RESIDENT file: the block in its claim byte for byte, no ring, every hold on two laps
+vidlivevga secs=100   # Live plays in the window on VGA and the screen is the file's
+vidpage secs=90   # a PAGE-AHEAD file: every hold across both flips is the clip, and from key 1 (the CRTC reads are MartyPC's)
+vidfskeysvga4 secs=60   # mode 12h full screen with the keys: four planes saved and the window back
+mrdrawvga secs=90   # MIDIRack's ARM: each gesture's UI-task drawing calls under its ceiling, and the incremental picture IS a repaint's
+midirackend secs=130   # MIDIRack's ARM on Bochs's FM chip: INTRO loops, then Loop off ends the playlist
+pxfolder secs=130   # PiXEL's ARM: the folder, Prev, Next and the slideshow, no claim left behind - its claims counted in mem_tab AND the pool by selector (the callback ceiling is MartyPC's: Bochs's cycles are its running time)
+vidclose secs=110   # the close box on the Video Player ARM while its hold still loads into kern_mega's XMS: the negotiator stops the session and frees the hold, no package pool block outlives it, the machine ticks - three rounds (the QEMU row on the Marty API); red with vp_onclose a bare clc/ret
+
+# DOS CONSOLE CAPTURE
+# The program's last screen reaches DOS.O88's console after a trip
+# (KERN-MEGA-PLAN 14.106, SPEC.md 96.34.6): kern_dos seeds the console onto
+# the program's screen and kd_snap writes it back through the linear the
+# kernel staged, left out of the park's sum.
+doscon secs=100   # DOSHELLO's own lines land in the console between `Starting` and `ended`, the cursor under them; red with kd_snap unbound (the band holds the prompt's history and none of them)
+
+# 86BOX HARDWARE (wave 3)
+# On 86Box (OS88_MEGA_EMU=86box: tools/os88mega86box.py, docs/86BOX.md "kern_mega
+# rows on 86Box"): the owner's mr286 with what the row's MartyPC machine names -
+# a CGA and a Hercules at once, a VGA beside a Hercules, a 1bpp adapter alone, a
+# Sound Blaster 2.0 on IRQ 7 whose DMA runs on the emulated clock, a 5.25" 1.2MB
+# drive, an IDE fixed disk. Hardware Bochs has not got. `ROW/86box` is a second
+# port of a row Bochs already carries (its other legs). Every line was seen to
+# go red with the thing it checks broken - a knob tree, the row's own --break,
+# OS88_MEGA_POKE (a kernel routine stubbed once the desktop is up), or a moved
+# IRQ - unless its comment says the break is not cheap.
+dockmark secs=30 OS88_MEGA_EMU=86box   # the extended desktop's dock strip (CGA + Hercules) marks only windows drawn under, both cards match a forced repaint; red: REDRAWFULL=1's kern_mega (OS88_MEGA_BUILD=its tree) marks A
+dispseam secs=120 OS88_MEGA_EMU=86box   # the cell a display seam crosses is whole, CGA primary (seam 640) and Hercules primary (720, MR BIOS's Primary Video = Monochrome); red: its own NOSEAMCUT=1 kern_mega arm loses 18 px
+disptitle secs=60 OS88_MEGA_EMU=86box   # a BAND=1 title bar straddling a VGA and a Hercules has one ground per display; red not cheap (the per-column polarity fix has no knob, and stubbing the composer moves both references alike)
+runclip secs=40 OS88_MEGA_EMU=86box   # a text run a window edge cuts is not drawn over the window, on the Hercules (font_run_cell's column mask); red: POKE font_run_cell.store-2=9090 (the merge skipped)
+vidcard secs=30 OS88_MEGA_EMU=86box   # the Video Player's info card: OSAPI_WM_RESIZE hides the pointer, the caption names the video; red: POKE cur_unlazy=c3 (its documented break, the slot straight at wm_resize, no longer reproduces on kern_big or kern_mega)
+vidwin secs=40 OS88_MEGA_EMU=86box   # VIDEO.O88 plays in its window on the Hercules, every frame, the thumb, a click pauses; the 8088's mute verdict handed over (a 286 plays the clip's PCM8 and the card would be the clock); red: POKE gfx_blit1=f8c3
+vidpreview secs=40 OS88_MEGA_EMU=86box   # the window is a preview: poster, keys, Play, seek, the thumb dragged on an 8088's tier and a 286's; red: POKE gfx_blit1=f8c3
+deskzoom/86box secs=60 OS88_MEGA_EMU=86box   # both legs, the Hercules one Bochs could not run: a zoom's restore and an overflowing drag leave a whole repaint; red: POKE wm_paint_dmg=c3
+thm95/86box secs=90 OS88_MEGA_EMU=86box +--legs +B   # leg B, the Windows theme on a Hercules primary: its buttons, the 1bpp dither ground, the chip menu; red not cheap (WIN95.DRV module code)
+zonedmg/86box secs=30 OS88_MEGA_EMU=86box   # a zone's damage owes the window over it a redraw, read off the Hercules VRAM itself; red: POKE wm_paint_dmg=c3
+midiracksb secs=30 OS88_MEGA_EMU=86box   # MIDIRack's synth on the SB2.0: the card takes 16,000 samples a second of guest time and the capture's pitch matches the song 10 of 10; red: --break
+midirackwt secs=30 OS88_MEGA_EMU=86box   # ...the wavetable bank (build/mrwt720.img's), 10 of 10; red: --break
+midiracksbmem secs=40 OS88_MEGA_EMU=86box OS88_MEGA_MEGS=1   # the two rings live only while they play, the grant ring and the refusals, on a 1MB kern_mega (mem_tab names paragraphs, the package selectors); red: POKE mmf_osapi_mem_free=f8cb
+audhand secs=40 OS88_MEGA_EMU=86box   # the Audio Player's AP_HANDOFF queue is found by the running player (its wakes from a PLAYING stream on the SB); red: POKE osapi_file_goto_qm+5=c3 (GOTO_QM as GOTO_Q)
+vidsound secs=40 OS88_MEGA_EMU=86box   # VIDEO.O88 off an IDE C: (MR BIOS type 47, identified) with the SB2.0 the clock: 1,800 frames, no pause, the play 59.59 s for 59.56 s of sound, the capture byte-exact; red: POKE mmf_osapi_mem_claim_dma_hi=f9cb
+dosirq secs=30 OS88_MEGA_EMU=86box   # a DOS program on the kern_dos trip gets the SB's IRQ 7, exactly once, and a DMA transfer; red: the card moved to IRQ 5 (OS88_MEGA_SND=sb2.0:5) - a software break is in kern_dos, not cheap
+wimgtrip secs=90 OS88_MEGA_EMU=86box   # Write Img... a geometry up: megaapps120.img written over mega120.img in a 5.25" 1.2MB A:, every sector bar the serial, the failing write's 'Disk error'; red: POKE dskf_disk_write=f8cb
+mixersb16 secs=60 OS88_MEGA_EMU=86box OS88_MEGA_SND=sb16   # the volume popup and the Mixer against a REAL CT1745 (86Box's SB16, the QEMU row's card) on the Marty path: nine channels, stereo readback, tone, the save-under claim sized and freed, a stream draining under the popup; red: POKE mmf_osapi_mem_free=f8cb
+telansi secs=180 OS88_MEGA_EMU=86box   # Telnet's ANSI renderer against the host's fixture streams, the answers, the Zmodem handover and ^]'s full screen (con_tseg a selector whose base is B8000) - Bochs's slirp could not carry it (KERN-MEGA-PLAN 14.89); red: the unfixed kernel's Ctrl+] (KERN-MEGA-PLAN 14.110)
+telzm secs=180 OS88_MEGA_EMU=86box   # Zmodem receive over 86Box's slirp: the batch, the liar, the cancel, the mangled names, every file byte-identical off B:; red: POKE dskw_append_x=f8c3
+
+# REDLINE (KERN-MEGA-PLAN 14.118): the shipped build, the copy kern_mega's
+# system disk carries in APPS/ - every fixed-address read through cs_win's
+# SEG_WIN or an identity selector. Red: cs_win made to hand back the bare
+# paragraph (the pre-MC7 spelling), and the Tune tab never identifies
+redlinevga secs=90   # the whole Bench run on a 386: 25 rows timed (a host-speed CPU row under one PIT count reads n/a), the CPUID name, the report saved to B:, the views and Quit
+redlinechipvga secs=60   # the Tune tab on an AT-class tier: the F000h fingerprint through SEG_WIN, the read-only port probes RUN, the option-ROM scan, the pick and CHIPSET1/2.TXT
+redlinechipvga@tune secs=150 -chipset= +--tune +os8088_redline_vga_gla   # the WRITE path: Mfg spec and the verified sweep (a cli window and a BIOS floppy read into the package's selector), REDLINE.CFG and AUTOSTRT\RLAPPLY.LNK on A:, RLAPPLY before, after and at a power cycle

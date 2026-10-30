@@ -145,7 +145,7 @@ def main():
             fail("the DOS window is gone after the program exited: %r" % titles)
         dm = dosmap.package()
         seg = dosmap.instance(m)
-        code = m.read((seg << 4) + dm["dos_exit"], 1)[0]
+        code = m.read(dosmap.lin(m, seg, dm["dos_exit"]), 1)[0]
         if code != 0:
             fail("DOS recorded exit code %d where DOS's AH=00h always "
                  "exits 0 - the probe left AL=%02Xh and that is what came "

@@ -191,6 +191,12 @@ def slots(ui):
     return " ".join(out)
 
 
+def _lin(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base on kern_mega (OS88_MEGA,
+    docs/BOCHS.md), `seg << 4` on every real-mode kernel."""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
+
 def seg_of(ui, want, settled=True):
     return dict(instances(ui, settled)).get(want, 0)
 
@@ -216,7 +222,7 @@ def mseg_title(ui):
         toff = struct.unpack("<H", m.read(wp + os88geom.W_TITLE, 2))[0]
         if not seg or not toff:
             continue
-        t = m.read((seg << 4) + toff, 24).split(b"\0")[0].decode(
+        t = m.read(_lin(m, seg, toff), 24).split(b"\0")[0].decode(
             "ascii", "replace")
         if t.startswith("MSEG"):
             return t
@@ -245,7 +251,7 @@ def main():
         # checks being FINISHED and not merely the wake having arrived.
         def done():
             seg = seg_of(ui, "PKGRUN", settled=False)
-            return bool(seg) and bool(ui.m.read(seg * 16 + PR_OFF, 3)[2])
+            return bool(seg) and bool(ui.m.read(_lin(ui.m, seg, PR_OFF), 3)[2])
 
         os88marty.until(ui.m, lambda _: done(),
                         "PKGRUN to finish its six checks", limit=180.0)
@@ -296,7 +302,7 @@ def main():
             # was not one. So the region is compared against the FILE.
             hseg = dict(live)["HELLO"]
             want = open(os88build.at("build/hello.o88"), "rb").read()
-            got = bytes(ui.m.read(hseg * 16, min(len(want), 512)))
+            got = bytes(ui.m.read(_lin(ui.m, hseg), min(len(want), 512)))
             if got != want[:len(got)]:
                 n = next((i for i in range(len(got))
                           if got[i] != want[i]), 0)
@@ -308,7 +314,7 @@ def main():
 
         # --- ...and what the package recorded --------------------------------
         if seg:
-            b = ui.m.read(seg * 16 + PR_OFF, PR_LEN)
+            b = ui.m.read(_lin(ui.m, seg, PR_OFF), PR_LEN)
             say("verdict raw: " + bytes(b).hex())
             if bytes(b[:2]) != b"PR":
                 fails.append("the verdict block at PKGRUN:%04X is %r, not "

@@ -128,6 +128,23 @@ int os88_mem_movable(unsigned seg, int on) { (void)seg; (void)on; return 0; }
 unsigned os88_mem_largest_kb(void)   { return (unsigned)(H_MEM_KB - h_mem_kb_used); }
 unsigned os88_mem_total_kb(void)     { return H_MEM_KB; }
 
+/* OSAPI_SEG's SEG_SUB as a REAL-MODE kernel answers it - the sum - which is
+ * what this model's segments are. It must land inside the live claim it was
+ * asked about, and inside the length it was given, or the program asked the
+ * kernel for a window its own arithmetic does not reach */
+unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len)
+{
+    int i = h_claim_index(seg);
+
+    if (i < 0 || i >= H_CLAIMS || !h_claim_live[i] ||
+        (seg - H_CLAIMBASE) % H_CLAIMPARAS + para + len >
+            (unsigned)h_claim_kb[i] * 64u) {
+        fail("os88_seg_sub past the end of a live claim");
+        return 0;
+    }
+    return seg + para;
+}
+
 int os88_mem_free(unsigned seg)
 {
     int i = h_claim_index(seg);

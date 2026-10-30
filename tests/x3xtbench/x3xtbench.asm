@@ -17,7 +17,8 @@
 ;   P  PCM of one granule     Z  the part's STATS (X3Z)    W  stack low water
 ;   E  the end of a case      F  a failure, its text       Q  all done
 ;
-; Memory: 0060:0 the directory, 1000:0 this, 1800:0 FRONT, 1E00:0 the XT
+; Memory: 0060:0 the directory as the boot sector reads it, moved to 0800:0
+; at entry so KERNEL_SEG holds OSAPI_SEG's cell (x3rmseg.inc), 1000:0 this, 1800:0 FRONT, 1E00:0 the XT
 ; part (64 KB at most), 2E00:0 the stack (SP = 180h), 2E20:0 the ring (8 KB),
 ; 3020:0 PCM, 3080:0 the file (128 KB), 5080:0 the part's segments (CAPS'
 ; paragraphs, end to end).
@@ -30,7 +31,14 @@
 %include "x3gran.inc"
 %include "x3ftab.inc"
 
-SEG_DIR     equ 0x0060
+SEG_BOOTDIR equ 0x0060              ; where x3bboot.asm reads the directory...
+SEG_DIR     equ 0x0800              ; ...and where it is moved to at entry: its
+                                    ; 8 KB at 0060:0 covers KERNEL_SEG's
+                                    ; OSAPI_SEG cell, which the XT part's OPEN
+                                    ; far-calls (x3rmseg.inc below)
+%ifndef X3RM_SEGOFF
+  %error "X3RM_SEGOFF is OSAPI_SEG's offset (x3xtbench.py passes it)"
+%endif
 SEG_FRONT   equ 0x1800
 SEG_XT      equ 0x1E00              ; up to 64 KB
 SEG_STACK   equ 0x2E00
@@ -73,6 +81,22 @@ entry:
     xor al, al
     rep stosb
     mov [b_drive], bl
+    push ds                         ; the directory out of KERNEL_SEG's way,
+    mov ax, SEG_BOOTDIR             ; then OSAPI_SEG answered there the way a
+    mov ds, ax                      ; real-mode kernel answers it (x3rmseg.inc)
+    xor si, si
+    mov ax, SEG_DIR
+    mov es, ax
+    xor di, di
+    mov cx, 16 * 512 / 2
+    rep movsw
+    pop ds
+    mov ax, SEG_BOOTDIR
+    mov es, ax
+    mov si, x3rm_seg
+    mov di, X3RM_SEGOFF
+    mov cx, x3rm_seg_end - x3rm_seg
+    rep movsb
     mov ax, SEG_DIR
     mov es, ax
     mov ax, [es:D_FRONT]
@@ -135,6 +159,8 @@ entry:
 .halt:
     hlt
     jmp short .halt
+
+%include "x3rmseg.inc"
 
 m_finit:    db 'x3p_init refused the FRONT part', 0
 m_xabi:     db 'the XT part header is not x3gran.inc', 0

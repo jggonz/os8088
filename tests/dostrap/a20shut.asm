@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - tests/dostrap/a20shut.asm
 ;
-; A20SHUT.COM - kern_mega's kern_dos in the HMA (docs/plans/KERN-MEGA-DOS-PLAN.md
+; A20SHUT.COM - kern_mega's kern_dos in the HMA (docs/plans/completed/KERN-MEGA-DOS-PLAN.md
 ; 7, wave W4) against a program that SHUTS A20 behind DOS's back.
 ;
 ;   nasm -f bin -w+error -o A20SHUT.COM tests/dostrap/a20shut.asm

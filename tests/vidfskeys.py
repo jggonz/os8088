@@ -87,6 +87,19 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
+# kern_mega (tests/megaport.txt): the shipped player refuses under protected
+# mode, so the row plays the ARM - build/megak/apps/, assembled -DPKG_MEGA -
+# and reads the arm's symbols; a segment the player holds is an LDT selector
+# there, read through its descriptor (tests/vidvga4.py's port)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+MEGA_DEFS = ("PKG_MEGA",) if MEGA else ()
+VIDEO_O88 = "build/megak/apps/video.o88" if MEGA else "build/video.o88"
+
+
+def lin(m, seg, off=0):
+    """seg << 4 - or the base in a kern_mega selector's descriptor"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
 FPS = 15.0
 H = 100
 YOFF, ROWS = 4, 12                  # vosd.inc's box: 4 rows in, 12 tall
@@ -301,8 +314,8 @@ def main():
                             pkg] + part, check=True, capture_output=True)
             syms, _ = pkg_syms(apps + "video/video.asm", (apps,))
         else:
-            syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-            pkg = os88build.at("build/video.o88")
+            syms, _ = pkg_syms("apps/video/video.asm", ("apps/",), MEGA_DEFS)
+            pkg = os88build.at(VIDEO_O88)
         g = vid.Geom(lay, gwb, H, bitplanes=pf == vid.PF_VGA4)
         g.sub2 = a.kind == "vga4m3"
         clip = os.path.join(tmp, "KEYS.V88")
@@ -348,7 +361,7 @@ def main():
             w = ui.path("B:/KEYS.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            base = lin(m, u16(rec, geom.W_SEG))
             rw = lambda n: u16(m.read(base + syms[n], 2))
             rb = lambda n: m.read(base + syms[n], 1)[0]
             ww = lambda n, v: m.write(base + syms[n], struct.pack("<H", v))
@@ -364,7 +377,7 @@ def main():
             def glyphs():
                 gs, go = rw("vo_gseg"), rw("vo_goff")
                 f, l = rb("vo_gfst"), rb("vo_glst")
-                t = bytes(m.read((gs << 4) + go, (l - f + 1) * 8))
+                t = bytes(m.read(lin(m, gs, go), (l - f + 1) * 8))
                 return f, l, t
 
             def box(text, want):
@@ -446,10 +459,18 @@ def main():
                                        for q in range(3)) > 6:
                                     bad_ = True
                                     break
-                    finally:
+                    except BaseException:
                         m.run()
+                        raise
                     miss += bad_
-                    os88marty.pace(m, 0.01)
+                    # ...and ON from the look by an ADVANCE, the machine
+                    # stopped again at its end: what a look costs the guest
+                    # is then this and nothing the host spent around it (a
+                    # run, then a pace, ran the guest for every host
+                    # millisecond between them - 5 looks of 20 on a busy box)
+                    m.advance(cycles=int(0.01 * os88marty.GUEST_PACE *
+                                         os88marty.GUEST_HZ))
+                m.run()
                 return looks, miss, clip
 
             def mem():
@@ -462,7 +483,7 @@ def main():
                     v = bytes(m.read(0xB8000, 16384))
                     return bytearray(v[(ty0 + y) * 160 + tx0 + x]
                                      for y in range(H) for x in range(row))
-                seg = bytes(m.read(rw("vp_vseg") << 4, 65536))
+                seg = bytes(m.read(lin(m, rw("vp_vseg")), 65536))
                 banks, stride, rows, _ = vid.LAYOUTS[lay]
                 out = bytearray()
                 for y in range(H):
@@ -562,8 +583,8 @@ def main():
                     if d0 >= hi:
                         break
                     r_ = m.regs()
-                    ret = u16(m.read((r_["ss"] << 4) + r_["sp"], 2))
-                    m.bp_exec((r_["cs"] << 4) + ret)
+                    ret = u16(m.read(lin(m, r_["ss"], r_["sp"]), 2))
+                    m.bp_exec(lin(m, r_["cs"], ret))
                     c0 = m.status()["cycles"]
                     m.run()
                     if not m.wait_stop(limit=120.0):

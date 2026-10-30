@@ -64,6 +64,7 @@ import argparse
 import re
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -86,30 +87,158 @@ MEGS = int(os.environ.get("OS88_BOCHS_MEGS", "16"))
 # file (`hostfwd = tcp::2121-:21`, one rule a line, five at most), which is
 # how a HOST client reaches a server in the guest - FTPD (KERN-MEGA-PLAN 14.46)
 SLIRP = os.environ.get("OS88_BOCHS_SLIRP")
+# THE MOUSE: Bochs's PS/2 one by default; $OS88_BOCHS_MOUSE=serial puts a
+# Microsoft serial mouse on COM1 instead - the transport every MartyPC machine
+# has, and the only one kern_dos's INT 33h serves (kerndos/kdmouse.inc)
+MOUSE = os.environ.get("OS88_BOCHS_MOUSE", "ps2")
+# THE CLOCK'S START: the host's local time by default; $OS88_BOCHS_TIME0 = a
+# Unix time pins it, for a row whose answer depends on the hour it is run at
+# (tests/dosdir.py sets the time BACK to 13:45:30 - KERN-MEGA-PLAN 14.114)
+TIME0 = os.environ.get("OS88_BOCHS_TIME0", "local")
+
+# A FILE-SIZE CAP on every Bochs this module starts (KERN-MEGA-PLAN 14.115):
+# `error: action=report` writes a line per fault, so a real-mode #GP that
+# irets back into itself grew one run's bochs.log at ~500MB a minute and
+# filled a 252GB volume shared by four agents. Past the cap the write gets
+# SIGXFSZ and Bochs dies - a dead machine names itself, a full disk breaks
+# every process on the box. $OS88_BOCHS_FSIZE_MB overrides (0 = no cap).
+FSIZE_MB = int(os.environ.get("OS88_BOCHS_FSIZE_MB", "2048"))
+
+
+def _fsize_cap():
+    if FSIZE_MB > 0:
+        import resource
+        n = FSIZE_MB << 20
+        # NEVER ABOVE THE HARD LIMIT IT INHERITED: an operator's `ulimit -f`
+        # lower than the cap made setrlimit raise, and the row died in
+        # Popen ("Exception occurred in preexec_fn") before Bochs existed
+        _, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        if hard != resource.RLIM_INFINITY:
+            n = min(n, hard)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (n, n))
 BOCHSRC = """megs: {megs}
 romimage: file=/usr/share/bochs/BIOS-bochs-legacy
 vgaromimage: file=/usr/share/vgabios/vgabios.bin
-vga: extension=vbe
+vga: extension=vbe{vgahz}
 pci: enabled=0
 floppya: 1_44={a}, status={astat}
 floppyb: type={btype}, {bmedia}={b}, status=inserted
-ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
-ata0-master: type=disk, path={c}, mode=flat, cylinders={cy}, heads={hd}, spt={sp}
-{cd}boot: {boot}
+{ata0}{cd}boot: {boot}
 port_e9_hack: enabled=1
-mouse: enabled=1, type=ps2, toggle=ctrl+mbutton
-clock: sync=realtime, time0=local
-{sb}log: {log}
+mouse: enabled=1, type={mouse}, toggle=ctrl+mbutton
+{com1}{com}{cpu}clock: sync={sync}, time0={time0}
+{sb}{rcextra}log: {log}
 panic: action=report
 error: action=report
 info: action=ignore
+debug: action=ignore{flogdbg}
 display_library: x
 """
 
 
-INPUT_GAP = 0.06    # s: Bochs's GUI takes X events every ~10 ms of its own
+# THE CLOCK (docs/BOCHS.md, *The clock*): `sync=slowdown` makes Bochs's time
+# its INSTRUCTION COUNT - IPS_N a guest second, HLT included - and only caps
+# it at real time, so a stall on the host (Bochs descheduled, a debugger stop)
+# is time the guest never sees, and its instructions per tick are the same on
+# any box. `realtime` ran the PIT off the host's clock instead: a starved
+# Bochs was a slower machine to the guest (Tracker refused its Play on the
+# calibration) and a stall was caught up in ticks afterwards (a double-click
+# read 18-50 ticks against a window of 9) - every kern_mega row that failed
+# under load and passed alone. $OS88_BOCHS_SYNC=realtime is the A/B, and
+# os88megabochs reads its clock the old way under it.
+#
+# THE SPEED is Bochs's own default, 4M instructions a guest second (a
+# 386SX-16, give or take - faster than the 286 kern_mega is for). Under
+# `realtime` the CPU ran as fast as this host runs Bochs, ~100M a wall second,
+# so two rows had been racing that CPU against a fixed pause and lost at 4M
+# (mega-ethernet, mega-vidvga4 - both now wait on the state they meant). 100M
+# was tried and REFUSED: a busy phase of mega-trkcompact (ten Trackers) runs
+# ~6M a host second here, so a 100M guest fell to 1/17 of real time and
+# os88marty.pace's backstop fired; a loaded host runs a quarter of that. The
+# guest-time waits absorb a guest slower than real time, but only down to
+# that backstop, so the speed is one a loaded host can still keep.
+# $OS88_BOCHS_IPS changes it - a row whose subject is a real-time load on a
+# faster 386
+SYNC = os.environ.get("OS88_BOCHS_SYNC", "slowdown")
+IPS_N = int(os.environ.get("OS88_BOCHS_IPS") or 4000000)
+IPS = "cpu: ips=%d\n" % IPS_N
+
+# A STOP COSTS THE GUEST NOTHING - but only with tools/bochs/bxclock.c
+# preloaded (docs/BOCHS.md, *The clock*). `slowdown`'s cap reads time(NULL),
+# the WALL clock, so host seconds spent stopped at the debugger (every read,
+# every screenshot, every breakpoint) put the guest behind it, and on the
+# resume Bochs ran flat out until it had caught up - up to a guest second at
+# many times real speed, after every stop that crossed a second of the wall
+# clock. How much guest time a host-timed interval then held depended on how
+# long the stops had taken, which is host load: mega-vidfskeysvga4 looked at
+# its toast 7 times where it needs 8. The preload replaces time() with a
+# clock that does not move while Bochs does not run. $OS88_BXCLOCK=0 is the
+# A/B (the wall clock again).
+BXCLOCK = os.environ.get("OS88_BXCLOCK", "1") != "0"
+BXCLOCK_SRC = os.path.join(ROOT, "tools", "bochs", "bxclock.c")
+
+
+def bxclock():
+    """The path of the built clock preload, building it if it is not there:
+    build/bochs/bxclock-<hash of the source>.so, so a changed source is a
+    new file and two machines starting at once never see a half-written
+    one. RuntimeError naming the compiler when it cannot be built -
+    `os88build.have_bochs()` asks for one first, so a row skips instead."""
+    import hashlib
+    with open(BXCLOCK_SRC, "rb") as f:
+        h = hashlib.sha1(f.read()).hexdigest()[:12]
+    d = os.path.join(ROOT, "build", "bochs")
+    so = os.path.join(d, "bxclock-%s.so" % h)
+    if os.path.exists(so):
+        return so
+    cc = shutil.which("cc") or shutil.which("gcc")
+    if not cc:
+        raise RuntimeError("os88bochs: no C compiler (cc) to build %s, the "
+                           "preload a stopped Bochs needs (docs/BOCHS.md, "
+                           "*The clock*); OS88_BXCLOCK=0 runs without it"
+                           % BXCLOCK_SRC)
+    os.makedirs(d, exist_ok=True)
+    tmp = "%s.%d.tmp" % (so, os.getpid())
+    r = subprocess.run([cc, "-O2", "-Wall", "-shared", "-fPIC", "-o", tmp,
+                        BXCLOCK_SRC, "-ldl"], capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError("os88bochs: %s failed on %s:\n%s"
+                           % (cc, BXCLOCK_SRC, r.stderr))
+    os.replace(tmp, so)
+    return so
+
+
+INPUT_GAP = 0.03    # s: Bochs's GUI takes X events every ~10 ms of its own.
+# It was 0.06, and under sync=realtime a stop was paid in GUEST time (the
+# timers caught up on the host clock afterwards), so a gesture of five stepped inputs - fmarrows'
+# click, Down, click inside FM_DBLCLK's 9 ticks - read 8-9 ticks at 0.06
+# and 5-6 at 0.03, every edge still confirmed off mouse_btn
 GLASS = 0.45        # s: two of Bochs's VGA updates (5 Hz) - see Box.shot
-GRAB = ("keydown", "ctrl", "click", 2, "keyup", "ctrl")
+# The capture toggle, as a press and a release with NOTHING between them:
+# xdotool's `click` holds the button ~100 ms (measured: `click 2` is 126 ms
+# of xdotool against 3 ms for `mousedown`), and since a debugger stop drops
+# the capture, a row that alternates input and stops paid that on every
+# input - in GUEST time while the clock was sync=realtime
+# THE SENTINEL, which ends every xdotool chain (_Input.xd): a key Bochs's X
+# GUI maps to nothing, so it hands the guest nothing and logs instead -
+# `xkeypress(): keysym 1008ff49 unhandled!` at `error: action=report` (gui/
+# x.cc, the switch's default). Its line in bochs.log says Bochs has PROCESSED
+# every event sent before it. Reading the X socket dry said only that Bochs
+# had READ them: xcb pulls events off the socket while Bochs is blocked
+# writing a frame to a slow X server, and a debugger stop taken then left
+# them unprocessed - and a stop DROPS THE CAPTURE, so on the resume a button
+# or a motion went nowhere and the GRAB toggled the capture back ON behind
+# the harness's back, whose next GRAB toggled it OFF. Only on a loaded box,
+# which is where the X server is slow. (The A/B, $OS88_BOCHS_TAKEN=socket,
+# at four Bochs rows to a box: mega-assocopen and -minesrc x6 each, 1 of 12
+# failed the old way - minesrc's G, a press that did not take - and 0 of 12
+# the new; a stronger wait either way, and a cheap one.)
+# $OS88_BOCHS_TAKEN=socket is the A/B: `taken` as it was, the sentinel only
+# counted, and a stop taken with a chain still unprocessed said on stderr
+TAKEN = os.environ.get("OS88_BOCHS_TAKEN", "sentinel")
+SENTINEL = "XF86Launch9"
+SENTINEL_LOG = b"keysym 1008ff49 unhandled"
+GRAB = ("keydown", "ctrl", "mousedown", 2, "mouseup", 2, "keyup", "ctrl")
 
 
 class _Input(object):
@@ -126,6 +255,12 @@ class _Input(object):
         self.env = dict(os.environ, DISPLAY=display)
         self.regrab = False
         self.last = 0.0
+        self.pid = None         # the Bochs reading this display (Box sets it)
+        self.sent = False       # input sent that Bochs may not have READ yet
+        self.log = None         # its bochs.log, for the SENTINEL (Box sets it)
+        self.marks = 0          # sentinels sent to this Bochs...
+        self.seen = 0           # ...and seen in its log
+        self.logpos = 0
         # ONE xdotool at a time on a display: a row that wiggles the mouse
         # in a thread while it clicks would otherwise have two calls both
         # see `regrab` and toggle the capture twice - OFF
@@ -138,14 +273,194 @@ class _Input(object):
             if self.regrab:
                 self.regrab = False
                 pre = GRAB
-            subprocess.run(["xdotool"] + [str(x) for x in pre + a],
-                           env=self.env, check=True)
+            # ...ENDING IN A ROUND TRIP (XQueryPointer): requests on one
+            # connection are done in order, so when xdotool has its reply
+            # the X server has PROCESSED every fake event before it and
+            # written them to Bochs's connection - which is what `taken`
+            # below then watches drain. (Its x:/y: line is the reply.)
+            # EXCEPT AFTER `type`, which takes EVERY argument left as text:
+            # the round trip was typed into the guest as letters - `kbtrip`
+            # arrived as `kbtripgetmouselocation`, a Bad command in the DOS
+            # window, and megasheet's macro name as COUNTgetmouselocation.
+            # There xdotool's exit is the round trip: XCloseDisplay XSyncs
+            #
+            # ...AND ENDING IN THE SENTINEL where the Bochs has a log: a key
+            # it does not map, which it does not hand the guest and DOES log
+            # (see SENTINEL). X delivers a client's events in order and
+            # handle_events takes them in order, so its line in bochs.log
+            # is proof that every event of the chain has been PROCESSED, not
+            # merely read off the socket - which is what `taken` waits on.
+            # `type` takes every argument left as text, so after one it is
+            # a second call (xdotool's exit XSyncs: its events come first)
+            if self.log:
+                tail = [] if "type" in a else ["key", SENTINEL]
+            else:
+                tail = [] if "type" in a else ["getmouselocation"]
+            subprocess.run(["xdotool"] + [str(x) for x in pre + a] + tail,
+                           env=self.env, check=True,
+                           stdout=subprocess.DEVNULL)
+            if self.log and "type" in a:
+                subprocess.run(["xdotool", "key", SENTINEL], env=self.env,
+                               check=True, stdout=subprocess.DEVNULL)
+            if self.log:
+                self.marks += 1
             self.last = time.time()
+            self.sent = True
+
+    def taken(self, stopped=None, timeout=10.0):
+        """Return once Bochs has READ every input sent to it - and only then
+        may the debugger take the machine, because A STOP RELEASES THE GRAB
+        and an event Bochs takes after it goes to an uncaptured window, which
+        drops it. This was INPUT_GAP alone, a host-time guess that the GUI
+        had got round to the X queue: on a loaded box Bochs is not scheduled
+        for longer than that, the stop came first, and the edge was lost -
+        mega-httpinstall's "guest never saw the button release", a press
+        confirmed and its release never arriving because nothing after it
+        re-took the grab. Now it is a CONDITION: the receive queue of Bochs's
+        X connection, read through sock_diag (`unread`), is empty. INPUT_GAP
+        still follows it, for the events Xlib has read and not yet handed
+        over. `stopped()` true means Bochs is at its prompt and reads no X
+        until it resumes, so there is nothing to wait for; `timeout` is a
+        backstop for a box with no sock_diag, where this is INPUT_GAP alone
+        as before."""
+        if self.sent and self.pid and self.log and TAKEN == "socket":
+            # THE A/B: the socket read dry and INPUT_GAP, as before the
+            # sentinel - and the sentinel still COUNTED, so what that left
+            # in flight at a stop is said (os88bochs: ... in flight)
+            self._taken_socket(stopped, timeout)
+            self._scan()
+            if self.seen < self.marks:
+                sys.stderr.write("os88bochs: %s: a stop with %d input chain(s)"
+                                 " in flight\n" % (self.display,
+                                                    self.marks - self.seen))
+                self.seen = self.marks
+            return
+        if self.sent and self.pid and self.log:
+            end = time.time() + timeout
+            nap = 0.001
+            while self.seen < self.marks:
+                if stopped is not None and stopped():
+                    return              # still pending: the next stop asks
+                self._scan()
+                if self.seen >= self.marks:
+                    break
+                if time.time() > end:
+                    # NOT TAKEN AT ALL: the chain went to a window that is
+                    # not Bochs's. Said, and forgiven, so the next input is
+                    # not charged this one's timeout as well
+                    sys.stderr.write(
+                        "os88bochs: %s: Bochs logged %d of %d input sentinels"
+                        " in %.0fs - input went to another window, or Bochs"
+                        " is wedged\n" % (self.display, self.seen,
+                                           self.marks, timeout))
+                    self.seen = self.marks
+                    break
+                time.sleep(nap)
+                nap = min(nap * 2, 0.01)
+            self.sent = False
+            return                      # PROCESSED: nothing is in flight
+        self._taken_socket(stopped, timeout)
+
+    def _taken_socket(self, stopped, timeout):
+        if self.sent and self.pid:
+            end = time.time() + timeout
+            nap = 0.001
+            while True:
+                if stopped is not None and stopped():
+                    return              # still unread: the next stop asks
+                n = unread(self.pid)
+                if not n or time.time() > end:  # 0, or no answer
+                    break
+                time.sleep(nap)
+                nap = min(nap * 2, 0.01)
+            self.sent = False
+        gap = self.last + INPUT_GAP - time.time()
+        if gap > 0:
+            time.sleep(gap)
+
+    def _scan(self):
+        """Count the SENTINEL's log lines past `logpos` into `seen` (a press
+        and a release each log one: two lines a sentinel)."""
+        try:
+            with open(self.log, "rb") as f:
+                f.seek(self.logpos)
+                t = f.read()
+        except OSError:
+            return
+        cut = t.rfind(b"\n") + 1
+        self._half = getattr(self, "_half", 0) + t[:cut].count(SENTINEL_LOG)
+        self.logpos += cut
+        self.seen = self._half // 2
+
+    def attach(self, pid, log):
+        """A NEW Bochs on this display: what the last one owed is void."""
+        self.pid, self.log = pid, log
+        self.marks = self.seen = self.logpos = self._half = 0
+        self.sent = False
 
     def shot(self, path):
         subprocess.run("xwd -root -silent | convert xwd:- -crop 650x500+5+40 "
                        "+repage '%s'" % path, shell=True, env=self.env,
                        check=True)
+
+
+def _sockets(pid):
+    """The inodes of PID's sockets - for Bochs, its X connection."""
+    out = []
+    try:
+        for fd in os.listdir("/proc/%d/fd" % pid):
+            try:
+                ln = os.readlink("/proc/%d/fd/%s" % (pid, fd))
+            except OSError:
+                continue
+            if ln.startswith("socket:["):
+                out.append(int(ln[8:-1]))
+    except OSError:
+        pass
+    return out
+
+
+def unread(pid):
+    """Bytes waiting UNREAD in the receive queues of PID's unix sockets,
+    asked of the kernel through NETLINK_SOCK_DIAG (UNIX_DIAG_RQLEN) one
+    socket at a time; None where the box will not answer. For Bochs that is
+    the X events its GUI has not yet taken (see _Input.taken)."""
+    import socket as so
+    total, seen = 0, False
+    try:
+        s = so.socket(so.AF_NETLINK, so.SOCK_RAW, 4)    # NETLINK_SOCK_DIAG
+    except OSError:
+        return None
+    try:
+        s.settimeout(1.0)
+        for ino in _sockets(pid):
+            # unix_diag_req: family, protocol, pad, states, ino, show
+            # (UDIAG_SHOW_RQLEN), cookie = INET_DIAG_NOCOOKIE: an EXACT get
+            req = struct.pack("=BBHIIIII", so.AF_UNIX, 0, 0, 0xFFFFFFFF, ino,
+                              0x10, 0xFFFFFFFF, 0xFFFFFFFF)
+            s.send(struct.pack("=IHHII", 16 + len(req), 20, 1, ino, 0) + req)
+            data = s.recv(8192)
+            o = 0
+            while o + 16 <= len(data):
+                ln, typ = struct.unpack_from("=IH", data, o)
+                if typ == 20 and ln >= 32:      # SOCK_DIAG_BY_FAMILY
+                    a = o + 32
+                    while a + 4 <= o + ln:
+                        al, at = struct.unpack_from("=HH", data, a)
+                        if al < 4:
+                            break
+                        if at == 4 and al >= 12:        # UNIX_DIAG_RQLEN
+                            total += struct.unpack_from("=I", data, a + 4)[0]
+                            seen = True
+                        a += (al + 3) & ~3
+                if ln < 16:
+                    break
+                o += (ln + 3) & ~3
+    except OSError:
+        return None
+    finally:
+        s.close()
+    return total if seen else None
 
 
 _IN = {}
@@ -217,6 +532,38 @@ def shot(path):
     _input().shot(path)
 
 
+def autorepeat_off(display=None):
+    """Turn the X server's KEY AUTOREPEAT off on DISPLAY.
+
+    X autorepeats a held key as RELEASE/PRESS pairs, and Bochs passes each
+    pair to the guest as a break and a make - a real keyboard's typematic is
+    makes alone. So an xdotool `keydown` held for half a second was a dozen
+    fresh presses: a held Alt+Enter toggled ArtfulType full screen 8-13 times
+    (tests/altenter.py's hold, which the kernel's own typematic rule - a make
+    with the key already down is a repeat - was written to absorb, and could
+    not, because every make was preceded by a break). A new server is started
+    with `-r`; one already running (another agent's, a hand-started one) is
+    told here. It is server state, so it holds while a client - Bochs - is
+    connected: called once Bochs is up. libX11 by ctypes, since there is no
+    `xset` in the container."""
+    import ctypes
+    import ctypes.util
+    try:
+        x = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+        x.XOpenDisplay.restype = ctypes.c_void_p
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        for f in ("XAutoRepeatOff", "XCloseDisplay"):
+            getattr(x, f).argtypes = [ctypes.c_void_p]
+        x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        d = x.XOpenDisplay((display or DISPLAY).encode())
+        if d:
+            x.XAutoRepeatOff(d)
+            x.XSync(d, 0)
+            x.XCloseDisplay(d)
+    except OSError:
+        pass
+
+
 def xvfb(display=None):
     display = display or DISPLAY
     n = display.lstrip(":").split(".")[0]
@@ -233,7 +580,8 @@ def xvfb(display=None):
                 os.remove(stale)
             except OSError:
                 pass
-        subprocess.Popen(["Xvfb", display, "-screen", "0", "1024x768x24"],
+        subprocess.Popen(["Xvfb", display, "-screen", "0", "1024x768x24",
+                          "-r"],            # no key autorepeat: see above
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(50):             # until it is listening, not a guess
             if os.path.exists(sock):
@@ -283,7 +631,8 @@ def _tail(path, n):
         return f.read().decode("latin-1")
 
 
-def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True):
+def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True,
+            at_prompt=None):
     """Break in, run the debugger commands CMDS, continue - and answer the
     transcript of the commands, read off OUT/e9.out (the debugger writes to
     the same stdout the E9 hack does).
@@ -291,15 +640,15 @@ def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True):
     ON CONDITION, NOT ON A CLOCK: the stop is the debugger's prompt
     appearing, and each command is done when the NEXT prompt does, so a
     stop costs ~15-20 ms where `dbg`'s fixed 1.5 + 2 + 0.3n s used to. The
-    guest is stopped for exactly that long; with `clock: sync=realtime` its
-    timers catch up on the host clock afterwards."""
+    guest is stopped for exactly that long, which under `sync=slowdown` it
+    never sees."""
     e9 = os.path.join(out, "e9.out")
     # INPUT FIRST: a stop RELEASES Bochs's mouse capture, so a click still
     # in the X queue when the debugger takes over is dropped on the floor.
     # Give the GUI the moment it needs to have taken the last xdotool input.
-    gap = (inp or _input()).last + INPUT_GAP - time.time()
-    if gap > 0:
-        time.sleep(gap)
+    # (taken: until Bochs has READ it, then INPUT_GAP - a machine already
+    # at its prompt reads no X, so there is nothing to wait for there)
+    (inp or _input()).taken(stopped=None if interrupt else (lambda: True))
     n = os.path.getsize(e9)
     end = time.time() + timeout
     if not interrupt:
@@ -340,6 +689,8 @@ def session(out, cmds, timeout=20.0, pids=None, inp=None, interrupt=True):
                 break               # say what it did say, and carry on
             time.sleep(nap)
             nap = min(nap * 2, 0.02)
+    if at_prompt is not None:       # ...anything the caller does while
+        at_prompt()                 # the guest is stopped (Box.dblclick)
     with open(os.path.join(out, "dbg.fifo"), "w") as fh:
         fh.write("c\n")
     # ...and until Bochs has READ it (it echoes each command after its
@@ -407,7 +758,10 @@ class Box(object):
     def __init__(self, out, pkgs, sb=False, cfg=None, bimg=None, ne2k=False,
                  btype="1_2", cmode="run", bootc=False, noa=False,
                  build=None, csys=False, put=(), cd=None, aimg=None,
-                 display=None, megs=None):
+                 display=None, megs=None, noc=False, vgahz=None,
+                 flog=False, mouse=None, noserial=False, imps2=False,
+                 cimg=None, cgeom=None, ne2k_io=None, rcextra="",
+                 ips=None):
         # DISPLAY: the X display this machine owns - the module's
         # ($OS88_BOCHS_DISPLAY, :99) by default, or its own, so ONE process
         # can run several machines at once (one display each)
@@ -422,6 +776,9 @@ class Box(object):
                       " ".join(map(str, running(self.display)))))
         bld = build or os.path.join(ROOT, "build")
         self.build = bld
+        # THIS machine's instructions a guest second (guest_sleep)
+        self.ips = (ips if ips and not os.environ.get("OS88_BOCHS_IPS")
+                    else IPS_N)
         self._map = None
         self.captured = False
         self.inp.regrab = False
@@ -429,6 +786,13 @@ class Box(object):
         self.e9 = os.path.join(out, "e9.out")
         a, b = os.path.join(out, "a.img"), os.path.join(out, "b.img")
         c = os.path.join(out, "c.img")
+        # `cimg`: THE CALLER'S OWN FIXED DISK, mounted IN PLACE (written
+        # through, so the host reads back what the guest wrote, and a second
+        # Box on the same file boots what the first left) at `cgeom` (C, H,
+        # S) - a row's VHD, os88megabochs's `--mount hd:0:` (docs/BOCHS.md)
+        if cimg:
+            c, noc = os.path.abspath(cimg), False
+        geom = tuple(cgeom) if cgeom else GEOM
         shutil.copy(aimg or os.path.join(bld, "mega.img"), a)
         shutil.copy(bimg or os.path.join(ROOT, "build", "apps120.img"), b)
         if cfg is not None:
@@ -447,16 +811,22 @@ class Box(object):
         stage = os.path.join(out, "stage")
         shutil.rmtree(stage, ignore_errors=True)
         os.makedirs(stage)
-        args = ["RUN:" + self._stage(stage, os.path.join(bld,
-                                                         "megarun.o88"),
-                                     "0run.o88")]
+        # MEGARUN rides the C: disk only, so a machine with none (`noc`,
+        # os88megabochs) does not need it built - a knob tree a ported row
+        # builds for itself (`targets=("mega",)`) has none
+        args = [] if noc or cimg or (cmode == "keep" and os.path.exists(c)) else [
+            "RUN:" + self._stage(stage, os.path.join(bld, "megarun.o88"),
+                                 "0run.o88")]
         for p in pkgs:
             args.append("RUN:" + self._stage(stage, p,
                                              os.path.basename(p).lower()))
         args += list(put)          # --put: FOLDER:path, as os88disk.py takes it
         if csys:
             args += self._sysfiles(a, stage)
-        if cmode == "keep" and os.path.exists(c):
+        if noc or cimg:
+            pass                    # no fixed disk at all (os88megabochs),
+                                    # or the caller's own, as it stands
+        elif cmode == "keep" and os.path.exists(c):
             pass                    # the disk as the last boot left it
         elif cmode == "blank":
             with open(c, "wb") as fh:   # nothing on it: no MBR, no partition
@@ -472,9 +842,34 @@ class Box(object):
                 check=True, stdout=subprocess.DEVNULL)
         rc = os.path.join(out, "bochsrc")
         with open(rc, "w") as f:
+            # `imps2`: an IntelliMouse, so the WHEEL reaches the guest
             f.write(BOCHSRC.format(
-                megs=megs or MEGS, a=a, b=b, c=c, cy=GEOM[0], hd=GEOM[1], sp=GEOM[2],
-                boot="disk" if bootc else "floppy",
+                # `ips`: THIS machine's guest speed, where the row's subject
+                # is a real-time load the default 4M CPU correctly declines
+                # (tests/x3mega.py's live play); $OS88_BOCHS_IPS still wins
+                megs=megs or MEGS, a=a, b=b,
+                cpu=("cpu: ips=%d\n" % ips
+                     if ips and not os.environ.get("OS88_BOCHS_IPS") else IPS),
+                time0=TIME0, sync=SYNC,
+                # `rcextra`: bochsrc lines a row adds as they stand - an
+                # option ROM (`optromimage1:`, tests/megapmmouse.py)
+                rcextra=rcextra,
+                mouse="imps2" if imps2 else (mouse or MOUSE),
+                com1="com1: enabled=1, mode=mouse\n"
+                if (mouse or MOUSE) == "serial" else "",
+                # NO UART AT ALL (`noserial`): the PS/2 mouse the only
+                # pointing device, QEMU's `-serial none` (tests/ps2mouse.py)
+                com="com1: enabled=0\n" if noserial and (mouse or MOUSE) != "serial" else "",
+                flogdbg=", floppy=report" if flog else "",
+                ata0="" if noc else (
+                    "ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14\n"
+                    "ata0-master: type=disk, path=%s, mode=flat, "
+                    "cylinders=%d, heads=%d, spt=%d\n" % ((c,) + geom)),
+                vgahz=", update_freq=%d" % vgahz if vgahz else "",
+                # A C: OF THE CALLER'S tries A: first and falls to C: - a
+                # blank or empty A: is how a MartyPC row offers the BIOS C:
+                boot="disk" if bootc else (
+                    "floppy, disk" if cimg else "floppy"),
                 astat="ejected" if noa else "inserted",
                 btype=btype, bmedia={368640: "360k", 737280: "720k",
                                      1228800: "1_2", 1474560: "1_44"}
@@ -483,16 +878,27 @@ class Box(object):
                 cd=("ata1: enabled=1, ioaddr1=0x170, ioaddr2=0x370, irq=15\n"
                     "ata1-master: type=cdrom, path=%s, status=inserted\n" %
                     os.path.abspath(cd)) if cd else "",
-                sb=("sound: waveoutdrv=file, waveout=%s\n"
+                # waveindrv=dummy: the default input driver is the host's
+                # (ALSA, absent in a container), and a guest that opened the
+                # DSP for INPUT (Recorder, SPEC.md 34) wedged Bochs with no
+                # debugger prompt ever again - the dummy hands it silence
+                sb=("sound: waveoutdrv=file, waveout=%s, waveindrv=dummy\n"
                     "sb16: enabled=1, midimode=0, wavemode=1, "
-                    "dmatimer=600000\n" % os.path.join(out, "sb.wav"))
+                    "dmatimer=%s\n" % (os.path.join(out, "sb.wav"), os.environ.get("OS88_BOCHS_DMATIMER", "600000")))
                 if sb else "") + (
-                "ne2k: ioaddr=0x300, irq=10, mac=52:54:00:12:34:56, "
-                "ethmod=slirp%s\n" % (", script=" + os.path.abspath(SLIRP)
+                "ne2k: ioaddr=0x%x, irq=10, mac=52:54:00:12:34:56, "
+                "ethmod=slirp%s\n" % (ne2k_io or 0x300,
+                                       ", script=" + os.path.abspath(SLIRP)
                                        if SLIRP else "") if ne2k else ""))
         for n in os.listdir(out):
             if n.endswith(".lock"):
                 os.remove(os.path.join(out, n))
+        # ...and the caller's own C:'s, which lives OUTSIDE out: Bochs locks
+        # a disk image with PATH.lock and a stopped Bochs leaves it, so the
+        # second launch on the same disk (install, then boot it) was refused
+        # with "could not open hard drive image file"
+        if cimg and os.path.exists(c + ".lock"):
+            os.remove(c + ".lock")
         xvfb(self.display)
         self.f = open(self.e9, "wb")
         # The debugger reads a FIFO, held open by a `sleep` of its own so the
@@ -501,10 +907,20 @@ class Box(object):
         if os.path.exists(fifo):
             os.remove(fifo)
         os.mkfifo(fifo)
+        # The clock preload on BOCHS ALONE (the wrapper script execs
+        # bochs-bin and the variable rides through), never on the display's
+        # shared env, which xdotool and xwd also run under
+        benv = self.env
+        if BXCLOCK and SYNC == "slowdown":
+            pre = os.environ.get("LD_PRELOAD")
+            benv = dict(self.env, LD_PRELOAD=bxclock() +
+                        (" " + pre if pre else ""))
         self.p = subprocess.Popen(["bochs", "-q", "-f", rc], cwd=out,
                                   stdin=os.open(fifo, os.O_RDWR),
                                   stdout=self.f, stderr=subprocess.STDOUT,
-                                  env=self.env)
+                                  env=benv, preexec_fn=_fsize_cap)
+        self.inp.attach(self.p.pid,     # (the wrapper execs bochs-bin)
+                        os.path.join(out, "bochs.log"))
         self.hold = subprocess.Popen("exec sleep 86400 > '%s'" % fifo,
                                      shell=True, env=self.env)
         with open(fifo, "w") as fh:
@@ -568,6 +984,7 @@ class Box(object):
                            env=self.env,
                            capture_output=True, text=True).stdout.split()[0]
         self.inp.regrab = False
+        autorepeat_off(self.display)
         self.xd("windowfocus", "--sync", w)
         self.xd("mousemove", 330, 300)
         self.xd("keydown", "ctrl")
@@ -585,6 +1002,34 @@ class Box(object):
         if self._map is None:
             self._map = kmap(self.build)
         return self._map[name]
+
+    def ptime(self):
+        """Bochs's instruction clock, read in one stop of the guest."""
+        m = re.findall(r"ptime: (\d+)", self.dbg(["ptime"]))
+        if not m:
+            raise RuntimeError("os88bochs: no answer to `ptime`")
+        return int(m[-1])
+
+    def guest_sleep(self, secs, poll=0.05):
+        """Let the guest run SECS of ITS OWN seconds (`ptime` over this
+        machine's ips), however long the host takes to give them. A
+        time.sleep() between two inputs is a HOST interval, and how much of
+        the guest it holds is how much CPU this Bochs got meanwhile: with
+        four Bochs to a core megavidv2's "Space, then Space again a second
+        in, while the blocks are coming" paused before the first frame had
+        drawn, and both tails were wrong. Read every POLL host seconds, one
+        stop each, which costs the guest nothing (bxclock), so it overshoots
+        by at most a poll's worth of running. A backstop at 10x real time
+        plus 30 s names a machine that stopped running."""
+        want = int(secs * self.ips)
+        t0, end = self.ptime(), time.time() + 30 + 10 * secs
+        while True:
+            time.sleep(poll)
+            if self.ptime() - t0 >= want:
+                return
+            if time.time() > end:
+                raise RuntimeError("os88bochs: %.2f guest seconds not run in "
+                                   "%.0f host seconds" % (secs, 30 + 10 * secs))
 
     def at_prompt(self, cmds, timeout=20.0):
         """`dbg` for a machine that is ALREADY at the debugger's prompt -
@@ -629,8 +1074,9 @@ class Box(object):
 
     def until(self, cond, what, secs=60.0, poll=0.1):
         """Poll COND() (which reads the guest) until true; RuntimeError
-        naming WHAT after SECS host seconds - the guest's clock is the host's
-        here (`clock: sync=realtime`)."""
+        naming WHAT after SECS host seconds - a BACKSTOP: the guest runs at
+        real time at most (`clock: sync=slowdown`), so a loaded box makes it
+        tighter, never looser."""
         end = time.time() + secs
         while True:
             v = cond()
@@ -859,13 +1305,32 @@ class Box(object):
         self.xd("click", button)
         return self.ui_done(what, lock=lock)
 
+    def dblclick(self):
+        """A double-click where the pointer is, QUEUED ON A STOPPED GUEST:
+        Bochs's GUI drains the X queue in one pass and each PS/2 button
+        change is a packet of its own, so the four edges are a few GUEST ms
+        apart whatever the host does (os88megabochs.queued_input is the
+        shim's twin; docs/BOCHS.md *The clock*). `click --repeat 2 --delay
+        120` spaced them in HOST time, and a guest catching up after a long
+        stop - megahma's few hundred `setpmem`s - ran that spacing past the
+        kernel's 9-tick window: two first clicks, KBTRIP never started.
+        The stop drops the capture, so the queue starts with GRAB."""
+        def queue():
+            if self.captured:
+                self.inp.regrab = True
+            self.inp.xd("mousedown", 1, "mouseup", 1, "mousedown", 1,
+                        "mouseup", 1)
+        session(self.out, [], pids=[self.p.pid], inp=self.inp,
+                at_prompt=queue)
+        self.inp.taken()            # read by Bochs before any next stop
+
     def dbl(self, x=None, y=None, what="the UI to take the double-click",
             lock=True):
         """A double-click, then `ui_done` - `lock=False` when what it opens
         is a program whose worker holds the gfx lock (a game)."""
         if x is not None:
             self.goto(x, y)
-        self.xd("click", "--repeat", 2, "--delay", 120, 1)
+        self.dblclick()
         return self.ui_done(what, lock=lock)
 
     def megarun(self, row=0):

@@ -183,19 +183,22 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine,
     # the package's base out of the instance table, its identity checked
     # against CODE at a named symbol (wdmenusu.py's probe, same reasoning)
     I_RECSZ, I_STATE, I_SPTR, I_KIND = 32, 0, 6, 2
+    # c * 16, or on kern_mega (Bochs) the base in c's LDT descriptor - a
+    # package's segment is a selector there (tests/megaport.txt)
+    lin = getattr(m, "lin", lambda s_, o_=0: s_ * 16 + o_)
     raw = m.read(S("inst_tab"), I_RECSZ * 12)
     seg = None
     for i in range(12):
         b = i * I_RECSZ
         if raw[b + I_STATE] == 1 and (raw[b + I_KIND] & 0x80):
             c = u16(raw, b + I_SPTR)
-            if m.read(c * 16 + syms["wd_mact"], 48) == \
+            if c and m.read(lin(c, syms["wd_mact"]), 48) == \
                     image[syms["wd_mact"]:syms["wd_mact"] + 48]:
                 seg = c
                 break
     if seg is None:
         sys.exit("could not locate the running package image in inst_tab")
-    base = seg * 16
+    base = lin(seg)
     rw = lambda n: u16(m.read(base + syms[n], 2))
 
     cl, ct, cw, ch = rw("wd_cl"), rw("wd_ct"), rw("wd_cw"), rw("wd_ch")

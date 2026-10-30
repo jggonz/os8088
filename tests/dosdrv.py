@@ -26,6 +26,8 @@ the only way to exercise the steal across volumes.
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
@@ -60,7 +62,27 @@ def names(img):
     return out
 
 
+def mega_sys():
+    """kern_mega (OS88_MEGA=1, tools/os88megabochs.py): A: is build/mega.img
+    and not the 360KB system disk, so the A:-only file goes onto a COPY of
+    it, which the shim is told to boot ($OS88_MEGA_A). The MartyPC arm never
+    calls this."""
+    src = os.path.join(os.environ.get("OS88_MEGA_BUILD") or "build",
+                       "mega.img")
+    dst = "build/dosdrv/dosdrvmega.img"
+    shutil.copy(src, dst)
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__),
+                    "..", "tools", "os88fat.py"), "add", dst,
+                    "build/dosdrv/AONLY.TXT"], check=True,
+                   stdout=subprocess.DEVNULL)
+    os.environ["OS88_MEGA_A"] = os.path.abspath(dst)
+    return dst
+
+
 def main():
+    global SYS
+    if os.environ.get("OS88_MEGA"):
+        SYS = mega_sys()
     for p in (SYS, GATE):
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)

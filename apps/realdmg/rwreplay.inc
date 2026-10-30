@@ -283,8 +283,8 @@ rw_rpfree:
     xchg dx, [rw_rpseg]
     or dx, dx
     jz .z
-    call OSAPI_MEM_FREE
-.z:
+    call rw_mrel                    ; (freed, or a lent slot's let go:
+.z:                                 ;   10.3.3)
     mov byte [rw_rpmode], 0
     mov byte [rw_rpstq], 0
     pop dx
@@ -516,17 +516,18 @@ rw_rpplay:
     pop ax
     ret
 
-; rw_rpclaim - [rw_rpseg] and [rw_rpcap]: RP_KB, or 2KB on a full heap. CF
-; = 1 neither, and it is said. UI task
+; rw_rpclaim - [rw_rpseg] and [rw_rpcap]: RP_KB - with bank slots lent for
+; it on a full heap (rw_mclaim, REALDMG-SPEC 10.3.3) - or 2KB. CF = 1
+; neither, and it is said. UI task
 rw_rpclaim:
     mov dx, [rw_rpseg]              ; (a claim rw_rpdrop left behind)
     or dx, dx
     jz .c
-    call OSAPI_MEM_FREE
+    call rw_mrel
     mov word [rw_rpseg], 0
 .c:
     mov ax, RP_KB
-    call OSAPI_MEM_CLAIM
+    call rw_mclaim
     jnc .got
     mov ax, 2
     call OSAPI_MEM_CLAIM

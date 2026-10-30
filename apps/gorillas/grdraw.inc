@@ -566,7 +566,7 @@ gr_frontvgaplane:
     mov cx, 80
     mul cx
     add di, ax
-    mov ax, 0a000h
+    mov ax, [gr_fsi+FSI_SEG]    ; the bracket's frame (a selector on kern_mega, MC7)
     mov es, ax
     mov al, 2
     mov ah, [gr_frontplane]

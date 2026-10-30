@@ -289,7 +289,7 @@ cs_fingerprint:
     push si
     push di
     push es
-    mov ax, 0xF000
+    call cs_f000                    ; (a window over it, MC7)
     mov es, ax
     mov dx, 0xFFFF                  ; the CRC
     mov cl, 4
@@ -807,3 +807,40 @@ cs_id_w7:
     stc
     ret
 %endif
+
+; cs_win - AX = a physical PARAGRAPH (a frame, a ROM, a card's buffer), BX
+; -> a window word: AX = a 64KB window over it, re-aimed (OSAPI_SEG's
+; SEG_WIN): under kern_mega a paragraph past the kernel's own is no selector
+; (KERN-MEGA-MEMORY-PLAN MC7), and every real-mode kernel answers the
+; paragraph itself. 0 stays 0. Every other register kept. NOT from inside a
+; cli window: it is a kernel call
+cs_win:
+    or ax, ax
+    jz .z
+    push bx
+    push cx
+    push dx
+    mov dx, ax
+    mov ax, [bx]                    ; the window to re-aim, 0 = a new one
+    push bx
+    xor cx, cx
+    mov bl, SEG_WIN
+    call OSAPI_SEG
+    pop bx
+    mov [bx], dx
+    xchg ax, dx
+    pop dx
+    pop cx
+    pop bx
+.z:
+    ret
+
+; cs_f000 - AX = the BIOS's 64KB, F000h, through its own window (cs_win's)
+cs_f000:
+    push bx
+    mov ax, 0xF000
+    mov bx, cs_fwin
+    call cs_win
+    pop bx
+    ret
+cs_fwin:    dw 0                    ; cs_f000's window, 0 = not made yet

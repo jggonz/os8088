@@ -91,6 +91,7 @@ cs_pmseg:   dw 0
 cs_nroms:   dw 0
 cs_roms:    times CS_NROMS * 3 dw 0 ; segment, KB, ns
 cs_tseg:    dw 0                    ; the read body's source
+cs_twin:    dw 0                    ; cs_measure's window (cs_win), 0 = none
 cs_toff:    dw 0
 cs_ram:     dw 0                    ; the RAM twin's counts
 cs_lcur:    dw 0                    ; the line being composed: its write ptr
@@ -1901,6 +1902,8 @@ cs_measure:
     call cs_ptime
     mov [cs_ram], ax
     call cs_scrseg
+    mov bx, cs_twin
+    call cs_win                     ; (a window over it: MC7)
     xor bx, bx
     call cs_time
     mov [cs_nsscr], ax
@@ -1910,6 +1913,8 @@ cs_measure:
     call cs_pmfind
     jc .roms
     mov ax, [cs_pmseg]
+    mov bx, cs_twin
+    call cs_win
     mov bx, 0x5000                  ; its disk transfer buffer
     call cs_time
     mov [cs_nspm], ax
@@ -1920,7 +1925,11 @@ cs_measure:
 .scan:
     cmp ax, 0xF000
     jae .done
+    push ax
+    mov bx, cs_twin
+    call cs_win                     ; ES = a window over the paragraph (MC7)
     mov es, ax
+    pop ax
     cmp word [es:0], 0xAA55
     jne .step
     mov cx, [cs_nroms]
@@ -1933,6 +1942,7 @@ cs_measure:
     shr bx, 1
     mov [si + 2], bx                ; ...as KB
     push ax
+    mov ax, es                      ; (the window over it)
     xor bx, bx
     call cs_time
     mov [si + 4], ax
@@ -2980,7 +2990,7 @@ cs_btscan:
     jne .seg                        ; PC's ROM keeps it: the whole 64 KB is
     mov si, 0xE000                  ; most of a second at 4.77 MHz
 .seg:
-    mov ax, 0xF000
+    call cs_f000
     mov ds, ax                      ; DS = the BIOS; ES:DI ours
 .scan:
     cmp si, 0xFFF0

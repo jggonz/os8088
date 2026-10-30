@@ -22,6 +22,13 @@ MONO = (0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1)
 CGA = (0, 3, 2, 3, 0, 2, 2, 1, 0, 3, 3, 2, 2, 0, 3, 3)
 
 
+
+def _lin(m, seg, off=0):
+    """SEG:OFF's linear address - on kern_mega (tests/megaport.txt) every
+    package segment, CS and SS included, is a SELECTOR: m.lin reads it."""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f else (seg << 4) + off
+
 def call(m, code, name, **args):
     saved = m.regs()
     registers = ('ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp',
@@ -31,9 +38,9 @@ def call(m, code, name, **args):
         m.setreg(reg, args.get(reg, saved[reg]))
     sp = (saved['sp'] - 2) & 65535
     m.setreg('sp', sp)
-    m.write((saved['ss'] << 4) + sp, struct.pack('<H', saved['ip']))
+    m.write(_lin(m, saved['ss'], sp), struct.pack('<H', saved['ip']))
     start = m.status()['cycles']
-    m.bp_exec((saved['cs'] << 4) + saved['ip'])
+    m.bp_exec(_lin(m, saved['cs'], saved['ip']))
     m.run()
     assert m.wait_stop(30) == 'breakpoint', name + ' never returned'
     ms = (m.status()['cycles'] - start) / G.M.GUEST_HZ * 1000
@@ -50,7 +57,7 @@ def lock(m, p, code):
     assert m.wait_stop(30) == 'breakpoint'
     r = m.regs()
     ret = struct.unpack('<H', m.readseg(r['ss'], r['sp'], 2))[0]
-    m.bp_exec((r['cs'] << 4) + ret)
+    m.bp_exec(_lin(m, r['cs'], ret))
     m.run()
     assert m.wait_stop(30) == 'breakpoint'
 

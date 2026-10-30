@@ -41,6 +41,19 @@ def package_segment(m, slot):
 STATE = ("selected", "loaded", "face", "pending", "error", "textlen")
 
 
+_BASES = {}
+
+
+def segbase(m, seg):
+    """seg * 16 - or on kern_mega (Bochs), where a package's segment is an
+    LDT selector, the base in its descriptor, read once (megaport.txt)."""
+    if not hasattr(m, "lin"):
+        return seg * 16
+    if seg not in _BASES:
+        _BASES[seg] = m.lin(seg)
+    return _BASES[seg]
+
+
 def fv_state(m, seg):
     """Each byte at its OWN mapped offset from the region's base. They are not
     one block: [fv_loaded], [fv_pending], [fv_error] and [fv_textlen] start
@@ -49,7 +62,7 @@ def fv_state(m, seg):
     not a span off os88_image_end."""
     lo = min(MAP["fv_" + n] for n in STATE)
     hi = max(MAP["fv_" + n] for n in STATE)
-    b = m.read(seg * 16 + lo, hi - lo + 1)
+    b = m.read(segbase(m, seg) + lo, hi - lo + 1)
     return {n: b[MAP["fv_" + n] - lo] for n in STATE}
 
 
@@ -105,7 +118,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
 
     fvslot = after[-1]
     seg = package_segment(m, fvslot)
-    image_end = u16(m.read(seg * 16, 32), 8)
+    image_end = u16(m.read(segbase(m, seg), 32), 8)
     if image_end != IMAGE_END:
         raise SystemExit("fontview: the running image is %d bytes and the "
                          "map's is %d - a different build" % (image_end,
@@ -116,7 +129,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
 
     # ty_nfam, off the map.  It must agree with the directory rather than
     # merely reaching TY_MAXFAM and silently hiding a family.
-    ty_nfam = seg * 16 + MAP["ty_nfam"]
+    ty_nfam = segbase(m, seg) + MAP["ty_nfam"]
     found = m.read(ty_nfam, 1)[0]
     print("catalogue rows:", found)
     if found != len(installed):
@@ -126,7 +139,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
     # THE LAUNCH NAME PICKED ITS OWN ROW: which row Charter is comes off the
     # viewer's own catalogue (ty_fnames, TY_NAMSZ = 13 bytes a family), so a
     # launch that fell back to row 0 fails unless Charter really is row 0.
-    names = m.read(seg * 16 + MAP["ty_fnames"], 13 * max(found, 1))
+    names = m.read(segbase(m, seg) + MAP["ty_fnames"], 13 * max(found, 1))
     rows = [names[i * 13:(i + 1) * 13].split(b"\0")[0].decode("ascii", "replace")
             for i in range(found)]
     want = rows.index("CHARTER.F88") if "CHARTER.F88" in rows else -1
@@ -162,7 +175,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
 
     # The mouse path is separate from the arrow path: click row 4 using the
     # content origin the package banked from WM_CONTENT.
-    raw = m.read(seg * 16 + MAP["fv_x"], 4)
+    raw = m.read(segbase(m, seg) + MAP["fv_x"], 4)
     cx, cy = u16(raw, 0), u16(raw, 2)
     target = 4
     mo.click(cx + 12, cy + FV_LISTY + target * FV_ROWH + 4, settle=0)

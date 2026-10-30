@@ -27,7 +27,8 @@ def frame(mm, rec):
     to happen here, which is what `on_hit` is for.
     """
     r = rec["regs"]
-    stk = mm.read((r["ss"] << 4) + r["sp"], 12)
+    lin = getattr(mm, "lin", lambda s_, o=0: (s_ << 4) + o)  # kern_mega:
+    stk = mm.read(lin(r["ss"], r["sp"]), 12)                  # a selector
     hits.append(([stk[j] | stk[j+1] << 8 for j in range(0, 12, 2)], r["bx"]))
     return None
 def check(m, where):

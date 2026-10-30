@@ -107,10 +107,21 @@
 %define SH_SBRATE286 2              ; ...and on a 286 or better
 %endif
 
-    OS88_HEADER 'SHEET', sh_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_PARTS
+    OS88_HEADER 'SHEET', sh_entry, OS88_F_ICON | OS88_F_ASSOC | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
                                         ; the icon, the association block
                                         ; below, and the two modules carried
-                                        ; INSIDE the file as parts (82.16.12)
+                                        ; INSIDE the file as parts (82.16.12).
+                                        ; ABOVE 1MB on kern_mega, region and
+                                        ; claims (KERN-MEGA-MEMORY-PLAN MC7):
+                                        ; both modules are far-called through
+                                        ; their CODE halves (op_cseg), the CS
+                                        ; ch_ovbind/sh_ovbind stamp is the
+                                        ; region's own code half, the note and
+                                        ; table carves and the row-height table
+                                        ; are SEG_SUB windows, and the macro
+                                        ; module's channels use [sh_m2dseg].
+                                        ; No worker, so no stack class (0,
+                                        ; the default). tests/megasheet.py
 
 ; --- embedded 16x16 icon: a blank page with a 3x3 grid on it -------------------
     OS88_ICON16
@@ -1962,9 +1973,12 @@ sh_m2need:
     popf
     jc .nomod
     mov al, SH_PART_MACRO
-    call op_seg                         ; AX = its claim's base
-    mov word [sh_m2far], 0              ; the dispatcher is at the part's 0
-    mov [sh_m2far + 2], ax
+    call op_cseg                        ; AX = its claim's CODE half (MC7: a far
+    mov word [sh_m2far], 0              ; call through the data one is a #GP)
+    mov [sh_m2far + 2], ax              ; - the dispatcher is at the part's 0
+    mov al, SH_PART_MACRO               ; ...and its DATA half, the ES of the
+    call op_seg                         ; text channels' file calls: a code
+    mov [sh_m2dseg], ax                 ; selector is read-only (MC7)
     mov al, SH_PART_MACRO               ; READ: now it may move (82.16.11,
     call op_movable                     ; ch_ovneed's rule)
     pop es
@@ -2438,7 +2452,7 @@ sh_k_file_delete:
     call OSAPI_FILE_DELETE
     ret
 ; sh_k_m2read / sh_k_m2write - a file call whose ES:BX is the macro module'S OWN
-; CLAIM (its text-file channels, 81.91.1: `push cs / pop es`). The kernel pins
+; CLAIM (its text-file channels, 81.91.1: ES = [sh_m2dseg]). The kernel pins
 ; a transfer's destination only for each transfer (SPEC.md 66.3 rule 5), not
 ; the directory walk between them, which claims - so the module is pinned for
 ; the call and declared again after, Note Pad's np_dmov pair (SPEC.md
@@ -2588,9 +2602,15 @@ sh_entry:
     mov [sh_bordseg], dx
     mov ax, sh_reloc                   ; DX IS THE CLAIM HERE: MEM_MOVABLE
     call OSAPI_MEM_MOVABLE             ; takes the claim's base, and the first
-    add dx, SH_CLAIM_BORD_KB * 64      ; build declared the NOTE table's - not
-    mov [sh_noteseg], dx               ; a claim, refused, silently pinned
-    add dx, SH_CLAIM_NOTE_KB * 64      ; ...and the table list past all five
+    push dx                            ; build declared the NOTE table's - not
+    mov ax, SH_CLAIM_BORD_KB * 64      ; a claim, refused, silently pinned.
+    mov bl, SEG_SUB                    ; THE CLAIM + PARAGRAPHS, ASKED: a sum on
+    xor cx, cx                         ; every real-mode kernel, and under
+    call OSAPI_SEG                     ; kern_mega's protected mode a selector
+    mov [sh_noteseg], dx               ; the kernel moves with the claim (MC7)
+    pop dx
+    mov ax, (SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB) * 64
+    call OSAPI_SEG                     ; ...and the table list past all five
     mov [sh_tblseg], dx                ; of the note claim's KB (81.114.7)
     mov word [sh_ntbl], 0
     mov word [sh_nbord], 0
@@ -3405,9 +3425,14 @@ sh_rc_sides:
     jae .out                          ; (81.60) - the table has no column
     push es                           ; word for a column op to read
     mov es, [sh_noteseg]
-    mov cx, [es:SH_ROWH_N]
+    push ax
     mov dx, es
-    add dx, SH_ROWH_OFF / 16
+    mov ax, SH_ROWH_OFF / 16          ; the table, ASKED (OSAPI_SEG's SEG_SUB:
+    mov bl, SEG_SUB                   ; the sum on a real-mode kernel, and a
+    xor cx, cx                        ; selector in the claim under kern_mega,
+    call OSAPI_SEG                    ; where a sum on one names nothing - MC7)
+    pop ax
+    mov cx, [es:SH_ROWH_N]
     mov bx, SH_ROWH_REC
     call sh_rc_table
     mov [es:SH_ROWH_N], cx
@@ -45567,8 +45592,7 @@ shm_mfopen:
     je .opened
     push es                           ; the whole file, expanded if packed
     push di
-    push cs
-    pop es
+    mov es, [sh_m2dseg]               ; the module's claim as DATA (MC7)
     mov bx, [cs:di+16]
     mov si, sh_delname
     mov cx, SHM_FEACH
@@ -45676,8 +45700,7 @@ shm_mfclose:
 shm_fflush:
     push es
     push di
-    push cs
-    pop es
+    mov es, [sh_m2dseg]               ; the module's claim as DATA (MC7)
     mov bx, [cs:di+16]
     mov cx, [cs:di+18]
     xor dx, dx
@@ -45767,8 +45790,7 @@ shm_fread:                            ; AX = the most to read, DI = channel
     jae .eof
     push si
     push es
-    push cs
-    pop es
+    mov es, [sh_m2dseg]               ; the module's claim as DATA (MC7)
     add bx, [cs:di+16]                ; the byte, in this segment
     mov si, sh_sacc
 .c:
@@ -45834,8 +45856,7 @@ shm_fwrite:
     SHOUT sh_skipargs
     push si
     push es
-    push cs
-    pop es
+    mov es, [sh_m2dseg]               ; the module's claim as DATA (MC7)
     mov bx, [cs:di+20]                ; a POSITION: shm_fput adds the base
     mov si, sh_sacc
     xor cx, cx
@@ -57220,6 +57241,7 @@ section .text
 ; Their claims MOVE (82.16.11): op_movable declares each one with the
 ; standard's own proc, which puts the row right and jumps here.
 %define OP_ONMOVE sh_partmv
+%define OP_WANT_CSEG                  ; op_cseg: both modules are far-called (MC7)
 %include "os88parts.inc"
 SH_PART_CHART equ 0                 ; .modc: the chart, file formats, dialogs
 SH_PART_MACRO equ 1                 ; .modm: the macro language (81.94)
@@ -57239,6 +57261,7 @@ sh_partmv:
     cmp [sh_m2far + 2], bx
     jne .x
     mov [sh_m2far + 2], dx
+    mov [sh_m2dseg], dx                 ; (one word on a real-mode kernel)
 .x:
     ret
 
@@ -57263,7 +57286,7 @@ section .text                          ; fragment, so nothing lands after this
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9487                     ; +102 for 82.16.12: the parts standard's own OP_BSS, at the chain's head (the two modules are parts of SHEET.O88 now); +48 for 82.16.11: twelve vectors, CHOUT and the SHK kernel slots; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, the chart module's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in the chart module, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9492                     ; +2 for sh_m2dseg, the macro module as DATA under kern_mega (MC7); +3 for KERN-MEGA-MEMORY-PLAN MC7: OP_BSS grew by op_at's second window and op_seg's verb; +102 for 82.16.12: the parts standard's own OP_BSS, at the chain's head (the two modules are parts of SHEET.O88 now); +48 for 82.16.11: twelve vectors, CHOUT and the SHK kernel slots; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, the chart module's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in the chart module, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -58670,7 +58693,12 @@ sh_macro_keys equ sh_macro_ontp + 1          ; SH_MKEYS * SH_MKREC: ON.KEY
 sh_m2far      equ sh_macro_keys + SH_MKEYS * SH_MKREC ; 4: the macro module's
                                              ; (offset, segment), 0 = not loaded
 sh_m2fail     equ sh_m2far + 4               ; byte: ...and it could not be
-sh_mtabp      equ sh_m2fail + 1              ; 81.95: the bar's table...
+sh_m2dseg     equ sh_m2fail + 1              ; the macro module's claim as DATA:
+                                             ; [sh_m2far+2] is its CODE half
+                                             ; under kern_mega, read-only, so
+                                             ; its text channels' file calls
+                                             ; and stores go through this
+sh_mtabp      equ sh_m2dseg + 2              ; 81.95: the bar's table...
 sh_mcount     equ sh_mtabp + 2               ; ...and its length
 sh_mtabc      equ sh_mcount + 2              ; SH_MCUST * 6: the custom bar's
 sh_mcrec      equ sh_mtabc + SH_MCUST * 6    ; SH_MCUST * SH_MCREC: the menus

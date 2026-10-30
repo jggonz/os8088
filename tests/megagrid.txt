@@ -4,12 +4,26 @@
 #
 #   <sites> <path>  # <reason>
 #
-# Under kern_mega's protected mode only a multiple of 8 paragraphs is an
-# identity selector, so a segment built by one-paragraph arithmetic faults or
-# loads an LDT alias of other memory. A file here may not GROW, and a count
-# that falls must be lowered in the same commit. The SDK rule is apps/
-# os88api.inc's: normalise to EIGHT paragraphs (`and si, 127`), never one.
+# Under kern_mega's protected mode a segment built by one-paragraph
+# arithmetic faults or loads an LDT alias of other memory. A file here may
+# not GROW, and a count that falls must be lowered in the same commit. The
+# old SDK rule - normalise to EIGHT paragraphs, `and si, 127` - is WITHDRAWN
+# since KERN-MEGA-MEMORY-PLAN MC7: every claim is an LDT selector and no sum
+# on one is right, so a paragraph is reached through OSAPI_SEG (SEG_SUB,
+# SEG_AT, SEG_LIN), which answers the sum itself on every real-mode kernel.
 
 # --- kern_mega's DOS.O88 says OS88_HIGH (KERN-MEGA-PLAN 14.44), which brings
 #     apps/dos/ into scope: its five sites are NOT in the part that says it
 5 apps/dos/dos.asm  # dos_mcb_split, dos_mcb_join and dos_mcb_resize - the DOS arena's MCB chain, inside %ifndef DOS_EXTCORE: the program part (dosp.bin) is assembled -DDOS_EXTCORE and does not contain it, and the core that does (doscore.asm, part 1) runs it on the DOS program's arena under kern_dos in REAL mode, after the trip has left protected mode - never on a segment of its own
+
+# --- drivers/ is in scope since KERN-MEGA-MEMORY-PLAN MC8 (every driver can
+#     run on kern_mega, and a file driver is handed the caller's buffer)
+1 drivers/hdd/hdxms.inc  # hd_xa_a20's DS = FFFFh: the A20 probe of the 386 XMS staging, reached only from hd_xa_arm, which refuses under CPU_F_PM before it (`test ah, CPU_F_PM / jnz .pm`, KERN-MEGA-PLAN 14.16) - real mode only
+1 drivers/xmem/xmem.asm  # xm_a20_probe's DS = HMA_SEG (FFFFh): XMEM.DRV is kept off kern_mega altogether (xm_sniff, kernel/xmem.inc 217 - the kernel serves the cells itself in protected mode), so this only ever runs in real mode
+
+# --- KERN-MEGA-MEMORY-PLAN MC7: since every claim is a selector the grid is
+#     no longer what makes a sum safe - no sum on a selector is - so a site
+#     that aims a WINDOW at a paragraph (OSAPI_SEG's SEG_AT) is not a segment
+#     built at all, and its paragraph need not be on any grid
+1 apps/xtmp3/x3hold.inc  # x3_rseq's .conv: the hold's paragraph and an offset under 16, loaded through x3h_at's SEG_AT window - a window aimed at RAM under kern_mega, the sum only on a real-mode kernel (where any paragraph is a segment)
+3 apps/browser/browser.asm  # the Browser's three one-paragraph normalisations - br_docmap's, br_srcat's and br_srcems_map's - each the REAL-MODE arm only: br_docmap takes the sum only while [br_docfar] is 0, which kern_mega never leaves it (br_entry banks CPU_F_PM there), br_srcat only while [br_mega] is 0, and br_srcems_map's paragraph goes through br_at, a SEG_AT window under kern_mega - so under protected mode each is a bound window aimed at the byte or a window aimed at RAM, never a segment built (tests/brmega.py)

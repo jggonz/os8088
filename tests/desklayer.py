@@ -156,6 +156,7 @@ import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88stik    # noqa: E402
 import os88flush   # noqa: E402
+import megafix     # noqa: E402
 
 TITLE = "DeskProbe"
 W_ONKEY = 14                    # apps/os88api.inc
@@ -219,6 +220,13 @@ def check(cond, what):
 
 
 _PSYMS = {}
+
+
+def _lin(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base under kern_mega, where a
+    package's region is a selector (os88megabochs)"""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f else seg * 16 + off
 
 
 def probe_sym(name):
@@ -506,8 +514,8 @@ def leg_z(ui):
     # lays is counted - between its entry and its ret - so the kernel's own
     # drawing for the click is outside it and the 4-tick poll cannot win a
     # race with the arming
-    td0 = p.seg * 16 + probe_sym("stik_tagdraw")
-    td1 = p.seg * 16 + probe_sym("stik_tagrows") - 1
+    td0 = _lin(m, p.seg, probe_sym("stik_tagdraw"))
+    td1 = _lin(m, p.seg, probe_sym("stik_tagrows") - 1)
     blit, gnd = m.sym("gfx_blit1"), m.sym("thm_desk")
     tr = os88marty.bp_trace(m, td0, td1, blit, gnd)
     with tr:
@@ -660,7 +668,7 @@ def leg_keys(ui):
     nseg = struct.unpack_from("<H", m.read(rec + geom.W_SEG, 2))[0]
     nkey = struct.unpack_from("<H", m.read(rec + W_ONKEY, 2))[0]
     check(nkey != 0, "Note Pad takes keys (W_ONKEY %#x)" % nkey)
-    nk = nseg * 16 + nkey
+    nk = _lin(m, nseg, nkey)
 
     print("B: a press on the widget: the keys go to IT")
     press(ui, *pt)
@@ -763,7 +771,7 @@ def leg_small(ui):
     check(k1 != k0, "the worker's kicks reach the package's STIK_WAKE (%d -> "
           "%d): the worker arm keeps it, SPEC.md 110.11" % (k0, k1))
     print("A2: OSAPI_GFX_DESK on kern_small, laid by the probe's beat")
-    m.write(p.seg * 16 + p.img + DP_TDRAG, b"\x03")
+    m.write(_lin(m, p.seg, p.img + DP_TDRAG), b"\x03")
     ui._wait(lambda: p.b(DP_TDRAG) == 4, "the beat's OSAPI_GFX_DESK", 30)
     park(ui)
     fw, fh, rows = m.vram("cga")
@@ -978,7 +986,8 @@ def hover_entry(m):
     widget's QUERY armed. A slot still naming mod_gone means the image never
     loaded, and the row says so rather than tracing nothing."""
     off, seg = struct.unpack("<HH", bytes(m.read(m.sym("DKDFP") + 4, 4)))
-    flat = (seg << 4) + off
+    flat = _lin(m, seg, off)            # the module's CS: a code SELECTOR
+                                        # on kern_mega (os88megabochs)
     if flat == m.sym("mod_gone"):
         raise SystemExit("desklayer: DESK.DRV is not loaded (DKDFP's hover "
                          "slot is mod_gone) - SPEC.md 11.103.10")
@@ -1192,7 +1201,7 @@ def leg_drag(ui, tmp):
 
     print("F: a DRAG posted from the TIMER is inert")
     w6 = p.win()
-    m.write(p.seg * 16 + p.img + DP_TDRAG, b"\x01")
+    m.write(_lin(m, p.seg, p.img + DP_TDRAG), b"\x01")
     ui._wait(lambda: p.b(DP_TDRAG) == 2, "the beat's DRAG", 30)
     wrec = p.rec() - geom.KERNEL_SEG * 16       # the record's KERNEL_SEG offset
     check(ui._word("ui_dragy") == wrec,
@@ -1433,7 +1442,7 @@ def leg_close(ui, tmp):
     ui.mo.to(*box_point(w))
     ui._wait(lambda: p.rev(), "the handle", 20)
     # the include's own state: "not revealed" (the dwell not yet run out)
-    m.write(p.seg * 16 + p.img + WOFF["stik_hv"], bytes([HV_HIDDEN]))
+    m.write(_lin(m, p.seg, p.img + WOFF["stik_hv"]), bytes([HV_HIDDEN]))
     with os88marty.bp_trace(m, "ui_drag") as tr:
         ui.mo._sep()
         ui.mo._edge(True)
@@ -1525,7 +1534,8 @@ def cards_bad(ui, w):
 
 def leg_ground(tmp):
     img = os.path.join(tmp, "stikdesk360.img")
-    shutil.copy(os.path.join(PKGDIR, "stikdesk360.img"), img)
+    shutil.copy(megafix.system_disk(os.path.join(PKGDIR, "stikdesk360.img")),
+                img)            # (kern_mega: the fixture rebuilt on mega.img)
     with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         m = ui.m
         p = Probe(ui)
@@ -1622,7 +1632,9 @@ def main():
             machine = "os8088_5150_cga_128k"
         else:
             img = os.path.join(tmp, "stikdesk360.img")
-            shutil.copy(os.path.join(PKGDIR, "stikdesk360.img"), img)
+            shutil.copy(megafix.system_disk(os.path.join(PKGDIR,
+                                                         "stikdesk360.img")),
+                        img)
             machine = {"hovercga": os88marty.machine("os8088_5150_cga"),
                        "hoverherc": "os8088_5150_herc_gla"}.get(
                            ARGS.leg, "os8088_xt_vga")

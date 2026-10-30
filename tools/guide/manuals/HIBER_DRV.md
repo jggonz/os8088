@@ -44,11 +44,12 @@ disk, the desktop shows a window: `A hibernation file is on drive C:`.
 - A program using extended memory greys the item as `Hibernate (XMS)`,
   because that memory is not saved. On the protected-mode build for the 286
   and later, the memory above the first megabyte that is in use is saved
-  too, and the file grows by that much. A resume on that build sets the
-  whole saved picture down above 1MB first, so a machine with less memory up
-  there than it has below reads `Hibernate (No room)`, and a resume on a
+  too, and the file grows by that much. On a machine with no memory above
+  the first megabyte that build reads `Hibernate (No room)`. A resume on a
   machine with less of it than the one that hibernated says
-  `No room above 1MB` and leaves the file alone. That build also needs the
+  `No room above 1MB` and leaves the file alone, and a file scattered over
+  the disk in too many pieces to read back says `Hibernate: fragmented`.
+  That build also needs the
   hard disk's clusters to be bigger than 512 bytes, and refuses a disk
   formatted with smaller ones with `Disk clusters too small`.
 - On a high-resolution VESA desktop the item reads `Hibernate (VESA)` and is

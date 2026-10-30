@@ -23,10 +23,13 @@ whether a block's owner is its own segment, XMW_CLS off the owner's header
 or 0 without one. Then room for fewer records than there are (none, one,
 part of the pool), BX not asking, and no tail at all (the door's offset 0) -
 and every register but AX, the flags' IF and DF, and the bytes either side
-of the room as they were.
+of the room as they were. And BX = XMW_LONG, kern_mega's eight-byte records
+(KERN-MEGA-PLAN 14.92), REFUSED: CF = 1, AX = 2 and not a byte of the room
+written, so a caller that asked for eight-byte records is never handed six.
 
 Broken on purpose: XMW_KB truncated instead of rounded, and the image/buffer
-test inverted, each fail the model.
+test inverted, each fail the model; and with xm_walk's XMW_LONG test taken
+out, the LONG leg fails (CF clear, six-byte records written).
 
 Needs nasm, the `unicorn` Python module, and a built tree (make).
 """
@@ -52,6 +55,7 @@ SSEG = 0x5000                   # a stack of its own (SS != DS, as on iron)
 STUB = 0x0100                   # RSEG:STUB: call near xm_walk / hlt
 ROOM = 0x1000                   # RSEG:ROOM: the records
 XMW_FIXED = 0x4658
+XMW_LONG = 0x4C58               # kern_mega's LONG records: REFUSED here
 XMW_HMAK, XMW_HMAI, XMW_HMAB = 0xF5, 0xF6, 0xF7
 HB_ORG = 0xC000                 # kernel.asm's DRV_HMA_ORG
 FAILS = []
@@ -132,7 +136,7 @@ def model(hbhi, room, fixed, tailed):
     return recs[:room]
 
 
-def run(img, syms, d, at, htab, door, room, bx, door_on):
+def run(img, syms, d, at, htab, door, room, bx, door_on, refuse=False):
     mu = Uc(UC_ARCH_X86, UC_MODE_16)
     mu.mem_map(0, 0x200000)
     mu.mem_write(XSEG << 4, img)
@@ -174,14 +178,20 @@ def run(img, syms, d, at, htab, door, room, bx, door_on):
         if r != UC_X86_REG_AX and mu.reg_read(r) != v:
             errs.append("register %d %04X, want %04X" % (r, mu.reg_read(r), v))
     fl = mu.reg_read(UC_X86_REG_EFLAGS)
-    if fl & 1:
-        errs.append("CF set")
+    if bool(fl & 1) != refuse:
+        errs.append("CF %s" % ("clear" if refuse else "set"))
     if fl & 0x600 != 0x200:
         errs.append("IF/DF %03X, want 200" % (fl & 0x600))
     n = mu.reg_read(UC_X86_REG_AX)
     raw = bytes(mu.mem_read((RSEG << 4) + ROOM, 6 * 16))
     if bytes(mu.mem_read((RSEG << 4) + ROOM - 16, 16)) != guard:
         errs.append("the bytes below the room were written")
+    if refuse:
+        if n != 2:
+            errs.append("AX %04X, want 2" % n)
+        if raw != b"\xA5" * (6 * 16):
+            errs.append("the room was written")
+        return [], errs
     if n > 16 or raw[6 * n:] != b"\xA5" * (6 * (16 - n)):
         errs.append("bytes past record %d were written" % n)
     recs = [struct.unpack_from("<HHH", raw, 6 * i) for i in range(min(n, 16))]
@@ -213,6 +223,12 @@ def main():
         check(ok, "%s: %d records%s" % (
             what, len(want), "" if ok else " - got %r want %r; %s" % (
                 got, want, "; ".join(errs))))
+    for on in (True, False):
+        got, errs = run(img, syms, d, at, htab, door, 16, XMW_LONG, on,
+                        refuse=True)
+        check(not errs, "BX = XMW_LONG REFUSED (CF = 1, AX = 2, nothing "
+              "written)%s%s" % ("" if on else ", no tail installed",
+                                "" if not errs else " - " + "; ".join(errs)))
     if FAILS:
         print("xmhwalk: %d FAILED" % len(FAILS))
         return 1

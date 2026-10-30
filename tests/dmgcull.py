@@ -67,7 +67,7 @@ def tick(mm, card=None):
 
 
 def view(m, seg):
-    return m.read((seg << 4) + dispapps.img_size("taskmgr")
+    return m.read(dispcp._lin(m, seg, dispapps.img_size("taskmgr"))
                   + dispapps.bss_off("taskmgr", "tm_view"), 1)[0]
 
 
@@ -113,7 +113,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # open list still ended at y 295 on a window whose visible strip starts
     # at 341, and DREW read 0 again.
     def tmw(name, n=2):
-        b = m.read((seg << 4) + dispapps.img_size("taskmgr")
+        b = m.read(dispcp._lin(m, seg, dispapps.img_size("taskmgr"))
                    + dispapps.bss_off("taskmgr", name), n)
         return int.from_bytes(b, "little")
     for name, n, want, col in (("tm_exp", 4, 0xFFFFFFFF, 22 * 8 + 4),
@@ -161,6 +161,20 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         somewhere neither the LAND rect nor the SETUP check agrees with.
         """
         w = [x for x in os88geom.windows(m) if x.i == disk][0]
+        if getattr(m, "bochs", False):
+            # kern_mega under Bochs (tests/megaport.txt): a guest at host
+            # speed with two breakpoints armed takes the press LATER than
+            # the walk leaves the title bar, so the press is confirmed TAKEN
+            # (`ui_drag`'s first store, os88ui._grab's proof) before it walks
+            rec = S("wm_wins") - (KSEG << 4) + disk * os88geom.WIN_SIZE
+            m.write(S("ui_dragwin"), b"\0\0")
+            ok = c.to(w.x + 60, w.y + 9) and c.edge(True)
+            for _ in range(400):
+                if u16(m.read(S("ui_dragwin"), 2)) == rec:
+                    break
+                c.pump(1, 4)
+            ok = c.to(w.x + 60 + dx, w.y + 9 + dy, l=True) and ok
+            return c.edge(False) and ok
         return c.drag(w.x + 60, w.y + 9, w.x + 60 + dx, w.y + 9 + dy)
 
     for attempt in range(3):

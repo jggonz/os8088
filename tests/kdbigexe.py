@@ -122,7 +122,7 @@ def wait_text(m, want, secs=240, what=""):
          % (what or want, want, [r for r in rows(m) if r.strip()][:10]))
 
 
-def symbols():
+def symbols(kdbin=None, defines=("DOS_EXTCORE",)):
     """{name: offset} for the SHIPPED kern_dos, proved to be its own.
 
     kdarena.py's, and for its reason: the Makefile emits no map for
@@ -130,8 +130,9 @@ def symbols():
     BINARY before an offset is trusted - `tools/os88sym.py`'s discipline, a
     map of another build resolving every name to a plausible wrong address.
     """
-    if not os.path.exists(KDBIN):
-        fail("build/kerndos.bin is not built - `make kdostest`")
+    kdbin = kdbin or KDBIN
+    if not os.path.exists(kdbin):
+        fail("%s is not built - `make kdostest`" % kdbin)
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "k.bin")
         mapp = os.path.join(td, "k.map")
@@ -139,14 +140,14 @@ def symbols():
         with open(root, "w") as f:
             f.write("[map all %s]\n%%include \"%s\"\n"
                     % (mapp, os.path.join(ROOT, "kerndos", "kdos.asm")))
-        cmd = ["nasm", "-f", "bin", "-w+error", "-DDOS_EXTCORE"]
+        cmd = ["nasm", "-f", "bin", "-w+error"] + ["-D" + d for d in defines]
         for inc in ("kernel", "kerndos", "apps", "apps/dos", "drivers/net"):
             cmd += ["-I", os.path.join(ROOT, inc) + os.sep]
         cmd += ["-o", binp, root]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             fail("kern_dos would not assemble for its map:\n%s" % r.stderr)
-        if open(binp, "rb").read() != open(KDBIN, "rb").read():
+        if open(binp, "rb").read() != open(kdbin, "rb").read():
             fail("the map describes a DIFFERENT kern_dos to the one on the "
                  "disk. Rebuild (`make kdostest`) before trusting this row")
         out = {}
@@ -205,85 +206,144 @@ def capacity(top, arena, wpara, kb, kept_kb):
     return ((t - arena - wpara) - DOS_PSPP - 16) * 16
 
 
+# kern_mega (OS88_MEGA, tests/megaport.txt): kern_dos runs in the HMA there,
+# at FFFF:KD_ORG (build/megak/kerndos.bin, -DKD_MEGA -DDOS_MEGA), so the map
+# is that image's and a cell is read at linear FFFF0 + its offset; and its
+# arena is ~35 KB larger than the low kern_dos's, so the fixture is assembled
+# again here, BIGSZ in the middle of THAT band (measured on kern_mega: 603,744
+# with the whole 32 KB cache, 627,296 at KD_RAH_KEEP's)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+MEGA_BIGSZ = 615424
+HMA = 0xFFFF0
+KD_ORG = 0x10 if MEGA else 0
+
+
+def kdread(m, off, n):
+    """n bytes of kern_dos at its own offset OFF"""
+    return m.read(HMA + off, n) if MEGA else m.readseg(KD_SEG, off, n)
+
+
 def main():
-    syms = symbols()
-    if not os.path.exists(EXE):
+    global BIG
+    kdbin = KDBIN
+    if MEGA:
+        kdbin = os.path.join(ROOT, "build", "megak", "kerndos.bin")
+        syms = symbols(kdbin, ("DOS_EXTCORE", "KD_MEGA", "DOS_MEGA"))
+        td = tempfile.mkdtemp(prefix="kdbigexe-")
+        exe = os.path.join(td, "BIG.EXE")
+        subprocess.run(["nasm", "-f", "bin", "-w+error",
+                        "-DBIGSZ=%d" % MEGA_BIGSZ, "-o", exe,
+                        os.path.join(ROOT, "tests", "dosbig", "big.asm")],
+                       check=True)
+        BIG = os.path.join(td, "big144.img")
+        subprocess.run(["python3", os.path.join(ROOT, "tools", "os88disk.py"),
+                        "-o", BIG, "--size", "1440", exe], check=True,
+                       stdout=subprocess.DEVNULL)
+    else:
+        syms = symbols()
+        exe = EXE
+    if not os.path.exists(exe):
         fail("build/BIG.EXE is not built - `make kdostest`")
-    size = os.path.getsize(EXE)
+    size = os.path.getsize(exe)
     print("kdbigexe: the map is this kern_dos's own; BIG.EXE is %d bytes"
           % size)
-    trybp = (KD_SEG << 4) + syms["kd_entry.loadtry"]
+    trybp = (HMA if MEGA else (KD_SEG << 4)) + syms["kd_entry.loadtry"]
 
     with os88ui.boot(SYS, apps=BIG, machine=MACH) as ui:
         m = ui.m
-        if not ui.path("B:/BIG.EXE"):
-            fail("BIG.EXE did not open a DOS window")
-        os88marty.settle(m)
-        dm = dosmap.package()
-        pseg = dosmap.instance(m)
-        base = pseg << 4
-        mo = os88mouse.Mouse(marty=m)
+        if MEGA:
+            # **kern_mega HAS ONE ARM** (KERN-MEGA-PLAN 12.1 item 1): the
+            # launch IS the whole machine, a trip under kern_dos in the HMA,
+            # so there is no windowed control to refuse it and no radio and
+            # no alert - the ladder is counted from the double-click. The
+            # bytes test below is what keeps a hit to kern_dos's own: before
+            # the trip that linear address is the kernel's above 1MB
+            with open(kdbin, "rb") as f:
+                kdimg = f.read()
+            lt = syms["kd_entry.loadtry"]
+            mine = kdimg[lt - KD_ORG:lt - KD_ORG + 3]
 
-        # --- the control: it does NOT fit the windowed DOS -------------------
-        st = m.read(base + dm["dos_state"], 1)[0]
-        if st != DST_ERR:
-            fail("the windowed run left [dos_state] at %d and this fixture is "
-                 "supposed to be too big for the windowed arena (~437 KB "
-                 "against a %d-byte file). If it now FITS, the fixture has "
-                 "drifted small and the row is no longer asking anything"
-                 % (st, size))
-        print("kdbigexe: 1/5 windowed DOS refused it, which is the control")
+            def runs_at(mm, _r):
+                if bytes(kdread(mm, lt, 3)) != mine:
+                    return None             # somebody else's instruction
+                return int.from_bytes(kdread(mm, syms["dsk_rah_runs"], 2),
+                                      "little")
+            with os88marty.bp_trace(m, trybp, on_hit=runs_at) as tr:
+                if not ui.path("B:/BIG.EXE"):
+                    fail("BIG.EXE did not open a DOS window")
+                rs = wait_text(m, "READY", secs=240,
+                               what="the run under kern_dos (the trip)")
+            print("kdbigexe: 1/5 (kern_mega: no windowed arm to refuse it - "
+                  "the launch is the trip)")
+        else:
+            if not ui.path("B:/BIG.EXE"):
+                fail("BIG.EXE did not open a DOS window")
+            os88marty.settle(m)
+            dm = dosmap.package()
+            pseg = dosmap.instance(m)
+            base = pseg << 4
+            mo = os88mouse.Mouse(marty=m)
 
-        # --- the Shut down the OS arm ---------------------------------------------------
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"))
-        os88marty.settle(m)
-        if rec(m, pseg, dm, RD_N) != NARM:
-            fail("the Memory page has %d arms" % rec(m, pseg, dm, RD_N))
-        if rec(m, pseg, dm, RD_DIS) & (1 << WHOLE):
-            fail("the Shut down the OS arm is GREYED after a failed windowed load: a "
-                 "program too big for the window is exactly the one that "
-                 "wants the whole machine")
-        x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
-        pitch = rec(m, pseg, dm, RD_PITCH)
-        mo.click((x1 + x2) // 2, y1 + WHOLE * pitch + pitch // 2)
-        os88marty.settle(m)
-        if rec(m, pseg, dm, RD_SEL) != WHOLE:
-            fail("clicking the Shut down the OS arm left OS88UI_RD_SEL at %d"
-                 % rec(m, pseg, dm, RD_SEL))
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_trect"))
-        os88marty.settle(m)
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
-        os88marty.settle(m)
-        if not alert_up(m, base, dm):
-            fail("Run on the Shut down the OS arm went straight to the launch "
-                 "(SPEC.md 96.42)")
+            # --- the control: it does NOT fit the windowed DOS -------------------
+            st = m.read(base + dm["dos_state"], 1)[0]
+            if st != DST_ERR:
+                fail("the windowed run left [dos_state] at %d and this fixture is "
+                     "supposed to be too big for the windowed arena (~437 KB "
+                     "against a %d-byte file). If it now FITS, the fixture has "
+                     "drifted small and the row is no longer asking anything"
+                     % (st, size))
+            print("kdbigexe: 1/5 windowed DOS refused it, which is the control")
 
-        # --- ...and the ladder, counted at the top of the retry loop ---------
-        # ARMED ONLY ACROSS THE LAUNCH. KD_SEG and KERNEL_SEG are the same
-        # paragraph, so this flat address is live kernel code until the handoff
-        # replaces it - `wm_strad_fit.clamp`, as it happens. Armed for the
-        # whole session it would be counting somebody else's instruction; armed
-        # from the Proceed click it can only be reached by kern_dos, and the
-        # recorded widths below say so out loud.
-        # ...AND THE ARM IS NOT ENOUGH: the handoff runs kernel code between
-        # the click and the replacement, and once a kernel size pass moved an
-        # instruction that IS executed in that window onto this address the
-        # first "width" was 2135, the kernel's own byte. So a hit counts only
-        # while the bytes under the breakpoint are kern_dos's own.
-        with open(KDBIN, "rb") as f:
-            kdimg = f.read()
-        lt = syms["kd_entry.loadtry"]
-        mine = kdimg[lt:lt + 3]
+            # --- the Shut down the OS arm ---------------------------------------------------
+            mo.click(*dosmap.centre(m, pseg, dm, "dos_erect"))
+            os88marty.settle(m)
+            if rec(m, pseg, dm, RD_N) != NARM:
+                fail("the Memory page has %d arms" % rec(m, pseg, dm, RD_N))
+            if rec(m, pseg, dm, RD_DIS) & (1 << WHOLE):
+                fail("the Shut down the OS arm is GREYED after a failed windowed load: a "
+                     "program too big for the window is exactly the one that "
+                     "wants the whole machine")
+            x1, y1, x2, _ = dosmap.rect(m, pseg, dm, "dos_mrad")
+            pitch = rec(m, pseg, dm, RD_PITCH)
+            mo.click((x1 + x2) // 2, y1 + WHOLE * pitch + pitch // 2)
+            os88marty.settle(m)
+            if rec(m, pseg, dm, RD_SEL) != WHOLE:
+                fail("clicking the Shut down the OS arm left OS88UI_RD_SEL at %d"
+                     % rec(m, pseg, dm, RD_SEL))
+            mo.click(*dosmap.centre(m, pseg, dm, "dos_trect"))
+            os88marty.settle(m)
+            mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
+            os88marty.settle(m)
+            if not alert_up(m, base, dm):
+                fail("Run on the Shut down the OS arm went straight to the launch "
+                     "(SPEC.md 96.42)")
 
-        def runs_at(mm, _r):
-            if bytes(mm.readseg(KD_SEG, lt, 3)) != mine:
-                return None                 # somebody else's instruction
-            return int.from_bytes(
-                mm.readseg(KD_SEG, syms["dsk_rah_runs"], 2), "little")
-        with os88marty.bp_trace(m, trybp, on_hit=runs_at) as tr:
-            mo.click(*alert_button(m, base, dm, 1))             # Proceed
-            rs = wait_text(m, "READY", secs=240,
-                           what="the run under kern_dos")
+            # --- ...and the ladder, counted at the top of the retry loop ---------
+            # ARMED ONLY ACROSS THE LAUNCH. KD_SEG and KERNEL_SEG are the same
+            # paragraph, so this flat address is live kernel code until the handoff
+            # replaces it - `wm_strad_fit.clamp`, as it happens. Armed for the
+            # whole session it would be counting somebody else's instruction; armed
+            # from the Proceed click it can only be reached by kern_dos, and the
+            # recorded widths below say so out loud.
+            # ...AND THE ARM IS NOT ENOUGH: the handoff runs kernel code between
+            # the click and the replacement, and once a kernel size pass moved an
+            # instruction that IS executed in that window onto this address the
+            # first "width" was 2135, the kernel's own byte. So a hit counts only
+            # while the bytes under the breakpoint are kern_dos's own.
+            with open(KDBIN, "rb") as f:
+                kdimg = f.read()
+            lt = syms["kd_entry.loadtry"]
+            mine = kdimg[lt:lt + 3]
+
+            def runs_at(mm, _r):
+                if bytes(mm.readseg(KD_SEG, lt, 3)) != mine:
+                    return None                 # somebody else's instruction
+                return int.from_bytes(
+                    mm.readseg(KD_SEG, syms["dsk_rah_runs"], 2), "little")
+            with os88marty.bp_trace(m, trybp, on_hit=runs_at) as tr:
+                mo.click(*alert_button(m, base, dm, 1))             # Proceed
+                rs = wait_text(m, "READY", secs=240,
+                               what="the run under kern_dos")
         widths = [h["hit"] for h in tr.hits if h["hit"] is not None]
 
         # --- what the program itself says ------------------------------------
@@ -301,7 +361,7 @@ def main():
 
         # --- the numbers kern_dos laid out ------------------------------------
         def w(name):
-            b = m.readseg(KD_SEG, syms[name], 2)
+            b = kdread(m, syms[name], 2)
             return b[0] | (b[1] << 8)
 
         top, arena = w("kd_top"), w("dos_arena")

@@ -136,7 +136,7 @@ RealDMG's short messages, such as a new Speed setting.
 
 ## Making a game faster
 
-Five settings trade looks or speed for smoothness.
+Six settings trade looks or speed for smoothness.
 
 **Interlace.** **Screen > Interlace**, or `F2`, steps through four
 settings. They give RealDMG less to draw when the picture moves.
@@ -158,6 +158,13 @@ pixels instead of one at a time. Everything on the screen moves together, so
 the game still lines up, but a smooth scroll becomes a jump every few frames.
 By 8 saves the most while a game scrolls, about a quarter of the drawing, and
 is the hardest to play; By 4 and By 2 are gentler and save less.
+
+**Steady.** On the full screen, `Shift+F2` switches between Free and
+Steady. Free draws a picture whenever there is time for one, so a game that
+cannot draw every frame shows its pictures at uneven gaps. Steady draws every
+second, third or up to every sixth frame and none between, as often as the
+game can keep up with, so the gaps are even. It often draws fewer pictures
+than Free. RealDMG starts in Free.
 
 RealDMG remembers Two Shades and Scroll for each game.
 
@@ -312,6 +319,7 @@ the same as the item.
 | Item | Key | What it does |
 |---|---|---|
 | Interlace: Off | `F2` | Step through Off, On, Scrolling and Doubled |
+| (no item) | `Shift+F2` | On the full screen: Steady or Free pictures |
 | Two Shades | `F10` | Draw in black and white only, for speed. Kept for each game |
 | Scroll | `F11` | Smooth, or move the picture in steps of 8, 4 or 2 pixels, for speed. Kept for each game |
 

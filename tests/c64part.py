@@ -141,6 +141,10 @@ def run():
         m.run()
         os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
         os88marty.no_saver(m)
+        mega = getattr(m, "bochs", False)
+        # SEG:OFF linear: on kern_mega (OS88_MEGA) the region, the parts and
+        # the overlay are LDT SELECTORS (docs/BOCHS.md)
+        lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
         mo = os88mouse.Mouse(marty=m)
         os88marty.no_saver(m)           # the KERNAL's boot is a MINUTE of
                                         # guest time on this machine, and the
@@ -178,7 +182,7 @@ def run():
         for i in dispcp.win_list(m, S):
             rec = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
             sg = u16(rec, 22)           # W_SEG
-            if sg and m.read(sg << 4, 2) == b"O8":
+            if sg and m.read(lin(sg), 2) == b"O8":
                 seg = sg
         say("ld_status = %d, package segment %04X" % (st, seg))
         if st != 0 or not seg:
@@ -189,21 +193,27 @@ def run():
                 "why if it cannot" % st)
 
         # --- 4. the standard's answer, and the package's use of it ---------
-        pseg = u16(m.read((seg << 4) + C64.sym("op_base"), 2))
-        slack = u16(m.read((seg << 4) + C64.sym("op_slack"), 2))
+        pseg = u16(m.read(lin(seg, C64.sym("op_base")), 2))
+        slack = u16(m.read(lin(seg, C64.sym("op_slack")), 2))
         want = (pseg + slack // 16) & 0xFFFF
         mach = C64.sym("_c64_m")
-        romseg = u16(m.read((seg << 4) + mach + CM_ROMSEG, 2))
-        ramseg = u16(m.read((seg << 4) + mach + CM_RAMSEG, 2))
+        romseg = u16(m.read(lin(seg, mach + CM_ROMSEG), 2))
+        ramseg = u16(m.read(lin(seg, mach + CM_RAMSEG), 2))
         say("op_base %04X + slack %d -> %04X; c64_m.romseg %04X, ramseg %04X"
             % (pseg, slack, want, romseg, ramseg))
-        if not romseg or romseg != want:
+        # kern_mega: op_seg(0) is a SELECTOR over the part (SEG_SUB), so
+        # "the same fact" is the same LINEAR base: the claim's plus the slack
+        same = (romseg and lin(romseg) == lin(pseg) + slack) if mega \
+            else romseg == want
+        if not romseg or not same:
             fails.append(
                 "c64_m.romseg is %04X and op_seg(0) is %04X. The C reads the "
                 "ROM's base straight out of the standard, so these are two "
                 "reads of one fact and a disagreement means the package is "
                 "pointing its 6510 somewhere the ROM is not" % (romseg, want))
-        if romseg and romseg < 0x0E00:
+        if romseg and romseg < 0x0E00 and not mega:     # (kern_mega reaches
+            # the KERNAL through an OSAPI_SEG window, c64cpu.inc, not by this
+            # paragraph arithmetic - there is nothing there to underflow)
             fails.append(
                 "the ROM part landed at %04X, below 0x0E00. The KERNAL is "
                 "fetched through `ES = romseg - $0E00` (c64cpu.inc 4.3) and "
@@ -220,7 +230,7 @@ def run():
                           (0x2000, "BASIC's first bytes"),
                           (0x4000, "the character generator's first row"),
                           (0x4FF0, "the LAST 16 bytes of the part")):
-            got = bytes(m.read((romseg << 4) + off, 16))
+            got = bytes(m.read(lin(romseg, off), 16))
             if got != rom[off:off + 16]:
                 fails.append(
                     "%s differ at ROM offset 0x%04X: the guest holds %s and "
@@ -236,10 +246,10 @@ def run():
         # cc_ovinit binds it from op_seg at launch, before any C runs), so
         # the module's first and last bytes there are the claim the eager
         # carve made good - the last window for 5a's reason.
-        oseg = u16(m.read((seg << 4) + C64.sym("cc_ovseg"), 2))
+        oseg = u16(m.read(lin(seg, C64.sym("cc_ovseg")), 2))
         say("cc_ovseg %04X" % oseg)
         for off in (0, len(ovl) - 16):
-            got = bytes(m.read((oseg << 4) + off, 16))
+            got = bytes(m.read(lin(oseg, off), 16))
             if not oseg or got != ovl[off:off + 16]:
                 fails.append(
                     "the overlay at cc_ovseg %04X differs at offset 0x%04X: "
@@ -248,10 +258,10 @@ def run():
                     % (oseg, off, got.hex(), ovl[off:off + 16].hex()))
 
         # --- and the machine is RUNNING, which is as far as this row goes -
-        st = u16(m.read((seg << 4) + C64.sym("_c64_state"), 2))
-        c0 = u16(m.read((seg << 4) + C64.sym("_c64_cyc_lo"), 2))
+        st = u16(m.read(lin(seg, C64.sym("_c64_state")), 2))
+        c0 = u16(m.read(lin(seg, C64.sym("_c64_cyc_lo")), 2))
         m.advance(frames=60)
-        c1 = u16(m.read((seg << 4) + C64.sym("_c64_cyc_lo"), 2))
+        c1 = u16(m.read(lin(seg, C64.sym("_c64_cyc_lo")), 2))
         say("c64_state %d, emulated cycles %d -> %d" % (st, c0, c1))
         if st == 1:
             fails.append(

@@ -123,8 +123,12 @@ class Probe:
     def __init__(self, ui, sym):
         self.ui, self.m, self.sym = ui, ui.m, sym
         w = ui.window("REDLINE")
-        self.base = struct.unpack("<H", self.m.read(self.m.sym("wm_wins") +
-                                 w.i * G.WIN_SIZE + G.W_SEG, 2))[0] << 4
+        self.seg = struct.unpack("<H", self.m.read(self.m.sym("wm_wins") +
+                                 w.i * G.WIN_SIZE + G.W_SEG, 2))[0]
+        # kern_mega: W_SEG is an LDT selector, so its base is the
+        # descriptor's (os88megacommon.lin); MartyPC's is the paragraph
+        self.base = (self.m.lin(self.seg) if hasattr(self.m, "lin")
+                     else self.seg << 4)
 
     def addr(self, name):
         return self.base + self.sym[name]

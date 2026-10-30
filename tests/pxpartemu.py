@@ -18,8 +18,12 @@ image and bss sizes a linked part checks before it touches a variable,
 SPEC.md 106.20) and the bss variables at the addresses build/pxlink.inc
 names. Every OSAPI cell is a `retf` - but OSAPI_GET_TICKS answers a clock
 that moves, OSAPI_TASK_SLEEP and OSAPI_TASK_ALIVE call back into Python (the
-"UI task" of a test, which may drain a writer's slots), and OSAPI_WM_WAKE is
-counted. Unicorn is not a declared dependency: a host without it skips the
+"UI task" of a test, which may drain a writer's slots), OSAPI_WM_WAKE is
+counted, and OSAPI_SEG answers what every real-mode kernel does (SEG_SUB the
+sum, SEG_LIN the segment x 16, SEG_AT refused). Before every call the
+package's window tables (px_mwc, px_mwp, px_mwd: pxrec.inc, KERN-MEGA-
+MEMORY-PLAN MC7) are made of the claims the record names, as px_wcall's and
+px_pcall's px_mwok makes them. Unicorn is not a declared dependency: a host without it skips the
 host leg and says so (`available()`).
 """
 import os
@@ -114,6 +118,35 @@ class PxPart:
             self.ticks = (self.ticks + 1) & 0xFFFF
             if self.on_alive:
                 self.on_alive(self)
+        elif off == self.cells.get("OSAPI_SEG"):
+            bl = mu.reg_read(UC_X86_REG_BX) & 0xFF
+            dx = mu.reg_read(UC_X86_REG_DX)
+            f = mu.reg_read(UC_X86_REG_FLAGS) & ~1
+            if bl in (3, 5):                    # SEG_SUB, SEG_SUBC: the sum
+                mu.reg_write(UC_X86_REG_DX,
+                             (dx + mu.reg_read(UC_X86_REG_AX)) & 0xFFFF)
+            elif bl == 0:                       # SEG_LIN: x 16
+                mu.reg_write(UC_X86_REG_AX, (dx << 4) & 0xFFFF)
+                mu.reg_write(UC_X86_REG_DX, dx >> 12)
+            elif bl == 8:                       # SEG_AT: the caller's sum
+                f |= 1
+            mu.reg_write(UC_X86_REG_FLAGS, f)
+
+    # --- the window tables (pxrec.inc), as px_mwok makes them -------------
+    MW_TABLES = (("px_mwc", "px_cur", 38, "px_cur", 40),
+                 ("px_mwp", "px_prev", 38, "px_prev", 40),
+                 ("px_mwd", "px_edseg", 0, "px_edkb2", 0))
+
+    def mw_sync(self):
+        if "px_mwc" not in self.syms:
+            return
+        for t, sn, so, kn, ko in self.MW_TABLES:
+            seg = self.r16(sn, so)
+            body = struct.pack("<HHH", seg, self.syms[sn] + so,
+                               self.syms[kn] + ko)
+            body += b"".join(struct.pack("<H", (seg + 0x800 * k) & 0xFFFF
+                                         if seg else 0) for k in range(32))
+            self.wbytes(t, body)
 
     # --- memory -------------------------------------------------------------
     def claim(self, nbytes):
@@ -184,6 +217,7 @@ class PxPart:
     def call(self, vec, ax=0, bx=0, cx=0, dx=0, si=0, di=0, es=None,
              limit=400_000_000):
         mu = self.mu
+        self.mw_sync()
         # the stub: call far PART:vec ; hlt
         stub = b"\x9A" + struct.pack("<HH", self.vector(vec), PART) + b"\xF4"
         mu.mem_write(STUB * 16, stub)

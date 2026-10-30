@@ -65,7 +65,7 @@ def main():
 
         mo.click(*dosmap.centre(m, ps, dm, "dos_erect"))
         M.settle(m)
-        page = m.read((ps << 4) + dm["dos_page"], 1)[0]
+        page = m.read(dosmap.lin(m, ps) + dm["dos_page"], 1)[0]
         if page != dm["DOS_PAGE_SET"]:
             fail("the bar's button left [dos_page] = %d and Setup is %d - "
                  "there is one setup page now and that button opens it"
@@ -86,7 +86,7 @@ def main():
         def rect(n):
             b = dm["dos_eln"] + n * dm["DOS_LNSZ"]
             return tuple(int.from_bytes(
-                m.read((ps << 4) + b + dm["LN_X1"] + 2 * i, 2), "little")
+                m.read(dosmap.lin(m, ps) + b + dm["LN_X1"] + 2 * i, 2), "little")
                 for i in range(4))
 
         rs = [rect(n) for n in range(dm["DOS_ENVN"])]
@@ -121,15 +121,15 @@ def main():
         # --- 4. and the hit test reaches the LAST one ------------------------
         last = dm["dos_eln"] + (dm["DOS_ENVN"] - 1) * dm["DOS_LNSZ"]
         mo.click(rs[-1][0] + 20, rs[-1][1] + 6)
-        if not m.read((ps << 4) + last + dm["LN_FOCUS"], 1)[0]:
+        if not m.read(dosmap.lin(m, ps) + last + dm["LN_FOCUS"], 1)[0]:
             fail("a click inside row %d's own rect did not give it the caret - "
                  "dos_fld_hit walks every row now that dos_click_env is gone"
                  % (dm["DOS_ENVN"] - 1))
         m.type_text("Z=9")
         M.settle(m)
-        buf = int.from_bytes(m.read((ps << 4) + last + dm["LN_BUF"], 2),
+        buf = int.from_bytes(m.read(dosmap.lin(m, ps) + last + dm["LN_BUF"], 2),
                              "little")
-        got = bytes(m.read((ps << 4) + buf, 16)).split(b"\0")[0]
+        got = bytes(m.read(dosmap.lin(m, ps) + buf, 16)).split(b"\0")[0]
         if got != b"Z=9":
             fail("typing into row %d put %r in its buffer - the click focused "
                  "one row and the keystroke went to another"

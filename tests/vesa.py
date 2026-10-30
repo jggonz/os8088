@@ -76,6 +76,14 @@ from os88geom import VID_VESA                               # noqa: E402
 SOCK, PIDFILE = os88qemu.paths("vesa")
 
 WANT_W, WANT_H, WANT_BPP = 1024, 768, 16
+if os88qemu.MEGA:
+    # BOCHS'S vgabios lists nothing above 800 x 600 (0100h-0115h and four
+    # 014xh modes; read off the image's vx_list, KERN-MEGA-PLAN 14.115), so
+    # Auto's answer there is 800 x 600 at 16bpp, mode 0114h - the same
+    # choice SPEC.md 120.2.3 makes on any card whose best is that
+    WANT_W, WANT_H = 800, 600
+# the A: and B: icons: desk zone 0, at the desktop's right edge
+ICON_X = WANT_W - 49
 
 
 def kill_stale():
@@ -90,9 +98,21 @@ def kill_stale():
             os.unlink(f)
 
 
-def launch():
-    """The standard VGA (QEMU's default, spelled out) and the gate disk."""
-    os88fixture.need("build/vesa.img", "build/apps.img")
+def launch(img="build/vesa.img", b="build/apps.img", sock=None, pidfile=None):
+    """The standard VGA (QEMU's default, spelled out) and the gate disk.
+
+    UNDER $OS88_MEGA it is kern_mega's (KERN-MEGA-PLAN 14.115): this socket
+    answered by a Bochs (tests/os88qmpmega.py) whose VGA carries Bochs's VBE
+    (`vga: extension=vbe`, tools/os88bochs.py) - the gate disk rebuilt on
+    mega.img with its SYSTEM.CFG (mega_twin), the shipped apps disk as
+    megaapps.img. The desktop comes up on the VBE in real mode exactly as on
+    kern_big, and mega_enter then hands VESA.DRV its selectors"""
+    os88fixture.need(img, b)
+    if os88qemu.MEGA:       # (and every vesa* row's, through `img`/`b`)
+        import os88qmpmega
+        launch.srv = os88qmpmega.Server(sock or SOCK, pidfile or PIDFILE,
+                                        _B.at(img), _B.at(b), ne2k=False)
+        return
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     os88qemu.start(
         em + " -machine pc,vmport=off -vga std"
@@ -216,6 +236,13 @@ def white_share(pix, w, x0, y0, x1, y1):
 
 def px(pix, w, x, y):
     i = (y * w + x) * 3
+    if os88qemu.MEGA:
+        # Bochs's X display widens RGB565 by filling the low bits with ones -
+        # the driver's white 0FFFFh is (251, 255, 251) - where QEMU, and
+        # vesablit4's q565, replicate the high bits. Re-expanded QEMU's way
+        # here, so every row compares a 565 pixel the same on both
+        r, g, b = pix[i] >> 3, pix[i + 1] >> 2, pix[i + 2] >> 3
+        return (r << 3 | r >> 2), (g << 2 | g >> 4), (b << 3 | b >> 2)
     return pix[i], pix[i + 1], pix[i + 2]
 
 
@@ -260,8 +287,8 @@ def main():
 
         w, h = word(q, "vid_cw"), word(q, "vid_ch")
         if (w, h) != (WANT_W, WANT_H):
-            fails.append("vid_cw x vid_ch %d x %d, want %d x %d (Auto on QEMU's "
-                         "standard VGA, SPEC.md 120.2.3)" % (w, h, WANT_W, WANT_H))
+            fails.append("vid_cw x vid_ch %d x %d, want %d x %d (Auto on this "
+                         "card, SPEC.md 120.2.3)" % (w, h, WANT_W, WANT_H))
         bpp = byte(q, "vid_planes")
         if bpp != WANT_BPP:
             fails.append("vid_planes %d, want %d: the depth is the plane count "
@@ -323,7 +350,7 @@ def main():
                              "come back whole (the restore)")
             # the A: icon at the desktop's right edge (desk zone 0): a Disk
             # window opens on a double-click
-            m.dblclick(975, 45)
+            m.dblclick(ICON_X, 45)
             os88qemu.pace(q, 4.0)
             sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
             if out_png:
@@ -349,7 +376,7 @@ def main():
             # window, so this one draws the chevron band (a pattern fill);
             # the desktop's left margin must be the dither still, every
             # block of it - the runaway covered 64 whole rows
-            m.dblclick(975, 100)
+            m.dblclick(ICON_X, 100)
             os88qemu.pace(q, 5.0)
             sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
             if out_png:
@@ -369,12 +396,12 @@ def main():
             # the transfers that opened two windows (SPEC.md 12.8, 120.5:
             # on a 1024-wide bar the widget sits past the composer's cells
             # and fpg_finish has to erase its band rows itself)
-            left = [(x, y) for y in range(1, 18) for x in range(600, 860, 2)
+            left = [(x, y) for y in range(1, 18) for x in range(WANT_W - 424, WANT_W - 164, 2)
                     if px(pix, sw, x, y) != (255, 255, 255)]
             if left:
                 fails.append("the disk widget's chrome is still on the bar after "
-                             "the transfers: %d non-white pixels between x=600 "
-                             "and 860, first at %r" % (len(left), left[0]))
+                             "the transfers: %d non-white pixels in the widget's band "
+                             "(first at %r)" % (len(left), left[0]))
             if bad:
                 fails.append("B:\\APPS open: the desktop's left margin is not "
                              "the dither on %d row pairs (first at y=%d) - a "

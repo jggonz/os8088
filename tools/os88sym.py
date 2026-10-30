@@ -78,11 +78,12 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # .lowbss so a mono machine's heap can start under them
                # (SPEC.md 39.22)
                ".vgabuf": "VGABUF_SEG",
-               # kern_mega's own segment (docs/plans/KERN-MEGA-SEGMENTS-PLAN.md):
+               # kern_mega's own segment (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md):
                # its RUNG, which is where it is until mega_enter copies it
                # above 1MB with `.cold` and where it stays on a machine with
                # too little extended memory. After the switch it runs under
-               # MEGA_SEL_CODE at MEGA_HI_LIN, which no real-mode linear
+               # MEGA_SEL_CODE at the code area mega_layoutf placed (mega_coldlin
+               # + COLD_PARA * 16, KERN-MEGA-MEMORY-PLAN MC2), which no real-mode linear
                # address names - the same caveat `.cold` carries there
                ".mega": "MEGA_RAM",
                # ...and the on-demand modules (SPEC.md 2.8), which have NO
@@ -335,7 +336,28 @@ def kz_defines(bdir, defines=()):
     return tuple(defines)
 
 
+def _mega_map():
+    """$OS88_MEGA: kern_mega's own map, as its build wrote it.
+
+    A row ported to kern_mega (tools/os88megabochs.py) asks every question
+    a MartyPC row asks, and this is where its symbols come from: the map
+    `make mega` wrote beside the kernel it built, `megak/kernel.map` in
+    $OS88_MEGA_BUILD (build/ by default). Nothing is re-assembled, because
+    nothing need be - that map IS the build's own, written in the same nasm
+    run as the image, so it cannot describe a different kernel the way a
+    re-assembly from today's sources can."""
+    import os88build
+    bdir = os88build.mega_build()       # the run's tree under a soak
+    mapf = os.path.join(bdir, "megak", "kernel.map")
+    key = ("mega", mapf, os.path.getmtime(mapf))
+    if key not in _cache:
+        _cache[key] = _parse_map(mapf)
+    return _cache[key]
+
+
 def _load(defines=(), check=True):
+    if os.environ.get("OS88_MEGA"):
+        return _mega_map()
     # $OS88_DEFINES is how a tool that never asked for a knob still finds the
     # right map. Every helper here takes `defines`, and the ones layered above
     # it - os88geom.word, sucheck.fb, Marty.sym - do not thread it through, so

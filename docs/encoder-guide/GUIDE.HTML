@@ -507,9 +507,9 @@ Old screens do not have square pixels. A CGA pixel is more than twice as tall as
 <p>Swaps black and white. Useful for a clip of white lines on black, or for a stylised look.</p></div>
 
 <h3>Solid colours</h3>
-<div class="opt"><h4>Clip</h4>
+<div class="opt" id="clip"><h4>Clip</h4>
 <p>How close a colour must be to one the screen has to be drawn as that colour <em>solid</em>, with no dots. Default 16 (out of 255). Without it, an MP4's "black" (which is often 3 or 4 rather than 0) would light a faint, even grid of dots across every dark area.</p>
-<p class="when"><b>Raise it</b> (24 or 32) if dark backgrounds or white skies show a fine pattern of stray dots. <b>Lower it</b> (8, or 0) if shadow detail is disappearing into solid black.</p></div>
+<p class="when"><b>Raise it</b> (24 or 32) if dark backgrounds or white skies show a fine pattern of stray dots. <b>Lower it</b> (8, or 0) if shadow detail is disappearing into solid black. On CGA's colours, a high Clip to stop coloured dots also stops greys being dithered; use <a href="#cgamix">Colour mix and Colour clip</a> instead.</p></div>
 
 <h3>Text mode</h3>
 <p>For the two text-mode entries. The picture is drawn with the 256 characters of the PC's text font, each cell a character with a foreground and background colour.</p>
@@ -547,6 +547,19 @@ Old screens do not have square pixels. A CGA pixel is more than twice as tall as
 <figure><a href="guide/cmp-cga4-p1.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-cga4-p1.png" alt="CGA palette 1 bright: cyan, magenta and white." loading="lazy"></a><figcaption><b>Palette 1, bright</b>: cyan, magenta, white. The famous CGA look.</figcaption></figure>
 </div>
 <p class="when"><b>Set them by hand</b> when you want a particular look regardless of the clip (the cyan and magenta of 1980s games, say), or when several clips should match. Choosing the background is often the biggest improvement: a dark blue background can suit a night scene far better than black.</p></div>
+
+<h3 id="cgamix">CGA colours: what mixes</h3>
+<div class="opt"><h4>Colour mix, Colour clip, Edge solid</h4>
+<p>For CGA 4 colours and CGA 16 colours. A colour the screen does not have is made by mixing ones it does have, dot by dot. With <b>Colour mix</b> on <b>all</b> (the default) any colours may mix, and on the cyan, red and white set that goes wrong: cyan and red dots side by side average to grey, so greys come out as speckles of cyan and red, and a blue picks up red dots. On a monitor that reads as coloured dots, not as a new colour.</p>
+<p><b>hue</b> stops it. Greys are mixed from black, white and the greys between, never from colours, and a colour mixes only with colours of its own hue and with one grey: black to darken it, white to lighten it.</p>
+<p><b>Colour clip</b> is <a href="#clip">Clip</a> for the colours alone, so the two can differ: how close a pixel must be to one of the set's colours to be drawn as that colour, solid. Left on <b>as Clip</b> it is the same number. <b>255</b> never dithers a colour at all: flat colours stay flat and only greys are dithered.</p>
+<p><b>Edge solid</b> draws a pixel where the picture changes sharply (an edge) as its nearest colour, never a dot. The soft edge of a letter or a cartoon outline is a blend one or two pixels wide; dithered, it becomes a fringe of stray dots around every shape. 48 suits cartoons and titles. Leave it at 0 for camera footage, where it would flatten fine texture into blotches.</p>
+<div class="grid three">
+<figure><a href="guide/cmp-cgamix-all.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-cgamix-all.png" alt="Colour mix all: the grey background is speckled with cyan and red dots." loading="lazy"></a><figcaption><b>all</b> (default). The grey background is cyan and red dots.</figcaption></figure>
+<figure><a href="guide/cmp-cgamix-hue.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-cgamix-hue.png" alt="Colour mix hue: the background is black and white dots, the flower red." loading="lazy"></a><figcaption><b>hue</b>. Greys in black and white; the flower's shading kept.</figcaption></figure>
+<figure><a href="guide/cmp-cgamix-solid.png" title="Open full size"><img width="640" height="480" class="px" src="guide/cmp-cgamix-solid.png" alt="Colour mix hue with colour clip 255 and edge solid 48: the flower is flat red with clean edges." loading="lazy"></a><figcaption><b>hue</b>, Colour clip <b>255</b>, Edge solid <b>48</b>. Flat colours and clean edges: right for a cartoon, too flat for a photograph.</figcaption></figure>
+</div>
+<p class="when"><b>Use hue</b> whenever greys or colours show dots of a colour that is not in the picture. <b>Add Colour clip 255 and Edge solid 48</b> for cartoons, anime and titles: flat colour areas and lettering, the kind of picture CGA's four colours suit best. For camera footage, hue alone is usually the better choice.</p></div>
 
 <h3>4 and 16 colours</h3>
 <div class="opt"><h4>Vga4 plan cap, Vga4 sparse</h4>
@@ -696,7 +709,7 @@ An MFM controller such as the ST11M moves data from the disk into memory by itse
 <div class="opt"><h4>Bands</h4>
 <p>Mode X and 16 colours draw a picture in four colour planes, so a half-drawn frame shows as stripes of wrong colour across the whole picture. <b>Bands</b> (for example 4 or 8) draws the frame one horizontal band at a time, so a half-drawn frame shows one clean tear line instead. It costs a few bytes and a little drawing time per band.</p></div>
 <div class="opt"><h4>Flip, Flip own</h4>
-<p>With two pages of video memory (Mode X, or 16 colours on a full-screen <b>Screen</b>), the player draws the next frame on the hidden page and then shows it all at once. No tearing at all, but about twice the drawing work. <b>Flip own</b> stores each frame against the page it will be drawn on, which saves drawing time for more bytes.</p>
+<p>With two pages of video memory (Mode X, or 16 colours on a full-screen <b>Screen</b>), the player draws the next frame on the hidden page and then shows it all at once. No tearing at all, but about twice the drawing work. <b>Flip own</b> stores each frame against the page it will be drawn on, which saves drawing time for more bytes. With both on, <a href="#flipbuild">Flip build</a> can bring big scene changes in whole.</p>
 <p class="when"><b>Use Flip</b> on a fast machine (a 486, a fast 286) where tearing bothers you.</p></div>
 <div class="opt"><h4>Page ahead, Pages, Page keys, Key pool, Page prune</h4>
 <p><b>Page ahead</b> uses the spare page differently: it builds an upcoming scene change on the hidden page during the calm frames before it, then shows the whole new scene at once with a single flip. The cut is clean instead of filling in over several frames. <code>auto</code> (default) tries it on Mode X and full-screen 16 colours, and keeps it only if the result is better everywhere; it doubles the encode time on those files. <b>Pages</b> uses more hidden pages so several cuts close together can all be built ahead. The remaining three settings tune how those pages are stored; leave them at their defaults.</p>
@@ -745,6 +758,12 @@ An MFM controller such as the ST11M moves data from the disk into memory by itse
 
 <div class="opt"><h4>Slow cost, Flip hold</h4>
 <p><b>Slow cost</b> is how much the encoder dislikes a slower frame rate compared with a torn picture: higher keeps the full rate longer. <b>Flip hold</b> is how a held frame is drawn on a page-flipped file; leave it at <code>ahead</code>.</p></div>
+
+<div class="opt" id="flipbuild"><h4>Flip build</h4>
+<p>For a page-flipped file, a way to bring a <b>big scene change in whole</b>. Normally the first frame of a new scene is drawn like any other frame: if it is too much for one frame, it is cut, or drawn as coarse cells, and fills in over the next few frames. With <b>Flip build</b> set to a number of frames, the encoder looks ahead to each scene change it would have to cut and holds the picture still on the old scene for a frame or two before it. During those frames it draws the new scene on the hidden page; then the page flips and the new scene appears complete, in its own colours. The frame after the flip copies the new picture onto the other page with the VGA's own copy hardware, so flipping carries on as normal.</p>
+<p>It holds the <b>fewest</b> frames that bring the scene in whole, and never more than the number you give (3 to 8 is plenty; 0, the default, is off). A scene change that fits anyway, or that would need more frames than that, is left to the ladder or the cuts as usual. The report has a line naming each scene it built and how many frames it held.</p>
+<p>It needs <b>Flip</b> and <b>Flip own</b> on (<a href="#tearing">Trade-offs, Tearing</a>: a 16-colour file on a Screen of its own, or Mode X), <b>Flip hold</b> at <code>ahead</code>, and <b>Scene palettes</b> on (the palettes are how the encoder knows where the scenes change). Otherwise the box is greyed and says which is missing.</p>
+<p class="when"><b>Use it</b> when a clip's scene changes are where it looks worst - a cut that takes many frames to fill in on a full-screen change - and the end of each scene is fairly still. <b>Leave it off</b> when the old scene is still moving as it ends: holding it for a frame or two is a small pause before the cut, which on fast footage can read as a stutter. Like the ladder, try it on the clip and compare. The preview shows a held frame as the screen does, still on the old picture.</p></div>
 
 <!-- ================================================================== -->
 <h2 id="disk">Making a disk</h2>

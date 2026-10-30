@@ -116,6 +116,23 @@ def claims(m, S):
             for i in range(MEM_MAX) if u16(raw, i * MC_SIZE)]
 
 
+MX_BLKSZ, MX_NBLK, MX_FPURGE = 10, 96, 4     # kernel/mega.inc
+
+
+def pool(m):
+    """kern_mega's XMEM pool (mega.inc's mx_tab): {(KB offset, KB): (owner,
+    flags)} for every live block. A driver image loaded in mid-session there
+    is a pool block above 1MB and NO mem_tab record, and so would a claim it
+    made - so on kern_mega check 2 reads both tables."""
+    raw = m.read(m.sym("mx_tab"), MX_BLKSZ * MX_NBLK)
+    out = {}
+    for k in range(MX_NBLK):
+        e = raw[k * MX_BLKSZ:(k + 1) * MX_BLKSZ]
+        if u16(e, 2):
+            out[(u16(e, 0), u16(e, 2))] = (e[4], e[5])
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default=MACHINE)
@@ -138,6 +155,8 @@ def main():
         # --- tick the hard disk in, which is also what mounts it -----------
         # A driver row is NOT WANTED by default (SPEC.md 51.3), so the tick is
         # both the request and the mount (SPEC.md 52.6.1).
+        mega = getattr(m, "bochs", False)
+        pool0 = pool(m) if mega else {}
         mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel
         os88marty.settle(m)
         cp = [w for w in os88geom.windows(m, S)
@@ -198,6 +217,21 @@ def main():
         mine = [c for c in claims(m, S) if c[2] == seg or c[0] == seg]
         image = [c for c in claims(m, S) if c[0] == seg]
         extra = [c for c in mine if c[0] != seg]
+        if mega:
+            # kern_mega (tests/megaport.txt): the image is the POOL block at
+            # the driver's selector's base, and a second claim is any block
+            # the tick and the mount added that is neither it nor a kernel
+            # CACHE (MX_FPURGE, purgeable by definition) - the pool records
+            # no owner finer than "the kernel" for a driver's claims
+            at = m.lin(seg)
+            new = {b: v for b, v in pool(m).items() if b not in pool0}
+            hit = [b for b in new if 0x100000 + b[0] * 1024 == at]
+            image += [(seg, b[1] * 64, 0, 0) for b in hit]
+            extra += [(0x10000 + b[0] * 64, b[1] * 64, v[0], v[1])
+                      for b, v in new.items()
+                      if b not in hit and not v[1] & MX_FPURGE]
+            mine = mine + [c for c in image if c not in mine] + \
+                [c for c in extra if c not in mine]
         print("driver-owned records:")
         for bs, pa, ow, rl in sorted(mine):
             print("   %04x %5d KB owner %04x%s%s"

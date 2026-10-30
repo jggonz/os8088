@@ -213,7 +213,10 @@ def main():
     ap.add_argument("--half", default="both", choices=("fat", "ram", "both"))
     a = ap.parse_args()
 
-    src = os88build.at("build/os8088-360.img")
+    # kern_mega's system disk under OS88_MEGA (docs/BOCHS.md): the struck
+    # copy is a scratch image, which the shim boots as it is
+    src = os88build.at("build/mega.img" if os.environ.get("OS88_MEGA")
+                       else "build/os8088-360.img")
     want = os.path.getsize(os.path.join(os.path.dirname(__file__), "..",
                                         PLAIN))
     with tempfile.TemporaryDirectory() as tmp:

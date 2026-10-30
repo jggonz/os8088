@@ -150,7 +150,9 @@ class Game:
         return v - 0x10000 if v & 0x8000 else v
 
     def wr(self, name, data, i=0):
-        self.m.write((self.seg << 4) + self.off(name) + i, bytes(data))
+        # the descriptor's base on kern_mega, where seg is a selector
+        lin = getattr(self.m, "lin", lambda s, o=0: (s << 4) + o)
+        self.m.write(lin(self.seg, self.off(name) + i), bytes(data))
 
     def movers(self):
         t = self.rd("tk_otype", TK_NOBJ)

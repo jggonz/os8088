@@ -52,14 +52,17 @@ SIX ASSERTIONS:
   2. CHART.OVL MOVED under the live chain, and the module's return from
      WM_SHOW came back to its NEW home, never to the old one;
   3. the Goto dialog opened - the module ran on after WM_SHOW returned;
-  4. [ch_ovseg], [ch_ovfar+2] and [sh_m2far+2] name the modules' NEW claims;
+  4. [ch_ovseg], [ch_ovfar+2], [sh_m2far+2] and [sh_m2dseg] name the
+     modules' NEW claims;
   5. Esc closes it - the module's key and close paths, at its new address;
   6. F5 opens it again and Esc closes it again.
 
 VERIFIED TO FAIL: with CHX put back to the old shim shape (`call routine /
 retf`, the module's CS left on the stack) the return is caught at the OLD
 home (5c00:2559, the module moved 5c00 -> 44c0), the UI task halts in the
-poison, and 2, 5 and 6 go red. SOVL_DEBUG=1 prints every stop and the arena.
+poison, and 2, 5 and 6 go red. With sh_partmv's store to [sh_m2dseg]
+taken out, 4 goes STALE (the word still names 6800 after MACRO.OVL moved
+to 4f80). SOVL_DEBUG=1 prints every stop and the arena.
 """
 import argparse
 import os
@@ -108,7 +111,10 @@ def module_frame(words, old, tag, back):
     """The module's innermost return frame on the stack: (index, IP, shape).
 
     Old shape: [ret into the shim][IP][the module's CS]. ch_xthunk's shape:
-    [ch_xthunk.back][IP][the tag, the ADDRESS of ch_ovseg]. The first from
+    [ch_xthunk.back][IP][the tag, the ADDRESS of ch_ovfar+2 - the far
+    vector's segment word, the module's CODE half under kern_mega (MC7); it
+    was ch_ovseg's until the batch that made the compare the code half, and
+    this row read NOT FOUND from then until it followed]. The first from
     the top of the stack is the frame the WM_SHOW chain will return through.
     """
     for i in range(1, len(words) - 1):
@@ -291,7 +297,7 @@ def main():
 
         # --- F5: stop on the bank's claim, inflate it; watch the return ----
         take = m.sym("wm_su_take")
-        tag, back = SH["ch_ovseg"], SH["ch_xthunk.back"]
+        tag, back = SH["ch_ovfar"] + 2, SH["ch_xthunk.back"]
         homes = {c0[0]: ("CHART.OVL", c0[1]), m0[0]: ("MACRO.OVL", m0[1])}
         bps = ["mem_claim", "mem_reloc_call"]
         m.bp_exec(*bps)
@@ -376,14 +382,16 @@ def main():
         bad += not ok
 
         want = (c1[0] if c1 else None, c1[0] if c1 else None,
-                m1[0] if m1 else None)
+                m1[0] if m1 else None, m1[0] if m1 else None)
         got = (word("ch_ovseg"), u16(m.read(sh_seg * 16 + SH["ch_ovfar"] + 2,
                                             2)),
-               u16(m.read(sh_seg * 16 + SH["sh_m2far"] + 2, 2)))
+               u16(m.read(sh_seg * 16 + SH["sh_m2far"] + 2, 2)),
+               word("sh_m2dseg"))   # the macro module as DATA (MC7)
         ok = got == want
         print("  4 the words follow           %s"
               % ("OK %s" % ["%04x" % g for g in got] if ok else
-                 "STALE: ch_ovseg/ch_ovfar+2/sh_m2far+2 = %s, claims %s"
+                 "STALE: ch_ovseg/ch_ovfar+2/sh_m2far+2/sh_m2dseg = %s, "
+                 "claims %s"
                  % (["%04x" % g for g in got], want)))
         bad += not ok
 

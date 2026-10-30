@@ -810,12 +810,19 @@ zi_load:
     mov ax, [zi_kb]
     call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base SEGMENT
     jc .nomem
-    test dl, 4                      ; a SELECTOR (kern_mega, a story of 64KB
-    jz .claimed                     ; or less) faults past its end where a
-    cmp word [zi_kb], 64            ; segment reads garbage, and a story may
-    jae .claimed                    ; name any 16-bit address: so 64KB of
-    call OSAPI_MEM_FREE             ; claim, and every one of them is inside
-    mov ax, 64                      ; it (KERN-MEGA-PLAN 14.13)
+    ; A SELECTOR (kern_mega: every claim is one, KERN-MEGA-MEMORY-PLAN MC7)
+    ; faults past its end where a segment reads garbage, and a story may name
+    ; any 16-bit address through [zf_sseg] (zmem.inc's <64KB arm): so a claim
+    ; under 64KB is made 64KB there, and every such address is inside it. A
+    ; bigger claim's selector already covers its first 64KB, and the pages
+    ; past that are zm_pages'. Bit 2 is TI: a real-mode claim is 512-byte
+    ; aligned and never has it, so this costs the XT nothing.
+    test dl, 4
+    jz .claimed
+    cmp word [zi_kb], 64
+    jae .claimed
+    call OSAPI_MEM_FREE
+    mov ax, 64
     mov [zi_kb], ax
     call OSAPI_MEM_CLAIM
     jc .nomem
@@ -823,6 +830,8 @@ zi_load:
     mov [zf_sseg], dx
     mov ax, [zi_kb]
     mov [zf_skb], ax
+    call zm_pages                   ; the page table: a segment per 32KB
+    jc .nomem                       ; (kern_mega: no LDT entry for one)
 
     push es
     mov es, dx                      ; ES:BX = the claim, offset 0
@@ -1011,18 +1020,24 @@ zi_load:
 ; REFUSED). A heap that cannot compact around it is a heap where the second
 ; story of a session does not open.
 ;
-; The story costs three words and not one, and the extra two are the whole
-; difficulty §61.3 describes:
+; The story costs more than one word, and the rest are the whole difficulty
+; §61.3 describes:
 ;
 ;   [zf_sseg]    the base itself
+;   [zf_stab]    the PAGE TABLE, sixteen segments into the story (zmem.inc)
 ;   [zf_pcseg]   THE PROGRAM COUNTER, which is a live segment INTO the story
 ;                and must be shifted rather than set - the PC is somewhere in
 ;                the middle of it, not at its start
 ;   [zf_sdelta]  the running total, which zi_yield differences to fix an ES
 ;                that was pushed before the move (66.5.9)
 ;
+; ONLY A REAL-MODE KERNEL CALLS THIS. On kern_mega every one of those is a
+; selector and a move REBASES it: the values do not change and no proc runs
+; (SPEC.md 50.6.12), which is why the page table is SEG_SUB's answers and not
+; sums this file made.
+;
 ; What costs NOTHING is everything else the Z-machine holds, and that is a
-; property of the design rather than luck: zm_pcaddr turns the live ES:SI back
+; property of the design rather than luck: zm_pcaddr turns the live PC back
 ; into a 20-bit STORY ADDRESS, so every return address in every frame on the
 ; Z-stack, every object pointer and every packed address is relative to the
 ; base and survives a move untouched.
@@ -1037,12 +1052,18 @@ zf_reloc:
     jne .stack
     mov [zf_sseg], dx
     push ax
+    push bx
     mov ax, dx
     sub ax, bx                      ; AX = the paragraph delta
     add [zf_sdelta], ax
-    add [zx_seglim], ax             ; zx_step's upper bound follows the story
-                                    ; (zbss.inc); before zx_boot it is a value
-                                    ; zx_boot overwrites, so adding is harmless
+    mov bx, zf_stab                 ; every page follows the story. Only a
+.page:                              ; real-mode kernel calls this at all: on
+    add [bx], ax                    ; kern_mega a move is a REBASE and the
+    inc bx                          ; page selectors go with it (SPEC.md
+    inc bx                          ; 50.6.11), so the table is never summed
+    cmp bx, zf_stab + 32            ; there
+    jb .page
+    pop bx
     cmp word [zf_pcseg], 0          ; 0 = no PC yet: a story claimed but not
     je .nopc                        ; booted, and zx_boot writes it shortly.
     add [zf_pcseg], ax              ; Adding to 0 would invent an address

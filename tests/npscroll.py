@@ -146,6 +146,8 @@ class Note(object):
         self.seg = self._find()
 
     def _find(self, name=b"NOTEPAD", lo=0x1000, hi=0xA000):
+        if getattr(self.m, "bochs", False):
+            return self._find_win(name)
         # A package sits on a paragraph boundary off the top of the heap
         # (SPEC.md 20.1/50.3), so the scan is over paragraphs and the match is
         # 'O8' + PKG_FMT + the header's own name field.
@@ -164,6 +166,25 @@ class Note(object):
             raise SystemExit("npscroll: no NOTEPAD package header in RAM")
         return hits[-1]
 
+    def _find_win(self, name):
+        """kern_mega (tests/megaport.txt): a package's segment is an LDT
+        selector there and its region need not be in the first megabyte at
+        all, so a paragraph scan finds nothing - ask the window records."""
+        import os88geom as geom
+        raw = self.m.read(self.m.sym("wm_wins"), geom.MAX_WIN * geom.WIN_SIZE)
+        hits = []
+        for i in range(geom.MAX_WIN):
+            seg = u16(raw, i * geom.WIN_SIZE + geom.W_SEG)
+            if not u16(raw, i * geom.WIN_SIZE) & geom.WF_USED or not seg:
+                continue
+            data = self.m.readseg(seg, 0, 32)
+            if (data[0] == 0x4F and data[1] == 0x38 and data[2] == PKG_FMT
+                    and bytes(data[16:32]).split(b"\0")[0] == name):
+                hits.append(seg)
+        if not hits:
+            raise SystemExit("npscroll: no NOTEPAD window")
+        return hits[-1]
+
     def w(self, name):
         return u16(self.m.readseg(self.seg, self.off[name], 2))
 
@@ -171,7 +192,8 @@ class Note(object):
         return self.m.readseg(self.seg, self.off[name], 1)[0]
 
     def poke(self, name, val, size=2):
-        addr = (self.seg << 4) + self.off[name]
+        addr = (self.m.lin(self.seg, self.off[name])
+                if hasattr(self.m, "lin") else (self.seg << 4) + self.off[name])
         self.m.write(addr, bytes((val & 0xFF, val >> 8)) if size == 2
                      else bytes((val & 0xFF,)))
 

@@ -77,9 +77,46 @@ class Own(dispcells.Cells):
             dispcells.Cells.on_stop(self, r, sym)
 
 
+class MegaOwn(object):
+    """Own's counts on kern_mega under Bochs, off FOUR RARE breakpoints.
+
+    Own stops on every font_run_x and gfx_fill on the machine - every cell
+    anybody draws - and under Bochs each stop is a debugger round trip at
+    real time, so the 900-frame pumps below ran out the row's timeout. What
+    CELLS asks is whether the Task Manager PAINTED for its own cache; its
+    interval paint has exactly one door, `tm_update` (the worker's, after
+    tm_quiet said the page moved), so a stop there IS the page drawing
+    cells, and a page that did not enter it drew none. `cells` counts those
+    entries; wm_su_occl/take/drop are the kernel's same three. The waits are
+    GUEST seconds, capped at six memory-page paints (TM_INT x TM_SLOW is 2 s)
+    where a pump of N frames would be N/60 of them."""
+
+    def __init__(self, m, mo, upd):
+        self.m, self.mo, self.upd = m, mo, upd
+        self.occl = self.took = self.dropped = self.cells = self.fills = 0
+        self.tr = os88marty.bp_trace(m, "wm_su_occl", "wm_su_take",
+                                     "wm_su_drop", upd)
+        self.tr.__enter__()
+
+    def drag(self, x0, y0, x1, y1):
+        self.mo.drag(x0, y0, x1, y1, settle=0)
+
+    def pump(self, k=400, frames=4):
+        os88marty.guest_sleep(self.m, min(k * frames / 60.0, 12.0))
+
+    def close(self):
+        self.tr.__exit__(None, None, None)
+        self.occl = self.tr.count("wm_su_occl")
+        self.took = self.tr.count("wm_su_take")
+        self.dropped = self.tr.count("wm_su_drop")
+        self.cells = self.tr.count("%05X" % self.upd)
+
+
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                       machine=MACHINE, boot=False) as m:
     m.run()
+    # a package segment's linear base: an LDT selector's on kern_mega
+    lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
     os88marty.kernel_up(m)              # the boot gate on state: setup is
     mo = os88mouse.Mouse(marty=m)       # clicks and guest reads
     os88marty.no_saver(m)
@@ -132,10 +169,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     if got is None:
         sys.exit("the Task Manager did not open - %r" % os88geom.windows(m))
     slot, seg = got
+    if getattr(m, "bochs", False):      # kern_mega: the cheap witness
+        _upd = lin(seg, dispapps.sym("taskmgr", "tm_update"))
+        Own = lambda mm, mmo: MegaOwn(mm, mmo, _upd)    # noqa: E731
 
     def view():
-        return m.read((seg << 4) + dispapps.img_size("taskmgr")
-                      + dispapps.bss_off("taskmgr", "tm_view"), 1)[0]
+        return m.read(lin(seg, dispapps.img_size("taskmgr")
+                          + dispapps.bss_off("taskmgr", "tm_view")), 1)[0]
 
     w = W(slot)
     for _ in range(4):
@@ -223,6 +263,9 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         p.close()
         os88marty.settle(m, limit=120)
         held = su(slot)
+        if getattr(m, "bochs", False):  # (kern_mega: what the drop did)
+            print("  drop %d: TM painted %d time(s), %d take(s), %d drop(s)"
+                  % (attempt + 1, p.cells, p.took, p.dropped))
         if held:
             break
     d, w = W(disk), W(slot)
@@ -279,8 +322,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # both: the key cannot move and nothing is painted. Cells and fills are
     # still printed, as what the pump happened to catch.
     def qkey():
-        return int.from_bytes(m.read((seg << 4) + dispapps.img_size("taskmgr")
-                                     + dispapps.bss_off("taskmgr", "tm_qkey"),
+        return int.from_bytes(m.read(lin(seg, dispapps.img_size("taskmgr")
+                                     + dispapps.bss_off("taskmgr", "tm_qkey")),
                                      2), "little")
 
     def content():

@@ -809,19 +809,20 @@ ps_tail:
     cmp word [cs:ps_tgot], 769
     jb .chunk
     jmp short .have
-.flat:                              ; in memory: segment arithmetic
-    mov ax, [cs:ps_ttail]
-    mov dx, [cs:ps_ttail + 2]
+.flat:                              ; in memory: a SEG_SUB at the tail's
+    mov ax, [cs:ps_ttail]           ; paragraph (MC7: the sum on a
+    mov dx, [cs:ps_ttail + 2]       ; real-mode kernel)
     mov si, ax
-    and si, 127                     ; to 8 paragraphs, not 1 (PX_WGRID)
-    mov cl, 4
+    and si, 127                     ; (eight paragraphs: one SEG_SUB entry
+    mov cl, 4                       ; serves eight places)
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
-    and al, 0xF8                    ; a segment kern_mega can load
-    add ax, [px_flatseg]
-    mov es, ax
+    and al, 0xF8
+    mov dx, [px_flatseg]
+    PXSUB
+    mov es, dx
     mov di, px_tbuf
     mov cx, 769
 .fl:
@@ -853,6 +854,9 @@ ps_tail:
     pop bx
     pop ax
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_pal16 - ES:SI = sixteen R,G,B triples into [px_spal]. Preserves all
 px_pal16:
@@ -1539,12 +1543,11 @@ px_masklut:
 
 ; px_lutseg - ES = the work claim's tables. Preserves all but ES
 px_lutseg:
-    push ax
-    mov ax, [px_wseg]
-    add ax, [px_wo_lut]
-    mov es, ax
-    pop ax
+    mov es, [px_wslut]              ; (px_wsubs's selector, MC7)
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_bfrow - the row buffer's w pixels of 16 or 32 bits -> R, G, B triples
 ; through the masks: per channel, the word at the byte the run starts in,
@@ -1854,9 +1857,7 @@ px_dpcx:
     clc
     ret
 .l1:
-    mov ax, [px_wseg]
-    add ax, [px_wo_lin]
-    mov es, ax
+    mov es, [px_wslin]              ; (px_wsubs's selector, MC7)
     xor di, di
     mov cx, [px_dlinsz]
     call px_pcxfill                 ; the line, from the runs
@@ -1874,6 +1875,9 @@ px_dpcx:
     stc
 .ret:
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_pcxfill - CX bytes of the run stream into ES:DI. THE RING'S WINDOW IS
 ; WALKED IN REGISTERS - DS:SI on the window, DX its end - and px_rnext is
@@ -1973,8 +1977,7 @@ px_pcxconv:
     push ds
     push es
     mov es, [px_wseg]               ; ES:DI = the row
-    mov ax, [px_wseg]
-    add ax, [px_wo_lin]
+    mov ax, [px_wslin]              ; (px_wsubs's selector, MC7)
     mov dx, [px_dbpl]               ; DX = a plane's bytes
     mov cx, [px_cur + PXR_SW]
     mov bl, [px_dbpp]

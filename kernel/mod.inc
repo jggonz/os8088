@@ -679,13 +679,13 @@ mod_check:
     mov [di], ax                ; offset...
 %ifdef KERN_MEGA
     push ax                     ; kern_mega: the slot is a FAR CALL's, so it
-    mov ax, es                  ; holds the image's CODE alias (mega.inc) -
-    cmp byte [ss:mega_pm], 0    ; safe to store rather than derive at every
-    je .rmseg                   ; call, because a module image never moves
-    shr ax, 1                   ; (memory.inc pins MEM_K_MOD). In REAL MODE
-    shr ax, 1                   ; the segment, and mega_enter converts what
-    or al, 4                    ; the boot armed (mega_mods_fix)
-.rmseg:
+    mov ax, es                  ; holds the image's CODE half - its pair's
+    cmp byte [ss:mega_pm], 0    ; data selector less 8 (KERN-MEGA-MEMORY-PLAN
+    je .rmseg                   ; MC7.4) - safe to store rather than derive at
+    sub ax, 8                   ; every call, because a module image never
+.rmseg:                         ; moves (memory.inc pins MEM_K_MOD). In REAL
+                                ; MODE the segment, and mega_enter converts
+                                ; what the boot armed (mega_mods_fix)
     mov [di+2], ax
     pop ax
 %else
@@ -772,13 +772,11 @@ mod_hi:
     mov ax, [bx+MODR_SEG]
     push ax
     call MEGA_SEL_CODE:mega_modhif ; AX = the pair's code selector
-    pop dx                      ; DX = the conventional segment
+    pop dx                      ; DX = the conventional pair's data half
     jc .out
     push dx
     push ax
-    shr dx, 1
-    shr dx, 1
-    or dl, 4                    ; DX = the alias mod_check armed with
+    sub dx, 8                   ; DX = the code half mod_check armed with
     call mod_fpr                ; DI = the slot block, CX = its count
     pop ax
     jcxz .free
@@ -790,7 +788,7 @@ mod_hi:
     add di, 4
     loop .slot
 .free:
-    pop dx                      ; the conventional segment
+    pop dx                      ; the conventional claim's selector
     mov [bx+MODR_SEG], ax       ; MODR_SEG = the selector
     push si
     mov si, [bx+MODR_FILE]      ; ...and where it went, to the debug port
@@ -830,9 +828,9 @@ mod_hiboot:
     mov ax, [bx+MODR_SEG]
     or ax, ax
     jz .n
-    test al, 4
-    jnz .n                      ; a selector: already above 1MB
-    mov es, ax                  ; (512-aligned, so a GDT identity selector)
+    MEGA_ISHI ax
+    jnc .n                      ; already above 1MB
+    mov es, ax                  ; (its conventional pair's data half)
     mov bp, [es:MOD_H_IMG]      ; ...the image's bytes, as the read had them
     push ax
     call mod_hi
@@ -840,9 +838,7 @@ mod_hiboot:
     mov dx, [bx+MODR_SEG]
     cmp dx, ax
     je .n                       ; refused: it stays low, hooks and all
-    shr ax, 1
-    shr ax, 1
-    or al, 4                    ; AX = the alias the tables hold
+    sub ax, 8                   ; AX = the code half the tables hold
     call MEGA_SEL_CODE:mega_modvfixf
 .n:
     add bx, MODR_SIZE
@@ -901,17 +897,30 @@ mod_free_row:
     xor dx, dx                  ; forming the id, and READ-AND-CLEAR is one
     xchg dx, [bx+MODR_SEG]      ; instruction on the 8086 - DX comes out the
 %ifdef KERN_MEGA
-    test dl, 4                  ; ABOVE 1MB (mod_hi): a selector, whose
-    jz .conv                    ; block and pair go back to the pool - and
+    MEGA_ISHI dx                ; ABOVE 1MB (mod_hi): a selector, whose
+    jc .conv                    ; block and pair go back to the pool - and
     xchg ax, dx                 ; DESK.DRV's library selector with them
     call MEGA_SEL_CODE:mega_hifreef
 %ifdef KERN_BIG
     cmp bx, mod_tab + MOD_DESK * MODR_SIZE
-    jne .out
+    jne .hiok
     call KERNEL_SEG:mega_dklibfree
+.hiok:
 %endif
-    ret
+    clc                         ; CF = 0, mem_free_x's answer on the other
+    ret                         ; path: mod_drop's flags ARE its callers'
+                                ; (fm_cldrop's success CF, which Disk >
+                                ; Unmount Image reads) - and this path left
+                                ; the `cmp` above in them, CF = 1 for every
+                                ; module whose row is under DESK.DRV's
+                                ; (KERN-MEGA-PLAN 14.82)
 .conv:
+%ifdef KERN_BIG
+    cmp bx, mod_tab + MOD_DESK * MODR_SIZE
+    jne .cvl                    ; ...and below 1MB too, where the library is a
+    call KERNEL_SEG:mega_dklibfree ; descriptor of its own as well (MC7.4)
+.cvl:
+%endif
 %endif
     mov bx, MEM_K_MOD           ; old segment and the word is left 0. NO bank
     call mem_free_x             ; round BX either: neither caller reads it

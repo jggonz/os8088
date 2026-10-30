@@ -302,10 +302,19 @@ with M.launch(SRC, apps=APPS, machine=MACHINE, boot=False) as m:
           "SPEC.md 18.99.4: a 360KB disk against a 5150's heap is one read and "
           "one write, so the user gets up twice and not twenty-two times",
           got=p.jobw(CL_CHUNK), want=p.jobw(CL_TOT))
-    check(p.job(CL_XON) == 0, "...out of CONVENTIONAL memory, on an 8088",
-          "there is no store above 1MB on this machine and xm_caps says so "
-          "(SPEC.md 41): a 1 here means the tier was guessed rather than asked",
-          got=p.job(CL_XON), want=0)
+    if getattr(m, "bochs", False):
+        # kern_mega under Bochs (tests/megaport.txt): a 386 with 16MB, whose
+        # XMEM pool IS a store above 1MB, so xm_caps says so and a 1.44MB
+        # disk is one trip out of it - a 0 here is the tier guessed
+        check(p.job(CL_XON) == 1, "...out of the store ABOVE 1MB, on "
+              "kern_mega", "xm_caps answers kern_mega's own XMEM pool "
+              "(SPEC.md 41): a 0 here means the tier was guessed rather "
+              "than asked", got=p.job(CL_XON), want=1)
+    else:
+        check(p.job(CL_XON) == 0, "...out of CONVENTIONAL memory, on an "
+              "8088", "there is no store above 1MB on this machine and "
+              "xm_caps says so (SPEC.md 41): a 1 here means the tier was "
+              "guessed rather than asked", got=p.job(CL_XON), want=0)
 
     # --- 3. ...and Y writes it anyway ----------------------------------------
     # The disk in the drive IS the source, so the write puts A:'s own bytes

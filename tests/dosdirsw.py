@@ -74,7 +74,7 @@ class Dos(object):
         # region MOVES now - it is a re-homed carve and was pinned only
         # until that section - so a base banked in __init__ names the bytes
         # the package used to occupy, and decodes as plausible rubbish.
-        return dosmap.instance(self.m) << 4
+        return dosmap.lin(self.m, dosmap.instance(self.m))
 
     def w(self, name):
         return int.from_bytes(self.m.read(self.base + self.dm[name], 2),
@@ -292,11 +292,25 @@ def main():
         # ...and it really RAN, so dismiss it and come back to the root: the
         # program waits on AH=08h, and B:\BIN holds one file where step 6
         # wants more than a page.
-        os88marty.until(m, lambda _=None: bx.b("dos_inbr"),
-                        "%s to be running" % SUBPROG, limit=120.0)
-        bx.type(" ")
-        os88marty.until(m, lambda _=None: not bx.b("dos_inbr"),
-                        "%s to exit" % SUBPROG, limit=120.0)
+        if getattr(m, "bochs", False):
+            # **ON kern_mega THE PROGRAM IS A TRIP** (KERN-MEGA-PLAN 14.77):
+            # the kernel is parked above 1MB with the CPU in REAL mode under
+            # kern_dos, the bracket's [dos_inbr] is never set, and the
+            # package's bss and the window list are not where a read of them
+            # looks until the wake - so the witness is CR0.PE, off for the
+            # trip and back on with the kernel
+            os88marty.until(m, lambda _=None: not m.protected(),
+                            "%s to be running" % SUBPROG, limit=120.0)
+            m.type_text(" ")
+            os88marty.until(m, lambda _=None: m.protected(),
+                            "%s to exit" % SUBPROG, limit=120.0)
+            os88marty.ui_done(m)
+        else:
+            os88marty.until(m, lambda _=None: bx.b("dos_inbr"),
+                            "%s to be running" % SUBPROG, limit=120.0)
+            bx.type(" ")
+            os88marty.until(m, lambda _=None: not bx.b("dos_inbr"),
+                            "%s to exit" % SUBPROG, limit=120.0)
         bx.run("CD \\")
 
         # --- 6: Esc abandons -------------------------------------------------

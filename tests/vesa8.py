@@ -73,6 +73,9 @@ def kill_stale():
 
 def launch():
     """The standard VGA (QEMU's default, spelled out) and the gate disk."""
+    if os88qemu.MEGA:       # kern_mega on Bochs's VBE: tests/vesa.py's launch
+        import vesa as _v
+        return _v.launch("build/vesa8.img", "build/apps.img", sock=SOCK, pidfile=PIDFILE)
     os88fixture.need("build/vesa8.img", "build/apps.img")
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     os88qemu.start(

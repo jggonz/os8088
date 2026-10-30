@@ -41,6 +41,19 @@ MACHINE = "os8088_5150_cga_720b_gla"
 SYS = "build/os8088-360.img"
 IMAGE = "build/apps360.img"
 IMGNAME = "APPS360.IMG"
+GEOM = (720, 9)                 # the image's CL_TOT and CL_SPT
+# KERN_MEGA ON 86BOX (tests/megaport.txt): kern_mega has no 360KB system disk
+# - its smallest is mega120.img, 1.2MB - so the same round trip is made a
+# geometry up: mega120.img in a 5.25" 1.2MB A: (86Box's 525_2hd drive) is the
+# target, and the 1.2MB apps image megaapps120.img is the FILE, on a 1.44MB
+# data disk in B: (which still has too little room for a Clone Disk image of
+# A:, leg 1b's 'Disk full'). The row's every check is the same, the geometry
+# being 2,400 sectors of 15 a track
+if os.environ.get("OS88_MEGA"):
+    SYS = "build/mega120.img"
+    IMAGE = "build/megaapps120.img"
+    IMGNAME = "APPS120.IMG"
+    GEOM = (2400, 15)
 
 
 def equ(path, name):
@@ -137,7 +150,16 @@ def pick_image(ui, m):
 
 # PER-PROCESS, for docs/WRITING-TESTS.md 5.5: the runner runs rows side by
 # side and scratch_disk would otherwise be one file three machines rebuild.
-FIX = M.scratch_disk("build/wimgtrip-%d.img" % os.getpid(), IMAGE, size=720)
+if os.environ.get("OS88_MEGA"):
+    import shutil
+    _named = os88build.at("build/wimgtrip-%d/%s" % (os.getpid(), IMGNAME))
+    os.makedirs(os.path.dirname(_named), exist_ok=True)
+    shutil.copyfile(os88build.at(IMAGE), _named)
+    FIX = M.scratch_disk("build/wimgtrip-%d.img" % os.getpid(), _named,
+                         size=1440)
+else:
+    FIX = M.scratch_disk("build/wimgtrip-%d.img" % os.getpid(), IMAGE,
+                         size=720)
 want = open(os88build.at(IMAGE), "rb").read()
 flush = os.path.abspath(os88build.at("build/wimgtrip-%d.a" % os.getpid()))
 flushb = os.path.abspath(os88build.at("build/wimgtrip-%d.b" % os.getpid()))
@@ -271,11 +293,11 @@ try:
               "...it arms the confirmation instead (CLS_WIMG)",
               "FS_EDIT 7 is the cloner's mode (SPEC.md 22.21.1)",
               got=(edit(ui, dw), job(m, CL_STEP)), want=(7, CLS_WIMG))
-        check((job(m, CL_TOT, 2), job(m, CL_SPT, 2)) == (720, 9),
+        check((job(m, CL_TOT, 2), job(m, CL_SPT, 2)) == GEOM,
               "...with the geometry of a 360KB disk, from the SIZE",
               "clo_geom_img: 368,640 bytes is 720 sectors of 9 a track - "
               "this is the dialog's DX:CX arriving intact",
-              got=(job(m, CL_TOT, 2), job(m, CL_SPT, 2)), want=(720, 9))
+              got=(job(m, CL_TOT, 2), job(m, CL_SPT, 2)), want=GEOM)
 
         m.key("Enter")
         M.settle(m, limit=400)
@@ -329,5 +351,7 @@ finally:
             os.remove(p)
         except OSError:
             pass
+    if os.environ.get("OS88_MEGA"):
+        shutil.rmtree(os.path.dirname(_named), ignore_errors=True)
 
 done("wimgtrip")

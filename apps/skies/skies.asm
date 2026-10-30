@@ -895,6 +895,14 @@ cs_xpand:
     ret
 .sum:
     pop dx
+    push ax                         ; UNDER kern_mega's protected mode SUBSEG
+    call OSAPI_CPU_INFO             ; refuses only with the LDT full, and our
+    test ah, CPU_F_PM               ; selector + BX names ANOTHER descriptor -
+    pop ax                          ; somebody else's memory - so the art is
+    jz .real                        ; refused instead (KERN-MEGA-MEMORY-PLAN
+    stc                             ; MC7)
+    ret
+.real:
     ; STKBALANCE-LOOP: BP/2 words pushed by .sv and popped by .rs; the count is in BP
     push bp
     push es

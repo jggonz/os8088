@@ -27,13 +27,14 @@
 ; caller swaps `call OSAPI_SND_PLAY` for `call os88pcm_play` and nothing else.
 ; A rate outside the range is ERR 2, NEVER A SILENT CLAMP (SPEC.md 34.4).
 ;
-; WHAT IT COSTS: ~180 bytes of code and one byte of state. The rescale table
+; WHAT IT COSTS: ~180 bytes of code and no state of its own. The rescale table
 ; is the CALLER'S 256 bytes (BX), not the library's: it is rebuilt every clip
 ; and dead between clips, so it belongs in a buffer the caller already has
 ; idle while the desktop is frozen - Recorder's is its demo stage buffer. It
 ; was a `times 256 db 0` here, 256 bytes of every includer's image (SPEC.md
-; 34.4). The labels are os88pcm_; the state is in the package's own image,
-; through CS.
+; 34.4). The labels are os88pcm_; N and the button byte's address are patched
+; into the loop's own operands, written through DS and read through CS, and
+; the click baseline is on the stack.
 ; =============================================================================
 
 os88pcm_play:
@@ -67,7 +68,7 @@ os88pcm_play:
     mul dl                          ; AX = s(N-2) <= 64,515
     div cl
     inc ax
-    mov [cs:bx+di], al
+    mov [bx+di], al                 ; (DS: the package's, still)
     dec di
     jns .tab
     pop cx
@@ -77,13 +78,18 @@ os88pcm_play:
     call OSAPI_SND_PLAY             ; the scheduler locked, the sub-tick
     pop di                          ; answers BX (DI is free until the
     jc .out                         ; deadline); CF = 1 AX = its refusal
-    mov [cs:.mbd], bx               ; the mouse button byte, KERNEL_SEG:BX -
-    push es                         ; into the abort check's own displacement
-    pop ds                          ; DS:SI = the samples
-    mov ax, KERNEL_SEG
-    mov es, ax
-    mov al, [es:bx]                 ; THE CLICK-ABORT BASELINE (34.4): a
-    mov [cs:os88pcm_b0], al         ; button already down never aborts
+    mov [.mbd], bx                  ; the mouse button byte, KERNEL_SEG:BX -
+                                    ; into the abort check's own displacement
+    mov [.pn1], bp                  ; ...and N into the loop's two immediates,
+    mov [.pn2], bp                  ; not a word it would read every sample.
+    push es                         ; THROUGH DS, the package's, while it still
+    pop ds                          ; is: under kern_mega CS is a read-only code
+    mov ax, KERNEL_SEG              ; half and a store through it is a #GP per
+    mov es, ax                      ; store (KERN-MEGA-MEMORY-PLAN MC7).
+    mov al, [es:bx]                 ; DS:SI = the samples. THE CLICK-ABORT
+    push ax                         ; BASELINE (34.4), a button already down
+    mov bp, sp                      ; never aborting: ON THE STACK at [bp], the
+                                    ; one writable segment the loop has free
     mov bx, di                      ; BX = the table, for xlat through CS
     cld
     pushf                           ; prime the deadline: one atomic channel 0
@@ -115,26 +121,30 @@ os88pcm_play:
     neg dx                          ; the phase, rising at 1,193,182 Hz...
     sub dx, di                      ; ...less the deadline, wrap-safe signed
     js .wait                        ; early: poll again
-    cmp dx, bp                      ; late by more than a period? THE RESYNC
-    jbe .emit                       ; RULE: the deadline to now - samples
-    add di, dx                      ; dropped, never a burst (34.4)
+    cmp dx, strict word 0xFFFF      ; late by more than a period (N, .pn1)?
+.pn1 equ $ - 2
+    jbe .emit                       ; THE RESYNC RULE: the deadline to now -
+    add di, dx                      ; samples dropped, never a burst (34.4)
 .emit:
     mov al, ah
     out 0x42, al                    ; the pulse
-    add di, bp                      ; the next deadline
+    add di, strict word 0xFFFF      ; the next deadline (N, .pn2)
+.pn2 equ $ - 2
 .mb:
     mov al, [es:0xFFFF]             ; (the button byte: .mbd, patched above)
 .mbd equ $ - 2
-    and [cs:os88pcm_b0], al         ; FOLD RELEASES INTO THE BASELINE first,
-    cmp al, [cs:os88pcm_b0]         ; then a button down now and not in it
+    and [bp], al                    ; FOLD RELEASES INTO THE BASELINE first,
+    cmp al, [bp]                    ; then a button down now and not in it
     jne .click                      ; is a click: the fold leaves the
     loop .next                      ; baseline a subset of AL, so != is it
 .done:
+    add sp, 2                       ; (the baseline)
     mov al, 1                       ; THE RELEASE, played out
     call OSAPI_SND_PLAY
     xor ax, ax                      ; AX = 0, CF = 0
     jmp short .out
 .click:
+    add sp, 2                       ; (the baseline)
     mov al, 2                       ; THE RELEASE after a click: the kernel
     call OSAPI_SND_PLAY             ; drains the aborting press first
     mov ax, 5
@@ -150,5 +160,3 @@ os88pcm_play:
     pop cx
     pop bx
     ret
-
-os88pcm_b0:     db 0                ; the click-abort baseline

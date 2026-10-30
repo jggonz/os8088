@@ -1114,8 +1114,34 @@ net_mark:
     xor bx, bx
 ; net_norm - fold DI's paragraph part into ES, leaving DI at 0..15. ONE body
 ; for both directions: the read walks a destination and the write a source,
-; and the arithmetic does not know which
+; and the arithmetic does not know which. Under kern_mega's protected mode
+; (CPU_F_PM, ASKED here: a byte banked at attach said real mode for the whole
+; session of a driver SYSTEM.CFG wants, attached before mega_enter - KERN-MEGA-
+; PLAN 14.112) the units are the segment's (KERN-MEGA-MEMORY-PLAN MC8, rd_fold's
+; rule): a GDT selector is the identity map's, so whole
+; 128-byte GRANULES fold and DI stays under 128 - a paragraph fold built a
+; segment off that grid, a #GP or silently an LDT alias of other memory
+; (KERN-MEGA-PLAN 14.69) - and an LDT selector's offset just walks, the
+; kernel handing it over with the transfer inside its 64KB
 net_norm:
+    call OSAPI_CPU_INFO         ; AH = the flags NOW; AX is ours to spend
+    test ah, CPU_F_PM
+    jz .fold
+    mov ax, es
+    test al, 4
+    jnz .r                      ; an LDT selector: the offset walks
+    push cx
+    mov ax, di
+    mov cl, 4
+    shr ax, cl
+    and al, 0xF8                ; an identity selector: whole granules
+    mov cx, es
+    add cx, ax
+    mov es, cx
+    pop cx
+    and di, 127
+    ret
+.fold:
     push cx
     mov ax, di
     mov cl, 4

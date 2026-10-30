@@ -185,6 +185,17 @@ def main(argv):
         os88marty.settle(m)             # NOT still(): the launch finishes the
                                         # menu bar a while after the UI first
                                         # idles (282 px at y 6..13 differed)
+        # ...AND NO TOAST ON IT. The launch can say one on the bar ('Loaded',
+        # a driver's report), it EXPIRES on the guest's clock, and the full
+        # repaint below is taken after it went: 199 px at y 6..13 x 396..431,
+        # the toast in the incremental frame and not in the repainted one
+        # (mega-tpdraw, at four Bochs rows to a box - settle's stable frames
+        # can all fall inside a toast's life). toast_dirty, _on and _want are
+        # adjacent (kernel/toast.inc's %if): all three clear is no toast
+        os88marty.until(m, lambda mm: not any(mm.read(S("toast_dirty"), 3)),
+                        "the launch's toast to leave the bar", poll=0.1,
+                        guest=30.0)
+        still(m)
         tx, ty, tw, th = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])
         print("   TeXPad window %d,%d %dx%d" % (tx, ty, tw, th))
         if tw < 400:

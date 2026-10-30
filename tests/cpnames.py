@@ -92,7 +92,8 @@ def main():
     img = "build/os8088-360.img"
     if HDD:                     # the tick below is the load (SPEC.md 51.3.2)
         import hdoff
-        img = hdoff.image(img)
+        img = hdoff.image("build/mega.img" if os.environ.get("OS88_MEGA")
+                          else img)
     with os88marty.launch(img, apps="build/apps360.img",
                           machine=MACHINE, boot=False) as m:
         m.run()
@@ -101,7 +102,9 @@ def main():
         mo = os88mouse.Mouse(marty=m)
         seg = int.from_bytes(m.read(S("font_seg"), 2), "little")
         off = int.from_bytes(m.read(S("font_base"), 2), "little")
-        tab = m.read(seg * 16 + off, FONT_N * 8)   # where the renderers read
+        # kern_mega's [font_seg] may be a SELECTOR (docs/BOCHS.md): m.lin
+        lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+        tab = m.read(lin(seg, off), FONT_N * 8)   # where the renderers read
         dispcp.open_panel(m, mo, S, UD, page=None)
         os88marty.ui_done(m)
         hide = m.read(S("cp_hide"), 1)[0]
@@ -156,8 +159,10 @@ def main():
             nst = m.read(S("cp_nst"), 1)[0]
             _w, _h, rows = m.vram()
             cx, cy = wx + 1, wy + TITLE_H + 1
+            # the pane's NINE rows (SPEC.md 31.1.5): a machine that shows all
+            # eight static pages (kern_mega's VGA) puts the driver's row ninth
             at = find(rows, cx + CP_IX - 1, cy + CP_I0Y, CP_DIVX - CP_IX,
-                      CP_IROWH * 8, render(HDD_PAGE, tab))
+                      CP_IROWH * 9, render(HDD_PAGE, tab))
             print("  %-10s list    %s (a driver's page, row %d)"
                   % (HDD_PAGE, at, nst))
             if at is None:

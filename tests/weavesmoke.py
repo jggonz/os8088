@@ -130,6 +130,25 @@ MACHINES = [
     ("os8088_5150_cga_gla",  "cga",  640, 200),
     ("os8088_5150_herc_gla", "herc", 720, 348),
 ]
+# kern_mega (OS88_MEGA, tests/megaport.txt) runs under Bochs, which has a VGA
+# and nothing else - so its one row is weavesim's vga adapter, read off the
+# glass (vram() below)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+if MEGA:
+    MACHINES = [("os8088_xt_vga", "vga", 640, 480)]
+
+
+def vram(m, card):
+    """`m.vram(card)`: one byte a pixel, 1 lit. On kern_mega's Bochs there
+    is no 1bpp card to read, so the VGA GLASS is thresholded instead - lit is
+    a LIGHT pixel, which is what a 1bpp white is on the window's chrome and
+    its content (the desktop's colours are never what a check here reads)."""
+    if not getattr(m, "bochs", False):
+        return m.vram(card)
+    w, h, d = m.fbuf()
+    return w, h, [[1 if d[i] + d[i + 1] + d[i + 2] >= 384 else 0
+                   for i in range((y * w) * 3, (y * w + w) * 3, 3)]
+                  for y in range(h)]
 
 # The 360KB geometry, because the 5150 machines above have 360KB drives. It is
 # also the tightest of the three, which is the one worth booting.
@@ -227,7 +246,8 @@ def _pkg_name(m, seg):
     window": a Disk window, an alert and any other package all satisfy the
     first.
     """
-    raw = m.read((seg << 4) + 16, 16)
+    raw = (m.readseg(seg, 16, 16) if getattr(m, "bochs", False)
+           else m.read((seg << 4) + 16, 16))       # (a selector there)
     return raw.split(b"\0", 1)[0].decode("latin-1")
 
 
@@ -459,7 +479,7 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
 
     # ONE CAPTURE. Everything from here to assertion 6 is about THIS
     # frame; the record is re-read afterwards and must not have moved.
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = vram(m, card)
     check((vw, vh) == (want_w, want_h), "%s: geometry" % machine,
           "the adapter came up in a mode nobody expects",
           got=(vw, vh), want=(want_w, want_h))
@@ -703,6 +723,9 @@ def main():
         try:
             t = os88build.tree(targets=("weave360.img", "os8088-360.img"))
             DISK, SYSIMG = t.img("weave360.img"), t.img("os8088-360.img")
+            if MEGA:                # build/'s, which the shim swaps for
+                SYSIMG = "build/os8088-360.img"     # mega.img; the tree's
+                                                    # would boot kern_big
             r = None
         except RuntimeError as e:
             r = e

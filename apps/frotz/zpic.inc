@@ -541,32 +541,44 @@ zp_find:
     jmp zf_pop7
 
 ; zp_place - [zp_bseg]:[zp_boff], the block at file offset DX:AX of length BX,
-; as a SEGMENT and an OFFSET (KERN-MEGA-PLAN 14.13). A selector - an archive of
-; 64KB or less, high on kern_mega - is the claim at the offset itself;
-; anything else is whole 128-byte granules from the claim, the grid
-; kern_mega's conventional descriptors sit on (the paragraph step this was
-; faulted there) and the same bytes real mode always read.
+; as a SEGMENT and an OFFSET. The claim is PINNED (zp_load_pix never declares
+; it), so this is OSAPI_SEG's SEG_AT over it (SPEC.md 50.6.11): one window,
+; [zp_win], re-aimed per picture at the block's paragraph - on kern_mega,
+; where the claim is a selector and adding paragraphs to it names some other
+; descriptor (KERN-MEGA-MEMORY-PLAN MC7). Every real-mode kernel REFUSES the
+; verb, keeping every register, and the sum is the answer there - the
+; paragraph rather than the 128-byte granule this used to round to, which was
+; only ever for kern_mega's old identity map. Once per picture drawn.
 ; out: CF=0 placed; CF=1 the start plus the length would wrap SI
 ; clobbers AX, BX, CX, DX (zp_find's own, saved)
 zp_place:
-    mov cx, [zp_seg]
-    test cl, 4
-    jnz .flat
     push ax
-    mov cx, 7
+    mov cx, 4
 .g:
     shr dx, 1
     rcr ax, 1
-    loop .g
-    mov cl, 3
-    shl ax, cl
-    add ax, [zp_seg]
-    mov cx, ax
+    loop .g                         ; AX = the block's PARAGRAPH (< 0x8000)
+    mov dx, [zp_seg]
+    push bx
+    mov cx, [zp_win]                ; the window to re-aim, 0 = a new one
+    mov bl, SEG_AT
+    call OSAPI_SEG                  ; DX = the window over [zp_seg] + AX...
+    pop bx
+    jc .sum
+    mov [zp_win], dx
+    or dx, dx                       ; 0: no LDT entry was free - the picture
+    jnz .seg                        ; is unavailable, which a story is
+    pop ax                          ; required to handle (SPEC.md 61.7)
+    stc
+    ret
+.sum:
+    add dx, ax                      ; ...or, refused, the sum: a real-mode
+.seg:                               ; kernel (apps/os88partsbody.inc's op_at)
+    mov cx, dx
     pop ax
-    and ax, 127
+    and ax, 15
     add bx, ax
     jc .out                         ; CF=1
-.flat:
     mov [zp_bseg], cx
     mov [zp_boff], ax
     clc

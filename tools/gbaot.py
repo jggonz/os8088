@@ -48,11 +48,54 @@ sys.path.insert(0, HERE)
 import gbstatic as G  # noqa: E402
 
 # THE BUNDLE (tools/gbaotbundle.py): no os8088 tree, the binaries prebuilt
+# - and the choice is made on the FILES, not on a folder's name: a stray
+# apps/realdmg/ beside a bundle (RealDMG's own folder off a disk) once sent
+# the bundle off to regenerate a core whose generator it does not carry, and
+# the only thing the window said was "rdggen.py returned non-zero exit status 2"
 PREBUILT = os.path.join(HERE, "gbaot-bin")
-if not os.path.isdir(os.path.join(ROOT, "apps", "realdmg")) and os.path.isdir(PREBUILT):
-    BUNDLED = True
-else:
-    BUNDLED = False
+PREBUILT_FILES = ("aothost.bin", "rdgcore.bin", "rdgtmpl.bin", "rdgcore.inc", "rdgdefs.inc",
+                  "realdmgaot.bin", "realdmgaotmega.bin", "rdgjitpaot.bin")
+TREE_FILES = [os.path.join("apps", "realdmg", f) for f in
+              ("rdggen.py", "rdgtmpl.py", "rdgdefs.inc", "rdgsys.inc", "rdgjit.inc",
+               "rdgaot.inc", "realdmg.asm")] + [os.path.join("tools", "gbaot", "aothost.asm")]
+TREE_MISSING = [f for f in TREE_FILES if not os.path.isfile(os.path.join(ROOT, f))]
+PREBUILT_MISSING = [f for f in PREBUILT_FILES if not os.path.isfile(os.path.join(PREBUILT, f))]
+BUNDLED = bool(TREE_MISSING) and not PREBUILT_MISSING
+
+
+def need_sources():
+    """Neither a whole tree nor a whole bundle: say which files are missing,
+    rather than let a generator or an assembler fail on one of them"""
+    if not TREE_MISSING:
+        return
+    raise SystemExit(
+        "gbaot: this is neither an os8088 tree nor the precompiler bundle.\n"
+        "  The tree at %s is missing: %s\n"
+        "  The bundle's prebuilt folder %s is %s.\n"
+        "  Run it from a whole os8088 checkout (with nasm on the PATH), or from the\n"
+        "  GBSTATIC folder of the tools zip (`make gbaotbundle`), which needs no nasm." % (
+            ROOT, ", ".join(TREE_MISSING), PREBUILT,
+            "missing: " + ", ".join(PREBUILT_MISSING) if os.path.isdir(PREBUILT) else "absent"))
+
+
+def run(cmd, what):
+    """A build step, its failure REPORTED: the window shows no console, so the
+    command's own words are what goes into the SystemExit"""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        if cmd[0] == "nasm":
+            raise SystemExit(
+                "gbaot: %s needs nasm, and there is none on the PATH.\n"
+                "  Install it (https://nasm.us; on Windows put nasm.exe's folder on the PATH),\n"
+                "  or use the precompiler bundle (`make gbaotbundle`, GBSTATIC in the tools\n"
+                "  zip), which carries these binaries prebuilt." % what)
+        raise SystemExit("gbaot: %s: cannot run %s" % (what, cmd[0]))
+    if r.returncode:
+        out = (r.stdout + r.stderr).strip().splitlines()
+        raise SystemExit("gbaot: %s failed (exit %d):\n  %s\n%s" % (
+            what, r.returncode, " ".join('"%s"' % c if " " in c else c for c in cmd),
+            "\n".join("  " + ln for ln in out[-20:]) or "  (it printed nothing)"))
 
 # --- the walk ---------------------------------------------------------------
 
@@ -109,7 +152,7 @@ def walk(rom, seeds=()):
         extra = set(seeds)
         for _ in range(6):
             found, _, _, _ = G.discover(rom, extra, True, fanout=fan)
-            new = jump_tables(rom, found) - extra
+            new = (jump_tables(rom, found) | G.discover.seeds) - extra
             if not new:
                 break
             extra |= new
@@ -128,6 +171,8 @@ def leaders(rom, found, extra, side=False):
     may take an interrupt or switch the bank (the IF/IE write and the guard
     leave there, REALDMG-SPEC 16.5) and after EI."""
     lead = {(0, 0x100)} | {(0, v) for v in range(0, 0x68, 8)} | set(extra)
+    for ents in getattr(G.discover, "jtabs", {}).values():   # an RST's or a
+        lead |= {(b if pc >= 0x4000 else 0, pc) for b, pc in ents}   # CALL's table
     for (b, pc), op in found.items():
         a1 = rom.byte(b, pc + 1)
         imm = a1 | rom.byte(b, pc + 2) << 8
@@ -183,12 +228,14 @@ P_MODE, P_HMASK, P_NOC, P_REASON, P_OUT, P_BUDGET, P_BANK, P_BMP = (
     0x22, 0x23, 0x24, 0x25, 0x26, 0x28, 0x2A, 0x2C)
 E_INIT, E_PRELOAD, E_ROUND, E_FRAME, E_CONT = 0, 3, 6, 9, 12
 P_AOTINT, P_STLOAD = 0x36, 0x38
-STK_SEG, DRV_SEG = 0x0050, 0x0860      # the stack 0:84F0 down, aothost.bin
-DRV_MAX = 0x10000 - DRV_SEG * 16         #   up to the core at 1000:0 (CORE in
-                                          #   translate and run_arm): 31,232 bytes.
+STK_SEG, DRV_SEG = 0x0050, 0x0560      # the stack 0:54F0 down, aothost.bin
+STK_TOP = 0x4FF0                          #   up to the core at 1000:0 (CORE in
+DRV_MAX = 0x10000 - DRV_SEG * 16         #   translate and run_arm): 43,520 bytes.
                                           #   At 0900 it was 28,672, aothost had
                                           #   grown to 28,686, and the core's
-                                          #   first 14 bytes were h_jitstub's last
+                                          #   first 14 bytes were h_jitstub's
+                                          #   last; at 0860, 31,232, and the CB
+                                          #   group's dead flags took it 74 over
 MEM_END = 0x10FFF0                       # what real mode can address, with A20
 TOKEN = 0xF000                            # a block table's segment, as written:
                                           #   TOKEN + n names the image's segment n
@@ -227,6 +274,7 @@ def prerequisites(build, defines=()):
         if defines:
             raise SystemExit("gbaot: the bundle has no driver built with %s" % ",".join(defines))
         return os.path.join(d, "aothost.bin")
+    need_sources()
     os.makedirs(d, exist_ok=True)
     gen = os.path.join(INC, "rdggen.py")
     tmpl = os.path.join(INC, "rdgtmpl.py")
@@ -237,19 +285,19 @@ def prerequisites(build, defines=()):
         return not os.path.exists(out) or any(os.path.getmtime(x) > os.path.getmtime(out) for x in deps)
     defs = os.path.join(INC, "rdgdefs.inc")
     if stale(asm, gen, defs):
-        subprocess.check_call([sys.executable, gen, asm])
+        run([sys.executable, gen, asm], "generating RealDMG's core (rdggen.py)")
     if stale(core, asm, defs):
-        subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-DRDG_AOTCORE", "-I", INC + "/",
-                               "-o", core, asm])
+        run(["nasm", "-f", "bin", "-w+error", "-DRDG_AOTCORE", "-I", INC + "/",
+             "-o", core, asm], "assembling the core")
     if stale(tbin, core, tmpl, gen) or stale(tinc, core, tmpl, gen):
-        subprocess.check_call([sys.executable, tmpl, core, tbin, tinc])
+        run([sys.executable, tmpl, core, tbin, tinc], "cutting the templates (rdgtmpl.py)")
     drv = os.path.join(d, "aothost%s.bin" % "".join("-" + x for x in defines))
     src = os.path.join(ROOT, "tools", "gbaot", "aothost.asm")
     deps = [src, tbin, tinc] + [os.path.join(INC, f) for f in
                                 ("rdgsys.inc", "rdgjit.inc", "rdgdefs.inc", "rdgaot.inc")]
     if stale(drv, *deps):
-        subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", INC + "/", "-I", d + "/"]
-                              + ["-D" + x for x in defines] + ["-o", drv, src])
+        run(["nasm", "-f", "bin", "-w+error", "-I", INC + "/", "-I", d + "/"]
+            + ["-D" + x for x in defines] + ["-o", drv, src], "assembling the host driver")
     return drv
 
 
@@ -307,7 +355,7 @@ class Machine:
     def enter(self, entry):
         X = self.X
         self.u.reg_write(X.UC_X86_REG_SS, STK_SEG)
-        self.u.reg_write(X.UC_X86_REG_SP, 0x7FF0)
+        self.u.reg_write(X.UC_X86_REG_SP, STK_TOP)
         self.u.reg_write(X.UC_X86_REG_DS, DRV_SEG)
         self.u.reg_write(X.UC_X86_REG_ES, DRV_SEG)
         self.u.reg_write(X.UC_X86_REG_CS, DRV_SEG)
@@ -320,7 +368,7 @@ class Machine:
             self.stopped = False
             cs = self.u.reg_read(X.UC_X86_REG_CS)
             ip = self.u.reg_read(X.UC_X86_REG_IP)
-            self.u.emu_start(cs * 16 + ip, MEM_END + 0xF, timeout=60 * 1000000)
+            self.u.emu_start(cs * 16 + ip, MEM_END + 0xF, timeout=int(os.environ.get("GBAOT_EMUTO", "60")) * 1000000)
             if not self.stopped:
                 raise RuntimeError("the machine stopped at %04X:%04X" % (
                     self.u.reg_read(X.UC_X86_REG_CS), self.u.reg_read(X.UC_X86_REG_IP)))
@@ -353,12 +401,17 @@ class Machine:
         free = [s for s in self.slots if s[1] is None]
         if free:
             slot = free[0]
-        else:
-            old, _ = self.lru.popitem(last=False)
-            slot = next(s for s in self.slots if s[1] == old)
+        else:                             # rwbank.inc's rw_bfetch: the slot
+            now = self.r16(view, self.sym["S_FRAMES"])   # whose bank was
+            use = self.sym["RDG_BUSE"]    #   switched to longest ago, by
+            slot = max(self.slots, key=lambda sl: (   # frame, the first of equals
+                (now - self.r16(view, use + 2 * sl[1])) & 0xFFFF, -self.slots.index(sl)))
+            old = slot[1]
+            del self.lru[old]
             self.w16(view, self.sym["RDG_BTAB"] + 2 * old, 0)
         slot[1] = n
         self.lru[n] = slot
+        self.fetches = getattr(self, "fetches", 0) + 1   # (a bank brought in)
         self.w(slot[0], 0, self.rom.d[n * 0x4000:(n + 1) * 0x4000].ljust(0x4000, b"\xFF"))
         self.w16(view, self.sym["RDG_BTAB"] + 2 * n, slot[0] - 0x400)
 
@@ -435,8 +488,54 @@ def slot_of(pc, key, hmask):
     return ((bh << 8) | bl) * 8
 
 
+NEAR_DEPTH = 1                     # near_heat's control transfers (3 measured worse)
+
+
+def near_heat(rom, found, entries, heat, depth=NEAR_DEPTH):
+    """The uncounted block starts in tiers by how many control transfers
+    away from the counted code they are - a jump, a call, a return or a
+    jump table's entry each 1, running on into the next instruction 0
+    (gbstatic.supergraph's edges; the last walk's tables). A list of sets of
+    (pc, key), nearest first. Images fill in this order after the counted
+    blocks, where they filled bank by bank: Link's Awakening's entity
+    handlers are one table entry from its hot dispatch at 3952h and were
+    dropped behind the low banks' cold code"""
+    import collections as C
+    jt = getattr(G.discover, "jtabs", {})
+    succ, _ = G.supergraph(rom, found, jt)
+    dist, dq = {}, C.deque()
+    for pc, key in heat or {}:
+        k = (0 if pc < 0x4000 else key, pc)
+        if k in found and k not in dist:
+            dist[k] = 0
+            dq.append(k)
+    while dq:
+        k = dq.popleft()
+        d, op = dist[k], found[k]
+        nx = k[1] + (2 if op == 0xCB else G.LEN[op])
+        out = [t for t in succ.get(k, ()) if t not in ("RET", None)]
+        if (op == 0xCD or op in G.RSTS) and k not in jt:   # a call goes on
+            out.append((k[0] if nx >= 0x4000 else 0, nx))   #   where it returns
+        for t in out:                      # (not RET's edges: they are every
+            for u in (t,):                 #   caller of a shared routine)
+                if u not in found:
+                    continue
+                w = 0 if u[1] == nx and u[0] == (k[0] if nx >= 0x4000 else 0) else 1
+                if d + w > depth or dist.get(u, depth + 1) <= d + w:
+                    continue
+                dist[u] = d + w
+                (dq.appendleft if w == 0 else dq.append)(u)
+    tiers = [set() for _ in range(depth)]
+    for b, pc in entries:
+        d = dist.get((b if pc >= 0x4000 else 0, pc))
+        k = (pc, 0xFF if pc < 0x4000 else b)
+        if d and (heat or {}).get(k, 0) == 0:
+            tiers[d - 1].add(k)
+    return tiers
+
+
 def translate(build, rom, entries, hmask=31, log=print, defines=(), rhm=7, heat=None,
-              hram=None, listall=False):
+              hram=None, squeeze=0, listall=False, near=None, images=None):
     """Every entry (bank, pc) translated, in rounds of two cache segments
     (the first round also fills the core's holes), the code's banks mapped a
     group at a time when they do not all fit. Returns the image.
@@ -449,8 +548,10 @@ def translate(build, rom, entries, hmask=31, log=print, defines=(), rhm=7, heat=
     blocks too, from HRAM as the hottest of them found it: each one GUARDED,
     its bytes compared with HRAM as it is at every entry and the interpreter
     taking it when they differ (REALDMG-SPEC 20.5)."""
-    m = Machine(build, rom, defines)
-    s = m.sym
+    if squeeze:                            # A TEST'S: every image's code cut
+        defines = tuple(defines) + ("RT_SQUEEZE",)  # to its first gap's first
+    m = Machine(build, rom, defines)       #   `squeeze` bytes and the core's
+    s = m.sym                              #   holes to RT_SQHOLES, so a small
     CORE, VIEW, HASH, PRF, SEGA, SEGB, ROMSEG = 0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000
     BMP = 0x4800                           # the profile's segment's second half
     m.set_slots(0x7400, MEM_END // 16)
@@ -482,6 +583,8 @@ def translate(build, rom, entries, hmask=31, log=print, defines=(), rhm=7, heat=
         m.w(BMP, 0, bmp.ljust(0x8000, b"\0"))
     m.p(P_BMP, BMP)
     m.init(2, VIEW, CORE, HASH, SEGA, SEGB, ROMSEG, prf=PRF, prfmask=mask - 1, hmask=hmask, noc=0)
+    if squeeze:                            #   ROM fills many images, with links
+        m.w16(VIEW, S_JITLIM, squeeze)     #   and a list between them
     if hram:                               # HRAM as the hottest routine's miss
         top = max(hram, key=lambda pc: ((heat or {}).get((pc, 0xFF), 0), -pc))
         m.w(VIEW, 0xFF80, hram[top])
@@ -494,7 +597,36 @@ def translate(build, rom, entries, hmask=31, log=print, defines=(), rhm=7, heat=
     blocks = {}                            # (pc, key) -> (image segment n, offset)
     dropped = set()
     rnd, cont, cleared = 0, False, False
-    for gi, group in enumerate(groups):
+    # With counters, every group is gone through TWICE: first for the blocks
+    # the counters saw run, then for the rest. Once was in bank order, so the
+    # images filled on the low banks' cold code and a high bank's hot code was
+    # dropped whole - Link's Awakening's music engine in banks 1E and 1F, 37%
+    # of the block entries of the owner's replay, and all of bank 1B
+    # ...and the counted ones in two tiers: the blocks that hold 90% of the
+    # entries before the rest, so the hottest code of every group lands in the
+    # first images together - a call between two hot blocks in different
+    # images is a far jump, which the Victory 286 prices at ~2.9 us
+    # (cpubench) and Link's Awakening's replay ran 49 of a frame. OPT-IN
+    # (GBAOT_TIER=1): measured on the four replays it took Link's Awakening
+    # 60 -> 81 far transfers a frame and Kirby 31 -> 30, because a cold block
+    # that a hot one exits to is then laid in a later image
+    counted = sorted((k for k in keyed if (heat or {}).get(k, 0)), key=lambda k: -heat[k])
+    tiers = []
+    if counted:
+        tot, run, top = sum(heat[k] for k in counted), 0, set()
+        for k in counted:
+            if run >= 0.9 * tot:
+                break
+            top.add(k)
+            run += heat[k]
+        tiers = [top, set(counted) - top] if os.environ.get("GBAOT_TIER") else [set(counted)]
+    for t in near or ():                   # ...then what is NEAR the counted
+        t = set(t) - set(counted)          #   code (near_heat), nearest first
+        if t:
+            tiers.append(t)
+    passes = [(g, t) for t in (tiers + [None] if tiers else [None]) for g in groups]
+    every = set().union(*tiers) if tiers else set()
+    for gi, (group, tier) in enumerate(passes):
         if gi:
             for sl in m.slots:             # the last group's banks out
                 if sl[1] is not None:
@@ -505,7 +637,8 @@ def translate(build, rom, entries, hmask=31, log=print, defines=(), rhm=7, heat=
                 m.map_bank(k)
         gset = set(group)
         bitmap(group)
-        todo = {k: None for k in keyed if (k[1] == 0xFF and gi == 0) or k[1] in gset}
+        todo = {k: None for k in keyed if ((k[1] == 0xFF and group is groups[0]) or k[1] in gset)
+                and (k in tier if tier is not None else k not in every)}
         while todo:
             prf = bytearray(mask * 4)
             offered = sorted(todo, key=lambda k: -weight(k))[:mask]
@@ -516,9 +649,11 @@ def translate(build, rom, entries, hmask=31, log=print, defines=(), rhm=7, heat=
             if cont:
                 m.enter(E_CONT)            # on where the last round stopped
             elif rnd:
-                if len(segs) + 1 > HOST_MAX:   # the images are full: the
-                    dropped |= set(todo)       #   coldest are interpreted
-                    break
+                if len(segs) + 1 > (images or HOST_MAX - 1) + 1:   # the images are
+                    dropped |= set(todo)       #   full: the coldest are interpreted
+                    break                      #   (`images`, at most AOT_MAX: past
+                                               #   HOST_MAX - 1 the host runs only
+                                               #   that many, degrade's way)
                 m.w(SEGA, 0, bytes(0x10000))
                 m.w(SEGB, 0, bytes(0x10000))
                 m.enter(E_ROUND)
@@ -656,7 +791,8 @@ def finish(img, sym, rom, keyed, rhm, heat=None, listall=False):
         starts[n].append((off, key))       #   nearest block start below it
     for v in starts.values():
         v.sort()
-    relocs, linked, lazy = [], 0, 0
+    relocs, linked, lazy, jns, jshort = [], 0, 0, 0, 0
+    nojns = bool(os.environ.get("GBAOT_NOJNS"))   # (the A/B)
     for n, sg in enumerate(segs):
         i = sg.find(b"\xBA")
         while i != -1 and i < 0xFFF0:
@@ -687,7 +823,19 @@ def finish(img, sym, rom, keyed, rhm, heat=None, listall=False):
                         sg[i + 5] = bank
                         sg[i + 6:i + 8] = b"\x75\x05"
                     tn, toff = tgt
-                    if tn == n:
+                    rel = toff - at
+                    if (tn == n and at == i and sg[i - 2:i] == b"\x78\x06"
+                            and -128 <= rel <= 127 and not nojns):
+                        sg[i - 2] = 0x79             # js +6 / jmp near T: one
+                        sg[i - 1] = rel & 0xFF       #   jns T, and the event's
+                        sg[i:i + 2] = b"\xEB\x04"   #   way a jmp short to the
+                        jns += 1                     #   mov si,T at SITE + 6
+                    elif tn == n and -128 <= toff - (at + 2) <= 127 and not nojns:
+                        sg[at] = 0xEB                # a jmp short where it
+                        sg[at + 1] = (toff - (at + 2)) & 0xFF   # reaches (a bank's
+                        sg[at + 2] = 0x90            #   exit, after its check)
+                        jshort += 1
+                    elif tn == n:
                         sg[at] = 0xE9
                         struct.pack_into("<H", sg, at + 1, (toff - (at + 3)) & 0xFFFF)
                     else:
@@ -711,7 +859,14 @@ def finish(img, sym, rom, keyed, rhm, heat=None, listall=False):
                 t = struct.unpack_from("<H", sg, i + 1)[0]
                 tgt = blocks.get((t, 0xFF)) if 0xFF80 <= t < 0xFFFF else None
                 if tgt is not None and tgt[0] == n:
-                    struct.pack_into("<H", sg, i + 6, (tgt[1] - (i + 8)) & 0xFFFF)
+                    rel = tgt[1] - (i + 5)
+                    if -128 <= rel <= 127 and not nojns:
+                        sg[i + 3] = 0x79             # js +3 / jmp near: one
+                        sg[i + 4] = rel & 0xFF       #   jns, the event's way
+                        sg[i + 5:i + 8] = b"\xEB\x01\x90"   # on past it
+                        jns += 1
+                    else:
+                        struct.pack_into("<H", sg, i + 6, (tgt[1] - (i + 8)) & 0xFFFF)
                     hlinked += 1
             i = sg.find(b"\xBE", i + 1)
     img["segs"] = [bytes(x) for x in segs]
@@ -730,7 +885,8 @@ def finish(img, sym, rom, keyed, rhm, heat=None, listall=False):
             cum += per[hot]
         hot = max(hot, 1) if len(segs) > 1 else 0
     img.update(table=bytes(table), list=bytes(lst), relocs=relocs, hmask=rhm,
-               linked=linked, lazy=lazy, listed=len(listed), hot=hot, hlinked=hlinked)
+               linked=linked, lazy=lazy, listed=len(listed), hot=hot, hlinked=hlinked,
+               jns=jns, jshort=jshort)
 
 
 def tailpages(build):
@@ -769,13 +925,15 @@ def load(out):
 # --- run --------------------------------------------------------------------
 
 def run_arm(build, rom, mode, frames, img=None, prove=False, defines=(), joy=None,
-            state=None, heat=False):
+            state=None, heat=False, slots=None, lparts=None):
     """Yields each frame's state: mode 0 the interpreter, 1 the dynamic
     recompiler, 3 the precompiled code in `img` (meta, segs, table)."""
     m = Machine(build, rom, defines)
     CORE, VIEW, HASH = 0x1000, 0x2000, 0x3000
-    if mode == 3:
-        meta, segs, table = img
+    if mode in (3, 4):
+        if len(img[1]) > HOST_MAX:         # more images than this layout
+            img = degrade(build, img, HOST_MAX - 1)   # holds: the rest run as the
+        meta, segs, table = img                       #   package runs an image
         seg_at = [CORE] + [0x4000 + 0x1000 * i for i in range(len(segs) - 1)]
         LIST = seg_at[-1] + 0x1000 if len(segs) > 1 else 0x4000
         segs = [bytearray(x) for x in segs]
@@ -794,15 +952,40 @@ def run_arm(build, rom, mode, frames, img=None, prove=False, defines=(), joy=Non
         t = reseg(table)
         lst = reseg(meta["list"])
         m.w(HASH, 0, t)
-        m.w(LIST, 0, lst)
+        sg = LIST                          # the list in its parts (20.17), as
+        lx = []                            #   the package lays them out
+        per = 8 * -(-len(lst) // (8 * lparts)) if lparts else LIST_PART
+        for k in range(0, max(len(lst), 1), per):   # (lparts: the list cut in
+            c = lst[k:k + per]                       #   that many, the search's gate)
+            m.w(sg, 0, c)
+            lx.append((sg, len(c) // 8))
+            sg += (len(c) + 15) // 16 + 1
+        if len(lx) > LIST_PARTS:
+            raise SystemExit("gbaot: %d list parts; the machine searches %d" % (len(lx), LIST_PARTS))
+        for k, (a, n) in enumerate(lx):
+            m.p(0x40 + 4 * k, a)
+            m.p(0x42 + 4 * k, n)
+        m.p(0x50, len(lx), 1)
         m.p(0x32, LIST)
-        m.p(0x34, len(lst) // 8)
-        FILT = LIST + (len(lst) + 15) // 16 + 1
+        m.p(0x34, lx[0][1])
+        FILT = sg
         m.p(0x3A, FILT)
         romseg = FILT + 0x280              # (the filter's 8KB, and the cache's
                                            #   2KB after it: rdgaot.inc)
-        m.set_slots(romseg + 0x400, MEM_END // 16)
-        m.init(3, VIEW, CORE, HASH, seg_at[1] if len(seg_at) > 1 else CORE, 0, romseg,
+        free, top = romseg + 0x400, MEM_END // 16
+        if mode == 4:                      # 20.16: the runtime table, ONE
+            m.p(0x3C, free)                #   bank slot, then the runtime tier
+            free += 0xA00                  #   last - a segment is 16 bits, and
+            top = free + 0x400             #   ten images leave ~127KB above
+            m.p(0x3E, top)                 #   them (p_hyseg, p_hyr0)
+        m.set_slots(free, top)
+        if slots:                          # a bank cache as small as a
+            m.slots = m.slots[-slots:]     #   machine's (10.3.2's gate) - and
+                                           #   not under bank 0's copy: a slot's
+                                           #   segment less 400h there reads
+                                           #   bank 0's own bytes at 0000-3FFF,
+                                           #   which hid a DS left on the bank
+        m.init(mode, VIEW, CORE, HASH, seg_at[1] if len(seg_at) > 1 else CORE, 0, romseg,
                hmask=meta["hmask"], core_image=bytes(segs[0]))
         if prove:                          # count what runs in the code segments:
             from unicorn import UC_HOOK_BLOCK  # the core's own handlers are
@@ -818,11 +1001,25 @@ def run_arm(build, rom, mode, frames, img=None, prove=False, defines=(), joy=Non
                     if off:
                         entries[seg * 16 + off] = (pc, key)
 
+            core0, sbank, smask = CORE * 16, m.sym["S_BANK"], m.sym["S_BMASK"]
+            m.interp = collections.Counter()
+
             def blk(uc, addr, size, ud):
                 m.ran["code"] += 1
                 k = entries.get(addr)
                 if k:
                     m.ran[k] += 1
+                elif heat and core0 <= addr < core0 + 0x10000 and not addr & 0xFF:
+                    dx = uc.reg_read(m.X.UC_X86_REG_DX)    # an instruction the
+                    si = uc.reg_read(m.X.UC_X86_REG_SI) - 1    # INTERPRETER ran:
+                    if dx == addr - core0 and si < 0x8000:     #   its dispatch's
+                        v = uc.mem_read(VIEW * 16 + si, 1)[0] if si < 0x4000 else None
+                        if si >= 0x4000:   # jmp dx, DL 0 and DH the opcode at SI-1
+                            b = uc.mem_read(VIEW * 16 + sbank, 1)[0] & \
+                                uc.mem_read(VIEW * 16 + smask, 1)[0]
+                            m.interp[(si, b)] += 1
+                        elif v == dx >> 8:
+                            m.interp[(si, 0xFF)] += 1
             for lo, hi in code_ranges:
                 m.u.hook_add(UC_HOOK_BLOCK, blk, begin=lo, end=hi - 1)
             if heat:                        # a ROM PC with no block, to the
@@ -842,12 +1039,24 @@ def run_arm(build, rom, mode, frames, img=None, prove=False, defines=(), joy=Non
     else:
         SEGA, SEGB, romseg = 0x4000, 0x5000, 0x6000
         m.set_slots(romseg + 0x400, MEM_END // 16)
+        if slots:                          # a bank cache as small as a
+            m.slots = m.slots[-slots:]     #   machine's (10.3.2's gate) - and
+                                           #   not under bank 0's copy: a slot's
+                                           #   segment less 400h there reads
+                                           #   bank 0's own bytes at 0000-3FFF,
+                                           #   which hid a DS left on the bank
         m.init(mode, VIEW, CORE, HASH, SEGA, SEGB, romseg, hmask=31)
     if state is not None:                  # a save state, rwstate.inc's file
-        if len(state) != 0x8000 + 0x800:
-            raise SystemExit("gbaot: a state with cartridge RAM is not taken here")
+        ram = len(state) - 0x8000 - 0x800  # its cartridge RAM part: none, or
+        if ram not in (0, 0x2000):         #   ONE 8KB bank, which rdgsys keeps
+            raise SystemExit("gbaot: a state with more than one bank of cartridge RAM "
+                             "is not taken here")   # in A000-BFFF itself
         m.w(VIEW, 0x8000, state[:0x8000])
-        m.w(VIEW, m.sym["RDG_STREC"], state[0x8000:])
+        rec = bytearray(state[0x8000 + ram:])
+        if ram:                            # the package keeps that bank in a
+            m.w(VIEW, 0xA000, state[0x8000:0x8000 + ram])   # claim of its own
+            rec[5] = 0                     #   and says 8 (KB) here; the harness,
+        m.w(VIEW, m.sym["RDG_STREC"], bytes(rec))   # in the window, says 0
         m.enter(m.pr(P_STLOAD))
         if m.pr(P_OUT):
             raise SystemExit("gbaot: the save state is not this game's")
@@ -886,7 +1095,9 @@ def heat_run(build, rom, img, frames, joy=None, state=None, log=print):
     misses = {"%02X:%04X" % (k, pc): n for (pc, k), n in m.miss.items()
               if pc < 0x8000 or pc >= 0xFF80}
     hram = {"%02X:%04X" % (k, pc): v.hex() for (pc, k), v in m.hram.items()}
-    return {"frames": frames, "blocks": blocks, "misses": misses, "hram": hram}
+    interp = {"%02X:%04X" % (k, pc): n for (pc, k), n in m.interp.items()}
+    return {"frames": frames, "blocks": blocks, "misses": misses, "hram": hram,
+            "interp": interp}
 
 
 # --- commands ---------------------------------------------------------------
@@ -914,6 +1125,9 @@ def load_heat(paths, hram=None):
         for k, n in h["blocks"].items():
             key, pc = k.split(":")
             hb[(int(pc, 16), int(key, 16))] += n
+        for k, n in h.get("interp", {}).items():   # every instruction the
+            key, pc = k.split(":")                # interpreter ran: a block
+            hb[(int(pc, 16), int(key, 16))] += n  #   start's is its entries
         for k, v in h.get("hram", {}).items():
             pc = int(k.split(":")[1], 16)
             if hram is not None and pc not in hram:
@@ -968,7 +1182,7 @@ def cmd_build(a):
     lead = leaders(rom, found, extra, side=a.side)
     print("gbaot: %d instructions, %d block starts" % (len(found), len(lead)))
     img = translate(a.build, rom, lead, hmask=a.hmask, rhm=a.table // 2 - 1, heat=heat,
-                    hram=hram if a.heat else None)
+                    hram=hram if a.heat else None, squeeze=a.squeeze)
     save(img, a.out, rom)
     code = sum(len(s) for s in img["segs"])
     print("gbaot: %d blocks in %d segments (the core and %d more), %d dropped; %d code bytes, "
@@ -980,7 +1194,7 @@ def cmd_build(a):
               img.get("hlinked", 0), a.out))
 
 
-ARMS = {"interp": 0, "dyn": 1, "aot": 3}
+ARMS = {"interp": 0, "dyn": 1, "aot": 3, "hyb": 4}   # hyb: 20.16
 
 
 def degrade(build, img, keep):
@@ -989,15 +1203,25 @@ def degrade(build, img, keep):
     entry into a missing image emptied, and a far jump into one put back to
     the exit it was before the host linked it - `mov dx,SITE / jmp
     tr_lsite` - for tr_link to find nothing behind at run time"""
+    return subset(build, img, range(1, keep + 1))
+
+
+def subset(build, img, keep):
+    """degrade() with any images kept: `keep` the image numbers (1 the first
+    past the core), renumbered in that order - so the host's ten can be ANY
+    ten, and images past the tenth run on the host too (`check --images`)"""
     meta, segs, table = img
     lsite = symbols(build)["RDGC_TR_LSITE"]
-    segs = [bytearray(x) for x in segs[:keep + 1]]
+    new = {0: 0}
+    for i in keep:
+        new[i] = len(new)
+    segs = [bytearray(segs[i]) if i in new else None for i in range(len(segs))]
     relocs = []
     for n, site, tn, form in meta["relocs"]:
-        if n > keep:
+        if n not in new:
             continue
-        if tn <= keep:
-            relocs.append((n, site, tn, form))
+        if tn in new:
+            relocs.append((new[n], site, new[tn], form))
             continue
         sg = segs[n]
         sg[site] = 0xBA
@@ -1007,20 +1231,29 @@ def degrade(build, img, keep):
 
     def empty(b, tab):
         t = bytearray(b)
+        out = bytearray()
         for e in range(0, len(t), 8):
             seg = struct.unpack_from("<H", t, e + 6)[0]
-            if seg >= TOKEN and seg - TOKEN > keep:
-                struct.pack_into("<H", t, e + 4, 0)
-                if tab:                    # out of every lookup's reach
-                    struct.pack_into("<HB", t, e, 0x8000, 0)
-        return bytes(t)
-    meta = dict(meta, relocs=relocs, list=empty(meta["list"], False), segs=keep + 1)
-    return meta, [bytes(x) for x in segs], empty(table, True)
+            if seg >= TOKEN and struct.unpack_from("<H", t, e + 4)[0]:
+                if seg - TOKEN not in new:
+                    if not tab:            # a LIST entry goes: unlisted and
+                        continue           #   offset 0 are both interpreted,
+                    struct.pack_into("<H", t, e + 4, 0)   # and only one costs
+                    struct.pack_into("<HB", t, e, 0x8000, 0)   # 8 bytes
+                else:                      #   (the TABLE's: out of every
+                    struct.pack_into("<H", t, e + 6, TOKEN + new[seg - TOKEN])
+            out += t[e:e + 8]              #   lookup's reach, kept in place)
+        return bytes(out)
+    order = [0] + list(keep)
+    hot = sum(1 for i in keep if i <= meta.get("hot", len(segs) - 1))
+    meta = dict(meta, relocs=relocs, list=empty(meta["list"], False), segs=len(order), hot=hot)
+    return meta, [bytes(segs[i]) for i in order], empty(table, True)
 
 
 # --- the package: GAME.O88 (REALDMG-SPEC 20.10) ------------------------------
 
-AOT_MAX = 14                       # realdmg.asm's RWA_MAX
+S_JITLIM = 0x4814                  # rdgdefs.inc's: RT_SQUEEZE's limit
+AOT_MAX = 29                       # realdmg.asm's RWA_MAX
 HOST_MAX = 11                      # ...and what run_arm's layout holds: image i
                                    #   at 4000h + 1000h x i, the list and its
                                    #   filter after the last, all under 10000h
@@ -1028,23 +1261,45 @@ AOT_CODE = 5                       # ...and RWA_CODE
 AOT_ROWS = 64                      # ...and RWA_ROWS: the table's rows
 
 
-def aot_image(build):
+def aot_image(build, mega=False):
     """realdmg.asm assembled as RDG_AOT, the one image every precompiled
-    cartridge is: build/gbaot/realdmgaot.bin"""
+    cartridge is: build/gbaot/realdmgaot.bin - or, `mega`, kern_mega's arm
+    of it (-DPKG_MEGA, REALDMG-SPEC 20.15): build/gbaot/realdmgaotmega.bin,
+    which runs on every kernel and is the one that runs on kern_mega"""
     d = aotdir(build)
     prerequisites(build)
-    out = os.path.join(d, "realdmgaot.bin")
+    out = os.path.join(d, "realdmgaotmega.bin" if mega else "realdmgaot.bin")
     if BUNDLED:
         return out
     srcs = [os.path.join(INC, f) for f in os.listdir(INC) if f.endswith((".asm", ".inc"))]
     srcs += [os.path.join(ROOT, "apps", f) for f in os.listdir(os.path.join(ROOT, "apps"))
              if f.endswith(".inc")]
     if not os.path.exists(out) or any(os.path.getmtime(x) > os.path.getmtime(out) for x in srcs):
-        subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-DRDG_AOT",
-                               "-I", os.path.join(ROOT, "apps") + "/", "-I", INC + "/",
-                               "-I", os.path.join(ROOT, "drivers", "sound") + "/",
-                               "-I", d + "/", "-l", os.path.join(d, "realdmgaot.lst"),
-                               "-o", out, os.path.join(INC, "realdmg.asm")])
+        run(["nasm", "-f", "bin", "-w+error", "-DRDG_AOT"] +
+            (["-DPKG_MEGA"] if mega else []) +
+            ["-I", os.path.join(ROOT, "apps") + "/", "-I", INC + "/",
+             "-I", os.path.join(ROOT, "drivers", "sound") + "/",
+             "-I", d + "/", "-l", out[:-4] + ".lst",
+             "-o", out, os.path.join(INC, "realdmg.asm")], "assembling the package image")
+    return out
+
+
+def aot_jitpart(build):
+    """The recompiler as a part (rdgjitp.asm), assembled against the
+    PRECOMPILED core's templates and offsets with RDG_HYB: kern_mega's
+    package carries it to translate what the host did not precompile
+    (REALDMG-SPEC 20.16) - build/gbaot/rdgjitpaot.bin"""
+    d = aotdir(build)
+    prerequisites(build)
+    out = os.path.join(d, "rdgjitpaot.bin")
+    if BUNDLED:
+        return out
+    srcs = [os.path.join(INC, f) for f in ("rdgjitp.asm", "rdgjit.inc", "rdgdefs.inc")]
+    srcs += [os.path.join(d, "rdgtmpl.bin"), os.path.join(d, "rdgcore.inc")]
+    if not os.path.exists(out) or any(os.path.getmtime(x) > os.path.getmtime(out) for x in srcs):
+        run(["nasm", "-f", "bin", "-w+error", "-DRDG_XTIER", "-DRDG_HYB",
+             "-I", d + "/", "-I", INC + "/", "-o", out,
+             os.path.join(INC, "rdgjitp.asm")], "assembling the recompiler's part")
     return out
 
 
@@ -1056,7 +1311,7 @@ def rom_name(path):
     return b
 
 
-def package(build, img, rom, out, romname, image=None, log=print, embed=False):
+def package(build, img, rom, out, romname, image=None, log=print, embed=False, mega=False):
     """GAME.O88: the RDG_AOT image with the parts set to this cartridge's -
     and with `embed`, the ROM itself as plain 32KB parts after the code
     images, which the package reads out of its own file (REALDMG-SPEC 20.13)"""
@@ -1065,38 +1320,56 @@ def package(build, img, rom, out, romname, image=None, log=print, embed=False):
     if nseg > AOT_MAX:
         raise SystemExit("gbaot: %d code images; the package holds %d" % (nseg, AOT_MAX))
     romrows = len(rom.d) // 0x8000 if embed else 0
-    if embed and (len(rom.d) % 0x8000 or AOT_CODE + 2 * nseg + romrows > AOT_ROWS):
-        raise SystemExit("gbaot: a %d KB ROM with %d code images does not fit the package's "
-                         "%d parts; make it without --embed" % (len(rom.d) // 1024, nseg, AOT_ROWS))
-    import os88lz
-    b = bytearray(open(image or aot_image(build), "rb").read())
-    at = b.find(b"O88PARTS")
-    rows = at + 10
-    b[at + 8] = AOT_CODE + 2 * nseg + romrows  # the rows there are
     lst = meta["list"]
     rel = b"".join(struct.pack("<BBH", n, tn | (0x80 if form else 0), site)
                    for n, site, tn, form in meta["relocs"])
-    loff = (62 + len(rel) + 15) & ~15
-    hdr = struct.pack("<6sBBHHH", b"RDAOT1", nseg, meta["hmask"], len(lst) // 8,
-                      len(meta["relocs"]), loff)
+    # THE RELOCATIONS AND THE LIST IN PARTS OF THEIR OWN (REALDMG-SPEC 20.17):
+    # in the meta part they bound a package at ~10 images (65,024 bytes)
+    relp = [rel[k:k + REL_PART] for k in range(0, len(rel), REL_PART)]
+    lstp = [lst[k:k + LIST_PART] for k in range(0, len(lst), LIST_PART)]
+    if len(lstp) > LIST_PARTS:
+        raise SystemExit("gbaot: %d listed blocks are %d list parts; the package searches %d - "
+                         "fewer images (--images, --prefer)" % (len(lst) // 8, len(lstp), LIST_PARTS))
+    relrow = AOT_CODE                      # (eager carve parts come before
+    lstrow = relrow + len(relp)            #   every lazy one, SPEC.md 20.12.4:
+    coderow = lstrow + len(lstp)           #   the images after them)
+    romrow = coderow + 2 * nseg
+    jrow = romrow + romrows if mega else 0   # (20.16: the recompiler last)
+    nrows = romrow + romrows + (1 if jrow else 0)
+    if embed and len(rom.d) % 0x8000 or nrows > AOT_ROWS:
+        raise SystemExit("gbaot: %d code images, %d relocation and %d list parts%s are %d rows; "
+                         "the package holds %d - fewer images (--images, --prefer)%s" % (
+                             nseg, len(relp), len(lstp),
+                             " and a %d KB ROM" % (len(rom.d) // 1024) if embed else "",
+                             nrows, AOT_ROWS, ", or the ROM beside it" if embed else ""))
+    import os88lz
+    b = bytearray(open(image or aot_image(build, mega), "rb").read())
+    at = b.find(b"O88PARTS")
+    rows = at + 10
+    b[at + 8] = nrows
+    for r in range(relrow, coderow):       # eager, into the carve: the load
+        b[rows + 8 * r] = 1                #   reads them, OP_ASSET | OP_COMP
+        b[rows + 8 * r + 1] = 16           #   (rwaot.inc's rw_ameta)
+    hdr = struct.pack("<6sBBHHBB", b"RDAOT2", nseg, meta["hmask"], len(lst) // 8,
+                      len(meta["relocs"]), relrow if relp else 0, len(relp))
     hdr += bytes.fromhex(meta["header"]) + romname.encode().ljust(13, b"\0")[:13]
-    foff = (loff + len(lst) + 15) & ~15
-    hdr = hdr.ljust(56, b"\0") + struct.pack("<HBBH", foff,
-                                             AOT_CODE + 2 * nseg if embed else 0,
-                                             meta.get("hot", nseg),
-                                             len(rom.d) // 1024 if embed else 0) + rel
-    metap = (hdr.ljust(loff, b"\0") + lst).ljust(foff, b"\0")
+    hdr = hdr.ljust(55, b"\0") + bytes([jrow]) + struct.pack(
+        "<BBBBH", lstrow if lstp else 0, len(lstp), romrow if embed else 0,
+        meta.get("hot", nseg), len(rom.d) // 1024 if embed else 0)
+    metap = hdr.ljust(64, b"\0")
     # the filter and the list's cache (rdgaot.inc, 10KB) follow the TABLE in
     # its part: in the meta part, after a long list, they took that part past
     # 65,024 bytes - Link's Awakening's 65,264, Wario Land's 68,672
-    parts = [segs[0][:0x8000], segs[0][0x8000:], table + bytes(0x2800), metap]
+    parts = [segs[0][:0x8000], segs[0][0x8000:], table + bytes(0x2800), metap] + relp + lstp
     for sg in segs[1:]:
         parts += [sg[:0x8000], sg[0x8000:]]
     plain = set()
     for i in range(romrows):               # the ROM: plain, so its pieces lie
         parts.append(rom.d[i * 0x8000:(i + 1) * 0x8000])   # back to back
-        plain.add(AOT_CODE + 2 * nseg + i)
-    filed = [0, 1, 3, 4] + list(range(AOT_CODE, AOT_CODE + 2 * nseg + romrows))
+        plain.add(romrow + i)
+    if jrow:                               # kern_mega's: the recompiler, for
+        parts.append(open(aot_jitpart(build), "rb").read())   # the misses (20.16)
+    filed = [0, 1, 3, 4] + list(range(AOT_CODE, nrows))
     work = tempfile.mkdtemp(prefix="gbaotpkg-")
     try:                                   # (the parts gone however it ends)
         paths = []
@@ -1118,17 +1391,67 @@ def package(build, img, rom, out, romname, image=None, log=print, embed=False):
     finally:
         shutil.rmtree(work, ignore_errors=True)
     size = os.path.getsize(out)
-    if size >= 1 << 20:                    # PKG_FILE_HI (SPEC.md 19.1): the
+    if size >= PKG_FILE_MAX:               # PKG_FILE_HI (SPEC.md 19.1): the
         os.remove(out)                     #   mount types no package file of
-        raise SystemExit(                  #   1MB or more as one
-            "gbaot: %s would be %d bytes; a package file is under 1MB (SPEC.md 19.1)%s" % (
+        raise SystemExit(                  #   32MB or more as one
+            "gbaot: %s would be %d bytes; a package file is under 32MB (SPEC.md 19.1)%s" % (
                 out, size, " - make it without --embed, the ROM beside it" if embed else ""))
-    carve = 64 + 16 + (len(metap) + 1023) // 1024 + 64
+    carve = 64 + (len(table) + 0x2800 + 1023) // 1024 + 64 + sum(
+        (len(x) + 1023) // 1024 for x in [metap] + relp + lstp)
     log("gbaot: %s, %d bytes: the core and %d code images (64 KB of heap each, %d of them "
         "hot), the table, %d listed, %d relocations; the carve is %d KB with the view; %s" % (
             out, size, nseg, meta.get("hot", nseg), len(lst) // 8, len(meta["relocs"]), carve,
-            "the ROM is inside it" if embed else "it opens %s beside it" % romname))
+            "the ROM is inside it" if embed else "it opens %s beside it" % romname)
+        + ("; kern_mega's build (it runs on every kernel)" if mega else ""))
     return size
+
+
+PKG_FILE_MAX = 512 << 16          # SPEC.md 19.1: a package file is under 32MB
+META_MAX = 65024                  # SPEC.md 20.12.11: a part's bytes at most
+REL_PART = 65024                  # a relocation part: 16,256 of 4 bytes
+LIST_PART = 8128 * 8              # a list part: 8,128 entries of 8 (a part's
+LIST_PARTS = 4                    #   most), RDG_LXMAX of them (rdgdefs.inc)
+
+
+def package_fit(build, img, rom, out, romname, log=print, embed=False, mega=False,
+                prefer=None):
+    """package(), choosing what gives when the ROM inside and every code
+    image will not both fit a package (the 32MB file, AOT_ROWS rows):
+    `prefer` "rom" keeps the ROM inside and leaves the coldest images out
+    (degrade's way - what they held is interpreted, or translated at run
+    time on kern_mega, REALDMG-SPEC 20.16); "code" keeps every image and
+    puts the ROM BESIDE the package when it does not fit inside. None is
+    package() as it was: refused"""
+    package_fit.embedded = embed           # (what came out: the GUI's floppy)
+    if prefer is None:
+        return package(build, img, rom, out, romname, log=log, embed=embed, mega=mega)
+    nseg = len(img[1]) - 1
+
+    def trimmed(emb):                  # the coldest images out until it fits:
+        rows = AOT_ROWS - AOT_CODE - (len(rom.d) // 0x8000 if emb else 0) - (1 if mega else 0)
+        keep = min(nseg, (rows - 2) // 2)   # the rows (two at least for the
+                                            #   relocation and list parts), the
+                                            #   list's parts, the file
+        while True:
+            try:
+                if keep < nseg:
+                    log("gbaot: %d code images of %d fit (%s)" % (
+                        keep, nseg, "the ROM inside" if emb else "the ROM beside it"))
+                return package(build, degrade(build, img, keep) if keep < nseg else img, rom,
+                               out, romname, log=log, embed=emb, mega=mega)
+            except SystemExit:
+                if keep <= 1:
+                    raise
+                keep -= 1
+    if embed and prefer == "code":     # every image the format holds, and
+        try:                           #   the ROM inside only when it fits
+            return package(build, img, rom, out, romname, log=log, embed=True, mega=mega)
+        except SystemExit as e:
+            log("gbaot: %s" % str(e).splitlines()[0])
+        log("gbaot: the code first (--prefer code): the ROM beside the package")
+        package_fit.embedded = False
+        return trimmed(False)
+    return trimmed(embed)
 
 
 def hottest(build, rom, img, frames=600):
@@ -1153,11 +1476,14 @@ def broken(img, which):
 
 
 def compare(build, rom, img, frames, ref="interp", arm="aot", serial=False, defines=(),
-            log=print):
-    """Run two arms side by side. Returns (identical, what was found)."""
-    r = run_arm(build, rom, ARMS[ref], frames, img if ref == "aot" else None, defines=defines)
-    k = run_arm(build, rom, ARMS[arm], frames, img if arm == "aot" else None,
-                prove=(arm == "aot"), defines=defines)
+            log=print, joy=None, state=None, slots=None, lparts=None):
+    """Run two arms side by side - the script, or a replay from its save
+    state (`joy`, `state`). Returns (identical, what was found)."""
+    r = run_arm(build, rom, ARMS[ref], frames, img if ref in ("aot", "hyb") else None, defines=defines,
+                joy=joy, state=state, slots=slots, lparts=lparts)
+    k = run_arm(build, rom, ARMS[arm], frames, img if arm in ("aot", "hyb") else None,
+                prove=(arm in ("aot", "hyb")), defines=defines, joy=joy, state=state, slots=slots,
+                lparts=lparts)
     m0 = m1 = None
     if serial:                            # a ROM that reports on its link port:
         for (f, x0, s0, m0), (_, x1, s1, m1) in zip(r, k):   # its words, not its
@@ -1172,12 +1498,20 @@ def compare(build, rom, img, frames, ref="interp", arm="aot", serial=False, defi
             return False, "frame %d DIFFERS (%s)" % (f, ", ".join(what))
     ran = getattr(m1, "ran", collections.Counter())["code"]
     nbr = m1.r16(m1.view, m1.sym["S_JITNBR"])
+    banks = ""
+    if slots:
+        banks = "; %d slots, banks fetched %d (%s) against %d (%s)" % (
+            slots, getattr(m1, "fetches", 0), arm, getattr(m0, "fetches", 0), ref)
+    hy = ""
+    if arm == "hyb":                      # (20.16: the misses made blocks)
+        hy = "; %d misses made blocks (%d counted)" % (
+            m1.r16(m1.view, m1.sym["S_HYN"]), m1.r16(m1.view, m1.sym["S_HYMISS"]))
     return True, "%d frames IDENTICAL, %s against %s; %d precompiled blocks entered, %d translated " \
-        "while running" % (frames, arm, ref, ran, nbr)
+        "while running%s%s" % (frames, arm, ref, ran, nbr, banks, hy)
 
 
 def make(build, rom_path, out, romname=None, heat_frames=3000, replays=(), check=0,
-         log=print, embed=False):
+         log=print, embed=False, mega=False, images=None, prefer=None):
     """GAME.O88 from a ROM in one go: the walk, the translation, a run of it
     with the harness's script (and any replays, from their save states) for
     the counters, the translation again with the hottest blocks first and
@@ -1192,7 +1526,8 @@ def make(build, rom_path, out, romname=None, heat_frames=3000, replays=(), check
         os.path.basename(rom_path), len(data) // 1024, len(found), len(lead)))
     work = tempfile.mkdtemp(prefix="gbaotmk-")
     try:
-        img = translate(build, rom, lead, log=log)
+        rhm = 15 if mega else 7            # kern_mega's table 32KB (20.17):
+        img = translate(build, rom, lead, log=log, images=images, rhm=rhm)   # more held, less listed
         d0 = os.path.join(work, "first")
         save(img, d0, rom)
         heats = []
@@ -1215,15 +1550,18 @@ def make(build, rom_path, out, romname=None, heat_frames=3000, replays=(), check
                 "again, the hottest first" % (len(heat), len(more), len(hram)))
             found, extra = walk(rom, set(extra) | more)   # the misses WALKED: a
             lead = leaders(rom, found, extra)               #   start the walk never
-            img = translate(build, rom, lead, log=log, heat=heat,   # found is dropped
-                            hram=hram)
+            near = near_heat(rom, found, lead, heat, int(os.environ.get(   # found is
+                "GBAOT_NEAR", NEAR_DEPTH)))                  #   dropped
+            img = translate(build, rom, lead, log=log, heat=heat,
+                            hram=hram, near=near, images=images, rhm=rhm)
         d1 = os.path.join(work, "final")
         save(img, d1, rom)
         # GAME.O88 is written under its own name only once it is checked: a
         # package that failed the check is not left beside the ROM
         part = out + ".part"
         try:
-            package(build, load(d1), rom, part, romname, log=log, embed=embed)
+            package_fit(build, load(d1), rom, part, romname, log=log, embed=embed, mega=mega,
+                        prefer=prefer)
             if check:
                 log("gbaot: checking %d frames beside the interpreter..." % check)
                 ok, what = compare(build, rom, load(d1), check, log=log)
@@ -1235,18 +1573,24 @@ def make(build, rom_path, out, romname=None, heat_frames=3000, replays=(), check
             if os.path.exists(part):
                 os.remove(part)
     finally:
+        keep = os.environ.get("GBAOT_KEEP")    # the first and final images and
+        if keep:                               #   the heat, to package again
+            shutil.copytree(work, keep, dirs_exist_ok=True)
         shutil.rmtree(work, ignore_errors=True)
     return out
 
 
 def cmd_make(a):
+    if a.images is not None and not 1 <= a.images <= AOT_MAX:
+        raise SystemExit("gbaot: --images is 1 to %d" % AOT_MAX)
     reps = []
     for r in a.replay:
         rp, _, ss = r.partition(",")
         if not ss:
             raise SystemExit("gbaot: --replay NAME.RPn,NAME.SSn: a replay and the state it starts from")
         reps.append((rp, ss))
-    make(a.build, a.rom, a.out, a.romname, a.frames, reps, a.check, embed=a.embed)
+    make(a.build, a.rom, a.out, a.romname, a.frames, reps, a.check, embed=a.embed,
+         mega=a.mega, images=a.images, prefer=a.prefer)
 
 
 def cmd_package(a):
@@ -1254,12 +1598,20 @@ def cmd_package(a):
     img = load(a.dir)
     if img[0]["rom_sha256"] != hashlib.sha256(rom.d).hexdigest():
         raise SystemExit("gbaot: %s was not built from %s" % (a.dir, a.rom))
-    package(a.build, img, rom, a.out, a.romname or rom_name(a.rom), embed=a.embed)
+    package_fit(a.build, img, rom, a.out, a.romname or rom_name(a.rom), embed=a.embed,
+                mega=a.mega, prefer=a.prefer)
 
 
 def cmd_check(a):
     rom = G.Rom(open(a.rom, "rb").read())
     img = load(a.dir)
+    if a.only:                            # (images by number, ranges too)
+        keep = []
+        for r in a.only.split(","):
+            lo, _, hi = r.partition("-")
+            keep += range(int(lo), int(hi or lo) + 1)
+        img = subset(a.build, img, keep)
+        print("gbaot: images %s only, as 1 to %d" % (a.only, len(keep)))
     if a.keep is not None:
         img = degrade(a.build, img, a.keep)
         print("gbaot: as the package runs with %d code images of %d" % (a.keep, len(load(a.dir)[1]) - 1))
@@ -1270,7 +1622,16 @@ def cmd_check(a):
     if a.break_block:
         img = broken(img, a.break_block)
         print("gbaot: block %s broken" % a.break_block)
-    ok, what = compare(a.build, rom, img, a.frames, a.ref, a.arm, a.serial)
+    joy = state = None
+    frames = a.frames
+    if a.replay:                          # a replay, as heat plays one
+        if not a.state:
+            raise SystemExit("gbaot: a replay is played from its save state: give --state")
+        j0, joy, n = replay(a.replay)
+        frames = min(frames, n)
+        state = open(a.state, "rb").read()
+    ok, what = compare(a.build, rom, img, frames, a.ref, a.arm, a.serial, joy=joy, state=state,
+                       slots=a.slots, lparts=a.list_parts)
     print("gbaot: " + what)
     return 0 if ok else 1
 
@@ -1288,6 +1649,9 @@ def main():
     b.add_argument("--table", type=int, default=16, choices=(16, 32, 64),
                    help="KB of the table the machine runs with")
     b.add_argument("--side", action="store_true", help="a block at every resume point too")
+    b.add_argument("--squeeze", type=lambda x: int(x, 0), default=0, metavar="END",
+                   help="TESTS ONLY: every image's code ends at END (e.g. 0x210), so a "
+                   "small ROM fills many images (tests/rdgaotmega.py)")
     b.add_argument("--heat", action="append", default=[],
                    help="a heat file (gbaot.py heat): its hottest blocks first, its misses "
                    "as block starts; may be given more than once")
@@ -1305,12 +1669,21 @@ def main():
     k.add_argument("-n", "--frames", type=int, default=1200)
     k.add_argument("--serial", action="store_true",
                    help="compare what the game says on its link port, not each frame")
-    k.add_argument("--ref", default="interp", choices=("interp", "dyn", "aot"))
-    k.add_argument("--arm", default="aot", choices=("interp", "dyn", "aot"))
+    k.add_argument("--ref", default="interp", choices=("interp", "dyn", "aot", "hyb"))
+    k.add_argument("--arm", default="aot", choices=("interp", "dyn", "aot", "hyb"))
     k.add_argument("--break-block", help="BB:PPPP: break this block on purpose (must go red)")
     k.add_argument("--break-hot", action="store_true", help="break the most entered block")
     k.add_argument("--keep", type=int, help="only this many code images past the core, as the "
                    "package runs when the heap holds no more")
+    k.add_argument("--only", help="these code images only (1,11-19): the rest as not loaded, "
+                   "so images past the host's ten are run on it too")
+    k.add_argument("--slots", type=int, help="a bank cache of this many 16KB slots, as the "
+                   "package keeps one when the cartridge does not fit")
+    k.add_argument("--list-parts", type=int, choices=range(1, LIST_PARTS + 1), metavar="N",
+                   help="the list cut into N parts, however long it is (REALDMG-SPEC 20.17.1: "
+                   "the part search's gate)")
+    k.add_argument("--replay", help="a NAME.RPn to play instead of the script...")
+    k.add_argument("--state", help="...from the NAME.SSn it starts from")
     mk = sub.add_parser("make", help="GAME.O88 from a ROM: build, count, build again, package")
     mk.add_argument("rom")
     mk.add_argument("-o", "--out", required=True)
@@ -1323,12 +1696,24 @@ def main():
                     help="then run that many frames beside the interpreter")
     mk.add_argument("--embed", action="store_true",
                     help="the ROM inside the package: one file, no ROM beside it")
+    mk.add_argument("--mega", action="store_true",
+                    help="kern_mega's build of the package (REALDMG-SPEC 20.15): runs on "
+                    "every kernel, and is the one that runs on kern_mega")
     p = sub.add_parser("package", help="GAME.O88 from a built directory")
     p.add_argument("rom")
     p.add_argument("dir")
     p.add_argument("-o", "--out", required=True)
     p.add_argument("--romname", help="the 8.3 name it opens beside it (default: the ROM's)")
     p.add_argument("--embed", action="store_true", help="the ROM inside the package")
+    p.add_argument("--mega", action="store_true", help="kern_mega's build of the package")
+    for x in (mk, p):
+        x.add_argument("--prefer", choices=("rom", "code"),
+                       help="with --embed, when the ROM and every code image do not both fit: "
+                       "'rom' leaves the coldest images out, 'code' puts the ROM beside it")
+    mk.add_argument("--images", type=int, metavar="N",
+                    help="code images at most (default %d, what the host runs; up to %d - "
+                    "past %d the host checks the first %d, as a package runs them with less "
+                    "memory)" % (HOST_MAX - 1, AOT_MAX, HOST_MAX - 1, HOST_MAX - 1))
     a = ap.parse_args()
     a.frames_given = "-n" in sys.argv or "--frames" in sys.argv
     return {"cover": cmd_cover, "heat": cmd_heat, "make": cmd_make, "build": cmd_build, "check": cmd_check,

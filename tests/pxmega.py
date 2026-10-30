@@ -30,6 +30,7 @@ written.
 """
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -39,6 +40,38 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88bochs  # noqa: E402
 import os88build  # noqa: E402
+import os88sym  # noqa: E402
+
+PXR = dict(MW=32, MH=34, HAVE=43)       # px_cur's fields (tests/megapixel.py)
+
+
+class Pixel(object):
+    """PiXEL's own state, read through its descriptor by the package's map
+    (tests/megapixel.py's Pixel, cut to what a step waits on: that module
+    sets OS88_BUILD at import, so it is not imported here)."""
+
+    def __init__(self, box, build):
+        self.box = box
+        self.map = os88sym._parse_map(os.path.join(build, "pixel.map"))[0]
+
+    def read(self, label, n):
+        return self.box.pkg_read("PiXEL", self.map[label], n)
+
+    def byte(self, label):
+        return self.read(label, 1)[0]
+
+    def name(self):
+        return self.read("px_cur", 13).split(b"\0")[0].decode("latin-1")
+
+    def rec(self):
+        r = self.read("px_cur", 44)
+        return dict(MW=struct.unpack_from("<H", r, PXR["MW"])[0],
+                    MH=struct.unpack_from("<H", r, PXR["MH"])[0],
+                    HAVE=r[PXR["HAVE"]])
+
+    def idle(self):
+        return (self.byte("px_busy") == 0 and self.byte("px_job") == 0
+                and self.byte("px_pcon") == 0)
 
 SAMPLES = ("BALLOONS.PNG", "BOUNCE.GIF", "CAT.GIF", "CITY.PCX", "FLOWER.JPG",
            "HOUSE.PNG", "LAKE.JPG", "MOUNTAIN.BMP", "ROOM.JPG")
@@ -71,26 +104,41 @@ def main():
                     for s in SAMPLES], check=True, stdout=subprocess.DEVNULL)
     t0 = time.time()
     box = os88bochs.Box(out, [], bimg=disk, btype="1_44", build=t.dir)
+    px = Pixel(box, t.dir)
     fails = []
     try:
         if not box.wait_for("kern_mega: protected mode", 300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         # the desktop, B:'s window and every step below end on the GUEST's
-        # state (os88bochs.Box.up / ui_done: PiXEL decodes and animates on
-        # its UI task, no worker) - each step used to wait out QUIET s of no
-        # E9 line, 12 s a step on a clean run. The trap windows still tile
-        # the whole run end to end, and the last one has a tail.
+        # state - each step used to wait out QUIET s of no E9 line, 12 s a
+        # step on a clean run. The trap windows still tile the whole run end
+        # to end, and the last one has a tail.
+        #
+        # A STEP ENDS ON PIXEL'S OWN WORD, then on the UI's. ui_done alone
+        # is not "the picture is decoded": PiXEL's worker decodes and its UI
+        # task paints between chunks (px_progpaint), so the UI task is idle
+        # between two of them and ui_done returned with FLOWER.JPG's first
+        # strip on the glass ("Opening 0%", 1% of the canvas). And a Space
+        # whose open has not run yet leaves the PREVIOUS picture idle. So a
+        # picture step waits for [px_cur]'s name to be the file and HAVE set
+        # with [px_busy] clear - px_open clears HAVE before it names the
+        # file and px_finish sets it, so the three together are only true of
+        # THIS decode, finished - and a Rotate for the master's dimensions
+        # turned and PiXEL idle (megapixel.py's settle, the same bytes).
         box.up()
         box.capture()
         box.dbl(591, 105, "B:'s Disk window")
         prev = [None]
         pos = [os.path.getsize(box.e9)]
 
-        def step(name, act, picture=True, tail=0.0):
+        def step(name, act, ready, picture=True, tail=0.0):
             act()
             try:
-                box.ui_done("PiXEL to finish " + name, secs=LIMIT)
+                box.until(lambda: box.pkg_base("PiXEL") is not None and
+                          ready(), "PiXEL to finish " + name, LIMIT,
+                          poll=0.5)
+                box.ui_done("PiXEL to paint " + name, secs=LIMIT)
             except RuntimeError as e:   # a FAULT: reported below, from E9
                 print("pxmega: %s" % e)
             time.sleep(tail)
@@ -120,13 +168,23 @@ def main():
                              if px == prev[0] else ""))
             prev[0] = px
 
-        step(SAMPLES[0], lambda: box.dbl(165, 123))
+        def opened(s):
+            return lambda: (px.rec()["HAVE"] == 1 and px.name() == s
+                            and px.byte("px_busy") == 0)
+
+        def turned():
+            r = px.rec()
+            want = (r["MH"], r["MW"])
+            return lambda: (px.idle() and
+                            (lambda q: (q["MW"], q["MH"]) == want)(px.rec()))
+
+        step(SAMPLES[0], lambda: box.dbl(165, 123), opened(SAMPLES[0]))
         for s in SAMPLES[1:]:
-            step(s, lambda: os88bochs.xd("key", "space"))
-        step("Rotate (clockwise)", lambda: (os88bochs.xd("key", "r"),
+            step(s, lambda: box.xd("key", "space"), opened(s))
+        step("Rotate (clockwise)", lambda: (box.xd("key", "r"),
                                             box.goto(240, 250),
-                                            os88bochs.xd("click", 1)))
-        step("Rotate (anticlockwise)", lambda: os88bochs.xd("click", 3),
+                                            box.xd("click", 1)), turned())
+        step("Rotate (anticlockwise)", lambda: box.xd("click", 3), turned(),
              tail=QUIET / 4)
     finally:
         box.stop()

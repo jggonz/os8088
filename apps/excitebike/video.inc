@@ -477,14 +477,14 @@ xb_partget:
     xor cx, cx                      ; THE DMA DOOR WITH NO HEAD: the plain claim
     call OSAPI_MEM_CLAIM_DMA        ; on every kernel, and CONVENTIONAL on
                                     ; kern_mega for this OS88_HIGHMEM package -
-                                    ; [op_rdseg] and the stream's segment below
-                                    ; are paragraphs added to this base, which a
-                                    ; selector above 1MB cannot take (op_fetch's
-                                    ; door, os88partsbody.inc). DX = the base
+                                    ; op_fetch's door (os88partsbody.inc), whose
+                                    ; windows reach it there. DX = the base
     pop ax
     jc .nomem
-    add ax, dx
-    mov [op_rdseg], ax              ; the read lands R up the claim
+    push word [op_base]             ; op_read lands [op_rdseg] PARAGRAPHS up
+    mov [op_base], dx               ; [op_base] (os88partsbody.inc), so the
+    mov [op_rdseg], ax              ; standard's base is lent this claim and
+    push ax                         ; the read lands R up it
     push si
     push bx
     push dx
@@ -492,10 +492,16 @@ xb_partget:
     pop dx
     pop bx
     pop si
+    pop ax                          ; (AX = R; neither pop touches CF)
+    pop word [op_base]
     jc .free
     mov cl, 4
     shr bx, cl
-    add bx, [op_rdseg]              ; BX = the stream's own segment
+    add ax, bx                      ; the stream: the slack + R up the claim,
+    push dx                         ; through one of the standard's windows -
+    call op_ata                     ; a sum on every real-mode kernel, a
+    pop dx                          ; window on kern_mega (MC7)
+    xchg ax, bx                     ; BX = the stream's own segment
     push si
     push dx
     mov cx, [si+OP_R_ZKB]           ; CX = the packed length

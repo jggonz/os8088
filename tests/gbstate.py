@@ -84,18 +84,24 @@ def package(fails):
     disk = os.path.join(tmp, "apps.img")
     subprocess.check_call([sys.executable, os.path.join(ROOT, "tools/os88disk.py"), "-o", disk,
                            "--size", "720", "--folder", "SYSTEM/APPDATA",
-                           os.path.join(ROOT, "build", "realdmg.o88"), rom],
+                           os.path.join(PKGDIR, "realdmg.o88"), rom],
                           stdout=subprocess.DEVNULL)
-    viewoff = gbwindow.label_off(os.path.join(ROOT, "build", "realdmg.lst"), "rdg_viewseg")
+    viewoff = gbwindow.label_off(os.path.join(PKGDIR, "realdmg.lst"), "rdg_viewseg")
     with os88ui.boot(SYS, apps=disk, machine=MACHINE) as ui:
         m = ui.m
         ui.path("B:/CLOCK0.GB")
         seg = view = None
         for _ in range(60):
             M.guest_sleep(m, 2)
+            if MEGA and not seg:        # (tests/gbsave.py's port)
+                import dispapps
+                got = dispapps.pkg_seg(m, 0)
+                seg = got and got[1]
             seg = seg or gbwindow.find_seg(m, b"REALDMG", viewoff)
             if seg:
-                view = int.from_bytes(m.read(seg * 16 + viewoff, 2), "little")
+                view = int.from_bytes(m.read(
+                    m.lin(seg, viewoff) if MEGA else seg * 16 + viewoff, 2),
+                    "little")
             if view and gbwindow.frames(m, view) >= 30:
                 break
         else:
@@ -151,6 +157,15 @@ def package(fails):
         M.guest_sleep(m, 1)
         m.key("Escape", down=False)
         M.guest_sleep(m, 3)
+
+
+# kern_mega (OS88_MEGA, tests/megaport.txt): the SHIPPED RealDMG refuses
+# there (REALDMG-SPEC 10.3.4), so the package half runs the ARM out of
+# build/megak/apps - and its package and its view are LDT SELECTORS, found
+# through the window record (tests/gbsave.py's port)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+PKGDIR = os.path.join(ROOT, "build", "megak", "apps") if MEGA \
+    else os.path.join(ROOT, "build")
 
 
 def main():

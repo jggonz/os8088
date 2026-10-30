@@ -78,14 +78,15 @@ ph_more:
     mov [px_k + PXK_HBASE], ax
     mov [px_k + PXK_HBASE + 2], dx
     push ax                         ; the head: the in-memory file at the
-    push dx                         ; marker's paragraph
-    mov cl, 4
+    push dx                         ; marker's paragraph, a SEG_SUB there
+    mov cl, 4                       ; (MC7: the sum on a real-mode kernel)
     shr ax, cl
     mov cl, 12
     shl dx, cl
     or ax, dx
-    add ax, [px_flatseg]
-    mov [px_k + PXK_HSEG], ax
+    mov dx, [px_flatseg]
+    PXSUB
+    mov [px_k + PXK_HSEG], dx
     pop dx
     pop ax
     mov cx, [px_flatlen]            ; its bytes from there: to the file's

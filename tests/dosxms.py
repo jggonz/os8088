@@ -75,14 +75,25 @@ def main():
             if len(t) >= 2 and t[0] in ("XMS4300", "MUX1600"):
                 got[t[0]] = t[1]
 
-        if got.get("XMS4300") == "80":
+        if got.get("XMS4300") is None:
+            fail("the program never printed its AX=4300h answer")
+        if getattr(m, "bochs", False):
+            # **kern_mega INVERTS IT**: the program runs on a kern_dos trip
+            # on a 16MB machine, and kern_dos's XMS arena is real (SPEC.md
+            # 96.15.4, kdx_init) - so 'no driver' here would be the door
+            # left shut on the one machine that has a store behind it
+            if got.get("XMS4300") != "80":
+                fail("int 2Fh AX=4300h answered %s and not 80h under "
+                     "kern_mega's kern_dos, whose XMS arena is real (SPEC.md "
+                     "96.15.4)" % got.get("XMS4300"))
+            print("dosxms: AX=4300h -> AL=80, a driver - kern_mega's arena")
+        elif got.get("XMS4300") == "80":
             fail("int 2Fh AX=4300h answered 80h on a machine with NO extended "
                  "memory - a program told yes here has committed to XMS by "
                  "the time the first call refuses (SPEC.md 96.15.1)")
-        if got.get("XMS4300") is None:
-            fail("the program never printed its AX=4300h answer")
-        print("dosxms: AX=4300h -> AL=%s, which is 'no driver'"
-              % got["XMS4300"])
+        else:
+            print("dosxms: AX=4300h -> AL=%s, which is 'no driver'"
+                  % got["XMS4300"])
 
         if got.get("MUX1600") != "00":
             fail("an unrelated multiplex number answered AL=%s, not 00 - "

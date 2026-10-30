@@ -100,14 +100,16 @@ em_attach:
     mov word [em_bases], 0x264  ; 264h's, asked twice. CF=1 = none loaded
 .any:
     mov bx, 0x4000
-    mov ax, 0xF000
-    mov es, ax
+    mov word [em_frame], 0xF000
 .frame:                         ; the frames E000h, D000h, C000h in that order
-    mov ax, es
+    mov ax, [em_frame]
     sub ah, 0x10
     cmp ah, 0xC0
     jb em_none
-    mov es, ax
+    mov [em_frame], ax          ; [em_frame] the PARAGRAPH, and ES a window
+    call em_fsel                ; over it: under kern_mega a paragraph is no
+    jc em_none                  ; selector (KERN-MEGA-MEMORY-PLAN MC7), and
+    mov es, dx                  ; with no window to give there is no board
     xor di, di                  ; AN OPTION ROM anywhere in the frame (the
 .rom:                           ; BIOS's own scan, a 2 KB step): somebody
     cmp word [es:di], EM_ROMSIG ; else's, and NO PORT is written for it
@@ -178,7 +180,6 @@ em_attach:
     cmp cx, EM_MINPG
     jb .base
     mov [em_port], dx
-    mov [em_frame], es
     mov [em_npg], cx
     xor ax, ax                  ; pages 0..3 into the four quarters, so the
 .map:                           ; frame reads as the board and nothing else
@@ -232,7 +233,8 @@ em_ident:
     mov ax, 'EM'
     ret
 
-; CAPS: AX = pages free, CX = the board's, DX = the frame, SI = free quarters
+; CAPS: AX = pages free, CX = the board's, DX = the frame, SI = free quarters;
+; CF = 1 AX = EMSE_BUSY when kern_mega has no window over the frame to give
 em_caps:
     mov cx, [em_npg]
     mov ax, cx
@@ -242,7 +244,8 @@ em_caps:
     dec di
     dec di
     jns .c
-    mov dx, [em_frame]
+    call em_fsel                ; DX = the frame, as a segment
+    jc .no                      ; (kern_mega: no window over it to give)
     xor si, si                  ; the free quarters, bit q for quarter q
     mov di, 3
 .q:
@@ -251,6 +254,10 @@ em_caps:
     dec di
     jns .q
     ret                         ; CF = 0: the bit `rcl` last shifted out of SI
+.no:
+    mov ax, EMSE_BUSY           ; (FRAME's answer to it: SPEC.md 107.3)
+    stc
+    ret
 
 ; FREE: AX = a handle of yours
 em_free:
@@ -392,8 +399,13 @@ em_map:
 em_gone:
     mov di, es
     cmp di, KERNEL_SEG
-    jne em_bad                  ; a package cannot send it: its calls arrive
-    xor al, EM_SLOTX            ; with its own segment in ES
+    ja  em_bad                  ; a package cannot send it: its calls arrive
+                                ; with its own segment in ES. AT OR BELOW 60h
+                                ; and not EQUAL: kern_mega's kernel sends it
+                                ; with ES = MEGA_SEL_KDATA (10h), its data
+                                ; alias in protected mode (KERN-MEGA-PLAN
+                                ; 14.85, ETHER.DRV's NETV_GONE the same)
+    xor al, EM_SLOTX
     mov bh, al                  ; (em_pkg puts DRVC_EMS back)
     mov di, 2 * EMS_NHND - 2
 .h:
@@ -421,8 +433,9 @@ em_unfr:
     jnz .u
     ret
 
-; FRAME: AL = quarters -> all of them the caller's, or none (EMSE_BUSY).
-; out DX = the frame, CX = quarter 0's register, SI = the step, AL = 0
+; FRAME: AL = quarters -> all of them the caller's, or none (EMSE_BUSY, which
+; is also kern_mega with no window over the frame to give). out DX = the
+; frame, CX = quarter 0's register, SI = the step, AL = 0
 em_fr:
     and al, 0x0F
     jz em_bad
@@ -439,8 +452,10 @@ em_fr:
     jns .chk
     test cl, al                 ; (CL's top half is whatever it held: AL has
     jnz .busy                   ; no bits there)
-    mov ah, al                  ; ...so take them all
-    mov di, em_qown - 1
+    call em_fsel                ; DX = the frame, as a segment - FIRST, so
+    jc .busy                    ; a frame kern_mega has no window for (its
+    mov ah, al                  ; table full) takes no quarter. Else take
+    mov di, em_qown - 1         ; them all
 .t:
     inc di
     shr ah, 1                   ; CF = this quarter, ZF = none after it
@@ -448,7 +463,6 @@ em_fr:
     mov [di], bh
 .n:
     jnz .t
-    mov dx, [em_frame]
     mov cx, [em_port]
     mov si, 1                   ; the CONSECUTIVE family: base + q
     xor ax, ax                  ; ...and a page's value is its number. CF = 0
@@ -480,7 +494,33 @@ em_svc_end  equ em_door + 2     ; (OS88_DRIVER's +15 table length: DSV_SIZE)
 ; =============================================================================
     OS88_STATE
 em_port:    dw 0                ; quarter 0's register
-em_frame:   dw 0                ; the frame's segment
+em_frame:   dw 0                ; the frame's PARAGRAPH
+em_fwin:    dw 0                ; ...and em_fsel's window over it
+
+; em_fsel - DX = the frame as a segment: a 64KB window over [em_frame]'s
+; paragraph, re-aimed each time it is asked (OSAPI_SEG's SEG_WIN) - under
+; kern_mega a paragraph past the kernel's own is no selector, and a driver
+; attached at boot has run in real mode before the switch, so it is asked
+; for at the moment it is handed out (KERN-MEGA-MEMORY-PLAN MC7). Every
+; real-mode kernel answers the paragraph itself, CF = 0; CF = 1 kern_mega
+; had no window to give (its table full) and [em_fwin] is as it was. Every
+; other register kept
+em_fsel:
+    push ax
+    push bx
+    push cx
+    mov dx, [em_frame]
+    mov ax, [em_fwin]           ; the window to re-aim, 0 = a new one
+    xor cx, cx
+    mov bl, SEG_WIN
+    call OSAPI_SEG
+    jc .no                      ; (the pops keep CF)
+    mov [em_fwin], dx
+.no:
+    pop cx
+    pop bx
+    pop ax
+    ret
 em_npg:     dw 0                ; the board's pages
 em_qown:    times 4 db 0        ; per quarter: its holder (XOR EM_SLOTX), 0 =
                                 ; nobody

@@ -99,10 +99,16 @@ def leg_callback():
         m.write(pen, POKE)
         m.bp_exec()
         at = None
+        # kern_mega: W_SEG is the region's DATA selector and the package
+        # runs through a CODE alias of it, so "its segment" is the same
+        # linear base (os88megabochs's m.lin reads either)
+        here = (lambda cs: m.lin(cs)) if getattr(m, "bochs", False) \
+            else (lambda cs: cs)
+        want = here(pseg)
         for _ in range(400):                    # step to the package's own
             m.step(1)                           # dispatcher: the first
             st = m.status()                     # instruction in its segment
-            if st["cs"] == pseg:
+            if here(st["cs"]) == want:
                 at = (st["cs"], st["ip"])
                 break
         got = m.read(pen, 2).hex()

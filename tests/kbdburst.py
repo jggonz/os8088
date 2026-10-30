@@ -95,8 +95,18 @@ with os88ui.boot(SYS, apps=APPS, machine=MACHINE,
 
     def burst(n, frames):
         m.bp_exec("sch_stkdie")
-        for _ in range(n):
-            m.key("Backspace")
+        if getattr(m, "bochs", False):
+            # kern_mega under Bochs (tests/megaport.txt): one xdotool call
+            # per key is ~25 keys a second, a typist and not a burst - so
+            # the whole burst goes in ONE X batch 3 ms a key, a make and a
+            # break at about patch 14's one byte a millisecond, through
+            # kern_mega's REFLECTED int 09h. Not 0 ms: Bochs's own 8042
+            # buffer is 16 bytes and a zero-delay batch overflows it
+            # before the guest sees a byte (10 keys deleted 8)
+            m.box.xd("key", "--delay", 1, *(["BackSpace"] * n))
+        else:
+            for _ in range(n):
+                m.key("Backspace")
         m.advance(frames=frames)
         stopped = dead()
         m.bp_exec()
@@ -124,6 +134,15 @@ with os88ui.boot(SYS, apps=APPS, machine=MACHINE,
              "keyboard can send them (patch 14?)" if died else "survived",
              head, tail, n1 - n2))
 
+    if not died and n2 == 0 and getattr(m, "bochs", False):
+        # kern_mega keeps up with the whole burst (a 386-class Bochs redraws
+        # faster than the keys come), so the specimen is EMPTY here and a
+        # Backspace would delete nothing either way: one typed character
+        # first, so that C still asks whether the machine answers
+        m.key("KeyA")
+        m.advance(frames=FRAMES)
+        m.run()
+        n2 = textlen()
     if not died:
         m.key("Backspace")
         m.advance(frames=FRAMES)

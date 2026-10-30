@@ -1949,6 +1949,25 @@ same_n:  dw 0
 ; =============================================================================
 ; THE ROUTINE UNDER TEST - THE SHIPPING TEXT
 ; =============================================================================
+; OSAPI_SEG's REAL-MODE answer, the harness having no kernel: SEG_LIN is
+; DX x 16 and SEG_WIN the paragraph itself (a2cpu.inc's a2_rbset)
+SEG_LIN equ 0
+SEG_WIN equ 2
+%define OSAPI_SEG hst_seg
+hst_seg:
+    cmp bl, SEG_LIN
+    jne .out
+    push cx
+    mov ax, dx
+    mov cl, 4
+    shl ax, cl
+    mov cl, 12
+    shr dx, cl
+    pop cx
+.out:
+    clc
+    ret
+
 %include "a2cpu.inc"
 
 section .text

@@ -41,6 +41,9 @@ for i, a in enumerate(sys.argv):
         MACHINE = sys.argv[i + 1]
 
 INST_MAX, MEM_MAX, CLS_RECSZ = 12, 32, 6    # apps/os88api.inc
+XMW_SIZE = 6                                # ...and OSAPI_XMEM_WALK's record
+XMW_LSIZE = 8                               # ...LONG, as the kern_mega arm asks
+                                            # (BX = XMW_LONG, KERN-MEGA-PLAN 14.92)
 TMG_PURGE = INST_MAX + 2                    # apps/taskmgr/taskmgr.asm
 TITLE_H = 18
 fails = []
@@ -63,7 +66,19 @@ with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
     if got is None:
         sys.exit("the Task Manager did not open - %r" % ui.titles())
     slot, seg = got
-    base = (seg << 4) + dispapps.img_size("taskmgr")
+    mega = getattr(m, "bochs", False)
+    # (on kern_mega the region is an LDT selector: its base out of the LDT)
+    base = (m.lin(seg) if mega else seg << 4) + dispapps.img_size("taskmgr")
+
+    def key(v):
+        """A claim's word as the claim map keys it: on kern_mega
+        (KERN-MEGA-MEMORY-PLAN MC7.4) a raise cache is NAMED by its selector
+        (wm_su_segs) while the claim snapshot carries the block's paragraph,
+        so the two meet at the paragraph under the selector"""
+        if mega and v and 0x100 <= v < 0xA000 and v & 4:
+            b = m.selector(v)
+            return b[0] >> 4 if b else v
+        return v
 
     def tmw(name, n=2):
         return int.from_bytes(m.read(base + dispapps.bss_off("taskmgr", name),
@@ -103,10 +118,28 @@ with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
                               MEM_MAX * CLS_RECSZ)
                 gid = m.read(base + dispapps.bss_off("taskmgr", "tm_cgid"),
                              MEM_MAX)
+                if mega and key(cache) >= 0x10000:
+                    # ...ABOVE 1MB: on a kern_mega machine with a pool the
+                    # cache is a pool block, which the page walks into tm_xw
+                    # (OSAPI_XMEM_WALK, XMW_OFF its KB from the pool's base)
+                    # and files in tm_xgid, its classification beside tm_cgid
+                    xn = tmw("tm_xwn")
+                    xw = m.read(base + dispapps.bss_off("taskmgr", "tm_xw"),
+                                xn * XMW_LSIZE)
+                    xg = m.read(base + dispapps.bss_off("taskmgr", "tm_xgid"),
+                                xn)
             finally:
                 m.run()
+            if mega and key(cache) >= 0x10000:
+                kb = ((key(cache) << 4) - 0x100000) >> 10
+                for r in range(xn):
+                    if xw[r * XMW_LSIZE] | (xw[r * XMW_LSIZE + 1] << 8) == kb:
+                        box["gid"] = xg[r]
+                        return True
+                return False
             for r in range(MEM_MAX):
-                if snap[r * CLS_RECSZ] | (snap[r * CLS_RECSZ + 1] << 8) == cache:
+                if key(snap[r * CLS_RECSZ] | (snap[r * CLS_RECSZ + 1] << 8)) \
+                        == key(cache):
                     box["gid"] = gid[r]
                     return True
             return False

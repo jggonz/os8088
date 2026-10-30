@@ -104,7 +104,7 @@ class Dos(object):
 
     @property
     def base(self):
-        return self.seg << 4
+        return dosmap.lin(self.m, self.seg)
 
     def w(self, name):
         return int.from_bytes(self.m.read(self.base + self.dm[name], 2),
@@ -334,7 +334,35 @@ def main():
         # Typed `PRINCE`, DOS answered `Bad command or file name` for a
         # folder holding PRINCE.EXE: it took the word as a whole file name,
         # where COMMAND.COM treats a name with no extension as a SEARCH.
-        bx.type("%s\n" % BARE)
+        trip = getattr(m, "bochs", False)
+        if trip:
+            # **ON kern_mega THE PROGRAM IS A TRIP** (KERN-MEGA-PLAN 14.77,
+            # 14.106): the kernel is parked above 1MB and kern_dos runs it in
+            # real mode, so `settle` cannot be the wait - the text cursor
+            # blinks for the whole run - and [dos_inbr] is never set; the
+            # witness is CR0.PE, off for the trip and back with the kernel.
+            # It is driven to its end HERE, because the package's bss is not
+            # where a read of it looks until the wake.
+            m.type_text("%s\n" % BARE)
+            os88marty.until(m, lambda _=None: not m.protected(),
+                            "%s to be running" % BARE, limit=120.0)
+            if not waited(m, lambda: any("READY" in r
+                                         for r in (m.screen() or [])),
+                          "READY", 30):
+                fail("%s.COM never reached its READY prompt on the trip"
+                     % BARE)
+            scr = [r for r in (m.screen() or []) if r.strip()]
+            if not any(r.startswith("Starting ") for r in scr):
+                fail("kern_dos did not SEED the console onto the program's "
+                     "screen (kd_snseed, SPEC.md 96.34.6): no `Starting` "
+                     "line above its output: %r" % scr[:6])
+            m.type_text("x")                 # ...which is how it exits, 042
+            os88marty.until(m, lambda _=None: m.protected(),
+                            "%s to exit" % BARE, limit=120.0)
+            os88marty.ui_done(m)
+            os88marty.settle(m)
+        else:
+            bx.type("%s\n" % BARE)
         # **AND DOS IS FULLY QUALIFIED** since SPEC.md 96.33.10: it held
         # the name as typed, which is only true while DOS is still
         # standing where it was typed - one CD and it names a different file.
@@ -363,14 +391,18 @@ def main():
         # (SPEC.md 96.34). With it removed the band still holds the prompt's
         # own history and not one of these lines, which is what makes this a
         # test rather than a description.
-        if not waited(m, lambda: any("READY" in r for r in (m.screen() or [])),
-                      "READY", 30):
-            fail("%s.COM never reached its READY prompt inside the bracket"
-                 % BARE)
-        m.type_text("x")                     # ...which is how it exits, 042
-        if not waited(m, lambda: not bx.b("dos_inbr"), "the bracket down", 48):
-            fail("the bracket never came down after %s.COM took a key" % BARE)
-        os88marty.settle(m)
+        if not trip:
+            if not waited(m, lambda: any("READY" in r
+                                         for r in (m.screen() or [])),
+                          "READY", 30):
+                fail("%s.COM never reached its READY prompt inside the "
+                     "bracket" % BARE)
+            m.type_text("x")                 # ...which is how it exits, 042
+            if not waited(m, lambda: not bx.b("dos_inbr"), "the bracket down",
+                          48):
+                fail("the bracket never came down after %s.COM took a key"
+                     % BARE)
+            os88marty.settle(m)
         rows = bx.live()
         for want in ("os8088 DOS gate", "Memory to top of block",
                      "READY - press a key"):
@@ -391,6 +423,15 @@ def main():
             fail("the exit line is at row %d and the program's first row at "
                  "%d - the cursor did not come across (SPEC.md 96.34.3)"
                  % (ended[0], prog[0]))
+        # ...and on the trip the console was SEEDED onto the program's screen
+        # (kd_snseed), so the capture brings the launch line home above the
+        # program's output, as the windowed bracket's seed does (96.34.4)
+        start = [i for i, r in enumerate(bx.rows()) if r.startswith("Starting ")]
+        if trip and prog and not (start and start[-1] < prog[0]):
+            fail("the `Starting` line is not above the program's output in "
+                 "the band (rows %r, the program at %d) - the trip's seed and "
+                 "capture are one round trip (SPEC.md 96.34.6)"
+                 % (start, prog[0]))
         print("doscon: ...and its last screen is in the band, %d rows of it, "
               "with DOS's exit line under it" % len(rows))
 
@@ -457,19 +498,26 @@ def main():
         # cell IS the cell in VRAM, so the renderer is a move and not a
         # translation (70.8.7). A screenshot could not tell that from a
         # translation that happened to work.
+        def vbase():
+            # ...on kern_mega [con_tseg] is FSI_SEG's SELECTOR over the text
+            # page, so its base is the descriptor's (dosmap.lin); in real mode
+            # it is the paragraph
+            sg = bx.w("con_tseg")
+            return dosmap.lin(m, sg) if trip else (sg & 0xF800) << 4
+
         ui.menu_pick("Program", "Full Screen")
         if waited(m, lambda: bx.b("dos_fsxup"), "[dos_fsxup]", 10):
             # ...and then the move into VRAM finished, which is what is read
             os88marty.quiesce(m, lambda: (bx.w("con_tseg"), m.read(
-                (bx.w("con_tseg") & 0xF800) << 4, 80 * 25 * 2)),
+                vbase(), 80 * 25 * 2)),
                 guest=0.5, what="the full screen's text VRAM")
         if not bx.b("dos_fsxup"):
             fail("Program > Full Screen did not take the screen: [dos_fsxup] "
                  "is 0 (SPEC.md 96.33.5)")
-        seg = bx.w("con_tseg")
+        seg = vbase() >> 4
         if seg not in (0xB000, 0xB800):
-            fail("the bracket's framebuffer segment is %04X, and FSXM_TEXT80 "
-                 "is B000 on Hercules and B800 on the rest" % seg)
+            fail("the bracket's framebuffer is at %05X, and FSXM_TEXT80 "
+                 "is B000 on Hercules and B800 on the rest" % (seg << 4))
         # **CELL FOR CELL, all 2,000 of them** - which is a far stronger claim
         # than "every line is present somewhere", and the one 70.8.7 actually
         # makes. The ATTRIBUTE byte is deliberately not compared: on a mono
@@ -523,52 +571,82 @@ def main():
         m.type_text("%s:\n" % other)                   # DOSHELLO.COM is there
         os88marty.pace(m, 1.0)
         m.type_text("%s\n" % BARE)
-        if not waited(m, lambda: bx.b("dos_inbr"), "[dos_inbr]", 20):
-            fail("%s never started from the FULL SCREEN console: state=%d, "
-                 "[dos_inbr]=0. The wake dos_con_prog posts cannot be "
-                 "dispatched while the UI task is inside the bracket, so the "
-                 "bracket has to come down first (SPEC.md 96.33.16)"
-                 % (BARE, bx.b("dos_state")))
-        if bx.b("dos_fsxup"):
-            fail("the console's bracket is STILL up with the program's own "
-                 "bracket inside it - they are two brackets and the first "
-                 "ends before the second starts (SPEC.md 96.33.16)")
-        if not waited(m, lambda: any("READY" in r for r in (m.screen() or [])),
-                      "READY", 30):
-            fail("%s.COM never reached READY inside its own bracket, launched "
-                 "from the full screen" % BARE)
-        m.type_text("x")
-        # **ONE LOOP FOR BOTH, and the exit line is POLLED rather than read
-        # once.** The flags flip when the bracket is back up; DOS's exit
-        # line is written after that, so a single read the instant they flip
-        # is a race - and it is a race that only loses UNDER LOAD, which is
-        # the worst shape a gate can have: docs/plans/SOAK-PARALLEL.md §1
-        # measures a contended guest doing up to 37% less work per host
-        # second, so this failed at --marty-jobs 3 and passed alone, looking
-        # exactly like the feature being broken. The two diagnoses stay
-        # separate because they are different defects.
-        st = {"back": False, "seen": False}
+        if trip:
+            # THE TRIP AGAIN (above): the program's own bracket is a kern_dos
+            # trip, CR0.PE is the witness, and the console's bracket coming
+            # back is DOS.O88's wake re-entering it (KERN-MEGA-PLAN 14.106)
+            os88marty.until(m, lambda _=None: not m.protected(),
+                            "%s to be running" % BARE, limit=120.0)
+            if not waited(m, lambda: any("READY" in r
+                                         for r in (m.screen() or [])),
+                          "READY", 30):
+                fail("%s.COM never reached READY on its trip, launched from "
+                     "the full screen" % BARE)
+            m.type_text("x")
+            os88marty.until(m, lambda _=None: m.protected(),
+                            "%s to exit" % BARE, limit=120.0)
+            def _back():
+                try:                # the stub is back in protected mode a
+                    return bx.b("dos_fsxup") and any(   # moment before the
+                        "exit code 042" in r            # session is restored
+                        for r in (m.screen() or []))
+                except Exception:
+                    return False
+            if not waited(m, _back, "the full screen back with the exit line",
+                          60):
+                fail("the full-screen console did not come back after the "
+                     "trip with DOS's exit line on it: [dos_fsxup]=%d, %r"
+                     % (bx.b("dos_fsxup"),
+                        [r for r in (m.screen() or []) if r.strip()][-4:]))
+            print("doscon: ...and a program typed at the full screen runs on "
+                  "its trip and hands the screen back")
+        else:
+            if not waited(m, lambda: bx.b("dos_inbr"), "[dos_inbr]", 20):
+                fail("%s never started from the FULL SCREEN console: state=%d, "
+                     "[dos_inbr]=0. The wake dos_con_prog posts cannot be "
+                     "dispatched while the UI task is inside the bracket, so the "
+                     "bracket has to come down first (SPEC.md 96.33.16)"
+                     % (BARE, bx.b("dos_state")))
+            if bx.b("dos_fsxup"):
+                fail("the console's bracket is STILL up with the program's own "
+                     "bracket inside it - they are two brackets and the first "
+                     "ends before the second starts (SPEC.md 96.33.16)")
+            if not waited(m, lambda: any("READY" in r for r in (m.screen() or [])),
+                          "READY", 30):
+                fail("%s.COM never reached READY inside its own bracket, launched "
+                     "from the full screen" % BARE)
+            m.type_text("x")
+            # **ONE LOOP FOR BOTH, and the exit line is POLLED rather than read
+            # once.** The flags flip when the bracket is back up; DOS's exit
+            # line is written after that, so a single read the instant they flip
+            # is a race - and it is a race that only loses UNDER LOAD, which is
+            # the worst shape a gate can have: docs/plans/SOAK-PARALLEL.md §1
+            # measures a contended guest doing up to 37% less work per host
+            # second, so this failed at --marty-jobs 3 and passed alone, looking
+            # exactly like the feature being broken. The two diagnoses stay
+            # separate because they are different defects.
+            st = {"back": False, "seen": False}
 
-        def _home():
-            if not st["back"] and not bx.b("dos_inbr") and bx.b("dos_fsxup"):
-                st["back"] = True
-            if st["back"] and any("exit code 042" in r
-                                  for r in (m.screen() or [])):
-                st["seen"] = True
-            return st["seen"]
-        waited(m, _home, "the exit line on the full screen", 20)
-        back, seen = st["back"], st["seen"]
-        if not back:
-            fail("the full-screen console did not come back after %s.COM: "
-                 "[dos_fsxup]=%d [dos_inbr]=%d. dos_run's exit re-enters it "
-                 "(SPEC.md 96.33.16)"
-                 % (BARE, bx.b("dos_fsxup"), bx.b("dos_inbr")))
-        rows = [r for r in (m.screen() or []) if r.strip()]
-        if not seen:
-            fail("DOS's exit line is not on the full screen it came back "
-                 "to: %r" % rows[-4:])
-        print("doscon: ...and a program typed at the full screen runs in its "
-              "OWN bracket and hands the screen back")
+            def _home():
+                if not st["back"] and not bx.b("dos_inbr") and bx.b("dos_fsxup"):
+                    st["back"] = True
+                if st["back"] and any("exit code 042" in r
+                                      for r in (m.screen() or [])):
+                    st["seen"] = True
+                return st["seen"]
+            waited(m, _home, "the exit line on the full screen", 20)
+            back, seen = st["back"], st["seen"]
+            if not back:
+                fail("the full-screen console did not come back after %s.COM: "
+                     "[dos_fsxup]=%d [dos_inbr]=%d. dos_run's exit re-enters it "
+                     "(SPEC.md 96.33.16)"
+                     % (BARE, bx.b("dos_fsxup"), bx.b("dos_inbr")))
+            rows = [r for r in (m.screen() or []) if r.strip()]
+            if not seen:
+                fail("DOS's exit line is not on the full screen it came back "
+                     "to: %r" % rows[-4:])
+            print("doscon: ...and a program typed at the full screen runs in its "
+                  "OWN bracket and hands the screen back")
 
         m.key("Escape")
         waited(m, lambda: not bx.b("dos_fsxup"), "[dos_fsxup] clear", 10)

@@ -246,6 +246,14 @@ vx_boot_x:
     mov al, VXV_INIT
     call COLD_SEG:drvf_drv_call ; the driver banks the block and fills row 4
     jc .refuse
+%ifdef KERN_MEGA
+    mov bx, vesa_row            ; kern_mega switches into protected mode at
+    mov bp, [bx+DRVR_ENT]       ; the end of kmain, and mega_vxpm hands the
+    xor dx, dx                  ; image its selectors there (KERN-MEGA-PLAN
+    mov al, VXV_PM              ; 14.115): an image that cannot take them
+    call COLD_SEG:drvf_drv_call ; refuses this QUESTION, here, while the
+    jc .refuse                  ; desktop is still the VGA's
+%endif
     or byte [vid_avail], VID_A_VESA
     mov al, VID_VESA
     BLOBCALL bvs_switch         ; the blob's own vid_switch (KSW_SECT); the

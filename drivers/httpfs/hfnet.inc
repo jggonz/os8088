@@ -840,10 +840,22 @@ hf_run:
     ret
 
 ; hf_bnorm - [hf_bseg]:[hf_boff] with the offset under 128, in whole 128-byte
-; granules: cd_bnorm's rule and reason (kern_mega's identity selectors,
-; SPEC.md 119.3.4). clobbers: nothing
+; granules: cd_bnorm's rule and reason (SPEC.md 119.3.4). Not under
+; kern_mega's protected mode, where every buffer is a selector and a sum on
+; one names some other descriptor: its offset walks, the kernel having
+; handed it over with the read inside its 64KB (KERN-MEGA-MEMORY-PLAN MC7).
+;
+; THE MODE IS ASKED HERE, NOT BANKED AT ATTACH. A driver SYSTEM.CFG wants is
+; attached by drv_boot_x in REAL mode, before kern_mega's mega_enter, so a
+; CPU_F_PM banked then read 0 for the whole session: the index claim - an LDT
+; selector - was stepped by 8 per 128 bytes and the next `mov es` faulted
+; (KERN-MEGA-PLAN 14.87). OSAPI_CPU_INFO reads two bytes.
+; clobbers: nothing
 hf_bnorm:
     push ax
+    call OSAPI_CPU_INFO         ; AH = the flags NOW
+    test ah, CPU_F_PM
+    jnz .out
     push cx
     mov ax, [hf_boff]
     mov cl, 4
@@ -852,6 +864,7 @@ hf_bnorm:
     add [hf_bseg], ax
     and word [hf_boff], 127
     pop cx
+.out:
     pop ax
     ret
 

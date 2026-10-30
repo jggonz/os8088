@@ -49,6 +49,7 @@ import os88ui      # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88flush   # noqa: E402
 import os88stik    # noqa: E402
+import megafix     # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -88,7 +89,8 @@ def probe_image():
 def main():
     tmp = tempfile.mkdtemp(prefix="stikboot-")
     sysimg = os.path.join(tmp, "stikrestore360.img")
-    shutil.copy(os.path.join(BDIR, "stikrestore360.img"), sysimg)
+    shutil.copy(megafix.system_disk(os.path.join(BDIR, "stikrestore360.img")),
+                sysimg)
     fixture = open(os.path.join(BDIR, "stikfix", "restore", "system.cfg"),
                    "rb").read()
     fixdat = open(os.path.join(BDIR, "stikfix", "STIKPROB.DAT"), "rb").read()
@@ -109,7 +111,8 @@ def main():
         zb = m.read(ui._S("desk_zslot") + DESK_SC0, 1)[0]
         check(zb == 0xFF, "[desk_zslot] of its zone is 0xFF (%#x)" % zb)
         seg = ui._word("sc_seg")
-        row = bytes(m.read(seg << 4, os88stik.SC_REC)) if seg else bytes(128)
+        lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)  # kern_mega
+        row = bytes(m.read(lin(seg), os88stik.SC_REC)) if seg else bytes(128)
         r = os88stik.parse_row(row)
         check(r["stik"] and r["kind"] == 1 and r["path"]
               == "STIKAPPS\\STIKPROB.O88",

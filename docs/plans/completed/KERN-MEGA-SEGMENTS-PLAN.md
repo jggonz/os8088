@@ -1,6 +1,8 @@
 # KERN-MEGA-SEGMENTS-PLAN — a segment of kern_mega's own
 
-**Status: W0 to W4 ARE BUILT** (W0-W3 on 2026-10-20, branch
+**Status: COMPLETED (2026-10-26) - W0 to W4 ARE BUILT**; the one thing it still owes,
+section 8.6's Victory run, is in KERN-MEGA-PLAN's *Open before kern_mega goes
+live*. Was: (W0-W3 on 2026-10-20, branch
 `protected-mode-segments`, cut from `protected-mode` at `7c64410`; W3's rest
 and W4 on 2026-10-21, KERN-MEGA-PLAN 14.45, which is 8.7 here); section 8
 is what was built and measured, and what is still owed. The owner's answers

@@ -498,40 +498,50 @@ hd_raw:
     mov ax, es
     cmp ah, 0xF0                ; OUR OWN BUFFER, IN THE HMA (SPEC.md 2.10.8):
     jae .bounce                 ; hd_mbr is in this image, and hd_bios_run
-    test al, 4                  ; ...or ABOVE 1MB (kern_mega's selector pair,
-    jz .go                      ; KERN-MEGA-PLAN item 82: 2800h and up), where
-    cmp ax, 0x2800              ; a reflected int 13h is refused 09h
-    jae .bounce
+    test al, 4                  ; ...or ANY kern_mega selector pair (KERN-
+    jnz .bounce                 ; MEGA-MEMORY-PLAN MC7.4): above 1MB a
+                                ; reflected int 13h is refused 09h, and below
+                                ; it the image's paragraph is no longer what
+                                ; it is named by. A real-mode image is 512-
+                                ; aligned, so bit 2 is clear there
 .go:
     call hd_xfer                ; refuses it there. Every other caller's
     pop ax                      ; buffer is in the heap
     ret
-.bounce:                        ; ...so through a 1KB heap claim, which
-    push bx                     ; starts 512-aligned and so straddles no DMA
-    push cx                     ; page. ONE SECTOR, and the buffer is OURS (ES
-    push dx                     ; = DS): hd_mbr, the partition table, read or
-    push si                     ; written once
-    push di
-    push es
-    mov ax, 1
-    call OSAPI_MEM_CLAIM        ; out DX = its segment
-    jc .out
-    mov [hd_bseg], dx
-    mov si, bx
-    mov es, dx
+.bounce:                        ; ...so through a heap claim, which starts
+    push bx                     ; 512-aligned, so a run splits only on a
+    push cx                     ; sector boundary at a DMA page (hd_bios_run).
+    push dx                     ; THE BUFFER IS THE CALLER'S ES:BX AND CX
+    push si                     ; SECTORS OF IT - not ours, and not one: the
+    push di                     ; tool's HSV_RAW hands its own image (hd_mbr,
+    push es                     ; hd_sec0) and the installer's three-sector
+    mov ax, cx                  ; FAT chunk (hd_kfat_get) through here, and on
+    inc ax                      ; kern_mega every one of those is a selector.
+    shr ax, 1                   ; A copy through DS:BX read HDD.DRV's own
+    call OSAPI_MEM_CLAIM        ; image at the tool's offset - #GP 0 past its
+    jc .out                     ; limit, the installer's Next on kern_mega
+    mov [hd_bseg], dx           ; (KERN-MEGA-MEMORY-PLAN MC7, as built). AX =
+    xor ax, ax                  ; KB, two sectors a KB; out DX = its segment
+    mov [hd_bofs], ax           ; ...at the claim's offset 0
+    mov ch, cl                  ; CX = sectors x 256 words: a raw transfer is
+    mov cl, al                  ; one to three sectors, well under 256
+    push cx                     ; (kept for the way out)
     push di                     ; (the device row, which hd_xfer reads)
+    push ds
+    mov si, bx
+    push es
+    pop ds                      ; DS:SI = the caller's buffer
+    mov es, dx
     xor di, di
-    mov [hd_bofs], di           ; ...at the claim's offset 0
-    mov cx, 256
     rep movsw                   ; in - which a read then overwrites (DF = 0,
-                                ; the system's contract, SPEC.md 1 rule 3)...
+    pop ds                      ; the system's contract, SPEC.md 1 rule 3)...
     pop di
     call hd_xfer
+    pop cx
+    pop es                      ; the caller's ES, read back off the stack
+    push es                     ; and left there for .out (no flag moves)
     pushf
-    push ds
-    pop es
     mov di, bx
-    mov cx, 256
     push ds
     mov ds, dx
     xor si, si

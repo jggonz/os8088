@@ -221,15 +221,14 @@ ZEXEC_SLACK  equ 1684                         ; 84
                                     ; has slid the story by (SPEC.md 66.5.9).
                                     ; Only ever DIFFERENCED across one wait,
                                     ; so wrapping is not a case to handle
-%define zx_seglim  (os88_image_end + ZEXEC_SLACK + 80)  ; word: the last ES
-                                    ; zx_step accepts as the PC's - a SEGMENT
-                                    ; derived from the story's base, so
-                                    ; zf_reloc shifts it by the same delta as
-                                    ; [zf_pcseg]. It did not, and a story slid
-                                    ; UP by the descending pass left the PC's
-                                    ; legal top where the story used to end:
-                                    ; a routine in the moved top of the story
-                                    ; was then "the PC left the story image"
+%define zf_pglim   (os88_image_end + ZEXEC_SLACK + 80)  ; word: the PC's
+                                    ; last legal PAGE, x2 - the story's last
+                                    ; byte's 32KB page (zmem.inc, zf_stab).
+                                    ; An INDEX and not a segment: it was
+                                    ; zx_seglim, the last ES zx_step accepted,
+                                    ; and an order compare on a segment means
+                                    ; nothing once a segment is a selector
+                                    ; (KERN-MEGA-MEMORY-PLAN MC7)
 
 ; --- the tail: frotz.asm's, added after every block above was laid out -----
 %define zf_why     (os88_image_end + 1768)  ; word: the refusal the no-story
@@ -239,4 +238,17 @@ ZEXEC_SLACK  equ 1684                         ; 84
 %define zp_boff    (os88_image_end + 1770)  ; word: zp_find's block OFFSET
                                             ;   in [zp_bseg] (zpic.inc)
 
-ZF_BSS_TOTAL equ 1772
+; THE STORY'S PAGE TABLE (zmem.inc): one segment per 32KB of the claim, 16
+; of them for the Standard's 512KB. On kern_mega each is a SEG_SUB selector
+; (SPEC.md 50.6.11), and on every other kernel [zf_sseg] + 0x800 x k, which
+; is what SEG_SUB answers there. Pages past the claim hold [zf_sseg]: a read
+; at a nonsense address lands in the story rather than off its end.
+%define zf_stab    (os88_image_end + 1772)  ; 16 words
+%define zf_pcpg    (os88_image_end + 1804)  ; word: the PC's page, x2 - the
+                                            ;   authority zm_pcaddr reads, so
+                                            ;   [zf_pcseg] is [zf_stab+this]
+%define zp_win     (os88_image_end + 1806)  ; word: zp_place's SEG_AT window
+                                            ;   into the .PIX claim, 0 = none
+                                            ;   yet (zpic.inc)
+
+ZF_BSS_TOTAL equ 1808

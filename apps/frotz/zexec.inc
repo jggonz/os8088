@@ -78,9 +78,8 @@ ZX_STKBYTES equ ZI_STKKB * 1024
 %define zx_raw     (os88_image_end + ZEXEC_SLACK + 78)   ; byte: the opcode BYTE,
                                     ; and +79 is never written: zx_report reads
                                     ; the pair as a word
-                                    ; zx_seglim (+80, word: last valid ES)
-                                    ; is defined in zbss.inc: zf_reloc in
-                                    ; zio.inc shifts it, and zio comes first
+                                    ; zf_pglim (+80, word: the PC's last
+                                    ; legal page x2) is defined in zbss.inc
 
 ; --- call frame layout, in the [zf_stkseg] claim ------------------------------
 ; One frame, then its locals, then its evaluation stack. Standard 6.3.1/6.3.2:
@@ -106,7 +105,7 @@ ZXF_ARGC    equ 8                   ; word: arguments supplied (@check_arg_count
 ZXF_LOC     equ 10                  ; the locals start here
 
 ; --- private bss, out of ZEXEC_SLACK (84 bytes, all used: +76 is zf_sdelta, ---
-; --- +78/+80 zx_raw/zx_seglim above, +82 ZXTRACE's zxt_n) --------------------
+; --- +78/+80 zx_raw/zf_pglim above, +82 ZXTRACE's zxt_n) ---------------------
 %define zx_op       (os88_image_end + ZEXEC_SLACK + 0)   ; byte: opcode number
 %define zx_rsm      (os88_image_end + ZEXEC_SLACK + 1)   ; byte: ZXR_*, the wait
                                     ; a restart resumes (zx_restart), 0 = none
@@ -120,7 +119,7 @@ ZXF_LOC     equ 10                  ; the locals start here
 %define zx_tmp1     (os88_image_end + ZEXEC_SLACK + 16)  ;       owned, never
 %define zx_tmp2     (os88_image_end + ZEXEC_SLACK + 18)  ;       live across a
 %define zx_tmp3     (os88_image_end + ZEXEC_SLACK + 20)  ;       call out
-%define zx_sum      (os88_image_end + ZEXEC_SLACK + 22)  ; word: @verify total
+%define zx_vpg      (os88_image_end + ZEXEC_SLACK + 22)  ; word: @verify's page x2
 %define zx_encbuf   (os88_image_end + ZEXEC_SLACK + 24)  ; 40: @encode_text in
 %define zx_encout   (os88_image_end + ZEXEC_SLACK + 64)  ; 12: ...and out
 
@@ -266,20 +265,18 @@ zx_boot:
     mov [es:bx+ZXF_ARGC], ax
     pop es
 
-    ; The highest segment the PC may legally hold: base + (length >> 4). A word
-    ; may start at the last byte, so the limit is inclusive and generous by a
-    ; paragraph - this is a sanity net, not a bounds check on reads (zmem does
-    ; those).
+    ; The highest PAGE the PC may legally be in: the one holding the story's
+    ; last byte, x2 as [zf_pcpg] is. zm_norm refuses to step past it - a
+    ; sanity net, not a bounds check on reads (zmem does those). A page and
+    ; not a segment: on kern_mega a segment is a selector and has no order.
     mov ax, [zf_slen_l]
     mov dx, [zf_slen_h]
-    mov cl, 4
-    shr ax, cl
-    mov bx, dx
-    mov cl, 12
-    shl bx, cl
-    or ax, bx
-    add ax, [zf_sseg]
-    mov [zx_seglim], ax
+    sub ax, 1
+    sbb dx, 0
+    shl ax, 1
+    rcl dx, 1                       ; DX = (length - 1) >> 15
+    shl dx, 1
+    mov [zf_pglim], dx
 
     xor ax, ax
     mov [zf_fp], ax
@@ -472,14 +469,20 @@ zx_step:
     ; hundreds of instructions later somewhere unrelated. One compare catches
     ; it at the instruction after the one that did it, and the halt names that
     ; opcode. It cost about 20 bytes and it found two bugs.
+    ;
+    ; The PC is a PAGE and an offset (zmem.inc), so the test is that ES is
+    ; the PC's page's segment: an EQUALITY against the table, never an order
+    ; compare - on kern_mega ES is a selector, and selectors have no order.
+    ; A mover that sends the PC out of the story leaves [zf_pcseg] 0 (zx_jrel)
+    ; or refuses outright (zm_norm), and either lands here.
     mov ax, es
-    cmp ax, [zf_sseg]
-    jb zx_lost
-    cmp ax, [zx_seglim]
-    ja zx_lost
+    mov bx, [zf_pcpg]
+    cmp ax, [zf_stab + bx]
+    jne zx_lost
     cmp si, 0x8000
     jb .norm
     call zm_norm                    ; once per 32KB of straight-line code
+    jc zx_lost                      ; ...and walked off the story's end
 .norm:
     mov byte [zf_opn], 0
     mov byte [zf_store], 0xFF
@@ -1030,25 +1033,25 @@ zx_branch:
 ; in:  BX = the signed delta, ES:SI = the PC
 ; out: ES:SI moved; preserves all registers
 ;
-; SI is only ever in 0..0x8015 at this point (zx_step renormalises at 0x8000
-; and no instruction is longer than 21 bytes), and a branch offset is at most
-; +/-8191, so exactly one case needs a segment adjustment: a backwards move
-; that goes below zero. `add si, bx` with BX negative clears CF precisely when
-; that happened, and 0x1000 paragraphs is the 65536 bytes SI wrapped by.
+; SI is only ever in 0..0x8015 at this point (zx_step moves to the next page
+; at 0x8000 and no instruction is longer than 21 bytes), and a move is at most
+; +/-8191 for a branch and +/-32767 for @jump, so exactly one case needs the
+; page to change: a backwards move that goes below zero. `add si, bx` with BX
+; negative clears CF precisely when that happened.
 ;
-; THE WHOLE OFFSET IS THEN FOLDED BACK INTO THE SEGMENT, and that is not
-; tidiness. `sub es, 0x1000` alone leaves ES:SI addressing the right BYTE with
-; SI up near 0xFFFF and ES a full 64KB below where the story starts - a legal
-; alias of a legal address that nothing downstream accepts. zx_step's guard
-; compares ES against [zf_sseg] and calls it a lost PC; zm_pcaddr subtracts
-; [zf_sseg] and reports an address a megabyte out, so the return address a
-; @call banks is wrong and the matching @ret fails zm_inimg. It bit whenever
-; the PC was in the story's first 64KB and a backwards branch reached further
-; back than SI had walked - which is every loop whose body contains a call,
-; because @ret comes through zm_seek and zm_seek leaves SI in 0..15. That is
-; the halt docs/plans/completed/FROTZ-PLAN.md 10.1 describes: the guard was right that
-; something had gone wrong and wrong about what, because the PC in front of it
-; was correct and merely unnormalised.
+; THE PC MOVES BACK BY ITS PAGE INDEX, and that is not tidiness. A move that
+; leaves SI near 0xFFFF in a segment 64KB below the right one addresses the
+; right BYTE in real mode and nothing downstream accepts it: zx_step's guard
+; calls it a lost PC and zm_pcaddr reports an address a megabyte out, so the
+; return address a @call banks is wrong and the matching @ret fails zm_inimg.
+; It bit whenever a backwards branch reached further back than SI had walked -
+; which is every loop whose body contains a call, because @ret comes through
+; zm_seek. That is the halt docs/plans/completed/FROTZ-PLAN.md 10.1 describes:
+; the guard was right that something had gone wrong and wrong about what,
+; because the PC in front of it was correct and merely unnormalised. With the
+; PC a page and an offset (zmem.inc) the fold is one page back and SI less
+; 0x8000, and on kern_mega - where a segment is a selector and cannot be
+; offset at all - it is the only form there is (KERN-MEGA-MEMORY-PLAN MC7).
 ; -----------------------------------------------------------------------------
 zx_jrel:
     or bx, bx
@@ -1058,23 +1061,25 @@ zx_jrel:
 .neg:
     add si, bx
     jc .ok                          ; no borrow: SI stayed above zero
-    push ax
-    push cx
-    mov ax, si                      ; SI is now the true offset MINUS 0x10000,
-    mov cl, 7                       ; so its top 9 bits are GRANULES the
-    shr ax, cl                      ; segment is owed (zm_map's unit)
-    mov cl, 3
-    shl ax, cl
-    and si, 127
-    mov cx, es
-    sub cx, 0x1000                  ; ...less the 64KB SI wrapped by
-    add ax, cx
-    mov es, ax
-    mov [zf_pcseg], ax              ; a PC mover; see zm_seek in zmem.inc
+    ; SI is now the true offset PLUS 0x10000: in [0x10000 - 0x8000, 0xFFFF]
+    ; for any move this file makes (SI was under 0x8000 + an instruction, BX
+    ; is at least -0x8000), which is the PREVIOUS page at SI - 0x8000. One
+    ; page back, by index; never a sum on the segment.
+    sub si, 0x8000
+    push bx
+    mov bx, [zf_pcpg]
+    sub bx, 2
+    jb .under                       ; before the story's first byte
+    mov [zf_pcpg], bx
+    mov es, [zf_stab + bx]
+    mov [zf_pcseg], es              ; a PC mover; see zm_seek in zmem.inc
     mov [zf_pcoff], si
-    pop cx
-    pop ax
+    pop bx
 .ok:
+    ret
+.under:
+    mov word [zf_pcseg], 0          ; no page's segment: zx_step's guard
+    pop bx                          ; halts on it at the next instruction
     ret
 
 ; =============================================================================
@@ -2098,15 +2103,19 @@ zxo_piracy:                         ; 0OP:191 piracy ?(label)
 ; lock every 4KB, which is ~16ms of work, well inside one 55ms tick, and calls
 ; zi_yield there so the desktop and the clock keep running through it.
 ;
-; ES:SI walks the story itself and is renormalised after every chunk, so SI
-; never passes $9000; DX:AX counts down what is left. zi_yield repairs the ES
-; it is handed if the compactor slid the story meanwhile (zio.inc), which is
-; why nothing here is re-derived from an address after a yield.
+; ES:SI walks the story itself, a PAGE at a time (zmem.inc): after each chunk
+; an SI past 0x8000 moves [zx_vpg] on by one and drops 0x8000, so SI never
+; passes $9000; DX:AX counts down what is left. ES is re-read from the page
+; table after every yield rather than carried across it, so a story the
+; compactor slid meanwhile (zf_reloc keeps the table) is followed for free,
+; and on kern_mega - where ES is a selector that a move REBASES - it is the
+; same load.
 ; -----------------------------------------------------------------------------
 zx_verify:
     mov ax, 0x40
     xor dx, dx
-    call zm_addr                    ; ES:SI = story + $40
+    call zm_page                    ; ES:SI = story + $40, BX = its page
+    mov [zx_vpg], bx
     mov ax, [zf_slen_l]
     mov dx, [zf_slen_h]
     sub ax, 0x40
@@ -2130,23 +2139,20 @@ zx_verify:
     inc si
     add di, bx
     loop .byte
-    test byte [zf_sseg], 4          ; a selector: SI walks the whole story
-    jnz .walked                     ; (zm_map), and never wraps inside it
-    push ax
-    mov ax, si                      ; move SI's whole GRANULES into ES (8
-    mov cl, 7                       ; paragraphs each: zm_map's unit)
-    shr ax, cl
-    mov cl, 3
-    shl ax, cl
-    mov cx, es
-    add ax, cx
-    mov es, ax
-    and si, 127
-    pop ax
+    cmp si, 0x8000
+    jb .walked
+    sub si, 0x8000                  ; the next page (a page's segment reaches
+    add word [zx_vpg], 2            ; 64KB, so the chunk that crossed 0x8000
+                                    ; read on in this one)
 .walked:
     call zx_unlock
     call zi_yield                   ; OSAPI_TASK_ALIVE + a yield, lock free
     call zx_lock
+    push bx
+    mov bx, [zx_vpg]
+    and bx, 0x1E                    ; a header length is at most 512KB
+    mov es, [zf_stab + bx]
+    pop bx
     jmp short .chunk
 .done:
     mov ax, 0x1C                    ; header word 9: the file's own checksum

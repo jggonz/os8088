@@ -18,19 +18,49 @@ design.
 
 ## Where it stands
 
-Waves 0 to 4 are built, the speed rounds after them are 1 to 9, and the
+Waves 0 to 4 are built, the speed rounds after them are 1 to 10, and the
 correctness items they turned up are closed. What is still open:
 - **The pins revisit** - after this release, at the owner's word.
 - **A JR across 4000h on the 8088's plain interpreter** lands with the wrong
   DS (REALDMG-SPEC 3.1). Priced and LEFT: 3-6% of every game there for
   Looney Tunes' two JRs, which every machine with the recompiler runs right.
-- **A save state with cartridge RAM past the window as a heat source**, and
-  **a 286 speed figure with the 100% cap lifted** (W4's two not built).
+- **A save state with more than one bank of cartridge RAM as a heat
+  source** (one bank is taken, round 10), and **a 286 speed figure with the
+  100% cap lifted** (W4's two not built).
 - **A cartridge whose code runs from WRAM** is interpreted (W3's GBRMW
   finding). No real game measured does; HRAM's routines are precompiled.
-- **Speed**: round 9 took the last item round 8's profile priced worth
-  building; the two left (the memory flushes, the event path) are ~2% each
-  and are written down with their costs.
+- **Speed**: round 10 took Link's Awakening's two (the counters' blind
+  spot, megamorphic RETs); left and priced are the memory flushes and the
+  event path (~2% each) and bank switches (~8% of Link's Awakening).
+- **Coverage is only as good as the replays the heat came from.** Code
+  reached only through a jump table is invisible to the walk, so an image
+  interprets it until a heat run has entered it. Link's Awakening's
+  push-the-spiked-beetle stretch, from the owner's replay (2026-10-28), was
+  60 such ROM PCs entered ~3 times a frame (banks 15h and 00h). That was
+  ~20% of the 86Box 286 in `rdg_aotmiss`, `tr_ejf`, `tr_ekey` and `op_*`,
+  and it held the game at 82-95%. With that replay added to the heat it
+  is 1 PC: 100% and 15 -> 22-23 pictures a second, `check` identical over
+  its 460 frames. **On kern_mega this is answered** (REALDMG-SPEC 20.16):
+  the package carries the recompiler and translates its own misses, which
+  lands that replay at 99-102% with no replay in the counters. Still open
+  for the machines without it - the 8088's and kern_big's packages - is
+  the walk seeing these tables (a pass over `JP (HL)` sites that reads the
+  table they index); only 19 of Link's Awakening's 60 PCs appear as a word
+  anywhere in the ROM, so it can narrow the gap but not close it.
+  **The walk's half is built (2026-10-28)**: a dispatcher reached by a JP
+  out of its RST vector or by a CALL is recognised (`gbstatic.dispatcher`
+  - Link's Awakening's RST 00 is `JP 2872h`, so none of its tables was
+  read), a table's 0000h/FFFFh are holes rather than its end, a PARALLEL
+  bank table (`LD HL,nn / ADD HL,DE / LD A,(HL) / CALL switch` then `LD
+  A,E / RST`) gives each entry its bank, a table's targets are block starts
+  (they never were, in any game), and the images fill after the counted
+  blocks with what is ONE control transfer from them (`near_heat`, depth 3
+  measured worse). Link's Awakening's walk went 1,232 -> ~40,000 block
+  starts, and that is the finding: the images (10 on the host, ~7,700
+  blocks) are what binds, not the walk. On the beetle replay, unrecorded,
+  34,671 -> 33,235 x86 instructions a frame (the interpreter 9,318 ->
+  6,544) against 25,450 recorded; the recorded replay unchanged. Of its 60
+  PCs 19 are precompiled now, 22 found and dropped for room, 19 not found.
 
 Moved off this plan: **the kern_mega arm** (20.14) is built on the
 kern_mega memory branch by the session doing that rework, which keeps
@@ -162,13 +192,14 @@ code, each holds 7.4 KB of tails and the gaps rounding leaves.
   ever played". Two field defects found on the way and fixed (REALDMG-SPEC
   20.10): image reads refused on a hard disk's clusters, and four images
   starving the bank cache (13,705 banks fetched in 100 s).
-- [x] The ROM inside the package (REALDMG-SPEC 20.13), under 1MB.
+- [x] The ROM inside the package (REALDMG-SPEC 20.13), under 1MB (32MB since 20.17).
 - [x] Merged with the kern_mega RealDMG work: the shipped REALDMG.O88 and its
   kern_mega arm are byte-identical to elendilon's; the precompiled gates
   pass on the merged core.
-- MOVED: kern_mega's arm (REALDMG-SPEC 20.14) is built on the kern_mega
-  memory branch, with that rework, by the session doing it; not in this
-  release. Here it refuses there, cleanly.
+- [x] kern_mega's arm (REALDMG-SPEC 20.15, built on `mega-dmg` once the
+  memory rework's MC7 landed): `gbaot.py --mega` packages realdmg.asm as
+  RDG_AOT + PKG_MEGA, every image in one pool block and the banks in place;
+  the plain package still refuses there (20.14). `tests/rdgaotmega.py`.
 - [x] Speed, round 1 (86Box `286-victory`, 580K heap, Looney Tunes (GBC)
   holding Right through the stretch at 20-38 s that saturates both arms;
   `tests/rdgcore/rdgwin.py --profile` now charges samples to the
@@ -343,3 +374,64 @@ code, each holds 7.4 KB of tails and the gaps rounding leaves.
   holds two) or a contract across every slow helper; and the event path,
   ~210 instructions an event over a dozen small routines, ~1,300 a frame
   with no single waste.
+- [x] Speed, round 10 - the owner's replay of Link's Awakening's first room
+  (1,128 frames from ZELDA.SS1, its one bank of cartridge RAM now taken by
+  the harness), 32,133 x86 instructions a frame: blocks only 42%, and the
+  rest two things. **The counters were blind past a frontier**
+  (REALDMG-SPEC 20.11): a block dropped from the image they ran on was
+  interpreted, and the code it reached after it was interpreted with no
+  miss to count, so a hot routine reached only from cold code stayed out of
+  the next build too - 37 interpreter entries a frame, and `rdg_aotmiss`,
+  `tr_link`'s failed lookups and the interpreter ~25% between them. The
+  heat run now counts every instruction the interpreter dispatches: 24,180
+  (-24.7%). **A RET returning to more than two places repatched its site
+  at every return** (REALDMG-SPEC 16.4.1): the bank switcher at 07B9, 20.5
+  of a frame's 28.7 repatches at ~110 instructions each. A site patched six
+  times while it holds a slot of `S_RMEG` becomes a lookup: 22,202 (-8.2%,
+  -30.9% for the round), blocks 64% of the frame. Both identical to the
+  interpreter over the replay and 3,000 script frames; the RET change across
+  thirteen cartridges and both recompilers state-identical, +1 instruction
+  to -4.8%. `gbaot.py check` takes `--replay`/`--state`. Left, priced: bank
+  switches ~8% of the room (07B9's `ld (2100),a` through `wr_slow`, `mbc_set`
+  and rdgsys, ~70 instructions each) and the megamorphic lookups themselves
+  (~35 a return, 26 a frame).
+- [x] Speed, round 11 - the owner's log of the same room on the Victory 286
+  (`ZELDA00.LOG`: one code image, 9 slots over XMS, 45-69% of real time)
+  said what instruction counts could not: **210-255 banks fetched a
+  second**, the Game Boy at 850-950 ms of every second. The room switches
+  banks 68 times a frame across 13 banks, so 9 slots fetched 8.7 a frame
+  whatever the eviction (random 9.6, true LRU 10.1) - but it READS 6-7 of
+  them, and bank 19 is switched to 7,896 times and never read. **A bank is
+  switched to lazily now** (REALDMG-SPEC 10.3.2): translated code's switch
+  leaves `S_ROMX` 0 and every reader fetches first. Over both replays at 9
+  slots, every frame the interpreter's: **9,816 fetches to 247** and **11,935
+  to 979** (0.2-0.4 a frame); at 5 slots, 35,051 to 8,055 - the slots still
+  matter, and a second code image (64KB, four slots) bought ~1% of the
+  instructions here. Found on the way, in this work's own first build: a
+  fetch let `rdg_setbank` point the interpreter's DS at the bank from a
+  stale `S_PC`, which the harness hid because its slots sat over bank 0's
+  copy; both are fixed, and GBBANKRD's two controls are the gate - and a
+  third that moved there: round 6's `RDG_NOTABFILT` control measured the
+  interpreter's jumps into table code on GBBANK, whose interpreter ran only
+  through the eager switch this took away, so it counts GBBANKRD's
+  interpreted jumps to a table block now (841 entries against 1). The
+  package's own move (`rw_reloc`) names the new vector, `S_RXVEC`, as it
+  names `S_MBCVEC`: `rdgclose`'s move leg found it unnamed. Thirteen
+  cartridges and Link's Awakening are each identical to themselves with
+  every bank in and with 6-9 slots, under both recompilers.
+- [x] Round 12 - the side features on the heap round 11 made fast. On the
+  owner's Victory with Link's Awakening at 80-100% of real time, Record
+  Replay and Log both refused, *not enough RAM*: the plan gives the bank
+  cache every KB past `RW_KEEPKB` and the code images take theirs first.
+  Keeping room for them would cost a slot for the whole session, so a side
+  buffer the heap cannot hold now lives in BANK SLOTS LENT for it while it
+  is held (REALDMG-SPEC 10.3.3) - cut from the cache's top slots, never
+  below four, every slot the cache's again with the last buffer. The first
+  build resized the slots' claim through `OSAPI_MEM_REGROW` instead, and the
+  86Box run found why that is wrong: a refused claim compacts the heap, the
+  cartridge's RAM moved up against the slots, and they could never grow
+  back - four slots for the rest of the session. Measured on `286-victory`,
+  heap full to the byte with the Task Manager open: replay and log on one
+  lent slot, all three files written, the replay identical to the
+  interpreter on playback, 9 slots again after. `tests/rdglend.py` is the
+  row; `-DRW_NOLEND` its control.

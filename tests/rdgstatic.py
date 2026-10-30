@@ -95,12 +95,13 @@ def rom_path(name):
 SEGCHK = bytes.fromhex("3B16E64875")
 
 
-def run(rom, frames, core, host, jit="static", seg2=False, small=False, squeeze=None):
+def run(rom, frames, core, host, jit="static", seg2=False, small=False, squeeze=None,
+        timeout=400):
     img = os.path.join(rdgimg.private(os.path.join(ROOT, "build", "realdmg")),
                        "rdgstatic.img")
     rdgimg.make_image(rom, img, frames=frames, core=core, host=host, jit=jit,
                      seg2=seg2, squeeze=seg2 if squeeze is None else squeeze, small=small)
-    text = rdgqemu.run(img, ["RDGHOST DONE", "RDGHOST BADOP"], timeout=400, quiet=True,
+    text = rdgqemu.run(img, ["RDGHOST DONE", "RDGHOST BADOP"], timeout=timeout, quiet=True,
                        final=[" END\n"])
     if jit != "static":
         m = re.search(r"flushes (\d+) seg2 (\d+)", text)
@@ -258,7 +259,10 @@ def main():
                                  "fails, as it must" if red else
                                  "passed - the gate cannot see a stale chain"))
         bad += not red
-        n, st = run(rom, frames, core, holeshift(host, out), jit=True, squeeze=True)
+        # (a broken core may LOOP rather than stop: what it must not do is
+        # pass, and a pass is seconds - so a minute, not run()'s 400 s)
+        n, st = run(rom, frames, core, holeshift(host, out), jit=True, squeeze=True,
+                    timeout=60)
         red = n == 0
         print("%-4s %-24s %s" % ("ok" if red else "FAIL", "control: holes over code",
                                  "fails, as it must" if red else

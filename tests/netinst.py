@@ -118,6 +118,34 @@ def fat16_dir(img, lba, path):
     return out
 
 
+def onscreen(q, ui, w, idx):
+    """Bring entry `idx` of Disk window `w` into its view: httpinstall's walk
+    - the first visible row clicked to select it, then the arrows, which move
+    the selection and the view with it (SPEC.md 22.26) - for kern_mega's A:,
+    mega.img's twin, whose root has five folders ahead of INSTALL.O88 and so
+    lists it past the window's eight rows. Answers idx."""
+    import hmacold
+    mo = hmacold.QMouse(q)
+    base = ui._fsblk(w)
+    if base is None:
+        base = (HM.geom.KERNEL_SEG << 4) + ui._word("fm_vp")
+    sel = lambda: struct.unpack("<H", q.read(base + HM.geom.FS_SEL, 2))[0]  # noqa: E731
+    mo.to(*ui.row_xy(w, 0))
+    mo._edge(True)
+    mo._edge(False)
+    os88qemu.acted(q, lambda: sel() == ui.scroll(w), secs=10,
+                   what="the first row to be selected")
+    for _ in range(64):
+        was = sel()
+        if was == idx:
+            break
+        xmcheck.qmp(q.sock, "sendkey %s" % ("up" if was > idx else "down"))
+        os88qemu.acted(q, lambda: sel() != was, secs=5,
+                       what="the selection to move")
+    os88qemu.ui_done(q, xmcheck.sym, cap=2.0)
+    return idx
+
+
 def machine(tmp, hd, gate, link=None):
     sysimg = os.path.join(tmp, "sys.img")
     shutil.copy(os88build.at("build/httpmount.img"), sysimg)
@@ -196,7 +224,9 @@ def main():
         w = HM.front_on(ui, 0)
         before = {x[0] for x in HI.wins(q)}
         i, _ = ui.entry("INSTALL.O88", w)
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        if os88qemu.MEGA:               # kern_mega's A: is mega.img's twin,
+            i = onscreen(q, ui, w, i)   # whose root lists INSTALL.O88 below
+        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))  # the fold
         q.need(lambda: install_seg(q, before)[0] is not None, "INSTALL", 60)
         seg, _ = install_seg(q, before)
         rd = lambda n: q.readseg(seg, syms[n], 1)[0]           # noqa: E731
@@ -217,7 +247,8 @@ def main():
         hrow = q.read(S("drv_tab") + HM.HF_ROW * HM.DRVR_SIZE, HM.DRVR_SIZE)
         hseg = struct.unpack_from("<H", hrow, HM.geom.DRVR_SEG)[0]
         hsyms = HM.os88drvsym.symbols("httpfs.bin")
-        url = q.read(HM.geom.drv_base(hseg) + hsyms["hf_url"], 96).split(b"\0")[0]
+        url = q.read(os88qemu.drv_base(hseg) + hsyms["hf_url"],
+                     96).split(b"\0")[0]       # a selector's base, kern_mega
         print("   A. the drive's address afterwards: %r" % url)
         if url != b"http://10.0.2.2:8095/fix/":
             bad.append("A. the user's HTTP drive was not put back: %r" % url)

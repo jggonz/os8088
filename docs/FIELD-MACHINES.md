@@ -399,7 +399,7 @@ spacebar for ten seconds"*, and this is what it was held on.
 | clock | `isartc_type = a6pak` — the SixPakPlus's **MM58167 at 2C0h**, §37.90's **rung 2**. **MartyPC models no XT clock card at all**, so `[clk_tier]` is 0 there and 2 here |
 | video | **Hercules**, 720x348 |
 | mouse | `msserial` — the serial mouse, §9.4 |
-| sound | **Sound Blaster 2.0** — SPEC.md 34 |
+| sound | **Sound Blaster 2.0** — SPEC.md 34 — on **IRQ 7**: 86Box's default for the card is 5, the ST11M's line below, and its model of the ST11 wipes a block interrupt pending there once per `int 13h`, which ends the card part way through a play (SPEC.md 34.5.6.1) |
 | network | **NE1000 on slirp**, with FTPD's control port forwarded 2121→21 and its eight PASV data ports 2048–2055 straight through (SPEC.md 77) |
 | hard disk | an **ST-225 on a real ST11M** at 0320/IRQ 5 — the *field* machine's controller, which `make xt-mfm` deliberately avoids because the ST11M keeps its geometry on the platter and will not present a blank image. The floppy boot is unaffected |
 | floppies | A: `os8088-360.img`, B: `apps360.img`, with `media360.img` one menu click away (§24.4) |

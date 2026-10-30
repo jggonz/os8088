@@ -32,6 +32,7 @@ BELOW the run and `op_claim`'s head slack is what puts each part's segment
 where it belongs (SPEC.md 20.12.2). At 1.44MB the slack is always zero and
 that arithmetic never runs at all.
 """
+import os
 import struct
 import sys
 sys.path.insert(0, "tools")
@@ -97,6 +98,7 @@ S = os88sym.linear
 # COUNT and the verdict string that quotes it now follow the fixture.
 PARTS = len(os88parts.rows(_image_of(O88)))
 SCRATCH, OPT, XMS, LAZY = 3, 4, 5, 6
+MEGA = bool(os.environ.get("OS88_MEGA"))     # kern_mega under Bochs
 fails = []
 
 
@@ -112,6 +114,9 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     m.run()
     os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
     os88marty.no_saver(m)
+    # a guest segment's linear base: on kern_mega (OS88_MEGA) every region
+    # and part is an LDT SELECTOR (docs/BOCHS.md)
+    lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, UD, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
@@ -150,9 +155,9 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     rec = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
     seg = struct.unpack_from("<H", rec, os88geom.W_SEG)[0]
     toff = struct.unpack_from("<H", rec, os88geom.W_TITLE)[0]
-    title = m.read((seg << 4) + toff, 24).split(b"\0")[0].decode("ascii",
+    title = m.read(lin(seg, toff), 24).split(b"\0")[0].decode("ascii",
                                                                 "replace")
-    hdr = m.read(seg << 4, 32)
+    hdr = m.read(lin(seg), 32)
     ver, flags, image = hdr[2], hdr[3], struct.unpack_from("<H", hdr, 8)[0]
     say("version %d, flags 0x%02X, image %d, verdict %r"
         % (ver, flags, image, title))
@@ -172,7 +177,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     want = "MSEG %d/%d OK" % (PARTS, PARTS)
     if title != want:
         bad = struct.unpack_from(
-            "<H", m.read((seg << 4) + msegsym.sym("ms_bad", COMP), 2), 0)[0]
+            "<H", m.read(lin(seg) + msegsym.sym("ms_bad", COMP), 2), 0)[0]
         fails.append(
             "MSEG says %r, wanted %r - the parts that did NOT pass are %r. "
             "Each part is checked three independent "
@@ -204,7 +209,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     # back. Unpadded it was 1,024, aligned on both, and this row passed
     # without ever running the arithmetic it exists for (SPEC.md 20.12.2).
     slack = struct.unpack_from(
-        "<H", m.read((seg << 4) + msegsym.sym("op_slack", COMP), 2), 0)[0]
+        "<H", m.read(lin(seg) + msegsym.sym("op_slack", COMP), 2), 0)[0]
     want_slack = 512 if GEOM == "360" else 0
     say("op_slack = %d (want %d on a %s disk)" % (slack, want_slack, GEOM))
     if slack != want_slack:
@@ -222,7 +227,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     # this row would be passing without testing SPEC.md 20.12.11 at all.
     if WIDE:
         secs, usecs = (struct.unpack_from(
-            "<H", m.read((seg << 4) + msegsym.sym(n, COMP), 2), 0)[0]
+            "<H", m.read(lin(seg) + msegsym.sym(n, COMP), 2), 0)[0]
             for n in ("op_secs", "op_usecs"))
         say("carve: %d sectors read, %d unpacked (want both > 128)"
             % (secs, usecs))
@@ -234,13 +239,34 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
                 "tests/multiseg/mkwide.py's padding is what makes it wide"
                 % (secs, usecs))
     for i in range(PARTS):
-        v = struct.unpack_from("<H", m.read((seg << 4) + ms_seg + i * 2, 2), 0)[0]
-        sig = m.read((v << 4) + 2, 4) if v and i < SCRATCH else b"----"
+        v = struct.unpack_from("<H", m.read(lin(seg) + ms_seg + i * 2, 2), 0)[0]
+        sig = m.read(lin(v, 2), 4) if v and i < SCRATCH else b"----"
         segs.append(v)
         say("  part %d  seg %04X  sig %r" % (i, v, sig))
-        if not v and i not in (OPT, LAZY):
+        if not v and i not in (OPT, LAZY) + ((XMS,) if MEGA else ()):
             fails.append("part %d has no segment: op_load claimed nothing for "
                          "it, or op_seg cannot find it" % i)
+    if MEGA:
+        # KERN_MEGA HAS A STORE, so OP_XMS is not the fallback there: part 5
+        # goes into the pool above 1MB - tests/msegxms.py's facts 1, 3 and 4,
+        # which no MartyPC run can ask: op_seg answers 0 for it, MSEG says it
+        # took the extended path ('X'), and an INSTANCE owns a pool block
+        # (OSAPI_XMEM_ALLOC's owner is its slot, mx_tab's MX_OWN < 80h). The
+        # title above is fact 2: the bytes came back down and summed
+        xw = m.read(lin(seg) + msegsym.sym("ms_xwhere", COMP), 1)
+        say("part %d: op_seg %04X, ms_xwhere %r" % (XMS, segs[XMS], xw))
+        if segs[XMS] or xw != b"X":
+            fails.append("the OP_XMS part did not go above 1MB on kern_mega: "
+                         "op_seg %04X, ms_xwhere %r (want 0000, 'X')"
+                         % (segs[XMS], xw))
+        mx = m.read(S("mx_tab"), 96 * 10)
+        mine = [(mx[k] | mx[k + 1] << 8, mx[k + 4]) for k in range(0, len(mx), 10)
+                if (mx[k + 2] | mx[k + 3] << 8) and mx[k + 4] < 0x80]
+        say("pool blocks an instance owns: %r" % mine)
+        if not mine:
+            fails.append("no pool block is owned by an INSTANCE, so the part "
+                         "above 1MB is the kernel's and stranded (SPEC.md "
+                         "41.5.1's trap, tests/msegxms.py)")
     if segs[LAZY]:
         fails.append(
             "part %d is OP_LAZY and it has a segment (%04X) after the LAUNCH. "
@@ -260,7 +286,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
         fails.append("two parts share a base segment %r - the run's or the "
                      "scratch area's arithmetic collapsed them (SPEC.md "
                      "20.12.2)" % (segs,))
-    if segs[SCRATCH] and segs[SCRATCH] < max(segs[:SCRATCH]):
+    if segs[SCRATCH] and lin(segs[SCRATCH]) < max(lin(v) for v in segs[:SCRATCH]):
         fails.append(
             "the scratch part landed at %04X, below the filed parts %r. It "
             "belongs AFTER the carved run in the one claim - op_runkb is the "

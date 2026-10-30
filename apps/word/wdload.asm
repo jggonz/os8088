@@ -66,8 +66,7 @@ wdl_entry:
     call op_seg
     or ax, ax
     jz .no
-    mov dx, ax                      ; DX = where the program is
-    mov es, ax
+    mov es, ax                      ; ES = where the program is
     mov ax, [es:LD_H_IMG]           ; AX = image + bss, the program's word for
     add ax, [es:LD_H_BSS]           ; its region - and where it ASSEMBLED part 1
 
@@ -76,18 +75,23 @@ wdl_entry:
     ; + bss long, so this holds by construction. It is checked anyway because
     ; the failure is not a refusal but a jump into whatever the carve has at
     ; that offset - and it costs a few bytes of an image that is freed at once.
-    push ax
+    ; IN PARAGRAPHS INTO THE CARVE (OP_SUBV_RAW): op_seg's answer is a selector
+    ; under kern_mega's protected mode, and a sum on one names nothing
     mov cl, 4
     shr ax, cl                      ; the region in paragraphs...
-    add ax, dx                      ; ...past the program is where part 1 goes
     mov bx, ax
+    mov byte [op_subv], OP_SUBV_RAW
+    mov al, WDL_PART_PROG
+    call op_seg
+    add bx, ax                      ; ...past the program is where part 1 goes
     mov al, WDL_PART_TOP
     call op_seg
+    mov byte [op_subv], 0
     cmp ax, bx
-    pop ax
     jne .no
 
-    OS88_REHOME                     ; DX = the program; the KEEP form, so
+    mov al, WDL_PART_PROG
+    OS88_REHOME                     ; AL = the program; the KEEP form, so
                                     ; the carve is cut where PART 1 ends and
                                     ; not where the program does (SPEC.md
                                     ; 20.12.10.5) - wdparts' check C

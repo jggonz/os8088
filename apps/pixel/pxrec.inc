@@ -67,6 +67,65 @@ VW_SZ       equ 16
 PXH_HIST    equ 0
 PXH_BINS    equ 1024
 
+; --- A CLAIM'S WINDOWS (KERN-MEGA-MEMORY-PLAN MC7): a master is reached by a
+; byte offset, and under kern_mega's protected mode every claim is ONE LDT
+; selector whose limit is 64KB - "the claim's segment + paragraphs" names
+; some other descriptor. So a claim walked past 64KB is reached through a
+; TABLE of OSAPI_SEG SEG_SUB selectors made once, one per 32KB: window k is
+; based k x 32KB in and reaches 64KB (or the claim's end), so a row of a
+; master (8,192 bytes at most) starting anywhere in its window ends inside
+; it. On every real-mode kernel SEG_SUB answers the sum, claim + 800h x k,
+; so the table is the same arithmetic made once - and a lookup is cheaper
+; than the shifts it replaced. Window k of an offset O is O >> 15, the
+; offset in it O & 7FFFh. A table names the WORDS holding its claim and its
+; KB, and is rebuilt when that claim is not the one it was made of (its
+; KEY); a real-mode move re-bases it (px_mreloc), a protected-mode one is a
+; rebase that changes no selector. A master is held to PX_MWN windows: 1MB,
+; more than any real-mode kernel can give one -----------------------------------
+PX_MWN      equ 32                  ; windows a table holds: 32 x 32KB
+MWT_KEY     equ 0                   ; word: the claim the table is OF; FFFFh
+                                    ; made of nothing yet (ask again)
+MWT_PSEG    equ 2                   ; word: where that claim's segment is
+MWT_PKB     equ 4                   ; word: ...and its KB
+MWT_WIN     equ 6                   ; PX_MWN words: the windows
+MWT_SZ      equ MWT_WIN + 2 * PX_MWN
+MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
+
+; PXSUB - DX = a segment or selector of ours, AX = paragraphs into it: DX =
+; a DATA selector based there, to 64KB or the claim's end (OSAPI_SEG's
+; SEG_SUB; DX + AX on every real-mode kernel). The same window asked again
+; answers the same selector, so asking per OPEN costs one LDT entry and not
+; one a call. Refused (no LDT entry free): DX = 0, the null selector, so a
+; use is a #GP the kernel closes us for - never somebody else's memory.
+; Every other register kept (the flags are not)
+%macro PXSUB 0
+    push ax
+    push bx
+    push cx
+    mov bl, SEG_SUB
+    xor cx, cx
+    call OSAPI_SEG
+    jnc %%ok
+    xor dx, dx
+%%ok:
+    pop cx
+    pop bx
+    pop ax
+%endmacro
+
+; PXMW_LOOK - the lookup itself: DX:AX = a byte offset into the claim the
+; table at DS:BX describes (its KEY already checked): AX = the segment of
+; its window, DX = the offset in it. SI clobbered
+%macro PXMW_LOOK 0
+    shl ax, 1
+    rcl dx, 1                       ; DX = O >> 15, the window...
+    shr ax, 1                       ; ...AX = O & 7FFFh, the offset in it
+    mov si, dx
+    shl si, 1
+    mov dx, ax
+    mov ax, [bx + MWT_WIN + si]
+%endmacro
+
 PM_PAL      equ 0                   ; SPEC.md 106.8's three modes
 PM_CUBE     equ 1
 PM_GREY     equ 2

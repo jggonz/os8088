@@ -85,6 +85,8 @@ def art():
 
 
 def launch(img):
+    if os88qemu.MEGA:       # kern_mega on Bochs's VBE: tests/vesa.py's launch
+        return vesa.launch(img)
     os88fixture.need(img, "build/apps.img")
     em = "qemu" + "-system-i386"
     os88qemu.start(

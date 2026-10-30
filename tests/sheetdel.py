@@ -53,6 +53,13 @@ PICK_ROW = (150, 82)                    # the picker's second row: the junk
                                         # that no folder has to be entered
 PICK_OK = (345, 63)                     # ...and its button, which says "Open"
 YES, NO = (268, 124), (360, 124)
+if SF.MEGA:
+    # kern_mega's machine is Bochs's VGA (tests/megaport.txt): SHEET opens
+    # 20 rows lower than on the CGA (sheetfmt.mega_y's measurement), and the
+    # alert is centred on a 480-row screen rather than a 200-row one
+    FILE_MENU = SF.mega_y(FILE_MENU, SF.SHEET_DY)
+    ITEM = lambda x, i: (x + 17, 57 + SF.SHEET_DY + 12 * i + 2)
+    YES, NO = (YES[0], YES[1] + 140), (NO[0], NO[1] + 140)
 
 
 def build_disk():

@@ -135,10 +135,17 @@ def main():
     # plain kernel back - two builds, and in between the shared tree held a
     # kernel nobody else had asked for, which is what made this row
     # `builds=True` and unable to share the box.
-    t = os88build.tree("GFXAUDIT=1").apply()
+    if os.environ.get("OS88_MEGA"):
+        # kern_mega under Bochs (tests/megaport.txt): the same knob on
+        # kern_mega, in a tree of its own, and os88sym reads THAT map
+        t = os88build.tree("GFXAUDIT=1", targets=("mega",))
+        os.environ["OS88_MEGA_BUILD"] = t.dir
+        img, apps = t.img("mega.img"), t.img("megaapps.img")
+    else:
+        t = os88build.tree("GFXAUDIT=1").apply()
+        img, apps = t.img("os8088-360.img"), t.img("apps360.img")
     settle = os88marty.settle
-    with os88marty.launch(t.img("os8088-360.img"),
-                          apps=t.img("apps360.img"),
+    with os88marty.launch(img, apps=apps,
                           machine="os8088_xt_vga", boot=False) as m:
         m.run()
         os88marty.kernel_up(m)          # the first act is open_drive
@@ -229,6 +236,13 @@ def main():
         # SELECTED, the pointer is parked where the window is about to
         # land, and Enter opens it - which is the field's own recipe.
         wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
+        if getattr(m, "bochs", False):
+            # kern_mega's apps disk is the 1.44MB one, whose GAMES does not
+            # fit the window: scroll_to walks it with the arrow keys, which
+            # go to the FRONT window - MINES, just opened - so the Disk
+            # window is brought forward first (the 360KB disk never scrolls)
+            mo.click(wx + 30, wy + 9)
+            settle(m)
         entry = dispcp.row_of(m, S, "CYCLONE.O88")
         row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
         rx, ry = dispcp.row_xy(wx, wy, row)

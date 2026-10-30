@@ -46,9 +46,11 @@ WORK = "build/sheetsort"                # this row's own paths (WRITING-TESTS 5.
 import os88build                                         # noqa: E402
 DISK = os88build.at("build/sheetsort.img")        # the run's tree, so a soak lane finds it
 NAME = "SHIN.SLK"
-EDIT = (123, 45)
-DATA = (311, 45)
-ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
+# CGA points; on kern_mega's VGA (tests/megaport.txt) SHEET opens SHEET_DY
+# lower and every point in it moves with it (sheetfmt.mega_y)
+EDIT = SF.mega_y((123, 45), SF.SHEET_DY)
+DATA = SF.mega_y((311, 45), SF.SHEET_DY)
+ITEM = lambda x, i: SF.mega_y((x + 17, 57 + 12 * i + 2), SF.SHEET_DY)
 COPY, PASTE, FILLR = 2, 3, 9
 SORT = 6                                # 81.71 put the Data menu in Excel's
                                          # own order, which moved Sort down

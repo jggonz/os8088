@@ -48,7 +48,8 @@ def instance(m, S, image):
         r = m.read(S("inst_tab") + i * os88geom.I_RECSZ, os88geom.I_RECSZ)
         c = u16(r, os88geom.I_SPTR)
         if (r[os88geom.I_STATE] == 1 and c
-                and same_header(m.read(c * 16, 32), image)):
+                and same_header(m.read(m.lin(c) if getattr(m, "bochs", False)
+                                       else c * 16, 32), image)):
             return c
     return None
 

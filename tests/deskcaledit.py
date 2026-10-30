@@ -100,7 +100,8 @@ def image_size(m, seg):
 
 def disk_with(tmp, name, dat):
     img = os.path.join(tmp, name)
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                img)
     src = os.path.join(tmp, "DESKCAL.DAT")
     open(src, "wb").write(dat)
     subprocess.run(["mcopy", "-o", "-i", img, src, "::/SYSTEM/APPDATA/"],

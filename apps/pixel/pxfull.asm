@@ -434,15 +434,19 @@ pxf_getpal:
     rcr ax, 1
     loop .p
     add ax, 7                       ; ...up to a multiple of 8, px_htail's
-    and al, 0xF8                    ; (kern_mega's grid, KERN-MEGA-PLAN 14.40)
-    add ax, [bx + PXR_MSEG]
-    mov ds, ax
+    and al, 0xF8                    ; layout - and a SEG_SUB there (MC7: the
+    mov dx, [bx + PXR_MSEG]         ; sum on a real-mode kernel)
+    PXSUB
+    mov ds, dx
     xor si, si
     mov di, pxf_cnt
     mov cx, 512
     rep movsw
     pop ds
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pxf_gl - the plan modes' ground and ink: the darkest and the lightest of
 ; the [pxf_ncol] colours at pxf_c6
@@ -2498,6 +2502,38 @@ pxf_mseg:
     pop bx
     ret
 
+; pxf_mwin - DX:AX = a byte offset into the shown master ([pxf_rec]'s, the
+; package's px_cur or px_prev): AX = the segment of its 32KB window, SI =
+; the offset in it - the record's window table (px_mwc or px_mwp, pxrec.inc),
+; made again by the package when the record's master is another claim now (a
+; slide decoded where it was). Clobbers DX
+pxf_mwin:
+    push bx
+    push ds
+    mov ds, [cs:PXP_PKGD]
+    mov bx, px_mwc
+    cmp word [cs:pxf_rec], px_cur
+    je .c
+    mov bx, px_mwp
+.c:
+    mov si, [bx + MWT_PSEG]
+    mov si, [si]
+    cmp si, [bx + MWT_KEY]
+    jne .b
+.k:
+    PXMW_LOOK
+    mov si, dx
+    pop ds
+    pop bx
+    ret
+.b:
+    push word [cs:PXP_PKG]          ; the package's px_mwfar, a far
+    push word [px_mwfo]             ; pointer on the stack: no store into
+    mov si, sp                      ; our CS
+    call far [ss:si]
+    add sp, 4
+    jmp short .k
+
 ; pxf_row - the row [pxf_y]: sampled, coloured, overlaid, put on the glass
 pxf_row:
     mov ax, [pxf_y]
@@ -2581,17 +2617,8 @@ pxf_sample:
     mul word [pxf_mw]
     add ax, [pxf_acc + 2]           ; ...and its first column
     adc dx, 0
-    mov si, ax
-    and si, 127                     ; to 8 paragraphs, not 1: a segment on
-    mov cx, 4                       ; kern_mega's grid (KERN-MEGA-PLAN 14.40)
-.p:
-    shr dx, 1
-    rcr ax, 1
-    loop .p
-    and al, 0xF8
-    mov bx, ax                      ; BX = paragraphs
-    call pxf_mseg
-    add ax, bx
+    call pxf_mwin                   ; AX:SI = it, through the master's 32KB
+                                    ; windows (pxrec.inc, MC7)
     push ds
     pop es
     mov di, [pxf_sa]

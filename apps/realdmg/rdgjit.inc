@@ -119,7 +119,22 @@ rt_init:
     mov [S_JITSEGB],cx
     mov [S_JITHSEG],bx
 %ifdef RDG_XTIER
-    mov byte [S_JITXN],0            ; (the extra tiers: rt_more's, after)
+    mov byte [S_JITXN],0            ; (the extra tiers: rt_more's, after -
+    push ax                         ;   the table cleared to its terminator,
+    push cx                         ;   so no stale pair is found by tr_lpx
+    push di                         ;   or rt_xlat)
+    push es
+    push ds
+    pop es
+    mov di,S_JITXT
+    mov cx,RT_XMAX * 2 + 2
+    xor ax,ax
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
 %endif
     mov [S_HMASK],dl
     push es
@@ -195,6 +210,7 @@ rt_more:
     mov [S_JITXT+bx],ax
     mov [S_JITXT+bx+2],dx
     call rt_init.tails
+    mov word [es:0FFF0h],0          ; (not written: no generation, R1)
     clc
 .r:
     pop es
@@ -206,6 +222,39 @@ rt_more:
     pop ax
     ret
 %endif
+
+; rt_hyon - DS = the view, a PRECOMPILED machine's misses TRANSLATED
+; (REALDMG-SPEC 20.16), S_HYON already 1: AX = the runtime tier's segment
+; and DX its code selector (0: the same) - the second cache segment, its
+; tails copied, current, its generation the images' (rt_tier). Every other
+; tier is marked written, so a full one stops the translator (S_JITPRE 2)
+; rather than moving it into a precompiled image; with RDG_XTIER the host
+; has put any more runtime tiers first in S_JITXT, the images after them.
+; Keeps every register
+rt_hyon:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [S_JITSEGB],ax
+    mov [S_JITCSB],dx
+    call rt_init.tails
+    mov byte [S_JITUSED],0FFh
+    mov byte [S_JITTIER],2
+    mov byte [S_JITPRE],0
+    mov ax,[S_JITSEGB]
+    call rt_tier
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; rt_resume - DS = the view: the recompiler back on over the cache it had
 ; when it was turned off (the package's rw_jitoff), nothing forgotten - the
@@ -275,10 +324,30 @@ rt_flush:
     mov cx,ax
     xor ax,ax
     rep stosw
+    push ds                         ; (no RET site counted: tr_rmeg's)
+    pop es
+    mov di,S_RMEG
+    mov cx,32
+    rep stosw
     cmp word [S_JITGNX],0FFF0h      ; (the generations near a wrap: from
     jb .g                           ;   nothing, every link forgotten with
     mov word [S_JITGNX],0           ;   the table - 16.2.3)
 .g:
+%ifdef RDG_XTIER
+    mov cl,[S_JITXN]                ; every tier's generation 0: none is
+    add cl,3                        ;   written since this flush (R1 - a
+.z:                                 ;   tier is written when it is not 0)
+    dec cl
+    mov al,cl
+    call rt_tseg
+    or ax,ax
+    jz .zn
+    mov es,ax
+    mov word [es:0FFF0h],0
+.zn:
+    or cl,cl
+    jnz .z
+%endif
     mov ax,[S_JITSEGA]
     mov byte [S_JITTIER],0
     mov byte [S_JITUSED],1
@@ -307,6 +376,13 @@ rt_tier:
     mov es,ax                       ; its generation: the newest (16.2.3)
     inc word [S_JITGNX]
     mov si,[S_JITGNX]
+    cmp byte [S_HYON],0             ; (a precompiled machine's runtime
+    je .gn                          ;   tier: the images' own generation,
+    push es                         ;   so no link is logged - none is ever
+    mov es,[S_JITSEGA]              ;   undone, and the log would be in an
+    mov si,[es:0FFF0h]              ;   image - 20.16)
+    pop es
+.gn:
     mov [es:0FFF0h],si
     pop es
     mov si,RT_HFREE
@@ -940,8 +1016,9 @@ rt_translate:
 .restart:
     cmp byte [S_JITPRE],2           ; a preload's cache is full (16.8):
     jne .go                         ;   this block is given up, not entered
-    mov word [S_JITOUT],0
-    ret
+.lazy:                              ; (...or its bank is not in: tr_int
+    mov word [S_JITOUT],0           ;   brings it in, interpreting it, and
+    ret                             ;   the next miss translates it)
 .go:
     mov si,[RT_PC0]
     mov ax,[S_BANK]
@@ -956,6 +1033,8 @@ rt_translate:
     jae .reg
     mov cx,8000h
     mov bx,[S_ROMX]
+    or bx,bx                        ; a bank switched to lazily (REALDMG-
+    jz .lazy                        ;   SPEC 10.3.2): not translated now
 .reg:
     sub cx,si
     cmp cx,80h
@@ -1023,11 +1102,15 @@ rt_translate:
     jne .nf
     mov al,[JIT_BUF+bx+1]
     inc ah
-    jmp short .tm
+    call rt_deadcb                  ; a shift of a register: without F, or
+    cmp ah,2                        ;   with C alone, when what follows
+    jb .tm                          ;   writes the rest first (16.1.2)
+    jmp short .bare
 .nf:
     call rt_deadf                   ; INC/DEC r, ADD HL,rr: without F when
     or ah,ah                        ;   the next instruction overwrites it
     jz .tm
+.bare:
     push ax                         ; (and so marked, for rt_lazy)
     push cx
     push bx
@@ -1108,17 +1191,21 @@ rt_translate:
     ; in (tr_miss: tr_enter's own, or its neighbour)
     mov si,[RT_PC0]
     mov dl,[S_JITBK]
+    mov ax,[RT_ENT]
+    mov [S_JITOUT],ax
+    mov ax,[S_JITCS]                ; ...in the segment it was written in,
+    mov [S_JITOUT+2],ax             ;   as a jump names it (16.2.4)
     mov bx,[S_JITSLOT]
+    cmp bx,0FFFFh                   ; (no slot: a precompiled machine's
+    je .ntab                        ;   miss, which its host files, 20.16)
     mov es,[S_JITHSEG]
     mov [es:JIT_HASH+bx],si
     mov [es:JIT_HASH+bx+2],dl
     mov ax,[RT_ENT]
     mov [es:JIT_HASH+bx+4],ax
-    mov [S_JITOUT],ax
-    mov ax,[S_JITCS]                ; ...in the segment it was written in,
-                                    ;   as a jump names it (16.2.4)
+    mov ax,[S_JITCS]
     mov [es:JIT_HASH+bx+6],ax
-    mov [S_JITOUT+2],ax
+.ntab:
     inc word [S_JITNB]
     cmp word [RT_PC0],8000h
     jae .hr
@@ -1147,6 +1234,8 @@ rt_aotstop:
     push bx
     push cx
     push es
+    cmp word [cs:RT_AOTBMP],0       ; (no bitmap: a run-time translation on
+    je .no                          ;   a precompiled machine, 20.16)
     mov es,[cs:RT_AOTBMP]
     mov ax,bx
     add ax,[RT_PC0]                 ; AX = the PC
@@ -1268,6 +1357,110 @@ rt_deadf:
     pop dx
 .r0:
     pop ax
+    ret
+
+; rt_deadcb - AX = 256 + a CB opcode at JIT_BUF+BX: a rotate or shift of a
+; register gets its record without F (rdggen.cb_nof_lines) when what follows
+; overwrites all four flags before reading one, or its record with C alone
+; when that is true of Z, N and H; else AX as it was. Keeps BX
+rt_deadcb:
+    cmp al,40h
+    jae .r
+    mov dl,al
+    and dl,7
+    cmp dl,6
+    je .r                           ; ((HL): the read-modify-writes)
+    jb .k
+    dec dl                          ; (A, 7: the seventh, 6)
+.k:
+    push bx
+    push ax
+    inc bx
+    inc bx                          ; BX = the next instruction
+    mov dh,0Fh
+    call rt_dlook                   ; CF = 0: all four dead
+    mov cx,0
+    jnc .rec
+    mov dh,7
+    call rt_dlook                   ; ...Z, N and H dead: C alone
+%ifdef RT_CBBUG                     ; (tests/gbcpu.py's control: C dropped
+    mov cx,0                        ;   with the rest)
+%else
+    mov cx,56
+%endif
+    jc .live
+.rec:
+    pop ax
+    push cx
+    mov cl,3                        ; (op >> 3) x 7 + the register
+    shr al,cl
+    mov ah,7
+    mul ah
+    add al,dl                       ; (DL: rt_dlook keeps it)
+    adc ah,0
+    pop cx
+    add ax,cx
+    add ax,RDGT_XCB
+    pop bx
+    ret
+.live:
+    pop ax
+    pop bx
+.r:
+    ret
+
+; rt_dlook - DH = flags still live, BX = an instruction in JIT_BUF: CF = 0
+; when it and those after it overwrite every one before any is read, as
+; rt_deadf's look (and its stops). Keeps BX and DL; AX, CX, SI lost
+rt_dlook:
+    push bx
+    mov cx,[RT_CNT]
+.k:
+    inc cx                          ; CX = the count with this one
+    cmp cx,RT_MAXI
+    jae .live
+    mov ax,[RT_CNT]
+    add ax,RT_DLOOK
+    cmp cx,ax
+    ja .live
+    lea si,[bx+3]
+    cmp si,[RT_N]
+    ja .live
+%ifdef RT_AOTSTOP
+    call rt_aotstop
+    jc .live
+%endif
+    push cx
+    call rt_fmask
+    and cl,dh
+%ifndef RT_DEADBUG
+    jnz .livec
+%endif
+    and ch,0Fh
+    not ch
+    and dh,ch
+    jz .dead
+    shl si,1
+    mov si,[cs:rt_tab + si]
+    or si,si
+    jz .livec
+    test byte [cs:rt_tab + si + 4],1+2+4+16+64
+    jnz .livec
+    mov al,[cs:rt_tab + si + 3]
+    cbw
+    add bx,ax
+    pop cx
+    jmp .k
+.dead:
+    pop cx
+    pop bx
+    clc
+    ret
+.livec:
+    pop cx
+.live:
+    pop bx
+    stc
     ret
 
 ; rt_fmask - the instruction at JIT_BUF+BX: SI = its record's index, CH =
@@ -1467,9 +1660,17 @@ rt_pick:
     cmp al,0F0h                     ; LDH A,(n): n >= 80h
     jne .e0
     cmp dl,80h
-    jb .no
+    jb .lcd
     mov ax,512
     jmp short .ff
+.lcd:
+    mov ax,RDGT_XLCD                ; ...or STAT or LY, to their answers
+    cmp dl,41h
+    je .ff
+    inc ax
+    cmp dl,44h
+    je .ff
+    jmp .no
 .e0:
     cmp al,0E0h                     ; LDH (n),A: 80h <= n < FFh, or a
     jne .fa                         ;   sound register io_wr only stores
@@ -1666,10 +1867,18 @@ rt_room:
     call rt_tseg                    ; AX = its segment, 0: none
     or ax,ax
     jz .nt                          ; (tier 0 always has one)
+%ifdef RDG_XTIER
+    push es                         ; written since the flush: its
+    mov es,ax                       ;   generation, which rt_flush zeroed
+    cmp word [es:0FFF0h],0          ;   (R1 - any count of tiers, where a
+    pop es                          ;   bit a tier held eight)
+    je .fresh
+%else
     mov ch,1
     shl ch,cl
     test [S_JITUSED],ch
     jz .fresh
+%endif
     cmp cl,[S_JITTIER]              ; written before: the OLDEST, so it
     je .flush                       ;   goes - but a preload or a fixed
     mov dl,[S_JITPRE]               ;   table stops at a full cache (16.8),
@@ -1685,7 +1894,9 @@ rt_room:
     inc word [S_JITRCY]
     inc word [S_JITFL]
 .fresh:
+%ifndef RDG_XTIER
     or [S_JITUSED],ch
+%endif
     mov [S_JITTIER],cl
     pop cx
     inc word [S_JITSW]
@@ -2868,6 +3079,8 @@ rt_idle:
     cmp si,8000h
     jae .r                          ; RAM: never
     mov bx,[S_ROMX]
+    or bx,bx                        ; (a bank switched to lazily, 10.3.2:
+    jz .r                           ;   not an idle loop's, for now)
 .src:
     push ds
     pop es

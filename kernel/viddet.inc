@@ -186,6 +186,18 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   nothing rather than something
 %endif
 %endif
+vid_tab_end:                    ; (kern_mega's switch walks the column)
+%ifdef KERN_MEGA
+k_vsa       dw 0xA000           ; VSEG's words (kernel.asm): the segments
+k_vsb       dw 0xB000           ; themselves in real mode, the selectors
+k_vsc       dw 0xB800           ; mega_vfixall made over them in protected
+k_vsf       dw 0xF000           ; mode (KERN-MEGA-MEMORY-PLAN MC7.4). HERE,
+                                ; beside the table, and not in mega.inc: the
+                                ; loader draws its splash through
+                                ; vid_setmode while the image is still
+                                ; arriving, and only the head of `.text` is
+                                ; in memory then
+%endif
 
 ; -----------------------------------------------------------------------------
 ; The live geometry block (SPEC.md 39.2). NINE CONTIGUOUS WORDS, in vid_tab's
@@ -1174,7 +1186,7 @@ vid_setmode:
     ; a hard-disk boot leaves the POST's own text, which is not regular at
     ; all. NO EMULATOR HERE CAN SHOW IT - they clear instantly - and on a
     ; 4.77MHz machine the ROM's own 16KB clear is tens of milliseconds.
-    mov ax, 0xB800
+    VSEG ax, 0xB800
     mov cx, 8192
     call vid_wipe
 
@@ -1245,7 +1257,7 @@ vid_setmode:
     mov dx, VGA_SEQ
     mov ax, 0x0F02
     out dx, ax
-    mov ax, VGA_SEG
+    VSEG ax, VGA_SEG
     mov es, ax
     xor di, di
     mov ax, 0xDBDB
@@ -1296,7 +1308,7 @@ vid_setmode:
     out dx, ax
     mov ax, 0xFF08              ; GC8  Bit Mask: every bit ours
     out dx, ax
-    mov ax, VGA_SEG             ; ...and CX is the count .wipego settled
+    VSEG ax, VGA_SEG             ; ...and CX is the count .wipego settled
     call vid_wipe
                                 ; ~110 ms on a 4.77MHz 8088, ONCE: vid_init
                                 ; skips the mode set while [spl_live] is up,

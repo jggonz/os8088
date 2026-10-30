@@ -618,10 +618,24 @@ def have_pil():
 def have_bochs():
     """Can THIS box run tools/os88bochs.py? Bochs with the legacy BIOS it
     boots (the default BIOS's 32-bit init crashes there), and the X tools the
-    sweep drives it with: Xvfb, xdotool, xwd and ImageMagick's convert."""
-    return all(shutil.which(t) for t in ("bochs", "Xvfb", "xdotool", "xwd",
-                                         "convert")) and \
-        os.path.exists("/usr/share/bochs/BIOS-bochs-legacy")
+    sweep drives it with: Xvfb, xdotool, xwd and ImageMagick's convert -
+    and the clock preload every Box runs Bochs under, tools/bochs/bxclock.c,
+    BUILT (a C compiler), because without it a stopped guest is paid its
+    stop back in guest time afterwards and a row's answer moves with the
+    host's load (docs/BOCHS.md, *The clock*)."""
+    if not (all(shutil.which(t) for t in ("bochs", "Xvfb", "xdotool", "xwd",
+                                          "convert")) and
+            os.path.exists("/usr/share/bochs/BIOS-bochs-legacy")):
+        return False
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import os88bochs
+    if not os88bochs.BXCLOCK or os88bochs.SYNC != "slowdown":
+        return True             # the A/B: run without it, as asked
+    try:
+        os88bochs.bxclock()
+    except (RuntimeError, OSError):
+        return False
+    return True
 
 
 def have_unicorn():
@@ -740,6 +754,46 @@ def qemu9():
 # other row: they stay on the system QEMU) - nasm3's build/nasm3 shape, so the
 # script's work counts without an export.
 QEMU9_BIN = os.path.join(ROOT, "build", "qemu9", "inst", "bin")
+QEMU9_PATCHES = os.path.join(ROOT, "tools", "qemu9")
+
+
+def qemu_patchver():
+    """The pkgversion tools/setup-qemu9.sh builds into its QEMU: 'os8088-'
+    and twelve hex digits of SHA-256 over tools/qemu9/*.patch in name order,
+    so a QEMU built before a patch changed is told apart by its --version."""
+    import glob
+    import hashlib
+    h = hashlib.sha256()
+    for f in sorted(glob.glob(os.path.join(QEMU9_PATCHES, "*.patch"))):
+        with open(f, "rb") as fh:
+            h.update(fh.read())
+    return "os8088-" + h.hexdigest()[:12]
+
+
+def qemuvt():
+    """build/qemu9's QEMU when it carries THIS tree's tools/qemu9/ patches.
+
+    Stock QEMU runs the 8237 DMA controller off an idle BOTTOM HALF on the
+    main loop - HOST time - while under -icount the vCPU runs on without the
+    BQL and spends GUEST time. A main loop the host starved therefore let
+    guest time pass with no transfer, and a Sound Blaster's block IRQ came
+    late by however long that was: 300 ms of host starvation, one thread
+    only, is SOUND.DRV's watchdog and 'The sound card stopped' on 8.2 and
+    9.2 alike (xtmp3rate's pause leg in a loaded soak). i8257-icount.patch
+    moves the channels onto a QEMU_CLOCK_VIRTUAL timer under -icount, which
+    the vCPU thread runs at the instruction count of its deadline, so the
+    transfer follows the GUEST: the same play survives two-second stalls of
+    that thread. Without -icount the patched device is stock. A row whose
+    answer rests on the card's clock under -icount needs `qemuvt`."""
+    p = os.path.join(QEMU9_BIN, "qemu-system-i386")
+    if not os.path.exists(p):
+        return None
+    try:
+        out = subprocess.run([p, "--version"], capture_output=True,
+                             text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p if "(%s)" % qemu_patchver() in (out or "") else None
 
 
 def tree_root():
@@ -763,6 +817,47 @@ def tree_root():
     as a missing build.
     """
     return os.environ.get("OS88_TREE") or None
+
+
+def mega_build():
+    """Where kern_mega's artefacts are read from: `$OS88_MEGA_BUILD`, else
+    the run's own tree (`$OS88_TREE`), else `build/`.
+
+    **THE RUN'S TREE, AND NOT `build/`** (docs/plans/SOAK-PARALLEL.md
+    17.13). Every mega backend defaulted to `build/` - the map, mega.img,
+    megaapps.img - so a frozen soak booted kern_mega out of the operator's
+    directory while its rows' own disks came out of the tree, which is half
+    a run against the directory the tree exists to avoid."""
+    return os.environ.get("OS88_MEGA_BUILD") or tree_root() or \
+        os.path.join(ROOT, "build")
+
+
+def shipped_dir(d):
+    """True when directory D holds the SHIPPED artefacts: `build/` itself or
+    the run's tree (`$OS88_TREE`).
+
+    A frozen soak hands a row `build/trees/<tree>/os8088-360.img` for
+    `build/os8088-360.img` (`at`), so every test of the form
+    `dirname(p) == build/` answers "not shipped" for the very image it was
+    written to recognise. Two kern_mega harness predicates were that test
+    (docs/plans/SOAK-PARALLEL.md 17.13): one booted kern_BIG's system disk
+    on Bochs, and the other took the tree's fixtures for a row's scratch and
+    wrote kern_mega's A: back over them."""
+    r = os.path.realpath(d)
+    roots = [os.path.join(ROOT, "build"), tree_root()]
+    return any(x and r == os.path.realpath(x) for x in roots)
+
+
+def shared_dir(d):
+    """True when directory D belongs to more than one row and a guest may not
+    write into it: a shipped directory (`shipped_dir`), or any tree under
+    `build/trees/` - a knob tree is shared by every row asking for that
+    knob (`DEFAULT_TARGETS`)."""
+    if shipped_dir(d):
+        return True
+    r = os.path.realpath(d)
+    t = os.path.realpath(TREES)
+    return r == t or r.startswith(t + os.sep)
 
 
 def _why(out, err):

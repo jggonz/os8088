@@ -29,6 +29,13 @@ ARMS = {'vga': 'os8088_xt_vga', 'cga': 'os8088_5150_cga_gla',
         'herc': 'os8088_5150_herc_gla'}
 
 
+
+def _lin(m, seg, off=0):
+    """SEG:OFF's linear address - on kern_mega (tests/megaport.txt) every
+    package segment, CS and SS included, is a SELECTOR: m.lin reads it."""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f else (seg << 4) + off
+
 def poses():
     """The raised-arm poses as the GENERATOR states them (SPEC.md 99.5). The
     guest holds only the left one and mirrors it to draw or convert the right,
@@ -93,12 +100,12 @@ def tones(m, p, code, name):
         m.setreg('flags', saved['flags'] & ~0x200)  # no ISR's tone in between
         sp = (saved['sp'] - 2) & 65535
         m.setreg('sp', sp)
-        m.write((saved['ss'] << 4) + sp, struct.pack('<H', saved['ip']))
+        m.write(_lin(m, saved['ss'], sp), struct.pack('<H', saved['ip']))
         m.bp_exec(tone)
         m.run()
         assert m.wait_stop(30) == 'breakpoint', name + ': no tone requested'
         r = m.regs()
-        m.bp_exec((saved['cs'] << 4) + saved['ip'])
+        m.bp_exec(_lin(m, saved['cs'], saved['ip']))
         m.run()
         assert m.wait_stop(30) == 'breakpoint', name + ': gr_musictick never returned'
         for reg in regs:
@@ -146,7 +153,8 @@ class Probe:
         self.m, self.offsets = ui.m, offsets
         win = ui.window('Gorillas')
         raw = self.m.read(self.m.sym('wm_wins'), G.MAX_WIN * G.WIN_SIZE)
-        self.base = struct.unpack_from('<H', raw, win.i * G.WIN_SIZE + G.W_SEG)[0] << 4
+        self.base = _lin(self.m, struct.unpack_from(
+            '<H', raw, win.i * G.WIN_SIZE + G.W_SEG)[0])
         assert self.base
 
     def data(self, name, count=1):

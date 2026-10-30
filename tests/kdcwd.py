@@ -131,6 +131,19 @@ def kdsyms(want):
         return out
 
 
+def rah_check_mega(m):
+    """rah_check's two checks on kern_mega, where kern_dos runs at FFFF in
+    the HMA (build/megak/kerndos.bin) and the DOS core is IN that image, so
+    every cell - the allocator's and the core's - is FFFF0 + its offset in
+    one map (tests/kdarena.py's port reads them the same way)"""
+    kd = dosmap.kerndos()
+
+    def w(n):
+        b = m.read(0xFFFF0 + kd[n], 2)
+        return b[0] | (b[1] << 8)
+    return w
+
+
 def rah_check(m, dm):
     """THE ARENA IS NOT THE ALLOCATOR'S ANY MORE (SPEC.md 96.44.11.3).
 
@@ -156,15 +169,18 @@ def rah_check(m, dm):
     is the DEFECT, and a later design that closes the allocator some other way
     should still be held to the second.
     """
-    syms = kdsyms(RAHWANT)
+    if getattr(m, "bochs", False):
+        w = core = rah_check_mega(m)
+    else:
+        syms = kdsyms(RAHWANT)
 
-    def w(n):
-        b = m.read((KD_SEG << 4) + syms[n], 2)
-        return b[0] | (b[1] << 8)
+        def w(n):
+            b = m.read((KD_SEG << 4) + syms[n], 2)
+            return b[0] | (b[1] << 8)
 
-    def core(n):
-        b = m.read((CORE_SEG << 4) + dm[n], 2)
-        return b[0] | (b[1] << 8)
+        def core(n):
+            b = m.read((CORE_SEG << 4) + dm[n], 2)
+            return b[0] | (b[1] << 8)
 
     seg, runs, top = w("dsk_rah_seg"), w("dsk_rah_runs"), w("kd_top")
     spent = w("kd_spent") & 0xFF
@@ -196,10 +212,31 @@ def main():
         mo = os88mouse.Mouse(marty=m)
 
         # --- 1: the WINDOW's own DOS ----------------------------------------
+        arm = "trip" if getattr(m, "bochs", False) else "windowed"
         win = answers(wait_text(m, "READY", secs=180,
-                                what="the windowed run"), "windowed")
+                                what="the %s run" % arm), arm)
         for k in ("DRIVE", "DIR", "BARE", "MYPATH"):
-            print("kdcwd: windowed %-7s %s" % (k, win[k]))
+            print("kdcwd: %s %-7s %s" % (arm, k, win[k]))
+        if getattr(m, "bochs", False):
+            # **kern_mega HAS ONE ARM** (KERN-MEGA-PLAN 12.1 item 1): that
+            # launch WAS the trip, kern_dos's back end in the HMA, so there is
+            # no window to compare it with - and the four facts the windowed
+            # DOS has always got right (WANT, which is that arm's answer on
+            # every other kernel) are what the trip owes. The second check is
+            # the same: the memory it was handed is still its own
+            bad = [k for k in WANT if win[k] != WANT[k]]
+            if bad:
+                fail("the trip disagrees with the windowed DOS about %s: %s "
+                     "(SPEC.md 96.44 - one core, two back ends, and on "
+                     "kern_mega this is the only one)"
+                     % (", ".join(bad), " / ".join(
+                         "%s=%r, want %r" % (k, win[k], WANT[k])
+                         for k in bad)))
+            rah_check(m, dm)
+            m.type_text("x")
+            print("kdcwd: the trip answers all four as the window does - "
+                  "drive, directory, a bare-name open and its own path")
+            return
         for k, v in WANT.items():
             if win[k] != v:
                 fail("windowed: %s is %r and should be %r - the WINDOW's own "

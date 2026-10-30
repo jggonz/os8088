@@ -75,8 +75,7 @@ csl_entry:
     ; the program could work out. THE ART IS NOT FETCHED HERE ANY MORE
     ; (88.10.7): the program reads it into the bss union it shares with the
     ; bracket's tables, so this image has no claim to make for it.
-    mov dx, ax                      ; DX = where the program is, which is
-    mov es, ax                      ; OSAPI_PKG_REHOME's own input (20.12.10)
+    mov es, ax                      ; ES = where the program is
     mov di, [es:LD_H_IMG]           ; the bss begins here, which the part's own
     mov word [es:di+CSH_MAGIC], 'CS' ; header says
     mov ax, [op_clb]
@@ -92,6 +91,7 @@ csl_entry:
     ; there - so the read's margin past the program goes back to the heap
     ; instead of standing in the region for the session. The same figure is
     ; what bounds the part's image + bss (20.12.10.4).
+    mov al, CS_PART_BODY
     OS88_REHOME
     jc .no
     xor bx, bx                      ; NO WINDOW: ours is the region that is

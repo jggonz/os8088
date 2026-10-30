@@ -119,9 +119,27 @@ def main():
         # back, which is the bracket ending.
         rows = []
 
+        mega = getattr(m, "bochs", False)
+
         def done(mm):
             rows[:] = mm.screen() or []
+            if mega and ran(mm):
+                return True
             return any("SHELLREF DONE" in r for r in rows)
+
+        def ran(mm):
+            """kern_mega (tests/megaport.txt): the probe runs on a TRIP - the
+            whole machine, at Bochs's speed - and the desktop is back the
+            moment it exits, so the DONE marker is gone before a poll can
+            see it. DOS's own [dos_state] = DST_RAN is the same answer."""
+            import dosmap
+            try:
+                dm = dosmap.package()
+                return mm.read(dosmap.lin(mm, dosmap.instance(mm),
+                                          dm["dos_state"]), 1)[0] == 2
+                # (DST_RAN, apps/dos/dos.asm)
+            except Exception:                                  # noqa: BLE001
+                return False                                   # mid-trip
         try:            # a GUEST budget: a loaded box cannot shorten it
             os88marty.until(m, done, "the probe's DONE marker", poll=0.5,
                             limit=240.0)
@@ -214,13 +232,29 @@ def main():
     print("dosshell: ok  - the out-of-space copy left no partial file behind")
 
     now = struct.unpack_from("<H", sub["TWO.TXT"], 26)[0]
-    if now != two_clus:
+    if os.environ.get("OS88_MEGA"):
+        # kern_mega runs the probe under kern_dos, which carries NO copy
+        # engine (OSAPI_FILE_COPY's re-link is the desktop kernel's, SPEC.md
+        # 22.24) by design, so its MOVE is the STREAM path - copy, then
+        # delete (KERN-MEGA-PLAN 14.77). What says that path is whole: the
+        # body above is the source's byte for byte, TWO.TXT is gone from the
+        # root, and the old chain is FREE or someone's - never leaked, which
+        # the --verify below walks for
+        if now == two_clus:
+            fail("SUB/TWO.TXT kept cluster %d: under kern_dos MOVE is the "
+                 "stream path, and a relink there is a copy engine kern_dos "
+                 "does not carry - this is not the build it claims" % now)
+        print("dosshell: ok  - MOVE streamed under kern_dos: cluster %d -> "
+              "%d, the old chain given back (kern_dos has no re-link)"
+              % (two_clus, now))
+    elif now != two_clus:
         fail("SUB/TWO.TXT starts at cluster %d and TWO.TXT started at %d: MOVE "
              "COPIED IT. OSAPI_FILE_COPY's move verb (SPEC.md 22.24) either "
              "did not try its re-link or the re-link declined and it fell "
              "through to its copy" % (now, two_clus))
-    print("dosshell: ok  - MOVE re-linked: still cluster %d, no data moved"
-          % now)
+    else:
+        print("dosshell: ok  - MOVE re-linked: still cluster %d, no data "
+              "moved" % now)
 
     r = subprocess.run([sys.executable, "tools/os88disk.py", "--verify",
                         SCRATCH], capture_output=True, text=True)

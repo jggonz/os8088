@@ -1013,9 +1013,9 @@ _lem_p_mini:
     mov ax, [lm_seg]
     cmp cx, 3
     je .seg
-    mov ax, LEM_TPLANE
-    mul cx
-    add ax, [lb_t]
+    mov bx, cx                      ; T's plane, by index (lemblit.inc's
+    shl bx, 1                       ; LEM_TPLANE note)
+    mov ax, [_lem_tpl+bx]
 .seg:
     mov si, [bp-4]
     mov di, [bp-2]

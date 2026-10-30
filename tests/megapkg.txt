@@ -38,10 +38,44 @@ drivers/hdd/hdxms.inc 1         # HDD.DRV's fill straight into XMS refused
     # refusal every build needs - HDD.DRV is one driver on every kernel's
     # disk - and ~10 bytes
 drivers/ramdisk/rdstore.inc 1   # RAMDISK.DRV's paragraph fold (rd_fold)
-    # skipped for a pool selector ONLY under CPU_F_PM: on a real-mode kernel
-    # a segment of that VALUE is an ordinary paragraph, and an unfolded one
-    # wraps a transfer over 64KB to the START of the caller's segment with
-    # CF=0. A correctness test every build needs, ~10 bytes with its bank
+    # in the units the segment's value allows ONLY under CPU_F_PM: whole
+    # 128-byte granules for an identity selector, none for an LDT one
+    # (KERN-MEGA-MEMORY-PLAN MC8). On a real-mode kernel a segment of that
+    # VALUE is an ordinary paragraph, and an unfolded one wraps a transfer
+    # over 64KB to the START of the caller's segment with CF=0. A correctness
+    # test every build needs, ~10 bytes with its bank
+drivers/net/net.asm 1           # NET.DRV's net_norm, the same rule as
+    # rd_fold's (KERN-MEGA-MEMORY-PLAN MC8, KERN-MEGA-PLAN 14.69): its
+    # one-paragraph fold built a segment off kern_mega's grid. Real mode
+    # folds paragraphs exactly as before; the test and its bank are ~25
+    # bytes of the image, and NET.DRV is one driver for every kernel
+    # under protected mode (um_pmattach): the card's int 33h callback is a
+    # real-mode far call into this image, which kern_mega cannot carry back
+    # into protected mode, so attaching would hand the BIOS a vector that
+    # faults on the first move (KERN-MEGA-MEMORY-PLAN MC7). A correctness
+    # refusal - the CH375 path is untouched - and ~8 bytes
+
+drivers/sound/sb.inc 1          # SOUND.DRV's direct-ring ISR reads the
+    # 8237's count ONLY under CPU_F_PM (SPEC.md 34.5.2.2), banked at verb 0:
+    # on a real-mode kernel the block IRQ lands inside a disk ROM's
+    # channel-3 programming (the ST11M's BIOS v2.0 runs it with IF = 1) and
+    # its flip-flop clear sent the disk's DMA to the wrong address. A
+    # correctness test every build needs - SOUND.DRV is one driver on every
+    # kernel's disk - and 23 bytes with its bank
+
+apps/browser/browser.asm 1      # THE BROWSER'S ARENAS AS SELECTORS
+    # (KERN-MEGA-MEMORY-PLAN MC7): br_entry banks CPU_F_PM in [br_mega] and
+    # [br_docfar], and on kern_mega br_docmap, the parser's br_srcat and the
+    # worker's br_take leave their paragraph sums for bound windows (SEG_BWIN
+    # + SEG_AIM), the EMS spill copies for SEG_AT (br_at). Without it the
+    # shipped Browser is CLOSED by kern_mega (`CLOSED BROWSER 0D`, br_docmap)
+    # on the first page it lays out - tests/brmega.py, red on the old build -
+    # and with it the region and its small claims run above 1MB (OS88_HIGH,
+    # OS88_HIGHMEM). An arm would leave the shipped build refusing to start.
+    # The 8088 pays nothing measurable: br_docmap's one test is the test it
+    # always made ([br_docfar] is [br_docems] OR kern_mega), a line record is
+    # an OFFSET now and so cheaper on every kernel, and the regrow/remap sites
+    # pay a compare. +366 bytes of image (48,035), +505 of BROWSER.O88 on disk
 
 # --- trivial: one far call through a code alias -----------------------------
 
@@ -62,33 +96,33 @@ apps/os88partsbody.inc 1        # op_cseg (OP_WANT_CSEG, PiXEL alone): a
 apps/cc/crt0.asm 1              # the C runtime's overlay vectors through
     # the overlay claim's code alias (cc_ovbind), OS88_CODESEL - a no-op in
     # real mode - in every C package with an overlay
-apps/realdmg/realdmg.asm 1      # rw_csel: the core's, the recompiler's
-    # two cache segments' and its part's far-jump selectors (REALDMG-SPEC
-    # 16.2.4), OSAPI_MEM_CODESEL - DX itself in real mode. On kern_mega it is
-    # CORRECTNESS and not only speed: every far jump into the core through
-    # its data segment was a #GP whose frame the CPU pushed on the core's SP,
-    # which is the GAME BOY's stack in its own WRAM or HRAM - cpu_instrs
-    # looped in test 01 under the recompiler - and a speed fix besides
-    # (87,703 traps in cpu_instrs against 96, all at init). +115 bytes of
-    # REALDMG.O88 on disk, the S_*CS indirection the arm would need anyway
 apps/loom/lmpv.inc 1            # LOOM's preview module far-called through
     # its code alias, OS88_CODESEL; LOOM rides its own disk, no apps disk
-apps/pixelstein/pxgame.asm 2    # px_hseg: OSAPI_MEM_SUBSEG and its code
+apps/pixelstein/pxgame.asm 3    # px_hseg: OSAPI_MEM_SUBSEG and its code
     # twin, with the paragraph sum as the CF=1 fallback every real-mode
-    # kernel takes - PIXELSTEIN 3D's re-homed program addressing its own parts
+    # kernel takes - and the test that refuses the part instead under
+    # protected mode, where CF=1 means a full LDT and the sum names another
+    # descriptor (KERN-MEGA-MEMORY-PLAN MC7) - PIXELSTEIN 3D's re-homed program addressing its own parts
     # (KERN-MEGA-PLAN 14.48). ~40 bytes; the program is on the games disks
-apps/skies/skies.asm 1          # cs_xpand's OSAPI_MEM_SUBSEG, ~25 bytes,
+apps/skies/skies.asm 2          # cs_xpand's OSAPI_MEM_SUBSEG, ~25 bytes,
     # with the granule-aligned sum as the CF=1 path every real-mode kernel
-    # takes (KERN-MEGA-PLAN 14.44). Gating it would take OS88_HIGH off the
+    # takes (KERN-MEGA-PLAN 14.44), and ~10 more refusing the art instead
+    # under protected mode, where CF=1 means a full LDT and the sum names
+    # another descriptor (KERN-MEGA-MEMORY-PLAN MC7). Gating it would take OS88_HIGH off the
     # shipped header with it, for 25 bytes
 apps/taskmgr/taskmgr.asm 1      # the Task Manager telling the truth about
     # kern_mega's memory: under CPU_F_PM extended memory is RAM and a region
-    # above 1MB reads HIGH (KERN-MEGA-PLAN 13.6) - four tests of the byte
+    # above 1MB is RAM's (KERN-MEGA-PLAN 13.6) - four tests of the byte
     # this one sets, and behind them ~180 bytes of display code only
     # kern_mega in protected mode reaches (tm_mpair2/tm_mfig2, tm_xnames,
     # tm_s_rampm, the [tm_pm] arms of the RAM line and tm_sqox; measured off
     # the 9.4KB package's listing at PR #299's review). Without the tests the
     # shipped copy on the system disk would print a selector as a segment
+    # The map's second part - RAM above 1MB drawn beside conventional memory,
+    # 312 bytes - is NOT here: it is the Task Manager's arm, under PKG_MEGA
+    # (SPEC.md 28.4.15), and `make mega` puts that build in SYSTEM/. What the
+    # shipped copy keeps is one more [tm_pm] test (a system block above 1MB
+    # files under System>1MB), a few bytes and no marker
 apps/win16/win16.asm 1          # WIN16 REFUSING TO START (SPEC.md 124.1,
     # WIN16-PLAN.md D6): w16_pmcheck's `test ah, CPU_F_PM`. The layer runs a
     # Windows program's real-mode code with its own segment arithmetic, so

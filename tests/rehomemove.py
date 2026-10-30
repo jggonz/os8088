@@ -77,6 +77,25 @@ RP_HAND, RP_ASSET, RP_CARVE = 0, 2, 4
 RP_OK, RP_ASEG, RP_MOVED = 6, 8, 16
 
 fails = []
+
+
+def L(m, seg, off=0):
+    """SEG:OFF linear: an LDT selector's base on kern_mega (docs/BOCHS.md)"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
+
+def K(m, v):
+    """A segment word as the heap keys its block - itself on a real-mode
+    kernel. On kern_mega (KERN-MEGA-MEMORY-PLAN MC7.4) I_SPTR, the handoff's
+    asset (op_seg's SUB) and the carve are LDT selectors a move REBASES and
+    never changes, so "it moved", "inside the carve" and the delta are asked
+    of the PARAGRAPH under each"""
+    if getattr(m, "bochs", False) and v and 0x100 <= v < 0xA000 and v & 4:
+        b = m.selector(v)
+        return b[0] >> 4 if b else v
+    return v
+
+
 def say(msg):
     print("      %s" % msg)
 
@@ -91,13 +110,13 @@ def prog(m, S):
         if not r[os88geom.I_STATE] or not (r[os88geom.I_KIND] & 0x80):
             continue
         seg = struct.unpack_from("<H", r, os88geom.I_SPTR)[0]
-        if m.read((seg << 4) + 16, 8).split(b"\0")[0] == b"REHOMED":
+        if m.read(L(m, seg, 16), 8).split(b"\0")[0] == b"REHOMED":
             return i, seg
     return None, None
 
 def bss(m, seg):
-    img = struct.unpack_from("<H", m.read(seg << 4, 32), 8)[0]
-    return m.read((seg << 4) + img, 18)
+    img = struct.unpack_from("<H", m.read(L(m, seg), 32), 8)[0]
+    return m.read(L(m, seg, img), 18)
 
 def filler(m, S):
     """FILLER's (fl_done, fl_nask) - or None - read through its window, so a
@@ -112,13 +131,14 @@ def filler(m, S):
                                                   + os88geom.W_SEG, 2))[0]
             if not seg:
                 return None
-            img = struct.unpack_from("<H", m.read(seg << 4, 32), 8)[0]
-            b = m.read((seg << 4) + img, 22)    # filler.asm's bss table:
+            img = struct.unpack_from("<H", m.read(L(m, seg), 32), 8)[0]
+            b = m.read(L(m, seg, img), 22)      # filler.asm's bss table:
             return b[20], struct.unpack_from("<H", b, 16)[0]  # done, nask
     return None
 
 with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     S = m.sym
+    mega = getattr(m, "bochs", False)
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     disk = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
@@ -131,7 +151,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                  "called REHOMED (ld_status %d). tests/rehome.py is the row "
                  "that diagnoses that" % m.read(S("ld_status"), 1)[0])
     b = bss(m, seg0)
-    asset0 = struct.unpack_from("<H", b, RP_ASSET)[0]
+    seg0r, seg0 = seg0, K(m, seg0)      # (raw for reading; the paragraph)
+    asset0 = K(m, struct.unpack_from("<H", b, RP_ASSET)[0])
     carve = [c for c in claims(m, S).claims if c.own == slot]
     if len(carve) != 1:
         sys.exit("rehomemove: %d claims on slot %d, want 1" % (len(carve), slot))
@@ -176,10 +197,11 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         except os88marty.MartyError as e:
             say("(%s)" % e)
         os88marty.settle(m)
-        if prog(m, S)[1] != seg0:
+        if K(m, prog(m, S)[1]) != seg0:
             break
 
-    slot2, seg1 = prog(m, S)
+    slot2, seg1r = prog(m, S)
+    seg1 = K(m, seg1r)
     now = claims(m, S)
 
     # --- 1. it moved ---------------------------------------------------------
@@ -199,12 +221,21 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         say("the region moved %04X -> %04X" % (seg0, seg1))
 
         # --- 2. our own proc RAN --------------------------------------------
-        b2 = bss(m, seg1)
+        b2 = bss(m, seg1r)
         moved = b2[RP_MOVED]
         say("[rp_moved] = %d, handoff asset %04X -> %04X, carve %04X"
-            % (moved, asset0, struct.unpack_from("<H", b2, RP_ASSET)[0],
-               struct.unpack_from("<H", b2, RP_CARVE)[0]))
-        if moved == 0:
+            % (moved, asset0, K(m, struct.unpack_from("<H", b2, RP_ASSET)[0]),
+               K(m, struct.unpack_from("<H", b2, RP_CARVE)[0])))
+        if mega:
+            # KERN-MEGA-MEMORY-PLAN MC7.4: a protected-mode move REBASES and
+            # calls no proc - the handoff's asset is a SUB selector inside
+            # the carve, which mega_mpmovef re-aims with it - so a call here
+            # is the failure, and 4 below is what says the vector followed
+            if moved != 0:
+                fails.append(
+                    "[rp_moved] = %d under kern_mega's protected mode, where "
+                    "a move calls no relocation proc" % moved)
+        elif moved == 0:
             fails.append(
                 "the region moved and [rp_moved] is still 0, so the package's "
                 "own relocation proc was never called. That is SPEC.md 66.2's "
@@ -213,10 +244,10 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
 
         # --- 3. the KERNEL's words followed ---------------------------------
         inst = m.read(S("inst_tab"), heapmap.INST_MAX * os88geom.I_RECSZ)
-        sptrs = [struct.unpack_from("<H", inst,
-                                    i * os88geom.I_RECSZ + os88geom.I_SPTR)[0]
+        sptrs = [K(m, struct.unpack_from("<H", inst, i * os88geom.I_RECSZ
+                                         + os88geom.I_SPTR)[0])
                  for i in range(heapmap.INST_MAX)]
-        owners = set(c.own for c in now.claims)
+        owners = set(K(m, c.own) for c in now.claims)
         if seg1 not in sptrs or seg0 in sptrs or seg0 in owners:
             fails.append(
                 "a kernel word did not follow the move: I_SPTR %r, claim "
@@ -228,7 +259,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         # --- 4. ...AND THE PACKAGE'S OWN ONE --------------------------------
         # The assertion nothing else in the tree makes. Read the asset back
         # through the vector the proc was supposed to fix.
-        asset1 = struct.unpack_from("<H", b2, RP_ASSET)[0]
+        asset1r = struct.unpack_from("<H", b2, RP_ASSET)[0]
+        asset1 = K(m, asset1r)
         # THE SIGNATURE ALONE IS NOT ENOUGH, and the break-it run is what said
         # so: a compaction copies the block DOWN and does not scrub what it
         # came from, so a vector the proc never fixed still points at a
@@ -244,7 +276,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                 "not scrub what it copied from, which is exactly why this "
                 "assertion is about the address and not the bytes"
                 % (asset1, carve1[0].seg, carve1[0].end))
-        sig = m.read(asset1 << 4, 4)
+        sig = m.read(L(m, asset1r), 4)
         if sig != b"RA" + struct.pack("<H", 0x5AA5):
             fails.append(
                 "the handoff vector names %04X and the bytes there are %r, "

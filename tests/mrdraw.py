@@ -156,6 +156,20 @@ def main():
     ap.add_argument("--vga", action="store_true")
     a = ap.parse_args()
     img, apps, machine, path = VGA if a.vga else HERC
+    if os.environ.get("OS88_MEGA"):
+        # kern_mega (tests/megaport.txt): MIDIRack's ARM, which mrprobe's
+        # map is (-DPKG_MEGA) - the media disk's MIDI library beside it, and
+        # nothing else, on a disk of this run's own (Bochs is a VGA: --vga)
+        import shlex
+        import subprocess
+        import tempfile
+        import os88fixture
+        cmd, _ = os88fixture.recipe("build/media360.img", "os88disk.py")
+        midi = [t for t in shlex.split(cmd) if t.startswith("MEDIA/MIDI:")]
+        apps = os.path.join(tempfile.mkdtemp(prefix="mrdraw-"), "mr.img")
+        subprocess.run(["python3", "tools/os88disk.py", "-o", apps, "--size",
+                        "360", "build/megak/apps/midirack.o88"] + midi,
+                       check=True, stdout=subprocess.DEVNULL)
     rows = []
     ok = True
     with os88ui.boot(img, apps=apps, machine=machine, quick=True) as ui:

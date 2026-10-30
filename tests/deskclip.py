@@ -133,6 +133,16 @@ def leg(ui, machine, sc):
                     "repaint (%d pixels differ)" % (slot, rect, bad))
 
 
+# kern_mega under Bochs (tests/megaport.txt): a VGA alone, so the Hercules
+# legs would only be the VGA ones again; and no snapshot, so a boot a leg
+MEGA = bool(os.environ.get("OS88_MEGA"))
+if MEGA:
+    RUNS = [(mc, s) for mc, s in RUNS if mc == "os8088_xt_vga"]
+    for machine, sc in RUNS:
+        with os88ui.boot(IMAGE, apps=APPS, machine=machine, quick=True) as ui:
+            leg(ui, machine, sc)
+    RUNS = []
+
 # ONE BOOT PER MACHINE: each scenario starts from a fork snapshot of the same
 # settled desktop (os88marty.Forks), not from a boot of its own
 for machine in sorted({mc for mc, _ in RUNS}, key=[mc for mc, _ in RUNS].index):

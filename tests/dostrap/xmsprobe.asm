@@ -2,7 +2,7 @@
 ; os8088 - tests/dostrap/xmsprobe.asm
 ;
 ; XMSPROBE.COM - kern_mega's XMS door (SPEC.md 96.15.4,
-; docs/plans/KERN-MEGA-DOS-PLAN.md 6 and its wave W3), end to end, and the
+; docs/plans/completed/KERN-MEGA-DOS-PLAN.md 6 and its wave W3), end to end, and the
 ; filter in front of the raw BIOS move.
 ;
 ;   nasm -f bin -w+error -o XMSPROBE.COM tests/dostrap/xmsprobe.asm

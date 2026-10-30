@@ -2357,14 +2357,21 @@ dsk_runcap:
     jae .hma                    ; (docs/plans/HMA-PLAN.md 5) - below
 %endif
 %ifdef KERN_MEGA
-    test al, 4                  ; AN LDT SELECTOR IS NOT A SEGMENT: a window
-    jnz .hma                    ; above 1MB (OSAPI_XMEM_SEL, a package placed
-%endif                          ; high) or a code alias - the page math below
-                                ; means nothing on it, and the ROM's int 13h
-                                ; cannot reach the first kind at all. 0 bounces
-                                ; it a sector at a time through dsk_secbuf
+    cmp byte [mega_on], 0       ; IN PROTECTED MODE A SELECTOR IS NOT A
+    je .seg                     ; SEGMENT: the page math is on its
+                                ; descriptor's BASE - the scratch ones the
+                                ; file doors load (ODD, SLD) and every
+    call MEGA_SEL_CODE:mega_selbasef ; claim's value in protected mode
+    cmp dx, 0x0F                ; (KERN-MEGA-MEMORY-PLAN MC7.4). Above 1MB (a
+    ja .hma                     ; window, a pool claim) the ROM's int 13h
+    jmp short .lin              ; cannot reach it at all: 0 bounces it
+.seg:
+%endif
     mov cl, 4                   ; the carry out of this is the page number,
     shl ax, cl                  ; which is exactly what we do not want
+%ifdef KERN_MEGA
+.lin:
+%endif
     add ax, bx
     neg ax                      ; bytes to the next 64KB page, 17 bits wide:
     cmc                         ; CF = 1 only when page-aligned (the whole
@@ -3444,29 +3451,19 @@ osapi_vol_fence:
     mov bx, es
     or bx, bx
     jz .no
-%ifdef KERN_MEGA                ; THE CALLER'S DS MAY BE ITS CODE ALIAS on
-    test bl, 4                  ; kern_mega, (S >> 2) | 4, and the published
-    jz .data                    ; segment is the DATA one: HDDTOOL.DRV calls
-    cmp bx, MEGA_LDT_FREE0 * 8  ; (a driver ABOVE 1MB, item 82: a pair's
-    jb .alias                   ; DATA half is published as it is, and its
-    push ax                     ; CODE half's data is + 8)
-    mov ax, bx
-    call MEGA_SEL_CODE:mega_cs2dsf
-    jc .pdata
-    xchg ax, bx
-.pdata:
-    pop ax
-    jmp short .data
-.alias:
-    and bl, 0xF8                ; the resident with DS = the `push cs` its
-    shl bx, 1                   ; HDT_INIT was handed, and a DS write converts
-    shl bx, 1                   ; it only when one faults (mega_gpw). A call
-.data:                          ; with no write before it - HSV_UNMOUNT's -
-%endif                          ; was refused here, silently: the volume kept
-                                ; its row, its icon and its letter, so the
-                                ; next mount of the same partition came up as
-                                ; D: (KERN-MEGA-PLAN 10.3 item 26). The alias
-                                ; IS the image, so it is mega_cs2ds's rule
+%ifdef KERN_MEGA                ; THE CALLER'S DS MAY BE ITS CODE HALF on
+    test bl, 4                  ; kern_mega, and the published segment is the
+    jz .data                    ; DATA one: HDDTOOL.DRV calls the resident
+    push ax                     ; with DS = the `push cs` its HDT_INIT was
+    mov ax, bx                  ; handed, and a DS write converts it only when
+    call MEGA_SEL_CODE:mega_cs2dsf ; one faults (mega_gpw). A call with no
+    jc .pdata                   ; write before it - HSV_UNMOUNT's - was
+    xchg ax, bx                 ; refused here, silently: the volume kept its
+.pdata:                         ; row, its icon and its letter, so the next
+    pop ax                      ; mount of the same partition came up as D:
+.data:                          ; (KERN-MEGA-PLAN 10.3 item 26). Every image
+%endif                          ; is a pair (KERN-MEGA-MEMORY-PLAN MC7.4): its
+                                ; code half's data is + 8, mega_cs2ds's rule
     mov al, 1                   ; WALK the classes rather than naming one. It
 .cls:                           ; tested [drv_fseg2] alone - the DISK class -
     call drv_cls_fp_x             ; which is a fence that only one kind of
@@ -4964,7 +4961,10 @@ dsk_synth_x:
     jne .size
     cmp byte [es:si+DSK_R_EXT+2], '8'
     jne .size
-    cmp dx, PKG_FILE_HI         ; the file must be under 1MB. It was `test dx,
+    cmp dh, PKG_FILE_HI >> 8    ; the file must be under 32MB (DH: the same
+                                ;   3 bytes as `cmp dx, imm8`, so nothing hot
+                                ;   moves - PKG_FILE_HI a multiple of 256,
+                                ;   kernel.asm asserts it). It was `test dx,
     jae .size                   ; dx` - the file had to fit 16 bits - and what
                                 ; changed it is that APP_MAX_SIZE no longer
                                 ; bounds a FILE (SPEC.md 19.1). It bounds the
@@ -6997,10 +6997,20 @@ dsk_rah_want:
 %ifdef KERN_MEGA
     cmp byte [dsk_rah_hi], 0    ; the store above 1MB is held: only its
     je .lo                      ; landing can have been shed, and a mount is
-    cmp word [dsk_rah_bnc], 0   ; where it comes back (dsk_rah_want's note)
+    cmp word [dsk_rah_seg], 0   ; where it comes back (dsk_rah_want's note)
+    je .hgone
+    cmp word [dsk_rah_bnc], 0
     jne .out
     call dsk_rah_land
     jmp short .out
+.hgone:                         ; ...OR THE STORE WAS: mx_shedf's forget
+    mov byte [dsk_rah_hi], 0    ; zeroes the word and nothing else, so the
+    mov bx, MEM_P_RAHB          ; landing stood low with nothing to land for
+    xor dx, dx                  ; and this branch never took a store again
+    xchg dx, [dsk_rah_bnc]      ; (KERN-MEGA-PLAN 14.121). The landing goes,
+    or dx, dx                   ; and the solve below takes both afresh
+    jz .lo
+    call mem_free_x
 .lo:
 %endif
     cmp word [dsk_rah_seg], 0
@@ -7158,7 +7168,10 @@ dsk_rah_wanthi:
     mov cx, DSK_RAH_SECS * 512
     mul cx                      ; AX = the store's bytes (<= 32,256: DX = 0)
     xchg ax, cx
-    call MEGA_SEL_CODE:mega_hiclaimf ; AX = its selector
+    push bx
+    mov bx, MEM_P_DIRW          ; its tag: purgeable, as the conventional
+    call MEGA_SEL_CODE:mega_hiclaimf ; store is (AX = its selector)
+    pop bx                      ; (KERN-MEGA-MEMORY-PLAN MC1)
     jc .no
     call dsk_rah_land
     jnc .got
@@ -7192,41 +7205,11 @@ dsk_rah_land:
 .out:
     jmp kretc_dx
 
-; dsk_fatw_lowf - FAR, from mega_enter (KERN-MEGA-PLAN 10.3 item 38): the
-; FAT windows the boot's mounts CLAIMED were placed before `.cold`'s rung and
-; the read-ahead's 32K came free under them, so each stands on a hole - 72K
-; under C:'s, measured, with the largest run 481K of 553K. A window that is a
-; claim, clean, and not the live one is given back (dsk_fatw_drop), and its
-; volume's next mount takes it again first-fit FROM THE FLOOR, where it walls
-; nothing. The live window and anything dirty are left exactly as they are.
-; Every register preserved
-dsk_fatw_lowf:
-    push ax
-    push bx
-    cmp word [dsk_fatd0], 0xFFFF
-    jne .out                    ; a FAT sector is dirty: touch nothing
-    xor al, al
-.vol:
-    push ax
-    call dsk_fatw_slota
-    jc .next
-    mov bx, [bx+DVOL_MAX*2]     ; the window's claim, 0 = none
-    or bx, bx
-    jz .next
-    cmp bx, FAT_SEG             ; the pin is not a claim
-    je .next
-    cmp bx, [dsk_fatseg]        ; ...and the live window stays live
-    je .next
-    call dsk_fatw_drop          ; AL = the volume
-.next:
-    pop ax
-    inc al
-    cmp al, DVOL_MAX
-    jb .vol
-.out:
-    pop bx
-    pop ax
-    retf
+; dsk_fatw_lowf lived here - mega_enter's drop of the boot's idle FAT
+; windows (item 38). It ran before mem_xlatf and freed by PARAGRAPH, which
+; mem_find_own no longer matches once mega_on is set, so it zeroed the slot and
+; LEAKED the claim; mem_hicaches_f now moves each window above 1MB with its
+; sectors instead (KERN-MEGA-PLAN 14.121).
 
 ; dsk_rah_dropf - FAR, from the DOS park's claim (mega_dosclaimf): the store
 ; and its landing given back and NOT re-solved, so a park sized from what the
@@ -7244,11 +7227,9 @@ dsk_rah_dropf:
     pop ax
     retf
 
-; dsk_rah_redof - dsk_rah_redo for a FAR caller: mega_enter, whose switch
-; makes the store's home above 1MB reachable for the first time
-dsk_rah_redof:
-    call dsk_rah_redo
-    retf
+; dsk_rah_redof lived here, mega_enter's re-solve of the read-ahead store:
+; the same paragraph free, so it refused and the boot's 32KB stayed low.
+; mem_hicaches_f moves the store, chunks and all (KERN-MEGA-PLAN 14.121)
 %endif
 
 ; -----------------------------------------------------------------------------

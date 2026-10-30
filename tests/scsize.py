@@ -149,13 +149,18 @@ def main():
                      quick=True) as ui:
         m = ui.m
         S = ui._S
+        # c * 16 - or on kern_mega (tests/megaport.txt), where every segment
+        # a package names is an LDT selector, its descriptor's base; and a
+        # claim is named there by its selector (heapmap's `sel`, the pool's
+        # claims above 1MB included), which on every other kernel IS c.seg
+        lin = getattr(m, "lin", lambda s_, o_=0: s_ * 16 + o_)
 
         def instance():
             for i in range(12):
                 r = m.read(S("inst_tab") + i * os88geom.I_RECSZ,
                            os88geom.I_RECSZ)
                 c = u16(r, os88geom.I_SPTR)
-                h = bytes(m.read(c * 16, 32)) if c else b""
+                h = bytes(m.read(lin(c), 32)) if c else b""
                 # the flags (+3: packed) and the image size (+8: the
                 # trim) are the packager's; the entry and name are ours
                 if (r[os88geom.I_STATE] == 1 and c and h[:2] == head[:2]
@@ -166,23 +171,23 @@ def main():
         ui.path("B:/SCRIBE.O88")
         M.until(m, lambda _: instance(), "SCRIBE's instance", poll=0.05,
                 limit=120)
-        base = instance() * 16
+        seg = instance()
+        base = lin(seg)
         W = lambda n, k=0: u16(m.read(base + syms[n] + k, 2))   # noqa: E731
 
         def claims():
             hm = heapmap.Map(m, {n: S(n) for n in ("mem_base", "mem_top",
                                                    "spl_live", "mem_tab")})
-            return hm.claims
+            return hm.claims + getattr(hm, "pool", [])
 
         def mine():
-            seg = base >> 4
-            return sorted((c.seg, c.para) for c in claims()
-                          if c.own == seg and c.seg != seg)
+            return sorted((c.sel, c.para) for c in claims()
+                          if c.own == seg and c.sel != seg)
 
         def doc():
             n = W("sc_len")
-            t = bytes(m.read(W("sc_dseg") * 16, n))
-            c = bytes(m.read(W("sc_cseg") * 16, n))
+            t = bytes(m.read(lin(W("sc_dseg")), n))
+            c = bytes(m.read(lin(W("sc_cseg")), n))
             return t, c
 
         def digest(what):
@@ -216,7 +221,6 @@ def main():
             idle("save " + name)
 
         idle("launch")
-        seg = base >> 4
         rec = next(m.read(S("inst_tab") + i * os88geom.I_RECSZ,
                           os88geom.I_RECSZ) for i in range(12)
                    if u16(m.read(S("inst_tab") + i * os88geom.I_RECSZ,
@@ -225,7 +229,7 @@ def main():
         check("PARTS: I_SIZE is SC_P1ORG = %d" % p1org, isize == p1org,
               "I_SIZE = %d - the region the program declared (20.12.10.4)"
               % isize)
-        reg = [c for c in claims() if c.seg == seg]
+        reg = [c for c in claims() if c.sel == seg]
         need = (p1org + len(p1) + 15) // 16
         check("PARTS: the region's claim holds part 1 too",
               reg and reg[0].para >= need,
@@ -277,15 +281,15 @@ def main():
         check("PICTURE: 64 x 48 in the table", (pw, ph) == (64, 48),
               "%d x %d" % (pw, ph))
         kb = (ps * ph + 1023) // 1024
-        pc = [c for c in claims() if c.seg == pseg]
+        pc = [c for c in claims() if c.sel == pseg]
         check("PICTURE: its claim is exactly its own %d KB" % kb,
               len(pc) == 1 and pc[0].para == kb * 64,
-              "%r" % [(c.seg, c.para) for c in pc])
+              "%r" % [(c.sel, c.para) for c in pc])
         check("PICTURE: no scratch or staging claim left",
               W("sc_picseg") == 0 and W("sc_stgseg") == 0
               and mine() == sorted(before + [(pseg, kb * 64)]),
               "%r -> %r" % (before, mine()))
-        pix = bytes(m.read(pseg * 16, ps * ph))
+        pix = bytes(m.read(lin(pseg), ps * ph))
         save_as("T2.RTF")
         open_doc("T2.RTF")
         digest("T2.RTF")
@@ -293,7 +297,7 @@ def main():
         pseg2 = u16(rec2, 6)
         check("PICTURE: survives an .RTF round trip, byte for byte",
               W("sc_npic") == 1 and rec2[:6] == rec[:6]
-              and bytes(m.read(pseg2 * 16, ps * ph)) == pix)
+              and bytes(m.read(lin(pseg2), ps * ph)) == pix)
 
         # --- TOOBIG --------------------------------------------------------
         held = mine()

@@ -63,8 +63,10 @@ BASE_VHD = os.path.join(M.base_run_dir(), VHD_REL)
 
 
 def vhd(m):
-    """THIS run's disk. One per instance, so two runs cannot share one."""
-    return os.path.join(m.run_dir, VHD_REL)
+    """THIS run's disk. One per instance, so two runs cannot share one. On
+    kern_mega it is the disk the row HANDED Bochs (`m.cimg`, a staged run
+    tree's VHD - tools/os88megabochs.py's row_disk)."""
+    return getattr(m, "cimg", None) or os.path.join(m.run_dir, VHD_REL)
 
 
 SECTOR = 512
@@ -360,8 +362,12 @@ def main():
     for img in ("build/os8088-360.img", "build/apps360.img"):
         if not os.path.exists(img):
             sys.exit("no %s - `make` first" % img)
+    # kern_mega (tests/megaport.txt): Bochs has no MartyPC template of its
+    # own, so the row stages one and hands it over as the machine's C:
+    run_dir = M.stage_run_dir("instdeep") if os.environ.get("OS88_MEGA") \
+        else None
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=MACHINE, boot=False) as m:
+                  machine=MACHINE, boot=False, run_dir=run_dir) as m:
         m.run(); M.kernel_up(m)       # a state gate: every act is a click
         install(m)
         # NO SCREENSHOT, and that is the point rather than an omission: the
@@ -409,7 +415,8 @@ def main():
     # --- and the BYTES, for the files the source disk carries packed --------
     # THE SAME READER ON BOTH SIDES, so a difference is the install's and not
     # two implementations disagreeing.
-    src = Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    src = Vol(open(M.system_disk(os88build.at("build/os8088-360.img")),
+                   "rb").read())       # (mega.img on kern_mega)
     for p in WANT_RAW:
         want, wmark = src.read(p), src.mark(p)
         if want is None or wmark not in (0x5A, 0x5B):

@@ -612,7 +612,8 @@ CHOICE_HELP = {
         "auto": "Mode X and 16 colours on a screen of their own: build each "
                 "scene change ahead on the second page and flip to it - kept "
                 "only if the picture comes out better and nowhere worse "
-                "(the default; twice the encode time there)",
+                "(the default; twice the encode time there). With Flip, on "
+                "the pages past the flip's two: Pages 3 or more",
         "on": "Always build ahead, a Hercules too - which then plays only "
               "on a Hercules with no colour card beside it",
         "off": "Never: one page, every frame drawn in place",
@@ -718,6 +719,12 @@ CHOICE_HELP = {
         "2": "Two a sample: the whine at twice the rate, much quieter to "
              "the ear - ~96% of a 4.77 MHz 8088, so for a 286 or better",
     },
+    "colour_mix": {
+        "all": "Any of the palette's colours mix (the default): a grey can "
+               "be cyan and red dots",
+        "hue": "Greys mix black and white; a colour mixes only its own hue "
+               "and one grey - no dots of an opposite colour",
+    },
     "dither": {
         "bayer": "An ordered 8 x 8 pattern: steady, compresses best",
         "bluenoise": "A noise pattern: no visible grid, ~8% more data",
@@ -734,9 +741,9 @@ CHOICE_HELP = {
         "640x350": "640 x 350, mode 10h's lines: full screen, two pages",
         "640x400": "640 x 400: full screen, two pages",
         "320x200n": "320 x 200 NARROW: full screen, eight pages - for "
-                    "--pages; no --flip (98.1.3.2.5)",
+                    "--pages or --flip, half a row to copy (98.1.3.2.5)",
         "320x240n": "320 x 240 NARROW: full screen, six pages - for "
-                    "--pages; no --flip (98.1.3.2.5)",
+                    "--pages or --flip, half a row to copy (98.1.3.2.5)",
     },
     "palette": dict([("auto", "The format's own colours: the clip's 256 "
                       "for 256-colour VGA, the EGA's sixteen for 16 "
@@ -886,7 +893,7 @@ def implied(preset=None, pixfmt=None, profile="5150-st225", live=None,
 # its story the day that default moved. What a preset, a format or a
 # profile implied is stored as the value it came to, and so is the
 # speaker style's three numbers. It is ~160 bytes (os88vid.OPTS_ZDICT).
-OPTS_VERSION = 47
+OPTS_VERSION = 49
 # what is the encode's plumbing rather than how the file was made
 OPTS_SKIP = ("src", "out", "help", "progress", "quiet", "preview_png",
              "profiles", "posters_only")
@@ -920,7 +927,8 @@ OPTS_FINGERPRINT = {1: "06108fff43ef1307", 2: "496cc97e70197133",
                     41: "9c78d785df0d94a4", 42: "6f2cb773837bd222",
                     43: "ec2917558c23907f", 44: "1baaf8c2dacb6f7b",
                     45: "9f36a470662f10ba", 46: "bdf38e4e169941ba",
-                    47: "5de4b2ffebe0a64f"}
+                    47: "5de4b2ffebe0a64f", 48: "ba9e5d3fb742014e",
+                    49: "238b11ab4d51b177"}
 LAG_MS = "50-100"       # --lag's default (98.2.1.1.3), the owner's (2026-10-16):
                         # a RANGE, searched for each burst, where it was one
                         # number tuned by hand. Its top is the 100 ms that
@@ -1117,6 +1125,14 @@ MIGRATIONS = {
     45: [("added", "ladder_at", ""), ("added", "scene_join", "")],
     # 47: --blocks (98.1.10) - a file made before it is version 1
     46: [("added", "blocks", "off")],
+    # 48: --flip-build (98.2.5.2.1) - a file made before it built no scene
+    # ahead of its flip
+    47: [("added", "flip_build", 0)],
+    # 49: --colour-mix, --colour-clip and --edge-solid (98.2.6.1) - a file
+    # made before them mixed any colours, clipped every colour at --clip
+    # and dithered its edges
+    48: [("added", "colour_mix", "all"), ("added", "colour_clip", None),
+         ("added", "edge_solid", 0.0)],
 }
 
 
@@ -1603,6 +1619,17 @@ def threshold_map(kind, w, h):
     m = bayer(8) if kind == "bayer" else bluenoise()
     reps = (-(-h // m.shape[0]), -(-w // m.shape[1]))
     return np.tile(m, reps)[:h, :w]
+
+
+def hue_chroma(x):
+    """(hue in degrees, chroma = max - min channel) of RGB `x` (..., 3)"""
+    r, g, b = x[..., 0], x[..., 1], x[..., 2]
+    mx, mn = x.max(-1), x.min(-1)
+    c = mx - mn
+    cz = np.where(c == 0, 1, c)
+    h = np.where(mx == r, ((g - b) / cz) % 6,
+                 np.where(mx == g, (b - r) / cz + 2, (r - g) / cz + 4))
+    return h * 60.0, c
 
 
 class Ditherer:
@@ -2151,10 +2178,23 @@ class KnollDitherer(Vga8Ditherer):
 
     HOLD_DECAY = 0.8                # the hold score's, a frame (settle)
 
+    # --colour-mix hue (98.2.6.1): a palette colour this far from grey
+    # (max - min channel, of 255) is a COLOUR, and a pixel this far from
+    # grey has a hue a colour must lie within HUE_GAP degrees of to mix
+    GREY_CHROMA = 48.0
+    HUE_CHROMA = 40.0
+    HUE_GAP = 60.0
+
     def __init__(self, w, h, palette, stable, clip=0.0, hold=0.0,
-                 score=0.0, cap=0.0, sparse=0):
+                 score=0.0, cap=0.0, sparse=0, mix="all", cclip=None,
+                 edge=0.0):
         super().__init__(w, h, palette, 0.0, stable)
         self.kclip = clip               # (every colour: see raw)
+        self.mix = mix                  # --colour-mix: see raw
+        self.cclip = cclip              # --colour-clip: see raw
+        self.edge = edge                # --edge-solid: see raw
+        ph, pc = hue_chroma(self.pal)
+        self.phue, self.pgrey = ph, pc < self.GREY_CHROMA
         self.sparse = sparse            # --vga4-sparse: see raw
         self.cap = cap                  # --vga4-plan-cap: see raw
         self.hold = hold                # --vga4-hold: see settle
@@ -2165,14 +2205,41 @@ class KnollDitherer(Vga8Ditherer):
         pal = self.pal
         self.luma = pal[:, 0] * 0.299 + pal[:, 1] * 0.587 + pal[:, 2] * 0.114
 
+    def allowed(self, f):
+        """--colour-mix hue (98.2.6.1): (h, w, colours) - the palette
+        colours each pixel's plan may use. The GREYS always; a COLOUR only
+        within HUE_GAP degrees of a pixel that is HUE_CHROMA from grey, so
+        two far hues (CGA's cyan and red, whose mean is a grey) never mix
+        into dots. And a coloured pixel's tone is ONE grey's: those darker
+        than its nearest colour where it is darker, those lighter where it
+        is lighter - a light edge of a colour mixes in white, not black"""
+        h, c = hue_chroma(f)
+        dh = np.abs((h[..., None] - self.phue + 180.0) % 360.0 - 180.0)
+        chrom = (dh <= self.HUE_GAP) & (c[..., None] >= self.HUE_CHROMA) \
+            & ~self.pgrey
+        d = ((f[..., None, :] - self.pal) ** 2).sum(-1)
+        ci = np.where(chrom, d, np.inf).argmin(-1)
+        lum = f @ np.array([0.299, 0.587, 0.114], np.float32)
+        darker = (lum < self.luma[ci])[..., None]
+        side = np.where(darker, self.luma <= self.luma[ci][..., None],
+                        self.luma >= self.luma[ci][..., None])
+        grey = self.pgrey & np.where(chrom.any(-1)[..., None], side, True)
+        ok = grey | chrom
+        return ok | ~ok.any(-1)[..., None]    # (no greys and no hue: any)
+
     def raw(self, rgb):
         f = rgb.astype(np.float32)
         err = np.zeros_like(f)
         cands = []
+        ok = self.allowed(f) if self.mix == "hue" else None
         for _ in range(self.N):
             t = np.clip(f + err, 0, 255)
-            q = np.clip(np.rint(t * (31 / 255)), 0, 31).astype(np.int32)
-            c = self.lut[(q[..., 0] << 10) | (q[..., 1] << 5) | q[..., 2]]
+            if ok is not None:
+                c = np.where(ok, ((t[..., None, :] - self.pal) ** 2).sum(-1),
+                             np.inf).argmin(-1).astype(np.uint8)
+            else:
+                q = np.clip(np.rint(t * (31 / 255)), 0, 31).astype(np.int32)
+                c = self.lut[(q[..., 0] << 10) | (q[..., 1] << 5) | q[..., 2]]
             if self.cap:
                 # THE PLAN'S REACH (--vga4-plan-cap, VIDEO-PALETTE-PLAN
                 # 10.3): a candidate further from the source than `cap`, or
@@ -2214,15 +2281,37 @@ class KnollDitherer(Vga8Ditherer):
             # colour, does not
             few = (cands == idx[..., None]).sum(-1) <= self.sparse
             idx = np.where(few, cands[..., 0].astype(np.uint8), idx)
-        if self.kclip:
+        if self.kclip or self.cclip or self.edge:
             # SOLID COLOURS (`--clip`, Ditherer's rule for a sparse palette):
             # a pixel within `clip` levels on every channel of the colour
             # nearest it - the plan's first - IS that colour. The plan
             # otherwise carries a near-black's small error until one cell in
             # sixteen takes dark grey or blue: an even grid of dots over
-            # every flat area, which also costs bytes as noise flickers them
+            # every flat area, which also costs bytes as noise flickers them.
+            # `--colour-clip` is the same rule for a COLOUR of the palette,
+            # `--clip` then the greys' alone (98.2.6.1): a flat colour the
+            # palette nearly has stays solid while greys still dither
             c0 = cands[..., 0]
-            near = np.abs(f - self.pal[c0]).max(-1) <= self.kclip
+            lim = np.float32(self.kclip) if self.cclip is None else \
+                np.where(self.pgrey[c0], np.float32(self.kclip),
+                         np.float32(self.cclip))
+            near = (np.abs(f - self.pal[c0]).max(-1) <= lim) & (lim > 0)
+            if self.edge:
+                # AN EDGE DOES NOT DITHER (`--edge-solid`, 98.2.6.1): where
+                # the source spans more than `edge` levels across a pixel's
+                # 3 x 3, the pixel is its nearest colour. A pattern needs an
+                # area to be seen; on a one- or two-pixel blend between two
+                # flat colours (an anti-aliased letter) it is stray dots
+                # (the 3 x 3's RANGE, high less low on each channel: the
+                # middle of a blend is an edge as well as its two ends)
+                pad = np.pad(f, ((1, 1), (1, 1), (0, 0)), mode="edge")
+                hh, ww = f.shape[:2]
+                hi, lo = f.copy(), f.copy()
+                for dy in range(3):
+                    for dx in range(3):
+                        n = pad[dy:dy + hh, dx:dx + ww]
+                        hi, lo = np.maximum(hi, n), np.minimum(lo, n)
+                near |= (hi - lo).max(-1) > self.edge
             idx = np.where(near, c0.astype(np.uint8), idx)
             plan = np.where(near, np.left_shift(np.uint16(1), c0.astype(
                 np.uint16)), plan)
@@ -3991,7 +4080,8 @@ def coarse_every(cell):
 
 
 def vfr_try(enc, ts, pat, au, tp, first=None, cost=VFR_HOLD, empty=False,
-            shown=None, stay=False, lag=None, count=False, every=None):
+            shown=None, stay=False, lag=None, count=False, every=None,
+            every_n=None):
     """The stretch `ts` encoded on a copy at the hold pattern `pat`: its
     mean view as seen, a frame against the picture it draws (a held one's
     the next shown, and VFR_HOLD more). `first`, what the first frame
@@ -4004,7 +4094,9 @@ def vfr_try(enc, ts, pat, au, tp, first=None, cost=VFR_HOLD, empty=False,
     (the ladder's). COUNT -> (that, the frames it shows that were cut, the
     most broken frame's view as seen, no hold's charge in it). EVERY,
     coarseany's: each frame drawn at its own time that the budgets would
-    cut is drawn as every(e, frame, au) says - cells - instead"""
+    cut is drawn as every(e, frame, au) says - cells - instead; EVERY_N,
+    only the stretch's first that many frames are (a scene's cells on
+    each page of a --flip-own file, own_cells)"""
     e = enc_clone(enc)
     if lag is not None:
         e.flag_lag = lag
@@ -4041,8 +4133,8 @@ def vfr_try(enc, ts, pat, au, tp, first=None, cost=VFR_HOLD, empty=False,
         c0 = e.stats["cut"]
         ev = every(e, ts[k], au if j == 0 else b"\x80" * len(au)) \
             if every is not None and k == j and not (
-                j == 0 and first is not None and first is not ts[0]) \
-            else None
+                j == 0 and first is not None and first is not ts[0]) and (
+                every_n is None or j < every_n) else None
         if j == 0 and k == 0 and first is not None and first is not ts[0]:
             e.all3 = e.wm3
             _, rec = e.frame(first, au)
@@ -4265,16 +4357,54 @@ def trial_pool(enc, a, most):
 
 
 def _ladder_trial(e, ts, pat, au, tp, first, cost, empty, shown, stay,
-                  lag, ac):
+                  lag, ac, an=None):
     """A ladder prefix's trial (degrade_choose), in a worker"""
     return vfr_try(e, ts, pat, au, tp, first, cost, empty, shown, stay,
                    lag=lag, count=True,
-                   every=coarse_every(ac) if ac else None)
+                   every=coarse_every(ac) if ac else None, every_n=an)
+
+
+def own_cells(enc):
+    """A SCENE'S CELLS ON EACH PAGE (--flip-own on two pages, 98.2.1.9):
+    every record is drawn on the page the glass is not showing, as it
+    stands, so the page after a scene's first frame still holds the scene
+    before it - cells on one page and a cut on the other alternate on the
+    glass. The frames a scene's cells go on: the first, and the next where
+    the budgets would cut it - 2 - or 1 where the pages are one picture"""
+    return 2 if getattr(enc, "own", False) else 1
+
+
+def build_try(enc, ts, m, au, pal=None):
+    """--flip-build's trial (98.2.5.2.1): the stretch `ts` - the frames up
+    to and including a scene's first, ts[-1] - on a copy of the encoder,
+    its last `m` frames before the scene HELD toward it (drawn on the page
+    the glass is not showing, in the scene's colours `pal`, and not shown)
+    and the scene's first then drawn and shown. -> the scene's first
+    frame's pixels left wrong, 0 where it came out whole"""
+    e = enc_clone(enc)
+    e.probe = True
+    n = len(ts) - 1
+    for j, t in enumerate(ts):
+        a_ = au if j == 0 else b"\x80" * len(au)
+        if n - m <= j < n:
+            old = e.pal
+            if pal is not None:
+                e.set_pal(pal)
+            e.staying = True
+            _, rec = e.frame(ts[n], a_)
+            if pal is not None:
+                e.set_pal(old)
+        else:
+            if j == n and pal is not None:
+                e.set_pal(pal)
+            _, rec = e.frame(t, a_)
+        e.charge(rec, len(au))
+    return int(np.count_nonzero(e.screen != ts[n]))
 
 
 def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
                    empty=False, shown=None, stay=False, coarse=None,
-                   scene=False, pool=None):
+                   scene=False, pool=None, nohold=False):
     """THE DEGRADE LADDER at a stretch (--ladder): today's draw, then each
     of the ladder's prefixes (`steps`, degrade_steps), each encoded on a
     copy - the first that shows every frame WHOLE, or past a cut rung no
@@ -4284,7 +4414,10 @@ def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
     stretch's frames the budgets would cut in cells (coarse_every) ->
     (hold pattern, rate, lag frames, scene cell, rung index, any cell).
     With a `pool` (TrialPool) every prefix's trial runs at once, today's
-    draw here meanwhile, and the same rule reads them in order"""
+    draw here meanwhile, and the same rule reads them in order. NOHOLD, a
+    stretch whose first frame may not be held - a flipped file's new
+    scene palette, which goes on with the flip onto the picture shown -
+    climbs every prefix at the full rate: its lag and its cells, no slow"""
     n = len(ts)
     full = [False] * n
     # (each prefix's draw: a trial where it draws other than the one
@@ -4292,6 +4425,8 @@ def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
     # made once a cell, here, before any trial: none changes the encoder)
     tries, cfs, was = [], {}, (1.0, None, False, None)
     for i, r, lag, sc, tol, ac in steps:
+        if nohold:
+            r = 1.0
         cell = sc if scene else None
         if coarse is None:
             ac = None
@@ -4309,8 +4444,11 @@ def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
         for t in tries:
             if t[8]:
                 i, r, lag, cell, tol, ac, pat, cf = t[:8]
+                tac, tan = ac, None
+                if not ac and cf is not first and own_cells(enc) > 1:
+                    tac, tan = cell, own_cells(enc)
                 t[9] = pool.submit(_ladder_trial, enc, ts, pat, au, tp, cf,
-                                   cost, empty, shown, stay, lag, ac)
+                                   cost, empty, shown, stay, lag, tac, tan)
     got = vfr_try(enc, ts, full, au, tp, first, cost, empty, shown,
                   stay, count=True)
     v, cuts, worst = got
@@ -4323,10 +4461,13 @@ def degrade_choose(enc, ts, au, steps, fps, tp, first=None, cost=VFR_HOLD,
         return best[1:]
     for i, r, lag, cell, tol, ac, pat, cf, new, job in tries:
         if new:
+            tac, tan = ac, None         # (the other page's cells: own_cells)
+            if not ac and cf is not first and own_cells(enc) > 1:
+                tac, tan = cell, own_cells(enc)
             got = job.get() if job is not None else vfr_try(
                 enc, ts, pat, au, tp, cf, cost, empty, shown, stay,
                 lag=lag, count=True,
-                every=coarse_every(ac) if ac else None)
+                every=coarse_every(tac) if tac else None, every_n=tan)
         v, cuts, worst = got            # (a cut rung alone: the same draw)
         if os.environ.get("OS88_VENC_LADLOG"):
             with open(os.environ["OS88_VENC_LADLOG"], "a") as fl:
@@ -5865,7 +6006,7 @@ class Flipped:
                 self._own_set((shown[0].copy(), bytearray(shown[1]),
                                None if shown[2] is None else shown[2].copy()))
                 # (the player's copy off the glass, 98.3.8.1's price)
-                self.prev_c = (y1 - y0) * 80 * self.lcopy + CYC_LCOPY0
+                self.prev_c = (y1 - y0) * self.g.stride * self.lcopy + CYC_LCOPY0
 
     def charge(self, rec, abytes):
         c = self.cost(rec)
@@ -5912,9 +6053,9 @@ class Flipped:
             elif sb is not None:
                 self.sband = None
                 rows = max(0, max(sb[1], y1) - min(sb[0], y0))
-                self.prev_c = rows * 80 * self.lcopy + CYC_LCOPY0
-            elif n > vid.PREV_MAX or rows * 80 * VP_LCW < n:
-                self.prev_c = rows * 80 * self.lcopy + CYC_LCOPY0
+                self.prev_c = rows * self.g.stride * self.lcopy + CYC_LCOPY0
+            elif n > vid.PREV_MAX or rows * self.g.stride * VP_LCW < n:
+                self.prev_c = rows * self.g.stride * self.lcopy + CYC_LCOPY0
             else:
                 self.prev_c = getattr(self, "cost0", self.cost)(rec)
         self.end(spent)
@@ -7301,7 +7442,7 @@ class PageAheadF(PageAheadN):
     def _ccost(self, band):
         e = self.e
         return 0.0 if band is None else \
-            (band[1] - band[0]) * 80 * e.lcopy + CYC_LCOPY0
+            (band[1] - band[0]) * e.g.stride * e.lcopy + CYC_LCOPY0
 
     def _setsurf(self, h, surf):
         """builder object `h` made to model the page holding `surf`"""
@@ -7467,7 +7608,7 @@ class PageAheadF(PageAheadN):
         # a builder for its copy - the next target's build begins once that
         # copy is whole. Where it can be paid (a 486), every builder builds
         pre = len(self.hs) > 1 and \
-            e.g.h * 80 * e.lcopy + CYC_LCOPY0 > e.ceil * PA_COPY_OK
+            e.g.h * e.g.stride * e.lcopy + CYC_LCOPY0 > e.ceil * PA_COPY_OK
         held = False                    # (the nearest's build or copy is
         for F, i in sorted((F, i) for i, F in enumerate(self.asg)  # not
                            if isinstance(F, int)):                 # whole)
@@ -7523,7 +7664,7 @@ class PageAheadF(PageAheadN):
             if y0 >= e.g.h or out and out[-1][0] == self.hp[i]:
                 continue                # (whole; or built THIS frame: its
                                         # rows are copied from the next)
-            per = 80 * e.lcopy
+            per = e.g.stride * e.lcopy
             n = int(min(e.g.h - y0, (cpu_left - CYC_LCOPY0) // per))
             if n < 1:
                 break
@@ -8620,8 +8761,7 @@ def page_auto_why(a):
     the report says it either way"""
     lay = a.layout or (PRESETS[a.preset][0] if a.preset else None)
     pf = a.pixfmt or PRESET_PIXFMT.get(a.preset)
-    for cond, why in ((a.flip, "--flip pages every frame already"),
-                      (a.live, "a Live file plays on the desktop"),
+    for cond, why in ((a.live, "a Live file plays on the desktop"),
                       (a.resident, "a resident file plays on the desktop"),
                       (a.loop_from is not None, "a looped file"),
                       (PROFILES[profile_name(a.profile)]["avg"] is None,
@@ -8630,7 +8770,17 @@ def page_auto_why(a):
             return why
     if lay == "modex" or (pf == "vga4" and
                           (a.screen or "640x480") != "640x480"):
+        # FLIPPED, the pages past the flip's two are what it builds on
+        # (98.2.1.8.5): auto tries it where --pages leaves three or more
+        if a.flip:
+            scr = vid.SCREEN_BY_NAME[a.screen] if pf == "vga4" else \
+                vid.SCR_320X200 if a.screen == "320x200" else 0
+            if page_count(a, vid.LAYOUT_BY_NAME[lay or "lin80"], scr) < 3:
+                return ("--flip pages every frame already, and building "
+                        "ahead as well wants 3 pages or more (--pages)")
         return None
+    if a.flip:
+        return "--flip pages every frame already"
     if pf == "vga4":
         return ("640 x 480 in 16 colours has no second page (two of its "
                 "frames are 300 KB of a VGA's 256)")
@@ -9892,6 +10042,10 @@ def _encode(a, keep, tick, readers):
         0.0 if own16 else 16.0
     ksparse = a.vga4_sparse if getattr(a, "vga4_sparse", None) is not None \
         else 2 if own16 else 0
+    # CGA'S COLOURS, MIXED BY HUE (98.2.6.1): CGA4 and C160 only
+    cmix = dict(mix=getattr(a, "colour_mix", "all") or "all",
+                cclip=getattr(a, "colour_clip", None),
+                edge=getattr(a, "edge_solid", 0.0) or 0.0)
     optsblk = vid.pack_options(options_doc(a, sfps))
     pasp = vid.CGA4_ASPECT if cga4 else LIVE_ASPECT[a.live] if a.live \
         else vid.SCREENS[scr][3] if scr else None
@@ -10104,11 +10258,11 @@ def _encode(a, keep, tick, readers):
             cgapal, " ".join(str(c) for c in cols)))
         pal6 = b"".join(vid.STD16[3 * c:3 * c + 3] for c in cols)
         k4 = KnollDitherer(lw, lh, pal6, a.vga4_stable, kclip,
-                           a.vga4_hold, a.vga4_hold_score)
+                           a.vga4_hold, a.vga4_hold_score, **cmix)
         dith = Staged(k4, post=lambda i: pack_pixels(i, 4))
     elif c160:
         k16 = KnollDitherer(lw, lh, vid.STD16, a.vga4_stable, kclip,
-                            a.vga4_hold, a.vga4_hold_score)
+                            a.vga4_hold, a.vga4_hold_score, **cmix)
         dith = Staged(k16, post=lambda i: pack_pixels(i, 2))
     elif text:
         cgapal = vid.TEXT_COLOUR if tcol == "colour" else vid.TEXT_MONO
@@ -10363,10 +10517,6 @@ def _encode(a, keep, tick, readers):
     if a.flip and L != vid.LAY_MODEX and not scr:
         raise vid.V88Error("--flip is Mode X's, or 16 colours' on a --screen "
                            "of its own: 13h and 12h have one page")
-    if a.flip and scr in vid.NARROW:
-        raise vid.V88Error("--flip is not a NARROW screen's: its pages are "
-                           "for --pages, and a flip every frame would want "
-                           "the whole canvas copied besides (98.1.3.2.5)")
     fown = bool(getattr(a, "flip_own", False))
     if fown and (not a.flip or a.loop_from is not None or a.live or
                  a.resident or getattr(a, "layer_disk", None) or
@@ -10407,7 +10557,13 @@ def _encode(a, keep, tick, readers):
         EncoderP(g, prof, fps, audio_cyc, audio_bps, palette and
                  palette[:48], a.flip) if vga4 else \
         Encoder(g, prof, fps, audio_cyc, audio_bps, palette)
-    if fown and not pa_on:
+    # (ONLY THE REAL page-ahead pass, the one with a plan, is a file on N
+    # pages: the PLAN pass logs and is the plain file auto ships when it
+    # declines, so it is made as asked - against its own page with
+    # --flip-own. It was made with neither own nor its page brought up
+    # once auto reached a flipped file, 2026-10-28)
+    pa_real = pa_on and getattr(a, "_paplan", None) is not None
+    if fown and not pa_real:
         enc.own_init()              # (two pages: byte 37 7, 98.1.3.10)
     elif fown:
         enc.nobring = True          # (on N pages: PageAheadF's, 98.2.1.8.5)
@@ -10582,7 +10738,7 @@ def _encode(a, keep, tick, readers):
                         os.path.basename(a.src))[0][:47],
                     credits=a.credits or "", keysecs=a.keysecs,
                     palette=palette, rowscale=dh, flip=a.flip,
-                    own=fown and not pa_on,
+                    own=fown and not pa_real,
                     aspect=scaled_aspect(pasp or vid.ASPECT[L], dh),
                     loop=None if a.loop_from is None else
                     max(0, round(a.loop_from * fps)),
@@ -10856,6 +11012,8 @@ def _encode(a, keep, tick, readers):
             if cell != "full":
                 draw = coarse_of(e, target, cell, au)
                 e.all3 = getattr(e, "wm3", False)
+                if own_cells(e) > 1:    # (the other page's too: own_cells)
+                    e.vcellrun = (k + own_cells(e), a.coarse_cut)
         held = hdraw = None
         if lsteps is not None and vreplay is None:
             if e.vlagn:
@@ -10870,6 +11028,34 @@ def _encode(a, keep, tick, readers):
                 cell = c
                 draw = coarse_of(e, target, c, au)
                 e.all3 = getattr(e, "wm3", False)
+        if pbn and vreplay is None and not e.vplan and vfut and \
+                not (pre and k <= pre) and k not in pev_at and \
+                draw is target:
+            # BUILT BEFORE THE SCENE (--flip-build, 98.2.5.2.1): a scene
+            # change within reach whose first frame the budgets would cut
+            # is built whole on the page the glass is not showing, by the
+            # fewest frames held before it that do it - the glass staying
+            # on the last scene meanwhile - then flipped to with its colours
+            kk = next((k + d for d in range(1, min(pbn, len(vfut)) + 1)
+                       if k + d in pev_at), None)
+            if kk is not None and kk not in e.vpbdone:
+                e.vpbdone.add(kk)
+                ts = [target] + list(vfut)[:kk - k]
+                kp = np.frombuffer(pev_at[kk], np.uint8)[:768].astype(
+                    np.float32).reshape(-1, 3) * (255.0 / 63)
+                busy(k, "building the scene at frame %d ahead: holds "
+                     "tried on copies of the encoder" % kk)
+                left0 = build_try(e, ts, 0, au, kp)
+                if left0:
+                    for m in range(1, kk - k + 1):
+                        if not build_try(e, ts, m, au, kp):
+                            e.vplan.extend([False] * (kk - k - m) +
+                                           [True] * m + [False])
+                            e.vpbuild[kk] = (m, kp)
+                            break
+                    else:
+                        e.vpbmiss.append(kk)
+                doing[0] = ""
         if vreplay is not None:
             if k in vreplay and draw is target:
                 held = True             # (nothing on the page shown: the
@@ -10879,7 +11065,8 @@ def _encode(a, keep, tick, readers):
                 e.stats["holds"] = e.stats.get("holds", 0) + 1
         elif vfr and not (pre and k <= pre) and not e.vplan and vfut and (
                 draw is target or k in cells_at) and not (
-                (vempty or vstay) and scene_pals and k in pev_at):
+                (vempty or vstay) and scene_pals and k in pev_at and
+                lsteps is None):
             # (nor a PRE-ROLL frame: the still is painted in plainly, as
             # preroll() counted it, or key 0 is not whole - 98.2.9.2)
             # (a flipped file holds no frame its palette changes at: the
@@ -10912,7 +11099,8 @@ def _encode(a, keep, tick, readers):
                         e, t, c if c != "auto" else
                         coarse_pick(e, t, au), au))
                     if coarse_on and k else None, k in cells_at,
-                    pool=trials())
+                    pool=trials(), nohold=bool(
+                        (vempty or vstay) and scene_pals and k in pev_at))
                 doing[0] = ""
                 if lg is not None:      # (the rung's lag, until level)
                     e.flag_lag, e.vlagn = lg, n
@@ -10939,7 +11127,8 @@ def _encode(a, keep, tick, readers):
                 # (coarseany: each frame the budgets would cut of what is
                 # committed drawn in cells, from this one - below)
                 e.vcellrun = (k + (n if any(pat) else VFR_AGAIN), ev) \
-                    if ev else None
+                    if ev else (k + own_cells(e), lc) if lc is not None and \
+                    draw is not target and own_cells(e) > 1 else None
             elif vcut and lsteps is None:
                 busy(k, "the frame rate at frame %d: slower rates tried on "
                      "copies of the encoder" % k)
@@ -10977,8 +11166,14 @@ def _encode(a, keep, tick, readers):
             hdraw = None if vempty or vstay else vfut[j]
             if vstay:                   # (98.1.3.9: drawn on the hidden
                 e.staying = True        # page toward the next, not shown)
+            pb = e.vpbuild.get(k + j + 1) if vstay else None
+            if pb is not None:          # (--flip-build: in the scene's own
+                opal = e.pal            # colours, which go on with its flip)
+                e.set_pal(pb[1])
             ops, rec = e.frame(vfut[j] if vstay else
                                e.screen.copy() if vempty else hdraw, au)
+            if pb is not None:
+                e.set_pal(opal)
             if e.stats["cut"] > c0:
                 e.stats["cut"] -= 1
             else:
@@ -10986,6 +11181,11 @@ def _encode(a, keep, tick, readers):
             e.stats["holds"] = e.stats.get("holds", 0) + 1
         else:
             ops, rec = e.frame(draw, au)
+            if k in e.vpbuild:          # (--flip-build: flipped to the
+                e.own_next = True       # built page, the next record's page
+                e.stats["built"] = e.stats.get("built", 0) + 1  # is the
+                if e.stats["cut"] > c0:     # glass's copy first, as after
+                    e.vpbcut.append(k)      # a key - REC_UP, 98.1.3.10)
         e.all3 = False
         hops = p.after(k, rec, au, target) if p is not None else None
         left = int(np.count_nonzero(e.screen != target)) \
@@ -11221,6 +11421,15 @@ def _encode(a, keep, tick, readers):
     vspan = max(2, int(round(fps * VFR_SPAN)))
     vcost = float(getattr(a, "slow_cost", VFR_HOLD))
     enc.vplan = deque()
+    # --flip-build (98.2.5.2.1): a file flipped against its own pages, its
+    # held records drawn ahead, with a palette a scene to say where the
+    # scenes are
+    pbn = int(getattr(a, "flip_build", 0) or 0)
+    if pbn and not (vstay and getattr(enc, "own", False) and scene_pals):
+        say("   --flip-build: needs --flip --flip-own with --flip-hold "
+            "ahead and --scene-palettes, on two pages - left out")
+        pbn = 0
+    enc.vpbuild, enc.vpbdone, enc.vpbmiss, enc.vpbcut = {}, set(), [], []
     if vreplay is None:
         enc.vrates = {}
     vstate = None                       # (the glass's screen, a STAY's run)
@@ -11254,7 +11463,7 @@ def _encode(a, keep, tick, readers):
     vprev, vshown = False, None         # (the frame before held; and the
                                         # target the picture shown is of)
     while True:
-        while len(ahead) < 1 + max(enc.look, vspan - 1 if vfr else 0):
+        while len(ahead) < 1 + max(enc.look, vspan - 1 if vfr else 0, pbn):
             t = next(targets, None)
             if t is None:
                 break
@@ -11271,7 +11480,7 @@ def _encode(a, keep, tick, readers):
             sound.append(au)
             au = b""
         fut = list(ahead)[:enc.look]
-        vfut = list(ahead) if vfr else ()
+        vfut = list(ahead) if vfr or pbn else ()
         if not enc.lag_cands or (pre and f <= pre):
             # (the pre-roll at the allowance preroll() counted it with)
             x = step(enc, pa, f, target, au, fut, vfut)
@@ -11885,6 +12094,20 @@ def _encode(a, keep, tick, readers):
             for c in COARSE_LADDER + tuple(sorted(set(coarse_used) -
                                                   set(COARSE_LADDER)))
             if c in coarse_used), a.coarse_cut))
+    if getattr(a, "flip_build", 0) and hasattr(enc, "vpbuild"):
+        pb = enc.vpbuild
+        rep("base", "scenes built ahead: %d (--flip-build %d, 98.2.5.2.1)%s"
+            "%s%s" % (
+                len(pb), a.flip_build,
+                " - " + ", ".join("frame %d after %d held" % (f, pb[f][0])
+                                  for f in sorted(pb)) if pb else "",
+                "; %d still cut on the flip (frame %s)" % (
+                    len(enc.vpbcut), ", ".join(map(str, enc.vpbcut)))
+                if enc.vpbcut else "",
+                "; %d not within %d frames (frame %s)" % (
+                    len(enc.vpbmiss), a.flip_build,
+                    ", ".join(map(str, enc.vpbmiss)))
+                if enc.vpbmiss else ""))
     if scene_pals and st["cut"]:
         # WHERE THE CUTS ARE, scene by scene (VIDEO-PALETTE-PLAN 10.9): a
         # step before cutting is chosen per scene, so its cost is read there
@@ -12152,7 +12375,9 @@ def _encode(a, keep, tick, readers):
                ladder=dict(enc.vladder) if lsteps is not None else None,
                ladder_at=dict(enc.vladat), vstretch=list(enc.vstretch),
                pev_left=list(pev_left) if scene_pals else [],
-               cells=dict(coarse_used))
+               cells=dict(coarse_used),
+               built={f: v[0] for f, v in
+                      getattr(enc, "vpbuild", {}).items()})
     if enc.metric and enc.q_frames:     # (98.2.1.8.1's comparison)
         pr = picture_report(enc.q_frames, enc.q_bad, fps)
         res.update(q_worst=pr[1], q_broken=pr[3] / fps)
@@ -12417,6 +12642,17 @@ def parser():
                          "is shown (98.1.3.9; a player before it refuses the "
                          "file); EMPTY, it writes nothing and the picture "
                          "before is shown again")
+    ap.add_argument("--flip-build", type=int, default=0, metavar="N",
+                    help="--flip --flip-own with --scene-palettes: a scene "
+                         "change whose first frame the budgets would cut is "
+                         "BUILT AHEAD - up to N frames before it are held, "
+                         "the glass staying on the last scene while they "
+                         "draw the new one whole on the page it is not "
+                         "showing, the fewest that do it - then flipped to "
+                         "with its colours, and the frame after takes the "
+                         "glass's copy onto the page left behind through "
+                         "the VGA's latches (98.2.5.2.1). 0: off, the "
+                         "default")
     ap.add_argument("--slow-cost", type=float, default=VFR_HOLD,
                     metavar="PTS",
                     help="--min-fps's price of choppiness: each frame a "
@@ -12864,7 +13100,7 @@ def parser():
                          "pages where 320 x 240 has three (98.1.3.1.1). "
                          "320x200n and 320x240n: 16 colours NARROW, rows 40 "
                          "bytes apart for eight and six pages, for --pages "
-                         "and not --flip (98.1.3.2.5)")
+                         "or --flip (98.1.3.2.5)")
     ap.add_argument("--palette", choices=PALETTES, default="auto",
                     help="vga8: the colours - auto, the clip's own 256; "
                          "greyN, a ramp of N greys black to white, dithered "
@@ -12903,6 +13139,27 @@ def parser():
                          "0 dithers everything. Default 16, and 0 for 16 "
                          "colours on a VGA in the clip's own (--palette "
                          "colourN), where --vga4-sparse 2 does its work")
+    ap.add_argument("--colour-mix", choices=("all", "hue"), default="all",
+                    help="cga4, c160: which colours the pattern dither may "
+                         "mix. all (the default): any - so on CGA's cyan, "
+                         "red and white a grey is cyan and red dots, and a "
+                         "blue picks up red. hue: greys mix only black, "
+                         "white and the greys between, and a colour only "
+                         "colours of its own hue plus the one grey on its "
+                         "side of it (98.2.6.1)")
+    ap.add_argument("--colour-clip", type=float, default=None,
+                    help="cga4, c160: --clip for the palette's COLOURS, "
+                         "--clip then the greys' alone: how close a pixel "
+                         "must be to a colour to be drawn as it SOLID. 255 "
+                         "never dithers a colour - only greys dither. "
+                         "Default: --clip's")
+    ap.add_argument("--edge-solid", type=float, default=0.0,
+                    help="cga4, c160: a pixel whose source's 3 x 3 spans "
+                         "more than this many levels (an edge) is its "
+                         "nearest colour, never a dot - for "
+                         "the anti-aliased edges of cartoons and titles. "
+                         "48 suits them; 0 (the default) is off, for "
+                         "camera footage, whose texture would flatten")
     ap.add_argument("--gamma", type=float, default=1.0,
                     help="ffmpeg's eq gamma: above 1 lightens the mid-tones")
     ap.add_argument("--contrast", type=float, default=1.0,

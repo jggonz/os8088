@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Write gbflags.asm, RealDMG's dead-flag gate ROM, for tools/gbours.py.
 
-The recompiler drops the flags of INC r, DEC r and ADD HL,rr when the
+The recompiler drops the flags of INC r, DEC r and ADD HL,rr, and of a CB
+rotate or shift of a register (all four, or Z, N and H with C kept), when the
 instructions after it in the block overwrite them before anything reads them
 (docs/REALDMG-SPEC.md section 16.1.2). Blargg's cpu_instrs cannot see that: it
 runs the instruction under test from RAM, which is never translated. This ROM
@@ -24,11 +25,19 @@ SEQS = 160
 PASSES = 100            # each sequence's loop: past RDG_JITHOT's 64, translated
 
 
+CBSH = ["rlc", "rrc", "rl", "rr", "sla", "sra", "swap", "srl"]
+
+
 def candidate(rnd):
     k = rnd.random()
-    if k < 0.6:
+    if k < 0.45:
         return "%s %s" % (rnd.choice(["inc", "dec"]), rnd.choice(R))
-    return "add hl, %s" % rnd.choice(["bc", "de", "hl", "sp"])
+    if k < 0.7:
+        return "add hl, %s" % rnd.choice(["bc", "de", "hl", "sp"])
+    if k < 0.85:                    # a CB shift of a register, and below a
+        return "%s %s" % (rnd.choice(CBSH), rnd.choice(R))   # carry chain:
+    return "%s %s\n    %s %s" % (rnd.choice(CBSH), rnd.choice(R),   # its C into
+                                rnd.choice(["rl", "rr"]), rnd.choice(R))   # RL/RR
 
 
 def neutral(rnd, tag):

@@ -50,7 +50,12 @@ syms, image = pkg_syms()
 import os88pkg                                          # noqa: E402
 # the IMAGE, not the file: a parted package's image ships packed when that
 # saves a sector (SPEC.md 20.13.8)
-o88 = os88pkg.image_unwrap(open(os88build.at("build/pixel.o88"), "rb").read())
+# kern_mega (OS88_MEGA, tests/megaport.txt): PiXEL's ARM, whose main image is
+# this one and whose decoder parts are assembled -DPKG_MEGA (Makefile's
+# $(MEGAAPPDIR)/pixel.o88); every segment it names is an LDT selector there
+MEGA = bool(os.environ.get("OS88_MEGA"))
+PIXEL_O88 = "build/megak/apps/pixel.o88" if MEGA else "build/pixel.o88"
+o88 = os88pkg.image_unwrap(open(os88build.at(PIXEL_O88), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run make")
 
@@ -82,7 +87,7 @@ files = []
 for n, d in sorted(PICS.items()):
     open(os.path.join(tmp, n), "wb").write(d)
     files.append("PICS:" + os.path.join(tmp, n))
-DISK = M.scratch_disk(pxtmp.private("pxfolder.img"), "build/pixel.o88",
+DISK = M.scratch_disk(pxtmp.private("pxfolder.img"), PIXEL_O88,
                       *files, "--folder", "SYSTEM/APPDATA",
                       size=720)
 NAMES = sorted(PICS)
@@ -98,7 +103,8 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         ui.path("B:/PICS/LAKE.JPG")
         M.until(m, lambda _: instance(m, S, image), "PiXEL's instance",
                 poll=0.3, limit=120)
-        return instance(m, S, image) * 16
+        seg = instance(m, S, image)
+        return m.lin(seg) if MEGA else seg * 16
 
     base = launch()
     B = lambda n: m.read(base + syms[n], 1)[0]                 # noqa: E731
@@ -132,8 +138,26 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
 
     def claims():
         hm = heapmap.Map(m, hsym)
-        seg = base >> 4
+        seg = instance(m, S, image) if MEGA else base >> 4
         here = parts_here()
+        if MEGA:
+            # kern_mega: a claim is named by its SELECTOR (heapmap's `sel`)
+            # and may be a conventional mem_tab record or a POOL block above
+            # 1MB - both are PiXEL's - and a fetched part is excepted by its
+            # linear base falling inside the claim (its word may name an
+            # alias of the block). The free run is the conventional arena's
+            hl = [m.lin(p) for p in here]
+
+            def lb(c):
+                return m.lin(c.sel)
+            mine = sorted(c.para for c in hm.claims + hm.pool
+                          if c.own == seg and c.sel != seg
+                          and not any(lb(c) <= h < lb(c) + c.para * 16
+                                      for h in hl))
+            hm.claims = [c for c in hm.claims
+                         if not any(lb(c) <= h < lb(c) + c.para * 16
+                                    for h in hl)]
+            return mine, max(p for _, p in hm.runs())
         mine = sorted(c.para for c in hm.claims
                       if c.own == seg and c.seg != seg
                       and not any(c.seg <= p < c.seg + c.para for p in here))
@@ -160,7 +184,8 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         to (review-w5 F13's measurement: every callback runs on the ONE UI
         task, the timer's under the gfx lock, so while one runs nothing else
         on the desktop is answered)"""
-        ents = {(base + syms[r]) & 0xFFFFF: r
+        msk = 0xFFFFFFFF if MEGA else 0xFFFFF   # (above 1MB on kern_mega)
+        ents = {(base + syms[r]) & msk: r
                 for r in ("px_ontimer", "px_onwake", "px_onclose")}
         rets, opn, calls = {}, [], []
 
@@ -178,12 +203,17 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
             if st.get("state") == "breakpoint":
                 if st.get("stops") != seen:
                     seen = st.get("stops")
-                    flat = ((st["cs"] << 4) + st["ip"]) & 0xFFFFF
+                    flat = (m.lin(st["cs"], st["ip"]) if MEGA else
+                            ((st["cs"] << 4) + st["ip"]) & 0xFFFFF)
                     if flat in ents:
                         r = m.regs()
-                        ret = (r["cs"] * 16 + u16(m.read(r["ss"] * 16
-                                                         + r["sp"], 2)))
-                        ret &= 0xFFFFF
+                        if MEGA:
+                            ret = m.lin(r["cs"], u16(m.read(
+                                m.lin(r["ss"], r["sp"]), 2)))
+                        else:
+                            ret = (r["cs"] * 16 + u16(m.read(r["ss"] * 16
+                                                             + r["sp"], 2)))
+                            ret &= 0xFFFFF
                         opn.append((cyc, ents[flat], ret))
                         if ret not in rets:
                             rets[ret] = 1
@@ -245,10 +275,15 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     check("SLIDES: the button latched", flags & 32 != 0, "flags %04X" % flags)
     M.until(m, lambda _: W("px_ndone") >= n0 + 3, "three slides", poll=0.5,
             limit=300)
-    # the picture SHOWN: px_prev's while the next one decodes hidden
+    # the picture SHOWN: px_prev's while the next one decodes hidden - read
+    # with the machine STOPPED and the Esc sent before it runs again, so a
+    # hidden decode cannot finish and flip between the reading and the key
+    # (a host-timed gap: mega-pxfolder read G8.GIF and stopped on C8.PCX)
+    m.pause()
     rec = "px_prev" if B("px_hmode") else "px_cur"
     was = m.read(base + syms[rec], 13).split(b"\0")[0].decode()
     m.key("Escape")
+    m.run()
     M.until(m, lambda _: B("px_slon") == 0, "the slideshow to stop",
             poll=0.3, limit=60)
     wait_still("still, after the slideshow")

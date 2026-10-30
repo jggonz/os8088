@@ -159,7 +159,9 @@ def main():
                           apps=KNOBTREE.img("apps360.img"),
                           machine=instdeep.MACHINE,
                           run_dir=run_dir) as m:
-        os88marty.settle(m)
+        os88marty.kernel_up(m)      # the boot gate on STATE, then the saver
+        os88marty.no_saver(m)       # OFF: a bare launch leaves it on, and once
+        os88marty.settle(m)         # it draws this settle can never return
         instdeep.install(m)
         v = instdeep.partition(instdeep.vhd(m))
     missing = [q for q in instdeep.WANT_FILES if q not in v.tree()]

@@ -124,8 +124,9 @@ def heapfrag_ran(m, S):
     seg, _ = pkg_seg(m, S, "Heap")
     if not seg:
         return False
-    img = u16(m.read(seg * 16 + 8, 2))
-    b = m.read(seg * 16 + img, 48)
+    lin = getattr(m, "lin", lambda s_, o_=0: s_ * 16 + o_)    # (kern_mega:
+    img = u16(m.read(lin(seg, 8), 2))                      # a selector)
+    b = m.read(lin(seg, img), 48)
     done, posted, woke = b[28], b[46], b[47]      # heapfrag.asm's bss table
     locked = m.read(S("gfx_lock_flag"), 1)[0]
     return bool(done and not locked and (woke or not posted))

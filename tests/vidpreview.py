@@ -57,6 +57,11 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
+
+# KERN_MEGA (tests/megaport.txt, on 86Box's 1bpp adapters): the player's ARM
+# (build/megak/apps/, -DPKG_MEGA, KERN-MEGA-PLAN 14.66), whose symbols are
+# the arm's, and a region or claim that is an LDT selector (m.lin)
+MEGA = bool(os.environ.get("OS88_MEGA"))
 import vidplay                                                # noqa: E402
 
 # the DESKTOP's framebuffer on each adapter: base, banks, stride
@@ -94,8 +99,10 @@ def main():
     shadow = screen != a.layout
     machine = a.machine or vidplay.MACHINE[screen]
     os.chdir(ROOT)
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",),
+                       ("PKG_MEGA",) if MEGA else ())
+    pkg = os88build.at("build/megak/apps/video.o88" if MEGA
+                       else "build/video.o88")
     if not os.path.exists(pkg):
         sys.exit("vidpreview: no build/video.o88 - run `make`")
     bad = []
@@ -129,7 +136,8 @@ def main():
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+            base = lin(u16(rec, geom.W_SEG))
 
             def rw(n, off=0):
                 return u16(m.read(base + syms[n] + off, 2))
@@ -152,7 +160,7 @@ def main():
                 """the claim's bytes, and the screen under the box"""
                 _, cv = key_canvas(r, ki)
                 img, bw, px, rows = vid.poster(cv, g.wb, g.h, rw("vp_ps"))
-                got = bytes(m.read(rw("vp_pseg") * 16 + rw("vp_pskip"),
+                got = bytes(m.read(lin(rw("vp_pseg"), rw("vp_pskip")),
                                    bw * rows))
                 d = sum(1 for x, y in zip(img, got) if x != y)
                 if (rw("vp_pbw"), rw("vp_ppx"), rw("vp_prows")) != \
@@ -199,6 +207,13 @@ def main():
                 if rb("vp_ok") != 1:
                     sys.exit("vidpreview: the player will not play the clip "
                              "here")
+                if MEGA:
+                    # THE 8088'S VERDICT ON THE CLIP'S PCM8: muted, as too
+                    # fast for its speaker (98.3.15, vp_mwhy 2) - where a 286
+                    # plays it, and with sound the CARD is the clock, which
+                    # runs on through this row's holds (tests/vidwin.py)
+                    m.write(base + syms["vp_mwhy"], b"\2")
+                    m.write(base + syms["vp_mute"], b"\1")
                 if rb("vp_shadow") != int(shadow):
                     bad.append("the player chose %s on the %s screen" % (
                         "the shadow" if rb("vp_shadow") else "native",
@@ -403,7 +418,9 @@ def main():
                 cx0, cy0 = rw("vp_cx0"), rw("vp_cy0")
                 bw, by = rw("vp_lbw"), cy0 + rw("vp_lbary") + 4
                 xat = lambda f: cx0 + VP_BOXX + int(bw * f)
-                n0 = rw("vp_ploads")
+                if MEGA:                # kern_mega's 286 (86Box) is tier 1
+                    m.write(base + syms["vp_tier"], b"\0")   # by itself: the
+                n0 = rw("vp_ploads")                          # 8088's, poked
                 ui.mo.drag(xat(0.2), by, xat(0.9), by)
                 wait(lambda mm: rw("vp_ploads") > n0 and rb("vp_drag") == 0,
                      "the drag's release to load a key")

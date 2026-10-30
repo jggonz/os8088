@@ -96,6 +96,14 @@ RD_PITCH = 14
 DR_RECT, DR_N, DR_SEL, DR_OPEN = 0, 10, 12, 16
 DRIH = 12                               # OS88UI_DRIH, an item's pitch
 DOS_MEM_IN, DOS_MEM_WHOLE = 0, 1
+# **kern_mega HAS ONE ARM** (KERN-MEGA-DOS-PLAN 12.1 item 1, dos_mem_fix):
+# every launch is the whole machine, so [dos_keepc] is PROMOTED to
+# DOS_MEM_WHOLE and arm 0's controls - the two driver boxes and the limit -
+# are greyed and keep what they hold. What a link CARRIES on that machine is
+# asserted as what it is: no limit, the whole arm, both driver boxes ticked.
+MEGA = bool(os.environ.get("OS88_MEGA"))
+ARM = DOS_MEM_WHOLE if MEGA else DOS_MEM_IN
+WANT_LIMIT = 0 if MEGA else None        # None: LIMIT, as typed
 DOS_CA_AUTO, DOS_CA_OFF_IN = 0, 4       # ONE LIST ON BOTH ARMS since SPEC.md
                                         # 18.95.8 (96.36.6): Auto / 32K / 18K /
                                         # 9K / Off, so Off is item 4 and not
@@ -159,7 +167,7 @@ def dos_state(m, ui):
             raw = bytes(m.read(ui.sym("wm_wins") + w.i * os88geom.WIN_SIZE,
                                os88geom.WIN_SIZE))
             seg = struct.unpack_from("<H", raw, os88geom.W_SEG)[0]
-            base = seg << 4
+            base = dosmap.lin(m, seg)
             break
     if base is None:
         fail("no DOS window to read the settings out of")
@@ -291,9 +299,9 @@ def main():
 
         def _pathbox(mm):
             ps = dosmap.instance(mm)
-            buf = mm.read((ps << 4) + _dm["dos_path"], 40).split(b"\0")[0]
+            buf = mm.read(dosmap.lin(mm, ps, _dm["dos_path"]), 40).split(b"\0")[0]
             ln = int.from_bytes(
-                mm.read((ps << 4) + _dm["dos_pln"] + 12, 2), "little")
+                mm.read(dosmap.lin(mm, ps, _dm["dos_pln"]) + 12, 2), "little")
             return buf, ln
 
         os88marty.until(m, lambda mm: _pathbox(mm)[1] == len(_pathbox(mm)[0]),
@@ -351,21 +359,22 @@ def main():
         dx1, dy1, _, dy2 = dosmap.rect(m, pseg, dm, "dos_mdr")
         mo.click(dx1 + 8, (dy1 + dy2) // 2)
         os88marty.settle(m)
-        if not m.read((pseg << 4) + dm["dos_mdr"] + DR_OPEN, 1)[0]:
+        if not m.read(dosmap.lin(m, pseg, dm["dos_mdr"]) + DR_OPEN, 1)[0]:
             fail("the disk cache box did not open its list (SPEC.md 96.36.6)")
         top = int.from_bytes(
-            m.read((pseg << 4) + dm["dos_mdr"] + 22, 2), "little")  # DR_TOP
+            m.read(dosmap.lin(m, pseg, dm["dos_mdr"]) + 22, 2), "little")  # DR_TOP
         mo.click(dx1 + 8, top + DOS_CA_OFF_IN * DRIH + DRIH // 2)
         os88marty.settle(m)
-        got = m.read((pseg << 4) + dm["dos_cache"], 1)[0]
+        got = m.read(dosmap.lin(m, pseg, dm["dos_cache"]), 1)[0]
         if got != DOS_CA_OFF_IN:
             fail("picking `Off (SLOW!)` left [dos_cache] at %d and arm 0's "
                  "list has it at %d (SPEC.md 96.36.6)"
                  % (got, DOS_CA_OFF_IN))
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_mln"))
-        os88marty.settle(m)
-        m.type_text(str(LIMIT))
-        os88marty.settle(m)
+        if not MEGA:
+            mo.click(*dosmap.centre(m, pseg, dm, "dos_mln"))
+            os88marty.settle(m)
+            m.type_text(str(LIMIT))
+            os88marty.settle(m)
 
         # **AND THE BOXES, which the link did not carry** (SPEC.md 96.25.2.1).
         # Network is arm 0's and live under it, so it is CLICKED off. Disable
@@ -375,11 +384,17 @@ def main():
         # is WRITTEN, as the user's request for a machine that can. What is
         # under test is that the writer carries it and the reader restores it,
         # and both happen after this.
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_mnet"))
-        os88marty.settle(m)
-        if m.read((pseg << 4) + dm["dos_mnet"] + CK_ON, 1)[0]:
-            fail("clicking the Network box left it ticked (SPEC.md 96.36.7)")
-        m.write((pseg << 4) + dm["dos_mmou"] + CK_ON, b"\x01")
+        if not getattr(m, "bochs", False):
+            mo.click(*dosmap.centre(m, pseg, dm, "dos_mnet"))
+            os88marty.settle(m)
+            if m.read(dosmap.lin(m, pseg, dm["dos_mnet"]) + CK_ON, 1)[0]:
+                fail("clicking the Network box left it ticked (SPEC.md "
+                     "96.36.7)")
+        # (kern_mega: ONE ARM, the whole machine - dos_mem_fix PROMOTES
+        # [dos_keepc] to DOS_MEM_WHOLE and arm 0's two driver boxes are greyed
+        # ticked with it (KERN-MEGA-DOS-PLAN 12.1 item 1), so there is no
+        # Network press to make; what is carried is asserted below)
+        m.write(dosmap.lin(m, pseg, dm["dos_mmou"]) + CK_ON, b"\x01")
 
         # ...and Save Shortcut is on this page's own bottom row, beside Return.
         # It reads the limit on the way out for dos_mem_take's reason (96.25):
@@ -416,13 +431,14 @@ def main():
     if "memkb" not in got:
         fail("there is no memory ExtraData block in the file at all - "
              "SPEC.md 96.25.2 writes one beside the environment's")
-    if got["memkb"] != LIMIT:
+    lim = LIMIT if WANT_LIMIT is None else WANT_LIMIT
+    if got["memkb"] != lim:
         fail("the memory block says a %dK limit and %dK was typed"
-             % (got["memkb"], LIMIT))
-    if got["keep"] != DOS_MEM_IN:
+             % (got["memkb"], lim))
+    if got["keep"] != ARM:
         fail("the memory block carries arm %d and arm %d was left picked "
              "(SPEC.md 96.36.5 - the middle arm is gone and DOS_MEM_IN is 0)"
-             % (got["keep"], DOS_MEM_IN))
+             % (got["keep"], ARM))
     if got["cache"] != DOS_CA_OFF_IN:
         fail("the memory block's cache byte is %d and `Off (SLOW!)` is %d on "
              "the one list both arms show. That byte was the block's PADDING (SPEC.md "
@@ -435,10 +451,11 @@ def main():
     if "boxes" not in got:
         fail("the memory block is the old 12 bytes and carries none of the "
              "page's three boxes (SPEC.md 96.25.2.1)")
-    if got["boxes"] != BX_NONET | BX_NOMOU:
+    wbox = BX_NOMOU if MEGA else BX_NONET | BX_NOMOU
+    if got["boxes"] != wbox:
         fail("the memory block's box byte is %#04x and the page had Network "
              "unticked and Disable the mouse ticked - %#04x (SPEC.md "
-             "96.25.2.1)" % (got["boxes"], BX_NONET | BX_NOMOU))
+             "96.25.2.1)" % (got["boxes"], wbox))
     # **AND WORKING_DIR CARRIES THE DRIVE** (SPEC.md 96.21.2.1).
     # OSAPI_FILE_PATH answers no drive letter by design (19.2.4), so DOS
     # wrote `\BIN` and the link resolved against whichever volume it happened
@@ -529,22 +546,24 @@ def main():
         memkb, keep, cache, akb = dos_state(m, ui)
         print("doslnk: the relaunched DOS has memkb=%d keep=%d cache=%d, "
               "arena %dK" % (memkb, keep, cache, akb))
-        if memkb != LIMIT or keep != DOS_MEM_IN or cache != DOS_CA_OFF_IN:
+        mega, arm = MEGA, ARM
+        lim = LIMIT if WANT_LIMIT is None else WANT_LIMIT
+        if memkb != lim or keep != arm or cache != DOS_CA_OFF_IN:
             fail("the shortcut ran with memkb=%d arm=%d cache=%d and the link "
                  "carries %d/%d/%d - the second ExtraData block was written "
                  "and not read"
-                 % (memkb, keep, cache, LIMIT, DOS_MEM_IN, DOS_CA_OFF_IN))
-        if akb > LIMIT:
+                 % (memkb, keep, cache, lim, arm, DOS_CA_OFF_IN))
+        if lim and akb > lim:
             fail("DOS claimed %dK against a %dK limit - the setting "
                  "reached [dos_memkb] and dos_run ignored it (SPEC.md 96.25.1)"
                  % (akb, LIMIT))
         dm = dosmap.package()
         pseg = dosmap.instance(m)
-        boxes = [m.read((pseg << 4) + dm[n] + CK_ON, 1)[0]
+        boxes = [m.read(dosmap.lin(m, pseg, dm[n]) + CK_ON, 1)[0]
                  for n in ("dos_mhdd", "dos_mnet", "dos_mmou")]
         print("doslnk: the relaunched DOS's boxes: hard drives %d, network "
               "%d, disable the mouse %d" % tuple(boxes))
-        if boxes != [1, 0, 1]:
+        if boxes != ([1, 1, 1] if mega else [1, 0, 1]):
             fail("the shortcut reopened with hard drives %d, network %d and "
                  "disable the mouse %d, and it carries 1/0/1 - the box byte "
                  "was written and not read (SPEC.md 96.25.2.1)"
@@ -594,7 +613,7 @@ def con_prompt(m, ui):
     """
     dm = dosmap.package()
     pseg = dosmap.instance(m)
-    raw = bytes(m.read((pseg << 4) + dm["con_scr"], dm["CON_SCRSZ"]))
+    raw = bytes(m.read(dosmap.lin(m, pseg, dm["con_scr"]), dm["CON_SCRSZ"]))
     cols = dm["CON_COLS"]
     rows = [bytes(raw[i:i + 2 * cols:2]).decode("latin-1").rstrip()
             for i in range(0, dm["CON_SCRSZ"], 2 * cols)]

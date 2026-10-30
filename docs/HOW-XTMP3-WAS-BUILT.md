@@ -840,6 +840,27 @@ region above 1MB (its DS was LDT selector 2844h). A forced XT Standard
 converted the song onto the 20 MB C: and played it. The WAV came off the
 image bit-exact against the model, and E9 recorded no fault.
 
+## 2026-10-25 — the claims go above the megabyte too
+
+*The kern_mega memory round's session.* MC7 made every claim an LDT
+selector, and its package wave converted the two places XTMP3 added
+paragraphs to one: the stage became an `OSAPI_SEG` `SEG_SUB` of the
+look-ahead claim, and the hold's reads go through `x3h_at`'s `SEG_AT`
+window. What was missing was the audit of everything else and a run. The
+audit found nothing more: the work segments, the probe's scratch and the
+speaker ring are loaded whole, the parts and the external ring are the DMA
+door's, and `x3_rmove`'s delta never runs there, because kern_mega calls
+no proc for a move. So the header now says `OS88_HIGHMEM` as well, and
+tests/megahigh.txt lost its line.
+
+`tests/x3mega.py` is the run. Under Bochs at 16MB, Auto plays NEONDRV live
+on the SB16 out of an XMS hold, with the region and the look-ahead claim
+above 1MB. A second boot makes `OSAPI_XMEM_CAPS` answer 0 while the track
+opens, so the hold is a 30 KB conventional claim, also above 1MB. A forced
+XT Standard then converts AFTERHRS onto C:. The stage is a selector exactly
+`x3_lasz` + 2,560 bytes into the claim, and the WAV matches x3simxt byte for
+byte. Putting either old sum back closes XTMP3 with a #GP.
+
 ## 2026-10-23 — the owner at the machine: three 86Box machines built by hand
 
 *The integrating session, at the owner's request. The automated rows drive

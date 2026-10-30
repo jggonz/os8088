@@ -265,6 +265,8 @@ static int  lem_data_load(void);
 static void ovl_far(unsigned base, int lo, int hi);
 static int  ovl_pk(unsigned seg, unsigned off);
 static int  ovl_pk16(unsigned seg, unsigned off);
+static int  lem_wins(unsigned *dst, unsigned seg, unsigned step,
+                     unsigned len, int n);
 static int  ovl_claim_all(void);
 static void lem_free_all(void);
 static int  ovl_need_kb(void);

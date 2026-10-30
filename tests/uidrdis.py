@@ -57,135 +57,161 @@ def main(argv):
     os.chdir(ROOT)
     mp = dispapps._map("skies")
 
-    with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
-                     quick=True) as ui:
-        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
-        m = ui.m
-        ui.path("B:/GAMES/SKIES.O88")
-        slot, seg = dispapps.pkg_seg(m, 0)
-        lin = seg << 4
-        m.advance(frames=40)
-        m.run()
-
-        def settings():
-            ui.raise_window("Clear Skies")
-            ui.menu_pick("Flight", "Settings")
-            m.advance(frames=60)
+    # KERN_MEGA UNDER BOCHS (tests/megaport.txt) TAKES TWO BOOTS: Bochs's
+    # trace cache does not see a debugger write to code that has already
+    # run (the patched `cmp` and cs_modechoice executed their OLD bytes,
+    # measured by single-stepping), so the patches go in before the
+    # Settings page is ever painted - check 1 on one boot, 2 and 3 on
+    # another. MartyPC has no such cache and keeps the one boot.
+    for phase in (("live", "dis") if os.environ.get("OS88_MEGA")
+                  else ("both",)):
+        with os88ui.boot(a.image, apps=a.apps, machine=a.machine,
+                         quick=True) as ui:
+            ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
+            m = ui.m
+            ui.path("B:/GAMES/SKIES.O88")
+            slot, seg = dispapps.pkg_seg(m, 0)
+            # a kern_mega region is an LDT selector (tools/os88megabochs.py)
+            lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)(seg)
+            m.advance(frames=40)
             m.run()
 
-        settings()
+            def settings():
+                ui.raise_window("Clear Skies")
+                ui.menu_pick("Flight", "Settings")
+                m.advance(frames=60)
+                m.run()
 
-        # A LIVE control, and not the Mode row: 88.13.11 hides that one where
-        # it has no meaning, and this row is about the LIBRARY
-        rec = mp["cs_drbld"]
+            if phase != "dis":
+                settings()
 
-        def w(o):
-            return int.from_bytes(m.readseg(seg, rec + o, 2), "little")
+            # A LIVE control, and not the Mode row: 88.13.11 hides that one where
+            # it has no meaning, and this row is about the LIBRARY
+            rec = mp["cs_drbld"]
 
-        def byte(o):
-            return m.readseg(seg, rec + o, 1)[0]
+            def w(o):
+                return int.from_bytes(m.readseg(seg, rec + o, 2), "little")
 
-        rect = [w(2 * i) for i in range(4)]
-        check(any(rect), "the Buildings drop-down is laid out (%s)" % rect)
-        cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+            def byte(o):
+                return m.readseg(seg, rec + o, 1)[0]
 
-        def press(x, y):
-            """The PRESS alone, held. A drop-down opens on the press and
-            picks (or closes) on the RELEASE, so a click does both and reads
-            OPEN=0 either way - which is check 2 passing for the wrong
-            reason, and is how the first draft of this row was green on a
-            build with the fix patched out."""
-            ui.mo.to(x, y)
-            if ui.mo.where()[2] & 1:
+            def layout():
+                rect = [w(2 * i) for i in range(4)]
+                check(any(rect), "the Buildings drop-down is laid out (%s)" % rect)
+                return rect, (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+
+            if phase != "dis":
+                rect, cx, cy = layout()
+
+            def press(x, y):
+                """The PRESS alone, held. A drop-down opens on the press and
+                picks (or closes) on the RELEASE, so a click does both and reads
+                OPEN=0 either way - which is check 2 passing for the wrong
+                reason, and is how the first draft of this row was green on a
+                build with the fix patched out."""
+                ui.mo.to(x, y)
+                if ui.mo.where()[2] & 1:
+                    ui.mo._edge(False)
+                ui.mo._edge(True)
+                m.advance(frames=30)
+                m.run()
+
+            def release(x, y):
+                ui.mo.to(x, y)
                 ui.mo._edge(False)
-            ui.mo._edge(True)
-            m.advance(frames=30)
+                m.advance(frames=30)
+                m.run()
+
+            def shut():
+                """Take the list down without picking. The list slides UP over
+                its own box (13.14.2), so a release where the press landed is a
+                release over an ITEM - it picks, and leaves OPEN set. Releasing
+                well outside is the only way back to a closed control, and check
+                2 is meaningless without it: the first draft read `OPEN=1, was 1`
+                and was measuring a list that never shut."""
+                release(rect[0] - 40 if rect[0] > 60 else rect[2] + 40, rect[1])
+                m.advance(frames=30)
+                m.run()
+
+            if phase != "dis":
+                press(cx, cy)
+                check(byte(DR_OPEN) != 0,
+                      "1. a LIVE drop-down opens on a press (OPEN=%d)" % byte(DR_OPEN))
+                shut()
+            if phase == "live":
+                continue
+
+            # --- 2/3: THE SAME CONTROL, GREYED BY THE APP -----------------------
+            # OS88UI_DR_DIS is DERIVED - os88ui_drop rewrites it from the
+            # painter's DI on every repaint - so poking it from here disables
+            # nothing, and a row that tried read PASS for check 1 and FAIL for
+            # check 2 on a correct build. The app has to be made to paint it
+            # greyed, so its own predicate is retargeted: `cmp bx, cs_drmode`
+            # becomes `cmp bx, cs_drbld`, one immediate, one site in the image.
+            # On a Hercules cs_modechoice then greys BUILDINGS, which is exactly
+            # what it does to Mode on every other display.
+            code = m.read(lin, 0x8000)
+            pat = b"\x81\xFB" + mp["cs_drmode"].to_bytes(2, "little")
+            i = code.find(pat)
+            if i < 0 or code.find(pat, i + 1) >= 0:
+                sys.exit("uidrdis: the app does not choose the greyed row the way "
+                         "this patch expects (%d matches)" % code.count(pat))
+            m.pause()
+            m.write(lin + i + 2, mp["cs_drbld"].to_bytes(2, "little"))
+            if getattr(m, "bochs", False):
+                # kern_mega under Bochs (tests/megaport.txt) is a VGA, where the
+                # Mode row is a live choice and the predicate greys NOTHING: so
+                # cs_modechoice is made to answer "no choice" (`stc` / `ret`),
+                # what it answers on a Hercules, and Buildings is greyed by the
+                # same painter path the Hercules run takes
+                m.write(lin + mp["cs_modechoice"], b"\xF9\xC3")
+            # ...and the control put back CLOSED. Poking OPEN/SEG/KB is a
+            # precondition and not the subject: it is what a control that has
+            # never been pressed looks like, and DIS - the thing under test - is
+            # written by the PAINTER below, not from here.
+            m.write(lin + rec + DR_OPEN, b"\x00")
+            m.write(lin + rec + 18, b"\x00\x00\x00\x00")   # SEG, KB
+            if a.clobber_dis:
+                # ...and the library's refusal taken back out: 3E 80 7E 18 00 /
+                # 74 xx, the guard this row is about
+                lo = mp["os88ui_drpress"]
+                c2 = m.read(lin + lo, 0x40)
+                g = c2.find(b"\x3E\x80\x7E\x18\x00\x74")
+                if g < 0:
+                    sys.exit("uidrdis: os88ui_drpress does not guard the way this "
+                             "patch expects")
+                # `je .live` -> `jmp .live`: the refusal is never taken, which
+                # is the tree before 13.14.5. NOPing the `je` instead makes it
+                # ALWAYS refuse - every control dead - and that passes checks 2
+                # and 3 for the exact opposite reason, which is how this arm
+                # first came back green
+                m.write(lin + lo + g + 5, b"\xEB")
+                print("  (the refusal is patched out: this run must fail)")
             m.run()
-
-        def release(x, y):
-            ui.mo.to(x, y)
-            ui.mo._edge(False)
-            m.advance(frames=30)
-            m.run()
-
-        def shut():
-            """Take the list down without picking. The list slides UP over
-            its own box (13.14.2), so a release where the press landed is a
-            release over an ITEM - it picks, and leaves OPEN set. Releasing
-            well outside is the only way back to a closed control, and check
-            2 is meaningless without it: the first draft read `OPEN=1, was 1`
-            and was measuring a list that never shut."""
-            release(rect[0] - 40 if rect[0] > 60 else rect[2] + 40, rect[1])
-            m.advance(frames=30)
-            m.run()
-
-        press(cx, cy)
-        check(byte(DR_OPEN) != 0,
-              "1. a LIVE drop-down opens on a press (OPEN=%d)" % byte(DR_OPEN))
-        shut()
-
-        # --- 2/3: THE SAME CONTROL, GREYED BY THE APP -----------------------
-        # OS88UI_DR_DIS is DERIVED - os88ui_drop rewrites it from the
-        # painter's DI on every repaint - so poking it from here disables
-        # nothing, and a row that tried read PASS for check 1 and FAIL for
-        # check 2 on a correct build. The app has to be made to paint it
-        # greyed, so its own predicate is retargeted: `cmp bx, cs_drmode`
-        # becomes `cmp bx, cs_drbld`, one immediate, one site in the image.
-        # On a Hercules cs_modechoice then greys BUILDINGS, which is exactly
-        # what it does to Mode on every other display.
-        code = m.read(lin, 0x8000)
-        pat = b"\x81\xFB" + mp["cs_drmode"].to_bytes(2, "little")
-        i = code.find(pat)
-        if i < 0 or code.find(pat, i + 1) >= 0:
-            sys.exit("uidrdis: the app does not choose the greyed row the way "
-                     "this patch expects (%d matches)" % code.count(pat))
-        m.pause()
-        m.write(lin + i + 2, mp["cs_drbld"].to_bytes(2, "little"))
-        # ...and the control put back CLOSED. Poking OPEN/SEG/KB is a
-        # precondition and not the subject: it is what a control that has
-        # never been pressed looks like, and DIS - the thing under test - is
-        # written by the PAINTER below, not from here.
-        m.write(lin + rec + DR_OPEN, b"\x00")
-        m.write(lin + rec + 18, b"\x00\x00\x00\x00")   # SEG, KB
-        if a.clobber_dis:
-            # ...and the library's refusal taken back out: 3E 80 7E 18 00 /
-            # 74 xx, the guard this row is about
-            lo = mp["os88ui_drpress"]
-            c2 = m.read(lin + lo, 0x40)
-            g = c2.find(b"\x3E\x80\x7E\x18\x00\x74")
-            if g < 0:
-                sys.exit("uidrdis: os88ui_drpress does not guard the way this "
-                         "patch expects")
-            # `je .live` -> `jmp .live`: the refusal is never taken, which
-            # is the tree before 13.14.5. NOPing the `je` instead makes it
-            # ALWAYS refuse - every control dead - and that passes checks 2
-            # and 3 for the exact opposite reason, which is how this arm
-            # first came back green
-            m.write(lin + lo + g + 5, b"\xEB")
-            print("  (the refusal is patched out: this run must fail)")
-        m.run()
-        ui.menu_pick("Flight", "Instructions")  # off the page and back, so the
-        m.advance(frames=40)                    # painter runs with the new
-        m.run()                                 # predicate
-        settings()
-        check(byte(DR_DIS) != 0,
-              "the app now paints Buildings DISABLED (DIS=%d)" % byte(DR_DIS))
-        check(byte(DR_OPEN) == 0,
-              "...and it starts CLOSED, or check 2 measures nothing (OPEN=%d)"
-              % byte(DR_OPEN))
-        before = byte(DR_OPEN)
-        press(cx, cy)
-        check(byte(DR_OPEN) == 0,
-              "2. ...and a DISABLED one does not (OPEN=%d, was %d)"
-              % (byte(DR_OPEN), before))
-        # the press must reach the page: the app's own dispatcher would have
-        # turned nothing, so what proves it is that no OTHER control took it
-        others = [n for n in ("cs_drlod", "cs_drsize")
-                  if m.readseg(seg, mp[n] + DR_OPEN, 1)[0] != 0]
-        check(not others,
-              "3. ...and the press is not spent on anything else (%s)"
-              % (others or "nothing opened"))
-        shut()
+            ui.menu_pick("Flight", "Instructions")  # off the page and back, so the
+            m.advance(frames=40)                    # painter runs with the new
+            m.run()                                 # predicate
+            settings()
+            if phase == "dis":
+                rect, cx, cy = layout()
+            check(byte(DR_DIS) != 0,
+                  "the app now paints Buildings DISABLED (DIS=%d)" % byte(DR_DIS))
+            check(byte(DR_OPEN) == 0,
+                  "...and it starts CLOSED, or check 2 measures nothing (OPEN=%d)"
+                  % byte(DR_OPEN))
+            before = byte(DR_OPEN)
+            press(cx, cy)
+            check(byte(DR_OPEN) == 0,
+                  "2. ...and a DISABLED one does not (OPEN=%d, was %d)"
+                  % (byte(DR_OPEN), before))
+            # the press must reach the page: the app's own dispatcher would have
+            # turned nothing, so what proves it is that no OTHER control took it
+            others = [n for n in ("cs_drlod", "cs_drsize")
+                      if m.readseg(seg, mp[n] + DR_OPEN, 1)[0] != 0]
+            check(not others,
+                  "3. ...and the press is not spent on anything else (%s)"
+                  % (others or "nothing opened"))
+            shut()
 
     if bad:
         for b in bad:

@@ -1537,7 +1537,7 @@ gr_vgatext:
     mul cx
     add di, ax
     mov [gr_vgdest], di
-    mov ax, 0a000h
+    mov ax, [gr_fsi+FSI_SEG]    ; the bracket's frame (a selector on kern_mega, MC7)
     mov es, ax
     mov ax, 0f02h
     cmp word [gr_ry], 8
@@ -2594,7 +2594,7 @@ gr_vgapalette:
 ; slot is called in this mode. gr_exclusive explicitly selects palette 0.
 gr_cgablit:
     push es
-    mov di, 0b800h
+    mov di, [gr_fsi+FSI_SEG]    ; the bracket's frame (a selector on kern_mega, MC7)
     mov es, di
     shr ax, 1
     shr ax, 1

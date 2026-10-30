@@ -48,7 +48,11 @@ REFRESH = (282, 24)         # the Disk window's Refresh button, off its frame
 def main():
     os.chdir(ROOT)
     bad = []
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
+    mega = bool(os.environ.get("OS88_MEGA"))
+    # kern_mega (tests/megaport.txt): the player is the -DPKG_MEGA ARM
+    # (Makefile $(MEGAPKGS)), so its map takes the define
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",),
+                       ("PKG_MEGA",) if mega else ())
     tmp = os.path.join(ROOT, "build", "assocvol-%d" % os.getpid())
     os.makedirs(tmp)
     junk = os.path.join(tmp, "BAD.V88")
@@ -58,14 +62,28 @@ def main():
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
                     "--size", "720", "apps/video/os8088.v88", junk],
                    check=True, capture_output=True)
+    sysimg, home = os88build.at("build/os8088-720.img"), "A:/APPS"
+    if mega:
+        # ...and mega.img, the only kern_mega system disk, carries no
+        # VIDEO.O88 at all: a scratch copy of it with the arm at its ROOT
+        # (os88fat adds to the root only) is the machine with the player on
+        # A:, browsed there rather than in A:\APPS
+        sysimg = os.path.join(tmp, "a.img")
+        with open(M.system_disk(os88build.at("build/os8088-720.img")),
+                  "rb") as f, open(sysimg, "wb") as g:
+            g.write(f.read())
+        subprocess.run([sys.executable, "tools/os88fat.py", "add", sysimg,
+                        os88build.at("build/megak/apps/video.o88"),
+                        "VIDEO.O88"], check=True, capture_output=True)
+        home = "A:/"
     try:
-        with os88ui.boot(os88build.at("build/os8088-720.img"), apps=disk,
+        with os88ui.boot(sysimg, apps=disk,
                          machine=MACHINE, quick=True) as ui:
             m = ui.m
 
             def content(w):
                 w = ui._as_win(w.i)
-                ui.mo.to(700, 12)
+                ui.mo.to(620 if mega else 700, 12)  # the bar, clear of B:
                 M.ui_done(m, "the window's paint")   # vram is the framebuffer
                 _, _, rows = m.vram()
                 return [bytes(r[w.x + 2:w.x + w.w - 2])
@@ -74,7 +92,7 @@ def main():
             # --- ICON
             b = ui.open_drive("B")
             before = content(b)
-            ui.path("A:/APPS")
+            ui.path(home)
             ui.raise_window(b)
             raised = content(b)
             bw = ui._as_win(b.i)
@@ -104,7 +122,8 @@ def main():
                 players.append(w.i)
                 rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                              geom.WIN_SIZE)
-                base = struct.unpack_from("<H", rec, geom.W_SEG)[0] << 4
+                wsg = struct.unpack_from("<H", rec, geom.W_SEG)[0]
+                base = m.lin(wsg) if mega else wsg << 4
                 rb = lambda n: m.read(base + syms[n], 1)[0]
                 rw = lambda n: struct.unpack(
                     "<H", bytes(m.read(base + syms[n], 2)))[0]

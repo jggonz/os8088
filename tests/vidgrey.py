@@ -36,6 +36,19 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
+# kern_mega (tests/megaport.txt): the shipped player refuses under protected
+# mode, so the row plays the ARM - build/megak/apps/, assembled -DPKG_MEGA -
+# and reads the arm's symbols; a segment the player holds is an LDT selector
+# there, read through its descriptor (tests/vidvga4.py's port)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+MEGA_DEFS = ("PKG_MEGA",) if MEGA else ()
+VIDEO_O88 = "build/megak/apps/video.o88" if MEGA else "build/video.o88"
+
+
+def lin(m, seg, off=0):
+    """seg << 4 - or the base in a kern_mega selector's descriptor"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
 WF_OWNBG = 64
 GREY = tuple((v * 255 + 31) // 63 for v in vid.STD16[3 * 7:3 * 7 + 3])
 NBTN = 7                        # VP_NBTN: the four, Repeat, Mute (SPEC.md
@@ -71,13 +84,13 @@ def main():
     a = ap.parse_args()
     vga = "vga" in a.machine or "ega" in a.machine
     os.chdir(ROOT)
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",), MEGA_DEFS)
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         v88 = clip(tmp)
         disk = os.path.join(tmp, "grey.img")
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
-                        "--size", "360", os88build.at("build/video.o88"), v88],
+                        "--size", "360", os88build.at(VIDEO_O88), v88],
                        check=True, capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
                          machine=a.machine,
@@ -86,7 +99,7 @@ def main():
             m = ui.m
             w = ui.path("B:/GREY.V88")
             wrec = ui._S("wm_wins") + w.i * geom.WIN_SIZE
-            base = u16(m.read(wrec, geom.WIN_SIZE), geom.W_SEG) << 4
+            base = lin(m, u16(m.read(wrec, geom.WIN_SIZE), geom.W_SEG))
             rw = lambda n: u16(m.read(base + syms[n], 2))
             sw = lambda n: s16(m.read(base + syms[n], 2))
             rb = lambda n: m.read(base + syms[n], 1)[0]

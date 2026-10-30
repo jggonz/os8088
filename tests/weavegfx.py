@@ -80,6 +80,8 @@ MACHINES = [
     ("os8088_5150_cga_gla",  "cga",  640, 200),
     ("os8088_5150_herc_gla", "herc", 720, 348),
 ]
+if weavesmoke.MEGA:             # kern_mega's Bochs: a VGA and nothing else,
+    MACHINES = weavesmoke.MACHINES      # read through weavesmoke.vram
 
 # One bundle per SHAPE of card. FORM is the widget zoo - label, input, button,
 # check, meter, list - and SHEET is the band composer, which draws through a
@@ -116,6 +118,21 @@ def _ink(rows, cx, cy, row, cells):
 
 def session(machine, card, vidw, vidh, png_dir=None):
     S = os88sym.linear
+    if weavesmoke.MEGA:
+        # kern_mega's Bochs has no snapshot (tools/os88megabochs.py), so a
+        # BOOT a bundle stands in for the fork: the same desktop each time
+        for bundle, src, known in CARDS:
+            weavesmoke.BUNDLE = bundle
+            with weavesmoke.booted("build/os8088-360.img", apps=DISK,
+                                   machine=machine) as m:
+                try:
+                    _drive(machine, card, vidw, S, m, bundle, src, known,
+                           png_dir)
+                except os88marty.MartyError as e:
+                    check(False, "%s/%s: the session broke off"
+                          % (machine, bundle), "the harness lost the machine",
+                          got=str(e)[:200], want="a driven session")
+        return
     # ONE BOOT A MACHINE, A FORK A BUNDLE (os88marty.Forks): each bundle
     # opens on the same booted desktop bytes, independent of the other.
     with weavesmoke.booted("build/os8088-360.img", apps=DISK,
@@ -144,9 +161,9 @@ def _drive(machine, card, vidw, S, m, bundle, src, known, png_dir):
                  got=new, want="exactly one slot"):
         return
     cx, cy, cw, ch = weavegrid._content(m, S, new[0], vidw)
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = weavesmoke.vram(m, card)
     weavegrid._park(m, mo, vw, vh)
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = weavesmoke.vram(m, card)
 
     model = _render(bundle, src, card)
     cells = len(model[0])

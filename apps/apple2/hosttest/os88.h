@@ -186,4 +186,5 @@ unsigned os88_strlen(const char *s);
 void os88_strcpy(char *dst, const char *src, unsigned cap);
 char *os88_utoa(unsigned v, char *dst6);
 
+unsigned os88_seg_para(unsigned seg);
 #endif

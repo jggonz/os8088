@@ -1111,6 +1111,21 @@ br_take:
     mov di, [br_nlen]
     and di, EMS_PAGE-1
     jmp short .mapped
+.convpm:                            ; kern_mega (KERN-MEGA-MEMORY-PLAN MC7):
+    mov dx, [br_srcseg]             ; the claim is a selector and `+ hi << 12`
+    or dx, dx                       ; names some other descriptor, so the
+    jz .convnone                    ; receive's own BOUND window is aimed at
+    mov cx, ax                      ; the 64 KiB the chunk lands in - one
+    xor ax, ax                      ; kernel call a chunk, rebased with the
+    push bx                         ; claim like the segment it replaces
+    mov bx, br_rwin
+    call br_bwaim
+    pop bx
+    mov ax, es                      ; (refused: the claim itself, never a
+    jmp short .convset              ; fault - br_bwaim's CF=1)
+.convnone:
+    xor ax, ax                      ; freed: the zero the sum would have made
+    jmp short .convset
 .convseg:
     push cx                         ; **THE CEILING IS THE CLAIM'S**, not the
     pop cx                          ; br_nstep has bounded this receive to the
@@ -1118,9 +1133,12 @@ br_take:
 ; cross its 64 KiB segment alias.
     push cx                         ; CL is the shift count below, but CX is
     mov ax, [br_nlen_hi]
+    cmp byte [br_mega], 0
+    jne .convpm
     mov cl, 12
     shl ax, cl                      ; one segment paragraph window per 64 KiB
     add ax, [br_srcseg]
+.convset:
     pop cx                          ; NETV_RECV's byte count drives LOOP below
     mov es, ax                      ; contiguous claim, MOVABLE (br_movable)
     mov dx, es                      ; but not while this worker RUNS, which

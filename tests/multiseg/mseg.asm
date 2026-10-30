@@ -30,6 +30,11 @@
 
     OS88_HEADER 'MSEG', ms_entry, OS88_F_PARTS
 
+%define OP_WANT_CSEG                ; ms_modchk FAR-CALLS each part, and under
+                                    ; kern_mega a data selector cannot be
+                                    ; called through: op_cseg is the standard's
+                                    ; answer (os88partsbody.inc), the same word
+                                    ; as op_seg on every real-mode kernel
 %include "os88parts.inc"
 
 MS_PARTS   equ 7
@@ -254,12 +259,12 @@ ms_check:
     mov ax, bx                      ; register - unbracketed, part 5 sets the
     call OSAPI_XMEM_COPY            ; loop counter to 1 and .part runs for
     pop di                          ; ever, which is a HANG and not a failure
-    jc .next
+    jc .xclr
     mov es, [ms_xbuf]
     cmp byte [es:MP_SIG], 'M'
-    jne .next
+    jne .xclr
     cmp byte [es:MP_IDX], MS_XMS
-    jne .next
+    jne .xclr
     mov cx, [es:MP_DHI]             ; sum its data area HERE - the module
     sub cx, [es:MP_DLO]             ; cannot be far-called where it is
     mov si, [es:MP_DLO]
@@ -272,8 +277,22 @@ ms_check:
     inc si
     loop .xsum
     cmp ax, [es:MP_SUM]
-    jne .next
+    jne .xclr
     inc byte [ms_ok]
+    ; ...AND THE SCRATCH PUT BACK, for the probe's reason above: ms_check
+    ; runs again on every ms_onkey, and part 3's zero scan comes BEFORE this
+    ; part - so the copy left there failed part 3 on the next pass. Only a
+    ; machine with a store takes this path (kern_mega's pool, QEMU's XMS),
+    ; which is why no 8088 row ever saw it (tests/mseglazy.py on kern_mega)
+.xclr:
+    push di
+    mov es, [ms_xbuf]
+    xor di, di
+    xor ax, ax
+    mov cx, MS_SCR_KB * 512         ; words
+    cld
+    rep stosw
+    pop di
     jmp .next
 
     ; --- part 6: LAZY, and the check is that it matches what we ASKED for ---
@@ -382,7 +401,8 @@ ms_modchk:
     push ax                         ; ...banked across the calls, because ES is
                                     ; the part's and the far call may not
                                     ; promise it back
-    mov ax, [ms_seg + bx]
+    mov ax, di                      ; AL = the part: its CODE selector, which
+    call op_cseg                    ; is [ms_seg + bx] on a real-mode kernel
     mov [ms_fp+2], ax
     mov word [ms_fp], 0             ; the entry IS offset 0 (msegpart.inc)
     xor al, al                      ; verb 0

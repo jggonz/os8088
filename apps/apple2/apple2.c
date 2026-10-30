@@ -2418,7 +2418,8 @@ void *os88_main(void)
      * SPEC.md 20.12.2), so the size kept is the head slack plus the main ROM.
      * A refusal leaves the claim as it was, which is only the old cost. */
     os88_mem_regrow(a2_opbase,
-                    (int)(((a2_m.romseg - a2_opbase) * 16u + A2_ROM_KEEP
+                    (int)(((os88_seg_para(a2_m.romseg)
+                            - os88_seg_para(a2_opbase)) * 16u + A2_ROM_KEEP
                            + 1023u) >> 10));
     /* ...built FROM ITSELF (apps size pass 1): i's low bit is the reversal's
      * bit 6, and the reversal of the other six is the reversal of i >> 1

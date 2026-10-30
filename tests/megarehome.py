@@ -30,6 +30,17 @@ THE FAILING CASE for 6: PXSTEIN.O88 from before 14.48 - its program says
 no OS88_HIGH and its keep ran low: `FAIL: Pixelstein 3D I_SPTR 7C40 - a
 conventional segment`, verified when the leg was added.
 
+WHAT COUNTS AS "INSIDE" is an ALLOCATOR selector (MEGA_LDT_FREE0 and up,
+off the map). Since KERN-MEGA-MEMORY-PLAN MC7 step 6 the LDT's base is the
+GDT's, so `info ldt` lists the GDT's entries too, and a SCRATCH is left aimed
+at its last use: MEGA_SEL_XB, mega_imghuge's copy destination, sits on
+PIXELSTEIN's block + 128KB with a 64KB limit and read as a fourth part
+selector running past the block, which no kernel change could remove because
+nothing had made it for the block. Verified the other way when the filter
+went in: a stray mega_ldt_alloc DATA selector at that same place, put there
+on purpose in mega_imghuge, is still `FAIL: PXSTEIN: selector 1264 runs past
+its block` and `1 code and 3 data selectors`.
+
 THE FAILING CASE (docs/WRITING-TESTS.md 1): drop OS88_HIGH from any of the
 four headers (or the `call ld_hicx` from kernel/loader.inc's step 8b) and
 (1) and (2) go red naming the program, its region a conventional segment;
@@ -66,7 +77,7 @@ PROGS = (("dos.o88", os.path.join(BUILD, "megak", "kdos", "DOS.O88"), "DOS",
          ("pxstein.o88", os.path.join(BUILD, "pxstein.o88"), "Pixelstein 3D",
           True))
 I_RECSZ, INST_MAX = 32, 12
-MX_BLKSZ, MX_NBLK = 8, 96        # kernel/mega.inc (KERN-MEGA-PLAN 14.49)
+MX_BLKSZ, MX_NBLK = 10, 96       # kernel/mega.inc (KERN-MEGA-PLAN 14.49; 10 since KERN-MEGA-MEMORY-PLAN MC1)
 MC_SIZE, MEM_MAX = 10, 32
 LOW_LIN = 0x0E60 * 16           # LOW_SEG on kern_mega (kernsize's ladder),
                                 # only if SS cannot be read off the machine
@@ -96,6 +107,16 @@ def sym(name):
             p = line.split()
             if len(p) == 3 and p[2] == name:
                 return int(p[1], 16)
+    raise SystemExit("megarehome: no %s in %s" % (name, MAP))
+
+
+def equ(name):
+    """A kern_mega constant off its map, whose `equ`s print as two columns"""
+    with open(MAP) as f:
+        for line in f:
+            p = line.split()
+            if len(p) == 2 and p[1] == name:
+                return int(p[0], 16)
     raise SystemExit("megarehome: no %s in %s" % (name, MAP))
 
 
@@ -180,11 +201,20 @@ def main():
         fails.append("the debugger read came back short (%d, %d bytes)"
                      % (len(I), len(X)))
         I = X = M = b""
+    # THE ALLOCATOR'S ENTRIES ONLY. Since KERN-MEGA-MEMORY-PLAN MC7 step 6
+    # the LDT's base is the GDT's, so `info ldt` lists the GDT's own entries
+    # too - and its scratches are left aimed wherever they were last used:
+    # MEGA_SEL_XB, a linear copy's destination, sits on the last 32KB chunk
+    # mega_imghuge copied, which is PIXELSTEIN's block + 128KB with a 64KB
+    # limit, and read as a fourth selector "running past its block". A
+    # scratch belongs to no block and is re-aimed before every use; what a
+    # block owns is an allocator selector, at or past MEGA_LDT_FREE0
+    free0 = equ("MEGA_LDT_FREE0")
     ldt = []
     for line in text.splitlines():
         m = re.match(r"LDT\[(0x[0-9a-f]+)\]=(Code|Data) segment, base="
                      r"(0x[0-9a-f]+), limit=(0x[0-9a-f]+)", line)
-        if m:
+        if m and int(m.group(1), 16) >= free0:
             ldt.append((int(m.group(1), 16), m.group(2), int(m.group(3), 16),
                         int(m.group(4), 16)))
     blocks = []

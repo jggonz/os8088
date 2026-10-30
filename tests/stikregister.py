@@ -93,7 +93,8 @@ def calendars(ui):
 def main():
     tmp = tempfile.mkdtemp(prefix="stikregister-")
     sysimg = os.path.join(tmp, "os8088-360.img")
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), sysimg)
+    shutil.copy(__import__("os88marty").system_disk(
+        os.path.join(BDIR, "os8088-360.img")), sysimg)  # (kern_mega: mega.img)
     image = image_size()
     so = os88stik.state_off(os88stik.DESKCAL_LIB, os88stik.DESKCAL_STIK_BSS,
                             os88stik.DESKCAL_PAYLEN, image)
@@ -204,10 +205,14 @@ def main():
               "...and the empty payload (%r)" % (cal,))
 
         print("E: a reset brings no calendar back")
-        t0 = struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
+        # kern_mega's machine is an AT, whose BIOS seeds 0040:006C from the
+        # RTC at power-on, so it restarts LARGE: the kernel's own [ticks]
+        # is what starts again there (Bochs's reset is a power cycle)
+        tick = ui._S("ticks") if getattr(m, "bochs", False) else 0x46C
+        t0 = struct.unpack("<H", bytes(m.read(tick, 2)))[0]
         m.reset()
         m.run()
-        ui._wait(lambda: struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
+        ui._wait(lambda: struct.unpack("<H", bytes(m.read(tick, 2)))[0]
                  < t0, "the BIOS tick to restart", 60)
         ui.ready()
         os88marty_pace(m, 10)

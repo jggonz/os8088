@@ -68,7 +68,8 @@ def want_grid(y, m):
 def main():
     tmp = tempfile.mkdtemp(prefix="deskcalgrid-")
     sysimg = os.path.join(tmp, "os8088-360.img")
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), sysimg)
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                sysimg)
     b = open(os.path.join(BDIR, "deskcal.bin"), "rb").read()
     image = struct.unpack_from("<H", b, 8)[0]
 

@@ -52,12 +52,63 @@ GAMES_DIR, MINES_PKG = "GAMES", "MINES.O88"
 WATCH = ["mn_mode", "mn_revealed", "mn_flags"]
 
 fails = []
+# kern_mega (OS88_MEGA, tests/megaport.txt): the same seven cases through the
+# Marty API that tools/os88megabochs.py answers out of Bochs - os88ui's
+# boot of mega.img with megaapps.img in B:, os88mouse's proven edges with the
+# RIGHT button's (Bochs's PS/2 mouse carries both), and the guest's own
+# waits. Every case and every assertion is the QEMU arm's
+MEGA = bool(os.environ.get("OS88_MEGA"))
 
 
 def check(name, cond, note=""):
     print("  [%s] %s %s" % ("PASS" if cond else "FAIL", name, note))
     if not cond:
         fails.append(name)
+
+
+def _acted(m, cond, secs, what, poll=0.05):
+    if MEGA:
+        import os88marty
+        try:
+            os88marty.until(m, lambda _: cond(), what, poll=poll,
+                            guest=secs)
+            return True
+        except os88marty.MartyError:
+            return False
+    return os88qemu.acted(m, cond, secs=secs, what=what, poll=poll)
+
+
+def _ui_done(m, cap, what="the UI"):
+    if MEGA:
+        import os88marty
+        return os88marty.ui_done(m, what, cap=cap)
+    return os88qemu.ui_done(m, S, cap=cap, what=what)
+
+
+class MartyMouse:
+    """Mouse's three verbs on a Marty machine: os88mouse's closed loop, the
+    right button its proven edge with btn=2"""
+
+    def __init__(self, m):
+        import os88mouse
+        self.m, self.mo = m, os88mouse.Mouse(marty=m)
+
+    def click(self, x, y, mask=1):
+        if mask == 1:
+            self.mo.click(x, y, settle=0)
+        else:
+            self.mo.to(x, y)
+            self.mo._sep()
+            self.mo._edge(True, btn=2)
+            self.mo._edge(False, btn=2)
+        _ui_done(self.m, 0.4)
+
+    def rclick(self, x, y):
+        self.click(x, y, mask=2)
+
+    def dblclick(self, x, y):
+        self.mo.dblclick(x, y)
+        _ui_done(self.m, 0.4)
 
 
 class Mouse:
@@ -161,7 +212,7 @@ def state(m, seg, cell):
     """One cell's MN_S_* state, decoded out of the package's bss: `mn_cell`
     is one byte a cell (SPEC.md 23) - MN_C_OPEN 0x40, MN_C_FLAG 0x20."""
     base = dispapps.img_size("mines") + dispapps.bss_off("mines", "mn_cell")
-    b = m.read((seg << 4) + base + cell, 1)[0]
+    b = m.read(dispcp._lin(m, seg, base + cell), 1)[0]
     return MN_S_OPEN if b & 0x40 else MN_S_FLAG if b & 0x20 else MN_S_COVER
 
 
@@ -190,18 +241,22 @@ def boot():
 
 def launch_mines(m, mo):
     """Drive B: -> GAMES -> MINES.O88, and answer (window slot, segment)."""
-    dispcp.open_drive(m, mo, S, settle, "B")
+    st = settle
+    if MEGA:                            # os88mouse and the guest's settle
+        import os88marty
+        mo, st = mo.mo, os88marty.settle
+    dispcp.open_drive(m, mo, S, st, "B")
     disk = dispcp.win_list(m, S)[-1]
     wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    dispcp.open_named(m, mo, S, settle, wx, wy, GAMES_DIR)
+    dispcp.open_named(m, mo, S, st, wx, wy, GAMES_DIR)
     games = dispcp.win_list(m, S)[-1]
     wx, wy = dispcp.win_rect(m, S, games)[:2]
-    dispcp.open_named(m, mo, S, settle, wx, wy, MINES_PKG)
+    dispcp.open_named(m, mo, S, st, wx, wy, MINES_PKG)
     # The package's WINDOW is the launch having landed - in the guest's own
     # seconds (tests/os88qemu.py) - and one more for the board's first paint.
-    if os88qemu.acted(m, lambda: dispapps.pkg_seg(m, 0) is not None, secs=30,
-                      what="the Minesweeper window", poll=0.05):
-        os88qemu.ui_done(m, S, cap=1)   # (the board's first paint)
+    if _acted(m, lambda: dispapps.pkg_seg(m, 0) is not None, secs=30,
+              what="the Minesweeper window", poll=0.05):
+        _ui_done(m, 1)                  # (the board's first paint)
     got = dispapps.pkg_seg(m, 0)
     if got is None:
         sys.exit("minesrc: MINES.O88 did not open")
@@ -220,6 +275,11 @@ def main():
     asked by itself. One leaked process, three wrong verdicts, and nothing in
     any of them named qemu.
     """
+    if MEGA:
+        import os88ui
+        with os88ui.boot("build/os8088.img", apps="build/apps.img",
+                         quick=True) as ui:
+            return _run(ui.m)
     m = boot()
     try:
         return _run(m)
@@ -238,11 +298,11 @@ def _run(m):
             return dispcp.drive_ordinal(m, S, "B") is not None
         except Exception:                                   # noqa: BLE001
             return False
-    if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.05):
+    if not _acted(m, zone, secs=90, what="drive B's zone", poll=0.05):
         sys.exit("minesrc: drive B: never got a desktop zone - the guest did "
                  "not reach a desktop")
-    os88qemu.ui_done(m, S, cap=8.0, what="the first desktop")
-    mo = Mouse(m)
+    _ui_done(m, 8.0, what="the first desktop")
+    mo = MartyMouse(m) if MEGA else Mouse(m)
     slot, seg, games = launch_mines(m, mo)
     rect = dispcp.win_rect(m, S, slot)
     grect = dispcp.win_rect(m, S, games)
@@ -344,7 +404,7 @@ def _run(m):
         # a starved guest's 20 quiet ticks were not the whole of that - the
         # next press arrived mid-raise and flagged nothing
         # (docs/plans/SOAK-PARALLEL.md 17.5). The UI going idle is the end
-        os88qemu.ui_done(m, S, cap=10.0, what="the raise")
+        _ui_done(m, 10.0, what="the raise")
         mo.rclick(cx, cy)                                   # now frontmost
         acted(m, lambda: w()["mn_flags"] != before)
         got = w()

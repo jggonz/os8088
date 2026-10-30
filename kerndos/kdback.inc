@@ -266,6 +266,14 @@ dos_k_path:
 ; the whole of it behind.
 dos_k_copy:
 dos_k_move:
+    ; **WITH THE ANSWER DBE_MOVE's CONTRACT GIVES A CALLER A WAY ON**: FERR_FULL
+    ; is "the engine took nothing and wrote nothing - stream with your own",
+    ; and the shell's MOVE does exactly that (apps/dos/dosh.inc dsh_copy_go,
+    ; SPEC.md 96.30.6). Refused with whatever AX held, MOVE under kern_dos was
+    ; an I/O error every time (KERN-MEGA-PLAN 14.77)
+    mov ax, FERR_FULL
+    stc
+    ret
 %ifndef KD_MEGA
 dos_k_xcopy:
 ; ...and the store above 1MB (SPEC.md 41), which needs a driver, a CPU tier

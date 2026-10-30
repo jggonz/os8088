@@ -69,9 +69,36 @@ def boot():
     return heapmap.Qmp(sock)
 
 
+def mega_rows():
+    """kern_mega (OS88_MEGA=1): the same program, under Bochs through
+    tools/os88megabochs.py - a 16MB 386 whose kern_dos trip carries its own
+    XMS arena (SPEC.md 96.15.4) - so the machine with a store is that one, and
+    the launch is os88ui's. The text screen is read the same way: 0xB8000."""
+    import os88marty
+    import os88ui
+    with os88ui.boot("build/os8088.img", apps=IMG, quick=True) as ui:
+        m = ui.m
+        if not ui.path("B:/DOSXMSQ.COM"):
+            fail("double-clicking DOSXMSQ.COM opened no window")
+        rows = []
+
+        def ready(_m):
+            rows[:] = [r.rstrip() for r in (m.screen() or [])]
+            return any("READY" in r for r in rows)
+        try:
+            os88marty.until(m, ready, "READY", poll=0.2, limit=120.0)
+        except os88marty.MartyError:
+            fail("the program never finished; the text screen was %r"
+                 % ([r for r in rows if r.strip()][:12],))
+        os88marty.text_taken(m, "x")
+        return rows
+
+
 def main():
     if not os.path.exists(IMG):
         fail("%s is missing - `make doscom` builds the gate disks" % IMG)
+    if os.environ.get("OS88_MEGA"):
+        return check(mega_rows())
     q = boot()
     S = os88sym.linear
     hmp = lambda *c: [q.hmp(x) for x in c]                  # noqa: E731
@@ -103,6 +130,10 @@ def main():
     if not os88qemu.acted(q, ready, secs=180.0, what="READY"):
         fail("the program never finished; the text screen was %r"
              % ([r for r in rows if r.strip()][:12],))
+    return check(rows)
+
+
+def check(rows):
 
     print("dosxmsq: the bracket's text screen:")
     for r in rows[:14]:

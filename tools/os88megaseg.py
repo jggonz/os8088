@@ -6,16 +6,18 @@
     python3 tools/os88megaseg.py --labels                # kern_mega-only labels too
     python3 tools/os88megaseg.py --json
 
-docs/plans/KERN-MEGA-SEGMENTS-PLAN.md is the question this answers: kern_mega
+docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md is the question this answers: kern_mega
 is kern_big plus a protected-mode layer, and both put `.text` + `.bss` in ONE
 64KB segment (KERN_CODE_MAX). Every byte kern_big adds there is a byte off
 kern_mega's headroom too, so what decides when kern_mega overflows is the
 DIFFERENCE between the two windows - and that difference is what this prints,
 per section and per source file.
 
-It also prints the second wall, `.cold`'s slot above 1MB: kern_mega copies
-`.cold` to MEGA_COLD_LIN and the XMEM pool starts at MEGA_XPOOL (mega.inc),
-so kern_big's `.cold` growing eats that slot as well.
+It also prints what `.cold` and `.mega` take above 1MB. Since
+KERN-MEGA-MEMORY-PLAN MC2 there is no fixed slot for them: mega_layoutf puts
+the code area at the top of RAM, sized MEGA_CODE_KB, and kernel.asm caps that
+at 255 KB (a byte of KB in the walk's records) - so kern_big's `.cold`
+growing costs the pool its bytes and nothing else, and the cap is the wall.
 
 HOW. Nothing is assembled. Each map's `[map all]` symbol table gives every
 label's address in its section; a label's size is the distance to the next
@@ -118,7 +120,7 @@ def map_equs(path, names):
 def mega_consts(root):
     src = open(os.path.join(root, 'kernel', 'mega.inc'), errors='replace').read()
     out = {}
-    for name in ('MEGA_COLD_LIN', 'MEGA_XPOOL'):
+    for name in ('MEGA_XPOOL',):
         m = re.search(r'^%s\s+equ\s+(0x[0-9A-Fa-f]+|\d+)' % name, src, re.M)
         if m:
             out[name] = int(m.group(1), 0)
@@ -147,10 +149,10 @@ def main():
     win_m = sum(mega[s]['length'] for s in WINDOW)
     out = dict(window=dict(big=win_b, mega=win_m, big_left=KERN_CODE_MAX - win_b,
                            mega_left=KERN_CODE_MAX - win_m, overhead=win_m - win_b))
-    if 'MEGA_COLD_LIN' in k and 'MEGA_XPOOL' in k:
-        # `.cold` at MEGA_COLD_LIN, `.mega` at its rung's distance above it
-        # (MEGA_HI_LIN = MEGA_COLD_LIN + COLD_PARA * 16, mega.inc)
-        slot = k['MEGA_XPOOL'] - k['MEGA_COLD_LIN']
+    if 'MEGA_XPOOL' in k:
+        # `.cold` at the code area's base, `.mega` at its rung's distance
+        # above it (COLD_PARA * 16), the area capped at 255 KB (kernel.asm)
+        slot = 255 * 1024
         cold = mega['.cold']['length']
         # ...and the park's scratch on `.mega`'s tail (MEGA_SCR_OFF + MPS_SIZE,
         # megados.inc; KERN-MEGA-PLAN 14.45), which kernel.asm's guard counts
@@ -186,7 +188,7 @@ def main():
     if 'cold_high' in out:
         c = out['cold_high']
         print('os88megaseg: above 1MB  .cold %d + .mega %d (from its rung) + its scratch %d '
-              '= %d of the %d between MEGA_COLD_LIN and MEGA_XPOOL (%d left)'
+              '= %d of the code area\'s %d-byte cap (%d left)'
               % (c['cold'], c['mega'], c['scratch'], c['used'], c['slot'], c['left']))
     if a.check:
         limit = None
@@ -205,7 +207,7 @@ def main():
             grew = [dict(file=f, delta=d) for f, d in per.most_common() if d > 0][:6]
             sys.exit('os88megaseg: kern_mega carries %d bytes more than kern_big in the kernel '
                      'segment, against the %d %s allows. Protected-mode-only code belongs in '
-                     '`.mega` (docs/plans/KERN-MEGA-SEGMENTS-PLAN.md 3.2); only what runs in '
+                     '`.mega` (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md 3.2); only what runs in '
                      'REAL mode after the switch has to be low. If it is that, raise the figure '
                      'in %s and say why. Biggest kern_mega shares: %s'
                      % (w['overhead'], limit, a.check, a.check,

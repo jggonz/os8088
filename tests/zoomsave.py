@@ -71,7 +71,7 @@ def tick(mm, card=None):
 
 
 def view(m, seg):
-    return m.read((seg << 4) + dispapps.img_size("taskmgr")
+    return m.read(dispcp._lin(m, seg, dispapps.img_size("taskmgr"))
                   + dispapps.bss_off("taskmgr", "tm_view"), 1)[0]
 
 

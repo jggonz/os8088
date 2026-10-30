@@ -212,7 +212,13 @@ class QH(object):
         self.sock = os.path.join(tmp, "qmp.sock")
         self.pid = os.path.join(tmp, "qemu.pid")
         self.pidn = None
+        self.srv = None
         atexit.register(self.close)
+        if os88qemu.MEGA:       # kern_mega: this socket answered by a Bochs
+            import os88qmpmega  # (tests/os88qmpmega.py), the gate disk's
+            self.srv = os88qmpmega.Server(  # twin on mega.img in A:
+                self.sock, self.pid, sysimg, bimg, ne2k=True)
+            return
         os88qemu.own(self.pid, self.sock)
         pre = []
         if BYNAME:
@@ -233,6 +239,8 @@ class QH(object):
         self.pidn = int(open(self.pid).read().strip())
 
     def close(self):
+        if self.srv is not None:
+            self.srv.close()
         if self.pidn:
             try:
                 os.kill(self.pidn, signal.SIGTERM)
@@ -248,7 +256,12 @@ class QH(object):
         return bytes(xmcheck.read_bytes(self.sock, linear, n))
 
     def readseg(self, seg, off, n):
-        return self.read((seg << 4) + off, n)
+        return self.read(os88qemu.lin(seg, off), n)
+
+    def lin(self, seg, off=0):
+        """SEG:OFF's linear address (os88qemu.lin: a selector's base under
+        kern_mega) - tests/dispcp.py and os88ui read through it"""
+        return os88qemu.lin(seg, off)
 
     def mouse(self, *args):
         subprocess.run([sys.executable, os.path.join(ROOT, "tools",
@@ -401,7 +414,7 @@ def main():
         if not seg:
             bad.append("1. HTTPFS.DRV is not loaded (DRVR_ERR %d)" % err)
             raise Stop()
-        base = geom.drv_base(seg)
+        base = os88qemu.drv_base(seg)   # a selector's base on kern_mega
         vol = q.read(base + syms["hf_vol"], 1)[0]
         url = q.read(base + syms["hf_url"], 96).split(b"\0")[0]
         print("   1. HTTPFS.DRV at %04Xh: volume %d, address %r, %d request(s)"
@@ -428,7 +441,8 @@ def main():
         if BYNAME:
             esyms = os88drvsym.symbols("ether.bin")
             erow = q.read(S("drv_tab") + 2 * DRVR_SIZE, DRVR_SIZE)
-            ebase = geom.drv_base(struct.unpack_from("<H", erow, geom.DRVR_SEG)[0])
+            ebase = os88qemu.drv_base(struct.unpack_from("<H", erow,
+                                                         geom.DRVR_SEG)[0])
             id0 = q.read(ebase + esyms["dns_id"], 2)
             cnm = q.read(ebase + esyms["dns_cnm"], 16).split(b"\0")[0]
             print("   N. the name looked up once: cache %r" % cnm)

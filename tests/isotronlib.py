@@ -158,7 +158,12 @@ class Game:
                                               + os88geom.W_SEG, 2))[0]
         assert seg, "the isoTron window has no segment"
         self.seg = seg
-        self.base = seg << 4
+        self.base = self.lin(seg)
+
+    def lin(self, seg):
+        """seg << 4 - or on kern_mega (tests/megaport.txt), where a
+        package's region and claims are LDT selectors, the descriptor's base"""
+        return self.m.lin(seg) if getattr(self.m, "bochs", False) else seg << 4
 
     def a(self, name):
         return self.base + (self.bss[name] if name in self.bss else self.code[name])
@@ -184,7 +189,7 @@ class Game:
     # --- wave 2: the picture ------------------------------------------------
     def canvas(self):
         """The guest's 64,000-byte canvas claim, as isotronsim's pack()."""
-        return self.m.read(self.w("it_cseg") << 4, CSIZE)
+        return self.m.read(self.lin(self.w("it_cseg")), CSIZE)
 
     def geom(self):
         """The picture's place: origin, rows and bytes across."""

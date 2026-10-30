@@ -23,14 +23,17 @@ INCS = ('apps/', 'apps/midirack/', 'drivers/sound/', 'drivers/')
 
 def syms():
     """Every label AND every bss equ (MRB/MRW/MRBUF are equs off
-    os88_image_end), from a map of a re-assembly - NASM lists both."""
+    os88_image_end), from a map of a re-assembly - NASM lists both. On
+    kern_mega (OS88_MEGA, tests/megaport.txt) the package is the ARM,
+    assembled -DPKG_MEGA (KERN-MEGA-PLAN 14.66), and so is this map."""
+    mega = ['-DPKG_MEGA'] if os.environ.get('OS88_MEGA') else []
     with tempfile.TemporaryDirectory() as d:
         cp = os.path.join(d, 'p.asm')
         mp = os.path.join(d, 'p.map')
         open(cp, 'w').write(open(SRC).read() + '\n[map symbols %s]\n' % mp)
         subprocess.run(['nasm', '-f', 'bin', '-w+error']
                        + sum([['-I', os.path.join(ROOT, i)] for i in INCS], [])
-                       + ['-o', os.path.join(d, 'p.bin'), cp], check=True,
+                       + mega + ['-o', os.path.join(d, 'p.bin'), cp], check=True,
                        cwd=ROOT)
         out = {}
         for line in open(mp):
@@ -43,9 +46,11 @@ def syms():
 class Probe(object):
     def __init__(self, m, seg, s):
         self.m, self.seg, self.s = m, seg, s
+        # seg * 16 - or on kern_mega the base in seg's LDT descriptor
+        self.base = m.lin(seg) if hasattr(m, 'lin') else seg * 16
 
     def addr(self, name):
-        return self.seg * 16 + self.s[name]
+        return self.base + self.s[name]
 
     def data(self, name, n=1):
         return bytes(self.m.read(self.addr(name), n))

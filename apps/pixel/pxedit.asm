@@ -610,8 +610,8 @@ pe_tail:
     ret
 
 ; pe_tailof - AX x BX pixels at segment CX: AX = their tail's segment, the
-; pixels' paragraphs up to a multiple of 8 (px_htail's: kern_mega's grid).
-; Preserves all but AX, DX
+; pixels' paragraphs up to a multiple of 8 (px_htail's layout) - a SEG_SUB
+; there (MC7: the sum on a real-mode kernel). Preserves all but AX, DX
 pe_tailof:
     mul bx
     add ax, 15
@@ -625,8 +625,13 @@ pe_tailof:
     pop cx
     add ax, 7
     and al, 0xF8
-    add ax, cx
+    mov dx, cx
+    PXSUB
+    mov ax, dx
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; =============================================================================
 ; THE PIXEL OPERATIONS (the worker)
@@ -892,24 +897,22 @@ pe_ops:     dw pe_rotcw, pe_rotccw, pe_rot180, pe_fliph, pe_flipv, pe_crop
 
 ; --- the rows ---------------------------------------------------------------------
 
-; pe_rowp - AX = a row, BX = a master's segment, CX = its width: DX:SI = the
-; row's first byte (SI < 128: DX on kern_mega's 8-paragraph grid, where only
-; those are segments - px_mrow's, KERN-MEGA-PLAN 14.40). Preserves all else
+; pe_rowp - AX = a row, BX = a master's window table (pxrec.inc: px_mwc, or
+; px_mwd for a destination), CX = its width: DX:SI = the row's first byte,
+; through its 32KB windows (MC7: px_mrow's) - current for the job (px_wjob's
+; px_mwok) and re-based by a real-mode move (px_mreloc). SI < 8000h, and
+; the row ends in its window. Preserves all else
 pe_rowp:
     push ax
-    push cx
     mul cx
     mov si, ax
-    and si, 127
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8
-    add ax, bx
-    mov dx, ax
-    pop cx
+    and si, 0x7FFF
+    shl ax, 1
+    rcl dx, 1
+    shl dx, 1
+    xchg dx, si
+    mov si, [bx + MWT_WIN + si]
+    xchg dx, si
     pop ax
     ret
 
@@ -917,12 +920,15 @@ pe_rowp:
 pe_srow:
     push bx
     push cx
-    mov bx, [px_cur + PXR_MSEG]     ; re-read: it may have moved
+    mov bx, px_mwc
     mov cx, [px_cur + PXR_MW]
     call pe_rowp
     pop cx
     pop bx
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pe_drow - AX = a row of the DESTINATION: ES:DI. Preserves all else
 pe_drow:
@@ -930,10 +936,10 @@ pe_drow:
     push cx
     push dx
     push si
-    mov bx, [px_edseg]
-    or bx, bx
-    jnz .d
-    mov bx, [px_cur + PXR_MSEG]     ; in place
+    mov bx, px_mwd
+    cmp word [px_edseg], 0
+    jne .d
+    mov bx, px_mwc                  ; in place
 .d:
     mov cx, [px_edw]
     call pe_rowp
@@ -944,6 +950,9 @@ pe_drow:
     pop cx
     pop bx
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pe_tick - a row done: [px_erow] + 1, liveness, a wake every 3 ticks, and
 ; the cancel. out CF = 1 AX = PXD_ABORT. Preserves all but AX
@@ -1000,6 +1009,14 @@ pe_rotcw:
 pe_rotccw:
     PXSW mov byte [es:pe_dir], 1
 pe_rot90:
+    mov ax, cs                      ; KERN_MEGA (CS is not our data segment
+    cmp ax, [cs:PXP_SELF]           ; there): a carry is the window TWO on
+    je .rm                          ; in the master's table, which no sum
+    push ds                         ; names (.pmc, MC7) - patched, so the
+    mov ds, [cs:PXP_SELF]           ; 8088's loop is the one it was
+    mov word [pe_rot90.cy], 0xEB | ((pe_rot90.pmc - pe_rot90.cy - 2) << 8)
+    pop ds
+.rm:
     xor bp, bp                      ; BP = the destination row
 .row:
     cmp bp, [px_edh]
@@ -1033,9 +1050,10 @@ pe_rot90:
     stosb
     add si, bx
     jnc .n
-    add dx, 0x1000                  ; the offset carried: 64 KB on
-    mov ds, dx
-.n:
+.cy:                                ; PATCHED on kern_mega to `jmp short
+    add dx, 0x1000                  ; .pmc`: the offset carried, 64 KB on -
+    mov ds, dx                      ; two windows of pe_srow's table, which
+.n:                                 ; a real-mode kernel's sums are
     loop .p
     pop ds
     cld
@@ -1043,6 +1061,28 @@ pe_rot90:
     call pe_tick
     jnc .row
     ret
+.pmc:                               ; kern_mega: DX is a window of the
+    push si                         ; master's table (pe_srow's); the one
+    mov ds, [cs:PXP_PKGD]           ; 64 KB on is two entries further
+    xor si, si
+.f:
+    cmp [px_mwc + MWT_WIN + si], dx
+    je .g
+    inc si
+    inc si
+    cmp si, 2 * (PX_MWN - 2)
+    jb .f
+    xor dx, dx                      ; (none: the null selector, a #GP and
+    jmp short .h                    ; not somebody else's memory)
+.g:
+    mov dx, [px_mwc + MWT_WIN + 4 + si]
+.h:
+    pop si
+    mov ds, dx
+    jmp short .n
+%if (pe_rot90.pmc - pe_rot90.cy - 2) > 127
+  %error "pe_rot90's kern_mega patch is a short jump"
+%endif
 
 ; THE HALF TURN, in place: row y and row h-1-y exchanged end for end (the
 ; middle row of an odd height reversed alone)
@@ -3311,8 +3351,9 @@ pv_xin:
 
 ; pv_xcopy - DI = 0 out, 1 in: [px_uxlen] bytes. CF on a refusal
 pv_xcopy:
-    mov bx, [px_cur + PXR_MSEG]     ; BX = the conventional end's segment
-    mov ax, [px_uxms]               ; DX:AX = the extended end
+    xor bx, bx                      ; BX = the conventional end's 32 KB
+    mov ax, [px_uxms]               ; window x 2 (px_mwc: MC7, the sum on a
+                                    ; real-mode kernel); DX:AX = the extended
     mov dx, [px_uxms + 2]
     mov si, [px_uxlen]              ; BP:SI = the bytes left
     mov bp, [px_uxlen + 2]
@@ -3327,7 +3368,7 @@ pv_xcopy:
     jcxz .done
     push si
     push es
-    mov es, bx
+    mov es, [px_mwc + MWT_WIN + bx]
     xor si, si
     call OSAPI_XMEM_COPY
     pop es
@@ -3335,7 +3376,8 @@ pv_xcopy:
     jc .err
     add ax, cx
     adc dx, 0
-    add bx, 0x0800
+    inc bx
+    inc bx
     sub si, cx
     sbb bp, 0
     jmp short .l
@@ -3479,9 +3521,15 @@ pf_go:                              ; flip's only once it is sure to run
     mov bl, al
     call pf_edkb                    ; a destination
     mov [px_edkb2], ax
+    cmp ax, PX_MWN * 32             ; at most the windows a table holds
+    ja .nodest                      ; (pxrec.inc, MC7)
     call OSAPI_MEM_CLAIM
     jc .nodest
     mov [px_edseg], dx
+    mov ax, MWT_NONE                ; (its segment may be one a table was
+    mov [px_mwc + MWT_KEY], ax      ; made of: px_mwinval's)
+    mov [px_mwp + MWT_KEY], ax
+    mov [px_mwd + MWT_KEY], ax
     jmp short .work
 .nodest:
     cmp bl, OC_EITHER               ; in place, over a copy above 1 MB?
@@ -3538,6 +3586,9 @@ pf_go:                              ; flip's only once it is sure to run
     call pf_say
     clc
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pf_rel - an operation's claims given back: the destination, the work and
 ; an XMS copy no commit took. Preserves all

@@ -116,12 +116,18 @@ def cstr(b):
     return bytes(b).split(b"\0")[0].decode("latin-1")
 
 
+def _lin(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base under kern_mega"""
+    lin = getattr(m, "lin", None)
+    return lin(seg, off) if lin else (seg << 4) + off
+
+
 def table(ui):
     seg = ui._word("sc_seg")
     n = ui._byte("sc_nrows")
     if not seg:
         return seg, n, []
-    raw = bytes(ui.m.read(seg << 4, n * SC_REC))
+    raw = bytes(ui.m.read(_lin(ui.m, seg), n * SC_REC))
     return seg, n, [raw[i * SC_REC:(i + 1) * SC_REC] for i in range(n)]
 
 
@@ -211,8 +217,10 @@ def main():
     sysimg = os.path.join(tmp, "os8088-360.img")
     appimg = os.path.join(tmp, "apps360.img")
     bdir = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
-    shutil.copy(os.path.join(bdir, "os8088-360.img"), sysimg)
-    shutil.copy(os.path.join(bdir, "apps360.img"), appimg)
+    shutil.copy(os88marty.system_disk(os.path.join(bdir, "os8088-360.img")),
+                sysimg)
+    shutil.copy(os88marty.apps_disk(os.path.join(bdir, "apps360.img")),
+                appimg)
     before = cfg_bytes(sysimg)
     print("SYSTEM.CFG before: %d bytes, trailer %r" % (len(before),
                                                        trailer(before)[0]))
@@ -419,7 +427,7 @@ def main():
         # --- I: a target that is not there -------------------------------
         print("I: the folder's target gone, double-click it")
         fidx = zone - DESK_SC0
-        fpath = (ui._word("sc_seg") << 4) + fidx * SC_REC + 4
+        fpath = _lin(m, ui._word("sc_seg"), fidx * SC_REC + 4)
         m.write(fpath, b"NOPE\0")         # memory only: no save follows
         fresh(ui)
         ui.mo.dblclick(gx, gy)

@@ -82,6 +82,17 @@ MOD_DESK = 7                    # kernel/mod.inc (SPEC.md 11.103.10)
 MODR_SIZE = 4
 DKD_NENT = 4
 MTENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+# kern_mega (OS88_MEGA, docs/BOCHS.md): its own 1.44MB system disk is the
+# fixture, and a segment read out of the guest is a SELECTOR - flat() is
+# the linear address either way (a GDT one for a CS or `.cold`'s far
+# pointers, an LDT one for a claim)
+SYSIMG = "mega.img" if os.environ.get("OS88_MEGA") else "os8088-360.img"
+
+
+def flat(m, sg, off):
+    if not getattr(m, "bochs", False) or not m.protected():
+        return (sg << 4) + off      # (stik_boot runs before mega_enter)
+    return (m.lin(sg, 0) if sg & 4 else m.gdt(sg)[0]) + off
 
 fails = []
 
@@ -105,7 +116,7 @@ def has_file(img, name):
 
 def fixture(tmp, leg):
     img = os.path.join(tmp, "nodesk-%s.img" % leg)
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
+    shutil.copy(os.path.join(BDIR, SYSIMG), img)
     cfg = os.path.join(tmp, "SYSTEM.CFG")
     vol = "B" if leg == "bdrive" else "A"
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88stik.py"),
@@ -130,7 +141,7 @@ def leg(name, tmp):
     bimg = None
     if name == "bdrive":        # B: is the shipped system disk again, so its
         bimg = os.path.join(tmp, "nodesk-b.img")    # STIKAPPS\ holds
-        shutil.copy(os.path.join(BDIR, "os8088-360.img"), bimg)  # DESKCAL
+        shutil.copy(os.path.join(BDIR, SYSIMG), bimg)  # DESKCAL
     print("%s:" % name)
     with os88marty.launch(img, apps=bimg,
                           machine=os88marty.machine("os8088_xt_vga", None),
@@ -144,14 +155,26 @@ def leg(name, tmp):
         # stands), and its state-file save walks to its own folder, so
         # [dsk_cwd] and the pair both name STIKAPPS on any build. That was
         # this row's first E, and it failed for that reason on all three legs
+        if getattr(m, "bochs", False):
+            # kern_mega relaunches the widgets AFTER mega_enter (KERN-MEGA-
+            # PLAN 14.78), where `.cold` runs above 1MB at an address only the
+            # GDT knows: run to mega_enter's return first, then ask
+            m.bp_exec("mega_enter")
+            m.run()
+            if m.wait_stop(120) == "breakpoint":
+                r = m.regs()
+                m.bp_exec(flat(m, r["cs"], struct.unpack("<H", bytes(m.read(
+                    flat(m, r["ss"], r["sp"]), 2)))[0]))
+                m.run()
+                m.wait_stop(120)
         m.bp_exec("stik_boot")
         m.run()
         hit = m.wait_stop(120)
         ret = None
         if hit == "breakpoint":
             r = m.regs()
-            ret = (r["cs"] << 4) + struct.unpack(
-                "<H", bytes(m.read((r["ss"] << 4) + r["sp"], 2)))[0]
+            ret = flat(m, r["cs"], struct.unpack(
+                "<H", bytes(m.read(flat(m, r["ss"], r["sp"]), 2)))[0])
             m.bp_exec(ret)
             m.run()
             hit = m.wait_stop(120)
@@ -190,19 +213,19 @@ def leg(name, tmp):
         raw = bytes(m.read(ui._S("DKDFP"), DKD_NENT * 4))
         for k in range(DKD_NENT):
             slots.append(struct.unpack_from("<HH", raw, k * 4))
-        flat = ["%05X" % ((sg << 4) + off) for off, sg in slots]
+        named = ["%05X" % flat(m, sg, off) for off, sg in slots]
         if absent:
             check(seg == 0, "mod_tab's MOD_DESK row is 0 (%#06x)" % seg)
-            check(all((sg << 4) + off == gone for off, sg in slots),
-                  "every DKDFP slot names mod_gone (%r)" % flat)
+            check(all(flat(m, sg, off) == gone for off, sg in slots),
+                  "every DKDFP slot names mod_gone (%r)" % named)
         else:
             check(seg != 0, "mod_tab's MOD_DESK row holds a claim (%#06x)"
                   % seg)
             check(all(sg == seg for off, sg in slots),
-                  "every DKDFP slot points into it (%r)" % flat)
+                  "every DKDFP slot points into it (%r)" % named)
         print(" D: the row is kept")
         sseg = ui._word("sc_seg")
-        r = os88stik.parse_row(bytes(m.read(sseg << 4, os88stik.SC_REC)))
+        r = os88stik.parse_row(bytes(m.readseg(sseg, 0, os88stik.SC_REC)))
         zb = m.read(ui._S("desk_zslot") + DESK_SC0, 1)[0]
         check(r["stik"] and r["kind"] == 1 and zb == 0xFF,
               "still the Sticky App row (+3 = %#x), with no cell (%#x)"
@@ -220,8 +243,11 @@ def leg(name, tmp):
             print(" F: DESK.DRV sits above the widget's region")
             rec = ui._S("wm_wins") + w.i * geom.WIN_SIZE
             wseg = struct.unpack("<H", bytes(m.read(rec + geom.W_SEG, 2)))[0]
-            check(seg > wseg, "the module at %#06x, the calendar's region at "
-                  "%#06x" % (seg, wseg))
+            # by BASE: on kern_mega both are LDT selectors into the pool
+            # above 1MB, whose numbers say nothing about where they sit
+            check(flat(m, seg, 0) > flat(m, wseg, 0),
+                  "the module at %#06x (%05X), the calendar's region at %#06x "
+                  "(%05X)" % (seg, flat(m, seg, 0), wseg, flat(m, wseg, 0)))
             print(" G: the last widget closed, DESK.DRV goes with it")
             ui.close(w)
             os88marty.guest_sleep(m, 1.0)
@@ -232,9 +258,9 @@ def leg(name, tmp):
                     for k in range(DKD_NENT)]
             check(seg2 == 0, "mod_tab's MOD_DESK row is 0 again (%#06x): "
                   "the 5 KB claim is given back" % seg2)
-            check(all((sg << 4) + off == gone for off, sg in back),
+            check(all(flat(m, sg, off) == gone for off, sg in back),
                   "every DKDFP slot names mod_gone again (%r)"
-                  % ["%05X" % ((sg << 4) + off) for off, sg in back])
+                  % ["%05X" % flat(m, sg, off) for off, sg in back])
 
 
 def main():

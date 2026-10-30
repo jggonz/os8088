@@ -122,7 +122,9 @@ def wiggle(stop):
 
 def main():
     keep = "--keep" in sys.argv
-    ob.BOCHSRC = ob.BOCHSRC.replace("type=ps2", "type=imps2")
+    ob.MOUSE = "imps2"   # an IntelliMouse. BOCHSRC is a template now
+    # (`type={mouse}`), so the replace that stood here matched nothing
+    # and every Box booted a plain PS/2 mouse: no wheel, mou_p2wz 0
     shutil.rmtree(OUT, ignore_errors=True)
     os.makedirs(OUT)
     com = os.path.join(OUT, "KBTRIP.COM")
@@ -152,7 +154,7 @@ def main():
             if i == 1:
                 box.goto(165, 123)      # the Disk window's one row
                 th.start()
-                ob.xd("click", "--repeat", 2, "--delay", 120, 1)
+                box.dblclick()
             else:
                 ob.xd("key", "--delay", 30, *(["BackSpace"] * 4))
                 ob.xd("type", "--delay", 120, TYPED)
@@ -169,7 +171,7 @@ def main():
                 retyped.append(i)
                 if i == 1:
                     ob.goto(165, 123)
-                    ob.xd("click", "--repeat", 2, "--delay", 120, 1)
+                    box.dblclick()
                 else:
                     ob.xd("key", "--delay", 60, *(["BackSpace"] * 8))
                     ob.xd("type", "--delay", 120, TYPED)

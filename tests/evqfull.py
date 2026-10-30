@@ -44,9 +44,12 @@ EVT_MDOWN = 1
 EVT_WAKE = 4
 
 
-def stub(sym, at, rec, n):
-    """mov si,rec / mov cx,n / .l: call evq_push / inc [si+EV_A] / loop / hlt"""
-    body = bytearray()
+def stub(sym, at, rec, n, cli=False):
+    """mov si,rec / mov cx,n / .l: call evq_push / inc [si+EV_A] / loop / hlt
+
+    `cli` puts a `cli` in front, for a `park` that cannot clear IF itself
+    (kern_mega's Bochs, tools/os88megabochs.py's _c_park)."""
+    body = bytearray([0xFA]) if cli else bytearray()
     body += bytes([0xBE]) + rec.to_bytes(2, "little")        # mov si, rec
     body += bytes([0xB9]) + n.to_bytes(2, "little")          # mov cx, n
     loop = at + len(body)
@@ -61,14 +64,16 @@ def stub(sym, at, rec, n):
 
 def run_pushes(m, sym, at, rec, evtype, first_a, n):
     """Park on the stub and let it push n records of `evtype`, EV_A = first_a.."""
-    blob, done = stub(sym, at, rec, n)
+    bochs = getattr(m, "bochs", False)
+    blob, done = stub(sym, at, rec, n, cli=bochs)
     m.write((KERNEL_SEG << 4) + at, blob)
     m.write((KERNEL_SEG << 4) + rec,
             evtype.to_bytes(2, "little") + first_a.to_bytes(2, "little")
             + b"\x00\x00\x00\x00")
     r = m.regs()
     m.cmd(cmd="park", cs=KERNEL_SEG, ip=at)                  # ...and IF := 0
-    for reg, val in (("ds", KERNEL_SEG), ("es", KERNEL_SEG),
+    ds = 0x10 if bochs else KERNEL_SEG  # kern_mega: MEGA_SEL_KDATA, the
+    for reg, val in (("ds", ds), ("es", ds),    # kernel's DATA selector
                      ("ss", r["ss"]), ("sp", r["sp"])):
         m.setreg(reg, val)
     m.bp_exec((KERNEL_SEG << 4) + done - 2)

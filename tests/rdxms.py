@@ -291,6 +291,18 @@ def main():
     return 1 if fails else 0
 
 
+def lin(seg, off=0):
+    """SEG:OFF as a linear address - os88qemu.lin: under kern_mega a driver's
+    segment and its claims are LDT selectors, whose base it looks up"""
+    return os88qemu.lin(seg, off)
+
+
+def mega():
+    """The kern_mega Bochs behind this row's socket (tests/os88qmpmega.py)"""
+    import os88qmpmega
+    return os88qmpmega.live().m
+
+
 def session(q, a, R, P, data, bimg):
     ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
     xm_kb, tier = u16(q.read(S("xm_kb"), 2)), q.read(S("cpu_tier"), 1)[0]
@@ -300,23 +312,26 @@ def session(q, a, R, P, data, bimg):
         raise SystemExit("rdxms: the machine reports %dKB above 1MB - there "
                          "is no extended store to test (needs -m >= 2)"
                          % xm_kb)
-    xtab = xmcheck.table_base(q.sock)
+    # kern_mega serves memory above 1MB ITSELF - its pool, mx_tab
+    # (kernel/mega.inc), with no XMEM.DRV - so the block table read there
+    # is the pool's (tools/heapmap.py `pool`)
+    xtab = None if os88qemu.MEGA else xmcheck.table_base(q.sock)
 
     def rd_seg():
         return u16(q.read(S("drv_tab") + rp.RD_ROW * rp.DRVR_SZ
                           + rp.DRVR_SEG, 2))
 
     def dw(n):                      # a driver word, at the driver's segment
-        return u16(q.read(rd_seg() * 16 + R[n], 2))     # AS IT IS NOW
+        return u16(q.read(lin(rd_seg(), R[n]), 2))      # AS IT IS NOW
 
     def dd(n):
-        return struct.unpack("<I", q.read(rd_seg() * 16 + R[n], 4))[0]
+        return struct.unpack("<I", q.read(lin(rd_seg(), R[n]), 4))[0]
 
     def db(n):
-        return q.read(rd_seg() * 16 + R[n], 1)[0]
+        return q.read(lin(rd_seg(), R[n]), 1)[0]
 
     def pb(n):                      # a byte of the page, RAMPAGE.DRV, at
-        return q.read(dw("rd_pseg") * 16 + P[n], 1)[0]  # rd_pseg AS IT IS
+        return q.read(lin(dw("rd_pseg"), P[n]), 1)[0]   # rd_pseg AS IT IS
 
     def fdlg_up():
         return u16(q.read(S("fdlg_win"), 2)) not in (0, 0xFFFF)
@@ -331,7 +346,17 @@ def session(q, a, R, P, data, bimg):
         return next((o for o in ui.windows() if o.i == i), None)
 
     def store_blocks():
-        """XMEM.DRV's live blocks the size of this store or bigger."""
+        """XMEM.DRV's live blocks the size of this store or bigger - as
+        (index, kb-offset, kb, owner) - or under kern_mega the POOL's, its
+        owner XM_OWN_KERN when the kernel's tag says no instance holds it
+        (heapmap.pool: FFxxh, the driver's claim outside any instance's
+        stamp, as on XMEM.DRV)"""
+        if xtab is None:
+            import heapmap
+            return [(i, c.seg - 0x10000, c.para // 64,
+                     XM_OWN_KERN if c.own >= 0xFF00 else c.own)
+                    for i, c in enumerate(heapmap.pool(mega()))
+                    if c.para // 64 >= a.kb]
         return [b for b in xmcheck.blocks(q.sock, xtab) if b[2] >= a.kb]
 
     def raise_win(w):
@@ -435,7 +460,7 @@ def session(q, a, R, P, data, bimg):
         return q.read(dd("rd_xbase"), dw("rd_kb") * 1024)
 
     def ctab():
-        return q.read(dw("rd_dtab") * 16 + RD_DIRB, dw("rd_next") * 2)
+        return q.read(lin(dw("rd_dtab"), RD_DIRB), dw("rd_next") * 2)
 
     # --- 1: Xms, the size, Mount ---------------------------------------------
     cp, px, py = open_page(True)

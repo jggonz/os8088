@@ -224,6 +224,22 @@ class Q(object):
         # leaves the emulator running (three were, the first day)
         atexit.register(self.close)
         signal.signal(signal.SIGTERM, lambda n, f: sys.exit(128 + n))
+        self.srv = None
+        if os88qemu.MEGA:       # kern_mega: this socket answered by a Bochs
+            import os88qmpmega  # (tests/os88qmpmega.py) on mega.img; its
+            import re           # pool IS the memory above 1MB. Of `extra`,
+            nic = [re.search(r"iobase=(0x[0-9a-fA-F]+)", x)  # an NE2000 and
+                   for x in extra if "ne2k_isa" in x]        # its port; any
+            if any("isa-debugcon" in x for x in extra):      # other device
+                raise SystemExit("vidxms.Q: no isa-debugcon under kern_mega "
+                                 "(Bochs has no such device)")
+            self.srv = os88qmpmega.Server(
+                self.sock, self.pid, sysimg, apps, ne2k=bool(nic),
+                ne2k_io=int(nic[0].group(1), 16) if nic and nic[0] else None,
+                megs=mem if mem < 16 else None)
+            if keep:
+                xmcheck.keep(self.sock)
+            return
         os88qemu.start(cmd, check=True)
         self.pidn = int(open(self.pid).read().strip())
         if keep:                # one QMP connection for the run (xmcheck.keep)
@@ -231,6 +247,8 @@ class Q(object):
 
     def close(self):
         xmcheck.keep(self.sock, False)
+        if getattr(self, "srv", None) is not None:
+            self.srv.close()
         if self.pidn:
             try:
                 os.kill(self.pidn, signal.SIGTERM)
@@ -246,7 +264,12 @@ class Q(object):
         return bytes(xmcheck.read_bytes(self.sock, linear, n))
 
     def readseg(self, seg, off, n):
-        return self.read((seg << 4) + off, n)
+        return self.read(os88qemu.lin(seg, off), n)
+
+    def lin(self, seg, off=0):
+        """SEG:OFF's linear address (os88qemu.lin: a selector's base under
+        kern_mega) - tests/dispcp.py and os88ui read through it"""
+        return os88qemu.lin(seg, off)
 
 
 def force_bios(tmp, sysimg):

@@ -1000,23 +1000,27 @@ br_dl_partload:
     mov al, 0
     call op_fetch
     jc .bad
-    mov al, 0                    ; op_fetch may clobber AL; op_seg takes index here
-    call op_seg
-    or ax, ax
+    mov al, 0                    ; op_fetch may clobber AL; op_cseg takes index here
+    call op_cseg                 ; THE VECTORS' SEGMENT IS THE CODE SELECTOR:
+    or ax, ax                    ; under kern_mega a far call through the data
+    jz .bad                      ; one is a #GP the kernel completes per call
+    mov [br_dl_partpaint+2], ax  ; (KERN-MEGA-MEMORY-PLAN MC7); every
+    mov [br_dl_partdoc+2], ax    ; real-mode kernel answers the same word
+    mov [br_dl_partlive+2], ax   ; op_seg does
+    mov [br_dl_partcopy+2], ax
+    mov al, 0
+    call op_seg                  ; ...and the entry table is READ through
+    or ax, ax                    ; the data one
     jz .bad
     mov es, ax
     mov ax, [es:0]
     mov [br_dl_partpaint], ax
-    mov [br_dl_partpaint+2], es
     mov ax, [es:2]
     mov [br_dl_partdoc], ax
-    mov [br_dl_partdoc+2], es
     mov ax, [es:4]
     mov [br_dl_partlive], ax
-    mov [br_dl_partlive+2], es
     mov ax, [es:6]
     mov [br_dl_partcopy], ax
-    mov [br_dl_partcopy+2], es
     clc
     jmp short .out
 .bad:

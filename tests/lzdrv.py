@@ -93,8 +93,12 @@ def main():
         "+%d bss" % (len(plain), len(packed), 100.0 * len(packed) / len(plain),
                      plain[31] * 16))
 
-    sysimg = strike(os88build.at("build/lzdrv360.img")) if a.nohint \
+    # kern_mega (OS88_MEGA, docs/BOCHS.md): its system disk IS the fixture -
+    # every shipped driver is a compressed 'CZ' file (SPEC.md 20.13.5) and
+    # mega.img carries build/ramdisk.drv, the very file compared against
+    fix = "build/mega.img" if os.environ.get("OS88_MEGA") \
         else "build/lzdrv360.img"
+    sysimg = strike(os88build.at(fix)) if a.nohint else fix
     try:
         return run(a, sysimg, plain)
     finally:
@@ -281,9 +285,17 @@ def run(a, sysimg, plain):
             # 3. and the claim covers image + bss
             kb = int.from_bytes(
                 m.read(S("drv_tab") + RD_ROW * DRVR_SZ + 8, 2), "little")
-            if kb * 1024 < len(plain) + bss:
-                fails.append("the claim is %d KB and the driver needs %d bytes"
-                             % (kb, len(plain) + bss))
+            have = kb * 1024
+            if getattr(m, "selector", None) and not kb:
+                # kern_mega: DRVR_KB is 0 by design - the image is in the
+                # pool above 1MB and no heap claim holds it (driver.inc's
+                # .keepall) - so what covers image + bss is the SELECTOR
+                # the row names, and its limit is the question
+                d = m.selector(seg)
+                have = d[1] + 1 if d else 0
+            if have < len(plain) + bss:
+                fails.append("the claim is %d bytes and the driver needs %d"
+                             % (have, len(plain) + bss))
 
         # 3. does it answer? - drvcall's own three probes
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")

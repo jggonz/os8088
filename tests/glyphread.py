@@ -24,7 +24,7 @@ def glyph_table(m):
     (SPEC.md 6) - read where the renderers read it."""
     seg = int.from_bytes(m.read(m.sym("font_seg"), 2), "little")
     off = int.from_bytes(m.read(m.sym("font_base"), 2), "little")
-    return m.read(seg * 16 + off, FONT_N * 8)
+    return m.readseg(seg, off, FONT_N * 8)   # (a selector on kern_mega)
 
 
 def render(text, tab):

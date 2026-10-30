@@ -391,8 +391,10 @@ rd_blk_out:
     mov bx, dx                  ; a multiple of RD_EXTB, so the paragraph
     mov cl, 12                  ; number is the low 12 bits of DX over the top
     shl bx, cl                  ; 4 of AX
-    or bx, ax
-    add bx, [rd_arena]
+    or ax, bx                   ; AX = the paragraphs into the arena
+    mov bx, rd_wb
+    call rd_at                  ; ...as a segment (rd_at: MC7)
+    xchg ax, bx
     pop cx
     ret
 .xms:

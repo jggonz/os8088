@@ -548,9 +548,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "f596e80c",
-  "strings": "b73fd87b7d70d417",
-  "why": "PR #299 review: kern_mega's 'Disk clusters too small' refusal and main's 'Hibernate (VESA)' greying added; the arm-3 'Unmount the image first' refusal is on DOS.O88's page, where the choice is; the 62-run cap reads 'Hibernate failed', already on the page"
+  "stamped": "ea7b512a",
+  "strings": "98dbfbe0d4d32714",
+  "why": "MC4's streaming resume: a full pool no longer greys the item, only no memory above 1MB does; added 'Hibernate: fragmented'; 'No room above 1MB' kept for a resume on less extended memory"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -630,9 +630,9 @@
   "sources": [
    "apps/lemmings"
   ],
-  "stamped": "733366a8",
-  "strings": "dad131b4b993929c",
-  "why": "no-pinning C4: the kept level's claims made movable - internal, no text a user reads changed; page checked, nothing to add"
+  "stamped": "ea7b512a",
+  "strings": "4580619ce2a0ff64",
+  "why": "MC7: claims over 64KB through os88_seg_sub windows and the OS88_HIGH/HIGHMEM declaration - internal; the only new string is a host test's failure message, nothing a user reads"
  },
  "LICENSE": {
   "sources": [],
@@ -888,9 +888,9 @@
   "sources": [
    "apps/realdmg"
   ],
-  "stamped": "a42f0d4f",
-  "strings": "6261802908aeb9b8",
-  "why": "Read the diff since 733366a8: the precompiled package is the user-visible part (its own program, the ROM beside or inside it, CPU > Precompiled, the F1 line's Pn/m, four toasts) and has a section, a file row and two Good-to-know lines. fill_ff/w16_ff, the kern_mega arm's tiers and the image load order are below the page's detail"
+  "stamped": "5734441e",
+  "strings": "6477c968484e9734",
+  "why": "Shift+F2 Steady pacing added to Making a game faster and the Screen table; the copy and fill marking, renderer and draw-pacing changes are below the page's detail"
  },
  "REDLINE_O88": {
   "sources": [
@@ -1106,9 +1106,9 @@
   "sources": [
    "apps/taskmgr"
   ],
-  "stamped": "15bf7dd5",
-  "strings": "17ad04af66b54570",
-  "why": "e5ddebd1 fixes the heap view's scroll-thumb drag (DX clobbered before os88ui_sbgrab); no user-visible text or behaviour the page describes changed"
+  "stamped": "086f52d4",
+  "strings": "cd3e0dc061f03cd1",
+  "why": "Memory page on the protected-mode build: System is the first 640K and System>1MB everything above (drivers included), the map shows the whole machine in two boxes, ADDR is a five-digit address above 1MB; IVT+BIOS and System HMA described as the rows they are"
  },
  "TELNET_O88": {
   "sources": [
@@ -1186,9 +1186,9 @@
    "tools/os88venc.py",
    "tools/os88vencgui.py"
   ],
-  "stamped": "e4b13e8c",
-  "strings": "1b990c96f4c98207",
-  "why": "Blocks (version 2) described under Good to know: the option, what it trades, what plays it, what it is greyed against"
+  "stamped": "64818263",
+  "strings": "2ca9c0e5cadcc280",
+  "why": "checked: --flip-build (a flipped file's scene built ahead), --colour-mix/--colour-clip/--edge-solid for cga4 and c160, Flip build offered in the window and the preview at a held frame (elendilon's a96b7a7b..f7c40759) - the page names the Colour tab's palette choices and 'tearing and second pages' as one row each and lists no per-format colour or flip options; below its level"
  },
  "TRACKER_O88": {
   "sources": [
@@ -1208,9 +1208,9 @@
   "sources": [
    "drivers/usbmouse"
   ],
-  "stamped": "e4576a70",
-  "strings": "602d648304a770c6",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "1ef08ce1",
+  "strings": "b360085af383d57a",
+  "why": "checked: KERN-MEGA-PLAN 14.117 lets the PicoMEM path run under kern_mega's protected mode (the int 33h capture) - the page names no kernel and no refusal, and the PicoMEM mouse works the same from the user's side; below the page's level"
  },
  "VACATION_JPG": {
   "sources": [],

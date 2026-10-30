@@ -76,7 +76,7 @@ S_FILEMAX = 64512
 S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261002.1)
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
-S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 5   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
+S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 6   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
 S_PKGFMT = 10                           # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
@@ -1704,15 +1704,34 @@ def fence(tmp, mod):
     pix = os.path.join(BUILD, "pixel.o88")
     if os.path.exists(pix):
         lvl, top = mod.cell_level([open(pix, "rb").read()])
-        eq(lvl, 4, "PiXEL's depth blit needs a level-4 Wire",
-           "it far-calls 0x%04X, which v1.0.20261020's kernel (table end "
-           "0x04A5) does not have" % (top or 0))
+        # AT LEAST 4, not exactly: the depth blit is past v1.0.20261020's
+        # table end (0x04A5), and PiXEL has since gained later cells
+        # (OSAPI_SEG, 0x04E3), which can only raise the level - an exact 4
+        # failed the day an unrelated call moved the top cell on
+        check(lvl is not None and lvl >= 4,
+              "PiXEL's depth blit needs at least a level-4 Wire",
+              "it far-calls 0x%04X; v1.0.20261020's kernel (table end "
+              "0x04A5) does not have its depth blit" % (top or 0),
+              got=lvl, want=">= 4")
     tm = os.path.join(BUILD, "taskmgr.o88")
     if os.path.exists(tm):
         lvl, top = mod.cell_level([open(tm, "rb").read()])
-        eq(lvl, 5, "the Task Manager's OSAPI_IMG_NAME needs a level-5 Wire",
-           "it far-calls 0x%04X, which v1.0.20261025's kernel (table end "
-           "0x04D7) does not have" % (top or 0))
+        # AT LEAST 5, PiXEL's reason above: it has since gained OSAPI_SEG
+        # (0x04E3), which puts it at 6 - and level 6 is checked by name below
+        check(lvl is not None and lvl >= 5,
+              "the Task Manager's OSAPI_IMG_NAME needs at least a level-5 Wire",
+              "it far-calls 0x%04X; v1.0.20261025's kernel (table end "
+              "0x04D7) does not have OSAPI_IMG_NAME" % (top or 0),
+              got=lvl, want=">= 5")
+    # LEVEL 6: OSAPI_SEG (0x04E3) is past v1.0.20261026's table, the one
+    # level-5 Wire. A package that calls it and reads below 6 is offered to a
+    # machine whose kernel would jump into whatever followed its table end -
+    # PiXEL calls it, so its level is the check
+    if os.path.exists(pix):
+        lvl, top = mod.cell_level([open(pix, "rb").read()])
+        if top is not None and top >= 0x04E3:
+            eq(lvl, 6, "PiXEL's OSAPI_SEG (0x04E3) needs a level-6 Wire",
+               "WIRE_CELL_LEVELS has no row for v1.0.20261026's table end")
 
     pub = os.path.join(tmp, "fpkg")
     os.makedirs(pub, exist_ok=True)

@@ -1,6 +1,6 @@
 ; =============================================================================
 ; kerndos/kdhma.inc - kern_dos IN THE HMA: its low half (-DKD_HMA, which
-; -DKD_MEGA implies; docs/plans/KERN-MEGA-DOS-PLAN.md 7, wave W4)
+; -DKD_MEGA implies; docs/plans/completed/KERN-MEGA-DOS-PLAN.md 7, wave W4)
 ;
 ; On kern_mega the image runs at FFFF:0010, which is memory only while A20 is
 ; open. kern_mega leaves it open across the bracket, and a program has three
@@ -11,10 +11,19 @@
 ; design. The proof is mega_a20t's, at FFFF:FFF0 against 0000:FFE0, which no
 ; image reaches; the reopen is port 92h and then the 8042's output port.
 ;
-; A slot is eight bytes in LOW_SEG - `call kdh_tchk` / `jmp far FFFF:target` -
-; and the call returns to the jump with the stack exactly as the vector left it,
-; so an interrupt frame or a far call is untouched. The check preserves every
-; register and the flags.
+; A slot is KDH_SLEN bytes in LOW_SEG - `pushf` / `cli` / its own return into
+; a cell / `jmp kdh_tchk` / `popf` / `jmp far FFFF:target` - and the check
+; runs on a PRIVATE stack, so what the caller's stack carries for it is ONE
+; word, the FLAGS, and the far jump leaves that stack exactly as the vector
+; found it. It was `call kdh_tchk` and seven words pushed on the CALLER's
+; stack, and a DOS program's stack is not ours to push on: `AH=4Ah` with
+; `BX = SS + 2 - PSP` puts the free block's MCB sixteen bytes below the
+; program's SP, the trampoline's CX, BX and AX landed on its signature, owner
+; and size, and the next EXEC refused with 8 (SPEC.md 96.7.2, the trip's
+; edition of it - KERN-MEGA-PLAN 14.105; tests/dosshrink.py on kern_mega).
+; The flags word lands at -8..-7 under the `int`'s three, inside that MCB's
+; RESERVED bytes, which is where a real DOS's own three go. The check keeps
+; every register and the flags.
 ;
 ; THE PASS RUNS ONCE, after every vector kern_dos takes and before the program,
 ; so every AH=35h the program makes sees trampolines. What the CORE publishes
@@ -27,6 +36,10 @@
 ; distinct targets, of which dos_ivtab alone is 29.
 ; =============================================================================
 KDH_NSLOT   equ 48                  ; distinct targets; ~40 are reachable
+KDH_SLEN    equ 18                  ; a slot's bytes (kdh_mkslot's layout)
+KDH_STGT    equ 14                  ; ...and where in it the target word is
+KDH_TSTK    equ 32                  ; the check's private stack: four pushes
+                                    ; and two calls deep is 14 bytes
 
 kdh_tramp:
     push ax
@@ -80,9 +93,9 @@ kdh_vslot:
     mov cx, [cs:kdh_sused]
     jcxz .new
 .find:
-    cmp [es:di+4], ax
+    cmp [es:di+KDH_STGT], ax
     je .have
-    add di, 8
+    add di, KDH_SLEN
     loop .find
 .new:
     cmp word [cs:kdh_sused], KDH_NSLOT
@@ -108,18 +121,37 @@ kdh_sused:  dw 0                    ; slots in use: the image is loaded fresh
                                     ; for every run, so this starts at zero
 
 ; kdh_mkslot - ES:DI = a slot in LOW_SEG, AX = a target in KD_SEG: the slot
-; becomes `call kdh_tchk` / `jmp far KD_SEG:target`. Every register kept
+; becomes
+;
+;   +0  pushf                       the caller's IF, which nothing else reads
+;   +1  cli                         ...and the cells below are one deep
+;   +2  mov word [cs:kdh_ret], +12  where the check comes back to
+;   +9  jmp near kdh_tchk
+;   +12 popf                        IF = 0 until here, so the far jump is
+;   +13 jmp far KD_SEG:target       taken with no cell left to clobber
+;
+; Every register kept
 kdh_mkslot:
     push ax
-    mov byte [es:di], 0xE8          ; call near kdh_tchk
-    mov ax, kdh_tchk
-    sub ax, di
-    sub ax, 3
-    mov [es:di+1], ax
+    push bx
+    mov byte [es:di], 0x9C          ; pushf
+    mov byte [es:di+1], 0xFA        ; cli
+    mov word [es:di+2], 0xC72E      ; cs: mov word [kdh_ret], imm16
+    mov byte [es:di+4], 0x06
+    mov word [es:di+5], kdh_ret
+    lea bx, [di+12]
+    mov [es:di+7], bx
+    mov byte [es:di+9], 0xE9        ; jmp near kdh_tchk
+    mov bx, kdh_tchk
+    sub bx, di
+    sub bx, 12
+    mov [es:di+10], bx
+    mov byte [es:di+12], 0x9D       ; popf
+    mov byte [es:di+13], 0xEA       ; jmp far KD_SEG:target
+    mov [es:di+KDH_STGT], ax
+    mov word [es:di+16], KD_SEG
+    pop bx
     pop ax
-    mov byte [es:di+3], 0xEA        ; jmp far KD_SEG:target
-    mov [es:di+4], ax
-    mov word [es:di+6], KD_SEG
     ret
 
 ; kdh_lowcode - the checker into LOW_SEG, and the slot every ROM call that
@@ -150,15 +182,26 @@ kdh_lowcode:
     ret
 
 ; kdh_tchk_src - THE CHECK, assembled here and run from LOW_SEG: position-
-; independent, no data, every register and the flags kept
+; independent, every register kept and the flags left to the slot's `popf`.
+; Entered from a slot with IF = 0 and the caller's FLAGS the only word on the
+; caller's stack: it banks SS:SP and AX in cells and does its work on
+; kdh_tstk, so not one more word lands there (KERN-MEGA-PLAN 14.105). IF
+; stays 0 throughout - ONE STEP: an IRQ nested between the two `not`s below,
+; with A20 shut, would leave 0:FFE0 inverted for good, and one between
+; `out 64h, D1` and `out 60h, DF` sends DFh to the KEYBOARD as a command
+; (KERN-MEGA-DOS-PLAN 10.5 defect 4) - which is also what makes one cell per
+; value enough
 kdh_tchk_src:
-    pushf
-    cli                             ; ONE STEP: an IRQ nested between the two
-    push ax                         ; `not`s below, with A20 shut, would leave
-    push bx                         ; 0:FFE0 inverted for good, and one between
-    push cx                         ; `out 64h, D1` and `out 60h, DF` sends
-    push ds                         ; DFh to the KEYBOARD as a command
-    push es                         ; (KERN-MEGA-DOS-PLAN 10.5 defect 4)
+    mov [cs:kdh_tax], ax
+    mov [cs:kdh_tss], ss
+    mov [cs:kdh_tsp], sp
+    mov ax, cs
+    mov ss, ax                      ; SS and SP as a pair: the `mov ss`
+    mov sp, kdh_tstk + KDH_TSTK     ; holds off even an NMI for the next one
+    push bx
+    push cx
+    push ds
+    push es
     xor ax, ax
     mov ds, ax
     dec ax
@@ -188,9 +231,10 @@ kdh_tchk_src:
     pop ds
     pop cx
     pop bx
-    pop ax
-    popf
-    ret
+    mov ss, [cs:kdh_tss]            ; back onto the caller's stack, its FLAGS
+    mov sp, [cs:kdh_tsp]            ; on top for the slot's `popf`
+    mov ax, [cs:kdh_tax]
+    jmp near [cs:kdh_ret]           ; IF still 0: the cell is ours to read
 .t:                                 ; ZF = 1: A20 is OPEN (the flip at
     mov bx, [0xFFE0]                ; FFFF:FFF0 went a megabyte up and left
     not word [es:0xFFF0]            ; 0:FFE0 alone). Clobbers AX, BX
@@ -243,6 +287,11 @@ kdh_dptsync:
 section .lowbss
 kdh_dpt:    resb DPT_LEN            ; int 1Eh's table, low (kd_entry)
 kdh_tchk:   resb kdh_tchk_end - kdh_tchk_src
-kdh_slots:  resb KDH_NSLOT * 8
-kdh_s87:    resb 8                  ; kdx_87's way back from the ROM
+kdh_slots:  resb KDH_NSLOT * KDH_SLEN
+kdh_s87:    resb KDH_SLEN           ; kdx_87's way back from the ROM
+kdh_tax:    resw 1                  ; the check's cells: one deep, IF = 0 from
+kdh_tss:    resw 1                  ; the slot's `cli` to its `popf`
+kdh_tsp:    resw 1
+kdh_ret:    resw 1                  ; the slot's `popf`, where the check returns
+kdh_tstk:   resb KDH_TSTK           ; the check's own stack
 section .text

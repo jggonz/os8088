@@ -46,6 +46,7 @@ import os88fixture                                      # noqa: E402
 import os88marty                                        # noqa: E402
 import os88ui                                           # noqa: E402
 from cmemmove import pkg_syms, u16, claims, pkg_seg, heapfrag_ran  # noqa: E402
+import sheetmove                                        # noqa: E402
 
 DISK = "build/rcmove360.img"
 RC_ROWS, RC_COLS = 25, 80
@@ -63,12 +64,24 @@ def main():
     with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine,
                      quick=True) as ui:
         m, S = ui.m, ui.sym
+        mega = getattr(m, "bochs", False)
+
+        def lin(seg, off=0):
+            """SEG:OFF linear: a selector's base on kern_mega"""
+            return m.lin(seg, off) if mega else seg * 16 + off
+
+        def key(v):
+            """A claim word as mem_tab keys it: on kern_mega (KERN-MEGA-
+            MEMORY-PLAN MC7.4) the selector a move rebases and never changes,
+            so "it moved" and "both words follow" are asked of its paragraph
+            - os88_onmove is called on no protected-mode move"""
+            return sheetmove.seg_key(m, v)
 
         def rcword(seg, name, off=0):
-            return u16(m.read(seg * 16 + RC[name] + off, 2))
+            return u16(m.read(lin(seg, RC[name] + off), 2))
 
         def screen(seg):
-            raw = m.read(seg * 16 + RC["_rc_ch"], RC_ROWS * RC_COLS)
+            raw = m.read(lin(seg, RC["_rc_ch"]), RC_ROWS * RC_COLS)
             return [raw[r * RC_COLS:(r + 1) * RC_COLS].decode("latin-1")
                     for r in range(RC_ROWS)]
 
@@ -92,7 +105,7 @@ def main():
             "the CCP's A> prompt, the machine blocked on a key", poll=0.5,
             guest=240)
         rc_seg, _ = pkg_seg(m, S, "RunCPM")
-        base0 = rcword(rc_seg, "_rc_zseg")
+        base0 = key(rcword(rc_seg, "_rc_zseg"))
         held = [c for c in claims(m, S) if c[0] == base0]
         print("RunCPM at %04x, its Z80 claim %04x" % (rc_seg, base0))
         if not base0 or not held:
@@ -119,8 +132,8 @@ def main():
                         guest=240)
 
         rc_seg, rcw = pkg_seg(m, S, "RunCPM")
-        base1 = rcword(rc_seg, "_rc_zseg")
-        zs = rcword(rc_seg, "_rc_z", RZ_SEG)
+        base1 = key(rcword(rc_seg, "_rc_zseg"))
+        zs = key(rcword(rc_seg, "_rc_z", RZ_SEG))
         held1 = [c for c in claims(m, S) if c[0] == base1]
         moved = base1 != base0
         print("  2 moved                  %s"

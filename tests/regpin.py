@@ -138,6 +138,9 @@ def main():
         done = lambda m, **k: os88marty.ui_done(m, lock=False)  # noqa: E731
         mo = os88mouse.Mouse(marty=m)
 
+        def key(v):                     # (a selector's paragraph on kern_mega)
+            return sheetmove.seg_key(m, v)
+
         dispcp.open_drive(m, mo, S, done, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
@@ -201,16 +204,19 @@ def main():
         p2_seg, p2 = open_named("PAINT.O88", 6, (8, 98))
         raise_disk()
         pm_seg, pm = open_named("PINME.O88", 5, (8, 136))
+        # THE PARAGRAPHS, NOW: on kern_mega the words are selectors whose
+        # base a move rebases, so key() read later answers where they ARE
+        ca_p, pm_p = key(ca_seg), key(pm_seg)
         print("paint1 %04x   calc %04x   paint2 %04x   pinme %04x"
               % (p1_seg, ca_seg, p2_seg, pm_seg))
-        if not (p1_seg > ca_seg > p2_seg > pm_seg):
+        if not (key(p1_seg) > ca_p > key(p2_seg) > pm_p):
             print("FAIL: the regions are not stacked in open order, so "
                   "closing the two Paints does not make the two holes this "
                   "row is about")
             return 1
 
         bad = 0
-        reg = [c for c in claims(m, S) if c[0] == pm_seg]
+        reg = [c for c in claims(m, S) if c[0] == pm_p]
         rloc = reg[0][3] if reg else 0
         print("  1 pinme declared movable   %s"
               % ("MC_RLOC=%04x, and the package agrees (%d)"
@@ -248,8 +254,8 @@ def main():
             m.key("KeyA")
             try:                        # the first move, bounded by what an
                 os88marty.until(        # idle box's pause gave it...
-                    m, lambda _: pkg_seg(m, S, "Calculator")[0]
-                    not in (ca_seg, None),
+                    m, lambda _: key(pkg_seg(m, S, "Calculator")[0])
+                    not in (ca_p, None),
                     "Calc's region to move",
                     guest=6 * os88marty.GUEST_PACE)
             except os88marty.MartyError:
@@ -259,27 +265,29 @@ def main():
             os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
                               what="the compaction")
             done(m)
-            if pkg_seg(m, S, "Calculator")[0] not in (ca_seg, None):
+            if key(pkg_seg(m, S, "Calculator")[0]) not in (ca_p, None):
                 break
 
         pm_now = pkg_seg(m, S, "PinMe")[0]
         ca_now = pkg_seg(m, S, "Calculator")[0]
         nreloc = u16(pm_bss(m, pm_now or pm_seg, PM_NRELOC))
-        ok3 = pm_now == pm_seg and nreloc == 0
+        ok3 = key(pm_now) == pm_p and nreloc == 0
         print("  3 pinme region STAYED      %s"
-              % ("%04x, pm_reloc called %d times" % (pm_now, nreloc) if ok3
+              % ("%04x, pm_reloc called %d times" % (key(pm_now), nreloc)
+                 if ok3
                  else "MOVED %04x -> %s (pm_reloc called %d times) <-- a "
                  "region whose worker holds the segment on its stack was "
-                 "packed" % (pm_seg, "%04x" % pm_now if pm_now else "GONE",
+                 "packed" % (pm_p, "%04x" % key(pm_now) if pm_now else "GONE",
                              nreloc)))
         bad += not ok3
 
-        moved = ca_now is not None and ca_now != ca_seg
+        moved = ca_now is not None and key(ca_now) != ca_p
         print("  4 calc region MOVED        %s"
               % ("%04x -> %04x, so the pass ran and could move a region"
-                 % (ca_seg, ca_now) if moved else
+                 % (ca_p, key(ca_now)) if moved else
                  "NO (%s) <-- the pass moved nothing, so assertion 3 proves "
-                 "nothing either" % ("%04x" % ca_now if ca_now else "GONE")))
+                 "nothing either" % ("%04x" % key(ca_now) if ca_now
+                                     else "GONE")))
         bad += not moved
 
         print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)

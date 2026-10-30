@@ -217,11 +217,30 @@ cs_sw_log:  times CS_SWMAX * CSL_SIZE db 0
 ; cs_sw_refs - AX = the screen's segment, BX = a PicoMEM's or 0, CX = an
 ; option ROM's on the 8-bit bus or 0 (THE CALLER CHOOSES: a shadowed ROM is
 ; RAM and tests nothing - chipset.inc, cs_romref)
-cs_sw_refs:
+cs_sw_refs:                         ; ...each through a window of its own,
+    push ax                         ; made HERE because the sweep reads them
+    push bx                         ; inside its cli window (cs_win)
+    push cx
+    mov bx, cs_sw_ws
+    call cs_win
     mov [cs_sw_sseg], ax
-    mov [cs_sw_pseg], bx
-    mov [cs_sw_rseg], cx
+    pop ax                          ; (CX: the ROM's)
+    push ax
+    mov bx, cs_sw_wr
+    call cs_win
+    mov [cs_sw_rseg], ax
+    pop cx
+    pop ax                          ; (BX: the PicoMEM's)
+    push ax
+    mov bx, cs_sw_wp
+    call cs_win
+    mov [cs_sw_pseg], ax
+    pop bx
+    pop ax
     ret
+cs_sw_ws:   dw 0
+cs_sw_wr:   dw 0
+cs_sw_wp:   dw 0
 
 ; cs_sw_set - AL = a value, through the descriptor. Every register kept
 cs_sw_set:

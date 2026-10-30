@@ -581,13 +581,20 @@ hd_bios_run:
     jbe .page
     mov ax, si
 .page:
+    push ax
+    push bx
     mov dx, [hd_bseg]
-    cmp dh, 0xF0                ; A BUFFER IN THE HMA IS NO int 13h TARGET
-    jae .none                   ; (SPEC.md 2.10.8): a diskette or XT-class
-    mov cl, 4                   ; ROM keeps four page bits and its DMA lands
-    shl dx, cl                  ; under 1MB. hd_raw bounces our own
-    add dx, [hd_bofs]           ; DX = the offset within the 64KB DMA page
-    neg dx
+    mov bl, SEG_LIN             ; the buffer's LINEAR base: DX x 16 on every
+    call OSAPI_SEG              ; real-mode kernel, a selector's base on
+    pop bx                      ; kern_mega (KERN-MEGA-MEMORY-PLAN MC7)
+    cmp dx, 0x000F              ; A BUFFER IN THE HMA IS NO int 13h TARGET
+    jae .hma                    ; (SPEC.md 2.10.8): a diskette or XT-class
+                                ; ROM keeps four page bits and its DMA lands
+                                ; under 1MB. hd_raw bounces our own
+    add ax, [hd_bofs]
+    neg ax
+    xchg ax, dx                 ; DX = the offset within the 64KB DMA page
+    pop ax                      ; (neither moves a flag)
     jz .cap                     ; a zero offset means the whole page: no cap
     mov cl, 9
     shr dx, cl                  ; ...as sectors
@@ -599,6 +606,8 @@ hd_bios_run:
     jbe .done
     mov ax, 127
     jmp short .done
+.hma:
+    pop ax
 .none:
     xor ax, ax                  ; ...a bound of zero: refused, below
 .done:

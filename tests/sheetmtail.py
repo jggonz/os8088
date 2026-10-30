@@ -148,7 +148,8 @@ def main_card(card):
             os88marty.write_png_rgb(os.path.join(WORK, "%s-%s-held.png"
                                                  % (card, tag)), *m.fbuf())
             if refuse:                          # what a refused save leaves
-                m.write(seg() * 16 + sym["sh_mbanked"], b"\x00")
+                m.write((m.lin(seg()) if getattr(m, "bochs", False)
+                         else seg() * 16) + sym["sh_mbanked"], b"\x00")
             mo.to(*park, l=True)                # button down: off the panel
             mo._edge(False)
             M.settle(m, limit=120)

@@ -355,8 +355,9 @@ aps_say:
     push si
     push di
     push es
-    push cs
-    pop es
+    push ds                         ; (DS, the package's: the same
+    pop es                          ; segment as CS on a real-mode kernel,
+                                    ; and under kern_mega its WRITABLE half)
     mov si, ax
     mov di, aps_cvxs
     mov cx, [si-2]                  ; CL = where the device is, CH how long
@@ -861,8 +862,9 @@ aps_dobox:
     mov cx, ax                      ; the outputs
     mov dl, bl                      ; DL = k
     push cx
-    push cs
-    pop es
+    push ds                         ; (DS, the package's: the same
+    pop es                          ; segment as CS on a real-mode kernel,
+                                    ; and under kern_mega its WRITABLE half)
     mov di, aps_stage
     mov si, [aps_ioff]
     mov ds, [aps_iseg]
@@ -904,8 +906,9 @@ aps_dostep:
     push bp
     push ds
     push es
-    push cs
-    pop es
+    push ds                         ; (DS, the package's: the same
+    pop es                          ; segment as CS on a real-mode kernel,
+                                    ; and under kern_mega its WRITABLE half)
     mov di, aps_stage
     mov [aps_nin], cx               ; the inputs
     mov cx, [aps_span]

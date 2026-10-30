@@ -236,15 +236,18 @@ def run(a):
         m = ui.m
         w = ui.path("B:/TAMEGRAM.O88")
         seg = u16(m.read(os88geom.winptr(m, w.i, ui.sym) + os88geom.W_SEG, 2))
-        S = lambda n: seg * 16 + syms[n]       # noqa: E731
+        # seg * 16, or on kern_mega (Bochs) the base in seg's LDT
+        # descriptor - a package's segment is a selector there
+        base = m.lin(seg) if hasattr(m, "lin") else seg * 16
+        S = lambda n: base + syms[n]       # noqa: E731
         # NOT ui.settle(): the game animates by design, so the screen never
         # stops. The worker being hired is the state that says it is playing.
         os88marty.until(m, lambda _: m.read(S("tg_hired"), 1)[0] == 1,
                         "TameGram's worker", poll=0.2, limit=120.0)
         ui.mo.to(4, 30)                       # out of the window's way
-        upd = seg * 16 + sites["tg_update"]
-        frm = seg * 16 + sites["tg_frame"]
-        unl = seg * 16 + sites["OSAPI_GFX_UNLOCK"]
+        upd = base + sites["tg_update"]
+        frm = base + sites["tg_frame"]
+        unl = base + sites["OSAPI_GFX_UNLOCK"]
         seedp = m.sym("osapi_seed")
         st = {"tick": -1, "c0": 0, "c1": 0, "mode": 0, "done": False,
               "armed": False}

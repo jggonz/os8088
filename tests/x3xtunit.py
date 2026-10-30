@@ -16,6 +16,11 @@ model (tools/x3simxt.py), in Unicorn's x86 core (SPEC.md 121.4).
                plans, to reach the split path no LAME fixture takes
   (none)       all three: four fixtures, 30 synthetic granules a profile
 
+The part's one kernel call is OSAPI_SEG (OPEN asks it for XTGEN.BIN's
+segment, KERN-MEGA-MEMORY-PLAN MC7), answered at its cell in KERNEL_SEG the
+way a real-mode kernel answers it: tests/x3xtbench/x3rmseg.inc, which the
+exactness row's harness copies to the same place.
+
 Every call is checked against x3gran.inc's contract: the registers kept
 but AX and the outputs, DF clear, IF untouched, at most 64 bytes of stack.
 
@@ -27,6 +32,7 @@ thing on the emulated machine.
 import argparse
 import os
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -72,7 +78,30 @@ X3E = {1: 'PROFILE', 2: 'DIV', 3: 'CHAN', 4: 'FMT', 5: 'MEM', 6: 'TABLE', 7: 'RE
        8: 'NOTOPEN', 9: 'ABI'}
 
 
+KSEG = 0x0060                    # apps/os88api.inc's KERNEL_SEG
+RMSEG = None                     # OSAPI_SEG's real-mode arm, assembled (build)
+
+
+def rmseg(d):
+    """(the cell's offset, its bytes): tests/x3xtbench/x3rmseg.inc - kernel/
+    kernel.asm's osapi_seg as every real-mode kernel answers it - for the
+    XT part's OPEN, which asks OSAPI_SEG for XTGEN.BIN's segment
+    (KERN-MEGA-MEMORY-PLAN MC7). Without it the far call lands in unmapped
+    nothing and OPEN refuses with whatever it read back"""
+    with open(os.path.join(ROOT, 'apps', 'os88api.inc')) as f:
+        m = re.search(r'%define\s+OSAPI_SEG\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)', f.read())
+    assert m, 'no OSAPI_SEG in apps/os88api.inc'
+    src, out = os.path.join(d, 'x3rmseg.asm'), os.path.join(d, 'x3rmseg.bin')
+    with open(src, 'w') as f:
+        f.write('cpu 8086\nbits 16\norg 0\n%include "x3rmseg.inc"\n')
+    subprocess.run(['nasm', '-f', 'bin', '-w+error', '-I', os.path.join(ROOT, 'tests', 'x3xtbench') + '/',
+                    '-o', out, src], check=True)
+    return int(m.group(1), 16), open(out, 'rb').read()
+
+
 def build(out):
+    global RMSEG
+    RMSEG = rmseg(os.path.dirname(out))
     inc = os.path.join(os.path.dirname(out), 'x3xtk.inc')
     G.emit(inc)
     G.xtgen(os.path.join(os.path.dirname(out), 'XTGEN.BIN'))
@@ -91,6 +120,7 @@ class Part:
         self.uc = Uc(UC_ARCH_X86, UC_MODE_16)
         self.uc.mem_map(0, 1 << 20)
         self.uc.mem_write(PART_SEG * 16, image)
+        self.uc.mem_write(KSEG * 16 + RMSEG[0], RMSEG[1])  # OSAPI_SEG (rmseg)
         self.image = image
         self.segs = []
         self.low = 0x10000

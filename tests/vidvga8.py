@@ -178,8 +178,14 @@ def main():
     mode_want = 8 if modex else FSXM_VGA13
     SW, SH = (320, 240) if modex else (320, 200)
     os.chdir(ROOT)
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    # kern_mega (tests/megaport.txt): the shipped player refuses under
+    # protected mode, so the row plays the ARM - build/megak/apps/, assembled
+    # -DPKG_MEGA - and reads the arm's symbols
+    mega = bool(os.environ.get("OS88_MEGA"))
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",),
+                       ("PKG_MEGA",) if mega else ())
+    pkg = os88build.at("build/megak/apps/video.o88" if mega
+                       else "build/video.o88")
     bad = []
     pal8 = [tuple((v * 255 + 31) // 63 for v in palette()[3 * i:3 * i + 3])
             for i in range(256)]
@@ -213,7 +219,9 @@ def main():
             w = ui.path("B:/COLOR.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            # seg << 4, or on kern_mega the base in its LDT descriptor
+            lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+            base = lin(u16(rec, geom.W_SEG))
 
             def rw(n):
                 return u16(m.read(base + syms[n], 2))
@@ -250,7 +258,8 @@ def main():
             cvp = b"".join(cvp[y // rs * W:(y // rs + 1) * W]
                            for y in range(H * rs))
             want = vid.vga8_mono(cvp, W, H * rs, r.palette)
-            pseg = rw("vp_pseg") << 4
+            pseg = rw("vp_pseg")
+            pseg = lin(pseg) if pseg else 0
             ps, pbw, prows = rw("vp_ps"), rw("vp_pbw"), rw("vp_prows")
             got = bytes(m.read(pseg, pbw * prows)) if pseg else b""
             d = sum(1 for x, y in zip(got, want) if x != y) + \

@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88ui                                                  # noqa: E402
 import os88marty                                               # noqa: E402
+import os88sym                                                 # noqa: E402
 
 SYS = "build/os8088-360.img"
 DIR = "build/dosdir360.img"
@@ -39,6 +40,21 @@ def main():
 
     with os88ui.boot(SYS, apps=DIR, quick=True) as ui:
         m = ui.m
+        # A MACHINE WITH A CLOCK (kern_mega's Bochs has an MC146818): DOS's
+        # date is the RTC's, so the row's claim - DOS and the menu bar agree
+        # - is asserted against the KERNEL's date, read here before the
+        # program runs (on a kern_dos trip the kernel is parked under it).
+        # MartyPC's 5150 has none, and its arm below is unchanged.
+        kdate = None
+        if getattr(m, "bochs", False):
+            import datetime
+            d = m.read(os88sym.linear("clk_day"), 1)[0]
+            mo = m.read(os88sym.linear("clk_mon"), 1)[0]
+            y = int.from_bytes(m.read(os88sym.linear("clk_year"), 2),
+                               "little")
+            kdate = ["%d-%d-%d" % (y, mo, d),
+                     str(datetime.date(y, mo, d).isoweekday() % 7)]
+            print("dosdir: the kernel's clock reads %s, day %s" % tuple(kdate))
         if not ui.path("B:/DOSDIR.COM"):
             fail("double-clicking DOSDIR.COM opened no window")
 
@@ -125,12 +141,21 @@ def main():
         for r in rows:
             if r.strip().startswith("DATE "):
                 date = r.split()[1:3]
-        if date != ["2026-7-4", "6"]:
+        if kdate is not None:
+            if date != kdate:
+                fail("AH=2Ah answered %r on a machine with a clock whose "
+                     "kernel reads %r - DOS asks the RTC once at entry and "
+                     "must agree with the menu bar (SPEC.md 96.13.1)"
+                     % (date, kdate))
+            print("dosdir: AH=2Ah = %s, day %s - the kernel's own date"
+                  % tuple(kdate))
+        elif date != ["2026-7-4", "6"]:
             fail("AH=2Ah answered %r, not ['2026-7-4', '6'] - the fallback "
                  "date is mirrored from kernel/clock.inc so a DOS program and "
                  "the menu bar agree, and 4 July 2026 is a Saturday "
                  "(SPEC.md 96.13.1)" % (date,))
-        print("dosdir: AH=2Ah = 2026-07-04, day 6 (Saturday)")
+        else:
+            print("dosdir: AH=2Ah = 2026-07-04, day 6 (Saturday)")
 
         if "DVAL ok" not in text:
             fail("AH=2Bh accepted month 13 - an impossible date answers FFh")
@@ -170,6 +195,25 @@ def main():
             fail("the mkdir/chdir/rmdir round trip did not complete")
 
         os88marty.text_taken(m, "x")      # taken, and the bracket left
+        if kdate is not None:
+            # ...AND THE KERNEL'S OWN CLOCK CAME HOME WHOLE: on kern_mega the
+            # program ran on a trip, and hbm_wake reloads clk_sec..clk_year
+            # off the stage kern_dos wrote - which went to (selector << 4)
+            # and read the program's text cells back as the date until
+            # KERN-MEGA-PLAN 14.77 (`07 8199` on the bar)
+            import datetime
+            os88marty.ui_done(m)
+            d = m.read(os88sym.linear("clk_day"), 1)[0]
+            mo = m.read(os88sym.linear("clk_mon"), 1)[0]
+            y = int.from_bytes(m.read(os88sym.linear("clk_year"), 2),
+                               "little")
+            back = "%d-%d-%d" % (y, mo, d)
+            if back != kdate[0]:
+                fail("the kernel's clock reads %s after the trip and %s "
+                     "before it - the wake's clock is the stage's, and the "
+                     "stage was not where kern_dos wrote it (KERN-MEGA-PLAN "
+                     "14.77)" % (back, kdate[0]))
+            print("dosdir: the kernel's clock came home %s" % back)
         if "Disk" not in ui.titles():
             fail("the desktop did not come back after the bracket")
 

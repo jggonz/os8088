@@ -1155,8 +1155,6 @@ mpp_load_name:
     mov [mpp_capk], ax
     call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF on refusal
     jc .nomem
-    call mpp_claimsel
-    jc .nomem
     mov [mpp_modseg], dx
 
     mov ax, [mpp_capk]              ; DX:CX = capacity in BYTES = KB * 1024
@@ -1258,33 +1256,6 @@ mpp_load_name:
     ret
 
 ; -----------------------------------------------------------------------------
-; mpp_claimsel - the module claim at DX came back a SELECTOR (KERN-MEGA-PLAN
-; 14.13: kern_mega, a claim of 64KB or less, bit 2 the LDT) - Tracker's
-; trk_claimsel. Its limit is the claim, where a segment reads garbage past its
-; end, and the mixer's bounds assume a position limit of 64,015 or less: so a
-; module of 62KB or less gets a whole 64KB selector and is addressed flat
-; (mpm_patseg), and one of 63 or 64KB is claimed at 65KB, which is
-; conventional by the contract and takes the granules.
-; in:  DX = the claim, [mpp_capk] its KB; out: CF=0 DX = the claim to use,
-;      [mpp_capk] its KB; CF=1 the second claim was refused (nothing held)
-; -----------------------------------------------------------------------------
-mpp_claimsel:
-    test dl, 4
-    jz .ok
-    call OSAPI_MEM_FREE
-    mov ax, 64
-    cmp word [mpp_capk], 62
-    jbe .re
-    inc ax
-.re:
-    mov [mpp_capk], ax
-    call OSAPI_MEM_CLAIM
-    ret
-.ok:
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
 ; mpp_trim - hand back the part of the claim the file did not need
 ; in:  [mpp_modseg], [mpm_bloblen_*]; preserves every register
 ;
@@ -1323,8 +1294,6 @@ mpp_trim:
     cmp ax, [mpp_capk]
     jae .out                        ; the file filled it: nothing to give back
     mov dx, [mpp_modseg]
-    test dl, 4                      ; a selector keeps its 64KB: every offset
-    jnz .out                        ; the mixer can form is inside it
     call OSAPI_MEM_REGROW
     jc .out                         ; refused: keep the oversized claim, which
     mov [mpp_modseg], dx            ; costs heap and breaks nothing
@@ -1341,7 +1310,7 @@ mpp_trim:
 ; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
 ; out: nothing; preserves every register
 ;
-; 36 WORDS, AND IT IS NOT trk_reloc. SPEC.md 56.1 is the whole reason this
+; 40 WORDS, AND IT IS NOT trk_reloc. SPEC.md 56.1 is the whole reason this
 ; file exists in the shape it does: ModPlug's replayer is an INDEPENDENT copy
 ; of Tracker's, so a fix in one is not a fix in the other - and the layouts
 ; really do differ (MPS_SZ is 12 against trkplay's MS_SZ, MPM_CHSZ 40), which
@@ -1380,6 +1349,13 @@ mpp_reloc:
 .chnext:
     add si, MPM_CHSZ
     loop .ch
+    mov si, mpm_pwin                ; ...and the eight pattern windows
+    mov cl, 8                       ; (CH = 0: the loop above ran CX out)
+.pw:
+    add [si], ax
+    inc si
+    inc si
+    loop .pw
 .out:
     pop si
     pop cx

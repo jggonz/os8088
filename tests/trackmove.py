@@ -34,7 +34,9 @@ Nine assertions. Check 7 is the one no memory dump can make:
   2. `[trk_modseg]` CHANGED ADDRESS. Without it the rest is vacuous.
   3. The 116KB of module survived, hashed at the two addresses.
   4. `[mp_blobseg]` followed the claim.
-  5. All 31 `MS_SEG` sample bases followed, checked as deltas.
+  5. All 31 `MS_SEG` sample bases followed, checked as deltas - and the
+     pattern windows `mp_pwin` (KERN-MEGA-MEMORY-PLAN MC7), window 0 at the
+     blob + 64 paragraphs (MP_PSEG).
   6. All 4 channel `MP_SEG` followed.
   7. The replayer is STILL RUNNING afterwards - `mp_row` advances - which is
      the only check that says the worker came back from its park.
@@ -69,13 +71,19 @@ MEM_K_DRV = 0xFF03              # a loaded driver's IMAGE claim (SPEC.md 51.3);
                                 # its base IS the segment the driver runs in
 
 
-def pkg_syms(src, incs=("apps/", "apps/tracker/")):
-    """A package's symbols, by re-assembling it - os88sym.py's trick."""
+def pkg_syms(src, incs=("apps/", "apps/tracker/"), defines=None):
+    """A package's symbols, by re-assembling it - os88sym.py's trick. Under
+    OS88_MEGA the package is kern_mega's ARM (-DPKG_MEGA, what
+    build/megak/apps/ holds and mega_disk() puts on the disk), whose bss is
+    laid out differently"""
+    if defines is None:
+        defines = ("PKG_MEGA",) if os.environ.get("OS88_MEGA") else ()
     with tempfile.TemporaryDirectory() as d:
         cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
         open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
         subprocess.run(["nasm", "-f", "bin", "-w+error"]
                        + sum([["-I", i] for i in incs], [])
+                       + ["-D" + x for x in defines]
                        + ["-o", os.path.join(d, "p.bin"), cp], check=True)
         out = {}
         for line in open(mp):
@@ -87,6 +95,31 @@ def pkg_syms(src, incs=("apps/", "apps/tracker/")):
 
 def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
+
+
+_MEGA_DISK = []
+
+
+def disk():
+    """build/trackmove360.img - or, under OS88_MEGA, the same three files with
+    kern_mega's Tracker ARM (build/megak/apps/tracker.o88) in place of the
+    shipped one, which refuses its speaker tier in protected mode
+    (KERN-MEGA-PLAN 14.66). A private copy, removed at exit"""
+    if not os.environ.get("OS88_MEGA"):
+        return "build/trackmove360.img"
+    if not _MEGA_DISK:
+        import atexit
+        import shutil
+        d = tempfile.mkdtemp(prefix="trkmega-")
+        atexit.register(shutil.rmtree, d, True)
+        out = os.path.join(d, "trackmove360.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", out,
+                        "--size", "360", "build/heapfrag.o88",
+                        "build/megak/apps/tracker.o88",
+                        "apps/tracker/beverly.mod"], check=True,
+                       stdout=subprocess.DEVNULL, cwd=_OS88_ROOT)
+        _MEGA_DISK.append(out)
+    return _MEGA_DISK[0]
 
 
 def claims(m, S):
@@ -152,12 +185,39 @@ def main():
     # it before any row starts. That is what lets this row drop
     # builds=True and share the emulator lane.
     os88fixture.need("build/trackmove360.img")
+    DISK = disk()
     # has
         # already built the artefact (Row(wants=...) and os88test's prebuild).
         # That is what lets this row drop builds=True and share the lane.
 
-    with os88marty.launch("build/os8088-360.img", apps="build/trackmove360.img",
+    with os88marty.launch("build/os8088-360.img", apps=DISK,
                           machine=a.machine, boot=False) as m:
+        mega = getattr(m, "bochs", False)
+
+        def L(seg, off=0):
+            """SEG:OFF linear: an LDT selector's base on kern_mega"""
+            return m.lin(seg, off) if mega else seg * 16 + off
+
+        def key(v):
+            """A segment word as mem_tab keys its block: on kern_mega
+            (KERN-MEGA-MEMORY-PLAN MC7.4) the region, the module, its blob
+            and every sample and pattern WINDOW are selectors - SEG_SUBs
+            based in the claim - that a move REBASES and never changes, so
+            the deltas below are read in paragraphs. 0 stays 0"""
+            if mega and v and 0x100 <= v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
+
+        def delta(v, base):
+            """A word's distance into the module, in paragraphs. On kern_mega
+            an unused sample's window is 0 and stays 0 (a rebase touches no
+            word), so it has no distance; a real-mode kernel's trk_reloc adds
+            the delta to all 31, used or not, and keeps today's arithmetic"""
+            if mega and not v:
+                return None
+            return (key(v) - base) & 0xFFFF
+
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
         os88marty.no_saver(m)           # a settle can outlast the saver's
@@ -204,7 +264,7 @@ def main():
 
         def loaded(_):                       # 116KB off a 360KB floppy
             seg, _w = find_win(m, S, "Tracker")
-            return bool(seg) and u16(m.read(seg * 16 + P["mp_loaded"], 2))
+            return bool(seg) and u16(m.read(L(seg, P["mp_loaded"]), 2))
         try:
             os88marty.until(m, loaded, "Tracker to load the module",
                             poll=0.5, limit=60)
@@ -217,11 +277,14 @@ def main():
             print("FAIL: Tracker never opened a window")
             return 1
 
+        tk_p0 = key(tk_seg)             # (its paragraph NOW: a selector's
+                                        # base is wherever it has moved to)
+
         def tword(name):
-            return u16(m.read(tk_seg * 16 + P[name], 2))
+            return u16(m.read(L(tk_seg, P[name]), 2))
 
         def tbyte(name):
-            return m.read(tk_seg * 16 + P[name], 1)[0]
+            return m.read(L(tk_seg, P[name]), 1)[0]
 
         # --- STOP THE PLAY, which is what gives the desktop back ------------
         #
@@ -246,7 +309,7 @@ def main():
                         "S to stop the play and give the desktop back",
                         limit=20)
 
-        base = tword("trk_modseg")
+        base = key(tword("trk_modseg"))
         if not base:
             print("FAIL: Tracker holds no module")
             return 1
@@ -273,7 +336,7 @@ def main():
         pool0 = prloc = None
         direct = 0
         if dseg:
-            pool0 = u16(m.read(dseg * 16 + D["sbl_poolseg"], 2))
+            pool0 = key(u16(m.read(dseg * 16 + D["sbl_poolseg"], 2)))
             direct = m.read(dseg * 16 + D["sbl_direct"], 1)[0]
             if pool0:
                 pc = [c for c in claims(m, S) if c[0] == pool0]
@@ -287,10 +350,16 @@ def main():
             print("no sound driver / no stream: the pool checks will SKIP")
 
         h0 = hashlib.md5(m.read(base * 16, para * 16)).hexdigest()
-        smp0 = m.read(tk_seg * 16 + P["mp_smptab"], MS_SZ * 31)
-        ch0 = m.read(tk_seg * 16 + P["mp_chans"], MP_CHSZ * 4)
-        ds0 = [(u16(smp0, i * MS_SZ + MS_SEG) - base) & 0xFFFF for i in range(31)]
-        dc0 = [(u16(ch0, i * MP_CHSZ + MP_SEG) - base) & 0xFFFF for i in range(4)]
+        smp0 = m.read(L(tk_seg, P["mp_smptab"]), MS_SZ * 31)
+        ch0 = m.read(L(tk_seg, P["mp_chans"]), MP_CHSZ * 4)
+        ds0 = [delta(u16(smp0, i * MS_SZ + MS_SEG), base) for i in range(31)]
+        dc0 = [delta(u16(ch0, i * MP_CHSZ + MP_SEG), base) for i in range(4)]
+        # THE PATTERN WINDOWS (KERN-MEGA-MEMORY-PLAN MC7): ceil(P / 32) SEG_SUBs
+        # of the blob, the claim plus a constant on this real-mode kernel - the
+        # ones the replayer reads, as deltas, like the sample bases
+        nwin = (tword("mp_npat") + 31) // 32
+        pw0 = m.read(L(tk_seg, P["mp_pwin"]), 16)
+        dw0 = [delta(u16(pw0, 2 * i), base) for i in range(nwin)]
         row0 = tword("mp_row")
         print("module md5 %s  blobseg %04x  row %d"
               % (h0[:12], tword("mp_blobseg"), row0))
@@ -335,8 +404,8 @@ def main():
         # apart from a compaction that never ran
         hf2_seg, _ = find_win(m, S, "Heap")
         if hf2_seg:
-            img = u16(m.read(hf2_seg * 16 + 8, 2))
-            hb = m.read(hf2_seg * 16 + img, 128)
+            img = u16(m.read(L(hf2_seg, 8), 2))
+            hb = m.read(L(hf2_seg, img), 128)
             print("heapfrag#2: %d checks, %s  L1=%dK want=%dK moved=%d"
                   % (u16(hb, 0),
                      "".join("." if b == 0 else "X"
@@ -364,20 +433,20 @@ def main():
         if tk_new is None:
             print("FAIL: Tracker's window vanished across the compaction")
             return 1
-        rgn = [c for c in claims(m, S) if c[0] == tk_new]
+        rgn = [c for c in claims(m, S) if c[0] == key(tk_new)]
         rdecl = bool(rgn and rgn[0][3])
         rst = inst_restart(m, S, tk_new)
-        rmoved = tk_new != tk_seg
+        rmoved = key(tk_new) != tk_p0
         print("  1 region movable      %s / restart %s%s"
               % ("DECLARED" if rdecl else "PINNED",
                  "%04x" % rst if rst else "NONE",
-                 ("   MOVED %04x -> %04x" % (tk_seg, tk_new)) if rmoved
+                 ("   MOVED %04x -> %04x" % (tk_p0, key(tk_new))) if rmoved
                  else "   (not exercised: nothing was free above it)"))
         bad += not rdecl
         bad += not rst
         tk_seg = tk_new
 
-        nb = tword("trk_modseg")
+        nb = key(tword("trk_modseg"))
         moved = nb != base
         # heapfrag holds the gfx lock across its triggering claim on purpose,
         # so WITHOUT SPEC.md 66.5.4's declaration this cannot move: the worker
@@ -392,15 +461,22 @@ def main():
               % ("OK" if h1 == h0 else "CORRUPT", h1[:12]))
         bad += h1 != h0
 
-        ok3 = tword("mp_blobseg") == nb
+        ok3 = key(tword("mp_blobseg")) == nb
         print("  4 blobseg followed    %s" % ("OK" if ok3 else "STALE"))
         bad += not ok3
 
-        smp1 = m.read(tk_seg * 16 + P["mp_smptab"], MS_SZ * 31)
-        ch1 = m.read(tk_seg * 16 + P["mp_chans"], MP_CHSZ * 4)
-        ds1 = [(u16(smp1, i * MS_SZ + MS_SEG) - nb) & 0xFFFF for i in range(31)]
+        smp1 = m.read(L(tk_seg, P["mp_smptab"]), MS_SZ * 31)
+        ch1 = m.read(L(tk_seg, P["mp_chans"]), MP_CHSZ * 4)
+        ds1 = [delta(u16(smp1, i * MS_SZ + MS_SEG), nb) for i in range(31)]
         print("  5 31 sample bases     %s" % ("OK" if ds0 == ds1 else "STALE"))
         bad += ds0 != ds1
+        pw1 = m.read(L(tk_seg, P["mp_pwin"]), 16)
+        dw1 = [delta(u16(pw1, 2 * i), nb) for i in range(nwin)]
+        okw = dw0 == dw1 and dw0 and dw0[0] == 64
+        print("  5b %d pattern windows %s  (%s)"
+              % (nwin, "OK" if okw else "STALE",
+                 " ".join("+%04x" % d for d in dw1)))
+        bad += not okw
 
         # MP_SEG is LIVE STATE, not a constant: a playing module rewrites it
         # every time a channel starts a note, so comparing it across time is
@@ -409,7 +485,8 @@ def main():
         # is exactly what a missed relocation would break.
         inb = [i for i in range(4)
                if u16(ch1, i * MP_CHSZ + MP_SEG)
-               and not (nb <= u16(ch1, i * MP_CHSZ + MP_SEG) < nb + para)]
+               and not (nb <= key(u16(ch1, i * MP_CHSZ + MP_SEG))
+                        < nb + para)]
         print("  6 channels inside it  %s" % ("OK" if not inb else
                                               "OUTSIDE: %s" % inb))
         bad += bool(inb)
@@ -430,7 +507,7 @@ def main():
               % ("OK" if alive else "GONE", row0, r1, r2, alive))
         bad += not alive
         if pool0:
-            pnew = u16(m.read(dseg * 16 + D["sbl_poolseg"], 2))
+            pnew = key(u16(m.read(dseg * 16 + D["sbl_poolseg"], 2)))
             live = [c[0] for c in claims(m, S)]
             # THE POOL EXISTS ONLY WHILE A STREAM DOES - sbl_pool_put releases
             # it with the last grant - so it can only be seen to move while

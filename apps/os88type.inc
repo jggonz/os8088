@@ -797,8 +797,17 @@ ty_open:
 .got:
     mov di, [ty_opdi]
     mov [di + TF_CLAIM], dx
-    test dl, 0x1F                   ; THE BASE IS ASSERTED 512-ALIGNED, not
-    jnz .unaligned                  ; rounded: kernel.asm's guard 6b pins every
+    push ax
+    push bx
+    push dx
+    mov bl, SEG_LIN                 ; (its LINEAR base: under kern_mega the
+    call OSAPI_SEG                  ; claim is a selector, whose bits say
+    test ax, 0x01FF                 ; nothing about alignment - MC7)
+    pop dx
+    pop bx
+    pop ax                          ; (no pop moves a flag)
+    jnz .unaligned                  ; THE BASE IS ASSERTED 512-ALIGNED, not
+                                    ; rounded: kernel.asm's guard 6b pins every
                                     ; base mem_claim hands out to HEAP_SEG +
                                     ; n*MEM_PARA_KB paragraphs, MEM_PARA_KB a
                                     ; multiple of 32, so a round-up could never

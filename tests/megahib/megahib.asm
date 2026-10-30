@@ -2,7 +2,7 @@
 ; os8088 - tests/megahib/megahib.asm
 ;
 ; MEGAHIB, a TEST instrument (nothing under tests/ ships): the XMS WITNESS for
-; a hibernate on kern_mega (docs/plans/KERN-MEGA-DOS-PLAN.md 8, wave W5). It
+; a hibernate on kern_mega (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 8, wave W5). It
 ; is MEGAXM's patterns HELD: on open it allocates 64KB through the XMEM cells
 ; and copies sixteen 4KB patterns out, and keeps its window - so the block is
 ; a live instance's, in the pool when the machine hibernates. Any key in its

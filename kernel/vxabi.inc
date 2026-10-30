@@ -42,6 +42,14 @@ VXV_NEXT    equ 0x42            ; in CL = a class: out CL = the next offered
                                 ; Y/8 and bpp for a label (0 for Auto); CF = 1
                                 ; = the class given matched no record (the
                                 ; first is answered). The Display page's walk
+VXV_PM      equ 0x43            ; kern_mega's alone (KERN-MEGA-PLAN 14.115):
+                                ; DX = 0 asks, in real mode after INIT, CF = 0
+                                ; = this image draws in protected mode; DX =
+                                ; a data selector over window A ARMS it at
+                                ; mega_enter, ES = the kernel's data selector.
+                                ; ADDITIVE, so VX_ABI_VER stays: an image
+                                ; that predates it refuses the question and
+                                ; kern_mega keeps its VGA desktop
 
 ; --- a mode CLASS: the user's name for a mode, a card's number being the
 ; card's (SPEC.md 120.2.3). ONE BYTE, because SYSTEM.CFG's buffer is boot

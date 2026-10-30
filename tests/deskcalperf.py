@@ -120,16 +120,22 @@ def segs_of(m, seg):
     STIK_LIB build - the shared library's in DESK.DRV (SPEC.md 110.15), the
     segment word of the block's first entry. Counting the package's alone
     reads 0 for whatever the include draws."""
-    if not os88stik.DESKCAL_LIB:
-        return (seg,)
-    lib = struct.unpack_from("<H", bytes(m.readseg(
-        seg, os88stik.STIKLIB_AT + STKL_LE + 2, 2)))[0]
-    return (seg, lib)
+    out = (seg,)
+    if os88stik.DESKCAL_LIB:
+        out += (struct.unpack_from("<H", bytes(m.readseg(
+            seg, os88stik.STIKLIB_AT + STKL_LE + 2, 2)))[0],)
+    if getattr(m, "bochs", False):
+        # kern_mega: a package's W_SEG is the DATA half of an LDT pair and
+        # its code runs under the CODE half, the entry below it (mega.inc's
+        # mega_ldt2ds), so a call's far return names that one
+        out += tuple(s - 8 for s in out if s & 4)
+    return out
 
 
 def caller(m, rec):
     r = rec.get("regs") or m.regs()
-    ip, cs = struct.unpack("<HH", bytes(m.read((r["ss"] << 4) + r["sp"], 4)))
+    lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)    # kern_mega's
+    ip, cs = struct.unpack("<HH", bytes(m.read(lin(r["ss"], r["sp"]), 4)))
     return cs
 
 
@@ -233,8 +239,9 @@ def ui_leg(tmp, machine, label, results):
               % (label, d["reads"], d["writes"]))
         r["missed_save"] = {"reads": d["reads"], "writes": d["writes"]}
 
-        tick_at = seg * 16 + pkg_sym(tmp, "dc_tick")
-        comp_at = seg * 16 + pkg_sym(tmp, "dc_compose")
+        lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)  # kern_mega
+        tick_at = lin(seg, pkg_sym(tmp, "dc_tick"))
+        comp_at = lin(seg, pkg_sym(tmp, "dc_compose"))
 
         def gesture(act, settle=2.0, extra=(), tag=True):
             """The calendar's calls during `act`. tag=False sets aside the

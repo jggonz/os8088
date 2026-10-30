@@ -1118,6 +1118,17 @@ JV_PBB      equ 0xB0                ; word: THE BLOCK'S BOUNCE, kern_mega's
 JV_PBSEG    equ 0xB2                ; 1/4 store (pj_pblock .pm4): its
 JV_PBOFF    equ 0xB4                ; segment, and the block's group and
                                     ; place there (KERN-MEGA-PLAN 14.40)
+JV_SBOFF    equ 0xB6                ; 3 words: each component's store, in
+                                    ; PARAGRAPHS from the scratch's base
+JV_SWIN     equ 0xBC                ; 16 words: the scratch's 64KB WINDOWS,
+                                    ; a SEG_SUB each (MC7: the sums on a
+                                    ; real-mode kernel, a selector apiece
+                                    ; under kern_mega) - paragraph P of the
+                                    ; store is window P >> 12, offset
+                                    ; (P & 0FFFh) x 16
+%if JV_SWIN + 32 > JV_SC
+  %error "JV_SWIN runs into JV_SC"
+%endif
 JV_FR       equ 0x100               ; JF_SZ: the frame, and its layout
 
 JP_SEGMAX   equ JS_CLEANSZ + JS_GUARD   ; a table segment's bytes at most
@@ -1139,7 +1150,10 @@ pj_decode:
     mov word [pj_pblock.pa], 0xEB | ((pj_pblock.pm4 - pj_pblock.pa - 2) << 8)
     mov word [pj_pblock.out], 0xEB | ((pj_pblock.pmout - pj_pblock.out - 2) << 8)
     mov word [pj_oblk.pa], 0xEB | ((pj_oblk.pmo - pj_oblk.pa - 2) << 8)
-    pop ds
+    mov byte [pj_pblock.j8 + 1], (pj_pm8 - pj_pblock.j8 - 2) & 0xFF
+    mov byte [pj_oblk.j8 + 1], (pj_opm8 - pj_oblk.j8 - 2) & 0xFF
+    pop ds                          ; (1/8's two: the `je` aimed at the
+                                    ; windows' arm, MC7)
 .rm:
     mov es, [di + PXK_DSEG]         ; ES = the scratch
     mov [es:JV_PKG], ds
@@ -1451,24 +1465,45 @@ pj_fsizes:
     cmp byte [JV_PROG], 0
     je .out
     mov di, JV_FR
-    call pj_stsize                  ; JL_SB: each component's paragraphs
+    call pj_stsize                  ; JL_SB: each component's paragraphs,
+    push ax                         ; AX the store's
     mov ax, [cs:pj_vend]            ; the store starts past the segment's
-    add ax, 127                     ; variable part, on kern_mega's 8-
-    mov cl, 4                       ; paragraph grid (KERN-MEGA-PLAN 14.40;
-    shr ax, cl                      ; HEAD's pj_dsc sized it so)
+    add ax, 127                     ; variable part, on the 8-paragraph
+    mov cl, 4                       ; grid (KERN-MEGA-PLAN 14.40; HEAD's
+    shr ax, cl                      ; pj_dsc sized it so)
     and al, 0xF8
     mov dx, ds                      ; (DS: the scratch)
-    add ax, dx
-    mov [JV_PBB], ax                ; the bounce (pj_pblock .pm4), and the
-    add ax, 8                       ; store after it
+    PXSUB                           ; the bounce (pj_pblock .pm4): a SEG_SUB
+    mov [JV_PBB], dx                ; (MC7: the sum on a real-mode kernel),
+    add ax, 8                       ; and the store after it
     xor bx, bx
 .sb:
     mov dx, ax
     add dx, [JV_FR + JL_SB + bx]
-    mov [JV_SBASE + bx], dx
-    add bx, 2
+    mov [JV_SBOFF + bx], dx         ; paragraphs from the scratch's base...
+    push ax
+    mov ax, ds
+    add ax, dx
+    mov [JV_SBASE + bx], ax         ; ...and the sum the 8088's loops read
+    pop ax                          ; (a real-mode kernel's; kern_mega's
+    add bx, 2                       ; arms are patched to the windows)
     cmp bx, 6
     jb .sb
+    pop dx                          ; THE WINDOWS: 64KB apart to the
+    add ax, dx                      ; store's end, AX paragraphs (< F000h)
+    add ax, 0x0FFF
+    mov cl, 12
+    shr ax, cl
+    mov cx, ax                      ; CX = how many
+    xor ax, ax
+    xor bx, bx
+.sw:
+    mov dx, ds
+    PXSUB
+    mov [JV_SWIN + bx], dx
+    add ax, 0x1000
+    add bx, 2
+    loop .sw
     call pj_stzero
 .out:
     pop dx
@@ -1477,46 +1512,70 @@ pj_fsizes:
     pop ax
     ret
 
-; pj_stzero - the store, every paragraph of it, zeroed. Preserves all
+; pj_stzero - the store, every paragraph of it, zeroed: through the
+; scratch's 64KB windows (JV_SWIN), 32KB a pass and never across a window's
+; end - the same on every kernel. Preserves all
 pj_stzero:
     push ax
     push bx
     push cx
+    push dx
     push di
     push es
     mov di, JV_FR
     call pj_stsize                  ; AX = its paragraphs
-    mov bx, ax
-    mov ax, [JV_SBASE]
-    mov es, ax
-    xor ax, ax
+    mov bx, ax                      ; BX = paragraphs left
+    mov dx, [JV_SBOFF]              ; DX = the next one, from the base
 .z:
     or bx, bx
     jz .out
-    mov cx, bx
+    mov di, dx
+    and di, 0x0FFF                  ; DI = its place in its window
+    mov cx, 0x1000
+    sub cx, di                      ; CX = what the window has left
     cmp cx, 0x0800                  ; 32 KB at a time
     jbe .c
     mov cx, 0x0800
 .c:
+    cmp cx, bx
+    jbe .c2
+    mov cx, bx
+.c2:
     sub bx, cx
+    push bx
+    mov bl, dh
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    xor bh, bh
+    shl bx, 1
+    mov es, [JV_SWIN + bx]          ; ES = its window
+    pop bx
+    add dx, cx
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    shl di, 1                       ; DI = its byte there
     push cx
     shl cx, 1
     shl cx, 1
     shl cx, 1                       ; words
-    xor di, di
+    xor ax, ax
     rep stosw
     pop cx
-    mov di, es
-    add di, cx
-    mov es, di
     jmp short .z
 .out:
     pop es
     pop di
+    pop dx
     pop cx
     pop bx
     pop ax
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; =============================================================================
 ; THE STREAM, a byte at a time (the marker segments) and in windows
@@ -4573,6 +4632,38 @@ pj_grid:
     pop ax
     ret
 
+; pj_pm8 - pj_pblock's 1/8 on kern_mega, out of line so its 8088 paths keep
+; their short jumps: pj_pblock's registers, ES:BP the word, through .s
+pj_pm8:                             ; KERN_MEGA'S 1/8 (MC7): block bi's word
+    ; STKBALANCE-OK: pj_pblock's own body, out of line - entered by its
+    ; patched `je` at pj_pblock's depth (its BX and ES pushed) and back into
+    ; it at .s, whose pops are that frame's
+    push cx                         ; is paragraph bi >> 3 of the store,
+    mov cx, [JV_BIH]                ; (bi & 7) x 2 into it, through the
+    mov dx, bp                      ; scratch's windows
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    pop cx
+    add dx, [JV_SBOFF + di]         ; DX = P, from the scratch's base
+    and bp, 7
+    shl bp, 1
+    mov ax, dx
+    and dx, 0x0FFF
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    add bp, dx                      ; BP = its byte in its window
+    call pj_swin                    ; AX = the window
+    jmp pj_pblock.s
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
+
 ; pj_pblock - scan component BX (x 8), block [JV_BI] of its store: the
 ; scan's kind of decode on it, by the bit position (pj_blk's reader). The
 ; position loaded and banked here
@@ -4605,22 +4696,24 @@ pj_pblock:
     mov ax, [JV_SBASE + di]         ; ES:BP = the block's store
     mov bp, [JV_BI]
     cmp byte [JV_SCL], 3
-    je .s8
+.j8:                                ; PATCHED on kern_mega to `je pj_pm8`
+    je short .s8                    ; (pj_decode)
 .pa:                                ; PATCHED on kern_mega to `jmp short
     add ax, bp                      ; .pm4` (pj_decode): (1/4: under F000h
     xor bp, bp                      ; blocks, a word)
     jmp short .s
-.pm4:                               ; KERN_MEGA'S 1/4 (KERN-MEGA-PLAN 14.40):
-    mov dx, bp                      ; a block is a paragraph of the store and
-    and dl, 0xF8                    ; the code below addresses it at ES:0 -
-    add ax, dx                      ; which is a segment only every eighth
-    sub bp, dx                      ; block there. So the block's group of
-    shl bp, 1                       ; eight (a segment on the grid) and its
-    shl bp, 1                       ; place in it are banked, the block is
-    shl bp, 1                       ; copied into eight paragraphs of its
-    shl bp, 1                       ; own, decoded at ES:0 there and copied
-    mov [JV_PBSEG], ax              ; back at .out. Real mode never comes
-    mov [JV_PBOFF], bp              ; here: .pa is not patched
+.pm4:                               ; KERN_MEGA'S 1/4 (KERN-MEGA-PLAN 14.40,
+    mov ax, [JV_SBOFF + di]         ; MC7): a block is a paragraph of the
+    add ax, bp                      ; store, P from the scratch's base, in
+    mov bp, ax                      ; window P >> 12 at (P & 0FFFh) x 16 -
+    and bp, 0x0FFF                  ; and the code below addresses it at
+    shl bp, 1                       ; ES:0. So its window and place are
+    shl bp, 1                       ; banked, the block is copied into eight
+    shl bp, 1                       ; paragraphs of its own, decoded at ES:0
+    shl bp, 1                       ; there and copied back at .out. Real
+    call pj_swin                    ; mode never comes here: .pa is not
+    mov [JV_PBSEG], ax              ; patched
+    mov [JV_PBOFF], bp
     mov dx, [JV_PBB]
     push ds
     push si
@@ -4650,9 +4743,9 @@ pj_pblock:
     shr cx, 1
     rcr dx, 1
     pop cx
-    and dl, 0xF8                    ; eight paragraphs at a time: kern_mega's
-    and bp, 63                      ; grid (KERN-MEGA-PLAN 14.40), the word's
-    shl bp, 1                       ; place in the offset
+    and dl, 0xF8                    ; eight paragraphs at a time (KERN-MEGA-
+    and bp, 63                      ; PLAN 14.40's layout), the word's place
+    shl bp, 1                       ; in the offset
     add ax, dx
 .s:
     mov es, ax
@@ -4741,6 +4834,27 @@ pj_pblock:
 %if (pj_pblock.pm4 - pj_pblock.pa - 2) > 127 || (pj_pblock.pmout - pj_pblock.out - 2) > 127
   %error "pj_pblock's kern_mega patches are short jumps"
 %endif
+%if (pj_pblock.j8 + 2 - pj_pm8) > 128
+  %error "pj_pblock's 1/8 patch is a short jump"
+%endif
+
+; pj_swin - AX = a paragraph of the scratch, from its base: AX = its 64KB
+; window (JV_SWIN, MC7). Preserves all else
+pj_swin:
+    push bx
+    mov bl, ah
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    xor bh, bh
+    shl bx, 1
+    mov ax, [JV_SWIN + bx]
+    pop bx
+    ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pj_rbits - AL = n, 1..15: AX = the next n bits as they are, taken.
 ; SI/CL live. Preserves BX, DX, DI, BP; clobbers CH
@@ -5244,6 +5358,32 @@ pj_output:
     jb .my
     ret
 
+; pj_opm8 - pj_oblk's 1/8 on kern_mega, out of line (pj_pm8's reason):
+; pj_oblk's registers, ES:BP the word, through .o8r
+pj_opm8:                            ; kern_mega's 1/8 (pj_pm8's,
+    mov cx, [JV_BIH]                ; MC7): the word through the windows
+    mov dx, bp
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    shr cx, 1
+    rcr dx, 1
+    add dx, [JV_SBOFF + bx]         ; DX = P
+    and bp, 7
+    shl bp, 1
+    mov ax, dx
+    and dx, 0x0FFF
+    mov cl, 4
+    shl dx, cl
+    add bp, dx                      ; BP = its byte in its window
+    call pj_swin
+    mov es, ax
+    jmp pj_oblk.o8r
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
+
 ; pj_oblk - block [JV_BI] of component [JV_COMP]'s store, dequantised into
 ; D (1/4: its four, natural 0, 1, 8 and 9; 1/8: the DC) and through the
 ; reduced IDCT into [JV_PL]. Clobbers AX, BX, CX, DX, SI, DI, BP, ES
@@ -5254,7 +5394,8 @@ pj_oblk:
     mov bp, [JV_BI]
     mov si, [JV_MLT]
     cmp byte [JV_SCL], 3
-    je .o8
+.j8:                                ; PATCHED on kern_mega to `je pj_opm8`
+    je short .o8                    ; (pj_decode)
 .pa:                                ; PATCHED on kern_mega to `jmp short
     add ax, bp                      ; .pmo` (pj_decode): 1/4, a paragraph a
 .oc:                                ; block
@@ -5278,12 +5419,13 @@ pj_oblk:
     pop es
     jmp pj_id2
 .pmo:                               ; kern_mega: the block through the bounce
-    mov dx, bp                      ; (pj_pblock .pm4's), read only
-    and dl, 0xF8
-    add ax, dx
-    sub bp, dx
+    mov ax, [JV_SBOFF + bx]         ; (pj_pblock .pm4's), read only: its
+    add ax, bp                      ; paragraph P, in window P >> 12 at
+    mov bp, ax                      ; (P & 0FFFh) x 16 (MC7)
+    and bp, 0x0FFF
     mov cl, 4
     shl bp, cl
+    call pj_swin
     mov dx, [JV_PBB]
     push ds
     push si                         ; (SI: the multipliers)
@@ -5300,6 +5442,9 @@ pj_oblk:
 %if (pj_oblk.pmo - pj_oblk.pa - 2) > 127
   %error "pj_oblk's kern_mega patch is a short jump"
 %endif
+%if (pj_oblk.j8 + 2 - pj_opm8) > 128
+  %error "pj_oblk's 1/8 patch is a short jump"
+%endif
 .o8:
     mov cx, [JV_BIH]                ; 1/8: a word a block, bi >> 3 from 32
     mov dx, bp                      ; bits
@@ -5314,6 +5459,7 @@ pj_oblk:
     mov es, ax
     and bp, 63
     shl bp, 1
+.o8r:
     mov ax, [es:bp]
     imul word [si]
     add ax, JP_BIAS

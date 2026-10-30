@@ -1487,33 +1487,32 @@ _lem_r_bgrect:
     mov ax, [lm_seg]
     mov es, ax
     mov dl, [es:di]                 ; m
-    mov ax, [lb_t]
-    mov es, ax
+    ; T's planes BY INDEX (lemblit.inc's LEM_TPLANE note): one segment load
+    ; out of _lem_tpl where this was a load or two `add`s and a move - four
+    ; bytes where it was six, which on an 8088 is what an instruction costs
+    mov es, [_lem_tpl]
     mov al, [es:di]                 ; t0
-    mov bx, [lb_t]
-    add bx, LEM_TPLANE
-    mov es, bx
-    mov ah, [es:di]                 ; t1
-    or al, ah
-    add bx, LEM_TPLANE
-    mov es, bx
+    mov es, [_lem_tpl+2]
+    or al, [es:di]                  ; t1
+    mov es, [_lem_tpl+4]
     or al, [es:di]                  ; t2
-    add bx, LEM_TPLANE
-    mov es, bx
+    mov es, [_lem_tpl+6]
     or al, [es:di]                  ; t3: AL = any colour at all
     not al
     and al, dl                      ; nb = m & ~colour: the new bricks
     mov dh, al
     ; t3 &= m, then t2, t1, t0 = (t & m) | nb
     and [es:di], dl
+    mov bx, _lem_tpl+4
     mov cx, 3
 .syp:
-    sub bx, LEM_TPLANE
-    mov es, bx
+    mov es, [bx]
     mov al, [es:di]
     and al, dl
     or al, dh
     mov [es:di], al
+    dec bx
+    dec bx
     loop .syp
     inc di
     pop cx
@@ -1530,9 +1529,9 @@ _lem_r_bgrect:
     mov ax, [lb_vbase]
 .vb:
     mov [lbp_vb], ax
-    mov dx, 1
-    mov bx, [lb_t]
-.vp:
+    mov dx, 1                       ; DL the Map Mask bit, DH 2 x the plane
+    mov bx, [_lem_tpl]              ; (T's planes by index: lemblit.inc's
+.vp:                                ; LEM_TPLANE note)
     push dx
     push bx
     mov ah, dl
@@ -1562,7 +1561,10 @@ _lem_r_bgrect:
     inc cx
     jmp .vrow
 .vpn:
-    add bx, LEM_TPLANE
+    add dh, 2                       ; the next plane's word in _lem_tpl
+    mov bl, dh
+    xor bh, bh
+    mov bx, [_lem_tpl+bx]
     shl dl, 1
     cmp dl, 16
     jb .vp

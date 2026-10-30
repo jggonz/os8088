@@ -27,8 +27,9 @@ sys.path.insert(0, HERE)
 import os88vbundle  # noqa: E402
 
 ROOTS = ("gbaotgui.py", "gbaot.py", "os88disk.py", "os88pkg.py")
-THIRD_PARTY = {"unicorn"}
-BINS = ("aothost.bin", "rdgcore.bin", "rdgtmpl.bin", "rdgcore.inc", "realdmgaot.bin")
+THIRD_PARTY = {"unicorn", "tkinterdnd2"}   # (tkinterdnd2 optional: drops off Windows)
+BINS = ("aothost.bin", "rdgcore.bin", "rdgtmpl.bin", "rdgcore.inc", "realdmgaot.bin",
+        "realdmgaotmega.bin", "rdgjitpaot.bin")
 FOLDER = "os8088-gbaot"
 
 README = """os8088 GAME BOY PRECOMPILER
@@ -51,7 +52,12 @@ NEEDS
   Nothing else: the parts that would be assembled are in gbaot-bin/.
 
 USING IT
-  1. Choose the cartridge. The package is written beside it, GAME.O88.
+  1. Choose the cartridge - or drop it on the window. The package is
+     written beside it, GAME.O88. A replay can be dropped too: drop
+     NAME.RP1 (or NAME.SS1) and, if its partner is beside it, the pair goes
+     straight into the list of replays.
+     Dropping is built in on Windows; elsewhere it wants
+         python3 -m pip install tkinterdnd2
   2. Make the package (a minute or two; a 1 MB cartridge longer).
   3. With "Put the ROM inside the package" ticked - the default - GAME.O88
      is the whole game in one file: copy it to an os8088 disk - or tick a
@@ -89,6 +95,8 @@ def main():
     a = ap.parse_args()
     import gbaot
     gbaot.aot_image(a.build)               # (every binary, current)
+    gbaot.aot_image(a.build, mega=True)    # (and kern_mega's, REALDMG-SPEC 20.15)
+    gbaot.aot_jitpart(a.build)             # (...and its recompiler, 20.16)
     mods, other = os88vbundle.closure(ROOTS)
     stray = other - THIRD_PARTY
     if stray:

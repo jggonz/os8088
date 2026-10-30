@@ -63,7 +63,7 @@ The list has one line per running program:
 
 | Column | What it shows |
 |---|---|
-| NAME | The program. **IVT+BIOS** is the first line: 2K at the very bottom of memory that belongs to the machine's BIOS, with a half-K beside it nothing can use, and, on machines whose BIOS keeps its own area at the top of memory, that area too. **System** is os8088 itself, including what it holds above the first megabyte; built-in windows such as a Disk window are listed under it, indented |
+| NAME | The program. **IVT+BIOS** is the first line: 2K at the very bottom of memory that belongs to the machine's BIOS, with a half-K beside it nothing can use, and, on machines whose BIOS keeps its own area at the top of memory, that area too. **System** is os8088 itself; built-in windows such as a Disk window are listed under it, indented. On a machine where os8088 keeps memory above the first megabyte, a line after them says how much: **System HMA**, or **System>1MB** on the protected-mode build for the 286 and later, where it is everything os8088 holds up there and **System** is what it holds in the first 640K |
 | ST | What it was doing at the last reading (see below) |
 | CPU | Its share of the processor's work over the last half second |
 | MEM | The memory it holds, in K: its own room plus any extra blocks it asked for |
@@ -90,11 +90,18 @@ watching costs.
 
 ![The memory page.](shot:taskmgr-memory){right}
 
-The top line repeats the **RAM** and **HEAP** figures. Under it is a bar that
-stands for the first megabyte of memory, from the bottom on the left to the
-top on the right. The grey part is os8088 itself, the striped part is the
-system's own buffers, each program's room is drawn in its own pattern, and
-every extra block a program asked for is a small framed box. White is free.
+The top line repeats the **RAM** and **HEAP** figures. Under it is a map of
+memory, from the bottom on the left to the top on the right. The grey part is
+os8088 itself, the striped part is the system's own buffers, each program's
+room is drawn in its own pattern, and every extra block a program asked for is
+a small framed box. White is free.
+
+On most machines the map is the first 640K. On the protected-mode build for
+the 286 and later it is the whole machine, in two boxes side by side: the
+first 640K on the left, and on the right the memory above the first megabyte,
+up to the top, where programs and the system's drivers run too. Each box is
+drawn to its own scale, the left one never narrower than a third of the map,
+so the first 640K can still be read on a machine with many megabytes.
 
 The next line names the processor. On a machine with memory above the first
 megabyte, an **XMS** line and bar show how much of that is in use. On the
@@ -116,14 +123,21 @@ Each line of the list is something that holds memory, with its total in
 is made of, and **-** closes it again. **+ALL** at the top right opens every
 line, and **-ALL** closes them all.
 
-- **System** is os8088 itself. Opened, it shows the 2K at the very bottom
-  that belongs to the machine's BIOS (**IVT+BIOS**), its program and data
-  (**Code+data**), the working space of the running programs (**Stacks**),
-  its copy of the disk's file table (**FAT snap**), and what it holds above
-  the first megabyte. Under those come its own lines that open in turn:
-  **Kernel** for blocks the system asked for, one line per driver, named by
-  its file (**SOUND.DRV**, **XMEM.DRV**), and one per system window, such as
-  a Disk window, named by its folder.
+- **IVT+BIOS** is the 2K at the very bottom that belongs to the machine's
+  BIOS.
+- **System** is os8088 itself. Opened, it shows its program and data
+  (**Code+data**), the working space of the running programs (**Stacks**)
+  and its copy of the disk's file table (**FAT snap**). Under those come its
+  own lines that open in turn: **Kernel** for blocks the system asked for,
+  one line per driver, named by its file (**SOUND.DRV**, **XMEM.DRV**), and
+  one per system window, such as a Disk window, named by its folder.
+- **System HMA** is what os8088 keeps just above the first megabyte, on a
+  286 or later machine that has memory there. Opened, it shows the system's
+  code kept there, each driver running there, and what is free.
+- **System>1MB** takes its place on the protected-mode build for the 286 and
+  later, where it is everything os8088 holds above the first megabyte: its
+  tables and code, then **Kernel** and one line per driver, opening into
+  their blocks. **System** is then only what os8088 holds in the first 640K.
 - **Programs** is the total of every program, and each program follows it on
   a line of its own. The small square beside it matches its pattern in the
   map. Opened, a program shows its own room and every extra block it asked
@@ -133,8 +147,10 @@ With every line closed, the sizes add up to the memory **RAM** says is in
 use, and that plus **AVAIL** is all of it.
 
 Each block in an opened line shows its **TYPE**, its address (**ADDR**) and
-its **SIZE**. **HIGH** in ADDR means the block is above the first megabyte.
-Some of the types you will see:
+its **SIZE**. The address is in hexadecimal, in units of 16 bytes. A block
+in the first megabyte has four digits, such as **9E40**; a block above the
+first megabyte has five, such as **3EA40**, which is just under 4MB. Some of
+the types you will see:
 
 | TYPE | What it is |
 |---|---|
@@ -144,6 +160,7 @@ Some of the types you will see:
 | CTRL, DISKOPS, ... | A part of the system loaded from its disk while you use it, such as the Control Panel |
 | WinSave | A copy of a window's picture, kept so it can be brought to the front quickly |
 | DirRead, FATwin | Disk caches that make folders open faster |
+| Cache | One of those caches kept above the first megabyte, on the protected-mode build for the 286 and later |
 | Icons | The desktop's store of program icons |
 | MenuSav | What was under an open menu |
 

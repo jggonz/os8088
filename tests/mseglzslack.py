@@ -96,8 +96,23 @@ def sym(name):
     return (msegsym.MSEG if PLAIN else msegsym.MSEGLZ).sym(name)
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF's linear address - an LDT selector's base on kern_mega
+    (OS88_MEGA, docs/BOCHS.md), `seg << 4` everywhere else."""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
+
 def claims(m):
     """Every live claim, as (segment, paragraphs, owner)."""
+    if getattr(m, "bochs", False):
+        # kern_mega: every claim is NAMED by a selector - mem_tab's records
+        # through mem_sel beside them, and a POOL block above 1MB through
+        # mx_tab's MX_SEL (tools/heapmap.py reads both) - and op_seg is that
+        # selector, so the claim that must BEGIN at it is keyed by it
+        import heapmap
+        hm = heapmap.Map(m, {n: S(n) for n in ("mem_base", "mem_top",
+                                               "spl_live", "mem_tab")})
+        return sorted((c.sel, c.para, c.own) for c in hm.claims + hm.pool)
     blob = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
     out = []
     for i in range(MEM_MAX):
@@ -111,7 +126,7 @@ def claims(m):
 
 def title_of(m, seg, rec):
     toff = struct.unpack_from("<H", rec, os88geom.W_TITLE)[0]
-    return m.read((seg << 4) + toff, 24).split(b"\0")[0].decode(
+    return m.read(lin(m, seg, toff), 24).split(b"\0")[0].decode(
         "ascii", "replace")
 
 
@@ -175,7 +190,7 @@ def run():
 
         def part_seg():
             return struct.unpack_from(
-                "<H", m.read((seg << 4) + sym("ms_seg") + LAZY * 2, 2), 0)[0]
+                "<H", m.read(lin(m, seg, sym("ms_seg") + LAZY * 2), 2), 0)[0]
 
         t = title_of(m, seg, wrec)
         say("after the launch: op_seg(%d) = %04X, verdict %r"
@@ -190,7 +205,7 @@ def run():
         os88marty.ui_done(m)
         ps = part_seg()
         t = title_of(m, seg, wrec)
-        lz = chr(m.read((seg << 4) + sym("ms_lazy"), 1)[0])
+        lz = chr(m.read(lin(m, seg, sym("ms_lazy")), 1)[0])
         say("after the key: op_seg(%d) = %04X, ms_lazy %r, %r"
             % (LAZY, ps, lz, t))
         if not ps or lz != "F":

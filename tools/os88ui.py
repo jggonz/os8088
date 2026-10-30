@@ -135,6 +135,8 @@ class _Booted(object):
             # healthy boot and fails on a slow one, which is the worst
             # available split.
             ui.up(limit=limit)
+            if hasattr(m, "toast_out"):     # kern_mega's boot toast (Bochs)
+                m.toast_out()
             if not self._kw.get("saver", False):
                 os88marty.no_saver(m)
             if self._kw.get("settle", True):
@@ -362,6 +364,8 @@ class UI:
                 return False
             return t != seen[0]
         self._wait(ok, "the kernel to reach the desktop", limit)
+        if getattr(self.m, "boot_toast", None):     # kern_mega under Bochs:
+            self.m.boot_toast()                     # its boot toast gone
         return self
 
     def ready(self, limit=180.0, saver=False):
@@ -837,6 +841,14 @@ class UI:
         for attempt in range(tries):
             if prep is not None:
                 prep()
+            # SEPARATED FROM THE LAST PRESS ON THE GUEST'S CLOCK, as every
+            # other press in os88mouse is: move_window's raise click and its
+            # grab are two presses on one title bar, and move_window's note
+            # counts on `_sep` to keep them from being a double-click (a
+            # ZOOM). This was the one press that skipped it - latent where
+            # the guest outruns the host (MartyPC), a zoom every time on
+            # kern_mega's Bochs, whose guest runs at host speed (deskzoom)
+            self.mo._sep()
             self.mo._edge(True)
             try:
                 return self._wait(cond, what,
@@ -1740,6 +1752,36 @@ class UI:
                 out.append((s, True))
         return out
 
+    def _bar_has(self, menu, item, limit=10.0):
+        """KERN_MEGA'S SHIMS ONLY (tools/os88megabochs.py, and
+        os88mega86box.py, whose 286 shows a Disk window on a 1.2MB A: before
+        its bar - tests/wimgtrip.py): wait, in host seconds, for the bar to
+        carry `menu` -> `item` before menu_pick reads it once.
+
+        A package's window is VISIBLE - which is all `open`/`path` confirm -
+        before its entry proc has run OSAPI_MENU_SET, and between the two
+        the bar is the previous window's cells plus the new one's About
+        cell (`Calc` holding only `About Calc`). MartyPC runs the guest ~4x
+        faster than real time, so its launch is over before the next read;
+        Bochs runs it AT real time and a pick straight after a launch read
+        the half-built bar (tests/toastfpg.py). A name that never arrives
+        falls through to menu_pick's own refusal, which prints the bar."""
+        if isinstance(menu, int) or isinstance(item, int):
+            return
+        mw, iw = menu.upper(), item.upper()
+        end = time.time() + limit
+        while time.time() < end:
+            try:
+                cells = self.menus()
+            except Exception:                       # noqa: BLE001
+                cells = []
+            for t, _x0, _x1, items in cells:
+                if t.upper().startswith(mw) and any(
+                        s.upper().lstrip(" *").startswith(iw)
+                        for s, _ in items):
+                    return
+            time.sleep(0.2)
+
     def menu_pick(self, menu, item, limit=T_MENU):
         """Press a menu title, highlight an item BY NAME, release.
 
@@ -1763,6 +1805,9 @@ class UI:
         printed: `menu_hover` will not stop on one, so the drag would end
         parked on a neighbour and release there.
         """
+        if getattr(self.m, "bochs", False) or getattr(self.m, "box86",
+                                                      False):
+            self._bar_has(menu, item)
         cells = self.menus()
         # AN INT IS A POSITION, a string is a name. Names are what a test
         # should say - they survive a menu gaining an item - but a row whose

@@ -164,9 +164,11 @@ _RIG = [None]
 # stepped down twice at eight emulators on four cores). Under -icount the
 # PIT, the card and the guest's work all count instructions, so the answer
 # is the same at any load and the row shares the lane. The other legs are
-# behaviour and keep QEMU's default clock.
+# behaviour and keep QEMU's default clock. The CARD only counts
+# instructions on `qemuvt` (os88build.qemuvt()), and mainstall is the leg
+# that says so.
 RATE_LEGS = ("ladder", "slowdown", "rungfail", "playwav", "pause",
-             "wavdirs", "xtpeak")
+             "wavdirs", "xtpeak", "mainstall")
 _ICOUNT = [False]
 
 
@@ -420,7 +422,23 @@ class Rig(object):
             except Exception:                               # noqa: BLE001
                 pass
             time.sleep(poll)
-        print("     (timed out waiting for %s)" % what)
+        # WHICH of the two ended it, and what the player was doing: a guest
+        # whose budget was SPENT and one whose clock STOPPED want different
+        # fixes, and "under 0" alone said neither (xtmp3rate's pause leg in
+        # a soak: "the end" never came, and nothing could say why)
+        try:
+            why = ("its clock stopped for %ds of host time" % os88qemu.STALL
+                   if c.stalled() else "%.1f guest s spent" % (c.n / os88qemu.TICK_HZ))
+        except Exception:                                   # noqa: BLE001
+            why = "?"
+        try:
+            s = self.st()
+            now = "state %d md %d elap %d of %d under %d '%s'" % (
+                s["state"], s["md"], s["elap"], s["total"], s["under"],
+                self.errtext())
+        except Exception as e:                              # noqa: BLE001
+            now = "unreadable (%s)" % e
+        print("     (timed out waiting for %s: %s; %s)" % (what, why, now))
         return False
 
     def open_file(self, drive, name, listing):
@@ -1905,6 +1923,69 @@ def leg_pause():
         r.done()
 
 
+def _stall_thread(tid, secs):
+    """Stop ONE THREAD of another process for `secs` of host time (ptrace
+    SEIZE + INTERRUPT on its tid; the process's other threads run on).
+    False where that cannot be done (no Linux ptrace, or not allowed)."""
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.ptrace.argtypes = [ctypes.c_long, ctypes.c_long,
+                                ctypes.c_void_p, ctypes.c_void_p]
+    except (OSError, AttributeError):
+        return False
+    if not sys.platform.startswith("linux") or \
+            libc.ptrace(0x4206, tid, None, None) != 0:      # PTRACE_SEIZE
+        return False
+    try:
+        libc.ptrace(0x4207, tid, None, None)                # PTRACE_INTERRUPT
+        st = ctypes.c_int()
+        libc.waitpid(tid, ctypes.byref(st), 0x40000000)     # __WALL
+        time.sleep(secs)
+    finally:
+        libc.ptrace(17, tid, None, None)                    # PTRACE_DETACH
+    return True
+
+
+def leg_mainstall():
+    """THE CARD ON THE GUEST'S CLOCK: QEMU's MAIN-LOOP thread - and only it
+    - stopped for 300 ms of host time, three times, during a live play on
+    the SB16. Stock QEMU moves the 8237's transfers on that loop in HOST
+    time while the vCPU spends guest time without it, so ONE such stall is
+    SOUND.DRV's watchdog and 'The sound card stopped' (what a loaded soak
+    did to the pause leg); on `qemuvt` (tools/qemu9/i8257-icount.patch) the
+    transfers are a virtual-clock timer and the play ends clean
+    (docs/plans/SOAK-PARALLEL.md 17.8.1). OS88_QEMUVT=0 is the A/B"""
+    leg = "mainstall"
+    r = Rig(leg, sb=True, xcfg=cfg([0, 400, 400, 400, 400, 400]),
+            hd=[(HD0_GEO, [fixture(NEON)], ["SYSTEM/APPDATA"], 0)])
+    try:
+        if not check(leg, "XTMP3 opens", r.open_file("C", NEON,
+                                                      hd_listing([NEON]))):
+            return
+        r.until(lambda: r.st()["md"] == MD_LIVE and r.st()["elap"] >= 2,
+                "two seconds live", 60)
+        states = []
+        for _ in range(3):
+            if not _stall_thread(r.pid, 0.3):
+                print("  NOTE  %s: cannot stop one thread of QEMU here (no "
+                      "Linux ptrace) - not checked" % leg)
+                return
+            states.append(r.st()["state"])
+            gpace(1)
+        r.until(lambda: states.append(r.st()["state"]) or
+                r.st()["state"] in (ST_DONE, ST_ERROR), "the end", 60, 0.2)
+        s = r.st()
+        check(leg, "three 300 ms main-loop stalls: plays to the end, no "
+              "ERROR, no underrun", s["state"] == ST_DONE and
+              ST_ERROR not in states and s["under"] == 0,
+              "state %d under %d '%s' %s" % (s["state"], s["under"],
+                                             r.errtext(),
+                                             sorted(set(states))))
+    finally:
+        r.done()
+
+
 def leg_offvol():
     """THE PACKAGE ON B:, THE SONG ON C: (the docs track's report): a lazy
     part is read from XTMP3.O88 by NAME, and a name resolves where the
@@ -2139,7 +2220,7 @@ def leg_wavdirs():
 LEGS = {"ladder": leg_ladder, "slowdown": leg_slowdown, "conv": leg_conv,
         "cancel": leg_cancel, "full": leg_full, "stale": leg_stale,
         "novol": leg_novol, "twovol": leg_twovol, "playwav": leg_playwav,
-        "pause": leg_pause, "xtpeak": leg_xtpeak, "xtclu": leg_xtclu,
+        "pause": leg_pause, "mainstall": leg_mainstall, "xtpeak": leg_xtpeak, "xtclu": leg_xtclu,
         "chgsrc": leg_chgsrc, "dfdel": leg_dfdel, "batch": leg_batch,
         "rovol": leg_rovol, "packed": leg_packed, "covox": leg_covox,
         "probe32": leg_probe32, "shortmem": leg_shortmem,
@@ -2163,7 +2244,21 @@ def main():
         if not os.path.exists(os88build.at(f)):
             sys.exit("xtmp3eng: no %s - make && make xtmp3stub "
                      "build/mixercfg/SYSTEM.CFG" % f)
-    for name in [n for n in (a.leg or list(LEGS)) if n not in a.skip]:
+    legs = [n for n in (a.leg or list(LEGS)) if n not in a.skip]
+    if os88qemu.icount() and set(legs) & set(RATE_LEGS):
+        # THE CARD'S CLOCK (os88build.qemuvt()): stock QEMU moves the SB16's
+        # DMA on its main loop in HOST time, so under -icount a starved main
+        # loop stops the card. The runner puts the patched QEMU first on
+        # PATH for xtmp3rate (needs `qemuvt`); a hand run does it here
+        vt = (os88build.qemuvt() if os.environ.get("OS88_QEMUVT") != "0"
+              else None)
+        if vt:
+            os.environ["PATH"] = (os.path.dirname(vt) + os.pathsep +
+                                  os.environ.get("PATH", ""))
+        else:
+            print("xtmp3eng: NOTE no qemuvt (tools/setup-qemu9.sh) - the "
+                  "rate legs' card runs in host time")
+    for name in legs:
         _ICOUNT[0] = name in RATE_LEGS
         print("xtmp3eng: %s%s" % (name, " (-icount)" if _ICOUNT[0] and
                                   os88qemu.icount() else ""))

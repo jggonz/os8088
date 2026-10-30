@@ -223,7 +223,15 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the gate disks" % p)
     arm_window()
-    arm_whole()
+    if os.environ.get("OS88_MEGA"):
+        # **kern_mega HAS ONE ARM** (KERN-MEGA-PLAN 12.1 item 1): the launch
+        # above WAS the whole machine - a kern_dos trip, kd_mou_txt drawing -
+        # so arm_whole would be the same run again behind a radio the page
+        # does not draw
+        print("kdmcur: kern_mega - that run was the trip, kern_dos's own "
+              "cursor; there is no second arm")
+    else:
+        arm_whole()
     print("kdmcur: ok - drawn on BOTH arms, and a no-output function "
           "leaves AX alone")
     return 0

@@ -212,6 +212,15 @@ def pace(m, secs):
         time.sleep(secs)
         return 0.0
     want = secs * GUEST_PACE
+    # ...EXACTLY, where the machine can stop itself after that much of its
+    # own time (os88megabochs: Bochs's time breakpoint). Polled, a pause
+    # ends when a reading says it has: free here, but a stop on Bochs, so
+    # its readings are 50-500 host ms apart and the guest ran the gap
+    exact = getattr(m, "pace_exact", None)
+    if exact is not None:
+        got = exact(want)
+        if got is not None:
+            return got
     st = m.status()
     c0 = int(st.get("cycles", 0))
     t0 = time.time()
@@ -781,6 +790,24 @@ class Marty:
         """
         import os88sym
         addr = os88sym.linear(name, defines)
+        if os88sym.segment_of(name, defines) == \
+                os88sym.equates(defines).get("COLD_SEG"):
+            addr -= self.cold_slide(defines)
+        return addr
+
+    def cold_slide(self, defines=()):
+        """How many BYTES below its map address `.cold` runs on this machine
+        right now: VGA_PARA * 16 once kmain_o has slid it, else 0.
+
+        **Ask it AFTER the boot**, never at launch: before cfx_slide runs,
+        [api_coldseg] still reads COLD_HOME on every machine, so a `.cold`
+        address resolved then is the UNSLID one even where the slide is about
+        to happen (tests/stikhiber.py arms both for exactly that reason). A
+        tool that maps sampled CS:IPs back to names subtracts this from every
+        `.cold` row of its table, or it names the routine 0x7F0 bytes away
+        (tools/os88vidprof.py, tools/os88rate.py).
+        """
+        import os88sym
         # **`.cold` MAY HAVE SLID** (docs/plans/MOVABLE-COLD-PLAN.md 2): on a
         # machine with neither a VGA nor an EGA, kmain_o moves it down by
         # VGA_PARA at boot, and from then on a `.cold` label at COLD_SEG is
@@ -789,12 +816,11 @@ class Marty:
         # nothing else ever writes that value (a ROM or the HMA write their
         # own segments, which the rows that want them name themselves)
         eq = os88sym.equates(defines)
-        if "VGA_PARA" in eq and \
-                os88sym.segment_of(name, defines) == eq["COLD_SEG"]:
+        if "VGA_PARA" in eq:
             live = self.read(os88sym.linear("api_coldseg", defines), 2)
             if live[0] | live[1] << 8 == eq["COLD_HOME"] - eq["VGA_PARA"]:
-                addr -= eq["VGA_PARA"] * 16
-        return addr
+                return eq["VGA_PARA"] * 16
+        return 0
 
     def write(self, addr, data):
         return self.cmd(cmd="write", addr=addr, data=data.hex())["written"]
@@ -2499,6 +2525,8 @@ def kernel_up(m, guest=120.0, what="the kernel to reach the desktop"):
             return False
         return t != seen[0]
     until(m, up, what, poll=0.05, guest=guest)
+    if getattr(m, "boot_toast", None):  # kern_mega under Bochs: its boot
+        m.boot_toast()                  # toast, out of the row's way
     return ui_done(m, what)
 
 
@@ -2960,6 +2988,23 @@ def _flat(seg):
     return seg << 4
 
 
+def _linf(m, base):
+    """The segment -> flat function for `m`: `base` (or `seg << 4`), except
+    on a kern_mega machine (tools/os88megacommon.py's MegaMixin), where a
+    kernel word names an LDT SELECTOR and its descriptor's base is the
+    answer - drv_base's HMA sum included, the descriptor already holding
+    it. A value that is no selector falls back to `base`."""
+    b = base or _flat
+    sel = getattr(m, "selector", None)
+    if sel is None:
+        return b
+
+    def f(s):
+        d = sel(s)
+        return d[0] if d else b(s)
+    return f
+
+
 def seg_snap(m, word, spans, base=None, what="a read through a heap base",
              sym=None, step=True):
     """(seg, [bytes, ...]) - the segment the kernel word at flat `word` names
@@ -2988,7 +3033,7 @@ def seg_snap(m, word, spans, base=None, what="a read through a heap base",
     if _is_qemu(m):
         import os88qemu
         return os88qemu.seg_snap(m, word, spans, base, what, step)
-    lin = base or _flat
+    lin = _linf(m, base)
     spans = [(int(o), int(n)) for o, n in spans]
     busy = _busy_addr(m, sym)
     piped = hasattr(m, "batch") and all(n <= 0x10000 for _, n in spans)
@@ -3094,7 +3139,7 @@ def seg_write(m, word, off, data, base=None,
     """Write `data` at offset `off` of the block the kernel word at `word`
     names, on a PAUSED guest with the compactor idle (a torn write corrupts
     whoever holds the old base). Answers the segment written, 0 for none."""
-    lin = base or _flat
+    lin = _linf(m, base)
 
     def put(mm):
         s = _u16(mm.read(word, 2))
@@ -3286,7 +3331,8 @@ def live_reads(m, seg, spans):
     reads otherwise (an int carries no word to re-check against)."""
     if isinstance(seg, LiveSeg):
         return seg.reads(spans)
-    return [m.read((int(seg) << 4) + o, n) for o, n in spans]
+    lin = _linf(m, None)
+    return [m.read(lin(int(seg)) + o, n) for o, n in spans]
 
 
 BIOS_KBUF = 0x41A              # 0040:001A/001C - the BIOS key ring's head, tail
@@ -4041,6 +4087,11 @@ class BpTrace:
         self.error = None       # what the pump died of, re-raised at exit
         self._by_addr = {}
         self._bps = []
+        # 20 bits on an 8088 (a flat address wraps there); kern_mega under
+        # Bochs (os88megabochs) runs `.cold` and `.mega` above 1MB, and a
+        # stop there is a 24-bit linear address that must not alias
+        self._mask = 0xFFFFFFFF if getattr(m, "bochs", False) else 0xFFFFF
+        mask = self._mask
         # LOGGED TARGETS ARE NOT STOPS. `log=True` (every exec target) or
         # `log=[some of them]` arms those as the debug server's logging
         # breakpoints: it notes (address, cycles) and resumes the guest
@@ -4052,19 +4103,25 @@ class BpTrace:
         # server too old to log, the same targets are ordinary stops and the
         # trace is what it always was, only slower.
         logset = set()
+        # A FLAT address is 20 bits on an 8088 - and 32 on kern_mega under
+        # Bochs (tools/os88megabochs.py), where a package region is above
+        # 1MB and CS is a selector, so a stop is named by the linear address
+        # the debugger reports (`flat_ip`) rather than by CS << 4 + IP
+        self._amask = amask = (0xFFFFFFFF if getattr(m, "bochs", False)
+                               else 0xFFFFF)
         if log and log is not True:
             for t in log:
-                logset.add((m.sym(t) if isinstance(t, str) else int(t)) & 0xFFFFF)
+                logset.add((m.sym(t) if isinstance(t, str) else int(t)) & amask)
         self._logaddrs = set()
         for t in targets:
             if isinstance(t, dict):             # a raw breakpoint dict
                 self._bps.append(t)
                 continue
             addr = m.sym(t) if isinstance(t, str) else int(t)
-            self._by_addr.setdefault(addr & 0xFFFFF, t if isinstance(t, str)
+            self._by_addr.setdefault(addr & amask, t if isinstance(t, str)
                                      else "%05X" % addr)
-            if log is True or (addr & 0xFFFFF) in logset:
-                self._logaddrs.add(addr & 0xFFFFF)
+            if log is True or (addr & amask) in logset:
+                self._logaddrs.add(addr & amask)
                 self._bps.append({"type": "exec", "addr": addr, "log": True})
             else:
                 self._bps.append({"type": "exec", "addr": addr})
@@ -4156,7 +4213,10 @@ class BpTrace:
         self._record(st)
 
     def _record(self, st):
-        flat = ((st.get("cs", 0) << 4) + st.get("ip", 0)) & 0xFFFFF
+        if self._amask != 0xFFFFF and "flat_ip" in st:
+            flat = st["flat_ip"]                # kern_mega: see __init__
+        else:
+            flat = ((st.get("cs", 0) << 4) + st.get("ip", 0)) & 0xFFFFF
         rec = {"name": self._by_addr.get(flat, "?%05X" % flat),
                "addr": flat, "cycles": int(st.get("cycles", 0)),
                "stops": st.get("stops"), "instructions": st.get("instructions"),
@@ -4695,6 +4755,46 @@ class _Leg(object):
         self._fk.drop(self._r)
 
 
+def system_disk(path):
+    """The system floppy a row COPIES to put its own files on (a scratch
+    A: built with mtools): PATH itself, and under $OS88_MEGA build/mega.img
+    beside it ($OS88_MEGA_BUILD's when set) - os88megabochs swaps only the
+    shipped images in build/, so a copy of os8088-360.img would boot
+    kern_big under Bochs and the row would test the wrong kernel. mega.img
+    is 1.44MB with the same tree, so what a row writes onto it lands as it
+    would on the 360KB disk (docs/BOCHS.md, "Rows ported from MartyPC")."""
+    if not os.environ.get("OS88_MEGA"):
+        return path
+    return os.path.join(os.environ.get("OS88_MEGA_BUILD")
+                        or os.path.dirname(os.path.abspath(path)), "mega.img")
+
+
+def apps_disk(path):
+    """system_disk's twin for a row that copies a shipped APPS floppy:
+    build/megaapps.img under $OS88_MEGA - the apps disk with kern_mega's
+    package arms (KERN-MEGA-PLAN 14.66)."""
+    if not os.environ.get("OS88_MEGA"):
+        return path
+    return os.path.join(os.environ.get("OS88_MEGA_BUILD")
+                        or os.path.dirname(os.path.abspath(path)),
+                        "megaapps.img")
+
+
+def emulator():
+    """THE EMULATOR `launch` answers with: "86box" under $OS88_EMU=86box (or,
+    for kern_mega, $OS88_MEGA_EMU=86box), "bochs" under $OS88_MEGA otherwise
+    (kern_mega's first shim), else "marty". A row that must know which
+    machine it is on asks this rather than reading the variables itself."""
+    e = (os.environ.get("OS88_EMU") or "").lower()
+    if e not in ("", "marty", "martypc", "86box"):
+        raise MartyError("$OS88_EMU=%s: the emulators a row can be handed to "
+                         "are martypc (the default) and 86box" % e)
+    if e == "86box" or (os.environ.get("OS88_MEGA") and (os.environ.get(
+            "OS88_MEGA_EMU") or "").lower() == "86box"):
+        return "86box"
+    return "bochs" if os.environ.get("OS88_MEGA") else "marty"
+
+
 def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
            card=None, label=None, detach=False, rom=None):
@@ -4750,6 +4850,32 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     """
     import subprocess
     import time
+
+    # $OS88_MEGA: the same row on kern_mega, under Bochs - every request
+    # this module makes is answered by tools/os88megabochs.py instead
+    # ...or under 86Box, with $OS88_MEGA_EMU=86box (or $OS88_EMU=86box): the
+    # hardware Bochs has not got - a CGA, a Hercules, two cards, a real-time
+    # Sound Blaster (tools/os88mega86box.py, docs/86BOX.md)
+    emu = emulator()
+    if os.environ.get("OS88_MEGA") and emu == "86box":
+        import os88mega86box
+        return os88mega86box.launch(image, apps=apps, machine=machine,
+                                   boot=boot, label=label, extra=extra,
+                                   run_dir=run_dir)
+    # $OS88_EMU=86box without $OS88_MEGA: the SAME row, its own kernel and its
+    # own disks, on 86Box - the machines MartyPC has not got: a 286 or a 386,
+    # an AT's clock chip, a PS/2 mouse, a network card (tools/os88box86api.py,
+    # docs/86BOX.md "kern_big rows on 86Box")
+    if emu == "86box" and not os.environ.get("OS88_MEGA"):
+        import os88box86api
+        return os88box86api.launch(image, apps=apps, machine=machine,
+                                   boot=boot, label=label, extra=extra,
+                                   run_dir=run_dir)
+    if os.environ.get("OS88_MEGA"):
+        import os88megabochs
+        return os88megabochs.launch(image, apps=apps, machine=machine,
+                                     boot=boot, label=label, extra=extra,
+                                     run_dir=run_dir)
 
     base = base_run_dir()
     if not os.path.isdir(base):

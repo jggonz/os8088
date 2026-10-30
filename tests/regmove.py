@@ -82,6 +82,18 @@ def main():
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
+        mega = getattr(m, "bochs", False)
+
+        def key(v):
+            """A segment WORD as mem_tab keys its claim. On kern_mega
+            (KERN-MEGA-MEMORY-PLAN MC7.4) a region, its I_SPTR and the owner
+            word of every claim it holds are an LDT SELECTOR that a move
+            REBASES and never changes, so "it moved" and "nothing still holds
+            the old one" are asked of the PARAGRAPH under it. Anything that
+            is not a selector (an instance slot, a kernel tag, 0) is itself"""
+            if mega and v and v < 0xA000 and v & 4:
+                return m.lin(v) >> 4
+            return v
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         dslot = dispcp.win_list(m, S)[-1]
@@ -109,6 +121,7 @@ def main():
         mo.drag(pt_win.x + 60, pt_win.y + 9, 60, pt_win.y + 9)  # out of the way
         os88marty.settle(m)
         pt_seg, pt_win = pkg_seg(m, S, "Paint")
+        pt_seg = key(pt_seg)
         print("paint region %04x at %s" % (pt_seg, (pt_win.x, pt_win.y)))
 
         # --- NOTEPAD under it: the one that has to move ---------------------
@@ -123,6 +136,7 @@ def main():
         mo.drag(ca_win.x + 60, ca_win.y + 9, ca_win.x + 60, ca_win.y + 9 + 25)
         os88marty.settle(m)
         ca_seg, ca_win = pkg_seg(m, S, "Note Pad")
+        ca_seg = key(ca_seg)
         print("calc   region %04x at %s"
               % (ca_seg, (ca_win.x, ca_win.y, ca_win.w, ca_win.h)))
         if ca_seg > pt_seg:
@@ -179,7 +193,10 @@ def main():
             top = u16(m.read(S("mem_top"), 2))
             print("   -- %s (wm_pkgd=%d)" % (tag, m.read(S("wm_pkgd"), 1)[0]))
             fill = base
-            for b, p, o, r in claims(m, S):
+            cl = claims(m, S)
+            if mega:                    # (kern_mega's table is not in base
+                cl = sorted(cl)         # order, so the holes read as one)
+            for b, p, o, r in cl:
                 if b > fill:
                     print("        %5d KB HOLE" % ((b - fill) // 64))
                 print("      %04x %5d KB own %04x%s"
@@ -224,7 +241,7 @@ def main():
             m.key("KeyA")
             try:                            # a fill or an ask: the move it
                 os88marty.until(            # forces, bounded by what an idle
-                    m, lambda _: pkg_seg(m, S, "Note Pad")[0]  # box's
+                    m, lambda _: key(pkg_seg(m, S, "Note Pad")[0])  # box's
                     != ca_seg, "Note Pad's region to move",       # pause gave it
                     poll=0.25,
                     guest=6 * os88marty.GUEST_PACE)
@@ -234,7 +251,7 @@ def main():
             os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
                               what="the compaction")
             os88marty.settle(m)
-            if pkg_seg(m, S, "Note Pad")[0] != ca_seg:
+            if key(pkg_seg(m, S, "Note Pad")[0]) != ca_seg:
                 break
         dump("after the forcing asks")
         ca_now, ca_win2 = pkg_seg(m, S, "Note Pad")
@@ -252,6 +269,7 @@ def main():
                   % [w.title for w in os88geom.windows(m, S) if w.visible])
             print("VERDICT: 1 PROBLEM(S)")
             return 1
+        ca_now = key(ca_now)
         moved = ca_now != ca_seg
         print("  2 the region moved         %s"
               % ("%04x -> %04x" % (ca_seg, ca_now) if moved
@@ -260,8 +278,8 @@ def main():
 
         # 3: every kernel word followed
         inst = m.read(S("inst_tab"), 12 * 32)
-        sptrs = [u16(inst, i * 32 + 6) for i in range(12)]
-        owners = sorted(set(c[2] for c in claims(m, S)))
+        sptrs = [key(u16(inst, i * 32 + 6)) for i in range(12)]
+        owners = sorted(set(key(c[2]) for c in claims(m, S)))
         ok3 = (ca_now in sptrs) and (ca_seg not in sptrs) \
             and (ca_seg not in owners)
         print("  3 kernel words followed    %s"
@@ -272,7 +290,8 @@ def main():
         bad += not ok3
 
         if moved:
-            h1 = hashlib.md5(m.read(ca_now * 16, 2048)).hexdigest()
+            h1 = hashlib.md5(m.read(ca_now * 16, 2048)).hexdigest()  # (a
+            # paragraph on both kernels: key() above)
             ok4 = h1 == h0
             print("  4 contents survived        %s  (%s)"
                   % ("OK" if ok4 else "CORRUPT", h1[:12]))

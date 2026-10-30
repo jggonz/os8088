@@ -165,6 +165,22 @@ def main():
                      quick=True) as ui:
         m = ui.m
         S = ui._S
+        mega = getattr(m, "bochs", False)
+
+        def L(sg, off=0):
+            """SEG:OFF linear: an LDT selector's base on kern_mega"""
+            return m.lin(sg, off) if mega else sg * 16 + off
+
+        def K(v):
+            """A segment word as the heap keys its block - itself on a
+            real-mode kernel. On kern_mega (KERN-MEGA-MEMORY-PLAN MC7.4) the
+            region, every base word and every claim owner are LDT selectors
+            a move REBASES and never changes, so "moved", "names a claim it
+            holds" and the bytes are asked of the PARAGRAPH under each"""
+            if mega and v and 0x100 <= v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
 
         def idle(what):
             M.ui_done(m, what, limit=600)
@@ -182,7 +198,7 @@ def main():
                 r = m.read(S("inst_tab") + i * os88geom.I_RECSZ,
                            os88geom.I_RECSZ)
                 c = u16(r, os88geom.I_SPTR)
-                h = bytes(m.read(c * 16, 32)) if c else b""
+                h = bytes(m.read(L(c), 32)) if c else b""
                 if (r[os88geom.I_STATE] == 1 and c and h[:2] == head[:2]
                         and h[12:] == head[12:]):
                     return c
@@ -202,8 +218,8 @@ def main():
             if not w:
                 return False
             seg = u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
-            img = u16(m.read(seg * 16 + 8, 2))
-            b = m.read(seg * 16 + img, 48)
+            img = u16(m.read(L(seg, 8), 2))
+            b = m.read(L(seg, img), 48)
             done, posted, woke = b[28], b[46], b[47]
             return bool(done and not m.read(S("gfx_lock_flag"), 1)[0]
                         and (woke or not posted))
@@ -227,12 +243,12 @@ def main():
         seg = [None]
 
         def W(n):
-            return u16(m.read(seg[0] * 16 + syms[n], 2))
+            return u16(m.read(L(seg[0], syms[n]), 2))
 
         def doc():
             n = W(p + "_len")
-            return (bytes(m.read(W(p + "_dseg") * 16, n)),
-                    bytes(m.read(W(p + "_cseg") * 16, n)))
+            return (bytes(m.read(K(W(p + "_dseg")) * 16, n)),
+                    bytes(m.read(K(W(p + "_cseg")) * 16, n)))
 
         def live(word, base):
             """The bytes of the claim `word` names that mean something."""
@@ -294,7 +310,7 @@ def main():
         n0 = W(p + "_len")
         m.type_text("compactor ")
         M.until(m, lambda _: W(p + "_len") == n0 + 10
-                and m.read(seg[0] * 16 + syms[p + "_uopen"], 1)[0] == 0,
+                and m.read(L(seg[0], syms[p + "_uopen"]), 1)[0] == 0,
                 "the typing, and its undo group to close", poll=0.1, limit=60)
         idle("the typing")
         for _ in range(4):
@@ -314,17 +330,17 @@ def main():
             pics = 1
 
         def picseg(i):
-            return u16(m.read(seg[0] * 16 + syms["sc_pictab"] + i * 8 + 6, 2))
+            return K(u16(m.read(L(seg[0], syms["sc_pictab"] + i * 8 + 6), 2)))
 
         def picbytes(i, base):
-            rec = bytes(m.read(seg[0] * 16 + syms["sc_pictab"] + i * 8, 8))
+            rec = bytes(m.read(L(seg[0], syms["sc_pictab"] + i * 8), 8))
             n = u16(rec, 4) * u16(rec, 2)
             return hashlib.md5(bytes(m.read(base * 16, n))).hexdigest()
 
         # --- bank every base word and its live bytes ------------------------
         bank = {}
         for wd in WORDS:
-            b = W(p + "_" + wd)
+            b = K(W(p + "_" + wd))
             bank[wd] = (b, ) + live(wd, b) if b else (0, None, 0)
             print("   [%s_%s] = %04x" % (p, wd, b))
         pbank = {i: (picseg(i), picbytes(i, picseg(i))) for i in range(pics)}
@@ -333,7 +349,8 @@ def main():
         check("SETUP: all six claims exist",
               all(bank[wd][0] for wd in WORDS),
               "%r" % {wd: "%04x" % bank[wd][0] for wd in WORDS})
-        mine0 = [c for c in claims() if c.own == seg[0] and c.seg != seg[0]]
+        mine0 = [c for c in claims() if K(c.own) == K(seg[0])
+                 and c.seg != K(seg[0])]
         print("   it holds %s" % ["%04x/%dKB%s" % (c.seg, c.para // 64,
                                                   "" if c.pinned else "*")
                                   for c in mine0])
@@ -353,7 +370,8 @@ def main():
         if seg[0] != seg0:
             print("   %s ITSELF moved %04x -> %04x (its region is movable)"
                   % (a.app, seg0, seg[0]))
-        mine = [c for c in claims() if c.own == seg[0] and c.seg != seg[0]]
+        mine = [c for c in claims() if K(c.own) == K(seg[0])
+                and c.seg != K(seg[0])]
         held = {c.seg for c in mine}
         print("   it now holds %s" % ["%04x/%dKB%s" % (c.seg, c.para // 64,
                                                       "" if c.pinned else "*")
@@ -369,7 +387,7 @@ def main():
         moved = 0
         for wd in WORDS:
             b0, h0, n = bank[wd]
-            b1 = W(p + "_" + wd)
+            b1 = K(W(p + "_" + wd))
             if b1 != b0:
                 moved += 1
             check("2 [%s_%s] %s names a claim it holds"

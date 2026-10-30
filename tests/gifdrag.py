@@ -136,9 +136,11 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
                      "the %.0f%% bar - and this machine's interrupt floor is "
                      "HALF the one SPEC.md 8.7 sizes against (SPEC.md 8.7.4)"
                      % (label, n, u, z, 100 * p, 100 * BAR))
-        a = m.status()
+        # (Bochs counts them with `ptime`, the shim's ticks(): kern_mega)
+        icount = getattr(m, "ticks", lambda: m.status()["instructions"])
+        a = icount()
         M.pace(m, 0.5)          # TIME: is it retiring instructions at all?
-        if m.status()["instructions"] == a["instructions"]:
+        if icount() == a:
             fail("%s: the guest retired no instructions - a cli/hlt, which is "
                  "sch_stkdie (SPEC.md 8.8 draws the panel that says so)" % label)
             m.shot("build/gifdrag-freeze.png", rendered=True)

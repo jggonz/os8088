@@ -44,6 +44,7 @@ import base64
 import io
 import os
 import queue
+import struct
 import subprocess
 import sys
 import threading
@@ -372,6 +373,9 @@ GROUPS = [
      _for(("text",), PF_WORDS["text"])),
     ("Colour", "CGA, 4 colours", ("cga_palette", "cga_bright", "cga_bg"),
      _for(("cga4",), PF_WORDS["cga4"])),
+    ("Colour", "CGA colours: what mixes", ("colour_mix", "colour_clip",
+                                           "edge_solid"),
+     _for(("cga4", "c160"), "CGA 4 colours or CGA 16 colours at 160 x 100")),
     ("Colour", "4 and 16 colours", ("vga4_plan_cap", "vga4_sparse"),
      _FOUR16),
     ("Colour", "CGA composite, 512 colours",
@@ -448,7 +452,8 @@ GROUPS = [
     ("Degrade to Fit", "Or, without the ladder: for the whole clip",
      LADDER_SETS, ALWAYS),
     ("Degrade to Fit", "Held frames, either way", ("slow_cost",
-                                                    "flip_hold"), ALWAYS),
+                                                    "flip_hold",
+                                                    "flip_build"), ALWAYS),
     ("Trade-offs", "When a frame is cut", ("lookahead", "lookahead_floor",
                                                 "error", "cut",
                                                 "frame_cap", "edges",
@@ -491,15 +496,13 @@ FIELD_WHEN = {
     "flip": lambda c: ("A Hercules's second page is page-ahead's: flipping "
                        "every frame is a VGA's (its latches copy the page)."
                        if c["layout"] == "herc" else
-                       "A NARROW screen's pages are page-ahead's (--pages): "
-                       "flipping every frame is a screen with 80-byte rows'."
-                       if str(c.get("screen", "")).endswith("n") else
                        "Flipping is a stream's played full screen: not Live "
                        "or resident." if c["live"] or c["resident"] else
                        None) if c["layout"] in ("modex", "herc") or (
         c["pixfmt"] == "vga4" and c["screen"] not in ("", "640x480")) else
     "Two pages are Mode X's, or 16 colours' on a Screen of their own "
-    "(320x200, 320x240, 640x350, 640x400) - and %s has one page."
+    "(320x200, 320x240, 640x350, 640x400, 320x200n, 320x240n) - and %s "
+    "has one page."
     % ("mode 12h's 640 x 480" if c["pixfmt"] == "vga4" else
        "mode 13h" if c["pixfmt"] == "vga8" else
        "this %s file" % c["pixfmt"]),
@@ -514,6 +517,15 @@ FIELD_WHEN = {
         "A looped file or a layer is drawn against the frame before."
         if c.get("loop_from") or c.get("layer_disk") or
         c.get("layer_profile") else None),
+    # (98.2.5.2.1: a scene built ahead on the page the glass is not
+    # showing, held records drawn there, the scenes its palettes')
+    "flip_build": lambda c: FIELD_WHEN["flip_own"](c) or (
+        "Building a scene ahead is a file against its own pages': turn "
+        "Flip own on." if not c.get("flip_own") else
+        "Held frames drawn ahead build it: Flip hold ahead."
+        if c.get("flip_hold", "ahead") != "ahead" else
+        "The scenes are the palettes': turn Scene palettes on."
+        if not c.get("scene_palettes") else None),
     "lag": lambda c: "A Live file is drawn on the desktop: it keeps time "
     "frame by frame." if c.get("live") else None
     if c["audio"] not in ("none", "speaker") else
@@ -786,7 +798,8 @@ CONTEXT_FIELDS = ("preset", "pixfmt", "profile", "live", "layout", "audio",
                   "text_colour", "comp_dither", "spk_shape", "aim",
                   "resident", "buffer_sound_ahead", "screen", "palette",
                   "scene_palettes", "flip", "loop_from", "repeat",
-                  "layer_disk", "layer_profile", "page_ahead", "step_down",
+                  "layer_disk", "layer_profile", "page_ahead", "pages",
+                  "step_down",
                   "ladder", "fps", "coarse_cut")
 # the choices that IMPLY others (os88venc.implied): changing one refills them
 IMPLYING = ("preset", "pixfmt", "profile", "live")
@@ -834,6 +847,8 @@ SUGGEST = {"rate": ["", "22050", "11025", "8000", "5512"],
            "volume": ["", "0.5", "1.5", "2", "3dB", "6dB"],
            "clip": ["", "0", "16"],
            "desktop_clip": ["0", "16", "32"],
+           "colour_clip": ["", "0", "16", "64", "255"],
+           "edge_solid": ["0", "32", "48", "64"],
            "text_busy": ["", "12", "2"],
            "layer_disk": [""],
            "layer_prefill": ["", "16", "32", "64", "all"],
@@ -857,7 +872,8 @@ BLANK_WORD = {"preset": "none", "layout": "auto", "pixfmt": "auto",
               "text_busy": "auto", "bank": "none", "layer_bank": "none",
               "layer_pool": "as Pool", "layer_disk": "none",
               "layer_prefill": "none", "prefill": "%g" % V.BANK_PREFILL,
-              "vga4_sparse": "auto", "worth": "%g" % V.AIM_WORTH}
+              "vga4_sparse": "auto", "colour_clip": "as Clip",
+              "worth": "%g" % V.AIM_WORTH}
 
 
 def blank_word(dest):
@@ -1080,10 +1096,18 @@ def form_context(values):
                 # (what the narrower rules - flip's, page-ahead's, the
                 # layer's - read: never here, so they never greyed a thing)
                 flip=g("flip") not in ("", "0", "False"),
+                # (--flip-build's rule reads these two: missing, it saw
+                # Flip own off and greyed itself whatever the form said)
+                flip_own=g("flip_own") not in ("", "0", "False"),
+                flip_hold=g("flip_hold") or "ahead",
                 repeat=g("repeat") not in ("", "0", "False"),
                 loop_from=g("loop_from"), layer_disk=g("layer_disk"),
                 layer_profile=g("layer_profile"),
                 page_ahead=g("page_ahead") or "auto",
+                # (the Pages field, read by page-ahead's, the keys' and the
+                # pool's rules - missing, every one of them saw "2", and
+                # Flip greyed Page ahead whatever Pages said)
+                pages=g("pages") or "max",
                 step_down=g("step_down") or "on",
                 ladder=g("ladder"), fps=g("fps") or imp.get("fps", ""),
                 # (VERSION 2's: what Blocks greys, and is greyed by)
@@ -1551,11 +1575,19 @@ def preview_frames(path, most=2000, tick=None):
     f0 = vid.first_shown(r)
     step = max(1, -(-(r.frames - f0) // most))
     out = []
-    for f, surf, rec, at, i in vid.v88_frames(r):
-        if tick:
-            tick(f, r.frames)
-        if f >= f0 and (f - f0) % step == 0:
-            out.append((f, render(r, surf, f)))
+    shown = prev = None                 # (a HELD record's frame, 98.1.3.9:
+    for f, surf, rec, at, i in vid.v88_frames(r):   # the glass keeps the
+        if tick:                        # picture before it while the
+            tick(f, r.frames)           # record builds the hidden page -
+        held = getattr(r, "held", False) and \
+            struct.unpack_from("<H", rec, 2)[0] & vid.REC_HELD
+        if not held:                    # which v88_frames hands back, and
+            shown = None                # the preview showed it half built
+        elif shown is None:             # in the last scene's colours:
+            shown = prev or bytes(surf)     # --flip-build's held run, the
+        if f >= f0 and (f - f0) % step == 0:    # owner's 2026-10-27)
+            out.append((f, render(r, shown if held else surf, f)))
+        prev = bytes(surf) if not held else prev
     return r, out
 
 

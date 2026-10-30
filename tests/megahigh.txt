@@ -32,28 +32,6 @@
 
 # --- high --------------------------------------------------------------------
 
-high apps/sheet/sheet.asm       # ITS OWN CS STAMPED INTO TWO OVERLAYS: ch_ovbind
-    # (apps/os88chartovl.inc) and sh_ovbind (sheet.asm, `mov ax, cs`) write the
-    # region's CS into the vector tables the chart and macro modules far-call
-    # back through, as real-mode far pointers. The modules ARE parts of
-    # SHEET.O88 now (SPEC.md 82.16.12, the sidecars-to-parts PR #289's review
-    # flagged), but those tables still carry a real-mode CS, so this is retired
-    # when they are reached through a selector kern_mega can patch. Not run on
-    # kern_mega.
-high apps/realdmg/realdmg.asm     # NOT YET RUN HIGH: since REALDMG-SPEC
-    # 16.2.4 the far vectors the core jumps through (S_EVVEC, S_IORVEC,
-    # S_IOWVEC, S_MBCVEC) hold the region's CODE selector (`mov ax, cs`) and
-    # rw_reloc re-stamps them by rw_csel, so the line's first reason is gone;
-    # what is left is that the region above 1MB has never been run - the
-    # parts carve, the worker's restart and the log's pins against a region
-    # whose selectors do not move. Retired by one MEGATRAP run with OS88_HIGH
-    # in the class byte (tests/rdgmega.py's shape) and the declaration.
-high apps/browser/browser.asm     # THE APP RETAINS CLAIM SEGMENTS: br_srcclaim
-    # saves OSAPI_MEM_CLAIM's DX in br_srcseg, and br_claimpage retains the
-    # document and line claims in br_docseg/br_lseg for later direct ES access.
-    # Keep it conventional until kern_mega verifies these handles across
-    # worker dispatch, regrowth and cleanup.
-
 high apps/waverack/waverack.asm   # ITS OWN DS COMPARED AS A PARAGRAPH: wc_myslot
     # (apps/waverack/wrrec.inc) finds the instance's slot - the recovery
     # markers' name for the recorder (SPEC.md 123.7) - as the
@@ -73,73 +51,7 @@ highmem apps/waverack/waverack.asm   # A CLAIM STEPPED BY PARAGRAPH: wt_hoff
     # OSAPI_MEM_HUGE's step for the hold (KERN-MEGA-PLAN 14.67) and a run on
     # kern_mega.
 
-highmem apps/sheet/sheet.asm    # FAR-CALLS CODE IN A CLAIM: its two module parts
-    # are read into claims and entered with `call far [ch_ovfar]` /
-    # `call far [sh_m2far]` at (0, the claim's segment) - os88chartovl.inc's
-    # ch_ovneed and sheet.asm's sh_m2need - which OS88_HIGHMEM's contract
-    # rules out (apps/os88api.inc). Retired with the `high` line above.
-highmem apps/realdmg/realdmg.asm  # PARAGRAPH ARITHMETIC ON ITS CLAIMS: cartridge
-    # RAM banks at S_RAMSEG + bank x 200h (rdg_rambank, rdgsys.inc), the bank
-    # cache's slots at rw_slotseg + slot x 400h (rwbank.inc), the recompiler's
-    # block table at its cache's segment + 1000h and its part past the table
-    # (rw_jitsegs, rw_jitget), and the cache and part entered as CODE through
-    # OSAPI_MEM_CODESEL's identity alias, which a lone data selector above
-    # 1MB has none of. (Its link patches no longer write through CS -
-    # REALDMG-SPEC 16.2.4 - and kern_mega's arm keeps the cartridge itself
-    # above 1MB in place, 10.3.1.) Retired by addressing each claim at its own
-    # selector and a code twin for the cache segments.
-
-highmem apps/xtmp3/xtmp3.asm   # PARAGRAPH ARITHMETIC ON ITS LOOK-AHEAD CLAIM:
-    # a Decode First's stage is a segment of its own, cut from the ring's claim
-    # as ap_la_seg + (x3_lasz + X3_PCMRES) / 16 (x3conv.inc's conversion start,
-    # [x3c_sseg]), because the 8-claims-a-owner limit (SPEC.md 50) puts ring,
-    # PCM and stage in ONE claim, which with 32 KB clusters passes 64KB and a
-    # single offset. Right on the identity map, a different descriptor on an
-    # LDT selector over exactly the KB asked. A conventional HOLD (x3hold.inc,
-    # SPEC.md 121.6.1) is read and copied out at hold + (offset >> 7 << 3),
-    # the 8-paragraph grid, which is the same arithmetic. Every other claim is opaque: the
-    # work segments are loaded whole by the parts, the external ring is
-    # OSAPI_MEM_CLAIM_DMA_HI (conventional by contract), and the parts are
-    # fetched through the DMA door with no OP_WANT_HIFETCH. Retired by
-    # addressing the stage as an offset into the claim when it fits 64KB (the
-    # XT path's ceiling always does) and a separate segment only when it does
-    # not, or by 14.12's flat arm at x3c_sseg's five users. OS88_HIGH it says.
-highmem apps/pixel/pixel.asm     # PARAGRAPH ARITHMETIC ON EVERY CLAIM IT HOLDS
-    # (KERN-MEGA-PLAN 14.40 item 4): the master is addressed as MSEG +
-    # (offset >> 7 << 3) at nine sites, the work claim is cut into
-    # sub-buffers by paragraph offsets (PX_WGRID, px_wo_*) handed to the parts
-    # as PXK_RSEG/PXK_DSEG, the PNG scanlines sit at PXK_DSEG + PZ_WPARA, the
-    # JPEG progressive store at the scratch + JV_SBASE, the histogram tail past
-    # the master and the animation's backup inside its claim. Right on the
-    # identity map, meaningless on an LDT selector over exactly the KB asked.
-    # Retired by 14.12's "flat arm" at every site (seg = claim, offset = the
-    # absolute address when `test dl, 4`) - a rewrite of PiXEL's addressing.
-    # OS88_HIGH it already says.
-highmem apps/browser/browser.asm  # THE SOURCE CLAIM GROWS TO 1 MIB:
-    # br_srcgrow grows one segment with OSAPI_MEM_REGROW and br_docensure
-    # grows the formatted arena using 16-bit offsets. Keep these potentially
-    # larger-than-64-KiB arenas conventional/EMS until kern_mega validates the
-    # selector limits and regrowth path end to end.
-
 # --- both --------------------------------------------------------------------
-
-high apps/lemmings/lemmings.asm  # NEVER RUN ON kern_mega, and it cannot be in
-    # this tree: SPEC.md 116's data is the original DOS Lemmings' 26 files,
-    # fetched into a developer's tree by tools/getlemmings.py and never
-    # committed, so no Bochs boot here has anything for it to load. Reading the
-    # code found nothing on its OWN region - every segment it computes is a
-    # claim's (below) and crt0 converts the overlay's CS (OS88_CODESEL) - so
-    # what retires this line is one MEGATRAP run with the data present
-    # (`make megatrap`, tools/os88bochs.py, docs/BOCHS.md) and the declaration
-    # (KERN-MEGA-PLAN 14.67).
-highmem apps/lemmings/lemmings.asm  # PARAGRAPH ARITHMETIC ON ITS CLAIMS:
-    # ovl_far (lemload.c) makes a far pointer as base + (hi << 12) + (lo >> 4)
-    # into lem_cl_main (60KB) and lem_cl_bank, lem_far_add (lemobj.c)
-    # renormalises by `seg += o >> 4`, lemload.c's part reads land at
-    # seg + p * 4032, and lemovl.c steps `seg += psz >> 2`. Right on the
-    # identity map, a different descriptor on an LDT selector over exactly the
-    # KB asked. Retired by 14.12's flat arm at those four sites, or by
-    # OSAPI_MEM_HUGE's step for the two claims over 64KB (KERN-MEGA-PLAN 14.67).
 
 high apps/win16/win16.asm       # IT REFUSES UNDER PROTECTED MODE: w16_pmcheck
     # (win16.asm) toasts and ends at entry when OSAPI_CPU_INFO answers

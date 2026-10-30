@@ -189,7 +189,8 @@ def region(fb, x0, y0, w, h):
 
 def vga(tmp):
     img = os.path.join(tmp, "os8088-360.img")
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                img)
     with os88ui.boot(img, machine="os8088_xt_vga", quick=True) as ui:
         c = Clock(ui, tmp)
         m = c.m
@@ -318,8 +319,13 @@ def vga(tmp):
         t0 = struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
         m.reset()
         m.run()
-        ui._wait(lambda: struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
-                 < t0, "the BIOS tick to restart", 60)
+        if not getattr(m, "bochs", False):
+            # (kern_mega under Bochs: the reset IS a new machine - a power
+            # cycle, tools/os88megabochs.py - whose AT BIOS starts 40:6C at
+            # the RTC's time of day, so the counter does not restart; there
+            # is no old desktop for ui.up to mistake)
+            ui._wait(lambda: struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
+                     < t0, "the BIOS tick to restart", 60)
         ui.up()                 # the clock ticks: a settle would wait it out
         os88marty.no_saver(m)
         ui._wait(lambda: c.find() is not None, "the clock's relaunch", 120,

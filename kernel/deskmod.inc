@@ -195,14 +195,13 @@ dkd_verb:
     jne .no                     ; App library's paragraph, at the end of
     mov dx, cs                  ; this image - where its own org 0 is
 %ifdef KERN_MEGA
-    test dl, 4                  ; kern_mega in protected mode: CS is this
-    jz .libseg                  ; image's LDT CODE alias, (S >> 2) | 4, and
-    cmp dx, MEGA_LDT_FREE0 * 8  ; (or, above 1MB, a pair's code half, whose
-    jae .libhi                  ; library gets a descriptor of its own)
-    add dx, (dkd_lib - modj_hdr) >> 6 ; a paragraph count added to it names
-    clc                         ; another descriptor - every Sticky App said
-    retf                        ; "No desk layer". The library is 512-aligned
-.libhi:                         ; (KERN-MEGA-PLAN 13.5: mega_dklibf)
+    test dl, 4                  ; kern_mega in protected mode: CS is the
+    jz .libseg                  ; CODE half of this image's pair (KERN-MEGA-
+                                ; MEMORY-PLAN MC7.4), and a paragraph count
+                                ; added to it names another descriptor -
+                                ; every Sticky App said "No desk layer" - so
+                                ; the library gets a descriptor of its own
+                                ; (KERN-MEGA-PLAN 13.5: mega_dklibf)
     push ax
     push cx
     mov ax, dx

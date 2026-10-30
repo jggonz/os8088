@@ -97,18 +97,30 @@ def main():
         def eseg():
             return pkg_seg(m, S, P["title"])[0]
 
+        mega = getattr(m, "bochs", False)
+
+        def lin(sg, off=0):
+            return m.lin(sg, off) if mega else sg * 16 + off
+
+        def para(sg):
+            """A segment word as mem_tab keys its claim: on kern_mega
+            (MC7.4) a SELECTOR that a move rebases and never changes, so
+            the claim is the paragraph under it - and "it moved", "romseg
+            followed" are asked of paragraphs. The word itself elsewhere"""
+            return (m.lin(sg) >> 4) if mega and sg else sg
+
         def w(seg, name, off=0):
-            return u16(m.read(seg * 16 + C[name] + off, 2))
+            return u16(m.read(lin(seg, C[name] + off), 2))
 
         def state(seg):
-            st = dict(ram=w(seg, P["rec"], M_RAMSEG),
-                      rom=w(seg, P["rec"], M_ROMSEG),
+            st = dict(ram=para(w(seg, P["rec"], M_RAMSEG)),
+                      rom=para(w(seg, P["rec"], M_ROMSEG)),
                       pc=w(seg, P["rec"], M_PC),
-                      opb=w(seg, "op_base"), st=w(seg, P["state"]))
+                      opb=para(w(seg, "op_base")), st=w(seg, P["state"]))
             if P["ovl"]:
-                st["ovs"] = w(seg, "cc_ovseg")
+                st["ovs"] = para(w(seg, "cc_ovseg"))
             if P["chr"]:
-                st["chr"] = w(seg, P["chr"])
+                st["chr"] = para(w(seg, P["chr"]))
             return st
 
         def rloc(base):
@@ -122,8 +134,8 @@ def main():
 
         def hf_rn():
             hseg, _ = pkg_seg(m, S, "Heap")
-            img = u16(m.read(hseg * 16 + 8, 2))
-            return u16(m.read(hseg * 16 + img + 152, 2))   # heapfrag's hf_rn
+            img = u16(m.read(lin(hseg, 8), 2))
+            return u16(m.read(lin(hseg, img + 152), 2))   # heapfrag's hf_rn
 
         ui.open_drive("B")
         np = ui.open("NOTEPAD.O88")     # the ceiling, and a floor document

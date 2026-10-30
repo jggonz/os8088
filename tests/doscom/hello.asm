@@ -41,6 +41,19 @@ start:
     mov al, 0x40                ; divisor 0x4000 = 72.8 Hz
     out 0x40, al
 %endif
+%ifdef SETTIME
+    ; --- 0c. ...AND THE CLOCK SET (KERN-MEGA-PLAN 14.114) ------------------
+    ; AH=2Dh to 12:00:00. Under kern_dos nothing restores 0040:006C, and the
+    ; way home measured the run as that count less the handover's - so the
+    ; SET became part of the run, and a set BACK (this program run twice: the
+    ; window's run already put the count at noon) a negative run, read as a
+    ; midnight crossed - the session came home a DAY on. The step is never
+    ; time the program ran.
+    mov ah, 0x2D
+    mov cx, 12 << 8
+    xor dx, dx
+    int 0x21
+%endif
     mov ah, 0x09                ; --- 1. say who we are -----------------------
     mov dx, msg_hi
     int 0x21

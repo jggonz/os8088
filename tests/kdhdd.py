@@ -46,7 +46,10 @@ import os88ui                                                  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = "build/martypc/run/media/hdds/default_xtide.vhd"
-KERNEL = "build/kernel.sys"
+# kern_mega (tests/megaport.txt) boots ITS kernel, boot record, modules and
+# DOS.O88 off the fixed disk - megak/'s, the Makefile's $(MEGADIR)
+KB = "build/megak" if os.environ.get("OS88_MEGA") else "build"
+KERNEL = KB + "/kernel.sys"
 MACHINE = "os8088_xt_hdd"        # kdreturn's machine, for its reason
 VHD = os.path.abspath("build/kdhdd-%d.vhd" % os.getpid())
 FLOPPY = os.path.abspath("build/kdhdd-%d.img" % os.getpid())
@@ -73,7 +76,7 @@ def rows(m):
 
 
 def fixture():
-    for p in (TEMPLATE, KERNEL, "build/kdos/DOS.O88"):
+    for p in (TEMPLATE, KERNEL, KB + "/kdos/DOS.O88"):
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the DOS pieces and "
                  "`make marty` the template" % p)
@@ -101,12 +104,12 @@ def fixture():
         open(p, "w").write(mark + "\n")
     subprocess.check_call(
         ["python3", "tools/os88hdd.py", "--template", TEMPLATE, "--out", VHD,
-         "--kernel", KERNEL, "--vbr", "build/boothd.bin",
+         "--kernel", KERNEL, "--vbr", KB + "/boothd.bin",
          "--mbr", "build/mbr.bin",
-         "--file", "HIBER.DRV=build/hiber.drv",
-         "--file", "CTRL.DRV=build/ctrl.drv",
+         "--file", "HIBER.DRV=" + KB + "/hiber.drv",
+         "--file", "CTRL.DRV=" + KB + "/ctrl.drv",
          "--file", "HDD.DRV=build/hdd.drv",
-         "--file", "DOS.O88=build/kdos/DOS.O88",
+         "--file", "DOS.O88=" + KB + "/kdos/DOS.O88",
          "--file", "%s=%s" % (PROG, prog),
          "--file", "KDDATA.TXT=" + dc], cwd=ROOT)
     subprocess.check_call(
@@ -182,7 +185,7 @@ def dos_state(m):
     Resolving each time costs one read of the window table.
     """
     dm = dosmap.package()                   # cached after the first call
-    return m.read((dosmap.instance(m) << 4) + dm["dos_state"], 1)[0]
+    return m.read(dosmap.lin(m, dosmap.instance(m), dm["dos_state"]), 1)[0]
 
 
 def marker(rs):
@@ -222,7 +225,7 @@ def arm3_run(m, mo):
                                 # DOS's region is movable, so a segment
                                 # banked before it is a segment the compaction
                                 # may have moved
-    m.write((pseg << 4) + dm["dos_keepc"], bytes([1, 0]))
+    m.write(dosmap.lin(m, pseg, dm["dos_keepc"]), bytes([1, 0]))
     pt = dosmap.centre(m, pseg, dm, "dos_rrect")
     # THE SCREEN AS IT WAS, because "anything on the text screen" is already
     # TRUE: in graphics mode `screen` decodes the B800 bytes under the

@@ -67,15 +67,19 @@ bits 16
 HOST_SEG        equ 0x0680
 HOST_STK        equ 0x6800
 %else
-HOST_SEG        equ 0x0720                  ; (36,352 bytes under the core: the
+HOST_SEG        equ 0x0200                  ; (57,344 bytes under the core: the
                                             ;   boot sector moves itself out of the
                                             ;   way first, BOOT_SEG, and the stack
                                             ;   is HOST_STK's, under the harness.
                                             ;   512-ALIGNED: `load` reads a sector
                                             ;   a call, and one that straddles
-                                            ;   10000h is int 13h's error 09h)
-HOST_STK        equ 0x7200                  ; 0:7200 down, over FRAME_SEG's end
-                                            ;   (6F20h: 736 bytes of stack)
+                                            ;   10000h is int 13h's error 09h. It
+                                            ;   was at 0720h, over the damage
+                                            ;   modes' buffers, and full to 24
+                                            ;   bytes: they are in the block
+                                            ;   table's segment now, DMG_SEG)
+HOST_STK        equ 0x2000                  ; 0:2000 down, over FRAME_SEG's end
+                                            ;   (1C80h: 896 bytes of stack)
 %endif
 BOOT_SEG        equ 0x2000                  ; the boot sector's copy, at 2000:7C00
                                             ;   (the view, not loaded from disk)
@@ -99,16 +103,23 @@ JF_SEG2         equ 04h                     ;   2 Static; a second segment; both
 JF_SQZ          equ 10h                     ;   squeezed to JIT2_LIM's 1KB;
 JF_SMALL        equ 08h                     ;   the block table at 16KB;
 JF_NOCORE       equ 20h                     ;   no core tier (REALDMG-SPEC 16.2.2)
-PRF_SEG         equ 0x058A                  ; Static's profile, 4KB (not MODES 5-9,
+%ifdef RDG_HLOSSY
+PRF_SEG         equ 0x058A                  ; (the lossy harness's layout, as it
+FRAME_SEG       equ 0x058A                  ;   was: its stack over FRAME_SEG)
+FRAMED_SEG      equ 0x0060
+DMG_SEG         equ 0x01D0
+%else
+PRF_SEG         equ 0x0060                  ; Static's profile, 4KB (not MODES 5-9,
                                             ;   which compose into FRAME_SEG)
-FRAME_SEG       equ 0x058A                  ; rdg_render's 5,760 bytes, above the
-                                            ;   damage memory's RDG_DMG_SIZE (to 5896h:
-                                            ;   INTERLACE writes its end) and under the
-                                            ;   harness's stack (HOST_STK): the harness
-                                            ;   (with the recompiler's templates) runs
-                                            ;   past A000h
-FRAMED_SEG      equ 0x0060                  ; MODE 6: rdg_renderd's buffer
-DMG_SEG         equ 0x01D0                  ;   and its damage memory
+FRAME_SEG       equ 0x0060                  ; rdg_render's 5,760 bytes, under the
+                                            ;   harness's stack (HOST_STK)
+DMG_SEG         equ 0x8000                  ; MODES 6 and 7: rdg_renderd's damage
+FRAMED_SEG      equ 0x8400                  ;   memory and buffer, in the block
+                                            ;   table's segment under HASH16_SEG -
+                                            ;   so those modes take the 16KB table
+                                            ;   (h_jitsegs) and a ROM of 320KB or
+                                            ;   less, as a 64KB table always did
+%endif
 STATE_SEG       equ 0x7000                  ; MODE 13's copy of a save state
 
 ; --- the boot sector ---------------------------------------------------------
@@ -259,6 +270,19 @@ host_main:
 .mode:
     mov ax,0x0003                       ; a clean text screen
     int 0x10
+%ifndef RDG_HLOSSY
+    cmp byte [h_mode],6                 ; MODES 6 and 7 and a ROM over 320KB:
+    je .dm                              ;   its top is where their buffers are
+    cmp byte [h_mode],7                 ;   (DMG_SEG) - said, and stopped
+    jne .dmok
+.dm:
+    cmp word [h_romsec],HASH_MAXSEC
+    jbe .dmok
+    mov si,s_dmbig
+    call puts
+    jmp $
+.dmok:
+%endif
     ; COM1, 115200 8N1, polled
     mov dx,0x3FB
     mov al,0x80
@@ -1271,6 +1295,9 @@ s_ticks db " ticks ",0
 s_ev    db " events ",0
 s_skip  db " skipped ",0
 s_jit   db " jit ",0
+%ifndef RDG_HLOSSY
+s_dmbig db "RDGHOST BADOP the damage modes take a ROM of 320KB or less",13,10,0
+%endif
 s_jfl   db " flushes ",0
 s_jsw   db " seg2 ",0
 s_jby   db " bytes/16 ",0
@@ -1297,6 +1324,12 @@ h_jitsegs:
     mov dl,JIT_HMMAX                    ; the table's 64KB (JF_SMALL, or a
     test byte [cs:h_jitf],JF_SMALL      ;   ROM too big for it: 16KB)
     jnz .h16
+%ifndef RDG_HLOSSY
+    cmp byte [cs:h_mode],6              ; (MODES 6 and 7: their buffers are
+    je .h16                             ;   where the 64KB table would be)
+    cmp byte [cs:h_mode],7
+    je .h16
+%endif
     cmp word [cs:h_romsec],HASH_MAXSEC
     jbe .hm
 .h16:
@@ -1384,6 +1417,11 @@ ticks   dw 0
 %define RDG_TRHOST                       ; (rdgsys.inc: the trace's receiving half)
 %include "rdgsys.inc"
 %include "rdgppu.inc"
+%ifndef RDG_HLOSSY
+%if DMG_SEG * 16 + RDG_DMG_SIZE > FRAMED_SEG * 16 || FRAMED_SEG * 16 + 5760 > HASH16_SEG * 16
+%error "the damage modes' buffers do not fit under the 16KB table"
+%endif
+%endif
 %define RT_SQUEEZE                      ; (b_jit's JF_SQZ)
 %ifdef RDG_PANMODES
 %define RT_NOPRELOAD                    ; (no Static in them: h_static's)

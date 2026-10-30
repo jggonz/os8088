@@ -102,8 +102,42 @@ AM_REASON equ 18
 section .bss
 a2_pkgds:
     resw 1
+; THE ROM'S FETCH SEGMENT, made at the door (a2_rbset) from the ROM part's
+; LINEAR base and only when that has moved - c64cpu.inc's c64_rbset with one
+; bank: a fetch runs with ES at the ROM part LESS $D000, a sum below the part,
+; which is a window under kern_mega (KERN-MEGA-MEMORY-PLAN MC7) and the sum on
+; every real-mode kernel
+a2_rbm:     resw 1
+a2_rblin:   resw 2
 
 section .text
+
+; a2_rbset - the ROM's fetch segment, remade when the ROM part has moved
+; in: DS = the package's; out: a2_rbm; clobbers AX, BX, CX, DX
+a2_rbset:
+    mov dx, [_a2_m+AM_ROMSEG]
+    mov bl, SEG_LIN
+    call OSAPI_SEG                  ; DX:AX = the part's linear base
+    cmp ax, [a2_rblin]
+    jne .new
+    cmp dx, [a2_rblin+2]
+    je .out
+.new:
+    mov [a2_rblin], ax
+    mov [a2_rblin+2], dx
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or dx, ax                       ; DX = its paragraph (the DMA door's carve)
+    sub dx, A2_ROMS_MAIN
+    mov ax, [a2_rbm]                ; the window to re-aim (0 = a new one)
+    xor cx, cx
+    mov bl, SEG_WIN
+    call OSAPI_SEG                  ; the paragraph itself on a real-mode kernel
+    mov [a2_rbm], dx
+.out:
+    ret
 
 ; --- what _a2_run answers (APPLE2-SPEC section 4.2) --------------------------
 A2_RUN_SLICE equ 0                  ; the wall-slice budget was spent
@@ -253,11 +287,7 @@ CT_W equ -18                        ; a WORD temporary (the branch's old PC)
 ; a2_rebias_go is reached from the middle of a2_ea_abs with half an effective
 ; address already in BX.
 %macro ROMBIAS 1
-    push ax
-    mov ax, [cs:_a2_m+AM_ROMSEG]
-    sub ax, %1
-    mov es, ax
-    pop ax
+    mov es, [cs:%1]                 ; (a2_rbset made it at the door)
     jmp short a2_rebias_go.go
 %endmacro
 
@@ -289,6 +319,7 @@ _a2_run:
     push es                         ; [bp-8] KERNEL_SEG (SPEC.md 20.4)
     sub sp, 12                      ; the CT_* scratch
     mov [a2_pkgds], ds              ; DS-relative: the package's, still
+    call a2_rbset                   ; ...and the ROM's fetch segment
 
     mov ax, [bp+4]
     mov si, [cs:_a2_m+AM_RAMSEG]
@@ -383,7 +414,7 @@ a2_rebias_go:
     ; fetched through the ROM's bias.
     mov word [A2_SCR_BASE + A2_SCR_BLO], A2_ROM_BASE
     mov word [A2_SCR_BASE + A2_SCR_BOUND], 0xFFFF
-    ROMBIAS A2_ROMS_MAIN
+    ROMBIAS a2_rbm
 .low:
     mov word [A2_SCR_BASE + A2_SCR_BLO], 0
     mov word [A2_SCR_BASE + A2_SCR_BOUND], A2_IO_BASE

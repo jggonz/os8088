@@ -1,0 +1,81 @@
+diff --git a/src/automation.c b/src/automation.c
+index 1aeaa59..f617992 100644
+--- a/src/automation.c
++++ b/src/automation.c
+@@ -180,6 +180,11 @@ static uint32_t *frame_buf;
+ static int       frame_w;
+ static int       frame_h;
+ static int       frame_alloc;
++static uint32_t *mon1_buf;      /* os8088: monitor 1's (05-automation-verbs) */
++static int       mon1_w;
++static int       mon1_h;
++static int       mon1_alloc;
++static uint64_t  mon1_frames;
+ static uint64_t  frame_count;
+ 
+ /* Recording: the displayed frame every rec_interval ms of emulated time. */
+@@ -579,7 +584,30 @@ automation_frame(int x, int y, int w, int h, int monitor_index)
+ {
+     bitmap_t *target;
+ 
+-    if (!enabled || (monitor_index != 0) || (w <= 0) || (h <= 0))
++    if (!enabled || (w <= 0) || (h <= 0))
++        return;
++
++    /* os8088 (tools/86box/patches/05-automation-verbs.patch): the SECOND
++       monitor's last frame is kept too, for `screenshot1` - a two-card
++       machine's other display (an extended desktop's secondary). */
++    if (monitor_index == 1) {
++        target = monitors[1].target_buffer;
++        if (!target)
++            return;
++        thread_wait_mutex(frame_mutex);
++        if ((w * h) > mon1_alloc) {
++            mon1_alloc = w * h;
++            mon1_buf   = realloc(mon1_buf, mon1_alloc * sizeof(uint32_t));
++        }
++        for (int row = 0; row < h; row++)
++            memcpy(&mon1_buf[row * w], &target->line[y + row][x], w * sizeof(uint32_t));
++        mon1_w = w;
++        mon1_h = h;
++        mon1_frames++;
++        thread_release_mutex(frame_mutex);
++        return;
++    }
++    if (monitor_index != 0)
+         return;
+ 
+     target = monitors[0].target_buffer;
+@@ -797,6 +825,32 @@ handle_request(char *line)
+         thread_release_mutex(frame_mutex);
+         if (!ok)
+             respond_error(frame_buf ? "could not write file" : "no frame rendered yet");
++    } else if (!strcmp(argv[0], "fdc")) {
++        /* os8088 (06-fdc-counters.patch counts them): read and write commands completed */
++        extern uint32_t os88_fdc_reads, os88_fdc_writes;
++        resp.len = 0;
++        sb_printf(&resp, "{\"ok\":true,\"reads\":%u,\"writes\":%u,\"ms\":%llu}",
++                  os88_fdc_reads, os88_fdc_writes, (unsigned long long) emu_ms);
++    } else if (!strcmp(argv[0], "screenshot1") && (argc >= 2)) {
++        /* os8088: screenshot1 <path> - the second monitor's last frame, as
++           `screenshot` writes the first's (swapped in under frame_mutex) */
++        uint32_t *b0 = frame_buf;
++        int       w0 = frame_w, h0 = frame_h, ok;
++        thread_wait_mutex(frame_mutex);
++        frame_buf = mon1_buf;
++        frame_w   = mon1_w;
++        frame_h   = mon1_h;
++        ok        = write_png(rest[1]);
++        resp.len  = 0;
++        if (ok)
++            sb_printf(&resp, "{\"ok\":true,\"w\":%d,\"h\":%d,\"ms\":%llu,\"frames\":%llu}",
++                      mon1_w, mon1_h, (unsigned long long) emu_ms, (unsigned long long) mon1_frames);
++        frame_buf = b0;
++        frame_w   = w0;
++        frame_h   = h0;
++        thread_release_mutex(frame_mutex);
++        if (!ok)
++            respond_error(mon1_buf ? "could not write file" : "no frame rendered on monitor 1 yet");
+     } else if (!strcmp(argv[0], "record") && (argc >= 2)) {
+         /* record start <interval_ms> <dir> | record stop */
+         if (!strcmp(argv[1], "stop")) {

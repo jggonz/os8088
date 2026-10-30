@@ -172,6 +172,8 @@ XB_OFF          equ 0           ; word: KB from the pool base
 XB_KB           equ 2           ; word: size in KB. ZERO MEANS THE ENTRY IS
                                 ; FREE - there is no separate in-use flag.
 XB_OWN          equ 4           ; byte: the stamping instance (0xFF = kernel)
+                                ; ...AND +5 IS ALWAYS 0: nothing writes it,
+                                ; and xm_walk copies +0..+5 as the record
 XM_BLKSZ        equ 8           ; the stride. 8 and not 5, because the table
                                 ; lives in xm_once's region and costs no byte
                                 ; of the image whatever its stride - and
@@ -370,10 +372,17 @@ xm_svc:
 ; out:      CF = 0, AX = records written, each {dw XB_OFF, dw XB_KB, db
 ;           XB_OWN, db 0} - OSAPI_XMEM_WALK's XMW_ record, which is this
 ;           table's entry less its padding. Read with IF = 0, so no record is
-;           torn by an allocation on another task
+;           torn by an allocation on another task. CF = 1, AX = 2 and nothing
+;           written for BX = XMW_LONG: kern_mega's eight-byte records
+;           (KERN-MEGA-PLAN 14.92), which this pool has no tags to fill - a
+;           caller that asked for them must be TOLD, not handed six-byte
+;           records it would read as eight
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
 xm_walk:
+    mov ax, 2                   ; (AX is no input: the walk writes its own)
+    cmp bx, XMW_LONG
+    je xm_no
     push cx
     push si
     push di
@@ -394,15 +403,17 @@ xm_walk:
     jcxz .done
     cmp word [si+XB_KB], 0
     je .n
-    push ax
-    mov ax, [si+XB_OFF]
-    stosw
-    mov ax, [si+XB_KB]
-    stosw
-    mov al, [si+XB_OWN]
-    xor ah, ah
-    stosw
-    pop ax
+    push si                     ; THE RECORD IS THE ENTRY'S FIRST SIX BYTES,
+    movsw                       ; copied: XB_OFF, XB_KB, then XB_OWN and the
+    movsw                       ; byte after it, which nothing ever writes and
+    movsw                       ; xm_attach's zeroing of the scratch leaves 0 -
+    pop si                      ; the record's `db 0`. 5 bytes where loading
+                                ; and storing each field was 15, and AX (the
+                                ; count) is never touched. It is what puts the
+                                ; image BACK INSIDE 2KB after XMW_LONG's
+                                ; refusal above took it to 2,051 bytes and a
+                                ; 3KB claim (SPEC.md 41.12.6, 28.4.11;
+                                ; tests/hma286.py's check 1)
     inc ax
     dec cx
 .n:
@@ -419,6 +430,7 @@ xm_walk:
     ret
 
 XMW_FIXED       equ 0x4658      ; MIRRORED: apps/os88api.inc's walk records
+XMW_LONG        equ 0x4C58      ; ...MIRRORED too: refused here (14.92)
 ROMF_HWALK      equ 10          ; MIRRORED: boot/osrom.asm's - the HMA tail's
                                 ; walk of its own pool (SPEC.md 28.4.13)
 

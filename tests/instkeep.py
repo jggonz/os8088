@@ -101,8 +101,10 @@ def check(vhd):
     # A TYPEFACE ONLY WHERE THE FLOPPY HAS ONE: the 360KB system disk gave
     # SYSTEM/FONTS to office360.img (SPEC.md 24.3.1.5), so an install off it
     # has none to copy - which that section says in as many words
+    # (the floppy is mega.img on kern_mega: os88marty.system_disk)
+    floppy = M.system_disk(os88build.at("build/os8088-360.img"))
     fonts = any(q.startswith("SYSTEM/FONTS/") for q in ID.Vol(open(
-        os88build.at("build/os8088-360.img"), "rb").read()).tree())
+        floppy, "rb").read()).tree())
     for p in ("COMMAND.COM", "IO.SYS", "SYSTEM/TASKMGR.O88", "APPS") + (
             ("SYSTEM/FONTS/TALLX.F88",) if fonts else ()):
         if p not in tree:
@@ -110,7 +112,7 @@ def check(vhd):
     if "KPAD.TMP" in tree:
         bad.append("the allocator's pad KPAD.TMP was left behind")
 
-    src = ID.Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    src = ID.Vol(open(floppy, "rb").read())
     want = src.read("KERNEL.SYS")
     got = v.read("KERNEL.SYS")
     if got != want:

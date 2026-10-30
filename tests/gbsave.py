@@ -41,6 +41,14 @@ import gbwindow  # noqa: E402
 
 MACHINE = "os8088_xt_vga_720b"
 SYS = os.path.join(ROOT, "build", "os8088-720.img")
+# kern_mega (OS88_MEGA, tests/megaport.txt): the SHIPPED RealDMG refuses
+# there (REALDMG-SPEC 10.3.4), so the row runs the ARM out of build/megak/apps
+# - and its package and its view are LDT SELECTORS, found through the window
+# record and read through their descriptors rather than by a scan of the
+# first megabyte
+MEGA = bool(os.environ.get("OS88_MEGA"))
+PKGDIR = os.path.join(ROOT, "build", "megak", "apps") if MEGA \
+    else os.path.join(ROOT, "build")
 
 
 def results(ui, viewoff):
@@ -49,6 +57,14 @@ def results(ui, viewoff):
     seg = view = None
     for _ in range(90):
         M.guest_sleep(m, 1)
+        if MEGA:
+            import dispapps
+            got = dispapps.pkg_seg(m, 0)
+            seg = got and got[1]
+            view = seg and int.from_bytes(m.readseg(seg, viewoff, 2), "little")
+            if view and m.readseg(view, 0xC000 + 15, 1)[0] == 0xA5:
+                return m.readseg(view, 0xC000, 16)
+            continue
         seg = seg or gbwindow.find_seg(m, b"REALDMG", viewoff)
         if seg:
             view = int.from_bytes(m.read(seg * 16 + viewoff, 2), "little")
@@ -83,9 +99,9 @@ def main():
     disk = os.path.join(tmp, "apps.img")
     subprocess.check_call([sys.executable, os.path.join(ROOT, "tools", "os88disk.py"), "-o", disk,
                            "--size", "720",
-                           os.path.join(ROOT, "build", "realdmg.o88"), gb],
+                           os.path.join(PKGDIR, "realdmg.o88"), gb],
                           stdout=subprocess.DEVNULL)
-    viewoff = gbwindow.label_off(os.path.join(ROOT, "build", "realdmg.lst"), "rdg_viewseg")
+    viewoff = gbwindow.label_off(os.path.join(PKGDIR, "realdmg.lst"), "rdg_viewseg")
     fails = []
 
     w1, after = run(disk, viewoff)

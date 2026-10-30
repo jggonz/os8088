@@ -142,7 +142,7 @@ def leg(name, keep, t, display=None):
             before = lg.counts("KBTRIP ready", "KBTRIP key", "unparked")
             if i == 1:
                 box.goto(165, 123)      # the Disk window's one row
-                box.xd("click", "--repeat", 2, "--delay", 120, 1)
+                box.dblclick()
                 ok = lg.wait(["KBTRIP ready"], before[:1], 90) is not None
             else:
                 ok = lg.command(before[0])
@@ -213,7 +213,9 @@ def leg(name, keep, t, display=None):
 
 def main():
     keep = "--keep" in sys.argv
-    ob.BOCHSRC = ob.BOCHSRC.replace("type=ps2", "type=imps2")
+    ob.MOUSE = "imps2"   # an IntelliMouse. BOCHSRC is a template now
+    # (`type={mouse}`), so the replace that stood here matched nothing
+    # and every Box booted a plain PS/2 mouse: no wheel, mou_p2wz 0
     fails = []
     # THE TWO LEGS ARE TWO MACHINES (two trees), run AT ONCE - one X display
     # each (os88bochs.take_display); the trees are asked for first, one at

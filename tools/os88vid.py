@@ -2969,9 +2969,6 @@ class Writer:
             raise V88Error("screen %r with rows %d bytes apart: a NARROW "
                            "screen's are 40, every other's 80 (98.1.3.2.5)"
                            % (screen, g.stride))
-        if flip and screen in NARROW:
-            raise V88Error("a NARROW screen is never flipped every frame "
-                           "(98.1.3.2.5)")
         if flip and not (g.layout == LAY_MODEX or screen):
             raise V88Error("page flipping is Mode X's, or a VGA4 file's on "
                            "a screen of its own (98.3.8)")
@@ -3652,9 +3649,15 @@ class Writer:
                          ktoff if nk else 0, nk, poster, s0, secs[0],
                          max(secs), len(stream),
                          max(len(r) for r in self.recs),
-                         max((max(key_reads(r)) + (0 if apart else
+                         max([max(key_reads(r)) + (0 if apart else
                                                    len(leads.get(k, b"")))
-                              for k, r, c in keys), default=0))
+                              for k, r, c in keys] +
+                             # (98.1.3.8.1: a pool picture's reads land in
+                             # the claim a key's read takes, which the
+                             # player sizes from this word - so they are
+                             # key reads to it, and must be counted)
+                             [max(key_reads(r)) for r in self.pool],
+                             default=0))
         struct.pack_into("<IBBBB", hdr, 224, pal,
                          self.rowscale if self.rowscale > 1 else 0,
                          (FLIP_OWN if self.own else
@@ -4260,8 +4263,6 @@ class Reader:
                 pg != bool(flags & F_PAGE) or \
                 (pg and flags & (F_RESIDENT | F_LIVE | F_LOOPREC)):
             raise V88Error("a flip byte of %d on layout %d" % (fl, layout))
-        if fl in (2, FLIP_FPAGE) and scr in NARROW:
-            raise V88Error("a NARROW screen flipped every frame (98.1.3.2.5)")
         # N PAGES (98.1.3.7.1): byte 39, 3..8 of them in a plane's 64 KB
         if (fl in (FLIP_MPAGE, FLIP_FPAGE)) != bool(npg) or (npg and (
                 not 3 <= npg <= MPAGE_MAX or
@@ -5134,6 +5135,11 @@ class Reader:
             if n < REC_HDR + 1 or n > KEY_PART + 1 or total + n > len(self.d):
                 raise V88Error("a page pool picture at %d runs off the file"
                                % at)
+            if n > self.kmax:           # (the player's bound on every read
+                raise V88Error(         # of a key's, vp_knrd: its claim is
+                    "a page pool picture at %d has a read of %d; the "
+                    "header's largest key read is %d (98.1.3.8.1)"
+                    % (at, n, self.kmax))   # sized from that word)
             if not struct.unpack_from("<H", self.d, total + 2)[0] & KEY_MORE:
                 break
             if struct.unpack_from("<H", self.d, total)[0] != n:
@@ -5142,6 +5148,27 @@ class Reader:
             total += n
             n = struct.unpack_from("<H", self.d, total - 2)[0]
         return key_split(self.d[at:total + n])
+
+    def pool_reads(self, krec):
+        """The reads of every page pool picture (98.1.3.8.1) a key's bytes
+        name - each one a key read to the player, so `kmax` covers them"""
+        if not (self.kpool and self.mpage):
+            return []
+        out = []
+        hs = mpage_parts(key_split(krec)[-1], self.g, self.pages,
+                         kref=True, key=True)[3]
+        for hp, x in hs:
+            if isinstance(x, tuple) and x[0] == "ref":
+                at, n = x[1], x[2]
+                while True:
+                    out.append(n)
+                    if n < REC_HDR + 1 or at + n > len(self.d) or not \
+                            struct.unpack_from("<H", self.d, at + 2)[0] & \
+                            KEY_MORE:
+                        break
+                    at += n
+                    n = struct.unpack_from("<H", self.d, at - 2)[0]
+        return out
 
     def key(self, i):
         k, off, n, spo, spn, idx = self.keys[i]
@@ -6283,7 +6310,8 @@ def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
                     title="", keysecs=KEY_SECS, poster=None, rowscale=1,
                     flip=False, loop=None, repeat=False, cgapal=None,
                     screen=SCR_480, pev=None, subs=None, kpart=KEY_PART,
-                    held=(), own=False, thumbs=None, resident=False):
+                    held=(), own=False, thumbs=None, resident=False,
+                    ups=()):
     """encode_frames for canvases already in hand (bytes, g.wb a row) - the
     only way to make a VGA8 file without a video (SPEC.md 98.2): silent,
     every changed byte. `pev`: a palette a scene's table (98.1.3.2.3).
@@ -6291,7 +6319,8 @@ def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
     (a SUB2 file's colour ones, 98.1.3.2.4). `held`: the frames whose
     records are HELD (98.1.3.9, a flipped file's) - drawn, not shown.
     `own`: flipped with each record against its own page (FLIP_OWN), the
-    record after a key bringing its page up by the rows that differ.
+    record after a key bringing its page up by the rows that differ - and
+    each frame in `ups` too (a flip to a page built ahead, 98.2.5.2.1).
     `thumbs`: the writer's DESKTOP POSTERS (98.1.3.11), as Writer.thumbs
     takes them. `resident`: written as a RESIDENT file (98.1.7)"""
     rate, spf = max(1, round(fps * 100)), 100
@@ -6308,7 +6337,7 @@ def encode_canvases(canvases, g, out, fps, pixfmt=PF_MONO1, palette=None,
         pcv, vis = [prev, prev], 0
         for k, cv in enumerate(canvases):
             d, up = vis ^ 1, None
-            if wr.keys and wr.keys[-1][0] == k - 1:
+            if wr.keys and wr.keys[-1][0] == k - 1 or k in ups:
                 rows = [y for y in range(g.h)
                         if pcv[d][y * g.w:(y + 1) * g.w] !=
                         pcv[vis][y * g.w:(y + 1) * g.w]]
@@ -6785,8 +6814,9 @@ def verify_v88(path, against=None, rend=None):
                          hash(bytes(g.canvas(r.hidden)))))
         if f in kat:
             k, krec, spo, spk, idx = r.key(kat[f])
-            kmax = max(kmax, max(key_reads(krec)) +
-                       (0 if r.kleadat else len(r.key_lead(kat[f]))))
+            kmax = max([kmax, max(key_reads(krec)) +
+                        (0 if r.kleadat else len(r.key_lead(kat[f])))] +
+                       r.pool_reads(krec))      # (98.1.3.8.1)
             kb = g.surface()
             if r.mpage:                 # (98.1.3.7.1: the page it names
                 kp, kvis, _ = r.key_view(krec)  # is the page shown, and
@@ -7709,7 +7739,7 @@ def selfcheck():
             pass
         # NARROW (98.1.3.2.5): sixteen colours with rows 40 bytes apart,
         # eight pages at 320 x 200 - the last one used - read back, and the
-        # canvas of an 80-byte stride and a flipped NARROW file refused
+        # canvas of an 80-byte stride refused
         gn = Geom(LAY_LIN80, 4, 16, bitplanes=True, stride=40)
         scnn = [bytes([(i * k + k) % 16 for i in range(32 * 16)])
                 for k in (1, 3, 5, 7, 9)]
@@ -7824,11 +7854,28 @@ def selfcheck():
                             "on the page shown")
         except V88Error as e:
             fails.append("a file flipped and built ahead: %s" % e)
+        # ...and FLIPPED every frame (98.1.3.2.5): the format is VGA4's and
+        # the records carry their addresses, so a flipped NARROW file - and
+        # one against its own page - reads back as it was written
+        for own in (False, True):
+            pnf = os.path.join(tmp, "FLIPN%d.V88" % own)
+            try:
+                encode_canvases(scnn * 2, gn, pnf, 15, pixfmt=PF_VGA4,
+                                palette=npal, keysecs=0.3, flip=True,
+                                screen=SCR_320X200N, own=own)
+                verify_v88(pnf)
+                rnf = Reader(pnf)
+                if rnf.g.stride != 40 or rnf.screen != SCR_320X200N or \
+                        rnf.own != own or \
+                        any(decode_at(rnf, f) != (scnn * 2)[f]
+                            for f in range(10)):
+                    fails.append("a flipped NARROW file (own %d) did not "
+                                 "read back as written" % own)
+            except V88Error as e:
+                fails.append("a flipped NARROW file (own %d): %s" % (own, e))
         for what, kw in (("an 80-byte canvas on a NARROW screen",
                           dict(screen=SCR_320X200N, page=True, pages=8,
-                               g=gm)),
-                         ("a NARROW screen flipped every frame",
-                          dict(screen=SCR_320X200N, flip=True, g=gn))):
+                               g=gm)),):
             try:
                 Writer(kw.pop("g"), 1500, 100, AUD_NONE, 0, PF_VGA4,
                        palette=npal, **kw)
@@ -7885,8 +7932,37 @@ def selfcheck():
                     any(decode_at(rq, f) != cvq[f] for f in range(12)):
                 fails.append("a page pool's picture did not read back as "
                              "written (key 6 names %r)" % (named,))
+            # the player reads a pool picture into the claim a key's read
+            # takes, sized from kmax and bounded by it (vp_knrd): a picture
+            # bigger than every key - the owner's 23 fps clip, 2026-10-26 -
+            # refused every seek with kmax counting the keys alone
         except V88Error as e:
             fails.append("a page pool: %s" % e)
+        # ...and a pool picture BIGGER than every key: the player reads it
+        # into the claim a key's read takes, sized from kmax and bounded by
+        # it (vp_knrd), so kmax counts it. A flat page shown makes the keys
+        # small and the busy page built behind it makes the picture large -
+        # the owner's 23 fps clip (2026-10-26), whose every seek refused
+        # with kmax counting the keys alone
+        try:
+            sfl = [bytes(32 * 16), scn[1]]
+            wq, cvq = mpage_clip(gm, PF_VGA4, sfl, {11: 1}, {1: (1, 0, 2)},
+                                 palette=pals[0] + bytes(PAL_BYTES - 48),
+                                 screen=SCR_320X200, pages=4)
+            pq = os.path.join(tmp, "POOLB.V88")
+            wq.write(pq, 0)
+            verify_v88(pq)
+            rq = Reader(pq)
+            kr = [n for i in range(len(rq.keys))
+                  for n in key_reads(rq.key(i)[1])]
+            pr = [n for i in range(len(rq.keys))
+                  for n in rq.pool_reads(rq.key(i)[1])]
+            if not pr or max(pr) <= max(kr) or rq.kmax != max(pr):
+                fails.append("a page pool picture bigger than its keys: "
+                             "pool reads %r, key reads %r, kmax %d"
+                             % (pr, kr, rq.kmax))
+        except V88Error as e:
+            fails.append("a page pool picture bigger than its keys: %s" % e)
         # ...and that pool in a file whose keys are IN PARTS (98.1.3.8): the
         # references lengthen a key's last part, so the part before it must
         # name the longer read - a stale word reads the last part short, and

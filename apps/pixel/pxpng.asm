@@ -278,8 +278,12 @@ pz_decode:
     mov [es:pz_rseg], ax
     mov ax, [di + PXK_DSEG]
     mov [es:pz_wseg], ax
-    add ax, PZ_WPARA
-    mov [es:pz_xseg], ax
+    push dx
+    mov dx, ax                      ; the scanlines' segment past the window
+    mov ax, PZ_WPARA                ; and its tables: a SEG_SUB (MC7: the sum
+    PXSUB                           ; on a real-mode kernel)
+    mov [es:pz_xseg], dx
+    pop dx
     mov ax, [di + PXK_SPAL]
     mov [es:pz_spal], ax
     mov dx, [cs:PXP_PKG]            ; the services, as far pointers through

@@ -37,6 +37,8 @@ import os88marty
 import os88sym   # noqa: E402
 import os88ui      # noqa: E402
 import os88stik    # noqa: E402
+import megafix     # noqa: E402
+import struct
 
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -67,10 +69,18 @@ def main():
         ["python3", os.path.join(ROOT, "tools/os88hdd.py"), "--template",
          TEMPLATE, "--out", vhd, "--noboot", "--file", "HIBERNAT.PTR=" + ptr])
     floppy = os.path.join(tmp, "stikhiber360.img")
-    shutil.copy(os.path.join(BDIR, "stikhiber360.img"), floppy)
+    shutil.copy(megafix.system_disk(os.path.join(BDIR, "stikhiber360.img")),
+                floppy)
+    extra = ["--mount", "hd:0:" + vhd]
+    if os.environ.get("OS88_MEGA"):
+        # kern_mega under Bochs: C: is the shim's own ATA disk, and the
+        # pointer file goes on it by name (os88megabochs's --put)
+        pf = os.path.join(tmp, "HIBERNAT.PTR")
+        shutil.copy(ptr, pf)
+        extra = ["--put", pf]
 
     with os88marty.launch(floppy, machine="os8088_xt_hdd", boot=False,
-                          extra=["--mount", "hd:0:" + vhd]) as m:
+                          extra=extra) as m:
         print("A: stik_boot meets the posted question")
         # `.cold` MAY SLIDE AT BOOT (docs/plans/MOVABLE-COLD-PLAN.md 2): on a
         # machine with neither a VGA nor an EGA kmain_o moves it down by
@@ -84,6 +94,20 @@ def main():
         arms = [home]
         if "VGA_PARA" in eq:
             arms.append(home - eq["VGA_PARA"] * 16)
+        if getattr(m, "bochs", False):
+            # kern_mega relaunches the widgets AFTER mega_enter (KERN-MEGA-
+            # PLAN 14.78), where `.cold` runs above 1MB at an address only
+            # the GDT knows (tests/stiknodesk.py's way): to mega_enter's
+            # return first, and stik_boot is asked for there
+            m.bp_exec("mega_enter")
+            m.run()
+            if m.wait_stop(120) == "breakpoint":
+                r = m.regs()
+                m.bp_exec(m.lin(r["cs"], struct.unpack("<H", bytes(m.read(
+                    m.lin(r["ss"], r["sp"]), 2)))[0]))
+                m.run()
+                m.wait_stop(120)
+            arms = [m.sym("stik_boot")]
         m.bp_exec(*arms)
         m.run()
         hit = None
@@ -91,8 +115,9 @@ def main():
             hit = m.wait_stop(120)
             if hit != "breakpoint":
                 break
-            r = m.regs()
-            if (r["cs"] << 4) + r["ip"] == m.sym("stik_boot"):
+            st = m.status()
+            if st.get("flat_ip", (st["cs"] << 4) + st["ip"]) \
+                    == m.sym("stik_boot"):
                 break
             m.run()
         else:
@@ -113,7 +138,8 @@ def main():
         check("StikProbe" not in ui.titles(),
               "no StikProbe window (%r)" % ui.titles())
         seg = ui._word("sc_seg")
-        r = os88stik.parse_row(m.read(seg << 4, os88stik.SC_REC)) if seg else {}
+        lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)  # kern_mega
+        r = os88stik.parse_row(m.read(lin(seg), os88stik.SC_REC)) if seg else {}
         check(r.get("stik") and m.read(ui._S("desk_zslot") + DESK_SC0, 1)[0]
               == 0xFF, "its row still carries the mark, with no cell: kept "
               "for the next boot (%r)" % (r,))

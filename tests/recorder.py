@@ -85,6 +85,13 @@ def build(tmp, o88):
     return img
 
 
+def every(hm):
+    """Every claim: the conventional arena's, and on kern_mega the pool's
+    above 1MB as well (tools/heapmap.py's pool), where a package's own
+    claims usually are - empty on every other kernel"""
+    return hm.claims + getattr(hm, "pool", [])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--o88", default="build/recorder.o88")
@@ -151,7 +158,15 @@ def main():
 
         # --- 3. play on the card ----------------------------------------------
         ui.menu_pick("Sound", "Play")
-        if p.rb("rc_st") != RC_PLAY or msg() != "PLAYING (SB)":
+        # WAITED FOR, not read once: menu_pick returns when the menu is down,
+        # and the Play command's state and status can land a poll later - a
+        # single read here failed a soak with 'st 2, PLAYING (SB)', both
+        # already right by the time the message was formatted
+        try:
+            M.until(m, lambda _: p.rb("rc_st") == RC_PLAY
+                    and msg() == "PLAYING (SB)", "Play's stream",
+                    poll=.05, guest=5.0)
+        except M.MartyError:
             fail("3: Play did not open the stream (st %d, %r)"
                  % (p.rb("rc_st"), msg()))
         M.guest_sleep(m, 1.6)
@@ -171,11 +186,12 @@ def main():
 
         # --- 4. play on the speaker, and 2. the sweep -------------------------
         p.ww("rc_caps", caps & ~SND_CAP_PCM_BG)
-        pc = seg * 16 + syms["os88pcm_play"]
+        pc = p.base + syms["os88pcm_play"]     # (a selector's base on
+        # kern_mega, where c.sel below is the claim's selector: heapmap)
         got = bytearray()
         heap = {n: ui._S(n) for n in ("mem_base", "mem_top", "spl_live",
                                        "mem_tab")}
-        mine = sorted((c.seg, c.para) for c in heapmap.Map(m, heap).claims
+        mine = sorted((c.seg, c.para) for c in every(heapmap.Map(m, heap))
                       if c.own == seg)
         m.bp_exec(pc)
         # the pick itself returns into a callback that BLOCKS, so drive it by
@@ -187,12 +203,13 @@ def main():
         for k in range(2):
             m.wait_stop(limit=30)
             r = m.regs()
-            if (r["cs"] << 4) + r["ip"] != pc:
+            if getattr(m, "lin", lambda s_, o_: (s_ << 4) + o_)(
+                    r["cs"], r["ip"]) != pc:
                 fail("4: stopped at %04X:%04X, not os88pcm_play"
                      % (r["cs"], r["ip"]))
             es, si, cx = r["es"], r["si"], r["cx"]
-            held = [c for c in heapmap.Map(m, heap).claims
-                    if c.own == seg and c.seg == es]
+            held = [c for c in every(heapmap.Map(m, heap))
+                    if c.own == seg and c.sel == es]
             if es == seg:
                 print("note: chunk %d plays from the package's own segment"
                       % k, flush=True)
@@ -221,7 +238,7 @@ def main():
         print("PASS 2: all %d samples are the 400-800-400 Hz sweep"
               % RC_D_LEN, flush=True)
         wait_msg("PLAY DONE (SPEAKER)", "the speaker play's end", limit=30)
-        after = sorted((c.seg, c.para) for c in heapmap.Map(m, heap).claims
+        after = sorted((c.seg, c.para) for c in every(heapmap.Map(m, heap))
                        if c.own == seg)
         if after != mine:
             fail("4: the package's claims were %s before Play and %s after"

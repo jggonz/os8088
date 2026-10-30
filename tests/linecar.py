@@ -75,16 +75,22 @@ class Field(object):
         # the package used to occupy, and decodes as plausible rubbish.
         return dosmap.instance(self.m)
 
+    def lin(self, seg, off):
+        """seg << 4, or the selector's base on kern_mega (megaport.txt)"""
+        if hasattr(self.m, "lin"):
+            return self.m.lin(seg, off)
+        return (seg << 4) + off
+
     @property
     def at(self):
-        return (self.seg << 4) + self.dm["dos_pln"]
+        return self.lin(self.seg, self.dm["dos_pln"])
 
     def w(self, name):
         off = self.at + self.dm[name]
         return int.from_bytes(self.m.read(off, 2), "little")
 
     def text(self):
-        base = (self.seg << 4) + self.w("LN_BUF")
+        base = self.lin(self.seg, self.w("LN_BUF"))
         return self.m.read(base, 80).split(b"\0")[0].decode("latin-1")
 
     def state(self):

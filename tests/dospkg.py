@@ -94,7 +94,7 @@ def main():
                 seg = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
                 toff = struct.unpack("<H", m.read(wp + os88geom.W_TITLE, 2))[0]
                 if seg and toff:
-                    out.append(m.read(seg * 16 + toff, 16).split(b"\0")[0]
+                    out.append(m.read(dosmap.lin(m, seg, toff), 16).split(b"\0")[0]
                                .decode("latin-1"))
             return out
 
@@ -103,7 +103,7 @@ def main():
                 wp = os88geom.winptr(m, sl, m.sym)
                 ws = struct.unpack("<H", m.read(wp + os88geom.W_SEG, 2))[0]
                 t = struct.unpack("<H", m.read(wp + os88geom.W_TITLE, 2))[0]
-                if ws and t and m.read(ws * 16 + t, 4).startswith(b"DOS\0"):
+                if ws and t and m.read(dosmap.lin(m, ws, t), 4).startswith(b"DOS\0"):
                     return ws
             return 0
 
@@ -111,7 +111,7 @@ def main():
             seg = dosseg()
             if not seg:
                 return []
-            scr = m.read((seg << 4) + dm["con_scr"], 80 * 25 * 2)
+            scr = m.read(dosmap.lin(m, seg, dm["con_scr"]), 80 * 25 * 2)
             out = []
             for r in range(25):
                 row = scr[r * 160:(r + 1) * 160]
@@ -241,17 +241,22 @@ def main():
         # come down before the window can appear AND before the wake can even
         # be dispatched, so a machine that got this wrong shows 80x25 text with
         # a package running behind it.
+        # ON THE BRACKET'S BYTE, NOT ON THE SCREEN: the full screen is 80x25
+        # text with a BLINKING cursor, so "the screen stopped changing" never
+        # comes where the emulator draws the blink (Bochs: mega-dospkg spent
+        # 360 guest seconds in settle here), and [dos_fsxup] is what the next
+        # line asks anyway
         to_dos()
         ui.menu_pick("Program", "Full Screen")
-        os88marty.settle(m)
-        if not m.read((dosseg() << 4) + dm["dos_fsxup"], 1)[0]:
+        fsx = lambda: m.read(dosmap.lin(m, dosseg(), dm["dos_fsxup"]), 1)[0]
+        if not wait(fsx, "Program > Full Screen to raise [dos_fsxup]", 25.0):
             fail("Program > Full Screen did not raise [dos_fsxup], so step 4 "
                  "is not testing the full screen at all")
         else:
-            typ("PAINT.O88\n")
-            wait(lambda: not m.read((dosseg() << 4) + dm["dos_fsxup"], 1)[0],
+            m.type_text("PAINT.O88\n")     # (typ() settles: the blink again)
+            wait(lambda: not m.read(dosmap.lin(m, dosseg(), dm["dos_fsxup"]), 1)[0],
                  "the console's bracket to come down", 25.0)
-            up = m.read((dosseg() << 4) + dm["dos_fsxup"], 1)[0]
+            up = m.read(dosmap.lin(m, dosseg(), dm["dos_fsxup"]), 1)[0]
             if up:
                 fail("the console's bracket is STILL up after a .O88 was "
                      "typed into the full screen - [dos_fsxgo] is what brings "

@@ -66,6 +66,29 @@ boot and a restore at the desktop.  The field reported exactly that and this
 row is what would have caught it - the LIVE_MAX cycle bound below goes red on
 the fallback, which is the whole reason it is a bound and not a screen read.
 
+**`--settime` RUNS A PROGRAM THAT SETS THE CLOCK** (AH=2Dh to 12:00:00,
+DOSSETT.COM, KERN-MEGA-PLAN 14.114). Assertion 5 is the one it is for: the
+way home measured the run as 0040:006C less the handover's count, so the SET
+counted as time the program ran. Here the windowed run has already set the
+count to noon, so the second set is a step BACK of the seconds between them -
+a NEGATIVE run, which the wake reads as a midnight crossed: the session came
+home a DAY on (`mega-dosdir`'s failure, on kern_big). kern_dos now moves the
+handover count by the step (DHK_TSET). VERIFIED RED without it: `(0, 0, 2,
+4, 7, 2026)` to `(0, 0, 44, 5, 7, 2026)` - and the date assertion compared
+the month and year only until then, so it had passed as "43 seconds".
+
+**`--fsx` TYPES THE COMMAND AT THE FULL-SCREEN CONSOLE** (SPEC.md 96.33.16,
+KERN-MEGA-PLAN 14.113) instead of pressing Run, and asserts the console comes
+back to the FULL SCREEN when the session does. A command typed there sets
+`[dos_fsxgo]` and brings the bracket down for the launch; `dos_run`'s exit is
+what puts it back - and the shut-down arm leaves `dos_run` by `.outq`, so the
+wake that delivers the exit code has to. kern_mega's trip got that call in
+14.106 under `%ifdef DOS_MEGA`; kern_big's shipped DOS.O88 did not, so the
+session came home WINDOWED with `[dos_fsxgo]` still standing, and the next
+program run from the window threw that console into the full screen on its
+exit. VERIFIED RED on the DOS.O88 before 14.113: `[dos_fsxup]` 0 and
+`[dos_fsxgo]` 1 on the desktop that came back.
+
 **`--compact extent` / `--compact module` MOVE DOS UNDER THE HANDOFF**
 (SPEC.md 96.40.8).  The post is a far pointer, `[hb_dosseg]`, and the DOS
 package's region is MOVABLE - so a claim between the post and the picture that
@@ -125,7 +148,7 @@ import os88ui                                                  # noqa: E402
 # The targets are this row's own `wants=`: a tree is cut to what it is asked
 # for, so a missing goal here is a FileNotFoundError naming a private tree.
 _TREE_TARGETS = ("kdos/DOS.O88", "DOSHELLO.COM", "DOSMODE.COM", "DOSGFX.COM",
-                 "DOSPIT.COM", "kernel.sys",
+                 "DOSPIT.COM", "DOSSETT.COM", "kernel.sys",
                  "boothd.bin", "mbr.bin", "hiber.drv", "ctrl.drv", "hdd.drv",
                  "os8088-360.img", "apps360.img")
 if "--tree" in sys.argv:
@@ -433,6 +456,9 @@ def main():
         prog = "DOSGFX.COM"
     elif "--pit" in sys.argv:
         prog = "DOSPIT.COM"
+    elif "--settime" in sys.argv:
+        prog = "DOSSETT.COM"
+    fsx = "--fsx" in sys.argv
     compact = None
     if "--compact" in sys.argv:
         compact = sys.argv[sys.argv.index("--compact") + 1]
@@ -520,8 +546,31 @@ def main():
         m.write((pseg << 4) + dm["dos_keepc"], bytes([1, 0]))
         if compact:
             m.bp_exec("hbf_perform")
-        # settle=0: what follows waits on the handoff's own state
-        mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"), settle=0)
+        def pb(name):
+            return m.read((dosmap.instance(m) << 4) + dm[name], 1)[0]
+
+        if fsx:
+            # --- --fsx: the same launch, TYPED AT THE FULL SCREEN ----------
+            ui.menu_pick("Program", "Full Screen")
+            M.until(m, lambda _=None: pb("dos_fsxup"), "[dos_fsxup]",
+                    guest=20.0)
+            print("kdreturn: --fsx - [dos_keepc] reads %d in the bracket"
+                  % pb("dos_keepc"))
+            m.write((dosmap.instance(m) << 4) + dm["dos_keepc"], bytes([1]))
+            m.type_text("B:\n")
+            M.pace(m, 1.0)
+            m.type_text(prog.split(".")[0] + "\n")
+            print("kdreturn: --fsx - %s typed at the full-screen console"
+                  % prog)
+            # THE BRACKET COMES DOWN FIRST (96.33.16), and until it has, the
+            # text screen is the CONSOLE - which still holds the windowed
+            # run's READY. So the wait below starts at the graphics desktop
+            # the launch goes through, not at the line already on the glass
+            M.until(m, lambda _=None: not M.video_is_text(m.video() or {}),
+                    "the console's bracket down", guest=30.0)
+        else:
+            # settle=0: what follows waits on the handoff's own state
+            mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"), settle=0)
         if compact:
             # --- DOS MOVES UNDER THE HANDOFF (SPEC.md 96.40.8) -----------
             if not m.wait_stop(60.0):
@@ -595,7 +644,41 @@ def main():
         # (that routine's own reason).
         c1 = []
         try:
-            wait_desktop(m, ui, stamp=c1)
+            if fsx:
+                # --fsx: the desktop that comes back is under the console's
+                # full screen again within moments - which is the point - so
+                # the edge is the CONSOLE back with this run's exit line on
+                # it, read off the restored session's own state
+                def _home(_m=None):
+                    try:
+                        up = pb("dos_fsxup")
+                    except Exception:                       # noqa: BLE001
+                        return False
+                    if up and any("exit code 042 (Arena: " in r
+                                  and int(r.split("(Arena: ")[1]
+                                          .split("KB")[0]) >= kd_kb
+                                  for r in rows(m)):
+                        c1.append(m.status()["cycles"])
+                        return True
+                    return False
+                try:
+                    M.until(m, _home, "the session back at its full screen",
+                            poll=0.05, guest=120.0)
+                except M.MartyError:
+                    pass
+                if not c1:
+                    fail("the session did not come home to the full-screen "
+                         "console it was typed at: [dos_fsxup]=%d "
+                         "[dos_fsxgo]=%d, the text screen %r. The shut-down "
+                         "arm leaves dos_run by `.outq`, so the return's wake "
+                         "has to spend [dos_fsxgo] (SPEC.md 96.33.16, "
+                         "KERN-MEGA-PLAN 14.113) - left standing, it throws "
+                         "the NEXT windowed program's console into the full "
+                         "screen" % (pb("dos_fsxup"), pb("dos_fsxgo"),
+                                     [r for r in rows(m) if r.strip()][-3:]))
+                ui.ready(limit=60)
+            else:
+                wait_desktop(m, ui, stamp=c1)
         except Exception as e:
             fail("the machine never came back after the return: %s" % e)
         spent = c1[0] - c0
@@ -623,6 +706,17 @@ def main():
         if "DOS" not in titles:
             fail("the DOS window is not up: the session that came back is not "
                  "the one that left - titles %r" % (titles,))
+
+        # --- 2b. --fsx: ...and Esc leaves the full screen it came back to,
+        # with nothing left owed (KERN-MEGA-PLAN 14.113)
+        if fsx:
+            print("kdreturn: --fsx - back at the full-screen console")
+            m.key("Escape")
+            M.until(m, lambda _=None: not pb("dos_fsxup"),
+                    "Esc to leave the full screen", guest=20.0)
+            if pb("dos_fsxgo"):
+                fail("[dos_fsxgo] is still set after the full screen came "
+                     "back and was left")
 
         # --- 3. ...with the program's own exit code ---------------------
         pseg = dosmap.instance(m)
@@ -739,10 +833,16 @@ def main():
                  "time fields kd_resume staged over KDL_CLK were cleared bss. "
                  "A month of 0 indexes clk_mnames BEFORE the table"
                  % (after[3], after[4], after[5]))
-        if after[5] != before[5] or after[4] != before[4]:
+        # THE DAY TOO (KERN-MEGA-PLAN 14.114): this compared the year and
+        # the month only, and `secs()` drops the day - so a session that came
+        # home a whole DAY on read as "moved forward 43 seconds" and passed.
+        # Every machine here starts its clock at midnight on the fallback date,
+        # so no honest round trip crosses one
+        if after[3:6] != before[3:6]:
             fail("the clock went from %r to %r - the DATE changed across a "
-                 "return that took seconds (SPEC.md 96.49.5)"
-                 % (before, after))
+                 "return that took seconds (SPEC.md 96.49.5; a program that "
+                 "SET the clock was counted as running for the step, "
+                 "KERN-MEGA-PLAN 14.114)" % (before, after))
         moved = secs(after) - secs(before)
         if moved < 0:
             moved += 24 * 3600

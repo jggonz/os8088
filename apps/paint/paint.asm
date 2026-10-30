@@ -183,11 +183,13 @@
 
     OS88_HEADER 'PAINT', pt_entry, 1, OS88_HIGH | OS88_HIGHMEM
                                     ; ...and its CLAIMS may be above 1MB too
-                                    ; (KERN-MEGA-PLAN 14.13): a canvas, undo
-                                    ; image, staging or clipboard of 64KB or
-                                    ; less can be an LDT selector, which
-                                    ; pt_layout's flat arm, pt_orowset and
-                                    ; pt_mstep address without arithmetic
+                                    ; (KERN-MEGA-PLAN 14.13). Under kern_mega's
+                                    ; protected mode EVERY claim is an LDT
+                                    ; selector (KERN-MEGA-MEMORY-PLAN MC7): one
+                                    ; of 64KB or less is addressed flat, and a
+                                    ; bigger canvas through 32KB-spaced SEG_SUB
+                                    ; windows - pt_layout's .win, pt_orowset,
+                                    ; pt_srowset, pt_uwinof
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A painter's palette: the thumb notch bottom-left, four dabs of paint. The
@@ -369,6 +371,10 @@ PT_CH_MAX   equ 464                 ; os8088 drives is 720, the tallest 480
 PT_IBSH     equ 4                   ; SPEC.md 42.18: the inked table's band is
 PT_IBH      equ 1 << PT_IBSH        ; 16 rows, so a row's band is y >> 4
 PT_NBAND    equ (PT_CH_MAX >> PT_IBSH) + 1
+PT_WMAX     equ 8                   ; kern_mega's 32KB windows over a canvas
+%if ((PT_CH_MAX * ((PT_CW_MAX + 7) / 8) * 4 + 118) >> 15) >= PT_WMAX
+%error "the biggest canvas needs more than PT_WMAX windows (pt_layout .win)"
+%endif
 PT_IDLESPIN equ 32                  ; SPEC.md 42.8.1: consecutive no-movement
                                     ; polls the stroke loop spends on a YIELD
                                     ; before it goes back to sleeping a whole
@@ -1282,6 +1288,11 @@ pt_alloc:
 ;   [pt_undelta]  canvas -> undo image, a DELTA, so it is wrong when EITHER
 ;                 end moves
 ;
+; NEVER CALLED UNDER kern_mega's PROTECTED MODE (KERN-MEGA-MEMORY-PLAN
+; MC7.4): a claim that moves there is REBASED - its selector, and every
+; SEG_SUB window pt_layout cut from it, keep their values - so nothing here
+; would have anything to do.
+;
 ; The row table is SHIFTED rather than rebuilt: every entry is the base plus
 ; a per-row constant, so adding the move's delta gives exactly what pt_geom
 ; would recompute, at a fraction of the cost and with no dependence on
@@ -1439,11 +1450,76 @@ pt_alloc_undo:
     sub dx, [pt_base]
     mov [pt_undelta], dx
     mov byte [pt_haveundo], 1
+    call pt_uwins                   ; ...and its windows, under kern_mega
 .out:
     call pt_menufix                 ; funded or not, the menu says which
     pop dx
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_uwins - the undo image's WINDOWS, when the canvas is laid out in them
+; pt_uwinof - the undo image's selector for the canvas window in AX
+; in:  pt_uwins: nothing; pt_uwinof: AX = a canvas row's segment
+; out: pt_uwins: pt_uwin[] filled when [pt_pmw]; pt_uwinof: AX = the undo
+;      image's window over the same offsets; both preserve every other
+;      register
+;
+; [pt_undelta] is a paragraph DELTA, and on kern_mega's windowed layout
+; (pt_layout's .win) there is no delta: a row's segment is a SEG_SUB selector
+; of the canvas, and the undo row beside it is a selector of the undo claim
+; that the kernel numbered on its own. The two claims have the SAME layout,
+; so the undo image's window k is SEG_SUB(undo, k) and the row's k is the
+; position of its segment in pt_cwin[] - a walk over at most PT_WMAX words,
+; taken only on that layout (pt_ucopy, pt_uswap_row and pt_urowset test
+; [pt_pmw]), so a real-mode kernel never runs it.
+; -----------------------------------------------------------------------------
+pt_uwins:
+    cmp byte [pt_pmw], 0
+    je .out
+    cmp word [pt_unseg], 0
+    je .out                         ; no undo image to lay out
+    push ax
+    push cx
+    push dx
+    push si
+    xor si, si
+    mov cx, [pt_nwin]
+.k:
+    mov ax, si
+    shr ax, 1                       ; k
+    mov dx, [pt_unseg]
+    call pt_subwin
+    mov [pt_uwin+si], dx
+    inc si
+    inc si
+    loop .k
+    pop si
+    pop dx
+    pop cx
+    pop ax
+.out:
+    ret
+
+pt_uwinof:
+    push bx
+    push cx
+    xor bx, bx
+    mov cx, [pt_nwin]
+.k:
+    cmp ax, [pt_cwin+bx]
+    je .hit
+    inc bx
+    inc bx
+    loop .k
+    xor ax, ax                      ; not one of ours, which cannot happen:
+    jmp short .out                  ; the null selector faults at its use
+.hit:                               ; rather than writing some other window
+    mov ax, [pt_uwin+bx]
+.out:
+    pop cx
+    pop bx
     ret
 %endif   ; PTF_UNDO
 
@@ -1737,11 +1813,18 @@ pt_paras:
 ; granule it starts in, rowoff[y] the 0..127 bytes into that granule. A canvas
 ; that FITS one segment is laid out flat instead - rowseg[y] = [pt_base] and
 ; rowoff[y] the whole offset - because its claim may be an LDT selector on
-; kern_mega (OS88_HIGHMEM), on which no segment arithmetic means anything. The
-; undo image has the identical layout [pt_undelta] paragraphs away, so its row
-; segment is rowseg[y] + [pt_undelta] and there is no second table: flat, that
-; sum is exactly [pt_unseg] whatever either claim is; granular, both claims are
-; over 64KB and so conventional on every kernel.
+; kern_mega, on which no segment arithmetic means anything. The undo image has
+; the identical layout [pt_undelta] paragraphs away, so its row segment is
+; rowseg[y] + [pt_undelta] and there is no second table: flat, that sum is
+; exactly [pt_unseg] whatever either claim is; granular, both are real
+; segments. **A canvas over 64KB under kern_mega's protected mode** has
+; neither: every claim is a selector there (KERN-MEGA-MEMORY-PLAN MC7), so
+; .win below cuts it into 32KB-spaced SEG_SUB windows, rowseg[y] the row's
+; window and rowoff[y] its offset in it, and the undo row is the undo claim's
+; window over the same offsets (pt_uwinof). A real-mode kernel never takes
+; that arm: it is behind the selector test, and [pt_brmax4] - the one number
+; the arm changes for everybody else - comes out exactly what pt_blit_1 used
+; to compute for itself.
 ;
 ; **[pt_undelta] is pt_alloc_undo's to set, not this routine's.** It used to be
 ; stamped here as [pt_smaxp], from the era when one claim held the canvas and
@@ -1807,6 +1890,33 @@ pt_layout:
     mov [pt_bpr], bx
     pop bx
 %endif
+    ; --- HOW MANY ROWS ONE BAND OF pt_blit_1 MAY CARRY, decided ONCE here
+    ; because it is a fact about the layout: a band is addressed from its
+    ; LAST row's (segment, offset) and every other row is a positive offset
+    ; from there, so what binds is the largest offset that last row can have.
+    ; Flat and granular, that is under 128 or the canvas fits 64KB anyway,
+    ; and 65,408 bytes of rows fit after it; kern_mega's 32KB windows leave
+    ; an offset under 32,768 and as much again after it. It was a `div` in
+    ; pt_blit_1 per call (KERN-MEGA-MEMORY-PLAN MC7).
+    mov ax, 65536 - 128
+%ifndef APP_SMALL                   ; (the small arm's canvas always fits 64KB)
+    cmp word [pt_cvparas], 0x1000
+    jbe .bm
+    test byte [pt_base], 4
+    jz .bm
+    mov ax, 0x8000
+.bm:
+%endif
+    xor dx, dx
+    div bx
+    or ax, ax
+    jnz .bmok
+    inc ax                          ; a zero band would not terminate
+.bmok:
+    mov [pt_brmax4], ax
+%ifdef PTF_UNDO
+    mov byte [pt_pmw], 0            ; ...and not windowed until .win says so
+%endif
     ; --- row 0 is the LAST row in the file, so the walk runs downward -------
     mov ax, [pt_ch]
     dec ax
@@ -1838,18 +1948,24 @@ pt_layout:
     loop .flat
     jmp pt_ld_6
 .row:
+%ifndef APP_SMALL
+    test byte [pt_base], 4          ; a SELECTOR: kern_mega in protected mode,
+    jnz .win                        ; where `[pt_base] + n` names nothing
+%endif
+.rowl:
     mov ax, si
     and ax, 127
     mov [pt_rowoff+bx], ax          ; 0..127 bytes into its 128-byte GRANULE...
-    mov ax, di
-    mov dx, si
-    push cx
-    mov cl, 12
-    shl ax, cl
-    mov cl, 4
-    shr dx, cl
-    pop cx
-    or ax, dx
+    mov ax, si                      ; ...whose paragraph is DI:SI >> 4, four
+    mov dx, di                      ; one-bit shifts through the pair: the
+    shr dx, 1                       ; 8088 shifts by CL at four clocks a bit,
+    rcr ax, 1                       ; so this is ~40 clocks a row cheaper than
+    shr dx, 1                       ; `shl ax, 12` / `shr dx, 4` - which pays
+    rcr ax, 1                       ; for the brmax `div` this routine took
+    shr dx, 1                       ; over from pt_blit_1 (KERN-MEGA-MEMORY-
+    rcr ax, 1                       ; PLAN MC7) many times over
+    shr dx, 1
+    rcr ax, 1
     and al, 0xF8                    ; (the segment a multiple of 8 paragraphs:
     add ax, [pt_base]               ; kern_mega's protected mode names memory in
     mov [pt_rowseg+bx], ax          ; 128-byte steps, docs/plans/KERN-MEGA-PLAN.md
@@ -1859,8 +1975,101 @@ pt_layout:
     sbb di, 0                       ; in the picture
     inc bx
     inc bx
-    loop .row
+    loop .rowl
     jmp pt_ld_6
+
+%ifndef APP_SMALL
+    ; --- KERN_MEGA'S PROTECTED MODE (KERN-MEGA-MEMORY-PLAN MC7): a claim is
+    ; an LDT SELECTOR, its limit is 64KB, and a granule of it is not a
+    ; segment. So a canvas over 64KB is cut into WINDOWS 32KB apart, each a
+    ; SEG_SUB selector reaching 64KB (or to the claim's end): window k starts
+    ; k * 32KB into the claim and a row whose first byte is at O belongs to
+    ; window O >> 15, at offset O & 7FFFh. Every row then fits its window
+    ; with 32KB to spare, which is what pt_brmax4 above promised a band. The
+    ; windows sit at FIXED offsets, not where the rows happen to fall, so a
+    ; re-layout - a resize's two passes, a load - asks for the same ones and
+    ; the kernel answers the same selectors: the LDT does not grow per
+    ; resize. They MOVE with the claim (a rebase, no relocation proc) and go
+    ; with it. pt_orowset and pt_srowset use the same windows.
+.win:
+    push si
+    push di                         ; DI:SI = row 0's offset, the HIGHEST, so
+    shl si, 1                       ; its window is the last one wanted
+    rcl di, 1                       ; DI = row 0's window
+    inc di
+    mov [pt_nwin], di               ; ...and how many windows
+    xor si, si
+.wsel:
+    mov ax, si
+    mov dx, [pt_base]
+    call pt_subwin
+    push si
+    add si, si
+    mov [pt_cwin+si], dx            ; window k's selector
+    pop si
+    inc si
+    cmp si, di
+    jb .wsel
+    pop di
+    pop si
+.wrow:
+    mov ax, si
+    and ax, 0x7FFF
+    mov [pt_rowoff+bx], ax          ; the offset in its window...
+    mov ax, si
+    mov dx, di
+    shl ax, 1
+    rcl dx, 1                       ; DX = its window
+    add dx, dx
+    xchg bx, dx
+    mov ax, [pt_cwin+bx]
+    xchg bx, dx
+    mov [pt_rowseg+bx], ax          ; ...and that window's selector
+    sub si, [pt_stride]
+    sbb di, 0
+    inc bx
+    inc bx
+    loop .wrow
+%ifdef PTF_UNDO
+    mov byte [pt_pmw], 1            ; the undo image is laid out the same way,
+    call pt_uwins                   ; through windows of its own
+%endif
+    jmp pt_ld_6
+%endif   ; APP_SMALL - whose canvas is never over 64KB (PT_CW_MAX, PT_CH_MAX)
+
+; -----------------------------------------------------------------------------
+; pt_subwin - a 32KB-spaced WINDOW of a claim, under kern_mega (pt_layout)
+; in:  DX = the claim (a selector), AX = the window, k
+; out: DX = a data selector based k * 32KB into it reaching 64KB or to its
+;      end - the claim itself for k = 0; preserves every other register
+;
+; OSAPI_SEG's SEG_SUB, which answers the same selector for the same window
+; asked again. Only ever reached in protected mode: every caller is behind a
+; selector test, and a real-mode kernel's answer would be DX + AX x 800h
+; anyway. A refusal (no LDT entry left - the LDT grows, so it is not
+; expected) answers the NULL selector, so the first use faults at its
+; instruction and the kernel closes Paint rather than letting a row land
+; in some other window.
+; -----------------------------------------------------------------------------
+pt_subwin:
+    or ax, ax
+    jz .out
+    push ax
+    push bx
+    push cx
+    mov cl, 11
+    shl ax, cl                      ; k * 800h paragraphs = k * 32KB
+    xor cx, cx                      ; to the claim's end, 64KB at most
+    mov bl, SEG_SUB
+    call OSAPI_SEG
+    jnc .ok
+    xor dx, dx
+.ok:
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; pt_topacked - turn a four-plane canvas back into nibbles (SPEC.md 42.13.1)
@@ -2174,11 +2383,19 @@ pt_urowset:
     mov bx, ax
     add bx, bx
     mov di, [pt_rowoff+bx]
-    mov bx, [pt_rowseg+bx]
-    add bx, [pt_undelta]
-    mov es, bx
+    push ax
+    mov ax, [pt_rowseg+bx]
+    cmp byte [pt_pmw], 0
+    jne .uwin
+    add ax, [pt_undelta]
+.useg:
+    mov es, ax
+    pop ax
     pop bx
     ret
+.uwin:
+    call pt_uwinof                  ; kern_mega's windows (pt_uwinof)
+    jmp short .useg
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -3095,9 +3312,13 @@ pt_umark_b:
 ; in:  AX = row; out: nothing; preserves all registers
 ;
 ; The two images share a row OFFSET and differ only by [pt_undelta]
-; paragraphs, which is what keeps this to one row table. ES is re-derived from
-; the banked canvas segment for every block, because the copy leaves it
-; pointing at the undo image.
+; paragraphs, which is what keeps this to one row table - or, on kern_mega's
+; windowed layout, by which of their own windows the row is in (pt_uwinof).
+; Either way the undo row's segment is worked out ONCE, here, and ES holds it
+; for every block: the copy only ever moves DS. pt_rowset is inlined for the
+; same reason - this runs once per row a stroke touches, and the call, its
+; push and pop and the ES round trip were more than the per-row test
+; (KERN-MEGA-MEMORY-PLAN MC7) costs.
 ; -----------------------------------------------------------------------------
 pt_ucopy:
     push ax
@@ -3108,9 +3329,18 @@ pt_ucopy:
     push di
     push bp
     push es
-    call pt_rowset                  ; ES:DI = the canvas row's first byte
-    mov ax, es
-    mov bp, ax                      ; BP = the canvas segment, as a value
+    mov bx, ax
+    add bx, bx
+    mov di, [pt_rowoff+bx]          ; DI = the row's first byte...
+    mov bp, [pt_rowseg+bx]          ; BP = the canvas segment, as a value
+    mov ax, bp
+    add ax, [pt_undelta]            ; ...and the undo image's, by the delta
+    cmp byte [pt_pmw], 0
+    je .useg
+    mov ax, bp
+    call pt_uwinof                  ; ...or by its window, under kern_mega
+.useg:
+    mov es, ax                      ; ES = the undo row, for every block
     mov [pt_urbase], di
     xor bx, bx                      ; BX = block index
 .blk:
@@ -3136,10 +3366,7 @@ pt_ucopy:
     mov cx, ax                      ; multiple of 4)
     mov di, [pt_urbase]
     add di, dx
-    mov si, di
-    mov ax, bp
-    add ax, [pt_undelta]
-    mov es, ax                      ; ES:DI = the undo row
+    mov si, di                      ; ES:DI = the undo row
     push ds
     mov ds, bp                      ; DS:SI = the canvas row
     rep movsw
@@ -3173,8 +3400,18 @@ pt_uswap_row:
     push di
     push bp
     push es
-    call pt_rowset                  ; ES:DI = the canvas row
-    mov bp, es                      ; BP = the canvas segment, a value
+    mov bx, ax                      ; pt_rowset, inlined as in pt_ucopy
+    add bx, bx
+    mov di, [pt_rowoff+bx]
+    mov bp, [pt_rowseg+bx]          ; BP = the canvas segment, a value
+    mov ax, bp
+    add ax, [pt_undelta]            ; the undo row's segment, ONCE a row
+    cmp byte [pt_pmw], 0
+    je .useg
+    mov ax, bp
+    call pt_uwinof                  ; (kern_mega's windows: pt_uwinof)
+.useg:
+    mov [pt_urseg], ax
     mov [pt_urbase], di
     cld                             ; lodsw below; nothing above promises DF
     mov dl, [pt_ubmiss]             ; DL = the blocks this row saved, bit 0
@@ -3213,8 +3450,7 @@ pt_uswap_row:
     add di, si
     mov si, di
     mov es, bp                      ; ES stays the canvas and DS becomes the
-    mov ax, bp                      ; undo image, so the exchange is one loop
-    add ax, [pt_undelta]
+    mov ax, [pt_urseg]              ; undo image, so the exchange is one loop
     push ds
     mov ds, ax
     shr cx, 1                       ; pairs, CF = a word over: done first
@@ -3609,8 +3845,9 @@ pt_blit_dmg:
 ;  - row y+1 sits one stride BELOW row y in memory - the canvas is stored as
 ;    the BMP it will be written as, bottom row first - so the stride handed
 ;    over is negative, and the band is addressed from its LAST row's
-;    segment so no row's offset can go below zero. [pt_brmax] is how many
-;    rows can share one segment that way; a 448x280 canvas is one band.
+;    segment so no row's offset can go below zero. [pt_brmax4] is how many
+;    rows can share one segment that way - pt_layout's to say, being a fact
+;    about the layout; a 448x280 canvas is one band.
 ; -----------------------------------------------------------------------------
 pt_blit:
     push ax
@@ -3888,31 +4125,24 @@ pt_blit_1:
     sub bx, ax
     inc bx
     mov [pt_bwid], bx               ; width in pixels
-    mov ax, 65536 - 128             ; rows that fit one segment, worst-case
-    xor dx, dx                      ; 127-byte row offset included: the
-                                    ; granules are 128 bytes since kern_mega's
-                                    ; grid, and 65520 let a band of a big
-                                    ; canvas's widest strides run up to 111
-                                    ; bytes past 64KB from an offset over 15.
-                                    ; A canvas that fits one segment is flat
-                                    ; (pt_layout) and its band's first row is
-                                    ; an exact offset, so this binds only the
-                                    ; granule layout
-    div word [pt_stride]
-    or ax, ax
-    jnz .rmok
-    inc ax                          ; a stride past 64KB cannot happen (the
-.rmok:                              ; canvas is clamped well below), but a
-    mov [pt_brmax], ax              ; zero band height would not terminate
+                                    ; [pt_brmax4] is how many rows one band
+                                    ; carries, and it is pt_layout's: the
+                                    ; layout decides how big the band's LAST
+                                    ; row's offset can be - under 128 in
+                                    ; 128-byte granules, the whole offset on a
+                                    ; flat canvas that fits 64KB anyway, under
+                                    ; 32KB in kern_mega's windows - and so how
+                                    ; many strides fit after it. It was a
+                                    ; `div` here on every call
     mov ax, [pt_cy1]
     mov [pt_bsi], ax                ; the band's first row
 .band:
     mov ax, [pt_cy2]
     sub ax, [pt_bsi]
     inc ax                          ; AX = rows left
-    cmp ax, [pt_brmax]
+    cmp ax, [pt_brmax4]
     jbe .nok
-    mov ax, [pt_brmax]
+    mov ax, [pt_brmax4]
 .nok:
     mov [pt_bn], ax                 ; AX = rows in this band
     add ax, [pt_bsi]
@@ -11622,9 +11852,12 @@ pt_setsize:
 ; eight because on kern_mega only a multiple of 8 paragraphs is a segment
 ; (KERN-MEGA-PLAN 3.1). It was one paragraph, which faulted a resize there.
 ;
-; A SELECTOR (bit 2, an OS88_HIGHMEM claim of 64KB or less) is never
-; normalised: its segment is not a number, so the offset IS the address, and
-; a claim that small keeps every row of either layout inside it.
+; REAL MODE ONLY. A selector's segment is not a number, so pt_cvmove does
+; not walk one at all under kern_mega's protected mode (its .pmrow); here bit
+; 2 is never set - a claim is 512-byte aligned and a granule is eight
+; paragraphs - and the test that used to sit here for it is gone. The small
+; arm (APP_SMALL) keeps it: its canvas fits 64KB, so a selector walked flat
+; is right there, and that is fewer bytes than .pmrow.
 ; -----------------------------------------------------------------------------
 pt_mstep:
     push cx
@@ -11636,9 +11869,11 @@ pt_mstep:
 .up:                                ; - the highest address of all - and comes
     add ax, cx                      ; DOWN the file from there
 .norm:
+%ifdef APP_SMALL
     mov [bx+2], ax
     test byte [bx], 4
-    jnz .out                        ; a selector: flat, as above
+    jnz .out                        ; the small arm: a selector is flat
+%endif
     mov dx, ax
     and ax, 127
     mov [bx+2], ax
@@ -11646,7 +11881,9 @@ pt_mstep:
     sar dx, cl
     and dl, 0xF8
     add [bx], dx
+%ifdef APP_SMALL
 .out:
+%endif
     pop cx
     ret
 
@@ -11851,9 +12088,15 @@ pt_cvmove:
     mov [pt_mdseg], es              ; these in the whole move
     mov [pt_mdoff], di
     mov ax, es                      ; ...and onto the GRANULES unless it is a
-    test al, 4                      ; selector: a canvas that fits a segment
-    jnz .row                        ; is laid out flat (pt_layout), and
-    mov ax, di                      ; pt_mstep's signed step wants an offset
+    test al, 4                      ; selector (kern_mega: .pmrow below, which
+%ifndef APP_SMALL                   ; walks no arithmetic at all; the small
+    jnz .pmrow                      ; arm's canvas fits 64KB, so pt_mstep's
+%else                               ; flat arm serves it). A canvas
+    jnz .row
+%endif
+    mov ax, di                      ; that fits a segment is laid out flat
+                                    ; (pt_layout), and pt_mstep's signed step
+                                    ; wants an offset
     and di, 127                     ; under 128 to start from
     mov [pt_mdoff], di
     mov cl, 4
@@ -11871,6 +12114,36 @@ pt_cvmove:
     mov cx, [pt_stride]
     call pt_mstep
     jmp short .row
+%ifndef APP_SMALL
+
+    ; --- KERN_MEGA'S PROTECTED MODE (KERN-MEGA-MEMORY-PLAN MC7): a segment
+    ; is a selector, so there is no granule to step into and every row is
+    ; looked up instead - the destination's out of the row table, the
+    ; source's out of pt_orowset, whose windows are pt_layout's. It costs a
+    ; kernel call a row on a machine that is a 286 at the least, and the
+    ; real-mode walk above is untouched by it.
+.pmrow:
+    call pt_cvrow
+    dec bp
+    jz .out
+    cmp byte [pt_cvup], 0
+    je .pmup
+    inc si                          ; the walk comes DOWN the file: row 0 led
+    jmp short .pmnext
+.pmup:
+    dec si                          ; ...or goes up it from the bottom row
+.pmnext:
+    mov ax, si
+    call pt_orowset
+    mov ax, [pt_orseg]
+    mov [pt_msseg], ax
+    mov [pt_msoff], di
+    mov ax, si
+    call pt_rowset
+    mov [pt_mdseg], es
+    mov [pt_mdoff], di
+    jmp short .pmrow
+%endif
 .out:
     jmp pt_ld_8
 
@@ -12602,8 +12875,11 @@ pt_orowset:
     mov di, ax                      ; DI = the whole offset...
     mov bx, [pt_osrc]               ; the old canvas claim, or the block being
     test bl, 4                      ; relaid in place (pt_resize)
-    jnz .seg                        ; ...which a SELECTOR is addressed by: a
-                                    ; claim of 64KB or less, so DX is 0
+%ifndef APP_SMALL
+    jnz .sel                        ; ...a SELECTOR: kern_mega, below
+%else
+    jnz .seg                        ; ...a SELECTOR, flat: the small arm's
+%endif                              ; canvas never passes 64KB
     and di, 127                     ; ...or the 0..127 bytes into its granule,
     mov cl, 4                       ; whose segment is a multiple of EIGHT
     shr ax, cl                      ; paragraphs (KERN-MEGA-PLAN 3.1: this was
@@ -12619,6 +12895,17 @@ pt_orowset:
     pop cx
     pop ax
     ret
+%ifndef APP_SMALL
+.sel:                               ; KERN_MEGA'S PROTECTED MODE: the window
+    and di, 0x7FFF                  ; the row starts in, 32KB apart - the same
+    shl ax, 1                       ; ones pt_layout's .win lays a canvas out
+    rcl dx, 1                       ; in, so an in-place relayout reads and
+    mov ax, dx                      ; writes through the selectors it already
+    mov dx, bx                      ; has (pt_subwin; k = 0 is the claim)
+    call pt_subwin
+    mov bx, dx
+    jmp short .seg
+%endif
 
 ; pt_num - AX in decimal at DS:DI, DI advanced; clobbers AX, BX, CX, DX
 pt_num:
@@ -13589,7 +13876,10 @@ pt_save:
     mov ax, [pt_base]               ; 66.5.7.1): the kernel holds ES:BX into
     mov es, ax                      ; the canvas for the whole call
     xor bx, bx                      ; ES:BX = the DIB, header and all
-    call OSAPI_FILE_WRITE           ; SI is still the name
+    call OSAPI_FILE_WRITE           ; SI is still the name - in one call
+                                    ; past 64KB on kern_mega too, whose file
+                                    ; layer steps a selector buffer's window
+                                    ; (dskw_hicarry, KERN-MEGA-MEMORY-PLAN MC7)
     call pt_unpin                   ; ...and movable again, CF untouched
     jnc .wrote
     call pt_ferr
@@ -14184,8 +14474,9 @@ pt_map16:
 ; -----------------------------------------------------------------------------
 ; pt_srowset - point ES:[pt_srow] at the staged file's byte DX:AX
 ; in:  DX:AX = a 32-bit offset into the staging buffer
-; out: ES = the segment, [pt_srow] = an offset of 0..127 (the whole offset
-;      when the staging claim is a selector); clobbers ES and [pt_srow] only
+; out: ES = the segment, [pt_srow] = an offset of 0..127 (under kern_mega,
+;      where the staging claim is a selector, the row's 32KB window and the
+;      offset in it - pt_layout's .win); clobbers ES and [pt_srow] only
 ;
 ; dskw_norm's arithmetic (SPEC.md 18.4.1) inside an app, and the same reason:
 ; the paragraph part of the offset goes into the segment, so what is left is
@@ -14201,11 +14492,18 @@ pt_srowset:
     push ax
     push cx
     push dx
-    mov cx, [pt_gseg]               ; A SELECTOR (an OS88_HIGHMEM claim of
-    test cl, 4                      ; 64KB or less on kern_mega) is addressed
-    jz .seg                         ; flat: the claim, and the whole offset,
-    mov es, cx                      ; which DX is 0 for in a claim that small
-    mov [pt_srow], ax
+    mov cx, [pt_gseg]               ; A SELECTOR (every claim, on kern_mega in
+    test cl, 4                      ; protected mode) is addressed through the
+    jz .seg                         ; 32KB window the row starts in, as the
+    mov cx, ax                      ; canvas is (pt_layout's .win): a row is
+    and cx, 0x7FFF                  ; at most [pt_cols] x 3 bytes, so it fits
+    mov [pt_srow], cx               ; the window it starts in with room over
+    shl ax, 1
+    rcl dx, 1
+    mov ax, dx                      ; AX = the window
+    mov dx, [pt_gseg]
+    call pt_subwin
+    mov es, dx
     jmp short .out
 .seg:
     mov cx, ax
@@ -16459,6 +16757,18 @@ pt_ic_text:
     PTWORD pt_bsi                   ; ...its first canvas row...
     PTWORD pt_bn                    ; ...how many rows it covers...
     PTWORD pt_brmax                 ; ...and the most that fit one segment
+    PTWORD pt_brmax4                ; ...which for a 4bpp or planar band is
+                                    ; the layout's to say (pt_layout)
+%ifndef APP_SMALL
+    PTWORD pt_nwin                  ; kern_mega: how many 32KB windows the
+    PTBUF  pt_cwin, PT_WMAX * 2     ; canvas is laid out in, and each one's
+                                    ; selector (pt_layout's .win)
+%endif
+%ifdef PTF_UNDO
+    PTBUF  pt_uwin, PT_WMAX * 2     ; ...the undo image's over the same
+    PTBYTE pt_pmw                   ; offsets, and 1 while that layout holds
+    PTWORD pt_urseg                 ; pt_uswap_row: the undo row's segment
+%endif
     PTWORD pt_lbx                   ; pt_lnblit: a stroke segment's own band
     PTWORD pt_lby                   ; (SPEC.md 42.23.8), kept apart from the
     PTWORD pt_lbw                   ; four above because pt_blit is this

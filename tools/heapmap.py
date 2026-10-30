@@ -139,10 +139,17 @@ def u16(b, i=0):
 
 
 class Claim(object):
-    __slots__ = ("seg", "para", "own", "dma", "rloc", "hi")
+    __slots__ = ("seg", "para", "own", "dma", "rloc", "hi", "sel")
 
     def __init__(self, r):
         self.seg = u16(r, MC_SEG)
+        # THE NAME A PACKAGE HOLDS FOR IT: the segment itself on every real
+        # mode kernel, and on kern_mega its DATA selector (`mem_sel`, by
+        # mem_tab index - Map sets it), which is what a W_SEG, an ES or a
+        # package's own claim word holds there. MC_SEG stays the paragraph,
+        # MC_OWN is the owner as the kernel recorded it: the caller's DS,
+        # which is a selector on kern_mega too
+        self.sel = self.seg
         self.para = u16(r, MC_PARA)
         self.own = u16(r, MC_OWN)
         place = u16(r, MC_DMA)          # ONE WORD, two placement facts:
@@ -177,6 +184,49 @@ class Claim(object):
                    "  dma-head %d para" % self.dma if self.dma else ""))
 
 
+MX_NBLK, MX_BLKSZ = 96, 10          # kernel/mega.inc's pool block table
+MX_FPURGE, MX_FPIN = 4, 8
+
+
+def pool(q):
+    """kern_mega's XMEM POOL claims (kernel/mega.inc's mx_tab: every pool
+    claim, region, driver image and kernel block above 1MB) as Claims whose
+    `sel` is the block's selector and `own` the owner as a package would
+    name it - its instance's region selector (I_SPTR; MX_OWN is the slot,
+    with 80h for the region and A0h for a claim), or for the kernel's
+    own blocks the MX_OWN byte with FF above it (a purgeable cache: its
+    MEM_P_* tag, so `purgeable` reads as on mem_tab). `seg` is a stand-in
+    past the first megabyte, unique and ordered; only `sel`, `own`, `para`
+    and `pinned` mean anything. q is a MegaBochs (tools/os88megabochs.py)."""
+    g = os88geom
+    raw = q.read(q.sym("mx_tab"), MX_NBLK * MX_BLKSZ)
+    inst = q.read(q.sym("inst_tab"), 12 * g.I_RECSZ)
+    out = []
+    for i in range(MX_NBLK):
+        r = raw[i * MX_BLKSZ:(i + 1) * MX_BLKSZ]
+        kb = u16(r, 2)
+        if not kb:
+            continue
+        own, fl = r[4], r[5]
+        c = Claim(bytes(MC_SIZE))
+        c.seg = 0x10000 + u16(r, 0) * 64
+        c.para = kb * 64
+        c.sel = u16(r, 6)
+        # MX_OWN: the slot, 80h | it for a package's REGION (OS88_HIGH),
+        # A0h | it for its claim (OS88_HIGHMEM), C0h and up the kernel's
+        if (own < 0x80 or own & 0xE0 in (0x80, 0xA0)) and own & 0x1F < 12:
+            c.own = u16(inst, (own & 0x1F) * g.I_RECSZ + g.I_SPTR)
+            if own & 0xE0 == 0x80:      # THE REGION itself: no MX_SEL of its
+                c.sel = c.own           # own, its name is the instance's
+        elif fl & MX_FPURGE:
+            c.own = u16(r, 8)
+        else:
+            c.own = 0xFF00 | own
+        c.rloc = 0 if fl & MX_FPIN else 1
+        out.append(c)
+    return sorted(out, key=lambda c: c.seg)
+
+
 class Map(object):
     """One sample of the claim heap, read while the guest is RUNNING.
 
@@ -203,9 +253,17 @@ class Map(object):
                                u16(q.read(sym["mem_top"], 2))):
                 break
         self.base, self.top, self.live = base, top, live
-        self.claims = sorted((Claim(raw[i * MC_SIZE:(i + 1) * MC_SIZE])
-                              for i in range(MEM_MAX)),
-                             key=lambda c: c.seg)
+        claims = [Claim(raw[i * MC_SIZE:(i + 1) * MC_SIZE])
+                  for i in range(MEM_MAX)]
+        if getattr(q, "bochs", False):          # kern_mega under Bochs
+            sel = q.read(q.sym("mem_sel"), MEM_MAX * 2)
+            for i, c in enumerate(claims):
+                c.sel = u16(sel, 2 * i) or c.seg
+        self.claims = sorted(claims, key=lambda c: c.seg)
+        # ...and kern_mega's POOL above 1MB, which mem_tab never sees: see
+        # pool(). Empty on every other kernel. NOT in `claims`, whose free-run
+        # arithmetic is the conventional arena's alone
+        self.pool = pool(q) if getattr(q, "bochs", False) else []
         self.claims = [c for c in self.claims if c.seg]
 
     def key(self):

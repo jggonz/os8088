@@ -949,16 +949,10 @@ px_eyeidx:
     mul word [px_cur + PXR_MW]
     add ax, [px_eyex]
     adc dx, 0
-    mov bx, ax
-    and bx, 127                    ; normalised to 8 paragraphs (PX_WGRID)
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8                    ; a segment kern_mega can load
-    add ax, [px_cur + PXR_MSEG]
+    mov bx, px_mwc                  ; through the master's 32KB windows
+    call px_mwget                   ; (pxrec.inc, MC7)
     mov es, ax
+    mov bx, dx
     mov al, [es:bx]
     xor ah, ah
     mov si, ax
@@ -970,6 +964,9 @@ px_eyeidx:
     pop cx
     pop bx
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_xy - "x,y" of the readout at DI, DI left on its NUL. Preserves all
 ; but DI

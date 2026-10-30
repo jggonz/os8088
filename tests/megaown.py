@@ -18,15 +18,18 @@ seconds later, which leaves a HOLE under MEGAOWN's region; MEGAOWN then
 fills the pool, frees every other block and claims 64KB from its own wake
 handler, walking the pool's region blocks before and after.
 
-Its region must be at a LOWER offset after the claim than before it; the
+Its region must be at a DIFFERENT offset after the claim than before it -
+HIGHER since KERN-MEGA-MEMORY-PLAN MC3, every claim being taken from the top
+and the pool packed UP, so MEGAHOLE's hole is ABOVE MEGAOWN's region; the
 claim and every survivor's stamps must read back (`MEGAOWN: ok`, which also
 checks a word of MEGAOWN's own bss and of its own code, read through DS and
 CS after the call that moved them); a second callback two seconds later must
 say the same (`MEGAOWN: after ok`); and no kern_mega FAULT or CLOSED.
 
-THE FAILING CASE (docs/WRITING-TESTS.md 1): make mx_compactf pin a package
-region (kernel/mega.inc, `cmp al, 0x80` -> `cmp al, 0xA0` in its owner
-test) and the region stays where it was: red on "did not move".
+THE FAILING CASE (docs/WRITING-TESTS.md 1): make mx_canmove pin a package
+region (kernel/mega.inc: `jmp short .no` after `cmp al, 0x80 / jb` ... i.e.
+answer ZF = 0 for 80h-9Fh) and the region stays where it was: red on "did
+not move".
 """
 import os
 import re
@@ -89,9 +92,9 @@ def main():
         fails.append("MEGAOWN walked %d region blocks where it should have "
                      "seen exactly one, twice (is MEGAOWN above 1MB?)"
                      % len(regs))
-    elif regs[1] >= regs[0]:
-        fails.append("MEGAOWN's region did not move: KB %d before the claim, "
-                     "%d after - the hole under it was never compacted "
+    elif regs[1] <= regs[0]:
+        fails.append("MEGAOWN's region did not move up: KB %d before the "
+                     "claim, %d after - the hole above it was never packed "
                      "across" % tuple(regs))
     if "MEGAOWN: ok" not in lines:
         fails.append("MEGAOWN's steps or self checks failed: %s" % " | ".join(

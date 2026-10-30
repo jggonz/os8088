@@ -108,6 +108,12 @@ def build():
 
 
 def launch(img, nic):
+    if os88qemu.MEGA:           # kern_mega: the same socket, a Bochs behind
+        import os88qmpmega     # it (tests/os88qmpmega.py) - mega.img for
+        os88qmpmega.Server(    # os8088.img, ether360's twin, NE2000 or not
+            SOCK, PIDFILE, os88build.at(img), os88build.at("build/apps.img"),
+            ne2k=nic)
+        return heapmap.Qmp(SOCK)
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     card = (" -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=3"
             if nic else "")

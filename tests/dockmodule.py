@@ -6,6 +6,7 @@ file and an invalid module must leave a working basic Dock and disarmed
 callbacks; a saved advanced preference must not prevent booting without it.
 The ordinary load/unload and drawing paths are exercised by dockpos.py.
 """
+import os
 import subprocess
 import sys
 import tempfile
@@ -39,7 +40,11 @@ def check_basic(m, cfg):
     eq = os88sym.equates()
     off = os88sym.syms()["mod_gone"]
     # (where `.cold` RUNS - [api_coldseg], not COLD_SEG: on a machine with no VGA and no EGA it slid down at boot, docs/plans/MOVABLE-COLD-PLAN.md 2)
-    expected = off.to_bytes(2, "little") + m.read(S("api_coldseg"), 2)
+    # kern_mega has no [api_coldseg]: `.cold`'s selector never moves there,
+    # so API_COLDSEG is the COLD_SEG equate itself (kernel.asm's api_far)
+    cold = (eq["COLD_SEG"].to_bytes(2, "little") if MEGA
+            else m.read(S("api_coldseg"), 2))
+    expected = off.to_bytes(2, "little") + cold
     base = S("DKFP")
     assert m.read(base, eq["DK_NENT"] * 4) == expected * eq["DK_NENT"], \
         "an unloaded callback still points into module memory"
@@ -54,10 +59,17 @@ def check_basic(m, cfg):
         "an unloaded Dock operation still points into module memory"
 
 
+# kern_mega (OS88_MEGA, docs/BOCHS.md): the same fixture out of its own tree -
+# its boot sector and kernel, and the modules assembled against it (the
+# Makefile's KMODDIR), on the 1.44MB geometry, the only one it boots from
+MEGA = bool(os.environ.get("OS88_MEGA"))
+KDIR = "build/megak/" if MEGA else "build/"
+
+
 def fixture(folder, fault, saved):
-    files = [os88build.at("build/ctrl.drv")]
+    files = [os88build.at(KDIR + "ctrl.drv")]
     if fault == "corrupt":
-        mod = bytearray(Path(os88build.at("build/dock.drv")).read_bytes())
+        mod = bytearray(Path(os88build.at(KDIR + "dock.drv")).read_bytes())
         mod[0] ^= 0xff             # refuses both raw and CZ module images
         path = folder / "dock.drv"
         path.write_bytes(mod)
@@ -67,9 +79,11 @@ def fixture(folder, fault, saved):
         cfg.write_bytes(b"O88CFG\0\0\x03\0DK\x01\x01\x06\0\0")
         files.append(str(cfg))
     image = folder / "system.img"
+    boot = KDIR + "boot.bin" if MEGA else "build/boot360.bin"
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", str(image),
-                    "--size", "360", "--boot", os88build.at("build/boot360.bin"),
-                    "--kernel", os88build.at("build/kernel.sys"), *files],
+                    "--size", "1440" if MEGA else "360",
+                    "--boot", os88build.at(boot),
+                    "--kernel", os88build.at(KDIR + "kernel.sys"), *files],
                    check=True, stdout=subprocess.DEVNULL)
     return str(image)
 

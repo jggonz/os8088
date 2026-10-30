@@ -1864,8 +1864,13 @@ x3c_start:
     add ax, X3_PCMRES
     mov cl, 4
     shr ax, cl
-    add ax, [ap_la_seg]
-    mov [x3c_sseg], ax
+    push bx
+    mov dx, [ap_la_seg]             ; ...ASKED (OSAPI_SEG's SEG_SUB): the sum
+    mov bl, SEG_SUB                 ; on every real-mode kernel, and under
+    xor cx, cx                      ; kern_mega a selector that moves with the
+    call OSAPI_SEG                  ; ring's claim (KERN-MEGA-MEMORY-PLAN MC7)
+    pop bx
+    mov [x3c_sseg], dx
     call x3c_tmpname                ; X3nnnnnn.TMP, free here
     jc .wrerr
     call x3c_hdr                    ; the header cluster at the stage's 0

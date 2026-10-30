@@ -44,6 +44,10 @@ import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E
 from cycweb import pkg_syms                                   # noqa: E402
 
 WB, H, NF, FPS = 50, 145, 20, 10
+# KERN_MEGA (tests/megaport.txt, on 86Box's Hercules): the player's ARM
+# (build/megak/apps/, -DPKG_MEGA, KERN-MEGA-PLAN 14.66), whose symbols are
+# the arm's, and a region that is an LDT selector (m.lin)
+MEGA = bool(os.environ.get("OS88_MEGA"))
 TITLE = "The Longest Title This Player Shows"     # 35: VP_COLS, the most
 
 
@@ -73,8 +77,10 @@ def main():
     ap.add_argument("--machine", default="os8088_5150_herc_gla")
     a = ap.parse_args()
     os.chdir(ROOT)
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",),
+                       ("PKG_MEGA",) if MEGA else ())
+    pkg = os88build.at("build/megak/apps/video.o88" if MEGA
+                       else "build/video.o88")
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         v88 = clip(tmp)
@@ -93,7 +99,8 @@ def main():
                 return (u16(r, geom.W_X), u16(r, geom.W_Y), u16(r, geom.W_W),
                         u16(r, geom.W_H))
 
-            base = u16(m.read(wrec, geom.WIN_SIZE), geom.W_SEG) << 4
+            lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+            base = lin(u16(m.read(wrec, geom.WIN_SIZE), geom.W_SEG))
 
             def rb(n):
                 return m.read(base + syms[n], 1)[0]

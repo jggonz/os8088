@@ -101,7 +101,43 @@ S_AOTFSEG       equ 0x4847          ; word: the list's filter, 8KB: a bit
                                     ;   listed block (rdgaot.inc)
 S_AOTSLOT       equ 0x4849          ; word: rdg_aotmiss's cache entry for
                                     ;   the PC being searched for
-RDG_FREE         equ 0x484B          ; the rest of the window is unassigned,
+S_RMEG          equ 0x484B          ; 16 x 4: a RET site patching (tr_rmeg):
+RT_RMEGN        equ 6               ;   its offset and its patches; this
+                                    ;   many and it is megamorphic (16.4.1)
+S_RXVEC         equ 0x488B          ; dword: rdg_rx, the core's way to a bank
+                                    ;   it switched to LAZILY (S_ROMX 0,
+                                    ;   REALDMG-SPEC 10.3.2)...
+S_RXRET         equ 0x488F          ; word: ...S_RET while it is fetched,
+S_RXGO          equ 0x4891          ; word: where the reader starts again
+S_RXDX          equ 0x4893          ; word: and its DX (rdg_ret clears DL)
+; a PRECOMPILED cartridge's misses TRANSLATED (REALDMG-SPEC 20.16): a PC
+; the host did not precompile is counted as the interpreter takes it, and at
+; HY_HOT entries the translator makes it a block in a RUNTIME tier, named in
+; a table of its own - never the host's, which is fixed
+S_HYON          equ 0x4895          ; byte: 0 off, 1 translating, 2 the
+                                    ;   runtime tiers full - looked up only
+S_HYSEG         equ 0x4896          ; word: the runtime table and the count
+S_HYN           equ 0x4898          ; word: blocks in the runtime table
+S_HYMISS        equ 0x489A          ; word: misses counted (stat, wraps)
+HY_TAB          equ 0x0000          ; 4,096 x 8: PC, key, -, offset, code
+HY_TABN         equ 4096            ;   selector - open addressing, no entry
+HY_TABMAX       equ 3072            ;   is ever taken out; full at 3/4
+HY_CNT          equ 0x8000          ; 2,048 x 4: PC, key, count, direct-
+HY_CNTN         equ 2048            ;   mapped (a clash only delays one)
+HY_SEGB         equ 0xA000          ; the segment's bytes
+HY_HOT          equ 16              ; entries before a miss is translated
+S_HYLNK         equ 0x489C          ; byte: rdg_aotmiss came from tr_link's
+                                    ;   miss - a block found is CHAINED
+S_HYLVEC        equ 0x489D          ; dword: rdg_aotlink, tr_lno's way there
+S_HYLP          equ 0x48A1          ; dword: tr_lpatch in the site's tier
+; the LIST in parts of its own (REALDMG-SPEC 20.17): S_AOTLSEG/S_AOTLN are
+; the first, and the directory names each - the search chooses its part by
+; the first entry, then searches inside it as one list
+S_AOTLX         equ 0x48A5          ; byte: the list's parts (0 or 1: one)
+S_AOTCN         equ 0x48A6          ; word: the searched part's entries
+S_AOTLXT        equ 0x48C0          ; RDG_LXMAX x 8: segment, its first
+RDG_LXMAX       equ 4               ;   entry's PC and key, -, its entries
+RDG_FREE         equ 0x48E0          ; the rest of the window is unassigned,
                                     ; but for rdgppu.inc's 4900-66FF and:
 ; CODE SELECTORS (REALDMG-SPEC 16.2.4): a segment the core or the recompiler
 ; JUMPS to is named by the selector a far jump may load - the segment itself
@@ -119,10 +155,14 @@ S_JITCS         equ 0x48E6          ; word: ...and S_JITSEG's (rt_tier)
 ; THE EXTRA TIERS (REALDMG-SPEC 16.2.5): cache segments past the second, tier
 ; 3 on - a host's (rt_more, a package part built RDG_XTIER), 0 of them for any
 ; other. Each is its DATA segment and its CODE selector (0: the same), and
-; RT_XMAX of them at most: S_JITUSED is a byte, a bit a tier
+; RT_XMAX of them at most, the table ending in a ZERO data word that the
+; core's tr_lpx stops at (a host with none scans one entry). A tier written
+; since the last flush is one whose generation word at FFF0h is not 0
+; (rt_flush zeroes them, RDG_XTIER's part) - S_JITUSED's byte, a bit a tier,
+; is what every other build still keeps (REALDMG-HIGHCACHE-PLAN R1)
 S_JITXN         equ 0x48BF          ; byte: how many
-S_JITXT         equ 0x48C0          ; RT_XMAX x 4: data, code
-RT_XMAX         equ 5               ;   (to 48D4; room to 48E0 for seven)
+S_JITXT         equ 0x7120          ; RT_XMAX x 4: data, code (7120-71FB),
+RT_XMAX         equ 55              ;   and 71FC its terminator, always 0
 RDG_DVMM         equ 0x48E8          ; byte: rdgppu's - the plane the VGA map
                                     ;   mask holds (ppu_dvga), FFh unknown
 RDG_BWST         equ 0x48E9          ; byte: rdgppu's - VGA's two-shades
@@ -151,7 +191,8 @@ RDG_BTAB         equ 0x6800          ; 512 words: a ROM bank's segment, or 0
 RDG_BUSE         equ 0x6C00          ; 512 words: the frame (S_FRAMES) it was
                                     ;   last switched to, the cache's
                                     ;   eviction (REALDMG-SPEC 10.3)
-                                    ; (7000-711F: rdgppu.inc's PPU_LSCR)
+                                    ; (7000-711F: rdgppu.inc's PPU_LSCR;
+                                    ;   7120-71FF: S_JITXT, below)
 JIT_HASH        equ 0x0000          ; 16,384, in a SEGMENT OF ITS OWN
                                     ;   (S_JITHSEG): the block table (tr_enter,
                                     ;   REALDMG-SPEC 16.3). The cache's 64KB

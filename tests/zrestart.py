@@ -96,6 +96,20 @@ class Frotz:
         self.P = editmove.pkg_syms(os.path.join(src, "frotz.asm"),
                                    (os.path.join(ROOT, "apps") + "/",
                                     src + "/"), FROTZ_PROBES)
+        self.mega = getattr(self.m, "bochs", False)
+
+    def lin(self, seg, off=0):
+        """SEG:OFF linear: an LDT selector's base on kern_mega"""
+        return self.m.lin(seg, off) if self.mega else seg * 16 + off
+
+    def para(self, v):
+        """A segment word as the heap keys its block. On kern_mega (KERN-MEGA-
+        MEMORY-PLAN MC7.4) the region and every claim are selectors that a
+        move REBASES, so "the region moved" is asked of the paragraph"""
+        if self.mega and v and 0x100 <= v < 0xA000 and v & 4:
+            b = self.m.selector(v)
+            return b[0] >> 4 if b else v
+        return v
 
     # --- where it is --------------------------------------------------------
     def win(self):
@@ -107,10 +121,10 @@ class Frotz:
                                + os88geom.W_SEG, 2))
 
     def b(self, name):
-        return self.m.read(self.seg() * 16 + self.P[name], 1)[0]
+        return self.m.read(self.lin(self.seg(), self.P[name]), 1)[0]
 
     def w(self, name):
-        return u16(self.m.read(self.seg() * 16 + self.P[name], 2))
+        return u16(self.m.read(self.lin(self.seg(), self.P[name]), 2))
 
     def inst(self):
         """(instance index, task slot) of the record whose base is ours."""
@@ -139,19 +153,20 @@ class Frotz:
         lines = []
         for L in range(cnt):
             slot = (head - cnt + L) % mx
-            off = sb * 16 + ZW_UPMAX * ZW_LSTRIDE + slot * ZW_LSTRIDE
+            off = self.lin(sb, ZW_UPMAX * ZW_LSTRIDE + slot * ZW_LSTRIDE)
             n = self.m.read(off, 1)[0]
             lines.append(self.m.read(off + 2, n).decode("latin-1"))
-        live = self.m.read(seg * 16 + self.P["zw_lbuf"], self.w("zw_lbn")) \
-            + self.m.read(seg * 16 + self.P["zw_wbuf"], self.w("zw_wbn"))
+        live = self.m.read(self.lin(seg, self.P["zw_lbuf"]),
+                           self.w("zw_lbn")) \
+            + self.m.read(self.lin(seg, self.P["zw_wbuf"]), self.w("zw_wbn"))
         lines.append(live.decode("latin-1"))
         return "\n".join(lines)
 
     def state(self):
         st, ln = self.w("zf_sseg"), self.w("zf_static")
         sp = self.w("zf_sp")
-        dyn = hashlib.md5(self.m.read(st * 16, ln)).hexdigest()[:12]
-        stk = hashlib.md5(self.m.read(self.w("zf_stkseg") * 16, sp)) \
+        dyn = hashlib.md5(self.m.read(self.lin(st), ln)).hexdigest()[:12]
+        stk = hashlib.md5(self.m.read(self.lin(self.w("zf_stkseg")), sp)) \
             .hexdigest()[:12]
         return {"dyn": dyn, "sp": sp, "stk": stk, "text": self.transcript()}
 
@@ -244,7 +259,8 @@ def run(a, move):
         z = Frotz(ui)
         z.prompt()
         print("%s: Frotz at %04x, story %04x, restart word %04x"
-              % ("MOVE" if move else "CONTROL", z.seg(), z.w("zf_sseg"),
+              % ("MOVE" if move else "CONTROL", z.para(z.seg()),
+                 z.para(z.w("zf_sseg")),
                  z.restart_word()))
         if move and z.restart_word() == 0:
             fails.append("the worker never declared a restart point")
@@ -280,15 +296,16 @@ def run(a, move):
             """Close a Calculator, post the compaction, check the region."""
             if not move:
                 return
-            before, sbefore = z.seg(), z.w("zf_sseg")
+            # (paragraphs: on kern_mega z.seg() is a selector a move rebases)
+            before, sbefore = z.para(z.seg()), z.para(z.w("zf_sseg"))
             hole()
             post()
-            after = z.seg()
+            after = z.para(z.seg())
             ok = (after != before) == want
             print("  %-10s region %04x -> %04x %s   (story %04x -> %04x)"
                   % (leg, before, after, "OK" if ok else
                      ("DID NOT MOVE" if want else "MOVED, and must not"),
-                     sbefore, z.w("zf_sseg")))
+                     sbefore, z.para(z.w("zf_sseg"))))
             if not ok:
                 fails.append("%s: region %s" % (leg, "did not move" if want
                                                 else "moved under [MORE]"))
@@ -319,9 +336,9 @@ def run(a, move):
                 fails.append("[MORE] never withdrew the declaration")
             else:
                 print("  [MORE] up: inst_restart = 0")
-            before = z.seg()
+            before = z.para(z.seg())
             move_now("more", want=False)
-            spare[0] = move and z.seg() == before
+            spare[0] = move and z.para(z.seg()) == before
             z.prompt()                  # every [MORE] dismissed with a key
             if move and z.restart_word() == 0:
                 fails.append("the declaration did not come back after [MORE]")
@@ -329,8 +346,32 @@ def run(a, move):
 
         def leg_loop():
             """The burst loop's own park: [zx_rsm] = 0."""
-            z.cmd("loop")
-            z.until(lambda: z.b("zi_want") == 0, "the loop running")
+            if not z.mega:
+                z.cmd("loop")
+                z.until(lambda: z.b("zi_want") == 0, "the loop running")
+            elif move:
+                # ON BOCHS'S 386 THE LOOP ENDS BETWEEN TWO POLLS (3,000
+                # iterations at real time), so the park is caught where
+                # @verify's is: a breakpoint on the burst loop past its
+                # ALIVE - not reached while @aread waits, so it is armed
+                # before the command - and the park asked for there; the
+                # control boot plays the same keys straight through
+                m.breakpoints([{"type": "exec", "addr": z.lin(
+                    z.seg(), z.P["zx_worker.running"])}])
+                z.cmd("loop")
+                if not m.wait_stop(20):
+                    fails.append("loop: the burst loop was never reached")
+                running = z.b("zi_want") == 0
+                m.write(S("inst_parkreq"), b"\x01")
+                m.breakpoints([])
+                m.run()
+                if not running:
+                    fails.append("loop: stopped in the burst loop with "
+                                 "zi_want %d" % z.b("zi_want"))
+                z.until(lambda: z.parked() == 1,
+                        "the worker parked in the burst loop")
+            else:
+                z.cmd("loop")
             rsm("loop", 0)
             move_now("loop")
             z.prompt()
@@ -412,7 +453,7 @@ def run(a, move):
                 hole()
                 s0 = z.seg()
                 m.breakpoints([{"type": "exec",
-                                "addr": s0 * 16 + z.P["zx_verify.walked"]}])
+                                "addr": z.lin(s0, z.P["zx_verify.walked"])}])
             z.cmd("verify")
             if move:
                 if not m.wait_stop(20):

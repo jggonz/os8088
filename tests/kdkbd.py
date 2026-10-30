@@ -94,6 +94,7 @@ def keyburst(m, stop):
     means.  Without it, "the tail did not move" and "no key ever arrived" are
     the same reading, and the unguarded arm asserts nothing.
     """
+    bochs = getattr(m, "bochs", False)
     while not stop.is_set():
         try:
             m.key("ShiftLeft", down=True, up=False)
@@ -101,6 +102,11 @@ def keyburst(m, stop):
             m.key("KeyA")
         except Exception:
             return
+        if bochs:
+            # Bochs runs the guest at REAL time, so KBHOLD's counted window
+            # is a fraction of a second there, and a guest-paced gap is the
+            # same gap in host time: the X calls themselves are the pacing
+            continue
         try:
             os88marty.pace(m, 0.05)     # the key rate is the GUEST's
         except Exception:
@@ -118,6 +124,14 @@ def main():
         m = ui.m
         if not ui.path("B:/KBHOLD.COM"):
             fail("double-clicking KBHOLD.COM opened no window")
+        if getattr(m, "bochs", False):
+            # **kern_mega HAS ONE ARM** (KERN-MEGA-PLAN 12.1 item 1): that
+            # launch IS the run under kern_dos - a trip, with kern_dos's
+            # guard in front of Bochs's own ROM - so the burst goes with it
+            # and there is no radio to pick
+            rs = burst(m, "the run under kern_dos (the trip)")
+            m.type_text("x")
+            return verdict(rs)
         K.wait_text(m, "KBHOLD READY", secs=150, what="the windowed run")
         m.type_text("x")
         os88marty.settle(m)
@@ -135,20 +149,40 @@ def main():
         os88marty.settle(m)
         mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
         os88marty.settle(m)
-        base = pseg << 4
+        base = dosmap.lin(m, pseg)
         if K.alert_up(m, base, dm):
             mo.click(*K.alert_button(m, base, dm, 1))       # Proceed
 
-        stop = threading.Event()
-        t = threading.Thread(target=keyburst, args=(m, stop), daemon=True)
-        t.start()
-        try:
-            rs = K.wait_text(m, "KBHOLD READY", secs=250,
-                             what="the run under kern_dos")
-        finally:
-            stop.set()
-            t.join(timeout=3)
+        rs = burst(m, "the run under kern_dos")
+    return verdict(rs)
 
+
+def burst(m, what):
+    stop = threading.Event()
+    t = threading.Thread(target=keyburst, args=(m, stop), daemon=True)
+    t.start()
+    try:
+        if getattr(m, "bochs", False):
+            # ...and every read is a debugger STOP there, which holds the
+            # burst's keys back until the resume: so the screen is looked at
+            # once a host second, and the guest runs - and takes keys - in
+            # between (wait_text's quarter-second poll let three shift
+            # changes and no `A` into the window)
+            import time
+            end = time.time() + 250
+            while time.time() < end:
+                time.sleep(1.0)
+                rs = K.rows(m)
+                if any("KBHOLD READY" in r for r in rs):
+                    return rs
+            fail("%s: KBHOLD READY never appeared" % what)
+        return K.wait_text(m, "KBHOLD READY", secs=250, what=what)
+    finally:
+        stop.set()
+        t.join(timeout=3)
+
+
+def verdict(rs):
     text = "\n".join(rs)
     print("kdkbd: under kern_dos:")
     for r in rs:

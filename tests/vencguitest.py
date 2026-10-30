@@ -312,6 +312,19 @@ def options_leg():
     if G.blank_fill("coarse_cut", vf) != "auto":
         bad.append("Coarse cut emptied is put back to %r, not auto"
                    % G.blank_fill("coarse_cut", vf))
+    # FLIP BUILD (98.2.5.2.1) is offered exactly where it applies - flipped,
+    # against its own pages, held ahead, a palette a scene - and greyed with
+    # the reason otherwise. The window's context once left Flip own out, so
+    # the field read it as off and greyed itself on the very form it is for
+    fb = dict(G.form_start(), preset="vga4", palette="colour16",
+              screen="640x350", scene_palettes="1", flip="1", flip_own="1")
+    for what, vals, want in (
+            ("all on", {}, None), ("no Flip own", {"flip_own": ""}, "Flip own"),
+            ("Flip hold empty", {"flip_hold": "empty"}, "Flip hold"),
+            ("no Scene palettes", {"scene_palettes": ""}, "Scene palettes")):
+        why = G.group_state(dict(fb, **vals))[1]["flip_build"]
+        if (why is None) != (want is None) or (want and want not in why):
+            bad.append("Flip build with %s: %r" % (what, why))
     # NO BOX STANDS EMPTY FOR A VALUE IT HAS, and none takes a word typed
     # blind (the boxes audit, 2026-10-14): on every target, every field that
     # applies shows a value or its BLANK_WORD - but for the free text that
@@ -593,6 +606,49 @@ def _surf(r, k):
     return s
 
 
+def held_preview_leg():
+    """THE PREVIEW AT A HELD FRAME (98.1.3.9, 98.2.5.2.1): what the glass
+    shows - the picture before the held run - and not the hidden page the
+    record is building. A 16-colour clip against its own pages, frames 5-7
+    HELD toward frame 8's new ground: every frame's preview must be the
+    reference decode's. It showed the half-built page, in the last scene's
+    colours - the owner's 2026-10-27 report on a --flip-build file"""
+    import tempfile
+    bad = []
+    g = vid.Geom(vid.LAY_LIN80, 8, 16, bitplanes=True,
+                 stride=vid.screen_stride(vid.SCREEN_BY_NAME["640x350"]))
+    cvs = []
+    for f in range(12):
+        cv = bytearray([1 if f < 8 else 9]) * (64 * 16)
+        x = (f * 5) % 50
+        for y in range(4, 10):
+            cv[y * 64 + x:y * 64 + x + 8] = bytes([f % 16]) * 8
+        cvs.append(bytes(cv))
+    for f in (5, 6, 7):                 # (held toward frame 8's picture)
+        cvs[f] = cvs[8]
+    pal = bytes(range(48)) + bytes(vid.PAL_BYTES - 48)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "held.V88")
+        vid.encode_canvases(cvs, g, out, 15.0, vid.PF_VGA4, pal, "held",
+                            keysecs=60.0, flip=True,
+                            screen=vid.SCREEN_BY_NAME["640x350"], own=True,
+                            held=(5, 6, 7), ups=(9,))
+        r, frames = G.preview_frames(out)
+        ref = vid.Reader(out)
+        wrong = []
+        for f, img in frames:
+            surf = ref.g.surface()
+            ref.g.put(surf, vid.decode_at(ref, f))
+            if img.tobytes() != G.render(ref, surf, f).tobytes():
+                wrong.append(f)
+    print("   held preview: %d frames, %s differ from the glass"
+          % (len(frames), wrong or "none"))
+    if not frames or wrong:
+        bad.append("the preview at held frames is not the glass: frames %s"
+                   % wrong)
+    return bad
+
+
 def main():
     bad = []
     # --- 1
@@ -690,6 +746,7 @@ def main():
     ladder_leg(bad)
     bad += groups_leg()
     bad += options_leg()
+    bad += held_preview_leg()
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         for b in bad:
             print("   FAIL: %s" % b)
@@ -933,6 +990,26 @@ def ladder_leg(bad):
                                            wv4.get("coarse_cut"),
                                            whg.get("coarse_cut"),
                                            wmx.get("scene_min")))
+    # FLIPPED AND BUILT AHEAD (98.2.1.8.5) IS FLIP AND PAGE AHEAD ON 3 PAGES
+    # OR MORE: with Flip on, Page ahead - and the keys' and the pool's - is
+    # live at Pages max and 6 and greyed at 2, on a NARROW screen
+    # (98.1.3.2.5.1) and a wide one. form_context once left Pages out, so
+    # every rule read "2" and Flip greyed Page ahead whatever Pages said
+    fpa = {}
+    for scr in ("320x240n", "320x200"):
+        for pg in ("max", "6", "2"):
+            _, w = G.group_state(dict(base, preset="vga4", pixfmt="vga4",
+                                      audio="pcm8", screen=scr, flip="1",
+                                      page_ahead="on", pages=pg))
+            fpa[scr, pg] = tuple(w.get(d) is None for d in
+                                 ("page_ahead", "page_keys", "key_pool"))
+    print("   18: Flip with Page ahead live (ahead, keys, pool) - %s" %
+          ", ".join("%s %s %s" % (sc, pg, "".join("+" if x else "-"
+                                                  for x in v))
+                    for (sc, pg), v in fpa.items()))
+    if any(v != ((True,) * 3 if pg != "2" else (False,) * 3)
+           for (sc, pg), v in fpa.items()):
+        bad.append("Flip's page-ahead greying: %r" % fpa)
     # WHAT EACH LIST OFFERS FOLLOWS THE FILE (2026-10-17, the owner: "only
     # what it actually supports... and not force the user to guess it")
     lists = lambda vals: {d: r(G.form_context(vals))

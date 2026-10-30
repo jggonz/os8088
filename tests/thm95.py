@@ -37,6 +37,7 @@ window), move wn_stick's click test after its `.drag` test (A's right-click
 runs item 0), or take ui_lit_go's clip out (A's light paints the cover).
 """
 import argparse
+import os
 import statistics
 import subprocess
 import sys
@@ -105,7 +106,11 @@ def doors(m):
 def at_rest(m, where):
     offs, segs = doors(m)
     bodies = [m.sym(d) for d in DOORS]          # sym() is LINEAR, so the
-    got = [(s << 4) + o for o, s in zip(offs, segs)]    # door's target is too
+    # door's target is too - and on kern_mega a door's segment word is a
+    # SELECTOR (wmz_crect_b's is .cold's, whose base is above 1MB), so it is
+    # resolved through the machine's own descriptor table, not shifted
+    lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+    got = [lin(s, o) for o, s in zip(offs, segs)]
     if got != bodies:
         fail("%s: a door still points away from the kernel's own body: %s"
              % (where, ["%05X" % g for g in got]))
@@ -127,11 +132,23 @@ def wait(m, cond, what, guest=20.0):
 
 
 # --- A ------------------------------------------------------------------------
+# KERN_MEGA UNDER BOCHS (tests/megaport.txt, `--legs ACDE`: Bochs has no
+# Hercules for B - which 86Box has, `mega-thm95-86box`): the THEMEDARK=3
+# knob on kern_mega in a tree of its own, and C/D/E's fixtures built from
+# kern_mega's boot sector, kernel and modules
+MEGA = bool(os.environ.get("OS88_MEGA"))
+
+
 def leg_a(eq):
     print("A: VGA, Windows booted")
-    t = os88build.tree("THEMEDARK=3").apply()
-    with os88ui.boot(t.img("os8088-360.img"), apps=t.img("apps360.img"),
-                     machine=VGA, quick=True) as ui:
+    if MEGA:
+        t = os88build.tree("THEMEDARK=3", targets=("mega",))
+        os.environ["OS88_MEGA_BUILD"] = t.dir
+        img, apps = t.img("mega.img"), t.img("megaapps.img")
+    else:
+        t = os88build.tree("THEMEDARK=3").apply()
+        img, apps = t.img("os8088-360.img"), t.img("apps360.img")
+    with os88ui.boot(img, apps=apps, machine=VGA, quick=True) as ui:
         m, mo = ui.m, ui.mo
         if kind(m) != THM_WIN or not hooked(m, eq, "A boot"):
             fail("A: the THEMEDARK=3 kernel did not boot Windows (kind %d)"
@@ -141,7 +158,10 @@ def leg_a(eq):
         ui.still()
         a_pixels(m, disk, "default")
         a_pixels95(m, ui)
-        a_cost(m, ui, disk)
+        if MEGA:
+            print("   (the title bar's cost is an 8088's cycles: not on Bochs)")
+        else:
+            a_cost(m, ui, disk)
         a_menus(m, mo, ui, disk)
         a_buttons(m, mo, ui, disk)
 
@@ -410,9 +430,14 @@ def a_buttons(m, mo, ui, disk):
 # --- B ------------------------------------------------------------------------
 def leg_b(eq):
     print("B: Hercules, Windows booted")
-    t = os88build.tree("THEMEDARK=3").apply()
-    with os88ui.boot(t.img("os8088-360.img"), apps=t.img("apps360.img"),
-                     machine=HERC, quick=True) as ui:
+    if MEGA:                        # (on 86Box's Hercules: leg A's tree)
+        t = os88build.tree("THEMEDARK=3", targets=("mega",))
+        os.environ["OS88_MEGA_BUILD"] = t.dir
+        img, apps = t.img("mega.img"), t.img("megaapps.img")
+    else:
+        t = os88build.tree("THEMEDARK=3").apply()
+        img, apps = t.img("os8088-360.img"), t.img("apps360.img")
+    with os88ui.boot(img, apps=apps, machine=HERC, quick=True) as ui:
         m, mo = ui.m, ui.mo
         if kind(m) != THM_WIN or not hooked(m, eq, "B boot"):
             fail("B: Windows did not survive a 1bpp primary (kind %d)"
@@ -447,10 +472,17 @@ def leg_b(eq):
 
 # --- C, D, E ------------------------------------------------------------------
 def fixture(folder, name, win95, saved):
-    files = [os88build.at("build/ctrl.drv"),     # the panel, and its
+    # kern_mega's modules are its OWN build's (build/megak): a kern_big
+    # CTRL.DRV on its disk is a module of another kernel, and the chip menu's
+    # Control Panel then never opens. The directory is chosen BEFORE at()
+    # resolves the path - it used to be a .replace("build/ctrl.drv", ...) on
+    # at()'s ANSWER, which under a frozen soak is build/trees/<tree>/ctrl.drv
+    # and matched nothing, so only the soak shipped the wrong modules.
+    mods = "build/megak/" if MEGA else "build/"
+    files = [os88build.at(mods + "ctrl.drv"),    # the panel, and its
              os88build.at("build/thmpal.drv")]   # Customize... window
     if win95:
-        files.append(os88build.at("build/win95.drv"))
+        files.append(os88build.at(mods + "win95.drv"))
     if saved:
         d = folder / name
         d.mkdir()
@@ -461,9 +493,15 @@ def fixture(folder, name, win95, saved):
                         + b"TH" + bytes([3, 5, THM_WIN, 1, 1, 5, 0]) + b"\0\0")
         files.append(str(cfg))
     image = folder / (name + ".img")
+    size, boot, kern = "360", "build/boot360.bin", "build/kernel.sys"
+    if MEGA:
+        # kern_mega's: its modules are its OWN build's (build/megak), and
+        # its system disk is 1.44MB (KERN-MEGA-PLAN 14.1 answer 19)
+        size, boot, kern = "1440", "build/megak/boot.bin", \
+            "build/megak/kernel.sys"
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", str(image),
-                    "--size", "360", "--boot", os88build.at("build/boot360.bin"),
-                    "--kernel", os88build.at("build/kernel.sys"), *files],
+                    "--size", size, "--boot", os88build.at(boot),
+                    "--kernel", os88build.at(kern), *files],
                    check=True, stdout=subprocess.DEVNULL, cwd=str(ROOT))
     return str(image)
 
@@ -498,6 +536,7 @@ def shipped():
     """C, D and E are about the SHIPPED kernel: put the paths and the symbol
     reader back on the shared tree, which A and B moved to THEMEDARK=3's"""
     os88build.plain().apply()
+    os.environ.pop("OS88_MEGA_BUILD", None)
 
 
 def leg_c(eq, folder):

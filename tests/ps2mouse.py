@@ -275,5 +275,157 @@ def main():
     return 0
 
 
+def _launch_marty():
+    """The machine main_marty asks its questions of, PAUSED at power-on.
+    kern_mega: Bochs, whose `mouse: type=ps2` and real 8042 are the PS/2
+    half and `noserial` the `-serial none`. kern_big on 86Box
+    ($OS88_EMU=86box, tests/box86port.txt): vm/386-ps2's Packard Bell
+    Legend 300SX - the one machine in vm/ whose 8042 has an aux port - with
+    its PS/2 mouse and NO serial mouse (os88box86api's `_ps2`), a VGA, and
+    the shipped 1.44MB pair as QEMU boots them. Its COM ports are there with
+    nothing on them, so the serial probe finds no mouse and `mou_bases`
+    still reads 0000 0000."""
+    import os88marty
+    if os.environ.get("OS88_MEGA"):
+        import os88megabochs
+        return os88megabochs.launch("build/os8088.img", apps="build/apps.img",
+                                    boot=False, noserial=True)
+    return os88marty.launch("build/os8088.img", apps="build/apps.img",
+                            machine="at386_vga_ps2", boot=False)
+
+
+def main_marty():
+    """THE SAME QUESTIONS THROUGH os88marty's API, on a machine with an 8042
+    (_launch_marty): kern_mega under Bochs (tests/megaport.txt) and kern_big
+    under 86Box (tests/box86port.txt). Every assertion above is asked of the
+    kernel's handshake as it is under QEMU - through the test API instead of
+    QMP. The pointer's exact landing is os88mouse's closed loop, which is the
+    same statement about the sign and the Y inversion: every packet's delta
+    is what the emulator made of a host motion, and the guest's published
+    mouse_x/y is what has to agree."""
+    import os88marty
+    import os88mouse
+    kern = "kern_mega" if os.environ.get("OS88_MEGA") else \
+        "kern_big, " + os88marty.emulator()
+    fails = []
+    with _launch_marty() as m:
+        m.run()
+        os88marty.until(m, lambda _: byte(m, "mou_p2st") == 9,
+                        "[mou_p2st] = 9", guest=90.0)
+        os88marty.kernel_up(m)
+        st = byte(m, "mou_p2st")
+        bases = m.read(os88sym.linear("mou_bases"), 4)
+        if any(bases):
+            fails.append("mou_bases %s - a serial row probed PRESENT"
+                         % bases.hex())
+        if st != 9:
+            fails.append("mou_p2st %d, want 9 (SPEC.md 9.9.1)" % st)
+        for sym, want in (("mou_p2", 1), ("mou_p2id", 0)):
+            got = byte(m, sym)
+            if got != want:
+                fails.append("%s %02X, want %02X" % (sym, got, want))
+
+        mo = os88mouse.Mouse(marty=m)
+        mo.to(TARGET_X, TARGET_Y)
+        for sym, want in (("mou_seen", 1), ("mou_port", 4), ("mou_line", 0xFF),
+                          ("mou_ptr", 1)):
+            got = byte(m, sym)
+            if got != want:
+                fails.append("%s %02X, want %02X" % (sym, got, want))
+        gx, gy = word(m, "mouse_x"), word(m, "mouse_y")
+        if (gx, gy) != (TARGET_X, TARGET_Y):
+            fails.append("pointer at %d,%d, want %d,%d" % (gx, gy, TARGET_X,
+                                                           TARGET_Y))
+
+        def is_open():
+            return byte(m, "menu_dropd") == 1 or word(m, "menu_sseg") != 0
+
+        # DOWN, per kind of cell: a pull-down says [menu_dropd] = 1, and the
+        # Sticky Apps cell (kern_big) never does - stikmenu.inc's panel claims
+        # the same [menu_sseg] and says it is up with STIKMENU.DRV's own
+        # stm_live, which tests/stikmenu.py's Menu reads (kern_mega's
+        # selector caveat included). Waiting on [menu_dropd] alone timed that
+        # cell out silently and released late; kern_small has no module, so
+        # the second half answers False there
+        class _Sym:
+            _S = staticmethod(os88sym.linear)
+        try:
+            import stikmenu
+            stik = stikmenu.Menu(m, _Sym())
+        except Exception:                   # noqa: BLE001 - no STIKMENU
+            stik = None
+
+        def down():
+            if byte(m, "menu_dropd") == 1:
+                return True
+            try:
+                return bool(stik and stik.base() and stik.b("stm_live"))
+            except Exception:               # noqa: BLE001
+                return False
+        nbar = word(m, "menu_nbar")
+        for cell in range(nbar):
+            ent = m.read(os88sym.linear("menu_bar") + cell * MB_ENTSZ,
+                         MB_ENTSZ)
+            xl = int.from_bytes(ent[MB_XL:MB_XL + 2], "little")
+            xr = int.from_bytes(ent[MB_XR:MB_XR + 2], "little")
+            x = (xl + xr) // 2
+            mo.to(x, 8)
+            mo._sep()
+            mo._edge(True)
+            # ...DOWN, not merely begun (`down` above): `is_open` is also
+            # true from the save-under's claim, and the press-and-hold this
+            # row means is a cell whose pull-down or panel is ON SCREEN. A
+            # release before that is not a kernel race - menu_drop's first
+            # poll closes a pull-down; the Sticky panel stays up for a click
+            # by design (stikmenu.inc's stm_loop) - but it is not this row
+            try:
+                os88marty.until(m, lambda _: byte(m, "menu_cell") == cell
+                                and down(), "bar cell %d" % cell, guest=3.0)
+            except os88marty.MartyError:
+                pass
+            got, dropped = byte(m, "menu_cell"), 1 if is_open() else 0
+            if got != cell or dropped != 1:
+                fails.append("bar cell %d at x=%d opened cell %d, drop=%d"
+                             % (cell, x, got, dropped))
+            mo._edge(False)
+            os88marty.until(m, lambda _: not is_open(),
+                            "the pull-down closing", guest=3.0)
+
+        before = m.read(KBHEAD, 4)
+        tail0 = before[2] | (before[3] << 8)
+        for k in "abcdef":
+            m.key("Key" + k.upper())
+
+        def queued(_):
+            b = m.read(KBHEAD, 4)
+            return ((b[2] | (b[3] << 8)) - tail0) & 0xFFFF == 12
+        try:
+            os88marty.until(m, queued, "six keys in the BIOS ring", guest=3.0)
+        except os88marty.MartyError:
+            pass
+        after = m.read(KBHEAD, 4)
+        tail1 = after[2] | (after[3] << 8)
+        if (tail1 - tail0) & 0xFFFF != 12:
+            fails.append("BIOS keyboard tail %04X -> %04X, want +12 for six "
+                         "keys (SPEC.md 9.9.1)" % (tail0, tail1))
+        else:
+            buf = m.read(0x400 + 0x1E, 0x20)
+            got = "".join(chr(buf[((tail0 - 0x1E) + 2 * i) % 0x20])
+                          for i in range(6))
+            if got != "abcdef":
+                fails.append("the BIOS queued %r for 'abcdef' (SPEC.md "
+                             "9.9.7)" % got)
+    if fails:
+        for f in fails:
+            print("ps2mouse: FAIL " + f)
+        return 1
+    print("ps2mouse: ok (%s) - p2st 9, port 04, line FF, pointer exact "
+          "on %d,%d, %d bar cells exact, keyboard intact"
+          % (kern, TARGET_X, TARGET_Y, nbar))
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    import os88marty
+    sys.exit(main_marty() if os.environ.get("OS88_MEGA")
+             or os88marty.emulator() != "marty" else main())

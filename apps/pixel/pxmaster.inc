@@ -9,9 +9,11 @@
 ; the two to the byte.
 ;
 ; The emitter and everything it calls run on the WORKER (SPEC.md 106.9): no
-; file slot, no claim, no drawing. They read [px_cur + PXR_MSEG] afresh at
-; every row, because a compaction may have moved the master while the worker
-; stood in OSAPI_TASK_ALIVE (SPEC.md 66.5).
+; file slot, no claim, no drawing. They reach a master row through its 32KB
+; WINDOWS (px_mwc, pxrec.inc) afresh at every row, because a compaction may
+; have moved the master while the worker stood in OSAPI_TASK_ALIVE (SPEC.md
+; 66.5) - which px_mreloc re-bases in the table on a real-mode kernel, and
+; which changes no selector under kern_mega (KERN-MEGA-MEMORY-PLAN MC7).
 ; =============================================================================
 
 ; (the record's fields, PXR_*, and the modes, PM_*, are apps/pixel/pxrec.inc's:
@@ -24,7 +26,10 @@ PX_HTAILKB  equ 2                   ; THE HISTOGRAM'S TAIL, past the master's
                                     ; parts fold it, 106.25)
 
 ; px_htail - ES = the shown picture's histogram tail: the master's segment
-; and its pixels' paragraphs, re-read (the master may have moved).
+; and its pixels' paragraphs, re-read (the master may have moved) - a
+; SEG_SUB at that paragraph (pxrec.inc's PXSUB: the sum on a real-mode
+; kernel, a selector of its own under kern_mega, MC7). The paragraphs are
+; still rounded up to 8, the layout every master was made with.
 ; Preserves all but ES
 px_htail:
     push ax
@@ -39,12 +44,177 @@ px_htail:
     shr dx, 1
     rcr ax, 1
     loop .p
-    add ax, 7                       ; ...up to a multiple of 8: a segment on
-    and al, 0xF8                    ; kern_mega's grid (KERN-MEGA-PLAN 14.40)
-    add ax, [px_cur + PXR_MSEG]
-    mov es, ax
+    add ax, 7                       ; ...up to a multiple of 8 (the layout
+    and al, 0xF8                    ; KERN-MEGA-PLAN 14.40 made it)
+    mov dx, [px_cur + PXR_MSEG]
+    PXSUB
+    mov es, dx
     pop dx
     pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; A CLAIM'S WINDOWS (pxrec.inc, KERN-MEGA-MEMORY-PLAN MC7): px_mwc is the
+; shown master's ([px_cur]), px_mwp the previous one's ([px_prev], which full
+; screen may show), px_mwd an operation's destination's ([px_edseg]). A HOT
+; lookup (a master row) reads a table without asking whether it is current:
+; px_mwok asks, at the top of every worker job (px_wjob), before every call
+; into a part on the UI task (px_pcall) and at every composer pass
+; (px_cset), and a master changes only between those - a real-mode move
+; being re-based in the table by px_mreloc, a protected-mode one changing
+; no selector at all
+; =============================================================================
+
+; px_mwinit - the three tables made of nothing, each naming the words its
+; claim and KB are in, and the far gate's offset for a part. Preserves all
+px_mwinit:
+    mov word [px_mwfo], px_mwfar
+    mov word [px_mwc + MWT_PSEG], px_cur + PXR_MSEG
+    mov word [px_mwc + MWT_PKB], px_cur + PXR_MKB
+    mov word [px_mwp + MWT_PSEG], px_prev + PXR_MSEG
+    mov word [px_mwp + MWT_PKB], px_prev + PXR_MKB
+    mov word [px_mwd + MWT_PSEG], px_edseg
+    mov word [px_mwd + MWT_PKB], px_edkb2
+                                    ; (falls into px_mwinval)
+; px_mwinval - every table made of nothing: a master was just CLAIMED, and
+; its segment may be one a table was made of before it was given back.
+; Preserves all
+px_mwinval:
+    mov word [px_mwc + MWT_KEY], MWT_NONE
+    mov word [px_mwp + MWT_KEY], MWT_NONE
+    mov word [px_mwd + MWT_KEY], MWT_NONE
+    ret
+
+; px_mwok - each table made of the claim it names now. Preserves all
+px_mwok:
+    push bx
+    push si
+    mov bx, px_mwc
+    call .one
+    mov bx, px_mwp
+    call .one
+    mov bx, px_mwd
+    call .one
+    pop si
+    pop bx
+    ret
+.one:
+    mov si, [bx + MWT_PSEG]
+    mov si, [si]
+    cmp si, [bx + MWT_KEY]
+    jne px_mwbuild
+    ret
+
+; px_mwget - BX = a table, DX:AX = a byte offset into its claim: AX = the
+; segment of its 32KB window, DX = the offset in it; the table made current
+; first. Preserves all else
+px_mwget:
+    push si
+    mov si, [bx + MWT_PSEG]
+    mov si, [si]
+    cmp si, [bx + MWT_KEY]
+    je .k
+    call px_mwbuild
+.k:
+    PXMW_LOOK
+    pop si
+    ret
+
+; px_mwfar - FAR, from a part that finds a table made of another claim
+; (pxfull.asm's pxf_mwin: full screen outlives a slide's decode), through
+; [cs:PXP_PKG]:[px_mwfo]: px_mwbuild with DS the package, as the part has it
+px_mwfar:
+    call px_mwbuild
+    retf
+
+; px_mwbuild - the table at BX made of the claim it names: a SEG_SUB a 32KB
+; window over the claim's KB (the sum on a real-mode kernel), null past its
+; end and for no claim at all; the KEY written LAST. Preserves all
+px_mwbuild:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov word [bx + MWT_KEY], MWT_NONE
+    mov si, [bx + MWT_PSEG]
+    mov di, [si]                    ; DI = the claim
+    mov si, [bx + MWT_PKB]
+    mov ax, [si]                    ; its KB...
+    or di, di
+    jnz .kb
+    xor ax, ax                      ; (no claim: every window null)
+.kb:
+    add ax, 31
+    jnc .n
+    mov ax, 0xFFFF
+.n:
+    mov cl, 5
+    shr ax, cl                      ; ...its windows
+    cmp ax, PX_MWN
+    jbe .c
+    mov ax, PX_MWN
+.c:
+    mov cx, ax
+    xor si, si                      ; SI = the window x 2
+    xor ax, ax                      ; AX = its paragraphs
+.w:
+    xor dx, dx
+    jcxz .st
+    mov dx, di
+    PXSUB
+    dec cx
+.st:
+    mov [bx + MWT_WIN + si], dx
+    add ax, 0x800
+    inc si
+    inc si
+    cmp si, 2 * PX_MWN
+    jb .w
+    mov [bx + MWT_KEY], di          ; LAST
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; px_mwmove - a REAL-MODE move (px_mreloc's): BX = where a claim was, DX =
+; where it is - every table made of it re-based. Called inside the
+; allocator. Preserves all
+px_mwmove:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov di, bx                      ; DI = where it was
+    mov ax, dx
+    sub ax, bx                      ; AX = how far
+    mov bx, px_mwc
+.t:
+    cmp [bx + MWT_KEY], di
+    jne .nt
+    mov [bx + MWT_KEY], dx
+    xor si, si
+    mov cx, PX_MWN
+.w:
+    cmp word [bx + MWT_WIN + si], 0
+    je .nw
+    add [bx + MWT_WIN + si], ax
+.nw:
+    inc si
+    inc si
+    loop .w
+.nt:
+    add bx, MWT_SZ
+    cmp bx, px_mwd + MWT_SZ
+    jb .t
+    pop di
+    pop si
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -77,12 +247,16 @@ px_mreloc:
     jne .f                          ; its passes (pxgif.asm's av_start pins
     mov [px_anseg], dx              ; it for one, av_wake lets it go)
 .f:
+    call px_mwmove                  ; ...and the windows made of any of them
     cmp [pxa_seg], bx               ; ...and the colour face's pictures,
     jne .out                        ; whose row's zkb is the claim op_drop
     mov [pxa_seg], dx               ; would free (SPEC.md 106.16)
     mov [PXA_ROW + OP_R_ZKB], dx
 .out:
     ret                             ; ...and the CODE parts' hook as well
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
                                     ; (OP_ONMOVE): op_lazymv has put the row
                                     ; right and none of these words matches
 
@@ -292,7 +466,9 @@ px_mkb:
     or dx, dx
     jnz .no
     add ax, PX_HTAILKB              ; ...and the histogram's TAIL (106.20)
-    clc
+    cmp ax, PX_MWN * 32             ; at most the windows a table holds
+    ja .no                          ; (pxrec.inc: 1MB, only kern_mega's pool
+    clc                             ; could give more)
     jmp short .out
 .no:
     stc
@@ -302,16 +478,55 @@ px_mkb:
     pop bx
     ret
 
-; PX_WGRID - DX (paragraphs into the work claim) up to a multiple of 8. Every
-; sub-buffer below is loaded into ES as [px_wseg] + its offset, and the claim
-; is 512-aligned, so this keeps each of them a multiple of 8 paragraphs: on
-; kern_mega only those are segments (the identity map, KERN-MEGA-PLAN 3.1) -
-; any other value is a #GP or, with bit 2 set, an LDT alias at another base.
-; At most 7 paragraphs a buffer, nothing on any other kernel
+; PX_WGRID - DX (paragraphs into the work claim) up to a multiple of 8: the
+; sub-buffers' layout KERN-MEGA-PLAN 14.40 made, when kern_mega's identity
+; map named only multiples of 8. Each is a SEG_SUB selector of its own now
+; (px_wsubs, MC7), which takes any paragraph; the layout is kept, at most 7
+; paragraphs a buffer, so no figure SPEC.md 106.9 prices moved
 %macro PX_WGRID 0
     add dx, 7
     and dl, 0xF8
 %endmacro
+
+; px_wsubs - DX = the work claim just made: the row's segment past the
+; quantiser's pages ([px_wseg]) and each sub-buffer's past the row
+; ([px_wsacc] [px_wslin] [px_wslut] [px_wsdec], at [px_wo_*] paragraphs) as
+; SEG_SUB selectors - the sums every real-mode kernel answers, and a
+; descriptor of their own under kern_mega, where the work claim is one
+; selector and a sum names somebody else's (MC7). The claim is pinned, so
+; they hold for its life. Preserves all
+px_wsubs:
+    push ax
+    push dx
+    push si
+    mov si, dx                      ; SI = the claim
+    mov ax, QT_SIZE / 16
+    PXSUB
+    mov [px_wseg], dx
+    mov ax, [px_wo_acc]
+    call .one
+    mov [px_wsacc], dx
+    mov ax, [px_wo_lin]
+    call .one
+    mov [px_wslin], dx
+    mov ax, [px_wo_lut]
+    call .one
+    mov [px_wslut], dx
+    mov ax, [px_wo_dec]
+    call .one
+    mov [px_wsdec], dx
+    pop si
+    pop dx
+    pop ax
+    ret
+.one:                               ; AX paragraphs past the row
+    add ax, QT_SIZE / 16
+    mov dx, si
+    PXSUB
+    ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_wkb - the WORK claim's KB for scale CL at [px_tmw] (SPEC.md 106.9): the
 ; quantiser's pages, the row buffer, the accumulators below 1/1, a PCX line,
@@ -479,14 +694,14 @@ px_claims:
     call OSAPI_MEM_CLAIM            ; the master first: the largest
     jc .nomem
     mov [px_cur + PXR_MSEG], dx
+    call px_mwinval                 ; (its segment may be one a table was of)
     mov ax, px_mreloc
     call OSAPI_MEM_MOVABLE
     call px_wkb                     ; the work claim: the quantiser's tables
     call OSAPI_MEM_CLAIM            ; at its base, the row's segment after
     jc .nomem2                      ; them
     mov [px_wbase], dx
-    add dx, QT_SIZE / 16
-    mov [px_wseg], dx
+    call px_wsubs                   ; ...and its sub-buffers' selectors
     cmp byte [px_rflat], 0          ; the ring, unless the file is in memory
     jne .mode
     call px_ringclaim
@@ -831,28 +1046,30 @@ px_emit:
     pop es
     jmp px_progress                 ; pxpump.inc: abort, liveness, the wake
 
-; px_mrow - AX = a master row: ES:DI = its first byte, DI < 128 - the
-; address normalised to EIGHT paragraphs and not one, as PX_WGRID says why
-; (pxplan, pxtools and pxview's master addresses the same). Preserves all else
+; px_mrow - AX = a master row: ES:DI = its first byte, through the shown
+; master's 32KB windows (px_mwc, pxrec.inc: DI < 8000h, and the row ends in
+; the window). The table is current for the whole job (px_wjob's px_mwok),
+; a real-mode move re-basing it (px_mreloc). pxplan, pxtools, pxview and
+; the parts address the master the same way. Preserves all else
 px_mrow:
     push ax
     push dx
+    push bx
     mul word [px_cur + PXR_MW]      ; DX:AX = its offset
     mov di, ax
-    and di, 127                    ; normalised to 8 paragraphs (PX_WGRID)
-    push cx
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8                    ; a segment kern_mega can load
-    pop cx
-    add ax, [px_cur + PXR_MSEG]     ; re-read: the master may have moved
-    mov es, ax
+    and di, 0x7FFF                  ; ...in its window
+    shl ax, 1
+    rcl dx, 1                       ; DX = the window
+    mov bx, dx
+    shl bx, 1
+    mov es, [px_mwc + MWT_WIN + bx]
+    pop bx
     pop dx
     pop ax
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_emitrow - the row buffer's [px_cur + PXR_MW] pixels into ES:DI: copied
 ; (an index or a grey), or quantised into the cube. Preserves ES
@@ -922,9 +1139,7 @@ px_accclear:
 
 ; px_accseg - ES = the accumulators, CX = their words, DX = channels (1 or 3)
 px_accseg:
-    mov ax, [px_wseg]
-    add ax, [px_wo_acc]
-    mov es, ax
+    mov es, [px_wsacc]
     mov dx, 3
     cmp byte [px_cur + PXR_RF], RF_GREY
     jne .3
@@ -936,6 +1151,9 @@ px_accseg:
     pop dx
     mov cx, ax
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_accrow - add the row buffer into the accumulators: per master pixel
 ; and channel, the sum of its 2^s source pixels. Preserves BX, CX

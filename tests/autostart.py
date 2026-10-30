@@ -63,6 +63,29 @@ def waited(fn):
         return None
 
 
+def mega_img():
+    """kern_mega's port (tests/megaport.txt): the same gate disk built on
+    build/mega.img - its one system disk - with `make autostarttest`'s four
+    files put where autostart360.img has them. A private copy, removed at
+    exit"""
+    import atexit
+    import shutil
+    import subprocess
+    import tempfile
+    d = tempfile.mkdtemp(prefix="astmega-")
+    atexit.register(shutil.rmtree, d, True)
+    img = os.path.join(d, "autostart.img")
+    shutil.copy(os88marty.system_disk(IMG), img)
+    ast = os.path.join(ROOT, "build", "astest")
+    env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+    for f, to in (("CALC.LNK", "::/"), ("BADVER.LNK", "::/AUTOSTRT/"),
+                  ("NOTES.TXT", "::/AUTOSTRT/"),
+                  ("TASKMGR.LNK", "::/AUTOSTRT/")):
+        subprocess.run(["mcopy", "-o", "-i", img, os.path.join(ast, f), to],
+                       check=True, env=env, stdout=subprocess.DEVNULL)
+    return img
+
+
 def boot(machine, shift=False):
     """A machine on the gate disk, run to the end of the boot - which on a
     disk that autostarts a WINDOW is not a still desktop, so `os88ui.boot`'s
@@ -74,7 +97,14 @@ def boot(machine, shift=False):
     ui = os88ui.UI(m)
     m.run()
     if shift:
-        os88marty.pace(m, 3.0)          # past POST, inside the loading screen
+        if getattr(m, "bochs", False):
+            # kern_mega under Bochs: its POST and boot take their own time
+            # in host seconds, so "inside the loading screen" is the
+            # kernel's own [spl_live] rather than three seconds in
+            os88marty.until(m, lambda mm: mm.read(mm.sym("spl_live"), 1)[0],
+                            "the loading screen", poll=0.1, guest=60.0)
+        else:
+            os88marty.pace(m, 3.0)      # past POST, inside the loading screen
         m.key("ShiftLeft", down=True, up=False)
     ui.up()
     os88marty.no_saver(m)
@@ -85,9 +115,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     a = ap.parse_args()
+    global IMG
     for f in (IMG, APPS):
         if not os.path.exists(f):
             sys.exit("autostart: %s is not built - make autostarttest" % f)
+    if os.environ.get("OS88_MEGA"):
+        IMG = mega_img()
 
     print("A. autostart")
     cm, ui = boot(a.machine)

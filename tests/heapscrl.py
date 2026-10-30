@@ -23,9 +23,14 @@ you:
    any capture can see it. What is NOT repaired is a row that changes while
    the key does not - a claim replaced by another of the same count, which on
    a page whose subject is claims coming and going is an ordinary Tuesday.
-   THAT is what the two bar checks below can see, and they are a floor rather
-   than a proof: they hold the bar over a quiet list, and they hold what the
-   incremental path left against what a full repaint draws. On the target
+   THAT is what the bar checks below can see, and they are a floor rather
+   than a proof: they hold the bar over a quiet list, they hold what the
+   incremental path left - at the bottom end stop, where the scroll MOVED the
+   thumb - against what a full repaint draws, and they hold that repaint's bar
+   over four more refreshes. Each pair is read by `glass_bar`, with the guest
+   stopped and the block it was drawn from, and compared only when the block
+   held still: a list that moved between two captures is a bar that SHOULD
+   differ, and reading it as tm_rowr's defect was a false red. On the target
    machine the same defect is also a PERFORMANCE.md Part 1 double-draw - the
    bar erased and redrawn on every scroll, ~756 us a call - and nothing here
    can see that at all.
@@ -163,6 +168,14 @@ def report():
 
 # --- the package's own state --------------------------------------------------
 _MAP = {}
+# kern_mega (OS88_MEGA, docs/BOCHS.md): mega.img's SYSTEM/ carries the Task
+# Manager's ARM (SPEC.md 28.4.15), assembled -DPKG_MEGA - a different layout -
+# and its region is an LDT SELECTOR, reached through m.lin
+MEGA = bool(os.environ.get("OS88_MEGA"))
+
+
+def lin(m, seg, off=0):
+    return m.lin(seg, off) if MEGA else (seg << 4) + off
 
 
 def sym(name):
@@ -173,8 +186,9 @@ def sym(name):
         mp = tempfile.mktemp(suffix=".map")
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
         r = subprocess.run(["nasm", "-f", "bin", "-w+error",
-                            "-I", os.path.join(ROOT, "apps") + os.sep,
-                            "-o", tmp + ".bin", tmp],
+                            "-I", os.path.join(ROOT, "apps") + os.sep]
+                           + (["-DPKG_MEGA"] if MEGA else [])
+                           + ["-o", tmp + ".bin", tmp],
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit("heapscrl: could not map %s:\n%s" % (APP, r.stderr[:400]))
@@ -205,7 +219,8 @@ def img_size():
     a perfectly good build. Unwrapped it is a layout check again, which is
     still worth having.
     """
-    raw = open(os88build.at("build/%s.o88" % APP), "rb").read()
+    raw = open(os88build.at("build/%s%s.o88" % ("megak/apps/" if MEGA else "",
+                                                APP)), "rb").read()
     d = os88pkg.image_unwrap(raw)
     n = int.from_bytes(d[8:10], "little")   # +8 = image size (SPEC.md 20.2)
     if n != len(d):
@@ -219,7 +234,7 @@ class Tm:
 
     def __init__(self, m, slot, seg):
         self.m, self.slot, self.seg = m, slot, seg
-        self.bss = (seg << 4) + img_size()
+        self.bss = lin(m, seg, img_size())
 
     def _at(self, name, i=0):
         return self.bss + sym(name) - sym("os88_image_end") + 2 * i
@@ -257,7 +272,7 @@ def pkg_slot(m, name):
         seg = int.from_bytes(t[b + geom.W_SEG:b + geom.W_SEG + 2], "little")
         if not seg:
             continue
-        hdr = m.read(seg << 4, 32)
+        hdr = m.read(lin(m, seg), 32)
         if hdr[:3] == b"O8" + bytes([PKG_FMT]) and hdr[16:32].split(b"\0")[0] == name:
             return i, seg
     return None
@@ -307,6 +322,68 @@ def stopped_read(m, tm, *names):
         return [tm.word(n) for n in names]
     finally:
         m.run()
+
+
+def glass_bar(m, tm, tries=8):
+    """The bar ON THE GLASS and the block it was drawn from, read as ONE fact.
+
+    `band` reads the last frame the card FINISHED while the guest runs on, and
+    `tm.bar()` is a second read at a second instant. Compared across a round
+    trip, that pair cannot tell a defect from two legitimate events: a paint
+    still in flight (the worker letters the rows and draws the bar LAST, so a
+    frame can hold the rows of one walk beside the bar of the one before), and
+    a claim arriving or going - the list is live (SPEC.md 50.6), and a total
+    one row longer is a different thumb. Check 3 already excuses the second
+    with a re-read of the row count; the bar checks had nothing, so either one
+    landing between their two captures read as tm_rowr's defect.
+
+    So the guest is STOPPED, and the answer is taken only when it is STILL:
+    the block, the pixels, then two frames later the block and the pixels
+    again, all four agreeing. A paint in progress moves one of them; the block
+    holding across the pair says the pixels are a function of it. Bounded: a
+    bar that never holds still fails here, saying so, rather than being
+    compared at all.
+    """
+    x1, y1, x2, y2 = tm.bar()[:4]
+    last = None
+    for _ in range(tries):
+        m.pause()
+        try:
+            blk = tm.bar() + [tm.word("tm_hrows")]
+            img = band(m, x1, y1, x2, y2)
+            m.advance(frames=2)
+            if tm.bar() + [tm.word("tm_hrows")] == blk and \
+                    band(m, x1, y1, x2, y2) == img:
+                return blk, img
+            last = blk
+        finally:
+            m.run()
+        tick(m, 20)
+    sys.exit("heapscrl: the bar never held still for two frames (last block "
+             "%r) - a paint that never ends, or a list that never stops "
+             "moving; nothing below can be compared against it" % (last,))
+
+
+def dump_bar(tag, blk, img):
+    """Save a bar capture where a failure can be looked at (PPM, rgb24)."""
+    x1, y1, x2, y2 = blk[:4]
+    fd, path = tempfile.mkstemp(prefix="heapscrl-%s-" % tag, suffix=".ppm")
+    with os.fdopen(fd, "wb") as f:
+        f.write(b"P6 %d %d 255\n" % (x2 - x1 + 1, y2 - y1 + 1) + img)
+    return path
+
+
+def bar_diff(a, b, blk):
+    """The differing pixels of two bar captures: count and bounding box."""
+    x1, y1, x2, y2 = blk[:4]
+    w = x2 - x1 + 1
+    pts = [(i // 3 % w + x1, i // 3 // w + y1)
+           for i in range(0, min(len(a), len(b)), 3) if a[i:i + 3] != b[i:i + 3]]
+    if not pts:
+        return "no pixel differs"
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return "%d px differ in (%d,%d)-(%d,%d)" % (len(pts), min(xs), min(ys),
+                                              max(xs), max(ys))
 
 
 def scroll_to_end(m, mo, tm, where, limit, top=False):
@@ -508,13 +585,24 @@ def main(argv):
         # --- 1. the bar survives its own list's refresh --------------------
         mo.to(*park)
         tick(m, 30)
-        before = band(m, x1, y1, x2, y2)
-        tick(m, 4 * SLOW_FRAMES)                    # four unattended refreshes
-        check(band(m, x1, y1, x2, y2) == before,
-              "the bar is untouched by four refreshes of the list beside it",
-              "tm_rowr: the row band would otherwise run through the bar. "
-              "This half is the unconditional case - a scrub that happens on "
-              "every pass rather than only when a row's text moves")
+        for _ in range(3):                  # ...over a list that held still:
+            b0, before = glass_bar(m, tm)   # a claim made in the window is a
+            tick(m, 4 * SLOW_FRAMES)        # bar that SHOULD move (glass_bar)
+            b1, after = glass_bar(m, tm)    # four unattended refreshes
+            if b1 == b0:
+                break
+            say("heapscrl: the list moved under the refreshes (%r -> %r); "
+                "again" % (b0, b1))
+        if not check(b1 == b0 and after == before,
+                     "the bar is untouched by four refreshes of the list beside it",
+                     "tm_rowr: the row band would otherwise run through the "
+                     "bar. This half is the unconditional case - a scrub that "
+                     "happens on every pass rather than only when a row's "
+                     "text moves",
+                     got="%r, %s" % (b1, bar_diff(before, after, b0)),
+                     want=b0):
+            say("  saved: %s %s" % (dump_bar("before", b0, before),
+                                    dump_bar("after", b1, after)))
         top = band(m, *rowarea)
 
         # --- 2. a scroll moves the list, and comes back --------------------
@@ -566,20 +654,64 @@ def main(argv):
         # a bar damaged while its own key stood still is never put back, so
         # the incremental picture drifts away from the drawn-from-scratch one
         # and stays away.
-        worn = band(m, x1, y1, x2, y2)
-        for _ in range(2):                  # 1 -> 0 -> 1, and each one
-            mo.click(cx, cy)                # white-fills the content first
-            tick(m, 50)
+        #
+        # AT THE BOTTOM END STOP, not at the top. Every bar this file has
+        # looked at so far was last drawn at pos 0 - which is also what a full
+        # repaint draws there, so a scroll path that never moved the thumb at
+        # all would have compared equal. From the end stop the thumb the
+        # incremental path left is the one it MOVED, and the page turn redraws
+        # it from nothing at the same pos (tm_htop survives the turn).
+        #
+        # Both captures are glass_bar's, and the pair is only compared when
+        # the block is the same at both ends: the list is live, and a claim
+        # made or purged across the page turn is a bar that legitimately
+        # differs. That case goes round again, scrolled away and back so the
+        # bar is once more the incremental path's.
+        for _ in range(3):
+            scroll_to_end(m, mo, tm, down, rows + 8)
+            mo.to(*park)
+            tick(m, 30)
+            b0, worn = glass_bar(m, tm)
+            mo.click(cx, cy)                # 1 -> 0 -> 1, and each one
+            tick(m, 50)                     # white-fills the content first
+            mo.click(cx, cy)                # ...and the click returns when
+            b1, fresh = glass_bar(m, tm)    # the UI task has drawn it: taken
+            tick(m, 4 * SLOW_FRAMES)        # AT ONCE, before a refresh can
+            b2, later = glass_bar(m, tm)    # touch it, and again after four
+            if b1 == b0 == b2:
+                break
+            say("heapscrl: the list moved across the page turn (%r -> %r "
+                "-> %r); again" % (b0, b1, b2))
+            scroll_to_end(m, mo, tm, up, rows + 8, top=True)
         check(tm.byte("tm_view") == 1,
               "two more clicks come back to the memory page")
-        mo.to(*park)
-        tick(m, 30)
-        check(worn == band(m, x1, y1, x2, y2),
-              "the bar the refresh left is the one a full repaint draws",
-              "tm_rowr, the half that survives its own repair: a row redrawn "
-              "while the bar's key has not moved erases part of it and "
-              "nothing puts it back, so what the incremental path leaves on "
-              "the glass drifts away from what tm_draw_mem would put there")
+        check(b0[6] > 0, "...with the view scrolled off the top (pos %d)"
+              % b0[6], "a bar compared at pos 0 is one no scroll ever moved")
+        if not check(b1 == b0 and worn == fresh,
+                     "the bar the refresh left is the one a full repaint draws",
+                     "tm_rowr, the half that survives its own repair: a row "
+                     "redrawn while the bar's key has not moved erases part "
+                     "of it and nothing puts it back, so what the incremental "
+                     "path leaves on the glass drifts away from what "
+                     "tm_draw_mem would put there",
+                     got="%r, %s" % (b1, bar_diff(worn, fresh, b0)),
+                     want=b0):
+            say("  saved: %s %s" % (dump_bar("worn", b0, worn),
+                                    dump_bar("fresh", b1, fresh)))
+        # ...and check 1 again, against a REFERENCE this time. Check 1 asks
+        # whether the bar CHANGES over four refreshes, which a scrub that
+        # happens on every pass answers "no" to: the bar is already white by
+        # the time it looks, and stays white. Here the "before" is the page
+        # turn's own bar, drawn whole and taken before any refresh ran.
+        if not check(b2 == b1 and later == fresh,
+                     "...and four refreshes after it leave that bar alone",
+                     "tm_rowr's unconditional half: a refresh that letters "
+                     "the rows beside the bar scrubs it, and the bar's key "
+                     "has not moved, so nothing draws it back",
+                     got="%r, %s" % (b2, bar_diff(fresh, later, b1)),
+                     want=b1):
+            say("  saved: %s %s" % (dump_bar("fresh", b1, fresh),
+                                    dump_bar("later", b2, later)))
 
     return report()
 

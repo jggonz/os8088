@@ -84,6 +84,14 @@ CPV_BTNX, CPV_BTNY = 2, 72          # ...and the Set Primary button under them
 MODES = {"single": 0, "right": 1, "below": 2}
 
 
+def _lin(m, seg, off=0):
+    """SEG:OFF as a linear address. `seg << 4` on MartyPC; under kern_mega
+    (tools/os88megabochs.py) a claim's segment is an LDT SELECTOR, and
+    `m.lin` looks its base up in the descriptor."""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f is not None else (seg << 4) + off
+
+
 def _u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
@@ -427,9 +435,26 @@ def open_drive(m, mo, S, settle, letter="B", card=None, paint=False):
                            "(dsk_vtab says it is free or hidden)" % letter)
     x, y = drive_xy(m, S, ordinal)
     ui = _ui(m, mo, card, S)
-    if ui is None:                      # QEMU: the blind path, as before
+    if ui is None:                      # QEMU: the blind path, CONFIRMED
+        # A Qemu has no os88ui, so the post-condition is the weakest one
+        # every outcome of desk_click_x shares (SPEC.md 22.1: it fronts a
+        # window, opens one, or moves the front one at the cap): AFTER IT
+        # THERE IS A WINDOW. It was not asked at all, and box-ethernet's
+        # double-click that 86Box coalesced into no edge (os88qmpmega's
+        # _box_edges) went on as `wins[-1]` - an IndexError three lines into
+        # the caller, naming the list and not the gesture.
+        import os88qemu
         mo.dblclick(x, y)
         settle(m, card=card)
+        if not os88qemu.acted(m, lambda: win_list(m, S, check=False),
+                              secs=6.0, what="a Disk window for %s:" % letter):
+            px, py, pb = os88qemu.mouse_where(m, S)
+            raise RuntimeError(
+                "drive %s:'s desktop zone was double-clicked at (%d,%d) and "
+                "no window is open: the pointer reads (%d,%d) buttons %02x, so "
+                "%s" % (letter, x, y, px, py, pb,
+                        "the double-click never arrived as one"
+                        if (px, py) == (x, y) else "it never got there"))
         return x, y
     try:
         ui.open_drive(letter)

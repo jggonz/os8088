@@ -85,6 +85,17 @@ ROWS = [
 ]
 
 
+# kern_mega (tests/megaport.txt): its system disk's DOS.O88 is built
+# -DDOS_MEGA and AUDIO.O88 is the -DPKG_MEGA arm (Makefile $(MEGAPKGS)), so
+# their maps are taken with the same defines or they resolve to plausible,
+# wrong offsets - pkg_syms' own warning
+if os.environ.get("OS88_MEGA"):
+    ROWS = [r[:4] + (tuple(d for d in r[4] if d != "-DDOS_WIN16")
+                     + (("-DDOS_MEGA",) if "DOS" in r[0] else
+                        ("-DPKG_MEGA",) if "AUDIO" in r[0] else ()),)
+            + r[5:] for r in ROWS]
+
+
 def close_menu(ui, w):
     """The cell that holds Close: the APP-NAME cell (SPEC.md 12.7), which is
     the window's title only when the package titles its window by its own
@@ -131,14 +142,21 @@ def run():
 
             # 2. the rects are inside the window - Browser's bug, where the
             #    record aliased other state and named a garbage rectangle.
+            # win_rect is (x, y, W, H) - it was read as two corners, which
+            # held only while a window was small and near the origin: a
+            # 640x480 VGA desktop (kern_mega's, and MartyPC's os8088_xt_vga)
+            # puts ArtfulType's splash button at y 329 in a window at y 60,
+            # 300 high, and the corner reading called it outside
             wr = os88geom.win_rect(m, w.i, ui.sym)
+            wx2, wy2 = wr[0] + wr[2], wr[1] + wr[3]
             r0 = [u16(m.readseg(seg, rects + i * 2, 2)) for i in range(4)]
-            if not (wr[0] - 4 <= r0[0] <= wr[2] and wr[1] - 4 <= r0[1] <= wr[3]
+            if not (wr[0] - 4 <= r0[0] <= wx2 and wr[1] - 4 <= r0[1] <= wy2
                     and r0[2] >= r0[0] and r0[3] >= r0[1]
                     and r0[2] - r0[0] < 400 and r0[3] - r0[1] < 200):
                 fails.append("%s: button 0's rect %s is not a sane rectangle "
                              "inside the window %s - a record that overlaps "
-                             "other state reads like this" % (name, r0, list(wr)))
+                             "other state reads like this"
+                             % (name, r0, [wr[0], wr[1], wx2, wy2]))
 
             def dark():
                 """dark pixels inside button 0 - THE GLASS, not the record.

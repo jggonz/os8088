@@ -148,14 +148,15 @@ def break_canary(src, dst):
     """A copy of `src` whose boot sector expects a KSIG the kernel does not
     carry, so 18.93.1's canary compares UNEQUAL after the first load and the
     loader loads again at the track bound - a failed canary, on a 5150 whose
-    FDC crosses heads perfectly well. KSIG is the word at KSIG_OFF +
-    BOOT2_PAD of KERNEL.SYS (the Makefile's KSIGDEF2) and boot.asm loads it
-    with one `mov di, imm16`, so the patch is that immediate and nothing else."""
+    FDC crosses heads perfectly well. KSIG is the 16-bit sum of the sector at
+    KSIG_OFF + BOOT2_PAD of KERNEL.SYS (the Makefile's KSIGDEF2) and boot.asm
+    loads it with one `mov di, imm16`, so the patch is that immediate and
+    nothing else."""
     shutil.copyfile(src, dst)
     eq = os88sym.equates()
     k = bytes(os88fat.Fat12(dst).read("KERNEL.SYS"))
     o = eq["KSIG_OFF"] + eq["BOOT2_SECS"] * 512
-    ksig = k[o] | (k[o + 1] << 8)
+    ksig = sum(k[i] | (k[i + 1] << 8) for i in range(o, o + 512, 2)) & 0xFFFF
     with open(dst, "r+b") as f:
         bs = bytearray(f.read(512))
         at = [i for i in range(510 - 2)

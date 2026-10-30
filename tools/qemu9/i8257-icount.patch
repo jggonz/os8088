@@ -1,0 +1,96 @@
+diff --git a/hw/dma/i8257.c b/hw/dma/i8257.c
+index 3e6700e..7ebaf5e 100644
+--- a/hw/dma/i8257.c
++++ b/hw/dma/i8257.c
+@@ -32,6 +32,8 @@
+ #include "qemu/module.h"
+ #include "qemu/log.h"
+ #include "trace.h"
++#include "qemu/timer.h"
++#include "sysemu/cpu-timers.h"
+ 
+ 
+ /* #define DEBUG_DMA */
+@@ -65,6 +67,28 @@ enum {
+ 
+ static void i8257_dma_run(void *opaque);
+ 
++/*
++ * os8088: the channels' clock under -icount - a QEMU_CLOCK_VIRTUAL timer per
++ * controller, kept here so the device's state (and its header) is unchanged.
++ */
++#define I8257_VPERIOD_NS 1000000
++static struct {
++    I8257State *d;
++    QEMUTimer *t;
++} i8257_vt[4];
++
++static QEMUTimer *i8257_vtimer(I8257State *d)
++{
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(i8257_vt); i++) {
++        if (i8257_vt[i].d == d) {
++            return i8257_vt[i].t;
++        }
++    }
++    return NULL;
++}
++
+ static const int channels[8] = {-1, 2, 3, 1, -1, -1, -1, 0};
+ 
+ static void i8257_write_page(void *opaque, uint32_t nport, uint32_t data)
+@@ -373,8 +397,21 @@ static void i8257_dma_run(void *opaque)
+     d->running = 0;
+ out:
+     if (rearm) {
+-        qemu_bh_schedule_idle(d->dma_bh);
+-        d->dma_bh_scheduled = true;
++        if (icount_enabled()) {
++            /*
++             * os8088: under -icount the channels run off QEMU_CLOCK_VIRTUAL,
++             * whose timers the vCPU thread runs at the exact instruction
++             * count of their deadline. The idle BH runs on the main loop in
++             * HOST time while the vCPU runs on without the BQL, so a main
++             * loop the host starved let guest time pass with no transfer -
++             * a Sound Blaster's block IRQ late by however long that was.
++             */
++            timer_mod(i8257_vtimer(d), qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                      I8257_VPERIOD_NS);
++        } else {
++            qemu_bh_schedule_idle(d->dma_bh);
++            d->dma_bh_scheduled = true;
++        }
+     }
+ }
+ 
+@@ -460,6 +497,14 @@ static int i8257_dma_write_memory(IsaDma *obj, int nchan, void *buf, int pos,
+ static void i8257_dma_schedule(IsaDma *obj)
+ {
+     I8257State *d = I8257(obj);
++    if (icount_enabled()) {
++        QEMUTimer *t = i8257_vtimer(d);
++
++        if (timer_pending(t)) {
++            timer_mod(t, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++        }
++        return;
++    }
+     if (d->dma_bh_scheduled) {
+         qemu_notify_event();
+     }
+@@ -583,6 +628,14 @@ static void i8257_realize(DeviceState *dev, Error **errp)
+     }
+ 
+     d->dma_bh = qemu_bh_new(i8257_dma_run, d);
++    for (i = 0; i < ARRAY_SIZE(i8257_vt); i++) {
++        if (!i8257_vt[i].d) {
++            i8257_vt[i].d = d;
++            i8257_vt[i].t = timer_new_ns(QEMU_CLOCK_VIRTUAL, i8257_dma_run, d);
++            break;
++        }
++    }
++    assert(i < ARRAY_SIZE(i8257_vt));
+ }
+ 
+ static Property i8257_properties[] = {

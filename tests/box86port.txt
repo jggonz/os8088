@@ -1,0 +1,45 @@
+# tests/box86port.txt - registered rows PORTED to 86Box on their OWN kernel.
+#
+# Each line registers `box-<name>` (tests/suite.py's _ports, the parser
+# tests/megaport.txt shares): the SAME script as row <name>, run with
+# OS88_EMU=86box, which makes os88marty.launch() answer tools/os88box86api.py
+# - 86Box booting the row's own disks with the row's own kernel (kern_big;
+# kern_small with `@OS88_BUILD=build/smallk @OS88_DEFINES=KERN_SMALL`) - and
+# tests/os88qemu.py's launchers serve QEMU's QMP over the same machine
+# (tests/os88qmpmega.py). docs/86BOX.md, "kern_big rows on 86Box".
+#
+#     name[@alias] [secs=N] [timeout=N] [@VAR=VAL ...] [+arg ...] [-arg ...] [-flag=]   # why
+#
+# THE GRAMMAR IS megaport.txt's. `+arg` appends to the row's command - a
+# machine name, say: `+at286_vga` puts dtwrite on an AT. A name for a
+# machine only 86Box has carries no `os8088_` prefix, which is MartyPC's
+# namespace (tests/unit/t_machines.py holds every `os8088_*` a test names to
+# MartyPC's machine list). `@VAR=VAL` or `VAR=VAL` goes into its environment.
+#
+# WHAT BELONGS HERE: a row about hardware MartyPC has not got - CLAUDE.md's
+# QEMU closed list (a 286 or 386, an AT's clock chip, the PS/2 mouse's 8042,
+# a network card) - asked of a period BIOS, through the same API a MartyPC
+# row uses. WHAT DOES NOT: a row whose assertion is an 8088 cycle count or
+# a timing. 86Box is not cycle-accurate (docs/86BOX.md, *What it is NOT*), so
+# such a row stays MartyPC's however well it runs here.
+#
+# THE MACHINE is tools/os88box86api.py's mapping of the row's MartyPC name:
+# an IBM XT (vm/xt640) when everything fits one, the owner's mr286
+# (vm/at286-port) for `at286`, a 1.2MB/1.44MB floppy or a network card, the
+# Packard Bell 386SX (vm/386-ps2) for `_ps2`. An AT's CMOS is primed ONCE per
+# configuration and cached under build/86box/nvrcache/, so the first run of
+# a line on a fresh box is ~15-45 s longer than `secs` (the six below
+# measured 5.6, 5.9, 4.9, 3.5, 3.1 and 21.0 s with the cache warm).
+#
+# `secs` is MEASURED on the port, a warm CMOS cache. A row is listed here only
+# once it PASSES - and was SEEN TO GO RED when the thing it checks was broken;
+# the comment names the break. `OS88_86BOX_POKE=SYM[+OFF]=HEX;...` is the
+# cheap one (the bytes written over the kernel once the desktop is up).
+
+# THE CLOSED LIST, ENTRY BY ENTRY
+ps2mouse secs=10   # entry 4, the PS/2 mouse: vm/386-ps2's 8042 and its aux port, the UARTs off as QEMU's -serial none - the handshake to step 9, the pointer exact on 200,150 through 86Box's PS/2 Y sense, every bar title, six keys through the shared output buffer; red: POKE mou_p2_byte.yp=9090 (the `neg ax` of 9.9.3's Y inversion) - the pointer runs to the bottom edge
+dtwrite secs=10 +at286_vga   # entry 6, the RTC ladder's WRITE half: the mr286's MC146818 read back through ports 70h/71h (m.cmos) - the stepped year in the kernel's clock and NOT the chip until the panel's close, then in the chip; red: POKE clk_rtc=00 (no usable RTC: the close writes nothing) - the chip keeps 2026
+hdtake secs=10   # entry 1, a 286: HDD.DRV's rung 1 TAKES the drive MR BIOS knows (an identified type 47 on the ISA IDE) - row 0 IDE 1F0h unit 0, HDD_BIOS 80h, one row - and CALC launches off C:; red: hdd.asm's `call hd_twins` taken out (a private tree, OS88_TREE) - row 0 stays the BIOS's
+hdtakeblank secs=10   # ...and a disk with no 55AA at LBA 0 stays the BIOS's row (the leg's own refusal)
+hdtakeboot secs=10   # ...and on the mr286 BOOTED off it (A: empty): C: handed to HDD.DRV, given back on untick, taken again
+ethernet secs=30   # entry 5, the network card: the mr286's NE2000 on 86Box's slirp behind the QMP server - ETHER.DRV attached, DHCP to 10.0.2.15, the browser's GET reaching this host, the rings claimed and FREED on close; red: POKE mmf_osapi_mem_free=f8cb - "a claim still starts at the old pool"

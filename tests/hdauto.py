@@ -220,7 +220,7 @@ def main():
         # --- F: an old file, no 'DA' -------------------------------------------
         print("-- F: an old SYSTEM.CFG: RAM disk on, hard disk off, no DA")
         old = os.path.join(tmp, "old.img")
-        shutil.copyfile(IMG, old)
+        shutil.copyfile(os88marty.system_disk(IMG), old)  # mega.img on kern_mega
         cfg = os.path.join(tmp, "SYSTEM.CFG")
         with open(cfg, "wb") as f:
             f.write(b"O88CFG\0\0" + struct.pack("<H", 3) + b"DW"

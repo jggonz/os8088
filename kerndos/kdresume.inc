@@ -51,6 +51,13 @@
 ; cannot reboot cleanly either.
 ; -----------------------------------------------------------------------------
 kd_resume:
+%ifdef KD_MEGA
+    jmp .no                     ; A kern_mega IMAGE is not this stub's to read
+                                ; (its extended section and its tables want
+                                ; kernel/megares.inc and protected mode): the
+                                ; reboot route, and the boot resumes it with
+                                ; no question (KERN-MEGA-MEMORY-PLAN D5)
+%endif
     test word [si+KDL_FLAGS], KDLF_HIBER
     jz .no                      ; no image was written: 96.42's floppy arm,
                                 ; where the machine restarts and says so

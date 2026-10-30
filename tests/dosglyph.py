@@ -128,6 +128,12 @@ def expect(m, step, shipped):
                      % (step, got.hex(), shipped.hex()))
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF's linear address: the icon store's claim is an LDT selector
+    on kern_mega (OS88_MEGA, docs/BOCHS.md), `seg * 16` everywhere else."""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else seg * 16 + off
+
+
 def find_icon(m, mo, rect, glyph):
     """Search the window's pixels for the composed document icon."""
     mo.to(*PARK)
@@ -194,7 +200,7 @@ def break_store_row(m):
     # is a question about ICO_R_SIZE and is asked here rather than assumed.
     want = b"DOS     " if r_size == 8 else b"DOS.O88\0"
     for i in range(n):
-        row = seg * 16 + i * stride
+        row = lin(m, seg) + i * stride
         if bytes(m.read(row, 8)) == want:
             m.write(row + r_size, b"\xFF\xFF")
             say("row %d is %r: its size word is now 0xFFFF" % (i, want))
@@ -255,7 +261,7 @@ with os88marty.launch(SYS_IMG, apps=DOC_IMG, machine=MACHINE) as m:
     n = m.read(S("ico_n"), 1)[0]
     docs = []
     for r in range(n):
-        k = bytes(m.read(seg * 16 + r * eqs["ICO_ROW"], eqs["ICO_KEY"]))
+        k = bytes(m.read(lin(m, seg) + r * eqs["ICO_ROW"], eqs["ICO_KEY"]))
         if k[0] == 0xFF:                       # a composed DOCUMENT row
             docs.append((r, k[1], k[2:10]))
     live = [d for d in docs if any(d[2])]

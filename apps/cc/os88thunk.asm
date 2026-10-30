@@ -2096,6 +2096,48 @@ _os88_mem_huge_step:
     ret
 %endif
 
+; unsigned os88_seg_para(unsigned seg) - the paragraph under a segment or
+; selector below 1MB: OSAPI_SEG's SEG_LIN, shifted (KERN-MEGA-MEMORY-PLAN
+; MC7). The segment itself on every real-mode kernel
+CC_GATE _os88_seg_para
+%ifdef CC_U__os88_seg_para
+_os88_seg_para:
+    mov bx, sp                      ; no frame: one argument
+    mov dx, [ss:bx+2]
+    mov bl, SEG_LIN
+    call OSAPI_SEG                  ; DX:AX = its linear base
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
+    ret
+%endif
+
+; unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len) - "seg +
+; para" for a claim or region of yours: OSAPI_SEG's SEG_SUB (SPEC.md
+; 50.6.11), a DATA selector based `para` paragraphs in, `len` paragraphs long
+; (0 = to the claim's end, 64KB at most), STABLE (asked again, the same one),
+; moved and freed with the claim. 0 = refused (no LDT entry). The sum seg +
+; para on every real-mode kernel, which answers CF = 0 with exactly that
+CC_GATE _os88_seg_sub
+%ifdef CC_U__os88_seg_sub
+_os88_seg_sub:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]
+    mov ax, [bp+6]
+    mov cx, [bp+8]
+    mov bl, SEG_SUB
+    call OSAPI_SEG                  ; CF = 0: DX = the selector (or the sum)
+    mov ax, dx
+    jnc .o
+    xor ax, ax                      ; refused
+.o:
+    pop bp
+    ret
+%endif
+
 ; int os88_mem_free(unsigned seg) - DX = a segment you were given.
 CC_GATE _os88_mem_free
 %ifdef CC_U__os88_mem_free

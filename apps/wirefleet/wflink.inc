@@ -116,8 +116,8 @@ wf_lease:
     cmp byte [wf_linkopen], 0
     jne .open
     push ax
-    mov dx, cs
-    xor ax, ax
+    mov dx, ds                  ; (DS: the region's name - under kern_mega
+    xor ax, ax                  ; CS is its code half, which names no claim)
     call OSAPI_MEM_MOVABLE      ; pin the region before publishing its ring
     pop ax
 .open:

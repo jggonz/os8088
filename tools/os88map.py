@@ -84,7 +84,20 @@ class Syms(object):
 
     @property
     def ship(self):
-        return _in_build(self._ship)
+        return self._mega() or _in_build(self._ship)
+
+    def _mega(self):
+        """The package's kern_mega ARM, when the row runs on kern_mega
+        ($OS88_MEGA, tests/megaport.txt) and the package has one
+        ($(MEGAPKGS), built -DPKG_MEGA into build/megak/apps/): that is the
+        image build/megaapps.img carries, and its layout is its own."""
+        if not os.environ.get("OS88_MEGA") or \
+                not self._ship.startswith("build/") or "/" in self._ship[6:]:
+            return None
+        import os88build
+        bld = os88build.mega_build()
+        p = os.path.join(bld, "megak", "apps", self._ship[6:])
+        return p if os.path.exists(p) else None
 
     @property
     def incs(self):
@@ -102,7 +115,7 @@ class Syms(object):
             with open(cp, "w") as f:
                 f.write(open(self.src).read() + "\n[map all %s]\n" % mp)
             args = ["nasm", "-f", "bin", "-w+error"]
-            for d in self.defines:
+            for d in self.defines + (("PKG_MEGA",) if self._mega() else ()):
                 args += ["-D" + d]
             for i in self.incs:
                 args += ["-I", i]

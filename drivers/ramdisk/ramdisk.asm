@@ -37,8 +37,8 @@
 ; =============================================================================
 
 %define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
-                                ; (KERN-MEGA-PLAN item 82): rd_fold leaves a
-                                ; selector's offset unfolded
+                                ; (KERN-MEGA-PLAN item 82): rd_fold leaves an
+                                ; LDT selector's offset unfolded
 %include "os88drv.inc"
 %include "rdpkg.inc"            ; the package ABI - the same file the PACKAGE
                                 ; includes, so the two ends cannot drift
@@ -179,8 +179,6 @@ rd_entry:
 ; [rd_cwd] is 0 because the image was loaded a moment ago.
 ; -----------------------------------------------------------------------------
 rd_attach:
-    call OSAPI_CPU_INFO         ; AH = the flags, for rd_fold: CPU_F_PM is
-    mov [rd_cpuf], ah           ; the one fact a segment's VALUE cannot give
     mov si, rd_svc
     clc
     ret
@@ -563,6 +561,8 @@ rd_dtab:    dw 0                ; the DIRECTORY AND CHAIN TABLE's claim
                                 ; the rows were 2,304 bytes every loaded driver
                                 ; paid for with nothing mounted. THESE THREE
                                 ; ARE ADJACENT for rd_reloc, which walks them
+rd_wa:      dw 0                ; rd_at's windows: rd_ext_seg's and
+rd_wb:      dw 0                ; rd_blk_out's, 0 = not made yet
 rd_xbase:   dw 0, 0             ; the extended block's 32-bit linear base
 rd_sext:    dw RD_NOEXT         ; which extent the bounce is holding
 rd_xerr:    db 0                ; ONE operation's verdict: the extended store
@@ -582,8 +582,6 @@ rd_ctabkb:  dw 0                ; ...and what the table costs
 rd_vol:     db 0xFF             ; the volume index we registered, FF = none
 rd_cwd:     db 0                ; the folder we are standing in, 0 = the root
 rd_err:     db 0                ; the last RDERR_*, for the page to report
-rd_cpuf:    db 0                ; OSAPI_CPU_INFO's AH, banked at attach: only
-                                ; under CPU_F_PM is a segment a selector
 
 ; --- scratch: an operation's own words ---------------------------------------
 rd_n:       dw 0, 0             ; bytes this operation is about to move,

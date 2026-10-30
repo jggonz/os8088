@@ -610,7 +610,7 @@ fsx_mode:
     mov dl, 0xC4                ; (DX was 3D4h: the CRTC loop moves no DX)
     mov ax, 0x0F02              ; map mask: all four planes...
     out dx, ax
-    mov ax, 0xA000              ; ...and clear the whole 256KB. vid_wipe is
+    VSEG ax, 0xA000             ; ...and clear the whole 256KB. vid_wipe is
     mov cx, 0x8000              ; this body, factored (viddet.inc): both ends
     call vid_wipe               ; are .text in KERNEL_SEG so the call is near,
                                 ; the four registers it clobbers - AX, CX, DI
@@ -654,9 +654,14 @@ fsx_mode:
     mov al, [vid_kind]          ; read ONCE, accumulator form - AL is spent
     cmp al, VID_HERC            ; here (the mul's product went into SI four
     jne .f2                     ; instructions above) and the caller's AX is
+%ifdef KERN_MEGA
+    VSEG ax, 0xB000             ; kern_mega: the row holds B800h's SELECTOR
+    mov [es:di+FSI_SEG-FSI_SIZE], ax ; after the switch, so B000h's whole
+%else                           ; word (KERN-MEGA-MEMORY-PLAN MC7.4)
     mov byte [es:di+FSI_SEG+1-FSI_SIZE], 0xB0 ; B800h -> B000h: the
                                 ; FSXM_TEXT80 row's segment has a zero low
                                 ; byte, so its HIGH byte is the whole edit
+%endif
     mov byte [es:di+FSI_PAGES-FSI_SIZE], 1
     jmp short .f3
 .f2:

@@ -519,7 +519,7 @@ vid_mono_text:
     push es
     mov si, vid_6845t           ; MDA 80x25, cursor off (viddet.inc)
     call vid_6845_prog
-    mov ax, VID_HERC_SEG        ; and clear the page, which the ROM's mode set
+    VSEG ax, VID_HERC_SEG        ; and clear the page, which the ROM's mode set
     mov es, ax                  ; would have done: what is in there is a
     xor di, di                  ; 720x348 graphics desktop, and read as
     mov ax, 0x0720              ; characters it is noise. Space on attribute 7

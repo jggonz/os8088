@@ -48,7 +48,8 @@ def main():
     img = os.path.join(ROOT, "build", "assocfind-%d.img" % tag)
     src = os.path.join(ROOT, "build", "assocfind-%d.tex" % tag)
     nobody = "HELLO.ZZZ"
-    with open(os88build.at("build/os8088-720.img"), "rb") as f:
+    with open(os88marty.system_disk(os88build.at("build/os8088-720.img")),
+              "rb") as f:
         data = f.read()
     with open(img, "wb") as f:
         f.write(data)

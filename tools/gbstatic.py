@@ -102,6 +102,66 @@ def writes_a(op, cb):
             or 0x78 <= op <= 0x7E or (0x80 <= op < 0xB8))
 
 
+TABLE_HOLES = 4                                  # a jump table's 0000h/FFFFh in a row
+
+
+def bank_switcher(rom, pc):
+    """The bank-0 routine at pc writes A to the bank register (LD (nn),A
+    with nn one that selects a bank) before any control transfer: the address
+    it writes, or None. Link's Awakening's 07B9h is LD (2100h),A / LD
+    (DBAFh),A / RET, called with A from a table - a walk that kept the last
+    constant bank across it walked every entity's handler in the wrong bank"""
+    for _ in range(8):
+        if pc >= 0x4000:
+            return None
+        op = rom.d[pc]
+        if op in INVALID or op in CT:
+            return None
+        if op == 0xEA:
+            a = rom.d[pc + 1] | rom.d[pc + 2] << 8
+            if bank_of_write(rom, a, 1) is not None:
+                return a
+        if writes_a(op, rom.d[pc + 1]):
+            return None
+        pc += LEN[op] if op != 0xCB else 2
+    return None
+
+
+def dispatcher(rom, pc):
+    """The bank-0 routine at pc is a jump-table dispatcher: it POPs its own
+    return address - before any PUSH of its own - and then leaves by JP (HL),
+    following its JPs and JRs. That is the table after the RST or CALL of it
+    being read as the routine's data; a routine that only pops inline
+    arguments (a print routine's text) and returns past them is not one."""
+    pushes, popped = 0, False
+    for _ in range(24):
+        if pc >= 0x4000:
+            return False
+        op = rom.d[pc]
+        if op in INVALID:
+            return False
+        if op in (0xC5, 0xD5, 0xE5, 0xF5):
+            pushes += 1
+        elif op in (0xE1, 0xD1, 0xC1):
+            if pushes:
+                pushes -= 1
+            else:
+                popped = True
+        if op == 0xE9:
+            return popped
+        if op == 0xC3:
+            pc = rom.d[pc + 1] | rom.d[pc + 2] << 8
+            continue
+        if op == 0x18:
+            d = rom.d[pc + 1]
+            pc += 2 + (d - 256 if d >= 128 else d)
+            continue
+        if op in CT:
+            return False
+        pc += LEN[op] if op != 0xCB else 2
+    return False
+
+
 def discover(rom, extra=(), tables=True, fanout=None):
     """Recursive descent. Returns {(bank, pc): op} of instruction starts found,
     and the reasons a walk stopped: JP HL sites, RETs, RST sites whose routine
@@ -113,7 +173,10 @@ def discover(rom, extra=(), tables=True, fanout=None):
     table_words = [0]
     jtabs = {}
     # an RST's routine that pops its return address is a jump-table dispatcher:
-    # the bytes after the RST are data
+    # the bytes after the RST are data - and so are the bytes after a CALL of
+    # one (dispatcher(): Link's Awakening's RST 00 is JP 2872h, whose POP HL
+    # is seven bytes in, so a POP inside the vector alone missed every table
+    # it has)
     jt_rst = set()
     for v in range(0, 0x40, 8):
         pc = v
@@ -135,10 +198,18 @@ def discover(rom, extra=(), tables=True, fanout=None):
             if op in CT or op in INVALID:
                 break
             pc += LEN[op] if op != 0xCB else 2
+        if tables and 0xC7 + v not in jt_rst and dispatcher(rom, v):
+            jt_rst.add(0xC7 + v)
+    jt_call = {}
+    sw = {}                                      # bank switchers (bank_switcher)
+    ptab = [None]                                # a parallel bank table's
     work = [(0, 0x100, None)] + [(0, v, None) for v in range(0x40, 0x68, 8)]
     work += [(b, pc, None) for b, pc in extra]
+    pending, cbs = [], collections.defaultdict(set)
     while work:
         bank, pc, cb = work.pop()                # cb: the bank last written to 2000-3FFF
+        head = (bank if pc >= 0x4000 else 0, pc)
+        cbs[head].add(cb)                        # (every way in: a parallel table)
         acc = None                               # A, when a constant
         while True:
             if pc >= 0x8000:
@@ -191,6 +262,39 @@ def discover(rom, extra=(), tables=True, fanout=None):
                 else:
                     work.append((0, t, newcb))
 
+            def read_table(key, bank, pc, t):
+                holes = 0                        # (the RST's reading, below -
+                par = None                       #   with its holes, as there)
+                if ptab[0] and ptab[0][0] == pc - 1 and rom.byte(bank, pc - 1) == 0x7B:
+                    par = ptab[0]                # (LD A,E just before: the
+                    if par[2] is None:           #   parallel bank table's - its
+                        pending.append((head, par[1], par[3], key, bank, t))
+                        return                   #   bank unknown on this way in:
+                i = -1                           #   after the walk, below)
+                while True:
+                    i += 1
+                    w = rom.byte(bank, t) | rom.byte(bank, t + 1) << 8
+                    if w in (0, 0xFFFF) and holes < TABLE_HOLES and \
+                            (key[0], t) not in found and t < 0x7FFE:
+                        holes += 1
+                        t += 2
+                        continue
+                    holes = 0
+                    if not 0x150 <= w < 0x8000 or (key[0], t) in found or t >= 0x8000:
+                        break
+                    if (pc < 0x4000) != (t < 0x4000) and t >= 0x4000 and pc < 0x4000:
+                        break
+                    wb = bank if w >= 0x4000 else 0
+                    if par and w >= 0x4000 and pc < 0x4000:
+                        wb = bank_of_write(rom, par[3], rom.byte(par[2], par[1] + i))
+                        if wb:
+                            work.append((wb, w, wb))
+                    else:
+                        go(w)
+                    jtabs.setdefault(key, []).append((wb, w))
+                    table_words[0] += 1
+                    t += 2
+
             if op in JR:
                 d = a1 - 256 if a1 >= 128 else a1
                 go(nxt + d)
@@ -200,24 +304,51 @@ def discover(rom, extra=(), tables=True, fanout=None):
                 go(imm)
                 if op == 0xC3:
                     break
+            elif op == 0xCD and tables and imm < 0x4000 and jt_call.setdefault(
+                    imm, dispatcher(rom, imm)):
+                go(imm)                          # a CALL of a dispatcher: its
+                stops["CALL jump table"] += 1    #   table follows, as an RST's
+                read_table(key, bank, pc, nxt)
+                break
             elif op == 0xCD or op in CALLCC:
                 go(imm)
+                if op == 0xCD and imm < 0x4000:  # a CALL of a bank switcher:
+                    a = sw.setdefault(imm, bank_switcher(rom, imm))
+                    if a is not None and acc is not None:
+                        cb = bank_of_write(rom, a, acc)   # its bank from here on
+                    elif a is not None and pc >= 5 and \
+                            [rom.byte(bank, pc - i) for i in (5, 2, 1)] == [0x21, 0x19, 0x7E]:
+                        # LD HL,nn / ADD HL,DE / LD A,(HL): A out of a BANK
+                        # TABLE at nn indexed by E - and a dispatch right
+                        # after on E (LD A,E / RST or CALL) takes entry i's
+                        # bank as byte i of it (Link's Awakening's entities,
+                        # 3949h: bank table at 4000h, handlers at 3953h)
+                        tb = rom.byte(bank, pc - 4) | rom.byte(bank, pc - 3) << 8
+                        tbb = 0                  # the bank the table is read in:
+                        if tb >= 0x4000:         #   the nearest constant switch
+                            tbb = None           #   before it in the code, LD A,n
+                            for q in range(pc - 7, max(pc - 72, -1), -1):  # / CALL
+                                if rom.byte(bank, q) == 0x3E and \
+                                        rom.byte(bank, q + 2) in (0xCD, 0xC3) and \
+                                        (rom.byte(bank, q + 3) | rom.byte(bank, q + 4) << 8) == imm:
+                                    tbb = bank_of_write(rom, a, rom.byte(bank, q + 1))
+                                    break        #   or JP the switcher (391Eh's
+                            if tbb is None:      #   LD A,3 / CALL 07B9h), else
+                                tbb = cb         #   the walk's own
+                        ptab[0] = (pc + 3, tb, tbb, a)
             elif op in RSTS:
                 go(op & 0x38)
                 if op in jt_rst:
                     stops["RST jump table"] += 1
                     if tables:                   # read the table: words while
-                        t = nxt                  #   they are ROM code addresses
-                        while True:              #   and not code already found
-                            w = rom.byte(bank, t) | rom.byte(bank, t + 1) << 8
-                            if not 0x150 <= w < 0x8000 or (key[0], t) in found or t >= 0x8000:
-                                break
-                            if (pc < 0x4000) != (t < 0x4000) and t >= 0x4000 and pc < 0x4000:
-                                break
-                            go(w)
-                            jtabs.setdefault(key, []).append((bank if w >= 0x4000 else 0, w))
-                            table_words[0] += 1
-                            t += 2
+                        read_table(key, bank, pc, nxt)   # they are ROM code
+                                                 #   addresses and not code
+                                                 #   already found - a 0000h or
+                                                 #   FFFFh being a HOLE, an
+                                                 #   unused index, not its end
+                                                 #   (Link's Awakening's entity
+                                                 #   table at 3953h has them
+                                                 #   at 29, 74 and 76 of ~200)
                     break
             elif op in (0xC9, 0xD9):
                 stops["RET"] += 1
@@ -229,8 +360,33 @@ def discover(rom, extra=(), tables=True, fanout=None):
                 stops["runs into 4000"] += 1
                 break
             pc = nxt
+    # a parallel bank table read with no bank known where its line was first
+    # walked: resolved when every OTHER way into that line agreed on one
+    # bank, its entries the walk's seeds for its next round (gbaot.walk)
+    seeds = set()
+    for head, tb, a, key, bank, t in pending:
+        vals = cbs[head] - {None}
+        if len(vals) != 1:
+            continue
+        b0 = (vals.pop() if tb >= 0x4000 else 0)
+        i, holes = -1, 0
+        while t < 0x4000:
+            i += 1
+            w = rom.byte(bank, t) | rom.byte(bank, t + 1) << 8
+            t += 2
+            if w in (0, 0xFFFF) and holes < TABLE_HOLES:
+                holes += 1
+                continue
+            holes = 0
+            if not 0x4000 <= w < 0x8000 or (0, t - 2) in found:
+                break
+            v = bank_of_write(rom, a, rom.byte(b0, tb + i))
+            if v:
+                seeds.add((v, w))
+                jtabs.setdefault(key, []).append((v, w))
     stops["table words read"] = table_words[0]
     discover.jtabs = jtabs
+    discover.seeds = seeds
     return found, stops, unknown_bank, jt_rst
 
 

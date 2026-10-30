@@ -51,7 +51,8 @@ WANT2 = dict(cw=640, ch=480, bpp=8, cls=0x84)
 
 
 def run(*a):
-    subprocess.run(["python3", "tools/mouse.py", "--screen", "1024x768",
+    subprocess.run(["python3", "tools/mouse.py", "--screen",
+                    "%dx%d" % (vesa.WANT_W, vesa.WANT_H),
                     vesa.SOCK] + list(a), cwd=ROOT, check=True,
                    capture_output=True)
 

@@ -21,7 +21,7 @@
 ; it and measures byte-identical.
 %define KD_BUILD
 
-; **ON kern_mega kern_dos RUNS IN THE HMA** (docs/plans/KERN-MEGA-DOS-PLAN.md
+; **ON kern_mega kern_dos RUNS IN THE HMA** (docs/plans/completed/KERN-MEGA-DOS-PLAN.md
 ; 7, wave W4): KD_HMA, implied by KD_MEGA, assembles the image at FFFF:0010 -
 ; linear 100000h, the first byte above 1MB - and leaves only what int 13h and
 ; SS must reach down here: the FAT snapshot, the mount buffers and the stack,
@@ -103,7 +103,7 @@ KD_IMG_KB   equ 34              ; and the shipped image has 133 of its rung
 KD_IMG_KB   equ 33              ; 34 until SPEC.md 96.11.7's character devices
 %endif                          ; raised CORE_MAX by a kilobyte to 35, and 33
 ; **kern_mega's kern_dos IS A KILOBYTE BIGGER, and only kern_mega's**
-; (SPEC.md 96.15.4, docs/plans/KERN-MEGA-DOS-PLAN.md 6, 12.1 item 4): the XMS
+; (SPEC.md 96.15.4, docs/plans/completed/KERN-MEGA-DOS-PLAN.md 6, 12.1 item 4): the XMS
 ; door over the arena is 842 bytes of code and 98 of bss (kerndos/kdxms.inc),
 ; and CORE_MAX's mega arm reserves 80 more for the core's extended-to-extended
 ; move. MEASURED at the foot of kdos.asm: 33,585 -> 34,611 of 34,816, 205
@@ -120,8 +120,13 @@ KD_IMG_KB   equ 33              ; 34 until SPEC.md 96.11.7's character devices
 ; off the DOS program at all - it is the HMA's, which holds 63
 ; **36 -> 37 FOR THE LOADER'S OWN EXEPACK UNPACKER** (kerndos/kdxpack.inc,
 ; KERN-MEGA-PLAN 14.24), and it is the HMA's kilobyte, not the program's
+; **37 -> 38 FOR THE PROGRAM'S LAST SCREEN** (KERN-MEGA-PLAN 14.106,
+; kerndos/kdpark.inc's kd_snseed and kd_snap): +368 bytes of code and +164 of
+; bss took the image 37,843 -> 38,375 of 38,912, past the 45 left. The HMA's
+; kilobyte again; the LOW image below takes the same 532 bytes inside its own
+; rung (35,951 -> 36,483 of 36,864), so no DOS program pays for it
 %elifdef KD_HMA
-KD_IMG_KB   equ 37
+KD_IMG_KB   equ 38
 %else
 ; **kern_mega's LOW kern_dos** (KD_LOWDOS, SPEC.md 96.40.9.2) has neither the
 ; HMA's low half nor the loader's EXEPACK unpacker - with A20 shut the

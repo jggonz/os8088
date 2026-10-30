@@ -1,6 +1,6 @@
 ; =============================================================================
 ; kerndos/kdpark.inc - THE WAY BACK TO A PARKED kern_mega (-DKD_MEGA only;
-; docs/plans/KERN-MEGA-DOS-PLAN.md 2.3 step 8, kernel/megados.inc)
+; docs/plans/completed/KERN-MEGA-DOS-PLAN.md 2.3 step 8, kernel/megados.inc)
 ;
 ; kern_mega copied all of conventional memory into a block above 1MB before it
 ; handed the machine over, and the launch block's tail says where
@@ -234,6 +234,236 @@ kdp_s_a20:    db 'A20 will not open, so the parked session cannot come back. '
               db 'Press a key to restart.', 13, 10, 0
 kdp_gdtr:     dw 6 * 8 - 1, 0, 0    ; the park's GDT, as lgdt wants it
 
+; -----------------------------------------------------------------------------
+; THE PROGRAM'S LAST SCREEN ON A TRIP (KERN-MEGA-PLAN 14.106, SPEC.md 96.34.6)
+;
+; `dos_snap`'s job, on the one host that cannot do it from DOS.O88: on
+; kern_mega every program runs here, and DOS.O88's `con_scr` is in its
+; region - a pool block above 1MB that real mode cannot name. So the record
+; DOS.O88 keeps in front of `con_scr` travels as a LINEAR address: DOS.O88
+; writes its offset into KDL_SNAPLIN, HIBER.DRV's `hbm_dosrun` turns that into
+; bits 0..23 (KDL_SNAPLIN, KDL_SNAPHI) before the park and leaves those lines
+; out of the park's sum, and both ends below move through `kdx_87`, the
+; int 15h AH=87h block move this image already carries for XMS. THE RECORD:
+; dw a cursor (column, then row), dw a flag (1 = captured), then 80x25 cells.
+;
+; It is both halves of 96.34, not one: `kd_snseed` puts the CONSOLE onto the
+; program's screen before it runs (96.34.4 - `Starting ...` and the command
+; above the program's output, as under COMMAND.COM), and `kd_snap` takes the
+; program's screen back at `dos_prog_done`, so the capture carries the whole
+; of it home. Below 110000h is nothing - the kernel's zero, a field it did not
+; convert, the HMA (this image's during the trip), or conventional memory,
+; which the park restores over anything written there.
+; -----------------------------------------------------------------------------
+
+; kd_snlin - DX:AX = the record's linear; CF = 1 there is none. DS = KD_SEG
+kd_snlin:
+    push si
+    mov si, [kd_lbp]
+    mov ax, [si+KDL_SNAPLIN]
+    mov dl, [si+KDL_SNAPHI]
+    xor dh, dh
+    pop si
+    cmp dl, 0x11                    ; CF = below 110000h
+    ret
+
+; kd_seglin - AX = a real segment -> DX:AX its linear base. Clobbers CL
+kd_seglin:
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl
+    mov cl, 12
+    shr dx, cl
+    ret
+
+; kd_snrowlin - [kdx_src] = kd_snrow's LINEAR address: this image is FFFF:x in
+; the HMA and 0060:x low, and the move takes neither. Clobbers AX CL DX
+kd_snrowlin:
+    mov ax, cs
+    call kd_seglin
+    add ax, kd_snrow
+    adc dx, 0
+    mov [cs:kdx_src], ax
+    mov [cs:kdx_src+2], dx
+    ret
+
+; -----------------------------------------------------------------------------
+; kd_snseed - the console onto the program's screen, before the bank
+; in:  DS = KD_SEG, the mode set at the entry done, kdx_init run; out: nothing,
+;      every register preserved. Any refusal leaves the clean screen as it was
+; -----------------------------------------------------------------------------
+kd_snseed:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    call kd_snlin
+    jc .out
+    push ax
+    push dx
+    call kd_snrowlin                ; DX:AX = kd_snrow's linear
+    add ax, KD_SNCOLS * 2
+    adc dx, 0
+    mov [kdx_dst], ax               ; TO kd_snrec, after kd_snrow...
+    mov [kdx_dst+2], dx
+    pop dx
+    pop ax
+    mov [kdx_src], ax               ; ...FROM the record
+    mov [kdx_src+2], dx
+    push ax
+    push dx
+    mov cx, KD_SNREC
+    call kdx_87                     ; DOS.O88's cursor, into kd_snrec
+    pop dx
+    pop ax
+    jc .out
+    add ax, KD_SNREC                ; ...then the cells, straight from
+    adc dx, 0                       ; con_scr onto page 0
+    mov [kdx_src], ax
+    mov [kdx_src+2], dx
+    call kd_mou_txt                 ; ES = the text segment, BX = columns
+    jc .out
+    cmp bx, KD_SNCOLS               ; (the entry's mode set left 3 or 7)
+    jne .out
+    mov ax, es
+    call kd_seglin
+    mov [kdx_dst], ax
+    mov [kdx_dst+2], dx
+    mov cx, KD_SNROWS * KD_SNCOLS * 2
+    call kdx_87
+    jc .out
+    mov dx, [kd_snrec]              ; ...and the ROM's cursor under the
+    mov ah, 2                       ; prompt, so the program's first line
+    xor bh, bh                      ; lands below `Starting` and not on row 0
+    int 0x10                        ; (96.34.4's last store)
+.out:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; kd_snap - DHK_SNAP: the program's screen, back into the record
+; in:  nothing; called from the core's dos_prog_done with the program's screen
+;      still up and DS unknown. out: nothing, every register preserved
+;
+; Row by row through `kd_snrow`: a forty-column mode lands in the left half
+; with the right half blanked, as `dos_snap` lands it. The cursor and the
+; flag go LAST, so a move the ROM refuses leaves the flag clear and DOS.O88
+; keeps the console it had.
+; -----------------------------------------------------------------------------
+kd_snap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    push cs
+    pop ds                          ; KD_SEG: this image's own cells
+    cld
+    call kd_snlin
+    jc .out
+    add ax, KD_SNREC                ; [kdx_dst] = the record's cells
+    adc dx, 0
+    mov [kdx_dst], ax
+    mov [kdx_dst+2], dx
+    mov ax, 0x40                    ; --- the BDA, as the PROGRAM left it ---
+    mov es, ax
+    mov si, [es:0x4E]               ; the active page's offset...
+    mov bl, [es:0x62]
+    and bx, 7
+    shl bx, 1
+    mov ax, [es:bx+0x50]            ; ...and that page's cursor
+    mov [kd_snrec], ax
+    mov word [kd_snrec+2], 1
+    call kd_mou_txt                 ; ES = the text segment, BX = columns,
+    jc .out                         ; CF = a graphics mode (96.34.2)
+    cmp bx, KD_SNCOLS
+    ja .out
+    call kd_snrowlin
+    mov cx, bx
+    push cx                         ; the columns
+    mov al, KD_SNROWS
+    mul cl
+    xchg ax, cx                     ; CX = the cells
+    push es
+    pop ds                          ; --- DS:SI is THEIRS from here ---
+    push si
+.any:                               ; AN EMPTY SCREEN IS NOT A CAPTURE
+    lodsw                           ; (96.34.3): neither a space nor a NUL
+    cmp al, ' '                     ; anywhere is a mode set's own clear
+    je .anyn
+    or al, al
+    jnz .some
+.anyn:
+    loop .any
+    pop si
+    pop cx
+    jmp short .out
+.some:
+    pop si
+    pop cx                          ; CX = the columns again
+    mov bx, KD_SNROWS
+.row:
+    push cs
+    pop es
+    mov di, kd_snrow
+    push cx
+    rep movsw                       ; the row itself...
+    pop cx
+    push cx
+    mov ax, 0x0720                  ; ...and a forty-column mode's right half
+    neg cx
+    add cx, KD_SNCOLS
+    rep stosw
+    push ds
+    push cs
+    pop ds
+    mov cx, KD_SNCOLS * 2
+    call kdx_87
+    jc .fail
+    add word [kdx_dst], KD_SNCOLS * 2
+    adc word [kdx_dst+2], 0
+    pop ds
+    pop cx
+    dec bx
+    jnz .row
+    push cs                         ; --- ...and the cursor and the flag ---
+    pop ds
+    add word [kdx_src], KD_SNCOLS * 2   ; kd_snrec follows kd_snrow
+    adc word [kdx_src+2], 0
+    sub word [kdx_dst], KD_SNREC + KD_SNROWS * KD_SNCOLS * 2
+    sbb word [kdx_dst+2], 0
+    mov cx, KD_SNREC
+    call kdx_87
+    jmp short .out
+.fail:
+    pop ds
+    pop cx
+.out:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+KD_SNCOLS   equ 80                  ; con_scr's geometry (apps/os88con.inc's
+KD_SNROWS   equ 25                  ; CON_COLS and CON_ROWS, which this build
+KD_SNREC    equ 4                   ; does not include) and the record ahead
+                                    ; of it (apps/dos/dos.asm's DOS_SNREC)
+
 section .bss
 kdp_stage:  resw 1
+kd_snrow:   resb KD_SNCOLS * 2      ; one row, staged for the move...
+kd_snrec:   resw 2                  ; ...and the record, FOLLOWING it (kd_snap)
 section .text

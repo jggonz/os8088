@@ -97,7 +97,11 @@ def dither(want):
 
 
 def frames(m, view):
-    return int.from_bytes(m.read(view * 16 + S_FRAMES, 2), "little")
+    # view * 16 - or on kern_mega (tests/megaport.txt) the view is an LDT
+    # selector, read through its descriptor
+    at = (m.lin(view, S_FRAMES) if getattr(m, "bochs", False)
+          else view * 16 + S_FRAMES)
+    return int.from_bytes(m.read(at, 2), "little")
 
 
 def compare(kind, got, want, label, rows=144):

@@ -368,8 +368,9 @@ rw_logtoggle:
     cmp byte [rw_logon], 0
     jne .off
     mov ax, RW_LOGRKB
-    call OSAPI_MEM_CLAIM            ; DX = the records' segment ([rw_logseg]
-    jc .room                        ;   names it, and it moves: rwmove.inc)
+    call rw_mclaim                  ; DX = the records' segment ([rw_logseg]
+    jc .room                        ;   names it, and it moves: rwmove.inc;
+                                    ;   a slot lent for it, 10.3.3)
     xor ax, ax
     mov [rw_logn], ax
     mov [rw_ltick], ax
@@ -400,7 +401,7 @@ rw_logflush:
     mov byte [rw_logon], 0
     call rw_logwrite
     mov ax, RW_LOGRKB
-    call OSAPI_MEM_CLAIM
+    call rw_mclaim
     jc .off
     xor ax, ax
     mov [rw_logn], ax
@@ -422,8 +423,8 @@ rw_logwrite:
     push ax
     call .w
     pop dx
-    call OSAPI_MEM_FREE
-.r0:
+    call rw_mrel                    ; (freed, or a lent slot's let go:
+.r0:                                ;   10.3.3)
     jmp rw_mfree                    ; (the rest free again)
     nop                             ; (PARITY: what follows at its old
                                     ;   alignment - os88rdiff's --hot)
@@ -442,7 +443,7 @@ rw_logwrite:
     adc dx, 0
     mov bx, 1024
     div bx
-    call OSAPI_MEM_CLAIM            ; DX = the text's segment
+    call rw_mclaim                  ; DX = the text's segment
     pop cx
     jnc .got
     shr cx, 1                       ; ...and with no room, the latest half
@@ -505,7 +506,7 @@ rw_logwrite:
     pop dx
     pushf
     push ax                         ; (AX = the FERR_*, refused)
-    call OSAPI_MEM_FREE
+    call rw_mrel                    ; (the text: freed, or let go)
     pop ax
     popf
     jc .fail

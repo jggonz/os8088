@@ -9,12 +9,19 @@ CPU_8086 equ 0
 CPU_286  equ 1
 CPU_386  equ 2
 %define OSAPI_CPU_INFO h_cpuinfo
+SEG_WIN  equ 2                      ; apps/os88api.inc's verb number
+%define OSAPI_SEG h_seg             ; cs_win's window (MC7), near stub
 h_start:
     call cs_identify
     hlt
 h_tier:     db 0
 h_cpuinfo:
     mov al, [h_tier]
+    ret
+; h_seg - OSAPI_SEG as every REAL-MODE kernel answers SEG_WIN: DX, the
+; physical paragraph, is already the segment over it. CF = 0, all kept
+h_seg:
+    clc
     ret
 cs_ap_fe:                           ; the rows' apply procs (csapply.inc):
 cs_ap_ne:                           ; not this harness's subject -

@@ -307,18 +307,12 @@ lz_at:
     and si, 0x7FFF
     mov ax, ds
 %ifdef KERN_MEGA
-    test al, 4                  ; kern_mega: an LDT selector (a buffer above
-    jz .idn                     ; 1MB) slides by its descriptor, not by
-    push dx                     ; arithmetic (mega_slidef)
-    mov dx, 0x0800
-    call KERNEL_SEG:mega_slidef
+    push dx                     ; kern_mega: in protected mode EVERY selector
+    mov dx, 0x0800              ; slides by its descriptor, not by arithmetic
+    call KERNEL_SEG:mega_slidef ; (mega_slidef: the sum in real mode)
     pop dx
-    jmp short .sl
-.idn:
-%endif
+%else
     add ax, 0x0800              ; 32KB is 2,048 paragraphs
-%ifdef KERN_MEGA
-.sl:
 %endif
     mov ds, ax
     dec byte [bp+LZ_F_K]
@@ -384,7 +378,14 @@ lz_cross:
     or si, si
     jnz .nos
     mov ax, ds                  ; ...and so did the source: 64KB on is 4,096
+%ifdef KERN_MEGA
+    push dx                     ; paragraphs (a descriptor's, in protected
+    mov dx, 0x1000              ; mode: mega_slidef)
+    call KERNEL_SEG:mega_slidef
+    pop dx
+%else
     add ax, 0x1000              ; paragraphs
+%endif
     mov ds, ax
 .nos:
     loop .b
@@ -446,9 +447,26 @@ lz_match:
     pop ds
     jnc .go                     ; `pop` leaves the flags alone
     mov ax, ds                  ; 64KB back is exactly 4,096 paragraphs, so
-    sub ax, 0x1000              ; the wrapped SI needs no arithmetic of its own
+%ifdef KERN_MEGA                ; the wrapped SI needs no arithmetic of its own
+    call COLD_SEG:mega_backf    ; (a third scratch in protected mode)
+%else
+    sub ax, 0x1000
+%endif
     mov ds, ax
 .go:
+%ifdef KERN_MEGA
+    mov ax, ds                  ; kern_mega: a source on the ODD scratch
+    cmp ax, MEGA_SEL_ODD        ; (which the output's bump re-aims) or one
+    je .bk                      ; that will slide (which would re-aim SLD,
+    mov ax, si                  ; the INPUT this match has on the stack) is
+    add ax, cx                  ; read through MEGA_SEL_BACK instead, which
+    jnc .go2                    ; nothing else moves (mega_bkaimf)
+    mov ax, ds
+.bk:
+    call COLD_SEG:mega_bkaimf
+    mov ds, ax
+.go2:
+%endif
     call lz_copy                ; ...which leaves CF clear on every path: the
     pop ds                      ; two carries it tests are the last flags it
     pop si                      ; writes, and neither can be set here

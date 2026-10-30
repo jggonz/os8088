@@ -42,6 +42,16 @@ MACHINES = {
     "vga": "os8088_xt_vga_720b",
     "cga": "os8088_5150_cga_720b_gla",
 }
+# kern_mega (OS88_MEGA, tests/megaport.txt): the SHIPPED RealDMG refuses there
+# (REALDMG-SPEC 10.3.4), so the row runs the ARM out of build/megak/apps - and
+# its package and its view are LDT SELECTORS, found through the window record
+# and read through their descriptors (tests/gbsave.py's port). VGA only: Bochs
+# has no CGA
+MEGA = bool(os.environ.get("OS88_MEGA"))
+PKGDIR = os.path.join(ROOT, "build", "megak", "apps") if MEGA \
+    else os.path.join(ROOT, "build")
+if MEGA:
+    del MACHINES["cga"]
 S_JOY = 0x4000 + 0x3D
 SHIPPED = bytes([0x4D, 0x4B, 0x48, 0x50, 0x2D, 0x2C, 0x39, 0x1C])
 BOX_A = (166, 58)               # rwkeys.inc's rw_kboxes, in the content
@@ -102,15 +112,22 @@ def run(kind, disk, viewoff, mapoff):
         m = ui.m
         ui.path("B:/ACID2.GB")
         st = {"seg": None, "view": 0}
+        lin = (lambda s_, o_=0: m.lin(s_, o_)) if MEGA else \
+            (lambda s_, o_=0: s_ * 16 + o_)
 
         def started(_):                 # polled, not slept: the same 30-frame
             if not st["seg"]:           # condition, read as it happens
-                st["seg"] = find_seg(m, b"REALDMG", viewoff)
+                if MEGA:
+                    import dispapps
+                    got = dispapps.pkg_seg(m, 0)
+                    st["seg"] = got and got[1]
+                else:
+                    st["seg"] = find_seg(m, b"REALDMG", viewoff)
             if st["seg"]:
                 st["view"] = int.from_bytes(
-                    m.read(st["seg"] * 16 + viewoff, 2), "little")
+                    m.read(lin(st["seg"], viewoff), 2), "little")
             return bool(st["view"]) and int.from_bytes(
-                m.read(st["view"] * 16 + S_FRAMES, 2), "little") >= 30
+                m.read(lin(st["view"], S_FRAMES), 2), "little") >= 30
         try:
             M.until(m, started, "the game's first 30 frames", poll=0.25,
                     guest=120.0)
@@ -119,7 +136,7 @@ def run(kind, disk, viewoff, mapoff):
         seg, view = st["seg"], st["view"]
         if not view:
             return "the package never started a game"
-        keymap = lambda: bytes(m.read(seg * 16 + mapoff, 8))
+        keymap = lambda: bytes(m.read(lin(seg, mapoff), 8))
         if keymap() != SHIPPED:
             return "the map is not the shipped one at the start: %s" % keymap().hex()
         ui.menu_pick("Machine", "Controls...")
@@ -174,7 +191,7 @@ def run(kind, disk, viewoff, mapoff):
         for key in ("KeyQ", "KeyZ", "KeyX"):
             m.key(key, down=True, up=False)
             M.guest_sleep(m, 1)
-            joy[key] = m.read(view * 16 + S_JOY, 1)[0]
+            joy[key] = m.read(lin(view, S_JOY), 1)[0]
             m.key(key, down=False, up=True)
             M.guest_sleep(m, 1)
         print("gbkeys %s: S_JOY Q %02X, Z %02X, X %02X" % (kind, joy["KeyQ"], joy["KeyZ"], joy["KeyX"]))
@@ -196,7 +213,7 @@ def main():
                           stdout=subprocess.DEVNULL)
     rompath = subprocess.check_output([sys.executable, os.path.join(ROOT, "tools/getgbtest.py"),
                                        "--path", "dmg-acid2.gb"], text=True).strip()
-    lst = os.path.join(ROOT, "build", "realdmg.lst")
+    lst = os.path.join(PKGDIR, "realdmg.lst")
     viewoff = label_off(lst, "rdg_viewseg")
     mapoff = code_off(lst, "rw_keymap")
     tmp = tempfile.mkdtemp(prefix="gbkeys-")
@@ -206,7 +223,7 @@ def main():
     disk = os.path.join(tmp, "apps.img")
     subprocess.check_call([sys.executable, os.path.join(ROOT, "tools/os88disk.py"), "-o", disk,
                            "--size", "720", "--folder", "SYSTEM/APPDATA",
-                           os.path.join(ROOT, "build", "realdmg.o88"), rom],
+                           os.path.join(PKGDIR, "realdmg.o88"), rom],
                           stdout=subprocess.DEVNULL)
     fails = []
     for kind in sorted(MACHINES):

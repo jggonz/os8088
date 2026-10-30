@@ -111,10 +111,13 @@ def main():
     bdir = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
     sysimg = os.path.join(tmp, "os8088-360.img")
     appimg = os.path.join(tmp, "deskitem360.img")
-    shutil.copy(os.path.join(bdir, "os8088-360.img"), sysimg)
+    shutil.copy(os88marty.system_disk(os.path.join(bdir, "os8088-360.img")),
+                sysimg)
     shutil.copy(os.path.join(bdir, "deskitem360.img"), appimg)
 
     with os88ui.boot(sysimg, apps=appimg, machine="os8088_xt_vga", quick=True) as ui:
+        # a guest segment's linear base: an LDT selector under kern_mega
+        lin = getattr(ui.m, "lin", lambda s, o=0: (s << 4) + o)
         m = ui.m
 
         def zbyte(z):
@@ -132,7 +135,7 @@ def main():
         check(v == DSL_PIN | 5, "the link is PLACED in cell 5, the one it "
               "asked for (%#x)" % v)
         seg = ui._word("sc_seg")
-        row = bytes(m.read(seg << 4, SC_REC)) if seg else bytes(SC_REC)
+        row = bytes(m.read(lin(seg), SC_REC)) if seg else bytes(SC_REC)
         check(row[0] == 1 and row[2] == 1,
               "volume 1 and kind 1, a package (%d, %d)" % (row[0], row[2]))
         check(cstr(row[4:49]) == "DESKITEM.O88",
@@ -166,11 +169,11 @@ def main():
         w = [w for w in ui.windows() if w.i in first][0]
         wseg = _u16le(m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE
                              + geom.W_SEG, 2))
-        res = (wseg << 4) + res_off()
+        res = lin(wseg, res_off())
 
         def path0():
-            return m.read((ui._word("sc_seg") << 4) + 4, 1)[0]
-        m.write((ui._word("sc_seg") << 4) + 4, b"X")    # XESKITEM.O88
+            return m.read(lin(ui._word("sc_seg"), 4), 1)[0]
+        m.write(lin(ui._word("sc_seg"), 4), b"X")    # XESKITEM.O88
         ui.raise_window(w)
         ui.menu_pick("File", "Remove")
         ui._wait(lambda: m.read(res, 1)[0] in b"rR", "Remove's answer", 90,
@@ -180,7 +183,7 @@ def main():
               % chr(m.read(res, 1)[0]))
         check(zbyte(DESK_SC0) == DSL_PIN | 5 and path0() == ord("X"),
               "...and the row in it is still there (%#x)" % zbyte(DESK_SC0))
-        m.write((ui._word("sc_seg") << 4) + 4, b"D")
+        m.write(lin(ui._word("sc_seg"), 4), b"D")
 
         print("D: File > Remove")
         ui.raise_window(w)

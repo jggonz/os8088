@@ -101,7 +101,28 @@ class Menu:
         """STIKMENU.DRV's linear base, 0 when it is not held."""
         seg = struct.unpack("<H", bytes(self.m.read(
             self.ui._S("mod_tab") + self.mod * MODR_SIZE, 2)))[0]
-        return seg << 4
+        if seg and getattr(self.m, "bochs", False) and \
+                self.m.selector(seg) is None:
+            # kern_mega: MODR_SEG names the CONVENTIONAL claim while the
+            # image is read, and the LDT pair above 1MB once mod_hi has
+            # copied it there - the bytes in between are the claim's last
+            # holder's, so a stm_live read there is a witness of nothing
+            # (it read 1 one boot in five and the row raced the scan)
+            return 0
+        lin = _lin(self.m, seg) if seg else 0
+        if lin and getattr(self.m, "bochs", False) and lin < 0x100000:
+            # ...AND UNDER PROTECTED MODE THE CONVENTIONAL CLAIM IS A
+            # SELECTOR TOO (the claim's own LDT pair, kernel/mod.inc
+            # mod_need/mod_hi), so the test above lets it through: base()
+            # named the claim the file is being READ into, and stm_live
+            # there is whatever that memory held. drop() took a panel that
+            # was not up and read stm_nsl = 0 - mega-stikmenu's A or D,
+            # IndexError on an empty slab list, 2 to 5 runs in 8 at two
+            # Bochs rows to a box - and C's fpg_on / busy-clock FAILs are
+            # the same race met during the scan. STIKMENU.DRV is MOD_HIOK
+            # (mod_hi): the image it runs is the copy ABOVE 1MB
+            return 0
+        return lin
 
     def rd(self, name, n):
         return bytes(self.m.read(self.base() + self.off[name], n))
@@ -192,13 +213,20 @@ def entries(menu):
     return out
 
 
+def _lin(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base under kern_mega, where a heap
+    claim and a module image are selectors (os88megabochs)"""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f else (seg << 4) + off
+
+
 def stik_rows(m, ui):
     """The desktop table's Sticky App rows, by path."""
     sseg = ui._word("sc_seg")
     n = ui._byte("sc_nrows")
     out = []
     for k in range(n):
-        r = os88stik.parse_row(bytes(m.read((sseg << 4) + k * os88stik.SC_REC,
+        r = os88stik.parse_row(bytes(m.read(_lin(m, sseg, k * os88stik.SC_REC),
                                             os88stik.SC_REC)))
         if r["stik"] and r["vol"] != 0xFF:      # 0xFF: a free row
             out.append(r)
@@ -229,7 +257,8 @@ def paging(tmp):
     panel up."""
     import subprocess
     img = os.path.join(tmp, "paging.img")
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                img)
     env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
     for k in range(6):
         f = os.path.join(tmp, "PAGE%d.O88" % k)
@@ -268,7 +297,8 @@ def paging(tmp):
 def main():
     tmp = tempfile.mkdtemp(prefix="stikmenu-")
     img = os.path.join(tmp, "stikmenu.img")
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                img)
     try:
         with os88marty.launch(img, machine=os88marty.machine(
                 "os8088_xt_vga", None), boot=True) as m:
@@ -379,6 +409,17 @@ def main():
             check(any(c[0] == "Sticky Apps" for c in ui.menus()),
                   "the desktop's bar carries 'Sticky Apps'")
             dw = ui.open_drive("A")
+            # ...ONCE THE BAR IS THE WINDOW'S: open_drive answers when the
+            # window EXISTS, and the bar follows its activation a pass or
+            # more later - read at once, it was still the desktop's
+            # (['Apple', 'File', 'Sticky Apps'], mega-stikmenu at four Bochs
+            # rows to a box). Bounded, so a bar that never changes still
+            # fails below on what it says
+            try:
+                ui._wait(lambda: "Disk" in [c[0] for c in ui.menus()],
+                         "the Disk window's bar", T)
+            except os88ui.UIError:
+                pass
             bar = [c[0] for c in ui.menus()]
             check("Sticky Apps" not in bar and "Disk" in bar,
                   "a Disk window's bar does not (%r)" % bar)

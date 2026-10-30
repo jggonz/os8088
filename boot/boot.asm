@@ -60,7 +60,10 @@ org 0x7C00
 ; to fetch KERNEL_SECTORS instead of BOOT2_SECS and to jump to what it read.
 ; Without it this sector is the KERNEL's, and the kernel's alone.
 %ifndef KSIG
-%define KSIG 0                  ; no signature: stage 2 skips the canary
+%define KSIG 0                  ; FLAT_PAYLOAD only: it has no stage 2, so DI
+                                ; is never read. A kernel's sector always gets
+                                ; KSIGDEF2's word, and stage 2 compares a 0
+                                ; like any other (SPEC.md 18.93.1)
 %endif
 
 ; Floppy geometry. Defaults describe a 1.44MB 3.5" disk; the Makefile

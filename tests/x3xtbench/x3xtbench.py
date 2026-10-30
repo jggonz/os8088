@@ -21,6 +21,7 @@ for the cycles (tools/x3xtmarty.py). Exit 0 only when every case matched.
 import argparse
 import hashlib
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -50,7 +51,17 @@ def harness(tmp):
     """The boot sector and the harness, assembled into the run's own
     directory (nothing of build/ is written)."""
     B.sh(B.NASM + ['-o', os.path.join(tmp, 'x3bboot.bin'), 'tests/x3bench/x3bboot.asm'])
-    B.sh(B.NASM + ['-o', os.path.join(tmp, 'x3xtbench.bin'), 'tests/x3xtbench/x3xtbench.asm'])
+    B.sh(B.NASM + ['-I', 'tests/x3xtbench/', '-DX3RM_SEGOFF=0x%X' % segoff(),
+                   '-o', os.path.join(tmp, 'x3xtbench.bin'), 'tests/x3xtbench/x3xtbench.asm'])
+
+
+def segoff():
+    """OSAPI_SEG's cell offset, off the SDK: the XT part far-calls it
+    (KERN-MEGA-MEMORY-PLAN MC7) and the harness answers it there"""
+    with open(os.path.join(ROOT, 'apps', 'os88api.inc')) as f:
+        m = re.search(r'%define\s+OSAPI_SEG\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)', f.read())
+    assert m, 'no OSAPI_SEG in apps/os88api.inc'
+    return int(m.group(1), 16)
 
 
 def make_image(cases, path, tmp):

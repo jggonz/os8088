@@ -38,6 +38,19 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
+# kern_mega (tests/megaport.txt): the shipped player refuses under protected
+# mode, so the row plays the ARM - build/megak/apps/, assembled -DPKG_MEGA -
+# and reads the arm's symbols; a segment the player holds is an LDT selector
+# there, read through its descriptor (tests/vidvga4.py's port)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+MEGA_DEFS = ("PKG_MEGA",) if MEGA else ()
+VIDEO_O88 = "build/megak/apps/video.o88" if MEGA else "build/video.o88"
+
+
+def lin(m, seg, off=0):
+    """seg << 4 - or the base in a kern_mega selector's descriptor"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
 WB, H, NF, FPS, L = 20, 60, 40, 15.0, 10
 REND = ("cga", "herc", "lin80")          # the file's order
 SCREEN = {"herc": ("os8088_5150_herc_gla", 0xB0000, "herc", 348, 90),
@@ -93,8 +106,8 @@ def main():
     machine, vseg, dlay, rows, stride = SCREEN[a.screen]
     want_r = REND.index(dlay)
     os.chdir(ROOT)
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",), MEGA_DEFS)
+    pkg = os88build.at(VIDEO_O88)
     bad = []
     pk = {"lzb": vid.PK_LZB, "lz4": vid.PK_LZ4, "none": vid.PK_NONE}[a.pack]
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
@@ -117,7 +130,7 @@ def main():
             w = ui.path("B:/RES.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            base = lin(m, u16(rec, geom.W_SEG))
             rw = lambda n: u16(m.read(base + syms[n], 2))
             rb = lambda n: m.read(base + syms[n], 1)[0]
             ww = lambda n, v: m.write(base + syms[n], struct.pack("<H", v))
@@ -166,7 +179,7 @@ def main():
                         "through the SHADOW" if rb("vp_shadow")
                         else "native"))
                 # --- 2: the block in its claim, and no ring
-                bseg = rw("vp_rblk") << 4
+                bseg = lin(m, rw("vp_rblk"))
                 got = bytes(m.read(bseg, len(blk))) if bseg else b""
                 d = sum(1 for x, y in zip(got, blk) if x != y) + \
                     abs(len(got) - len(blk))

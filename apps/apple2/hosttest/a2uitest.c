@@ -893,6 +893,12 @@ int os88_mem_movable(unsigned seg, int on)
 unsigned a2_opbase = H_ROMSEG;
 static int h_regrow_n, h_regrow_kb;
 
+/* the paragraph under a segment: itself, the harness being real mode */
+unsigned os88_seg_para(unsigned seg)
+{
+    return seg;
+}
+
 unsigned os88_mem_regrow(unsigned seg, int kb)
 {
     if (seg != H_ROMSEG) {

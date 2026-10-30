@@ -142,17 +142,43 @@ def keycode(name):
 
 
 # --- the client ---------------------------------------------------------------
+def sock_path(run):
+    """The automation socket of the run directory RUN. A UNIX socket's path
+    is limited to ~107 bytes, and 86Box refuses a longer one ("socket path
+    too long") - which a run directory inside a git worktree reaches - so a
+    long one goes through a short symlink to RUN in the temp directory: the
+    socket itself is still created in RUN."""
+    sock = os.path.join(run, "auto.sock")
+    if len(sock) <= 100:
+        return sock
+    import hashlib
+    link = os.path.join("/tmp", "o88box-%s" % hashlib.sha1(
+        os.path.abspath(run).encode()).hexdigest()[:12])
+    if os.path.realpath(link) != os.path.realpath(run):
+        try:
+            os.unlink(link)
+        except OSError:
+            pass
+        os.symlink(os.path.abspath(run), link)
+    return os.path.join(link, "auto.sock")
+
+
 class Box(object):
     """One running 86Box. Every request is a line; every answer a JSON line."""
 
     def __init__(self, name):
         self.name = name
         self.run = os.path.join(RUNS, name)
-        self.sock = os.path.join(self.run, "auto.sock")
+        self.sock = sock_path(self.run)
         self._s = None
         self._f = None
         self._ms = None             # the emulated clock as the last reply had it
         self._syms = {}
+        # ONE REQUEST AT A TIME on the socket, whatever thread asks: a
+        # harness polling from a second thread (tools/os88mega86box.py) would
+        # otherwise read the other thread's reply
+        import threading
+        self._lk = threading.RLock()
 
     def __enter__(self):
         return self
@@ -187,6 +213,11 @@ class Box(object):
                 time.sleep(0.02)
         if remove:
             shutil.rmtree(self.run, ignore_errors=True)
+        if os.path.islink(os.path.dirname(self.sock)):  # sock_path's link:
+            try:                        # the socket is gone with the process,
+                os.unlink(os.path.dirname(self.sock))   # and a later look
+            except OSError:             # makes the link again
+                pass
 
     def _conn(self):
         if self._s is None:
@@ -204,6 +235,10 @@ class Box(object):
             self._s = self._f = None
 
     def cmd(self, line):
+        with self._lk:
+            return self._cmd(line)
+
+    def _cmd(self, line):
         f = self._conn()
         t0 = time.time() if BOXLOG else 0
         self._s.sendall((line + "\n").encode())
@@ -275,6 +310,18 @@ class Box(object):
         if a is None:
             a = self._syms[name] = self.ksym(name)
         return a
+
+    def lin(self, seg):
+        """A segment's LINEAR base - or, on kern_mega (a megak map), an LDT
+        selector's, read out of its descriptor at [mega_ldtlin] (KERN-MEGA-
+        MEMORY-PLAN MC7: every claim is a selector there, so `seg * 16` is
+        some other memory). A real-mode kernel's segment may have bit 2 set
+        like any number, which is why the kernel decides and not the bit."""
+        if not (seg & 4 and "megak" in (self.kmap() or "")):
+            return seg * 16
+        ldt = self.memr(self.sym("mega_ldtlin"), 4)
+        d = self.memr(int.from_bytes(ldt, "little") + (seg & ~7), 8)
+        return d[2] | d[3] << 8 | d[4] << 16 | d[7] << 24
 
     def word(self, name):
         b = self.memr(self.sym(name), 2)
@@ -585,7 +632,8 @@ def free_port():
 
 def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
            hold=False, window=False, fresh=False, clear_cmos=False, inplace=False,
-           gdb_wait=False, kmap=None, cd=None, temp=False, turbo=False):
+           gdb_wait=False, kmap=None, cd=None, temp=False, turbo=False,
+           cfgs=(), nvr=None, env=None, inplace_c=False, eject_a=False):
     """Boot VM under NAME (see the module's launch options). TEMP marks the
     run directory disposable: `with launch(...) as b:` removes it after the
     quit, and `reap()` removes it once its process is gone - a row's copies
@@ -593,7 +641,17 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
     per-drive floppy turbo (`fdd_0N_turbo`): a sector costs no rotation or
     seek, so a boot off a floppy is ~4 emulated s shorter and half the host
     time, and a 1MB load is seconds - for a row whose subject is not the
-    floppy's timing."""
+    floppy's timing.
+
+    For a harness (tools/os88mega86box.py): CFGS is (section, key, value)
+    triples set as they are (a value of None removes the key) - a section
+    name with a dot in it ("Sound Blaster v2.0 #1") cannot go through `sets`;
+    NVR is {file: bytes} written into the run's nvr/ before the start (a
+    seeded CMOS, so an AT does not stop in setup); ENV is extra environment
+    for the 86Box process; INPLACE_C mounts C: in place while the floppies
+    are still copied; EJECT_A leaves A: empty (a boot off C:). A profile
+    with an `nvr-seed/` directory has it copied into a run's nvr/ when that
+    has none, so its BIOS does not stop in setup either."""
     if not os.path.isfile(BIN):
         raise SystemExit("os88box: no 86Box at %s - run `python3 tools/os88box.py build` "
                          "(or set OS88_86BOX)" % BIN)
@@ -609,17 +667,31 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
     if fresh and os.path.isdir(run):
         shutil.rmtree(run)
     os.makedirs(run, exist_ok=True)
+    nd = os.path.join(run, "nvr")
+    seed = os.path.join(os.path.dirname(src), "nvr-seed")
+    if nvr is None and os.path.isdir(seed):
+        nvr = {f: open(os.path.join(seed, f), "rb").read()
+               for f in os.listdir(seed)
+               if not os.path.exists(os.path.join(nd, f))}
+    for f, data in (nvr or {}).items():
+        os.makedirs(nd, exist_ok=True)
+        with open(os.path.join(nd, f), "wb") as fh:
+            fh.write(data)
     order, secs = read_cfg(src)
     srcdir = os.path.dirname(src)
     for sec in list(secs):                       # history is the host's, not ours
         secs[sec] = [kv for kv in secs[sec] if "image_history" not in kv[0]]
     a_name = os.path.basename(a or cfg_get(secs, "Floppy and CD-ROM drives", "fdd_01_fn") or "")
-    mount(order, secs, srcdir, run, "fdd1", "Floppy and CD-ROM drives", "fdd_01_fn", a, inplace)
+    if eject_a and not a:
+        cfg_set(order, secs, "Floppy and CD-ROM drives", "fdd_01_fn", None)
+    else:
+        mount(order, secs, srcdir, run, "fdd1", "Floppy and CD-ROM drives", "fdd_01_fn", a,
+              inplace)
     mount(order, secs, srcdir, run, "fdd2", "Floppy and CD-ROM drives", "fdd_02_fn", b, inplace)
     for n in range(3, 5):
         mount(order, secs, srcdir, run, "fdd%d" % n, "Floppy and CD-ROM drives",
               "fdd_%02d_fn" % n, None, inplace)
-    mount(order, secs, srcdir, run, "hdd1", "Hard disks", "hdd_01_fn", c, inplace)
+    mount(order, secs, srcdir, run, "hdd1", "Hard disks", "hdd_01_fn", c, inplace or inplace_c)
     mount(order, secs, srcdir, run, "hdd2", "Hard disks", "hdd_02_fn", d, inplace)
     # The CD-ROM's image is resolved and NOT copied: a disc is read-only, and a
     # .cue names its .bin relative to itself. Left relative, 86Box resolves it
@@ -651,6 +723,8 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
     if turbo:
         for n in range(1, 5):
             cfg_set(order, secs, "Floppy and CD-ROM drives", "fdd_%02d_turbo" % n, "1")
+    for sec, key, val in cfgs:
+        cfg_set(order, secs, sec, key, val)
     for s in sets:
         m = re.match(r"^([^.=]+(?: [^.=]+)*)\.([^=]+)=(.*)$", s)
         if not m:
@@ -661,10 +735,10 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
     gcfg = os.path.join(run, "global.cfg")
     with open(gcfg, "w") as f:
         f.write("[General]\nconfirm_exit = 0\nconfirm_reset = 0\nconfirm_save = 0\n")
-    sock = os.path.join(run, "auto.sock")
+    sock = sock_path(run)
     if os.path.exists(sock):
         os.unlink(sock)
-    env = dict(os.environ, OS88_FAULTLOG="1")
+    env = dict(os.environ, OS88_FAULTLOG="1", **(env or {}))
     if gdb_wait:
         env["OS88_GDBWAIT"] = "1"
     if not window:

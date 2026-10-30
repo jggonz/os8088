@@ -78,6 +78,18 @@ def started(m, name, viewoff):
     return None, None
 
 
+def _rwa_max():
+    """realdmg.asm's RWA_MAX - rw_aseg's words, rw_anseg after them - read
+    from the source rather than restated (it was 14, a stale 14 here)"""
+    import re
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps",
+                            "realdmg", "realdmg.asm")).read()
+    return int(re.search(r"^RWA_MAX\s+equ\s+(\d+)", src, re.M).group(1))
+
+
+RWA_MAX = _rwa_max()
+
+
 def leg(m_args, disk, stem, nseg, lst, viewoff, asegoff, fails, label):
     """open B:/STEM.O88 and read what the package made of it: (seg, view,
     images claimed, images in memory, samples in them of 200), or None"""
@@ -89,8 +101,8 @@ def leg(m_args, disk, stem, nseg, lst, viewoff, asegoff, fails, label):
             fails.append("%s: the package never started its game" % label)
             return None
         on, fix = m.read(view * 16 + S_JITON, 1)[0], m.read(view * 16 + S_JITFIX, 1)[0]
-        bss = m.read(seg * 16 + asegoff, 2 * 14 + 1)
-        claimed = bss[28]
+        bss = m.read(seg * 16 + asegoff, 2 * RWA_MAX + 1)
+        claimed = bss[2 * RWA_MAX]           # rw_anseg, after rw_aseg's words
         images = [int.from_bytes(bss[2 * i:2 * i + 2], "little") for i in range(nseg)]
         here = [x for x in images if x]
         inimg = 0

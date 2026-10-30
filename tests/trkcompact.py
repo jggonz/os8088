@@ -52,7 +52,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88fixture                                       # noqa: E402
 import os88ui, os88geom, os88marty                       # noqa: E402
-from trackmove import pkg_syms, u16                      # noqa: E402
+from trackmove import pkg_syms, u16, disk                # noqa: E402
 from heapcheck import claims                             # noqa: E402
 
 MOD, PKG = "BEVERLY.MOD", "TRACKER.O88"
@@ -73,9 +73,22 @@ def main():
     modsz = os.path.getsize("apps/tracker/beverly.mod")
     needk = (modsz + 1023) // 1024
 
-    with os88ui.boot("build/os8088-360.img", apps="build/trackmove360.img",
+    with os88ui.boot("build/os8088-360.img", apps=disk(),
                      machine=a.machine, quick=True) as ui:
         m = ui.m
+        mega = getattr(m, "bochs", False)
+
+        def L(seg, off=0):
+            """SEG:OFF linear: an LDT selector's base on kern_mega"""
+            return m.lin(seg, off) if mega else seg * 16 + off
+
+        def key(v):
+            """W_SEG as mem_tab keys the region: on kern_mega (KERN-MEGA-
+            MEMORY-PLAN MC7.4) a selector, whose base is the paragraph"""
+            if mega and v and 0x100 <= v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
         S = ui.sym                      # os88ui's own resolver, so a row that
                                         # names a kernel word and one that
                                         # clicks a window agree about which
@@ -90,7 +103,7 @@ def main():
                 seg = u16(m.read(os88geom.winptr(m, w.i, S)
                                  + os88geom.W_SEG, 2))
                 out.append((seg, w))
-            return sorted(out, reverse=True)
+            return sorted(out, key=lambda t: key(t[0]), reverse=True)
 
         def layout(tag):
             """Print the arena and answer the largest run in KB, PURGEABLE
@@ -178,7 +191,7 @@ def main():
         # count is the stopping depth less one, so the posted pass drags the
         # same number of workers it always did.
         rgn = max(c[1] // 64 for c in claims(m, S)
-                  if c[0] == trackers()[0][0])
+                  if c[0] == key(trackers()[0][0]))
         extra = max(0, (needk - 1) // rgn - 1)
         if i + 1 + extra > MAXTRK:
             print("FAIL: %d instances is the row's limit and the floor only"
@@ -190,11 +203,11 @@ def main():
                % (i + 1 + extra, extra, rgn))
         tk = trackers()
         nopen = len(tk)
-        print("  trackers at %s" % " ".join("%04x" % s for s, _ in tk))
+        print("  trackers at %s" % " ".join("%04x" % key(s) for s, _ in tk))
 
         top = tk[:extra + 1]
         rgnkb = sum(c[1] // 64 for c in claims(m, S)
-                    if c[0] in [sg for sg, _ in top])
+                    if c[0] in [key(sg) for sg, _ in top])
         for _, w in top:
             ui.close(w)
         ui.settle()
@@ -213,6 +226,7 @@ def main():
 
         tk = trackers()
         seg0, win = tk[0]
+        seg0 = key(seg0)                # (its paragraph, NOW)
         ui.raise_window(win)
 
         def wseg():
@@ -248,9 +262,9 @@ def main():
 
         def watched(_):                 # a 50ms host poll, a GUEST budget
             at = wseg()                 # (the byte is up for the whole pass
-            if m.read(at * 16 + P["trk_cpq"], 1)[0]:     # AND the 114KB
+            if m.read(L(at, P["trk_cpq"]), 1)[0]:        # AND the 114KB
                 seen["posted"] = True                    # floppy read)
-            if u16(m.read(at * 16 + P["tui_msgp"], 2)) == P["trk_s_cpq"]:
+            if u16(m.read(L(at, P["tui_msgp"]), 2)) == P["trk_s_cpq"]:
                 seen["said"] = True
             return seen["posted"] and seen["said"]
         try:
@@ -266,7 +280,7 @@ def main():
         # is the load's own word that it finished
         try:
             os88marty.until(
-                m, lambda _: m.read(wseg() * 16 + P["mp_loaded"], 1)[0],
+                m, lambda _: m.read(L(wseg(), P["mp_loaded"]), 1)[0],
                 "[mp_loaded]", poll=0.5, limit=180.0)
         except os88marty.MartyError:
             pass                        # ...judged below
@@ -279,14 +293,14 @@ def main():
             return 1
 
         def tw(name):
-            return u16(m.read(seg2 * 16 + P[name], 2))
+            return u16(m.read(L(seg2, P[name]), 2))
 
         def tb(name):
-            return m.read(seg2 * 16 + P[name], 1)[0]
+            return m.read(L(seg2, P[name]), 1)[0]
 
         bad = 0
         print("  1 Tracker posted      %s  (region %04x -> %04x)"
-              % ("OK" if posted else "NO - it never asked", seg0, seg2))
+              % ("OK" if posted else "NO - it never asked", seg0, key(seg2)))
         bad += not posted
         print("  2 it said so          %s" % ("OK" if said else
                                               "NO - the freeze was silent"))

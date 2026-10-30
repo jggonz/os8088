@@ -32,6 +32,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88flush   # noqa: E402
 import os88stik    # noqa: E402
+sys.path.insert(0, HERE)
+import megafix     # noqa: E402  (kern_mega: the fixture rebuilt on mega.img)
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -61,7 +63,9 @@ def volume(m, tmp):
 
 def row(ui, k):
     seg = ui._word("sc_seg")
-    return bytes(ui.m.read((seg << 4) + k * os88stik.SC_REC, os88stik.SC_REC))
+    # a real segment, or kern_mega's selector (tools/os88megabochs.py)
+    lin = getattr(ui.m, "lin", lambda sg, off=0: (sg << 4) + off)
+    return bytes(ui.m.read(lin(seg) + k * os88stik.SC_REC, os88stik.SC_REC))
 
 
 def downgraded(ui, zone, cap):
@@ -79,7 +83,8 @@ def downgraded(ui, zone, cap):
 
 def leg(name, tmp):
     sysimg = os.path.join(tmp, "stik%s360.img" % name)
-    shutil.copy(os.path.join(BDIR, "stik%s360.img" % name), sysimg)
+    shutil.copy(megafix.system_disk(
+        os.path.join(BDIR, "stik%s360.img" % name)), sysimg)
     fixture = open(os.path.join(BDIR, "stikfix", name, "system.cfg"),
                    "rb").read()
     print("%s:" % name)

@@ -1,0 +1,39 @@
+diff --git a/src/floppy/fdc.c b/src/floppy/fdc.c
+index d03acec..3a92ea7 100644
+--- a/src/floppy/fdc.c
++++ b/src/floppy/fdc.c
+@@ -1976,9 +1976,26 @@ fdc_poll_common_finish(fdc_t *fdc, int compare, int st5)
+         dma_set_drq(fdc->dma_ch, 0);
+ }
+ 
++/* os8088 (tools/86box/patches/06-fdc-counters.patch): every READ DATA and
++   WRITE DATA command the controller completes, for the automation socket's
++   `fdc` - MartyPC's `disk` counters, which a harness waits on ("no read
++   since") */
++uint32_t os88_fdc_reads;
++uint32_t os88_fdc_writes;
++
++static void
++os88_fdc_count(const fdc_t *fdc)
++{
++    if ((fdc->interrupt == 6) || (fdc->interrupt == 0xc))
++        os88_fdc_reads++;
++    else if ((fdc->interrupt == 5) || (fdc->interrupt == 9))
++        os88_fdc_writes++;
++}
++
+ static void
+ fdc_poll_readwrite_finish(fdc_t *fdc, int compare)
+ {
++    os88_fdc_count(fdc);
+     if ((fdc->interrupt == 5) || (fdc->interrupt == 9))
+         fdd_do_writeback(fdc->fdd[real_drive(fdc, fdc->drive)]);
+ 
+@@ -1990,6 +2007,7 @@ fdc_poll_readwrite_finish(fdc_t *fdc, int compare)
+ static void
+ fdc_no_dma_end(fdc_t *fdc, int compare)
+ {
++    os88_fdc_count(fdc);
+     timer_disable(&fdc->timer);
+ 
+     fdc_poll_common_finish(fdc, compare, 0x80);

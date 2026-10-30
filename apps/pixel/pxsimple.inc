@@ -208,7 +208,7 @@ px_dpart:
     mov [px_k + PXK_MH], ax
     mov ax, [px_wseg]
     mov [px_k + PXK_RSEG], ax
-    add ax, [px_wo_dec]
+    mov ax, [px_wsdec]              ; (px_wsubs's selector, MC7)
     mov [px_k + PXK_DSEG], ax
     mov word [px_k + PXK_SPAL], px_spal
     mov byte [px_k + PXK_RBLK], 0
@@ -234,3 +234,6 @@ px_dpart:
     pop ax
     popf
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)

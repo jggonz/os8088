@@ -65,7 +65,13 @@ class Q(HM.QH):
         self.sock = os.path.join(tmp, "qmp.sock")
         self.pid = os.path.join(tmp, "qemu.pid")
         self.pidn = None
+        self.srv = None
         atexit.register(self.close)
+        if os88qemu.MEGA:       # kern_mega: this socket answered by a Bochs
+            import os88qmpmega  # (tests/os88qmpmega.py), the IDE disk its
+            self.srv = os88qmpmega.Server(  # C: and read back live
+                self.sock, self.pid, sysimg, bimg, hd=hd, ne2k=True)
+            return
         os88qemu.own(self.pid, self.sock)
         os88qemu.start(
             ["qemu-system-i386", "-machine", "pc,vmport=off", "-m", "4",
@@ -201,7 +207,7 @@ def main():
         seg = struct.unpack_from("<H", row, HM.geom.DRVR_SEG)[0]
         if not seg:
             sys.exit("httpinstall: HTTPFS.DRV did not load")
-        base = HM.geom.drv_base(seg)
+        base = os88qemu.drv_base(seg)   # a selector's base on kern_mega
         syms = HM.os88drvsym.symbols("httpfs.bin")
         vol = q.read(base + syms["hf_vol"], 1)[0]
         ui = HM.os88ui.UI(q, mouse=object(), sym=S, verbose=False)
@@ -268,7 +274,8 @@ def main():
               % chr(ord("A") + vol))
         n0 = len(log.gets())
         t0 = time.time()
-        wz = instwiz.qemu(q, S, click, w)
+        instwiz.SYM = instwiz.symmap(shipped=True)  # os8088-360.img's
+        wz = instwiz.qemu(q, S, click, w)           # INSTALL.O88, on any kernel
         wz.run(wipe=False, limit=LIMIT)
         if open(hd, "rb").read(446) == mbr0:
             sys.exit("httpinstall: FAIL - the wizard finished and nothing "

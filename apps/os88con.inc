@@ -952,9 +952,13 @@ con_font:
     jnz .rom
     or bx, bx
     jnz .rom
-    mov ax, 0xF000                  ; no EGA-or-later ROM: the CGA/MDA half
-    mov bx, 0xFA6E + 32*8           ; table, which is 0..127 and no further
-    mov es, ax
+    mov dx, 0xF000                  ; no EGA-or-later ROM: the CGA/MDA half
+    xor ax, ax                      ; table, which is 0..127 and no further -
+    xor cx, cx                      ; through a window over F000h (OSAPI_SEG's
+    mov bl, SEG_WIN                 ; SEG_WIN: under kern_mega a paragraph is
+    call OSAPI_SEG                  ; no selector, MC7; F000h itself on every
+    mov es, dx                      ; real-mode kernel), the instance's own
+    mov bx, 0xFA6E + 32*8
     mov si, bx
     mov di, con_glyf + 32 * 8
     mov cx, 96 * 8

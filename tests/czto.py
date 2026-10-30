@@ -181,6 +181,10 @@ def main():
         m = ui.m
         S = ui._S
         fl = os88flush.Flush(marty=m)
+        # a real segment, or kern_mega's selector (tools/os88megabochs.py):
+        # the clone's claim is one, and a stop's CS in .cold is COLD_SEG's
+        # descriptor based above 1MB, where ui._S puts the breakpoints
+        lin = getattr(m, "lin", lambda sg, off=0: (sg << 4) + off)
 
         def w16(sym):
             return int.from_bytes(m.read(S(sym), 2), "little")
@@ -195,7 +199,7 @@ def main():
             seg = w16("clo_seg")
             if not seg:
                 return None
-            h = m.read(seg << 4, 32)
+            h = m.read(lin(seg), 32)
             return h[CL_STEP], int.from_bytes(h[HDR_K:HDR_K + 2], "little")
 
         def select(name):
@@ -242,6 +246,21 @@ def main():
                 # land inside the join's own toast-then-free window and call
                 # it still. The reading has to hold for STILL guest seconds
                 # (what two polls span on an idle box), whatever the box does
+                #
+                # AND THE VERDICT IS THE STAGED TEXT, NOT A LIT STRIP. A toast
+                # is up for TOAST_TICKS (3 guest s) from the moment it is
+                # said, and a still reading needs two polls STILL apart - so
+                # on kern_mega under Bochs on a loaded box, where a poll's
+                # debugger stops spaced the looks 1-2 GUEST seconds apart,
+                # the strip was said, seen once and gone before the second
+                # look: the join HAD finished ('Uncompressed' staged, the
+                # claim freed, the result on A:) and this waited 120 guest
+                # seconds for a lit strip that was never coming back
+                # (mega-czto, two whole soaks, at whichever swap leg lost the
+                # draw). Every wait here starts from a toast_buf that key()
+                # or unto() emptied, so what is in it now was said AFTER the
+                # key, lit or not - `on` is left in the reading only so its
+                # going out is a change like any other
                 now = (claim(), mode(), ui.toast())
                 cyc = int(m.status()["cycles"])
                 if box.get("last") != now:
@@ -262,14 +281,14 @@ def main():
                     # still up too, and is the "said" arm's once it is freed
                     t, on = ui.toast()
                     if (was is None or c[1] != was
-                            or (on and t.startswith("Missing"))):
+                            or t.startswith("Missing")):
                         box["r"] = ("asked", c[1])
                         box["why"] = (t, on, c, mode(),
                                       int(m.status()["cycles"]))
                         return True
                     return False
                 t, on = ui.toast()
-                if on and t and not c and w16("fdlg_win") == 0:
+                if t and not c and w16("fdlg_win") == 0:
                     box["r"] = ("said", t)
                     return True
                 return False
@@ -347,7 +366,7 @@ def main():
                 if m.wait_stop(limit=10.0) != "breakpoint":
                     break
                 rg = m.regs()
-                here = (rg["cs"] << 4) + rg["ip"]
+                here = lin(rg["cs"], rg["ip"])
                 seen[here] = (rg["cx"], rg["di"])
                 m.run()
                 if back in seen:
@@ -438,11 +457,12 @@ def main():
                 for _ in range(20000):
                     if m.wait_stop(limit=0.3) != "breakpoint":
                         if claim() is None and mode() == 0:
-                            t, on = ui.toast()
-                            return (t if on else None), hits, hops
+                            t, on = ui.toast()      # staged since the key
+                            return (t or None), hits, hops  # (outcome's
+                                                            # reason)
                         continue
                     rg = m.regs()
-                    here = (rg["cs"] << 4) + rg["ip"]
+                    here = lin(rg["cs"], rg["ip"])
                     if here == gto:
                         seenhops.append(rg["ax"] & 0xFF)
                         if failhop and hits and rg["ax"] & 0xFF == 0:
@@ -505,7 +525,14 @@ def main():
         motor_off()
         m.mount(1, dy)
         key("Enter")
-        r = marginal(2, False, stays=True)
+        # TWO good reads are the mount's boot sector and its FAT, so the
+        # ROOT DIRECTORY's is the first to fail. kern_mega's mount reads the
+        # FAT in TWO transfers (sector 2 alone, then sectors 3-11 - the
+        # trace of its int 13h calls, where kern_big's is one 9-sector
+        # call), so the same read is its fourth: failing the third fails
+        # the FAT, the mount refuses and the verdict is `No disk`
+        r = marginal(3 if getattr(m, "bochs", False) else 2, False,
+                     stays=True)
         af = a_files()
         leg("ioerr", r[0] == "Disk error" and mode() == 0
             and claim() is None and "BAD.DAT" not in af

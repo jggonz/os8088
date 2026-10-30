@@ -23,6 +23,14 @@
 ; its own, from the folder MIDIRack was launched from (recorded at entry:
 ; adding songs through the Open dialog moves the instance's folder), and is
 ; kept until the window closes. Its index lives in it, so nothing is copied.
+; It is read and played through WINDOWS (KERN-MEGA-MEMORY-PLAN MC7): an
+; OSAPI_SEG SEG_SUB every 32 KB of the claim, each 64 KB long or to the
+; claim's end, made once at load (mwt_wins). On kern_mega in protected mode
+; the claim is an LDT selector, where `bseg + N` names some other
+; descriptor; a real-mode kernel answers SEG_SUB with bseg + N itself, so the
+; same table is today's segments there and it is one path on every kernel.
+; A sample starting at byte A plays from window A >> 15 at A & 7FFFh, which
+; is no slower per note-on than the granule sum it replaces (mwt_place).
 ;
 ; THE MIX CLAIM holds what the inner loop reads beside the sample: 32 volume
 ; pages (the signed sample to its scaled value, built at open), the span's sum
@@ -38,6 +46,8 @@ MWT_OTAB    equ MWT_ACC + MWT_SPAN * 2  ; ...and the output table after it
 MWT_VSTEP   equ MWT_OTAB + 2048     ; ...and the loop's step, protected mode
 MWT_MIXKB   equ (MWT_VSTEP + 2 + 1023) / 1024
 MWT_FULL    equ 127 << 8            ; an envelope at its top
+MWT_NWIN    equ 20                  ; windows: a 32 KB step over a bank of
+                                    ; 640 KB at most (mwt_info's ceiling)
 %if MWT_MAXV > MR_MAXV
   %error "the wavetable's voices are the allocator's"
 %endif
@@ -66,7 +76,11 @@ MRS_GAIN    equ 10
     MRW mwt_bseg                    ; the bank's claim (0: not loaded)
     MRW mwt_doff                    ; ...where its sample data starts in
     MRW mwt_doffh                   ;    it, a 32-bit byte offset
-    MRW mwt_lim                     ; the highest end a voice may have
+    MRW mwt_lim                     ; mwt_place: the highest end a voice
+                                    ; may have, in its sample's window
+    MRW mwt_nwin                    ; the windows mwt_wins made, x 2
+    MRBUF mwt_win, MWT_NWIN * 2     ; window w: a SEG_SUB at 2,048w paragraphs
+    MRBUF mwt_wlim, MWT_NWIN * 2    ; ...and its length, FFFFh for 64 KB
     MRW mwt_nbase                   ; mwt_place: a voice's start, as an offset
     MRW mwt_xseg                    ; the mix claim
     MRW mwt_rate                    ; the output rate
@@ -168,6 +182,8 @@ mwt_load:
     mov word [mr_msg], mr_s_bankmem
     jc .no
     mov [mwt_bseg], dx
+    call mwt_wins                   ; its windows, before a byte is read into
+    jc .free                        ; them (no LDT entry: the claim goes back)
     call OSAPI_FILE_HERE            ; where we stand, to come back to
     push dx
     push bx
@@ -210,20 +226,20 @@ mwt_load:
     pop dx
     pop ax
     jc .rdfail
-    jcxz .done
+    cmp cx, 32768
+    jne .done                       ; (a short chunk is the last)
+    sub bp, 32
+    jz .done
     add ax, 32768
     adc dx, 0
     xor bx, 32768                   ; the second half of this 64KB, or the
-    jnz .same                       ; first of the next - an OFFSET step,
-    mov bx, es                      ; so a bank of 64KB or less that is a
-    add bx, 65536 / 16              ; selector on kern_mega never moves ES
-    mov es, bx                      ; (KERN-MEGA-PLAN 14.13); one over 64KB
-    xor bx, bx                      ; is conventional by the contract
-.same:
-    cmp cx, 32768
-    jne .done
-    sub bp, 32
-    jnz .chunk
+    jnz .chunk                      ; first of the next - whose window is
+    mov bx, dx                      ; mwt_wins's 2 x DX (DX:AX = DX x 64KB):
+    shl bx, 1                       ; reloaded only when a chunk is going
+    shl bx, 1                       ; there, so ES never holds a window past
+    mov es, [mwt_win + bx]          ; the last
+    xor bx, bx
+    jmp short .chunk
 .done:
     pop bx
     pop dx
@@ -236,24 +252,10 @@ mwt_load:
     jne .free
     cmp word [es:4], 1
     jne .free
-    mov ax, [es:MRK_DOFF]           ; where the data is, KEPT as an offset:
-    mov [mwt_doff], ax              ; a segment of bseg + (doff >> 4) is a
-    mov ax, [es:MRK_DOFF+2]         ; paragraph step off kern_mega's grid of
-    mov [mwt_doffh], ax             ; conventional descriptors, and nothing
-    mov cx, 0xFFFF                  ; at all on a selector (mwt_place)
-%ifdef PKG_MEGA                     ; (a SELECTOR is an OS88_HIGHMEM claim:
-    test byte [mwt_bseg], 4         ; the kern_mega arm's, 14.66)
-    jz .lim
-    mov ax, [mr_bankkb]             ; a selector (KERN-MEGA-PLAN 14.13): no
-    cmp ax, 64                      ; voice may read past the claim - real
-    jae .lim                        ; mode reads garbage there, a selector
-    mov ch, al                      ; faults. A 64KB claim's last offset is
-    mov cl, 0                       ; 0xFFFF already
-    shl ch, 1
-    shl ch, 1
-%endif
-.lim:
-    mov [mwt_lim], cx
+    mov ax, [es:MRK_DOFF]           ; where the data is, KEPT as an offset
+    mov [mwt_doff], ax              ; (mwt_place: a 32-bit byte offset into
+    mov ax, [es:MRK_DOFF+2]         ; the bank, which picks the window)
+    mov [mwt_doffh], ax
     clc
     jmp short .out
 .rdfail:
@@ -279,6 +281,58 @@ mwt_load:
     ret
 
 %include "os88rseq.inc"            ; os88_rseq, for mwt_load
+
+; mwt_wins - the bank's WINDOWS (KERN-MEGA-MEMORY-PLAN MC7): window w an
+; OSAPI_SEG SEG_SUB of [mwt_bseg] at 2,048w paragraphs, 64 KB or to the
+; claim's end - [mwt_bseg] + 2,048w on a real-mode kernel - and the bytes it
+; reaches, the most a voice in it may play to (FFFFh for a whole 64 KB, the
+; claim's tail in the last ones). ceil(KB / 32) of them: seven LDT entries
+; for the shipped 224 KB bank, freed with the claim. CF = 1 no LDT entry
+; free (the claim's free takes the ones made). Keeps every register
+mwt_wins:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor si, si                      ; SI = the row, x 2
+    xor ax, ax                      ; AX = the window's paragraph
+    mov cx, [mr_bankkb]             ; CX = the claim's KB from its base
+.w:
+    push cx
+    mov dx, [mwt_bseg]
+    mov bl, SEG_SUB
+    xor cx, cx
+    call OSAPI_SEG
+    pop cx
+    jc .x
+    mov [mwt_win + si], dx
+    mov dx, 0FFFFh
+    cmp cx, 64
+    jae .lim
+    mov dh, cl                      ; under 64 KB left: its bytes
+    mov dl, 0
+    shl dh, 1
+    shl dh, 1
+.lim:
+    mov [mwt_wlim + si], dx
+    inc si
+    inc si
+    add ax, 2048
+    sub cx, 32
+    ja .w
+    clc                             ; (the last sub may have borrowed)
+.x:
+    mov [mwt_nwin], si
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%if MWT_NWIN * 32 < 640
+  %error "MWT_NWIN windows of 32 KB do not reach mwt_info's 640 KB bank"
+%endif
 
 ; mwt_pin / mwt_decl - the bank and the mix claim PINNED for a wavetable play
 ; (mro_play, once mwt_load has the bank) and MOVABLE again once none is open
@@ -306,11 +360,28 @@ mwt_set:
 
 ; mwt_move - the bank or the mix claim MOVED (SPEC.md 66.3: BX = was, DX =
 ; now): one word each, and nothing derived from either is live while they
-; may move (mwt_pin's note)
+; may move (mwt_pin's note) - but the bank's WINDOWS are kept from load to
+; close, so they move with it: each is the bank plus a constant on the
+; real-mode kernel that calls this (kern_mega's protected mode REBASES a
+; claim's selectors and calls no proc)
 mwt_move:
     cmp bx, [mwt_bseg]
     jne .x
     mov [mwt_bseg], dx
+    push ax
+    push si
+    mov ax, dx
+    sub ax, bx                      ; AX = the paragraph delta
+    mov si, [mwt_nwin]
+.w:
+    dec si
+    dec si
+    js .wd
+    add [mwt_win + si], ax
+    jmp short .w
+.wd:
+    pop si
+    pop ax
 .x:
     cmp bx, [mwt_xseg]
     jne .r
@@ -458,21 +529,21 @@ mwt_hush:
 ; -----------------------------------------------------------------------------
 ; mwt_on - MRO_ON: AL = channel, AH = key, CL = velocity
 ; -----------------------------------------------------------------------------
-; mwt_place - where a voice's sample is (KERN-MEGA-PLAN 14.13): the bank's
-; data offset plus the sample's paragraph, as a byte offset A, and from it a
-; SEGMENT and a START. On a bank that is conventional - every machine but
-; kern_mega, and kern_mega's banks over 64KB - the segment is bseg + 8 x (A >>
-; 7) and the start A & 127: whole 128-byte granules, on the grid kern_mega's
-; conventional descriptors sit on, and the same bytes real mode always read.
-; On a bank that came back a SELECTOR (bit 2, the LDT; a conventional base is
-; a multiple of 32 paragraphs, so the bit is clear there) it is 64KB or less
-; and the segment is the claim itself, the start A.
+; mwt_place - where a voice's sample is (KERN-MEGA-MEMORY-PLAN MC7): the
+; bank's data offset plus the sample's paragraph, as a byte offset A, and
+; from it a WINDOW and a START - window A >> 15 of mwt_wins's, the start
+; A & 7FFFh in it, and that window's length as the end a voice may have. One
+; shape on every kernel (the windows are bseg + 2,048w on a real-mode one),
+; and cheaper on the XT than the 128-byte granule sum it replaces, whose
+; seven-step 32-bit shift was a loop. A sample past the bank (a bank that
+; lies) is placed at window 0 with nothing to play: mwt_on silences it.
 ; in:  ES:SI -> the sample's row, BX = the voice x 2
-; out: [mwt_sseg+bx], [mwt_nbase]; preserves every register
+; out: [mwt_sseg+bx], [mwt_nbase], [mwt_lim]; preserves every register
 mwt_place:
     push ax
     push cx
     push dx
+    push di
     mov ax, [es:si+MRS_PARA]
     mov dx, ax
     mov cl, 4
@@ -481,26 +552,24 @@ mwt_place:
     shr dx, cl                      ; DX:AX = the paragraph, in bytes
     add ax, [mwt_doff]
     adc dx, [mwt_doffh]             ; DX:AX = A
-    mov cx, [mwt_bseg]
-%ifdef PKG_MEGA
-    test cl, 4                      ; (a selector: the kern_mega arm's)
-    jnz .flat
-%endif
-    push ax
-    mov cx, 7
-.g:
-    shr dx, 1
-    rcr ax, 1
-    loop .g
-    mov cl, 3
-    shl ax, cl
-    add ax, [mwt_bseg]
-    mov cx, ax                      ; CX = the granule's segment
-    pop ax
-    and ax, 127                     ; AX = the start in it
-.flat:
+    shl ax, 1
+    rcl dx, 1                       ; DX = A >> 15, the window
+    shr ax, 1                       ; AX = A & 7FFFh, the start in it
+    mov di, dx
+    shl di, 1
+    cmp di, [mwt_nwin]
+    jb .in
+    xor di, di                      ; past the bank: window 0, and an end of
+    mov [mwt_lim], di               ; 0 that no start is below
+    jmp short .put
+.in:
+    mov cx, [mwt_wlim + di]
+    mov [mwt_lim], cx
+.put:
+    mov cx, [mwt_win + di]
     mov [mwt_sseg+bx], cx
     mov [mwt_nbase], ax
+    pop di
     pop dx
     pop cx
     pop ax
@@ -578,7 +647,9 @@ mwt_on:
 .clip:
     mov cx, [mwt_lim]               ; only a bank whose sample runs off it
 .endok:
-    mov [mwt_end+bx], cx
+    cmp cx, [mwt_nbase]             ; ...or starts past it (mwt_place): no
+    jbe .none                       ; byte to play, so no voice - the mixer
+    mov [mwt_end+bx], cx            ; reads before it tests the end
     mov cx, [mwt_nbase]
     mov [mwt_ip+bx], cx
     mov word [mwt_fp+bx], 0
@@ -612,6 +683,12 @@ mwt_on:
 .tune:
     call mwt_tune                   ; AH = the key
     call mwt_page
+    jmp short .out
+.none:
+    pop di                          ; (the entry, pushed for mwt_envset)
+    shr bx, 1
+    mov byte [mwt_stage+bx], 0      ; the voice it was given goes back
+    mov byte [mrv_st+bx], MRV_FREE
 .out:
     pop es
     pop di

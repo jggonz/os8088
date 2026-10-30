@@ -62,17 +62,18 @@
 ; fetch is bounded by a precomputed limit.
 ;
 ; Addressing a blob that exceeds 64KB (BEVERLY.MOD is 116,085 bytes) on an
-; 8086: nothing ever offsets more than 64KB from one base. The header is
-; within blobseg's first 1084 bytes; pattern p lives at segment
-; blobseg + 64 + 64*p, offset 60 (1084 + 1024*p = ((64 + 64*p) << 4) + 60);
-; each sample gets a base seg = blobseg + 8*(start >> 7), off = start & 127,
-; with its play length capped at MPM_MAXSMP bytes so off + position (+ one
-; mix step) can never wrap a 16-bit offset. Every segment is a whole number
-; of 128-byte GRANULES from the claim, Tracker's layout (trkplay.inc): on
-; kern_mega a conventional segment is a descriptor only on the 8-paragraph
-; grid (KERN-MEGA-PLAN 10.1 item 18), and the old paragraph steps - 67 + 64p
-; and start >> 4 - landed between descriptors and faulted on every row. Real
-; mode reads the same bytes either way.
+; 8086: nothing ever offsets more than 64KB from one base, and NO base is a
+; sum (KERN-MEGA-MEMORY-PLAN MC7) - Tracker's layout (trkplay.inc), whose
+; note is the long form. On kern_mega in protected mode the blob is an LDT
+; selector and `blobseg + N` names some other descriptor, so every base past
+; the first 64KB is an OSAPI_SEG SEG_SUB made once at load, which a real-mode
+; kernel answers with DX + AX: one path on every kernel. The header is within
+; blobseg's first 1084 bytes; pattern p is window p >> 5 of mpm_pwin (a
+; SEG_SUB at paragraph MPM_PSEG + 2048w) at offset MPM_POFF + 1024(p & 31);
+; each PLAYABLE sample gets a SEG_SUB at paragraph start >> 4, off = start &
+; 15, with its play length capped at MPM_MAXSMP bytes so off + position (+
+; one mix step) can never wrap a 16-bit offset. At most 31 + 8 LDT entries an
+; instance, freed with the claim at the next load.
 ;
 ; Timing (research-ft2-reference): tick rate = BPM*2/5 Hz, speed = ticks
 ; per row; mpm_gen renders [mpm_spt] = mixrate*5/(2*BPM) samples per tick.
@@ -83,8 +84,8 @@
 ; conversion pass: out = 128 + (sum >> 2).
 ; =============================================================================
 
-MPM_PSEG   equ 64                ; pattern 0's segment, paragraphs into the blob
-MPM_POFF   equ 60                ; ...and its first cell's offset in it
+MPM_PSEG   equ 64                ; pattern window 0, paragraphs into the blob
+MPM_POFF   equ 60                ; ...and pattern 0's first cell's offset in it
 MPM_MAXSMP  equ 60000            ; per-sample play-length cap, bytes: keeps
                                 ; off + pos + step*chunk < 65536 in the mixer
                                 ; even at a 4000 Hz mix rate (step int <= 7)
@@ -121,8 +122,8 @@ MPM_DSMP   equ 38                ; b: ...and sample
 MPM_CHSZ   equ 40
 
 ; --- sample table entry (bss, 12 bytes x 31) -----------------------------------
-MPS_SEG    equ 0                 ; w: base segment, on the granule grid
-MPS_OFF    equ 2                 ; w: base offset 0..127
+MPS_SEG    equ 0                 ; w: its window (a SEG_SUB at start >> 4)
+MPS_OFF    equ 2                 ; w: base offset 0..15 in it
 MPS_PLEN   equ 4                 ; w: play length, bytes (0 = unplayable)
 MPS_LLEN   equ 6                 ; w: loop length, bytes (0 = one-shot)
 MPS_LSTART equ 8                 ; w: loop start, bytes (kept for reference)
@@ -272,6 +273,20 @@ mpm_load:
                                  ; app refused any file over 128KB, because
                                  ; 1084 + 1024*P <= 131072 forces P <= 126 -
                                  ; a byte held it only by way of that cap
+    ; -- the pattern windows: ceil(P / 32) SEG_SUBs, 64KB each or to the end
+    xchg ax, cx                  ; CX = P
+    mov si, mpm_pwin
+    mov ax, MPM_PSEG
+.pw:
+    mov dx, [mpm_blobseg]
+    call mpm_sub
+    jc .e_memj
+    mov [si], dx
+    inc si
+    inc si
+    add ax, 2048
+    sub cx, 32
+    ja .pw
     ; -- 7..10: the 31 sample headers -> mpm_smptab ---------------------------
     mov word [mpm_t1], 0         ; sample index 0..30
 .sm:
@@ -326,29 +341,6 @@ mpm_load:
     mov ax, 0xFFFF
 .llok:
     mov [mpm_t5], ax             ; ll bytes
-    ; normalized base from the running 32-bit start
-    mov ax, [mpm_run_lo]
-    mov dx, [mpm_run_hi]
-    mov bx, [mpm_blobseg]
-    test bl, 4                  ; a selector: the claim, at the start itself
-    jz .gran                    ; (mpm_patseg)
-    mov [di+MPS_OFF], ax
-    mov [di+MPS_SEG], bx
-    jmp short .placed
-.gran:
-    mov bx, ax
-    and bx, 127
-    mov [di+MPS_OFF], bx
-    mov cx, 7
-.sh4:
-    shr dx, 1
-    rcr ax, 1
-    loop .sh4                   ; AX = start >> 7, GRANULES (hi bits beyond 20
-    mov cl, 3                   ; only on hostile files whose samples are
-    shl ax, cl                  ; unplayable) - 8 paragraphs each
-    add ax, [mpm_blobseg]
-    mov [di+MPS_SEG], ax
-.placed:
     ; effective length = min(stated, bytes remaining in file, MPM_MAXSMP)
     mov ax, [mpm_bloblen_lo]
     mov dx, [mpm_bloblen_hi]
@@ -379,6 +371,38 @@ mpm_load:
     mov ax, MPM_MAXSMP
 .capok:
     mov [mpm_t6], ax             ; elen
+    ; the sample's WINDOW (KERN-MEGA-MEMORY-PLAN MC7): a SEG_SUB at its
+    ; start's paragraph, 64KB or to the claim's end - blobseg + paragraph on
+    ; a real-mode kernel. An unplayable one takes no LDT entry: the blob
+    ; itself at 0, which nothing reads (MPS_PLEN 0 is never indexed)
+    mov dx, [mpm_blobseg]
+    mov word [di+MPS_OFF], 0
+    or ax, ax
+    jz .win
+    mov ax, [mpm_run_lo]
+    mov bx, [mpm_run_hi]
+    cmp bx, 16
+    jae .unplay                  ; 1MB or more in: no SEG_SUB names it (a
+    mov cl, 12                   ; hostile file, or a pool block's)
+    shl bx, cl
+    mov cx, ax
+    and cx, 15
+    mov [di+MPS_OFF], cx
+    mov cl, 4
+    shr ax, cl
+    or ax, bx                    ; AX = start >> 4, paragraphs
+    call mpm_sub
+    jnc .win
+.e_memj:
+    push ds
+    pop es
+    mov ax, mpp_s_nomem          ; no LDT entry free: the claim goes with
+    stc                          ; this refusal, and every window with it
+    ret
+.unplay:
+    mov word [mpm_t6], 0
+.win:
+    mov [di+MPS_SEG], dx
     ; advance the running start by the STATED length (the file layout)
     mov ax, [mpm_t2]
     mov dx, [mpm_t3]
@@ -690,18 +714,18 @@ mpm_cell2txt:
     push ax
     mov ax, di
     call mpm_patseg
+    mov si, ax                  ; SI = the pattern's first cell
     pop ax
     mov bl, al
     xor bh, bh
     mov cl, 4
     shl bx, cl                  ; row * 16
-    mov si, bx
+    add si, bx
     mov bl, ah
     xor bh, bh
     shl bx, 1
     shl bx, 1                   ; ch * 4
     add si, bx
-    add si, [mpm_pbase]
     ; decode
     mov al, [es:si]             ; b0
     mov ah, [es:si+1]           ; b1
@@ -1473,30 +1497,39 @@ mpm_nextrow:
 ; mpm_readrow - tick 0: read the four cells of (pattern, row), trigger notes,
 ; run tick-0 effects
 ; -----------------------------------------------------------------------------
-; mpm_patseg - pattern AX's segment, and the offset of its first cell
-; (KERN-MEGA-PLAN 14.13; Tracker's mp_patseg). A conventional blob is whole
-; 128-byte granules from the claim; a blob that came back a SELECTOR (bit 2,
-; the LDT) is 62KB or less (mpp_claimsel) and is the claim itself, the cell at
-; its absolute 1084 + 1024p.
-; in:  AX = a pattern number already checked against [mpm_npat]
-; out: ES = its segment, [mpm_pbase] = row 0 channel 0's offset in it
-; clobbers AX and CL
+; mpm_patseg - pattern AX's window, and the offset of its first cell
+; (KERN-MEGA-MEMORY-PLAN MC7; Tracker's mp_patseg, whose note is the long
+; form): window p >> 5 of mpm_load's eight, offset MPM_POFF + 1024(p & 31).
+; THE OFFSET COMES BACK IN A REGISTER - the UI task (mpm_cell2txt) and the
+; worker (mpm_readrow) both ask, and a shared word would hand one of them
+; the other's pattern after a switch.
+; in:  AX = a pattern number already checked against [mpm_npat] (so AH = 0)
+; out: ES = its window, AX = row 0 channel 0's offset in it; clobbers BX
 mpm_patseg:
-    test byte [mpm_blobseg], 4
-    jnz .flat
-    mov cl, 6
-    shl ax, cl                  ; pattern * 64 paragraphs
-    add ax, MPM_PSEG
-    add ax, [mpm_blobseg]
-    mov es, ax
-    mov word [mpm_pbase], MPM_POFF
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                   ; AH = p >> 5, AL = (p & 31) x 8
+    mov bl, ah
+    xor bh, bh
+    shl bx, 1
+    mov es, [mpm_pwin + bx]
+    mov ah, al
+    shr ah, 1
+    mov al, MPM_POFF            ; AX = (p & 31) x 1024 + MPM_POFF
     ret
-.flat:
-    mov cl, 10
-    shl ax, cl                  ; pattern * 1024 bytes
-    add ax, MPM_PSEG * 16 + MPM_POFF
-    mov [mpm_pbase], ax
-    mov es, [mpm_blobseg]
+
+; mpm_sub - DX = the blob (or any segment of ours), AX = a PARAGRAPH offset
+; -> DX = an OSAPI_SEG SEG_SUB window there, 64KB or to the claim's end: DX +
+; AX on a real-mode kernel. CF = 1 no LDT entry free (AX = the reason). Every
+; other register kept
+mpm_sub:
+    push bx
+    push cx
+    mov bl, SEG_SUB
+    xor cx, cx
+    call OSAPI_SEG
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1510,6 +1543,7 @@ mpm_readrow:
 .pok:                            ; too - a byte compare against P = 256 reads
                                  ; as 0 and forces EVERY pattern to 0
     call mpm_patseg
+    mov [mpm_pbase], ax          ; the worker's own (mpm_patseg's note)
     mov word [mpm_crec], mpm_chans
     mov byte [mpm_curc], 0
 .ch:
@@ -2366,7 +2400,8 @@ mpme_song:   db 'Bad song data', 0
     MPPW mpm_outp                    ; mpm_gen output cursor
     MPPW mpm_chunk                   ; current mix chunk, samples
     MPPW mpm_crec                    ; current channel record
-    MPPW mpm_pbase                   ; mpm_patseg: the pattern's first cell
+    MPPW mpm_pbase                   ; mpm_readrow's pattern's first cell
+    MPPBUF mpm_pwin, 16              ; the eight pattern windows (mpm_load)
     MPPW mpm_climit                  ; mixer scratch: position limit
     MPPW mpm_cloopl                  ;   loop length
     MPPW mpm_cstepi                  ;   step int

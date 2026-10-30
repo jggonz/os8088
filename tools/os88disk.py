@@ -283,9 +283,9 @@ def validate_o88(path: str) -> bytes:
     # tail is the package's own (SPEC.md 20.12) - so image <= file is the
     # whole rule, the 16-bit ceiling belongs to the IMAGE and not to the file,
     # and the mount types such a file up to PKG_FILE_HI (SPEC.md 19.1).
-    if parts and len(data) >= (1 << 20):
-        fail(f"{path}: {len(data)} bytes; PKG_FILE_HI caps a package file at "
-             "1MB (SPEC.md 19.1)")
+    if parts and len(data) >= (512 << 16):
+        fail(f"{path}: {len(data)} bytes; PKG_FILE_HI caps a package file "
+             "under 32MB (SPEC.md 19.1)")
     hname = data[16:32].split(b"\0", 1)[0]
     if not hname:
         fail(f"{path}: empty name field in header")

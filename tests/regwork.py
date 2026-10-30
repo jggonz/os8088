@@ -87,6 +87,10 @@ def main():
         # done with a gesture is the wait (SOAK-SPEED technique 4)
         done = lambda m, **k: os88marty.ui_done(m, lock=False)  # noqa: E731
         mo = os88mouse.Mouse(marty=m)
+        mega = getattr(m, "bochs", False)
+
+        def key(v):                     # (a selector's paragraph on kern_mega)
+            return sheetmove.seg_key(m, v)
 
         dispcp.open_drive(m, mo, S, done, "B")
         dslot = dispcp.win_list(m, S)[-1]
@@ -143,9 +147,12 @@ def main():
         p2_seg, p2 = open_named("PAINT.O88", 6, (8, 98))
         raise_disk()
         pm_seg, pm = open_named("PINME.O88", 5, (8, 136))
+        # THE PARAGRAPHS, NOW: on kern_mega the words are selectors whose
+        # base a move rebases, so key() read later answers where they ARE
+        pm_p = key(pm_seg)
         print("paint1 %04x   calc %04x   paint2 %04x   pinme %04x"
               % (p1_seg, ca_seg, p2_seg, pm_seg))
-        if not (p1_seg > ca_seg > p2_seg > pm_seg):
+        if not (key(p1_seg) > key(ca_seg) > key(p2_seg) > pm_p):
             print("FAIL: the regions are not stacked in open order")
             return 1
 
@@ -169,7 +176,7 @@ def main():
                     return i
             return None
 
-        reg = [c for c in claims(m, S) if c[0] == pm_seg]
+        reg = [c for c in claims(m, S) if c[0] == pm_p]
         rloc = reg[0][3] if reg else 0
         slot = slot_of(pm_seg)
         rst = (u16(m.read(S("inst_restart") + slot * 2, 2))
@@ -208,14 +215,14 @@ def main():
             m.key("KeyA")
             try:                            # the claim, and the move it forces
                 os88marty.until(
-                    m, lambda _: pkg_seg(m, S, "PinMe")[0] not in (pm_seg,
-                                                                   None),
+                    m, lambda _: key(pkg_seg(m, S, "PinMe")[0])
+                    not in (pm_p, None),
                     "PinMe's region to move",
                     guest=6 * os88marty.GUEST_PACE)
             except os88marty.MartyError:
                 pass                        # ...press again
             done(m)
-            if pkg_seg(m, S, "PinMe")[0] not in (pm_seg, None):
+            if key(pkg_seg(m, S, "PinMe")[0]) not in (pm_p, None):
                 break
 
         pm_now = pkg_seg(m, S, "PinMe")[0]
@@ -226,22 +233,53 @@ def main():
             print("VERDICT: 1 PROBLEM(S)")
             return 1
         nreloc = u16(bss(m, pm_now, PM_NRELOC))
-        moved = pm_now != pm_seg
-        print("  3 the region MOVED         %s"
-              % ("%04x -> %04x, pm_reloc called %d time(s)"
-                 % (pm_seg, pm_now, nreloc) if moved and nreloc else
-                 "NO (%04x, pm_reloc %d) <-- a declared, restartable, PARKED "
-                 "worker's region was still pinned" % (pm_now, nreloc)))
-        bad += not (moved and nreloc)
+        moved = key(pm_now) != pm_p
+        if not mega:
+            print("  3 the region MOVED         %s"
+                  % ("%04x -> %04x, pm_reloc called %d time(s)"
+                     % (pm_seg, pm_now, nreloc) if moved and nreloc else
+                     "NO (%04x, pm_reloc %d) <-- a declared, restartable, "
+                     "PARKED worker's region was still pinned"
+                     % (pm_now, nreloc)))
+            bad += not (moved and nreloc)
+        else:
+            # KERN_MEGA (KERN-MEGA-MEMORY-PLAN MC7.4): a protected-mode move
+            # REBASES the region's selectors and calls no proc - every
+            # holder, the worker's own frame included, names the selector -
+            # so "pm_reloc was called" becomes "it was NOT", heapfrag check
+            # 11's arm, and the move is read off the paragraph
+            print("  3 the region MOVED         %s"
+                  % ("%04x -> %04x, pm_reloc called %d time(s), as a rebase "
+                     "calls none" % (pm_p, key(pm_now), nreloc)
+                     if moved and not nreloc else
+                     "NO (%04x, pm_reloc %d) <-- %s"
+                     % (key(pm_now), nreloc,
+                        "a proc was CALLED under protected mode" if moved
+                        else "a declared, restartable, PARKED worker's "
+                        "region was still pinned")))
+            bad += not (moved and not nreloc)
 
         nstart1 = u16(bss(m, pm_now, PM_NSTART))
-        print("  4 the worker was RE-ENTERED %s"
-              % ("entered %d -> %d" % (nstart0, nstart1)
-                 if nstart1 > nstart0 else
-                 "NO (%d -> %d) <-- the region moved and the worker was left "
-                 "standing on a stack that names the old segment"
-                 % (nstart0, nstart1)))
-        bad += not nstart1 > nstart0
+        if not mega:
+            print("  4 the worker was RE-ENTERED %s"
+                  % ("entered %d -> %d" % (nstart0, nstart1)
+                     if nstart1 > nstart0 else
+                     "NO (%d -> %d) <-- the region moved and the worker was "
+                     "left standing on a stack that names the old segment"
+                     % (nstart0, nstart1)))
+            bad += not nstart1 > nstart0
+        else:
+            # ...and the worker is NOT re-entered: its parked frame names the
+            # region by SELECTOR, which the rebase has already aimed at the
+            # new bytes, so it resumes where it parked (sch_wk_restart is
+            # mem_region_reloc's, which a protected-mode move does not run)
+            print("  4 the worker RESUMED       %s"
+                  % ("in place, entered %d -> %d" % (nstart0, nstart1)
+                     if nstart1 == nstart0 else
+                     "NO (%d -> %d) <-- it was restarted, which nothing on "
+                     "kern_mega's protected-mode move does"
+                     % (nstart0, nstart1)))
+            bad += nstart1 != nstart0
 
         t0 = u16(bss(m, pm_now, PM_NTICK))
         try:                        # its next loop, or what an idle box's

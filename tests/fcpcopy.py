@@ -124,7 +124,8 @@ def edit_cell(m):
         p, sg = u16(t, 0), u16(t, MB_SEG)
         if not p:
             continue
-        if m.read((sg or KERNEL_SEG) * 16 + p, 16).split(b"\0")[0] == b"Edit":
+        if m.read(dispcp._lin(m, sg or KERNEL_SEG, p),
+                  16).split(b"\0")[0] == b"Edit":
             return (u16(t, MB_XL) + u16(t, MB_XR)) // 2
     sys.exit("fcpcopy: no 'Edit' cell in menu_bar - the Locator's menus have "
              "moved and this harness is aiming at nothing")

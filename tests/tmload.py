@@ -106,8 +106,8 @@ def sym(name):
         mp = tempfile.mktemp(suffix=".map")
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
         r = subprocess.run(["nasm", "-f", "bin", "-w+error",
-                            "-I", os.path.join(ROOT, "apps") + os.sep,
-                            "-o", tmp + ".bin", tmp],
+                            "-I", os.path.join(ROOT, "apps") + os.sep]
+                           + MEGA_DEF + ["-o", tmp + ".bin", tmp],
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit("tmload: could not map taskmgr:\n%s" % r.stderr[:400])
@@ -124,8 +124,16 @@ def sym(name):
     return _MAP[name]
 
 
+# kern_mega (OS88_MEGA, docs/BOCHS.md): mega.img's SYSTEM/ carries the Task
+# Manager's ARM (SPEC.md 28.4.15), assembled -DPKG_MEGA - a different layout
+MEGA = bool(os.environ.get("OS88_MEGA"))
+MEGA_DEF = ["-DPKG_MEGA"] if MEGA else []
+TM_O88 = os.path.join(ROOT, "build", *(("megak", "apps") if MEGA else ()),
+                      "taskmgr.o88")
+
+
 def img_size():
-    with open(os.path.join(ROOT, "build", "taskmgr.o88"), "rb") as f:
+    with open(TM_O88, "rb") as f:
         return struct.unpack_from("<H", f.read(16), 8)[0]
 
 
@@ -139,7 +147,7 @@ def pkg_slot(m, name):
         seg = int.from_bytes(t[b + geom.W_SEG:b + geom.W_SEG + 2], "little")
         if not seg:
             continue
-        hdr = m.read(seg << 4, 32)
+        hdr = m.read(m.lin(seg) if MEGA else seg << 4, 32)
         if hdr[:3] == b"O8" + bytes([PKG_FMT]) and hdr[16:32].split(b"\0")[0] == name:
             return i, seg
     return None
@@ -181,7 +189,7 @@ def main(argv):
                      "everything below reads its bss"):
             report()
         slot, seg = got
-        bss = (seg << 4) + img_size()
+        bss = (m.lin(seg) if MEGA else seg << 4) + img_size()
 
         def word(name):
             return int.from_bytes(

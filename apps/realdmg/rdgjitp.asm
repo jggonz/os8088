@@ -44,6 +44,17 @@ pt_more:                                ; 40: rt_more, AX and DX as its
     call rt_more
     retf
 %endif
+%ifdef RDG_HYB                          ; (a PRECOMPILED package's, -DRDG_HYB:
+    times 50-($-$$) nop                 ;   its misses translated, 20.16)
+pt_hyon:                                ; 50: rt_hyon, AX and DX as its
+    mov [cs:rdg_viewseg], ds
+    call rt_hyon
+    retf
+    times 60-($-$$) nop
+pt_xlate:                               ; 60: rt_translate, SI the PC
+    call rt_translate
+    retf
+%endif
 
 rdg_viewseg  dw 0                        ; the view, for RDG_TOHOST and rdg_ret
 

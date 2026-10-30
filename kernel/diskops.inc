@@ -274,7 +274,7 @@ clo_disp_x:
     cmp dl, CLV_FREE            ; clo_start refuses a busy [clo_seg] as it
     ja .ladder                  ; always has
     push es
-    mov es, [clo_seg]
+    KSEG es, [clo_seg], MEGA_SEL_K4
     cmp byte [es:CL_STEP], CLS_JOIN
     pop es
     jne .ladder
@@ -354,7 +354,7 @@ clo_start:
     jc .fail                    ; live and ES = it
     pop ax
     push ax
-    mov es, [clo_seg]
+    KSEG es, [clo_seg], MEGA_SEL_K4
     mov [es:CL_MOK], ah         ; the caller's answer to "did it mount?", in
                                 ; the block rather than in a register: clo_geom
                                 ; is four pushes deep by the time it wants it
@@ -493,8 +493,12 @@ clo_plan:
     stc
     jmp short .out
 .got:
+%ifdef KERN_MEGA
+    call clo_kpara              ; kern_mega: the claim's REAL paragraph
+    jc .nomem                   ; (none above 1MB: given back, refused)
+%endif
     mov [clo_seg], dx
-    mov es, dx
+    KSEG es, dx, MEGA_SEL_K4
     call clo_zerohdr            ; BLANK FIRST. CL_KB is inside the block this
     mov [es:CL_KB], di          ; zeroes, so writing it first writes it and
     clc                         ; then throws it away - and a claim of 0 KB is
@@ -833,6 +837,41 @@ clo_read1:
     pop ax
     ret
 
+%ifdef KERN_MEGA
+; -----------------------------------------------------------------------------
+; clo_kpara - (kern_mega) DX = a claim just made, its selector in protected
+; mode -> DX = its REAL paragraph, which this image's arithmetic and KSEG take
+; (KERN-MEGA-MEMORY-PLAN MC7.6): CF = 0. CF = 1 when it has none - a base
+; above 1MB - and then it is given back. BX = its tag, kept; every other
+; register kept. The image's claims are PINNED (none declares a proc), so the
+; paragraph stays true until clo_kfree
+; clo_kfree - (kern_mega) mmf_mem_free for a claim held as its REAL paragraph
+; DX, BX = the tag: the selector it was given goes back. mmf_mem_free's out
+; -----------------------------------------------------------------------------
+clo_kpara:
+    push ax
+    mov ax, dx
+    call KERNEL_SEG:mega_s2segf
+    cmp ax, 0xFFFF
+    je .hi
+    xchg dx, ax
+    pop ax
+    clc
+    ret
+.hi:
+    call COLD_SEG:mmf_mem_free
+    pop ax
+    stc
+    ret
+clo_kfree:
+    cmp byte [ss:mega_pm], 0
+    je .f
+    call MEGA_SEL_CODE:mega_p2df
+.f:
+    call COLD_SEG:mmf_mem_free
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; clo_size - how much of the disk does one trip move? (SPEC.md 18.99.4)
 ; in:  ES = the claim, CL_TOT known, CL_SRC/CL_TGT set to the same drive
@@ -857,6 +896,7 @@ clo_size:
     push di
 
     mov ax, es                  ; the buffer: the claim's base plus the
+    KPARA                       ; (kern_mega: ES's real paragraph, K4's base)
     add ax, CL_HDRPARA          ; 1KB header, rounded UP to 32 paragraphs
     add ax, 31
     and ax, 0xFFE0
@@ -866,6 +906,11 @@ clo_size:
     mov ax, 64                  ; the claim's end, in paragraphs: KB * 64,
     mul word [es:CL_KB]         ; and KB <= 640 so this cannot carry out
     mov cx, es                  ; ...through CX, an 8086 having no `add r16,
+%ifdef KERN_MEGA
+    xchg ax, cx                 ; (kern_mega: the claim's real paragraph)
+    KPARA
+    xchg ax, cx
+%endif
     add ax, cx                  ; sreg` (SPEC.md 1)
     sub ax, bx                  ; ...less the buffer's base
     jbe .nomem
@@ -1086,7 +1131,7 @@ clo_fput:
 %ifdef KERN_BIG
     mov di, [es:CL_FTOK]
 %endif
-    mov es, [es:CL_BUFSG]
+    KSEG es, [es:CL_BUFSG], MEGA_SEL_K5
     or ah, ah
     jnz .append
     call COLD_SEG:dwf_dskw_write
@@ -1165,7 +1210,7 @@ clo_fget:
     mov si, clo_fnbuf
     push es
     mov bp, es                  ; BP = the claim, whose header holds the
-    mov es, di                  ; cursor: clo_zerohdr blanks it per job
+    KSEG es, di, MEGA_SEL_K5    ; cursor: clo_zerohdr blanks it per job
     xor bx, bx                  ; ES:BX = the buffer
     CLO_RSEQ bp, CL_FCUR        ; DX:AX = the bytes delivered
     pop es
@@ -1306,7 +1351,7 @@ clo_key:
     push si
     push di
     push es
-    mov es, [clo_seg]
+    KSEG es, [clo_seg], MEGA_SEL_K4
     cmp al, 27
     je .stop                    ; Esc, at every step and answered first
     mov dl, [es:CL_STEP]        ; the step, COUNTED DOWN: DL is dead past the
@@ -1511,7 +1556,7 @@ clo_saved:
     push di
     push es
     call clo_fnget              ; the box's answer, where the file API reads it
-    mov es, [clo_seg]
+    KSEG es, [clo_seg], MEGA_SEL_K4
     mov byte [es:CL_END], 1     ; the TARGET is a file. CL_FOFF is still
                                 ; clo_plan's zero: only clo_imgrun moves it,
                                 ; and every way out of that ends the claim
@@ -1584,7 +1629,7 @@ clo_wimg:
     jc .fail                    ; claim and [clo_seg] live
     pop ax
     push ax
-    mov es, [clo_seg]
+    KSEG es, [clo_seg], MEGA_SEL_K4
     mov ah, al
     mov [es:CL_SRC], ax         ; ...both, so clo_free and the verdict have a
     mov byte [es:CL_END], 2     ; volume to name either way
@@ -2035,7 +2080,7 @@ clo_fin:
     mov bx, [es:CL_BUFSG]
     push es
     pop ds                      ; DS = the claim, ES = the buffer, for one
-    mov es, bx                  ; rep movsw and nothing else
+    KSEG es, bx, MEGA_SEL_K5    ; rep movsw and nothing else
     mov si, CL_BOOT
     xor di, di
     mov cx, 256
@@ -2124,7 +2169,7 @@ clo_move:
 
     add di, dx                  ; the caller's skip, in paragraphs
     push es
-    mov es, di
+    KSEG es, di, MEGA_SEL_K5
     mov ax, si
     call clo_span
     pop es
@@ -2155,7 +2200,7 @@ clo_move:
 .sdisk:
     push cx
     push es
-    mov es, di
+    KSEG es, di, MEGA_SEL_K5
     mov cx, dx
     mov ax, bp
     call clo_span
@@ -2287,8 +2332,16 @@ clo_span:
     mov cl, 5                   ; sector is 512 bytes, so 32 of them. CL is
     shl ax, cl                  ; free: .win reloads CX from DI before the
                                 ; next transfer reads it
+%ifdef KERN_MEGA
+    push dx                     ; kern_mega: the buffer's K5 slides onto
+    xchg dx, ax                 ; itself, DX paragraphs (DL is the
+    mov ax, es                  ; direction, kept)
+    call KERNEL_SEG:mega_slidef
+    pop dx
+%else
     mov bx, es                  ; ...and an 8086 has no `add reg, sreg`. BX is
     add ax, bx                  ; reloaded at .go, so spending it here is free
+%endif
     mov es, ax
     jmp short .win
 .ok:
@@ -2339,7 +2392,7 @@ clo_xms:
     pop dx
     pop ax
 
-    mov es, di                  ; ES:SI = the CONVENTIONAL end: the staging
+    KSEG es, di, MEGA_SEL_K5    ; ES:SI = the CONVENTIONAL end: the staging
     xor si, si                  ; buffer, at offset 0
     xor di, di                  ; DI = the direction, which is what the
     or bl, bl                   ; register means from here on
@@ -2399,7 +2452,7 @@ clo_keepboot:
     push es
     mov ax, es
     mov di, CL_BOOT
-    mov ds, [es:CL_BUFSG]       ; DS is the BUFFER for this one copy...
+    KSEG ds, [es:CL_BUFSG], MEGA_SEL_K5 ; DS is the BUFFER for this one copy...
     mov es, ax                  ; ...and ES the claim; put DS back below
     xor si, si
     mov cx, 256
@@ -2456,8 +2509,14 @@ clo_issrc:
     mov cx, 256
     cld
     repe cmpsw
-    KDATAR_M ax
-    mov ds, ax                  ; DS back before the flags are read: `mov`
+%ifdef KERN_MEGA
+    pushf                       ; kern_mega: KDATAR_M asks [mega_pm] with a
+%endif                          ; `cmp`, and ZF = 0 then ran every same-drive
+    KDATAR_M ax                 ; clone straight past this check (KERN-MEGA-
+    mov ds, ax                  ; PLAN 14.83) - compress.inc's idiom
+%ifdef KERN_MEGA
+    popf
+%endif                          ; DS back before the flags are read: `mov`
     jne .no                     ; leaves them alone, and this is the one
     clc                         ; every byte the same: it IS the source disk
     jmp short .out
@@ -2514,7 +2573,7 @@ clo_line:
     mov bx, [clo_seg]
     or bx, bx
     jz .none                    ; nothing is running, so there is no prompt to
-    mov es, bx                  ; compose. It cannot happen - the prompt is
+    KSEG es, bx, MEGA_SEL_K4    ; compose. It cannot happen - the prompt is
     mov bl, [es:CL_STEP]        ; armed after the claim and dropped with it -
     cmp al, 2                   ; and this is what makes that a fact rather
     je .verdict                 ; than a segment register pointed at 0000
@@ -2846,7 +2905,7 @@ clo_free:
     mov ax, [clo_seg]
     or ax, ax
     jz .out
-    mov es, ax
+    KSEG es, ax, MEGA_SEL_K4
 %ifdef CLO_XMS
     cmp word [es:CL_XKB], 0
     je .noxms
@@ -2859,7 +2918,11 @@ clo_free:
     mov dx, [clo_seg]
     mov word [clo_seg], 0       ; cleared FIRST: the free below can compact
     mov bx, MEM_K_CLONE         ; (SPEC.md 66.4), and a word still naming a
+%ifdef KERN_MEGA
+    call clo_kfree              ; claim that is going away is the one state
+%else
     call COLD_SEG:mmf_mem_free  ; claim that is going away is the one state
+%endif
 .out:                           ; nothing downstream could survive
     pop es
     pop di
@@ -3085,7 +3148,11 @@ clo_mount:
     push word [dskw_raw+DE_ATTR]    ; the attribute and byte 12, read while
     mov ax, IMG_KB              ; the stat's entry is the one staged
     mov bx, MEM_K_IMG
+%ifdef KERN_MEGA
+    CLO_KCALL mem_claim_x       ; ...on kern_mega ABOVE 1MB in protected mode
+%else                           ; (mem_hitag, KERN-MEGA-PLAN 14.121), every
     CLO_KCALL mem_claim_hi_x    ; DX = the claim, top-down, pinned until .marked
+%endif                          ; use being a segment load
     pop di                      ; DI = the attribute word
     pop bx
     pop si                      ; SI = the sectors, from here to the row

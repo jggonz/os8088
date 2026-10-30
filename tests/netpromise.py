@@ -83,7 +83,8 @@ def cache(m, i):
 
 
 def bss(m, seg, app, name):
-    return (seg << 4) + dispapps.img_size(app) + dispapps.bss_off(app, name)
+    lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)   # kern_mega:
+    return lin(seg, dispapps.img_size(app) + dispapps.bss_off(app, name))
 
 
 def raise_win(m, mo, x, y, i, what):

@@ -574,6 +574,28 @@ BDLG_GX1, BDLG_GX2, BDLG_W, BDLG_ROWTOP, BDLG_ROWH = 10, 104, 190, 26, 18
 DISP_FORMULAS, DISP_GRIDLINES = 0, 1
 
 
+def mega_y(xy, dy):
+    """A pinned CGA point moved to kern_mega's machine, Bochs's VGA (tests/
+    megaport.txt): every window here opens at the same x and a different y on
+    a 480-row screen - measured there, SHEET at (55,40) against the CGA's
+    (55,20), the Disk window at (103,80) against (103,20) and the Save As
+    chooser at (119,96) against (119,20) - so each family of constants moves
+    by its own window's dy and by nothing else"""
+    return (xy[0], xy[1] + dy) if MEGA else xy
+
+
+MEGA = bool(os.environ.get("OS88_MEGA"))
+SHEET_DY, DISK_DY, CHOOSER_DY = 20, 60, 76
+FILE_MENU, SAVE_AS = mega_y(FILE_MENU, SHEET_DY), mega_y(SAVE_AS, SHEET_DY)
+FORMAT_MENU, CELL_PROT = (mega_y(FORMAT_MENU, SHEET_DY),
+                          mega_y(CELL_PROT, SHEET_DY))
+SHEETS_MENU, SHEET2 = (mega_y(SHEETS_MENU, SHEET_DY),
+                       mega_y(SHEET2, SHEET_DY))
+OPTIONS_MENU = mega_y(OPTIONS_MENU, SHEET_DY)
+SAVE_BUTTON = mega_y(SAVE_BUTTON, CHOOSER_DY)
+APPS_FOLDER = mega_y(APPS_FOLDER, DISK_DY)
+
+
 def display_toggle(m, mo, box, title=OPTIONS_MENU, row=0):
     """Options > Display..., flip ONE box, OK. `title` is the Options menu's
     title on this machine and `row` Display's row in it (SH_OI_DISPLAY).
@@ -581,7 +603,8 @@ def display_toggle(m, mo, box, title=OPTIONS_MENU, row=0):
     Returns True when a dialog opened and was answered."""
     S = lambda n: m.sym(n)
     before = dispcp.win_list(m, S, check=False)
-    mo.menu(title[0], title[1], title[0] + 17, 57 + 12 * row + 2)
+    mo.menu(title[0], title[1], title[0] + 17,
+            mega_y((0, 57 + 12 * row + 2), SHEET_DY)[1])
     M.settle(m)
     wins = dispcp.win_list(m, S, check=False)
     if len(wins) <= len(before) and wins[-1:] == before[-1:]:

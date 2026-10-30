@@ -200,7 +200,8 @@ def main():
     fails = []
     plain = host_checks(fails)
     P = pkg_syms("apps/tracker/tracker.asm")
-    apps = os88build.at(IMG)
+    apps = mega_disk(os88build.at(PACKED)) if os.environ.get("OS88_MEGA") \
+        else os88build.at(IMG)
     if a.nohint:
         apps = strike(apps)
     try:
@@ -208,6 +209,29 @@ def main():
     finally:
         if a.nohint:
             os.remove(apps)
+
+
+def mega_disk(packed):
+    """Under OS88_MEGA, IMG's two files with kern_mega's Tracker ARM
+    (build/megak/apps/tracker.o88) in place of the shipped one - trackmove's
+    disk() for this row. The shipped build refuses its speaker tier in
+    protected mode (KERN-MEGA-PLAN 14.66), and pkg_syms answers the ARM's
+    offsets there, so with the shipped Tracker on the disk every read of its
+    bss was at the wrong offset: [trk_modseg] read 50EB and the module claim
+    as all zeros while the window showed the module loaded. A private copy,
+    removed at exit"""
+    import atexit
+    import shutil
+    import subprocess
+    import tempfile
+    d = tempfile.mkdtemp(prefix="lzmega-")
+    atexit.register(shutil.rmtree, d, True)
+    out = os.path.join(d, os.path.basename(IMG))
+    subprocess.run([sys.executable, "tools/os88disk.py", "-o", out, "--size",
+                    "360", os88build.at("build/megak/apps/tracker.o88"),
+                    packed], check=True, stdout=subprocess.DEVNULL,
+                   cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return out
 
 
 def strike(src):
@@ -241,6 +265,10 @@ def strike(src):
 def run(a, apps, plain, P, fails):
     with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine=a.machine, boot=False) as m:
+        # a segment out of the guest, linear: on kern_mega (OS88_MEGA) the
+        # module and every sample are SELECTORS (docs/BOCHS.md), and the
+        # module is one block whose selectors are 64KB windows over it
+        lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
         m.run()
         os88marty.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
         os88marty.no_saver(m)   # SPEC.md 79: it DRAWS, so the settle
@@ -409,16 +437,17 @@ def run(a, apps, plain, P, fails):
                 for i in range(31):
                     sg, of, pl = (int.from_bytes(tab[i * 12 + k:i * 12 + k + 2],
                                                  "little") for k in (0, 2, 4))
-                    at = (sg << 4) + of - (modseg << 4)
+                    at = lin(sg, of) - lin(modseg, 0)
                     want[at:at + pl] = os88spkfx.tracker_natural(bytes(want[at:at + pl]))
                 want = bytes(want)
                 say("  samples    high-passed in place, a bass or a drum "
                     "squared up (no card, SPEC.md 45.25.4): compared "
                     "through tools/os88spkfx.py's tracker_natural")
         got = b""
+        base = lin(modseg, 0)               # ONE block, however it is named:
         while len(got) < len(plain):        # 116KB, in segment-sized reads
             k = min(0x8000, len(plain) - len(got))
-            got += m.readseg(modseg + (len(got) >> 4), 0, k)
+            got += m.read(base + len(got), k)
         if got == want:
             say("  bytes      ok  (all %d, byte for byte)" % len(plain))
         else:

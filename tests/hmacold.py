@@ -106,6 +106,18 @@ class QMouse(os88mouse.Mouse):
                               secs=5, what="button %s" % want):
             raise os88ui.UIError("the guest never saw the button %s"
                                  % ("press" if down else "release"))
+        if down:
+            # ...AND HELD FOR A WHOLE GUEST TICK before anything may release
+            # it, as a finger does. A loop that POLLS the level - the volume
+            # popup (drivers/sound/volume.inc .poll), menu_track, ui_drag -
+            # sees a press only if one of its polls lands inside it, and a
+            # poll is a task_yield apart. The release used to follow the
+            # moment mouse_btn read 1, a few HOST ms: a guest whose vCPU was
+            # descheduled after the press ISR took the release packet before
+            # its next poll, and mixersb16's outside click never dismissed
+            # the popup - on a loaded box only. pace() runs on the guest's
+            # own tick count (two increments: one whole tick in between)
+            os88qemu.pace(self.q, 1 / os88qemu.TICK_HZ)
 
 
 class QUI(os88ui.UI):

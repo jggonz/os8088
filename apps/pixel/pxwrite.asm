@@ -345,24 +345,23 @@ pw_puts:                            ; CS:SI, CX bytes. Preserves all
 ; copy): DX:SI = its first pixel in the master. Preserves all else
 pw_row:
     push ax
-    push cx
     add ax, [cs:pw_y0]
     mul word [px_cur + PXR_MW]
     add ax, [cs:pw_x0]
     adc dx, 0
-    mov si, ax
-    and si, 127                     ; on kern_mega's 8-paragraph grid
-    mov cl, 4                       ; (px_mrow's, KERN-MEGA-PLAN 14.40)
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8
-    add ax, [px_cur + PXR_MSEG]     ; re-read: the master may have moved
-    mov dx, ax
-    pop cx
+    mov si, ax                      ; through the master's 32KB windows
+    and si, 0x7FFF                  ; (pxrec.inc, MC7: px_mrow's), current
+    shl ax, 1                       ; for the job (px_wjob) and re-based by
+    rcl dx, 1                       ; a real-mode move (px_mreloc)
+    shl dx, 1
+    xchg dx, si
+    mov si, [px_mwc + MWT_WIN + si]
+    xchg dx, si
     pop ax
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; =============================================================================
 ; BMP - 8-bit (pixelsim's write_bmp8) and 24-bit (write_bmp24)

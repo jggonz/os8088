@@ -109,6 +109,14 @@ with os88ui.boot(SYS, apps=APPS, machine=MACHINE, quick=True) as ui:
     ui.menu_pick("File", "Open")
     w = ui.chooser()
     ui.still()
+    if getattr(m, "bochs", False):
+        # kern_mega under Bochs boots the 1.44MB apps disk, whose MEDIA - the
+        # chooser's default folder (SPEC.md 38.10) - is longer than the list,
+        # so the blank row the last leg clicks is not there: up to B:\, four
+        # folders, first. Every assertion below is the same
+        ui.open("..", win=w)
+        w = ui.chooser()
+        ui.still()
     rows = ui.listing(w)
     check("the Open form is up", w.title == "Open", "(%r)" % w.title)
     check("nothing is selected", fs(ui, geom.FS_SEL) == 0xFFFF,

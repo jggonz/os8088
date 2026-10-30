@@ -197,7 +197,7 @@ def flags_for(op, cb, lines):
     return 1
 
 
-NEXTRA = 56             # record slots after the 512 for rdggen.EXTRA
+NEXTRA = 168            # record slots after the 512 for rdggen.EXTRA
 HEAD = 2 * (512 + NEXTRA) + 16   # then the core's holes', the free ranges',
                                  #   tail slots' and JDISPATCH sites' offset
                                  #   and count words;
@@ -213,7 +213,7 @@ HEAD = 2 * (512 + NEXTRA) + 16   # then the core's holes', the free ranges',
 # it guards itself (rdggen.self_guard), and a store that does takes no guard.
 TMAX = 84
 EXPORT = ("tr_enter", "tr_link", "tr_lsite", "tr_stale", "tr_int", "idle_yes", "tr_evfar", "cnt_ff", "add_ff", "cpy_ff", "cpc_ff", "fill_ff", "w16_ff", "stat_ff", "RDG_DISPATCH",
-          "tr_hm0", "tr_hm1", "tr_hm2")
+          "tr_hm0", "tr_hm1", "tr_hm2", "tr_back", "tr_lpatch")
 
 
 def free_ranges(tails):
@@ -360,9 +360,10 @@ def main():
             f.write("RDGC_%s equ 0x%04X\n" % (n.upper(), labels[n]))
         f.write("RDGT_HFREE equ %d\nRDGT_HTAIL equ %d\nRDGT_HJD equ %d\n"
                 "RDGT_XBANK equ %d\nRDGT_XNOF equ %d\nRDGT_FLG equ %d\n"
-                "RDGT_CFREE equ %d\n"
+                "RDGT_CFREE equ %d\nRDGT_XCB equ %d\nRDGT_XLCD equ %d\n"
                 % (HEAD - 12, HEAD - 8, HEAD - 4, 512 + rdggen.RDG_XBANK,
-                   512 + rdggen.RDG_XNOF, HEAD, HEAD - 16))
+                   512 + rdggen.RDG_XNOF, HEAD, HEAD - 16, 512 + rdggen.RDG_XCB,
+                   512 + rdggen.RDG_XLCD))
         # the JDISPATCH sites again, for the package itself: an 8088 never
         # loads the recompiler's part (REALDMG-SPEC 16.9) and still makes
         # them plain DISPATCH (rw_jdoff)

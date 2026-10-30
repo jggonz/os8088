@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "152833002b519c8ad7ae9acd7800c6b18c947cd16b00ef27ca6110932454465c",
+  "fingerprint": "314fbbea973b777acbec4b427aa9d984a9de23ac420a0d6948320c7fe0c280ee",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "efc429ec1fc929ce523b5a82a3008e52f8c9e303fa2d04d7862b46895b62a03c",
+  "fingerprint": "e5b83e4b3530f1221818d57fde8e92e3e77ed8bcc8afb116123f27ffe62bf057",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1064,6 +1064,195 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "OS88_DRV_FOOT (drivers/os88drv.inc): a zero-byte declaration that a driver cuts its HMA block, read by tools/os88rom.py off its map - additive (SPEC.md 51.1.3.1)",
+   "to": 11
+  },
+  {
+   "fingerprint": "24c51fd83d8f846cfd12e914af31f2becc4ba8ebdc707fb8b21d46b9afe97e93",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_XMEM_WALK: XMW_CLS carries a kernel cache's purge level on kern_mega (SPEC.md 50.6.8, KERN-MEGA-MEMORY-PLAN MC1) - a contract clarified, additive",
+   "to": 10
+  },
+  {
+   "fingerprint": "4ac67b2a27d9686ffc6507d63dfa1c11011089dcd2749208daaff405570fe63b",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_XMEM_WALK: XMW_CLS carries a kernel cache's purge level on kern_mega (SPEC.md 50.6.8, KERN-MEGA-MEMORY-PLAN MC1) - a contract clarified, additive",
+   "to": 11
+  },
+  {
+   "fingerprint": "e175ad5c52383dc3a59a5a02a196091407724184dff035bd09bc88bb13bebde6",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "XMW_FIXED's records describe kern_mega's fixed areas at the top of RAM (SPEC.md 50.6.9): a comment, no cell moved",
+   "to": 10
+  },
+  {
+   "fingerprint": "10823f928b835f4ebf074d95a5f3e741a2867361d0043844475f77c66cc0ccd7",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "XMW_FIXED's records describe kern_mega's fixed areas at the top of RAM (SPEC.md 50.6.9): a comment, no cell moved",
+   "to": 11
+  },
+  {
+   "fingerprint": "ab3a940d5a47343ad21e67bda4873930ccadf6cffcc101206c4c6194fd16693c",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_XMEM_ALLOC answers a TOKEN; on kern_mega in protected mode it is not the block's base (SPEC.md 50.6.10): a comment, no cell moved",
+   "to": 10
+  },
+  {
+   "fingerprint": "7cbbe903a0e3779d72c8232f2753cc10b07490b5e202208c626d88b8b8ac6cd6",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_XMEM_ALLOC answers a TOKEN; on kern_mega in protected mode it is not the block's base (SPEC.md 50.6.10): a comment, no cell moved",
+   "to": 11
+  },
+  {
+   "fingerprint": "b7e236b01c23c3a477cd8a0ffcc4f69aa9be41db14578917a93fd9eb6ae810a6",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG (0x04E3): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "a58c69b62a367c2a1b7fe61fede83599ff230eabdc0910c60a8b822b47518b93",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG (0x04E3): a cell at the table's end, the doors KERN-MEGA-MEMORY-PLAN MC7 needs; nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "0a2d23f2fe985227391b995c3df42450d6cccd0f6222e4ae099c14da065f88a2",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG: three verbs added - SEG_SUBC (a code/data pair inside a block), SEG_BWIN and SEG_AIM (a bound window a rate hook re-aims); additive, KERN-MEGA-MEMORY-PLAN 8.1 and 9.1",
+   "to": 10
+  },
+  {
+   "fingerprint": "1ee2ce06037416b1b084841999235bde8949715989f685b105ebd9cb6478060c",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG: three verbs added - SEG_SUBC (a code/data pair inside a block), SEG_BWIN and SEG_AIM (a bound window a rate hook re-aims); additive, KERN-MEGA-MEMORY-PLAN 8.1 and 9.1",
+   "to": 11
+  },
+  {
+   "fingerprint": "05665d120013aa3e2ea49bb205f12a22847509b2e17f8573a1e224eefed1c727",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG: SEG_AIM refuses on a real-mode kernel (the caller's own sum); additive",
+   "to": 10
+  },
+  {
+   "fingerprint": "4ef8b8ac9193497a57210cae2ab644ebdf6c154ea624f611a1efcefbc08e41f9",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG: SEG_AIM refuses on a real-mode kernel (the caller's own sum); additive",
+   "to": 11
+  },
+  {
+   "fingerprint": "13e3789b7fd61388c5c2c621a9e780d49e90f69b9d5207eb076a52d3851c0ee2",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_HUGE: CX = 8 for a conventional claim on kern_mega in protected mode too, and BX = 4000h asks for a window every 16KB (KERN-MEGA-MEMORY-PLAN MC7.4); a program that walks by CX is unchanged",
+   "to": 10
+  },
+  {
+   "fingerprint": "5d397d8206b080d0b00536f243004bad0aa3a13a7ff48375612583d968847be5",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_HUGE: CX = 8 for a conventional claim on kern_mega in protected mode too, and BX = 4000h asks for a window every 16KB (KERN-MEGA-MEMORY-PLAN MC7.4); a program that walks by CX is unchanged",
+   "to": 11
+  },
+  {
+   "fingerprint": "8718ddba83de4337e9f9bc24c6058e96b91f29ebfd6bdfe90efd54320aa4ad50",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OS88_CODESEL is a pair's code half (value - 8) under CPU_F_PM: kern_mega's static LDT aliases and its identity map above .cold are gone (KERN-MEGA-MEMORY-PLAN MC7's step 6). A no-op on every real-mode kernel, so nothing built before stops running there. NOT a no-op on kern_mega: a package built before this that converts with OS88_CODESEL or op_cseg (a C package with an overlay, PIXELSTEIN 3D, LOOM, WEAVE) still computes the retired alias (S >> 2) | 4, which names an unrelated LDT entry with no fault, so it must be rebuilt for kern_mega and kern_mega pairs with its own release's apps disk (SPEC.md 20.18, 41.16). No bump, on 14.67's precedent: a bump would refuse those binaries on every real-mode kernel too, where they still run",
+   "to": 10
+  },
+  {
+   "fingerprint": "052e6bf9ad446cccb617fea95e78728da06c2f082b54729174e6c9398b016d8f",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OS88_CODESEL is a pair's code half (value - 8) under CPU_F_PM: kern_mega's static LDT aliases and its identity map above .cold are gone (KERN-MEGA-MEMORY-PLAN MC7's step 6). A no-op on every real-mode kernel, so nothing built before stops running there. NOT a no-op on kern_mega: a package built before this that converts with OS88_CODESEL or op_cseg (a C package with an overlay, PIXELSTEIN 3D, LOOM, WEAVE) still computes the retired alias (S >> 2) | 4, which names an unrelated LDT entry with no fault, so it must be rebuilt for kern_mega and kern_mega pairs with its own release's apps disk (SPEC.md 20.18, 41.16). No bump, on 14.67's precedent: a bump would refuse those binaries on every real-mode kernel too, where they still run",
+   "to": 11
+  },
+  {
+   "fingerprint": "53baf8fc25050b9ad9e3a961e7e0ef1f451a5ab9c633f9a82e317e062ec48861",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG gains SEG_AT (verb 8, refused on every real-mode kernel): the parts standard's op_at, KERN-MEGA-MEMORY-PLAN MC7",
+   "to": 10
+  },
+  {
+   "fingerprint": "0d4a4d0c2d1e38df5c2bde21797e902b817f02cd28bcfb5608d82de518f0507a",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG gains SEG_AT (verb 8, refused on every real-mode kernel): the parts standard's op_at, KERN-MEGA-MEMORY-PLAN MC7",
+   "to": 11
+  },
+  {
+   "fingerprint": "bd21f538dcf051b1724103086becf3741b703c001b0f915de7367ce30450013c",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_HUGE: AX = 0 asks, and kern_mega's bridge (KERN-MEGA-MEMORY-PLAN MC5) - a contract clarified, nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "d6b9da9c1e827ed000766ff5e49c82c5388d46f7cee8e74bdedb42bfb27eb37d",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_HUGE: AX = 0 asks, and kern_mega's bridge (KERN-MEGA-MEMORY-PLAN MC5) - a contract clarified, nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "f1fef01e5451dbbb1e2fd43eefc54984f255d526d1a4441895d0bbbfffff38b5",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_HUGE: AX = 0 asks, and kern_mega's bridge (KERN-MEGA-MEMORY-PLAN MC5) - a contract clarified, nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "f228839dd9a97e5343d2a5481bf82776cb644ef5801039acd744e80a41ecffb2",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_HUGE: AX = 0 asks, and kern_mega's bridge (KERN-MEGA-MEMORY-PLAN MC5) - a contract clarified, nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "49d93bb04e7feb6f4a5b194e4feeebd941a969afcb112d93dd1bbce7b8da8a9d",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_XMEM_WALK gains BX = XMW_LONG (0x4C58): XMW_FIXED's records at XMW_LSIZE = 8 bytes with XMW_TAG, a kernel cache's whole MEM_P_* tag at +6 (KERN-MEGA-PLAN 14.92). Additive: a caller that does not ask gets the 6-byte records it always did, kern_big's XMEM.DRV refuses it (CF=1 AX=2) - no PKG_FMT bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "bdb5b36f5bf156ce2dd33282d547dc29bbc05320e8e9191737131c2fe70c6a51",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_XMEM_WALK gains BX = XMW_LONG (0x4C58): XMW_FIXED's records at XMW_LSIZE = 8 bytes with XMW_TAG, a kernel cache's whole MEM_P_* tag at +6 (KERN-MEGA-PLAN 14.92). Additive: a caller that does not ask gets the 6-byte records it always did, kern_big's XMEM.DRV refuses it (CF=1 AX=2) - no PKG_FMT bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "e5b83e4b3530f1221818d57fde8e92e3e77ed8bcc8afb116123f27ffe62bf057",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_XMEM_CAPS contract clarified, no bump: a kernel cache in the kern_mega pool counts as free in AX and BL (a claim sheds it, KERN-MEGA-PLAN 14.122); every package built before still runs and plans better",
+   "to": 10
+  },
+  {
+   "fingerprint": "7c68e68c0a18f9a67e717c095448697a2898ee997f2e2f841fdf83f34cd1fa8f",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_XMEM_CAPS contract clarified, no bump: a kernel cache in the kern_mega pool counts as free in AX and BL (a claim sheds it, KERN-MEGA-PLAN 14.122); every package built before still runs and plans better",
+   "to": 11
+  },
+  {
+   "fingerprint": "314fbbea973b777acbec4b427aa9d984a9de23ac420a0d6948320c7fe0c280ee",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "os88drv.inc: FSCAP_SEL = 4, a DRVC_FILE driver's DSV_CAPS bit saying its transfer verbs take a selector as it is (SPEC.md 62.9.2.4); a constant added, nothing built before changes meaning",
    "to": 11
   }
  ]

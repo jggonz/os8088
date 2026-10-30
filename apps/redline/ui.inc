@@ -1320,7 +1320,7 @@ ru_facts:
     call ru_fstr
     mov si, ru_model
     push es
-    mov ax, 0xF000
+    call cs_f000                    ; (a window over it, MC7)
     mov es, ax
     xor ax, ax
     mov al, [es:0xFFFE]

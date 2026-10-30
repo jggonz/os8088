@@ -22,6 +22,19 @@ sys.path[:0] = [str(ROOT / 'tools'), str(ROOT / 'tests/unit')]
 import redline_profile as R
 from os88build import at
 
+# kern_mega (tests/megaport.txt's mega-redline*): os88marty.launch() answers
+# Bochs, a 386 AT, so the CPU is no 8088, every package segment is an LDT
+# SELECTOR whose base is the descriptor's, and a timing is the host's rather
+# than a 4.77 MHz machine's (docs/BOCHS.md, "Rows ported from MartyPC")
+MEGA = bool(os.environ.get('OS88_MEGA'))
+OLDNAMES = ('8088-compatible', '8086-compatible', 'NEC V20', 'NEC V30',
+            '80188-compatible', '80186-compatible', '8086/NEC (IRQ unproven)')
+
+
+def lin(m, seg, off=0):
+    """SEG:OFF's linear address - through the descriptor on kern_mega."""
+    return m.lin(seg, off) if hasattr(m, 'lin') else (seg << 4) + off
+
 
 def host():
     from t_image import Vol
@@ -82,9 +95,11 @@ def invoke(p, name, **args):
     old = m.regs()
     regs = ('ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'ss', 'ds', 'es', 'flags')
     sentinel = p.base + p.sym['rl_key']
-    m.cmd(cmd='park', cs=p.base >> 4, ip=p.sym[name])
+    # the package's CS: its paragraph, or on kern_mega the code half of its
+    # selector pair (code = data - 8, KERN-MEGA-PLAN 3.2)
+    m.cmd(cmd='park', cs=(p.seg - 8) if MEGA else p.base >> 4, ip=p.sym[name])
     for r in regs:
-        value = args.get(r, (p.base >> 4) if r == 'ds' else old[r])
+        value = args.get(r, (p.seg if MEGA else p.base >> 4) if r == 'ds' else old[r])
         if r == 'flags':
             # Debugger writes bypass POPF's V20 native-mode protection.
             # Preserve MD when requesting interrupt flags for a probe.
@@ -92,7 +107,7 @@ def invoke(p, name, **args):
         m.setreg(r, value)
     sp = (old['sp'] - 2) & 0xFFFF
     m.setreg('sp', sp)
-    m.write((old['ss'] << 4) + sp, struct.pack('<H', p.sym['rl_key']))
+    m.write(lin(m, old['ss'], sp), struct.pack('<H', p.sym['rl_key']))
     m.bp_exec(sentinel)
     m.run()
     assert m.wait_stop(20) == 'breakpoint', name + ' did not return'
@@ -146,9 +161,13 @@ def native(machine):
                'graphics lab did not open')
         R.wait(ui, lambda: p.word('rl_runs') == 1, 'native run did not finish')
         counts = p.counts()
-        assert all(0 < n < 0xFFFFFFFF for n in counts), counts
+        # a body under one PIT count is timed as 0 and indexed 0, n/a
+        # (ru_indices): never on a 4.77 MHz machine, and the norm for the
+        # CPU rows of a host-speed Bochs
+        assert all((0 <= n if MEGA else 0 < n) and n < 0xFFFFFFFF for n in counts), counts
         assert p.data('bl_full') == b'\0'
-        assert p.word('rl_convkb') == 640
+        conv = struct.unpack('<H', ui.m.read(0x413, 2))[0]    # int 12h's answer
+        assert p.word('rl_convkb') == conv and conv >= 639, (p.word('rl_convkb'), conv)
         assert p.data('ru_view') == b'\0'
         assert list(counts) == [sum(x)//R.RUNS for x in zip(*p.samples())]
         assert p.word('rl_pass') == R.RUNS and p.data('rl_busy') == b'\0'
@@ -177,7 +196,8 @@ def native(machine):
         gfx_suffix = '' if adapter == 'cga' else '-' + adapter
         graphics_reference = json.loads((ROOT/('apps/redline/reference%s.json' % gfx_suffix)).read_text())
         bases = reference['workload_counts'][:6] + graphics_reference['workload_counts'][6:]
-        expected_indices = tuple(min(b*1000//n, 0xFFFFFFFF) for b,n in zip(bases, counts))
+        expected_indices = tuple(min(b*1000//n, 0xFFFFFFFF) if n else 0
+                                 for b,n in zip(bases, counts))
         assert measured_indices == expected_indices, (measured_indices, expected_indices, bases, counts)
         overall = struct.unpack('<I', p.data('ru_overall', 4))[0]
         assert overall == sum(expected_indices[:6])//6
@@ -190,7 +210,11 @@ def native(machine):
         R.wait(ui, lambda:p.word('ru_anim') == 12, 'completion animation did not finish')
         ptr = p.word('rl_cpuname')
         cpu = ui.m.read(p.base + ptr, 32).split(b'\0')[0].decode('ascii')
-        if 'v20' in machine:
+        if MEGA:
+            # a 286+ by construction: rl_detect's 386 arm names the class or
+            # the CPUID vendor, and never one of the pre-286 names
+            assert cpu and cpu not in OLDNAMES, cpu
+        elif 'v20' in machine:
             assert cpu == 'NEC V20', cpu
         else:
             assert cpu == '8088-compatible', cpu
@@ -251,7 +275,7 @@ def native(machine):
         ui.m.advance(frames=60)
         report = F.Flush(marty=ui.m).volume(1).read('REDLINE.TXT').decode('ascii')
         (out / 'REDLINE.TXT').write_text(report)
-        assert cpu in report and 'BIOS conventional KB           640' in report
+        assert cpu in report and ('BIOS conventional KB           %d' % conv) in report
         assert 'MUL 64 fixed operands' in report and 'Packed 4bpp blit 64x32' in report
         assert 'REPORT TRUNCATED' not in report
         assert 'Graphics index unavailable' not in report
@@ -271,7 +295,8 @@ def native(machine):
                    report.split('Bar scale maximum (x)')[1], re.M)][1:]
         assert len(indices) == R.ROWS, indices
         assert indices == list(struct.unpack('<%dI' % R.ROWS, p.data('ru_scores', R.ROWS*4)))
-        if machine in ('os8088_redline_pc_gla','os8088_redline_herc_gla','os8088_redline_vga_gla'):
+        if not MEGA and machine in ('os8088_redline_pc_gla','os8088_redline_herc_gla',
+                                    'os8088_redline_vga_gla'):
             assert all(800 < n < 1200 for n in indices), indices
         arena_headroom(report, p.word('bl_used'))
         def screenshot(name):
@@ -738,21 +763,33 @@ def chipset(machine):
                 'the Tune tab identifies (fingerprint %04X) and measures on entry' % crc,
                 limit=30)
         assert has('REDLINE') and not has('Chipset'), 'the tab is not a second window'
-        assert p.data('cs_tier') == b'\0', 'MartyPC is an 8088'
         pres = p.data('cs_pres', 10)
-        assert all(pres[r] == 1 for r in (3, 4, 5, 6, 7)), ('port probes on an 8088', pres)
+        if MEGA:
+            # kern_mega's floor is a 286, so the tier is AT-class and the
+            # read-only port probes RUN (103.6.1) - through the reflected
+            # BIOS and at ring 0, which is what this leg is for
+            assert p.data('cs_tier') != b'\0', 'kern_mega on an 8088 tier'
+            assert any(pres[r] != 1 for r in (3, 4, 5, 6, 7)), ('no port probe ran', pres)
+        else:
+            assert p.data('cs_tier') == b'\0', 'MartyPC is an 8088'
+            assert all(pres[r] == 1 for r in (3, 4, 5, 6, 7)), ('port probes on an 8088', pres)
         lw = 74
         line = lambda n: p.data('cs_lines', lw * (n + 1))[lw * n:lw * n + 72].decode('ascii')
         assert ('fingerprint %04X' % crc) in line(0), line(0)
         assert 'screen ' in line(5), line(5)
+        # nothing detected and nothing picked greys them on any tier
         M.until(ui.m, lambda _: flags()[0] & 1 and flags()[1] & 1,
-                'an 8088 greys Tune and Save setting', limit=20)
+                'an 8088, or no chipset, greys Tune and Save setting', limit=20)
         assert not flags()[2] & 1 and not flags()[3] & 1, flags()
-        M.until(ui.m, lambda _: p.data('cs_tgt', 25)[24] != 0,
-                'an 8088 greys the Target drop-down', limit=20)
+        if not MEGA:
+            M.until(ui.m, lambda _: p.data('cs_tgt', 25)[24] != 0,
+                    'an 8088 greys the Target drop-down', limit=20)
         stat = p.data('cs_stat', 19).decode('ascii')
         assert stat.startswith('Stock: BIOS timing'), stat
-        # the drop-down: open it, pick C&T NEAT (row 7)
+        # the drop-down: open it, pick C&T NEAT (row 7) - once cs_geom has
+        # PLACED it (see pick() in tune for why)
+        M.until(ui.m, lambda _: any(p.data('cs_drop', 8)),
+                'the drop-down placed', limit=20)
         dx1, dy1, dx2, dy2 = struct.unpack('<4H', p.data('cs_drop', 8))
         ui.m.run()
         ui.mo.click((dx1 + dx2) // 2, (dy1 + dy2) // 2, settle=0)
@@ -796,9 +833,144 @@ def chipset(machine):
         press(3)
         M.until(ui.m, lambda _: not has('REDLINE'), 'Quit on the Tune tab closes REDLINE',
                 limit=20)
-    print('REDLINE tune tab %s: fingerprint %04X, no port probe on an 8088, writes grey, '
+    print('REDLINE tune tab %s: fingerprint %04X, %s, writes grey, '
           'measured on entry, pick, CHIPSET1/2.TXT without the help, tabs, Quit: OK'
-          % (machine, crc), flush=True)
+          % (machine, crc, 'port probes on an AT-class tier' if MEGA
+             else 'no port probe on an 8088'), flush=True)
+
+
+def tune(machine):
+    """REDLINE's chipset WRITE path (SPEC.md 103.6.3-103.6.5) under kern_mega,
+    tests/rltune.py's sequence on the package kern_mega's SYSTEM disk carries
+    (A:\\APPS\\REDLINE.O88): the FE3600 picked, Target Mfg spec, Tune
+    confirmed and R4 = 10 set; Target Fastest tested and the verified sweep -
+    a cli window of PIT-timed reads through OSAPI_SEG windows, and a floppy
+    read by the BIOS into the package's own selector (cs_dmard, which
+    mega_svc bounces below 1MB) - setting what it kept; Apply on boot writing
+    REDLINE.CFG and \\AUTOSTRT\\RLAPPLY.LNK on the BOOT disk; RLAPPLY before
+    and after it; and a power cycle that runs RLAPPLY with nobody touching
+    anything. Bochs's 386 is an AT, where 63h, 72h and 73h decode to nothing
+    that matters, so the writes land harmlessly. AN AT-CLASS CPU ONLY: an
+    8088 greys every write, which tests/redline.py --chipset asserts."""
+    import os88ui
+    import os88flush as F
+    import os88lnk
+    import os88marty as M
+    if not MEGA:
+        raise SystemExit('redline.py --tune needs an AT-class CPU: run it under '
+                         'OS88_MEGA=1 (MartyPC is an 8088; tests/rltune.py is QEMU\'s)')
+    sym = R.symbols()
+    with os88ui.boot(str(ROOT / 'build/os8088-360.img'),
+                     apps=str(ROOT / 'build/redline360.img'), machine=machine,
+                     quick=True) as ui:
+        ui.still(0)
+        # 5a. RLAPPLY with nothing saved: it toasts and opens no window
+        ui.path('A:/SYSTEM')
+        ui.open('RLAPPLY.O88', expect='refusal')
+        ui.wait_toast(says='No REDLINE.CFG to apply')
+        print('  5a. RLAPPLY, nothing saved: No REDLINE.CFG to apply', flush=True)
+        # the copy kern_mega's system disk ships
+        ui.open('..')
+        ui.open('APPS')
+        ui.open('REDLINE.O88')
+        p = R.Probe(ui, sym)
+        rect = lambda i: struct.unpack('<4h', p.data('ru_rects', 64)[i * 8:i * 8 + 8])
+        stat = lambda: p.data('cs_stat', 19).decode('ascii').rstrip()
+
+        def press(i):
+            x1, y1, x2, y2 = rect(i)
+            ui.m.run()
+            ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2, settle=0)
+
+        def pick(rec, item):
+            # ONCE THE CONTROL IS PLACED: its rect is cs_geom's, filled by a
+            # paint after the tab's identify-and-measure, so reading it the
+            # moment cs_measd is set could find it all zeros - and the click
+            # went to (0, 0), the drop-down never opened (mega-redlinechipvga-
+            # tune at four Bochs rows to a box; the click logged as TO (0,0))
+            M.until(ui.m, lambda _: any(p.data(rec, 8)), '%s placed' % rec,
+                    limit=20)
+            x1, y1, x2, y2 = struct.unpack('<4H', p.data(rec, 8))
+            ui.m.run()
+            ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2, settle=0)
+            M.until(ui.m, lambda _: p.data(rec, 17)[16] == 1, '%s opens' % rec, limit=20)
+            top = struct.unpack('<H', p.data(rec, 24)[22:24])[0]
+            ui.mo.click((x1 + x2) // 2, top + 1 + item * 12 + 6, settle=0)
+            M.until(ui.m, lambda _: p.data(rec, 17)[16] == 0, '%s closes' % rec, limit=20)
+
+        M.until(ui.m, lambda _: rect(7) != (0, 0, 0, 0), 'REDLINE paints its tabs', limit=30)
+        press(7)
+        M.until(ui.m, lambda _: p.data('cs_tab') == b'\1' and p.data('cs_measd') == b'\1',
+                'the Tune tab identifies and measures', limit=60)
+        # 1. FE3600 (row 1), Target Mfg spec, T, Proceed: R4 10
+        pick('cs_drop', 1)
+        M.until(ui.m, lambda _: p.data('cs_pick') == b'\1', 'the pick is the FE3600', limit=20)
+        assert stat() == 'Stock: BIOS timing' or '~' in stat(), stat()
+        pick('cs_tgt', 1)
+        M.until(ui.m, lambda _: p.data('cs_target') == b'\1', 'the Target is Mfg spec', limit=20)
+        R.key(ui, 'KeyT')
+        ui.m.run()
+        M.until(ui.m, lambda _: p.word('os88ui_awin') != 0, 'the alert', limit=20)
+        ui.m.run()
+        ui.settle()
+        x1, y1, x2, y2 = struct.unpack('<4H', p.data('os88ui_ar', 8))
+        ui.m.run()
+        ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2, settle=0)
+        M.until(ui.m, lambda _: p.data('cs_setv') == b'\x0a', 'Mfg spec sets R4 10', limit=60)
+        assert p.data('cs_meth') == b'\1', p.data('cs_meth')
+        M.until(ui.m, lambda _: stat() == 'Mfg spec: 10 waits', 'the state field: %r' % stat(),
+                limit=20)
+        print('  1. FE3600, Mfg spec, confirmed: R4 10', flush=True)
+        # 2. Fastest tested: the verified sweep, set unasked
+        pick('cs_tgt', 0)
+        M.until(ui.m, lambda _: p.data('cs_target') == b'\0', 'the Target is Fastest tested',
+                limit=20)
+        R.key(ui, 'KeyT')
+        ui.m.run()
+        M.until(ui.m, lambda _: p.data('cs_meth') == b'\3', 'Tune sets what it kept', limit=180)
+        fast = p.data('cs_tfast')[0]
+        assert fast in (10, 8, 6, 4) and p.data('cs_setv')[0] == fast, (fast, p.data('cs_setv'))
+        ui.m.run()
+        ui.settle()
+        assert p.word('os88ui_awin') == 0, 'Tune raised an alert; it asks nothing now'
+        want = 'Mfg spec: 10 waits' if fast == 10 else 'Tuned: %d waits' % fast
+        assert stat() == want, (stat(), want)
+        print('  2. Tune kept R4 %d and set it, method 3: %r' % (fast, want), flush=True)
+        # 3. Apply on boot: REDLINE.CFG and RLAPPLY.LNK on the BOOT disk
+        R.key(ui, 'KeyK')
+        ui.m.run()
+        M.until(ui.m, lambda _: p.data('cs_saved') == b'\1', 'Apply on boot saves', limit=60)
+        ui.m.run()
+        ui.settle()
+        bios = bytes(ui.m.read(0xF0000, 0x10000))
+        want = (b'RLCFG\0\0\0' + b'F3' + bytes([3, 1])
+                + struct.pack('<H', crc16(bios)) + bios[0xFFF5:0xFFFD]
+                + bytes([bios[0xFFFE], 0]) + bytes([4, fast]))
+        vol = F.Flush(marty=ui.m).volume(0)
+        got = vol.read('SYSTEM/APPDATA/REDLINE.CFG')
+        assert got == want, (got, want)
+        assert vol.read('AUTOSTRT/RLAPPLY.LNK') == os88lnk.make('SYSTEM\\RLAPPLY.O88')
+        print('  3. REDLINE.CFG (fingerprint %04X) and AUTOSTRT\\RLAPPLY.LNK on A:'
+              % crc16(bios), flush=True)
+        # 4. Quit on the Tune tab
+        R.key(ui, 'KeyQ')
+        ui.m.run()
+        M.until(ui.m, lambda _: not any(w.title == 'REDLINE' for w in ui.windows()),
+                'Quit closes REDLINE', limit=20)
+        # 5b. RLAPPLY with REDLINE.CFG saved
+        ui.path('A:/SYSTEM')
+        before = ui.titles()
+        ui.open('RLAPPLY.O88', expect='refusal')
+        ui.wait_toast(says='Chipset setting applied')
+        assert ui.titles() == before, (ui.titles(), before)
+        print('  5b. RLAPPLY, saved: Chipset setting applied, no window', flush=True)
+        # 6. a power cycle: the boot disk's AUTOSTRT runs it
+        ui.m.reset()
+        M.until(ui.m, lambda _: ui.toast()[0] == 'Chipset setting applied',
+                "the reboot's autostart toast", limit=120)
+        print('  6. power cycle: AUTOSTRT\\RLAPPLY.LNK - Chipset setting applied', flush=True)
+    print('REDLINE tune %s: FE3600 Mfg spec and sweep set, Apply on boot, RLAPPLY '
+          'before, after and at boot: OK' % machine, flush=True)
 
 
 def main():
@@ -809,6 +981,7 @@ def main():
     ap.add_argument('--scene', action='store_true')
     ap.add_argument('--machine')
     ap.add_argument('--chipset', metavar='MACHINE')
+    ap.add_argument('--tune', metavar='MACHINE')
     args = ap.parse_args()
     if args.host: host()
     if args.modern: modern()
@@ -816,8 +989,9 @@ def main():
     if args.scene: scene()
     if args.machine: native(args.machine)
     if args.chipset: chipset(args.chipset)
+    if args.tune: tune(args.tune)
     assert (args.host or args.modern or args.nec or args.machine or args.scene
-            or args.chipset)
+            or args.chipset or args.tune)
 
 
 if __name__ == '__main__':

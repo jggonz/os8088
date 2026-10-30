@@ -89,6 +89,8 @@ def mbase(m):
     these two helpers exist."""
     seg = word(m, "mod_r_dock")
     assert seg, "DOCK.DRV is not mounted - nothing to read"
+    if getattr(m, "bochs", False):      # kern_mega: a driver image's
+        return m.lin(seg)               # segment is an LDT selector
     return seg * 16
 
 
@@ -187,6 +189,26 @@ def setting(m, mo, kind, cfg, want_cfg=None):
         row = tab[off:off + eq["MC_SIZE"]]
         claims[u16(row[eq["MC_SEG"]:])] = (
             u16(row[eq["MC_PARA"]:]), u16(row[eq["MC_OWN"]:]))
+    if getattr(m, "bochs", False) and seg:
+        # kern_mega: a module's claim (mem_claim_hi_x) is an XMEM POOL block
+        # above 1MB (kernel/mega.inc's mx_tab: MX_OFF/MX_KB in KB from
+        # MEGA_XPOOL), and its name is an LDT selector whose base is that
+        # block - so the claim is found by its LINEAR base, and mem_tab never
+        # sees it. The same two questions: exactly the rounded size, and
+        # the kernel's (an mx_tab owner of C0h and up, mega_ownerf)
+        m.pause()
+        try:
+            raw = m.read(m.sym("mx_tab"), eq["MX_NBLK"] * eq["MX_BLKSZ"])
+            at = m.lin(seg)
+        finally:
+            m.run()
+        for i in range(0, len(raw), eq["MX_BLKSZ"]):
+            kb = u16(raw[i + eq["MX_KB"]:])
+            if kb and eq["MEGA_XPOOL"] + \
+                    u16(raw[i + eq["MX_OFF"]:]) * 1024 == at:
+                claims[seg] = (kb * 64, eq["MEM_K_MOD"]
+                               if raw[i + eq["MX_OWN"]] >= 0xC0
+                               else raw[i + eq["MX_OWN"]])
     if seg:
         paras = ((eq["MODK_SIZE"] + 1023) // 1024) * 64
         check(claims.get(seg) == (paras, eq["MEM_K_MOD"]),

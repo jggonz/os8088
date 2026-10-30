@@ -50,6 +50,11 @@
                                     ; header. The overlay is a PART of this
                                     ; file (CC_OVL_PART below), so no module
                                     ; file name is built from it
+%define CC_STACK_CLASS OS88_HIGH | OS88_HIGHMEM    ; kern_mega may load it above 1MB
+                                    ; and its claims there (KERN-MEGA-MEMORY-
+                                    ; PLAN MC7: every claim is reached by a
+                                    ; window os88_seg_sub made, never by a sum;
+                                    ; tests/lemmega.py runs it so)
 %define CC_ICON "lemmings/icon.inc" ; the 16x16 walking lemming, drawn for this
                                     ; port (wave 6). 64 bytes of image, and the
                                     ; Disk window's tile instead of the generic

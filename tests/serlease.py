@@ -137,11 +137,20 @@ def main():
         seen = {}
 
         def dropped():
-            if ui._byte('mou_hpst') != 1:
-                return False
-            seen['com1'] = m.inb(COM1 + 4)
-            seen['com2'] = m.inb(COM2 + 4)
-            return True
+            # ONE INSTANT OF GUEST TIME: the state and both MCRs are read
+            # with the guest paused. Read on a running guest they were three
+            # moments, and a loaded host let mou_hotplug leave state 1 between
+            # the first and the second - COM1 read back raised (MCR 0b) in a
+            # soak, a cycle that had dropped it correctly
+            m.pause()
+            try:
+                if ui._byte('mou_hpst') != 1:
+                    return False
+                seen['com1'] = m.inb(COM1 + 4)
+                seen['com2'] = m.inb(COM2 + 4)
+                return True
+            finally:
+                m.run()
         wait(dropped, "mou_hotplug's reset drop (state 1)", guest=8)
         check(seen['com1'] & 3 == 0,
               'B: the reset cycle did not drop COM1 (MCR %02x) - the control' % seen['com1'])

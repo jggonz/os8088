@@ -134,7 +134,8 @@ def kernel_constants(arm="big"):
 # space-only pattern walked straight past it.
 WORKER = [
     re.compile(r'(\d[\d,]*)[-\s]+byte(?:s)?\s+(?:task|worker)[-\s]+(?:stack|slice)', re.I),
-    re.compile(r"(?<!UI )(?:task|worker)(?:'s)?(?:\s+[\w']+){0,2}[-\s]+(?:stack|slice)\s+is\s+(?:\*\*)?(\d[\d,]*)(?:\*\*)?\s+bytes", re.I),
+    # `(?!\s+0\b)`: "task 0's stack is 512 bytes" is TASK0's, not a worker's
+    re.compile(r"(?<!UI )(?:task|worker)(?!\s+0\b)(?:'s)?(?:\s+[\w']+){0,2}[-\s]+(?:stack|slice)\s+is\s+(?:\*\*)?(\d[\d,]*)(?:\*\*)?\s+bytes", re.I),
     re.compile(r'worker\s+(?:gets|owns|has)\s+(?:\*\*)?(\d[\d,]*)(?:\*\*)?[-\s]*(?:bytes|BYTES)', re.I),
     re.compile(r'(?:task|worker)(?:\'s)?[-\s]+stacks?\s+(?:are|is)\s+(\d[\d,]*)\s+bytes', re.I),
     re.compile(r'(?:worker|task)[^.\n]{0,40}?has\s+(\d[\d,]*)\s+bytes of stack', re.I),
@@ -144,6 +145,7 @@ WORKER = [
 # bug: a package's window callbacks run on 1,024 bytes, its worker on 384.
 TASK0 = [
     re.compile(r'task 0\'s\s+(\d[\d,]*)[-\s]+byte\s+stack', re.I),
+    re.compile(r'task 0\'s\s+stack\s+is\s+(\d[\d,]*)\s+bytes', re.I),
     re.compile(r'UI task\'s\s+stack\s+is\s+(\d[\d,]*)[-\s]*byte', re.I),
     re.compile(r'UI task\'s\s+stack\s+is\s+(\d[\d,]*)\s+bytes', re.I),
     re.compile(r'package\'s\s+stack\s+is\s+(\d[\d,]*)\s+bytes', re.I),

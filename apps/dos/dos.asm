@@ -1124,7 +1124,7 @@ dos_wake:
     cmp byte [dos_pkgq], 0          ; **A `.O88` TYPED AT THE PROMPT** (SPEC.md
     je .nopkg                       ; 96.33.17): OSAPI_PKG_START wants the gfx
     call dos_pkg_go                 ; lock FREE and W_ONKEY holds it, so the
-    jmp short .out                  ; console posts and this is where it lands
+    jmp .out                        ; console posts and this is where it lands
                                     ; - the same place a DOS program's own
                                     ; launch is serviced, and for the same
                                     ; reason. It is tested FIRST and clears its
@@ -1205,6 +1205,37 @@ dos_wake:
     ; A resume with nothing commanded is free, the same way one with nothing
     ; suspended is.
     call dos_cache_free
+%ifdef DOS_MEGA
+    ; **THE PROGRAM'S LAST SCREEN, CAPTURED ON THE TRIP** (KERN-MEGA-PLAN
+    ; 14.106, SPEC.md 96.34.6): kern_dos's kd_snap wrote con_scr and the
+    ; record in front of it through the linear address the kernel staged, so
+    ; what is left is dos_snap's TAIL - the cursor clamped, the wrap and the
+    ; scroll debt spent, every row marked - and the exit line below lands
+    ; under the program's last screen exactly as it does in the window
+    cmp byte [dos_snrec + 2], 0
+    je .nosn
+    mov byte [dos_snrec + 2], 0
+    mov ax, [dos_snrec]             ; AL the column, AH the row
+    push ax
+    xor ah, ah
+    cmp al, CON_COLS - 1
+    jbe .sncx
+    mov al, CON_COLS - 1
+.sncx:
+    mov [con_cx], ax
+    pop ax
+    mov al, ah
+    xor ah, ah
+    cmp al, CON_ROWS - 1
+    jbe .sncy
+    mov al, CON_ROWS - 1
+.sncy:
+    mov [con_cy], ax
+    mov byte [con_pwrap], 0
+    mov word [con_scrl], 0
+    call con_markall
+.nosn:
+%endif
     ; ...and the console says so HERE, which is where the run really ended.
     ; `dos_run`'s own `.out` cannot: the post is spent long before the program
     ; starts, so a line written there is about a launch that has not happened
@@ -1213,6 +1244,15 @@ dos_wake:
     call dos_con_ended
     mov bx, [dos_win]
     call dos_swap
+    call dos_fsx_back               ; ...AND BACK INTO THE FULL SCREEN when the
+                                    ; command was typed there (SPEC.md
+                                    ; 96.33.16): the posted path leaves dos_run
+                                    ; by `.outq`, past its own call - so the
+                                    ; return is where [dos_fsxgo] is spent, or
+                                    ; it stood until some later WINDOWED exit
+                                    ; spent it and threw that console into the
+                                    ; full screen. kern_mega's trip (14.106) and
+                                    ; kern_big's shut-down arm alike (14.113)
     jmp short .out
 .nocode:
 %endif
@@ -5273,8 +5313,13 @@ DHK_TXT     equ 12                  ; the TEXT SCREEN the mouse cursor may draw
                                     ; every pixel and B800 is the kernel's, so
                                     ; the cursor is a `kern_dos` capability and
                                     ; the absent hook is how that is spelled
+DHK_TSET    equ 14                  ; AH=2Dh's step, DX:AX signed ticks, before
+                                    ; 0040:006C is written: kern_dos moves the
+                                    ; handover count by it (KERN-MEGA-PLAN
+                                    ; 14.114). Absent = the host does not read
+                                    ; the count as time (the windowed DOS)
 %ifdef DOS_MEGA
-DHK_XUNP    equ 14                  ; **A CHILD, UNPACKED BY THE HMA HOST**
+DHK_XUNP    equ 16                  ; **A CHILD, UNPACKED BY THE HMA HOST**
                                     ; (SPEC.md 96.40.9.1): a launcher's EXEPACK
                                     ; child runs its own unpacker below 64KB
                                     ; with A20 open, which fails - so the HMA
@@ -5285,9 +5330,9 @@ DHK_XUNP    equ 14                  ; **A CHILD, UNPACKED BY THE HMA HOST**
                                     ; 96.40.9.1). Only kern_mega's HMA host
                                     ; fills it; it is `%ifdef DOS_MEGA` so
                                     ; kern_big's core is byte-identical
-DHK_NENT    equ 8
+DHK_NENT    equ 9
 %else
-DHK_NENT    equ 7
+DHK_NENT    equ 8
 %endif
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -5660,9 +5705,11 @@ dos_be_bind:
 ; dos_hk_bind - the six hooks DOS.O88 wants (SPEC.md 96.44.3)
 ; in:  nothing; out: nothing, every register preserved
 ;
-; Beside `dos_be_bind` and called with it. `kern_dos` has no equivalent and
-; wants none: its six cells stay the zero a bss arrives as, which is what
-; "this host does not want it" is spelled as.
+; Beside `dos_be_bind` and called with it. `kern_dos` binds its own at its
+; entry (kerndos/kdentry.inc: the mouse's two, the HMA image's DHK_XUNP and,
+; on kern_mega, DHK_SNAP's kd_snap - SPEC.md 96.34.6); every cell nobody
+; binds stays the zero a bss arrives as, which is what "this host does not
+; want it" is spelled as.
 ; -----------------------------------------------------------------------------
 dos_hk_bind:
     push ax
@@ -7809,6 +7856,13 @@ dos_lbfill:
     mov ax, [dos_kdlrow + OP_R_ZKB]         ; image reads part 3 itself for an
     mov [di+KDL_L3ZB], ax                   ; EXEPACK program its unpacker
                                             ; refuses (SPEC.md 96.40.9.1)
+    mov word [di+KDL_SNAPLIN], dos_snrec    ; ...and the CONSOLE, for the trip
+    mov byte [di+KDL_SNAPHI], 0             ; to seed and capture (KERN-MEGA-
+    mov al, [con_cx]                        ; PLAN 14.106): the record's
+    mov ah, [con_cy]                        ; OFFSET, which the kernel makes
+    mov [dos_snrec], ax                     ; linear, the cursor kern_dos
+    mov word [dos_snrec + 2], 0             ; seeds the screen under, and the
+                                            ; flag clear until it captures
 %endif
     mov word [di+KDL_TLEN], KDL_MINE
     mov word [di+KDL_WAKE + 2], 0           ; ...and the live resume's, whose
@@ -7894,7 +7948,7 @@ dos_mem_fix:
     push si
     mov byte [dos_keepc+1], 0
 %ifdef DOS_MEGA
-    ; **ON kern_mega THERE IS ONE ARM** (docs/plans/KERN-MEGA-DOS-PLAN.md
+    ; **ON kern_mega THERE IS ONE ARM** (docs/plans/completed/KERN-MEGA-DOS-PLAN.md
     ; 12.1 item 1): the program cannot run inside a protected-mode kernel, so
     ; every launch is the whole machine and the page draws no radio at all.
     ; A pick from a .LNK written on kern_big is not demoted, it is PROMOTED.
@@ -8708,7 +8762,11 @@ dos_click_mem:
     mov cx, [dos_mpx]
     mov dx, [dos_mpy]
 %ifdef DOS_MEGA
-    jmp short .out                  ; no radio on kern_mega (12.1 item 1)
+    jmp short .away                 ; no radio on kern_mega (12.1 item 1), so
+                                    ; nothing here took it: REFUSE it, or the
+                                    ; arguments box and the environment rows
+                                    ; beside this block never see a press
+                                    ; (KERN-MEGA-PLAN 14.77)
 %endif
     call dos_mrad_place             ; ...AND THE ARM LAST, which is what
     push bx                         ; anything inside a subsection that no
@@ -13911,8 +13969,12 @@ dos_date_init:
     jc .stamp                       ; no clock chip: the fallback stands
     mov al, ch                      ; ...AND A 5150's ROM DOES NOT SET CF FOR A
     call dos_unbcd                  ; FUNCTION IT HAS NEVER HEARD OF, so every
-    mov bx, 100                     ; field below is checked for a value that
-    mul bx                          ; is merely POSSIBLE before any of it is
+    mov bl, 100                     ; field below is checked for a value that
+    mul bl                          ; is merely POSSIBLE before any of it is
+                                    ; (A BYTE MULTIPLY: `mul bx` writes DX, and
+                                    ; DH/DL are the month and the day still to
+                                    ; be read - every RTC date fell back to 4
+                                    ; July, SPEC.md 96.13.1)
     mov [dos_tmp1], ax              ; believed - which is the only thing
     mov al, cl                      ; standing between a garbage register and a
     call dos_unbcd                  ; date the program will stamp on its files
@@ -14145,9 +14207,19 @@ dos_time_now:
 ; in:  CH = hours, CL = minutes, DH = seconds
 ; out: nothing; every register preserved
 ;
-; It writes 0040:006C, which is banked at bracket entry and put back at the
-; end (SPEC.md 96.5) - so a DOS program may set the clock, read it back and
-; agree with itself, and the machine's own time is not moved by it.
+; It writes 0040:006C, so a DOS program may set the clock, read it back and
+; agree with itself. Nothing puts the count back - dos_bdalist leaves it out
+; on purpose (SPEC.md 96.5, 96.13.2) - and in a window nothing needs to: the
+; kernel keeps its clock off [ticks].
+;
+; **UNDER kern_dos THE WAY HOME READS IT, so the STEP goes to the host
+; first** (DHK_TSET, KERN-MEGA-PLAN 14.114): DX:AX = the new count less the
+; old, signed. The way home measures how long the program had the machine as
+; 0040:006C now less the count at the handover (SPEC.md 96.49.5), and a
+; program that set the clock BACK made that negative - which reads as a
+; midnight crossed, so the session came home a day on. kern_dos moves the
+; handover count by the same step, and the difference is the run again.
+; The windowed host binds nothing.
 ; -----------------------------------------------------------------------------
 dos_time_set:
     push ax
@@ -14157,36 +14229,42 @@ dos_time_set:
     push si
     push di
     push es
-    mov [dos_tmp1], ch
-    mov [dos_tmp2], cl
-    mov [dos_tmp3], dh
-
-    mov al, [dos_tmp1]
-    xor ah, ah
+    push dx                         ; DH = seconds
+    push cx                         ; CL = minutes
+    mov al, ch
+    cbw                             ; (CH <= 23)
     mov bx, 32772
     mul bx
     shl ax, 1
     rcl dx, 1                       ; hours, in ticks
-    mov si, ax
+    xchg si, ax
     mov di, dx
-    mov al, [dos_tmp2]
+    pop ax                          ; AL = minutes
     xor ah, ah
     mov bx, 1092
     mul bx
     add si, ax
     adc di, dx
-    mov al, [dos_tmp3]
+    pop ax
+    mov al, ah                      ; AL = seconds
     xor ah, ah
     mov bx, 182
     mul bx
-    mov bx, 10
-    div bx
-    xor dx, dx
+    mov bl, 10
+    div bx                          ; (DX = 0 after a mul this small)
     add si, ax
-    adc di, dx
+    adc di, 0
 
     mov bx, 0x40
     mov es, bx
+    mov ax, si
+    mov dx, di
+    sub ax, [es:0x6C]
+    sbb dx, [es:0x6E]               ; DX:AX = the step
+    cmp word [dos_hkv + DHK_TSET], 0
+    je .nohk
+    call word [dos_hkv + DHK_TSET]
+.nohk:
     mov [es:0x6C], si
     mov [es:0x6E], di
     mov [dos_lasttl], si            ; ...and midnight is measured from here now
@@ -18790,6 +18868,22 @@ dos_fh_fill:
 %ifdef DOS_MEGA                     ; both hosts of one build, so not rule 1's
     DBSS DOS_B_HSLOT,   2           ; the HMA host's slot maker (dos_hvec), or
 %endif                              ; 0 - and LAST, so no cell before it moves
+%ifdef DOS_MEGA
+%ifndef KD_BACKEND
+DOS_SNREC   equ 4                   ; **THE TRIP'S SNAP RECORD** (KERN-MEGA-PLAN
+    HBSS DOS_B_SNAP, DOS_SNREC      ; 14.106): dw a cursor (column, row), dw a
+                                    ; flag - and con_scr DIRECTLY AFTER IT,
+                                    ; because the console's bss is based at
+                                    ; DOS_BSS_SIZE and this is the last host
+                                    ; row. kern_dos fills cursor, cells and
+                                    ; flag through one linear address the
+                                    ; kernel staged (kerndos/kdpark.inc), so
+                                    ; the three must be one run
+%if HB != DOS_B_SNAP + DOS_SNREC
+ %error "the snap record must be the LAST HBSS row: con_scr follows it"
+%endif
+%endif
+%endif
 ; **AND THE HOST'S BLOCK IS THE PACKAGE'S OWN bss** (SPEC.md 96.44.5). It was
 ; `CORE_BSS_SIZE + HB` - the core's cells first and the host's after them,
 ; both inside the package's bss - and since the core became a PART its cells
@@ -19307,6 +19401,11 @@ dos_fsxgo equ dos_hbss + DOS_B_FSXGO
 dos_aedn equ dos_hbss + DOS_B_AEDN     ; byte: 96.33.5.1's edge
 dsh_exec    equ DOS_CBASE + DOS_B_SHEXEC
 dos_cmdx equ dos_hbss + DOS_B_CMDX
+%ifdef DOS_MEGA
+%ifndef KD_BACKEND
+dos_snrec equ dos_hbss + DOS_B_SNAP ; 4: the trip's snap record (14.106)
+%endif
+%endif
 dos_cmdn equ dos_hbss + DOS_B_CMDN
 dos_fhpath  equ DOS_CBASE + DOS_B_FHPATH
 dos_fpbuf   equ DOS_CBASE + DOS_B_FPBUF

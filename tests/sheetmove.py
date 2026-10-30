@@ -114,6 +114,20 @@ def claims(m, S):
             for i in range(MEM_MAX) if u16(raw, i * MC_SIZE)]
 
 
+def seg_key(m, v):
+    """A segment WORD as mem_tab keys its claim - the identity on a real-mode
+    kernel. On kern_mega (KERN-MEGA-MEMORY-PLAN MC7.4) a region's W_SEG and
+    I_SPTR, a claim's value and the owner word of every claim a package holds
+    are an LDT SELECTOR that a move REBASES and never changes, so "it moved"
+    and "nothing still holds the old one" are asked of the PARAGRAPH under it
+    (tests/emumove.py's para()). An instance slot, a kernel tag, a real
+    segment and 0 are themselves"""
+    if v and getattr(m, "bochs", False) and 0x100 <= v < 0xA000 and v & 4:
+        b = m.selector(v)
+        return b[0] >> 4 if b else v
+    return v
+
+
 def mine(cl, seg):
     return sorted([c for c in cl if c[2] == seg], key=lambda c: -c[1])
 
@@ -248,7 +262,11 @@ def rt_watch(m, S, SH, seg, stub, trigger):
     # through it, where `mem_claim` is only .text's trampoline - the disk
     # layer is in .cold and calls mem_claim_x direct, so a breakpoint on the
     # trampoline saw none of the caches a file call claims back
-    claim, reloc = S("mem_claim_x.go"), S("mem_reloc_call")
+    # ...through m.sym() and NOT S(): both are `.cold`, and on this row's
+    # CGA kmain_o slid `.cold` down by VGA_PARA at boot, so os88sym.linear's
+    # addresses are 0x7F0 bytes above the live code and neither stop ever
+    # matched (MOVABLE-COLD-PLAN 2; tests/fddpark.py found the class)
+    claim, reloc = m.sym("mem_claim_x.go"), m.sym("mem_reloc_call")
     stg = lambda: u16(m.read(seg * 16 + SH["sh_stgseg"], 2))
     res = {"in": False, "rloc": None, "stg": None, "claims": 0, "forced": 0,
            "moved": 0, "out": False}

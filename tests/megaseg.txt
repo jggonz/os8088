@@ -1,5 +1,5 @@
 # tests/megaseg.txt - kern_mega's overhead in the kernel's 64KB segment
-# (docs/plans/KERN-MEGA-SEGMENTS-PLAN.md W0)
+# (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md W0)
 #
 # The bytes kern_mega's `.text` + `.bss` carry beyond kern_big's, as
 # tools/os88megaseg.py measures them off the two maps. `make mega` fails when
@@ -42,4 +42,22 @@
 #             DS and ES with KDS/KES rather than push cs/pop: it runs in
 #             protected mode, where CS is readable code, so each load reads
 #             [cs:k_dsel] - five bytes against two, byte-identical on kern_big
-4029
+# 2026-10-26: +230, to 4,259, KERN-MEGA-PLAN 14.115 - NOT a byte of new
+#             kern_mega code: VID_EXT (the VESA hook, SPEC.md 120.3) is now
+#             assembled on kern_mega as on kern_big, and the figure had been
+#             reading LOW by exactly the hook's 356 kernel-segment bytes that
+#             kern_big carried and kern_mega did not (with NOVIDEXT=1 on both
+#             kernels the overhead measures 4,259 too, so the hook costs the
+#             two the same). The protected-mode half, mega_vxpm, is `.mega`
+# 2026-10-26: +92, to 4,351, KERN-MEGA-PLAN 14.117 - the PicoMEM mouse's
+#             capture: mega_cap33 and its state are the int 33h handler the
+#             card's ROM calls INSIDE an IRQ reflection, i.e. in REAL mode
+#             after the switch, so they have to be low (the protected-mode
+#             replay, mega_m33go, is `.mega`). Measured here as the merged
+#             tree's overhead, 14.115's 4,259 plus exactly these 92
+# 2026-10-26: +30, to 4,381, KERN-MEGA-PLAN 14.119 - mega_r15 (26) and
+#             mega_old15 (4): int 15h AH=4Fh in a REFLECTION, which the ROM's
+#             own int 09h calls in REAL mode, so the key-state map sees a key
+#             a reflection took. It runs at KERNEL_SEG:offset with no switch,
+#             so it has to be low; the IVT installs are `.mega`
+4381

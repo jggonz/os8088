@@ -185,19 +185,28 @@ def scan(m, apps=None):
     return seg, drv
 
 
-def kernel_syms():
+def kernel_syms(m):
     """(linear address, name) for every kernel symbol, sorted.
 
     Needed because "outside the package" is not one thing: on the fullscreen
     surface it is mostly the SCHEDULER, and a run that reports 17% idle while
     the audio starves is saying something completely different from a run that
     is out of cycles. `.cold`, `.boot2` and `.lowbss` each live somewhere other
-    than KERNEL_SEG, so the segment is asked per symbol.
+    than KERNEL_SEG, so the segment is asked per symbol - and `.cold` is
+    taken where it RUNS on `m`: on a machine with neither a VGA nor an EGA
+    (this tool's default) kmain_o slid it down at boot, and the map's address
+    would name the routine 0x7F0 bytes away (MOVABLE-COLD-PLAN 2), so the
+    table is built after the boot.
     """
+    cold = os88sym.equates().get("COLD_SEG")
+    slide = m.cold_slide()
     out = []
     for n in os88sym.syms():
         try:
-            out.append((os88sym.linear(n), n))
+            a = os88sym.linear(n)
+            if os88sym.segment_of(n) == cold:
+                a -= slide
+            out.append((a, n))
         except Exception:
             pass
     out.sort()
@@ -258,13 +267,13 @@ def main():
         print("defines from %s: %r" % (side, a.defines))
     P, syms = symbols(tuple(
         d for d in a.defines.replace(",", " ").split() if d))
-    ksyms = kernel_syms()
     S = os88sym.linear
 
     with os88marty.launch("build/os8088-360.img", apps=a.apps,
                           machine=a.machine, boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
+        ksyms = kernel_syms(m)          # after the boot: `.cold` may slide
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         slot = dispcp.win_list(m, S)[-1]

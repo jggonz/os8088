@@ -70,6 +70,7 @@ import os88marty as M                                   # noqa: E402
 import os88pkg                                          # noqa: E402
 import os88sym                                          # noqa: E402
 from os88mouse import Mouse                             # noqa: E402
+import dispapps                                         # noqa: E402
 import dispcp                                           # noqa: E402
 import heaphi                                           # noqa: E402
 
@@ -128,6 +129,11 @@ def u32(b, i=0):
     return int.from_bytes(b[i:i + 4], "little")
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF linear: an LDT selector's base on kern_mega (docs/BOCHS.md)"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
+
 def tick(m, frames):
     """Let the guest run for `frames` and leave it running.
 
@@ -150,9 +156,12 @@ def sym(name):
         tmp = tempfile.mktemp(suffix=".asm")
         mp = tempfile.mktemp(suffix=".map")
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
+        # kern_mega's Task Manager is its ARM (build/megak/apps/, SPEC.md
+        # 20.18), -DPKG_MEGA, whose bss is laid out differently
+        arm = ["-DPKG_MEGA"] if dispapps.mega_arm(APP) else []
         r = subprocess.run(["nasm", "-f", "bin", "-w+error",
-                            "-I", os.path.join(ROOT, "apps") + os.sep,
-                            "-o", tmp + ".bin", tmp],
+                            "-I", os.path.join(ROOT, "apps") + os.sep]
+                           + arm + ["-o", tmp + ".bin", tmp],
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit("heapdrv: could not map %s:\n%s" % (APP, r.stderr[:400]))
@@ -173,7 +182,8 @@ def sym(name):
 
 def img_size():
     """The package's image size - THE FILE IS NOT THE IMAGE (SPEC.md 20.13.5)."""
-    raw = open(os88build.at("build/%s.o88" % APP), "rb").read()
+    raw = open(os88build.at("build/%s%s.o88" % (
+        "megak/apps/" if dispapps.mega_arm(APP) else "", APP)), "rb").read()
     return len(os88pkg.image_unwrap(raw))
 
 
@@ -182,7 +192,7 @@ class Tm:
 
     def __init__(self, m, slot, seg):
         self.m, self.slot, self.seg = m, slot, seg
-        self.bss = (seg << 4) + img_size()
+        self.bss = lin(m, seg) + img_size()
 
     def _at(self, name, off=0):
         return self.bss + sym(name) - sym("os88_image_end") + off
@@ -205,7 +215,7 @@ def pkg_slot(m, name):
         if u16(t, b + geom.W_FLAGS) & 3 != 3:
             continue
         seg = u16(t, b + geom.W_SEG)
-        if seg and m.read((seg << 4) + 16, len(name)) == name:
+        if seg and m.read(lin(m, seg, 16), len(name)) == name:
             return i, seg
     return None
 
@@ -226,7 +236,7 @@ def guest_font(m):
     """
     seg = int.from_bytes(m.read(S("font_seg"), 2), "little")
     off = int.from_bytes(m.read(S("font_base"), 2), "little")
-    raw = m.read(seg * 16 + off, FONT_BYTES)
+    raw = m.read(lin(m, seg, off), FONT_BYTES)
     return {FONT_FIRST + i: list(raw[i * 8:i * 8 + 8])
             for i in range(FONT_BYTES // 8)}
 

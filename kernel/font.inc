@@ -225,6 +225,19 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     ret
 %endmacro
 
+; FONT_F000 reg - the planar ROM's segment: F000h itself, and on kern_mega
+; [k_vsf], which is F000h too until the switch and the selector over it after
+; (mega_vfixall) - so the body is right at boot and in HIBER.DRV's resume,
+; which runs in protected mode (KERN-MEGA-MEMORY-PLAN MC7: the GDT maps no
+; segment to itself past the kernel's own)
+%macro FONT_F000 1
+%ifdef KERN_MEGA
+    mov %1, [k_vsf]
+%else
+    mov %1, 0xF000
+%endif
+%endmacro
+
 %macro FONT_PICK 1
     xor ax, ax                  ; zero the answer first: on a pre-EGA BIOS
     mov es, ax                  ; AH=11h is not implemented and returns with
@@ -236,7 +249,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     add bp, FONT_FIRST * 8
     or dx, dx                   ; a table is never in segment 0: no answer
     jnz %%timea
-    mov dx, 0xF000              ; no answer: the planar ROM's own set
+    FONT_F000 dx                ; no answer: the planar ROM's own set
     mov bp, FONT_PLANAR
 %%timea:
     mov ax, dx                  ; BX = the answer's count
@@ -246,18 +259,24 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     pop dx
     xchg bx, ax
     push bx                     ; ...kept for the ICA
+%ifdef KERN_MEGA
+    FONT_F000 ax                ; (through DS: before it changes)
+    mov es, ax
+%endif
     push ds                     ; is the planar set the SAME glyphs?
     mov ds, dx
     mov si, bp
+%ifndef KERN_MEGA
     mov ax, 0xF000
     mov es, ax
+%endif
     mov di, FONT_PLANAR
     mov cx, FONT_BYTES
     repe cmpsb
     pop ds
     jne %%ram                   ; a different face: the card's, the only one
     push dx
-    mov ax, es                  ; AX = 0xF000
+    mov ax, es                  ; AX = 0xF000 (FONT_F000)
     mov si, FONT_PLANAR
     call %1_time
     pop dx
@@ -269,7 +288,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     cmp ax, si
     ja %%ram
     xchg bx, ax                 ; take the planar ROM
-    mov dx, 0xF000
+    FONT_F000 dx
     mov bp, FONT_PLANAR
 %%ram:
     push dx
@@ -627,7 +646,7 @@ font_char:
 
     mov ch, [wm_clip_rn]        ; row counter: the rows the region allows,
                                 ; 8 whenever it is not cutting this cell
-    mov ax, VGA_SEG             ; ...and DS = the FRAMEBUFFER for the loop, so
+    VSEG ax, VGA_SEG            ; ...and DS = the FRAMEBUFFER for the loop, so
     mov ds, ax                  ; its four latch accesses carry no override:
                                 ; nothing below reads a kernel word but the
                                 ; column mask, through CS

@@ -955,8 +955,10 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # KERNEL_SEG:0 and never enters stage 2 at all. There has been no canary on
 # those disks for either value of this constant. What still holds is the
 # runtime fence one line down, and it is enough on its own: a payload shorter
-# than this offset gets no -DKSIG, boot/boot.asm's `%define KSIG 0` applies,
-# and stage 2's `cmp word [b2_ksig], 0` skips the compare.
+# than this offset gets no -DKSIG and boot/boot.asm's `%define KSIG 0` applies -
+# which is inert, because a FLAT_PAYLOAD never enters stage 2. Stage 2 itself
+# no longer reads 0 as "no canary": a kernel's real word can BE zero
+# (kern_mega's was), and that test switched its canary off (SPEC.md 18.93.1).
 # SPEC.md 6.0.1 took the blob to TEN sectors, and the probe moved one memory
 # sector down with it - 5632, memory sector 11, file sector 11 + 10 = 21, the
 # same file sector - so the band argument above is untouched. SPEC.md 26.10.5
@@ -986,6 +988,12 @@ KSIG_OFF := 4096
 KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else None" $(1))
 
 # ...and the KERNEL's, which needs its own because SPEC.md 2.9 put stage 2 in
+# front of the image - and which is not a WORD but the 16-bit SUM of the
+# canary's whole sector (SPEC.md 18.93.1): one word was 0 on kern_mega, and
+# so was the same word of the wrong sector a 286 ROM delivered there.
+# KSIGDEF above stays a word: it feeds only FLAT_PAYLOAD sectors, which have
+# no stage 2 to compare it.
+#
 # front of the image: KSIG_OFF is a MEMORY offset from KERNEL_SEG and stage 2
 # holds it as a constant, so what shifts is only where the same bytes sit in
 # the FILE. The signature itself still has to be injected - it is read out of
@@ -994,12 +1002,12 @@ KSIGDEF = -DKSIG_OFF=$(KSIG_OFF) $$(python3 -c "import sys; d = open(sys.argv[1]
 #
 # AND IT REFUSES A KERNEL SHORTER THAN THE OFFSET. KSIGDEF above prints nothing
 # for a short payload on purpose; this one MUST NOT, because boot/boot.asm
-# defaults KSIG to 0 and 0 means NO CANARY - so a kernel that came out shorter
-# than KSIG_OFF (a cut-down build, a broken split) would boot with the check
-# silently switched off. The refusal is two-sided: the message goes to stderr
+# defaults KSIG to 0, and a kernel that came out shorter than KSIG_OFF (a
+# cut-down build, a broken split) would then be compared against a sector
+# it does not have. The refusal is two-sided: the message goes to stderr
 # and an option nasm rejects goes to stdout, because a failing `$(...)` on its
 # own does not fail the recipe - the sector would still assemble, canary-less.
-KSIGDEF2 = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF) + $(BOOT2_PAD); print('-DKSIG=%d' % int.from_bytes(d[o:o+2], 'little')) if len(d) > o + 1 else (sys.stderr.write('KSIGDEF2: %s is %d bytes, shorter than KSIG_OFF + BOOT2_PAD = %d - no canary word to read, and KSIG=0 would switch the canary OFF\n' % (sys.argv[1], len(d), o)), print('--KSIGDEF2-REFUSED-kernel-shorter-than-KSIG_OFF'))" $(1))
+KSIGDEF2 = $$(python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); o = $(KSIG_OFF) + $(BOOT2_PAD); print('-DKSIG=%d' % (sum(int.from_bytes(d[i:i+2], 'little') for i in range(o, o + 512, 2)) & 0xFFFF)) if len(d) >= o + 512 else (sys.stderr.write('KSIGDEF2: %s is %d bytes, shorter than KSIG_OFF + BOOT2_PAD + 512 = %d - no canary sector to sum\n' % (sys.argv[1], len(d), o + 512)), print('--KSIGDEF2-REFUSED-kernel-shorter-than-KSIG_OFF'))" $(1))
 
 # ...and THE BLOB'S OWN CHECKSUM (SPEC.md 2.9.7). The kernel's load has had
 # 18.93.1's canary since the day a BIOS was caught flipping heads early; the
@@ -3486,7 +3494,9 @@ SYSTOOLSARGS := $(addprefix SYSTEM:,$(SYSTOOLS))
 # notes: two clusters at 512 bytes, one at 1 KB, one on the live volume.
 # WELCOME.TXT is what makes it exist and is the first note anybody sees.
 # Beside $(STIKARGS) on every system disk that carries Sticky Note - the four
-# geometries, emu.img and the live media; NOT the small pair, which does not
+# geometries, emu.img, kern_mega's pair (KERN-MEGA-PLAN 14.95: it shipped
+# without, so an install off mega.img had no notes) and the live media; NOT
+# the small pair, which does not
 # carry the package (SPEC.md 24.5.1). STIKNOTESOPT is an OPTION and so goes
 # AFTER the positional list (argparse stops collecting at it).
 STIKNOTESTXT := $(BUILD)/notes/WELCOME.TXT
@@ -3617,8 +3627,8 @@ APPSYSARGS := $(addprefix SYSTEM:,$(APPSYS))
 # REDLINE is the seventh (SPEC.md 24.3.2) and, like FONTVIEW, rides the system
 # disks ALONE ($(CORE_SYSONLY)): a benchmark answers "what is this machine",
 # and the disk every machine boots is the one sure to be in a drive. The 360KB
-# system disk leaves it off ($(SYS360OMIT)) - util360.img carries it there -
-# and kern_mega's disks leave it off too ($(MEGACOREOMIT)).
+# system disk leaves it off ($(SYS360OMIT)) - util360.img carries it there.
+# kern_mega's system disks carry it too (KERN-MEGA-PLAN 14.118).
 CORE_TOOLS := $(BUILD)/browser.o88 $(BUILD)/fontview.o88 \
               $(BUILD)/notepad.o88 $(BUILD)/paint.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/redline.o88
@@ -6382,7 +6392,7 @@ $(BUILD)/rdgcore.inc: $(BUILD)/rdgtmpl.bin ;
 REALDMG_SRC := apps/realdmg/realdmg.asm apps/realdmg/rdgdefs.inc \
                apps/realdmg/rdgsys.inc apps/realdmg/rdgppu.inc apps/realdmg/rwfsx.inc apps/realdmg/rwkeys.inc \
                $(BUILD)/rdgcore.inc \
-               apps/os88api.inc apps/os88ui.inc apps/os88parts.inc \
+               apps/os88api.inc apps/os88mega.inc apps/os88ui.inc apps/os88parts.inc \
                apps/os88partsbody.inc apps/os88alt.inc apps/os88pit.inc apps/realdmg/rwlog.inc apps/realdmg/rwbank.inc apps/realdmg/rwstate.inc apps/realdmg/rwreplay.inc \
                apps/realdmg/rwfm.inc apps/realdmg/rwmove.inc drivers/sound/sndpkg.inc \
                apps/os88data.inc
@@ -6743,8 +6753,8 @@ $(BUILD)/XTGEN.BIN: $(X3XTGENDEPS) | $(BUILD)
 	python3 tools/x3xtgen.py --xtgen $@
 
 $(BUILD)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc \
-                   $(BUILD)/XTGEN.BIN | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/xtmp3/ -I $(BUILD)/ -o $@ apps/xtmp3/x3xt.asm
+                   $(BUILD)/XTGEN.BIN apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -I apps/ -I $(BUILD)/ -o $@ apps/xtmp3/x3xt.asm
 	python3 tools/x3xtgen.py --seal $@
 	@echo "x3xt:   $(call FILESIZE,$@) bytes"
 
@@ -7290,7 +7300,7 @@ KERNDOS_INC := kerndos/kdlayout.inc kerndos/kdlaunch.inc kerndos/kdshim.inc \
                kerndos/kdback.inc kerndos/kdentry.inc kerndos/kdosgate.inc \
                kerndos/kdmouse.inc kerndos/kdkbd.inc kernel/mouproto.inc \
                kerndos/kdresume.inc kerndos/kdxms.inc kerndos/kdpark.inc \
-               kerndos/kdxpack.inc \
+               kerndos/kdxpack.inc kerndos/kdhma.inc \
                kernel/hbstage.inc kernel/hbstub.inc kernel/hbmark.inc
 
 # KDSTKDIAG=1 fills the gap between `.lowbss` and the stack top with a
@@ -7491,7 +7501,7 @@ $(BUILD)/CWDHERE.COM: tests/dostrap/cwdhere.asm | $(BUILD)
 $(BUILD)/XMSPROBE.COM: tests/dostrap/xmsprobe.asm | $(BUILD)
 	$(NASM) -f bin -w+error -o $@ tests/dostrap/xmsprobe.asm
 
-# A20SHUT.COM - W4's probe (docs/plans/KERN-MEGA-DOS-PLAN.md 7): shut A20
+# A20SHUT.COM - W4's probe (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 7): shut A20
 # through port 92h, then INT 21h, which with kern_dos in the HMA only the low
 # trampolines can serve (kerndos/kdhma.inc). On demand, like XMSPROBE.COM.
 $(BUILD)/A20SHUT.COM: tests/dostrap/a20shut.asm | $(BUILD)
@@ -7679,6 +7689,11 @@ $(BUILD)/DOSGFX.COM: tests/doscom/hello.asm | $(BUILD)
 
 $(BUILD)/DOSPIT.COM: tests/doscom/hello.asm | $(BUILD)
 	$(NASM) -f bin -w+error -DPITFAST -o $@ tests/doscom/hello.asm
+
+# ...and having SET the clock with AH=2Dh, a step the return used to count as
+# time the program ran (KERN-MEGA-PLAN 14.114, kdreturn --settime)
+$(BUILD)/DOSSETT.COM: tests/doscom/hello.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DSETTIME -o $@ tests/doscom/hello.asm
 
 # ...and having written one word of `.cold` in the HMA, under kern_dos only
 # (SPEC.md 96.49.9): tests/hmadosret.py's negative control, which the live
@@ -9462,6 +9477,25 @@ $(BUILD)/zrestart360.img: $(BUILD)/calc.o88 $(BUILD)/frotz.o88 \
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/calc.o88 \
 		$(BUILD)/frotz.o88 $(BUILD)/zt/ZRS.Z5
 
+# ...and the BIG story (KERN-MEGA-MEMORY-PLAN MC7, tests/zbig.py and
+# tests/megafrotz.py): a story past 64KB, which is where Frotz's page table
+# (apps/frotz/zmem.inc) is all of the addressing. GENERATED by
+# tests/frotz/zbiggen.py, which also writes the GOLD - what `go`, `text`, `go`
+# print - from its own model of every statement, so the gates need no
+# reference interpreter. ZBIG.Z5 is 148KB (five pages) for the XT; ZBIG.Z8 is
+# 282KB (nine pages, past 256KB) for kern_mega under Bochs.
+$(BUILD)/zt/ZBIG.Z5: tests/frotz/zbiggen.py
+	@mkdir -p $(BUILD)/zt
+	@$(INFORMCHK)
+	python3 tests/frotz/zbiggen.py -o $(BUILD)/zt/zbig5.inf --gold $(BUILD)/zt/ZBIG5.GLD
+	$(INFORM) -v5 $(BUILD)/zt/zbig5.inf $@
+
+$(BUILD)/zt/ZBIG.Z8: tests/frotz/zbiggen.py
+	@mkdir -p $(BUILD)/zt
+	@$(INFORMCHK)
+	python3 tests/frotz/zbiggen.py -o $(BUILD)/zt/zbig8.inf --workers 120 --gold $(BUILD)/zt/ZBIG8.GLD
+	$(INFORM) -v8 $(BUILD)/zt/zbig8.inf $@
+
 $(BUILD)/filetest.bin: tests/filetest/filetest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/filetest/filetest.asm
 	@echo "filetest: $(call FILESIZE,$@) bytes"
@@ -9978,7 +10012,9 @@ pkgrun: $(BUILD)/pkgrun.img $(BUILD)/pkgrun360.img
 # NOT a package - and validate_o88 exists to make exactly that unbuildable.
 # --raw is the escape (os88disk.py, --scramble's precedent) and nothing
 # shipped uses it. The pair is the experiment: 70,144 bytes must type 1 and be
-# refused Too large, 1,048,576 must type 0 and be refused Bad package.
+# refused Too large, 33,554,432 must type 0 and be refused Bad package - a
+# size HUGE.O88's ENTRY says (tests/pkgbig/lie.py, after the verify) over its
+# 1MB of data, the boundary being more than a floppy holds.
 # 1.44MB only - the four fixtures do not fit a 360KB disk, and neither rule
 # they test has any geometry in it. The disk carries BOTH gates' fixtures
 # (tests/pkgbig.py and tests/pkgfence.py) because it is one `--raw` build and
@@ -9987,7 +10023,7 @@ pkgrun: $(BUILD)/pkgrun.img $(BUILD)/pkgrun360.img
 # ...and PKGMAX.O88, the one fixture that IS a package (tests/pkgmax.py): a
 # real image + bss of exactly APP_MAX_SIZE, which must LOAD - SPEC.md 20.1.1's
 # 64KB claim, the size two of the loader's words used to wrap on.
-$(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tests/pkgbig/pkgmax.asm \
+$(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tests/pkgbig/lie.py tests/pkgbig/pkgmax.asm \
                      apps/os88api.inc tools/os88disk.py tools/os88pkg.py \
                      | $(BUILD)
 	python3 tests/pkgbig/mkfix.py $(BUILD)/pkgbig
@@ -10001,6 +10037,7 @@ $(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tests/pkgbig/pkgmax.asm \
 		$(BUILD)/pkgbig/BSSWRAP.O88 $(BUILD)/pkgbig/BSSWORST.O88 \
 		$(BUILD)/pkgbig/PKGMAX.O88
 	@python3 tools/os88disk.py --verify $@
+	python3 tests/pkgbig/lie.py $@ HUGE.O88 33554432
 
 # --- PKGFMT, the format byte's disk (ON DEMAND: `make pkgfmt`) ---------------
 #
@@ -13085,6 +13122,28 @@ $(BUILD)/vm3bench360.img: $(BUILD)/vm3bench.o88 tools/os88disk.py
 $(BUILD)/vm3bench144.img: $(BUILD)/vm3bench.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/vm3bench.o88
 
+# CPUBENCH (tests/cpubench/cpubench.asm): what the instruction shapes
+# RealDMG's translated code is made of cost THIS machine - jumps taken and
+# not, LAHF/SAHF, SUB BP, memory through SS, segment loads - so 86Box's 286
+# and a real one can be set side by side (REALDMG-AOT-PLAN's branch round).
+# `make cpubench` is the package on a 1.44MB and a 360KB disk alone
+.PHONY: cpubench
+cpubench: $(BUILD)/cpubench144.img $(BUILD)/cpubench360.img
+
+$(BUILD)/cpubench.bin: tests/cpubench/cpubench.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/cpubench/cpubench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/cpubench/cpubench.asm
+	@echo "cpubench: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cpubench.o88: $(BUILD)/cpubench.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/cpubench.bin -o $@
+
+$(BUILD)/cpubench144.img: $(BUILD)/cpubench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/cpubench.o88
+
+$(BUILD)/cpubench360.img: $(BUILD)/cpubench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/cpubench.o88
+
 # ...and wave 0 (b): streaming a 12.6 MB file off the fixed disk, and the
 # controller's own ceiling. tests/viddisk.py builds the VHD it runs on.
 vidbench: $(BUILD)/viddisk.o88
@@ -14590,6 +14649,25 @@ $(BUILD)/megaxm.bin: tests/megaxm/megaxm.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megaxm/megaxm.asm
 $(BUILD)/megaxm.o88: $(BUILD)/megaxm.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megaxm.bin -o $@
+# MEGAHUGE (tests/megahuge): ONE CLAIM FOR ALL OF IT (KERN-MEGA-MEMORY-PLAN
+# MC5) - OSAPI_MEM_HUGE's query, a claim of its answer bridged across the
+# pool and the heap, a pattern through every window, the free, the query again
+$(BUILD)/megahuge.bin: tests/megahuge/megahuge.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahuge/megahuge.asm
+$(BUILD)/megahuge.o88: $(BUILD)/megahuge.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megahuge.bin -o $@
+# MEGACAPS (tests/megacaps): OSAPI_XMEM_CAPS answers what a claim is then
+# given, a cache in the pool counted as free (KERN-MEGA-PLAN 14.122)
+$(BUILD)/megacaps.bin: tests/megacaps/megacaps.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megacaps/megacaps.asm
+$(BUILD)/megacaps.o88: $(BUILD)/megacaps.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megacaps.bin -o $@
+# MEGARSQ (tests/megarsq): a file STREAMED the Video Player's way on
+# kern_mega, timed and checked (KERN-MEGA-PLAN 14.122)
+$(BUILD)/megarsq.bin: tests/megarsq/megarsq.asm apps/os88api.inc apps/os88pit.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarsq/megarsq.asm
+$(BUILD)/megarsq.o88: $(BUILD)/megarsq.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarsq.bin -o $@
 # MEGAI13 (tests/megai13): forty REFLECTED int 13h reads back to back, for the
 # pointer to move through (KERN-MEGA-PLAN 14.1 answer 18, 14.9); and a 1.44MB
 # floppy carrying it, for a B: drive
@@ -14662,7 +14740,7 @@ $(BUILD)/megaw32.o88: $(BUILD)/megaw32.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megaw32.bin -o $@
 # MEGAHIB (tests/megahib): MEGAXM's patterns HELD by a window across a
 # hibernate, and compared on a key - kern_mega's W5 witness
-# (docs/plans/KERN-MEGA-DOS-PLAN.md 8)
+# (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 8)
 $(BUILD)/megahib.bin: tests/megahib/megahib.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahib/megahib.asm
 $(BUILD)/megahib.o88: $(BUILD)/megahib.bin tools/os88pkg.py
@@ -14740,7 +14818,7 @@ MEGAAPPDIR := $(MEGADIR)/apps
 MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
-            $(MEGAAPPDIR)/realdmg.o88
+            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -14750,19 +14828,18 @@ MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 MEGASUB = $(patsubst $(BUILD)/%,$(MEGAAPPDIR)/%,$(filter $(MEGABASE),$(1))) \
           $(filter-out $(MEGABASE),$(1))
 # ...the system disks' two lists through it (`make small`'s SMALLSYSAPPS):
-# none of SYSTEM/'s or the core set's packages has an arm today, so these
-# name exactly what $(SYSAPPSARGS) and $(COREAPPSARGS) do - and the day one
-# does, kern_mega's system disk takes it without anybody remembering
+# the Task Manager is the one SYSTEM/ package with an arm (SPEC.md 28.4.15),
+# and kern_mega's system disk takes it here without anybody remembering
 MEGASYSAPPSARGS = $(addprefix SYSTEM:,$(call MEGASUB,$(SYSAPPS)))
 # ...and SYSTEM\'s two optional faces, MIXER.O88 and CDRACK.O88 (SPEC.md
 # 34.15, 119.6), which every roomy system disk carries beside the drivers they
 # need: the merge that brought them put them on kern_big's disks only, and
 # kern_mega is the kernel that runs on machines with a CD-ROM drive in them
 MEGASYSOPTARGS = $(addprefix SYSTEM:,$(call MEGASUB,$(SYSOPTIONAL)))
-# ...less REDLINE (SPEC.md 24.3.2): its inventory pass rewrites its own code
-# (103.2) and it has never been run under kern_mega's selectors
-MEGACOREOMIT := $(BUILD)/redline.o88
-MEGACOREARGS = $(addprefix APPS:,$(call MEGASUB,$(filter-out $(MEGACOREOMIT),$(CORE_TOOLS)))) \
+# ...REDLINE included (SPEC.md 24.3.2, KERN-MEGA-PLAN 14.118): it was left
+# off until it had been run under kern_mega's selectors, and its rows now run
+# there (tests/megaport.txt's mega-redline*)
+MEGACOREARGS = $(addprefix APPS:,$(call MEGASUB,$(CORE_TOOLS))) \
                $(addprefix GAMES:,$(call MEGASUB,$(CORE_GAMES)))
 
 $(MEGAAPPDIR)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
@@ -14848,6 +14925,18 @@ $(MEGAAPPDIR)/realdmg.o88: $(MEGAAPPDIR)/realdmg.bin $(BUILD)/rdgcore0.bin $(BUI
 	$(OS88PKG) $(MEGAAPPDIR)/realdmg.bin -o $@ --part $(BUILD)/rdgcore0.bin \
 		--part $(BUILD)/rdgcore1.bin --part $(MEGAAPPDIR)/rdgjitp.bin --part-compress lz4
 
+# The Task Manager's arm (SPEC.md 28.4.15): the memory map's second part,
+# RAM above 1MB at its own scale beside conventional memory - kern_mega's
+# alone, where that RAM is RAM a program runs in. The first SYSTEM/ package
+# with an arm, so $(MEGASYSAPPSARGS) puts it on kern_mega's system disks
+$(MEGAAPPDIR)/taskmgr.bin: apps/taskmgr/taskmgr.asm apps/os88api.inc \
+                           apps/os88ui.inc apps/os88dec.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DPKG_MEGA -o $@ apps/taskmgr/taskmgr.asm
+	@echo "taskmgr (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/taskmgr.o88: $(MEGAAPPDIR)/taskmgr.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/taskmgr.bin -o $@
+
 megapkgs: $(MEGAPKGS) $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 	@python3 tests/unit/t_megapkg.py --sizes
 .PHONY: megapkgs
@@ -14874,18 +14963,18 @@ mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/mega
 MEGADRIVERS = $(filter-out %/coldhma.sys %/xmem.drv,$(DRIVERS))
 $(BUILD)/mega.img: KMODDIR := $(MEGADIR)
 #
-# **ITS DOS.O88 IS kern_mega's OWN** (docs/plans/KERN-MEGA-DOS-PLAN.md 12.1
+# **ITS DOS.O88 IS kern_mega's OWN** (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 12.1
 # item 4): the same sources assembled with -DDOS_MEGA and kern_dos with
 # -DKD_MEGA, into $(MEGADIR)/kdos/, so the shipped $(SYSROOT) stays
 # byte-identical and a copy carried to the other kernel refuses in a sentence.
-$(BUILD)/mega.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/mega.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(STIKNOTESTXT) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
                    $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
 	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot.bin $(MEGADIR)/boothd.sys \
 		$(MEGADIR)/kdos/DOS.O88
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
-		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
-		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER)
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # ...and the 1.2MB 5.25" HD twin (KERN-MEGA-PLAN 14.1 answer 19: kern_mega's
 # system disk is 1.2MB and 1.44MB only - every machine that can run it has an
@@ -14897,14 +14986,14 @@ $(BUILD)/mega120.img: KMODDIR := $(MEGADIR)
 # $(MEGADIR), and two of them at once under -j race on one DOS.O88 (os88pkg
 # reading a file the other is still writing reads it as 0 bytes)
 $(BUILD)/mega120.img: | $(BUILD)/mega.img
-$(BUILD)/mega120.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/mega120.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(STIKNOTESTXT) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
                    $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
 	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot120.bin $(MEGADIR)/boothd.sys \
 		$(MEGADIR)/kdos/DOS.O88
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(MEGADIR)/boot120.bin --kernel $(MEGADIR)/$(KERNNAME) \
-		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
-		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER)
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # MEGACDTEST - kern_mega's CD-ROM machine disks (SPEC.md 119.7, KERN-MEGA-PLAN
 # 14.68): build/mega.img's files with a SYSTEM.CFG that wants SOUND.DRV (bit

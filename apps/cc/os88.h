@@ -1040,9 +1040,9 @@ int os88_snd_tone(int hz, int ticks, int prio);  /* hz 0 = off, ticks 0 = until
  * A _seg base MUST BE 512-BYTE ALIGNED (SPEC.md 2.1.1: every disk-visible
  * base is): a claim's own base is (the kernel's guard 6b - KB-granular
  * blocks from a 512-aligned heap), and so is any offset into it that is a
- * multiple of 0x200 (seg + 0x20, + 0x40, ...; on kern_mega an OS88_HIGHMEM
- * package's claim is a selector and takes no arithmetic at all - use the
- * _segoff forms below) - but seg + 0x10 is NOT, and
+ * multiple of 0x200 (seg + 0x20, + 0x40, ...; under kern_mega's protected
+ * mode EVERY claim is a selector and takes no arithmetic at all - use the
+ * _segoff forms below, or os88_seg_sub) - but seg + 0x10 is NOT, and
  * int 13h answers a run that then straddles a 64KB physical page with
  * error 09h on real hardware, which QEMU never shows. Read to an aligned
  * offset and move the bytes yourself if they must sit elsewhere (SPEC.md
@@ -1055,8 +1055,8 @@ int os88_file_write(const char *name, const void *buf, unsigned count);
 int os88_file_write_seg(const char *name, unsigned seg, unsigned count);
 /* ...and at an OFFSET into the claim, a multiple of 512 like the base. THE
  * WAY to name part of a claim: `seg + 0x20` is arithmetic on the segment,
- * and on kern_mega a claim of an OS88_HIGHMEM package is a SELECTOR, which
- * arithmetic breaks - claim + offset does not (KERN-MEGA-PLAN 14.12) */
+ * and on kern_mega EVERY claim is a SELECTOR, which arithmetic breaks -
+ * claim + offset does not (KERN-MEGA-PLAN 14.12, KERN-MEGA-MEMORY-PLAN MC7) */
 unsigned os88_file_read_segoff(const char *name, unsigned seg, unsigned off,
                                unsigned cap);
 int os88_file_write_segoff(const char *name, unsigned seg, unsigned off,
@@ -1219,11 +1219,30 @@ unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
                                                   * which may have MOVED */
 /* os88_mem_huge - a claim of ANY size (SPEC.md 50.3.5): 0 = refused, else its
  * first segment or selector; os88_mem_huge_step() is what to add to it for
- * each 64KB - 0x1000 for a conventional claim, 8 for a run of selectors above
- * 1MB on kern_mega. base + k * step is the one segment arithmetic a claim
- * allows; 0x1000 is only the conventional step */
+ * each 64KB - 0x1000 on a real-mode kernel, 8 under kern_mega's protected
+ * mode, where every claim is a run of selectors. base + k * step is the one
+ * segment arithmetic a claim allows, and only a huge claim allows it.
+ * Never pass kb = 0: that is OSAPI_MEM_HUGE's ASK (KERN-MEGA-MEMORY-PLAN
+ * MC5), which answers in AX and claims nothing, and this wrapper returns DX,
+ * so on kern_mega it would hand back a value that is no claim */
 unsigned os88_mem_huge(int kb);
 unsigned os88_mem_huge_step(void);
+/* os88_seg_para - the PARAGRAPH under a segment or selector below 1MB:
+ * the segment itself on every real-mode kernel, and under kern_mega, where
+ * every claim is a selector (KERN-MEGA-MEMORY-PLAN MC7), its descriptor's
+ * base / 16. A distance between two claims or parts, in paragraphs, is a
+ * difference of two of these and never of the values themselves */
+unsigned os88_seg_para(unsigned seg);
+/* os88_seg_sub - "seg + para" for a claim or region of yours, as a value that
+ * is right on EVERY kernel (OSAPI_SEG's SEG_SUB, SPEC.md 50.6.11): a DATA
+ * selector based `para` paragraphs in, `len` paragraphs long (0 = to the
+ * claim's end, 64KB at most). It is STABLE - the same arguments answer the
+ * same selector - and it moves and goes with the claim, so make a FIXED set
+ * once (one per 32KB of a big claim, one per plane) and keep them. 0 =
+ * refused, no LDT entry free. On every real-mode kernel it answers seg + para
+ * itself, so a value kept across a compaction there is a segment INSIDE the
+ * claim and a relocation proc moves it as it moves any derived segment. */
+unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len);
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
 
@@ -1341,8 +1360,10 @@ int os88_task_restartable(int on);            /* on: 1 = you may restart my
  * linear address and this dialect has no `long` (docs/C-TOOLCHAIN.md). */
 unsigned os88_part_seg(int i);       /* base segment; 0 = it is not here */
 /* THE CARVE CAN MOVE, if you say so (SPEC.md 73.14.2.1). The eager parts live
- * in ONE claim, and os88_part_seg's answer is arithmetic on its base - so a
- * copy of it you keep (a ROM's segment in a machine record, a table's) is
+ * in ONE claim, and os88_part_seg's answer is its base plus the part's
+ * paragraphs (on kern_mega a selector based there, which the kernel moves
+ * with the claim and frees with it, MC7) - so a copy of it you keep on a
+ * real-mode kernel (a ROM's segment in a machine record, a table's) is
  * stale the moment the compactor moves that claim, and by default it never
  * does: the carve is pinned. To let it move, say in your shim
  *

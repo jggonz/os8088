@@ -26,6 +26,18 @@ and the split's old box), which can only make this more lenient.
 A reading is WRONG when a picture pixel is lit and not blue (an actor's pen),
 and MISSING when it is black; both are counted, and the row fails on either.
 
+A WHOLE REPAINT IS NOT READ (`dd_full` set, SPEC.md 93.5.6's dd_draw_all):
+it fills the surface black and then blits the walls, so mid-repaint the walls
+are legitimately not there yet - and the glass, two refreshes behind, still
+holds whatever was under it (the desktop, on the way into the bracket).  A
+reading taken while one is under way, or within WINDOW guest cycles after one
+(`dd_fulls` moved), or within WINDOW of the census starting, is skipped and
+counted.  This was the row's one failure under load: the fullscreen pass
+started on a HOST sleep after F, so a loaded box began reading inside the
+bracket's own first repaint (or before the bracket had re-cut the tile at
+all, with the window's geometry) and reported every unpainted wall.  Every
+wait is in guest time now; the band frames the defect lives in are untouched.
+
 BREAK IT ON PURPOSE: `--nopok` finds every `mov byte [dd_pok], 1` store in
 the running image - the frame's, the window's and the W_PAINT's - and makes
 them store 0, which is the one-pen build on the
@@ -37,13 +49,13 @@ import argparse
 import os
 import struct
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tools"))
 
 import dotdel as D                                          # noqa: E402
+import os88marty                                             # noqa: E402
 import os88ui                                               # noqa: E402
 
 KEYS = ("ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight")
@@ -67,28 +79,31 @@ def census(tag, ui, p, say, samples, nopok=False):
     tw, th = p.w("dd_tw"), p.w("dd_th")
     bdx, bdy = p.w("dd_bdx"), p.w("dd_bdy")
     sb, bdseg, mh, mw = p.w("dd_sb"), p.w("dd_bdseg"), p.w("dd_mh"), p.w("dd_mw")
-    pic = bytes(m.read(bdseg << 4, sb * mh))
+    pic = bytes(m.read(D.lin(m, bdseg), sb * mh))
     ink = [(x, y) for y in range(mh) for x in range(mw)
            if (pic[y * sb + (x >> 3)] >> (7 - (x & 7))) & 1]
     sprsz = 2 * 16
-    spr_at = (p.seg << 4) + p.names["dd_spr"]
+    spr_at = p.base + p.names["dd_spr"]
     if nopok:
         # mov byte [dd_pok], 1 is C6 06 <lo> <hi> 01: make both store 0
         at = p.names["dd_pok"]
         pat = bytes([0xC6, 0x06, at & 0xFF, at >> 8, 0x01])
-        img = bytes(m.read(p.seg << 4, at))
+        img = bytes(m.read(p.base, at))
         hits = [i for i in range(len(img) - 4) if img[i:i + 5] == pat]
         if len(hits) not in (0, 3):     # 0: the windowed pass patched them
             return ["%s: --nopok found %d dd_pok stores, want 3" % (tag,
                                                                   len(hits))]
         for i in hits:
-            m.write((p.seg << 4) + i + 4, b"\x00")
+            m.write(p.base + i + 4, b"\x00")
     bps = [{"type": "execseg", "seg": p.seg, "off": D.codeoff("dd_blit")}]
     m.breakpoints(bps)
     wrong, missing, took, looked = {}, {}, 0, 0
     nopl, bad = 0, []                   # readings with the planes OFF, and
                                         # what each wrong one looked like
     kidx = 0
+    skipped = 0                         # readings inside a whole repaint
+    fulls = p.w("dd_fulls")
+    last_full = m.status()["cycles"]    # the census start counts as one
     hist = []                           # (guest cycle, {actor: (x, y, img)})
                                         # for every reading in WINDOW: see
                                         # the note at `spots`
@@ -103,10 +118,16 @@ def census(tag, ui, p, say, samples, nopok=False):
             break
         if p.b("dd_state") != 2:            # only a PLAYING frame's writes
             continue
-        m.write((p.seg << 4) + p.names["dd_lives"], bytes([99]))
+        m.write(p.base + p.names["dd_lives"], bytes([99]))
+        cyc = m.status()["cycles"]
+        f = p.w("dd_fulls")
+        if p.b("dd_full") or f != fulls:
+            fulls, last_full = f, cyc
+        if cyc - last_full <= WINDOW:
+            skipped += 1
+            continue
         cover = set()
         now = {}
-        cyc = m.status()["cycles"]
         for a in range(5):
             img, limg = p.b("dd_img", a), p.b("dd_limg", a)
             now[a] = [(p.w("dd_x", a) >> 4, p.w("dd_y", a) >> 4, img),
@@ -184,13 +205,38 @@ def census(tag, ui, p, say, samples, nopok=False):
                     "black, over %d mid-frame readings (%d pixels each) - a "
                     "wall went down in the wrong pen (SPEC.md 93.5.19). "
                     "Worst (count, (x, y)): %s. %d readings had the planes "
-                    "OFF; the first wrong ones: %s"
-                    % (tag, nw, nm, took, len(ink), worst, nopl, bad))
+                    "OFF, %d skipped inside a whole repaint; the first "
+                    "wrong ones: %s"
+                    % (tag, nw, nm, took, len(ink), worst, nopl, skipped,
+                       bad))
     else:
         say("%s: %d mid-frame readings, %d wall pixels looked at, 0 wrong, "
-            "0 missing (%d readings with the planes off)"
-            % (tag, took, looked, nopl))
+            "0 missing (%d readings with the planes off, %d skipped inside "
+            "a whole repaint)" % (tag, took, looked, nopl, skipped))
     return fail
+
+
+def to_bracket(m, p, frames=400):
+    """Stop at the first frame the bracket starts on a finished board."""
+    tile = (p.w("dd_tw"), p.w("dd_th"))
+    fulls = p.w("dd_fulls")
+    m.key("KeyF")
+    m.pause()
+    m.breakpoints([{"type": "execseg", "seg": p.seg,
+                    "off": D.codeoff("dd_draw")}])
+    ok = False
+    for _ in range(frames):
+        m.go()
+        if not m.wait_stop(20.0):
+            break
+        if (p.b("dd_inbr") and p.b("dd_full") == 0
+                and p.w("dd_fulls") != fulls
+                and (p.w("dd_tw"), p.w("dd_th")) != tile):
+            ok = True
+            break
+    m.breakpoints([])
+    m.go()
+    return ok
 
 
 def main(argv):
@@ -207,14 +253,24 @@ def main(argv):
     names = D.bss()
     with os88ui.boot(a.image, apps=a.apps, machine="os8088_xt_vga") as ui:
         ui.path(D.PKG)
-        time.sleep(2)
+        os88marty.pace(ui.m, 2)
         p = D.Probe(ui, names)
         ui.m.key("Enter")
-        time.sleep(3)
+        os88marty.pace(ui.m, 3)
         for what in ("windowed", "fullscreen"):
             if what == "fullscreen":
-                ui.m.key("KeyF")
-                time.sleep(3)
+                # AT A FRAME BOUNDARY, in guest time: the census reads the
+                # geometry and the board picture ONCE, so it may not start
+                # until the bracket has re-cut the tile, RE-RENDERED the
+                # picture (dd_relayout_ck - the tile word moves first, so a
+                # poll on it alone lands mid-render and reads the window's
+                # picture against the bracket's geometry) and finished its
+                # whole repaint.  The first dd_draw inside the bracket with
+                # dd_full clear and dd_fulls moved is exactly that moment.
+                if not to_bracket(ui.m, p):
+                    fail.append("vga fullscreen: never reached a frame of "
+                                "the bracket's own board")
+                    continue
             elif a.fullscreen_only:
                 continue
             fail += census("vga " + what, ui, p, say, a.samples, a.nopok)

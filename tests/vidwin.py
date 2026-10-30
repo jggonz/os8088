@@ -68,6 +68,11 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
+
+# KERN_MEGA (tests/megaport.txt, on 86Box's 1bpp adapters): the player's ARM
+# (build/megak/apps/, -DPKG_MEGA, KERN-MEGA-PLAN 14.66), whose symbols are
+# the arm's, and a region or claim that is an LDT selector (m.lin)
+MEGA = bool(os.environ.get("OS88_MEGA"))
 import vidplay                                                # noqa: E402
 
 DESK = {"herc": (0xB0000, vid.LAYOUT_BY_NAME["herc"], 348)}
@@ -88,8 +93,10 @@ def main():
     a = ap.parse_args()
     shadow = a.layout != "herc"
     os.chdir(ROOT)
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",),
+                       ("PKG_MEGA",) if MEGA else ())
+    pkg = os88build.at("build/megak/apps/video.o88" if MEGA
+                       else "build/video.o88")
     bad = []
     nf = vidplay.NF
     want_t = nf / vidplay.FPS * 1193182 / 65536
@@ -108,7 +115,8 @@ def main():
             w = ui.path("B:/CLIP.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)
+            base = lin(u16(rec, geom.W_SEG))
 
             def rw(n):
                 return u16(m.read(base + syms[n], 2))
@@ -225,6 +233,16 @@ def main():
                 if rw("vp_ps") != 1 or rb("vp_ok") != 1:
                     sys.exit("vidwin: the picture is not at its own size "
                              "here (scale %d)" % rw("vp_ps"))
+                if MEGA:
+                    # A 286 PLAYS THE CLIP'S PCM8 through the speaker, where
+                    # an 8088 mutes it as too fast for it (98.3.15, vp_mwhy
+                    # 2) - and with sound the CARD is the clock, which runs
+                    # on through the holds below and counts the frames it
+                    # left behind late. So the player is handed the 8088's
+                    # VERDICT, the load's own (vp_mwhy 2, muted) - the play
+                    # is the silent one this row is about
+                    m.write(base + syms["vp_mwhy"], b"\2")
+                    m.write(base + syms["vp_mute"], b"\1")
                 ui.mo.to(700, 12)           # the pointer off the window
                 border("the poster")
                 if rw("vp_py") % 4:
@@ -323,7 +341,7 @@ def main():
                 at = rw("vp_done")
                 img, bw, px, rows = vid.poster(vid.decode_at(r, at - 1),
                                                g.wb, g.h, 1)
-                got = bytes(m.read(rw("vp_pseg") * 16, bw * rows))
+                got = bytes(m.read(lin(rw("vp_pseg")), bw * rows))
                 d = sum(1 for x, y in zip(img, got) if x != y)
                 lab = u16(m.read(base + syms["vp_blabels"] + 4, 2))
                 print("   clicked at frame %d: the box holds it, %d bytes "

@@ -238,9 +238,166 @@ def boot_leg(bad):
     return report(bad)
 
 
+def marty_leg(bad, blank, boot):
+    """THE SAME THREE LEGS THROUGH os88marty's API, on a 286 or better whose
+    BIOS knows an ATA disk - this row's pairing exactly - with the disk
+    handed over as its C: (`--mount hd:0:`, 16 heads of 63 sectors) instead
+    of to a QEMU. kern_mega (tests/megaport.txt): Bochs's 386, the kernel's
+    files out of megak/, and a driver segment a SELECTOR, read through m.lin.
+    kern_big ($OS88_EMU=86box, tests/box86port.txt): 86Box's mr286 - MR BIOS
+    286, the disk on its ISA IDE as an identified type 47 - the shipped
+    kernel, and the driver read where os88geom.drv_base says (the HMA's on a
+    286 as on QEMU's 386). The fixture, the SYSTEM.CFG and every assertion
+    are the QEMU legs'."""
+    import os88marty as M
+    mega = bool(os.environ.get("OS88_MEGA"))
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    mk = os.path.join(os.environ.get("OS88_MEGA_BUILD") or "build", "megak") \
+        if mega else os.path.dirname(os88build.at("build/kernel.sys"))
+    try:
+        cfg = os.path.join(tmp, "SYSTEM.CFG")
+        open(cfg, "wb").write(b"O88CFG\0\0" + (3).to_bytes(2, "little")
+                              + b"DW" + bytes([1, 2])
+                              + (1 << 1).to_bytes(2, "little") + b"\0\0")
+        hdimg = os.path.join(tmp, "hd.img")
+        geo = ["--heads", "16", "--spt", "63", "--cyls", "130"]
+        if boot:
+            subprocess.run(
+                [sys.executable, "tools/os88hdd.py", "--raw", "--out", hdimg]
+                + geo + ["--kernel", os.path.join(mk, "kernel.sys"),
+                         "--vbr", os.path.join(mk, "boothd.bin"),
+                         "--mbr", os88build.at("build/mbr.bin"),
+                         "--file", "HDD.DRV=" + os88build.at("build/hdd.drv"),
+                         "--file", "CTRL.DRV=" + os.path.join(mk, "ctrl.drv"),
+                         "--file", "CALC.O88=" + os88build.at(
+                             "build/calc.o88"),
+                         "--file", "SYSTEM.CFG=" + cfg],
+                check=True, capture_output=True)
+            sysimg = None               # A: empty: the BIOS boots C:
+        else:
+            subprocess.run([sys.executable, "tools/os88hdd.py", "--raw",
+                            "--noboot", "--out", hdimg] + geo +
+                           ["--file", "CALC.O88=" + os88build.at(
+                               "build/calc.o88")],
+                           check=True, capture_output=True)
+            if blank:
+                with open(hdimg, "r+b") as f:
+                    f.seek(510)
+                    f.write(b"\0\0")
+            sysimg = os.path.join(tmp, "sys.img")
+            shutil.copy(M.system_disk(os88build.at("build/os8088.img")),
+                        sysimg)
+            subprocess.run([sys.executable, "tools/os88fat.py", "del", sysimg,
+                            "SYSTEM.CFG"], capture_output=True)
+            subprocess.run([sys.executable, "tools/os88fat.py", "add", sysimg,
+                            cfg, "SYSTEM.CFG"], check=True,
+                           capture_output=True)
+        with M.launch(sysimg, apps=os88build.at("build/apps.img"),
+                      machine="os8088_xt_hdd" if mega else
+                      "at286_vga_hdd", boot=False,
+                      extra=["--mount", "hd:0:" + hdimg]) as m:
+            m.run()
+            M.kernel_up(m)
+            S = m.sym
+            ui = os88ui.UI(m)
+            ui.ready()
+            row = S("drv_tab") + 1 * DRVR_SIZE + geom.DRVR_SEG
+            seg = lambda: struct.unpack("<H", m.read(row, 2))[0]
+
+            def capp(tag):
+                try:
+                    ui.path("C:/CALC.O88")      # raises naming what it saw
+                    print("   %s C: lists CALC.O88 and it launches: True"
+                          % tag)
+                except Exception as e:          # noqa: BLE001
+                    bad.append("%s C: did not work: %s" % (tag, e))
+            if boot:
+                bv = m.read(S("dsk_bootvol"), 1)[0]
+                k = vrow(m, S, bv)
+                print("   B1. booted from volume %d; its row: kind %d unit "
+                      "%02Xh class %d bunit %02Xh; HDD.DRV at %04Xh"
+                      % ((bv,) + k + (seg(),)))
+                if bv != 2 or k[0] != 1 or k[3] != 0x80:
+                    bad.append("B1: the boot volume C: was not handed to the "
+                               "driver (kind %d, bunit %02Xh)" % (k[0], k[3]))
+                capp("B2.")
+                import dispcp
+                import os88mouse
+                mo = os88mouse.Mouse(marty=m)
+                done = lambda mm, **kw: M.ui_done(mm)
+                dispcp.open_panel(m, mo, S, done, page=2)   # CP_IDRV
+                wx, wy = dispcp._cp_win(m, S)
+                import rdpreserve as rp
+                hx = wx + 1 + rp.CP_RX + 40
+                hy = wy + rp.TITLE_H + 1 + rp.CP_DBY1 + rp.CP_DROWH \
+                    + rp.CP_DROWH // 2
+                mo.click(hx, hy)                # the Hard disk row: OFF
+                M.until(m, lambda _: seg() == 0, "HDD.DRV to unload",
+                        guest=30.0)
+                M.ui_done(m)
+                k = vrow(m, S, bv)
+                print("   B3. HDD.DRV unloaded; C:'s row: kind %d unit %02Xh "
+                      "class %d bunit %02Xh" % k)
+                if k != (0, 0x80, 0, 0):
+                    bad.append("B3: C: was not GIVEN BACK to the BIOS when "
+                               "the driver went (%r)" % (k,))
+                mo.click(hx, hy)                # ...and ON again
+                M.until(m, lambda _: seg() != 0, "HDD.DRV to load again",
+                        guest=30.0)
+                M.ui_done(m)
+                k = vrow(m, S, bv)
+                print("   B4. HDD.DRV again; C:'s row: kind %d unit %02Xh "
+                      "class %d bunit %02Xh" % k)
+                if k[0] != 1 or k[3] != 0x80:
+                    bad.append("B4: C: was not taken again when the driver "
+                               "came back (%r)" % (k,))
+                return report(bad)
+            syms = os88drvsym.symbols("hdd.bin")
+            if not seg():
+                bad.append("HDD.DRV is not loaded - SYSTEM.CFG's bit 1 was "
+                           "not read, and this tests nothing")
+                return report(bad)
+            # kern_mega: a selector, org-0 offsets from it; kern_big: a
+            # segment, in the HMA on a 286 as on QEMU's 386 (2.10.8)
+            base = m.lin(seg(), 0) if mega else geom.drv_base(seg())
+            nd = m.read(base + syms["hd_ndev"], 1)[0]
+            rows = [m.read(base + syms["hd_devs"] + i * HDD_SIZE, HDD_SIZE)
+                    for i in range(nd)]
+            for i, r in enumerate(rows):
+                print("   1. device %d: kind %d unit %02Xh bios %02Xh base "
+                      "%04Xh geometry %d/%d/%d" % (
+                          i, r[HDD_KIND], r[HDD_UNIT], r[HDD_BIOS],
+                          struct.unpack_from("<H", r, HDD_BASE)[0],
+                          struct.unpack_from("<H", r, 4)[0],
+                          struct.unpack_from("<H", r, 6)[0],
+                          struct.unpack_from("<H", r, 8)[0]))
+            if blank:
+                r = rows[0] if rows else None
+                if r is None or r[HDD_KIND] != HDK_BIOS or \
+                        r[HDD_UNIT] != 0x80 or r[HDD_BIOS] != 0x80 or \
+                        struct.unpack_from("<H", r, HDD_BASE)[0]:
+                    bad.append("a disk with no 55AA at LBA 0 was taken, or "
+                               "its BIOS row left changed")
+                return report(bad)
+            if not rows or rows[0][HDD_KIND] != HDK_IDE or \
+                    rows[0][HDD_BIOS] != 0x80 or rows[0][HDD_UNIT] != 0 or \
+                    struct.unpack_from("<H", rows[0], HDD_BASE)[0] != 0x1F0:
+                bad.append("the BIOS's drive 80h was not taken by rung 1 "
+                           "(row 0 is not IDE 1F0h unit 0 with HDD_BIOS 80h)")
+            if nd != 1:
+                bad.append("%d device rows for one disk, not 1" % nd)
+            capp("3.")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return report(bad)
+
+
 def main():
     blank = "--blank" in sys.argv[1:]
     bad = []
+    import os88marty
+    if os.environ.get("OS88_MEGA") or os88marty.emulator() != "marty":
+        return marty_leg(bad, blank, "--boot" in sys.argv[1:])
     if "--boot" in sys.argv[1:]:
         return boot_leg(bad)
     # -DHDTOOL_KB and every other define off the Makefile's own recipe, and

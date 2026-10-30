@@ -241,14 +241,14 @@ def refuse_offgrid(m, S):
     the patch is a `jmp short .refuse` over `.offg`'s first two bytes, which
     an off-grid band reaches only after the arguments have passed.
     """
-    at = S("gfx_blit1_x.offg")
+    at = m.sym("gfx_blit1_x.offg")     # `.cold`: m.sym follows a slide
     code = m.read(at - 4, 4)
     if code[:3] != b"\xA8\x07\x74":
         raise RuntimeError("gfx_blit1_x.offg does not follow `test al, 7 / "
                            "jz`: %s" % code.hex())
-    if at + code[3] - 256 * (code[3] > 127) != S("gfx_blit1_x.argok"):
+    if at + code[3] - 256 * (code[3] > 127) != m.sym("gfx_blit1_x.argok"):
         raise RuntimeError("gfx_blit1_x's jz is not to .argok")
-    rel = S("gfx_blit1_x.refuse") - (at + 2)
+    rel = m.sym("gfx_blit1_x.refuse") - (at + 2)
     if not -128 <= rel <= 127:
         raise RuntimeError(".refuse is out of a short jump's reach (%d)" % rel)
     m.write(at, bytes([0xEB, rel & 0xFF]))

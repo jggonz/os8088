@@ -89,9 +89,12 @@ class Pkg:
     """Read and write the running package's own variables."""
     def __init__(self, m, seg, syms):
         self.m, self.seg, self.s = m, seg, syms
+        # the segment's linear base: seg * 16, or on kern_mega (Bochs) the
+        # base in its LDT descriptor, read once (tests/megaport.txt)
+        self.base = m.lin(seg) if hasattr(m, "lin") else seg * 16
 
     def addr(self, name):
-        return self.seg * 16 + self.s[name]
+        return self.base + self.s[name]
 
     def rw(self, name):
         return u16(self.m.read(self.addr(name), 2))

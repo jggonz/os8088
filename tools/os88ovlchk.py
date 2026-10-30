@@ -79,7 +79,7 @@ MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
 # clone module's every `call COLD_SEG:` was correct, and would not have been
 # reported had one been near.
 FAR = ('.boot2', '.blob', '.ovl', '.cold', '.mega') + MODS  # sections with a vstart
-# `.mega` is kern_mega's own segment (docs/plans/KERN-MEGA-SEGMENTS-PLAN.md):
+# `.mega` is kern_mega's own segment (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md):
 # protected-mode code under MEGA_SEL_CODE, vstart 0 like `.text`, so a near
 # call between the two assembles and lands in the other one's bytes.
 # `.blob` IS NOT A NASM SECTION. It is this scanner's name for the boot

@@ -129,8 +129,12 @@ def main():
         if not os.path.exists(img):
             sys.exit("no %s - `make` first" % img)
 
+    # kern_mega (tests/megaport.txt): the row hands Bochs the MartyPC
+    # template as its C: (instdeep's way)
+    run_dir = M.stage_run_dir("instassoc") if os.environ.get("OS88_MEGA") \
+        else None
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=ID.MACHINE, boot=False) as m:
+                  machine=ID.MACHINE, boot=False, run_dir=run_dir) as m:
         m.run(); M.kernel_up(m)       # a state gate: every act is a click
         ID.install(m)
         v = ID.partition(ID.vhd(m))     # inside the `with`: the media go with it

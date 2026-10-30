@@ -169,11 +169,31 @@ def leg(defines, label, image=None, apps=None):
         # 18.100's park now ENDS in the int 19h, so on the default arm the
         # GUI's last instruction is dsk_rb_go in .cold; NOFDDPARK=1 keeps
         # ui_rb_go in .text.
-        m.bp_exec(S("ui_rb_go" if "NO_FDDPARK" in defines else "dsk_rb_go"))
+        #
+        # **THE ADDRESS COMES FROM m.sym() AND NOT FROM S()**, and this row was
+        # the case that proved it: MACHINE is a CGA, so kmain_o SLIDES `.cold`
+        # down by VGA_PARA at boot (docs/plans/MOVABLE-COLD-PLAN.md 2), and
+        # os88sym.linear's address for a `.cold` label is then 0x7F0 bytes
+        # above the code it names. That address held dskw_norm.hi, so the
+        # "park" stop was taken inside the SECOND boot's first by-name read -
+        # after int 19h, on a machine every emulator here starts parked - and
+        # the row passed vacuously, or missed when that boot did not reach
+        # the branch inside 60 guest seconds. m.sym() reads [api_coldseg] and
+        # follows the slide; the CS:IP check below makes any repeat of it a
+        # named failure rather than a reading taken somewhere else.
+        go = m.sym("ui_rb_go" if "NO_FDDPARK" in defines else "dsk_rb_go",
+                   defines)
+        m.bp_exec(go)
         m.write(S("ui_rebootq"), bytes([UI_RBQ_NOFLUSH]))
         m.run()
         if not m.wait_stop(60.0):
             say("  !! ui_rb_go was never reached")
+            return {"fresh": fresh, "dirty": dirty, "parked": None, "eqp": eqp}
+        r = m.regs()
+        at = (r["cs"] << 4) + r["ip"]
+        if at != go:
+            say("  !! stopped at %04X:%04X, not at the int 19h (%05X)"
+                % (r["cs"], r["ip"], go))
             return {"fresh": fresh, "dirty": dirty, "parked": None, "eqp": eqp}
         parked = show("at ui_rb_go, one instruction from int 19h", st3(m))
         return {"fresh": fresh, "dirty": dirty, "parked": parked, "eqp": eqp}

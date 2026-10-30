@@ -67,7 +67,12 @@ C kernel/hiber.inc MEM_K_HIB             # the hibernate's HMA-pool copy and res
                                          # around it is about to be overwritten
 B kernel/font.inc MEM_K_FONT             # the 8x8 glyph table copied out of an
                                          # option ROM: 1KB claimed TOP-DOWN at
-                                         # boot before any driver, never freed
+                                         # boot before any driver, never freed -
+                                         # on kern_mega it is copied above 1MB
+                                         # and FREED at the switch
+                                         # (mem_hicaches_f, KERN-MEGA-PLAN
+                                         # 14.120), so no conventional pin is
+                                         # left there at all
 X kernel/band.inc MEM_K_BAND             # the 1bpp band composer's buffer, taken
                                          # once at boot and never freed - and only
                                          # the BAND=1 knob assembles band.inc, so
@@ -88,7 +93,8 @@ N kernel/filecp.inc MEM_K_COPY           # Cut/Copy/Paste's page-safe copy buffe
                                          # is held across a suspended overwrite
                                          # QUESTION - a user wait. K4b, a one-word
                                          # proc (~17 bytes), waits for a size pass
-N kernel/mega.inc MEM_K_MTBL             # kern_mega's 82KB descriptor tables in
+N kernel/mega.inc MEM_K_MTBL             # kern_mega's descriptor tables (82KB once,
+                                         # ~11KB since MC7's growable LDT) in
                                          # conventional memory. Not a ceiling
                                          # claim after all: mega_enter runs after
                                          # drv_boot, so unloading a boot driver
@@ -188,8 +194,14 @@ C apps/frotz/zpic.inc zp_seg             # a .PIX archive read and validated ins
                                          # one call, freed before it returns
 C apps/frotz/zpic.inc zp_pseg            # the .mg1 probe buffer, claimed and freed
                                          # inside one call
-C apps/realdmg/rwlog.inc @rw_logwrite    # the log's text, composed and written
-                                         # inside one command (REALDMG-SPEC 14.4)
+C apps/realdmg/rwbank.inc @rw_mclaim     # RealDMG's side buffers (REALDMG-SPEC
+                                         # 10.3.3), for the caller to store: a
+                                         # replay's buttons and the log's records
+                                         # go into rw_rpseg and rw_logseg, which
+                                         # rw_mfree declares movable (rw_mtab);
+                                         # the log's text is composed and written
+                                         # inside one command (14.4). One that
+                                         # lives in a lent slot is no claim at all
 C apps/realdmg/rwaot.inc rw_abseg        # a precompiled package's cluster bounce,
                                          # a claim of its own only when a cluster
                                          # passes 16KB: claimed and freed inside
@@ -229,7 +241,7 @@ C apps/excitebike/game.inc xb_tseg       # the harness's script and trace, insid
                                          # the fsx bracket, freed at xb_fsdone
 C apps/excitebike/sprite.inc xb_sprseg   # the compiled poses, far-called IN the
                                          # claim, inside the fsx bracket only
-C apps/excitebike/video.inc @xb_partget  # the game art, read inside the fsx
+C apps/excitebike/video.inc op_base     # the game art, read inside the fsx
                                          # bracket and freed at its end
 C apps/pixelstein/pxstein.asm @pxl_entry # the loader's reserve, held across
                                          # op_load inside the entry call
@@ -401,7 +413,7 @@ N apps/pixelstein/pxstein.asm op:PX_PART_LEV  # the 10KB levels, behind the same
                                          # fence (6.5)
 N apps/pixelstein/pxstein.asm pxl_sseg   # the 60KB sprite set, behind the same
                                          # fence (6.5)
-N apps/browser/brdownload.inc br_dl_partpaint+2  # the Download Manager's
+N apps/browser/brdownload.inc op:0      # the Download Manager's
                                          # lazy part: far-called, and Copy
                                          # Selection claims under that far call, so
                                          # op_movable's rule (SPEC.md 20.12.12)

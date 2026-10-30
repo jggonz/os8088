@@ -58,6 +58,8 @@ import dispcp                                               # noqa: E402
 from os88geom import (VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY,   # noqa: E402
                       VID_CTX_CW, VID_CTX_CH, WIN_SIZE, W_TITLE, KERNEL_SEG)
 
+MEGA = bool(os.environ.get("OS88_MEGA"))
+
 TITLE_H = 18
 PARK = (5, 45)                  # the pointer, off every rect measured here:
                                 # left of the window in both positions and
@@ -125,10 +127,18 @@ def leg(image, apps, machine, tree, say):
     library helpers here need (they take no defines).
     """
     tree = tree or os88build.plain()
-    tree.apply()
-    defs = tree.defines
-    image = tree.img(os.path.basename(image))
-    apps = tree.img(os.path.basename(apps))
+    if MEGA:
+        # KERN_MEGA ON 86BOX (tests/megaport.txt): the tree's kern_mega disks,
+        # its map read through $OS88_MEGA_BUILD (os88sym.megak) - the two
+        # cards are 86Box's CGA and Hercules on the mr286
+        os.environ["OS88_MEGA_BUILD"] = tree.dir
+        defs = ()
+        image, apps = tree.img("mega.img"), tree.img("megaapps.img")
+    else:
+        tree.apply()
+        defs = tree.defines
+        image = tree.img(os.path.basename(image))
+        apps = tree.img(os.path.basename(apps))
     S = lambda n: os88sym.linear(n, defines=defs)           # noqa: E731
     # EVERY READ HERE IS GUEST MEMORY - the window table and the two cards'
     # VRAM (m.vram, not the rendered glass) - so after the boot the wait is the
@@ -284,7 +294,8 @@ def main(argv):
         # failure does not leave a knob kernel in build/ for the next row to
         # drive". build/ is not written at all now, so there is nothing to put
         # back and nothing a failure can leave behind.
-        knob = os88build.tree("NOSEAMCUT=1")
+        knob = os88build.tree("NOSEAMCUT=1", targets=("mega",)) if MEGA \
+            else os88build.tree("NOSEAMCUT=1")
         bsolo, bstrad, bph, _ = leg(a.image, a.apps, mach, knob, say)
         bd = diff(bsolo, bstrad)
         if not bd:

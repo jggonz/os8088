@@ -1,5 +1,9 @@
 # kern_mega: tracks to run side by side
 
+**HISTORY (2026-10-26): every track here (M3-M6) has landed**; what it built is
+KERN-MEGA-PLAN section 10.3 and section 14. Kept as the brief the parallel
+sessions worked from.
+
 Written 2026-10-18 for parallel sessions, cut from `protected-mode` at the
 commit that adds this file. Each track is one session. **Read Part A first,
 then only your track.** The design they all serve is
@@ -294,7 +298,7 @@ or MartyPC (CLAUDE.md's instruments) and on kern_mega under Bochs.
 
 ## Track 5 - the plan for M6: DOS beside protected mode, and hibernate
 
-**Goal.** A plan document, no code: `docs/plans/KERN-MEGA-DOS-PLAN.md`.
+**Goal.** A plan document, no code: `docs/plans/completed/KERN-MEGA-DOS-PLAN.md`.
 
 **Inputs.** KERN-MEGA-PLAN.md 2.6 and 2.7 (the feasibility verdict: drop to
 real mode for the bracket) and section 13 (high-first, so conventional memory
@@ -326,7 +330,7 @@ cut from `protected-mode`. Part A applies in full.
 
 **Goal.** A DOS program runs from kern_mega's desktop and the desktop comes
 back, on a 386 under Bochs and on the Victory 286, by the route
-docs/plans/KERN-MEGA-DOS-PLAN.md chose: the WHOLE-MACHINE handoff ("arm 3"),
+docs/plans/completed/KERN-MEGA-DOS-PLAN.md chose: the WHOLE-MACHINE handoff ("arm 3"),
 with conventional memory PARKED in a block above 1MB in place of a hibernation
 file. **Read that plan first, all of sections 1-10 and 12.1** - 12.1 is the
 owner's answers to its open questions and it binds you:

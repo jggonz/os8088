@@ -111,7 +111,7 @@ with the stub (kdlayout.inc) and cannot move, so CORE_ORG has to rise"
 %include "kdxms.inc"                ; ...and kern_mega's XMS door: the arena,
                                     ; the int 15h filter (SPEC.md 96.15.4)
 %include "kdpark.inc"               ; ...and the way back to its park
-                                    ; (docs/plans/KERN-MEGA-DOS-PLAN.md 2.3)
+                                    ; (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 2.3)
 %endif
 %ifdef KD_HMA
 %include "kdhma.inc"                ; ...and the HMA arm's low half (W4)

@@ -1763,7 +1763,7 @@ x3_fbytes:
 ; x3_snd_open - the grant, the pre-roll (the worker's own producer, run here),
 ; the format (verb 11, right before verb 0), the stream, the worker.
 ; in:  [x3_sjob] says which producer (WJ_LIVE / WJ_FILE)
-; out: CF = 1 refused, x3_st says why
+; out: CF = 1 refused, X3S_ERR says why (the state is the caller's)
 ; -----------------------------------------------------------------------------
 x3_snd_open:
     mov byte [x3_job], WJ_NONE      ; (the worker sits it out until the open)
@@ -1876,9 +1876,8 @@ x3_snd_open:
     jmp short .fail
 .nomem:
     mov word [x3_st+X3S_ERR], ap_s_nomem
-.fail:
-    call x3_snd_close
-    mov byte [x3_st+X3S_STATE], X3ST_ERROR
+.fail:                              ; (X3S_ERR only: the STATE is the caller's,
+    call x3_snd_close               ; a ladder's retry never shows ERROR)
     stc
     ret
 
@@ -3366,6 +3365,17 @@ x3_wfailed:
 ; it, the histories reset, those frames decoded to nothing, the card opened
 ; -----------------------------------------------------------------------------
 x3_live_at:
+    call x3_live_q
+    jnc .ok
+    mov byte [x3_st+X3S_STATE], X3ST_ERROR
+.ok:
+    ret
+
+; x3_live_q - x3_live_at with a refusal left to the caller: X3S_ERR says why
+; and the state is untouched, so the ladder's retry (x3l_done's .cant) is
+; never ERROR on the way - which a poll of x3_st saw, at a rate that rose
+; with host load (xtmp3rate's rungfail)
+x3_live_q:
     call x3_snd_close
     call x3_samp2ms                 ; DX:AX = its millisecond
     call x3_resync                  ; the ring, the front, the backend there
@@ -3705,7 +3715,7 @@ x3_steptick:
 ; this source and the rung's output (x3_ofmt). Switching backend drops the one
 ; part before fetching the other (SPEC.md 121.3); its work segments are
 ; claimed as CAPS asks and freed with it. On the UI task.
-; out: CF = 1 refused, x3_st says why
+; out: CF = 1 refused, X3S_ERR says why (the state is the caller's)
 ; -----------------------------------------------------------------------------
 x3_rungset:
     mov [x3_rung], al
@@ -3824,8 +3834,7 @@ x3_rungset:
     jmp short .fail
 .oe:
     mov word [x3_st+X3S_ERR], x3_s_decode
-.fail:
-    mov byte [x3_st+X3S_STATE], X3ST_ERROR
+.fail:                              ; (X3S_ERR only, as x3_snd_open's)
     stc
     ret
 
@@ -4843,7 +4852,7 @@ x3l_okc:
 x3l_launch:
     call x3_rungset
     jc .no
-    mov byte [x3_st+X3S_STATE], X3ST_CHECK  ; (a refusal said ERROR)
+    mov byte [x3_st+X3S_STATE], X3ST_CHECK  ; (the part's hold said LOAD)
     xor ax, ax
     xor dx, dx
     call x3_resync                  ; the stream's start
@@ -5275,7 +5284,7 @@ x3l_done:
     call x3_rungset
     jc .cant
     call x3_ms2samp
-    call x3_live_at
+    call x3_live_q
     jc .cant
     ret
 .cant:                              ; A RUNG THAT CANNOT START - its claims
@@ -5543,11 +5552,12 @@ x3_file_at:
     call x3_prime
     mov byte [x3_sjob], WJ_FILE
     call x3_snd_open
-    jc .out
+    jc .err
     mov byte [x3_md], MD_FILE
     mov byte [x3_st+X3S_STATE], X3ST_FILE
-    call x3_flagsvol
-.out:
+    jmp x3_flagsvol
+.err:
+    mov byte [x3_st+X3S_STATE], X3ST_ERROR
     ret
 
 ; =============================================================================
@@ -5782,6 +5792,7 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3h_kind, 1                 ; THE HOLD (x3hold.inc): none, XMS, conv
     X3B x3h_on, 1                   ; ...whole
     X3B x3h_base, 4                 ; ...its XMS base, or its segment
+    X3B x3h_win, 2                  ; x3h_at's window, 0 = not made yet
     X3B x3h_ckb, 2                  ; ...a conventional one's KB
     X3B x3h_size, 4                 ; ...the file's bytes
     X3B x3h_have, 4                 ; ...and how many are in

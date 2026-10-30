@@ -131,7 +131,8 @@ def main(argv):
         m.advance(frames=30)
         m.run()
         if a.clobber_si:
-            lin = seg << 4
+            # seg << 4, or the selector's base on kern_mega (megaport.txt)
+            lin = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)(seg)
             for name, nxt, tail in (("cs_onclick", "cs_onup", b"\x5f\x5e\x5a\x59\x5b\x58\xc3"),
                                     ("cs_drtake", "cs_drcloseall", b"\x5e\x58\x9d")):
                 code = m.read(lin + mp[name], mp[nxt] - mp[name])
@@ -377,7 +378,7 @@ def main(argv):
               % bss("cs_page", 1))
         pl = rect("cs_drplane")
         bx, by = (pl[0] + pl[2]) // 2, (pl[1] + pl[3]) // 2
-        drec = (seg << 4) + mp["cs_drplane"]
+        drec = getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)(seg, mp["cs_drplane"])
 
         # 7a. a press that could not arm the clip must leave the control SHUT.
         # It used to leave OS88UI_DR_OPEN at 1 with nothing drawn, and the next

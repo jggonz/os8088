@@ -74,6 +74,9 @@ UNREGISTERED = {
     "mrprobe.py": "MIDIRack's guest reader (SPEC.md 105.11) - the running "
                   "package's variables by NAME, for tests/midirack.py; "
                   "library, not a test",
+    "megafix.py": "a row's built system-disk fixture (stik*360.img) made "
+                  "again on build/mega.img for the rows ported to kern_mega "
+                  "(tests/megaport.txt); a fixture, not a test",
     "hdoff.py": "a system disk with the hard disk ANSWERED OFF (SPEC.md "
                 "51.5.4), for the rows that tick HDD.DRV in themselves now "
                 "that SPEC.md 51.3.2 loads it at boot - imported by hddcp, "
@@ -125,10 +128,15 @@ UNREGISTERED = {
                  "tests/dostrap/dospkt.asm is not. Both differences fail as a "
                  "message about the wrong subject. tests/dosxlat.py is the "
                  "registered row that reads through it",
+    "os88qmpmega.py": "the QMP socket QEMU's network rows drive, answered "
+                       "by a kern_mega Bochs: a library imported by "
+                       "os88qemu.py's launchers under OS88_MEGA, not a row",
     "os88qemu.py": "the teardown every QEMU launcher registers, written once "
                    "rather than thirteen times - library, not a test. What "
                    "checks it is `t_qemuown`, which asserts every launcher "
                    "calls it",
+    "gftp.py": "ftplib with every timeout read as GUEST seconds - a library "
+               "imported by tests/ftpd.py, not a row; ftpd is what drives it",
     "benchlib.inc": "a benchmark library, not a test",
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",

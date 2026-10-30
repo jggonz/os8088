@@ -107,7 +107,18 @@ class Wizard(IW.Wizard):
         laid its buttons out only when it painted hit-tested the press
         against where the window USED to be: "Finished - click Next", and
         Next did nothing until a minimize and restore repainted it."""
-        self.button(IW.NEXT)
+        if getattr(self.m, "bochs", False):
+            # kern_mega under Bochs copies both disks in seconds: the click's
+            # own guest-paced settle would spend the copy before the first
+            # look, so the press is made bare and the watch starts at once
+            click, self.click = self.click, (
+                lambda x, y: self.ui.mo.click(x, y, settle=0))
+            try:
+                self.button(IW.NEXT)
+            finally:
+                self.click = click
+        else:
+            self.button(IW.NEXT)
         bar = BarWatch(self.m)
         lines = self.ended(what, limit=limit, sample=bar.sample)
         bar.verdict(what)
@@ -227,7 +238,8 @@ def main():
             sys.exit("no %s - `make` first" % f)
     run_dir = M.stage_run_dir("install")
     vhd = os.path.join(run_dir, ID.VHD_REL)
-    src = ID.Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    src = ID.Vol(open(M.system_disk(os88build.at("build/os8088-360.img")),
+                      "rb").read())     # (mega.img on kern_mega)
 
     # --- 1. from the floppy: ERASE the DOS partition -------------------------
     with M.launch("build/os8088-360.img", apps="build/apps360.img",

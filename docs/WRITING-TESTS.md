@@ -166,7 +166,7 @@ Row("lzmod", "soak", py("tests/lzmod.py"), 30.0,
 | `cmd` | `py("tests/x.py", "--flag")`, run with `cwd=ROOT` |
 | `secs` | **measured** (§4) |
 | `why` | what breaks if this goes red, with the § that owns it - for somebody who finds it failing in a year |
-| `needs` | capabilities, probed: `marty`, `qemu`, `qemu9`, `86box`, `bochs`, `nasm`, `nasm3`, `cc`, `pil`, `unicorn`, `ffmpeg`, `dosbox`, ... A Python module the row imports is a capability too. A missing one SKIPS the row - the box declining to answer, never a pass |
+| `needs` | capabilities, probed: `marty`, `qemu`, `qemu9`, `qemuvt`, `86box`, `bochs`, `nasm`, `nasm3`, `cc`, `pil`, `unicorn`, `ffmpeg`, `dosbox`, ... A Python module the row imports is a capability too. A missing one SKIPS the row - the box declining to answer, never a pass |
 | `wants` | build artefacts the row OPENS that `make all` does not build - **paths, never make targets** (§5.1) |
 | `serial` | it drives an emulator; implied by `needs=("marty",)`, say it for QEMU |
 | `builds` | it runs `make` in `build/`. **You almost certainly do not want this** (§5) |
@@ -298,6 +298,11 @@ built one needed only the shipped kernel and a different fixture.
   failed at a different step every time (incident 17). Write scratch through
   `tempfile` (the runner points `$TMPDIR` at `build/tmp/`) or key it to the
   process, and use `os88marty.scratch_disk` for a manufactured image.
+  The runner backs this up for ONE case and only one: two rows running the
+  SAME script (a row and its `mega-`/`box-` port, two legs of one file)
+  never share the emulator lane at once - the script is an implicit lock
+  (`tools/os88test.py`'s `lane_locks`, docs/plans/SOAK-PARALLEL.md 18). It
+  does nothing for a path two DIFFERENT scripts both write.
 
 ---
 

@@ -240,7 +240,7 @@ KDL_STAGE   equ 104             ; dw WHERE THE KERNEL WILL LOOK for everything
                                 ; The payload is 377 bytes today; the assert
                                 ; each side writes is what keeps it true
 
-; --- THE kern_mega TAIL (docs/plans/KERN-MEGA-DOS-PLAN.md 2.3, 6) -----------
+; --- THE kern_mega TAIL (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 2.3, 6) -----------
 ; The last 24 bytes of the sector, written by kern_mega's `hbm_dosrun` into
 ; the STAGED block and read only by a -DKD_MEGA kern_dos. AT THE END AND NOT
 ; IN THE HEADER, because the header runs to KDL_BODY with no spare byte and a
@@ -260,8 +260,18 @@ KDL_PKB     equ 502             ; dw KB of conventional memory parked (from 0)
 KDL_PLOW    equ 504             ; dw the lowest PARAGRAPH left IN PLACE (12.1
                                 ;    item 5's partial park), 0 = all parked:
                                 ;    kern_dos's arena must end below it
-KDL_POUT    equ 506             ; dw ms the park's copy and sum took, carried
-                                ;    to the way back for the menu bar's line
+KDL_SNAPLIN equ 506             ; dw THE PROGRAM'S LAST SCREEN (KERN-MEGA-PLAN
+                                ;    14.106): DOS.O88 writes its snap record's
+                                ;    OFFSET here, and HIBER.DRV's hbm_dosrun
+                                ;    turns it into bits 0..15 of a LINEAR
+                                ;    address before the park - with bits
+                                ;    16..23 in KDL_SNAPHI - and leaves those
+                                ;    lines out of the park's sum; kern_dos's
+                                ;    kd_snap writes the screen there. It was
+                                ;    KDL_POUT, the park's ms out, which the
+                                ;    kernel wrote and NOTHING READ: the way
+                                ;    back's line takes it from the park
+                                ;    header's MPK_C_POUT
 ; --- AND WHERE THE OTHER kern_dos IS (SPEC.md 96.40.9.1, KERN-MEGA-PLAN 14.26)
 ; The HMA image switches itself to part 3, the LOW one, for an EXEPACK program
 ; its unpacker refuses - reading the part off the disk with its own file layer,
@@ -274,7 +284,12 @@ KDL_L3OFF   equ 484             ; dw part 3's first file SECTOR (DOS.O88's)
 KDL_L3ZB    equ 486             ; dw ...and its PACKED bytes (DOS.O88's)
 KDL_O88CL   equ 508             ; dw DOS.O88's first cluster (the kernel's)
 KDL_O88V    equ 510             ; db ...and its volume (the kernel's)
-KDL_MRSV    equ 511             ; db reserved for the park
+KDL_SNAPHI  equ 511             ; db ...and the linear's bits 16..23, 0 = no
+                                ;    capture: below 110000h is the kernel's
+                                ;    zero or a field it did not convert. It
+                                ;    was KDL_MRSV, a reserve nothing used.
+                                ;    24 bits because AH=87h's descriptors are
+                                ;    (kerndos/kdxms.inc)
 %assign KDL_MTAIL 484
 
 ; --- AND kern_big's HMA, on the live resume (SPEC.md 96.49.9) ---------------
@@ -295,6 +310,14 @@ KDL_HWDS    equ 490             ; dw ...the words summed from there
 KDL_HSUM    equ 492             ; dd s1, s2 (kernel/hbstage.inc's HS_HMASUM)
 
 KDL_SIG     equ 0x314C444B      ; 'KDL1', little-endian
+%ifdef DOS_MEGA
+KDL_VER_NOW equ 6               ; kern_mega's: 5 -> 6 is KDL_POUT becoming
+                                ; KDL_SNAPLIN and KDL_MRSV KDL_SNAPHI, a row
+                                ; that changed hands (KERN-MEGA-PLAN 14.106).
+                                ; The mega tail is kern_mega's alone, so
+                                ; kern_big's block stays 5 and its DOS.O88 and
+                                ; kern_dos byte-identical
+%else
 KDL_VER_NOW equ 5               ; what this tree writes and checks. It is a
                                 ; CONSTANT and not a literal at three sites,
                                 ; because a version that has to be bumped in
@@ -315,6 +338,7 @@ KDL_VER_NOW equ 5               ; what this tree writes and checks. It is a
                                 ; artefact on a different disk. An old
                                 ; DOS.O88 under a new kernel is exactly what
                                 ; this word refuses
+%endif
 
 KDLF_REBOOT equ 1               ; bit 0: `int 19h` when the program exits.
                                 ; docs/plans/KERN-DOS-PLAN.md §9 - there is no

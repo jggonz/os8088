@@ -177,8 +177,10 @@ pxl_art:
 ;           keep leaves where it is (KERN-MEGA-PLAN 14.48)
 ; -----------------------------------------------------------------------------
 pxl_off:
-    call op_seg
-    or ax, ax
+    mov byte [op_subv], OP_SUBV_RAW ; paragraphs into the carve (+ 1): op_seg's
+    call op_seg                     ; segment is a selector under kern_mega's
+    mov byte [op_subv], 0           ; protected mode, and a difference of two
+    or ax, ax                       ; names nothing
     jz .out
     sub ax, bp
 .out:
@@ -268,12 +270,16 @@ pxl_entry:
     jc .noart
     mov [pxl_sseg], dx
 .noart:
+    mov byte [op_subv], OP_SUBV_RAW
+    mov al, PX_PART_BODY
+    call op_seg                     ; BP = the program in paragraphs into the
+    mov byte [op_subv], 0           ; carve (+ 1), for the two offsets below
+    mov bp, ax
     mov al, PX_PART_BODY
     call op_seg
     or ax, ax
     jz .no
     mov es, ax                      ; ES = where the program is
-    mov bp, ax                      ; ...and BP, for the two offsets below
     mov di, [es:LD_H_IMG]           ; its bss begins here, which the part's
                                     ; own header says
     mov word [es:di+PXH_MAGIC], 'PX'
@@ -303,7 +309,7 @@ pxl_entry:
     ; where its last part ends. With the scratch and the byte set granted that
     ; is the claim's own end and nothing is cut; with them refused it is the
     ; program, and the read's margin past it goes back to the heap.
-    mov dx, es
+    mov al, PX_PART_BODY
     OS88_REHOME
     jc .no
     xor bx, bx                      ; NO WINDOW: ours is the region that is

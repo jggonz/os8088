@@ -107,7 +107,7 @@ def wait_text(m, want, secs=150, what=""):
          % (what or want, want, [r for r in rows(m) if r.strip()][:10]))
 
 
-def symbols():
+def symbols(kdbin=None, defines=("DOS_EXTCORE",)):
     """{name: offset} for the SHIPPED kern_dos, and proved to be its own.
 
     The Makefile emits no map for `build/kerndos.bin`, so this assembles the
@@ -117,7 +117,8 @@ def symbols():
     describes a different build resolves every name to a plausible wrong
     address and nothing says so.
     """
-    if not os.path.exists(KDBIN):
+    kdbin = kdbin or KDBIN
+    if not os.path.exists(kdbin):
         fail("build/kerndos.bin is not built - `make kdostest`")
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "k.bin")
@@ -126,14 +127,14 @@ def symbols():
         with open(root, "w") as f:
             f.write("[map all %s]\n%%include \"%s\"\n"
                     % (mapp, os.path.join(ROOT, "kerndos", "kdos.asm")))
-        cmd = ["nasm", "-f", "bin", "-w+error", "-DDOS_EXTCORE"]
+        cmd = ["nasm", "-f", "bin", "-w+error"] + ["-D" + d for d in defines]
         for inc in ("kernel", "kerndos", "apps", "apps/dos", "drivers/net"):
             cmd += ["-I", os.path.join(ROOT, inc) + os.sep]
         cmd += ["-o", binp, root]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             fail("kern_dos would not assemble for its map:\n%s" % r.stderr)
-        if open(binp, "rb").read() != open(KDBIN, "rb").read():
+        if open(binp, "rb").read() != open(kdbin, "rb").read():
             fail("the map describes a DIFFERENT kern_dos to the one on the "
                  "disk. Rebuild (`make kdostest`) before trusting this row - "
                  "or, if a knob is in build/, build it into a tree of its own "
@@ -184,14 +185,32 @@ def topmem(rs):
 
 
 def main():
-    syms = symbols()
+    mega = bool(os.environ.get("OS88_MEGA"))
+    if mega:
+        # **kern_mega: kern_dos IN THE HMA** (build/megak/kerndos.bin, the
+        # Memory page's default), and EVERY program is a trip there - there is
+        # no radio to pick an arm with (KERN-MEGA-PLAN 12.1 item 1). So the
+        # map is that image's, read at FFFF:offset, and the run is a plain
+        # launch. The four assertions are the same four.
+        kdbin = os.path.join(ROOT, "build", "megak", "kerndos.bin")
+        syms = symbols(kdbin, ("DOS_EXTCORE", "KD_MEGA", "DOS_MEGA"))
+    else:
+        kdbin = KDBIN
+        syms = symbols()
     print("kdarena: the map is this kern_dos's own (%d bytes)"
-          % os.path.getsize(KDBIN))
+          % os.path.getsize(kdbin))
 
     with os88ui.boot(SYS, apps=COM, machine=MACH,
                      quick=True) as ui:
         ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         m = ui.m
+        if mega:
+            if not ui.path("B:/DOSHELLO.COM"):
+                fail("DOSHELLO.COM did not open a DOS window")
+            rs = wait_text(m, "READY", secs=150, what="the run under kern_dos")
+            check(m, syms, rs, lambda name: 0xFFFF0 + syms[name])
+            print("kdarena: ok")
+            return
         if not ui.path("B:/DOSHELLO.COM"):
             fail("DOSHELLO.COM did not open a DOS window")
         wait_text(m, "READY", secs=120, what="the windowed run")
@@ -227,9 +246,15 @@ def main():
         mo.click(*alert_button(m, base, dm, 1))         # Proceed
         rs = wait_text(m, "READY", secs=150, what="the run under kern_dos")
 
+        check(m, syms, rs, lambda name: (KD_SEG << 4) + syms[name])
+
+    print("kdarena: ok")
+
+
+def check(m, syms, rs, at):
         # --- what kern_dos laid out, read out of the machine ------------------
         def w(name):
-            b = m.readseg(KD_SEG, syms[name], 2)
+            b = m.read(at(name), 2)
             return b[0] | (b[1] << 8)
 
         top, floor = w("kd_top"), w("kd_floor")
@@ -311,8 +336,6 @@ def main():
                  % (kb, want))
         print("kdarena: 4/4 the program has %d KB of the %d the ceiling "
               "allows" % (kb, want))
-
-    print("kdarena: ok")
 
 
 if __name__ == "__main__":

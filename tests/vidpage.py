@@ -91,6 +91,19 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
+# kern_mega (tests/megaport.txt): the shipped player refuses under protected
+# mode, so the row plays the ARM - build/megak/apps/, assembled -DPKG_MEGA -
+# and reads the arm's symbols; a segment the player holds is an LDT selector
+# there, read through its descriptor (tests/vidvga4.py's port)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+MEGA_DEFS = ("PKG_MEGA",) if MEGA else ()
+VIDEO_O88 = "build/megak/apps/video.o88" if MEGA else "build/video.o88"
+
+
+def lin(m, seg, off=0):
+    """seg << 4 - or the base in a kern_mega selector's descriptor"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
 NF, FPS = 60, 15.0
 FLIPS = (20, 45)
 STOPS = (18, 19, 20, 21, 22, 44, 45, 46, NF)
@@ -530,8 +543,8 @@ def main():
         global STOPS
         STOPS = tuple(sorted(set(n for F, p in mflips(a.pages)
                                  for n in (F - 1, F, F + 1)) | {NF}))
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",), MEGA_DEFS)
+    pkg = os88build.at(VIDEO_O88)
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         if a.bench:                     # (every kind of bench record inside
@@ -646,7 +659,7 @@ def main():
                 wh = ui.path("B:/" + fn)
                 rh = m.read(ui._S("wm_wins") + wh.i * geom.WIN_SIZE,
                             geom.WIN_SIZE)
-                bh = u16(rh, geom.W_SEG) << 4
+                bh = lin(m, u16(rh, geom.W_SEG))
                 # (DONE - loaded, or the card opened - as vidpal's hostile
                 # leg waits: vp_parse says "damaged" while it runs)
                 os88marty.until(
@@ -664,7 +677,7 @@ def main():
             w = ui.path("B:/PAGE.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            base = lin(m, u16(rec, geom.W_SEG))
 
             def rw(n):
                 return u16(m.read(base + syms[n], 2))
@@ -805,7 +818,10 @@ def main():
                           rw("vp_done") == n, "hold before frame %d" % n,
                           240.0)
                     glass(n, what)
-                    if not herc and not si:     # THE SCREEN'S TIMING
+                    # (kern_mega's Bochs has no port reads for a row -
+                    # tools/os88megabochs.py refuses inb/outb - so the CRTC
+                    # half is MartyPC's; the glass above is read either way)
+                    if not herc and not si and not MEGA:  # THE SCREEN'S TIMING
                         m.pause()           # and ROW, off the CRTC: MartyPC
                         ix = m.inb(0x3D4)   # scans Mode X's 480 lines into
                         m.outb(0x3D4, 0x12)     # 400, so the glass's first
@@ -820,7 +836,7 @@ def main():
                         if off != want:
                             bad.append("%s: CR13 %02Xh, not %02Xh - the "
                                        "screen's row" % (what, off, want))
-                    if modex and not si:
+                    if modex and not si and not MEGA:
                         want = 0x8F if scr == vid.SCR_320X200 else 0xDF
                         print("   %s: the vertical display end, CR12, %02Xh"
                               % (what, vde))
@@ -906,7 +922,7 @@ def main():
             w = ui.path("B:/PAGENK.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            base = lin(m, u16(rec, geom.W_SEG))
             until(lambda mm: rb("vp_loaded") == 1 or rb("vp_card") == 1,
                   "PAGENK.V88's open", 60.0)
             print("   PAGENK.V88: ok %d, %d keys" % (rb("vp_ok"),

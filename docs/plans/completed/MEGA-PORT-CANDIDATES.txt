@@ -1,0 +1,368 @@
+# megaport-candidates.txt - soak rows worth porting to kern_mega under Bochs
+# COMPLETED (2026-10-26): the selection behind tests/megaport.txt, which now
+# carries ~317 ports; kept as the record of what was chosen and excluded.
+# (build/mega.img + build/megaapps.img, Bochs 386 VGA, PS/2 mouse, 16MB,
+#  optional SB16 / NE2000), chosen against rows.json (1135 rows) plus the
+#  emulator rows rows.json does not list (sndmove, drvmove, regapp, regwork,
+#  regpin, fmrefuse, btn*, gifdrag, thewire, int0sweep, weavesmoke, kd*hand,
+#  kdreturn) - suite.py registers those without needs=("marty",).
+#
+# Grades:
+#   A  os88ui verbs + plain kernel-symbol reads; runs unchanged once the shim
+#      maps boot(SYS, apps=...) to mega.img and honours an apps= FIXTURE
+#      floppy as B: (most DOS gate rows are A on that convention)
+#   B  small edits: machine name (herc/cga default -> Bochs VGA), a 1bpp
+#      m.vram()/640x200 geometry assumption -> VGA fbuf, `seg << 4` on a
+#      package region/claim -> selector-aware readseg, m.disk() used only as
+#      a "disk went quiet" quiesce (needs a Bochs stand-in), a package that
+#      is on office360/games360 rather than megaapps.img, breakpoints in
+#      PACKAGE code (selector:offset, not seg<<4+off)
+#   C  important, needs real rework: the scenario is built on the
+#      conventional-heap / mem_tab layout (kern_mega's claims are LDT
+#      selectors in a pool), or the row drives tests/os88qemu.py's raw
+#      QMP/HMP layer instead of the Marty API, or the assertion inverts
+#
+# Flag noise worth knowing: rows.json's `flick` flag is almost always
+# os88marty.pace(m, secs) - a GUEST-seconds sleep the shim must provide -
+# not the flicker instrument. Only brscroll, calcflick, deskbench,
+# drvscroll, ftpdflick, lemplaymarty, tank, tmground, weavegame and
+# wireflick call m.flicker()/m.pace(frames)/frame_count(); none is chosen.
+# Likewise `cyc` is usually os88marty.until's guest-seconds budget.
+
+# HARNESS (the shim's own acceptance rows)
+uilayer	A	every os88ui verb confirmed off guest state; the first row to make green on the shim
+bptrace	B	os88ui driven with breakpoints ARMED (os88marty.bp_trace); proves shim bp_exec + UI coexist
+
+# WINDOW MANAGER, DAMAGE AND REDRAW
+zonedmg	B	zone damage owes the window over it a redraw; m.vram("herc") compare -> VGA fbuf
+deskzoom	B	two gestures that overflowed the damage region; drop the CGA/herc legs
+deskclip	B	kern_big half of 11.91.6 (cells drawn only where revealed); VGA leg
+dmgcull	B	a marked window not painted under what is about to cover it; `<<4` on window seg
+zoomsave	B	a ZOOM over another window banks it (raise cache); `<<4` reads of the bank
+clipkeep	B	covered window keeps its raise cache when it arms a clip; `<<4`
+sizesnap	A	the SIZE snap keeps a maximized window maximized; mouse + kernel reads only
+btnmove	A	a standard button answers where its window IS after a drag (readseg of package)
+dragui	A	every control a package laid out answers after a drag replay; readseg only
+uidrdis	B	a drop-down drawn disabled takes no press; `<<4` on the package record
+gfxlk	B	nothing draws with the gfx lock free (the state the mouse ISR draws in); kernel bps, builds a probe
+blitp	B	gfx_blitp puts bytes in the four PLANES it was given; plane reads need shim VGA-plane access
+thm95	B	Windows theme (WIN95.DRV module) caption buttons pixel by pixel; VGA leg only
+fsxclip	B	fsx bracket entered from a click handler comes back to a whole desktop; herc -> VGA
+altenter	B	Alt+Enter full screen in both latch and key mechanisms; `<<4` on package bss
+evqfull	B	a full event ring drops its OLDEST input, never a coalesced WAKE; bp on evq_push
+tnest	B	a non-UI task's call into an image is counted in wm_tcnt (NO-PINNING K9); `<<4`
+curbusy	B	hourglass while frozen, arrow after (7.5); office360 disk, bp
+cfgtrip	B	a setting survives the panel and a reboot (two parser copies); shim reboot
+int0sweep	C	does anything raise a divide error; on kern_mega #DE is an IDT exception, not the IVT stub the row watches
+stkpanel	C	stack-overflow death panel; task-0 canary and the panel path differ under PM stacks
+
+# KEYBOARD, MOUSE AND MENUS
+kbdburst	B	a scripted key burst must not nest int 09h (reflected on kern_mega); readseg/`<<4` on the package
+mouseup	B	13.7 release + os88ui arm + MOUSEUP guard; fixture muptest.img, CGA geometry
+atmenusu	B	ArtfulType pull-down banks the pixels it covers and the close restores them
+btngesture	B	a standard button goes down, up on slide-off, down again; readseg of the record
+btncp	B	the Control Panel's buttons through its FAR call (module CS); herc default
+fmarrows	A	Disk-window arrows move a selection, Down scrolls with none selected
+ps2mouse	C	PS/2 mouse reaches the pointer and the keyboard survives the handshake; raw os88qemu row -> shim
+wheelps2	C	9.9.8's knock puts a PS/2 wheel mouse in 4-byte mode; Bochs imps2; raw QMP row
+
+# DISK WINDOW AND FILE OPERATIONS
+msel	B	multi-select, copy/paste of a set, drag-move, delete; `<<4` on the listing segment
+fcpapi	B	OSAPI_FILE_COPY both verbs, every answer a file; disk() used as a quiet-quiesce
+fcpcopy	B	Cut/Copy/Paste moves a file AND a folder tree (kern_big leg only); 1.44 pair + scratch
+icostore	B	two volumes, one icon-store body (25.9); `<<4` on the store claim (pool on mega)
+desksc	B	desktop shortcuts, every route on one boot; `seg<<4` read of the shortcut table
+imgmount	B	a .IMG mounted as a drive by double-click and unmounted by the next
+diskclone	B	Clone Disk end to end; needs a 720KB B: (Bochs floppy type) and readseg
+czjoin	B	Uncompress on a part of a split set joins it, streaming, in an 82KB claim
+lzbig	B	Compress/Uncompress past 64KB (megacz covers the basic verbs on 86Box)
+rdxms	B	RAM disk's EXTENDED-memory store end to end (QEMU row via os88ui) -> kern_mega's own XMEM
+bigvol	B	a 321MB FAT16 volume formatted by mtools, mounted and used; Bochs ATA disk
+hdnoclaim	B	a mounted hard-disk partition costs no heap; xt_hdd -> Bochs IDE, `<<4`
+install	B	the INSTALL WIZARD end to end (megainst only covers the first Next); XT-IDE -> Bochs IDE
+instdeep	C	an install reproduces the WHOLE tree; bps + mtools readback, XT geometry assumptions
+hdtake	C	HDD.DRV's IDE rung takes a drive the BIOS also knows; raw os88qemu, Bochs ATA
+
+# STANDARD FILE DIALOG
+fdlgchoose	B	the chooser end to end through Note Pad's Open/Save As (kern_big arm only); `<<4`
+fdlggrey	B	the chooser's default button greyed with nothing selected
+sbardlg	B	chooser's scroll bar at the list's right edge
+facescan	B	ty_scan walks to SYSTEM/FONTS and back; 1.44 system-disk leg
+
+# CONTROL PANEL, SETTINGS AND DRIVERS
+cpup	B	the Control Panel acts on the release; CGA geometry
+cpnames	B	list names and page headings letter (module strings, 2.8.6.1); add the HDD leg
+dtwrite	B	the hardware clock is written by the panel's CLOSE; Bochs HAS an MC146818, so assert the CMOS too
+dockmodule	B	DOCK.DRV missing/corrupt refusal and saved-setting fallback; builds bad modules
+drvcall	B	a package reaches a driver (OSAPI_DRV_CALL); disk() quiesce
+lzdrv	B	a compressed driver loads, expands and answers (RAMDISK.DRV)
+modstr	A	a module's own strings letter correctly
+fmrefuse	B	a driver verb nothing publishes refuses, not hangs; Bochs with NO SB16
+sndkeep	B	SOUND.DRV shrinks its claim to DRV_H_KEEP; SB16 mixer leg only (no Covox)
+stiknodesk	B	DESK.DRV loads for an OS88_F_DESK package and drops after
+regapp	B	shipped packages DECLARE region-movable / worker-restartable (MC_RLOC read from kernel tables)
+mixersb16	B	SB16/CT1745 mixer readback, balance, tone (QEMU row through os88ui) -> Bochs SB16
+wirezone	C	the desktop service zone arrives with ETHER.DRV and leaves with it; raw QMP
+
+# HEAP, COMPACTION AND MOVES (all re-plan the arena on kern_mega's pool)
+heapcheck	C	tests/heapfrag's verdict out of the guest; fragment layout assumes the conventional heap
+regmove	C	a package's REGION moves and keeps working; mem_tab/`<<4` -> selector bases
+regwork	C	a worker-owning region moves after a restart point is declared
+drvmove	C	a DRIVER IMAGE moves and every drv_tab/IVT word follows
+sndmove	C	SOUND.DRV's image moved with its IRQ vector rewritten (reflected IRQ on mega)
+cmemmove	C	a C package declares a claim movable and the compactor moves it
+trackmove	C	compact the heap under a LOADED module (Tracker)
+pkgmove-texpad	C	pkgmove's generic gate: TeXPad's source claim moves, bytes and redraw identical
+ringmove-audio	C	Audio's 32KB look-ahead ring moves between plays and is pinned for one (SB leg; Tracker's leg is a speaker ring)
+rcmove	C	RunCPM's 64KB Z80 claim moves and the machine keeps running
+c64move	C	the C64's 64KB RAM and its parts carve move, the 6510 keeps running
+trkcompact	C	Tracker asks OSAPI_MEM_AVAIL_MAX for room before refusing; 512K machine layout
+zrestart	C	Frotz's worker RESTARTS and its region moves (NO-PINNING P2)
+rehomeabort	B	a re-homed program refuses itself and nothing leaks; `<<4`
+
+# COMPRESSED PACKAGES, PARTS AND THE LOADER
+lzload	B	a compressed package loads and expands to the same bytes; fixture lzload360.img, readseg
+lzmod	B	BEVERLY.MOD compressed, opened by double-click (transparent read)
+lzmod-lz4big	B	an LZ4 file past 64KB packed through the transparent read
+rdcz	A	a compressed file with NO hint is still read compressed; readseg only
+multiseg	B	a package carries its parts in its own file and loads them itself; `<<4`
+msegw	B	the CARVE passes 64KB (one claim > 64KB is a selector bridge on mega)
+mseglazy	B	an OP_LAZY part is not read at load and can be given back
+msegxms	C	an OP_XMS part really goes above 1MB; raw os88qemu, and kern_mega's pool replaces XMEM.DRV
+pkgmax	B	a package of exactly APP_MAX_SIZE loads, runs, closes
+pkgrun	B	OSAPI_PKG_START, the loader's back half from a copy
+c64part	B	C64.ROM as part 0 of C64.O88 (the parts standard's first consumer)
+
+# ASSOCIATIONS AND OPEN-WITH
+assocopen	B	opening a document draws no pixel of the Disk window; bp on fm_re*, CGA default
+assocwake	B	a document launch draws the program's window first, then reads the document
+assocfind	B	an unclaimed extension is LOOKED FOR; disk() read count is part of the assertion
+assocstale	B	a stale hint falls back to another disk's ASSOC.DAT; 720KB pair -> megaapps
+assocflush	B	what the machine learns is written back to ASSOC.DAT across five boots; disk() resets
+
+# AUTOSTART, LINKS AND DESKTOP ITEMS
+autostart	B	LINKS and AUTOSTART off `make autostarttest`'s disk; needs a mega autostart system disk
+deskitem	B	OSAPI_DESK_ITEM from a package (DESKITEM.O88); `<<4`
+
+# SCREEN SAVER
+savervga	B	saver on VGA, the PLANAR blanker arm (AC 12h)
+
+# TOASTS, PROGRESS WIDGET, DESK LAYER AND STICKY APPS
+toastbar	B	a maximum-width toast reaches the bar whole and touches no menu; CGA bar geometry
+fpgnotch	A	dsk_xfer asks once a run whether a bar/widget is live (reflected transfers on mega)
+deskz	B	the desk layer's z-order off stikdesk360.img (DESKPROB.O88)
+deskclose	B	a widget closes by its own box
+deskkeys	B	keys reach the widget while Note Pad stays front
+deskmodal	A	a widget's DELETE with a Disk window in front
+deskcalgrid	A	Desk Calendar's 42-byte grid read out of its bss equals Python's calendar
+deskcalremind	B	reminders ring on card 3; clock set through clk_* (Bochs RTC rung)
+deskclock	B	the Desk Clock desk window off the shipped system disk
+stikboot	B	a Sticky App comes back at boot; `<<4` on the row table
+stikmenu	B	Locator's Sticky Apps menu (STIKMENU.DRV module)
+stikhiber	B	a pending RESUME stands the relaunch down (kern_mega hibernate exists); `<<4`, CS:IP bp
+
+# TASK MANAGER
+tmselfsu	B	the Task Manager keeps its own raise cache and still repaints
+heapscrl	B	the memory page's merged list scrolls (megatmmem covers the page's content)
+tmload	B	CPU meter and process rows read the same numbers (idle bucket under PM halt)
+gifdrag	B	the field's freeze: heap page open while Paint holds OS8088.GIF, then a drag
+
+# DOS PROGRAMS (on kern_mega every program runs on a kern_dos TRIP; the gate .COMs ride a fixture B:)
+doscom	A	DOS wave-1 gate: a real .COM runs from a Disk-window double-click
+dosexe	A	a real MZ .EXE with a relocation table and a short last page
+dosexec	A	AH=4Bh loads a child and control comes back to the parent
+dosfile	A	the file-handle layer: 20KB written, read, seeked, rewritten, grown, deleted
+dosdir	A	directory, FIND, vector and clock gate (DOS clock vs the kernel's)
+dosdrv	A	a drive letter in a name reaches the drive it names
+dosregs	A	INT 21h gives back every register it does not answer in
+dosshell	B	built-in commands, COMMAND.COM that is not a file; disk() quiesce
+dostype	B	TYPE and the flag that muted DOS
+dosargs	B	a DOS program given arguments (the prompt's command line); herc default
+dosxms	B	the XMS gate: on an 8088 a REFUSAL, on kern_mega the door is real - the assertion inverts
+dosxmsq	B	the XMS working gate (QEMU row through os88ui) - kern_dos's XMS door on kern_mega
+dosmouse	B	INT 33h translation over the kernel's ISR numbers; PS/2 under kern_dos
+dossnd	B	a DOS program programs the Sound Blaster itself (Bochs SB16)
+dosirq	B	the DOS hardware gate: IRQs reach the program
+doscon	B	DOS's console band and the prompt in it; `<<4` on DOS.O88's bss
+dosram	B	the Memory page's figure is the figure the program gets
+dospkg	B	a .O88 typed at the prompt opens the package, by bare name too
+doslnk	B	a DOS shortcut with arguments and environment saved and reopened
+call5	B	CP/M's CALL 5 dispatches on CL and comes back (dos_cpm on kern_dos)
+irqgrab	B	a DOS program takes the mouse's IRQ and the kernel takes it back
+dospkt	C	the packet driver over a real card (NE2000); raw os88qemu layer
+kdhand	B	the DOS handoff end to end: a .COM in the window, then under kern_dos
+kdarena	B	the arena and the read-ahead do not overlap under kern_dos
+kdhdd	B	the fixed disk is a volume under kern_dos; a program reads its own drive
+kdmouse	B	INT 33h with no kernel on the machine (PS/2 path under kern_dos)
+
+# CP/M, C64, APPLE II  (see rcmove, c64move, c64part and call5 above)
+
+# WEAVE AND LOOM
+weavesmoke	B	WEAVE opens FORM.WAB and draws a window (1bpp legs -> VGA)
+weavepack	B	LOOM packs every demo and template ON THE MACHINE byte-identical to weavesim
+weaveprev	B	LOOM's preview pane against weavesim --render --preview; 1bpp compare -> VGA
+weavesession	B	a scripted session through the shipping package (type, click, script, formula)
+
+# WORD, CWORD AND SCRIBE
+wdcombo	B	Word's three combos are os88ui_drop records; fixture wdcombo.img
+scsize	B	SCRIBE's parts and size pass, the only row that drives SCRIBE
+ovlhigh	B	a C package's (CWORD) overlay claimed from the TOP (pool placement on mega)
+
+# TEXPAD AND NOTE PAD
+tpdraw	B	TeXPad's incremental source redraw equals a full repaint (one vram read)
+tpstore	A	TeXPad's parser stores its variables through DS (the stos/ES defect)
+npscroll	B	scrolling a note whose height is still being counted; readseg + `<<4`
+linecar	B	the caret's bar after an edit that moved it (os88line_edit); `<<4`
+
+# CHART AND SHEET (Sheet's region is above 1MB on kern_mega - megasheet covers open/chart only)
+chartgal	B	the Gallery draws seven different charts (pixels); fixture chartgal.img
+chartread	B	CHART's SYLK, DIF and BIFF readers are one reader
+sheeteval	B	what SHEET's evaluator answers, checked by the host
+sheetfunc	B	all 48 text/information/transcendental functions
+sheetfmt	B	SHEET's three file formats round-trip what they mean
+sheetxl2	B	SHEET opens Excel 2.1's own BIFF2 files
+sheetmacro	B	the macro language: FOR/NEXT, WHILE, ACTIVE.CELL, SELECT
+
+# MINES, SOLITAIRE AND GAMES
+minexflag	B	a wrong flag is not pixel-identical to a mine; `<<4`, CGA colour compare -> VGA
+tgplay	B	TameGram played as one seeded game to an expected hash
+cychs	B	Cyclone's high-score table survives a save and a re-launch
+tankaim	B	TANK's aim assist reaches every bearing; readseg + `<<4`
+skiesui	B	Clear Skies' title page drop-downs on VGA (re-homed above 1MB on mega)
+skiesworlds	B	every Clear Skies location loads its world and flies
+ddcorner	B	Dot Delirium's walls never in an actor's colour (VGA, windowed and full screen)
+gorillasreactions	A	Gorillas feature parity: trajectories, bounds, collisions (os88ui only)
+wirefleetdeploy	B	WireFleet deployment, bounds/overlap refusal, rotation, Ready (VGA leg)
+
+# TRACKER, AUDIO, MIDIRACK AND THE SOUND DRIVER (Bochs SB16)
+trkrate	B	Tracker XT mode's second rate and the surface it refuses
+trkbigmod	C	the whole dance: Sheet/Paint/Skies open, SOUND.DRV mounted, a big module (megamod covers the module only)
+audhand	B	the Audio Player's -DAP_HANDOFF queue is found; hdd_sb machine -> Bochs IDE+SB16
+midiracksb	B	MIDIRack's synth on the Sound Blaster (external ring in place)
+midiracksbmem	B	MIDIRack's two rings live only while they play (KERN-MEGA-PLAN 14.55/14.59)
+midirackwt	B	MIDIRack's SB wavetable bank (megamod covers bank > 64KB only)
+recorder	B	RECORDER on a Sound Blaster from a scratch floppy
+sndfmt	B	SND_CAP_STEREO/PCM16 and verb 11 on an SB16 (QEMU arm through os88ui) -> Bochs SB16 DSP 4.x
+
+# VIDEO PLAYER (megavidbig/megavidring/megavidv2 cover BIGSP-from-XMS, the ring arm and V2)
+vidxip	B	a file held whole in XMS decoded IN PLACE (QEMU row through os88ui) -> kern_mega XMEM
+vidxipbank	B	a clip past the pool through a BANK
+vidxms	B	a streamed .V88 held in XMS and played from there (os88ui + a little QMP)
+vidbank	B	a streamed .V88 bigger than the XMS pool through a bank
+vidwin	B	VIDEO.O88 plays in its window, a same-mode bracket (herc default -> VGA layout)
+vidpreview	B	the window is a preview: poster, Play, seek
+vidvga4	B	sixteen colours in mode 12h in the window
+vidmodex	B	Mode X sub-records under a map mask
+vidcard	B	OSAPI_WM_RESIZE takes the gfx lock itself (info card)
+vidsound	B	VIDEO.O88 with sound, the card the clock (Bochs SB16)
+
+# NETWORK (Bochs NE2000 on slirp, host at 10.0.2.2)
+netinstbad	B	INSTALL's release check against a server with no release (os88ui + readseg, no QMP)
+netpromise	B	Telnet and FTPD promise per debt (no wire needed); `<<4` on package bss
+ftpdfocus	B	FTPD's Setup page keeps no caret it cannot type into
+httpmount	C	HTTPFS.DRV mounts a web server as a drive; os88ui + raw QMP, host server
+netinst	C	INSTALL over the network from a published tree
+ethernet	C	ETHER.DRV up before the first paint, DHCP, ping, the browser fetch (99k script on os88qemu)
+telzm	C	ZMODEM receive end to end, bytes read back off the disk
+wirechat	C	WireChat end to end over a real card
+brdownload	C	Save Link As streams 32KB through the NE2000 into cluster-aligned writes
+thewire	C	The Wire end to end: fixture catalog, Add to Disk writes
+
+# PACKAGES WITH NO OTHER HOME
+fontview	B	F88 association launches FONT VIEWER with every installed face; disk() quiesce
+imgtest	A	apps/os88img.inc's decoders run: every case's verdict out of its record
+fptest	A	apps/os88fp.inc against host IEEE-754 bytes, 88 cases
+gbsave	B	RealDMG battery RAM and MBC3 clock (fixture cartridge)
+pxsave	B	PiXEL Save As on the machine (pxmega covers decode/use, not write)
+
+# ---------------------------------------------------------------------------
+# EXCLUDED SUBJECTS, AND WHY
+#
+# - Timing/cost rows: everything whose assertion is guest cycles, ms, fps,
+#   or a primitive-call budget measured as cost (atkey, deskbench, *perf,
+#   *bench, *lap, wdtype/wdcaret/wdenter/wdscroll, isotronload/pace,
+#   excitebike*perf/load, gorillasmenu/city, pxbench, paintgif/paintstroke,
+#   uiblock, uilat, schacct, saverate, fishfit, pathcost, ldcost, cpcost,
+#   viddisk*/wseq* (ST-225/floppy streaming rates), spkbench, covbench,
+#   trkload, glyphcost, vidv2bench*), plus the ten true flicker/pace rows
+#   (brscroll, calcflick, drvscroll, ftpdflick, tmground, tank, wireflick,
+#   weavegame, deskbench, lemplaymarty).
+# - 1bpp adapters as subject: paint1*, su1bpp, win1bpp, monoink, fillpat,
+#   blitpair, tmcol2, dispmine, dosconcga, deskcal1bpp, deskhovercga/herc,
+#   telnet/telnetherc, vid*herc/cga/c160/c512/text CGA legs, fishedge,
+#   pxssim-herc, wcdrawcga, sheetmtailherc, colorpresets (EGA presets).
+# - Two-card extended desktop: every disp* row bar dispclose (which is
+#   kern_small-shaped anyway), extdmod, ptsext/ptsmix, dotdelmd, pxsmd,
+#   pxswin*, isotrontwodisp, vidxdisp, vidlivext, fsxdisp, dualcheck.
+# - Serial mouse / 8250: mouwheel, wheel, mouerrq, mousess, mouresume,
+#   serlease, wirefleetnomouse, wireball*, wirefleetlink/system, doscable,
+#   socktest, brfetch (parallel-cable link), usbmouse (CH375 model).
+# - kern_small / 128KB / knob builds: *small*, fdlgdrop, fcpsmall,
+#   dispclose(-small), shedrelist, regrowshed, tanksmall, smalllaunch,
+#   ddsmall, isotronsmall, kernresident, bootfloor-ab, knobhd, kzboot*,
+#   lzship* (zset rebuild), lzload-lz4, NOSEAMCUT/BAND/NOPLANE A/Bs.
+# - Boot/loader/geometry/ROM: blobsum, cylrun, kdcylrun, dljunk, splash*,
+#   bootstatus, fddpark, fddpage, mseg360/msegw360/msegz360/msegwz360
+#   (360KB head-slack variants of rows already chosen), excitebikeboot*,
+#   rom*, coldslide, vgadrop, hma*/p2hiber (kern_big's HMA; megahma owns
+#   kern_mega's).
+# - XT-only hardware: covox*, *covox*, apspk*/trkspk*/vidspk* (speaker PCM
+#   off PIT channel 2 timed for an 8088), sndplay (PIT OUT trace), pitnow,
+#   v20boot, redline* (CPU/chipset probes), ems/emspico/videms* (no EMS
+#   board in Bochs), midirackmpu (standalone MPU-401 card), mpupin,
+#   fmtreach/fmtlow (765 cylinder reach), dskwstage (DMA staging arm),
+#   vgacolor (PVGA1A verdict planted in MartyPC), int 13h DMA-boundary rows.
+# - VESA (vesa*, mixervesa): kern_mega builds without VID_EXT and never
+#   loads VESA.DRV (KERN-MEGA-MEMORY-PLAN, item on VESA).
+# - Host-only rows (gbacid, gbcpu, gbtrace, rdgstatic, weavevm, weavecanvas,
+#   x3*exact, *selfcheck, t_* units).
+# - Hibernate, the installer's first Next, PiXEL decode, PIXELSTEIN play,
+#   RealDMG cores, Lemmings, XTMP3, CD-ROM, Compress/Uncompress basics, the
+#   Task Manager memory page and Sheet+Chart open: already covered by the
+#   existing kern_mega rows; only FUNCTIONAL rows they do not reach are
+#   listed above.
+##
+# RUNNERS-UP (good candidates cut to stay near 200 - same families, the
+# nearest duplicates of a chosen row; add them once the chosen row is green)
+#   WM: deskwhole deskflash clipgrow runclip dockmark alertbtn alertanim
+#       spantest-vga timerrace curshape radio sbar tickzero postboot
+#   input: btnall fmcommit sheetmtailvga
+#   files: czto wimgtrip imgswap lzcomp fmthumb fcproom fatwpin rdup rdicon
+#       rdpreserve fsclass hdmap hdsize hdauto hddcp instassoc inststate
+#       instkeep fmtpair syscheck; dialog: lzmod-dialog sheetdel
+#   panel/drivers: cplistrow cppromise dtfield dockpos heapdrv heaphi
+#       lzdrv-nohint netcoexist ethcfg
+#   heap: regpin editmove editmove-frotz pkgmove-browser ringmove-tracker
+#       ringmove-midirack weavemove wdheapmove rehomemove heapmap tmowner
+#   loader: msegz msegnomem mseglzslack pkgbig pkgfence pkgfmt lzfile
+#       lzfence rehome apple2part
+#   assoc/links/saver: assocvol dosglyph stikshort saver
+#   desk: deskdock deskdrag deskhover deskground deskpen deskcalsnooze
+#       deskcaledit stikmiss stikmove stikanchor stikregister toastfpg fpgcold
+#   DOS: dosfcb dosmcb dosren dosgap doslong dosdev dosshrink dosvec dosfix
+#       dosfull dosmouevt dosrange dosdirsw dosenvfold dosest dosmem dosopen
+#       kdbigexe kdcwd kdmcur kdnomouse kdnoprog kdmredraw kdkbd kdreturn(C)
+#       dosnetarena(C) dosxlat(C)
+#   apps: tpsaveu wdparts weavegrid weavegfx chartname sheetsort sheetsize
+#       sheetundo sheetask sheetbtn tgui cycplay tankspawn isotronrules
+#       minesrc(C) gbkeys gbstate pxfolder timerbounce
+#   sound: midirackfm midiracksbrate midirackend mrdrawvga fmpatch
+#       trktxsurf trkclick(C)
+#   video: vidxipsnd vidxmslive vidclose vidlybank vidplayvga vidvga8 vidpage
+#       vidgrey vidthumb vidresidentvga vidlivevga vidsndpause vidfskeysvga4
+#   network: httpinstall(C) telansi(C)
+#
+# SUBJECTS WITH NO PORTABLE ROW
+# - Solitaire: no functional row exists at all (only regapp's declaration
+#   check and megasweep's launch).
+# - Calculator: dispcalc is its only functional row and it is an
+#   extended-desktop/1bpp row; calcflick is a flicker row. regapp covers
+#   CALC's movable declaration only.
+# - RunCPM / CP/M programs: no functional row beyond rcmove (a heap move)
+#   and call5 (which is DOS's CALL 5); rczex/rcz80test are make targets in
+#   raw QEMU, not soak rows.
+# - ModPlug and Piano: no rows.
+# - Frotz functionally: only megafrotz (covered), zrestart and
+#   editmove-frotz (heap); zcheck/zgfx are make targets.
+# - RTC write: no QEMU RTC-write row is registered; dtwrite (marty) is the
+#   nearest and needs its assertion extended to read Bochs's CMOS.

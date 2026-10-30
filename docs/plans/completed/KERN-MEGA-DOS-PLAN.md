@@ -1,6 +1,10 @@
 # kern_mega M6: DOS beside protected mode, and hibernate
 
-**Status: W0-W7 BUILT (2026-10-18, branch `protected-mode-7`), with 10.4's
+**Status: COMPLETED (2026-10-26)**: every wave is built and the DOS trip, the
+live resume and the console capture run under ~40 kern_mega rows
+(`tests/megaport.txt`); the field items below are carried in KERN-MEGA-PLAN's
+*Open before kern_mega goes live*, and section 11's questions are answered by
+what was built (sections 10.1-10.6, KERN-MEGA-PLAN 14.x). Was: **W0-W7 BUILT (2026-10-18, branch `protected-mode-7`), with 10.4's
 review answered at the second merge and the park cut to the runs in use
 (10.6); W2, W6's prime, W5 on a BIOS-only C:, the runs park on a real 1MB AT
 and whether the Victory's ROM keeps extended memory over a warm boot (W7's
@@ -8,7 +12,7 @@ premise) are untested off the Victory 286.** Section 1 now records what really h
 under kern_mega, sections 10.1-10.3 what each wave measured. **W5 departs
 from section 8.3**: the resume never leaves protected mode (10.3). Written 2026-10-18 on branch
 `protected-mode-5`, cut from `protected-mode` at `62dfe2c0`, as Track 5 of
-docs/plans/KERN-MEGA-HANDOFF.md. It is the "own plan first" that
+docs/history/KERN-MEGA-HANDOFF.md. It is the "own plan first" that
 docs/plans/KERN-MEGA-PLAN.md section 10's M6 row asks for. Section 2.7 of that
 file is the feasibility verdict this plan turns into steps, and section 13 is
 the memory direction it has to fit.
@@ -332,7 +336,7 @@ it.
 
 Out clears CR0.PE and far-jumps to `mega_dropr`, as `mega_svc`'s 386 arm does.
 Back is the same `lmsw` (it sets PE on a 386 too). Bochs runs only this path
-(docs/plans/KERN-MEGA-HANDOFF.md Part A.3, limit 2).
+(docs/history/KERN-MEGA-HANDOFF.md Part A.3, limit 2).
 
 `mega_dropr` banks the low four bits of the MSW before the drop, and the stub's
 `lmsw` restores them, so MP, EM and TS come back as they were whatever the
@@ -480,6 +484,13 @@ kern_mega build. The map is the instrument here.
 
 ### 5.1 The extended-memory map during the bracket
 
+**This map is the layout before docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md MC2.**
+Since MC2 the pool runs from 100000h with the HMA as its first block (pinned,
+skipped by the park), and the GDT, LDT, IDT, `.cold` and `.mega` are at the
+TOP of extended memory where `mega_layoutf` puts them; the park saves them
+from there (`[mega_tbllin]`, `[mega_coldlin]`). The rows' owners and
+protections are unchanged.
+
 | linear | what | whose | protected by |
 |---|---|---|---|
 | 100000h-10FFEFh | the HMA | free on kern_mega (`kernel/kernel.asm:698`; `MEGA_GDT_LIN` sits above it on purpose). `kern_dos`'s from wave 4 | - |
@@ -526,8 +537,12 @@ protected mode, LOADALL or unreal mode on its own. Real mode cannot stop any
 of those. The sum catches them.
 
 **Placement.** A raw allocator takes memory either top-down from the CMOS size
-or bottom-up from 1MB. With the tables fixed at 110000h, the kernel's state is
-at the bottom whatever is decided. Putting the park directly above `.cold` and
+or bottom-up from 1MB. Since docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md MC2 the
+tables and the code are at the TOP of extended memory and the pool runs from
+1MB, so a top-down raw allocator meets the kernel's state first and a
+bottom-up one meets the HMA and then the pool's lowest blocks. (Before MC2,
+with the tables fixed at 110000h, the kernel's state was at the bottom
+whatever was decided, and the rest of this paragraph was written then.) Putting the park directly above `.cold` and
 the arena at the top means a top-down raw allocator eats the arena (the
 program's own XMS clients suffer, the session survives) and a bottom-up one
 eats the kernel (the sum catches it). Neither can be ruled out from the
@@ -883,7 +898,7 @@ run's to confirm.
 
 Bochs is a 386. It cannot run the 286 reset (its triple fault resets the
 devices too), has no PicoMEM, and gives a C: through HDD.DRV's rung 1 rather
-than the BIOS (docs/plans/KERN-MEGA-HANDOFF.md Part A.3). So every wave below
+than the BIOS (docs/history/KERN-MEGA-HANDOFF.md Part A.3). So every wave below
 is cut into a Bochs half and, where it has one, a Victory half. kern_big stays
 byte-identical in every wave. The kernel's changes are all `%ifdef
 KERN_MEGA`, and HIBER.DRV is built per kernel. `DOS.O88` is the exception:

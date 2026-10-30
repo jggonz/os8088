@@ -178,7 +178,7 @@ def maps():
                  incs=("apps/", "apps/xtmp3/", "apps/audio/",
                        "drivers/sound/", "build/"))
     PXT = nasm_map("apps/xtmp3/x3xt.asm", "build/x3xt.bin",
-                   incs=("apps/xtmp3/", "build/"),
+                   incs=("apps/xtmp3/", "apps/", "build/"),
                    post=[sys.executable, "tools/x3xtgen.py", "--seal"])
     PFR = nasm_map("apps/xtmp3/x3front.asm", "build/x3front.bin",
                    incs=("apps/", "apps/xtmp3/", "build/"))

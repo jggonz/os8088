@@ -201,6 +201,71 @@ def sample(limit=40.0):
     return q, seen
 
 
+def sample_mega(limit=60.0):
+    """kern_mega's boot under Bochs (docs/BOCHS.md): the same samples off a
+    MegaBochs, which heapmap.Map reads as it reads QMP - and whose Map also
+    carries the POOL above 1MB (tools/heapmap.py's pool(), mx_tab). The
+    machine is Bochs's own: its SB16, an NE2000 on slirp and an ATA disk, and
+    A: is mega.img with this row's SYSTEM.CFG (the launch's `cfg`). There is
+    no XMEM.DRV to want - kern_mega's pool IS the memory above 1MB - so what
+    this maps is every driver kern_mega loads. `limit` is HOST seconds, a
+    backstop: Bochs's guest runs at real time at most (docs/BOCHS.md)."""
+    import os88megabochs
+    os.environ["OS88_BOCHS_NE2K"] = "1"     # ...and the NE2000 (no MartyPC
+    m = os88megabochs.launch("build/os8088.img", apps="build/apps.img",
+                              machine="os8088_xt_vga_hdd_sb", boot=False,
+                              cfg=ALLBITS, label="heapmap")   # machine has one)
+    sym = {n: m.sym(n) for n in ("mem_base", "mem_top", "spl_live",
+                                 "mem_tab")}
+    fseg = os88sym.linear("spl_fseg")
+    m.run()
+    t0 = time.time()
+    seen, keys = [], set()
+    whole = False
+    while True:
+        t = time.time() - t0
+        if t >= limit:
+            break
+        if not whole:
+            whole = m.read(fseg, 2) != b"\0\0"
+            if not whole:
+                time.sleep(0.2)
+                continue
+        try:
+            mp = heapmap.Map(m, sym)
+        except Exception:
+            continue
+        if not (mp.top and mp.base and mp.top > mp.base
+                and mp.top - mp.base < 0x10000):
+            continue
+        k = (mp.key(), tuple((c.seg, c.para, c.own) for c in mp.pool))
+        if k not in keys:
+            keys.add(k)
+            seen.append((t, mp))
+        if len(seen) > 3 and not mp.live and t > 25:
+            break
+        time.sleep(0.1)
+    return m, seen
+
+
+def check_pool(seen):
+    """kern_mega's POOL, the other half of its heap: no two blocks overlap
+    (mx_tab's MX_OFF/MX_KB, which Map.pool stands in for as seg/para), at
+    any sample - and the pool must exist on a 16MB machine at all"""
+    bad = []
+    if not any(m.pool for _, m in seen):
+        bad.append("kern_mega's pool held nothing at any sample - no mx_tab "
+                   "block on a 16MB machine is the pool not being read")
+    for t, m in seen:
+        last = None
+        for c in m.pool:
+            if last is not None and c.seg < last.end:
+                bad.append("t=%.2f: pool block %r OVERLAPS %r"
+                           % (t, c, last))
+            last = c
+    return bad
+
+
 def check(seen):
     bad = []
     if not seen:
@@ -240,10 +305,14 @@ def main():
                     help="fail if the largest free run is under this many KB")
     a = ap.parse_args()
 
-    kill_stale()
-    image()
-    launch(hdd=not a.no_hdd)
-    q, seen = sample()
+    mega = bool(os.environ.get("OS88_MEGA"))
+    if mega:                            # kern_mega: Bochs (see sample_mega)
+        q, seen = sample_mega()
+    else:
+        kill_stale()
+        image()
+        launch(hdd=not a.no_hdd)
+        q, seen = sample()
     try:
         print("\n%d distinct claim maps" % len(seen))
         prev = None
@@ -266,6 +335,13 @@ def main():
         final.report("FINAL")
 
         bad = check(seen)
+        if mega:
+            bad += check_pool(seen)
+            for c in final.pool:
+                print("  pool %07X %7.1fK  %-14s %s"
+                      % ((c.seg - 0x10000) * 16 + 0x100000, c.kb,
+                         heapmap.owner(c.own),
+                         "PINNED" if c.pinned else "movable"))
         runs = final.runs()
         largest = max((p for _, p in runs), default=0) / 64.0
 
@@ -305,11 +381,14 @@ def main():
                              sum(p for _, p in runs) / 64.0, len(runs)))
         return 0
     finally:
-        try:
-            q.hmp("quit")
-        except Exception:
-            pass
-        kill_stale()
+        if mega:
+            q.close()
+        else:
+            try:
+                q.hmp("quit")
+            except Exception:
+                pass
+            kill_stale()
 
 
 if __name__ == "__main__":

@@ -41,8 +41,10 @@ WORK = "build/sheetundo"                # this row's own paths (WRITING-TESTS 5.
 import os88build                                         # noqa: E402
 DISK = os88build.at("build/sheetundo.img")        # the run's tree, so a soak lane finds it
 CELLS = {(0, 0): 1.0, (1, 0): 2.0, (0, 1): 'x'}
-EDIT = (123, 45)
-ITEM = lambda i: (140, 57 + 12 * i + 2)     # the Edit menu's rows, measured
+# CGA points; on kern_mega's VGA (tests/megaport.txt) SHEET opens SHEET_DY
+# lower and every point in it moves with it (sheetfmt.mega_y)
+EDIT = SF.mega_y((123, 45), SF.SHEET_DY)
+ITEM = lambda i: SF.mega_y((140, 57 + 12 * i + 2), SF.SHEET_DY)  # measured
 UNDO, COPY, PASTE, CLEAR, INSERT = 0, 2, 3, 4, 8
 
 

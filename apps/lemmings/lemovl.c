@@ -659,13 +659,22 @@ static int ovl_spec_compose(int style)
         rows != LEM_WORLD_H / ph || rows * ph != LEM_WORLD_H)
         return 0;
     psz = (pw >> 3) * ph;           /* one plane */
-    if ((psz & 3) != 0)             /* four planes, whole paragraphs */
-        return 0;
-    seg = lem_cl_bank + (LEM_SP_HEAD >> 4);
+    if ((psz & 3) != 0 || psz > 8192) /* four planes, whole paragraphs, and */
+        return 0;                   /* at most 32 KB (below) */
+    /* THE PICTURE IS 76,800 BYTES, past one segment, so its pieces are walked
+     * in PARAGRAPHS from the bank's base and each is reached through
+     * ovl_far's 32 KB window for it (lemload.c) - not as bank + paragraphs,
+     * which under kern_mega's protected mode names another descriptor
+     * (KERN-MEGA-MEMORY-PLAN MC7). A piece of at most 32 KB starting inside
+     * a window's first 32 KB is inside its 64 KB, and the whole picture ends
+     * at 77,312, inside the claim. The converter cuts 9,600-byte pieces
+     * (tools/os88lem.py, 480 x 40). */
+    seg = LEM_SP_HEAD >> 4;         /* paragraphs into the bank */
     k = 0;
     for (r = 0; r < rows; r++)
         for (c = 0; c < cols; c++) {
-            lem_r_wpiece(seg, 0, x0 + c * pw, r * ph, pw, ph, 0);
+            lem_r_wpiece(lem_bwin[seg >> 11], (seg & 2047u) << 4,
+                         x0 + c * pw, r * ph, pw, ph, 0);
             seg += (unsigned)psz >> 2;  /* 4 x psz bytes, in paragraphs */
             k++;
             ovl_load_bar((k << 6) / (rows * cols));

@@ -418,8 +418,17 @@ boot2_entry:
     ; proves only that our own write to our own RAM worked, which it always
     ; does. Failing it costs a whole second load, and that is the right price:
     ; a boot that is 2.2s slower beats a kernel that is quietly wrong.
-    cmp word [b2_ksig], 0
-    je .nocross                 ; no signature for this image: nothing to check
+    ; THE SIGNATURE IS THE SECTOR'S SUM, NOT ONE WORD OF IT. KSIG is the
+    ; 16-bit sum of the 256 words of the canary sector (the Makefile's
+    ; KSIGDEF2) and this adds them up again. It was the sector's FIRST WORD,
+    ; and on kern_mega that word is 0 - a `ret`'s padding - and so was the
+    ; first word of the wrong sector a 286 ROM that cannot cross a head
+    ; delivered there: 495 of 512 bytes wrong and the canary PASSED, after a
+    ; Cylinder save (tests/megacz.py's third boot; the decoder then spun on
+    ; the wrong bytes for ever). It also read 0 as "no canary", which no image
+    ; that enters stage 2 can be: FLAT_PAYLOAD never comes this way and
+    ; KSIGDEF2 refuses a kernel too short to have the sector. A wrong sector
+    ; now passes one time in 65,536, whatever its first word holds
     mov ax, [b2_runmax]
     cmp ax, [b2_spt]
     je .nocross                 ; already track-bounded: no run crossed a head
@@ -431,10 +440,8 @@ boot2_entry:
     ; the geometry, not of what is in it. So it is still file sector 21 on
     ; every shipped disk; only the memory address moved, because the packed
     ; tail lands R paragraphs up from where the plain one did. The Makefile
-    ; reads the word out of the PACKED file at the same offset.
-  %if KSIG_OFF < KZ_HEADSEC * 512
-    cmp [es:KSIG_OFF], bx       ; ...in the plain head, so exactly as before
-  %else
+    ; sums the PACKED file's sector at the same offset.
+  %if KSIG_OFF >= KZ_HEADSEC * 512
     push es
     push ax                     ; **AX IS THE ANSWER, NOT A SCRATCH REGISTER.**
                                 ; It was loaded from [b2_runmax] above and is
@@ -452,13 +459,22 @@ boot2_entry:
     mov ax, es                  ; ES is KERNEL_SEG, and the two adjustments
     add ax, KZ_RPARA            ; CANCEL: the tail's base is +head/16 +R and
     mov es, ax                  ; the offset inside it is KSIG_OFF - head, so
-    cmp [es:KSIG_OFF], bx       ; +R and the SAME OFFSET is the same address
-    pop ax
-    pop es
+    pop ax                      ; +R and the SAME OFFSET is the same address
   %endif
-%else
-    cmp [es:KSIG_OFF], bx
 %endif
+    mov si, KSIG_OFF
+    mov cx, 256
+.ksum:
+    sub bx, [es:si]             ; BX ends 0 exactly when the sector sums to
+    inc si                      ; KSIG
+    inc si
+    loop .ksum
+%ifdef KZIP
+  %if KSIG_OFF >= KZ_HEADSEC * 512
+    pop es                      ; (flags are not the answer: BX is)
+  %endif
+%endif
+    or bx, bx
     jne .rerun
     inc byte [b2_cylok]         ; FE -> FF: this boot SAW a head crossed right
     mov [es:0x0004], ax         ; ...and tell the kernel what we learned, so

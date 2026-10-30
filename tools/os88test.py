@@ -110,6 +110,25 @@ name at once, picking another row meanwhile rather than parking a lane on the
 wait (`_locked_lane`).  tests/os88qemu.py's `lease_port` is the cross-runner
 half: another checkout's soak serving the same port is waited for.
 
+BOCHS AND 86BOX ROWS SHARE IT LAST (docs/plans/SOAK-PARALLEL.md 18).  The
+333 `mega-*`/`box-*` ports were serial and needed neither `marty` nor `qemu`,
+so they fell out of the lane by its admission test alone - a full soak spent
+hours running one Bochs at a time on a four-core box.  Their instances were
+private already: a Bochs row is handed an X display ($OS88_BOCHS_DISPLAY) and
+a run dir under build/bochs/inst/, an 86Box one a socket, a run dir and a
+GDB port.  What was NOT private is the SCRIPT's own scratch - a fixed
+build/<name>-run.img is private against every other script and not against
+the same script's port - so the lane holds every row's script as an implicit
+lock (`lane_locks`), and two rows of one script never run at once.
+
+...AND A BOCHS ROW IS A QUARTER OF A LANE (docs/plans/SOAK-PARALLEL.md 19).
+`sync=slowdown` and the clock preload cap a Bochs guest at real time, so a
+Bochs row keeps ~0.1-0.25 of a core busy where a MartyPC row keeps one; the
+lane is a budget of `--marty-jobs` cores, a Bochs-only row weighs
+`1/--bochs-per-core` of one (BOCHS_PER_CORE, 4) after its first BOCHS_WARM
+seconds and a whole one before, a fractional row waits for BOCHS_IDLE idle
+cores on the box, and every other row weighs 1 as it did.
+
 WHAT STILL RUNS ALONE, and it is no longer about the emulator.  TWO flags,
 and they are different claims:
 
@@ -295,6 +314,10 @@ def capabilities():
     # that RESUMES a hibernate under QEMU needs it.
     if os88build.qemu9():
         caps.add("qemu9")
+    # ...and one whose DMA follows the GUEST's clock under -icount
+    # (os88build.qemuvt(): tools/qemu9/'s patches, by its --version)
+    if os88build.qemuvt():
+        caps.add("qemuvt")
     # The BINARY, not the directory: build/cc exists from the moment
     # tools/setup-cc.sh starts cloning, so a half-finished or failed setup
     # would grant the capability and turn a skip into a confusing build
@@ -704,7 +727,8 @@ def run_row(row, caps, strict, verbose, unbuilt=(), shared=False):
         qdir = tempfile.mkdtemp(prefix="os88q-%s-" % row.name[:16],
                                 dir="/tmp")
         env = dict(env or os.environ, OS88_QEMU_DIR=qdir)
-    q9 = os88build.qemu9() if "qemu9" in row.needs else None
+    q9 = (os88build.qemuvt() if "qemuvt" in row.needs else
+          os88build.qemu9() if "qemu9" in row.needs else None)
     if q9:                              # the rows launch QEMU BY NAME
         env = dict(env or os.environ)
         env["PATH"] = os.path.dirname(q9) + os.pathsep + env.get("PATH", "")
@@ -735,8 +759,156 @@ def run_row(row, caps, strict, verbose, unbuilt=(), shared=False):
     return Result(row, ok, False, time.time() - t0, out, reason, cpu)
 
 
-def _locked_lane(rows, width, run):
-    """Run `rows` `width` at a time, never two holding one `Row.locks` name.
+# THE EMULATORS whose rows share the concurrent lane (main's `conc`). A row
+# needing one of these runs a machine that is private by construction -
+# os88marty.launch's port and run dir, tests/os88qemu.py's RUNDIR, a Bochs
+# display from `_bochs_display` and os88megabochs's run dir, os88box.py's
+# socket, run dir and GDB port - so two of them never meet in the emulator.
+EMULATORS = ("marty", "qemu", "bochs", "86box")
+
+
+def lane_locks(row):
+    """The names `_locked_lane` holds for ROW: its own `Row.locks`, and the
+    SCRIPT it runs.
+
+    THE SCRIPT IS A LOCK because a test's scratch is private against every
+    OTHER test and against nothing else. 120 of the 296 scripts that
+    tests/megaport.txt ports write a FIXED path under build/ - `dosfix`'s
+    build/dosfix-run.img, `chartgal`'s build/chartgal.img, `dosram`'s
+    build/dosram.vhd, which a kern_mega port then mounts IN PLACE - and that
+    was safe while every port ran in the one-at-a-time lane, which never
+    overlaps the shared one. Once `mega-dosfix` shares a lane with `dosfix`
+    (and `mega-tmselfsu` with `mega-tmselfsu-16m`, and `box-X` with
+    `mega-X`), the two would write one file at once. One name per script
+    makes every such pair run end to end, whatever the script writes, with
+    nothing for the next row's author to remember; the rows of one script
+    are a lock group, so `_locked_lane` starts them early rather than as a
+    tail."""
+    script = next((c for c in row.cmd
+                   if c.startswith("tests/") and c.endswith(".py")), None)
+    return tuple(getattr(row, "locks", ())) + (
+        ("script:" + script,) if script else ())
+
+
+# **A BOCHS ROW IS A FRACTION OF A CORE** (docs/plans/SOAK-PARALLEL.md 19).
+# Under `clock: sync=slowdown` and tools/bochs/bxclock.c a Bochs guest is
+# CAPPED at real time - 4M instructions a guest second, never more - so a
+# Bochs row spends most of its life with bochs-bin asleep in the slowdown
+# timer, and one costs ~0.15 of a core (bochs-bin, Xvfb, xdotool and the
+# harness together) where a MartyPC or a QEMU guest runs flat out and costs
+# a whole one. Counting it as a whole lane sat a four-core box at a load
+# average of ~1 for a four-hour kern_mega pass.
+#
+# So the emulator lane is a BUDGET of `--marty-jobs` cores rather than a
+# count of rows: a row needing Bochs and no other emulator weighs
+# `cpus / BOCHS_PER_CORE`, every other row weighs 1 as it always did, and the
+# lane admits rows while the weights fit. MartyPC, QEMU and 86Box rows are
+# scheduled exactly as before (a lane of nothing but them is the old lane).
+#
+# THE DEFAULT IS MEASURED, and the line it must not cross is the one where a
+# guest can no longer KEEP real time: below it nothing a guest does depends
+# on how many run beside it, because a capped guest at 4M IPS is the same
+# machine on any box; past it every guest runs slower than real time, which
+# the guest-clock waits absorb (docs/BOCHS.md, *The clock*) but the host-second
+# budgets of os88bochs.Box.until/up do not. `$OS88_BOCHS_PER_CORE` and
+# `--bochs-per-core` override; 1 is the old lane.
+BOCHS_PER_CORE = 4
+# ...BUT NOT WHILE IT STARTS. A row's first seconds are its dearest - the
+# script's imports, a map, disks built and copied, an Xvfb, Bochs's own
+# start - and a lane of sixteen admitted at once spends them all at once:
+# the first measured pass at 4 a core held the box at 4.0 of 4 cores for a
+# minute as the lane filled (docs/plans/SOAK-PARALLEL.md 19.2). So a
+# fractional row weighs a WHOLE lane for its first BOCHS_WARM host seconds
+# and its fraction after,
+# which fills a lane of 16 in four waves instead of one. It is a host-timed
+# number and it can only be: it decides WHEN a row starts, never what it
+# does. `$OS88_BOCHS_WARM` overrides; 0 admits a lane at once.
+BOCHS_WARM = 15.0
+# ...AND NOT ONTO A BOX WITH NO CORE TO SPARE. Weights are what OUR rows cost;
+# the box also runs whatever else is on it (another soak, a `make`, an
+# agent), and a Bochs guest keeps real time only while it can get its share
+# of a core - sixteen flat-out guests kept it beside another soak, twenty-four
+# fell to 0.63-0.73 of it. Past that every guest runs slow, and the waits
+# still spent in HOST seconds - os88bochs.Box.until's and up's budgets,
+# GLASS, ui_done's hold, _run_exact's backstop, the Bochs serial mouse's
+# host-timed fallback chain - stop meaning what they say. So a fractional row is
+# admitted only while the box has BOCHS_IDLE cores idle over the last
+# BOCHS_IDLE_SECS, read off /proc/stat so it counts everybody's load, and a
+# lane with none of our rows running always admits one. Like BOCHS_WARM it
+# decides WHEN a row starts and never what it does. `$OS88_BOCHS_IDLE`
+# overrides; 0 turns the gate off.
+BOCHS_IDLE = 0.75
+BOCHS_IDLE_SECS = 3.0
+
+
+class _Idle(object):
+    """Idle cores on the box over the last `secs`, off /proc/stat; None where
+    there is no /proc/stat (the gate is then open)."""
+
+    def __init__(self, secs=BOCHS_IDLE_SECS):
+        self.secs, self.hist = secs, []
+
+    @staticmethod
+    def _read():
+        try:
+            with open("/proc/stat") as f:
+                v = [int(x) for x in f.readline().split()[1:]]
+        except (OSError, ValueError):
+            return None
+        return sum(v), v[3] + (v[4] if len(v) > 4 else 0)
+
+    def cores(self):
+        now, got = time.time(), self._read()
+        if got is None:
+            return None
+        self.hist.append((now,) + got)
+        while len(self.hist) > 2 and now - self.hist[1][0] >= self.secs:
+            self.hist.pop(0)
+        t0, tot0, idle0 = self.hist[0]
+        if now - t0 < 0.5:
+            return None                 # no window yet: do not hold anyone
+        _, tot, idle = self.hist[-1]
+        n = os.cpu_count() or 1
+        return n * (idle - idle0) / float(max(1, tot - tot0))
+
+
+def _env_float(name, dflt):
+    try:
+        return max(0.0, float(os.environ.get(name, dflt)))
+    except ValueError:
+        return dflt
+
+
+def _default_bpc():
+    env = os.environ.get("OS88_BOCHS_PER_CORE")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    return BOCHS_PER_CORE
+
+
+def lane_weight(row, bpc):
+    """What ROW costs the emulator lane's core budget: `cpus / bpc` for a row
+    whose only emulator is Bochs, 1 for everything else (see BOCHS_PER_CORE).
+    A row that also needs MartyPC, QEMU or 86Box weighs what that one does."""
+    others = [e for e in EMULATORS if e != "bochs"]
+    if "bochs" in row.needs and not any(e in row.needs for e in others):
+        return min(1.0, max(1, getattr(row, "cpus", 1)) / float(max(1, bpc)))
+    return 1.0
+
+
+def _locked_lane(rows, width, run, weight=None):
+    """Run `rows` `width` at a time, never two holding one `lane_locks` name.
+
+    `weight(row)` is what a row costs out of `width` (lane_weight; 1 when it
+    is not given, which is a count of rows). Rows are admitted while their
+    weights fit, and one always runs on an empty lane. THE PICK IS NEVER
+    PASSED OVER FOR SIZE: when the row the order below chooses does not fit,
+    the lane waits for room rather than filling it with lighter rows behind
+    it - otherwise a stream of Bochs rows would hold a MartyPC row out until
+    the last of them, which is a tail as long as that row.
 
     A ThreadPoolExecutor with every row submitted would hand a lane to a row
     whose port is held and leave it parked on the lease for the length of the
@@ -750,6 +922,17 @@ def _locked_lane(rows, width, run):
     pending = list(rows)
     held = set()
     out = queue.Queue()
+    wt = weight or (lambda r: 1.0)
+    warm = _env_float("OS88_BOCHS_WARM", BOCHS_WARM)
+    spare = _env_float("OS88_BOCHS_IDLE", BOCHS_IDLE)
+    idle = _Idle()
+    idle.cores()                        # start the window now
+    running = {}                    # id(row) -> (row, host start)
+
+    def used(now):
+        # a fractional row weighs a whole lane until it is `warm` seconds old
+        return sum(1.0 if (wt(r) < 1.0 and now - t < warm) else wt(r)
+                   for r, t in running.values())
 
     def worker():
         while True:
@@ -758,7 +941,7 @@ def _locked_lane(rows, width, run):
                     if not pending:
                         return
                     free = [r for r in pending
-                            if not held & set(getattr(r, "locks", ()))]
+                            if not held & set(lane_locks(r))]
                     # LONGEST FIRST, and a LOCK GROUP by what it has left:
                     # the rows sharing a port run end to end whatever this
                     # does, so the group is the lane's critical path and
@@ -767,27 +950,46 @@ def _locked_lane(rows, width, run):
                     # 1,200 s row picked last is a 1,200 s tail)
                     left = {}
                     for p in pending:
-                        for lk in getattr(p, "locks", ()):
+                        for lk in lane_locks(p):
                             left[lk] = left.get(lk, 0.0) + p.secs
                     pick = max(free, key=lambda r: (
-                        max([left[lk] for lk in getattr(r, "locks", ())]
+                        max([left[lk] for lk in lane_locks(r)]
                             or [0.0]), r.secs), default=None)
-                    if pick is not None:
+                    now = time.time()
+                    gate = True
+                    if pick is not None and running and spare \
+                            and wt(pick) < 1.0:
+                        c = idle.cores()
+                        gate = c is None or c >= spare
+                    if pick is not None and (
+                            not running
+                            or gate and used(now)
+                            + max(wt(pick), 1.0 if warm else 0.0)
+                            <= width + 1e-9):
                         pending.remove(pick)
-                        held.update(getattr(pick, "locks", ()))
+                        held.update(lane_locks(pick))
+                        running[id(pick)] = (pick, now)
                         break
-                    cond.wait()
+                    # a WARMING row frees room by growing older, which no
+                    # notify announces, so a waiter re-checks once a second
+                    cond.wait(1.0 if running else None)
             try:
                 res = run(pick)
             except Exception as e:                      # noqa: BLE001
                 res = Result(pick, False, False, 0.0, repr(e), "runner error")
             with cond:
-                held.difference_update(getattr(pick, "locks", ()))
+                held.difference_update(lane_locks(pick))
+                running.pop(id(pick), None)
                 cond.notify_all()
             out.put(res)
 
+    # As many threads as the lightest row lets in at once: `width` for a lane
+    # of whole rows, `width * bpc` for one of Bochs rows. A spare thread just
+    # waits on the condition.
+    least = min([wt(r) for r in rows] or [1.0])
+    nthreads = max(1, int(width / max(least, 1e-3) + 1e-6))
     ts = [threading.Thread(target=worker, daemon=True)
-          for _ in range(max(1, width))]
+          for _ in range(min(nthreads, max(1, len(rows))))]
     for t in ts:
         t.start()
     for _ in rows:
@@ -1078,6 +1280,14 @@ def main():
                          "safety - see the header. Rows marked builds=True "
                          "(cannot share the TREE) or alone=True (cannot share "
                          "the CORES) run alone whatever this says.")
+    ap.add_argument("--bochs-per-core", type=int, dest="bpc",
+                    default=_default_bpc(),
+                    help="how many Bochs-only rows share ONE of the emulator "
+                         "lane's --marty-jobs cores (default %d, or "
+                         "$OS88_BOCHS_PER_CORE). A Bochs guest is capped at "
+                         "real time and uses a fraction of a core; 1 is the "
+                         "old one-row-per-lane. See BOCHS_PER_CORE."
+                         % BOCHS_PER_CORE)
     ap.add_argument("--user-asked", action="store_true", dest="user_asked",
                     help="the OWNER asked, in as many words, for the WHOLE "
                          "soak tier. Required to run `soak` with no -k: "
@@ -1169,13 +1379,26 @@ def main():
     # the one-at-a-time lane - build/qmp.sock - is gone. A row that serves a
     # fixed host port declares it in `locks=`, and the lane never runs two
     # rows holding one name at once.
+    #
+    # ...AND BOCHS AND 86BOX ROWS, the last emulators to join it (docs/plans/
+    # SOAK-PARALLEL.md 18). The 333 `mega-*`/`box-*` ports were `serial` for
+    # the lane and needed neither `marty` nor `qemu` - `_ports` drops both -
+    # so they fell through this test into the one-at-a-time lane, and a full
+    # soak spent hours there at a load average under one. Their instances
+    # were private already (a Bochs takes an X display from the runner and a
+    # run dir of its own, an 86Box a socket, a run dir and a GDB port); what
+    # was NOT private is a row's own scratch, which `lane_locks` covers.
     conc = [r for r in ser
-            if mj > 1 and ("marty" in r.needs or "qemu" in r.needs)
+            if mj > 1 and any(e in r.needs for e in EMULATORS)
             and not r.builds and not r.alone]
     ser = [r for r in ser if r not in conc]
+    bpc = max(1, a.bpc)
     if conc:
+        nb = sum(1 for r in conc if lane_weight(r, bpc) < 1.0)
         print("os88test: %d emulator row(s) in a lane of %d; %d run alone"
-              % (len(conc), mj, len(ser)))
+              % (len(conc), mj, len(ser))
+              + ("; %d Bochs row(s) at %d a core" % (nb, bpc)
+                 if nb and bpc > 1 else ""))
 
     def report(res):
         if res.skipped:
@@ -1235,7 +1458,8 @@ def main():
     # row must not be reading.
     if conc:
         for res in _locked_lane(conc, mj, lambda r: run_row(
-                r, caps, a.strict, a.verbose, unbuilt, shared=True)):
+                r, caps, a.strict, a.verbose, unbuilt, shared=True),
+                weight=lambda r: lane_weight(r, bpc)):
             results.append(res)
             report(res)
 

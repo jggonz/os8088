@@ -140,8 +140,61 @@ CM_REASON equ 18
 ; Outside the struct, so the C's view of c64_m is unchanged.
 c64_pkgds:
     resw 1
+; THE THREE ROM BANKS' FETCH SEGMENTS, made at the door (c64_rbset) from the
+; ROM part's LINEAR base, and only when that has moved: a fetch runs with ES
+; at the ROM part's segment LESS its bank's base, so the 6510's own PC is the
+; offset. That is a sum below the part, which is a selector under kern_mega
+; (KERN-MEGA-MEMORY-PLAN MC7) - so each is a window there (OSAPI_SEG's
+; SEG_WIN, over RAM the carve holds) and the sum on every real-mode kernel,
+; the same three words either way. Per run is enough: the UI task is the only
+; one that compacts and a run is on it, so a move lands between two runs
+; (os88_onmove's note, c64.c)
+c64_rbk:    resw 1                  ; KERNAL  ($E000 in the part's 0E00h)
+c64_rbb:    resw 1                  ; BASIC   ($A000 in its 0800h)
+c64_rbc:    resw 1                  ; CHARGEN ($D000 in its 0900h)
+c64_rblin:  resw 2                  ; the linear base they were made for
 
 section .text
+
+; c64_rbset - the three fetch segments, remade when the ROM part has moved
+; in: DS = the package's; out: c64_rbk/rbb/rbc; clobbers AX, BX, CX, DX
+c64_rbset:
+    mov dx, [_c64_m+CM_ROMSEG]
+    mov bl, SEG_LIN
+    call OSAPI_SEG                  ; DX:AX = the part's linear base
+    cmp ax, [c64_rblin]
+    jne .new
+    cmp dx, [c64_rblin+2]
+    je .out                         ; where they were made: as they are
+.new:
+    mov [c64_rblin], ax
+    mov [c64_rblin+2], dx
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or dx, ax                       ; DX = its paragraph (the DMA door's
+    mov bx, c64_rbk                 ; carve: conventional on every kernel)
+    mov ax, C64_ROMS_KERNAL
+    call .one
+    mov bx, c64_rbb
+    mov ax, C64_ROMS_BASIC
+    call .one
+    mov bx, c64_rbc
+    mov ax, C64_ROMS_CHARGEN
+.one:                               ; [BX] = DX - AX, as a window there
+    push dx
+    sub dx, ax
+    push bx
+    mov ax, [bx]                    ; the window to re-aim (0 = a new one)
+    xor cx, cx                      ; 64KB: all the PC can name
+    mov bl, SEG_WIN
+    call OSAPI_SEG                  ; the paragraph itself on a real-mode kernel
+    pop bx
+    mov [bx], dx
+    pop dx
+.out:
+    ret
 
 ; --- what _c64_run answers (C64-SPEC §4.5) ----------------------------
 C64_RUN_SLICE equ 0                 ; the wall-slice budget was spent
@@ -257,11 +310,7 @@ CT_W equ -18                        ; a WORD temporary (the branch's old PC)
 ; c64_rebias is reached from the middle of c64_ea_abs with half an effective
 ; address already in BX.
 %macro ROMBIAS 1
-    push ax
-    mov ax, [cs:_c64_m+CM_ROMSEG]
-    sub ax, %1
-    mov es, ax
-    pop ax
+    mov es, [cs:%1]                 ; (c64_rbset made it at the door)
     jmp short c64_rebias.go
 %endmacro
 
@@ -293,6 +342,7 @@ _c64_run:
     push es                         ; [bp-8] KERNEL_SEG (SPEC.md 20.4)
     sub sp, 12                      ; the CT_* scratch
     mov [c64_pkgds], ds             ; DS-relative: the package's, still
+    call c64_rbset                  ; ...and the ROM banks' fetch segments
 
     mov ax, [bp+4]
     mov si, [cs:_c64_m+CM_RAMSEG]
@@ -375,7 +425,7 @@ c64_rebias:
     mov word [C64_SCR_BASE + C64_SCR_BOUND], 0xFFFF
     cmp byte [C64_SCR_BASE + C64_SCR_MAPE], C64_MAP_KERNAL
     jne .ram
-    ROMBIAS C64_ROMS_KERNAL
+    ROMBIAS c64_rbk
 .low:
     mov word [C64_SCR_BASE + C64_SCR_BLO], 2
     mov word [C64_SCR_BASE + C64_SCR_BOUND], 0xA000
@@ -385,7 +435,7 @@ c64_rebias:
     mov word [C64_SCR_BASE + C64_SCR_BOUND], 0xC000
     cmp byte [C64_SCR_BASE + C64_SCR_MAPA], C64_MAP_BASIC
     jne .ram
-    ROMBIAS C64_ROMS_BASIC
+    ROMBIAS c64_rbb
 .c000:
     mov word [C64_SCR_BASE + C64_SCR_BLO], 0xC000
     mov word [C64_SCR_BASE + C64_SCR_BOUND], 0xD000
@@ -397,7 +447,7 @@ c64_rebias:
     mov word [C64_SCR_BASE + C64_SCR_BOUND], 0xE000
     cmp byte [C64_SCR_BASE + C64_SCR_MAPD], C64_MAP_CHARGEN
     jne .ram
-    ROMBIAS C64_ROMS_CHARGEN
+    ROMBIAS c64_rbc
 .ram:
     mov es, [cs:_c64_m+CM_RAMSEG]
 .go:

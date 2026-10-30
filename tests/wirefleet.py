@@ -7,6 +7,7 @@ The negative cases require a successful placement first, so a routine that
 refuses everything cannot pass. Additional delivery waves extend this file.
 """
 import argparse
+import os
 from collections import Counter
 from pathlib import Path
 import subprocess
@@ -82,9 +83,12 @@ def effects():
 def deployment():
     from PIL import Image
     sy = dispapps._map('wirefleet')
-    for adapter, machine in (('vga', 'os8088_xt_vga'),
-                             ('cga', 'os8088_5150_cga'),
-                             ('herc', 'os8088_5150_herc')):
+    legs = (('vga', 'os8088_xt_vga'),
+            ('cga', 'os8088_5150_cga'),
+            ('herc', 'os8088_5150_herc'))
+    if os.environ.get('OS88_MEGA'):     # kern_mega's Bochs is a VGA alone
+        legs = legs[:1]                 # (tests/megaport.txt)
+    for adapter, machine in legs:
         with os88ui.boot(artifact('os8088-360.img'), apps=artifact('wireflet360.img'),
                          machine=machine, settle=False, quick=True) as ui:
             ui.open_drive('B')

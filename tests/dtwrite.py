@@ -102,6 +102,44 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     check("nothing is owed before the edit", dirty() == 0 and wdirty() == 0,
           f"([clk_dirty]={dirty()} [cp_wdirty]={wdirty()})")
 
+    # THE CHIP ITSELF, on kern_mega's Bochs: it HAS an MC146818 (rung 1),
+    # so what the close is for can be asserted on the hardware - the stepped
+    # field reaches the CMOS at the close and NOT before. MartyPC models no
+    # clock chip, so there this half is not asked at all.
+    chip = getattr(m, "cmos", None)
+
+    def kclock():
+        b = m.read(m.sym("clk_sec"), 9)       # tests/dtfield.py's clock()
+        return dict(min=b[1], hour=b[2], day=b[3], mon=b[4],
+                    year=b[7] | (b[8] << 8))
+
+    def bcd(v):
+        return (v >> 4) * 10 + (v & 15)
+
+    def rtc():
+        c = chip()
+        yy = bcd(c[9])
+        year = bcd(c[0x32]) * 100 + yy
+        # A STALE CENTURY BYTE composes a year that does not exist here:
+        # 86Box's mr286 keeps the 19 its BIOS defaulted to while the chip
+        # follows the host to 26, and kernel/clock.inc's clk_yr_join windows
+        # the two digits for exactly that case - so the chip is read the way
+        # the kernel reads it (and the close's write puts 20 back)
+        if not 1980 <= year <= 2099:
+            year = (1900 if yy >= 80 else 2000) + yy
+        return dict(min=bcd(c[2]), hour=bcd(c[4]), day=bcd(c[7]),
+                    mon=bcd(c[8]), year=year)
+    k0 = kclock() if chip else None
+    if chip:
+        # THE YEAR, not the default month: Bochs's MC146818 RACES while the
+        # debugger holds the guest (measured: hours of chip time per stop,
+        # with the kernel's own clock exact), so over a row's hundred reads
+        # the chip's day rolls - and near a month's end its month would too.
+        # A year only rolls at New Year. Field 2 is tests/dtfield.py's.
+        mo.click(w[0] + 1 + CP_RX + 8 + 56 + 16, w[1] + TITLE_H + 1 + 26 + 4,
+                 settle=0)
+        M.ui_done(m)
+
     # --- 1: the arrow posts BOTH flags ------------------------------------
     px, py = w[0] + 1 + CP_RX, w[1] + TITLE_H + 1
     mo.click(px + CPT_BX + CPT_BW // 2, py + CPT_BUY + CPT_BH // 2, settle=0)
@@ -118,12 +156,28 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     check("three guest seconds on, the tick has NOT drained it",
           dirty() == 1, f"([clk_dirty] = {dirty()}, ~54 ticks)")
 
+    if chip:
+        k1 = kclock()
+        moved = [f for f in ("day", "mon", "year") if k1[f] != k0[f]]
+        f = moved[0] if moved else "year"
+        r1 = rtc()
+        check("the step moved the year, and only the year, in the kernel's "
+              "clock", moved == ["year"], f"({k0} -> {k1})")
+        check("...and the CHIP still holds the old one before the close",
+              r1[f] == k0[f], f"(CMOS {f} = {r1[f]}, was {k0[f]}, "
+              f"stepped to {k1[f]})")
+
     # --- 3: the close spends it -------------------------------------------
     w = panel(m)
     mo.click(w[0] + 10, w[1] + TITLE_H // 2, settle=0)        # the close box
     M.ui_done(m)                # the close's module load and write included
     check("the panel's CLOSE spent it", dirty() == 0, f"({dirty()})")
     check("...and the panel is gone", panel(m) is None)
+    if chip:
+        k2, r2 = kclock(), rtc()
+        check("the close WROTE the chip: its year is the panel's",
+              r2[f] == k1[f] == k2[f], f"(CMOS {f} {r2[f]}, kernel {k2[f]}, "
+              f"stepped to {k1[f]})")
 
 print()
 if fails:

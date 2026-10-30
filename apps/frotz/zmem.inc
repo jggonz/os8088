@@ -5,13 +5,28 @@
 ;
 ; ONE DECISION SHAPES THIS FILE (docs/plans/completed/FROTZ-PLAN.md 3): the whole story file is
 ; resident in one heap claim, and a story address is up to 20 bits (Standard
-; 1.1.4 caps a v6-v8 file at 512KB). A claim hands back a base SEGMENT, so the
-; conversion is
+; 1.1.4 caps a v6-v8 file at 512KB). The claim is walked by 32KB PAGE: at load,
+; zm_pages builds [zf_stab], one segment per page, and the conversion is
 ;
-;     byte at A   ->   segment = [zf_sseg] + (A >> 4),   offset = A & 15
+;     byte at A   ->   segment = [zf_stab + 2 x (A >> 15)],   offset = A & 0x7FFF
 ;
-; and `A >> 4` for a 20-bit A is a 16-bit result - a shift pair and an add,
-; never a 32-bit register (CLAUDE.md rule 1: 8086 only, no exception).
+; `A >> 15` for a 20-bit A is a shift-and-carry of DX:AX, never a 32-bit
+; register (CLAUDE.md rule 1: 8086 only, no exception).
+;
+; WHY A TABLE AND NOT A SUM (KERN-MEGA-MEMORY-PLAN MC7). It was `[zf_sseg] + 8
+; x (A >> 7)` - 128-byte granules counted off the base - and on kern_mega in
+; protected mode every claim is an LDT SELECTOR: adding paragraphs to one names
+; some other descriptor. Each table entry is OSAPI_SEG's SEG_SUB of the claim,
+; a 64KB data selector based on that page on kern_mega and exactly the old sum
+; on every real-mode kernel, so ONE binary is right on both and nothing here
+; asks which it is on. It is also CHEAPER on the 8088: a shift-and-carry and an
+; indexed load where the granule sum was three shifts by CL (zm_map's high arm
+; ~80 clocks against ~165).
+;
+; A PAGE'S SEGMENT REACHES 64KB, NOT 32: SEG_SUB with CX = 0 runs to the claim's
+; end or 64KB, and the sum is a whole real-mode segment. So a word read at a
+; page's last byte, an instruction that runs over the page, and an offset that
+; has walked past 0x8000 before zm_norm moves the page are all still inside it.
 ;
 ; Two fast paths carry almost all the traffic and both are visible here:
 ;
@@ -22,13 +37,16 @@
 ;     zm_gb/zm_gw are the general forms and they simply FALL INTO the 16-bit
 ;     ones when DX is zero. One test, no duplicated body. (There were write
 ;     forms too, zm_pb/zm_pw; nothing called them - every write is below 64KB.)
+;     [zf_sseg] itself is a selector on kern_mega, and a claim's selector
+;     covers its first 64KB - zio.inc claims at least that much there.
 ;
-;   - **The PC is a live ES:SI** (zm_seek/zm_norm/zm_pcaddr). Instruction fetch
-;     is `lods`, the cheapest thing the 8086 has, and ES:SI is renormalised
-;     only when SI crosses 0x8000 - once per 32KB of straight-line code. That
-;     is why zm_seek always lands SI in 0..15 rather than taking the <64K fast
-;     path: the PC must start with the whole of a segment ahead of it.
-;
+;   - **The PC is a live ES:SI** (zm_seek/zm_norm/zm_pcaddr), plus its page
+;     INDEX in [zf_pcpg]. Instruction fetch is `lods`-shaped, the cheapest thing
+;     the 8086 has, and ES:SI moves to the next page only when SI crosses
+;     0x8000 - once per 32KB of straight-line code. The page is an index, so
+;     the PC's address is the index and the offset, and nothing ever compares
+;     or subtracts segments to find it.
+
 ; Z-machine words are BIG-ENDIAN and the 8086 is not (docs/plans/completed/FROTZ-PLAN.md 3).
 ; THIS FILE IS THE ONLY PLACE A WORD IS FORMED FROM STORY BYTES. Everything
 ; else calls zm_gw/zm_gw16. That is not tidiness: a byte pair assembled by hand
@@ -116,33 +134,33 @@ ZM_COL_WHITE equ 9
 ;
 ; The DX=0 arm is not an optimisation of the other one, it is a different
 ; answer: it leaves the whole of the low 64KB reachable from one segment, so a
-; word read never straddles a segment boundary and [es:bx+1] is exact.
+; word read never straddles a segment boundary and [es:bx+1] is exact. The
+; high arm's offset is at most 0x7FFF in a segment that reaches 64KB, so
+; [es:bx+1] is exact there too.
+;
+; The page is masked to the table's sixteen entries: a v6/v7 packed address
+; plus its offset can name ~768KB, and an entry past the table is not a
+; segment at all - on kern_mega, loading one into ES is a fault. A nonsense
+; address reads nonsense out of the story instead, as it always did.
 ; =============================================================================
 zm_map:
     push ax
-    push cx
     or dx, dx
     jnz .hi
-.lo:
     mov bx, ax                      ; < 64KB: one segment reaches all of it
     mov es, [zf_sseg]
-    jmp short .out
+    pop ax
+    ret
 .hi:
-    test byte [zf_sseg], 4          ; a SELECTOR (KERN-MEGA-PLAN 14.13) is a
-    jnz .lo                         ; story of 64KB or less in a 64KB claim:
-    mov bx, ax                      ; past its end it reads garbage, as here
-    and bx, 127                     ; offset = A & 127: a 128-byte GRANULE,
-    mov cl, 7                       ; so the segment is a multiple of 8
-    shr ax, cl                      ; paragraphs along and an identity selector
-    mov cl, 9                       ; on kern_mega (KERN-MEGA-PLAN 10.1 item
-    shl dx, cl                      ; 18). Real mode reads the same byte
-    or ax, dx                       ; AX = A >> 7
-    mov cl, 3
-    shl ax, cl                      ; ...in paragraphs
-    add ax, [zf_sseg]               ; segment = base + 8 x (A >> 7)
-    mov es, ax
-.out:
-    pop cx
+    mov bx, ax
+    shl ax, 1
+    rcl dx, 1                       ; DX = A >> 15, the PAGE
+    shl dx, 1
+    and dx, 0x1E                    ; ...x2, and one of the table's sixteen
+    xchg bx, dx                     ; BX = the page, DX = A's low word
+    mov es, [zf_stab + bx]
+    mov bx, dx
+    and bx, 0x7FFF                  ; offset = A & 0x7FFF
     pop ax
     ret
 
@@ -282,38 +300,35 @@ zm_pw16:
 ; =============================================================================
 ; zm_seek - point the live PC at a story address
 ; in:  DX:AX = story address
-; out: ES:SI addresses it, with SI in 0..127 (a granule: zm_map)
+; out: ES:SI addresses it, with SI in 0..0x7FFF (a page: zm_map), and
+;      [zf_pcpg] its page
 ;
-; SI is deliberately left tiny rather than taking zm_map's <64K arm: the PC
-; walks forward with `lods` and wants the whole 32KB window ahead of it before
-; zm_norm has to do anything.
+; It takes the PAGED arm even below 64KB, unlike zm_map: the PC's position is
+; its page and its offset, and the page's segment reaches 64KB, so the PC has
+; at least 32KB ahead of it before zm_norm has anything to do.
 ; =============================================================================
 ; zm_addr sets ES:SI to an address WITHOUT claiming it is the program counter.
 ; Walking a Quetzal chunk or checksumming the image needs the arithmetic and
 ; must not disturb the PC (SPEC.md 61.3).
 zm_addr:
+    push bx
+    call zm_page
+    pop bx
+    ret
+
+; zm_page - zm_addr, and BX = the page x2 (the index zm_seek banks)
+zm_page:
     push ax
-    push cx
     push dx
     mov si, ax
-    test byte [zf_sseg], 4          ; a selector: the claim, at the address
-    jz .gran                        ; itself (zm_map)
-    mov es, [zf_sseg]
-    jmp short .out
-.gran:
-    and si, 127                     ; a GRANULE, as zm_map
-    mov cl, 7
-    shr ax, cl
-    mov cl, 9
-    shl dx, cl
-    or ax, dx
-    mov cl, 3
-    shl ax, cl
-    add ax, [zf_sseg]
-    mov es, ax
-.out:
+    and si, 0x7FFF                  ; offset = A & 0x7FFF
+    shl ax, 1
+    rcl dx, 1                       ; DX = A >> 15
+    shl dx, 1
+    and dx, 0x1E                    ; as zm_map
+    mov bx, dx
+    mov es, [zf_stab + bx]
     pop dx
-    pop cx
     pop ax
     ret
 
@@ -329,12 +344,12 @@ zm_seek:
     ; instead of the innocent opcode that runs afterwards at a nonsense PC.
     call zm_inimg
     jc .bad
-    call zm_addr
-    push ax
-    mov ax, es
-    mov [zf_pcseg], ax
+    push bx
+    call zm_page
+    mov [zf_pcpg], bx
+    mov [zf_pcseg], es
     mov [zf_pcoff], si
-    pop ax
+    pop bx
     ret
 .bad:
     mov [zx_badpc_l], ax
@@ -361,44 +376,108 @@ zm_inimg:
     ret
 
 ; =============================================================================
-; zm_norm - renormalise ES:SI after SI has walked past 0x8000
+; zm_norm - move the PC to the next page after SI has walked past 0x8000
 ; in/out: ES:SI = the PC
-; Preserves every other register. Called once per 32KB of straight-line code,
-; which is why the test is a bare compare and not a table.
+; out: CF = 1 the PC has left the story (it is past the last page); ES:SI and
+;      the page are then left as they were. Preserves every other register.
+;
+; Called once per 32KB of straight-line code, so the test is a bare compare
+; and the page move is a table load - never a sum on the segment. A forward
+; @jump may have taken SI as far as 0xFFFF; one page is still all it needs.
 ; =============================================================================
 zm_norm:
     cmp si, 0x8000
-    jb .out
-    test byte [zf_sseg], 4          ; a selector reaches the whole story
-    jnz .out                        ; from one base (zm_map)
-    push ax
+    jb .out                         ; (CF = 1 from jb is not the answer: clc)
+    push bx
+    mov bx, [zf_pcpg]
+    inc bx
+    inc bx                          ; the next page, x2
+    cmp [zf_pglim], bx
+    jb .lost                        ; past the story's last page
     sub si, 0x8000
-    mov ax, es
-    add ax, 0x800                   ; 0x8000 bytes = 0x800 paragraphs
-    mov es, ax
-    mov [zf_pcseg], ax              ; a PC mover: keep the authority current
+    mov [zf_pcpg], bx
+    mov es, [zf_stab + bx]
+    mov [zf_pcseg], es              ; a PC mover: keep the authority current
     mov [zf_pcoff], si
-    pop ax
+    pop bx
 .out:
+    clc
+    ret
+.lost:
+    pop bx
+    stc
     ret
 
 ; =============================================================================
-; zm_pcaddr - the live ES:SI as a 20-bit story address
-; out: DX:AX = the address
+; zm_pcaddr - the live PC as a 20-bit story address
+; out: DX:AX = the address: [zf_pcpg]'s page x 32KB, plus SI
 ; Preserves every other register.
+;
+; From the page INDEX, never from ES: on kern_mega ES is a selector, and a
+; selector's value says nothing about where it points.
 ; =============================================================================
 zm_pcaddr:
-    push cx
-    mov ax, es
-    sub ax, [zf_sseg]               ; paragraph index, 0..0x7FFF for 512KB
+    mov ax, [zf_pcpg]               ; the page x2
     mov dx, ax
-    mov cl, 12
-    shr dx, cl                      ; paragraphs >> 12 = address bits 16..19
-    mov cl, 4
-    shl ax, cl                      ; paragraphs << 4, low 16 bits
+    shr dx, 1
+    shr dx, 1                       ; DX = page >> 1, address bits 16..19
+    and ax, 2                       ; the page's low bit, x2...
+    ror ax, 1
+    ror ax, 1                       ; ...as 0x8000
     add ax, si
     adc dx, 0
+    ret
+
+; =============================================================================
+; zm_pages - build [zf_stab] over the story claim (zio.inc's zi_load)
+; in:  [zf_sseg] = the claim, [zf_skb] = its size in KB
+; out: CF = 1 a page could not be given a segment (kern_mega with no LDT entry
+;      free): the story cannot run. Preserves every register.
+;
+; One OSAPI_SEG SEG_SUB per 32KB page that starts inside the claim - "my
+; segment + 0x800 x k" - which is that sum on a real-mode kernel and a 64KB
+; data selector based there on kern_mega, stable for the claim's life, moved
+; with it and freed with it (SPEC.md 50.6.11). Up to fifteen calls, once per
+; story load. Page 0 is the claim itself, and a page past the claim's end is
+; the claim again (zbss.inc).
+; =============================================================================
+zm_pages:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    mov bp, [zf_skb]
+    mov cl, 6
+    shl bp, cl                      ; BP = the claim in paragraphs (<= 0x8000)
+    mov di, zf_stab
+    xor ax, ax                      ; AX = the page's paragraph offset
+.page:
+    mov dx, [zf_sseg]
+    or ax, ax
+    jz .put                         ; page 0: the claim's own segment
+    cmp ax, bp
+    jae .put                        ; past the claim: the claim again
+    xor cx, cx                      ; to the claim's end, 64KB at most
+    mov bl, SEG_SUB
+    call OSAPI_SEG                  ; DX = the page; AX kept
+    jc .out
+.put:
+    mov [di], dx
+    inc di
+    inc di
+    add ax, 0x800                   ; 32KB on
+    cmp di, zf_stab + 32
+    jb .page
+    clc
+.out:
+    pop bp
+    pop di
+    pop dx
     pop cx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================

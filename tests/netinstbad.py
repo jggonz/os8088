@@ -172,6 +172,8 @@ def main():
             w = HM.front_on(ui, 0)
             before = {x[0] for x in NI.HI.wins(q)}
             i, _ = ui.entry("INSTALL.O88", w)
+            if os88qemu.MEGA:           # mega.img's twin: below the fold
+                i = NI.onscreen(q, ui, w, i)    # (netinst.onscreen)
             xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
             q.need(lambda: NI.install_seg(q, before)[0] is not None,
                    "INSTALL", 60)

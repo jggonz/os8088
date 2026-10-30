@@ -39,7 +39,9 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dosmap                                                  # noqa: E402
 import dosmouse                                                # noqa: E402
+import os88mouserel                                            # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -50,6 +52,12 @@ WX, WY = 320, 200                   # ...and the window MOURANGE.COM asks for:
                                     # 0..319 and 0..199, which is Battle
                                     # Chess's own (96.10.7)
 MACHINES = ("os8088_5150_cga_gla", "os8088_5150_herc_gla")
+# kern_mega (OS88_MEGA=1, Bochs): ONE arm. Both machines are Bochs's VGA
+# there, and the two adapters' scales are not what is under test - kern_dos's
+# pointer lives in the virtual screen whatever the card (kerndos/kdmouse.inc)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+if MEGA:
+    MACHINES = MACHINES[:1]
 
 
 def fail(msg):
@@ -77,8 +85,22 @@ def run(machine):
         # `tests/dosmouse.py` is what proves it. All this row asks of it is
         # that the map has not quietly changed it.
         x1, y1 = pos(m, "POS1")
-        w, h = ui._word("vid_w"), ui._word("vid_h")
-        want = (ui._word("mouse_x") * VW // w, ui._word("mouse_y") * VH // h)
+        if MEGA:
+            # **ON kern_mega THE PROGRAM IS A kern_dos TRIP**: the kernel is
+            # parked, its mouse_x is not where a read looks, and the host's
+            # pointer is kern_dos's own kdm_x/kdm_y - which accumulate in INT
+            # 33h's VIRTUAL screen already (kerndos/kdmouse.inc), so the
+            # host's scale IS the identity and w, h are VW, VH
+            kd = dosmap.kerndos()
+
+            def word(n):
+                return int.from_bytes(m.read(0xFFFF0 + kd[n], 2), "little")
+            w, h = VW, VH
+            mx, my = (lambda: word("kdm_x")), (lambda: word("kdm_y"))
+        else:
+            w, h = ui._word("vid_w"), ui._word("vid_h")
+            mx, my = (lambda: ui._word("mouse_x")), (lambda: ui._word("mouse_y"))
+        want = (mx() * VW // w, my() * VH // h)
         print("dosrange: POS1 (full window) %s, the pointer scales to %s"
               % ((x1, y1), want))
         if abs(x1 - want[0]) > 2 or abs(y1 - want[1]) > 2:
@@ -101,11 +123,18 @@ def run(machine):
         # the host's units, and that is the whole point: without the map this
         # reads ~600 and a program that indexes a table with it is gone.
         px, py = w * 3 // 4, h * 3 // 4
-        ui.mo.to(px, py)
+        if MEGA:
+            # no kernel to aim an absolute pointer through: a SERIAL mouse
+            # moved by hand (tests/kdmouse.py's Rel, paced by the wall for
+            # its reason), from kern_dos's centre to past three quarters
+            os88mouserel.Rel(m, pace="wall").move(px - mx() + 40,
+                                                  py - my() + 10)
+        else:
+            ui.mo.to(px, py)
         m.type_text("x")
         x3, y3 = pos(m, "POS3")
-        hx = ui._word("mouse_x") * VW // w
-        hy = ui._word("mouse_y") * VH // h
+        hx = mx() * VW // w
+        hy = my() * VH // h
         wx, wy = hx * WX // VW, hy * WY // VH
         print("dosrange: POS3 pointer (%d,%d) -> host (%d,%d) -> window "
               "(%d,%d); the program read (%d,%d)"

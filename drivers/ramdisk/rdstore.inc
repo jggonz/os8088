@@ -339,6 +339,36 @@ rd_ext_clear:
     ret
 
 ; -----------------------------------------------------------------------------
+; rd_at - AX paragraphs into the conventional arena, as a segment for NOW
+; in:  AX = paragraphs, BX -> rd_wa or rd_wb; out: AX = the segment
+; clobbers: AX (the output), flags
+;
+; THE SUM [rd_arena] + AX, asked of the kernel first (OSAPI_SEG's SEG_AT,
+; apps/os88partsbody.inc's op_at): under kern_mega the arena is a selector
+; and a sum on it names some other descriptor, so a window is re-aimed there
+; instead (KERN-MEGA-MEMORY-PLAN MC7); every real-mode kernel refuses the
+; verb with every register kept, and the sum is the answer. Two windows,
+; because a Preserve holds an extent's and a chunk's at once
+; -----------------------------------------------------------------------------
+rd_at:
+    push cx
+    push dx
+    mov dx, [rd_arena]
+    mov cx, [bx]                ; the window to re-aim, 0 = a new one
+    push bx
+    mov bl, SEG_AT
+    call OSAPI_SEG
+    pop bx
+    jnc .w
+    add dx, ax                  ; refused: a real-mode kernel's sum
+.w:
+    mov [bx], dx
+    xchg ax, dx
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; rd_ext_seg - a segment through which extent AX can be read and written
 ; in:  AX = an extent index
 ; out: AX = the segment; offset 0 is the extent's first byte
@@ -355,8 +385,11 @@ rd_ext_seg:
     push cx
     push dx
     mul word [rd_extpara]       ; DX:AX, and the product is bounded by the
-    add ax, [rd_arena]          ; conventional heap - a store big enough to
-    pop dx                      ; carry DX is one no 640KB machine can claim
+    push bx                     ; conventional heap - a store big enough to
+    mov bx, rd_wa               ; carry DX is one no 640KB machine can claim
+    call rd_at
+    pop bx
+    pop dx
     pop cx
     ret
 .xms:
@@ -873,25 +906,33 @@ rd_free_ext:
     pop bx
     ret
 
-; rd_fold - [rd_bufs]:[rd_bufo] normalised to an offset under 16 - unless the
-; segment is a kern_mega pool SELECTOR (CPU_F_PM banked at attach, and 2800h
-; and up with bit 2 set: this image placed above 1MB, KERN-MEGA-PLAN item 82),
-; whose base is no paragraph, and then the offset carries on inside it. The
-; only such buffer is the seed's, read out of this image and far under 64KB.
-; On a real-mode kernel the same VALUE is an ordinary paragraph - a packed
-; file's destination is any one (SPEC.md 18.4.1) - so it folds, always, as
-; rd_io's wrap guard needs. Clobbers AX, CL
+; rd_fold - [rd_bufs]:[rd_bufo] normalised, so a transfer longer than 64KB
+; never carries off the end of a segment - in the units the segment's VALUE
+; allows (KERN-MEGA-MEMORY-PLAN MC8). On a real-mode kernel any paragraph is a
+; segment, so the paragraphs fold into it and the offset is left under 16, as
+; rd_io's wrap guard needs. Under kern_mega's protected mode (CPU_F_PM, ASKED
+; HERE and never banked: a driver SYSTEM.CFG wants is attached in REAL mode,
+; before mega_enter, so a byte banked at attach says "real mode" for the whole
+; session - KERN-MEGA-PLAN 14.87, 14.112) a GDT selector is the IDENTITY map's (KERN-MEGA-PLAN 3.1), one
+; entry per 128 bytes, so only whole 128-byte GRANULES fold - a paragraph fold
+; built a segment off that grid, a #GP or SILENTLY an LDT alias of other
+; memory (14.19, 14.68) - and an LDT selector (TI set) has a base that is no
+; paragraph at all, so its offset just walks: the kernel hands such a buffer
+; over with the transfer inside its 64KB. Clobbers AX, CL
 rd_fold:
-    mov ax, [rd_bufs]
-    test byte [rd_cpuf], CPU_F_PM
-    jz .fold
-    test al, 4
-    jz .fold
-    cmp ax, 0x2800
-    jae .out
-.fold:
-    mov ax, [rd_bufo]
+    call OSAPI_CPU_INFO         ; AH = the flags NOW (it preserves the rest)
+    test ah, CPU_F_PM
+    mov ax, [rd_bufo]           ; (neither mov touches the flags)
     mov cl, 4
+    jz .fold
+    shr ax, cl                  ; AX = the offset's paragraphs
+    test byte [rd_bufs], 4
+    jnz .out                    ; an LDT selector: the offset walks
+    and al, 0xF8                ; an identity selector: whole granules
+    add [rd_bufs], ax
+    and word [rd_bufo], 127
+    ret
+.fold:
     shr ax, cl
     add [rd_bufs], ax
     and word [rd_bufo], 15

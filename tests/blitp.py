@@ -91,8 +91,10 @@ def main():
         if x % 8:
             sys.exit("blitp: the bench handed it an unaligned x - it will "
                      "have REFUSED, and this row would prove nothing")
-        src = m.read((r["es"] << 4) + r["si"], pstep * 4)
-        ret = u16(m.read((r["ss"] << 4) + r["sp"], 2))
+        # ES and SS are SELECTORS on kern_mega (docs/BOCHS.md): m.lin
+        lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)
+        src = m.read(lin(r["es"], r["si"]), pstep * 4)
+        ret = u16(m.read(lin(r["ss"], r["sp"]), 2))
         m.bp_exec(KBASE + ret)
         m.run()
         if not m.wait_stop(limit=600.0):

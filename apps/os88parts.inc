@@ -375,12 +375,12 @@ op_zshadow:
 %endmacro
 
 ; -----------------------------------------------------------------------------
-; OS88_REHOME - hand the program part at DX to the kernel, KEEPING the carve
-;               only to the end of its last part (SPEC.md 20.12.10.5)
-; in:  DX = the program part's segment (op_seg's answer), its handoff already
-;      written into the head of its bss (SPEC.md 20.12.10.2)
+; OS88_REHOME - hand program part AL to the kernel, KEEPING the carve only
+;               to the end of its last part (SPEC.md 20.12.10.5)
+; in:  AL = the program part's INDEX, its handoff already written into the
+;      head of its bss (SPEC.md 20.12.10.2)
 ; out: OSAPI_PKG_REHOME's CF: 0 recorded, 1 refused
-; clobbers: AX, BX, CX, SI, DI, flags
+; clobbers: AX, BX, CX, DX, SI, DI, flags
 ;
 ; It is OSAPI_PKG_REHOME's KEEP form with the figure worked out from the
 ; table, so a loader states it without knowing it: the walk visits every row
@@ -394,6 +394,12 @@ op_zshadow:
 ; reads. A loader that has put something of its OWN past its parts (no
 ; loader in the tree does) cannot use this and writes the call itself.
 ;
+; AN INDEX AND NOT A SEGMENT, and the walk in PARAGRAPHS INTO THE CARVE
+; (op_seg's OP_SUBV_RAW), because under kern_mega's protected mode op_seg
+; answers a selector and the ends below are a sum and a compare on the
+; layout (KERN-MEGA-MEMORY-PLAN MC7). DX, the program's own answer, is asked
+; for last, and the kernel takes a selector there as the paragraph under it.
+;
 ; A MACRO AND NOT A ROUTINE IN os88partsbody.inc, because only a re-homing
 ; loader wants it and the body's gates are derived from the table - which is
 ; written AFTER the entry proc that expands this, so a gate here could not
@@ -403,8 +409,11 @@ op_zshadow:
 ; taken without an OP_ZERO row: a filed row's offset is never 0.
 ; -----------------------------------------------------------------------------
 %macro OS88_REHOME 0
-    push dx
-    mov bx, dx                  ; BX = the highest END so far: the program's
+    push ax                     ; the program's index, for DX at the end
+    mov byte [op_subv], OP_SUBV_RAW
+    call op_seg                 ; AX = its paragraphs into the carve, + 1
+    mov bx, ax                  ; BX = the highest END so far: the program's
+    push ax                     ; START, banked for the figure
     xor di, di                  ; DI = the row
 %%row:
     mov ax, di
@@ -413,10 +422,10 @@ op_zshadow:
     call op_row                 ; SI -> the row, AX kept
     test byte [si+OP_R_FLAG], OP_LAZY
     jnz %%next                  ; a claim of its own, wherever it landed
-    call op_seg                 ; AX = where the carve put it, 0 = nowhere
+    call op_seg                 ; AX = where the carve put it, + 1; 0 = nowhere
     or ax, ax
     jz %%next
-    xchg ax, dx                 ; DX = that segment
+    xchg ax, dx                 ; DX = that start
     mov ax, [si+OP_R_ZKB]       ; a SCRATCH part is zkb KB long...
     mov cl, 6
     cmp word [si+OP_R_OFF], 0
@@ -437,9 +446,13 @@ op_zshadow:
     inc di
     jmp short %%row
 %%done:
-    pop dx
-    mov cx, bx
-    sub cx, dx                  ; CX = the paragraphs at DX to keep
+    mov byte [op_subv], 0
+    pop cx
+    neg cx
+    add cx, bx                  ; CX = the paragraphs at the program to keep
+    pop ax
+    call op_seg
+    xchg ax, dx                 ; DX = the program: a segment, or a selector
     xor ax, ax                  ; AX = 0: the KEEP form
     call OSAPI_PKG_REHOME
 %endmacro
@@ -533,7 +546,13 @@ op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in sectors.
                                     ; in a word of bytes. R comes from the two
                                     ; sector counts now (SPEC.md 20.12.11), and
                                     ; the word is left UNNAMED, op_tail's way,
-                                    ; so no offset below moves)
+                                    ; so no offset below moves - until it was
+                                    ; op_wa's, below)
+op_wa       equ OP_BSS_AT + 76      ; op_at's two WINDOWS (OSAPI_SEG's SEG_AT,
+                                    ; re-aimed each use): a selector under
+                                    ; kern_mega's protected mode, where every
+                                    ; claim is one, and the last sum anywhere
+                                    ; else, where SEG_AT is refused
 op_rpara    equ OP_BSS_AT + 78      ; R, in paragraphs: how far up the claim the
                                     ; packed run lands so op_unpack can walk
                                     ; down onto it. 0 = it lands at the base,
@@ -556,5 +575,14 @@ op_rcur     equ OP_BSS_AT + 86      ; FSEQ_SIZE: the READ_SEQ cursor both
                                     ; is always op_name, so it is never zeroed
                                     ; and a lazy fetch finds it where the carve
                                     ; left it, re-seeded if the offset differs
-OP_BSS      equ 102
+op_wb       equ OP_BSS_AT + 102     ; ...op_at's second window (op_wa above)
+op_subv     equ OP_BSS_AT + 104     ; byte: what op_seg answers for a part in
+                                    ; the carve - 0 a segment (SEG_SUB under
+                                    ; CPU_F_PM), OP_SUBV_C a code/data pair
+                                    ; (op_cseg), OP_SUBV_RAW its PARAGRAPHS
+                                    ; into the carve PLUS ONE (0 stays "not
+                                    ; there"), for arithmetic on the layout
+OP_SUBV_C   equ SEG_SUBC - SEG_SUB
+OP_SUBV_RAW equ 0x80
+OP_BSS      equ 105
 

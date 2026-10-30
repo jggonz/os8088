@@ -63,7 +63,8 @@ xc_init:
     mov word [xc_wb], 80
     mov word [xc_wc1], XB_COLS - 1
     mov word [xc_crtc], 3d4h
-    mov word [xc_vseg], 0b800h
+    mov ax, [xb_fsi + FSI_SEG]      ; the bracket's frame (a selector on
+    mov [xc_vseg], ax               ; kern_mega, MC7)
     mov word [xc_colp], xc_col
     mov word [xc_hudp], xc_hud
     mov word [xc_hudcp], xc_hud_cells

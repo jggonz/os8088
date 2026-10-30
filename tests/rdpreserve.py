@@ -266,15 +266,17 @@ def main():
 
 def session(ui, a, R, data):
     m, mo = ui.m, ui.mo
+    # a real segment, or kern_mega's selector (tools/os88megabochs.py)
+    lin = getattr(m, "lin", lambda sg, off=0: sg * 16 + off)
 
     def rd_seg():
         return u16(m.read(ui.sym("drv_tab") + RD_ROW * DRVR_SZ + DRVR_SEG, 2))
 
     def dw(name):                   # a driver word, at the driver's segment
-        return u16(m.read(rd_seg() * 16 + R[name], 2))    # AS IT IS NOW
+        return u16(m.read(lin(rd_seg()) + R[name], 2))    # AS IT IS NOW
 
     def db(name):
-        return m.read(rd_seg() * 16 + R[name], 1)[0]
+        return m.read(lin(rd_seg()) + R[name], 1)[0]
 
     def wait(cond, what, guest=60.0):
         try:
@@ -407,8 +409,8 @@ def session(ui, a, R, data):
           "calls)" % (io.get("reads", -1), calls),
           "a lookup per call - every WRITE_SEQ call was COLD, so the token "
           "is not reaching the kernel (rd_itok)")
-    store = m.read(dw("rd_arena") * 16, kb * 1024)
-    ctab = m.read(dw("rd_dtab") * 16 + RD_DIRB, next_ * 2)
+    store = m.read(lin(dw("rd_arena")), kb * 1024)
+    ctab = m.read(lin(dw("rd_dtab")) + RD_DIRB, next_ * 2)
     ui.close(cp)
 
     fl = os88flush.Flush(marty=m)
@@ -485,8 +487,8 @@ def session(ui, a, R, data):
     if not check("L", ok, "Load mounted the image"):
         return
     kb2 = dw("rd_kb")
-    store2 = m.read(dw("rd_arena") * 16, kb2 * 1024)
-    ctab2 = m.read(dw("rd_dtab") * 16 + RD_DIRB, dw("rd_next") * 2)
+    store2 = m.read(lin(dw("rd_arena")), kb2 * 1024)
+    ctab2 = m.read(lin(dw("rd_dtab")) + RD_DIRB, dw("rd_next") * 2)
     check("L", kb2 == kb and store2 == img[RDI_ARENA:],
           "the loaded store IS the file's arena (%dKB)" % kb2)
     check("L", ctab2 == img[RDI_META:RDI_META + len(ctab2)],

@@ -64,10 +64,27 @@ def cell_rect(rect, cell):
             rect[1] + TITLE_H + MN_STRIP_H + row * MN_CELLPX)
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF's linear address - through the descriptor on kern_mega, where
+    a package's segment is an LDT selector (tests/megaport.txt)."""
+    return m.lin(seg, off) if hasattr(m, "lin") else (seg << 4) + off
+
+
 def bss(m, seg, name, n):
     """`n` raw bytes of one of the package's own bss arrays."""
     base = dispapps.img_size("mines") + dispapps.bss_off("mines", name)
-    return bytes(m.read((seg << 4) + base + 0, n)) if n else b""
+    return bytes(m.read(lin(m, seg, base), n)) if n else b""
+
+
+def glass(m):
+    """(w, h, rows) of the screen: the 1bpp card's own memory, or on
+    kern_mega (Bochs, a VGA only) the glass - each pixel an RGB triple, which
+    compares cell against cell exactly as a bit does."""
+    if not getattr(m, "bochs", False):
+        return m.vram()
+    w, h, d = m.fbuf()
+    return w, h, [[d[(y * w + x) * 3:(y * w + x) * 3 + 3] for x in range(w)]
+                  for y in range(h)]
 
 
 def cells(m, seg):
@@ -161,8 +178,8 @@ def main(argv):
         # --- 3. lose ----------------------------------------------------------
         mo.click(*cell_xy(rect, boom))
         settle(m)
-        mode = m.read((seg << 4) + dispapps.img_size("mines")
-                      + dispapps.bss_off("mines", "mn_mode"), 1)[0]
+        mode = m.read(lin(m, seg, dispapps.img_size("mines")
+                             + dispapps.bss_off("mines", "mn_mode")), 1)[0]
         if mode != MN_M_LOST:
             sys.exit("minexflag: the board is in mode %d, not lost - the "
                      "click on the mine did not land" % mode)
@@ -172,7 +189,7 @@ def main(argv):
         # light-red ground and would differ from the wrong flag for a reason
         # that has nothing to do with the X.
         other = [c for c in mined if c != boom]
-        w, h, rows = m.vram()
+        w, h, rows = glass(m)
         wx0, wy0 = cell_rect(rect, wrong)
         got = block(rows, h, wx0, wy0)
         same = [c for c in other

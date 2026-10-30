@@ -1,0 +1,4 @@
+# t_coldsym allowlist: path symbol reason
+# One line per (file, symbol): the path, the `.cold` label, and why the map's
+# UNSLID address is what this use wants or cannot be wrong here.
+tests/stikhiber.py stik_boot armed BEFORE the boot, where m.sym() cannot know yet whether the slide will happen: both the unslid and the slid address are armed, and a stop counts only at m.sym()'s answer read after it

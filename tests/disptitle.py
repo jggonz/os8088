@@ -141,7 +141,13 @@ def main(argv):
     # `apply()` sets os88sym's module default as well as the environment, so
     # the lookups below - and the library helpers they call, which take no
     # defines - all describe THIS kernel.
-    if not a.no_build:
+    if not a.no_build and os.environ.get("OS88_MEGA"):
+        # KERN_MEGA ON 86BOX (tests/megaport.txt): BAND=1's kern_mega, in a
+        # tree of its own - its disks, and its map through $OS88_MEGA_BUILD
+        knob = os88build.tree("BAND=1", targets=("mega",))
+        os.environ["OS88_MEGA_BUILD"] = knob.dir
+        a.image, a.apps = knob.img("mega.img"), knob.img("megaapps.img")
+    elif not a.no_build:
         knob = os88build.tree("BAND=1").apply()
         a.image = knob.img(os.path.basename(a.image))
         a.apps = knob.img(os.path.basename(a.apps))

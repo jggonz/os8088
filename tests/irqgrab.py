@@ -96,9 +96,24 @@ def main(argv):
     ap.add_argument("--machine", default="os8088_xt_vga_144")
     a = ap.parse_args(argv)
 
-    mx, my = os88sym.linear("mouse_x"), os88sym.linear("mouse_y")
+    mx, my = (None, None) if os.environ.get("OS88_MEGA") else (
+        os88sym.linear("mouse_x"), os88sym.linear("mouse_y"))
+    kseg, koff = KSEG, None
     with os88ui.boot(SYS, apps=DISK, machine=a.machine, quick=True) as ui:
         m = ui.m
+        if getattr(m, "bochs", False):
+            # **kern_mega: THE PROGRAM RUNS ON A kern_dos TRIP** (KERN-MEGA-
+            # PLAN), so the driver that must take the vector back is kern_dos's
+            # own (kd_mou_rearm, SPEC.md 96.45.4) and the pointer is ITS
+            # kdm_x/kdm_y - the kernel is parked. kern_dos runs in the HMA
+            # (the Memory page's default), at FFFF:offset of its own map.
+            # Needs a SERIAL mouse: tests/megaport.txt sets
+            # OS88_BOCHS_MOUSE=serial.
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import dosmap
+            kd = dosmap.kerndos()
+            kseg, koff = 0xFFFF, kd["kd_mou_isr"]
+            mx, my = 0xFFFF0 + kd["kdm_x"], 0xFFFF0 + kd["kdm_y"]
         if not ui.path("B:/IRQGRAB.COM"):
             fail("double-clicking IRQGRAB.COM opened no window")
         wait_text(m, "TOOK int 0Ch")
@@ -111,7 +126,7 @@ def main(argv):
         print("irqgrab: while the program holds it: int 0Ch -> %04X:%04X, "
               "the pointer went %s -> %s" % (seg, off, before, after))
 
-        if seg != KSEG:
+        if seg != kseg or (koff is not None and off != koff):
             fail("int 0Ch is %04X:%04X - the program still has it. The "
                  "kernel re-arms on osapi_mouse, which DOS's DHK_MOUSE "
                  "calls on every key poll, and this program is blocked in "

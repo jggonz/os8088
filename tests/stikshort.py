@@ -35,6 +35,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88stik    # noqa: E402
+sys.path.insert(0, HERE)
+import megafix     # noqa: E402  (kern_mega: the fixture rebuilt on mega.img)
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -74,17 +76,20 @@ def solid(ui, cell):
 def main():
     tmp = tempfile.mkdtemp(prefix="stikshort-")
     sysimg = os.path.join(tmp, "stikshort360.img")
-    shutil.copy(os.path.join(BDIR, "stikshort360.img"), sysimg)
+    shutil.copy(megafix.system_disk(os.path.join(BDIR, "stikshort360.img")),
+                sysimg)
     with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
         m = ui.m
         seg = ui._word("sc_seg")
+        # a real segment, or kern_mega's selector (tools/os88megabochs.py)
+        lin = getattr(m, "lin", lambda sg, off=0: (sg << 4) + off)
         bare = solid(ui, FREE_CELL)
         print("A/B: each shortcut shown in its cell, its +3 untouched")
         for k, (cell, cap) in enumerate(SHORTS):
             zb = m.read(ui._S("desk_zslot") + DESK_SC0 + k, 1)[0]
             check(zb == os88stik.DSL_PIN | cell,
                   "%s is SHOWN in cell %d (%#x)" % (cap, cell, zb))
-            r = os88stik.parse_row(m.read((seg << 4) + k * os88stik.SC_REC,
+            r = os88stik.parse_row(m.read(lin(seg) + k * os88stik.SC_REC,
                                          os88stik.SC_REC))
             check(r["mark"] == 0x5C and r["cap"] == cap,
                   "%s's row keeps `\\` at +3 (%#x)" % (cap, r["mark"]))

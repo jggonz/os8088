@@ -1,13 +1,29 @@
 # REALDMG-HIGHCACHE-PLAN - the recompiler's cache segments above 1MB on kern_mega
 
-**Status: PLAN, nothing built** (written 2026-10-25 on `mega-dmg`). It
+**Status: R1 to R4 BUILT (REALDMG-SPEC 16.2.6); R5 waits on the kernel**
+(written 2026-10-25 on `mega-dmg`, built the same day). K1 was supplied by
+the memory round as `SEG_SUBC`; R2 took one `OSAPI_XMEM_ALLOC` block rather
+than an `OSAPI_MEM_HUGE` claim, so it needed neither MC5 nor a claim
+record; the setting is the arm's Machine > Cache: All. R5, freeing the
+cache before a hibernate, needs a package-visible hibernate notice
+(KERN-MEGA-MEMORY-PLAN 8.4) and is the one step left. The rest of this
+file is the plan as written. It
 follows REALDMG-SPEC 16.2.5, which is built: kern_mega's arm of RealDMG
 runs its round robin over a TABLE of cache tiers and fills that table from
 conventional memory. This plan fills it from extended memory instead. It
 waits on the kernel's memory consolidation round
-(docs/plans/KERN-MEGA-MEMORY-PLAN.md on
+(docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md on
 `claude/protected-mode-memory-consolidation-k1kjao`), because that round
 changes what a claim and a code selector ARE, and so does this.
+
+**Since then (2026-10-25):** that round's MC7 has landed and been merged into
+`mega-dmg`, and RealDMG's prerequisite conversion is BUILT - REALDMG-SPEC
+10.3.4: the arm asks `OSAPI_SEG` for every "claim + N" (the extra tiers
+already as `SEG_SUBC` pairs inside cache B's claim, which is K1's twin
+supplied by the kernel), and the shipped build refuses under `CPU_F_PM`.
+What is left of this plan is R2 onward: the tiers out of the POOL, and the
+`highmem` line in tests/megahigh.txt that the pool's no-regrow-past-64KB
+rule now holds in place. Sections 1 and 2 below are as written, before MC7.
 
 The owner's words: *"write up plans for being able to put the recompiler
 segments in protected/>1mb ram; we may still do it for completeness sake,

@@ -50,6 +50,9 @@ EGA = None                      # the sixteen as QEMU's 565 -> 888 lands them
 
 
 def launch():
+    if os88qemu.MEGA:       # kern_mega on Bochs's VBE: tests/vesa.py's launch
+        import vesa as _v
+        return _v.launch("build/vesablitd.img", "build/vxpics.img")
     os88fixture.need("build/vesablitd.img", "build/vxpics.img")
     em = "qemu" + "-system-i386"
     os88qemu.start(

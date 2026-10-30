@@ -9,7 +9,7 @@ FILE as well, because the two were the same thing, and SPEC.md 19.1 typed a
 tradeoff written down: *"a >=64KB *.O88 reads 'Bad package' rather than 'Too
 large' - it cannot be a package, so the message is truthful."* A package that
 carries PARTS beyond its own segment ends the second half of that sentence,
-so the bound moved out to `PKG_FILE_HI` (1MB) and the message has to become
+so the bound moved out to `PKG_FILE_HI` (32MB) and the message has to become
 truthful again.
 
 **Lifting the mount's rule alone is a defect, and that is the whole of what
@@ -26,7 +26,7 @@ one that answers.
 
 TWO FILES, AND THE PAIR IS THE EXPERIMENT. Neither alone answers anything:
 
-  1. `BIGPKG.O88`, 70,144 bytes - over `APP_MAX_SIZE`, under 1MB. The mount
+  1. `BIGPKG.O88`, 70,144 bytes - over `APP_MAX_SIZE`, under 32MB. The mount
      must type it 1 and the loader must answer **LD_EBIG**. On its own this
      is also what a rule that types every `*.O88` as a package looks like.
 
@@ -36,7 +36,8 @@ TWO FILES, AND THE PAIR IS THE EXPERIMENT. Neither alone answers anything:
      and the high-word test this row is named for was never reached. A/B on
      the machine, with `or dx,dx / jne .toobig` deleted from the kernel: the
      clamped fixture still PASSES this row and the truncated one fails it.
-  2. `HUGE.O88`, 1,048,576 bytes - exactly `PKG_FILE_HI << 16`, the first
+  2. `HUGE.O88`, 33,554,432 bytes by its ENTRY (1MB of data under it:
+     tests/pkgbig/lie.py) - exactly `PKG_FILE_HI << 16`, the first
      size the mount itself refuses. It must type 0 and reach the loader as
      **LD_EBAD**. On its own this is also what the OLD `high word == 0` rule
      looks like.
@@ -116,7 +117,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
                      "in dsk_synth's test (SPEC.md 19.1)"
                      % have["BIGPKG.O88"])
     if have["HUGE.O88"] != 0:
-        fails.append("HUGE.O88 (1,048,576 bytes) typed %d, not 0: the bound "
+        fails.append("HUGE.O88 (33,554,432 bytes by its entry) typed %d, not 0: the bound "
                      "is not AT PKG_FILE_HI, it is somewhere above it - the "
                      "rule types files it must refuse (SPEC.md 19.1)"
                      % have["HUGE.O88"])

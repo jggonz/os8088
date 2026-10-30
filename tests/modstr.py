@@ -112,8 +112,13 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
           "and letters rubbish that does not fault",
           got=got, want="Spc=drive  Enter=yes  Esc=no")
 
+    # whatever a toast left behind is not this verdict: kern_mega's boot says
+    # "Entered protected mode" into the same buffer (KERN-MEGA-PLAN 14.65),
+    # and on MartyPC it is empty here, which `unless` already ignores
+    before = text(m, toast, 24)
     m.key("Enter")                          # A: -> B:, the whole cross-drive
-    said = watch_toast(m, toast, limit=90)  # clone, then the verdict
+    said = watch_toast(m, toast, limit=90,  # clone, then the verdict
+                       unless=before)
     check(said == "Cloned A: to B:", "...and its verdict, composed pre-drop",
           "SPEC.md 2.8.6: the image stages this into fm_hdrbuf while it is "
           "still loaded and toast_show copies it, so the message outlives the "
@@ -127,11 +132,16 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_IFMT * ITEM_H)
     M.settle(m)
     got = text(m, hdr)
-    check(got == "Enter=yes  Esc=no", "FORMAT.DRV letters its own key line",
+    # kern_mega runs on an AT-class machine whose B: is a 1.44MB HD drive,
+    # and an HD drive makes a PAIR (1.44MB/720KB, SPEC.md 18.96.4) - so there
+    # the line names Space, and that predicate is in the image as well
+    fkeys = ("Spc=size  Enter=yes  Esc=no" if getattr(m, "bochs", False)
+             else "Enter=yes  Esc=no")
+    check(got == fkeys, "FORMAT.DRV letters its own key line",
           "'Spc=size' is named only on an external drive (SPEC.md 18.96.2), "
           "and B: is not one - so the SHORT line is the right answer here and "
           "the predicate that picks it is in the image too",
-          got=got, want="Enter=yes  Esc=no")
+          got=got, want=fkeys)
 
     m.key("Enter")
     said = watch_toast(m, toast, limit=60, unless="Cloned A: to B:")

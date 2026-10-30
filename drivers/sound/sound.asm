@@ -310,6 +310,10 @@ snd_entry:
     jmp short .nosb
 .sbok:
     mov byte [drv_up], 1
+    cmp byte [sbl_verhi], 4     ; a DSP 4 (an SB16 or a true compatible)
+    jb .sbo                     ;   carries an OPL3-class chip: its short
+    mov byte [opl_fast], 1      ;   write delays (SPEC.md 34.12.1), whatever
+.sbo:                           ;   opl_kind_probe made of the second bank
     call mix_probe              ; save/test/restore; no mixer reset (34.15)
     call snd_sb_pub             ; the stream verb, the tick, the caps and the
                                 ; card's name - what DRVV_TIER's "on" also
@@ -577,7 +581,7 @@ opl_defpatch:
 ;
 ; Select via 388h, 6 counted status reads (the chip's post-address window),
 ; data write to 389h - that much under one pushf/cli..popf - then 35 counted
-; status reads at the caller's IF. ~430-1,300 cycles ~= 90-280us per write on
+; status reads at the caller's IF. An OPL3 takes 2 and 4 (SPEC.md 34.12.1). ~430-1,300 cycles ~= 90-280us per write on
 ; the floor machine, of which <= ~100us is this routine's own IF=0 window
 ; when it is entered at IF=1.
 ; =============================================================================
@@ -607,17 +611,24 @@ opl_wrp:
     out dx, al
     push dx
     mov dx, 0x388
-    mov cx, 6
-.post_addr:                     ; counted status reads: the address window
-    in al, dx
-    loop .post_addr
+    mov cx, 6                   ; an OPL2 wants 3.3 us after the address and
+    cmp byte [cs:opl_fast], 0   ;   23 after the data; an OPL3 ~0.28 after
+    je .post_addr               ;   either (SPEC.md 34.12.1): two reads and
+    mov cl, 2                   ;   four, once the attach knows it is one -
+.post_addr:                     ;   the flags are popf's to give
+    in al, dx                   ;   back. Counted status reads: the address
+    loop .post_addr             ;   window
     pop dx
     mov al, ah                  ; the value
     inc dx                      ; 389h / 38Bh
     out dx, al
+    mov cx, 35
+    cmp byte [cs:opl_fast], 0
+    je .d
+    mov cl, 4
+.d:
     popf                        ; the long delay runs at the caller's IF
     mov dx, 0x388
-    mov cx, 35
 .post_data:                     ; counted status reads: the data window
     in al, dx
     loop .post_data
@@ -1411,6 +1422,7 @@ opl_b0:     times OPL_NCH db 0  ; per-channel B0h image: the single-write
                                 ; key-off's source (SPEC.md 8.2/34.3). Follows
                                 ; opl_xown for the same fill
 opl_kind:   db 0                ; 0 none / SND_OPL2 / SND_OPL3 (opl_probe)
+opl_fast:   db 0                ; 1: an OPL3-class chip, its short delays
 opl_xmode:  db 0                ; the mode it was granted: SND_OPL2 / SND_OPL3
 %if (opl_xown - opl_own != OPL_NCH) || (opl_b0 - opl_xown != 1)
   %error "opl_state_init fills opl_own[], opl_xown and opl_b0[] as one run"
@@ -1548,6 +1560,7 @@ opl_kind_probe:
     and bl, 0xE0
     jnz .out                    ; the timer RAN: 38Ah is 388h, an OPL2
     mov byte [opl_kind], SND_OPL3
+    mov byte [opl_fast], 1      ; (its short write delays, SPEC.md 34.12.1)
 .out:
     pop dx
     pop cx

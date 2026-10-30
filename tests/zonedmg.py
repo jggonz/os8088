@@ -95,6 +95,13 @@ def isect(a, b):
 
 
 def grab(m, r):
+    if getattr(m, "bochs", False):
+        # kern_mega under Bochs (tests/megaport.txt): a VGA, whose glass is
+        # the card's rasterised picture - one RGB triple a pixel
+        W, _, px = m.fbuf()
+        return [[px[(y * W + x) * 3:(y * W + x) * 3 + 3]
+                 for x in range(r[0], r[2] + 1)]
+                for y in range(r[1], r[3] + 1)]
     _, _, rows = m.vram("herc")
     return [bytes(rows[y][r[0]:r[2] + 1]) for y in range(r[1], r[3] + 1)]
 

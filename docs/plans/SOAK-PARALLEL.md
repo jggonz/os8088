@@ -2059,6 +2059,36 @@ relative (rungs against each other, a decode against a yardstick). A row
 ABOUT host behaviour, or whose throttle is the rate it compares, cannot use
 it.
 
+**17.8.1 - icount did NOT put the Sound Blaster on the guest's clock, and
+`xtmp3rate` kept failing under load because of it.** The paragraphs above
+say the SB16's DMA runs on the virtual clock. It does not: QEMU's 8237
+(`hw/dma/i8257.c`) moves a running channel from an IDLE BOTTOM HALF on the
+main loop, polled at host intervals of up to 10 ms, while under TCG the vCPU
+thread executes without the BQL - so guest time keeps passing while the main
+loop is not scheduled, and the card's block IRQ is late by however long that
+was. Made exact by stopping ONLY QEMU's main thread (ptrace, its tid) during
+a live play: 120 ms stalls every second play to the end, a single 300 ms
+stall is SOUND.DRV's watchdog (2 block periods + 3 ticks) and *The sound
+card stopped*, with 0 underruns - the pause leg's "under 0" exactly - on
+8.2.2 and on 9.2.4 alike. Stopping the WHOLE process for 500 ms is harmless
+(the guest's clock stops with it): it is the main loop falling behind the
+vCPU, which is what a loaded box does. `tools/qemu9/i8257-icount.patch`
+runs the channels off a QEMU_CLOCK_VIRTUAL timer under -icount, which the
+vCPU thread runs at the instruction count of its deadline; the same play then
+survives seven TWO-SECOND stalls of the main thread with 0 underruns, and
+the seven rate legs pass. `tools/setup-qemu9.sh` builds it into build/qemu9
+with a pkgversion naming the patch set (`os8088-<hash>`), `os88build.qemuvt()`
+reads that back, and `xtmp3rate` needs `qemuvt`. The DISK is not covered:
+IDE's aio completes on the main loop as well, so a read's latency is still
+the host's - a look-ahead ring absorbs it here, and it is the next place to
+look if a rate row underruns.
+
+The same row's other failure was the PRODUCT: `rungfail`'s *no ERROR on the
+way* saw state 10 because XTMP3's ladder published ERROR for an instant on
+every retry of a rung that could not start (seven times a run, under a
+watchpoint), and a 0.1 s host poll caught it more often the less guest time
+each poll covered. Fixed in `apps/xtmp3/x3eng.inc`, +6 bytes.
+
 ### 17.9 The host sleeps, row by row
 
 Prioritised by the soaks' FAIL lines (`build/soak/*/run.log` in both
@@ -2290,3 +2320,323 @@ is the same three lines for `excitebikefront` and its siblings, and
 a reader that drops repeats, an arrow at a list's end) cannot fail this way;
 one that toggles, counts or navigates can, and that is the next row to look
 at when one of those goes red under load.
+
+### 17.13 A frozen tree is not `build/` to the kern_mega harness - and it was never load
+
+A scoped run of 36 rows at `--marty-jobs 3` (the VESA work, KERN-MEGA-PLAN
+14.115) failed seven that all passed when re-run with `os88test.py soak
+--marty-jobs 1`: `mega-lzcomp` (*"os88bochs: no kern_mega line in 240s"*),
+and six kern_big QEMU rows that had run AFTER the `mega-vesa*` family -
+`vesa` and `vesa8` with *"vid_kind 134, want 4 ... (vesa_row DRVR_SEG C818,
+DRVR_ERR 139)"*, `vesacp`, `vesafsx`, `vesablit4` and `vesagor` with *"the
+desktop never came up"*. The obvious reading was contention: three Bochs
+lanes at host real time, and a VESA.DRV refusal under a loaded QEMU.
+
+**Neither is load, and neither needs a second lane.** The re-run that passed
+did not only drop the width - `os88test.py` reads `build/`, and `os88soak.py`
+reads a FROZEN TREE (14.2), so every row is handed
+`build/trees/<tree>/os8088-360.img` for `build/os8088-360.img`. Three places
+in the kern_mega harness asked "is this the shipped image?" as
+`dirname(p) == build/`, and under a tree that answers NO for exactly the
+image it was written to recognise:
+
+* **`os88megacommon.mega_images`** swaps a shipped system disk for
+  `mega.img`. It did not swap the tree's, so `mega-lzcomp` booted **kern_big**
+  on Bochs and waited four minutes for a `kern_mega:` E9 line that kernel
+  never prints. `os88soak.py start -k mega-lzcomp --marty-jobs 1` is red on
+  its own, one Bochs on an idle box.
+* **`os88qmpmega._scratch`** decides which of a row's images the guest may
+  write back. It took the tree's `vesa.img` for a row's scratch, so the
+  `mega-vesa` row's Server made that path a SYMLINK into Bochs's run
+  directory for the whole boot and, at close, copied the live A: - a
+  `mega_twin`, i.e. **kern_mega's** `KERNEL.SYS` - back over it. `make` then
+  sees the fixture newer than its inputs and never rebuilds it, so the tree
+  stays poisoned for every later run on it. The kern_big `vesa` row booted
+  kern_mega under QEMU, and `DRVR_ERR 139` is kern_mega's memory read through
+  kern_big's map - not a refusal at all. Measured on the failing run's own
+  tree: `vesa`, `vesa8`, `vesafsx` and `vesablit4.img` all carried
+  `mega.img`'s `KERNEL.SYS`, mtimes inside the `mega-vesa*` window, while
+  `vesapref` and `vesablitd`, which no mega row boots, carried kern_big's.
+  `apps.img` was rewritten too (byte-identical this time; a guest that
+  saved to B: would not have been).
+* **every `OS88_MEGA_BUILD` fallback** (`os88megabochs`, `os88mega86box`,
+  `os88sym`'s kern_mega map, `os88map`, `os88box86api`, `dispapps`) read
+  `build/` - mega.img, megaapps.img and `megak/kernel.map` out of the
+  operator's directory while the row's own disks came out of the tree.
+
+**The fix** is three functions in `tools/os88build.py`, used by all of them:
+`mega_build()` (`$OS88_MEGA_BUILD`, else the run's tree, else `build/`),
+`shipped_dir(d)` (`build/` or the run's tree) and `shared_dir(d)` (those,
+or any tree under `build/trees/` - a knob tree is shared by every row asking
+for that knob). `_scratch` is now `not shared_dir`. Nothing a guest runs
+changed. `tests/unit/t_megatree.py` (`megatree`, soak) asserts all three
+answers with `$OS88_TREE` set and ratchets the `OS88_MEGA_BUILD` fallback
+spelling out of `tools/` and `tests/`; against the old predicates it fails
+four of its eleven checks.
+
+| run (`os88soak.py start`, `--marty-jobs 1`) | before | after |
+|---|---|---|
+| `-k mega-lzcomp` | FAIL, no kern_mega line in 240s | ok |
+| `-k mega-vesa -k vesa`, first run on a fresh tree | ok, ok - but the tree's `vesa.img` now carries kern_mega | ok, ok - `vesa.img` keeps kern_big's kernel |
+| the same, second run on that tree | **`vesa` FAIL**, the soak's own `DRVR_ERR 139` line | ok, ok |
+
+and the original 36-row set at `--marty-jobs 3`, in the failing run's own
+lane order (the six `mega-vesa*` rows before every `vesa*` one): **36 of 36
+ok** in 951 s, against 29 of 36 before, with `mega-lzcomp` 177.7 s - and
+every `vesa*.img` in the tree byte-identical before and after the run.
+
+A harness change took the same run: `os88bochs`'s file-size cap
+(`_fsize_cap`, the 2GB guard in the same merge) raised `RLIMIT_FSIZE` to its
+cap even when the shell's hard limit was lower, so under an operator's
+`ulimit -f` every Bochs row died in `Popen` with *"Exception occurred in
+preexec_fn"* before Bochs existed. It now stays at or under the inherited
+hard limit.
+
+**Two things to carry.** A row that passes under `os88test.py` and fails
+under `os88soak.py` is not proof of contention: re-run it ALONE under
+`os88soak.py` first (`--marty-jobs 1`), because the tree is the other
+difference and costs nothing to rule out. And **a tree a row has written to
+is poisoned for every later run on it** - the operator's
+`build/trees/plain-898921f7/` from the failing run still carries kern_mega
+in its four `vesa*` fixtures and must be deleted, or the next soak that
+reuses that key fails the same six rows on a fixed harness.
+
+## 18. BOCHS AND 86BOX ROWS — the 333 ports that were still one at a time
+
+**BUILT.** 17 emptied the one-at-a-time lane of QEMU and left it holding
+something nobody had put there on purpose: every `mega-<row>` and `box-<row>`
+port (tests/megaport.txt, tests/box86port.txt; tests/suite.py `_ports`) - 307
+on Bochs and 26 on 86Box. A port is `serial=True` for the emulator lane, and
+`_ports` DROPS the base row's `marty`, `qemu` and `qemu9` needs because the
+port runs on neither - so the lane's admission test, *needs `marty` or
+`qemu`*, refused every one and they ran end to end after everything else. On
+a four-core box a full soak then sat at a load average under one for hours.
+No row had ever been found unable to share; the test simply did not name the
+emulator.
+
+### 18.1 What the instances already had
+
+The emulator half was done before this started, one emulator at a time:
+
+| emulator | what is private per row | where |
+|---|---|---|
+| Bochs | an X display from the runner's pool (`:110`-`:149`, an flock on `/tmp/.os88bochs-<n>.lock` that `os88bochs.take_display` honours from `:150` up for a row's extra machines); a run dir under `build/bochs/inst/`; every process it counts or kills is the one whose environment names ITS display | `tools/os88test.py` `_bochs_display`, `tools/os88megabochs.py` `launch`, `tools/os88bochs.py` `running`/`stop` |
+| 86Box | a run dir under `build/86box/inst/` and a name from it, its automation socket inside that, a GDB port from `free_port`; `reap` removes only TEMP runs whose process is gone | `tools/os88box.py` `launch`, `tools/os88box86api.py`, `tools/os88mega86box.py` |
+
+Neither binds a fixed host port: Bochs's slirp forwards only what
+`$OS88_BOCHS_SLIRP` names, which no registered row sets, and a port that
+serves a fixture inherits the base row's `locks=`.
+
+### 18.2 What was NOT private: the SCRIPT's own scratch
+
+A row's scratch is private against every OTHER script, which is what the
+shared lane has always relied on, and against nothing else. 120 of the 296
+scripts tests/megaport.txt ports write a fixed path under `build/` -
+`dosram`'s `build/dosram.vhd`, which the Bochs port then MOUNTS IN PLACE
+(`os88megacommon.row_disk`), `dosfix`'s `build/dosfix-run.img`,
+`chartgal`'s `build/chartgal.img` - and that was safe only because the port
+ran in a lane that never overlaps the shared one. In one lane `dosram` and
+`mega-dosram` would build and boot one disk at once, and so would
+`mega-tmselfsu` with `mega-tmselfsu-16m`, `box-hdtake` with `mega-hdtake`,
+`megapixel` with `megapixelship`.
+
+The fix is in the runner, not in 120 scripts: `_locked_lane` holds a row's
+SCRIPT as an implicit lock (`lane_locks`, `script:tests/<x>.py` beside the
+row's own `locks=`), so two rows of one script never run at once whatever the
+script writes, and the next row's author has nothing to remember. It is a
+guard by construction rather than a cure for an observed failure - the A/B
+with the lock taken out ran `dosfix`+`mega-dosfix`, `dosram`+`mega-dosram`
+and `chartgal`+`mega-chartgal` side by side and all six passed, the
+overlapping windows missing each other - and it costs the lane nothing it
+can measure: over the whole soak the largest script group is `vidpage`'s 26
+rows, 1,955 declared seconds against a ~40,000 s lane at width 3, and a lock
+group is started first (`_locked_lane` orders by what a lock has left), so
+it is never the tail.
+
+One race of the same kind was in the harness and is fixed there:
+`os88box86api.cmos_primed` takes `build/86box/nvrcache/<hash>/` the moment
+every FILE NAME exists, and wrote each file with a plain `open(..., "wb")` -
+which makes the name before the bytes, so a second row priming the same
+machine could boot a truncated CMOS. It stages under its own pid and renames.
+
+### 18.3 The rule, and the runs
+
+The lane takes a row needing ANY of `marty`, `qemu`, `bochs`, `86box`
+(`tools/os88test.py` `EMULATORS`), less `builds=True` and `alone=True` as
+before. No Bochs or 86Box row is kept out of it. The 51 standalone Bochs and
+86Box rows (`megahiber`, `gbreplay`, ...) are untouched: they are not
+`serial`, so they were never in the one-at-a-time lane - they run in the
+host lane at `-j`, as 47 QEMU rows do (17 left those where they were too).
+
+Measured on 2026-10-27 in a worktree on the four-core container, with two
+other soaks running on the box (load average ~2 before these started):
+
+| set | `--marty-jobs 1` (the old lane) | `--marty-jobs 3` |
+|---|---|---|
+| 19 rows: 14 Bochs ports, `mega-zonedmg-86box`, 3 `box-*`, and `fcpapi` (MartyPC) beside its port | 19/19, **371.0 s** of rows | 19/19, **122.3 s** - 3.03x |
+| 32 more: 20 Bochs ports, 9 `mega-*-86box`, 3 `box-*` | - | 31/32 in 250.0 s; `box-ethernet` fails the SAME way at width 1 on an idle lane (`ethernet.py:1012`, `wins[-1]` of an empty list: B:'s window never opened), so it is the row's and not the lane's |
+
+### 18.4 A Bochs guest's clock was the HOST's - the last place contention reached the guest
+
+**BUILT** (docs/BOCHS.md, *The clock*). §1's finding is that contention makes
+a row less thorough because its waits run on the guest's clock - and on
+Bochs, until 2026-10-27, the guest's clock WAS the host's. `clock:
+sync=realtime` ran the PIT off the wall clock, so a starved Bochs was a slower
+machine to the guest and a stall was caught up in ticks it never executed,
+and the shim's `status()["cycles"]` was host seconds of running. So kern_mega
+rows failed under load and passed alone, in the guest's own terms: a
+double-click read 18-50 ticks against a window of 9 (`mega-alertbtn`,
+`-trkcompact`, `-bptrace`, `-int0sweep`), and Tracker's speaker calibration
+refused its Play (`mega-ringmove-tracker`). The clock is `sync=slowdown` now
+at Bochs's default 4M instructions a guest second - guest time is the
+instruction count, read off `ptime` - and a double-click is queued on a stopped
+guest (the shim's `queued_input`, `os88bochs.Box.dblclick` for the rows that
+drive a Box) so its spacing is no host interval at all. With the soak running
+and a CPU hog beside the rows: base 4 of 5 of those rows FAILED (load 8-16),
+the fix 5 of 5 passed, and with `mega-install` and `mega-clipgrow` 7 of 7,
+repeated (load 2-15). One speed was tried and refused on the way: 100M, the
+CPU the rows had under `realtime`, starved `mega-trkcompact`'s ten Trackers to
+1/17 of real time and fired `pace`'s host backstop (docs/BOCHS.md).
+`megakbtrip`, `megapiclose` (its green arm) and `megasheet` fail at the BASE
+too, unloaded and on either clock - trip 2's typed command never hands over,
+the macro's message never comes - so they are not this.
+
+## 19. A BOCHS ROW IS A QUARTER OF A LANE — the kern_mega pass ran at a load of one
+
+**BUILT** (`tools/os88test.py` `lane_weight`, `BOCHS_PER_CORE`,
+`BOCHS_WARM`, `BOCHS_IDLE`). 18 put the 307 Bochs ports into the shared
+lane, and 18.4 then capped every Bochs guest at real time (`sync=slowdown`,
+4M instructions a guest second, and `tools/bochs/bxclock.c` so a stop costs
+the guest nothing). Together they made a Bochs row a row that spends most of
+its life WAITING: `bochs-bin` sleeps in the slowdown timer whenever the guest
+is ahead of the wall clock, which on a desktop that HLTs is nearly always. A
+lane of four such rows on a four-core box sat at a load average of ~1, and a
+pass scoped to ~388 rows, mostly `mega-*`, took ~4 hours. The lane counted
+ROWS where the cost was CORES.
+
+### 19.1 What a Bochs row costs, measured
+
+Two instruments, both on the four-core container with another soak (and, it
+turned out, another agent's Bochs rows) on the box throughout:
+
+**The guest alone** - N machines booted at once, BIOS ticks read twice 30 host
+seconds apart, `bochs-bin` + `Xvfb` CPU off `/proc` (a scratch probe, not a
+row):
+
+| guests | idle desktop: ticks/real | core/guest | busy guest (a 4M-IPS loop, no HLT): ticks/real, min-median | core/guest | box busy |
+|---|---|---|---|---|---|
+| 1 | 0.999 | 0.036 | 0.999 | 0.128 | ~1 of 4 |
+| 8 | 0.996 | 0.033 | 0.994-1.001 | 0.132 | 2.2 |
+| 16 | 1.000 | 0.030 | 0.992-1.000 | 0.120 | 3.3 |
+| 24 | - | - | **0.633-0.731** | 0.104 | **3.95** |
+| 32 | 0.999 | 0.028 | **0.300-0.386** | 0.133 | **3.99** |
+
+So the guest itself is 3% of a core idle and 13% flat out, and it keeps real
+time until the BOX runs out - not before. Sixteen flat-out guests beside
+another soak still kept it; twenty-four did not.
+
+**The row** - a whole kern_mega row run by hand under a process-tree sampler
+(`mega-sheetdel`, `mega-vidgrey`): **0.1-0.25 of a core** steady (the
+harness's reads, `xdotool`, `xwd`), and **~0.5 for its first ~5 s** - the
+script's imports, the map, the disks it builds, Xvfb, Bochs starting.
+
+### 19.2 The rule
+
+The emulator lane is a BUDGET of `--marty-jobs` cores. A row needing Bochs
+and no other emulator weighs `cpus / BOCHS_PER_CORE`; every other row weighs
+1 exactly as before, so a lane of MartyPC, QEMU and 86Box rows is the old
+lane. Three refinements, each from a measurement:
+
+- **A starting row weighs a whole lane** for its first `BOCHS_WARM` = 15 host
+  seconds. The first pass admitted sixteen at once: the box held 4.0 of 4
+  cores for a minute while the lane filled, and in that minute two rows
+  failed that are host-sensitive (`mega-vidfskeysvga4`, `mega-dosmouevt` -
+  19.3 has what each turned out to be). A row's first seconds are its
+  dearest, so the warm-up fills the lane in four waves of four instead.
+- **A fractional row waits for `BOCHS_IDLE` = 0.75 idle cores** over the last
+  3 s, read off `/proc/stat`, so it counts EVERYBODY's load - another soak, a
+  `make`, an agent - and not only the lane's own weights. A lane with none of
+  our rows running always admits one, so the gate cannot stall a run.
+- **The pick is never passed over for size**: when the row the lane's order
+  chooses does not fit, the lane waits rather than filling the room with
+  lighter rows behind it, which would hold a whole-lane row out until the
+  last Bochs row had run.
+
+`BOCHS_WARM` and `BOCHS_IDLE` are HOST quantities and that is legitimate for
+exactly the reason a timeout is not: they decide WHEN a row starts, never
+what it does. `--bochs-per-core N` / `$OS88_BOCHS_PER_CORE` set the weight
+(`tools/os88soak.py` passes it through and records it in `meta.json`;
+`status` prints it), `$OS88_BOCHS_WARM` and `$OS88_BOCHS_IDLE` the other
+two, and **`--bochs-per-core 1` is the old lane**, which is the A/B.
+
+**Why 4 and not more.** The correctness argument is 18.4's: a guest capped at
+real time is the same machine on any box, so packing changes nothing a row
+asserts SO LONG AS EVERY GUEST STILL GETS ITS SHARE. Past that each guest
+runs slower than real time. The guest-clock waits absorb that, but not every
+wait is the guest's - `os88bochs.Box.until`'s and `up`'s budgets, `GLASS`,
+`ui_done`'s hold, `_run_exact`'s *"under a tenth of real time"* backstop and
+the serial mouse's fallback chain are host seconds - so the width
+must stay UNDER saturation, not merely near it. Four a core is sixteen rows
+on four cores: 1.6-4 cores of rows by 19.1 at the worst, sixteen FLAT-OUT
+guests kept real time in the probe, and the idle gate covers the rest. On
+the measured set it left three cores idle (19.3), and 6 a core passed too -
+but twenty-four flat-out guests is where the probe saturated, so 4 is the
+default that holds in the worst case rather than the typical one. 19.1's
+numbers predate b46662b5, which makes a halted guest's X-GUI `select` a
+poll; the post-fix runs in 19.3 read LOWER box load per row, not higher.
+
+### 19.3 The runs
+
+The validation set: 39 Bochs ports - `mega-stikmenu`, `-assocopen`, `-czto`,
+`-vidfskeysvga4`, `-redlinechipvga-tune`, `-tpdraw`, `-dosmouevt` and 32
+drawn at random - plus the standalone `lemmega`, `x3mega`, `pxmega` and
+`megasheet`, which are not `serial` and run in the HOST lane at `-j` as
+before (18.3), unchanged by this. `--marty-jobs 4 -j 4`, from a worktree.
+"Lane" is the emulator lane's own wall time, from the last host-lane row to
+the end; `mega-czto` is the set's longest row and so the lane's floor at any
+width.
+
+**On the tree with 8d57160d and b46662b5** (the serial mouse's paced
+double-click; bxclock's non-blocking X-GUI `select` and the 50 ms SIGINT
+re-kick), on an otherwise idle box:
+
+| `--bochs-per-core` | rows | lane | whole run | box busy, mean (of 4) | Bochs at once, max |
+|---|---|---|---|---|---|
+| 1 (the old lane) | 43/43 | 601 s | 701.4 s | 0.40 | 4 |
+| **4** | **43/43** | **320 s** | 427.2 s | 0.85 | 11 |
+| **4** | **43/43** | **304 s** | 404.2 s | 0.66 | 12 |
+| 6 | 43/43 | 260 s | 360.0 s | 0.74 | 14 |
+
+So 4 a core is **1.9x** on the lane and the box still has three cores idle;
+the lane is now bounded by `mega-czto` (~208 s) and the set's script
+groups, not by width - which is why 6 buys only another 15%. Every row's
+wall time is the same at every width (czto 203-210 s), which is the point:
+packing changed when rows ran and nothing about how.
+
+**Before those two fixes**, the same set beside another soak and another
+agent's Bochs rows: `--bochs-per-core 1` 43/43, lane 791 s; 4 a core 43/43
+(lane 392 s), 42/43, 43/43 and 42/43 over four runs. Every failure there was
+one of three things the fixes have since diagnosed, and each failed at
+`--bochs-per-core 1` and in that other soak too, so none was the width:
+`mega-trkcompact` (a halted CPU slept the host in the X GUI's `select`, so a
+Tracker guest at 8 kHz PIT ran at an eighth of real time; it failed at every
+width and was left out of the set), `mega-vidfskeysvga4` (a lost SIGINT
+let a 0.045 s look run a guest second), and the seven SERIAL-mouse rows
+(`OS88_BOCHS_MOUSE=serial`), whose double-click was the one input still
+spaced in host seconds - run as a set twice at each width they failed 4 of
+14 at 1 a core and 2 of 14 at 4. An attempt here to give those rows the
+lane to themselves doubled the lane's wall and still failed 2 of 7, and was
+reverted; 8d57160d is the real fix.
+
+### 19.4 What it buys the whole pass
+
+PREDICTED, not measured: the last full pass at the old lane, 388 rows mostly `mega-*`, took 4:03:54. Of it,
+the 307 Bochs ports declare 27,025 s, which four lanes take ~6,750 s at the
+least; sixteen take ~1,700 s, where the floor is the largest script group,
+`vidpage`'s 26 rows at 1,955 s declared (`lane_locks` runs a script's rows
+end to end). So that part of a pass goes from ~2 hours to ~35-40 minutes at
+the same pass rate (the 1.9x above, bounded by script groups), and the 41 standalone Bochs rows in the host lane are
+untouched - several of them run two to four machines in threads
+(`megavidv2`, `megavidring`, `megapiclose`, `megasweep`, ...) with
+`cpus=1`, so a fractional weight would undercount them; moving them wants a
+declared machine count first.

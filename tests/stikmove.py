@@ -110,7 +110,8 @@ def wseg_of(ui, w):
 
 def move_leg(tmp, machine, template, drag, screen):
     sysimg = os.path.join(tmp, "os8088-360.img")
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), sysimg)
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                sysimg)         # (kern_mega: mega.img, os88marty's note)
     image = image_size()
     STIK_ST, HDR = state_off()
 
@@ -159,10 +160,14 @@ def move_leg(tmp, machine, template, drag, screen):
                  + ({k: v for k, v in d.items() if k != "payload"},)))
 
         print("C: reset - it comes back where it was put")
-        t0 = struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
+        # kern_mega's machine is an AT, whose BIOS seeds 0040:006C from the
+        # RTC at power-on, so it restarts LARGE: the kernel's own [ticks]
+        # is what starts again there (Bochs's reset is a power cycle)
+        tick = ui._S("ticks") if getattr(m, "bochs", False) else 0x46C
+        t0 = struct.unpack("<H", bytes(m.read(tick, 2)))[0]
         m.reset()
         m.run()
-        ui._wait(lambda: struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
+        ui._wait(lambda: struct.unpack("<H", bytes(m.read(tick, 2)))[0]
                  < t0, "the BIOS tick to restart", 60)
         ui.ready()
         w2 = ui.wait_window(TITLE, limit=90)
@@ -171,7 +176,9 @@ def move_leg(tmp, machine, template, drag, screen):
               % (w2.x, w2.y))
         seg = ui._word("sc_seg")
         n = ui._byte("sc_nrows")
-        rows = [os88stik.parse_row(m.read((seg << 4) + i * os88stik.SC_REC,
+        # a real segment, or kern_mega's selector (tools/os88megabochs.py)
+        lin = getattr(m, "lin", lambda sg, off=0: (sg << 4) + off)
+        rows = [os88stik.parse_row(m.read(lin(seg) + i * os88stik.SC_REC,
                                          os88stik.SC_REC))
                 for i in range(n)] if seg else []
         stik = [i for i, r in enumerate(rows) if r["stik"]]
@@ -198,7 +205,8 @@ ANCHORED = (399, 118)           # face (561, 118): x 561 - 800 + 640 = 401,
 
 def anchor_leg(tmp):
     sysimg = os.path.join(tmp, "os8088-360.img")
-    shutil.copy(os.path.join(BDIR, "os8088-360.img"), sysimg)
+    shutil.copy(os88marty.system_disk(os.path.join(BDIR, "os8088-360.img")),
+                sysimg)         # (kern_mega: mega.img, os88marty's note)
     image = image_size()
     STIK_ST, HDR = state_off()
     fixture = os88stik.dat(os88stik.deskcal(), x=SAVED[0], y=SAVED[1],

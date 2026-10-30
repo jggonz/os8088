@@ -107,7 +107,7 @@ rh_entry:
     ; the end of its last part - the ASSET, here, which the program goes on
     ; reading - and the kernel cuts the read's margin past it. tests/rehome.py
     ; asserts the claim ends exactly there.
-    mov dx, [rh_pseg]
+    mov al, RH_PROG                 ; (the program's INDEX: SPEC.md 20.12.10.5)
     OS88_REHOME
     jc .refuse
     xor bx, bx                      ; NO WINDOW (SPEC.md 20.12.10.6): ours is

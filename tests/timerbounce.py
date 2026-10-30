@@ -160,11 +160,14 @@ class Pkg:
             seg = int.from_bytes(t[b + geom.W_SEG:b + geom.W_SEG + 2], "little")
             if not seg:
                 continue
-            hdr = m.read(seg << 4, 32)
+            # seg << 4 - or, on kern_mega (tests/megaport.txt), where a
+            # package's region is an LDT selector, its descriptor's base
+            base = m.lin(seg) if getattr(m, "bochs", False) else seg << 4
+            hdr = m.read(base, 32)
             if hdr[:3] == b"O8" + bytes([PKG_FMT]) and \
                     hdr[16:32].split(b"\0")[0] == self.name:
                 self.slot, self.seg = i, seg
-                self.bss = (seg << 4) + self.img_size()
+                self.bss = base + self.img_size()
                 return True
         return False
 

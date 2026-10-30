@@ -38,9 +38,11 @@
     OS88_HEADER 'TRACKER', trk_entry, 3, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
 %else                               ; THE SHIPPED BUILD'S CLAIMS STAY LOW
     OS88_HEADER 'TRACKER', trk_entry, 3, OS88_STACK_256 | OS88_HIGH
-%endif                              ; (KERN-MEGA-PLAN 14.66): a module claim
-                                    ; that is a SELECTOR is the kern_mega
-                                    ; arm's to read (trk_claimsel, mp_patseg)
+%endif                              ; (KERN-MEGA-PLAN 14.66) - for the rest
+                                    ; of the arm (the speaker's ISR copies),
+                                    ; not the module: mp_load addresses it
+                                    ; through SEG_SUB windows on every kernel
+                                    ; (KERN-MEGA-MEMORY-PLAN MC7)
                                 ; THE WORKER'S STACK, declared
                                 ; rather than defaulted (SPEC.md 8.7):
                                 ; static 118 since the windowed
@@ -798,43 +800,12 @@ trk_trim:
     cmp ax, [trk_capk]
     jae .out                        ; the file filled it: nothing to give back
     mov dx, [trk_modseg]
-%ifdef PKG_MEGA
-    test dl, 4                      ; a selector keeps its 64KB: every offset
-    jnz .out                        ; the mixer can form is inside it
-%endif
     call OSAPI_MEM_REGROW
     jc .out                         ; refused: keep the oversized claim, which
     mov [trk_modseg], dx            ; costs heap and breaks nothing
     mov [trk_capk], ax
 .out:
     ret
-
-; trk_claimsel - the module claim at DX came back a SELECTOR (KERN-MEGA-PLAN
-; 14.13: kern_mega, a claim of 64KB or less, bit 2 the LDT). Its limit is the
-; claim, where a segment reads garbage past its end, and the mixer's bounds
-; assume a position limit of 64,015 or less (mp_mixch). So a module of 62KB
-; or less is given a whole 64KB selector and addressed flat (mp_patseg), and
-; one of 63 or 64KB is claimed at 65KB, which is conventional by the contract
-; and takes the granules. A conventional claim is left as it is.
-; in:  DX = the claim, [trk_capk] its KB; out: CF=0 DX = the claim to use,
-;      [trk_capk] its KB; CF=1 the second claim was refused (nothing held)
-%ifdef PKG_MEGA                     ; (the kern_mega arm's: KERN-MEGA-PLAN 14.66)
-trk_claimsel:
-    test dl, 4
-    jz .ok
-    call OSAPI_MEM_FREE
-    mov ax, 64
-    cmp word [trk_capk], 62
-    jbe .re
-    inc ax
-.re:
-    mov [trk_capk], ax
-    call OSAPI_MEM_CLAIM
-    ret
-.ok:
-    clc
-    ret
-%endif
 
 ; trk_tokb - DX:AX bytes -> AX = KB, rounded UP; ZF from the answer. DX:AX
 ; must be under ~64MB (DX <= 1022), which both callers guarantee. Clobbers CL
@@ -1128,10 +1099,6 @@ trk_fdone:
     mov [trk_capk], ax
     call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF=1
     jc .nomem                       ; refused (the answer moves register too)
-%ifdef PKG_MEGA
-    call trk_claimsel
-    jc .nomem
-%endif
     mov [trk_modseg], dx
 
     call trk_ring_probe             ; RESERVE the ring before the floppy turns
@@ -1464,6 +1431,14 @@ trk_fs_enter:
 ;      and fsx_run banks all six around it (kent_di)
 ; -----------------------------------------------------------------------------
 trk_fsx_main:
+    OS88_ALTENTER_SEED              ; the Alt+Enter that got us here is still
+                                    ; HELD (apps/os88alt.inc): unseeded, the
+                                    ; first os88alt_edge read that same hold
+                                    ; as the press that LEAVES, and on a
+                                    ; machine that reaches the loop before the
+                                    ; finger lifts - a 286, Bochs - the
+                                    ; bracket opened and shut in one keystroke
+                                    ; (KERN-MEGA-PLAN 14.79, the altenter port)
     call trk_txon                   ; the 80x25 TEXT screen (SPEC.md 45.13):
     je .gfx                         ; XT mode forces it, [trk_txw] asks for it
     call ttx_begin                  ; (45.13.7) - see trktxt.inc for the
@@ -3580,14 +3555,17 @@ trk_s_txxt:   db 'Windowed only: Esc first', 0
 ; the replayer never reads it again after load. What it reads is
 ;
 ;   [mp_blobseg]         trkplay's own copy of the base
-;   mp_smptab[31].MS_SEG A NORMALIZED BASE SEGMENT PER SAMPLE - "each sample
-;                        gets a base seg = blobseg + (start >> 4)", which is
-;                        how a blob bigger than a segment is addressed at all
-;   mp_chans[4].MP_SEG   ...and the segment of the sample each channel is
+;   mp_smptab[31].MS_SEG A WINDOW PER SAMPLE - "each sample gets a SEG_SUB at
+;                        start >> 4", which is how a blob bigger than a
+;                        segment is addressed at all
+;   mp_chans[4].MP_SEG   ...and the window of the sample each channel is
 ;                        PLAYING, which the mixer walks every chunk
+;   mp_pwin[8]           the eight pattern windows (mp_patseg)
 ;
-; so thirty-six words, all of them blobseg plus a constant, all fixed by
-; adding the delta.
+; so forty-four words, all of them blobseg plus a constant on the real-mode kernel
+; this proc runs on, all fixed by adding the delta. (Under kern_mega's
+; protected mode a move is a REBASE: every one of them is a selector that
+; moves with the claim, and no proc is called - KERN-MEGA-MEMORY-PLAN MC7.)
 ;
 ; IT IS PLACED AFTER trkplay.inc AND NOT BESIDE ITS CALLERS, because MS_SZ,
 ; MP_CHSZ and the bss labels are that file's and this is the first point they
@@ -3638,6 +3616,13 @@ trk_reloc:
     add si, MP_CHSZ             ; machine with no sound card, where all four
     loop .ch                    ; channels sit at 0 and every one of them came
                                 ; out pointing outside the module
+    mov si, mp_pwin
+    mov cl, 8                   ; (CH = 0: the loop above ran CX out)
+.pw:
+    add [si], ax                ; all eight, the unused ones too: those are
+    inc si                      ; never read (a pattern is < [mp_npat])
+    inc si
+    loop .pw
 .out:
     pop si
     pop cx

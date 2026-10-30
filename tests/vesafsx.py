@@ -38,6 +38,8 @@ from os88geom import VID_VESA                               # noqa: E402
 
 
 def launch(img):
+    if os88qemu.MEGA:       # kern_mega on Bochs's VBE: tests/vesa.py's launch
+        return vesa.launch(img)
     os88fixture.need(img, "build/apps.img")
     em = "qemu" + "-system-i386"
     os88qemu.start(
@@ -133,7 +135,7 @@ def main():
         for f in fails:
             print("  " + f)
         return 1
-    print("vesafsx: ok - a BIOS-mode bracket from the 1024x768x16 desktop (%dx%d) and back"
+    print("vesafsx: ok - a BIOS-mode bracket from the VESA desktop (%dx%d) and back"
           % (sw2, sh2))
     return 0
 

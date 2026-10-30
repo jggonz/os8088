@@ -90,6 +90,13 @@ def say(s):
     print("  " + s)
 
 
+def _lin(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base under kern_mega, whose claims
+    and package regions are selectors (os88megabochs)"""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f else (seg << 4) + off
+
+
 def status(m, seg):
     """[ft_nfam], [ft_err], [ft_face], [ft_cached] out of facetest's own bss.
 
@@ -97,7 +104,7 @@ def status(m, seg):
     an edit to facetest.asm cannot leave this row reading the wrong four bytes
     and calling the result a scan failure.
     """
-    base = (seg << 4) + dispapps.img_size("facetest")
+    base = _lin(m, seg, dispapps.img_size("facetest"))
     out = {}
     for n in ("ft_nfam", "ft_err", "ft_face", "ft_cached"):
         out[n] = m.read(base + dispapps.bss_off("facetest", n), 1)[0]
@@ -188,13 +195,13 @@ with os88ui.boot(a.sys, apps=a.bench, machine=a.machine, quick=True) as ui:
         cl = [c for c in claims if c[2] == seg]
         say("facetest holds %s"
             % ["%04x/%dKB" % (b, p // 64) for b, p, _ in cl])
-        faces = [c for c in cl if m.read(c[0] << 4, 4) == b"F88\x1a"]
+        faces = [c for c in cl if m.read(_lin(m, c[0]), 4) == b"F88\x1a"]
         if len(faces) != 1:
             fails.append(
                 "CLAIM: %d claims owned by FACETEST hold an .F88 image, and "
                 "exactly one face is open" % len(faces))
         for b, p, _ in faces:
-            hdr = m.read(b << 4, 64)
+            hdr = m.read(_lin(m, b), 64)
             rows, flen = hdr[6], hdr[56] | hdr[57] << 8
             want = (flen >> 10) + 1
             say("face %04x: %d bytes, %d rows -> %dKB claim, %dKB wanted"

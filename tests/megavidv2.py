@@ -107,11 +107,16 @@ def tailclip(tmp, lay):
 
 
 def tap(box, key, n=1, gap=1.0):
+    """KEY pressed N times, held 0.15 and then GAP seconds apart - GUEST
+    seconds (Box.guest_sleep): where the pause lands in the clip is the
+    scenario, and in host seconds it moved with how much CPU this Bochs got
+    (four to a core paused before the first frame, both tails wrong)"""
     for _ in range(n):
         box.xd("keydown", key)
-        time.sleep(0.15)
+        box.guest_sleep(0.15)
         box.xd("keyup", key)
-        time.sleep(gap)
+        if gap:
+            box.guest_sleep(gap)
 
 
 def differ(a, b):
@@ -137,7 +142,7 @@ def still(box, d, tag):
         if prev and differ(prev, p) == 0:
             return p
         prev, i = p, i + 1
-        time.sleep(1.0)
+        box.guest_sleep(1.0)
     return None
 
 

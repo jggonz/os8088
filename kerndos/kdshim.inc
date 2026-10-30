@@ -87,7 +87,7 @@ DBG_TAG_FDD   equ 0x4446
 ; 589 -> 586 KB, MEASURED (tests/kdhand.py). A DOS that cannot read a 1.44MB
 ; floppy is not a DOS.
 DSK_FAT_SECS equ 9
-PKG_FILE_HI  equ 16
+PKG_FILE_HI  equ 512
 ; --- from kernel/lz.inc ---
 LZ_LZB      equ 1
 ; --- from kernel/memory.inc ---

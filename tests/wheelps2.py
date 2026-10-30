@@ -213,5 +213,95 @@ def main():
     return 0
 
 
+def main_mega():
+    """THE SAME ROW ON kern_mega (tests/megaport.txt), under Bochs with its
+    mouse an IntelliMouse (`type=imps2`, as tests/megakbtrip.py has it) and
+    no UART (`noserial`, this row's `-serial none`): os88marty's API for
+    QMP's, os88mouse's closed loop for the exact walk, and `m.wheel`, which
+    the shim turns into X's buttons 5 (toward the user) and 4 (away) and
+    Bochs into the device's Z."""
+    import os88megabochs
+    import os88marty
+    import os88mouse
+    fails = []
+    with os88megabochs.launch("build/os8088.img", apps="build/apps.img",
+                               boot=False, noserial=True, wheel=True) as m:
+        m.run()
+        os88marty.until(m, lambda _: byte(m, "mou_p2st") == 9,
+                        "[mou_p2st] = 9", guest=90.0)
+        os88marty.kernel_up(m)
+        for sym, want in (("mou_p2st", 9), ("mou_p2", 1), ("mou_p2id", 0),
+                          ("mou_p2wz", 3)):
+            got = byte(m, sym)
+            if got != want:
+                fails.append("%s %02X, want %02X%s" % (
+                    sym, got, want,
+                    " - the knock did not put the device in WHEEL mode "
+                    "(SPEC.md 9.9.8)" if sym == "mou_p2wz" else ""))
+        mo = os88mouse.Mouse(marty=m)
+        mo.to(TARGET_X, TARGET_Y)
+        gx, gy = word(m, "mouse_x"), word(m, "mouse_y")
+        if (gx, gy) != (TARGET_X, TARGET_Y):
+            fails.append("pointer at %d,%d, want %d,%d - the FRAMING "
+                         "(SPEC.md 9.9.8)" % (gx, gy, TARGET_X, TARGET_Y))
+
+        def held():
+            return byte(m, "menu_dropd") == 1 or word(m, "menu_sseg") != 0
+
+        def turn(n):
+            m.wheel(n, l=True)          # the title held through it
+
+        def wait(cond, what):
+            try:
+                os88marty.until(m, lambda _: cond(), what, guest=3.0)
+            except os88marty.MartyError:
+                pass
+        ent = m.read(os88sym.linear("menu_bar"), MB_ENTSZ)
+        x = (int.from_bytes(ent[MB_XL:MB_XL + 2], "little")
+             + int.from_bytes(ent[MB_XR:MB_XR + 2], "little")) // 2
+        mo.to(x, 8)
+        mo._sep()
+        mo._edge(True)
+        wait(held, "the first bar title held open")
+        w0 = sword(m, "mou_whl")
+        turn(4)
+        wait(lambda: sword(m, "mou_whl") - w0 == 4, "[mou_whl] +4")
+        d1 = sword(m, "mou_whl") - w0
+        if d1 != 4:
+            fails.append("four notches toward the user moved [mou_whl] by %d,"
+                         " want +4 (SPEC.md 10.4)" % d1)
+        turn(-6)
+        wait(lambda: sword(m, "mou_whl") - w0 == -2, "[mou_whl] -2")
+        d2 = sword(m, "mou_whl") - w0
+        if d2 != -2:
+            fails.append("then six away left [mou_whl] at %d over its start, "
+                         "want -2 (SPEC.md 10.4)" % d2)
+        mo._edge(False)
+        wait(lambda: word(m, "mou_whl") == 0, "the UI task spending it")
+        if word(m, "mou_whl") != 0:
+            fails.append("[mou_whl] still %d after the menu closed"
+                         % sword(m, "mou_whl"))
+
+        before = m.read(KBHEAD, 4)
+        tail0 = before[2] | (before[3] << 8)
+        for k in "abcdef":
+            m.key("Key" + k.upper())
+        wait(lambda: ((lambda b: (b[2] | (b[3] << 8)) - tail0)
+                      (m.read(KBHEAD, 4)) & 0xFFFF) == 12,
+             "six keys in the BIOS ring")
+        after = m.read(KBHEAD, 4)
+        if ((after[2] | (after[3] << 8)) - tail0) & 0xFFFF != 12:
+            fails.append("six keys did not all reach the BIOS ring "
+                         "(SPEC.md 9.9.1)")
+    if fails:
+        for f in fails:
+            print("wheelps2: FAIL " + f)
+        return 1
+    print("wheelps2: ok (kern_mega) - knock took (ID 3), pointer exact in "
+          "four-byte mode, +4 / -2 summed and signed, spent on release, "
+          "keyboard intact")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main_mega() if os.environ.get("OS88_MEGA") else main())

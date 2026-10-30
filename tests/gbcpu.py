@@ -201,6 +201,13 @@ def main():
                                  "passed - the gate cannot go red" if ok
                                  else "%s, as it must not be" % broke))
         bad += ok
+        broke = run_sum(rom, core, rdgimg.build_host(out, ["RT_CBBUG"]), True)
+        rdgimg.build_host(out)
+        ok = broke == want
+        print("%-4s %-24s %s" % ("FAIL" if ok else "ok", "control: CB's C dropped",
+                                 "passed - the gate cannot go red" if ok
+                                 else "%s, as it must not be" % broke))
+        bad += ok
     if not a.k or a.k in "lazy loops":
         import gbours
         rom = gbours.build(LAZY_ROM)

@@ -39,6 +39,13 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
+def _lin(m, seg, off):
+    """SEG:OFF as linear: `seg << 4`, or a kern_mega selector's base under
+    tools/os88megabochs.py (`m.lin`)."""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f is not None else (seg << 4) + off
+
+
 class Pump:
     """Drive the mouse with a breakpoint pump in the SAME loop.
 
@@ -212,7 +219,8 @@ class Cells(Pump):
             cull = self.m.read(S(self.cull_sym), 1)[0]
         fr = self.frags()
         x, y = r["cx"] & 0xFFFF, r["dx"] & 0xFFFF
-        txt = self.m.read(((r["es"] & 0xFFFF) << 4) + (r["si"] & 0xFFFF), 48)
+        txt = self.m.read(_lin(self.m, r["es"] & 0xFFFF, r["si"] & 0xFFFF),
+                          48)
         ln = txt.find(b"\0")
         ln = 48 if ln < 0 else ln
         self.runs += 1
@@ -228,7 +236,7 @@ class Cells(Pump):
 
     def on_stop(self, r, sym):
         m = self.m
-        b = m.read(((r["ss"] & 0xFFFF) << 4) + (r["sp"] & 0xFFFF), 2)
+        b = m.read(_lin(m, r["ss"] & 0xFFFF, r["sp"] & 0xFFFF), 2)
         ret = b[0] | (b[1] << 8)
         if sym == "font_run_x":
             if self.stub <= ret < self.stub + 12:

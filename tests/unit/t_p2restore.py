@@ -68,10 +68,18 @@ def main():
             continue
         if cur:
             where[cur].append(ln)
-    for arm in (".fail", ".noaux"):
-        check(arm in where, "mou_p2_init still has a %s arm" % arm)
+    check(".fail" in where, "mou_p2_init still has a .fail arm")
+    # .noaux may be its own arm or FOLDED into .fail (SPEC.md 9.7.2's size
+    # pass made it .fail byte for byte). Either is fine; what is not is a
+    # jump to a .noaux that is not one of the arms checked below.
+    arms = [".fail"] + ([".noaux"] if ".noaux" in where else [])
+    code = "\n".join(init)
+    stray = re.findall(r"\bj\w*\s+(\.j?noaux)\b", code)
+    check(".noaux" in where or not stray,
+          ".noaux is its own arm, or nothing jumps to one (%s)"
+          % (", ".join(stray) or "folded into .fail"))
 
-    for arm in (".fail", ".noaux"):
+    for arm in arms:
         lines = where.get(arm, [])
         reads = [l.strip() for l in lines if DOC in l]
         check(not reads,

@@ -61,13 +61,23 @@ def main():
         # about the warp. A range of CODE, not the whole image - the header is
         # stamped by os88pkg.py and cy_ekcol is patched for the display.
         lo, n = syms["cy_entry"], 2048
-        live = bytes(m.read(seg * 16 + lo, n))
+        live = bytes(m.read(m.lin(seg, lo) if getattr(m, "bochs", False)
+                            else seg * 16 + lo, n))   # (a selector there)
         if live != image[lo:lo + n]:
             raise RuntimeError("the CYCLONE.O88 running here is not this "
                                "source - run `make` (a knob build in build/ "
                                "is the usual cause)")
         p = Pkg(m, seg, syms)
         mo.to(2, 2)
+        bochs = getattr(m, "bochs", False)
+        if bochs:
+            # **BEFORE THE PLAY, ON BOCHS**: Bochs decodes an instruction
+            # once per physical page and a debugger write does not invalidate
+            # it (docs/BOCHS.md), so the `ret` below patched over a spawn
+            # tick that has already RUN is never executed - and a flipper
+            # spawned beside the tanker scored 250. The title never spawns,
+            # so the patch lands before the code is first decoded
+            m.write(p.addr("cy_spawn_tick"), bytes([0xC3]))
         for _ in range(10):
             if p.rb("cy_state") != CYS_TITLE:
                 break
@@ -88,7 +98,8 @@ def main():
 
         # --- 1. what a kill is worth. The superzapper is the instrument: it
         # calls cy_score_kind for every live enemy, so one enemy is one award.
-        m.write(p.addr("cy_spawn_tick"), bytes([0xC3]))
+        if not bochs:
+            m.write(p.addr("cy_spawn_tick"), bytes([0xC3]))
         for name, kind, want in KINDS:
             for i in range(10):                 # an empty board...
                 m.write(p.addr("cy_e_kind") + i, bytes([0xFF]))

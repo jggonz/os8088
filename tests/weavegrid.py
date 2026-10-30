@@ -89,6 +89,8 @@ MACHINES = [
     ("os8088_5150_cga_gla",  "cga",  640, 200),
     ("os8088_5150_herc_gla", "herc", 720, 348),
 ]
+if weavesmoke.MEGA:             # kern_mega's Bochs: a VGA and nothing else,
+    MACHINES = weavesmoke.MACHINES      # read through weavesmoke.vram
 
 # WEAVE-SPEC 6.9.1's geometry, mirrored - and the mirror is checked, because
 # the model prints the same numbers and assertion 1 compares whole bands.
@@ -295,9 +297,9 @@ def _drive(machine, card, vidw, S, m, png_dir):
     ncells = len(m0[0])
 
     # --- 1: the opening picture is the model's ------------------------------
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = weavesmoke.vram(m, card)
     _park(m, mo, vw, vh)
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = weavesmoke.vram(m, card)
     g = Glass(rows, vw, vh, cx, cy)
     _learn(g, m0, gr0, vr)
     for k, (a, b) in enumerate(zip(_read_bands(g, gr0, vr, ncells),
@@ -322,7 +324,7 @@ def _drive(machine, card, vidw, S, m, png_dir):
                                            ncells, base),
                     "the recalculation to reach the glass", limit=20.0)
     _park(m, mo, vidw, vh)
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = weavesmoke.vram(m, card)
     m1 = _cardrows(card, "click btnBump\n")
     moved = set(k for k in range(vr)
                 if m1[gr0 + WG_CHROME + k] != m0[gr0 + WG_CHROME + k])
@@ -360,7 +362,7 @@ def _drive(machine, card, vidw, S, m, png_dir):
     m.key("Enter")
     os88marty.ui_done(m)
     _park(m, mo, vidw, vh)
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = weavesmoke.vram(m, card)
     m2 = _cardrows(card, "click btnBump\nselect g %d %d\nedit g %d %d %s\n"
                    % (TYPE_R, TYPE_C, TYPE_R, TYPE_C, TYPE_SRC))
     g = Glass(rows, vw, vh, cx, cy)
@@ -392,7 +394,7 @@ def _drive(machine, card, vidw, S, m, png_dir):
         m.key("ArrowDown")
     os88marty.ui_done(m)
     _park(m, mo, vidw, vh)
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = weavesmoke.vram(m, card)
     full = [_band_pixels(rows, cx, cy, gr0 + WG_CHROME + k, ncells)
             for k in range(vr)]
     bad = [k for k in range(vr) if inc[k] != full[k]]
@@ -418,7 +420,7 @@ def _drive(machine, card, vidw, S, m, png_dir):
 
 
 def _changed(m, card, cx, cy, gr0, vr, ncells, base):
-    rows = m.vram(card)[2]
+    rows = weavesmoke.vram(m, card)[2]
     return any(_band_pixels(rows, cx, cy, gr0 + WG_CHROME + k, ncells)
                != base[k] for k in range(vr))
 

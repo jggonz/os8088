@@ -27,6 +27,31 @@
 ;                              is in it too (step 2D-2F): the hint stamp
 ;                              must read the file's byte 0 and not one past
 ;                              the window (KERN-MEGA-PLAN 14.27)
+;                              ...and OSAPI_SEG (SPEC.md 50.6.11): a SUB
+;                              one chunk into the block read through, no
+;                              REAL segment for it, a WINDOW over the BIOS
+;                              ROM's date and its LINEAR base F0000h, the
+;                              window freed; SEG_SUBC's pair over chunk 1
+;                              and its code half at DX - 8; a BOUND window
+;                              (SEG_BWIN) aimed at chunk 2's byte 100 by
+;                              SEG_AIM, refused 5 past the block's end, and
+;                              freed; an OSAPI_MEM_HUGE claim of 96KB BELOW
+;                              1MB as a run of selectors 16KB apart, a byte
+;                              read through two windows - and on a
+;                              real-mode kernel the SUB and
+;                              the SUBC are the caller's own segment + AX
+;                              and SEG_AIM is refused
+;   MEGAXM: move OOOO PPPP     (protected mode) THE BLOCK MOVED, and is read
+;                              back through the SAME token (KERN-MEGA-MEMORY-
+;                              PLAN MC3): a 64KB filler taken first lies
+;                              above it, so freeing the filler leaves a hole
+;                              there, and a claim of every free KB the pool
+;                              has (OSAPI_XMEM_CAPS) fits only once the pool
+;                              is packed UP - which lifts the block into the
+;                              hole. OOOO and PPPP are its KB from the pool's
+;                              base before and after (OSAPI_XMEM_WALK); every
+;                              chunk below is read AFTER the move, through the
+;                              token the block was first given
 ;   MEGAXM: i13 ok             (protected mode) int 13h issued by the PACKAGE
 ;                              into a buffer above 1MB (KERN-MEGA-PLAN 14.1
 ;                              answer 11, mega_hibnc): drive A's track 0,
@@ -34,7 +59,8 @@
 ;                              read into the block at an odd offset and
 ;                              compared with the same sectors read low, then
 ;                              written back from the block and read again
-;   MEGAXM: ok | bad NN | no NN    the verdict, or the step that refused
+;   MEGAXM: ok | bad NN | no NN AAAA   the verdict, or the step that
+;                              refused and the AX its cell answered
 ;
 ; It was written for kern_mega's own pool (docs/plans/KERN-MEGA-PLAN.md 12.2,
 ; mega.inc's mx_*), and runs on any kernel with a store: tier 0 answers caps 0
@@ -58,6 +84,17 @@ mz_entry:
     call mz_nl
     or ax, ax
     jz .done
+    call OSAPI_CPU_INFO         ; protected mode: a 64KB FILLER first, so the
+    test ah, CPU_F_PM           ; block below lies under it (claims come from
+    jz .nofill                  ; the top) - mz_move frees it for a hole
+    xor ax, ax
+    mov dx, 1
+    call OSAPI_XMEM_ALLOC
+    mov cl, 0x40
+    jc .no
+    mov [mz_fill4], ax
+    mov [mz_fill4+2], dx
+.nofill:
     xor ax, ax                  ; DX:AX = 64KB
     mov dx, 1
     call OSAPI_XMEM_ALLOC
@@ -83,6 +120,9 @@ mz_entry:
     inc bx
     cmp bx, MZ_N
     jb .out
+    call mz_move                ; (protected mode) the block MOVES first
+    jc .no
+    jnz .bad
     ; --- in, and compare -------------------------------------------------
     xor bx, bx
 .in:
@@ -123,12 +163,19 @@ mz_entry:
     call mz_say
     call mz_nl
     jmp short .done
-.no:                            ; CL = the step that refused
-    mov si, mz_s_no
-    jmp short .code
+.no:                            ; CL = the step that refused, AX the
+    mov si, mz_s_no             ; cell's own answer
+    call mz_say
+    xchg ax, cx
+    call mz_hex2
+    mov al, ' '
+    out 0xE9, al
+    xchg ax, cx
+    call mz_hex4
+    call mz_nl
+    jmp short .done
 .bad:
     mov si, mz_s_bad
-.code:
     call mz_say
     mov al, cl
     call mz_hex2
@@ -137,6 +184,100 @@ mz_entry:
     pop di
     pop si
     stc                         ; no window: the instance ends here
+    ret
+
+; mz_move - (protected mode, and only when the filler was taken) the block
+; moved by a pack (KERN-MEGA-MEMORY-PLAN MC3): the filler above it freed, a
+; claim of every free KB the pool has taken and freed, the block's place
+; walked before and after. out: CF = 0, ZF = 1 it moved UP; CF = 1 a cell
+; refused (CL = the step); ZF = 0 it did not move (CL = the step)
+mz_move:
+    push ax
+    push dx
+    push si
+    mov ax, [mz_fill4]
+    mov dx, [mz_fill4+2]
+    mov cx, ax
+    or cx, dx
+    jz .ok                      ; (real mode: nothing to do)
+    call OSAPI_XMEM_FREE
+    mov cl, 0x41
+    jc .out
+    call mz_woff                ; AX = the block's KB, before
+    mov si, ax
+    call OSAPI_XMEM_CAPS        ; AX = every free KB
+    mov dx, ax                  ; DX:AX = AX x 1024
+    mov cl, 6
+    shr dx, cl
+    mov cl, 10
+    shl ax, cl
+    call OSAPI_XMEM_ALLOC       ; ...which fits only once the pool is packed
+    mov cl, 0x42
+    jc .out
+    call OSAPI_XMEM_FREE
+    mov cl, 0x43
+    jc .out
+    call mz_woff                ; AX = after
+    push si
+    mov si, mz_s_move
+    call mz_say
+    pop si
+    xchg ax, si
+    call mz_hex4
+    mov al, ' '
+    out 0xE9, al
+    xchg ax, si
+    call mz_hex4
+    call mz_nl
+    mov cl, 0x44
+    cmp ax, si
+    ja .ok
+    or cl, cl                   ; ZF = 0: it did not move up (CF = 0)
+    jmp short .out
+.ok:
+    xor cl, cl                  ; ZF = 1, CF = 0
+.out:
+    pop si
+    pop dx
+    pop ax
+    ret
+
+; mz_woff - AX = the KB from the pool's base of this package's one 64KB
+; OSAPI_XMEM_ALLOC block (FFFFh none), off OSAPI_XMEM_WALK into mz_buf.
+; Clobbers nothing else
+mz_woff:
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov di, mz_buf
+    mov cx, MZ_CHUNK / XMW_SIZE
+    xor bx, bx
+    call OSAPI_XMEM_WALK        ; AX = records
+    xchg ax, cx
+    mov si, mz_buf
+    mov ax, 0xFFFF
+.l:
+    jcxz .o
+    cmp byte [si+XMW_OWN], 0x80
+    jae .n                      ; an instance's OSAPI_XMEM_ALLOC block...
+    cmp word [si+XMW_KB], 64
+    jne .n                      ; ...of 64KB: ours
+    mov ax, [si+XMW_OFF]
+    jmp short .o
+.n:
+    add si, XMW_SIZE
+    dec cx
+    jmp short .l
+.o:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
     ret
 
 ; mz_sel - the two cells of KERN-MEGA-PLAN 12.2 against the block the copy
@@ -166,6 +307,29 @@ mz_sel:
     mov dx, ds
     cmp ax, dx                  ; the segment itself
     jne .wrong
+    mov ax, 0x10                ; OSAPI_SEG answers the caller's own sum
+    mov bl, SEG_SUB             ; on a real-mode kernel (SPEC.md 50.6.11)
+    call OSAPI_SEG
+    mov cl, 0x12
+    jc .refused
+    mov ax, ds
+    add ax, 0x10
+    cmp ax, dx
+    jne .wrong
+    mov dx, ds                  ; ...SEG_SUBC the same sum...
+    mov ax, 0x10
+    mov bl, SEG_SUBC
+    call OSAPI_SEG
+    mov cl, 0x13
+    jc .refused
+    mov ax, ds
+    add ax, 0x10
+    cmp ax, dx
+    jne .wrong
+    mov bl, SEG_AIM             ; ...and SEG_AIM refused: the caller's own
+    call OSAPI_SEG              ; sum is the answer in real mode
+    mov cl, 0x14
+    jnc .wrong
     jmp .say
 .pm:
     mov ax, [mz_base]           ; --- the whole block, 64KB, in place
@@ -212,20 +376,183 @@ mz_sel:
     jnc .wrong
     cmp ax, 2
     jne .wrong
-    mov dx, ds                  ; --- CODESEL: our region's segment is its
-    call OSAPI_MEM_CODESEL      ; LDT code alias...
-    mov cl, 0x0D
+    mov dx, ds                  ; --- CODESEL: our region is its claim's
+    call OSAPI_MEM_CODESEL      ; pair, so its code half is DS - 8 (KERN-
+    mov cl, 0x0D                ; MEGA-MEMORY-PLAN MC7.4)...
     jc .refused
     mov dx, ds
-    shr dx, 1
-    shr dx, 1
-    or dl, 4
+    sub dx, 8
     cmp ax, dx
     jne .wrong
     mov dx, [mz_xsel]           ; ...and a data-only selector has none
     call OSAPI_MEM_CODESEL
     mov cl, 0x0E
     jnc .wrong
+    mov dx, [mz_xsel]           ; --- OSAPI_SEG (SPEC.md 50.6.11): a SUB
+    mov ax, MZ_CHUNK / 16       ; one chunk into the block, so chunk 1's
+    xor cx, cx                  ; byte i is (1 + 7i) & 0xFF
+    mov bl, SEG_SUB
+    call OSAPI_SEG
+    mov cl, 0x50
+    jc .refused
+    mov es, dx
+    mov cl, 0x51
+    cmp byte [es:100], (1 + 7*100) & 0xFF
+    jne .wrong
+    mov bl, SEG_REAL            ; ...above 1MB: no real segment
+    call OSAPI_SEG
+    mov cl, 0x52
+    jnc .wrong
+    xor ax, ax                  ; a WINDOW over the BIOS ROM: F000:FFF5 is
+    mov dx, 0xF000              ; its date, MM/DD/YY
+    xor cx, cx
+    mov bl, SEG_WIN
+    call OSAPI_SEG
+    mov cl, 0x53
+    jc .refused
+    mov es, dx
+    mov cl, 0x54
+    cmp byte [es:0xFFF7], '/'
+    jne .wrong
+    mov bl, SEG_LIN             ; ...whose base is F0000h
+    call OSAPI_SEG
+    mov cl, 0x55
+    cmp dx, 0x000F
+    jne .wrong
+    or ax, ax
+    jnz .wrong
+    mov dx, es
+    push ds
+    pop es                      ; (ES off the window before it goes)
+    mov bl, SEG_FREE
+    call OSAPI_SEG
+    mov cl, 0x56
+    jc .refused
+    mov dx, [mz_xsel]           ; --- SEG_SUBC: chunk 1 as a CODE/DATA pair
+    mov ax, MZ_CHUNK / 16       ; (KERN-MEGA-MEMORY-PLAN 8.1)...
+    xor cx, cx
+    mov bl, SEG_SUBC
+    call OSAPI_SEG
+    mov cl, 0x57
+    jc .refused
+    mov es, dx
+    cmp byte [es:100], (1 + 7*100) & 0xFF
+    jne .wrong
+    push dx                     ; ...whose code half is DX - 8
+    call OSAPI_MEM_CODESEL
+    pop dx
+    mov cl, 0x58
+    jc .refused
+    sub dx, 8
+    cmp ax, dx
+    jne .wrong
+    push ds
+    pop es
+    mov dx, [mz_xsel]           ; --- SEG_BWIN: a window bound to the block
+    mov bl, SEG_BWIN            ; (KERN-MEGA-MEMORY-PLAN 9.1)...
+    call OSAPI_SEG
+    mov cl, 0x59
+    jc .refused
+    mov [mz_win], dx
+    mov ax, 2 * MZ_CHUNK + 100  ; ...SEG_AIM at chunk 2's byte 100
+    xor cx, cx
+    mov bl, SEG_AIM
+    call OSAPI_SEG
+    mov cl, 0x5A
+    jc .refused
+    cmp dx, [mz_win]            ; the same window
+    jne .wrong
+    or ax, ax
+    jnz .wrong
+    mov es, dx
+    cmp byte [es:0], (2 + 7*100) & 0xFF
+    jne .wrong
+    push ds
+    pop es
+    xor ax, ax                  ; ...and past the block's 64KB: refused, 5
+    mov cx, 1
+    mov bl, SEG_AIM
+    call OSAPI_SEG
+    mov cl, 0x5B
+    jnc .wrong
+    cmp ax, 5
+    jne .wrong
+    mov dx, [mz_win]
+    mov bl, SEG_FREE
+    call OSAPI_SEG
+    mov cl, 0x5C
+    jc .refused
+    mov ax, 96                  ; --- OSAPI_MEM_HUGE BELOW 1MB (this package
+    mov bx, 0x4000              ; is not OS88_HIGHMEM): a RUN of selectors,
+    call OSAPI_MEM_HUGE         ; a window every 16KB (KERN-MEGA-MEMORY-PLAN
+    mov ax, cx                  ; MC7.4)... (the step, before CL is ours)
+    mov cl, 0x5D
+    jc .refused
+    mov [mz_huge], dx
+    cmp ax, 8                   ; the step: a selector run's (5D)...
+    jne .wrong
+    mov cl, 0x60                ; ...and the 16KB ask met (60)
+    or bx, bx
+    jnz .wrong
+    mov ax, dx                  ; ...byte 0 of window 5 (80KB in)...
+    add ax, 5 * 8
+    mov es, ax
+    mov byte [es:0], 0xC3
+    mov ax, dx                  ; ...is byte 4000h of window 4 (64KB in)
+    add ax, 4 * 8
+    mov es, ax
+    mov cl, 0x5E
+    cmp byte [es:0x4000], 0xC3
+    jne .wrong
+    mov es, [mz_huge]           ; ...a PACKED file of 90,000 bytes read into
+    xor bx, bx                  ; it, past one window, decoded on the file
+    mov dx, 1                   ; doors' segment arm (KERN-MEGA-MEMORY-PLAN
+    mov cx, 0x8000              ; MC7.4): capacity 96KB
+    mov si, mz_s_huge
+    call OSAPI_FILE_READ
+    mov cl, 0x61
+    jc .refused
+    mov cl, 0x62
+    cmp dx, 1                   ; 90,000 = 1:5F90h
+    jne .wrong
+    cmp ax, 0x5F90
+    jne .wrong
+    mov cl, 0x63
+    cmp byte [es:0], 'A'        ; byte 0 through window 0...
+    jne .wrong
+    mov ax, [mz_huge]           ; ...byte 70,000 through window 4 (64KB on),
+    add ax, 4 * 8               ; at 70,000 - 65,536 = 1170h: 'A' + 70,000
+    mov es, ax                  ; mod 26 = 'I'
+    mov cl, 0x64
+    cmp byte [es:0x1170], 'I'
+    jne .wrong
+    mov ax, [mz_huge]           ; ...and every byte from 64KB to the end
+    add ax, 4 * 8               ; through window 4: 'A' + i mod 26, i from
+    mov es, ax                  ; 65,536 ('O')
+    xor di, di
+    mov al, 'A' + 65536 % 26
+    mov cx, 90000 - 65536
+.hb:
+    cmp [es:di], al
+    jne .hbad
+    inc di
+    inc al
+    cmp al, 'Z' + 1
+    jb .hbn
+    mov al, 'A'
+.hbn:
+    loop .hb
+    jmp short .hok
+.hbad:
+    mov cl, 0x65
+    jmp .wrong
+.hok:
+    push ds
+    pop es
+    mov dx, [mz_huge]           ; ...and it goes back by its first selector
+    call OSAPI_MEM_FREE
+    mov cl, 0x5F
+    jc .refused
 .say:
     mov si, mz_s_sel
     call mz_say
@@ -678,10 +1005,12 @@ mz_s_code:  db ' code ', 0
 mz_s_file:  db 'MEGAXM: file ', 0
 mz_s_tmp:   db 'MEGAXM.TMP', 0
 mz_s_big:   db 'ZBIG.TXT', 0
+mz_s_huge:  db 'ZHUGE.TXT', 0
 mz_s_at:    db 'MEGAXM: at ', 0
 mz_s_i13:   db 'MEGAXM: i13 ok', 0
+mz_s_move:  db 'MEGAXM: move ', 0
 
-    OS88_BSS 14 + MZ_CHUNK
+    OS88_BSS 22 + MZ_CHUNK
     OS88_IMAGE_END
 
 mz_base     equ os88_image_end + 0
@@ -689,4 +1018,7 @@ mz_xsel     equ os88_image_end + 4
 mz_base2    equ os88_image_end + 6
 mz_xsel2    equ os88_image_end + 10
 mz_diff     equ os88_image_end + 12
-mz_buf      equ os88_image_end + 14
+mz_fill4    equ os88_image_end + 14 ; dword: the filler's token, 0 = none
+mz_buf      equ os88_image_end + 18
+mz_win      equ os88_image_end + 18 + MZ_CHUNK ; SEG_BWIN's window
+mz_huge     equ os88_image_end + 20 + MZ_CHUNK ; OSAPI_MEM_HUGE's run

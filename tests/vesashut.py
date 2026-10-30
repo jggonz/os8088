@@ -47,6 +47,8 @@ MENU_SHUT = (50, 124)           # its last item, "Shut Down..." (1024x768)
 
 
 def launch():
+    if os88qemu.MEGA:       # kern_mega on Bochs's VBE: tests/vesa.py's launch
+        return vesa.launch(sock=SOCK, pidfile=PIDFILE)
     os88fixture.need("build/vesa.img", "build/apps.img")
     for f in (SOCK, PIDFILE):
         if os.path.exists(f):
@@ -69,8 +71,8 @@ def launch():
 
 
 def mouse(*args):
-    subprocess.run(["python3", "tools/mouse.py", "--screen", "1024x768",
-                    SOCK] + [str(a) for a in args], cwd=ROOT, check=True)
+    subprocess.run(["python3", "tools/mouse.py", "--screen",
+                    "%dx%d" % (vesa.WANT_W, vesa.WANT_H), SOCK] + [str(a) for a in args], cwd=ROOT, check=True)
 
 
 def main():

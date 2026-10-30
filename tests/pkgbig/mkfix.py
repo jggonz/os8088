@@ -10,12 +10,16 @@ that is not a program.
 SPEC.md 19.1's rule types a file by its EXTENSION and its SIZE, before
 anything reads a byte of it (`tests/pkgbig.py`):
 
-  BIGPKG.O88   70,144 bytes  - over APP_MAX_SIZE, under PKG_FILE_HI's 1MB.
+  BIGPKG.O88   70,144 bytes  - over APP_MAX_SIZE, under PKG_FILE_HI's 32MB.
                                The mount must type it 1 and the LOADER must
                                refuse it, saying `Too large`.
-  HUGE.O88  1,048,576 bytes  - exactly PKG_FILE_HI << 16, the first size the
+  HUGE.O88  1,048,576 bytes of data whose directory entry SAYS 33,554,432 -
+                               exactly PKG_FILE_HI << 16, the first size the
                                mount itself refuses. It must type 0 and reach
-                               the loader as `Bad package`.
+                               the loader as `Bad package`. The mount types by
+                               the entry's size before it reads a byte, and a
+                               32MB file fits no floppy, so tests/pkgbig/lie.py
+                               writes the size after the disk is verified.
 
 The pair is the experiment and neither file alone is one: BIGPKG passing on
 its own is also what a rule that types EVERYTHING as a package looks like,
@@ -65,10 +69,12 @@ APP_MAX_SIZE = 0xF000           # NOT the live ceiling: SPEC.md 20.1.1 raised
                                 # the old one and still test the same `jc` -
                                 # an image under the bound whose sum CARRIES
                                 # (0xE000 and 1, both below 0xFE00 too)
-PKG_FILE_HI = 16                # SPEC.md 3 - the mount's file bound, <1MB
+PKG_FILE_HI = 512               # SPEC.md 3 - the mount's file bound, <32MB
 
 BIG = 70144                     # 137 sectors: over 64KB, well under 1MB
-HUGE = PKG_FILE_HI << 16        # 1,048,576 - the first size the mount refuses
+HUGE = 1 << 20                  # 1,048,576 bytes ON the disk - and...
+HUGE_SAYS = PKG_FILE_HI << 16   # ...33,554,432 in its entry (lie.py), the
+                                #   first size the mount refuses
 FENCE = APP_MAX_SIZE            # 61,440 - image == file, so only bss decides
 
 

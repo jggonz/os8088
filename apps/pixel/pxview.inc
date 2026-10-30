@@ -876,6 +876,14 @@ px_cset:
     push bx
     push cx
     push dx
+    mov dx, [px_cur + PXR_MSEG]     ; px_crow's windows (pxrec.inc, MC7),
+    cmp dx, [px_mwc + MWT_KEY]      ; made of the shown master for the pass
+    je .mw                          ; (DX: AX, BX and CX are the pass's)
+    push bx
+    mov bx, px_mwc
+    call px_mwbuild
+    pop bx
+.mw:
     mov [px_cbv], bx
     add cx, 7
     shr cx, 1
@@ -919,14 +927,12 @@ px_crow:
     add ax, [px_cbint]
     adc dx, 0                       ; DX:AX = the first sample's offset
     mov si, ax
-    and si, 127                    ; normalised to 8 paragraphs (PX_WGRID)
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8                    ; a segment kern_mega can load
-    add ax, [px_cur + PXR_MSEG]
+    and si, 0x7FFF                  ; ...in its 32KB window (pxrec.inc;
+    shl ax, 1                       ; px_cset made the table current)
+    rcl dx, 1
+    mov bx, dx
+    shl bx, 1
+    mov ax, [px_mwc + MWT_WIN + bx]
     mov [px_crseg], ax
     pop ax                          ; BH = the row's tables: (y & 7) x 8
     and al, 7
@@ -1070,6 +1076,9 @@ px_crow:
     jne .d8
     pop ds
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; px_t565 - the RGB565 word of each of [px_pal]'s 256 entries at
 ; [px_vseg]:PX_VORGB (SPEC.md 106.27): (r >> 3) << 11 | (g >> 2) << 5 |

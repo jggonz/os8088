@@ -63,15 +63,22 @@ def pkg_map(defines=()):
         return out, open(os.path.join(d, "p.bin"), "rb").read()
 
 
-def kern_table():
-    """[(linear, name)] for every kernel label with a fixed segment"""
+def kern_table(m):
+    """[(linear, name)] for every kernel label with a fixed segment, where it
+    RUNS on `m`: a `.cold` row is moved down by `m.cold_slide()`, because on
+    a machine with neither a VGA nor an EGA (this tool's default CGA) kmain_o
+    slid `.cold` at boot and the map's address names the routine 0x7F0
+    bytes away (docs/plans/MOVABLE-COLD-PLAN.md 2). Build it after the boot."""
     off = os88sym.syms()
+    cold = os88sym.equates().get("COLD_SEG")
+    slide = m.cold_slide()
     out = []
     for n in off:
         try:
-            out.append((os88sym.segment_of(n) * 16 + off[n], n))
+            seg = os88sym.segment_of(n)
         except (RuntimeError, KeyError):
-            pass
+            continue
+        out.append((seg * 16 + off[n] - (slide if seg == cold else 0), n))
     out.sort()
     return out
 
@@ -189,7 +196,6 @@ def main():
     os.chdir(ROOT)
     syms, image = pkg_map(a.define)
     ptab = sorted((v, k) for k, v in syms.items())
-    ktab = kern_table()
     r = vid.Reader(a.v88)
     print("clip: %s, %d frames, %.3f fps, layout %d, %d bytes"
           % (a.v88, r.frames, r.rate / r.spf, r.g.layout,
@@ -230,6 +236,7 @@ def main():
             m = ui.m
             where = "B:/" + os.path.basename(a.v88).upper()
         try:
+            ktab = kern_table(m)        # after the boot: `.cold` may have slid
             w = ui.path(where)
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)

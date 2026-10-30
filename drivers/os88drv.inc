@@ -468,6 +468,14 @@ FSCAP_LOCAL  equ 1              ; my reads cost what a memcpy costs
 ; inverts your picture like any other (SPEC.md 26.9.9)
 FSCAP_ICON   equ 2              ; my volume draws its own desktop picture
 DRV_ICONV    equ 0x41           ; ...through my door, verb DRV_ICONV
+; ...and the THIRD (SPEC.md 62.9.2.4): set it when your FSV_READ, _WRITE,
+; _APPEND and _READAT do NO paragraph arithmetic on the buffer's DX - it is
+; loaded into a segment register as it is and only the offset walks - and
+; kern_mega hands you a buffer above 1MB as its pool selector instead of
+; splitting the call into 512-byte pieces through a low buffer. The pieces
+; are each a call of yours: on a wire, each is a round trip. No other kernel
+; reads it, a real-mode segment being anything you like to do arithmetic on
+FSCAP_SEL    equ 4              ; my transfer verbs take a selector as it is
 
 FSV_READAT   equ 12             ; ...and its read half
 FSV_DELETE   equ 14             ; SI = name
@@ -715,7 +723,9 @@ DRV_VER equ 11
 ; (CS + 8). Say it only of a driver that does no PARAGRAPH arithmetic on its
 ; own CS or DS (derive DS from CS by the pair rule, as SOUND.DRV's SBL_DSCS
 ; does), never hands its own segment to a BIOS call or a DMA engine, and has
-; no code a ROM runs in real mode. Its claims stay conventional. It is bit 7
+; no code a ROM runs in real mode. Its claims stay conventional - and are
+; selectors under protected mode all the same, as every claim is there
+; (KERN-MEGA-MEMORY-PLAN MC7): no driver does arithmetic on one. It is bit 7
 ; of +15, which every kernel masks or clamps to its own table length, so the
 ; bit is invisible to a kernel that does not place drivers high.
 ; OS88_DRV_HICLAIM - %define it as well to say that the driver's own claims

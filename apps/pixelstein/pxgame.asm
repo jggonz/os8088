@@ -546,11 +546,16 @@ px_hseg:
 .out:
     ret
 .sum:                               ; CF = 1, every register kept: the sum
-    mov dx, ds                      ; is right where we are
-    add ax, dx
-    test bl, 1
-    jz .out
+    test byte [px_cpuf], CPU_F_PM   ; is right where we are - except under
+    jnz .none                       ; kern_mega's protected mode, where SUBSEG
+    mov dx, ds                      ; refuses only with the LDT full and DS +
+    add ax, dx                      ; AX names ANOTHER descriptor: no part
+    test bl, 1                      ; then, which degrades as a refused one
+    jz .out                         ; (KERN-MEGA-MEMORY-PLAN MC7)
     OS88_CODESEL ax, byte [px_cpuf]
+    ret
+.none:
+    xor ax, ax
     ret
 
 ; px_hsegs - the words DERIVED from the handoff's segments: px_bseg (the

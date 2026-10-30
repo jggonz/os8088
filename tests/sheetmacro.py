@@ -56,8 +56,8 @@ WORK = "build/sheetmacro"               # this row's own paths (WRITING-TESTS 5.
 import os88build                                         # noqa: E402
 DISK = os88build.at("build/sheetmacro.img")        # the run's tree, so a soak lane finds it
 NAME = "MAC.SLK"
-MACRO = (435, 45)
-RUN = (MACRO[0] + 17, 57 + 12 + 2)      # Macro's SECOND item: 81.74's
+MACRO = SF.mega_y((435, 45), SF.SHEET_DY)    # (kern_mega's VGA: sheetfmt)
+RUN = SF.mega_y((MACRO[0] + 17, 57 + 12 + 2), SF.SHEET_DY)  # Macro's SECOND item: 81.74's
                                          # recorder put Record... above it
 COUNT = [
     'FOR(H1,1,5)',

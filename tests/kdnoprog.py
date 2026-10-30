@@ -123,6 +123,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default=MACHINE)
     a = ap.parse_args()
+    if os.environ.get("OS88_MEGA"):
+        # **kern_mega NEEDS NO FIXED DISK FOR THIS**: every program is a TRIP
+        # there (the kernel parked above 1MB, KERN-MEGA-PLAN 12.1 item 1), so
+        # the round trip this row exists for - post, kern_dos, refuse, come
+        # home - happens off the floppy, and A: is mega.img with no
+        # NOSUCH.COM on it. There is no arm to poke either: dos_mem_fix has
+        # promoted [dos_keepc] already
+        with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
+                         quick=True) as ui:
+            m = ui.m
+            if not ui.path("A:/APPS/DOS.O88"):
+                fail("double-clicking DOS.O88 on mega.img opened no window")
+            M.settle(m)
+            return refusal(m, os88mouse.Mouse(marty=m), "A:\\NOSUCH.COM",
+                           poke=False)
     fixture()
 
     m = M.launch(None, machine=a.machine, boot=False,
@@ -137,10 +152,16 @@ def main():
         if not ui.path("C:/DOS.O88"):
             fail("double-clicking DOS.O88 on the fixed disk opened no window")
         M.settle(m)
+        return refusal(m, mo, GONE)
+    finally:
+        m.close()
+
+
+def refusal(m, mo, gone, poke=True):
         dm = dosmap.package()
 
         def pb():
-            return dosmap.instance(m) << 4
+            return dosmap.lin(m, dosmap.instance(m))
 
         def rect(n):
             return [int.from_bytes(m.read(pb() + dm[n] + i * 2, 2), "little")
@@ -158,16 +179,17 @@ def main():
         # so this is a position out of the guest rather than a remembered one.
         mo.click(*ctr("dos_pln"))
         M.settle(m)
-        m.type_text(GONE)
+        m.type_text(gone)
         M.settle(m)
         got = m.read(pb() + dm["dos_path"], 24).split(b"\0")[0].decode("latin-1")
-        if got.upper() != GONE:
-            fail("the command box holds %r and %r was typed" % (got, GONE))
+        if got.upper() != gone:
+            fail("the command box holds %r and %r was typed" % (got, gone))
         # **THE ARM IS POKED AND THE RUN IS CLICKED.** Driving the radio is
         # tests/dosmem.py's subject and re-driving it here would make this row
         # fail for somebody else's defect; the RUN has to be a real press,
         # because the quiet door under test is on that path.
-        m.write(pb() + dm["dos_keepc"], bytes([1, 0]))
+        if poke:
+            m.write(pb() + dm["dos_keepc"], bytes([1, 0]))
         mo.click(*ctr("dos_rrect"))
 
         # --- 1: it comes back, and as a REFUSAL --------------------------
@@ -239,10 +261,9 @@ def main():
                  "%r. dos_con_ended's `.err` arm prints the path, then `: `, "
                  "then dos_err_line's sentence (SPEC.md 96.33.20)" % (said,))
         print("kdnoprog: ...and the console says %r" % (said[-1],))
-    finally:
-        m.close()
-    print("kdnoprog: ok - a name that opens nothing is a REFUSAL and says so")
-    return 0
+        print("kdnoprog: ok - a name that opens nothing is a REFUSAL and says "
+              "so")
+        return 0
 
 
 if __name__ == "__main__":

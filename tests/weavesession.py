@@ -76,6 +76,8 @@ MACHINES = [
     ("os8088_5150_cga_gla",  "cga",  640, 200),
     ("os8088_5150_herc_gla", "herc", 720, 348),
 ]
+if weavesmoke.MEGA:             # kern_mega's Bochs: a VGA and nothing else,
+    MACHINES = weavesmoke.MACHINES      # read through weavesmoke.vram
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +189,7 @@ def _meter_fill(m, card, S, slot, vidw, cells):
     """
     col, row, wcells = cells
     cx, cy, _, _ = _content(m, S, slot, vidw)
-    rows = m.vram(card)[2]              # vram answers (w, h, rows)
+    rows = weavesmoke.vram(m, card)[2]              # vram answers (w, h, rows)
     x0 = cx + col * 8 + 1                       # inside the frame
     x1 = cx + (col + wcells) * 8 - 2
     y0 = cy + row * 8 + 1
@@ -258,7 +260,7 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
                                         # KeyboardEvent.code, not ASCII
     m.type_text(NAME)
     os88marty.ui_done(m)
-    ink_typed = _lit(m.vram(card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
+    ink_typed = _lit(weavesmoke.vram(m, card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
 
     _press_button(m, mo, S, cx, cy, card, "Greet")
     _press_button(m, mo, S, cx, cy, card, "Greet")
@@ -303,7 +305,7 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
         os88marty.ui_done(m)
 
     # --- 3: the callback ran, so the card CHANGED again --------------------
-    ink_end = _lit(m.vram(card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
+    ink_end = _lit(weavesmoke.vram(m, card)[2], cx, cy, cx + cw - 1, cy + ch - 1)
     check(ink_end != ink_typed,
           "%s: the card moved after the alert was dismissed" % machine,
           "afterReset writes status.text, and it can only run as an onalert "
@@ -325,7 +327,7 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
           got="the BIOS tick did not move", want="a moving tick")
 
     if png_dir:
-        vw, vh, rows = m.vram(card)
+        vw, vh, rows = weavesmoke.vram(m, card)
         weavesmoke._shot(png_dir, machine, vw, vh, rows)
 
 

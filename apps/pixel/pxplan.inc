@@ -651,14 +651,18 @@ pl_htail:
     shr dx, 1
     rcr ax, 1
     loop .p
-    add ax, 7                       ; ...up to a multiple of 8: a segment on
-    and al, 0xF8                    ; kern_mega's grid (KERN-MEGA-PLAN 14.40)
-    add ax, [px_cur + PXR_MSEG]
-    mov es, ax
+    add ax, 7                       ; ...up to a multiple of 8 (the layout
+    and al, 0xF8                    ; KERN-MEGA-PLAN 14.40 made)
+    mov dx, [px_cur + PXR_MSEG]     ; a SEG_SUB there (MC7: the sum on a
+    PXSUB                           ; real-mode kernel)
+    mov es, dx
     pop dx
     pop cx
     pop ax
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pl_luma - AX = (77 R + 150 G + 29 B) >> 8 of DS:SI. Preserves all but AX
 pl_luma:
@@ -792,23 +796,20 @@ pl_hcount:
     jne .ab
     push bx
     mov bx, [px_win]
-    call OSAPI_TASK_ALIVE
+    call OSAPI_TASK_ALIVE           ; (where a real-mode move happens...)
     pop bx
+    call pl_htail                   ; ...so the tail is asked again here
 .r:
     push dx
-    mov ax, dx                      ; the row: (y w) of the master, re-read
-    mul word [px_cur + PXR_MW]      ; each row (the master moves)
-    mov di, ax
-    and di, 127                    ; normalised to 8 paragraphs (PX_WGRID)
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8                    ; a segment kern_mega can load
-    add ax, [px_cur + PXR_MSEG]
-    mov si, ax                      ; SI:DI = the row
-    call pl_htail                   ; ES = the tail
+    mov ax, dx                      ; the row: (y w) of the master, through
+    mul word [px_cur + PXR_MW]      ; its 32KB windows (pxrec.inc, MC7) -
+    mov di, ax                      ; current for the job (px_wjob, or the
+    and di, 0x7FFF                  ; UI's px_pcall), a real-mode move
+    shl ax, 1                       ; re-basing them (px_mreloc)
+    rcl dx, 1
+    mov si, dx
+    shl si, 1
+    mov si, [px_mwc + MWT_WIN + si] ; SI:DI = the row
     pop dx
     mov cx, [px_cur + PXR_MW]
     push ds

@@ -90,6 +90,20 @@ def main():
         m = ui.m
         dk = ui.open_drive("B")
         tm = ui._as_win(ui.path("A:/SYSTEM/TASKMGR.O88"))
+        if getattr(m, "bochs", False):
+            # kern_mega's glass is 640 wide (Bochs's VGA), and a 322-wide
+            # Disk window cannot sit beside a caption's middle on BOTH sides
+            # of it there (mid + 322 <= 640 and mid - 322 >= 0 meet nowhere).
+            # The Calculator (226 wide) is the covering window instead: the
+            # question is the caption's strip beside ANY window's corner
+            dk = ui._as_win(ui.path("B:/APPS/CALC.O88"))
+            for w in ui.windows():          # the Disk windows, out of
+                if w.visible and w.i not in (tm.i, dk.i):   # the strip's way
+                    ui.move_window(w, 8, 300)
+            tm = ui._as_win(tm.i)
+            if tm.x + tm.w // 2 + dk.w > 632:
+                ui.move_window(tm, max(dk.w + 8 - tm.w // 2, 8), tm.y)
+                tm = ui._as_win(tm.i)
         # Out of the way first, below the Task Manager's title bar, and raised:
         # the reference is the caption as an INACTIVE window draws it, which
         # is what it is once the Disk window covers it

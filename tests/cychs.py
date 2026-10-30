@@ -51,6 +51,12 @@ WANT = [(77777, b"QZX"), (12345, b"ABC"), (5000, b"---"), (4000, b"---"),
         (3000, b"---")]
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF's linear address; through the descriptor on kern_mega, where
+    a package's segment and its CS are LDT selectors (tests/megaport.txt)."""
+    return m.lin(seg, off) if hasattr(m, "lin") else (seg << 4) + off
+
+
 def table(p):
     """The five rows as (score, initials), out of the live cy_hstab."""
     s = p.m.read(p.addr("cy_hs"), NHS * 4)
@@ -64,7 +70,7 @@ def launch(ui, syms, image):
     w = ui.path("B:/GAMES/CYCLONE.O88")
     seg = u16(ui.m.read(os88geom.winptr(ui.m, w.i, ui.sym) + os88geom.W_SEG, 2))
     lo, n = syms["cy_entry"], 2048           # cycweb's guard: a knob build in
-    if bytes(ui.m.read(seg * 16 + lo, n)) != image[lo:lo + n]:  # build/ moves
+    if bytes(ui.m.read(lin(ui.m, seg, lo), n)) != image[lo:lo + n]:  # build/ moves
         raise SystemExit("cychs: the CYCLONE.O88 running here is not this "
                          "source - run `make` (a knob build in build/ is the "
                          "usual cause)")
@@ -128,7 +134,7 @@ def game(m, p, syms, score, initials, row):
     if not m.wait_stop(limit=60.0):
         raise SystemExit("cychs: Enter did not reach cy_hs_save")
     r = m.regs()
-    ret = p.seg * 16 + u16(m.read((r["ss"] << 4) + r["sp"], 2))
+    ret = p.base + u16(m.read(lin(m, r["ss"], r["sp"]), 2))
     # ...and od_write's FULL arm on the way, which says which of the two
     # writes this was: the in-place WRITE_AT falls into .full only on a
     # refusal, so a save that reaches it with a current stamp did not write
@@ -141,7 +147,7 @@ def game(m, p, syms, score, initials, row):
         if not m.wait_stop(limit=120.0):
             raise SystemExit("cychs: cy_hs_save never returned")
         r = m.regs()
-        if (r["cs"] << 4) + r["ip"] != full:
+        if lin(m, r["cs"], r["ip"]) != full:
             break
         tookfull = True
     cf = r["flags"] & 1

@@ -309,7 +309,7 @@ def leg_reboot(bad, after):
 
 def leg_locate(bad):
     """LOCATE: a sweep's answer is written back, and a warm disk is quiet."""
-    sysimg = scratch("sys", SYS)
+    sysimg = scratch("sys", os88marty.system_disk(SYS))
     src = os.path.join(ROOT, "build", "assocflush-%d.tex" % TAG)
     SCRATCH.append(src)
     with open(src, "wb") as f:

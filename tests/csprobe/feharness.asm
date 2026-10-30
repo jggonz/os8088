@@ -11,6 +11,8 @@ CPU_286  equ 1
 CPU_386  equ 2
 FERR_NOENT equ 4
 %define OSAPI_CPU_INFO h_cpuinfo
+SEG_WIN  equ 2                      ; apps/os88api.inc's verb number
+%define OSAPI_SEG h_seg             ; cs_win's window (MC7), near stub
 %define CS_LOADER                   ; csapply.inc's load and apply, RLAPPLY's
 h_ret:
     hlt
@@ -20,6 +22,11 @@ h_file:     times 64 db 0
 h_wlen:     dw 0
 h_cpuinfo:
     mov al, [h_tier]
+    ret
+; h_seg - OSAPI_SEG as every REAL-MODE kernel answers SEG_WIN: DX, the
+; physical paragraph, is already the segment over it. CF = 0, all kept
+h_seg:
+    clc
     ret
 od_read:                            ; ES:BX = buffer, CX = capacity
     mov ax, [h_flen]

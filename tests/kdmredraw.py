@@ -168,7 +168,14 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the gate disks" % p)
     arm_window()
-    arm_whole()
+    if os.environ.get("OS88_MEGA"):
+        # **kern_mega HAS ONE ARM** (KERN-MEGA-PLAN 12.1 item 1): the launch
+        # above WAS the whole machine, a kern_dos trip, so arm_whole would be
+        # the same run again behind a radio the page does not draw
+        print("kdmredraw: kern_mega - that run was the trip; there is no "
+              "second arm")
+    else:
+        arm_whole()
     print("kdmredraw: ok - BOTH arms agree with CuteMouse 1.9.1, and a hide "
           "leaves the program's own cell alone")
     return 0

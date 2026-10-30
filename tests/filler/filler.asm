@@ -71,7 +71,12 @@ fl_fill:
     mov bx, [fl_nheld]
     cmp bx, FL_HOLD
     jae .out
-    call OSAPI_MEM_AVAIL        ; AX = largest run KB
+    push bx                     ; OSAPI_MEM_AVAIL ANSWERS IN BX (total free
+    call OSAPI_MEM_AVAIL        ; KB): AX = largest run KB. Without the push
+    pop bx                      ; the index below was the free total - a
+                                ; stray word past the region on a real-mode
+                                ; kernel, a #GP on kern_mega (KERN-MEGA-PLAN
+                                ; 14.90)
     cmp ax, FL_LEAVE + 8
     jbe .out                    ; nothing worth taking
     sub ax, FL_LEAVE
@@ -148,7 +153,9 @@ fl_take:
     mov bx, [fl_nheld]
     cmp bx, FL_HOLD
     jae .out
-    call OSAPI_MEM_AVAIL        ; AX = largest run KB
+    push bx                     ; (BX is OSAPI_MEM_AVAIL's second answer:
+    call OSAPI_MEM_AVAIL        ; fl_fill's note)
+    pop bx
     or ax, ax
     jz .out
     call OSAPI_MEM_CLAIM

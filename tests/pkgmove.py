@@ -197,6 +197,19 @@ def main():
         m.run()
         os88marty.kernel_up(m)
         os88marty.no_saver(m)
+        mega = getattr(m, "bochs", False)
+
+        def lin(sg, off=0):
+            """SEG:OFF linear: an LDT selector's base on kern_mega."""
+            return m.lin(sg, off) if mega else sg * 16 + off
+
+        def key(c):
+            """The claim a WORD names, as mem_tab keys it: the word itself on
+            a real-mode kernel; on kern_mega (MC7.4) the word is a SELECTOR
+            that a move rebases and never changes, and mem_tab keeps the
+            PARAGRAPH under it - so the claim is the selector's base, and
+            "it moved" is that paragraph changing"""
+            return (m.lin(c) >> 4) if mega and c else c
         mo = os88mouse.Mouse(marty=m)
         first = walk(m, mo, a.first) if a.first else None
         if first is not None and a.tuck:   # a window as big as PiXEL's covers
@@ -226,17 +239,17 @@ def main():
                          dispcp.WIN_SIZE)
             return u16(rec, 22)
         for z in a.idle:               # the package's own "nothing running"
-            os88marty.until(m, lambda _: m.read(pseg() * 16 + addr(z), 1)[0]
+            os88marty.until(m, lambda _: m.read(lin(pseg(), addr(z)), 1)[0]
                             == 0, "%s = 0" % z, poll=0.3, limit=120)
         os88marty.quiesce(m, lambda: sorted(claims(m).items()), guest=2.0,
                           what="the package's claims")
         os88marty.ui_done(m)
 
         def words(seg):
-            return {w: u16(m.read(seg * 16 + addr(w), 2)) for w in a.word}
+            return {w: key(u16(m.read(lin(seg, addr(w)), 2))) for w in a.word}
 
         def stills(seg):
-            return {w: u16(m.read(seg * 16 + addr(w), 2)) for w in a.still}
+            return {w: key(u16(m.read(lin(seg, addr(w)), 2))) for w in a.still}
 
         seg0 = pseg()
         w0 = words(seg0)
@@ -336,11 +349,11 @@ def main():
                 S("inst_tab") + inst * os88geom.I_RECSZ + os88geom.I_TASK,
                 1)[0]
             parked = task != 0xFF and mm.read(S("sch_parked") + task, 1)[0]
-            busy = {z: mm.read(seg * 16 + addr(z), 1)[0] for z in a.busy}
+            busy = {z: mm.read(lin(seg, addr(z)), 1)[0] for z in a.busy}
             hd = claims(mm)
             st = {}
             for k in a.still:
-                c = u16(mm.read(seg * 16 + addr(k), 2))
+                c = key(u16(mm.read(lin(seg, addr(k)), 2)))
                 st[k] = (c, c in hd and not hd[c][1])
             return {"task": task, "parked": bool(parked), "busy": busy,
                     "st": st}
@@ -352,7 +365,7 @@ def main():
             s0 = stills(pseg())
             for z in a.busy:
                 print("  0 %s = %d as compaction %d is posted" % (
-                    z, m.read(pseg() * 16 + addr(z), 1)[0], attempt))
+                    z, m.read(lin(pseg(), addr(z)), 1)[0], attempt))
             with os88marty.bp_trace(m, "mem_compact.plan",
                                     on_hit=at_plan) as tr:
                 post()

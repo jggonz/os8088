@@ -185,6 +185,12 @@ def bss(path="apps/dotdel/dotdel.asm"):
     return {n: img + v for n, v in zip(names, vals)}
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF's linear address: seg << 4, or through the descriptor on
+    kern_mega, where a package's segments are LDT selectors"""
+    return m.lin(seg, off) if hasattr(m, "lin") else (seg << 4) + off
+
+
 class Probe(object):
     """The package's own state, read out of its segment."""
 
@@ -196,13 +202,16 @@ class Probe(object):
         self.seg = struct.unpack_from("<H", raw, w.i * G.WIN_SIZE + G.W_SEG)[0]
         if not self.seg:
             raise RuntimeError("no package segment for %r" % title)
+        # seg << 4 - or on kern_mega (Bochs) the base in the selector's LDT
+        # descriptor, read once (tests/megaport.txt)
+        self.base = lin(self.m, self.seg)
 
     def w(self, n, i=0):
-        a = (self.seg << 4) + self.names[n] + i * 2
+        a = self.base + self.names[n] + i * 2
         return struct.unpack("<H", bytes(self.m.read(a, 2)))[0]
 
     def b(self, n, i=0):
-        return bytes(self.m.read((self.seg << 4) + self.names[n] + i, 1))[0]
+        return bytes(self.m.read(self.base + self.names[n] + i, 1))[0]
 
 
 def screen(m):
@@ -305,7 +314,7 @@ def leg_f(tag, ui, p, say):
         pass                            # ...the forced frame below says so
     m.pause()
     for n, v in (("dd_paused", 1), ("dd_full", 1)):
-        m.write((seg << 4) + p.names[n], bytes([v]))
+        m.write(lin(m, seg) + p.names[n], bytes([v]))
     m.go()
     # dd_full is cleared by the frame that has just drawn the whole board
     os88marty.until(m, lambda _: p.b("dd_full") == 0,
@@ -313,7 +322,7 @@ def leg_f(tag, ui, p, say):
     m.pause()
     tw, th = p.w("dd_tw"), p.w("dd_th")
     bdx, bdy = p.w("dd_bdx"), p.w("dd_bdy")
-    grid = bytes(m.read((seg << 4) + p.names["dd_grid"], G_COLS * G_ROWS))
+    grid = bytes(m.read(lin(m, seg) + p.names["dd_grid"], G_COLS * G_ROWS))
     act = [(p.b("dd_ac", i), p.b("dd_ar", i)) for i in range(5)]
     w, h, d = screen(m)
     m.go()
@@ -345,7 +354,7 @@ def leg_f(tag, ui, p, say):
     else:
         say("%s: %d dots, every one in its own tile" % (tag, checked))
     m.pause()
-    m.write((seg << 4) + p.names["dd_paused"], bytes([0]))
+    m.write(lin(m, seg) + p.names["dd_paused"], bytes([0]))
     m.go()
     m.key("Escape")                     # ...and hand the attract screen back:
     try:                                # legs B and C both start from it
@@ -430,8 +439,8 @@ def leg_g(tag, ui, p, say):
     bdx, bdy = p.w("dd_bdx"), p.w("dd_bdy")
     sb, bdseg, mh = p.w("dd_sb"), p.w("dd_bdseg"), p.w("dd_mh")
     ovw, ovx, ovy = p.w("dd_ovw"), p.w("dd_ovx"), p.w("dd_ovy")
-    grid = bytes(m.read((p.seg << 4) + p.names["dd_grid"], G_COLS * G_ROWS))
-    pic = bytes(m.read(bdseg << 4, sb * mh))
+    grid = bytes(m.read(p.base + p.names["dd_grid"], G_COLS * G_ROWS))
+    pic = bytes(m.read(lin(m, bdseg), sb * mh))
     act = [(p.b("dd_ac", i), p.b("dd_ar", i)) for i in range(5)]
     w, h, d = screen(m)
     m.go()
@@ -521,7 +530,7 @@ def leg_h(tag, ui, p, say, frames=20, cap=5):
     tw, th = p.w("dd_tw"), p.w("dd_th")
     bdx, bdy = p.w("dd_bdx"), p.w("dd_bdy")
     sb, bdseg, mh = p.w("dd_sb"), p.w("dd_bdseg"), p.w("dd_mh")
-    pic = bytes(m.read(bdseg << 4, sb * mh))
+    pic = bytes(m.read(lin(m, bdseg), sb * mh))
     m.breakpoints([{"type": "execseg", "seg": p.seg,
                     "off": codeoff("dd_draw")}])
     wrong = {}
@@ -530,7 +539,7 @@ def leg_h(tag, ui, p, say, frames=20, cap=5):
         m.go()
         if not m.wait_stop(20.0):
             break
-        grid = bytes(m.read((p.seg << 4) + p.names["dd_grid"], G_COLS * G_ROWS))
+        grid = bytes(m.read(p.base + p.names["dd_grid"], G_COLS * G_ROWS))
         box = [(p.w("dd_ox", i), p.w("dd_oy", i)) for i in range(5)]
         w, h, d = screen(m)
         per = len(d) // (w * h)
@@ -585,7 +594,7 @@ def settle_playing(m, p, secs=20.0):
            < secs * os88marty.GUEST_BUDGET_RATIO):
         m.pause()
         st = p.b("dd_state")
-        m.write((p.seg << 4) + p.names["dd_lives"], bytes([99]))
+        m.write(p.base + p.names["dd_lives"], bytes([99]))
         m.go()
         if st == 2:                     # DDS_PLAY
             return True

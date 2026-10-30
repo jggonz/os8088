@@ -517,7 +517,7 @@ gr_frontpaint:
     mov dx, 03c4h
     mov ax, 0f02h
     out dx, ax
-    mov ax, 0a000h
+    mov ax, [gr_fsi+FSI_SEG]    ; the bracket's frame (a selector on kern_mega, MC7)
     mov es, ax
     xor di, di
     xor ax, ax
@@ -525,7 +525,7 @@ gr_frontpaint:
     rep stosw
     jmp short .text
 .cga:
-    mov ax, 0b800h
+    mov ax, [gr_fsi+FSI_SEG]    ; the bracket's frame (a selector on kern_mega, MC7)
     mov es, ax
     xor di, di
     xor ax, ax

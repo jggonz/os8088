@@ -34,6 +34,7 @@
 %include "x3xtk.inc"
 
 %include "x3gran.inc"
+%include "os88api.inc"              ; (OSAPI_SEG alone: x3x OPEN's XTGEN)
 
 ; ---- the granule record's fields (apps/xtmp3/x3gran.inc, SPEC.md 121.3)
 X3X_R_VER    equ X3G_VER
@@ -2378,20 +2379,26 @@ x3x_opentail:
     mov ax, [es:si + 4]
     mov [cs:x3x_segh2], ax
     ; XTGEN.BIN, 128-byte aligned in this image: its paragraph is this
-    ; part's own plus its offset. CS IS NOT ALWAYS THAT PARAGRAPH: under
-    ; kern_mega the part is far-called through its claim's LDT code alias
-    ; (op_cseg, OS88_CODESEL: (seg >> 2) | 4), whose segment is (CS & ~7)
-    ; << 2 (docs/BOCHS.md), and a part's claim is on the 512-byte grid, so a
-    ; real CS never has bit 2 set. The sum lands on the identity map's
-    ; 8-paragraph grid (KERN-MEGA-PLAN 3.1) because x3x_gen is 128-aligned
-    mov ax, cs
-    test al, 4
+    ; part's own plus its offset, ASKED (OSAPI_SEG's SEG_SUB: the sum on
+    ; every real-mode kernel). Under kern_mega CS is the part's CODE half,
+    ; op_cseg's, and every claim a selector (KERN-MEGA-MEMORY-PLAN MC7): the
+    ; DATA half is CS + 8, and a sum on either names some other descriptor.
+    ; A part's claim is on the 512-byte grid, so a real CS never has bit 2
+    ; set and a protected-mode one always does
+    push bx
+    push cx
+    mov dx, cs
+    test dl, 4
     jz .rmcs
-    and al, 0xF8
-    shl ax, 1
-    shl ax, 1
+    add dx, 8                       ; the pair's DATA half
 .rmcs:
-    add ax, strict word (x3x_gen - $$) / 16
+    mov ax, strict word (x3x_gen - $$) / 16
+    mov bl, SEG_SUB
+    xor cx, cx
+    call OSAPI_SEG                  ; DX = XTGEN's segment
+    pop cx
+    pop bx
+    xchg ax, dx
     mov [cs:x3x_gseg], ax
     mov es, ax
     call x3x_gencheck

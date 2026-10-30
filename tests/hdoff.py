@@ -45,6 +45,12 @@ def image(src="build/os8088-360.img"):
         _tmp.append(tempfile.mkdtemp(prefix="hdoff-"))
         atexit.register(shutil.rmtree, _tmp[0], True)
     src = src if os.path.isabs(src) else os.path.join(ROOT, src)
+    if os.environ.get("OS88_MEGA"):
+        # kern_mega's port (tests/megaport.txt): build/mega.img, its one
+        # system disk - a copy of os8088-360.img is kern_big under Bochs
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import os88marty
+        src = os88marty.system_disk(src)
     out = os.path.join(_tmp[0], os.path.basename(src))
     shutil.copyfile(src, out)
     cfg = os.path.join(_tmp[0], "SYSTEM.CFG")

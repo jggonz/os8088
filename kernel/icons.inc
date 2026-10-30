@@ -502,7 +502,7 @@ section .vga                    ; COLD-PLAN 2): VIDEXTM above is its door
 ico_core_v:
 %endif
 
-    mov ax, VGA_SEG
+    VSEG ax, VGA_SEG
     mov es, ax
 
     mov dx, 0x3CE               ; GC1: enable Set/Reset on all planes

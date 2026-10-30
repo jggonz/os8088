@@ -29,24 +29,24 @@
  * reads it and one translation unit wants every variable declared before its
  * first use. What is here is what is DONE with it. */
 
-/* lem_far_add - lem_far_seg/off advanced by `n`, renormalised (it was
- * ovl_far_add, and a frame now needs it every time it draws) */
+/* lem_far_add - lem_far_seg/off advanced by `n` (it was ovl_far_add, and a
+ * frame now needs it every time it draws). THE OFFSET MOVES AND THE SEGMENT
+ * DOES NOT: it used to renormalise, seg += off >> 4, which under kern_mega's
+ * protected mode names another descriptor (KERN-MEGA-MEMORY-PLAN MC7). It
+ * needs no renormalising anyway - every segment it is given is a claim or
+ * one of ovl_far's bank windows, each with the whole of what is reached from
+ * it inside its 64 KB (ovl_far's header) - so one add serves every kernel. */
 static void lem_far_add(unsigned n)
 {
-    unsigned o = lem_far_off + n;
-
-    lem_far_seg += o >> 4;
-    lem_far_off = o & 15;
+    lem_far_off += n;
 }
 
-/* lem_far_mul - ...by `n` times `per`, without a 32-bit product: the step is
- * taken `n` times, and n is a frame number (at most 37 in the five sets). */
+/* lem_far_mul - ...by `n` times `per`. n is a frame number (at most 37 in the
+ * five sets) and the run ends inside the same 64 KB, so the 16-bit product is
+ * exact; it used to take the step `n` times, which renormalising needed */
 static void lem_far_mul(unsigned n, unsigned per)
 {
-    while (n > 0) {
-        lem_far_add(per);
-        n--;
-    }
+    lem_far_off += n * per;
 }
 
 /* lem_anim_at - frame `f` of the action's animation for lemming p, into

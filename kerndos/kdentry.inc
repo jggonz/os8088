@@ -327,6 +327,9 @@ kd_entry:
     call kd_mou_start
     mov word [dos_hkv + DHK_MOUSE], kd_mou_read
     mov word [dos_hkv + DHK_TXT],  kd_mou_txt
+    mov word [dos_hkv + DHK_TSET], kd_tset   ; AH=2Dh's step (KERN-MEGA-PLAN
+                                ; 14.114): nothing here restores 0040:006C, so
+                                ; the handover count moves with it
                                 ; **THE CURSOR IS THIS HOST'S AND ONLY THIS
                                 ; HOST'S** (SPEC.md 96.10.5.1). A DOS mouse
                                 ; driver draws its own pointer and nothing
@@ -343,6 +346,14 @@ kd_entry:
                                 ; Only this host fills it; the low image (A20
                                 ; shut) and DOS.O88 leave it zero
 %endif
+%ifdef KD_MEGA
+    mov word [dos_hkv + DHK_SNAP], kd_snap   ; **AND THE PROGRAM'S LAST
+                                ; SCREEN** (KERN-MEGA-PLAN 14.106): DOS.O88's
+                                ; own dos_snap cannot reach its console from a
+                                ; trip, so this host writes it - through the
+                                ; linear the kernel staged, by int 15h AH=87h.
+                                ; Both kern_mega images, HMA and low
+%endif
 %ifndef KD_NO_KBGUARD
     call kd_kbd_start           ; ...and the key buffer's guard, BEFORE the
                                 ; bank for the same reason (SPEC.md 96.50)
@@ -351,6 +362,10 @@ kd_entry:
     call kdx_init               ; ...and kern_mega's XMS arena with its int
                                 ; 15h filter, BEFORE the bank for the same
                                 ; reason again (SPEC.md 96.15.4)
+    call kd_snseed              ; ...and DOS.O88's console onto the program's
+                                ; screen, `Starting` and the cursor under it
+                                ; (96.34.4 on a trip, KERN-MEGA-PLAN 14.106):
+                                ; kdx_87 is ready now, and nothing has drawn
 %ifndef KD_HMA
     call kd_a20shut             ; ...and the LOW image's A20, SHUT for the
                                 ; program (SPEC.md 96.40.9.2): kern_mega left
@@ -1082,6 +1097,20 @@ section .text
 ; here so the call need not be far - is WRONG, because near or far is a
 ; property of the BODY and not of the distance: `dkf_dsk_vol_fixed` ends in
 ; `retf` whatever segment it is in. kdback.inc's header has the rest of it.
+; --- kd_tset - DHK_TSET: a DOS program set the time (KERN-MEGA-PLAN 14.114) --
+; in:  DX:AX = the new tick count less the old, signed; clobbers BX
+;
+; The way home measures the program's run as 0040:006C less the count the
+; launch block banked at the handover (KDL_TICK, SPEC.md 96.49.5), and AH=2Dh
+; writes 0040:006C. Moving the banked count by the same step keeps the
+; difference the run: a clock set BACK made it negative, which the wake reads
+; as a midnight crossed - the session came home a day on.
+kd_tset:
+    mov bx, [kd_lbp]
+    add [bx + KDL_TICK], ax
+    adc [bx + KDL_TICK + 2], dx
+    ret
+
 section .text
 dsk_vol_fixed:
     call COLD_SEG:dkf_dsk_vol_fixed

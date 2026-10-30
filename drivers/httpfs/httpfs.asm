@@ -33,12 +33,15 @@
     OS88_DRIVER 'HTTP Drive', DRVC_HTTP, hf_entry
 
 ; -----------------------------------------------------------------------------
-; The service table (SPEC.md 51.2). DSV_CAPS is 0: not FSCAP_LOCAL - a read
-; is a round trip on a wire - so the mount takes the cache-only icon pass,
-; and not FSCAP_ICON, so the zone wears the kernel's own drive picture.
+; The service table (SPEC.md 51.2). DSV_CAPS is FSCAP_SEL alone: hf_bnorm
+; folds no selector, so kern_mega hands a buffer above 1MB over as it is
+; rather than one READAT - one GET - a sector (SPEC.md 62.9.2.4). Not
+; FSCAP_LOCAL - a read is a round trip on a wire - so the mount takes the
+; cache-only icon pass, and not FSCAP_ICON, so the zone wears the kernel's
+; own drive picture.
 ; -----------------------------------------------------------------------------
 hf_svc:
-    dw 0                        ; DSV_CAPS
+    dw FSCAP_SEL                ; DSV_CAPS
     dw 0                        ; DSV_FM
     dw 0                        ; DSV_STREAM
     dw 0                        ; DSV_TICK

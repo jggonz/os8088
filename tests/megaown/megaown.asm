@@ -13,7 +13,8 @@
 ;
 ; MEGAOWN (OS88_HIGH | OS88_HIGHMEM too) waits fifteen seconds and then, in
 ; a wake handler, does MEGACP's four steps: 60KB claims until the pool takes
-; no more (the first ones fill the hole under its region), every other one
+; no more (the first ones fill the hole next to its region - ABOVE it since
+; KERN-MEGA-MEMORY-PLAN MC3 takes every claim from the top), every other one
 ; freed, a 64KB claim only a compaction can place, every survivor's stamps
 ; read back. Around them it walks the pool (OSAPI_XMEM_WALK) for the blocks
 ; owned 80h | slot - package regions above 1MB, and its own is the only one

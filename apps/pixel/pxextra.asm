@@ -2776,5 +2776,8 @@ mc_off:     dw 0                    ; MacPaint: where the PackBits start
 ex_lzw:     times LZW_BSSSZ db 0    ; the LZW's state (os88lzw.inc)
 
 %include "pxplan.inc"                ; the plans: shared source (106.20)
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the table below keeps
+                                    ; its even shift)
 
 ex_table:   times EX_TABLE db 0     ; THE TABLE: TIFF's strips, ICO's mask

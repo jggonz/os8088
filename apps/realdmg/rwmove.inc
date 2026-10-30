@@ -41,9 +41,11 @@ rw_mtab:        dw rw_pseg, rdg_dmgseg, rw_jitseg, rw_jit2seg, rw_romseg
                 dw rw_slotseg, rw_ramseg, rw_prfseg, rw_logseg, rw_rpseg
                 dw 0
 %ifdef PKG_MEGA
-rw_jitx:        times RT_XMAX dw 0  ; the arm's extra cache tiers, or 0: the
-rw_jitxk:       db 0                ;   second segment's claim past its first
-%endif                              ;   64KB, [rw_jitxk] of them (16.2.5)
+rw_jitx:        times RT_XMAX dw 0  ; the arm's extra cache tiers' data
+rw_jitxk:       db 0                ;   halves, or 0, [rw_jitxk] of them:
+                                    ;   SEG_SUBC pairs in one pool block
+                                    ;   (rw_jitxget, REALDMG-SPEC 16.2.6)
+%endif
 
 ; rw_mpin - every claim of ours PINNED (OSAPI_MEM_MOVABLE AX = 0): around a
 ; call that can claim while one of their segments is in a register - a file
@@ -113,6 +115,37 @@ rw_mdecl:
     popf
     ret
 
+; rw_mlent - rw_mreloc's, the slots moving: BX = where they were, AX = the
+; move, CX = the slots lent or not. A side buffer cut from a lent slot
+; (rwbank.inc's rw_lend, REALDMG-SPEC 10.3.3) moves with them - a replay's
+; buttons, the log's records; the log's text is only ever held pinned
+; (rw_logwrite). Keeps every register
+rw_mlent:
+    cmp byte [rw_loans], 0
+    je .r
+    push cx
+    push dx
+    mov ch, cl                      ; CX = the claim's paragraphs
+    xor cl, cl
+    shl cx, 1
+    shl cx, 1
+    mov dx, [rw_rpseg]
+    sub dx, bx
+    cmp dx, cx
+    jae .lg
+    add [rw_rpseg], ax
+.lg:
+    mov dx, [rw_logseg]
+    sub dx, bx
+    cmp dx, cx
+    jae .x
+    add [rw_logseg], ax
+.x:
+    pop dx
+    pop cx
+.r:
+    ret
+
 ; rw_mreloc - A CLAIM OF OURS MOVED (SPEC.md 66.2): BX = where it was, DX =
 ; where it is, DS = CS = ours, ES = KERNEL_SEG. Every word that names it, and
 ; every one derived from it, put right; may clobber AX-DI and ES. It runs in
@@ -161,7 +194,10 @@ rw_mreloc:
     cmp bx, [rw_slotseg]            ; ...or the bank cache's slots
     jne .n6
     mov [rw_slotseg], dx
-    mov cx, [rw_nslot]
+    mov cx, [rw_nslot]              ; (and the lent ones, whose side
+    add cl, [rw_slotlent]           ;   buffers move with them: 10.3.3)
+    adc ch, 0
+    call rw_mlent
 .bank:
     mov ch, cl                      ; x 400h
     xor cl, cl
@@ -180,7 +216,9 @@ rw_mreloc:
     inc si
     cmp si, RDG_BTAB + 512 * 2
     jb .b
-    mov di, [es:S_ROMX]             ; ...the bank switched in now
+    mov di, [es:S_ROMX]             ; ...the bank switched in now - none
+    or di, di                       ;   when it was switched to lazily
+    jz .bx                          ;   (REALDMG-SPEC 10.3.2)
     add di, 400h
     sub di, bx
     cmp di, cx
@@ -207,12 +245,10 @@ rw_mreloc:
     je rw_mjit
     ret
 .n7:
-    cmp bx, [rw_jit2seg]            ; ...and its second 64KB, with the arm's
-    jne .r                          ;   extra tiers in the same claim (16.2.5)
-    mov [rw_jit2seg], dx
-%ifdef PKG_MEGA
-    call rw_jitxset
-%endif
+    cmp bx, [rw_jit2seg]            ; ...and its second 64KB (the arm's
+    jne .r                          ;   extra tiers are a pool block's now,
+    mov [rw_jit2seg], dx            ;   rebased and not ours to put right,
+                                    ;   16.2.6)
     cmp [es:S_JITSEGB], bx
     jne .r
     ; on into rw_mjit

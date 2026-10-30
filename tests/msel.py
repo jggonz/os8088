@@ -122,6 +122,9 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
                  apps=os.path.join(BUILD, "apps360.img"), quick=True) as ui:
     m = ui.m
     S = ui._S
+    # a guest segment's linear base: under kern_mega (os88megabochs) the
+    # listing's segment is an LDT selector
+    lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)
     w = ui.path("B:/APPS")
     ui.still()
     blk = ui._fsblk(w)
@@ -193,8 +196,8 @@ with os88ui.boot(os.path.join(BUILD, "os8088-360.img"),
     sizes = []
     for i, (nm, ty) in enumerate(rows[:fit]):
         if ty in (0, 1):
-            sz = int.from_bytes(m.read((vseg << 4) + i * geom.DSK_DE_STRIDE
-                                       + 20, 4), "little")
+            sz = int.from_bytes(m.read(lin(vseg, i * geom.DSK_DE_STRIDE
+                                           + 20), 4), "little")
             sizes.append((sz, i, nm))
     sizes.sort()
     (_s1, i1, n1), (_s2, i2, n2) = sizes[0], sizes[1]

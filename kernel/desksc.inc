@@ -1882,18 +1882,40 @@ ovl_sc_load:
 ; the BIOS's own shift byte at that instruction, after the whole boot, so a
 ; key held through the loading screen is a key held here; and only at a link,
 ; so a folder with nothing in it says nothing whatever is held.
+;
+; ON kern_mega IT RUNS AFTER mega_enter, from `.cold` (KERN-MEGA-MEMORY-PLAN
+; MC8, KERN-MEGA-PLAN 14.69). Walked from the blob it ran in REAL mode, so
+; every package it started was loaded into conventional memory whatever its
+; header said - an autostarted CDRack at 9640h, the same package started by
+; hand at 140000h - and one with a worker made mega_tasks_ok refuse protected
+; mode for the whole session. kmain calls it last, after the switch (or the
+; refusal), so a link opens exactly as a double-click would.
+;
+; SO THE WALK IS ONE BODY ASSEMBLED TWICE: `as_boot` in the blob for every
+; other kernel, `as_bootc` in `.cold` for kern_mega - and it is written in the
+; idioms both allow. It holds NO DATA (`.cold` may not, SPEC.md 2.6 rule 1:
+; the folder's name and the toast are built by immediate stores) and NO CS
+; idiom (`.cold` is code there, rule 2): the find's answer is a frame on the
+; STACK, popped as soon as its name is copied out - so it is gone again
+; before the open, which is what the 320 bytes of LNK_SPMIN are for.
 ; =============================================================================
-section .boot2
-
-as_boot:
+%macro AS_WALK 0
     xor bx, bx
     call .go                    ; the boot volume's ROOT
     jc .out
+%ifdef KERN_MEGA
+    mov word [assoc_doc], 'AU'  ; the folder's name, into the locator (a name
+    mov word [assoc_doc+2], 'TO' ; dskw_stat reads goes through DS): stored,
+    mov word [assoc_doc+4], 'ST' ; since `.cold` holds no string to copy
+    mov word [assoc_doc+6], 'RT'
+    mov byte [assoc_doc+8], 0
+%else
     push cs
     pop es
     mov si, as_s_dir            ; a name dskw_stat reads goes through DS, so
     mov cx, as_s_dirn           ; the blob's own is staged
     call .cp
+%endif
     mov si, assoc_doc
     call COLD_SEG:dwf_dskw_stat ; AL = its attribute, BX = its first cluster
     jc .out
@@ -1906,6 +1928,22 @@ as_boot:
     mov bx, dx                  ; stand there again: the open before this one
     call .go                    ; went wherever its link pointed
     jc .root
+%ifdef KERN_MEGA
+    sub sp, DSK_FIND_SZ         ; ES:DI = the answer's room: a frame on the
+    mov di, sp                  ; stack, popped as soon as the name is out -
+    push ss                     ; before anything opens, which is what the
+    pop es                      ; 320 bytes of LNK_SPMIN are for
+    xor al, al                  ; no hidden or system entries
+    call COLD_SEG:dsk_find_x    ; CX = the next ordinal; CF = the end
+    jc .endf
+    mov si, di                  ; its 8.3 name, NUL, into the document locator
+    push cx                     ; every open reads (SPEC.md 21.5)
+    mov cx, 13
+    call .cp
+    pop cx
+    add sp, DSK_FIND_SZ
+    push cx
+%else
     push cs                     ; ES:DI = the answer's room, in the blob and
     pop es                      ; not on task 0's stack: a link that names a
     mov di, as_find             ; link is followed only while 320 bytes of it
@@ -1917,6 +1955,7 @@ as_boot:
     mov si, di                  ; its 8.3 name, NUL, into the document locator
     mov cx, 13                  ; every open reads (SPEC.md 21.5)
     call .cp
+%endif
     mov bp, lnk_is
     call COLD_SEG:wm_cbd        ; ZF = 1: a .LNK - anything else there is
     jne .nl                     ; not started
@@ -1932,11 +1971,41 @@ as_boot:
     jmp short .next
 .skip:
     pop cx
+%ifdef KERN_MEGA
+    mov ax, 'd'                 ; 'Autostart skipped', NUL: 18 bytes pushed
+    push ax                     ; last word first, so they read forwards from
+    mov ax, 'pe'                ; SP - COPIED by the toast, so a frame is as
+    push ax                     ; good a home as the blob's string was
+    mov ax, 'ip'
+    push ax
+    mov ax, 'sk'
+    push ax
+    mov ax, 't '
+    push ax
+    mov ax, 'ar'
+    push ax
+    mov ax, 'st'
+    push ax
+    mov ax, 'to'
+    push ax
+    mov ax, 'Au'
+    push ax
+    mov si, sp
+    push ss
+    pop es
+    xor cx, cx
+    call KERNEL_SEG:cw_toast_show
+    add sp, 18
+    jmp short .root
+.endf:
+    add sp, DSK_FIND_SZ         ; (the end of the folder: the frame back)
+%else
     push cs
     pop es
     mov si, as_s_skip
     xor cx, cx
     call KERNEL_SEG:cw_toast_show   ; COPIED, so a blob string outlives it
+%endif
 .root:
     xor bx, bx                  ; ...and the boot volume's root again, where
     call .go                    ; the boot left it
@@ -1955,11 +2024,34 @@ as_boot:
     inc di
     loop .c
     ret
+%endmacro
+
+%ifndef KERN_MEGA
+section .boot2
+as_boot:                        ; (BLOBCALL from kmain_o)
+    AS_WALK
 
 as_s_dir:   db 'AUTOSTRT', 0
 as_s_dirn   equ $ - as_s_dir
 as_s_skip:  db 'Autostart skipped', 0
 as_find:    times DSK_FIND_SZ db 0
+%else
+section .cold
+as_bootc:                       ; (call COLD_SEG: from kmain, after mega_enter)
+    AS_WALK
+
+; stik_bootf - stik_boot, FAR, for kern_mega's kmain AFTER mega_enter
+; (KERN-MEGA-PLAN 14.78). In drv_notice_x it ran in REAL mode, so a widget
+; bound DESK.DRV's library by a real PARAGRAPH (os88stikc.inc's stik_load
+; writes OSAPI_WM_DESK's DX into every far pointer of its own block) that
+; the switch never translates - the first thunk called after it far-jumped
+; to a paragraph that is no selector, and the package was closed for a #GP.
+; Launched here, it binds in the mode it runs in, as AUTOSTART does (MC8),
+; and no widget's worker can make mega_enter decline either.
+stik_bootf:
+    call stik_boot
+    retf
+%endif
 
 section .modc                   ; ...and the image's own scratch, IN the
 sc_mz       db 0                ; image: a module may write its own bytes

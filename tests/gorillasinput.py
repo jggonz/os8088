@@ -17,6 +17,13 @@ import time
 import gorillas as G
 
 
+
+def _lin(m, seg, off=0):
+    """SEG:OFF's linear address - on kern_mega (tests/megaport.txt) every
+    package segment, CS and SS included, is a SELECTOR: m.lin reads it."""
+    f = getattr(m, "lin", None)
+    return f(seg, off) if f else (seg << 4) + off
+
 def code_offsets(extra=()):
     source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
     names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_velocity',
@@ -52,7 +59,7 @@ def check_hud(m, p, code):
             'flight sky contains text or an incorrect banana'
         return
     first = p.b('fontfirst')
-    font = m.read((p.w('fontseg') << 4) + p.w('fontoff'), (127-first)*8)
+    font = m.read(_lin(m, p.w('fontseg'), p.w('fontoff')), (127-first)*8)
     expected = bytearray(24*128)
     prompt = ('gr_pausemsg' if p.b('paused') else
               {0: 'gr_prompt', 2: 'gr_roundmsg', 3: 'gr_matchmsg'}[p.b('state')])
@@ -120,8 +127,8 @@ def check_repaint(m, p, code, tag):
         m.setreg(reg, saved[reg])
     sp = (saved['sp'] - 2) & 65535
     m.setreg('sp', sp)
-    m.write((saved['ss'] << 4) + sp, struct.pack('<H', saved['ip']))
-    m.bp_exec((saved['cs'] << 4) + saved['ip'])
+    m.write(_lin(m, saved['ss'], sp), struct.pack('<H', saved['ip']))
+    m.bp_exec(_lin(m, saved['cs'], saved['ip']))
     m.run()
     assert m.wait_stop(30) == 'breakpoint', 'full repaint never returned'
     after = video_bytes(m, tag)
@@ -147,7 +154,7 @@ def measure(m, p, code, name, tag, repaint):
     r = m.regs()
     ret = struct.unpack('<H', m.readseg(r['ss'], r['sp'], 2))[0]
     start = m.status()['cycles']
-    m.bp_exec((r['cs'] << 4) + ret)
+    m.bp_exec(_lin(m, r['cs'], ret))
     m.run()
     assert m.wait_stop(30) == 'breakpoint', 'key handler never returned'
     cycles = m.status()['cycles'] - start
@@ -173,7 +180,7 @@ def flight_hud(m, p, code, tag, repaint):
         assert m.wait_stop(30) == 'breakpoint', 'flight tick never entered'
         r = m.regs()
         ret = struct.unpack('<H', m.readseg(r['ss'], r['sp'], 2))[0]
-        m.bp_exec((r['cs'] << 4) + ret)
+        m.bp_exec(_lin(m, r['cs'], ret))
         m.run()
         assert m.wait_stop(30) == 'breakpoint', 'flight tick never returned'
         assert p.b('state') == 1, 'shot ended before reaching the text rows'
@@ -211,7 +218,7 @@ def queued_input(m, p, code):
             start = m.status()['cycles']
     r = m.regs()
     ret = struct.unpack('<H', m.readseg(r['ss'], r['sp'], 2))[0]
-    m.bp_exec((r['cs'] << 4) + ret)
+    m.bp_exec(_lin(m, r['cs'], ret))
     m.run()
     assert m.wait_stop(30) == 'breakpoint'
     ms = (m.status()['cycles'] - start)/G.M.GUEST_HZ*1000

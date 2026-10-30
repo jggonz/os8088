@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FTPD: the FTP server, driven by a real FTP client (SPEC.md 77).
+r"""FTPD: the FTP server, driven by a real FTP client (SPEC.md 77).
 
     make && make ftpdtest && python3 tests/ftpd.py
 
@@ -126,6 +126,7 @@ import os88layout                                           # noqa: E402
 import os88geom                                             # noqa: E402
 import os88qemu                                              # noqa: E402
 import os88build                                       # noqa: E402
+import gftp                                            # noqa: E402
 import os88fixture                                     # noqa: E402
 
 S = os88sym.linear
@@ -220,9 +221,25 @@ def main():
     # is what makes a click land (its own header says so).
     m = Qemu(SOCK)
     mo = eth.Mouse()
+    # EVERY ftplib TIMEOUT BELOW IS GUEST SECONDS from here (tests/gftp.py).
+    # They were host seconds: `connect(..., timeout=30)` put 30 of the HOST's
+    # seconds on every reply, a budget a starved guest buys less of. (The
+    # 8b timeout the full soak of 2026-10-27 hit was NOT that: the guest's
+    # clock ran all 30 seconds and the server had dropped the STOR without a
+    # reply - SPEC.md 77.53, fixed in the package. This keeps the row's
+    # budgets on the guest's terms, so the next silence it reports is the
+    # server's.)
+    gftp.install(m)
 
     try:
-        run_gate(m, mo, fails)
+        try:
+            run_gate(m, mo, fails)
+        except Exception:
+            # a raise ends the gate - say what had ALREADY failed first, or
+            # the traceback is the only line and the first cause is lost
+            for f in fails:
+                say("FAIL (before the exception) " + f)
+            raise
         if a.kfz:
             stack_water(m)
         if a.shot:
@@ -1514,7 +1531,7 @@ def setup(m, mo, fields=(), machine=None, readonly=None, use_menu=False):
         # which would otherwise give `/NOSUCHB:\DEEP`. End, then enough
         # Backspaces for anything this file types.
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey end"]
-                       + ["sendkey backspace", "sleep 0.05"] * 24,
+                       + ["sendkey backspace", "gsleep 0.05"] * 24,
                        check=True, capture_output=True)
         gpace(0.3)
         type_text(text)
@@ -1613,7 +1630,7 @@ def type_text(text):
             cmds += ["sendkey " + QCHR[ch]]
         else:
             sys.exit("ftpd: no sendkey mapping for %r" % ch)
-        cmds += ["sleep 0.08"]
+        cmds += ["gsleep 0.08"]           # GUEST seconds (tools/qmp.py)
     subprocess.run(["python3", "tools/qmp.py", SOCK] + cmds,
                    check=True, capture_output=True)
 

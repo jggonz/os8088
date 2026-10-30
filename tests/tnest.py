@@ -73,8 +73,17 @@ def main():
     with os88ui.boot("build/os8088-360.img",
                      apps="build/apps360.img") as ui:
         m = ui.m
+        # KERN_MEGA UNDER BOCHS (tests/megaport.txt): `.cold` runs under
+        # COLD_SEG, a GDT selector whose base is its copy ABOVE 1MB (m.lin
+        # reads the descriptor); the kernel's DATA is MEGA_SEL_KDATA, 0010,
+        # since KERNEL_SEG's own selector is its read-only code; and the two
+        # fake images are identity GDT entries, since a PM DS must be one
+        bochs = getattr(m, "bochs", False)
+        DSEG = 0x10 if bochs else KSEG
+        flat = m.lin if bochs else (lambda s_, o: s_ * 16 + o)
         # (where `.cold` RUNS - [api_coldseg], not COLD_SEG: on a machine with no VGA and no EGA it slid down at boot, docs/plans/MOVABLE-COLD-PLAN.md 2)
-        cold = int.from_bytes(m.read(lin("api_coldseg"), 2), "little")
+        if not bochs:
+            cold = int.from_bytes(m.read(lin("api_coldseg"), 2), "little")
 
         def w16(name, i=0):
             b = m.read(lin(name) + i, 2)
@@ -109,10 +118,10 @@ def main():
             m.cmd(cmd="park", cs=cold, ip=S[routine])   # (os88marty's own
             for r, v in (("ss", ss),                    # stub idiom: setreg
                                                         # cannot move IP)
-                         ("sp", scratch_sp), ("ds", ds), ("es", KSEG),
+                         ("sp", scratch_sp), ("ds", ds), ("es", DSEG),
                          ("bx", bx), ("flags", saved["flags"] & ~1)):
                 m.setreg(r, v)
-            m.bp_exec(cold * 16 + ret)
+            m.bp_exec(flat(cold, ret))
             m.go()
             st = m.wait_stop(20)
             m.bp_exec()
@@ -122,7 +131,8 @@ def main():
                                    % (routine, st, rg))
             return rg["flags"] & 1
 
-        T, X = 3, 0x5A00                # a worker slot, a fake image
+        T, X = 3, (0x0FF0 if bochs else 0x5A00)     # a worker slot, a fake
+                                                    # image
         kseg = KSEG
 
         def far_call(routine, bx):
@@ -130,11 +140,11 @@ def main():
             m.write((ss << 4) + scratch_sp,
                     bytes([ret & 0xFF, ret >> 8, cold & 0xFF, cold >> 8]))
             m.cmd(cmd="park", cs=kseg, ip=S[routine])
-            for r, v in (("ss", ss), ("sp", scratch_sp), ("ds", kseg),
-                         ("es", kseg), ("bx", bx),
+            for r, v in (("ss", ss), ("sp", scratch_sp), ("ds", DSEG),
+                         ("es", DSEG), ("bx", bx),
                          ("flags", saved["flags"] & ~1)):
                 m.setreg(r, v)
-            m.bp_exec(cold * 16 + ret)
+            m.bp_exec(flat(cold, ret))
             m.go()
             m.wait_stop(20)
             m.bp_exec()
@@ -153,35 +163,35 @@ def main():
                   and m.read(lin("wm_pkgs"), 16) == stack0,
                   "1. a worker's push is counted, and the stack is untouched",
                   (b8("wm_tcnt"), b8("wm_pkgd"), pkgd0))
-            check(call("mem_in_nest", KSEG, 0x6B00) == 1,
+            check(call("mem_in_nest", DSEG, 0x6B00) == 1,
                   "2. while it stands, mem_in_nest pins any image")
             check(far_call("inst_seg_parked", 0x6B00) == 1,
                   "3. ...and a driver's claims")
             call("wm_nest_pushd", X)
             two = b8("wm_tcnt")
-            call("wm_nest_pop", KSEG)
-            call("wm_nest_pop", KSEG)
+            call("wm_nest_pop", DSEG)
+            call("wm_nest_pop", DSEG)
             check(two == 2 and b8("wm_tcnt") == 0,
                   "4. a nested push counts twice, and both pops undo it",
                   (two, b8("wm_tcnt")))
             m.write(lin("sch_cur"), bytes([0]))
-            check(call("mem_in_nest", KSEG, 0x6B00) == 0
+            check(call("mem_in_nest", DSEG, 0x6B00) == 0
                   and far_call("inst_seg_parked", 0x6B00) == 0,
                   "5. at zero both answer movable again")
             call("wm_nest_pushd", X)
             ui_ok = (b8("wm_pkgd") == pkgd0 + 1 and b8("wm_tcnt") == 0)
-            call("wm_nest_pop", KSEG)
+            call("wm_nest_pop", DSEG)
             check(ui_ok and b8("wm_pkgd") == pkgd0,
                   "6. the UI task still uses the stack")
             m.write(lin("sch_cur"), bytes([T]))
             call("wm_nest_pushd", X)            # a worker inside an image...
             m.write(lin("sch_cur"), bytes([0]))
-            Y = 0x5B00
+            Y = 0x0FE8 if bochs else 0x5B00
             call("wm_nest_pushd", Y)            # ...while the UI task enters
             at = w16("wm_pkgs", 2 * pkgd0)      # another: still RECORDED
-            call("wm_nest_pop", KSEG)
+            call("wm_nest_pop", DSEG)
             m.write(lin("sch_cur"), bytes([T]))
-            call("wm_nest_pop", KSEG)
+            call("wm_nest_pop", DSEG)
             m.write(lin("sch_cur"), bytes([0]))
             check(pkgd0 >= 8 or (at == Y and b8("wm_pkgd") == pkgd0
                                  and b8("wm_tcnt") == 0),

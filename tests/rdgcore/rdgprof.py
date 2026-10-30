@@ -40,8 +40,9 @@ HASHLEN = 0x10000                       # (its 64KB block table, 16.3)
 CACHE2 = 0x70000                        # ...and CACHE2_SEG
 
 
-def labels(lst, section=None):
-    """(offset, name) of every global label in a nasm listing - a label line
+def labels(lst, section=None, local=False):
+    """(offset, name) of every global label in a nasm listing (and with
+    `local`, every `.local` one too, as `parent.local`) - a label line
     carries no address, so it takes the next one that emits a byte. A label
     a MACRO makes (`%1:` in its body, `PPU_LINE ppu_linep, 1, ...` the call)
     is named by the call's first argument: without it every such routine's
@@ -49,7 +50,17 @@ def labels(lst, section=None):
     sprites' to ppu_wplace."""
     out, pending = [], []
     call = None
+    parent = ""
     for line in open(lst, errors="replace"):
+        if local:
+            ll = re.search(r"^\s*\d+\s+(?:[0-9A-F]{8}\s+\S+\s+)?(?:<\d+>\s+)?(\.[A-Za-z0-9_.@]+):", line)
+            if ll:
+                nm = parent + ll.group(1)
+                if re.match(r"\s*\d+\s+([0-9A-F]{8})\s", line):
+                    out.append((int(re.match(r"\s*\d+\s+([0-9A-F]{8})\s", line).group(1), 16), nm))
+                else:
+                    pending.append(nm)
+                continue
         m = re.match(r"\s*\d+\s+([0-9A-F]{8})\s", line)
         mc = re.match(r"\s*\d+\s+(?:<\d+>\s+)?([A-Z][A-Z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\b", line)
         if mc and not m:
@@ -59,6 +70,8 @@ def labels(lst, section=None):
             pending.append(call)
             call = None
             continue
+        if lab:
+            parent = lab.group(1)
         if lab and not m:
             pending.append(lab.group(1))
             continue

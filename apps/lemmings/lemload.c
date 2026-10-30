@@ -344,22 +344,57 @@ static unsigned lem_cl_kb[7] = {
 static int      lem_bank_have;      /* the style in lem_cl_bank, or -1 */
 static int      lem_main_have;
 
-/* ovl_far - a dword offset inside a claim as a SEGMENT and a 0..15 offset.
+/* ovl_far - a dword offset inside a claim as a SEGMENT and a 16-bit offset.
  *
  * A bank is bigger than a segment, so a piece's offset genuinely needs 32 bits
- * and this dialect has no `long` (docs/C-TOOLCHAIN.md). The two halves are read
- * as words and the segment is base + (hi << 12) + (lo >> 4), which is
- * base + off/16 without ever forming off. lem_far_off() is the remainder.
+ * and this dialect has no `long` (docs/C-TOOLCHAIN.md). It used to answer
+ * base + (hi << 12) + (lo >> 4) and lo & 15 - and under kern_mega's protected
+ * mode every claim is an LDT SELECTOR (KERN-MEGA-MEMORY-PLAN MC7), where
+ * adding paragraphs to one names some other descriptor. So the BANK, the one
+ * claim over 64 KB that ovl_far is asked about, carries three WINDOWS made
+ * once at the claim (lem_bwin, os88_seg_sub): at 0, 32 KB and 64 KB, each
+ * reaching 64 KB or to the claim's end. The 32 KB the offset falls in picks
+ * the window and the offset is what is left, 0..32,767 - so a piece has at
+ * least 32 KB of reach past its first byte, where the widest object strip in
+ * the five sets is 15,170 bytes (set 3's object 8) and the furthest any piece
+ * or strip ends from its window's base is 41,864. Every other claim ovl_far is
+ * asked about (LEMMAIN, 60 KB) is one selector already: the segment is the
+ * claim and the offset is lo.
+ *
+ * A HOSTILE bank whose run reaches past its claim reads whatever follows the
+ * claim on a real-mode kernel, as it always did, and under kern_mega's
+ * protected mode faults at the selector's limit, which the kernel answers by
+ * closing the package (KERN-MEGA-PLAN 14.42) - LEMMAIN's items the same.
+ *
+ * On every real-mode kernel a window IS bank + k x 2048, so the answer is a
+ * segment inside the bank as it always was, the relocation proc moves it
+ * (lemblit.inc's lb_rlist names lem_bwin), and an XT does the same work: a
+ * compare and a table read where it did two shifts and an add.
  *
  * IT ANSWERS THROUGH A STATIC because half of this API is out-parameters and
  * every one of them is a static (rule 1, LESSONS.md 4). */
+#define LEM_NBWIN 3                 /* 96 KB in 32 KB windows */
 static unsigned lem_far_seg;
 static unsigned lem_far_off;
+static unsigned lem_bwin[LEM_NBWIN];
+/* ...and the T claim's four PLANES (VGA), 32,000 bytes each: [0] is the claim
+ * and [1..3] os88_seg_sub windows of 2,000 paragraphs made once at the claim,
+ * which the raster reads BY INDEX (lemblit.inc, lemsprite.inc, lemfont.inc).
+ * T + k x 2000 on a real-mode kernel, which is what the raster used to add */
+static unsigned lem_tpl[4];
 
 static void ovl_far(unsigned base, int lo, int hi)
 {
-    lem_far_seg = base + ((unsigned)hi << 12) + ((unsigned)lo >> 4);
-    lem_far_off = (unsigned)lo & 15;
+    if (base == lem_cl_bank) {
+        if (hi != 0)
+            base = lem_bwin[2];     /* 64 KB on: the offset is lo */
+        else if (lo < 0) {
+            base = lem_bwin[1];     /* 32..64 KB */
+            lo &= 0x7FFF;
+        }
+    }
+    lem_far_seg = base;
+    lem_far_off = (unsigned)lo;
 }
 
 /* ovl_pk / ovl_pk16 - one byte or one little-endian word out of a claim.
@@ -385,6 +420,23 @@ static int ovl_pk16(unsigned seg, unsigned off)
  * every claim is taken here, before the bracket, and a refusal frees what it
  * got and answers 0 with a sentence the user can act on (SPEC.md 47,
  * WEAVE-SPEC 1.4's precedent). */
+/* lem_wins - a claim's windows, once: dst[0] = seg and dst[k] =
+ * os88_seg_sub(seg, k x step, len) for k = 1..n-1. 1, or 0 when one was
+ * refused (no LDT entry under kern_mega; never on a real-mode kernel) */
+static int lem_wins(unsigned *dst, unsigned seg, unsigned step, unsigned len,
+                    int n)
+{
+    unsigned p = 0;
+
+    *dst = seg;
+    while (--n > 0) {
+        p += step;
+        if ((*++dst = os88_seg_sub(seg, p, len)) == 0)
+            return 0;
+    }
+    return 1;
+}
+
 static int ovl_claim_all(void)
 {
     if (lem_claimed)
@@ -427,6 +479,14 @@ static int ovl_claim_all(void)
             return 0;
         }
     }
+    /* THE WINDOWS, once (ovl_far's header): stable, and they move and go
+     * with their claims. 0 is an LDT with no entry left, which is refused as
+     * a claim is - before the bracket, with the sentence */
+    if (!lem_wins(lem_bwin, lem_cl_bank, 2048u, 0, LEM_NBWIN) ||
+        (lem_cl_t && !lem_wins(lem_tpl, lem_cl_t, 2000u, 2000u, 4))) {
+        lem_free_all();
+        return 0;
+    }
     lem_claimed = 1;
     lem_bank_have = -1;
     lem_main_have = 0;
@@ -456,7 +516,7 @@ static void lem_free_all(void)
     lem_cl_main = 0;
     lem_cl_bank = 0;
     lem_cl_mask = 0;
-    lem_claimed = 0;
+    lem_claimed = 0;                /* (the windows went with their claims) */
     lem_bank_have = -1;
     lem_main_have = 0;
 }
@@ -498,7 +558,7 @@ static int lem_pbar;                /* the bar's base while a read is inside
 static int ovl_parts_read(int nparts, unsigned seg, unsigned kb)
 {
     int p, n, i;
-    unsigned off, left, cap;
+    unsigned off, left, cap, dst;
 
     if (nparts < 1)
         return 0;
@@ -523,8 +583,15 @@ static int ovl_parts_read(int nparts, unsigned seg, unsigned kb)
         lem_f_scratch[i++] = 'M';
         lem_f_scratch[i] = 0;
         /* 4,032 paragraphs a part: 64,512 bytes, which is 126 sectors, so
-         * every part's base is 512-aligned by construction (see the header). */
-        n = os88_file_read_seg(lem_f_scratch, seg + off, cap);
+         * every part's base is 512-aligned by construction (see the header).
+         * Part p > 0 is read through os88_seg_sub's "seg + off", which is that
+         * sum on a real-mode kernel and a selector under kern_mega's
+         * protected mode (KERN-MEGA-MEMORY-PLAN MC7) - stable, so the one a
+         * 96 KB bank's second part needs is the same entry every launch */
+        dst = seg;
+        if (off != 0 && (dst = os88_seg_sub(seg, off, 0)) == 0)
+            return 0;
+        n = os88_file_read_seg(lem_f_scratch, dst, cap);
         if (n == 0)
             return 0;
         off += 4032u;

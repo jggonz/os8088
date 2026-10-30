@@ -73,6 +73,18 @@ HOLD = 0.5                      # a human keystroke, in host seconds - and
 GUEST_HZ = getattr(os88marty, "GUEST_HZ", 4772727.0)
 
 
+
+def IN_HOLD(m):
+    """How long the press that ENTERS a bracket is held. A bare press on
+    MartyPC: an 8088 reaches the bracket's first poll long after a finger
+    has lifted. ON kern_mega (Bochs, tests/megaport.txt) A HUMAN'S PRESS,
+    because a 286 or better reaches that poll WHILE IT IS STILL DOWN - which
+    is the case OS88_ALTENTER_SEED exists for, and Tracker shipped without
+    it: the bracket opened and shut in one keystroke 2 times in 3 at this
+    hold (KERN-MEGA-PLAN 14.79)."""
+    return 0.15 if getattr(m, "bochs", False) else 0.0
+
+
 def _fail(msg):
     print("FAIL: " + msg)
     return False
@@ -145,7 +157,9 @@ def seed_spent(ui, st):
 
     def dn():
         b = ui.m.read(at, 2)            # re-read: the region is movable
-        return ui.m.read(((b[0] | b[1] << 8) << 4) + off, 1)[0]
+        seg = b[0] | b[1] << 8          # a kern_mega region is a selector
+        lin = getattr(ui.m, "lin", lambda s, o=0: (s << 4) + o)
+        return ui.m.read(lin(seg, off), 1)[0]
     if st.wait(dn, lambda v: v == 0) != 0:
         return _fail("bracket: the poll never saw Alt+Enter released after "
                      "the bracket opened - os88alt_dn is still set, so "
@@ -191,7 +205,7 @@ def leg_bracket(ui, st):
     if st.bracket() != NO_BRACKET:
         return _fail("bracket: one was already up before any key")
 
-    ui.m.alt("Enter")
+    ui.m.alt("Enter", hold=IN_HOLD(ui.m))
     got = st.wait(st.bracket, lambda v: v != NO_BRACKET)
     if got == NO_BRACKET:
         # WHICH of the three it was: the key is latched in [kbd_ae] and spent
@@ -239,7 +253,7 @@ def leg_bracket(ui, st):
     # seed's store of 1 landed on a byte that behaves like `[pt_fs]` left set
     # (SPEC.md 11.2.1.1). One round trip cannot see that class of bug at all.
     if st.bracket() == NO_BRACKET:
-        ui.m.alt("Enter")
+        ui.m.alt("Enter", hold=IN_HOLD(ui.m))
         if st.wait(st.bracket, lambda v: v != NO_BRACKET) == NO_BRACKET:
             ok = _fail("bracket: a SECOND Alt+Enter did not enter. One cycle "
                        "is not evidence: apps/paint passes the first and "

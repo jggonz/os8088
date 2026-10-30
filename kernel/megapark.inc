@@ -1,5 +1,5 @@
 ; =============================================================================
-; kernel/megapark.inc - THE PARK STUB (docs/plans/KERN-MEGA-DOS-PLAN.md 2.3
+; kernel/megapark.inc - THE PARK STUB (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 2.3
 ; step 9; kernel/megados.inc is the rest). Included by kernel/hiber.inc, in
 ; HIBER.DRV's `.modh`, under -DKERN_MEGA: mega_dosparkf copies it from there
 ; into the park's header, and it never runs where it is assembled.
@@ -60,7 +60,7 @@ mpk_stub:
     cmp si, [MPK_C_PBASE + 2]
     jne .badc
     mov si, mpk_tabs - mpk_stub     ; ...the kernel's GDTR and IDTR, which are
-    mov di, MPK_C_KGDTR             ; constants of its build
+    mov di, MPK_C_KGDTR             ; what the staging kernel wrote in here
     mov cx, 6
     repe cmpsw
     jne .badc
@@ -218,8 +218,8 @@ mpk_stub:
 
 .bad:                               ; --- THE SUM DIFFERS (12.1 item 3) ---------
     MPKMARK 42, 'X'
-    mov ax, MEGA_GDT_LIN & 0xFFFF   ; W7's anchor goes first: a park judged
-    mov dx, MEGA_GDT_LIN >> 16      ; damaged is not one for the next boot to
+    mov ax, [mpk_tabs - mpk_stub + 2] ; W7's anchor goes first: a park judged
+    mov dx, [mpk_tabs - mpk_stub + 4] ; damaged is not one for the next boot to
     mov di, MPK_GDT + 0x18          ; find and take back (it did, in Bochs,
     call .desc                      ; with the header's own shrunk cells)
     push word 0x18
@@ -373,9 +373,10 @@ mpk_stub:
     ret
 
 mpk_tabs    dw MEGA_GDT_N * 8 - 1   ; mega_gdtr and mega_idtr, as the cells
-            dw MEGA_GDT_LIN & 0xFFFF, MEGA_GDT_LIN >> 16 ; must hold them
-            dw 256 * 8 - 1
-            dw MEGA_IDT_LIN & 0xFFFF, MEGA_IDT_LIN >> 16
+            dw 0, 0                 ; must hold them - their BASES written
+            dw 256 * 8 - 1          ; in by mega_dstubup when the stub is
+            dw 0, 0                 ; staged, the tables moving with the
+                                    ; machine since KERN-MEGA-MEMORY-PLAN MC2
 mpk_s_bad   db "os8088: "
 mpk_s_name  db "            "       ; the program's name (mega_dosgo)
             db " wrote over the parked session. Press a key to restart.", 0

@@ -62,9 +62,14 @@ xg_gap:
     pop dx
     pop ax
     jc .fail
-    mov bx, es                      ; C, ES:0's linear address - its low
-    mov cl, 4                       ; 14 bits are all the arithmetic needs,
-    shl bx, cl                      ; everything being mod 16 KB
+    push ax
+    push dx
+    mov dx, es                      ; C, ES:0's linear address - its low
+    mov bl, SEG_LIN                 ; 14 bits are all the arithmetic needs,
+    call OSAPI_SEG                  ; everything being mod 16 KB (a selector
+    xchg bx, ax                     ; under kern_mega, so asked rather than
+    pop dx                          ; shifted: KERN-MEGA-MEMORY-PLAN MC7)
+    pop ax
     sub bx, ax
     and bx, 0x3FFF                  ; x0: the block's offset 0 mod 16 KB
     add ax, bx                      ; apart from C, so g is the gap exactly
@@ -99,8 +104,14 @@ xg_gap:
     jb .g
     mov ax, [xg_t0]                 ; a preference only if it is a sixteenth
     mov bx, ax                      ; better than 0 apart: a board with none
-    shr bx, cl                      ; (CL is still 4) measures within its
-    sub ax, bx                      ; noise, and its answer is 0
+    mov cl, 4                       ; measures within its noise, and its
+    shr bx, cl                      ; answer is 0. CL SET HERE: it was "still
+    sub ax, bx                      ; 4" from the old DS shift, and when the
+                                    ; scratch claim took that shift's place
+                                    ; CL came here 0, the threshold was t0
+                                    ; itself and every board answered 0 - the
+                                    ; Victory's 0.56 at 2 KB thrown away and
+                                    ; T69 starved (SPEC.md 41.14.1)
     cmp [xg_bt], ax
     mov ax, [xg_best]
     jbe .out
@@ -116,6 +127,10 @@ xg_gap:
     mov dx, es                      ; the scratch back (ES = 0 when it was
     or dx, dx                       ; refused: OSAPI_MEM_CLAIM answers DX = 0)
     jz .nf
+%ifdef PKG_MEGA
+    push ds                         ; (ES off it for the call: in protected
+    pop es                          ; mode its selector goes with it, and the
+%endif                              ; cell's pop es would be a #GP - MC7)
     call OSAPI_MEM_FREE
 .nf:
     popf

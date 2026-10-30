@@ -294,7 +294,9 @@ development cycle that feels inexplicably slow is usually that, and the
 emulator rows already fan out (docs/plans/SOAK-PARALLEL.md §4.2) so the one
 call is wide as well as cheaper. For a whole tier, or anything past a few
 minutes, use `tools/os88soak.py` instead — it preflights, detaches, runs one
-lane per core and resumes.
+lane per core and resumes. Every emulator row shares that lane - MartyPC, QEMU,
+Bochs and 86Box alike, kern_mega's `mega-*` ports included - and two rows of
+one script never run at once (docs/plans/SOAK-PARALLEL.md §18).
 
 **`fast` — at a commit you intend to keep.**
 

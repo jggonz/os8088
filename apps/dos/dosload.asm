@@ -267,6 +267,7 @@ dsl_pmok:
     ; there - so the read's margin past the program goes back to the heap
     ; instead of standing in the region for the session. The same figure is
     ; what bounds the part's image + bss (20.12.10.4).
+    mov al, DOS_PART_PKG
     OS88_REHOME
     jc .no
     xor bx, bx                      ; NO WINDOW: ours is the region that is

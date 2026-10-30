@@ -49,6 +49,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "tools"), os.path.join(ROOT, "tests")]
 import dispapps                                          # noqa: E402
+import megafix                                           # noqa: E402
 import os88geom as geom                                  # noqa: E402
 import os88marty as M                                    # noqa: E402
 import os88ui                                            # noqa: E402
@@ -107,6 +108,20 @@ class Run(object):
         self.P = dispapps._map(cfg["src"])
         self.pinsnap = None             # a play too short to read from
                                         # outside leaves its own reading here
+        self.mega = getattr(self.m, "bochs", False)
+
+    def para(self, v):
+        """A segment word as mem_tab keys its claim: on kern_mega (KERN-MEGA-
+        MEMORY-PLAN MC7.4) an LDT selector, rebased by a move and never
+        changed, so "it moved" is asked of the paragraph under it"""
+        if self.mega and v and 0x100 <= v < 0xA000 and v & 4:
+            b = self.m.selector(v)
+            return b[0] >> 4 if b else v
+        return v
+
+    def lin(self, seg, off=0):
+        """SEG:OFF linear: a selector's base on kern_mega"""
+        return self.m.lin(seg, off) if self.mega else seg * 16 + off
 
     # --- the package, read through ITS segment, re-read each time: the region
     # is movable too (OS88_REGION_MOVABLE), and a stale segment decodes a live
@@ -116,7 +131,7 @@ class Run(object):
         return u16(self.m.read(p + geom.W_SEG, 2))
 
     def addr(self, name):
-        return self.seg() * 16 + self.P[name]
+        return self.lin(self.seg(), self.P[name])
 
     def b(self, name):
         return self.m.read(self.addr(name), 1)[0]
@@ -134,10 +149,10 @@ class Run(object):
                 for i in range(MEM_MAX) if u16(raw, i * MC_SIZE)}
 
     def words(self):
-        return {n: self.w(n) for n in self.cfg["words"]}
+        return {n: self.para(self.w(n)) for n in self.cfg["words"]}
 
     def rloc(self, name):
-        c = self.claims().get(self.w(name))
+        c = self.claims().get(self.para(self.w(name)))
         return None if c is None else c[1]
 
     def heapmap(self):
@@ -219,7 +234,7 @@ def audio_playing(r):
 
 
 def spk_cons(r, segname, rl):
-    b = r.m.read(r.w(segname) * 16 + rl + 2, 2)
+    b = r.m.read(r.lin(r.w(segname), rl + 2), 2)
     return u16(b)
 
 
@@ -298,7 +313,7 @@ def midirack_stop(r):
 def mr_cons(r):
     if r.b("mrb_grant"):
         return r.w("mrb_gcons")
-    return u16(r.m.read(r.w("mrb_seg") * 16 + 16384 + 2, 2))
+    return u16(r.m.read(r.lin(r.w("mrb_seg"), 16384 + 2), 2))
 
 
 def midirack_playing(r):
@@ -325,7 +340,7 @@ def wf_play(r):
 
 def wf_playing(r):
     wf_stop(r)                          # played out: CONS is how far the
-    cons = u16(r.m.read(r.w("wf_pcmseg") * 16 + 4096 + 2, 2))   # card got
+    cons = u16(r.m.read(r.lin(r.w("wf_pcmseg"), 4096 + 2), 2))  # card got
     return r.wf_active and cons >= 4096, "wf_pcmactive %d at the call, the " \
         "card's CONS %d at the clip's end" % (r.wf_active, cons)
 
@@ -364,7 +379,8 @@ def main():
 
     # bare names, build/'s: launch() resolves them against the run's tree
     with os88ui.boot(os.path.join("build", cfg["sys"]),
-                     apps=os.path.join("build", cfg["disk"]),
+                     apps=megafix.arm_disk(os.path.join("build",
+                                                        cfg["disk"])),
                      machine=cfg["machine"], quick=True) as ui:
         first = ui.path(cfg["first"]) if cfg.get("first") else None
         w = ui.path(cfg["open"])

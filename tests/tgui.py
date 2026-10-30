@@ -68,7 +68,10 @@ def main():
         w = ui.path("B:/TAMEGRAM.O88")
         seg = tgplay.u16(m.read(os88geom.winptr(m, w.i, ui.sym)
                                 + os88geom.W_SEG, 2))
-        S = lambda n: seg * 16 + syms[n]           # noqa: E731
+        # seg * 16 - or on kern_mega, where the region is an LDT selector,
+        # its descriptor's base (tests/megaport.txt)
+        base = m.lin(seg) if getattr(m, "bochs", False) else seg * 16
+        S = lambda n: base + syms[n]               # noqa: E731
         B = lambda n: m.read(S(n), 1)[0]           # noqa: E731
         W = lambda n: tgplay.u16(m.read(S(n), 2))  # noqa: E731
 
@@ -93,7 +96,7 @@ def main():
             in os88ui_abp - an 8px cell a glyph, a leading OS88UI_ABLT byte
             not measured, 12px of margin a side and 7 above and below."""
             p, n, wide = W("tg_plines"), 0, 0
-            text = m.read(seg * 16 + p, 512)
+            text = m.read(base + p, 512)
             for ln in text[:text.index(0xFF)].split(b"\0")[:-1]:
                 n += 1
                 wide = max(wide, 8 * len(ln.lstrip(b"\x01")))

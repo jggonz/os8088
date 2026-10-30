@@ -74,6 +74,11 @@ RLABELS = ["avail_max >= avail", "the post was accepted",
 OFF_MUST_FAIL = {7, 10, 12, 13}
 
 
+def LIN(m, seg, off=0):
+    """SEG:OFF linear - an LDT selector's base on kern_mega (docs/BOCHS.md)."""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else seg * 16 + off
+
+
 def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
@@ -228,7 +233,7 @@ def main():
                         now = sg
                 if now is None:
                     return None
-                return bytes(m.read(now * 16 + u16(m.read(now * 16 + 8, 2)),
+                return bytes(m.read(LIN(m, now, u16(m.read(LIN(m, now, 8), 2))),
                                     176))
             except Exception:
                 return None
@@ -254,8 +259,8 @@ def main():
             return 1
 
         # its bss, at the offsets heapfrag.asm's own table declares
-        img = u16(m.read(seg * 16 + 8, 2))       # +8 = image size (the header)
-        b = m.read(seg * 16 + img, 176)
+        img = u16(m.read(LIN(m, seg, 8), 2))       # +8 = image size (the header)
+        b = m.read(LIN(m, seg, img), 176)
         n = u16(b, 0)
         res = b[128:128 + n]
         nmoved, nrel, nbad = u16(b, 20), u16(b, 16), u16(b, 18)
@@ -348,7 +353,7 @@ def main():
                                     + os88geom.W_SEG, 2))
                     if sg:
                         now = sg
-                return now, m.read(now * 16 + img, 176)
+                return now, m.read(LIN(m, now, img), 176)
             try:                # ...on the GUEST's clock
                 os88marty.until(m, lambda _: u16(rbss()[1], 152)
                                 >= len(RLABELS),
