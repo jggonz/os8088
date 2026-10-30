@@ -821,10 +821,16 @@ w16_ibgate:
 ; close is refused until the program has ended (w16_close, SPEC.md 124.8).
 ; One without a window is all on its own stack and in its own claim, which
 ; the kernel frees with the instance; int 21h is never ours between resumes
-; (SPEC.md 124.2.1).
+; (SPEC.md 124.2.1). The kernel holds the gfx lock for us, so it is marked
+; held throughout: a program that ends in here frees its windows, and that
+; must not ask for the lock again.
 ; -----------------------------------------------------------------------------
 w16_onclose:
-    jmp w16_close
+    push word [w16_locked]
+    mov byte [w16_locked], 1
+    call w16_close
+    pop word [w16_locked]           ; (CF, the answer, is kept)
+    ret
 
 ; =============================================================================
 ; The window: two lines on white

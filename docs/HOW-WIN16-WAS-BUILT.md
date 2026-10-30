@@ -718,7 +718,7 @@ dialog's loop: `IsDialogMessage`, then dispatch. A dialog procedure can
 open another dialog (WinMine's About opens Preferences), and each loop
 keeps its state in its own dialog's record.
 
-**Four bugs worth writing down.**
+**Five bugs worth writing down.**
 
 - **A `BOOL` is AX.** The first dialog repainted forever. A dialog
   procedure answers `BOOL`, a 16-bit value, but the code tested DX:AX, and
@@ -737,6 +737,12 @@ keeps its state in its own dialog's record.
   program that exited inside a key callback freed its windows, which took
   the lock it already held. The flag is now saved and restored around every
   nested use, and the end-of-callback work runs with the lock still held.
+- **The close box froze the machine.** Found while taking the S6
+  screenshots: GDICARD ends as soon as it gets `WM_CLOSE`, and it ended
+  inside the close callback, which the kernel calls with the gfx lock held.
+  WIN16's flag said "not held", so freeing the program's windows asked for
+  the lock again and the UI task waited forever. The whole callback now runs
+  with the flag set.
 - **Message-box buttons sat off-centre** inside WIN16's own window,
   because the client width was read before the window had been resized.
   The width the layout computed is used instead.

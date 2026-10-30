@@ -2670,11 +2670,12 @@ w16_close:
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
     call w16_post
-    push word [w16_locked]          ; held already, or held by us: as it was
-    mov byte [w16_locked], 1
     call w16_kick
-    pop word [w16_locked]
     pop si
+    cmp byte [w16_state], W16S_ENDED
+    jne .sref
+    call w16_after                  ; it ended: WIN16's window goes with it
+.sref:
     stc
     ret
 .sgone:
@@ -2710,7 +2711,8 @@ w16_close:
     pop si
     cmp byte [w16_state], W16S_ENDED
     jne .refuse
-    call w16_freeprog
+    mov byte [w16_locked], 1        ; (w16_mhpost cleared it; the kernel's
+    call w16_freeprog               ;   lock is still held, w16_onclose)
 .go:
     clc
     ret
