@@ -934,3 +934,128 @@ of bss: 6,259 bytes are left under the segment. The kernel is unchanged.
 **Not seen:** Hercules (QEMU has none); the two rows, written but not run
 until S13's final pass; the 8088 refusal on MartyPC; the V20's cost per
 reveal.
+
+## 2026-10-29 — S9: floating point
+
+**The decision first.** D5 was the owner's to take: emulate only the x87
+instructions the census found in Calculator, or something wider. The owner
+said "go ahead", and the end goal - any Win16 program - decided the width:
+the emulator is the whole 8087 except its five transcendentals and its two
+BCD instructions. The rest shares Calculator's code, so `fxtract`, `fscale`,
+`fsave` and the integer forms cost a table row each. An instruction it lacks
+ends the program with its name - *Needs the x87's FPTAN, which WIN16's
+emulator does not have.* - and the census tool says so before anything
+runs. The plan's D5 row records it as taken and widened, so it can still be
+overruled.
+
+**The reference is Windows' own WIN87EM.** winevdm's `win87em` answers the
+same calls, but Windows 3.0's `WIN87EM.DLL` 6.00.11 is the thing Calculator
+was written against, so it was disassembled. `__FPMATH` is a far call with
+the function in `BX`: 0 starts, 1 resets to control word `1332h`, 3 takes
+the runtime's error handler, 7 is `fistp` into `DX:AX`, and so on to 12.
+Exceptions reach the program as a far call to that handler with WIN87EM's
+code in `AX` - `83h` for a zero divide - which is how the C runtime's
+`signal(SIGFPE)` works. With a real coprocessor WIN87EM never calls the
+program from an interrupt: its `int 2` handler keeps the code, and the
+program's next `fwait` delivers it. WIN16 does the same.
+
+**What the loader rewrites.** A Microsoft C program carries native x87 code
+with an "OS fixup" on each `wait` byte, six kinds of them. Read off three
+programs: kind 5 turns `9B D8` into `CD 34` (`int 34h`), kind 6 turns
+`90 9B` into `CD 3D`, and kinds 1-4 turn a segment-overridden escape into
+`int 3Ch` plus a byte whose top two bits are the segment. Windows patched
+every site and put the native bytes back on first use if a coprocessor was
+there. WIN16 decides at load instead: with a coprocessor, only the lone
+`fwait`s become `int 3Dh`, where an exception is reported; without one,
+every site becomes an interrupt and the emulator part is fetched.
+
+**The emulator is a part, and self-contained.** `w16fp.inc` assembles at
+`vstart 0` after the dialog part and is cut out of WIN16.O88 by the same
+tool, as part 4 (7,860 bytes, 6.3 KB packed). Its registers, status and
+control words live in its own segment and it calls nothing of WIN16's, so
+the same bytes load into unicorn on the host. It keeps a value unpacked -
+an 80-bit mantissa with sixteen guard bits, an exponent word, a sign - and
+rounds every result once, to where it is going: a register at the control
+word's precision with the extended exponent range, then an `m64` or `m32`
+again on a store. That is the 8087's double rounding, reproduced.
+
+**The oracle is exact arithmetic.** The plan said Python's doubles; doubles
+cannot see a 64-bit register, a 24-bit precision mode or a round-toward-zero
+store. So `tests/unit/t_w16fp.py` uses `fractions`: every operation exact,
+then rounded by a model that does what the 8087 manual says. Unicorn runs
+the emulator on PATCHED instruction sequences - the bytes the loader leaves -
+and every result is compared bit for bit, with the status word's flags,
+condition codes and stack top. Operands are chosen to hit ties, gradual
+underflow, overflow on a store, signed zeros, infinities and NaNs. The
+first run found fifteen bugs, among them the indefinite NaN's bytes (in the
+oracle), an infinity stored with stale mantissa bits, `fistp` raising
+precision beside invalid, and the edge case -2^15 being refused. Since then
+it has passed 3,000-4,000 seeded cases per seed on several seeds. The same
+row runs every instruction the census can name through the emulator and
+checks that exactly the "lacks" list ends a program, so the census report
+and the emulator cannot disagree.
+
+**FPX, an exception fixture, and Windows' answer to it.** `fpx.c` installs
+`signal(SIGFPE)`, unmasks zero-divide, divides 1 by 0 and longjmps out of
+the handler; then prints 1/0 masked, 1/3 and sqrt(2) to fifteen places. On
+the Windows 3.0 reference machine the first build died with *Not enough
+memory to allocate file structures*: `signal()` pulls in stdio, and the
+default 1 KB local heap was too small. Linked with a 16 KB heap it shows
+`SIGFPE`, `infinity`, `0.333333333333333`, `1.414213562373095`. The
+fixture rule now takes per-program `wlink` options from a `.wlk` file.
+
+**FPX's "masked" line is the machine's answer.** On the XT the first FPX
+never reached its message box: `caught` climbed by about a thousand a
+second. Watcom's runtime looks for an 8087 with a bare `fninit` and
+`fnstcw` that carry no OS fixup, and an 8086 has no way to trap an ESC, so
+with no coprocessor those are no-ops and the runtime finds none. Its
+`_fpreset` and `_control87` then do nothing. WIN87EM's own control word,
+`1332h` (Microsoft C's default, which leaves zero divide unmasked), stands,
+so the "masked" 1/0 raised SIGFPE again and the handler longjmped back into
+the loop. Windows' WIN87EM cannot trap those bytes either, so on a Windows
+3.0 machine with no coprocessor this Watcom program does the same; that is
+inferred, not seen, as no reference machine here lacks an FPU. The fixture
+now guards the masked division with its own `setjmp`, and on the XT it
+prints `1/0 masked: SIGFPE (no 8087 to mask)`. QEMU cannot show this case
+even with `-DW16_X87_EMU`: the probe meets QEMU's real FPU and the mask
+takes. So the knob also clears `WF_80x87` from `GetWinFlags`, and only the
+XT leg expects the second SIGFPE. Windows 3.0 still prints the original
+four lines for the changed fixture.
+
+**Seen on the glass.** On QEMU, which has a coprocessor, FPU.EXE and FPX.EXE
+print exactly Windows 3.0's text - read off the program's stack, the text
+pointer MessageBox was given - and the unmasked 1/0 travels QEMU's IRQ 13,
+SeaBIOS's `int 75h`, WIN16's `int 2` and the next `int 3Dh` into the
+program's own signal handler. A test build, `-DW16_X87_EMU`, takes the
+emulator on QEMU too: the same four lines. On MartyPC's 4.77 MHz V20 5150,
+with no coprocessor, FPU.EXE prints its three lines through the emulator
+and FPX its four (the second being `SIGFPE (no 8087 to mask)`, below). From
+the double-click to the message box, with WIN16, the program and the
+emulator part all read off a 360 KB floppy first, FPU.EXE took 18.6 s and
+FPX 15.4 s; that time was not split into loading and arithmetic.
+
+**Calculator gets as far as its message loop.** It imports `__FPMATH` by
+NAME, which WIN16's loader had never bound, so a small by-name table came
+in. Then it exited at once: a gate trace showed `RegisterClass` refused its
+class, because its main window is a dialog-class window asking for
+Windows' `DLGWINDOWEXTRA`, 30 bytes of window extra, and WIN16 allowed 16.
+Raising that to 32 costs 768 bytes of bss. Calculator then runs its whole
+start-up - the floating point, its profile, its dialog items - into
+`GetMessage`. Its window is a dialog with its own class, which is S10's
+story, so KB Q72540 (2.01 - 2 showing 0.00) is read there.
+
+**Found on the way, for S11.** The stock 8088's leg refused FPU.EXE as
+*Needs an 80386 or better.* The host census says 8086 for the same bytes.
+The in-guest census reaches offset 0x13 of the code segment - the immediate
+byte of `sub sp, 60h` - as an instruction, reads `60` as a 186 `pusha`, and
+goes on from there. It does this without S9's patches too, so it is S2's
+walk, and no 8088 run had been taken before. S11 owns the CPU floor; this
+leg runs on the V20 until then.
+
+**Making the XT bearable.** Counting host instructions per emulated
+instruction in unicorn showed `fdiv` at 3,034, most of it an 80-step
+restoring division whose remainder lived in memory. With the remainder in
+four registers and its 65th bit carried in CF from one step to the next it
+is 1,702, and each of those is a register operation rather than a
+read-modify-write of memory. Rounding was rewritten the same way: word
+masks instead of shifting the mantissa down and back bit by bit.

@@ -200,9 +200,12 @@ w16_load:
     call w16_copyres                ; the resource table, kept (SPEC.md 124.10)
     jc .refuse
     call w16_modules                ; which of the imported modules are ours
+    mov word [w16_nfix], 0
     xor al, al
     call w16_relocs                 ; pass 0: check every import (CF=1: [w16_l1/2])
     jc .refused
+    call w16x_mode                  ; the x87: native, emulated, or neither
+    jc .refuse
     mov al, 1
     call w16_relocs                 ; pass 1: apply
     jc .refused
@@ -695,8 +698,22 @@ w16_reloc1:
     mov [w16_rseg], bx
     mov al, [es:si + 1]
     and al, 3
-    cmp al, 3                       ; an OS fixup: the x87's (SPEC.md 124.5),
-    jne .notos                      ; left as native code for now
+    cmp al, 3                       ; an OS fixup: the x87's (SPEC.md 124.5)
+    jne .notos
+    cmp byte [w16_rpass], 1
+    je .osfix
+    ja .os0
+    inc word [w16_nfix]             ; pass 0 counts them
+.os0:
+    jmp .ok
+.osfix:
+    mov di, [es:si + 2]             ; one site, patched for this machine
+    mov cl, [es:si + 4]
+    push es
+    mov bx, [w16_rseg]
+    mov es, [w16_sbase + bx]
+    call w16x_osfix
+    pop es
     jmp .ok
 .notos:
     cmp al, 0
@@ -709,9 +726,14 @@ w16_reloc1:
     mov dl, [w16_modid + di]
     cmp dl, 0xFF
     je .missing
-    cmp al, 2                       ; by name: none of ours is named
-    je .missing
+    cmp al, 2                       ; by name: the few names we know
+    jne .byord
+    call w16_byname                 ;   (w16_bynm) as the ordinals they are
+    jc .missing
+    jmp short .named
+.byord:
     mov ax, [es:si + 6]             ; the ordinal
+.named:
     call w16_findexp                ; DL = module, AX = ordinal -> AX = row
     jc .missing
     cmp ax, W16_D3ROW               ; DOS3Call: int 21h itself, no gate
@@ -720,6 +742,21 @@ w16_reloc1:
     mov dx, cs
     jmp .apply
 .nd3:
+    cmp ax, W16_FPROW               ; __FPMATH: the emulator's, or ours
+    jne .nfp
+    cmp byte [w16_rpass], 0
+    jne .fpbind
+    inc word [w16_nfix]
+    jmp .ok
+.fpbind:
+    xor ax, ax
+    mov dx, [w16_fpseg]
+    cmp byte [w16_fpm], W16FP_EMU
+    je .apply
+    mov ax, w16x_fpmath
+    mov dx, cs
+    jmp .apply
+.nfp:
     cmp ax, W16_WFROW               ; __WINFLAGS: a constant, its value
     jne .stub
     call w16k_getwinflags           ; AX (DX = 0)
@@ -842,6 +879,73 @@ w16_reloc1:
     call w16_strcpy
     stc
     ret
+
+; w16_byname - an import by NAME, as the ordinal it is (SPEC.md 124.5.2:
+; CALC 3.00 imports WIN87EM's __FPMATH so). in: DL = the module, ES:SI -> the
+; record, ES = the file; out: AX = the ordinal, CF=1 not a name in w16_bynm
+w16_byname:
+    push bx
+    push cx
+    push si
+    push di
+    mov bx, [w16_ne]
+    mov ax, [es:bx + NE_IMPTAB]
+    add ax, bx
+    jc .no
+    add ax, [es:si + 6]             ; target2: the name's offset in the table
+    jc .no
+    mov si, ax
+    inc ax
+    jz .no
+    cmp ax, [w16_fend]
+    jae .no
+    mov cl, [es:si]                 ; the whole name inside the file
+    xor ch, ch
+    add ax, cx
+    jc .no
+    cmp ax, [w16_fend]
+    ja .no
+    mov di, w16_bynm
+.t:
+    mov al, [di]
+    cmp al, 0xFF
+    je .no
+    cmp al, dl
+    jne .skip
+    mov cl, [di + 3]
+    cmp cl, [es:si]
+    jne .skip
+    xor ch, ch
+    xor bx, bx
+.c:
+    mov al, [di + 4 + bx]
+    cmp al, [es:si + 1 + bx]
+    jne .skip
+    inc bx
+    loop .c
+    mov ax, [di + 1]
+    clc
+    jmp short .out
+.skip:
+    mov cl, [di + 3]
+    xor ch, ch
+    add di, cx
+    add di, 4
+    jmp short .t
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+w16_bynm:                           ; module, ordinal, the name (pascal)
+    db W16M_WIN87EM
+    dw 1
+    db 8, '__FPMATH'
+    db 0xFF
 
 ; w16_inrange - CF=1 if a WORD at DI is not inside segment [w16_rseg]
 w16_inrange:

@@ -728,7 +728,7 @@ they stand on.
     is §124.4's census, gated host-side by `win16ne`); and the V20's frame
     cost.
 
-- [ ] **S9: Floating point.** *As a user Calculator gets the right answer
+- [x] **S9: Floating point.** *As a user Calculator gets the right answer
   whether or not my machine has a coprocessor.*
   - With an 8087/287/387 present: the OS fixups are patched to native
     instructions.
@@ -739,6 +739,42 @@ they stand on.
   - *Verify:* a host oracle compares the emulator against Python's IEEE
     doubles over the census's opcode set; a QEMU leg runs with an FPU and a
     MartyPC leg without.
+  - **Amended at S9** (SPEC.md §124.5):
+    - D5 taken and widened: the 8087 less its transcendentals and BCD, not
+      only the census's subset (the D5 row says why and what is lacking).
+    - The reference became Windows 3.0's own `WIN87EM.DLL` 6.00.11,
+      disassembled - its `__FPMATH` table, its exception codes, its `int 2`
+      design - rather than winevdm's, which answers the same calls.
+    - The oracle is EXACT arithmetic (Python's `fractions`), not the host's
+      doubles: it is the 80-bit register, three precisions and four
+      rounding modes that need checking, and a double holds none of them.
+    - The XT leg runs on a V20 5150 with no coprocessor, because the stock
+      8088's in-guest census refuses the fixtures (written into S11).
+    - KB Q72540 moves to S10: Calculator now gets past `__FPMATH`, the C
+      runtime's floating-point start-up and `RegisterClass` into its message
+      loop, but its window - a dialog-class window, which S10 is - is not
+      shown yet, so there is no display to read 0.00 from. S10's
+      `win16calc` row reads it.
+  - **Shipped** (one commit on PR #320): see the S9 entry of
+    docs/HOW-WIN16-WAS-BUILT.md for the account.
+    - `apps/win16/w16fp.inc`, part W16P_FPU (7,860 bytes, 6.3 KB packed):
+      the emulator, self-contained, run on the program's own stack.
+    - `apps/win16/w16x87.inc`: the fixups patched per machine, the vectors
+      swapped with int 21h's, `__FPMATH` with a coprocessor, the `int 2` /
+      `int 3Dh` exception path, and the x87 row that ends a program on an
+      instruction the emulator lacks.
+    - The loader: OS fixups counted in pass 0, the mode chosen, the part
+      fetched, sites patched in pass 1; `__FPMATH` bound straight to its
+      far routine; a by-name import table (`__FPMATH`, CALC 3.00's way).
+    - `cbWndExtra` up to 32 (Windows' `DLGWINDOWEXTRA` is 30, CALC's).
+    - `tools/os88ne.py` names what a program reaches that the emulator
+      lacks; `FPX.EXE`, an exception fixture; `-DW16_X87_EMU`, the test
+      knob that runs the emulator on QEMU.
+    - Rows: `w16fp` (fast, the oracle), `win16fpu` (QEMU) and `win16fpuxt`
+      (MartyPC's V20).
+    - `make win16`: a 47,055-byte image (45,701 at S8) and 13,950 bytes of
+      bss, 4,531 bytes under the 64KB segment; 60,684 bytes on disk. The
+      kernel is unchanged.
 
 - [ ] **S10: Calculator.** *As a user I can use the original Windows
   Calculator in Standard and Scientific modes, copy and paste through the
@@ -757,6 +793,16 @@ they stand on.
   - WinMine says it needs a V20.
   - On a V20 everything runs.
   - The V20/186 test is `apps/redline/detect.inc`'s, shared as source.
+  - **Found at S9, S11's to fix:** the IN-GUEST census (`w16cens.inc`,
+    S2's) refuses the Open Watcom fixtures on a stock 8088 as *Needs an
+    80386 or better.* where the host census (`os88ne.py`) says 8086, on the
+    same bytes, patched or not. It reaches FPU.EXE's segment 1 offset
+    0x13 - the imm8 of `sub sp, 60h` at 0x11 - as an instruction start, and
+    from there decodes `60` (`pusha`) and worse; 17 tiered records in all.
+    Seen on QEMU with `-DW16_CENSUS_ALWAYS`, so it is the walk and not the
+    CPU. No 8088 run had been taken before S9: S8's refusal of W31MINE on
+    an 8088 is unseen too. S9's no-coprocessor leg runs on the V20 5150
+    meanwhile, where the census does not run.
   - *Verify:* MartyPC as a stock 8088 and as a V20, and QEMU as a 386.
 
 - [ ] **S12: Living with the desktop.**
@@ -824,7 +870,7 @@ Taken by the owner on 2026-10-28 unless marked otherwise.
 | D2 | Where the program runs | **A coroutine on the UI task** (finding 3) | A worker task (SPEC.md §20.6): no file access, and paint deferred out of `W_PAINT`, so every exposure draws twice |
 | D3 | Memory model (recommendation; not raised; revisited 2026-10-29) | Every segment fixed in one claim; nothing moves or discards yet. `GlobalAlloc` sub-allocates in arena claims. **Handles, not segments:** a `GMEM_FIXED` handle is its segment, as on real-mode Windows, and a moveable one is a table entry, so a protected-mode arm (R3) and discardable segments (R6) stay reachable | Real-mode Windows' movable segments: `INT 3Fh` loader stubs and BP-chain walking, for two programs that fit easily |
 | D4 | Fonts | **What Windows showed on that display**, so the programs look as they did on Windows. MEASURED from Windows 3.0's setup disk 2 (`CGASYS`, `EGASYS`, `VGASYS.FON`), all proportional with maximum width 14: **CGA 8 px (average 7, ascent 7); EGA 12 px (7, 10); VGA 16 px (7, 13)**. **Hercules uses EGA's 12 px font**: `SETUP.INF` gives it EGA's resolution class, `133,96,72`. VGA's face comes from Wine's System font, whose 16 px strike matches (`fonts/system.sfd`). CGA's and EGA's come from Windows' own `.FON` when the user supplies their Windows directory, and otherwise from os8088 strikes drawn to those metrics from source art (CLAUDE.md's artwork rule). S4 shipped each as committed art drawn into a part of `WIN16.O88` and a composer of WIN16's own, not as an `.F88` face through `os88type.inc` (SPEC.md 124.7). Dialog units follow the font, as on Windows | os8088's 8x8 cell everywhere: dialogs half height on VGA and nothing like Windows |
-| D5 **gate** | Floating point without a coprocessor | Emulate only the census's opcode subset, as a part. S1 MEASURED it: CALC 3.00 reaches 35 kinds and CALC 3.10 40, all 8087 instructions; no 287 or 387 form appears (SPEC.md 124.5 lists them). The file carries NATIVE x87 code with the OS fixups on the `wait` bytes; the loader rewrites those to `int 34h`–`3Dh` only on a machine without a coprocessor, as Windows did. Still the owner's to take | A whole x87 emulator, or refusing CALC on FPU-less machines |
+| D5 | Floating point without a coprocessor | **An emulator part of the 8087's instruction set less its transcendentals and BCD** (taken at S9 on the owner's "go ahead", WIDENED from the census's subset toward the end goal - so the owner can still overrule it). S1 MEASURED the subset: CALC 3.00 reaches 35 kinds and CALC 3.10 40, all 8087 instructions; no 287 or 387 form appears. The rest of the 8087 that shares their code (`fxtract`, `fscale`, `fprem`, the `m16`/`m64` integer forms, `fsave`/`frstor`, the constants) came for the price of a table row each, so a program compiled against the same runtime is not refused for an instruction CALC happened not to use. What it LACKS - `f2xm1`, `fyl2x`, `fyl2xp1`, `fptan`, `fpatan`, `fbld`, `fbstp`, every 387 form - ends a program that reaches one, naming it (SPEC.md 124.5.1), and `tools/os88ne.py` reports it ahead of time. The file carries NATIVE x87 code with the OS fixups on the `wait` bytes; the loader rewrites those to `int 34h`–`3Dh` only on a machine without a coprocessor, as Windows did | Only the census's subset (the plan's first wording): a CALC-shaped emulator that refuses the next program over `fxtract`. A whole x87 emulator with the transcendentals: worth it when a program here needs them, and it is a part, so it grows without touching WIN16's image |
 | D6 | Kernels | **`kern_big` and `kern_emu`.** `kern_mega` refuses at entry, *WIN16 needs real mode* (not `OS88_MEGA_REFUSE`, whose words name a MEGA apps disk). `kern_small` lacks `OSAPI_WM_TIMER` (SPEC.md §13.9), so its disks do not carry it (§24.5) | A kern_mega arm giving programs real selectors, winevdm's model: later, and now the way to most Windows 3.1-era programs (Beyond S13, R3) |
 | D7 | Sources and licence | **Bring in whatever is needed from Wine and winevdm.** `apps/win16/` becomes GPL-2.0-or-later (finding 6), `apps/apple2`'s footing. Microsoft binaries are still never committed | Clean-room MIT: slower, and gains nothing the owner wants |
 | D8 | Menus and check marks (revised 2026-10-29, for the end goal) | **WIN16's own menu manager, after Wine's `menu.c`, inside the program's window.** A Windows program's menu bar is in its window and the package owns it, so it costs no kernel bytes, which is what the first decision was for. It draws in the display's System font with Windows' ✓, nests popups, carries 16-bit IDs, and has room for `TrackPopupMenu` and owner-draw later | **`OS88UI_MENU`** (SPEC.md §13.16), the 2026-10-28 decision: no nested popups, a one-byte action per item and os8088's 8x8 cell, so a general Win16 program cannot be served by it. The kernel's global bar: at most 5 menus, no check marks, and not where Windows put it |

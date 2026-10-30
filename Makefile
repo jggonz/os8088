@@ -18704,9 +18704,12 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # The compiler is fetched by tools/setup-watcom.sh into build/watcom/ the
 # first time, ~150 MB at a pinned SHA-256, which is why this is on demand.
 # The bitmaps bitmap.rc binds are generated (tests/win16/mkbmp.py), never
-# committed. tests/unit/t_win16ne.py reads the result when it is there.
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU PUMP GDICARD
-WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc) \
+# committed. tests/unit/t_win16ne.py reads the result when it is there. A
+# fixture with a tests/win16/<name>.wlk is linked by wlink with those options
+# (FPX's 16KB local heap: signal() brings stdio in, and Windows 3.0 refused
+# it with the default 1KB - "Not enough memory to allocate file structures").
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD
+WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk) \
             tests/win16/mkbmp.py
 
 win16census:
@@ -18726,8 +18729,15 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 	@cd $(@D) && eval "$$($(CURDIR)/tools/setup-watcom.sh --build-dir $(abspath $(BUILD)) --env)" && \
 	for p in $(WIN16FIX); do \
 	  l=$$(echo $$p | tr A-Z a-z); \
-	  wcl -q -0 -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
-	      -fe=$$p.EXE $(CURDIR)/tests/win16/$$l.c >/dev/null || exit 1; \
+	  if [ -f $(CURDIR)/tests/win16/$$l.wlk ]; then \
+	    wcl -q -c -0 -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	        $(CURDIR)/tests/win16/$$l.c >/dev/null && \
+	    wlink op q system windows $$(cat $(CURDIR)/tests/win16/$$l.wlk) \
+	        file $$l.obj name $$p.EXE >/dev/null || exit 1; \
+	  else \
+	    wcl -q -0 -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	        -fe=$$p.EXE $(CURDIR)/tests/win16/$$l.c >/dev/null || exit 1; \
+	  fi; \
 	  if [ -f $(CURDIR)/tests/win16/$$l.rc ]; then \
 	    wrc -q -bt=windows -30 -r -i=$(CURDIR)/tests/win16 -i=. -fo=$$l.res \
 	        $(CURDIR)/tests/win16/$$l.rc && wrc -q -bt=windows -30 $$l.res $$p.EXE || exit 1; \
@@ -18759,14 +18769,17 @@ $(BUILD)/win16/sys%.bin: apps/win16/fonts/sys%.txt tools/w16font.py
 # win16.asm assembles them after the image in `section .w16dlg vstart=0`, and
 # tools/os88ovl.py cuts them off at the image size the header records, Sheet's
 # and Word's way, into a part of their own segment, far-called both ways.
+# Part 4 is the 8087 emulator (SPEC.md 124.5.1), assembled after it in
+# `section .w16fp` and cut at its W16X87EM mark as Sheet's macro module is.
 $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) tools/os88pkg.py tools/os88ovl.py \
                     $(PKGZSTAMP)
 	@mkdir -p $(BUILD)/win16
 	python3 tools/os88ovl.py $(BUILD)/win16.bin -o $(BUILD)/win16/w16dlg.bin \
-		--trim $(BUILD)/win16/win16.trim.bin
+		--trim $(BUILD)/win16/win16.trim.bin \
+		--second $(BUILD)/win16/w16fp.bin --mark W16X87EM
 	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
-		--part-compress lz4
+		--part $(BUILD)/win16/w16fp.bin --part-compress lz4
 
 win16: $(BUILD)/win16.o88
 

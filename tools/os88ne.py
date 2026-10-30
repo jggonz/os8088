@@ -546,6 +546,13 @@ X87_ONE = {
     (0xDA, 0xE9): "fucompp", (0xDB, 0xE0): "feni", (0xDB, 0xE1): "fdisi", (0xDB, 0xE2): "fclex",
     (0xDB, 0xE3): "finit", (0xDB, 0xE4): "fsetpm", (0xDE, 0xD9): "fcompp", (0xDF, 0xE0): "fstsw ax",
 }
+# What WIN16's 8087 emulator (SPEC.md 124.5.1) does not carry: on a machine
+# with no coprocessor a program that reaches one of these ends there with its
+# name. tests/unit/t_w16fp.py runs every instruction above through the
+# emulator and holds this set to exactly the ones that end the program.
+X87_EMU_LACKS = frozenset((
+    "f2xm1", "fyl2x", "fptan", "fpatan", "fprem1", "fyl2xp1", "fsincos", "fsin", "fcos",
+    "fucom st(i)", "fucomp st(i)", "fucompp", "fbld", "fbstp"))
 X87_TIER = {"fsetpm": 287, "fstsw ax": 287, "fprem1": 387, "fsincos": 387, "fsin": 387,
             "fcos": 387, "fucom st(i)": 387, "fucomp st(i)": 387, "fucompp": 387}
 
@@ -990,6 +997,7 @@ def _analyse(ne, specs):
     r["segments"] = segs
     r["beyond_8086"] = dict(sorted(beyond.items()))
     r["x87"] = dict(sorted(x87.items()))
+    r["x87_emu_lacks"] = sorted(k for k in x87 if k in X87_EMU_LACKS)
     r["interrupts"] = dict(sorted(ints.items()))
     r["port_io"] = io
     x87tier = max([87] + [X87_TIER.get(k, 87) for k in x87]) if x87 else None
@@ -1042,6 +1050,10 @@ def text_report(r):
     if r["x87"]:
         L.append("  x87 (%d kinds): " % len(r["x87"]) +
                  ", ".join("%s x%d" % kv for kv in r["x87"].items()))
+        L.append("  without a coprocessor: " + (
+            "WIN16's emulator lacks " + ", ".join(r["x87_emu_lacks"])
+            + " - the program ends where it reaches one" if r["x87_emu_lacks"]
+            else "every kind is in WIN16's emulator"))
     if r["osfixups"]:
         L.append("  OS fixups: " + ", ".join("type %s x%d" % kv for kv in r["osfixups"].items()))
     if r["interrupts"]:

@@ -2131,6 +2131,21 @@ FAST = [
         "every prefix and some noise must not raise, and, when present, the "
         "Open Watcom fixtures (`make win16fixtures`) and the reference "
         "programs (the win16-reference skill) must give the plan's verdicts"),
+    Row("w16fp", "fast", py("tests/unit/t_w16fp.py"), 1.5,
+        "WIN16's 8087 emulator (SPEC.md 124.5.1, part W16P_FPU) under unicorn "
+        "against EXACT arithmetic: apps/win16/w16fp.inc assembled alone and "
+        "fed the int 34h-3Dh the loader leaves where a program's x87 was, "
+        "each result compared bit for bit and flag for flag with a fractions "
+        "model that rounds once, to the precision, range and mode of where "
+        "the answer goes - 600 seeded cases over every form and rounding "
+        "mode, ties, double rounding on a store, overflow, gradual "
+        "underflow, signed zeros, infinities and NaNs. Then the unmasked "
+        "exception's far call with WIN87EM's code, the stack's overflow and "
+        "underflow, int 3Ch's segment byte, __FPMATH's functions, and every "
+        "instruction tools/os88ne.py can name: the ones that END a program "
+        "must be exactly X87_EMU_LACKS, so the census's report about a "
+        "program is the emulator's own answer",
+        needs=("nasm", "unicorn")),
 ]
 
 # --------------------------------------------------------------------------
@@ -16082,6 +16097,25 @@ SOAK = [
         "SYSTEM\\APPDATA\\WIN16\\WINMINE.INI on B: with the won game's Time1",
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16fpu", "soak", py("tests/win16fpu.py"), 60.0,
+        "SPEC.md 124.5, WIN16-PLAN S9 with a COPROCESSOR (QEMU's): FPU.EXE "
+        "and FPX.EXE (`make win16fixtures`) on WIN16's native path - the "
+        "sites left x87, __FPMATH WIN16's, an unmasked 1/0 travelling IRQ "
+        "13, int 2 and the next int 3Dh into the program's own "
+        "signal(SIGFPE) handler. Each MessageBox's text is read off the "
+        "program's stack and must be what Windows 3.0 showed for the same "
+        "file (win16ref/ref/w30-fix-fpu.png, w30-fix-fpx.png)",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16fpuxt", "soak", py("tests/win16fpu.py", "--marty"), 300.0,
+        "WIN16-PLAN S9 WITHOUT a coprocessor: the same programs on a 5150's "
+        "8088, every OS fixup an int 34h-3Dh and part W16P_FPU fetched (read "
+        "off w16_fpm, not assumed), and the same answers Windows 3.0 gave "
+        "on hardware with one",
+        needs=("marty", "nasm", "win16fixtures"), serial=True, timeout=1800,
+        wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88")),
     Row("win16minesxt", "soak", py("tests/win16mines.py", "--marty"), 240.0,
         "WIN16-PLAN S8 on the XT: a 5150's 8088 must REFUSE W31MINE - an "

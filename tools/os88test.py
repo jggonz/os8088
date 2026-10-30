@@ -378,6 +378,10 @@ def capabilities():
     # in build/win16/ on a box that has them, and every other box SKIPS.
     if os.path.exists(os88build.at("build/win16/W31MINE.EXE")):
         caps.add("win16samples")
+    # ...and the Open Watcom fixtures (`make win16fixtures`, on demand: it
+    # fetches a compiler), whose FPX.EXE is the newest of them
+    if os.path.exists(os88build.at("build/win16/FPX.EXE")):
+        caps.add("win16fixtures")
     # `skiesdiag` WANTED ONE OF THESE and got `wants=` instead, which is the
     # note worth leaving. It opens a PRIVATE TREE (a -DCSDIAG build of a
     # package that ships without it), nothing in the suite built one, and the

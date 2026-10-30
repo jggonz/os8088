@@ -370,7 +370,8 @@ w16_args:
 
 ; -----------------------------------------------------------------------------
 ; w16_i21_on / w16_i21_off - int 21h is the program's only while its code
-; runs (SPEC.md 124.2.1). IF = 0 on entry to both; DS = ours.
+; runs (SPEC.md 124.2.1), and so are int 34h-3Dh and int 2 (124.5). IF = 0
+; on entry to both; DS = ours.
 ; -----------------------------------------------------------------------------
 w16_i21_on:
     push ax
@@ -385,7 +386,7 @@ w16_i21_on:
     mov [es:0x21 * 4 + 2], cs
     pop es
     pop ax
-    ret
+    jmp w16x_on                     ; and the x87's (SPEC.md 124.5)
 
 w16_i21_off:
     push ax
@@ -398,4 +399,4 @@ w16_i21_off:
     mov [es:0x21 * 4 + 2], ax
     pop es
     pop ax
-    ret
+    jmp w16x_off

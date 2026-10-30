@@ -1915,7 +1915,7 @@ w16_wwaddr:
     clc
     ret
 .x:
-    cmp cx, 16 - 2
+    cmp cx, W16_WEXTRA - 2
     ja .no
     add bx, W16W_EXTRA
     add bx, cx
@@ -1939,7 +1939,7 @@ w16_wladdr:
     clc
     ret
 .x:
-    cmp cx, 16 - 4
+    cmp cx, W16_WEXTRA - 4
     ja .no
     add bx, W16W_EXTRA
     add bx, cx

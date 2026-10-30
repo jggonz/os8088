@@ -34,22 +34,28 @@ W16W_UL     equ 12              ; the invalid rectangle, client coordinates,
 W16W_UT     equ 14              ;   right and bottom exclusive as Windows'
 W16W_UR     equ 16
 W16W_UB     equ 18
-W16W_EXTRA  equ 20              ; cbWndExtra, at most 16
-W16W_MENU   equ 36              ; its HMENU, 0 = none (SPEC.md 124.11); a
+W16W_EXTRA  equ 20              ; cbWndExtra, at most W16_WEXTRA
+W16_WEXTRA  equ 32              ;   (Windows' DLGWINDOWEXTRA is 30, and a
+                                ;   dialog-class main window - CALC 3.00's -
+                                ;   asks for exactly that)
+W16W_MENU   equ 52              ; its HMENU, 0 = none (SPEC.md 124.11); a
                                 ;   child's ID
-W16W_PARENT equ 38              ; a child's parent; a top-level's owner
-W16W_X      equ 40              ; a child's window rectangle, in its parent's
-W16W_Y      equ 42              ;   client coordinates (SPEC.md 124.8)
-W16W_CX     equ 44
-W16W_CY     equ 46
-W16W_OSW    equ 48              ; a top-level's os8088 window
-W16W_TEXT   equ 50              ; its text, a block in the USER heap; 0 none
-W16W_KIND   equ 52              ; W16Q_*: 0 the program's class, else WIN16's
-W16W_F2     equ 53              ; W16W2_*
-W16W_CS     equ 54              ; 18 bytes: a control's or a dialog's own
+W16W_PARENT equ 54              ; a child's parent; a top-level's owner
+W16W_X      equ 56              ; a child's window rectangle, in its parent's
+W16W_Y      equ 58              ;   client coordinates (SPEC.md 124.8)
+W16W_CX     equ 60
+W16W_CY     equ 62
+W16W_OSW    equ 64              ; a top-level's os8088 window
+W16W_TEXT   equ 66              ; its text, a block in the USER heap; 0 none
+W16W_KIND   equ 68              ; W16Q_*: 0 the program's class, else WIN16's
+W16W_F2     equ 69              ; W16W2_*
+W16W_CS     equ 70              ; 18 bytes: a control's or a dialog's own
                                 ;   state (w16dlg.inc)
-W16W_SEQ    equ 72              ; when it was made: siblings are in this
+W16W_SEQ    equ 88              ; when it was made: siblings are in this
                                 ;   order, Windows' Z order (w16dlg.inc)
+%if W16W_SEQ + 2 != W16W_SIZE || W16W_EXTRA + W16_WEXTRA != W16W_MENU
+  %error "the window record's layout and W16W_SIZE disagree"
+%endif
 
 W16WF_USED  equ 1
 W16WF_INVAL equ 2
@@ -323,7 +329,7 @@ w16u_regclass:
     push di
     call w16_args
     les si, [es:bx]                 ; ES:SI = the WNDCLASS
-    cmp word [es:si + 8], 16        ; cbWndExtra
+    cmp word [es:si + 8], W16_WEXTRA    ; cbWndExtra
     ja .fail
     mov ax, [es:si + 22]            ; lpszClassName
     mov dx, [es:si + 24]

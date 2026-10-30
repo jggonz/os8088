@@ -224969,37 +224969,162 @@ AH = 25h, 30h, 35h, 3Eh, 40h, 44h and 4Ch, and WinMine 2.9 with 25h, 30h,
 `DOS3Call` (KERNEL.102). WIN16 therefore owns `int 21h` while a program
 runs, and answers at least these functions (§124.3).
 
-### 124.5 Floating point *(pinned; the subset is a gate)*
+### 124.5 Floating point *(pinned for S9)*
 
 The file carries NATIVE x87 code. Every x87 instruction is `wait` + ESC,
-and an OS fixup (relocation type 3) sits on its `wait` byte. The fixup
-kinds are MS C's: 5 = FIDRQQ (a plain ESC), 6 = FIWRQQ (a lone `fwait`), and
-1–4 the segment-override forms. MEASURED on CALC 3.00: 288 type-5, 57
-type-6 and 3 type-3 fixups (348), and `WIN87EM.__FPMATH` imported. The
-loader decides per machine, as Windows' own loader did:
+and an OS fixup (relocation type 3) sits on its `wait` byte. The fixup kinds
+are MS C's, and what is under each was read off CALC 3.00, CALC 3.10 and the
+Open Watcom fixture:
 
-- **with an x87 present:** the sites are left as they are;
-- **without one:** each site is rewritten into the emulator interrupt it
-  stands for (`int 34h`–`3Bh` for ESC `D8`–`DF`, `3Ch` for a
-  segment-override form, `3Dh` for `fwait`), and an emulator part answers
-  those interrupts, covering exactly the subset the census found.
+| kind | the site | becomes | MS C's name and constant |
+|---|---|---|---|
+| 5 | `9B` `D8`–`DF` (a plain ESC) | `CD 34`–`CD 3B` | FIDRQQ, `5C32h` added to the word |
+| 6 | `90 9B` (a `nop`, then a lone `fwait`) | `CD 3D` | FIWRQQ, `A23Dh` |
+| 1 | `9B 3E` (DS:) ESC | `CD 3C`, then ESC − `C0h` | FIARQQ `FE32h` / FJARQQ `4000h` on the word after |
+| 2 | `9B 36` (SS:) ESC | `CD 3C`, then ESC − `80h` | FISRQQ `0632h` / FJSRQQ `8000h` |
+| 3 | `9B 2E` (CS:) ESC | `CD 3C`, then ESC − `40h` | FICRQQ `0E32h` / FJCRQQ `C000h` |
+| 4 | `9B 26` (ES:) ESC | `CD 3C`, then ESC unchanged | FIERQQ `1632h` |
 
-The subset, MEASURED (`tools/os88ne.py`, reached code only):
+So after `int 3Ch` the byte's low three bits are the ESC's and its top two
+the segment: `11` ES, `00` DS, `01` SS, `10` CS. MEASURED: CALC 3.00 carries
+288 kind-5, 57 kind-6 and 3 kind-3 fixups and imports `WIN87EM.__FPMATH`;
+CALC 3.10 has kinds 2, 3 and 4 as well.
 
-- **CALC 3.00, 35 kinds:**
-  - loads and stores: `fld`/`fst`/`fstp` m64, `fld`/`fstp` m80, `fstp` m32,
-    `fild` m16i/m32i, `fistp` m64i;
-  - register forms: `fld`/`fstp`/`fxch`/`fcomp` st(i);
-  - arithmetic: `fadd`/`fsub`/`fsubr`/`fmul`/`fdiv`/`fdivr`/`fcom` m64, and
-    `faddp`/`fsubp`/`fmulp`/`fdivp`/`fcompp`;
-  - the rest: `fabs`, `fchs`, `ftst`, `fxam`, `fprem`, `frndint`, `fclex`,
-    `fldcw`/`fstcw`/`fstsw`.
-- **CALC 3.10, 40 kinds:** the same less `fabs`, plus `fild` m64i, `fdivrp`, `fld1`,
-  `fldz`, `finit` and `fstenv`.
+**The loader decides per machine** (`OSAPI_CPU_INFO`'s `CPU_F_X87`, which is
+probed, never the equipment word):
 
-All of these are 8087 instructions; no 287 or 387 form appears. A program
-that reaches an instruction outside the emulator's subset is refused at
-load with the instruction named.
+- **With a coprocessor**, every site stays native but kind 6's, which becomes
+  `int 3Dh`: that is where an exception the coprocessor raised is delivered
+  (below). Windows' own loader patched every site and WIN87EM put the native
+  bytes back on first use; leaving them native from the start is the same
+  machine code.
+- **Without one**, every site is patched, and WIN16's emulator part
+  (`W16P_FPU`, a part of `WIN16.O88` like the dialog manager, §124.13) is
+  fetched before the program runs. A program whose part cannot be read is
+  refused, with op_fetch's reason.
+
+A program with no OS fixups costs nothing either way: no part, no vectors.
+
+**The vectors.** `int 34h`–`3Dh` are the program's only while its code runs,
+exactly as `int 21h` is (§124.2.1): set when WIN16 switches to the program,
+put back when it switches home. The scheduler does not switch while a
+program runs, so two WIN16s never meet in them. With a coprocessor, WIN16
+also holds `int 2` (the 8087's NMI, and IRQ 13 on an AT, which the BIOS
+sends there) the same way - only while the program's code runs - and passes
+on every NMI the coprocessor did not raise. An exception whose interrupt
+came while the vector was the machine's is not lost: it is still in the
+coprocessor's status word, and the program's next `int 3Dh` reads it there.
+Holding `int 2` for a program's whole lifetime would chain a second WIN16's
+handler through the first's, and the first's ends with its program.
+
+`__FPMATH` is bound by the loader straight to the emulator's entry (the
+part's offset 0) or to WIN16's own, never to a gate stub: the C runtime
+calls it with arguments in `BX` and `DX:AX`, and a stub's `mov ax, row`
+would destroy them. CALC 3.00 imports it BY NAME, so the loader binds a
+by-name import through a small table of the names it knows (`w16_bynm`),
+`__FPMATH` its first row; a name not in it is missing as before (§124.12).
+A program whose part cannot be read is refused: *WIN16's 8087 emulator
+could not be read for* and its name.
+
+`-DW16_X87_EMU` assembles a test build that takes the emulator on a
+machine WITH a coprocessor (`W16_CENSUS_ALWAYS`'s shape), so QEMU can run
+the path an XT takes, and `GetWinFlags` then leaves out `WF_80x87`;
+nothing ships it.
+
+An x87 instruction with NO OS fixup is a no-op on an 8086 with no
+coprocessor, and nothing can trap it: no emulator sees it, WIN87EM's did not
+either. A runtime that probes for an 8087 that way (Open Watcom's bare
+`fninit`/`fnstcw`) finds none, and Watcom's `_control87` and `_fpreset` then
+do nothing, so the control word stays `1332h` with zero divide unmasked.
+That is the machine's answer, not a defect to emulate around. QEMU cannot
+show it: under the test build the probe still meets the real FPU.
+
+#### 124.5.1 The emulator
+
+An 8087: eight registers in Intel's 80-bit format with its tag word, status
+word and control word, and every result rounded as the 8087 rounds it - to
+the control word's precision (24, 53 or 64 bits) and rounding mode, with the
+extended exponent range in a register and gradual underflow, then rounded
+again to the destination's format by a store. It runs on the program's own
+stack, as WIN87EM's did, so a `longjmp` out of a floating-point error
+handler leaves nothing of it behind.
+
+**What it has**, every form of each: `fld`, `fst`, `fstp` (m32, m64, m80,
+st(i)); `fild`, `fist`, `fistp` (m16, m32, m64 integers); `fadd`, `fsub`,
+`fsubr`, `fmul`, `fdiv`, `fdivr` and their pop forms (m32, m64, m16 and m32
+integers, st(i)); `fcom`, `fcomp`, `fcompp`, `ftst`, `fxam`; `fxch`, `fchs`,
+`fabs`, `fsqrt`, `fprem`, `frndint`, `fscale`, `fxtract`; `fld1`, `fldz`,
+`fldpi`, `fldl2e`, `fldl2t`, `fldlg2`, `fldln2`; `finit`, `fclex`, `fldcw`,
+`fstcw`, `fstsw` (m16, and the 287's `fstsw ax`), `fstenv`, `fldenv`,
+`fsave`, `frstor`, `ffree`, `fincstp`, `fdecstp`, `fnop`; `feni`, `fdisi`
+and `fsetpm` do nothing. That is the census's subset of CALC 3.00 and 3.10
+(35 and 40 kinds) and the rest of the 8087 that shares its code.
+
+**What it lacks:** the transcendentals (`f2xm1`, `fyl2x`, `fyl2xp1`,
+`fptan`, `fpatan`), BCD (`fbld`, `fbstp`), and every 387 instruction
+(`fsin`, `fcos`, `fsincos`, `fprem1`, `fucom` and its forms). A program
+that EXECUTES one ends there, as an import WIN16 lacks ends it (§124.12):
+*Needs the x87's FPTAN, which WIN16's emulator does not have.* It is not
+refused at load: S1's census is run only on a CPU that cannot run 186 code,
+and walking every program on a 286 without a coprocessor to find an
+instruction it may never reach is not worth its time. `tools/os88ne.py`'s
+report names the instructions a program reaches that the emulator lacks.
+
+#### 124.5.2 `__FPMATH` (WIN87EM.1)
+
+The C runtime's one door into WIN87EM: a far call with the function in `BX`,
+read off Windows 3.0's `WIN87EM.DLL` 6.00.11. Above 12 it answers −1 in
+`AX` and `DX`.
+
+| BX | | answers |
+|---|---|---|
+| 0 | start: counted, then as 1 | `AX` = 0, CF = 0 (the runtime aborts on CF = 1) |
+| 1 | reset (`_fpreset`): `finit`, the control word `1332h`, no exception pending | — |
+| 2 | end: uncounted | — |
+| 3 | the runtime's floating-point error handler, `DX:AX` | — |
+| 4 | the control word, `AX` | — |
+| 5 | | the control word |
+| 6 | round `st(0)` to an integer in the rounding mode `AX & 0C00h` | — |
+| 7 | `st(0)` to a 32-bit integer in the rounding mode `AX & 0C00h`, popped | `DX:AX` |
+| 8 | | the exceptions since the last 9: `AX` (bits 0-5), kept |
+| 9 | `fclex`, and the kept exceptions cleared | `AX` = 0 |
+| 10 | | the registers in use |
+| 11 | | 1 with a coprocessor, else 0 |
+| 12 | `AX` kept, and not used | — |
+
+`__WIN87EMINFO`, `__WIN87EMSAVE` and `__WIN87EMRESTORE` (3, 5, 4) are not
+provided: no program here calls them, and one that does ends naming it.
+
+#### 124.5.3 Exceptions
+
+An exception the control word masks gets the 8087's masked response (a NaN,
+an infinity, a denormal, a rounded result) and its flag in the status word,
+and nothing else happens. One it does not mask is reported to the C runtime
+the way WIN87EM reported it: a far call to the handler `__FPMATH` 3 named,
+with `AX` = the MS C code - `81h` invalid, `83h` zero divide, `84h`
+overflow, `85h` underflow, `86h` precision, `8Ah` and `8Bh` the register
+stack's overflow and underflow - and DS as the program left it. That is
+how the runtime reaches the program's `signal(SIGFPE)` handler, and CALC
+3.00 installs one. A denormal operand is never reported, as WIN87EM never
+reported it. No handler: nothing is called.
+
+- **The emulator** reports after the instruction, from inside it. Like the
+  8087 it leaves the destination as it was for an unmasked invalid
+  operation or zero divide, and stores the rounded result first for an
+  unmasked precision exception; for an unmasked overflow or underflow it
+  also leaves the destination as it was, where Intel stores the result with
+  its exponent rebiased. No program here reads that result.
+- **A coprocessor** raises its interrupt. WIN16's `int 2` handler reads its
+  status (`fnstsw`, which does not wait), clears it (`fnclex`) and keeps the
+  code; the program's next `int 3Dh` - an `fwait` the compiler put after the
+  instruction - reports it, in the program's own context. That is WIN87EM's
+  design: never call the program from an interrupt. An `int 3Dh` with no
+  kept code reads the status word itself, which is how an exception whose
+  interrupt arrived while the vector was not WIN16's is still reported.
+
+Neither path extends the register stack into memory, which WIN87EM did on a
+real coprocessor: a ninth push is the invalid operation it is on bare
+silicon (`8Ah`).
 
 ### 124.6 What it does not do yet *(pinned)*
 
@@ -225107,7 +225232,10 @@ as `?`.
 - the name: at most 15 characters, compared without regard to case, as
   Windows does;
 - the style, the window procedure and the background brush;
-- `cbWndExtra`: at most 16, and a class asking for more is refused with 0.
+- `cbWndExtra`: at most 32 (`W16_WEXTRA`), and a class asking for more is
+  refused with 0. It was 16 until S9 met CALC 3.00, whose main window is a
+  dialog-class window asking for Windows' `DLGWINDOWEXTRA`, 30 bytes: that
+  is 16 bytes more in each of the 48 window records, 768 of WIN16's bss.
 
 **Windows.** At most 48 (`W16_MAXWND`, S6: a dialog is a window and so is
 each of its controls; WinMine's Preferences is 20). An `HWND` is

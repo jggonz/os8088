@@ -99,6 +99,9 @@ W16_D3ROW equ W16NX
 W16EXPORT W16M_KERNEL,     102,     0,  w16k_dos3call       ; DOS3Call() -register
 W16_WFROW equ W16NX
 W16EXPORT W16M_KERNEL,     178,     0,  w16k_getwinflags    ; __WINFLAGS, an equate
+; and __FPMATH to the emulator's or the coprocessor's (SPEC.md 124.5.2)
+W16_FPROW equ W16NX
+W16EXPORT W16M_WIN87EM,    1,       0,  w16x_never          ; __FPMATH() -register
 W16EXPORT W16M_USER,       1,       12, w16u_msgbox         ; MessageBox(word str str word)
 W16EXPORT W16M_USER,       5,       2,  w16u_initapp        ; InitApp(word)
 W16EXPORT W16M_USER,       6,       2,  w16u_postquit       ; PostQuitMessage(word)
@@ -260,6 +263,10 @@ W16EXPORT 0xFE,            0,       0,  w16_cbdone
 ; bound by the loader either - the missing stubs below reach it
 W16_MISSROW equ W16NX
 W16EXPORT 0xFD,            0,       0,  w16_missed
+; an x87 instruction the emulator lacks, met (SPEC.md 124.5.1): module 0FBh,
+; never bound - the emulator's header holds this row's stub
+W16_X87ROW equ W16NX
+W16EXPORT 0xFB,            0,       0,  w16x_lacks
 
 w16_exports:
 %assign k 0
@@ -960,6 +967,9 @@ WF_80x87  equ 0x0400
 
 w16k_getwinflags:
     call OSAPI_CPU_INFO             ; AL = the tier, AH = CPU_F_*
+%ifdef W16_X87_EMU                  ; (the test build's machine has none:
+    and ah, ~CPU_F_X87              ;   the runtime takes its no-8087 path)
+%endif
     mov dx, WF_CPU286
     cmp al, CPU_8086
     jne .fpu

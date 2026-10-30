@@ -43,7 +43,7 @@ W16_MAXWND   equ 48             ; windows: a dialog's controls are windows
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16C_SIZE    equ 30             ; a class record
-W16W_SIZE    equ 74             ; a window record
+W16W_SIZE    equ 90             ; a window record
 W16_MAXTOP   equ 4              ; top-level windows in os8088 windows of
                                 ;   their own (dialogs, SPEC.md 124.8)
 W16_TTLSZ    equ 50
@@ -83,6 +83,8 @@ W16P_SYS12   equ 1              ; EGA and Hercules
 W16P_SYS08   equ 2              ; CGA
 W16P_DLG     equ 3              ; the dialog manager and controls (SPEC.md
                                 ;   124.13): code, far-called both ways
+W16P_FPU     equ 4              ; the 8087 emulator (SPEC.md 124.5.1): code,
+                                ;   reached by the program's int 34h-3Dh
 
 ; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
 ; sides of either, so a vector is one word written and one far call, and a
@@ -384,6 +386,20 @@ section .w16dlg
     W16BSS w16_ctop, 2          ; w16_ppaint: the client's top, screen
     ; --- S6: the dialog part (w16dlg.inc, SPEC.md 124.13) ---
     W16BSS w16_dseg, 2          ; its segment, 0 = not fetched
+    ; --- S9: floating point (w16x87.inc, SPEC.md 124.5) ---
+    W16BSS w16_fpm, 1           ; W16FP_*: none, the emulator, the coprocessor
+    W16BSS w16_nfix, 2          ; pass 0: OS fixups and __FPMATH imports
+    W16BSS w16_fpseg, 2         ; the emulator part's segment, 0 = not here
+    W16BSS w16x_new, 40         ; its ten vectors, int 34h..3Dh
+    W16BSS w16x_old, 44         ; the machine's 34h..3Dh and 2
+    W16BSS w16x_hand, 4         ; the runtime's handler (__FPMATH 3), native
+    W16BSS w16x_q, 1            ; a code int 2 kept for int 3Dh
+    W16BSS w16x_kept, 2         ; __FPMATH 8's exceptions
+    W16BSS w16x_ref, 2          ; __FPMATH 0/2's count
+    W16BSS w16x_sw, 2           ; the coprocessor's words, read
+    W16BSS w16x_cw, 2
+    W16BSS w16x_cw2, 2
+    W16BSS w16x_env, 14         ; fnstenv's, and fistp's dword
     W16BSS w16_pfv, 4           ; DCALL's vector: a routine in it, its segment
     W16BSS w16_ibv, 4           ; ICALL's: w16_ibgate and our CS
     W16BSS w16_ifn, 2           ; ...and the image routine w16_ibgate calls
@@ -788,6 +804,7 @@ w16_freeprog:
     mov word [w16_focus], 0
     mov word [w16_capture], 0
     call w16_dlgout
+    call w16x_end                   ; its floating point (SPEC.md 124.5)
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
@@ -1152,6 +1169,7 @@ w16_cputest:
 %include "win16/w16prof.inc"    ; WIN.INI and private profiles
 %include "win16/w16snd.inc"     ; SOUND's voice queue (SPEC.md 124.15.1)
 %include "win16/w16bmp.inc"     ; bitmaps and memory DCs (SPEC.md 124.15.2)
+%include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"
 
@@ -1178,11 +1196,12 @@ w16_s_noface:   db 'Its System font could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 4
+    OS88_PARTS_BEGIN 5
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_DLG: section .w16dlg
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_FPU: section .w16fp
     OS88_PARTS_END
 
     OS88_IMAGE_END
