@@ -594,13 +594,29 @@ W16LIB w16u_adjrect
     push si
     push di
     ICALL w16_args
+    xor cx, cx                      ; no extended style
+    jmp short w16_adjrect
+; AdjustWindowRectEx (USER.454) - args: +0 dwExStyle, then AdjustWindowRect's.
+; WS_EX_DLGMODALFRAME is the one extended style that changes the frame
+W16LIB w16u_adjrectex
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx]
+    add bx, 4
+w16_adjrect:
     mov si, [es:bx + 4]             ; SI = the style's high word
     mov di, [es:bx]                 ; DI = bMenu
     les bx, [es:bx + 6]
     xor ax, ax                      ; AX/DX = the frame, x and y
     xor dx, dx
-    mov cx, 32                      ; SM_CXFRAME, SM_CYFRAME: WS_THICKFRAME
     test si, 0x0004
+    jz .nothick
+    mov cx, 32                      ; SM_CXFRAME, SM_CYFRAME: WS_THICKFRAME
+    jmp short .frame
+.nothick:
+    test cl, 1                      ; WS_EX_DLGMODALFRAME: the dialog frame
+    mov cx, 7
     jnz .frame
     mov ax, si
     and ax, 0x00C0
@@ -1115,3 +1131,244 @@ w16_cutkid:
 
 section .text
 w16_rdinv:  dd 0x00550009           ; DSTINVERT, InvertRect's ROP
+
+section .w16dlg
+
+; -----------------------------------------------------------------------------
+; w16_txtxpar - TRANSPARENT text (SPEC.md 124.17.1): the band w16_txtdraw
+; composed ([w16_tb0] its bit 0 on the screen, rows [w16_r0]..[w16_r1] of
+; it drawn, [w16_rl]..[w16_rr] across) put down as ink alone, every pixel
+; around the glyphs left as it was. Sixteen columns at a time through
+; OSAPI_ICON_DRAW's masked pass, the glyph rows its mask and its data, both
+; in the ink - one call where the pass is not cut by the window's clip.
+; ICON_DRAW draws nothing at all where a clip edge cuts its rect (SPEC.md
+; 25.6), so a cut chunk goes a row at a time: the screen read back with
+; OSAPI_GFX_SAVE, the ink put in and the row put down with OSAPI_GFX_BLIT4,
+; which clips per pixel. Clobbers AX, BX, CX, DX, SI, DI, BP.
+; -----------------------------------------------------------------------------
+w16_txtxpar:
+    mov al, [w16_tcol]              ; the ink, as the kernel's 1bpp ops read
+    cmp byte [w16_mono], 0          ;   a colour: white lit, the rest not
+    je .ink
+    mov bl, al
+    xor bh, bh
+    mov al, CBLACK
+    cmp byte [w16_monolit + bx], 0
+    je .ink
+    mov al, CWHITE
+.ink:
+    mov [w16x_ink], al
+    mov ax, [w16_rl]
+    mov [w16x_l], ax
+    mov ax, [w16_rr]
+    mov [w16x_r], ax
+    mov ax, [w16_r0]
+    mov [w16x_r0], ax
+.grp:                               ; sixteen rows at most to a record
+    mov ax, [w16x_r0]
+    mov cx, [w16_r1]
+    sub cx, ax
+    jl .done
+    inc cx
+    cmp cx, 16
+    jbe .n
+    mov cx, 16
+.n:
+    mov [w16x_n], cx
+    mov word [w16x_b], 2            ; the band byte the chunk starts at
+.chunk:
+    mov ax, [w16x_b]
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, [w16_tb0]
+    mov [w16x_c], ax                ; its first column on the screen
+    cmp ax, [w16x_r]
+    jg .nextgrp
+    mov ax, W16_BS                  ; SI = the band's two bytes for it
+    mul word [w16x_r0]
+    add ax, w16_gbuf
+    add ax, [w16x_b]
+    mov si, ax
+    mov ax, [w16x_c]
+    mov dx, 0xFFFF                  ; DX = the columns of it to draw
+    mov cx, [w16x_l]
+    sub cx, ax
+    jle .nl
+    shr dx, cl
+.nl:
+    mov cx, ax
+    add cx, 15
+    sub cx, [w16x_r]
+    jle .nr
+    mov bx, 0xFFFF
+    shl bx, cl
+    and dx, bx
+.nr:
+    mov cx, [w16x_n]                ; the record: the band's two bytes a row,
+                                    ;   cut to the columns, as mask and data
+    mov bx, w16x_rec
+    mov byte [bx], 1
+    mov [bx + 1], cl
+    add bx, 2
+    mov di, cx
+    shl di, 1
+    add di, bx                      ; DI = the data rows
+    xor bp, bp
+.row:
+    mov ah, [si]
+    mov al, [si + 1]
+    and ax, dx
+    mov [bx], ax
+    mov [di], ax
+    or bp, ax
+    inc bx
+    inc bx
+    inc di
+    inc di
+    add si, W16_BS
+    loop .row
+    or bp, bp
+    jz .next                        ; a space: nothing to put down
+    mov ax, [w16x_c]
+    mov cx, ax
+    add cx, 15
+    mov bx, [w16_ty]
+    add bx, [w16x_r0]
+    mov dx, bx
+    add dx, [w16x_n]
+    dec dx
+    call OSAPI_WM_CLIP_TEST
+    jc .cut
+    mov al, [w16x_ink]
+    mov ah, al
+    call OSAPI_ICON_PEN
+    mov cx, [w16x_c]
+    mov dx, [w16_ty]
+    add dx, [w16x_r0]
+    mov si, w16x_rec
+    call OSAPI_ICON_DRAW
+    jmp short .next
+.cut:
+    call w16_xcut
+.next:
+    add word [w16x_b], 2
+    jmp .chunk
+.nextgrp:
+    add word [w16x_r0], 16
+    jmp .grp
+.done:
+    mov ax, [w16x_l]                ; the run's own extent back
+    mov [w16_rl], ax
+    mov ax, [w16x_r]
+    mov [w16_rr], ax
+    ret
+
+; w16_xcut - the chunk at [w16x_c] whose record w16x_rec holds, a row at a
+; time: its columns that are the run's read back, the ink put in where the
+; mask row says, and put down with OSAPI_GFX_BLIT4. Nothing on a VESA
+; display, whose save is the driver's own format (SPEC.md 120.4)
+w16_xcut:
+    mov bx, [w16_win]
+    call OSAPI_WM_DISPLAY           ; DL = the kind, DH = the planes
+    cmp dl, VID_KIND_VESA
+    je .out
+    or dh, dh
+    jz .out
+    mov [w16b_pl], dh
+    mov ax, [w16x_c]                ; the columns: the chunk's, cut to the run
+    cmp ax, [w16x_l]
+    jge .l
+    mov ax, [w16x_l]
+.l:
+    mov [w16_rl], ax
+    mov [w16b_sxs], ax
+    mov ax, [w16x_c]
+    add ax, 15
+    cmp ax, [w16x_r]
+    jle .r
+    mov ax, [w16x_r]
+.r:
+    mov [w16_rr], ax
+    xor ax, ax
+    mov [w16x_i], ax
+.row:
+    mov ax, [w16x_i]
+    cmp ax, [w16x_n]
+    jae .out
+    mov bx, [w16_ty]
+    add bx, [w16x_r0]
+    add bx, ax
+    mov dx, bx
+    mov ax, [w16_rl]
+    mov cx, [w16_rr]
+    push ds
+    pop es
+    mov di, w16x_sv
+    call OSAPI_GFX_SAVE
+    jc .next
+    mov ax, [w16_rr]                ; one plane's bytes
+    mov cl, 3
+    shr ax, cl
+    mov bp, [w16_rl]
+    shr bp, cl
+    sub ax, bp
+    inc ax
+    mov bp, ax
+    mov si, w16x_sv
+    mov di, w16x_nib
+    xor bl, bl
+    call w16_scrpix                 ; the row as colours
+    mov si, [w16x_i]                ; the ink where the mask row is set
+    shl si, 1
+    mov dx, [w16x_rec + 2 + si]
+    mov cx, [w16_rl]
+    sub cx, [w16x_c]
+    shl dx, cl                      ; DX bit 15 = the first column drawn
+    mov di, w16x_nib
+    mov cx, [w16_rr]
+    sub cx, [w16_rl]
+    inc cx
+    xor bl, bl                      ; BL = 1: the low half
+.px:
+    shl dx, 1
+    jnc .pn
+    mov al, [w16x_ink]
+    or bl, bl
+    jnz .lo
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    and byte [di], 0x0F
+    or [di], al
+    jmp short .pn
+.lo:
+    and byte [di], 0xF0
+    or [di], al
+.pn:
+    xor bl, 1
+    jnz .same
+    inc di
+.same:
+    loop .px
+    push ds
+    pop es
+    mov si, w16x_nib
+    mov bp, 8
+    mov ax, [w16_rl]
+    mov bx, [w16_ty]
+    add bx, [w16x_r0]
+    add bx, [w16x_i]
+    mov cx, [w16_rr]
+    sub cx, ax
+    inc cx
+    mov dx, 1
+    call OSAPI_GFX_BLIT4
+.next:
+    inc word [w16x_i]
+    jmp .row
+.out:
+    ret
+
+section .text

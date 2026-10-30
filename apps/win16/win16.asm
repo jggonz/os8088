@@ -737,6 +737,17 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16b_mbr, 2          ; ...the memory DC's brush
     W16BSS w16b_ropb, 1         ; ...a source ROP's index byte
     W16BSS w16_ropt, 256        ; ...its answer, source * 16 + screen
+    W16BSS w16x_rec, 66         ; TRANSPARENT text: a chunk's ICON_DRAW
+    W16BSS w16x_sv, 8           ; ...a cut row read back (four planes of 2)
+    W16BSS w16x_nib, 8          ; ...and as colours
+    W16BSS w16x_l, 2            ; ...the run's columns
+    W16BSS w16x_r, 2
+    W16BSS w16x_r0, 2           ; ...the record's first band row
+    W16BSS w16x_n, 2            ; ...its rows
+    W16BSS w16x_b, 2            ; ...the chunk's band byte
+    W16BSS w16x_c, 2            ; ...its first screen column
+    W16BSS w16x_i, 2            ; ...a cut chunk's row
+    W16BSS w16x_ink, 1          ; ...the ink
     W16BSS w16b_pl, 1           ; ...the screen's planes, read from it
     W16BSS w16b_bw, 2           ; ...the screen bytes a row a plane
     W16BSS w16b_sxs, 2          ; ...the screen rect read, inclusive
@@ -1411,6 +1422,7 @@ w16_cputest:
 %include "win16/w16acc.inc"     ; what CLOCK and REVERSI call (SPEC.md 124.17)
 %include "win16/w16ico.inc"     ; icons (SPEC.md 124.18.4)
 %include "win16/w16draw.inc"    ; what Solitaire calls (SPEC.md 124.20.4)
+%include "win16/w16sys.inc"     ; what the Control Panel calls (SPEC.md 124.20.5)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md

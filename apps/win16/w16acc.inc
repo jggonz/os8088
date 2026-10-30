@@ -9,6 +9,7 @@
 ; machine with only the System font answers them.
 ; =============================================================================
 
+TRANSPARENT equ 1               ; SetBkMode: the ink alone
 OPAQUE      equ 2               ; SetBkMode's default
 TA_RIGHT    equ 2               ; SetTextAlign: TA_CENTER is both bits
 TA_CENTER   equ 6
@@ -33,7 +34,7 @@ W16LIB w16_ans1
 W16LIB w16u_setcurpos
     ret
 
-; CreateFontIndirect (GDI.57) - the System font: the only face there is, so
+; CreateFontIndirect (GDI.57), CreateFont (GDI.56) - the System font: the only face there is, so
 ; the one Windows' mapper would fall back to (SPEC.md 124.17.1)
 W16LIB w16g_crefont
     mov ax, W16_STOCK + SYSTEM_FONT
@@ -76,8 +77,8 @@ w16_cref:
     ret
 
 ; SetBkMode (GDI.2), SetTextAlign (GDI.346) - args: +0 the value, +2 hDC.
-; Answer the old one. TRANSPARENT is kept and answered, but text is drawn on
-; its paper either way (SPEC.md 124.17.1).
+; Answer the old one. Under TRANSPARENT text is the ink alone (w16_txtxpar,
+; SPEC.md 124.17.1).
 W16LIB w16g_setbkmode
     mov si, w16_bkmode
     jmp short w16_dcbyte

@@ -227381,7 +227381,7 @@ they make that S10 did not answer, in `apps/win16/w16acc.inc`.
 | call | answers |
 |---|---|
 | `SetBkColor(hDC, cr)` (GDI.1) | the old COLORREF. The nearest of the sixteen colours (§124.8.1's rule, as `SetTextColor`'s) is the paper text is drawn on, and `ExtTextOut`'s opaque rectangle. A DC starts with white |
-| `SetBkMode(hDC, mode)` (GDI.2) | the old mode, `OPAQUE` at first. `TRANSPARENT` is kept and answered, and text is still drawn on its paper: §6.1's one-pass `font_run` is how os8088 draws text, and the two programs that set it draw on a ground of the paper's colour anyway |
+| `SetBkMode(hDC, mode)` (GDI.2) | the old mode, `OPAQUE` at first. Under `TRANSPARENT` text is the ink alone. The band is composed as before, and goes down 16 columns at a time through `OSAPI_ICON_DRAW`'s masked pass (§25.6), the glyph rows its mask and its data, both in the ink: one call where the rect is wholly drawable. `ICON_DRAW` draws nothing where a clip edge cuts its rect, so a cut chunk goes a row at a time: the screen read back with `OSAPI_GFX_SAVE`, the ink put in, and the row put down with `OSAPI_GFX_BLIT4`, which clips per pixel (nothing on VESA, whose save is the driver's format). Control Panel 3.0 letters its selected icon's label white on a caption-blue `FillRect`; on paper the label was white on white |
 | `SetTextAlign(hDC, ta)` (GDI.346) | the old value. `TextOut` and `ExtTextOut` take the point as the text's right end or centre (`TA_RIGHT`, `TA_CENTER`) and its bottom or baseline (`TA_BOTTOM`, `TA_BASELINE`, off the face's ascent and height); `TA_UPDATECP` is not followed |
 | `ExtTextOut(hDC, x, y, opts, lprc, lpsz, n, lpDx)` (GDI.351) | `ETO_OPAQUE` fills the rectangle in the background colour first, and `ETO_CLIPPED` cuts the text to it; the text as `TextOut` draws it. `lpDx` is not followed: each character keeps its own advance |
 | `Ellipse(hDC, l, t, r, b)` (GDI.24) | `RoundRect`'s shape with each corner's radii half the box's, so the four quarters meet - and so the same pen, brush and 64-pixel limit (§124.8.1) |
@@ -227893,7 +227893,37 @@ inside the clip is not, since one rectangle cannot have a hole. Without it
 the column Solitaire erases under a card that animated home ran down over
 the status bar in felt green.
 
-#### 124.20.5 The gate rows
+#### 124.20.5 The calls the Control Panel makes
+
+Control Panel 3.0 is 161 KB in 21 code segments: the plan's second target
+for S15, and the first program here to be more than its resources. It
+imports 201 functions and WIN16 lacked 51. What its start-up and its main
+window reach is provided here; the rest are files (S16) and USER and GDI's
+common half (S17), and end it with the usual toast when it reaches them.
+
+| call | answer |
+|---|---|
+| `GetWindowsDirectory`, `GetSystemDirectory` | the folder `WIN.INI` is in (§124.14) as a DOS path, `A:\SYSTEM\APPDATA\WIN16` on WIN16's own volume; both, since WIN16 has no SYSTEM folder of its own. The length; a buffer too small is left alone and the size it needs is answered, NUL included, as Windows did |
+| `OpenFile` | every file is absent until WIN16 has files (S16): `HFILE_ERROR`, the `OFSTRUCT`'s `nErrCode` 2 and its path empty. The Control Panel asks `OF_EXIST` for `SETUP.INF` and carries on without it |
+| `_lclose` | `HFILE_ERROR`: nothing is open |
+| `LoadLibrary`, `FreeLibrary` | 2, file not found, until a program's own DLLs load (S18); nothing to free |
+| `WNetGetCaps` and the other WNet calls (USER.512-520) | there is no network: `WNetGetCaps` answers 0 and the rest `WN_NOT_SUPPORTED` (1), what Windows answered without a network driver |
+| `OemToAnsi` | the string copied as it is: WIN16 does not translate between the OEM and ANSI sets, and what programs pass it is file names |
+| `EqualRect`, `GetAsyncKeyState` | as Windows; `GetAsyncKeyState` is `GetKeyState`'s answer |
+| `AdjustWindowRectEx` | `AdjustWindowRect`'s, and `WS_EX_DLGMODALFRAME` gives a frame the dialog frame |
+| `CreateFont` | the System font, as `CreateFontIndirect` (§124.17.1) |
+
+**Seen on QEMU:** the window and its twelve icons, each label centred under
+its icon, the selected one white on the caption blue (that needed
+`TRANSPARENT` text, §124.17.1); a click moves the selection; Help > About
+Control Panel. **Not yet:** every Settings dialog. Each uses a control WIN16
+lacks (`COMBOBOX`, `SCROLLBAR`) or `cpArrow`, a class the program registers
+itself and names in its dialog templates, and `DialogBox` refuses a template
+with a class it cannot create; S17 is where both land. The Settings menu has
+twelve items and the window's client is two rows of icons high, so its
+popup, which is kept inside the window (§124.11), shows the first eight.
+
+#### 124.20.6 The gate rows
 
 **`win16sol`** (soak, QEMU, needs the `win16samples` capability): Solitaire
 3.0 and 3.1 load, deal and move a card, and each draws its cards on VGA,

@@ -1728,10 +1728,13 @@ w16_txtdraw:
     inc si
     pop cx
     loop .g
-    jmp short w16_bandblit
+    jmp short .blit
 .stop:
     pop cx
-    jmp short w16_bandblit
+.blit:
+    cmp byte [w16_bkmode], TRANSPARENT
+    jne w16_bandblit
+    LCALL w16_txtxpar               ; the ink alone (SPEC.md 124.17.1)
 .out:
     pop es
     ret
