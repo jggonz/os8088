@@ -400,6 +400,13 @@ section .w16dlg
     W16BSS w16x_cw, 2
     W16BSS w16x_cw2, 2
     W16BSS w16x_env, 14         ; fnstenv's, and fistp's dword
+    W16BSS w16d_menu, 4         ; a dialog template's menu (w16d_ownwin)
+    W16BSS w16_clpopen, 1       ; the clipboard: open (SPEC.md 124.16.1)
+    W16BSS w16_clpown, 2        ; ...by this window
+    W16BSS w16_clph, 2          ; ...GetClipboardData's block, which it owns
+    W16BSS w16_scase, 1         ; lstrcmp: 1 case decides a tie
+    W16BSS w16_cursor, 2        ; SetCursor's, answered by the next
+    W16BSS w16_curcnt, 2        ; ShowCursor's count
     W16BSS w16_pfv, 4           ; DCALL's vector: a routine in it, its segment
     W16BSS w16_ibv, 4           ; ICALL's: w16_ibgate and our CS
     W16BSS w16_ifn, 2           ; ...and the image routine w16_ibgate calls
@@ -1169,6 +1176,7 @@ w16_cputest:
 %include "win16/w16prof.inc"    ; WIN.INI and private profiles
 %include "win16/w16snd.inc"     ; SOUND's voice queue (SPEC.md 124.15.1)
 %include "win16/w16bmp.inc"     ; bitmaps and memory DCs (SPEC.md 124.15.2)
+%include "win16/w16clip.inc"    ; the clipboard, strings (SPEC.md 124.16)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"

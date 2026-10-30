@@ -924,14 +924,9 @@ w16u_showwnd:
     pop dx
     pop cx
     pop ax
-    call w16_ownosw
-    jnc .osw
-    cmp byte [bx + W16W_KIND], W16Q_DIALOG  ; a dialog in WIN16's own window
-    jne .shown                              ;   is fitted to it as well
-    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
-    jnz .shown
-.osw:
-    call w16_oswshow
+    call w16_ownosw                 ; a second top-level: shown at its
+    jc .shown                       ;   client. WIN16's own keeps its size: a
+    call w16_oswshow                ;   dialog was sized when made (w16d_ownwin)
 .shown:
     cmp dx, SW_SHOWNORMAL
     je .restore

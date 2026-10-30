@@ -224969,7 +224969,7 @@ AH = 25h, 30h, 35h, 3Eh, 40h, 44h and 4Ch, and WinMine 2.9 with 25h, 30h,
 `DOS3Call` (KERNEL.102). WIN16 therefore owns `int 21h` while a program
 runs, and answers at least these functions (§124.3).
 
-### 124.5 Floating point *(pinned for S9)*
+### 124.5 Floating point *(shipped in S9)*
 
 The file carries NATIVE x87 code. Every x87 instruction is `wait` + ESC,
 and an OS fixup (relocation type 3) sits on its `wait` byte. The fixup kinds
@@ -225136,6 +225136,7 @@ to the end goal, and none is a design decision against it:
 - DOS calls beyond what the C runtime makes (R5);
 - no segment moving or discarding (R6);
 - no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
+- the clipboard carries text only, because §55's does (§124.16.1);
 - no WinHelp: `WinHelp` says so in a message box (§124.15.3), and answers
   `TRUE` to `HELP_QUIT`, which a program sends as it ends, silently.
 
@@ -225520,6 +225521,14 @@ a load from inside a paint is legal.
 
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
+
+**A string name may be in the name table** *(S10)*. A Windows 3.0 linker
+numbered every resource and wrote the names into an `RT_NAMETABLE` (type
+15) resource: CALC 3.00 asks for dialog `"SC"`, which is DIALOG 1 there.
+When a string name matches nothing and the type is an integer, the lookup
+reads that table - entries of a length word, the type, the number with 8000h
+set, an empty type name and the resource's name, ending at a length of 0 -
+and finds the numbered resource. The table is loaded as any resource is.
 
 ### 124.11 Menus *(shipped in S5)*
 
@@ -225934,3 +225943,102 @@ data - a right-click flag cleared again, a game won and recorded, a game lost
 8088 to the refusal and plays a game to a win on a V20, printing what each
 reveal costs. Both run only where the win16-reference skill has put the
 program in `build/win16/`: no Microsoft file is in this tree.
+
+### 124.16 Calculator: the clipboard, and the calls around it *(shipped in S10)*
+
+Windows 3.0's and 3.1's Calculator, in its Standard and Scientific faces,
+with its Statistics Box, Copy and Paste.
+
+#### 124.16.1 The clipboard is os8088's
+
+**There is one clipboard on the machine, and it is §55's.** WIN16 keeps no
+second one: a number copied in Calculator pastes into Note Pad, and a line
+copied in Note Pad pastes into Calculator, with each program open or closed.
+It carries text, so `CF_TEXT` is all WIN16 holds (§55.1's rule, not a gap
+to fill): `CF_OEMTEXT` (7) reads the same text, and any other format is
+accepted from `SetClipboardData`, freed, and not available afterwards.
+
+Line ends are translated each way. Windows' text ends a line with CR LF and
+os8088's with CR (§27), so a put drops the LF after each CR and a get puts
+one back. The text a program gets is NUL-terminated, as `CF_TEXT` is.
+
+| call | |
+|---|---|
+| `OpenClipboard(hWnd)` (USER.137) | TRUE; FALSE when this program has it open already. Its owner is `hWnd` |
+| `CloseClipboard()` (USER.138) | TRUE when it was open |
+| `EmptyClipboard()` (USER.139) | os8088's clipboard emptied (§55.4, `CX` = 0). FALSE when not open |
+| `SetClipboardData(wFormat, hMem)` (USER.141) | `CF_TEXT` or `CF_OEMTEXT`: the block's text, to its NUL or its size, put on os8088's clipboard, then the block freed, as Windows took it over; `hMem`. Any other format: the block freed, `hMem`. A NULL `hMem` (delayed rendering) answers NULL |
+| `GetClipboardData(wFormat)` (USER.142) | `CF_TEXT` or `CF_OEMTEXT` with text there: a moveable global block holding it, which the clipboard owns. The program must not free it, and it lasts until the clipboard is next emptied or set, another `GetClipboardData`, or the program's end. Otherwise NULL |
+| `IsClipboardFormatAvailable(wFormat)` (USER.193) | TRUE for `CF_TEXT` and `CF_OEMTEXT` when there is text |
+| `CountClipboardFormats()` (USER.143) | 2 with text, 0 without |
+| `EnumClipboardFormats(wFormat)` (USER.144) | `CF_TEXT` after 0, `CF_OEMTEXT` after it, then 0; 0 when empty |
+| `GetClipboardOwner()` (USER.140) | the window that last opened it in this program, else NULL |
+
+A put os8088 refuses (over 32 KB, or no heap) leaves the clipboard as §55.2
+says. WIN16 answers `SetClipboardData` with NULL then, which a program
+reports in its own words.
+
+#### 124.16.2 The EDIT control copies and pastes
+
+`WM_COPY` (0x301) puts the selection; `WM_CUT` (0x300) puts it and deletes
+it; `WM_PASTE` (0x302) puts the clipboard's text in place of the selection,
+up to its first line end, because the control is one line; `WM_CLEAR`
+(0x303) deletes the selection. Ctrl+Ins, Shift+Del and Shift+Ins are the
+first three, as Windows 3.0's keys were.
+
+**Ctrl+Ins does not reach a program.** os8088 reads the keyboard through
+`int 16h`'s standard functions (§9), which have no code for Ctrl or Alt with
+the editing keys: an AT BIOS keeps 92h for Ctrl+Ins for its extended
+functions, and an XT BIOS has none at all. Windows read the keys itself,
+through KEYBOARD.DRV. So CALC copies from Edit > Copy, and the EDIT
+control's Ctrl+Ins is there for a keyboard path that delivers it. Shift+Ins
+and Shift+Del arrive and work. An `ES_PASSWORD` edit copies too:
+CALC copies its number through a hidden `ES_PASSWORD` edit (a child at
+x = -270, never shown): `SetWindowText`, `EM_SETSEL` 0 to 21h, then
+`WM_CUT`, and Windows copied from it.
+
+#### 124.16.3 The other calls
+
+| call | answers |
+|---|---|
+| `lstrcmp(a, b)` (USER.430) | -1, 0 or 1 in the order Windows 3.x's US language driver gave: letters compared case blind first, and when that ties, the first case difference decides with lower case first; anything else by its byte |
+| `lstrcmpi(a, b)` (USER.471) | the first of those passes alone |
+| `AnsiNext(lpsz)`, `AnsiPrev(lpszStart, lpsz)` (USER.472, 473) | a character on, not past the NUL; a character back, not before the start: no double-byte sets here |
+| `AnsiUpper(lpsz)` (USER.431), `AnsiLower(lpsz)` (USER.432) | a pointer whose segment is 0 is a character, answered converted; else the string converted in place, and the pointer. ANSI's letters: `a`-`z`, and E0h-FEh but F7h (`÷`) |
+| `SetCursor(hCursor)` (USER.69) | the cursor set before it; os8088's arrow stays (§124.10) |
+| `ShowCursor(bShow)` (USER.71) | its count, raised or lowered, from 0; the arrow stays |
+
+#### 124.16.4 A dialog can be the program's window
+
+CALC has no window class of its own drawing: its main window is
+`CreateDialog(hInst, "SC", NULL, NULL)`, a dialog of class `SciCalc` whose
+menu is the class's (`SM`) and not the template's. **When a program's first
+top-level window is a dialog, it is WIN16's own os8088 window** (§124.8),
+and it is given at creation what an ordinary window is given by
+`CreateWindow`: its menu (the template's, by ordinal or non-empty name,
+else the class's `lpszMenuName`) and its size (the template's client box,
+in dialog units converted as §124.13 says, plus the frame, the caption
+and the menu bar's rows). `ShowWindow` does not fit it again later: CALC
+switches faces with `SetWindowPos(..., SWP_NOMOVE | SWP_NOZORDER)` to
+13/24 of its Scientific width and 4/5 of its height, measured off
+`GetWindowRect`, and a refit at `ShowWindow` would undo that.
+
+**`SetFocus` to a window in another top-level window brings that one to
+the front.** Windows activated a top-level window when the focus moved
+into it; os8088's front window is where keys go (§9), so a `SetFocus`
+across top-level windows that left os8088's z-order alone would hand the
+keyboard to a window behind. The Statistics Box's RET button is
+`SetFocus(hwndCalc)`, and with this the next key is CALC's.
+
+#### 124.16.5 The gate
+
+`win16calc` (QEMU) runs Calculator 3.00 and 3.10 in turn. Note Pad types
+`12+3=` and copies it, and Calculator's Edit > Paste keys it in: `15`.
+Standard's `2.01-2=` answers **`0.00`** - KB Q72540, Windows 3.0's and
+3.1's subtraction defect, kept because these are the original programs,
+and shown on both reference machines. Scientific's `2 y 10 =` is `1024`,
+and the Statistics Box's Ave of 5 and 7 is `6`. Every display is read
+through Calculator's own Edit > Copy off §55's clipboard, and is the
+display string with its sign column: ` 0.00`, as Windows 3.1's Notepad
+pastes it. Like `win16mines`, it runs only where the win16-reference skill
+has put the programs in `build/win16/`.

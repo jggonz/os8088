@@ -29,6 +29,7 @@ RT_MENU        equ 4
 RT_DIALOG      equ 5
 RT_STRING      equ 6
 RT_ACCELERATOR equ 9
+RT_NAMETABLE   equ 15            ; Windows 3.0's names for numbered resources
 
 ; -----------------------------------------------------------------------------
 ; w16_rlayout - the paragraphs the kept table needs; in ES = the file
@@ -223,9 +224,100 @@ w16_rmatch:
 ; -----------------------------------------------------------------------------
 ; w16_rfind - [w16_rtk]/[w16_rnk] (keys, w16_rkey's, with the strings in
 ; w16_rtypb/w16_rnamb) -> AX = the entry's offset in the table, 0 = none.
-; Keeps the rest.
+; A string name the table does not carry is looked up in the program's
+; RT_NAMETABLE (SPEC.md 124.10): a Windows 3.0 linker gave every resource a
+; number and wrote the names there, CALC 3.00's "SC" for DIALOG 1. Keeps the
+; rest.
 ; -----------------------------------------------------------------------------
 w16_rfind:
+    call w16_rscan
+    or ax, ax
+    jnz .ret
+    cmp word [w16_rnk], 0
+    jne .ret                        ; an integer name: no table to ask
+    test byte [w16_rtk + 1], 0x80
+    jz .ret                         ; a string type: the table has none
+    call w16_rnametab
+.ret:
+    ret
+
+; w16_rnametab - w16_rfind's miss, by the name table: AX = the entry, 0 =
+; none. [w16_rnk] is put back. Keeps the rest.
+w16_rnametab:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push word [w16_rtk]
+    mov ax, 0x8000 | RT_NAMETABLE
+    mov [w16_rtk], ax
+    mov word [w16_rnk], 0x8001
+    call w16_rscan
+    pop word [w16_rtk]
+    mov word [w16_rnk], 0
+    or ax, ax
+    jz .out
+    call w16_rload                  ; AX = its handle
+    or ax, ax
+    jz .out
+    call w16_gfind                  ; ES = its header
+    jc .none
+    cmp byte [w16_gdisc], 0
+    jne .none
+    mov ax, es
+    inc ax
+    mov es, ax
+    xor di, di
+.ent:
+    cmp di, 0x0F00                  ; a table is a few entries: a walk this
+    ja .none                        ;   long is a damaged one
+    mov cx, [es:di]                 ; the entry's length; 0 ends it
+    cmp cx, 7
+    jb .none
+    mov ax, [es:di + 2]             ; its type, a number
+    or ah, 0x80
+    cmp ax, [w16_rtk]
+    jne .next
+    lea bx, [di + 7]                ; past the id and the type's empty name
+    mov si, w16_rnamb
+.c:
+    mov al, [es:bx]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 0x20
+.u:
+    cmp al, [si]
+    jne .next
+    inc bx
+    inc si
+    or al, al
+    jnz .c
+    mov ax, [es:di + 4]             ; its number, 8000h set
+    or ah, 0x80
+    mov [w16_rnk], ax
+    call w16_rscan
+    mov word [w16_rnk], 0
+    jmp short .out
+.next:
+    add di, cx
+    jmp short .ent
+.none:
+    xor ax, ax
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16_rscan - w16_rfind's own table, without the name table
+w16_rscan:
     push bx
     push cx
     push si

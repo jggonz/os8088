@@ -776,7 +776,7 @@ they stand on.
       bss, 4,531 bytes under the 64KB segment; 60,684 bytes on disk. The
       kernel is unchanged.
 
-- [ ] **S10: Calculator.** *As a user I can use the original Windows
+- [x] **S10: Calculator.** *As a user I can use the original Windows
   Calculator in Standard and Scientific modes, copy and paste through the
   os8088 clipboard, and use its Statistics Box.*
   - The clipboard through `OSAPI_CLIP_PUT`/`GET`
@@ -785,6 +785,54 @@ they stand on.
     after S9 lets CALC past `WIN87EM.__FPMATH`.
   - *Verify:* the `win16calc` row keys a calculation in each mode and reads
     the display, then pastes a number in from Note Pad.
+  - **Amended at S10** (SPEC.md §124.16):
+    - The Scientific panel is not a child dialog. CALC's main window is
+      itself a dialog (`CreateDialog(hInst, "SC", ...)`, class `SciCalc`),
+      and the two faces are one set of controls: View > Standard shrinks
+      the window with `SetWindowPos` and the Scientific keys fall outside
+      it. So the work was a dialog that is WIN16's own window - its menu
+      and its size at creation - and not a nested dialog.
+    - Resources by NAME through a name table: CALC 3.00 asks for `"SC"`,
+      `"SM"`, `"SB"`, `"SA"` and `"ABOUT"`, which its file holds only as
+      numbers plus an `RT_NAMETABLE` (type 15) mapping (§124.10).
+    - Ctrl+Ins, CALC's Copy key, never reaches a program: os8088 reads the
+      keyboard through `int 16h`'s standard functions, which have no code
+      for it (§124.16.2). Edit > Copy is the way, and Shift+Ins pastes.
+    - KB Q72540 is in Windows 3.1's Calculator too: `2.01-2=` showed 0.00
+      on the 3.1 reference machine, as it does on 3.0's, so `win16calc`
+      expects 0.00 from both.
+    - Copy carries CALC's sign column: ` 0.00`, with the leading space.
+      That is Windows' answer as well - pasted into Windows 3.1's Notepad
+      between an `x` and a `y` it reads `x 0.00y`.
+  - **Shipped** (one commit on PR #320): see the S10 entry of
+    docs/HOW-WIN16-WAS-BUILT.md for the account.
+    - `apps/win16/w16clip.inc`: the clipboard calls over §55's (CR LF to
+      CR and back, `CF_TEXT`/`CF_OEMTEXT`), `lstrcmp`/`lstrcmpi` in Windows'
+      order, `AnsiUpper`/`AnsiLower`/`AnsiNext`/`AnsiPrev`, `SetCursor` and
+      `ShowCursor`.
+    - The EDIT control's `WM_CUT`, `WM_COPY`, `WM_PASTE` and `WM_CLEAR`,
+      and the Shift+Ins, Shift+Del and Ctrl+Ins keys.
+    - A dialog that is the program's first window gets its menu and size
+      when it is made, and `ShowWindow` no longer fits it again; `SetFocus`
+      into another top-level window brings that one to the front (the
+      Statistics Box's RET).
+    - Fixed on the way: `FillRect` drew only when stale scratch happened to
+      hold the right DC, which is why CALC's ground was black at first.
+    - `tests/win16calc.py`, row `win16calc` (QEMU, `win16samples`): CALC
+      3.00 and 3.10 each paste `12+3=` from Note Pad, then Standard,
+      Scientific and the Statistics Box, every display read through
+      Calculator's own Copy.
+    - `make win16`: a 48,254-byte image (47,055 at S9) and 13,964 bytes of
+      bss, 3,318 bytes under the 64KB segment; 61,708 bytes on disk. The
+      kernel is unchanged.
+  - **Seen on the glass** (QEMU VGA): both Calculators' faces, Standard and
+    Scientific, beside Windows 3.0's and 3.1's; the Statistics Box in its
+    own window with 5 and 7 entered and n = 2; the answers above, and Note
+    Pad's `12+3=` pasted in. The `win16calc` row was run once by hand, one
+    program at a time, while it was written: every reading right.
+  - **Not seen yet, owed to S13's final pass:** the row's registered run
+    (both programs in one boot); CGA, EGA and Hercules faces; the About
+    box; Help (the WinHelp refusal, which is §124.15.3's).
 
 - [ ] **S11: The CPU floor on the glass.** *As an XT owner, the Windows
   programs my CPU can run, run, and the rest tell me plainly what they need.*

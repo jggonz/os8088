@@ -16109,6 +16109,19 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
+        "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
+        "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "
+        "win16-reference skill put them) under QEMU. Note Pad types 12+3= "
+        "and copies it, and Calculator's Edit > Paste keys it in; then "
+        "Standard's 2.01-2= (0.00 - KB Q72540, which both reference "
+        "machines show), Scientific's 2 y 10 = and the Statistics Box's "
+        "Ave of 5 and 7. Every display is read through Calculator's own "
+        "Edit > Copy off the kernel's clipboard, sign column and all, as "
+        "Windows 3.1 pastes it",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88", "build/notepad.o88")),
     Row("win16fpuxt", "soak", py("tests/win16fpu.py", "--marty"), 300.0,
         "WIN16-PLAN S9 WITHOUT a coprocessor: the same programs on a 5150's "
         "8088, every OS fixup an int 34h-3Dh and part W16P_FPU fetched (read "

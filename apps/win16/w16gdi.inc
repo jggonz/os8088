@@ -1306,8 +1306,9 @@ w16u_fillrect:
     mov ax, 1
     ret
 
-; w16_rcin - ES:BX -> a RECT (left, top, right, bottom, client): w16_rectin's
-; answer for it. Clobbers AX, BX, ES.
+; w16_rcin - ES:BX -> a RECT (left, top, right, bottom, client), on a DC the
+; caller has found to be the window's: w16_rectin's answer for it. Clobbers
+; AX, BX, ES.
 w16_rcin:
     mov ax, [es:bx]
     mov [w16_scratch + 6], ax
@@ -1317,8 +1318,9 @@ w16_rcin:
     mov [w16_scratch + 2], ax
     mov ax, [es:bx + 6]
     mov [w16_scratch], ax
-    push ds
-    pop es
+    mov word [w16_scratch + 8], W16_HDC ; the caller's DC, checked already: was
+    push ds                         ;   whatever the last user of the scratch
+    pop es                          ;   left, so FillRect drew only by luck
     mov bx, w16_scratch
     jmp w16_rectin
 

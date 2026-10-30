@@ -1059,3 +1059,91 @@ four registers and its 65th bit carried in CF from one step to the next it
 is 1,702, and each of those is a register operation rather than a
 read-modify-write of memory. Rounding was rewritten the same way: word
 masks instead of shifting the mantissa down and back bit by bit.
+
+## 2026-10-29 — S10: Calculator
+
+**The story.** *As a user I can use the original Windows Calculator in
+Standard and Scientific modes, copy and paste through the os8088
+clipboard, and use its Statistics Box.* S9 had taken Calculator 3.00 as
+far as `GetMessage` with no window on the screen.
+
+**Its window is a dialog, named by a string the file does not hold.**
+CALC's `WinMain` calls `CreateDialog(hInst, "SC", NULL, NULL)`, and that
+failed. The file has no resource named `SC`: every resource is numbered,
+and a resource of type 15, `RT_NAMETABLE`, maps the names to the numbers -
+`SC` is dialog 1 (and icon group 1), `SM` menu 1, `SB` dialog 2, `ABOUT`
+dialog 3, `SA` accelerator table 1. Windows 3.0's resource loader read that
+table; WIN16's now does too, when a lookup by name finds nothing (§124.10).
+Two missing imports came next, `SetCursor` and `ShowCursor`, then the
+clipboard and string calls the plan expected.
+
+**A pile of buttons in the corner, and no menu.** The dialog appeared as a
+cluster of keys at the top left of WIN16's status window, with no menu bar.
+The template has no menu: the class names one, `SM`. And nothing had sized
+WIN16's window, because a dialog had never been a program's first window
+before. CALC measures itself at start-up with `GetWindowRect`, and
+switches faces by setting its size to 13/24 of that width and 4/5 of that
+height, so the size it read then is the size of every face after. A dialog
+that is the program's first window now gets the class's menu and the
+template's size when it is made. Then View > Standard did nothing visible:
+`ShowWindow` was fitting the window to its dialog again and undoing CALC's
+`SetWindowPos`. That refit went.
+
+**A black calculator.** With the size right, the ground was black. CALC
+paints its own background: a solid brush from `[SciCalc] background=` (by
+default `GetSysColor(12)`) and a `FillRect` over the update rectangle.
+WIN16's `FillRect` handed its rectangle to the shared clipper with a DC
+word read from scratch memory it never set, so it drew only when an earlier
+call had happened to leave the screen DC there. Every program before CALC
+had been lucky. One store fixed it.
+
+**What Copy actually does.** CALC copies its display through a hidden
+password EDIT, placed at x = -270 so it is never seen:
+`SetWindowText` with the display string, `EM_SETSEL` from 0 to 21h, and
+then `WM_CUT`, not `WM_COPY`. The EDIT control learned all four clipboard
+messages and their keys. Paste is CALC's own: `OpenClipboard`,
+`GetClipboardData(CF_TEXT)`, and each byte of the block fed in as a
+keystroke. WIN16 has no clipboard of its own. The calls go to §55's, so a
+number copied in Calculator pastes into Note Pad and back, with line ends
+translated each way.
+
+**Ctrl+Ins never arrives.** CALC's accelerator for Copy is Ctrl+Ins. os8088
+reads keys through the BIOS's `int 16h` standard functions, and they have
+no code for Ctrl+Ins: an AT BIOS gives it one only in the extended
+functions, and an XT BIOS has none. Windows read the keyboard itself.
+Edit > Copy works, and Shift+Ins pastes.
+
+**The Statistics Box.** Ctrl+S opens it modeless, in an os8088 window of
+its own. Its RET button calls `SetFocus` on the calculator, and in Windows
+that activated the calculator's window. In WIN16 the focus moved but the
+Statistics Box stayed in front, and os8088 sends keys to the front window,
+so the next key went to the wrong window. `SetFocus` into another top-level
+window now brings that window forward.
+
+**KB Q72540, and Windows 3.1.** On the Windows 3.0 reference machine,
+Standard's `2.01-2=` shows 0.00, as the knowledge-base article says, and so
+does CALC 3.00 on WIN16. The row was first written expecting Windows 3.1's
+Calculator to answer 0.01, on the belief that 3.1 fixed it. WIN16 showed
+0.00, so the 3.1 reference machine was booted to check: its own Calculator
+shows **0.00** too. The expectation was wrong, not the program.
+
+**The sign column.** The first full run read every answer right, each with
+a leading space: ` 15`, ` 0.00`, ` 1024`, ` 6`. CALC's display string keeps
+a column for the sign (` 6.` in its data segment after Ave), and Copy
+copies that string, dropping only a trailing decimal point. To see what
+Windows does, the copy was pasted into Windows 3.1's Notepad and typed
+around: `x 0.00y`. The space is Windows' answer, and the row expects it.
+
+**Seen on the glass** (QEMU VGA). Calculator 3.00 and 3.10, each in Standard
+and Scientific, beside Windows' own; the Statistics Box with 5 and 7
+entered, n = 2, and Ave 6; Scientific's `2 y 10 =` at 1024; Note Pad's
+`12+3=` copied and pasted into Calculator as 15. `tests/win16calc.py` does
+all of that and reads every display through Calculator's own Copy off the
+kernel's clipboard. It was run by hand, one program at a time, while it was
+written. Its registered run - both programs in one boot - waits for S13's
+final pass, with the CGA, EGA and Hercules faces and the About box, none of
+which has been looked at yet.
+
+**What it cost.** WIN16's image went from 47,055 bytes to 48,254, and its
+bss to 13,964 bytes, leaving 3,318 bytes under the 64 KB segment. The
+kernel is unchanged.

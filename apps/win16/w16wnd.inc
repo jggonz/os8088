@@ -1530,6 +1530,7 @@ w16_setfocus:
     jz .done
     call w16_hwnd2rec
     jc .done
+    call w16_focfront               ; another top-level's: it comes forward
     mov word [w16_sm_msg], WM_SETFOCUS
     mov [w16_sm_wp], si
     call w16_tellfocus
@@ -1553,6 +1554,37 @@ w16_setfocus:
 .keep:
     mov ax, [w16_focus]
     pop si
+    ret
+
+; w16_focfront - BX = the window taking the focus from SI's HWND (0 none):
+; when the two are in different top-level windows, the new one's os8088
+; window comes to the front, as Windows activated a window the focus moved
+; into (CALC's Statistics Box hands it back with SetFocus). With none before,
+; nothing moves. Keeps every register.
+w16_focfront:
+    or si, si
+    jz .ret
+    push ax
+    push bx
+    push cx
+    call w16_toplevel
+    mov cx, [bx + W16W_OSW]         ; CX = the new one's os8088 window
+    mov ax, si
+    call w16_hwnd2rec
+    jc .out
+    call w16_toplevel
+    cmp cx, [bx + W16W_OSW]
+    je .out
+    pop cx
+    pop bx
+    push bx
+    push cx
+    call w16_frontwnd
+.out:
+    pop cx
+    pop bx
+    pop ax
+.ret:
     ret
 
 ; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it, if it

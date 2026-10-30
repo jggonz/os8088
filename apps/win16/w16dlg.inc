@@ -131,7 +131,12 @@ VK_LEFT     equ 0x25
 VK_UP       equ 0x26
 VK_RIGHT    equ 0x27
 VK_DOWN     equ 0x28
+VK_INSERT   equ 0x2D
 VK_DELETE   equ 0x2E
+WM_CUT      equ 0x0300          ; an edit and the clipboard (SPEC.md 124.16.2)
+WM_COPY     equ 0x0301
+WM_PASTE    equ 0x0302
+WM_CLEAR    equ 0x0303
 
 ; --- a control's style word, named for its class: BS_, ES_, SS_ and LBS_ give
 ; the same bits different meanings, as Windows' did, so each class reads them
@@ -2099,6 +2104,10 @@ w16d_edtab:
     dw EM_SETMODIFY, w16d_esetmod
     dw EM_LINELENGTH, w16d_elen
     dw EM_GETLINE, w16d_egetline
+    dw WM_CUT, w16d_ecut
+    dw WM_COPY, w16d_ecopycb
+    dw WM_PASTE, w16d_epaste
+    dw WM_CLEAR, w16d_eclear
     dw 0
 
 ; w16d_ebuf - BX = an edit -> ES:DI = its text, CX = its length. Keeps the
@@ -2465,6 +2474,94 @@ w16d_eshift:
     clc
     ret
 
+; w16d_ectrl - CF=1 when Ctrl was down for the key in [w16_sm_lp]'s scan
+; code. Keeps every register.
+w16d_ectrl:
+    push bx
+    mov bl, [w16_sm_lp + 2]
+    xor bh, bh
+    cmp bl, W16_NSCAN
+    jae .no
+    test byte [w16_kmods + bx], 4
+    jz .no
+    pop bx
+    stc
+    ret
+.no:
+    pop bx
+    clc
+    ret
+
+; WM_COPY: the selection onto os8088's clipboard; an ES_PASSWORD edit too,
+; as Windows 3.0's did (CALC 3.00 copies through one)
+w16d_ecopycb:
+    call w16d_esel                  ; AX..DX
+    mov cx, dx
+    sub cx, ax
+    jcxz .out
+    push es
+    call w16d_ebuf                  ; ES:DI = the text
+    mov si, di
+    add si, ax
+    ICALL w16_clput                 ; (a single line: nothing to translate)
+    pop es
+.out:
+    jmp w16d_ezero
+
+; WM_CUT: copied, then cleared
+w16d_ecut:
+    call w16d_ecopycb
+; WM_CLEAR: the selection deleted
+w16d_eclear:
+    call w16d_esel
+    cmp ax, dx
+    je .out
+    mov cx, dx
+    sub cx, ax
+    call w16d_edel
+    mov [bx + EC_CARET], ax
+    mov [bx + EC_SELA], ax
+    or byte [bx + EC_FL], ECF_MODIFY
+    mov ax, EN_CHANGE
+    call w16d_notify
+    jmp w16d_eredraw
+.out:
+    jmp w16d_ezero
+
+; WM_PASTE: the clipboard's text, to its first line end, in place of the
+; selection
+w16d_epaste:
+    push es
+    push ds
+    pop es
+    mov di, w16d_sbuf
+    mov cx, EC_BUFSZ - 1
+    call OSAPI_CLIP_GET             ; CX = the bytes copied
+    pop es
+    jc .out
+    mov si, w16d_sbuf
+    xor dx, dx
+.end:
+    cmp dx, cx
+    jae .got
+    mov al, [si]
+    cmp al, 13
+    je .got
+    cmp al, 10
+    je .got
+    or al, al
+    je .got
+    inc si
+    inc dx
+    jmp short .end
+.got:
+    mov cx, dx
+    mov si, w16d_sbuf
+    jcxz .out
+    call w16d_erepl
+.out:
+    jmp w16d_ezero
+
 ; WM_KEYDOWN: the arrows, Home, End and Delete; Shift extends the selection
 w16d_ekey:
     call w16d_ebuf                  ; CX = the length
@@ -2480,6 +2577,14 @@ w16d_ekey:
     je .end
     cmp dx, VK_DELETE
     je .del
+    cmp dx, VK_INSERT
+    je .ins
+    jmp w16d_ezero
+.ins:
+    call w16d_eshift                ; Shift+Ins pastes, Ctrl+Ins copies
+    jc w16d_epaste
+    call w16d_ectrl
+    jc w16d_ecopycb
     jmp w16d_ezero
 .left:
     or ax, ax
@@ -2504,6 +2609,8 @@ w16d_ekey:
 .ext:
     jmp w16d_eredraw
 .del:
+    call w16d_eshift                ; Shift+Del cuts
+    jc w16d_ecut
     call w16d_esel
     cmp ax, dx
     jne .cut
@@ -4988,8 +5095,10 @@ w16d_mkdlg:
     call w16d_duy
     mov [w16_cwcy], ax
     add si, 13
-    call w16d_tstr                  ; the menu: not WIN16's (a dialog's menu
-    call w16d_tstr                  ;   is S13's); the class
+    call w16d_tstr                  ; the menu: a dialog that is the program's
+    mov [w16d_menu], ax             ;   own window has it (w16d_ownwin)
+    mov [w16d_menu + 2], dx
+    call w16d_tstr                  ; the class
     mov [w16d_cls], ax
     mov [w16d_cls + 2], dx
     call w16d_tstr                  ; the caption
@@ -5067,6 +5176,13 @@ w16d_mkdlg:
     ICALL w16_mkwnd                 ; BX = it
     jc .fail
     mov [w16d_dlg], bx
+    test word [w16d_dsty + 2], WS_CHILD_HI
+    jnz .notown
+    mov ax, [bx + W16W_OSW]
+    cmp ax, [w16_win]
+    jne .notown
+    call w16d_ownwin                ; the program's first window: WIN16's own
+.notown:
     mov ax, [w16d_dsty + 2]         ; its style as the template has it
     mov [bx + W16W_STYLE + 2], ax
     mov ax, [w16d_func]
@@ -5097,6 +5213,72 @@ w16d_mkdlg:
 .fail:
     pop es
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; w16d_ownwin - BX = a dialog that is the program's first top-level window,
+; so WIN16's own (CALC's, made by CreateDialog with no parent): its menu,
+; the template's or else its class's, as CreateWindow gives one, and WIN16's
+; window the size of its client, its caption and its menu bar - before
+; anything can ask GetWindowRect (SPEC.md 124.13). Keeps BX, ES.
+; -----------------------------------------------------------------------------
+w16d_ownwin:
+    push bx
+    push es
+    mov ax, [w16d_menu]
+    mov dx, [w16d_menu + 2]
+    or dx, dx
+    jnz .tstr
+    or ax, ax                       ; an ordinal, or none
+    jnz .load
+    jmp short .cls
+.tstr:
+    push si
+    mov es, dx
+    mov si, ax
+    cmp byte [es:si], 0
+    pop si
+    jne .load
+.cls:
+    mov al, [bx + W16W_CLS]         ; the class's, by name
+    cmp al, 0xFF
+    je .size
+    mov ah, W16C_SIZE
+    mul ah
+    mov di, ax
+    add di, w16_cls
+    mov ax, [di + W16C_MENU]
+    mov dx, [di + W16C_MENU + 2]
+    mov cx, ax
+    or cx, dx
+    jz .size
+.load:
+    ICALL w16_mload                 ; AX = the HMENU, 0 = none
+    mov [bx + W16W_MENU], ax
+.size:
+    xor ax, ax                      ; first without the bar, whose rows
+    call .to                        ;   depend on the width it is laid in
+    ICALL w16_mbarh                 ; AX = its rows
+    or ax, ax
+    jz .out
+    call .to
+.out:
+    pop es
+    pop bx
+    ret
+; .to - AX = the menu bar's rows: WIN16's window takes the client, that bar,
+; the caption and a thin frame (w16_sizeto's outer size)
+.to:
+    push bx
+    mov cx, [bx + W16W_CX]
+    add cx, 2
+    mov dx, [bx + W16W_CY]
+    add dx, 2
+    add dx, [w16_capn]
+    add dx, ax
+    mov ax, [bx + W16W_STYLE + 2]
+    ICALL w16_sizeto
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
