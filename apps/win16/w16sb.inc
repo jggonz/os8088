@@ -20,9 +20,10 @@ SB_THUMBTRACK   equ 5
 SB_TOP          equ 6
 SB_BOTTOM       equ 7
 SB_ENDSCROLL    equ 8
+SBS_VERT        equ 1               ; a SCROLLBAR control's style: up and down
 
-W16SB_FIRST     equ 4           ; ticks before a held arrow repeats,
-W16SB_EVERY     equ 2           ;   and between repeats
+W16SB_FIRST     equ 6           ; ticks before a held arrow repeats (330
+W16SB_EVERY     equ 2           ;   ms: a click is shorter), and between
 
 ; [w16_sbg], w16_sbgeom's answer, all on the screen and inclusive
 SG_X0   equ 0                   ; the bar
@@ -47,6 +48,8 @@ w16_sbfld:
 ; w16_sbhas - BX = a record, AL = a bar: CF=0 it has that bar. Keeps every
 ; register.
 w16_sbhas:
+    cmp byte [bx + W16W_KIND], W16Q_SCROLL
+    je .ctl
     push ax
     mov ah, WS_HSCROLL_HI
     or al, al
@@ -58,8 +61,26 @@ w16_sbhas:
     jz .no
     clc
     ret
+.ctl:
+    push ax                         ; a SCROLLBAR control: its one bar
+    call w16_sbctlbar
+    cmp al, ah
+    pop ax
+    jne .no
+    clc
+    ret
 .no:
     stc
+    ret
+
+; w16_sbctlbar - BX = a SCROLLBAR control -> AH = its bar: SB_VERT with
+; SBS_VERT, else SB_HORZ (124.22.8). Keeps the rest.
+w16_sbctlbar:
+    mov ah, SB_HORZ
+    test byte [bx + W16W_STYLE], SBS_VERT
+    jz .out
+    mov ah, SB_VERT
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -79,6 +100,27 @@ w16_sbgeom:
     mov [w16d_bar], al
     ICALL w16_origin                ; AX/DX = the client, CX/SI its size
     jc .out
+    cmp byte [bx + W16W_KIND], W16Q_SCROLL
+    jne .frame
+    mov [w16_sbg + SG_X0], ax       ; a SCROLLBAR control is all bar
+    mov [w16d_wl], ax
+    add ax, cx
+    dec ax
+    mov [w16_sbg + SG_X1], ax
+    mov [w16d_wr], ax
+    mov [w16_sbg + SG_Y0], dx
+    mov [w16d_wt], dx
+    add dx, si
+    dec dx
+    mov [w16_sbg + SG_Y1], dx
+    mov [w16d_wb], dx
+    mov cx, [w16_sbg + SG_Y0]       ; CX..DX along it
+    cmp byte [w16d_bar], SB_VERT
+    je .along
+    mov cx, [w16_sbg + SG_X0]
+    mov dx, [w16_sbg + SG_X1]
+    jmp .along
+.frame:
     push ax
     ICALL w16_bord
     mov di, ax                      ; DI = the border
@@ -491,6 +533,29 @@ w16d_hbox:
 w16d_bmleft:  db 0x10,0, 0x30,0, 0x70,0, 0xF0,0, 0x70,0, 0x30,0, 0x10,0
 w16d_bmright: db 0x80,0, 0xC0,0, 0xE0,0, 0xF0,0, 0xE0,0, 0xC0,0, 0x80,0
 
+; w16_sbctl - the SCROLLBAR control's procedure (124.22.8): BX = it, [w16_sm_*]
+; the message -> DX:AX. It paints its bar; a press on it is w16_sbhit's,
+; and the program sets and reads it with SB_CTL. Keeps BX, SI, DI.
+w16_sbctl:
+    cmp word [w16_sm_msg], WM_PAINT
+    jne .z
+    call w16d_popen
+    jc .z
+    call w16d_pclose
+    push ax
+    push cx
+    call w16_sbctlbar
+    mov al, ah
+    xor cl, cl
+    call w16_sbdraw
+    pop cx
+    pop ax
+.z:
+    xor ax, ax
+    xor dx, dx
+    ret
+
+; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; w16_ncpaint - BX = a record whose scroll bars are owed: drawn, and the
 ; corner between two (SPEC.md 124.22.1). Keeps every register.
@@ -650,14 +715,27 @@ w16_sbsend:
     ret
 
 ; w16_sbpost - AH = an SB_* code: WM_VSCROLL or WM_HSCROLL to the held bar's
-; window, lParam [w16_sbdpos] and 0. Keeps every register.
+; window, lParam [w16_sbdpos] and 0 - or, the bar being a SCROLLBAR control,
+; to the control's parent with the control in lParam's high word (124.22.8).
+; Keeps every register.
 w16_sbpost:
     push ax
+    push bx
     mov al, ah
     xor ah, ah
     mov [w16_sm_wp], ax
     mov ax, [w16_sbtrk]
     mov [w16_sm_hwnd], ax
+    mov word [w16_sm_lp + 2], 0
+    ICALL w16_hwnd2rec
+    jc .win
+    cmp byte [bx + W16W_KIND], W16Q_SCROLL
+    jne .win
+    mov ax, [bx + W16W_PARENT]
+    mov [w16_sm_hwnd], ax
+    mov ax, [w16_sbtrk]
+    mov [w16_sm_lp + 2], ax
+.win:
     mov ax, WM_HSCROLL
     cmp byte [w16_sbbar], SB_VERT
     jne .m
@@ -666,9 +744,9 @@ w16_sbpost:
     mov [w16_sm_msg], ax
     mov ax, [w16_sbdpos]
     mov [w16_sm_lp], ax
-    mov word [w16_sm_lp + 2], 0
     xor al, al
     ICALL w16_post
+    pop bx
     pop ax
     ret
 
@@ -830,10 +908,21 @@ w16_sbargs:
     ICALL w16_hwnd2rec
     pop ax
     jc .out
+    cmp al, SB_CTL                  ; SB_CTL: a SCROLLBAR control's own bar
+    je .ctl
     cmp al, SB_VERT
     ja .no
     clc
 .out:
+    ret
+.ctl:
+    cmp byte [bx + W16W_KIND], W16Q_SCROLL
+    jne .no
+    push cx
+    call w16_sbctlbar
+    mov al, ah
+    pop cx
+    clc
     ret
 .no:
     stc
@@ -950,6 +1039,8 @@ W16LIB w16u_setscrollrng
     mov dx, cx
 .p1:
     mov [si], dx
+    cmp byte [bx + W16W_KIND], W16Q_SCROLL
+    je .drawn                       ; a control's bar is never hidden
     mov dx, [si + 4]                ; shown when min != max
     cmp dx, [si + 2]
     mov ah, 1
@@ -958,6 +1049,7 @@ W16LIB w16u_setscrollrng
 .show:
     call w16_sbshow                 ; CF=1: it changed, and all is redrawn
     jc .out
+.drawn:
     or di, di
     jz .out
     mov cl, 1
@@ -1068,6 +1160,7 @@ W16LIB w16u_scrollwnd
     push di
     ICALL w16_args
     mov ax, [es:bx + 12]
+    call w16_carpre                 ; the caret off while it scrolls
     push word [es:bx + 8]
     push word [es:bx + 10]
     ICALL w16_hwnd2rec
@@ -1101,6 +1194,7 @@ W16LIB w16u_scrollwnd
     mov byte [w16_erase], 1
     call w16_srinval
 .out:
+    call w16_carpost
     mov ax, 1
     pop di
     pop si

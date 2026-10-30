@@ -79,6 +79,8 @@ EM_LINELENGTH    equ 0x0411
 EM_REPLACESEL    equ 0x0412
 EM_GETLINE       equ 0x0414
 EM_LIMITTEXT     equ 0x0415
+EN_SETFOCUS      equ 0x0100
+EN_KILLFOCUS     equ 0x0200
 EN_CHANGE        equ 0x0300
 
 LB_ADDSTRING     equ 0x0401
@@ -558,6 +560,11 @@ w16d_ctlproc:
     je .static
     cmp al, W16Q_LIST
     je .list
+    cmp al, W16Q_SCROLL
+    je .scroll
+    jmp short .out
+.scroll:
+    call w16_sbctl
     jmp short .out
 .button:
     call w16d_button
@@ -624,11 +631,36 @@ w16d_notify:
     mov word [w16_sm_msg], WM_COMMAND
     mov ax, [bx + W16W_MENU]
     mov [w16_sm_wp], ax
+    cmp byte [w16_nfdefer], 0       ; inside a program's SetFocus: sent when
+    jne .defer                      ;   it returns (SPEC.md 124.22.6)
+.post:
     xor al, al
     ICALL w16_post
+.out:
     pop cx
     pop ax
     ret
+.defer:
+    mov cl, [w16_nfn]
+    cmp cl, 2
+    jae .post
+    inc byte [w16_nfn]
+    push di
+    mov di, cx
+    and di, 0xff
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    mov ax, [w16_sm_hwnd]
+    mov [w16_nfq + di], ax
+    mov ax, [w16_sm_wp]
+    mov [w16_nfq + di + 2], ax
+    mov ax, [w16_sm_lp]
+    mov [w16_nfq + di + 4], ax
+    mov ax, [w16_sm_lp + 2]
+    mov [w16_nfq + di + 6], ax
+    pop di
+    jmp short .out
 
 ; w16d_popen - BX = a control: BeginPaint's DC on it, its invalid part made
 ; valid. Out [w16d_l]..[w16d_b] = its client on the screen (inclusive),
@@ -2143,14 +2175,16 @@ w16d_ecreate:
     jz .fail
     mov di, ax
     push di
-    ICALL w16_textptr               ; ES:SI, CX = the text it was made with
-    cmp cx, EC_BUFSZ - 1
-    jbe .c
+    push es                         ; the USER heap: w16_textptr answers the
+    ICALL w16_textptr               ;   TEXT's segment in ES - WIN16's own
+    mov ax, es                      ;   for a window made with none, where
+    pop es                          ;   the NUL landed at the block's offset
+    cmp cx, EC_BUFSZ - 1            ;   (S17: Calendar's empty edits wrote
+    jbe .c                          ;   into WIN16's code)
     mov cx, EC_BUFSZ - 1
 .c:
     push ds
-    push es
-    pop ds
+    mov ds, ax                      ; DS:SI, CX = the text it was made with
     cld
     rep movsb
     pop ds
@@ -2181,10 +2215,14 @@ w16d_ecode:
 
 w16d_efocus:
     or byte [bx + EC_FL], ECF_FOCUS
-    jmp short w16d_eredraw
+    mov ax, EN_SETFOCUS
+    jmp short w16d_efnote
 w16d_eunfocus:
     and byte [bx + EC_FL], ~ECF_FOCUS
     mov byte [bx + EC_DRAG], 0
+    mov ax, EN_KILLFOCUS
+w16d_efnote:
+    call w16d_notify
 w16d_eredraw:
     call w16d_inval
 w16d_ezero:
@@ -4988,8 +5026,11 @@ w16d_mkitem:
     jz .named
     inc si
     sub al, 0x80 - W16Q_BUTTON      ; BUTTON EDIT STATIC LISTBOX are 80h-83h,
-    cmp al, W16Q_LIST               ;   which is W16Q_BUTTON.. in order
-    ja .refuse
+    cmp al, W16Q_LIST               ;   which is W16Q_BUTTON.. in order, and
+    jbe .kind                       ;   SCROLLBAR is 84h
+    cmp al, 0x84 - 0x80 + W16Q_BUTTON
+    jne .refuse
+    mov al, W16Q_SCROLL
     jmp short .kind
 .named:
     mov ax, si

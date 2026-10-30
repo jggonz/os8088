@@ -1,0 +1,21 @@
+# obm_old_rgarrow.txt - WIN16's OBM_OLD_RGARROW (32763), SPEC.md 124.22.7: WIN16's own
+# drawing, not Microsoft's - Windows 2's arrow, pointing right, in a box,
+# 15 x 15 as Windows 3.0's VGA driver had it. `0` black, `f` white.
+# THE ART IS THE SOURCE: tools/w16icon.py builds it into WIN16.O88's
+# icon part.
+bitmap 32763
+000000000000000
+0fffffffffffff0
+0fffffffffffff0
+0ffffff0ffffff0
+0ffffff00fffff0
+0ff0000000ffff0
+0ff00000000fff0
+0ff000000000ff0
+0ff00000000fff0
+0ff0000000ffff0
+0ffffff00fffff0
+0ffffff0ffffff0
+0fffffffffffff0
+0fffffffffffff0
+000000000000000

@@ -75,6 +75,7 @@ W16_NOBJ     equ 16             ; brushes and pens made at once
 W16_NBMP     equ 16             ; bitmaps at once (SPEC.md 124.15.2)
 W16_NMDC     equ 4              ; memory DCs at once
 W16_DCMAX    equ 3              ; window DCs open under the current one
+W16_SVMAX    equ 2              ; SaveDC's states at once (SPEC.md 124.22.11)
 W16S_QN      equ 32             ; SOUND's queue, in notes (SPEC.md 124.15.1:
 W16S_QE      equ 6              ;   Windows' 192 bytes), and a note's bytes
 W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
@@ -283,6 +284,7 @@ section .w16dlg
     W16BSS w16_my, 2
     W16BSS w16_kascii, W16_NSCAN    ; each scan code's last ASCII
     W16BSS w16_capture, 2
+    W16BSS w16_car, 16          ; the caret (w16car.inc, SPEC.md 124.22.9)
     W16BSS w16_sbtrk, 2         ; a scroll bar's press (SPEC.md 124.22.1):
     W16BSS w16_sbbar, 1         ;   its window, 0 none; SB_HORZ or SB_VERT;
     W16BSS w16_sbcode, 1        ;   the SB_* it sends; the tick it repeats at;
@@ -539,6 +541,14 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
     W16BSS w16_focus, 2         ; the window with the keyboard focus, 0 none
+    ; --- S17: focus notifications sent from SetFocus (SPEC.md 124.22.6) ---
+    W16BSS w16_nfdefer, 1       ; 1: inside a program's SetFocus
+    W16BSS w16_nfn, 1           ; the notifications it raised
+    W16BSS w16_nfi, 1           ; ...and the next one to send
+    W16BSS w16_nfq, 8 * 2       ; each its parent, wParam and lParam
+    ; --- S17: SaveDC's states (SPEC.md 124.22.11) ---
+    W16BSS w16_svn, 1           ; how many are saved
+    W16BSS w16_svdc, W16_SVMAX * W16_DCSZ
     ; --- w16draw.inc (SPEC.md 124.20.4) ---
     W16BSS w16_dtr, 8           ; DrawText's rectangle (IntersectRect's,
                                 ;   FrameRect's scratch too)
@@ -781,6 +791,7 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16b_h, 2 * W16_NBMP
     W16BSS w16b_str, 2 * W16_NBMP       ; ...its 4bpp bytes a row
     W16BSS w16b_sel, 2 * W16_NBMP       ; ...1 = a memory DC holds it
+    W16BSS w16b_mono, 2 * W16_NBMP      ; ...1 = made 1 plane, 1 bit a pixel
     W16BSS w16m_bmp, 2 * W16_NMDC       ; each memory DC's bitmap
     W16BSS w16m_on, W16_NMDC            ; ...1 = it exists
     W16BSS w16m_brush, 2 * W16_NMDC     ; ...the brush selected into it
@@ -1502,6 +1513,7 @@ w16_cputest:
 %include "win16/w16sys.inc"     ; what the Control Panel calls (SPEC.md 124.20.5)
 %include "win16/w16file.inc"    ; files, through DOS.O88's core (SPEC.md 124.21)
 %include "win16/w16sb.inc"      ; scroll bars and ScrollWindow (SPEC.md 124.22)
+%include "win16/w16car.inc"     ; the caret (SPEC.md 124.22.9)
 %include "win16/w16edml.inc"    ; the multi-line EDIT (SPEC.md 124.22.3)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 

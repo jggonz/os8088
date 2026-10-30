@@ -540,6 +540,7 @@ W16LIB w16g_crebmp
     mul word [es:bx + 6]
     cmp ax, 1
     jne .done
+    mov byte [ds:w16b_mono + bp], 1 ; GetObject and GetBitmapBits answer 1bpp
     les si, [es:bx]
     mov ax, es
     or ax, si

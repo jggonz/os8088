@@ -1120,6 +1120,20 @@ w16_builtin:
     inc al
     cmp al, W16Q_LIST
     jbe .c
+    mov si, w16_bisb                ; SCROLLBAR, longer than eight
+    mov di, w16_namebuf
+    mov cx, 10
+.sb:
+    mov ah, [si]
+    cmp ah, [di]
+    jne .no
+    inc si
+    inc di
+    loop .sb
+    mov al, W16Q_SCROLL
+    clc
+    jmp short .out
+.no:
     stc
 .out:
     pop di
@@ -1132,6 +1146,8 @@ w16_bitab:                      ; in W16Q_BUTTON.. order, NUL-padded to 8
     db 'EDIT', 0, 0, 0, 0
     db 'STATIC', 0, 0
     db 'LISTBOX', 0
+w16_bisb:
+    db 'SCROLLBAR', 0
 
 ; w16_ctlstub - DX:AX = the window procedure of WIN16's controls: the stub
 ; of an export row no program can import (w16_ctlrow), so the program can
@@ -1554,12 +1570,58 @@ w16u_getfocus:
 w16u_setfocus:
     call w16_args
     mov ax, [es:bx]
-    ; fall into w16_setfocus
+    xor cx, cx
+    mov [w16_nfn], cx               ; and w16_nfi
+    mov byte [w16_nfdefer], 1
+    push si
+    call w16_setfocus
+    mov byte [w16_nfdefer], 0
+    mov cx, ax
+    call w16_nfsend
+    pop si
+    ret
+
+; w16_nfsend - CX = SetFocus's answer: the notifications its controls raised
+; (EN_KILLFOCUS, EN_SETFOCUS) SENT to their parents one after the other, as
+; Windows sent them inside the call - Calendar stores the line it is leaving
+; on EN_KILLFOCUS and has moved its edit by the time a posted one arrives -
+; and then CX answered. It is its own continuation.
+w16_nfsend:
+    mov bl, [w16_nfi]
+    cmp bl, [w16_nfn]
+    jae .done
+    inc byte [w16_nfi]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, w16_nfq
+    mov ax, [bx]
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_COMMAND
+    mov dx, [bx + 2]
+    mov [w16_sm_wp], dx
+    mov dx, [bx + 4]
+    mov [w16_sm_lp], dx
+    mov dx, [bx + 6]
+    mov [w16_sm_lp + 2], dx
+    push cx
+    call w16_hwnd2rec
+    pop ax                          ; the answer, the continuation's word
+    mov cx, ax
+    jc w16_nfsend                   ; its parent is gone
+    mov si, w16_nfsend
+    jmp w16_sendwnd
+.done:
+    mov ax, cx
+    xor dx, dx
+    ret
+
 
 ; -----------------------------------------------------------------------------
 ; w16_setfocus - AX = an HWND (0 = none) -> AX = the one that had the focus.
-; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8), at
-; once; a program's window is not told yet. A dialog keeps the control that
+; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8) at
+; once, and are posted to a program's own window (124.22.6). A dialog keeps the control that
 ; had its focus. Clobbers BX, CX, DX.
 ; -----------------------------------------------------------------------------
 w16_setfocus:
@@ -1649,11 +1711,12 @@ w16_focfront:
 .ret:
     ret
 
-; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it, if it
-; is one of WIN16's controls. Keeps every register.
+; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it - one
+; of WIN16's controls at once, a program's own window posted (SPEC.md
+; 124.22.6), a dialog not at all. Keeps every register.
 w16_tellfocus:
     cmp byte [bx + W16W_KIND], W16Q_PROG
-    je .out
+    je .prog
     cmp byte [bx + W16W_KIND], W16Q_DIALOG
     je .out
     push ax
@@ -1667,6 +1730,16 @@ w16_tellfocus:
     pop cx
     pop ax
 .out:
+    ret
+.prog:                              ; a program's own window: posted (S17)
+    push ax
+    call w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    xor ax, ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

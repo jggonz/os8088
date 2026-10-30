@@ -305,14 +305,60 @@ its table goes in the diary, so the reach is measured, not claimed.
       typing at both ends, and File Save writes the file - the bytes read
       off the floppy image on the host were the edited text exactly.
     - **Not yet seen:** `TabbedTextOut` drawing (Notepad imports it only to
-      print; Cardfile, batch 2, draws its list with it); word wrap (pinned
-      for the last batch); `SB_CTL` scroll bar controls (batch 4).
+      print; Cardfile, batch 2, draws its list with it - seen there); word
+      wrap (pinned for the last batch, moved up after batch 2); `SB_CTL`
+      scroll bar controls (shipped in batch 2).
     - **Not yet run:** `win16file`'s Notepad leg, which is written and runs
       in the final pass (S25).
     - What it costs (not yet measured): the EDIT is drawn twice when
       Notepad opens a file - once by its own `UpdateWindow`, once after its
       parent's erase (124.22.6) - which a MartyPC timing in the final pass
       will price.
+  - **Batch 2, Calendar and Cardfile - done** (SPEC.md §124.22.7-124.22.11,
+    and additions to 124.13, 124.22.1 and 124.22.6):
+    - [x] system bitmaps: `LoadBitmap(NULL, OBM_OLD_*)`, WIN16's own art
+      in the icon part, made through the same DIB routine as a program's
+      bitmap;
+    - [x] the SCROLLBAR control (`SB_CTL`), its presses posted to its
+      parent;
+    - [x] the caret: `CreateCaret` to `GetCaretBlinkTime`, steady, taken off
+      around a paint;
+    - [x] Calendar's calls (`GetUpdateRect`, `GetActiveWindow`, `AnyPopup`,
+      `HiliteMenuItem`, `FlashWindow`, `IsTwoByteCharPrefix`), and a hidden
+      window has no pixels;
+    - [x] an EDIT's `EN_SETFOCUS`/`EN_KILLFOCUS`, SENT when the program's
+      own `SetFocus` raises them - Calendar stores the line it leaves on
+      `EN_KILLFOCUS`;
+    - [x] Cardfile's calls: `CreateIC`, `IntersectClipRect`, `SaveDC`,
+      `RestoreDC`, `GetBitmapBits`, `Catch`, `Throw`, the Comm calls
+      refused;
+    - [x] activation gives the focus: `DefWindowProc`'s `WM_ACTIVATE`, and
+      a program's own window posted `WM_SETFOCUS`/`WM_KILLFOCUS`;
+    - [x] a scroll arrow's first repeat after six ticks, not four;
+    - [x] **a latent bug since S6**: a one-line EDIT made with no text
+      wrote its NUL into WIN16's own code. Calendar was the first program to
+      make one.
+    - **Seen on QEMU**, VGA and CGA: Calendar 3.0's day view, its day arrows
+      stepping one day a click, an appointment typed at 7:00 staying there
+      after Enter, the caret moving to 8:00. Cardfile 3.0's card view,
+      typing straight into the card, F6's Index dialog, F7 adding a second
+      card in sorted order, and List view (`TabbedTextOut`, seen drawing at
+      last).
+    - **Not yet seen:** a card with a picture (`GetBitmapBits`, saving),
+      `Catch`/`Throw` taken, `SaveDC`/`IntersectClipRect` drawing a picture
+      (Cardfile reaches them only with a picture in a card); Calendar's
+      month view and alarms.
+    - **Not yet:** word wrap. Calendar's notes and Cardfile's card are both
+      `ES_MULTILINE` without `ES_AUTOHSCROLL`, so a long line scrolls
+      across instead of wrapping. It moves up from the last batch to the
+      next.
+    - **Found and left:** Calendar and Cardfile at once on CGA - the second
+      is refused, "WIN16's library part could not be read", because each
+      instance holds its own image, bss and library part. One instance
+      running several programs is S21.
+    - What it costs: the image 32,237 bytes (+281), its bss 20,251 (+170),
+      13,048 bytes of room left in the 64 KB; the library part 46,325
+      (+1,791).
 
 - [ ] **S18: Libraries (R4, the program's own).**
   - *As a user, Recorder runs with its RECORDER.DLL, and Paintbrush with

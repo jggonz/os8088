@@ -1768,3 +1768,88 @@ off the floppy image on the host were the edited text exactly.
 `TabbedTextOut` is written but not yet seen drawing: Notepad imports it only
 to print, and Cardfile, the next batch, draws its list with it.
 `win16file`'s new Notepad leg is written and runs in the final pass.
+
+## 2026-10-30 — S17, batch 2: Calendar and Cardfile
+
+**Calendar needed a scroll bar that is a window of its own.** Its two day
+arrows are one SCROLLBAR control, and the arrows on it are Windows 2's
+bitmaps, which a program asks for with `LoadBitmap(NULL, OBM_OLD_*)`. Those
+are Microsoft's drawings, so WIN16 draws its own: four 15 x 15 text files
+beside the system icons, built into the same part. The control is the
+window's bar of batch 1 standing alone, its presses posted to the parent
+with the control's handle, which is how Calendar tells it from the hour
+list's bar. Calendar also wanted a caret (it is a box, inverted, and it
+does not blink), `GetUpdateRect` and a handful of answers.
+
+**A white box on the desktop.** Before its first `ShowWindow`, Calendar fills
+its client. WIN16 drew that fill, on the desktop, where the window was going
+to be. On Windows a hidden window has no pixels, and now WIN16's DC on a
+window that is not visible, or whose parent is not, draws nothing.
+
+**The appointment that vanished.** Typed "lunch" at 7:00, pressed Enter: the
+caret went to 8:00 and "lunch" was gone. Calendar's disassembly showed where
+it saves a line: on `EN_KILLFOCUS` from its edit, which WIN16's one-line EDIT
+never sent. Adding it was not enough, because WIN16 POSTS notifications
+(§124.13) and Windows sends them. Calendar's Enter calls `SetFocus` away
+from the edit, expecting the save to happen inside that call. It then moves
+the edit to the next line and gives it the next line's text. A posted
+`EN_KILLFOCUS` arrived after all that, and saved the empty next line. Now the
+notifications a program's own `SetFocus` raises are SENT, one after the
+other, before `SetFocus` returns. The import handler does the sending as a
+chain of continuations (§124.2.2), so the controls still never call the
+program themselves.
+
+**The crash that moved.** With that fixed, Calendar froze before its first
+paint - but only in the plain build. The trace build ran it; adding a few
+bytes of bss made the plain build run it too, and the next change broke it
+again. The CPU sat on an invalid opcode inside WIN16's window table. Five
+instruments in, the answer:
+
+1. QEMU's GDB stub, a breakpoint on every byte of the bss it landed in:
+   it arrived by an `iret`, from a frame that looked like one but was not.
+2. Breakpoints on every `iret` and `retf` in WIN16: so many stops that the
+   guest clock stood still for minutes.
+3. QEMU's `log exec` into a FIFO, with Python keeping a ring of the last
+   3,000 blocks. The block before the jump was `w16_cbenter` - calling
+   `w16_i21_on` at the wrong address. **WIN16's own code had been
+   changed**: the call's displacement byte read 00, not 07.
+4. Comparing the live image with the built one: a handful of single bytes
+   overwritten across WIN16's code, values like 00, `e`, `(`.
+5. The same ring, polling just those bytes and stopping the machine the
+   moment one changed: the last blocks were a one-line EDIT's `WM_CREATE`.
+
+`w16d_ecreate` asks `w16_textptr` for the text the window was made with,
+and that call answers the TEXT's segment in ES - and the copy and its NUL
+then went out through that ES rather than the USER heap's. A window made
+with no text has WIN16's own empty string, so the NUL landed in WIN16's
+code at the heap block's offset. That bug has been there since S6; every
+earlier program made its one-line edits from a dialog template with text in
+them. Calendar makes its edits empty. The multi-line EDIT had the same call
+written correctly.
+
+**Cardfile.** It refused at load until `CreateIC`, `IntersectClipRect`,
+`SaveDC`/`RestoreDC`, `GetBitmapBits`, `Catch`/`Throw` and the Comm calls
+were there. Then its first keys went nowhere. Windows' `DefWindowProc`
+gives a window activated the focus, and the window is told `WM_SETFOCUS`;
+Cardfile moves the focus into its card there. WIN16 did neither. With both,
+Cardfile runs: the card takes typing, F6 names it, F7 adds a second card in
+sorted order, and List view draws the index lines with `TabbedTextOut` -
+the first time that call was seen drawing.
+
+**One click, two days.** Calendar's day arrow stepped twice. The test's
+click holds the button for a fifth of a second, which is four ticks, and a
+held arrow repeated after four ticks. It repeats after six now.
+
+**What the gate caught.** The fast tier's stack-balance row found a path in
+the hidden-window change that popped one word too many: a paint of a window
+in another os8088 window had fallen through into the new label. No look
+would have shown it.
+
+**What was seen.** On QEMU, on VGA and CGA: Calendar 3.0's day view, a day
+a click on its arrows, an appointment kept; Cardfile 3.0's card and list
+views, its Index dialog, two cards. Not yet: a card with a picture, which is
+where `SaveDC`, `IntersectClipRect`, `GetBitmapBits` and `Catch`/`Throw` are
+reached, and word wrap, which both programs' text wants. Two WIN16 programs
+at once on CGA ran short of memory: each instance carries its own copy of
+WIN16, and one instance for several programs is S21.
+

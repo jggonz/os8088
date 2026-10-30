@@ -88,6 +88,7 @@ w16_bmnew:
     jb .find
     jmp short .no
 .take:
+    mov byte [w16b_mono + bx], 0
     mov [w16b_w + bx], ax
     mov [w16b_h + bx], dx
     inc ax
@@ -390,13 +391,29 @@ W16LIB w16g_credib
 
 ; LoadBitmap (USER.175) - args: +0 lpName, +4 hInstance: a bitmap resource,
 ; made as CreateDIBitmap makes one, a 1-bit one in its palette's colours
-; (SPEC.md 124.15.2)
+; (SPEC.md 124.15.2). hInstance NULL is one of Windows' own (OBM_*), WIN16's
+; drawing of it out of the icon part (124.22.7).
 W16LIB w16u_loadbmp
     push si
     push di
     ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
+    cmp word [es:bx + 4], 0
+    jne .prog
+    or dx, dx
+    jnz .no0
+    call w16_obm                    ; ES:SI = it
+    jc .no0
+    call w16_dibmake
+    jmp short .out0
+.no0:
+    xor ax, ax
+.out0:
+    pop di
+    pop si
+    ret
+.prog:
     mov di, w16_rnamb
     ICALL w16_rkey
     mov [w16_rnk], ax
@@ -415,28 +432,8 @@ W16LIB w16u_loadbmp
     mov ax, es
     inc ax
     mov es, ax                      ; ES:0 = the BITMAPINFO
-    mov [w16b_rs], ax
     xor si, si
-    ICALL w16_dibhdr
-    jc .rel
-    mov ax, [w16_dwid]
-    mov dx, [w16_dhgt]
-    call w16_bmnew
-    jc .rel
-    push ax                         ; a 1-bit one keeps its palette's two
-                                    ;   colours (SPEC.md 124.15.2)
-    mov es, [w16b_rs]               ; the bits follow the header and palette
-    mov ax, 2
-    cmp byte [w16_dbpp], 1
-    je .pn
-    mov ax, 16
-.pn:
-    mul word [w16_dpal]
-    add ax, [es:0]
-    mov [w16_dbits], ax
-    mov [w16_dbits + 2], es
-    call w16_bmfill
-    pop ax
+    call w16_dibmake
     jmp short .relx
 .rel:
     xor ax, ax
@@ -454,6 +451,67 @@ W16LIB w16u_loadbmp
 .out:
     pop di
     pop si
+    ret
+
+; w16_dibmake - ES:SI = a packed DIB (a header, its palette, its bits): a
+; bitmap made of it, a 1-bit one keeping its palette's two colours (SPEC.md
+; 124.15.2) -> AX = its handle, 0 none. Clobbers BX, CX, DX, SI.
+w16_dibmake:
+    mov [w16b_rs], es
+    push si
+    ICALL w16_dibhdr
+    pop si
+    jc .no
+    mov ax, [w16_dwid]
+    mov dx, [w16_dhgt]
+    push si
+    call w16_bmnew
+    pop si
+    jc .no
+    push ax
+    mov es, [w16b_rs]               ; the bits follow the header and palette
+    mov ax, 2
+    cmp byte [w16_dbpp], 1
+    je .pn
+    mov ax, 16
+.pn:
+    mul word [w16_dpal]
+    add ax, [es:si]
+    add ax, si
+    mov [w16_dbits], ax
+    mov [w16_dbits + 2], es
+    call w16_bmfill
+    pop ax
+    ret
+.no:
+    xor ax, ax
+    ret
+
+; w16_obm - AX = an OBM_* id -> ES:SI = WIN16's drawing of that bitmap, in
+; the icon part (124.22.7). CF=1 not one WIN16 draws. Keeps AX, BX, CX, DX.
+w16_obm:
+    push cx
+    call w16_icpart
+    jc .out
+    mov si, [es:0]                  ; past the icons' table: the bitmaps'
+    shl si, 1
+    add si, 2
+    mov cx, [es:si]
+    add si, 2
+    jcxz .no
+.e:
+    cmp [es:si], ax
+    je .hit
+    add si, 4
+    loop .e
+.no:
+    stc
+    jmp short .out
+.hit:
+    mov si, [es:si + 2]
+    clc
+.out:
+    pop cx
     ret
 
 ; GetObject (GDI.82) - args: +0 lpObject, +4 cbBuffer, +6 hObject. A bitmap's
@@ -484,8 +542,20 @@ W16LIB w16g_getobj
     and al, 0xFE
     mov [w16b_rec + 6], ax          ; bmWidthBytes, even
     mov word [w16b_rec + 8], 0x0401 ; bmPlanes 1, bmBitsPixel 4
+    cmp byte [w16b_mono + si], 0    ; made 1bpp: as it was made (124.22.11)
+    je .mono
+    mov ax, [w16b_rec + 2]
+    add ax, 15
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    and al, 0xFE
+    mov [w16b_rec + 6], ax          ; bmWidthBytes, a word a 16 pixels
+    jmp short .one
+.mono:
     cmp byte [w16_mono], 0
     je .bpp
+.one:
     mov byte [w16b_rec + 9], 1
 .bpp:
     xor ax, ax

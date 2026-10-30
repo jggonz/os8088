@@ -78,6 +78,7 @@ W16Q_EDIT   equ 2               ;   procedures are in the dialog part
 W16Q_STATIC equ 3
 W16Q_LIST   equ 4
 W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
+W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
 
 ; a dialog's own state, in its W16W_CS (w16dlg.inc); the program's DWL_*
 ; are its extra bytes, as on Windows
@@ -863,6 +864,7 @@ w16_wndfree:
     pop bx
 .noosw:
     call w16_rec2hwnd               ; AX = the HWND
+    LCALL w16_cargone               ; the caret goes with it (124.22.9)
     cmp [w16_focus], ax
     jne .nofocus
     mov word [w16_focus], 0
@@ -1847,6 +1849,7 @@ w16u_beginpaint:
     push di
     call w16_args
     mov ax, [es:bx + 4]
+    LCALL w16_carpre                ; the caret off while it paints (124.22.9)
     call w16_hwnd2rec
     jc .fail
     mov al, 1
@@ -1946,6 +1949,7 @@ w16_bp_erased:
 ; EndPaint (USER.40) - args: +0 lpPaint, +4 hWnd
 w16u_endpaint:
     call w16_dcclose
+    LCALL w16_carpost
     mov ax, 1
     ret
 
@@ -2083,6 +2087,27 @@ w16u_defproc:
     pop si
     ret
 .notsc:
+    cmp cx, WM_ACTIVATE             ; activated: the focus to it, unless it
+    jne .notact                     ;   is in it already (SPEC.md 124.22.6)
+    cmp word [w16_sm_wp], 0
+    je .actz
+    mov dx, ax
+    mov ax, [w16_focus]
+.inside:
+    or ax, ax
+    jz .take
+    cmp ax, dx
+    je .actz
+    call w16_hwnd2rec
+    jc .take
+    mov ax, [bx + W16W_PARENT]
+    jmp short .inside
+.take:
+    mov ax, dx
+    call w16_setfocus
+.actz:
+    jmp .zero
+.notact:
     cmp cx, WM_ERASEBKGND
     jne .noterase
     call w16_hwnd2rec
@@ -2098,11 +2123,16 @@ w16u_defproc:
     jc .zero                        ;   brush as the erase
     test byte [bx + W16W_FLAGS], W16WF_ERASE
     jz .valid
+    push ax
+    call w16_rec2hwnd
+    LCALL w16_carpre
+    pop ax
     mov al, 1
     call w16_dcopen
     call w16_pkids
     call w16_erasebg
     call w16_dcclose
+    LCALL w16_carpost
 .valid:
     and byte [bx + W16W_FLAGS], ~(W16WF_INVAL | W16WF_ERASE)
     jmp short .zero
@@ -2389,8 +2419,11 @@ w16_mouse:
 .have:
     cmp word [w16_sm_msg], WM_LBUTTONDOWN
     jne .nbar
+    cmp byte [bx + W16W_KIND], W16Q_SCROLL
+    je .sbar
     test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
     jz .nbar
+.sbar:
     LCALL w16_sbhit                 ; CF=0: it was on a bar, and is the bar's
     jnc .out
 .nbar:

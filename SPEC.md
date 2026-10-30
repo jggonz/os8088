@@ -226595,7 +226595,8 @@ parent's client, and nothing in os8088 knows it exists:
 - A disabled window (`EnableWindow`), or a window inside a disabled
   window, gets no mouse or key input.
 - `SetFocus` and `GetFocus`. `WM_SETFOCUS` and `WM_KILLFOCUS` go to WIN16's
-  own controls (§124.13) and not yet to a program's own windows.
+  own controls (§124.13) at once, and are posted to a program's own
+  windows (§124.22.6, S17).
 - `GetWindowText`, `SetWindowText` (a top-level window's is the os8088
   title), `GetWindowTextLength`, `GetParent`, `IsWindow`, `IsChild`,
   `IsWindowVisible`, `IsWindowEnabled`, `GetWindowRect`, `ScreenToClient`
@@ -227034,8 +227035,14 @@ text) and `WM_GETDLGCODE`.
 - **Notifications are POSTED**, where Windows sends them: `WM_COMMAND`, its
   `wParam` the ID and its `lParam` the control and the code (`BN_CLICKED`,
   `EN_CHANGE`, `LBN_SELCHANGE`, `LBN_DBLCLK`). That is one message later
-  than Windows, which no program in the plan can tell, and it keeps a
-  control's procedure from ever calling the program.
+  than Windows, and it keeps a control's procedure from ever calling the
+  program. **One program can tell, and that case is SENT** (S17 batch 2): an
+  EDIT's `EN_KILLFOCUS` and `EN_SETFOCUS` raised inside the program's own
+  `SetFocus` are sent to the parents before `SetFocus` returns, one after
+  the other, by the import's handler and not by the control. Calendar saves
+  the line it is leaving on `EN_KILLFOCUS`, then moves its edit to the next
+  line and sets the edit's text. A posted notification arrived after that,
+  so Calendar read the next line's text and lost what had been typed.
 - `WM_CTLCOLOR` is not sent: every control has Windows' default colours.
 - The caret is a solid bar; it does not blink.
 - **On a 1bpp display a button's face is white and its shadow black**, as
@@ -228054,7 +228061,7 @@ makes and leaves, then writes a result file. The row reads that file's bytes
 off the floppy image on the host and checks every one, and its message box's
 line. The Notepad leg joins the row in S17.
 
-### 124.22 USER and GDI, the common half *(S17, docs/plans/WIN16-ANY-PLAN.md: batch 1, Notepad, shipped)*
+### 124.22 USER and GDI, the common half *(S17, docs/plans/WIN16-ANY-PLAN.md: batch 1, Notepad, and batch 2, Calendar, shipped)*
 
 *As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and PIF
 Editor run.* What those six share is most of what Windows 3.x's USER and GDI
@@ -228081,7 +228088,7 @@ range 0-100, Windows' default. The calls:
 
 | call | answer |
 |---|---|
-| `SetScrollRange(hwnd, bar, min, max, redraw)` | the range. **A range of nothing hides the bar** (`min` = `max`) and any other shows it, which is how Windows' own was turned on and off: the style bit is the truth, the client grows or shrinks, and the window is sent `WM_SIZE` and invalidated whole. `SB_CTL` (a SCROLLBAR control) is batch 4's |
+| `SetScrollRange(hwnd, bar, min, max, redraw)` | the range. **A range of nothing hides the bar** (`min` = `max`) and any other shows it, which is how Windows' own was turned on and off: the style bit is the truth, the client grows or shrinks, and the window is sent `WM_SIZE` and invalidated whole. `SB_CTL` is a SCROLLBAR control's own (§124.22.8) |
 | `SetScrollPos(hwnd, bar, pos, redraw)` | the position, cut to the range, and the bar's thumb redrawn at once when `redraw` says so; the old position |
 | `GetScrollPos`, `GetScrollRange` | what was set |
 | `ShowScrollBar(hwnd, bar, show)` | the style bit, as `SetScrollRange`'s hiding does; `SB_BOTH` both |
@@ -228101,8 +228108,10 @@ moves, the thumb drawn where it is, and `SB_THUMBPOSITION` where it is let
 go. Every press ends in `SB_ENDSCROLL`. The mouse is the bar's until the
 release; the program sees no button message for it. `lParam`'s low word is
 the position, its high word 0 (the window's bar, not a control). **An arrow
-or the track held down repeats**, every two ticks after the first four, as
-Windows' did.
+or the track held down repeats**, every two ticks after the first six, as
+Windows' did. The first delay was four ticks until batch 2: a click held for
+a fifth of a second is four ticks, and Calendar's day arrow stepped two days
+for one click.
 
 #### 124.22.2 ScrollWindow *(shipped in S17 batch 1)*
 
@@ -228206,6 +228215,11 @@ need, because it is the first whose keys go to a CHILD:
   up: the program's own `TranslateMessage` would make a second `WM_SYSCHAR`
   of it, and a second menu loop would open under the first, so one keystroke
   in the menu chose its command twice.
+- **Activation gives the focus** (S17 batch 2). `DefWindowProc`'s
+  `WM_ACTIVATE` with `WA_ACTIVE` sets the focus to the window unless it is
+  in the window already, as Windows' did, and a program's own window is
+  posted `WM_SETFOCUS` and `WM_KILLFOCUS`. Cardfile moves the focus to its
+  card's EDIT on `WM_SETFOCUS`; without both, its first keys went nowhere.
 - **The ROM's shifted codes are folded back.** The BIOS reports Ctrl+End as
   scan `75h`, Ctrl+Home `77h`, Ctrl+Left/Right `73h`/`74h`, Ctrl+Page
   Up/Down `84h`/`76h`, Alt+1 through Alt+= `78h`-`83h`, Shift, Ctrl and Alt
@@ -228214,6 +228228,88 @@ need, because it is the first whose keys go to a CHILD:
   scan code (`w16_scanx`) before the virtual-key table, and the modifier is
   the shift state's, as it was already. Before, each was dropped, so Ctrl+End
   did nothing anywhere.
+
+#### 124.22.7 System bitmaps *(shipped in S17 batch 2)*
+
+`LoadBitmap(NULL, id)` answers one of Windows' predefined bitmaps, the
+`OBM_*` ids from 32734 up. Batch 2 draws the four Calendar loads,
+`OBM_OLD_UPARROW`, `OBM_OLD_DNARROW`, `OBM_OLD_LFARROW` and
+`OBM_OLD_RGARROW` (32765 to 32762): Windows 2's arrows, each in its box,
+15 x 15 as Windows 3.0's VGA driver had them. Calendar draws its day
+buttons with them. Any other id answers NULL, as Windows answered an id it
+did not have.
+
+The drawings are WIN16's own, as §124.18.4's icons are: one character a
+pixel in `apps/win16/icons/obm_*.txt`, with a `bitmap <id>` line where an
+icon has its size. `tools/w16icon.py` puts them in the same part 6, after
+the icons' table: a count, then (id, offset) pairs in ascending id order,
+then each bitmap as a packed DIB (a `BITMAPINFOHEADER`, its colour table
+and its bits). A drawing that uses only black and white is 1 bit a pixel,
+and any other is 4. A system bitmap is therefore made exactly as a
+program's own `RT_BITMAP` resource is: one shared routine (`w16_dibmake`)
+turns a packed DIB into a bitmap handle, and `LoadBitmap` reaches it with
+the program's resource or with WIN16's drawing.
+
+#### 124.22.8 The SCROLLBAR control *(shipped in S17 batch 2)*
+
+A `SCROLLBAR` window, made by `CreateWindow` or a dialog template's class
+`0x84`, is the window's bar of §124.22.1 standing on its own. `SBS_VERT`
+makes it vertical, and anything else makes it horizontal. **The whole
+window is the bar**: arrows at its ends, the track between them, the
+thumb. It answers `SetScrollRange`, `SetScrollPos`, `GetScrollPos` and
+`GetScrollRange` with `SB_CTL` and its own `HWND`. A range of nothing does
+not hide it. A press on it posts `WM_VSCROLL` or `WM_HSCROLL` to its
+PARENT, with the codes of §124.22.1 and `lParam`'s high word the control's
+`HWND`, which is how Windows told a program which control it was. The
+press repeats as §124.22.1's does. Calendar's two day arrows are one such
+control.
+
+#### 124.22.9 The caret *(shipped in S17 batch 2)*
+
+There is one caret, and one window owns it, as on Windows:
+
+| call | answer |
+|---|---|
+| `CreateCaret(hwnd, hbm, w, h)` | the old caret destroyed; the new one made at (0, 0), hidden. A width or height of 0 is 1. With a bitmap, the caret is the bitmap's size |
+| `DestroyCaret()` | the caret taken off and forgotten |
+| `SetCaretPos(x, y)`, `GetCaretPos(lppt)` | its place in its window's client |
+| `HideCaret(hwnd)`, `ShowCaret(hwnd)` | a count, as Windows': created at 1, each `HideCaret` one more and each `ShowCaret` one less; it shows at 0. `hwnd` NULL is whichever window has it |
+| `SetCaretBlinkTime(ms)`, `GetCaretBlinkTime()` | kept and answered back, 530 until set |
+
+The caret is drawn as an inverted box of its size (`W16_XOR` through a DC
+of its own on its window), so taking it off is drawing it again. **It does
+not blink**: blinking would be a redraw twice a second for nothing on an
+XT, and the multi-line EDIT's caret (§124.22.3) does not blink either.
+**A paint of the caret's window takes it off first and puts it back after**,
+as Windows hid it: `BeginPaint` and `EndPaint`, `DefWindowProc`'s
+`WM_PAINT`, and `ScrollWindow`. The inverted pixels and the window's
+therefore never disagree. A window destroyed takes the caret with it.
+
+#### 124.22.10 Calendar's calls *(shipped in S17 batch 2)*
+
+| call | answer |
+|---|---|
+| `GetUpdateRect(hwnd, lprc, erase)` | the window's pending update cut to its client, and TRUE when it is not empty |
+| `GetActiveWindow()` | the top-level window of the one with the focus; with none, the topmost of the program's |
+| `AnyPopup()` | TRUE when a top-level window of the program is visible and has an owner |
+| `HiliteMenuItem` | TRUE: the menu bar is drawn by its own loop (§124.10) |
+| `FlashWindow`, `IsTwoByteCharPrefix` | 0: nothing flashes, and no character is a lead byte |
+
+**A window that is not visible has no pixels.** A DC on a window, or on a
+window whose parent is not `WS_VISIBLE`, draws nothing until the window is
+shown, as on Windows. Calendar fills its client before its `ShowWindow`, and
+that fill drew a white box on the desktop outside any window.
+
+#### 124.22.11 Cardfile's calls *(shipped in S17 batch 2)*
+
+| call | answer |
+|---|---|
+| `CreateIC(driver, device, port, init)` | the display's information context: the desktop's DC, as `CreateDC` answers (§124.17.1). Cardfile measures the System font through it |
+| `IntersectClipRect(hdc, l, t, r, b)` | the open DC's clip cut by the rectangle, in client coordinates with its right and bottom outside it. It holds until the DC is released or `RestoreDC` puts the old clip back. `SIMPLEREGION`, or `NULLREGION` when nothing is left. Another DC's answers `SIMPLEREGION` and keeps nothing |
+| `SaveDC(hdc)`, `RestoreDC(hdc, n)` | the open DC's whole state - its clip, its objects, its colours and modes - kept, `W16_SVMAX` (2) deep, and put back. `SaveDC` answers the level, 1 for the first, and 0 past the depth. `RestoreDC` takes that level or a negative one (-1 the last saved), forgets it and every later one, and answers TRUE (FALSE for a level never saved). A DC released forgets them all |
+| `GetBitmapBits(hbm, count, bits)` | the bitmap's rows, top first, as `GetObject` describes them. A bitmap `CreateBitmap` made with 1 plane and 1 bit a pixel answers Windows' monochrome bits: a pixel light grey or brighter is 1, and each row is a whole number of words. `GetObject` now says so too (`bmPlanes` 1, `bmBitsPixel` 1, `bmWidthBytes` the words' bytes). Any other bitmap answers its 4-bit rows, each padded to a word. At most `count` bytes; the answer is the bytes written. Cardfile saves a card's picture this way |
+| `Catch(lpCatchBuf)`, `Throw(lpCatchBuf, n)` | `Catch` keeps where its gate frame is on the program's stack and the frame's six words (the program's DI, SI, DS, BP and return), and answers 0. `Throw` puts that frame back where it was and returns from that `Catch` answering `n`. Everything pushed since is left behind with it, including any call WIN16 was making into the program: its continuation is on that same stack (§124.2.2) |
+| `OpenComm` | `IE_HARDWARE` (-10): there is no serial port a Windows program may have. `SetCommState`, `GetCommState`, `WriteComm`, `CloseComm` and `FlushComm` answer -1, and `GetCommError` 0. Cardfile imports them to dial a card's number |
 
 #### 124.22.5 The gate
 

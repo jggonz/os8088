@@ -92,6 +92,7 @@ w16_dcopen:
     jmp .clip
 .first:
     mov byte [w16_dcon], 1
+    mov byte [w16_svn], 0           ; SaveDC's states are this DC's
 .fresh:
     mov [w16_dcwnd], bx
     mov [w16_dcpaint], al
@@ -123,6 +124,13 @@ w16_dcopen:
     mov byte [w16_dctook], 1
 .held:
     push bx
+    push bx                         ; a window in a hidden one has no pixel
+.vis:                               ;   to draw, as Windows' DC had none
+    test byte [bx + W16W_FLAGS], W16WF_VIS  ;   (SPEC.md 124.22.6)
+    jz .hidden
+    call w16_parent
+    jnc .vis
+    pop bx
     call w16_toplevel
     mov bx, [bx + W16W_OSW]         ; BX = the os8088 window it is in
     or bx, bx
@@ -131,6 +139,9 @@ w16_dcopen:
     je .arm
     cmp bx, [w16_pfosw]
     je .armed0
+    jmp short .hide                 ; another os8088 window's: nothing to draw
+.hidden:
+    pop bx
 .hide:
     mov byte [w16_dchide], 1        ; not a pixel visible
     jmp short .armed0
