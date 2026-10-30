@@ -714,6 +714,17 @@ w16_reloc1:
     mov ax, [es:si + 6]             ; the ordinal
     call w16_findexp                ; DL = module, AX = ordinal -> AX = row
     jc .missing
+    cmp ax, W16_D3ROW               ; DOS3Call: int 21h itself, no gate
+    jne .nd3                        ;   (SPEC.md 124.15.3)
+    mov ax, w16k_dos3call
+    mov dx, cs
+    jmp .apply
+.nd3:
+    cmp ax, W16_WFROW               ; __WINFLAGS: a constant, its value
+    jne .stub
+    call w16k_getwinflags           ; AX (DX = 0)
+    jmp .apply
+.stub:
     mov dx, ax                      ; the stub: our CS : w16_stubs + row * 6
     shl ax, 1
     add ax, dx

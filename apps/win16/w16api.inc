@@ -90,6 +90,15 @@ W16EXPORT W16M_KERNEL,     128,     22, w16k_getpprofstr    ; GetPrivateProfileS
 W16EXPORT W16M_KERNEL,     129,     16, w16k_writepprof     ; WritePrivateProfileString(str str str str)
 W16EXPORT W16M_KERNEL,     132,     0,  w16k_getwinflags    ; GetWinFlags()
 W16EXPORT W16M_KERNEL,     207,     2,  w16k_isdbcs         ; IsDBCSLeadByte(word)
+W16EXPORT W16M_KERNEL,     1,       2,  w16k_fatalexit      ; FatalExit(word)
+W16EXPORT W16M_KERNEL,     115,     4,  w16k_debugstr       ; OutputDebugString(str)
+W16EXPORT W16M_KERNEL,     137,     6,  w16k_fatalapp       ; FatalAppExit(word str)
+; two bound by the loader to something other than a gate stub (w16_reloc1):
+; DOS3Call to int 21h itself, __WINFLAGS to its value (SPEC.md 124.15.3)
+W16_D3ROW equ W16NX
+W16EXPORT W16M_KERNEL,     102,     0,  w16k_dos3call       ; DOS3Call() -register
+W16_WFROW equ W16NX
+W16EXPORT W16M_KERNEL,     178,     0,  w16k_getwinflags    ; __WINFLAGS, an equate
 W16EXPORT W16M_USER,       1,       12, w16u_msgbox         ; MessageBox(word str str word)
 W16EXPORT W16M_USER,       5,       2,  w16u_initapp        ; InitApp(word)
 W16EXPORT W16M_USER,       6,       2,  w16u_postquit       ; PostQuitMessage(word)
@@ -103,6 +112,13 @@ W16EXPORT W16M_USER,       22,      2,  w16u_setfocus       ; SetFocus(word)
 W16EXPORT W16M_USER,       23,      0,  w16u_getfocus       ; GetFocus()
 W16EXPORT W16M_USER,       28,      6,  w16u_c2s            ; ClientToScreen(word ptr)
 W16EXPORT W16M_USER,       29,      6,  w16u_s2c            ; ScreenToClient(word ptr)
+W16EXPORT W16M_USER,       31,      2,  w16u_isiconic       ; IsIconic(word)
+W16EXPORT W16M_USER,       45,      2,  w16u_totop          ; BringWindowToTop(word)
+W16EXPORT W16M_USER,       50,      8,  w16u_findwnd        ; FindWindow(str str)
+W16EXPORT W16M_USER,       130,     6,  w16u_setclsword     ; SetClassWord(word s_word word)
+W16EXPORT W16M_USER,       175,     6,  w16u_loadbmp        ; LoadBitmap(word str)
+W16EXPORT W16M_USER,       286,     0,  w16u_desktop        ; GetDesktopWindow()
+W16EXPORT W16M_USER,       287,     2,  w16u_lastpopup      ; GetLastActivePopup(word)
 W16EXPORT W16M_USER,       32,      6,  w16u_getwrect       ; GetWindowRect(word ptr)
 W16EXPORT W16M_USER,       33,      6,  w16u_clientrect     ; GetClientRect(word ptr)
 W16EXPORT W16M_USER,       34,      4,  w16u_enable         ; EnableWindow(word word)
@@ -209,6 +225,12 @@ W16EXPORT W16M_GDI,        27,      10, w16g_rect           ; Rectangle(word s_w
 W16EXPORT W16M_GDI,        28,      14, w16g_roundrect      ; RoundRect(word s_word x6)
 W16EXPORT W16M_GDI,        31,      10, w16g_setpixel       ; SetPixel(word s_word s_word long)
 W16EXPORT W16M_GDI,        33,      12, w16g_textout        ; TextOut(word s_word s_word str word)
+W16EXPORT W16M_GDI,        34,      20, w16g_bitblt         ; BitBlt(word s_word x4 word s_word s_word long)
+W16EXPORT W16M_GDI,        35,      24, w16g_stretch        ; StretchBlt(word s_word x4 word s_word x4 long)
+W16EXPORT W16M_GDI,        52,      2,  w16g_cmpdc          ; CreateCompatibleDC(word)
+W16EXPORT W16M_GDI,        68,      2,  w16g_deldc          ; DeleteDC(word)
+W16EXPORT W16M_GDI,        82,      8,  w16g_getobj         ; GetObject(word s_word ptr)
+W16EXPORT W16M_GDI,        442,     20, w16g_credib         ; CreateDIBitmap(word ptr long ptr ptr word)
 W16EXPORT W16M_GDI,        45,      4,  w16g_select         ; SelectObject(word word)
 W16EXPORT W16M_GDI,        61,      8,  w16g_createpen      ; CreatePen(s_word s_word long)
 W16EXPORT W16M_GDI,        66,      4,  w16g_solidbrush     ; CreateSolidBrush(long)
@@ -220,11 +242,12 @@ W16EXPORT W16M_GDI,        93,      6,  w16g_textmet        ; GetTextMetrics(wor
 W16EXPORT W16M_GDI,        443,     28, w16g_setdib         ; SetDIBitsToDevice(word s_word x6 word word ptr ptr word)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
 W16EXPORT W16M_SOUND,      1,       0,  w16s_open           ; OpenSound()
-W16EXPORT W16M_SOUND,      2,       0,  w16s_none           ; CloseSound()
-W16EXPORT W16M_SOUND,      4,       8,  w16s_none           ; SetVoiceNote(word word word word)
-W16EXPORT W16M_SOUND,      5,       10, w16s_none           ; SetVoiceAccent(word word word word word)
-W16EXPORT W16M_SOUND,      9,       0,  w16s_none           ; StartSound()
-W16EXPORT W16M_SOUND,      10,      0,  w16s_none           ; StopSound()
+W16EXPORT W16M_SOUND,      2,       0,  w16s_close          ; CloseSound()
+W16EXPORT W16M_SOUND,      4,       8,  w16s_note           ; SetVoiceNote(word word word word)
+W16EXPORT W16M_SOUND,      5,       10, w16s_accent         ; SetVoiceAccent(word word word word word)
+W16EXPORT W16M_SOUND,      9,       0,  w16s_start          ; StartSound()
+W16EXPORT W16M_SOUND,      10,      0,  w16s_stop           ; StopSound()
+W16EXPORT W16M_SHELL,      22,      12, w16sh_about         ; ShellAbout(word str str word)
 ; a control's window procedure (SPEC.md 124.13), reached through its stub:
 ; module 0FCh, which the loader never binds
 W16_CTLROW equ W16NX
@@ -487,28 +510,438 @@ w16_lstr:
     pop si
     ret
 
-; --- SOUND, until S8 plays it through OSAPI_SND_TONE: OpenSound answers
-; S_SERDVNA (-1), "the device is not available", which a Windows program
-; already handles - a machine with its sound driver unloaded said the same
-w16s_open:
-    mov ax, 0xFFFF
+; WinHelp (USER.171) - +0 dwData, +4 wCommand, +6 lpHelpFile, +10 hWnd.
+; There is no Help here (SPEC.md 124.15.3): HELP_QUIT, which a program sends
+; as it ends whether or not it showed help, answers TRUE silently. Any other
+; command says why in a message box - its arguments are rewritten in place as
+; MessageBox's, which are as many bytes - and answers TRUE, so the program
+; does not add a message of its own
+w16u_winhelp:
+    call w16_args
+    mov ax, 1
+    cmp word [es:bx + 4], 2         ; HELP_QUIT
+    jne .say
     ret
-w16s_none:
+.say:
+    push si
+    push di
+    mov di, w16pf_ins + 128
+    mov si, w16_s_nohelp1
+    call w16_strcpy
+    push es
+    les si, [es:bx + 6]             ; the file's last component
+    mov ax, es
+    or ax, si
+    jz .noname
+    call w16_lastpart               ; ES:SI -> it
+    call w16_fcopy40
+    jmp short .named
+.noname:
+    pop es
+    push es
+    push ds
+    pop es
+    mov si, w16_s_itshelp
+    call w16_strcpy
+.named:
+    pop es
+    mov si, w16_s_nohelp2
+    call w16_strcpy
+    mov word [w16pf_ins], 'He'      ; the caption: "Help"
+    mov word [w16pf_ins + 2], 'lp'
+    mov byte [w16pf_ins + 4], 0
+    pop di
+    pop si
+    ; fall into w16_asmsgbox
+
+; w16_asmsgbox - ES:BX = twelve bytes of arguments whose +10 is an hWnd:
+; rewritten as MessageBox(hWnd, w16pf_ins + 128, w16pf_ins, MB_OK |
+; MB_ICONINFORMATION) and run as that import
+w16_asmsgbox:
+    mov word [es:bx], 0x0040
+    mov word [es:bx + 2], w16pf_ins
+    mov [es:bx + 4], ds
+    mov word [es:bx + 6], w16pf_ins + 128
+    mov [es:bx + 8], ds
+    jmp w16u_msgbox
+
+w16_s_nohelp1:  db 'Help is not available.', 13, 10, 'WIN16 has no WinHelp, so ', 0
+w16_s_itshelp:  db 'its help', 0
+w16_s_nohelp2:  db ' cannot be opened.', 0
+
+; ShellAbout (SHELL.22) - +0 hIcon, +2 lpszOtherStuff, +6 lpszApp, +10 hWnd.
+; A WIN16 message box (SPEC.md 124.15.3): "About" and the application, then
+; the application (after a '#' when there is one), the other line, and what
+; it is running on
+w16sh_about:
+    push si
+    push di
+    call w16_args
+    mov di, w16pf_ins               ; the caption: "About " + the title part
+    mov si, w16_s_about
+    call w16_strcpy
+    push es
+    les si, [es:bx + 6]
+    mov ax, es
+    or ax, si
+    jz .noapp
+    mov cx, 40
+    mov dl, '#'
+    call w16_fcopyn                 ; up to a '#'
+    mov byte [di], 0
+    mov di, w16pf_ins + 128         ; the text: after the '#', else the same
+    cmp byte [es:si], '#'
+    jne .whole
+    inc si
+    jmp short .line1
+.whole:
+    pop es
+    push es
+    les si, [es:bx + 6]
+.line1:
+    mov cx, 60
+    xor dl, dl
+    call w16_fcopyn
+    jmp short .other
+.noapp:
+    mov byte [di], 0
+    mov di, w16pf_ins + 128
+.other:
+    pop es
+    push es
+    mov word [di], 0x0A0D
+    add di, 2
+    les si, [es:bx + 2]
+    mov ax, es
+    or ax, si
+    jz .us
+    mov cx, 120
+    xor dl, dl
+    call w16_fcopyn
+    mov word [di], 0x0A0D
+    add di, 2
+.us:
+    pop es
+    mov si, w16_s_on8088
+    call w16_strcpy
+    pop di
+    pop si
+    jmp w16_asmsgbox
+
+w16_s_about:    db 'About ', 0
+w16_s_on8088:   db 13, 10, 'WIN16 on os8088', 0
+
+; w16_fcopyn - ES:SI a far string -> DS:DI, at most CX characters, stopping
+; at its NUL or at DL (0 = none). DI and SI end past what was copied; no NUL
+; is written. Keeps the rest but AL.
+w16_fcopyn:
+    jcxz .out
+.c:
+    mov al, [es:si]
+    or al, al
+    jz .out
+    or dl, dl
+    jz .put
+    cmp al, dl
+    je .out
+.put:
+    mov [di], al
+    inc si
+    inc di
+    loop .c
+.out:
+    ret
+
+; w16_fcopy40 - ES:SI -> DS:DI, at most 40 characters, NUL-terminated
+w16_fcopy40:
+    push cx
+    push dx
+    mov cx, 40
+    xor dl, dl
+    call w16_fcopyn
+    mov byte [di], 0
+    pop dx
+    pop cx
+    ret
+
+; w16_lastpart - ES:SI a far path -> ES:SI past its last '\', '/' or ':'
+w16_lastpart:
+    push di
+    mov di, si
+.c:
+    mov al, [es:di]
+    or al, al
+    jz .out
+    inc di
+    cmp al, '\'
+    je .cut
+    cmp al, '/'
+    je .cut
+    cmp al, ':'
+    jne .c
+.cut:
+    mov si, di
+    jmp short .c
+.out:
+    pop di
+    ret
+
+; --- the program ends itself (SPEC.md 124.15.3) -----------------------------
+
+; FatalAppExit (KERNEL.137) - +0 lpMessage, +4 wAction: the program ends,
+; its window showing the message
+w16k_fatalapp:
+    push si
+    push di
+    call w16_args
+    mov di, w16_l1
+    les si, [es:bx]
+    mov ax, es
+    or ax, si
+    jz .nomsg
+    call w16_fcopy40
+.nomsg:
+    mov si, w16_s_fatalapp
+    jmp short w16_endself
+
+; FatalExit (KERNEL.1) - +0 the code
+w16k_fatalexit:
+    push si
+    push di
+    call w16_args
+    mov ax, [es:bx]
+    mov di, w16_l1
+    mov si, w16_s_fatalx
+    call w16_strcpy
+    call w16_putdec
+    mov word [di], ')'
+    mov si, w16_s_empty
+    ; fall into w16_endself
+
+; w16_endself - SI = the second line: the program is over, as w16_missed
+; ends one. Pops the DI and SI its callers pushed
+w16_endself:
+    mov di, w16_l2
+    call w16_strcpy
+    mov byte [w16_endmsg], 1
+    mov byte [w16_state], W16S_ENDED
+    pop di
+    pop si
+    ret
+
+w16_s_fatalapp: db 'It ended itself (FatalAppExit).', 0
+w16_s_fatalx:   db 'It ended itself (FatalExit ', 0
+
+; OutputDebugString (KERNEL.115): nowhere to go
+w16k_debugstr:
+    ret
+
+; DOS3Call (KERNEL.102): bound by the loader straight to this, not to a gate
+; stub, so it is int 21h with the program's own registers and flags back
+w16k_dos3call:
+    ; STKBALANCE-OK: a far call's target, left by retf
+    int 0x21
+    retf
+
+; =============================================================================
+; USER: the window calls WinMine 3.10 makes at start-up (SPEC.md 124.15.3)
+; =============================================================================
+
+; GetDesktopWindow (USER.286)
+w16u_desktop:
+    mov ax, W16_HDESK
+    ret
+
+; GetLastActivePopup (USER.287) - +0 hWnd: the window itself
+w16u_lastpopup:
+    call w16_args
+    mov ax, [es:bx]
+    ret
+
+; IsIconic (USER.31): os8088 does not minimize
+w16u_isiconic:
     xor ax, ax
     ret
 
-; WinHelp (USER.171) - +0 dwData, +4 wCommand, +6 lpHelpFile, +10 hWnd.
-; There is no Help here (SPEC.md 124.6): HELP_QUIT, which a program sends as
-; it ends whether or not it showed help, answers TRUE, and every other
-; command FALSE, as Windows answered when WINHELP.EXE could not be run.
-; S8 makes the refusal say so
-w16u_winhelp:
+; BringWindowToTop (USER.45) - +0 hWnd
+w16u_totop:
     call w16_args
+    mov ax, [es:bx]
+    call w16_hwnd2rec
+    jc .no
+    call w16_frontwnd
+    mov ax, 1
+    ret
+.no:
     xor ax, ax
-    cmp word [es:bx + 4], 2         ; HELP_QUIT
-    jne .out
-    inc ax
+    ret
+
+; FindWindow (USER.50) - +0 lpWindowName, +4 lpClassName: the program's own
+; top-level window whose class and text match, case blind; NULL matches all
+w16u_findwnd:
+    push si
+    push di
+    call w16_args
+    mov ax, [es:bx + 4]
+    mov dx, [es:bx + 6]
+    mov byte [w16_fwcls], 0
+    mov cx, ax
+    or cx, dx
+    jz .title
+    call w16_farname                ; [w16_namebuf]
+    jc .none
+    mov byte [w16_fwcls], 1
+.title:
+    les si, [es:bx]
+    mov [w16_fwt], si
+    mov [w16_fwt + 2], es
+    xor cx, cx
+.slot:
+    cmp cx, W16_MAXWND
+    jae .none
+    call w16_slot2rec
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .next
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz .next
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .next
+    cmp byte [w16_fwcls], 0
+    je .ct
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .next
+    push cx
+    mov al, [bx + W16W_CLS]
+    mov ah, W16C_SIZE
+    mul ah
+    add ax, w16_cls
+    mov di, ax
+    mov si, w16_namebuf
+    mov cx, 16
+    push es
+    push ds
+    pop es
+    cld
+    repe cmpsb
+    pop es
+    pop cx
+    jne .next
+.ct:
+    mov ax, [w16_fwt]
+    or ax, [w16_fwt + 2]
+    jz .hit
+    call w16_fwcmp
+    jne .next
+.hit:
+    call w16_rec2hwnd
+    jmp short .out
+.next:
+    inc cx
+    jmp short .slot
+.none:
+    xor ax, ax
 .out:
+    pop di
+    pop si
+    ret
+
+; SetClassWord (USER.130) - +0 wNewWord, +2 nIndex, +4 hWnd. The class's
+; background brush (and every window of the class's, which each keep a copy)
+; or style; anything else - the icon, the cursor - is kept nowhere: 0
+GCW_HBRBACKGROUND equ -10
+GCW_STYLE         equ -26
+
+w16u_setclsword:
+    push si
+    call w16_args
+    mov dx, [es:bx]
+    mov cx, [es:bx + 2]
+    mov ax, [es:bx + 4]
+    call w16_hwnd2rec
+    jc .no
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .no
+    mov al, [bx + W16W_CLS]
+    mov ah, W16C_SIZE
+    mul ah
+    add ax, w16_cls
+    mov si, ax
+    cmp cx, GCW_STYLE
+    je .style
+    cmp cx, GCW_HBRBACKGROUND
+    jne .no
+    mov ax, dx
+    xchg ax, [si + W16C_HBR]
+    push ax
+    mov al, [bx + W16W_CLS]
+    xor cx, cx
+.w:
+    cmp cx, W16_MAXWND
+    jae .wd
+    call w16_slot2rec
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .wn
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .wn
+    cmp [bx + W16W_CLS], al
+    jne .wn
+    mov [bx + W16W_HBR], dx
+.wn:
+    inc cx
+    jmp short .w
+.wd:
+    pop ax
+    jmp short .out
+.style:
+    mov ax, dx
+    xchg ax, [si + W16C_STYLE]
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    pop si
+    ret
+
+; w16_fwcmp - BX = a window: ZF=1 its text equals [w16_fwt]'s, case blind.
+; Keeps BX and CX.
+w16_fwcmp:
+    push cx
+    push si
+    push di
+    push es
+    mov dx, ds
+    mov di, w16pf_ins
+    mov cx, 128
+    call w16_gettext
+    mov si, w16pf_ins
+    les di, [w16_fwt]
+.c:
+    mov al, [si]
+    mov ah, [es:di]
+    cmp al, 'a'
+    jb .u1
+    cmp al, 'z'
+    ja .u1
+    sub al, 'a' - 'A'
+.u1:
+    cmp ah, 'a'
+    jb .u2
+    cmp ah, 'z'
+    ja .u2
+    sub ah, 'a' - 'A'
+.u2:
+    cmp al, ah
+    jne .out
+    or al, al
+    jz .out
+    inc si
+    inc di
+    jmp short .c
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
     ret
 
 ; GetVersion (KERNEL.3): Windows 3.10 in AX (AL = major), DOS 3.30 in DX -

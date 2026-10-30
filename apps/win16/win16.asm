@@ -56,6 +56,10 @@ W16_NSCAN    equ 0x59           ; scan codes with a virtual key
 W16_NPTS     equ 32             ; LineTo's point buffer
 W16_TXTMAX   equ 80             ; TextOut's longest run
 W16_NOBJ     equ 16             ; brushes and pens made at once
+W16_NBMP     equ 8              ; bitmaps at once (SPEC.md 124.15.2)
+W16_NMDC     equ 4              ; memory DCs at once
+W16S_QN      equ 32             ; SOUND's queue, in notes (SPEC.md 124.15.1:
+W16S_QE      equ 6              ;   Windows' 192 bytes), and a note's bytes
 W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
                                 ;   the spill, to even
 W16_GBUF     equ W16_BS * 20    ; the band (20 rows: a menu item is the
@@ -539,6 +543,55 @@ section .w16dlg
     W16BSS w16w_hexa, 1         ; 'a' - 10 or 'A' - 10
     W16BSS w16w_tch, 1          ; the type's letter
     W16BSS w16w_buf, 12         ; a number's digits, built backwards
+    ; --- SOUND (w16snd.inc, SPEC.md 124.15.1)
+    W16BSS w16s_q, W16S_QN * W16S_QE    ; the queue: Hz, sounding units, units
+    W16BSS w16s_qh, 2           ; ...its head, tail and count
+    W16BSS w16s_qt, 2
+    W16BSS w16s_qn, 2
+    W16BSS w16s_due, 2          ; the tick the next note starts at
+    W16BSS w16s_frac, 2         ; ...and the 1/2000 of a tick carried
+    W16BSS w16s_until, 2        ; the tick our last tone ends at
+    W16BSS w16s_rnd, 2          ; 1000 or 2000: w16s_tick's rounding
+    W16BSS w16s_on, 1           ; OpenSound has it
+    W16BSS w16s_play, 1         ; StartSound has started the queue
+    W16BSS w16s_sounding, 1     ; a tone of ours may still be sounding
+    W16BSS w16s_tempo, 1        ; SetVoiceAccent's
+    W16BSS w16s_mode, 1
+    W16BSS w16s_pitch, 1
+    ; --- bitmaps and memory DCs (w16bmp.inc, SPEC.md 124.15.2)
+    W16BSS w16b_seg, 2 * W16_NBMP       ; each bitmap's claim, 0 = free
+    W16BSS w16b_w, 2 * W16_NBMP         ; ...its width and height
+    W16BSS w16b_h, 2 * W16_NBMP
+    W16BSS w16b_str, 2 * W16_NBMP       ; ...its 4bpp bytes a row
+    W16BSS w16b_sel, 2 * W16_NBMP       ; ...1 = a memory DC holds it
+    W16BSS w16m_bmp, 2 * W16_NMDC       ; each memory DC's bitmap
+    W16BSS w16m_on, W16_NMDC            ; ...1 = it exists
+    W16BSS w16b_rec, 14         ; GetObject's BITMAP
+    W16BSS w16b_bm, 2           ; the blit's: the bitmap's slot * 2
+    W16BSS w16b_src, 2          ; ...the source DC
+    W16BSS w16b_x, 2            ; ...the destination, client
+    W16BSS w16b_y, 2
+    W16BSS w16b_cx, 2
+    W16BSS w16b_cy, 2
+    W16BSS w16b_xs, 2           ; ...the source
+    W16BSS w16b_ys, 2
+    W16BSS w16b_cxs, 2
+    W16BSS w16b_cys, 2
+    W16BSS w16b_dx0, 2          ; ...the destination's corner, screen, uncut
+    W16BSS w16b_dy0, 2
+    W16BSS w16b_sx, 2           ; ...the source column, the cut corner's
+    W16BSS w16b_sy, 2
+    W16BSS w16b_sx0, 2          ; ...the DDA's first column and error
+    W16BSS w16b_err0, 2
+    W16BSS w16b_err, 2
+    W16BSS w16b_n, 2            ; ...pixels a row (bytes a row, filling)
+    W16BSS w16b_ow, 2           ; ...the band's stride
+    W16BSS w16b_band, 2         ; ...rows a band
+    W16BSS w16b_by, 2           ; ...the band's first screen row
+    W16BSS w16b_rs, 2           ; LoadBitmap's resource, its data segment
+    ; --- FindWindow (SPEC.md 124.15.3)
+    W16BSS w16_fwt, 4           ; the title asked for, far
+    W16BSS w16_fwcls, 1         ; 1 = a class was asked for
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -728,6 +781,8 @@ w16_endshow:
 ; and the dialog part, once
 w16_freeprog:
     call w16pf_endprog              ; its profiles written (SPEC.md 124.14)
+    call w16s_endprog               ; its sound stopped (SPEC.md 124.15.1)
+    call w16_bmend                  ; its bitmaps freed (SPEC.md 124.15.2)
     call w16_killwins               ; its second windows, which are ours
     mov byte [w16_inmodal], 0
     mov word [w16_focus], 0
@@ -1095,6 +1150,8 @@ w16_cputest:
 %include "win16/w16optab.inc"
 %include "win16/w16dlg.inc"     ; part 3's code, and its trampolines here
 %include "win16/w16prof.inc"    ; WIN.INI and private profiles
+%include "win16/w16snd.inc"     ; SOUND's voice queue (SPEC.md 124.15.1)
+%include "win16/w16bmp.inc"     ; bitmaps and memory DCs (SPEC.md 124.15.2)
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"
 

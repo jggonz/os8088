@@ -676,7 +676,7 @@ they stand on.
   - **Not seen:** the fifth held file sending one out (no program here
     opens five); a profile over 32,000 bytes.
 
-- [ ] **S8: Minesweeper.** *As a user I can play the original Windows
+- [x] **S8: Minesweeper.** *As a user I can play the original Windows
   Minesweeper on os8088, every level, with the timer, the mine counter, the
   face, marks, colour and best times, on every adapter my machine has.*
   - SOUND.DRV's voice API (`OpenSound`, `SetVoiceNote`, `SetVoiceAccent`,
@@ -687,6 +687,46 @@ they stand on.
   - *Verify:* QEMU and MartyPC-with-V20 rows (`win16mines`) play a scripted
     game to a win and a loss; the four adapters are looked at; the XT's
     frame cost is taken in the final pass.
+  - **Amended at S8** (SPEC.md §124.15): the target is Windows 3.1's
+    Minesweeper (3.0a, 80186 code) beside WinMine 2.9. SOUND's behaviour
+    was read off Windows 3.0's `SOUND.DRV` itself, including its bug: dotted
+    notes are ignored. WinHelp is a message box with its reason rather than
+    a greyed item - the item is the program's, and WIN16 cannot grey it.
+  - **Shipped** (one commit on PR #320):
+    - `apps/win16/w16snd.inc`: the voice queue, 32 notes, played from WIN16's
+      tick with the error carried in 1/2000 of a tick.
+    - `apps/win16/w16bmp.inc`: memory DCs (four), bitmaps (eight, each a
+      pinned claim in os8088's sixteen colours), `CreateDIBitmap`,
+      `LoadBitmap`, `GetObject`, `BitBlt` and `StretchBlt` (`SRCCOPY`,
+      `BLACKNESS`, `WHITENESS`, `PATCOPY`). An even source column is one
+      `OSAPI_GFX_BLIT4` straight from the claim.
+    - The calls around them (§124.15.3), `DOS3Call` and `__WINFLAGS` bound
+      at load rather than through a gate, and `FatalExit`/`FatalAppExit`.
+    - `tests/win16mines.py`, rows `win16mines` (QEMU) and `win16minesxt`
+      (MartyPC: the 8088's refusal, a V20's game and its cost), behind a new
+      `win16samples` capability: they run only where the samples are.
+    - `make win16`: a 45,701-byte image (41,833 at S7) and 13,064 bytes of
+      bss, 6,259 bytes under the 64KB segment. The kernel is unchanged.
+  - **Seen on the glass** (QEMU):
+    - W31MINE on VGA matches the Windows 3.1 screenshot, colours aside. A
+      game won shows the sunglasses and the name dialog, and Best Times
+      then reads *Beginner: 128 seconds Os8088*. A game lost shows the
+      frown and the mines. Flags and `?` marks, Expert (30 x 16, 99 mines,
+      kept across a relaunch), Custom Field, Color off (matching Windows
+      3.1's own mono shot, `win16ref/ref/w31-mine-mono.png`), the About box
+      and the WinHelp refusal.
+    - Sound, captured with `make test-snd`: the win tune is 247, 277, 311,
+      330, 370, 415, 466 and 494 Hz exactly; the loss alternates 494 and
+      247 Hz; the clock ticks at 2,488 Hz. WinMine 2.9 ticks and plays too.
+    - EGA (640 x 350): colour, and it fits. CGA (640 x 200): mono bitmaps,
+      and the bottom rows are off the screen (§124.15.4).
+    - BITMAP.EXE: the copy, the 2x `StretchBlt` and the mono twin are
+      pixel-for-pixel where Windows 3.0 puts them.
+  - **Not seen yet, owed to S13's final pass:** the two rows have been
+    written and registered but not run (soak runs once, at the end);
+    Hercules, which QEMU does not have; the 8088's refusal on MartyPC (it
+    is §124.4's census, gated host-side by `win16ne`); and the V20's frame
+    cost.
 
 - [ ] **S9: Floating point.** *As a user Calculator gets the right answer
   whether or not my machine has a coprocessor.*

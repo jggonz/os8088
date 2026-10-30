@@ -33,9 +33,10 @@
 ;   -DT16_PROBE286    the 286 probe Open Watcom's start-up uses (push sp / pop
 ;                     ax / cmp ax, sp / jnz) guarding an smsw: verdict STILL
 ;                     8086, because an 8086 never executes the smsw
-;   -DT16_UNKNOWN     one import more, USER.287 (GetLastActivePopup), which
-;                     WIN16 does not provide: the loader's refusal names it
-;                     before anything runs (SPEC.md 124.3)
+;   -DT16_UNKNOWN     one import more, USER.182 (KillSystemTimer), which
+;                     only Windows' own drivers call and WIN16 does not
+;                     provide: calling it ends the program, naming it
+;                     (SPEC.md 124.12; it was USER.287 until S8 provided that)
 
 %ifdef T16_186
 cpu 186
@@ -213,7 +214,7 @@ t16_start:
 %endif
         FARCALL MOD_USER, 1                 ; MessageBox
 %ifdef T16_UNKNOWN
-        FARCALL MOD_USER, 287               ; GetLastActivePopup: not provided
+        FARCALL MOD_USER, 182               ; KillSystemTimer: not provided
 %endif
         jmp     short t16_quit
         db      0x60, 0xC8, 0x0F, 0x6A, 0x69    ; data: never executed

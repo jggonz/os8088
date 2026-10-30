@@ -844,3 +844,93 @@ are only called at the end.
 **Not seen:** a fifth held file pushing one out; a file over 32,000 bytes.
 WinMine 2.9 keeps no best times, so the story's "record a time" waits for a
 program that does.
+
+## 2026-10-29 — S8: Minesweeper
+
+**The story.** *As a user I can play the original Windows Minesweeper.* The
+target moved up a version: Windows 3.1's Minesweeper (3.0a) has Custom,
+Color, marks and best times, which WinMine 2.9 does not. It is 80186 code,
+so on an 8088 §124.4's census refuses it with *Needs a V20, 80186 or
+better.* before a byte of it runs.
+
+**Three groups of calls.** What it imports that S1–S7 did not provide falls
+into sound, bitmaps, and a dozen small USER, KERNEL and SHELL calls. The
+small ones are each a row of SPEC.md §124.15.3. Two are not calls at all:
+`DOS3Call` is bound at load straight to an `int 21h / retf` in WIN16's code,
+and `__WINFLAGS` is a constant the loader writes where the fixup points.
+
+**SOUND was read off Windows' own driver.** No document says exactly what
+Windows 3.0's `SOUND.DRV` does with a note, so the driver was disassembled:
+
+- its frequency table is the eighth octave's twelve semitones, shifted
+  down by the octave and rounded;
+- a note's length is 96,000 / (tempo x length) units of 2.5 ms; normal
+  notes sound 7/8 of it, staccato 3/4, legato all;
+- its error codes and their order of checking;
+- and a bug: the dots argument is accepted and ignored. WIN16 ignores it
+  too, because the programs were written against that driver.
+
+The queue plays from WIN16's own tick, with each note's start rounded to the
+18.2 Hz tick and the remainder carried in 1/2000 of a tick, so a tune does
+not drift.
+
+**Minesweeper is silent by default.** The first runs made no sound at all,
+and the reason was in the program, not in WIN16: it only plays when
+`WINMINE.INI` says `Sound=3`, and it only ticks with `Tick=1` as well.
+With those set, `make test-snd` captured the win tune at 247, 277, 311, 330,
+370, 415, 466 and 494 Hz, exactly the driver's table.
+
+**A one-tick note can be two milliseconds long.** The clock tick is a 32nd
+note at tempo 120, 62.5 ms, which rounds to one 55 ms tick. But
+`StartSound` can be called anywhere inside a tick, and a one-tick tone that
+starts near the end of a tick is cut off by the next one. The first capture
+had ticks of about 20 ms. The first note after `StartSound` now rounds up
+by half a tick, which gives about 74 ms on average.
+
+**One memory DC, sixty-four blits.** Minesweeper keeps its cell pictures in
+one 16 x 256 bitmap, selects it into a memory DC, and `BitBlt`s a 16 x 16
+cell out of it for each square. So a bitmap here is converted once, when it
+is made, into os8088's own sixteen colours in a heap claim of its own, and a
+`SRCCOPY` from an even column is one `OSAPI_GFX_BLIT4` straight out of that
+claim. An odd column, and `StretchBlt`, go through WIN16's band with a
+nearest-pixel scaler. The LEDs and the face are `SetDIBitsToDevice`, which
+S4 already had. The `BITMAP.EXE` fixture puts its copy, its 2x stretch and
+its mono twin on exactly the pixels Windows 3.0 does.
+
+**The first click is never a mine.** The scripted loss clicked a mine as its
+first move and won a cell instead: Minesweeper moves a mine away from the
+first click. The script, and later the row, open a safe cell first.
+
+**What the adapters show.** On EGA the grey is darker. That is the program's
+own choice: it picks a darker grey on a display under 351 lines. On CGA the
+bitmaps go through the mono map, and with *Color* off on Windows 3.1 the
+reference machine draws the same picture (`w31-mine-mono.png`). But CGA's
+200 lines are fewer than Beginner's window, so its bottom rows are off the
+screen. WIN16 does not move or shrink a program's window, so that is a
+limit of the machine, written into §124.15.4.
+
+**The row reads the board.** `tests/win16mines.py` does not click blind. It
+reads the program's board out of its data segment (32 bytes a row at
+0x440, a mine bit and a revealed bit per cell) and asks WIN16's hit test
+where the client is. So every click is aimed at a cell whose contents the
+row already knows: a flag and its removal, every safe cell for a win, a mine
+after a safe cell for a loss, then the `WINMINE.INI` it leaves. Its MartyPC
+leg holds an 8088 to the refusal and plays a game on a V20, printing what
+each reveal costs.
+
+**Sizes.** WIN16 is a 45,701-byte image, up 3,868 bytes, with 13,064 bytes
+of bss: 6,259 bytes are left under the segment. The kernel is unchanged.
+
+**Tested, on the glass (QEMU):**
+
+- W31MINE on VGA: a game won, with the name dialog and Best Times reading
+  *Beginner: 128 seconds Os8088*; a game lost; flags and marks; Expert,
+  kept across a relaunch; Custom Field; Color off; About; the WinHelp
+  refusal;
+- the win and loss tunes and the clock tick, from the captured sound;
+- EGA and CGA, as described above;
+- WinMine 2.9, which ticks and plays its loss tune.
+
+**Not seen:** Hercules (QEMU has none); the two rows, written but not run
+until S13's final pass; the 8088 refusal on MartyPC; the V20's cost per
+reveal.

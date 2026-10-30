@@ -225011,8 +225011,8 @@ to the end goal, and none is a design decision against it:
 - DOS calls beyond what the C runtime makes (R5);
 - no segment moving or discarding (R6);
 - no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
-- no WinHelp: `WinHelp` answers `FALSE`, and `TRUE` to `HELP_QUIT`, which a
-  program sends as it ends; S8 makes the refusal say why (§47).
+- no WinHelp: `WinHelp` says so in a message box (§124.15.3), and answers
+  `TRUE` to `HELP_QUIT`, which a program sends as it ends, silently.
 
 Never: a 32-bit program. That is not Win16.
 
@@ -225317,9 +225317,9 @@ The kernel's own map is os8088's UI's, and it turns bright red **white**. A
 Windows program's red is dark, so WIN16 reduces it first. Every pen, brush
 and DIB pixel goes through this map; text is §124.7's lit-or-dark.
 
-**Not provided:** `BitBlt`, `CreateCompatibleDC`, `CreateDIBitmap`,
-`DeleteDC` and `StretchBlt` (WinMine 3.1's memory-DC drawing and
-`BITMAP.EXE`). WinMine 2.9 draws with `SetDIBitsToDevice` alone.
+`BitBlt`, `CreateCompatibleDC`, `CreateDIBitmap`, `DeleteDC` and
+`StretchBlt` (WinMine 3.1's memory-DC drawing and `BITMAP.EXE`) are S8's,
+§124.15.2. WinMine 2.9 draws with `SetDIBitsToDevice` alone.
 
 #### 124.8.2 What the system answered *(shipped in S4)*
 
@@ -225449,7 +225449,7 @@ aside for the end goal: it has no nested popup, a one-byte action and os8088's
 - **It exits** (`int 21h` AH = 4Ch): its memory and its window go
   (§124.8).
 - **It calls an import WIN16 does not provide:** the stub (§124.3) ends it in
-  the same way, with a toast naming the call, *Needs USER.287, which WIN16
+  the same way, with a toast naming the call, *Needs USER.182, which WIN16
   does not provide yet.*
 - **The user asks it to close:** the close box posts `WM_CLOSE`, and the
   program decides (§124.8).
@@ -225682,3 +225682,127 @@ own formatter after Wine's `wsprintf.c` (`apps/win16/w16fmt.inc`):
 `%[-][#][0][width][.precision][l]` with `c d i u x X s` and `%%`, `%s` and
 the `l` forms taking far arguments, a `NULL` `%s` printing `(null)`, at most
 1,024 characters and then a NUL, answering the count without it.
+
+### 124.15 Minesweeper: sound, bitmaps and the calls around them *(shipped in S8)*
+
+S8's target is Microsoft's own Minesweeper, `WINMINE.EXE` 3.10 off the
+Windows 3.1 disks (the one with Custom, Color, Best Times and marks), beside
+WinMine 2.9. §124.4's census already decides the CPU: it is 80186 code, so on
+an 8088 or 8086 it refuses with *Needs a V20, 80186 or better.* Everything
+below is what it imports that S1–S7 did not provide.
+
+#### 124.15.1 SOUND: the voice queue on the PC speaker
+
+`OpenSound`, `SetVoiceAccent`, `SetVoiceNote`, `StartSound`, `StopSound` and
+`CloseSound` behave as Windows 3.0's `SOUND.DRV` did, read off that driver,
+and play through `OSAPI_SND_TONE` (§34.1). There is one voice.
+
+| call | answers |
+|---|---|
+| `OpenSound` | 1, the number of voices. `S_SERDVNA` (-1) when `OSAPI_SND_CAPS` says the machine has no speaker, and when it is already open |
+| `SetVoiceAccent(voice, tempo, volume, mode, pitch)` | 0. Tempo 32–255 quarter notes a minute, else `S_SERDTP` (-8); mode 0 normal, 1 legato, 2 staccato, else `S_SERDMD` (-10); pitch 0–83 semitones added to every note, else `S_SERDPT` (-12). Volume is kept and not used: a speaker has one. A voice other than 1, or a sound not open, answers 0 and changes nothing |
+| `SetVoiceNote(voice, value, length, cdots)` | 0, the note queued. Value 1–84 is C2 to B8 (value 1 is 65 Hz, 37 is 262 Hz); 0 is a rest; over 84 `S_SERDNT` (-5). Length 1 is a whole note, 2 a half, 4 a quarter, and so on: it lasts 240,000 / (tempo × length) ms. `cdots` is accepted and ignored, as Windows 3.0's driver ignored it. A length the tempo makes zero ms long `S_SERDLN` (-6). A full queue `S_SERQFUL` (-3) |
+| `StartSound` | 0. Plays the queue from its first note; notes queued while it plays follow |
+| `StopSound` | 0. Stops the note sounding and empties the queue |
+| `CloseSound` | stops, empties, and closes |
+
+**A note sounds for part of its length:** all of it legato, 7/8 normal and
+3/4 staccato, then silence for the rest. The frequency is Windows' own table:
+the eighth octave's twelve semitones (C8 = 4,186 Hz to B8 = 7,902 Hz),
+shifted down by the octave.
+
+**The queue holds 32 notes** (Windows' default 192 bytes, six a note). It is
+played from WIN16's tick (`OSAPI_WM_TIMER`, §13.9), the clock `SetTimer`
+already runs on: each note's start is its offset from `StartSound` in
+milliseconds, rounded to the 18.2 Hz tick, so the error does not add up over
+a tune. So a note is at least one tick (55 ms) long. The first note after
+`StartSound` sounds half a tick longer, rounded: `StartSound` can come anywhere
+in a tick, and a one-tick note started near a tick's end would otherwise be
+cut to a few milliseconds by the tick after it. WinMine's tick is a 32nd note
+at 120 (62.5 ms): about 74 ms here on average. A sound left playing when the
+program ends is stopped.
+
+Minesweeper only makes a sound when its own `WINMINE.INI` asks: `Sound=3` in
+`[Minesweeper]` for the win and loss tunes, and `Tick=1` as well for the
+clock's tick. Windows 3.1 shipped them off, and so does a new Windows
+directory here.
+
+#### 124.15.2 Bitmaps and memory device contexts
+
+| call | |
+|---|---|
+| `CreateCompatibleDC(hdc)` | a memory DC, with a 1 x 1 stock bitmap selected. Up to four at once; then 0 |
+| `DeleteDC(hdc)` | TRUE for a memory DC. Its bitmap is not deleted |
+| `CreateDIBitmap(hdc, lpbih, fdwInit, lpbBits, lpbmi, fuUsage)` | a bitmap of the header's size. With `CBM_INIT` and `DIB_RGB_COLORS` its pixels are the DIB's, read the way §124.8.1's `SetDIBitsToDevice` reads one (1 or 4 bits a pixel, either header); without `CBM_INIT` they are black |
+| `LoadBitmap(hInstance, lpName)` | a bitmap resource (§124.10) made into a bitmap the same way |
+| `GetObject(hBitmap, cb, lp)` | the `BITMAP` record: type 0, width, height, width bytes, 1 plane, 4 bits a pixel (1 on a 1bpp display), no bits pointer. Other objects answer 0 |
+| `SelectObject(hMemDC, hBitmap)` | selects it and answers the one it replaced. A pen, brush or font selected into a memory DC is not kept: the answer is the stock object of its kind, and nothing changes. A bitmap selected into a window's DC answers 0 |
+| `DeleteObject(hBitmap)` | frees it. A bitmap still selected into a memory DC is not deleted: FALSE, as Windows answered |
+| `BitBlt(hdcDest, x, y, cx, cy, hdcSrc, xSrc, ySrc, dwRop)` | from a memory DC to a window's DC: `SRCCOPY` copies, the source cut to the bitmap and the destination to the DC's clip. `BLACKNESS`, `WHITENESS` and `PATCOPY` (the brush) fill the destination and need no source |
+| `StretchBlt(..., cxSrc, cySrc, dwRop)` | `BitBlt`'s pairs and ROPs, each destination pixel taken from the source pixel it falls on (Windows' `COLORONCOLOR`) |
+
+**How a bitmap is kept.** Its pixels are converted once, when it is made,
+into os8088's sixteen colours, 4 bits a pixel, top row first, in a heap claim
+of its own (`OSAPI_MEM_CLAIM`, §66: pinned). Each palette entry becomes the
+nearest of the sixteen, and on a 1bpp display it then goes through §124.8.1's
+mono map, as `SetDIBitsToDevice`'s pixels do. A monochrome bitmap's pixels
+are 0 and 1 drawn as black and white, the DC's default text and background
+colours. Up to eight bitmaps at once, each at most 64,000 bytes converted.
+They are freed when the program ends.
+
+**What a copy costs.** `BitBlt` puts a bitmap down with one
+`OSAPI_GFX_BLIT4` (§5.4.1) straight from its claim when the source's left
+edge is on a byte (an even column), and through WIN16's band otherwise.
+WinMine draws every cell that way, 16 x 16 from column 0.
+
+**Not provided** (R7, *USER and GDI breadth*): drawing INTO a memory DC
+(`BitBlt` to one, or any other drawing call on one, draws nothing and
+answers FALSE where the call answers anything); copying from the screen;
+every other raster operation (FALSE, nothing drawn); `CreateBitmap`,
+`CreateCompatibleBitmap`, `GetDIBits`, `SetBkColor`/`SetTextColor` applied
+to a monochrome source.
+
+**Which DC a call draws on.** A drawing call draws only on the DC
+`GetDC`/`BeginPaint` gave the program. A memory DC, the desktop's DC and a
+handle that is not a DC draw nothing.
+
+#### 124.15.3 The other calls
+
+| call | answers |
+|---|---|
+| `GetDesktopWindow` (USER.286) | a handle for the desktop. `GetDC` on it answers a DC that `GetDeviceCaps` reads but nothing draws on, so WinMine's *xyzzy* pixel at the screen's corner is not drawn over os8088's menu bar |
+| `FindWindow(lpClass, lpTitle)` (USER.50) | the program's own top-level window whose class and title match, case blind; NULL matches anything. Only the program's own: each program runs in a WIN16 of its own (S12), so `hPrevInstance` is always 0 |
+| `GetLastActivePopup(hWnd)` (USER.287) | the window itself. WinMine asks it only of the window `FindWindow` found, to front a previous instance, and there is never one (S12) |
+| `BringWindowToTop(hWnd)` (USER.45) | its os8088 window to the front |
+| `IsIconic(hWnd)` (USER.31) | FALSE: os8088 does not minimize |
+| `SetClassWord(hWnd, nIndex, wNew)` (USER.130) | `GCW_HBRBACKGROUND` (-10): the old brush, the new one set in the class and in every window of it, so the next erase uses it (WinMine's Color switch). `GCW_STYLE` (-26): the old style, the new one set. Every other index - the icon and cursor among them, which are kept nowhere - answers 0 and changes nothing |
+| `ShellAbout(hWnd, lpApp, lpOther, hIcon)` (SHELL.22) | a WIN16 message box titled *About* and the application (up to a `#` when there is one), its lines the application (after the `#`), the other line, a blank line and *WIN16 on os8088*. Not Windows' own box: there is no Windows here to name |
+| `WinHelp(hWnd, lpFile, wCommand, dwData)` (USER.171) | `HELP_QUIT`: TRUE, silently. Every other command shows *Help is not available. WIN16 has no WinHelp, so FILE.HLP cannot be opened.* in a message box, then answers TRUE so a program does not add a second message of its own (§47: the refusal says why) |
+| `DOS3Call` (KERNEL.102) | `int 21h` with the program's registers, through §124.3's handler: the import is bound to `int 21h / retf` in WIN16's code, not to a gate stub |
+| `__WINFLAGS` (KERNEL.178) | a constant import: `GetWinFlags`' answer, written where the program's fixup points when it is loaded |
+| `OutputDebugString` (KERNEL.115) | nothing |
+| `FatalExit(code)` (KERNEL.1) | the program ends, its window saying *It ended itself (FatalExit n).* |
+| `FatalAppExit(action, lpMessage)` (KERNEL.137) | the program ends, its window showing the message and *It ended itself (FatalAppExit).* |
+
+`TINYUNK.EXE`, the fixture for an import WIN16 lacks, imported
+`GetLastActivePopup` until this story provided it; it imports
+`KillSystemTimer` (USER.182) now, which only Windows' own drivers call.
+
+#### 124.15.4 What each adapter shows, and the gates
+
+On VGA the game is Windows 3.1's, cell for cell, in os8088's sixteen
+colours. On EGA's 640 x 350 it is in colour too, with the darker grey the
+program itself chooses below 351 lines. On a 1bpp display its bitmaps go
+through the mono map and it reads like Windows 3.1 with *Color* off. On CGA's
+640 x 200 Beginner's window is taller than the screen - the board starts 39
+lines down its client and is 144 high - so its bottom rows are off the
+screen: WIN16 does not move or shrink a program's window. Hercules' 720 x
+348 is taller than Beginner's window; its picture is the S13 pass's to look
+at, QEMU having no Hercules.
+
+`win16mines` (QEMU, VGA) plays it by reading the board out of the program's
+data - a right-click flag cleared again, a game won and recorded, a game lost
+- and checks the `WINMINE.INI` it leaves; `win16minesxt` (MartyPC) holds an
+8088 to the refusal and plays a game to a win on a V20, printing what each
+reveal costs. Both run only where the win16-reference skill has put the
+program in `build/win16/`: no Microsoft file is in this tree.

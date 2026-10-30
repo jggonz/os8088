@@ -691,6 +691,8 @@ w16g_createpen:
 w16g_delobj:
     call w16_args
     mov ax, [es:bx]
+    call w16_bmdelete               ; a bitmap (SPEC.md 124.15.2): freed
+    jnc .ret
     mov bx, ax
     sub bx, W16_OBJ0
     jb .stock
@@ -698,6 +700,7 @@ w16g_delobj:
     jae .no
     mov byte [w16_objk + bx], 0
     mov ax, 1
+.ret:
     ret
 .stock:
     sub ax, W16_STOCK
@@ -714,6 +717,22 @@ w16g_delobj:
 w16g_select:
     call w16_args
     mov ax, [es:bx]
+    mov cx, [es:bx + 2]             ; a memory DC's (SPEC.md 124.15.2)
+    cmp cx, W16_HDC
+    je .win
+    push ax
+    mov ax, cx
+    call w16_mdcslot                ; BX = its slot
+    pop ax
+    jc .no
+    jmp w16_bmselect
+.win:
+    cmp ax, W16_BMSTK               ; a bitmap into the window's DC: no
+    je .no
+    push bx
+    call w16_bmslot
+    pop bx
+    jnc .no
     mov dx, ax
     sub dx, W16_OBJ0
     jb .stock
@@ -755,6 +774,8 @@ w16g_setrop2:
     call w16_args
     mov cx, [es:bx]
     xor ax, ax
+    cmp word [es:bx + 2], W16_HDC   ; another DC's (SPEC.md 124.15.2): 0
+    jne .out
     mov al, [w16_rop]
     cmp cx, R2_BLACK
     jb .out
@@ -771,6 +792,10 @@ w16g_setrop2:
 ; MoveTo (GDI.20) - args: +0 y, +2 x, +4 hDC. Answers the old point in DX:AX.
 w16g_moveto:
     call w16_args
+    xor ax, ax
+    xor dx, dx
+    cmp word [es:bx + 4], W16_HDC   ; another DC's: nothing moves
+    jne .ret
     mov cx, [es:bx + 2]
     mov dx, [es:bx]
     mov ax, [w16_curx]
@@ -778,6 +803,7 @@ w16g_moveto:
     mov cx, [w16_cury]
     mov [w16_cury], dx
     mov dx, cx
+.ret:
     ret
 
 ; LineTo (GDI.19) - args: +0 y, +2 x, +4 hDC. Bresenham from the current
@@ -788,6 +814,10 @@ w16g_lineto:
     push di
     push bp
     call w16_args
+    cmp word [es:bx + 4], W16_HDC   ; another DC's: nothing drawn, FALSE
+    je .dc
+    jmp .no
+.dc:
     mov ax, [es:bx + 2]
     mov [w16_lx1], ax
     mov ax, [es:bx]
@@ -853,10 +883,14 @@ w16g_lineto:
     call w16_lflush
 .done:
     mov ax, 1
+.out:
     pop bp
     pop di
     pop si
     ret
+.no:
+    xor ax, ax
+    jmp short .out
 
 ; w16_lplot - SI, DI = a client point: into the buffer if inside the clip, or
 ; inverted now under W16_XOR
@@ -938,6 +972,8 @@ w16_rectin:
     mov [w16_rb], ax
     cmp byte [w16_dcon], 0
     je .no
+    cmp word [es:bx + 8], W16_HDC   ; Rectangle's and RoundRect's hDC
+    jne .no
     mov ax, [w16_rl]
     cmp ax, [w16_rr]
     jg .no
@@ -1251,6 +1287,8 @@ w16_rrinset:
 ; and not under the ROP: Windows' FillRect is PATCOPY.
 w16u_fillrect:
     call w16_args
+    cmp word [es:bx + 6], W16_HDC   ; another DC's: nothing drawn
+    jne .out
     mov ax, [es:bx]
     call w16_brcol
     cmp al, W16_NOCOL
@@ -1288,6 +1326,10 @@ w16_rcin:
 ; the ROP. Answers the colour it drew, as a COLORREF.
 w16g_setpixel:
     call w16_args
+    xor ax, ax                      ; another DC's: nothing drawn, -1
+    mov dx, -1
+    cmp word [es:bx + 8], W16_HDC
+    jne .ret
     mov ax, [es:bx]
     mov dl, [es:bx + 2]
     call w16_rgb2col
@@ -1306,6 +1348,7 @@ w16g_setpixel:
     mov ax, [w16_pal16 + bx]
     mov dl, [w16_pal16 + bx + 2]
     xor dh, dh
+.ret:
     ret
 
 ; =============================================================================
@@ -1389,6 +1432,10 @@ w16_txtcopy:
 ; SetTextColor (GDI.9) - args: +0 the COLORREF, +4 hDC. Answers the old one.
 w16g_settextcol:
     call w16_args
+    xor ax, ax
+    xor dx, dx
+    cmp word [es:bx + 4], W16_HDC   ; another DC's: kept nowhere
+    jne .out
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
     xchg ax, [w16_trgb]
@@ -1401,6 +1448,7 @@ w16g_settextcol:
     mov [w16_tcol], al
     pop dx
     pop ax
+.out:
     ret
 
 ; GetTextExtent (GDI.91) - args: +0 nCount, +2 lpString, +6 hDC. DX:AX =
@@ -1475,6 +1523,8 @@ w16g_textout:
     cmp byte [w16_dcon], 0
     je .done
     call w16_args
+    cmp word [es:bx + 10], W16_HDC  ; another DC's: nothing drawn, FALSE
+    jne .no
     mov ax, [es:bx + 8]
     add ax, [w16_ox]
     mov [w16_tx], ax
@@ -1488,10 +1538,14 @@ w16g_textout:
     call w16_txtdraw
 .done:
     mov ax, 1
+.out:
     pop bp
     pop di
     pop si
     ret
+.no:
+    xor ax, ax
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; w16_txtdraw - [w16_tn] characters of w16_txt at [w16_tx], [w16_ty] (screen)
@@ -1905,65 +1959,17 @@ w16g_setdib:
     cmp byte [w16_dcon], 0
     je .ret
     call w16_args
+    cmp word [es:bx + 26], W16_HDC  ; another DC's: nothing drawn
+    jne .ret
     cmp word [es:bx], 0             ; DIB_PAL_COLORS: no palette here
     jne .ret
     push es
     push bx
     les si, [es:bx + 2]             ; the header
-    mov ax, [es:si + 4]             ; width and height: words of a core
-    mov dx, [es:si + 6]             ;   header, dwords of an info one
-    mov cl, [es:si + 10]            ; ...and the bits a pixel
-    mov di, 3                       ; ...and the palette's bytes an entry
-    cmp word [es:si], 12
-    je .core
-    mov dx, [es:si + 8]
-    mov cl, [es:si + 14]
-    mov di, 4
-.core:
-    mov [w16_dwid], ax
-    mov [w16_dhgt], dx
-    mov [w16_dbpp], cl
-    mov [w16_dpal], di
-    ; --- the palette, mapped: 2 or 16 entries ---
-    mov bx, 2
-    cmp cl, 1
-    je .pal
-    mov bx, 16
-    cmp cl, 4
-    jne .refused
-.pal:
-    add si, [es:si]                 ; the entries follow the header
-    xor di, di
-.pe:
-    mov dl, [es:si]                 ; blue, green, red
-    mov ah, [es:si + 1]
-    mov al, [es:si + 2]
-    call w16_rgb2col
-    cmp byte [w16_mono], 0          ; BLIT4 would put the kernel's own map
-    je .pm                          ;   on it (SPEC.md 39.4): reduce it as
-    push bx                         ;   w16_ink does
-    mov bx, w16_monotab
-    xlat
-    pop bx
-.pm:
-    mov [w16_dmap + di], al
-    add si, [w16_dpal]
-    inc di
-    cmp di, bx
-    jb .pe
-    ; --- the source stride: DWORD-aligned rows ---
-    mov ax, [w16_dwid]
-    mov cl, [w16_dbpp]
-    xor ch, ch
-    mul cx                          ; bits a row
-    add ax, 31
-    mov cl, 5
-    shr ax, cl
-    shl ax, 1
-    shl ax, 1
-    mov [w16_dstride], ax
+    call w16_dibhdr
     pop bx
     pop es
+    jc .ret
     ; --- the visible rectangle, on the screen ---
     mov ax, [es:bx + 24]
     add ax, [w16_ox]
@@ -2049,14 +2055,81 @@ w16g_setdib:
 .skip:
     inc dx                          ; a row lpBits has not: not drawn
     jmp short .band
-.refused:
-    pop bx
-    pop es
 .ret:
     mov ax, [w16_dres]
     pop bp
     pop di
     pop si
+    ret
+
+; w16_dibhdr - ES:SI = a BITMAPINFO (or BITMAPCOREINFO) -> [w16_dwid],
+; [w16_dhgt], [w16_dbpp], [w16_dpal], [w16_dstride], and [w16_dmap] its
+; palette as os8088's colours (through the mono map on a 1bpp display).
+; CF=1: not 1 or 4 bits a pixel. Keeps all but AX, CX, DX.
+w16_dibhdr:
+    push bx
+    push si
+    push di
+    mov ax, [es:si + 4]             ; width and height: words of a core
+    mov dx, [es:si + 6]             ;   header, dwords of an info one
+    mov cl, [es:si + 10]            ; ...and the bits a pixel
+    mov di, 3                       ; ...and the palette's bytes an entry
+    cmp word [es:si], 12
+    je .core
+    mov dx, [es:si + 8]
+    mov cl, [es:si + 14]
+    mov di, 4
+.core:
+    mov [w16_dwid], ax
+    mov [w16_dhgt], dx
+    mov [w16_dbpp], cl
+    mov [w16_dpal], di
+    ; --- the palette, mapped: 2 or 16 entries ---
+    mov bx, 2
+    cmp cl, 1
+    je .pal
+    mov bx, 16
+    cmp cl, 4
+    jne .no
+.pal:
+    add si, [es:si]                 ; the entries follow the header
+    xor di, di
+.pe:
+    mov dl, [es:si]                 ; blue, green, red
+    mov ah, [es:si + 1]
+    mov al, [es:si + 2]
+    call w16_rgb2col
+    cmp byte [w16_mono], 0          ; BLIT4 would put the kernel's own map
+    je .pm                          ;   on it (SPEC.md 39.4): reduce it as
+    push bx                         ;   w16_ink does
+    mov bx, w16_monotab
+    xlat
+    pop bx
+.pm:
+    mov [w16_dmap + di], al
+    add si, [w16_dpal]
+    inc di
+    cmp di, bx
+    jb .pe
+    ; --- the source stride: DWORD-aligned rows ---
+    mov ax, [w16_dwid]
+    mov cl, [w16_dbpp]
+    xor ch, ch
+    mul cx                          ; bits a row
+    add ax, 31
+    mov cl, 5
+    shr ax, cl
+    shl ax, 1
+    shl ax, 1
+    mov [w16_dstride], ax
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop bx
     ret
 
 ; w16_dibrow - screen row DX of the DIB into 4bpp at DS:DI, [w16_dvw] pixels

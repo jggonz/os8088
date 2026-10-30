@@ -16070,6 +16070,29 @@ SOAK = [
         needs=("qemu", "mtools"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/apps.img", "build/syscheck.o88",
                "build/mbr.bin", "build/boothd.bin")),
+    Row("win16mines", "soak", py("tests/win16mines.py"), 60.0,
+        "SPEC.md 124.15, WIN16-PLAN S8: Windows 3.1's Minesweeper (W31MINE, "
+        "Microsoft's, in build/win16/ only where the win16-reference skill "
+        "put it - never in this tree) played on WIN16 under QEMU off a B: the "
+        "row writes itself. The board is READ out of the program's DGROUP, "
+        "so every click is aimed at a cell the row knows: a right-click "
+        "flags and two more clear it, every safe cell clicked is a WIN (Enter "
+        "takes the name dialog and Best Times), F2 and a mine after a safe "
+        "first click is a LOSS that WIN16 survives, and the close box leaves "
+        "SYSTEM\\APPDATA\\WIN16\\WINMINE.INI on B: with the won game's Time1",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16minesxt", "soak", py("tests/win16mines.py", "--marty"), 240.0,
+        "WIN16-PLAN S8 on the XT: a 5150's 8088 must REFUSE W31MINE - an "
+        "80186 program - with SPEC.md 124.4's sentence in WIN16's own window "
+        "(an 8088 does not fault on 186 code, it mis-executes it), and the "
+        "same 5150 with a NEC V20 and Hercules must play a game to a win. "
+        "It PRINTS the XT's cost - the launch, and each reveal from the "
+        "click to the UI's next idle - which is S8's frame-cost reading",
+        needs=("marty", "nasm", "win16samples"), serial=True, timeout=1800,
+        wants=("build/os8088-360.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "

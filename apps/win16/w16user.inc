@@ -1839,6 +1839,11 @@ w16u_endpaint:
 w16u_getdc:
     call w16_args
     mov ax, [es:bx]
+    cmp ax, W16_HDESK               ; the desktop's: read, never drawn on
+    jne .wnd                        ;   (SPEC.md 124.15.3)
+    mov ax, W16_HDESKDC
+    ret
+.wnd:
     call w16_hwnd0
     mov ax, 0
     jc .out
@@ -1850,7 +1855,11 @@ w16u_getdc:
 
 ; ReleaseDC (USER.68) - args: +0 hDC, +2 hWnd
 w16u_releasedc:
+    call w16_args
+    cmp word [es:bx], W16_HDC       ; the desktop's DC holds nothing
+    jne .out
     call w16_dcclose
+.out:
     mov ax, 1
     ret
 
@@ -2123,6 +2132,11 @@ w16_tarm:
 .n:
     add si, W16T_SIZE
     loop .t
+    call w16s_wait                  ; the sound queue's next note (124.15.1)
+    cmp ax, bx
+    jae .snd
+    mov bx, ax
+.snd:
     mov ax, bx
     inc bx
     jnz .arm
@@ -2162,6 +2176,7 @@ w16_ontimer:
 .n:
     add si, W16T_SIZE
     loop .t
+    call w16s_tick                  ; the sound queue (SPEC.md 124.15.1)
     call w16_tarm
     pop si
     jmp w16_input_kick
