@@ -97,6 +97,44 @@ w16_bord:
 .out:
     ret
 
+; w16_sbcut - BX = a record, CX/SI = its client's width and height inside
+; its border: each less the scroll bar it has (SPEC.md 124.22.1) - W16D_SBW,
+; less the border the bar lies over - never below 0. A list box's bar is
+; inside its own client (SPEC.md 124.13). Keeps the rest.
+w16_sbcut:
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    jz .out
+    cmp byte [bx + W16W_KIND], W16Q_LIST
+    je .out
+    push ax
+    call w16_bord
+    neg ax
+    add ax, W16D_SBW
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI
+    jz .h
+    sub cx, ax
+    jge .h
+    xor cx, cx
+.h:
+    test word [bx + W16W_STYLE + 2], WS_HSCROLL_HI
+    jz .o
+    sub si, ax
+    jge .o
+    xor si, si
+.o:
+    pop ax
+.out:
+    ret
+
+; w16_ncmark - BX = a record: its scroll bars owed, if it has any. Keeps
+; every register.
+w16_ncmark:
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    jz .out
+    or byte [bx + W16W_F2], W16W2_NCDIRTY
+.out:
+    ret
+
 ; -----------------------------------------------------------------------------
 ; w16_origin - BX = a record -> AX/DX = its client's top left on the screen,
 ; CX/SI = the client's width and height (never below 0). CF=1: its os8088
@@ -125,6 +163,7 @@ w16_origin:
     xor si, si
 .nobar:
     pop ax
+    call w16_sbcut
     clc
     ret
 .hid:
@@ -157,6 +196,7 @@ w16_origin:
     jge .h
     xor si, si
 .h:
+    call w16_sbcut
     mov ax, di
     pop di
     clc
@@ -381,8 +421,22 @@ w16_invaltree:
     cmp [di + W16W_PARENT], ax
     jne .n
     push ax
-    mov bx, di                      ; the rectangle in the child's client
-    call w16_bord
+    mov bx, di                      ; its frame, if the region reaches its
+    mov ax, [bx + W16W_X]           ;   window rectangle
+    cmp ax, [bp + 6]
+    jge .nonc
+    add ax, [bx + W16W_CX]
+    cmp ax, [bp + 12]
+    jle .nonc
+    mov ax, [bx + W16W_Y]
+    cmp ax, [bp + 4]
+    jge .nonc
+    add ax, [bx + W16W_CY]
+    cmp ax, [bp + 8]
+    jle .nonc
+    call w16_ncmark
+.nonc:
+    call w16_bord                   ; the rectangle in the child's client
     mov [w16_ivb], ax
     mov ax, [bx + W16W_X]
     add ax, [w16_ivb]
@@ -953,6 +1007,11 @@ w16_mkwnd:
     mov [si + W16W_CX], ax
     mov ax, [w16_cwcy]
     mov [si + W16W_CY], ax
+    mov ax, 100                     ; its scroll bars' range, Windows' default
+    mov [si + W16W_SBH + 4], ax
+    mov [si + W16W_SBV + 4], ax
+    mov bx, si
+    call w16_ncmark
     inc word [w16_seq]
     mov ax, [w16_seq]
     mov [si + W16W_SEQ], ax
@@ -1120,7 +1179,7 @@ w16_csize:
     xor dx, dx
 .bar:
     call w16_nobar
-    jmp short .out
+    jmp short .pos
 .rec:
     mov cx, [bx + W16W_CX]
     mov dx, [bx + W16W_CY]
@@ -1133,6 +1192,9 @@ w16_csize:
     mov dx, [bx + W16W_CY]
     sub dx, ax
 .pos:
+    xchg dx, si
+    call w16_sbcut
+    xchg dx, si
     or cx, cx
     jge .p1
     xor cx, cx

@@ -111,10 +111,12 @@ def progs():
     return out
 
 
-def bdisk(out, size, names):
+def bdisk(out, size, names, extra=()):
+    """B: for a leg: WIN16, DOS.O88, the build/win16/ programs NAMES, and
+    the host files EXTRA at the root"""
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", out,
                     "--size", str(size), b("win16.o88"), b("win16/DOS.O88")]
-                   + [b(os.path.join("win16", n)) for n in names]
+                   + [b(os.path.join("win16", n)) for n in names] + list(extra)
                    + ["--folder", "SYSTEM/APPDATA", "--folder",
                       "SYSTEM/APPDATA/WIN16"],
                    check=True, capture_output=True)

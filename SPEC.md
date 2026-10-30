@@ -228053,3 +228053,172 @@ both doors - KERNEL's calls and the C runtime's `int 21h` - in a folder it
 makes and leaves, then writes a result file. The row reads that file's bytes
 off the floppy image on the host and checks every one, and its message box's
 line. The Notepad leg joins the row in S17.
+
+### 124.22 USER and GDI, the common half *(S17, docs/plans/WIN16-ANY-PLAN.md: batch 1, Notepad, shipped)*
+
+*As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and PIF
+Editor run.* What those six share is most of what Windows 3.x's USER and GDI
+are past a dialog: scroll bars on any window, a window that scrolls its own
+pixels, and the multi-line EDIT, which Notepad *is*. S17 lands in batches, one
+program family each, and this section grows with them; a subsection says
+whether it is pinned or shipped.
+
+#### 124.22.1 Scroll bars on any window *(shipped in S17 batch 1)*
+
+A window made with `WS_VSCROLL` or `WS_HSCROLL` has Windows 3.0's scroll bar
+down its right or along its bottom, **outside its client**, as Windows' frame
+drew it: its client is `W16D_SBW` (17) narrower or shorter, less the window's
+own border where it has one, which is the overlap `AdjustWindowRect` already
+assumes (§124.20.5). Every reader of a client's size - `w16_origin`,
+`w16_csize`, and so `GetClientRect`, a DC's clip and a mouse message's point -
+takes it off in one place, so a program sees one client whichever it asks.
+The list box keeps the bar it draws inside its own rectangle (§124.13):
+it is not this one.
+
+Each window record carries the two bars' position, minimum and maximum
+(`W16W_SB`, 12 bytes; the record is 102). A window made with a bar has the
+range 0-100, Windows' default. The calls:
+
+| call | answer |
+|---|---|
+| `SetScrollRange(hwnd, bar, min, max, redraw)` | the range. **A range of nothing hides the bar** (`min` = `max`) and any other shows it, which is how Windows' own was turned on and off: the style bit is the truth, the client grows or shrinks, and the window is sent `WM_SIZE` and invalidated whole. `SB_CTL` (a SCROLLBAR control) is batch 4's |
+| `SetScrollPos(hwnd, bar, pos, redraw)` | the position, cut to the range, and the bar's thumb redrawn at once when `redraw` says so; the old position |
+| `GetScrollPos`, `GetScrollRange` | what was set |
+| `ShowScrollBar(hwnd, bar, show)` | the style bit, as `SetScrollRange`'s hiding does; `SB_BOTH` both |
+
+**A bar is drawn when its window's frame is exposed**, not on every
+`WM_PAINT`: an invalidation that reaches a window's rectangle from its parent
+marks the frame owed (`W16W2_NCDIRTY`), and the message loop draws owed
+frames before it hands out the next `WM_PAINT`. A position that changes
+redraws the thumb's track and the thumb, two fills and a box, and nothing
+else (PERFORMANCE.md rule 1).
+
+**A press on a bar is the window's `WM_VSCROLL` or `WM_HSCROLL`**, posted,
+as DefWindowProc's tracking sent them: an arrow is `SB_LINEUP`/`SB_LINEDOWN`
+(`LEFT`/`RIGHT`), the track either side of the thumb `SB_PAGEUP`/`SB_PAGEDOWN`,
+and the thumb is dragged - `SB_THUMBTRACK` at each new position while it
+moves, the thumb drawn where it is, and `SB_THUMBPOSITION` where it is let
+go. Every press ends in `SB_ENDSCROLL`. The mouse is the bar's until the
+release; the program sees no button message for it. `lParam`'s low word is
+the position, its high word 0 (the window's bar, not a control). **An arrow
+or the track held down repeats**, every two ticks after the first four, as
+Windows' did.
+
+#### 124.22.2 ScrollWindow *(shipped in S17 batch 1)*
+
+`ScrollWindow(hwnd, dx, dy, lprcScroll, lprcClip)` moves the client's pixels
+(or `lprcScroll`'s, cut by `lprcClip`) with §5.5's `gfx_scroll` and
+invalidates, **erasing**, what it uncovers. `gfx_scroll` moves whole bytes and
+only vertically, so a vertical scroll moves the rectangle's byte-aligned core
+and invalidates the vacated rows and the few columns either side of the core;
+a horizontal scroll, or one `gfx_scroll` refuses - the window covered by
+another, a clip that does not hold it - invalidates the whole rectangle,
+which is always correct and only slower. An update already pending in the
+window moves with the pixels, as Windows offset the update region. A child
+window does not move with its parent's scroll: none of S17's targets scrolls
+a window with children in it.
+
+#### 124.22.3 The multi-line EDIT *(shipped in S17 batch 1, but word wrap)*
+
+An EDIT made with `ES_MULTILINE` is a different control from the one-line
+EDIT of §124.13, in the same class, after Wine's `edit.c` in what it does.
+
+**Its text is in the program's own local heap**, a moveable block in the
+DGROUP of the instance it was created for, which is where Windows 3.0 kept
+it and where Notepad expects it: `EM_GETHANDLE` answers that local handle,
+and Notepad reads a file **into it** (`LocalReAlloc`, `LocalLock`,
+`_lread`) and hands it back with `EM_SETHANDLE`, and writes a file
+**out of it** the same way. The text is NUL-terminated in the block, lines
+end in CR LF, and a character index counts both. The block grows in steps of
+256 bytes, so typing does not reallocate at every key; the heap is never
+compacted (§124.9), and a step is what keeps it from being cut to pieces. A
+program whose instance has no local heap gets the block from WIN16's USER
+heap, and `EM_GETHANDLE` answers 0.
+
+Its limit is 30,000 characters until `EM_LIMITTEXT` sets another - Notepad
+sets 65,535 once a file is open, so the room the limit leaves is reckoned
+unsigned - and a key that would pass it is refused with `EN_MAXTEXT`.
+
+**It is drawn a line at a time** from the first line shown, each line in one
+`w16_tbox` per run of text between tabs and selection edges - the run's box
+reaching to the next tab stop, or to the right edge after the last - so a
+line is drawn once, and the white past its end in the same call. Tab stops
+are every eight average character widths. The caret is a bar the text's
+height. A change invalidates only the lines it touched: a character typed is
+its own line, an Enter or a joined line is from there down, and a caret that
+moves without changing the text is the two lines it left and reached.
+
+| what | answer |
+|---|---|
+| keys | the characters; Enter (CR LF); Backspace and Delete, across a line end too; the arrows, Home, End, Page Up, Page Down, Ctrl+Home and Ctrl+End; Shift with any of them to select; Shift+Delete, Ctrl+Insert, Shift+Insert. Up and Down keep the column the caret was at (the goal x), as Windows' did |
+| the mouse | a press places the caret, a drag selects, Shift extends; the view scrolls when a drag leaves it |
+| scrolling | `WM_VSCROLL` by a line, a page or to the thumb's line; `WM_HSCROLL` by eight average widths or a page. The view follows the caret. A vertical scroll is §124.22.2's: the lines move and only the ones uncovered are drawn |
+| its bars | `WS_VSCROLL`: the range 0 to the lines less the lines the view holds, so the bar's end is the last page, and the thumb at the first line shown. `WS_HSCROLL`: 0-100, the thumb at the view's left as a share of the widest line drawn so far |
+| `EM_GETTHUMB` | Windows 3.x's `0x040E`, sent as `WM_VSCROLL`'s or `WM_HSCROLL`'s `wParam`: the thumb's position - its own bar's when it has one, else 0-100 as a share of the way through. **That is Notepad's scrolling**: its EDIT has no bars, its main window has both and passes their `WM_VSCROLL`/`WM_HSCROLL` to the EDIT, and on `EN_VSCROLL`/`EN_HSCROLL` it asks `EM_GETTHUMB` and sets its own bar's position to the answer; an `SB_THUMBPOSITION` or `SB_THUMBTRACK` to an EDIT with no bar of its own is read as that share likewise, as Wine's `edit.c` reads it |
+| messages | `EM_GETSEL`, `EM_SETSEL` (an end past the text is the text's end), `EM_REPLACESEL`, `EM_GETHANDLE`, `EM_SETHANDLE`, `EM_GETLINECOUNT`, `EM_LINEINDEX`, `EM_LINELENGTH`, `EM_LINEFROMCHAR`, `EM_GETLINE`, `EM_LINESCROLL`, `EM_SCROLL`, `EM_GETRECT`, `EM_GETMODIFY`, `EM_SETMODIFY`, `EM_LIMITTEXT`, `EM_CANUNDO`, `EM_UNDO`, `EM_FMTLINES` (accepted: the text has no soft breaks to show), `EM_GETFIRSTVISIBLELINE`; `WM_SETTEXT`, `WM_GETTEXT`, `WM_GETTEXTLENGTH`, `WM_SETFONT` (the System font is the only one), `WM_SETREDRAW`, `WM_CUT`, `WM_COPY`, `WM_PASTE`, `WM_CLEAR`, `WM_SIZE` |
+| notifications | `EN_CHANGE`, `EN_UPDATE`, `EN_MAXTEXT`, `EN_ERRSPACE` (the heap would not grow), `EN_SETFOCUS`, `EN_KILLFOCUS`, `EN_VSCROLL`, `EN_HSCROLL`, posted to the parent as §124.13's are |
+| undo | one step, as Windows 3.0's: the last run of typing, the last deletion or the last replacement, put back by `EM_UNDO`, which then undoes itself |
+| the clipboard | os8088's (§124.16.1), and the multi-line text crosses it whole: CR LF in, CR LF out |
+
+**`ES_AUTOHSCROLL` off is word wrap**, which Notepad's Word Wrap command
+turns on by making a new EDIT without it. It is **not in this batch**: the
+lines are not wrapped, the view scrolls across instead, and `EM_FMTLINES`
+has no soft breaks to add. It is pinned for S17's last batch.
+
+#### 124.22.4 TabbedTextOut and Escape *(shipped in S17 batch 1)*
+
+`TabbedTextOut(hdc, x, y, str, n, ntabs, tabs, origin)` is `TextOut` a run at
+a time between tabs, a tab advancing to the next stop after the pen -
+`tabs`' (from `origin`), past the last of them or with none every eight
+average widths, and with ONE entry a stop every that many pixels, as Wine's
+`TEXT_TabbedTextOut` reads Windows' - with the gap the background colour's
+under `OPAQUE`, as an opaque `TextOut` fills; `SetTextAlign`'s vertical
+reference is honoured, its horizontal one is not. It answers the extent,
+height:width, and `GetTabbedTextExtent(hdc, str, n, ntabs, tabs)` answers the
+same without drawing. Notepad imports it to print, and Cardfile to draw its
+list (batch 2). **`Escape` answers 0 for every escape**: there is no printer
+(SPEC.md 124.6), and 0 is how a Windows 3.x printer driver said "not
+supported", which every target treats as no printing.
+
+#### 124.22.6 Activation, the paint order, and the keys a control passes up *(shipped in S17 batch 1)*
+
+Four things Windows did around a window that Notepad was the first target to
+need, because it is the first whose keys go to a CHILD:
+
+- **`WM_ACTIVATE`.** A program's top-level window shown for the first time,
+  and the owner of a modal dialog when the dialog ends, is posted
+  `WM_ACTIVATE` with `WA_ACTIVE`, as Windows sent it when the window became
+  the active one. Notepad sets the focus to its EDIT there and nowhere else;
+  without it its keys went to its main window and were lost.
+- **A parent paints before its children.** A window that is not
+  `WS_CLIPCHILDREN` and is painted - by its own `BeginPaint`, or by
+  `DefWindowProc`'s `WM_PAINT`, which erases - invalidates the children
+  under its update rectangle first, so they are painted after it and it
+  cannot draw over them. `UpdateWindow` on a child paints it ahead of its
+  parent's pending paint (Notepad's File Open does exactly that), and without
+  this the parent's erase then wiped it. What it costs is that child drawn
+  twice in that case, once by `UpdateWindow` and once after the parent.
+- **A control passes Alt up as a command.** A key `WM_SYSKEYDOWN`,
+  `WM_SYSKEYUP` or `WM_SYSCHAR` reaching one of WIN16's controls is made into
+  the `WM_SYSCOMMAND` `DefWindowProc` makes of it - Alt+letter `SC_KEYMENU`
+  with the letter, F10 `SC_KEYMENU`, Alt+F4 `SC_CLOSE` - and that is posted
+  to the control's top-level window, whose menu it is. The KEY is not posted
+  up: the program's own `TranslateMessage` would make a second `WM_SYSCHAR`
+  of it, and a second menu loop would open under the first, so one keystroke
+  in the menu chose its command twice.
+- **The ROM's shifted codes are folded back.** The BIOS reports Ctrl+End as
+  scan `75h`, Ctrl+Home `77h`, Ctrl+Left/Right `73h`/`74h`, Ctrl+Page
+  Up/Down `84h`/`76h`, Alt+1 through Alt+= `78h`-`83h`, Shift, Ctrl and Alt
+  with F1-F10 `54h`-`71h`, F11 and F12 `85h`-`8Ch` and an enhanced keyboard's
+  Ctrl and Alt cursor keys `8Dh`-`A3h`; every one is folded to the key's own
+  scan code (`w16_scanx`) before the virtual-key table, and the modifier is
+  the shift state's, as it was already. Before, each was dropped, so Ctrl+End
+  did nothing anywhere.
+
+#### 124.22.5 The gate
+
+`win16file`'s **Notepad leg** (soak, QEMU; it skips without Microsoft's
+`NOTEPAD.EXE`, which is never in this tree): Notepad is started on a text
+file of more than one screen, the leg scrolls it by its bar and by keys,
+types a line at the end, saves it with File Save, and reads the file off the
+floppy image on the host - the original bytes, then the line, CR LF and all.

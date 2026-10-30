@@ -518,6 +518,30 @@ w16d_ctlproc:
     push di
     xor ax, ax
     xor dx, dx
+    mov cx, [w16_sm_msg]            ; Alt and its keys: the WM_SYSCOMMAND
+    cmp cx, WM_SYSKEYDOWN           ;   DefWindowProc makes of them, posted
+    jb .nsys                        ;   to the top-level window, whose menu
+    cmp cx, WM_SYSCHAR              ;   it is (124.22.6). The key itself is
+    ja .nsys                        ;   not passed up: TranslateMessage
+    ICALL w16_syskey                ;   would make a second WM_SYSCHAR of it
+    jc .out
+    push bx
+    ICALL w16_toplevel
+    ICALL w16_rec2hwnd
+    pop bx
+    mov [w16_sm_hwnd], ax
+    xor al, al
+    ICALL w16_post
+    xor ax, ax
+    jmp .out
+.nsys:
+    cmp byte [bx + W16W_KIND], W16Q_EDIT    ; the multi-line EDIT takes
+    jne .shared                             ;   every message itself
+    test byte [bx + W16W_STYLE], ES_MULTILINE   ; (SPEC.md 124.22.3)
+    jz .shared
+    call w16e_proc
+    jmp short .out
+.shared:
     mov cx, [w16_sm_msg]
     cmp cx, WM_GETTEXT              ; what all four take alike
     je .gettext
@@ -3969,71 +3993,43 @@ w16d_lpaint:
 
 ; -----------------------------------------------------------------------------
 ; w16d_sbar - BX = a list box with its bar: the bar down the right of
-; [w16d_il]..[w16d_ib] - an arrow box at each end, the track, and the thumb
-; where the top item is among them all. Keeps BX.
+; [w16d_il]..[w16d_ib] - w16d_vbar's (w16sb.inc), the thumb where the top
+; item is among them all. Keeps BX.
 ; -----------------------------------------------------------------------------
 w16d_sbar:
     push bx
     mov ax, [w16d_ir]
     sub ax, W16D_SBW - 1
     mov [w16d_bxx], ax              ; the bar's left
-    mov si, COLOR_WINDOWFRAME       ; its left edge
-    mov bx, [w16d_it]
-    mov cx, ax
-    mov dx, [w16d_ib]
-    call w16d_fill
-    mov ax, [w16d_it]               ; the up box
-    mov [w16d_by], ax
-    mov si, w16d_bmup  ; XSEC-OK: w16d_sbox reads it through cs:
-    call w16d_sbox
-    mov ax, [w16d_ib]               ; the down box
-    sub ax, W16D_SBW - 1
-    mov [w16d_by], ax
-    mov si, w16d_bmdown  ; XSEC-OK: w16d_sbox reads it through cs:
-    call w16d_sbox
-    pop bx
-    push bx
-    mov ax, [w16d_ib]               ; the track: [w16d_e0]..[w16d_e1]
-    sub ax, W16D_SBW
-    mov [w16d_e1], ax
-    mov ax, [w16d_it]
-    add ax, W16D_SBW
-    mov [w16d_e0], ax
-    call w16d_lvis                  ; the thumb's top: the track's top plus
-    mov ax, [bx + LC_COUNT]         ;   its free rows x top / (count - shown)
+    mov ax, [w16d_it]               ; the thumb's top: the track's top plus
+    add ax, W16D_SBW                ;   its free rows x top / (count - shown)
+    mov [w16_sbg + SG_TH], ax
+    mov ax, [w16d_ib]
+    sub ax, [w16d_it]
+    inc ax
+    sub ax, 3 * W16D_SBW            ; AX = the rows the thumb can move
+    mov [w16_sbg + SG_FREE], ax
+    jl .draw
+    mov cx, [bx + LC_COUNT]
+    push cx
+    call w16d_lvis                  ; CX = the rows shown
+    pop ax
     sub ax, cx
     mov cx, ax                      ; CX = the scroll range
-    mov ax, [w16d_e1]
-    sub ax, [w16d_e0]
-    inc ax
-    sub ax, W16D_SBW                ; AX = the rows the thumb can move
-    jge .r
-    xor ax, ax
-.r:
+    mov ax, [w16_sbg + SG_FREE]
     mul word [bx + LC_TOP]
     or cx, cx
     jz .t0
     div cx
 .t0:
-    add ax, [w16d_e0]
-    mov [w16d_by], ax
-    mov si, COLOR_SCROLLBAR         ; the track above it and below it
-    mov ax, [w16d_bxx]
-    inc ax
-    mov bx, [w16d_e0]
-    mov cx, [w16d_ir]
-    mov dx, [w16d_by]
-    dec dx
-    call w16d_fill
-    mov bx, [w16d_by]
-    add bx, W16D_SBW
-    mov dx, [w16d_e1]
-    call w16d_fill
-    xor si, si                      ; the thumb, a plain box
-    call w16d_sbox
+    add [w16_sbg + SG_TH], ax
+.draw:
+    mov byte [w16d_sbonly], 0
+    call w16d_vbar
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
 ; w16d_sbox - a scroll bar box at [w16d_bxx] + 1, [w16d_by], W16D_SBW - 1
 ; across and W16D_SBW down: a black frame top and bottom, white, and the
 ; part's 7 x 4 picture at CS:SI in the middle (SI = 0: none). Keeps every
@@ -4786,7 +4782,13 @@ w16d_mrun:
     mov dx, 1
     ICALL w16_enable
     pop ax
+    push ax
     ICALL w16_setfocus
+    pop ax
+    ICALL w16_hwnd2rec              ; ...and activated again (124.22.6)
+    jc .act
+    ICALL w16_postact
+.act:
     pop bx
 .noown:
     mov al, [bx + WD_PREV]

@@ -51,7 +51,10 @@ W16W_KIND   equ 68              ; W16Q_*: 0 the program's class, else WIN16's
 W16W_F2     equ 69              ; W16W2_*
 W16W_CS     equ 70              ; 18 bytes: a control's or a dialog's own
                                 ;   state (w16dlg.inc)
-W16W_SEQ    equ 88              ; when it was made: siblings are in this
+W16W_SB     equ 88              ; 12: its scroll bars (SPEC.md 124.22.1),
+W16W_SBH    equ W16W_SB         ;   SB_HORZ's position, minimum and maximum,
+W16W_SBV    equ W16W_SB + 6     ;   then SB_VERT's
+W16W_SEQ    equ 100             ; when it was made: siblings are in this
                                 ;   order, Windows' Z order (w16dlg.inc)
 %if W16W_SEQ + 2 != W16W_SIZE || W16W_EXTRA + W16_WEXTRA != W16W_MENU
   %error "the window record's layout and W16W_SIZE disagree"
@@ -65,6 +68,7 @@ W16WF_DIS   equ 16              ; disabled (EnableWindow)
 W16WF_DYING equ 32              ; DestroyWindow has it
 
 W16W2_TTL   equ 7               ; a second top-level's title buffer, + 1
+W16W2_NCDIRTY equ 16            ; its scroll bars are owed (SPEC.md 124.22.1)
 W16W2_NSIZE equ 8               ; an overlapped window not yet sized: its
                                 ;   first ShowWindow sends WM_SIZE (124.8)
 
@@ -100,6 +104,7 @@ WS_CAPTION_HI  equ 0x00C0
 WS_BORDER_HI   equ 0x0080
 WS_DLGFRAME_HI equ 0x0040
 WS_VSCROLL_HI  equ 0x0020
+WS_HSCROLL_HI  equ 0x0010
 WS_GROUP_HI    equ 0x0002
 WS_TABSTOP_HI  equ 0x0001
 
@@ -143,6 +148,7 @@ MSG_PT      equ 14
 WM_CREATE     equ 0x0001
 WM_DESTROY    equ 0x0002
 WM_SIZE       equ 0x0005
+WM_ACTIVATE   equ 0x0006
 WM_SETFOCUS   equ 0x0007
 WM_KILLFOCUS  equ 0x0008
 WM_ENABLE     equ 0x000A
@@ -938,6 +944,10 @@ w16u_showwnd:
     or byte [bx + W16W_FLAGS], W16WF_VIS
     or di, di
     jnz .shown
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI | WS_MINIMIZE_HI
+    jnz .noact
+    call w16_postact                ; a top-level window: active (124.22.6)
+.noact:
     push ax                         ; newly shown: all of it is invalid
     push cx
     push dx
@@ -1474,7 +1484,23 @@ w16_nextmsg:
     mov byte [w16_quit], 0
     jmp .gen
 .paint:
-    xor cx, cx                      ; 3. WM_PAINT, a window that is invalid
+    xor cx, cx                      ; 3. the scroll bars owed, drawn here
+.nc:                                ;   (SPEC.md 124.22.1), then
+    call w16_slot2rec
+    mov al, [bx + W16W_FLAGS]
+    and al, W16WF_USED | W16WF_DYING
+    cmp al, W16WF_USED
+    jne .ncn
+    test byte [bx + W16W_F2], W16W2_NCDIRTY
+    jz .ncn
+    call w16_pshown
+    jc .ncn
+    LCALL w16_ncpaint
+.ncn:
+    inc cx
+    cmp cx, W16_MAXWND
+    jb .nc
+    xor cx, cx                      ;   WM_PAINT, a window that is invalid
 .pw:                                ;   and shown, its parent before it
     call w16_slot2rec
     mov al, [bx + W16W_FLAGS]
@@ -1843,6 +1869,7 @@ w16u_beginpaint:
     mov [es:di + PS_RC + 6], ax
     mov bx, [w16_dcwnd]
     mov al, [bx + W16W_FLAGS]
+    call w16_pkids
     and byte [bx + W16W_FLAGS], ~(W16WF_INVAL | W16WF_ERASE)
     test al, W16WF_ERASE
     jz .done
@@ -1871,6 +1898,30 @@ w16u_beginpaint:
 .out:
     pop di
     pop si
+    ret
+
+; w16_pkids - BX = a window being painted, [w16_prc] its rcPaint: its
+; children under it invalid, unless it is WS_CLIPCHILDREN - they are drawn
+; after it, so it cannot draw over them (SPEC.md 124.22.6). Keeps every
+; register.
+w16_pkids:
+    test word [bx + W16W_STYLE + 2], WS_CLIPCH_HI
+    jnz .ret
+    push ax
+    push cx
+    push dx
+    push si
+    mov ax, [w16_prc]
+    mov cx, [w16_prc + 2]
+    mov dx, [w16_prc + 4]
+    mov si, [w16_prc + 6]
+    mov byte [w16_erase], 1
+    call w16_invaltree
+    pop si
+    pop dx
+    pop cx
+    pop ax
+.ret:
     ret
 
 ; w16_bp_erased - WM_ERASEBKGND answered: fErase says whether it did not
@@ -1950,6 +2001,49 @@ w16u_clientrect:
     pop di
     ret
 
+; w16_syskey - [w16_sm_*] = WM_SYSKEYDOWN, WM_SYSKEYUP or WM_SYSCHAR: made
+; the WM_SYSCOMMAND DefWindowProc makes of it, in [w16_sm_*] - Alt+letter
+; SC_KEYMENU with the letter, F10 SC_KEYMENU with none, Alt+F4 SC_CLOSE. CF=1:
+; the key makes none. Keeps the rest.
+w16_syskey:
+    push dx
+    mov dx, [w16_sm_msg]
+    cmp dx, WM_SYSKEYUP
+    jne .notsku
+    cmp word [w16_sm_wp], VK_F10    ; F10: SC_KEYMENU, no character
+    jne .no
+    xor dx, dx
+    jmp short .keymenu
+.notsku:
+    cmp dx, WM_SYSKEYDOWN
+    jne .notskd
+    cmp word [w16_sm_wp], VK_F4     ; Alt+F4: SC_CLOSE
+    jne .no
+    test byte [w16_sm_lp + 3], 0x20
+    jz .no
+    mov dx, SC_CLOSE
+    jmp short .syscmd
+.notskd:
+    cmp dx, WM_SYSCHAR
+    jne .no
+    mov dx, [w16_sm_wp]             ; Alt+letter: SC_KEYMENU with it
+    cmp dl, ' '
+    je .no
+.keymenu:
+    mov [w16_sm_lp], dx
+    mov dx, SC_KEYMENU
+.syscmd:
+    mov word [w16_sm_lp + 2], 0
+    mov [w16_sm_wp], dx
+    mov word [w16_sm_msg], WM_SYSCOMMAND
+    pop dx
+    clc
+    ret
+.no:
+    pop dx
+    stc
+    ret
+
 ; =============================================================================
 ; DefWindowProc (USER.107) - args: as w16_smargs (SPEC.md 124.8's table)
 ; =============================================================================
@@ -1975,34 +2069,12 @@ w16u_defproc:
     LCALL w16_mtbegin
     ret
 .notnc:
-    cmp cx, WM_SYSKEYUP
-    jne .notsku
-    cmp word [w16_sm_wp], VK_F10    ; F10: SC_KEYMENU, no character
-    jne .zero
-    xor dx, dx
-    jmp short .keymenu
-.notsku:
     cmp cx, WM_SYSKEYDOWN
-    jne .notskd
-    cmp word [w16_sm_wp], VK_F4     ; Alt+F4: SC_CLOSE
-    jne .zero
-    test byte [w16_sm_lp + 3], 0x20
-    jz .zero
-    mov dx, SC_CLOSE
-    jmp short .syscmd
-.notskd:
+    jb .notsc
     cmp cx, WM_SYSCHAR
-    jne .notsc
-    mov dx, [w16_sm_wp]             ; Alt+letter: SC_KEYMENU with it
-    cmp dl, ' '
-    je .zero
-.keymenu:
-    mov [w16_sm_lp], dx
-    mov dx, SC_KEYMENU
-.syscmd:
-    mov word [w16_sm_lp + 2], 0
-    mov [w16_sm_wp], dx
-    mov word [w16_sm_msg], WM_SYSCOMMAND
+    ja .notsc
+    call w16_syskey
+    jc .zero
     call w16_hwnd2rec
     jc .zero
     push si
@@ -2028,6 +2100,7 @@ w16u_defproc:
     jz .valid
     mov al, 1
     call w16_dcopen
+    call w16_pkids
     call w16_erasebg
     call w16_dcclose
 .valid:
@@ -2288,6 +2361,11 @@ w16_mouse:
     mov [w16_my], dx
     mov [w16_sm_msg], ax
     mov [w16_sm_wp], di
+    cmp word [w16_sbtrk], 0         ; a scroll bar's press: all of it the
+    je .nsb                         ;   bar's (SPEC.md 124.22.1)
+    LCALL w16_sbmouse
+    jmp short .out
+.nsb:
     mov ax, [w16_capture]           ; the capture's, while there is one
     or ax, ax
     jz .hit
@@ -2309,6 +2387,13 @@ w16_mouse:
     call w16_modfront
     jmp short .out
 .have:
+    cmp word [w16_sm_msg], WM_LBUTTONDOWN
+    jne .nbar
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    jz .nbar
+    LCALL w16_sbhit                 ; CF=0: it was on a bar, and is the bar's
+    jnc .out
+.nbar:
     call w16_origin                 ; AX/DX = its client's top left
     jc .out
     mov cx, [w16_mx]
@@ -2489,6 +2574,16 @@ w16_input_kick:
 ; key with Alt held, are WM_SYSKEYDOWN / WM_SYSKEYUP with lParam's context bit,
 ; and an Alt+letter's WM_SYSCHAR is the letter (SPEC.md 124.11).
 w16_onkey:
+    cmp ah, W16_NSCAN               ; the ROM's own codes for a shifted,
+    jb .base                        ;   Ctrl or Alt key folded back to the
+    cmp ah, W16_SCANX               ;   key's: the modifier is the shift
+    jae .base                       ;   state's (124.22.6)
+    push bx
+    mov bl, ah
+    xor bh, bh
+    mov ah, [w16_scanx + bx - W16_NSCAN]
+    pop bx
+.base:
     cmp byte [w16_mtrk], 0
     je .nt
     LCALL w16_mkey
@@ -2653,6 +2748,23 @@ w16_vktab:
   %error "w16_vktab: one virtual key per scan code"
 %endif
 
+; w16_scanx - the scan code the ROM gives a key with Shift, Ctrl or Alt held
+; (59h on, to W16_SCANX) -> the key's own: Shift/Ctrl/Alt+F1-F10, Ctrl+the
+; cursor keys, Alt+1-=, F11/F12 with each, an enhanced keyboard's Ctrl+Up/
+; Down/Ins/Del and Alt+the cursor keys. 0FFh: not a key (dropped)
+w16_scanx:
+    db 0x40, 0x41, 0x42, 0x43, 0x44, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41
+    db 0x42, 0x43, 0x44, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43
+    db 0x44, 0xFF, 0x4B, 0x4D, 0x4F, 0x51, 0x47, 0x02, 0x03, 0x04, 0x05, 0x06
+    db 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x49, 0x57, 0x58, 0x57, 0x58
+    db 0x57, 0x58, 0x57, 0x58, 0x48, 0x4A, 0x4C, 0x4E, 0x50, 0x52, 0x53, 0x0F
+    db 0x35, 0x37, 0x47, 0x48, 0x49, 0xFF, 0x4B, 0xFF, 0x4D, 0xFF, 0x4F, 0x50
+    db 0x51, 0x52, 0x53
+W16_SCANX equ 0xA4
+%if ($ - w16_scanx) != W16_SCANX - W16_NSCAN
+  %error "w16_scanx: one key per ROM code"
+%endif
+
 ; =============================================================================
 ; The os8088 side: W_PAINT, the close box, and the lock
 ; =============================================================================
@@ -2704,6 +2816,7 @@ w16_ppaint:
     cmp si, 0
     jle .bar                        ; the damage is all bar
     mov byte [w16_erase], 1
+    call w16_ncmark                 ; its scroll bars too (SPEC.md 124.22.1)
     call w16_invaltree              ; its children with it
     cmp byte [w16_mtrk], 0          ; the menu loop's banks are stale now
     je .kick
@@ -2757,6 +2870,25 @@ w16_ppaint:
 .out:
     mov byte [w16_inwp], 0
     pop si
+    ret
+
+; w16_postact - BX = a program's top-level window: WM_ACTIVATE (WA_ACTIVE)
+; posted to it, as Windows sent it when the window was activated (SPEC.md
+; 124.22.6). Keeps every register.
+w16_postact:
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .ret
+    push ax
+    call w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_ACTIVATE
+    mov word [w16_sm_wp], 1
+    xor ax, ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    pop ax
+.ret:
     ret
 
 ; w16_close - the close negotiator's half (SPEC.md 124.8). CF=0: let the

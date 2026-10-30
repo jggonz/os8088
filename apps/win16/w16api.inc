@@ -117,6 +117,15 @@ W16EXPORT W16M_USER,       100,     12, w16u_dlgdirlist     ; DlgDirList(word pt
 W16EXPORT W16M_USER,       99,      8,  w16u_dlgdirsel      ; DlgDirSelect(word ptr word)
 W16EXPORT W16M_KERNEL,     95,      4,  w16k_loadlib        ; LoadLibrary(str)
 W16EXPORT W16M_KERNEL,     96,      2,  w16k_freelib        ; FreeLibrary(word)
+W16EXPORT W16M_USER,       61,      14, w16u_scrollwnd      ; ScrollWindow(word s_word s_word ptr ptr)
+W16EXPORT W16M_USER,       62,      8,  w16u_setscrollpos   ; SetScrollPos(word word s_word word)
+W16EXPORT W16M_USER,       63,      4,  w16u_getscrollpos   ; GetScrollPos(word word)
+W16EXPORT W16M_USER,       64,      10, w16u_setscrollrng   ; SetScrollRange(word word s_word s_word word)
+W16EXPORT W16M_USER,       65,      12, w16u_getscrollrng   ; GetScrollRange(word word ptr ptr)
+W16EXPORT W16M_USER,       267,     6,  w16u_showsb         ; ShowScrollBar(word word word)
+W16EXPORT W16M_GDI,        38,      14, w16g_escape         ; Escape(word word word segptr segptr)
+W16EXPORT W16M_USER,       196,     20, w16u_tabtext        ; TabbedTextOut(word s_word s_word ptr s_word s_word ptr s_word)
+W16EXPORT W16M_USER,       197,     14, w16u_tabext         ; GetTabbedTextExtent(word ptr word word ptr)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put

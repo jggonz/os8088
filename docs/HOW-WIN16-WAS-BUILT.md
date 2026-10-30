@@ -1702,3 +1702,69 @@ also S17.
 **Measured.** WIN16's segment has about **14,885 bytes** of room (image
 31,521, bss about 19,130). The library part is 36,523 bytes. `win16file`
 is registered and runs in the final pass.
+
+## 2026-10-30 — S17, batch 1: Notepad
+
+*As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and PIF
+Editor run.* S17 lands one program family at a time, and Notepad came
+first because the multi-line EDIT is most of it.
+
+**Reading Notepad before writing its control.** The EDIT was written
+against what Notepad 3.0 actually does, read out of its disassembly rather
+than guessed. Its main window has both scroll bars, and its EDIT has none.
+The main window passes `WM_VSCROLL` and `WM_HSCROLL` on to the EDIT. When
+the EDIT says it scrolled (`EN_VSCROLL`), Notepad asks it `EM_GETTHUMB`, an
+undocumented Windows 3.x message, and puts the answer on its own bar as a
+share of 100. To open a file, it grows the EDIT's own text block in its
+local heap with `LocalReAlloc`, reads the file into it with `_lread`, and
+hands it back with `EM_SETHANDLE`. So the text had to live in the
+program's DGROUP heap, where Windows kept it. That is why S16 laid out
+DGROUP at the whole 64 KB.
+
+**Scroll bars on any window, and ScrollWindow.** A window's bar sits
+outside its client, as Windows' frame drew it. Every reader of a client's
+size takes the bar off in one place, so `GetClientRect`, a DC's clip and a
+mouse point agree. A bar is drawn when its frame is exposed, not on every
+paint. A press is tracked until the release: an arrow or the track held
+down repeats, and the thumb drags. `ScrollWindow` moves the pixels with
+`OSAPI_GFX_SCROLL` and invalidates only the rows it uncovered.
+
+**Four bugs between "it draws" and "it edits".** Each one looked like a
+broken EDIT and was not.
+
+- **The text vanished after File Open.** A trace of paints showed the EDIT
+  painted whole, and then its parent's erase wiped it. Notepad calls
+  `UpdateWindow` on the EDIT before its main window has painted the area
+  the dialog uncovered. The parent's later erase drew over the child. The
+  first fix put "a parent invalidates its children under its paint" in
+  `BeginPaint`, but Notepad's main window paints through `DefWindowProc`.
+  The rule now lives where both paths meet. The cost is that one EDIT paint
+  happens twice on an open.
+- **Keys went nowhere.** WIN16 never sent `WM_ACTIVATE`, and Notepad sets
+  its focus to the EDIT there and nowhere else.
+- **One keystroke opened File Open twice.** A control passed Alt keys up to
+  its top-level window by posting the key itself. The program's own
+  `TranslateMessage` then made a second `WM_SYSCHAR` of it, and a second
+  menu loop opened under the first. The `o` that chose Open in the inner
+  loop was still waiting for the outer one. Now the control posts the
+  `WM_SYSCOMMAND` that `DefWindowProc` makes of the key, and nothing else.
+- **Every key said "Insufficient memory".** That was not the heap: 53 KB
+  of it was free. Notepad sets `EM_LIMITTEXT` to 65,535, and the room left
+  under the limit was computed with a signed compare, so it read as
+  negative and every character was refused with `EN_MAXTEXT`.
+
+**Ctrl+End did nothing, anywhere.** The BIOS reports Ctrl+End as scan
+code `75h`, not End's `4Fh`. The same goes for every Ctrl, Alt and Shift
+variant of the cursor and function keys, and for Alt with the digits.
+WIN16's table stopped at F12, so all of them were dropped. They are now
+folded back to the key's own code, and the modifier comes from the shift
+state, as it always did.
+
+**What was seen.** On QEMU, on VGA and on CGA, Notepad 3.0 opens a 61-line
+file through its own File Open. It scrolls by its bar's arrow and by Page
+Down, with its own thumb following. It takes Ctrl+End, Ctrl+Home and typing
+at both ends of the text. File Save then wrote the file, and the bytes read
+off the floppy image on the host were the edited text exactly.
+`TabbedTextOut` is written but not yet seen drawing: Notepad imports it only
+to print, and Cardfile, the next batch, draws its list with it.
+`win16file`'s new Notepad leg is written and runs in the final pass.

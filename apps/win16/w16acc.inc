@@ -236,6 +236,247 @@ W16LIB w16g_exttext
     xor ax, ax
     jmp short .out
 
+; -----------------------------------------------------------------------------
+; TabbedTextOut (USER.196) - args: +0 nTabOrigin, +2 lpnTabStopPositions,
+; +6 nTabPositions, +8 nCount, +10 lpString, +14 y, +16 x, +18 hDC.
+; GetTabbedTextExtent (USER.197) - args: +0 lpnTabStopPositions,
+; +4 nTabPositions, +6 nCount, +8 lpString, +12 hDC. Both answer DX:AX =
+; height:width. The text between tabs is TextOut's; a tab moves the pen to
+; the next stop after it - the array's, measured from nTabOrigin, or with no
+; array one every eight average widths, and with one entry one every that
+; many pixels - and under OPAQUE the gap it crosses is the background
+; colour's, as Windows filled it (SPEC.md 124.22.4).
+; -----------------------------------------------------------------------------
+TT_STR   equ 0                  ; far: the next character
+TT_LEFT  equ 4                  ; characters left
+TT_PEN   equ 6                  ; the pen, x on the screen
+TT_ORG   equ 8                  ; the stops' origin, on the screen
+TT_DEFW  equ 10                 ; the stop past the array's
+TT_STOPS equ 12                 ; far: the array
+TT_NSTOP equ 16
+TT_DRAW  equ 18                 ; 1: drawn (TabbedTextOut), 0: measured
+TT_X0    equ 20                 ; where it started, on the screen
+
+W16LIB w16u_tabtext
+    push si
+    push di
+    push bp
+    ICALL w16_args
+    xor ax, ax
+    cwd
+    cmp byte [w16_dcon], 0          ; no DC: nothing drawn, 0
+    je .out
+    cmp word [es:bx + 18], W16_HDC
+    jne .out
+    mov byte [w16_tt + TT_DRAW], 1
+    mov ax, [es:bx + 16]
+    add ax, [w16_ox]
+    mov [w16_tx], ax
+    mov ax, [es:bx + 14]
+    add ax, [w16_oy]
+    mov [w16_ty], ax
+    mov word [w16_tn], 0            ; SetTextAlign's vertical reference
+    call w16_talign
+    mov ax, [es:bx + 0]
+    add ax, [w16_ox]
+    mov [w16_tt + TT_ORG], ax
+    mov si, 2                       ; the stops at +2, their count at +6,
+    mov di, 8                       ;   the string at +10, its count at +8
+    call w16_ttwalk
+.out:
+    pop bp
+    pop di
+    pop si
+    ret
+
+W16LIB w16u_tabext
+    push si
+    push di
+    push bp
+    ICALL w16_args
+    mov byte [w16_tt + TT_DRAW], 0
+    xor ax, ax
+    mov [w16_tx], ax
+    mov [w16_tt + TT_ORG], ax
+    xor si, si                      ; the stops at +0, their count at +4,
+    mov di, 6                       ;   the string at +8, its count at +6
+    call w16_ttwalk
+    pop bp
+    pop di
+    pop si
+    ret
+
+; w16_ttwalk - ES:BX = the args: the stops at +SI (far) and their count at
+; +SI+4, the string's count at +DI and the string at +DI+2; [w16_tx],
+; [w16_ty] the pen, [w16_tt + TT_ORG] and TT_DRAW set -> DX:AX = height:width.
+w16_ttwalk:
+    mov ax, [es:bx + si]            ; the stops
+    mov [w16_tt + TT_STOPS], ax
+    mov ax, [es:bx + si + 2]
+    mov [w16_tt + TT_STOPS + 2], ax
+    mov cx, [es:bx + si + 4]
+    or ax, [w16_tt + TT_STOPS]
+    jnz .arr
+    xor cx, cx                      ; no array: no stops in it
+.arr:
+    or cx, cx
+    jge .n
+    xor cx, cx
+.n:
+    mov [w16_tt + TT_NSTOP], cx
+    mov ax, [es:bx + di]            ; the string
+    or ax, ax
+    jge .c
+    xor ax, ax
+.c:
+    mov [w16_tt + TT_LEFT], ax
+    mov ax, [es:bx + di + 2]
+    mov [w16_tt + TT_STR], ax
+    mov ax, [es:bx + di + 4]
+    mov [w16_tt + TT_STR + 2], ax
+    push es
+    mov es, [w16_face]              ; eight average widths, the default
+    mov al, [es:W16F_AVG]
+    xor ah, ah
+    mov cl, 3
+    shl ax, cl
+    pop es
+    cmp word [w16_tt + TT_NSTOP], 1 ; one entry: a stop every that many
+    jne .dw
+    push es
+    les si, [w16_tt + TT_STOPS]
+    mov cx, [es:si]
+    pop es
+    mov word [w16_tt + TT_NSTOP], 0
+    or cx, cx
+    jle .dw
+    mov ax, cx
+.dw:
+    or ax, ax
+    jnz .dw1
+    inc ax
+.dw1:
+    mov [w16_tt + TT_DEFW], ax
+    mov ax, [w16_tx]
+    mov [w16_tt + TT_PEN], ax
+    mov [w16_tt + TT_X0], ax
+.run:
+    ; --- a run up to the next tab, at most W16_TXTMAX at a time ---
+    mov cx, [w16_tt + TT_LEFT]
+    or cx, cx
+    jnz .more
+    jmp .end
+.more:
+    push es
+    les si, [w16_tt + TT_STR]
+    mov di, w16_txt
+    xor dx, dx                      ; DX = taken
+.cp:
+    mov al, [es:si]
+    cmp al, 9
+    je .cut
+    cmp dx, W16_TXTMAX
+    je .cut
+    mov [di], al
+    inc si
+    inc di
+    inc dx
+    loop .cp
+.cut:
+    pop es
+    add [w16_tt + TT_STR], dx
+    sub [w16_tt + TT_LEFT], dx
+    mov [w16_tn], dx
+    or dx, dx
+    jz .tab
+    push es
+    mov es, [w16_face]
+    mov si, w16_txt
+    mov cx, dx
+    ICALL w16_textw                 ; AX = its width
+    pop es
+    push ax
+    mov ax, [w16_tt + TT_PEN]
+    mov [w16_tx], ax
+    cmp byte [w16_tt + TT_DRAW], 0
+    je .nodraw
+    push es
+    ICALL w16_txtdraw
+    pop es
+.nodraw:
+    pop ax
+    add [w16_tt + TT_PEN], ax
+    jmp short .run
+.tab:
+    ; --- a tab: the pen to the next stop past it ---
+    inc word [w16_tt + TT_STR]
+    dec word [w16_tt + TT_LEFT]
+    mov ax, [w16_tt + TT_PEN]
+    sub ax, [w16_tt + TT_ORG]       ; AX = where the pen is, from the origin
+    mov cx, [w16_tt + TT_NSTOP]
+    jcxz .def
+    push es
+    les si, [w16_tt + TT_STOPS]
+.st:
+    mov dx, [es:si]
+    cmp dx, ax
+    jg .stop
+    add si, 2
+    loop .st
+    pop es
+.def:
+    mov cx, [w16_tt + TT_DEFW]      ; past the array: the next multiple
+    or ax, ax
+    jge .pos
+    xor ax, ax
+.pos:
+    xor dx, dx
+    div cx
+    inc ax
+    mul cx
+    mov dx, ax
+    jmp short .gap
+.stop:
+    pop es
+.gap:
+    add dx, [w16_tt + TT_ORG]       ; DX = the new pen
+    cmp byte [w16_tt + TT_DRAW], 0
+    je .moved
+    cmp byte [w16_bkmode], TRANSPARENT
+    je .moved
+    mov ax, [w16_tt + TT_PEN]       ; the gap in the background colour
+    mov cx, dx
+    dec cx
+    cmp cx, ax
+    jl .moved
+    push bx
+    push dx
+    mov bl, [w16_tpap]
+    mov [w16_gcol], bl
+    mov bx, [w16_ty]
+    push es
+    mov es, [w16_face]
+    mov dl, [es:W16F_ROWS]
+    pop es
+    xor dh, dh
+    add dx, bx
+    dec dx
+    ICALL w16_gfill
+    pop dx
+    pop bx
+.moved:
+    mov [w16_tt + TT_PEN], dx
+    jmp .run
+.end:
+    mov ax, [w16_tt + TT_PEN]
+    sub ax, [w16_tt + TT_X0]
+    push es
+    mov es, [w16_face]
+    mov dl, [es:W16F_ROWS]
+    pop es
+    xor dh, dh
+    ret
+
 ; Ellipse (GDI.24) - args: +0 bottom, +2 right, +4 top, +6 left, +8 hDC:
 ; RoundRect's shape with each corner's radii half the box's, so the four
 ; quarters meet (radii past W16_RRMAX are cut to it, as RoundRect's are)

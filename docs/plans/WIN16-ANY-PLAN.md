@@ -284,6 +284,35 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Verification:** a row per program family; a look on all four
     adapters; the redraw priced in calls on Notepad's scroll (PERFORMANCE.md
     Part 5's rule: no full repaint where a scroll will do).
+  - **Batch 1, Notepad - done** (SPEC.md §124.22.1-124.22.4, 124.22.6):
+    - [x] scroll bars on any window, outside its client: drawn when the
+      frame is owed, pressed, dragged and auto-repeated; `SetScrollPos`,
+      `SetScrollRange` (an empty range hides the bar), `GetScrollPos`,
+      `GetScrollRange`, `ShowScrollBar`;
+    - [x] `ScrollWindow`, through `OSAPI_GFX_SCROLL`, invalidating only
+      what it uncovers;
+    - [x] the multi-line EDIT, its text in the program's own local heap
+      (`EM_GETHANDLE`/`EM_SETHANDLE`), with the keys, the mouse, the
+      clipboard, one step of undo and Notepad's `EM_GETTHUMB`;
+    - [x] `TabbedTextOut` and `GetTabbedTextExtent`; `Escape` answering 0;
+    - [x] what Notepad needed around them (124.22.6): `WM_ACTIVATE`, a
+      parent painted before its children, Alt passed up from a control as
+      the `WM_SYSCOMMAND` it makes, and the ROM's Ctrl/Alt/Shift scan codes
+      folded back to their keys - Ctrl+End did nothing anywhere before;
+    - **Seen on QEMU**, VGA and CGA: Notepad 3.0 opens a 61-line file
+      through its own File Open, scrolls by its bar's arrow and by Page
+      Down with its own thumb following, takes Ctrl+End, Ctrl+Home and
+      typing at both ends, and File Save writes the file - the bytes read
+      off the floppy image on the host were the edited text exactly.
+    - **Not yet seen:** `TabbedTextOut` drawing (Notepad imports it only to
+      print; Cardfile, batch 2, draws its list with it); word wrap (pinned
+      for the last batch); `SB_CTL` scroll bar controls (batch 4).
+    - **Not yet run:** `win16file`'s Notepad leg, which is written and runs
+      in the final pass (S25).
+    - What it costs (not yet measured): the EDIT is drawn twice when
+      Notepad opens a file - once by its own `UpdateWindow`, once after its
+      parent's erase (124.22.6) - which a MartyPC timing in the final pass
+      will price.
 
 - [ ] **S18: Libraries (R4, the program's own).**
   - *As a user, Recorder runs with its RECORDER.DLL, and Paintbrush with

@@ -58,7 +58,7 @@ W16_MAXWND   equ 48             ; windows: a dialog's controls are windows
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16C_SIZE    equ 30             ; a class record
-W16W_SIZE    equ 90             ; a window record
+W16W_SIZE    equ 102            ; a window record
 W16_MAXTOP   equ 4              ; top-level windows in os8088 windows of
                                 ;   their own (dialogs, SPEC.md 124.8)
 W16_TTLSZ    equ 50
@@ -283,6 +283,13 @@ section .w16dlg
     W16BSS w16_my, 2
     W16BSS w16_kascii, W16_NSCAN    ; each scan code's last ASCII
     W16BSS w16_capture, 2
+    W16BSS w16_sbtrk, 2         ; a scroll bar's press (SPEC.md 124.22.1):
+    W16BSS w16_sbbar, 1         ;   its window, 0 none; SB_HORZ or SB_VERT;
+    W16BSS w16_sbcode, 1        ;   the SB_* it sends; the tick it repeats at;
+    W16BSS w16_sbdue, 2         ;   the thumb's position as it is dragged and
+    W16BSS w16_sbdpos, 2        ;   the press's offset inside the thumb
+    W16BSS w16_sbgrab, 2
+    W16BSS w16_sbg, 16          ; a bar's geometry, w16_sbgeom's (w16sb.inc)
     W16BSS w16_sm_hwnd, 2       ; the message being sent or posted
     W16BSS w16_sm_msg, 2
     W16BSS w16_sm_wp, 2
@@ -349,6 +356,10 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_tx, 2
     W16BSS w16_ty, 2
     W16BSS w16_txt, W16_TXTMAX + 2
+    W16BSS w16_tt, 22           ; TabbedTextOut's walk (w16acc.inc): the
+                                ;   string, the count left, the pen, the
+                                ;   tab origin, the default stop, the stops,
+                                ;   their count and whether it draws
     ; --- S4: the display, the face, text, RoundRect, DIBs ---
     W16BSS w16_disp, 1          ; the window's VID_* kind (VESA reads as VGA)
     W16BSS w16_mono, 1          ; 1 = a 1bpp display
@@ -610,6 +621,44 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16d_bxx, 2
     W16BSS w16d_e0, 2
     W16BSS w16d_e1, 2
+    W16BSS w16d_bar, 1          ; w16sb.inc's: the bar being drawn, whether
+    W16BSS w16d_sbonly, 1       ;   only its thumb moved, the window's
+    W16BSS w16d_wl, 2           ;   rectangle on the screen
+    W16BSS w16d_wt, 2
+    W16BSS w16d_wr, 2
+    W16BSS w16d_wb, 2
+    W16BSS w16e_wtab, 256       ; w16edml.inc's: the System font's advances,
+    W16BSS w16e_wface, 2        ;   the face they are of, a tab stop, a row,
+    W16BSS w16e_tabw, 2         ;   the text's offset in its segment
+    W16BSS w16e_rowh, 2
+    W16BSS w16e_base, 2
+    W16BSS w16e_y, 2            ; ...painting: the line's top, the selection
+    W16BSS w16e_s0, 2           ;   shown, the line's start and end, the
+    W16BSS w16e_s1, 2           ;   view's left, the pen, the next box's left
+    W16BSS w16e_ls, 2           ;   and whether the run is selected
+    W16BSS w16e_le, 2
+    W16BSS w16e_xo, 2
+    W16BSS w16e_x, 2
+    W16BSS w16e_bx0, 2
+    W16BSS w16e_rsel, 1
+    W16BSS w16e_ext, 1          ; ...the caret carries the selection
+    W16BSS w16e_noundo, 1       ; ...w16e_repl: keep no step; a typed key
+    W16BSS w16e_typing, 1
+    W16BSS w16e_src, 4          ;   what goes in, and how much
+    W16BSS w16e_cnt, 2
+    W16BSS w16e_a, 2            ;   the selection it replaces
+    W16BSS w16e_b, 2
+    W16BSS w16e_nlen, 2         ;   the length after it
+    W16BSS w16e_als, 2          ;   the first changed line's start and index
+    W16BSS w16e_aln, 2
+    W16BSS w16e_dlf, 2          ;   the line feeds that went and came
+    W16BSS w16e_ilf, 2
+    W16BSS w16e_ch, 2           ; ...a typed character, or CR LF
+    W16BSS w16e_ublk, 2         ; ...EM_UNDO's step, taken off the record
+    W16BSS w16_srl, 2           ; ScrollWindow's rectangle, client
+    W16BSS w16_srt, 2
+    W16BSS w16_srr, 2
+    W16BSS w16_srb, 2
     W16BSS w16d_hdlg, 2
     W16BSS w16d_frec, 2
     W16BSS w16d_code, 2
@@ -1452,6 +1501,8 @@ w16_cputest:
 %include "win16/w16draw.inc"    ; what Solitaire calls (SPEC.md 124.20.4)
 %include "win16/w16sys.inc"     ; what the Control Panel calls (SPEC.md 124.20.5)
 %include "win16/w16file.inc"    ; files, through DOS.O88's core (SPEC.md 124.21)
+%include "win16/w16sb.inc"      ; scroll bars and ScrollWindow (SPEC.md 124.22)
+%include "win16/w16edml.inc"    ; the multi-line EDIT (SPEC.md 124.22.3)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md

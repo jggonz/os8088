@@ -278,7 +278,7 @@ w16s_tick:
     pop cx
     pop bx
     pop ax
-    ret
+    jmp w16_sbtick                  ; and a held scroll bar's (w16sb.inc)
 
 ; w16s_flush - the queue emptied and not playing. Keeps every register.
 w16s_flush:
@@ -336,6 +336,6 @@ w16s_wait:
 .ahead:
     pop dx
 .out:
-    ret
+    jmp w16_sbwait                  ; or a held scroll bar's, if sooner
 
 section .text
