@@ -172,15 +172,14 @@ w16_gate:
     mov [w16_pend], al
     mov [w16_rflags], al
     mov [w16_rdx], ax
-    mov bx, [w16_idx]               ; the row: module, ordinal, args, handler
-    mov ax, W16X_SIZE
-    mul bx
-    mov bx, ax
-    add bx, w16_exports
-    mov al, [bx + W16X_ARGB]
+    mov bx, [w16_idx]               ; the slot: args, part, handler
+    shl bx, 1                       ;   (SPEC.md 124.19.1)
+    shl bx, 1
+    add bx, w16_bind
+    mov al, [bx + W16B_ARGB]
     cbw
     mov [w16_nargb], ax
-    call [bx + W16X_PROC]           ; AX(:DX) = the result, or [w16_pend]
+    call w16_dispatch               ; AX(:DX) = the result, or [w16_pend]
     mov [w16_rax], ax
     mov [w16_rdx], dx
     cmp byte [w16_state], W16S_ENDED
@@ -198,6 +197,66 @@ w16_gate:
     push bx
     popf
     jmp w16_epi
+
+; -----------------------------------------------------------------------------
+; w16_dispatch - run slot BX's handler (SPEC.md 124.19.2), with AX = the
+; argument bytes as the gate always gave it. Part 0 is the image's own,
+; W16B_MISS an import WIN16 lacks, and the library part's are reached through
+; its gate, the part fetched first if it is not here. Returns what the
+; handler returns.
+; -----------------------------------------------------------------------------
+w16_dispatch:
+    mov al, [bx + W16B_PART]
+    and al, ~W16B_NORET & 0xFF
+    jz .image
+    cmp al, W16B_MISS
+    je .miss
+    mov ax, [bx + W16B_PROC]
+    mov [w16_lfn], ax
+    call w16_dlgin
+    jc .nolib
+    mov ax, [w16_nargb]
+    call far [w16_lbv]
+    ret
+.image:
+    mov ax, [w16_nargb]
+    jmp [bx + W16B_PROC]
+.miss:
+    mov ax, [bx + W16B_PROC]
+    mov [w16_missi], ax
+    jmp w16_missed
+.nolib:                             ; it could not be read: ended, as a missing
+    push si                         ;   import ends it, saying why
+    push di
+    mov si, w16_s_nolib
+    mov di, w16_l1
+    call w16_strcpy
+    mov si, w16_s_nolib2
+    mov di, w16_l2
+    call w16_strcpy
+    mov byte [w16_endmsg], 1
+    mov byte [w16_state], W16S_ENDED
+    pop di
+    pop si
+    xor ax, ax
+    cwd
+    ret
+
+w16_s_nolib:  db 'WIN16', 39, 's library part', 0
+w16_s_nolib2: db 'could not be read.', 0
+
+; -----------------------------------------------------------------------------
+; w16_lcall - LCALL's far half (SPEC.md 124.19.2): [w16_lfn] near-called in
+; the library part, fetched first if it is not here. Registers and flags pass
+; both ways, as ICALL's. CF=1 with nothing called if the part could not be
+; read - and op_fetch has said why.
+; -----------------------------------------------------------------------------
+w16_lcall:
+    call w16_dlgin
+    jc .out
+    call far [w16_lbv]
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; w16_cbenter - enter the program's callee instead of finishing the import
@@ -286,10 +345,8 @@ w16_cbdone:
     mov [w16_idx], ax
     mov bx, ax
     shl bx, 1
-    mov dx, bx
-    shl bx, 1
-    add bx, dx                      ; * W16X_SIZE
-    mov al, [w16_exports + bx + W16X_ARGB]
+    shl bx, 1                       ; * W16B_SIZE
+    mov al, [w16_bind + bx + W16B_ARGB]
     cbw
     mov [w16_nargb], ax
     mov ax, KERNEL_SEG

@@ -81,6 +81,21 @@ W16_RRMAX    equ 64             ; RoundRect's largest corner radius
 W16_NMISS    equ 64             ; different imports WIN16 lacks a program may
                                 ;   import before the load refuses it
 W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
+W16_NBIND    equ 384            ; bind slots: the distinct imports a program
+                                ;   may bind, each a stub (SPEC.md 124.19.1).
+                                ;   Paintbrush 3.1's 270 is the most measured
+W16_NFIXED   equ 4              ; ...slots 0-3 are the image's own:
+W16_CTLROW   equ 0              ;   a control's window procedure,
+W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
+W16_X87ROW   equ 2              ;   the emulator's missing instruction and
+W16_DDPROW   equ 3              ;   DefDlgProc, a dialog class's procedure
+W16B_SIZE    equ 4              ; a slot: the argument bytes, the part, the
+W16B_ARGB    equ 0              ;   handler's offset in it
+W16B_PART    equ 1
+W16B_PROC    equ 2
+W16B_MISS    equ 0x7F           ; W16B_PART: an import WIN16 lacks, PROC its
+                                ;   name's slot in w16_mtxt
+W16B_NORET   equ 0x80           ; ...ORed in: it never returns (the census)
 W16_NARENA   equ 6              ; global heap arenas at once (w16mem.inc)
 W16_NGH      equ 64             ; moveable global handles
 W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)
@@ -92,8 +107,10 @@ MP_SIZE      equ 16             ; ...an open popup's record
 W16P_SYS16   equ 0              ; VGA
 W16P_SYS12   equ 1              ; EGA and Hercules
 W16P_SYS08   equ 2              ; CGA
-W16P_DLG     equ 3              ; the dialog manager and controls (SPEC.md
-                                ;   124.13): code, far-called both ways
+W16P_DLG     equ 3              ; THE LIBRARY PART (SPEC.md 124.19): the
+W16P_LIB     equ W16P_DLG       ;   dialog manager and controls (124.13) and
+                                ;   the handlers moved out of the image -
+                                ;   code, far-called both ways
 W16P_FPU     equ 4              ; the 8087 emulator (SPEC.md 124.5.1): code,
                                 ;   reached by the program's int 34h-3Dh
 W16P_LOAD    equ 5              ; the loader and the census (SPEC.md 124.18.7):
@@ -111,6 +128,14 @@ W16P_ICONS   equ 6              ; WIN16's own system icons (SPEC.md 124.18.4):
 %macro ICALL 1                  ; part -> image: %1 is an image routine that
     mov word [w16_ifn], %1      ;   ends in ret, near-called by w16_ibgate
     call far [w16_ibv]
+%endmacro
+%macro LCALL 1                  ; image -> library part (SPEC.md 124.19.2):
+    mov word [w16_lfn], %1      ;   %1 is a NEAR routine there, ending in
+    call w16_lcall              ;   ret, near-called by w16_lbgate. The part
+%endmacro                       ;   is fetched first if it is not here
+%macro W16LIB 1                 ; in the library part: %1 is a HANDLER that
+%define w16lib_%1 1             ;   a row names, near, ending in ret - the
+%1:                             ;   row's part says so (SPEC.md 124.19.1)
 %endmacro
 %macro DCONT 1                  ; in the part: %1 is a CONTINUATION
 section .text                   ;   (SPEC.md 124.2.2), which the gate enters
@@ -168,7 +193,7 @@ section .w16dlg
     W16BSS w16_rflags, 1
     W16BSS w16_pend, 1          ; 1 = the handler is waiting: yield
     W16BSS w16_nargb, 2         ; bytes the finishing call pops (-2: InitTask)
-    W16BSS w16_idx, 2           ; the export row the gate is serving
+    W16BSS w16_idx, 2           ; the bind slot the gate is serving
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     W16BSS w16_exit, 1          ; AH=4Ch's AL
@@ -435,6 +460,11 @@ section .w16dlg
     W16BSS w16_pfv, 4           ; DCALL's vector: a routine in it, its segment
     W16BSS w16_ibv, 4           ; ICALL's: w16_ibgate and our CS
     W16BSS w16_ifn, 2           ; ...and the image routine w16_ibgate calls
+    W16BSS w16_lbv, 4           ; LCALL's: w16_lbgate and the library part's
+    W16BSS w16_lfn, 2           ;   segment, and the routine it calls
+    ; --- S14: the bind table (SPEC.md 124.19.1) ---
+    W16BSS w16_nbind, 2         ; slots given out
+    W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
     W16BSS w16_focus, 2         ; the window with the keyboard focus, 0 none
     W16BSS w16_kl, 2            ; w16_wclip's answer, screen, inclusive
@@ -799,8 +829,8 @@ w16_after:
     mov bx, [w16_win]               ;   deferred to the next UI pass
     call OSAPI_WM_CLOSE
     ret
-.trim:
-    jmp w16_dlgtrim                 ; the dialog part, if nothing needs it
+.trim:                              ; the library part stays until the
+    ret                             ;   program ends (SPEC.md 124.19.2)
 
 ; w16_afterl - w16_after from a callback that holds the gfx lock: marked
 ; held while it runs, so its clean-up does not ask for the lock again
@@ -1000,8 +1030,8 @@ w16_ldin:
     ret
 
 ; -----------------------------------------------------------------------------
-; w16_dlgin - the dialog part (SPEC.md 124.13), fetched from WIN16's own
-; folder if it is not here. CF=1: it could not be, and op_fetch has said why.
+; w16_dlgin - the library part (SPEC.md 124.13, 124.19), fetched from WIN16's
+; own folder if it is not here. CF=1: it could not be, and op_fetch has said why.
 ; Keeps every register.
 ; -----------------------------------------------------------------------------
 w16_dlgin:
@@ -1018,6 +1048,8 @@ w16_dlgin:
     jc .out
     mov [w16_dseg], ax
     mov [w16_pfv + 2], ax
+    mov [w16_lbv + 2], ax           ; LCALL's and the gate's (SPEC.md 124.19.2)
+    mov word [w16_lbv], w16_lbgate
     clc
 .out:
     pop dx
@@ -1307,6 +1339,47 @@ w16_cputest:
 %include "win16/w16acc.inc"     ; what CLOCK and REVERSI call (SPEC.md 124.17)
 %include "win16/w16ico.inc"     ; icons (SPEC.md 124.18.4)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
+
+; --- the export rows and the fixed slots, in the loader part (SPEC.md
+; 124.19.1). Emitted HERE, after every handler is defined, because a row's
+; part is whether its handler was declared W16LIB - which nasm can only know
+; once the library part's files have been read.
+section .w16ld
+w16_exports:
+%assign k 0
+%rep W16NX
+    db w16x_m_%[k]
+    dw w16x_o_%[k]
+    db w16x_a_%[k]
+  %ifdef w16lib_%[w16x_p_%[k]]
+    %assign w16pt W16P_LIB
+  %else
+    %assign w16pt 0
+  %endif
+  %if w16x_m_%[k] = W16M_KERNEL
+    %if w16x_o_%[k] = 1 || w16x_o_%[k] = 137
+      %assign w16pt w16pt | W16B_NORET  ; FatalExit, FatalAppExit
+    %endif
+  %endif
+    db w16pt
+    dw w16x_p_%[k]
+%assign k k + 1
+%endrep
+w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
+%assign k 0
+%rep W16NF
+    db w16f_a_%[k]
+  %ifdef w16lib_%[w16f_p_%[k]]
+    db W16P_LIB
+  %else
+    db 0
+  %endif
+    dw w16f_p_%[k]
+%assign k k + 1
+%endrep
+w16l_rowslot:  times W16NX dw 0     ; the bind slot each row has, 0 = none yet
+w16l_missslot: times W16_NMISS dw 0 ; ...and each missing name's
+section .text
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"
 

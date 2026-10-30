@@ -32,11 +32,17 @@ w16_modnames:                   ; pascal strings, then 0
     db 0
 
 ; --- the export rows ----------------------------------------------------------
+; Since S14 they live in the LOADER part (SPEC.md 124.19.1): the loader and the
+; census are their only readers, and each program's imports are bound into
+; slots of w16_bind. A row's handler is an offset in the image or in the
+; library part, and W16LIB is what tells the two apart (w16_exports, emitted
+; at the end of win16.asm, after every handler is defined).
 W16X_MOD  equ 0
 W16X_ORD  equ 1
 W16X_ARGB equ 3
-W16X_PROC equ 4
-W16X_SIZE equ 6
+W16X_PART equ 4
+W16X_PROC equ 5
+W16X_SIZE equ 7
 
 %assign W16NX 0
 %macro W16EXPORT 4              ; module, ordinal, argument bytes, handler
@@ -176,7 +182,7 @@ W16EXPORT W16M_USER,       241,     16, w16u_credlgp        ; CreateDialogParam(
 W16EXPORT W16M_USER,       242,     16, w16u_credlgindp     ; CreateDialogIndirectParam(word segptr word segptr long)
 W16EXPORT W16M_USER,       243,     0,  w16u_dlgunits       ; GetDialogBaseUnits()
 W16EXPORT W16M_USER,       277,     2,  w16u_ctrlid         ; GetDlgCtrlID(word)
-W16_DDPROW equ W16NX
+W16_XDDP equ W16NX                ; DefDlgProc's row: bound to slot W16_DDPROW
 W16EXPORT W16M_USER,       308,     10, w16u_defdlgproc     ; DefDlgProc(word word word long)
 W16EXPORT W16M_USER,       108,     10, w16u_getmsg         ; GetMessage(ptr word word word)
 W16EXPORT W16M_USER,       109,     12, w16u_peekmsg        ; PeekMessage(ptr word word word word)
@@ -291,72 +297,48 @@ W16EXPORT W16M_SOUND,      5,       10, w16s_accent         ; SetVoiceAccent(wor
 W16EXPORT W16M_SOUND,      9,       0,  w16s_start          ; StartSound()
 W16EXPORT W16M_SOUND,      10,      0,  w16s_stop           ; StopSound()
 W16EXPORT W16M_SHELL,      22,      12, w16sh_about         ; ShellAbout(word str str word)
-; a control's window procedure (SPEC.md 124.13), reached through its stub:
-; module 0FCh, which the loader never binds
-W16_CTLROW equ W16NX
-W16EXPORT 0xFC,            0,       10, w16_ctlrow
-; the callee's way back (SPEC.md 124.2.2): module 0FEh, which no program's
-; module table can name, so the loader never binds an import to it
-W16_CBROW equ W16NX
-W16EXPORT 0xFE,            0,       0,  w16_cbdone
-; an import WIN16 does not provide, called (SPEC.md 124.12): module 0FDh, never
-; bound by the loader either - the missing stubs below reach it
-W16_MISSROW equ W16NX
-W16EXPORT 0xFD,            0,       0,  w16_missed
-; an x87 instruction the emulator lacks, met (SPEC.md 124.5.1): module 0FBh,
-; never bound - the emulator's header holds this row's stub
-W16_X87ROW equ W16NX
-W16EXPORT 0xFB,            0,       0,  w16x_lacks
+W16_NX equ W16NX                  ; the rows, as a symbol: the loader part is
+                                  ;   read before this file (SPEC.md 124.19.1)
 
-w16_exports:
-%assign k 0
-%rep W16NX
-    db w16x_m_%[k]
-    dw w16x_o_%[k]
-    db w16x_a_%[k]
-    dw w16x_p_%[k]
-%assign k k + 1
-%endrep
+; The four slots the image names its stubs by (SPEC.md 124.19.1): rows of the
+; bind table no program's import table can reach, written by w16_bindinit
+; before the first import is bound. Emitted with the rows (win16.asm's end).
+%macro W16FIXED 2               ; argument bytes, handler
+%xdefine w16f_a_%[W16NF] %1
+%xdefine w16f_p_%[W16NF] %2
+%assign W16NF W16NF + 1
+%endmacro
+%assign W16NF 0
+W16FIXED 10, w16_ctlrow         ; W16_CTLROW: a control's window procedure
+W16FIXED 0,  w16_cbdone         ; W16_CBROW: the callee's way back
+W16FIXED 0,  w16x_lacks         ; W16_X87ROW: an x87 instruction it lacks
+W16FIXED 10, w16u_defdlgproc    ; W16_DDPROW: DefDlgProc (W16_XDDP's handler)
+%if W16NF != W16_NFIXED
+  %error "W16FIXED: one row a fixed slot"
+%endif
 
-; The stubs: row k is `mov ax, k / jmp near w16_gate`, six bytes, so a stub's
+; The stubs: slot k is `mov ax, k / jmp near w16_gate`, six bytes, so a stub's
 ; address is w16_stubs + 6k. `near` is not decoration - a short jmp would make
-; one stub five bytes and every address after it wrong.
+; one stub five bytes and every address after it wrong. There are W16_NBIND of
+; them whatever WIN16 exports: what a program imports is what it binds.
 w16_stubs:
     ; STKBALANCE-OK: each stub is `mov ax, k / jmp near w16_gate`, entered by
     ; the program's far call - the gate's frame, not a routine of its own
 %assign k 0
-%rep W16NX
+%rep W16_NBIND
     mov ax, k
     jmp near w16_gate
 %assign k k + 1
 %endrep
-%if ($ - w16_stubs) != W16NX * 6
+%if ($ - w16_stubs) != W16_NBIND * 6
   %error "w16_stubs: every stub must be six bytes"
 %endif
 
-; The missing stubs (SPEC.md 124.12): slot k of w16_mtxt is `mov ax, k /
-; jmp near w16_missgate`, which banks k and enters the gate as W16_MISSROW.
-w16_mstubs:
-    ; STKBALANCE-OK: entered by the program's far call, like w16_stubs
-%assign k 0
-%rep W16_NMISS
-    mov ax, k
-    jmp near w16_missgate
-%assign k k + 1
-%endrep
-%if ($ - w16_mstubs) != W16_NMISS * 6
-  %error "w16_mstubs: every stub must be six bytes"
-%endif
-w16_missgate:
-    ; STKBALANCE-OK: the gate's frame, as w16_stubs
-    mov [cs:w16_missi], ax          ; DS is the program's: CS is ours
-    mov ax, W16_MISSROW
-    jmp w16_gate
-
-; w16_missed - the W16_MISSROW handler: the program called an import WIN16
-; does not provide. It ends as AH=4Ch ends it, but WIN16's window stays, back
-; to its own two lines, naming the call (w16_endshow): a toast would go with
-; the window that raised it (SPEC.md 59).
+; w16_missed - an import WIN16 does not provide, called (SPEC.md 124.12): its
+; slot's part is W16B_MISS and the gate has banked the name's slot in
+; [w16_missi]. It ends as AH=4Ch ends it, but WIN16's window stays, back to
+; its own two lines, naming the call (w16_endshow): a toast would go with the
+; window that raised it (SPEC.md 59).
 w16_missed:
     push si
     push di
@@ -380,37 +362,6 @@ w16_missed:
 
 w16_r_needs:   db 'Needs ', 0
 w16_r_notyet:  db 'which WIN16 does not provide yet.', 0
-
-; -----------------------------------------------------------------------------
-; w16_findexp - DL = module, AX = ordinal -> AX = the row; CF=1 not ours
-; -----------------------------------------------------------------------------
-w16_findexp:
-    push bx
-    push cx
-    mov bx, w16_exports
-    xor cx, cx
-.row:
-    cmp cx, W16NX
-    jae .none
-    cmp [bx + W16X_MOD], dl
-    jne .next
-    cmp [bx + W16X_ORD], ax
-    je .hit
-.next:
-    add bx, W16X_SIZE
-    inc cx
-    jmp short .row
-.hit:
-    mov ax, cx
-    pop cx
-    pop bx
-    clc
-    ret
-.none:
-    pop cx
-    pop bx
-    stc
-    ret
 
 ; =============================================================================
 ; KERNEL

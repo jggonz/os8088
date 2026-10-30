@@ -211,6 +211,7 @@ w16_load:
 .modok:
     mov [w16_nmod], ax
 
+    call w16_bindinit               ; nothing bound yet (SPEC.md 124.19.1)
     call w16_layout                 ; sizes and the claim; CF=1 SI = reason
     jc .refuse
     call w16_copysegs               ; CF=1 SI = reason
@@ -752,7 +753,7 @@ w16_reloc1:
 .byord:
     mov ax, [es:si + 6]             ; the ordinal
 .named:
-    ICALL w16_findexp                ; DL = module, AX = ordinal -> AX = row
+    call w16_findexp                ; DL = module, AX = ordinal -> AX = row
     jc .missing
     cmp ax, W16_D3ROW               ; DOS3Call: int 21h itself, no gate
     jne .nd3                        ;   (SPEC.md 124.15.3)
@@ -780,13 +781,21 @@ w16_reloc1:
     ICALL w16k_getwinflags           ; AX (DX = 0)
     jmp .apply
 .stub:
-    mov dx, ax                      ; the stub: our CS : w16_stubs + row * 6
+    call w16_bindrow                ; the row's slot (SPEC.md 124.19.1)
+    jc .nbind
+    mov dx, ax                      ; the stub: our CS : w16_stubs + slot * 6
     shl ax, 1
     add ax, dx
     shl ax, 1
     add ax, w16_stubs
     mov dx, ds                      ; the image's segment (this part's CS is not)
     jmp .apply
+.nbind:
+    pop di
+    pop si
+    pop bx
+    mov si, w16_r_nbind
+    jmp .refusal
 .missing:                           ; SPEC.md 124.12: bound to a stub that
     cmp byte [w16_rpass], 1         ;   ends the program, naming it, if it is
     jne .ok                         ;   ever CALLED
@@ -803,6 +812,7 @@ w16_reloc1:
     pop si
     pop bx
     mov si, w16_r_toomany
+.refusal:
     mov di, w16_l1
     ICALL w16_strcpy
     mov si, w16_name
@@ -1397,12 +1407,29 @@ w16_missbind:
     mov si, w16_mbtext
     ICALL w16_mslot
     ICALL w16_strcpy
-.stub:
-    mov ax, bx                      ; w16_mstubs + 6 * slot
+.stub:                              ; name slot BX's bind slot (124.19.1):
+    mov di, bx                      ;   given out on its first import
+    shl di, 1
+    mov ax, [cs:w16l_missslot + di]
+    or ax, ax
+    jnz .bound
+    mov ax, [w16_nbind]
+    cmp ax, W16_NBIND
+    jae .full
+    inc word [w16_nbind]
+    mov [cs:w16l_missslot + di], ax
+    mov di, ax
+    shl di, 1
+    shl di, 1
+    mov byte [w16_bind + di + W16B_ARGB], 0
+    mov byte [w16_bind + di + W16B_PART], W16B_MISS
+    mov [w16_bind + di + W16B_PROC], bx
+.bound:
+    mov dx, ax                      ; the stub: our CS : w16_stubs + slot * 6
     shl ax, 1
-    add ax, bx
+    add ax, dx
     shl ax, 1
-    add ax, w16_mstubs
+    add ax, w16_stubs
     mov dx, ds                      ; the image's segment (this part's CS is not)
     clc
     jmp short .out
@@ -1453,6 +1480,120 @@ w16_pcopy:
     ret
 
 
+; -----------------------------------------------------------------------------
+; w16_findexp - DL = module, AX = ordinal -> AX = the row; CF=1 not ours.
+; The rows are this part's own (SPEC.md 124.19.1), read through CS.
+; -----------------------------------------------------------------------------
+w16_findexp:
+    push bx
+    push cx
+    mov bx, w16_exports             ; XSEC-OK: read through cs:
+    xor cx, cx
+.row:
+    cmp cx, W16_NX
+    jae .none
+    cmp [cs:bx + W16X_MOD], dl
+    jne .next
+    cmp [cs:bx + W16X_ORD], ax
+    je .hit
+.next:
+    add bx, W16X_SIZE
+    inc cx
+    jmp short .row
+.hit:
+    mov ax, cx
+    pop cx
+    pop bx
+    clc
+    ret
+.none:
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_bindinit - a fresh bind table (SPEC.md 124.19.1): the image's four
+; slots written, nothing of a program's bound yet. Keeps every register.
+; -----------------------------------------------------------------------------
+w16_bindinit:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push cs
+    pop es
+    mov di, w16l_rowslot            ; XSEC-OK: written through ES = CS
+    mov cx, W16_NX + W16_NMISS      ;   (w16l_missslot follows it)
+    xor ax, ax
+    rep stosw
+    mov word [cs:w16l_rowslot + 2 * W16_XDDP], W16_DDPROW
+    push ds
+    pop es
+    mov si, w16_fixed               ; XSEC-OK: read through cs:
+    mov di, w16_bind
+    mov cx, W16B_SIZE * W16_NFIXED
+.c:
+    cs lodsb
+    stosb
+    loop .c
+    mov word [w16_nbind], W16_NFIXED
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_bindrow - AX = an export row -> AX = its bind slot, given out and
+; written on the row's first import. CF=1 every slot is taken. Keeps the rest.
+; -----------------------------------------------------------------------------
+w16_bindrow:
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, ax
+    shl bx, 1
+    mov dx, [cs:w16l_rowslot + bx]  ; (0 is the image's own slot, never a row's)
+    or dx, dx
+    jnz .have
+    mov dx, [w16_nbind]
+    cmp dx, W16_NBIND
+    jae .full
+    inc word [w16_nbind]
+    mov [cs:w16l_rowslot + bx], dx
+    mov cx, W16X_SIZE               ; the row: AX * 7
+    mul cx
+    mov si, ax
+    add si, w16_exports             ; XSEC-OK: read through cs:
+    mov bx, [cs:w16l_rowslot + bx]
+    shl bx, 1
+    shl bx, 1
+    mov al, [cs:si + W16X_ARGB]
+    mov [w16_bind + bx + W16B_ARGB], al
+    mov al, [cs:si + W16X_PART]
+    mov [w16_bind + bx + W16B_PART], al
+    mov ax, [cs:si + W16X_PROC]
+    mov [w16_bind + bx + W16B_PROC], ax
+    shr bx, 1
+    shr bx, 1
+    mov dx, bx
+.have:
+    mov ax, dx
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 section .text
 ; --- the loader's own bss, beside the package's -----------------------------
 ; (declared here, in the image, rather than in w16_* bss: they are scratch
@@ -1484,3 +1625,4 @@ w16_r_trunc:   db 'The file is damaged.', 0
 w16_r_reloc:   db 'A relocation WIN16 cannot apply.', 0
 w16_r_entry:   db 'Its entry point is not in it.', 0
 w16_r_toomany: db 'It calls too much WIN16 lacks.', 0
+w16_r_nbind:   db 'Imports more than WIN16 can bind (384).', 0

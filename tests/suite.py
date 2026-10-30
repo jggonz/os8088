@@ -2188,6 +2188,17 @@ FAST = [
         "finding (WIN16-PLAN S11): an opcode with a modrm AND an immediate "
         "was walked short, so FPU.EXE read as 386 code",
         needs=("nasm", "unicorn")),
+    Row("w16xsec", "fast", py("tests/unit/t_w16xsec.py"), 3.0,
+        "WIN16 is one nasm run emitting the image and its code parts, each at "
+        "vstart=0, so a near call from a part to an image label (or back) "
+        "assembles cleanly and lands on whatever the CALLER's segment holds "
+        "at that offset - nothing in -f bin refuses it. SPEC.md 124.19.3: "
+        "off WIN16's own listing and map, every near call/jmp must stay in "
+        "its section, nothing outside a part may name the part's labels but "
+        "the DCALL/LCALL vector store, and a part whose DS is the image may "
+        "not read its own data without cs:. S14 moves handlers into the "
+        "library part, and this is what keeps that move honest",
+        needs=("nasm",)),
 ]
 
 # --------------------------------------------------------------------------

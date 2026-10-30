@@ -17,8 +17,9 @@
 ;     handed to w16_cbopen as name_c, its trampoline in the image;
 ;   - the kernel is never handed an address in here (SPEC.md 124.13);
 ;   - no routine in here is on any stack while the program runs: every DCALL
-;     returns before the gate enters the program, which is what lets
-;     w16_dlgtrim drop the part between two resumes.
+;     returns before the gate enters the program. The part stays until the
+;     program ends all the same (SPEC.md 124.19.2): it is the LIBRARY part
+;     now, and a handler moved here is reached through w16_lbgate.
 ;
 ; After Wine's dialog16.c, dialog.c, defdlg.c, button.c, static.c, edit.c and
 ; listbox.c, cut to what Windows 3.0 showed (SPEC.md 124.13's tables) and
@@ -326,33 +327,6 @@ w16_mkick:
 .out:
     ret
 
-; w16_dlgtrim - drop the dialog part when nothing of it is left: no window of
-; WIN16's classes and no modal loop (SPEC.md 124.13). Between two resumes
-; only. Keeps every register.
-w16_dlgtrim:
-    cmp word [w16_dseg], 0
-    je .out
-    cmp byte [w16_inmodal], 0
-    jne .out
-    push bx
-    push cx
-    mov bx, w16_wnd
-    mov cx, W16_MAXWND
-.w:
-    test byte [bx + W16W_FLAGS], W16WF_USED
-    jz .n
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .keep
-.n:
-    add bx, W16W_SIZE
-    loop .w
-    call w16_dlgout
-.keep:
-    pop cx
-    pop bx
-.out:
-    ret
-
 ; w16_dlgres - DX:AX = a dialog's name or MAKEINTRESOURCE in this program ->
 ; ES = its template's segment (the template at ES:0), BX = the resource
 ; entry it is (w16_dlgrel gives it back). CF=1 there is none.
@@ -519,6 +493,14 @@ w16_s_no:       db '&No', 0
 w16_s_mbclass:  db 0
 
 section .w16dlg vstart=0 align=1
+; w16_lbgate - the library part's one way in for a NEAR routine (SPEC.md
+; 124.19.2): the gate's dispatch and LCALL far-call it with [w16_lfn] naming
+; the routine. CS = this part, DS = WIN16's image. Every register and the flags
+; pass through both ways - w16_ibgate's mirror.
+w16_lbgate:
+    call [w16_lfn]
+    retf
+
 ; align=1 is load-bearing (apps/word/word.asm's .modc): a pad between the
 ; image the header records and this section's start would ride into the part
 ; and move every label in it.
@@ -1874,13 +1856,13 @@ w16d_chkpaint:
     call w16d_colors
     mov bx, [w16d_rec]
     call w16d_bstyle
-    mov si, w16d_bmcheck            ; which picture: SI in the part, as an
+    mov si, w16d_bmcheck            ; which picture: SI in the part, as an  XSEC-OK: read through cs:
     cmp al, BS_RADIOBUTTON          ;   offset of w16d_bm*
     je .radio
     cmp al, BS_AUTORADIOBUTTON
     jne .pic
 .radio:
-    mov si, w16d_bmradio
+    mov si, w16d_bmradio  ; XSEC-OK: read through cs:
 .pic:
     mov al, [bx + BC_STATE]
     and al, 3
@@ -2075,7 +2057,7 @@ w16d_bmradio:
 
 w16d_edit:
     mov cx, [w16_sm_msg]
-    mov si, w16d_edtab
+    mov si, w16d_edtab  ; XSEC-OK: read through cs:
 .find:
     mov ax, [cs:si]
     or ax, ax
@@ -2991,7 +2973,7 @@ W16D_SBW    equ 17              ; the scroll bar's width (SM_CXVSCROLL)
 
 w16d_list:
     mov cx, [w16_sm_msg]
-    mov si, w16d_lbtab
+    mov si, w16d_lbtab  ; XSEC-OK: read through cs:
 .find:
     mov ax, [cs:si]
     or ax, ax
@@ -4002,12 +3984,12 @@ w16d_sbar:
     call w16d_fill
     mov ax, [w16d_it]               ; the up box
     mov [w16d_by], ax
-    mov si, w16d_bmup
+    mov si, w16d_bmup  ; XSEC-OK: w16d_sbox reads it through cs:
     call w16d_sbox
     mov ax, [w16d_ib]               ; the down box
     sub ax, W16D_SBW - 1
     mov [w16d_by], ax
-    mov si, w16d_bmdown
+    mov si, w16d_bmdown  ; XSEC-OK: w16d_sbox reads it through cs:
     call w16d_sbox
     pop bx
     push bx
@@ -6264,7 +6246,7 @@ w16u_msgbox_d:
     mov [w16d_mbk], bx
     shl bx, 1
     shl bx, 1
-    add bx, w16d_mbtab
+    add bx, w16d_mbtab  ; XSEC-OK: read through cs:
     mov al, [cs:bx]
     xor ah, ah
     mov [w16d_mbn], ax              ; how many

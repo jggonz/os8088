@@ -227547,3 +227547,98 @@ shipped and carries no `DOS.O88`, so the forward is the system disk's.
 `win16hiber` (MartyPC's XT-IDE, every hibernate row's machine): a program
 started through the shipped forward off the hard disk, hibernated and
 resumed at the same segment, then played on and closed.
+
+### 124.19 The layer as an image and a library part *(pinned for S14, docs/plans/WIN16-ANY-PLAN.md)*
+
+WIN16's image and its bss share one 64 KB segment, and at S13 it had 4,946
+bytes left. Every function WIN16 exported cost the image 12 bytes, a row
+and a stub, and the 605 the census found missing would cost 7 KB in rows
+before a line of them ran. So S14 changes two things. What the image carries
+stops depending on how many functions WIN16 exports. Most of the handlers
+move into a part, whose segment is its own.
+
+**One library part, not one a module.** The plan (D11) proposed a part per
+Windows module. `MEM_OWNER_MAX` (§50) allows an owner 8 claims, and a
+program already holds five to seven, so each extra resident part is a claim
+the program's own bitmaps and heaps lose. Instead, part 3, the dialog part
+since S6 (§124.13), becomes **the library part**: the dialog manager, the
+controls, and the handlers moved out of the image. A second library part
+is added only when the first reaches 64 KB.
+
+#### 124.19.1 The bind table
+
+The export table moves into the loader part (part 5, §124.18.7), where the
+loader and the census are its only readers. Its rows keep their shape:
+module, ordinal, argument bytes, and the handler. The handler is now an
+offset together with **the part it is in** (0 for the image, 3 for the
+library part).
+
+At load, the loader gives each distinct import of the program the next
+**bind slot** and writes the slot's entry into the image's bss:
+
+| byte | |
+|---|---|
+| +0 | the argument bytes the pascal callee pops (signed: InitTask's −2) |
+| +1 | the part: 0 the image, 3 the library part, `W16B_MISS` (7Fh) an import WIN16 lacks; bit 7 set = the import never returns (FatalExit, FatalAppExit), which the census reads |
+| +2 | the handler's offset in that part, or for a missing import its name's slot in `w16_mtxt` (§124.12) |
+
+Stub *k* in the image is `mov ax, k / jmp near w16_gate`, as before, and
+serves slot *k*. There are `W16_NBIND` = 384 stubs. The largest import list
+in Windows 3.0's and 3.1's own programs is Paintbrush 3.1's, 270. Slots 0–3
+are fixed, because the image names their stubs: the control procedure
+(`W16_CTLROW`), the callee's return (`W16_CBROW`), the emulator's missing
+instruction (`W16_X87ROW`), and `DefDlgProc`, which a dialog class's window
+procedure is (`W16_DDPROW`). A program that imports more functions than the
+table holds is refused at load: *Imports more than WIN16 can bind (384).*
+A missing import binds a slot like any other, so S5's 64 separate missing
+stubs go. The 64 names stay.
+
+#### 124.19.2 The gate
+
+The gate reads slot *k*:
+
+- for part 0 it near-calls the handler, as before;
+- for part 3 it makes sure the library part is here, fetching it from
+  WIN16's own folder if not, and far-calls the part's **library gate** with
+  the handler's offset in `[w16_lfn]`. The library gate near-calls it and
+  returns with `retf`;
+- for `W16B_MISS` it banks the name's slot and runs `w16_missed`.
+
+So a moved handler is an ordinary near routine ending in `ret`, and code in
+the image reaches one with `LCALL name`, the mirror of the dialog part's
+`ICALL` (§124.13). A library part that cannot be read ends the program with
+the reason, as a missing import does.
+
+**The library part stays until the program ends.** Since S6, `w16_dlgtrim`
+has dropped the dialog part between two resumes whenever no dialog was up.
+With general handlers in the part, the next call would fetch it again: a
+disk read, about 400 ms on an XT (PERFORMANCE.md). Now the part is fetched
+at the first handler that needs it and dropped when the program ends.
+
+#### 124.19.3 What moves, and the rule that checks it
+
+The files whose code moves are chosen by measurement: the bytes each
+leaves in the image against the calls that would have to cross the
+boundary. Each file's measurement is recorded here when it moves.
+
+- **In the moved file**, a call into the image is `ICALL`, and a table the
+  file reads itself is in `section .text` or read through `cs:`.
+- **In the image**, a call into the moved file is `LCALL`.
+
+Nothing in nasm's `-f bin` output refuses a near call from one section to a
+label in another. Each section's addresses start at 0, so such a call
+assembles cleanly and calls the wrong code. **`tests/unit/t_w16xsec.py`
+(fast tier) is the rule.** It reads the listing and symbol map of WIN16's
+own assembly. It fails `make` for:
+
+- any near `call` or `jmp` whose target is in another section;
+- any reference to a part's label from outside that part, other than the
+  `DCALL`/`LCALL` vector store and a `cs:` read inside the part itself.
+
+#### 124.19.4 The gate rows
+
+The rows stay as they were: every `win16*` row from S1–S13. A program's
+bind table and the library part change no behaviour a row can see. The
+library part's residency changes the claims a program holds while no
+dialog is up, which `win16desk` reads. The image, the bss, the segment's
+room and the library part's size are MEASURED in S14's diary entry.

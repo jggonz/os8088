@@ -132,20 +132,15 @@ def put(mu, name, val, off=0):
     mu.mem_write((IMG << 4) + S[name] + off, struct.pack("<H", val))
 
 
-def noret_rows():
-    """the export rows of KERNEL.1 and KERNEL.137 (FatalExit, FatalAppExit):
-    a far call to their stubs does not return, to either census"""
-    rows, n = {}, 0
-    for line in open(os.path.join(ROOT, "apps", "win16", "w16api.inc")):
-        if line.startswith("W16EXPORT"):
-            f = [x.strip() for x in line.split(";")[0][len("W16EXPORT"):].split(",")]
-            if f[0] == "W16M_KERNEL" and f[1] in ("1", "137"):
-                rows[int(f[1])] = n
-            n += 1
-    return rows
+def noret_slots():
+    """KERNEL.1 and KERNEL.137 (FatalExit, FatalAppExit) as the loader binds
+    them (SPEC.md 124.19.1): a slot each past the image's four fixed ones, its
+    part byte carrying W16B_NORET - which is what the census reads, so a far
+    call to their stubs does not return, to either census"""
+    return {1: 4, 137: 5}
 
 
-NORET = noret_rows()
+NORET = noret_slots()
 
 
 def fixtab():
@@ -237,6 +232,9 @@ class Machine:
         put(mu, "w16_ne", ne.ne)
         put(mu, "w16_nseg", len(ne.segs))
         put(mu, "w16_nmod", 0)
+        for slot in NORET.values():                 # the bind table's two
+            mu.mem_write((IMG << 4) + S["w16_bind"] + 4 * slot,   # no-return
+                         bytes((0, 0x80, 0, 0)))                  # slots
         for s in ne.segs:
             put(mu, "w16_sbase", base[s.n], 2 * (s.n - 1))
         mu.mem_write((IMG << 4) + S["w16_name"], b"TEST.EXE\0")
