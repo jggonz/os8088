@@ -170,7 +170,7 @@ its table goes in the diary, so the reach is measured, not claimed.
     and the MartyPC price of a call through the library gate (`win16mines`'
     reveal median). They run in S25's final pass.
 
-- [ ] **S15: Programs over 64 KB (R2).**
+- [x] **S15: Programs over 64 KB (R2).**
   - *As a user, I double-click Solitaire and play it.*
   - The loader reads the NE header and tables with `OSAPI_FILE_READ_AT`,
     then each segment to its place, rather than the whole file into one
@@ -183,6 +183,32 @@ its table goes in the diary, so the reach is measured, not claimed.
     array checks what SOL does not.
   - **Verification:** a `win16sol` row plays a deal on QEMU and draws its
     cards on all four adapters; the XT's load time on MartyPC.
+  - **Shipped:** the loader reads a file in pieces through a cluster cache
+    (SPEC.md §124.20.1); Solitaire's calls (§124.20.4): bitmaps keep their
+    palette and live in the global heap, sixteen of them; `GetPixel` on the
+    screen; nested DCs; `BitBlt`/`PatBlt` INTO a memory DC; the
+    pattern-free source ROPs onto the screen; `WS_CLIPCHILDREN` for a child
+    along an edge; the first `WM_SIZE` of a hidden window deferred to its
+    `ShowWindow`; the client rounded UP to the 8-pixel grid. Control
+    Panel 3.0's start-up and main window (§124.20.5), and `TRANSPARENT` text
+    (§124.17.1). The `BIG.EXE` fixture (tests/win16/big.c, medium model,
+    with a `.wcl` options file the fixture build now reads).
+  - **Measured:** the segment's room is **15,915 bytes** (image 30,987, bss
+    18,634), down from S14's 19,368; the library part is 34,759 bytes.
+    BIG.EXE is 17 code segments and about 155 KB of code.
+  - **Seen:** on QEMU, Solitaire 3.0 and 3.1 dealt on VGA, EGA, CGA and
+    Hercules, one at a time; 3.0's drag and a legal move; 3.1's ace to a
+    foundation, scored; the empty piles' outlines on VGA, EGA and Hercules.
+    Control Panel's window, its selection and Help > About. BIG.EXE's
+    MessageBox equal to the sums computed on the host.
+  - **Not yet:** on CGA Solitaire 3.1 draws no outline on an empty pile -
+    no source ROP reaches the screen there, so it draws them another way;
+    Control Panel's Settings dialogs (a control class of the program's own
+    in a template, `COMBOBOX`, `SCROLLBAR`) and its cut-off Settings popup
+    (§124.20.5) are S17's. Two Solitaires at once run short of memory, and
+    3.1 says so and drags outlines.
+  - **Not yet run:** `win16sol` and `win16big` (registered), and the XT's
+    load time on MartyPC. They run in the final pass (S25).
 
 - [ ] **S16: Files (R5).**
   - *As a user, Notepad opens my text file and saves it back.*

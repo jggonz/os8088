@@ -16376,6 +16376,28 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16sol", "soak", py("tests/win16sol.py"), 420.0,
+        "SPEC.md 124.20, WIN16-ANY-PLAN S15: Solitaire 3.0 (SOL.EXE, 180 KB, "
+        "the first program over 64 KB) and 3.1 (W31SOL.EXE) - Microsoft's, in "
+        "build/win16/ only where the win16-reference skill put them - on VGA, "
+        "EGA, CGA and Hercules under QEMU: private VIDEO= kernel trees "
+        "(tools/os88build.py), Hercules with HERCSEG and read out of RAM. Each "
+        "program alone: its window is Solitaire, it has dealt (a tenth of the "
+        "client is not the felt), a click on the deck turns cards onto the "
+        "waste, and its close box ends it",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=1800,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16big", "soak", py("tests/win16big.py"), 60.0,
+        "SPEC.md 124.20, WIN16-ANY-PLAN S15: BIG.EXE (`make win16fixtures`, "
+        "tests/win16/big.c) - 17 code segments and about 155 KB of code, each "
+        "of sixteen functions far-called forward and back, and a 128 KB "
+        "GlobalAlloc block written through a __huge pointer and read back by "
+        "adding __AHINCR (KERNEL.114) to the segment. Its MessageBox, read "
+        "off the program's stack, must be the sums the row computes itself",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

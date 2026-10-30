@@ -1541,3 +1541,85 @@ Minesweeper's Game menu with its checks, separators and accelerators. The
 emulator rows, and the MartyPC price of a call through the library gate,
 run in the final pass (S25).
 
+
+## 2026-10-30 — S15: Solitaire, and the first program over 64 KB
+
+*As a user, I double-click Solitaire and play it.*
+
+Solitaire 3.0 is 180 KB. Only 28 KB of it is code; the rest is the cards,
+which are resources and were always read one at a time. So the loader's
+change was small: it now reads the file in pieces through an 8 KB cluster
+cache, never the whole file at once. Most of the story was what Solitaire
+asks of GDI that nothing before it had.
+
+**Bugs that looked like missing features.** Each of these first looked
+like a whole subsystem to build, and turned out to be one bug:
+
+| on the glass | what it was |
+|---|---|
+| no face cards, only backs | `LoadBitmap` kept the resource entry in SI across a call that answers in SI. Its release then decremented words of the resource table's own header, one of them a type's entry count, so faces 1-52 were never found |
+| hearts and diamonds black | a 1-bit bitmap was forced to black and white; Solitaire's cards are 1-bit with a red palette |
+| white corners on every card | `GetPixel` on the screen answered `CLR_INVALID`; Solitaire reads the felt's colour to paint the corners |
+| a green block over the status line | a timer's DC closed the DC the drag was drawing with; DCs nest now |
+| the spot a lifted card left was white | a memory DC had no brush of its own, so `PATCOPY` in it used the window's |
+| 3.1 dealt nothing | os8088 snaps a window's width DOWN to 8 pixels: Solitaire 3.1 asked for 585, got 584, and computed its piles from the difference. The client now rounds UP |
+| 3.1 hung at start | its window got `WM_SIZE` inside `CreateWindow`, before it had allocated the piles. A hidden overlapped window now gets its first `WM_SIZE` at `ShowWindow`, as Wine sends it |
+
+**Drawing into a bitmap.** Solitaire's drag is five `SRCCOPY`s a step
+through three bitmaps of its own, so `BitBlt` and `PatBlt` now draw into a
+memory DC as well as from one. The screen-to-bitmap copy reads the screen
+back with `OSAPI_GFX_SAVE`, a band at a time.
+
+**ROPs are truth tables.** An empty pile is a monochrome outline put down
+with `SRCAND`. Rather than special-case it, every ROP whose answer ignores
+the pattern goes through one path. Its index byte is a truth table over
+(source bit, screen bit), applied to each of a colour's four bits as the
+VGA driver applied it per plane. A 256-byte table is built per call, and
+each row is read back, combined and put down with one `BLIT4`.
+
+**Control Panel 3.0** is 161 KB in 21 code segments, and it is the first
+program here that is more than its resources. Seven calls were enough to
+reach its window: the Windows directory, `OpenFile` answering *not found*
+until S16, `LoadLibrary` answering 2 until S18, no network, `OemToAnsi`,
+`AdjustWindowRectEx` and `CreateFont`. Two lessons came with it:
+
+- **A row in the wrong place became a constant.** I added
+  `GetWindowsDirectory` just below the rows the loader binds by position.
+  `__AHINCR` moved down one, and Control Panel's call was fixed up as the
+  constant 1000h: a far call to 0000:0000. A comment now marks where new
+  rows go.
+- **`TRANSPARENT` text is not optional.** The selected icon's label is
+  white text on a caption-blue `FillRect`, and WIN16 always drew text on
+  its paper, so the label vanished. It now goes down as ink alone, 16
+  columns at a time through `OSAPI_ICON_DRAW`'s masked pass. That pass
+  draws nothing when a clip edge cuts it, so a cut chunk is read back and
+  put down a row at a time. Dragging the Disk window across the labels
+  exercised both arms.
+
+**BIG.EXE checks what Solitaire does not.** It is an Open Watcom fixture
+in medium model: sixteen functions of straight-line arithmetic, each in a
+code segment of its own (17 segments, about 155 KB of code), and a 128 KB
+block walked once through a `__huge` pointer and once by adding
+`__AHINCR` to the segment by hand. Watcom's own huge arithmetic never
+imports `__AHINCR`, which is why the program imports it itself. The first
+checksum came out 0000: the byte pattern sums to a multiple of 65,536, and
+so did the next two mixes I tried. The step the code functions use is the
+one that does not cancel. The MessageBox reads `code 47D5`, `sum A9A1`,
+`0 wrong`, `__AHINCR 1000`, exactly what Python computes.
+
+**Seen on all four adapters.** Each Solitaire dealt on VGA, EGA, CGA and
+Hercules (Hercules read out of RAM, since QEMU has no Hercules card). Two
+things looked like bugs and were not:
+
+- With both Solitaires open, 3.1 said *"Not enough memory to display card
+  faces when cards move"* on EGA, and on CGA a pile went missing. Two
+  programs genuinely run short of memory. Run alone, each deals.
+- On CGA, Solitaire 3.1 draws no outline on an empty pile. No source ROP
+  reaches the screen there, so it is drawing them some other way; that
+  waits for S17.
+
+**Measured.** WIN16's segment has **15,915 bytes** of room, down from
+19,368: the ROP table, the transparent-text state and the DC stack are
+bss. The library part is 34,759 bytes. `win16sol` (four adapters, deal and
+deck click) and `win16big` are registered and run in the final pass, with
+the XT's load time on MartyPC.

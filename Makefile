@@ -18827,8 +18827,10 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # fixture with a tests/win16/<name>.wlk is linked by wlink with those options
 # (FPX's 16KB local heap: signal() brings stdio in, and Windows 3.0 refused
 # it with the default 1KB - "Not enough memory to allocate file structures").
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER
-WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk) \
+# A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
+# model, so its sixteen code_seg functions are far (SPEC.md 124.20).
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG
+WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk tests/win16/*.wcl) \
             tests/win16/mkbmp.py
 
 win16census:
@@ -18848,13 +18850,14 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 	@cd $(@D) && eval "$$($(CURDIR)/tools/setup-watcom.sh --build-dir $(abspath $(BUILD)) --env)" && \
 	for p in $(WIN16FIX); do \
 	  l=$$(echo $$p | tr A-Z a-z); \
+	  o=$$(cat $(CURDIR)/tests/win16/$$l.wcl 2>/dev/null); \
 	  if [ -f $(CURDIR)/tests/win16/$$l.wlk ]; then \
-	    wcl -q -c -0 -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	    wcl -q -c -0 $$o -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
 	        $(CURDIR)/tests/win16/$$l.c >/dev/null && \
 	    wlink op q system windows $$(cat $(CURDIR)/tests/win16/$$l.wlk) \
 	        file $$l.obj name $$p.EXE >/dev/null || exit 1; \
 	  else \
-	    wcl -q -0 -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	    wcl -q -0 $$o -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
 	        -fe=$$p.EXE $(CURDIR)/tests/win16/$$l.c >/dev/null || exit 1; \
 	  fi; \
 	  if [ -f $(CURDIR)/tests/win16/$$l.rc ]; then \

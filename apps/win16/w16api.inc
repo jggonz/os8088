@@ -106,6 +106,10 @@ W16EXPORT W16M_KERNEL,     74,      10, w16k_openfile       ; OpenFile(str ptr w
 W16EXPORT W16M_KERNEL,     81,      2,  w16k_lclose         ; _lclose(word)
 W16EXPORT W16M_KERNEL,     95,      4,  w16k_loadlib        ; LoadLibrary(str)
 W16EXPORT W16M_KERNEL,     96,      2,  w16k_freelib        ; FreeLibrary(word)
+; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
+; and W16_FPROW are W16NX at the line before them, and the rows after each are
+; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put
+; between W16_AHROW and __AHINCR was bound as the constant 1000h.
 ; two bound by the loader to something other than a gate stub (w16_reloc1):
 ; DOS3Call to int 21h itself, __WINFLAGS to its value (SPEC.md 124.15.3)
 W16_D3ROW equ W16NX
