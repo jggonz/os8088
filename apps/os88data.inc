@@ -83,6 +83,11 @@
 ; and on a one-drive machine a Save asks for the system disk. The visit still
 ; ends where the instance stood, on whatever volume that was.
 ;
+; A VOLUME OF YOUR CHOOSING, by `%define OD_TVOL label` before the include:
+; the visit goes to the drive in the byte at `label`, read at every od_enter.
+; WIN16 (SPEC.md 124.14) names the volume WIN16.O88 was launched from, which
+; is not where its instance stands while a Windows program runs.
+;
 ; READ-ONLY, by `%define OD_READONLY` before the include (apps size pass 2b):
 ; od_write is not assembled, for a package that only ever reads its file
 ; back - RLAPPLY reads the REDLINE.CFG that REDLINE writes. It is os88ui.inc's
@@ -101,6 +106,9 @@ od_home:     dw 0               ; where the instance stood before this visit
 od_homedrv:  db 0
 %ifdef OD_BOOTVOL
 od_tdrv:     db 0               ; the volume visited: the boot volume
+ %define OD_TDRV od_tdrv
+%elifdef OD_TVOL
+od_tdrv:     db 0               ; the volume visited: the package's choice
  %define OD_TDRV od_tdrv
 %else
  %define OD_TDRV od_homedrv     ; ...or, by default, our own
@@ -127,6 +135,9 @@ od_enter:
     mov [od_homedrv], bl
 %ifdef OD_BOOTVOL
     call OSAPI_VOL_SYS              ; BL = the volume the machine booted from
+    mov [od_tdrv], bl
+%elifdef OD_TVOL
+    mov bl, [OD_TVOL]               ; the volume the package named
     mov [od_tdrv], bl
 %endif
     mov byte [od_fresh], 0

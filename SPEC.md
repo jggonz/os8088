@@ -225011,7 +225011,8 @@ to the end goal, and none is a design decision against it:
 - DOS calls beyond what the C runtime makes (R5);
 - no segment moving or discarding (R6);
 - no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
-- no WinHelp: it greys itself with the reason (§47).
+- no WinHelp: `WinHelp` answers `FALSE`, and `TRUE` to `HELP_QUIT`, which a
+  program sends as it ends; S8 makes the refusal say why (§47).
 
 Never: a 32-bit program. That is not Win16.
 
@@ -225623,3 +225624,61 @@ stays pinned (§20.12.12), so a far return is never stale. The kernel is
 handed no address in it. **The reason is room as well as memory**: WIN16's
 image and bss share one segment capped at 65,024 bytes (§20.1.1), and the
 stories after S6 grow it; the part has a segment of its own.
+
+### 124.14 Profiles: WIN.INI and a program's own `.INI` *(shipped in S7)*
+
+`GetProfileInt`, `GetProfileString` and `WriteProfileString` read and write
+`WIN.INI`; `GetPrivateProfileInt`, `GetPrivateProfileString` and
+`WritePrivateProfileString` read and write the file the program names. Both
+are WIN16's own code, after Wine's `profile.c`, in WIN16's image
+(`apps/win16/w16prof.inc`).
+
+**Where the files are.** The Windows directory is `SYSTEM\APPDATA\WIN16\`
+on the volume `WIN16.O88` was launched from (§19.9: a program's state, on its
+own disk). A private profile's name is reduced to its last component, after
+the last `\` or `:`, and must be a legal 8.3 name; `WINMINE.INI` and
+`C:\WINDOWS\WINMINE.INI` are the same file. A program that keeps its `.INI`
+beside itself gets it in the Windows directory too, until WIN16 has DOS
+paths (R5). A name that is not 8.3 reads as an empty file and is never
+written. The folder is BUILT onto every disk that carries WIN16 (§19.9); a
+disk without it keeps the profiles in memory for the session and says
+nothing, and the folder is never created.
+
+**The cache.** A profile file is read whole into a claim of its own the first
+time it is asked for, and kept. Up to four files are held; a fifth sends the
+least recently used one out (written first if it changed). A file over
+32,000 bytes reads as empty and is never written. A file that cannot be read
+for any other reason is an empty one, as on Windows.
+
+**Writes are kept until the program ends.** A write changes the copy in
+memory. The changed files are written when the program ends, however it
+ends (it returns, it exits, End Task, an import it called that WIN16 lacks),
+and when the program asks for it: `WriteProfileString(NULL, NULL, NULL)` and
+`WritePrivateProfileString(NULL, NULL, NULL, file)`, Windows 3.1's flush.
+Each file is one `OSAPI_FILE_WRITE` on the UI task (§124.2), so the file rules
+hold. That is the decision the floppy makes: WinMine writes ten keys as it
+ends, and ten whole-file writes would be ten times the disk time of one. A
+machine switched off while a program runs loses that session's settings.
+
+**The format** is Windows': lines ending CR LF (a bare LF is read too),
+`[section]` headers, `key=value` lines, and `;` comments. Sections and keys
+are matched without case; blanks around a key and around a value are not part
+of it. A section, key or value the program passes is cut to 255 characters.
+
+| call | answers |
+|---|---|
+| `GetProfileString` and the private form | the value, cut to `nSize − 1` characters, and its length; a value in double quotes is answered without them. With no key: every key of the section, each ending in a NUL, a second NUL after the last, cut to `nSize − 2`. With no section (Windows 3.1's form): every section's name, the same way. Not found: the default, cut the same way; a `NULL` default leaves the buffer as it was and answers 0 |
+| `GetProfileInt` and the private form | the value's leading decimal digits, unsigned: `-42` is 0, `12ab` is 12; the default when the key is absent or its value is empty |
+| `WriteProfileString` and the private form | `TRUE`. The section, key and value are written without blanks at either end. A new key goes after the last line of its section that is not blank; a new section goes at the end of the file after a blank line (a new file starts with that blank line); an existing key keeps its spelling and gets the new value. No string deletes the key; no key deletes the section, header to the next one, leaving the blank line before it. `FALSE` when there is no section name, for a name that is not 8.3, or when there is no memory for the file |
+
+Every row of that table is Windows 3.0's own answer, measured: the fixture
+`tests/win16/inifile.c` runs on the reference machine and on WIN16, and both
+its message box and the `W16INI.INI` it leaves are compared byte for byte.
+
+**What WinMine needed on the way out.** A program saves as it ends, so the
+imports it calls there are part of this story: `WinHelp` (USER.171) with
+§124.6's answer, and `wsprintf` and `wvsprintf` (USER.420, USER.421), USER's
+own formatter after Wine's `wsprintf.c` (`apps/win16/w16fmt.inc`):
+`%[-][#][0][width][.precision][l]` with `c d i u x X s` and `%%`, `%s` and
+the `l` forms taking far arguments, a `NULL` `%s` printing `(null)`, at most
+1,024 characters and then a NUL, answering the count without it.

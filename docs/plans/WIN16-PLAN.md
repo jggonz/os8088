@@ -632,7 +632,7 @@ they stand on.
   - **Not seen:** Hercules (QEMU has none); CALC's Scientific panel (S10);
     a call count on a dialog's first paint (S13's final pass).
 
-- [ ] **S7: Profiles.** *As a user my best times and my chosen difficulty are
+- [x] **S7: Profiles.** *As a user my best times and my chosen difficulty are
   still there tomorrow.*
   - `GetProfileInt`/`GetProfileString`/`WriteProfileString` and the
     `PrivateProfile` forms.
@@ -641,13 +641,48 @@ they stand on.
   - Writes are made on the UI task, so the file rules hold.
   - *Verify:* set Expert, record a time, close, reopen; the INI on the host
     reads back with `mtools`.
+  - **Amended at S7** (SPEC.md §124.14, every row measured on Windows 3.0):
+    `GetProfileInt` is unsigned (`-42` reads 0); a quoted value is answered
+    without its quotes; a `NULL` default leaves the buffer and answers 0; a
+    written value is trimmed. Writes are kept in memory and each changed
+    file is one write when the program ends or flushes, not one a key.
+    WinMine 2.9 has no best times, so "record a time" waits for a program
+    that keeps them.
+  - **Shipped** (one commit on PR #320):
+    - `apps/win16/w16prof.inc`: the profile calls after Wine's `profile.c`.
+      Up to four files held, each in its own claim, least recently used
+      out first, at most 32,000 bytes each.
+    - `apps/os88data.inc`'s `OD_TVOL` mode, so WIN16 reaches
+      `SYSTEM\APPDATA\WIN16\` on the volume it was launched from. Every
+      other package that includes it assembles byte-identical.
+    - What WinMine called on its way out: `WinHelp` (USER.171, `TRUE` to
+      `HELP_QUIT`), and `wsprintf`/`wvsprintf` (USER.420/421,
+      `apps/win16/w16fmt.inc`).
+    - `tests/win16/inifile.c`: the oracle fixture, run on Windows 3.0 and on
+      WIN16; `win16test.img` carries the `WIN16` folder.
+    - `make win16`: a 41,833-byte image (38,243 at S6), 49,863 bytes on
+      disk. The kernel is unchanged.
+  - **Seen on the glass** (QEMU, VGA):
+    - INIFILE.EXE: its message box matches Windows 3.0's, and the
+      `W16INI.INI` it leaves is byte-identical to the reference's (`cmp`).
+    - PROFILE.EXE, run twice: run 1, then run 2; `W16TEST.INI` read back on
+      the host with `mtype`.
+    - **WinMine 2.9**: Expert, then Exit, writes `WINMINE.INI`'s ten keys
+      (`Difficulty=2`, 24 x 24, 99 mines, the sound/mark/menu/tick flags,
+      the position); relaunched, it opens as Expert. Intermediate, then
+      Exit, then relaunch: 16 x 16 with 40 mines.
+    - A disk without the folder: PROFILE.EXE says run 1 both times, with
+      no error, and nothing is written.
+  - **Not seen:** the fifth held file sending one out (no program here
+    opens five); a profile over 32,000 bytes.
 
 - [ ] **S8: Minesweeper.** *As a user I can play the original Windows
   Minesweeper on os8088, every level, with the timer, the mine counter, the
   face, marks, colour and best times, on every adapter my machine has.*
   - SOUND.DRV's voice API (`OpenSound`, `SetVoiceNote`, `SetVoiceAccent`,
     `StartSound`, `StopSound`, `CloseSound`) plays through `OSAPI_SND_TONE`.
-  - WinHelp refuses with its reason, greyed (SPEC.md §47).
+  - WinHelp refuses with its reason, greyed (SPEC.md §47). (S7 already
+    answers `TRUE` to `HELP_QUIT`, which WinMine sends as it exits.)
   - The CPU it needs is stated on the glass when it is not met.
   - *Verify:* QEMU and MartyPC-with-V20 rows (`win16mines`) play a scripted
     game to a win and a loss; the four adapters are looked at; the XT's

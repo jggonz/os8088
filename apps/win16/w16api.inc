@@ -168,6 +168,7 @@ W16EXPORT W16M_USER,       114,     4,  w16u_dispatch       ; DispatchMessage(pt
 W16EXPORT W16M_USER,       124,     2,  w16u_updatewnd      ; UpdateWindow(word)
 W16EXPORT W16M_USER,       125,     8,  w16u_invalrect      ; InvalidateRect(word ptr word)
 W16EXPORT W16M_USER,       127,     6,  w16u_validrect      ; ValidateRect(word ptr)
+W16EXPORT W16M_USER,       171,     12, w16u_winhelp        ; WinHelp(word str word long)
 W16EXPORT W16M_USER,       173,     6,  w16u_loadcursor     ; LoadCursor(word str)
 W16EXPORT W16M_USER,       174,     6,  w16u_loadicon       ; LoadIcon(word str)
 W16EXPORT W16M_USER,       176,     10, w16u_loadstr        ; LoadString(word word ptr s_word)
@@ -192,6 +193,8 @@ W16EXPORT W16M_USER,       232,     14, w16u_setwndpos      ; SetWindowPos(word 
 W16EXPORT W16M_USER,       250,     6,  w16u_menustate      ; GetMenuState(word word word)
 W16EXPORT W16M_USER,       263,     2,  w16u_menucount      ; GetMenuItemCount(word)
 W16EXPORT W16M_USER,       264,     4,  w16u_menuitemid     ; GetMenuItemID(word word)
+W16EXPORT W16M_USER,       420,     0,  w16u_wsprintf       ; wsprintf(ptr str ...), cdecl
+W16EXPORT W16M_USER,       421,     12, w16u_wvsprintf      ; wvsprintf(ptr str ptr)
 W16EXPORT W16M_USER,       410,     12, w16u_insertmenu     ; InsertMenu(word word word word segptr)
 W16EXPORT W16M_USER,       411,     10, w16u_appendmenu     ; AppendMenu(word word word segptr)
 W16EXPORT W16M_USER,       412,     6,  w16u_removemenu     ; RemoveMenu(word word word)
@@ -409,33 +412,8 @@ w16k_waitevent:
     xor ax, ax
     ret
 
-; --- profiles, until S7 (SPEC.md 124.12's plan line): the reads answer as an
-; empty WIN.INI does, with their defaults; the writes are accepted and not yet
-; kept ---------------------------------------------------------------------------
-
-; GetProfileInt (KERNEL.57) - args: +0 nDefault, +2 lpKey, +6 lpApp
-w16k_getprofint:
-    call w16_args
-    mov ax, [es:bx]
-    ret
-
-; GetPrivateProfileInt (KERNEL.127) - args: +0 lpFile, +4 nDefault, ...
-w16k_getpprofint:
-    call w16_args
-    mov ax, [es:bx + 4]
-    ret
-
-; GetProfileString (KERNEL.58) - args: +0 nSize, +2 lpBuf, +6 lpDefault,
-; +10 lpKey, +14 lpApp. The default, cut to nSize - 1; AX = its length
-w16k_getprofstr:
-    call w16_args
-    jmp short w16_profdef
-
-; GetPrivateProfileString (KERNEL.128) - args: +0 lpFile, then as above
-w16k_getpprofstr:
-    call w16_args
-    add bx, 4
-    ; fall into w16_profdef
+; --- profiles: w16prof.inc (SPEC.md 124.14). The default's copy stays here
+; ------------------------------------------------------------------------------
 
 ; w16_profdef - ES:BX = GetProfileString's arguments: copy the default
 w16_profdef:
@@ -449,8 +427,8 @@ w16_profdef:
     mov si, [es:bx + 6]
     mov dx, [es:bx + 8]
     les di, [es:bx + 2]
-    or dx, dx                       ; a NULL default is ""
-    jz .end
+    or dx, dx                       ; a NULL default leaves the buffer as it
+    jz .out                         ;   was and answers 0, as Windows 3.0 did
     mov ds, dx
 .c:
     jcxz .end
@@ -469,13 +447,6 @@ w16_profdef:
     pop ds
     pop di
     pop si
-    ret
-
-; WriteProfileString (KERNEL.59), WritePrivateProfileString (KERNEL.129):
-; TRUE, and nothing kept until S7 gives them a file
-w16k_writeprof:
-w16k_writepprof:
-    mov ax, 1
     ret
 
 ; lstrcpy (KERNEL.88) - args: +0 lpSrc, +4 lpDst. DX:AX = lpDst
@@ -524,6 +495,20 @@ w16s_open:
     ret
 w16s_none:
     xor ax, ax
+    ret
+
+; WinHelp (USER.171) - +0 dwData, +4 wCommand, +6 lpHelpFile, +10 hWnd.
+; There is no Help here (SPEC.md 124.6): HELP_QUIT, which a program sends as
+; it ends whether or not it showed help, answers TRUE, and every other
+; command FALSE, as Windows answered when WINHELP.EXE could not be run.
+; S8 makes the refusal say so
+w16u_winhelp:
+    call w16_args
+    xor ax, ax
+    cmp word [es:bx + 4], 2         ; HELP_QUIT
+    jne .out
+    inc ax
+.out:
     ret
 
 ; GetVersion (KERNEL.3): Windows 3.10 in AX (AL = major), DOS 3.30 in DX -

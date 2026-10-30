@@ -18705,7 +18705,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # first time, ~150 MB at a pinned SHA-256, which is why this is on demand.
 # The bitmaps bitmap.rc binds are generated (tests/win16/mkbmp.py), never
 # committed. tests/unit/t_win16ne.py reads the result when it is there.
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE BITMAP FPU PUMP GDICARD
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU PUMP GDICARD
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc) \
             tests/win16/mkbmp.py
 
@@ -18741,7 +18741,7 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 # shipped image carries it yet and `all` does not build it.
 WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
 
-$(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc \
+$(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
                     apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -o $@ apps/win16/win16.asm
 	@echo "win16:  $(call FILESIZE,$@) bytes"
@@ -18772,7 +18772,8 @@ win16: $(BUILD)/win16.o88
 
 # `make win16test` is S2's gate disk (WIN16-PLAN.md S2): a 1.44MB B: with
 # WIN16.O88, the TINY16 variants, whatever `make win16fixtures` has built,
-# and a DOS.O88 assembled -DDOS_WIN16 - the one that hands an NE to WIN16
+# SYSTEM/APPDATA/WIN16, the Windows directory a program's profiles are kept
+# in (SPEC.md 124.14), and a DOS.O88 assembled -DDOS_WIN16 - the one that hands an NE to WIN16
 # (apps/dos/dosw16.inc). It sits in the ROOT beside the programs, so the
 # association's rung 2 (the document's own folder, SPEC.md 54.4.2) finds it
 # before the system disk's, and the shipped DOS.O88 stays byte-identical.
@@ -18809,7 +18810,8 @@ $(BUILD)/win16test.img: $(BUILD)/win16.o88 $(BUILD)/win16/DOS.O88 \
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/win16.o88 \
 	    $(BUILD)/win16/DOS.O88 \
 	    $(sort $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
-	           $(wildcard $(BUILD)/win16/*.EXE))
+	           $(wildcard $(BUILD)/win16/*.EXE)) \
+	    $(APPDATAFOLDER) --folder SYSTEM/APPDATA/WIN16
 
 win16test: $(BUILD)/win16test.img
 	@echo "win16test: build/win16test.img - boot it as B: with"

@@ -775,3 +775,72 @@ after S9 provides the emulator.
 
 **Not seen:** Hercules (QEMU has none); CALC's Scientific panel (S10); the
 icons (S12); a call count on a dialog's first paint (S13's final pass).
+
+## 2026-10-29 — S7: profiles
+
+**The story.** *As a user my chosen difficulty is still there tomorrow.*
+WinMine keeps its settings in `WINMINE.INI`, and every installer the end
+goal names writes `WIN.INI`. So this is the first story where a Windows
+program leaves something on an os8088 disk.
+
+**Where Windows' directory is.** A program's state goes in
+`SYSTEM\APPDATA\` (SPEC.md §19.9), so the Windows directory is
+`SYSTEM\APPDATA\WIN16\` on the disk WIN16 was launched from. The shared
+walk to that folder, `os88data.inc`, only knew "the system disk" and "the
+disk the package came from"; a third mode, `OD_TVOL`, names a byte holding
+the drive. Every package that already included it assembles byte-identical.
+A program that asks for `C:\WINDOWS\WINMINE.INI` gets `WINMINE.INI` there:
+only the last part of the name counts until WIN16 has DOS paths (R5).
+
+**One write a file, not one a key.** WinMine writes ten keys as it exits.
+On a floppy each `OSAPI_FILE_WRITE` is a FAT update and a directory update,
+so ten writes would be ten times the disk time. WIN16 holds each file in a
+claim of its own and writes it once, when the program ends (however it
+ends) or flushes with `WriteProfileString(NULL, NULL, NULL)`. A disk
+without the folder keeps the profile for the session and says nothing.
+
+**Windows 3.0 was asked rather than guessed.** The first draft of the SPEC
+assumed four things, and the reference machine disagreed with all four:
+
+- `GetProfileInt` is unsigned: `-42` reads as 0;
+- a value in double quotes is answered without them;
+- a `NULL` default leaves the buffer alone and answers 0, not `""`;
+- a written value is trimmed of blanks at both ends.
+
+The fixture `tests/win16/inifile.c` writes, updates, deletes a key and a
+section, writes a quoted value, then reads them back seven ways and shows
+the answers in a message box. On WIN16 the message box reads the same as
+Windows 3.0's, and the `W16INI.INI` it leaves is byte-identical to the
+reference's, including where a deleted section leaves its blank line.
+
+**What WinMine called on its way out.** Expert, then Exit, and WinMine
+stopped with *Needs USER.171*: `WinHelp(HELP_QUIT)`, which every program with
+a Help menu sends as it closes. That answers `TRUE` now. Then *Needs
+USER.420*: `wsprintf`, which WinMine uses to turn each number into the
+string it writes. That is USER's own printf, cdecl and variadic, so its
+export row says 0 argument bytes and the handler reads the format to know
+how many there were. `w16fmt.inc` follows Wine's `wsprintf.c`. Neither
+import was in S1's census of what WinMine needs at start-up, because both
+are only called at the end.
+
+**Two mistakes on the reference machine, both mine.**
+
+- In Windows 3.0's Minesweeper menu, `e` is the mnemonic of both Expert and
+  Exit, so it only moves the highlight; it needs Enter after it. The first
+  runs "chose" nothing.
+- With Expert really chosen and Windows exited, Windows 3.0 still left no
+  `WINMINE.INI`. This is not explained yet. WIN16's file is checked against
+  the format the fixture measured, not against a WinMine file from the
+  reference.
+
+**Tested, on the glass (QEMU, VGA):**
+
+- INIFILE.EXE: message box and file identical to Windows 3.0's;
+- PROFILE.EXE twice: run 1, then run 2;
+- WinMine 2.9: Expert, Exit, relaunch opens as Expert; Intermediate, Exit,
+  relaunch opens 16 x 16 with 40 mines; `WINMINE.INI` read back on the host;
+- a disk without the folder: run 1 both times, no error, nothing written.
+
+**Not seen:** a fifth held file pushing one out; a file over 32,000 bytes.
+WinMine 2.9 keeps no best times, so the story's "record a time" waits for a
+program that does.

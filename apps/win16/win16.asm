@@ -484,6 +484,61 @@ section .w16dlg
     W16BSS w16_bxt, 2
     W16BSS w16_bxr, 2
     W16BSS w16_bxb, 2
+    ; --- profiles (SPEC.md 124.14, w16prof.inc) ---------------------------------
+    W16BSS w16pf_tab, 88        ; W16PF_N rows of W16PF_SZ (4 x 22)
+    W16BSS w16pf_clock, 1       ; the use stamp's clock
+    W16BSS w16pf_row, 2         ; the row being worked on
+    W16BSS w16pf_end, 2         ;   and its length
+    W16BSS w16pf_nm, 13         ; the file's 8.3 name, zero-filled
+    W16BSS w16pf_app, 256       ; the section, the key and the value, as the
+    W16BSS w16pf_key, 256       ;   program passed them (W16PF_STR)
+    W16BSS w16pf_val, 256
+    W16BSS w16pf_ins, 784       ; text being composed for the file
+    W16BSS w16pf_def, 2         ; GetProfileInt's default
+    W16BSS w16pf_fr, 2          ; the frame (a far pointer: these two stay
+    W16BSS w16pf_frs, 2         ;   together)
+    W16BSS w16pf_dst, 4         ; the program's buffer
+    W16BSS w16pf_dn, 2          ;   its size
+    W16BSS w16pf_cnt, 2         ;   bytes written to it
+    W16BSS w16pf_cut, 1         ;   1 = a list was cut
+    W16BSS w16pf_nokey, 1       ; the write's NULLs
+    W16BSS w16pf_noval, 1
+    W16BSS w16pf_hdrp, 2        ; the section found: its header line, its
+    W16BSS w16pf_body, 2        ;   first line, its end and where a new key
+    W16BSS w16pf_send, 2        ;   goes
+    W16BSS w16pf_last, 2
+    W16BSS w16pf_kln, 2         ; the key line found: its start, the key,
+    W16BSS w16pf_ks, 2          ;   the key's end, the value, the text's end
+    W16BSS w16pf_ke, 2          ;   and the next line
+    W16BSS w16pf_kend, 2
+    W16BSS w16pf_vs, 2
+    W16BSS w16pf_ve, 2
+    W16BSS w16pf_lend, 2
+    W16BSS w16pf_lnx, 2
+    W16BSS w16pf_sp, 2          ; a splice: where, deleted, inserted
+    W16BSS w16pf_sd, 2
+    W16BSS w16pf_si, 2
+    W16BSS w16pf_kb, 2          ;   and a grown claim's KB
+    W16BSS w16pf_cs, 2          ; w16pf_cpy's copy, for w16pf_strim
+    ; --- wsprintf (w16fmt.inc) ----------------------------------------------
+    W16BSS w16w_out, 4          ; the output, the format and the arguments:
+    W16BSS w16w_fmt, 4          ;   far pointers that move as they are used
+    W16BSS w16w_arg, 4
+    W16BSS w16w_sp, 4           ; a %s argument
+    W16BSS w16w_cnt, 2          ; characters written
+    W16BSS w16w_wid, 2          ; the field: its width, its precision
+    W16BSS w16w_prec, 2         ;   (FFFFh = none) and its text's length
+    W16BSS w16w_n, 2
+    W16BSS w16w_base, 2         ; 10 or 16
+    W16BSS w16w_left, 1         ; the flags: '-', '#', 'l', the pad
+    W16BSS w16w_alt, 1
+    W16BSS w16w_long, 1
+    W16BSS w16w_pad, 1
+    W16BSS w16w_neg, 1          ; 1 = a signed type, and 1 = it is below 0
+    W16BSS w16w_minus, 1
+    W16BSS w16w_hexa, 1         ; 'a' - 10 or 'A' - 10
+    W16BSS w16w_tch, 1          ; the type's letter
+    W16BSS w16w_buf, 12         ; a number's digits, built backwards
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -672,6 +727,7 @@ w16_endshow:
 ; w16_freeprog - give back the program's claim, its global heap, the face
 ; and the dialog part, once
 w16_freeprog:
+    call w16pf_endprog              ; its profiles written (SPEC.md 124.14)
     call w16_killwins               ; its second windows, which are ours
     mov byte [w16_inmodal], 0
     mov word [w16_focus], 0
@@ -1028,6 +1084,7 @@ w16_cputest:
 %include "win16/w16load.inc"
 %include "win16/w16i21.inc"
 %include "win16/w16api.inc"
+%include "win16/w16fmt.inc"     ; wsprintf, wvsprintf
 %include "win16/w16mem.inc"
 %include "win16/w16res.inc"
 %include "win16/w16user.inc"
@@ -1037,6 +1094,9 @@ w16_cputest:
 %include "win16/w16cens.inc"
 %include "win16/w16optab.inc"
 %include "win16/w16dlg.inc"     ; part 3's code, and its trampolines here
+%include "win16/w16prof.inc"    ; WIN.INI and private profiles
+%define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
+%include "os88data.inc"
 
 ; --- the window template (SPEC.md 11) ----------------------------------------
 w16_tpl:
