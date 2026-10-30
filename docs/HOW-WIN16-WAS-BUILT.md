@@ -1458,3 +1458,28 @@ it):
   WIN16 takes no kernel bytes, so it is the owner's decision.
 - `emu360.img` under `EMUFULL=1`, with WIN16 beside C64, APPLE2 and RunCPM,
   was not built here (estimated ~330 of 354 clusters).
+
+## 2026-10-30 — After S13: how far is "any Win16 program"?
+
+PR #320 merged with S0–S13, and the owner asked for the R1–R9 rows as a plan
+of their own. Before ordering them, we measured how far the layer reaches.
+`tools/w16reach.py` runs the census over a directory and compares each
+program's imports with WIN16's 235 export rows. We ran it over Windows 3.0's
+and 3.1's own installed `\WINDOWS`, which come from the reference machines
+and never enter the tree.
+
+- **Windows 3.0: 11 of its 21 programs have nothing in the way.** Seven are
+  over 64 KB, and five import a module WIN16 lacks.
+- **Windows 3.1: 11 of its 32 programs have nothing in the way.** Ten are
+  over 64 KB, three are marked protected-mode only, and seventeen import a
+  module WIN16 lacks, COMMDLG in eighteen files.
+- **605 distinct imports are missing.** The file calls lead (`OpenFile` in
+  49 files), then the library calls (`GetProcAddress` in 46) and scroll bars
+  (30).
+
+Two numbers shaped the plan. First, WIN16's segment has 4,946 bytes left,
+which cannot hold six hundred functions, so the first story makes each
+Windows module a part of its own. Second, Solitaire is 180 KB on disk but
+only 28 KB of code, so "over 64 KB" is mostly a loader change. Write and
+Windows Help are 160–200 KB of code each, and they are the real memory
+problem. The plan is `docs/plans/WIN16-ANY-PLAN.md`.

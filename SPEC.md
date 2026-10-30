@@ -226404,7 +226404,9 @@ silicon (`8Ah`).
 ### 124.6 What it does not do yet *(pinned)*
 
 Each of these is a row of docs/plans/WIN16-PLAN.md's *Beyond S13*, the road
-to the end goal, and none is a design decision against it:
+to the end goal, and none is a design decision against it.
+docs/plans/WIN16-ANY-PLAN.md turns the rows into stories S14–S25 (a plan,
+not yet authorised); each story pins its subsection here before its code:
 
 - no file over 64 KB (R2), no protected-mode-only program and no program that
   writes selectors (R3), and no DLL, the program's own or a system one (R4);
