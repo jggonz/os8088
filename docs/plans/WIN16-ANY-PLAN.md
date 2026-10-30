@@ -210,7 +210,7 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Not yet run:** `win16sol` and `win16big` (registered), and the XT's
     load time on MartyPC. They run in the final pass (S25).
 
-- [ ] **S16: Files (R5).**
+- [x] **S16: Files (R5).**
   - *As a user, Notepad opens my text file and saves it back.*
   - KERNEL's file API: `OpenFile` (with `OF_EXIST`, `OF_PARSE`, `OF_DELETE`,
     `OF_PROMPT`'s refusal), `_lopen`, `_lcreat`, `_lread`, `_lwrite`,
@@ -223,6 +223,42 @@ its table goes in the diary, so the reach is measured, not claimed.
     the files first; their USER and GDI gaps are S17.
   - **Verification:** a `win16file` row writes a file through Notepad and
     reads its bytes off the image on the host.
+  - **Shipped:** WIN16 **hosts DOS.O88's core** (SPEC.md §124.21.1) - the
+    same `build/doscore.bin`, as a lazy part, with a 426-byte host part
+    above it in one ~20 KB claim and an 8 KB read window, both fetched at a
+    program's first file call. DOS.O88's back end moved into
+    `apps/dos/dosbe.inc`, which both hosts include; DOS.O88 and `kern_dos`
+    assemble byte-identical. The core's gate is found through a map of the
+    same assembly (`tools/w16dcmap.py`), because a jump-table slot took
+    `kern_dos` over a kilobyte rung. `int 21h`'s file and directory calls go
+    to the core (§124.21.2); KERNEL's `_lopen`, `_lcreat`, `_lread`,
+    `_lwrite`, `_llseek`, `_lclose`, `OpenFile`, `GetTempFileName` and the
+    `AnsiToOem` family, and USER's `DlgDirList`/`DlgDirSelect` - pulled in
+    from S17, being the File Open dialog every target has (§124.21.3). A
+    program's DGROUP is laid out at 64 KB when the arena has it, so its
+    local heap can grow (§124.21.4): Notepad needed that to start at all.
+    The `FILES.EXE` fixture and the `win16file` row.
+  - **Measured:** the segment's room is **about 14,885 bytes** (image 31,521,
+    bss about 19,130); the library part is 36,523 bytes. A program that
+    touches no file pays nothing; one that does pays the ~20 KB DOS and its
+    8 KB window.
+  - **Seen:** on QEMU, FILES.EXE's message box says `files: 0 failed`, and
+    its 10,000-byte `W16FILE.TXT` read off the image on the host is every
+    byte it wrote; its `W16DIR` gone again. Notepad 3.0's window and menus,
+    and its File Open: `programs.txt` under Files, `[-a-] [-b-] [system]
+    [win16]` under Directories, `b:\` beside Directory; OK opens the file.
+  - **Not yet:** Notepad then says the file is *too large*: its document is
+    the multi-line EDIT's buffer (`EM_SETHANDLE`), S17's, and so is saving
+    one. Cardfile is refused at load (`CreateIC`) and Calendar ends at
+    start-up on its Windows 2.x bitmap - both GDI, S17. **A handle that has
+    grown its file writes only at its end**, the core's own rule (§96.11.2):
+    a program that writes a header and seeks back to patch it gets error 5,
+    as a DOS program does. Lifting it is a change to the core - and so to
+    DOS.O88 and `kern_dos`, whose `KD_IMG_KB` the core's 10 bytes of slack
+    sit against - for the owner to decide. `57h` and `5Ah` are not in the
+    core and no target issues them; they wait for the installer story.
+  - **Not yet run:** `win16file` (registered). It runs in the final pass
+    (S25).
 
 - [ ] **S17: USER and GDI, the common half (R7).**
   - *As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and

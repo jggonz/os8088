@@ -23,6 +23,8 @@
 ; =============================================================================
 
 %include "os88api.inc"
+%include "doscall.inc"              ; where the DOS core goes (SPEC.md 124.21.1)
+%include "win16/w16dos.inc"         ; ...and WIN16's host above it
 
     OS88_HEADER 'WIN16', w16_entry, OS88_F_ICON | OS88_F_PARTS
 
@@ -121,6 +123,9 @@ W16P_LOAD    equ 5              ; the loader and the census (SPEC.md 124.18.7):
                                 ;   code, far-called once a program
 W16P_ICONS   equ 6              ; WIN16's own system icons (SPEC.md 124.18.4):
                                 ;   tools/w16icon.py's, from apps/win16/icons/
+W16P_DCORE   equ 7              ; WIN16'S DOS (SPEC.md 124.21.1): the DOS
+W16P_DHOST   equ 8              ;   core DOS.O88 ships, and the host part above
+                                ;   it, copied into one claim at first use
 
 ; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
 ; sides of either, so a vector is one word written and one far call, and a
@@ -193,6 +198,9 @@ section .w16dlg
     W16BSS w16_slen, 2 * W16_MAXSEG     ; ...and its size in bytes (0 = 64KB)
     W16BSS w16_dgroup, 2        ; DGROUP's paragraph, which is hInstance
     W16BSS w16_dgsize, 2        ; ...its size in bytes (0 = 64KB)
+    W16BSS w16_lbase, 2         ; ...where its local heap starts: past the
+                                ;   static data and the stack (SPEC.md 124.9)
+    W16BSS w16_dgfull, 1        ; 1 = lay DGROUP out at 64KB (w16_layout)
     W16BSS w16_psp, 2           ; the PSP-shaped block's paragraph
     W16BSS w16_ptop, 2          ; the paragraph past the claim
     W16BSS w16_nmod, 2          ; the program's module-reference count
@@ -219,6 +227,25 @@ section .w16dlg
     W16BSS w16_idx, 2           ; the bind slot the gate is serving
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
+    ; --- S16: the DOS (SPEC.md 124.21) ---
+    W16BSS w16_dhseg, 2         ; the DOS's claim, 0 = not fetched yet
+    W16BSS w16_dhtmp, 2         ; ...while it is being made
+    W16BSS w16_dhwin, 2         ; ...and its read window's
+    W16BSS w16_dhent, 4         ; the far entry: W16DH_I21 (or _INIT)
+    W16BSS w16_i21ss, 2         ; the program's stack, across a fetch
+    W16BSS w16_i21sp, 2
+    W16BSS w16f_style, 2        ; OpenFile's wStyle
+    W16BSS w16f_ofs, 4          ; ...its OFSTRUCT
+    W16BSS w16f_num, 2          ; GetTempFileName: where the digits go
+    W16BSS w16f_unq, 2          ; ...and the number
+    W16BSS w16_dces, 2          ; the ES the DOS's last call answered
+    W16BSS w16f_ddl, 2          ; DlgDirList's wFiletype
+    W16BSS w16f_spec, 2         ; ...the file part it searches with
+    W16BSS w16f_odta, 4         ; ...the program's DTA, while it uses its own
+    W16BSS w16f_dta, 44         ; ...which is this one
+    W16BSS w16f_item, 144       ; ...and one item's text
+    W16BSS w16f_name, 128       ; a name as the program gave it
+    W16BSS w16f_path, 144       ; ...and as a full path
     W16BSS w16_exit, 1          ; AH=4Ch's AL
     W16BSS w16_mbtext, 64       ; MessageBox's text, one line, in OUR segment
     W16BSS w16_scratch, 16
@@ -973,6 +1000,7 @@ w16_freeprog:
     mov word [w16_capture], 0
     call w16_dlgout
     call w16x_end                   ; its floating point (SPEC.md 124.5)
+    call w16_dosend                 ; its files closed, the DOS freed (124.21)
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
@@ -1423,6 +1451,7 @@ w16_cputest:
 %include "win16/w16ico.inc"     ; icons (SPEC.md 124.18.4)
 %include "win16/w16draw.inc"    ; what Solitaire calls (SPEC.md 124.20.4)
 %include "win16/w16sys.inc"     ; what the Control Panel calls (SPEC.md 124.20.5)
+%include "win16/w16file.inc"    ; files, through DOS.O88's core (SPEC.md 124.21)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
@@ -1492,7 +1521,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 7
+    OS88_PARTS_BEGIN 9
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
@@ -1500,6 +1529,8 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_FPU: section .w16fp
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_LOAD: section .w16ld
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_ICONS: apps/win16/icons/
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DCORE: build/doscore.bin
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DHOST: w16dosh.asm
     OS88_PARTS_END
 
     OS88_IMAGE_END

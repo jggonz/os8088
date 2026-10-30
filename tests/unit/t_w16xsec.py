@@ -72,7 +72,7 @@ def assemble():
             with open(w, "w") as f:
                 f.write('%%include "win16/win16.asm"\n[map symbols %s]\n' % m)
             subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                            "-I", "apps/win16/", "-o", o, "-l", l, w],
+                            "-I", "apps/win16/", "-I", "apps/dos/", "-o", o, "-l", l, w],
                            check=True, cwd=ROOT)
             open(cache + ".map", "w").write(open(m).read())
             open(cache + ".lst", "w").write(open(l, errors="replace").read())

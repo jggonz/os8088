@@ -16398,6 +16398,17 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16file", "soak", py("tests/win16file.py"), 60.0,
+        "SPEC.md 124.21, WIN16-ANY-PLAN S16: FILES.EXE (`make win16fixtures`, "
+        "tests/win16/files.c) reaches files through KERNEL's _lopen family, "
+        "OpenFile and GetTempFileName and through the C runtime's own int 21h "
+        "(mkdir, chdir, getcwd, rename, remove, findfirst, stdio), all answered "
+        "by DOS.O88's core hosted in WIN16; its MessageBox names any check that "
+        "failed, and the 10,000-byte W16FILE.TXT it writes is read back off the "
+        "floppy image on the host, every byte",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

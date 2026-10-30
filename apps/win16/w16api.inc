@@ -104,6 +104,17 @@ W16EXPORT W16M_KERNEL,     134,     6,  w16k_windir         ; GetWindowsDirector
 W16EXPORT W16M_KERNEL,     135,     6,  w16k_windir         ; GetSystemDirectory(ptr word)
 W16EXPORT W16M_KERNEL,     74,      10, w16k_openfile       ; OpenFile(str ptr word)
 W16EXPORT W16M_KERNEL,     81,      2,  w16k_lclose         ; _lclose(word)
+W16EXPORT W16M_KERNEL,     85,      6,  w16k_lopen          ; _lopen(str word)
+W16EXPORT W16M_KERNEL,     83,      6,  w16k_lcreat         ; _lcreat(str word)
+W16EXPORT W16M_KERNEL,     82,      8,  w16k_lread          ; _lread(word segptr word)
+W16EXPORT W16M_KERNEL,     86,      8,  w16k_lwrite         ; _lwrite(word ptr word)
+W16EXPORT W16M_KERNEL,     84,      8,  w16k_llseek         ; _llseek(word long word)
+W16EXPORT W16M_KERNEL,     97,      12, w16k_tempname       ; GetTempFileName(word str word ptr)
+W16EXPORT W16M_KEYBOARD,   5,       8,  w16kb_oem2ansi      ; AnsiToOem(str ptr)
+W16EXPORT W16M_KEYBOARD,   134,     10, w16kb_xlatbuf       ; AnsiToOemBuff(ptr ptr word)
+W16EXPORT W16M_KEYBOARD,   135,     10, w16kb_xlatbuf       ; OemToAnsiBuff(ptr ptr word)
+W16EXPORT W16M_USER,       100,     12, w16u_dlgdirlist     ; DlgDirList(word ptr word word word)
+W16EXPORT W16M_USER,       99,      8,  w16u_dlgdirsel      ; DlgDirSelect(word ptr word)
 W16EXPORT W16M_KERNEL,     95,      4,  w16k_loadlib        ; LoadLibrary(str)
 W16EXPORT W16M_KERNEL,     96,      2,  w16k_freelib        ; FreeLibrary(word)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
@@ -441,14 +452,14 @@ w16k_inittask:
     mov ax, [w16_psp]
     mov [w16_res], ax
     or byte [w16_rflags], W16R_SIDI
-    mov dx, [w16_dgsize]            ; the local heap: ne_heap bytes after the
-    or dx, dx                       ;   stack, to DGROUP's end (SPEC.md 124.9)
-    jnz .dgend
+    mov dx, [w16_dgsize]            ; the local heap: after the stack, to
+    or dx, dx                       ;   DGROUP's end - ne_heap bytes, or the
+    jnz .dgend                      ;   rest of 64KB (SPEC.md 124.9)
     mov dx, 0xFFFC
 .dgend:
-    mov bx, dx
-    sub bx, [w16_heap]
-    jbe .noheap
+    mov bx, [w16_lbase]
+    cmp bx, dx
+    jae .noheap
     cmp word [w16_heap], 0
     je .noheap
     mov ax, [w16_dgroup]

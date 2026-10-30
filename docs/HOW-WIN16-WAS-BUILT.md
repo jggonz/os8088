@@ -1623,3 +1623,82 @@ things looked like bugs and were not:
 bss. The library part is 34,759 bytes. `win16sol` (four adapters, deal and
 deck click) and `win16big` are registered and run in the final pass, with
 the XT's load time on MartyPC.
+
+## 2026-10-30 — S16: files, through DOS.O88's own DOS
+
+*As a user, Notepad opens my text file and saves it back.*
+
+**Notepad did not start at all.** It ended before its window opened. The
+trace showed `LocalAlloc` and then the C runtime's exit. Notepad asks its
+local heap for 2 KB at once, and its NE gives the heap exactly 2 KB, less
+the heap's own headers. Windows grew DGROUP with `GlobalReAlloc` when that
+happened. Real-mode Windows could, because it moved segments and patched
+every saved `DS`; WIN16 never moves a segment. So DGROUP is now laid out at
+the whole 64 KB when the arena has room, and at the NE's size when not.
+Notepad's window and menus came up at the next boot.
+
+**One DOS, and not a new one.** The plan said the file calls would come
+from DOS.O88's source, shared rather than copied. An agent mapped DOS.O88's
+file layer first: some 5.5 KB of code, tied to its gate's frame, its arena
+and its PSP. Lifting that out would have meant cutting `dos.asm` into a
+dozen pieces. But DOS.O88's **core** is already assembled once, as
+`build/doscore.bin`, and joined to two hosts, DOS.O88 and `kern_dos`
+(SPEC.md §96.44). WIN16 became the third host. It ships the same binary as
+a part and supplies what a host owes:
+
+- **The back end** is DOS.O88's own `dos_k_*` doors. They moved into
+  `apps/dos/dosbe.inc`, which both hosts include. DOS.O88 assembles
+  byte-identical.
+- **The hooks** are none. A zero hook is how the core spells "this host
+  does not want it".
+- **The segment** is one claim: the core at `CORE_ORG`, its bss above it,
+  and a 426-byte host part above that.
+
+Including `dos.asm` with both `DOS_EXTCORE` and `KD_BACKEND` emits no bytes
+at all. It gives a host every constant and every cell's address, which is
+what made a third host a short file.
+
+**The slot that cost a kilobyte.** WIN16 needs the core's `int 21h` gate by
+address, and it is not on the core's jump table. Appending a slot is
+allowed, but three bytes of table moved `dos_cpm`'s `align 16` by thirteen.
+That needed `CORE_MAX` raised by 16, and those 16 bytes took `kern_dos`
+over a kilobyte rung: a kilobyte off every DOS program it runs. So
+`tools/w16dcmap.py` assembles the core again with a symbol map, refuses
+unless the bytes are the shipped core's, and writes one equate. The core
+did not change by a byte.
+
+**It is fetched on first use.** A program that never opens a file never
+pays the ~20 KB DOS or its 8 KB window. The first fetch crashed to
+0000:0003: `op_fetch` spends DI, the copy's destination, so both parts
+landed in the wrong place in the claim.
+
+**FILES.EXE reaches both doors.** It is an Open Watcom fixture: KERNEL's
+`_lopen` family, `OpenFile` and `GetTempFileName`, and the C runtime's own
+`int 21h` for `mkdir`, `chdir`, `getcwd`, `rename`, `remove`,
+`_dos_findfirst` and stdio. Its first run said `2 failed lwrite2 lread`. It
+had created a file, written 300 bytes, sought back to 100 and written
+`MARK`. DOS.O88's core refuses that, and says so in §96.11.2: a handle that
+has grown its file writes only at its end, because `OSAPI_FILE_APPEND`
+cannot do anything else. Reopening read/write first did not help either,
+since the first write that grows the file turns any handle into an append
+stream. Lifting the rule is a change to the core, so to DOS.O88 and
+`kern_dos`, whose budget is 10 bytes from a kilobyte rung. That decision is
+the owner's. The fixture now patches through `_lopen`'s read/write handle,
+which the core does support (§96.11.6), and says why. The message box
+reads `files: 0 failed`. The 10,000-byte `W16FILE.TXT` it leaves, read off
+the floppy image on the host, is every byte it wrote.
+
+**File Open.** All three targets' File Open dialogs are `DlgDirList` and
+`DlgDirSelect`. The plan had them in S17, but they are file calls, so they
+came here. Notepad's dialog lists `programs.txt` under Files, `[-a-] [-b-]
+[system] [win16]` under Directories, and `b:\` beside Directory. OK opens
+the file, and `OpenFile` names it. Then Notepad says *"File PROGRAMS.TXT is
+too large for Notepad"*. Its document lives in the multi-line EDIT's
+buffer, which is S17's, and that is where opening and saving a document
+finishes. Cardfile is refused at load for `CreateIC`, and Calendar ends at
+start-up when its Windows 2.x bitmap does not load. Both are GDI, which is
+also S17.
+
+**Measured.** WIN16's segment has about **14,885 bytes** of room (image
+31,521, bss about 19,130). The library part is 36,523 bytes. `win16file`
+is registered and runs in the final pass.

@@ -7269,7 +7269,7 @@ $(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP) $(PKG
 # alone - the granule RDPV_MOUNT rounds a size up to, which the refusal
 # strings have to name.
 # --- DOS (SPEC.md 96) --------------------------------------------------------
-$(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
+$(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                   apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
@@ -7363,7 +7363,7 @@ $(shell mkdir -p $(BUILD); \
                                touch $(KDSTAMP); })
 
 $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
-                      apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
+                      apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                       apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
@@ -7381,7 +7381,7 @@ $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 # program that wants the 1MB wrap. kern_mega's DOS.O88 carries it as part 3
 # and the Memory page's `Load DOS in the HMA` picks; nothing else builds it.
 $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
-                       apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
+                       apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
                        apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                        apps/os88api.inc apps/dos/doscall.inc \
                        apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
@@ -7405,7 +7405,7 @@ DOSW16DEF := $(if $(KERN_MEGA)$(KERN_SMALL),,-DDOS_WIN16)
 # nothing else: the standard's 800-byte body is NOT emitted, because this part
 # is never read by op_load - the handoff walks its bytes into extents and the
 # stub reads them with int 13h (docs/plans/KERN-DOS-PLAN.md §4.1.1).
-$(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
+$(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
                    apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
                    apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
@@ -7425,7 +7425,7 @@ $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
 # or a core routine that still names a host symbol, fails here and in no other
 # build - the two hosts each carry the other half and would never notice.
 # `all` builds it, because a check nobody runs is a check that rots.
-$(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
+$(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc \
                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnet.inc \
                       apps/dos/dosnetabi.inc apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc \
@@ -18829,7 +18829,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk tests/win16/*.wcl) \
             tests/win16/mkbmp.py
 
@@ -18874,8 +18874,9 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
 
 $(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
-                    apps/os88ui.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -o $@ apps/win16/win16.asm
+                    apps/os88ui.inc apps/dos/doscall.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/win16/win16.asm
 	@echo "win16:  $(call FILESIZE,$@) bytes"
 
 # The System font, one part a display (SPEC.md 124.7.1): tools/w16font.py
@@ -18901,7 +18902,31 @@ $(BUILD)/win16/icons.bin: $(wildcard apps/win16/icons/*.txt) tools/w16icon.py
 	@mkdir -p $(@D)
 	python3 tools/w16icon.py build $@
 
+# Parts 7 and 8 are WIN16's DOS (SPEC.md 124.21.1): the DOS core DOS.O88
+# ships, the same build/doscore.bin, and the host part that sits above it in
+# one claim - DOS.O88's own back end (apps/dos/dosbe.inc) and an init. The
+# core's int 21h gate is not on its jump table, so tools/w16dcmap.py reads
+# its address off a map of the same assembly and refuses a different one.
+$(BUILD)/win16/w16dcore.inc: $(BUILD)/doscore.bin tools/w16dcmap.py
+	@mkdir -p $(@D)
+	python3 tools/w16dcmap.py --nasm "$(NASM)" --core $< -o $@ \
+	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA)
+
+$(BUILD)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc \
+                            $(BUILD)/win16/w16dcore.inc apps/dos/dosbe.inc \
+                            apps/dos/dos.asm apps/dos/doscall.inc \
+                            apps/dos/doscents.inc apps/os88api.inc \
+                            apps/os88rseq.inc apps/dos/dosnetabi.inc \
+                            apps/os88cp437.inc apps/os88partsbody.inc \
+                            drivers/net/netpkg.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \
+	        -I $(BUILD)/win16/ -I drivers/net/ -I kerndos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/win16/w16dosh.asm
+	@echo "w16dosh: $(call FILESIZE,$@) bytes of DOS host"
+
 $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
+                    $(BUILD)/doscore.bin $(BUILD)/win16/w16dosh.bin \
                     tools/os88pkg.py tools/os88ovl.py \
                     $(PKGZSTAMP)
 	@mkdir -p $(BUILD)/win16
@@ -18912,7 +18937,8 @@ $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
 	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
 		--part $(BUILD)/win16/w16fp.bin --part $(BUILD)/win16/w16ld.bin \
-		--part $(BUILD)/win16/icons.bin --part-compress lz4
+		--part $(BUILD)/win16/icons.bin --part $(BUILD)/doscore.bin \
+		--part $(BUILD)/win16/w16dosh.bin --part-compress lz4
 
 win16: $(BUILD)/win16.o88
 

@@ -285,9 +285,28 @@ w16_load:
 ; in:  ES = the file, [w16_ne]; out: CF=0 [w16_pseg], [w16_sbase], [w16_slen],
 ;      [w16_dgroup], [w16_dgsize], [w16_psp], [w16_ptop]; CF=1 SI = reason
 ; DGROUP is minalloc + stack + heap (Wine's NE_CreateSegment), and must fit
-; 64KB because SS = DS = it.
+; 64KB because SS = DS = it. It is laid out at the WHOLE 64KB when the arena
+; has room, so the local heap can grow to its end, and at that size alone
+; when not (SPEC.md 124.9): a segment here never moves, so DGROUP cannot be
+; grown later the way Windows grew it.
 ; -----------------------------------------------------------------------------
 w16_layout:
+    mov byte [w16_dgfull], 1
+    call w16_lay1
+    jnc .out
+    cmp si, w16_r_mem
+    jne .no
+    cmp byte [w16_dgfull], 0
+    je .no
+    mov byte [w16_dgfull], 0        ; the size the program asked for, then
+    call w16_lay1
+    ret
+.no:
+    stc
+.out:
+    ret
+
+w16_lay1:
     push bp
     mov si, [w16_ne]
     mov di, si
@@ -334,6 +353,7 @@ w16_layout:
     jne .notdg
     add ax, [es:si + NE_STACK]
     adc cx, 0
+    mov [w16_lbase], ax             ; the heap starts here (CX=1: refused below)
     add ax, [es:si + NE_HEAP]
     adc cx, 0
     cmp cx, 1                       ; more than 64KB
@@ -347,6 +367,11 @@ w16_layout:
     stc
     ret
 .dgok:
+    cmp byte [w16_dgfull], 0
+    je .dgset
+    xor ax, ax                      ; the whole 64KB, the heap's to grow into
+    mov cx, 1
+.dgset:
     mov [w16_dgsize], ax            ; 0 = 64KB
 .notdg:
     mov [w16_slen + bx], ax         ; 0 = 64KB
@@ -1522,8 +1547,7 @@ w16_frame:
     mov ax, [es:si + NE_SP]
     or ax, ax
     jnz .sp
-    mov ax, [w16_dgsize]            ; static data + stack = DGROUP - the heap
-    sub ax, [es:si + NE_HEAP]
+    mov ax, [w16_lbase]             ; static data + stack: the heap's start
 .sp:
     and al, 0xFE
     or ax, ax

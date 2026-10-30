@@ -226412,7 +226412,8 @@ not yet authorised); each story pins its subsection here before its code:
 - no protected-mode-only program and no program that writes selectors (R3),
   and no DLL, the program's own or a system one (R4); files over 64 KB load
   since S15 (§124.20);
-- DOS calls beyond what the C runtime makes (R5);
+- DOS calls beyond the file and directory ones (R5): the file calls arrive in
+  S16 (§124.21);
 - no segment moving or discarding (R6);
 - no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
 - the clipboard carries text only, because §55's does (§124.16.1);
@@ -226790,8 +226791,9 @@ neighbours merged. Arenas are freed with the program.
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
 | out of memory | unused resource blocks (§124.10) are discarded and the request is tried once more; then the answer is 0 |
 
-**The local heap** is the one in DGROUP, initialised by `InitTask` over
-`ne_heap` bytes after the stack (§124.3), with its descriptor's offset at
+**The local heap** is the one in DGROUP, initialised by `InitTask` from the
+end of the stack to DGROUP's end - `ne_heap` bytes, or the rest of 64 KB
+since S16 (§124.21.4) - with its descriptor's offset at
 `DS:0006`, as Windows kept `pLocalHeap`. `LocalInit(seg, start, end)` makes one
 anywhere, so a program can turn a global block into a heap. **Every `Local*`
 call works on the CALLER's DS**, read from the gate's frame, as Windows' did.
@@ -227931,3 +227933,123 @@ EGA, CGA and Hercules. **`win16big`** (soak, QEMU) runs an Open Watcom
 fixture with more than 100 KB of code in many segments and a 128 KB huge
 array walked by `__AHINCR`, checking every byte. The 8088's load time for
 Solitaire is taken on MartyPC in the final pass (S25).
+
+### 124.21 Files *(pinned for S16, docs/plans/WIN16-ANY-PLAN.md)*
+
+*As a user, Notepad opens my text file and saves it back.* A Windows 3.x
+program reaches files two ways: KERNEL's `_lopen` family and `OpenFile`, which
+in Windows were thin wrappers over `int 21h`, and `int 21h` itself, which every
+C runtime issues directly. WIN16 answers both from **one DOS**, and it is not a
+new one.
+
+#### 124.21.1 WIN16 hosts DOS.O88's core
+
+**The DOS core (§96.44) is assembled once, `build/doscore.bin`, and WIN16
+ships that same file as one of its parts**, as DOS.O88 does. It is the third
+host the core's seam was drawn for: a host includes `apps/dos/dos.asm` with
+`DOS_EXTCORE` and `KD_BACKEND`, which emits no bytes and gives it every
+constant and every `DBSS` cell's address, and supplies three things.
+
+| the host owes | WIN16's |
+|---|---|
+| the back end, `dos_bevec` (§96.44.1) | `apps/dos/dosbe.inc`: DOS.O88's `dos_k_*` doors, `dos_be_bind` and the `DOS_BETAB` table, moved out of `dos.asm` into a file **both** include. DOS.O88 assembles byte-identical |
+| the hooks, `dos_hkv` (§96.44.3) | none: each is zero, which the core reads as "this host does not want it" |
+| the core's segment | the core at `CORE_ORG`, its bss at `CORE_BSS_AT`, and the host's part (`apps/win16/w16dosh.asm`) above it at `W16DH_ORG`, all in **one claim**, because the core reaches its doors and its hooks by near calls |
+
+The host's part begins with a table the image far-calls
+(`apps/win16/w16dos.inc`): **+0** `w16dh_init`; **+3** the `int 21h` entry,
+which puts the host stack the image hands it (**+9**, **+11**) in
+`dos_sv_ss`/`dos_dstk` and jumps to the core's `dos_int21`; **+6**
+`w16dh_done`, which closes every handle a program left open, as DOS's exit
+does; and **+13** `DOS_WKB`, the window's floor, read by the image before it
+claims the window, so no DOS constant is copied into WIN16.
+
+**The core's gate is not on its jump table** - neither DOS.O88 nor `kern_dos`
+ever needed it by address - and a slot would cost more than it says: three
+bytes of table move `dos_cpm`'s `align 16` by thirteen, and the sixteen take
+`kern_dos` over a kilobyte rung of `KD_IMG_KB`, which is a kilobyte off every
+DOS program it runs. So `tools/w16dcmap.py` reads `dos_int21`'s address off a
+symbol map of **the same assembly**: it assembles `doscore.asm` again with a
+map, refuses unless the bytes equal `build/doscore.bin`, and writes one
+equate. The core and both its other hosts are byte-identical to before.
+
+**The DOS is fetched the first time a program asks for a file**, not at
+launch: Minesweeper never pays for it. The image claims the block, fetches
+the two parts (lazy, compressed), copies each to its offset as DOS.O88's
+loader does (§96.44.5.3), drops them, and claims the read window
+(§96.11): `DOS_WKB` KB, or one cluster where a cluster is larger. The block is
+**about 20 KB and the window 8 KB**; both are freed with the program.
+
+`w16dh_init` stands the core where the program is - its volume and folder,
+the program's own as Windows' current directory was the one it was started
+in - points `dos_ldpsp` and the DTA at the program's PSP-shaped block
+(PSP:0080), and calls the core's `dos_fh_setup` against an arena whose top is
+the window. **Nothing else of the arena is used**: the memory calls are never
+forwarded (124.21.2), so the core never walks a chain that is not there.
+
+#### 124.21.2 `int 21h`: what is forwarded
+
+WIN16's own `int 21h` (§124.4.1, §124.17.3) keeps what it answers - `4Ch`,
+`30h`, `25h`, `35h`, the clock, and handles 0-4, which are not files. **The
+file and directory calls go to the core**: `0Dh`, `0Eh`, `19h`, `1Ah`, `29h`,
+`2Fh`, `36h`, `39h`-`43h`, `44h` on a file, `47h`, `4Eh`, `4Fh`, `56h`, `68h`
+and `6Ah`. Everything else answers invalid function as before, and in
+particular **the memory, process and terminate calls are never forwarded**:
+`48h`-`4Bh` and `00h`/`31h` would act on a DOS program's arena and PSP chain,
+and a Windows program has neither.
+
+A forwarded call runs on the UI task's stack, as every import's handler does
+(§124.2.1), with interrupts on, so the disk runs as it does for DOS.O88.
+
+`57h` (a file's date) and `5Ah` (a unique temporary file) are not in the core
+(§96.7.3) and are not in this story: no target program issues them, and the
+installer story is where they land, in the core where DOS.O88 gains them too.
+
+#### 124.21.3 KERNEL's file calls
+
+Each builds the registers its `int 21h` takes and calls the core's entry as
+an `int` does, so the two ways in are one DOS with one handle table.
+
+| call | answer |
+|---|---|
+| `_lopen(path, mode)` | `3Dh`; the handle, or `HFILE_ERROR` (-1). The share bits are ignored |
+| `_lcreat(path, attr)` | `3Ch`. **A handle that has grown its file writes only at its end** - §96.11.2's rule of the core, which `.iappend` applies to a `3Dh` handle too once it grows - so a program that writes a header and then seeks back to patch it is refused with error 5, as a DOS program is. Reopening with `_lopen` (`OF_READWRITE`) and patching inside the file works (§96.11.6). Lifting the rule is a change to the core, and so to DOS.O88 and `kern_dos`: it is not this story's |
+| `_lread`, `_lwrite` | `3Fh`, `40h`; the count, or -1. `_lwrite` of 0 bytes truncates, as `40h` does (§96.11.6.2) |
+| `_llseek(h, offset, origin)` | `42h`; the new position as a `LONG` |
+| `_lclose` | `3Eh`; 0, or -1 |
+| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5); the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
+| `GetTempFileName(drive, prefix, unique, buf)` | `X:\~PPPuuuu.TMP` in the Windows directory (Windows used `TEMP`, and WIN16 has no environment); `TF_FORCEDRIVE` puts it at the root of that drive. With `unique` 0 a number is taken from the clock and stepped until the name is free, and the file is CREATED, as Windows did, so a second call cannot answer the same name. The number |
+| `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5) |
+| `AnsiToOem`, `OemToAnsi`, `AnsiToOemBuff`, `OemToAnsiBuff` | the bytes copied: the two sets agree on every character a file name holds |
+| `DOS3Call` | `int 21h`, and so the core for the calls 124.21.2 forwards |
+| `DlgDirList(dlg, spec, list, static, type)` | Windows 3.0's File Open: a folder or drive in the spec is moved to first (`0Eh`, `3Bh`) and the spec left holding its file part; the list box is emptied and given the files the spec finds (`4Eh`/`4Fh`, on a DTA of WIN16's, the program's put back after), then `[folder]` with `DDL_DIRECTORY` and `[-a-]` with `DDL_DRIVES`, in lower case as Windows showed them; the static control gets the current folder, `b:\docs`. FALSE for a folder or drive that is not there. The controls are WIN16's own (§124.13), so their procedures are called directly |
+| `DlgDirSelect(dlg, buf, list)` | the selection: `[name]` as `name\` and `[-a-]` as `a:`, each answering TRUE; a file as its name, with a `.` added when it has none, answering FALSE |
+
+#### 124.21.4 The local heap can grow to 64 KB
+
+A program's DGROUP is laid out at the **whole 64 KB** when the arena has room
+for it, and its local heap runs from the end of the stack to there; when it
+has not, DGROUP is the size the NE asks for, as before. Windows grew DGROUP
+with `GlobalReAlloc` when `LocalAlloc` ran out, and could because real-mode
+Windows moved segments and patched every saved `DS`; WIN16 never moves one
+(§124.9), so the room is given at the start. Notepad is why: its `ne_heap` is
+2 KB and its first `LocalAlloc` asks for 2 KB, so it ended before its window
+opened; and its EDIT keeps the document in that heap (S17), which is what
+lets it hold a 50 KB file as Windows 3.0's did.
+
+#### 124.21.5 What the targets reach, and the gate
+
+**Notepad 3.0 runs** (124.21.4 is what it needed), and its **File Open lists
+the folder's text files, its folders and the drives**, and opens the one
+chosen - `OpenFile` succeeds and names it - and then says *"too large for
+Notepad"*: its document is the multi-line EDIT's buffer (`EM_SETHANDLE`),
+which is S17's. **Cardfile 3.0** is refused at load for `CreateIC`, and
+**Calendar 3.0** ends at start-up when its Windows 2.x bitmap does not load;
+both are GDI's, S17. So this story's own gate is a fixture.
+
+**`win16file`** (soak, QEMU): `tests/win16/FILES.C`, an Open Watcom program,
+writes, seeks, rewrites, reads back, renames, deletes and lists files through
+both doors - KERNEL's calls and the C runtime's `int 21h` - in a folder it
+makes and leaves, then writes a result file. The row reads that file's bytes
+off the floppy image on the host and checks every one, and its message box's
+line. The Notepad leg joins the row in S17.
