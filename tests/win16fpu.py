@@ -9,7 +9,7 @@
 QEMU HAS a coprocessor, so its leg is the NATIVE path: the sites stay x87
 code, `__FPMATH` is WIN16's, and an unmasked exception travels IRQ 13 ->
 the BIOS's int 75h -> WIN16's int 2 -> the program's next int 3Dh. MartyPC's
-V20 5150 has NO coprocessor, so its leg is the EMULATOR's: every site an
+stock 5150 has NO coprocessor, so its leg is the EMULATOR's: every site an
 `int 34h`-`3Dh` and part W16P_FPU fetched. Which path a leg took is
 read off WIN16 (`w16_fpm`), not assumed.
 
@@ -62,11 +62,12 @@ def pkg_syms():
                 out[f[2]] = int(f[0], 16)
         return out
 
-# A 5150 with a NEC V20 and no coprocessor: the emulator's path. Not the
-# stock 8088, whose in-guest census (S2's, w16cens.inc) refuses these Watcom
-# programs as "80386" - it reaches FPU.EXE's seg 1:0013, the imm8 of
-# `sub sp, 60h`, as an instruction - which is S11's to fix (WIN16-PLAN S11)
-XT = "os8088_5150_herc_hdd_v20_gla"
+# A stock 5150 - an 8088 and no coprocessor: the emulator's path, and the
+# in-guest census (SPEC.md 124.4.1) sweeping each program first. S9 ran this
+# leg on a V20 because that census walked a modrm+immediate instruction short
+# and called FPU.EXE "80386" off the imm8 of `sub sp, 60h` at seg 1:0013;
+# S11 fixed it, and tests/unit/t_w16cens.py holds it to os88ne.py's walk
+XT = "os8088_5150_cga_gla"
 W16S_REFUSED = 2
 W16S_ENDED = 4
 W16F_ARGS = 12

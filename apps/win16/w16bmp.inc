@@ -24,6 +24,8 @@ SRCCOPY_HI  equ 0x00CC          ; the ROPs, by their high word
 BLACKNESS_HI equ 0x0000
 WHITENESS_HI equ 0x00FF
 PATCOPY_HI  equ 0x00F0
+PATINVERT_HI equ 0x005A         ; (PatBlt's, SPEC.md 124.17.1)
+DSTINVERT_HI equ 0x0055
 RT_BITMAP   equ 2
 
 ; -----------------------------------------------------------------------------
@@ -600,6 +602,19 @@ w16_blt:
     mov dl, CWHITE
     cmp ax, WHITENESS_HI
     je .fill
+    mov dl, W16_XOR
+    cmp ax, DSTINVERT_HI
+    je .fill
+    cmp ax, PATINVERT_HI            ; a black brush leaves it; any other
+    jne .pat                        ;   inverts, as a white one does
+    mov ax, [w16_brush]
+    call w16_brcol
+    cmp al, W16_NOCOL
+    je .yes
+    cmp al, CBLACK
+    je .yes
+    jmp short .fill
+.pat:
     cmp ax, PATCOPY_HI
     jne .no
     mov ax, [w16_brush]

@@ -1147,3 +1147,104 @@ which has been looked at yet.
 **What it cost.** WIN16's image went from 47,055 bytes to 48,254, and its
 bss to 13,964 bytes, leaving 3,318 bytes under the 64 KB segment. The
 kernel is unchanged.
+
+## 2026-10-30 — S11: the CPU floor
+
+**The story.** *As an XT owner, the Windows programs my CPU can run, run,
+and the rest tell me plainly what they need.* Every Windows 3.0 accessory
+is 8086 code; Windows 3.1's are 80186. So a stock 8088 should run CALC,
+CLOCK and REVERSI from 3.0, and refuse 3.1's Calculator with the sentence
+S2 wrote for it.
+
+**First, S9's finding.** S9 had seen the census running on the machine
+refuse Open Watcom's FPU.EXE as *Needs an 80386 or better.*, where the host
+census said 8086. The test that would have caught it did not exist, so it
+was written first: `tests/unit/t_w16cens.py` assembles the whole of WIN16,
+runs its own `w16_census` under unicorn on each program the way the loader
+calls it - segments laid out and relocated, OS fixups patched - and
+compares the bytes its walk reached, read out of its bitmap, with the bytes
+`os88ne.py` reached, segment by segment. It failed on FPU.EXE straight
+away, and the first differing byte named the bug: `83 EC 60`, `sub sp, 60h`,
+an opcode with a modrm byte AND an immediate, was walked one byte short.
+`w16c_mrlen` answers in AX, and AH was where the opcode's table byte was
+kept, so the immediate's length was read off the displacement count. The
+walk then decoded the `60` as `pusha`. One register move fixed it. All 43
+programs under `win16ref/samples/` now walk byte-identically on both sides
+(row `w16censall`), and `w16cens` runs on every `make`.
+
+**The V20 test stayed WIN16's.** The plan said to share REDLINE's
+`detect.inc` as source. That file tells six CPUs apart and times them in
+382 lines; WIN16's question is only whether `push imm8` executes, and its
+eight-byte probe answers it by executing one. With 3,318 bytes left in the
+segment at the start of S11, the probe stayed and the plan and SPEC say
+why (§124.4).
+
+**CLOCK quit at once.** It calls `FindResource(h, "CLOCK", "DATA")` - a
+string name AND a string type. S10's name-table lookup only ran for a
+numbered type. CLOCK's table names its resource type F006h, number 1,
+with the type name `DATA`, so the lookup now matches a string type against
+the table's type names as well (§124.10).
+
+**Then CLOCK drew its face once and froze.** Nothing on the screen was
+wrong; it simply never moved. A `-DW16_TRACE` build - a ring of the last
+128 calls, now kept as a knob with `tools/w16trace.py` to read it - showed
+the last thing CLOCK asked for, over and over: `int 21h` AH = 2Ch, the time,
+which WIN16 did not answer. Answering it from `OSAPI_CLK_GET` was not
+enough, because the kernel's clock fields are written by the UI task, and a
+WIN16 program runs as the UI task's coroutine: while CLOCK spins waiting for
+the next second, the second never comes. WIN16 now anchors the time it
+last read from the kernel to the BIOS tick count and adds the ticks since
+(§124.17.3).
+
+**What REVERSI and CLOCK draw with.** Twenty exports were missing between
+them (§124.17.1). Most are short: `SetBkColor`, `SetBkMode` and
+`SetTextAlign` for the DC; `ExtTextOut` with its opaque rectangle and clip;
+`Ellipse` as `RoundRect` with half-box corners; `PatBlt` as a source-less
+`BitBlt`, with `DSTINVERT` and `PATINVERT` as XOR fills. REVERSI's board is
+a pattern brush made from a monochrome bitmap: a checker of two greys,
+exactly half bright. That is the kernel's own 50% dither, so
+`CreatePatternBrush` answers it with `OSAPI_GFX_FILL_GRAY`, which is the
+same picture Windows draws on a 1bpp display. The font calls answer as a
+machine with only the System font: CLOCK's digital face is the System font,
+centred, where Windows 3.0 used `digital.fon`.
+
+**The 8088 that ran everything.** The first XT run of the new row said the
+three 8086 programs ran, then timed out waiting for 3.1's Calculator. Run
+alone, 3.1's Calculator *also* ran on the 8088 - at which point the census
+bss was read back and found untouched: the census had never run. The row
+had stopped waiting too early. WIN16 sets its state to running *before*
+the load, so that a second wake does nothing, and on QEMU the load is over
+before anyone looks. On an 8088 it takes seconds, and the row was reading
+a program still loading as one at its message loop. It now waits for the
+`Running` line, written after the load, and `win16calc` got the same fix.
+The timeout was most likely the disk window, which by the fourth launch
+need not be in front of the row the double-click aims at; the row now
+brings B: to the front first, and REVERSI followed by 3.1's Calculator then
+passed. The four in one boot is the registered run, S13's.
+
+**On the glass, measured on MartyPC** (`win16cpuxt`; double-click to the
+program idle in its message loop, everything included):
+
+| | stock 8088 | V20 |
+|---|---|---|
+| CALC 3.00 | runs, 35.1 s | |
+| CLOCK 3.00 | runs, 20.2 s | |
+| REVERSI 3.00 | runs, 19.9 s | |
+| CALC 3.10 | *Needs a V20, 80186 or better.*, 27.0 s | runs, 28.1 s |
+
+QEMU, as a 386, takes all four to their loops in under two seconds
+(`win16cpu`). S9's no-coprocessor row `win16fpuxt` moved from the V20 to
+the stock 8088, since the census now passes its programs; its run is S13's.
+Both new rows were run by hand while they were written. On QEMU's VGA,
+CLOCK's analog and digital faces and REVERSI's board were looked at beside
+Windows 3.0's, and a game of REVERSI was started; the 8088 runs were
+checked by the row (each window up, then closed), not looked at. CGA,
+EGA and Hercules wait for S13.
+
+**What is left undone, and said so** (§124.17.1): `TRANSPARENT` text is
+still drawn on its paper; `SetCursorPos` does nothing; `ExtTextOut`'s
+spacing array is not followed; every pen is one pixel wide.
+
+**What it cost.** WIN16's image went from 48,254 bytes to 49,721, and its
+bss from 13,964 to 13,975, leaving 1,840 bytes under the 64 KB segment.
+63,244 bytes on disk. The kernel is unchanged.

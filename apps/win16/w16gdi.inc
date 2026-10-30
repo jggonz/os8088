@@ -25,6 +25,8 @@ W16_STOCK   equ 0x3100          ; GetStockObject(i) = W16_STOCK + i
 W16_OBJ0    equ 0x3200          ; a made brush or pen, W16_OBJ0 + slot
 W16_NOCOL   equ 0xFF            ; a NULL brush or pen, or R2_NOP: draw nothing
 W16_XOR     equ 0xFE            ; ...or invert what is there (w16_ropcol)
+W16_GRAY    equ 0xFD            ; ...or the 50% checker a pattern brush is
+                                ;   (w16g_patbrush): gfx_fill_gray's
 
 W16K_BRUSH  equ 1               ; [w16_objk]
 W16K_PEN    equ 2
@@ -93,6 +95,10 @@ w16_dcopen:
     mov byte [w16_tpap], CWHITE     ; ...on white paper (SPEC.md 124.13)
     mov [w16_trgb], ax
     mov [w16_trgb + 2], ax
+    mov [w16_tal], al               ; TA_TOP | TA_LEFT
+    mov byte [w16_bkmode], OPAQUE
+    mov word [w16_brgb], 0xFFFF     ; ...whose COLORREF is white
+    mov word [w16_brgb + 2], 0x00FF
     mov [w16_curx], ax
     mov [w16_cury], ax
     mov [w16_dchide], al
@@ -299,6 +305,8 @@ w16_gfill:
     jg .out
     cmp byte [w16_gcol], W16_XOR
     je .xor
+    cmp byte [w16_gcol], W16_GRAY
+    je .gray
     push ax
     mov al, [w16_gcol]
     call w16_ink
@@ -307,6 +315,9 @@ w16_gfill:
     jmp short .out
 .xor:
     call OSAPI_GFX_XOR_FILL
+    jmp short .out
+.gray:
+    call OSAPI_GFX_FILL_GRAY
 .out:
     pop dx
     pop cx
@@ -427,8 +438,8 @@ w16_stockcol:
 ; with (CALC's pressed key) and the nearest the kernel has for the rest.
 ; Keeps all but AL.
 w16_ropcol:
-    cmp al, W16_NOCOL
-    je .ret
+    cmp al, W16_GRAY                ; (the checker is drawn as it is)
+    jae .ret
     push bx
     mov bl, [w16_rop]
     cmp bl, R2_COPYPEN
@@ -1075,6 +1086,7 @@ w16g_roundrect:
     shr ax, 1
     mov [w16_rry], ax
     add bx, 4
+.box:                               ; Ellipse's way in (w16acc.inc)
     call w16_rectin
     jc .done
     mov ax, [w16_pen]
@@ -1433,25 +1445,9 @@ w16_txtcopy:
 
 ; SetTextColor (GDI.9) - args: +0 the COLORREF, +4 hDC. Answers the old one.
 w16g_settextcol:
-    call w16_args
-    xor ax, ax
-    xor dx, dx
-    cmp word [es:bx + 4], W16_HDC   ; another DC's: kept nowhere
-    jne .out
-    mov ax, [es:bx]
-    mov dx, [es:bx + 2]
-    xchg ax, [w16_trgb]
-    xchg dx, [w16_trgb + 2]
-    push ax
-    push dx
-    mov ax, [w16_trgb]
-    mov dl, [w16_trgb + 2]
-    call w16_rgb2col
-    mov [w16_tcol], al
-    pop dx
-    pop ax
-.out:
-    ret
+    mov si, w16_trgb
+    mov di, w16_tcol
+    jmp w16_cref                    ; SetBkColor's body too (w16acc.inc)
 
 ; GetTextExtent (GDI.91) - args: +0 nCount, +2 lpString, +6 hDC. DX:AX =
 ; height:width.
@@ -1537,6 +1533,7 @@ w16g_textout:
     xor di, di
     call w16_txtcopy
     mov [w16_tn], cx
+    call w16_talign                 ; SetTextAlign's reference point
     call w16_txtdraw
 .done:
     mov ax, 1

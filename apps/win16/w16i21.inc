@@ -5,8 +5,10 @@
 ; and Open Watcom start-up and exit issue int 21h themselves rather than
 ; through DOS3Call: S1's census found AH = 25h, 30h, 35h, 3Eh, 40h, 44h and
 ; 4Ch in CALC 3.00 and 25h, 30h, 35h and 4Ch in WinMine 2.9. This is only
-; that set; anything else answers "invalid function", which a runtime treats
-; as an ordinary refusal.
+; that set, and the clock: 2Ch, which CLOCK 3.00 reads the time with, and
+; 2Ah, the date, which Notepad and Calendar ask for (SPEC.md 124.17.3), both
+; off OSAPI_CLK_GET. Anything else answers "invalid function", which a
+; runtime treats as an ordinary refusal.
 ;
 ; It runs on the PROGRAM's stack (it is the program's own `int`), with the
 ; program's DS, IF = 0 from the gate. Only AH=4Ch leaves it other than by
@@ -23,6 +25,19 @@ w16_i21:
     je w16_i21_exit
     push bp
     mov bp, sp
+%ifdef W16_TRACE
+    push bx
+    push ax
+    mov bx, [cs:w16_trn]
+    and bx, 127
+    shl bx, 1
+    mov al, ah
+    mov ah, 0x80
+    mov [cs:w16_trc + bx], ax
+    inc word [cs:w16_trn]
+    pop ax
+    pop bx
+%endif
     and word [bp + W16_IRET_FL], 0xFFFE     ; CF = 0 unless refused below
     cmp ah, 0x30
     je .ver
@@ -36,6 +51,11 @@ w16_i21:
     je .close
     cmp ah, 0x44
     je .ioctl
+    cmp ah, 0x2A
+    jb .bad
+    cmp ah, 0x2C
+    ja .bad
+    jmp w16_i21clk                  ; 2Ah, 2Ch (and 2Bh, refused there)
 .bad:
     mov ax, 1                       ; invalid function
 .err:
@@ -169,3 +189,116 @@ w16_i21_exit:
     popf
     cld
     jmp w16_tohost
+
+; -----------------------------------------------------------------------------
+; w16_i21clk - int 21h's clock (SPEC.md 124.17.3), off OSAPI_CLK_GET: w16_i21's
+; arm, BP pushed, left through its .done
+; -----------------------------------------------------------------------------
+w16_i21clk:
+    ; STKBALANCE-OK: w16_i21's arm, which pops BP and irets in .done
+    cmp ah, 0x2B
+    je w16_i21.bad                  ; setting the date is not a program's
+    cmp ah, 0x2A
+    je .date
+    push ax                         ; 2Ch: CH hour, CL minute, DH second,
+    push bx                         ;   DL hundredths
+    push si
+    push ds
+    mov si, cs
+    mov ds, si
+    call OSAPI_CLK_GET              ; BX = hour:minute, AH = the second
+    push es
+    xor si, si
+    mov es, si
+    mov si, [es:0x46C]              ; SI = the BIOS's tick, which IRQ 0 moves
+    pop es
+    cmp bx, [w16_ckhm]              ; the kernel's fields are the UI task's,
+    jne .anchor                     ;   which is this program while it spins:
+    cmp ah, [w16_cks]               ;   they stand still. So the answer is
+    je .since                       ;   them, plus the ticks since they last
+.anchor:                            ;   moved (SPEC.md 124.17.3)
+    mov [w16_ckhm], bx
+    mov [w16_cks], ah
+    mov [w16_ckt], si
+.since:
+    mov ax, si
+    sub ax, [w16_ckt]               ; ticks since, in hundredths: x 1000 / 182
+    cmp ax, 4000                    ; (past three minutes the UI task has
+    jbe .t                          ;   run, or this answer is as good as any)
+    mov ax, 4000
+.t:
+    mov cx, 1000
+    mul cx
+    mov cx, 182
+    div cx                          ; AX = hundredths since the anchor
+    mov cl, 100
+    div cl                          ; AL = seconds since, AH = hundredths
+    mov dl, ah
+    xor ah, ah
+    add al, [w16_cks]
+    adc ah, 0
+    mov cx, [w16_ckhm]
+.sec:
+    cmp ax, 60
+    jb .done
+    sub ax, 60
+    inc cl
+    cmp cl, 60
+    jb .sec
+    mov cl, 0
+    inc ch
+    cmp ch, 24
+    jb .sec
+    mov ch, 0
+    jmp short .sec
+.done:
+    mov dh, al
+    pop ds
+    pop si
+    pop bx
+    pop ax
+    jmp w16_i21.done
+.date:                              ; CX year, DH month, DL day, AL weekday
+    push bx
+    push si
+    call OSAPI_CLK_GET
+    mov bl, dh                      ; Sakamoto's: (y + y/4 - y/100 + y/400 +
+    xor bh, bh                      ;   t[m] + d) mod 7, y one less before
+    mov al, [cs:w16_i21wd + bx - 1] ;   March; 0 = Sunday (DS: the program's)
+    xor ah, ah
+    mov si, cx
+    cmp bl, 3
+    jae .yr
+    dec si
+.yr:
+    add al, dl
+    adc ah, 0
+    add ax, si
+    push dx
+    push cx
+    mov cx, ax                      ; CX = the sum so far
+    mov ax, si
+    mov bx, 4
+    xor dx, dx
+    div bx
+    add cx, ax                      ; + y/4
+    mov ax, si
+    mov bx, 100
+    xor dx, dx
+    div bx
+    sub cx, ax                      ; - y/100
+    shr ax, 1
+    shr ax, 1
+    add cx, ax                      ; + y/400
+    mov ax, cx
+    mov bx, 7
+    xor dx, dx
+    div bx
+    mov al, dl
+    pop cx
+    pop dx
+    pop si
+    pop bx
+    jmp w16_i21.done
+
+w16_i21wd:  db 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4

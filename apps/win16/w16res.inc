@@ -235,14 +235,16 @@ w16_rfind:
     jnz .ret
     cmp word [w16_rnk], 0
     jne .ret                        ; an integer name: no table to ask
-    test byte [w16_rtk + 1], 0x80
-    jz .ret                         ; a string type: the table has none
     call w16_rnametab
 .ret:
     ret
 
-; w16_rnametab - w16_rfind's miss, by the name table: AX = the entry, 0 =
-; none. [w16_rnk] is put back. Keeps the rest.
+; w16_rnametab - w16_rfind's miss, by the name table (SPEC.md 124.10): AX =
+; the entry, 0 = none. An entry is its length, its type and id as numbers,
+; then the type's name (empty for a numbered type) and the resource's: CALC
+; 3.00 names a dialog of type 5 "SC", CLOCK 3.00 a resource of type "DATA"
+; "CLOCK" (stored as type F006h). [w16_rtk]/[w16_rnk] are put back. Keeps
+; the rest.
 w16_rnametab:
     push bx
     push cx
@@ -250,12 +252,11 @@ w16_rnametab:
     push si
     push di
     push es
-    push word [w16_rtk]
-    mov ax, 0x8000 | RT_NAMETABLE
-    mov [w16_rtk], ax
+    mov dx, [w16_rtk]               ; DX = the type asked for, 0 = by name
+    mov word [w16_rtk], 0x8000 | RT_NAMETABLE
     mov word [w16_rnk], 0x8001
     call w16_rscan
-    pop word [w16_rtk]
+    mov [w16_rtk], dx
     mov word [w16_rnk], 0
     or ax, ax
     jz .out
@@ -276,30 +277,33 @@ w16_rnametab:
     mov cx, [es:di]                 ; the entry's length; 0 ends it
     cmp cx, 7
     jb .none
-    mov ax, [es:di + 2]             ; its type, a number
+    lea bx, [di + 6]                ; BX = the type's name
+    or dx, dx
+    jz .bytype
+    mov ax, [es:di + 2]             ; a numbered type: its number, and no name
     or ah, 0x80
-    cmp ax, [w16_rtk]
+    cmp ax, dx
     jne .next
-    lea bx, [di + 7]                ; past the id and the type's empty name
-    mov si, w16_rnamb
-.c:
-    mov al, [es:bx]
-    cmp al, 'a'
-    jb .u
-    cmp al, 'z'
-    ja .u
-    sub al, 0x20
-.u:
-    cmp al, [si]
+    cmp byte [es:bx], 0
     jne .next
     inc bx
-    inc si
-    or al, al
-    jnz .c
-    mov ax, [es:di + 4]             ; its number, 8000h set
+    jmp short .name
+.bytype:
+    mov si, w16_rtypb
+    call w16_rnmcmp
+    jne .next
+.name:
+    mov si, w16_rnamb
+    call w16_rnmcmp
+    jne .next
+    mov ax, [es:di + 2]             ; the type and the number it is filed as
+    or ah, 0x80
+    mov [w16_rtk], ax
+    mov ax, [es:di + 4]
     or ah, 0x80
     mov [w16_rnk], ax
     call w16_rscan
+    mov [w16_rtk], dx
     mov word [w16_rnk], 0
     jmp short .out
 .next:
@@ -314,6 +318,28 @@ w16_rnametab:
     pop dx
     pop cx
     pop bx
+    ret
+
+; w16_rnmcmp - the name at ES:BX against the upper-case one at DS:SI, case
+; blind: ZF=1 the same, BX past its NUL. Keeps all but BX, SI, the flags.
+w16_rnmcmp:
+    push ax
+.c:
+    mov al, [es:bx]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 0x20
+.u:
+    cmp al, [si]
+    jne .o
+    inc bx
+    inc si
+    or al, al
+    jnz .c
+.o:
+    pop ax
     ret
 
 ; w16_rscan - w16_rfind's own table, without the name table

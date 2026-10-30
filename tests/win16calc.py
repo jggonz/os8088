@@ -168,7 +168,8 @@ def run_calc(d, ui, sym, S, dw, name, bad, keep, shot):
     p = Prog(d, ui, sym, S, name)
     p.launch(dw)
     d.wait(lambda: p.pb("w16_state") in (W16S_REFUSED, W16S_ENDED)
-           or p.pb("w16_inprog") == 0, 120, "%s to reach its message loop" % name)
+           or (p.text("w16_l2") == "Running" and p.pb("w16_inprog") == 0),
+           120, "%s to reach its message loop" % name)     # (win16cpu.at_loop)
     d.idle(4.0)
     st = p.pb("w16_state")
     print("%s: state %d, %s / %s" % (name, st, p.text("w16_l1"), p.text("w16_l2")))

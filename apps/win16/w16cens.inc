@@ -498,7 +498,8 @@ w16c_dec:
 .op:
     mov [w16c_cls], ch
     mov [w16c_op], al
-    mov bp, si
+    mov cl, ah                      ; the table's byte: w16c_mrlen answers in
+    mov bp, si                      ;   AX, so AH does not survive a modrm
     inc bp                          ; BP = past the opcode
     cmp ch, W16C_OP0F
     je .op0f
@@ -547,7 +548,7 @@ w16c_dec:
     add bp, ax
     jmp short .chk
 .plain:
-    mov al, ah
+    mov al, cl
     and ax, 7                       ; the immediate's bytes
     add bp, ax
 .chk:

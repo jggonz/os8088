@@ -17,6 +17,11 @@ committed: the downloads are Microsoft's and Duff Software's.
     win16ref.py quit                  stop the running machine
     win16ref.py copy w30|w31 FILE...  copy host files into C:\\FIX on a STOPPED machine's
                                       disk (the WIN16 fixtures: `make win16fixtures`)
+    win16ref.py samples               copy the programs WIN16's rows play into
+                                      <repo>/build/win16/ (git-ignored): CALC, CLOCK
+                                      and REVERSI from Windows 3.0, Windows 3.1's
+                                      CALC and WINMINE as W31CALC and W31MINE, and
+                                      WinMine 2.9 as WINMINE
 
 Each install step screenshots into <root>/log/<install>/NN-<step>.png. LOOK at
 them: the key sequence is the one that worked on 2026-10-28, with fixed waits,
@@ -318,6 +323,24 @@ def copy(which, files):
     print("copied", len(files), "file(s) to", which, "C:\\FIX")
 
 
+# What `samples` copies: build/win16/<name> <- samples/<path>. The rows that
+# play them (tests/win16*.py) SKIP where a name is missing.
+SAMPLES = [("CALC.EXE", "w3-archive/WINDOWS/CALC.EXE"),
+           ("CLOCK.EXE", "w3-archive/WINDOWS/CLOCK.EXE"),
+           ("REVERSI.EXE", "w3-archive/WINDOWS/REVERSI.EXE"),
+           ("W31CALC.EXE", "w31/CALC.EXE"),
+           ("W31MINE.EXE", "w31/WINMINE.EXE"),
+           ("WINMINE.EXE", "winmine-2.9/WINMINE.EXE")]
+
+
+def samples():
+    out = os.path.join(REPO, "build", "win16")
+    os.makedirs(out, exist_ok=True)
+    for name, src in SAMPLES:
+        shutil.copyfile(os.path.join(ROOT, "samples", src), os.path.join(out, name))
+    print("copied", len(SAMPLES), "programs to", out)
+
+
 def run(which, cmd=None):
     img = os.path.join(ROOT, which, "c.img")
     boot = os.path.join(ROOT, "dosboot.img")
@@ -345,6 +368,7 @@ def main(a):
     elif c == "type": q = Q(); q.type(" ".join(a[1:])); q.close()
     elif c == "quit": quit_qemu()
     elif c == "copy": copy(a[1], a[2:])
+    elif c == "samples": samples()
     else: sys.exit(__doc__)
 
 

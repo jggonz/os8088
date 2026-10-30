@@ -834,13 +834,14 @@ they stand on.
     (both programs in one boot); CGA, EGA and Hercules faces; the About
     box; Help (the WinHelp refusal, which is §124.15.3's).
 
-- [ ] **S11: The CPU floor on the glass.** *As an XT owner, the Windows
+- [x] **S11: The CPU floor on the glass.** *As an XT owner, the Windows
   programs my CPU can run, run, and the rest tell me plainly what they need.*
   - On a stock 8088, the 8086-clean programs run: CALC, CLOCK and REVERSI
     from Windows 3.0.
   - WinMine says it needs a V20.
   - On a V20 everything runs.
-  - The V20/186 test is `apps/redline/detect.inc`'s, shared as source.
+  - The V20/186 test is `apps/redline/detect.inc`'s, shared as source
+    *(amended: WIN16's own probe, below)*.
   - **Found at S9, S11's to fix:** the IN-GUEST census (`w16cens.inc`,
     S2's) refuses the Open Watcom fixtures on a stock 8088 as *Needs an
     80386 or better.* where the host census (`os88ne.py`) says 8086, on the
@@ -852,6 +853,55 @@ they stand on.
     an 8088 is unseen too. S9's no-coprocessor leg runs on the V20 5150
     meanwhile, where the census does not run.
   - *Verify:* MartyPC as a stock 8088 and as a V20, and QEMU as a 386.
+  - **Amended at S11** (SPEC.md §124.4, §124.17):
+    - The V20 test is WIN16's own eight-byte `6Ah` probe (§124.3), not
+      `detect.inc`: that file tells six CPUs apart and clocks them in 382
+      lines, and WIN16 asks one question, whether `push imm8` executes,
+      which the probe answers by executing it. The segment had 3,318 bytes
+      left.
+    - S9's finding was one register: `w16c_mrlen` answers in AX and AH
+      held the opcode's table byte, so an instruction with a modrm byte
+      and an immediate was walked short (§124.4.1).
+    - CLOCK reads the time with `int 21h` AH = 2Ch, and spins on it; the
+      kernel's clock does not move while a program runs as the UI task's
+      coroutine, so 2Ch extrapolates off the BIOS tick (§124.17.3).
+    - CLOCK names a resource with a string TYPE (`"DATA"`), so the name
+      table is read for any type (§124.10).
+    - "WinMine says it needs a V20" is S8's row (`win16minesxt`); this
+      story's refusal is Windows 3.1's Calculator, beside the three that run.
+  - **Shipped** (one commit on PR #320): see the S11 entry of
+    docs/HOW-WIN16-WAS-BUILT.md for the account.
+    - `tests/unit/t_w16cens.py`, rows `w16cens` (fast) and `w16censall`
+      (full): WIN16's own census under unicorn against `os88ne.py`'s,
+      byte for byte and verdict for verdict, on 43 programs. It failed on
+      FPU.EXE before the fix.
+    - `apps/win16/w16acc.inc`: the twenty calls CLOCK and REVERSI make
+      (§124.17.1) - the DC's background colour, mode and text alignment,
+      `ExtTextOut`, `Ellipse`, `PatBlt`, a monochrome bitmap and a pattern
+      brush (REVERSI's board as the kernel's 50% grey), `OffsetRect`,
+      `InflateRect`, `GetKeyState`, and the font calls answered as a
+      machine with only the System font.
+    - `int 21h` AH = 2Ah and 2Ch (§124.17.3), and `FindResource` by a
+      string type through the name table.
+    - `-DW16_TRACE` and `tools/w16trace.py`: the last 128 calls a program
+      made (§124.17.4).
+    - `tests/win16cpu.py`, rows `win16cpu` (QEMU) and `win16cpuxt`
+      (MartyPC); `win16fpuxt` moved to the stock 8088. The win16-reference
+      skill's `samples` command puts CLOCK and REVERSI in `build/win16/`.
+    - `make win16`: a 49,721-byte image (48,254 at S10) and 13,975 bytes of
+      bss, 1,840 bytes under the 64KB segment; 63,244 bytes on disk. The
+      kernel is unchanged.
+  - **Seen** (MartyPC, by the row): on a stock 8088 CALC, CLOCK and
+    REVERSI 3.00 each reached its message loop with its window up, in
+    35.1, 20.2 and 19.9 s from the double-click, census included; CALC
+    3.10 was refused with *Needs a V20, 80186 or better.* in 27.0 s; on a
+    V20 it ran, in 28.1 s. On QEMU's VGA, CLOCK's analog and digital faces
+    and REVERSI's board and a move, beside Windows 3.0's.
+  - **Not seen yet, owed to S13's final pass:** the registered runs of
+    `win16cpuxt` (all four in one boot; it was run by hand in two parts),
+    `win16cpu` and `win16fpuxt` on the stock 8088; CLOCK and REVERSI on CGA,
+    EGA and Hercules. Not done: `TRANSPARENT` text is drawn opaque,
+    `SetCursorPos` does nothing, `ExtTextOut`'s spacing is not followed.
 
 - [ ] **S12: Living with the desktop.**
   - Two Windows programs at once (two `WIN16.O88` instances).
@@ -968,7 +1018,7 @@ docs/INDEX.md was read first.
 | drawing | `OSAPI_GFX_*`, `OSAPI_GFX_BLIT4`, and proportional type (`apps/os88type.inc`, SPEC.md §6.3) |
 | UI | the in-window menu (SPEC.md §13.16), `os88ui.inc`'s controls (SPEC.md §13.8–§13.17), line editing (SPEC.md §83) and the About card (`OSAPI_ABOUT_SET`, SPEC.md §12.2) |
 | services | the timer (SPEC.md §13.9), the clipboard (`OSAPI_CLIP_*`), speaker tones (`OSAPI_SND_TONE`), claims (SPEC.md §50.3) and app data (SPEC.md §19.9, `apps/os88data.inc`) |
-| CPU detection | `OSAPI_CPU_INFO` (SPEC.md §60.1) tells 8086/286/386 apart but not a V20. `apps/redline/detect.inc` does, and is SHARED AS SOURCE (WEAVE-SPEC §1.2's rule) |
+| CPU detection | `OSAPI_CPU_INFO` (SPEC.md §60.1) tells 8086/286/386 apart but not a V20. `apps/redline/detect.inc` does; S11 kept WIN16's own `6Ah` probe instead, which asks the one question WIN16 has (SPEC.md §124.4) |
 
 **Missing, and owned by a story:**
 

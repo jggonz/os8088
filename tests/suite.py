@@ -2146,6 +2146,17 @@ FAST = [
         "must be exactly X87_EMU_LACKS, so the census's report about a "
         "program is the emulator's own answer",
         needs=("nasm", "unicorn")),
+    Row("w16cens", "fast", py("tests/unit/t_w16cens.py"), 1.0,
+        "WIN16's IN-GUEST census (SPEC.md 124.4.1, apps/win16/w16cens.inc) "
+        "against tools/os88ne.py's: the whole of WIN16 assembled and run under "
+        "unicorn, its own w16_census called on each program in build/win16/ "
+        "the way the loader calls it - segments relocated, OS fixups patched "
+        "for an 8088 - and the bytes its walk reached, read out of its "
+        "bitmap, must be the host's instructions and switch tables exactly, "
+        "segment by segment, with the same verdict. It failed on S9's "
+        "finding (WIN16-PLAN S11): an opcode with a modrm AND an immediate "
+        "was walked short, so FPU.EXE read as 386 code",
+        needs=("nasm", "unicorn")),
 ]
 
 # --------------------------------------------------------------------------
@@ -2271,6 +2282,14 @@ FULL = [
         "and a stale line for a package that declares. FULL and not fast "
         "because the owner asked for it there; host-side, 2s measured",
         needs=()),
+    Row("w16censall", "full", py("tests/unit/t_w16cens.py", "--all"), 3.5,
+        "w16cens over EVERY program under win16ref/samples/ as well - the "
+        "whole of Windows 3.0's directory (CLOCK and REVERSI, S11's stock-8088 "
+        "programs, among them), Windows 3.1's CALC and WINMINE and WinMine "
+        "2.6-2.9: 43 programs, the guest's walk byte-identical to the host's "
+        "and every verdict the same. Full and not fast for its 3 s; it runs "
+        "only where the win16-reference skill has put the samples",
+        needs=("nasm", "unicorn", "win16samples")),
     Row("sysfree", "full", py("tests/unit/t_sysfree.py"), 0.2,
         "at the owner's word: every SYSTEM disk keeps room for what the "
         "system saves on it - 5 KB on a disk of 512-byte clusters, 10 KB on "
@@ -16123,11 +16142,31 @@ SOAK = [
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/notepad.o88")),
     Row("win16fpuxt", "soak", py("tests/win16fpu.py", "--marty"), 300.0,
-        "WIN16-PLAN S9 WITHOUT a coprocessor: the same programs on a 5150's "
-        "8088, every OS fixup an int 34h-3Dh and part W16P_FPU fetched (read "
-        "off w16_fpm, not assumed), and the same answers Windows 3.0 gave "
-        "on hardware with one",
+        "WIN16-PLAN S9 WITHOUT a coprocessor: the same programs on a stock "
+        "5150's 8088, each swept by WIN16's census first and passed (S11 "
+        "moved this leg off a V20 when it fixed that census), every OS fixup "
+        "an int 34h-3Dh and part W16P_FPU fetched (read off w16_fpm, not "
+        "assumed), and the same answers Windows 3.0 gave on hardware with one",
         needs=("marty", "nasm", "win16fixtures"), serial=True, timeout=1800,
+        wants=("build/os8088-360.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16cpu", "soak", py("tests/win16cpu.py"), 40.0,
+        "SPEC.md 124.17, WIN16-PLAN S11 on a 386 (QEMU): Windows 3.0's "
+        "CALC, CLOCK and REVERSI and Windows 3.1's Calculator (Microsoft's, "
+        "in build/win16/ only where the win16-reference skill put them) each "
+        "launched to its message loop - the 'Running' line, not W16S_RUN, "
+        "which is set before the load - with its window up, then closed",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16cpuxt", "soak", py("tests/win16cpu.py", "--marty"), 420.0,
+        "WIN16-PLAN S11, the CPU floor on the glass: a stock 5150's 8088 "
+        "runs Windows 3.0's three 8086 accessories, each swept by WIN16's "
+        "own census first (SPEC.md 124.4.1), and refuses Windows 3.1's "
+        "Calculator - 80186 code - with SPEC.md 124.4's sentence; a 5150 "
+        "with a NEC V20 runs it. It PRINTS each launch's cost on the XT, "
+        "census included, which is S11's reading",
+        needs=("marty", "nasm", "win16samples"), serial=True, timeout=2400,
         wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88")),
     Row("win16minesxt", "soak", py("tests/win16mines.py", "--marty"), 240.0,

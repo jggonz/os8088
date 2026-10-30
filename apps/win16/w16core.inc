@@ -143,6 +143,15 @@ w16_gate:
     mov bp, cs
     mov ds, bp
     mov [w16_idx], ax
+%ifdef W16_TRACE
+    push bx
+    mov bx, [w16_trn]
+    and bx, 127
+    shl bx, 1
+    mov [w16_trc + bx], ax
+    inc word [w16_trn]
+    pop bx
+%endif
     mov [w16_rbx], bx
     mov [w16_rcx], cx
     mov [w16_res], es

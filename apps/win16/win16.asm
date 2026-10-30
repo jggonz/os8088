@@ -222,6 +222,16 @@ section .w16dlg
     W16BSS w16_rop, 1           ; SetROP2's mode
     W16BSS w16_tcol, 1          ; the text colour, and its COLORREF
     W16BSS w16_trgb, 4
+%ifdef W16_TRACE                   ; a debugging knob: the last 128 gate rows
+    W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
+    W16BSS w16_trc, 256         ;   tools/w16trace.py reads (SPEC.md 124.17)
+%endif
+    W16BSS w16_ckhm, 2          ; int 21h 2Ch's anchor: the kernel's hour:minute
+    W16BSS w16_cks, 1           ; ...second
+    W16BSS w16_ckt, 2           ; ...and the BIOS tick it was seen at
+    W16BSS w16_brgb, 4          ; SetBkColor's COLORREF (w16_tpap its colour)
+    W16BSS w16_bkmode, 1        ; SetBkMode's
+    W16BSS w16_tal, 1           ; SetTextAlign's
     W16BSS w16_rgb, 4
     W16BSS w16_lx1, 2
     W16BSS w16_ly1, 2
@@ -1177,6 +1187,7 @@ w16_cputest:
 %include "win16/w16snd.inc"     ; SOUND's voice queue (SPEC.md 124.15.1)
 %include "win16/w16bmp.inc"     ; bitmaps and memory DCs (SPEC.md 124.15.2)
 %include "win16/w16clip.inc"    ; the clipboard, strings (SPEC.md 124.16)
+%include "win16/w16acc.inc"     ; what CLOCK and REVERSI call (SPEC.md 124.17)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"

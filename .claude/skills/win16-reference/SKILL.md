@@ -87,6 +87,17 @@ python3 $S quit
 python3 $S run w31 "win /s calc"        # Windows 3.1 has no real mode; standard mode
 ```
 
+The WIN16 rows that run Microsoft's programs (`win16mines`, `win16calc`,
+`win16cpu` and their XT legs) read them from `build/win16/`, never from this
+tree. `samples` puts them there, renamed where two versions share a name:
+CALC, CLOCK and REVERSI from Windows 3.0, `W31CALC.EXE` and `W31MINE.EXE`
+from 3.1, and WinMine 2.9 as `WINMINE.EXE`. `make clean` removes them, so
+run it again after one:
+
+```sh
+python3 $S samples                      # win16ref/samples/ -> build/win16/
+```
+
 To try a program of your own, such as the WIN16 test programs
 `make win16fixtures` builds, copy it onto a STOPPED machine's disk and start
 it from `C:\FIX`:

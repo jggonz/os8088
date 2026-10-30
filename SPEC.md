@@ -224854,8 +224854,8 @@ something else (`0x60`–`0x6F` alias the conditional jumps, `0x0F` is
 `pop cs`), so running such a program unchecked is a silent wrong answer, not
 a crash.
 
-The census result is matched against `OSAPI_CPU_INFO` (§60.1), plus a V20/186
-test shared as source from `apps/redline/detect.inc`:
+The census result is matched against `OSAPI_CPU_INFO` (§60.1), plus §124.3's
+`6Ah` probe, which tells a V20 or a 186 from an 8088:
 
 - **no new opcodes:** every machine;
 - **186 opcodes:** a V20/V30/186 or better;
@@ -224870,6 +224870,15 @@ with unguarded 286 instructions is not caught on a V20. Applications do not
 issue them: no sample in the census table above does.
 
 No translation of 186 opcodes for the 8088 is planned: the floor is a V20.
+
+**The V20 test is the probe, not REDLINE's detector** *(amended at S11)*.
+The plan named `apps/redline/detect.inc`, shared as source. That file
+answers a wider question - which of the 8088, 8086, V20, V30, 80188 and
+80186 this is, by the prefetch queue and the shift-count mask, and the
+clock behind it - and is 382 lines. WIN16 has one question, whether the
+CPU executes `push imm8`, and the probe answers exactly that in eight bytes
+by executing it. A machine that gives the wrong answer to the probe gives
+the wrong answer to the program.
 
 `__WINFLAGS` reports `WF_CPU086`, `WF_CPU186` or `WF_CPU286`, never
 `WF_PMODE`, plus `WF_80x87` when a coprocessor is present. `__AHINCR` is
@@ -224948,8 +224957,35 @@ VERIFIED on QEMU with a test build that runs the census on any CPU
   an 80286 or better.* So the walk reaches the `smsw`, and the guard is what
   admits it.
 
-NOT YET MEASURED: the census on a real 8088 or MartyPC (its time, and the
-`6Ah` probe answering *no*), which is S13's.
+**The walk was short once** *(found at S9, fixed at S11)*. An instruction
+with a modrm byte AND an immediate - `sub sp, 60h` is `83 EC 60` - was
+decoded one byte short, because `w16c_mrlen` answers in AX and AH held the
+opcode's table byte. The walk then took the immediate for the next
+instruction: Open Watcom's FPU.EXE reached its `60` at segment 1 offset 13h
+as `pusha`, and the census refused it as *Needs an 80386 or better.* where
+`os88ne.py` says 8086. `tests/unit/t_w16cens.py` is the gate that would have
+caught it (rows `w16cens`, fast, and `w16censall`, full): the whole of WIN16
+under unicorn, its own `w16_census` called the way the loader calls it on
+every program in `build/win16/` (and with `--all`, all 43 under
+`win16ref/samples/`), and the bytes its walk reached, read out of its
+bitmap, must be the host's instructions and switch tables exactly, segment
+by segment, with the same verdict. It failed on FPU.EXE before the fix.
+
+MEASURED on MartyPC, 2026-10-30 (`win16cpuxt`): a stock 5150 answers the
+probe *no*, and the census runs. Double-click to the program idle in its
+message loop, the read, relocation and census included:
+
+| program, stock 8088 | verdict | double-click to the answer |
+|---|---|---|
+| CALC 3.00 | runs | 35.1 s |
+| CLOCK 3.00 | runs | 20.2 s |
+| REVERSI 3.00 | runs | 19.9 s |
+| CALC 3.10 | *Needs a V20, 80186 or better.* | 27.0 s |
+| CALC 3.10 on a V20 (no census) | runs | 28.1 s |
+
+The census is not timed apart from the load; the V20 row is the same load
+without it. QEMU (a 386, the probe *yes*) takes the same four to their
+loops in 0.8-1.8 s (`win16cpu`).
 
 MEASURED, 2026-10-28:
 
@@ -225522,13 +225558,18 @@ a load from inside a paint is legal.
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
 
-**A string name may be in the name table** *(S10)*. A Windows 3.0 linker
-numbered every resource and wrote the names into an `RT_NAMETABLE` (type
-15) resource: CALC 3.00 asks for dialog `"SC"`, which is DIALOG 1 there.
-When a string name matches nothing and the type is an integer, the lookup
-reads that table - entries of a length word, the type, the number with 8000h
-set, an empty type name and the resource's name, ending at a length of 0 -
-and finds the numbered resource. The table is loaded as any resource is.
+**A string name may be in the name table** *(S10; any type at S11)*. A
+Windows 3.0 linker numbered every resource and wrote the names into an
+`RT_NAMETABLE` (type 15) resource: CALC 3.00 asks for dialog `"SC"`, which
+is DIALOG 1 there. When a string name matches nothing, the lookup reads
+that table - entries of a length word, the type, the number with 8000h set,
+the type's name and the resource's name, ending at a length of 0 - and
+finds the numbered resource. **The TYPE may be a string too**: CLOCK 3.00
+asks for `FindResource(h, "CLOCK", "DATA")`, and its table names it type
+F006h, number 1, type name `DATA`. A numbered type matches an entry whose
+type word is that type and whose type name is empty; a string type matches
+the type name, case blind, and the entry's own type word is then the
+numbered type to look in. The table is loaded as any resource is.
 
 ### 124.11 Menus *(shipped in S5)*
 
@@ -226042,3 +226083,80 @@ through Calculator's own Edit > Copy off §55's clipboard, and is the
 display string with its sign column: ` 0.00`, as Windows 3.1's Notepad
 pastes it. Like `win16mines`, it runs only where the win16-reference skill
 has put the programs in `build/win16/`.
+
+### 124.17 CLOCK and REVERSI: the CPU floor *(shipped in S11)*
+
+Windows 3.0's Clock and Reversi are 8086 programs (§124.4.1's table), so
+with Calculator 3.00 they are what a stock 8088 runs. These are the calls
+they make that S10 did not answer, in `apps/win16/w16acc.inc`.
+
+#### 124.17.1 GDI and USER
+
+| call | answers |
+|---|---|
+| `SetBkColor(hDC, cr)` (GDI.1) | the old COLORREF. The nearest of the sixteen colours (§124.8.1's rule, as `SetTextColor`'s) is the paper text is drawn on, and `ExtTextOut`'s opaque rectangle. A DC starts with white |
+| `SetBkMode(hDC, mode)` (GDI.2) | the old mode, `OPAQUE` at first. `TRANSPARENT` is kept and answered, and text is still drawn on its paper: §6.1's one-pass `font_run` is how os8088 draws text, and the two programs that set it draw on a ground of the paper's colour anyway |
+| `SetTextAlign(hDC, ta)` (GDI.346) | the old value. `TextOut` and `ExtTextOut` take the point as the text's right end or centre (`TA_RIGHT`, `TA_CENTER`) and its bottom or baseline (`TA_BOTTOM`, `TA_BASELINE`, off the face's ascent and height); `TA_UPDATECP` is not followed |
+| `ExtTextOut(hDC, x, y, opts, lprc, lpsz, n, lpDx)` (GDI.351) | `ETO_OPAQUE` fills the rectangle in the background colour first, and `ETO_CLIPPED` cuts the text to it; the text as `TextOut` draws it. `lpDx` is not followed: each character keeps its own advance |
+| `Ellipse(hDC, l, t, r, b)` (GDI.24) | `RoundRect`'s shape with each corner's radii half the box's, so the four quarters meet - and so the same pen, brush and 64-pixel limit (§124.8.1) |
+| `PatBlt(hDC, x, y, w, h, rop)` (GDI.29) | `BitBlt` with no source: `PATCOPY`, `BLACKNESS`, `WHITENESS`, `DSTINVERT` (an XOR fill) and `PATINVERT` (nothing under a black or null brush, else an XOR fill); any other raster op as `BitBlt` answers it |
+| `CreateBitmap(w, h, planes, bpp, lpBits)` (GDI.48) | a monochrome bitmap's bits (one plane, one bit, rows a word apart) converted as a DIB's are, a set bit white; any other format a black bitmap of that size |
+| `CreatePatternBrush(hbm)` (GDI.60) | a solid brush; the brush keeps no copy of the bitmap, which may be deleted at once. A top-left 8 x 8 exactly half bright is the kernel's 50% checker (`OSAPI_GFX_FILL_GRAY`, `(x + y) & 1`, Windows' own grey pattern on a 1bpp display) - REVERSI's board; anything else is the colour of the sixteen nearest the grey it averages |
+| `GetNearestColor(hDC, cr)` (GDI.154) | the COLORREF of the sixteen it is drawn in |
+| `CreateDC(driver, device, port, init)` (GDI.53) | the desktop's DC, which `GetDeviceCaps` answers for; an information context, nothing draws on it |
+| `CreateFontIndirect(lplf)` (GDI.57) | the System font's stock handle: the only face there is (§124.7), and the one Windows' mapper falls back to. CLOCK's digital face is the System font, centred |
+| `AddFontResource`, `RemoveFontResource` (GDI.119, 136) | 0: no font file is loaded (§124.7) |
+| `UnrealizeObject(h)` (GDI.150) | TRUE: a brush has no origin to reset here |
+| `OffsetRect(lprc, dx, dy)`, `InflateRect(lprc, dx, dy)` (USER.77, 78) | the rectangle moved, or grown on each side |
+| `GetKeyState(vk)` (USER.106) | Shift, Ctrl and Alt (10h, 11h, 12h) read off the BIOS's shift flags, 8000h when down; any other key 0, as os8088 delivers no key's release (§9) |
+| `SetCursorPos(x, y)` (USER.70) | nothing: no package moves os8088's pointer |
+| `GetModuleUsage(h)`, `GetInstanceData(h, p, n)` (KERNEL.48, 54) | 1, and 0 bytes: one instance of a program per WIN16, so there is no earlier one to copy from |
+
+#### 124.17.2 What they look like
+
+On QEMU's VGA beside Windows 3.0 (`win16ref/ref/w30-clock.png`,
+`w30-clock-dig.png`, `w30-reversi.png`): CLOCK's analog face with its red
+frame and hands, which Windows drew with 2-pixel pens and WIN16 draws with
+1-pixel ones (every pen width is one pixel, §124.8.1); its digital
+face in the System font, green on black, where Windows 3.0 used its
+`digital.fon` (§124.7: no font file is loaded); REVERSI's checkered board,
+its pieces as `Ellipse`s, and a move answered by the computer's.
+
+#### 124.17.3 int 21h's clock
+
+CLOCK reads the time with `int 21h` AH = 2Ch, not through a Windows call,
+and redraws when the second changes. WIN16 answers 2Ch and 2Ah (the date)
+off `OSAPI_CLK_GET`; 2Bh and 2Dh, setting them, answer "invalid function".
+
+**The kernel's clock does not move while a program runs.** `OSAPI_CLK_GET`'s
+fields are written by the UI task, and a WIN16 program IS the UI task's
+coroutine (§124.2): a program that spins on 2Ch, as CLOCK waiting for the
+next second does between its timer messages, would read the same second
+forever. So 2Ch extrapolates: it keeps the hour, minute and second it last
+read from the kernel and the BIOS tick count (0:046Ch) it read them at, and
+answers that time plus the ticks since (at most 4,000 of them, 3.7
+minutes), in hundredths as ticks x 1000 / 182. When the kernel's fields
+change, they are the new anchor. The date's day of the week is computed
+(Sakamoto's method), not read.
+
+#### 124.17.4 A debugging knob
+
+`-DW16_TRACE` builds WIN16 with a 128-entry ring of what the program asked
+for last: each export through the gate as its `w16api.inc` row, and each
+`int 21h` as 80h:AH. `tools/w16trace.py SOCK PROGRAM.EXE` reads it out of a
+running QEMU (with `W16_DEFINES=W16_TRACE` for the symbols). It is how
+CLOCK's spin on 2Ch was found: a program that stops drawing and asks for
+nothing new is waiting for something WIN16 never changes.
+
+#### 124.17.5 The gate
+
+`win16cpu` (QEMU, a 386) takes CALC, CLOCK and REVERSI 3.00 and CALC 3.10
+each to its message loop with its window up, then closes it.
+`win16cpuxt` (MartyPC) does the same on a stock 5150, where the census runs
+and the three pass it, and CALC 3.10 is refused with *Needs a V20, 80186 or
+better.* in WIN16's window; on a 5150 with a NEC V20, CALC 3.10 runs.
+**"At its message loop" is the `Running` line**, not `W16S_RUN`, which the
+wake handler sets BEFORE the load (so that a second wake does nothing): on
+an 8088 the load is seconds, and a gate that read the state alone took a
+program still loading for one running. `win16fpuxt` moved to the stock
+8088 too (§124.5), now that the census passes the Open Watcom fixtures.
