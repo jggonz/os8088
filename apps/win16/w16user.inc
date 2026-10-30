@@ -497,7 +497,7 @@ w16u_createwnd:
     mov cx, ax
     or cx, dx
     jz .menu
-    call w16_mload
+    LCALL w16_mload
     mov es, [w16_pss]
     mov bx, [w16_cwargs]
 .menu:
@@ -691,7 +691,7 @@ w16_sizemsg:
 ; never below 0 (SPEC.md 124.11). Keeps the rest.
 w16_nobar:
     push ax
-    call w16_mbarh
+    LCALL w16_mbarh
     sub dx, ax
     jge .ok
     xor dx, dx
@@ -814,7 +814,7 @@ w16_wndfree:
     jnz .nomenu                     ;   (a child's is its ID)
     or ax, ax
     jz .nomenu
-    call w16_mdestroy
+    LCALL w16_mdestroy
 .nomenu:
     xor ax, ax
     xchg ax, [bx + W16W_OSW]
@@ -1907,7 +1907,8 @@ w16u_defproc:
     call w16_hwnd2rec
     jc .zero
     xor dl, dl
-    jmp w16_mtbegin
+    LCALL w16_mtbegin
+    ret
 .notnc:
     cmp cx, WM_SYSKEYUP
     jne .notsku
@@ -1978,7 +1979,8 @@ w16u_defproc:
     jc .zero
     mov dl, 1
     mov dh, [w16_sm_lp]
-    jmp w16_mtbegin
+    LCALL w16_mtbegin
+    ret
 .notkm:
     cmp cx, SC_CLOSE
     jne .zero
@@ -2133,7 +2135,11 @@ w16_tarm:
 .n:
     add si, W16T_SIZE
     loop .t
-    call w16s_wait                  ; the sound queue's next note (124.15.1)
+    mov ax, 0xFFFF                  ; the sound queue's next note (124.15.1):
+    cmp word [w16_dseg], 0          ;   none unless the library part, which
+    je .nosnd                       ;   plays it, is here
+    LCALL w16s_wait
+.nosnd:
     cmp ax, bx
     jae .snd
     mov bx, ax
@@ -2177,7 +2183,10 @@ w16_ontimer:
 .n:
     add si, W16T_SIZE
     loop .t
-    call w16s_tick                  ; the sound queue (SPEC.md 124.15.1)
+    cmp word [w16_dseg], 0          ; the sound queue (SPEC.md 124.15.1),
+    je .nosnd                       ;   the library part's
+    LCALL w16s_tick
+.nosnd:
     call w16_tarm
     pop si
     jmp w16_input_kick
@@ -2266,7 +2275,8 @@ w16_modfront:
 w16_onclick:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mclick
+    LCALL w16_mclick
+    ret
 .nt:
     call w16_onbar
     jc w16_barpress
@@ -2277,7 +2287,8 @@ w16_onclick:
 w16_onup:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mup
+    LCALL w16_mup
+    ret
 .nt:
     cmp byte [w16_meat], 0
     je .mine
@@ -2291,7 +2302,8 @@ w16_onup:
 w16_ondrag:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mdrag
+    LCALL w16_mdrag
+    ret
 .nt:
     cmp byte [w16_meat], 0
     jne .eat
@@ -2333,7 +2345,7 @@ w16_onbar:
     push dx
     sub dx, bx
     jl .no
-    call w16_mbarh
+    LCALL w16_mbarh
     dec ax
     cmp dx, ax
     jge .no
@@ -2398,7 +2410,8 @@ w16_input_kick:
 w16_onkey:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mkey
+    LCALL w16_mkey
+    ret
 .nt:
     push di
     push ax
@@ -2590,7 +2603,7 @@ w16_ppaint:
     cmp si, [w16_win]
     jne .nobar
     push ax
-    call w16_mbarh                  ; the client is under the menu bar
+    LCALL w16_mbarh                  ; the client is under the menu bar
     add dx, ax
     pop ax
 .nobar:
@@ -2655,11 +2668,11 @@ w16_ppaint:
     mov ax, [w16_dmg + 2]           ; the bar, if the damage reaches it, and
     cmp ax, [w16_ctop]              ;   the menu loop's popups over it all
     jge .pops
-    call w16_mbardraw
+    LCALL w16_mbardraw
 .pops:
     cmp byte [w16_mtrk], 0
     je .out
-    call w16_mrepaint
+    LCALL w16_mrepaint
 .out:
     mov byte [w16_inwp], 0
     pop si
@@ -2710,11 +2723,11 @@ w16_close:
     push si
     cmp byte [w16_mtrk], 0          ; a menu open: it closes first, and the
     je .post                        ;   program returns to its loop
-    call w16_mhpre
+    LCALL w16_mhpre
     jc .post
     mov byte [w16_locked], 1        ; (the negotiator holds the lock)
-    call w16_mstop
-    call w16_mhpost
+    LCALL w16_mstop
+    LCALL w16_mhpost
     cmp byte [w16_state], W16S_RUN
     jne .ended
 .post:

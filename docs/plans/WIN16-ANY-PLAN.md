@@ -132,7 +132,8 @@ its table goes in the diary, so the reach is measured, not claimed.
 
 ### Phase A: real mode, on the XT and up
 
-- [ ] **S14: The layer becomes modules (D11, O4).**
+- [x] **S14: The layer becomes modules (D11, O4).** *Shipped differently
+  from the proposal below: SPEC.md §124.19.*
   - *As the owner, I can add the next six hundred functions without
     running out of segment.*
   - WIN16.O88 keeps the gate, the six-byte stubs, the coroutine, the queue
@@ -147,6 +148,27 @@ its table goes in the diary, so the reach is measured, not claimed.
     unchanged; WIN16's segment room is MEASURED and written down; the cost of
     a call through a module vector is priced on MartyPC (`win16mines`'
     reveal median is the bar: 1.26 s on a V20).
+  - **Shipped:** one **library part**, not a part per module: an owner
+    holds at most 8 claims and a program already took five to seven, so
+    each resident part is a claim the program loses (§124.19). A per-program
+    **bind table** of 384 slots replaces the export table in the image; the
+    rows moved to the loader part, and a missing import binds a slot like
+    any other. Profiles, wsprintf, the clipboard, accelerators, icons,
+    bitmaps, SOUND and menus moved into the part beside the dialog manager.
+    `t_w16xsec` (fast) refuses a call that crosses sections without the
+    macros, which nasm assembles silently.
+  - **Measured:** the segment's room went from **4,946 to 19,368 bytes**
+    (image 30,583, bss 15,585); the library part is 29,903 bytes. The reach
+    table is byte-identical to S13's. Each running program is **16 KB
+    larger** (WIN16's share 76 KB against 60) and keeps one more claim, so
+    four programs and the Disk window hold 30 of 32 claims and a fifth is
+    refused, as at S13.
+  - **Seen:** on QEMU, W31CALC, W31MINE, ICONS and MENU at once; ICONS'
+    hand box, INIFILE, GDICARD; W31MINE's Game menu with its checks,
+    separators and accelerators.
+  - **Not yet run:** every `win16*` row, `w16cens` beyond the fast tier,
+    and the MartyPC price of a call through the library gate (`win16mines`'
+    reveal median). They run in S25's final pass.
 
 - [ ] **S15: Programs over 64 KB (R2).**
   - *As a user, I double-click Solitaire and play it.*

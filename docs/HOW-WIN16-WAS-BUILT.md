@@ -1483,3 +1483,61 @@ Windows module a part of its own. Second, Solitaire is 180 KB on disk but
 only 28 KB of code, so "over 64 KB" is mostly a loader change. Write and
 Windows Help are 160–200 KB of code each, and they are the real memory
 problem. The plan is `docs/plans/WIN16-ANY-PLAN.md`.
+
+## 2026-10-30 — S14: the layer becomes an image and a library part
+
+The plan asked for one part per Windows module. Two numbers argued against
+it before any code was written. A program holds at most 8 heap claims, and
+Minesweeper already took seven. Every part that stays loaded is a claim
+the program can no longer spend on its own bitmaps. So there is one
+**library part**, the dialog part grown up, and a second one only when the
+first reaches 64 KB.
+
+The second change matters more for the long run. The image used to carry
+a 12-byte row and stub for every function WIN16 exports. With 605 imports
+still missing, that alone would have filled the segment. The rows moved to
+the loader part. Each program now gets a **bind table** of 384 four-byte
+slots, filled at load, and stub *k* serves slot *k* whatever function it
+binds. The image's size no longer depends on how many functions WIN16
+knows.
+
+**The trap nasm sets.** In a flat binary each section's addresses start at
+0, so a near call from the image to a label in a part assembles without a
+word and calls whatever image code sits at that offset. A part that reads
+its own table without `cs:` reads the image instead. Moving eight files by
+hand would have planted dozens of these. `tests/unit/t_w16xsec.py` reads
+the listing and the map, refuses each kind, and runs in every `make`. It
+found a real one while the files moved: Ellipse jumping into the middle
+of RoundRect, which had gone to the part. A second fault was ordering,
+which no gate sees. The icon cleanup was called after the part was
+dropped, so its guard would always have skipped it.
+
+**What moved, and what it bought.** The segment's room, step by step:
+
+| step | room |
+|---|---|
+| S13 | 4,946 |
+| the bind table | 4,226 |
+| profiles | 6,912 |
+| wsprintf, clipboard, accelerators, icons | 10,198 |
+| bitmaps, SOUND | 12,711 |
+| menus | **19,368** |
+
+**What it costs.** The library part now stays loaded for the whole
+program. Under S6 the dialog part was dropped between dialogs, but a part
+that holds menus and bitmaps would be fetched again on the next call,
+about 400 ms on an XT. Measured off the claim table with four programs
+running, each program is **16 KB larger** than at S13: Clock 109 KB,
+ICONS 111, Reversi 112, Minesweeper 3.1 141. Four programs and the Disk
+window hold 30 of the 32 claim records. A fifth is refused, as it was at
+S13. An earlier reading put Clock at 139 KB, but it counted every claim
+made during the launch, including ones that were not the program's.
+Reading the table by owner corrected it.
+
+**Checked.** `make`'s 69 fast rows; `w16reach.py` over both Windows
+directories, byte-identical to S13's table. Looked at on QEMU: Calculator,
+Minesweeper, ICONS and MENU at once, ICONS' hand box, INIFILE, GDICARD, and
+Minesweeper's Game menu with its checks, separators and accelerators. The
+emulator rows, and the MartyPC price of a call through the library gate,
+run in the final pass (S25).
+

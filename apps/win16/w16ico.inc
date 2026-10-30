@@ -25,8 +25,11 @@ IDI_FIRST   equ 32512
 ; LoadIcon (USER.174) - args: +0 lpIconName, +4 hInst. The program's own by
 ; name or ordinal, or with hInst NULL one of WIN16's five; NULL for anything
 ; else.
-w16u_loadicon:
-    call w16_args
+; THE CODE IS THE LIBRARY PART'S (SPEC.md 124.19.3): moved out of the image
+; in S14 - a call into the image is ICALL, and its data stays in .text
+section .w16dlg
+W16LIB w16u_loadicon
+    ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
     cmp word [es:bx + 4], 0
@@ -46,8 +49,8 @@ w16u_loadicon:
 
 ; DrawIcon (USER.84) - args: +0 hIcon, +2 y, +4 x, +6 hDC. TRUE. Drawn on the
 ; window's DC only: an icon onto a memory bitmap is not followed.
-w16u_drawicon:
-    call w16_args
+W16LIB w16u_drawicon
+    ICALL w16_args
     cmp word [es:bx + 6], W16_HDC
     jne .yes
     mov cx, [es:bx + 4]
@@ -64,13 +67,13 @@ w16u_drawicon:
 ; DestroyIcon (USER.457) - args: +0 hIcon. TRUE. A program's icon is a
 ; resource block, and it goes back as FreeResource gives one back; WIN16's
 ; own are never freed.
-w16u_destroyicon:
-    call w16_args
+W16LIB w16u_destroyicon
+    ICALL w16_args
     mov ax, [es:bx]
     cmp ax, W16_HSYSICO
     jae .yes
     push si
-    call w16_rentry                 ; SI = its entry
+    ICALL w16_rentry                 ; SI = its entry
     jc .no
     mov es, [w16_rtab]
     cmp word [es:si + RN_USAGE], 0
@@ -96,14 +99,14 @@ w16_icload:
     push di
     push es
     mov di, w16_rnamb
-    call w16_rkey
+    ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_GRPICON
-    call w16_rfind
-    call w16_rload                  ; AX = the group's handle, 0 none
+    ICALL w16_rfind
+    ICALL w16_rload                  ; AX = the group's handle, 0 none
     or ax, ax
     jz .out
-    call w16_gfind                  ; ES = its block's header
+    ICALL w16_gfind                  ; ES = its block's header
     jc .zero
     mov ax, es
     inc ax
@@ -136,8 +139,8 @@ w16_icload:
     loop .e
     mov ax, RT_ICON
     mov bx, di
-    call w16_rfindid
-    call w16_rload                  ; AX = the image's handle, 0 none
+    ICALL w16_rfindid
+    ICALL w16_rload                  ; AX = the image's handle, 0 none
     jmp short .out
 .zero:
     xor ax, ax
@@ -161,7 +164,7 @@ w16_icpart:
     or ax, ax
     jnz .have
     mov al, W16P_ICONS
-    call w16_pfetch
+    ICALL w16_pfetch
     jc .out
     mov [w16_icseg], ax
 .have:
@@ -177,7 +180,7 @@ w16_icend:
     je .out
     push ax
     mov al, W16P_ICONS
-    call op_drop
+    ICALL op_drop
     mov word [w16_icseg], 0
     pop ax
 .out:
@@ -202,7 +205,7 @@ w16_icdib:
     mov si, [es:si + 2]
     jmp short .chk
 .prog:
-    call w16_gfind
+    ICALL w16_gfind
     jc .no
     cmp byte [w16_gdisc], 0
     jne .no
@@ -279,7 +282,7 @@ w16_icodraw:
     mov dl, [es:di]                 ; an RGBQUAD: blue, green, red
     mov ah, [es:di + 1]
     mov al, [es:di + 2]
-    call w16_rgb2col
+    ICALL w16_rgb2col
     mov [w16_icmap + bx], al
     add di, 4
     inc bx
@@ -416,10 +419,12 @@ w16_icrun:
     mov bx, [w16_icy]
     add bx, bp
     mov dx, bx
-    call w16_gfill
+    ICALL w16_gfill
     pop dx
     pop cx
     pop bx
     pop ax
 .out:
     ret
+
+section .text

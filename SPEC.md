@@ -227619,7 +227619,23 @@ at the first handler that needs it and dropped when the program ends.
 
 The files whose code moves are chosen by measurement: the bytes each
 leaves in the image against the calls that would have to cross the
-boundary. Each file's measurement is recorded here when it moves.
+boundary. What S14 moved, and the segment's room after each step:
+
+| step | room in the segment |
+|---|---|
+| S13 | 4,946 |
+| the bind table (rows to the loader, 384 stubs, 1,536 bytes of bss) | 4,226 |
+| `w16prof.inc` (profiles) | 6,912 |
+| `w16fmt.inc`, `w16clip.inc`, `w16acc.inc`, `w16ico.inc` (wsprintf, the clipboard, accelerators, icons and cursors) | 10,198 |
+| `w16bmp.inc`, `w16snd.inc` (bitmaps, SOUND) | 12,711 |
+| `w16menu.inc` (menus, `TrackPopupMenu`) | **19,368** |
+
+At the end of S14 the image is 30,583 bytes with 15,585 of bss, and the
+library part is 29,903 bytes unpacked (the dialog part was 15,145). A menu
+routine that resumes in the image after a message loop (a popup's tracking,
+`WM_INITMENU`) is an `LCONT`: a three-instruction trampoline in the image
+that `LCALL`s the continuation in the part, so the image can hand its
+address to code that calls it near.
 
 - **In the moved file**, a call into the image is `ICALL`, and a table the
   file reads itself is in `section .text` or read through `cs:`.
@@ -227631,14 +227647,37 @@ assembles cleanly and calls the wrong code. **`tests/unit/t_w16xsec.py`
 (fast tier) is the rule.** It reads the listing and symbol map of WIN16's
 own assembly. It fails `make` for:
 
-- any near `call` or `jmp` whose target is in another section;
+- any near `call`, `jmp`, conditional jump or `loop` whose target is in
+  another section;
 - any reference to a part's label from outside that part, other than the
-  `DCALL`/`LCALL` vector store and a `cs:` read inside the part itself.
+  vector stores the `DCALL`, `LCALL` and gate code make;
+- in a part that runs with DS = the image (every part but the 8087
+  emulator's), any read of the part's own data without `cs:`, whether as a
+  memory operand or as an immediate address;
+- an `ICALL` whose target is not in the image, or an `LCALL`/`DCALL` whose
+  target is not in the library part;
+- an export row whose part byte or offset disagrees with the symbol map.
+
+A line that is right for a reason the gate cannot see says so with
+`XSEC-OK` in its comment; on a table's label the mark covers the table.
 
 #### 124.19.4 The gate rows
 
-The rows stay as they were: every `win16*` row from S1–S13. A program's
-bind table and the library part change no behaviour a row can see. The
-library part's residency changes the claims a program holds while no
-dialog is up, which `win16desk` reads. The image, the bss, the segment's
-room and the library part's size are MEASURED in S14's diary entry.
+The rows stay as they were: every `win16*` row from S1–S13, plus
+`w16xsec` (fast) and `w16cens`, which reads the no-return bit out of the
+bind table now. A program's bind table and the library part change no
+behaviour a row can see. The library part's residency changes the claims a
+program holds while no dialog is up, which `win16desk` reads.
+
+**What it costs a running program, MEASURED** on QEMU off the kernel's claim
+table, four programs at once: WIN16's share is 76 KB (the 46 KB region and
+the 30 KB library part) against S13's 60 KB, so each program is **16 KB
+larger**: Clock 3.0 109 KB (S13 93), ICONS 111 KB (95), Reversi 112 KB and
+Windows 3.1's Minesweeper 141 KB (125). Each also keeps one more claim for
+its whole run, so four programs and the Disk window hold **30** of the 32
+claim records (S13: 27), and a fifth program is refused, as at S13. This is
+the price of D11's room. The two ways to win it back are both larger
+changes than S14: put the dialog manager back in a part of its own that is
+dropped when no dialog is up (which puts Minesweeper at all eight of its
+claims while a dialog is up), or share one library part between WIN16's
+instances, which needs a kernel verb (O2).

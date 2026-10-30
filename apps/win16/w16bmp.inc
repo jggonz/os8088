@@ -32,6 +32,9 @@ RT_BITMAP   equ 2
 ; w16_bmslot - AX = a bitmap handle -> BX = its slot * 2. CF=1 not one of ours
 ; (the stock bitmap included). Keeps the rest.
 ; -----------------------------------------------------------------------------
+; THE CODE IS THE LIBRARY PART'S (SPEC.md 124.19.3): moved out of the image
+; in S14 - a call into the image is ICALL, and its data stays in .text
+section .w16dlg
 w16_bmslot:
     mov bx, ax
     sub bx, W16_BMP0
@@ -165,7 +168,7 @@ w16_bmfill:
     cmp dx, [w16b_h + bx]
     jae .out
     mov di, w16_gbuf
-    call w16_dibrow                 ; CF=1: the DIB has not that row
+    ICALL w16_dibrow                 ; CF=1: the DIB has not that row
     mov bx, [w16b_bm]               ; (it keeps neither AX nor BX)
     jc .next
     mov ax, [w16b_str + bx]
@@ -194,7 +197,7 @@ w16_bmfill:
 
 ; CreateCompatibleDC (GDI.52) - args: +0 hdc. A memory DC holding the stock
 ; 1 x 1 bitmap; 0 when four are open.
-w16g_cmpdc:
+W16LIB w16g_cmpdc
     xor bx, bx
 .find:
     cmp byte [w16m_on + bx], 0
@@ -213,8 +216,8 @@ w16g_cmpdc:
     ret
 
 ; DeleteDC (GDI.68) - args: +0 hdc. TRUE for a memory DC; its bitmap stays.
-w16g_deldc:
-    call w16_args
+W16LIB w16g_deldc
+    ICALL w16_args
     mov ax, [es:bx]
     call w16_mdcslot
     jc .no
@@ -348,10 +351,10 @@ w16_bmend:
 
 ; CreateDIBitmap (GDI.442) - args: +0 fuUsage, +2 lpbmi, +6 lpbBits,
 ; +10 fdwInit, +14 lpbih, +18 hdc
-w16g_credib:
+W16LIB w16g_credib
     push si
     push di
-    call w16_args
+    ICALL w16_args
     push es
     push bx
     les si, [es:bx + 14]            ; the size, from the header
@@ -376,7 +379,7 @@ w16g_credib:
     mov ax, [es:bx + 8]
     mov [w16_dbits + 2], ax
     les si, [es:bx + 2]
-    call w16_dibhdr
+    ICALL w16_dibhdr
     mov bx, di
     jc .noinit
     call w16_bmfill
@@ -390,24 +393,24 @@ w16g_credib:
 ; LoadBitmap (USER.175) - args: +0 lpName, +4 hInstance: a bitmap resource,
 ; made as CreateDIBitmap makes one. A 1-bit one is a monochrome bitmap, its
 ; 0 and 1 black and white whatever its palette says (SPEC.md 124.15.2)
-w16u_loadbmp:
+W16LIB w16u_loadbmp
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
     mov di, w16_rnamb
-    call w16_rkey
+    ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_BITMAP
-    call w16_rfind
+    ICALL w16_rfind
     or ax, ax
     jz .no
     mov si, ax                      ; SI = the entry
-    call w16_rload
+    ICALL w16_rload
     or ax, ax
     jz .no
-    call w16_gfind
+    ICALL w16_gfind
     jc .rel
     cmp byte [w16_gdisc], 0
     jne .rel
@@ -417,7 +420,7 @@ w16u_loadbmp:
     mov [w16b_rs], ax
     push si
     xor si, si
-    call w16_dibhdr
+    ICALL w16_dibhdr
     pop si
     jc .rel
     mov ax, [w16_dwid]
@@ -430,11 +433,11 @@ w16u_loadbmp:
     push bx
     xor ax, ax
     xor dl, dl
-    call w16_rgb2col
+    ICALL w16_rgb2col
     mov [w16_dmap], al
     mov ax, 0xFFFF
     mov dl, 0xFF
-    call w16_rgb2col
+    ICALL w16_rgb2col
     mov [w16_dmap + 1], al
     pop bx
 .bits:
@@ -471,10 +474,10 @@ w16u_loadbmp:
 
 ; GetObject (GDI.82) - args: +0 lpObject, +4 cbBuffer, +6 hObject. A bitmap's
 ; BITMAP record (14 bytes), cut to cbBuffer; AX = the bytes written
-w16g_getobj:
+W16LIB w16g_getobj
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx + 6]
     mov cx, [es:bx + 4]
     les di, [es:bx]
@@ -518,8 +521,8 @@ w16g_getobj:
 
 ; BitBlt (GDI.34) - args: +0 dwRop, +4 ySrc, +6 xSrc, +8 hdcSrc, +10 nHeight,
 ; +12 nWidth, +14 y, +16 x, +18 hdcDest
-w16g_bitblt:
-    call w16_args
+W16LIB w16g_bitblt
+    ICALL w16_args
     mov ax, [es:bx + 4]
     mov [w16b_ys], ax
     mov ax, [es:bx + 6]
@@ -540,8 +543,8 @@ w16g_bitblt:
 
 ; StretchBlt (GDI.35) - args: +0 dwRop, +4 nHeightSrc, +6 nWidthSrc, +8 ySrc,
 ; +10 xSrc, +12 hdcSrc, +14 nHeight, +16 nWidth, +18 y, +20 x, +22 hdcDest
-w16g_stretch:
-    call w16_args
+W16LIB w16g_stretch
+    ICALL w16_args
     mov ax, [es:bx + 4]
     mov [w16b_cys], ax
     mov ax, [es:bx + 6]
@@ -608,7 +611,7 @@ w16_blt:
     cmp ax, PATINVERT_HI            ; a black brush leaves it; any other
     jne .pat                        ;   inverts, as a white one does
     mov ax, [w16_brush]
-    call w16_brcol
+    ICALL w16_brcol
     cmp al, W16_NOCOL
     je .yes
     cmp al, CBLACK
@@ -618,7 +621,7 @@ w16_blt:
     cmp ax, PATCOPY_HI
     jne .no
     mov ax, [w16_brush]
-    call w16_brcol
+    ICALL w16_brcol
     mov dl, al
     cmp dl, W16_NOCOL
     je .yes
@@ -628,7 +631,7 @@ w16_blt:
     mov bx, [w16_rt]
     mov cx, [w16_rr]
     mov dx, [w16_rb]
-    call w16_gfill
+    ICALL w16_gfill
     jmp .yes
 .copy:
     mov ax, [w16b_src]              ; the source: a memory DC's bitmap
@@ -647,7 +650,7 @@ w16_blt:
     mov ax, [w16b_cys]
     or ax, ax
     jle .no
-    call w16_cliprect               ; the destination cut to the clip
+    ICALL w16_cliprect               ; the destination cut to the clip
     jc .yes
     mov ax, [w16b_cx]               ; the same size: a copy
     cmp ax, [w16b_cxs]
@@ -911,3 +914,5 @@ w16_bmclamp_h:
     dec ax
 .out:
     ret
+
+section .text

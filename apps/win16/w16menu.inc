@@ -116,6 +116,9 @@ FALT          equ 0x10
 
 ; w16_mheap - ES = the USER heap's segment, made on first use. CF=1 no memory.
 ; Keeps the rest.
+; THE CODE IS THE LIBRARY PART'S (SPEC.md 124.19.3): moved out of the image
+; in S14 - a call into the image is ICALL, and its data stays in .text
+section .w16dlg
 w16_mheap:
     push ax
     push dx
@@ -127,7 +130,7 @@ w16_mheap:
     mov ax, W16_MHEAPB
     xor dx, dx
     xor cl, cl                      ; fixed
-    call w16_gnew                   ; AX = the handle, DX = the segment
+    ICALL w16_gnew                   ; AX = the handle, DX = the segment
     or ax, ax
     jz .fail
     mov [w16_mhh], ax
@@ -135,7 +138,7 @@ w16_mheap:
     mov ax, dx
     mov bx, 16
     mov dx, W16_MHEAPB
-    call w16_linit
+    ICALL w16_linit
     pop cx
     pop bx
     mov ax, [w16_mseg]
@@ -162,7 +165,7 @@ w16_mget:
     push ax
     push di
     sub ax, W16_HMB
-    call w16_lfind                  ; SI = the data
+    ICALL w16_lfind                  ; SI = the data
     pop di
     pop ax
     jc .no
@@ -183,7 +186,7 @@ w16_mnew:
     jc .no
     mov cx, MH_SIZE
     mov al, LMEM_ZEROINIT
-    call w16_lnew
+    ICALL w16_lnew
     or ax, ax
     jz .out
     mov si, ax
@@ -233,7 +236,7 @@ w16_minsert:
     mul bl
     mov cx, ax
     mov al, LMEM_ZEROINIT
-    call w16_lnew
+    ICALL w16_lnew
     pop cx
     or ax, ax
     jz .fail
@@ -257,7 +260,7 @@ w16_minsert:
     mov ax, dx
     or ax, ax
     jz .nofree
-    call w16_lfree
+    ICALL w16_lfree
 .nofree:
     pop di
     pop si
@@ -323,7 +326,7 @@ w16_mremove:
     mov ax, [es:di + MI_TEXT]
     or ax, ax
     jz .nt
-    call w16_lfree
+    ICALL w16_lfree
 .nt:
     test byte [es:di + MI_FLAGS], MF_POPUP
     jz .shift
@@ -384,10 +387,10 @@ w16_mdestroy:
     mov ax, [es:si + MH_ITEMS]
     or ax, ax
     jz .h
-    call w16_lfree
+    ICALL w16_lfree
 .h:
     mov ax, si
-    call w16_lfree
+    ICALL w16_lfree
 .out:
     pop es
     pop di
@@ -406,7 +409,7 @@ w16_msettext:
     mov ax, [es:di + MI_TEXT]
     or ax, ax
     jz .old
-    call w16_lfree
+    ICALL w16_lfree
     mov word [es:di + MI_TEXT], 0
 .old:
     cmp word [w16_mstr + 2], 0
@@ -426,7 +429,7 @@ w16_msettext:
     push cx
     inc cx
     xor al, al
-    call w16_lnew
+    ICALL w16_lnew
     pop cx
     or ax, ax
     jz .fail
@@ -766,17 +769,17 @@ w16_mload:
     push di
     push es
     mov di, w16_rnamb
-    call w16_rkey
+    ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_MENU
-    call w16_rfind
+    ICALL w16_rfind
     or ax, ax
     jz .no
     mov bx, ax                      ; BX = the entry
-    call w16_rload
+    ICALL w16_rload
     or ax, ax
     jz .no
-    call w16_gfind
+    ICALL w16_gfind
     jc .no
     cmp byte [w16_gdisc], 0
     jne .no
@@ -801,15 +804,15 @@ w16_mload:
     ret
 
 ; LoadMenu (USER.150) - args: +0 lpMenuName, +4 hInstance
-w16u_loadmenu:
-    call w16_args
+W16LIB w16u_loadmenu
+    ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
     jmp w16_mload
 
 ; LoadMenuIndirect (USER.220) - args: +0 lpMenuTemplate
-w16u_loadmenuind:
-    call w16_args
+W16LIB w16u_loadmenuind
+    ICALL w16_args
     mov ax, [es:bx]
     mov [w16_mtp], ax
     mov ax, [es:bx + 2]
@@ -821,13 +824,13 @@ w16u_loadmenuind:
 ; =============================================================================
 
 ; CreateMenu (USER.151), CreatePopupMenu (USER.415)
-w16u_createmenu:
+W16LIB w16u_createmenu
     jmp w16_mnew
 
 ; DestroyMenu (USER.152) - args: +0 hMenu
-w16u_destroymenu:
+W16LIB w16u_destroymenu
     push si
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx]
     call w16_mget
     jc .no
@@ -855,8 +858,8 @@ w16_mitemargs:
 
 ; AppendMenu (USER.411) - args: +0 lpNewItem, +4 wIDNewItem, +6 wFlags,
 ; +8 hMenu
-w16u_appendmenu:
-    call w16_args
+W16LIB w16u_appendmenu
+    ICALL w16_args
     mov ax, [es:bx + 8]
     call w16_mitemargs
 w16_mappend1:
@@ -870,10 +873,10 @@ w16_mappend1:
 ; InsertMenu (USER.410) - args: +0 lpNewItem, +4 wIDNewItem, +6 wFlags,
 ; +8 nPosition, +10 hMenu. By command, the new item goes in front of that
 ; command's, in whichever popup it is; a position of -1 appends.
-w16u_insertmenu:
+W16LIB w16u_insertmenu
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov cx, [es:bx + 8]
     mov ax, [es:bx + 10]
     call w16_mitemargs              ; BX = the ID, DX = the flags
@@ -916,10 +919,10 @@ w16_minsert1:
     ret
 
 ; ModifyMenu (USER.414) - args: as InsertMenu's
-w16u_modifymenu:
+W16LIB w16u_modifymenu
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov cx, [es:bx + 8]
     mov ax, [es:bx + 10]
     call w16_mitemargs
@@ -941,16 +944,16 @@ w16_mmodify1:
 
 ; DeleteMenu (USER.413), RemoveMenu (USER.412) - args: +0 wFlags,
 ; +2 nPosition, +4 hMenu. Delete destroys a popup the item names.
-w16u_deletemenu:
+W16LIB w16u_deletemenu
     mov al, 1
     jmp short w16_mdel
-w16u_removemenu:
+W16LIB w16u_removemenu
     xor al, al
 w16_mdel:
     push si
     push di
     push ax
-    call w16_args
+    ICALL w16_args
     mov dx, [es:bx]
     mov cx, [es:bx + 2]
     mov ax, [es:bx + 4]
@@ -969,10 +972,10 @@ w16_mdel:
 
 ; ChangeMenu (USER.153) - args: +0 wFlags, +2 wIDNewItem, +4 lpNewItem,
 ; +8 nPosition, +10 hMenu. Windows 2's verb, as Wine's ChangeMenu16 maps it.
-w16u_changemenu:
+W16LIB w16u_changemenu
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov dx, [es:bx]
     mov ax, [es:bx + 4]
     mov [w16_mstr], ax
@@ -1029,10 +1032,10 @@ w16u_changemenu:
 
 ; CheckMenuItem (USER.154) - args: +0 wCheck, +2 wIDCheckItem, +4 hMenu.
 ; Answers the old check, or -1.
-w16u_checkmenu:
+W16LIB w16u_checkmenu
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov dx, [es:bx]
     mov cx, [es:bx + 2]
     mov ax, [es:bx + 4]
@@ -1052,10 +1055,10 @@ w16u_checkmenu:
 
 ; EnableMenuItem (USER.155) - args: +0 wEnable, +2 wIDEnableItem, +4 hMenu.
 ; Answers the old state, or -1.
-w16u_enablemenu:
+W16LIB w16u_enablemenu
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov dx, [es:bx]
     mov cx, [es:bx + 2]
     mov ax, [es:bx + 4]
@@ -1075,10 +1078,10 @@ w16u_enablemenu:
 
 ; GetMenuState (USER.250) - args: +0 wFlags, +2 wId, +4 hMenu. A popup
 ; answers its item count in the high byte (Wine's GetMenuState).
-w16u_menustate:
+W16LIB w16u_menustate
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov dx, [es:bx]
     mov cx, [es:bx + 2]
     mov ax, [es:bx + 4]
@@ -1100,9 +1103,9 @@ w16u_menustate:
     ret
 
 ; GetMenuItemCount (USER.263) - args: +0 hMenu
-w16u_menucount:
+W16LIB w16u_menucount
     push si
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx]
     call w16_mget
     mov ax, -1
@@ -1114,10 +1117,10 @@ w16u_menucount:
     ret
 
 ; GetMenuItemID (USER.264) - args: +0 nPos, +2 hMenu. A popup answers -1.
-w16u_menuitemid:
+W16LIB w16u_menuitemid
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov cx, [es:bx]
     mov ax, [es:bx + 2]
     mov dx, MF_BYPOSITION
@@ -1133,10 +1136,10 @@ w16u_menuitemid:
     ret
 
 ; GetSubMenu (USER.159) - args: +0 nPos, +2 hMenu
-w16u_getsubmenu:
+W16LIB w16u_getsubmenu
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov cx, [es:bx]
     mov ax, [es:bx + 2]
     mov dx, MF_BYPOSITION
@@ -1153,10 +1156,10 @@ w16u_getsubmenu:
 
 ; GetMenuString (USER.161) - args: +0 wFlags, +2 nMaxCount, +4 lpString,
 ; +8 wIDItem, +10 hMenu. Answers the characters copied.
-w16u_menustring:
+W16LIB w16u_menustring
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov dx, [es:bx]
     mov cx, [es:bx + 8]
     mov ax, [es:bx + 10]
@@ -1165,7 +1168,7 @@ w16u_menustring:
     jc .out
     mov si, [es:di + MI_TEXT]
     push es
-    call w16_args
+    ICALL w16_args
     mov cx, [es:bx + 2]
     les di, [es:bx + 4]
     pop ds                          ; DS = the USER heap, for the copy
@@ -1196,10 +1199,10 @@ w16u_menustring:
     ret
 
 ; GetMenu (USER.157) - args: +0 hWnd
-w16u_getmenu:
-    call w16_args
+W16LIB w16u_getmenu
+    ICALL w16_args
     mov ax, [es:bx]
-    call w16_hwnd0
+    ICALL w16_hwnd0
     mov ax, 0
     jc .out
     mov ax, [bx + W16W_MENU]
@@ -1208,12 +1211,12 @@ w16u_getmenu:
 
 ; SetMenu (USER.158) - args: +0 hMenu, +2 hWnd. The bar comes or goes, the
 ; client moves under it, and the program hears WM_SIZE.
-w16u_setmenu:
+W16LIB w16u_setmenu
     push si
-    call w16_args
+    ICALL w16_args
     mov dx, [es:bx]
     mov ax, [es:bx + 2]
-    call w16_hwnd2rec
+    ICALL w16_hwnd2rec
     jc .no
     or dx, dx
     jz .set
@@ -1231,13 +1234,13 @@ w16u_setmenu:
     mov dx, 0x7FFF
     mov si, dx
     mov byte [w16_erase], 1
-    call w16_inval
+    ICALL w16_inval
     call w16_mbardraw
     pop bx
     pop ax
-    call w16_sizemsg
+    ICALL w16_sizemsg
     mov si, w16_cont_one
-    call w16_sendwnd
+    ICALL w16_sendwnd
     pop si
     ret
 .no:
@@ -1246,17 +1249,17 @@ w16u_setmenu:
     ret
 
 ; DrawMenuBar (USER.160) - args: +0 hWnd
-w16u_drawmenubar:
+W16LIB w16u_drawmenubar
     call w16_mbardraw
     xor ax, ax
     ret
 
 ; GetSystemMenu (USER.156) - args: +0 bRevert, +2 hWnd. A real popup, the
 ; Windows 3.0 items, which a program may edit; os8088's frame never shows it.
-w16u_sysmenu:
+W16LIB w16u_sysmenu
     push si
     push di
-    call w16_args
+    ICALL w16_args
     cmp word [es:bx], 0
     je .get
     mov ax, [w16_msys]
@@ -1295,6 +1298,7 @@ w16u_sysmenu:
     pop si
     ret
 
+section .text
 w16_systab:                     ; ID, flags, text: Windows 3.0's system menu
     dw 0xF120, MF_GRAYED, w16_s_sysrest
     dw 0xF010, 0, w16_s_sysmove
@@ -1305,6 +1309,7 @@ w16_systab:                     ; ID, flags, text: Windows 3.0's system menu
     dw 0xF060, 0, w16_s_sysclose
     dw 0, MF_SEPARATOR, 0
     dw 0xF130, 0, w16_s_sysswitch
+section .text
 w16_systab_end:
 w16_s_sysrest:   db '&Restore', 0
 w16_s_sysmove:   db '&Move', 0
@@ -1319,6 +1324,7 @@ w16_s_sysswitch: db 'S&witch To...', 9, 'Ctrl+Esc', 0
 ; =============================================================================
 
 ; w16_frows - AX = the System font's rows. Keeps the rest.
+section .w16dlg
 w16_frows:
     push es
     mov es, [w16_face]
@@ -1353,7 +1359,7 @@ w16_mlaybar:
     push cx
     mov si, w16_mlab
     mov cx, [w16_mlabn]
-    call w16_textw
+    ICALL w16_textw
     pop cx
     pop si
     add ax, 16                      ; AX = its width
@@ -1423,14 +1429,14 @@ w16_mlaypop:
     push cx
     mov si, w16_mlab
     mov cx, [w16_mlabn]
-    call w16_textw
+    ICALL w16_textw
     cmp ax, bx
     jbe .l
     mov bx, ax
 .l:
     mov si, w16_macc
     mov cx, [w16_maccn]
-    call w16_textw
+    ICALL w16_textw
     cmp ax, dx
     jbe .a
     mov dx, ax
@@ -1490,7 +1496,7 @@ w16_mbarh:
     push dx
     push si
     push es
-    call w16_toprec
+    ICALL w16_toprec
     mov ax, 0
     jc .out
     mov ax, [bx + W16W_MENU]
@@ -1640,7 +1646,7 @@ w16_mbstr:
 .g:
     push cx
     mov al, [si]
-    call w16_glyph
+    ICALL w16_glyph
     mov cl, [es:W16F_ADV + bx]
     xor ch, ch
     mov ax, dx
@@ -1649,7 +1655,7 @@ w16_mbstr:
     jle .next
     cmp dx, [w16_rr]
     jg .stop
-    call w16_compose
+    ICALL w16_compose
 .next:
     add dx, cx
     inc si
@@ -1878,16 +1884,16 @@ w16_mbflush:
     jz .dark
     or al, al
     jnz .fill
-    call w16_bandnot
+    ICALL w16_bandnot
     jmp short .pen
 .fill:
-    call w16_bandfill
+    ICALL w16_bandfill
     jmp short .pen
 .dark:
     or al, al
     jnz .pen
-    call w16_bandfill
-    call w16_bandnot
+    ICALL w16_bandfill
+    ICALL w16_bandnot
 .pen:
     mov al, [w16_mink]
     mov ah, [w16_mpap]
@@ -1926,13 +1932,13 @@ w16_munder:
     je .out
     xor ch, ch
     mov si, w16_mlab
-    call w16_textw
+    ICALL w16_textw
     add dx, ax                      ; DX = the character's x
     mov bl, [w16_mmn]
     xor bh, bh
     mov al, [w16_mlab + bx]
     mov es, [w16_face]
-    call w16_glyph
+    ICALL w16_glyph
     mov al, [es:W16F_ADV + bx]
     xor ah, ah
     mov cx, dx
@@ -1964,7 +1970,7 @@ w16_mbardraw:
     push si
     push di
     push es
-    call w16_toprec
+    ICALL w16_toprec
     jc .out
     mov ax, [bx + W16W_MENU]
     or ax, ax
@@ -2015,7 +2021,7 @@ w16_mbardraw:
     jmp short .line
 .last:
     mov al, CBLACK
-    call w16_ink
+    ICALL w16_ink
     mov ax, [w16_mcx0]
     mov cx, ax
     add cx, [es:si + MH_W]
@@ -2238,7 +2244,7 @@ w16_mpopdraw:
     call w16_mprect
     push bx
     mov al, CBLACK
-    call w16_ink
+    ICALL w16_ink
     mov ax, [w16_mx0]
     mov bx, [w16_my0]
     mov cx, [w16_mx1]
@@ -2249,7 +2255,7 @@ w16_mpopdraw:
     je .shink                       ; of the dither reads as dots
     mov al, CBLACK
 .shink:
-    call w16_ink
+    ICALL w16_ink
     mov ax, [w16_mx1]
     inc ax
     mov cx, ax
@@ -2322,7 +2328,7 @@ w16_mpsave:
     cmp ax, 0xFFF0
     ja .out
     xor cl, cl
-    call w16_gnew                   ; AX = the handle, DX = the segment
+    ICALL w16_gnew                   ; AX = the handle, DX = the segment
     or ax, ax
     jz .out
     mov bx, [w16_mrec]
@@ -2343,7 +2349,7 @@ w16_mpsave:
     jmp short .out
 .drop:
     mov ax, [bx + MP_SH]
-    call w16_gfreeh
+    ICALL w16_gfreeh
 .out:
     pop es
     pop di
@@ -2391,7 +2397,7 @@ w16_mpclose:
     je .out
     mov byte [bx + MP_SAVED], 0
     mov ax, [bx + MP_SH]
-    call w16_gfreeh
+    ICALL w16_gfreeh
 .out:
     pop es
     pop si
@@ -2414,7 +2420,7 @@ w16_mpinval:
     mov di, bx
     call w16_mbarh
     mov si, ax                      ; SI = the bar's height
-    call w16_toprec                 ; BX = the window
+    ICALL w16_toprec                 ; BX = the window
     jc .out
     mov ax, [di + MP_X]
     mov cx, [di + MP_Y]
@@ -2429,14 +2435,14 @@ w16_mpinval:
     pop di
     sub si, di
     mov byte [w16_erase], 1
-    call w16_inval                  ; (it cuts nothing: the paint will)
+    ICALL w16_inval                  ; (it cuts nothing: the paint will)
     mov ax, [bx + W16W_HBR]
-    call w16_brcol
+    ICALL w16_brcol
     cmp al, W16_NOCOL
     je .out
     call w16_mgon
     jc .out
-    call w16_ink
+    ICALL w16_ink
     mov bx, [w16_mrec]
     call w16_mprect
     mov ax, [w16_mx0]
@@ -2656,6 +2662,7 @@ w16_mupper:
     ret
 
 ; --- the pictures (Windows 3.0's, read off its screen) ------------------------
+section .text
 w16_mchk:   db 0x01, 0x01, 0x03, 0x02, 0x06, 0xC4, 0x68, 0x28, 0x38, 0x10
 w16_marr:   db 0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xF0, 0xE0, 0xC0, 0x80
 
@@ -2667,6 +2674,7 @@ w16_marr:   db 0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xF0, 0xE0, 0xC0, 0x80
 ; WM_INITMENUPOPUP for [w16_mnmenu] ([w16_mnpos] its place), and open it
 ; when the program has answered (w16_mt_popup). Only queues the call: the
 ; gate or w16_mhpost enters it. Keeps every register.
+section .w16dlg
 w16_msendpop:
     push ax
     push bx
@@ -2684,11 +2692,11 @@ w16_msendpop:
     mov [w16_sm_lp], ax
     mov word [w16_sm_lp + 2], 0
     mov ax, [w16_mhwnd]
-    call w16_hwnd2rec
+    ICALL w16_hwnd2rec
     jc .out
     mov ax, si
-    mov si, w16_mt_popup
-    call w16_sendwnd
+    mov si, w16_mt_popup_c
+    ICALL w16_sendwnd
 .out:
     pop es
     pop di
@@ -2699,7 +2707,7 @@ w16_msendpop:
     ret
 
 ; w16_mt_popup - WM_INITMENUPOPUP answered: CX = the level and AH's flag
-w16_mt_popup:
+LCONT w16_mt_popup
     cmp byte [w16_mtrk], 0
     je w16_mt_tail
     mov ax, cx
@@ -2758,8 +2766,8 @@ w16_mtbegin:
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
     push si
-    mov si, w16_mt_inited
-    call w16_sendwnd
+    mov si, w16_mt_inited_c
+    ICALL w16_sendwnd
     pop si
     ret
 .zero:
@@ -2769,7 +2777,7 @@ w16_mtbegin:
 
 ; w16_mt_inited - WM_INITMENU answered: select what the press or the key
 ; named
-w16_mt_inited:
+LCONT w16_mt_inited
     cmp byte [w16_mtrk], 0
     je w16_mt_tail
     cmp byte [w16_mkbd], 0
@@ -2835,7 +2843,7 @@ w16_mpick:
     xor ax, ax
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
-    call w16_post
+    ICALL w16_post
     pop ax
     clc
     ret
@@ -3198,16 +3206,16 @@ w16_mhpost:
     mov byte [w16_locked], 1
     cmp byte [w16_cbgo], 0
     je .nosend
-    call w16_resumecb
+    ICALL w16_resumecb
     jmp short .after
 .nosend:
     cmp byte [w16_mtrk], 0
     jne .still
     xor ax, ax
     xor dx, dx
-    call w16_resume
+    ICALL w16_resume
 .after:
-    call w16_after                  ; (the lock still marked held)
+    ICALL w16_after                  ; (the lock still marked held)
     mov byte [w16_locked], 0
     ret
 .still:
@@ -3560,19 +3568,19 @@ w16_mrepaint:
 
 ; LoadAccelerators (USER.177) - args: +0 lpTableName, +4 hInstance. The
 ; table stays loaded: its handle IS the HACCEL.
-w16u_loadaccel:
+W16LIB w16u_loadaccel
     push di
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
     mov di, w16_rnamb
-    call w16_rkey
+    ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_ACCEL
-    call w16_rfind
+    ICALL w16_rfind
     or ax, ax
     jz .out
-    call w16_rload
+    ICALL w16_rload
 .out:
     pop di
     ret
@@ -3584,10 +3592,10 @@ w16u_loadaccel:
 ; popup, and - unless the item is grey or disabled - WM_COMMAND with 1 in
 ; lParam's high word: Wine's translate_accelerator, and Windows 3.0's
 ; counts (MENU.EXE: one of each a press). Answers 1 for a match.
-w16u_transaccel:
+W16LIB w16u_transaccel
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx + 6]
     mov [w16_ahwnd], ax
     mov ax, [es:bx + 4]
@@ -3634,7 +3642,7 @@ w16u_transaccel:
 .tab:
     mov ax, [w16_aacc]
     push bx
-    call w16_gfind
+    ICALL w16_gfind
     pop bx
     jc .zero
     cmp byte [w16_gdisc], 0
@@ -3677,7 +3685,7 @@ w16u_transaccel:
     mov [w16_acmd], ax
     mov word [w16_asub], 0
     mov ax, [w16_ahwnd]
-    call w16_hwnd2rec               ; BX = the window
+    ICALL w16_hwnd2rec               ; BX = the window
     jc .zero
     mov [w16_arec], bx
     mov ax, [bx + W16W_MENU]
@@ -3709,8 +3717,8 @@ w16u_transaccel:
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
     mov bx, [w16_arec]
-    mov si, w16_ta_inited
-    call w16_sendwnd
+    mov si, w16_ta_inited_c
+    ICALL w16_sendwnd
     jmp short .out
 .cmd:
     call w16_ta_cmd
@@ -3720,7 +3728,7 @@ w16u_transaccel:
     ret
 
 ; w16_ta_inited - WM_INITMENU answered: WM_INITMENUPOPUP for its popup
-w16_ta_inited:
+LCONT w16_ta_inited
     mov ax, [w16_asub]
     or ax, ax
     jz w16_ta_popped
@@ -3732,11 +3740,12 @@ w16_ta_inited:
     mov [w16_sm_lp], ax
     mov word [w16_sm_lp + 2], 0
     mov bx, [w16_arec]
-    mov si, w16_ta_popped
-    jmp w16_sendwnd
+    mov si, w16_ta_popped_c
+    ICALL w16_sendwnd
+    ret
 
 ; w16_ta_popped - both answered: the item's state now decides
-w16_ta_popped:
+LCONT w16_ta_popped
     mov ax, [w16_ahm]
     mov cx, [w16_acmd]
     xor dx, dx
@@ -3758,11 +3767,14 @@ w16_ta_cmd:
     mov word [w16_sm_lp], 0
     mov word [w16_sm_lp + 2], 1
     mov ax, [w16_ahwnd]
-    call w16_hwnd2rec
+    ICALL w16_hwnd2rec
     jc .one
     mov si, w16_cont_one
-    jmp w16_sendwnd
+    ICALL w16_sendwnd
+    ret
 .one:
     mov ax, 1
     xor dx, dx
     ret
+
+section .text

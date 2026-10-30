@@ -702,7 +702,7 @@ w16g_createpen:
 w16g_delobj:
     call w16_args
     mov ax, [es:bx]
-    call w16_bmdelete               ; a bitmap (SPEC.md 124.15.2): freed
+    LCALL w16_bmdelete               ; a bitmap (SPEC.md 124.15.2): freed
     jnc .ret
     mov bx, ax
     sub bx, W16_OBJ0
@@ -733,15 +733,16 @@ w16g_select:
     je .win
     push ax
     mov ax, cx
-    call w16_mdcslot                ; BX = its slot
+    LCALL w16_mdcslot                ; BX = its slot
     pop ax
     jc .no
-    jmp w16_bmselect
+    LCALL w16_bmselect
+    ret
 .win:
     cmp ax, W16_BMSTK               ; a bitmap into the window's DC: no
     je .no
     push bx
-    call w16_bmslot
+    LCALL w16_bmslot
     pop bx
     jnc .no
     mov dx, ax
@@ -1074,6 +1075,14 @@ w16g_rect:
 ; through w16_span: the pen's left edge (with the top and bottom rows whole),
 ; its right edge, and the brush between them.
 ; -----------------------------------------------------------------------------
+; w16g_rrbox - Ellipse's way in (w16acc.inc, the library part's): RoundRect
+; from its box, with [w16_rrx]/[w16_rry] already set and ES:BX its arguments
+w16g_rrbox:
+    push si
+    push di
+    push bp
+    jmp w16g_roundrect.box
+
 w16g_roundrect:
     push si
     push di
@@ -1447,7 +1456,8 @@ w16_txtcopy:
 w16g_settextcol:
     mov si, w16_trgb
     mov di, w16_tcol
-    jmp w16_cref                    ; SetBkColor's body too (w16acc.inc)
+    LCALL w16_cref                    ; SetBkColor's body too (w16acc.inc)
+    ret
 
 ; GetTextExtent (GDI.91) - args: +0 nCount, +2 lpString, +6 hDC. DX:AX =
 ; height:width.
@@ -1533,7 +1543,7 @@ w16g_textout:
     xor di, di
     call w16_txtcopy
     mov [w16_tn], cx
-    call w16_talign                 ; SetTextAlign's reference point
+    LCALL w16_talign                 ; SetTextAlign's reference point
     call w16_txtdraw
 .done:
     mov ax, 1

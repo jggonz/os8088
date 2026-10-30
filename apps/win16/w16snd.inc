@@ -23,7 +23,10 @@ S_SERDMD      equ -10
 S_SERDPT      equ -12
 
 ; OpenSound (SOUND.1): 1 voice, or S_SERDVNA with no speaker or when it is open
-w16s_open:
+; THE CODE IS THE LIBRARY PART'S (SPEC.md 124.19.3): moved out of the image
+; in S14 - a call into the image is ICALL, and its data stays in .text
+section .w16dlg
+W16LIB w16s_open
     mov ax, S_SERDVNA
     cmp byte [w16s_on], 0
     jne .out
@@ -44,21 +47,21 @@ w16s_open:
     ret
 
 ; CloseSound (SOUND.2)
-w16s_close:
+W16LIB w16s_close
     call w16s_stop
     mov byte [w16s_on], 0
     ret
 
 ; StopSound (SOUND.10): the note sounding stopped, the queue emptied
-w16s_stop:
+W16LIB w16s_stop
     call w16s_flush
     call w16s_quiet
-    call w16_tarm
+    ICALL w16_tarm
     xor ax, ax
     ret
 
 ; StartSound (SOUND.9): the queue from its first note
-w16s_start:
+W16LIB w16s_start
     cmp byte [w16s_on], 0
     je .out
     cmp byte [w16s_play], 0
@@ -70,15 +73,15 @@ w16s_start:
     mov word [w16s_rnd], 2000       ; anywhere in a tick (w16s_tick)
     call w16s_tick
     mov word [w16s_rnd], 1000       ; ...and from now on at a tick's start
-    call w16_tarm
+    ICALL w16_tarm
 .out:
     xor ax, ax
     ret
 
 ; SetVoiceAccent (SOUND.5) - args: +0 nPitch, +2 nMode, +4 nVolume,
 ; +6 nTempo, +8 nVoice
-w16s_accent:
-    call w16_args
+W16LIB w16s_accent
+    ICALL w16_args
     xor ax, ax
     cmp byte [w16s_on], 0
     je .out
@@ -107,10 +110,10 @@ w16s_accent:
 
 ; SetVoiceNote (SOUND.4) - args: +0 nCdots (ignored, as Windows 3.0 did),
 ; +2 nLength, +4 nValue, +6 nVoice
-w16s_note:
+W16LIB w16s_note
     push si
     push di
-    call w16_args
+    ICALL w16_args
     xor ax, ax
     cmp byte [w16s_on], 0
     je .out
@@ -204,11 +207,13 @@ w16s_note:
     jmp short .out
 
 ; Windows' table: the eighth octave's semitones, C8 to B8, in Hz
+section .text
 w16s_hz:
     dw 4186, 4435, 4699, 4978, 5274, 5588, 5920, 6272, 6645, 7040, 7459, 7902
 
 ; w16s_tick - start the queue's next note if its time has come (from WIN16's
 ; tick, and from StartSound). Keeps every register.
+section .w16dlg
 w16s_tick:
     push ax
     push bx
@@ -332,3 +337,5 @@ w16s_wait:
     pop dx
 .out:
     ret
+
+section .text

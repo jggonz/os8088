@@ -118,7 +118,7 @@ w16_origin:
     mov ax, [bx + W16W_OSW]
     cmp ax, [w16_win]
     jne .nobar
-    call w16_mbarh                  ; the client is under the menu bar
+    LCALL w16_mbarh                  ; the client is under the menu bar
     add dx, ax
     sub si, ax
     jge .nobar
@@ -457,7 +457,7 @@ w16_settext:
     push es
     push ds
     push dx
-    call w16_mheap                  ; ES = the USER heap
+    LCALL w16_mheap                  ; ES = the USER heap
     pop dx
     jc .fail
     mov ax, [bx + W16W_TEXT]

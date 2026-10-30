@@ -21,6 +21,11 @@ This row does, off WIN16's own listing and symbol map:
      The same for an immediate address of the part's own data (`mov si,
      string`), which the code then reads through DS.
 
+  4. a macro naming the wrong side: ICALL's routine must be in the image,
+     LCALL's and DCALL's in the library part (DCONT defines its own);
+  5. an export row whose part byte or handler offset is not where the map
+     puts its handler: a W16LIB forgotten, or one too many.
+
 A line may carry `XSEC-OK: <reason>` in its comment to be passed. Macro
 bodies (lines naming %1) are not resolved; the four macros that carry part
 calls (DCALL, ICALL, LCALL, DCONT) are written to this rule by hand.
@@ -41,7 +46,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 PARTS = (".w16dlg", ".w16fp", ".w16ld")
 DSELF = (".w16fp",)     # parts that run with DS = their OWN segment: the 8087
                         # emulator (w16fp.inc), so rule 3 does not apply
-MACROS = ("dcall", "lcall", "dcont", "icall")   # the sanctioned crossings
+MACROS = ("dcall", "lcall", "icall")   # the sanctioned crossings (DCONT
+DEFINES = ("dcont", "w16export", "w16fixed")   # define a label or record a
+                                        #   row - checked by rule 5 instead
 NEAR = re.compile(r"^(call|jmp|j[a-z]{1,4}|loop[a-z]{0,2})$")
 VSTORE = re.compile(r"^\s*mov\s+word\s+\[\s*(w16_pfv|w16_lfn|w16_lbv)\s*\]\s*,")
 DATA = re.compile(r"^\s*(db|dw|dd|times|resb|resw|incbin)\b", re.I)
@@ -56,7 +63,7 @@ def assemble():
                     + glob.glob(os.path.join(ROOT, "apps", "*.inc"))):
         h.update(f.encode() + b"\0" + open(f, "rb").read())
     cache = os.path.join(ROOT, "build", "win16", "xsec-%s" % h.hexdigest()[:16])
-    if not (os.path.exists(cache + ".lst") and os.path.exists(cache + ".map")):
+    if not all(os.path.exists(cache + x) for x in (".lst", ".map", ".bin")):
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         for old in glob.glob(os.path.join(os.path.dirname(cache), "xsec-*")):
             os.remove(old)
@@ -69,11 +76,13 @@ def assemble():
                            check=True, cwd=ROOT)
             open(cache + ".map", "w").write(open(m).read())
             open(cache + ".lst", "w").write(open(l, errors="replace").read())
-    return cache + ".lst", cache + ".map"
+            open(cache + ".bin", "wb").write(open(o, "rb").read())
+    return cache + ".lst", cache + ".map", cache + ".bin"
 
 
-def symbols(mapfile):
-    """name -> section, for every label the map places in a section"""
+def symbols(mapfile, where=None):
+    """name -> section, for every label the map places in a section (and,
+    into `where`, name -> (real file offset, virtual address))"""
     sec, out = None, {}
     for line in open(mapfile):
         m = re.match(r"^---- Section (\S+)", line)
@@ -86,6 +95,8 @@ def symbols(mapfile):
         f = line.split()
         if sec and len(f) == 3 and re.fullmatch(r"[0-9A-F]+", f[0]):
             out[f[2]] = sec if sec in PARTS else ".text"
+            if where is not None:
+                where[f[2]] = (int(f[0], 16), int(f[1], 16))
     return out
 
 
@@ -193,11 +204,16 @@ def walk(lstfile, syms):
             cs = inmem and "cs:" in ops[ops[:mm.start()].rfind("["):mm.start()]
             far = "far" in ops.split()
             why = None
-            if NEAR.match(mnem) and not inmem and not far:
+            if mnem in MACROS and mm.start() == len(ops) - len(ops.lstrip()):
+                want = ".text" if mnem == "icall" else ".w16dlg"
+                if tsec != want:
+                    why = "%s names %s, which is in %s, not %s" % (
+                        mnem.upper(), full, tsec, want)
+            elif NEAR.match(mnem) and not inmem and not far:
                 if tsec != sec:
                     why = "a near %s into %s from %s" % (mnem, tsec, sec)
             elif tsec in PARTS and tsec != sec:
-                if not VSTORE.match(body) and mnem not in MACROS:
+                if not VSTORE.match(body) and mnem not in MACROS + DEFINES:
                     why = "%s's label %s named from %s" % (tsec, full, sec)
             elif tsec in PARTS and tsec == sec and full in datalabels \
                     and tsec not in DSELF:
@@ -212,17 +228,45 @@ def walk(lstfile, syms):
     return problems, crossings
 
 
+def rows(binfile, syms, where):
+    """rule 5: every export row's part byte and handler offset, read out of
+    the assembled table, against where the map puts its handler"""
+    import struct
+    names = []
+    for line in open(os.path.join(ROOT, "apps", "win16", "w16api.inc")):
+        if line.startswith("W16EXPORT"):
+            f = [x.strip() for x in line.split(";")[0][len("W16EXPORT"):].split(",")]
+            names.append(f[3])
+    data = open(binfile, "rb").read()
+    at = where["w16_exports"][0]
+    out = []
+    for k, h in enumerate(names):
+        part, proc = struct.unpack_from("<BH", data, at + 7 * k + 4)
+        sec = syms.get(h)
+        want = {".text": 0, ".w16dlg": 3}.get(sec)
+        if want is None:
+            out.append("row %d (%s): its handler is in %s, which no row can name" % (k, h, sec))
+        elif part & 0x7F != want or proc != where[h][1]:
+            out.append("row %d (%s): the row says part %d at %04X, the map %s at %04X"
+                       % (k, h, part & 0x7F, proc, sec, where[h][1]))
+    return out, len(names)
+
+
 def main():
-    lst, mp = assemble()
-    syms = symbols(mp)
+    lst, mp, binf = assemble()
+    where = {}
+    syms = symbols(mp, where)
     problems, crossings = walk(lst, syms)
+    bad, nrows = rows(binf, syms, where)
+    problems += ["w16_exports\n        " + b for b in bad]
     if "--list" in sys.argv:
         for here, full, tsec, why, ok in crossings:
             print("%-5s %-60s -> %s (%s)%s" % ("ok" if not why else ("PASS" if ok else "FAIL"),
                                                here[:60], full, tsec, "  " + why if why else ""))
     nparts = sum(1 for v in syms.values() if v in PARTS)
-    print("t_w16xsec: %d labels, %d in parts, %d cross-section references"
-          % (len(syms), nparts, sum(1 for c in crossings if c[2] != c[0].split(":")[1].split()[0])))
+    print("t_w16xsec: %d labels, %d in parts, %d cross-section references, %d export rows"
+          % (len(syms), nparts, sum(1 for c in crossings if c[2] != c[0].split(":")[1].split()[0]),
+             nrows))
     if problems:
         print("t_w16xsec: %d FAILED (SPEC.md 124.19.3):" % len(problems))
         for p in problems:

@@ -1015,7 +1015,7 @@ w16d_stpaint:
     mov si, [bx + SC_ICON]
     mov bl, al
     mov ax, si
-    ICALL w16_icodraw
+    call w16_icodraw
     pop si
     pop bx
     jmp .done
@@ -2110,7 +2110,7 @@ w16d_ebuf:
 
 ; WM_CREATE: the block, the text copied in
 w16d_ecreate:
-    ICALL w16_mheap                 ; ES = the USER heap
+    call w16_mheap                 ; ES = the USER heap
     jc .fail
     mov cx, EC_BUFSZ
     xor al, al
@@ -2492,7 +2492,7 @@ w16d_ecopycb:
     call w16d_ebuf                  ; ES:DI = the text
     mov si, di
     add si, ax
-    ICALL w16_clput                 ; (a single line: nothing to translate)
+    call w16_clput                 ; (a single line: nothing to translate)
     pop es
 .out:
     jmp w16d_ezero
@@ -3025,7 +3025,7 @@ w16d_lerr:
     ret
 
 w16d_lcreate:
-    ICALL w16_mheap
+    call w16_mheap
     jc w16d_lerr
     mov cx, 16 * LI_SIZE
     xor al, al
@@ -3044,7 +3044,7 @@ w16d_ldestroy:
     mov ax, [bx + LC_TAB]
     or ax, ax
     jz .z
-    ICALL w16_mheap
+    call w16_mheap
     jc .z
     ICALL w16_lfree
     mov word [bx + LC_TAB], 0
@@ -3056,7 +3056,7 @@ w16d_ldestroy:
 w16d_lfreeall:
     mov cx, [bx + LC_COUNT]
     jcxz .out
-    ICALL w16_mheap
+    call w16_mheap
     jc .out
     mov si, [bx + LC_TAB]
 .i:
@@ -3097,7 +3097,7 @@ w16d_lunfocus:
 w16d_lent:
     push ax
     push dx
-    ICALL w16_mheap
+    call w16_mheap
     mov dx, LI_SIZE
     mul dx
     mov si, ax
@@ -3221,7 +3221,7 @@ w16d_lnewstr:
     pop ds
     push ds
     push cx
-    ICALL w16_mheap
+    call w16_mheap
     pop cx
     jc .no
     push cx
@@ -3283,7 +3283,7 @@ w16d_linsat:
     push cx
     shl cx, 1
     shl cx, 1                       ; (* LI_SIZE)
-    ICALL w16_mheap
+    call w16_mheap
     xor al, al
     ICALL w16_lnew
     pop cx
@@ -5010,7 +5010,7 @@ w16d_mkitem:
     and cl, 0x0F
     cmp cl, SS_ICON
     jne .noi
-    ICALL w16_icload                ; SS_ICON: the text names the icon, and
+    call w16_icload                ; SS_ICON: the text names the icon, and
     mov [w16d_icon], ax             ;   the control is the icon's size, as
     mov word [w16_cwcx], 32         ;   Windows sized it (SPEC.md 124.18.4)
     mov word [w16_cwcy], 32
@@ -5262,12 +5262,12 @@ w16d_ownwin:
     or cx, dx
     jz .size
 .load:
-    ICALL w16_mload                 ; AX = the HMENU, 0 = none
+    call w16_mload                 ; AX = the HMENU, 0 = none
     mov [bx + W16W_MENU], ax
 .size:
     xor ax, ax                      ; first without the bar, whose rows
     call .to                        ;   depend on the width it is laid in
-    ICALL w16_mbarh                 ; AX = its rows
+    call w16_mbarh                 ; AX = its rows
     or ax, ax
     jz .out
     call .to
@@ -6231,7 +6231,7 @@ w16u_msgbox_d:
     jz .noicon
     cmp ax, 4
     ja .noicon
-    ICALL w16_icpart                ; WIN16's own art, read if need be
+    call w16_icpart                ; WIN16's own art, read if need be
     jc .noicon
     add ax, W16_HSYSICO
     mov [w16d_icon], ax

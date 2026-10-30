@@ -133,6 +133,14 @@ W16P_ICONS   equ 6              ; WIN16's own system icons (SPEC.md 124.18.4):
     mov word [w16_lfn], %1      ;   %1 is a NEAR routine there, ending in
     call w16_lcall              ;   ret, near-called by w16_lbgate. The part
 %endmacro                       ;   is fetched first if it is not here
+%macro LCONT 1                  ; in the library part: %1 is a CONTINUATION
+section .text                   ;   (SPEC.md 124.2.2) that is a NEAR routine,
+%1_c:                           ;   handed out as %1_c - its trampoline in the
+    LCALL %1                    ;   image, which w16_cbdone's `jmp si` can
+    ret                         ;   reach (SPEC.md 124.19.3)
+section .w16dlg
+%1:
+%endmacro
 %macro W16LIB 1                 ; in the library part: %1 is a HANDLER that
 %define w16lib_%1 1             ;   a row names, near, ending in ret - the
 %1:                             ;   row's part says so (SPEC.md 124.19.1)
@@ -880,16 +888,19 @@ w16_endshow:
 ; w16_freeprog - give back the program's claim, its global heap, the face
 ; and the dialog part, once
 w16_freeprog:
-    call w16pf_endprog              ; its profiles written (SPEC.md 124.14)
-    call w16s_endprog               ; its sound stopped (SPEC.md 124.15.1)
-    call w16_bmend                  ; its bitmaps freed (SPEC.md 124.15.2)
+    cmp word [w16_dseg], 0          ; the library part's own (SPEC.md
+    je .nolib                       ;   124.19.3): a program that never fetched
+    LCALL w16pf_endprog             ;   it opened no profile, played no note,
+    LCALL w16s_endprog              ;   made no bitmap and loaded no icon.
+    LCALL w16_bmend                 ;   Profiles written (124.14), sound
+    LCALL w16_icend                 ;   stopped (124.15.1), bitmaps freed
+.nolib:                             ;   (124.15.2), icons dropped (124.18.4)
     call w16_killwins               ; its second windows, which are ours
     mov byte [w16_inmodal], 0
     mov word [w16_focus], 0
     mov word [w16_capture], 0
     call w16_dlgout
     call w16x_end                   ; its floating point (SPEC.md 124.5)
-    call w16_icend                  ; its icons (SPEC.md 124.18.4)
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
@@ -1322,7 +1333,6 @@ w16_cputest:
 %include "win16/w16load.inc"
 %include "win16/w16i21.inc"
 %include "win16/w16api.inc"
-%include "win16/w16fmt.inc"     ; wsprintf, wvsprintf
 %include "win16/w16mem.inc"
 %include "win16/w16res.inc"
 %include "win16/w16user.inc"
@@ -1333,6 +1343,7 @@ w16_cputest:
 %include "win16/w16optab.inc"
 %include "win16/w16dlg.inc"     ; part 3's code, and its trampolines here
 %include "win16/w16prof.inc"    ; WIN.INI and private profiles
+%include "win16/w16fmt.inc"     ; wsprintf, wvsprintf (the library part's)
 %include "win16/w16snd.inc"     ; SOUND's voice queue (SPEC.md 124.15.1)
 %include "win16/w16bmp.inc"     ; bitmaps and memory DCs (SPEC.md 124.15.2)
 %include "win16/w16clip.inc"    ; the clipboard, strings (SPEC.md 124.16)

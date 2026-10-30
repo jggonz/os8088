@@ -20,31 +20,34 @@ ETO_CLIPPED equ 4
 ; the one-line answers: AddFontResource, RemoveFontResource and
 ; GetInstanceData answer 0, UnrealizeObject and GetModuleUsage 1, and
 ; SetCursorPos does nothing (os8088 lets no package move the pointer)
-w16_ans0:
+; THE CODE IS THE LIBRARY PART'S (SPEC.md 124.19.3): moved out of the image
+; in S14 - a call into the image is ICALL, and its data stays in .text
+section .w16dlg
+W16LIB w16_ans0
     xor ax, ax
     cwd
     ret
-w16_ans1:
+W16LIB w16_ans1
     mov ax, 1
     xor dx, dx
-w16u_setcurpos:
+W16LIB w16u_setcurpos
     ret
 
 ; CreateFontIndirect (GDI.57) - the System font: the only face there is, so
 ; the one Windows' mapper would fall back to (SPEC.md 124.17.1)
-w16g_crefont:
+W16LIB w16g_crefont
     mov ax, W16_STOCK + SYSTEM_FONT
     ret
 
 ; CreateDC (GDI.53) - an information context for the display: the desktop's
 ; DC, which GetDeviceCaps answers for and nothing draws on
-w16g_credc:
+W16LIB w16g_credc
     mov ax, W16_HDESKDC
     ret
 
 ; SetBkColor (GDI.1) - args: +0 the COLORREF, +4 hDC. The paper text is
 ; drawn on, and ExtTextOut's opaque rectangle. Answers the old one.
-w16g_setbkcol:
+W16LIB w16g_setbkcol
     mov si, w16_brgb
     mov di, w16_tpap
     ; fall into w16_cref
@@ -52,7 +55,7 @@ w16g_setbkcol:
 ; w16_cref - SetTextColor's and SetBkColor's body: the COLORREF at +0 into
 ; the dword at SI, its nearest colour into the byte at DI; DX:AX = the old
 w16_cref:
-    call w16_args
+    ICALL w16_args
     xor ax, ax
     xor dx, dx
     cmp word [es:bx + 4], W16_HDC   ; another DC's: kept nowhere
@@ -65,7 +68,7 @@ w16_cref:
     push dx
     mov ax, [si]
     mov dl, [si + 2]
-    call w16_rgb2col
+    ICALL w16_rgb2col
     mov [di], al
     pop dx
     pop ax
@@ -75,13 +78,13 @@ w16_cref:
 ; SetBkMode (GDI.2), SetTextAlign (GDI.346) - args: +0 the value, +2 hDC.
 ; Answer the old one. TRANSPARENT is kept and answered, but text is drawn on
 ; its paper either way (SPEC.md 124.17.1).
-w16g_setbkmode:
+W16LIB w16g_setbkmode
     mov si, w16_bkmode
     jmp short w16_dcbyte
-w16g_settalign:
+W16LIB w16g_settalign
     mov si, w16_tal
 w16_dcbyte:
-    call w16_args
+    ICALL w16_args
     xor ax, ax
     cmp word [es:bx + 2], W16_HDC
     jne .out
@@ -92,11 +95,11 @@ w16_dcbyte:
 
 ; GetNearestColor (GDI.154) - args: +0 the COLORREF, +4 hDC: the colour of
 ; the sixteen it is drawn in, as a COLORREF
-w16g_nearcol:
-    call w16_args
+W16LIB w16g_nearcol
+    ICALL w16_args
     mov ax, [es:bx]
     mov dl, [es:bx + 2]
-    call w16_rgb2col
+    ICALL w16_rgb2col
     mov bl, al
     xor bh, bh
     mov ax, bx
@@ -116,7 +119,7 @@ w16_talign:
     mov es, [w16_face]
     mov si, w16_txt
     mov cx, [w16_tn]
-    call w16_textw
+    ICALL w16_textw
     pop es
     test byte [w16_tal], TA_CENTER & ~TA_RIGHT
     jz .r
@@ -146,13 +149,13 @@ w16_talign:
 ; background colour first, ETO_CLIPPED cuts the text to it; lpDx's spacing
 ; is not followed - each character keeps its own advance (SPEC.md 124.17.1).
 ; -----------------------------------------------------------------------------
-w16g_exttext:
+W16LIB w16g_exttext
     push si
     push di
     push bp
     cmp byte [w16_dcon], 0
     je .yes
-    call w16_args
+    ICALL w16_args
     cmp word [es:bx + 20], W16_HDC
     jne .no
     push word [w16_cl]              ; the clip, which ETO_CLIPPED narrows
@@ -166,7 +169,7 @@ w16g_exttext:
     push bx
     mov bp, [es:bx + 14]            ; the options
     les bx, [es:bx + 10]
-    call w16_rcin                   ; [w16_rl].. = it, on the screen
+    ICALL w16_rcin                   ; [w16_rl].. = it, on the screen
     pop bx
     pop es
     jc .gone                        ; empty: nothing filled, nothing cut
@@ -179,7 +182,7 @@ w16g_exttext:
     mov bx, [w16_rt]
     mov cx, [w16_rr]
     mov dx, [w16_rb]
-    call w16_gfill
+    ICALL w16_gfill
     pop bx
 .clip:
     test bp, ETO_CLIPPED
@@ -212,10 +215,10 @@ w16g_exttext:
     mov [w16_ty], ax
     mov si, 6
     mov di, 4
-    call w16_txtcopy
+    ICALL w16_txtcopy
     mov [w16_tn], cx
     call w16_talign
-    call w16_txtdraw
+    ICALL w16_txtdraw
 .gone:
     pop word [w16_cb]
     pop word [w16_cr]
@@ -235,11 +238,11 @@ w16g_exttext:
 ; Ellipse (GDI.24) - args: +0 bottom, +2 right, +4 top, +6 left, +8 hDC:
 ; RoundRect's shape with each corner's radii half the box's, so the four
 ; quarters meet (radii past W16_RRMAX are cut to it, as RoundRect's are)
-w16g_ellipse:
+W16LIB w16g_ellipse
     push si
     push di
     push bp
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx + 2]
     sub ax, [es:bx + 6]
     sar ax, 1
@@ -248,13 +251,17 @@ w16g_ellipse:
     sub ax, [es:bx + 4]
     sar ax, 1
     mov [w16_rry], ax
-    jmp w16g_roundrect.box
+    pop bp                          ; RoundRect's own frame, from the image
+    pop di
+    pop si
+    ICALL w16g_rrbox
+    ret
 
 ; PatBlt (GDI.29) - args: +0 dwRop, +4 nHeight, +6 nWidth, +8 y, +10 x,
 ; +12 hDC: BitBlt with no source (PATCOPY, PATINVERT, DSTINVERT, BLACKNESS,
 ; WHITENESS)
-w16g_patblt:
-    call w16_args
+W16LIB w16g_patblt
+    ICALL w16_args
     mov ax, [es:bx + 4]
     mov [w16b_cy], ax
     mov ax, [es:bx + 6]
@@ -265,7 +272,8 @@ w16g_patblt:
     mov [w16b_x], ax
     mov cx, [es:bx + 12]
     xor ax, ax
-    jmp w16_blt
+    call w16_blt
+    ret
 
 ; -----------------------------------------------------------------------------
 ; CreateBitmap (GDI.48) - args: +0 lpBits, +4 cBitsPixel, +6 cPlanes,
@@ -273,11 +281,11 @@ w16g_patblt:
 ; rows a word apart, top row first) are converted as a DIB's are: a set bit
 ; white, a clear one black. Any other format is made black (SPEC.md 124.17.1).
 ; -----------------------------------------------------------------------------
-w16g_crebmp:
+W16LIB w16g_crebmp
     push si
     push di
     push bp
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx + 10]
     mov dx, [es:bx + 8]
     push bx
@@ -361,11 +369,11 @@ w16g_crebmp:
 ; anything else is the colour of the sixteen nearest the grey it averages
 ; (SPEC.md 124.17.1). The bitmap may be deleted at once, as REVERSI does.
 ; -----------------------------------------------------------------------------
-w16g_patbrush:
+W16LIB w16g_patbrush
     push si
     push di
     push bp
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx]
     call w16_bmslot                 ; BX = its slot * 2
     mov ax, 0
@@ -423,10 +431,10 @@ w16g_patbrush:
     div word [w16_scratch]          ; AL = the grey
     mov ah, al
     mov dl, al
-    call w16_rgb2col
+    ICALL w16_rgb2col
 .made:
     mov ah, W16K_BRUSH
-    call w16_newobj
+    ICALL w16_newobj
 .out:
     pop bp
     pop di
@@ -434,16 +442,16 @@ w16g_patbrush:
     ret
 
 ; OffsetRect (USER.77), InflateRect (USER.78) - args: +0 dy, +2 dx, +4 lpRect
-w16u_offrect:
-    call w16_args
+W16LIB w16u_offrect
+    ICALL w16_args
     mov ax, [es:bx + 2]
     mov dx, [es:bx]
     les bx, [es:bx + 4]
     add [es:bx], ax
     add [es:bx + 2], dx
     jmp short w16_rbr
-w16u_infrect:
-    call w16_args
+W16LIB w16u_infrect
+    ICALL w16_args
     mov ax, [es:bx + 2]
     mov dx, [es:bx]
     les bx, [es:bx + 4]
@@ -457,8 +465,8 @@ w16_rbr:
 ; GetKeyState (USER.106) - args: +0 nVirtKey. Shift, Ctrl and Alt are read
 ; off the BIOS's shift flags, down answering 8000h; any other key is up, as
 ; os8088 delivers no key's release (SPEC.md 124.17.1)
-w16u_getkeystate:
-    call w16_args
+W16LIB w16u_getkeystate
+    ICALL w16_args
     mov al, [es:bx]
     mov ah, 3                       ; either Shift
     cmp al, 0x10
@@ -481,3 +489,5 @@ w16u_getkeystate:
 .up:
     xor ax, ax
     ret
+
+section .text

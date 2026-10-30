@@ -11,8 +11,11 @@
 W16W_MAX    equ 1024
 
 ; wsprintf (USER.420) - cdecl: +0 lpOut, +4 lpFormat, +8 the arguments
-w16u_wsprintf:
-    call w16_args
+; THE CODE IS THE LIBRARY PART'S (SPEC.md 124.19.3): moved out of the image
+; in S14 - a call into the image is ICALL, and its data stays in .text
+section .w16dlg
+W16LIB w16u_wsprintf
+    ICALL w16_args
     mov ax, [es:bx]
     mov [w16w_out], ax
     mov ax, [es:bx + 2]
@@ -27,8 +30,8 @@ w16u_wsprintf:
     jmp short w16w_go
 
 ; wvsprintf (USER.421) - pascal: +0 lpArgs, +4 lpFormat, +8 lpOut
-w16u_wvsprintf:
-    call w16_args
+W16LIB w16u_wvsprintf
+    ICALL w16_args
     mov ax, [es:bx]
     mov [w16w_arg], ax
     mov ax, [es:bx + 2]
@@ -351,9 +354,11 @@ w16w_go:
 .bout:
     ret
 
+section .text
 w16w_s_null: db '(null)', 0
 
 ; w16w_fch - AL = the format's next character (it does not move past a NUL)
+section .w16dlg
 w16w_fch:
     push es
     push si
@@ -412,3 +417,5 @@ w16w_put:
     inc word [w16w_cnt]
 .out:
     ret
+
+section .text
