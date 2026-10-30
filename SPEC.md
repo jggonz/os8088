@@ -226059,6 +226059,7 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
   no kernel bytes.
 - **Reading the file:** WIN16 reads the whole file into a temporary claim
   with `OSAPI_FILE_READ`, so a program larger than 64KB is refused in S2.
+  Since S15 it reads the file in pieces instead (§124.20.1).
 - **The claim:** the segments are laid out in ONE claim, each at a paragraph
   boundary, at its `minalloc`. DGROUP is `minalloc + ne_stack + ne_heap`,
   the stack directly after the static data and the local heap after the
@@ -226408,8 +226409,9 @@ to the end goal, and none is a design decision against it.
 docs/plans/WIN16-ANY-PLAN.md turns the rows into stories S14–S25 (a plan,
 not yet authorised); each story pins its subsection here before its code:
 
-- no file over 64 KB (R2), no protected-mode-only program and no program that
-  writes selectors (R3), and no DLL, the program's own or a system one (R4);
+- no protected-mode-only program and no program that writes selectors (R3),
+  and no DLL, the program's own or a system one (R4); files over 64 KB load
+  since S15 (§124.20);
 - DOS calls beyond what the C runtime makes (R5);
 - no segment moving or discarding (R6);
 - no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
@@ -226528,7 +226530,10 @@ VGA's: frame 4 for `WS_THICKFRAME`, 1 otherwise. The 19 is `SM_CYCAPTION`'s
 20 less the row the caption shares with the frame, MEASURED on Windows 3.0:
 `tests/win16/pump.c` at 320 × 180 has a 312 × 153 client there and here.
 
-- `CW_USEDEFAULT` keeps the size WIN16's window already has.
+- `CW_USEDEFAULT` as the width was the size WIN16's window already had,
+  which is a few rows tall. Solitaire asks for it (S15), so it is now
+  Windows' default: three-quarters of the screen each way, as Wine's
+  `CreateWindowEx` has it, and the height is ignored.
 - The position is os8088's to choose, and so is the width's last few
   pixels: `OSAPI_WM_RESIZE` keeps a window's width on os8088's 8-pixel
   grid, so a 260-wide window has a 256-pixel client here where Windows
@@ -226646,7 +226651,12 @@ flag.
 - `GetMessage` generates `WM_TIMER` when nothing else is pending, as Windows
   does, so timers never fill the queue.
 
-A non-NULL `lpfnTimer` is refused with 0 until a program needs it.
+A non-NULL `lpfnTimer` was refused with 0 until a program needed it.
+Solitaire does (S15, §124.20.4), so it is now Windows' own arrangement. The
+timer's `WM_TIMER` carries the procedure in `lParam`, and `DispatchMessage`
+calls it with `(hwnd, WM_TIMER, id, GetTickCount())` instead of the window
+procedure. A timer with no window gets an identifier of its own, which is
+what `SetTimer` answers and what `KillTimer(NULL, id)` takes.
 
 **`DefWindowProc`:**
 
@@ -226748,7 +226758,8 @@ client (§124.8), so the sizing and the answer agree on every display.
 ### 124.9 Memory: the global and local heaps *(shipped in S5)*
 
 **The global heap** is WIN16's, sub-allocated inside ARENAS: claims of
-`W16_ARENAKB` (16) KB, or one claim the size of a larger request, at most
+`W16_ARENAKB` (16) KB, each arena after the first twice the one before up
+to 64 KB (§124.20.2), or one claim the size of a larger request, at most
 `W16_NARENA` (6) at once. Each block is whole paragraphs behind a one-paragraph
 header (its size, its handle, its lock count, its flags), first fit, with free
 neighbours merged. Arenas are freed with the program.
@@ -227163,25 +227174,41 @@ directory here.
 | `StretchBlt(..., cxSrc, cySrc, dwRop)` | `BitBlt`'s pairs and ROPs, each destination pixel taken from the source pixel it falls on (Windows' `COLORONCOLOR`) |
 
 **How a bitmap is kept.** Its pixels are converted once, when it is made,
-into os8088's sixteen colours, 4 bits a pixel, top row first, in a heap claim
-of its own (`OSAPI_MEM_CLAIM`, §66: pinned). Each palette entry becomes the
-nearest of the sixteen, and on a 1bpp display it then goes through §124.8.1's
-mono map, as `SetDIBitsToDevice`'s pixels do. A monochrome bitmap's pixels
-are 0 and 1 drawn as black and white, the DC's default text and background
-colours. Up to eight bitmaps at once, each at most 64,000 bytes converted.
-They are freed when the program ends.
+into os8088's sixteen colours, 4 bits a pixel, top row first, in a fixed
+block of the program's global heap (§124.20.2; until S15 a heap claim of its
+own, and an owner's claims are eight). Each palette entry becomes the nearest
+of the sixteen, and on a 1bpp display it then goes through §124.8.1's mono
+map, as `SetDIBitsToDevice`'s pixels do. **A 1-bit DIB keeps its palette's
+two colours**, as Windows 3.x's `LoadBitmap` made a bitmap compatible with
+the screen: Solitaire's hearts and diamonds are 1-bit resources whose
+palette is red and white, and forcing every 1-bit bitmap to black and white
+drew them black. A black-and-white one is therefore drawn as Windows draws a
+monochrome bitmap with the DC's default text and background colours. Up to
+sixteen bitmaps at once (Solitaire holds twelve: three marks, three drag
+buffers, the back and a five-face cache), each at most 64,000 bytes
+converted. They are freed when the program ends.
+
+**A resource stays found.** `LoadBitmap` releases its resource (its usage
+count falls by one) through the resource's ENTRY, which it holds in a
+register `w16_gfind` does not answer in: `w16_gfind` returns a moveable
+handle's index in SI, and a `LoadBitmap` that kept the entry in SI
+decremented a word of the resource table's own header instead - a type's
+entry count among them - so every lookup past it missed. Solitaire's faces
+(resources 1 to 52) were never found, and its tableau showed no face-up
+card.
 
 **What a copy costs.** `BitBlt` puts a bitmap down with one
 `OSAPI_GFX_BLIT4` (§5.4.1) straight from its claim when the source's left
 edge is on a byte (an even column), and through WIN16's band otherwise.
 WinMine draws every cell that way, 16 x 16 from column 0.
 
-**Not provided** (R7, *USER and GDI breadth*): drawing INTO a memory DC
-(`BitBlt` to one, or any other drawing call on one, draws nothing and
-answers FALSE where the call answers anything); copying from the screen;
-every other raster operation (FALSE, nothing drawn); `CreateBitmap`,
-`CreateCompatibleBitmap`, `GetDIBits`, `SetBkColor`/`SetTextColor` applied
-to a monochrome source.
+**Not provided** (R7, *USER and GDI breadth*): drawing into a memory DC
+with anything but `BitBlt` and `PatBlt` (§124.20.4 says what those two do
+there since S15; every other drawing call on one draws nothing and answers
+FALSE where the call answers anything); a stretch into one; every other
+raster operation (FALSE, nothing drawn); `GetDIBits`,
+`SetBkColor`/`SetTextColor` applied to a monochrome source
+(`CreateCompatibleBitmap` arrived in S15, §124.20.4).
 
 **Which DC a call draws on.** A drawing call draws only on the DC
 `GetDC`/`BeginPaint` gave the program. A memory DC, the desktop's DC and a
@@ -227681,3 +227708,161 @@ changes than S14: put the dialog manager back in a part of its own that is
 dropped when no dialog is up (which puts Minesweeper at all eight of its
 claims while a dialog is up), or share one library part between WIN16's
 instances, which needs a kernel verb (O2).
+
+### 124.20 Programs over 64 KB *(pinned for S15, docs/plans/WIN16-ANY-PLAN.md)*
+
+Until S15 the loader read the whole file into one temporary claim with
+`OSAPI_FILE_READ`, so a file over 64 KB was refused (§124.3). Solitaire is
+180 KB, of which 28 KB is code: the rest is its cards, which are resources
+and were always read one at a time (§124.10). So S15 is mostly a change to
+how the loader reads, not to what it loads.
+
+#### 124.20.1 The loader reads the file in pieces
+
+The file is never in memory whole. Only a **cluster cache** of 8 KB, or one
+cluster where a cluster is larger, is read with `OSAPI_FILE_READ_AT`, always
+at a cluster boundary as that call requires. The loader copies each byte it
+wants out of the cache. A miss refills the cache from the cluster holding
+the byte. The loader's reads mostly ascend through the file, so each cluster
+that holds a segment or its relocations is read once, and the loader never
+reads the clusters that hold only resources.
+
+1. **The MZ header**, 64 bytes, gives `e_lfanew`, a 32-bit offset: Windows
+   3.1's SETUP.EXE has its NE header 230 KB into the file.
+2. **The tables.** The loader reads from the NE header to the end of the
+   farthest of the segment, resource, resident-name, module-reference,
+   imported-name and entry tables. They go into a temporary claim with the
+   NE header at its offset 0. Each table's offset is a word from the NE
+   header, so they all lie within 64 KB of it. The largest in Windows 3.1
+   is Windows Help's, 13 KB.
+3. **Each segment** is read straight to its place in the program's claim.
+4. **Its relocation records** (a count word, then 8 bytes each) are
+   appended to the table claim, which grows with `OSAPI_MEM_REGROW`. The
+   three passes over them (check, apply, and the census's seeds, §124.4)
+   read them there. When the tables and every segment's records together
+   pass 64 KB, the program is refused: *Its tables are larger than WIN16
+   can read.* Windows 3.1's largest is Windows Help again, 13 + 18 KB.
+5. The cache is freed after the last segment, and the table claim when the
+   load ends, as the whole file used to be.
+
+A read that comes back short, from a truncated file, refuses *The file is
+damaged.*
+
+#### 124.20.2 One claim, of any size
+
+The segments, the PSP-shaped block and the kept resource table are still
+laid out in **one** claim, each segment at its own paragraph (§124.3). The
+claim may now be up to `OSAPI_MEM_CLAIM`'s ceiling of 1023 KB in
+conventional memory (§50.3.5). A program takes one claim whatever its
+number of segments, so segments do not spend `MEM_OWNER_MAX` (§50). The
+cost is that a heap with enough memory in total but no single run large
+enough refuses with *Not enough memory to load it.* Placing segments in
+several claims is worth doing when segments can move and be discarded,
+which is S20 (R6), not here.
+
+**A bitmap is a block of the global heap**, not a claim of its own. Until
+S15 each bitmap was its own `OSAPI_MEM_CLAIM`. Solitaire keeps three card
+bitmaps and makes a fourth for dragging, and with the program's own claims
+that passed the eight an owner may hold (§50), so Solitaire said it had no
+memory to drag card faces. A bitmap is now a fixed block from §124.9's
+arenas, its handle its segment, and it goes with the arenas when the
+program ends. §124.15.2's eight bitmaps and 64,000 bytes each are
+unchanged.
+
+**Arenas double.** Bitmaps in the heap made it the larger user of claims:
+Solitaire's three 10 KB drag bitmaps each wanted a new 16 KB arena, and the
+program, its library part and its parts already held most of its eight.
+So the first arena is still `W16_ARENAKB` (16) KB, and each one after is
+twice the size of the one before, up to 64 KB, or the request's own size
+where that is larger (§124.9). Three arenas hold 112 KB.
+
+`W16_MAXSEG` becomes **253**, the NE format's own limit: a relocation names
+an internal segment by a byte, and 0FEh and 0FFh mean a constant and a
+moveable entry. Windows Help 3.1 has 102 segments and Write 3.1 has 84.
+
+#### 124.20.3 Huge pointers
+
+`__AHINCR` (KERNEL.114) is **1000h** and `__AHSHIFT` (KERNEL.113) is
+**12**, the real-mode values: a program steps a huge pointer to the next
+64 KB by adding `__AHINCR` to its segment. The loader binds both as it
+binds `__WINFLAGS` (§124.15.3). An offset fixup gets the value and a
+segment fixup gets 0. The global heap already gives a block of any size up
+to an arena's 1023 KB (§124.9), so a 128 KB `GlobalAlloc` is one block.
+
+#### 124.20.4 The calls Solitaire makes
+
+Solitaire 3.0 imports twelve functions WIN16 lacked, and Solitaire 3.1
+three more. They go in the library part (§124.19):
+
+| call | |
+|---|---|
+| `CopyRect`, `IntersectRect` | USER.74, USER.79, as Windows defines them: an empty intersection answers `FALSE` with the destination emptied |
+| `InvertRect`, `FrameRect` | USER.82, USER.83: `PatBlt(DSTINVERT)` over the rectangle; the brush along each edge, one pixel wide |
+| `DrawText` | USER.85: `DT_LEFT`, `DT_CENTER`, `DT_RIGHT`, `DT_TOP`, `DT_VCENTER`, `DT_BOTTOM`, `DT_SINGLELINE`, `DT_WORDBREAK`, `DT_EXPANDTABS`, `DT_NOCLIP`, `DT_CALCRECT` and `DT_NOPREFIX`; without `DT_NOPREFIX` a single `&` is dropped and `&&` drawn as one. The answer is the height drawn |
+| `RegisterWindowMessage` | USER.118: a message number from C000h up, the same for the same name, case blind, while WIN16 runs this program |
+| `AdjustWindowRect` | USER.102: the rectangle grown by the frame, the caption and the menu bar that `CreateWindow` gives the same style (§124.8) |
+| `SetActiveWindow` | USER.59: the window fronted and focused, as `BringWindowToTop` does; the previous active window answered |
+| `LineDDA` | GDI.100: the callback is called for every point of the line, Bresenham's, the last point excluded, with `(x, y, lpData)`; each call is a call into the program (§124.2.2) |
+| `PtVisible` | GDI.103: whether the point is inside the DC's clip rectangle |
+| `SetBrushOrg` | GDI.148: kept and answered; brushes are aligned to the screen, as on a 1-bit adapter they always were |
+| `CreateCompatibleBitmap` | GDI.51: a bitmap of the display's format (§124.15), as `CreateBitmap` makes one |
+| `GetDCOrg` | GDI.79: the DC's origin in screen coordinates |
+| `GetPixel` | GDI.83: the pixel's colour in a memory DC's bitmap, or on the screen under the window's DC - one pixel read back with `OSAPI_GFX_SAVE` (§5.3), a byte a plane, its bit the pixel's - or `CLR_INVALID` (FFFFFFFFh) outside the bitmap or the clip and on a VESA display, whose save is the driver's own format (§120.4). Solitaire reads the twelve pixels at a card's corners before it puts the card down and writes them back after, which is how its cards are round; a covered pixel reads the window over it, and the write that puts it back is clipped away |
+| `GetProcAddress` | KERNEL.50: added when a program reached here is seen to call it, with what it was called for |
+| `GetDC(NULL)` | the screen's DC, as `GetDC` on `GetDesktopWindow()` answers it (§124.15.3): `GetDeviceCaps` reads it, nothing draws on it. Solitaire asks it at start and says *Out of memory* when it is refused |
+
+**A DC opened over an open one.** WIN16 has one window DC (§124.8), and
+until S15 a second `GetDC` or `BeginPaint` while it was open only cut a new
+clip on it, and the second `ReleaseDC` closed it. Solitaire holds a DC from
+the button going down to it coming up, and its timer redraws the score
+line with a `GetDC`/`ReleaseDC` of its own every second in between: the
+inner `GetDC` drew with the drag's green brush - a green block over the
+status line - and the inner `ReleaseDC` closed the drag's DC, so every
+`BitBlt` of the drag after it drew nothing. So a DC opened while one is open
+**saves that one's state whole** - its window, origin, clip, `rcPaint`, the
+selected pen, brush and font, the current position, the ROP2, text and
+background colours, background mode, text alignment and brush origin, 52
+bytes - and starts from Windows' defaults on its own window; its
+`ReleaseDC` or `EndPaint` puts the one under it back as it was. Three can
+be open under the current one (`W16_DCMAX`); a fourth falls back to the old
+behaviour, a new clip on the open DC. The handle stays `W16_HDC` for all of
+them, so the calls go to the innermost open DC, which is the one the
+program is drawing with whenever the opens and closes nest - and Windows
+programs nest them: a DC is a resource a message handler takes and gives
+back before it returns. The gfx lock is taken by the outermost open and
+given back by its close.
+
+**Drawing into a memory DC.** Solitaire's drag is five `SRCCOPY`s a step
+through three bitmaps of its own: the screen where the card is going into
+one, the overlap of the old save into it, the card into the old save, the
+card onto the screen and the old save back where the card was. So `BitBlt`
+and `PatBlt` draw into a memory DC's bitmap:
+
+| source | into the bitmap |
+|---|---|
+| another memory DC, `SRCCOPY`, the same size | its pixels, cut to both bitmaps; bytes moved whole when the two columns agree on which half of a byte they start in, a pixel at a time when they do not. A bitmap copied onto itself overlapping downward is not provided |
+| the window's DC, `SRCCOPY`, the same size | the screen under the DC read back with `OSAPI_GFX_SAVE` (§5.3) a band of `w16_gbuf` at a time, a byte a plane a column of 8, each pixel's plane bits its colour (one plane: lit is white). Cut to the display; nothing from a hidden DC or a VESA display, whose save is the driver's own format (§120.4) |
+| none: `BLACKNESS`, `WHITENESS`, `DSTINVERT`, `PATCOPY`, `PATINVERT` | the rectangle filled or inverted. The pattern ROPs use **the memory DC's own brush**: a brush selected into a memory DC is kept there (white until one is), answered by the next `SelectObject` of a brush, and never the window DC's - Solitaire paints the felt under a lifted card into its save bitmap that way, and with the window's white brush the spot a card left was white |
+
+The destination is cut to its bitmap and the source to its own extent, so a
+negative offset - Solitaire's overlap, `(-60, -59)` into a 71 x 276 bitmap -
+copies the part that lands. A `StretchBlt` into a memory DC and every other
+ROP into one answer FALSE.
+
+**A parent does not draw on its children.** Solitaire's status bar is a
+child window (a class of its own, along the bottom of the client) and its
+main window is `WS_CLIPCHILDREN`. WIN16's DC clip is one rectangle (§124.8),
+so a child is cut out of it only when it spans the clip edge to edge along
+one side - a status bar or a tool bar - which leaves a rectangle; a child
+inside the clip is not, since one rectangle cannot have a hole. Without it
+the column Solitaire erases under a card that animated home ran down over
+the status bar in felt green.
+
+#### 124.20.5 The gate rows
+
+**`win16sol`** (soak, QEMU, needs the `win16samples` capability): Solitaire
+3.0 and 3.1 load, deal and move a card, and each draws its cards on VGA,
+EGA, CGA and Hercules. **`win16big`** (soak, QEMU) runs an Open Watcom
+fixture with more than 100 KB of code in many segments and a 128 KB huge
+array walked by `__AHINCR`, checking every byte. The 8088's load time for
+Solitaire is taken on MartyPC in the final pass (S25).

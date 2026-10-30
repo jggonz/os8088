@@ -145,11 +145,21 @@ w16_gate:
     mov [w16_idx], ax
 %ifdef W16_TRACE
     push bx
+    push ax
+    mov bx, ax                      ; the slot's row, which the tool names
+    shl bx, 1
+    mov ax, [w16_trow + bx]
     mov bx, [w16_trn]
-    and bx, 127
+%ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
+    cmp bx, W16_TRN - 1             ;   taking every call after them
+    jb short $+5
+    mov bx, W16_TRN - 1
+%endif
+    and bx, W16_TRN - 1
     shl bx, 1
     mov [w16_trc + bx], ax
     inc word [w16_trn]
+    pop ax
     pop bx
 %endif
     mov [w16_rbx], bx

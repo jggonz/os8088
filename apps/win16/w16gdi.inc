@@ -73,7 +73,9 @@ W16F_DEFCH  equ '?'             ; what a character the face has not is drawn as
 ; and arms the kernel's clip on its top-level's os8088 window unless the
 ; resuming callback holds both - inside W_PAINT the damage is that clip, and
 ; a window in another os8088 window than the one painting has no pixel to
-; draw. Keeps every register.
+; draw. A DC opened while one is open saves that one's state whole and starts
+; from Windows' defaults; w16_dcclose puts it back (SPEC.md 124.20.4 - the
+; timer's GetDC inside Solitaire's drag). Keeps every register.
 ; -----------------------------------------------------------------------------
 w16_dcopen:
     push ax
@@ -81,11 +83,20 @@ w16_dcopen:
     push cx
     push dx
     push si
+    cmp byte [w16_dcon], 0
+    je .first
+    call w16_dcpush                 ; CF=1: too deep, a new clip on this one
+    jnc .fresh
     mov [w16_dcwnd], bx
     mov [w16_dcpaint], al
-    cmp byte [w16_dcon], 0
-    jne .clip                       ; open already: a new clip, same DC
+    jmp .clip
+.first:
     mov byte [w16_dcon], 1
+.fresh:
+    mov [w16_dcwnd], bx
+    mov [w16_dcpaint], al
+    mov word [w16_brorg], 0
+    mov word [w16_brorg + 2], 0
     mov word [w16_pen], W16_STOCK + BLACK_PEN
     mov word [w16_brush], W16_STOCK + WHITE_BRUSH
     mov word [w16_font], W16_STOCK + SYSTEM_FONT
@@ -102,6 +113,8 @@ w16_dcopen:
     mov [w16_curx], ax
     mov [w16_cury], ax
     mov [w16_dchide], al
+    cmp byte [w16_dctook], 0        ; a DC under this one took it
+    jne .held
     cmp byte [w16_locked], 0
     jne .held
     cmp byte [w16_ltook], 0
@@ -142,6 +155,7 @@ w16_dcopen:
     jne .empty
     call w16_wclip                  ; [w16_kl]..[w16_kb]: cut by its ancestors
     jc .empty
+    LCALL w16_clipkids              ; ...and by the children it clips
     xor ax, ax
     mov [w16_prc], ax
     mov [w16_prc + 2], ax
@@ -224,6 +238,8 @@ w16_dcopen:
 w16_dcclose:
     cmp byte [w16_dcon], 0
     je .out
+    cmp byte [w16_dcdep], 0
+    jne w16_dcpop                   ; a DC under it: that one again
     mov byte [w16_dcon], 0
     cmp byte [w16_dcclip], 0
     je .lock
@@ -236,6 +252,55 @@ w16_dcclose:
     call OSAPI_GFX_UNLOCK
 .out:
     ret
+
+; w16_dcpush - the open DC's state onto w16_dcstk. CF=1: W16_DCMAX open under
+; it already, nothing saved. Keeps every register.
+w16_dcpush:
+    cmp byte [w16_dcdep], W16_DCMAX
+    jb .room
+    stc
+    ret
+.room:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov al, W16_DCSZ
+    mul byte [w16_dcdep]
+    add ax, w16_dcstk
+    mov di, ax
+    mov si, w16_dchide
+    inc byte [w16_dcdep]
+.copy:
+    push ds
+    pop es
+    mov cx, W16_DCSZ
+    cld
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    clc
+    ret
+
+; w16_dcpop - w16_dcclose's: the DC under the closing one is the open one
+; again, its state as it was. Keeps every register.
+w16_dcpop:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    dec byte [w16_dcdep]
+    mov al, W16_DCSZ
+    mul byte [w16_dcdep]
+    add ax, w16_dcstk
+    mov si, ax
+    mov di, w16_dchide
+    jmp short w16_dcpush.copy
 
 ; -----------------------------------------------------------------------------
 ; w16_ink - AL = a colour: make it the kernel's ink. On a 1bpp display it is

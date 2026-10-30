@@ -4,9 +4,9 @@
     nasm ... -DW16_TRACE ...   (W16_DEFINES=W16_TRACE for the tests' symbols)
     python3 tools/w16trace.py build/qmp.sock CLOCK.EXE
 
-A `-DW16_TRACE` build of WIN16 records the last 128 things a program asked
+A `-DW16_TRACE` build of WIN16 records the last W16_TRN (2048) things a program asked
 for in a ring in its bss: every export through the gate as its w16api.inc
-row, and every int 21h as 80h:AH. It answers the question a program that
+row (the bind slot's, which the trace build keeps beside the bind table), and every int 21h as 80h:AH. It answers the question a program that
 "just stops" leaves - what did it ask for last, and what does it keep
 asking for? - which is how CLOCK was found spinning on int 21h 2Ch. The
 instance is found by the program's name in w16_name.
@@ -40,16 +40,22 @@ def main():
         a = (seg << 4) + S["w16_name"]
         if mem[a:a + len(want)] != want:
             continue
+        if not 1 <= mem[(seg << 4) + S["w16_state"]] <= 4:
+            continue                        # a stale copy of the name
         found = True
         n = struct.unpack_from("<H", mem, (seg << 4) + S["w16_trn"])[0]
         print("WIN16 at %04X: %d calls" % (seg, n))
-        tr = struct.unpack_from("<128H", mem, (seg << 4) + S["w16_trc"])
-        for i in range(max(0, n - 128), n):
-            r = tr[i & 127]
+        ring = (S["w16_trow"] - S["w16_trc"]) // 2   # W16_TRN
+        tr = struct.unpack_from("<%dH" % ring, mem, (seg << 4) + S["w16_trc"])
+        first = "W16_TRFIRST" in os.environ.get("W16_DEFINES", "")
+        for i in (range(min(n, ring)) if first else range(max(0, n - ring), n)):
+            r = tr[i & (ring - 1)]
             if r & 0xFF00 == 0x8000:
                 what = "int 21h AH=%02Xh" % (r & 0xFF)
+            elif r == 0xFFFF:               # SPEC.md 124.19.1: no row behind
+                what = "(a missing import, or a fixed slot)"   # the slot
             else:
-                what = rows[r] if r < len(rows) else "?"
+                what = rows[r] if r < len(rows) else "? %04Xh" % r
             print("%6d  %s" % (i, what))
     if not found:
         sys.exit("w16trace: no WIN16 instance running %s" % name)

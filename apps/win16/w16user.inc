@@ -128,6 +128,7 @@ W16T_HWND   equ 2
 W16T_ID     equ 4
 W16T_PER    equ 6               ; ticks
 W16T_DUE    equ 8               ; OSAPI_GET_TICKS at which it fires
+W16T_PROC   equ 10              ; its TimerProc, 0:0 for none (SPEC.md 124.8)
 
 ; --- a queued message is a MSG ---------------------------------------------------
 MSG_HWND    equ 0
@@ -169,6 +170,7 @@ MK_RBUTTON    equ 2
 SC_CLOSE      equ 0xF060
 CW_USEDEFAULT equ 0x8000
 WS_CHILD_HI   equ 0x4000        ; the style's high word
+WS_CLIPCH_HI  equ 0x0200        ; WS_CLIPCHILDREN
 WS_THICKFRAME_HI equ 0x0004
 WS_MINIMIZE_HI equ 0x2000
 SWP_NOSIZE    equ 0x0001
@@ -640,10 +642,24 @@ w16_cw_sized:
 ; The caption is SM_CYCAPTION less the row it shares with the frame: 19 on
 ; VGA, MEASURED on Windows 3.0 (PUMP.EXE: 320 x 180 is a 312 x 153 client),
 ; and the System font's rows + 3 on every display (w16_capn).
-; CW_USEDEFAULT keeps the size. Clobbers AX, BX, CX, DX, SI, ES.
+; CW_USEDEFAULT is three-quarters of the screen each way, Windows' default
+; (SPEC.md 124.8). Clobbers AX, BX, CX, DX, SI, ES.
 w16_sizeto:
     cmp cx, CW_USEDEFAULT
-    je .out
+    jne .sized
+    push ax
+    mov ax, [w16_scrw]
+    mov cx, ax
+    shr ax, 1
+    shr ax, 1
+    sub cx, ax                      ; CX = 3/4 of the width
+    mov ax, [w16_scrh]
+    mov dx, ax
+    shr ax, 1
+    shr ax, 1
+    sub dx, ax                      ; DX = 3/4 of the height
+    pop ax
+.sized:
     mov bx, 2
     test ax, WS_THICKFRAME_HI
     jz .thin
@@ -1252,6 +1268,27 @@ w16u_dispatch:
     mov [w16_sm_msg], ax
     mov ax, [es:bx + MSG_HWND]
     mov [w16_sm_hwnd], ax
+    cmp word [w16_sm_msg], WM_TIMER ; a TimerProc's: it is called, with the
+    jne .wnd                        ;   time, in the window's place
+    mov ax, [w16_sm_lp]
+    or ax, [w16_sm_lp + 2]
+    jz .wnd
+    push si
+    mov ax, [w16_sm_lp]             ; the procedure, where w16_sendgo reads
+    mov [w16_tproc], ax             ;   a window's
+    mov ax, [w16_sm_lp + 2]
+    mov [w16_tproc + 2], ax
+    mov si, w16_cont_ret
+    xor ax, ax
+    xor cx, cx
+    call w16_cbopen
+    call w16_ticksms                ; ...and the time as its lParam
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], dx
+    mov bx, w16_tproc - W16W_PROC
+    pop si
+    jmp w16_sendgo
+.wnd:
     call w16_hwnd2rec
     jc .no
     push si
@@ -1414,7 +1451,7 @@ w16_nextmsg:
     cmp byte [w16_take], 0
     je .gen
     mov byte [w16_quit], 0
-    jmp short .gen
+    jmp .gen
 .paint:
     xor cx, cx                      ; 3. WM_PAINT, a window that is invalid
 .pw:                                ;   and shown, its parent before it
@@ -1448,6 +1485,10 @@ w16_nextmsg:
     mov word [bx + MSG_MSG], WM_TIMER
     mov ax, [si + W16T_ID]
     mov [bx + MSG_WP], ax
+    mov ax, [si + W16T_PROC]        ; the TimerProc, which DispatchMessage
+    mov [bx + MSG_LP], ax           ;   calls instead of the window's
+    mov ax, [si + W16T_PROC + 2]
+    mov [bx + MSG_LP + 2], ax
     cmp byte [w16_take], 0
     je .gen
     mov byte [si + W16T_FIRED], 0
@@ -1840,8 +1881,11 @@ w16u_endpaint:
 w16u_getdc:
     call w16_args
     mov ax, [es:bx]
+    or ax, ax                       ; NULL is the screen's (Solitaire asks
+    jz .desk                        ;   GetDeviceCaps of it, SPEC.md 124.20.4)
     cmp ax, W16_HDESK               ; the desktop's: read, never drawn on
     jne .wnd                        ;   (SPEC.md 124.15.3)
+.desk:
     mov ax, W16_HDESKDC
     ret
 .wnd:
@@ -2026,11 +2070,23 @@ w16_erasebg:
 w16u_settimer:
     push si
     call w16_args
-    mov ax, [es:bx]
-    or ax, [es:bx + 2]
-    jnz .fail                       ; a TimerProc: not until a program needs it
     mov ax, [es:bx + 8]
     mov dx, [es:bx + 6]
+    or ax, ax                       ; no window: an identifier of its own,
+    jnz .wnd                        ;   past every slot's (SPEC.md 124.8)
+    mov si, w16_tmr
+    mov cx, W16_MAXTMR
+.nfree:
+    cmp byte [si + W16T_USED], 0
+    je .nslot
+    add si, W16T_SIZE
+    loop .nfree
+    jmp short .fail
+.nslot:
+    mov dx, W16_MAXTMR + 0x7F00
+    sub dx, cx                      ; 7F00h + the slot
+    jmp short .take
+.wnd:
     mov si, w16_tmr                 ; the same timer again, or a free one
     mov cx, W16_MAXTMR
 .find:
@@ -2056,6 +2112,10 @@ w16u_settimer:
 .take:
     mov [si + W16T_HWND], ax
     mov [si + W16T_ID], dx
+    mov ax, [es:bx]                 ; the TimerProc, 0:0 for none
+    mov [si + W16T_PROC], ax
+    mov ax, [es:bx + 2]
+    mov [si + W16T_PROC + 2], ax
     mov ax, [es:bx + 4]             ; ms * 182 / 10000 ticks, at least one
     mov cx, 182
     mul cx
@@ -2834,6 +2894,9 @@ W16_NSM          equ 36
 w16u_sysmet:
     call w16_args
     mov bx, [es:bx]
+; w16_sm - BX = an SM_* index -> AX = its metric (AdjustWindowRect's too,
+; w16draw.inc). Clobbers BX.
+w16_sm:
     cmp bx, W16_NSM
     jae .zero
     cmp bx, SM_CXSCREEN

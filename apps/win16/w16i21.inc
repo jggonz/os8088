@@ -29,7 +29,12 @@ w16_i21:
     push bx
     push ax
     mov bx, [cs:w16_trn]
-    and bx, 127
+%ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
+    cmp bx, W16_TRN - 1             ;   taking every call after them
+    jb short $+5
+    mov bx, W16_TRN - 1
+%endif
+    and bx, W16_TRN - 1
     shl bx, 1
     mov al, ah
     mov ah, 0x80

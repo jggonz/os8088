@@ -91,73 +91,78 @@ w16_load:
     mov bx, 512
 .clus:
     mov [w16_clus], bx
-    mov si, w16_name                ; the size probe: no room, so FERR_BIG
-    xor bx, bx                      ; with DX = the KB the read needs
-    mov es, bx
-    xor cx, cx
-    xor dx, dx
-    call OSAPI_FILE_READ
-    jnc .empty
-    cmp ax, FERR_BIG
-    je .sized
-    mov si, w16_r_read
-    jmp .refuse0
-.empty:
-    mov si, w16_r_notwin
-    jmp .refuse0
-.sized:
-    cmp dx, 64
-    jbe .fits
-    mov si, w16_r_big
-    jmp .refuse0
-.fits:
-    mov bp, dx                      ; BP = KB
-    mov ax, dx
+    mov ax, W16_FCACHE * 1024       ; the cache: 8KB, or one cluster when a
+    cmp bx, ax                      ;   cluster is larger (SPEC.md 124.20.1)
+    jbe .csz
+    mov ax, bx
+.csz:
+    mov [w16_csz], ax
+    mov cl, 10
+    shr ax, cl
     call OSAPI_MEM_CLAIM
-    jnc .claimed
+    jnc .cached
     mov si, w16_r_mem
     jmp .refuse0
-.claimed:
-    mov [w16_fseg], dx
-    mov es, dx
-    xor bx, bx
-    mov ax, bp                      ; capacity = KB * 1024 as DX:CX
-    mov cl, 10
-    shl ax, cl
-    mov dx, bp
-    mov cl, 6
-    shr dx, cl
-    mov cx, ax
-    mov si, w16_name
-    call OSAPI_FILE_READ            ; DX:AX = the bytes
-    jnc .read
-    mov si, w16_r_read
-    jmp .refuse
-.read:
-    or dx, dx                       ; 64KB exactly reads as DX = 1, AX = 0
-    jz .size16
-    mov ax, 0xFFFF
-.size16:
-    mov [w16_fend], ax
+.cached:
+    mov [w16_cseg], dx
+    mov word [w16_clen], 0
 
     ; --- MZ, then NE ---------------------------------------------------------
-    cmp ax, 0x40
-    jb .notwin
-    cmp word [es:0], 0x5A4D         ; 'MZ'
-    jne .notwin
-    cmp word [es:0x18], 0x40        ; a new-format executable says so here
-    jb .notwin
-    mov si, [es:0x3C]
-    mov ax, si
-    add ax, 0x40
+    push ds
+    pop es
+    mov di, w16_hdr
+    xor ax, ax
+    xor dx, dx
+    mov cx, 0x40
+    call w16l_fread
     jc .notwin
-    cmp ax, [w16_fend]
-    ja .notwin
-    cmp word [es:si], 0x454E        ; 'NE'
-    je .isne
+    cmp word [w16_hdr], 0x5A4D      ; 'MZ'
+    jne .notwin
+    cmp word [w16_hdr + 0x18], 0x40 ; a new-format executable says so here
+    jb .notwin
+    mov ax, [w16_hdr + 0x3C]        ; e_lfanew, 32 bits (SETUP.EXE 3.1's is
+    mov dx, [w16_hdr + 0x3E]        ;   230KB into the file)
+    mov [w16_soff], ax
+    mov [w16_soff + 2], dx
+    mov di, w16_hdr
+    mov cx, 0x40
+    call w16l_fread
+    jc .notwin
+    cmp word [w16_hdr], 0x454E      ; 'NE'
+    jne .notwin
+    call w16l_tabend                ; AX = the tables' extent, CF=1 too far
+    jc .bigtab
+    mov [w16_fend], ax
+    mov [w16_hpos], ax
+    inc word [w16_hpos]             ; the records start word-aligned
+    and word [w16_hpos], 0xFFFE
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    mov [w16_hkb], ax
+    call OSAPI_MEM_CLAIM
+    jnc .tclaimed
+    mov si, w16_r_mem
+    jmp .refuse
+.tclaimed:
+    mov [w16_fseg], dx
+    mov es, dx
+    xor di, di
+    mov ax, [w16_soff]
+    mov dx, [w16_soff + 2]
+    mov cx, [w16_fend]
+    call w16l_fread
+    jnc .tread
+    mov si, w16_r_trunc
+    jmp .refuse
+.bigtab:
+    mov si, w16_r_tabs
+    jmp .refuse
 .notwin:
     mov si, w16_r_notwin
     jmp .refuse
+.tread:
+    xor si, si                      ; the NE header is at the claim's 0
 .isne:
     mov [w16_ne], si
     mov ax, [es:si + NE_FLAGS]
@@ -214,8 +219,9 @@ w16_load:
     call w16_bindinit               ; nothing bound yet (SPEC.md 124.19.1)
     call w16_layout                 ; sizes and the claim; CF=1 SI = reason
     jc .refuse
-    call w16_copysegs               ; CF=1 SI = reason
-    jc .refuse
+    call w16_copysegs               ; CF=1 SI = reason; ES = the tables NOW
+    jc .refuse                      ;   (they grew, and may have moved)
+    call w16l_cfree                 ; the cache's work is done
     ICALL w16_copyres                ; the resource table, kept (SPEC.md 124.10)
     jc .refuse
     call w16_modules                ; which of the imported modules are ours
@@ -253,6 +259,7 @@ w16_load:
     mov di, w16_l2
     ICALL w16_strcpy
 .refused:
+    call w16l_cfree
     mov dx, [w16_fseg]
     or dx, dx
     jz .nof
@@ -353,6 +360,7 @@ w16_layout:
     shr ax, 1
     shr ax, 1                       ; (CX is 0 after one shift)
     add bp, ax
+    jc .huge                        ; a megabyte of segments
     add di, 8
     inc bx
     inc bx
@@ -362,17 +370,21 @@ w16_layout:
     jb .seg
     mov [w16_psp], bp               ; then the PSP-shaped block, 16 paragraphs
     add bp, 16
+    jc .huge
     mov [w16_rtab], bp              ; then the kept resource table (w16res.inc)
     ICALL w16_rlayout
     add bp, ax
+    jc .huge
     mov ax, bp
-    add ax, 63                      ; KB, rounded up
-    mov cl, 6
+    add ax, 63                      ; KB, rounded up: past 64KB since S15
+    rcr ax, 1                       ;   (SPEC.md 124.20.2), so the carry is
+    mov cl, 5                       ;   bit 16
     shr ax, cl
     push ax
     call OSAPI_MEM_CLAIM
     pop cx                          ; CX = KB
     jnc .got
+.huge:
     mov si, w16_r_mem
     pop bp
     stc
@@ -433,64 +445,93 @@ w16_layout:
     ret
 
 ; -----------------------------------------------------------------------------
-; w16_copysegs - each segment's bytes out of the file into its place
-; in:  ES = the file; out: CF=1 SI = reason (a segment past the end)
+; w16_copysegs - each segment's bytes out of the file into its place, and its
+; relocation records onto the end of the tables (SPEC.md 124.20.1)
+; in:  ES = the tables; out: CF=1 SI = reason; ES = the tables, which grew and
+;      may have MOVED ([w16_fseg] is current either way)
 ; -----------------------------------------------------------------------------
 w16_copysegs:
-    push ds
-    push es
-    mov si, [w16_ne]
-    mov cl, [es:si + NE_ALIGN]
-    or cl, cl
-    jnz .al
-    mov cl, 9
-.al:
-    cmp cl, 15
-    ja .bad
-    mov di, si
-    add di, [es:si + NE_SEGTAB]
+    push bp
+    mov di, [w16_ne]
+    add di, [es:di + NE_SEGTAB]     ; DI = the segment table's offset in ES
     xor bx, bx
 .seg:
+    mov word [w16_rtoff + bx], 0
     mov ax, [es:di]                 ; sector
     or ax, ax
     jz .next                        ; nothing in the file: all zero
-    mov dx, [es:di + 2]             ; length
-    or dx, dx
-    jz .bad                         ; 64KB of data cannot be in a 64KB file
-    xor si, si                      ; SI:AX = sector << align, as 32 bits
-.sh:
-    shl ax, 1
-    rcl si, 1
-    dec cl
-    jnz .sh
-    or si, si
-    jnz .bad
-    mov si, ax
-    add ax, dx
-    jc .bad
-    cmp ax, [w16_fend]
-    ja .bad
-    push cx
+    call w16l_secoff                ; DX:AX = its offset in the file
+    mov [w16_soff], ax
+    mov [w16_soff + 2], dx
+    mov cx, [es:di + 2]             ; length, 0 = 64KB
+    push es
+    push di
+    mov es, [w16_sbase + bx]
+    xor di, di
+    jcxz .whole
+    call w16l_fread
+    jmp short .copied
+.whole:
+    mov cx, 0x8000                  ; 64KB is two halves: CX cannot say it
+    call w16l_fread
+    jc .copied
+    mov ax, [w16_soff]
+    mov dx, [w16_soff + 2]
+    add ax, 0x8000
+    adc dx, 0
+    mov di, 0x8000
+    mov cx, 0x8000
+    call w16l_fread
+.copied:
+    pop di
+    pop es
+    jc .trunc
+    mov es, [w16_fseg]
+    test word [es:di + 4], NSF_RELOC
+    jz .next
+    mov ax, [w16_soff]              ; the records follow the bytes
+    mov dx, [w16_soff + 2]
+    mov cx, [es:di + 2]
+    add ax, cx
+    adc dx, 0
+    or cx, cx
+    jnz .roff
+    inc dx                          ; after 64KB
+.roff:
+    mov [w16_soff], ax
+    mov [w16_soff + 2], dx
+    push es
     push di
     push ds
-    push es
-    mov cx, dx
-    mov ax, [w16_sbase + bx]
-    push es
-    pop ds                          ; DS:SI -> the file's bytes
-    mov es, ax
-    xor di, di
-    cld
-    rep movsb
     pop es
-    pop ds
+    mov di, w16_hdr                 ; the count, first
+    mov cx, 2
+    call w16l_fread
     pop di
-    pop cx
-    mov si, [w16_ne]                ; the shift count again for the next one
-    mov cl, [es:si + NE_ALIGN]
-    or cl, cl
-    jnz .next
-    mov cl, 9
+    pop es
+    jc .trunc
+    mov ax, [w16_hdr]
+    cmp ax, 0x1FFE                  ; more than any 64KB could hold
+    ja .big
+    mov cl, 3
+    shl ax, cl
+    add ax, 2                       ; AX = the count and the records
+    mov cx, ax
+    add ax, [w16_hpos]
+    jc .big
+    cmp ax, 0xFFF0
+    ja .big
+    call w16l_hgrow                 ; to AX bytes; ES = the tables, CF=1 none
+    jc .mem
+    push di
+    mov di, [w16_hpos]
+    mov [w16_rtoff + bx], di
+    add [w16_hpos], cx
+    mov ax, [w16_soff]
+    mov dx, [w16_soff + 2]
+    call w16l_fread
+    pop di
+    jc .trunc
 .next:
     add di, 8
     inc bx
@@ -499,15 +540,233 @@ w16_copysegs:
     shr ax, 1
     cmp ax, [w16_nseg]
     jb .seg
-    pop es
-    pop ds
+    mov es, [w16_fseg]
+    pop bp
     clc
     ret
-.bad:
-    pop es
-    pop ds
+.trunc:
     mov si, w16_r_trunc
+    jmp short .fail
+.big:
+    mov si, w16_r_tabs
+    jmp short .fail
+.mem:
+    mov si, w16_r_mem
+.fail:
+    mov es, [w16_fseg]
+    pop bp
     stc
+    ret
+
+; w16l_secoff - AX = a sector -> DX:AX = sector << ne_align (ES = the tables)
+w16l_secoff:
+    push cx
+    push si
+    mov si, [w16_ne]
+    mov cl, [es:si + NE_ALIGN]
+    or cl, cl
+    jnz .al
+    mov cl, 9
+.al:
+    and cl, 15
+    xor dx, dx
+.sh:
+    shl ax, 1
+    rcl dx, 1
+    dec cl
+    jnz .sh
+    pop si
+    pop cx
+    ret
+
+; w16l_hgrow - make the tables' claim hold AX bytes. out: CF=0 ES = it (and
+; [w16_fseg]); CF=1 no memory. Keeps all but ES.
+w16l_hgrow:
+    push ax
+    push cx
+    push dx
+    add ax, 1023
+    rcr ax, 1                       ; (the carry is bit 16)
+    mov cl, 9
+    shr ax, cl                      ; KB
+    cmp ax, [w16_hkb]
+    jbe .fits
+    mov dx, [w16_fseg]
+    call OSAPI_MEM_REGROW           ; DX = its base now
+    jc .out
+    mov [w16_fseg], dx
+    mov [w16_hkb], ax
+.fits:
+    mov es, [w16_fseg]
+    clc
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16l_tabend - the NE header in [w16_hdr]: AX = how far its tables reach
+; from it, CF=1 past 64KB. Each table's offset is a word from the header;
+; the imported names have no length and run to the entry table (SPEC.md
+; 124.20.1), so they are taken to end where the farthest other table does.
+w16l_tabend:
+    push bx
+    push cx
+    mov ax, [w16_hdr + NE_CSEG]     ; segments: 8 bytes each
+    mov cl, 3
+    shl ax, cl
+    jc .far
+    add ax, [w16_hdr + NE_SEGTAB]
+    jc .far
+    mov bx, [w16_hdr + NE_CMOD]     ; modules: a word each
+    shl bx, 1
+    jc .far
+    add bx, [w16_hdr + NE_MODTAB]
+    jc .far
+    call .max
+    mov bx, [w16_hdr + NE_ENTTAB]
+    add bx, [w16_hdr + NE_ENTLEN]
+    jc .far
+    call .max
+    mov bx, [w16_hdr + NE_RSRCTAB]
+    call .max
+    mov bx, [w16_hdr + NE_RESTAB]
+    call .max
+    mov bx, [w16_hdr + NE_IMPTAB]
+    inc bx
+    jz .far
+    call .max
+    cmp ax, 0x40                    ; at least the header itself
+    jae .ok
+    mov ax, 0x40
+.ok:
+    cmp ax, 0xF000                  ; room for the relocations behind them
+    ja .far
+    clc
+    jmp short .out
+.far:
+    stc
+.out:
+    pop cx
+    pop bx
+    ret
+.max:
+    cmp bx, ax
+    jbe .m
+    mov ax, bx
+.m:
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_fread - CX bytes (1-65535) at file offset DX:AX to ES:DI, through the
+; cluster cache (SPEC.md 124.20.1). The program's folder is current.
+; out: CF=1 the file ended first or would not read. Keeps all but AX, CX, DX
+; (and the bytes at ES:DI).
+; -----------------------------------------------------------------------------
+w16l_fread:
+    push bx
+    push si
+    push di
+    push bp
+    cld
+.loop:
+    jcxz .done
+    call .hit                       ; BX = the offset in the cache, CF=1 miss
+    jnc .copy
+    call .fill
+    jc .err
+    call .hit
+    jc .err                         ; past what the file holds
+.copy:
+    mov bp, [w16_clen]
+    sub bp, bx                      ; BP = what the cache has from there
+    cmp bp, cx
+    jbe .n
+    mov bp, cx
+.n:
+    push cx
+    push ds
+    mov si, bx
+    mov cx, bp
+    mov ds, [w16_cseg]
+    rep movsb
+    pop ds
+    pop cx
+    add ax, bp
+    adc dx, 0
+    sub cx, bp
+    jmp short .loop
+.done:
+    clc
+    jmp short .out
+.err:
+    stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop bx
+    ret
+; .hit - DX:AX inside the cache? BX = its offset there, CF=0; else CF=1
+.hit:
+    push dx
+    mov bx, ax
+    sub bx, [w16_cbase]
+    sbb dx, [w16_cbase + 2]
+    jnz .no                         ; below it, or 64KB and more past it
+    cmp bx, [w16_clen]
+    jae .no
+    pop dx
+    clc
+    ret
+.no:
+    pop dx
+    stc
+    ret
+; .fill - the cache from the cluster holding DX:AX. CF=1 a read error
+.fill:
+    push ax
+    push cx
+    push dx
+    push es
+    push di
+    mov bx, [w16_clus]
+    dec bx
+    not bx
+    and ax, bx
+    mov [w16_cbase], ax
+    mov [w16_cbase + 2], dx
+    mov word [w16_clen], 0
+    mov es, [w16_cseg]
+    xor bx, bx
+    mov cx, [w16_csz]
+    mov si, w16_name
+    call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
+    jc .ferr
+    or dx, dx
+    jz .f16
+    mov ax, [w16_csz]
+.f16:
+    mov [w16_clen], ax
+    clc
+.ferr:
+    pop di
+    pop es
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16l_cfree - the cache, given back. Keeps all.
+w16l_cfree:
+    push dx
+    xor dx, dx
+    xchg dx, [w16_cseg]
+    or dx, dx
+    jz .none
+    call OSAPI_MEM_FREE
+.none:
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -617,29 +876,10 @@ w16_relocs:
 .seg:
     test word [es:di + 4], NSF_RELOC
     jz .nextseg
-    mov ax, [es:di]
-    or ax, ax
+    mov si, [w16_rtoff + bx]        ; read with the segment (SPEC.md 124.20.1)
+    or si, si
     jz .nextseg
-    call w16_secoff                 ; AX = the segment's file offset
-    add ax, [es:di + 2]             ; ...its relocation table follows the data
-    jc .trunc
-    mov si, ax
-    add ax, 2
-    jc .trunc
-    cmp ax, [w16_fend]
-    ja .trunc
     mov cx, [es:si]                 ; the record count
-    mov ax, cx
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1
-    jc .trunc
-    add ax, si
-    jc .trunc
-    add ax, 2
-    jc .trunc
-    cmp ax, [w16_fend]
-    ja .trunc
     add si, 2
     jcxz .nextseg
 .rec:
@@ -676,33 +916,6 @@ w16_relocs:
     pop di
     pop si
     pop bp
-    ret
-
-; w16_secoff - AX = sector -> AX = sector << align (the file is < 64KB, so
-; anything that does not fit 16 bits is past its end: AX = 0xFFFF then)
-w16_secoff:
-    push cx
-    push dx
-    push si
-    mov si, [w16_ne]
-    mov cl, [es:si + NE_ALIGN]
-    or cl, cl
-    jnz .al
-    mov cl, 9
-.al:
-    xor dx, dx
-.sh:
-    shl ax, 1
-    rcl dx, 1
-    dec cl
-    jnz .sh
-    or dx, dx
-    jz .ok
-    mov ax, 0xFFFF
-.ok:
-    pop si
-    pop dx
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -777,8 +990,19 @@ w16_reloc1:
     jmp .apply
 .nfp:
     cmp ax, W16_WFROW               ; __WINFLAGS: a constant, its value
-    jne .stub
+    jne .ahinc
     ICALL w16k_getwinflags           ; AX (DX = 0)
+    jmp .apply
+.ahinc:
+    mov dx, 0x1000                  ; __AHINCR and __AHSHIFT: their values
+    cmp ax, W16_AHROW               ;   (SPEC.md 124.20.3)
+    je .equate
+    mov dx, 12
+    cmp ax, W16_AHROW + 1
+    jne .stub
+.equate:
+    mov ax, dx
+    xor dx, dx
     jmp .apply
 .stub:
     call w16_bindrow                ; the row's slot (SPEC.md 124.19.1)
@@ -1539,6 +1763,12 @@ w16_bindinit:
     stosb
     loop .c
     mov word [w16_nbind], W16_NFIXED
+%ifdef W16_TRACE
+    mov di, w16_trow                ; ES = DS here
+    mov cx, W16_NBIND
+    mov ax, 0xFFFF
+    rep stosw
+%endif
     pop es
     pop di
     pop si
@@ -1565,6 +1795,13 @@ w16_bindrow:
     jae .full
     inc word [w16_nbind]
     mov [cs:w16l_rowslot + bx], dx
+%ifdef W16_TRACE
+    push bx
+    mov bx, dx
+    shl bx, 1
+    mov [w16_trow + bx], ax
+    pop bx
+%endif
     mov cx, W16X_SIZE               ; the row: AX * 7
     mul cx
     mov si, ax
@@ -1609,7 +1846,7 @@ w16_mord:   dw 0
 w16_r_disk:    db 'Cannot reach the disk it is on.', 0
 w16_r_read:    db 'Cannot read the file.', 0
 w16_r_notwin:  db 'This is not a Windows program.', 0
-w16_r_big:     db 'Larger than 64KB: not yet.', 0
+w16_r_tabs:    db 'Its tables are larger than WIN16 can read.', 0
 w16_r_mem:     db 'Not enough memory to load it.', 0
 w16_r_lib:     db 'A Windows library, not a program.', 0
 w16_r_self:    db 'It loads itself: not supported.', 0

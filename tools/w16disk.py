@@ -17,7 +17,7 @@ put on a disk it would be refused from:
     a DOS program      no NE header
     a library          NEF_LIB / NEF_SELF (WIN16 runs programs, R4)
     protected mode     NEF_PMODE (Windows 3.1's /S-only, R3)
-    over 64KB          the whole file is read into one claim (R2)
+    big tables         its NE tables and relocations past 64KB (124.20.1)
     not 8.3            os8088's FAT names are 8.3
     no room            it did not fit after the ones before it
 
@@ -36,7 +36,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 NEF_PMODE, NEF_SELF, NEF_LIB = 0x0008, 0x0800, 0x8000
-MAXBYTES = 64 * 1024
+MAXTABLES = 0xFFF0              # w16_copysegs' bound (SPEC.md 124.20.1)
 EXTS = (".EXE",)
 
 
@@ -46,7 +46,7 @@ def verdict(path):
         d = f.read()
     if len(d) < 0x40 or d[:2] != b"MZ" or struct.unpack_from("<H", d, 0x18)[0] < 0x40:
         return "a DOS program, not a Windows one"
-    ne = struct.unpack_from("<H", d, 0x3C)[0]
+    ne = struct.unpack_from("<I", d, 0x3C)[0]
     if ne + 0x40 > len(d) or d[ne:ne + 2] != b"NE":
         return "a DOS program, not a Windows one"
     flags = struct.unpack_from("<H", d, ne + 0x0C)[0]
@@ -54,9 +54,25 @@ def verdict(path):
         return "a library or a self-loading program: not yet"
     if flags & NEF_PMODE:
         return "it needs protected mode"
-    if len(d) > MAXBYTES:
-        return "larger than 64KB: not yet (%d bytes)" % len(d)
+    if tables(d, ne) > MAXTABLES:
+        return "its tables are larger than WIN16 can read"
     return None
+
+
+def tables(d, ne):
+    """the bytes w16_load keeps while it loads (SPEC.md 124.20.1): the NE
+    tables, then every segment's relocation records, word-aligned between"""
+    u = lambda o: struct.unpack_from("<H", d, ne + o)[0]
+    end = max(u(0x22) + 8 * u(0x1C), u(0x28) + 2 * u(0x1E), u(0x04) + u(0x06),
+              u(0x24), u(0x26), u(0x2A) + 1, 0x40)
+    n = end + (end & 1)
+    align = u(0x32) or 9
+    for i in range(u(0x1C)):
+        sec, ln, fl, _ = struct.unpack_from("<4H", d, ne + u(0x22) + 8 * i)
+        r = (sec << align) + (ln or 0x10000)
+        if sec and fl & 0x100 and r + 2 <= len(d):
+            n += 2 + 8 * struct.unpack_from("<H", d, r)[0]
+    return n
 
 
 def is83(name):

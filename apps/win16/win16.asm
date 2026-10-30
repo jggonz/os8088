@@ -44,8 +44,10 @@ W16S_REFUSED equ 2              ; [w16_l1]/[w16_l2] say why, and it stays up
 W16S_RUN     equ 3              ; the program is running (or waiting)
 W16S_ENDED   equ 4              ; it called int 21h AH=4Ch; the window closes
 
-W16_MAXSEG   equ 64             ; segments a program may have (WinMine has 2,
-                                ; CALC 5; the table is 4 bytes a segment)
+W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
+                                ; a byte with 0FEh/0FFh taken (SPEC.md 124.20.2;
+                                ; Windows Help 3.1 has 102). 10 bytes a segment
+W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
 W16_MAXCLS   equ 8              ; classes (SPEC.md 124.8)
@@ -61,14 +63,16 @@ W16_TTLSZ    equ 50
 W16D_SBUF    equ 256            ; the dialog part's text buffer
 W16D_NBUF    equ 16             ; ...and its number's             ; ...each one's title buffer: its os8088
                                 ;   window, then up to 47 characters
-W16T_SIZE    equ 10             ; a timer record
+W16T_SIZE    equ 14             ; a timer record
 MSG_SIZE     equ 18             ; a Windows MSG
 W16_NSCAN    equ 0x59           ; scan codes with a virtual key
 W16_NPTS     equ 32             ; LineTo's point buffer
 W16_TXTMAX   equ 80             ; TextOut's longest run
+W16_DTMAX    equ 255            ; DrawText's longest string (w16draw.inc)
 W16_NOBJ     equ 16             ; brushes and pens made at once
-W16_NBMP     equ 8              ; bitmaps at once (SPEC.md 124.15.2)
+W16_NBMP     equ 16             ; bitmaps at once (SPEC.md 124.15.2)
 W16_NMDC     equ 4              ; memory DCs at once
+W16_DCMAX    equ 3              ; window DCs open under the current one
 W16S_QN      equ 32             ; SOUND's queue, in notes (SPEC.md 124.15.1:
 W16S_QE      equ 6              ;   Windows' 192 bytes), and a note's bytes
 W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
@@ -170,9 +174,20 @@ section .w16dlg
     W16BSS w16_vol, 1           ; ...and the volume
     W16BSS w16_l1, 48           ; the two lines the window shows
     W16BSS w16_l2, 48
-    W16BSS w16_fseg, 2          ; the file, read whole (freed before the run)
+    W16BSS w16_fseg, 2          ; the NE header and its tables, then every
+                                ;   segment's relocations (SPEC.md 124.20.1;
+                                ;   freed before the run)
+    W16BSS w16_hpos, 2          ; ...the bytes of it in use
+    W16BSS w16_hkb, 2           ; ...and the KB claimed
+    W16BSS w16_rtoff, 2 * W16_MAXSEG    ; each segment's relocations in it
+    W16BSS w16_cseg, 2          ; the cluster cache's claim (0 = none)
+    W16BSS w16_csz, 2           ; ...its bytes
+    W16BSS w16_cbase, 4         ; ...the file offset it holds
+    W16BSS w16_clen, 2          ; ...and the bytes of it valid
+    W16BSS w16_soff, 4          ; a segment's offset in the file
+    W16BSS w16_hdr, 64          ; the MZ header, then the NE header
     W16BSS w16_pseg, 2          ; the program's ONE claim
-    W16BSS w16_ne, 2            ; the NE header's offset in the file
+    W16BSS w16_ne, 2            ; the NE header's offset in [w16_fseg]: 0
     W16BSS w16_nseg, 2          ; segments
     W16BSS w16_sbase, 2 * W16_MAXSEG    ; each segment's paragraph
     W16BSS w16_slen, 2 * W16_MAXSEG     ; ...and its size in bytes (0 = 64KB)
@@ -235,6 +250,7 @@ section .w16dlg
     W16BSS w16_quit, 1          ; 1 = PostQuitMessage was called
     W16BSS w16_quitcode, 2
     W16BSS w16_tmr, W16_MAXTMR * W16T_SIZE
+    W16BSS w16_tproc, 4         ; the TimerProc DispatchMessage calls
     W16BSS w16_msg, MSG_SIZE    ; the message being delivered
     W16BSS w16_mx, 2            ; the last pointer position, screen
     W16BSS w16_my, 2
@@ -246,9 +262,14 @@ section .w16dlg
     W16BSS w16_sm_lp, 4
     W16BSS w16_dmg, 8           ; W_PAINT's damage, screen, inclusive
     ; --- GDI (w16gdi.inc) ---
-    W16BSS w16_dcon, 1
+    W16BSS w16_dcon, 1          ; 1 = a DC is open (w16_dcdep more under it)
     W16BSS w16_dctook, 1        ; 1 = the DC took the gfx lock
     W16BSS w16_dcclip, 1        ; 1 = ...and armed the kernel's clip
+    W16BSS w16_dcdep, 1         ; DCs open UNDER the current one (SPEC.md
+    W16BSS w16_gcol, 1          ;   124.20.4: a GetDC inside a GetDC)
+    W16BSS w16_objk, W16_NOBJ   ; each made object's W16K_*, 0 = free
+    W16BSS w16_objc, W16_NOBJ   ; ...and its colour
+    ; --- one DC's state, saved whole when another opens over it ---
     W16BSS w16_dchide, 1        ; 1 = nothing of the window is visible
     W16BSS w16_dcpaint, 1
     W16BSS w16_dcwnd, 2
@@ -264,22 +285,27 @@ section .w16dlg
     W16BSS w16_font, 2
     W16BSS w16_curx, 2
     W16BSS w16_cury, 2
-    W16BSS w16_gcol, 1
-    W16BSS w16_objk, W16_NOBJ   ; each made object's W16K_*, 0 = free
-    W16BSS w16_objc, W16_NOBJ   ; ...and its colour
     W16BSS w16_rop, 1           ; SetROP2's mode
     W16BSS w16_tcol, 1          ; the text colour, and its COLORREF
     W16BSS w16_trgb, 4
-%ifdef W16_TRACE                   ; a debugging knob: the last 128 gate rows
+    W16BSS w16_brgb, 4          ; SetBkColor's COLORREF (w16_tpap its colour)
+    W16BSS w16_bkmode, 1        ; SetBkMode's
+    W16BSS w16_tal, 1           ; SetTextAlign's
+    W16BSS w16_tpap, 1          ; text's paper colour (w16_txtdraw)
+    W16BSS w16_brorg, 4         ; SetBrushOrg's
+W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
+    W16BSS w16_dcstk, W16_DCMAX * W16_DCSZ ; the DCs open under it, innermost
+                                ;   last
+W16_TRN equ 2048                   ; the trace ring's entries, a power of two
+%ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate rows
     W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
-    W16BSS w16_trc, 256         ;   tools/w16trace.py reads (SPEC.md 124.17)
+    W16BSS w16_trc, 2 * W16_TRN ;   tools/w16trace.py reads (SPEC.md 124.17)
+    W16BSS w16_trow, 2 * W16_NBIND ; ...each bind slot's export row, FFFFh
+                                ;   for none (a missing import, a fixed slot)
 %endif
     W16BSS w16_ckhm, 2          ; int 21h 2Ch's anchor: the kernel's hour:minute
     W16BSS w16_cks, 1           ; ...second
     W16BSS w16_ckt, 2           ; ...and the BIOS tick it was seen at
-    W16BSS w16_brgb, 4          ; SetBkColor's COLORREF (w16_tpap its colour)
-    W16BSS w16_bkmode, 1        ; SetBkMode's
-    W16BSS w16_tal, 1           ; SetTextAlign's
     W16BSS w16_rgb, 4
     W16BSS w16_lx1, 2
     W16BSS w16_ly1, 2
@@ -475,6 +501,31 @@ section .w16dlg
     W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
     W16BSS w16_focus, 2         ; the window with the keyboard focus, 0 none
+    ; --- w16draw.inc (SPEC.md 124.20.4) ---
+    W16BSS w16_dtr, 8           ; DrawText's rectangle (IntersectRect's,
+                                ;   FrameRect's scratch too)
+    W16BSS w16_dtfmt, 2         ; ...its DT_* flags
+    W16BSS w16_dtn, 2           ; ...the characters kept
+    W16BSS w16_dth, 2           ; ...the height drawn so far
+    W16BSS w16_dtw, 2           ; ...the widest line
+    W16BSS w16_dtfh, 2          ; ...the font's height
+    W16BSS w16_dty, 2           ; ...the next line's y, client
+    W16BSS w16_dtclip, 8        ; ...the DC's clip, banked
+    W16BSS w16_dtdraw, 1        ; ...1 = drawing, not DT_CALCRECT
+    W16BSS w16_dtc, 2           ; ...one character measured
+    W16BSS w16_dtbuf, W16_DTMAX + 1     ; ...the string, its prefixes out
+    W16BSS w16_ddx, 2           ; LineDDA's point
+    W16BSS w16_ddy, 2
+    W16BSS w16_ddxa, 2          ; ...its steps, +1 or -1
+    W16BSS w16_ddya, 2
+    W16BSS w16_dderr, 2         ; ...Bresenham's error and its two adds
+    W16BSS w16_ddea, 2
+    W16BSS w16_ddeb, 2
+    W16BSS w16_ddcnt, 2         ; ...the points still to call
+    W16BSS w16_ddmaj, 1         ; ...1 = x is the major axis
+    W16BSS w16_ddfn, 4          ; ...the callback
+    W16BSS w16_ddat, 4          ; ...and its lpData
+    W16BSS w16_gpix, 4          ; GetPixel's one screen pixel, a byte a plane
     W16BSS w16_kl, 2            ; w16_wclip's answer, screen, inclusive
     W16BSS w16_kt, 2
     W16BSS w16_kr, 2
@@ -573,7 +624,6 @@ section .w16dlg
     W16BSS w16_mvx, 2           ; MoveWindow's place, and SWP_NOSIZE/NOMOVE
     W16BSS w16_mvy, 2
     W16BSS w16_mvfl, 1
-    W16BSS w16_tpap, 1          ; text's paper colour (w16_txtdraw)
     W16BSS w16_bmpp, 2          ; w16_bmp's picture
     W16BSS w16_bxl, 2           ; w16_tbox's box, screen, inclusive
     W16BSS w16_bxt, 2
@@ -657,6 +707,7 @@ section .w16dlg
     W16BSS w16b_sel, 2 * W16_NBMP       ; ...1 = a memory DC holds it
     W16BSS w16m_bmp, 2 * W16_NMDC       ; each memory DC's bitmap
     W16BSS w16m_on, W16_NMDC            ; ...1 = it exists
+    W16BSS w16m_brush, 2 * W16_NMDC     ; ...the brush selected into it
     W16BSS w16b_rec, 14         ; GetObject's BITMAP
     W16BSS w16b_bm, 2           ; the blit's: the bitmap's slot * 2
     W16BSS w16b_src, 2          ; ...the source DC
@@ -680,6 +731,14 @@ section .w16dlg
     W16BSS w16b_band, 2         ; ...rows a band
     W16BSS w16b_by, 2           ; ...the band's first screen row
     W16BSS w16b_rs, 2           ; LoadBitmap's resource, its data segment
+    W16BSS w16b_dbm, 2          ; a blit INTO a memory DC: its bitmap * 2
+    W16BSS w16b_dfc, 1          ; ...a fill's colour, or W16_XOR to invert
+    W16BSS w16b_fpat, 1         ; ...and in both halves of a byte
+    W16BSS w16b_mbr, 2          ; ...the memory DC's brush
+    W16BSS w16b_pl, 1           ; ...the screen's planes, read from it
+    W16BSS w16b_bw, 2           ; ...the screen bytes a row a plane
+    W16BSS w16b_sxs, 2          ; ...the screen rect read, inclusive
+    W16BSS w16b_sxe, 2
     ; --- icons (SPEC.md 124.18.4, w16ico.inc)
     W16BSS w16_icseg, 2         ; part 6's segment, 0 = not here
     W16BSS w16_icx, 2           ; w16_icodraw: where, screen
@@ -1349,6 +1408,7 @@ w16_cputest:
 %include "win16/w16clip.inc"    ; the clipboard, strings (SPEC.md 124.16)
 %include "win16/w16acc.inc"     ; what CLOCK and REVERSI call (SPEC.md 124.17)
 %include "win16/w16ico.inc"     ; icons (SPEC.md 124.18.4)
+%include "win16/w16draw.inc"    ; what Solitaire calls (SPEC.md 124.20.4)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md

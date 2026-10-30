@@ -105,6 +105,10 @@ W16_D3ROW equ W16NX
 W16EXPORT W16M_KERNEL,     102,     0,  w16k_dos3call       ; DOS3Call() -register
 W16_WFROW equ W16NX
 W16EXPORT W16M_KERNEL,     178,     0,  w16k_getwinflags    ; __WINFLAGS, an equate
+; the huge-pointer equates, real mode's values (SPEC.md 124.20.3)
+W16_AHROW equ W16NX
+W16EXPORT W16M_KERNEL,     114,     0,  w16x_never          ; __AHINCR = 1000h
+W16EXPORT W16M_KERNEL,     113,     0,  w16x_never          ; __AHSHIFT = 12
 ; and __FPMATH to the emulator's or the coprocessor's (SPEC.md 124.5.2)
 W16_FPROW equ W16NX
 W16EXPORT W16M_WIN87EM,    1,       0,  w16x_never          ; __FPMATH() -register
@@ -288,6 +292,21 @@ W16EXPORT W16M_GDI,        154,     6,  w16g_nearcol        ; GetNearestColor(wo
 W16EXPORT W16M_GDI,        346,     4,  w16g_settalign      ; SetTextAlign(word word)
 W16EXPORT W16M_GDI,        351,     22, w16g_exttext        ; ExtTextOut(word s_word s_word word ptr ptr word ptr)
 W16EXPORT W16M_USER,       84,      8,  w16u_drawicon       ; DrawIcon(word s_word s_word word)
+; what Solitaire calls (SPEC.md 124.20.4, w16draw.inc)
+W16EXPORT W16M_USER,       74,      8,  w16u_copyrect       ; CopyRect(ptr ptr)
+W16EXPORT W16M_USER,       79,      12, w16u_isectrect      ; IntersectRect(ptr ptr ptr)
+W16EXPORT W16M_USER,       82,      6,  w16u_invrect        ; InvertRect(word ptr)
+W16EXPORT W16M_USER,       83,      8,  w16u_framerect      ; FrameRect(word ptr word)
+W16EXPORT W16M_USER,       85,      14, w16u_drawtext       ; DrawText(word str s_word ptr word)
+W16EXPORT W16M_USER,       118,     4,  w16u_regmsg         ; RegisterWindowMessage(str)
+W16EXPORT W16M_USER,       102,     10, w16u_adjrect        ; AdjustWindowRect(ptr long word)
+W16EXPORT W16M_USER,       59,      2,  w16u_setactive      ; SetActiveWindow(word)
+W16EXPORT W16M_GDI,        100,     16, w16g_linedda        ; LineDDA(s_word s_word s_word s_word segptr long)
+W16EXPORT W16M_GDI,        103,     6,  w16g_ptvisible      ; PtVisible(word s_word s_word)
+W16EXPORT W16M_GDI,        148,     6,  w16g_setbrorg       ; SetBrushOrg(word s_word s_word)
+W16EXPORT W16M_GDI,        51,      6,  w16g_cmpbmp         ; CreateCompatibleBitmap(word word word)
+W16EXPORT W16M_GDI,        79,      2,  w16g_getdcorg       ; GetDCOrg(word)
+W16EXPORT W16M_GDI,        83,      6,  w16g_getpixel       ; GetPixel(word s_word s_word)
 W16EXPORT W16M_USER,       457,     2,  w16u_destroyicon    ; DestroyIcon(word)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
 W16EXPORT W16M_SOUND,      1,       0,  w16s_open           ; OpenSound()
