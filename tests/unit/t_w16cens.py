@@ -7,7 +7,8 @@ docs/plans/WIN16-PLAN.md S11).
 `apps/win16/w16cens.inc` is os88ne.py's recursive descent, run on the 8088
 that has to decide whether a program may run (SPEC.md 124.4.1). Its header
 promises that it follows the host "decision for decision", and this row is
-where that is held: the WHOLE of WIN16 is assembled, loaded into unicorn,
+where that is held: the WHOLE of WIN16 is assembled, loaded into unicorn (the
+census's code at a segment of its own, as part 5, SPEC.md 124.18.7),
 and its own `w16_census` is called on each program the way the loader
 calls it - the file read, every segment copied to a paragraph of its own,
 the relocations applied and the OS fixups patched for a machine with no
@@ -60,7 +61,8 @@ except Exception:                                          # pragma: no cover
     print("t_w16cens: SKIP - unicorn is not importable here")
     sys.exit(77)
 
-IMG = 0x1000            # WIN16's segment: CS = DS
+IMG = 0x1000            # WIN16's segment: DS
+PSEG = 0x7000           # part 5, the loader and the census: CS (SPEC.md 124.18.7)
 FSEG = 0x2000           # the file, as w16_load reads it
 SEG0 = 0x3000           # the program's segments, one after another
 CLAIM = 0x8000          # what OSAPI_MEM_CLAIM answers
@@ -96,8 +98,10 @@ def assemble():
     for line in open(cache + ".map"):
         f = line.split()
         if len(f) == 3 and re.fullmatch(r"[0-9A-F]+", f[0]):
-            syms[f[2]] = int(f[0], 16)
-    return open(cache + ".bin", "rb").read()[:syms["os88_image_end"]], syms
+            syms[f[2]] = int(f[1], 16)      # VIRTUAL: a part's own offset
+    raw = open(cache + ".bin", "rb").read()
+    at = raw.find(b"W16LOADR") - 2           # part 5 is the last section
+    return raw[:syms["os88_image_end"]], raw[at:], syms
 
 
 def api(name):
@@ -106,7 +110,7 @@ def api(name):
                          src).group(1), 16)
 
 
-IMAGE, S = assemble()
+IMAGE, PART, S = assemble()
 CLAIM_CELL, FREE_CELL = api("OSAPI_MEM_CLAIM"), api("OSAPI_MEM_FREE")
 REFUSAL = {}
 for k, tier in (("w16_r_c186", "186"), ("w16_r_c286", "286"),
@@ -222,6 +226,7 @@ class Machine:
     def census(self, data, ne):
         mu = self.mu
         mu.mem_write(IMG << 4, IMAGE + b"\0" * (0x10000 - len(IMAGE)))
+        mu.mem_write(PSEG << 4, PART + b"\0" * (0x10000 - len(PART)))
         mu.mem_write(FSEG << 4, data + b"\0" * (0x10000 - len(data)))
         mu.mem_write(CLAIM << 4, b"\xAA" * 0x10000)       # the census clears it
         base = layout(ne)
@@ -235,15 +240,17 @@ class Machine:
         for s in ne.segs:
             put(mu, "w16_sbase", base[s.n], 2 * (s.n - 1))
         mu.mem_write((IMG << 4) + S["w16_name"], b"TEST.EXE\0")
+        put(mu, "w16_ibv", S["w16_ibgate"])     # ICALL's way back, as the
+        put(mu, "w16_ibv", IMG, 2)              #   entry proc sets it
         sp = 0xFFFE - 2
         mu.mem_write((SSEG << 4) + sp, struct.pack("<H", STOP))
         for r, v in ((UC_X86_REG_SS, SSEG), (UC_X86_REG_SP, sp), (UC_X86_REG_DS, IMG),
-                     (UC_X86_REG_ES, IMG), (UC_X86_REG_CS, IMG)):
+                     (UC_X86_REG_ES, IMG), (UC_X86_REG_CS, PSEG)):
             mu.reg_write(r, v)
-        lin = (IMG << 4) + S["w16_census"]
+        lin = (PSEG << 4) + S["w16_census"]
         while True:
             self.pend = None
-            mu.emu_start(lin, (IMG << 4) + STOP, count=400000000)
+            mu.emu_start(lin, (PSEG << 4) + STOP, count=400000000)
             if self.pend is None:
                 break
             if self.pend != 0xF0:

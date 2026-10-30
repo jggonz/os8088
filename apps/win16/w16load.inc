@@ -46,6 +46,24 @@ NSF_DATA   equ 0x0001           ; segment flags
 NSF_ITER   equ 0x0008
 NSF_RELOC  equ 0x0100
 
+; =============================================================================
+; PART 5, W16P_LOAD (SPEC.md 124.18.7): the loader and the census run once a
+; program, so their CODE is a part, fetched by the wake handler (w16_ldin) and
+; dropped when the load returns. Their tables, strings and scratch stay in the
+; image in `section .text`, read through DS, which is ours on both sides; a
+; call into the image is ICALL, as the dialog part's are, and the image's own
+; address in a stub's far pointer is DS, never this part's CS.
+; =============================================================================
+section .w16ld follows=.w16fp vstart=0 align=1
+w16l_base:
+    jmp short w16l_go               ; +0  tools/os88ovl.py: a short jump ...
+    db 'W16LOADR'                   ; +2  ...before the cut mark
+w16l_go:
+; w16_loadf - w16_load, far-called by w16_ldin
+w16_loadf:
+    call w16_load
+    retf
+
 ; -----------------------------------------------------------------------------
 ; w16_load - read, check, lay out, relocate, and build the first frame
 ; in:  [w16_name], [w16_dir], [w16_vol]; the wake handler's context
@@ -197,14 +215,14 @@ w16_load:
     jc .refuse
     call w16_copysegs               ; CF=1 SI = reason
     jc .refuse
-    call w16_copyres                ; the resource table, kept (SPEC.md 124.10)
+    ICALL w16_copyres                ; the resource table, kept (SPEC.md 124.10)
     jc .refuse
     call w16_modules                ; which of the imported modules are ours
     mov word [w16_nfix], 0
     xor al, al
     call w16_relocs                 ; pass 0: check every import (CF=1: [w16_l1/2])
     jc .refused
-    call w16x_mode                  ; the x87: native, emulated, or neither
+    ICALL w16x_mode                  ; the x87: native, emulated, or neither
     jc .refuse
     mov al, 1
     call w16_relocs                 ; pass 1: apply
@@ -229,10 +247,10 @@ w16_load:
 .refuse0:                           ; SI = a line-1 reason, before any claim
 .refuse:
     mov di, w16_l1
-    call w16_strcpy
+    ICALL w16_strcpy
     mov si, w16_name
     mov di, w16_l2
-    call w16_strcpy
+    ICALL w16_strcpy
 .refused:
     mov dx, [w16_fseg]
     or dx, dx
@@ -344,7 +362,7 @@ w16_layout:
     mov [w16_psp], bp               ; then the PSP-shaped block, 16 paragraphs
     add bp, 16
     mov [w16_rtab], bp              ; then the kept resource table (w16res.inc)
-    call w16_rlayout
+    ICALL w16_rlayout
     add bp, ax
     mov ax, bp
     add ax, 63                      ; KB, rounded up
@@ -645,10 +663,10 @@ w16_relocs:
 .trunc:
     mov si, w16_r_trunc
     mov di, w16_l1
-    call w16_strcpy
+    ICALL w16_strcpy
     mov si, w16_name
     mov di, w16_l2
-    call w16_strcpy
+    ICALL w16_strcpy
     stc
     jmp short .out
 .ok:
@@ -712,7 +730,7 @@ w16_reloc1:
     push es
     mov bx, [w16_rseg]
     mov es, [w16_sbase + bx]
-    call w16x_osfix
+    ICALL w16x_osfix
     pop es
     jmp .ok
 .notos:
@@ -734,12 +752,12 @@ w16_reloc1:
 .byord:
     mov ax, [es:si + 6]             ; the ordinal
 .named:
-    call w16_findexp                ; DL = module, AX = ordinal -> AX = row
+    ICALL w16_findexp                ; DL = module, AX = ordinal -> AX = row
     jc .missing
     cmp ax, W16_D3ROW               ; DOS3Call: int 21h itself, no gate
     jne .nd3                        ;   (SPEC.md 124.15.3)
     mov ax, w16k_dos3call
-    mov dx, cs
+    mov dx, ds                      ; the image's segment (this part's CS is not)
     jmp .apply
 .nd3:
     cmp ax, W16_FPROW               ; __FPMATH: the emulator's, or ours
@@ -754,12 +772,12 @@ w16_reloc1:
     cmp byte [w16_fpm], W16FP_EMU
     je .apply
     mov ax, w16x_fpmath
-    mov dx, cs
+    mov dx, ds                      ; the image's segment (this part's CS is not)
     jmp .apply
 .nfp:
     cmp ax, W16_WFROW               ; __WINFLAGS: a constant, its value
     jne .stub
-    call w16k_getwinflags           ; AX (DX = 0)
+    ICALL w16k_getwinflags           ; AX (DX = 0)
     jmp .apply
 .stub:
     mov dx, ax                      ; the stub: our CS : w16_stubs + row * 6
@@ -767,7 +785,7 @@ w16_reloc1:
     add ax, dx
     shl ax, 1
     add ax, w16_stubs
-    mov dx, cs
+    mov dx, ds                      ; the image's segment (this part's CS is not)
     jmp .apply
 .missing:                           ; SPEC.md 124.12: bound to a stub that
     cmp byte [w16_rpass], 1         ;   ends the program, naming it, if it is
@@ -786,10 +804,10 @@ w16_reloc1:
     pop bx
     mov si, w16_r_toomany
     mov di, w16_l1
-    call w16_strcpy
+    ICALL w16_strcpy
     mov si, w16_name
     mov di, w16_l2
-    call w16_strcpy
+    ICALL w16_strcpy
     stc
     ret
 .internal:
@@ -835,7 +853,7 @@ w16_reloc1:
     push es
     mov bx, [w16_rseg]
     mov es, [w16_sbase + bx]
-    call w16_inrange                ; the FIRST site must be in the segment
+    ICALL w16_inrange                ; the FIRST site must be in the segment
     jc .applied
     test ch, 4                      ; additive: that one site, added
     jz .chain
@@ -852,7 +870,7 @@ w16_reloc1:
     mov di, bx
     cmp di, 0xFFFF
     je .chained
-    call w16_inrange
+    ICALL w16_inrange
     jc .chained
     dec bp
     jnz .link
@@ -873,10 +891,10 @@ w16_reloc1:
     pop bx
     mov si, w16_r_reloc
     mov di, w16_l1
-    call w16_strcpy
+    ICALL w16_strcpy
     mov si, w16_name
     mov di, w16_l2
-    call w16_strcpy
+    ICALL w16_strcpy
     stc
     ret
 
@@ -941,6 +959,7 @@ w16_byname:
     pop bx
     ret
 
+section .text                       ; (w16_inrange is w16x87.inc's too)
 w16_bynm:                           ; module, ordinal, the name (pascal)
     db W16M_WIN87EM
     dw 1
@@ -971,6 +990,7 @@ w16_inrange:
     stc
     ret
 
+section .w16ld
 ; w16_site - write DX:AX at ES:DI by address type CL; CH bit 2 = additive.
 ; out CF=1 an address type WIN16 does not know
 w16_site:
@@ -1199,7 +1219,7 @@ w16_prolog1:
     mov es, [w16_sbase + bx]
     push di
     inc di                          ; three bytes must fit
-    call w16_inrange
+    ICALL w16_inrange
     pop di
     jc .out
     cmp byte [es:di + 2], 0x90
@@ -1316,7 +1336,7 @@ w16_frame:
 ; "USER.287" or "COMMDLG.GETOPENFILENAME", into the next free slot of
 ; w16_mtxt unless a slot already holds it, and that slot's stub
 ; in:  [w16_mmod] (1-based), [w16_mord], [w16_mkind]; ES = the file
-; out: DX:AX = the stub (our CS); CF=1 W16_NMISS are already taken
+; out: DX:AX = the stub (the image's segment); CF=1 W16_NMISS are already taken
 ; -----------------------------------------------------------------------------
 w16_missbind:
     push bx
@@ -1348,7 +1368,7 @@ w16_missbind:
     jmp short .named
 .ord:
     mov ax, [w16_mord]
-    call w16_putdec
+    ICALL w16_putdec
 .named:
     mov byte [di], 0
     mov byte [w16_mbtext + W16_MTXT - 1], 0
@@ -1357,7 +1377,7 @@ w16_missbind:
     cmp bx, [w16_nmiss]
     jae .new
     mov si, w16_mbtext              ; the same name: the same stub
-    call w16_mslot                  ; DI -> slot BX's text
+    ICALL w16_mslot                  ; DI -> slot BX's text
 .cmp:
     mov al, [si]
     cmp al, [di]
@@ -1375,15 +1395,15 @@ w16_missbind:
     jae .full
     inc word [w16_nmiss]
     mov si, w16_mbtext
-    call w16_mslot
-    call w16_strcpy
+    ICALL w16_mslot
+    ICALL w16_strcpy
 .stub:
     mov ax, bx                      ; w16_mstubs + 6 * slot
     shl ax, 1
     add ax, bx
     shl ax, 1
     add ax, w16_mstubs
-    mov dx, cs
+    mov dx, ds                      ; the image's segment (this part's CS is not)
     clc
     jmp short .out
 .full:
@@ -1395,6 +1415,7 @@ w16_missbind:
     pop bx
     ret
 
+section .text                       ; (w16api.inc's too)
 ; w16_mslot - DI -> missing-import slot BX's text (W16_MTXT = 24 bytes each)
 w16_mslot:
     push ax
@@ -1409,6 +1430,7 @@ w16_mslot:
     pop ax
     ret
 
+section .w16ld
 ; w16_pcopy - ES:SI pascal string -> DI (at most 24 characters), DI past it
 w16_pcopy:
     push cx
@@ -1431,6 +1453,7 @@ w16_pcopy:
     ret
 
 
+section .text
 ; --- the loader's own bss, beside the package's -----------------------------
 ; (declared here, in the image, rather than in w16_* bss: they are scratch
 ; for one load and a few bytes)

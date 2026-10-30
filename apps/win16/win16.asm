@@ -24,7 +24,18 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'WIN16', w16_entry, OS88_F_PARTS
+    OS88_HEADER 'WIN16', w16_entry, OS88_F_ICON | OS88_F_PARTS
+
+; --- the icon (SPEC.md 20.2, 124.18.3): a window with a title bar and the
+; four-pane flag in it, 1bpp, the same on every adapter. It is the dock's tile
+; for every program WIN16 runs, and the Disk window's for WIN16.O88; the
+; program's own icons are §124.18.4's, drawn inside its window
+    OS88_ICON16
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000
+    dw 0xFFFF, 0xFFFF, 0x8001, 0x8001, 0x9EF1, 0x9EF1, 0x9EF1, 0x8001
+    dw 0x9EF1, 0x9EF1, 0x9EF1, 0x8001, 0x8001, 0xFFFF, 0x0000, 0x0000
+    OS88_ICON16_END
 
 ; --- the states -------------------------------------------------------------
 W16S_IDLE    equ 0              ; launched empty
@@ -85,6 +96,10 @@ W16P_DLG     equ 3              ; the dialog manager and controls (SPEC.md
                                 ;   124.13): code, far-called both ways
 W16P_FPU     equ 4              ; the 8087 emulator (SPEC.md 124.5.1): code,
                                 ;   reached by the program's int 34h-3Dh
+W16P_LOAD    equ 5              ; the loader and the census (SPEC.md 124.18.7):
+                                ;   code, far-called once a program
+W16P_ICONS   equ 6              ; WIN16's own system icons (SPEC.md 124.18.4):
+                                ;   tools/w16icon.py's, from apps/win16/icons/
 
 ; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
 ; sides of either, so a vector is one word written and one far call, and a
@@ -500,6 +515,11 @@ section .w16dlg
     W16BSS w16d_mtw, 2
     W16BSS w16d_mtl, 2
     W16BSS w16d_mth, 2
+    W16BSS w16d_icon, 2         ; an SS_ICON static's icon, or a message
+                                ;   box's (SPEC.md 124.18.4); 0 none
+    W16BSS w16d_tx, 2           ; a message box's text: where it starts
+    W16BSS w16d_ty, 2
+    W16BSS w16d_mby, 2          ; ...and its buttons' top
     W16BSS w16_cwkind, 1        ; w16_mkwnd's arguments (SPEC.md 124.8)
     W16BSS w16_cwcls, 1
     W16BSS w16_cwproc, 4
@@ -522,7 +542,7 @@ section .w16dlg
     W16BSS w16_bxr, 2
     W16BSS w16_bxb, 2
     ; --- profiles (SPEC.md 124.14, w16prof.inc) ---------------------------------
-    W16BSS w16pf_tab, 88        ; W16PF_N rows of W16PF_SZ (4 x 22)
+    W16BSS w16pf_tab, 104       ; W16PF_N rows of W16PF_SZ (4 x 26)
     W16BSS w16pf_clock, 1       ; the use stamp's clock
     W16BSS w16pf_row, 2         ; the row being worked on
     W16BSS w16pf_end, 2         ;   and its length
@@ -622,6 +642,22 @@ section .w16dlg
     W16BSS w16b_band, 2         ; ...rows a band
     W16BSS w16b_by, 2           ; ...the band's first screen row
     W16BSS w16b_rs, 2           ; LoadBitmap's resource, its data segment
+    ; --- icons (SPEC.md 124.18.4, w16ico.inc)
+    W16BSS w16_icseg, 2         ; part 6's segment, 0 = not here
+    W16BSS w16_icx, 2           ; w16_icodraw: where, screen
+    W16BSS w16_icy, 2
+    W16BSS w16_icw, 2           ; ...the image's width and height
+    W16BSS w16_ich, 2
+    W16BSS w16_icbpp, 1         ; ...its bits a pixel
+    W16BSS w16_icmap, 16        ; ...its colours, each the nearest of ours
+    W16BSS w16_icxp, 2          ; ...where its colours' rows and its mask's
+    W16BSS w16_icxs, 2          ;   rows start, and their strides
+    W16BSS w16_icap, 2
+    W16BSS w16_icas, 2
+    W16BSS w16_icrc, 1          ; ...the run being gathered: its colour
+    W16BSS w16_icrs, 2          ;   (W16_NOCOL none) and its first column
+    W16BSS w16_icgnd, 1         ; ...what a see-through pixel is: W16_NOCOL,
+                                ;   or a static's ground colour
     ; --- FindWindow (SPEC.md 124.15.3)
     W16BSS w16_fwt, 4           ; the title asked for, far
     W16BSS w16_fwcls, 1         ; 1 = a class was asked for
@@ -682,6 +718,7 @@ w16_entry:
     or al, al
     loopnz .cp
     mov byte [di], 0
+    call w16_ownname                ; the instance is named after it
     mov si, w16_name
     mov di, w16_l1
     call w16_strcpy
@@ -721,7 +758,7 @@ w16_wake:
     cmp byte [w16_state], W16S_LOAD
     jne .out
     mov byte [w16_state], W16S_RUN
-    call w16_load                   ; CF=1: refused, [w16_l1]/[w16_l2] say why
+    call w16_ldin                   ; CF=1: refused, [w16_l1]/[w16_l2] say why
     jc .refused
     call w16_facein                 ; the System font for this display
     jnc .run
@@ -822,6 +859,7 @@ w16_freeprog:
     mov word [w16_capture], 0
     call w16_dlgout
     call w16x_end                   ; its floating point (SPEC.md 124.5)
+    call w16_icend                  ; its icons (SPEC.md 124.18.4)
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
@@ -902,6 +940,66 @@ w16_facein:
     ret
 
 ; -----------------------------------------------------------------------------
+; w16_pfetch - part AL, fetched from WIN16's own folder (SPEC.md 20.12):
+; out CF=0 and AX = its segment; CF=1 it could not be, and op_fetch has said
+; why. Keeps every other register.
+; -----------------------------------------------------------------------------
+w16_pfetch:
+    push bx
+    push dx
+    push ax
+    call OSAPI_FILE_HERE            ; where the user is, to be put back
+    push dx
+    push bx
+    mov dx, [w16_home]
+    mov bl, [w16_homev]
+    call OSAPI_FILE_GOTO_QM
+    mov bx, sp
+    mov al, [ss:bx + 4]             ; the part
+    call op_fetch                   ; claims, reads, expands; a toast if not
+    pop bx
+    pop dx
+    pushf
+    call OSAPI_FILE_GOTO_QM
+    popf
+    pop ax
+    jc .out
+    call op_seg                     ; AX = it
+.out:
+    pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_ldin - the load, from part 5 (SPEC.md 124.18.7): fetched, far-called,
+; and dropped whatever w16_load answered. Its contract is w16_load's: CF=1
+; refused, with [w16_l1]/[w16_l2] saying why.
+; -----------------------------------------------------------------------------
+w16_ldin:
+    mov al, W16P_LOAD
+    call w16_pfetch
+    jnc .have
+    mov si, w16_name
+    mov di, w16_l1
+    call w16_strcpy
+    mov si, w16_s_noload
+    mov di, w16_l2
+    call w16_strcpy
+    stc
+    ret
+.have:
+    mov word [w16_pfv], w16_loadf   ; DCALL's vector, idle at a load: no
+    mov [w16_pfv + 2], ax           ;   dialog is up before the program runs
+    call far [w16_pfv]
+    pushf
+    mov ax, [w16_dseg]              ; the dialog part's segment back, for
+    mov [w16_pfv + 2], ax           ;   the next DCALL
+    mov al, W16P_LOAD
+    call op_drop
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; w16_dlgin - the dialog part (SPEC.md 124.13), fetched from WIN16's own
 ; folder if it is not here. CF=1: it could not be, and op_fetch has said why.
 ; Keeps every register.
@@ -915,22 +1013,9 @@ w16_dlgin:
     push ax
     push bx
     push dx
-    call OSAPI_FILE_HERE            ; where the user is, to be put back
-    push dx
-    push bx
-    mov dx, [w16_home]
-    mov bl, [w16_homev]
-    call OSAPI_FILE_GOTO_QM
     mov al, W16P_DLG
-    call op_fetch                   ; claims, reads, expands; a toast if not
-    pop bx
-    pop dx
-    pushf
-    call OSAPI_FILE_GOTO_QM
-    popf
+    call w16_pfetch
     jc .out
-    mov al, W16P_DLG
-    call op_seg
     mov [w16_dseg], ax
     mov [w16_pfv + 2], ax
     clc
@@ -1073,6 +1158,38 @@ w16_strcpy:
     pop ax
     ret
 
+; w16_ownname - the program's stem into OUR header's name (SPEC.md 20.2 +16,
+; 124.18.3): the loader copies that field into I_NAME after this entry proc
+; returns, so the Task Manager, the dock and the menu bar call the instance
+; WINMINE rather than WIN16. The field is 16 bytes, NUL-padded. Keeps every
+; register.
+w16_ownname:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, w16_name
+    mov di, 16
+    mov cx, 16
+.c:
+    lodsb
+    cmp al, '.'
+    jne .k
+    xor al, al                      ; the stem ends at the dot
+.k:
+    or al, al
+    jnz .w
+    dec si                          ; NUL: pad from here on
+.w:
+    mov [di], al
+    inc di
+    loop .c
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 ; w16_pmcheck - CF=1 under protected mode, having said so (SPEC.md 124.1, D6)
 ; Its own routine so that w16_entry, which loads the idle lines, is not a
 ; toasting procedure to tests/unit/t_toast.py. Not os88mega.inc's refusal:
@@ -1188,6 +1305,7 @@ w16_cputest:
 %include "win16/w16bmp.inc"     ; bitmaps and memory DCs (SPEC.md 124.15.2)
 %include "win16/w16clip.inc"    ; the clipboard, strings (SPEC.md 124.16)
 %include "win16/w16acc.inc"     ; what CLOCK and REVERSI call (SPEC.md 124.17)
+%include "win16/w16ico.inc"     ; icons (SPEC.md 124.18.4)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"
@@ -1204,6 +1322,7 @@ w16_s_idle2:    db 'Double-click one in a Disk window.', 0
 w16_s_loading:  db 'Loading...', 0
 w16_s_running:  db 'Running', 0
 w16_s_noface:   db 'Its System font could not be read.', 0
+w16_s_noload:   db 'WIN16.O88 could not be read.', 0
 
 ; --- the alert (SPEC.md 75.3): MessageBox's face until S6 --------------------
 %define OS88UI_ALERT 1
@@ -1215,12 +1334,14 @@ w16_s_noface:   db 'Its System font could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 5
+    OS88_PARTS_BEGIN 7
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_DLG: section .w16dlg
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_FPU: section .w16fp
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_LOAD: section .w16ld
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_ICONS: apps/win16/icons/
     OS88_PARTS_END
 
     OS88_IMAGE_END

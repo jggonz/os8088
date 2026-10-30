@@ -74,7 +74,10 @@ def assemble():
         wrap = os.path.join(td, "w.asm")
         out = os.path.join(td, "w16fp.bin")
         with open(wrap, "w") as f:
-            f.write('cpu 8086\nbits 16\nsection .text\n%%include "%s"\n' % src)
+            # w16fp.inc's section FOLLOWS .w16dlg, the dialog part (124.18.7)
+            f.write('cpu 8086\nbits 16\nsection .text\n'
+                    'section .w16dlg vstart=0 align=1\n'
+                    '%%include "%s"\n' % src)
         subprocess.run(["nasm", "-w+error", "-f", "bin", "-o", out, wrap], check=True)
         return open(out, "rb").read()
 

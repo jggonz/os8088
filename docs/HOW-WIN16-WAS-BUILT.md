@@ -1248,3 +1248,78 @@ spacing array is not followed; every pen is one pixel wide.
 **What it cost.** WIN16's image went from 48,254 bytes to 49,721, and its
 bss from 13,964 to 13,975, leaving 1,840 bytes under the 64 KB segment.
 63,244 bytes on disk. The kernel is unchanged.
+
+## 2026-10-30 — S12: living with the desktop
+
+*As a user, my Windows programs behave like any other os8088 program: on
+the disk I already have, two at once, named after themselves, with their
+icons, closed by the close box, and ended when they will not close.*
+
+**Making room first.** S11 left 1,840 bytes under the 64 KB segment, and
+icons, a profile merge and a name were all still to come. The loader and the
+census only run while a program loads, so they became part 5 of
+`WIN16.O88`: fetched for the load, far-called once, dropped after. Their data
+and the few image routines they call stayed in the image, and the calls the
+other way go through the same `ICALL` gate the dialog part uses. The image
+fell from 49,721 to 46,552 bytes. `tools/os88ovl.py` learned to cut more than
+one module off an image in order, each at its own mark.
+
+**The name.** The kernel copies the name in a package's header into the
+instance record after the entry proc returns. WIN16's entry writes the
+program's stem there first, so the Task Manager, the dock's tip and the menu
+bar all say ICONS rather than WIN16. The dock keys a tile by its icon, so the
+program's own icon cannot go there; WIN16 got a small icon of its own, a
+window with a flag.
+
+**Icons.** The five system icons are Microsoft's art, so WIN16 has its own:
+32 x 32 drawings in text files, one character a pixel, built into part 6 by
+`tools/w16icon.py` as the same kind of image a program's own icons are. One
+drawing routine serves both, row by row as runs of one colour, so the DC's
+clip and a mono display's reduction are GDI's own. `LoadIcon` picks from a
+program's icon group the 32 x 32 image with the most colours the display
+shows. The reference machine was asked what a message box with an icon
+looks like, and the answer was measured to the pixel: icon at (18, 16),
+text at 68, buttons 22 below the taller of the two. Measuring it found that
+S6's plain message box had been 10 pixels short all along; that is fixed.
+
+**Two programs, one WIN.INI.** Each WIN16 instance keeps its own copy of a
+profile file and writes it when the program ends. Two programs writing
+`WIN.INI` would each write back what they read, and the second would undo the
+first. Every write is now also logged; when a changed file is written, it is
+read again from the disk and the log played onto it first. The `WRITER`
+fixture writes a key named after its own file and waits in a message box, so
+two copies under two names hold the file at once.
+
+**Shipping it.** `WIN16\` is on the 1.44MB and 1.2MB apps disks, the second
+720KB disk, the everything set and the live media, and at the root of the
+360KB emulators disk. The shipped `DOS.O88` now hands a Windows program to
+WIN16. Two gates disagreed with the first try, and both were right: the
+package-freshness check compares every `README.TXT` on a disk with the
+system's, and the emulators disk keeps its programs at the root, where a
+second `README.TXT` or `COPYING` would collide. WIN16's two documents ship
+as `WIN16.TXT` and `COPYING.W16`, the names The Wire already gives Apple
+II's. `make win16disk WIN3X=<dir>` puts your own programs on a floppy in all
+four sizes and writes `PROGRAMS.TXT` saying why each one left off was left
+off, with the loader's own refusals checked on the host. Windows 3.0's own
+directory gives 14 programs on the larger disks and 8 on the 360KB one; the
+rest are over 64 KB, or are SETUP, which is a DOS program.
+
+**Seen.** One boot to look, with B: as `make win16disk` writes it and no
+`DOS.O88` on it. ICONS and MENU both started through the system disk's DOS
+and found `WIN16.O88` in its folder, and ran together. The Task Manager
+listed them as ICONS (95 KB) and MENU (100 KB). Told to refuse `WM_CLOSE`,
+MENU stayed open after its close box, asked *It has not closed. End it?* on
+the second click, and was gone after Proceed while ICONS ran on. The hand
+message box's icon was found on the glass where the measurement says.
+
+**Not seen yet.** The two new rows, `win16desk` and `win16hiber`, are
+written and registered but have not run; their first run is S13's final
+pass, with every other row. They are what will say that the heap goes back
+to its pre-launch claims, that both `WIN.INI` keys survive, that
+Minesweeper runs beside Paint and that a program comes back from a
+hibernate and keeps working. The icons on CGA, EGA and Hercules are S13's
+too.
+
+**What it cost.** WIN16's image is 46,552 bytes with 14,038 of bss, about
+4.9 KB under the 64 KB segment; 66,236 bytes on disk. The windowed DOS grew
+326 bytes for the forward. The kernel is unchanged.

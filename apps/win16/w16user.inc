@@ -2541,13 +2541,10 @@ w16_ticksms:
     pop bx
     ret
 
-; LoadCursor (USER.173), LoadIcon (USER.174) - a handle that is not NULL;
-; the pointer stays os8088's and the icon is S12's
+; LoadCursor (USER.173) - a handle that is not NULL: the pointer stays
+; os8088's. LoadIcon is w16ico.inc's (SPEC.md 124.18.4)
 w16u_loadcursor:
     mov ax, 0x3300
-    ret
-w16u_loadicon:
-    mov ax, 0x3301
     ret
 
 ; --- the scan code -> virtual key table (the US layout, scans 00h-58h) --------

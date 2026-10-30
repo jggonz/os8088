@@ -19,7 +19,9 @@ ways to use it:
 
 - **Double-click a `.COM` or `.EXE` file** in any Disk window. DOS opens and
   runs that program at once. This works for a program on any disk, because
-  the system knows that DOS is the program for those files.
+  the system knows that DOS is the program for those files. A Windows 3.x
+  program is an `.EXE` too: DOS hands it to [[WIN16.O88]], which runs it in
+  a window of its own, and DOS's window closes.
 - **Double-click a `.LNK` shortcut** that DOS saved. It runs the program with
   the arguments and settings stored in the shortcut.
 - **Double-click DOS.O88** itself. The window opens at the prompt, and you

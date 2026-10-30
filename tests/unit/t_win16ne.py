@@ -254,4 +254,32 @@ if os.path.exists(p):
     eq([art[c][0] for c in range(32, 127)], [g[c][0] for c in range(32, 127)],
        "sys16.txt (Wine's): every advance is VGASYS.FON's")
 
+# --- G: WIN16's own system icons (SPEC.md 124.18.4) -------------------------
+# apps/win16/icons/ is committed art and tools/w16icon.py builds part 6; the
+# icon routine reads each as a Windows icon image, so the part's table must
+# be in IDI order and each image a 32 x 32, 4-bit DIB with its mask after it.
+import struct                                               # noqa: E402
+import w16icon                                              # noqa: E402
+eq(w16icon.check(), 0, "apps/win16/icons/: w16icon.py check")
+b = w16icon.part()
+n = int.from_bytes(b[0:2], "little")
+eq(n, 5, "the icon part holds IDI_APPLICATION .. IDI_ASTERISK")
+for k in range(n):
+    o = int.from_bytes(b[2 + 2 * k:4 + 2 * k], "little")
+    hdr = struct.unpack_from("<IiiHH", b, o)
+    eq(hdr, (40, 32, 64, 1, 4), "icon %d: a 32 x 32, 4-bit icon image" % k)
+broken = os.path.join(tempfile.mkdtemp(), "icons")
+os.makedirs(broken)
+for _, nm in w16icon.ORDER:
+    with open(os.path.join(w16icon.ICONS, nm + ".txt")) as f, \
+            open(os.path.join(broken, nm + ".txt"), "w") as g:
+        t = f.read()
+        g.write(t.replace("\n................................\n", "\n...............................\n", 1)
+                if nm == "hand" else t)
+try:
+    w16icon.part(broken)
+    check(False, "NEGATIVE CONTROL: an icon row one pixel short is refused")
+except SystemExit:
+    check(True, "NEGATIVE CONTROL: an icon row one pixel short is refused")
+
 done("win16ne")

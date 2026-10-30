@@ -952,6 +952,30 @@ kind = "document"
 summary = "An Applesoft BASIC program to load into the Apple II Plus."
 short = "Sample Applesoft program"
 
+["WIN16.O88"]
+title = "WIN16"
+kind = "program"
+summary = "Runs Windows 3.0 programs in os8088 windows: their menus, dialogs, controls and icons, as Windows 3.0 drew them. Bring your own programs."
+short = "Runs Windows 3.x programs"
+
+["WIN16/"]
+title = "WIN16"
+kind = "folder"
+summary = "The WIN16 program, its notes and its licence."
+short = "WIN16 and its licence"
+
+["WIN16.TXT"]
+title = "WIN16 notes"
+kind = "document"
+summary = "How to start a Windows program, where its settings go and what WIN16 can run. Double-click to read it in Note Pad."
+short = "Notes on WIN16"
+
+["COPYING.W16"]
+title = "WIN16 licence"
+kind = "document"
+summary = "WIN16's licence, the GNU General Public License, version 2."
+short = "GNU General Public License"
+
 ["CWORD.O88"]
 title = "Word, C edition"
 kind = "program"

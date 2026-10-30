@@ -23,7 +23,7 @@
 ; extended range), an m64 or an m32 - which is the 8087's double rounding.
 ; =============================================================================
 
-section .w16fp vstart=0 align=1
+section .w16fp follows=.w16dlg vstart=0 align=1
 
 ; --- the header WIN16 reads (win16.asm names these offsets) -------------------
 w16f_base:

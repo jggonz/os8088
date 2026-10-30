@@ -49,13 +49,15 @@ def main():
     ap.add_argument('-o', '--overlay', required=True, help='the .OVL to write')
     ap.add_argument('--trim', required=True,
                     help='the resident image to write (what os88pkg.py takes)')
-    ap.add_argument('--second', metavar='OVL',
+    ap.add_argument('--second', metavar='OVL', action='append', default=[],
                     help='a SECOND module after the first (SHEET\'s macro module, '
                          'SPEC.md 81.94): it starts two bytes before the one '
                          'occurrence of --mark, its dispatcher\'s short jump '
-                         'being those two')
-    ap.add_argument('--mark', default='SHMACRO2',
-                    help='the second module\'s cut mark (default %(default)s)')
+                         'being those two. Given again, a third after it, with '
+                         'its own --mark (WIN16\'s loader, SPEC.md 124.18.7): '
+                         'each --second pairs with the --mark in the same place')
+    ap.add_argument('--mark', action='append', default=[],
+                    help='the second module\'s cut mark (default SHMACRO2)')
     ap.add_argument('--pad-bss', action='store_true',
                     help='append the header\'s bss to the resident image as '
                          'zeros: it is a PART, which the kernel does not zero')
@@ -77,20 +79,34 @@ def main():
                  'image' % args.image)
 
     head, tail = raw[:cut], raw[cut:]
-    second = b''
-    if args.second:
-        mark = args.mark.encode('ascii')
+    marks = args.mark or ['SHMACRO2']
+    if len(marks) != len(args.second) and args.second:
+        sys.exit('os88ovl: %d --second and %d --mark: each later module names '
+                 'its own mark' % (len(args.second), len(marks)))
+    splits = []
+    for m in marks[:len(args.second)]:
+        mark = m.encode('ascii')
         at = [i for i in range(len(tail)) if tail.startswith(mark, i)]
         if len(at) != 1:
             sys.exit('os88ovl: the mark %r occurs %d times in the module tail '
                      '- it must occur exactly once, or the cut is a guess'
-                     % (args.mark, len(at)))
+                     % (m, len(at)))
         split = at[0] - 2
         if split <= 0 or tail[split] != 0xEB:
-            sys.exit('os88ovl: the mark is not two bytes after a short jump - '
-                     'the second module must START with its dispatcher')
-        tail, second = tail[:split], tail[split:]
-        open(args.second, 'wb').write(second)
+            sys.exit('os88ovl: the mark %r is not two bytes after a short jump '
+                     '- each later module must START with its dispatcher' % m)
+        if splits and split <= splits[-1]:
+            sys.exit('os88ovl: the mark %r comes before the one named ahead '
+                     'of it - name the modules in the order they are '
+                     'assembled' % m)
+        splits.append(split)
+    seconds = []
+    for k, out in enumerate(args.second):
+        end = splits[k + 1] if k + 1 < len(splits) else len(tail)
+        seconds.append((out, tail[splits[k]:end]))
+        open(out, 'wb').write(seconds[-1][1])
+    if splits:
+        tail = tail[:splits[0]]
     if args.pad_bss:
         head += bytes(struct.unpack_from('<H', raw, H_BSS)[0])
     open(args.trim, 'wb').write(head)
@@ -98,8 +114,7 @@ def main():
     sys.stderr.write('os88ovl: %s -> %s (%d resident) + %s (%d on demand)%s\n'
                      % (args.image, args.trim, len(head),
                         args.overlay, len(tail),
-                        ' + %s (%d)' % (args.second, len(second))
-                        if args.second else ''))
+                        ''.join(' + %s (%d)' % (o, len(b)) for o, b in seconds)))
 
 
 if __name__ == '__main__':

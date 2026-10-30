@@ -147,6 +147,7 @@ SC_STYLE    equ W16W_STYLE
 LC_STYLE    equ W16W_STYLE
 
 ; --- a control's own state, in its W16W_CS ------------------------------------
+SC_ICON     equ W16W_CS + 0     ; STATIC: an SS_ICON's icon (SPEC.md 124.18.4)
 BC_STATE    equ W16W_CS + 0     ; BUTTON: the check (0-2) and BST_*
 BC_TRACK    equ W16W_CS + 1     ; ...1 = the mouse is pressing it
 BST_PUSHED  equ 4
@@ -1023,12 +1024,18 @@ w16d_stpaint:
     call w16d_fill                  ; the right
     jmp .done
 .icon:
-    mov ax, [w16d_l]                ; SS_ICON: the program's icon is S12's
-    mov bx, [w16d_t]                ;   (SPEC.md 124.13); its place is the
-    mov cx, [w16d_r]                ;   window's
-    mov dx, [w16d_b]
-    mov si, COLOR_WINDOW
-    call w16d_fill
+    mov al, COLOR_WINDOW            ; SS_ICON (SPEC.md 124.18.4): the icon,
+    call w16d_syscol                ;   its see-through pixels in the
+    push bx                         ;   window's colour, one pass
+    push si
+    mov cx, [w16d_l]
+    mov dx, [w16d_t]
+    mov si, [bx + SC_ICON]
+    mov bl, al
+    mov ax, si
+    ICALL w16_icodraw
+    pop si
+    pop bx
     jmp .done
 .text:
     mov [w16d_sty], al
@@ -5014,9 +5021,22 @@ w16d_mkitem:
 .kind:
     mov [w16_cwkind], al
     call w16d_tstr                  ; its text
+    mov word [w16d_icon], 0
+    cmp byte [w16_cwkind], W16Q_STATIC
+    jne .noi
+    mov cl, [w16_cwstyle]
+    and cl, 0x0F
+    cmp cl, SS_ICON
+    jne .noi
+    ICALL w16_icload                ; SS_ICON: the text names the icon, and
+    mov [w16d_icon], ax             ;   the control is the icon's size, as
+    mov word [w16_cwcx], 32         ;   Windows sized it (SPEC.md 124.18.4)
+    mov word [w16_cwcy], 32
+    xor dx, dx
+.noi:
     or dx, dx
     jnz .t
-    xor ax, ax                      ; an ordinal (SS_ICON's): no text
+    xor ax, ax                      ; an ordinal: no text
 .t:
     mov [w16_cwtext], ax
     mov [w16_cwtext + 2], dx
@@ -5057,7 +5077,14 @@ w16d_mkitem:
     add ax, cx
     mov [w16_cwcy], ax
 .mk:
-    jmp w16d_mkctl
+    call w16d_mkctl
+    jc .mkx
+    mov ax, [w16d_icon]
+    or ax, ax                       ; (CF = 0)
+    jz .mkx
+    mov [bx + SC_ICON], ax
+.mkx:
+    ret
 .refuse1:
     pop si
 .refuse:
@@ -6146,7 +6173,12 @@ w16d_ddef:
 ; =============================================================================
 W16D_MBW    equ 58              ; a button, VGA's: 58 wide, the face's rows
 W16D_MBGAP  equ 12              ;   + 12 high, 12 apart
-W16D_MBM    equ 16              ; the margin round the text
+W16D_MBM    equ 16              ; the margin above the text, and right of it
+W16D_MBIX   equ 18              ; the text's left, or an icon's; the text
+W16D_MBTX   equ 68              ;   beside an icon starts here
+W16D_MBGV   equ 22              ; the content to the buttons, and the buttons
+W16D_MBBOT  equ 10              ;   to the bottom (SPEC.md 124.18.4: Windows
+                                ;   3.0's VGA boxes, measured)
 
 w16u_msgbox_d:
     ICALL w16_args
@@ -6208,6 +6240,21 @@ w16u_msgbox_d:
     jne .ml
     inc word [w16d_mtl]
 .ml:
+    mov word [w16d_icon], 0         ; the icon (SPEC.md 124.18.4): MB_ICONHAND
+    mov word [w16d_tx], W16D_MBIX   ;   1 .. MB_ICONASTERISK 4 in bits 4-6,
+    mov ax, [w16d_mbt]              ;   IDI_HAND .. IDI_ASTERISK
+    mov cl, 4
+    shr ax, cl
+    and ax, 7
+    jz .noicon
+    cmp ax, 4
+    ja .noicon
+    ICALL w16_icpart                ; WIN16's own art, read if need be
+    jc .noicon
+    add ax, W16_HSYSICO
+    mov [w16d_icon], ax
+    mov word [w16d_tx], W16D_MBTX
+.noicon:
     mov bx, [w16d_mbt]              ; the buttons
     and bx, 0x0F
     cmp bx, 5
@@ -6226,7 +6273,9 @@ w16u_msgbox_d:
     sub ax, W16D_MBGAP
     mov [w16d_mbrw], ax
     mov cx, [w16d_mtw]              ; the client: the wider of the text and
-    cmp cx, ax                      ;   the buttons, the margins round both
+    add cx, [w16d_tx]               ;   the buttons, with the text's left
+    sub cx, W16D_MBM                ;   (past an icon) and the margins
+    cmp cx, ax
     jae .w
     mov cx, ax
 .w:
@@ -6238,7 +6287,20 @@ w16u_msgbox_d:
     add word [w16d_mbh], 12
     mul word [w16d_mtl]
     mov [w16d_mth], ax
-    add ax, W16D_MBM + W16D_MBM + 12
+    mov word [w16d_ty], W16D_MBM    ; the text's top: centred on an icon
+    cmp word [w16d_icon], 0         ;   taller than it, which sets the
+    je .th                          ;   content's height then
+    cmp ax, 32
+    jae .th
+    mov ax, 32
+    sub ax, [w16d_mth]
+    shr ax, 1
+    add [w16d_ty], ax
+    mov ax, 32
+.th:
+    add ax, W16D_MBM + W16D_MBGV    ; AX = the buttons' top
+    mov [w16d_mby], ax
+    add ax, W16D_MBBOT
     add ax, [w16d_mbh]
     mov [w16_cwcy], ax
     mov ax, [w16_scrw]              ; centred on the screen
@@ -6287,8 +6349,10 @@ w16u_msgbox_d:
     ICALL w16_rec2hwnd
     mov [w16d_hdlg], ax
     mov byte [w16_cwkind], W16Q_STATIC  ; the text
-    mov word [w16_cwx], W16D_MBM
-    mov word [w16_cwy], W16D_MBM
+    mov ax, [w16d_tx]
+    mov [w16_cwx], ax
+    mov ax, [w16d_ty]
+    mov [w16_cwy], ax
     mov ax, [w16d_mtw]
     mov [w16_cwcx], ax
     mov ax, [w16d_mth]
@@ -6300,6 +6364,24 @@ w16u_msgbox_d:
     mov [w16_cwtext + 2], ds
     call w16d_mkctl
     jc .undo
+    cmp word [w16d_icon], 0         ; the icon, an SS_ICON static
+    je .noic
+    mov byte [w16_cwkind], W16Q_STATIC
+    mov word [w16_cwx], W16D_MBIX
+    mov word [w16_cwy], W16D_MBM
+    mov word [w16_cwcx], 32
+    mov word [w16_cwcy], 32
+    mov word [w16_cwid], -1
+    mov word [w16_cwstyle], SS_ICON
+    mov word [w16_cwstyle + 2], WS_VISIBLE_HI
+    xor ax, ax
+    mov [w16_cwtext], ax
+    mov [w16_cwtext + 2], ax
+    call w16d_mkctl
+    jc .undo
+    mov ax, [w16d_icon]
+    mov [bx + SC_ICON], ax
+.noic:
     mov ax, [w16d_mbt]              ; the default: MB_DEFBUTTON1-3
     mov al, ah
     and ax, 0x0F
@@ -6312,8 +6394,7 @@ w16u_msgbox_d:
     sub cx, [w16d_mbrw]
     sar cx, 1
     mov [w16_cwx], cx
-    mov ax, W16D_MBM + 12
-    add ax, [w16d_mth]
+    mov ax, [w16d_mby]
     mov [w16_cwy], ax
     xor cx, cx                      ; CX = the button
 .b:

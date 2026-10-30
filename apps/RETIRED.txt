@@ -77,9 +77,3 @@ local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
                        # stories (fetched the same way) do ride the live media.
                        # `make lemmings` / `make lemmingsdisk` build it standalone,
                        # `make xt-lemmings` / `make 386-lemmings` boot it in 86Box.
-local      win16       # SPEC.md 124. The Windows 3.x layer, built by `make win16`
-                       # and carried by `make win16test`'s gate disk. Its programs
-                       # are the user's own Windows files (Microsoft's, never
-                       # committed), and where WIN16.O88 itself ships - the live
-                       # payload or EXEMPT_DIRS - is docs/plans/WIN16-PLAN.md S12's
-                       # decision, so until then no standard image carries it.

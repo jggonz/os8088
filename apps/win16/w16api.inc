@@ -281,6 +281,8 @@ W16EXPORT W16M_GDI,        150,     2,  w16_ans1            ; UnrealizeObject(wo
 W16EXPORT W16M_GDI,        154,     6,  w16g_nearcol        ; GetNearestColor(word long)
 W16EXPORT W16M_GDI,        346,     4,  w16g_settalign      ; SetTextAlign(word word)
 W16EXPORT W16M_GDI,        351,     22, w16g_exttext        ; ExtTextOut(word s_word s_word word ptr ptr word ptr)
+W16EXPORT W16M_USER,       84,      8,  w16u_drawicon       ; DrawIcon(word s_word s_word word)
+W16EXPORT W16M_USER,       457,     2,  w16u_destroyicon    ; DestroyIcon(word)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
 W16EXPORT W16M_SOUND,      1,       0,  w16s_open           ; OpenSound()
 W16EXPORT W16M_SOUND,      2,       0,  w16s_close          ; CloseSound()

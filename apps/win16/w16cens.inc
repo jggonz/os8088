@@ -41,6 +41,7 @@ W16C_TBLO equ W16C_STKO + 4 * W16C_STK
 W16C_GRDO equ W16C_TBLO + 4 * W16C_TBL
 W16C_TIRO equ W16C_GRDO + 6 * W16C_GRD
 W16C_END  equ W16C_TIRO + 6 * W16C_TIR
+section .w16ld                      ; part 5's code (w16load.inc)
 
 ; -----------------------------------------------------------------------------
 ; w16_census - may this 8088 run the program? (SPEC.md 124.4)
@@ -159,10 +160,10 @@ w16_census:
     call OSAPI_MEM_FREE
 .refuse:
     mov di, w16_l1
-    call w16_strcpy
+    ICALL w16_strcpy
     mov si, w16_name
     mov di, w16_l2
-    call w16_strcpy
+    ICALL w16_strcpy
     stc
 .out:
     pop es
@@ -424,6 +425,7 @@ w16c_walk:
     jc .end                         ; off the end of 64KB
     jmp .ins
 
+section .text
 w16c_jt:
     dw w16c_walk.fall               ; NEXT
     dw w16c_walk.t186               ; T186
@@ -443,6 +445,7 @@ w16c_jt:
     dw w16c_walk.t386               ; T386
 
 ; w16c_rel8 / w16c_rel16 - AX = the target of the instruction at DI, CX long
+section .w16ld
 w16c_rel8:
     push bp
     mov bp, di
@@ -783,7 +786,7 @@ w16c_far:
     push dx
     mov ax, [es:si + 1]             ; the offset ...
     mov dx, [es:si + 3]             ; ...and the segment, relocated
-    mov cx, cs
+    mov cx, ds                      ; the stubs' segment: the image's
     cmp dx, cx
     je .import
     xor bx, bx
@@ -1072,6 +1075,7 @@ w16c_prologs:
     pop ax
     ret
 
+section .text
 w16c_pro:                           ; os88ne.py's PROLOGUES, in its order
     db 3, 0x1E, 0x58, 0x90          ; push ds / pop ax / nop   (exported, MS C)
     db 3, 0x8C, 0xD8, 0x90          ; mov ax, ds / nop         (Borland)
@@ -1084,6 +1088,7 @@ w16c_pro:                           ; os88ne.py's PROLOGUES, in its order
 ; -----------------------------------------------------------------------------
 ; w16c_tierof - AL = the highest tier reached outside every guarded range
 ; -----------------------------------------------------------------------------
+section .w16ld
 w16c_tierof:
     push bx
     push cx
@@ -1133,6 +1138,8 @@ w16c_tierof:
     pop cx
     pop bx
     ret
+
+section .text
 
 ; --- the census's own scratch, beside the loader's ----------------------------
 w16c_cseg:  dw 0                    ; the walk's claim

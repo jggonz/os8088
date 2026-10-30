@@ -903,16 +903,71 @@ they stand on.
     EGA and Hercules. Not done: `TRANSPARENT` text is drawn opaque,
     `SetCursorPos` does nothing, `ExtTextOut`'s spacing is not followed.
 
-- [ ] **S12: Living with the desktop.**
+- [x] **S12: Living with the desktop.**
   - Two Windows programs at once (two `WIN16.O88` instances).
   - Minesweeper beside Paint.
-  - Close and kill from the Task Manager.
-  - Hibernate across a running game.
+  - Close from the close box, and End Task as its second click. *Amended:*
+    the plan said "close and kill from the Task Manager", but the Task
+    Manager is a viewer (§28) and can end nothing; End Task is the owner's
+    decision of 2026-10-29 (§124.12, §124.18.5).
+  - Hibernate across a running program.
   - The live media's payload, or `EXEMPT_DIRS` with its reason
     (`tests/unit/t_livefull.py`).
   - `make win16disk WIN3X=<dir>` in all four geometries.
+  - The icons S6 deferred: `LoadIcon`, `DrawIcon`, `SS_ICON` and the
+    message box's icons.
   - *Verify:* `mem_tab` returns to its pre-launch state after each close;
     the Task Manager shows the program's own name.
+  - **Shipped** (one commit on PR #320): see the S12 entry of
+    docs/HOW-WIN16-WAS-BUILT.md for the account.
+    - **On the disks** (§124.18.1): a `WIN16\` folder (`WIN16.O88`,
+      `WIN16.TXT`, `COPYING.W16`) and `SYSTEM\APPDATA\WIN16` on the
+      1.44MB and 1.2MB apps disks and `more720.img`, the three files at the
+      root of `emu360.img`, the everything set and the live media; not on
+      `kern_small`'s or `kern_mega`'s. `apps/RETIRED.txt`'s `local` line is
+      gone. The shipped `DOS.O88` hands an NE to WIN16 on `kern_big` and
+      `kern_emu` (+326 bytes of `dosp.bin`); `make win16test`'s is a copy.
+    - `make win16disk WIN3X=<dir>` (`tools/w16disk.py`): your programs on
+      `build/w16prog{,120,720,360}.img`, with `PROGRAMS.TXT` naming what
+      went on and why each other one did not, the loader's own refusals
+      taken host-side. Windows 3.0's own directory: 14 programs on the
+      1.44MB, 1.2MB and 720KB disks, 8 on the 360KB one.
+    - **The program's name** (§124.18.3): WIN16 writes the program's stem
+      into its header before the loader copies it, so the Task Manager, the
+      dock and the menu bar say ICONS or MENU. WIN16 has a dock icon of its
+      own.
+    - **Icons** (§124.18.4, `apps/win16/w16ico.inc`): `LoadIcon` from a
+      program's resources (the best image for the display) and the five
+      system icons as WIN16's own art (`apps/win16/icons/`,
+      `tools/w16icon.py`, part 6), `DrawIcon`, `DestroyIcon`, `SS_ICON`,
+      and `MessageBox` with each icon, laid out to Windows 3.0's VGA boxes
+      measured to the pixel - which also corrected the no-icon box, 10
+      pixels short since S6.
+    - **The profile merge** (§124.18.2): every write a program makes is
+      logged, and a changed file is read again and the log played onto it
+      before it is written, so two programs writing `WIN.INI` both keep
+      their keys.
+    - **The loader is a part** (§124.18.7): the loader and the census moved
+      to part 5, fetched for the load and dropped after, which took the
+      image from 49,721 to 46,552 bytes (bss 14,038) and left about 4.9KB of
+      the 64KB segment. 66,236 bytes on disk. The kernel is unchanged.
+    - The guide: WIN16's manual and its folder, notes and licence pages,
+      and one sentence on DOS's.
+    - Rows `win16desk` (QEMU) and `win16hiber` (MartyPC), registered.
+  - **Seen** (QEMU, a boot to look): B: as `make win16disk` writes it, with
+    no `DOS.O88` on it - the system disk's forwarded ICONS and MENU to
+    `WIN16\WIN16.O88`, both running at once; the Task Manager listed them as
+    ICONS (95K) and MENU (100K); MENU, told by F5 to refuse `WM_CLOSE`,
+    stayed after the first click on its close box, the second asked *It has
+    not closed. End it?*, and Proceed ended it with ICONS still running;
+    ICONS' five system icons, its own icon twice, and a hand message box
+    whose icon is at (19, 34) from the frame.
+  - **Not seen yet, owed to S13's final pass:** the registered runs of
+    `win16desk` and `win16hiber` (neither has run: the heap's return to its
+    pre-launch claims, the `WIN.INI` merge on the glass, Minesweeper beside
+    Paint and the hibernate are what they assert); the icons on CGA, EGA and
+    Hercules; `emu360.img` under `EMUFULL=1` with WIN16 beside C64, APPLE2
+    and RunCPM (estimated at ~330 of 354 clusters, not built here).
 
 - [ ] **S13: Acceptance.**
   - Every row S1–S12 named, as one deduplicated soak union, then

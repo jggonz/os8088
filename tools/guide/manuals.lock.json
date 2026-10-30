@@ -237,6 +237,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "COPYING_W16": {
+  "sources": [
+   "apps/win16/COPYING"
+  ],
+  "stamped": "e7ca16f80",
+  "strings": "990607bd0239d38d",
+  "why": "new page"
+ },
  "COURIER_F88": {
   "sources": [],
   "stamped": "e4576a70",
@@ -335,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "af4ae8f5",
-  "strings": "28df7ede37a080f4",
-  "why": "kern_mega's Memory page: the park arm and the Save the session to disk box (14.43) described; the mouse box's kern_mega greying is below the page's detail"
+  "stamped": "e7ca16f80",
+  "strings": "efe62396ae4edb45",
+  "why": "S12: the shipped DOS.O88 forwards a Windows NE to WIN16 (SPEC 124.18.1); one sentence added"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -1283,6 +1291,28 @@
   "stamped": "0606f018",
   "strings": "550be98fc7fd1525",
   "why": "new page for the welcome note, checked against apps/stiknote/welcome.txt"
+ },
+ "WIN16": {
+  "sources": [],
+  "stamped": "e7ca16f80",
+  "strings": null,
+  "why": "new folder page"
+ },
+ "WIN16_O88": {
+  "sources": [
+   "apps/win16"
+  ],
+  "stamped": "e7ca16f80",
+  "strings": "ceca4b5d20354bb8",
+  "why": "new page, from SPEC 124 and apps/win16's strings"
+ },
+ "WIN16_TXT": {
+  "sources": [
+   "apps/win16/README.TXT"
+  ],
+  "stamped": "e7ca16f80",
+  "strings": "2bb5a00fcbda3777",
+  "why": "new page"
  },
  "WIN95_DRV": {
   "sources": [

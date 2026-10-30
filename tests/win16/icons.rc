@@ -1,0 +1,16 @@
+/* icons.rc - the ICONS fixture's resources (WIN16 fixture, S12): its own icon,
+ * made by tests/win16/mkbmp.py at build time, and a dialog that shows it as an
+ * SS_ICON static, as WinMine's Preferences shows its bomb */
+#include <windows.h>
+#include "icons.h"
+
+DIAMOND ICON "w16icon.ico"
+
+IDD_ABOUT DIALOG 20, 20, 160, 64
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "About Icons"
+BEGIN
+    ICON "DIAMOND", IDC_DIAMOND, 8, 8, 0, 0
+    LTEXT "An SS_ICON static, drawn from the program's own icon.", -1, 40, 10, 112, 24
+    DEFPUSHBUTTON "OK", IDOK, 60, 44, 40, 14
+END

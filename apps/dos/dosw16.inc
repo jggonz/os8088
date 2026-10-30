@@ -20,14 +20,13 @@
 ; (SPEC.md 18.4.5). A second read only follows the `40h` test, which a plain
 ; DOS program's header fails.
 ;
-; ONLY IN -DDOS_WIN16, which only the WIN16 test disk's DOS.O88 is built
-; with (`make win16test`), until S12 decides where WIN16.O88 ships
-; (docs/plans/WIN16-PLAN.md). A forward on a machine that has no WIN16.O88
-; ends in the association search's full rebuild and a `Needs WIN16.O88`
-; toast with DOS's window already gone, where the stub's own sentence is the
-; truer answer - so the shipped DOS.O88 does not carry this, and is
-; byte-identical to the one before it. Never on kern_mega: WIN16 refuses
-; there (SPEC.md 124.1, D6).
+; -DDOS_WIN16 is the DEFAULT on kern_big and kern_emu, whose apps disks carry
+; WIN16.O88 (SPEC.md 124.18.1), and off on kern_small and kern_mega, whose
+; disks do not - the Makefile's DOSW16DEF. A forward on a machine that has no
+; WIN16.O88 ends in the association search's `Needs WIN16.O88` toast with
+; DOS's window already gone; the toast names what to get, which the stub's
+; own sentence does not. Never on kern_mega: WIN16 refuses there (SPEC.md
+; 124.1, D6).
 ; =============================================================================
 %ifdef DOS_MEGA
  %error "DOS_WIN16 on kern_mega: WIN16 refuses there (SPEC.md 124.1)"

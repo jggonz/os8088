@@ -19,10 +19,14 @@ WPF_SEG     equ 14              ; the claim
 WPF_LEN     equ 16              ; bytes held
 WPF_CAP     equ 18              ; bytes the claim holds
 WPF_LRU     equ 20              ; the use stamp
-W16PF_SZ    equ 22
+WPF_LOG     equ 22              ; the writes made to it since it was read:
+WPF_LLEN    equ 24              ;   a claim (0 none) and the bytes in it
+W16PF_SZ    equ 26
 WPFF_DIRTY  equ 1               ; changed since it was read or written
 WPFF_MEM    equ 2               ; no folder: kept in memory only
 WPFF_KEEP   equ 4               ; too large, or unreadable: never written
+WPFF_LOGX   equ 8               ; its log ran out: written as held, unmerged
+W16PF_LOGKB equ 1               ; a log's claim (SPEC.md 124.18.2)
 W16PF_MAX   equ 32000           ; the largest file held (SPEC.md 124.14)
 W16PF_STR   equ 256             ; a section, key or value: 255 and a NUL
 
@@ -269,6 +273,20 @@ w16pf_write:
     call w16pf_cpy
     mov byte [w16pf_noval], 0
     adc byte [w16pf_noval], 0
+    call w16pf_wcore
+    or ax, ax
+    jz .out
+    call w16pf_log                  ; kept for the merge (SPEC.md 124.18.2)
+.out:
+    ret
+.no:
+    xor ax, ax
+    ret
+
+; w16pf_wcore - the write itself: [w16pf_nm], [w16pf_app], [w16pf_key],
+; [w16pf_val], [w16pf_nokey] and [w16pf_noval] as w16pf_write leaves them.
+; AX = TRUE or FALSE. The merge plays a log back through here
+w16pf_wcore:
     call w16pf_open
     jc .no
     call w16pf_sect
@@ -661,7 +679,10 @@ w16pf_open:
     add bx, W16PF_SZ
     loop .r
     mov bx, dx
-    call w16pf_drop                 ; written if it changed, and let go
+    or byte [bx + WPF_FL], WPFF_LOGX    ; not merged: the merge's replay
+    call w16pf_drop                 ;   would spend the call in hand's
+                                    ;   section, key and value. Written if it
+                                    ;   changed, and let go
 .take:
     mov [w16pf_row], bx
     mov ax, 2                       ; 2KB, until the file says otherwise
@@ -676,7 +697,10 @@ w16pf_open:
     rep movsb
     pop es
     mov byte [bx + WPF_FL], 0
-    mov word [bx + WPF_LEN], 0
+    xor ax, ax
+    mov [bx + WPF_LEN], ax
+    mov [bx + WPF_LOG], ax
+    mov [bx + WPF_LLEN], ax
     call w16pf_in                   ; SYSTEM\APPDATA\WIN16
     jnc .read
     or byte [bx + WPF_FL], WPFF_MEM ; no folder: memory only
@@ -779,12 +803,14 @@ w16pf_in:
 w16pf_out:
     jmp od_back
 
-; w16pf_flush - BX = a held row: written if it changed. Keeps BX
+; w16pf_flush - BX = a held row: written if it changed, merged first with
+; what is on the disk now (w16pf_merge). Keeps BX
 w16pf_flush:
     test byte [bx + WPF_FL], WPFF_DIRTY
     jz .out
     test byte [bx + WPF_FL], WPFF_MEM | WPFF_KEEP
     jnz .out
+    call w16pf_merge
     call w16pf_in
     jc .out
     push bx
@@ -801,12 +827,245 @@ w16pf_flush:
 .out:
     ret
 
-; w16pf_drop - BX = a held row: flushed, its claim freed, the row free
+; w16pf_drop - BX = a held row: flushed, its claims freed, the row free
 w16pf_drop:
     call w16pf_flush
     mov dx, [bx + WPF_SEG]
     call OSAPI_MEM_FREE
+    call w16pf_logfree
     mov byte [bx + WPF_NAME], 0
+    ret
+
+; w16pf_logfree - BX = a row: its log let go. Keeps BX
+w16pf_logfree:
+    mov dx, [bx + WPF_LOG]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    xor dx, dx
+    mov [bx + WPF_LOG], dx
+    mov [bx + WPF_LLEN], dx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; THE MERGE (SPEC.md 124.18.2). Each WIN16 holds its own copy of a file, so
+; two programs that write WIN.INI would each write back what they read, and
+; the second to end would undo the first. So every write is also kept in the
+; row's log - a flags byte (bit 0 no key, bit 1 no value), then the section,
+; key and value, each NUL-ended - and a flush first reads the file again from
+; the disk and plays the log onto that. The last write of a key wins,
+; whichever program made it. A log that would pass W16PF_LOGKB stops (and
+; WPFF_LOGX writes the file as held): a program that writes more than that
+; loses the merge for that file alone, and so does a fifth file's eviction
+; (w16pf_open), which happens in the middle of another call.
+; -----------------------------------------------------------------------------
+
+; w16pf_log - [w16pf_row]'s log gains the write just made. Keeps AX
+w16pf_log:
+    push ax
+    mov bx, [w16pf_row]
+    test byte [bx + WPF_FL], WPFF_LOGX
+    jnz .out
+    mov ax, 1                       ; the entry's size: the flags byte ...
+    mov si, w16pf_app
+    call w16pf_slen
+    mov si, w16pf_key
+    call w16pf_slen
+    mov si, w16pf_val
+    call w16pf_slen
+    mov cx, ax
+    add ax, [bx + WPF_LLEN]
+    cmp ax, W16PF_LOGKB * 1024
+    ja .over
+    mov dx, [bx + WPF_LOG]
+    or dx, dx
+    jnz .have
+    mov ax, W16PF_LOGKB
+    call OSAPI_MEM_CLAIM
+    jc .over
+    mov [bx + WPF_LOG], dx
+.have:
+    mov es, dx
+    mov di, [bx + WPF_LLEN]
+    add [bx + WPF_LLEN], cx
+    mov al, [w16pf_noval]
+    shl al, 1
+    or al, [w16pf_nokey]
+    stosb
+    mov si, w16pf_app
+    call w16pf_scpy
+    mov si, w16pf_key
+    call w16pf_scpy
+    mov si, w16pf_val
+    call w16pf_scpy
+    jmp short .out
+.over:
+    or byte [bx + WPF_FL], WPFF_LOGX
+.out:
+    pop ax
+    ret
+
+; w16pf_slen - AX += the NUL-ended string at DS:SI's length, its NUL counted
+w16pf_slen:
+    inc ax
+.l:
+    cmp byte [si], 0
+    je .z
+    inc si
+    inc ax
+    jmp short .l
+.z:
+    ret
+
+; w16pf_scpy - DS:SI -> ES:DI, its NUL too; DI past it
+w16pf_scpy:
+    lodsb
+    stosb
+    or al, al
+    jnz w16pf_scpy
+    ret
+
+; w16pf_merge - BX = a changed row with a log: the file read again from the
+; disk into a claim of its own, the log played onto it, and that held in
+; place of the row's copy. Anything that goes wrong leaves the row as it was,
+; to be written as held. Keeps BX
+w16pf_merge:
+    cmp word [bx + WPF_LLEN], 0
+    je .out
+    test byte [bx + WPF_FL], WPFF_LOGX
+    jnz .out
+    call w16pf_in
+    jc .out
+    mov ax, [bx + WPF_CAP]          ; a claim the copy's size, grown once if
+    mov cl, 10                      ;   the file on the disk is larger now
+    shr ax, cl
+.try:
+    mov [w16pf_kb], ax
+    call OSAPI_MEM_CLAIM
+    jc .back
+    push bx
+    lea si, [bx + WPF_NAME]
+    mov cx, [w16pf_kb]
+    mov bx, cx
+    mov cl, 10
+    shl bx, cl
+    mov cx, bx
+    jnz .cap
+    dec cx
+.cap:
+    mov es, dx
+    xor bx, bx
+    push dx
+    xor dx, dx
+    call OSAPI_FILE_READ            ; DX:AX = its length
+    pop di                          ; DI = the claim
+    pop bx
+    jnc .read
+    push ax
+    push dx
+    mov dx, di
+    call OSAPI_MEM_FREE
+    pop dx
+    pop ax
+    cmp ax, FERR_BIG                ; DX = the KB it needs
+    jne .gone
+    cmp word [w16pf_kb], W16PF_MAX / 1024 + 2
+    jae .back
+    cmp dx, W16PF_MAX / 1024
+    ja .back
+    mov ax, dx
+    add ax, 2
+    jmp short .try
+.gone:
+    cmp ax, FERR_NOENT              ; deleted since: an empty file, merged
+    jne .back
+    mov ax, 1
+    call OSAPI_MEM_CLAIM
+    jc .back
+    mov di, dx
+    mov word [w16pf_kb], 1
+    xor ax, ax
+    xor dx, dx
+.read:
+    or dx, dx
+    jnz .drop
+    cmp ax, W16PF_MAX
+    ja .drop
+    push ax
+    mov dx, [bx + WPF_SEG]          ; the fresh copy is the row's now
+    call OSAPI_MEM_FREE
+    mov [bx + WPF_SEG], di
+    pop word [bx + WPF_LEN]
+    mov ax, [w16pf_kb]
+    mov cl, 10
+    shl ax, cl
+    jnz .cap2
+    dec ax
+.cap2:
+    mov [bx + WPF_CAP], ax
+    call w16pf_out
+    call w16pf_replay
+    jmp short .out
+.drop:
+    mov dx, di
+    call OSAPI_MEM_FREE
+.back:
+    call w16pf_out
+.out:
+    ret
+
+; w16pf_replay - BX = a row: its log played onto its copy, then emptied.
+; Keeps BX
+w16pf_replay:
+    push bx
+    mov si, bx                      ; [w16pf_nm] = its name: w16pf_open finds
+    mov di, w16pf_nm                ;   the row by it
+    push ds
+    pop es
+    mov cx, 13
+    rep movsb
+    pop bx
+    push bx
+    xor si, si                      ; SI = the next entry
+.e:
+    pop bx
+    push bx
+    cmp si, [bx + WPF_LLEN]
+    jae .done
+    push ds
+    mov ds, [bx + WPF_LOG]          ; (DS: the log, until the copies are made)
+    lodsb
+    pop ds
+    mov ah, al
+    and al, 1
+    mov [w16pf_nokey], al
+    shr ah, 1
+    mov [w16pf_noval], ah
+    mov es, [bx + WPF_LOG]
+    mov di, w16pf_app
+    call w16pf_lcpy
+    mov di, w16pf_key
+    call w16pf_lcpy
+    mov di, w16pf_val
+    call w16pf_lcpy
+    push si
+    call w16pf_wcore
+    pop si
+    jmp short .e
+.done:
+    pop bx
+    mov word [bx + WPF_LLEN], 0     ; it is in the copy now
+    ret
+
+; w16pf_lcpy - ES:SI (the log) -> DS:DI, its NUL too; SI past it
+w16pf_lcpy:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz w16pf_lcpy
     ret
 
 ; w16pf_flushall - every changed file written, all still held

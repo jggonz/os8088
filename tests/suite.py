@@ -16179,6 +16179,28 @@ SOAK = [
         needs=("marty", "nasm", "win16samples"), serial=True, timeout=1800,
         wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16desk", "soak", py("tests/win16desk.py"), 120.0,
+        "SPEC.md 124.18, WIN16-PLAN S12 under QEMU, off a B: laid out as "
+        "shipped (WIN16\\ in a folder, no DOS.O88 - the system disk's hands "
+        "each NE on): ICONS' DrawIcon, MessageBox and SS_ICON icons found on "
+        "the glass pixel for pixel from their art, its instance named ICONS, "
+        "its close box giving back every heap claim; WRITERA and WRITERB "
+        "holding WIN.INI at once and both keys in it after; MENU and a second "
+        "program (WINMINE.EXE where the win16-reference skill put it) at once "
+        "beside Paint; MENU refusing WM_CLOSE and ended by End Task's Proceed; "
+        "mem_tab the pre-launch one at the end",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=900,
+        wants=("build/os8088.img", "build/win16.o88", "build/paint.o88",
+               "build/win16/WIN16.TXT", "build/win16/COPYING.W16")),
+    Row("win16hiber", "soak", py("tests/win16hiber.py"), 120.0,
+        "SPEC.md 124.18.6, WIN16-PLAN S12: tests/hibernate.py's --sum clean "
+        "pass with a Windows program open - MENU.EXE through the shipped "
+        "DOS.O88 forward off an XT-IDE disk's root, hibernated from the System "
+        "menu, resumed at the same segment still running, then PLAYED ON: F3's "
+        "MessageBox up and answered, and its close box freeing WIN16. MartyPC",
+        needs=("marty", "nasm", "win16fixtures"), serial=True, timeout=1800,
+        wants=("build/kernel.sys", "build/win16.o88", "build/kdos/DOS.O88",
+               "build/hiber.drv")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "

@@ -43174,7 +43174,7 @@ each needed a mechanism**:
 | 10  | 2    | bss size — bytes the loader zeroes after the image        |
 | 12  | 3    | **the dispatcher**: `FF D5` (`call bp`), `CB` (`retf`)     |
 | 15  | 1    | **worker stack class** — an index into the kernel's `sch_clsbytes` (§8.7.2). 0 is "no opinion" and gets the largest class, which is what every package built before this field carries |
-| 16  | 16   | program name, printable, NUL-padded (shown by tools)      |
+| 16  | 16   | program name, printable, NUL-padded (shown by tools). The loader copies it into the instance's `I_NAME` (§29.1) AFTER the entry proc returns (§21 step 9), so an entry proc may write its own: WIN16 names the instance after the Windows program it runs (§124.18.3) |
 
 #### 20.2.0 The format number is the TABLE'S, and moving the table moves it
 
@@ -224595,8 +224595,11 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
 ## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
 
-**Status: BEING BUILT, owner decisions taken 2026-10-28. S0–S4 have shipped:
-the loader, the message pump and GDI.** The delivery record is `docs/plans/WIN16-PLAN.md` and the diary
+**Status: BEING BUILT, owner decisions taken 2026-10-28. S0–S12 have
+shipped: the loader, the message pump, GDI, memory, resources, menus,
+dialogs, profiles, Minesweeper, floating point, Calculator, the 8088
+floor, and living with the desktop (§124.18: on the shipped disks, two
+programs at once, icons); S13, the final pass, is next.** The delivery record is `docs/plans/WIN16-PLAN.md` and the diary
 `docs/HOW-WIN16-WAS-BUILT.md`. Each subsection says *(pinned)* until the story
 that builds it marks it *(shipped)* with what was measured. Until then it is a
 design, not a fact about the system.
@@ -224623,15 +224626,15 @@ layer stands on it.
 
 | | |
 |---|---|
-| home | a package, `WIN16.O88`, in `apps/win16/`. **Zero resident kernel bytes** is the target, checked with `tools/kernsize.py` |
+| home | a package, `WIN16.O88`, in `apps/win16/`. **Zero resident kernel bytes** is the target, checked with `tools/kernsize.py`. It ships in a `WIN16\` folder on the disks §124.18.1 names |
 | launch | `EXE` stays DOS.O88's (§54, §96). DOS.O88 reads `e_lfanew` at offset 3Ch; a file whose header there says `NE` is handed to `WIN16.O88` with `OSAPI_PKG_START`'s document form (§21.5.3) instead of running its DOS stub |
 | instances | one `WIN16.O88` instance per Windows program, multi-instance as any package is (§20) |
-| on demand | the dialog manager and controls, the floating-point emulator and the loader are package PARTS (§20.12), each fetched when first needed and dropped after |
+| on demand | the dialog manager and controls (with the icons, §124.18.4), the floating-point emulator and the loader (§124.18.7) are package PARTS (§20.12), each fetched when first needed and dropped after |
 | kernels | `kern_big` and `kern_emu`. `kern_small` omits it (§24.5): it has no `OSAPI_WM_TIMER` (§13.9). `kern_mega` refuses at entry in its own words, *WIN16 needs real mode* (`w16_pmcheck`): not `OS88_MEGA_REFUSE` (§20.18), whose toast sends the user to a MEGA apps disk WIN16 has no arm on |
 | CPU | the layer's own code is `cpu 8086`. The programs it runs are checked by §124.4's census: an 8086-clean program runs on every machine, and a 186 program needs a V20/V30/186 or better |
 | binaries | **no Microsoft file is ever in the tree.** The user supplies them: `make win16census WIN3X=<dir>` and `make win16disk WIN3X=<dir>` |
 | test programs | Win16 programs written in C under `tests/win16/` and built by Open Watcom v2 (`tools/setup-watcom.sh`, a pinned upstream instrument in `build/watcom/`, never committed), plus one NE assembled by NASM that needs no compiler |
-| sources and licence | code and data are brought in from Wine (LGPL-2.1+) and winevdm (GPL-2, any version) at the commits the plan pins: the `.spec` ordinal tables vendored in `tools/win16spec/`, Wine's System bitmap font, and the loader, dialog and control logic translated into 8086 assembly. **`apps/win16/` is therefore GPL-2.0-or-later**, and `COPYING` and `README.TXT` ship beside `WIN16.O88`, `apps/apple2`'s footing (docs/APPLE2-SPEC.md section 1.3). The rest of the tree is unaffected |
+| sources and licence | code and data are brought in from Wine (LGPL-2.1+) and winevdm (GPL-2, any version) at the commits the plan pins: the `.spec` ordinal tables vendored in `tools/win16spec/`, Wine's System bitmap font, and the loader, dialog and control logic translated into 8086 assembly. **`apps/win16/` is therefore GPL-2.0-or-later**, and `COPYING` and `README.TXT` ship beside `WIN16.O88` (as `COPYING.W16` and `WIN16.TXT`, §124.18.1), `apps/apple2`'s footing (docs/APPLE2-SPEC.md section 1.3). The rest of the tree is unaffected |
 | look | what Windows 3.0 showed on that display: the program's menu bar inside its window, drawn by WIN16's own menu manager (§124.11), controls drawn as Windows drew them, and text in that adapter's Windows System font (§124.7) |
 
 ### 124.2 Execution — the program's stack and the coroutine *(pinned)*
@@ -224804,15 +224807,15 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
   (`apps/dos/dosw16.inc`). A launch from the desktop closes DOS's window; one
   typed at the prompt keeps the console and gets its prompt back. A
   compressed file's raw bytes are its wrapper, so it stays DOS's.
-- **Only in WIN16's test build, until S12:** the forward is assembled under
-  `-DDOS_WIN16`, which only `make win16test`'s DOS.O88 carries. On a machine
-  without WIN16.O88 a forward ends in the association search's full rebuild
-  and a `Needs WIN16.O88` toast with DOS's window already gone, where the
-  stub's own sentence is the truer answer. So the shipped DOS.O88 is
-  byte-identical to the one before (verified: `dosp.bin` against HEAD's
-  source). The test disk puts its DOS.O88 in the ROOT beside the programs,
-  where the association's rung 2 (the document's own folder, §54.4.2) finds
-  it first. S12 decides where WIN16 ships, and the define goes with that.
+- **Which DOS.O88 carries it:** the forward is assembled under
+  `-DDOS_WIN16`. Until S12 only `make win16test`'s DOS.O88 had it; since S12
+  it is the default on `kern_big` and `kern_emu` and off on `kern_small` and
+  `kern_mega`, whose disks carry no WIN16 (§124.18.1). On a machine without
+  WIN16.O88 a forward ends in the association search's `Needs WIN16.O88`
+  toast with DOS's window already gone, which names what to get. The test
+  disk's DOS.O88 is a copy of the shipped one, in the ROOT beside the
+  programs, where the association's rung 2 (the document's own folder,
+  §54.4.2) finds it first.
 - **Finding the package:** `WIN16` is a BUILT-IN app stem in
   `kernel/assoc.inc`, beside `DOS` and for DOS's reason: its documents sit on
   somebody else's disk, so a declaration harvested at a full mount could not
@@ -225553,7 +225556,7 @@ a load from inside a paint is legal.
 | `LockResource`, `FreeResource`, `SizeofResource` | `GlobalLock`; the usage lowered, and at 0 the block is kept until memory is short (§124.9); the length |
 | `LoadString` | `RT_STRING` block `id / 16 + 1`, the string `id mod 16`; at most `cchMax - 1` bytes and a NUL; the length |
 | `LoadAccelerators`, `TranslateAccelerator` | the table's five-byte entries (flags, key, ID); a `WM_KEYDOWN` or `WM_SYSKEYDOWN` meets the `FVIRTKEY` entries with the Shift, Ctrl and Alt state the BIOS reports, a `WM_CHAR` the others. A match is SENT as `WM_COMMAND` with `lParam` high word 1, unless its ID is a greyed item of the window's menu |
-| `LoadIcon`, `LoadCursor`, `SetCursor`, `ShowCursor` | a handle that is not NULL, and the arrow; the icon is S12's |
+| `LoadCursor`, `SetCursor`, `ShowCursor` | a handle that is not NULL, and the arrow. `LoadIcon` is §124.18.4's |
 
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
@@ -225752,7 +225755,7 @@ procedure is WIN16's:
 | class | styles | messages |
 |---|---|---|
 | BUTTON | push, default push, check box, automatic check box, 3-state, automatic 3-state, radio, automatic radio, group box; `BS_LEFTTEXT` | `BM_GETCHECK`, `BM_SETCHECK`, `BM_GETSTATE`, `BM_SETSTATE`, `BM_SETSTYLE`; a press is tracked until the release, and a release inside clicks |
-| STATIC | left, centre and right text, word-wrapped, `&` underlining the next letter unless `SS_NOPREFIX`; `SS_SIMPLE`, `SS_LEFTNOWORDWRAP`; `SS_ICON` (the text names the icon resource; its place is kept and left blank until S12 draws icons); the black, grey and white rectangles and frames | |
+| STATIC | left, centre and right text, word-wrapped, `&` underlining the next letter unless `SS_NOPREFIX`; `SS_SIMPLE`, `SS_LEFTNOWORDWRAP`; `SS_ICON` (the text names the icon resource, drawn as §124.18.4 says); the black, grey and white rectangles and frames | |
 | EDIT | one line: typing, Backspace, Delete, the arrows, Home, End, Shift with them to select, a click and a drag; `ES_LEFT`, `ES_CENTER` and `ES_RIGHT` all drawn left, `ES_UPPERCASE`, `ES_LOWERCASE`, `ES_PASSWORD`, `ES_AUTOHSCROLL` | `EM_GETSEL`, `EM_SETSEL`, `EM_REPLACESEL`, `EM_LIMITTEXT`, `EM_GETMODIFY`, `EM_SETMODIFY`, `EM_GETLINE`, `EM_LINELENGTH`; at most 255 characters |
 | LISTBOX | one selection, `LBS_NOTIFY`, `LBS_SORT`; Windows 3.0's scroll bar with `WS_VSCROLL` when the items overflow | `LB_ADDSTRING`, `LB_INSERTSTRING`, `LB_DELETESTRING`, `LB_RESETCONTENT`, `LB_SETCURSEL`, `LB_GETCURSEL`, `LB_GETTEXT`, `LB_GETTEXTLEN`, `LB_GETCOUNT`, `LB_FINDSTRING`, `LB_SELECTSTRING`, `LB_GETTOPINDEX`, `LB_SETTOPINDEX`, `LB_GETITEMDATA`, `LB_SETITEMDATA` |
 
@@ -225776,7 +225779,10 @@ text) and `WM_GETDLGCODE`.
 
 **`MessageBox`** is a dialog WIN16 builds, laid out as Windows 3.0 laid it
 out: the text word-wrapped at five eighths of the screen's width less the
-margins, a 16-pixel margin, the buttons of `MB_OK` to `MB_RETRYCANCEL` 58
+margins, 18 pixels from the left and 16 from the top and the right (S12
+measured these against Windows 3.0's own boxes, §124.18.4: S6 had 16 all
+round and the buttons 10 pixels too high), the buttons 22 pixels below the
+text and 10 above the bottom, those of `MB_OK` to `MB_RETRYCANCEL` 58
 pixels wide and the System font's rows plus 12 high, 12 apart and centred,
 with `MB_DEFBUTTON1`–`3`, and the box centred on the screen. It answers
 `IDOK` to `IDNO`. Esc and the close box answer `IDCANCEL` when the box
@@ -225784,8 +225790,7 @@ has a Cancel button, `IDOK` when OK is all it has, and nothing otherwise
 (a Yes/No box must be answered), as on Windows. It is modal like `DialogBox`, so a program can have
 one up over another. Its text is at most 255 characters, the rest cut. The
 icons of `MB_ICONHAND`, `MB_ICONQUESTION`, `MB_ICONEXCLAMATION` and
-`MB_ICONASTERISK` are S12's (WIN16's own art then, `apps/win16/icons/`, not
-Microsoft's); until then the box is laid out without one. The os8088 alert
+`MB_ICONASTERISK` are WIN16's own art (§124.18.4), not Microsoft's. The os8088 alert
 it used to be (§75.3) is gone.
 
 **The code is a part.** The dialog manager, the controls and `MessageBox`
@@ -226160,3 +226165,147 @@ wake handler sets BEFORE the load (so that a second wake does nothing): on
 an 8088 the load is seconds, and a gate that read the state alone took a
 program still loading for one running. `win16fpuxt` moved to the stock
 8088 too (§124.5), now that the census passes the Open Watcom fixtures.
+
+### 124.18 Living with the desktop *(shipped in S12; its two gate rows, `win16desk` and `win16hiber`, run in S13's final pass)*
+
+What a Windows program is to the rest of os8088 once it runs: one
+instance among others, named after itself, drawn with its icons, carried
+across a hibernate, and shipped on the disks a `kern_big` machine boots
+with.
+
+#### 124.18.1 Where WIN16 ships
+
+| | |
+|---|---|
+| folder | `WIN16\` holding `WIN16.O88`, `WIN16.TXT` and `COPYING.W16` (§124.1's licence row: `apps/win16/README.TXT` and `COPYING` under the names The Wire gives APPLE2's, because `emu360.img` is a category disk with its programs at the root, §24.6, where `README.TXT` is the system's and `COPYING` is C64's and APPLE2's), with `SYSTEM\APPDATA\WIN16\` built beside it (§124.14) |
+| disks | the 1.44MB and 1.2MB apps disks, `more720.img` (the 720KB machine's second, §24.7) and `emu360.img` (the 360KB machine's, §24.6: programs of another system; the three files at its root, the category disks' rule), the everything set (§19.10) and the live media (§80), which carries the everything set's payload. Not in `$(APPSARGS)` itself, which also feeds `kern_mega`'s apps disks |
+| not on | `kern_small`'s disks (§24.5: no `OSAPI_WM_TIMER`) and `kern_mega`'s (WIN16 refuses there, §124.1) |
+| `DOS.O88` | the shipped one hands an NE to WIN16 (§124.1's launch row). `-DDOS_WIN16` is the default for `kern_big` and `kern_emu`, and off for `kern_small` and `kern_mega`, whose disks carry no WIN16 |
+| your programs | `make win16disk WIN3X=<dir>`: a floppy in all four geometries with `WIN16\`, the profile folder, and the NE programs found directly in `<dir>`, in name order, as many as the geometry holds. `PROGRAMS.TXT` on each says which went on and why each other one did not (a library, over 64 KB (R2), or no room). Microsoft's files are read from `<dir>` and never enter the tree |
+
+**A forward to a WIN16.O88 the machine does not have** ends in the
+association search's `Needs WIN16.O88` toast: DOS's window has already
+closed when the search fails (§124.3). The toast names what to get, which
+is the sentence a user acts on; the stub's *This program requires Microsoft
+Windows.* names something os8088 never runs.
+
+#### 124.18.2 Two programs at once
+
+Each Windows program is a `WIN16.O88` instance of its own (§124.1), so two
+programs are two copies of the image, two bss areas and two program
+claims. Nothing in WIN16 is shared between them but the machine:
+
+- **Vectors** are taken only for the length of a resume (`int 21h`,
+  §124.2.1; `int 02h`, §124.5) and the UI task runs one resume at a time, so
+  two instances never hold them together.
+- **The speaker, the clipboard and the timers** are the kernel's
+  (`OSAPI_SND_TONE`, §55, `OSAPI_WM_TIMER`), which arbitrate them already.
+- **`hPrevInstance` is always 0** and `FindWindow` sees only the
+  program's own windows (§124.15.3): a second Minesweeper is a second first
+  one, as on Windows with a program that does not look.
+- **Profiles are merged when they are written.** Each instance holds its
+  own copy of a file (§124.14), so two programs that both write `WIN.INI`
+  would each write back the copy they read, and the second to end would undo
+  the first. So every write a program makes is also kept in a log, and a
+  changed file is read again from the disk as it is written: the log is
+  played onto what is there now, then that is written. The last write of a
+  key wins, whichever program made it. A log is at most 1 KB a file; a
+  program that writes more than that has its file written as its copy
+  says, and the merge is lost for that file alone. So is a file sent out by
+  a fifth (§124.14's cache), which happens in the middle of another call:
+  it is written as held.
+
+#### 124.18.3 The program's own name
+
+`I_NAME` (§29.1), which the Task Manager's rows, the dock's tile and the
+menu bar's application label read, is the package header's name (§20.2
++16), and the loader copies it AFTER the entry proc returns (§21 step 9).
+So WIN16's entry proc, which has the program's file name from
+`OSAPI_ARG_FILE` before it returns, writes the name's stem into its own
+header: the instance is `WINMINE`, not `WIN16`. A WIN16 launched empty
+keeps its own name. The window's caption stays the program's (§124.8).
+
+The dock's tile is the instance's icon, read live out of the header at
++32 (§20.2): WIN16's own, a window with a four-pane flag in it. The
+program's icon is not put there: the dock keys a tile by the instance's
+`I_ICON` slot and not the icon's bytes (§30.3), so a tile changed after it is drawn would stay
+as it was until something else rebuilt the strip.
+
+#### 124.18.4 Icons
+
+| call | answers |
+|---|---|
+| `LoadIcon(hInst, lpName)` (USER.174) | with the program's instance: its `RT_GROUP_ICON` by name or ordinal, and of that group's images the 32 x 32 one with the most colours this display shows (16 on VGA and EGA, 2 on CGA and Hercules), as a global handle holding that `RT_ICON` resource. With `hInst` 0: `IDI_APPLICATION`, `IDI_HAND`, `IDI_QUESTION`, `IDI_EXCLAMATION` and `IDI_ASTERISK` (32512 to 32516) as WIN16's own art. NULL for anything else |
+| `DrawIcon(hDC, x, y, hIcon)` (USER.84) | TRUE. The icon's image (a Windows 3.x DIB: a `BITMAPINFOHEADER`, its colour table, the XOR bits and the AND mask, 1 or 4 bits a pixel) drawn with its top-left at `x, y` in the DC: where the mask is 0 the colour, mapped as GDI maps a COLORREF (§124.8.1), and where it is 1 nothing, so what was under it shows. Each row is drawn as runs of one colour. FALSE for a handle that is not an icon |
+| `DestroyIcon(hIcon)` (USER.457) | TRUE; the handle is freed unless it is a system icon |
+| an `SS_ICON` static (§124.13) | its text names the icon (`#n`, an ordinal or a name); it is loaded as `LoadIcon` loads it, the control takes the icon's size (32 x 32, as Windows sized it), and it is drawn at the control's top-left with its see-through pixels in the window's colour, so the square is one pass and no pixel is drawn twice |
+| `MessageBox` with `MB_ICONHAND`, `MB_ICONQUESTION`, `MB_ICONEXCLAMATION`, `MB_ICONASTERISK` | the system icon as an `SS_ICON` at (18, 16) in the box, the text 68 from the left, the content as tall as the taller of the two with a shorter text centred on the icon, and the buttons 22 below it - Windows 3.0's VGA boxes measured on the reference machine (`win16ref/ref/w30-mb-*.png`), to the pixel |
+
+**WIN16's own art.** Windows' icons are Microsoft's, so the five system
+icons are WIN16's: 32 x 32 drawings in `apps/win16/icons/*.txt`, one
+character a pixel (`.` see-through, a hex digit a colour in Windows'
+palette order), a window, a red octagon with a white bar, a blue disc with
+a question mark, a yellow triangle with an exclamation mark and a blue disc
+with an `i`. `tools/w16icon.py` builds them into part 6, `W16P_ICONS`, as
+icon images of the same shape a program's own have, so there is one drawing
+routine and a system icon is the program's case with WIN16 as the program.
+The part is fetched by the first `LoadIcon(NULL, ...)` or message box with
+an icon, and dropped when the program ends; `win16ne` checks the art and
+refuses a broken drawing. On CGA and Hercules every colour is drawn as GDI
+draws it there (§124.8.1), which is why each drawing keeps its shape in
+black, grey and white.
+
+The drawing routine (`w16_icodraw`, `apps/win16/w16ico.inc`) is the
+image's: a few hundred bytes, which `DrawIcon` from a program's own
+`WM_PAINT` reaches without fetching anything. Each row is runs of one
+colour, each one `w16_gfill`, so the DC's clip and a 1bpp display's
+reduction are GDI's own; a 32 x 32 icon is a few dozen fills.
+
+#### 124.18.5 The Task Manager, closing, and End Task
+
+The Task Manager is a viewer (§28): it can neither close nor end a
+program. It shows a WIN16 program as a row named after it (§124.18.3), and
+on its memory page WIN16's region with every claim the program holds under
+it: its segments, its global heap's arenas and its profile copies. A
+program is closed by its close box and ended by End Task, the close box's
+second click (§124.12). Either way every one of those claims is given back,
+and the heap is as it was before the launch.
+
+#### 124.18.6 Hibernate
+
+A hibernate (§87) is taken from the System menu, so the UI task is in the
+kernel when it is written, and a Windows program is never in the middle of
+a resume: it is waiting in `GetMessage`, with its frame on its own stack in
+its own claim. WIN16 holds no vector, no hardware and no driver between
+resumes, so the image puts everything back and the program's next message
+resumes it as if nothing happened. Its timers are the kernel's and go on
+from the restored count; `int 21h` AH = 2Ch takes its anchor afresh from
+the kernel's clock on the first call after (§124.17.3), because the BIOS
+tick it anchored to was the old session's.
+
+A hibernate image is resumed on the machine that wrote it, so the CPU the
+census measured (§124.4) and the floating point the loader bound
+(§124.5) are the same on the way back.
+
+#### 124.18.7 The loader is a part
+
+The loader and the census (`w16load.inc`, `w16cens.inc`) run once a
+program, so they are part 5 of `WIN16.O88`, `W16P_LOAD`: fetched by the
+wake handler before the load and dropped when it returns, whatever it
+answered. Their tables and strings stay in the image, which they read
+through DS; their calls into the image are the dialog part's `ICALL`
+(§124.13). A load costs one more read of `WIN16.O88`; the segment gets
+the loader's code back for the stories after S12.
+
+#### 124.18.8 The gate
+
+`win16desk` (QEMU): two Windows programs at once beside Paint, each named
+in the Task Manager and the dock, one closed by its close box and one
+ended by End Task, with the heap back to its pre-launch claims after each;
+a fixture's icons drawn by `DrawIcon`, an `SS_ICON` and a `MessageBox`
+with each icon, each found on the glass pixel for pixel from its art; two
+programs writing `WIN.INI` and both writes kept. Its B: is laid out as
+shipped and carries no `DOS.O88`, so the forward is the system disk's.
+`win16hiber` (MartyPC's XT-IDE, every hibernate row's machine): a program
+started through the shipped forward off the hard disk, hibernated and
+resumed at the same segment, then played on and closed.
