@@ -65,6 +65,8 @@ W16WF_DIS   equ 16              ; disabled (EnableWindow)
 W16WF_DYING equ 32              ; DestroyWindow has it
 
 W16W2_TTL   equ 7               ; a second top-level's title buffer, + 1
+W16W2_NSIZE equ 8               ; an overlapped window not yet sized: its
+                                ;   first ShowWindow sends WM_SIZE (124.8)
 
 W16Q_PROG   equ 0               ; the kinds: the program's own class ...
 W16Q_BUTTON equ 1               ; ...and WIN16's (SPEC.md 124.13), whose
@@ -604,6 +606,11 @@ w16_cw_done:
     inc ax
     jz .refused
     call w16_slot2rec
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI | WS_POPUP_HI | WS_VISIBLE_HI
+    jnz .now                        ; overlapped and hidden: the size waits
+    or byte [bx + W16W_F2], W16W2_NSIZE ;   for its first ShowWindow
+    jmp w16_cw_sized
+.now:
     call w16_rec2hwnd
     call w16_sizemsg
     push si
@@ -665,8 +672,11 @@ w16_sizeto:
     jz .thin
     mov bx, 8
 .thin:
-    sub cx, bx                      ; the client Windows would have given
+    sub cx, bx                      ; the client Windows would have given,
     jle .out
+    add cx, 7                       ;   up to os8088's 8-pixel grid, so the
+    and cx, 0xFFF8                  ;   snap never takes from it (SPEC.md
+                                    ;   124.8)
     sub dx, bx
     sub dx, [w16_capn]
     jle .out
@@ -944,6 +954,17 @@ w16u_showwnd:
     jc .shown                       ;   client. WIN16's own keeps its size: a
     call w16_oswshow                ;   dialog was sized when made (w16d_ownwin)
 .shown:
+    test byte [bx + W16W_F2], W16W2_NSIZE
+    jz .sized                       ; its first show: the WM_SIZE that
+    and byte [bx + W16W_F2], ~W16W2_NSIZE ; CreateWindow kept back (124.8)
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jnz .sized
+    call w16_sizemsg
+    mov si, w16_sw_done
+    mov ax, di
+    call w16_sendwnd
+    jmp short .out
+.sized:
     cmp dx, SW_SHOWNORMAL
     je .restore
     cmp dx, SW_RESTORE

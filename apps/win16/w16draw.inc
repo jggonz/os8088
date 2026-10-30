@@ -1010,6 +1010,15 @@ W16LIB w16g_getpixel
     and al, 15
     jmp .rgb
 
+; GetProcAddress (KERNEL.50) - args: +0 lpProcName, +4 hModule. NULL: the
+; C runtime's Pen Windows probe asks it of SM_PENWINDOWS' answer, which is 0
+; here, and a real lookup waits for a program that needs one (SPEC.md
+; 124.20.4)
+W16LIB w16k_getproc
+    xor ax, ax
+    xor dx, dx
+    ret
+
 ; w16_clipkids - BX = the DC's window: with WS_CLIPCHILDREN, each visible
 ; child that spans [w16_kl]..[w16_kb] edge to edge along one side is cut out
 ; of it - a status bar, a tool bar (SPEC.md 124.20.4). A child inside the

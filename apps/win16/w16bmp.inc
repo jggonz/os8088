@@ -606,7 +606,7 @@ w16_blt:
     jmp short .fill
 .pat:
     cmp ax, PATCOPY_HI
-    jne .no
+    jne .srcrop
     mov ax, [w16_brush]
     ICALL w16_brcol
     mov dl, al
@@ -659,6 +659,37 @@ w16_blt:
     pop di
     pop si
     ret
+.srcrop:                            ; a source ROP the pattern plays no part
+    mov dl, al                      ;   in: its index byte's two halves agree
+    and dl, 0x0F
+    mov dh, al
+    shr dh, 1
+    shr dh, 1
+    shr dh, 1
+    shr dh, 1
+    cmp dl, dh
+    jne .no
+    mov [w16b_ropb], al
+    mov ax, [w16b_src]
+    call w16_mdcslot
+    jc .no
+    shl bx, 1
+    mov ax, [w16m_bmp + bx]
+    cmp ax, W16_BMSTK
+    je .yes
+    call w16_bmslot
+    jc .no
+    mov [w16b_bm], bx
+    mov ax, [w16b_cx]               ; the same size (a stretch under another
+    cmp ax, [w16b_cxs]              ;   ROP is not provided)
+    jne .no
+    mov ax, [w16b_cy]
+    cmp ax, [w16b_cys]
+    jne .no
+    ICALL w16_cliprect
+    jc .yes
+    call w16_ropscr
+    jmp short .yes
 
 ; w16_bmcopy - a same-size SRCCOPY: [w16_rl]..[w16_rb] (cut) from bitmap
 ; [w16b_bm] at [w16b_xs], [w16b_ys] for the uncut [w16b_dx0], [w16b_dy0].
@@ -1403,6 +1434,17 @@ w16_scrrow:
     call w16_bmaddr                 ; ES:DI, CF = a low nibble first
     sbb bl, bl
     and bl, 1
+    mov cx, [w16_rr]
+    sub cx, [w16_rl]
+    inc cx
+    call w16_scrpix
+    pop bp
+    ret
+
+; w16_scrpix - CX pixels of a saved screen row (DS:SI = plane 0's byte of
+; its first, BP = one plane's bytes, [w16b_sxs] its first column, [w16b_pl]
+; the planes) as colours to ES:DI from the half BL says (1 low)
+w16_scrpix:
     mov cl, [w16b_sxs]
     and cl, 7
     mov ah, 0x80
@@ -1437,7 +1479,203 @@ w16_scrrow:
     inc si
 .same:
     loop .px
+    ret
+
+; -----------------------------------------------------------------------------
+; The other source ROPs onto the screen (SPEC.md 124.20.4): Solitaire's empty
+; piles are a monochrome outline put down with SRCAND. A ROP whose answer
+; does not depend on the pattern is a truth table over (source bit, screen
+; bit), applied to each colour's four bits as Windows' VGA driver applied it
+; to each plane: the screen row is read back, combined and put down again.
+; -----------------------------------------------------------------------------
+W16_ROPROW  equ 400                 ; the combined row, in w16_gbuf past the
+                                    ;   saved planes (4 x 92 bytes at 720 px)
+
+; w16_roptab - [w16b_ropb] (the ROP's index byte) -> w16_ropt: the answer
+; for each source colour * 16 + screen colour
+w16_roptab:
+    push ds
+    pop es
+    mov di, w16_ropt
+    xor dx, dx                      ; DL = source * 16 + screen
+.e:
+    mov bh, dl
+    shr bh, 1
+    shr bh, 1
+    shr bh, 1
+    shr bh, 1                       ; BH = the source
+    mov bl, dl
+    and bl, 15                      ; BL = the screen
+    xor al, al
+    mov ah, 1                       ; AH = the bit
+.b:
+    xor cl, cl                      ; the table's index: S * 2 + D
+    test bh, ah
+    jz .s0
+    mov cl, 2
+.s0:
+    test bl, ah
+    jz .d0
+    inc cl
+.d0:
+    mov ch, [w16b_ropb]
+    shr ch, cl
+    test ch, 1
+    jz .z
+    or al, ah
+.z:
+    shl ah, 1
+    cmp ah, 16
+    jb .b
+    stosb
+    inc dl
+    jnz .e
+    ret
+
+; w16_ropscr - from bitmap [w16b_bm] onto the screen under ROP [w16b_ropb]:
+; [w16_rl]..[w16_rb] the destination cut to the clip, [w16b_dx0]/[w16b_dy0]
+; its uncut corner, [w16b_xs]/[w16b_ys] the source's
+w16_ropscr:
+    call w16_roptab
+    mov bx, [w16b_bm]
+    mov ax, [w16b_w + bx]
+    mov dx, [w16b_h + bx]
+    call w16_bmcut
+    jc .out
+    mov bx, [w16_win]
+    call OSAPI_WM_DISPLAY           ; DL = the kind, DH = the planes
+    cmp dl, VID_KIND_VESA
+    je .out
+    or dh, dh
+    jz .out
+    mov [w16b_pl], dh
+    mov ax, [w16_rl]
+    mov [w16b_sxs], ax
+    mov cl, 3
+    mov dx, ax
+    shr dx, cl
+    mov ax, [w16_rr]
+    shr ax, cl
+    sub ax, dx
+    inc ax
+    mov [w16b_bw], ax               ; one plane's bytes for the row
+    mov dx, [w16_rt]
+.row:
+    cmp dx, [w16_rb]
+    jg .out
+    push dx
+    mov ax, [w16_rl]                ; the screen's row, read back
+    mov bx, dx
+    mov cx, [w16_rr]
+    push ds
+    pop es
+    mov di, w16_gbuf
+    call OSAPI_GFX_SAVE
+    jc .next
+    push bp
+    mov si, w16_gbuf                ; ...as colours, into the row buffer
+    mov di, w16_gbuf + W16_ROPROW
+    mov bp, [w16b_bw]
+    xor bl, bl
+    call w16_scrpix
     pop bp
+    pop dx
+    push dx
+    call w16_roprow                 ; ...combined with the source
+    push bp
+    push ds
+    pop es
+    mov si, w16_gbuf + W16_ROPROW
+    mov cx, [w16_rr]
+    sub cx, [w16_rl]
+    inc cx
+    mov bp, cx
+    inc bp
+    shr bp, 1
+    mov ax, [w16_rl]
+    mov bx, dx
+    mov dx, 1
+    call OSAPI_GFX_BLIT4            ; ...and put down
+    pop bp
+.next:
+    pop dx
+    inc dx
+    jmp short .row
+.out:
+    ret
+
+; w16_roprow - the row buffer (screen row DX's colours) combined, pixel by
+; pixel through w16_ropt, with the source row that lands on it
+w16_roprow:
+    push dx
+    mov ax, dx                      ; the source row
+    sub ax, [w16_rt]
+    add ax, [w16b_ys]
+    sub ax, [w16b_dy0]
+    add ax, [w16_rt]
+    mov bx, [w16b_bm]
+    mul word [w16b_str + bx]
+    mov cx, [w16b_sx]
+    mov si, cx
+    shr si, 1
+    add si, ax
+    mov es, [w16b_seg + bx]
+    mov dh, cl
+    and dh, 1                       ; DH = 1: the source starts low
+    xor dl, dl                      ; DL = 1: the row buffer's low half
+    mov di, w16_gbuf + W16_ROPROW
+    mov cx, [w16_rr]
+    sub cx, [w16_rl]
+    inc cx
+.px:
+    mov al, [es:si]                 ; AL = the source's colour
+    or dh, dh
+    jnz .slo
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    jmp short .sg
+.slo:
+    and al, 0x0F
+    inc si
+.sg:
+    xor dh, 1
+    mov ah, [di]                    ; AH = the screen's
+    or dl, dl
+    jnz .dlo
+    shr ah, 1
+    shr ah, 1
+    shr ah, 1
+    shr ah, 1
+    jmp short .dg
+.dlo:
+    and ah, 0x0F
+.dg:
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    or al, ah
+    mov bx, w16_ropt
+    xlat                            ; AL = the answer
+    or dl, dl
+    jnz .wlo
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    and byte [di], 0x0F
+    or [di], al
+    jmp short .wg
+.wlo:
+    and byte [di], 0xF0
+    or [di], al
+    inc di
+.wg:
+    xor dl, 1
+    loop .px
+    pop dx
     ret
 
 section .text

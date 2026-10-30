@@ -87,6 +87,7 @@ W16EXPORT W16M_KERNEL,     88,      8,  w16k_lstrcpy        ; lstrcpy(segptr str
 W16EXPORT W16M_KERNEL,     89,      8,  w16k_lstrcat        ; lstrcat(segstr str)
 W16EXPORT W16M_KERNEL,     30,      2,  w16k_waitevent      ; WaitEvent(word)
 W16EXPORT W16M_KERNEL,     49,      8,  w16k_getmodfn       ; GetModuleFileName(word ptr s_word)
+W16EXPORT W16M_KERNEL,     50,      6,  w16k_getproc        ; GetProcAddress(word str)
 W16EXPORT W16M_KERNEL,     51,      6,  w16k_mkprocinst     ; MakeProcInstance(segptr word)
 W16EXPORT W16M_KERNEL,     52,      4,  w16k_freeprocinst   ; FreeProcInstance(segptr)
 W16EXPORT W16M_KERNEL,     90,      4,  w16k_lstrlen        ; lstrlen(str)

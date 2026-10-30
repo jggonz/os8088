@@ -226538,9 +226538,25 @@ VGA's: frame 4 for `WS_THICKFRAME`, 1 otherwise. The 19 is `SM_CYCAPTION`'s
   pixels: `OSAPI_WM_RESIZE` keeps a window's width on os8088's 8-pixel
   grid, so a 260-wide window has a 256-pixel client here where Windows
   gives 252. WM_SIZE and `GetClientRect` report the client os8088 gave.
+  **Since S15 that grid is never met by shrinking.** §11.94.5.1's snap rounds
+  a width up where the window fits and DOWN where it does not, and
+  Solitaire 3.1 asks, through `AdjustWindowRect`, for a client of exactly
+  7 x 71 + 8 x 11 = 585 - the narrowest its layout accepts. At x = 48 a
+  593-wide window does not fit rounded up, so it got 584, and Solitaire's
+  `WM_SIZE` kept its previous layout, which on the first `WM_SIZE` is every
+  pile at (0, 0): no card showed. So `w16_sizeto` rounds the client UP to a
+  multiple of 8 itself; the snap then has nothing to do, and
+  `OSAPI_WM_RESIZE`'s fit nudges the window left instead. A program gets at
+  least the client it asked for, never less.
 - `CreateWindow` sends `WM_CREATE` (its `lParam` a CREATESTRUCT, which is
-  the call's own thirty argument bytes in order) and then `WM_SIZE`, as
-  Windows does.
+  the call's own thirty argument bytes in order) and then `WM_SIZE` - for a
+  child, a popup, or a window created `WS_VISIBLE`. **An overlapped window
+  made hidden hears its first `WM_SIZE` from its first `ShowWindow`**
+  instead (S15), which is what Windows did: Wine's `WIN_CreateWindowEx`
+  marks it `WIN_NEED_SIZE` and its `ShowWindow` sends the size. Solitaire
+  3.1 lays its piles out in `WM_SIZE` through a pointer it allocates after
+  `CreateWindow` returns; sent from inside `CreateWindow`, the handler
+  walked thirteen piles through a null pointer and never came back.
 - **A window created `WS_MINIMIZE` keeps its restored size.** `MoveWindow`
   and `SetWindowPos` on it move the icon on Windows and change nothing
   here, and `ShowWindow(SW_SHOWNORMAL)` or `SW_RESTORE` restores it at the
@@ -227170,7 +227186,7 @@ directory here.
 | `GetObject(hBitmap, cb, lp)` | the `BITMAP` record: type 0, width, height, width bytes, 1 plane, 4 bits a pixel (1 on a 1bpp display), no bits pointer. Other objects answer 0 |
 | `SelectObject(hMemDC, hBitmap)` | selects it and answers the one it replaced. A pen, brush or font selected into a memory DC is not kept: the answer is the stock object of its kind, and nothing changes. A bitmap selected into a window's DC answers 0 |
 | `DeleteObject(hBitmap)` | frees it. A bitmap still selected into a memory DC is not deleted: FALSE, as Windows answered |
-| `BitBlt(hdcDest, x, y, cx, cy, hdcSrc, xSrc, ySrc, dwRop)` | from a memory DC to a window's DC: `SRCCOPY` copies, the source cut to the bitmap and the destination to the DC's clip. `BLACKNESS`, `WHITENESS` and `PATCOPY` (the brush) fill the destination and need no source |
+| `BitBlt(hdcDest, x, y, cx, cy, hdcSrc, xSrc, ySrc, dwRop)` | from a memory DC to a window's DC: `SRCCOPY` copies, the source cut to the bitmap and the destination to the DC's clip; the other source-and-destination ROPs (`SRCAND`, `NOTSRCCOPY`, ...) combine with the screen read back (see *The other source ROPs onto the screen*). `BLACKNESS`, `WHITENESS` and `PATCOPY` (the brush) fill the destination and need no source |
 | `StretchBlt(..., cxSrc, cySrc, dwRop)` | `BitBlt`'s pairs and ROPs, each destination pixel taken from the source pixel it falls on (Windows' `COLORONCOLOR`) |
 
 **How a bitmap is kept.** Its pixels are converted once, when it is made,
@@ -227808,7 +227824,7 @@ three more. They go in the library part (§124.19):
 | `CreateCompatibleBitmap` | GDI.51: a bitmap of the display's format (§124.15), as `CreateBitmap` makes one |
 | `GetDCOrg` | GDI.79: the DC's origin in screen coordinates |
 | `GetPixel` | GDI.83: the pixel's colour in a memory DC's bitmap, or on the screen under the window's DC - one pixel read back with `OSAPI_GFX_SAVE` (§5.3), a byte a plane, its bit the pixel's - or `CLR_INVALID` (FFFFFFFFh) outside the bitmap or the clip and on a VESA display, whose save is the driver's own format (§120.4). Solitaire reads the twelve pixels at a card's corners before it puts the card down and writes them back after, which is how its cards are round; a covered pixel reads the window over it, and the write that puts it back is clipped away |
-| `GetProcAddress` | KERNEL.50: added when a program reached here is seen to call it, with what it was called for |
+| `GetProcAddress` | KERNEL.50: NULL. Solitaire 3.1 calls it from the Microsoft C runtime's start-up as `GetProcAddress(GetSystemMetrics(SM_PENWINDOWS), "RegisterPenApp")` - the Pen Windows probe - and `SM_PENWINDOWS` is 0 here, so the module asked of is NULL and Windows answered NULL too; the program tests the answer and skips the call. A real lookup - a run-time bind of a WIN16 export to a gate slot - needs the loader part (§124.19), which is not resident once the program runs, and waits for a program that asks one of a module WIN16 has (R7) |
 | `GetDC(NULL)` | the screen's DC, as `GetDC` on `GetDesktopWindow()` answers it (§124.15.3): `GetDeviceCaps` reads it, nothing draws on it. Solitaire asks it at start and says *Out of memory* when it is refused |
 
 **A DC opened over an open one.** WIN16 has one window DC (§124.8), and
@@ -227848,6 +227864,25 @@ The destination is cut to its bitmap and the source to its own extent, so a
 negative offset - Solitaire's overlap, `(-60, -59)` into a 71 x 276 bitmap -
 copies the part that lands. A `StretchBlt` into a memory DC and every other
 ROP into one answer FALSE.
+
+**The other source ROPs onto the screen.** Solitaire puts an empty pile's
+outline down with `SRCAND` (a monochrome bitmap: its white is the screen
+left as it was, its black the line) and selects a card with `NOTSRCCOPY`.
+A ROP3 whose answer does not depend on the pattern - its index byte's two
+halves equal, which is every one of the sixteen source-and-destination
+operations (`SRCAND`, `SRCPAINT`, `SRCINVERT`, `SRCERASE`, `NOTSRCCOPY`,
+`NOTSRCERASE`, `MERGEPAINT`, ...) - is a truth table over (source bit,
+destination bit), bit `S * 2 + D` of that byte. WIN16 applies it to each of
+a colour's four bits, as Windows' VGA driver applied it to each plane:
+`w16_roptab` makes a 256-byte answer table (source colour * 16 + screen
+colour) once per call, and each destination row is read back with
+`OSAPI_GFX_SAVE`, made colours, combined through the table and put down
+with one `OSAPI_GFX_BLIT4`. That is two primitive calls a row, so it is a
+small-blit path - a card is 96 rows. Same size only, from a memory DC to
+the window's DC; nothing on a hidden DC or a VESA display (the save is the
+driver's format). A pattern ROP other than `PATCOPY` (`MERGECOPY`, ROP3s
+that mix all three) answers FALSE, and so does a source ROP into a memory
+DC.
 
 **A parent does not draw on its children.** Solitaire's status bar is a
 child window (a class of its own, along the bottom of the client) and its

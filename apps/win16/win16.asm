@@ -735,6 +735,8 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16b_dfc, 1          ; ...a fill's colour, or W16_XOR to invert
     W16BSS w16b_fpat, 1         ; ...and in both halves of a byte
     W16BSS w16b_mbr, 2          ; ...the memory DC's brush
+    W16BSS w16b_ropb, 1         ; ...a source ROP's index byte
+    W16BSS w16_ropt, 256        ; ...its answer, source * 16 + screen
     W16BSS w16b_pl, 1           ; ...the screen's planes, read from it
     W16BSS w16b_bw, 2           ; ...the screen bytes a row a plane
     W16BSS w16b_sxs, 2          ; ...the screen rect read, inclusive
