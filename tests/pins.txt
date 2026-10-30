@@ -427,3 +427,51 @@ N apps/waverack/wredit.inc wo_useg     # the undo history (6KB), held while a
 N apps/waverack/wrsave.inc ws_oseg     # a save's output claim (16-32KB), held
                                          # across the save's ticks; each write
                                          # holds its segment only inside its call
+
+# --- WIN16 (SPEC.md 124) and DOS.O88's hand-off to it ------------------------
+
+C apps/dos/dosw16.inc @dos_w16_try       # the first two clusters of an .EXE,
+                                         # read to find an NE header and freed
+                                         # inside the one dos_w16_try call
+C apps/win16/w16load.inc w16_fseg        # the program's whole file, claimed and
+                                         # freed inside one w16_load call
+C apps/win16/w16cens.inc w16c_cseg       # the CPU census's work block, claimed
+                                         # and freed inside one w16_census call
+X apps/win16/w16load.inc @w16_load       # the Windows program's own segments
+                                         # (w16_layout's claim, w16_pseg). The
+                                         # loader's fixups write their PARAGRAPHS
+                                         # into the program's code and data, and
+                                         # the program keeps CS, DS and SS in its
+                                         # own frames across every message, as
+                                         # real-mode Windows' FIXED segments do
+X apps/win16/w16mem.inc w16_arena+si     # the program's global heap: GlobalLock
+                                         # and GlobalAlloc(GMEM_FIXED) hand it a
+                                         # block's SEGMENT, which it keeps in its
+                                         # own data as a far pointer for as long
+                                         # as it likes (SPEC.md 124.6)
+X apps/win16/w16x87.inc op:W16P_FPU      # the 8087 emulator: its segment is in
+                                         # int 34h-3Dh's vectors (w16x_new) for
+                                         # the whole of the program, which jumps
+                                         # through them from inside its own code;
+                                         # dropped at the program's end
+N apps/win16/w16bmp.inc w16b_seg+bx      # a GDI bitmap's bits, held for the
+                                         # bitmap's life. The program holds only
+                                         # the HBITMAP, so a proc rewriting
+                                         # w16b_seg would retire this line
+N apps/win16/w16prof.inc bx+WPF_SEG      # an open profile's text (WIN.INI, the
+                                         # program's .INI), held until the
+                                         # program ends and it is written; reached
+                                         # only through WPF_SEG, so a proc would
+                                         # retire it
+N apps/win16/w16prof.inc bx+WPF_LOG      # the same profile's change log, held
+                                         # with it; the same proc would retire it
+N apps/win16/win16.asm @w16_facein       # the System font part, held while the
+                                         # program draws: w16_face names it, so
+                                         # op_movable with a proc re-stamping
+                                         # w16_face would retire this line
+N apps/win16/win16.asm @w16_pfetch       # the loader part (dropped inside the
+                                         # load), the icons (held to the end)
+                                         # and the dialog part, far-called through
+                                         # w16_pfv while a dialog is up; a proc
+                                         # re-stamping w16_pfv, w16_dseg and
+                                         # w16_icseg would retire it

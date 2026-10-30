@@ -140,3 +140,16 @@ highmem apps/lemmings/lemmings.asm  # PARAGRAPH ARITHMETIC ON ITS CLAIMS:
     # identity map, a different descriptor on an LDT selector over exactly the
     # KB asked. Retired by 14.12's flat arm at those four sites, or by
     # OSAPI_MEM_HUGE's step for the two claims over 64KB (KERN-MEGA-PLAN 14.67).
+
+high apps/win16/win16.asm       # IT REFUSES UNDER PROTECTED MODE: w16_pmcheck
+    # (win16.asm) toasts and ends at entry when OSAPI_CPU_INFO answers
+    # CPU_F_PM (SPEC.md 124.1, WIN16-PLAN D6), because what it runs is a
+    # real-mode Windows program whose loader writes PARAGRAPHS into its code
+    # (w16load.inc's fixups) and whose GlobalLock hands it segments
+    # (w16mem.inc). It has no kern_mega arm and none is on the megaapps disks.
+    # Retired by a protected-mode WIN16 (Windows 3.x standard mode, the plan's
+    # R3), which would hand out selectors instead.
+highmem apps/win16/win16.asm    # THE SAME REFUSAL, and the claims are the same
+    # paragraphs: the program's segments and its global heap are addressed as
+    # base + paragraph offsets by the fixups and by GlobalAlloc's arena walk
+    # (w16_garena, GH_SIZE in paragraphs). Retired with the line above.

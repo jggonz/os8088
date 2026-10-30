@@ -1323,3 +1323,138 @@ too.
 **What it cost.** WIN16's image is 46,552 bytes with 14,038 of bss, about
 4.9 KB under the 64 KB segment; 66,236 bytes on disk. The windowed DOS grew
 326 bytes for the forward. The kernel is unchanged.
+
+## 2026-10-30 — S13: acceptance
+
+*As the owner, I can see that WIN16 does what the stories said, on the
+machines it claims, at the cost it claims, with what it cannot do yet written
+down.*
+
+**The final pass.** Every row the stories named ran as one soak union, with
+the DOS rows beside them because the shipped DOS.O88 changed in S12:
+`win16mines`, `win16minesxt`, `win16fpu`, `win16fpuxt`, `win16calc`,
+`win16cpu`, `win16cpuxt`, `win16desk`, `win16hiber`, and the `dos*`
+family. The first pass failed six rows, and every failure was a row, not
+WIN16:
+
+- **The shipped DOS moved under the DOS rows.** `dosmap.py` assembled
+  DOS.O88's symbol map from the shipped define set, which S12 had grown by
+  `-DDOS_WIN16`. Everything after `dosw16.inc` moved, so `doslnk` read its
+  path box and `dosopen` its prompt at the wrong addresses. `dosmap`, the two
+  button rows and `t_dosbss` now assemble what ships.
+- **Two windows open, and the row took DOS's.** `win16mines` waited for the
+  first new window with a segment, which is DOS's while DOS hands the program
+  on. It now waits for the window whose segment holds the program's name, as
+  `win16fpu` already did.
+- **The row was wrong about Minesweeper.** It expected a 9 x 9 Beginner
+  board. Windows 3.1's is 8 x 8; the reference machine's fresh install shows
+  it (`win16ref/ref/w31-vga-winmine.png`), and 9 x 9 arrived with Windows
+  2000. This was the row's first registered run, so nothing had checked it.
+- **A clock never stops.** On the XT, the row waited for the screen to stop
+  changing, and once a game is under way Minesweeper's timer repaints every
+  second. It now waits for the UI task to finish with the input.
+- **A Disk window five rows high.** `win16cpuxt` double-clicked Windows
+  3.1's Calculator where a CGA Disk window had no row for it. It scrolls to
+  each program first.
+- **A stale rectangle.** `win16desk` aimed at the window Prog.launch saw
+  first, before the program sized it. It refreshes the window, and parks the
+  pointer before reading icons off the glass.
+- `doscable` failed once on a socket timeout and passed on the re-run.
+
+The second pass re-ran what had failed beside the DOS family: 56 of 59
+passed. The third re-ran the five that were left, and all passed. `make
+test-full` ran alone after that, and failed two of its 80 rows for a reason
+that had arrived with `main`: #318 had added two registry gates and WIN16 was
+in neither. `pins` wants every heap claim declared movable or registered
+with a reason, and `megahigh` wants every package to opt into extended
+memory under kern_mega or say why it cannot. WIN16 refuses under protected
+mode, so the second is a sentence. The first is eleven lines: three claims
+freed inside one call, three that a real-mode Windows program holds by its
+paragraph (its segments, its global heap, the 8087 emulator in its
+interrupt vectors), and five that **could** move and do not yet (bitmaps,
+profiles, the font, dialog and icon parts). Those five are `N` lines, the
+registry's word for a finding owed to the owner; each says which proc would
+retire it.
+
+**On the glass, measured** (MartyPC, a 4.77 MHz 5150; double-click to the
+program idle in its message loop):
+
+| | stock 8088 | V20 |
+|---|---|---|
+| CALC 3.00 | 37.0 s | |
+| CLOCK 3.00 | 22.2 s | |
+| REVERSI 3.00 | 20.0 s | |
+| CALC 3.10 | *Needs a V20, 80186 or better.*, 26.9 s | 28.0 s |
+| Minesweeper 3.10 | *Needs a V20, 80186 or better.* | 25.8 s; a game won in 13 reveals, median 1.26 s a reveal, worst 4.17 s |
+
+On QEMU (a 386) the rows pass and were not timed. On 86Box's 12.5 MHz 286
+(`vm/286`, 1 MB), ICONS, Reversi and Minesweeper ran side by side, started
+from `\AUTOSTRT` links because 86Box cannot be clicked from here, so nothing
+was timed there. Calculator, the fourth link, did not appear, and why was
+not run down.
+
+**The four adapters.** ICONS, Calculator, Clock, Reversi and WinMine were
+looked at on VGA, EGA and CGA (QEMU, the `VIDEO=` knob in private build
+trees) and on Hercules (MartyPC, a V20 5150). EGA is VGA's picture at 350
+lines. On CGA and Hercules every colour is reduced as GDI reduces it, so the
+icons keep their shapes in black, white and grey; Minesweeper's red LED
+digits become hard to read there, which was not compared against Windows 3.0
+on those cards.
+
+![The hand message box on VGA, EGA, CGA and Hercules](win16/icons-four-adapters.png)
+
+![Two Windows programs in the Task Manager, each under its own name](win16/two-programs-taskmgr.png)
+
+**Against the reference machine.** The Windows 3.0 machine's shots
+(`win16ref/ref/`, never committed) were put beside these.
+
+- **ICONS' hand box** (`w30-mb-hand.png`) matches in its text, its
+  placement, the icon left of the text and the OK button centred under it.
+  What differs is ours on purpose: the frame and title bar are os8088's, and
+  the icons are WIN16's own drawings. Windows draws the hand as an octagon
+  lettered STOP; WIN16 draws a red octagon with a white bar, because the
+  icons are not Microsoft's.
+- **Reversi** (`w30-reversi.png`) has the same board, grid, shadow, menu bar
+  and opening four pieces. Its colours are lighter here: Windows' VGA driver
+  loads a palette with pure red, green and blue, and os8088's desktop keeps
+  the standard 16 colours, whose nearest are light red, light green and light
+  blue (FF5555 and its kin). It is the same reduction GDI makes to any colour
+  outside the 16, so it is right for this palette, not a defect. Changing it
+  would mean a WIN16 palette, which no other package on the desktop would
+  share.
+- **Minesweeper and Calculator** were compared in S9 and S10 and have not
+  changed since; the Beginner board is Windows 3.1's 8 x 8 above.
+
+**What it costs.**
+
+- **The kernel:** nothing. `tools/kernsize.py` reads *unchanged* on both
+  kernels.
+- **The package:** a 46,552-byte image with 14,038 bytes of bss, about
+  4.9 KB under the 64 KB segment, and 66,236 bytes on disk. Its six parts
+  (three fonts, the dialogs, the 8087 emulator, the loader and the icons) are
+  read when needed and dropped after.
+- **A running program**, read off the kernel's claim table on QEMU with four
+  running at once: WIN16's region is 60 KB, and with the program's segments,
+  its global heap and its stack the whole is ICONS 95 KB, CLOCK 93 KB,
+  Windows 3.1's Minesweeper 125 KB and Calculator 3.00 133 KB.
+
+**What it does not do yet** (the plan's *Beyond S13* is the road for most of
+it):
+
+- Programs over 64 KB, Windows 3.1's protected-mode-only programs, a
+  program's own DLLs, installers, and programs that talk to each other
+  (R1-R9).
+- `TRANSPARENT` text is drawn on its paper, `SetCursorPos` does nothing,
+  `ExtTextOut`'s spacing array is not followed, and every pen is one pixel
+  wide.
+- **About four programs at once.** Each takes five to seven of the kernel's
+  32 heap-claim records; four programs and the Disk window held 27.
+- **Found in S13: several Windows programs in `\AUTOSTRT` leave DOS windows
+  open.** DOS closes its own window after a hand-off with `OSAPI_WM_CLOSE`,
+  which is deferred in one word (§75.2). Autostart launches every link in one
+  pass, so each DOS overwrites the request before it is spent and only the
+  last one closes. A double-click is a pass of its own and is not affected.
+  The fix is a kernel change (a queue, or a refusal the caller can retry), and
+  WIN16 takes no kernel bytes, so it is the owner's decision.
+- `emu360.img` under `EMUFULL=1`, with WIN16 beside C64, APPLE2 and RunCPM,
+  was not built here (estimated ~330 of 354 clusters).

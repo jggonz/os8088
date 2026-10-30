@@ -29,7 +29,7 @@ def u16(b): return b[0] | (b[1] << 8)
 def pkg_syms(src=None, inc=None):
     """A package's own symbols, by re-assembling it with a map - atclip's
     trick.  THE DEFINES MUST MATCH THE SHIPPED BUILD: DOS on the
-    system disk is dosp.bin (-DDOSKPART -DDOS_EXTCORE), and a map taken
+    system disk is dosp.bin (-DDOSKPART -DDOS_EXTCORE -DDOS_WIN16), and a map taken
     without them resolves to plausible, wrong offsets."""
     import subprocess, tempfile
     src = src or (ROOT + "/apps/telnet/telnet.asm")
@@ -103,7 +103,7 @@ with os88ui.boot(ROOT + "/build/os8088-360.img",
     dsyms = pkg_syms(ROOT + "/apps/dos/dos.asm",
                      ["-I", ROOT + "/apps/", "-I", ROOT + "/apps/dos/",
                       "-I", ROOT + "/drivers/net/", "-I", ROOT + "/kerndos/",
-                      "-DDOSKPART", "-DDOS_EXTCORE"])
+                      "-DDOSKPART", "-DDOS_EXTCORE", "-DDOS_WIN16"])
     dseg = u16(m.read(os88geom.winptr(m, dw.i, ui.sym) + os88geom.W_SEG, 2))
     n = u16(m.readseg(dseg, dsyms["dos_btrec"] + 6, 2))     # OS88UI_BT_N
     r = u16(m.readseg(dseg, dsyms["dos_btrec"] + 0, 2))     # OS88UI_BT_RECTS

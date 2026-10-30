@@ -67,7 +67,8 @@ OPEN = re.compile(r"^%(?:if|ifdef|ifndef)\b")
 # something that SHIPS, which is the point: a pair that agrees is not a rule.
 #
 #   inline   build/dos.o88     - DOS with the core inside it
-#   parted   build/dosp.bin    - DOS that CALLS a core part (-DDOS_EXTCORE)
+#   parted   build/dosp.bin    - DOS that CALLS a core part (-DDOS_EXTCORE),
+#                                with kern_big's WIN16 forward (-DDOS_WIN16)
 #   root     build/doscore.bin - that core part, assembled on its own
 #   kerndos  build/kerndos.bin - the same core over the KERNEL's disk layer,
 #                                which is where DVOL_MAX comes from somebody
@@ -77,7 +78,7 @@ OPEN = re.compile(r"^%(?:if|ifdef|ifndef)\b")
 BUILDS = (
     ("inline",  ["apps/dos/dos.asm"],   [],
      ["apps/", "apps/dos/", "drivers/net/"]),
-    ("parted",  ["apps/dos/dos.asm"],   ["DOSKPART", "DOS_EXTCORE"],
+    ("parted",  ["apps/dos/dos.asm"],   ["DOSKPART", "DOS_EXTCORE", "DOS_WIN16"],
      ["apps/", "apps/dos/", "drivers/net/", "kerndos/"]),
     ("root",    ["apps/dos/doscore.asm"], [],
      ["apps/", "apps/dos/", "drivers/net/", "kerndos/"]),

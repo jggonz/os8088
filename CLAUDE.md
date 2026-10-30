@@ -622,11 +622,14 @@ make win16census WIN3X=<dir>  # WIN16 (SPEC.md 124): what each Windows 3.x
               #   recursive descent (tools/os88ne.py). `make win16fixtures`
               #   builds the Win16 TEST programs with Open Watcom
               #   (tools/setup-watcom.sh fetches it). Both on demand.
-              #   `make win16` is the layer itself (a `local` package, on
-              #   no shipped disk until WIN16-PLAN.md S12), and `make
-              #   win16test` its gate floppy: WIN16.O88, the fixtures and a
-              #   DOS.O88 built -DDOS_WIN16, the only one that hands an NE
-              #   to WIN16 - boot it with TESTAPPS=build/win16test.img
+              #   `make win16` is the layer itself, in `all`: a WIN16\
+              #   folder on the 1.44MB/1.2MB apps disks, more720, the
+              #   everything set and the live media, and at emu360's root
+              #   (SPEC.md 124.18.1); the shipped DOS.O88 hands it an NE on
+              #   kern_big and kern_emu. `make win16disk WIN3X=<dir>` puts
+              #   YOUR Windows programs on build/w16prog*.img in all four
+              #   geometries, and `make win16test` is the gate floppy -
+              #   boot it with TESTAPPS=build/win16test.img
 make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   lists the attached USB flash drives (USB + external +
               #   never the boot disk), typed-identifier confirmation,

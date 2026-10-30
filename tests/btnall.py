@@ -69,7 +69,7 @@ def pkg_syms(src, inc, defines=()):
 ROWS = [
     ("A:/APPS/DOS.O88", "dos_btrec", "/apps/dos/dos.asm",
      ["/apps/", "/apps/dos/", "/drivers/net/", "/kerndos/"],
-     ("-DDOSKPART", "-DDOS_EXTCORE"), (556, 26)),
+     ("-DDOSKPART", "-DDOS_EXTCORE", "-DDOS_WIN16"), (556, 26)),
     ("B:/APPS/TELNET.O88", "te_btrec", "/apps/telnet/telnet.asm",
      ["/apps/", "/apps/telnet/", "/drivers/net/"], (), False),
     ("B:/APPS/BROWSER.O88", "br_btrec", "/apps/browser/browser.asm",

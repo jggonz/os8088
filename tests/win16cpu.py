@@ -84,6 +84,9 @@ def run1(d, ui, sym, S, dw, name, want, bad, tag):
     """launch one program: want "run" (its message loop, its window up, the
     census as `census` says) or "refuse" (SPEC.md 124.4's sentence)"""
     raise_(d, ui, dw)           # the last program's window may cover its row
+    if hasattr(ui.m, "status"):  # MartyPC: a CGA Disk window shows five rows,
+        ui.scroll_to(ui.entry(name, dw)[0], win=dw)   # and the 4th program
+        d.idle(2.0)                                     # is below them
     p = Prog(d, ui, sym, S, name)
     t0 = ticks(d)
     p.launch(dw)

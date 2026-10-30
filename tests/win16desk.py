@@ -146,8 +146,18 @@ def running(d, p, what, bad):
     return True
 
 
+def fresh(ui, p):
+    """p.w as it is NOW: the Win Prog.launch kept is the window as it first
+    opened, before the program sized and titled it, and a click or a search
+    aimed at that rectangle misses (S13's first run, ICONS and WINMINE)"""
+    for w in ui.windows():
+        if w.i == p.w.i:
+            p.w = w
+    return p.w
+
+
 def close(d, ui, sym, p):
-    raise_(d, ui, p.w)
+    raise_(d, ui, fresh(ui, p))
     d.click(*geom.close_xy(p.w.x, p.w.y, p.w.w, m=d, sym=sym))
 
 
@@ -157,8 +167,12 @@ def art(name, ident):
 
 
 def glass(d, work):
-    """the screen as rows of Windows palette indices (nearest colour)"""
+    """the screen as rows of Windows palette indices (nearest colour), with
+    the pointer parked at the top-right first: left where the double-click
+    was, it sits on the icon at a window's client origin"""
     import shot
+    d.q.mouse_to(d, d.x.sym, d.hmp, 630, 4)
+    d.idle(1.0)
     path = os.path.join(work, "s.ppm")
     d.hmp("screendump %s" % path)
     w, h, rgb = shot.read_ppm(path)
@@ -197,7 +211,7 @@ def look(d, work, win, rows, what, bad):
 def dialog(d, ui, sym, p, key, what):
     """press a key in the program's window and wait for the window it opens"""
     for attempt in range(2):        # a key straight after Enter can be lost
-        raise_(d, ui, p.w)
+        raise_(d, ui, fresh(ui, p))
         d.hmp("sendkey %s" % key)
         try:
             d.wait(lambda: len(owned(d, ui, sym, p)) > 1, 15, what)
@@ -253,6 +267,7 @@ def main():
             print("1. ICONS runs in WIN16 at %04x, its instance named %r" % (p.seg, nm))
             if nm != "ICONS":
                 bad.append("1: the instance is named %r, not ICONS (124.18.3)" % nm)
+            fresh(ui, p)
             for name, ident in SYSICONS:
                 look(d, work, p.w, art(name, ident), "DrawIcon's " + name, bad)
             look(d, work, p.w, mkbmp.diamond(), "DrawIcon's own icon", bad)
@@ -337,7 +352,7 @@ def main():
                 bad.append("3: %s stopped when Paint closed" % w.name)
 
         # 4. End Task, then the close box, then the heap
-        raise_(d, ui, pm.w)
+        raise_(d, ui, fresh(ui, pm))
         d.hmp("sendkey f5")                      # MENU refuses WM_CLOSE now
         d.idle(3.0)
         close(d, ui, sym, pm)

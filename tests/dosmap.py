@@ -99,7 +99,14 @@ def _map(src, defines, incs):
 # this was caught) reports `DOS is on volume 16`. A caller with a knob of
 # its own passes it ON TOP: `package("DOSNET_CARD")` is the shipped DOS plus
 # that, which is what `make DOSNETCARD=1` builds.
-SHIPPED = ("DOSKPART", "DOS_EXTCORE")
+#
+# **AND A THIRD SINCE WIN16 SHIPPED** (SPEC.md 124.18.1): kern_big's and
+# kern_emu's DOS.O88 is `-DDOS_WIN16` too, the door a Windows program leaves
+# by, and dosw16.inc sits in `.text` ahead of everything assembled after it -
+# so a map without it is one more map of a DOS no disk carries (doslnk's
+# path box and dosopen's prompt were read at the wrong address, S13). It is
+# dropped beside `DOS_MEGA`, whose DOS has no forward and refuses one.
+SHIPPED = ("DOSKPART", "DOS_EXTCORE", "DOS_WIN16")
 
 
 def package(*defines, shipped=True):
@@ -117,6 +124,8 @@ def package(*defines, shipped=True):
     reads a live machine never wants it.
     """
     base = list(SHIPPED) if shipped else []
+    if "DOS_MEGA" in defines:
+        base = [d for d in base if d != "DOS_WIN16"]
     want = base + [d for d in defines if d not in base]
     return _map(os.path.join(ROOT, "apps", "dos", "dos.asm"), want,
                 ("apps", os.path.join("apps", "dos"),

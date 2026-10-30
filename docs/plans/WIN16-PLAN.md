@@ -969,7 +969,7 @@ they stand on.
     Hercules; `emu360.img` under `EMUFULL=1` with WIN16 beside C64, APPLE2
     and RunCPM (estimated at ~330 of 354 clusters, not built here).
 
-- [ ] **S13: Acceptance.**
+- [x] **S13: Acceptance.**
   - Every row S1–S12 named, as one deduplicated soak union, then
     `make test-full`.
   - The four adapters, the XT (MartyPC as an 8088 and as a V20), a 286
@@ -978,6 +978,27 @@ they stand on.
     `tools/kernsize.py`), and the package image and claims MEASURED.
   - The diary closed with screenshots, against Windows 3.0 reference
     screenshots where those exist, and the limitations stated.
+  - **Shipped:** the union (the `win16*` rows with the `dos*` family) passed
+    after six row defects were fixed, none of them in WIN16: a DOS symbol map
+    missing `-DDOS_WIN16`, a row that latched DOS's window, a 9 x 9 Beginner
+    board where Windows 3.1's is 8 x 8, a settle a running clock never ends, a
+    CGA Disk window without the program's row in view, and stale rectangles.
+    `make test-full` then passed but for `pins` and `megahigh`, two gates
+    `main` brought, and passes with WIN16's lines in both registries (five
+    `N` pins among them: claims that could move and do not yet).
+  - **Measured:** zero kernel bytes; a 46,552-byte image with 14,038 of bss
+    (66,236 on disk); 60 KB of region per program, 93-133 KB a program in
+    all; on a 4.77 MHz 8088 CALC 37.0 s, CLOCK 22.2 s and REVERSI 20.0 s to
+    their loops, and on a V20 Windows 3.1's Calculator 28.0 s and
+    Minesweeper 25.8 s, a reveal 1.26 s at the median and 4.17 s at worst.
+  - **Seen:** ICONS, CALC, CLOCK, REVERSI and WINMINE on VGA, EGA, CGA and
+    Hercules; three programs at once on 86Box's 12.5 MHz 286; a program
+    across a hibernate on the XT.
+  - **Not seen:** a timing on the 286 (86Box cannot be keyed from here);
+    why CALC, the fourth `\AUTOSTRT` link there, did not open; `emu360.img`
+    built with `EMUFULL=1`. **Found:** several Windows programs in
+    `\AUTOSTRT` leave DOS windows open, because `OSAPI_WM_CLOSE` is deferred
+    in one word (§75.2). A kernel change, so the owner's to decide.
 
 ---
 
@@ -1052,7 +1073,7 @@ Taken by the owner on 2026-10-28 unless marked otherwise.
 
 - **One 16x16 Minesweeper cell:** one `OSAPI_GFX_BLIT4`. The planar decoder
   prices it at about 107 cycles a pixel, so roughly 6 ms.
-- **A Beginner board (81 cells):** about 0.5 s to paint.
+- **A Beginner board (64 cells - Windows 3.1's is 8 x 8):** about 0.4 s to paint.
 - **An Expert board (480 cells):** about 3 s on the XT and a fraction of that
   on a 286.
 

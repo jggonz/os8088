@@ -159,11 +159,16 @@ class Game(object):
         d.dblclick(*ui.row_xy(dw, i - ui.scroll(dw)))
 
         def opened():
+            # WIN16's window, not DOS.O88's: the association opens DOS, which
+            # hands the NE on and closes, and while both are up the first new
+            # window with a segment is DOS's - whose bytes at w16_state are
+            # not a WIN16 state (win16fpu's Prog.launch, the same test)
             for w in ui.windows():
                 if w.i not in before and w.visible:
                     seg = u16(d.read(geom.winptr(d, w, self.sym)
                                      + geom.W_SEG, 2))
-                    if seg:
+                    if seg and d.read((seg << 4) + self.S["w16_name"],
+                                      len(PROG) + 1) == PROG.encode() + b"\0":
                         box["p"] = (w, seg)
                         return True
             return False
@@ -320,8 +325,11 @@ def qemu_leg(bad, keep):
         g.origin()
         w, h, _ = g.board()
         print("   client at (%d,%d), a %dx%d board" % (g.ox, g.oy, w, h))
-        if (w, h) != (9, 9):
-            bad.append("1: the board is %dx%d - Beginner's is 9x9 (an empty "
+        # Windows 3.1's Beginner is 8 x 8 (win16ref/ref/w31-vga-winmine.png, a
+        # fresh install; 9 x 9 is Windows 2000's). This said 9 x 9 until S13's
+        # final pass, the first registered run of the row
+        if (w, h) != (8, 8):
+            bad.append("1: the board is %dx%d - Beginner's is 8x8 (an empty "
                        "WINMINE.INI)" % (w, h))
         # 2. flags
         c, r = 5, 5
@@ -396,7 +404,11 @@ class MDrive(object):
         return self.read((seg << 4) + off, n)
 
     def idle(self, cap=2.0):
-        self.ui.settle(limit=max(cap, 30.0))
+        # THE UI FINISHING, not the screen standing still: once a game is
+        # under way Minesweeper's clock repaints its counter every second, so
+        # a wait for an unchanging screen never ends (win16minesxt's V20 leg,
+        # S13's first registered run, 90 guest seconds into the first reveal)
+        self.mm.ui_done(self.m, limit=max(cap, 30.0))
 
     def click(self, x, y):
         self.mo.click(x, y, settle=0)

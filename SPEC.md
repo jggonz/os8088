@@ -224595,11 +224595,13 @@ standing in that folder with `OSAPI_FILE_GOTO_QM`.
 
 ## 124. WIN16 — Windows 3.x programs in an os8088 window (`apps/win16/`, `WIN16.O88`)
 
-**Status: BEING BUILT, owner decisions taken 2026-10-28. S0–S12 have
-shipped: the loader, the message pump, GDI, memory, resources, menus,
-dialogs, profiles, Minesweeper, floating point, Calculator, the 8088
-floor, and living with the desktop (§124.18: on the shipped disks, two
-programs at once, icons); S13, the final pass, is next.** The delivery record is `docs/plans/WIN16-PLAN.md` and the diary
+**Status: SHIPPED (S0–S13), owner decisions taken 2026-10-28: the loader,
+the message pump, GDI, memory, resources, menus, dialogs, profiles,
+Minesweeper, floating point, Calculator, the 8088 floor, and living with the
+desktop (§124.18: on the shipped disks, two programs at once, icons), with
+S13's acceptance pass measured in the plan. What it does not run yet -
+programs over 64 KB, protected-mode-only programs, a program's own DLLs,
+installers - is the plan's *Beyond S13* (R1-R9).** The delivery record is `docs/plans/WIN16-PLAN.md` and the diary
 `docs/HOW-WIN16-WAS-BUILT.md`. Each subsection says *(pinned)* until the story
 that builds it marks it *(shipped)* with what was measured. Until then it is a
 design, not a fact about the system.
