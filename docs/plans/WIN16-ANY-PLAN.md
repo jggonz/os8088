@@ -455,10 +455,11 @@ its table goes in the diary, so the reach is measured, not claimed.
     - What it costs: the image 32,237 bytes (+281), its bss 20,251 (+170),
       13,048 bytes of room left in the 64 KB; the library part 46,325
       (+1,791).
-    - What batch 4 costs: the image 32,831 bytes (+594), its bss 23,989
-      (+3,738 - the owner-draw queue, the combo boxes' saved create
-      arguments, the hooks), 8,716 bytes of room left in the 64 KB; the
-      library part 55,137 (+8,812).
+    - What batch 4 costs, against batch 3's 32,454 / 23,798 / 48,543: the
+      image 32,831 bytes (+377), its bss 23,989 (+191 - the owner-draw
+      queue, the combo boxes' saved create arguments, the hooks), 8,716
+      bytes of room left in the 64 KB (9,284 before); the library part
+      55,137 (+6,594).
 
 - [ ] **S18: Libraries (R4, the program's own).**
   - *As a user, Recorder runs with its RECORDER.DLL, and Paintbrush with

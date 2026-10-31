@@ -2006,10 +2006,10 @@ program did not start, and nothing said so: no window, no refusal. Two at
 once is the case SPEC.md §124.18.2 designs for. The third needs measuring,
 and a refusal the user can read.
 
-**What it cost.** The image grew by 594 bytes to 32,831, its bss by 3,738
-to 23,989 (the owner-draw queue, the combo boxes' saved create arguments,
-the hooks), leaving 8,716 bytes of the 64 KB. The library part grew by
-8,812 bytes to 55,137.
+**What it cost.** The image grew by 377 bytes to 32,831, its bss by 191 to
+23,989 (the owner-draw queue, the combo boxes' saved create arguments, the
+hooks), leaving 8,716 bytes of the 64 KB, down from 9,284. The library part
+grew by 6,594 bytes to 55,137.
 
 **WIN16 got a disk of its own.** At 104 KB the package no longer fit the
 disks it shipped on: the 1.44MB apps disk was 3 clusters short and
