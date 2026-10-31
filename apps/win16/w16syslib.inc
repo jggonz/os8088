@@ -1271,6 +1271,476 @@ w16r_s_file:  db 'REG.DAT', 0
 w16r_s_sect:  db 'HKEY_CLASSES_ROOT', 0
 
 ; =============================================================================
+; SHELL: ShellExecute and FindExecutable (SPEC.md 124.24.10). A document is
+; opened the way a double-click opens it: OSAPI_PKG_START's document arm
+; with the name left empty, so os8088's association (SPEC.md 54) picks the
+; program - an .EXE's is DOS.O88, which hands an NE to a WIN16 of its own.
+; The slot wants the gfx lock free, which a call from the program seldom
+; has, so the launch is POSTED: the locator in WIN16's image, a wake, and
+; w16_wake's first act (DOS.O88's shape, SPEC.md 96.33.17)
+; =============================================================================
+
+SE_ERR_FNF      equ 2
+SE_ERR_PNF      equ 3
+SE_ERR_OOM      equ 8
+SE_ERR_NOASSOC  equ 31
+W16C_SEOK       equ 33              ; above 32: done (not an instance handle)
+W16C_LDBAD      equ 2               ; LD_EBAD: nothing on the machine opens it
+
+; ShellExecute (SHELL.20) - args: +0 nShowCmd, +2 lpDirectory,
+; +6 lpParameters, +10 lpFile, +14 lpOperation, +18 hwnd. "open" (or NULL)
+; only; lpParameters and nShowCmd are not used
+W16SYS w16c_shexec
+    push si
+    push di
+    ICALL w16_args
+    les si, [es:bx + 14]
+    mov ax, es
+    or ax, si
+    jz .open
+    mov di, w16c_s_open             ; XSEC-OK: read through cs:
+    call w16c_cseq
+    mov ax, SE_ERR_NOASSOC
+    jne .out
+.open:
+    mov ax, SE_ERR_OOM              ; one launch waits at a time
+    cmp byte [w16_shq], 0
+    jne .out
+    mov ax, 10
+    mov bx, 2
+    call w16c_path                  ; CF=1 AX = SE_ERR_FNF or SE_ERR_PNF
+    jc .out
+    call w16c_locate
+    jc .out
+    mov byte [w16_shq], 1
+    mov bx, [w16_win]
+    call OSAPI_WM_WAKE
+    mov ax, W16C_SEOK
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16c_shrun - from w16_wake, the gfx lock free: the posted ShellExecute
+; started. A document nothing on the machine opens says so in a toast
+w16c_shrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [w16_shq], 0
+    mov si, w16s_dir + w16s_dirlen - 1  ; "": the document names its program
+    xor cx, cx
+    xor dx, dx
+    push ds
+    pop es
+    mov di, w16_shdoc
+    call OSAPI_PKG_START
+    jnc .out                        ; (any other refusal, the user was told)
+    cmp al, W16C_LDBAD
+    jne .out
+    mov si, w16c_s_noprog           ; XSEC-OK: read through cs:
+    mov di, w16c_toast              ; XSEC-OK: the part's buffer
+.p:
+    mov al, [cs:si]
+    or al, al
+    jz .n
+    mov [cs:di], al
+    inc si
+    inc di
+    jmp short .p
+.n:
+    mov si, w16_shdoc
+.c:
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    or al, al
+    jnz .c
+    push cs
+    pop es
+    mov si, w16c_toast              ; XSEC-OK: ES = CS
+    xor cx, cx
+    call OSAPI_TOAST
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; FindExecutable (SHELL.21) - args: +0 lpResult, +4 lpDirectory, +8 lpFile.
+; A program (.EXE .COM .BAT .PIF) is its own; os8088's associations cannot
+; name a Windows program for anything else
+W16SYS w16c_findexe
+    push si
+    push di
+    mov ax, 8
+    mov bx, 4
+    call w16c_path
+    jc .empty
+    mov si, w16v_path               ; XSEC-OK: read through cs:
+    xor bx, bx                      ; BX = past the last name's '.', 0 none
+.n:
+    mov al, [cs:si]
+    or al, al
+    jz .e
+    inc si
+    cmp al, '.'
+    je .dot
+    cmp al, '\'
+    je .sep
+    cmp al, ':'
+    jne .n
+.sep:
+    xor bx, bx
+    jmp short .n
+.dot:
+    mov bx, si
+    jmp short .n
+.e:
+    mov ax, SE_ERR_NOASSOC
+    or bx, bx
+    jz .empty
+    mov di, w16c_exts               ; XSEC-OK: read through cs:
+.x:
+    cmp byte [cs:di], 0
+    jne .try
+    mov ax, SE_ERR_NOASSOC          ; (AL was the compare's)
+    jmp short .empty
+.try:
+    push bx
+    mov cx, 3
+.xc:
+    mov al, [cs:bx]
+    call w16v_up
+    cmp al, [cs:di]
+    jne .xn
+    inc bx
+    inc di
+    loop .xc
+    cmp byte [cs:bx], 0
+    pop bx
+    je .prog
+    jmp short .x
+.xn:
+    add di, cx
+    pop bx
+    jmp short .x
+.prog:
+    ICALL w16_args
+    les di, [es:bx]
+    mov si, w16v_path               ; XSEC-OK: read through cs:
+.cp:
+    mov al, [cs:si]
+    mov [es:di], al
+    inc si
+    inc di
+    or al, al
+    jnz .cp
+    mov ax, W16C_SEOK
+    jmp short .out
+.empty:
+    push ax
+    ICALL w16_args
+    les di, [es:bx]
+    mov ax, es
+    or ax, di
+    jz .z
+    mov byte [es:di], 0
+.z:
+    pop ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16c_path - AX = the call's word holding a file name, BX = its folder's
+; (NULL or "" for the current one, and not used for a name with a drive or
+; from the root): the path in w16v_path, and the file there. CF=1 AX =
+; SE_ERR_FNF or SE_ERR_PNF. Keeps the rest
+w16c_path:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov si, ax
+    mov di, bx
+    ICALL w16_args
+    mov cx, [es:bx + si]            ; DX:CX = the name
+    mov dx, [es:bx + si + 2]
+    mov si, [es:bx + di]            ; BX:SI = the folder
+    mov bx, [es:bx + di + 2]
+    mov es, dx
+    mov di, cx
+    mov ax, es
+    or ax, di
+    jz .fnf
+    cmp byte [es:di + 1], ':'
+    je .whole
+    cmp byte [es:di], '\'
+    jne .join
+.whole:
+    xor bx, bx
+    xor si, si
+.join:
+    mov di, w16v_path               ; XSEC-OK: the part's buffer
+    call w16v_join
+    jc .fnf
+    mov dx, w16v_path               ; XSEC-OK: the part's buffer, ES = CS
+    push cs
+    pop es
+    mov ax, 0x3D00
+    ICALL w16_dcall
+    jc .no
+    mov bx, ax
+    mov ah, 0x3E
+    ICALL w16_dcall
+    clc
+    jmp short .out
+.no:
+    cmp ax, 3                       ; DOS's "path not found"
+    je .pnf
+.fnf:
+    mov ax, SE_ERR_FNF
+    stc
+    jmp short .out
+.pnf:
+    mov ax, SE_ERR_PNF
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16c_locate - w16v_path, a file that is there: its name in capitals, its
+; folder's cluster and its volume into w16_shdoc, OSAPI_PKG_START's locator.
+; The folder is asked of the instance (OSAPI_FILE_HERE) with WIN16's DOS
+; standing in it, then the DOS is put back. CF=1 AX = SE_ERR_FNF or
+; SE_ERR_PNF
+w16c_locate:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov si, w16v_path               ; XSEC-OK: read through cs:
+    mov bx, si                      ; BX = the name's start
+.n:
+    mov al, [cs:si]
+    or al, al
+    jz .e
+    inc si
+    cmp al, '\'
+    je .s
+    cmp al, ':'
+    jne .n
+.s:
+    mov bx, si
+    jmp short .n
+.e:
+    mov ax, si
+    sub ax, bx
+    jz .fnf
+    cmp ax, 12
+    ja .fnf
+    mov si, bx
+    mov di, w16_shdoc
+.c:
+    mov al, [cs:si]
+    call w16v_up
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .c
+    cmp bx, w16v_path               ; XSEC-OK: a bound. No folder: the one
+    je .here                        ;   the DOS is standing in
+    mov ah, 0x19                    ; the DOS's drive, and its folder there
+    ICALL w16_dcall
+    mov [cs:w16c_cdrv], al
+    mov [cs:w16c_tdrv], al
+    cmp byte [cs:w16v_path + 1], ':'
+    jne .save
+    mov al, [cs:w16v_path]
+    call w16v_up
+    sub al, 'A'
+    mov [cs:w16c_tdrv], al
+.save:
+    mov byte [cs:w16v_path2], '\'
+    mov si, w16v_path2 + 1          ; XSEC-OK: the part's buffer, ES = CS
+    xor dl, dl
+    call w16c_cwd
+    jc .pnf
+    mov al, [cs:w16c_tdrv]          ; another drive's folder moves too
+    cmp al, [cs:w16c_cdrv]
+    je .go
+    mov ah, ':'
+    add al, 'A'
+    mov [cs:w16c_ocwd], ax
+    mov byte [cs:w16c_ocwd + 2], '\'
+    mov si, w16c_ocwd + 3           ; XSEC-OK: the part's buffer, ES = CS
+    mov dl, [cs:w16c_tdrv]
+    inc dl
+    call w16c_cwd
+    jc .pnf
+.go:
+    call w16c_seld                  ; the document's drive, if another
+    mov si, bx                      ; the folder: up to the name, keeping a
+    dec si                          ;   root's '\' ("\NAME", "X:\NAME")
+    cmp byte [cs:si], ':'
+    je .moved                       ; "X:NAME": where that drive stands (CF=0)
+    cmp si, w16v_path               ; XSEC-OK: a bound
+    je .root
+    cmp byte [cs:si - 1], ':'
+    jne .cut
+.root:
+    inc si
+.cut:
+    mov al, [cs:si]
+    mov byte [cs:si], 0
+    mov dx, w16v_path               ; XSEC-OK: the part's buffer, ES = CS
+    call w16c_cd
+    mov [cs:si], al
+.moved:
+    jc .undo
+    call OSAPI_FILE_HERE
+    mov [w16_shdoc + 13], dx
+    mov [w16_shdoc + 15], bl
+    mov al, [cs:w16c_tdrv]          ; ...and the DOS put back
+    cmp al, [cs:w16c_cdrv]
+    je .back
+    mov dx, w16c_ocwd               ; XSEC-OK: the part's buffer, ES = CS
+    call w16c_cd
+    call w16c_selc
+.back:
+    mov dx, w16v_path2              ; XSEC-OK: the part's buffer, ES = CS
+    call w16c_cd
+    clc
+    jmp short .out
+.undo:
+    call w16c_selc                  ; a folder that is not there: only the
+    jmp short .pnf                  ;   drive had moved
+.here:
+    call OSAPI_FILE_HERE
+    mov [w16_shdoc + 13], dx
+    mov [w16_shdoc + 15], bl
+    clc
+    jmp short .out
+.fnf:
+    mov ax, SE_ERR_FNF
+    stc
+    jmp short .out
+.pnf:
+    mov ax, SE_ERR_PNF
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16c_cwd - DL = a drive (0 its own): its folder, DOS's AH=47h, at CS:SI.
+; CF=1 it has none. Keeps all but AX
+w16c_cwd:
+    push es
+    push cs
+    pop es
+    mov ah, 0x47
+    ICALL w16_dcall
+    pop es
+    ret
+
+; w16c_cd - CS:DX = a folder: WIN16's DOS there (AH=3Bh). CF=1 it is not.
+; Keeps all
+w16c_cd:
+    push ax
+    push es
+    push cs
+    pop es
+    mov ah, 0x3B
+    ICALL w16_dcall
+    pop es
+    pop ax
+    ret
+
+; w16c_seld / w16c_selc - WIN16's DOS on the document's drive, and back on
+; its own (AH=0Eh), when the two differ. A chdir on another drive moves that
+; drive's folder and not the DOS, and OSAPI_FILE_HERE asks where the DOS is.
+; Keeps all
+w16c_seld:
+    push dx
+    mov dl, [cs:w16c_tdrv]
+    jmp short w16c_sel
+w16c_selc:
+    push dx
+    mov dl, [cs:w16c_cdrv]
+w16c_sel:
+    pushf
+    push ax
+    mov al, [cs:w16c_tdrv]
+    cmp al, [cs:w16c_cdrv]
+    je .out
+    mov ah, 0x0E
+    ICALL w16_dcall
+.out:
+    pop ax
+    popf
+    pop dx
+    ret
+
+; w16c_cseq - ES:SI and CS:DI, two strings: ZF=1 the same, case ignored.
+; Keeps all
+w16c_cseq:
+    push ax
+    push si
+    push di
+.c:
+    mov al, [es:si]
+    call w16v_up
+    mov ah, al
+    mov al, [cs:di]
+    call w16v_up
+    cmp al, ah
+    jne .out
+    inc si
+    inc di
+    or al, al
+    jnz .c
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+w16c_s_open:    db 'open', 0
+w16c_s_noprog:  db 'No program: ', 0
+w16c_exts:      db 'EXECOMBATPIF', 0
+w16c_cdrv:      db 0                ; the DOS's drive, and the document's
+w16c_tdrv:      db 0
+w16c_ocwd:      times 68 db 0       ; the other drive's folder, "X:\..."
+w16c_toast:     times 26 db 0
+
+; =============================================================================
 ; OLECLI and OLESVR (SPEC.md 124.24.7): Windows 3.1 with no OLE server
 ; registered and no object on the clipboard. Eight answers; w16api.inc's rows
 ; say which call gets which

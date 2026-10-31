@@ -624,6 +624,9 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
                                 ;   0 = none (SPEC.md 124.24.2)
     W16BSS w16_chst, 4          ; the CHOOSEFONT or CHOOSECOLOR a dialog fills
     W16BSS w16_chk, 1           ;   ...and which: 0 font, 1 colour (124.24.4)
+    W16BSS w16_shdoc, 16        ; a ShellExecute's document, posted to the
+    W16BSS w16_shq, 1           ;   wake (OSAPI_PKG_START's locator), and 1
+                                ;   while one waits (SPEC.md 124.24.10)
     ; --- S14: the bind table (SPEC.md 124.19.1) ---
     W16BSS w16_nbind, 2         ; slots given out
     W16BSS w16_cbview, 2        ; SetClipboardViewer's window, 0 none
@@ -1066,6 +1069,10 @@ w16_entry:
 ; work: a second wake finds W16S_RUN or W16S_REFUSED and does nothing.
 ; =============================================================================
 w16_wake:
+    cmp byte [w16_shq], 0           ; a ShellExecute's launch, first: this is
+    je .nosh                        ;   where the lock is free (124.24.10)
+    SCALL w16c_shrun
+.nosh:
     cmp byte [w16_state], W16S_ENDED
     je w16_after                    ; it ended inside a W_PAINT (w16_ppaint)
     cmp byte [w16_inpeek], 0

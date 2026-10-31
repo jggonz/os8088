@@ -542,7 +542,7 @@ its table goes in the diary, so the reach is measured, not claimed.
     (+2,257). The room is now the tightest it has been: S19 should put what
     it can in parts.
 
-- [ ] **S19: The system libraries WIN16 provides (R4, the system's own).**
+- [x] **S19: The system libraries WIN16 provides (R4, the system's own).**
   - *As a user, File > Open in a Windows 3.1 program shows os8088's Standard
     File dialog.*
   - **COMMDLG** over the Standard File dialog (§38):
@@ -676,6 +676,36 @@ its table goes in the diary, so the reach is measured, not claimed.
       module names), bss unchanged, 6,207 bytes of room; the loader part
       12,196 (+162, 18 export rows); part 9 9,335 (+5,121, of which 624 is
       the language table and 496 the buffers and words).
+
+  - [x] **Batch 5: ShellExecute and FindExecutable** (SPEC.md §124.24.10).
+    - `ShellExecute` opens a document as a Disk-window double-click does:
+      the file is checked, its locator (name, folder cluster, volume, asked
+      of the instance while WIN16's DOS stands in the folder) is written
+      into WIN16's image, and the launch is posted to `w16_wake`, where
+      `OSAPI_PKG_START` takes the association route. Verb `open` or NULL
+      only; one launch waits at a time (8 for a second); success is 33.
+    - `FindExecutable` answers a program's own path; for anything else it
+      answers 31, because os8088's associations name packages, not Windows
+      programs.
+    - **Seen on QEMU's VGA:** SHX.EXE (new fixture) says `SHX OK`, and
+      Note Pad opens `DOCS\SHX.TXT`, the folder's file and not the root's.
+    - **Found on the way:** a document on another drive moved that drive's
+      folder but not the DOS, so `OSAPI_FILE_HERE` would have named the
+      wrong folder; WIN16's DOS now selects the document's drive around the
+      question.
+    - **Seen, and pinned, not fixed:** a program whose FIRST act is
+      `ShellExecute` on another Windows `.EXE` got a second DOS.O88 that
+      handed off, but no second WIN16, and both DOS windows stayed. After
+      a `MessageBox` first, the same call ran the second WIN16 with no DOS
+      window left. The one-word deferred close (§75.2) is the likely cause
+      and is not proven; S24's installer, which launches what it installs,
+      settles it.
+    - **Registered, not yet run:** `win16shx`.
+    - What it costs, against batch 4: the image 34,130 bytes (+16), bss
+      24,720 (+17, the locator and its flag), 6,174 bytes of room; the
+      loader part 12,214 (+18, 2 export rows); part 9 10,333 (+998).
+    - **S19 is complete.** Its rows, `win16cdlg`, `win16reg`, `win16lz` and
+      `win16shx`, run in S25's final pass.
 
 - [ ] **S19b: GDI, the drawing half (R7).**
   - *As a user, Paintbrush opens, and I draw with its tools.* (Moved from

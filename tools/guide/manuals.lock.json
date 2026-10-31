@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "7ec824f3e",
-  "strings": "920aa58aa708ad0a",
-  "why": "S19 batch 4: packed files and shared installs"
+  "stamped": "754004020",
+  "strings": "839a2abeff431927",
+  "why": "documents a program opens in another program open through os8088's associations (SPEC.md 124.24.10)"
  },
  "WIN16_TXT": {
   "sources": [

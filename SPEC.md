@@ -228814,7 +228814,8 @@ S19 lands in batches: batch 1 is the second library part, COMMDLG's file
 dialogs and the calls that answer "not available", and SHELL's drag calls.
 Batch 2 is `ChooseFont`, `ChooseColor` and `CreateFont` (§124.24.4); batch 3 the
 registration database and OLE's answers (§124.24.6, §124.24.7); batch 4 LZEXPAND and VER, the
-installer's core (S24; §124.24.8, §124.24.9).
+installer's core (S24; §124.24.8, §124.24.9); batch 5 `ShellExecute` and
+`FindExecutable` (§124.24.10).
 
 #### 124.24.1 The system-library part
 
@@ -228997,8 +228998,8 @@ value is at most 255.
   WIN16's Windows directory is WIN16's.
 - A key whose name holds `=` cannot be kept.
 - Like any profile value, a value loses blanks at either end.
-- `ShellExecute` and `FindExecutable` are not here yet. They will open a
-  document through os8088's associations (§54).
+- `ShellExecute` and `FindExecutable` do not read the registration
+  database: a document opens through os8088's associations (§124.24.10).
 
 #### 124.24.7 OLE answers "not available" *(S19 batch 3)*
 
@@ -229113,6 +229114,54 @@ in it answers `Unknown Language`:
 - `GETFILEVERSIONINFORAW` (VER.20), a stub in winevdm's table too, has no
   row.
 
+#### 124.24.10 ShellExecute and FindExecutable *(S19 batch 5)*
+
+A program opens a document the way a double-click in the Disk window opens
+it: through os8088's associations (§54), not Windows' own. Both calls take a
+name and a folder. The folder is not used when the name has a drive or
+starts at a root, and NULL or `""` is the current folder.
+
+| call | |
+|---|---|
+| `ShellExecute` (SHELL.20) | the verb must be `"open"` or NULL, or the answer is 31 (`SE_ERR_NOASSOC`). The file must be there: 2 (`SE_ERR_FNF`), or 3 (`SE_ERR_PNF`) when its folder is not. Then the launch is POSTED and the answer is 33 |
+| `FindExecutable` (SHELL.21) | a program (`.EXE`, `.COM`, `.BAT`, `.PIF`) is its own: its path in `lpResult` and 33. Any other file that is there answers 31 and an empty `lpResult`. 2 and 3 as above |
+
+**The launch is posted.** `OSAPI_PKG_START` wants the UI task with the gfx
+lock free, and a program's call seldom has it. So `ShellExecute` writes the
+document's locator into WIN16's image: its name in capitals, its folder's
+cluster and its volume, asked of the instance with `OSAPI_FILE_HERE` while
+WIN16's DOS stands in that folder, which is then put back. It wakes the
+window, and `w16_wake`'s first act is `OSAPI_PKG_START` with an empty
+package name: the association route (§21.5.3). DOS.O88 does the same
+(§96.33.17). A document nothing on the machine opens (`LD_EBAD`) is a
+toast, *No program: NAME*. Any other refusal the kernel has already told
+the user about. An `.EXE`'s program is DOS.O88, which hands a Windows
+program to a WIN16 of its own (§124.3).
+
+**Not done, pinned:**
+
+- **One launch waits at a time.** A second call before the first has
+  started answers 8 (`SE_ERR_OOM`). The program sees the launch start no
+  sooner than its next wait for a message.
+- 33 is not an instance handle. Windows answers the new program's
+  `hInstance`, and it would be a WIN16 handle only when the program is a
+  Windows one in the same WIN16, which it never is.
+- `lpParameters` and `nShowCmd` are not used: a package has no command
+  line (§21.5), and its window opens as it opens.
+- Neither call reads the registration database (§124.24.6) or WIN.INI's
+  `[extensions]`. `FindExecutable` cannot name an os8088 package, which
+  is not a file a Windows program could run.
+- **A Windows `.EXE` opened as the program's first act did not start.**
+  Seen on the glass in batch 5: a program whose first call was
+  `ShellExecute` on another Windows program got a second DOS.O88, which
+  handed off, but no second WIN16 started and neither DOS window closed.
+  The same program calling it after a `MessageBox` got the second WIN16
+  running and no DOS window left. The likely cause, not yet proven, is
+  that the first DOS.O88's close and the second's handoff fall in one pass
+  of the UI loop, and the kernel's deferred close is one word (§75.2).
+  S24's installer, which launches what it installed, is where this has to
+  be settled.
+
 #### 124.24.5 The gate
 
 **`win16cdlg`** (soak, QEMU, VGA; `make win16fixtures`; a SKIP without its
@@ -229165,6 +229214,17 @@ itself. **LZT.EXE** (`tests/win16/lzt.c`, its `VERSIONINFO` in
 Its message box must be `LZT OK 24000`. When it has ended, `SAMPLE.TXT` at
 B:'s root and `SYSTEM\APPDATA\WIN16\SECOND.DAT` read off the floppy image
 must be the host's expansions, byte for byte.
+
+**`win16shx`** (soak, QEMU; `make win16fixtures`): `ROOT.TXT` at B:'s
+root and `SHX.TXT` in a folder, `DOCS`. **SHX.EXE** (`tests/win16/shx.c`)
+asks `ShellExecute` for the verb `print` (31), a file that is not there
+(2) and one in a folder that is not there (3). It asks `FindExecutable`
+for itself (33, its own name) and for `ROOT.TXT` (31, an empty result).
+Then it opens `SHX.TXT` with the folder `DOCS` (above 32), checks that
+its own folder did not move, and calls again before that launch has
+started (8). Its message box must be `SHX OK`. A new Note Pad window must
+then be on the screen, which only the folder's `SHX.TXT` could have
+opened. The row closes it and SHX ends.
 
 Opening a file and Save As through the chooser were seen on the glass in
 batch 1 (the plan's S19 record). The row does not repeat them, because

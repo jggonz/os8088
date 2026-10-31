@@ -2395,3 +2395,52 @@ this tree.
 **What it cost.** The image grew 13 bytes, leaving 6,207. The loader part
 grew by 162 bytes for 18 export rows. Part 9 grew by 5,121, of which 624 is
 the language table.
+
+## 2026-10-31 — S19, batch 5: opening a document, os8088's way
+
+**A Windows program asks the shell to open a file.** `ShellExecute` is how
+a Windows 3.1 program opens a document it did not make: a setup program's
+`README.TXT` at the end, a help file, a picture. On Windows the registration
+database decides which program opens it. Here there is already an answer to
+that question, the one a double-click in the Disk window uses, so
+`ShellExecute` asks os8088's associations instead. A `.TXT` opens in Note
+Pad, an `.EXE` in DOS.O88, and DOS.O88 hands a Windows program to a WIN16 of
+its own.
+
+**The launch has to wait for a quiet moment.** The kernel's launch call
+wants the desktop's drawing lock free, and a Windows program calling
+`ShellExecute` is usually in the middle of something. DOS.O88 met the same
+problem when `CALC.O88` typed at its prompt became a launch, and solved it
+by posting: write down what to open, wake the window, and launch from the
+wake handler, which runs with the lock free. WIN16 does the same. The call
+checks that the file is there, writes its name, its folder and its volume
+into WIN16's image, and answers 33, which is above 32 and so means
+"done" to a Windows program.
+
+**Asking where a folder is.** The kernel names a document by its folder's
+first cluster, not by a path. WIN16's DOS already knows how to stand in a
+folder, so the call steps its DOS into the document's folder, asks the
+kernel where the instance is, and steps back. On a second look, a document
+on another drive moved that drive's folder and left the DOS where it was,
+so the kernel would have answered the wrong folder. The DOS now changes
+drive around the question as well.
+
+**What was seen.** SHX.EXE checks the refusals first: a verb other than
+`open`, a file that is not there, a folder that is not there, a second call
+while the first launch waits. Then it opens `SHX.TXT` in a folder called
+`DOCS`, with a different `ROOT.TXT` at the root as a decoy. It says
+`SHX OK`, and Note Pad opens with *SHX.TXT, in DOCS.*
+
+**What did not work.** A test program whose very first act was
+`ShellExecute` on another Windows program got a second DOS.O88, and that
+DOS.O88 handed the program on. But no second WIN16 appeared, and both DOS
+windows stayed on the screen. The same program, showing a message box
+first, got the second WIN16 running and no DOS window left. The likeliest
+explanation is that two windows asked to close in the same pass of the
+desktop's loop, and the kernel keeps only one such request. That is not
+proven yet. It is written into the spec as a known limit, and S24's
+installer, which launches what it installs, is where it has to be settled.
+
+**What it cost.** The image grew 16 bytes and its data 17, leaving 6,174
+bytes of room. Part 9 grew by 998 bytes, and the loader part by 18 for the
+two export rows. S19 is complete. Its four rows run in S25's final pass.

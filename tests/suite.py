@@ -16473,6 +16473,18 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16shx", "soak", py("tests/win16shx.py"), 60.0,
+        "SPEC.md 124.24.10, WIN16-ANY-PLAN S19: SHX.EXE (`make "
+        "win16fixtures`, tests/win16/shx.c) asks ShellExecute and "
+        "FindExecutable for what they refuse - a verb not open, a file and "
+        "a folder not there, a document no Windows program is named for, a "
+        "second launch before the first has started - and opens DOCS\\SHX.TXT "
+        "by its folder; its MessageBox must be SHX OK, and os8088's "
+        "association must have opened the document in a Note Pad window, "
+        "which is closed before SHX ends",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

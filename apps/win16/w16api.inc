@@ -279,6 +279,8 @@ W16EXPORT W16M_SHELL,      4,       8,  w16r_delete         ; RegDeleteKey(long 
 W16EXPORT W16M_SHELL,      5,       20, w16r_setval         ; RegSetValue(long str long str long)
 W16EXPORT W16M_SHELL,      6,       16, w16r_queryval       ; RegQueryValue(long str ptr ptr)
 W16EXPORT W16M_SHELL,      7,       16, w16r_enum           ; RegEnumKey(long long ptr long)
+W16EXPORT W16M_SHELL,      20,      20, w16c_shexec         ; ShellExecute(word str str str str s_word)
+W16EXPORT W16M_SHELL,      21,      12, w16c_findexe        ; FindExecutable(str str ptr)
 ; OLECLI and OLESVR (SPEC.md 124.24.7): every function in their .spec tables,
 ; each one of eight answers - generated from tools/win16spec/ by ordinal
 W16EXPORT W16M_OLECLI,     2,       4,  w16o_obj            ; OleDelete(segptr)
