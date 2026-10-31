@@ -228545,7 +228545,7 @@ speed bar and spin field, Marquee's owner-drawn colour list (no strings),
 Mystify's shape list dropped and picked, its two colour lists greyed with
 Two Colors off, Flying Windows' - and Password Protected enabling *Set
 Password* and greying it again. Marquee's Format Text calls `COMMDLG`'s
-`ChooseFont`, which is S18's: it is bound to the missing-import stub
+`ChooseFont`, which is S19's: it is bound to the missing-import stub
 (§124.12). **A third WIN16 instance did not start**, with Clock and
 Calculator running, on QEMU's 640 KB: the launch shows nothing at all,
 neither a window nor a refusal. Two at once is §124.18.2's case; the third

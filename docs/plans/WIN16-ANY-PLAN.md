@@ -442,7 +442,7 @@ its table goes in the diary, so the reach is measured, not claimed.
       the next paint; paint under a dropped list waits until it goes up; the
       list is cut to its top-level window; only the System font is
       enumerated; hooks other than `WH_MSGFILTER` are kept and not called;
-      Marquee's Format Text is `COMMDLG.ChooseFont`, S18's.
+      Marquee's Format Text is `COMMDLG.ChooseFont`, S19's.
     - Known and pinned: the PIF Editor's Advanced Options is taller than
       os8088's desktop, and its last row (the shortcut key) is below the
       screen's edge. The window records live in WIN16's 64 KB data segment
