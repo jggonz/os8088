@@ -663,7 +663,10 @@ w16d_notify:
     jmp short .out
 
 ; w16d_popen - BX = a control: BeginPaint's DC on it, its invalid part made
-; valid. Out [w16d_l]..[w16d_b] = its client on the screen (inclusive),
+; valid - or, for a WM_PAINT whose wParam is a DC the program opened on it
+; (a subclass that called BeginPaint and passes the message on: Cardfile's
+; card), a DC inside that one, its clip and rcPaint, as Wine's controls take
+; the hdc. Out [w16d_l]..[w16d_b] = its client on the screen (inclusive),
 ; [w16d_w]/[w16d_h] its size. CF=1 nothing of it can be drawn (the DC is
 ; closed again). Keeps every register.
 w16d_popen:
@@ -673,8 +676,52 @@ w16d_popen:
     push si
     mov [w16d_rec], bx
     mov al, 1
+    cmp word [w16_sm_msg], WM_PAINT
+    jne .own
+    cmp word [w16_sm_wp], 0
+    je .own
+    cmp byte [w16_dcon], 0
+    je .own
+    cmp [w16_dcwnd], bx
+    jne .own
+    push word [w16_cl]              ; the program's DC: its clip and rcPaint
+    push word [w16_ct]              ;   kept, and the whole client opened
+    push word [w16_cr]
+    push word [w16_cb]
+    push word [w16_prc]
+    push word [w16_prc + 2]
+    push word [w16_prc + 4]
+    push word [w16_prc + 6]
+    xor al, al
+    ICALL w16_dcopen
+    pop word [w16_prc + 6]
+    pop word [w16_prc + 4]
+    pop word [w16_prc + 2]
+    pop word [w16_prc]
+    pop ax                          ; the clip cut by the program's
+    cmp ax, [w16_cb]
+    jge .cb
+    mov [w16_cb], ax
+.cb:
+    pop ax
+    cmp ax, [w16_cr]
+    jge .cr
+    mov [w16_cr], ax
+.cr:
+    pop ax
+    cmp ax, [w16_ct]
+    jle .ct
+    mov [w16_ct], ax
+.ct:
+    pop ax
+    cmp ax, [w16_cl]
+    jle .test
+    mov [w16_cl], ax
+    jmp short .test
+.own:
     ICALL w16_dcopen
     and byte [bx + W16W_FLAGS], ~(W16WF_INVAL | W16WF_ERASE)
+.test:
     mov ax, [w16_cl]
     cmp ax, [w16_cr]
     jg .none

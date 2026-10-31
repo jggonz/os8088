@@ -190,7 +190,10 @@ PM_REMOVE     equ 0x0001
 ; Handles and records
 ; =============================================================================
 
-; w16_hwnd2rec - AX = an HWND -> BX = its record, CX = its slot; CF=1 not one
+; w16_hwnd2rec - AX = an HWND -> BX = its record; CF=1 not one. Keeps the
+; rest - it once answered the slot in CX, which every caller that had loaded
+; CX first (Get/SetWindowWord and Long's index, SetClassWord's, GetWindowText's
+; count) then read as its own
 w16_hwnd2rec:
     mov bx, ax
     sub bx, W16_HWND0
@@ -201,8 +204,10 @@ w16_hwnd2rec:
     shr bx, 1
     cmp bx, W16_MAXWND
     jae .no
+    push cx
     mov cx, bx
     call w16_slot2rec
+    pop cx
     test byte [bx + W16W_FLAGS], W16WF_USED
     jz .no
     clc
@@ -775,7 +780,7 @@ w16_moveto:
     mov [w16_mvcx], cx
     mov [w16_mvcy], dx
     mov [w16_mvhwnd], ax
-    call w16_hwnd2rec               ; BX = the record, CX = the slot
+    call w16_hwnd2rec               ; BX = the record
     jc .no
     test word [bx + W16W_STYLE + 2], WS_CHILD_HI
     jnz .child

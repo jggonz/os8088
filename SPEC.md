@@ -228127,7 +228127,7 @@ window moves with the pixels, as Windows offset the update region. A child
 window does not move with its parent's scroll: none of S17's targets scrolls
 a window with children in it.
 
-#### 124.22.3 The multi-line EDIT *(shipped in S17 batch 1, but word wrap)*
+#### 124.22.3 The multi-line EDIT *(shipped in S17 batch 1; word wrap in batch 3)*
 
 An EDIT made with `ES_MULTILINE` is a different control from the one-line
 EDIT of §124.13, in the same class, after Wine's `edit.c` in what it does.
@@ -228164,15 +228164,42 @@ moves without changing the text is the two lines it left and reached.
 | scrolling | `WM_VSCROLL` by a line, a page or to the thumb's line; `WM_HSCROLL` by eight average widths or a page. The view follows the caret. A vertical scroll is §124.22.2's: the lines move and only the ones uncovered are drawn |
 | its bars | `WS_VSCROLL`: the range 0 to the lines less the lines the view holds, so the bar's end is the last page, and the thumb at the first line shown. `WS_HSCROLL`: 0-100, the thumb at the view's left as a share of the widest line drawn so far |
 | `EM_GETTHUMB` | Windows 3.x's `0x040E`, sent as `WM_VSCROLL`'s or `WM_HSCROLL`'s `wParam`: the thumb's position - its own bar's when it has one, else 0-100 as a share of the way through. **That is Notepad's scrolling**: its EDIT has no bars, its main window has both and passes their `WM_VSCROLL`/`WM_HSCROLL` to the EDIT, and on `EN_VSCROLL`/`EN_HSCROLL` it asks `EM_GETTHUMB` and sets its own bar's position to the answer; an `SB_THUMBPOSITION` or `SB_THUMBTRACK` to an EDIT with no bar of its own is read as that share likewise, as Wine's `edit.c` reads it |
-| messages | `EM_GETSEL`, `EM_SETSEL` (an end past the text is the text's end), `EM_REPLACESEL`, `EM_GETHANDLE`, `EM_SETHANDLE`, `EM_GETLINECOUNT`, `EM_LINEINDEX`, `EM_LINELENGTH`, `EM_LINEFROMCHAR`, `EM_GETLINE`, `EM_LINESCROLL`, `EM_SCROLL`, `EM_GETRECT`, `EM_GETMODIFY`, `EM_SETMODIFY`, `EM_LIMITTEXT`, `EM_CANUNDO`, `EM_UNDO`, `EM_FMTLINES` (accepted: the text has no soft breaks to show), `EM_GETFIRSTVISIBLELINE`; `WM_SETTEXT`, `WM_GETTEXT`, `WM_GETTEXTLENGTH`, `WM_SETFONT` (the System font is the only one), `WM_SETREDRAW`, `WM_CUT`, `WM_COPY`, `WM_PASTE`, `WM_CLEAR`, `WM_SIZE` |
+| messages | `EM_GETSEL`, `EM_SETSEL` (an end past the text is the text's end), `EM_REPLACESEL`, `EM_GETHANDLE`, `EM_SETHANDLE`, `EM_GETLINECOUNT`, `EM_LINEINDEX`, `EM_LINELENGTH`, `EM_LINEFROMCHAR`, `EM_GETLINE`, `EM_LINESCROLL`, `EM_SCROLL`, `EM_GETRECT`, `EM_GETMODIFY`, `EM_SETMODIFY`, `EM_LIMITTEXT`, `EM_CANUNDO`, `EM_UNDO`, `EM_FMTLINES` (accepted either way: the text never holds soft breaks, below), `EM_GETFIRSTVISIBLELINE`; `WM_SETTEXT`, `WM_GETTEXT`, `WM_GETTEXTLENGTH`, `WM_SETFONT` (the System font is the only one), `WM_SETREDRAW`, `WM_CUT`, `WM_COPY`, `WM_PASTE`, `WM_CLEAR`, `WM_SIZE` |
 | notifications | `EN_CHANGE`, `EN_UPDATE`, `EN_MAXTEXT`, `EN_ERRSPACE` (the heap would not grow), `EN_SETFOCUS`, `EN_KILLFOCUS`, `EN_VSCROLL`, `EN_HSCROLL`, posted to the parent as §124.13's are |
 | undo | one step, as Windows 3.0's: the last run of typing, the last deletion or the last replacement, put back by `EM_UNDO`, which then undoes itself |
 | the clipboard | os8088's (§124.16.1), and the multi-line text crosses it whole: CR LF in, CR LF out |
 
-**`ES_AUTOHSCROLL` off is word wrap**, which Notepad's Word Wrap command
-turns on by making a new EDIT without it. It is **not in this batch**: the
-lines are not wrapped, the view scrolls across instead, and `EM_FMTLINES`
-has no soft breaks to add. It is pinned for S17's last batch.
+**Word wrap is an EDIT with neither `ES_AUTOHSCROLL` nor `WS_HSCROLL`**,
+as Wine's `edit.c` reads Windows: Notepad's Word Wrap command makes a new
+EDIT without them, Cardfile's card and Calendar's notes are made without
+them. A line then ends at the client's right as well as at CR LF:
+
+- **A line breaks after the last space before the word that would pass the
+  right edge**, and the spaces stay at the end of the line they follow, as
+  Windows left them. A word wider than the line alone breaks at the
+  character that would pass it. A line holds one character at least.
+- **There is no line table here either.** A line's start is found from its
+  hard line's start (after the line feed before it) by walking the wrapped
+  lines forward, so the cost of a wrapped line is the length of the
+  paragraph it is in, not of the text. The first line shown is kept as an
+  index and an offset as before, and is snapped to a wrapped line's start
+  again whenever an edit could have moved the break above it.
+- **A change re-counts the lines and draws from the line before it down**:
+  typing a character can pull a word back onto the line above or push one
+  onto the line below, and only the paragraph says which. A new client
+  width (`WM_SIZE`) re-counts and draws all of it.
+- **The view never moves across**: no `WM_HSCROLL`, no horizontal half of
+  `EM_LINESCROLL`, and the caret is always in it.
+- **The text never holds soft breaks.** Windows' `EM_FMTLINES(TRUE)` puts
+  CR CR LF at each one in the buffer and `FALSE` takes them out again;
+  Notepad sends `FALSE` before it writes a file and `TRUE` after, so the
+  file never has them either way. Here both are accepted and the buffer is
+  always as `FALSE` leaves it.
+- **End at a soft break is the start of the next line.** The offset at the
+  end of a wrapped line and the start of the next are the same character
+  index, and the caret is drawn where the index's line begins. Windows kept
+  a flag to draw it at the end of the line above; nothing here does, so End
+  on a wrapped line puts the caret at the start of the line below.
 
 #### 124.22.4 TabbedTextOut and Escape *(shipped in S17 batch 1)*
 
@@ -228300,7 +228327,7 @@ window whose parent is not `WS_VISIBLE`, draws nothing until the window is
 shown, as on Windows. Calendar fills its client before its `ShowWindow`, and
 that fill drew a white box on the desktop outside any window.
 
-#### 124.22.11 Cardfile's calls *(shipped in S17 batch 2)*
+#### 124.22.11 Cardfile's calls *(shipped in S17 batch 2; the last two rows in batch 3)*
 
 | call | answer |
 |---|---|
@@ -228310,6 +228337,8 @@ that fill drew a white box on the desktop outside any window.
 | `GetBitmapBits(hbm, count, bits)` | the bitmap's rows, top first, as `GetObject` describes them. A bitmap `CreateBitmap` made with 1 plane and 1 bit a pixel answers Windows' monochrome bits: a pixel light grey or brighter is 1, and each row is a whole number of words. `GetObject` now says so too (`bmPlanes` 1, `bmBitsPixel` 1, `bmWidthBytes` the words' bytes). Any other bitmap answers its 4-bit rows, each padded to a word. At most `count` bytes; the answer is the bytes written. Cardfile saves a card's picture this way |
 | `Catch(lpCatchBuf)`, `Throw(lpCatchBuf, n)` | `Catch` keeps where its gate frame is on the program's stack and the frame's six words (the program's DI, SI, DS, BP and return), and answers 0. `Throw` puts that frame back where it was and returns from that `Catch` answering `n`. Everything pushed since is left behind with it, including any call WIN16 was making into the program: its continuation is on that same stack (§124.2.2) |
 | `OpenComm` | `IE_HARDWARE` (-10): there is no serial port a Windows program may have. `SetCommState`, `GetCommState`, `WriteComm`, `CloseComm` and `FlushComm` answer -1, and `GetCommError` 0. Cardfile imports them to dial a card's number |
+| `SetWindowLong(hEdit, GWL_WNDPROC, proc)` | the subclass takes, and `GetWindowLong` answers the old procedure for `CallWindowProc`. Until S17 batch 3 **every** window word and long went to the wrong place: the HWND's lookup answered its slot in CX, where `GetWindowWord`, `SetWindowWord`, `GetWindowLong`, `SetWindowLong` and `SetClassWord` had already put the index, and `GetWindowText` its count. Cardfile's subclass of the card's EDIT wrote its procedure into the EDIT's own state instead; the lookup keeps CX now |
+| `WM_PAINT` with an HDC in `wParam` | a control painted inside the DC the program opened on it, cut to that DC's clip and `rcPaint`, as Wine's controls take the `hdc`. Cardfile's subclass calls `BeginPaint` on the card's EDIT itself and passes the message on with the DC; a control that opened its own would find the update region already taken, and draw nothing. With `wParam` 0, or a DC on another window, the control opens its own as before |
 
 #### 124.22.5 The gate
 

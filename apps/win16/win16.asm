@@ -642,6 +642,8 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16e_tabw, 2         ;   the text's offset in its segment
     W16BSS w16e_rowh, 2
     W16BSS w16e_base, 2
+    W16BSS w16e_ww, 2           ; ...word wrap's width, 0 none (124.22.3)
+    W16BSS w16e_lst, 2          ; ...w16e_wline's line
     W16BSS w16e_y, 2            ; ...painting: the line's top, the selection
     W16BSS w16e_s0, 2           ;   shown, the line's start and end, the
     W16BSS w16e_s1, 2           ;   view's left, the pen, the next box's left

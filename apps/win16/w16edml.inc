@@ -11,6 +11,7 @@
 section .w16dlg
 
 ES_MULTILINE    equ 0x0004
+ES_AUTOHSCROLL  equ 0x0080
 ES_NOHIDESEL    equ 0x0100
 EM_GETRECT      equ 0x0402
 EM_SCROLL       equ 0x0405
@@ -63,6 +64,23 @@ ME_LM      equ 1                ; the text's left margin, pixels
 ; message): BX = the record -> DX:AX
 w16e_proc:
     call w16e_wset
+    xor ax, ax                      ; word wrap (SPEC.md 124.22.3): neither
+    test byte [bx + W16W_STYLE], ES_AUTOHSCROLL   ;   ES_AUTOHSCROLL nor
+    jnz .nowrap                     ;   WS_HSCROLL, as Wine's edit.c reads
+    test word [bx + W16W_STYLE + 2], WS_HSCROLL_HI ;   Windows - the line
+    jnz .nowrap                     ;   ends at the client's right
+    push cx
+    push dx
+    ICALL w16_csize                 ; CX = the client's width
+    mov ax, cx
+    sub ax, ME_LM + 1
+    jg .ww
+    mov ax, 1
+.ww:
+    pop dx
+    pop cx
+.nowrap:
+    mov [w16e_ww], ax
     mov cx, [w16_sm_msg]
     mov si, w16e_msgs  ; XSEC-OK: read through cs:
 .find:
@@ -293,6 +311,8 @@ w16e_adv:
 ; line end not counted), DX = the next line's start, 0FFFFh for the last.
 ; Keeps the rest.
 w16e_line:
+    cmp word [w16e_ww], 0
+    jne w16e_wline
     push ax
     push si
     push di
@@ -327,9 +347,108 @@ w16e_line:
     pop ax
     ret
 
-; w16e_lstart - BX = an edit, AX = an offset -> AX = the start of its line.
-; Keeps the rest.
+; w16e_wline - w16e_line under word wrap: the line also ends where the next
+; word would pass [w16e_ww] - after the spaces before it, which stay on the
+; line as Windows left them, or at the character itself when the word alone
+; is wider than the line. A line holds one character at least. Keeps the
+; rest.
+w16e_wline:
+    push ax
+    push si
+    push di
+    push bp
+    mov si, [w16e_base]
+    mov di, si
+    add di, [bx + ME_LEN]           ; DI = the text's end
+    add si, ax
+    mov [w16e_lst], si
+    xor dx, dx                      ; DX = the pen
+    xor bp, bp                      ; BP = after the last space, 0 none
+.c:
+    cmp si, di
+    jae .last
+    mov cl, [es:si]
+    cmp cl, 10
+    je .hard
+    cmp cl, 13
+    jne .ch
+    mov ax, si
+    inc ax
+    cmp ax, di
+    jae .ch
+    cmp byte [es:si + 1], 10
+    je .hard
+.ch:
+    mov al, cl
+    call w16e_adv
+    add ax, dx                      ; AX = the pen after it
+    cmp cl, ' '
+    je .sp
+    cmp ax, [w16e_ww]
+    jbe .fit
+    cmp si, [w16e_lst]
+    je .fit
+    or bp, bp
+    jz .soft
+    mov si, bp                      ; the word goes down whole
+.soft:
+    mov dx, si
+    sub dx, [w16e_base]
+    jmp short .len
+.sp:
+    lea bp, [si + 1]                ; a space never breaks; after it may
+.fit:
+    mov dx, ax
+    inc si
+    jmp short .c
+.hard:
+    mov dx, si                      ; past CR LF, or a lone LF
+    cmp cl, 13
+    jne .lf
+    inc dx
+.lf:
+    inc dx
+    sub dx, [w16e_base]
+    jmp short .len
+.last:
+    mov dx, 0xFFFF
+.len:
+    mov cx, si
+    sub cx, [w16e_lst]
+    pop bp
+    pop di
+    pop si
+    pop ax
+    ret
+
+; w16e_lstart - BX = an edit, AX = an offset -> AX = the start of its line:
+; under word wrap the line's of the hard line's lines that holds it (a
+; boundary is the next line's). Keeps the rest.
 w16e_lstart:
+    cmp word [w16e_ww], 0
+    je w16e_hstart
+    push cx
+    push dx
+    push si
+    mov si, ax
+    call w16e_hstart
+.w:
+    call w16e_line
+    cmp dx, 0xFFFF
+    je .out
+    cmp dx, si
+    ja .out
+    mov ax, dx
+    jmp short .w
+.out:
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; w16e_hstart - BX = an edit, AX = an offset -> AX = the start of its hard
+; line, after the line feed before it. Keeps the rest.
+w16e_hstart:
     push cx
     push di
     mov cx, ax
@@ -354,8 +473,43 @@ w16e_lstart:
     ret
 
 ; w16e_nlf - BX = an edit, AX = an offset, CX = bytes -> DX = the line feeds
-; among them. Keeps the rest.
+; among them: the lines that start after AX and by AX + CX, which under word
+; wrap counts the soft breaks too. Keeps the rest.
 w16e_nlf:
+    cmp word [w16e_ww], 0
+    je w16e_hnlf
+    push ax
+    push cx
+    push si
+    push di
+    push bp
+    mov bp, ax                      ; BP = after it, SI = by it
+    mov si, ax
+    add si, cx
+    xor di, di
+    call w16e_lstart
+.w:
+    call w16e_line
+    cmp dx, 0xFFFF
+    je .out
+    cmp dx, si
+    ja .out
+    cmp dx, bp
+    jbe .n
+    inc di
+.n:
+    mov ax, dx
+    jmp short .w
+.out:
+    mov dx, di
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+w16e_hnlf:
     push ax
     push cx
     push di
@@ -718,8 +872,11 @@ w16e_settop:
 ; again when it moved. Keeps every register.
 w16e_setx:
     push ax
+    cmp word [w16e_ww], 0           ; wrapped: the view never moves across
+    jne .z
     or ax, ax
     jge .p
+.z:
     xor ax, ax
 .p:
     cmp ax, [bx + ME_XOFF]
@@ -761,6 +918,8 @@ w16e_show:
     inc dx
     call w16e_settop
 .across:
+    cmp word [w16e_ww], 0           ; wrapped: nothing is across
+    jne .out
     call w16e_open                  ; (the view moved: the text did not)
     mov ax, [bx + EC_CARET]
     call w16e_lstart
@@ -1147,6 +1306,13 @@ w16e_repl:
     call w16e_undorec               ; the step, before it is made
     mov ax, [w16e_a]                ; the line the change starts on, while
     call w16e_lstart                ;   the text above it is as it was
+    cmp word [w16e_ww], 0           ; wrapped: the line before it too, which
+    je .als                         ;   a change can pull a word back onto
+    or ax, ax
+    jz .als
+    dec ax
+    call w16e_lstart
+.als:
     mov [w16e_als], ax
     call w16e_num
     mov [w16e_aln], dx
@@ -1208,6 +1374,11 @@ w16e_repl:
     add ax, dx
     sub ax, [w16e_dlf]
     mov [bx + ME_LINES], ax
+    cmp word [w16e_ww], 0           ; wrapped: the lines counted again, and
+    je .lines                       ;   every line from the change down drawn
+    call w16e_count
+    mov word [w16e_dlf], 1
+.lines:
     mov ax, [w16e_a]
     add ax, [w16e_cnt]
     mov [bx + EC_CARET], ax
@@ -1224,6 +1395,10 @@ w16e_repl:
     call w16e_invall
     jmp short .drawn
 .anch:
+    cmp word [w16e_ww], 0           ; wrapped: the top line may have moved
+    je .anch1                       ;   (a word pulled back onto the line
+    call w16e_resnap                ;   above it)
+.anch1:
     mov ax, [w16e_aln]              ; a line feed in or out: from the line
     mov dx, ax                      ;   down; else the line alone
     cmp word [w16e_dlf], 0
@@ -1393,6 +1568,8 @@ w16e_create:
     xor ax, ax
     mov [bx + ME_TOP], ax
     mov [bx + ME_TOPO], ax
+    mov [bx + ME_XOFF], ax           ; (a wrapped view never moves across,
+    mov [bx + ME_WIDE], ax           ;   so nothing else would set it)
     mov [bx + EC_CARET], ax
     mov [bx + EC_SELA], ax
     mov ax, [bx + ME_LINES]         ; its bars' ranges (SPEC.md 124.22.3)
@@ -2062,9 +2239,38 @@ w16e_hscroll:
     jmp w16e_zero
 
 w16e_size:
+    cmp word [w16e_ww], 0           ; wrapped: a new width is new lines
+    je .draw
+    call w16e_open
+    call w16e_count
+    call w16e_resnap
+.draw:
     call w16e_invall
     call w16e_sbupd
     jmp w16e_zero
+
+; w16e_resnap - BX = an edit, wrapped, the text open: the first line shown
+; made a line's start again and its index counted (ME_TOPO, ME_TOP). Keeps
+; every register.
+w16e_resnap:
+    push ax
+    push cx
+    push dx
+    mov ax, [bx + ME_TOPO]
+    cmp ax, [bx + ME_LEN]
+    jbe .in
+    mov ax, [bx + ME_LEN]
+.in:
+    call w16e_lstart
+    mov [bx + ME_TOPO], ax
+    mov cx, ax
+    xor ax, ax
+    call w16e_nlf                   ; DX = the lines before it
+    mov [bx + ME_TOP], dx
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; WM_SETREDRAW: wParam 0 draws nothing until a non-zero one, which draws all
 w16e_redraw:

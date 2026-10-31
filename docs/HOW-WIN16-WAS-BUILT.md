@@ -1853,3 +1853,43 @@ reached, and word wrap, which both programs' text wants. Two WIN16 programs
 at once on CGA ran short of memory: each instance carries its own copy of
 WIN16, and one instance for several programs is S21.
 
+## 2026-10-31 — S17, batch 3: word wrap, and a lookup that lied
+
+**Word wrap.** Windows wraps an EDIT's lines when it has neither
+`ES_AUTOHSCROLL` nor `WS_HSCROLL`, and three programs here want it: Notepad's
+Word Wrap command re-makes its EDIT that way, and Cardfile's card and
+Calendar's notes are made that way. The multi-line EDIT had no line table to
+change. A line is found by scanning from the first line shown, so wrap went
+into the scan: a line ends at CR LF, or after the last space before the word
+that would pass the right edge, or mid-word when one word is wider than the
+line. A line's start is found from its paragraph's start, walking wrapped
+lines forward. The cost of a wrapped line is the length of its paragraph, not
+of the text.
+
+**Then the card drew nothing.** The typed text was in the buffer and the
+lines were counted right, but the card stayed white. The view's left edge
+held 43,520 pixels. The EDIT never sets it after creation. Without wrap that
+had not mattered: the view follows the caret across and fixes any value. With
+wrap nothing moves across, so the garbage stayed. The value came from
+somewhere: a watch on the record's bytes, with QEMU's execution log in a
+ring, caught `SetWindowLong` writing a far pointer into the middle of the
+EDIT's state. Cardfile subclasses its card's EDIT with `GWL_WNDPROC` (-4),
+and the index arrived as 3. The routine that turns an HWND into a record
+also handed back the window's slot in CX. `GetWindowWord`, `SetWindowWord`,
+`GetWindowLong`, `SetWindowLong` and `SetClassWord` had already put the
+index in CX, and `GetWindowText` its count. Every one of them has been wrong
+since it was written, and **no subclass in any program had ever taken**. The
+lookup keeps CX now. Nothing read the slot.
+
+**Then the card still drew nothing**, for a better reason. With the
+subclass in place, Cardfile's own procedure calls `BeginPaint` on the EDIT
+and passes `WM_PAINT` on with the DC in `wParam`. Windows' controls paint
+into a DC handed to them that way. Ours opened their own, found the update
+region already taken by the program's `BeginPaint`, and drew nothing at all.
+A control now paints inside the program's DC, cut to its clip.
+
+**What was seen.** On QEMU (VGA): the card wrapping, a word pushed down by
+typing into the line above it and pulled back by a deletion; Calendar's
+notes wrapping; Notepad's Word Wrap command re-making its EDIT and the text
+following the window's edge, and Notepad without it still scrolling across.
+

@@ -348,10 +348,22 @@ its table goes in the diary, so the reach is measured, not claimed.
       `Catch`/`Throw` taken, `SaveDC`/`IntersectClipRect` drawing a picture
       (Cardfile reaches them only with a picture in a card); Calendar's
       month view and alarms.
-    - **Not yet:** word wrap. Calendar's notes and Cardfile's card are both
-      `ES_MULTILINE` without `ES_AUTOHSCROLL`, so a long line scrolls
-      across instead of wrapping. It moves up from the last batch to the
-      next.
+    - [x] **Batch 3, word wrap** (SPEC.md §124.22.3): an EDIT with
+      neither `ES_AUTOHSCROLL` nor `WS_HSCROLL` breaks its lines at the
+      client's right, after the last space. **Seen on QEMU (VGA)**:
+      Cardfile's card, a word pushed down by typing into the line above
+      and pulled back up by a deletion; Calendar's notes; Notepad's Edit >
+      Word Wrap re-making its EDIT and the text wrapping, and Notepad
+      without it still scrolling across.
+    - [x] **Two old bugs it uncovered** (SPEC.md §124.22.11): the HWND's
+      lookup answered its slot in CX, so `Get`/`SetWindowWord`,
+      `Get`/`SetWindowLong` and `SetClassWord` used the slot as the index
+      and `GetWindowText` as the count - no subclass ever took. With it
+      fixed, Cardfile's subclass of its card paints through `BeginPaint`
+      and passes `WM_PAINT` on with the DC, so a control now paints
+      inside a DC handed to it in `wParam`.
+    - Known and pinned: End at a soft break shows the caret at the start
+      of the line below (one index for both places).
     - **Found and left:** Calendar and Cardfile at once on CGA - the second
       is refused, "WIN16's library part could not be read", because each
       instance holds its own image, bss and library part. One instance
