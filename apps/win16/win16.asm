@@ -1792,6 +1792,7 @@ w16_cputest:
 %include "win16/w16combo.inc"   ; COMBOBOX, owner-drawn items (124.22.14)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
+%include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's

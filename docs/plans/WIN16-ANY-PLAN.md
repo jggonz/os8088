@@ -640,8 +640,42 @@ its table goes in the diary, so the reach is measured, not claimed.
     - **Not done:** `ShellExecute` and `FindExecutable`.
     - What it costs, against batch 2: the image 34,101 bytes (+14, the two
       module names), bss unchanged, 6,220 bytes of room; the loader part
-      12,034 (+772, 66 new export rows); part 9 4,214 (+2,431, of which
+      12,034 (+657, 73 new export rows); part 9 4,214 (+2,431, of which
       1,024 is the open keys' table).
+
+  - [x] **Batch 4: LZEXPAND and VER, the installer's core** (SPEC.md
+    §124.24.8, §124.24.9).
+    - LZEXPAND (module 10) expands SZDD files as they are read: `LZInit`,
+      `LZOpenFile` (with the `_` name when the plain one is not there),
+      `LZRead`, `LZSeek` in the expansion (back before the position expands
+      again from the start), `LZCopy`, `GetExpandedName`. Sixteen handles,
+      each a 5,152-byte fixed block in the program's own heap.
+    - VER (module 11): `GetFileResourceSize`/`GetFileResource` over an NE's
+      resource table, by number or name; `GetFileVersionInfoSize`/
+      `GetFileVersionInfo`; `VerQueryValue`; `VerLanguageName` with the
+      table Windows 3.1's own `VER.DLL` answers (read off the reference
+      machine); `VerFindFile`; `VerInstallFile`, which copies through the
+      expander. Every file VER reads is opened as `LZOpenFile` opens it, so
+      a packed `.DL_` answers its version.
+    - **Seen on QEMU's VGA:** LZT.EXE (new fixture, its version in
+      `tests/win16/lzt.rc`) says `LZT OK 24000`. `SAMPLE.TXT`, copied out
+      by `LZCopy`, and `SECOND.DAT`, installed by `VerInstallFile` into the
+      system directory, read off the guest's floppy, are the host's
+      expansions byte for byte. With Windows 3.1's own `VER.DL_` (packed
+      by Microsoft's `COMPRESS.EXE`) in `SECOND.DA_`'s place, the 9,008
+      bytes `VerInstallFile` wrote were `tools/w16font.py`'s expansion
+      exactly. That was a look; no Microsoft file is in the row.
+    - **Found on the way:** DOS's seek answers the position in DX:AX, so
+      the reader's own seek clobbered the file position it was walking the
+      resource table by. A packed file never showed it (its seek is the
+      expander's), and the plain one answered "no version".
+    - **Registered, not yet run:** `win16lz`.
+    - **Pinned** (§124.24.9): `VerInstallFile` compares no versions and
+      writes no temporary file; no KWAJ; no PE version resource.
+    - What it costs, against batch 3: the image 34,114 bytes (+13, the two
+      module names), bss unchanged, 6,207 bytes of room; the loader part
+      12,196 (+162, 18 export rows); part 9 9,335 (+5,121, of which 624 is
+      the language table and 496 the buffers and words).
 
 - [ ] **S19b: GDI, the drawing half (R7).**
   - *As a user, Paintbrush opens, and I draw with its tools.* (Moved from

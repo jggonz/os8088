@@ -2341,5 +2341,57 @@ installer does and reads it back every way the API allows. It said
 held exactly the two keys its delete left behind.
 
 **What it cost.** The image grew 14 bytes (the two module names), leaving
-6,220. The loader part grew by 772 bytes for 66 export rows. Part 9 grew by
+6,220. The loader part grew by 657 bytes for 73 export rows. Part 9 grew by
 2,431, of which 1,024 is the table of open keys.
+
+## 2026-10-31 — S19, batch 4: packed files, and where a file goes
+
+**An installer's two libraries.** A Windows 3.1 setup disk is mostly files
+whose names end in `_`: `CTL3D.DL_`, `README.TX_`. Microsoft's
+`COMPRESS.EXE` packed them, and the setup program unpacks each one with
+LZEXPAND as it copies it. It asks VER where the file belongs and to put it
+there. Both libraries are now WIN16's own modules, in part 9 beside COMMDLG
+and SHELL, so the batch spent nothing of the image but the two names.
+
+**SZDD is small enough to expand as it is read.** The format is a 14-byte
+header and LZSS over a 4 KB window that starts full of spaces. A control
+byte says, for each of the next eight items, whether it is one literal byte
+or a two-byte reference back into the window. `tools/w16font.py` already
+expanded it on the host for Windows' packed fonts, so the machine's version
+is a port of that loop. Each LZ handle gets a fixed block in the program's
+own global heap: the window, a kilobyte of read buffer and a few words.
+Ending the program frees it along with everything else the program owned.
+A program can seek in the expanded file. Going forward expands and drops
+bytes. Going back starts again from the top, because nothing in the format
+lets a reader start in the middle.
+
+**VER reads through LZEXPAND.** The version calls open their file the way
+`LZOpenFile` does, so asking a packed `.DL_` for its version reads the
+expansion. That is what Windows does too. An installer can then compare
+versions before it copies anything. The resource table walk is the NE one
+WIN16's loader already does, done again through file reads, because the
+file being asked about is not loaded. `VerLanguageName`'s names came from the
+real thing: Windows 3.1's `VER.DLL`, expanded off disk 2 of the reference
+install, holds a table of 45 names and `Unknown Language`. Only the names
+were taken. The DLL stays where it was, outside the tree.
+
+**A bug only one kind of file could show.** The new fixture asked for its
+own version twice, once from a packed copy of itself and once from the
+plain `.EXE`. The packed copy answered 220 bytes and the plain file answered
+0. DOS's seek returns the new position in DX:AX, and the resource walk kept
+its place in the file in DX. A packed file's seek is the expander's own,
+which leaves DX alone, so only a plain file lost its place. The seek keeps
+DX now.
+
+**What was seen.** LZT.EXE says `LZT OK 24000`. It read, seeked, copied,
+named and installed three files the host had packed. The two files it
+wrote, read back off the guest's floppy, matched the host's expansion byte
+for byte. A file packed by Microsoft's own `COMPRESS.EXE` was the stronger
+test. With Windows 3.1's `VER.DL_` put in place of one of the host's files,
+`VerInstallFile` wrote the same 9,008 bytes `w16font.py` expands it to. That
+was a look rather than part of the row, because no Microsoft file goes in
+this tree.
+
+**What it cost.** The image grew 13 bytes, leaving 6,207. The loader part
+grew by 162 bytes for 18 export rows. Part 9 grew by 5,121, of which 624 is
+the language table.

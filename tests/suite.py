@@ -16460,6 +16460,19 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16lz", "soak", py("tests/win16lz.py"), 60.0,
+        "SPEC.md 124.24.8-9, WIN16-ANY-PLAN S19: LZT.EXE (`make "
+        "win16fixtures`, tests/win16/lzt.c) reads three SZDD files the host "
+        "packed (checked against tools/w16font.py's expansion first) - "
+        "forward, back, past the end, copied out with LZCopy, by the name "
+        "it expands to - reads its own VERSIONINFO out of a packed copy of "
+        "itself, and has VerFindFile and VerInstallFile put one in the "
+        "system directory; its MessageBox must be LZT OK and the length, and "
+        "SAMPLE.TXT and the installed SECOND.DAT off the floppy image must "
+        "be the host's expansions byte for byte",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

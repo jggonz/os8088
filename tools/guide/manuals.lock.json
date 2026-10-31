@@ -343,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "e7ca16f80",
-  "strings": "efe62396ae4edb45",
-  "why": "S12: the shipped DOS.O88 forwards a Windows NE to WIN16 (SPEC 124.18.1); one sentence added"
+  "stamped": "7ec824f3e",
+  "strings": "562e87c75fe90f35",
+  "why": "S16-S19: the DOS core shared with WIN16 (dosbe.inc), no text a user sees changed"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "d13fc8971",
-  "strings": "622daf79471d7d21",
-  "why": "S19 batch 3: REG.DAT and OLE greyed"
+  "stamped": "7ec824f3e",
+  "strings": "920aa58aa708ad0a",
+  "why": "S19 batch 4: packed files and shared installs"
  },
  "WIN16_TXT": {
   "sources": [

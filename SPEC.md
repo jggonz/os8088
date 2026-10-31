@@ -228814,7 +228814,7 @@ S19 lands in batches: batch 1 is the second library part, COMMDLG's file
 dialogs and the calls that answer "not available", and SHELL's drag calls.
 Batch 2 is `ChooseFont`, `ChooseColor` and `CreateFont` (§124.24.4); batch 3 the
 registration database and OLE's answers (§124.24.6, §124.24.7); batch 4 LZEXPAND and VER, the
-installer's core (S24).
+installer's core (S24; §124.24.8, §124.24.9).
 
 #### 124.24.1 The system-library part
 
@@ -229028,6 +229028,91 @@ A document that holds an embedded object (a Cardfile card with a picture
 from Paintbrush, say) loads without it, because `OleLoadFromStream` answers
 `OLE_ERROR_CLASS`. The out-pointer of a call that fails is not written.
 
+#### 124.24.8 LZEXPAND: SZDD files *(S19 batch 4)*
+
+An installer's files arrive packed by Microsoft's `COMPRESS.EXE` as
+**SZDD** files, named with the last letter of the name replaced by `_`
+(`CTL3D.DL_`). LZEXPAND is WIN16's module 10. It expands them as a program
+reads them, which is how `SETUP.EXE` programs and `VerInstallFile`
+(§124.24.9) copy them. `tools/w16font.py`'s `szdd()` is the reference
+expansion on the host.
+
+The format is a 14-byte header (`SZDD` 88h F0h 27h 33h, the method `A`,
+the name's missing last letter, and the expanded length as a dword), then
+LZSS. A control byte gives the next eight items, low bit first. A 1 bit is
+one literal byte. A 0 bit is a two-byte match: the window position is the
+low byte plus the high byte's top four bits shifted up by four, and the
+length is the high byte's low four bits plus 3. The window is 4,096 bytes,
+starts full of spaces, and is first written at FF0h.
+
+| call | |
+|---|---|
+| `LZInit` (LZEXPAND.3) | a handle on an SZDD file: an **LZ handle**, `400h` + its slot. A file that is not SZDD answers its own handle, put back at offset 0. A method other than `A` answers `LZERROR_UNKNOWNALG`, an unreadable handle `LZERROR_BADINHANDLE`, no slot or no memory `LZERROR_GLOBALLOC` |
+| `LZOpenFile` (LZEXPAND.2) | `OpenFile` (§124.21.3); if that fails, `OpenFile` again with the name's last letter replaced by `_` (`._` added to a name with no extension, `_` to a shorter one). Opened for reading, the handle goes through `LZInit`, and an answer that is not a handle gives back the plain one. Any other mode answers `OpenFile`'s handle |
+| `LZRead` (LZEXPAND.5) | the expanded bytes from the handle's position, and the count. A plain handle is `_lread` |
+| `LZSeek` (LZEXPAND.4) | the position in the EXPANDED file: from the start, from the position or from the end. Outside 0 to the length answers `LZERROR_BADVALUE`. A plain handle is `_llseek` |
+| `LZClose` (LZEXPAND.6) | the file closed and the slot freed. A plain handle is `_lclose` |
+| `LZCopy` (LZEXPAND.1), `CopyLZFile` (LZEXPAND.8) | the source from its position to its end, expanded, written to the destination. The bytes written as a dword, or `LZERROR_READ` / `LZERROR_WRITE`. A plain source goes through `LZInit` first, and the LZ handle made for it is closed after, which closes the source |
+| `GetExpandedName` (LZEXPAND.10) | the name an SZDD file expands to: the last letter put back from its header, in the case of the rest of the name. A plain file's name as it is. 1, or `LZERROR_BADINHANDLE` |
+| `LZStart` (LZEXPAND.7), `LZDone` (LZEXPAND.9) | 1, and nothing |
+
+**What it costs.** Sixteen handles can be open at once. Each handle's state
+is a **5,152-byte global block** in the program's own heap (§124.9): the
+window, a 1,024-byte read buffer and 32 bytes of state. It is freed by
+`LZClose`, or with every other block when the program ends. Expansion reads
+the file a kilobyte a call. Going back before the position expands the
+file again from its start: an SZDD file cannot be entered in the middle.
+`LZCopy` takes a further kilobyte while it runs.
+
+**Not done, pinned:** the KWAJ format of MS-DOS 6's `COMPRESS.EXE /Z`
+(Windows 3.1's LZEXPAND does not read it either).
+
+#### 124.24.9 VER: version resources and installing a file *(S19 batch 4)*
+
+VER is WIN16's module 11. It is the installer's core (S24): it reads a
+program's or library's `VERSIONINFO` resource, says where a file belongs,
+and copies one into place. Every file VER reads is opened as `LZOpenFile`
+opens it, so a packed `.DL_` answers its version as its expansion would.
+
+| call | |
+|---|---|
+| `GetFileResourceSize` (VER.2) | an NE file's resource of the type and id named, by number (`MAKEINTRESOURCE`) or by name, case ignored: its length as a dword, and its offset in the file at `*lpdwFileOffset`. 0 when the file is not an NE, or has no such resource |
+| `GetFileResource` (VER.3) | that resource's first `dwResLen` bytes into the buffer, found again unless `dwFileOffset` gives its offset. At most 65,520 bytes. TRUE, or FALSE |
+| `GetFileVersionInfoSize` (VER.6), `GetFileVersionInfo` (VER.7) | the same calls for type 16 (`VS_FILE_INFO`), id 1 (`VS_VERSION_INFO`). `GetFileVersionInfo` always looks for the resource. It does not trust the handle |
+| `VerQueryValue` (VER.11) | a path through the version block, `\` first and a key a step, case ignored: a far pointer to the value and its length. `\` alone is the root's value, the `VS_FIXEDFILEINFO`. FALSE when a step is not there |
+| `VerLanguageName` (VER.10) | the name of a language id, from the table below, cut to `nSize` with its NUL, and the characters copied |
+| `VerFindFile` (VER.8) | where a file goes: a shared one (`VFFF_ISSHAREDFILE`) to the system directory, anything else to `szAppDir`. Where it is now: the destination if it is there, otherwise the other one of those two with `VFF_CURNEDEST`. A buffer too small is filled as far as it holds, with `VFF_BUFFTOOSMALL`, and each length is set to what was needed |
+| `VerInstallFile` (VER.9) | `szSrcDir\szSrcFileName`, expanded if it is SZDD, written to `szDestDir\szDestFileName`. Then, unless `VIFF_DONTDELETEOLD`, the copy in `szCurDir` is deleted when that is another directory. 0, or `VIF_CANNOTREADSRC`, `VIF_CANNOTCREATE`, `VIF_OUTOFSPACE` (a short write: the partial file is deleted) or `VIF_CANNOTDELETECUR` |
+
+WIN16's Windows directory and system directory are one directory (O5,
+§124.14), so a shared file and a program's own file found there are the same
+file.
+
+The language table is the one Windows 3.1's own `VER.DLL` answers, read off
+the reference machine (the win16-reference skill), with its ids. An id not
+in it answers `Unknown Language`:
+
+| ids | names |
+|---|---|
+| 0401h-040Fh | Arabic, Bulgarian, Catalan, Traditional Chinese, Czech, Danish, German, Greek, U.S. English, Castilian Spanish, Finnish, French, Hebrew, Hungarian, Icelandic |
+| 0410h-0421h | Italian, Japanese, Korean, Dutch, Norwegian - Bokmal, Polish, Brazilian Portuguese, Rhaeto-Romanic, Romanian, Russian, Croato-Serbian (latin), Slovak, Albanian, Swedish, Thai, Turkish, Urdu, Bahasa |
+| 0804h, 0807h, 0809h, 080Ah, 080Ch | Simplified Chinese, Swiss German, U.K. English, Mexican Spanish, Belgian French |
+| 0810h, 0813h, 0814h, 0816h, 081Ah | Swiss Italian, Belgian Dutch, Norwegian - Nynorsk, Portuguese, Serbo-Croatian (cyrillic) |
+| 0C0Ch, 100Ch | Canadian French, Swiss French |
+
+**Not done, pinned:**
+
+- `VerInstallFile` compares no versions, languages or code pages, so it
+  never answers `VIF_SRCOLD`, `VIF_MISMATCH` or `VIF_DIFF*`. It writes the
+  destination directly, not through a temporary file, so it never answers
+  `VIF_TEMPFILE` and leaves `szTmpFile` alone. Nothing is ever in use, so
+  there is no `VIF_FILEINUSE` or `VFF_FILEINUSE`. S24's installer is where a
+  version comparison would be decided.
+- A version resource in a PE file is not read. A Windows 3.x program is an
+  NE.
+- `GETFILEVERSIONINFORAW` (VER.20), a stub in winevdm's table too, has no
+  row.
+
 #### 124.24.5 The gate
 
 **`win16cdlg`** (soak, QEMU, VGA; `make win16fixtures`; a SKIP without its
@@ -229056,6 +229141,30 @@ order and one past the last, then deleted and gone. `OleRegisterClientDoc`
 answers `OLE_OK` and `OleQueryCreateFromClip` `OLE_ERROR_FORMAT`. Its
 message box must be `REGDB OK`. When it has ended, `REG.DAT` read off the
 floppy image must hold exactly the two keys the delete left.
+
+**`win16lz`** (soak, QEMU; `make win16fixtures`): the host packs three
+SZDD files with the row's own packer, each checked against
+`tools/w16font.py`'s `szdd()` first: `SAMPLE.TX_` (24,000 bytes of text),
+`SECOND.DA_` (bytes that mostly do not compress) and `LZT.EX_`, the fixture
+itself. **LZT.EXE** (`tests/win16/lzt.c`, its `VERSIONINFO` in
+`tests/win16/lzt.rc`):
+
+- reads `SAMPLE.TX_` by its packed name forward, relative, back and past
+  its end;
+- copies it out with `LZCopy` and reads the copy as a plain file;
+- asks `GetExpandedName` in both cases;
+- opens `SECOND.DAT`, which is not there, and is given `SECOND.DA_`;
+- reads its own version out of `LZT.EX_` and finds it the same size as
+  `LZT.EXE`'s, then queries it: the fixed block, a string with its block
+  name in lower case, the translation, and a key that is not there;
+- names three languages, one of them cut short;
+- has `VerFindFile` place a program's file and a shared one (and a buffer
+  too small), `VerInstallFile` put `SECOND.DAT` in the system directory,
+  and refuse a source that is not there.
+
+Its message box must be `LZT OK 24000`. When it has ended, `SAMPLE.TXT` at
+B:'s root and `SYSTEM\APPDATA\WIN16\SECOND.DAT` read off the floppy image
+must be the host's expansions, byte for byte.
 
 Opening a file and Save As through the chooser were seen on the glass in
 batch 1 (the plan's S19 record). The row does not repeat them, because

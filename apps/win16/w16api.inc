@@ -23,6 +23,8 @@ W16M_SHELL    equ 6
 W16M_COMMDLG  equ 7             ; the system libraries (SPEC.md 124.24)
 W16M_OLECLI   equ 8             ;   ...and OLE's two, which answer "not
 W16M_OLESVR   equ 9             ;   available" (124.24.7)
+W16M_LZEXPAND equ 10            ; an installer's two (124.24.8, 124.24.9)
+W16M_VER      equ 11
 
 w16_modnames:                   ; pascal strings, then 0
     db 6, 'KERNEL'
@@ -35,6 +37,8 @@ w16_modnames:                   ; pascal strings, then 0
     db 7, 'COMMDLG'
     db 6, 'OLECLI'
     db 6, 'OLESVR'
+    db 8, 'LZEXPAND'
+    db 3, 'VER'
     db 0
 
 ; --- the export rows ----------------------------------------------------------
@@ -346,6 +350,25 @@ W16EXPORT W16M_OLESVR,     9,       4,  w16o_ok             ; OleRevertServerDoc
 W16EXPORT W16M_OLESVR,     10,      4,  w16o_ok             ; OleSavedServerDoc(long)
 W16EXPORT W16M_OLESVR,     11,      4,  w16o_ok             ; OleRevokeObject(ptr)
 W16EXPORT W16M_OLESVR,     12,      0,  w16o_ok             ; OleQueryServerVersion()
+; LZEXPAND (SPEC.md 124.24.8) and VER (124.24.9), in part 9 (w16lzver.inc)
+W16EXPORT W16M_LZEXPAND,   1,       4,  w16z_lzcopy         ; LZCopy(word word)
+W16EXPORT W16M_LZEXPAND,   2,       10, w16z_lzopen         ; LZOpenFile(str ptr word)
+W16EXPORT W16M_LZEXPAND,   3,       2,  w16z_lzinit         ; LZInit(word)
+W16EXPORT W16M_LZEXPAND,   4,       8,  w16z_lzseek         ; LZSeek(word long word)
+W16EXPORT W16M_LZEXPAND,   5,       8,  w16z_lzread         ; LZRead(word ptr word)
+W16EXPORT W16M_LZEXPAND,   6,       2,  w16z_lzclose        ; LZClose(word)
+W16EXPORT W16M_LZEXPAND,   7,       0,  w16_ans1            ; LZStart()
+W16EXPORT W16M_LZEXPAND,   8,       4,  w16z_lzcopy         ; CopyLZFile(word word)
+W16EXPORT W16M_LZEXPAND,   9,       0,  w16_ans0            ; LZDone()
+W16EXPORT W16M_LZEXPAND,   10,      8,  w16z_expname        ; GetExpandedName(str ptr)
+W16EXPORT W16M_VER,        2,       16, w16v_ressize        ; GetFileResourceSize(str str str ptr)
+W16EXPORT W16M_VER,        3,       24, w16v_res            ; GetFileResource(str str str long long ptr)
+W16EXPORT W16M_VER,        6,       8,  w16v_vsize          ; GetFileVersionInfoSize(str ptr)
+W16EXPORT W16M_VER,        7,       16, w16v_vinfo          ; GetFileVersionInfo(str long long ptr)
+W16EXPORT W16M_VER,        8,       30, w16v_findfile       ; VerFindFile(word str str str ptr ptr ptr ptr)
+W16EXPORT W16M_VER,        9,       30, w16v_install        ; VerInstallFile(word str str str str str ptr ptr)
+W16EXPORT W16M_VER,        10,      8,  w16v_lang           ; VerLanguageName(word ptr word)
+W16EXPORT W16M_VER,        11,      16, w16v_query          ; VerQueryValue(segptr str ptr ptr)
 ; the text calls that draw or measure in the face of the DC's font (SPEC.md
 ; 124.24.4): their rows carry W16B_DCF
 %define w16dcf_w16g_textout
