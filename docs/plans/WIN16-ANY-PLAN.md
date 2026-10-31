@@ -364,6 +364,23 @@ its table goes in the diary, so the reach is measured, not claimed.
       inside a DC handed to it in `wParam`.
     - Known and pinned: End at a soft break shows the caret at the start
       of the line below (one index for both places).
+    - [x] **Batch 3, the PIF Editor and the Task Manager** (SPEC.md
+      §124.22.12): `GetModuleHandle` and `GetProcAddress` on WIN16's own
+      modules by name (`W16PROCNAME`), `MapVirtualKey`, `GetCurPID`;
+      `GetWindow`, `GetDesktopHwnd`, `WindowFromDC` (and Windows 3.0's
+      reading of its ordinal), `SwitchToThisWindow`, and four calls that
+      answer 0. A dialog control of a class the program registered is
+      made and sent `WM_CREATE` before `WM_INITDIALOG`. `W16_MAXWND` 48 ->
+      80. Controls are drawn grey by their own `WS_DISABLED` only.
+      **Seen on QEMU (VGA)**: PIF Editor 3.0 in both modes, its Advanced
+      Options with the program's own shortcut-key control, Save As writing
+      a 545-byte `TEST.PIF`; Task Manager 3.0's Task List, closed by
+      Cancel.
+    - Known and pinned: the PIF Editor's Advanced Options is taller than
+      os8088's desktop, and its last row (the shortcut key) is below the
+      screen's edge. The window records live in WIN16's 64 KB data segment
+      (102 bytes each), so the next rise of `W16_MAXWND` should move them
+      out of it rather than spend more of it: 9,762 bytes of room are left.
     - **Found and left:** Calendar and Cardfile at once on CGA - the second
       is refused, "WIN16's library part could not be read", because each
       instance holds its own image, bss and library part. One instance

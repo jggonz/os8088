@@ -1026,13 +1026,204 @@ W16LIB w16g_getpixel
     and al, 15
     jmp .rgb
 
-; GetProcAddress (KERNEL.50) - args: +0 lpProcName, +4 hModule. NULL: the
-; C runtime's Pen Windows probe asks it of SM_PENWINDOWS' answer, which is 0
-; here, and a real lookup waits for a program that needs one (SPEC.md
-; 124.20.4)
+; WIN16's own modules' handles (SPEC.md 124.22.12): W16_HMOD + the W16M_*
+; id, paragraphs in the interrupt table, which no program's memory can be
+W16_HMOD equ 0x0020
+
+; GetModuleHandle (KERNEL.47) - args: +0 lpModuleName. A name, to its first
+; dot, is one of WIN16's modules (its W16_HMOD handle) or the program's own
+; (its instance, which every call here takes as its module too); a NULL
+; segment is a handle given, and is the program's. Anything else is 0: no
+; other module is loaded
+W16LIB w16k_getmodh
+    push si
+    push di
+    ICALL w16_args
+    les di, [es:bx]
+    mov ax, es
+    or ax, ax
+    jz .own
+    mov si, w16_modnames
+    xor dx, dx                      ; DL = the module's id
+.mod:
+    mov cl, [si]
+    or cl, cl
+    jz .prog
+    inc si
+    xor ch, ch
+    call w16_nmeq
+    jnc .ours
+    add si, cx
+    inc dl
+    jmp short .mod
+.ours:
+    mov ax, W16_HMOD
+    add al, dl
+    jmp short .out
+.prog:
+    mov si, w16_name                ; the program's, to its dot
+    xor cx, cx
+.len:
+    mov al, [si]
+    or al, al
+    jz .cmp
+    cmp al, '.'
+    je .cmp
+    inc si
+    inc cx
+    jmp short .len
+.cmp:
+    sub si, cx
+    xor ax, ax
+    call w16_nmeq
+    jc .out
+.own:
+    mov ax, [w16_dgroup]
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16_nmeq - ES:DI = a name ending in a NUL or a dot, DS:SI = CX upper-case
+; characters: CF=0 they are the name, case aside. Keeps every register
+w16_nmeq:
+    push ax
+    push cx
+    push si
+    push di
+    jcxz .end
+.c:
+    mov al, [es:di]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 0x20
+.u:
+    cmp al, [si]
+    jne .no
+    inc si
+    inc di
+    loop .c
+.end:
+    mov al, [es:di]
+    or al, al
+    jz .yes
+    cmp al, '.'
+    je .yes
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; GetProcAddress (KERNEL.50) - args: +0 lpProcName, +4 hModule. On one of
+; WIN16's modules, a function in w16api.inc's W16PROCNAME list, by name
+; (case aside) or by ordinal (a NULL segment): a far pointer to its stub, the
+; slot bound on the first ask. Anything else is NULL - the C runtime's Pen
+; Windows probe asks it of SM_PENWINDOWS' answer, which is 0 here (SPEC.md
+; 124.20.4), and a program's own DLLs are S18's
 W16LIB w16k_getproc
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    sub ax, W16_HMOD
+    jb .null
+    cmp ax, W16M_SHELL
+    ja .null
+    mov dl, al                      ; DL = the module's id
+    les di, [es:bx]
+    mov si, w16_pnames  ; XSEC-OK: read through cs:
+    xor bx, bx                      ; BX = the name's index, twice
+.ent:
+    mov al, [cs:si]
+    cmp al, 0xFF
+    je .null
+    cmp al, dl
+    jne .next
+    mov ax, es
+    or ax, ax
+    jnz .name
+    cmp di, [cs:si + 1]
+    je .hit
+    jmp short .next
+.name:
+    push si
+    push di
+    mov cl, [cs:si + 7]
+    xor ch, ch
+    add si, 8
+.c:
+    mov al, [es:di]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 0x20
+.u:
+    mov ah, [cs:si]
+    cmp ah, 'a'
+    jb .u2
+    cmp ah, 'z'
+    ja .u2
+    sub ah, 0x20
+.u2:
+    cmp al, ah
+    jne .ne
+    inc si
+    inc di
+    loop .c
+    cmp byte [es:di], 0
+.ne:
+    pop di
+    pop si
+    je .hit
+.next:
+    mov al, [cs:si + 7]
+    xor ah, ah
+    add si, ax
+    add si, 8
+    inc bx
+    inc bx
+    jmp short .ent
+.hit:
+    mov ax, [w16_pnslot + bx]
+    or ax, ax
+    jnz .stub
+    mov ax, [w16_nbind]             ; its first ask: a slot, as a fixup's
+    cmp ax, W16_NBIND
+    jae .null
+    inc word [w16_nbind]
+    mov [w16_pnslot + bx], ax
+    mov di, ax
+    shl di, 1
+    shl di, 1
+    mov cx, [cs:si + 3]             ; the argument bytes and the part
+    mov [w16_bind + di + W16B_ARGB], cx
+    mov cx, [cs:si + 5]
+    mov [w16_bind + di + W16B_PROC], cx
+.stub:
+    mov dx, ax                      ; our CS : w16_stubs + slot * 6, as the
+    shl ax, 1                       ;   loader's fixup answers it
+    add ax, dx
+    shl ax, 1
+    add ax, w16_stubs
+    mov dx, ds
+    jmp short .out
+.null:
     xor ax, ax
     xor dx, dx
+.out:
+    pop di
+    pop si
     ret
 
 ; w16_clipkids - BX = the DC's window: with WS_CLIPCHILDREN, each visible

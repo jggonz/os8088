@@ -1012,7 +1012,9 @@ w16d_focus:
     ret
 
 ; w16d_grey - AL = the COLOR_* a control's text is in: COLOR_GRAYTEXT if it
-; is disabled, else AL. Keeps the rest.
+; is disabled, else AL - its own WS_DISABLED, as Windows' controls read
+; IsWindowEnabled: a dialog disabled under a modal one takes no input
+; (w16_disabled) but its controls are not drawn grey. Keeps the rest.
 COLOR_WINDOWTEXT equ 8
 COLOR_HIGHLIGHT  equ 13
 COLOR_HIGHLIGHTTEXT equ 14
@@ -1023,8 +1025,8 @@ COLOR_WINDOWFRAME equ 6
 COLOR_BACKGROUND equ 1
 COLOR_SCROLLBAR  equ 0
 w16d_grey:
-    ICALL w16_disabled
-    jnc .out
+    test byte [bx + W16W_FLAGS], W16WF_DIS
+    jz .out
     mov al, COLOR_GRAYTEXT
 .out:
     ret
@@ -4235,10 +4237,17 @@ w16d_sibx:
     and al, W16WF_USED | W16WF_DYING
     cmp al, W16WF_USED
     jne .n
+    cmp dx, W16_HDESK               ; the desktop's: the top-levels
+    je .top
     test word [bx + W16W_STYLE + 2], WS_CHILD_HI
     jz .n
     cmp [bx + W16W_PARENT], dx
     jne .n
+    jmp short .cand
+.top:
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .n
+.cand:
     push dx
     mov dx, [bx + W16W_SEQ]
     or ah, ah
@@ -5043,8 +5052,29 @@ w16d_mkctl:
     stc
     ret
 
+; w16d_mkprog - a control of a class the program registered, from [w16_cw*]
+; (the class's procedure and brush among them) in the dialog [w16d_dlg]:
+; made, disabled if its style says, and its WM_CREATE owed - it is the
+; program's procedure, which w16d_initsend calls before WM_INITDIALOG, in
+; the controls' order (SPEC.md 124.22.12). CF=1 refused.
+w16d_mkprog:
+    or word [w16_cwstyle + 2], WS_CHILD_HI
+    mov ax, [w16d_hdlg]
+    mov [w16_cwpar], ax
+    ICALL w16_mkwnd                 ; BX = it
+    jc .out
+    test word [bx + W16W_STYLE + 2], WS_DISABLED_HI
+    jz .en
+    or byte [bx + W16W_FLAGS], W16WF_DIS
+.en:
+    or byte [bx + W16W_F2], W16W2_OWECR
+    clc
+.out:
+    ret
+
 ; w16d_mkitem - the item at [w16d_tseg]:[w16d_tp] made, [w16d_tp] moved past
-; it. CF=1 refused: a class WIN16 has not got (SPEC.md 124.13), or no room.
+; it. CF=1 refused: a class neither WIN16 nor the program has (SPEC.md
+; 124.13), or no room.
 w16d_mkitem:
     push es
     mov es, [w16d_tseg]
@@ -5087,7 +5117,22 @@ w16d_mkitem:
     ICALL w16_farname
     jc .refuse1
     ICALL w16_builtin               ; AL = the kind
-    jc .refuse1
+    jnc .bi
+    ICALL w16_findcls               ; ...or a class the program registered,
+    jc .refuse1                     ;   made as CreateWindow makes one
+    mov ax, bx                      ;   (SPEC.md 124.22.12)
+    sub ax, w16_cls
+    mov dl, W16C_SIZE
+    div dl
+    mov [w16_cwcls], al
+    mov ax, [bx + W16C_PROC]
+    mov [w16_cwproc], ax
+    mov ax, [bx + W16C_PROC + 2]
+    mov [w16_cwproc + 2], ax
+    mov ax, [bx + W16C_HBR]
+    mov [w16_cwhbr], ax
+    mov al, W16Q_PROG
+.bi:
     pop si
     mov es, [w16d_tseg]
 .kind:
@@ -5149,6 +5194,10 @@ w16d_mkitem:
     add ax, cx
     mov [w16_cwcy], ax
 .mk:
+    cmp byte [w16_cwkind], W16Q_PROG
+    jne .ctl
+    jmp w16d_mkprog
+.ctl:
     call w16d_mkctl
     jc .mkx
     mov ax, [w16d_icon]
@@ -5529,6 +5578,10 @@ w16d_make:
 ; w16d_initsend - BX = a dialog just made: WM_INITDIALOG, with the first
 ; control that takes Tab and [w16d_param], and w16d_init after it
 w16d_initsend:
+    call w16d_owecr                 ; a control's WM_CREATE first: it comes
+    jc .init                        ;   back here when it is answered
+    retf
+.init:
     ICALL w16_rec2hwnd
     mov [w16d_hdlg], ax
     mov [w16_sm_hwnd], ax
@@ -5553,6 +5606,85 @@ w16d_initsend:
     shr ax, 1
     mov si, w16d_init_c
     ICALL w16_sendwnd
+    retf
+
+; w16d_owecr - BX = a dialog just made: the first of its controls whose
+; WM_CREATE is owed (w16d_mkprog) sent it, with a CREATESTRUCT as
+; CreateWindow's (its creation parameters, name and class NULL), and
+; w16d_cc continues. CF=1 none is owed. Keeps BX.
+w16d_owecr:
+    push bx
+    ICALL w16_rec2hwnd
+    mov dx, ax                      ; DX = the dialog's HWND
+    mov bx, w16_wnd
+    mov cx, W16_MAXWND
+.w:
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .n
+    test byte [bx + W16W_F2], W16W2_OWECR
+    jz .n
+    cmp [bx + W16W_PARENT], dx
+    je .send
+.n:
+    add bx, W16W_SIZE
+    loop .w
+    pop bx
+    stc
+    ret
+.send:
+    and byte [bx + W16W_F2], ~W16W2_OWECR
+    push si
+    push di
+    push es
+    mov ax, dx                      ; the continuation's word: the dialog's
+    sub ax, W16_HWND0               ;   slot
+    shr ax, 1
+    shr ax, 1
+    mov si, w16d_cc_c
+    mov cx, W16_CSSIZE
+    ICALL w16_cbopen                ; ES:DI = the CREATESTRUCT, zeroed
+    mov ax, [w16_dgroup]
+    mov [es:di + 4], ax             ; hInstance
+    mov ax, [bx + W16W_MENU]
+    mov [es:di + 6], ax             ; hMenu: a child's ID
+    mov [es:di + 8], dx             ; hwndParent
+    mov ax, [bx + W16W_CY]
+    mov [es:di + 10], ax
+    mov ax, [bx + W16W_CX]
+    mov [es:di + 12], ax
+    mov ax, [bx + W16W_Y]
+    mov [es:di + 14], ax
+    mov ax, [bx + W16W_X]
+    mov [es:di + 16], ax
+    mov ax, [bx + W16W_STYLE]
+    mov [es:di + 18], ax
+    mov ax, [bx + W16W_STYLE + 2]
+    mov [es:di + 20], ax
+    mov [w16_sm_lp], di
+    mov [w16_sm_lp + 2], es
+    ICALL w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_CREATE
+    mov word [w16_sm_wp], 0
+    ICALL w16_sendgo
+    pop es
+    pop di
+    pop si
+    pop bx
+    clc
+    ret
+
+; w16d_cc - a control's WM_CREATE answered, CX = its dialog's slot: the next
+; one owed, then WM_INITDIALOG (w16d_initsend). An answer of -1 is not a
+; refusal here: the control stays, as nothing is left to unwind
+DCONT w16d_cc
+    ICALL w16_slot2rec
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .gone
+    cmp byte [bx + W16W_KIND], W16Q_DIALOG
+    jne .gone
+    jmp w16d_initsend
+.gone:
     retf
 
 ; w16d_init - WM_INITDIALOG answered (AX:DX), CX = the dialog's slot: an

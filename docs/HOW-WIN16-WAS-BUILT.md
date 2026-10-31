@@ -1893,3 +1893,36 @@ typing into the line above it and pulled back by a deletion; Calendar's
 notes wrapping; Notepad's Word Wrap command re-making its EDIT and the text
 following the window's edge, and Notepad without it still scrolling across.
 
+**The PIF Editor asks for a function by name.** It refused to start until
+`GetModuleHandle("KEYBOARD")` and `GetProcAddress(…, "MapVirtualKey")` both
+answered something. The export rows that would answer `GetProcAddress` live
+in the loader part, which is dropped once a program runs. So the names a
+program asks for at run time are a short list of their own, assembled into
+the library part with each one's binding copied from its export row. The
+first ask gives it a bind slot, exactly as an import's fixup would have.
+
+**Its Advanced button did nothing**, three times over, for three reasons. The
+dialog has 53 controls and WIN16 held 48 windows at most. With 80, the
+dialog still refused, because one of its controls is of a class the PIF
+Editor registered itself (`PifHKy`, the shortcut-key field), and a dialog
+template could only name WIN16's own classes. Such a control is now made as
+`CreateWindow` makes one, and its `WM_CREATE` (which is a call into the
+program, so it cannot be made inside the template's loop) is sent after the
+loop, before `WM_INITDIALOG`, control by control.
+
+**Grey behind every message box.** A modal dialog disables the window under
+it, and WIN16 drew that window's controls grey, because the same walk up
+the ancestors that decides input was deciding the colour. Windows draws a
+control grey only when the control itself is disabled.
+
+**The Task Manager** needed `GetWindow` and seven small calls. One of them,
+ordinal 117, is `WindowFromDC` in Windows 3.1, but the 3.0 Task Manager
+calls it with a window handle and treats the answer as a task. It answers
+both readings. Its list is empty here, and should be: the only top-level
+window in a WIN16 instance is the Task Manager's own.
+
+**What was seen.** On QEMU (VGA): the PIF Editor in Standard and 386
+Enhanced modes, its Advanced Options dialog, and Save As writing a 545-byte
+`.PIF`, which is the size Windows 3.0 writes; the Task Manager's Task List,
+and Cancel closing it.
+

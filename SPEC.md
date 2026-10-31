@@ -226518,8 +226518,11 @@ as `?`.
   dialog-class window asking for Windows' `DLGWINDOWEXTRA`, 30 bytes: that
   is 16 bytes more in each of the 48 window records, 768 of WIN16's bss.
 
-**Windows.** At most 48 (`W16_MAXWND`, S6: a dialog is a window and so is
-each of its controls; WinMine's Preferences is 20). An `HWND` is
+**Windows.** At most 80 (`W16_MAXWND`: a dialog is a window and so is
+each of its controls). It was 48 from S6, WinMine's Preferences being 20,
+until the PIF Editor's Advanced Options (§124.22.12) wanted 54 beside the
+23 its main dialog holds; the 32 more records are 3,264 bytes of WIN16's
+data segment. An `HWND` is
 `0x2000 + 4 × slot`, so it is never 0 and never a small integer that a
 program could confuse with something else.
 
@@ -226931,9 +226934,11 @@ drawn in the display's System font (§124.7). Each item is `x`, `y`, `cx`,
 `cy`, its ID (words), its style (a dword), its class (a byte `80h`-`85h`
 for BUTTON, EDIT, STATIC, LISTBOX, SCROLLBAR, COMBOBOX, or a string), its
 text (a string, or `FFh` and a word) and a count of extra bytes, skipped.
-A control of a class WIN16 has not got (SCROLLBAR, COMBOBOX, or one of
-the program's own) refuses the dialog: `DialogBox` answers −1 and
-`CreateDialog` NULL. The DIALOG's own class may be the program's (one
+A control of a class neither WIN16 nor the program has (COMBOBOX, until
+it is written) refuses the dialog: `DialogBox` answers −1 and
+`CreateDialog` NULL. A SCROLLBAR is §124.22.8's, and a class the program
+registered is made as `CreateWindow` makes one, its `WM_CREATE` sent before
+`WM_INITDIALOG` (§124.22.12). The DIALOG's own class may be the program's (one
 registered with `DLGWINDOWEXTRA`); a LISTBOX's height is inflated by its
 border and cut to whole items, as Windows cut it.
 
@@ -228339,6 +228344,41 @@ that fill drew a white box on the desktop outside any window.
 | `OpenComm` | `IE_HARDWARE` (-10): there is no serial port a Windows program may have. `SetCommState`, `GetCommState`, `WriteComm`, `CloseComm` and `FlushComm` answer -1, and `GetCommError` 0. Cardfile imports them to dial a card's number |
 | `SetWindowLong(hEdit, GWL_WNDPROC, proc)` | the subclass takes, and `GetWindowLong` answers the old procedure for `CallWindowProc`. Until S17 batch 3 **every** window word and long went to the wrong place: the HWND's lookup answered its slot in CX, where `GetWindowWord`, `SetWindowWord`, `GetWindowLong`, `SetWindowLong` and `SetClassWord` had already put the index, and `GetWindowText` its count. Cardfile's subclass of the card's EDIT wrote its procedure into the EDIT's own state instead; the lookup keeps CX now |
 | `WM_PAINT` with an HDC in `wParam` | a control painted inside the DC the program opened on it, cut to that DC's clip and `rcPaint`, as Wine's controls take the `hdc`. Cardfile's subclass calls `BeginPaint` on the card's EDIT itself and passes the message on with the DC; a control that opened its own would find the update region already taken, and draw nothing. With `wParam` 0, or a DC on another window, the control opens its own as before |
+
+#### 124.22.12 The PIF Editor's and the Task Manager's calls *(shipped in S17 batch 3)*
+
+The PIF Editor 3.0 asks for a function by NAME at start-up, and refuses to
+start without it: `GetModuleHandle("KEYBOARD")`, then
+`GetProcAddress(that, "MapVirtualKey")`, for its shortcut-key names.
+
+| call | answer |
+|---|---|
+| `GetModuleHandle(name)` | one of WIN16's modules, by its name to the first dot and case aside: `W16_HMOD` (20h) + its id, KERNEL 20h to SHELL 26h - paragraphs in the interrupt table, which no program's memory can be. The program's own name answers its instance, which every call here takes as its module too, and so does a NULL segment (a handle given). Anything else is 0: no other module is loaded |
+| `GetProcAddress(hModule, name)` | on one of WIN16's modules, a function in `w16api.inc`'s `W16PROCNAME` list, by name (case aside) or by ordinal (a NULL segment): a far pointer to its stub, the bind slot given out on the first ask, as an import's first fixup gives one. The export rows are the loader part's and it is dropped once the program runs (§124.18.7), so the list carries each name's binding into the library part; at most `W16_NPNMAX` (8) names, and today one, `KEYBOARD.MapVirtualKey`. Anything else is NULL, as it was (§124.20.4); a program's own DLLs are S18's |
+| `MapVirtualKey(code, type)` | 0: a virtual key's scan code, the first with that key; 1: a scan code's virtual key; 2: a virtual key's character unshifted - a digit or letter its own, Backspace, Tab, Enter, Esc and space theirs, and the punctuation keys' US characters. All of the US layout WIN16 reads keys in (§124.6) |
+| `GetCurPID` | 0, as Wine answers it |
+| a dialog control of a class the program registered | made from the class as `CreateWindow` makes one, and sent `WM_CREATE` - with a `CREATESTRUCT` of its instance, ID, parent, place, size and style; its name and class NULL - before the dialog's `WM_INITDIALOG`, in the controls' order. The PIF Editor's `PifHKy` (the shortcut key) is one. An answer of -1 does not refuse it: nothing is left to unwind by then |
+| `GetWindow(hWnd, cmd)` | `GW_HWNDFIRST`, `LAST`, `NEXT`, `PREV`: its siblings in Z order, which here is the order they were made (§124.13); a top-level's are the other top-levels, which are the desktop's children. `GW_OWNER`: a top-level's owner, 0 for a child. `GW_CHILD`: its first child, and the desktop's is the first top-level |
+| `GetDesktopHwnd()` | `GetDesktopWindow`'s answer |
+| `WindowFromDC(hDC)` | the window the open DC is on; the desktop for the desktop's DC. **The Task Manager 3.0 calls ordinal 117 with an HWND** and hands the answer to `IsWinOldApTask` as a task, which is not Windows 3.1's `WindowFromDC`: an HWND answers the instance, which stands for the task here |
+| `SwitchToThisWindow(hWnd, fRestore)` | brought to the front, as `BringWindowToTop`; os8088 does not minimize, so nothing is restored |
+| `IsWinOldApTask`, `ArrangeIconicWindows`, `CascadeChildWindows`, `TileChildWindows` | 0. There is no DOS box, no icon is ever on a Windows desktop here, and os8088 places its own windows |
+
+**A control is drawn grey by its own `WS_DISABLED` only**, as Windows'
+controls read `IsWindowEnabled`. A dialog under a modal one takes no input,
+which is still `w16_disabled`'s ancestor walk, but its controls stay black:
+until S17 batch 3 they were drawn grey behind every message box.
+
+**What the PIF Editor shows here.** Its window is the main dialog's size;
+Mode switches between the Standard and 386 Enhanced dialogs and resizes it;
+File > Save As writes a 545-byte `.PIF`, the size Windows 3.0's has.
+The Advanced Options dialog is 480 rows tall in the System font's units, and
+os8088's menu bar and dock leave less than that: its last row, the
+shortcut-key field, is below the screen's edge.
+
+**What the Task Manager shows here.** Its list is every visible top-level
+window without an owner but its own, and in one WIN16 instance there is
+none: os8088's other windows are not Windows windows. Cancel closes it.
 
 #### 124.22.5 The gate
 

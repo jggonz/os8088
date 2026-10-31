@@ -53,8 +53,9 @@ W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
 W16_MAXCLS   equ 8              ; classes (SPEC.md 124.8)
-W16_MAXWND   equ 48             ; windows: a dialog's controls are windows
-                                ;   (WinMine's Preferences is 20)
+W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
+                                ;   (WinMine's Preferences is 20, the PIF
+                                ;   Editor's Advanced 54 beside 23 open)
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16C_SIZE    equ 30             ; a class record
@@ -91,6 +92,7 @@ W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
 W16_NBIND    equ 384            ; bind slots: the distinct imports a program
                                 ;   may bind, each a stub (SPEC.md 124.19.1).
                                 ;   Paintbrush 3.1's 270 is the most measured
+W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
 W16_NFIXED   equ 4              ; ...slots 0-3 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
@@ -538,6 +540,7 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_lfn, 2           ;   segment, and the routine it calls
     ; --- S14: the bind table (SPEC.md 124.19.1) ---
     W16BSS w16_nbind, 2         ; slots given out
+    W16BSS w16_pnslot, 2 * W16_NPNMAX ; ...GetProcAddress's names', 0 none yet
     W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
     W16BSS w16_focus, 2         ; the window with the keyboard focus, 0 none
@@ -1544,6 +1547,43 @@ w16_exports:
     dw w16x_p_%[k]
 %assign k k + 1
 %endrep
+; GetProcAddress's names (w16api.inc's W16PROCNAME): each its module and
+; ordinal, its export row's binding in w16_bind's layout, then the name as a
+; pascal string; 0FFh ends them. The library part's, read through cs:
+section .w16dlg
+w16_pnames:
+%if W16NPN > W16_NPNMAX
+  %error "W16PROCNAME: more names than W16_NPNMAX"
+%endif
+%assign j 0
+%rep W16NPN
+  %assign w16f -1
+  %assign k 0
+  %rep W16NX
+    %if w16x_m_%[k] = w16pn_m_%[j] && w16x_o_%[k] = w16pn_o_%[j]
+      %assign w16f k
+    %endif
+    %assign k k + 1
+  %endrep
+  %if w16f < 0
+    %error "W16PROCNAME: no export row for that module and ordinal"
+  %endif
+    db w16pn_m_%[j]
+    dw w16pn_o_%[j]
+    db w16x_a_%[w16f]
+  %ifdef w16lib_%[w16x_p_%[w16f]]
+    db W16P_LIB
+  %else
+    db 0
+  %endif
+    dw w16x_p_%[w16f]
+  %xdefine w16pns w16pn_s_%[j]
+  %strlen w16pnl w16pns
+    db w16pnl, w16pns
+%assign j j + 1
+%endrep
+    db 0xFF
+section .w16ld
 w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
 %assign k 0
 %rep W16NF

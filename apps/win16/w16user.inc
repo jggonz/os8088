@@ -69,6 +69,8 @@ W16WF_DYING equ 32              ; DestroyWindow has it
 
 W16W2_TTL   equ 7               ; a second top-level's title buffer, + 1
 W16W2_NCDIRTY equ 16            ; its scroll bars are owed (SPEC.md 124.22.1)
+W16W2_OWECR equ 32               ; a dialog's control of the program's own class:
+                                ;   its WM_CREATE is owed (SPEC.md 124.22.12)
 W16W2_NSIZE equ 8               ; an overlapped window not yet sized: its
                                 ;   first ShowWindow sends WM_SIZE (124.8)
 

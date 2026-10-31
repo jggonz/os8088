@@ -576,6 +576,187 @@ W16LIB w16_ansm1
     cwd
     ret
 
+; MapVirtualKey (KEYBOARD.131) - args: +0 wMapType, +2 wCode. 0: a virtual
+; key's scan code, 1: a scan code's virtual key, 2: a virtual key's character
+; unshifted - all of the US layout WIN16's keys are read in (w16_vktab). 0
+; for what has none (SPEC.md 124.22.12)
+W16LIB w16kb_mapvk
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+    mov cx, [es:bx]
+    xor bx, bx
+    cmp cx, 1
+    je .s2v
+    ja .v2c
+    or ah, ah                       ; 0: the first scan code with that key
+    jnz .zero
+    or al, al
+    jz .zero
+.f:
+    cmp al, [w16_vktab + bx]
+    je .scan
+    inc bx
+    cmp bx, W16_NSCAN
+    jb .f
+    jmp short .zero
+.scan:
+    mov ax, bx
+    jmp short .out
+.s2v:
+    cmp ax, W16_NSCAN
+    jae .zero
+    mov bx, ax
+    mov al, [w16_vktab + bx]
+    xor ah, ah
+    jmp short .out
+.v2c:
+    cmp cx, 2
+    jne .zero
+    or ah, ah
+    jnz .zero
+    cmp al, '0'                     ; the digits and the letters are their
+    jb .ctl                         ;   own characters
+    cmp al, '9'
+    jbe .out
+    cmp al, 'A'
+    jb .zero
+    cmp al, 'Z'
+    jbe .out
+    mov bx, w16kb_vkch  ; XSEC-OK: read through cs:
+.t:
+    mov cx, [cs:bx]
+    or cl, cl
+    jz .zero
+    cmp al, cl
+    je .ch
+    inc bx
+    inc bx
+    jmp short .t
+.ch:
+    mov al, ch
+    jmp short .out
+.ctl:
+    cmp al, 0x08                    ; Backspace, Tab, Enter, Esc and space
+    je .out
+    cmp al, 0x09
+    je .out
+    cmp al, 0x0D
+    je .out
+    cmp al, 0x1B
+    je .out
+    cmp al, 0x20
+    je .out
+.zero:
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+w16kb_vkch:                         ; the other keys': virtual key, character
+    db 0x6A, '*', 0x6B, '+', 0x6D, '-', 0xBA, ';', 0xBB, '=', 0xBC, ','
+    db 0xBD, '-', 0xBE, '.', 0xBF, '/', 0xC0, '`', 0xDB, '[', 0xDC, '\'
+    db 0xDD, ']', 0xDE, "'", 0
+
+; GetWindow (USER.262) - args: +0 uCmd, +2 hWnd. GW_HWNDFIRST (0), LAST,
+; NEXT, PREV: its siblings in Z order, the order they were made (w16d_sibx)
+; - a top-level's are the other top-levels, the desktop's children; GW_OWNER
+; (4) a top-level's owner; GW_CHILD (5) its first child, and the desktop's
+; is the first top-level (SPEC.md 124.22.12)
+W16LIB w16u_getwindow
+    push si
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov ax, [es:bx + 2]
+    cmp cx, 5
+    je .child
+    cmp ax, W16_HDESK
+    je .zero
+    ICALL w16_hwnd2rec
+    jc .zero
+    cmp cx, 4
+    je .owner
+    ja .zero
+    mov dx, W16_HDESK               ; DX = whose children they are
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jz .k
+    mov dx, [bx + W16W_PARENT]
+.k:
+    mov si, [bx + W16W_SEQ]
+    mov al, 1
+    cmp cx, 2
+    je .sib
+    dec ax
+    cmp cx, 3
+    je .sib
+    xor si, si                      ; the first: the next after none
+    inc ax
+    jcxz .sib
+    dec si                          ; the last: the one before all
+    dec ax
+.sib:
+    call w16d_sibx
+    jc .zero
+    ICALL w16_rec2hwnd
+    jmp short .out
+.owner:
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .zero
+    mov ax, [bx + W16W_PARENT]
+    jmp short .out
+.child:
+    mov dx, ax
+    xor si, si
+    mov al, 1
+    jmp short .sib
+.zero:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop si
+    ret
+
+; WindowFromDC (USER.117) - args: +0 hDC: the window the open DC is on, the
+; desktop for the desktop's DC. Windows 3.0's Task Manager calls ordinal 117
+; with an HWND and hands the answer to IsWinOldApTask as a task: an HWND
+; answers the instance, which stands for the task here (SPEC.md 124.22.12)
+W16LIB w16u_wndfromdc
+    ICALL w16_args
+    mov ax, [es:bx]
+    cmp ax, W16_HDC
+    jne .desk
+    cmp byte [w16_dcon], 0
+    je .zero
+    mov bx, [w16_dcwnd]
+    ICALL w16_rec2hwnd
+    jmp short .out
+.desk:
+    cmp ax, W16_HDESKDC
+    jne .wnd
+    mov ax, W16_HDESK
+    jmp short .out
+.wnd:
+    ICALL w16_hwnd2rec
+    jc .zero
+    mov ax, [w16_dgroup]
+    jmp short .out
+.zero:
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+
+; SwitchToThisWindow (USER.172) - args: +0 fRestore, +2 hWnd: brought to the
+; front, as BringWindowToTop. os8088 does not minimize, so there is nothing
+; to restore
+W16LIB w16u_switchto
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+    ICALL w16_hwnd2rec
+    jc .out
+    ICALL w16_frontwnd
+.out:
+    xor ax, ax
+    ret
+
 section .text
 
 w16s_dir:    db ':\SYSTEM\APPDATA\WIN16', 0

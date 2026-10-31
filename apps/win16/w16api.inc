@@ -53,6 +53,22 @@ W16X_SIZE equ 7
 %assign W16NX W16NX + 1
 %endmacro
 
+; --- GetProcAddress's names (SPEC.md 124.22.12) ------------------------------
+; The export rows are the loader part's and it is dropped once the program
+; runs, so GetProcAddress on one of WIN16's own modules finds a function in
+; this list instead: a name a program asks for at run time rather than
+; importing. Each is an export row above as well, whose binding win16.asm
+; copies into the library part beside the name; the first ask gives it a
+; bind slot, as an import's first fixup would.
+%assign W16NPN 0
+%macro W16PROCNAME 3            ; module, ordinal, the name as Windows spells it
+%xdefine w16pn_m_%[W16NPN] %1
+%xdefine w16pn_o_%[W16NPN] %2
+%xdefine w16pn_s_%[W16NPN] %3
+%assign W16NPN W16NPN + 1
+%endmacro
+W16PROCNAME W16M_KEYBOARD, 131, 'MapVirtualKey'      ; PIF Editor's hot keys
+
 ;           module         ordinal  args  handler               the .spec line
 W16EXPORT W16M_KERNEL,     3,       0,  w16k_getversion     ; GetVersion()
 W16EXPORT W16M_KERNEL,     4,       6,  w16k_linit          ; LocalInit(word word word)
@@ -154,6 +170,17 @@ W16EXPORT W16M_USER,       203,     6,  w16_ans0            ; GetCommError(s_wor
 W16EXPORT W16M_USER,       205,     8,  w16_ansm1           ; WriteComm(s_word ptr s_word)
 W16EXPORT W16M_USER,       207,     2,  w16_ansm1           ; CloseComm(s_word)
 W16EXPORT W16M_USER,       215,     4,  w16_ansm1           ; FlushComm(s_word word)
+W16EXPORT W16M_KERNEL,     47,      4,  w16k_getmodh        ; GetModuleHandle(segstr)
+W16EXPORT W16M_KERNEL,     157,     4,  w16_ans0            ; GetCurPID(long)
+W16EXPORT W16M_KEYBOARD,   131,     4,  w16kb_mapvk         ; MapVirtualKey(word word)
+W16EXPORT W16M_KERNEL,     158,     2,  w16_ans0            ; IsWinOldApTask(word)
+W16EXPORT W16M_USER,       117,     2,  w16u_wndfromdc      ; WindowFromDC(word)
+W16EXPORT W16M_USER,       170,     2,  w16_ans0            ; ArrangeIconicWindows(word)
+W16EXPORT W16M_USER,       172,     4,  w16u_switchto       ; SwitchToThisWindow(word word)
+W16EXPORT W16M_USER,       198,     4,  w16_ans0            ; CascadeChildWindows(word word)
+W16EXPORT W16M_USER,       199,     4,  w16_ans0            ; TileChildWindows(word word)
+W16EXPORT W16M_USER,       262,     4,  w16u_getwindow      ; GetWindow(word word)
+W16EXPORT W16M_USER,       278,     0,  w16u_desktop        ; GetDesktopHwnd()
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put
