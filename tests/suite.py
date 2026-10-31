@@ -16411,6 +16411,18 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16fam", "soak", py("tests/win16fam.py"), 300.0,
+        "SPEC.md 124.22, WIN16-ANY-PLAN S17: the story's program families - "
+        "Notepad, Cardfile, Calendar, Clipboard, PIF Editor, Task Manager and "
+        "Character Map, and the 3.1 screen savers' setup dialogs - "
+        "Microsoft's, in build/win16/ only where the win16-reference skill put "
+        "them, on VGA and CGA under QEMU. Each alone: WIN16 says Running, its "
+        "window's title has the family's word, its client is not one colour, "
+        "Character Map's DS_SETFONT dialog fits the screen (124.22.17), and "
+        "it ends by its close box or by Esc",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=1500,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

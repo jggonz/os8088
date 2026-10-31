@@ -71,6 +71,8 @@ W16W2_TTL   equ 7               ; a second top-level's title buffer, + 1
 W16W2_NCDIRTY equ 16            ; its scroll bars are owed (SPEC.md 124.22.1)
 W16W2_OWECR equ 32               ; a dialog's control of the program's own class:
                                 ;   its WM_CREATE is owed (SPEC.md 124.22.12)
+W16W2_DFACE equ 128             ; a control of a DS_SETFONT dialog, or the
+                                ;   dialog: drawn in the dialog face (124.22.17)
 W16W2_OWEMI equ 64              ; an owner-drawn list or combo box: its
                                 ;   WM_MEASUREITEM is owed (SPEC.md 124.22.14)
 W16W2_NSIZE equ 8               ; an overlapped window not yet sized: its

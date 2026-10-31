@@ -379,7 +379,14 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_capn, 2          ; SM_CYCAPTION - 1: what CreateWindow takes off
     W16BSS w16_home, 2          ; the folder WIN16.O88 is in, and its volume
     W16BSS w16_homev, 1
-    W16BSS w16_face, 2          ; the System font part's segment, 0 = none
+    W16BSS w16_face, 2          ; the CURRENT face's segment, 0 = none: the
+                                ;   System font's, or the dialog face's while
+                                ;   a control of a DS_SETFONT dialog runs
+    W16BSS w16_sface, 2         ; the System font's (the part's start), and
+    W16BSS w16_dface, 2         ;   the dialog face after it (124.22.17)
+    W16BSS w16d_dfon, 1         ; 1 while a DS_SETFONT dialog is made
+    W16BSS w16_thalf, 1         ; 1: text's ink halved on 1bpp (grey text)
+    W16BSS w16d_dfsv, 2         ; ...and the face before it
     W16BSS w16_fpart, 1         ; ...which part, + 1
     W16BSS w16_tn, 2            ; TextOut's characters
     W16BSS w16_tnb, 2           ; ...the band's bytes a row
@@ -1138,6 +1145,8 @@ w16_freeprog:
     call op_drop
     mov byte [w16_fpart], 0
     mov word [w16_face], 0
+    mov word [w16_sface], 0
+    mov word [w16_dface], 0
 .out:
     ret
 
@@ -1178,9 +1187,31 @@ w16_facein:
     dec al
     call op_seg
     mov [w16_face], ax
+    mov [w16_sface], ax
     push es
+    push bx
+    push cx
     mov es, ax
+    mov bl, [es:W16F_COUNT]         ; the dialog face (124.22.17) is at the
+    xor bh, bh                      ;   paragraph after the System face's
+    shl bx, 1                       ;   last glyph
+    mov bx, [es:W16F_OFF - 2 + bx]
+    mov cl, [es:W16F_ADV - 1 + W16F_COUNT_N]
+    add cl, 7
+    shr cl, 1
+    shr cl, 1
+    shr cl, 1                       ; CL = its bytes a row
     mov al, [es:W16F_ROWS]
+    mul cl
+    add ax, bx
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    add ax, [w16_sface]
+    mov [w16_dface], ax
+    mov al, [es:W16F_ROWS]
+    pop cx
+    pop bx
     pop es
     xor ah, ah
     add ax, 3

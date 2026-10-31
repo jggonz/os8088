@@ -226931,10 +226931,10 @@ fixture, WinMine 2.9's About and Preferences, a `MessageBox`).
 **Templates.** The Windows 3.x `DLGTEMPLATE`: the style (a dword), the
 item count (a byte), `x`, `y`, `cx`, `cy` (words), the menu, the class and
 the caption (each a string, or `FFh` and a word), and, with `DS_SETFONT`, a
-point size and a face name that are read and not used: every dialog is
-drawn in the display's System font (§124.7), and laid out in its units -
-which a 3.1 program's `MS Sans Serif` 8 dialog finds wider than Windows'
-(§124.22.15). Each item is `x`, `y`, `cx`,
+point size and a face name. `MS Sans Serif` or `Helv` at 8 points makes the
+dialog and its controls the DIALOG FACE's (§124.22.17), in its units; any
+other font is read and not used, and that dialog is drawn in the display's
+System font (§124.7) in the System font's units. Each item is `x`, `y`, `cx`,
 `cy`, its ID (words), its style (a dword), its class (a byte `80h`-`85h`
 for BUTTON, EDIT, STATIC, LISTBOX, SCROLLBAR, COMBOBOX, or a string), its
 text (a string, or `FFh` and a word) and a count of extra bytes, skipped.
@@ -226947,8 +226947,9 @@ registered with `DLGWINDOWEXTRA`); a LISTBOX's height is inflated by its
 border and cut to whole items, as Windows cut it.
 
 **Units.** A dialog unit is a quarter of `cxBase` across and an eighth of
-`cyBase` down. `cxBase` is 8, the System font's average over the alphabet
-(429 / 52, rounded), and `cyBase` is the face's rows: **8 × 16 on VGA**,
+`cyBase` down. `cxBase` is 8, ((the System font's alphabet, 429) / 26 + 1)
+/ 2, and `cyBase` is the face's rows (a `DS_SETFONT` dialog's are the
+dialog face's, §124.22.17): **8 × 16 on VGA**,
 measured (the fixture's 180 × 110 dialog has a 360 × 220 client on
 Windows 3.0 and its EDIT lands on the unit grid), 8 × 12 on EGA and
 Hercules, 8 × 8 on CGA. `GetDialogBaseUnits` answers them and
@@ -228070,7 +228071,7 @@ makes and leaves, then writes a result file. The row reads that file's bytes
 off the floppy image on the host and checks every one, and its message box's
 line. The Notepad leg joins the row in S17.
 
-### 124.22 USER and GDI, the common half *(S17, docs/plans/WIN16-ANY-PLAN.md: batches 1-4 - Notepad; Calendar and Cardfile; the PIF Editor, the Task Manager and the Clipboard viewer; Character Map and the screen savers - shipped)*
+### 124.22 USER and GDI, the common half *(S17, docs/plans/WIN16-ANY-PLAN.md: batches 1-5 - Notepad; Calendar and Cardfile; the PIF Editor, the Task Manager and the Clipboard viewer; Character Map and the screen savers; the dialog face - shipped)*
 
 *As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and PIF
 Editor run.* What those six share is most of what Windows 3.x's USER and GDI
@@ -228499,10 +228500,10 @@ are pinned:
 
 - **The template asks for `MS Sans Serif` 8** (`DS_SETFONT`), whose dialog
   units on Windows 3.1's VGA are 7 × 13, measured off `w31-charmap`: its
-  348 × 118 dialog has a 609 × 192 client. WIN16 lays every dialog out in
-  the System font's 8 × 16 (§124.13), so Character Map's window is 696
-  pixels across, wider than the screen, and its buttons are past the right
-  edge. A dialog face for `DS_SETFONT` is the next batch.
+  348 × 118 dialog has a 609 × 192 client. Until batch 5 WIN16 laid it out in
+  the System font's 8 × 16, 696 pixels across with its buttons past the
+  screen's right edge; the dialog face (§124.22.17) makes it 618 across with
+  every control on the screen.
 - Characters past 7Eh draw as `?`: WIN16's System font has the ASCII range
   (§124.7).
 
@@ -228533,11 +228534,14 @@ on as the message. The savers hook it for F1. **Every other type is kept
 and answered, not called** (a journal, a keyboard or a `GetMessage` hook);
 the first program that needs one called is where it lands.
 
-**A disabled push button's caption is legible.** Windows 3.0's
+**A disabled control's caption is legible.** Windows 3.0's
 `COLOR_GRAYTEXT` is the button face's own grey, which would draw a disabled
 button's caption into its face; when the two are the same colour on the
 display, the caption is the button shadow's grey instead, as Windows'
-`GrayString` test made it legible. The savers' *Set Password* button is
+`GrayString` test made it legible. On a 1bpp display grey text is black
+with every other pixel taken out, a checkerboard fixed to the screen - the
+menus' rule (batch 5; before it a disabled caption was white on white
+there). The savers' *Set Password* button is
 disabled until Password Protected is checked.
 
 **What was seen.** On QEMU (VGA): each setup dialog - Starfield's warp
@@ -228550,6 +228554,34 @@ Password* and greying it again. Marquee's Format Text calls `COMMDLG`'s
 Calculator running, on QEMU's 640 KB: the launch shows nothing at all,
 neither a window nor a refusal. Two at once is §124.18.2's case; the third
 is open, to be measured and given its refusal.
+
+#### 124.22.17 The dialog face *(shipped in S17 batch 5)*
+
+Windows 3.x programs name a font in nearly every dialog template:
+`"Helv" 8` in Windows 3.0's own Calculator, Calendar, Cardfile, Clipboard,
+Control Panel, Notepad, PIF Editor and Task Manager, `"MS Sans Serif" 8` in
+3.1's Character Map and screen savers. Windows drew that font **bold** and
+laid the dialog out in its units, which on VGA are **7 × 13**, measured
+twice: Character Map 3.1's 348 × 118 template has a 609 × 192 client, and
+Control Panel 3.0's 200 × 158 Desktop dialog about 350 × 257. The bold
+alphabet is 375 pixels on VGA - `SSERIFE.FON`'s 323 and one a character for
+the emboldening - and ((375 / 26) + 1) / 2 = 7, the formula that gives the
+System font's 8.
+
+| | |
+|---|---|
+| the face | Wine's MS Sans Serif, `fonts/ms_sans_serif.sfd`'s 13 px strike at the commit §124.1 pins (LGPL-2.1-or-later, Huw D M Davies and Dmitry Timoshkov - the System font's authors), whose advances are `SSERIFE.FON`'s own, EMBOLDENED as Windows did: each row OR-ed with itself a pixel right, the advance one wider. Committed art, `apps/win16/fonts/dlg13.txt` (VGA), `dlg10.txt` (EGA and Hercules) and `dlg08.txt` (CGA), drafted by `tools/w16font.py dlgdraft` and THE SOURCE from then on |
+| metrics | VGA 13 rows, ascent 11, internal leading 2 - `SSERIFE.FON`'s 8 point face. EGA and Hercules 10 rows, ascent 8; CGA 8 rows, ascent 6: drafted from the 13 by the System font's row plan and **derived, not measured** - no Windows 3.1 EGA or CGA face is installed on the reference machine. `tmAveCharWidth` 6 (`SSERIFE.FON`'s 5, bold) |
+| where it is | in the System font's own part (§124.7.1), at the paragraph after its last glyph: one part and one claim carry both, and WIN16 finds the second from the first's own table. +1,721 bytes on VGA |
+| which dialogs | `DS_SETFONT` naming `MS Sans Serif` or `Helv`, case aside, at 8 points. `CLOCK`'s `Helv` 6, and every other face or size, is the System font's as before |
+| units | `cxBase` 7 on every adapter (the advances do not change with the rows), `cyBase` the dialog face's rows; `MapDialogRect` on such a dialog answers in them. `GetDialogBaseUnits` is the System font's, as Windows' was |
+| what draws in it | WIN16's own controls in such a dialog - a window flag (`W16W2_DFACE`) set when they are made from its template, and on a combo box's own list and edit - each message they handle (measuring, the caret, painting) in the dialog face; and the DC an owner-drawn control hands its owner with `WM_DRAWITEM`. The dialog window's own DC, and a program's `GetDC`, stay the System font's |
+
+**Not done, pinned:** `WM_SETFONT` and `WM_GETFONT` carry no font, and a
+program's `SelectObject` of a font changes nothing: a program that measures
+or draws text in the dialog's font itself (Character Map's status line) does
+it in the System font. `CreateFont` answering from the dialog face is S19's,
+with the font dialogs.
 
 #### 124.22.5 The gate
 

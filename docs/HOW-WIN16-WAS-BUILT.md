@@ -2021,3 +2021,77 @@ rest of each floppy free for the Windows programs a user copies onto it.
 They are 252 clusters used of 2,847 at 1.44MB and 129 of 354 at 360KB. The
 apps disks and `more720.img` no longer carry it; `emu360.img`, the
 everything set and the live media still do.
+
+## 2026-10-31 — S17, batch 5: the dialog face
+
+*As a user, Character Map fits on my screen.*
+
+**Nearly every dialog names a font.** Character Map's template asks for
+`MS Sans Serif` 8 with `DS_SETFONT`, and so do the 3.1 screen savers'.
+Windows 3.0's own programs ask for `Helv` 8, the same face under its older
+name. Windows laid such a dialog out in that font's units, not the System
+font's, and drew its controls' text in it. WIN16 had used the System font
+for both, so Character Map came out 696 pixels across and its buttons were
+past the screen's edge.
+
+**The units were measured, not looked up.** Windows 3.1 on the reference
+machine gave Character Map's 348 × 118 template a 609 × 192 client, which is
+7 × 13 dialog units. Control Panel 3.0's Desktop dialog, 200 × 158 units,
+measured about 350 × 257 on Windows 3.0: the same 7 × 13. The 7 needed an
+explanation, because `SSERIFE.FON`'s alphabet is 323 pixels and gives 6.
+Windows drew these dialogs **bold**: one more pixel per character makes the
+alphabet 375, and ((375 / 26) + 1) / 2 = 7, the same formula that gives the
+System font 8.
+
+**The face is Wine's.** Wine ships an MS Sans Serif as a FontForge source
+under the same licence and by the same authors as the System font WIN16
+already draws from, and its advances match `SSERIFE.FON`'s. `tools/w16font.py
+dlgdraft` reads its 13-pixel strike, emboldens each row (OR-ed with itself
+shifted one pixel right, the advance one wider), and writes art files in the
+format the System font uses. Then it plans rows for the smaller adapters the
+way the System font's were planned: 10 for EGA and Hercules, 8 for CGA. As
+with the System font, the drafted files are the source from then on. The
+first CGA draft had a 4-row x-height, and in bold the strokes ran into each
+other; 5 rows reads.
+
+**One part carries both faces.** The dialog face goes into each display's
+System font part, at the paragraph after the System face's last glyph.
+WIN16 finds it by reading the first face's own glyph table, so no new part,
+claim or header field was needed. The three parts grew by 1,721, 1,390 and
+1,168 bytes.
+
+**Choosing the face per control.** A dialog whose template names one of the
+two faces at 8 points has its controls flagged as they are made. Every
+message a flagged control handles (measuring, placing the caret, painting)
+switches WIN16's current face to the dialog face and back again. A combo box
+flags the list and the field it creates, and an owner-drawn control's
+`WM_DRAWITEM` DC is set to the dialog face as well, which is why Character
+Map's font list draws in it. Text a program draws itself is not affected: it
+would need `WM_SETFONT` and `SelectObject` of a real font, and those wait for
+`CreateFont` in S19.
+
+**Grey on a 1bpp display.** The last batch drew a disabled caption in the
+button shadow's grey. On CGA and Hercules that grey is black, so *Set
+Password* looked enabled. A disabled caption on a 1bpp display is now drawn
+through a checkerboard, half its pixels, which is how a mono screen shows
+grey everywhere else in os8088.
+
+**What was seen.** On QEMU's VGA, Character Map is 618 pixels across with
+every button on the screen and its font list drops in the dialog face; the
+Starfield setup dialog uses it too. On CGA, Character Map and Mystify use
+the 8-row face, and *Set Password*'s caption is half-drawn while it is
+disabled.
+
+**What is left.** The EGA, Hercules and CGA faces are derived, not measured:
+the reference machine has Windows on VGA only. The PIF Editor's Advanced
+Options names `Helv` 8, so it should now be shorter than the desktop; nobody
+has looked yet.
+
+**A row for the story.** `win16fam` opens each of S17's eleven targets on VGA
+and CGA, checks its title and that its client has something drawn in it,
+checks that Character Map's window is inside the screen, and closes it. It
+is registered and runs in the final pass with the rest.
+
+**What it cost.** The image grew by 159 bytes to 32,990, its bss by 8 to
+23,997, leaving 8,549 bytes of the 64 KB. The library part grew by 505 bytes
+to 55,642.

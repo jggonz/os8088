@@ -18907,11 +18907,17 @@ $(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88par
 # The System font, one part a display (SPEC.md 124.7.1): tools/w16font.py
 # builds each face from its committed art in apps/win16/fonts/, and they ride
 # in WIN16.O88 as lazy compressed parts in W16P_* order.
+# Each also carries the DIALOG FACE of its display after it (SPEC.md
+# 124.22.17, Wine's MS Sans Serif emboldened): dlg13 with VGA's, dlg10 with
+# EGA and Hercules', dlg08 with CGA's - one part and one claim for both.
 W16FACES := $(BUILD)/win16/sys16.bin $(BUILD)/win16/sys12.bin $(BUILD)/win16/sys08.bin
 
+$(BUILD)/win16/sys16.bin: apps/win16/fonts/dlg13.txt
+$(BUILD)/win16/sys12.bin: apps/win16/fonts/dlg10.txt
+$(BUILD)/win16/sys08.bin: apps/win16/fonts/dlg08.txt
 $(BUILD)/win16/sys%.bin: apps/win16/fonts/sys%.txt tools/w16font.py
 	@mkdir -p $(@D)
-	python3 tools/w16font.py build $< $@
+	python3 tools/w16font.py build $< $@ $(filter apps/win16/fonts/dlg%,$^)
 
 # ...and part 3 is the dialog manager and the controls (SPEC.md 124.13):
 # win16.asm assembles them after the image in `section .w16dlg vstart=0`, and

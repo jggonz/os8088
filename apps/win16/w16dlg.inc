@@ -249,14 +249,24 @@ w16k_freeprocinst:
 ; GetDialogBaseUnits (USER.243) - DX:AX = the System font's units: 8 across,
 ; its rows down (SPEC.md 124.13)
 w16u_dlgunits:
-    mov ax, 8
-    call w16_rowsn
-    mov dx, ax
+    mov dx, [w16_capn]              ; the System font's rows, whatever face
+    sub dx, 3                       ;   is current
     mov ax, 8
     ret
 
-; w16_rowsn - AX = the System font's rows. Keeps the rest.
+; w16_rowsn - AX = the current face's rows: the System font's, or the dialog
+; face's inside a DS_SETFONT dialog's control (SPEC.md 124.22.17). Keeps the
+; rest.
 w16_rowsn:
+    cmp word [w16_face], 0
+    je .sys
+    push es
+    mov es, [w16_face]              ; the CURRENT face's: a DS_SETFONT
+    mov al, [es:W16F_ROWS]          ;   dialog's controls are laid out and
+    xor ah, ah                      ;   drawn in the dialog face (124.22.17)
+    pop es
+    ret
+.sys:
     mov ax, [w16_capn]
     sub ax, 3
     ret
@@ -523,6 +533,20 @@ w16d_org:
 ; w16d_ctlproc - a control's procedure: BX = its record, [w16_sm_*] the
 ; message (the HWND filled in) -> DX:AX. Keeps BX, SI, DI.
 w16d_ctlproc:
+    test byte [bx + W16W_F2], W16W2_DFACE
+    jz w16d_ctlproc0
+    push word [w16_face]            ; a DS_SETFONT dialog's control: its
+    push ax                         ;   message handled in the dialog face,
+    mov ax, [w16_dface]             ;   its text measured and drawn in it
+    mov [w16_face], ax              ;   (SPEC.md 124.22.17)
+    pop ax
+    ; STKBALANCE-OK: push cs and a near call are a far call, and
+    ; w16d_ctlproc0 ends in retf
+    push cs
+    call w16d_ctlproc0
+    pop word [w16_face]
+    retf
+w16d_ctlproc0:
     push si
     push di
     xor ax, ax
@@ -772,6 +796,7 @@ w16d_popen:
 
 ; w16d_pclose - the DC w16d_popen opened, closed
 w16d_pclose:
+    mov byte [w16_thalf], 0
     ICALL w16_dcclose
     ret
 
@@ -808,8 +833,35 @@ w16d_fill:
     ret
 
 ; w16d_colors - AL = the text's COLOR_*, AH = its paper's -> [w16_tcol],
-; [w16_tpap]. Keeps every register.
+; [w16_tpap]. GREY TEXT that would vanish is made legible, as Windows'
+; GrayString test made it: on a 1bpp display it is black with every other
+; pixel taken out ([w16_thalf], the menus' rule), and on a colour one whose
+; COLOR_GRAYTEXT is the ground's own colour - Windows 3.0's, on a button's
+; face - it is the button shadow's grey. Keeps every register.
 w16d_colors:
+    mov byte [w16_thalf], 0
+    cmp al, COLOR_GRAYTEXT
+    jne .go
+    push ax
+    cmp byte [w16_mono], 0
+    je .col
+    pop ax
+    mov al, COLOR_WINDOWTEXT
+    mov byte [w16_thalf], 1
+    jmp short .go
+.col:
+    push cx
+    mov al, ah
+    ICALL w16_syscol                ; (AH = 0 after it)
+    mov cl, al
+    mov al, COLOR_GRAYTEXT
+    ICALL w16_syscol
+    cmp al, cl
+    pop cx
+    pop ax
+    jne .go
+    mov al, COLOR_BTNSHADOW
+.go:
     push ax
     push ax
     call w16d_syscol
@@ -1045,28 +1097,6 @@ w16d_grey:
     test byte [bx + W16W_FLAGS], W16WF_DIS
     jz .out
     mov al, COLOR_GRAYTEXT
-.out:
-    ret
-
-; w16d_greyon - AL = the text's COLOR_*, AH = the ground's: grey text on a
-; ground of the same colour - Windows 3.0's GRAYTEXT on a button's face -
-; is the button shadow's grey instead, as Windows' GrayString test makes it
-; legible. Keeps the rest.
-w16d_greyon:
-    cmp al, COLOR_GRAYTEXT
-    jne .out
-    push ax
-    push cx
-    mov al, ah
-    ICALL w16_syscol                ; (AH = 0 after it)
-    mov cl, al
-    mov al, COLOR_GRAYTEXT
-    ICALL w16_syscol
-    cmp al, cl
-    pop cx
-    pop ax
-    jne .out
-    mov al, COLOR_BTNSHADOW
 .out:
     ret
 
@@ -1707,7 +1737,6 @@ w16d_pushpaint:
     mov al, COLOR_BTNTEXT
     call w16d_grey
     mov ah, COLOR_BTNFACE
-    call w16d_greyon
     call w16d_colors
     mov ax, [w16d_l]                ; the four corners are the dialog's
     mov bx, [w16d_t]
@@ -5283,10 +5312,105 @@ w16d_tstr:
     inc si
     ret
 
+; w16d_dfchk - ES:SI = a DLGTEMPLATE: with DS_SETFONT naming "MS Sans Serif"
+; or "Helv" (Windows 3.0's name for it) at 8 points, the dialog and its
+; controls are made in the DIALOG FACE (SPEC.md 124.22.17) - [w16d_dfon] = 1
+; and [w16_face] the dialog face, put back by w16d_dfoff. Anything else is
+; the System font's, as every dialog was before. Keeps every register.
+w16d_dfchk:
+    mov byte [w16d_dfon], 0
+    test byte [w16d_dsty], DS_SETFONT
+    jz .ret
+    cmp word [w16_dface], 0
+    je .ret
+    push ax
+    push dx
+    push si
+    push di
+    add si, 13
+    call w16d_tstr                  ; the menu, the class, the caption
+    call w16d_tstr
+    call w16d_tstr
+    cmp word [es:si], 8             ; the point size
+    jne .out
+    add si, 2
+    mov di, w16d_dfn1   ; XSEC-OK: read through cs:
+    call w16d_dfname
+    je .yes
+    mov di, w16d_dfn2   ; XSEC-OK: read through cs:
+    call w16d_dfname
+    jne .out
+.yes:
+    mov byte [w16d_dfon], 1
+    mov ax, [w16_face]
+    mov [w16d_dfsv], ax
+    mov ax, [w16_dface]
+    mov [w16_face], ax
+.out:
+    pop di
+    pop si
+    pop dx
+    pop ax
+.ret:
+    ret
+
+; w16d_dfname - ES:SI = a name, CS:DI = one in capitals: ZF=1 the same, case
+; aside. Keeps all but AX, DI.
+w16d_dfname:
+    push si
+.c:
+    mov al, [es:si]
+    mov ah, [cs:di]
+    call w16d_fold
+    cmp al, ah
+    jne .out
+    inc si
+    inc di
+    or al, al
+    jnz .c
+.out:
+    pop si
+    ret
+
+w16d_dfn1: db 'MS SANS SERIF', 0
+w16d_dfn2: db 'HELV', 0
+
+; w16d_dfoff - a dialog made (or refused): back to the face before it, and
+; the dialog marked as the dialog face's. BX = the dialog when CF=0. Keeps
+; every register and the flags.
+w16d_dfoff:
+    pushf
+    cmp byte [w16d_dfon], 0
+    je .out
+    push ax
+    mov ax, [w16d_dfsv]
+    mov [w16_face], ax
+    pop ax
+    mov byte [w16d_dfon], 0
+    popf
+    pushf
+    jc .out
+    or byte [bx + W16W_F2], W16W2_DFACE
+.out:
+    popf
+    ret
+
 ; w16d_dux / w16d_duy - AX = dialog units across / down -> AX = pixels
 ; (SPEC.md 124.13: 8 / 4 across, the face's rows / 8 down). Keep the rest.
 w16d_dux:
+    cmp byte [w16d_dfon], 0
+    jne .dface
     sal ax, 1
+    ret
+.dface:
+    push cx                         ; the dialog face's unit: 7 a quarter
+    push dx                         ;   (SPEC.md 124.22.17)
+    mov cx, 7
+    imul cx
+    mov cx, 4
+    idiv cx
+    pop dx
+    pop cx
     ret
 w16d_duy:
     push cx
@@ -5317,6 +5441,10 @@ w16d_mkctl:
     mov [w16_cwpar], ax
     ICALL w16_mkwnd                 ; BX = it
     jc .out
+    cmp byte [w16d_dfon], 0         ; in a DS_SETFONT dialog: the dialog
+    je .sf                          ;   face's (SPEC.md 124.22.17)
+    or byte [bx + W16W_F2], W16W2_DFACE
+.sf:
     test word [bx + W16W_STYLE + 2], WS_DISABLED_HI
     jz .en
     or byte [bx + W16W_FLAGS], W16WF_DIS
@@ -5530,6 +5658,7 @@ w16d_mkdlg:
     mov al, [es:si + 4]
     xor ah, ah
     mov [w16d_cnt], ax
+    call w16d_dfchk                 ; the dialog face's units, if it asks
     mov ax, [es:si + 5]
     call w16d_dux
     mov [w16_cwx], ax
@@ -5859,6 +5988,7 @@ w16d_failed:
 ; -----------------------------------------------------------------------------
 w16d_make:
     call w16d_mkdlg                 ; BX = it
+    call w16d_dfoff
     pushf
     push bx
     mov bx, [w16d_rent]
@@ -6482,6 +6612,25 @@ w16u_checkradio_d:
 ; MapDialogRect (USER.103) - args: +0 lpRect, +4 hDlg
 w16u_mapdlgrect_d:
     ICALL w16_args
+    mov ax, [es:bx + 4]             ; a DS_SETFONT dialog's are the dialog
+    push es                         ;   face's units (SPEC.md 124.22.17)
+    push bx
+    ICALL w16_hwnd2rec
+    mov al, 0
+    jc .sf
+    test byte [bx + W16W_F2], W16W2_DFACE
+    jz .sf
+    inc ax
+.sf:
+    pop bx
+    pop es
+    mov [w16d_dfon], al
+    push word [w16_face]
+    or al, al
+    jz .f
+    mov ax, [w16_dface]
+    mov [w16_face], ax
+.f:
     les di, [es:bx]
     mov ax, [es:di]
     call w16d_dux
@@ -6495,6 +6644,8 @@ w16u_mapdlgrect_d:
     mov ax, [es:di + 6]
     call w16d_duy
     mov [es:di + 6], ax
+    pop word [w16_face]
+    mov byte [w16d_dfon], 0
     jmp w16d_zero
 
 ; GetNextDlgGroupItem (USER.227), GetNextDlgTabItem (USER.228) - args:

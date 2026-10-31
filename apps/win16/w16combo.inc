@@ -455,6 +455,11 @@ w16c_mkchild:
     mov [w16_cwtext + 2], ax
     ICALL w16_mkwnd
     jc .out
+    mov ax, [w16_face]              ; a combo box in the dialog face makes
+    cmp ax, [w16_sface]             ;   its list and edit in it (124.22.17)
+    je .sf
+    or byte [bx + W16W_F2], W16W2_DFACE
+.sf:
     push word [w16_sm_msg]
     push word [w16_sm_wp]
     push word [w16_sm_lp]
@@ -1947,6 +1952,11 @@ w16_odsend:
     jc .no
     xor al, al                      ; its whole client, then cut
     ICALL w16_dcopen
+    test byte [bx + W16W_F2], W16W2_DFACE
+    jz .fc
+    mov ax, [w16_dface]             ; a DS_SETFONT dialog's control hands its
+    mov [w16_face], ax              ;   owner a DC in the dialog face, as
+.fc:                                ;   Windows' had its font (124.22.17)
     mov ax, [w16_odrc]
     add ax, [w16_ox]
     cmp ax, [w16_cl]
@@ -2026,6 +2036,8 @@ w16_odsend:
 LCONT w16_odback
     push cx
     ICALL w16_dcclose
+    mov cx, [w16_sface]             ; the System font's again
+    mov [w16_face], cx
     pop cx
     cmp cl, W16OD_PEEK
     je .peek

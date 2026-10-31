@@ -63,6 +63,7 @@ W16F_FIRST  equ 6
 W16F_COUNT  equ 7
 W16F_ADV    equ 8
 W16F_OFF    equ 104             ; 8 + 95 advances, to even
+W16F_COUNT_N equ 95             ; the count every face has (tools/w16font.py)
 W16F_DEFCH  equ '?'             ; what a character the face has not is drawn as
 
 ; -----------------------------------------------------------------------------
@@ -1775,10 +1776,53 @@ w16_txtdraw:
     pop es
     ret
 
+; w16_bandhalf - the band's rows [w16_r0]..[w16_r1], [w16_tnb] bytes each,
+; ANDed with a checkerboard fixed to the screen (rows from [w16_ty]).
+; Keeps every register.
+w16_bandhalf:
+    push ax
+    push cx
+    push dx
+    push di
+    mov ax, W16_BS
+    mul word [w16_r0]
+    add ax, w16_gbuf
+    mov di, ax
+    mov dx, [w16_r0]
+.row:
+    mov al, 0x55                    ; the row's parity on the screen
+    push dx
+    add dx, [w16_ty]
+    test dl, 1
+    pop dx
+    jz .p
+    mov al, 0xAA
+.p:
+    push di
+    mov cx, [w16_tnb]
+.b:
+    and [di], al
+    inc di
+    loop .b
+    pop di
+    add di, W16_BS
+    inc dx
+    cmp dx, [w16_r1]
+    jle .row
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 ; w16_bandblit - the tail w16_txtdraw and w16_bmp share: blit the band's
 ; rows [w16_r0]..[w16_r1] from screen x [w16_rl] to [w16_rr], row [w16_ty]
 ; + [w16_r0], in [w16_tcol] on [w16_tpap]. The caller pushed ES.
 w16_bandblit:
+    cmp byte [w16_thalf], 0         ; grey text on 1bpp: every other pixel
+    je .full                        ;   of the ink, a checkerboard
+    call w16_bandhalf
+.full:
     ; --- the colours, and on a 1bpp display what lit means ---
     mov al, [w16_tcol]
     mov ah, [w16_tpap]

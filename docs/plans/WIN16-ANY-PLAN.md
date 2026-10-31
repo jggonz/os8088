@@ -260,7 +260,7 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Not yet run:** `win16file` (registered). It runs in the final pass
     (S25).
 
-- [ ] **S17: USER and GDI, the common half (R7).**
+- [x] **S17: USER and GDI, the common half (R7).**
   - *As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and
     PIF Editor run.*
   - The reach table's top missing list, in order:
@@ -414,14 +414,38 @@ its table goes in the diary, so the reach is measured, not claimed.
       Marquee (its owner-drawn colour list), Mystify (its shape list
       dropped and picked) and Flying Windows, and Password Protected
       enabling and greying *Set Password*.
-    - **Character Map is not done**: its template asks for `MS Sans Serif`
-      8 (`DS_SETFONT`), 7 x 13 dialog units on Windows 3.1's VGA against the
-      System font's 8 x 16, so its window is 696 pixels across and its
-      buttons are past the screen's right edge. **Batch 5 is a dialog face
-      for `DS_SETFONT`** - Wine's MS Sans Serif (LGPL), drafted per adapter
-      as the System font was (D4) - laying such a dialog out in its own
-      units and drawing its controls' text in it. `CreateFont` answers from
-      it too.
+    - [x] **Batch 5, the dialog face** (SPEC.md §124.22.17, and changes to
+      124.13, 124.22.15 and 124.22.16): a `DS_SETFONT` dialog naming
+      `MS Sans Serif` or `Helv` at 8 points is laid out in 7 x 13 units on
+      VGA (the dialog face's rows on EGA, Hercules and CGA) and its
+      controls draw their text in Wine's MS Sans Serif, emboldened as
+      Windows drew it - committed art drafted per adapter by
+      `tools/w16font.py dlgdraft` and carried in each System font part,
+      after the System face. A combo box's list and field, and the DC an
+      owner-drawn control hands its owner, use it too. On a 1bpp display
+      a disabled caption is drawn at half density, since both greys round
+      to black there.
+    - **Seen on QEMU**, VGA: Character Map 618 pixels across with every
+      button on the screen, its font list dropped in the dialog face, its
+      grid unchanged; Starfield's setup dialog in the dialog face. CGA:
+      Character Map and Mystify in the 8-row face, and *Set Password*'s
+      caption halved while it is disabled.
+    - Known and pinned (SPEC.md §124.22.17): `WM_SETFONT`/`WM_GETFONT`
+      carry no font and a program's `SelectObject` of a font changes
+      nothing, so text a program draws itself (Character Map's status
+      line) is still the System font's. `CreateFont` from the dialog face
+      moves to S19 with the font dialogs. The EGA, Hercules and CGA faces
+      are derived from the 13-row one and not measured against Windows,
+      whose reference machine has VGA only.
+    - What batch 5 costs, against batch 4: the image 32,990 bytes (+159),
+      its bss 23,997 (+8), 8,549 bytes of room left in the 64 KB; the
+      library part 55,642 (+505); the three face parts 3,919, 3,112 and
+      2,414 bytes (+1,721, +1,390, +1,168 - the dialog faces).
+    - **Not yet run:** `win16fam` (registered), S17's row for the program
+      families: each of the eleven targets opened, its title and its client
+      checked, Character Map's window inside the screen, and closed, on VGA
+      and CGA. It runs in the final pass (S25), with the look on all four
+      adapters and Notepad's scroll priced in calls.
     - [x] **WIN16 has its own disk** (SPEC.md §124.18.1, the owner's
       decision of 2026-10-31): `win16.img`, `win16-120.img`,
       `win16-720.img`, `win16-360.img`. WIN16.O88 had outgrown the 1.44MB
@@ -445,7 +469,8 @@ its table goes in the diary, so the reach is measured, not claimed.
       Marquee's Format Text is `COMMDLG.ChooseFont`, S19's.
     - Known and pinned: the PIF Editor's Advanced Options is taller than
       os8088's desktop, and its last row (the shortcut key) is below the
-      screen's edge. The window records live in WIN16's 64 KB data segment
+      screen's edge. Its template names `Helv` 8, so batch 5's dialog face
+      should make it shorter; that has not been looked at. The window records live in WIN16's 64 KB data segment
       (102 bytes each), so the next rise of `W16_MAXWND` should move them
       out of it rather than spend more of it: 9,762 bytes of room are left.
     - **Found and left:** Calendar and Cardfile at once on CGA - the second
