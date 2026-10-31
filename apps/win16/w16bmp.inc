@@ -523,6 +523,8 @@ W16LIB w16g_getobj
     mov ax, [es:bx + 6]
     mov cx, [es:bx + 4]
     les di, [es:bx]
+    call w16g_fontobj               ; a font (SPEC.md 124.24.4)
+    jnc .out
     push bx
     call w16_bmslot
     mov si, bx
@@ -571,6 +573,42 @@ W16LIB w16g_getobj
 .out:
     pop di
     pop si
+    ret
+
+; w16g_fontobj - AX = a handle, ES:DI -> CX bytes: if it is a font - the
+; dialog face's or a stock one - its LOGFONT there and AX = LF_SIZE (0 when
+; CX is short of one), CF=0; CF=1 it is not. Keeps the rest.
+w16g_fontobj:
+    push word [w16_face]
+    push ax
+    cmp ax, W16_HFDLG
+    jne .stock
+    mov ax, [w16_dface]
+    jmp short .face
+.stock:
+    sub ax, W16_STOCK + OEM_FIXED_FONT
+    jb .not
+    cmp ax, STOCK_LAST - OEM_FIXED_FONT
+    ja .not
+    cmp ax, DEFAULT_PALETTE - OEM_FIXED_FONT
+    je .not
+    mov ax, [w16_sface]
+.face:
+    mov [w16_face], ax
+    pop ax
+    xor ax, ax
+    cmp cx, LF_SIZE
+    jb .short
+    call w16g_lfill
+    mov ax, LF_SIZE
+.short:
+    pop word [w16_face]
+    clc
+    ret
+.not:
+    pop ax
+    pop word [w16_face]
+    stc
     ret
 
 ; BitBlt (GDI.34) - args: +0 dwRop, +4 ySrc, +6 xSrc, +8 hdcSrc, +10 nHeight,

@@ -34,11 +34,87 @@ W16LIB w16_ans1
 W16LIB w16u_setcurpos
     ret
 
-; CreateFontIndirect (GDI.57), CreateFont (GDI.56) - the System font: the only face there is, so
-; the one Windows' mapper would fall back to (SPEC.md 124.17.1)
+; CreateFontIndirect (GDI.57) - args: +0 lplf. CreateFont (GDI.56) - args:
+; +0 lpszFace, +4 fbPitchAndFamily, ... The request mapped onto WIN16's two
+; faces, as Windows' mapper would map it (SPEC.md 124.24.4)
+FF_SWISS equ 0x20
 W16LIB w16g_crefont
-    mov ax, W16_STOCK + SYSTEM_FONT
+    push si
+    ICALL w16_args
+    cmp word [w16_nargb], 4
+    jne .cf
+    les si, [es:bx]
+    mov al, [es:si + 17]            ; lfPitchAndFamily
+    add si, 18                      ; lfFaceName
+    jmp short .map
+.cf:
+    mov al, [es:bx + 4]
+    les si, [es:bx]
+.map:
+    call w16g_fontmap
+    xor dx, dx
+    pop si
     ret
+
+; w16g_fontmap - ES:SI = a face name (or NULL), AL = the pitch and family:
+; AX = the font, W16_HFDLG or the System font's. Keeps the rest.
+w16g_fontmap:
+    push bx
+    push dx
+    push di
+    mov dl, al
+    mov ax, W16_STOCK + SYSTEM_FONT
+    cmp word [w16_dface], 0         ; no dialog face: the System font's
+    je .out
+    mov bx, es
+    or bx, si
+    jz .family
+    cmp byte [es:si], 0
+    je .family
+    mov di, w16g_facename   ; XSEC-OK: read through cs:
+    call w16g_fcmp
+    je .out
+    mov di, w16g_dlgname    ; XSEC-OK: read through cs:
+    call w16g_fcmp
+    je .dlg
+    mov di, w16g_helv       ; XSEC-OK: read through cs:
+    call w16g_fcmp
+    je .dlg
+.family:
+    and dl, 0xF0
+    cmp dl, FF_SWISS
+    jne .out
+.dlg:
+    mov ax, W16_HFDLG
+.out:
+    pop di
+    pop dx
+    pop bx
+    ret
+
+; w16g_fcmp - ES:SI a name, CS:DI another: ZF=1 the same, case aside. Keeps
+; the rest.
+w16g_fcmp:
+    push ax
+    push si
+    push di
+.c:
+    mov al, [es:si]
+    mov ah, [cs:di]
+    call w16d_fold
+    cmp al, ah
+    jne .out
+    inc si
+    inc di
+    or al, al
+    jnz .c
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+w16g_helv:    db 'Helv', 0
 
 ; CreateDC (GDI.53) - an information context for the display: the desktop's
 ; DC, which GetDeviceCaps answers for and nothing draws on

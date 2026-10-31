@@ -130,6 +130,8 @@ W16B_PROC    equ 2
 W16B_MISS    equ 0x7F           ; W16B_PART: an import WIN16 lacks, PROC its
                                 ;   name's slot in w16_mtxt
 W16B_NORET   equ 0x80           ; ...ORed in: it never returns (the census)
+W16B_DCF     equ 0x40           ; ...ORed in: a text call, in the face of the
+                                ;   DC's font (SPEC.md 124.24.4)
 W16_NARENA   equ 6              ; global heap arenas at once (w16mem.inc)
 W16_NGH      equ 64             ; moveable global handles
 W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)
@@ -620,6 +622,8 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_cderr, 2         ; CommDlgExtendedError's answer (124.24.3)
     W16BSS w16_ofnwin, 2        ; the file dialog a GetOpenFileName waits on,
                                 ;   0 = none (SPEC.md 124.24.2)
+    W16BSS w16_chst, 4          ; the CHOOSEFONT or CHOOSECOLOR a dialog fills
+    W16BSS w16_chk, 1           ;   ...and which: 0 font, 1 colour (124.24.4)
     ; --- S14: the bind table (SPEC.md 124.19.1) ---
     W16BSS w16_nbind, 2         ; slots given out
     W16BSS w16_cbview, 2        ; SetClipboardViewer's window, 0 none
@@ -1304,6 +1308,10 @@ w16_facein:
 ; why. Keeps every other register.
 ; -----------------------------------------------------------------------------
 w16_pfetch:
+    push cx                         ; (op_fetch and the file calls keep none
+    push si                         ;   of these four: an SLCALL that fetched
+    push di                         ;   the library part arrived without its
+    push es                         ;   ES:SI, SPEC.md 124.24.4)
     push bx
     push dx
     push ax
@@ -1327,6 +1335,10 @@ w16_pfetch:
 .out:
     pop dx
     pop bx
+    pop es
+    pop di
+    pop si
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1803,6 +1815,9 @@ w16_exports:
     %if w16x_o_%[k] = 1 || w16x_o_%[k] = 137
       %assign w16pt w16pt | W16B_NORET  ; FatalExit, FatalAppExit
     %endif
+  %endif
+  %ifdef w16dcf_%[w16x_p_%[k]]
+    %assign w16pt w16pt | W16B_DCF
   %endif
     db w16pt
     dw w16x_p_%[k]

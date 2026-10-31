@@ -23,6 +23,8 @@
 W16_HDC     equ 0x3002          ; the one DC
 W16_STOCK   equ 0x3100          ; GetStockObject(i) = W16_STOCK + i
 W16_OBJ0    equ 0x3200          ; a made brush or pen, W16_OBJ0 + slot
+W16_HFDLG   equ 0x3120          ; the dialog face, as a font (SPEC.md 124.24.4):
+                                ;   one handle, shared like a stock object
 W16_NOCOL   equ 0xFF            ; a NULL brush or pen, or R2_NOP: draw nothing
 W16_XOR     equ 0xFE            ; ...or invert what is there (w16_ropcol)
 W16_GRAY    equ 0xFD            ; ...or the 50% checker a pattern brush is
@@ -33,7 +35,9 @@ W16K_PEN    equ 2
 
 WHITE_BRUSH equ 0
 BLACK_PEN   equ 7
+OEM_FIXED_FONT equ 10           ; the first stock font
 SYSTEM_FONT equ 13
+DEFAULT_PALETTE equ 15          ; ...and the one stock object among them that is not
 STOCK_LAST  equ 16
 PS_NULL     equ 5
 
@@ -808,8 +812,11 @@ w16g_delobj:
 .stock:
     sub ax, W16_STOCK
     jb .no
+    cmp ax, W16_HFDLG - W16_STOCK   ; the dialog face: shared, never freed
+    je .yes
     cmp ax, STOCK_LAST
     ja .no
+.yes:
     mov ax, 1
     ret
 .no:
@@ -866,6 +873,8 @@ w16g_select:
     je .no
     cmp dx, STOCK_LAST
     jbe .swap                       ; 10-16 fonts (and the palette)
+    cmp dx, W16_HFDLG - W16_STOCK   ; ...and the dialog face (124.24.4)
+    je .swap
 .no:
     xor ax, ax
     ret

@@ -2233,3 +2233,62 @@ all start.
 **What it cost.** The image grew by 198 bytes to 34,008 and its bss by 12,
 leaving 6,318 bytes of the 64 KB. Part 9 is 642 bytes, and the library part
 is unchanged.
+
+## 2026-10-31 — S19, batch 2: the font dialog, and a font a program makes
+
+*As a user, Clock's Set Font and Marquee's Format Text open a font dialog,
+and the text is drawn in the face I chose.*
+
+**Two faces, so a short list.** WIN16 has the display's System font and,
+since S17, the dialog face, Wine's MS Sans Serif drawn bold. `ChooseFont`
+is a WIN16 dialog listing those two with OK and Cancel. It is built in part
+9 from the same pieces MessageBox is built from: a dialog window, a static
+label, a list box and two push buttons, run in the dialog manager's modal
+loop. One new dialog flag, `WDF_CHOOSE`, makes the loop end on OK or Cancel
+instead of on the list box's first notification. On OK, the list's
+selection is written into the program's `CHOOSEFONT` and `LOGFONT` before
+the dialog closes. `ChooseColor` is the same dialog with the sixteen colours
+listed by name. Names rather than swatches let it work unchanged on CGA and
+Hercules.
+
+**A font a program makes.** `CreateFont` used to answer the System font
+whatever was asked. It now maps the request the way Windows' mapper would:
+`MS Sans Serif` or `Helv` by name, or any Swiss-family request, gets the
+dialog face, and everything else gets System. The dialog face is a single
+handle shared like a stock object. The harder part was making a selected
+font matter without letting it leak into WIN16's own drawing, because
+WIN16's menus, controls and message boxes all read the same "current face"
+word. So nine text calls carry a flag in their export row: `TextOut`,
+`ExtTextOut`, `DrawText`, `TabbedTextOut`, `GetTabbedTextExtent`,
+`GetTextExtent`, `GetTextMetrics`, `GetTextFace` and `GetCharWidth`. For a
+flagged call only, the gate swaps the face in and back out again. A new
+check in `t_w16xsec` holds the flag and the list in step.
+
+**A bug the new caller found.** The first look had CDLG.EXE ask to begin
+at "Helv" and be shown System. The mapper was right when `CreateFont`
+called it and wrong when part 9 called it. Attaching QEMU's gdb stub to the
+running machine and breaking in the mapper showed the library part's
+segment was 0. Nothing in that program had called into the library part
+yet, so part 9's call was the one that fetched it. `w16_pfetch` promised to
+keep every register but AX; it kept BX and DX, and the disk read under it
+clobbered ES, SI, CX and DI. An SLCALL that happened to be the first one
+lost its ES:SI. `w16_pfetch` keeps all of them now, which also mends every
+other caller that relied on its promise.
+
+**What was seen**, on QEMU's VGA:
+
+- **Clock 3.1:** Settings › Set Font opens *Font* with MS Sans Serif
+  selected, mapped from Clock's own font. Choosing System and OK redraws the
+  digital time in System's taller cells.
+- **Marquee 3.1:** Format Text opens *Font* with System selected, mapped
+  from its Times New Roman. A double-click on MS Sans Serif closes it, and
+  the setup dialog is frontmost again.
+- **CDLG.EXE, the new fixture:** both dialogs answer TRUE with Enter. The
+  message box reads `font 1 MS Sans Serif 80; colour 1 0000FF; face MS Sans
+  Serif 13`. With Cancel, it reads `font 0` and the "Helv" the program put
+  in, and the colour dialog preselects Red for `RGB(255, 0, 0)`.
+- **CGA:** the font dialog fits the 200-line screen.
+
+**What it cost.** The image grew by 79 bytes to 34,087 and its bss by 5,
+leaving 6,234 bytes. The library part grew by 354 bytes to 58,068, and part
+9 grew by 1,141 to 1,783.

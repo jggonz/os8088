@@ -16435,6 +16435,19 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/win16/W16DLL.DLL")),
+    Row("win16cdlg", "soak", py("tests/win16cdlg.py"), 120.0,
+        "SPEC.md 124.24, WIN16-ANY-PLAN S19: COMMDLG. CDLG.EXE (`make "
+        "win16fixtures`, tests/win16/cdlg.c) waits in ChooseFont and in "
+        "ChooseColor with WIN16's Font and Color dialogs up, OK in each; its "
+        "MessageBox must say both answered TRUE, Helv mapped to MS Sans Serif "
+        "8 point, red's COLORREF, and the font made from it selected into a "
+        "window's DC answering GetTextFace MS Sans Serif and tmHeight 13. "
+        "Where the win16-reference skill put them: Notepad 3.1's File Open "
+        "opens os8088's chooser and Esc is seen as a Cancel (124.24.2), and "
+        "Marquee 3.1's Format Text opens Font and carries on after OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=900,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

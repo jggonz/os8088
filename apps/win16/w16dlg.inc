@@ -4431,6 +4431,8 @@ IDCANCEL    equ 2
 DC_HASDEFID equ 0x534B
 WDF_MSGBOX  equ 4               ; WD_FL: MessageBox's, which ends on any
                                 ;   WM_COMMAND
+WDF_CHOOSE  equ 8               ; ...ChooseFont's or ChooseColor's, which ends
+                                ;   on OK or Cancel (SPEC.md 124.24.4)
 
 ; --- siblings, in the order they were made (W16W_SEQ, Windows' Z order) ------
 
@@ -5286,6 +5288,15 @@ DCONT w16d_mcont
 DCONT w16d_mfin
     xor dx, dx
     retf
+
+; w16d_modrun - BX = a modal dialog part 9 built, [w16d_param] set (SPEC.md
+; 124.24.4): run as MessageBox's is. Its answer, or the call left waiting
+w16d_modrun:
+    ; STKBALANCE-OK: push cs and a near call are a far call, and
+    ; w16d_initsend ends in retf (DTHUNK's shape)
+    push cs
+    call w16d_initsend
+    ret
 
 ; =============================================================================
 ; Making a dialog
@@ -6795,6 +6806,8 @@ w16d_ddef:
 .nsdef:
     cmp cx, WM_COMMAND
     jne .ncmd
+    test byte [bx + WD_FL], WDF_CHOOSE
+    jnz .choose
     test byte [bx + WD_FL], WDF_MSGBOX
     jz .zero
     mov ax, [w16_sm_wp]             ; a message box ends on its button
@@ -6817,6 +6830,33 @@ w16d_ddef:
     ICALL w16_hidewnd
 .zero:
     jmp w16d_zero
+.choose:                            ; ChooseFont, ChooseColor (124.24.4):
+    mov ax, [w16_sm_wp]             ;   Cancel answers FALSE; OK, or a face
+    cmp ax, IDCANCEL                ;   double-clicked, fills the program's
+    je .cancel                      ;   structure and answers TRUE
+    cmp ax, IDOK
+    je .pick
+    cmp ax, W16C_LIST
+    jne .zero
+    cmp word [w16_sm_lp + 2], LBN_DBLCLK
+    jne .zero
+.pick:
+    push bx
+    ICALL w16_rec2hwnd
+    mov [w16d_hdlg], ax
+    mov ax, W16C_LIST
+    call w16d_item                  ; BX = the list
+    mov ax, -1
+    jc .nolist
+    mov word [w16_sm_msg], LB_GETCURSEL
+    ICALL w16_intproc
+.nolist:
+    ICALL w16c_chdone_c
+    pop bx
+    jmp .end
+.cancel:
+    xor ax, ax
+    jmp .end
 .ncmd:
     cmp cx, WM_INITDIALOG
     je .zero

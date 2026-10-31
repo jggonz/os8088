@@ -228578,10 +228578,9 @@ System font's 8.
 | what draws in it | WIN16's own controls in such a dialog - a window flag (`W16W2_DFACE`) set when they are made from its template, and on a combo box's own list and edit - each message they handle (measuring, the caret, painting) in the dialog face; and the DC an owner-drawn control hands its owner with `WM_DRAWITEM`. The dialog window's own DC, and a program's `GetDC`, stay the System font's |
 
 **Not done, pinned:** `WM_SETFONT` and `WM_GETFONT` carry no font, and a
-program's `SelectObject` of a font changes nothing: a program that measures
-or draws text in the dialog's font itself (Character Map's status line) does
-it in the System font. `CreateFont` answering from the dialog face is S19's,
-with the font dialogs.
+program's `SelectObject` of a font changed nothing until S19: since
+§124.24.4, a font a program makes in MS Sans Serif or Helv is the dialog
+face, and the program's own text calls draw in it while it is selected.
 
 #### 124.22.5 The gate
 
@@ -228813,7 +228812,7 @@ they call:
 
 S19 lands in batches: batch 1 is the second library part, COMMDLG's file
 dialogs and the calls that answer "not available", and SHELL's drag calls.
-Batch 2 is `ChooseFont`, `ChooseColor` and `CreateFont`; batch 3 the
+Batch 2 is `ChooseFont`, `ChooseColor` and `CreateFont` (§124.24.4); batch 3 the
 registration database and OLE's answers; batch 4 LZEXPAND and VER, the
 installer's core (S24).
 
@@ -228886,3 +228885,98 @@ gone before the answer. Gone without an answer is a Cancel.
 | `GetFileTitle` (COMMDLG.27) | the name part of a path, into the buffer; 0, or the size wanted when the buffer is short |
 | `DragAcceptFiles`, `DragFinish` (SHELL.9, 12) | nothing: nothing is ever dropped on a Windows program here |
 | `DragQueryFile`, `DragQueryPoint` (SHELL.11, 13) | 0 |
+
+#### 124.24.4 ChooseFont, ChooseColor and a font a program makes *(S19 batch 2)*
+
+WIN16 has two faces (§124.22.17): the display's **System** font and the
+**dialog face**, Wine's MS Sans Serif drawn bold. `CreateFont` and the font
+dialog choose between those two and nothing else, and every size of either is
+its one strike.
+
+**A font a program makes.** `CreateFont` (GDI.56) and `CreateFontIndirect`
+(GDI.57) map the request as Windows' mapper would map it onto those two:
+
+| the request | the font |
+|---|---|
+| `lfFaceName` `System` | the System font, `SYSTEM_FONT`'s stock handle |
+| `lfFaceName` `MS Sans Serif` or `Helv`, case aside | the dialog face |
+| any other face, or none: `lfPitchAndFamily`'s family `FF_SWISS` | the dialog face, the Swiss family's raster face |
+| ...any other family | the System font |
+
+The dialog face is one handle, `W16_HFDLG`, made once and shared like a stock
+object: `DeleteObject` on it answers TRUE and frees nothing. A machine whose
+System font part has no dialog face after it (§124.22.17) maps every request
+to the System font. The height, width, weight, italic, underline and the rest
+of the request change nothing.
+
+**The DC's font picks the face of the program's text calls.** Once the
+dialog face is selected into the window's DC, `TextOut`, `ExtTextOut`,
+`GetTextExtent`, `GetTextMetrics`, `GetTextFace`, `GetCharWidth`,
+`DrawText`, `TabbedTextOut` and `GetTabbedTextExtent` measure and draw in it.
+An export row carries the flag `W16B_DCF` (40h in its part byte, beside
+`W16B_NORET`), and the gate swaps `[w16_face]` to the dialog face around
+that call only, when the DC's font is `W16_HFDLG` and the DC came with the
+System font. A DC that came in the dialog face (an owner-drawn control's in a
+`DS_SETFONT` dialog, §124.22.17) keeps it, whatever font is selected. Nothing
+else changes face with the DC: WIN16's menus, its controls and its message
+boxes draw in their own. `GetObject` on a font (the dialog face's handle, or
+a stock font) fills a `LOGFONT` in the same way `EnumFontFamilies` does. A
+count short of the 50 bytes of a `LOGFONT` answers 0 and fills nothing.
+
+**`ChooseFont(lpcf)`** (COMMDLG.15) opens a WIN16 dialog titled *Font*. It
+is a list of the faces WIN16 has, *MS Sans Serif, 8 point* and *System,
+10 point*, with OK and Cancel. A double-click on a face is OK. The program
+waits in the call, as it waits in `DialogBox`:
+
+| `CHOOSEFONT` | |
+|---|---|
+| `Flags` `CF_INITTOLOGFONTSTRUCT` | the face `lpLogFont` maps to (above) is selected to begin with; otherwise the first face |
+| `CF_TTONLY`, `CF_SCREENFONTS`, `CF_PRINTERFONTS`, `CF_EFFECTS`, `nSizeMin`, `nSizeMax` | not used: the list is the same two faces whatever is asked. No TrueType font exists for `CF_TTONLY` to keep, and leaving the list empty would leave the program nothing it could use |
+| `CF_ENABLEHOOK`, `CF_ENABLETEMPLATE` | not honoured, as in §124.24.2 |
+| `lpLogFont`, coming out | the chosen face's `LOGFONT`, as `GetObject` gives it |
+| `iPointSize` | 80 or 100: the size Windows gives the face, times ten |
+| `nFontType` | `SCREEN_FONTTYPE` and `BOLD_FONTTYPE` (2100h): both faces are raster faces drawn bold |
+| `rgbColors`, `lpszStyle` | left as they were |
+
+**`ChooseColor(lpcc)`** (COMMDLG.5) is the same dialog, titled *Color*, with
+a list of Windows' sixteen colours by name. Names rather than swatches let it
+work the same on all four adapters (§39). `CC_RGBINIT` selects the colour
+nearest `rgbResult` to begin with. OK writes the chosen colour's `COLORREF`
+to `rgbResult`. `lpCustColors` is neither read nor written.
+
+Either call answers TRUE for OK and FALSE for Cancel, with
+`CommDlgExtendedError` 0. If WIN16 cannot build the dialog, the call answers
+FALSE with `CDERR_DIALOGFAILURE`. The dialog is laid out in the System
+font, as a message box is (§124.18.4), and is built in part 9. It runs in
+the dialog manager's modal loop: a dialog flag, `WDF_CHOOSE`, ends it on OK
+or Cancel rather than on any `WM_COMMAND`. Before it ends, the list's
+selection is written into the program's structure.
+
+**Not done, pinned:** `EnumFonts` and `EnumFontFamilies` still enumerate the
+System font alone (§124.22.15). A program reaches the dialog face by naming
+it, by asking for the Swiss family, or through `ChooseFont`. A sample of the
+face is not shown in the dialog, and there are no style or size lists.
+
+#### 124.24.5 The gate
+
+**`win16cdlg`** (soak, QEMU, VGA; `make win16fixtures`; a SKIP without its
+fixture):
+
+- **CDLG.EXE** (`tests/win16/cdlg.c`) waits in `ChooseFont` with a window
+  titled *Font* up, and then in `ChooseColor` with *Color* up. Enter is OK
+  in each. Its message box, read off the program's stack, must say:
+  - both calls answered TRUE;
+  - `Helv` came back as MS Sans Serif at 8 points;
+  - the colour is red's `COLORREF`;
+  - the font made from that `LOGFONT`, selected into a window's DC, answers
+    `GetTextFace` *MS Sans Serif* and `tmHeight` 13.
+- **Notepad 3.1**, where the win16-reference skill put it: Alt+F O opens
+  os8088's chooser and the program waits in `GetOpenFileName`. Esc closes
+  the chooser. WIN16's tick sees the Cancel, Notepad no longer waits, and
+  `CommDlgExtendedError`'s word is 0.
+- **Marquee 3.1's setup dialog**, where it is present: *Format Text* opens
+  *Font*, and after OK the program no longer waits in `ChooseFont`.
+
+Opening a file and Save As through the chooser were seen on the glass in
+batch 1 (the plan's S19 record). The row does not repeat them, because
+picking a file in the chooser from a script is §38's own rows' business.

@@ -262,6 +262,19 @@ W16EXPORT W16M_SHELL,      9,       4,  w16k_gnotify        ; DragAcceptFiles(wo
 W16EXPORT W16M_SHELL,      12,      2,  w16k_gnotify        ; DragFinish(word)
 W16EXPORT W16M_SHELL,      11,      10, w16_ans0            ; DragQueryFile(word s_word ptr s_word)
 W16EXPORT W16M_SHELL,      13,      6,  w16_ans0            ; DragQueryPoint(word ptr)
+W16EXPORT W16M_COMMDLG,    15,      4,  w16c_choosefont     ; ChooseFont(segptr)
+W16EXPORT W16M_COMMDLG,    5,       4,  w16c_choosecol      ; ChooseColor(ptr)
+; the text calls that draw or measure in the face of the DC's font (SPEC.md
+; 124.24.4): their rows carry W16B_DCF
+%define w16dcf_w16g_textout
+%define w16dcf_w16g_exttext
+%define w16dcf_w16g_textext
+%define w16dcf_w16g_textmet
+%define w16dcf_w16g_textface
+%define w16dcf_w16g_charwidth
+%define w16dcf_w16u_drawtext
+%define w16dcf_w16u_tabtext
+%define w16dcf_w16u_tabext
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put

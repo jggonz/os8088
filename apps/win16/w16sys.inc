@@ -1840,29 +1840,7 @@ W16LIB w16g_enumfam
     xor ax, ax
     mov cx, LF_SIZE + NTM_SIZE
     ICALL w16_cbopen                ; ES:DI = the LOGFONT, then the metrics
-    push es
-    mov es, [w16_face]              ; LOGFONT: its height and width
-    mov al, [es:W16F_ROWS]
-    xor ah, ah
-    mov cl, [es:W16F_AVG]
-    xor ch, ch
-    pop es
-    mov [es:di], ax                 ; lfHeight
-    mov [es:di + 2], cx             ; lfWidth
-    mov word [es:di + 8], 700       ; lfWeight: bold
-    mov word [es:di + 14], 0x0201   ; lfOutPrecision OUT_STRING_PRECIS,
-    mov word [es:di + 16], 0x2201   ;   lfClipPrecision CLIP_STROKE_PRECIS,
-    push di                         ;   lfQuality DRAFT, VARIABLE_PITCH |
-    add di, 18                      ;   FF_SWISS; lfFaceName
-    mov si, w16g_facename   ; XSEC-OK: read through cs:
-.nm:
-    mov al, [cs:si]
-    mov [es:di], al
-    inc si
-    inc di
-    or al, al
-    jnz .nm
-    pop di
+    call w16g_lfill
     push di
     add di, LF_SIZE
     ICALL w16_tmfill                ; the TEXTMETRIC; the rest 0
@@ -1892,8 +1870,63 @@ W16LIB w16g_enumfam
 
 w16g_sysname: db 'SYSTEM', 0
 
-; GetTextFace (GDI.92) - args: +0 lpFaceName, +4 nCount, +6 hDC: "System"
-; and its NUL, cut to the count; its length
+; w16g_lfill - ES:DI -> LF_SIZE bytes: the LOGFONT of the face in [w16_face]
+; (EnumFontFamilies', GetObject's and ChooseFont's, SPEC.md 124.24.4). Keeps
+; every register.
+w16g_lfill:
+    push ax
+    push cx
+    push si
+    push di
+    push di
+    mov cx, LF_SIZE / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop di
+    push es
+    mov es, [w16_face]              ; its height and width
+    mov al, [es:W16F_ROWS]
+    mov cl, [es:W16F_AVG]
+    pop es
+    mov [es:di], ax                 ; lfHeight
+    mov [es:di + 2], cx             ; lfWidth
+    mov word [es:di + 8], 700       ; lfWeight: bold
+    mov word [es:di + 14], 0x0201   ; lfOutPrecision OUT_STRING_PRECIS,
+    mov word [es:di + 16], 0x2201   ;   lfClipPrecision CLIP_STROKE_PRECIS,
+    add di, 18                      ;   lfQuality DRAFT, VARIABLE_PITCH |
+    call w16g_fname                 ;   FF_SWISS; lfFaceName
+.nm:
+    mov al, [cs:si]
+    mov [es:di], al
+    inc si
+    inc di
+    or al, al
+    jnz .nm
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; w16g_fname - SI = the name of the face in [w16_face], read through CS.
+; Keeps the rest.
+w16g_fname:
+    mov si, w16g_facename   ; XSEC-OK: read through cs:
+    push ax
+    mov ax, [w16_face]
+    or ax, ax
+    jz .s
+    cmp ax, [w16_dface]
+    jne .s
+    mov si, w16g_dlgname    ; XSEC-OK: read through cs:
+.s:
+    pop ax
+    ret
+
+; GetTextFace (GDI.92) - args: +0 lpFaceName, +4 nCount, +6 hDC: the
+; face's name ("System", or the dialog face's, SPEC.md 124.24.4) and its NUL,
+; cut to the count; its length
 W16LIB w16g_textface
     push si
     push di
@@ -1903,7 +1936,7 @@ W16LIB w16g_textface
     xor ax, ax
     jcxz .out
     dec cx
-    mov si, w16g_facename   ; XSEC-OK: read through cs:
+    call w16g_fname
 .c:
     jcxz .end
     mov dl, [cs:si]
@@ -1924,6 +1957,7 @@ W16LIB w16g_textface
     ret
 
 w16g_facename: db 'System', 0
+w16g_dlgname:  db 'MS Sans Serif', 0
 
 ; GetRasterizerCaps (GDI.313) - args: +0 cb, +2 lpraststat: no TrueType -
 ; nSize 6, wFlags 0, nLanguageID 0

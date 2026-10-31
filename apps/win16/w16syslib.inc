@@ -370,6 +370,324 @@ W16SYS w16c_exterr
     xor dx, dx
     ret
 
+; =============================================================================
+; COMMDLG: ChooseFont and ChooseColor (SPEC.md 124.24.4)
+; =============================================================================
+
+CF_INITTOLOGFONTSTRUCT equ 0x40     ; CHOOSEFONT's Flags
+CC_RGBINIT  equ 1                   ; CHOOSECOLOR's
+CHF_LOGFONT equ 8                   ; CHOOSEFONT: lpLogFont
+CHF_POINTS  equ 12                  ;   iPointSize
+CHF_FLAGS   equ 14                  ;   Flags
+CHF_TYPE    equ 40                  ;   nFontType
+CHC_RGB     equ 8                   ; CHOOSECOLOR: rgbResult
+CHC_FLAGS   equ 16                  ;   Flags
+W16C_LIST   equ 0x460               ; the list's ID: Windows' lst1
+W16C_M      equ 8                   ; the margin, and between the parts
+W16C_BW     equ 58                  ; a button, MessageBox's width
+
+; ChooseFont (COMMDLG.15), ChooseColor (COMMDLG.5) - args: +0 the structure.
+; A WIN16 dialog of the faces it has, or of the sixteen colours: the program
+; waits in the call, and OK fills the structure before the dialog ends
+W16SYS w16c_choosefont
+    xor al, al
+    jmp short w16c_choose
+W16SYS w16c_choosecol
+    mov al, 1
+w16c_choose:
+    push si
+    push di
+    mov [w16_chk], al
+    mov word [w16_cderr], 0
+    ICALL w16_args
+    les bx, [es:bx]
+    mov [w16_chst], bx
+    mov [w16_chst + 2], es
+    mov ax, [es:bx + 4]             ; hwndOwner, both structures'
+    mov [w16d_par], ax
+    xor dx, dx                      ; DX = the item selected to begin with
+    cmp byte [w16_chk], 0
+    jne .rgb
+    test byte [es:bx + CHF_FLAGS], CF_INITTOLOGFONTSTRUCT
+    jz .sel
+    les si, [es:bx + CHF_LOGFONT]
+    mov ax, es
+    or ax, si
+    jz .sel
+    mov al, [es:si + 17]            ; lfPitchAndFamily
+    add si, 18                      ; lfFaceName
+    SLCALL w16g_fontmap             ; the face CreateFont would give it
+    cmp ax, W16_HFDLG
+    je .sel
+    cmp word [w16_dface], 0         ; System: the second, after the dialog
+    je .sel                         ;   face when there is one
+    inc dx
+    jmp short .sel
+.rgb:
+    test byte [es:bx + CHC_FLAGS], CC_RGBINIT
+    jz .sel
+    mov ax, [es:bx + CHC_RGB]
+    mov dl, [es:bx + CHC_RGB + 2]
+    ICALL w16_rgb2col
+    xor ah, ah
+    mov dx, ax
+.sel:
+    push dx
+    ICALL w16_rowsn                 ; AX = the System font's rows
+    mov [w16d_mbh], ax              ; (MessageBox's words, as scratch)
+    mov si, w16c_fitems     ; XSEC-OK: the items' table, read through cs:
+    cmp byte [w16_chk], 0
+    je .fl
+    mov si, w16c_citems     ; XSEC-OK: read through cs:
+.fl:
+    mov [w16d_mtl], si
+    mov cl, [cs:si]                 ; CL = how many, CH = the list's width
+    mov ch, [cs:si + 1]             ;   in cells
+    cmp byte [w16_chk], 0
+    jne .n
+    cmp word [w16_dface], 0         ; no dialog face: System alone
+    jne .n
+    dec cl
+    add word [w16d_mtl], w16c_fsys - w16c_fitems - 2 ; XSEC-OK: a length
+.n:
+    xor ah, ah
+    mov al, cl
+    mov [w16d_mbn], ax              ; [w16d_mbn] = the items
+    mul word [w16d_mbh]
+    add ax, 2                       ; the list: an item a row, and its border
+    mov [w16d_mth], ax
+    mov al, ch
+    xor ah, ah
+    mov cl, 3
+    shl ax, cl
+    mov [w16d_mtw], ax              ; [w16d_mtw] = the list's width
+    add ax, 3 * W16C_M + W16C_BW
+    mov [w16_cwcx], ax
+    mov ax, [w16d_mbh]              ; the client's height: the list's, below
+    add ax, W16C_M + 4              ;   its label, or the two buttons'
+    mov [w16d_mby], ax              ; [w16d_mby] = the list's top
+    add ax, [w16d_mth]
+    mov cx, [w16d_mbh]
+    add cx, 12
+    shl cx, 1
+    add cx, [w16d_mby]
+    add cx, 6
+    cmp ax, cx
+    jae .h
+    mov ax, cx
+.h:
+    add ax, W16C_M
+    mov [w16_cwcy], ax
+    mov ax, [w16_scrw]              ; centred on the screen
+    sub ax, [w16_cwcx]
+    sar ax, 1
+    mov [w16_cwx], ax
+    mov ax, [w16_scrh]
+    sub ax, [w16_cwcy]
+    sar ax, 1
+    mov [w16_cwy], ax
+    mov byte [w16_cwkind], W16Q_DIALOG
+    mov byte [w16_cwcls], 0xFF
+    ICALL w16_ddpstub
+    mov [w16_cwproc], ax
+    mov [w16_cwproc + 2], dx
+    mov word [w16_cwhbr], COLOR_WINDOW + 1
+    mov word [w16_cwstyle], 0
+    mov word [w16_cwstyle + 2], WS_POPUP_HI | WS_CAPTION_HI
+    mov word [w16_cwid], 0
+    mov ax, [w16d_par]
+    mov [w16_cwpar], ax
+    mov ax, w16c_sfont      ; XSEC-OK: a string the window copies, by CS
+    cmp byte [w16_chk], 0
+    je .cap
+    mov ax, w16c_scolor     ; XSEC-OK: by CS
+.cap:
+    mov [w16_cwtext], ax
+    mov [w16_cwtext + 2], cs
+    ICALL w16_mkwnd                 ; BX = it
+    jc .fail
+    mov [w16d_dlg], bx
+    xor ax, ax
+    mov [bx + W16W_EXTRA + DWL_DLGPROC], ax
+    mov [bx + W16W_EXTRA + DWL_DLGPROC + 2], ax
+    mov byte [bx + WD_FL], WDF_MODAL | WDF_CHOOSE
+    ICALL w16_rec2hwnd
+    mov [w16d_hdlg], ax
+    mov byte [w16d_dfon], 0
+    mov byte [w16_cwkind], W16Q_STATIC  ; the label
+    mov word [w16_cwx], W16C_M
+    mov word [w16_cwy], W16C_M
+    mov ax, [w16d_mtw]
+    mov [w16_cwcx], ax
+    mov ax, [w16d_mbh]
+    mov [w16_cwcy], ax
+    mov word [w16_cwid], -1
+    mov word [w16_cwstyle], SS_LEFT
+    mov word [w16_cwstyle + 2], WS_VISIBLE_HI | WS_GROUP_HI
+    mov ax, w16c_lfont      ; XSEC-OK: by CS
+    cmp byte [w16_chk], 0
+    je .lab
+    mov ax, w16c_lcolor     ; XSEC-OK: by CS
+.lab:
+    mov [w16_cwtext], ax
+    SLCALL w16d_mkctl
+    jc .undo
+    mov byte [w16_cwkind], W16Q_LIST    ; the list
+    mov ax, [w16d_mby]
+    mov [w16_cwy], ax
+    mov ax, [w16d_mth]
+    mov [w16_cwcy], ax
+    mov word [w16_cwid], W16C_LIST
+    mov word [w16_cwstyle], LBS_NOTIFY
+    mov word [w16_cwstyle + 2], WS_VISIBLE_HI | WS_BORDER_HI | WS_TABSTOP_HI | WS_GROUP_HI
+    xor ax, ax
+    mov [w16_cwtext], ax
+    mov [w16_cwtext + 2], ax
+    SLCALL w16d_mkctl
+    jc .undo
+    mov si, [w16d_mtl]              ; its items
+    add si, 2
+    mov cx, [w16d_mbn]
+.item:
+    mov [w16_sm_lp], si
+    mov [w16_sm_lp + 2], cs
+    mov word [w16_sm_msg], LB_ADDSTRING
+    mov word [w16_sm_wp], 0
+    push cx
+    ICALL w16_intproc
+    pop cx
+.skip:
+    cs lodsb                        ; (the part's own: DS is the image)
+    or al, al
+    jnz .skip
+    loop .item
+    pop dx                          ; the selection
+    push dx
+    mov [w16_sm_wp], dx
+    mov word [w16_sm_msg], LB_SETCURSEL
+    ICALL w16_intproc
+    mov ax, [w16d_mtw]              ; the buttons, right of the list
+    add ax, 2 * W16C_M
+    mov [w16_cwx], ax
+    mov ax, [w16d_mby]
+    mov [w16_cwy], ax
+    mov word [w16_cwcx], W16C_BW
+    mov ax, [w16d_mbh]
+    add ax, 12
+    mov [w16_cwcy], ax
+    mov word [w16_cwid], IDOK
+    mov word [w16_cwtext], w16_s_ok
+    mov ax, BS_DEFPUSHBUTTON
+    call .button
+    jc .undo
+    mov ax, [w16_cwcy]
+    add ax, 6
+    add [w16_cwy], ax
+    mov word [w16_cwid], IDCANCEL
+    mov word [w16_cwtext], w16_s_cancel
+    mov ax, BS_PUSHBUTTON
+    call .button
+    jc .undo
+    pop dx
+    xor ax, ax
+    mov [w16d_param], ax
+    mov [w16d_param + 2], ax
+    mov bx, [w16d_dlg]
+    SLCALL w16d_modrun              ; MessageBox's modal run: the answer,
+    pop di                          ;   or the call left waiting on it
+    pop si
+    ret
+.button:
+    mov [w16_cwstyle], ax
+    mov word [w16_cwstyle + 2], WS_VISIBLE_HI | WS_TABSTOP_HI
+    mov [w16_cwtext + 2], ds
+    mov byte [w16_cwkind], W16Q_BUTTON
+    SLCALL w16d_mkctl
+    ret
+.undo:
+    mov bx, [w16d_dlg]
+    ICALL w16_freetree
+.fail:
+    pop dx
+    mov word [w16_cderr], CDERR_DIALOGFAILURE
+    xor ax, ax
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16c_chdone - the dialog's OK (w16d_ddef, WDF_CHOOSE): AX = the list's
+; selection, written into the waiting call's structure. AX = TRUE, the
+; dialog's answer. Keeps the rest.
+SCONT w16c_chdone
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    cmp ax, -1
+    jne .some
+    xor ax, ax
+.some:
+    les bx, [w16_chst]
+    cmp byte [w16_chk], 0
+    jne .colour
+    push word [w16_face]            ; the face: the dialog face first, when
+    mov dx, [w16_sface]             ;   there is one, then System
+    mov cx, 100
+    cmp word [w16_dface], 0
+    je .face
+    or ax, ax
+    jnz .face
+    mov dx, [w16_dface]
+    mov cx, 80
+.face:
+    mov [w16_face], dx
+    mov [es:bx + CHF_POINTS], cx
+    mov word [es:bx + CHF_TYPE], 0x2100 ; SCREEN_FONTTYPE | BOLD_FONTTYPE
+    les di, [es:bx + CHF_LOGFONT]
+    mov ax, es
+    or ax, di
+    jz .nolf
+    SLCALL w16g_lfill
+.nolf:
+    pop word [w16_face]
+    jmp short .ok
+.colour:
+    mov di, ax                      ; its COLORREF, w16_pal16's
+    shl di, 1
+    add di, ax
+    mov ax, [w16_pal16 + di]
+    mov dl, [w16_pal16 + di + 2]
+    xor dh, dh
+    mov [es:bx + CHC_RGB], ax
+    mov [es:bx + CHC_RGB + 2], dx
+.ok:
+    mov ax, 1
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; each list: how many items, its width in cells, then the items
+w16c_fitems:
+    db 2, 23
+    db 'MS Sans Serif, 8 point', 0
+w16c_fsys:
+    db 'System, 10 point', 0
+w16c_citems:
+    db 16, 14
+    db 'Black', 0, 'Dark Blue', 0, 'Dark Green', 0, 'Dark Cyan', 0
+    db 'Dark Red', 0, 'Dark Magenta', 0, 'Brown', 0, 'Light Gray', 0
+    db 'Gray', 0, 'Blue', 0, 'Green', 0, 'Cyan', 0
+    db 'Red', 0, 'Magenta', 0, 'Yellow', 0, 'White', 0
+w16c_sfont:   db 'Font', 0
+w16c_scolor:  db 'Color', 0
+w16c_lfont:   db '&Font:', 0
+w16c_lcolor:  db '&Color:', 0
+
 section .text
 
 ; w16_ofnback - OSAPI_FILE_DLG's completion (SPEC.md 38.6, 124.24.2): the

@@ -591,6 +591,35 @@ its table goes in the diary, so the reach is measured, not claimed.
       24,698 (+12), 6,318 bytes of room; part 9 642 bytes; the library part
       unchanged at 57,714.
 
+  - [x] **Batch 2: ChooseFont, ChooseColor and a font a program makes**
+    (SPEC.md §124.24.4, §124.24.5).
+    - `ChooseFont` and `ChooseColor` are WIN16 dialogs built in part 9:
+      a list (WIN16's two faces; the sixteen colours by name), OK and
+      Cancel, run in the dialog manager's modal loop with `WDF_CHOOSE`,
+      the structure filled on OK before the dialog ends.
+    - `CreateFont`/`CreateFontIndirect` map onto the two faces (MS Sans
+      Serif or Helv by name, or the Swiss family: the dialog face, one
+      shared handle `W16_HFDLG`). Nine text calls carry `W16B_DCF` in
+      their export row, and the gate draws them in the face of the DC's
+      font; `t_w16xsec` holds the flag to `w16api.inc`'s list. `GetObject`
+      on a font answers its `LOGFONT`.
+    - **Fixed on the way:** `w16_pfetch` kept BX and DX but not ES, SI,
+      CX and DI. An SLCALL that was the first to fetch the library part
+      lost ES:SI.
+    - **Seen on QEMU's VGA:** Clock 3.1's Set Font (MS Sans Serif mapped
+      from its own font; choosing System redraws the time in System);
+      Marquee 3.1's Format Text (System from its Times New Roman; a
+      double-click on MS Sans Serif is OK); CDLG.EXE's message box
+      `font 1 MS Sans Serif 80; colour 1 0000FF; face MS Sans Serif 13`.
+      The font dialog seen on CGA.
+    - **Registered, not yet run:** `win16cdlg` (CDLG.EXE, Notepad's
+      Cancel, Marquee's Format Text). It runs in the final pass.
+    - **Pinned** (§124.24.4): every size is the one strike; the enumerations
+      still name System alone; no sample, no style or size lists.
+    - What it costs, against batch 1: the image 34,087 bytes (+79), its bss
+      24,703 (+5), 6,234 bytes of room; the library part 58,068 (+354);
+      part 9 1,783 (+1,141).
+
 - [ ] **S19b: GDI, the drawing half (R7).**
   - *As a user, Paintbrush opens, and I draw with its tools.* (Moved from
     S18: Paintbrush's library works; its drawing does not.)

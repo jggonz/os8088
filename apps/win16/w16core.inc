@@ -218,9 +218,13 @@ w16_gate:
 w16_dispatch:
     mov al, [bx + W16B_PART]
     and al, ~W16B_NORET & 0xFF
-    jz .image
     cmp al, W16B_MISS
     je .miss
+    test al, W16B_DCF
+    jnz .dcf
+.go:
+    and al, ~W16B_DCF & 0xFF
+    jz .image
     cmp al, W16P_SYS
     je .sys
     mov ax, [bx + W16B_PROC]
@@ -245,6 +249,28 @@ w16_dispatch:
     mov ax, [bx + W16B_PROC]
     mov [w16_missi], ax
     jmp w16_missed
+.dcf:                               ; a text call (SPEC.md 124.24.4): in the
+    push ax                         ;   dialog face while the DC holds its
+    mov ax, [w16_dface]             ;   font and came with the System font's
+    cmp word [w16_font], W16_HFDLG
+    jne .nof
+    or ax, ax
+    jz .nof
+    xchg ax, [w16_face]
+    cmp ax, [w16_sface]
+    jne .back
+    pop ax
+    call .go
+    push ax
+    mov ax, [w16_sface]
+    mov [w16_face], ax
+    pop ax
+    ret
+.back:
+    mov [w16_face], ax
+.nof:
+    pop ax
+    jmp short .go
 .nolib:                             ; it could not be read: ended, as a missing
     push si                         ;   import ends it, saying why
     push di
