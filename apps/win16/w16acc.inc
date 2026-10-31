@@ -523,11 +523,38 @@ W16LIB w16g_patblt
 ; rows a word apart, top row first) are converted as a DIB's are: a set bit
 ; white, a clear one black. Any other format is made black (SPEC.md 124.17.1).
 ; -----------------------------------------------------------------------------
+; CreateBitmapIndirect (GDI.49) - args: +0 lpBitmap, a BITMAP: CreateBitmap
+; of its width, height, planes, bits a pixel and bits (SPEC.md 124.22.13)
+W16LIB w16g_crebmpi
+    push si
+    push di
+    push bp
+    ICALL w16_args
+    les si, [es:bx]
+    mov ax, [es:si + 2]
+    mov [w16_bmi + 10], ax          ; the width
+    mov ax, [es:si + 4]
+    mov [w16_bmi + 8], ax           ; the height
+    mov al, [es:si + 8]
+    xor ah, ah
+    mov [w16_bmi + 6], ax           ; the planes
+    mov al, [es:si + 9]
+    mov [w16_bmi + 4], ax           ; the bits a pixel
+    mov ax, [es:si + 10]
+    mov [w16_bmi], ax               ; the bits
+    mov ax, [es:si + 12]
+    mov [w16_bmi + 2], ax
+    push ds
+    pop es
+    mov bx, w16_bmi
+    jmp w16g_crebmp.body
+
 W16LIB w16g_crebmp
     push si
     push di
     push bp
     ICALL w16_args
+.body:
     mov ax, [es:bx + 10]
     mov dx, [es:bx + 8]
     push bx

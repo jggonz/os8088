@@ -757,6 +757,142 @@ W16LIB w16u_switchto
     xor ax, ax
     ret
 
+; =============================================================================
+; The mapping calls and the palette (SPEC.md 124.22.13). Drawing is MM_TEXT:
+; a mode and the extents are kept in the DC and answered back, and the
+; viewport's origin moves logical 0, 0 - which in MM_TEXT is all a viewport
+; does, and is what the Clipboard viewer scrolls with
+; =============================================================================
+
+MM_TEXT equ 1
+
+; SetMapMode (GDI.3) - args: +0 nMapMode, +2 hDC: the old mode
+W16LIB w16g_setmapmode
+    ICALL w16_args
+    mov ax, MM_TEXT
+    call w16g_ours
+    jc .out
+    mov ax, [es:bx]
+    xchg ax, [w16_mm]
+.out:
+    xor dx, dx
+    ret
+
+; w16g_ours - ES:BX = the args, the hDC at +2: CF=0 it is the open DC.
+; Keeps every register
+w16g_ours:
+    cmp word [es:bx + 2], W16_HDC
+    jne .no
+    cmp byte [w16_dcon], 0
+    je .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; SetWindowExt (GDI.12), SetViewportExt (GDI.14) - args: +0 y, +2 x, +4 hDC:
+; the old extents, DX:AX = y:x
+W16LIB w16g_setwext
+    push si
+    mov si, w16_wext
+    jmp short w16g_ext
+W16LIB w16g_setvext
+    push si
+    mov si, w16_vext
+w16g_ext:
+    mov cx, 1
+    call w16g_pair
+    pop si
+    ret
+
+; w16g_pair - SI = a pair in the DC's state, CX = its value on any other DC:
+; set from the args (+0 y, +2 x, +4 hDC); DX:AX = the old y:x. CF=1 not the
+; open DC, nothing set
+w16g_pair:
+    ICALL w16_args
+    add bx, 2
+    call w16g_ours
+    lahf
+    sub bx, 2
+    sahf
+    jc .other
+    mov ax, [es:bx + 2]
+    mov dx, [es:bx]
+    xchg ax, [si]
+    xchg dx, [si + 2]
+    clc
+    ret
+.other:
+    mov ax, cx
+    mov dx, cx
+    stc
+    ret
+
+; SetViewportOrg (GDI.13) - args: +0 y, +2 x, +4 hDC: logical 0, 0 is at
+; that client point, and the old one is the answer. The DC's client origin
+; moves by the difference: every call adds it
+W16LIB w16g_setvorg
+    push si
+    mov si, w16_vorg
+    xor cx, cx
+    call w16g_pair
+    jc .out
+    mov cx, [w16_vorg]
+    sub cx, ax
+    add [w16_ox], cx
+    mov cx, [w16_vorg + 2]
+    sub cx, dx
+    add [w16_oy], cx
+.out:
+    pop si
+    ret
+
+; RectVisibleOld (GDI.104) - args: +0 lpRect, +4 hDC: TRUE when any of the
+; rectangle (logical, right and bottom outside it) is inside the clip. Any
+; other DC's answers TRUE
+W16LIB w16g_rectvis
+    ICALL w16_args
+    mov ax, 1
+    add bx, 2
+    call w16g_ours
+    lahf
+    sub bx, 2
+    sahf
+    jc .out
+    les bx, [es:bx]
+    mov cx, [es:bx]
+    add cx, [w16_ox]
+    cmp cx, [w16_cr]
+    jg .no
+    mov cx, [es:bx + 4]
+    add cx, [w16_ox]
+    dec cx
+    cmp cx, [w16_cl]
+    jl .no
+    mov cx, [es:bx + 2]
+    add cx, [w16_oy]
+    cmp cx, [w16_cb]
+    jg .no
+    mov cx, [es:bx + 6]
+    add cx, [w16_oy]
+    dec cx
+    cmp cx, [w16_ct]
+    jge .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+
+; CreatePalette (GDI.360), SelectPalette (USER.282): the stock
+; DEFAULT_PALETTE. A display here has the colours it has: a palette is
+; taken, selected and realized, and changes nothing
+W16LIB w16g_crepal
+    mov ax, W16_STOCK + 15
+    xor dx, dx
+    ret
+
 section .text
 
 w16s_dir:    db ':\SYSTEM\APPDATA\WIN16', 0

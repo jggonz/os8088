@@ -376,6 +376,23 @@ its table goes in the diary, so the reach is measured, not claimed.
       Options with the program's own shortcut-key control, Save As writing
       a 545-byte `TEST.PIF`; Task Manager 3.0's Task List, closed by
       Cancel.
+    - [x] **Batch 3, the Clipboard viewer** (SPEC.md §124.22.13): the
+      viewer chain and `WM_DRAWCLIPBOARD` (posted when this program
+      changes the clipboard, and when os8088's clipboard has changed at the
+      viewer's next paint), registered formats, `SetViewportOrg` as the
+      translation it is in `MM_TEXT`, the mapping mode and extents kept,
+      `CreateBitmapIndirect`, palettes and metafiles answering as a display
+      with none. A NULL class brush makes `fErase` TRUE. **Seen on QEMU
+      (VGA)**: the viewer empty, then showing text copied in Notepad, then
+      emptied by its own Delete.
+    - **The mapping modes are only partly done**: `MM_TEXT` drawing with a
+      viewport origin. Scaling modes are kept and not applied; they move to
+      the first program that draws through one.
+    - **Character Map is batch 4**: its main dialog is a `COMBOBOX` (a
+      drop-down list of fonts), which WIN16 does not have yet, and it needs
+      `EnumFontFamilies`, `GetCharWidth`, `MulDiv`, `VkKeyScan`,
+      `GetMessagePos`, `WindowFromPoint`, `DrawFocusRect` and
+      `GetWindowDC`.
     - Known and pinned: the PIF Editor's Advanced Options is taller than
       os8088's desktop, and its last row (the shortcut key) is below the
       screen's edge. The window records live in WIN16's 64 KB data segment

@@ -114,6 +114,15 @@ w16_dcopen:
     mov [w16_curx], ax
     mov [w16_cury], ax
     mov [w16_dchide], al
+    mov [w16_vorg], ax              ; MM_TEXT, its origins at 0 and its
+    mov [w16_vorg + 2], ax          ;   extents 1 (SPEC.md 124.22.13)
+    inc ax
+    mov [w16_mm], ax
+    mov [w16_wext], ax
+    mov [w16_wext + 2], ax
+    mov [w16_vext], ax
+    mov [w16_vext + 2], ax
+    dec ax
     cmp byte [w16_dctook], 0        ; a DC under this one took it
     jne .held
     cmp byte [w16_locked], 0
@@ -238,6 +247,10 @@ w16_dcopen:
     mov word [w16_ct], 1
     mov word [w16_cb], 0
 .out:
+    mov ax, [w16_vorg]              ; the viewport's origin: logical 0, 0
+    add [w16_ox], ax                ;   is there (SetViewportOrg), after the
+    mov ax, [w16_vorg + 2]          ;   clip, which is the client's
+    add [w16_oy], ax
     pop si
     pop dx
     pop cx

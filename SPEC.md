@@ -228380,6 +228380,36 @@ shortcut-key field, is below the screen's edge.
 window without an owner but its own, and in one WIN16 instance there is
 none: os8088's other windows are not Windows windows. Cancel closes it.
 
+#### 124.22.13 The Clipboard viewer's calls *(shipped in S17 batch 3)*
+
+os8088's clipboard carries text (§124.16.1, SPEC.md §55), so the Clipboard
+viewer 3.0 is a viewer of text here; what it imports for bitmaps, metafiles
+and palettes answers as a display with none of them would.
+
+| call | answer |
+|---|---|
+| `SetClipboardViewer(hWnd)` | the viewer, told `WM_DRAWCLIPBOARD` at once as Windows told it; the old one is the answer. `ChangeClipboardChain(hWnd, hWndNext)` takes `hWnd` out, `hWndNext` in its place when it was the viewer |
+| `WM_DRAWCLIPBOARD` | posted to the viewer by `CloseClipboard` when this program emptied or set the clipboard, and **when os8088's clipboard is not what it was at the last look** - its length and its first 16 bytes, read on the viewer's window's paint (`w16_cbpeek`). os8088's clipboard tells no one when another program changes it (§55 has no notification), and a window brought to the front is painted, which is when a viewer is being looked at. A change that keeps the length and the first 16 bytes is missed until the next one |
+| `RegisterClipboardFormat(name)` | `C000h` + its place in a table of `W16_NCBF` (4) names, the same for the same name, case aside; 0 when it is full. `GetClipboardFormatName` answers the name back, cut to the buffer. Nothing is ever on the clipboard in one |
+| `SetMapMode`, `SetWindowExt`, `SetViewportExt` | kept in the DC's state, answered back by the next call, reset by `GetDC`/`BeginPaint` and kept by `SaveDC`. **Drawing is `MM_TEXT`**: a scaling mode is taken and not applied. The Clipboard viewer sets one only to play a metafile |
+| `SetViewportOrg(hDC, x, y)` | logical 0, 0 is at that client point, the old one is the answer. In `MM_TEXT` that is all a viewport does, and it moves the DC's client origin, which every drawing call already adds, so it costs nothing anywhere else. The Clipboard viewer scrolls with it |
+| `RectVisibleOld(hDC, lpRect)` | TRUE when any of the rectangle (logical, right and bottom outside it) is inside the DC's clip; TRUE on any other DC |
+| `CreateBitmapIndirect(lpBitmap)` | `CreateBitmap` (§124.17.1) of the `BITMAP`'s width, height, planes, bits a pixel and bits |
+| `CreatePalette`, `SelectPalette` | the stock `DEFAULT_PALETTE`: a display here has the colours it has, so a palette is taken, selected and realized and changes nothing. `RealizePalette`, `GetPaletteEntries` and `UpdateColors` answer 0 |
+| `PlayMetaFile`, `GetMetaFileBits`, `SetMetaFileBits` | 0. No metafile reaches the clipboard here, and a `.CLP` file holding one opens without it |
+
+**A NULL class brush erases nothing, and says so.** `DefWindowProc`'s
+`WM_ERASEBKGND` on a window whose class has no brush answers 0, so
+`BeginPaint`'s `fErase` is TRUE and the program erases for itself. The
+Clipboard viewer registers its class that way and fills with its own
+`COLOR_WINDOW` brush when `fErase` says to; it was answered 1 before, and
+its window was left as the screen under it had been.
+
+**What was seen.** On QEMU (VGA), with Notepad beside it in a second WIN16
+instance: the viewer empty and white; text copied in Notepad shown when the
+viewer was brought to the front, its Display and Delete enabled; Delete's
+confirmation emptying the clipboard and the viewer.
+
 #### 124.22.5 The gate
 
 `win16file`'s **Notepad leg** (soak, QEMU; it skips without Microsoft's

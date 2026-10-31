@@ -204,12 +204,184 @@ W16LIB w16u_opencb
     xor dx, dx
     ret
 
-; CloseClipboard (USER.138)
+; CloseClipboard (USER.138): the viewer told WM_DRAWCLIPBOARD when it changed
 W16LIB w16u_closecb
     xor ax, ax
     xchg al, [w16_clpopen]
     xor ah, ah
     xor dx, dx
+    cmp byte [w16_cbchg], 0
+    je .out
+    mov byte [w16_cbchg], 0
+    call w16_cbtell
+.out:
+    ret
+
+; w16_cbtell - WM_DRAWCLIPBOARD posted to the clipboard's viewer, if there is
+; one. Keeps AX and DX
+w16_cbtell:
+    push ax
+    mov ax, [w16_cbview]
+    or ax, ax
+    jz .out
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_DRAWCLIPBOARD
+    xor ax, ax
+    mov [w16_sm_wp], ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    ICALL w16_post
+.out:
+    pop ax
+    ret
+
+; SetClipboardViewer (USER.147) - args: +0 hWnd: the viewer, told
+; WM_DRAWCLIPBOARD at once, as Windows told it; the old one is the answer,
+; which the new one passes WM_DRAWCLIPBOARD on to. One program here, so the
+; chain is as long as it makes it (SPEC.md 124.22.13)
+W16LIB w16u_setcbview
+    ICALL w16_args
+    mov ax, [es:bx]
+    xchg ax, [w16_cbview]
+    call w16_cbtell
+    xor dx, dx
+    ret
+
+; ChangeClipboardChain (USER.149) - args: +0 hWndNext, +2 hWnd: hWnd out of
+; the chain, hWndNext in its place when it was the viewer
+W16LIB w16u_cbchain
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+    cmp ax, [w16_cbview]
+    jne .out
+    mov ax, [es:bx]
+    mov [w16_cbview], ax
+.out:
+    xor ax, ax
+    xor dx, dx
+    ret
+
+; RegisterClipboardFormat (USER.145) - args: +0 lpszFormat: C000h + its
+; place in WIN16's table, the same for the same name (case aside); 0 when
+; the W16_NCBF places are taken. Nothing is ever put on os8088's clipboard
+; in one: it carries text
+W16LIB w16u_regcbfmt
+    push si
+    push di
+    ICALL w16_args
+    les di, [es:bx]
+    xor bx, bx                      ; BX = the place
+    mov si, w16_cbfn
+.f:
+    cmp byte [si], 0
+    je .new
+    push si
+    push di
+.c:
+    mov al, [es:di]
+    mov ah, [si]
+    call w16_up2
+    cmp al, ah
+    jne .ne
+    or al, al
+    jz .eq
+    inc si
+    inc di
+    jmp short .c
+.eq:
+    pop di
+    pop si
+    jmp short .have
+.ne:
+    pop di
+    pop si
+    add si, 32
+    inc bx
+    cmp bx, W16_NCBF
+    jb .f
+    xor ax, ax
+    jmp short .out
+.new:
+    mov cx, 31                      ; the name, cut to 31
+.cp:
+    mov al, [es:di]
+    mov [si], al
+    or al, al
+    jz .have
+    inc si
+    inc di
+    loop .cp
+    mov byte [si], 0
+.have:
+    mov ax, 0xC000
+    add ax, bx
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16_up2 - AL and AH each upper-cased (a-z). Keeps the rest
+w16_up2:
+    cmp al, 'a'
+    jb .h
+    cmp al, 'z'
+    ja .h
+    sub al, 0x20
+.h:
+    cmp ah, 'a'
+    jb .out
+    cmp ah, 'z'
+    ja .out
+    sub ah, 0x20
+.out:
+    ret
+
+; GetClipboardFormatName (USER.146) - args: +0 nMaxCount, +2 lpszFormatName,
+; +6 wFormat: a registered format's name, cut to the buffer; the answer is
+; its length, 0 for any other format
+W16LIB w16u_cbfmtname
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov ax, [es:bx + 6]
+    les di, [es:bx + 2]
+    sub ax, 0xC000
+    jb .zero
+    cmp ax, W16_NCBF
+    jae .zero
+    mov si, ax
+    push cx
+    mov cl, 5
+    shl si, cl
+    pop cx
+    add si, w16_cbfn
+    cmp byte [si], 0
+    je .zero
+    jcxz .zero
+    dec cx                          ; room for the NUL
+    xor ax, ax
+.cp:
+    jcxz .end
+    mov dl, [si]
+    or dl, dl
+    jz .end
+    mov [es:di], dl
+    inc si
+    inc di
+    inc ax
+    dec cx
+    jmp short .cp
+.end:
+    mov byte [es:di], 0
+    jmp short .out
+.zero:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
     ret
 
 ; EmptyClipboard (USER.139)
@@ -220,6 +392,7 @@ W16LIB w16u_emptycb
     call w16_cbdrop
     xor cx, cx                      ; CX = 0 empties it (SPEC.md 55.4)
     call OSAPI_CLIP_PUT
+    mov byte [w16_cbchg], 1
     mov ax, 1
 .out:
     xor dx, dx
@@ -264,6 +437,7 @@ W16LIB w16u_setcbdata
     xor si, si
     call w16_clput
     jc .bad
+    mov byte [w16_cbchg], 1
 .free:
     pop ax
     push ax

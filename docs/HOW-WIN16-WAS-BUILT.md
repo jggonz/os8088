@@ -1926,3 +1926,17 @@ Enhanced modes, its Advanced Options dialog, and Save As writing a 545-byte
 `.PIF`, which is the size Windows 3.0 writes; the Task Manager's Task List,
 and Cancel closing it.
 
+**The Clipboard viewer.** os8088's clipboard carries text, so most of what
+the viewer imports (metafiles, palettes, bitmap formats) answers as a display
+without them would. Two things mattered. Its window class has no background
+brush, and Windows' answer to that is to erase nothing and set `fErase`, so
+the program fills the window itself. WIN16 said it had erased, and the
+viewer's window kept whatever had been on the screen under it. The other is
+being told the clipboard changed. os8088's clipboard has no notification,
+because no native application ever needed one. A viewer is looked at when its
+window is brought to the front, and a window brought to the front is painted.
+So the viewer's paint compares the clipboard's length and first 16 bytes with
+the last ones it saw, and posts `WM_DRAWCLIPBOARD` when they differ. On QEMU
+the viewer showed text copied in Notepad, running beside it, and Delete
+emptied both the clipboard and the view.
+

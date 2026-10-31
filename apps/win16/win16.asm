@@ -92,6 +92,7 @@ W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
 W16_NBIND    equ 384            ; bind slots: the distinct imports a program
                                 ;   may bind, each a stub (SPEC.md 124.19.1).
                                 ;   Paintbrush 3.1's 270 is the most measured
+W16_NCBF     equ 4              ; registered clipboard formats at most
 W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
 W16_NFIXED   equ 4              ; ...slots 0-3 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
@@ -331,6 +332,10 @@ section .w16dlg
     W16BSS w16_tal, 1           ; SetTextAlign's
     W16BSS w16_tpap, 1          ; text's paper colour (w16_txtdraw)
     W16BSS w16_brorg, 4         ; SetBrushOrg's
+    W16BSS w16_mm, 2            ; SetMapMode's, drawn as MM_TEXT (SPEC.md 124.22.13)
+    W16BSS w16_vorg, 4          ; SetViewportOrg's: w16_ox/w16_oy moved by it
+    W16BSS w16_wext, 4          ; SetWindowExt's, kept and answered
+    W16BSS w16_vext, 4          ; SetViewportExt's, kept and answered
 W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_dcstk, W16_DCMAX * W16_DCSZ ; the DCs open under it, innermost
                                 ;   last
@@ -540,6 +545,12 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_lfn, 2           ;   segment, and the routine it calls
     ; --- S14: the bind table (SPEC.md 124.19.1) ---
     W16BSS w16_nbind, 2         ; slots given out
+    W16BSS w16_cbview, 2        ; SetClipboardViewer's window, 0 none
+    W16BSS w16_cbnow, 18        ; os8088's clipboard: its length, first 16 bytes
+    W16BSS w16_cbseen, 18       ; ...as the viewer was last told it
+    W16BSS w16_bmi, 12          ; CreateBitmapIndirect's BITMAP, as CreateBitmap's args
+    W16BSS w16_cbchg, 1         ; ...the clipboard changed since it was opened
+    W16BSS w16_cbfn, W16_NCBF * 32 ; RegisterClipboardFormat's names
     W16BSS w16_pnslot, 2 * W16_NPNMAX ; ...GetProcAddress's names', 0 none yet
     W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
@@ -1279,6 +1290,7 @@ W16_H   equ 64
 ; w16_paint - W_PAINT; in: SI = window, lock held; preserves everything.
 ; Once the program has a window, the window is the program's (w16_ppaint).
 w16_paint:
+    call w16_cbpeek
     cmp byte [w16_top], 0
     je .lines
     jmp w16_ppaint
@@ -1304,6 +1316,66 @@ w16_paint:
     pop cx
     pop bx
     pop ax
+    ret
+
+; w16_cbpeek - a clipboard viewer is told WM_DRAWCLIPBOARD when os8088's
+; clipboard is not what it was at the last look: its length and its first
+; 16 bytes. os8088's clipboard tells no one when another program changes
+; it, and a window being brought up is painted, which is when a viewer is
+; looked at (SPEC.md 124.22.13). Preserves everything.
+w16_cbpeek:
+    cmp word [w16_cbview], 0
+    je .ret
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov di, w16_cbnow
+    mov cx, 8
+    xor ax, ax
+    cld
+    rep stosw
+    mov di, w16_cbnow + 2           ; its length, then its first 16 bytes
+    mov cx, 16
+    call OSAPI_CLIP_GET
+    mov [w16_cbnow], ax
+    mov si, w16_cbnow
+    mov di, w16_cbseen
+    mov cx, 9
+    repe cmpsw
+    je .same
+    mov si, w16_cbnow
+    mov di, w16_cbseen
+    mov cx, 9
+    rep movsw
+    push word [w16_sm_hwnd]         ; the message being made is put back:
+    push word [w16_sm_msg]          ;   this is a paint, between two of them
+    push word [w16_sm_wp]
+    push word [w16_sm_lp]
+    push word [w16_sm_lp + 2]
+    mov ax, [w16_cbview]
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_DRAWCLIPBOARD
+    xor ax, ax
+    mov [w16_sm_wp], ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    pop word [w16_sm_lp + 2]
+    pop word [w16_sm_lp]
+    pop word [w16_sm_wp]
+    pop word [w16_sm_msg]
+    pop word [w16_sm_hwnd]
+.same:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+.ret:
     ret
 
 ; w16_repaint - the content, under a lock WE take (a wake has none). DOS.O88's

@@ -161,6 +161,7 @@ WM_GETTEXTLENGTH equ 0x000E
 WM_GETDLGCODE equ 0x0087
 WM_INITDIALOG equ 0x0110
 WM_PAINT      equ 0x000F
+WM_DRAWCLIPBOARD equ 0x0308
 WM_CLOSE      equ 0x0010
 WM_QUIT       equ 0x0012
 WM_ERASEBKGND equ 0x0014
@@ -2119,8 +2120,9 @@ w16u_defproc:
     jne .noterase
     call w16_hwnd2rec
     jc .zero
-    call w16_erasebg
-    mov ax, 1
+    call w16_erasebg                ; a NULL class brush erases nothing and
+    jc .zero                        ;   answers 0, so BeginPaint's fErase
+    mov ax, 1                       ;   tells the program to (CLIPBRD's)
     xor dx, dx
     ret
 .noterase:
@@ -2170,7 +2172,8 @@ w16u_defproc:
     xor dx, dx
     ret
 
-; w16_erasebg - BX = a window: fill the DC's clip with its class brush
+; w16_erasebg - BX = a window: fill the DC's clip with its class brush. CF=1
+; it has none (NULL), and nothing was filled
 w16_erasebg:
     push ax
     push bx
@@ -2179,6 +2182,7 @@ w16_erasebg:
     mov ax, [bx + W16W_HBR]
     call w16_brcol
     cmp al, W16_NOCOL
+    stc
     je .out
     mov [w16_gcol], al
     mov ax, [w16_cl]
@@ -2186,6 +2190,7 @@ w16_erasebg:
     mov cx, [w16_cr]
     mov dx, [w16_cb]
     call w16_gfill
+    clc
 .out:
     pop dx
     pop cx
@@ -2927,6 +2932,13 @@ w16_postact:
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
     call w16_post
+    mov ax, [w16_cbview]            ; os8088's clipboard says nothing when
+    or ax, ax                       ;   another program changes it: the
+    jz .nov                         ;   viewer looks again when it is
+    mov [w16_sm_hwnd], ax           ;   activated (SPEC.md 124.22.13)
+    mov word [w16_sm_msg], WM_DRAWCLIPBOARD
+    call w16_post
+.nov:
     pop ax
 .ret:
     ret
