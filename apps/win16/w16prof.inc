@@ -723,7 +723,7 @@ w16pf_open:
     ja .keep
     push dx
     mov dx, [bx + WPF_SEG]
-    call OSAPI_MEM_FREE
+    ICALL w16_kfree
     pop ax
     add ax, 2
     call w16pf_claim
@@ -763,7 +763,7 @@ w16pf_open:
 ; w16pf_claim - BX = a row, AX = KB: its claim. CF=1 refused (the row free)
 w16pf_claim:
     push ax
-    call OSAPI_MEM_CLAIM
+    ICALL w16_kclaim                ; in the heap (SPEC.md 124.25.1)
     pop ax
     jc .no
     mov [bx + WPF_SEG], dx
@@ -841,7 +841,7 @@ w16pf_flush:
 w16pf_drop:
     call w16pf_flush
     mov dx, [bx + WPF_SEG]
-    call OSAPI_MEM_FREE
+    ICALL w16_kfree
     call w16pf_logfree
     mov byte [bx + WPF_NAME], 0
     ret
@@ -851,7 +851,7 @@ w16pf_logfree:
     mov dx, [bx + WPF_LOG]
     or dx, dx
     jz .out
-    call OSAPI_MEM_FREE
+    ICALL w16_kfree
     xor dx, dx
     mov [bx + WPF_LOG], dx
     mov [bx + WPF_LLEN], dx
@@ -892,7 +892,7 @@ w16pf_log:
     or dx, dx
     jnz .have
     mov ax, W16PF_LOGKB
-    call OSAPI_MEM_CLAIM
+    ICALL w16_kclaim                ; in the heap (SPEC.md 124.25.1)
     jc .over
     mov [bx + WPF_LOG], dx
 .have:
@@ -952,7 +952,7 @@ w16pf_merge:
     shr ax, cl
 .try:
     mov [w16pf_kb], ax
-    call OSAPI_MEM_CLAIM
+    ICALL w16_kclaim                ; in the heap (SPEC.md 124.25.1)
     jc .back
     push bx
     lea si, [bx + WPF_NAME]
@@ -975,7 +975,7 @@ w16pf_merge:
     push ax
     push dx
     mov dx, di
-    call OSAPI_MEM_FREE
+    ICALL w16_kfree
     pop dx
     pop ax
     cmp ax, FERR_BIG                ; DX = the KB it needs
@@ -991,7 +991,7 @@ w16pf_merge:
     cmp ax, FERR_NOENT              ; deleted since: an empty file, merged
     jne .back
     mov ax, 1
-    call OSAPI_MEM_CLAIM
+    ICALL w16_kclaim                ; in the heap (SPEC.md 124.25.1)
     jc .back
     mov di, dx
     mov word [w16pf_kb], 1
@@ -1004,7 +1004,7 @@ w16pf_merge:
     ja .drop
     push ax
     mov dx, [bx + WPF_SEG]          ; the fresh copy is the row's now
-    call OSAPI_MEM_FREE
+    ICALL w16_kfree
     mov [bx + WPF_SEG], di
     pop word [bx + WPF_LEN]
     mov ax, [w16pf_kb]
@@ -1019,7 +1019,7 @@ w16pf_merge:
     jmp short .out
 .drop:
     mov dx, di
-    call OSAPI_MEM_FREE
+    ICALL w16_kfree
 .back:
     call w16pf_out
 .out:
@@ -1145,7 +1145,7 @@ w16pf_splice:
     mov cl, 10
     shr ax, cl
     mov [w16pf_kb], ax
-    call OSAPI_MEM_CLAIM
+    ICALL w16_kclaim                ; in the heap (SPEC.md 124.25.1)
     jc .full
     push ds
     mov es, dx
@@ -1157,7 +1157,7 @@ w16pf_splice:
     pop ds
     push dx
     mov dx, [bx + WPF_SEG]
-    call OSAPI_MEM_FREE
+    ICALL w16_kfree
     pop dx
     mov [bx + WPF_SEG], dx
     mov ax, [w16pf_kb]

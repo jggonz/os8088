@@ -29,4 +29,6 @@ W16DH_DONE  equ W16DH_ORG + 6       ; far: every handle the program left open
 W16DH_HSS   equ W16DH_ORG + 9       ; word: the stack the core runs a call on,
 W16DH_HSP   equ W16DH_ORG + 11      ;   written by the image before each one
 W16DH_WKB   equ W16DH_ORG + 13      ; byte: the read window's floor in KB,
-                                    ;   DOS's DOS_WKB, read before the claim
+                                    ;   DOS's DOS_WKB, checked against
+W16DH_WFLOOR equ 8                  ;   ...this, which sizes the block before
+                                    ;   the host is read (SPEC.md 124.25.1)

@@ -19,7 +19,12 @@
 ; word is the data, so `*(char **)h` reads what LocalLock answers.
 ; =============================================================================
 
-W16_ARENAKB equ 16              ; an arena's KB unless a request is more
+W16_ARENAKB equ 32              ; the first arena's KB unless a request is
+                                ;   more; the second is twice it
+W16_LHROOM  equ 4096            ; a library's local heap, past its ne_heap
+                                ;   (SPEC.md 124.25.2)
+W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
+                                ;   largest free run (SPEC.md 124.25.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
 
 GMEM_MOVEABLE equ 0x0002
@@ -265,33 +270,52 @@ w16_garena:
     inc si
     jmp short .slot
 .free:
-    push si                         ; the floor: 16KB, doubled for each arena
-    mov dx, W16_ARENAKB             ;   already in use, to 64KB (SPEC.md
-    xor si, si                      ;   124.20.2)
-.dbl:
+    push si                         ; the floor, by the arenas already in use
+    push bx                         ;   (SPEC.md 124.25.1): 32 KB, then 64,
+    xor cx, cx                      ;   then what is free but W16_ARKEEP
+    xor si, si
+.cnt:
     cmp word [w16_arena + si], 0
-    je .nd
-    cmp dx, 64
-    jae .nd
-    shl dx, 1
-.nd:
+    je .nc
+    inc cx
+.nc:
     inc si
     inc si
     cmp si, 2 * W16_NARENA
-    jb .dbl
+    jb .cnt
+    mov dx, W16_ARENAKB
+    jcxz .fl
+    mov dx, 2 * W16_ARENAKB
+    cmp cx, 1
+    je .fl
+    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
+    sub ax, W16_ARKEEP
+    jb .fl
+    cmp ax, dx
+    jbe .fl
+    mov dx, ax
+.fl:
+    pop bx
     pop si
     mov ax, bx                      ; KB = ceil(paragraphs / 64)
     add ax, 63
     mov cl, 6
     shr ax, cl
+    push ax                         ; (the request's own KB, to fall back to)
     cmp ax, dx
     jae .kb
     mov ax, dx
 .kb:
-    push ax
     call OSAPI_MEM_CLAIM            ; DX = the segment
-    pop cx
+    mov cx, ax
+    pop ax
+    jnc .got
+    cmp ax, cx
+    je .no                          ; it was the request's own size
+    mov cx, ax
+    call OSAPI_MEM_CLAIM            ; the floor would not go: the request
     jc .no
+.got:
     mov [w16_arena + si], dx
     mov es, dx
     mov ax, cx
@@ -738,6 +762,17 @@ w16k_gcompact:
     inc si
     jmp short .arena
 .claims:
+    xor si, si                      ; a new arena only while a slot is free
+.free:                              ;   (SPEC.md 124.25.1)
+    cmp word [w16_arena + si], 0
+    je .room
+    inc si
+    inc si
+    cmp si, 2 * W16_NARENA
+    jb .free
+    xor ax, ax
+    jmp short .kb
+.room:
     call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
     cmp ax, 1023
     jbe .kb
@@ -1313,6 +1348,11 @@ w16k_linit:
     dec bx
     mov cl, 4
     shl bx, cl
+    pop ax                          ; a library's DGROUP: its heap takes the
+    push ax                         ;   room the load gave it too, as a heap
+    call w16_islibdg                ;   Windows grew would have (124.25.2)
+    jc .sized
+    add dx, W16_LHROOM
     jmp short .sized
 .dg:
     mov bx, [w16_dgsize]
@@ -1335,6 +1375,28 @@ w16k_linit:
     jc .out
     inc ax
 .out:
+    ret
+
+; w16_islibdg - AX = a segment: CF=0 it is a loaded library's DGROUP
+; (SPEC.md 124.23.2). Keeps all.
+w16_islibdg:
+    push bx
+    mov bx, w16_libs
+.r:
+    cmp byte [bx + W16L_COUNT], 0
+    je .n
+    cmp ax, [bx + W16L_HINST]
+    je .yes
+.n:
+    add bx, W16L_SIZE
+    cmp bx, w16_libs + W16_NLIB * W16L_SIZE
+    jb .r
+    pop bx
+    stc
+    ret
+.yes:
+    pop bx
+    clc
     ret
 
 ; LocalAlloc (KERNEL.5) - args: +0 wBytes, +2 wFlags

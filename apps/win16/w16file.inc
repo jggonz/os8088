@@ -39,8 +39,21 @@ w16_dosup:
     push si
     push di
     push es
-    mov ax, W16DH_KB
-    call OSAPI_MEM_CLAIM            ; DX = the block
+    mov dx, [w16_dir]               ; the window: DOS_WKB KB, or one cluster
+    mov bl, [w16_vol]               ;   of the program's volume where that
+    call OSAPI_FILE_GOTO_QM         ;   is larger (SPEC.md 96.11)
+    call OSAPI_FILE_DFREE           ; BX = sectors a cluster
+    jnc .clus
+    xor bx, bx
+.clus:
+    shr bx, 1                       ; KB
+    cmp bx, W16DH_WFLOOR
+    jae .kb
+    mov bx, W16DH_WFLOOR
+.kb:
+    mov [w16_dhwkb], bx
+    lea ax, [bx + W16DH_KB]         ; ONE block: the core, the host and the
+    call w16_kclaim                 ;   window (SPEC.md 124.25.1)
     jc .out
     mov [w16_dhtmp], dx
     mov es, dx                      ; zero: the core's bss and the host's
@@ -57,30 +70,20 @@ w16_dosup:
     mov di, W16DH_ORG
     call w16_dhcopy
     jc .free
-    mov dx, [w16_dir]               ; the window: DOS_WKB KB, or one cluster
-    mov bl, [w16_vol]               ;   of the program's volume where that
-    call OSAPI_FILE_GOTO_QM         ;   is larger (SPEC.md 96.11)
-    call OSAPI_FILE_DFREE           ; BX = sectors a cluster
-    jnc .clus
-    xor bx, bx
-.clus:
-    shr bx, 1                       ; KB
     mov es, [w16_dhtmp]
     mov al, [es:W16DH_WKB]          ; the DOS's own floor (SPEC.md 96.11)
-    xor ah, ah
-    cmp bx, ax
-    jae .kb
-    mov bx, ax
-.kb:
-    mov ax, bx
-    push bx
-    call OSAPI_MEM_CLAIM            ; DX = the window
-    pop si
-    jc .free
-    mov [w16_dhwin], dx
+    cmp al, W16DH_WFLOOR
+    jbe .floor
+    xor ah, ah                      ; (more than the block was sized for:
+    mov si, [w16_dhwkb]             ;   refused rather than overrun)
+    cmp ax, si
+    ja .free
+.floor:
+    mov si, [w16_dhwkb]
     mov cl, 6
-    shl si, cl                      ; SI = its paragraphs
-    mov cx, dx
+    shl si, cl                      ; SI = the window's paragraphs
+    mov cx, [w16_dhtmp]             ; CX = the window, after the DOS: on 512
+    add cx, W16DH_KB * 64           ;   bytes, as the block is (w16_kclaim)
     mov ax, [w16_dhtmp]
     mov word [w16_dhent], W16DH_INIT
     mov [w16_dhent + 2], ax
@@ -89,18 +92,14 @@ w16_dosup:
     mov dx, [w16_dir]
     call far [w16_dhent]
     mov word [w16_dhent], W16DH_I21
-    jc .nowin
+    jc .free
     mov ax, [w16_dhtmp]
     mov [w16_dhseg], ax             ; ready
     clc
     jmp short .out
-.nowin:
-    xor dx, dx
-    xchg dx, [w16_dhwin]
-    call OSAPI_MEM_FREE
 .free:
     mov dx, [w16_dhtmp]
-    call OSAPI_MEM_FREE
+    call w16_kfree
     stc
 .out:
     pop es
@@ -156,11 +155,8 @@ w16_dosend:
     call far [w16_dhent]
     mov word [w16_dhent], W16DH_I21
     xor dx, dx
-    xchg dx, [w16_dhwin]
-    call OSAPI_MEM_FREE
-    xor dx, dx
     xchg dx, [w16_dhseg]
-    call OSAPI_MEM_FREE
+    call w16_kfree
     pop es
     pop dx
 .ret:

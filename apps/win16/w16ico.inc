@@ -164,7 +164,7 @@ w16_icpart:
     or ax, ax
     jnz .have
     mov al, W16P_ICONS
-    ICALL w16_pfetch
+    ICALL w16_pkeep                 ; in the heap, not a claim (124.25.1)
     jc .out
     mov [w16_icseg], ax
 .have:
@@ -178,11 +178,11 @@ w16_icpart:
 w16_icend:
     cmp word [w16_icseg], 0
     je .out
-    push ax
-    mov al, W16P_ICONS
-    ICALL op_drop
-    mov word [w16_icseg], 0
-    pop ax
+    push dx
+    xor dx, dx
+    xchg dx, [w16_icseg]
+    ICALL w16_kfree
+    pop dx
 .out:
     ret
 

@@ -2444,3 +2444,56 @@ installer, which launches what it installs, is where it has to be settled.
 **What it cost.** The image grew 16 bytes and its data 17, leaving 6,174
 bytes of room. Part 9 grew by 998 bytes, and the loader part by 18 for the
 two export rows. S19 is complete. Its four rows run in S25's final pass.
+
+## 2026-10-31 — S19b, batch 1: Paintbrush opens, and S18 was wrong about why it didn't
+
+**The story was planned on a wrong diagnosis.** S18 ended with Paintbrush
+3.0 saying *Insufficient memory for this operation*, and the diary put that
+down to its picture: a bitmap the size of the screen, 153,600 bytes, when
+WIN16 makes none over 64,000. S19b was written around that, with "bitmaps
+over 64,000 bytes" as one of its parts. Nobody had measured it.
+
+**Measuring it took four instruments.** A temporary probe in the bitmap
+allocator logged all 65 bitmaps Paintbrush asked for: none over 8,960
+bytes, none refused. Its `PBRUSH.DLL` is a virtual bitmap manager that keeps
+the picture in bands of at most 32 KB and pages them to a temporary file,
+so it never wants the whole picture at once. A trace of its calls then
+showed the failure: it made a temporary file name, `OpenFile` failed to
+create it, and the DLL deleted the file and gave up. A second probe caught
+`OpenFile`'s error: DOS error 8, not enough memory. The screen also had a
+toast, *Not enough memory*, from WIN16 failing to fetch its DOS. Freezing
+the machine at that moment and mapping the heap showed 145 KB free.
+
+**The heap was not full. WIN16 had used up its claims.** os8088 lets one
+owner hold eight claims, so that one greedy program cannot fill the
+kernel's table for everyone. WIN16 is one owner for itself and the program
+it runs, and nearly everything it kept was a claim of its own: the program,
+the library part, every global-heap arena, the System font, the icons, the
+system libraries, the floating-point emulator, the DOS and its read window,
+and each profile file. Paintbrush held seven. The DOS took the eighth, and
+fetching the DOS's code into it needed a ninth.
+
+**The fix keeps three kinds of claim.** The program, the library part and
+at most three arenas stay claims. Everything else WIN16 keeps is now a
+block in the arenas, beside the program's own memory. That is the move S15
+made for bitmaps and S18 for a program's libraries, made for the rest at
+once. A part is still fetched into a claim of its own, but only long enough
+to copy it into its block. Because profiles are read straight from disk into
+their blocks, each block starts on 512 bytes, as a claim does. A transfer
+across a 64 KB boundary is a disk error, and alignment is what prevents it.
+
+**Then the next thing ran out.** With its temporary file made, the DLL
+asked its own local heap for a table of its bands and got nothing. The DLL
+declares a 1 KB heap, and on Windows that did not matter: a full local
+heap grew. WIN16 cannot move a library's data segment while its code holds
+it in DS, so a library is now given 4 KB of heap more than it asks for.
+
+**What was seen.** Paintbrush 3.0 opens with its toolbox, line widths,
+palette, scroll bars and a white canvas, and waits for input. WIN16 holds
+four claims where it held eight. A stroke on the canvas draws nothing yet,
+because Paintbrush draws into memory bitmaps and that is the next batch.
+REGDB and LZT, the two programs that lean hardest on profiles and the DOS,
+still pass.
+
+**What it cost.** The image grew 223 bytes, leaving 5,963. The library part
+grew 61 bytes and the loader 13.

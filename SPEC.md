@@ -226780,10 +226780,11 @@ client (§124.8), so the sizing and the answer agree on every display.
 
 ### 124.9 Memory: the global and local heaps *(shipped in S5)*
 
-**The global heap** is WIN16's, sub-allocated inside ARENAS: claims of
-`W16_ARENAKB` (16) KB, each arena after the first twice the one before up
-to 64 KB (§124.20.2), or one claim the size of a larger request, at most
-`W16_NARENA` (6) at once. Each block is whole paragraphs behind a one-paragraph
+**The global heap** is WIN16's, sub-allocated inside ARENAS, at most
+`W16_NARENA` (3) at once: the first a claim of `W16_ARENAKB` (32) KB, the
+second 64 KB, the third the largest free run less `W16_ARKEEP` (32) KB, or
+each one the size of a larger request (§124.25.1; until S19b six arenas of
+16 KB doubling to 64, §124.20.2). Each block is whole paragraphs behind a one-paragraph
 header (its size, its handle, its lock count, its flags), first fit, with free
 neighbours merged. Arenas are freed with the program.
 
@@ -227111,8 +227112,9 @@ written. The folder is BUILT onto every disk that carries WIN16 (§19.9); a
 disk without it keeps the profiles in memory for the session and says
 nothing, and the folder is never created.
 
-**The cache.** A profile file is read whole into a claim of its own the first
-time it is asked for, and kept. Up to four files are held; a fifth sends the
+**The cache.** A profile file is read whole into a block of WIN16's own in
+the global heap the first time it is asked for, and kept (a claim of its own
+until S19b, §124.25.1). Up to four files are held; a fifth sends the
 least recently used one out (written first if it changed). A file over
 32,000 bytes reads as empty and is never written. A file that cannot be read
 for any other reason is an empty one, as on Windows.
@@ -227809,7 +227811,8 @@ Solitaire's three 10 KB drag bitmaps each wanted a new 16 KB arena, and the
 program, its library part and its parts already held most of its eight.
 So the first arena is still `W16_ARENAKB` (16) KB, and each one after is
 twice the size of the one before, up to 64 KB, or the request's own size
-where that is larger (§124.9). Three arenas hold 112 KB.
+where that is larger (§124.9). Three arenas hold 112 KB. *S19b changed this
+again (§124.25.1): three arenas at most, of 32 KB, 64 KB and the rest.*
 
 `W16_MAXSEG` becomes **253**, the NE format's own limit: a relocation names
 an internal segment by a byte, and 0FEh and 0FFh mean a constant and a
@@ -227971,7 +227974,7 @@ constant and every `DBSS` cell's address, and supplies three things.
 |---|---|
 | the back end, `dos_bevec` (§96.44.1) | `apps/dos/dosbe.inc`: DOS.O88's `dos_k_*` doors, `dos_be_bind` and the `DOS_BETAB` table, moved out of `dos.asm` into a file **both** include. DOS.O88 assembles byte-identical |
 | the hooks, `dos_hkv` (§96.44.3) | none: each is zero, which the core reads as "this host does not want it" |
-| the core's segment | the core at `CORE_ORG`, its bss at `CORE_BSS_AT`, and the host's part (`apps/win16/w16dosh.asm`) above it at `W16DH_ORG`, all in **one claim**, because the core reaches its doors and its hooks by near calls |
+| the core's segment | the core at `CORE_ORG`, its bss at `CORE_BSS_AT`, and the host's part (`apps/win16/w16dosh.asm`) above it at `W16DH_ORG`, all in **one block**, because the core reaches its doors and its hooks by near calls, with the read window after them (§124.25.1) |
 
 The host's part begins with a table the image far-calls
 (`apps/win16/w16dos.inc`): **+0** `w16dh_init`; **+3** the `int 21h` entry,
@@ -227991,11 +227994,13 @@ map, refuses unless the bytes equal `build/doscore.bin`, and writes one
 equate. The core and both its other hosts are byte-identical to before.
 
 **The DOS is fetched the first time a program asks for a file**, not at
-launch: Minesweeper never pays for it. The image claims the block, fetches
-the two parts (lazy, compressed), copies each to its offset as DOS.O88's
-loader does (§96.44.5.3), drops them, and claims the read window
-(§96.11): `DOS_WKB` KB, or one cluster where a cluster is larger. The block is
-**about 20 KB and the window 8 KB**; both are freed with the program.
+launch: Minesweeper never pays for it. The image takes one block of the
+global heap (§124.25.1) for the DOS and its read window (§96.11): `DOS_WKB`
+KB, or one cluster where a cluster is larger. It fetches the two parts
+(lazy, compressed), copies each to its offset as DOS.O88's loader does
+(§96.44.5.3), and drops them. The DOS is **about 20 KB and the window
+8 KB**, which starts on 512 bytes as the block does; the block is freed with
+the program. Until S19b they were two claims.
 
 `w16dh_init` stands the core where the program is - its volume and folder,
 the program's own as Windows' current directory was the one it was started
@@ -228572,7 +228577,7 @@ System font's 8.
 |---|---|
 | the face | Wine's MS Sans Serif, `fonts/ms_sans_serif.sfd`'s 13 px strike at the commit §124.1 pins (LGPL-2.1-or-later, Huw D M Davies and Dmitry Timoshkov - the System font's authors), whose advances are `SSERIFE.FON`'s own, EMBOLDENED as Windows did: each row OR-ed with itself a pixel right, the advance one wider. Committed art, `apps/win16/fonts/dlg13.txt` (VGA), `dlg10.txt` (EGA and Hercules) and `dlg08.txt` (CGA), drafted by `tools/w16font.py dlgdraft` and THE SOURCE from then on |
 | metrics | VGA 13 rows, ascent 11, internal leading 2 - `SSERIFE.FON`'s 8 point face. EGA and Hercules 10 rows, ascent 8; CGA 8 rows, ascent 6: drafted from the 13 by the System font's row plan and **derived, not measured** - no Windows 3.1 EGA or CGA face is installed on the reference machine. `tmAveCharWidth` 6 (`SSERIFE.FON`'s 5, bold) |
-| where it is | in the System font's own part (§124.7.1), at the paragraph after its last glyph: one part and one claim carry both, and WIN16 finds the second from the first's own table. +1,721 bytes on VGA |
+| where it is | in the System font's own part (§124.7.1), at the paragraph after its last glyph: one part and one block carry both, and WIN16 finds the second from the first's own table. +1,721 bytes on VGA |
 | which dialogs | `DS_SETFONT` naming `MS Sans Serif` or `Helv`, case aside, at 8 points. `CLOCK`'s `Helv` 6, and every other face or size, is the System font's as before |
 | units | `cxBase` 7 on every adapter (the advances do not change with the rows), `cyBase` the dialog face's rows; `MapDialogRect` on such a dialog answers in them. `GetDialogBaseUnits` is the System font's, as Windows' was |
 | what draws in it | WIN16's own controls in such a dialog - a window flag (`W16W2_DFACE`) set when they are made from its template, and on a combo box's own list and edit - each message they handle (measuring, the caret, painting) in the dialog face; and the DC an owner-drawn control hands its owner with `WM_DRAWITEM`. The dialog window's own DC, and a program's `GetDC`, stay the System font's |
@@ -229229,3 +229234,84 @@ opened. The row closes it and SHX ends.
 Opening a file and Save As through the chooser were seen on the glass in
 batch 1 (the plan's S19 record). The row does not repeat them, because
 picking a file in the chooser from a script is §38's own rows' business.
+
+### 124.25 GDI, the drawing half *(S19b, docs/plans/WIN16-ANY-PLAN.md)*
+
+Paintbrush 3.0 is the target: it draws every tool into memory bitmaps and
+copies them to its window. S18 recorded that it stopped on a bitmap of
+153,600 bytes. **That was wrong.** Measured in S19b batch 1, Paintbrush and
+`PBRUSH.DLL` ask for no bitmap over 8,960 bytes: the DLL's virtual bitmap
+manager sizes its bands from `GetFreeSpace` and keeps the picture in bands
+of at most 32 KB, paging them to a temporary file. What stopped it was the
+eight claims an owner may hold (§50), and then the DLL's local heap.
+
+S19b lands in batches: batch 1 is the claims and the heap (§124.25.1,
+§124.25.2), so Paintbrush opens with its picture; the drawing calls on a
+memory DC follow.
+
+#### 124.25.1 WIN16 within its eight claims *(S19b batch 1)*
+
+An owner holds at most eight claims (§50), and WIN16 is one owner for
+itself and the program it runs. Until S19b each of these was a claim of
+its own: the program, the library part, each arena of the global heap (up
+to six), the System font's part, the icon part, the system-library part,
+the emulator part, the DOS and its read window, and each profile file held
+(up to four). Paintbrush held seven when its bitmap manager made its
+temporary file: the DOS's block was the eighth, and fetching the DOS core
+into it was the ninth. The kernel refused it, `op_fetch` said *Not enough
+memory*, `OpenFile` answered DOS error 8, and the DLL reported *Insufficient
+memory for this operation*. It was never short of RAM: 145 KB was free at that moment.
+
+So WIN16 keeps three kinds of claim and no more:
+
+| claim | how many |
+|---|---|
+| the program (§124.20.2) | one |
+| the library part (§124.19) | one, from its first call |
+| the global heap's arenas (§124.9) | at most `W16_NARENA` = 3: 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB; each one the size of a larger request instead, and the request's own size when the larger one cannot be had |
+
+Everything else WIN16 keeps is a **block of its own in the global heap**
+(`w16_kclaim`), in the arenas beside the program's blocks: each profile
+file held (§124.14), the DOS with its read window after it (§124.21.1), and
+the System font's, icon, system-library and emulator parts. A part is
+fetched into a claim of its own, copied into its block and dropped
+(`w16_pkeep`), as the DOS's parts always were, so it costs a claim only
+while it is read. The blocks go with the arenas when the program ends.
+
+A block of WIN16's starts on 512 bytes, as a claim does: a profile is read
+straight into its block, and every disk-visible base is aligned, since an
+`int 13h` across a 64 KB boundary fails. It is cut from a fixed block 512
+bytes larger, whose handle is the word in the paragraph before it.
+
+That leaves the eight as the program, the library part, three arenas, and
+three for what is claimed for a moment: a part being fetched, and a
+`LoadLibrary` while the program runs (the loader part, its read cache and
+its table, §124.23.5).
+
+**`GlobalCompact` and `GetFreeSpace`** count a new arena only while one of
+the three is free, so they say what `GlobalAlloc` can actually get.
+
+**Not done, pinned:** `GetFreeSpace` still answers the largest free run
+(§124.23.9), where Windows answered the sum. Paintbrush sizes its bands from
+it, so its bands are smaller here than on Windows, and it keeps more of
+them.
+
+#### 124.25.2 A library's local heap has room *(S19b batch 1)*
+
+Windows grew a full local heap: `LocalAlloc` enlarged the data segment, up
+to 64 KB. WIN16 cannot move a library's DGROUP, which the library's code
+holds in DS, and the blocks beside it are its own code and module record,
+so it cannot grow in place either. So a library whose `ne_heap` is not 0 is
+given `W16_LHROOM` = 4,096 bytes more DGROUP when it is loaded, and its
+`LocalInit(DS, 0, cbHeap)` takes that room into the heap: the heap is
+`cbHeap` + 4,096 bytes, at the block's end.
+
+`PBRUSH.DLL` declares a 1,024-byte heap. With the small bands above it
+needed more for its band table, and its `LocalAlloc` failed after its
+temporary file had been made. With the room it does not.
+
+**Seen on QEMU's VGA (batch 1):** Paintbrush 3.0 opens with its toolbox,
+line widths, palette, scroll bars and a white canvas, and waits in
+`GetMessage`. WIN16 holds four claims: the program (172 KB), the library
+part (57 KB) and two arenas (32 KB and 64 KB). A stroke draws nothing yet:
+that is the memory DC's drawing, the next batch.

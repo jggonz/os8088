@@ -2340,8 +2340,13 @@ w16l_laylib:
     jne .code
     add ax, [es:si + NE_STACK]      ; DGROUP: its stack (0 in a library) and
     adc cx, 0                       ;   its local heap
+    cmp word [es:si + NE_HEAP], 0
+    je .noheap
     add ax, [es:si + NE_HEAP]
     adc cx, 0
+    add ax, W16_LHROOM              ; ...and the room Windows let it grow
+    adc cx, 0                       ;   into (SPEC.md 124.25.2)
+.noheap:
     cmp cx, 1
     ja .dgbig
     jb .dgok

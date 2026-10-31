@@ -132,7 +132,8 @@ W16B_MISS    equ 0x7F           ; W16B_PART: an import WIN16 lacks, PROC its
 W16B_NORET   equ 0x80           ; ...ORed in: it never returns (the census)
 W16B_DCF     equ 0x40           ; ...ORed in: a text call, in the face of the
                                 ;   DC's font (SPEC.md 124.24.4)
-W16_NARENA   equ 6              ; global heap arenas at once (w16mem.inc)
+W16_NARENA   equ 3              ; global heap arenas at once (w16mem.inc,
+                                ;   SPEC.md 124.25.1)
 W16_NGH      equ 64             ; moveable global handles
 W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)
 W16_MLAB     equ 64             ; ...a menu label's characters, and an
@@ -294,9 +295,9 @@ section .w16dlg
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     ; --- S16: the DOS (SPEC.md 124.21) ---
-    W16BSS w16_dhseg, 2         ; the DOS's claim, 0 = not fetched yet
+    W16BSS w16_dhseg, 2         ; the DOS's block, 0 = not fetched yet
     W16BSS w16_dhtmp, 2         ; ...while it is being made
-    W16BSS w16_dhwin, 2         ; ...and its read window's
+    W16BSS w16_dhwkb, 2         ; ...and its read window's KB, in the same block
     W16BSS w16_dhent, 4         ; the far entry: W16DH_I21 (or _INIT)
     W16BSS w16_i21ss, 2         ; the program's stack, across a fetch
     W16BSS w16_i21sp, 2
@@ -451,7 +452,7 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16d_dfon, 1         ; 1 while a DS_SETFONT dialog is made
     W16BSS w16_thalf, 1         ; 1: text's ink halved on 1bpp (grey text)
     W16BSS w16d_dfsv, 2         ; ...and the face before it
-    W16BSS w16_fpart, 1         ; ...which part, + 1
+    W16BSS w16_fpart, 1         ; ...1 = its block is in the heap
     W16BSS w16_tn, 2            ; TextOut's characters
     W16BSS w16_tnb, 2           ; ...the band's bytes a row
     W16BSS w16_tb0, 2           ; ...the screen x of its bit 0
@@ -1222,11 +1223,8 @@ w16_freeprog:
     call OSAPI_MEM_FREE
     mov word [w16_pseg], 0
 .face:
-    mov al, [w16_fpart]
-    or al, al
-    jz .out
-    dec al
-    call op_drop
+    cmp byte [w16_fpart], 0         ; its block went with the arenas
+    je .out
     mov byte [w16_fpart], 0
     mov word [w16_face], 0
     mov word [w16_sface], 0
@@ -1256,8 +1254,8 @@ w16_facein:
     push dx
     push bx
     push ax
-    call op_fetch                   ; claims, reads, expands; a toast if not
-    pop ax
+    call w16_pkeep                  ; in the heap, not a claim (124.25.1)
+    pop bx                          ; (the part, spent)
     pop bx
     pop dx
     pushf
@@ -1266,10 +1264,7 @@ w16_facein:
     pop ax
     popf
     jc .no
-    inc al
-    mov [w16_fpart], al
-    dec al
-    call op_seg
+    mov byte [w16_fpart], 1
     mov [w16_face], ax
     mov [w16_sface], ax
     push es
@@ -1307,6 +1302,122 @@ w16_facein:
     mov di, w16_l2
     call w16_strcpy
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_kclaim - AX = KB: a fixed block of WIN16's own in the global heap, in
+; place of an OSAPI_MEM_CLAIM (SPEC.md 124.25.1). An owner holds at most eight
+; claims (SPEC.md 50), and the program, the library part and the arenas are
+; WIN16's long-lived ones; what WIN16 keeps besides goes in the arenas with
+; the program's blocks. It starts on 512 bytes, as a claim does: a profile is
+; read straight into one, and every disk-visible base is aligned (an int 13h
+; across 64 KB fails). The block's own handle is the word in the paragraph
+; before it. out: CF=0 DX = the segment; CF=1 none. Keeps all but DX.
+; -----------------------------------------------------------------------------
+w16_kclaim:
+    push ax
+    push cx
+    push es
+    mov cx, 1024
+    mul cx                          ; DX:AX = bytes, and 512 to align in
+    add ax, 512
+    adc dx, 0
+    xor cl, cl                      ; GMEM_FIXED: the handle is the segment
+    call w16_gnew
+    or ax, ax
+    jz .no
+    add dx, 32                      ; at least a paragraph in, then down to
+    and dx, 0xFFE0                  ;   512 bytes
+    dec dx
+    mov es, dx
+    mov [es:0], ax                  ; the handle, before it
+    inc dx
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop cx
+    pop ax
+    ret
+
+; w16_kfree - DX = a w16_kclaim block (or a w16_pkeep part): freed. Keeps all
+w16_kfree:
+    push ax
+    push es
+    dec dx
+    mov es, dx
+    inc dx
+    mov ax, [es:0]
+    call w16_gfreeh
+    pop es
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_pkeep - part AL into a w16_kclaim block (SPEC.md 124.25.1): fetched,
+; copied and dropped, as w16_dhcopy puts the DOS in place, so the part costs a
+; claim only while it is read. out: CF=0 AX = the block's segment, the part at
+; offset 0; CF=1 not had (op_fetch has said why, or the heap is full). Keeps
+; every other register. w16_kfree frees it.
+; -----------------------------------------------------------------------------
+w16_pkeep:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov bl, al
+    call op_row                     ; SI -> its row: the unpacked length
+    mov cx, [si + OP_R_LEN]
+    mov ax, cx
+    add ax, 1023
+    rcr ax, 1                       ; KB, the carry kept (a 64 KB part)
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    call w16_kclaim                 ; first, so a full heap reads nothing
+    jc .out
+    mov di, dx                      ; DI = the block
+    mov al, bl
+    call w16_pfetch                 ; AX = the part
+    jc .nopart
+    push ds
+    mov es, di
+    mov ds, ax
+    xor si, si
+    push di
+    xor di, di
+    add cx, 1                       ; words, a 65,535-byte part's carry kept
+    rcr cx, 1
+    cld
+    rep movsw
+    pop di
+    pop ds
+    mov al, bl
+    call op_drop
+    mov ax, di
+    clc
+    jmp short .out
+.nopart:
+    mov dx, di
+    call w16_kfree
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1430,7 +1541,7 @@ w16_sysin:
 .fetch:
     push ax
     mov al, W16P_SYS
-    call w16_pfetch
+    call w16_pkeep                  ; in the heap, not a claim (124.25.1)
     jc .out
     mov [w16_sseg], ax
     mov [w16_sbv + 2], ax
@@ -1442,11 +1553,11 @@ w16_sysin:
 w16_sysout:
     cmp word [w16_sseg], 0
     je .out
-    push ax
-    mov al, W16P_SYS
-    call op_drop
-    mov word [w16_sseg], 0
-    pop ax
+    push dx
+    xor dx, dx
+    xchg dx, [w16_sseg]
+    call w16_kfree
+    pop dx
 .out:
     ret
 

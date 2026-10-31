@@ -523,9 +523,9 @@ its table goes in the diary, so the reach is measured, not claimed.
       bar from the real one (§124.23.8).
     - Paintbrush 3.0 with `PBRUSH.DLL`: 23 of its 35 missing imports added
       (§124.23.9). Its window opens with all nine menus and its toolbox,
-      then *Insufficient memory for this operation* - its picture is a
-      screen-sized bitmap, 153,600 bytes, and WIN16 makes none over 64,000
-      - and it ends cleanly.
+      then *Insufficient memory for this operation* and it ends cleanly.
+      (S18 put that down to a 153,600-byte bitmap. S19b batch 1 measured it:
+      the cause was WIN16's eight claims, §124.25.1.)
   - **Fixed, older than this story:** `GetMenuString` put DS back from CS in
     the library part, where CS is the part's segment; after it, WIN16's DS
     accesses went into its code. Paintbrush's MessageBox did not paint, the
@@ -714,10 +714,10 @@ its table goes in the diary, so the reach is measured, not claimed.
     text and `BitBlt`/`StretchBlt` between bitmaps, with the ROPs Paintbrush
     uses - the same primitives the window DC has, against a bitmap's claim
     instead of the screen.
-  - **Bitmaps over 64,000 bytes**: Paintbrush's picture is the screen's
-    size (153,600 bytes at four planes on VGA). Its bitmap manager
-    (`PBRUSH.DLL`) pages bands of it to a temporary file, so the band size
-    WIN16 allows decides how it works; the bands may be enough.
+  - **Bitmaps over 64,000 bytes**: not needed by Paintbrush, measured in
+    batch 1. Its bitmap manager (`PBRUSH.DLL`) keeps the picture in bands of
+    at most 32 KB and pages them to a temporary file; it asks for no bitmap
+    over 8,960 bytes. Left for a program that needs one.
   - The imports Paintbrush still lacks (§124.23.9): `SetBitmapBits`,
     `GetDIBits`, `SetDIBits`, `ExtFloodFill`, `CreateRectRgn`,
     `CreatePolygonRgn`, `SelectClipRgn`, `ExcludeClipRect`,
@@ -726,6 +726,33 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Verification:** a row that draws with each tool into a fixture's
     memory DC and compares the bitmap with the host's expected pixels, and
     Paintbrush opened, drawn in and saved.
+  - [x] **Batch 1: WIN16 within its eight claims, and a library's heap with
+    room** (SPEC.md §124.25.1, §124.25.2).
+    - **Found:** Paintbrush stopped on the eight claims an owner may hold,
+      not on a bitmap. A temporary probe logged its 65 bitmap requests (none
+      over 8,960 bytes, none refused); a call trace showed `OpenFile`
+      creating its temporary file fail with DOS error 8; the heap, frozen at
+      that moment, had 145 KB free and WIN16 holding seven claims. The DOS's
+      block was the eighth and fetching its core the ninth.
+    - WIN16 keeps the program, the library part and at most three arenas
+      (32 KB, 64 KB, then the largest free run less 32 KB) as claims.
+      Profiles, the DOS and its window, and the System font's, icon,
+      system-library and emulator parts are blocks of the global heap
+      (`w16_kclaim`, `w16_pkeep`), aligned to 512 bytes.
+    - Then `PBRUSH.DLL`'s 1 KB local heap ran out for its band table. A
+      library with a heap is given 4 KB more of it, as Windows' growable
+      heap would have.
+    - **Seen on QEMU's VGA:** Paintbrush 3.0 opens with its toolbox,
+      palette, scroll bars and a white canvas, and waits for input; WIN16
+      holds four claims. A stroke draws nothing yet (batch 2). REGDB and
+      LZT, which lean on profiles, the DOS and LZEXPAND, still say
+      `REGDB OK` and `LZT OK 24000`.
+    - **Rows that cover it, for S25's pass:** every `win16*` row, since
+      every program takes its face, DOS and profiles from the heap now;
+      `win16fpu` for the emulator part; `win16dll` for the library heap.
+    - What it costs, against S19 batch 5: the image 34,353 bytes (+223),
+      bss 24,708 (-12), 5,963 bytes of room; the library part 58,129 (+61),
+      the loader part 12,227 (+13).
 
 - [ ] **S20: Big programs in small memory (R6).**
   - *As a user, Write opens a document on a 640 KB machine.*
