@@ -470,9 +470,10 @@ its table goes in the diary, so the reach is measured, not claimed.
     - Known and pinned: the PIF Editor's Advanced Options is taller than
       os8088's desktop, and its last row (the shortcut key) is below the
       screen's edge. Its template names `Helv` 8, so batch 5's dialog face
-      should make it shorter; that has not been looked at. The window records live in WIN16's 64 KB data segment
-      (102 bytes each), so the next rise of `W16_MAXWND` should move them
-      out of it rather than spend more of it: 9,762 bytes of room are left.
+      should make it shorter; that has not been looked at. The window
+      records live in WIN16's 64 KB data segment (102 bytes each), so the
+      next rise of `W16_MAXWND` should move them out of it rather than
+      spend more of it: 9,762 bytes of room were left then.
     - **Found and left:** Calendar and Cardfile at once on CGA - the second
       is refused, "WIN16's library part could not be read", because each
       instance holds its own image, bss and library part. One instance
@@ -486,9 +487,10 @@ its table goes in the diary, so the reach is measured, not claimed.
       bytes of room left in the 64 KB (9,284 before); the library part
       55,137 (+6,594).
 
-- [ ] **S18: Libraries (R4, the program's own).**
+- [x] **S18: Libraries (R4, the program's own).**
   - *As a user, Recorder runs with its RECORDER.DLL, and Paintbrush with
-    PBRUSH.DLL.*
+    PBRUSH.DLL.* Paintbrush's half moved to S19b (below): its library loads
+    and runs, and what stops it is GDI's drawing half, not a library.
   - NE libraries join the module table (SPEC.md §124.2.1):
     - an implicit import is resolved at load;
     - `LoadLibrary`, `GetProcAddress`, `FreeLibrary`, `GetModuleHandle` and
@@ -503,6 +505,42 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Verification:** a `win16dll` row, with a Watcom DLL fixture that
     exports by name and by ordinal and keeps a counter in its DGROUP across
     two users.
+  - **Done** (SPEC.md §124.23): a library's DGROUP, code and module block
+    in the global heap; implicit imports bound at load by ordinal and by
+    name (resident, then non-resident names); `LibMain` through fixed slot
+    4 before the program starts; `LoadLibrary`, `FreeLibrary` (with `WEP`),
+    `GetProcAddress`, `GetModuleHandle`, `GetModuleFileName` and
+    `GetModuleUsage`; up to 8 libraries, 4 deep. `tools/w16disk.py` carries
+    a program's libraries onto `make win16disk`'s floppies.
+  - **Seen on QEMU's VGA:**
+    - `DLLUSE.EXE` reports **DLLUSE OK**: LibMain first, imports by name and
+      by ordinal, `GetProcAddress` both ways, the shared counter, a library
+      importing another, `WEP` on `FreeLibrary`, and 2 for a missing file.
+    - Recorder 3.0 with `RECORDER.DLL`: its window with File, Macro, Options
+      and Help; Macro's greyed items; Record… opens its dialog. Two
+      defects found on the way and fixed: a 16-character class name was
+      refused, and a hidden first window took WIN16's window and its menu
+      bar from the real one (§124.23.8).
+    - Paintbrush 3.0 with `PBRUSH.DLL`: 23 of its 35 missing imports added
+      (§124.23.9). Its window opens with all nine menus and its toolbox,
+      then *Insufficient memory for this operation* - its picture is a
+      screen-sized bitmap, 153,600 bytes, and WIN16 makes none over 64,000
+      - and it ends cleanly.
+  - **Fixed, older than this story:** `GetMenuString` put DS back from CS in
+    the library part, where CS is the part's segment; after it, WIN16's DS
+    accesses went into its code. Paintbrush's MessageBox did not paint, the
+    launching DOS window stayed, and a keystroke rebooted the machine.
+    `t_w16xsec` rule 6 now refuses the pattern.
+  - **Not yet run:** `win16dll` (registered). It runs in the final pass
+    (S25).
+  - **Pinned** (§124.23.6): a library's own resources; `WEP` at program
+    end; a DGROUP that grows; sharing a library between two programs (S21).
+    A hidden helper window shown later stays undrawn (§124.23.8).
+  - What it cost, against S17 batch 5: the image 33,810 bytes (+820), its
+    bss 24,686 (+689), **6,528 bytes of room left in the 64 KB** (8,549
+    before); the library part 57,714 (+2,072); the loader part 11,260
+    (+2,257). The room is now the tightest it has been: S19 should put what
+    it can in parts.
 
 - [ ] **S19: The system libraries WIN16 provides (R4, the system's own).**
   - *As a user, File > Open in a Windows 3.1 program shows os8088's Standard
@@ -525,6 +563,26 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Verification:** a `win16cdlg` row opens and saves through the
     dialog; an LZ row expands a fixture on the machine and compares bytes
     with the host's expansion.
+
+- [ ] **S19b: GDI, the drawing half (R7).**
+  - *As a user, Paintbrush opens, and I draw with its tools.* (Moved from
+    S18: Paintbrush's library works; its drawing does not.)
+  - Drawing **into a memory DC**: lines, rectangles, ellipses, polygons,
+    text and `BitBlt`/`StretchBlt` between bitmaps, with the ROPs Paintbrush
+    uses - the same primitives the window DC has, against a bitmap's claim
+    instead of the screen.
+  - **Bitmaps over 64,000 bytes**: Paintbrush's picture is the screen's
+    size (153,600 bytes at four planes on VGA). Its bitmap manager
+    (`PBRUSH.DLL`) pages bands of it to a temporary file, so the band size
+    WIN16 allows decides how it works; the bands may be enough.
+  - The imports Paintbrush still lacks (§124.23.9): `SetBitmapBits`,
+    `GetDIBits`, `SetDIBits`, `ExtFloodFill`, `CreateRectRgn`,
+    `CreatePolygonRgn`, `SelectClipRgn`, `ExcludeClipRect`,
+    `CreateHatchBrush`.
+  - **Targets:** PBRUSH 3.0 with PBRUSH.DLL, then 3.1's.
+  - **Verification:** a row that draws with each tool into a fixture's
+    memory DC and compares the bitmap with the host's expected pixels, and
+    Paintbrush opened, drawn in and saved.
 
 - [ ] **S20: Big programs in small memory (R6).**
   - *As a user, Write opens a document on a 640 KB machine.*

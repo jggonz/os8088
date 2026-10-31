@@ -34,6 +34,8 @@ NE_IMPTAB  equ 0x2A
 NE_ENTTAB  equ 0x04
 NE_ENTLEN  equ 0x06
 NE_ALIGN   equ 0x32
+NE_NRESN   equ 0x20             ; the non-resident names' length...
+NE_NRESOFF equ 0x2C             ; ...and their offset in the FILE, 32 bits
 NE_EXETYP  equ 0x36
 
 NEF_MULTI  equ 0x0002           ; ne_flags
@@ -217,6 +219,10 @@ w16_load:
     mov [w16_nmod], ax
 
     call w16_bindinit               ; nothing bound yet (SPEC.md 124.19.1)
+    call w16_modules                ; which of the imported modules are ours,
+    call w16l_libs                  ;   and its own libraries, loaded first
+    jc .refused                     ;   (SPEC.md 124.23.1): lines written
+    mov es, [w16_fseg]
     call w16_layout                 ; sizes and the claim; CF=1 SI = reason
     jc .refuse
     call w16_copysegs               ; CF=1 SI = reason; ES = the tables NOW
@@ -224,7 +230,6 @@ w16_load:
     call w16l_cfree                 ; the cache's work is done
     ICALL w16_copyres                ; the resource table, kept (SPEC.md 124.10)
     jc .refuse
-    call w16_modules                ; which of the imported modules are ours
     mov word [w16_nfix], 0
     xor al, al
     call w16_relocs                 ; pass 0: check every import (CF=1: [w16_l1/2])
@@ -983,6 +988,8 @@ w16_reloc1:
     mov dl, [w16_modid + di]
     cmp dl, 0xFF
     je .missing
+    test dl, W16M_LIB               ; a library's: its own address (124.23.3)
+    jnz .lib
     cmp al, 2                       ; by name: the few names we know
     jne .byord
     call w16_byname                 ;   (w16_bynm) as the ordinals they are
@@ -1045,6 +1052,29 @@ w16_reloc1:
     pop bx
     mov si, w16_r_nbind
     jmp .refusal
+.lib:
+    cmp byte [w16_rpass], 1         ; pass 0 checks nothing (bound, or bound
+    jne .ok                         ;   missing), and pass 2 seeds nothing
+    mov bl, dl
+    and bl, ~W16M_LIB & 0xFF
+    xor cl, cl                      ; by ordinal: CL = 0, AX = it
+    mov al, [es:si + 1]             ; the kind, again
+    and al, 3
+    cmp al, 2
+    mov ax, [es:si + 6]             ; (mov keeps the flags)
+    jne .libord
+    mov di, [w16_ne]                ; by name: the imported-names table
+    add ax, [es:di + NE_IMPTAB]
+    add ax, di
+    mov di, ax
+    mov cl, [es:di]
+    inc di
+    or cl, cl
+    jz .missing
+.libord:
+    ICALL w16_libproc               ; -> DX:AX, CF=1 not exported
+    jc .missing
+    jmp .apply
 .missing:                           ; SPEC.md 124.12: bound to a stub that
     cmp byte [w16_rpass], 1         ;   ends the program, naming it, if it is
     jne .ok                         ;   ever CALLED
@@ -1580,6 +1610,7 @@ w16_frame:
     mov [w16_res], ax
     mov word [w16_nargb], 0
     mov byte [w16_rflags], 0
+    call w16l_lmfirst               ; LibMain owed: a stub before the entry
     pop di
     clc
     ret
@@ -1587,6 +1618,52 @@ w16_frame:
     pop di
     mov si, w16_r_entry
     stc
+    ret
+
+; w16l_lmfirst - a library owed its LibMain (SPEC.md 124.23.4): the first
+; frame moved down four bytes, so the entry's IP:CS lies above it, and its
+; return pointed at W16_LMROW's stub - the "call" the entry seems to make
+; first. Keeps every register.
+w16l_lmfirst:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov si, w16_libs
+    mov cx, W16_NLIB
+.find:
+    cmp byte [si + W16L_COUNT], 0
+    je .next
+    cmp byte [si + W16L_OWED], 0
+    jne .owed
+.next:
+    add si, W16L_SIZE
+    loop .find
+    jmp short .out
+.owed:
+    mov es, [w16_pss]
+    mov si, [w16_psp_]
+    lea di, [si - 4]
+    mov [w16_psp_], di
+    mov cx, 6                       ; DI SI DS BP: the IP and CS stay above
+.mv:
+    mov ax, [es:si]
+    mov [es:di], ax
+    inc si
+    inc si
+    inc di
+    inc di
+    loop .mv
+    mov di, [w16_psp_]
+    mov word [es:di + W16F_IP], w16_stubs + 6 * W16_LMROW
+    mov [es:di + W16F_CS], ds
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1855,11 +1932,809 @@ w16_bindrow:
     pop bx
     ret
 
+; =============================================================================
+; A PROGRAM'S OWN LIBRARIES (SPEC.md 124.23). A module WIN16 does not provide
+; is <NAME>.DLL in the program's folder, loaded here before the module that
+; imports it is laid out: its segments in the global heap, its imports bound,
+; its prologs patched, its census taken, and what later calls read kept in a
+; module block. The importer's loader state is saved around it (w16l_push).
+; =============================================================================
+
+; w16l_libs - each module of [w16_modid] that is not WIN16's, as a library:
+; [w16_modid] becomes W16M_LIB + its record, or stays 0FFh when its file is
+; not there. ES = the tables. out: CF=1 refused, [w16_l1]/[w16_l2] written
+w16l_libs:
+    push bx
+    push si
+    xor bx, bx
+.mod:
+    cmp bx, [w16_nmod]
+    jae .done
+    cmp byte [w16_modid + bx], 0xFF
+    jne .next
+    mov es, [w16_fseg]
+    call w16_modname                ; ES:SI -> its pascal name
+    call w16l_need                  ; AL = the record, 0FFh none; CF=1 refused
+    jc .out
+    cmp al, 0xFF
+    je .next
+    or al, W16M_LIB
+    mov [w16_modid + bx], al
+.next:
+    inc bx
+    jmp short .mod
+.done:
+    clc
+.out:
+    mov es, [w16_fseg]
+    pop si
+    pop bx
+    ret
+
+; w16l_need - ES:SI = a module's pascal name: a library already loaded (its
+; count raised), or its file loaded now. out: CF=0 AL = the record or 0FFh
+; (no such file); CF=1 refused, the lines written. Keeps the rest.
+w16l_need:
+    push cx
+    push si
+    push di
+    mov di, w16_lname               ; the file: up to 8 of it, then .DLL
+    mov cl, [es:si]
+    xor ch, ch
+    cmp cx, 8
+    jbe .n
+    mov cx, 8
+.n:
+    jcxz .ext
+.c:
+    inc si
+    mov al, [es:si]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 0x20
+.u:
+    mov [di], al
+    inc di
+    loop .c
+.ext:
+    mov word [di], '.D'
+    mov word [di + 2], 'LL'
+    mov byte [di + 4], 0
+    ICALL w16_libfind               ; AL = the record, CF=1 none loaded
+    jc .load
+    clc
+    jmp short .out
+.load:
+    call w16l_ldlib
+.out:
+    pop di
+    pop si
+    pop cx
+    ret
+
+; w16l_ldlib - [w16_lname]'s library, loaded (SPEC.md 124.23). The folder
+; is current and the cluster cache claimed. out: CF=0 AL = its record, or
+; 0FFh no such file; CF=1 refused with the lines written (line 2 the
+; library's file). Clobbers AX; keeps the rest.
+w16l_ldlib:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    cmp byte [w16_ldep], W16_LDEPTH
+    jb .deep
+    mov si, w16_r_ldeep
+    jmp .refuse0
+.deep:
+    call w16l_push                  ; the importer's state, aside
+    mov si, w16_lname
+    mov di, w16_name
+    ICALL w16_strcpy
+    mov word [w16_fseg], 0
+    mov word [w16l_code], 0
+    mov word [w16_dgroup], 0
+    push ds
+    pop es
+    mov di, w16_hdr                 ; MZ, then NE (w16_load's own checks)
+    xor ax, ax
+    xor dx, dx
+    mov cx, 0x40
+    call w16l_fread
+    jnc .mz
+    call w16l_pop                   ; no such file: its imports bind missing
+    mov al, 0xFF
+    clc
+    jmp .ret
+.mz:
+    cmp word [w16_hdr], 0x5A4D
+    jne .notwin
+    cmp word [w16_hdr + 0x18], 0x40
+    jb .notwin
+    mov ax, [w16_hdr + 0x3C]
+    mov dx, [w16_hdr + 0x3E]
+    mov [w16_soff], ax
+    mov [w16_soff + 2], dx
+    mov di, w16_hdr
+    mov cx, 0x40
+    call w16l_fread
+    jc .notwin
+    cmp word [w16_hdr], 0x454E
+    jne .notwin
+    call w16l_tabend
+    jnc .tabs
+    mov si, w16_r_tabs
+    jmp .refuse
+.notwin:
+    mov si, w16_r_notlib
+    jmp .refuse
+.tabs:
+    mov [w16_fend], ax
+    mov [w16_hpos], ax
+    inc word [w16_hpos]
+    and word [w16_hpos], 0xFFFE
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    mov [w16_hkb], ax
+    call OSAPI_MEM_CLAIM
+    jnc .tclaimed
+    mov si, w16_r_mem
+    jmp .refuse
+.tclaimed:
+    mov [w16_fseg], dx
+    mov es, dx
+    xor di, di
+    mov ax, [w16_soff]
+    mov dx, [w16_soff + 2]
+    mov cx, [w16_fend]
+    call w16l_fread
+    jnc .tread
+    mov si, w16_r_trunc
+    jmp .refuse
+.tread:
+    xor si, si
+    mov [w16_ne], si
+    mov ax, [es:si + NE_FLAGS]
+    mov di, w16_r_notlib
+    test ax, NEF_LIB
+    jz .flagref
+    mov di, w16_r_self
+    test ax, NEF_SELF
+    jnz .flagref
+    mov di, w16_r_linkerr
+    test ax, NEF_LINKERR
+    jnz .flagref
+    mov di, w16_r_pmode
+    test ax, NEF_PMODE
+    jnz .flagref
+    mov al, [es:si + NE_EXETYP]
+    cmp al, 2
+    je .exeok
+    or al, al
+    jz .exeok
+    mov di, w16_r_os2
+.flagref:
+    mov si, di
+    jmp .refuse
+.exeok:
+    mov ax, [es:si + NE_CSEG]       ; a library may have no segment at all
+    cmp ax, W16_MAXSEG              ;   (a resource library's)
+    jbe .segok
+    mov si, w16_r_segs
+    jmp .refuse
+.segok:
+    mov [w16_nseg], ax
+    mov ax, [es:si + NE_AUTODATA]   ; ...or no DGROUP
+    cmp ax, [w16_nseg]
+    jbe .dataok
+    mov si, w16_r_nodata
+    jmp .refuse
+.dataok:
+    mov ax, [es:si + NE_CMOD]
+    cmp ax, 16
+    jbe .modok
+    mov si, w16_r_mods
+    jmp .refuse
+.modok:
+    mov [w16_nmod], ax
+    call w16_modules
+    call w16l_libs                  ; ITS libraries, first
+    jc .refused
+    mov es, [w16_fseg]
+    call w16l_laylib                ; CF=1 SI = reason
+    jc .refuse
+    call w16_copysegs
+    jc .refuse
+    mov word [w16_nfix], 0
+    xor al, al
+    call w16_relocs
+    jc .refused
+    cmp word [w16_nfix], 0          ; floating point: decided once, by the
+    je .nofp                        ;   first module that has any (124.5)
+    ICALL w16x_mode
+    jc .refuse
+.nofp:
+    mov al, 1
+    call w16_relocs
+    jc .refused
+    call w16_prologs
+%ifndef W16_CENSUS_ALWAYS
+    cmp byte [w16_cpu186], 0
+    jne .cpuok
+%endif
+    call w16_census
+    jc .refused
+.cpuok:
+    call w16l_mrec                  ; AL = its record; CF=1 SI = reason
+    jc .refuse
+    push ax
+    mov dx, [w16_fseg]
+    call OSAPI_MEM_FREE
+    call w16l_pop
+    pop ax
+    clc
+    jmp short .ret
+.refuse0:
+    mov di, w16_l1                  ; (nothing pushed: the importer's name)
+    ICALL w16_strcpy
+    mov si, w16_lname
+    mov di, w16_l2
+    ICALL w16_strcpy
+    stc
+    jmp short .ret
+.refuse:
+    mov di, w16_l1
+    ICALL w16_strcpy
+    mov si, w16_name
+    mov di, w16_l2
+    ICALL w16_strcpy
+.refused:
+    call w16l_undo                  ; its blocks and its tables back
+    call w16l_pop
+    stc
+.ret:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16l_rtlib - [w16_lname]'s library loaded while the program runs
+; (LoadLibrary, SPEC.md 124.23.5), far-called by w16_ldlibin: the program's
+; folder made current and the cluster cache claimed for it, the user's folder
+; put back after. out: as w16l_ldlib's
+w16l_rtlib:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov word [cs:w16l_rowslot + 2 * W16_XDDP], W16_DDPROW ; XSEC-OK: (a fresh part)
+    call OSAPI_FILE_HERE
+    push dx
+    push bx
+    mov dx, [w16_dir]
+    mov bl, [w16_vol]
+    call OSAPI_FILE_GOTO_QM
+    jc .fail
+    mov ax, [w16_csz]
+    mov cl, 10
+    shr ax, cl
+    call OSAPI_MEM_CLAIM
+    jc .fail
+    mov [w16_cseg], dx
+    mov word [w16_clen], 0
+    call w16l_ldlib
+    pushf
+    call w16l_cfree
+    popf
+    jmp short .back
+.fail:
+    stc
+.back:
+    pop bx
+    pop dx
+    pushf
+    push ax
+    call OSAPI_FILE_GOTO_QM
+    pop ax
+    popf
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    retf
+
+; w16l_undo - a library refused part way: its tables, code and DGROUP given
+; back. Keeps all.
+w16l_undo:
+    push ax
+    push dx
+    xor dx, dx
+    xchg dx, [w16_fseg]
+    or dx, dx
+    jz .t
+    call OSAPI_MEM_FREE
+.t:
+    xor ax, ax
+    xchg ax, [w16l_code]
+    or ax, ax
+    jz .c
+    ICALL w16_gfreeh
+.c:
+    xor ax, ax
+    xchg ax, [w16_dgroup]
+    or ax, ax
+    jz .d
+    ICALL w16_gfreeh
+.d:
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_laylib - a library's segments into the global heap (SPEC.md 124.23.2):
+; DGROUP a block of its own (minalloc + stack + heap), every other segment
+; one block, each at a paragraph of its own. in: ES = the tables
+; out: [w16_sbase], [w16_slen], [w16_dgroup] (0 = none), [w16l_code];
+; CF=1 SI = reason
+; -----------------------------------------------------------------------------
+w16l_laylib:
+    push bp
+    mov si, [w16_ne]
+    mov di, si
+    add di, [es:si + NE_SEGTAB]
+    xor bp, bp                      ; BP = the code block's paragraphs
+    xor bx, bx
+    mov word [w16l_dgb], 0
+    mov word [w16l_dgb + 2], 0
+.seg:
+    mov ax, bx
+    shr ax, 1
+    cmp ax, [w16_nseg]
+    jae .sized
+    test word [es:di + 4], NSF_ITER
+    jz .noiter
+    mov si, w16_r_iter
+    jmp .fail
+.noiter:
+    xor cx, cx                      ; CX:AX = max(length, minalloc), w16_lay1's
+    mov dx, [es:di + 6]
+    or dx, dx
+    jnz .minset
+    inc cx
+.minset:
+    mov ax, dx
+    cmp word [es:di], 0
+    je .one
+    cmp word [es:di + 2], 0
+    jne .len16
+    xor ax, ax
+    mov cx, 1
+    jmp short .one
+.len16:
+    or cx, cx
+    jnz .one
+    cmp [es:di + 2], ax
+    jbe .one
+    mov ax, [es:di + 2]
+.one:
+    mov si, [w16_ne]
+    mov dx, bx
+    shr dx, 1
+    inc dx
+    cmp dx, [es:si + NE_AUTODATA]
+    jne .code
+    add ax, [es:si + NE_STACK]      ; DGROUP: its stack (0 in a library) and
+    adc cx, 0                       ;   its local heap
+    add ax, [es:si + NE_HEAP]
+    adc cx, 0
+    cmp cx, 1
+    ja .dgbig
+    jb .dgok
+    or ax, ax
+    jz .dgok
+.dgbig:
+    mov si, w16_r_dgbig
+    jmp .fail
+.dgok:
+    mov [w16_slen + bx], ax
+    mov [w16l_dgb], ax
+    mov [w16l_dgb + 2], cx
+    mov word [w16_sbase + bx], 0xFFFF   ; placed below
+    jmp short .nextseg
+.code:
+    mov [w16_slen + bx], ax
+    mov [w16_sbase + bx], bp        ; relative, until the block is made
+    add ax, 15
+    adc cx, 0
+    shr cx, 1
+    rcr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add bp, ax
+    jc .mem
+.nextseg:
+    add di, 8
+    inc bx
+    inc bx
+    jmp .seg
+.sized:
+    or bp, bp                       ; the code block
+    jz .nocode
+    cmp bp, 0xFE00
+    jae .mem
+    mov ax, bp
+    xor dx, dx
+    mov cx, 4
+.p2b:
+    shl ax, 1
+    rcl dx, 1
+    loop .p2b
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew                  ; AX = the handle, DX = the segment
+    or ax, ax
+    jz .mem
+    mov [w16l_code], dx
+.nocode:
+    mov ax, [w16l_dgb]
+    mov dx, [w16l_dgb + 2]
+    mov cx, ax
+    or cx, dx
+    jz .nodg
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew
+    or ax, ax
+    jz .mem
+    mov [w16_dgroup], dx
+    mov ax, [w16l_dgb]
+    mov [w16_dgsize], ax
+.nodg:
+    xor bx, bx                      ; absolute paragraphs
+.abs:
+    mov ax, bx
+    shr ax, 1
+    cmp ax, [w16_nseg]
+    jae .done
+    mov ax, [w16_dgroup]
+    cmp word [w16_sbase + bx], 0xFFFF
+    je .put
+    mov ax, [w16_sbase + bx]
+    add ax, [w16l_code]
+.put:
+    mov [w16_sbase + bx], ax
+    inc bx
+    inc bx
+    jmp short .abs
+.done:
+    pop bp
+    clc
+    ret
+.mem:
+    mov si, w16_r_mem
+.fail:
+    pop bp
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_mrec - the library loaded: its module block made and its record
+; written (SPEC.md 124.23.2). in: ES = the tables. out: CF=0 AL = the
+; record; CF=1 SI = reason. Keeps the rest but ES.
+; -----------------------------------------------------------------------------
+w16l_mrec:
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    mov si, w16_libs                ; a free record
+    xor bp, bp
+.free:
+    cmp byte [si + W16L_COUNT], 0
+    je .rec
+    add si, W16L_SIZE
+    inc bp
+    cmp bp, W16_NLIB
+    jb .free
+    mov si, w16_r_nlib
+    jmp .fail
+.rec:
+    mov [w16l_rp], si
+    push es                         ; the record, cleared before it is filled
+    push ds
+    pop es
+    mov di, si
+    mov cx, W16L_SIZE / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    mov bx, [w16_ne]                ; what the block copies, measured first
+    mov ax, [es:bx + NE_ENTTAB]
+    add ax, bx
+    mov [w16l_entp], ax
+    mov ax, [es:bx + NE_ENTLEN]
+    mov [w16l_entn], ax
+    mov ax, [es:bx + NE_NRESN]
+    mov [w16l_nresn], ax
+    mov ax, [es:bx + NE_IP]
+    mov [w16l_ip], ax
+    mov ax, [es:bx + NE_CS]
+    mov [w16l_cs], ax
+    mov di, bx                      ; the resident names, walked to their 0
+    add di, [es:bx + NE_RESTAB]
+    mov [w16l_resp], di
+.rw:
+    cmp di, [w16_fend]
+    jae .rwe
+    mov al, [es:di]
+    or al, al
+    jz .rwe
+    xor ah, ah
+    add di, ax
+    add di, 3
+    jmp short .rw
+.rwe:
+    inc di                          ; its 0, kept
+    sub di, [w16l_resp]
+    mov [w16l_resn], di
+    mov ax, [w16_nseg]              ; header, segments, entries, names
+    shl ax, 1
+    add ax, W16LM_SEGS
+    add ax, [w16l_entn]
+    jc .mem
+    add ax, di
+    jc .mem
+    add ax, [w16l_nresn]
+    jc .mem
+    xor dx, dx
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew
+    or ax, ax
+    jz .mem
+    mov si, [w16l_rp]
+    mov [si + W16L_MREC], dx
+    mov es, dx                      ; ES = the block from here
+    mov ax, [w16_nseg]
+    mov [es:W16LM_NSEG], ax
+    mov ax, [w16l_ip]
+    mov [es:W16LM_IP], ax
+    mov ax, [w16l_cs]
+    mov [es:W16LM_CS], ax
+    xor bx, bx                      ; the libraries it imports
+.lib:
+    mov al, 0xFF
+    cmp bx, [w16_nmod]
+    jae .lput
+    mov al, [w16_modid + bx]
+    test al, W16M_LIB
+    jz .lnone
+    and al, ~W16M_LIB & 0xFF
+    jmp short .lput
+.lnone:
+    mov al, 0xFF
+.lput:
+    mov [es:W16LM_LIBS + bx], al
+    inc bx
+    cmp bx, 16
+    jb .lib
+    mov di, W16LM_SEGS              ; each segment's paragraph
+    mov si, w16_sbase
+    mov cx, [w16_nseg]
+    cld
+    rep movsw
+    mov [es:W16LM_ENT], di          ; the entry table
+    mov ax, [w16l_entn]
+    mov [es:W16LM_ENTN], ax
+    mov si, [w16l_entp]
+    mov cx, ax
+    call w16l_tcopy
+    mov [es:W16LM_RES], di          ; the resident names
+    mov si, [w16l_resp]
+    mov cx, [w16l_resn]
+    call w16l_tcopy
+    mov cx, [w16l_nresn]            ; the non-resident ones, out of the file
+    mov [es:W16LM_NRESN], cx
+    mov [es:W16LM_NRES], di
+    jcxz .rdone
+    push es
+    mov es, [w16_fseg]
+    mov bx, [w16_ne]
+    mov ax, [es:bx + NE_NRESOFF]
+    mov dx, [es:bx + NE_NRESOFF + 2]
+    pop es
+    call w16l_fread
+    jnc .rdone
+    mov word [es:W16LM_NRESN], 0    ; unreadable: by ordinal still works
+.rdone:
+    mov si, [w16l_rp]               ; the record
+    mov es, [w16_fseg]              ; its name: the resident names' first
+    mov bx, [w16l_resp]
+    mov cl, [es:bx]
+    xor ch, ch
+    cmp cx, 8
+    jbe .nm
+    mov cx, 8
+.nm:
+    jcxz .named
+    mov di, si
+.nc:
+    inc bx
+    mov al, [es:bx]
+    mov [di + W16L_NAME], al
+    inc di
+    loop .nc
+.named:
+    push si
+    lea di, [si + W16L_FILE]
+    mov si, w16_name
+    ICALL w16_strcpy
+    pop si
+    mov byte [si + W16L_COUNT], 1
+    mov ax, [w16_dgroup]
+    or ax, ax
+    jnz .hi
+    mov ax, [si + W16L_MREC]        ; no DGROUP: the module block is its handle
+.hi:
+    mov [si + W16L_HINST], ax
+    mov ax, [w16l_code]
+    mov [si + W16L_CODE], ax
+    mov bx, [w16_ne]
+    mov ax, [es:bx + NE_HEAP]
+    mov [si + W16L_HEAP], ax
+    cmp word [w16l_cs], 0
+    je .noinit
+    mov byte [si + W16L_OWED], 1
+.noinit:
+    mov ax, bp                      ; AL = the record
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.mem:
+    mov si, w16_r_mem
+.fail:
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; w16l_tcopy - CX bytes from the tables at SI to ES:DI, DI past them.
+; Keeps the rest but SI.
+w16l_tcopy:
+    jcxz .out
+    push ds
+    mov ds, [w16_fseg]
+    cld
+    rep movsb
+    pop ds
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_push / w16l_pop - one module's loader state, aside while a library it
+; imports loads, and back (SPEC.md 124.23.1). The cluster cache is shared and
+; forgotten at each. Keep every register.
+; -----------------------------------------------------------------------------
+w16l_push:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov al, [w16_ldep]
+    inc byte [w16_ldep]
+    mov ah, W16_LSVSZ
+    mul ah
+    add ax, w16_lsave
+    mov di, ax
+    mov bx, w16l_svtab              ; XSEC-OK: read through cs:
+.item:
+    mov si, [cs:bx]
+    or si, si
+    jz .done
+    mov cx, [cs:bx + 2]
+    cld
+    rep movsb
+    add bx, 4
+    jmp short .item
+.done:
+    mov word [w16_clen], 0
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+w16l_pop:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    dec byte [w16_ldep]
+    mov al, [w16_ldep]
+    mov ah, W16_LSVSZ
+    mul ah
+    add ax, w16_lsave
+    mov si, ax
+    mov bx, w16l_svtab              ; XSEC-OK: read through cs:
+.item:
+    mov di, [cs:bx]
+    or di, di
+    jz .done
+    mov cx, [cs:bx + 2]
+    cld
+    rep movsb
+    add bx, 4
+    jmp short .item
+.done:
+    mov word [w16_clen], 0
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+w16l_svtab:                         ; what one module's load holds, address
+    dw w16_fseg, 2,  w16_hpos, 2,  w16_hkb, 2,  w16_ne, 2,  w16_nseg, 2
+    dw w16_nmod, 2,  w16_modid, 32,  w16_fend, 2,  w16_name, 14
+    dw w16_dgroup, 2,  w16_dgsize, 2,  w16_lbase, 2,  w16_pseg, 2
+    dw w16_psp, 2,  w16_ptop, 2,  w16_dgfull, 1,  w16_rtab, 2
+    dw w16_rtlen, 2,  w16_heap, 2,  w16_nfix, 2,  w16_soff, 4
+    dw w16l_code, 2
+    dw 0
+%assign w16l_svn 2+2+2+2+2 + 2+32+2+14 + 2+2+2+2 + 2+2+1+2 + 2+2+2+4 + 2
+%if w16l_svn > W16_LSVSZ
+  %error "w16l_svtab holds more than W16_LSVSZ"
+%endif
+
 section .text
 ; --- the loader's own bss, beside the package's -----------------------------
 ; (declared here, in the image, rather than in w16_* bss: they are scratch
 ; for one load and a few bytes)
 w16_fend:   dw 0                    ; the file's last valid offset + 1
+w16l_code:  dw 0                    ; a library's code block (w16l_laylib)
+w16l_dgb:   dd 0                    ; ...its DGROUP's bytes
+w16l_rp:    dw 0                    ; ...its record, being written
+w16l_entp:  dw 0                    ; ...its entry table and names, measured
+w16l_entn:  dw 0
+w16l_resp:  dw 0
+w16l_resn:  dw 0
+w16l_nresn: dw 0
+w16l_ip:    dw 0                    ; ...and ne_csip
+w16l_cs:    dw 0
 w16_rpass:  db 0
 w16_mkind:  db 0
 w16_rseg:   dw 0
@@ -1887,3 +2762,6 @@ w16_r_reloc:   db 'A relocation WIN16 cannot apply.', 0
 w16_r_entry:   db 'Its entry point is not in it.', 0
 w16_r_toomany: db 'It calls too much WIN16 lacks.', 0
 w16_r_nbind:   db 'Imports more than WIN16 can bind (384).', 0
+w16_r_notlib:  db 'Not a Windows library.', 0
+w16_r_ldeep:   db 'Its libraries import too deeply.', 0
+w16_r_nlib:    db 'It needs more libraries than WIN16 holds (8).', 0

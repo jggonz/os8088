@@ -1061,6 +1061,51 @@ W16LIB w16k_getmodh
     add al, dl
     jmp short .out
 .prog:
+    mov si, w16_libs                ; a library's module name, or its file's
+    mov bx, W16_NLIB                ;   stem (SPEC.md 124.23.5)
+.lib:
+    cmp byte [si + W16L_COUNT], 0
+    je .lnext
+    xor cx, cx                      ; its name: up to 8, NUL-padded
+.ln:
+    push bx
+    mov bx, cx
+    cmp byte [si + bx + W16L_NAME], 0
+    pop bx
+    je .lcmp
+    inc cx
+    cmp cx, 8
+    jb .ln
+.lcmp:
+    call w16_nmeq
+    jnc .lhit
+    push si
+    add si, W16L_FILE
+    xor cx, cx
+.fl:
+    push bx
+    mov bx, cx
+    mov al, [si + bx]
+    pop bx
+    or al, al
+    jz .fcmp
+    cmp al, '.'
+    je .fcmp
+    inc cx
+    jmp short .fl
+.fcmp:
+    call w16_nmeq
+    pop si
+    jnc .lhit
+.lnext:
+    add si, W16L_SIZE
+    dec bx
+    jnz .lib
+    jmp short .pname
+.lhit:
+    mov ax, [si + W16L_HINST]
+    jmp short .out
+.pname:
     mov si, w16_name                ; the program's, to its dot
     xor cx, cx
 .len:
@@ -1134,6 +1179,37 @@ W16LIB w16k_getproc
     push si
     push di
     ICALL w16_args
+    mov ax, [es:bx + 4]
+    push bx
+    ICALL w16_libof                 ; a library's (SPEC.md 124.23.5)?
+    mov cx, bx
+    pop bx
+    jc .notlib
+    les di, [es:bx]
+    mov ax, es
+    or ax, ax
+    jnz .lname
+    mov ax, di                      ; by ordinal
+    mov bl, cl
+    xor cl, cl
+    jmp short .lget
+.lname:
+    push cx                         ; the record
+    xor cx, cx                      ; by name: its length
+.len:
+    mov bx, cx
+    cmp byte [es:di + bx], 0
+    je .lgot
+    inc cx
+    cmp cx, 255
+    jb .len
+.lgot:
+    pop bx                          ; BL = the record, CL = the length
+.lget:
+    ICALL w16_libproc
+    jc .null
+    jmp .out
+.notlib:
     mov ax, [es:bx + 4]
     sub ax, W16_HMOD
     jb .null

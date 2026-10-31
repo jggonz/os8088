@@ -39,14 +39,563 @@ W16LIB w16k_windir
 ; OpenFile (KERNEL.74) and _lclose (KERNEL.81) are files' (w16file.inc,
 ; SPEC.md 124.21.3).
 
-; LoadLibrary (KERNEL.95) - no DLL loads yet (S18): 2, file not found, as a
-; library that is not on the path answered. FreeLibrary (KERNEL.96) has
-; nothing to free
+; =============================================================================
+; A program's own libraries, while it runs (SPEC.md 124.23.4-124.23.5)
+; =============================================================================
+
+; LoadLibrary (KERNEL.95) - args: +0 lpLibFileName. The file part, its folder
+; ignored: WIN16's own module, a library already loaded, or one loaded now
+; from the program's folder with its LibMain called. hInstance, or 2 (no
+; such file) or 11 (refused); 0 if its LibMain answers 0 (w16k_llback)
 W16LIB w16k_loadlib
+    push si
+    push di
+    ICALL w16_args
+    les di, [es:bx]
+    mov si, di                      ; the file part: past the last \ / or :
+.scan:
+    mov al, [es:si]
+    or al, al
+    jz .scanned
+    inc si
+    cmp al, '\'
+    je .cut
+    cmp al, '/'
+    je .cut
+    cmp al, ':'
+    jne .scan
+.cut:
+    mov di, si
+    jmp short .scan
+.scanned:
+    mov si, w16_modnames            ; one of WIN16's own
+    xor dx, dx
+.mod:
+    mov cl, [si]
+    or cl, cl
+    jz .notours
+    inc si
+    xor ch, ch
+    call w16_nmeq
+    jnc .ours
+    add si, cx
+    inc dl
+    jmp short .mod
+.ours:
+    mov ax, W16_HMOD
+    add al, dl
+    jmp .out
+.notours:
+    mov si, w16_lname               ; up to 8 of the stem, then its extension
+    xor cx, cx                      ;   or .DLL
+.st:
+    mov al, [es:di]
+    or al, al
+    jz .noext
+    cmp al, '.'
+    je .ext
+    cmp cx, 8
+    jae .skp
+    call w16l_up
+    mov [si], al
+    inc si
+    inc cx
+.skp:
+    inc di
+    jmp short .st
+.ext:
+    mov byte [si], '.'
+    inc si
+    inc di
+    xor cx, cx
+.e2:
+    mov al, [es:di]
+    or al, al
+    jz .term
+    cmp cx, 3
+    jae .term
+    call w16l_up
+    mov [si], al
+    inc si
+    inc di
+    inc cx
+    jmp short .e2
+.noext:
+    mov word [si], '.D'
+    mov word [si + 2], 'LL'
+    add si, 4
+.term:
+    mov byte [si], 0
+    ICALL w16_libfind               ; AL = the record, its count raised
+    jnc .found
+    ICALL w16_ldlibin               ; AL = the record or 0FFh; CF=1 refused
+    jc .refused
+    cmp al, 0xFF
+    je .nofile
+    xor ah, ah
+    call w16l_recp                  ; BX -> it
+    cmp byte [bx + W16L_OWED], 0
+    je .found
+    mov byte [bx + W16L_OWED], 0
+    mov si, w16k_llback_c           ; its LibMain, then w16k_llback answers
+    call w16l_lmcall
+    jmp short .out
+.found:
+    xor ah, ah
+    call w16l_recp
+    mov ax, [bx + W16L_HINST]
+    jmp short .out
+.refused:
+    mov si, w16_name                ; WIN16's own lines, as they were
+    mov di, w16_l1
+    ICALL w16_strcpy
+    mov si, w16_s_running
+    mov di, w16_l2
+    ICALL w16_strcpy
+    mov ax, 11
+    jmp short .out
+.nofile:
     mov ax, 2
+.out:
+    xor dx, dx
+    pop di
+    pop si
     ret
+
+; LoadLibrary's continuation: AX = LibMain's answer, CX = the record
+LCONT w16k_llback
+    push ax
+    mov ax, cx
+    call w16l_recp
+    pop ax
+    or ax, ax
+    jz .fail
+    mov ax, [bx + W16L_HINST]
+    xor dx, dx
+    ret
+.fail:
+    mov ax, cx
+    call w16l_drop
+    xor ax, ax
+    cwd
+    ret
+
+; FreeLibrary (KERNEL.96) - args: +0 hLibModule. The count lowered; at 0
+; its WEP(WEP_FREE_DLL) called, then its blocks freed (w16k_flback)
 W16LIB w16k_freelib
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx]
+    ICALL w16_libof                 ; SI -> it, BX = its record
+    jc .out
+    dec byte [si + W16L_COUNT]
+    jnz .out
+    inc byte [si + W16L_COUNT]      ; alive while its WEP runs
+    push cs
+    pop es
+    mov di, w16_s_wep               ; XSEC-OK: ES = CS
+    mov cl, 3
+    ICALL w16_libproc               ; BL = the record -> DX:AX
+    jc .nowep
+    push dx
+    push ax
+    mov ax, bx
+    mov si, w16k_flback_c
+    xor cx, cx
+    ICALL w16_cbopen
+    xor ax, ax                      ; WEP_FREE_DLL
+    ICALL w16_ppush
+    pop ax
+    pop dx
+    ICALL w16_cbcall
+    jmp short .out
+.nowep:
+    mov ax, bx
+    call w16l_drop
+.out:
+    pop di
+    pop si
     ret
+w16_s_wep: db 'WEP'
+
+LCONT w16k_flback
+    mov ax, cx
+    jmp w16l_drop
+
+; GetModuleUsage (KERNEL.48) - args: +0 hModule: a library's count, else 1
+W16LIB w16k_getmodu
+    push si
+    ICALL w16_args
+    mov ax, [es:bx]
+    ICALL w16_libof
+    mov ax, 1
+    jc .out
+    mov al, [si + W16L_COUNT]
+    xor ah, ah
+.out:
+    pop si
+    ret
+
+; =============================================================================
+; What Recorder and RECORDER.DLL call (SPEC.md 124.23.8)
+; =============================================================================
+
+; GetCapture (USER.236): the window SetCapture named, 0 none
+W16LIB w16u_getcapture
+    mov ax, [w16_capture]
+    ret
+
+; GetDoubleClickTime (USER.21): Windows' default, 500 ms
+W16LIB w16u_dblclktime
+    mov ax, 500
+    ret
+
+; GetKeyboardState (USER.222) - args: +0 lpKeyState: 256 bytes, each key's
+; state as GetKeyState sees it - Shift, Ctrl and Alt down (80h) off the
+; BIOS's flags, and the three locks' toggles (bit 0). Every other key is up
+W16LIB w16u_getkbstate
+    push di
+    ICALL w16_args
+    les di, [es:bx]
+    push di
+    mov cx, 128
+    xor ax, ax
+    cld
+    rep stosw
+    pop di
+    push ds
+    mov ax, 0x40
+    mov ds, ax
+    mov al, [0x17]
+    pop ds
+    test al, 3
+    jz .s
+    mov byte [es:di + 0x10], 0x80   ; VK_SHIFT
+.s:
+    test al, 4
+    jz .c
+    mov byte [es:di + 0x11], 0x80   ; VK_CONTROL
+.c:
+    test al, 8
+    jz .a
+    mov byte [es:di + 0x12], 0x80   ; VK_MENU
+.a:
+    test al, 0x40
+    jz .cap
+    mov byte [es:di + 0x14], 1      ; VK_CAPITAL
+.cap:
+    test al, 0x20
+    jz .num
+    mov byte [es:di + 0x90], 1      ; VK_NUMLOCK
+.num:
+    test al, 0x10
+    jz .out
+    mov byte [es:di + 0x91], 1      ; VK_SCROLL
+.out:
+    pop di
+    ret
+
+; SetKeyboardState (USER.223): kept by nothing - the keyboard's state is the
+; BIOS's, and a program cannot set it here
+W16LIB w16u_setkbstate
+    ret
+
+; GetClassName (USER.58) - args: +0 nMaxCount, +2 lpClassName, +6 hWnd. A
+; class the program registered answers its name as WIN16 keeps it, upper
+; case; WIN16's own classes their Windows names. AX = the length
+W16LIB w16u_getclsname
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov ax, [es:bx + 6]
+    les di, [es:bx + 2]
+    ICALL w16_hwnd2rec
+    jc .zero
+    jcxz .zero
+    dec cx                          ; room for the NUL
+    mov al, [bx + W16W_KIND]
+    or al, al
+    jnz .ours
+    mov al, [bx + W16W_CLS]
+    mov ah, W16C_SIZE
+    mul ah
+    add ax, w16_cls + W16C_NAME
+    mov si, ax
+    mov dx, 16
+    jmp short .copy
+.ours:
+    xor ah, ah
+    dec ax
+    shl ax, 1
+    mov si, ax
+    mov si, [cs:w16u_clsn + si]     ; XSEC-OK: read through cs:
+    push ds
+    push cs                         ; XSEC-OK: the names are the part's, and
+    pop ds                          ;   DS is put back after the copy
+    call .copyds
+    pop ds
+    jmp short .out
+.copy:
+    call .copyds
+    jmp short .out
+.zero:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    ret
+; .copyds - DS:SI, at most DX and CX characters, to ES:DI, NUL-ended:
+; AX = the characters
+.copyds:
+    push di
+    mov dx, 16
+.c:
+    jcxz .e
+    mov al, [si]
+    or al, al
+    jz .e
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    dec dx
+    jnz .c
+.e:
+    mov byte [es:di], 0
+    mov ax, di
+    pop di
+    sub ax, di
+    ret
+w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co
+.b:  db 'Button', 0
+.e:  db 'Edit', 0
+.s:  db 'Static', 0
+.l:  db 'ListBox', 0
+.d:  db '#32770', 0
+.sc: db 'ScrollBar', 0
+.co: db 'ComboBox', 0
+
+; EnumWindows (USER.54) - args: +0 lParam (long), +4 lpEnumFunc. The
+; callback for each of the program's top-level windows, (hwnd, lParam), as a
+; call into the program, until one answers FALSE. AX = 1
+W16LIB w16u_enumwnd
+    xor cx, cx
+w16u_enwgo:                         ; CX = the slot to try from
+    push si
+.slot:
+    cmp cx, W16_MAXWND
+    jae .done
+    ICALL w16_slot2rec
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .next
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz .next
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .next
+    ICALL w16_rec2hwnd              ; AX = it
+    push ax
+    ICALL w16_args                  ; (before cbopen moves the frame)
+    push word [es:bx + 6]           ; the function
+    push word [es:bx + 4]
+    push word [es:bx + 2]           ; lParam
+    push word [es:bx]
+    mov ax, cx                      ; the next slot, the continuation's word
+    inc ax
+    mov si, w16u_enwnext_c
+    xor cx, cx
+    ICALL w16_cbopen
+    pop bx                          ; lParam's low word
+    pop cx                          ;   ...high
+    pop ax                          ; the function: AX offset, DX segment
+    pop dx
+    pop si                          ; hwnd
+    push dx
+    push ax
+    mov ax, si
+    ICALL w16_ppush                 ; pascal: hwnd, then lParam
+    mov ax, cx
+    ICALL w16_ppush
+    mov ax, bx
+    ICALL w16_ppush
+    pop ax
+    pop dx
+    ICALL w16_cbcall
+    pop si
+    ret
+.next:
+    inc cx
+    jmp .slot
+.done:
+    mov ax, 1
+    xor dx, dx
+    pop si
+    ret
+
+LCONT w16u_enwnext
+    or ax, ax
+    jnz w16u_enwgo
+    mov ax, 1
+    xor dx, dx
+    ret
+
+; The W16_LMROW handler (SPEC.md 124.23.4): the program's first "call",
+; each library's LibMain in turn, then the program's entry with its start
+; registers, which the LibMains' own calls would otherwise have overwritten
+W16LIB w16_lmgo
+    mov ax, [w16_rbx]
+    mov [w16_lmsv], ax
+    mov ax, [w16_rcx]
+    mov [w16_lmsv + 2], ax
+    mov ax, [w16_res]
+    mov [w16_lmsv + 4], ax
+    mov word [w16_lmi], 0
+w16l_lmnext:
+    mov ax, [w16_lmi]
+    cmp ax, W16_NLIB
+    jae .done
+    inc word [w16_lmi]
+    call w16l_recp
+    cmp byte [bx + W16L_COUNT], 0
+    je w16l_lmnext
+    cmp byte [bx + W16L_OWED], 0
+    je w16l_lmnext
+    mov byte [bx + W16L_OWED], 0
+    mov si, w16l_lmback_c
+    jmp w16l_lmcall
+.done:
+    mov ax, [w16_lmsv]
+    mov [w16_rbx], ax
+    mov ax, [w16_lmsv + 2]
+    mov [w16_rcx], ax
+    mov ax, [w16_lmsv + 4]
+    mov [w16_res], ax
+    xor ax, ax
+    cwd
+    ret
+
+; ...each LibMain's answer: AX, CX = the record. 0 ends the program
+LCONT w16l_lmback
+    or ax, ax
+    jnz w16l_lmnext
+    mov ax, cx
+    call w16l_recp
+    mov si, w16_s_lmfail
+    mov di, w16_l1
+    ICALL w16_strcpy
+    lea si, [bx + W16L_FILE]
+    mov di, w16_l2
+    ICALL w16_strcpy
+    mov byte [w16_endmsg], 1
+    mov byte [w16_state], W16S_ENDED
+    xor ax, ax
+    cwd
+    ret
+
+; w16l_lmcall - call record BX's LibMain (index AX) as a call into the
+; program, SI = the continuation: DS = its DGROUP, DI = its hInstance, CX =
+; its ne_heap, ES:SI = an empty command line (SPEC.md 124.23.4)
+w16l_lmcall:
+    push bx
+    xor cx, cx
+    ICALL w16_cbopen
+    pop bx
+    mov ax, [bx + W16L_HINST]
+    mov [w16_lmdi], ax
+    mov [w16_lmds], ax
+    mov ax, [bx + W16L_HEAP]
+    mov [w16_lmcx], ax
+    mov ax, [w16_psp]
+    mov [w16_lmes], ax
+    mov word [w16_lmsi], 0x80       ; the PSP's tail length: a 0, so ""
+    push es
+    mov es, [bx + W16L_MREC]
+    mov ax, [es:W16LM_IP]
+    mov [w16_lmfar], ax
+    mov bx, [es:W16LM_CS]
+    dec bx
+    shl bx, 1
+    mov ax, [es:W16LM_SEGS + bx]
+    mov [w16_lmfar + 2], ax
+    pop es
+    mov ax, w16_lmtramp
+    mov dx, ds
+    ICALL w16_cbcall
+    ret
+
+; w16l_recp - AX = a record's index -> BX -> it. Keeps the rest.
+w16l_recp:
+    push cx
+    mov bx, ax
+    mov cl, 5
+    shl bx, cl
+    add bx, w16_libs
+    pop cx
+    ret
+
+; w16l_drop - record AX freed: the libraries it imports lose a count (and go
+; at 0, without their WEP), and its three blocks are given back. Keeps all.
+w16l_drop:
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    call w16l_recp
+    mov es, [bx + W16L_MREC]
+    xor si, si
+.dep:
+    mov al, [es:W16LM_LIBS + si]
+    cmp al, 0xFF
+    je .ndep
+    xor ah, ah
+    push bx
+    call w16l_recp
+    cmp byte [bx + W16L_COUNT], 0
+    je .ok
+    dec byte [bx + W16L_COUNT]
+    jnz .ok
+    call w16l_drop
+.ok:
+    pop bx
+.ndep:
+    inc si
+    cmp si, 16
+    jb .dep
+    mov ax, [bx + W16L_CODE]
+    or ax, ax
+    jz .nc
+    ICALL w16_gfreeh
+.nc:
+    mov ax, [bx + W16L_HINST]
+    cmp ax, [bx + W16L_MREC]
+    je .nd
+    ICALL w16_gfreeh
+.nd:
+    mov ax, [bx + W16L_MREC]
+    ICALL w16_gfreeh
+    mov byte [bx + W16L_COUNT], 0
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_up - AL upper-cased
+w16l_up:
+    cmp al, 'a'
+    jb .o
+    cmp al, 'z'
+    ja .o
+    sub al, 0x20
+.o:
+    ret
+
+section .text                       ; (read through DS, by w16_strcpy)
+w16_s_lmfail: db 'A library it needs did not start.', 0
+section .w16dlg
 
 ; The network (USER.512-520): there is none. WNetGetCaps answers 0, no
 ; capabilities, and every other WNet call WN_NOT_SUPPORTED (1), as Windows
@@ -1431,12 +1980,14 @@ W16LIB w16g_polygon
     dec si
     shl si, 1
     shl si, 1
+    xor di, di                      ; ...and the first point its end
+.start:
     les bx, [es:bx + 2]
     mov ax, [es:bx + si]
     mov [w16_curx], ax
     mov ax, [es:bx + si + 2]
     mov [w16_cury], ax
-    xor si, si                      ; SI = the point's offset, CX how many
+    mov si, di                      ; SI = the point's offset, CX how many
 .e:
     push cx
     push si
@@ -1463,6 +2014,26 @@ W16LIB w16g_polygon
     pop di
     pop si
     ret
+
+; Polyline (GDI.37) - args: +0 nCount, +2 lpPoints, +4 hDC: Polygon's
+; edges without the one closing it, in the pen; the current point is neither
+; used nor moved, as Windows'
+W16LIB w16g_polyline
+    push si
+    push di
+    push bp
+    ICALL w16_args
+    cmp word [es:bx + 6], W16_HDC
+    jne w16g_polygon.no
+    mov cx, [es:bx]
+    cmp cx, 2
+    jl w16g_polygon.no
+    push word [w16_curx]
+    push word [w16_cury]
+    dec cx                          ; one edge fewer: the first point starts
+    xor si, si                      ;   it and the second ends it
+    mov di, 4
+    jmp w16g_polygon.start
 
 ; =============================================================================
 ; Hooks (SPEC.md 124.22.16): SetWindowsHook keeps a chain, a type's last in
@@ -1630,6 +2201,311 @@ W16LIB w16u_defhook
     xor ax, ax
     xor dx, dx
     pop si
+    ret
+
+; --- Paintbrush's (SPEC.md 124.23.9) ----------------------------------------
+
+; GlobalNotify (KERNEL.154) - args: +0 lpNotifyProc. Kept nowhere: WIN16
+; discards no block (SPEC.md 124.18), so there is nothing to be told of.
+; ClipCursor (USER.16) - args: +0 lpRect. The pointer is os8088's and is not
+; confined (SPEC.md 124.23.9)
+W16LIB w16k_gnotify
+    ret
+
+; GlobalLRUNewest (KERNEL.164), GlobalLRUOldest (KERNEL.163) - args: +0 the
+; handle, answered: no block is ever discarded, so its age is nothing
+W16LIB w16k_glru
+    ICALL w16_args
+    mov ax, [es:bx]
+    ret
+
+; GetTempDrive (KERNEL.92) - args: +0 a byte, ignored. The Windows
+; directory's drive (SPEC.md 124.21.3), its letter in AL and ':' in AH, and
+; DX = 1, as Wine's GetTempDrive16 answers
+W16LIB w16k_tempdrv
+    mov al, [w16_homev]
+    add al, 'A'
+    mov ah, ':'
+    mov dx, 1
+    ret
+
+; SetRectEmpty (USER.73) - args: +0 lpRect, its four words 0
+W16LIB w16u_rectempty
+    push di
+    ICALL w16_args
+    les di, [es:bx]
+    xor ax, ax
+    cld
+    stosw
+    stosw
+    stosw
+    stosw
+    pop di
+    ret
+
+; IsRectEmpty (USER.75) - args: +0 lpRect: TRUE when it has no width or no
+; height
+W16LIB w16u_isrempty
+    ICALL w16_args
+    les bx, [es:bx]
+    mov ax, 1
+    mov dx, [es:bx + 4]
+    cmp dx, [es:bx]
+    jle .out
+    mov dx, [es:bx + 6]
+    cmp dx, [es:bx + 2]
+    jle .out
+    dec ax
+.out:
+    xor dx, dx
+    ret
+
+; UnionRect (USER.80) - args: +0 lprc2, +4 lprc1, +8 lprcDst. The smallest
+; rectangle holding both, an empty one ignored; both empty empties the
+; destination and answers FALSE
+W16LIB w16u_unionrect
+    push si
+    push di
+    ICALL w16_args
+    mov word [w16_dtr], 0x7FFF      ; nothing yet
+    mov word [w16_dtr + 2], 0x7FFF
+    mov word [w16_dtr + 4], 0x8000
+    mov word [w16_dtr + 6], 0x8000
+    push bx
+    les si, [es:bx + 4]
+    call .one
+    pop bx
+    push bx
+    ICALL w16_args
+    les si, [es:bx]
+    call .one
+    pop bx
+    ICALL w16_args
+    les di, [es:bx + 8]
+    mov si, w16_dtr
+    mov ax, [si + 4]
+    cmp ax, [si]
+    jg .some
+    xor ax, ax                      ; both empty: the destination emptied
+    cld
+    stosw
+    stosw
+    stosw
+    stosw
+    jmp short .out
+.some:
+    mov cx, 4
+    cld
+    rep movsw
+    mov ax, 1
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+; .one - ES:SI = a rectangle into w16_dtr, unless it is empty
+.one:
+    mov ax, [es:si + 4]
+    cmp ax, [es:si]
+    jle .skip
+    mov ax, [es:si + 6]
+    cmp ax, [es:si + 2]
+    jle .skip
+    mov ax, [es:si]
+    cmp ax, [w16_dtr]
+    jge .l
+    mov [w16_dtr], ax
+.l:
+    mov ax, [es:si + 2]
+    cmp ax, [w16_dtr + 2]
+    jge .t
+    mov [w16_dtr + 2], ax
+.t:
+    mov ax, [es:si + 4]
+    cmp ax, [w16_dtr + 4]
+    jle .r
+    mov [w16_dtr + 4], ax
+.r:
+    mov ax, [es:si + 6]
+    cmp ax, [w16_dtr + 6]
+    jle .skip
+    mov [w16_dtr + 6], ax
+.skip:
+    ret
+
+; GetPriorityClipboardFormat (USER.402) - args: +0 cFormats, +2 lpList.
+; The first of the list the clipboard holds; 0 when it holds nothing, -1
+; when it holds none of them
+W16LIB w16u_cbprio
+    push si
+    call w16u_cbtrue                ; AX = 1 when it holds text
+    or ax, ax
+    jz .out
+    ICALL w16_args
+    mov cx, [es:bx]
+    les si, [es:bx + 2]
+    mov ax, -1
+    jcxz .out
+.f:
+    mov dx, [es:si]
+    xchg ax, dx
+    call w16_cbtext
+    je .out
+    xchg ax, dx
+    inc si
+    inc si
+    loop .f
+.out:
+    xor dx, dx
+    pop si
+    ret
+
+; GetBkColor (GDI.75) - args: +0 hDC: SetBkColor's COLORREF
+W16LIB w16g_getbkcol
+    mov ax, [w16_brgb]
+    mov dx, [w16_brgb + 2]
+    ret
+
+; GetROP2 (GDI.85) - args: +0 hDC: SetROP2's mode
+W16LIB w16g_getrop2
+    mov al, [w16_rop]
+    xor ah, ah
+    xor dx, dx
+    ret
+
+; GetWindowOrg (GDI.97) - args: +0 hDC: SetWindowOrg's, DX:AX = y:x
+W16LIB w16g_getworg
+    mov ax, [w16_worg]
+    mov dx, [w16_worg + 2]
+    ret
+
+; SetPolyFillMode (GDI.6), SetStretchBltMode (GDI.7) - args: +0 the mode,
+; +2 hDC: kept, the old one answered. Neither changes a pixel: WIN16 fills no
+; polygon (SPEC.md 124.22.16) and StretchBlt drops or repeats whole pixels
+W16LIB w16g_setpfmode
+    push si
+    mov si, w16_pfmode
+    call w16_dcbyte
+    pop si
+    ret
+W16LIB w16g_setsbmode
+    push si
+    mov si, w16_sbmode
+    call w16_dcbyte
+    pop si
+    ret
+
+; LPtoDP (GDI.99), DPtoLP (GDI.67) - args: +0 nCount, +2 lpPoints, +6 hDC.
+; Every point moved by the window origin; the extents are kept and never
+; scale a drawing here (SPEC.md 124.22.2), so they do not scale these
+W16LIB w16g_lptodp
+    mov cx, 1
+    jmp short w16g_dplp
+W16LIB w16g_dptolp
+    xor cx, cx
+w16g_dplp:
+    push si
+    push di
+    ICALL w16_args
+    mov si, [w16_worg]
+    mov di, [w16_worg + 2]
+    jcxz .back
+    neg si
+    neg di
+.back:
+    mov cx, [es:bx]
+    les bx, [es:bx + 2]
+    jcxz .out
+.p:
+    add [es:bx], si
+    add [es:bx + 2], di
+    add bx, 4
+    loop .p
+.out:
+    mov ax, 1
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; EnumObjects (GDI.71) - args: +0 lpData, +4 lpObjectFunc, +8 nObjectType,
+; +10 hDC. OBJ_PEN (1) and OBJ_BRUSH (2): a solid one in each of the
+; display's sixteen colours, its LOGPEN or LOGBRUSH in a block on the
+; program's stack, (lpLogObject, lpData), as a call into the program, until
+; one answers 0. 1 when every one was called, 0 when one stopped it or the
+; type is another
+W16_EOBLK   equ 10                  ; a LOGPEN, the larger
+W16LIB w16g_enumobj
+    xor cx, cx
+w16g_eogo:                          ; CX = the colour to try from
+    push si
+    cmp cx, 16
+    jae .done
+    ICALL w16_args                  ; (before cbopen moves the frame)
+    mov dx, [es:bx + 8]
+    cmp dx, 1
+    je .ok
+    cmp dx, 2
+    jne .none
+.ok:
+    push word [es:bx + 6]           ; the function
+    push word [es:bx + 4]
+    push word [es:bx + 2]           ; lpData
+    push word [es:bx]
+    push dx                         ; the type
+    push cx                         ; the colour
+    mov ax, cx                      ; the next colour, the continuation's word
+    inc ax
+    mov si, w16g_eonext_c
+    mov cx, W16_EOBLK
+    ICALL w16_cbopen                ; ES:DI = the block, zeroed
+    pop bx
+    mov ax, bx                      ; BX = the colour * 3
+    shl bx, 1
+    add bx, ax
+    mov ax, [w16_pal16 + bx]
+    mov cl, [w16_pal16 + bx + 2]
+    xor ch, ch
+    pop dx
+    cmp dx, 1
+    jne .brush
+    mov word [es:di + 2], 1         ; a LOGPEN: PS_SOLID, 1 wide
+    mov [es:di + 6], ax
+    mov [es:di + 8], cx
+    jmp short .call
+.brush:
+    mov [es:di + 2], ax             ; a LOGBRUSH: BS_SOLID
+    mov [es:di + 4], cx
+.call:
+    mov ax, es                      ; pascal: lpLogObject, then lpData
+    ICALL w16_ppush
+    mov ax, di
+    ICALL w16_ppush
+    pop ax                          ; lpData's low word
+    pop cx                          ;   ...high
+    xchg ax, cx
+    ICALL w16_ppush
+    mov ax, cx
+    ICALL w16_ppush
+    pop ax                          ; the function: AX offset, DX segment
+    pop dx
+    ICALL w16_cbcall
+    pop si
+    ret
+.done:
+    mov ax, 1
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop si
+    ret
+
+LCONT w16g_eonext
+    or ax, ax
+    jnz w16g_eogo
+    xor dx, dx
     ret
 
 section .text

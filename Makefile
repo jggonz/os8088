@@ -18854,7 +18854,11 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE
+# ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
+# their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
+# by the import lines in its own .wlk, so it links without them.
+WIN16DLLFIX := W16DLL W16DLL2
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk tests/win16/*.wcl) \
             tests/win16/mkbmp.py
 
@@ -18889,9 +18893,16 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 	    wrc -q -bt=windows -30 -r -i=$(CURDIR)/tests/win16 -i=. -fo=$$l.res \
 	        $(CURDIR)/tests/win16/$$l.rc && wrc -q -bt=windows -30 $$l.res $$p.EXE || exit 1; \
 	  fi; \
+	done; \
+	for p in $(WIN16DLLFIX); do \
+	  l=$$(echo $$p | tr A-Z a-z); \
+	  wcl -q -c -0 -bd -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	      $(CURDIR)/tests/win16/$$l.c >/dev/null && \
+	  wlink op q system windows_dll $$(cat $(CURDIR)/tests/win16/$$l.wlk) \
+	      file $$l.obj name $$p.DLL >/dev/null || exit 1; \
 	done
 	@touch $@
-	@echo "win16fixtures: TINY16 $(WIN16FIX) built into $(BUILD)/win16/"
+	@echo "win16fixtures: TINY16 $(WIN16FIX) $(WIN16DLLFIX) built into $(BUILD)/win16/"
 
 # `make win16` builds the layer itself, apps/win16/ (SPEC.md 124.2): a
 # `local` package in apps/RETIRED.txt until S12 decides its payload, so no

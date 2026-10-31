@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "e7ca16f80",
-  "strings": "ceca4b5d20354bb8",
-  "why": "new page, from SPEC 124 and apps/win16's strings"
+  "stamped": "740511e01",
+  "strings": "498c8ddf011c7b60",
+  "why": "What it can run brought to S18: programs over 64KB run (S15), a program's own DLLs from its folder and their two failures (S18); checked against w16load.inc's refusal strings"
  },
  "WIN16_TXT": {
   "sources": [

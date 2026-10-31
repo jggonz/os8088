@@ -277,7 +277,8 @@ w16_hwnd0:
     jmp w16_toprec
 
 ; w16_farname - DX:AX = a far class name -> [w16_namebuf], upper case and
-; NUL-padded to 16. CF=1: NULL, an atom (segment 0), empty or over 15.
+; NUL-padded to 16, or its first 16 with no NUL (SPEC.md 124.23.8: Recorder's
+; RecorderKeyXlate is 16). CF=1: NULL, an atom (segment 0) or empty.
 w16_farname:
     push cx
     push si
@@ -303,7 +304,8 @@ w16_farname:
     inc si
     inc di
     loop .cp
-    jmp short .no                   ; sixteen and still going: too long
+    clc                             ; sixteen: kept, the rest not
+    jmp short .out
 .end:
     cmp di, w16_namebuf
     je .no
@@ -491,6 +493,8 @@ w16u_createwnd:
     jnz .mk
     cmp byte [w16_top], 0           ; a second top-level: its client and
     je .mk                          ;   where it goes
+    call w16_handover               ; ...unless the first was a hidden helper
+    jnc .mk                         ;   (SPEC.md 124.23.8)
     call w16_popclient
 .mk:
     call w16_mkwnd                  ; BX = it, CX = its slot
@@ -630,6 +634,53 @@ w16_popclient:
     sub [w16_cwcy], ax
 .out:
     pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16_handover - a top-level about to be made ([w16_cw*]) with a menu takes
+; WIN16's own window from the first top-level when that one was never shown
+; and has no menu: a helper the program made first, as Recorder makes its
+; RecorderKeyXlate (SPEC.md 124.23.8). The helper keeps no os8088 window.
+; CF=0 handed over ([w16_top] = 0), CF=1 not. Keeps every register.
+w16_handover:
+    push ax
+    push bx
+    push cx
+    mov ax, [w16_cwid]              ; the new one's menu, or its class's
+    or ax, ax
+    jnz .menu
+    mov al, [w16_cwcls]
+    cmp al, 0xFF
+    je .no
+    mov ah, W16C_SIZE
+    mul ah
+    mov bx, ax
+    mov ax, [bx + w16_cls + W16C_MENU]
+    or ax, [bx + w16_cls + W16C_MENU + 2]
+    jz .no
+.menu:
+    mov cl, [w16_top]
+    xor ch, ch
+    dec cx
+    call w16_slot2rec               ; BX = the first
+    test byte [bx + W16W_FLAGS], W16WF_VIS
+    jnz .no
+    test byte [bx + W16W_F2], W16W2_NSIZE
+    jz .no                          ; ...never shown
+    cmp word [bx + W16W_MENU], 0
+    jne .no
+    cmp byte [bx + W16W_KIND], 0
+    jne .no
+    mov word [bx + W16W_OSW], 0
+    mov byte [w16_top], 0
+    mov word [w16_titleptr], w16_name
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
     pop bx
     pop ax
     ret

@@ -24,7 +24,13 @@ This row does, off WIN16's own listing and symbol map:
   4. a macro naming the wrong side: ICALL's routine must be in the image,
      LCALL's and DCALL's in the library part (DCONT defines its own);
   5. an export row whose part byte or handler offset is not where the map
-     puts its handler: a W16LIB forgotten, or one too many.
+     puts its handler: a W16LIB forgotten, or one too many;
+  6. inside a part that runs with DS = WIN16's image, `push cs` then
+     `pop ds`: CS is the part's own segment there, so DS "restored" from it
+     is not WIN16's. GetMenuString shipped that way for four stories after
+     S14 moved it, and every DS access after one went to the library
+     part's segment (SPEC.md 124.23.9). A deliberate one, which saves DS
+     and puts it back, carries XSEC-OK.
 
 A line may carry `XSEC-OK: <reason>` in its comment to be passed. Macro
 bodies (lines naming %1) are not resolved; the four macros that carry part
@@ -155,7 +161,7 @@ def walk(lstfile, syms):
                 datalabels.add(pending)
             pending = None
     problems, crossings = [], []
-    sec, scope, blockok = ".text", "", False
+    sec, scope, blockok, prev = ".text", "", False, None
     for num, addr, code, comment in lines:
         s = re.match(r"^\s*\[?section\s+(\.\w+)", code)
         if s:
@@ -187,6 +193,12 @@ def walk(lstfile, syms):
             toks = toks[1].split(None, 1)
             mnem = toks[0].lower()
         ops = toks[1] if len(toks) > 1 else ""
+        if sec in PARTS and sec not in DSELF and mnem == "pop" \
+                and ops.strip().lower() == "ds" and prev \
+                and prev[0] == "push" and prev[1] == "cs" and not (ok or prev[2]):
+            problems.append("%s:%s %s\n        push cs / pop ds in %s, whose CS is "
+                            "not WIN16's DS" % (num, sec, code.strip(), sec))
+        prev = (mnem, ops.strip().lower(), ok)
         if mnem in ("equ", "%define", "%assign", "global", "extern", "align", "cpu",
                     "bits", "org", "section", "segment", "absolute", "struc", "endstruc"):
             continue

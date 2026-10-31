@@ -2095,3 +2095,82 @@ is registered and runs in the final pass with the rest.
 **What it cost.** The image grew by 159 bytes to 32,990, its bss by 8 to
 23,997, leaving 8,549 bytes of the 64 KB. The library part grew by 505 bytes
 to 55,642.
+
+## 2026-10-31 — S18: a program's own libraries
+
+*As a user, Recorder runs with its RECORDER.DLL.*
+
+**A library is a module like a program, loaded beside it.** Windows 3.0's
+Recorder imports from `RECORDER.DLL` and Paintbrush from `PBRUSH.DLL`. Until
+now WIN16 knew one module, the program. An NE library is read by the same
+loader, into three global-heap blocks: its DGROUP, its code, and a small
+module block that keeps its entry table and names tables for
+`GetProcAddress`. An import naming it is bound to the address straight away
+at load, by ordinal or by name. Real-mode Windows had **one** DGROUP for a
+library, shared by every program using it, and so does WIN16. A library
+that imports another is loaded the same way, up to four deep and eight in
+all (SPEC.md §124.23).
+
+**LibMain runs before the program does.** A library's entry point expects
+DS = its DGROUP, DI = its instance handle and CX = its heap size. The
+program's start frame is shifted down four bytes, and its first "call" is a
+fixed slot that calls each library's entry in turn and then starts the
+program with its own start registers. A LibMain answering 0 refuses the
+program with "A library it needs did not start." `FreeLibrary` calls `WEP`.
+
+**A fixture first.** Two Watcom DLLs and a program, built by `make
+win16fixtures`, exercise every path before a Microsoft binary is involved:
+an export by name and by ordinal, `GetProcAddress` both ways, a counter in
+the library's DGROUP raised through two users, a library importing another,
+and `LoadLibrary` of a file that is not there answering 2. The program
+reports **DLLUSE OK** on QEMU. The `win16dll` row will run it in the final
+pass.
+
+**Recorder.** Its LibMain ran at once. Then the program ended before
+opening a window. Its second `RegisterClass` names `RecorderKeyXlate`,
+sixteen characters, and WIN16 refused class names over fifteen. Names are
+now kept to sixteen, the length Windows 3.0 compared.
+
+With that fixed, Recorder's window opened with no menu bar. The first
+top-level window a program makes becomes WIN16's own os8088 window, and
+Recorder's first is a hidden 1 × 1 helper, style 0, with no menu. Its real
+window became a second os8088 window, and a second window draws no menu bar.
+Now a top-level window made with a menu takes WIN16's window from the first
+one, if that one was never shown and has none. With that, Recorder shows
+File, Macro, Options and Help. Its Macro menu greys Run, Delete and
+Properties as Windows does with no macros, and Record… opens its dialog
+with the combo boxes, check boxes and group boxes drawn. Recording itself
+needs the journal hooks, which are kept and not called (§124.22.16).
+
+**Paintbrush, and a bug four stories old.** Paintbrush 3.0 lacked 35
+imports. The 23 that keep or report state were added: rectangles,
+`GetTempDrive`, `GetFreeSpace`, the DC getters, `Polyline`, `EnumFonts`,
+and `EnumObjects`, which calls the program back with a solid pen or brush
+in each of the sixteen colours. Paintbrush then got as far as its bitmap
+manager. On the first run the screen went wrong: its MessageBox never
+painted, the DOS window that launched it stayed open, and a keystroke
+**rebooted the machine**.
+
+The call trace ended in `GetMenuString`. That handler moved into the library
+part in S14 and still put DS back with `push cs` / `pop ds`. In the
+library part CS is the part's own segment, so after any `GetMenuString`
+every DS access WIN16 made went into its code. It saves DS and restores it
+now. `t_w16xsec`, the row that keeps the parts apart, has a sixth rule
+refusing that pair in a part unless the line says why. It fails on the old
+code.
+
+With that fixed, Paintbrush opens its window with all nine menus and draws
+its toolbox. Its bitmap manager then asks for the picture as a bitmap the
+size of the screen. That is 153,600 bytes at four planes, and WIN16 makes
+none over 64,000. Paintbrush reports *Insufficient memory for this
+operation* and ends, as it would on Windows, and the machine carries on.
+
+**What Paintbrush still needs is not a library.** It draws every tool into
+memory bitmaps and copies them to the screen. WIN16 draws into a memory DC
+only with `BitBlt` and `PatBlt` (§124.15.2), and it has no regions, no DIBs
+and no flood fill. That half of GDI is its own story now, S19b in the plan,
+and Paintbrush moved there with it.
+
+**What it cost.** The image grew by 820 bytes to 33,810 and its bss by 689
+to 24,686, leaving 6,528 bytes of the 64 KB. The library part grew by 2,072
+bytes to 57,714, and the loader part by 2,257 to 11,260.

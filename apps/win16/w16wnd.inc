@@ -145,6 +145,8 @@ w16_origin:
     jnz .child
     push bx
     mov bx, [bx + W16W_OSW]
+    or bx, bx                       ; a helper with none (124.23.8)
+    jz .hid
     call OSAPI_WM_GEOM              ; CX/DX = the content's size
     jc .hid
     mov si, dx

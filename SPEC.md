@@ -227481,7 +227481,7 @@ with.
 | disks | **WIN16's own disk** in all four geometries - `win16.img`, `win16-120.img`, `win16-720.img`, `win16-360.img` - the folder and the profile folder and the rest of the floppy for the user's Windows programs; `emu360.img` (the 360KB machine's, §24.6: programs of another system; the three files at its root, the category disks' rule), the everything set (§19.10) and the live media (§80), which carries the everything set's payload. Not in `$(APPSARGS)`, which also feeds `kern_mega`'s apps disks. **Until S17 batch 4 it rode the 1.44MB and 1.2MB apps disks and `more720.img`**; WIN16.O88 grew to 104 KB, 3 clusters past what the 1.44MB apps disk had left and 4 past `more720.img`, and it grows with each story to S25, so it left them for a disk of its own rather than evict a program each time (the owner's decision, 2026-10-31). **What that costs an install:** the network trees carry it (§117.10.2: `big/` and `emu/` are cut from the WIN16 disk too), but INSTALL's floppy path copies the system disk and the apps disk (§117), so a machine installed from floppies has no WIN16 until its `WIN16\` folder is copied over by hand. A third disk for the installer to ask for is not done |
 | not on | `kern_small`'s disks (§24.5: no `OSAPI_WM_TIMER`) and `kern_mega`'s (WIN16 refuses there, §124.1) |
 | `DOS.O88` | the shipped one hands an NE to WIN16 (§124.1's launch row). `-DDOS_WIN16` is the default for `kern_big` and `kern_emu`, and off for `kern_small` and `kern_mega`, whose disks carry no WIN16 |
-| your programs | `make win16disk WIN3X=<dir>`: a floppy in all four geometries with `WIN16\`, the profile folder, and the NE programs found directly in `<dir>`, in name order, as many as the geometry holds. `PROGRAMS.TXT` on each says which went on and why each other one did not (a library, over 64 KB (R2), or no room). Microsoft's files are read from `<dir>` and never enter the tree |
+| your programs | `make win16disk WIN3X=<dir>`: a floppy in all four geometries with `WIN16\`, the profile folder, and the NE programs found directly in `<dir>`, in name order, as many as the geometry holds, each with the libraries it imports from `<dir>` (§124.23.1), then the other libraries there while room is left, for a program that loads one by name. `PROGRAMS.TXT` on each says which went on and why each other one did not (a library where a program was expected, a library it needs that WIN16 would refuse, its tables too large, or no room). Microsoft's files are read from `<dir>` and never enter the tree |
 
 **A forward to a WIN16.O88 the machine does not have** ends in the
 association search's `Needs WIN16.O88` toast: DOS's window has already
@@ -228590,3 +228590,205 @@ with the font dialogs.
 file of more than one screen, the leg scrolls it by its bar and by keys,
 types a line at the end, saves it with File Save, and reads the file off the
 floppy image on the host - the original bytes, then the line, CR LF and all.
+
+**`win16fam`** (soak, QEMU, the `win16samples` capability): each of S17's
+targets - Notepad, Cardfile, Calendar, Clipboard, PIF Editor, Task Manager,
+Character Map and the four 3.1 screen savers' setup dialogs - opened alone
+on VGA and CGA: WIN16 says Running, the window's title has the family's
+word, its client is not one colour, Character Map's window is inside the
+screen (§124.22.17), and it ends by its close box or by Esc.
+
+### 124.23 A program's own libraries *(S18, docs/plans/WIN16-ANY-PLAN.md)*
+
+A Windows program may come with libraries of its own: Recorder 3.0 with
+`RECORDER.DLL`, its hooks; Paintbrush 3.0 with `PBRUSH.DLL`, its virtual
+bitmaps. Until S18 a module WIN16 does not provide was a name only, each
+import from it bound to a missing-import stub (§124.12). Now WIN16 loads it
+as Windows did: the library's segments in memory, its imports bound, its
+entry prologs patched, its `LibMain` run before the program's first
+instruction, and the program's calls into it fixed up to the library's own
+code.
+
+#### 124.23.1 Which module is a library, and where it is
+
+| | |
+|---|---|
+| a library | an imported module whose name is not one of WIN16's own (`w16_modnames`: KERNEL, USER, GDI, KEYBOARD, SOUND, WIN87EM, SHELL, and S19's) |
+| its file | `<NAME>.DLL` - the module's name, up to 8 characters - in the **program's own folder**. Windows also searched the current directory, the Windows and system directories and the PATH; os8088 has none of those, and a library beside its program is how every target ships. Paintbrush names its library `PBRUSH` while the library calls itself `SCOOLVM`: the import's name finds the file, and the file's own module name is kept as well, both answering `GetModuleHandle` |
+| not there | its imports bind to missing-import stubs, named, as a module WIN16 lacks did (§124.12). Windows refused such a program at load; WIN16 runs it until it calls into the absent library and then says which function |
+| refused | a library the loader refuses for its own reason (§124.3: self-loading, protected mode only, an iterated segment, tables too large, a CPU the census rules out) refuses the PROGRAM, line 1 the reason and line 2 the library's file name |
+| a library of a library | loaded the same way, before the library that imports it. At most `W16_NLIB` = 8 libraries are loaded at once and `W16_LDEPTH` = 4 deep |
+
+#### 124.23.2 Where it lives
+
+A library's segments are blocks of the program's **global heap** (§124.9),
+not claims: the program already holds most of the eight claims an owner may
+(§50), and the heap's arenas are shared. Three fixed blocks a library:
+
+| block | holds |
+|---|---|
+| its DGROUP | `minalloc` + `ne_heap` (+ `ne_stack`, 0 in a library): its own block, so `LocalInit(DS, 0, cbHeap)` from its `LibEntry` finds the block and puts the heap at its end (§124.9) |
+| its code | every other segment, each at a paragraph of its own, as the program's are laid out (§124.3) |
+| its module record | what calls after the load read: each segment's paragraph, the entry table, and the resident and non-resident names tables, copied out of the file |
+
+A library has **one** DGROUP, as on real-mode Windows: every module that
+uses it, the program and any library that imports it, reaches the same one.
+Until one WIN16 instance runs several programs (S21), "every module" is one
+program and its libraries. `hInstance` is the DGROUP's paragraph, and the
+module handle is the same value: every call that takes an `HMODULE` or an
+`HINSTANCE` accepts either, as Windows' did.
+
+`W16_NLIB` module records in WIN16's own bss, 32 bytes each:
+
+| | |
+|---|---|
+| +0 | the module's name as the file gives it (its resident names' first entry), upper case, NUL-padded, 8 bytes |
+| +8 | the file name, 8.3, NUL-terminated, 13 bytes |
+| +21 | the reference count; 0 = a free record |
+| +22 | hInstance: the DGROUP's paragraph |
+| +24 | the code block's paragraph (0 = no segment but DGROUP) |
+| +26 | the module record block's paragraph |
+| +28 | `ne_heap` |
+| +30 | 1 = its `LibMain` is still owed a call |
+| +31 | spare |
+
+The module record block begins with eight words - the segment count, the
+entry table's offset and length, the resident names' offset, the
+non-resident names' offset and length, and `ne_csip` - then each segment's
+paragraph, then the three tables as the file has them.
+
+#### 124.23.3 Binding
+
+- **A library's own imports** of WIN16's functions bind slots of the same
+  table as the program's (§124.19.1), so one import used by both is one slot.
+- **An import of a library's function** is fixed up straight to the
+  function's address in the library: no stub, no gate. A call into a
+  library costs a far call, as it did on Windows. By ordinal through the
+  library's entry table; by name through its resident names table, then its
+  non-resident one, case aside (Paintbrush imports `PBRUSH`'s seven
+  functions by name).
+- **An ordinal or a name the library does not export** binds to a
+  missing-import stub, named "PBRUSH.VBITBLT" or "RECORDER.17".
+- **Prologs** are patched as the program's are (§124.3): a library's exports
+  are shared-data entries, so their `push ds / pop ax / nop` becomes
+  `mov ax, DGROUP` with the library's own DGROUP. A call from WIN16 into a
+  library's window or hook procedure enters with AX = the program's DGROUP
+  (§124.2.2), and the patched prolog replaces it.
+- **The census** (§124.4) runs on each library's code on an 8088, as it does
+  on the program's. A far call from one module into another is not
+  followed: each module's code is censused on its own.
+
+#### 124.23.4 `LibMain`, before the program starts
+
+A library whose `ne_csip` names an entry has its `LibMain` (the C runtime's
+`LibEntry`) called before the program's first instruction, the libraries in
+the order they finished loading - so a library's own libraries first. Each
+is a call into the program (§124.2.2) with Windows' registers: **DS** = the
+library's DGROUP, **DI** = its hInstance, **CX** = its `ne_heap`, **ES:SI**
+= an empty command line. The program's first frame returns into a WIN16
+stub, `W16_LMROW`, fixed slot 4 (§124.19.1), whose handler runs each
+`LibMain` in turn and then finishes as if that stub had been the program's
+first call, with the start registers of §124.3. A `LibMain` that answers
+AX = 0 ends the program, line 1 *A library it needs did not start.* and
+line 2 the library's file.
+
+#### 124.23.5 The calls
+
+| call | |
+|---|---|
+| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for in the program's folder, by its 8.3 name. A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3) and its `LibMain` called as a call into the program; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
+| `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
+| `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
+| `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |
+| `GetModuleFileName` (KERNEL.49) | on a library's handle, `A:\NAME.DLL` - the program's drive and the library's name, the form the program's own name takes |
+| `GetModuleUsage` (KERNEL.48) | a library's count; 1 for anything else, as before |
+
+#### 124.23.6 Not done, pinned
+
+- **A library's resources** are not read: `FindResource`, `LoadString`,
+  `LoadBitmap` and their kind given a library's handle look in the
+  program's. A resource-only library (`MORICONS.DLL`) is the Program
+  Manager's, S23's.
+- **`WEP` at the program's end** is not called: the libraries go with the
+  program's memory when it ends, as they went when Windows 3.0 exited.
+- **Hooks** other than `WH_MSGFILTER` are kept and not called (§124.22.16),
+  so Recorder's journal hooks record nothing and play nothing back.
+- **A library's DGROUP does not grow**: its local heap is the `ne_heap` it
+  asked for, and `LocalAlloc` past it fails. Windows grew it.
+- **A library shared between two programs** is S21's: each WIN16 instance
+  loads its own copy.
+
+#### 124.23.7 The gate
+
+**`win16dll`** (soak, QEMU, the `win16fixtures` capability): `DLLUSE.EXE`
+(`tests/win16/dlluse.c`) imports `W16DLL.DLL` (`tests/win16/w16dll.c`) by
+ordinal and by name; `W16DLL`'s `LibMain` records that it ran; the program
+calls into it both ways and through `GetProcAddress`, then `LoadLibrary`s
+`W16DLL2.DLL`, which imports `W16DLL` too, and calls a function there that
+raises `W16DLL`'s counter - one DGROUP for both users - then `FreeLibrary`s
+it and reads that its `WEP` ran. The `MessageBox` it ends with names every
+check that failed, and the row reads it off the program's stack.
+
+#### 124.23.8 The calls Recorder makes
+
+Recorder 3.0 and `RECORDER.DLL` import seven functions WIN16 lacked. They
+go in the library part (§124.19):
+
+| call | |
+|---|---|
+| `GetCapture` (USER.236) | the window `SetCapture` named, 0 when none |
+| `GetDoubleClickTime` (USER.21) | 500, Windows' default |
+| `GetKeyboardState` (USER.222) | 256 bytes, each key as `GetKeyState` sees it: `VK_SHIFT`, `VK_CONTROL` and `VK_MENU` down (80h) from the BIOS's shift flags, and `VK_CAPITAL`, `VK_NUMLOCK` and `VK_SCROLL` toggled (bit 0) from its lock flags; every other key up |
+| `SetKeyboardState` (USER.223) | kept by nothing: the keyboard's state is the BIOS's |
+| `GetClassName` (USER.58) | a class the program registered answers its name as WIN16 keeps it, upper case (§124.8); WIN16's own controls their Windows names - `Button`, `Edit`, `Static`, `ListBox`, `ScrollBar`, `ComboBox` - and a dialog `#32770`. The length |
+| `EnumWindows` (USER.54) | the callback for each of the program's top-level windows, `(hwnd, lParam)`, as a call into the program (§124.2.2), until one answers FALSE; 1 |
+| `GlobalWire`, `GlobalUnWire` (KERNEL.111, 112) | `GlobalLock`'s and `GlobalUnlock`'s answers: nothing moves here, so wiring a block low is already true |
+
+Two things Recorder showed that were not imports:
+
+- **A class name of sixteen characters.** `RecorderKeyXlate` is 16, and
+  WIN16 refused any name over 15, so its second `RegisterClass` failed and
+  Recorder ended before its window opened. A class name is now kept to its
+  first sixteen characters (§124.8), the length Windows 3.0 compared.
+- **The first top-level window is a hidden helper.** Recorder makes a 1 x 1
+  window of class `RecorderKeyXlate`, style 0 and no menu, before its main
+  window, and the first top-level window takes WIN16's own os8088 window
+  (§124.8) - so the main window became a second one, which has no menu bar
+  (§124.11). Now a top-level window made **with a menu** (its own `hMenu`
+  or its class's) takes WIN16's window from the first one when that one has
+  **never been shown** and has no menu; the helper keeps no os8088 window
+  at all, and nothing draws it. A helper shown afterwards stays undrawn,
+  which is pinned: no target does it.
+
+#### 124.23.9 The calls Paintbrush makes
+
+Paintbrush 3.0 and `PBRUSH.DLL` (its virtual bitmap manager, module
+`SCOOLVM`) import 35 functions WIN16 lacked. The ones that keep or answer
+state went in with S18, in the library part:
+
+| call | |
+|---|---|
+| `GlobalNotify` (KERNEL.154) | kept by nothing: WIN16 discards no block (§124.18), so there is no discard to be told of |
+| `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle: no block is discarded, so its age means nothing |
+| `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less |
+| `GetTempDrive` (KERNEL.92) | the Windows directory's drive (§124.21.3): its letter in AL, `:` in AH, DX = 1, as Wine's `GetTempDrive16` |
+| `ClipCursor` (USER.16) | nothing: the pointer is os8088's and is not confined |
+| `SetRectEmpty`, `IsRectEmpty`, `UnionRect` (USER.73, 75, 80) | as Windows': a rectangle with no width or no height is empty, and `UnionRect` ignores an empty one, emptying the destination and answering FALSE when both are |
+| `GetPriorityClipboardFormat` (USER.402) | the first format of the list the clipboard holds (`CF_TEXT` or `CF_OEMTEXT`, §124.16); 0 when it holds nothing, -1 when it holds none of them |
+| `GetBkColor`, `GetROP2`, `GetWindowOrg`, `GetBrushOrg` (GDI.75, 85, 97, 149) | what `SetBkColor`, `SetROP2` and `SetWindowOrg` set; the brush origin is always 0, 0 |
+| `SetPolyFillMode`, `SetStretchBltMode` (GDI.6, 7) | kept, the old one answered; neither changes a pixel (no polygon is filled, §124.22.16, and `StretchBlt` drops or repeats whole pixels) |
+| `LPtoDP`, `DPtoLP` (GDI.99, 67) | each point moved by the window origin; the extents never scale a drawing here (§124.22.2) and do not scale these |
+| `Polyline` (GDI.37) | `Polygon`'s edges without the closing one; the current point neither used nor moved |
+| `SetBitmapDimension` (GDI.163) | 0, the old dimension; nothing kept |
+| `CreateDiscardableBitmap` (GDI.156) | `CreateCompatibleBitmap`: nothing is discarded |
+| `EnumFonts` (GDI.70) | `EnumFontFamilies`' walk (§124.22.15): the System font, once |
+| `EnumObjects` (GDI.71) | `OBJ_PEN` and `OBJ_BRUSH`: a solid one in each of the display's sixteen colours, its `LOGPEN` (1 wide) or `LOGBRUSH` in a block on the program's stack, `(lpLogObject, lpData)` as a call into the program (§124.2.2), until one answers 0. 1 when all sixteen were called; 0 when one stopped it, or for any other type |
+
+**What Paintbrush found that was not an import.** `GetMenuString` is in the
+library part since S14 (§124.19), and it still put DS back with `push cs` /
+`pop ds` - but CS there is the PART's segment, not WIN16's. Every DS access
+after a `GetMenuString` went to the library part: Paintbrush's MessageBox
+never painted, the DOS window that had launched it was never closed, and
+the next keystroke rebooted the machine. It saves DS and puts it back now,
+and `tests/unit/t_w16xsec.py` (rule 6) refuses `push cs` then `pop ds` in a
+part that runs on WIN16's DS unless the line says `XSEC-OK`.

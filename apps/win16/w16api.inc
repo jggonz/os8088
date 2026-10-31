@@ -218,6 +218,37 @@ W16EXPORT W16M_GDI,        370,     6,  w16_ans0            ; GetNearestPaletteI
 W16EXPORT W16M_USER,       121,     6,  w16u_sethook        ; SetWindowsHook(s_word segptr)
 W16EXPORT W16M_USER,       234,     6,  w16u_unhook         ; UnhookWindowsHook(s_word segptr)
 W16EXPORT W16M_USER,       235,     12, w16u_defhook        ; DefHookProc(s_word word long ptr)
+W16EXPORT W16M_USER,       236,     0,  w16u_getcapture     ; GetCapture()
+W16EXPORT W16M_USER,       21,      0,  w16u_dblclktime     ; GetDoubleClickTime()
+W16EXPORT W16M_USER,       222,     4,  w16u_getkbstate     ; GetKeyboardState(ptr)
+W16EXPORT W16M_USER,       223,     4,  w16u_setkbstate     ; SetKeyboardState(ptr)
+W16EXPORT W16M_USER,       58,      8,  w16u_getclsname     ; GetClassName(word ptr s_word)
+W16EXPORT W16M_USER,       54,      8,  w16u_enumwnd        ; EnumWindows(segptr long)
+W16EXPORT W16M_KERNEL,     111,     2,  w16k_glock          ; GlobalWire(word)
+W16EXPORT W16M_KERNEL,     112,     2,  w16k_gunlock        ; GlobalUnWire(word)
+W16EXPORT W16M_KERNEL,     154,     4,  w16k_gnotify        ; GlobalNotify(segptr)
+W16EXPORT W16M_KERNEL,     163,     2,  w16k_glru           ; GlobalLRUOldest(word)
+W16EXPORT W16M_KERNEL,     164,     2,  w16k_glru           ; GlobalLRUNewest(word)
+W16EXPORT W16M_KERNEL,     169,     2,  w16k_gcompact       ; GetFreeSpace(word)
+W16EXPORT W16M_KERNEL,     92,      2,  w16k_tempdrv        ; GetTempDrive(byte)
+W16EXPORT W16M_USER,       16,      4,  w16k_gnotify        ; ClipCursor(ptr)
+W16EXPORT W16M_USER,       73,      4,  w16u_rectempty      ; SetRectEmpty(ptr)
+W16EXPORT W16M_USER,       75,      4,  w16u_isrempty       ; IsRectEmpty(ptr)
+W16EXPORT W16M_USER,       80,      12, w16u_unionrect      ; UnionRect(ptr ptr ptr)
+W16EXPORT W16M_USER,       402,     6,  w16u_cbprio         ; GetPriorityClipboardFormat(ptr s_word)
+W16EXPORT W16M_GDI,        75,      2,  w16g_getbkcol       ; GetBkColor(word)
+W16EXPORT W16M_GDI,        85,      2,  w16g_getrop2        ; GetROP2(word)
+W16EXPORT W16M_GDI,        97,      2,  w16g_getworg        ; GetWindowOrg(word)
+W16EXPORT W16M_GDI,        149,     2,  w16_ans0            ; GetBrushOrg(word)
+W16EXPORT W16M_GDI,        6,       4,  w16g_setpfmode      ; SetPolyFillMode(word word)
+W16EXPORT W16M_GDI,        7,       4,  w16g_setsbmode      ; SetStretchBltMode(word word)
+W16EXPORT W16M_GDI,        99,      8,  w16g_lptodp         ; LPtoDP(word ptr s_word)
+W16EXPORT W16M_GDI,        67,      8,  w16g_dptolp         ; DPtoLP(word ptr s_word)
+W16EXPORT W16M_GDI,        37,      8,  w16g_polyline       ; Polyline(word ptr word)
+W16EXPORT W16M_GDI,        163,     6,  w16_ans0            ; SetBitmapDimension(word s_word s_word)
+W16EXPORT W16M_GDI,        156,     6,  w16g_cmpbmp         ; CreateDiscardableBitmap(word word word)
+W16EXPORT W16M_GDI,        70,      14, w16g_enumfam        ; EnumFonts(word str segptr long)
+W16EXPORT W16M_GDI,        71,      12, w16g_enumobj        ; EnumObjects(word word segptr long)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put
@@ -394,7 +425,7 @@ W16EXPORT W16M_GDI,        91,      8,  w16g_textext        ; GetTextExtent(word
 W16EXPORT W16M_GDI,        93,      6,  w16g_textmet        ; GetTextMetrics(word ptr)
 W16EXPORT W16M_GDI,        443,     28, w16g_setdib         ; SetDIBitsToDevice(word s_word x6 word word ptr ptr word)
 ; what CLOCK and REVERSI call (SPEC.md 124.17, w16acc.inc)
-W16EXPORT W16M_KERNEL,     48,      2,  w16_ans1            ; GetModuleUsage(word)
+W16EXPORT W16M_KERNEL,     48,      2,  w16k_getmodu        ; GetModuleUsage(word)
 W16EXPORT W16M_KERNEL,     54,      6,  w16_ans0            ; GetInstanceData(word word word)
 W16EXPORT W16M_USER,       70,      4,  w16u_setcurpos      ; SetCursorPos(word word)
 W16EXPORT W16M_USER,       77,      8,  w16u_offrect        ; OffsetRect(ptr s_word s_word)
@@ -469,6 +500,7 @@ W16FIXED 10, w16_ctlrow         ; W16_CTLROW: a control's window procedure
 W16FIXED 0,  w16_cbdone         ; W16_CBROW: the callee's way back
 W16FIXED 0,  w16x_lacks         ; W16_X87ROW: an x87 instruction it lacks
 W16FIXED 10, w16u_defdlgproc    ; W16_DDPROW: DefDlgProc (W16_XDDP's handler)
+W16FIXED 0,  w16_lmgo           ; W16_LMROW: the libraries' LibMain (124.23.4)
 %if W16NF != W16_NFIXED
   %error "W16FIXED: one row a fixed slot"
 %endif
@@ -1159,7 +1191,17 @@ w16k_getmodfn:
     call .put
     mov al, '\'
     call .put
+    push bx
+    push es
+    call w16_args
+    mov ax, [es:bx + 6]             ; hModule: a library's (SPEC.md 124.23.5)
+    pop es
+    call w16_libof                  ; SI -> its record
+    lea si, [si + W16L_FILE]
+    jnc .lib
     mov si, w16_name
+.lib:
+    pop bx
 .name:
     lodsb
     or al, al
@@ -1180,6 +1222,306 @@ w16k_getmodfn:
     inc di
     dec cx
 .full:
+    ret
+
+; =============================================================================
+; A program's own libraries, as the image reaches them (SPEC.md 124.23): both
+; the loader part and the library part call these
+; =============================================================================
+
+; w16_libfind - a library already loaded by the file name in [w16_lname], or
+; by the module name its stem is: its count raised, AL = its record. CF=1
+; none. Keeps the rest.
+w16_libfind:
+    push bx
+    push cx
+    push si
+    push di
+    mov si, w16_libs
+    xor bx, bx
+.rec:
+    cmp byte [si + W16L_COUNT], 0
+    je .next
+    push si                         ; the file name, whole
+    lea di, [si + W16L_FILE]
+    mov si, w16_lname
+.f:
+    mov al, [si]
+    cmp al, [di]
+    jne .fne
+    inc si
+    inc di
+    or al, al
+    jnz .f
+    pop si
+    jmp short .hit
+.fne:
+    pop si
+    mov di, w16_lname               ; ...or its stem, the module's name
+    xor cx, cx
+.m:
+    mov al, [di]
+    or al, al
+    jz .mend
+    cmp al, '.'
+    je .mend
+    cmp cx, 8
+    jae .next
+    push bx
+    mov bx, cx
+    cmp al, [si + bx + W16L_NAME]
+    pop bx
+    jne .next
+    inc di
+    inc cx
+    jmp short .m
+.mend:
+    jcxz .next
+    cmp cx, 8
+    jae .hit
+    push bx
+    mov bx, cx
+    cmp byte [si + bx + W16L_NAME], 0
+    pop bx
+    jne .next
+.hit:
+    inc byte [si + W16L_COUNT]
+    mov al, bl
+    clc
+    jmp short .out
+.next:
+    add si, W16L_SIZE
+    inc bx
+    cmp bx, W16_NLIB
+    jb .rec
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; w16_libof - AX = a handle: SI -> the library's record and BX = its index
+; if it is one (its hInstance, or its module block). CF=1 not. Keeps AX.
+w16_libof:
+    or ax, ax
+    jz .no
+    mov si, w16_libs
+    xor bx, bx
+.r:
+    cmp byte [si + W16L_COUNT], 0
+    je .n
+    cmp ax, [si + W16L_HINST]
+    je .yes
+    cmp ax, [si + W16L_MREC]
+    je .yes
+.n:
+    add si, W16L_SIZE
+    inc bx
+    cmp bx, W16_NLIB
+    jb .r
+.no:
+    stc
+    ret
+.yes:
+    clc
+    ret
+
+; w16_libproc - an export of library BL (SPEC.md 124.23.3): by name (ES:DI,
+; CL characters, case aside: the resident names, then the non-resident) or
+; by ordinal (CL = 0, AX). out: DX:AX = its address; CF=1 it has none.
+; Keeps the rest.
+w16_libproc:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push ds
+    xor bh, bh
+    mov si, bx
+    mov bx, 5
+.x32:
+    shl si, 1
+    dec bx
+    jnz .x32
+    mov ds, [si + w16_libs + W16L_MREC]   ; DS = the module block from here
+    or cl, cl
+    jz .ord
+    mov si, [W16LM_RES]
+    call .find
+    jnc .ord
+    cmp word [W16LM_NRESN], 0
+    je .none
+    mov si, [W16LM_NRES]
+    call .find
+    jc .none
+.ord:                               ; AX = the ordinal: w16_entrypt's walk
+    mov si, [W16LM_ENT]
+    mov bx, ax
+    mov cx, 1
+.bundle:
+    xor ax, ax
+    mov al, [si]
+    or al, al
+    jz .none
+    mov dl, [si + 1]
+    add si, 2
+    or dl, dl
+    jnz .live
+    add cx, ax
+    jmp short .bundle
+.live:
+    mov di, 3
+    cmp dl, 0xFF
+    jne .size
+    mov di, 6
+.size:
+    mov bp, bx
+    sub bp, cx
+    jb .none
+    cmp bp, ax
+    jb .here
+    add cx, ax
+    push dx
+    mul di
+    pop dx
+    add si, ax
+    jmp short .bundle
+.here:
+    mov ax, bp
+    push dx
+    mul di
+    pop dx
+    add si, ax
+    cmp dl, 0xFF
+    je .mov
+    cmp dl, 0xFE
+    je .none                        ; a constant names no code
+    mov ax, [si + 1]
+    jmp short .got
+.mov:
+    mov dl, [si + 3]
+    mov ax, [si + 4]
+.got:
+    xor dh, dh
+    or dx, dx
+    jz .none
+    cmp dx, [W16LM_NSEG]
+    ja .none
+    mov bx, dx
+    dec bx
+    shl bx, 1
+    mov dx, [W16LM_SEGS + bx]
+    clc
+    jmp short .out
+.none:
+    xor ax, ax
+    xor dx, dx
+    stc
+.out:
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+; .find - DS:SI = a names table (its first entry the module's own, skipped),
+; ES:DI the name, CL its length: AX = its ordinal, CF=1 not there
+.find:
+    lodsb
+    xor ah, ah
+    or al, al
+    jz .nf
+    add si, ax
+    inc si
+    inc si
+.e:
+    mov al, [si]
+    or al, al
+    jz .nf
+    cmp al, cl
+    jne .sk
+    push cx
+    push si
+    push di
+    xor ch, ch
+.c:
+    inc si
+    mov al, [si]
+    mov ah, [es:di]
+    cmp al, 'a'
+    jb .u1
+    cmp al, 'z'
+    ja .u1
+    sub al, 0x20
+.u1:
+    cmp ah, 'a'
+    jb .u2
+    cmp ah, 'z'
+    ja .u2
+    sub ah, 0x20
+.u2:
+    cmp al, ah
+    jne .ne
+    inc di
+    loop .c
+    pop di
+    pop si
+    pop cx
+    mov al, [si]
+    xor ah, ah
+    add si, ax
+    mov ax, [si + 1]
+    clc
+    ret
+.ne:
+    pop di
+    pop si
+    pop cx
+.sk:
+    mov al, [si]
+    xor ah, ah
+    add si, ax
+    add si, 3
+    jmp short .e
+.nf:
+    stc
+    ret
+
+; w16_lmtramp - where a call into a library's LibMain enters (SPEC.md
+; 124.23.4): w16_cbenter leaves AX = DS = the program's DGROUP, and this
+; gives the library Windows' registers instead
+w16_lmtramp:
+    mov di, [cs:w16_lmdi]
+    mov cx, [cs:w16_lmcx]
+    mov si, [cs:w16_lmsi]
+    mov es, [cs:w16_lmes]
+    mov ds, [cs:w16_lmds]
+    jmp far [cs:w16_lmfar]
+
+; w16_ldlibin - [w16_lname] loaded while the program runs (LoadLibrary,
+; SPEC.md 124.23.5): the loader part fetched, far-called and dropped, as
+; w16_ldin does. out: CF=0 AL = the record or 0FFh no such file; CF=1
+; refused. Clobbers AX
+w16_ldlibin:
+    mov al, W16P_LOAD
+    call w16_pfetch
+    jc .out
+    mov word [w16_pfv], w16l_rtlib
+    mov [w16_pfv + 2], ax
+    call far [w16_pfv]
+    pushf
+    push ax
+    mov ax, [w16_dseg]
+    mov [w16_pfv + 2], ax
+    mov al, W16P_LOAD
+    call op_drop
+    pop ax
+    popf
+.out:
     ret
 
 ; =============================================================================

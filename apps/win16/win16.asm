@@ -94,11 +94,35 @@ W16_NBIND    equ 384            ; bind slots: the distinct imports a program
                                 ;   Paintbrush 3.1's 270 is the most measured
 W16_NCBF     equ 4              ; registered clipboard formats at most
 W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
-W16_NFIXED   equ 4              ; ...slots 0-3 are the image's own:
+W16_NFIXED   equ 5              ; ...slots 0-4 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
-W16_X87ROW   equ 2              ;   the emulator's missing instruction and
-W16_DDPROW   equ 3              ;   DefDlgProc, a dialog class's procedure
+W16_X87ROW   equ 2              ;   the emulator's missing instruction,
+W16_DDPROW   equ 3              ;   DefDlgProc, a dialog class's procedure,
+W16_LMROW    equ 4              ;   and the libraries' LibMain (124.23.4)
+W16_NLIB     equ 8              ; a program's own libraries loaded at once
+W16_LDEPTH   equ 4              ; ...and how deep one may import another
+W16L_NAME    equ 0              ; a library's record (SPEC.md 124.23.2): its
+W16L_FILE    equ 8              ;   module name, its 8.3 file name, its count
+W16L_COUNT   equ 21             ;   (0 = a free record), hInstance, its code
+W16L_HINST   equ 22             ;   block, its module block, ne_heap and
+W16L_CODE    equ 24             ;   whether LibMain is owed a call
+W16L_MREC    equ 26
+W16L_HEAP    equ 28
+W16L_OWED    equ 30
+W16L_SIZE    equ 32
+W16LM_NSEG   equ 0              ; its module block's header: segments, the
+W16LM_ENT    equ 2              ;   entry table's offset and length, the
+W16LM_ENTN   equ 4              ;   resident names', the non-resident names'
+W16LM_RES    equ 6              ;   offset and length, ne_csip, the records
+W16LM_NRES   equ 8              ;   of the libraries it imports (0FFh none),
+W16LM_NRESN  equ 10             ;   then each segment's paragraph
+W16LM_IP     equ 12
+W16LM_CS     equ 14
+W16LM_LIBS   equ 16
+W16LM_SEGS   equ 32
+W16M_LIB     equ 0x80           ; [w16_modid]: ORed with a library's record
+W16_LSVSZ    equ 96             ; ...one module's loader state, saved (w16load.inc)
 W16B_SIZE    equ 4              ; a slot: the argument bytes, the part, the
 W16B_ARGB    equ 0              ;   handler's offset in it
 W16B_PART    equ 1
@@ -210,6 +234,18 @@ section .w16dlg
     W16BSS w16_nmod, 2          ; the program's module-reference count
     W16BSS w16_modid, 2 * 16    ; ...each one's W16M_* (0xFF = not ours)
     W16BSS w16_cpu186, 1        ; 1 = this CPU runs 186 code (SPEC.md 124.3)
+    W16BSS w16_libs, W16_NLIB * W16L_SIZE ; the program's own libraries (124.23)
+    W16BSS w16_lsave, W16_LDEPTH * W16_LSVSZ ; ...a module's loader state while
+    W16BSS w16_ldep, 1          ;   a library it imports loads, and how deep
+    W16BSS w16_lmsv, 6          ; LibMain's chain: the start BX, CX and ES
+    W16BSS w16_lmi, 2           ; ...the record it is at
+    W16BSS w16_lmdi, 2          ; the registers w16_lmtramp enters a library
+    W16BSS w16_lmcx, 2          ;   with (SPEC.md 124.23.4)
+    W16BSS w16_lmsi, 2
+    W16BSS w16_lmes, 2
+    W16BSS w16_lmds, 2
+    W16BSS w16_lmfar, 4
+    W16BSS w16_lname, 14        ; LoadLibrary's 8.3 name
     W16BSS w16_cbm, 2 * W16_MAXSEG      ; the census: each code segment's bitmap
     W16BSS w16_clast, 2 * W16_MAXSEG    ; ...and its last offset (w16cens.inc)
     ; --- the coroutine (w16core.inc) ---
@@ -337,6 +373,8 @@ section .w16dlg
     W16BSS w16_wext, 4          ; SetWindowExt's, kept and answered
     W16BSS w16_vext, 4          ; SetViewportExt's, kept and answered
     W16BSS w16_worg, 4          ; SetWindowOrg's: w16_ox/w16_oy moved back by
+    W16BSS w16_pfmode, 1        ; SetPolyFillMode's, kept (SPEC.md 124.23.9)
+    W16BSS w16_sbmode, 1        ; SetStretchBltMode's, kept
                                 ;   it, as MM_TEXT's scale is 1 (124.22.16)
 W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_dcstk, W16_DCMAX * W16_DCSZ ; the DCs open under it, innermost
@@ -1117,6 +1155,10 @@ w16_freeprog:
     xor ax, ax
     cld
     rep stosw
+    mov di, w16_libs                ; no libraries (124.23): their blocks
+    mov cx, W16_NLIB * W16L_SIZE / 2 ;  go with the arenas below
+    rep stosw
+    mov [w16_ldep], al
     pop es
     pop di
     call w16_dlgout

@@ -1171,8 +1171,10 @@ W16LIB w16u_menustring
     ICALL w16_args
     mov cx, [es:bx + 2]
     les di, [es:bx + 4]
-    pop ds                          ; DS = the USER heap, for the copy
-    xor ax, ax
+    pop ax
+    push ds                         ; (this is the library part: CS is not
+    mov ds, ax                      ;   WIN16's DS, SPEC.md 124.19.3)
+    xor ax, ax                      ; DS = the USER heap, for the copy
     jcxz .back
     dec cx
     or si, si
@@ -1191,7 +1193,6 @@ W16LIB w16u_menustring
 .nul:
     mov byte [es:di], 0
 .back:
-    push cs
     pop ds
 .out:
     pop di

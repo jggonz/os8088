@@ -16423,6 +16423,18 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=1500,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16dll", "soak", py("tests/win16dll.py"), 60.0,
+        "SPEC.md 124.23, WIN16-ANY-PLAN S18: a program's own libraries. "
+        "DLLUSE.EXE (`make win16fixtures`, tests/win16/dlluse.c) imports "
+        "W16DLL.DLL by name and by ordinal, its LibMain having run first; "
+        "GetModuleHandle, GetProcAddress, GetModuleFileName and "
+        "GetModuleUsage answer for it; LoadLibrary loads W16DLL2.DLL, which "
+        "imports W16DLL too and raises its counter - one DGROUP for both - "
+        "and FreeLibrary runs its WEP. The MessageBox, read off the program's "
+        "stack, must be DLLUSE OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88", "build/win16/W16DLL.DLL")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "
