@@ -426,7 +426,11 @@ its table goes in the diary, so the reach is measured, not claimed.
       decision of 2026-10-31): `win16.img`, `win16-120.img`,
       `win16-720.img`, `win16-360.img`. WIN16.O88 had outgrown the 1.44MB
       apps disk (3 clusters) and `more720.img` (4), and it grows with each
-      story; the apps disks and `more720.img` no longer carry it.
+      story; the apps disks and `more720.img` no longer carry it. The
+      network-install trees take it from the new disk
+      (`tools/os88nettree.py` now merges any number of disks); INSTALL's
+      floppy path does not ask for it, which is pinned (SPEC.md
+      §124.18.1).
     - **Open, not investigated:** a THIRD WIN16 instance (Clock and
       Calculator running, QEMU's 640 KB) does not start, and nothing says
       so - neither a window nor a refusal. Two at once is SPEC.md

@@ -109,6 +109,7 @@ BLURB = {
     "PiXEL": "An image viewer and editor, with sample pictures.",
     "XTMP3": "An MP3 player for every PC, with three demo songs.",
     "Weave": "Weave apps, ready to run.",
+    "Windows 3.x programs": "WIN16, with room for your Windows 3.0 and 3.1 programs.",
     "Weave editor": "The Weave editor, with the demo apps' sources.",
     "Video demo": "A ready-installed hard disk with demo videos: CGA and "
                   "Hercules for an XT, VGA for a 286.",

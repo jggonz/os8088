@@ -221271,7 +221271,9 @@ tree is the 1.44MB system disk's files and the 1.44MB apps disk's files as
 one - `build/os8088.img` and `build/apps.img` for `big/`, `build/mega.img`
 and `build/megaapps.img` for `mega/`, `build/emu.img` and the SHIPPED
 `build/apps.img` for `emu/` (there is no emu apps disk, 9.11.7; `make
-nettree` therefore needs `make mega` and builds `make emu`'s disk) -
+nettree` therefore needs `make mega` and builds `make emu`'s disk) - and,
+for `big/` and `emu/`, WIN16's own disk, `build/win16.img`, since WIN16 left
+the apps disk for it (124.18.1) -
 `SYSTEM\OS88VER.TXT`, and the
 `OS88.IDX` `tools/os88httpdrv.py export` writes for it. The version file is
 in `SYSTEM\` because an install copies the tree whole: there it lands beside
@@ -227475,7 +227477,7 @@ with.
 | | |
 |---|---|
 | folder | `WIN16\` holding `WIN16.O88`, `WIN16.TXT` and `COPYING.W16` (§124.1's licence row: `apps/win16/README.TXT` and `COPYING` under the names The Wire gives APPLE2's, because `emu360.img` is a category disk with its programs at the root, §24.6, where `README.TXT` is the system's and `COPYING` is C64's and APPLE2's), with `SYSTEM\APPDATA\WIN16\` built beside it (§124.14) |
-| disks | **WIN16's own disk** in all four geometries - `win16.img`, `win16-120.img`, `win16-720.img`, `win16-360.img` - the folder and the profile folder and the rest of the floppy for the user's Windows programs; `emu360.img` (the 360KB machine's, §24.6: programs of another system; the three files at its root, the category disks' rule), the everything set (§19.10) and the live media (§80), which carries the everything set's payload. Not in `$(APPSARGS)`, which also feeds `kern_mega`'s apps disks. **Until S17 batch 4 it rode the 1.44MB and 1.2MB apps disks and `more720.img`**; WIN16.O88 grew to 104 KB, 3 clusters past what the 1.44MB apps disk had left and 4 past `more720.img`, and it grows with each story to S25, so it left them for a disk of its own rather than evict a program each time (the owner's decision, 2026-10-31) |
+| disks | **WIN16's own disk** in all four geometries - `win16.img`, `win16-120.img`, `win16-720.img`, `win16-360.img` - the folder and the profile folder and the rest of the floppy for the user's Windows programs; `emu360.img` (the 360KB machine's, §24.6: programs of another system; the three files at its root, the category disks' rule), the everything set (§19.10) and the live media (§80), which carries the everything set's payload. Not in `$(APPSARGS)`, which also feeds `kern_mega`'s apps disks. **Until S17 batch 4 it rode the 1.44MB and 1.2MB apps disks and `more720.img`**; WIN16.O88 grew to 104 KB, 3 clusters past what the 1.44MB apps disk had left and 4 past `more720.img`, and it grows with each story to S25, so it left them for a disk of its own rather than evict a program each time (the owner's decision, 2026-10-31). **What that costs an install:** the network trees carry it (§117.10.2: `big/` and `emu/` are cut from the WIN16 disk too), but INSTALL's floppy path copies the system disk and the apps disk (§117), so a machine installed from floppies has no WIN16 until its `WIN16\` folder is copied over by hand. A third disk for the installer to ask for is not done |
 | not on | `kern_small`'s disks (§24.5: no `OSAPI_WM_TIMER`) and `kern_mega`'s (WIN16 refuses there, §124.1) |
 | `DOS.O88` | the shipped one hands an NE to WIN16 (§124.1's launch row). `-DDOS_WIN16` is the default for `kern_big` and `kern_emu`, and off for `kern_small` and `kern_mega`, whose disks carry no WIN16 |
 | your programs | `make win16disk WIN3X=<dir>`: a floppy in all four geometries with `WIN16\`, the profile folder, and the NE programs found directly in `<dir>`, in name order, as many as the geometry holds. `PROGRAMS.TXT` on each says which went on and why each other one did not (a library, over 64 KB (R2), or no room). Microsoft's files are read from `<dir>` and never enter the tree |

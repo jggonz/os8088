@@ -193,7 +193,7 @@ def main():
         open(ver, "wb").write(newrel + b"\r\nA line of what is new,\r\n"
                               b"and a second one.\r\n")
         os88nettree.build(os88build.at("build/os8088.img"),
-                          os88build.at("build/apps.img"), ver,
+                          [os88build.at("build/apps.img")], ver,
                           os.path.join(web, "net"))
         open(os.path.join(web, "net", "NETMARK.TXT"), "wb").write(MARK)
         tree, attrs = os88httpdrv.load(os.path.join(web, "net"))
@@ -324,7 +324,7 @@ def main():
         # --- C: started at boot, nothing newer -----------------------------
         open(ver, "wb").write(rel + b"\r\n")
         os88nettree.build(os88build.at("build/os8088.img"),
-                          os88build.at("build/apps.img"), ver,
+                          [os88build.at("build/apps.img")], ver,
                           os.path.join(web, "net"))
         for arg, expect in (("CHECK", False), (None, True)):
             n0 = len(log.gets())

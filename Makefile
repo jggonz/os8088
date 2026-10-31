@@ -6820,9 +6820,11 @@ $(BUILD)/install-gate.o88: $(BUILD)/install-gate.bin tools/os88pkg.py $(PKGZSTAM
 
 # THE PUBLISHED TREES (SPEC.md 117.10.2): per kernel, the 1.44MB system and
 # apps disks as one tree, OS88VER.TXT and its OS88.IDX - build/nettree/big/
-# from os8088.img + apps.img, build/nettree/mega/ from mega.img +
-# megaapps.img, build/nettree/emu/ from emu.img + the SHIPPED apps.img (there
-# is no emu apps disk, `make emu`). On demand; the release publishes
+# from os8088.img + apps.img + win16.img, build/nettree/mega/ from mega.img +
+# megaapps.img (no WIN16: it refuses there, SPEC.md 124.1), build/nettree/emu/
+# from emu.img + the SHIPPED apps.img (there is no emu apps disk, `make emu`)
+# + win16.img. WIN16 left the apps disk for its own (SPEC.md 124.18.1), and
+# an installed machine still gets it. On demand; the release publishes
 # build/nettree/ whole under $(INURLBASE) (117.10.2's store), so each lands
 # where its own INSTALL looks.
 .PHONY: nettree nettree-big nettree-mega nettree-emu
@@ -6830,18 +6832,18 @@ nettree: nettree-big nettree-mega nettree-emu
 nettree-big: $(BUILD)/nettree/big/OS88.IDX
 nettree-mega: $(BUILD)/nettree/mega/OS88.IDX
 nettree-emu: $(BUILD)/nettree/emu/OS88.IDX
-$(BUILD)/nettree/big/OS88.IDX: $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
+$(BUILD)/nettree/big/OS88.IDX: $(IMG) $(APPSIMG) $(WIN16IMG) apps/install/OS88VER.TXT \
                                tools/os88nettree.py tools/os88httpdrv.py
-	python3 tools/os88nettree.py $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
-		$(BUILD)/nettree/big
+	python3 tools/os88nettree.py $(IMG) $(APPSIMG) $(WIN16IMG) \
+		apps/install/OS88VER.TXT $(BUILD)/nettree/big
 $(BUILD)/nettree/mega/OS88.IDX: $(BUILD)/mega.img $(BUILD)/megaapps.img \
                                 apps/install/OS88VER.TXT \
                                 tools/os88nettree.py tools/os88httpdrv.py
 	python3 tools/os88nettree.py $(BUILD)/mega.img $(BUILD)/megaapps.img \
 		apps/install/OS88VER.TXT $(BUILD)/nettree/mega
-$(BUILD)/nettree/emu/OS88.IDX: $(BUILD)/emu.img $(APPSIMG) apps/install/OS88VER.TXT \
+$(BUILD)/nettree/emu/OS88.IDX: $(BUILD)/emu.img $(APPSIMG) $(WIN16IMG) apps/install/OS88VER.TXT \
                                tools/os88nettree.py tools/os88httpdrv.py
-	python3 tools/os88nettree.py $(BUILD)/emu.img $(APPSIMG) \
+	python3 tools/os88nettree.py $(BUILD)/emu.img $(APPSIMG) $(WIN16IMG) \
 		apps/install/OS88VER.TXT $(BUILD)/nettree/emu
 
 $(BUILD)/install.o88: $(BUILD)/install.bin tools/os88pkg.py $(PKGZSTAMP)
