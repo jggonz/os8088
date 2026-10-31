@@ -29,7 +29,12 @@ w16_i21:
     push bx
     push ax
     mov bx, [cs:w16_trn]
-    and bx, 127
+%ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
+    cmp bx, W16_TRN - 1             ;   taking every call after them
+    jb short $+5
+    mov bx, W16_TRN - 1
+%endif
+    and bx, W16_TRN - 1
     shl bx, 1
     mov al, ah
     mov ah, 0x80
@@ -52,10 +57,20 @@ w16_i21:
     cmp ah, 0x44
     je .ioctl
     cmp ah, 0x2A
-    jb .bad
+    jb .file
     cmp ah, 0x2C
-    ja .bad
+    ja .file
     jmp w16_i21clk                  ; 2Ah, 2Ch (and 2Bh, refused there)
+.file:                              ; the file calls are the DOS's (SPEC.md
+    push si                         ;   124.21.2)
+    mov si, w16_i21fwd
+.scan:
+    cmp ah, [cs:si]
+    je .fwd
+    inc si
+    cmp si, w16_i21fwd + W16_NI21FWD
+    jb .scan
+    pop si
 .bad:
     mov ax, 1                       ; invalid function
 .err:
@@ -86,9 +101,12 @@ w16_i21:
     jne .bad
     mov dx, 0x80D3
     jmp short .done
-.badh:
-    mov ax, 6                       ; invalid handle
-    jmp short .err
+.badh:                              ; a handle above the devices: a file,
+    push si                         ;   which is the DOS's
+.fwd:
+    pop si
+    pop bp
+    jmp w16_i21dos
 
 ; AH=25h/35h keep the program's vectors in a table of our own and never touch
 ; the machine's: the program sets int 0 (divide error) and the x87 vectors

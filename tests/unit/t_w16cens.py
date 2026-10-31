@@ -91,7 +91,7 @@ def assemble():
             with open(w, "w") as f:
                 f.write('%%include "win16/win16.asm"\n[map symbols %s]\n' % m)
             subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                            "-I", "apps/win16/", "-o", o, w], check=True, cwd=ROOT)
+                            "-I", "apps/win16/", "-I", "apps/dos/", "-o", o, w], check=True, cwd=ROOT)
             open(cache + ".map", "w").write(open(m).read())
             open(cache + ".bin", "wb").write(open(o, "rb").read())
     syms = {}
@@ -132,20 +132,15 @@ def put(mu, name, val, off=0):
     mu.mem_write((IMG << 4) + S[name] + off, struct.pack("<H", val))
 
 
-def noret_rows():
-    """the export rows of KERNEL.1 and KERNEL.137 (FatalExit, FatalAppExit):
-    a far call to their stubs does not return, to either census"""
-    rows, n = {}, 0
-    for line in open(os.path.join(ROOT, "apps", "win16", "w16api.inc")):
-        if line.startswith("W16EXPORT"):
-            f = [x.strip() for x in line.split(";")[0][len("W16EXPORT"):].split(",")]
-            if f[0] == "W16M_KERNEL" and f[1] in ("1", "137"):
-                rows[int(f[1])] = n
-            n += 1
-    return rows
+def noret_slots():
+    """KERNEL.1 and KERNEL.137 (FatalExit, FatalAppExit) as the loader binds
+    them (SPEC.md 124.19.1): a slot each past the image's four fixed ones, its
+    part byte carrying W16B_NORET - which is what the census reads, so a far
+    call to their stubs does not return, to either census"""
+    return {1: 4, 137: 5}
 
 
-NORET = noret_rows()
+NORET = noret_slots()
 
 
 def fixtab():
@@ -160,6 +155,30 @@ FIX1, FIX2 = fixtab()
 def addw(buf, off, v):
     if 0 <= off and off + 2 <= len(buf):
         struct.pack_into("<H", buf, off, (struct.unpack_from("<H", buf, off)[0] + v) & 0xFFFF)
+
+
+def tables(data):
+    """what w16_load leaves in [w16_fseg] (SPEC.md 124.20.1): the NE header
+    and its tables at offset 0, then each segment's relocation records, and
+    where those start. Out (bytes, the tables' extent, {segment: offset})"""
+    at = struct.unpack_from("<I", data, 0x3C)[0]
+    h = data[at:at + 0x40]
+    u = lambda o: struct.unpack_from("<H", h, o)[0]
+    end = max(u(0x22) + 8 * u(0x1C), u(0x28) + 2 * u(0x1E), u(0x04) + u(0x06),
+              u(0x24), u(0x26), u(0x2A) + 1, 0x40)
+    buf = bytearray(data[at:at + end])
+    buf += b"\0" * (end - len(buf) + (end & 1))
+    align = u(0x32) or 9
+    rtoff = {}
+    for n in range(1, u(0x1C) + 1):
+        sec, ln, fl, _mn = struct.unpack_from("<4H", data, at + u(0x22) + 8 * (n - 1))
+        if not sec or not fl & 0x100:
+            continue
+        r = (sec << align) + (ln or 0x10000)
+        cnt = struct.unpack_from("<H", data, r)[0]
+        rtoff[n] = len(buf)
+        buf += data[r:r + 2 + 8 * cnt]
+    return bytes(buf), end, rtoff
 
 
 def layout(ne):
@@ -227,16 +246,23 @@ class Machine:
         mu = self.mu
         mu.mem_write(IMG << 4, IMAGE + b"\0" * (0x10000 - len(IMAGE)))
         mu.mem_write(PSEG << 4, PART + b"\0" * (0x10000 - len(PART)))
-        mu.mem_write(FSEG << 4, data + b"\0" * (0x10000 - len(data)))
+        tab, tend, rtoff = tables(data)
+        mu.mem_write(FSEG << 4, tab + b"\0" * (0x10000 - len(tab)))
         mu.mem_write(CLAIM << 4, b"\xAA" * 0x10000)       # the census clears it
         base = layout(ne)
         for s in ne.segs:
             mu.mem_write(base[s.n] << 4, segimage(ne, s, base))
         put(mu, "w16_fseg", FSEG)
-        put(mu, "w16_fend", len(data))
-        put(mu, "w16_ne", ne.ne)
+        put(mu, "w16_fend", tend)
+        put(mu, "w16_ne", 0)
+        mu.mem_write((IMG << 4) + S["w16_rtoff"], b"\0" * 2 * 253)
+        for n, o in rtoff.items():
+            put(mu, "w16_rtoff", o, 2 * (n - 1))
         put(mu, "w16_nseg", len(ne.segs))
         put(mu, "w16_nmod", 0)
+        for slot in NORET.values():                 # the bind table's two
+            mu.mem_write((IMG << 4) + S["w16_bind"] + 4 * slot,   # no-return
+                         bytes((0, 0x80, 0, 0)))                  # slots
         for s in ne.segs:
             put(mu, "w16_sbase", base[s.n], 2 * (s.n - 1))
         mu.mem_write((IMG << 4) + S["w16_name"], b"TEST.EXE\0")

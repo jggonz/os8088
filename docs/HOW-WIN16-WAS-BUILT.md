@@ -1458,3 +1458,640 @@ it):
   WIN16 takes no kernel bytes, so it is the owner's decision.
 - `emu360.img` under `EMUFULL=1`, with WIN16 beside C64, APPLE2 and RunCPM,
   was not built here (estimated ~330 of 354 clusters).
+
+## 2026-10-30 — After S13: how far is "any Win16 program"?
+
+PR #320 merged with S0–S13, and the owner asked for the R1–R9 rows as a plan
+of their own. Before ordering them, we measured how far the layer reaches.
+`tools/w16reach.py` runs the census over a directory and compares each
+program's imports with WIN16's 235 export rows. We ran it over Windows 3.0's
+and 3.1's own installed `\WINDOWS`, which come from the reference machines
+and never enter the tree.
+
+- **Windows 3.0: 11 of its 21 programs have nothing in the way.** Seven are
+  over 64 KB, and five import a module WIN16 lacks.
+- **Windows 3.1: 11 of its 32 programs have nothing in the way.** Ten are
+  over 64 KB, three are marked protected-mode only, and seventeen import a
+  module WIN16 lacks, COMMDLG in eighteen files.
+- **605 distinct imports are missing.** The file calls lead (`OpenFile` in
+  49 files), then the library calls (`GetProcAddress` in 46) and scroll bars
+  (30).
+
+Two numbers shaped the plan. First, WIN16's segment has 4,946 bytes left,
+which cannot hold six hundred functions, so the first story makes each
+Windows module a part of its own. Second, Solitaire is 180 KB on disk but
+only 28 KB of code, so "over 64 KB" is mostly a loader change. Write and
+Windows Help are 160–200 KB of code each, and they are the real memory
+problem. The plan is `docs/plans/WIN16-ANY-PLAN.md`.
+
+## 2026-10-30 — S14: the layer becomes an image and a library part
+
+The plan asked for one part per Windows module. Two numbers argued against
+it before any code was written. A program holds at most 8 heap claims, and
+Minesweeper already took seven. Every part that stays loaded is a claim
+the program can no longer spend on its own bitmaps. So there is one
+**library part**, the dialog part grown up, and a second one only when the
+first reaches 64 KB.
+
+The second change matters more for the long run. The image used to carry
+a 12-byte row and stub for every function WIN16 exports. With 605 imports
+still missing, that alone would have filled the segment. The rows moved to
+the loader part. Each program now gets a **bind table** of 384 four-byte
+slots, filled at load, and stub *k* serves slot *k* whatever function it
+binds. The image's size no longer depends on how many functions WIN16
+knows.
+
+**The trap nasm sets.** In a flat binary each section's addresses start at
+0, so a near call from the image to a label in a part assembles without a
+word and calls whatever image code sits at that offset. A part that reads
+its own table without `cs:` reads the image instead. Moving eight files by
+hand would have planted dozens of these. `tests/unit/t_w16xsec.py` reads
+the listing and the map, refuses each kind, and runs in every `make`. It
+found a real one while the files moved: Ellipse jumping into the middle
+of RoundRect, which had gone to the part. A second fault was ordering,
+which no gate sees. The icon cleanup was called after the part was
+dropped, so its guard would always have skipped it.
+
+**What moved, and what it bought.** The segment's room, step by step:
+
+| step | room |
+|---|---|
+| S13 | 4,946 |
+| the bind table | 4,226 |
+| profiles | 6,912 |
+| wsprintf, clipboard, accelerators, icons | 10,198 |
+| bitmaps, SOUND | 12,711 |
+| menus | **19,368** |
+
+**What it costs.** The library part now stays loaded for the whole
+program. Under S6 the dialog part was dropped between dialogs, but a part
+that holds menus and bitmaps would be fetched again on the next call,
+about 400 ms on an XT. Measured off the claim table with four programs
+running, each program is **16 KB larger** than at S13: Clock 109 KB,
+ICONS 111, Reversi 112, Minesweeper 3.1 141. Four programs and the Disk
+window hold 30 of the 32 claim records. A fifth is refused, as it was at
+S13. An earlier reading put Clock at 139 KB, but it counted every claim
+made during the launch, including ones that were not the program's.
+Reading the table by owner corrected it.
+
+**Checked.** `make`'s 69 fast rows; `w16reach.py` over both Windows
+directories, byte-identical to S13's table. Looked at on QEMU: Calculator,
+Minesweeper, ICONS and MENU at once, ICONS' hand box, INIFILE, GDICARD, and
+Minesweeper's Game menu with its checks, separators and accelerators. The
+emulator rows, and the MartyPC price of a call through the library gate,
+run in the final pass (S25).
+
+
+## 2026-10-30 — S15: Solitaire, and the first program over 64 KB
+
+*As a user, I double-click Solitaire and play it.*
+
+Solitaire 3.0 is 180 KB. Only 28 KB of it is code; the rest is the cards,
+which are resources and were always read one at a time. So the loader's
+change was small: it now reads the file in pieces through an 8 KB cluster
+cache, never the whole file at once. Most of the story was what Solitaire
+asks of GDI that nothing before it had.
+
+**Bugs that looked like missing features.** Each of these first looked
+like a whole subsystem to build, and turned out to be one bug:
+
+| on the glass | what it was |
+|---|---|
+| no face cards, only backs | `LoadBitmap` kept the resource entry in SI across a call that answers in SI. Its release then decremented words of the resource table's own header, one of them a type's entry count, so faces 1-52 were never found |
+| hearts and diamonds black | a 1-bit bitmap was forced to black and white; Solitaire's cards are 1-bit with a red palette |
+| white corners on every card | `GetPixel` on the screen answered `CLR_INVALID`; Solitaire reads the felt's colour to paint the corners |
+| a green block over the status line | a timer's DC closed the DC the drag was drawing with; DCs nest now |
+| the spot a lifted card left was white | a memory DC had no brush of its own, so `PATCOPY` in it used the window's |
+| 3.1 dealt nothing | os8088 snaps a window's width DOWN to 8 pixels: Solitaire 3.1 asked for 585, got 584, and computed its piles from the difference. The client now rounds UP |
+| 3.1 hung at start | its window got `WM_SIZE` inside `CreateWindow`, before it had allocated the piles. A hidden overlapped window now gets its first `WM_SIZE` at `ShowWindow`, as Wine sends it |
+
+**Drawing into a bitmap.** Solitaire's drag is five `SRCCOPY`s a step
+through three bitmaps of its own, so `BitBlt` and `PatBlt` now draw into a
+memory DC as well as from one. The screen-to-bitmap copy reads the screen
+back with `OSAPI_GFX_SAVE`, a band at a time.
+
+**ROPs are truth tables.** An empty pile is a monochrome outline put down
+with `SRCAND`. Rather than special-case it, every ROP whose answer ignores
+the pattern goes through one path. Its index byte is a truth table over
+(source bit, screen bit), applied to each of a colour's four bits as the
+VGA driver applied it per plane. A 256-byte table is built per call, and
+each row is read back, combined and put down with one `BLIT4`.
+
+**Control Panel 3.0** is 161 KB in 21 code segments, and it is the first
+program here that is more than its resources. Seven calls were enough to
+reach its window: the Windows directory, `OpenFile` answering *not found*
+until S16, `LoadLibrary` answering 2 until S18, no network, `OemToAnsi`,
+`AdjustWindowRectEx` and `CreateFont`. Two lessons came with it:
+
+- **A row in the wrong place became a constant.** I added
+  `GetWindowsDirectory` just below the rows the loader binds by position.
+  `__AHINCR` moved down one, and Control Panel's call was fixed up as the
+  constant 1000h: a far call to 0000:0000. A comment now marks where new
+  rows go.
+- **`TRANSPARENT` text is not optional.** The selected icon's label is
+  white text on a caption-blue `FillRect`, and WIN16 always drew text on
+  its paper, so the label vanished. It now goes down as ink alone, 16
+  columns at a time through `OSAPI_ICON_DRAW`'s masked pass. That pass
+  draws nothing when a clip edge cuts it, so a cut chunk is read back and
+  put down a row at a time. Dragging the Disk window across the labels
+  exercised both arms.
+
+**BIG.EXE checks what Solitaire does not.** It is an Open Watcom fixture
+in medium model: sixteen functions of straight-line arithmetic, each in a
+code segment of its own (17 segments, about 155 KB of code), and a 128 KB
+block walked once through a `__huge` pointer and once by adding
+`__AHINCR` to the segment by hand. Watcom's own huge arithmetic never
+imports `__AHINCR`, which is why the program imports it itself. The first
+checksum came out 0000: the byte pattern sums to a multiple of 65,536, and
+so did the next two mixes I tried. The step the code functions use is the
+one that does not cancel. The MessageBox reads `code 47D5`, `sum A9A1`,
+`0 wrong`, `__AHINCR 1000`, exactly what Python computes.
+
+**Seen on all four adapters.** Each Solitaire dealt on VGA, EGA, CGA and
+Hercules (Hercules read out of RAM, since QEMU has no Hercules card). Two
+things looked like bugs and were not:
+
+- With both Solitaires open, 3.1 said *"Not enough memory to display card
+  faces when cards move"* on EGA, and on CGA a pile went missing. Two
+  programs genuinely run short of memory. Run alone, each deals.
+- On CGA, Solitaire 3.1 draws no outline on an empty pile. No source ROP
+  reaches the screen there, so it is drawing them some other way; that
+  waits for S17.
+
+**Measured.** WIN16's segment has **15,915 bytes** of room, down from
+19,368: the ROP table, the transparent-text state and the DC stack are
+bss. The library part is 34,759 bytes. `win16sol` (four adapters, deal and
+deck click) and `win16big` are registered and run in the final pass, with
+the XT's load time on MartyPC.
+
+## 2026-10-30 — S16: files, through DOS.O88's own DOS
+
+*As a user, Notepad opens my text file and saves it back.*
+
+**Notepad did not start at all.** It ended before its window opened. The
+trace showed `LocalAlloc` and then the C runtime's exit. Notepad asks its
+local heap for 2 KB at once, and its NE gives the heap exactly 2 KB, less
+the heap's own headers. Windows grew DGROUP with `GlobalReAlloc` when that
+happened. Real-mode Windows could, because it moved segments and patched
+every saved `DS`; WIN16 never moves a segment. So DGROUP is now laid out at
+the whole 64 KB when the arena has room, and at the NE's size when not.
+Notepad's window and menus came up at the next boot.
+
+**One DOS, and not a new one.** The plan said the file calls would come
+from DOS.O88's source, shared rather than copied. An agent mapped DOS.O88's
+file layer first: some 5.5 KB of code, tied to its gate's frame, its arena
+and its PSP. Lifting that out would have meant cutting `dos.asm` into a
+dozen pieces. But DOS.O88's **core** is already assembled once, as
+`build/doscore.bin`, and joined to two hosts, DOS.O88 and `kern_dos`
+(SPEC.md §96.44). WIN16 became the third host. It ships the same binary as
+a part and supplies what a host owes:
+
+- **The back end** is DOS.O88's own `dos_k_*` doors. They moved into
+  `apps/dos/dosbe.inc`, which both hosts include. DOS.O88 assembles
+  byte-identical.
+- **The hooks** are none. A zero hook is how the core spells "this host
+  does not want it".
+- **The segment** is one claim: the core at `CORE_ORG`, its bss above it,
+  and a 426-byte host part above that.
+
+Including `dos.asm` with both `DOS_EXTCORE` and `KD_BACKEND` emits no bytes
+at all. It gives a host every constant and every cell's address, which is
+what made a third host a short file.
+
+**The slot that cost a kilobyte.** WIN16 needs the core's `int 21h` gate by
+address, and it is not on the core's jump table. Appending a slot is
+allowed, but three bytes of table moved `dos_cpm`'s `align 16` by thirteen.
+That needed `CORE_MAX` raised by 16, and those 16 bytes took `kern_dos`
+over a kilobyte rung: a kilobyte off every DOS program it runs. So
+`tools/w16dcmap.py` assembles the core again with a symbol map, refuses
+unless the bytes are the shipped core's, and writes one equate. The core
+did not change by a byte.
+
+**It is fetched on first use.** A program that never opens a file never
+pays the ~20 KB DOS or its 8 KB window. The first fetch crashed to
+0000:0003: `op_fetch` spends DI, the copy's destination, so both parts
+landed in the wrong place in the claim.
+
+**FILES.EXE reaches both doors.** It is an Open Watcom fixture: KERNEL's
+`_lopen` family, `OpenFile` and `GetTempFileName`, and the C runtime's own
+`int 21h` for `mkdir`, `chdir`, `getcwd`, `rename`, `remove`,
+`_dos_findfirst` and stdio. Its first run said `2 failed lwrite2 lread`. It
+had created a file, written 300 bytes, sought back to 100 and written
+`MARK`. DOS.O88's core refuses that, and says so in §96.11.2: a handle that
+has grown its file writes only at its end, because `OSAPI_FILE_APPEND`
+cannot do anything else. Reopening read/write first did not help either,
+since the first write that grows the file turns any handle into an append
+stream. Lifting the rule is a change to the core, so to DOS.O88 and
+`kern_dos`, whose budget is 10 bytes from a kilobyte rung. That decision is
+the owner's. The fixture now patches through `_lopen`'s read/write handle,
+which the core does support (§96.11.6), and says why. The message box
+reads `files: 0 failed`. The 10,000-byte `W16FILE.TXT` it leaves, read off
+the floppy image on the host, is every byte it wrote.
+
+**File Open.** All three targets' File Open dialogs are `DlgDirList` and
+`DlgDirSelect`. The plan had them in S17, but they are file calls, so they
+came here. Notepad's dialog lists `programs.txt` under Files, `[-a-] [-b-]
+[system] [win16]` under Directories, and `b:\` beside Directory. OK opens
+the file, and `OpenFile` names it. Then Notepad says *"File PROGRAMS.TXT is
+too large for Notepad"*. Its document lives in the multi-line EDIT's
+buffer, which is S17's, and that is where opening and saving a document
+finishes. Cardfile is refused at load for `CreateIC`, and Calendar ends at
+start-up when its Windows 2.x bitmap does not load. Both are GDI, which is
+also S17.
+
+**Measured.** WIN16's segment has about **14,885 bytes** of room (image
+31,521, bss about 19,130). The library part is 36,523 bytes. `win16file`
+is registered and runs in the final pass.
+
+## 2026-10-30 — S17, batch 1: Notepad
+
+*As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and PIF
+Editor run.* S17 lands one program family at a time, and Notepad came
+first because the multi-line EDIT is most of it.
+
+**Reading Notepad before writing its control.** The EDIT was written
+against what Notepad 3.0 actually does, read out of its disassembly rather
+than guessed. Its main window has both scroll bars, and its EDIT has none.
+The main window passes `WM_VSCROLL` and `WM_HSCROLL` on to the EDIT. When
+the EDIT says it scrolled (`EN_VSCROLL`), Notepad asks it `EM_GETTHUMB`, an
+undocumented Windows 3.x message, and puts the answer on its own bar as a
+share of 100. To open a file, it grows the EDIT's own text block in its
+local heap with `LocalReAlloc`, reads the file into it with `_lread`, and
+hands it back with `EM_SETHANDLE`. So the text had to live in the
+program's DGROUP heap, where Windows kept it. That is why S16 laid out
+DGROUP at the whole 64 KB.
+
+**Scroll bars on any window, and ScrollWindow.** A window's bar sits
+outside its client, as Windows' frame drew it. Every reader of a client's
+size takes the bar off in one place, so `GetClientRect`, a DC's clip and a
+mouse point agree. A bar is drawn when its frame is exposed, not on every
+paint. A press is tracked until the release: an arrow or the track held
+down repeats, and the thumb drags. `ScrollWindow` moves the pixels with
+`OSAPI_GFX_SCROLL` and invalidates only the rows it uncovered.
+
+**Four bugs between "it draws" and "it edits".** Each one looked like a
+broken EDIT and was not.
+
+- **The text vanished after File Open.** A trace of paints showed the EDIT
+  painted whole, and then its parent's erase wiped it. Notepad calls
+  `UpdateWindow` on the EDIT before its main window has painted the area
+  the dialog uncovered. The parent's later erase drew over the child. The
+  first fix put "a parent invalidates its children under its paint" in
+  `BeginPaint`, but Notepad's main window paints through `DefWindowProc`.
+  The rule now lives where both paths meet. The cost is that one EDIT paint
+  happens twice on an open.
+- **Keys went nowhere.** WIN16 never sent `WM_ACTIVATE`, and Notepad sets
+  its focus to the EDIT there and nowhere else.
+- **One keystroke opened File Open twice.** A control passed Alt keys up to
+  its top-level window by posting the key itself. The program's own
+  `TranslateMessage` then made a second `WM_SYSCHAR` of it, and a second
+  menu loop opened under the first. The `o` that chose Open in the inner
+  loop was still waiting for the outer one. Now the control posts the
+  `WM_SYSCOMMAND` that `DefWindowProc` makes of the key, and nothing else.
+- **Every key said "Insufficient memory".** That was not the heap: 53 KB
+  of it was free. Notepad sets `EM_LIMITTEXT` to 65,535, and the room left
+  under the limit was computed with a signed compare, so it read as
+  negative and every character was refused with `EN_MAXTEXT`.
+
+**Ctrl+End did nothing, anywhere.** The BIOS reports Ctrl+End as scan
+code `75h`, not End's `4Fh`. The same goes for every Ctrl, Alt and Shift
+variant of the cursor and function keys, and for Alt with the digits.
+WIN16's table stopped at F12, so all of them were dropped. They are now
+folded back to the key's own code, and the modifier comes from the shift
+state, as it always did.
+
+**What was seen.** On QEMU, on VGA and on CGA, Notepad 3.0 opens a 61-line
+file through its own File Open. It scrolls by its bar's arrow and by Page
+Down, with its own thumb following. It takes Ctrl+End, Ctrl+Home and typing
+at both ends of the text. File Save then wrote the file, and the bytes read
+off the floppy image on the host were the edited text exactly.
+`TabbedTextOut` is written but not yet seen drawing: Notepad imports it only
+to print, and Cardfile, the next batch, draws its list with it.
+`win16file`'s new Notepad leg is written and runs in the final pass.
+
+## 2026-10-30 — S17, batch 2: Calendar and Cardfile
+
+**Calendar needed a scroll bar that is a window of its own.** Its two day
+arrows are one SCROLLBAR control, and the arrows on it are Windows 2's
+bitmaps, which a program asks for with `LoadBitmap(NULL, OBM_OLD_*)`. Those
+are Microsoft's drawings, so WIN16 draws its own: four 15 x 15 text files
+beside the system icons, built into the same part. The control is the
+window's bar of batch 1 standing alone, its presses posted to the parent
+with the control's handle, which is how Calendar tells it from the hour
+list's bar. Calendar also wanted a caret (it is a box, inverted, and it
+does not blink), `GetUpdateRect` and a handful of answers.
+
+**A white box on the desktop.** Before its first `ShowWindow`, Calendar fills
+its client. WIN16 drew that fill, on the desktop, where the window was going
+to be. On Windows a hidden window has no pixels, and now WIN16's DC on a
+window that is not visible, or whose parent is not, draws nothing.
+
+**The appointment that vanished.** Typed "lunch" at 7:00, pressed Enter: the
+caret went to 8:00 and "lunch" was gone. Calendar's disassembly showed where
+it saves a line: on `EN_KILLFOCUS` from its edit, which WIN16's one-line EDIT
+never sent. Adding it was not enough, because WIN16 POSTS notifications
+(§124.13) and Windows sends them. Calendar's Enter calls `SetFocus` away
+from the edit, expecting the save to happen inside that call. It then moves
+the edit to the next line and gives it the next line's text. A posted
+`EN_KILLFOCUS` arrived after all that, and saved the empty next line. Now the
+notifications a program's own `SetFocus` raises are SENT, one after the
+other, before `SetFocus` returns. The import handler does the sending as a
+chain of continuations (§124.2.2), so the controls still never call the
+program themselves.
+
+**The crash that moved.** With that fixed, Calendar froze before its first
+paint - but only in the plain build. The trace build ran it; adding a few
+bytes of bss made the plain build run it too, and the next change broke it
+again. The CPU sat on an invalid opcode inside WIN16's window table. Five
+instruments in, the answer:
+
+1. QEMU's GDB stub, a breakpoint on every byte of the bss it landed in:
+   it arrived by an `iret`, from a frame that looked like one but was not.
+2. Breakpoints on every `iret` and `retf` in WIN16: so many stops that the
+   guest clock stood still for minutes.
+3. QEMU's `log exec` into a FIFO, with Python keeping a ring of the last
+   3,000 blocks. The block before the jump was `w16_cbenter` - calling
+   `w16_i21_on` at the wrong address. **WIN16's own code had been
+   changed**: the call's displacement byte read 00, not 07.
+4. Comparing the live image with the built one: a handful of single bytes
+   overwritten across WIN16's code, values like 00, `e`, `(`.
+5. The same ring, polling just those bytes and stopping the machine the
+   moment one changed: the last blocks were a one-line EDIT's `WM_CREATE`.
+
+`w16d_ecreate` asks `w16_textptr` for the text the window was made with,
+and that call answers the TEXT's segment in ES - and the copy and its NUL
+then went out through that ES rather than the USER heap's. A window made
+with no text has WIN16's own empty string, so the NUL landed in WIN16's
+code at the heap block's offset. That bug has been there since S6; every
+earlier program made its one-line edits from a dialog template with text in
+them. Calendar makes its edits empty. The multi-line EDIT had the same call
+written correctly.
+
+**Cardfile.** It refused at load until `CreateIC`, `IntersectClipRect`,
+`SaveDC`/`RestoreDC`, `GetBitmapBits`, `Catch`/`Throw` and the Comm calls
+were there. Then its first keys went nowhere. Windows' `DefWindowProc`
+gives a window activated the focus, and the window is told `WM_SETFOCUS`;
+Cardfile moves the focus into its card there. WIN16 did neither. With both,
+Cardfile runs: the card takes typing, F6 names it, F7 adds a second card in
+sorted order, and List view draws the index lines with `TabbedTextOut` -
+the first time that call was seen drawing.
+
+**One click, two days.** Calendar's day arrow stepped twice. The test's
+click holds the button for a fifth of a second, which is four ticks, and a
+held arrow repeated after four ticks. It repeats after six now.
+
+**What the gate caught.** The fast tier's stack-balance row found a path in
+the hidden-window change that popped one word too many: a paint of a window
+in another os8088 window had fallen through into the new label. No look
+would have shown it.
+
+**What was seen.** On QEMU, on VGA and CGA: Calendar 3.0's day view, a day
+a click on its arrows, an appointment kept; Cardfile 3.0's card and list
+views, its Index dialog, two cards. Not yet: a card with a picture, which is
+where `SaveDC`, `IntersectClipRect`, `GetBitmapBits` and `Catch`/`Throw` are
+reached, and word wrap, which both programs' text wants. Two WIN16 programs
+at once on CGA ran short of memory: each instance carries its own copy of
+WIN16, and one instance for several programs is S21.
+
+## 2026-10-31 — S17, batch 3: word wrap, and a lookup that lied
+
+**Word wrap.** Windows wraps an EDIT's lines when it has neither
+`ES_AUTOHSCROLL` nor `WS_HSCROLL`, and three programs here want it: Notepad's
+Word Wrap command re-makes its EDIT that way, and Cardfile's card and
+Calendar's notes are made that way. The multi-line EDIT had no line table to
+change. A line is found by scanning from the first line shown, so wrap went
+into the scan: a line ends at CR LF, or after the last space before the word
+that would pass the right edge, or mid-word when one word is wider than the
+line. A line's start is found from its paragraph's start, walking wrapped
+lines forward. The cost of a wrapped line is the length of its paragraph, not
+of the text.
+
+**Then the card drew nothing.** The typed text was in the buffer and the
+lines were counted right, but the card stayed white. The view's left edge
+held 43,520 pixels. The EDIT never sets it after creation. Without wrap that
+had not mattered: the view follows the caret across and fixes any value. With
+wrap nothing moves across, so the garbage stayed. The value came from
+somewhere: a watch on the record's bytes, with QEMU's execution log in a
+ring, caught `SetWindowLong` writing a far pointer into the middle of the
+EDIT's state. Cardfile subclasses its card's EDIT with `GWL_WNDPROC` (-4),
+and the index arrived as 3. The routine that turns an HWND into a record
+also handed back the window's slot in CX. `GetWindowWord`, `SetWindowWord`,
+`GetWindowLong`, `SetWindowLong` and `SetClassWord` had already put the
+index in CX, and `GetWindowText` its count. Every one of them has been wrong
+since it was written, and **no subclass in any program had ever taken**. The
+lookup keeps CX now. Nothing read the slot.
+
+**Then the card still drew nothing**, for a better reason. With the
+subclass in place, Cardfile's own procedure calls `BeginPaint` on the EDIT
+and passes `WM_PAINT` on with the DC in `wParam`. Windows' controls paint
+into a DC handed to them that way. Ours opened their own, found the update
+region already taken by the program's `BeginPaint`, and drew nothing at all.
+A control now paints inside the program's DC, cut to its clip.
+
+**What was seen.** On QEMU (VGA): the card wrapping, a word pushed down by
+typing into the line above it and pulled back by a deletion; Calendar's
+notes wrapping; Notepad's Word Wrap command re-making its EDIT and the text
+following the window's edge, and Notepad without it still scrolling across.
+
+**The PIF Editor asks for a function by name.** It refused to start until
+`GetModuleHandle("KEYBOARD")` and `GetProcAddress(…, "MapVirtualKey")` both
+answered something. The export rows that would answer `GetProcAddress` live
+in the loader part, which is dropped once a program runs. So the names a
+program asks for at run time are a short list of their own, assembled into
+the library part with each one's binding copied from its export row. The
+first ask gives it a bind slot, exactly as an import's fixup would have.
+
+**Its Advanced button did nothing**, three times over, for three reasons. The
+dialog has 53 controls and WIN16 held 48 windows at most. With 80, the
+dialog still refused, because one of its controls is of a class the PIF
+Editor registered itself (`PifHKy`, the shortcut-key field), and a dialog
+template could only name WIN16's own classes. Such a control is now made as
+`CreateWindow` makes one, and its `WM_CREATE` (which is a call into the
+program, so it cannot be made inside the template's loop) is sent after the
+loop, before `WM_INITDIALOG`, control by control.
+
+**Grey behind every message box.** A modal dialog disables the window under
+it, and WIN16 drew that window's controls grey, because the same walk up
+the ancestors that decides input was deciding the colour. Windows draws a
+control grey only when the control itself is disabled.
+
+**The Task Manager** needed `GetWindow` and seven small calls. One of them,
+ordinal 117, is `WindowFromDC` in Windows 3.1, but the 3.0 Task Manager
+calls it with a window handle and treats the answer as a task. It answers
+both readings. Its list is empty here, and should be: the only top-level
+window in a WIN16 instance is the Task Manager's own.
+
+**What was seen.** On QEMU (VGA): the PIF Editor in Standard and 386
+Enhanced modes, its Advanced Options dialog, and Save As writing a 545-byte
+`.PIF`, which is the size Windows 3.0 writes; the Task Manager's Task List,
+and Cancel closing it.
+
+**The Clipboard viewer.** os8088's clipboard carries text, so most of what
+the viewer imports (metafiles, palettes, bitmap formats) answers as a display
+without them would. Two things mattered. Its window class has no background
+brush, and Windows' answer to that is to erase nothing and set `fErase`, so
+the program fills the window itself. WIN16 said it had erased, and the
+viewer's window kept whatever had been on the screen under it. The other is
+being told the clipboard changed. os8088's clipboard has no notification,
+because no native application ever needed one. A viewer is looked at when its
+window is brought to the front, and a window brought to the front is painted.
+So the viewer's paint compares the clipboard's length and first 16 bytes with
+the last ones it saw, and posts `WM_DRAWCLIPBOARD` when they differ. On QEMU
+the viewer showed text copied in Notepad, running beside it, and Delete
+emptied both the clipboard and the view.
+
+
+## 2026-10-31 — S17, batch 4: the combo box, Character Map and the screen savers
+
+**A combo box is a list box with a field on top.** That is how Windows
+built it, and WIN16 builds it the same way. The list is a real WIN16 list
+box window holding the items, so every list path already written (the keys,
+the scroll bar, sorting, item data) serves the combo box without a second
+copy. A `CB_` message that has an `LB_` twin is passed straight on. What
+the combo box owns is the field, the button and the dropping. A dropped
+list is a child of the combo box's top-level window, hidden until it drops,
+shown on top of its siblings with the pointer captured, and cut to that
+window: Windows' list was a popup and could hang past it. Its look was
+measured off Windows 3.0's Control Panel, the Desktop dialog's wallpaper
+list dropped.
+
+**Owner-drawn items could not be drawn the way Windows drew them.** Windows
+sends `WM_DRAWITEM` to the parent from *inside* the control's paint, and
+the program draws the item with the DC it is handed. WIN16's controls answer
+at once (SPEC.md §124.13): a control's paint cannot stop half way and wait
+for a call into the program. So a paint now writes down what it owes — a
+window, an action, a range of items — and the message is sent at the next
+place the program asks for one: `GetMessage`, `PeekMessage` and the modal
+dialog loop each send what is queued before handing over the next message.
+Each send is a real one, with a DC on the control clipped to the item. Seen
+from the program, it is the same message with the same DC, a little later.
+
+**Character Map's font list showed *System*, and then the dialog was too
+wide.** Its template asks for `MS Sans Serif` 8 with `DS_SETFONT`, and
+Windows 3.1 lays such a dialog out in that font's units. Measured off the
+reference screenshot, the 348 × 118 dialog has a 609 × 192 client on VGA,
+which is 7 × 13 per unit. WIN16 lays every dialog out in the System font's
+8 × 16, so the same template is 696 pixels across and the Close and Select
+buttons are past the screen's edge. Using the right units with the System
+font's text would only trade the overflow for clipped labels. The answer is
+a second face: Wine has an MS Sans Serif under the same licence as the
+System font WIN16 already draws from it, and it becomes batch 5.
+
+**The screen savers.** Starfield, Marquee, Mystify and Flying Windows each
+show their setup dialog when started without arguments. They needed
+`CreateWindowEx` (whose arguments are `CreateWindow`'s with one more in
+front), `SetWindowOrg`, `Polygon` (edges only; os8088 has no polygon fill),
+and a hook chain. Each saver hooks `WH_MSGFILTER` to catch F1 in its
+dialog, so the modal loop now hands each message to that hook first and
+skips it on a TRUE answer. Other hook types are kept and answered but not
+called, until a program needs one called.
+
+**A disabled button had no caption.** The *Set Password* button is
+disabled until Password Protected is checked, and it drew as a blank grey
+button. Windows 3.0's `COLOR_GRAYTEXT` is the same grey as a button's face,
+so the caption was being drawn into the face. Windows' own test for this
+case falls back to a grey that shows, and WIN16 now uses the shadow's grey
+there. The first version of the fix compared the two colours after a call
+that zeroes AH, so it compared one of them with 0, and the button stayed
+blank until that was caught on the next look.
+
+**What was seen.** On QEMU (VGA): Character Map's grid and its owner-drawn
+font list dropped and picked; Starfield's and Flying Windows' dialogs;
+Marquee's owner-drawn colour list, which has no strings; Mystify's shape
+list dropped and picked, its colour lists greyed; and Password Protected
+enabling *Set Password* and greying it again.
+
+**Found and left open.** With Clock and Calculator running, a third Windows
+program did not start, and nothing said so: no window, no refusal. Two at
+once is the case SPEC.md §124.18.2 designs for. The third needs measuring,
+and a refusal the user can read.
+
+**What it cost.** The image grew by 377 bytes to 32,831, its bss by 191 to
+23,989 (the owner-draw queue, the combo boxes' saved create arguments, the
+hooks), leaving 8,716 bytes of the 64 KB, down from 9,284. The library part
+grew by 6,594 bytes to 55,137.
+
+**WIN16 got a disk of its own.** At 104 KB the package no longer fit the
+disks it shipped on: the 1.44MB apps disk was 3 clusters short and
+`more720.img` 4. Each story to S25 makes it larger, so making room by
+evicting something would have had to be repeated every batch. The owner
+chose to move it: `WIN16\` and its profile folder are now on
+`win16.img`, `win16-120.img`, `win16-720.img` and `win16-360.img`, with the
+rest of each floppy free for the Windows programs a user copies onto it.
+They are 252 clusters used of 2,847 at 1.44MB and 129 of 354 at 360KB. The
+apps disks and `more720.img` no longer carry it; `emu360.img`, the
+everything set and the live media still do.
+
+## 2026-10-31 — S17, batch 5: the dialog face
+
+*As a user, Character Map fits on my screen.*
+
+**Nearly every dialog names a font.** Character Map's template asks for
+`MS Sans Serif` 8 with `DS_SETFONT`, and so do the 3.1 screen savers'.
+Windows 3.0's own programs ask for `Helv` 8, the same face under its older
+name. Windows laid such a dialog out in that font's units, not the System
+font's, and drew its controls' text in it. WIN16 had used the System font
+for both, so Character Map came out 696 pixels across and its buttons were
+past the screen's edge.
+
+**The units were measured, not looked up.** Windows 3.1 on the reference
+machine gave Character Map's 348 × 118 template a 609 × 192 client, which is
+7 × 13 dialog units. Control Panel 3.0's Desktop dialog, 200 × 158 units,
+measured about 350 × 257 on Windows 3.0: the same 7 × 13. The 7 needed an
+explanation, because `SSERIFE.FON`'s alphabet is 323 pixels and gives 6.
+Windows drew these dialogs **bold**: one more pixel per character makes the
+alphabet 375, and ((375 / 26) + 1) / 2 = 7, the same formula that gives the
+System font 8.
+
+**The face is Wine's.** Wine ships an MS Sans Serif as a FontForge source
+under the same licence and by the same authors as the System font WIN16
+already draws from, and its advances match `SSERIFE.FON`'s. `tools/w16font.py
+dlgdraft` reads its 13-pixel strike, emboldens each row (OR-ed with itself
+shifted one pixel right, the advance one wider), and writes art files in the
+format the System font uses. Then it plans rows for the smaller adapters the
+way the System font's were planned: 10 for EGA and Hercules, 8 for CGA. As
+with the System font, the drafted files are the source from then on. The
+first CGA draft had a 4-row x-height, and in bold the strokes ran into each
+other; 5 rows reads.
+
+**One part carries both faces.** The dialog face goes into each display's
+System font part, at the paragraph after the System face's last glyph.
+WIN16 finds it by reading the first face's own glyph table, so no new part,
+claim or header field was needed. The three parts grew by 1,721, 1,390 and
+1,168 bytes.
+
+**Choosing the face per control.** A dialog whose template names one of the
+two faces at 8 points has its controls flagged as they are made. Every
+message a flagged control handles (measuring, placing the caret, painting)
+switches WIN16's current face to the dialog face and back again. A combo box
+flags the list and the field it creates, and an owner-drawn control's
+`WM_DRAWITEM` DC is set to the dialog face as well, which is why Character
+Map's font list draws in it. Text a program draws itself is not affected: it
+would need `WM_SETFONT` and `SelectObject` of a real font, and those wait for
+`CreateFont` in S19.
+
+**Grey on a 1bpp display.** The last batch drew a disabled caption in the
+button shadow's grey. On CGA and Hercules that grey is black, so *Set
+Password* looked enabled. A disabled caption on a 1bpp display is now drawn
+through a checkerboard, half its pixels, which is how a mono screen shows
+grey everywhere else in os8088.
+
+**What was seen.** On QEMU's VGA, Character Map is 618 pixels across with
+every button on the screen and its font list drops in the dialog face; the
+Starfield setup dialog uses it too. On CGA, Character Map and Mystify use
+the 8-row face, and *Set Password*'s caption is half-drawn while it is
+disabled.
+
+**What is left.** The EGA, Hercules and CGA faces are derived, not measured:
+the reference machine has Windows on VGA only. The PIF Editor's Advanced
+Options names `Helv` 8, so it should now be shorter than the desktop; nobody
+has looked yet.
+
+**A row for the story.** `win16fam` opens each of S17's eleven targets on VGA
+and CGA, checks its title and that its client has something drawn in it,
+checks that Character Map's window is inside the screen, and closes it. It
+is registered and runs in the final pass with the rest.
+
+**What it cost.** The image grew by 159 bytes to 32,990, its bss by 8 to
+23,997, leaving 8,549 bytes of the 64 KB. The library part grew by 505 bytes
+to 55,642.

@@ -97,6 +97,44 @@ w16_bord:
 .out:
     ret
 
+; w16_sbcut - BX = a record, CX/SI = its client's width and height inside
+; its border: each less the scroll bar it has (SPEC.md 124.22.1) - W16D_SBW,
+; less the border the bar lies over - never below 0. A list box's bar is
+; inside its own client (SPEC.md 124.13). Keeps the rest.
+w16_sbcut:
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    jz .out
+    cmp byte [bx + W16W_KIND], W16Q_LIST
+    je .out
+    push ax
+    call w16_bord
+    neg ax
+    add ax, W16D_SBW
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI
+    jz .h
+    sub cx, ax
+    jge .h
+    xor cx, cx
+.h:
+    test word [bx + W16W_STYLE + 2], WS_HSCROLL_HI
+    jz .o
+    sub si, ax
+    jge .o
+    xor si, si
+.o:
+    pop ax
+.out:
+    ret
+
+; w16_ncmark - BX = a record: its scroll bars owed, if it has any. Keeps
+; every register.
+w16_ncmark:
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    jz .out
+    or byte [bx + W16W_F2], W16W2_NCDIRTY
+.out:
+    ret
+
 ; -----------------------------------------------------------------------------
 ; w16_origin - BX = a record -> AX/DX = its client's top left on the screen,
 ; CX/SI = the client's width and height (never below 0). CF=1: its os8088
@@ -118,13 +156,14 @@ w16_origin:
     mov ax, [bx + W16W_OSW]
     cmp ax, [w16_win]
     jne .nobar
-    call w16_mbarh                  ; the client is under the menu bar
+    LCALL w16_mbarh                  ; the client is under the menu bar
     add dx, ax
     sub si, ax
     jge .nobar
     xor si, si
 .nobar:
     pop ax
+    call w16_sbcut
     clc
     ret
 .hid:
@@ -157,6 +196,7 @@ w16_origin:
     jge .h
     xor si, si
 .h:
+    call w16_sbcut
     mov ax, di
     pop di
     clc
@@ -381,8 +421,22 @@ w16_invaltree:
     cmp [di + W16W_PARENT], ax
     jne .n
     push ax
-    mov bx, di                      ; the rectangle in the child's client
-    call w16_bord
+    mov bx, di                      ; its frame, if the region reaches its
+    mov ax, [bx + W16W_X]           ;   window rectangle
+    cmp ax, [bp + 6]
+    jge .nonc
+    add ax, [bx + W16W_CX]
+    cmp ax, [bp + 12]
+    jle .nonc
+    mov ax, [bx + W16W_Y]
+    cmp ax, [bp + 4]
+    jge .nonc
+    add ax, [bx + W16W_CY]
+    cmp ax, [bp + 8]
+    jle .nonc
+    call w16_ncmark
+.nonc:
+    call w16_bord                   ; the rectangle in the child's client
     mov [w16_ivb], ax
     mov ax, [bx + W16W_X]
     add ax, [w16_ivb]
@@ -457,7 +511,7 @@ w16_settext:
     push es
     push ds
     push dx
-    call w16_mheap                  ; ES = the USER heap
+    LCALL w16_mheap                  ; ES = the USER heap
     pop dx
     jc .fail
     mov ax, [bx + W16W_TEXT]
@@ -953,6 +1007,11 @@ w16_mkwnd:
     mov [si + W16W_CX], ax
     mov ax, [w16_cwcy]
     mov [si + W16W_CY], ax
+    mov ax, 100                     ; its scroll bars' range, Windows' default
+    mov [si + W16W_SBH + 4], ax
+    mov [si + W16W_SBV + 4], ax
+    mov bx, si
+    call w16_ncmark
     inc word [w16_seq]
     mov ax, [w16_seq]
     mov [si + W16W_SEQ], ax
@@ -1061,6 +1120,27 @@ w16_builtin:
     inc al
     cmp al, W16Q_LIST
     jbe .c
+    mov si, w16_bisb                ; SCROLLBAR and COMBOBOX, longer: each
+    mov al, W16Q_SCROLL             ;   with its NUL
+.long:
+    mov di, w16_namebuf
+    mov cx, 10
+.sb:
+    mov ah, [si]
+    cmp ah, [di]
+    jne .nl
+    inc si
+    inc di
+    loop .sb
+    clc
+    jmp short .out
+.nl:
+    cmp al, W16Q_COMBO
+    je .no
+    mov si, w16_bicb
+    mov al, W16Q_COMBO
+    jmp short .long
+.no:
     stc
 .out:
     pop di
@@ -1073,6 +1153,10 @@ w16_bitab:                      ; in W16Q_BUTTON.. order, NUL-padded to 8
     db 'EDIT', 0, 0, 0, 0
     db 'STATIC', 0, 0
     db 'LISTBOX', 0
+w16_bisb:
+    db 'SCROLLBAR', 0
+w16_bicb:
+    db 'COMBOBOX', 0, 0
 
 ; w16_ctlstub - DX:AX = the window procedure of WIN16's controls: the stub
 ; of an export row no program can import (w16_ctlrow), so the program can
@@ -1120,7 +1204,7 @@ w16_csize:
     xor dx, dx
 .bar:
     call w16_nobar
-    jmp short .out
+    jmp short .pos
 .rec:
     mov cx, [bx + W16W_CX]
     mov dx, [bx + W16W_CY]
@@ -1133,6 +1217,9 @@ w16_csize:
     mov dx, [bx + W16W_CY]
     sub dx, ax
 .pos:
+    xchg dx, si
+    call w16_sbcut
+    xchg dx, si
     or cx, cx
     jge .p1
     xor cx, cx
@@ -1492,12 +1579,58 @@ w16u_getfocus:
 w16u_setfocus:
     call w16_args
     mov ax, [es:bx]
-    ; fall into w16_setfocus
+    xor cx, cx
+    mov [w16_nfn], cx               ; and w16_nfi
+    mov byte [w16_nfdefer], 1
+    push si
+    call w16_setfocus
+    mov byte [w16_nfdefer], 0
+    mov cx, ax
+    call w16_nfsend
+    pop si
+    ret
+
+; w16_nfsend - CX = SetFocus's answer: the notifications its controls raised
+; (EN_KILLFOCUS, EN_SETFOCUS) SENT to their parents one after the other, as
+; Windows sent them inside the call - Calendar stores the line it is leaving
+; on EN_KILLFOCUS and has moved its edit by the time a posted one arrives -
+; and then CX answered. It is its own continuation.
+w16_nfsend:
+    mov bl, [w16_nfi]
+    cmp bl, [w16_nfn]
+    jae .done
+    inc byte [w16_nfi]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, w16_nfq
+    mov ax, [bx]
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_COMMAND
+    mov dx, [bx + 2]
+    mov [w16_sm_wp], dx
+    mov dx, [bx + 4]
+    mov [w16_sm_lp], dx
+    mov dx, [bx + 6]
+    mov [w16_sm_lp + 2], dx
+    push cx
+    call w16_hwnd2rec
+    pop ax                          ; the answer, the continuation's word
+    mov cx, ax
+    jc w16_nfsend                   ; its parent is gone
+    mov si, w16_nfsend
+    jmp w16_sendwnd
+.done:
+    mov ax, cx
+    xor dx, dx
+    ret
+
 
 ; -----------------------------------------------------------------------------
 ; w16_setfocus - AX = an HWND (0 = none) -> AX = the one that had the focus.
-; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8), at
-; once; a program's window is not told yet. A dialog keeps the control that
+; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8) at
+; once, and are posted to a program's own window (124.22.6). A dialog keeps the control that
 ; had its focus. Clobbers BX, CX, DX.
 ; -----------------------------------------------------------------------------
 w16_setfocus:
@@ -1587,11 +1720,12 @@ w16_focfront:
 .ret:
     ret
 
-; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it, if it
-; is one of WIN16's controls. Keeps every register.
+; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it - one
+; of WIN16's controls at once, a program's own window posted (SPEC.md
+; 124.22.6), a dialog not at all. Keeps every register.
 w16_tellfocus:
     cmp byte [bx + W16W_KIND], W16Q_PROG
-    je .out
+    je .prog
     cmp byte [bx + W16W_KIND], W16Q_DIALOG
     je .out
     push ax
@@ -1605,6 +1739,16 @@ w16_tellfocus:
     pop cx
     pop ax
 .out:
+    ret
+.prog:                              ; a program's own window: posted (S17)
+    push ax
+    call w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    xor ax, ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

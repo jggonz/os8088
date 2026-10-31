@@ -265,13 +265,28 @@ w16_garena:
     inc si
     jmp short .slot
 .free:
+    push si                         ; the floor: 16KB, doubled for each arena
+    mov dx, W16_ARENAKB             ;   already in use, to 64KB (SPEC.md
+    xor si, si                      ;   124.20.2)
+.dbl:
+    cmp word [w16_arena + si], 0
+    je .nd
+    cmp dx, 64
+    jae .nd
+    shl dx, 1
+.nd:
+    inc si
+    inc si
+    cmp si, 2 * W16_NARENA
+    jb .dbl
+    pop si
     mov ax, bx                      ; KB = ceil(paragraphs / 64)
     add ax, 63
     mov cl, 6
     shr ax, cl
-    cmp ax, W16_ARENAKB
+    cmp ax, dx
     jae .kb
-    mov ax, W16_ARENAKB
+    mov ax, dx
 .kb:
     push ax
     call OSAPI_MEM_CLAIM            ; DX = the segment

@@ -51,7 +51,10 @@ W16W_KIND   equ 68              ; W16Q_*: 0 the program's class, else WIN16's
 W16W_F2     equ 69              ; W16W2_*
 W16W_CS     equ 70              ; 18 bytes: a control's or a dialog's own
                                 ;   state (w16dlg.inc)
-W16W_SEQ    equ 88              ; when it was made: siblings are in this
+W16W_SB     equ 88              ; 12: its scroll bars (SPEC.md 124.22.1),
+W16W_SBH    equ W16W_SB         ;   SB_HORZ's position, minimum and maximum,
+W16W_SBV    equ W16W_SB + 6     ;   then SB_VERT's
+W16W_SEQ    equ 100             ; when it was made: siblings are in this
                                 ;   order, Windows' Z order (w16dlg.inc)
 %if W16W_SEQ + 2 != W16W_SIZE || W16W_EXTRA + W16_WEXTRA != W16W_MENU
   %error "the window record's layout and W16W_SIZE disagree"
@@ -65,6 +68,15 @@ W16WF_DIS   equ 16              ; disabled (EnableWindow)
 W16WF_DYING equ 32              ; DestroyWindow has it
 
 W16W2_TTL   equ 7               ; a second top-level's title buffer, + 1
+W16W2_NCDIRTY equ 16            ; its scroll bars are owed (SPEC.md 124.22.1)
+W16W2_OWECR equ 32               ; a dialog's control of the program's own class:
+                                ;   its WM_CREATE is owed (SPEC.md 124.22.12)
+W16W2_DFACE equ 128             ; a control of a DS_SETFONT dialog, or the
+                                ;   dialog: drawn in the dialog face (124.22.17)
+W16W2_OWEMI equ 64              ; an owner-drawn list or combo box: its
+                                ;   WM_MEASUREITEM is owed (SPEC.md 124.22.14)
+W16W2_NSIZE equ 8               ; an overlapped window not yet sized: its
+                                ;   first ShowWindow sends WM_SIZE (124.8)
 
 W16Q_PROG   equ 0               ; the kinds: the program's own class ...
 W16Q_BUTTON equ 1               ; ...and WIN16's (SPEC.md 124.13), whose
@@ -72,6 +84,23 @@ W16Q_EDIT   equ 2               ;   procedures are in the dialog part
 W16Q_STATIC equ 3
 W16Q_LIST   equ 4
 W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
+W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
+W16Q_COMBO  equ 7               ; the COMBOBOX control (SPEC.md 124.22.14)
+
+; --- owner-drawn items owed (SPEC.md 124.22.14, w16combo.inc) -----------------
+W16_ODQN    equ 8               ; the queue's entries: a window, its items
+OQ_HWND     equ 0               ;   first to last, the action, and 1 when
+OQ_FIRST    equ 2               ;   a paint inside W_PAINT owed them
+OQ_LAST     equ 4
+OQ_ACT      equ 6
+OQ_PAINT    equ 7
+OQ_SIZE     equ 8
+%if W16_ODQN * OQ_SIZE != 64
+  %error "w16_odq is 64 bytes in win16.asm's bss"
+%endif
+W16OD_GET   equ 0               ; who sends them: GetMessage,
+W16OD_PEEK  equ 1               ;   PeekMessage,
+W16OD_MODAL equ 2               ;   the modal loop
 
 ; a dialog's own state, in its W16W_CS (w16dlg.inc); the program's DWL_*
 ; are its extra bytes, as on Windows
@@ -98,6 +127,7 @@ WS_CAPTION_HI  equ 0x00C0
 WS_BORDER_HI   equ 0x0080
 WS_DLGFRAME_HI equ 0x0040
 WS_VSCROLL_HI  equ 0x0020
+WS_HSCROLL_HI  equ 0x0010
 WS_GROUP_HI    equ 0x0002
 WS_TABSTOP_HI  equ 0x0001
 
@@ -128,6 +158,7 @@ W16T_HWND   equ 2
 W16T_ID     equ 4
 W16T_PER    equ 6               ; ticks
 W16T_DUE    equ 8               ; OSAPI_GET_TICKS at which it fires
+W16T_PROC   equ 10              ; its TimerProc, 0:0 for none (SPEC.md 124.8)
 
 ; --- a queued message is a MSG ---------------------------------------------------
 MSG_HWND    equ 0
@@ -140,6 +171,7 @@ MSG_PT      equ 14
 WM_CREATE     equ 0x0001
 WM_DESTROY    equ 0x0002
 WM_SIZE       equ 0x0005
+WM_ACTIVATE   equ 0x0006
 WM_SETFOCUS   equ 0x0007
 WM_KILLFOCUS  equ 0x0008
 WM_ENABLE     equ 0x000A
@@ -149,6 +181,7 @@ WM_GETTEXTLENGTH equ 0x000E
 WM_GETDLGCODE equ 0x0087
 WM_INITDIALOG equ 0x0110
 WM_PAINT      equ 0x000F
+WM_DRAWCLIPBOARD equ 0x0308
 WM_CLOSE      equ 0x0010
 WM_QUIT       equ 0x0012
 WM_ERASEBKGND equ 0x0014
@@ -169,6 +202,7 @@ MK_RBUTTON    equ 2
 SC_CLOSE      equ 0xF060
 CW_USEDEFAULT equ 0x8000
 WS_CHILD_HI   equ 0x4000        ; the style's high word
+WS_CLIPCH_HI  equ 0x0200        ; WS_CLIPCHILDREN
 WS_THICKFRAME_HI equ 0x0004
 WS_MINIMIZE_HI equ 0x2000
 SWP_NOSIZE    equ 0x0001
@@ -179,7 +213,10 @@ PM_REMOVE     equ 0x0001
 ; Handles and records
 ; =============================================================================
 
-; w16_hwnd2rec - AX = an HWND -> BX = its record, CX = its slot; CF=1 not one
+; w16_hwnd2rec - AX = an HWND -> BX = its record; CF=1 not one. Keeps the
+; rest - it once answered the slot in CX, which every caller that had loaded
+; CX first (Get/SetWindowWord and Long's index, SetClassWord's, GetWindowText's
+; count) then read as its own
 w16_hwnd2rec:
     mov bx, ax
     sub bx, W16_HWND0
@@ -190,8 +227,10 @@ w16_hwnd2rec:
     shr bx, 1
     cmp bx, W16_MAXWND
     jae .no
+    push cx
     mov cx, bx
     call w16_slot2rec
+    pop cx
     test byte [bx + W16W_FLAGS], W16WF_USED
     jz .no
     clc
@@ -497,7 +536,7 @@ w16u_createwnd:
     mov cx, ax
     or cx, dx
     jz .menu
-    call w16_mload
+    LCALL w16_mload
     mov es, [w16_pss]
     mov bx, [w16_cwargs]
 .menu:
@@ -602,6 +641,11 @@ w16_cw_done:
     inc ax
     jz .refused
     call w16_slot2rec
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI | WS_POPUP_HI | WS_VISIBLE_HI
+    jnz .now                        ; overlapped and hidden: the size waits
+    or byte [bx + W16W_F2], W16W2_NSIZE ;   for its first ShowWindow
+    jmp w16_cw_sized
+.now:
     call w16_rec2hwnd
     call w16_sizemsg
     push si
@@ -640,17 +684,34 @@ w16_cw_sized:
 ; The caption is SM_CYCAPTION less the row it shares with the frame: 19 on
 ; VGA, MEASURED on Windows 3.0 (PUMP.EXE: 320 x 180 is a 312 x 153 client),
 ; and the System font's rows + 3 on every display (w16_capn).
-; CW_USEDEFAULT keeps the size. Clobbers AX, BX, CX, DX, SI, ES.
+; CW_USEDEFAULT is three-quarters of the screen each way, Windows' default
+; (SPEC.md 124.8). Clobbers AX, BX, CX, DX, SI, ES.
 w16_sizeto:
     cmp cx, CW_USEDEFAULT
-    je .out
+    jne .sized
+    push ax
+    mov ax, [w16_scrw]
+    mov cx, ax
+    shr ax, 1
+    shr ax, 1
+    sub cx, ax                      ; CX = 3/4 of the width
+    mov ax, [w16_scrh]
+    mov dx, ax
+    shr ax, 1
+    shr ax, 1
+    sub dx, ax                      ; DX = 3/4 of the height
+    pop ax
+.sized:
     mov bx, 2
     test ax, WS_THICKFRAME_HI
     jz .thin
     mov bx, 8
 .thin:
-    sub cx, bx                      ; the client Windows would have given
+    sub cx, bx                      ; the client Windows would have given,
     jle .out
+    add cx, 7                       ;   up to os8088's 8-pixel grid, so the
+    and cx, 0xFFF8                  ;   snap never takes from it (SPEC.md
+                                    ;   124.8)
     sub dx, bx
     sub dx, [w16_capn]
     jle .out
@@ -691,7 +752,7 @@ w16_sizemsg:
 ; never below 0 (SPEC.md 124.11). Keeps the rest.
 w16_nobar:
     push ax
-    call w16_mbarh
+    LCALL w16_mbarh
     sub dx, ax
     jge .ok
     xor dx, dx
@@ -742,7 +803,7 @@ w16_moveto:
     mov [w16_mvcx], cx
     mov [w16_mvcy], dx
     mov [w16_mvhwnd], ax
-    call w16_hwnd2rec               ; BX = the record, CX = the slot
+    call w16_hwnd2rec               ; BX = the record
     jc .no
     test word [bx + W16W_STYLE + 2], WS_CHILD_HI
     jnz .child
@@ -814,7 +875,7 @@ w16_wndfree:
     jnz .nomenu                     ;   (a child's is its ID)
     or ax, ax
     jz .nomenu
-    call w16_mdestroy
+    LCALL w16_mdestroy
 .nomenu:
     xor ax, ax
     xchg ax, [bx + W16W_OSW]
@@ -831,6 +892,7 @@ w16_wndfree:
     pop bx
 .noosw:
     call w16_rec2hwnd               ; AX = the HWND
+    LCALL w16_cargone               ; the caret goes with it (124.22.9)
     cmp [w16_focus], ax
     jne .nofocus
     mov word [w16_focus], 0
@@ -912,6 +974,10 @@ w16u_showwnd:
     or byte [bx + W16W_FLAGS], W16WF_VIS
     or di, di
     jnz .shown
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI | WS_MINIMIZE_HI
+    jnz .noact
+    call w16_postact                ; a top-level window: active (124.22.6)
+.noact:
     push ax                         ; newly shown: all of it is invalid
     push cx
     push dx
@@ -928,6 +994,17 @@ w16u_showwnd:
     jc .shown                       ;   client. WIN16's own keeps its size: a
     call w16_oswshow                ;   dialog was sized when made (w16d_ownwin)
 .shown:
+    test byte [bx + W16W_F2], W16W2_NSIZE
+    jz .sized                       ; its first show: the WM_SIZE that
+    and byte [bx + W16W_F2], ~W16W2_NSIZE ; CreateWindow kept back (124.8)
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jnz .sized
+    call w16_sizemsg
+    mov si, w16_sw_done
+    mov ax, di
+    call w16_sendwnd
+    jmp short .out
+.sized:
     cmp dx, SW_SHOWNORMAL
     je .restore
     cmp dx, SW_RESTORE
@@ -1252,6 +1329,27 @@ w16u_dispatch:
     mov [w16_sm_msg], ax
     mov ax, [es:bx + MSG_HWND]
     mov [w16_sm_hwnd], ax
+    cmp word [w16_sm_msg], WM_TIMER ; a TimerProc's: it is called, with the
+    jne .wnd                        ;   time, in the window's place
+    mov ax, [w16_sm_lp]
+    or ax, [w16_sm_lp + 2]
+    jz .wnd
+    push si
+    mov ax, [w16_sm_lp]             ; the procedure, where w16_sendgo reads
+    mov [w16_tproc], ax             ;   a window's
+    mov ax, [w16_sm_lp + 2]
+    mov [w16_tproc + 2], ax
+    mov si, w16_cont_ret
+    xor ax, ax
+    xor cx, cx
+    call w16_cbopen
+    call w16_ticksms                ; ...and the time as its lParam
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], dx
+    mov bx, w16_tproc - W16W_PROC
+    pop si
+    jmp w16_sendgo
+.wnd:
     call w16_hwnd2rec
     jc .no
     push si
@@ -1414,9 +1512,25 @@ w16_nextmsg:
     cmp byte [w16_take], 0
     je .gen
     mov byte [w16_quit], 0
-    jmp short .gen
+    jmp .gen
 .paint:
-    xor cx, cx                      ; 3. WM_PAINT, a window that is invalid
+    xor cx, cx                      ; 3. the scroll bars owed, drawn here
+.nc:                                ;   (SPEC.md 124.22.1), then
+    call w16_slot2rec
+    mov al, [bx + W16W_FLAGS]
+    and al, W16WF_USED | W16WF_DYING
+    cmp al, W16WF_USED
+    jne .ncn
+    test byte [bx + W16W_F2], W16W2_NCDIRTY
+    jz .ncn
+    call w16_pshown
+    jc .ncn
+    LCALL w16_ncpaint
+.ncn:
+    inc cx
+    cmp cx, W16_MAXWND
+    jb .nc
+    xor cx, cx                      ;   WM_PAINT, a window that is invalid
 .pw:                                ;   and shown, its parent before it
     call w16_slot2rec
     mov al, [bx + W16W_FLAGS]
@@ -1424,6 +1538,8 @@ w16_nextmsg:
     cmp al, W16WF_USED | W16WF_INVAL
     jne .pn
     call w16_pshown
+    jc .pn
+    call w16_cbunder                ; under a dropped list: later
     jnc .ispaint
 .pn:
     inc cx
@@ -1448,17 +1564,26 @@ w16_nextmsg:
     mov word [bx + MSG_MSG], WM_TIMER
     mov ax, [si + W16T_ID]
     mov [bx + MSG_WP], ax
+    mov ax, [si + W16T_PROC]        ; the TimerProc, which DispatchMessage
+    mov [bx + MSG_LP], ax           ;   calls instead of the window's
+    mov ax, [si + W16T_PROC + 2]
+    mov [bx + MSG_LP + 2], ax
     cmp byte [w16_take], 0
     je .gen
     mov byte [si + W16T_FIRED], 0
     jmp short .gen
 .ispaint:
-    mov si, bx                      ; the highest invalid window it is in
+    mov si, bx                      ; the highest invalid window it is in -
+    call w16_rec2hwnd               ;   none above a dropped list, none the
+    cmp ax, [w16_cbdl]              ;   list is over (124.22.14)
+    je .top
 .up:
     call w16_parent
     jc .top
     test byte [bx + W16W_FLAGS], W16WF_INVAL
     jz .up
+    call w16_cbunder
+    jc .top
     mov si, bx
     jmp short .up
 .top:
@@ -1539,14 +1664,23 @@ w16_putmsg:
 ; GetMessage (USER.108) - args: +0 wMsgFilterMax, +2 wMsgFilterMin, +4 hWnd,
 ; +6 lpMsg. S3 honours only the NULL filter, and treats every other as it.
 w16u_getmsg:
+    cmp byte [w16_odn], 0           ; an owner-drawn item owed first: sent,
+    je .msg                         ;   and this comes back (124.22.14)
+    mov al, W16OD_GET
+    LCALL w16_odgo
+    jnc .ret
+.msg:
     mov al, 1
     call w16_nextmsg
     jc .wait
     mov bx, 6
     jmp w16_putmsg
 .wait:
+    mov ax, [w16_idx]
+    mov [w16_widx], ax
     mov byte [w16_inget], 1         ; nothing to give: the next callback that
     mov byte [w16_pend], 1          ;   has something resumes it (w16_kick)
+.ret:
     ret
 
 ; PeekMessage (USER.109) - args: +0 wRemoveMsg, +2 max, +4 min, +6 hWnd,
@@ -1555,8 +1689,16 @@ w16u_getmsg:
 ; machine a pass a turn instead of owning it - which is what PeekMessage
 ; did on Windows 3.x, where it yielded to the other tasks.
 w16u_peekmsg:
+    cmp byte [w16_odn], 0
+    je .msg
+    mov al, W16OD_PEEK
+    LCALL w16_odgo
+    jnc .out
+.msg:
     call w16_peekmsg
     jnc .out
+    mov ax, [w16_idx]
+    mov [w16_widx], ax
     mov byte [w16_inpeek], 1
     mov byte [w16_pend], 1
     mov bx, [w16_win]
@@ -1584,6 +1726,16 @@ w16_peekmsg:
 ; with a message if there is one now, and run on. No lock is held.
 w16_peekwake:
     mov byte [w16_inpeek], 0
+    cmp byte [w16_odn], 0           ; an owner-drawn item owed: sent, and
+    je .msg                         ;   PeekMessage asked again after it
+    call w16_reidx
+    mov byte [w16_locked], 0
+    mov al, W16OD_PEEK
+    LCALL w16_odgo
+    jc .msg
+    call w16_resumecb
+    jmp w16_after
+.msg:
     call w16_peekmsg
     xor dx, dx
     mov byte [w16_locked], 0
@@ -1597,6 +1749,16 @@ w16_peekwake:
 w16_kick:
     cmp byte [w16_inget], 0
     je .modal
+    cmp byte [w16_odn], 0           ; an owner-drawn item owed: sent, and
+    je .msg                         ;   GetMessage asked again after it
+    call w16_reidx
+    mov al, W16OD_GET
+    LCALL w16_odgo
+    jc .msg
+    mov byte [w16_inget], 0
+    call w16_resumecb
+    ret
+.msg:
     mov al, 1
     call w16_nextmsg
     jc .out
@@ -1611,6 +1773,78 @@ w16_kick:
     cmp byte [w16_inmodal], 0       ; ...or waits in a DialogBox (SPEC.md
     je .out                         ;   124.13 step 3)
     jmp w16_mkick
+
+; w16_reidx - the import waiting in GetMessage or PeekMessage made current
+; again ([w16_widx]), as w16_cbdone makes one, for a send from a callback.
+; Keeps all but AX.
+w16_reidx:
+    push bx
+    mov ax, [w16_widx]
+    mov [w16_idx], ax
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1                       ; * W16B_SIZE
+    mov al, [w16_bind + bx + W16B_ARGB]
+    cbw
+    mov [w16_nargb], ax
+    mov byte [w16_rflags], 0
+    pop bx
+    ret
+
+; w16_cbunder - BX = an invalid window: CF=1 a combo box's list is down
+; over its invalid part, which then waits for the list to go up - the one
+; rectangle a DC clips to cannot have the list cut out of it (SPEC.md
+; 124.22.14). Keeps every register.
+w16_cbunder:
+    cmp word [w16_cbdl], 0
+    je .no
+    push ax
+    push cx
+    push dx
+    push si
+    call w16_rec2hwnd
+    cmp ax, [w16_cbdl]
+    je .no0
+    call w16_origin                 ; AX/DX = its client on the screen
+    jc .no0
+    mov cx, ax
+    add cx, [bx + W16W_UL]          ; its invalid part there: left
+    cmp cx, [w16_cbdr + 4]
+    jg .no0
+    mov cx, dx
+    add cx, [bx + W16W_UT]          ; ...top
+    cmp cx, [w16_cbdr + 6]
+    jg .no0
+    mov cx, [bx + W16W_UR]          ; ...right, cut to the client
+    cmp cx, 0x4000
+    jl .r
+    mov cx, 0x4000
+.r:
+    add cx, ax
+    cmp cx, [w16_cbdr]
+    jle .no0
+    mov cx, [bx + W16W_UB]          ; ...bottom
+    cmp cx, 0x4000
+    jl .b
+    mov cx, 0x4000
+.b:
+    add cx, dx
+    cmp cx, [w16_cbdr + 2]
+    jle .no0
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+.no0:
+    pop si
+    pop dx
+    pop cx
+    pop ax
+.no:
+    clc
+    ret
 
 ; =============================================================================
 ; Paint (SPEC.md 124.8)
@@ -1759,6 +1993,7 @@ w16u_beginpaint:
     push di
     call w16_args
     mov ax, [es:bx + 4]
+    LCALL w16_carpre                ; the caret off while it paints (124.22.9)
     call w16_hwnd2rec
     jc .fail
     mov al, 1
@@ -1781,6 +2016,7 @@ w16u_beginpaint:
     mov [es:di + PS_RC + 6], ax
     mov bx, [w16_dcwnd]
     mov al, [bx + W16W_FLAGS]
+    call w16_pkids
     and byte [bx + W16W_FLAGS], ~(W16WF_INVAL | W16WF_ERASE)
     test al, W16WF_ERASE
     jz .done
@@ -1811,6 +2047,30 @@ w16u_beginpaint:
     pop si
     ret
 
+; w16_pkids - BX = a window being painted, [w16_prc] its rcPaint: its
+; children under it invalid, unless it is WS_CLIPCHILDREN - they are drawn
+; after it, so it cannot draw over them (SPEC.md 124.22.6). Keeps every
+; register.
+w16_pkids:
+    test word [bx + W16W_STYLE + 2], WS_CLIPCH_HI
+    jnz .ret
+    push ax
+    push cx
+    push dx
+    push si
+    mov ax, [w16_prc]
+    mov cx, [w16_prc + 2]
+    mov dx, [w16_prc + 4]
+    mov si, [w16_prc + 6]
+    mov byte [w16_erase], 1
+    call w16_invaltree
+    pop si
+    pop dx
+    pop cx
+    pop ax
+.ret:
+    ret
+
 ; w16_bp_erased - WM_ERASEBKGND answered: fErase says whether it did not
 w16_bp_erased:
     push di
@@ -1833,6 +2093,7 @@ w16_bp_erased:
 ; EndPaint (USER.40) - args: +0 lpPaint, +4 hWnd
 w16u_endpaint:
     call w16_dcclose
+    LCALL w16_carpost
     mov ax, 1
     ret
 
@@ -1840,8 +2101,11 @@ w16u_endpaint:
 w16u_getdc:
     call w16_args
     mov ax, [es:bx]
+    or ax, ax                       ; NULL is the screen's (Solitaire asks
+    jz .desk                        ;   GetDeviceCaps of it, SPEC.md 124.20.4)
     cmp ax, W16_HDESK               ; the desktop's: read, never drawn on
     jne .wnd                        ;   (SPEC.md 124.15.3)
+.desk:
     mov ax, W16_HDESKDC
     ret
 .wnd:
@@ -1885,6 +2149,49 @@ w16u_clientrect:
     pop di
     ret
 
+; w16_syskey - [w16_sm_*] = WM_SYSKEYDOWN, WM_SYSKEYUP or WM_SYSCHAR: made
+; the WM_SYSCOMMAND DefWindowProc makes of it, in [w16_sm_*] - Alt+letter
+; SC_KEYMENU with the letter, F10 SC_KEYMENU with none, Alt+F4 SC_CLOSE. CF=1:
+; the key makes none. Keeps the rest.
+w16_syskey:
+    push dx
+    mov dx, [w16_sm_msg]
+    cmp dx, WM_SYSKEYUP
+    jne .notsku
+    cmp word [w16_sm_wp], VK_F10    ; F10: SC_KEYMENU, no character
+    jne .no
+    xor dx, dx
+    jmp short .keymenu
+.notsku:
+    cmp dx, WM_SYSKEYDOWN
+    jne .notskd
+    cmp word [w16_sm_wp], VK_F4     ; Alt+F4: SC_CLOSE
+    jne .no
+    test byte [w16_sm_lp + 3], 0x20
+    jz .no
+    mov dx, SC_CLOSE
+    jmp short .syscmd
+.notskd:
+    cmp dx, WM_SYSCHAR
+    jne .no
+    mov dx, [w16_sm_wp]             ; Alt+letter: SC_KEYMENU with it
+    cmp dl, ' '
+    je .no
+.keymenu:
+    mov [w16_sm_lp], dx
+    mov dx, SC_KEYMENU
+.syscmd:
+    mov word [w16_sm_lp + 2], 0
+    mov [w16_sm_wp], dx
+    mov word [w16_sm_msg], WM_SYSCOMMAND
+    pop dx
+    clc
+    ret
+.no:
+    pop dx
+    stc
+    ret
+
 ; =============================================================================
 ; DefWindowProc (USER.107) - args: as w16_smargs (SPEC.md 124.8's table)
 ; =============================================================================
@@ -1907,36 +2214,15 @@ w16u_defproc:
     call w16_hwnd2rec
     jc .zero
     xor dl, dl
-    jmp w16_mtbegin
+    LCALL w16_mtbegin
+    ret
 .notnc:
-    cmp cx, WM_SYSKEYUP
-    jne .notsku
-    cmp word [w16_sm_wp], VK_F10    ; F10: SC_KEYMENU, no character
-    jne .zero
-    xor dx, dx
-    jmp short .keymenu
-.notsku:
     cmp cx, WM_SYSKEYDOWN
-    jne .notskd
-    cmp word [w16_sm_wp], VK_F4     ; Alt+F4: SC_CLOSE
-    jne .zero
-    test byte [w16_sm_lp + 3], 0x20
-    jz .zero
-    mov dx, SC_CLOSE
-    jmp short .syscmd
-.notskd:
+    jb .notsc
     cmp cx, WM_SYSCHAR
-    jne .notsc
-    mov dx, [w16_sm_wp]             ; Alt+letter: SC_KEYMENU with it
-    cmp dl, ' '
-    je .zero
-.keymenu:
-    mov [w16_sm_lp], dx
-    mov dx, SC_KEYMENU
-.syscmd:
-    mov word [w16_sm_lp + 2], 0
-    mov [w16_sm_wp], dx
-    mov word [w16_sm_msg], WM_SYSCOMMAND
+    ja .notsc
+    call w16_syskey
+    jc .zero
     call w16_hwnd2rec
     jc .zero
     push si
@@ -1945,12 +2231,34 @@ w16u_defproc:
     pop si
     ret
 .notsc:
+    cmp cx, WM_ACTIVATE             ; activated: the focus to it, unless it
+    jne .notact                     ;   is in it already (SPEC.md 124.22.6)
+    cmp word [w16_sm_wp], 0
+    je .actz
+    mov dx, ax
+    mov ax, [w16_focus]
+.inside:
+    or ax, ax
+    jz .take
+    cmp ax, dx
+    je .actz
+    call w16_hwnd2rec
+    jc .take
+    mov ax, [bx + W16W_PARENT]
+    jmp short .inside
+.take:
+    mov ax, dx
+    call w16_setfocus
+.actz:
+    jmp .zero
+.notact:
     cmp cx, WM_ERASEBKGND
     jne .noterase
     call w16_hwnd2rec
     jc .zero
-    call w16_erasebg
-    mov ax, 1
+    call w16_erasebg                ; a NULL class brush erases nothing and
+    jc .zero                        ;   answers 0, so BeginPaint's fErase
+    mov ax, 1                       ;   tells the program to (CLIPBRD's)
     xor dx, dx
     ret
 .noterase:
@@ -1960,10 +2268,16 @@ w16u_defproc:
     jc .zero                        ;   brush as the erase
     test byte [bx + W16W_FLAGS], W16WF_ERASE
     jz .valid
+    push ax
+    call w16_rec2hwnd
+    LCALL w16_carpre
+    pop ax
     mov al, 1
     call w16_dcopen
+    call w16_pkids
     call w16_erasebg
     call w16_dcclose
+    LCALL w16_carpost
 .valid:
     and byte [bx + W16W_FLAGS], ~(W16WF_INVAL | W16WF_ERASE)
     jmp short .zero
@@ -1978,7 +2292,8 @@ w16u_defproc:
     jc .zero
     mov dl, 1
     mov dh, [w16_sm_lp]
-    jmp w16_mtbegin
+    LCALL w16_mtbegin
+    ret
 .notkm:
     cmp cx, SC_CLOSE
     jne .zero
@@ -1993,7 +2308,8 @@ w16u_defproc:
     xor dx, dx
     ret
 
-; w16_erasebg - BX = a window: fill the DC's clip with its class brush
+; w16_erasebg - BX = a window: fill the DC's clip with its class brush. CF=1
+; it has none (NULL), and nothing was filled
 w16_erasebg:
     push ax
     push bx
@@ -2002,6 +2318,7 @@ w16_erasebg:
     mov ax, [bx + W16W_HBR]
     call w16_brcol
     cmp al, W16_NOCOL
+    stc
     je .out
     mov [w16_gcol], al
     mov ax, [w16_cl]
@@ -2009,6 +2326,7 @@ w16_erasebg:
     mov cx, [w16_cr]
     mov dx, [w16_cb]
     call w16_gfill
+    clc
 .out:
     pop dx
     pop cx
@@ -2024,11 +2342,23 @@ w16_erasebg:
 w16u_settimer:
     push si
     call w16_args
-    mov ax, [es:bx]
-    or ax, [es:bx + 2]
-    jnz .fail                       ; a TimerProc: not until a program needs it
     mov ax, [es:bx + 8]
     mov dx, [es:bx + 6]
+    or ax, ax                       ; no window: an identifier of its own,
+    jnz .wnd                        ;   past every slot's (SPEC.md 124.8)
+    mov si, w16_tmr
+    mov cx, W16_MAXTMR
+.nfree:
+    cmp byte [si + W16T_USED], 0
+    je .nslot
+    add si, W16T_SIZE
+    loop .nfree
+    jmp short .fail
+.nslot:
+    mov dx, W16_MAXTMR + 0x7F00
+    sub dx, cx                      ; 7F00h + the slot
+    jmp short .take
+.wnd:
     mov si, w16_tmr                 ; the same timer again, or a free one
     mov cx, W16_MAXTMR
 .find:
@@ -2054,6 +2384,10 @@ w16u_settimer:
 .take:
     mov [si + W16T_HWND], ax
     mov [si + W16T_ID], dx
+    mov ax, [es:bx]                 ; the TimerProc, 0:0 for none
+    mov [si + W16T_PROC], ax
+    mov ax, [es:bx + 2]
+    mov [si + W16T_PROC + 2], ax
     mov ax, [es:bx + 4]             ; ms * 182 / 10000 ticks, at least one
     mov cx, 182
     mul cx
@@ -2133,7 +2467,11 @@ w16_tarm:
 .n:
     add si, W16T_SIZE
     loop .t
-    call w16s_wait                  ; the sound queue's next note (124.15.1)
+    mov ax, 0xFFFF                  ; the sound queue's next note (124.15.1):
+    cmp word [w16_dseg], 0          ;   none unless the library part, which
+    je .nosnd                       ;   plays it, is here
+    LCALL w16s_wait
+.nosnd:
     cmp ax, bx
     jae .snd
     mov bx, ax
@@ -2177,7 +2515,10 @@ w16_ontimer:
 .n:
     add si, W16T_SIZE
     loop .t
-    call w16s_tick                  ; the sound queue (SPEC.md 124.15.1)
+    cmp word [w16_dseg], 0          ; the sound queue (SPEC.md 124.15.1),
+    je .nosnd                       ;   the library part's
+    LCALL w16s_tick
+.nosnd:
     call w16_tarm
     pop si
     jmp w16_input_kick
@@ -2198,6 +2539,11 @@ w16_mouse:
     mov [w16_my], dx
     mov [w16_sm_msg], ax
     mov [w16_sm_wp], di
+    cmp word [w16_sbtrk], 0         ; a scroll bar's press: all of it the
+    je .nsb                         ;   bar's (SPEC.md 124.22.1)
+    LCALL w16_sbmouse
+    jmp short .out
+.nsb:
     mov ax, [w16_capture]           ; the capture's, while there is one
     or ax, ax
     jz .hit
@@ -2219,6 +2565,16 @@ w16_mouse:
     call w16_modfront
     jmp short .out
 .have:
+    cmp word [w16_sm_msg], WM_LBUTTONDOWN
+    jne .nbar
+    cmp byte [bx + W16W_KIND], W16Q_SCROLL
+    je .sbar
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    jz .nbar
+.sbar:
+    LCALL w16_sbhit                 ; CF=0: it was on a bar, and is the bar's
+    jnc .out
+.nbar:
     call w16_origin                 ; AX/DX = its client's top left
     jc .out
     mov cx, [w16_mx]
@@ -2266,7 +2622,8 @@ w16_modfront:
 w16_onclick:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mclick
+    LCALL w16_mclick
+    ret
 .nt:
     call w16_onbar
     jc w16_barpress
@@ -2277,7 +2634,8 @@ w16_onclick:
 w16_onup:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mup
+    LCALL w16_mup
+    ret
 .nt:
     cmp byte [w16_meat], 0
     je .mine
@@ -2291,7 +2649,8 @@ w16_onup:
 w16_ondrag:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mdrag
+    LCALL w16_mdrag
+    ret
 .nt:
     cmp byte [w16_meat], 0
     jne .eat
@@ -2333,7 +2692,7 @@ w16_onbar:
     push dx
     sub dx, bx
     jl .no
-    call w16_mbarh
+    LCALL w16_mbarh
     dec ax
     cmp dx, ax
     jge .no
@@ -2396,9 +2755,20 @@ w16_input_kick:
 ; key with Alt held, are WM_SYSKEYDOWN / WM_SYSKEYUP with lParam's context bit,
 ; and an Alt+letter's WM_SYSCHAR is the letter (SPEC.md 124.11).
 w16_onkey:
+    cmp ah, W16_NSCAN               ; the ROM's own codes for a shifted,
+    jb .base                        ;   Ctrl or Alt key folded back to the
+    cmp ah, W16_SCANX               ;   key's: the modifier is the shift
+    jae .base                       ;   state's (124.22.6)
+    push bx
+    mov bl, ah
+    xor bh, bh
+    mov ah, [w16_scanx + bx - W16_NSCAN]
+    pop bx
+.base:
     cmp byte [w16_mtrk], 0
     je .nt
-    jmp w16_mkey
+    LCALL w16_mkey
+    ret
 .nt:
     push di
     push ax
@@ -2559,6 +2929,23 @@ w16_vktab:
   %error "w16_vktab: one virtual key per scan code"
 %endif
 
+; w16_scanx - the scan code the ROM gives a key with Shift, Ctrl or Alt held
+; (59h on, to W16_SCANX) -> the key's own: Shift/Ctrl/Alt+F1-F10, Ctrl+the
+; cursor keys, Alt+1-=, F11/F12 with each, an enhanced keyboard's Ctrl+Up/
+; Down/Ins/Del and Alt+the cursor keys. 0FFh: not a key (dropped)
+w16_scanx:
+    db 0x40, 0x41, 0x42, 0x43, 0x44, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41
+    db 0x42, 0x43, 0x44, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43
+    db 0x44, 0xFF, 0x4B, 0x4D, 0x4F, 0x51, 0x47, 0x02, 0x03, 0x04, 0x05, 0x06
+    db 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x49, 0x57, 0x58, 0x57, 0x58
+    db 0x57, 0x58, 0x57, 0x58, 0x48, 0x4A, 0x4C, 0x4E, 0x50, 0x52, 0x53, 0x0F
+    db 0x35, 0x37, 0x47, 0x48, 0x49, 0xFF, 0x4B, 0xFF, 0x4D, 0xFF, 0x4F, 0x50
+    db 0x51, 0x52, 0x53
+W16_SCANX equ 0xA4
+%if ($ - w16_scanx) != W16_SCANX - W16_NSCAN
+  %error "w16_scanx: one key per ROM code"
+%endif
+
 ; =============================================================================
 ; The os8088 side: W_PAINT, the close box, and the lock
 ; =============================================================================
@@ -2569,6 +2956,10 @@ w16_vktab:
 ; its WM_PAINT lands in this pass. Damage the program has not painted when
 ; the resume comes back gets the class brush. SI = our window; gives SI back.
 w16_ppaint:
+    cmp word [w16_cbdl], 0          ; a dropped list goes up first
+    je .nd                          ;   (SPEC.md 124.22.14)
+    LCALL w16c_osclose
+.nd:
     push si
     mov byte [w16_inwp], 1
     mov [w16_pfosw], si
@@ -2590,7 +2981,7 @@ w16_ppaint:
     cmp si, [w16_win]
     jne .nobar
     push ax
-    call w16_mbarh                  ; the client is under the menu bar
+    LCALL w16_mbarh                  ; the client is under the menu bar
     add dx, ax
     pop ax
 .nobar:
@@ -2610,6 +3001,7 @@ w16_ppaint:
     cmp si, 0
     jle .bar                        ; the damage is all bar
     mov byte [w16_erase], 1
+    call w16_ncmark                 ; its scroll bars too (SPEC.md 124.22.1)
     call w16_invaltree              ; its children with it
     cmp byte [w16_mtrk], 0          ; the menu loop's banks are stale now
     je .kick
@@ -2655,14 +3047,40 @@ w16_ppaint:
     mov ax, [w16_dmg + 2]           ; the bar, if the damage reaches it, and
     cmp ax, [w16_ctop]              ;   the menu loop's popups over it all
     jge .pops
-    call w16_mbardraw
+    LCALL w16_mbardraw
 .pops:
     cmp byte [w16_mtrk], 0
     je .out
-    call w16_mrepaint
+    LCALL w16_mrepaint
 .out:
     mov byte [w16_inwp], 0
     pop si
+    ret
+
+; w16_postact - BX = a program's top-level window: WM_ACTIVATE (WA_ACTIVE)
+; posted to it, as Windows sent it when the window was activated (SPEC.md
+; 124.22.6). Keeps every register.
+w16_postact:
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .ret
+    push ax
+    call w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_ACTIVATE
+    mov word [w16_sm_wp], 1
+    xor ax, ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    mov ax, [w16_cbview]            ; os8088's clipboard says nothing when
+    or ax, ax                       ;   another program changes it: the
+    jz .nov                         ;   viewer looks again when it is
+    mov [w16_sm_hwnd], ax           ;   activated (SPEC.md 124.22.13)
+    mov word [w16_sm_msg], WM_DRAWCLIPBOARD
+    call w16_post
+.nov:
+    pop ax
+.ret:
     ret
 
 ; w16_close - the close negotiator's half (SPEC.md 124.8). CF=0: let the
@@ -2710,11 +3128,11 @@ w16_close:
     push si
     cmp byte [w16_mtrk], 0          ; a menu open: it closes first, and the
     je .post                        ;   program returns to its loop
-    call w16_mhpre
+    LCALL w16_mhpre
     jc .post
     mov byte [w16_locked], 1        ; (the negotiator holds the lock)
-    call w16_mstop
-    call w16_mhpost
+    LCALL w16_mstop
+    LCALL w16_mhpost
     cmp byte [w16_state], W16S_RUN
     jne .ended
 .post:
@@ -2821,6 +3239,9 @@ W16_NSM          equ 36
 w16u_sysmet:
     call w16_args
     mov bx, [es:bx]
+; w16_sm - BX = an SM_* index -> AX = its metric (AdjustWindowRect's too,
+; w16draw.inc). Clobbers BX.
+w16_sm:
     cmp bx, W16_NSM
     jae .zero
     cmp bx, SM_CXSCREEN

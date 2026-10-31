@@ -33,6 +33,10 @@ W16PF_STR   equ 256             ; a section, key or value: 255 and a NUL
 w16pf_s_win: db 'WIN.INI', 0
 w16pf_s_dir: db 'WIN16', 0
 
+; THE CODE IS THE LIBRARY PART'S (SPEC.md 124.19.3): moved out of the image
+; in S14, so a call into the image is ICALL and the strings stay in .text
+section .w16dlg
+
 ; -----------------------------------------------------------------------------
 ; The six calls. Each copies its strings in, finds its file and works on the
 ; held copy; the frame is w16_args' ES:BX, Pascal order (the last argument
@@ -40,15 +44,15 @@ w16pf_s_dir: db 'WIN16', 0
 ; -----------------------------------------------------------------------------
 
 ; GetProfileInt (KERNEL.57) - +0 nDefault, +2 lpKey, +6 lpApp
-w16k_getprofint:
-    call w16_args
+W16LIB w16k_getprofint
+    ICALL w16_args
     call w16pf_win
     jmp short w16pf_getint
 
 ; GetPrivateProfileInt (KERNEL.127) - +0 lpFile, +4 nDefault, +6 lpKey,
 ; +10 lpApp
-w16k_getpprofint:
-    call w16_args
+W16LIB w16k_getpprofint
+    ICALL w16_args
     call w16pf_priv                 ; BX += 4
     ; fall into w16pf_getint
 
@@ -106,14 +110,14 @@ w16pf_getint:
 
 ; GetProfileString (KERNEL.58) - +0 nSize, +2 lpBuf, +6 lpDefault, +10 lpKey,
 ; +14 lpApp
-w16k_getprofstr:
-    call w16_args
+W16LIB w16k_getprofstr
+    ICALL w16_args
     call w16pf_win
     jmp short w16pf_getstr
 
 ; GetPrivateProfileString (KERNEL.128) - +0 lpFile, then as above
-w16k_getpprofstr:
-    call w16_args
+W16LIB w16k_getpprofstr
+    ICALL w16_args
     call w16pf_priv
     ; fall into w16pf_getstr
 
@@ -165,7 +169,8 @@ w16pf_getstr:
 .def:
     mov bx, [w16pf_fr]
     mov es, [w16pf_frs]
-    jmp w16_profdef                 ; the default (w16api.inc)
+    ICALL w16_profdef               ; the default (w16api.inc)
+    ret
 .keys:
     call w16pf_open
     jc .empty
@@ -223,14 +228,14 @@ w16pf_getstr:
     jmp w16pf_pmany
 
 ; WriteProfileString (KERNEL.59) - +0 lpString, +4 lpKey, +8 lpApp
-w16k_writeprof:
-    call w16_args
+W16LIB w16k_writeprof
+    ICALL w16_args
     call w16pf_win
     jmp short w16pf_write
 
 ; WritePrivateProfileString (KERNEL.129) - +0 lpFile, then as above
-w16k_writepprof:
-    call w16_args
+W16LIB w16k_writepprof
+    ICALL w16_args
     call w16pf_priv
     ; fall into w16pf_write
 
@@ -360,8 +365,10 @@ w16pf_wcore:
     xor ax, ax
     ret
 
+section .text
 w16pf_s_crlfb:  db 13, 10, '[', 0
 w16pf_s_bcrlf:  db ']', 13, 10, 0
+section .w16dlg
 
 ; w16pf_keyval - DS:DI = where to compose: key '=' value CR LF
 w16pf_keyval:
@@ -529,8 +536,10 @@ w16pf_name:
 .out:
     ret
 
+section .text
 w16pf_bad:  db '"*+,/:;<=>?[\]|'
 w16pf_badn  equ $ - w16pf_bad
+section .w16dlg
 
 ; w16pf_cpy - DX:AX = a far string (0:0 is NULL): copied to DS:DI, cut to
 ; 255 characters. CF=1 it was NULL (DI gets ""). Keeps BX, ES
@@ -788,20 +797,21 @@ w16pf_rd:
 ; Keep BX
 w16pf_in:
     push bx
-    call od_enter
+    ICALL od_enter
     jc .out
     push si
     mov si, w16pf_s_dir
-    call od_dive
+    ICALL od_dive
     pop si
     jnc .out
-    call od_back
+    ICALL od_back
     stc
 .out:
     pop bx
     ret
 w16pf_out:
-    jmp od_back
+    ICALL od_back
+    ret
 
 ; w16pf_flush - BX = a held row: written if it changed, merged first with
 ; what is on the disk now (w16pf_merge). Keeps BX
@@ -1534,3 +1544,5 @@ w16pf_pmany:
     mov byte [es:di], 0
     xor ax, ax
     ret
+
+section .text

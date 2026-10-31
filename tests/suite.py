@@ -2190,6 +2190,17 @@ FAST = [
         "`make win16fixtures`'s, which `make clean` removes, so it needs them "
         "rather than failing a clean tree's `make` on its own SKIP",
         needs=("nasm", "unicorn", "win16fixtures")),
+    Row("w16xsec", "fast", py("tests/unit/t_w16xsec.py"), 3.0,
+        "WIN16 is one nasm run emitting the image and its code parts, each at "
+        "vstart=0, so a near call from a part to an image label (or back) "
+        "assembles cleanly and lands on whatever the CALLER's segment holds "
+        "at that offset - nothing in -f bin refuses it. SPEC.md 124.19.3: "
+        "off WIN16's own listing and map, every near call/jmp must stay in "
+        "its section, nothing outside a part may name the part's labels but "
+        "the DCALL/LCALL vector store, and a part whose DS is the image may "
+        "not read its own data without cs:. S14 moves handlers into the "
+        "library part, and this is what keeps that move honest",
+        needs=("nasm",)),
 ]
 
 # --------------------------------------------------------------------------
@@ -16365,6 +16376,51 @@ SOAK = [
         "program's stack and must be what Windows 3.0 showed for the same "
         "file (win16ref/ref/w30-fix-fpu.png, w30-fix-fpx.png)",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16sol", "soak", py("tests/win16sol.py"), 420.0,
+        "SPEC.md 124.20, WIN16-ANY-PLAN S15: Solitaire 3.0 (SOL.EXE, 180 KB, "
+        "the first program over 64 KB) and 3.1 (W31SOL.EXE) - Microsoft's, in "
+        "build/win16/ only where the win16-reference skill put them - on VGA, "
+        "EGA, CGA and Hercules under QEMU: private VIDEO= kernel trees "
+        "(tools/os88build.py), Hercules with HERCSEG and read out of RAM. Each "
+        "program alone: its window is Solitaire, it has dealt (a tenth of the "
+        "client is not the felt), a click on the deck turns cards onto the "
+        "waste, and its close box ends it",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=1800,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16big", "soak", py("tests/win16big.py"), 60.0,
+        "SPEC.md 124.20, WIN16-ANY-PLAN S15: BIG.EXE (`make win16fixtures`, "
+        "tests/win16/big.c) - 17 code segments and about 155 KB of code, each "
+        "of sixteen functions far-called forward and back, and a 128 KB "
+        "GlobalAlloc block written through a __huge pointer and read back by "
+        "adding __AHINCR (KERNEL.114) to the segment. Its MessageBox, read "
+        "off the program's stack, must be the sums the row computes itself",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16file", "soak", py("tests/win16file.py"), 60.0,
+        "SPEC.md 124.21, WIN16-ANY-PLAN S16: FILES.EXE (`make win16fixtures`, "
+        "tests/win16/files.c) reaches files through KERNEL's _lopen family, "
+        "OpenFile and GetTempFileName and through the C runtime's own int 21h "
+        "(mkdir, chdir, getcwd, rename, remove, findfirst, stdio), all answered "
+        "by DOS.O88's core hosted in WIN16; its MessageBox names any check that "
+        "failed, and the 10,000-byte W16FILE.TXT it writes is read back off the "
+        "floppy image on the host, every byte",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16fam", "soak", py("tests/win16fam.py"), 300.0,
+        "SPEC.md 124.22, WIN16-ANY-PLAN S17: the story's program families - "
+        "Notepad, Cardfile, Calendar, Clipboard, PIF Editor, Task Manager and "
+        "Character Map, and the 3.1 screen savers' setup dialogs - "
+        "Microsoft's, in build/win16/ only where the win16-reference skill put "
+        "them, on VGA and CGA under QEMU. Each alone: WIN16 says Running, its "
+        "window's title has the family's word, its client is not one colour, "
+        "Character Map's DS_SETFONT dialog fits the screen (124.22.17), and "
+        "it ends by its close box or by Esc",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=1500,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
