@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "1720e251e",
-  "strings": "025d9e7a2eb284c9",
-  "why": "S19 batch 2: Fonts and colours - ChooseFont and ChooseColor"
+  "stamped": "d13fc8971",
+  "strings": "622daf79471d7d21",
+  "why": "S19 batch 3: REG.DAT and OLE greyed"
  },
  "WIN16_TXT": {
   "sources": [

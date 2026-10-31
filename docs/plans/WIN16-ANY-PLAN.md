@@ -620,6 +620,29 @@ its table goes in the diary, so the reach is measured, not claimed.
       24,703 (+5), 6,234 bytes of room; the library part 58,068 (+354);
       part 9 1,783 (+1,141).
 
+  - [x] **Batch 3: the registration database, and OLE answering "not
+    available"** (SPEC.md §124.24.6, §124.24.7).
+    - SHELL's seven Reg calls keep `REG.DAT` in the Windows directory as a
+      profile file: one `[HKEY_CLASSES_ROOT]` section, a `name=value` line
+      a key, held, merged and written by §124.14's machinery. The root and
+      eight open keys, held in part 9.
+    - OLECLI (module 8) and OLESVR (module 9): a row for every function in
+      their `.spec` tables, the eight stubs sized from the 3.1 SDK's
+      `ole.h`. Eight answers: document calls `OLE_OK`, clipboard queries
+      `OLE_ERROR_FORMAT`, object-making calls `OLE_ERROR_CLASS`, calls on
+      an object `OLE_ERROR_OBJECT`, the server registrations `OLE_OK` with
+      a handle.
+    - **Seen on QEMU's VGA:** REGDB.EXE (new fixture) says `REGDB OK`, and
+      `REG.DAT` read off the floppy after it holds `.w16=w16file` and
+      `w16file=W16 Document`, what its delete left. Cardfile 3.1 runs, its
+      Edit menu with Paste Link, Paste Special and Insert Object greyed.
+    - **Registered, not yet run:** `win16reg`.
+    - **Not done:** `ShellExecute` and `FindExecutable`.
+    - What it costs, against batch 2: the image 34,101 bytes (+14, the two
+      module names), bss unchanged, 6,220 bytes of room; the loader part
+      12,034 (+772, 66 new export rows); part 9 4,214 (+2,431, of which
+      1,024 is the open keys' table).
+
 - [ ] **S19b: GDI, the drawing half (R7).**
   - *As a user, Paintbrush opens, and I draw with its tools.* (Moved from
     S18: Paintbrush's library works; its drawing does not.)

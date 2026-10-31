@@ -2292,3 +2292,54 @@ other caller that relied on its promise.
 **What it cost.** The image grew by 79 bytes to 34,087 and its bss by 5,
 leaving 6,234 bytes. The library part grew by 354 bytes to 58,068, and part
 9 grew by 1,141 to 1,783.
+
+## 2026-10-31 — S19, batch 3: the registration database, and OLE that says no
+
+*As a user, a Windows 3.1 program that registers its documents keeps them
+registered, and one that offers OLE runs with OLE greyed.*
+
+**The registry is a profile file.** Windows 3.1 keeps its registration
+database in a binary `REG.DAT`. Its API is seven calls, and every one
+treats the database as a tree of named keys with one string each. WIN16
+already had a careful store for text keys: the profile code from S7, which
+holds `WIN.INI` and a program's own `.INI` in memory, writes them when the
+program ends, and merges two programs' writes so neither is lost. So
+`REG.DAT` here is a profile file, in the same Windows directory, with one
+section and one line a key:
+
+```
+[HKEY_CLASSES_ROOT]
+.w16=w16file
+w16file=W16 Document
+```
+
+A key exists when it has a line, so creating `a\b\c` writes three lines,
+and listing the keys below one is a walk over the lines that start with its
+name. The open keys are a small table in part 9, which goes away with the
+program as Windows' handles do. The new code is all in part 9; the profile
+code it calls was already in the library part.
+
+**OLE says no the way Windows says no.** Cardfile and Write import about
+forty OLECLI functions, and Paintbrush eight of OLESVR's. Until now each
+was a missing import that would close the program the moment it was
+called. Real object linking cannot happen here, because there is no second
+program to be the server. So the answers are the ones Windows 3.1 gives
+when no OLE server is registered and the clipboard holds no object.
+Registering a document works. Asking whether the clipboard can be pasted
+as an object answers "no such format". Making an object answers "no such
+class", and anything done to an object answers "no such object". Cardfile
+3.1 then shows its Edit menu with Paste Link, Paste Special and Insert
+Object greyed, which is what it does on a Windows with nothing installed
+that serves OLE. The rows were generated from winevdm's `.spec` tables,
+which also name eight functions only as stubs. Two of those, Cardfile and
+Write import, so their argument sizes came from the Windows 3.1 SDK's
+`ole.h`.
+
+**What was seen.** REGDB.EXE, a new fixture, registers a class the way an
+installer does and reads it back every way the API allows. It said
+`REGDB OK` on its first run, and the `REG.DAT` read off the floppy afterwards
+held exactly the two keys its delete left behind.
+
+**What it cost.** The image grew 14 bytes (the two module names), leaving
+6,220. The loader part grew by 772 bytes for 66 export rows. Part 9 grew by
+2,431, of which 1,024 is the table of open keys.

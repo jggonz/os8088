@@ -16448,6 +16448,18 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=900,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16reg", "soak", py("tests/win16reg.py"), 60.0,
+        "SPEC.md 124.24.6-7, WIN16-ANY-PLAN S19: REGDB.EXE (`make "
+        "win16fixtures`, tests/win16/regdb.c) registers a document class "
+        "through SHELL's seven Reg calls and reads it back - by full name, "
+        "through an open key, cut short, enumerated in order and past the "
+        "last, deleted and gone - and OLECLI answers OleRegisterClientDoc "
+        "OLE_OK and OleQueryCreateFromClip OLE_ERROR_FORMAT; its MessageBox "
+        "must be REGDB OK, and REG.DAT off the floppy image must hold the "
+        "two keys the delete left",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

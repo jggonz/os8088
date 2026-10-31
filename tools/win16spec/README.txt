@@ -23,6 +23,8 @@ b88d7f8736d77baa5710eb0c35f81b489540c1a0:
     toolhelp/toolhelp.dll16.spec  TOOLHELP
     commdlg/commdlg.dll16.spec    COMMDLG
     mmsystem/mmsystem.dll16.spec  MMSYSTEM
+    olecli/olecli.dll16.spec      OLECLI   (S19 batch 3, SPEC.md 124.24.7)
+    olesvr/olesvr.dll16.spec      OLESVR
 
 winevdm's tables are Wine's (winehq.org, LGPL-2.1-or-later), extended.
 winevdm as a whole is distributed under the GNU General Public License,

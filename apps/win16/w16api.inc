@@ -21,6 +21,8 @@ W16M_SOUND    equ 4
 W16M_WIN87EM  equ 5
 W16M_SHELL    equ 6
 W16M_COMMDLG  equ 7             ; the system libraries (SPEC.md 124.24)
+W16M_OLECLI   equ 8             ;   ...and OLE's two, which answer "not
+W16M_OLESVR   equ 9             ;   available" (124.24.7)
 
 w16_modnames:                   ; pascal strings, then 0
     db 6, 'KERNEL'
@@ -31,6 +33,8 @@ w16_modnames:                   ; pascal strings, then 0
     db 7, 'WIN87EM'
     db 5, 'SHELL'
     db 7, 'COMMDLG'
+    db 6, 'OLECLI'
+    db 6, 'OLESVR'
     db 0
 
 ; --- the export rows ----------------------------------------------------------
@@ -264,6 +268,84 @@ W16EXPORT W16M_SHELL,      11,      10, w16_ans0            ; DragQueryFile(word
 W16EXPORT W16M_SHELL,      13,      6,  w16_ans0            ; DragQueryPoint(word ptr)
 W16EXPORT W16M_COMMDLG,    15,      4,  w16c_choosefont     ; ChooseFont(segptr)
 W16EXPORT W16M_COMMDLG,    5,       4,  w16c_choosecol      ; ChooseColor(ptr)
+W16EXPORT W16M_SHELL,      1,       12, w16r_open           ; RegOpenKey(long str ptr)
+W16EXPORT W16M_SHELL,      2,       12, w16r_create         ; RegCreateKey(long str ptr)
+W16EXPORT W16M_SHELL,      3,       4,  w16r_close          ; RegCloseKey(long)
+W16EXPORT W16M_SHELL,      4,       8,  w16r_delete         ; RegDeleteKey(long str)
+W16EXPORT W16M_SHELL,      5,       20, w16r_setval         ; RegSetValue(long str long str long)
+W16EXPORT W16M_SHELL,      6,       16, w16r_queryval       ; RegQueryValue(long str ptr ptr)
+W16EXPORT W16M_SHELL,      7,       16, w16r_enum           ; RegEnumKey(long long ptr long)
+; OLECLI and OLESVR (SPEC.md 124.24.7): every function in their .spec tables,
+; each one of eight answers - generated from tools/win16spec/ by ordinal
+W16EXPORT W16M_OLECLI,     2,       4,  w16o_obj            ; OleDelete(segptr)
+W16EXPORT W16M_OLECLI,     3,       8,  w16o_obj            ; OleSaveToStream(segptr segptr)
+W16EXPORT W16M_OLECLI,     4,       24, w16o_class          ; OleLoadFromStream(segptr str segptr long str ptr)
+W16EXPORT W16M_OLECLI,     6,       20, w16o_class          ; OleClone(segptr segptr long str ptr)
+W16EXPORT W16M_OLECLI,     8,       8,  w16o_obj            ; OleEqual(segptr segptr)
+W16EXPORT W16M_OLECLI,     9,       8,  w16o_fmt            ; OleQueryLinkFromClip(str word word)
+W16EXPORT W16M_OLECLI,     10,      8,  w16o_fmt            ; OleQueryCreateFromClip(str word word)
+W16EXPORT W16M_OLECLI,     11,      24, w16o_class          ; OleCreateLinkFromClip(str segptr long str ptr word word)
+W16EXPORT W16M_OLECLI,     12,      24, w16o_class          ; OleCreateFromClip(str segptr long str long word word)
+W16EXPORT W16M_OLECLI,     13,      4,  w16o_obj            ; OleCopyToClipboard(segptr)
+W16EXPORT W16M_OLECLI,     14,      8,  w16o_obj            ; OleQueryType(segptr ptr)
+W16EXPORT W16M_OLECLI,     15,      12, w16o_obj            ; OleSetHostNames(long str str)
+W16EXPORT W16M_OLECLI,     16,      6,  w16o_obj            ; OleSetTargetDevice(segptr word)
+W16EXPORT W16M_OLECLI,     17,      8,  w16o_obj            ; OleSetBounds(segptr ptr)
+W16EXPORT W16M_OLECLI,     18,      8,  w16o_obj            ; OleQueryBounds(long ptr)
+W16EXPORT W16M_OLECLI,     19,      16, w16o_obj            ; OleDraw(long word ptr ptr word)
+W16EXPORT W16M_OLECLI,     20,      4,  w16o_obj            ; OleQueryOpen(segptr)
+W16EXPORT W16M_OLECLI,     21,      16, w16o_obj            ; OleActivate(segptr word word word word ptr)
+W16EXPORT W16M_OLECLI,     22,      4,  w16o_obj            ; OleUpdate(segptr)
+W16EXPORT W16M_OLECLI,     23,      4,  w16o_obj            ; OleReconnect(segptr)
+W16EXPORT W16M_OLECLI,     24,      8,  w16o_obj            ; OleGetLinkUpdateOptions(segptr ptr)
+W16EXPORT W16M_OLECLI,     25,      6,  w16o_obj            ; OleSetLinkUpdateOptions(segptr word)
+W16EXPORT W16M_OLECLI,     26,      6,  w16o_ok             ; OleEnumFormats(segptr word)
+W16EXPORT W16M_OLECLI,     27,      4,  w16o_obj            ; OleClose(segptr)
+W16EXPORT W16M_OLECLI,     28,      10, w16o_obj            ; OleGetData(segptr word ptr)
+W16EXPORT W16M_OLECLI,     29,      8,  w16o_obj            ; OleSetData(segptr word word)
+W16EXPORT W16M_OLECLI,     34,      28, w16o_class          ; OleCreate(str segptr str long str ptr word word)
+W16EXPORT W16M_OLECLI,     35,      4,  w16o_ok             ; OleQueryReleaseStatus(segptr)
+W16EXPORT W16M_OLECLI,     36,      4,  w16o_ok             ; OleQueryReleaseError(long)
+W16EXPORT W16M_OLECLI,     37,      4,  w16o_ok             ; OleQueryReleaseMethod(long)
+W16EXPORT W16M_OLECLI,     38,      32, w16o_class          ; OleCreateFromFile(str segptr str str long str ptr word word)
+W16EXPORT W16M_OLECLI,     40,      4,  w16o_obj            ; OleRelease(segptr)
+W16EXPORT W16M_OLECLI,     41,      16, w16o_hnd0           ; OleRegisterClientDoc(ptr ptr long ptr)
+W16EXPORT W16M_OLECLI,     42,      4,  w16o_ok             ; OleRevokeClientDoc(long)
+W16EXPORT W16M_OLECLI,     43,      8,  w16o_ok             ; OleRenameClientDoc(long ptr)
+W16EXPORT W16M_OLECLI,     44,      4,  w16o_ok             ; OleRevertClientDoc(long)
+W16EXPORT W16M_OLECLI,     45,      4,  w16o_ok             ; OleSavedClientDoc(long)
+W16EXPORT W16M_OLECLI,     46,      8,  w16o_obj            ; OleRename(segptr str)
+W16EXPORT W16M_OLECLI,     47,      8,  w16o_nul0           ; OleEnumObjects(long ptr)
+W16EXPORT W16M_OLECLI,     48,      12, w16o_obj            ; OleQueryName(segptr str ptr)
+W16EXPORT W16M_OLECLI,     49,      8,  w16o_obj            ; OleSetColorScheme(segptr ptr)
+W16EXPORT W16M_OLECLI,     54,      8,  w16o_obj            ; OleLockServer(segptr ptr)
+W16EXPORT W16M_OLECLI,     55,      4,  w16o_obj            ; OleUnlockServer(segptr)
+W16EXPORT W16M_OLECLI,     56,      8,  w16o_obj            ; OleQuerySize(long ptr)
+W16EXPORT W16M_OLECLI,     58,      30, w16o_class          ; OleCreateInvisible(str segptr str long str ptr word word word)
+W16EXPORT W16M_OLECLI,     59,      0,  w16o_ok             ; OleQueryClientVersion()
+W16EXPORT W16M_OLECLI,     60,      2,  w16o_ok             ; OleIsDcMeta(word)
+; ...and the eight winevdm's table names as stubs, sized from the Windows 3.1
+; SDK's ole.h (Cardfile and Write import OleObjectConvert and
+; OleCreateLinkFromFile)
+W16EXPORT W16M_OLECLI,     7,       24, w16o_class          ; OleCopyFromLink(segptr str segptr long str ptr)
+W16EXPORT W16M_OLECLI,     30,      8,  w16o_obj            ; OleQueryProtocol(segptr str)
+W16EXPORT W16M_OLECLI,     31,      4,  w16o_obj            ; OleQueryOutOfDate(segptr)
+W16EXPORT W16M_OLECLI,     32,      24, w16o_obj            ; OleObjectConvert(segptr str segptr long str ptr)
+W16EXPORT W16M_OLECLI,     33,      28, w16o_class          ; OleCreateFromTemplate(str segptr str long str ptr word word)
+W16EXPORT W16M_OLECLI,     39,      36, w16o_class          ; OleCreateLinkFromFile(str segptr str str str long str ptr word word)
+W16EXPORT W16M_OLECLI,     50,      6,  w16o_obj            ; OleRequestData(segptr word)
+W16EXPORT W16M_OLECLI,     57,      8,  w16o_obj            ; OleExecute(segptr word word)
+W16EXPORT W16M_OLESVR,     2,       16, w16o_hnd4           ; OleRegisterServer(str segptr ptr word word)
+W16EXPORT W16M_OLESVR,     3,       4,  w16o_ok             ; OleRevokeServer(long)
+W16EXPORT W16M_OLESVR,     4,       4,  w16o_ok             ; OleBlockServer(long)
+W16EXPORT W16M_OLESVR,     5,       8,  w16o_bool0          ; OleUnblockServer(long ptr)
+W16EXPORT W16M_OLESVR,     6,       16, w16o_hnd0           ; OleRegisterServerDoc(long str segptr ptr)
+W16EXPORT W16M_OLESVR,     7,       4,  w16o_ok             ; OleRevokeServerDoc(long)
+W16EXPORT W16M_OLESVR,     8,       8,  w16o_ok             ; OleRenameServerDoc(long str)
+W16EXPORT W16M_OLESVR,     9,       4,  w16o_ok             ; OleRevertServerDoc(long)
+W16EXPORT W16M_OLESVR,     10,      4,  w16o_ok             ; OleSavedServerDoc(long)
+W16EXPORT W16M_OLESVR,     11,      4,  w16o_ok             ; OleRevokeObject(ptr)
+W16EXPORT W16M_OLESVR,     12,      0,  w16o_ok             ; OleQueryServerVersion()
 ; the text calls that draw or measure in the face of the DC's font (SPEC.md
 ; 124.24.4): their rows carry W16B_DCF
 %define w16dcf_w16g_textout

@@ -228813,7 +228813,7 @@ they call:
 S19 lands in batches: batch 1 is the second library part, COMMDLG's file
 dialogs and the calls that answer "not available", and SHELL's drag calls.
 Batch 2 is `ChooseFont`, `ChooseColor` and `CreateFont` (§124.24.4); batch 3 the
-registration database and OLE's answers; batch 4 LZEXPAND and VER, the
+registration database and OLE's answers (§124.24.6, §124.24.7); batch 4 LZEXPAND and VER, the
 installer's core (S24).
 
 #### 124.24.1 The system-library part
@@ -228957,6 +228957,77 @@ System font alone (§124.22.15). A program reaches the dialog face by naming
 it, by asking for the Swiss family, or through `ChooseFont`. A sample of the
 face is not shown in the dialog, and there are no style or size lists.
 
+#### 124.24.6 The registration database *(S19 batch 3)*
+
+SHELL's seven registration calls keep **`REG.DAT` in the Windows
+directory** (O5: `SYSTEM\APPDATA\WIN16` on the disk WIN16 started from). It
+is a profile file (§124.14), held, merged and written by the same machinery
+as `WIN.INI`, so two programs that register both keep what they wrote. It
+has one section, `[HKEY_CLASSES_ROOT]`, and one line a key: the key's full
+name below the root, `=`, and its value.
+
+```
+[HKEY_CLASSES_ROOT]
+.crd=cardfile
+cardfile=Card File
+cardfile\shell=
+cardfile\shell\open=
+cardfile\shell\open\command=cardfile.exe %1
+```
+
+| call | |
+|---|---|
+| `RegOpenKey` (SHELL.1) | a key that has a line, or the root itself: a handle. Otherwise `ERROR_BADKEY` |
+| `RegCreateKey` (SHELL.2) | the same, making the key's line, and each missing one above it, with an empty value |
+| `RegCloseKey` (SHELL.3) | the handle freed. The root's never is |
+| `RegDeleteKey` (SHELL.4) | the key's line and every line below it removed |
+| `RegSetValue` (SHELL.5) | `REG_SZ` only, else `ERROR_INVALID_PARAMETER`. The key is made as `RegCreateKey` makes it, and its value set |
+| `RegQueryValue` (SHELL.6) | the value, cut to `*lpcb` bytes with its NUL, and `*lpcb` its length with the NUL. A key with no line answers `ERROR_BADKEY` |
+| `RegEnumKey` (SHELL.7) | the `dwIndex`th key directly below, in the order of the file's lines. Past the last it answers `ERROR_BADKEY`: Windows 3.1's `shellapi.h` has no other answer for it |
+
+`HKEY_CLASSES_ROOT` (1) is always open. Eight more keys can be open at
+once, each held as its full name in part 9 (§124.24.1). A ninth answers
+`ERROR_OUTOFMEMORY`. The handles are the program's own and go when it ends,
+with the part. A full name is at most 126 characters, or `ERROR_BADKEY`. A
+value is at most 255.
+
+**Not done, pinned:**
+
+- Windows' own binary `REG.DAT` (`SHCC3.10`) is not read: the file in
+  WIN16's Windows directory is WIN16's.
+- A key whose name holds `=` cannot be kept.
+- Like any profile value, a value loses blanks at either end.
+- `ShellExecute` and `FindExecutable` are not here yet. They will open a
+  document through os8088's associations (§54).
+
+#### 124.24.7 OLE answers "not available" *(S19 batch 3)*
+
+Cardfile and Write import 37 and 38 of OLECLI's functions, and Paintbrush 8
+of OLESVR's. WIN16 provides both as modules of its own (OLECLI 8, OLESVR 9),
+with a row for every function in their `.spec` tables. That includes the
+eight that winevdm's table names only as stubs, sized from the Windows 3.1
+SDK's `ole.h`: Cardfile and Write import two of them, `OleObjectConvert` and
+`OleCreateLinkFromFile`.
+Each answers the way Windows 3.1 answers when no OLE server is registered
+and the clipboard holds no object. A program then runs with its OLE
+commands greyed, or failing with its own message:
+
+| calls | answer |
+|---|---|
+| a client document: `OleRegisterClientDoc` (its handle 1), `OleRevokeClientDoc`, `OleRenameClientDoc`, `OleRevertClientDoc`, `OleSavedClientDoc` | `OLE_OK` |
+| `OleEnumObjects` | `OLE_OK`, and the object `NULL`: the document holds none |
+| `OleQueryCreateFromClip`, `OleQueryLinkFromClip` | `OLE_ERROR_FORMAT` (12): there is nothing on the clipboard to paste as an object |
+| making an object: `OleCreate`, `OleCreateFromClip`, `OleCreateLinkFromClip`, `OleCreateFromFile`, `OleCreateLinkFromFile`, `OleCreateFromTemplate`, `OleCreateInvisible`, `OleLoadFromStream`, `OleClone`, `OleCopyFromLink` | `OLE_ERROR_CLASS` (20): no server is registered for any class |
+| a call on an object: `OleDraw`, `OleActivate`, `OleRelease`, `OleQueryBounds` and the rest | `OLE_ERROR_OBJECT` (13): there is no object |
+| `OleQueryReleaseStatus`, `OleQueryReleaseError`, `OleQueryReleaseMethod`, `OleEnumFormats`, `OleIsDcMeta`, `OleQueryClientVersion` | 0 |
+| OLESVR: `OleRegisterServer`, `OleRegisterServerDoc` (their handle 1), the revoke, rename, revert, saved and block calls, `OleRevokeObject` | `OLE_OK`. No client can ever ask the server for anything |
+| `OleUnblockServer` | `OLE_OK`, and `*lpfRequest` FALSE |
+| `OleQueryServerVersion` | 0 |
+
+A document that holds an embedded object (a Cardfile card with a picture
+from Paintbrush, say) loads without it, because `OleLoadFromStream` answers
+`OLE_ERROR_CLASS`. The out-pointer of a call that fails is not written.
+
 #### 124.24.5 The gate
 
 **`win16cdlg`** (soak, QEMU, VGA; `make win16fixtures`; a SKIP without its
@@ -228976,6 +229047,15 @@ fixture):
   `CommDlgExtendedError`'s word is 0.
 - **Marquee 3.1's setup dialog**, where it is present: *Format Text* opens
   *Font*, and after OK the program no longer waits in `ChooseFont`.
+
+**`win16reg`** (soak, QEMU; `make win16fixtures`): **REGDB.EXE**
+(`tests/win16/regdb.c`) registers a document class the way an installer does:
+an extension, a class name and its open command. It reads them back through
+all seven calls: by full name, through an open key, cut short, enumerated in
+order and one past the last, then deleted and gone. `OleRegisterClientDoc`
+answers `OLE_OK` and `OleQueryCreateFromClip` `OLE_ERROR_FORMAT`. Its
+message box must be `REGDB OK`. When it has ended, `REG.DAT` read off the
+floppy image must hold exactly the two keys the delete left.
 
 Opening a file and Save As through the chooser were seen on the glass in
 batch 1 (the plan's S19 record). The row does not repeat them, because

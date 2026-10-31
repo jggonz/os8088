@@ -688,6 +688,671 @@ w16c_scolor:  db 'Color', 0
 w16c_lfont:   db '&Font:', 0
 w16c_lcolor:  db '&Color:', 0
 
+
+; =============================================================================
+; SHELL: the registration database (SPEC.md 124.24.6) - REG.DAT in the
+; Windows directory, a profile file with one section, [HKEY_CLASSES_ROOT],
+; and a line a key: its full name, '=', its value. The library part's profile
+; code holds it, merges it and writes it; this part holds the open keys
+; =============================================================================
+
+ERROR_BADKEY      equ 2
+ERROR_CANTWRITE   equ 5
+ERROR_OUTOFMEMORY equ 6
+ERROR_INVALID_PARAMETER equ 7
+REG_SZ      equ 1
+W16R_N      equ 8                   ; keys open at once, besides the root
+W16R_SZ     equ 128                 ; a key's row: a used byte, its full name
+W16R_MAX    equ W16R_SZ - 2         ;   (126 at most) and its NUL
+W16R_H0     equ 0x10                ; the first key's handle
+
+; RegOpenKey (SHELL.1), RegCreateKey (SHELL.2) - args: +0 phkResult,
+; +4 lpSubKey, +8 hKey
+W16SYS w16r_create
+    mov cl, 1
+    jmp short w16r_opn
+W16SYS w16r_open
+    xor cl, cl
+w16r_opn:
+    push si
+    push di
+    push cx
+    ICALL w16_args
+    mov ax, [es:bx + 8]
+    les si, [es:bx + 4]
+    call w16r_path
+    pop cx
+    jc w16r_bad
+    mov ax, 1                       ; the root itself: its own handle
+    cmp byte [w16pf_key], 0
+    je .give
+    or cl, cl
+    jz .find
+    call w16r_make
+    jc w16r_cant
+    jmp short .slot
+.find:
+    call w16r_find
+    jc w16r_bad
+.slot:
+    xor bx, bx                      ; a free row for it
+.s:
+    cmp byte [cs:w16r_keys + bx], 0
+    je .take
+    add bx, W16R_SZ
+    cmp bx, W16R_N * W16R_SZ
+    jb .s
+    mov ax, ERROR_OUTOFMEMORY
+    jmp short w16r_out
+.take:
+    mov byte [cs:w16r_keys + bx], 1
+    mov si, w16pf_key
+    lea di, [bx + 1]
+.cp:
+    mov al, [si]
+    mov [cs:w16r_keys + di], al
+    inc si
+    inc di
+    or al, al
+    jnz .cp
+    mov ax, bx
+    mov cl, 7                       ; (W16R_SZ)
+    shr ax, cl
+    add ax, W16R_H0
+.give:
+    push ax
+    ICALL w16_args
+    les bx, [es:bx]
+    pop ax
+    mov [es:bx], ax
+    mov word [es:bx + 2], 0
+    ; fall into w16r_ok
+
+; the calls' ends: AX = ERROR_SUCCESS, ERROR_CANTWRITE, ERROR_BADKEY or, at
+; w16r_out, AX; DX = 0, and SI and DI as the call's start pushed them
+w16r_ok:
+    xor ax, ax
+    jmp short w16r_out
+w16r_cant:
+    mov ax, ERROR_CANTWRITE
+    jmp short w16r_out
+w16r_bad:
+    mov ax, ERROR_BADKEY
+w16r_out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; RegCloseKey (SHELL.3) - args: +0 hKey
+W16SYS w16r_close
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx]
+    cmp ax, 1
+    jbe w16r_ok
+    call w16r_row
+    jc w16r_bad
+    mov byte [cs:w16r_keys + bx], 0
+    jmp short w16r_ok
+
+; RegDeleteKey (SHELL.4) - args: +0 lpSubKey, +4 hKey. The key's line and
+; every line below it
+W16SYS w16r_delete
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    les si, [es:bx]
+    call w16r_path
+    jc w16r_bad
+    cmp byte [w16pf_key], 0         ; never the root
+    je w16r_bad
+    mov si, w16pf_key               ; the name, kept in [w16pf_val]
+    mov di, w16pf_val
+    call w16r_scpy
+    mov byte [cs:w16r_hit], 0
+.again:
+    call w16r_db
+    jc .end
+    mov si, [w16pf_body]
+.k:
+    SLCALL w16pf_keyline
+    jc .end
+    call w16r_under                 ; AX = 0 the key, 1 below it, 2 neither
+    cmp ax, 1
+    ja .k
+    mov si, [w16pf_ks]              ; that line's key, as spelled, deleted
+    mov di, w16pf_key
+.c:
+    cmp si, [w16pf_ke]
+    jae .cz
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    jmp short .c
+.cz:
+    mov byte [di], 0
+    mov byte [w16pf_noval], 1
+    call w16r_write
+    jc w16r_cant
+    mov byte [cs:w16r_hit], 1
+    jmp short .again
+.end:
+    cmp byte [cs:w16r_hit], 0
+    je w16r_bad
+    jmp w16r_ok
+
+; RegSetValue (SHELL.5) - args: +0 cbData, +4 lpData, +8 dwType,
+; +12 lpSubKey, +16 hKey. The key made, as RegCreateKey makes it, and its
+; value set
+W16SYS w16r_setval
+    push si
+    push di
+    ICALL w16_args
+    mov ax, ERROR_INVALID_PARAMETER
+    cmp word [es:bx + 8], REG_SZ
+    jne w16r_out
+    cmp word [es:bx + 10], 0
+    jne w16r_out
+    mov ax, [es:bx + 16]
+    les si, [es:bx + 12]
+    call w16r_path
+    jc w16r_bad
+    cmp byte [w16pf_key], 0         ; the root has no value of its own
+    je w16r_bad
+    call w16r_make
+    jc w16r_cant
+    ICALL w16_args
+    les ax, [es:bx + 4]
+    mov dx, es
+    mov di, w16pf_val
+    SLCALL w16pf_cpy                ; (NULL: "")
+    mov byte [w16pf_noval], 0
+    call w16r_write
+    jc w16r_cant
+    jmp w16r_ok
+
+; RegQueryValue (SHELL.6) - args: +0 lpcb, +4 lpValue, +8 lpSubKey,
+; +12 hKey. The value, cut to *lpcb bytes with its NUL; *lpcb the bytes
+; written with it, or with no buffer the bytes it needs
+W16SYS w16r_queryval
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 12]
+    les si, [es:bx + 8]
+    call w16r_path
+    jc w16r_bad
+    xor si, si                      ; the value: the root's is empty
+    xor di, di
+    mov ax, ds
+    cmp byte [w16pf_key], 0
+    je .have
+    call w16r_find
+    jc w16r_bad
+    mov ax, es
+    mov si, [w16pf_vs]
+    mov di, [w16pf_ve]
+.have:
+    mov [cs:w16r_vseg], ax
+    mov [cs:w16r_vs], si
+    mov [cs:w16r_ve], di
+    ICALL w16_args
+    les di, [es:bx]                 ; *lpcb: the room, its NUL among it
+    mov cx, [es:di]
+    ICALL w16_args
+    les di, [es:bx + 4]             ; ES:DI = the buffer
+    mov si, [cs:w16r_vs]
+    mov dx, [cs:w16r_ve]
+    push ds
+    mov ds, [cs:w16r_vseg]
+    cld
+    xor bx, bx                      ; BX = the bytes written, its NUL aside
+    mov ax, es
+    or ax, di
+    jz .count
+    jcxz .size
+    dec cx
+.v:
+    cmp si, dx
+    jae .nul
+    jcxz .nul
+    lodsb
+    stosb
+    inc bx
+    dec cx
+    jmp short .v
+.nul:
+    mov byte [es:di], 0
+    jmp short .size
+.count:
+    mov bx, dx
+    sub bx, si
+.size:
+    pop ds
+    inc bx                          ; with its NUL
+    push bx
+    ICALL w16_args
+    les bx, [es:bx]
+    pop ax
+    mov [es:bx], ax
+    mov word [es:bx + 2], 0
+    jmp w16r_ok
+
+; RegEnumKey (SHELL.7) - args: +0 cchName, +4 lpName, +8 dwIndex, +12 hKey.
+; The dwIndex'th key directly below hKey, in the file's order
+W16SYS w16r_enum
+    push si
+    push di
+    ICALL w16_args
+    cmp word [es:bx + 10], 0
+    jne .bad
+    mov ax, [es:bx + 8]
+    mov [cs:w16r_idx], ax
+    mov ax, [es:bx + 12]
+    xor si, si                      ; (no subkey: the key itself)
+    mov es, si
+    call w16r_path
+    jc .bad
+    mov si, w16pf_key
+    mov di, w16pf_val
+    call w16r_scpy
+    call w16r_db
+    jc .bad
+    mov si, [w16pf_body]
+.k:
+    SLCALL w16pf_keyline
+    jc .bad
+    call w16r_under                 ; 1: below it, the rest at [w16r_tail]
+    cmp ax, 1
+    jne .k
+    mov bx, [cs:w16r_tail]          ; directly below: no '\' in the rest
+.d:
+    cmp bx, [w16pf_ke]
+    jae .direct
+    cmp byte [es:bx], '\'
+    je .k
+    inc bx
+    jmp short .d
+.direct:
+    cmp word [cs:w16r_idx], 0
+    je .this
+    dec word [cs:w16r_idx]
+    jmp short .k
+.this:
+    mov [cs:w16r_vseg], es
+    ICALL w16_args
+    mov cx, [es:bx]                 ; the room, its NUL among it
+    les di, [es:bx + 4]
+    mov si, [cs:w16r_tail]
+    mov dx, [w16pf_ke]
+    push ds
+    mov ds, [cs:w16r_vseg]
+    cld
+    jcxz .z
+    dec cx
+.c:
+    cmp si, dx
+    jae .n
+    jcxz .n
+    lodsb
+    stosb
+    dec cx
+    jmp short .c
+.n:
+    mov byte [es:di], 0
+.z:
+    pop ds
+    jmp w16r_ok
+.bad:
+    jmp w16r_bad
+
+; w16r_path - AX = an HKEY, ES:SI = a subkey (NULL or "" for the key
+; itself): its full name below the root into [w16pf_key]. CF=1 not an open
+; key, or a name longer than W16R_MAX. Keeps every register
+w16r_path:
+    push ax
+    push bx
+    push si
+    push di
+    mov di, w16pf_key
+    cmp ax, 1                       ; 0 and HKEY_CLASSES_ROOT: the root
+    jbe .sub
+    call w16r_row
+    jc .out
+    inc bx
+.base:
+    mov al, [cs:w16r_keys + bx]
+    or al, al
+    jz .sub
+    mov [di], al
+    inc di
+    inc bx
+    jmp short .base
+.sub:
+    mov ax, es
+    or ax, si
+    jz .done
+    cmp byte [es:si], '\'
+    jne .s1
+    inc si
+.s1:
+    cmp byte [es:si], 0
+    je .done
+    cmp di, w16pf_key
+    je .cp
+    mov al, '\'
+.put:
+    cmp di, w16pf_key + W16R_MAX
+    jae .long
+    mov [di], al
+    inc di
+.cp:
+    mov al, [es:si]
+    inc si
+    or al, al
+    jnz .put
+.done:
+    mov byte [di], 0
+    clc
+    jmp short .out
+.long:
+    stc
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; w16r_row - AX = a key's handle: BX = its row. CF=1 not an open one.
+; Keeps the rest
+w16r_row:
+    push ax
+    push cx
+    sub ax, W16R_H0
+    jb .no
+    cmp ax, W16R_N
+    jae .no
+    mov cl, 7                       ; (W16R_SZ)
+    shl ax, cl
+    mov bx, ax
+    cmp byte [cs:w16r_keys + bx], 0
+    je .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop ax
+    ret
+
+; w16r_names - REG.DAT and its section, for the profile code
+w16r_names:
+    push ax
+    push cx
+    push si
+    push di
+    mov di, w16pf_nm                ; the name, zero-filled
+    mov cx, 13
+    xor al, al
+.z:
+    mov [di], al
+    inc di
+    loop .z
+    mov si, w16r_s_file     ; XSEC-OK: read through cs:
+    mov di, w16pf_nm
+    call w16r_ccpy
+    mov si, w16r_s_sect     ; XSEC-OK: read through cs:
+    mov di, w16pf_app
+    call w16r_ccpy
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; w16r_ccpy - CS:SI to DS:DI, its NUL too. Clobbers AL, SI, DI
+w16r_ccpy:
+    mov al, [cs:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz w16r_ccpy
+    ret
+
+; w16r_scpy - DS:SI to DS:DI, its NUL too. Clobbers AL, SI, DI
+w16r_scpy:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz w16r_scpy
+    ret
+
+; w16r_db - REG.DAT held, its section found: ES = the held file. CF=1 there
+; is no memory for it, or no key yet
+w16r_db:
+    call w16r_names
+    SLCALL w16pf_open
+    jc .out
+    SLCALL w16pf_sect
+.out:
+    ret
+
+; w16r_find - [w16pf_key]'s line: CF=0 found, the profile code's answers
+; for it and ES the held file; CF=1 none
+w16r_find:
+    call w16r_db
+    jc .out
+    SLCALL w16pf_findkey
+.out:
+    ret
+
+; w16r_make - the key in [w16pf_key], and each above it, given a line with an
+; empty value where it has none. CF=1 one could not be written
+w16r_make:
+    push si
+    mov si, w16pf_key
+.c:
+    mov al, [si]
+    or al, al
+    jz .last
+    cmp al, '\'
+    jne .n
+    mov byte [si], 0                ; the name so far
+    call .one
+    mov byte [si], '\'
+    jc .out
+.n:
+    inc si
+    jmp short .c
+.last:
+    call .one
+.out:
+    pop si
+    ret
+.one:
+    push si
+    call w16r_find
+    jnc .has
+    mov byte [w16pf_val], 0
+    mov byte [w16pf_noval], 0
+    call w16r_write
+    pop si
+    ret
+.has:
+    pop si
+    clc
+    ret
+
+; w16r_write - [w16pf_key] written with [w16pf_val], or deleted when
+; [w16pf_noval]: the profile code's write, then its merge log. CF=1 not
+; written
+w16r_write:
+    call w16r_names
+    mov byte [w16pf_nokey], 0
+    SLCALL w16pf_wcore
+    or ax, ax
+    jz .no
+    SLCALL w16pf_log
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; w16r_under - ES:[w16pf_ks]..[w16pf_ke] a key, DS:w16pf_val a name: AX = 0
+; the key is that name, 1 it is below it ([cs:w16r_tail] where the rest
+; starts), 2 neither. The root ("") has every key below it. Keeps the rest
+w16r_under:
+    push bx
+    push si
+    mov bx, [w16pf_ks]
+    mov si, w16pf_val
+    cmp byte [si], 0
+    je .below
+.c:
+    mov al, [si]
+    or al, al
+    jz .end
+    cmp bx, [w16pf_ke]
+    jae .no
+    mov ah, [es:bx]
+    call w16r_fold
+    cmp al, ah
+    jne .no
+    inc si
+    inc bx
+    jmp short .c
+.end:
+    cmp bx, [w16pf_ke]
+    je .same
+    cmp byte [es:bx], '\'
+    jne .no
+    inc bx
+.below:
+    mov [cs:w16r_tail], bx
+    mov ax, 1
+    jmp short .out
+.same:
+    xor ax, ax
+    jmp short .out
+.no:
+    mov ax, 2
+.out:
+    pop si
+    pop bx
+    ret
+
+; w16r_fold - AL and AH in upper case
+w16r_fold:
+    cmp al, 'a'
+    jb .h
+    cmp al, 'z'
+    ja .h
+    sub al, 'a' - 'A'
+.h:
+    cmp ah, 'a'
+    jb .out
+    cmp ah, 'z'
+    ja .out
+    sub ah, 'a' - 'A'
+.out:
+    ret
+
+w16r_s_file:  db 'REG.DAT', 0
+w16r_s_sect:  db 'HKEY_CLASSES_ROOT', 0
+
+; =============================================================================
+; OLECLI and OLESVR (SPEC.md 124.24.7): Windows 3.1 with no OLE server
+; registered and no object on the clipboard. Eight answers; w16api.inc's rows
+; say which call gets which
+; =============================================================================
+
+OLE_ERROR_FORMAT equ 12
+OLE_ERROR_OBJECT equ 13
+OLE_ERROR_CLASS  equ 20
+
+; OLE_OK, or a 0 answer
+W16SYS w16o_ok
+    xor ax, ax
+    xor dx, dx
+    ret
+
+; nothing on the clipboard to paste as an object
+W16SYS w16o_fmt
+    mov ax, OLE_ERROR_FORMAT
+    jmp short w16o_ret
+
+; no server registered for the class: an object is never made
+W16SYS w16o_class
+    mov ax, OLE_ERROR_CLASS
+    jmp short w16o_ret
+
+; there is no object
+W16SYS w16o_obj
+    mov ax, OLE_ERROR_OBJECT
+w16o_ret:
+    xor dx, dx
+    ret
+
+; OLE_OK, and a handle, 1, where the far pointer at +4 (OleRegisterServer)
+; or +0 (OleRegisterClientDoc, OleRegisterServerDoc) says
+W16SYS w16o_hnd4
+    mov ax, 4
+    mov cx, 1
+    jmp short w16o_put
+W16SYS w16o_hnd0
+    xor ax, ax
+    mov cx, 1
+    jmp short w16o_put
+
+; OLE_OK, and NULL where the far pointer at +0 says (OleEnumObjects: the
+; document holds no object)
+W16SYS w16o_nul0
+    xor ax, ax
+    xor cx, cx
+w16o_put:
+    push si
+    push ax
+    ICALL w16_args
+    pop si
+    les bx, [es:bx + si]
+    mov ax, es
+    or ax, bx
+    jz .none
+    mov [es:bx], cx
+    mov word [es:bx + 2], 0
+.none:
+    pop si
+    jmp short w16o_ok
+
+; OleUnblockServer: OLE_OK, and *lpfRequest FALSE - nothing is waiting
+W16SYS w16o_bool0
+    ICALL w16_args
+    les bx, [es:bx]
+    mov ax, es
+    or ax, bx
+    jz w16o_ok
+    mov word [es:bx], 0
+    jmp short w16o_ok
+
+; the registration database's words, in the part: they go with the program
+w16r_hit:   db 0
+w16r_idx:   dw 0
+w16r_tail:  dw 0
+w16r_vseg:  dw 0
+w16r_vs:    dw 0
+w16r_ve:    dw 0
+w16r_keys:  times W16R_N * W16R_SZ db 0     ; the open keys' rows
+
 section .text
 
 ; w16_ofnback - OSAPI_FILE_DLG's completion (SPEC.md 38.6, 124.24.2): the
