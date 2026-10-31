@@ -2174,3 +2174,62 @@ and Paintbrush moved there with it.
 **What it cost.** The image grew by 820 bytes to 33,810 and its bss by 689
 to 24,686, leaving 6,528 bytes of the 64 KB. The library part grew by 2,072
 bytes to 57,714, and the loader part by 2,257 to 11,260.
+
+## 2026-10-31 — S19, batch 1: File › Open is os8088's dialog
+
+*As a user, File › Open in a Windows 3.1 program shows os8088's Standard
+File dialog.*
+
+**The system libraries are WIN16's own modules.** Windows 3.1's
+accessories import from libraries that shipped with Windows: COMMDLG for
+the file dialogs, SHELL for the About box and drag-and-drop, and the OLE
+pair. A census of the 3.1 accessories set the order. Every one calls
+`ShellAbout`, which WIN16 already had; most call `GetOpenFileName` and
+`GetSaveFileName`; Clock, Marquee and Write call `ChooseFont`. WIN16
+provides these as it provides USER: an import naming COMMDLG binds to
+WIN16's rows, and no `COMMDLG.DLL` is read.
+
+**A second library part.** The library part was 57,714 bytes of its 64 KB.
+S14 had written down when a second one would come, "only when the first
+reaches 64 KB", and this was that moment. Part 9 holds the system
+libraries. It has the first part's shape: a two-instruction gate at a
+fixed offset, a part byte in each export row, a fetch at the first call and
+a drop when the program ends. A program that never calls COMMDLG never pays
+for it. The row that keeps the parts apart learned the new section in five
+lines.
+
+**The dialog was already there.** os8088 has one file dialog, §38's
+Standard File dialog, and every package that opens a file uses it.
+`GetOpenFileName` opens it over the program's window and the program waits
+in the call, as it waits in `GetMessage`. When a file is chosen, the
+dialog's completion builds the full path, drive and folder included, from
+where the dialog left the instance. That path goes into the program's
+`OPENFILENAME` with the offsets Windows filled in, and the program goes on.
+Notepad 3.1 then opens the file with `OpenFile` and reads it with `_lread`,
+calls S16 had already made work.
+
+**Cancel had no answer.** The dialog calls its completion only for a file.
+Cancel, Escape and the close box call nothing, and every package already
+using the dialog depends on that. A Windows program, though, has to get
+FALSE back. Changing the kernel's contract would have cost resident bytes
+on two kernels and an SDK change. Instead WIN16 notes the dialog's window
+the moment it opens, and its own tick looks every half second for that
+window no longer being frontmost. The dialog is modal, so nothing else can
+come in front of it. When a file is chosen, the dialog closes and its
+completion runs in the same pass, so the tick can never see it gone before
+the answer arrives. Gone without an answer is a Cancel.
+
+**What was seen.** On QEMU's VGA, Notepad 3.1's File › Open shows the
+chooser in its Open form. Choosing PROGRAMS.TXT puts its text in the window
+and its name in the title. Cancel leaves Notepad as it was, after
+Notepad asked `CommDlgExtendedError` and got 0. Save As offers the current
+name; typing `COPY` saved `COPY.TXT`, because Notepad names `TXT` as its
+default extension, and the file read back off the disk image matched the
+original byte for byte. Print is greyed because `PrintDlg` answers "no
+default printer", which is what Notepad does on a Windows with no printer
+installed. Calendar, the Clipboard viewer, the PIF Editor and Recorder 3.1
+all start.
+
+**What it cost.** The image grew by 198 bytes to 34,008 and its bss by 12,
+leaving 6,318 bytes of the 64 KB. Part 9 is 642 bytes, and the library part
+is unchanged.

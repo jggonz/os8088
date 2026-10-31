@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "740511e01",
-  "strings": "498c8ddf011c7b60",
-  "why": "What it can run brought to S18: programs over 64KB run (S15), a program's own DLLs from its folder and their two failures (S18); checked against w16load.inc's refusal strings"
+  "stamped": "778fec906",
+  "strings": "37e1d6dd38a7da6b",
+  "why": "Opening and saving files: COMMDLG's GetOpen/SaveFileName over the os8088 file dialog, Cancel, the default extension, PrintDlg greying Print (S19 batch 1); checked on Notepad 3.1"
  },
  "WIN16_TXT": {
   "sources": [

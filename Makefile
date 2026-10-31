@@ -18975,12 +18975,14 @@ $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
 	python3 tools/os88ovl.py $(BUILD)/win16.bin -o $(BUILD)/win16/w16dlg.bin \
 		--trim $(BUILD)/win16/win16.trim.bin \
 		--second $(BUILD)/win16/w16fp.bin --mark W16X87EM \
-		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR
+		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR \
+		--second $(BUILD)/win16/w16sys.bin --mark W16SYSLB
 	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
 		--part $(BUILD)/win16/w16fp.bin --part $(BUILD)/win16/w16ld.bin \
 		--part $(BUILD)/win16/icons.bin --part $(BUILD)/doscore.bin \
-		--part $(BUILD)/win16/w16dosh.bin --part-compress lz4
+		--part $(BUILD)/win16/w16dosh.bin --part $(BUILD)/win16/w16sys.bin \
+		--part-compress lz4
 
 win16: $(BUILD)/win16.o88
 

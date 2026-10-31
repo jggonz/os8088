@@ -43,7 +43,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NEF_PMODE, NEF_SELF, NEF_LIB = 0x0008, 0x0800, 0x8000
 MAXTABLES = 0xFFF0              # w16_copysegs' bound (SPEC.md 124.20.1)
 EXTS = (".EXE",)
-WIN16MODS = {"KERNEL", "USER", "GDI", "KEYBOARD", "SOUND", "WIN87EM", "SHELL"}
+WIN16MODS = {"KERNEL", "USER", "GDI", "KEYBOARD", "SOUND", "WIN87EM", "SHELL",
+             "COMMDLG"}
 
 
 def verdict(path, lib=False):

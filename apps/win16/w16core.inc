@@ -221,12 +221,22 @@ w16_dispatch:
     jz .image
     cmp al, W16B_MISS
     je .miss
+    cmp al, W16P_SYS
+    je .sys
     mov ax, [bx + W16B_PROC]
     mov [w16_lfn], ax
     call w16_dlgin
     jc .nolib
     mov ax, [w16_nargb]
     call far [w16_lbv]
+    ret
+.sys:                               ; the system-library part (124.24.1)
+    mov ax, [bx + W16B_PROC]
+    mov [w16_sfn], ax
+    call w16_sysin
+    jc .nolib
+    mov ax, [w16_nargb]
+    call far [w16_sbv]
     ret
 .image:
     mov ax, [w16_nargb]

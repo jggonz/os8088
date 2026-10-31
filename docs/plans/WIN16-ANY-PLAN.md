@@ -563,6 +563,33 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Verification:** a `win16cdlg` row opens and saves through the
     dialog; an LZ row expands a fixture on the machine and compares bytes
     with the host's expansion.
+  - [x] **Batch 1: the system-library part, COMMDLG's file dialogs, the
+    "not available" answers** (SPEC.md §124.24-124.24.3).
+    - Part 9, `section .w16sys` (`apps/win16/w16syslib.inc`): fetched at a
+      system library's first call, dropped when the program ends; `W16SYS`,
+      `SCALL`, `SCONT`, `SLCALL`; `t_w16xsec` knows it (rows say part 9).
+    - COMMDLG is WIN16's module 7: `GetOpenFileName`, `GetSaveFileName`
+      over §38's chooser, the program waiting in the call; `GetFileTitle`;
+      `CommDlgExtendedError`; `PrintDlg` (no default printer), `FindText`,
+      `ReplaceText` (no dialog). SHELL's drag calls: nothing dropped.
+    - **Cancel is seen, not told**: the chooser's completion is called only
+      for a file, so WIN16's tick looks for the chooser no longer frontmost
+      while a call waits on it. No kernel byte and no SDK change.
+    - **Seen on QEMU's VGA, Notepad 3.1:** File › Open opens the os8088
+      chooser in its Open form; choosing PROGRAMS.TXT answers its full path
+      and Notepad reads and shows it. Cancel answers FALSE and
+      `CommDlgExtendedError` 0, and Notepad carries on. Save As offers
+      PROGRAMS.TXT; typing `COPY` saved **COPY.TXT** (`lpstrDefExt`), read
+      back off the disk image byte-identical. Print is greyed, as on a
+      Windows with no printer. Calendar, Clipboard, PIF Editor and Recorder
+      3.1 start.
+    - **Not yet run:** `win16cdlg` (to be registered with batch 2). It runs
+      in the final pass.
+    - **Pinned** (§124.24.2): the filter, initial directory and title are
+      not used; a hook or custom template is not honoured.
+    - What it costs, against S18: the image 34,008 bytes (+198), its bss
+      24,698 (+12), 6,318 bytes of room; part 9 642 bytes; the library part
+      unchanged at 57,714.
 
 - [ ] **S19b: GDI, the drawing half (R7).**
   - *As a user, Paintbrush opens, and I draw with its tools.* (Moved from

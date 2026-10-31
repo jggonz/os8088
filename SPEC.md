@@ -228792,3 +228792,97 @@ never painted, the DOS window that had launched it was never closed, and
 the next keystroke rebooted the machine. It saves DS and puts it back now,
 and `tests/unit/t_w16xsec.py` (rule 6) refuses `push cs` then `pop ds` in a
 part that runs on WIN16's DS unless the line says `XSEC-OK`.
+
+### 124.24 The system libraries WIN16 provides *(S19, docs/plans/WIN16-ANY-PLAN.md)*
+
+A Windows 3.1 program imports from libraries that came with Windows rather
+than with it: COMMDLG, SHELL, LZEXPAND, VER, OLECLI and OLESVR. WIN16
+provides them as it provides KERNEL, USER and GDI: they are modules of its
+own, an import naming one binds to WIN16's rows, and no `.DLL` file is read.
+The census of Windows 3.1's own accessories (`tools/os88ne.py`) is what
+they call:
+
+| program | COMMDLG | SHELL | OLE |
+|---|---|---|---|
+| Notepad, Calendar, PIF Editor | `GetOpenFileName`, `GetSaveFileName`, `PrintDlg`, `FindText`, `CommDlgExtendedError` | `ShellAbout`, the drag calls | |
+| Clipboard, Recorder | `GetOpenFileName`, `GetSaveFileName`, `CommDlgExtendedError` | `ShellAbout` | |
+| Clock, Marquee | `ChooseFont` | `ShellAbout` | |
+| Cardfile, Write | as Notepad's, and `ChooseFont` (Write) | `ShellAbout`, the drag calls, the registration database | OLECLI, 37 and 38 functions by ordinal |
+| Paintbrush | as Write's | the same | OLESVR, 8 |
+| Solitaire, Control Panel | | `ShellAbout` | |
+
+S19 lands in batches: batch 1 is the second library part, COMMDLG's file
+dialogs and the calls that answer "not available", and SHELL's drag calls.
+Batch 2 is `ChooseFont`, `ChooseColor` and `CreateFont`; batch 3 the
+registration database and OLE's answers; batch 4 LZEXPAND and VER, the
+installer's core (S24).
+
+#### 124.24.1 The system-library part
+
+The library part (§124.19) is 57,714 bytes of its 64 KB, so the system
+libraries are **part 9**, `W16P_SYS`, `section .w16sys`: §124.19's "a second
+library part is added only when the first reaches 64 KB", reached. It is the
+library part's shape:
+
+- an export row's part byte is **9**; the gate fetches the part from WIN16's
+  own folder on its first call, as it fetches part 3, and far-calls the
+  part's gate (`w16s_gate`, at +10 after a short jump and the cut mark
+  `W16SYSLB`) with the handler's offset in `[w16_sfn]`;
+- a handler is declared `W16SYS`; code in the image reaches one with
+  `SCALL`, and a continuation in the part is `SCONT` (an image trampoline,
+  as `LCONT`'s);
+- from the part, the image is `ICALL` and the library part `SLCALL`
+  (`[w16_lfn]` set, then `ICALL w16_lcall`), so the part never makes a near
+  call into either;
+- it stays until the program ends, then is dropped with the library part.
+  A program that calls none of the system libraries never fetches it and
+  never holds its claim.
+
+`tests/unit/t_w16xsec.py` knows the part: its rules hold for `.w16sys` as
+for `.w16dlg`, `SCALL`'s target must be in `.w16sys`, and a row naming a
+`W16SYS` handler must say part 9.
+
+#### 124.24.2 GetOpenFileName and GetSaveFileName: os8088's Standard File dialog
+
+`GetOpenFileName(lpofn)` (COMMDLG.1) and `GetSaveFileName(lpofn)`
+(COMMDLG.2) open **os8088's Standard File dialog** (§38) over the program's
+window, in its Open or Save form, and the program **waits** in the call, as
+it waits in `GetMessage` (§124.2.1), until the dialog answers:
+
+| `OPENFILENAME` field | |
+|---|---|
+| `lpstrFile`, going in | its name part, when it is a plain 8.3 name, is the dialog's default name; a pattern (`*.TXT`) or nothing gives none |
+| `lpstrFilter`, `nFilterIndex`, `lpstrCustomFilter`, `lpstrInitialDir`, `lpstrTitle` | not used: the dialog lists every file, starts where it last stood for WIN16 (§38.10), and has os8088's own caption |
+| `Flags` | `OFN_ENABLEHOOK` and `OFN_ENABLETEMPLATE` are not honoured: the hook is not called and the template not shown. The rest change nothing |
+| `lpstrFile`, coming out | the chosen file's **full path**, `X:\FOLDER\NAME.EXT`, from the volume and folder the dialog committed in (`OSAPI_FILE_PATH`) |
+| `nFileOffset`, `nFileExtension` | where the name starts in it, and where its extension does (the NUL's offset when it has none) |
+| `lpstrFileTitle` | the name alone, when the program gave a buffer |
+| `lpstrDefExt` | a Save whose name has no extension gets this one |
+
+The answer is TRUE for a file chosen, FALSE for Cancel, with
+`CommDlgExtendedError` 0, as Windows answered. A path longer than
+`nMaxFile` answers FALSE with `FNERR_BUFFERTOOSMALL` (3003h). A dialog
+os8088 cannot open (one is already up) answers FALSE with
+`CDERR_DIALOGFAILURE` (FFFFh).
+
+**Cancel is seen, not told.** §38.6's completion is called only when a file
+is chosen; Cancel, Escape and the close box call nothing, and the contract
+is unchanged to the register for every package that already uses it. So
+WIN16 notes the dialog's window (`OSAPI_WM_TOP`, the moment
+`OSAPI_FILE_DLG` returns, the dialog being on screen by then) and, while the
+program waits, looks on its own tick (`OSAPI_WM_ONTIMER`, every 9 ticks) for
+that window no longer frontmost. The dialog is modal (§38.2): nothing comes
+in front of it while it is up, and on a choice the reap closes it and calls
+the completion in one pass under the gfx lock, so the tick never sees it
+gone before the answer. Gone without an answer is a Cancel.
+
+#### 124.24.3 The calls that answer "not available"
+
+| call | answer |
+|---|---|
+| `PrintDlg` (COMMDLG.20) | FALSE, `PDERR_NODEFAULTPRN` (1008h): Windows with no printer installed, which a program already handles |
+| `FindText`, `ReplaceText` (COMMDLG.11, 12) | 0, no dialog, `CDERR_DIALOGFAILURE` |
+| `CommDlgExtendedError` (COMMDLG.26) | the last of these, 0 after a call that worked or a Cancel |
+| `GetFileTitle` (COMMDLG.27) | the name part of a path, into the buffer; 0, or the size wanted when the buffer is short |
+| `DragAcceptFiles`, `DragFinish` (SHELL.9, 12) | nothing: nothing is ever dropped on a Windows program here |
+| `DragQueryFile`, `DragQueryPoint` (SHELL.11, 13) | 0 |

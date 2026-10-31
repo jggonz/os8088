@@ -154,6 +154,9 @@ W16P_ICONS   equ 6              ; WIN16's own system icons (SPEC.md 124.18.4):
 W16P_DCORE   equ 7              ; WIN16'S DOS (SPEC.md 124.21.1): the DOS
 W16P_DHOST   equ 8              ;   core DOS.O88 ships, and the host part above
                                 ;   it, copied into one claim at first use
+W16P_SYS     equ 9              ; THE SYSTEM-LIBRARY PART (SPEC.md 124.24.1):
+                                ;   COMMDLG, SHELL, LZEXPAND, VER - fetched at
+                                ;   their first call, kept until the program ends
 
 ; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
 ; sides of either, so a vector is one word written and one far call, and a
@@ -181,6 +184,27 @@ section .w16dlg
 %macro W16LIB 1                 ; in the library part: %1 is a HANDLER that
 %define w16lib_%1 1             ;   a row names, near, ending in ret - the
 %1:                             ;   row's part says so (SPEC.md 124.19.1)
+%endmacro
+; --- the system-library part's (SPEC.md 124.24.1), the library part's shape
+%macro SCALL 1                  ; image -> system-library part: %1 is a NEAR
+    mov word [w16_sfn], %1      ;   routine there, ending in ret, near-called
+    call w16_scall              ;   by w16s_gate; fetched first if not here
+%endmacro
+%macro SLCALL 1                 ; system-library part -> library part: the
+    mov word [w16_lfn], %1      ;   image's LCALL half, through ICALL
+    ICALL w16_lcall
+%endmacro
+%macro SCONT 1                  ; in the system-library part: %1 is a
+section .text                   ;   CONTINUATION, handed out as %1_c, its
+%1_c:                           ;   trampoline in the image (LCONT's shape)
+    SCALL %1
+    ret
+section .w16sys
+%1:
+%endmacro
+%macro W16SYS 1                 ; in the system-library part: %1 is a HANDLER
+%define w16sys_%1 1             ;   a row names, near, ending in ret
+%1:
 %endmacro
 %macro DCONT 1                  ; in the part: %1 is a CONTINUATION
 section .text                   ;   (SPEC.md 124.2.2), which the gate enters
@@ -590,6 +614,12 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_ifn, 2           ; ...and the image routine w16_ibgate calls
     W16BSS w16_lbv, 4           ; LCALL's: w16_lbgate and the library part's
     W16BSS w16_lfn, 2           ;   segment, and the routine it calls
+    W16BSS w16_sseg, 2          ; the system-library part's segment, 0 = not
+    W16BSS w16_sbv, 4           ;   fetched; SCALL's vector (w16s_gate) and
+    W16BSS w16_sfn, 2           ;   the routine it calls (SPEC.md 124.24.1)
+    W16BSS w16_cderr, 2         ; CommDlgExtendedError's answer (124.24.3)
+    W16BSS w16_ofnwin, 2        ; the file dialog a GetOpenFileName waits on,
+                                ;   0 = none (SPEC.md 124.24.2)
     ; --- S14: the bind table (SPEC.md 124.19.1) ---
     W16BSS w16_nbind, 2         ; slots given out
     W16BSS w16_cbview, 2        ; SetClipboardViewer's window, 0 none
@@ -1162,6 +1192,7 @@ w16_freeprog:
     pop es
     pop di
     call w16_dlgout
+    call w16_sysout                 ; ...and the system-library part (124.24.1)
     call w16x_end                   ; its floating point (SPEC.md 124.5)
     call w16_dosend                 ; its files closed, the DOS freed (124.21)
     call w16_gfreeall
@@ -1364,6 +1395,49 @@ w16_dlgout:
     call op_drop
     mov word [w16_dseg], 0
     pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; w16_sysin - the system-library part (SPEC.md 124.24.1), fetched from
+; WIN16's own folder if it is not here. CF=1: it could not be, and op_fetch
+; has said why. Keeps every register. w16_sysout drops it.
+; -----------------------------------------------------------------------------
+w16_sysin:
+    cmp word [w16_sseg], 0
+    je .fetch
+    clc
+    ret
+.fetch:
+    push ax
+    mov al, W16P_SYS
+    call w16_pfetch
+    jc .out
+    mov [w16_sseg], ax
+    mov [w16_sbv + 2], ax
+    mov word [w16_sbv], W16S_GATE
+.out:
+    pop ax
+    ret
+
+w16_sysout:
+    cmp word [w16_sseg], 0
+    je .out
+    push ax
+    mov al, W16P_SYS
+    call op_drop
+    mov word [w16_sseg], 0
+    pop ax
+.out:
+    ret
+
+; w16_scall - SCALL's far half: [w16_sfn] near-called in the system-library
+; part, fetched first. Registers and flags pass both ways; CF=1 with nothing
+; called if the part could not be read.
+w16_scall:
+    call w16_sysin
+    jc .out
+    call far [w16_sbv]
 .out:
     ret
 
@@ -1705,6 +1779,7 @@ w16_cputest:
 %include "win16/w16edml.inc"    ; the multi-line EDIT (SPEC.md 124.22.3)
 %include "win16/w16combo.inc"   ; COMBOBOX, owner-drawn items (124.22.14)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
+%include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's
@@ -1719,6 +1794,8 @@ w16_exports:
     db w16x_a_%[k]
   %ifdef w16lib_%[w16x_p_%[k]]
     %assign w16pt W16P_LIB
+  %elifdef w16sys_%[w16x_p_%[k]]
+    %assign w16pt W16P_SYS
   %else
     %assign w16pt 0
   %endif
@@ -1757,6 +1834,8 @@ w16_pnames:
     db w16x_a_%[w16f]
   %ifdef w16lib_%[w16x_p_%[w16f]]
     db W16P_LIB
+  %elifdef w16sys_%[w16x_p_%[w16f]]
+    db W16P_SYS
   %else
     db 0
   %endif
@@ -1810,7 +1889,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 9
+    OS88_PARTS_BEGIN 10
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
@@ -1820,6 +1899,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_ICONS: apps/win16/icons/
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DCORE: build/doscore.bin
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DHOST: w16dosh.asm
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_SYS: section .w16sys
     OS88_PARTS_END
 
     OS88_IMAGE_END

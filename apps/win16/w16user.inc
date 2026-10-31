@@ -2527,6 +2527,12 @@ w16_tarm:
     jae .snd
     mov bx, ax
 .snd:
+    cmp word [w16_ofnwin], 0        ; a file dialog's Cancel is looked for
+    je .noofn                       ;   every 9 ticks (SPEC.md 124.24.2)
+    cmp bx, 9
+    jbe .noofn
+    mov bx, 9
+.noofn:
     mov ax, bx
     inc bx
     jnz .arm
@@ -2570,6 +2576,7 @@ w16_ontimer:
     je .nosnd                       ;   the library part's
     LCALL w16s_tick
 .nosnd:
+    call w16_ofnpoll                ; a file dialog gone unanswered (124.24.2)
     call w16_tarm
     pop si
     jmp w16_input_kick

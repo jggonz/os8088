@@ -20,6 +20,7 @@ W16M_KEYBOARD equ 3
 W16M_SOUND    equ 4
 W16M_WIN87EM  equ 5
 W16M_SHELL    equ 6
+W16M_COMMDLG  equ 7             ; the system libraries (SPEC.md 124.24)
 
 w16_modnames:                   ; pascal strings, then 0
     db 6, 'KERNEL'
@@ -29,6 +30,7 @@ w16_modnames:                   ; pascal strings, then 0
     db 5, 'SOUND'
     db 7, 'WIN87EM'
     db 5, 'SHELL'
+    db 7, 'COMMDLG'
     db 0
 
 ; --- the export rows ----------------------------------------------------------
@@ -249,6 +251,17 @@ W16EXPORT W16M_GDI,        163,     6,  w16_ans0            ; SetBitmapDimension
 W16EXPORT W16M_GDI,        156,     6,  w16g_cmpbmp         ; CreateDiscardableBitmap(word word word)
 W16EXPORT W16M_GDI,        70,      14, w16g_enumfam        ; EnumFonts(word str segptr long)
 W16EXPORT W16M_GDI,        71,      12, w16g_enumobj        ; EnumObjects(word word segptr long)
+W16EXPORT W16M_COMMDLG,    1,       4,  w16c_getopen        ; GetOpenFileName(segptr)
+W16EXPORT W16M_COMMDLG,    2,       4,  w16c_getsave        ; GetSaveFileName(segptr)
+W16EXPORT W16M_COMMDLG,    20,      4,  w16c_printdlg       ; PrintDlg(segptr)
+W16EXPORT W16M_COMMDLG,    11,      4,  w16c_findtext       ; FindText(segptr)
+W16EXPORT W16M_COMMDLG,    12,      4,  w16c_findtext       ; ReplaceText(segptr)
+W16EXPORT W16M_COMMDLG,    26,      0,  w16c_exterr         ; CommDlgExtendedError()
+W16EXPORT W16M_COMMDLG,    27,      10, w16c_filetitle      ; GetFileTitle(str ptr word)
+W16EXPORT W16M_SHELL,      9,       4,  w16k_gnotify        ; DragAcceptFiles(word word)
+W16EXPORT W16M_SHELL,      12,      2,  w16k_gnotify        ; DragFinish(word)
+W16EXPORT W16M_SHELL,      11,      10, w16_ans0            ; DragQueryFile(word s_word ptr s_word)
+W16EXPORT W16M_SHELL,      13,      6,  w16_ans0            ; DragQueryPoint(word ptr)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put
