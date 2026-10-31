@@ -388,11 +388,57 @@ its table goes in the diary, so the reach is measured, not claimed.
     - **The mapping modes are only partly done**: `MM_TEXT` drawing with a
       viewport origin. Scaling modes are kept and not applied; they move to
       the first program that draws through one.
-    - **Character Map is batch 4**: its main dialog is a `COMBOBOX` (a
-      drop-down list of fonts), which WIN16 does not have yet, and it needs
-      `EnumFontFamilies`, `GetCharWidth`, `MulDiv`, `VkKeyScan`,
-      `GetMessagePos`, `WindowFromPoint`, `DrawFocusRect` and
-      `GetWindowDC`.
+    - [x] **Batch 4, the COMBOBOX and owner-drawn items** (SPEC.md
+      §124.22.14): `CBS_SIMPLE`, `CBS_DROPDOWN` and `CBS_DROPDOWNLIST`, a
+      field and a real list box window, the list dropped as a child of the
+      top-level window with the pointer captured, the `CBN_` notifications
+      and the `CB_` messages passed on as their `LB_` twins.
+      `CBS_`/`LBS_OWNERDRAWFIXED` with and without strings:
+      `WM_MEASUREITEM` before `WM_INITDIALOG`, and `WM_DRAWITEM` QUEUED by
+      a control's paint and sent where the program next asks for a message
+      (`GetMessage`, `PeekMessage`, the modal loop), a DC on the control
+      clipped to the item.
+    - [x] **Batch 4, Character Map** (SPEC.md §124.22.15): `MulDiv`,
+      `GetCharWidth`, `EnumFontFamilies` (one family, System),
+      `GetTextFace`, `VkKeyScan`, `GetMessagePos`, `GetCursorPos`,
+      `WindowFromPoint`, `DrawFocusRect` (solid, not dotted) and
+      `GetWindowDC` (the client's). **Seen on QEMU (VGA)**: the grid, the
+      owner-drawn font list showing *System*, dropped and picked.
+    - [x] **Batch 4, the screen savers' setup dialogs** (SPEC.md
+      §124.22.16): `CreateWindowEx`, `SetWindowOrg`, `Polygon` (edges
+      only), `GetRasterizerCaps`, two palette calls answering 0, and
+      `SetWindowsHook`/`UnhookWindowsHook`/`DefHookProc` as a chain whose
+      `WH_MSGFILTER` the modal loop CALLS (the savers' F1). A disabled push
+      button's caption, which Windows 3.0's `COLOR_GRAYTEXT` drew into the
+      face, is the shadow's grey. **Seen on QEMU (VGA)**: Starfield,
+      Marquee (its owner-drawn colour list), Mystify (its shape list
+      dropped and picked) and Flying Windows, and Password Protected
+      enabling and greying *Set Password*.
+    - **Character Map is not done**: its template asks for `MS Sans Serif`
+      8 (`DS_SETFONT`), 7 x 13 dialog units on Windows 3.1's VGA against the
+      System font's 8 x 16, so its window is 696 pixels across and its
+      buttons are past the screen's right edge. **Batch 5 is a dialog face
+      for `DS_SETFONT`** - Wine's MS Sans Serif (LGPL), drafted per adapter
+      as the System font was (D4) - laying such a dialog out in its own
+      units and drawing its controls' text in it. `CreateFont` answers from
+      it too.
+    - [x] **WIN16 has its own disk** (SPEC.md §124.18.1, the owner's
+      decision of 2026-10-31): `win16.img`, `win16-120.img`,
+      `win16-720.img`, `win16-360.img`. WIN16.O88 had outgrown the 1.44MB
+      apps disk (3 clusters) and `more720.img` (4), and it grows with each
+      story; the apps disks and `more720.img` no longer carry it.
+    - **Open, not investigated:** a THIRD WIN16 instance (Clock and
+      Calculator running, QEMU's 640 KB) does not start, and nothing says
+      so - neither a window nor a refusal. Two at once is SPEC.md
+      §124.18.2's case; the third wants measuring and its own refusal.
+    - Known and pinned (SPEC.md §124.22.14-124.22.16): no `CB_DIR`;
+      `CB_FINDSTRINGEXACT` is a prefix find; no `WM_COMPAREITEM` or
+      `WM_DELETEITEM`; no `WM_MEASUREITEM` for a combo box made by
+      `CreateWindow`; owner-draw entries past `W16_ODQN` (8) dropped until
+      the next paint; paint under a dropped list waits until it goes up; the
+      list is cut to its top-level window; only the System font is
+      enumerated; hooks other than `WH_MSGFILTER` are kept and not called;
+      Marquee's Format Text is `COMMDLG.ChooseFont`, S18's.
     - Known and pinned: the PIF Editor's Advanced Options is taller than
       os8088's desktop, and its last row (the shortcut key) is below the
       screen's edge. The window records live in WIN16's 64 KB data segment
@@ -405,6 +451,10 @@ its table goes in the diary, so the reach is measured, not claimed.
     - What it costs: the image 32,237 bytes (+281), its bss 20,251 (+170),
       13,048 bytes of room left in the 64 KB; the library part 46,325
       (+1,791).
+    - What batch 4 costs: the image 32,831 bytes (+594), its bss 23,989
+      (+3,738 - the owner-draw queue, the combo boxes' saved create
+      arguments, the hooks), 8,716 bytes of room left in the 64 KB; the
+      library part 55,137 (+8,812).
 
 - [ ] **S18: Libraries (R4, the program's own).**
   - *As a user, Recorder runs with its RECORDER.DLL, and Paintbrush with

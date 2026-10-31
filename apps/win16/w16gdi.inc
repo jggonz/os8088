@@ -116,6 +116,8 @@ w16_dcopen:
     mov [w16_dchide], al
     mov [w16_vorg], ax              ; MM_TEXT, its origins at 0 and its
     mov [w16_vorg + 2], ax          ;   extents 1 (SPEC.md 124.22.13)
+    mov [w16_worg], ax
+    mov [w16_worg + 2], ax
     inc ax
     mov [w16_mm], ax
     mov [w16_wext], ax
@@ -916,13 +918,26 @@ w16g_lineto:
     push bp
     call w16_args
     cmp word [es:bx + 4], W16_HDC   ; another DC's: nothing drawn, FALSE
-    je .dc
-    jmp .no
-.dc:
+    jne .no
     mov ax, [es:bx + 2]
     mov [w16_lx1], ax
     mov ax, [es:bx]
     mov [w16_ly1], ax
+    call w16_lineline
+    mov ax, 1
+.out:
+    pop bp
+    pop di
+    pop si
+    ret
+.no:
+    xor ax, ax
+    jmp short .out
+
+; w16_lineline - LineTo's line on the open DC, from the current point to
+; [w16_lx1], [w16_ly1], which becomes the current point (Polygon's edges
+; too, SPEC.md 124.22.16). Clobbers AX, BX, CX, DX, SI, DI, BP.
+w16_lineline:
     mov si, [w16_curx]              ; SI, DI = x, y
     mov di, [w16_cury]
     mov ax, [w16_lx1]
@@ -983,15 +998,7 @@ w16g_lineto:
 .flush:
     call w16_lflush
 .done:
-    mov ax, 1
-.out:
-    pop bp
-    pop di
-    pop si
     ret
-.no:
-    xor ax, ax
-    jmp short .out
 
 ; w16_lplot - SI, DI = a client point: into the buffer if inside the clip, or
 ; inverted now under W16_XOR
@@ -1569,6 +1576,12 @@ TM_SIZE equ 31
 w16g_textmet:
     call w16_args
     les di, [es:bx]
+    call w16_tmfill
+    mov ax, 1
+    ret
+
+; w16_tmfill - ES:DI -> TM_SIZE bytes: the TEXTMETRIC. Clobbers AX, BX, DI.
+w16_tmfill:
     push ds
     mov ds, [w16_face]
     xor ah, ah
@@ -1607,7 +1620,6 @@ w16g_textmet:
     xor bh, bh
     mov al, [w16_logpy + bx]
     stosw                           ; tmDigitizedAspectY
-    mov ax, 1
     ret
 
 ; TextOut (GDI.33) - args: +0 nCount, +2 lpString, +6 y, +8 x, +10 hDC.

@@ -183,7 +183,8 @@ SMALL_SYSTEM = ("small.img", "small360.img", "small720.img")  # ...the small bui
 OPTIONAL_SYSTEM = ["small.img", "small360.img", "small720.img", "emu.img"]
 DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
                "media360.img", "office360.img", "network360.img",
-               "games360.img", "emu360.img", "util360.img", "more720.img"]
+               "games360.img", "emu360.img", "util360.img", "more720.img",
+               "win16.img", "win16-120.img", "win16-720.img", "win16-360.img"]
 OPTIONAL_DATA = ["smallapps.img", "smallapps360.img"]   # `make smallapps`
 NOTES_DIR = os88stik.STIKNOTE_DIR      # Sticky Note's notes (SPEC.md 110.13.1)
 NOTES_SLOTS = os88stik.STIKNOTE_SLOTS  # '.', '..' and 30 notes

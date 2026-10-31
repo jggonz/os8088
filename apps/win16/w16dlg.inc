@@ -59,6 +59,8 @@ ES_PASSWORD      equ 0x0020
 
 LBS_NOTIFY       equ 0x0001
 LBS_SORT         equ 0x0002
+LBS_OWNERDRAWFIXED equ 0x0010   ; its parent draws each item (SPEC.md 124.22.14)
+LBS_HASSTRINGS   equ 0x0040     ; ...and it keeps their strings all the same
 LBS_NOINTEGRALHEIGHT equ 0x0100
 
 DS_ABSALIGN      equ 0x01
@@ -174,8 +176,13 @@ LC_CAP      equ W16W_CS + 8     ; ...the table's room, in items
 LC_FL       equ W16W_CS + 10    ; ...LCF_*
 LCF_FOCUS   equ 1
 LCF_TRACK   equ 2               ; a press is selecting
-LI_SIZE     equ 4               ; an item: its text (a USER heap block) and
-                                ;   its data word
+LCF_DPRESS  equ 4               ; ...the press that dropped it (a combo's)
+LC_DBL      equ W16W_CS + 12    ; ...the last press's time, for LBN_DBLCLK
+LC_ITEMH    equ W16W_CS + 14    ; ...an item's height: the System font's rows,
+                                ;   or WM_MEASUREITEM's answer
+LC_COMBO    equ W16W_CS + 16    ; ...the COMBOBOX it is the list of; 0 none
+LI_SIZE     equ 6               ; an item: its text (a USER heap block; 0
+                                ;   none) and its data, a dword
 
 ; =============================================================================
 ; The image's side (`section .text`)
@@ -522,10 +529,15 @@ w16d_ctlproc:
     xor dx, dx
     mov cx, [w16_sm_msg]            ; Alt and its keys: the WM_SYSCOMMAND
     cmp cx, WM_SYSKEYDOWN           ;   DefWindowProc makes of them, posted
-    jb .nsys                        ;   to the top-level window, whose menu
-    cmp cx, WM_SYSCHAR              ;   it is (124.22.6). The key itself is
-    ja .nsys                        ;   not passed up: TranslateMessage
-    ICALL w16_syskey                ;   would make a second WM_SYSCHAR of it
+    jne .nalt                       ;   to the top-level window, whose menu
+    call w16c_altkey                ;   it is (124.22.6) - Alt+Down and Alt+Up
+    jc .out                         ;   on a combo box drop it (124.22.14).
+.nalt:                              ;   The key itself is not passed up:
+    cmp cx, WM_SYSKEYDOWN           ;   TranslateMessage would make a second
+    jb .nsys                        ;   WM_SYSCHAR of it
+    cmp cx, WM_SYSCHAR
+    ja .nsys
+    ICALL w16_syskey
     jc .out
     push bx
     ICALL w16_toplevel
@@ -537,6 +549,11 @@ w16d_ctlproc:
     xor ax, ax
     jmp .out
 .nsys:
+    cmp byte [bx + W16W_KIND], W16Q_COMBO   ; a combo box takes every
+    jne .ncb                                ;   message itself too
+    call w16c_proc                          ;   (SPEC.md 124.22.14)
+    jmp .out
+.ncb:
     cmp byte [bx + W16W_KIND], W16Q_EDIT    ; the multi-line EDIT takes
     jne .shared                             ;   every message itself
     test byte [bx + W16W_STYLE], ES_MULTILINE   ; (SPEC.md 124.22.3)
@@ -1028,6 +1045,28 @@ w16d_grey:
     test byte [bx + W16W_FLAGS], W16WF_DIS
     jz .out
     mov al, COLOR_GRAYTEXT
+.out:
+    ret
+
+; w16d_greyon - AL = the text's COLOR_*, AH = the ground's: grey text on a
+; ground of the same colour - Windows 3.0's GRAYTEXT on a button's face -
+; is the button shadow's grey instead, as Windows' GrayString test makes it
+; legible. Keeps the rest.
+w16d_greyon:
+    cmp al, COLOR_GRAYTEXT
+    jne .out
+    push ax
+    push cx
+    mov al, ah
+    ICALL w16_syscol                ; (AH = 0 after it)
+    mov cl, al
+    mov al, COLOR_GRAYTEXT
+    ICALL w16_syscol
+    cmp al, cl
+    pop cx
+    pop ax
+    jne .out
+    mov al, COLOR_BTNSHADOW
 .out:
     ret
 
@@ -1668,6 +1707,7 @@ w16d_pushpaint:
     mov al, COLOR_BTNTEXT
     call w16d_grey
     mov ah, COLOR_BTNFACE
+    call w16d_greyon
     call w16d_colors
     mov ax, [w16d_l]                ; the four corners are the dialog's
     mov bx, [w16d_t]
@@ -2260,7 +2300,7 @@ w16d_ecreate:
 w16d_ecode:
     mov ax, DLGC_WANTCHARS | DLGC_HASSETSEL | DLGC_WANTARROWS
     xor dx, dx
-    ret
+    jmp w16c_ecode                  ; ...and a dropped combo box's edit, all
 
 w16d_efocus:
     or byte [bx + EC_FL], ECF_FOCUS
@@ -2664,6 +2704,10 @@ w16d_epaste:
 
 ; WM_KEYDOWN: the arrows, Home, End and Delete; Shift extends the selection
 w16d_ekey:
+    call w16c_ekey                  ; a combo box's edit: its keys first
+    jnc .own                        ;   (SPEC.md 124.22.14)
+    jmp w16d_lzero
+.own:
     call w16d_ebuf                  ; CX = the length
     mov ax, [bx + EC_CARET]
     mov dx, [w16_sm_wp]
@@ -3148,7 +3192,28 @@ w16d_lcreate:
     mov word [bx + LC_COUNT], 0
     mov word [bx + LC_CUR], -1
     mov word [bx + LC_TOP], 0
+    ICALL w16_rowsn
+    mov [bx + LC_ITEMH], ax
+    test byte [bx + LC_STYLE], LBS_OWNERDRAWFIXED
+    jz .z
+    or byte [bx + W16W_F2], W16W2_OWEMI ; its parent is asked its items' height
+.z:                                     ;   before WM_INITDIALOG (124.22.14)
     jmp w16d_lzero
+
+; w16d_lhasstr - BX = a list box: CF=1 its items have strings - it is not
+; drawn by its parent, or it keeps them anyway (LBS_HASSTRINGS). An item of
+; one that has not is its data alone, which LB_ADDSTRING's lParam is.
+; Keeps every register.
+w16d_lhasstr:
+    test byte [bx + LC_STYLE], LBS_OWNERDRAWFIXED
+    jz .yes
+    test byte [bx + LC_STYLE], LBS_HASSTRINGS
+    jnz .yes
+    clc
+    ret
+.yes:
+    stc
+    ret
 
 w16d_ldestroy:
     call w16d_lfreeall
@@ -3218,12 +3283,16 @@ w16d_lent:
     ret
 
 ; w16d_lstr - BX = a list box, AX = an index -> ES:SI = its string, CX =
-; its length. Keeps the rest.
+; its length. An item with none has its entry's own 0 word as its string, so
+; it reads as empty. Keeps the rest.
 w16d_lstr:
     push ax
     push di
     call w16d_lent
+    cmp word [es:si], 0
+    je .none
     mov si, [es:si]
+.none:
     mov di, si
     mov cx, 0xFFFF
     xor al, al
@@ -3264,7 +3333,7 @@ w16d_lgetdata:
     jae w16d_lerr
     call w16d_lent
     mov ax, [es:si + 2]
-    xor dx, dx
+    mov dx, [es:si + 4]
     ret
 
 w16d_lsetdata:
@@ -3274,31 +3343,47 @@ w16d_lsetdata:
     call w16d_lent
     mov dx, [w16_sm_lp]
     mov [es:si + 2], dx
+    mov dx, [w16_sm_lp + 2]
+    mov [es:si + 4], dx
     jmp w16d_lzero
 
 w16d_lgettlen:
     mov ax, [w16_sm_wp]
     cmp ax, [bx + LC_COUNT]
     jae w16d_lerr
+    mov cx, 4                       ; an item with no string: its data's
+    call w16d_lhasstr
+    jnc .len
     call w16d_lstr
+.len:
     mov ax, cx
     xor dx, dx
     ret
 
-; LB_GETTEXT: the item's string and its NUL into lParam; its length
+; LB_GETTEXT: the item's string and its NUL into lParam; its length. An
+; item with no string gives its data, four bytes, as Windows' did
 w16d_lgettext:
     mov ax, [w16_sm_wp]
     cmp ax, [bx + LC_COUNT]
     jae .err
+    call w16d_lhasstr
+    jc .str
+    call w16d_lent
+    add si, 2
+    mov cx, 4
+    push cx                         ; the answer: 4, and no NUL after it
+    jmp short .copy
+.str:
     call w16d_lstr                  ; ES:SI = the string, CX = its length
     push cx
+    inc cx                          ; ...and its NUL
+.copy:
     push ds
     mov di, [w16_sm_lp]
     mov ax, [w16_sm_lp + 2]
     push es
     pop ds                          ; DS:SI = the string
     mov es, ax                      ; ES:DI = the buffer
-    inc cx
     cld
     rep movsb
     pop ds
@@ -3361,11 +3446,14 @@ w16d_lnewstr:
     pop cx
     ret
 
-; LB_ADDSTRING: at the end, or in its place with LBS_SORT
+; LB_ADDSTRING: at the end, or in its place with LBS_SORT (an item with no
+; string, at the end: Windows asked WM_COMPAREITEM, which is not sent here)
 w16d_ladd:
     mov ax, [bx + LC_COUNT]
     test byte [bx + LC_STYLE], LBS_SORT
     jz w16d_linsat
+    call w16d_lhasstr
+    jnc w16d_linsat
     xor ax, ax                      ; the first item after it
 .s:
     cmp ax, [bx + LC_COUNT]
@@ -3383,28 +3471,34 @@ w16d_lins:
     mov ax, [bx + LC_COUNT]
     ; fall into w16d_linsat
 
-; w16d_linsat - lParam's string as item AX -> its index
+; w16d_linsat - lParam's string (or, with no strings, lParam itself) as item
+; AX -> its index
 w16d_linsat:
     mov [w16d_e0], ax
     mov ax, [bx + LC_COUNT]         ; room for one more
     cmp ax, [bx + LC_CAP]
     jb .room
-    mov cx, [bx + LC_CAP]
-    shl cx, 1
-    push cx
-    shl cx, 1
-    shl cx, 1                       ; (* LI_SIZE)
+    mov ax, [bx + LC_CAP]
+    shl ax, 1
+    push ax                         ; the room, doubled
+    mov cx, LI_SIZE
+    mul cx
+    mov cx, ax
     call w16_mheap
     xor al, al
     ICALL w16_lnew
-    pop cx
     or ax, ax
-    jz w16d_lerr
-    push cx
+    jnz .grew
+    pop ax
+    jmp w16d_lerr
+.grew:
+    push ax
     mov di, ax                      ; the table, copied over
     mov si, [bx + LC_TAB]
-    mov cx, [bx + LC_COUNT]
-    shl cx, 1
+    mov ax, [bx + LC_COUNT]
+    mov cx, LI_SIZE / 2
+    mul cx
+    mov cx, ax
     push ds
     push es
     pop ds
@@ -3413,26 +3507,27 @@ w16d_linsat:
     pop ds
     mov ax, [bx + LC_TAB]
     ICALL w16_lfree
-    sub di, [bx + LC_COUNT]
-    sub di, [bx + LC_COUNT]
-    sub di, [bx + LC_COUNT]
-    sub di, [bx + LC_COUNT]
-    mov [bx + LC_TAB], di
-    pop cx
-    mov [bx + LC_CAP], cx
+    pop word [bx + LC_TAB]
+    pop word [bx + LC_CAP]
 .room:
+    xor ax, ax
+    call w16d_lhasstr
+    jnc .nostr
     call w16d_lnewstr               ; AX = the string
     or ax, ax
     jz w16d_lerr
+.nostr:
     push ax
     mov ax, [bx + LC_COUNT]         ; the entries after it, one along
     call w16d_lent                  ; ES:SI = one past the last
     mov di, si
     add di, LI_SIZE - 2
     sub si, 2
-    mov cx, [bx + LC_COUNT]
-    sub cx, [w16d_e0]
-    shl cx, 1
+    mov ax, [bx + LC_COUNT]
+    sub ax, [w16d_e0]
+    mov cx, LI_SIZE / 2
+    mul cx
+    mov cx, ax
     push ds
     push es
     pop ds
@@ -3444,7 +3539,15 @@ w16d_linsat:
     call w16d_lent
     pop ax
     mov [es:si], ax
-    mov word [es:si + 2], 0
+    xor ax, ax                      ; its data: 0, or lParam with no string
+    xor dx, dx
+    call w16d_lhasstr
+    jc .data
+    mov ax, [w16_sm_lp]
+    mov dx, [w16_sm_lp + 2]
+.data:
+    mov [es:si + 2], ax
+    mov [es:si + 4], dx
     inc word [bx + LC_COUNT]
     mov ax, [w16d_e0]
     cmp word [bx + LC_CUR], -1
@@ -3466,14 +3569,21 @@ w16d_ldel:
     call w16d_lent
     push ax
     mov ax, [es:si]
+    or ax, ax
+    jz .nostr
     ICALL w16_lfree
+.nostr:
     pop ax
+    push ax
     mov di, si
     add si, LI_SIZE
     mov cx, [bx + LC_COUNT]
     sub cx, ax
     dec cx
-    shl cx, 1
+    mov ax, LI_SIZE / 2
+    mul cx
+    mov cx, ax
+    pop ax
     push ds
     push es
     pop ds
@@ -3557,7 +3667,8 @@ w16d_fold:
     ret
 
 ; w16d_lprefix - BX = a list box, AX = an item: CF=1 its string begins with
-; lParam's (case folded). Keeps every register.
+; lParam's (case folded) - or, an item with no string, its data is lParam.
+; Keeps every register.
 w16d_lprefix:
     push ax
     push cx
@@ -3565,6 +3676,17 @@ w16d_lprefix:
     push di
     push ds
     push es
+    call w16d_lhasstr
+    jc .str
+    call w16d_lent
+    mov ax, [es:si + 2]
+    cmp ax, [w16_sm_lp]
+    jne .no
+    mov ax, [es:si + 4]
+    cmp ax, [w16_sm_lp + 2]
+    jne .no
+    jmp short .yes
+.str:
     call w16d_lstr
     mov di, si
     lds si, [w16_sm_lp]
@@ -3640,8 +3762,12 @@ w16d_lsetcur:
     ret
 
 ; w16d_lcur - BX = a list box, AX = the item to select: selected, shown and
-; redrawn. Keeps BX.
+; redrawn - an owner-drawn one whose view did not move, by its parent drawing
+; the two items whose state changed (ODA_SELECT, SPEC.md 124.22.14). Keeps BX.
 w16d_lcur:
+    push cx
+    push dx
+    mov dx, [bx + LC_CUR]           ; DX = the selection before
     mov [bx + LC_CUR], ax
     cmp ax, [bx + LC_TOP]
     jae .below
@@ -3649,17 +3775,35 @@ w16d_lcur:
     jmp short .inv
 .below:
     push ax
+    push dx
     call w16d_lvis                  ; CX = the rows it shows
-    pop ax
     mov dx, [bx + LC_TOP]
     add dx, cx
     cmp ax, dx
-    jb .inv
+    pop dx
+    pop ax
+    jb .same
     sub ax, cx
     inc ax
     mov [bx + LC_TOP], ax
 .inv:
     call w16d_inval
+    jmp short .out
+.same:
+    test byte [bx + LC_STYLE], LBS_OWNERDRAWFIXED
+    jz .inv
+    mov cl, ODA_SELECT
+    cmp dx, -1
+    je .new
+    mov ax, dx
+    call w16_odput
+.new:
+    mov ax, [bx + LC_CUR]
+    mov dx, ax
+    call w16_odput
+.out:
+    pop dx
+    pop cx
     ret
 
 ; w16d_lvis - BX = a list box -> CX = how many items its client shows, at
@@ -3672,8 +3816,7 @@ w16d_lvis:
     jz .nb
     sub dx, 2
 .nb:
-    ICALL w16_rowsn
-    mov cx, ax
+    mov cx, [bx + LC_ITEMH]
     mov ax, dx
     or ax, ax
     jle .none
@@ -3714,6 +3857,10 @@ w16d_lsel:
     cmp ax, [bx + LC_CUR]
     je .out
     call w16d_lcur
+    cmp word [bx + LC_COMBO], 0     ; a combo box's list tells the combo box
+    je .own
+    jmp w16c_lsel
+.own:
     test byte [bx + LC_STYLE], LBS_NOTIFY
     jz .out
     mov ax, LBN_SELCHANGE
@@ -3734,10 +3881,7 @@ w16d_lhit:
     jge .p
     xor ax, ax
 .p:
-    push ax
-    ICALL w16_rowsn
-    mov cx, ax
-    pop ax
+    mov cx, [bx + LC_ITEMH]
     xor dx, dx
     div cx
     add ax, [bx + LC_TOP]
@@ -3757,10 +3901,18 @@ w16d_lhit:
     ret
 
 w16d_ldown:
+    cmp word [bx + LC_COMBO], 0     ; a combo box's dropped list keeps the
+    je .focus                       ;   focus where it is, and a press off it
+    call w16c_lin                   ;   closes it up (SPEC.md 124.22.14)
+    jc .bar
+    call w16c_cancel
+    jmp w16d_lzero
+.focus:
     push bx
     ICALL w16_rec2hwnd
     ICALL w16_setfocus
     pop bx
+.bar:
     call w16d_lbar                  ; on the scroll bar?
     jnc .items
     ICALL w16_csize
@@ -3815,8 +3967,8 @@ w16d_ldown:
     pop dx                          ;   LBN_DBLCLK
     push dx
     mov cx, ax
-    sub ax, [bx + W16W_CS + 12]
-    mov [bx + W16W_CS + 12], cx
+    sub ax, [bx + LC_DBL]
+    mov [bx + LC_DBL], cx
     cmp dx, [bx + LC_CUR]
     jne .sel
     cmp ax, 500
@@ -3839,6 +3991,11 @@ w16d_ldown:
 w16d_lmove:
     test byte [bx + LC_FL], LCF_TRACK
     jz .z
+    cmp word [bx + LC_COMBO], 0     ; a combo box's list: only over it
+    je .t
+    call w16c_lin
+    jnc .z
+.t:
     mov ax, [w16_sm_lp + 2]
     call w16d_lhit
     jc .z
@@ -3850,6 +4007,10 @@ w16d_lup:
     test byte [bx + LC_FL], LCF_TRACK
     jz .z
     and byte [bx + LC_FL], ~LCF_TRACK
+    cmp word [bx + LC_COMBO], 0
+    je .own
+    jmp w16c_lup
+.own:
     ICALL w16_rec2hwnd
     cmp [w16_capture], ax
     jne .z
@@ -3993,6 +4154,33 @@ w16d_lpaint:
     mov [w16d_e0], ax               ; [w16d_e0] = the item
     mov ax, [w16d_it]
     mov [w16_ty], ax
+    test byte [bx + LC_STYLE], LBS_OWNERDRAWFIXED
+    jz .item
+    mov cx, [bx + LC_COUNT]         ; owner-drawn: the items shown are its
+    sub cx, [bx + LC_TOP]           ;   parent's to draw (SPEC.md 124.22.14),
+    jle .rest0                      ;   white below them
+    push cx
+    call w16d_lvis
+    pop dx
+    cmp dx, cx
+    jbe .n
+    mov dx, cx
+.n:
+    push dx
+    mov ax, dx
+    mul word [bx + LC_ITEMH]
+    add [w16_ty], ax
+    pop dx
+    mov ax, [bx + LC_TOP]
+    add dx, ax
+    dec dx
+    mov cl, ODA_DRAWENTIRE
+    call w16_odput
+.rest0:
+    mov ax, [w16_ty]
+    cmp ax, [w16d_ib]
+    jg .done
+    jmp .rest
 .item:
     mov ax, [w16_ty]
     cmp ax, [w16d_ib]
@@ -4035,11 +4223,7 @@ w16d_lpaint:
     mov [w16_bxr], ax
     mov ax, [w16_ty]
     mov [w16_bxt], ax
-    push ax
-    ICALL w16_rowsn
-    mov dx, ax
-    pop ax
-    add ax, dx
+    add ax, [bx + LC_ITEMH]
     dec ax
     cmp ax, [w16d_ib]
     jle .bb
@@ -4064,7 +4248,7 @@ w16d_lpaint:
     pop bx
 .nf:
     inc word [w16d_e0]
-    ICALL w16_rowsn
+    mov ax, [bx + LC_ITEMH]
     add [w16_ty], ax
     jmp .item
 .rest:
@@ -4494,6 +4678,12 @@ w16d_focusin:
     mov ax, [w16d_hdlg]
     cmp [bx + W16W_PARENT], ax
     je .out
+    ICALL w16_parent                ; a combo box's edit: the combo box
+    jc .none                        ;   (SPEC.md 124.22.14)
+    cmp byte [bx + W16W_KIND], W16Q_COMBO
+    jne .none
+    cmp [bx + W16W_PARENT], ax
+    je .out
 .none:
     xor bx, bx
 .out:
@@ -4739,6 +4929,14 @@ w16d_isdlg:
     call w16d_mnem
     jmp short .yes
 .key:
+    test byte [w16d_code], DLGC_WANTALLKEYS ; a dropped combo box: every
+    jz .k                                   ;   key its own - a multi-line
+    mov bx, [w16d_frec]                     ;   EDIT's Enter is still the
+    or bx, bx                               ;   default button's, as on
+    jz .k                                   ;   Windows 3.0 (124.22.14)
+    cmp byte [bx + W16W_KIND], W16Q_COMBO
+    je .no
+.k:
     mov al, [w16_msg + MSG_WP]
     cmp al, VK_TAB
     je .tab
@@ -4773,7 +4971,7 @@ w16d_isdlg:
     test byte [bx + BC_STATE], 3
     jnz .yes
     call w16d_click
-    jmp short .yes
+    jmp .yes
 .tab:
     test byte [w16d_code], DLGC_WANTTAB
     jnz .no
@@ -4841,6 +5039,16 @@ w16d_mrun:
     ICALL w16_wakeme                ; the rest on the next pass
     jmp short .empty
 .turn:
+    cmp byte [w16_odn], 0           ; an item owed its owner's drawing first
+    je .msg                         ;   (SPEC.md 124.22.14)
+    push bx
+    mov al, W16OD_MODAL
+    call w16_odgo
+    pop bx
+    jc .msg
+    mov cl, 2
+    ret
+.msg:
     push bx
     mov al, 1
     ICALL w16_nextmsg
@@ -4852,16 +5060,8 @@ w16d_mrun:
     or byte [bx + WD_FL], WDF_ENDED ;   for the program's own loop
     jmp short w16d_mrun
 .notquit:
-    call w16d_isdlg
-    jc w16d_mrun
-    push es
-    push ds
-    pop es
-    mov bx, w16_msg
-    ICALL w16_xlatemsg
-    pop es
-    call w16d_dispmsg
-    jnc w16d_mrun
+    call w16d_mhook                 ; a message filter sees it first
+    jnc w16d_mproc                  ;   (SPEC.md 124.22.16)
     mov cl, 2
     ret
 .empty:
@@ -4898,6 +5098,101 @@ w16d_mrun:
 .call:
     mov cl, 2
     ret
+
+; w16d_mproc - the rest of w16d_mrun for [w16_msg], BX = the dialog: its
+; keys, else translated and dispatched; then the loop goes on
+w16d_mproc:
+    call w16d_isdlg
+    jc .again
+    push es
+    push ds
+    pop es
+    mov bx, w16_msg
+    ICALL w16_xlatemsg
+    pop es
+    call w16d_dispmsg
+    jnc .again
+    mov cl, 2
+    ret
+.again:
+    jmp w16d_mrun
+
+; w16d_mhook - a WH_MSGFILTER hook set (SPEC.md 124.22.16): it called with
+; MSGF_DIALOGBOX and a copy of [w16_msg], w16d_mhooked the continuation,
+; CF=1. None, CF=0. Keeps BX
+w16d_mhook:
+    mov ax, WH_MSGFILTER
+    call w16u_hookof
+    mov cx, ax
+    or cx, dx
+    jnz .call
+    clc
+    ret
+.call:
+    push bx
+    push ax
+    push dx
+    mov si, w16d_mhooked_c
+    xor ax, ax
+    mov cx, MSG_SIZE
+    ICALL w16_cbopen                ; ES:DI = the copy
+    push di
+    mov si, w16_msg
+    mov cx, MSG_SIZE / 2
+    cld
+    rep movsw
+    pop di
+    xor ax, ax                      ; nCode MSGF_DIALOGBOX, wParam 0,
+    ICALL w16_ppush
+    ICALL w16_ppush
+    mov ax, es                      ;   lParam the MSG
+    ICALL w16_ppush
+    mov ax, di
+    ICALL w16_ppush
+    pop dx
+    pop ax
+    ICALL w16_cbcall
+    pop bx
+    stc
+    ret
+
+; w16d_mhooked - the hook answered: TRUE, it took the message and the loop
+; goes on without it; FALSE, the copy - which it may have changed - is the
+; message, and goes on as w16d_mrun would have taken it
+DCONT w16d_mhooked
+    or ax, ax
+    jnz .skip
+    mov es, [w16_pss]
+    mov si, [w16_psp_]
+    sub si, MSG_SIZE
+    mov di, w16_msg
+    mov cx, MSG_SIZE / 2
+.c:
+    mov ax, [es:si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    loop .c
+    mov cl, [w16_inmodal]
+    xor ch, ch
+    jcxz .skip                      ; (the dialog is gone: the loop says so)
+    dec cx
+    ICALL w16_slot2rec
+    call w16d_mproc
+    jmp short .cl
+.skip:
+    call w16d_mrun
+.cl:
+    cmp cl, 1
+    je .done
+    cmp cl, 2
+    je .out
+    mov byte [w16_pend], 1          ; the queue is empty: DialogBox waits
+.out:
+    retf
+.done:
+    xor dx, dx
+    retf
 
 ; w16d_dispmsg - DispatchMessage of [w16_msg] in the modal loop: WIN16's own
 ; control at once (CF=0), any other window called with w16d_mcont as the
@@ -5103,11 +5398,16 @@ w16d_mkitem:
     jz .named
     inc si
     sub al, 0x80 - W16Q_BUTTON      ; BUTTON EDIT STATIC LISTBOX are 80h-83h,
-    cmp al, W16Q_LIST               ;   which is W16Q_BUTTON.. in order, and
-    jbe .kind                       ;   SCROLLBAR is 84h
+    cmp al, W16Q_LIST               ;   which is W16Q_BUTTON.. in order,
+    jbe .kind                       ;   SCROLLBAR is 84h and COMBOBOX 85h
     cmp al, 0x84 - 0x80 + W16Q_BUTTON
+    mov ah, W16Q_SCROLL
+    je .atom
+    cmp al, 0x85 - 0x80 + W16Q_BUTTON
     jne .refuse
-    mov al, W16Q_SCROLL
+    mov ah, W16Q_COMBO
+.atom:
+    mov al, ah
     jmp short .kind
 .named:
     mov ax, si
@@ -5578,8 +5878,11 @@ w16d_make:
 ; w16d_initsend - BX = a dialog just made: WM_INITDIALOG, with the first
 ; control that takes Tab and [w16d_param], and w16d_init after it
 w16d_initsend:
-    call w16d_owecr                 ; a control's WM_CREATE first: it comes
-    jc .init                        ;   back here when it is answered
+    call w16d_owecr                 ; a control's WM_CREATE first, then an
+    jnc .wait                       ;   owner-drawn one's WM_MEASUREITEM: each
+    call w16d_owemi                 ;   comes back here when it is answered
+    jc .init
+.wait:
     retf
 .init:
     ICALL w16_rec2hwnd

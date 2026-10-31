@@ -1120,19 +1120,26 @@ w16_builtin:
     inc al
     cmp al, W16Q_LIST
     jbe .c
-    mov si, w16_bisb                ; SCROLLBAR, longer than eight
+    mov si, w16_bisb                ; SCROLLBAR and COMBOBOX, longer: each
+    mov al, W16Q_SCROLL             ;   with its NUL
+.long:
     mov di, w16_namebuf
     mov cx, 10
 .sb:
     mov ah, [si]
     cmp ah, [di]
-    jne .no
+    jne .nl
     inc si
     inc di
     loop .sb
-    mov al, W16Q_SCROLL
     clc
     jmp short .out
+.nl:
+    cmp al, W16Q_COMBO
+    je .no
+    mov si, w16_bicb
+    mov al, W16Q_COMBO
+    jmp short .long
 .no:
     stc
 .out:
@@ -1148,6 +1155,8 @@ w16_bitab:                      ; in W16Q_BUTTON.. order, NUL-padded to 8
     db 'LISTBOX', 0
 w16_bisb:
     db 'SCROLLBAR', 0
+w16_bicb:
+    db 'COMBOBOX', 0, 0
 
 ; w16_ctlstub - DX:AX = the window procedure of WIN16's controls: the stub
 ; of an export row no program can import (w16_ctlrow), so the program can

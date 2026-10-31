@@ -1940,3 +1940,84 @@ the last ones it saw, and posts `WM_DRAWCLIPBOARD` when they differ. On QEMU
 the viewer showed text copied in Notepad, running beside it, and Delete
 emptied both the clipboard and the view.
 
+
+## 2026-10-31 — S17, batch 4: the combo box, Character Map and the screen savers
+
+**A combo box is a list box with a field on top.** That is how Windows
+built it, and WIN16 builds it the same way. The list is a real WIN16 list
+box window holding the items, so every list path already written (the keys,
+the scroll bar, sorting, item data) serves the combo box without a second
+copy. A `CB_` message that has an `LB_` twin is passed straight on. What
+the combo box owns is the field, the button and the dropping. A dropped
+list is a child of the combo box's top-level window, hidden until it drops,
+shown on top of its siblings with the pointer captured, and cut to that
+window: Windows' list was a popup and could hang past it. Its look was
+measured off Windows 3.0's Control Panel, the Desktop dialog's wallpaper
+list dropped.
+
+**Owner-drawn items could not be drawn the way Windows drew them.** Windows
+sends `WM_DRAWITEM` to the parent from *inside* the control's paint, and
+the program draws the item with the DC it is handed. WIN16's controls answer
+at once (SPEC.md §124.13): a control's paint cannot stop half way and wait
+for a call into the program. So a paint now writes down what it owes — a
+window, an action, a range of items — and the message is sent at the next
+place the program asks for one: `GetMessage`, `PeekMessage` and the modal
+dialog loop each send what is queued before handing over the next message.
+Each send is a real one, with a DC on the control clipped to the item. Seen
+from the program, it is the same message with the same DC, a little later.
+
+**Character Map's font list showed *System*, and then the dialog was too
+wide.** Its template asks for `MS Sans Serif` 8 with `DS_SETFONT`, and
+Windows 3.1 lays such a dialog out in that font's units. Measured off the
+reference screenshot, the 348 × 118 dialog has a 609 × 192 client on VGA,
+which is 7 × 13 per unit. WIN16 lays every dialog out in the System font's
+8 × 16, so the same template is 696 pixels across and the Close and Select
+buttons are past the screen's edge. Using the right units with the System
+font's text would only trade the overflow for clipped labels. The answer is
+a second face: Wine has an MS Sans Serif under the same licence as the
+System font WIN16 already draws from it, and it becomes batch 5.
+
+**The screen savers.** Starfield, Marquee, Mystify and Flying Windows each
+show their setup dialog when started without arguments. They needed
+`CreateWindowEx` (whose arguments are `CreateWindow`'s with one more in
+front), `SetWindowOrg`, `Polygon` (edges only; os8088 has no polygon fill),
+and a hook chain. Each saver hooks `WH_MSGFILTER` to catch F1 in its
+dialog, so the modal loop now hands each message to that hook first and
+skips it on a TRUE answer. Other hook types are kept and answered but not
+called, until a program needs one called.
+
+**A disabled button had no caption.** The *Set Password* button is
+disabled until Password Protected is checked, and it drew as a blank grey
+button. Windows 3.0's `COLOR_GRAYTEXT` is the same grey as a button's face,
+so the caption was being drawn into the face. Windows' own test for this
+case falls back to a grey that shows, and WIN16 now uses the shadow's grey
+there. The first version of the fix compared the two colours after a call
+that zeroes AH, so it compared one of them with 0, and the button stayed
+blank until that was caught on the next look.
+
+**What was seen.** On QEMU (VGA): Character Map's grid and its owner-drawn
+font list dropped and picked; Starfield's and Flying Windows' dialogs;
+Marquee's owner-drawn colour list, which has no strings; Mystify's shape
+list dropped and picked, its colour lists greyed; and Password Protected
+enabling *Set Password* and greying it again.
+
+**Found and left open.** With Clock and Calculator running, a third Windows
+program did not start, and nothing said so: no window, no refusal. Two at
+once is the case SPEC.md §124.18.2 designs for. The third needs measuring,
+and a refusal the user can read.
+
+**What it cost.** The image grew by 594 bytes to 32,831, its bss by 3,738
+to 23,989 (the owner-draw queue, the combo boxes' saved create arguments,
+the hooks), leaving 8,716 bytes of the 64 KB. The library part grew by
+8,812 bytes to 55,137.
+
+**WIN16 got a disk of its own.** At 104 KB the package no longer fit the
+disks it shipped on: the 1.44MB apps disk was 3 clusters short and
+`more720.img` 4. Each story to S25 makes it larger, so making room by
+evicting something would have had to be repeated every batch. The owner
+chose to move it: `WIN16\` and its profile folder are now on
+`win16.img`, `win16-120.img`, `win16-720.img` and `win16-360.img`, with the
+rest of each floppy free for the Windows programs a user copies onto it.
+They are 252 clusters used of 2,847 at 1.44MB and 129 of 354 at 360KB. The
+apps disks and `more720.img` no longer carry it; `emu360.img`, the
+everything set and the live media still do.

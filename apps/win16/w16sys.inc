@@ -893,6 +893,745 @@ W16LIB w16g_crepal
     xor dx, dx
     ret
 
+; =============================================================================
+; Character Map's calls (SPEC.md 124.22.15)
+; =============================================================================
+
+; MulDiv (GDI.128) - args: +0 nDenominator, +2 nNumber, +4 nMultiplier:
+; their product over the denominator, rounded half away from 0 in 32 bits;
+; 32767 or -32768 by the sign when it does not fit, or the denominator is 0
+W16LIB w16g_muldiv
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov ax, [es:bx + 4]
+    imul word [es:bx + 2]           ; DX:AX = the product
+    mov si, dx                      ; SI's sign: the answer's
+    xor si, cx
+    or dx, dx
+    jns .p
+    not ax
+    not dx
+    add ax, 1
+    adc dx, 0
+.p:
+    jcxz .ovf
+    or cx, cx
+    jns .c
+    neg cx
+.c:
+    mov di, cx                      ; half the denominator, to round
+    shr di, 1
+    add ax, di
+    adc dx, 0
+    cmp dx, cx
+    jae .ovf
+    div cx
+    or si, si
+    js .neg
+    cmp ax, 32767
+    ja .ovf
+    jmp short .out
+.neg:
+    cmp ax, 32768
+    ja .ovf
+    neg ax
+    jmp short .out
+.ovf:
+    mov ax, 32767
+    or si, si
+    jns .out
+    inc ax                          ; -32768
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; GetCharWidth (GDI.350) - args: +0 lpBuffer, +4 wLastChar, +6 wFirstChar,
+; +8 hDC: each character's advance in the System font, one word each
+W16LIB w16g_charwidth
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx + 4]
+    mov dx, [es:bx + 6]
+    les di, [es:bx]
+    sub cx, dx
+    jb .no
+    inc cx
+    cmp cx, 256
+    ja .no
+    mov si, [w16_face]
+    cld
+.c:
+    push es
+    mov es, si
+    mov al, dl                      ; w16_glyph's lookup, here
+    sub al, [es:W16F_FIRST]
+    jb .def
+    cmp al, [es:W16F_COUNT]
+    jb .ok
+.def:
+    mov al, W16F_DEFCH
+    sub al, [es:W16F_FIRST]
+.ok:
+    xor ah, ah
+    mov bx, ax
+    mov al, [es:W16F_ADV + bx]
+    pop es
+    stosw
+    inc dx
+    loop .c
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; GetMessagePos (USER.119): where the pointer was for the last message
+; handed over, DX:AX = y:x on the screen
+W16LIB w16u_msgpos
+    mov ax, [w16_msg + MSG_PT]
+    mov dx, [w16_msg + MSG_PT + 2]
+    ret
+
+; GetCursorPos (USER.17) - args: +0 lpPoint: where the pointer is now
+W16LIB w16u_getcurpos
+    ICALL w16_args
+    les bx, [es:bx]
+    mov ax, [w16_mx]
+    mov [es:bx], ax
+    mov ax, [w16_my]
+    mov [es:bx + 2], ax
+    mov ax, 1
+    xor dx, dx
+    ret
+
+; WindowFromPoint (USER.30) - args: +0 x, +2 y (a POINT by value): the
+; deepest visible window there among this program's - of two top-levels
+; that both hold it, the one made last, which is in front - else 0
+W16LIB w16u_wndfrompt
+    push si
+    push di
+    push bp
+    ICALL w16_args
+    mov ax, [es:bx]
+    mov [w16_odrc], ax              ; (a scratch pair here)
+    mov ax, [es:bx + 2]
+    mov [w16_odrc + 2], ax
+    xor bp, bp                      ; BP = the top-level found, DI its SEQ
+    xor di, di
+    mov bx, w16_wnd
+    mov cx, W16_MAXWND
+.w:
+    mov al, [bx + W16W_FLAGS]
+    and al, W16WF_USED | W16WF_VIS | W16WF_DYING
+    cmp al, W16WF_USED | W16WF_VIS
+    jne .n
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .n
+    cmp word [bx + W16W_OSW], 0
+    je .n
+    push cx
+    ICALL w16_origin                ; AX/DX = its client, CX/SI its size
+    jc .n0
+    neg ax
+    add ax, [w16_odrc]
+    js .n0
+    cmp ax, cx
+    jge .n0
+    neg dx
+    add dx, [w16_odrc + 2]
+    js .n0
+    cmp dx, si
+    jge .n0
+    mov ax, [bx + W16W_SEQ]
+    cmp ax, di
+    jb .n0
+    mov di, ax
+    mov bp, bx
+.n0:
+    pop cx
+.n:
+    add bx, W16W_SIZE
+    loop .w
+    xor ax, ax
+    or bp, bp
+    jz .out
+    mov bx, bp
+    mov cx, [w16_odrc]
+    mov dx, [w16_odrc + 2]
+    ICALL w16_hittest               ; AX = the HWND
+.out:
+    xor dx, dx
+    pop bp
+    pop di
+    pop si
+    ret
+
+; DrawFocusRect (USER.466) - args: +0 lprc, +4 hDC: the rectangle's four
+; edges inverted, so a second call takes it off - solid, where Windows'
+; was dotted: os8088 has no dotted XOR line (SPEC.md 124.22.15)
+W16LIB w16u_drawfocus
+    push si
+    push di
+    ICALL w16_args
+    cmp word [es:bx + 4], W16_HDC
+    jne .out
+    cmp byte [w16_dcon], 0
+    je .out
+    cmp byte [w16_dchide], 0
+    jne .out
+    les si, [es:bx]
+    mov ax, [es:si]                 ; l, t, r, b on the screen, inclusive
+    add ax, [w16_ox]
+    mov bx, [es:si + 2]
+    add bx, [w16_oy]
+    mov cx, [es:si + 4]
+    add cx, [w16_ox]
+    dec cx
+    mov dx, [es:si + 6]
+    add dx, [w16_oy]
+    dec dx
+    cmp ax, cx
+    jg .out
+    cmp bx, dx
+    jg .out
+    push dx                         ; the top
+    mov dx, bx
+    call w16u_xorcut
+    pop dx
+    cmp bx, dx
+    je .out
+    push bx                         ; the bottom
+    mov bx, dx
+    call w16u_xorcut
+    pop bx
+    inc bx                          ; the sides, between them
+    dec dx
+    cmp bx, dx
+    jg .out
+    push cx
+    mov cx, ax
+    call w16u_xorcut
+    pop cx
+    cmp ax, cx
+    je .out
+    mov ax, cx
+    call w16u_xorcut
+.out:
+    mov ax, 1
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16u_xorcut - AX..CX x BX..DX (screen, inclusive) inverted, cut to the
+; DC's clip. Keeps every register.
+w16u_xorcut:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp ax, [w16_cl]
+    jge .l
+    mov ax, [w16_cl]
+.l:
+    cmp bx, [w16_ct]
+    jge .t
+    mov bx, [w16_ct]
+.t:
+    cmp cx, [w16_cr]
+    jle .r
+    mov cx, [w16_cr]
+.r:
+    cmp dx, [w16_cb]
+    jle .b
+    mov dx, [w16_cb]
+.b:
+    cmp ax, cx
+    jg .out
+    cmp bx, dx
+    jg .out
+    call OSAPI_GFX_XOR_FILL
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; VkKeyScan (KEYBOARD.129) - args: +0 cChar: the key that types it, and the
+; shift state - AL the virtual key, AH 1 Shift, 2 Ctrl; -1 none (US layout)
+W16LIB w16kb_vkscan
+    ICALL w16_args
+    mov al, [es:bx]
+    xor ah, ah
+    cmp al, '0'
+    jb .ctl
+    cmp al, '9'
+    jbe .out
+    cmp al, 'A'
+    jb .punct
+    cmp al, 'Z'
+    jbe .shift
+    cmp al, 'a'
+    jb .punct
+    cmp al, 'z'
+    ja .punct
+    sub al, 'a' - 'A'
+    jmp short .out
+.shift:
+    mov ah, 1
+    jmp short .out
+.ctl:
+    cmp al, 0x08                    ; Backspace, Tab, Enter, Esc and space
+    je .out
+    cmp al, 0x09
+    je .out
+    cmp al, 0x0D
+    je .out
+    cmp al, 0x1B
+    je .out
+    cmp al, 0x20
+    je .out
+    cmp al, 1                       ; Ctrl and a letter
+    jb .none
+    cmp al, 26
+    ja .punct
+    add al, 'A' - 1
+    mov ah, 2
+    jmp short .out
+.punct:
+    mov bx, w16kb_vkch  ; XSEC-OK: read through cs:
+.t:
+    mov cx, [cs:bx]
+    or cl, cl
+    jz .sh
+    cmp al, ch
+    je .vk
+    inc bx
+    inc bx
+    jmp short .t
+.vk:
+    mov al, cl
+    jmp short .out
+.sh:
+    mov bx, w16kb_vksh  ; XSEC-OK: read through cs:
+.s:
+    mov cx, [cs:bx]
+    or cl, cl
+    jz .none
+    cmp al, ch
+    je .vks
+    inc bx
+    inc bx
+    jmp short .s
+.vks:
+    mov al, cl
+    mov ah, 1
+    jmp short .out
+.none:
+    mov ax, -1
+.out:
+    xor dx, dx
+    ret
+w16kb_vksh:                         ; the shifted ones': virtual key, character
+    db '0', ')', '1', '!', '2', '@', '3', '#', '4', '$', '5', '%'
+    db '6', '^', '7', '&', '8', '*', '9', '(', 0xBA, ':', 0xBB, '+'
+    db 0xBC, '<', 0xBD, '_', 0xBE, '>', 0xBF, '?', 0xC0, '~', 0xDB, '{'
+    db 0xDC, '|', 0xDD, '}', 0xDE, '"', 0
+
+; EnumFontFamilies (GDI.330) - args: +0 lParam, +4 lpEnumFontFamProc,
+; +8 lpszFamily, +12 hDC: the program's procedure called once for each
+; family - WIN16 has one, the display's System font, a raster font - with a
+; LOGFONT and a NEWTEXTMETRIC on its stack. A family that is not System has
+; no faces: nothing is called, and the answer is 1 (SPEC.md 124.22.15)
+LF_SIZE  equ 50
+NTM_SIZE equ 42
+W16LIB w16g_enumfam
+    push si
+    push di
+    ICALL w16_args
+    les si, [es:bx + 8]             ; a family named: System's only
+    mov ax, es
+    or ax, si
+    jz .all
+    mov di, w16g_sysname    ; XSEC-OK: read through cs:
+.cmp:
+    mov al, [es:si]
+    mov ah, [cs:di]
+    call w16d_fold
+    cmp al, ah
+    jne .none
+    or al, al
+    jz .all
+    inc si
+    inc di
+    jmp short .cmp
+.none:
+    mov ax, 1
+    xor dx, dx
+    pop di
+    pop si
+    ret
+.all:
+    ICALL w16_args
+    push word [es:bx + 6]           ; the procedure
+    push word [es:bx + 4]
+    push word [es:bx + 2]           ; lParam
+    push word [es:bx]
+    mov si, w16_cont_ret            ; its answer, EnumFontFamilies'
+    xor ax, ax
+    mov cx, LF_SIZE + NTM_SIZE
+    ICALL w16_cbopen                ; ES:DI = the LOGFONT, then the metrics
+    push es
+    mov es, [w16_face]              ; LOGFONT: its height and width
+    mov al, [es:W16F_ROWS]
+    xor ah, ah
+    mov cl, [es:W16F_AVG]
+    xor ch, ch
+    pop es
+    mov [es:di], ax                 ; lfHeight
+    mov [es:di + 2], cx             ; lfWidth
+    mov word [es:di + 8], 700       ; lfWeight: bold
+    mov word [es:di + 14], 0x0201   ; lfOutPrecision OUT_STRING_PRECIS,
+    mov word [es:di + 16], 0x2201   ;   lfClipPrecision CLIP_STROKE_PRECIS,
+    push di                         ;   lfQuality DRAFT, VARIABLE_PITCH |
+    add di, 18                      ;   FF_SWISS; lfFaceName
+    mov si, w16g_facename   ; XSEC-OK: read through cs:
+.nm:
+    mov al, [cs:si]
+    mov [es:di], al
+    inc si
+    inc di
+    or al, al
+    jnz .nm
+    pop di
+    push di
+    add di, LF_SIZE
+    ICALL w16_tmfill                ; the TEXTMETRIC; the rest 0
+    pop di
+    mov ax, es                      ; the procedure's arguments, pascal:
+    ICALL w16_ppush                 ;   lplf,
+    mov ax, di
+    ICALL w16_ppush
+    mov ax, es                      ;   lpntm,
+    ICALL w16_ppush
+    mov ax, di
+    add ax, LF_SIZE
+    ICALL w16_ppush
+    mov ax, 1                       ;   RASTER_FONTTYPE,
+    ICALL w16_ppush
+    pop cx                          ;   lParam, its high word first
+    pop ax
+    ICALL w16_ppush
+    mov ax, cx
+    ICALL w16_ppush
+    pop ax
+    pop dx
+    ICALL w16_cbcall
+    pop di
+    pop si
+    ret
+
+w16g_sysname: db 'SYSTEM', 0
+
+; GetTextFace (GDI.92) - args: +0 lpFaceName, +4 nCount, +6 hDC: "System"
+; and its NUL, cut to the count; its length
+W16LIB w16g_textface
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx + 4]
+    les di, [es:bx]
+    xor ax, ax
+    jcxz .out
+    dec cx
+    mov si, w16g_facename   ; XSEC-OK: read through cs:
+.c:
+    jcxz .end
+    mov dl, [cs:si]
+    or dl, dl
+    jz .end
+    mov [es:di], dl
+    inc si
+    inc di
+    inc ax
+    dec cx
+    jmp short .c
+.end:
+    mov byte [es:di], 0
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+w16g_facename: db 'System', 0
+
+; GetRasterizerCaps (GDI.313) - args: +0 cb, +2 lpraststat: no TrueType -
+; nSize 6, wFlags 0, nLanguageID 0
+W16LIB w16g_rastcaps
+    ICALL w16_args
+    mov cx, [es:bx]
+    les bx, [es:bx + 2]
+    cmp cx, 6
+    jb .out
+    mov word [es:bx], 6
+    mov word [es:bx + 2], 0
+    mov word [es:bx + 4], 0
+.out:
+    mov ax, 1
+    xor dx, dx
+    ret
+
+; SetWindowOrg (GDI.11) - args: +0 y, +2 x, +4 hDC: logical x, y is at the
+; viewport's origin, the old one the answer - in MM_TEXT, the DC's origin
+; moved back by the difference (SPEC.md 124.22.16)
+W16LIB w16g_setworg
+    push si
+    mov si, w16_worg
+    xor cx, cx
+    call w16g_pair
+    jc .out
+    mov cx, [w16_worg]
+    sub cx, ax
+    sub [w16_ox], cx
+    mov cx, [w16_worg + 2]
+    sub cx, dx
+    sub [w16_oy], cx
+.out:
+    pop si
+    ret
+
+; Polygon (GDI.36) - args: +0 nCount, +2 lpPoints, +6 hDC: its edges in the
+; pen, the last point joined to the first; the current point is left where
+; it was. The INSIDE is not filled with the brush, as Windows' is: os8088
+; has no polygon fill (SPEC.md 124.22.16)
+W16LIB w16g_polygon
+    push si
+    push di
+    push bp
+    ICALL w16_args
+    cmp word [es:bx + 6], W16_HDC
+    jne .no
+    mov cx, [es:bx]
+    cmp cx, 2
+    jl .no
+    push word [w16_curx]
+    push word [w16_cury]
+    mov si, cx                      ; the last point is the first edge's start
+    dec si
+    shl si, 1
+    shl si, 1
+    les bx, [es:bx + 2]
+    mov ax, [es:bx + si]
+    mov [w16_curx], ax
+    mov ax, [es:bx + si + 2]
+    mov [w16_cury], ax
+    xor si, si                      ; SI = the point's offset, CX how many
+.e:
+    push cx
+    push si
+    ICALL w16_args
+    les bx, [es:bx + 2]
+    mov ax, [es:bx + si]
+    mov [w16_lx1], ax
+    mov ax, [es:bx + si + 2]
+    mov [w16_ly1], ax
+    ICALL w16_lineline
+    pop si
+    pop cx
+    add si, 4
+    loop .e
+    pop word [w16_cury]
+    pop word [w16_curx]
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop bp
+    pop di
+    pop si
+    ret
+
+; =============================================================================
+; Hooks (SPEC.md 124.22.16): SetWindowsHook keeps a chain, a type's last in
+; front; WH_MSGFILTER is called by the modal dialog loop with each message
+; (MSGF_DIALOGBOX), and every other type is kept and answered, not called
+; =============================================================================
+W16_HKMAX equ 4                 ; hooks at once: a type, its procedure
+WH_MSGFILTER equ -1
+%if W16_HKMAX * 6 != 24 || W16_HKMAX * 2 != 8
+%error "w16_hooks and w16_hkord are sized for W16_HKMAX in win16.asm"
+%endif
+
+; SetWindowsHook (USER.121) - args: +0 lpfn, +4 nFilterType: in front of
+; its type's chain; the one it is in front of, the program's to call through
+; DefHookProc, is the answer (0 none)
+W16LIB w16u_sethook
+    push si
+    ICALL w16_args
+    mov si, w16_hooks
+    mov cx, W16_HKMAX
+.f:
+    cmp word [si + 2], 0            ; a free entry
+    jne .n
+    cmp word [si + 4], 0
+    je .take
+.n:
+    add si, 6
+    loop .f
+    xor ax, ax                      ; full: not hooked
+    xor dx, dx
+    pop si
+    ret
+.take:
+    mov ax, [es:bx + 4]
+    mov cx, [es:bx]
+    mov dx, [es:bx + 2]
+    push ax
+    call w16u_hookof                ; DX:AX = the type's front one now
+    pop cx
+    mov [si], cx
+    push ax
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov [si + 2], cx
+    mov cx, [es:bx + 2]
+    mov [si + 4], cx
+    inc word [w16_hkseq]
+    mov cx, [w16_hkseq]
+    mov [w16_hkord + si - w16_hooks], cx
+    pop ax
+    pop si
+    ret
+
+; w16u_hookof - AX = a type -> DX:AX = the front of its chain (0 none).
+; Keeps the rest.
+w16u_hookof:
+    push bx
+    push cx
+    push si
+    push di
+    mov di, ax
+    xor ax, ax
+    xor dx, dx
+    xor cx, cx                      ; CX = the front's order
+    mov si, w16_hooks
+    mov bx, w16_hkord
+.f:
+    cmp si, w16_hooks + W16_HKMAX * 6
+    jae .out
+    cmp [si], di
+    jne .n
+    mov dx, [si + 2]
+    or dx, [si + 4]
+    jz .n
+    cmp [bx], cx
+    jb .n
+    mov cx, [bx]
+    mov ax, [si + 2]
+    mov dx, [si + 4]
+.n:
+    add si, 6
+    add bx, 2
+    jmp short .f
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; UnhookWindowsHook (USER.234) - args: +0 lpfnHook, +4 nHook: out of the
+; chain. TRUE when it was in it
+W16LIB w16u_unhook
+    push si
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    mov cx, [es:bx]
+    mov dx, [es:bx + 2]
+    mov si, w16_hooks
+.f:
+    cmp si, w16_hooks + W16_HKMAX * 6
+    jae .no
+    cmp [si], ax
+    jne .n
+    cmp [si + 2], cx
+    jne .n
+    cmp [si + 4], dx
+    je .yes
+.n:
+    add si, 6
+    jmp short .f
+.yes:
+    xor ax, ax
+    mov [si + 2], ax
+    mov [si + 4], ax
+    inc ax
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop si
+    ret
+
+; DefHookProc (USER.235) - args: +0 lplpfnNextHook, +4 lParam, +8 wParam,
+; +10 nCode: the next hook in the chain called with them, its answer the
+; answer; none, 0
+W16LIB w16u_defhook
+    push si
+    ICALL w16_args
+    les bx, [es:bx]
+    mov ax, [es:bx]
+    mov dx, [es:bx + 2]
+    mov cx, ax
+    or cx, dx
+    jz .zero
+    push ax
+    push dx
+    ICALL w16_args
+    push word [es:bx + 10]
+    push word [es:bx + 8]
+    push word [es:bx + 6]
+    push word [es:bx + 4]
+    mov si, w16_cont_ret
+    xor ax, ax
+    xor cx, cx
+    ICALL w16_cbopen
+    pop dx                          ; lParam's low word
+    pop cx                          ; ...its high
+    pop bx                          ; wParam
+    pop ax                          ; nCode
+    ICALL w16_ppush
+    mov ax, bx
+    ICALL w16_ppush
+    mov ax, cx
+    ICALL w16_ppush
+    mov ax, dx
+    ICALL w16_ppush
+    pop dx
+    pop ax
+    ICALL w16_cbcall
+    pop si
+    ret
+.zero:
+    xor ax, ax
+    xor dx, dx
+    pop si
+    ret
+
 section .text
 
 w16s_dir:    db ':\SYSTEM\APPDATA\WIN16', 0

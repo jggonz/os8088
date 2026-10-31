@@ -71,6 +71,8 @@ W16W2_TTL   equ 7               ; a second top-level's title buffer, + 1
 W16W2_NCDIRTY equ 16            ; its scroll bars are owed (SPEC.md 124.22.1)
 W16W2_OWECR equ 32               ; a dialog's control of the program's own class:
                                 ;   its WM_CREATE is owed (SPEC.md 124.22.12)
+W16W2_OWEMI equ 64              ; an owner-drawn list or combo box: its
+                                ;   WM_MEASUREITEM is owed (SPEC.md 124.22.14)
 W16W2_NSIZE equ 8               ; an overlapped window not yet sized: its
                                 ;   first ShowWindow sends WM_SIZE (124.8)
 
@@ -81,6 +83,22 @@ W16Q_STATIC equ 3
 W16Q_LIST   equ 4
 W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
 W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
+W16Q_COMBO  equ 7               ; the COMBOBOX control (SPEC.md 124.22.14)
+
+; --- owner-drawn items owed (SPEC.md 124.22.14, w16combo.inc) -----------------
+W16_ODQN    equ 8               ; the queue's entries: a window, its items
+OQ_HWND     equ 0               ;   first to last, the action, and 1 when
+OQ_FIRST    equ 2               ;   a paint inside W_PAINT owed them
+OQ_LAST     equ 4
+OQ_ACT      equ 6
+OQ_PAINT    equ 7
+OQ_SIZE     equ 8
+%if W16_ODQN * OQ_SIZE != 64
+  %error "w16_odq is 64 bytes in win16.asm's bss"
+%endif
+W16OD_GET   equ 0               ; who sends them: GetMessage,
+W16OD_PEEK  equ 1               ;   PeekMessage,
+W16OD_MODAL equ 2               ;   the modal loop
 
 ; a dialog's own state, in its W16W_CS (w16dlg.inc); the program's DWL_*
 ; are its extra bytes, as on Windows
@@ -1518,6 +1536,8 @@ w16_nextmsg:
     cmp al, W16WF_USED | W16WF_INVAL
     jne .pn
     call w16_pshown
+    jc .pn
+    call w16_cbunder                ; under a dropped list: later
     jnc .ispaint
 .pn:
     inc cx
@@ -1551,12 +1571,17 @@ w16_nextmsg:
     mov byte [si + W16T_FIRED], 0
     jmp short .gen
 .ispaint:
-    mov si, bx                      ; the highest invalid window it is in
+    mov si, bx                      ; the highest invalid window it is in -
+    call w16_rec2hwnd               ;   none above a dropped list, none the
+    cmp ax, [w16_cbdl]              ;   list is over (124.22.14)
+    je .top
 .up:
     call w16_parent
     jc .top
     test byte [bx + W16W_FLAGS], W16WF_INVAL
     jz .up
+    call w16_cbunder
+    jc .top
     mov si, bx
     jmp short .up
 .top:
@@ -1637,14 +1662,23 @@ w16_putmsg:
 ; GetMessage (USER.108) - args: +0 wMsgFilterMax, +2 wMsgFilterMin, +4 hWnd,
 ; +6 lpMsg. S3 honours only the NULL filter, and treats every other as it.
 w16u_getmsg:
+    cmp byte [w16_odn], 0           ; an owner-drawn item owed first: sent,
+    je .msg                         ;   and this comes back (124.22.14)
+    mov al, W16OD_GET
+    LCALL w16_odgo
+    jnc .ret
+.msg:
     mov al, 1
     call w16_nextmsg
     jc .wait
     mov bx, 6
     jmp w16_putmsg
 .wait:
+    mov ax, [w16_idx]
+    mov [w16_widx], ax
     mov byte [w16_inget], 1         ; nothing to give: the next callback that
     mov byte [w16_pend], 1          ;   has something resumes it (w16_kick)
+.ret:
     ret
 
 ; PeekMessage (USER.109) - args: +0 wRemoveMsg, +2 max, +4 min, +6 hWnd,
@@ -1653,8 +1687,16 @@ w16u_getmsg:
 ; machine a pass a turn instead of owning it - which is what PeekMessage
 ; did on Windows 3.x, where it yielded to the other tasks.
 w16u_peekmsg:
+    cmp byte [w16_odn], 0
+    je .msg
+    mov al, W16OD_PEEK
+    LCALL w16_odgo
+    jnc .out
+.msg:
     call w16_peekmsg
     jnc .out
+    mov ax, [w16_idx]
+    mov [w16_widx], ax
     mov byte [w16_inpeek], 1
     mov byte [w16_pend], 1
     mov bx, [w16_win]
@@ -1682,6 +1724,16 @@ w16_peekmsg:
 ; with a message if there is one now, and run on. No lock is held.
 w16_peekwake:
     mov byte [w16_inpeek], 0
+    cmp byte [w16_odn], 0           ; an owner-drawn item owed: sent, and
+    je .msg                         ;   PeekMessage asked again after it
+    call w16_reidx
+    mov byte [w16_locked], 0
+    mov al, W16OD_PEEK
+    LCALL w16_odgo
+    jc .msg
+    call w16_resumecb
+    jmp w16_after
+.msg:
     call w16_peekmsg
     xor dx, dx
     mov byte [w16_locked], 0
@@ -1695,6 +1747,16 @@ w16_peekwake:
 w16_kick:
     cmp byte [w16_inget], 0
     je .modal
+    cmp byte [w16_odn], 0           ; an owner-drawn item owed: sent, and
+    je .msg                         ;   GetMessage asked again after it
+    call w16_reidx
+    mov al, W16OD_GET
+    LCALL w16_odgo
+    jc .msg
+    mov byte [w16_inget], 0
+    call w16_resumecb
+    ret
+.msg:
     mov al, 1
     call w16_nextmsg
     jc .out
@@ -1709,6 +1771,78 @@ w16_kick:
     cmp byte [w16_inmodal], 0       ; ...or waits in a DialogBox (SPEC.md
     je .out                         ;   124.13 step 3)
     jmp w16_mkick
+
+; w16_reidx - the import waiting in GetMessage or PeekMessage made current
+; again ([w16_widx]), as w16_cbdone makes one, for a send from a callback.
+; Keeps all but AX.
+w16_reidx:
+    push bx
+    mov ax, [w16_widx]
+    mov [w16_idx], ax
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1                       ; * W16B_SIZE
+    mov al, [w16_bind + bx + W16B_ARGB]
+    cbw
+    mov [w16_nargb], ax
+    mov byte [w16_rflags], 0
+    pop bx
+    ret
+
+; w16_cbunder - BX = an invalid window: CF=1 a combo box's list is down
+; over its invalid part, which then waits for the list to go up - the one
+; rectangle a DC clips to cannot have the list cut out of it (SPEC.md
+; 124.22.14). Keeps every register.
+w16_cbunder:
+    cmp word [w16_cbdl], 0
+    je .no
+    push ax
+    push cx
+    push dx
+    push si
+    call w16_rec2hwnd
+    cmp ax, [w16_cbdl]
+    je .no0
+    call w16_origin                 ; AX/DX = its client on the screen
+    jc .no0
+    mov cx, ax
+    add cx, [bx + W16W_UL]          ; its invalid part there: left
+    cmp cx, [w16_cbdr + 4]
+    jg .no0
+    mov cx, dx
+    add cx, [bx + W16W_UT]          ; ...top
+    cmp cx, [w16_cbdr + 6]
+    jg .no0
+    mov cx, [bx + W16W_UR]          ; ...right, cut to the client
+    cmp cx, 0x4000
+    jl .r
+    mov cx, 0x4000
+.r:
+    add cx, ax
+    cmp cx, [w16_cbdr]
+    jle .no0
+    mov cx, [bx + W16W_UB]          ; ...bottom
+    cmp cx, 0x4000
+    jl .b
+    mov cx, 0x4000
+.b:
+    add cx, dx
+    cmp cx, [w16_cbdr + 2]
+    jle .no0
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+.no0:
+    pop si
+    pop dx
+    pop cx
+    pop ax
+.no:
+    clc
+    ret
 
 ; =============================================================================
 ; Paint (SPEC.md 124.8)
@@ -2820,6 +2954,10 @@ W16_SCANX equ 0xA4
 ; its WM_PAINT lands in this pass. Damage the program has not painted when
 ; the resume comes back gets the class brush. SI = our window; gives SI back.
 w16_ppaint:
+    cmp word [w16_cbdl], 0          ; a dropped list goes up first
+    je .nd                          ;   (SPEC.md 124.22.14)
+    LCALL w16c_osclose
+.nd:
     push si
     mov byte [w16_inwp], 1
     mov [w16_pfosw], si

@@ -111,8 +111,16 @@ MOREIMG720    := $(BUILD)/more720.img
 # stays on demand - the release carries the 128KB machine at 360KB and 720KB
 SMALLIMG360   := $(BUILD)/small360.img
 SMALLIMG720   := $(BUILD)/small720.img
+# ...and WIN16's own disk in all four geometries (SPEC.md 124.18.1), since
+# S17 batch 4 (2026-10-31, the owner's decision): WIN16.O88 grew past what the
+# 1.44MB apps disk and more720.img had left, and it grows with every story to
+# S25, so it left the apps disks rather than evict something each time
+WIN16IMG      := $(BUILD)/win16.img
+WIN16IMG120   := $(BUILD)/win16-120.img
+WIN16IMG720   := $(BUILD)/win16-720.img
+WIN16IMG360   := $(BUILD)/win16-360.img
 
-# ...and all thirteen in one list, because it appeared in FOUR places (`all`
+# ...and all twenty-one in one list, because it appeared in FOUR places (`all`
 # and the three tiers) and each of those had to be edited by hand the first
 # time a disk was added. A shipped image that is in `all` and in none of the
 # tiers is one no gate ever reads, which is the failure this prevents rather
@@ -121,7 +129,8 @@ SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
             $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) \
-            $(SMALLIMG360) $(SMALLIMG720)
+            $(SMALLIMG360) $(SMALLIMG720) \
+            $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360)
 
 # ...and each of them SIGNS IN A SLOT OF ITS OWN (SPEC.md 18.8.2.2): os88disk.py
 # reads this list (tools/os88ship.py) and steers every member's boot-sector
@@ -16442,10 +16451,12 @@ MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
 # WIN16 (SPEC.md 124.18.1): a WIN16\ folder - the package, its GPL-2 COPYING
 # and its README.TXT, apps/apple2's footing - and SYSTEM\APPDATA\WIN16, the
 # Windows directory a program's WIN.INI and .INI files are kept in (124.14),
-# BUILT because WIN16 never makes it. On the 1.44MB and 1.2MB apps disks,
-# more720 (the 720KB machine's second), emu360 (programs of another system,
-# at its root, 24.6's rule), the everything set and the live media. NOT in $(APPSARGS) itself: that list
-# feeds kern_mega's apps disks, where WIN16 refuses (124.1).
+# BUILT because WIN16 never makes it. On WIN16's own disk in all four
+# geometries ($(WIN16IMG) and its three, below), emu360 (programs of another
+# system, at its root, 24.6's rule), the everything set and the live media.
+# Until S17 batch 4 it rode the 1.44MB and 1.2MB apps disks and more720; it
+# outgrew them. NOT in $(APPSARGS): that list feeds kern_mega's apps disks,
+# where WIN16 refuses (124.1).
 # The two documents ride as WIN16.TXT and COPYING.W16, the names The Wire
 # gives APPLE2's (APPLE2.TXT, COPYING.A2): emu360 is a category disk with its
 # programs at the ROOT (24.6), where a README.TXT is the system's and a
@@ -16465,8 +16476,7 @@ $(BUILD)/win16/COPYING.W16: apps/win16/COPYING
 # ahead of $(APPDATAFOLDER), $(APPSARGS720)'s way: argparse stops collecting
 # positionals at an option that takes a value, so the folder stays last.
 APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
-               $(addprefix MEDIA:,$(XTMP3MP3)) $(WIN16ARGS) \
-               $(APPDATAFOLDER) $(WIN16FOLDER)
+               $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
 # ...AND THE 1.2MB DISK LEAVES XTMP3 AND ITS SONGS OFF (SPEC.md 24.6.1's rule,
 # dated 2026-10-23, the 720KB disk's decision of 2026-10-22 one geometry along):
 # Browser 1.6c grew 67 clusters and apps120.img needed 2399 of 2371. The player
@@ -16474,13 +16484,26 @@ APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
 # prerequisites ($(APPS120)) and the recipe ($(APPSARGS120)) are filtered
 # together, as the 720KB disk's are.
 APPS120 := $(filter-out $(BUILD)/xtmp3.o88,$(APPS))
-APPSARGS120 := $(filter-out $(APPDATAFOLDER) APPS:$(BUILD)/xtmp3.o88,$(APPSARGS)) \
-               $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
-$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) $(WIN16SHIP) tools/os88disk.py
+APPSARGS120 := $(filter-out APPS:$(BUILD)/xtmp3.o88,$(APPSARGS))
+$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS144)
 
-$(APPSIMG120): $(APPS120) $(LOGOVID) $(WIN16SHIP) tools/os88disk.py
+$(APPSIMG120): $(APPS120) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS120)
+
+# WIN16's own disk (SPEC.md 124.18.1): WIN16\ and SYSTEM\APPDATA\WIN16, the
+# same in every geometry, and the rest of the floppy for the Windows programs
+# a user copies onto it. `make win16disk WIN3X=<dir>` is this disk with them
+# already on it.
+WIN16DISKARGS := $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
+$(WIN16IMG): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(WIN16DISKARGS)
+$(WIN16IMG120): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(WIN16DISKARGS)
+$(WIN16IMG720): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(WIN16DISKARGS)
+$(WIN16IMG360): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(WIN16DISKARGS)
 
 # kern_mega's APPS DISKS (KERN-MEGA-PLAN 14.66): $(APPSARGS) with the
 # kern_mega arm of every package that has one ($(MEGAPKGS), MEGASUB) - in the
@@ -16534,8 +16557,8 @@ MOREARGS720 := APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/midirack.o88 \
                $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP)) \
                MEDIA:$(RDG_DEMO) $(LOGOVIDARG) \
                $(addprefix MEDIA/MIDI:,$(MORE720_SONGS)) \
-               $(PX_GALLERY_360) $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
-$(MOREIMG720): $(MORE720) $(WIN16SHIP) tools/os88disk.py
+               $(PX_GALLERY_360) $(APPDATAFOLDER)
+$(MOREIMG720): $(MORE720) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(MOREARGS720)
 
 $(APPSIMG360): $(APPS360) tools/os88disk.py

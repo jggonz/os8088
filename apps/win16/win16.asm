@@ -336,6 +336,8 @@ section .w16dlg
     W16BSS w16_vorg, 4          ; SetViewportOrg's: w16_ox/w16_oy moved by it
     W16BSS w16_wext, 4          ; SetWindowExt's, kept and answered
     W16BSS w16_vext, 4          ; SetViewportExt's, kept and answered
+    W16BSS w16_worg, 4          ; SetWindowOrg's: w16_ox/w16_oy moved back by
+                                ;   it, as MM_TEXT's scale is 1 (124.22.16)
 W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_dcstk, W16_DCMAX * W16_DCSZ ; the DCs open under it, innermost
                                 ;   last
@@ -711,6 +713,7 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16d_tx, 2           ; a message box's text: where it starts
     W16BSS w16d_ty, 2
     W16BSS w16d_mby, 2          ; ...and its buttons' top
+%assign W16CWA W16B
     W16BSS w16_cwkind, 1        ; w16_mkwnd's arguments (SPEC.md 124.8)
     W16BSS w16_cwcls, 1
     W16BSS w16_cwproc, 4
@@ -723,6 +726,28 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_cwpar, 2
     W16BSS w16_cwid, 2
     W16BSS w16_cwtext, 4
+%assign W16_CWSZ W16B - W16CWA  ; [w16_cwkind] to here: w16combo.inc copies it
+    W16BSS w16_odq, 64      ; w16combo.inc's (SPEC.md 124.22.14):
+    W16BSS w16_odn, 1           ;   owner-drawn items owed, and how many
+    W16BSS w16_odctx, 1         ; ...the one being sent: who asked,
+    W16BSS w16_odact, 1         ;   its action, state and CtlType, its
+    W16BSS w16_odst, 1          ;   item, rcItem, data, owner, ID and HWND
+    W16BSS w16_odtype, 1
+    W16BSS w16_odi, 2
+    W16BSS w16_odrc, 8
+    W16BSS w16_oddata, 4
+    W16BSS w16_odown, 2
+    W16BSS w16_odid, 2
+    W16BSS w16_odhw, 2
+    W16BSS w16_cbdl, 2          ; a dropped combo box list's HWND, 0 none,
+    W16BSS w16_cbdr, 8          ;   and its rectangle on the screen
+    W16BSS w16_widx, 2          ; the import waiting in Get/PeekMessage
+    W16BSS w16_mirec, 2         ; WM_MEASUREITEM's control, and its item
+    W16BSS w16_mii, 2
+    W16BSS w16d_cwsv, W16_CWSZ  ; a combo box's caller's [w16_cw*]
+    W16BSS w16_hooks, 24        ; W16_HKMAX hooks: a type, its procedure
+    W16BSS w16_hkord, 8         ;   when each was set, the last in front
+    W16BSS w16_hkseq, 2
     W16BSS w16_mvx, 2           ; MoveWindow's place, and SWP_NOSIZE/NOMOVE
     W16BSS w16_mvy, 2
     W16BSS w16_mvfl, 1
@@ -1074,6 +1099,19 @@ w16_freeprog:
     mov byte [w16_inmodal], 0
     mov word [w16_focus], 0
     mov word [w16_capture], 0
+    mov word [w16_cbdl], 0          ; no list down, nothing owed (124.22.14)
+    mov byte [w16_odn], 0
+    push di                         ; no hooks (124.22.16)
+    push es
+    push ds
+    pop es
+    mov di, w16_hooks
+    mov cx, (24 + 8 + 2) / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    pop di
     call w16_dlgout
     call w16x_end                   ; its floating point (SPEC.md 124.5)
     call w16_dosend                 ; its files closed, the DOS freed (124.21)
@@ -1592,6 +1630,7 @@ w16_cputest:
 %include "win16/w16sb.inc"      ; scroll bars and ScrollWindow (SPEC.md 124.22)
 %include "win16/w16car.inc"     ; the caret (SPEC.md 124.22.9)
 %include "win16/w16edml.inc"    ; the multi-line EDIT (SPEC.md 124.22.3)
+%include "win16/w16combo.inc"   ; COMBOBOX, owner-drawn items (124.22.14)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md

@@ -623,7 +623,7 @@ make win16census WIN3X=<dir>  # WIN16 (SPEC.md 124): what each Windows 3.x
               #   builds the Win16 TEST programs with Open Watcom
               #   (tools/setup-watcom.sh fetches it). Both on demand.
               #   `make win16` is the layer itself, in `all`: a WIN16\
-              #   folder on the 1.44MB/1.2MB apps disks, more720, the
+              #   folder on its OWN disk in four geometries (win16*.img), the
               #   everything set and the live media, and at emu360's root
               #   (SPEC.md 124.18.1); the shipped DOS.O88 hands it an NE on
               #   kern_big and kern_emu. `make win16disk WIN3X=<dir>` puts
@@ -1321,9 +1321,11 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 `apple2disk`, `weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
 reached them.
 
-**Seventeen images, not nine.** The system and apps disks in four geometries
-each, SIX more at 360KB alone, `more720.img` (§24.7) and kern_small's
-`small360.img`/`small720.img` (§24.5.7). `build/media360.img` —
+**Twenty-one images, not nine.** The system and apps disks in four geometries
+each, SIX more at 360KB alone, `more720.img` (§24.7), kern_small's
+`small360.img`/`small720.img` (§24.5.7) and WIN16's own disk in four
+geometries, `win16*.img` (§124.18.1), which left the apps disks when it
+outgrew them. `build/media360.img` —
 `BEVERLY.MOD` is data rather than software and was 114 of a 360KB disk's 354
 clusters before packages were compressed, so at that geometry it rides a disk
 of its own (§24.4). **It is not on `apps360.img` as well any more, and cannot

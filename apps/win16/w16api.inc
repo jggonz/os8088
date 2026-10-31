@@ -199,6 +199,25 @@ W16EXPORT W16M_USER,       147,     2,  w16u_setcbview      ; SetClipboardViewer
 W16EXPORT W16M_USER,       149,     4,  w16u_cbchain        ; ChangeClipboardChain(word word)
 W16EXPORT W16M_USER,       282,     6,  w16g_crepal         ; SelectPalette(word word word)
 W16EXPORT W16M_USER,       283,     2,  w16_ans0            ; RealizePalette(word)
+W16EXPORT W16M_GDI,        128,     6,  w16g_muldiv         ; MulDiv(s_word s_word s_word)
+W16EXPORT W16M_GDI,        350,     10, w16g_charwidth      ; GetCharWidth(word word word ptr)
+W16EXPORT W16M_GDI,        330,     14, w16g_enumfam        ; EnumFontFamilies(word str segptr long)
+W16EXPORT W16M_KEYBOARD,   129,     2,  w16kb_vkscan        ; VkKeyScan(word)
+W16EXPORT W16M_USER,       119,     0,  w16u_msgpos         ; GetMessagePos()
+W16EXPORT W16M_USER,       30,      4,  w16u_wndfrompt      ; WindowFromPoint(long)
+W16EXPORT W16M_USER,       466,     6,  w16u_drawfocus      ; DrawFocusRect(word ptr)
+W16EXPORT W16M_USER,       67,      2,  w16u_getdc          ; GetWindowDC(word): the client's
+W16EXPORT W16M_USER,       17,      4,  w16u_getcurpos      ; GetCursorPos(ptr)
+W16EXPORT W16M_USER,       452,     34, w16u_createwnd      ; CreateWindowEx(long str str long s_word x4 word word word segptr)
+W16EXPORT W16M_GDI,        36,      8,  w16g_polygon        ; Polygon(word ptr word)
+W16EXPORT W16M_GDI,        11,      6,  w16g_setworg        ; SetWindowOrg(word s_word s_word)
+W16EXPORT W16M_GDI,        92,      8,  w16g_textface       ; GetTextFace(word s_word ptr)
+W16EXPORT W16M_GDI,        313,     6,  w16g_rastcaps       ; GetRasterizerCaps(ptr word)
+W16EXPORT W16M_GDI,        367,     10, w16_ans0            ; AnimatePalette(word word word ptr)
+W16EXPORT W16M_GDI,        370,     6,  w16_ans0            ; GetNearestPaletteIndex(word long)
+W16EXPORT W16M_USER,       121,     6,  w16u_sethook        ; SetWindowsHook(s_word segptr)
+W16EXPORT W16M_USER,       234,     6,  w16u_unhook         ; UnhookWindowsHook(s_word segptr)
+W16EXPORT W16M_USER,       235,     12, w16u_defhook        ; DefHookProc(s_word word long ptr)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put

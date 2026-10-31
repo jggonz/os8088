@@ -226930,7 +226930,9 @@ fixture, WinMine 2.9's About and Preferences, a `MessageBox`).
 item count (a byte), `x`, `y`, `cx`, `cy` (words), the menu, the class and
 the caption (each a string, or `FFh` and a word), and, with `DS_SETFONT`, a
 point size and a face name that are read and not used: every dialog is
-drawn in the display's System font (§124.7). Each item is `x`, `y`, `cx`,
+drawn in the display's System font (§124.7), and laid out in its units -
+which a 3.1 program's `MS Sans Serif` 8 dialog finds wider than Windows'
+(§124.22.15). Each item is `x`, `y`, `cx`,
 `cy`, its ID (words), its style (a dword), its class (a byte `80h`-`85h`
 for BUTTON, EDIT, STATIC, LISTBOX, SCROLLBAR, COMBOBOX, or a string), its
 text (a string, or `FFh` and a word) and a count of extra bytes, skipped.
@@ -227473,7 +227475,7 @@ with.
 | | |
 |---|---|
 | folder | `WIN16\` holding `WIN16.O88`, `WIN16.TXT` and `COPYING.W16` (§124.1's licence row: `apps/win16/README.TXT` and `COPYING` under the names The Wire gives APPLE2's, because `emu360.img` is a category disk with its programs at the root, §24.6, where `README.TXT` is the system's and `COPYING` is C64's and APPLE2's), with `SYSTEM\APPDATA\WIN16\` built beside it (§124.14) |
-| disks | the 1.44MB and 1.2MB apps disks, `more720.img` (the 720KB machine's second, §24.7) and `emu360.img` (the 360KB machine's, §24.6: programs of another system; the three files at its root, the category disks' rule), the everything set (§19.10) and the live media (§80), which carries the everything set's payload. Not in `$(APPSARGS)` itself, which also feeds `kern_mega`'s apps disks |
+| disks | **WIN16's own disk** in all four geometries - `win16.img`, `win16-120.img`, `win16-720.img`, `win16-360.img` - the folder and the profile folder and the rest of the floppy for the user's Windows programs; `emu360.img` (the 360KB machine's, §24.6: programs of another system; the three files at its root, the category disks' rule), the everything set (§19.10) and the live media (§80), which carries the everything set's payload. Not in `$(APPSARGS)`, which also feeds `kern_mega`'s apps disks. **Until S17 batch 4 it rode the 1.44MB and 1.2MB apps disks and `more720.img`**; WIN16.O88 grew to 104 KB, 3 clusters past what the 1.44MB apps disk had left and 4 past `more720.img`, and it grows with each story to S25, so it left them for a disk of its own rather than evict a program each time (the owner's decision, 2026-10-31) |
 | not on | `kern_small`'s disks (§24.5: no `OSAPI_WM_TIMER`) and `kern_mega`'s (WIN16 refuses there, §124.1) |
 | `DOS.O88` | the shipped one hands an NE to WIN16 (§124.1's launch row). `-DDOS_WIN16` is the default for `kern_big` and `kern_emu`, and off for `kern_small` and `kern_mega`, whose disks carry no WIN16 |
 | your programs | `make win16disk WIN3X=<dir>`: a floppy in all four geometries with `WIN16\`, the profile folder, and the NE programs found directly in `<dir>`, in name order, as many as the geometry holds. `PROGRAMS.TXT` on each says which went on and why each other one did not (a library, over 64 KB (R2), or no room). Microsoft's files are read from `<dir>` and never enter the tree |
@@ -228066,7 +228068,7 @@ makes and leaves, then writes a result file. The row reads that file's bytes
 off the floppy image on the host and checks every one, and its message box's
 line. The Notepad leg joins the row in S17.
 
-### 124.22 USER and GDI, the common half *(S17, docs/plans/WIN16-ANY-PLAN.md: batch 1, Notepad, and batch 2, Calendar, shipped)*
+### 124.22 USER and GDI, the common half *(S17, docs/plans/WIN16-ANY-PLAN.md: batches 1-4 - Notepad; Calendar and Cardfile; the PIF Editor, the Task Manager and the Clipboard viewer; Character Map and the screen savers - shipped)*
 
 *As a user, Notepad, Cardfile, Calendar, Character Map, Clipboard and PIF
 Editor run.* What those six share is most of what Windows 3.x's USER and GDI
@@ -228409,6 +228411,143 @@ its window was left as the screen under it had been.
 instance: the viewer empty and white; text copied in Notepad shown when the
 viewer was brought to the front, its Display and Delete enabled; Delete's
 confirmation emptying the clipboard and the viewer.
+
+#### 124.22.14 COMBOBOX and owner-drawn items *(shipped in S17 batch 4)*
+
+A combo box is a field and a LISTBOX, as Windows' was: its list is a real
+WIN16 list box window holding the items, so every list path is the list
+box's own (§124.13), and a `CB_` message is passed on as its `LB_` twin. It
+is template class `85h` or the class name `COMBOBOX`, after Wine's
+`combo.c` in what it does and Windows 3.0's in how it looks (measured off
+the Control Panel's Desktop dialog, `w30-desktop-drop`).
+
+| style | the field | the list |
+|---|---|---|
+| `CBS_SIMPLE` | an EDIT, the combo box's child | the combo box's own child, always shown under it |
+| `CBS_DROPDOWN` | an EDIT, the combo box's child (ID 1001) | dropped by the button or Alt+Down/Up and F4 |
+| `CBS_DROPDOWNLIST` | the selected item, drawn by the combo box, highlighted while it has the focus | the same |
+
+- **The dropped list** is a child of the combo box's TOP-LEVEL window, made
+  hidden, shown on top of its siblings with the pointer captured, and its
+  height the template's `cy` less the field's. It is cut to that top-level
+  window - Windows' was a popup and could hang past it. While it is down,
+  `WM_PAINT` for any window under it waits until it goes up: one rectangle
+  (`w16_cbdr`) is the whole test.
+- **It goes up** on a click in it (`CBN_SELENDOK`), a click outside it,
+  Escape or F4 again (`CBN_SELENDCANCEL`), Enter, and the focus leaving -
+  then `CBN_CLOSEUP`. `CBN_DROPDOWN` comes before it is shown.
+  `CBN_SELCHANGE` comes from the arrow keys on the closed field, as
+  Windows 3.0's did, and from the list while it is down.
+- **Messages:** `CB_ADDSTRING`, `CB_INSERTSTRING`, `CB_DELETESTRING`,
+  `CB_RESETCONTENT`, `CB_GETCOUNT`, `CB_GETCURSEL`, `CB_SETCURSEL`,
+  `CB_GETLBTEXT`, `CB_GETLBTEXTLEN`, `CB_FINDSTRING`, `CB_SELECTSTRING`,
+  `CB_GETITEMDATA`, `CB_SETITEMDATA` (the list's), `CB_SHOWDROPDOWN`,
+  `CB_GETDROPPEDSTATE`, `CB_GETDROPPEDCONTROLRECT`, `CB_SETITEMHEIGHT`,
+  `CB_GETITEMHEIGHT`, `CB_LIMITTEXT`, `CB_GETEDITSEL`, `CB_SETEDITSEL` (the
+  edit's), `WM_SETTEXT`, `WM_GETTEXT` (the field's).
+  **Not done, pinned:** `CB_DIR` answers `CB_ERR`; `CB_FINDSTRINGEXACT` is
+  a prefix find, as `CB_FINDSTRING`; `CB_SETEXTENDEDUI` is taken and
+  changes nothing.
+
+**Owner-drawn items** (`CBS_OWNERDRAWFIXED`, `LBS_OWNERDRAWFIXED`). An item
+is a string handle and a DWORD of data (6 bytes); without
+`HASSTRINGS` an owner-drawn item has no string and its data is what
+`LB_GETTEXT` answers (4 bytes), which is what `FINDSTRING` compares. The
+item height is `WM_MEASUREITEM`'s, sent to the owner for a dialog's control
+before `WM_INITDIALOG` (the `MEASUREITEMSTRUCT` on the program's stack),
+and a combo box's field and its items are each measured.
+
+Windows SENT `WM_DRAWITEM` from inside the control's paint. WIN16's controls
+answer at once and cannot wait on the program (§124.13), so **a paint
+QUEUES what it owes** - an item, its action (`ODA_DRAWENTIRE`, or
+`ODA_SELECT` for the two items a selection moves between) and its state -
+and the message is sent where the program next asks for one: `GetMessage`,
+`PeekMessage` and the modal loop each send what is queued before the next
+message is handed over, a real send with a DC on the control clipped to the
+item and a 26-byte `DRAWITEMSTRUCT` on the program's stack. An entry is a
+window, an action and a range of items, and what a window owes again for
+the same action joins its entry; at most `W16_ODQN` (8) entries are queued,
+and **past that what is owed is dropped** until that window's next paint. A
+drop-down list's field is its selected item drawn the same way; with
+nothing selected it is drawn empty by the combo box. **Not done, pinned:** `WM_COMPAREITEM` and
+`WM_DELETEITEM` (a sorted owner-drawn list without strings keeps the order
+the items came in), and `WM_MEASUREITEM` for a combo box made by
+`CreateWindow` rather than a template (its items are the System font's
+height).
+
+#### 124.22.15 Character Map's calls *(shipped in S17 batch 4)*
+
+| call | answer |
+|---|---|
+| `MulDiv(a, b, c)` | a × b / c in 32 bits, rounded half away from 0; 32767 or -32768 by the sign when it does not fit or c is 0 |
+| `GetCharWidth(hDC, first, last, lpBuffer)` | each character's advance in the System font, a word each; FALSE for a range past 256 |
+| `EnumFontFamilies(hDC, lpszFamily, lpProc, lParam)` | the procedure called ONCE, for the one family WIN16 has - the display's System font, a raster font (`RASTER_FONTTYPE`) - with a `LOGFONT` (its height and average width, bold, `VARIABLE_PITCH \| FF_SWISS`, face `System`) and a `NEWTEXTMETRIC` that is `GetTextMetrics`' answer on the procedure's stack; its answer is the answer. A family named that is not `System` has no faces: nothing is called, and the answer is 1 |
+| `GetTextFace(hDC, n, lp)` | `System`, cut to the buffer; its length |
+| `VkKeyScan(ch)` | the key that types it on the US layout, with Shift (1) or Ctrl (2) in the high byte; -1 for a character no key types |
+| `GetMessagePos()` | where the pointer was when the last message was handed over, the screen's y:x |
+| `GetCursorPos(lpPoint)` | where it is now |
+| `WindowFromPoint(pt)` | the deepest visible window there among this program's: of two top-levels that both hold it, the one made last, which is in front; 0 elsewhere. os8088's other windows are not Windows windows |
+| `DrawFocusRect(hDC, lprc)` | the rectangle's edges INVERTED on the open DC, so a second call takes it off, as Windows' did. **Solid**, where Windows' was dotted: os8088 has no dotted XOR line |
+| `GetWindowDC(hWnd)` | `GetDC`'s: the client's. A program drawing its own frame draws inside the client |
+
+**What Character Map shows here** (QEMU, VGA): its dialog with the
+character grid drawn and the font list - the owner-drawn combo box of
+§124.22.14 - showing *System*, its one item, dropped and picked. Two things
+are pinned:
+
+- **The template asks for `MS Sans Serif` 8** (`DS_SETFONT`), whose dialog
+  units on Windows 3.1's VGA are 7 × 13, measured off `w31-charmap`: its
+  348 × 118 dialog has a 609 × 192 client. WIN16 lays every dialog out in
+  the System font's 8 × 16 (§124.13), so Character Map's window is 696
+  pixels across, wider than the screen, and its buttons are past the right
+  edge. A dialog face for `DS_SETFONT` is the next batch.
+- Characters past 7Eh draw as `?`: WIN16's System font has the ASCII range
+  (§124.7).
+
+#### 124.22.16 The screen savers' setup dialogs, hooks and window origins *(shipped in S17 batch 4)*
+
+The 3.1 savers (`SSSTARS`, `SSMARQUE`, `SSMYST`, `SSFLYWIN`) are programs
+whose whole interface without arguments is their setup dialog. They run as
+programs here - renamed `.EXE`, since os8088 associates `.SCR` with nothing
+- and their dialogs are what S17 targets: os8088 has its own screen saver
+(§79).
+
+| call | answer |
+|---|---|
+| `CreateWindowEx(dwExStyle, ...)` | `CreateWindow` with the rest: its 30 bytes of arguments are the first 30 here, and an extended style changes nothing |
+| `SetWindowOrg(hDC, x, y)` | logical x, y is at the viewport origin; the old one is the answer. In `MM_TEXT` it moves the DC's client origin back by the difference, as `SetViewportOrg` (§124.22.13) moves it forward, and `GetDC`/`BeginPaint` reset it |
+| `Polygon(hDC, lpPoints, n)` | its edges in the pen, the last point joined to the first, the current point left where it was. **The inside is not filled** with the brush, as Windows' is: os8088 has no polygon fill |
+| `GetRasterizerCaps(lp, cb)` | no TrueType: `nSize` 6, `wFlags` 0 |
+| `AnimatePalette`, `GetNearestPaletteIndex` | 0 (the palettes of §124.22.13) |
+| `SetWindowsHook(type, lpfn)` | in front of its type's chain; the one it is in front of is the answer, the program's to call on with `DefHookProc` (0 none). At most `W16_HKMAX` (4) at once; past that it is not hooked and the answer is 0 |
+| `UnhookWindowsHook(type, lpfn)` | out of the chain; TRUE when it was in it |
+| `DefHookProc(code, wParam, lParam, lplpfnNext)` | the next hook, `*lplpfnNext`, called with them and its answer the answer; 0 when there is none |
+
+**`WH_MSGFILTER` is called.** The modal dialog loop hands each message to
+the type's front hook before the dialog sees it - `nCode` `MSGF_DIALOGBOX`,
+`lParam` a copy of the `MSG` on the program's stack - and a TRUE answer
+takes the message; FALSE passes the copy, which the hook may have changed,
+on as the message. The savers hook it for F1. **Every other type is kept
+and answered, not called** (a journal, a keyboard or a `GetMessage` hook);
+the first program that needs one called is where it lands.
+
+**A disabled push button's caption is legible.** Windows 3.0's
+`COLOR_GRAYTEXT` is the button face's own grey, which would draw a disabled
+button's caption into its face; when the two are the same colour on the
+display, the caption is the button shadow's grey instead, as Windows'
+`GrayString` test made it legible. The savers' *Set Password* button is
+disabled until Password Protected is checked.
+
+**What was seen.** On QEMU (VGA): each setup dialog - Starfield's warp
+speed bar and spin field, Marquee's owner-drawn colour list (no strings),
+Mystify's shape list dropped and picked, its two colour lists greyed with
+Two Colors off, Flying Windows' - and Password Protected enabling *Set
+Password* and greying it again. Marquee's Format Text calls `COMMDLG`'s
+`ChooseFont`, which is S18's: it is bound to the missing-import stub
+(§124.12). **A third WIN16 instance did not start**, with Clock and
+Calculator running, on QEMU's 640 KB: the launch shows nothing at all,
+neither a window nor a refusal. Two at once is §124.18.2's case; the third
+is open, to be measured and given its refusal.
 
 #### 124.22.5 The gate
 
