@@ -278,8 +278,9 @@ ITEMS = [
      [("games360.img", "360KB", "")]),
     ("xt", "Emulators disk", True,
      "RealDMG, the Game Boy emulator, with the project's own demo cartridge "
-     "in MEDIA. The other emulators -- the Commodore 64, the Apple II Plus "
-     "and CP/M -- each have a disk of their own below.",
+     "in MEDIA, and WIN16, which runs Windows 3.x programs you put on a "
+     "disk. The other emulators -- the Commodore 64, the Apple II Plus and "
+     "CP/M -- each have a disk of their own below.",
      [("emu360.img", "360KB", "")]),
     ("xt", "Utilities disk", True,
      "System Check, which checks a system disk against this release, the "
@@ -295,8 +296,9 @@ ITEMS = [
     ("x720", "Second software disk, 720KB", True,
      "PiXEL with five of its sample pictures in PICTURES, MIDIRack with "
      "the eight songs the first disk has no room for, RealDMG with its demo "
-     "cartridge, DrMarco and the demo video. MIDIRack is on both software "
-     "disks, so its songs open from either.",
+     "cartridge, WIN16 for Windows 3.x programs, DrMarco and the demo "
+     "video. MIDIRack is on both software disks, so its songs open from "
+     "either.",
      [("more720.img", "720KB", "")]),
 
     ("emu", "Emulator system disk", True,
@@ -467,6 +469,7 @@ PROGRAMS = {
     "PaccMan": ("PACCMAN", "PACCM"),
     "1942": ("1942", "1942"),
     "MIDIRack": ("MIDIRACK", "MIDI"),
+    "WaveRack": ("WAVERACK", "WAVE"),
     "PiXEL": ("PIXEL", "PIXEL"),
     "XTMP3": ("XTMP3", "XTMP3"),
     "Weave": ("WEAVE", "WEAVE"),

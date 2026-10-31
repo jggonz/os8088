@@ -2186,8 +2186,10 @@ FAST = [
         "bitmap, must be the host's instructions and switch tables exactly, "
         "segment by segment, with the same verdict. It failed on S9's "
         "finding (WIN16-PLAN S11): an opcode with a modrm AND an immediate "
-        "was walked short, so FPU.EXE read as 386 code",
-        needs=("nasm", "unicorn")),
+        "was walked short, so FPU.EXE read as 386 code. Its programs are "
+        "`make win16fixtures`'s, which `make clean` removes, so it needs them "
+        "rather than failing a clean tree's `make` on its own SKIP",
+        needs=("nasm", "unicorn", "win16fixtures")),
     Row("w16xsec", "fast", py("tests/unit/t_w16xsec.py"), 3.0,
         "WIN16 is one nasm run emitting the image and its code parts, each at "
         "vstart=0, so a near call from a part to an image label (or back) "
