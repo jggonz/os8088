@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "e06400f24",
+  "stamped": "45b731f6d",
   "strings": "79fb304ab66a9eb0",
-  "why": "S20 batch 7: segment block before cluster cache"
+  "why": "S20 batch 8: load/discard counters"
  },
  "WIN16_TXT": {
   "sources": [
