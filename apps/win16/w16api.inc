@@ -454,6 +454,13 @@ W16EXPORT W16M_GDI,        125,     4,  w16_ans0            ; CreateMetaFile(str
 W16EXPORT W16M_GDI,        126,     2,  w16_ans0            ; CloseMetaFile(word)
 W16EXPORT W16M_GDI,        307,     10, w16_ans0            ; GetCharABCWidths(word word word ptr)
 W16EXPORT W16M_GDI,        439,     32, w16_ans0            ; StretchDIBits(word s_word*8 ptr ptr word long)
+; Write 3.0 (SPEC.md 124.26.7): justification is not applied, no bitmap has a
+; dimension set, and no message is ever sent from another task
+W16EXPORT W16M_GDI,        10,      6,  w16_ans1            ; SetTextJustification(word s_word s_word)
+W16EXPORT W16M_GDI,        162,     2,  w16_ans0            ; GetBitmapDimension(word)
+W16EXPORT W16M_USER,       120,     0,  w16u_msgtime        ; GetMessageTime()
+W16EXPORT W16M_USER,       192,     0,  w16_ans0            ; InSendMessage()
+W16EXPORT W16M_USER,       55,      10, w16u_enumchild      ; EnumChildWindows(word segptr long)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put

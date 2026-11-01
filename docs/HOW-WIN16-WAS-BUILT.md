@@ -2739,3 +2739,42 @@ the image's bss, and it did not. The loader part grew 2 KB, to 14.4 KB, and
 a program with discardable code now keeps it in memory, so a segment loaded
 later binds its imports the same way the launch did. Write still stops at
 *Needs GDI.10*. Its five missing calls are batch 2.
+
+## 2026-11-01 — S20, batch 2: Write opens a document
+
+**Five calls stood between Write and its window.** None was hard.
+`SetTextJustification` accepts and applies nothing. `GetBitmapDimension`
+answers 0, `InSendMessage` FALSE, and `GetMessageTime` reads the time
+already stamped on the last message. `EnumChildWindows` reuses
+`EnumWindows`' callback walk. One bit of the word that resumes the walk
+after each callback says which of the two is running.
+
+**Alt+C did nothing, and the trace said why.** Write's keystrokes go to its
+document window, which is a child of the window with the menu bar.
+`DefWindowProc` correctly made Alt+C into `SC_KEYMENU`, and then started the
+menu loop on the child, which has no menu. Windows looked upward for the
+nearest window that has one. WIN16 now starts the loop on the top-level
+window, a one-instruction fix.
+
+**Then it opened Windows 3.1's `PRINTERS.WRI`.** Write 3.0 reads the 3.1
+file format unchanged. Write's own Open dialog listed the file, and the
+document came up with its headings and paragraph spacing. Page Down paged
+through it. We then rebuilt WIN16 with a 40 KB code budget, a quarter of
+Write's code, and did it again. The document opened and paged while
+segments were thrown away and read back behind it. That is the story's
+sentence, seen on the glass. The `win16write` row that will check it
+automatically is still to come.
+
+**What it showed next is not about memory.** Paging a short document wiped
+the page number and the horizontal scroll bar. The same happened on the
+build without a budget, so discarding was not the cause. The windows did
+not overlap either: the document child was 298 pixels high and the page
+number sat below it. Reading WIN16's state showed the real cause. Write had
+three device contexts open at once, and the one on top was the main
+window's. All four of Write's window classes are `CS_OWNDC`, so each window
+keeps a private DC that the program takes once and never gives back. WIN16
+has one window-DC handle, so every drawing call went to the DC opened last.
+The document's text and Page Down's erase were drawn through the main
+window's DC, which the document's rectangle does not clip. That is the
+next batch: own DCs, each with its own state, swapped in per call the way
+memory DCs already are.

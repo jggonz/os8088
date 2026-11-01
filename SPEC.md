@@ -228363,6 +228363,12 @@ need, because it is the first whose keys go to a CHILD:
   up: the program's own `TranslateMessage` would make a second `WM_SYSCHAR`
   of it, and a second menu loop would open under the first, so one keystroke
   in the menu chose its command twice.
+- **A child's `SC_KEYMENU` opens its window's menu** (S20 batch 2).
+  `DefWindowProc` makes Alt+letter into `WM_SYSCOMMAND` `SC_KEYMENU` for the
+  window it was given, and for a child that is not the window with the menu:
+  Write 3.0's keys go to its document, a child of the window with the menu
+  bar. The menu loop is started on the child's top-level window, as Windows
+  looked for the nearest window with a menu.
 - **Activation gives the focus** (S17 batch 2). `DefWindowProc`'s
   `WM_ACTIVATE` with `WA_ACTIVE` sets the focus to the window unless it is
   in the window already, as Windows' did, and a program's own window is
@@ -229784,7 +229790,33 @@ segment not in use is discarded until the new one fits under it, or none is
 left to discard. The `win16write` row uses it to make Write discard and load
 segments again on a machine that has the room not to.
 
-#### 124.26.7 Not done *(S20 batch 1)*
+#### 124.26.7 Write 3.0's calls *(S20 batch 2)*
+
+Write 3.0 imported five calls WIN16 did not have:
+
+| call | |
+|---|---|
+| `SetTextJustification` (GDI.10) | `TRUE`, and nothing is applied: `TextOut` adds no space to a break character, so a justified paragraph is drawn ragged |
+| `GetBitmapDimension` (GDI.162) | 0: `SetBitmapDimension` sets none |
+| `GetMessageTime` (USER.120) | the time of the last message `GetMessage` or `PeekMessage` handed over, in `GetTickCount`'s milliseconds |
+| `InSendMessage` (USER.192) | `FALSE`: no other task sends one (§124.22) |
+| `EnumChildWindows` (USER.55) | the callback, `(hwnd, lParam)`, for each of the parent's descendants, by `EnumWindows`' walk, until one answers `FALSE`; `TRUE` |
+
+With them Write opens: its menus, its Open dialog and a document. **Seen on
+QEMU's VGA:** Write 3.0 opens Windows 3.1's `PRINTERS.WRI` (44,928 bytes,
+the `BE31` format), lays it out with its headings and paragraph spacing, and
+pages through it with Page Down. With a 40 KB code budget (§124.26.6) it does
+the same while discarding and loading its segments: 249 of its 409 entries'
+thunks were pointing at the loader after the document opened.
+
+**Found, and left for batch 3:** Write's four window classes are all
+`CS_OWNDC`. Each window keeps its own DC for as long as it lives, and Write
+draws through them interleaved, never releasing any. WIN16 has one window DC
+handle (§124.8), so a drawing call meant for the document drew with the DC
+opened last, the main window's, unclipped by the document's rectangle: the
+text and Page Down's erase ran over the page number and the scroll bar.
+
+#### 124.26.8 Not done *(S20 batch 1)*
 
 - A program's own libraries keep their code fixed.
 - A discardable segment of 64 KB is laid out fixed.

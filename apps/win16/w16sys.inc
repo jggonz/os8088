@@ -379,11 +379,20 @@ w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co
 
 ; EnumWindows (USER.54) - args: +0 lParam (long), +4 lpEnumFunc. The
 ; callback for each of the program's top-level windows, (hwnd, lParam), as a
-; call into the program, until one answers FALSE. AX = 1
+; call into the program, until one answers FALSE. AX = 1.
+; EnumChildWindows (USER.55) - args: the same, +8 hWndParent: the callback
+; for each of its descendants instead
 W16LIB w16u_enumwnd
     xor cx, cx
-w16u_enwgo:                         ; CX = the slot to try from
-    push si
+    jmp short w16u_enwgo
+W16LIB w16u_enumchild
+    mov cx, 0x8000
+w16u_enwgo:                         ; CX = the slot to try from, bit 15 set
+    push si                         ;   for EnumChildWindows
+    push di
+    mov di, cx
+    and di, 0x8000                  ; DI = which
+    and cx, 0x7FFF
 .slot:
     cmp cx, W16_MAXWND
     jae .done
@@ -392,8 +401,25 @@ w16u_enwgo:                         ; CX = the slot to try from
     jz .next
     test byte [bx + W16W_FLAGS], W16WF_DYING
     jnz .next
+    or di, di
+    jnz .child
     test word [bx + W16W_STYLE + 2], WS_CHILD_HI
     jnz .next
+    jmp short .take
+.child:
+    push bx
+    ICALL w16_args
+    mov ax, [es:bx + 8]             ; hWndParent
+    pop bx
+    push bx
+    ICALL w16_parent
+    jc .notin                       ; a top-level window
+    ICALL w16_inside                ; CF=1: AX is its parent or above
+    cmc
+.notin:
+    pop bx
+    jc .next
+.take:
     ICALL w16_rec2hwnd              ; AX = it
     push ax
     ICALL w16_args                  ; (before cbopen moves the frame)
@@ -403,6 +429,7 @@ w16u_enwgo:                         ; CX = the slot to try from
     push word [es:bx]
     mov ax, cx                      ; the next slot, the continuation's word
     inc ax
+    or ax, di
     mov si, w16u_enwnext_c
     xor cx, cx
     ICALL w16_cbopen
@@ -422,6 +449,7 @@ w16u_enwgo:                         ; CX = the slot to try from
     pop ax
     pop dx
     ICALL w16_cbcall
+    pop di
     pop si
     ret
 .next:
@@ -430,6 +458,7 @@ w16u_enwgo:                         ; CX = the slot to try from
 .done:
     mov ax, 1
     xor dx, dx
+    pop di
     pop si
     ret
 
@@ -1571,6 +1600,13 @@ W16LIB w16g_charwidth
 W16LIB w16u_msgpos
     mov ax, [w16_msg + MSG_PT]
     mov dx, [w16_msg + MSG_PT + 2]
+    ret
+
+; GetMessageTime (USER.120): when the last message handed over was made,
+; in GetTickCount's milliseconds
+W16LIB w16u_msgtime
+    mov ax, [w16_msg + MSG_TIME]
+    mov dx, [w16_msg + MSG_TIME + 2]
     ret
 
 ; GetCursorPos (USER.17) - args: +0 lpPoint: where the pointer is now

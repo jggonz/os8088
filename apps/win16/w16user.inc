@@ -2387,6 +2387,7 @@ w16u_defproc:
     jne .notkm
     call w16_hwnd2rec
     jc .zero
+    call w16_toplevel               ; a child's is its window's menu (Write's)
     mov dl, 1
     mov dh, [w16_sm_lp]
     LCALL w16_mtbegin

@@ -958,6 +958,33 @@ its table goes in the diary, so the reach is measured, not claimed.
     - What it costs, against S19b: the image 36,193 bytes (+207), bss 27,238
       (+31), **1,593 bytes of room**; the library part 59,941 (+75), the
       loader part 14,412 (+2,023), part 9 unchanged.
+  - [x] **Batch 2: Write's calls** (SPEC.md §124.26.7, §124.11).
+    - Five imports: `SetTextJustification` (TRUE, not applied),
+      `GetBitmapDimension` (0), `GetMessageTime` (the last message's time),
+      `InSendMessage` (FALSE) and `EnumChildWindows`, which shares
+      `EnumWindows`' callback walk, with bit 15 of the continuation word
+      saying which.
+    - **Found:** Alt+letter did nothing in Write. Its keys go to its
+      document window, a child, and `SC_KEYMENU` started the menu loop on
+      that child, which has no menu. It now starts on the top-level window.
+    - **Seen on QEMU's VGA:** Write 3.0 opens with its menus (by mouse and
+      by Alt+letter), types, and opens Windows 3.1's `PRINTERS.WRI` through
+      its own Open dialog. It lays out the headings and paragraphs and pages
+      through them. With `W16_CODEKB=40` it does the same while its segments
+      are discarded and loaded.
+    - **Found, for batch 3:** all four of Write's window classes are
+      `CS_OWNDC`. WIN16 has one window-DC handle, so Write's drawing for its
+      document went through the main window's DC: its text and Page Down's
+      erase ran over the page number and the horizontal scroll bar.
+    - Still seen: the end mark draws as `?`, because the faces stop at 7Eh
+      (§124.7.1); a justified paragraph would be ragged.
+    - **Rows, for S25's pass:** `win16file` and `win16cdlg` (Alt+letter
+      through `DefWindowProc`), `win16reg` and every row whose program
+      calls `EnumWindows`.
+    - Sizes: the image 36,196 (+3), bss unchanged, **1,590 bytes of room**;
+      the library part 60,027 (+86), the loader part 14,457 (+45, 5 rows).
+- [ ] **Batch 3: own DCs** (`CS_OWNDC`, `CS_CLASSDC`), so Write draws
+  each window through its own DC.
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and
