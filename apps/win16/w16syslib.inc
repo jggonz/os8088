@@ -31,6 +31,9 @@ FNERR_BUFFERTOOSMALL equ 0x3003
 PDERR_NODEFAULTPRN   equ 0x1008
 
 section .w16sys follows=.w16ld vstart=0 align=1
+%if ($ - $$) != 0                   ; a file that switched to .w16sys before
+  %error "part 9 does not start with its header: include it after this file"
+%endif                              ;   here would come first in the part
 w16s_base:
     jmp short w16s_gate             ; +0  tools/os88ovl.py: a short jump ...
     db 'W16SYSLB'                   ; +2  ...before the cut mark

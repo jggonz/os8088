@@ -3,6 +3,11 @@
  * WinExecs TASKB.EXE with a command tail and an nCmdShow, then trades
  * messages with it: TASKB posts to this program's window, this program
  * posts to TASKB's task with no window (PostAppMessage), and TASKB answers.
+ * Then it sends to TASKB's window, and TASKB's procedure sends back to this
+ * one before it answers; then TASKB is closed, and this program goes on
+ * with one task. Last, it starts TASKB again with the tail "last" and
+ * ends, so TASKB is left with WIN16's own window: that TASKB puts up the
+ * MessageBox, "TASKS OK" when its own checks pass too (taskb.c).
  *
  * Its MessageBox is "TASKS OK" or names each check that failed; the row
  * win16tasks reads it off the program's stack.
@@ -13,11 +18,14 @@
 #define WM_BHELLO   (WM_USER + 1)       /* TASKB -> here: it has started */
 #define WM_APING    (WM_USER + 2)       /* here -> TASKB's task, no window */
 #define WM_BPONG    (WM_USER + 3)       /* TASKB -> here: the ping's answer */
+#define WM_ASEND    (WM_USER + 4)       /* here -> TASKB's window, sent */
+#define WM_BBACK    (WM_USER + 5)       /* TASKB -> here, sent inside it */
 
 static char res[256];
 static int fails;
 static HWND me, hb;
 static HTASK tb;
+static int backs, waits;
 
 static void check(int ok, const char *tag)
 {
@@ -30,8 +38,12 @@ static void check(int ok, const char *tag)
 
 static void done(void)
 {
+    if (fails == 0 && WinExec("TASKB.EXE last", SW_SHOWNORMAL) >= 32) {
+        DestroyWindow(me);              /* TASKB says it, after this ends */
+        return;
+    }
     if (fails == 0)
-        strcpy(res, "TASKS OK");
+        strcpy(res, "relaunch");
     MessageBox(me, res, "TASKS", MB_OK);
     DestroyWindow(me);
 }
@@ -51,7 +63,22 @@ LRESULT __export CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_BPONG:
         check(wp == 0x55 && lp == 0x66778899L, "pong");
-        done();
+        check(SendMessage(hb, WM_ASEND, 7, 0) == 142, "xsend");
+        check(backs == 1, "nested");
+        PostMessage(hb, WM_CLOSE, 0, 0);
+        SetTimer(hwnd, 1, 200, NULL);
+        return 0;
+    case WM_BBACK:
+        backs++;
+        return 100;
+    case WM_TIMER:
+        if (GetNumTasks() == 1 || ++waits == 20) {
+            KillTimer(hwnd, 1);
+            check(GetNumTasks() == 1, "ended");
+            check(!IsWindow(hb), "itswnd");
+            check(!IsTask(tb), "itstask");
+            done();
+        }
         return 0;
     case WM_DESTROY:
         PostQuitMessage(0);

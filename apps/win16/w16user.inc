@@ -24,6 +24,7 @@ W16C_HBR    equ 22
 W16C_WEXTRA equ 24
 W16C_MENU   equ 26              ; far: lpszMenuName (SPEC.md 124.11)
 W16C_ICON   equ 30              ; hIcon: a minimized MDI child's (124.27.5)
+CS_GLOBALCLASS_HI equ 0x40      ; CS_GLOBALCLASS (0x4000), the high byte's
 
 ; --- a window ------------------------------------------------------------------
 W16W_FLAGS  equ 0               ; W16WF_*
@@ -354,6 +355,17 @@ w16_findcls:
 .cls:
     cmp byte [bx + W16C_NAME], 0
     je .next
+    test byte [bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI
+    jnz .any                        ; a task's class is its own, unless it
+    mov si, W16_MAXCLS              ;   is global (SPEC.md 124.28.3)
+    sub si, cx
+    mov al, [w16_ctask + si]
+    or al, al
+    jz .any
+    dec ax
+    cmp al, [w16_cur]
+    jne .next
+.any:
     mov si, w16_namebuf
     lea di, [bx + W16C_NAME]
     push cx
@@ -1313,6 +1325,11 @@ w16_isctl:
 w16_sendwnd:
     call w16_isctl
     jnc .ctl
+    cmp byte [w16_ntk], 2
+    jb .own
+    SCALL w16t_xsend                ; CF=0 another task's, and answered
+    jnc .ret                        ;   (SPEC.md 124.28.6)
+.own:
     push di
     push es
     xor cx, cx
@@ -1331,6 +1348,16 @@ w16_sendwnd:
     pop ax
     call si
     pop es
+.ret:
+    ret
+
+; w16_cont_xs - a send from another task answered (w16t_xsend): the answer
+; kept where the switch back leaves it, and the import this task waited in
+; waiting again
+w16_cont_xs:
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], dx
+    mov byte [w16_pend], 1
     ret
 
 ; w16_sendgo - push [w16_sm_*] as the procedure's arguments and enter it,
@@ -1457,7 +1484,8 @@ w16u_dispatch:
     pop si
     jmp w16_sendgo
 .wnd:
-    call w16_hwnd2rec
+    mov ax, [w16_sm_hwnd]           ; (a WM_TIMER came here with AX = its
+    call w16_hwnd2rec               ;   lParam, 0: it reached no window)
     jc .no
     push si
     mov si, w16_cont_ret

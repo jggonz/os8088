@@ -7,9 +7,11 @@
 ; (SEG_WIN): one at a time, on a paragraph below 1 MB, 64 KB at most. The
 ; kern_mega arm's alone; hooked with int 21h (w16_i21_on) and entered as an
 ; int on the program's stack, IF = 0, every register the program's. The
-; kernel's calls are made on the UI task's stack, as the DOS forward's are
-; (w16_i21dos): kern_mega's own code reads its tables through SS. LSL and LAR
-; are 286 instructions: the arm runs on nothing older.
+; image keeps only the entry: it moves to the UI task's stack, as the DOS
+; forward does (w16_i21dos) - kern_mega's own code reads its tables through
+; SS - and SCALLs the functions, which are the system-library part's
+; (124.24.1). LSL and LAR are 286 instructions: the arm runs on nothing
+; older.
 ; =============================================================================
 
 W16_I31FL   equ 8                   ; [bp+]: the int's FLAGS, past BP, DS, IP, CS
@@ -28,6 +30,28 @@ w16_i31:
     mov [w16_i31sp], sp
     mov ss, [w16_hss]
     mov sp, [w16_hsp]
+    push word [w16_hflags]          ; interrupts as the host has them: the
+    popf                            ;   part may be read from the disk
+    cld
+    SCALL w16_i31b                  ; CF = the answer, AX its code
+    cli
+    mov ss, [w16_i31ss]
+    mov sp, [w16_i31sp]
+    jc .err
+    and byte [bp + W16_I31FL], 0xFE
+    jmp short .out
+.err:
+    or byte [bp + W16_I31FL], 1
+.out:
+    pop bp
+    pop ds
+    iret
+
+section .w16sys
+
+; w16_i31b - the function in AX, every other register the program's: CF=0
+; done, CF=1 AX = DPMI's error code
+w16_i31b:
     cmp ax, 0x0400
     je .ver
     cmp ax, 0x0500
@@ -44,25 +68,17 @@ w16_i31:
     mov bl, al
     xor bh, bh
     shl bx, 1
-    mov ax, [w16_i31tab + bx]
+    mov ax, [cs:w16_i31tab + bx]    ; XSEC-OK: the part's own table, at cs:
     pop bx
     jmp ax
 .bad:
     mov ax, 0x8001                  ; unsupported function
 .err:
-    mov ss, [w16_i31ss]
-    mov sp, [w16_i31sp]
-    or byte [bp + W16_I31FL], 1
-    pop bp
-    pop ds
-    iret
+    stc
+    ret
 .ok:
-    mov ss, [w16_i31ss]
-    mov sp, [w16_i31sp]
-    and byte [bp + W16_I31FL], 0xFE
-    pop bp
-    pop ds
-    iret
+    clc
+    ret
 
 .alloc:                             ; 0000h: CX = 1 -> AX = a descriptor
     cmp cx, 1
@@ -275,6 +291,8 @@ w16_i31win:
     ret
 
 w16_i31tab:
-    dw w16_i31.alloc, w16_i31.free, w16_i31.bad, w16_i31.incr
-    dw w16_i31.bad, w16_i31.bad, w16_i31.getb, w16_i31.setb
-    dw w16_i31.setl, w16_i31.bad, w16_i31.alias, w16_i31.desc
+    dw w16_i31b.alloc, w16_i31b.free, w16_i31b.bad, w16_i31b.incr
+    dw w16_i31b.bad, w16_i31b.bad, w16_i31b.getb, w16_i31b.setb
+    dw w16_i31b.setl, w16_i31b.bad, w16_i31b.alias, w16_i31b.desc
+
+section .text

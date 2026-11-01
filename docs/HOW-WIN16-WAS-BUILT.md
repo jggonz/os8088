@@ -3470,3 +3470,78 @@ before its first library call; that is noted for the lead.
     the fixture asks only that a block is not done as it is written.
 - With no card: "0 wrong, waveOut 0": `waveOutOpen` answered
   `MMSYSERR_BADDEVICEID` and `sndPlaySound` answered FALSE.
+
+## 2026-11-01 — S21, batch 3: talking across, and leaving
+
+**A message sent to another program has to run on that program's own
+stack.** Windows programs assume their stack and their data are the same
+segment, so calling TASKB's window procedure on TASKS's stack would hand it
+pointers into the wrong memory. Instead TASKS's call parks TASKS, makes
+TASKB current, and runs TASKB until its window procedure returns. Then it
+swaps TASKS back with the answer, all inside TASKS's one call. TASKB's
+procedure can send back to TASKS in the middle of that, and it does in the
+test: the answer is 7 × 6 + 100.
+
+**Ending one program means knowing what was its.** Windows, classes and
+timers already had their owner byte from batch 1. Memory was harder. Many
+parts of WIN16 allocate from the shared heap: menus, the clipboard,
+libraries, the program's code segments. Marking all of it with the program
+that happened to be running would free a library another program still
+uses. So ownership is opt-in: only what the program itself asked for
+(`GlobalAlloc`) carries its mark. The worst a missed mark can do is leak a
+block until WIN16 closes.
+
+**The test found a bug from two weeks earlier, and not in the new code.**
+After TASKB ended, TASKS waited for its timer and never heard it. A
+debugger breakpoint on `DispatchMessage` showed it called every time but
+never calling the window. The timer check had loaded the message's lParam
+into the register that names the window, and with no TimerProc that was
+zero. Since S15, a timer on a window had reached nobody, Clock's second
+hand included. It is one instruction.
+
+**The last surprise was a program nobody had started yet.** TASKS's
+final act is to start TASKB again and then quit. When TASKS ended, the
+only task left was one that had never run, and the turns only ever looked
+at the others. So the end of a task now runs the turns itself, and a task
+that has never run is the one current task they will start. That second
+TASKB takes over WIN16's own window: the title bar now says *Task B*.
+
+## 2026-11-01: merging S21 batch 3 into the protected-mode arm
+
+The lead's batch 3 came into Phase B/C as a merge, and the arm came out of
+it 86 bytes over `APP_MAX_SIZE`. Room is 65,024 bytes less the image and
+its bss. Before the merge the arm had 77 left, not the 589 I had written
+down: I had measured against 65,536.
+
+The bytes came back by moving the `int 31h` functions (`w16_i31b`) into the
+system-library part. The image keeps only the stub that changes stacks and
+sets CF, which leaves 330 bytes of room.
+
+**A discovery: a part's first byte is its header.** After that move, SELTEST
+and MMTEST both stopped with *kern_mega FAULT 0D* in `RegQueryValue`, which
+neither program calls.
+- `w16i31.inc` was included before `w16syslib.inc`. So its
+  `section .w16sys` came before the line that declares the part
+  (`follows=.w16ld vstart=0`), and its 426 bytes landed ahead of the part's
+  header.
+- `os88ovl.py` cuts the part at the header, so in memory every handler sat
+  426 bytes away from the offset the image called. SELTEST's first int 31h
+  call landed in the middle of `RegQueryValue`.
+- `w16syslib.inc` now refuses to assemble when anything comes before its
+  header, and the include sits beside `w16sel.inc`. The old order fails with
+  *part 9 does not start with its header*.
+
+Three of batch 3's new segment loads needed the arm's conversions:
+- `w16t_gfree` walks the arenas: `W16SEG es, bx`.
+- `w16t_codefree` reads the code list: `W16SEG es, [w16_clive]`.
+- `w16t_end` frees a context block by handle: `W16VOF ax, es`.
+
+The new GH_TASK byte took offset 10. The arm's tile fields (`GH_TN`,
+`GH_TSEL`, `GH_TVP`) moved to 11 through 15 of the 16-byte header.
+
+**Seen**, dev kern_mega, QEMU 486:
+- SELTEST: "seltest: 0 wrong, flags 0415, WIN16 at 00F9CC00".
+- MMTEST with an SB16: "0 wrong, waveOut 1, step 1 ms, played 491 ms".
+- TASKS with TASKB: "TASKS OK".
+
+The real-mode `win16.bin` is byte-identical to the lead's tip.

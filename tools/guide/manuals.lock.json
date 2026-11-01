@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "7a47dce34",
-  "strings": "b983c178120b2992",
-  "why": "S23 batch 2: waveOut and sndPlaySound in the kern_mega arm"
+  "stamped": "23c2e5d40",
+  "strings": "17f273ce17c30db0",
+  "why": "S21 batch 3: tasks talk and end"
  },
  "WIN16_TXT": {
   "sources": [

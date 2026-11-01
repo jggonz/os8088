@@ -866,7 +866,7 @@ w16_ptile:
     shr bx, cl                      ; BX = the tiles
     cmp word [es:GH_TSEL], 0
     je .new
-    cmp [es:GH_TN], bx
+    cmp [es:GH_TN], bl
     jne .new
     cmp [es:GH_TVP], ax
     jne .new
@@ -886,7 +886,7 @@ w16_ptile:
     jc .no
     pop ax
     mov [es:GH_TSEL], dx
-    mov [es:GH_TN], bx
+    mov [es:GH_TN], bl
     mov [es:GH_TVP], ax
     mov ax, dx
     jmp short .out

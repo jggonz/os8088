@@ -49,9 +49,13 @@ GH_HANDLE equ 4                 ; what GlobalAlloc answered for it
 GH_OWNER  equ 6                 ; a resource's entry offset (w16res.inc), or 0
 GH_MAGIC  equ 8
 GH_SIG    equ 0x4857            ; 'WH'
-GH_TSEL   equ 10                ; the kern_mega arm's: a block over 64 KB's
-GH_TN     equ 12                ;   first SEG_TILE selector (0 = none yet),
-GH_TVP    equ 14                ;   its count, and where it was made (124.31.6)
+GH_TASK   equ 10                ; the task whose end frees it, + 1; 0 = none's
+                                ;   (WIN16's own, or GMEM_DDESHARE: 124.28.3)
+GMEM_DDESHARE_HI equ 0x20       ; GMEM_DDESHARE (0x2000), the high byte's
+GH_TN     equ 11                ; the kern_mega arm's: a block over 64 KB's
+GH_TSEL   equ 12                ;   SEG_TILE count (a byte), its first
+GH_TVP    equ 14                ;   selector (0 = none yet), and where it was
+                                ;   made (124.31.6)
 
 GHF_USED  equ 1
 GHF_MOVE  equ 2
@@ -123,6 +127,7 @@ w16_gnew:
 .got:
     W16SEG es, ax                      ; ES = the header
     mov byte [es:GH_LOCK], 0
+    mov byte [es:GH_TASK], 0        ; nobody's until w16_gmine
     mov word [es:GH_OWNER], 0
 %ifdef PKG_MEGA
     mov word [es:GH_TSEL], 0
@@ -643,6 +648,21 @@ w16_gtouch:
 .ret:
     ret
 
+; w16_gmine - DX = a block's data: the current task's, freed when it ends
+; (SPEC.md 124.28.3). Keeps every register
+w16_gmine:
+    push ax
+    push es
+    dec dx
+    W16SEG es, dx
+    mov al, [w16_cur]
+    inc ax
+    mov [es:GH_TASK], al
+    inc dx
+    pop es
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; w16_gdiscard - free every loaded resource block nobody is using (SPEC.md
 ; 124.9's "out of memory" rule). CF=1 there was none. Keeps all.
@@ -747,6 +767,12 @@ w16k_galloc:
     call w16_gnew
     or ax, ax
     jz .short
+    test ch, GMEM_DDESHARE_HI       ; the program's, freed when it ends -
+    jnz .own                        ;   unless it is to be shared (124.28.3)
+    or dx, dx
+    jz .own
+    call w16_gmine
+.own:
     cmp ax, W16_GH0                 ; a moveable handle's entry: used now,
     jb .out                         ;   and marked if it may be discarded.
     cmp ax, W16_GH0 + 2 * W16_NGH   ;   A fixed one IS its segment, above
