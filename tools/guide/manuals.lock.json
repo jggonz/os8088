@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "45b731f6d",
-  "strings": "79fb304ab66a9eb0",
-  "why": "S20 batch 8: load/discard counters"
+  "stamped": "9c4b56970",
+  "strings": "53edf1be5af48333",
+  "why": "S20b batch 1: calls around MDI"
  },
  "WIN16_TXT": {
   "sources": [
