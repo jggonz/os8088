@@ -226937,7 +226937,7 @@ a load from inside a paint is legal.
 |---|---|
 | `FindResource` | a type and a name, each an integer (`MAKEINTRESOURCE`, or a string `"#123"`) or a case-blind string; the HRSRC is the entry's offset in the kept table, as real-mode Windows' was |
 | `LoadResource` | the entry's own `handle` and `usage` words (the NE NAMEINFO's, which is what Windows used them for) cache the block: a second load answers the same handle |
-| `LockResource`, `FreeResource`, `SizeofResource` | `GlobalLock`; the usage lowered, and at 0 the block is kept until memory is short (§124.9); the length |
+| `LockResource`, `FreeResource`, `SizeofResource` | `GlobalLock`; the usage lowered, and at 0 the block is freed, so the next `LoadResource` reads the file again - a program may have written into it, and File Manager 3.0 does (§124.27.1). WIN16's own uses of a resource (a dialog, a menu, a bitmap) keep a block at 0 until memory is short (§124.9); the length |
 | `LoadString` | `RT_STRING` block `id / 16 + 1`, the string `id mod 16`; at most `cchMax - 1` bytes and a NUL; the length |
 | `LoadAccelerators`, `TranslateAccelerator` | the table's five-byte entries (flags, key, ID); a `WM_KEYDOWN` or `WM_SYSKEYDOWN` meets the `FVIRTKEY` entries with the Shift, Ctrl and Alt state the BIOS reports, a `WM_CHAR` the others. A match is SENT as `WM_COMMAND` with `lParam` high word 1, unless its ID is a greyed item of the window's menu |
 | `LoadCursor`, `SetCursor`, `ShowCursor` | a handle that is not NULL, and the arrow. `LoadIcon` is §124.18.4's |
@@ -230055,3 +230055,81 @@ of their own (`W16_SEGROW`), and the loader writes the value from
 `w16l_segv` in part 5.
 
 `W16_MAXCLS` is 12, up from 8: File Manager registers nine classes.
+
+**A program's `FreeResource` frees.** File Manager 3.0 locks each of its
+toolbar bitmaps, finds the colour-table entry that is pure blue (`FF 00 00`)
+and writes the window colour over it, then frees the resource and loads it
+again for the next bitmap. Its search for the blue has no bound, so when a
+cached copy came back already recoloured it looped forever. The program's
+`FreeResource` that takes a block's usage to 0 now frees the block, so the
+next `LoadResource` reads the file again, as Windows' did. WIN16's own uses
+(a dialog, a menu, a bitmap it loads for the program) still leave a block
+cached until memory is short (124.9).
+
+#### 124.27.2 The client and its children *(S20b batch 2)*
+
+`MDICLIENT` is one of WIN16's classes, as `SCROLLBAR` and `COMBOBOX` are
+(kind `W16Q_MDI`). Its state is in the record's 18 control bytes: the
+`CLIENTCREATESTRUCT`'s Window menu and first child ID, the active child, the
+count of children, and whether the Window menu has its separator. Its
+background is `COLOR_APPWORKSPACE`. Its scroll bars start hidden, their range
+empty, as Windows' were until a child reached past the client.
+
+| message | what it does |
+|---|---|
+| `WM_MDICREATE` | `CreateWindow` with the `MDICREATESTRUCT`'s class, title, place, size and style, called back through the program's stack (124.2.2) with its 30 bytes of arguments, so the program's window procedure sees `WM_CREATE` as it would. The style adds `WS_CHILD`, `WS_CLIPSIBLINGS`, a caption, a thick frame, a system menu and both boxes. The ID is the next after the last child's. `CW_USEDEFAULT` is Windows' stagger (`MDI_CalcDefaultChildPos`). The new child is made the active one, and its `HWND` is the answer |
+| `WM_MDIDESTROY` | `DestroyWindow`, called back the same way. The IDs close up, the Window menu is made again, and the top child left becomes the active one |
+| `WM_MDIACTIVATE` | the child is raised, `WM_MDIACTIVATE` goes to the one leaving (wParam FALSE) and to it (TRUE) with lParam the new and the old, and it takes the focus. Both captions are repainted |
+| `WM_MDINEXT` | the top child below the active one, which goes to the bottom; with lParam not 0 the bottom one |
+| `WM_MDIGETACTIVE` | the active child |
+| `WM_MDISETMENU` | the frame's menu, the Window menu or both replaced, and the list put in the Window menu again; the old frame menu is the answer |
+
+**The Z order is `W16W_SEQ`.** A child raised gets the next sequence number.
+Inside an MDI client the pointer finds the higher one where two overlap. A
+left press on a child that is not active posts `WM_MDIACTIVATE` to its client
+first, as Windows activated a child clicked. A press on its frame or caption
+belongs to the child and is not passed to the program.
+
+**The Window menu** ends in a separator and `&1 title` for each child in ID
+order, at most nine, the active one checked. A command from it activates
+that child (`DefFrameProc`, 124.27.4).
+
+#### 124.27.3 The frame and the caption *(S20b batch 2)*
+
+A program's child with `WS_THICKFRAME` has a frame 4 pixels wide, and one
+with `WS_CAPTION` a caption `SM_CYCAPTION - 1` high, in the geometry
+everything else reads: its client's origin and size, its window rectangle,
+what is invalidated with it. Both are drawn where its scroll bars are, when
+the non-client area is owed (124.22.1). They are measured off Windows 3.0's
+Program Manager on VGA:
+
+- **The frame:** a black line, two lines of `COLOR_ACTIVEBORDER` (or
+  `COLOR_INACTIVEBORDER` for a child that is not active), and a black line.
+- **The caption:** the frame's width in, `COLOR_ACTIVECAPTION` (or
+  `COLOR_INACTIVECAPTION`), with a black line under it. The title is
+  centred in the room the boxes leave, in `COLOR_CAPTIONTEXT` when active
+  and `COLOR_WINDOWTEXT` when not, and is cut to fit.
+- **The boxes** are squares as high as the caption's face, with a black
+  line between each and the title. The system-menu box at the left is
+  `COLOR_BTNFACE` with a black bar 7 by 3, its middle row white, shadowed
+  right and below. The maximize and minimize boxes at the right have a white
+  top and left edge, two lines of `COLOR_BTNSHADOW` right and below, and an
+  arrow 1, 3, 5 and 7 pixels wide, up or down.
+
+**The client paints before its children.** `MDICLIENT` is
+`WS_CLIPCHILDREN`, but WIN16's clip is one rectangle, and it can only cut
+out a child that spans a side (124.20.4). So the client's `WM_PAINT`
+invalidates every child under it, frame and caption included, and they are
+drawn after it, as a parent that is not `WS_CLIPCHILDREN` does (124.22.6).
+
+#### 124.27.4 The default procedures and the keys *(S20b batch 2)*
+
+| call | what it adds to `DefWindowProc` |
+|---|---|
+| `DefFrameProc` | with an MDI client: a `WM_COMMAND` whose ID is in the Window menu's list activates that child; `WM_SIZE` makes the client the frame's whole client; `WM_SETFOCUS` gives the focus to the active child, or to the client when there is none. Everything else is `DefWindowProc`'s, for the frame |
+| `DefMDIChildProc` | `WM_CLOSE` destroys the child as `WM_MDIDESTROY` does; `WM_CHILDACTIVATE`, and `WM_SETFOCUS` on a child that is not active, make it the active one; `SC_NEXTWINDOW` and `SC_PREVWINDOW` are `WM_MDINEXT` |
+| `TranslateMDISysAccel` | a key down with Ctrl held: F4 sends the active child `WM_SYSCOMMAND` `SC_CLOSE`; F6 and Tab send `SC_NEXTWINDOW`, or `SC_PREVWINDOW` with Shift. The answer is TRUE, and the program neither translates nor dispatches the key |
+
+`CreateWindow` and `DestroyWindow` are called back through fixed bind slots
+6 and 7 (`W16_CWROW`, `W16_DWROW`), as the controls' own calls are: the
+program may not have imported them.

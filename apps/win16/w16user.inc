@@ -86,6 +86,7 @@ W16Q_LIST   equ 4
 W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
 W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
 W16Q_COMBO  equ 7               ; the COMBOBOX control (SPEC.md 124.22.14)
+W16Q_MDI    equ 8               ; MDICLIENT (SPEC.md 124.27.2), part 9's
 
 ; --- owner-drawn items owed (SPEC.md 124.22.14, w16combo.inc) -----------------
 W16_ODQN    equ 8               ; the queue's entries: a window, its items
@@ -2160,10 +2161,13 @@ w16u_beginpaint:
 ; w16_pkids - BX = a window being painted, [w16_prc] its rcPaint: its
 ; children under it invalid, unless it is WS_CLIPCHILDREN - they are drawn
 ; after it, so it cannot draw over them (SPEC.md 124.22.6). Keeps every
-; register.
+; register. w16_pkidsall does it whatever the style: an MDI client is
+; WS_CLIPCHILDREN, and one rectangle cannot have its children's holes
+; (SPEC.md 124.27.3).
 w16_pkids:
     test word [bx + W16W_STYLE + 2], WS_CLIPCH_HI
-    jnz .ret
+    jnz w16_pkidsall.ret
+w16_pkidsall:
     push ax
     push cx
     push dx
@@ -2694,7 +2698,7 @@ w16_mouse:
     cmp word [w16_sbtrk], 0         ; a scroll bar's press: all of it the
     je .nsb                         ;   bar's (SPEC.md 124.22.1)
     LCALL w16_sbmouse
-    jmp short .out
+    jmp .out
 .nsb:
     mov ax, [w16_capture]           ; the capture's, while there is one
     or ax, ax
@@ -2719,6 +2723,11 @@ w16_mouse:
 .have:
     cmp word [w16_sm_msg], WM_LBUTTONDOWN
     jne .nbar
+    cmp byte [w16_mdion], 0         ; inside an MDI child: it is made the
+    je .nmdi                        ;   active one, and its frame's press
+    SCALL w16i_press                ;   is its own (SPEC.md 124.27.4)
+    jnc .out
+.nmdi:
     cmp byte [bx + W16W_KIND], W16Q_SCROLL
     je .sbar
     test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI

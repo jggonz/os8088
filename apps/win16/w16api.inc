@@ -528,6 +528,9 @@ W16EXPORT W16M_USER,       434,     2,  w16i_isalnum        ; IsCharAlphaNumeric
 W16EXPORT W16M_USER,       437,     6,  w16i_upbuff         ; AnsiUpperBuff(str word)
 W16EXPORT W16M_USER,       455,     6,  w16i_iconid         ; GetIconID(word long)
 W16EXPORT W16M_USER,       456,     4,  w16i_ichandler      ; LoadIconHandler(word word)
+W16EXPORT W16M_USER,       445,     12, w16i_defframe       ; DefFrameProc(word word word word long)
+W16EXPORT W16M_USER,       447,     10, w16i_defchild       ; DefMDIChildProc(word word word long)
+W16EXPORT W16M_USER,       451,     6,  w16i_mdiaccel       ; TranslateMDISysAccel(word ptr)
 W16EXPORT W16M_USER,       458,     2,  w16_ans1            ; DestroyCursor(word)
 W16EXPORT W16M_USER,       464,     12, w16_ans0            ; DragObject(word word word word word word)
 ; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
@@ -785,7 +788,7 @@ W16EXPORT W16M_SHELL,      22,      12, w16sh_about         ; ShellAbout(word st
 W16_NX equ W16NX                  ; the rows, as a symbol: the loader part is
                                   ;   read before this file (SPEC.md 124.19.1)
 
-; The six slots the image names its stubs by (SPEC.md 124.19.1): rows of the
+; The eight slots the image names its stubs by (SPEC.md 124.19.1): rows of the
 ; bind table no program's import table can reach, written by w16_bindinit
 ; before the first import is bound. Emitted with the rows (win16.asm's end).
 %macro W16FIXED 2               ; argument bytes, handler
@@ -800,6 +803,8 @@ W16FIXED 0,  w16x_lacks         ; W16_X87ROW: an x87 instruction it lacks
 W16FIXED 10, w16u_defdlgproc    ; W16_DDPROW: DefDlgProc (W16_XDDP's handler)
 W16FIXED 0,  w16_lmgo           ; W16_LMROW: the libraries' LibMain (124.23.4)
 W16FIXED 0,  w16_segld          ; W16_SLROW: a discarded segment's thunk (124.26.2)
+W16FIXED 30, w16u_createwnd     ; W16_CWROW: CreateWindow, for WM_MDICREATE
+W16FIXED 2,  w16u_destroywnd    ; W16_DWROW: DestroyWindow, for WM_MDIDESTROY
 %if W16NF != W16_NFIXED
   %error "W16FIXED: one row a fixed slot"
 %endif

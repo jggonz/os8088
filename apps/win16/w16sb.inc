@@ -564,6 +564,16 @@ w16_ncpaint:
     and byte [bx + W16W_F2], ~W16W2_NCDIRTY
     push ax
     push cx
+    ICALL w16_bord                  ; a thick frame or a caption: an MDI
+    cmp ax, 4                       ;   child's, drawn first by part 9
+    je .mdi                         ;   (SPEC.md 124.27.3) - which is not
+    ICALL w16_capt                  ;   fetched for a window without one
+    or ax, ax
+    jz .nomdi
+.mdi:
+    mov word [w16_sfn], w16i_ncpaint
+    ICALL w16_scall
+.nomdi:
     xor cl, cl
     mov al, SB_VERT
     call w16_sbdraw

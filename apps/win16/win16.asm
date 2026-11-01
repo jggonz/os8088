@@ -98,13 +98,15 @@ W16_NBIND    equ 384            ; bind slots: the distinct imports a program
                                 ;   Paintbrush 3.1's 270 is the most measured
 W16_NCBF     equ 4              ; registered clipboard formats at most
 W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
-W16_NFIXED   equ 6              ; ...slots 0-5 are the image's own:
+W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
 W16_X87ROW   equ 2              ;   the emulator's missing instruction,
 W16_DDPROW   equ 3              ;   DefDlgProc, a dialog class's procedure,
 W16_LMROW    equ 4              ;   the libraries' LibMain (124.23.4),
-W16_SLROW    equ 5              ;   and a discarded segment's thunk (124.26.2)
+W16_SLROW    equ 5              ;   a discarded segment's thunk (124.26.2),
+W16_CWROW    equ 6              ;   and CreateWindow and DestroyWindow, which
+W16_DWROW    equ 7              ;   MDICLIENT calls back through (124.27.2)
 W16_NLIB     equ 8              ; a program's own libraries loaded at once
 W16_LDEPTH   equ 4              ; ...and how deep one may import another
 W16L_NAME    equ 0              ; a library's record (SPEC.md 124.23.2): its
@@ -792,6 +794,9 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_pfosw, 2         ; the os8088 window being painted (w16_ppaint)
     W16BSS w16_inmodal, 1       ; the innermost modal dialog's slot + 1
     W16BSS w16_seq, 2           ; the next window's W16W_SEQ
+    W16BSS w16_mdion, 1         ; 1 = an MDICLIENT was made (SPEC.md 124.27)
+    W16BSS w16i_aold, 2         ; MDI activation's chain: the child leaving,
+    W16BSS w16i_acli, 2         ;   and the client (w16mdi.inc)
     W16BSS w16_inprog, 1        ; 1 = between a resume and its return
     ; --- the dialog part's (w16dlg.inc): it has no bss of its own
     W16BSS w16d_sbuf, W16D_SBUF ; a control's text, as drawn

@@ -82,18 +82,40 @@ w16_osw2rec:
     clc
     ret
 
-; w16_bord - BX = a record -> AX = its border: 1 for a program's child with
-; WS_BORDER, else 0 (a top-level window's frame is os8088's, and WIN16's
-; controls draw their own inside their rectangle). Keeps the rest.
+; w16_bord - BX = a record -> AX = its border: for a program's child, 4 with
+; WS_THICKFRAME (an MDI child's, SPEC.md 124.27.3) and 1 with WS_BORDER, else
+; 0 (a top-level window's frame is os8088's, and WIN16's controls draw their
+; own inside their rectangle). Keeps the rest.
 w16_bord:
     xor ax, ax
     cmp byte [bx + W16W_KIND], W16Q_PROG    ; WIN16's controls draw their own
     jne .out
     test word [bx + W16W_STYLE + 2], WS_CHILD_HI
     jz .out
+    test word [bx + W16W_STYLE + 2], WS_THICKFRAME_HI
+    jz .thin
+    mov al, 4
+    ret
+.thin:
     test word [bx + W16W_STYLE + 2], WS_BORDER_HI
     jz .out
     inc ax
+.out:
+    ret
+
+; w16_capt - BX = a record -> AX = the caption above its client: SM_CYCAPTION
+; less a border ([w16_capn]) for a program's child with WS_CAPTION, an MDI
+; child's (SPEC.md 124.27.3), else 0. Keeps the rest.
+w16_capt:
+    call w16_bord                   ; (0 for all but a program's child)
+    or ax, ax
+    jz .out
+    mov ax, [bx + W16W_STYLE + 2]
+    and ax, WS_CAPTION_HI
+    cmp ax, WS_CAPTION_HI
+    mov ax, 0
+    jne .out
+    mov ax, [w16_capn]
 .out:
     ret
 
@@ -129,7 +151,7 @@ w16_sbcut:
 ; w16_ncmark - BX = a record: its scroll bars owed, if it has any. Keeps
 ; every register.
 w16_ncmark:
-    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI | WS_CAPTION_HI | WS_THICKFRAME_HI
     jz .out
     or byte [bx + W16W_F2], W16W2_NCDIRTY
 .out:
@@ -194,6 +216,9 @@ w16_origin:
 .w:
     mov si, [bx + W16W_CY]
     sub si, ax
+    sub si, ax
+    call w16_capt                   ; ...and under its caption
+    add dx, ax
     sub si, ax
     jge .h
     xor si, si
@@ -328,6 +353,13 @@ w16_hittest:
     jge .n
     or di, di
     jz .take
+    cmp byte [bx + W16W_KIND], W16Q_MDI ; an MDI client's: the one on top
+    jne .size                       ;   (SPEC.md 124.27.4)
+    mov ax, [si + W16W_SEQ]
+    cmp ax, [di + W16W_SEQ]
+    jb .n
+    jmp short .take
+.size:
     mov ax, [si + W16W_CX]
     add ax, [si + W16W_CY]
     mov dx, [di + W16W_CX]
@@ -444,6 +476,10 @@ w16_invaltree:
     add ax, [w16_ivb]
     mov cx, [bx + W16W_Y]
     add cx, [w16_ivb]
+    push ax
+    call w16_capt
+    add cx, ax
+    pop ax
     mov dx, [bp + 6]
     sub dx, ax
     mov si, [bp + 4]
@@ -1122,9 +1158,10 @@ w16_builtin:
     inc al
     cmp al, W16Q_LIST
     jbe .c
-    mov si, w16_bisb                ; SCROLLBAR and COMBOBOX, longer: each
-    mov al, W16Q_SCROLL             ;   with its NUL
+    mov si, w16_bisb                ; SCROLLBAR, COMBOBOX and MDICLIENT,
+    mov al, W16Q_SCROLL             ;   longer: ten bytes each
 .long:
+    push si
     mov di, w16_namebuf
     mov cx, 10
 .sb:
@@ -1134,14 +1171,15 @@ w16_builtin:
     inc si
     inc di
     loop .sb
+    pop si
     clc
     jmp short .out
 .nl:
-    cmp al, W16Q_COMBO
-    je .no
-    mov si, w16_bicb
-    mov al, W16Q_COMBO
-    jmp short .long
+    pop si
+    add si, 10
+    inc al
+    cmp al, W16Q_MDI
+    jbe .long
 .no:
     stc
 .out:
@@ -1155,10 +1193,10 @@ w16_bitab:                      ; in W16Q_BUTTON.. order, NUL-padded to 8
     db 'EDIT', 0, 0, 0, 0
     db 'STATIC', 0, 0
     db 'LISTBOX', 0
-w16_bisb:
+w16_bisb:                       ; in W16Q_SCROLL.. order, ten bytes each
     db 'SCROLLBAR', 0
-w16_bicb:
     db 'COMBOBOX', 0, 0
+    db 'MDICLIENT', 0               ; SPEC.md 124.27.2
 
 ; w16_ctlstub - DX:AX = the window procedure of WIN16's controls: the stub
 ; of an export row no program can import (w16_ctlrow), so the program can
@@ -1217,6 +1255,8 @@ w16_csize:
     mov cx, [bx + W16W_CX]
     sub cx, ax
     mov dx, [bx + W16W_CY]
+    sub dx, ax
+    call w16_capt
     sub dx, ax
 .pos:
     xchg dx, si
@@ -1966,6 +2006,8 @@ w16u_getwrect:
     push ax
     call w16_bord
     mov cx, ax
+    call w16_capt                   ; ...and its caption
+    sub dx, ax
     pop ax
     sub ax, cx
     sub dx, cx
