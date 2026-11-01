@@ -983,8 +983,39 @@ its table goes in the diary, so the reach is measured, not claimed.
       calls `EnumWindows`.
     - Sizes: the image 36,196 (+3), bss unchanged, **1,590 bytes of room**;
       the library part 60,027 (+86), the loader part 14,457 (+45, 5 rows).
-- [ ] **Batch 3: own DCs** (`CS_OWNDC`, `CS_CLASSDC`), so Write draws
-  each window through its own DC.
+  - [x] **Batch 3: own DCs** (SPEC.md §124.25.11, §124.11, §124.22.6).
+    - A `CS_OWNDC` window (or `CS_CLASSDC`, taken as it) gets a DC of its
+      own: a handle of its own, `W16_ODC0` + 2 *i*, and its state kept in a
+      record between uses. Up to four, in a global-heap block made with the
+      first, so they cost the image's bss 6 bytes.
+    - The DC a call names is made the open DC first: at dispatch for the
+      `W16B_MDC` rows, and by an explicit call in the blit core, `SaveDC`,
+      `RestoreDC`, `GetPixel`, `DrawIcon`, `SelectObject` and
+      `WindowFromDC`. The displaced DC goes back to its record, or onto the
+      stack under it (the shared DC's), and the named one is armed as a
+      parked DC is unparked. `BeginPaint`, `EndPaint`, `GetDC` and
+      `ReleaseDC` answer and take the own handle.
+    - **Found:** batch 2's Alt+letter fix opened Write's menu, but
+      `WM_INITMENU` and the chosen `WM_COMMAND` still went to the document
+      child, so Alt+F, O did nothing. They go to the top-level window now,
+      and Write greys its own items on `WM_INITMENU` (Print).
+    - **Found:** after typing, Alt+F still did nothing. Write sits in a
+      `PeekMessage(PM_NOREMOVE)` + `int 21h 2Ch` loop after a keystroke, so
+      WIN16 took the key from os8088 after Alt was let go and read the shift
+      state then. A letter or digit with no character from the ROM is now
+      taken as pressed with Alt.
+    - **Seen on QEMU's VGA:** Write's text is clipped to its document
+      window, Page Down no longer wipes the page number or the scroll bar,
+      and the page number is white on black, as on Windows 3.0's own Write
+      (`win16ref/ref/w30-write.png`, taken this batch). Alt+F, O opens the
+      Save prompt and the File Open dialog. CALC, Solitaire, Cardfile,
+      Clock, Calendar, MEMDC, Notepad, Character Map and Paintbrush 3.0
+      look as they did, and a Paintbrush stroke matches the last build's.
+    - **Rows, for S25's pass:** every row that paints, since `BeginPaint`
+      and `w16_dcopen` changed: all `win16*` rows, and `win16memdc` and
+      `win16pbrush` above all.
+    - Sizes: the image 36,387 (+191), bss 27,244 (+6), **1,393 bytes of
+      room**; the library part 60,771 (+744).
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and

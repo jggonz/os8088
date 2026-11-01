@@ -648,6 +648,7 @@ w16_blt:
     push si
     push di
     push bp
+    call w16od_blt                   ; own DCs (SPEC.md 124.25.11)
     call w16_srcorg
     cmp cx, W16_HDC                 ; the window's DC, or a memory DC's
     je .scr                         ;   bitmap (SPEC.md 124.20.4)

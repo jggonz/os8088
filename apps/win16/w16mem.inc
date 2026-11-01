@@ -699,7 +699,8 @@ w16_gfreeall:
     inc si
     jmp short .a
 .h:
-    xor si, si
+    mov [w16_odseg], si             ; the own DCs' block went with them
+    mov byte [w16_odcur], 0
 .e:
     mov byte [w16_ghf + si], 0
     mov word [w16_ghseg + si], 0

@@ -50,6 +50,7 @@ W16LIB w16u_loadicon
 ; DrawIcon (USER.84) - args: +0 hIcon, +2 y, +4 x, +6 hDC. TRUE. Drawn on the
 ; window's DC only: an icon onto a memory bitmap is not followed.
 W16LIB w16u_drawicon
+    call w16od_last                  ; an own DC's the open one (124.25.11)
     ICALL w16_args
     cmp word [es:bx + 6], W16_HDC
     jne .yes

@@ -228368,7 +228368,9 @@ need, because it is the first whose keys go to a CHILD:
   window it was given, and for a child that is not the window with the menu:
   Write 3.0's keys go to its document, a child of the window with the menu
   bar. The menu loop is started on the child's top-level window, as Windows
-  looked for the nearest window with a menu.
+  looked for the nearest window with a menu, and that window is the one sent
+  `WM_INITMENU` and the chosen `WM_COMMAND`: in batch 2 they still went to
+  the child, so Write's File menu opened and choosing from it did nothing.
 - **Activation gives the focus** (S17 batch 2). `DefWindowProc`'s
   `WM_ACTIVATE` with `WA_ACTIVE` sets the focus to the window unless it is
   in the window already, as Windows' did, and a program's own window is
@@ -228382,6 +228384,13 @@ need, because it is the first whose keys go to a CHILD:
   scan code (`w16_scanx`) before the virtual-key table, and the modifier is
   the shift state's, as it was already. Before, each was dropped, so Ctrl+End
   did nothing anywhere.
+- **Alt is known by the missing character** (S20 batch 3). The shift state
+  is read when WIN16 takes the key from os8088, which for a program busy in
+  a `PeekMessage` loop is after the key was let go: Write's Alt+F arrived as
+  a plain F, with no character, and nothing happened. A letter or a digit
+  the ROM gave no character for was pressed with Alt, since every other
+  shift state gives one, so it is a `WM_SYSKEYDOWN` with Alt whatever the
+  shift state says by then.
 
 #### 124.22.7 System bitmaps *(shipped in S17 batch 2)*
 
@@ -229614,6 +229623,55 @@ have it. On a 640 KB machine the largest free run left beside its 150 KB of
 code is about 98 KB. Windows 3.1 never ran in real mode, so it always had
 more. S20's discardable code segments are what free that memory.
 
+#### 124.25.11 Own DCs *(S20 batch 3)*
+
+A window whose class is `CS_OWNDC` (20h) has a DC of its own on Windows: the
+same handle from every `GetDC`, `GetWindowDC` and `BeginPaint` on it, its
+state (the objects selected, the colours, the modes, the origins) kept from
+one use to the next, and `ReleaseDC` doing nothing with it. A program takes
+it once and draws through it whenever it likes, and draws through several of
+them in turn. Write 3.0 does: its four classes are all `CS_OWNDC`. WIN16 had
+one window DC, `W16_HDC`, so every call drew through the DC opened last.
+
+**WIN16 keeps up to `W16_NODC` = 4 own DCs**, one for each such window, in a
+block of WIN16's own in the global heap (§124.25.1), made with the first: a
+word naming the window and the DC's state, as `w16_dchide` holds it, 81
+bytes each. Each answers its own handle, `W16_ODC0` (3040h) + 2 *i*.
+`CS_CLASSDC` (40h) is taken as `CS_OWNDC`: a DC for each window rather than
+one for the class. A fifth window of such a class, or one when the block
+cannot be had, gets the shared DC as before.
+
+**The DC a call names is made the open one first.** Only one DC's state is
+the open DC (§124.8), so for a call that names an own DC:
+
+- the open DC's state goes back where it belongs: an own DC's to its record,
+  the shared DC's onto the stack of DCs opened under (`w16_dcpush`), as when
+  a DC opens over it;
+- the named DC's state is taken in, and it is armed as a parked DC is
+  unparked (§124.25.5): the lock taken, and its window's clip as it is now,
+  the whole client.
+
+`W16_HDC` named while an own DC is open puts the own DC back and takes the
+shared one again, its clip re-armed the same way, and so does any DC WIN16
+opens on its own account. The calls that do this are every call on a DC
+(the `W16B_MDC` rows, §124.25.3, before a memory DC is looked for),
+`SelectObject`, `BitBlt`, `PatBlt` and `StretchBlt`, `SaveDC` and
+`RestoreDC`, `GetPixel`, `DrawIcon` and `WindowFromDC`. `BitBlt` from one
+own DC into another reads the source window's pixels by its own origin. An
+own DC open when the program waits is parked like any other (§124.25.5).
+
+**`BeginPaint`** on such a window makes its own DC the open one with the
+paint's clip, the update rectangle, and answers its handle in the
+`PAINTSTRUCT`, in `WM_ERASEBKGND`'s `wParam` and as the result. `EndPaint`
+and `ReleaseDC` put it back in its record; the next call that names it
+takes it again with the whole client as its clip, as Windows' own DC was
+after `EndPaint`. A window destroyed gives its own DC back.
+
+**What it costs:** a switch is a copy of the state each way and the clip
+armed again, `OSAPI_WM_CLIP_SET`, so a program that alternates between two
+own DCs call by call pays that on every call. Write draws a line of text
+through one DC at a time.
+
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
 Until S20 every segment of a program was loaded at launch into its one
@@ -229809,12 +229867,14 @@ pages through it with Page Down. With a 40 KB code budget (§124.26.6) it does
 the same while discarding and loading its segments: 249 of its 409 entries'
 thunks were pointing at the loader after the document opened.
 
-**Found, and left for batch 3:** Write's four window classes are all
+**Found, and done in batch 3:** Write's four window classes are all
 `CS_OWNDC`. Each window keeps its own DC for as long as it lives, and Write
-draws through them interleaved, never releasing any. WIN16 has one window DC
-handle (§124.8), so a drawing call meant for the document drew with the DC
-opened last, the main window's, unclipped by the document's rectangle: the
-text and Page Down's erase ran over the page number and the scroll bar.
+draws through them interleaved, never releasing any. WIN16 had one window
+DC handle (§124.8), so a drawing call meant for the document drew with the
+DC opened last, the main window's, unclipped by the document's rectangle:
+the text and Page Down's erase ran over the page number and the scroll bar.
+Own DCs (§124.25.11) are the answer. With them the page number is drawn
+white on black, as Windows 3.0 drew it, which the shared DC had lost.
 
 #### 124.26.8 Not done *(S20 batch 1)*
 

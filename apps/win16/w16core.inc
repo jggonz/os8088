@@ -226,6 +226,7 @@ w16_dispatch:
     je .miss
     test al, W16B_MDC
     jz .plain
+    call w16_odarg                  ; an own DC's the open DC (124.25.11)
     call w16_mdcin                  ; CF=1: a memory DC's, its state the open
     jnc .plain                      ;   DC's for the call (SPEC.md 124.25.3)
     call .plain

@@ -924,6 +924,7 @@ W16LIB w16g_getpixel
     push si
     push di
     push es
+    call w16od_last                  ; an own DC's the open one (124.25.11)
     ICALL w16_args
     mov cx, [es:bx + 2]
     mov dx, [es:bx]

@@ -2778,3 +2778,48 @@ The document's text and Page Down's erase were drawn through the main
 window's DC, which the document's rectangle does not clip. That is the
 next batch: own DCs, each with its own state, swapped in per call the way
 memory DCs already are.
+
+## 2026-11-01 — S20, batch 3: a DC of its own
+
+**Windows gave some windows a DC that never goes away.** A class registered
+with `CS_OWNDC` gets one per window: `GetDC` hands back the same handle
+every time, and whatever the program selected into it stays there. Write
+takes its four DCs once, at the start, and draws through whichever window
+it is updating. WIN16 had a single window DC, so all four of Write's
+handles were the same number. The fix gives each such window a DC of its
+own, with its own handle and a saved copy of its state. A drawing call that
+names one swaps it in first: the open DC's state goes back where it came
+from, and the named one comes in with its window's clip as the window is
+now.
+
+There was already a model for that swap. Memory DCs, added for Paintbrush,
+copy their state in for the length of one call. Own DCs reuse the same
+copy, at the same place in the dispatcher, plus a handful of calls that
+look at their DC themselves: the blits, SaveDC, RestoreDC, GetPixel,
+DrawIcon, SelectObject and WindowFromDC. The records live in the global
+heap, so the feature costs WIN16's segment 6 bytes of bss. Room there is
+down to 1,393 bytes, and S21 will need it.
+
+**The result is visible in one corner of the window.** Write's page number
+used to be drawn black on white. With its own DC it remembers the colours
+it set once, and comes out white on black. To check which was right, we
+booted the real Windows 3.0 reference machine and started Write: white on
+black. That reference screenshot did not exist before this batch.
+
+**We almost claimed a second improvement that was not one.** Windows 3.0's
+Clock showed a red frame around its face on the new build, matching the
+reference. It would have been easy to credit the own DCs. A run of the
+previous build showed the frame was already there, so the claim came out
+of the spec before the commit.
+
+**Two keyboard bugs came out of the same afternoon.** Batch 2 had made
+Alt+F open Write's menu, but the menu's messages still went to the child
+window that received the keystroke. So the menu opened, and choosing Open
+from it did nothing. Then, after typing, Alt+F stopped working altogether.
+A trace showed why. After every keystroke, Write spins in a loop of
+`PeekMessage` and DOS time calls. WIN16 only took the next key from os8088
+on one of those peeks, by which time Alt had been let go, and it read the
+shift state at that moment. Alt+F became a plain F. The ROM gives no
+character for Alt plus a letter, and every other combination does, so a
+letter that arrives without one must have had Alt held. That one test fixed
+it.

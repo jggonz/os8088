@@ -942,6 +942,10 @@ w16_wndfree:
     push ax
     push dx
     push si
+    cmp word [w16_odseg], 0         ; its own DC (SPEC.md 124.25.11)
+    je .noodc
+    LCALL w16od_free
+.noodc:
     mov byte [bx + W16W_FLAGS], 0
     xor dx, dx
     call w16_settext                ; its text
@@ -2093,8 +2097,15 @@ w16u_beginpaint:
     LCALL w16_carpre                ; the caret off while it paints (124.22.9)
     call w16_hwnd2rec
     jc .fail
+    mov word [w16_bph], W16_HDC
+    LCALL w16od_paint                ; CF=0: its own DC, the open one
+    jc .shared                      ;   (SPEC.md 124.25.11)
+    mov [w16_bph], ax
+    jmp short .open
+.shared:
     mov al, 1
     call w16_dcopen                 ; the lock, the clip, the DC
+.open:
     call w16_args
     les di, [es:bx]
     push di
@@ -2102,7 +2113,8 @@ w16u_beginpaint:
     xor ax, ax
     rep stosw
     pop di
-    mov word [es:di + PS_HDC], W16_HDC
+    mov ax, [w16_bph]
+    mov [es:di + PS_HDC], ax
     mov ax, [w16_prc]               ; rcPaint: the invalid rectangle cut to
     mov [es:di + PS_RC], ax         ;   the client
     mov ax, [w16_prc + 2]
@@ -2127,7 +2139,8 @@ w16u_beginpaint:
     add ax, W16_HWND0
     mov [w16_sm_hwnd], ax
     mov word [w16_sm_msg], WM_ERASEBKGND
-    mov word [w16_sm_wp], W16_HDC
+    mov ax, [w16_bph]
+    mov [w16_sm_wp], ax
     xor ax, ax
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
@@ -2135,7 +2148,7 @@ w16u_beginpaint:
     call w16_sendwnd
     jmp short .out
 .done:
-    mov ax, W16_HDC
+    mov ax, [w16_bph]
     jmp short .out
 .fail:
     xor ax, ax
@@ -2182,14 +2195,23 @@ w16_bp_erased:
     les di, [es:bx]
     pop ax
     mov [es:di + PS_ERASE], ax
-    mov ax, W16_HDC
+    mov ax, [w16_bph]
     pop es
     pop di
     ret
 
 ; EndPaint (USER.40) - args: +0 lpPaint, +4 hWnd
 w16u_endpaint:
+    cmp word [w16_odseg], 0
+    je .shared
+    call w16_args
+    les bx, [es:bx]
+    mov ax, [es:bx + PS_HDC]
+    LCALL w16od_rel                  ; an own DC's goes back to its record
+    jnc .own
+.shared:
     call w16_dcclose
+.own:
     LCALL w16_carpost
     mov ax, 1
     ret
@@ -2209,6 +2231,8 @@ w16u_getdc:
     call w16_hwnd0
     mov ax, 0
     jc .out
+    LCALL w16od_get                  ; CF=0: its own DC's (SPEC.md 124.25.11)
+    jnc .out
     xor al, al
     call w16_dcopen
     mov ax, W16_HDC
@@ -2218,7 +2242,13 @@ w16u_getdc:
 ; ReleaseDC (USER.68) - args: +0 hDC, +2 hWnd
 w16u_releasedc:
     call w16_args
-    cmp word [es:bx], W16_HDC       ; the desktop's DC holds nothing
+    mov ax, [es:bx]
+    cmp word [w16_odseg], 0
+    je .shared
+    LCALL w16od_rel                  ; an own DC's goes back to its record
+    jnc .out
+.shared:
+    cmp ax, W16_HDC                 ; the desktop's DC holds nothing
     jne .out
     call w16_dcclose
 .out:
@@ -2387,7 +2417,8 @@ w16u_defproc:
     jne .notkm
     call w16_hwnd2rec
     jc .zero
-    call w16_toplevel               ; a child's is its window's menu (Write's)
+    call w16_toplevel               ; a child's is its window's menu (Write's),
+    call w16_rec2hwnd               ;   and its messages that window's too
     mov dl, 1
     mov dh, [w16_sm_lp]
     LCALL w16_mtbegin
@@ -3019,6 +3050,15 @@ w16_onkey:
     mov al, [w16_vktab + bx]
     or al, al
     jz .out
+    cmp byte [w16_kascii + bx], 0   ; a letter or a digit the ROM gave no
+    jne .asis                       ;   character for was pressed with Alt,
+    cmp al, '0'                     ;   whatever the shift state is by the
+    jb .asis                        ;   time a busy program lets it be read
+    cmp al, 'Z'                     ;   (Write's PeekMessage loop)
+    ja .asis
+    or cl, 8
+    mov [w16_kmods + bx], cl
+.asis:
     xor ah, ah
     mov [w16_sm_wp], ax
     mov word [w16_sm_lp], 1         ; a repeat count of one, the scan code

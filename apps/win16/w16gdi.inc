@@ -95,6 +95,10 @@ w16_dcopen:
     push si
     cmp byte [w16_dcre], 0          ; w16_dcunpark's: the lock and the clip
     jne .rearm                      ;   again, the state kept
+    cmp byte [w16_odcur], 0         ; an own DC open goes back to its record
+    je .noown                       ;   first (SPEC.md 124.25.11)
+    LCALL w16od_out
+.noown:
     cmp byte [w16_dcon], 0
     je .first
     call w16_dcpush                 ; CF=1: too deep, a new clip on this one
@@ -429,6 +433,26 @@ W16DC_BRUSH equ w16_brush - w16_dchide
 W16DC_BCL   equ w16_bcl - w16_dchide
 W16DC_OX    equ w16_ox - w16_dchide
 W16DC_OY    equ w16_oy - w16_dchide
+
+; w16_odarg - the call's hDC, its last argument, resolved when it names an
+; own DC or the shared one with an own DC open (SPEC.md 124.25.11). Keeps
+; every register.
+w16_odarg:
+    cmp word [w16_odseg], 0         ; no own DC made: nothing to resolve
+    je .ret
+    push ax
+    push bx
+    push es
+    call w16_args
+    add bx, [w16_nargb]
+    mov ax, [es:bx - 2]
+    LCALL w16od_res
+    mov [es:bx - 2], ax
+    pop es
+    pop bx
+    pop ax
+.ret:
+    ret
 
 ; w16_mdcin - CF=1: the call's hDC is a memory DC, and the open DC's state is
 ; that DC's now, the handle on the stack W16_HDC. CF=0 with nothing changed
@@ -1214,6 +1238,7 @@ w16g_delobj:
 
 ; SelectObject (GDI.45) - args: +0 hObject, +2 hDC. Answers the one it replaced.
 w16g_select:
+    call w16_odarg
     call w16_args
     mov ax, [es:bx]
     mov cx, [es:bx + 2]             ; a memory DC's (SPEC.md 124.15.2)

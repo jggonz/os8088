@@ -448,6 +448,11 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_mdsave, W16_DCSZ ; ...the open DC's, while a memory DC's is
     W16BSS w16_mdslot, 2        ; ...that memory DC's slot
     W16BSS w16_mdsvon, 1        ; ...and [w16_dcon] before it
+    W16BSS w16_odseg, 2         ; own DCs (SPEC.md 124.25.11): their records'
+                                ;   block, 0 before the first
+    W16BSS w16_odcur, 1         ; ...the open DC's slot + 1, 0 not an own DC
+    W16BSS w16_odson, 1         ; ...1 = the shared DC is under it
+    W16BSS w16_bph, 2           ; the hDC BeginPaint answers
     W16BSS w16_mtgt, 1          ; 1 = drawing goes into its bitmap
     W16BSS w16_mmono, 1         ; ...which is 1 = made 1bpp
     W16BSS w16_mbm, 2           ; ...the bitmap's slot * 2
@@ -2027,6 +2032,7 @@ w16_cputest:
 %include "win16/w16ico.inc"     ; icons (SPEC.md 124.18.4)
 %include "win16/w16draw.inc"    ; what Solitaire calls (SPEC.md 124.20.4)
 %include "win16/w16sys.inc"     ; what the Control Panel calls (SPEC.md 124.20.5)
+%include "win16/w16odc.inc"     ; own DCs (SPEC.md 124.25.11)
 %include "win16/w16file.inc"    ; files, through DOS.O88's core (SPEC.md 124.21)
 %include "win16/w16sb.inc"      ; scroll bars and ScrollWindow (SPEC.md 124.22)
 %include "win16/w16car.inc"     ; the caret (SPEC.md 124.22.9)

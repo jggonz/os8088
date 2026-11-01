@@ -880,6 +880,7 @@ W16LIB w16g_intclip
 ; the first. W16_SVMAX deep; 0 past it. Another DC's answers 1 and keeps
 ; nothing.
 W16LIB w16g_savedc
+    call w16od_last                  ; an own DC's the open one (124.25.11)
     ICALL w16_args
     mov ax, 1
     cmp word [es:bx], W16_HDC
@@ -920,6 +921,7 @@ W16LIB w16g_savedc
 ; that level put back, it and every one after it forgotten; -1 the last,
 ; -2 the one before. TRUE, FALSE for a level never saved.
 W16LIB w16g_restdc
+    call w16od_last                  ; an own DC's the open one (124.25.11)
     ICALL w16_args
     mov ax, 1
     cmp word [es:bx + 2], W16_HDC
@@ -1328,6 +1330,7 @@ W16LIB w16u_getwindow
 ; with an HWND and hands the answer to IsWinOldApTask as a task: an HWND
 ; answers the instance, which stands for the task here (SPEC.md 124.22.12)
 W16LIB w16u_wndfromdc
+    call w16od_last                  ; an own DC's the open one (124.25.11)
     ICALL w16_args
     mov ax, [es:bx]
     cmp ax, W16_HDC
