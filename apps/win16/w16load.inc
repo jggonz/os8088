@@ -3565,16 +3565,6 @@ w16l_segin:
     call OSAPI_FILE_GOTO_QM
     mov si, w16_r_disk
     jc .back
-    mov ax, [w16_csz]               ; the cluster cache, a block of WIN16's
-    add ax, 1023
-    rcr ax, 1
-    mov cl, 9
-    shr ax, cl
-    ICALL w16_kclaim
-    mov si, w16_r_code
-    jc .back
-    mov [w16_cseg], dx
-    mov word [w16_clen], 0
     mov es, [w16_cmb]
     mov bx, bp
     dec bx
@@ -3595,11 +3585,42 @@ w16l_segin:
     call w16l_codeold
     jnc .budget
 .fits:
-    mov dx, bp
-    call w16l_segalloc
+    mov dx, bp                      ; its block first: the cluster cache is
+    call w16l_segalloc              ;   for a moment, and smaller will do
     mov si, w16_r_code
-    jc .uncache
+    jc .back
+    call w16l_segkeep               ; not discarded for its own cache
+    push word [w16_csz]
+    mov ax, [w16_csz]
+.claim:
+    push ax                         ; the cluster cache, a block of WIN16's:
+    add ax, 1023                    ;   W16_FCACHE KB, or one cluster when
+    rcr ax, 1                       ;   that cannot be had (124.26.3)
+    mov cl, 9
+    shr ax, cl
+    ICALL w16_kclaim
+    pop ax
+    jnc .cached
+    cmp ax, [w16_clus]
+    je .nocache
+    mov ax, [w16_clus]
+    mov [w16_csz], ax
+    jmp short .claim
+.nocache:
+    pop word [w16_csz]
+    mov dx, bp
+    call w16l_segkeep
+    call w16l_segdrop
+    mov si, w16_r_code
+    jmp short .back
+.cached:
+    mov [w16_cseg], dx
+    mov word [w16_clen], 0
+    mov dx, bp
+    call w16l_segkeep
+    mov es, [w16_cmb]
     call w16l_segfill
+    pop word [w16_csz]              ; (the flags kept)
     mov si, 1                       ; SI = 1: refused, the lines written
     jc .drop
     xor si, si                      ; SI = 0: loaded
@@ -3668,6 +3689,18 @@ w16l_segdrop:
     pop si
     pop bx
     pop ax
+    ret
+
+; w16l_segkeep - discardable segment DX's W16CLF_KEEP flipped: set while its
+; block is new and its cluster cache is claimed, which may discard code
+; (w16l_codeold passes a kept one over), clear again after. Keeps all.
+w16l_segkeep:
+    push si
+    push es
+    call w16l_lent
+    xor byte [es:si + W16CL_FL], W16CLF_KEEP
+    pop es
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------

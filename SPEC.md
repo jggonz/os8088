@@ -229650,12 +229650,16 @@ needed §124.9.1's bitmap retry). With the picture set to 320 x 200 pixels
 (Options > Image Attributes), File > Save As writes a 32,118-byte BMP whose
 box is where it was drawn, and File > Open reads it back after File > New.
 
-**Not yet: saving a full-screen picture.** Paintbrush 3.1 saves through one
-moveable block the size of the whole picture, 141,440 bytes for its default
-640 x 442, and answers *Not enough memory for this operation* when it cannot
-have it. On a 640 KB machine the largest free run left beside its 150 KB of
-code is about 98 KB. Windows 3.1 never ran in real mode, so it always had
-more. S20's discardable code segments are what free that memory.
+**Not on 640 KB: saving a full-screen picture.** Paintbrush 3.1 saves through
+one moveable block the size of the whole picture, 141,440 bytes for its
+default 640 x 442, and answers *Not enough memory for this operation* when it
+cannot have it. A global block lies inside one arena, and WIN16 has at most
+three (§124.25.1): 32 KB, 64 KB and the largest free run less 32 KB, which on
+a 640 KB machine is 88 KB. So the block cannot be had there however much code
+is discarded, and Paintbrush says so in its own words and carries on (S20
+batch 7, §124.26.3); a smaller picture saves. Windows 3.1 never ran in real
+mode and always had extended memory. The full-screen save moves to S22,
+whose claims may live above 1 MB.
 
 #### 124.25.11 Own DCs *(S20 batch 3)*
 
@@ -229798,7 +229802,15 @@ rather than holes between data. Its header is marked as code, with the
 segment's number. Then:
 
 1. its bytes are read from the file through a cluster cache (§124.20.1) and
-   the rest of it, up to `minalloc`, is zeroed;
+   the rest of it, up to `minalloc`, is zeroed. **The segment's block is
+   taken before the cache** *(S20 batch 7)*, and the cache is a block of
+   WIN16's (§124.25.1) of `W16_FCACHE` KB, or of ONE CLUSTER when that
+   cannot be had; it is given back when the segment is in. While the cache
+   is claimed the new block is marked kept, so the claim cannot discard the
+   segment it is for. Before, the 8 KB cache was claimed first, and on a
+   full heap it took the one run the segment needed: 3.1's Paintbrush,
+   refused its full-screen save, could not load the code that says so,
+   and WIN16 ended it with *Not enough memory for its code*;
 2. its relocation records are read into the module block and applied as at
    launch (§124.3), the x87's OS fixups among them (§124.5);
 3. its exported prologs are patched (§124.3);

@@ -900,6 +900,8 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Targets:** WRITE 3.0 (163 KB of code), WINHELP (200 KB), TERMINAL,
     WINFILE 3.0, CONTROL 3.0, and Windows 3.1's Paintbrush saving a
     full-screen picture, which needs one 141,440-byte block (S19b batch 4).
+    **Re-planned at batch 7:** WINFILE needs MDI, which is S20b; the
+    full-screen save cannot fit on 640 KB at all and is S22's.
   - **Verification:** a `win16write` row opens a document under a cache
     deliberately smaller than the program, checks that segments were
     discarded and reloaded, and checks that the document is intact; the XT's
@@ -1128,6 +1130,55 @@ its table goes in the diary, so the reach is measured, not claimed.
       `"SC"`); and `w16xsec` in the fast tier.
     - Sizes: the image 36,495 (+88), bss 27,246 (+2), **1,283 bytes of
       room**; the library part 61,686 (+284).
+  - [x] **Batch 7: a full heap refuses in the program's words**
+    (SPEC.md §124.26.3, §124.25.10).
+    - 3.1's Paintbrush, saving its default 640 x 442 picture on 640 KB, was
+      ended by WIN16 with *Not enough memory for its code*. Halted at that
+      moment with a knob build, the heap had 36 KB free, its largest run
+      17,312 bytes; the segment wanted 10,332 at most. The loader had
+      claimed its 8 KB cluster cache FIRST, which took that run, and every
+      other run was under 4.8 KB with Paintbrush's code pinned by its stack.
+    - **The segment's block is taken first, and the cache shrinks to one
+      cluster when 8 KB cannot be had.** The new block is marked kept while
+      the cache is claimed: `w16l_codeold` re-ages every segment it finds in
+      use, so on a full heap the newest block could otherwise become the
+      oldest and be discarded for its own cache.
+    - **The full-screen save itself cannot fit on 640 KB**, and is not
+      S20's to give: a global block lies inside one arena, WIN16 has three,
+      and the largest is the free run less 32 KB, 88 KB here. Windows 3.1
+      only ever ran with extended memory. Moved to S22, whose claims may
+      live above 1 MB.
+    - **Seen on QEMU's VGA:** Paintbrush now answers *Not enough memory for
+      this operation* itself, keeps running and opens its menus; Notepad
+      3.0 under a 4 KB code budget (`-DW16_CODEKB=4`) types, opens Find and
+      About and counts its characters, every segment reloaded through the
+      new order.
+    - **Rows, for S25's pass:** `win16write` (the reload path under a small
+      budget), `win16pbrush`, `win16big`, and every row whose program has
+      discardable code.
+    - Sizes: the image, bss and room unchanged (1,283); the loader part
+      grows by the new order.
+
+- [ ] **S20b: Windows inside a window, MDI (R6, R9).**
+  - *As a user, File Manager 3.0 opens its drive window, and Program
+    Manager its groups.*
+  - S20 listed File Manager 3.0 as a target. Its 18 missing imports are
+    small, but three of them are the Multiple Document Interface, which
+    WIN16 has none of: the `MDICLIENT` class (`WM_MDICREATE`,
+    `WM_MDIDESTROY`, `WM_MDIACTIVATE`, `WM_MDIGETACTIVE`, `WM_MDINEXT`,
+    `WM_MDIMAXIMIZE`, `WM_MDIRESTORE`, `WM_MDITILE`, `WM_MDICASCADE`,
+    `WM_MDIICONARRANGE`, `WM_MDISETMENU`), `DefFrameProc`,
+    `DefMDIChildProc` and `TranslateMDISysAccel`. An MDI child is a child
+    window with a caption, a frame, a system menu and minimize and
+    maximize boxes, drawn and dragged inside its parent's client, which
+    WIN16's windows have never been. Program Manager, S21's target, is MDI
+    too, so this comes before S21.
+  - It needs room the image does not have (1,283 bytes): MDI goes in a part
+    of its own, fetched at the first `MDICLIENT`.
+  - **Targets:** WINFILE 3.0 and PROGMAN 3.0 to their windows; a Watcom
+    fixture that creates, tiles, cascades, maximizes and closes MDI
+    children.
+  - **Verification:** a `win16mdi` row on the fixture.
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and

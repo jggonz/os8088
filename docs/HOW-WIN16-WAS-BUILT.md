@@ -2947,3 +2947,36 @@ from blue to black; Terminal's background is a pale yellow. Neither colour
 is one of the sixteen. Windows' display driver mixes such a colour from a
 pattern of two, and WIN16 picks the nearest of the sixteen. That is its own
 piece of work.
+
+## 2026-11-01 — S20, batch 7: running out of memory politely
+
+**The plan said Paintbrush 3.1 should save a full-screen picture.** That
+takes one block of 141,440 bytes. Asked for it on a 640 KB machine, WIN16
+did not answer "no". It ended Paintbrush with *Not enough memory for its
+code*, which is WIN16 saying it could not load a piece of the program back.
+
+**A knob build that froze at that message let us look at the heap.** There
+were 36 KB free, the largest piece 17 KB, and the code that had to load was
+at most 10 KB. It should have fitted. What took the 17 KB was the loader's
+own reading buffer, 8 KB, which it claimed before the code's block. Every
+other free piece was under 5 KB, and the code around them could not be let
+go because Paintbrush was in the middle of using it.
+
+**Now the code's block comes first, and the buffer makes do with one
+cluster**, 512 bytes on a floppy, when 8 KB is not there. One detail took a
+second look. Claiming the buffer may push old code out of memory, and the
+block just made for the new code is code too. On a heap this full it could
+be the one pushed out, so it is marked "keep" until the buffer is in hand.
+Paintbrush now says *Not enough memory for this operation* in its own words
+and keeps running.
+
+**The save itself cannot fit on 640 KB, and that is arithmetic, not a bug.**
+A block has to sit inside one of WIN16's three memory areas, and the largest
+one a 640 KB machine can give is 88 KB. Windows 3.1 never ran without
+memory above 1 MB, so this target moves to the story that gives WIN16 that
+memory (S22).
+
+**File Manager moves too.** Its missing pieces turned out to be MDI, the
+windows-inside-a-window that File Manager and Program Manager are built
+from. WIN16 has none of it, and it is a story of its own, S20b, before
+Program Manager's.
