@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "3454fa487",
-  "strings": "8ebf4b162ad028f2",
-  "why": "S20 batch 2: five more calls and Alt+letter from a child window; below the page's level of detail, unchanged"
+  "stamped": "95214284b",
+  "strings": "79fb304ab66a9eb0",
+  "why": "S20 batch 3: own DCs and two keyboard fixes; below the page's level of detail, unchanged"
  },
  "WIN16_TXT": {
   "sources": [
