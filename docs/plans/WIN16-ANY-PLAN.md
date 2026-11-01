@@ -1275,6 +1275,25 @@ its table goes in the diary, so the reach is measured, not claimed.
     through `WM_DDE_TERMINATE`).
   - **Verification:** a `win16tasks` row; the claim records counted with
     three programs and a DLL in one instance.
+  - **Pinned in SPEC.md §124.28 before its code.** A task's state is
+    swapped between the bss and a context block per task, not indexed:
+    the image has 898 bytes and every use would cost some. Owners go
+    beside the full window and class records; a later program's segments
+    are a global block, not a ninth claim.
+  - [x] **O2(a), first:** `OSAPI_WM_CLOSE` keeps every request, a bit per
+    window slot (SPEC.md §75.2.1). +20 bytes of `.text` on both kernels,
+    no RAM, no rung crossed.
+  - [ ] Batch 1: the task model with one task — the task table, the
+    context list and its switch, the owner bytes, and the task calls —
+    and nothing a single program can see changes.
+  - [ ] Batch 2: `WinExec` and `LoadModule`, the turns, input to a
+    window's task, a second program's os8088 window.
+  - [ ] Batch 3: messages between tasks, a task's end while others run,
+    the instance window handed over.
+  - [ ] Batch 4: `WinHelp` and WINHELP.EXE; Program Manager starting Clock
+    and Notepad.
+  - [ ] Batch 5: DDE, the `TASKS`/`TASKB` fixtures and the `win16tasks`
+    row.
 
 ### Phase B: protected mode, on a 286 and up (O1)
 

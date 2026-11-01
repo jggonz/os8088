@@ -130858,7 +130858,7 @@ one word, `wm_clreq`; `wm_close_pass`, in the UI task's idle section beside
 when nothing is pending, which is nearly always.
 
 **Any number of closes can wait at once** (§75.2.1). The word held one window
-POINTER until WIN16's S21 (§124, docs/plans/WIN16-ANY-PLAN.md), so a second
+POINTER until WIN16's S21 (§124.28.7), so a second
 request before the UI's next pass replaced the first, and that window stayed
 open: S13 saw it when several
 Windows programs started in one autostart pass left DOS windows behind, and
@@ -130912,7 +130912,8 @@ replaced, which keeps `ui_task` and `wm_paint_all` where `t_hotpar` wants
 them.
 
 **Rows:** `dispclose`, `dispclose-small` and `deskclose` close one window at
-a time through it; `win16desk` and S21's `win16tasks` (§124) close several.
+a time through it; `win16desk` and S21's `win16tasks` (§124.28.11) close
+several.
 
 ### 75.3 The standard alert — `os88ui_ask`, and it is NOT in the kernel
 
@@ -230292,3 +230293,271 @@ so they have no row. Both were looked at under QEMU on VGA beside Windows
 maximized with the bar merged, minimized and restored, tiled and cascaded
 with a directory window, and Program Manager's Main group with its six
 items and the Accessories and Games groups as icons.
+
+### 124.28 One instance, several programs *(S21, docs/plans/WIN16-ANY-PLAN.md)*
+
+*As a user, a Help menu opens Windows Help beside the program, and Program
+Manager starts Notepad.* Until S21 each Windows program was a `WIN16.O88`
+instance of its own (§124.18.2), and nothing was shared between two of them
+but the machine. Windows 3.x ran every program in one system: `WinExec`
+started the next one, a window's messages could come from another program,
+two programs shared a library and talked through DDE, and Program Manager
+is a program whose whole job is starting others. From S21 one instance
+hosts several programs, its **tasks**.
+
+The instance is still one os8088 package instance and one owner of claims.
+Launching a second `.EXE` from the desktop still starts a second instance;
+a program started by a program (`WinExec`, `LoadModule`, `WinHelp`,
+`ShellExecute` of a Windows program) joins the instance that asked.
+
+#### 124.28.1 A task
+
+A task is one loaded Windows program: its segments, its DGROUP and stack,
+and its state between two waits. At most `W16_MAXTASK` = 4 run in one
+instance.
+
+- **Its handle is its DGROUP's paragraph, as before.** That is also its
+  hInstance and its module handle (§124.3), and `GetCurrentTask` answers
+  it. Windows' task handle was a selector of its own; no program here has
+  been seen to depend on the two differing.
+- **`hPrevInstance` is still 0** when a program is started a second time.
+  Each start loads its own copy, with its own classes, rather than sharing
+  the first copy's code and classes as Windows did. A program that would
+  have taken a non-zero `hPrevInstance` to mean "activate the first copy
+  and leave" runs twice instead.
+- **The task table** (`w16_task`, a record per task) holds the handle, the
+  segment of the task's saved context (124.28.2), its state (`W16K_*`:
+  free, running, waiting, ending), and why it waits.
+
+#### 124.28.2 Its context is swapped, not addressed
+
+Every piece of WIN16's state that describes "the program" was one variable
+of the image's bss (§124.19), and code all over WIN16 addresses those
+variables directly. Making each of them a table indexed by task would cost
+bytes at every use, and the image has 898. So the **current** task's state
+stays where it is, and switching tasks swaps it:
+
+1. the state of the task leaving is copied out of the bss into its
+   **context block**, a fixed block of WIN16's in the global heap
+   (`w16_kclaim`), one per task;
+2. the state of the task arriving is copied in from its block.
+
+The state copied is a list of ranges of the bss, `w16_ctxtab` in part 9,
+the way the loader's `w16l_svtab` already saves one module's loader state
+(§124.23.5). The rule for what is on the list is the one that decides
+everything here: **state that lives across a wait** (`w16_tohost`) belongs
+to a task; state that lives only inside one handler is the instance's,
+since only one handler runs at a time. On the list:
+
+- the program's name, folder, state and exit code;
+- its NE tables, segment bases and lengths, and code cache;
+- its claim, DGROUP, PSP, local heap and stack top;
+- the coroutine: the waiting stack, the register bank, the waiting import
+  and why it waits (`GetMessage`, `PeekMessage`, a dialog's loop, a menu's
+  loop, a file dialog);
+- its message queue, its quit flag and its owed owner-draw and focus
+  notifications;
+- its menu loop and modal dialog state, and its DOS state (the handle
+  table and current directory of §124.21);
+- the x87 runtime's handler and its DC open across a wait (§124.25.5).
+
+Shared by the tasks, and so not on the list:
+
+- the window table, the classes, the global heap, the libraries, the bind
+  table and the USER heap, each with an owner where one is needed
+  (124.28.3);
+- the focus, the capture, the display and the fonts;
+- the profiles, the clipboard and the parts;
+- the pointer, the keyboard and every handler's scratch.
+
+A switch copies the list out and in. `tools/os88pkgsize.py` reports the
+list's length with the package. A program that never starts another never
+switches.
+
+#### 124.28.3 Who owns what
+
+The window record is full (102 bytes) and so is the class record, so the
+owner is kept beside them, a byte for each, with the task's index plus 1:
+
+| table | owner | used for |
+|---|---|---|
+| windows | `w16_wtask`, a byte a window | which queue a window's input goes to; `GetWindowTask`; `EnumTaskWindows`; the windows a task's end destroys |
+| classes | `w16_ctask`, a byte a class | a class is its task's: `CreateWindow` finds the caller's class of that name, then a `CS_GLOBALCLASS` one, then WIN16's own; two programs can register one name |
+| global blocks | `GH_TASK`, the byte at +10 of the block's header | the blocks a task's end frees |
+| timers | the window's task, or for a timer with no window the task that set it (`W16T_TASK`) | which task hears `WM_TIMER` |
+| libraries | `LM_USERS`, a bit a task | a library stays while any task uses it; the last task's `FreeLibrary`, or its end, frees it |
+
+A block allocated `GMEM_DDESHARE` belongs to no task (`GH_TASK` = 0) and
+is not freed when the task that made it ends, so a DDE partner can still
+read it. WIN16's own blocks (the context blocks, the profiles, the parts)
+are not a task's either.
+
+`GetMessage`, `PeekMessage`, the paint scan and the timers look only at the
+current task's windows, queue and timers.
+
+#### 124.28.4 Taking turns
+
+The tasks take turns as Windows 3.x's did. A task runs until it waits, and
+nothing pre-empts it. It waits:
+
+- in `GetMessage`, `WaitMessage` or `Yield`;
+- in `PeekMessage` with nothing for it;
+- in a dialog's loop or a menu's;
+- in a file dialog;
+- for the answer to a `SendMessage` to another task.
+
+**WIN16 runs only when every task is waiting:** it is os8088 calling back,
+and the coroutine (§124.2.1) means no program is running then. So a switch
+is only ever made there, in the host's code, never inside a call.
+
+Every callback ends by running the tasks that have work, in turn:
+
+- the current task first, if it has some;
+- then the others, in the order of the table after it.
+
+A task has work when its queue holds a message or its quit flag is set,
+when one of its windows is owed a paint, when one of its timers has fired,
+when it has just started, or when it waits in a loop the callback served.
+The turns stop when no task has work.
+
+**Input goes to a window's task.** A click, a key or a timer for a window
+is posted to the queue of the task that owns it; a paint marks the window
+as before. If that task is not the current one, its queue is written in its
+context block, at the place the queue has in the list (`w16_tqaddr`), so
+posting never needs a switch.
+
+#### 124.28.5 Starting a program: `WinExec` and `LoadModule`
+
+`WinExec(lpCmdLine, nCmdShow)` and `LoadModule(lpName, lpParams)` load the
+program while the caller waits in the call, as `LoadLibrary` loads a
+library at run time (§124.23.5):
+
+1. The caller's context is saved, and a fresh one is set up for the new
+   task.
+2. The loader runs and builds the new program's first frame (§124.3), with
+   its command tail and `nCmdShow`.
+3. The new task's context is saved, and the caller's is put back.
+4. The call answers the new task's hInstance.
+
+The new program first runs when the caller next waits.
+
+**The file is looked for as Windows looked**, and the first place that has
+it wins:
+
+1. the path given, if it names a folder;
+2. the caller's own folder;
+3. the Windows directory (§124.14, `SYSTEM\APPDATA\WIN16`);
+4. `SYSTEM\` under it;
+5. the folder WIN16 itself was started from.
+
+A name without an extension gets `.EXE`. **The answers below 32 are
+Windows' own:**
+
+| answer | why |
+|---|---|
+| 0 | out of memory |
+| 2 | the file is not there |
+| 11 | it is not a Windows program WIN16 can run |
+| 16 | `W16_MAXTASK` tasks already run |
+
+**A second program cannot take a claim.** The first program's segments
+are its claim, one of the eight (§124.25.1). Every later program's go in
+one fixed block of the global heap instead, laid out as the claim would
+be. The arenas grow to hold it, within their three.
+
+**Its first top-level window is an os8088 window of its own** (a "second
+window", `W16_MAXTOP`), titled with its text. The instance's own window
+stays the first program's.
+
+#### 124.28.6 Messages between tasks
+
+- **`PostMessage` and `PostAppMessage`** put the message in the queue of
+  the window's task, or of the task named (124.28.4).
+- **`SendMessage` to another task's window** makes the sender wait for
+  the answer. Then:
+  1. the receiver is switched in, and its window procedure is called on
+     its own stack through §124.2.2's callback;
+  2. when it returns, the sender is switched back in with the answer.
+- **A task waiting for an answer can itself be sent to.** Its procedure
+  runs, as Windows ran it, so two programs that send to each other do
+  not deadlock. `InSendMessage` is TRUE inside such a call. `ReplyMessage`
+  answers early: the sender gets the answer, but runs only when the
+  receiver next waits.
+- **`SendMessage` to `HWND_BROADCAST`**, and `PostMessage` to it, reach the
+  top-level windows of every task, which is how a DDE conversation starts
+  (`WM_DDE_INITIATE`).
+
+#### 124.28.7 A task's end
+
+When one task ends (§124.18.2's ways), the rest go on:
+
+- its windows are destroyed, without messages, since the program is gone;
+- its classes, timers and hooks go;
+- its blocks are freed, except `GMEM_DDESHARE` ones;
+- its libraries lose it as a user, and a library no task uses is freed;
+- its context block is freed.
+
+**Every window it had on the glass closes**, usually several at once, which
+is why O2(a)'s queue behind `OSAPI_WM_CLOSE` (§75.2.1) came first.
+
+**If its main window was the instance's own window**, the next task's main
+window takes that window over: the os8088 window gets the next task's
+title and place, and the next task's own os8088 window closes. The instance
+is renamed for that task's program (§124.18.3).
+
+**When the last task ends, the instance ends**, as one program's end
+always ended it.
+
+#### 124.28.8 The instance on the desktop
+
+- **The Task Manager lists the instance** under its first program's name,
+  and End Task asks every task to close (`WM_CLOSE` to each main window,
+  §124.18.2).
+- **A program's own close box** closes that program only.
+- **Memory is the instance's.** Its claims (§124.25.1) hold every task's
+  blocks, and the Task Manager's figure is their sum.
+
+#### 124.28.9 The calls
+
+| call | answer |
+|---|---|
+| `GetCurrentTask` | the current task's handle |
+| `GetNumTasks` | the tasks running |
+| `IsTask` | TRUE for a running task's handle |
+| `GetWindowTask` | the window's task |
+| `EnumTaskWindows` | that task's top-level windows |
+| `Yield`, `WaitMessage` | the caller waits for its turn / for a message (124.28.4) |
+| `PostAppMessage` | posted to that task's queue with no window |
+| `GetModuleUsage` | how many tasks run that module, or a library's users |
+| `GetInstanceData` | copies bytes from another task's DGROUP at the same offset |
+| `WinExec`, `LoadModule` | 124.28.5 |
+| `InSendMessage`, `ReplyMessage` | 124.28.6 |
+| `GlobalGetAtomName`, `GlobalDeleteAtom` | the global atom table, shared by every task, which DDE names its application and topic in |
+| `WinHelp` | 124.28.10 |
+
+#### 124.28.10 Windows Help
+
+`WinHelp(hWnd, lpHelpFile, wCommand, dwData)` finds a top-level window of
+class `MS_WINHELP` in the instance. If there is none, it starts
+`WINHELP.EXE` with `WinExec`, looked for as 124.28.5 says. It then sends
+that window the registered message `WM_WINHELP`, with a `GMEM_DDESHARE`
+block holding Windows' `HLP` record (the command, the file and the data),
+as USER did. `HELP_QUIT` with no Help window answers TRUE and starts
+nothing. With no `WINHELP.EXE` to be found, it shows §124.6's message box,
+as before. WINHELP.EXE is Microsoft's: the user brings it, as every other
+Windows program (`make win16disk WIN3X=<dir>`).
+
+#### 124.28.11 What checks it
+
+The **`win16tasks`** row runs Watcom fixtures in one instance:
+
+- `TASKS.EXE` starts `TASKB.EXE` with `WinExec`;
+- the two talk through `SendMessage` and `PostMessage` both ways, then hold
+  a DDE conversation from `WM_DDE_INITIATE` to `WM_DDE_TERMINATE`;
+- each checks the other's answers and its own task calls;
+- one ends while the other goes on.
+
+The row then counts the instance's claim records, with the two programs
+and a library loaded, against §124.25.1's eight. Program Manager 3.0
+starting Clock and Notepad, and Notepad's Help menu opening Windows Help,
+are Microsoft's programs, and are looked at.
