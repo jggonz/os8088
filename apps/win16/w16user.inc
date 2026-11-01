@@ -2704,8 +2704,9 @@ w16_tarm:
     mov bx, 1
 .nohv:
 %ifdef PKG_MEGA
-    cmp byte [w16mm_wq], 0          ; a waveOut block queued: every tick
-    je .nowo                        ;   (SPEC.md 124.32.3; BX is 1 at least)
+    mov al, [w16mm_wq]              ; a waveOut block queued: every tick
+    or al, [w16_go1]                ;   (SPEC.md 124.32.3; BX is 1 at least),
+    jz .nowo                        ;   and the first run's (124.31.8)
     mov bx, 1
 .nowo:
 %endif
@@ -2725,6 +2726,23 @@ w16_tarm:
 
 ; w16_ontimer - OSAPI_WM_ONTIMER: SI = our window, the gfx lock held
 w16_ontimer:
+%ifdef PKG_MEGA
+    cmp byte [w16_go1], 0           ; the program's first instruction: here,
+    je .nogo                        ;   where the UI task's stack is shallow,
+    mov byte [w16_go1], 0           ;   rather than in the wake (124.31.8)
+    cmp byte [w16_state], W16S_RUN
+    jne .nogo
+    call w16_tarm                   ; the tick, as the wake armed it
+    push word [w16_locked]
+    mov byte [w16_locked], 1
+    xor ax, ax
+    xor dx, dx
+    call w16_resume
+    call w16_after
+    pop word [w16_locked]
+    ret
+.nogo:
+%endif
     push si
     call OSAPI_GET_TICKS
     mov dx, ax

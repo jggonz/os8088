@@ -342,6 +342,7 @@ section .w16dlg
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
 %ifdef PKG_MEGA
     W16BSS w16_old31, 4         ; ...and int 31h, DPMI's (124.31.6)
+    W16BSS w16_go1, 1           ; 1 = the first run is the tick's (124.31.8)
     W16BSS w16_i31ss, 2         ; ...the program's stack while it runs on
     W16BSS w16_i31sp, 2         ;   the UI task's
     W16BSS w16mm_bsel, 2         ; MMSYSTEM's mmio, one call at a time
@@ -355,6 +356,7 @@ section .w16dlg
     W16BSS w16mm_last, 4        ; timeGetTime's last answer (124.32.1)
     W16BSS w16mm_wo, 2          ; the HWAVEOUT open, 0 none (124.32.3),
     W16BSS w16mm_wq, 2          ;   and 1 while a block of it is queued
+    W16BSS w16mm_mci, 2         ; MCI's block, 0 none yet (124.32.4)
 %endif
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     ; --- S16: the DOS (SPEC.md 124.21) ---
@@ -1252,12 +1254,17 @@ w16_wake:
     mov di, w16_l2
     call w16_strcpy
     call w16_repaint
+%ifdef PKG_MEGA
+    mov byte [w16_go1], 1           ; the first instruction from the tick,
+    jmp w16_tarm                    ;   not here (SPEC.md 124.31.8)
+%else
     call w16_tarm                   ; the tick, for the pointer (w16_hover)
     mov byte [w16_locked], 0        ; a wake holds no lock
     xor ax, ax
     xor dx, dx
     call w16_resume                 ; the program's first instruction
     call w16_after
+%endif
 .out:
     ret
 .kick:
@@ -1382,8 +1389,11 @@ w16_freeprog:
     pop di
     call w16_dlgout
 %ifdef PKG_MEGA
-    cmp word [w16mm_wo], 0          ; waveOut's stream closed (124.32.3)
+    cmp word [w16mm_wo], 0          ; waveOut's stream closed (124.32.3),
+    jne .wo                         ;   MCI's block forgotten (124.32.4)
+    cmp word [w16mm_mci], 0
     je .nowo
+.wo:
     SCALL w16mm_wend
 .nowo:
 %endif
@@ -2175,6 +2185,7 @@ w16_cputest:
 %include "win16/w16sel.inc"     ; the selector functions: part 9 (124.31.6)
 %include "win16/w16i31.inc"     ; DPMI 0.9, a subset: part 9 too (124.31.6)
 %include "win16/w16mm.inc"      ; MMSYSTEM, part 9 too (124.32)
+%include "win16/w16mci.inc"     ; ...and its MCI (124.32.4)
 %endif
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)

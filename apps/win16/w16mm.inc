@@ -310,59 +310,7 @@ w16mm_caps:
 
 w16mm_s_dev: db 'os8088 Sound', 0
 
-; mciGetErrorString (MMSYSTEM.706) - args: +0 wLength, +2 lpstrBuffer,
-; +6 dwError: its sentence, cut to the buffer. TRUE for one the arm answers
-W16SYS w16mm_mcierr
-    push si
-    push di
-    ICALL w16_args
-    mov cx, [es:bx]
-    jcxz .no
-    mov ax, [es:bx + 6]
-    les di, [es:bx + 2]
-    mov si, w16mm_s_mcix             ; XSEC-OK: the part's strings, at cs:
-    xor dx, dx                      ; DX = the answer
-    or ax, ax
-    jz .gen
-    sub ax, 256                     ; MCIERR_BASE
-    cmp ax, 2
-    jae .gen
-    inc dx
-    mov si, w16mm_s_mci0             ; XSEC-OK
-    or ax, ax
-    jz .cp
-    mov si, w16mm_s_mci1             ; XSEC-OK
-    jmp short .cp
-.gen:
-    or ax, ax                       ; 0 is no error at all
-    jnz .cp
-    inc dx
-    mov si, w16mm_s_ok               ; XSEC-OK
-.cp:
-    dec cx                          ; room for the NUL
-    jcxz .nul
-.c:
-    cs lodsb
-    or al, al
-    jz .nul
-    stosb
-    loop .c
-.nul:
-    mov byte [es:di], 0
-    mov ax, dx
-    jmp short .out
-.no:
-    xor ax, ax
-.out:
-    xor dx, dx
-    pop di
-    pop si
-    ret
-
-w16mm_s_ok:   db 'The specified command was carried out.', 0
-w16mm_s_mci0: db 'The device is not ready.', 0
-w16mm_s_mci1: db 'Undefined external error.', 0
-w16mm_s_mcix: db 'The device reported an error.', 0
+; mciGetErrorString (MMSYSTEM.706) is MCI's, in w16mci.inc (124.32.4)
 
 ; =============================================================================
 ; mmio (124.32.2)
@@ -1595,6 +1543,7 @@ WO_LEN      equ WO_SIL + W16MM_SILN
 WOF_PAUSE   equ 1
 WOF_DEAD    equ 2                   ; the stream would not open: nothing plays
 WOF_SND     equ 4                   ; sndPlaySound's own
+WOF_MCI     equ 8                   ; a waveaudio play's (w16mci.inc, 124.32.4)
 W16MM_WSIG  equ 0x4F57
 W16MM_SILN  equ 256
 MM_WOM_OPEN     equ 0x3BB
@@ -2013,9 +1962,9 @@ W16SYS w16mm_sndplay
     pop si
     ret
 
-; w16mm_wtick - WIN16's tick while a block is queued (the arm's w16_ontimer):
-; the copy, and sndPlaySound's device closed once its sound has played.
-; Keeps all
+; w16mm_wtick - WIN16's tick while a block is queued or an MCI device plays
+; (the arm's w16_ontimer): the copy, sndPlaySound's device closed once its
+; sound has played, and MCI's turn (w16mm_mtick). Keeps all
 w16mm_wtick:
     push ax
     push es
@@ -2024,20 +1973,22 @@ w16mm_wtick:
     jc .none
     call w16mm_wfeed
     test byte [es:WO_FL], WOF_SND
-    jz .out
+    jz .mci
     cmp word [es:WO_HEAD + 2], 0
-    jne .out
+    jne .mci
     call w16mm_wkill
-    jmp short .out
+    jmp short .mci
 .none:
     mov byte [w16mm_wq], 0
-.out:
+.mci:
+    call w16mm_mtick                ; AL = 1 while a device plays
+    or [w16mm_wq], al
     pop es
     pop ax
     ret
 
 ; w16mm_wend - the program's end (w16_freeprog): its device closed, with no
-; notice. Keeps all
+; notice, and MCI's forgotten. Keeps all
 w16mm_wend:
     push ax
     push es
@@ -2046,8 +1997,10 @@ w16mm_wend:
     jc .out
     call w16mm_wkill
 .out:
-    mov word [w16mm_wo], 0
-    mov byte [w16mm_wq], 0
+    xor ax, ax
+    mov [w16mm_wo], ax
+    mov [w16mm_wq], ax
+    mov [w16mm_mci], ax             ; MCI's block goes with the arenas
     pop es
     pop ax
     ret
@@ -2083,11 +2036,11 @@ w16mm_wargs:
     ret
 
 ; w16mm_wst - AX = an HWAVEOUT -> ES = its state, CF=0; CF=1 it is not the
-; one open. w16mm_wpst: and not sndPlaySound's. Keeps all but ES
+; one open. w16mm_wpst: and not sndPlaySound's or MCI's. Keeps all but ES
 w16mm_wpst:
     call w16mm_wst
     jc .ret
-    test byte [es:WO_FL], WOF_SND   ; (CF=0)
+    test byte [es:WO_FL], WOF_SND | WOF_MCI ; (CF=0)
     jz .ret
     stc
 .ret:
@@ -2839,8 +2792,9 @@ w16mm_wfr:
     pop cx
     ret
 
-; w16mm_ms - DX:AX = frames, BX = frames a second -> DX:AX = milliseconds:
-; whole seconds times 1000, and the rest's. Keeps the rest
+; w16mm_ms - DX:AX = frames, BX = frames a second -> DX:AX = milliseconds,
+; to the nearest as Windows' MulDiv gives them: whole seconds times 1000, and
+; the rest's. Keeps the rest
 w16mm_ms:
     push cx
     push si
@@ -2862,7 +2816,12 @@ w16mm_ms:
     pop ax
     push dx
     mul cx
-    div bx                          ; AX = the rest's, under 1000
+    push bx
+    shr bx, 1
+    add ax, bx
+    adc dx, 0
+    pop bx
+    div bx                          ; AX = the rest's, 1000 at most
     pop dx
     add ax, si
     adc dx, 0

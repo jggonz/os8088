@@ -1496,7 +1496,20 @@ its table goes in the diary, so the reach is measured, not claimed.
       waveOut 0". The arm's third arena now keeps 96 KB (124.31.1), so the
       library part can still be fetched. Arm: 31 bytes of room (65,024 less
       image and bss; the earlier "589" was against 65,536).
-    - [ ] *Batch 3: MCI*, `cdaudio` over CDROM.DRV and `waveaudio`.
+    - [x] *Batch 3: MCI* (124.32.4), `cdaudio` over CDROM.DRV's door and
+      `waveaudio` streaming a file through 124.32.3's device; commands and
+      strings, notices, `MCI_WAIT`, Windows' error sentences. New fixture
+      `MCITEST.EXE`. **Seen 2026-11-01 on the dev kern_mega with an SB16
+      and the gate's CDROM.DRV:** "mcitest: 0 wrong, wave 1, cd 2, waited
+      328 ms", and the capture holds 0.8 s of tone (a 500 ms play, then a
+      300 ms one with `MCI_WAIT`). `cd 2`: QEMU's drive refuses PLAY AUDIO,
+      so the play answers `MCIERR_HARDWARE` as 124.32.4 says. The first
+      look overran the UI task's stack, so the arm now runs a program's
+      first instruction from WIN16's tick (124.31.8): `w16_hsp` went from
+      274 bytes below the stack's top to 66. Arm: 279 bytes of room.
+      **Open:** on the same kernel SELTEST computes "0 wrong" (read out of
+      its memory) but its MessageBox draws with no text; at the batch's
+      base it overran the stack before reaching the box.
     - [ ] *Batch 4: `waveIn`, `timeSetEvent`, `midiOut`*; SOUNDREC and
       MPLAYER.
   - **Verification:** `make test-snd`'s capture; 86Box `386-sound` and

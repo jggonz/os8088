@@ -18856,7 +18856,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
 # by the import lines in its own .wlk, so it links without them.
@@ -18909,7 +18909,7 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 # `make win16` builds the layer itself, apps/win16/ (SPEC.md 124.2): a
 # `local` package in apps/RETIRED.txt until S12 decides its payload, so no
 # shipped image carries it yet and `all` does not build it.
-WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
+WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc) drivers/cdrom/cdpkg.inc
 
 # W16DEFS="-DW16_CODEKB=40" builds WIN16 with a TEST define: SPEC.md
 # 124.26.6's code budget, W16_TRACE (124.17.4), W16_X87_EMU (124.5) - what a

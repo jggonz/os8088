@@ -230942,7 +230942,30 @@ What the arm does is all on WIN16's side of the door:
 The memory calls that would walk an arena are not forwarded (§124.21.2), so
 `dos_arena` is never loaded into a segment register.
 
-#### 124.31.8 Verification
+#### 124.31.8 The UI task's stack
+
+Every handler, every forwarded DOS call and every int 31h function runs on
+the UI task's stack, below where the program was last resumed
+(`w16_hsp`). Task 0's stack is 512 bytes (`STK0_SIZE`). On kern_mega an
+IRQ0 that arrives there pays for `SOUND.DRV`'s tick as well: a
+`drv_svc_call` into the driver through a protected-mode far call. Measured
+under QEMU with an SB16, 2026-11-01:
+
+| where the program was resumed from | `w16_hsp` below the top |
+|---|---|
+| the wake that started it (`w16_wake`), launched by `\AUTOSTRT` | 274 bytes |
+| WIN16's tick (`w16_ontimer`) | 66 bytes |
+
+A file read made from the first of these, while a sound played, overran
+the stack's canary (`STACK OVERFLOW TASK 00`). So **the arm runs a
+program's first instruction from WIN16's tick, not from the wake**. The
+wake loads the program and sets `w16_go1`; `w16_tarm` arms the tick for
+the next period; and `w16_ontimer` makes the first resume, with the lock
+marked held as every resume from the tick has it. A later wake still
+resumes a program waiting in `PeekMessage` (`w16_peekwake`); that depth
+has not been measured. Real mode is unchanged.
+
+#### 124.31.9 Verification
 
 - **Bochs** (docs/BOCHS.md) is the instrument, because QEMU lets code write
   through CS and checks no limit; `MEGATRAP=1` (KERN-MEGA-PLAN 10.3) counts
@@ -231129,10 +231152,159 @@ One output device, device 0 (`WAVE_MAPPER` is the same one), over
 - **At the program's end** the stream is closed and the grant given back;
   the blocks go with its heap.
 
-#### 124.32.4 Planned *(S23 batches 3-4)*
+#### 124.32.4 MCI: `cdaudio` and `waveaudio` *(S23 batch 3)*
 
-- **Batch 3: MCI.** `mciSendCommand` and `mciSendString` for `cdaudio`,
-  over `CDROM.DRV`'s package door (§119.4), and `waveaudio` over batch 2.
-- **Batch 4:** `waveIn` over the record verbs (§34.6), `timeSetEvent`,
-  `CALLBACK_FUNCTION`'s call, and `midiOut` where `SOUND.DRV` has an MPU-401
-  (§34.13). SOUNDREC and MPLAYER are its look.
+`mciSendCommand` (701), `mciSendString` (702), `mciGetDeviceID` (703) and
+`mciExecute` (712). Two device types answer, each a WIN16 handler in part 9
+with no driver of its own:
+- `cdaudio` (`MCI_DEVTYPE_CD_AUDIO`, 516) over `CDROM.DRV`'s package door
+  (§119.4);
+- `waveaudio` (`MCI_DEVTYPE_WAVEFORM_AUDIO`, 522) over §124.32.3's output
+  device.
+
+`mciSetYieldProc` (714) answers TRUE and keeps nothing.
+`mciGetYieldProc` (716) answers NULL.
+
+- **The devices** are four records in one fixed block of WIN16's heap, made
+  at the first open. `[w16mm_mci]` names the block, and it goes with the
+  arenas at the program's end. A device ID is its record's number, 1 to 4.
+  - A fifth open answers `MCIERR_OUT_OF_MEMORY` (264).
+  - Every task of the instance sees the same four (§124.28). A device a
+    task leaves open stays open until the program's end.
+  - `MCI_ALL_DEVICE_ID` (FFFFh) is taken by `MCI_CLOSE` and `MCI_SYSINFO`
+    only. Any other command answers `MCIERR_CANNOT_USE_ALL` (279).
+- **`MCI_OPEN`** chooses the type in this order:
+  1. `MCI_OPEN_TYPE_ID`: the low word, 516 or 522;
+  2. `MCI_OPEN_TYPE`: the name, `cdaudio` or `waveaudio` (`type!element`
+     in a string);
+  3. otherwise, an element whose extension is `.WAV`: `waveaudio`.
+
+  An element with any other extension answers
+  `MCIERR_EXTENSION_NOT_FOUND` (281); any other type name,
+  `MCIERR_INVALID_DEVICE_NAME` (263). `MCI_OPEN_ALIAS` names the device,
+  and an alias already in use answers `MCIERR_DUPLICATE_ALIAS` (289).
+  `MCI_OPEN_SHAREABLE` is accepted. The ID goes in `wDeviceID`.
+  - `cdaudio` answers `MCIERR_DEVICE_NOT_INSTALLED` (306) without
+    `CDROM.DRV`. With it, the device opens with or without a disc, whose
+    absence is a status (`not ready`).
+  - `waveaudio` opens its element with WIN16's DOS (§124.21) and keeps the
+    handle. It reads the RIFF header and keeps the `fmt ` chunk's 16 bytes
+    and where the `data` chunk lies. A file that is not a PCM WAV answers
+    `MCIERR_INVALID_FILE` (296); one that does not open answers
+    `MCIERR_FILE_NOT_FOUND` (275). A `waveaudio` with no element opens, and
+    its play, seek and status answer `MCIERR_FILENAME_REQUIRED` (304):
+    recording into it (`new`) is batch 4's.
+- **Commands.**
+  - `MCI_CLOSE`, `MCI_PLAY` (`MCI_FROM`, `MCI_TO`), `MCI_STOP`,
+    `MCI_PAUSE`, `MCI_RESUME`.
+  - `MCI_SEEK`: `MCI_TO`, `MCI_SEEK_TO_START`, `MCI_SEEK_TO_END`.
+  - `MCI_STATUS`: `MCI_STATUS_ITEM`, `MCI_TRACK`, `MCI_STATUS_START`.
+  - `MCI_SET`: `MCI_SET_TIME_FORMAT`, `MCI_SET_DOOR_OPEN` and `_CLOSED`.
+    `MCI_SET_AUDIO` is accepted and changes nothing.
+  - `MCI_INFO`: `MCI_INFO_PRODUCT`, and for `waveaudio` `MCI_INFO_FILE`.
+  - `MCI_GETDEVCAPS`, all nine items.
+  - `MCI_SYSINFO`: `QUANTITY`, `NAME`, `MCI_SYSINFO_OPEN`.
+
+  Any other message answers `MCIERR_UNSUPPORTED_FUNCTION` (274); a NULL
+  parameter block where one is read answers
+  `MCIERR_NULL_PARAMETER_BLOCK` (297).
+- **`MCI_NOTIFY`** posts `MM_MCINOTIFY` (3B9h) to the callback's window,
+  `lParam` the device ID:
+  - when the command is done: at once for every command but a play, and
+    when a play reaches its end (`MCI_NOTIFY_SUCCESSFUL`, 1);
+  - when a play with a notice outstanding is replaced by another play that
+    asks for one (`MCI_NOTIFY_SUPERSEDED`, 2);
+  - when it is ended by a stop, a pause, a seek, a play without a notice
+    or a close (`MCI_NOTIFY_ABORTED`, 4).
+
+  **`MCI_WAIT`** on a play returns when the play ends, yielding a tick at a
+  time as `sndPlaySound` does.
+- **`cdaudio`**:
+  - Its time formats are `MCI_FORMAT_MSF` (the default), `MCI_FORMAT_TMSF`
+    and `MCI_FORMAT_MILLISECONDS`; any other answers
+    `MCIERR_BAD_TIME_FORMAT` (293).
+  - **A position is one second fine**: the door's `CDV_STATUS` counts
+    seconds. An MSF position is the track's start (`CDV_TRACK`'s LBA, plus
+    the 150 frames before LBA 0) and the seconds into it. TMSF and MSF
+    positions come back with frames 0.
+  - **A play is `CDV_PLAY`** from the track and second a `from` names, or
+    from where the disc stands. A `to` at a track's start ends the play
+    with the track before it. A `to` inside a track is checked every
+    `W16MM_CDPOLL` = 9 ticks, half a second, on WIN16's tick, and the play
+    is stopped (`CDV_STOP`) once it is reached. The same poll sees a play
+    end, for its notice and for `MCI_WAIT`.
+  - `MCI_PAUSE` is `CDV_PAUSE`. `MCI_RESUME`, or a play with no `from`
+    while paused, is `CDV_RESUME`. `MCI_SEEK` moves where the next play
+    starts and plays nothing, because the door has no seek. A drive that
+    refuses audio, QEMU's, answers `MCIERR_HARDWARE` (262) for a play.
+  - Status items:
+    - `MCI_STATUS_MODE`: `CDV_STATUS`'s state (playing, paused, or else
+      stopped). A drive with no audio commands, QEMU's, is stopped; any
+      other refusal, such as no disc, is `not ready`;
+    - the disc's length (in TMSF, as MSF, as Windows answers it), a
+      track's length, and the number of tracks;
+    - `MCI_STATUS_POSITION`, `MCI_STATUS_CURRENT_TRACK`,
+      `MCI_STATUS_START`;
+    - `MCI_STATUS_MEDIA_PRESENT` and `MCI_STATUS_READY`: `CDV_DISC`
+      answering;
+    - `MCI_CDA_STATUS_TYPE_TRACK` (4001h): `MCI_CDA_TRACK_AUDIO` (1088)
+      or `MCI_CDA_TRACK_OTHER` (1089).
+  - `MCI_SET_DOOR_OPEN` and `_CLOSED` are `CDV_EJECT`. Closing the device
+    does not stop the disc, as closing CDRack does not (§119.4).
+- **`waveaudio`**:
+  - Its time formats are `MCI_FORMAT_MILLISECONDS` (the default),
+    `MCI_FORMAT_BYTES` and `MCI_FORMAT_SAMPLES`. A position given in
+    milliseconds is taken down to a sample. One answered in milliseconds
+    is rounded to the nearest, as Windows' `MulDiv` gives it, so a play to
+    500 stands at 500. `waveOutGetPosition`'s `TIME_MS` is rounded the same
+    way.
+  - **A play streams the file**: two buffers of a fixed block, each half a
+    second of the format, 4 to 32 KB. They go to §124.32.3's device as two
+    `WAVEHDR`s in the device's record, each read again and written again
+    as the card finishes it, on WIN16's tick. So a WAV of any length plays
+    in 8 to 64 KB of heap.
+  - The output device is the MCI's while the play lasts (`WOF_MCI`):
+    - a `waveOutOpen` meanwhile answers `MMSYSERR_ALLOCATED`, and a
+      `sndPlaySound` answers FALSE;
+    - a play while the program's own `waveOut` or a sound is playing
+      answers `MCIERR_WAVE_OUTPUTSINUSE` (320);
+    - a format the card cannot play answers `MCIERR_WAVE_OUTPUTSUNSUITABLE`
+      (326), as does a machine without a stream.
+  - Pause and resume are §124.32.3's: up to the ring's length plays after
+    a pause.
+  - Status items: `MCI_STATUS_MODE`, the length, the position,
+    `MCI_STATUS_MEDIA_PRESENT` and `MCI_STATUS_READY` (TRUE), the number
+    of tracks and the current track (1), and the `fmt ` chunk's fields
+    (`MCI_WAVE_STATUS_FORMATTAG` 4001h to `BITSPERSAMPLE` 4006h).
+- **`mciSendString`** reads `verb device keyword...` and fills the same
+  parameter block in WIN16's scratch, so a string and a command are one
+  path. Keywords are matched without case; a `"quoted"` value keeps its
+  spaces.
+  - Verbs: `open`, `close`, `play`, `stop`, `pause`, `resume`, `seek`,
+    `status`, `set`, `info`, `capability`, `sysinfo`.
+  - A position is a number, or colon-separated fields packed a byte each
+    in the order given (`3:01:30` is MSF's minute, second and frame; in
+    TMSF, track, minute, second).
+  - What a command answers is written back as text:
+    - a number in decimal;
+    - a position as `mm:ss:ff` or `tt:mm:ss:ff`;
+    - a mode, `true` or `false`, a time format, a track's type, or a
+      device type, by name;
+    - `open` answers the device ID.
+    - An answer longer than the program's buffer is cut to it, NUL-ended.
+  - An unknown verb answers `MCIERR_UNRECOGNIZED_COMMAND` (261); an
+    unknown keyword `MCIERR_UNRECOGNIZED_KEYWORD` (259); a device that is
+    not open `MCIERR_INVALID_DEVICE_NAME` (263); a missing device
+    `MCIERR_MISSING_DEVICE_NAME` (292); a missing value
+    `MCIERR_MISSING_PARAMETER` (273); a bad number `MCIERR_BAD_INTEGER`
+    (270). A device named in a command and not opened is **not**
+    auto-opened, as Windows would: that answers 263.
+  - `mciExecute` is `mciSendString` with no answer, and it puts up no
+    message box. It answers TRUE when the command was carried out.
+- `mciGetErrorString` copies Windows' sentence for each code above.
+
+#### 124.32.5 Planned *(S23 batch 4)*
+
+`waveIn` over the record verbs (§34.6), `timeSetEvent`, `CALLBACK_FUNCTION`'s
+call, and `midiOut` where `SOUND.DRV` has an MPU-401 (§34.13). SOUNDREC and
+MPLAYER are its look.

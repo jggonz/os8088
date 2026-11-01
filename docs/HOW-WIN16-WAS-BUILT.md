@@ -3545,3 +3545,72 @@ The new GH_TASK byte took offset 10. The arm's tile fields (`GH_TN`,
 - TASKS with TASKB: "TASKS OK".
 
 The real-mode `win16.bin` is byte-identical to the lead's tip.
+
+## 2026-11-01: S23 batch 3, MCI
+
+Windows programs mostly reach sound and CD audio through MCI rather than
+`waveOut`. Media Player is an MCI program, and so is many a title's "play
+the narration" button. Batch 3 adds `mciSendCommand` and `mciSendString`
+for two device types (SPEC.md 124.32.4):
+- `waveaudio` streams a WAV file through batch 2's `waveOut` device, in two
+  half-second buffers that WIN16's tick reads again and writes again.
+- `cdaudio` drives `CDROM.DRV` through its package door (§119.4).
+
+Both are handlers in the system-library part, and a string becomes the same
+parameter block a command fills, so the two share one path. `mciGetErrorString`
+gives Windows' own sentences.
+
+**A discovery: the first slice ran 274 bytes deep.** The first look at
+MCITEST stopped on *STACK OVERFLOW TASK 00* with an SB16 playing. Task 0's
+stack is 512 bytes, and its canary was gone. To find out where the bytes
+went, a scratch build recorded the deepest SP at four places in WIN16's bss,
+behind a marker. QEMU's `pmemsave` then wrote the guest's memory out, and
+the marker was found in it:
+
+| place | SP | below the top |
+|---|---|---|
+| `w16_hsp`, where the program was resumed | 1EEB | 274 |
+| an MCI handler's entry | 1EE3 | 282 |
+| the file read in `w16mm_wvfill` | 1ECD | 304 |
+| WIN16's tick, `w16_ontimer` | 1FCB | 50 |
+
+MCI itself costs about 30 bytes. The rest was where the program had been
+resumed from: the wake that started it. A dump of the dead stack showed what
+spent the last 200 bytes under the file read. An IRQ0 had taken
+`SOUND.DRV`'s tick (`snd_tick`, then `drv_svc_call`, then the driver's
+protected-mode far call) on top of the DOS core's read.
+
+**The fix is WIN16's, and is the arm's alone.** The wake loads the program
+and sets `w16_go1`, and the next tick runs its first instruction (SPEC.md
+124.31.8). `w16_hsp` measured 66 bytes below the top after the change. Real
+mode is byte-identical.
+
+The same looks also turned up a kernel defect, which is the owner's to
+decide. kern_mega's `.cold` arm of `MEGA_CSELTOP` decides real or protected
+mode by reading `[ss:mega_pm]`. When an IRQ0 arrives while a Windows program
+runs on its own stack, SS is the program's selector, and that byte is
+whatever the program keeps at that offset. When it read 0, `drv_svc_call_x`'s
+`retf` went to a data selector: *kern_mega FAULT 0D*. A local prototype reads
+the machine status word instead (`smsw`, its PE bit), and MCITEST runs on it.
+That prototype is not committed.
+
+Three answers that were wrong on the first pass:
+- `mciSendString` answered 768 and 6656 with the right text, because
+  the routine that writes the answer left AX holding its scratch. It now
+  answers 0.
+- `status position` after a play to 500 ms said 499: 500 ms is 5,512.5
+  samples, kept as 5,512. Milliseconds are now rounded as Windows' `MulDiv`
+  rounds them, and `waveOutGetPosition`'s `TIME_MS` is rounded the same way.
+- `cdaudio`'s mode said *not ready* on QEMU, whose drive has a disc but no
+  audio commands. That drive is now *stopped*.
+
+**Seen**, dev kern_mega, QEMU 486, SB16 and the gate's `CDROM.DRV` (three
+fake audio tracks):
+- MCITEST: "mcitest: 0 wrong, wave 1, cd 2, waited 328 ms".
+- The capture held 0.8 s of tone.
+- MMTEST: "0 wrong, waveOut 1, step 1 ms, played 463 ms".
+- MSGBOX: its box, as before.
+
+**Open:** SELTEST computes "0 wrong", read out of its own memory, but its
+MessageBox draws with no title and no text. The menus outside it still draw.
+At the batch's base it never got that far, because it overran the stack.
