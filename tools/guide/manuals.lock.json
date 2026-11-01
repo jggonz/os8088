@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "a3899bf8c",
-  "strings": "8785ca1a6c089287",
-  "why": "S22 batch 6: the arm's hosted DOS core; the real-mode build is byte-identical"
+  "stamped": "664da0e46",
+  "strings": "d5a908ce3c9aa918",
+  "why": "S22 batch 5: GetWinFlags, selector functions, DPMI int 31h on the kern_mega arm"
  },
  "WIN16_TXT": {
   "sources": [
