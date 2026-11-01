@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "ef6aeb494",
+  "stamped": "5f15456e9",
   "strings": "17f273ce17c30db0",
-  "why": "S21 batch 1: task table"
+  "why": "S21 batch 2: WinExec and turns"
  },
  "WIN16_TXT": {
   "sources": [
