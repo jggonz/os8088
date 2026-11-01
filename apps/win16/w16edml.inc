@@ -246,7 +246,7 @@ w16e_wset:
     push si
     push es
     mov [w16e_wface], ax
-    mov es, ax
+    W16SEG es, ax
     xor cx, cx
 .c:
     mov al, cl
@@ -2312,7 +2312,7 @@ w16e_copy:
     push ds
     push es
     pop ds                          ; DS:SI = the selection
-    mov es, dx
+    W16SEG es, dx
     xor di, di
     push cx
     cld

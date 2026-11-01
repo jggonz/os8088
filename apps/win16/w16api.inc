@@ -1600,7 +1600,7 @@ w16_libproc:
     shl si, 1
     dec bx
     jnz .x32
-    mov ds, [si + w16_libs + W16L_MREC]   ; DS = the module block from here
+    W16SEG ds, [si + w16_libs + W16L_MREC] ; DS = the module block from here
     or cl, cl
     jz .ord
     mov si, [W16LM_RES]

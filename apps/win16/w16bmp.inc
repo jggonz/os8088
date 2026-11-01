@@ -119,7 +119,7 @@ w16_bmnew:
     jmp short .no                   ;   (SPEC.md 124.9.1)
 .got:
     mov [w16b_seg + bx], dx
-    mov es, dx                      ; black: CBLACK in both halves
+    W16SEG es, dx                      ; black: CBLACK in both halves
     xor di, di
     xor al, al
     cld
@@ -1708,7 +1708,7 @@ w16_bm2bm:
     cmp byte [w16b_brop], 0
     jne .rop
     push ds
-    mov ds, ax                      ; DS:SI = the source, ES:DI the destination
+    W16SEG ds, ax                      ; DS:SI = the source, ES:DI the destination
     call w16_nibrow
     pop ds
 .next:

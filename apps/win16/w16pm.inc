@@ -155,6 +155,18 @@
 %endif
 %endmacro
 
+; W16TOVIRT reg - the arm only: reg, a selector W16TOSEL made, becomes its
+; virtual paragraph again (W16VOF's half after the mov). Nothing in real
+; mode. Keeps every other register, and the flags.
+%macro W16TOVIRT 1
+%ifdef PKG_MEGA
+  W16V_SECT
+  %define w16vany_%[w16v_sx] 1
+  %define w16vo_%[w16v_sx]_%1 1
+    call w16v%[w16v_sx]_o%1
+%endif
+%endmacro
+
 ; W16CSDS reg - reg = this section's DATA segment, from CS: the same value in
 ; real mode, and in the arm the pair's data half, CS + 8 (a package image, a
 ; part claim and a SEG_SUBC copy are each a pair). Flags not kept in the arm.
@@ -162,6 +174,21 @@
     mov %1, cs
 %ifdef PKG_MEGA
     add %1, 8
+%endif
+%endmacro
+
+; W16CSEG sreg - sreg = this section's data, as `push cs` / `pop sreg` is in
+; real mode: in the arm the pair's data half, so what is written through it is
+; a store and not a trap (SPEC.md 20.18). Flags not kept in the arm.
+%macro W16CSEG 1
+%ifdef PKG_MEGA
+    push ax
+    W16CSDS ax
+    mov %1, ax
+    pop ax
+%else
+    push cs
+    pop %1
 %endif
 %endmacro
 
@@ -226,6 +253,8 @@ w16v%1_sel:
     add ax, 8
     mov ds, ax
     pop ax
+  %else
+    mov ds, [cs:w16v%1_myds]        ; WIN16's, written when the part came
   %endif
     mov bx, ax
     and bx, W16V_NC - 1
@@ -293,6 +322,8 @@ w16v%1_vof:
     add ax, 8
     mov ds, ax
     pop ax
+  %else
+    mov ds, [cs:w16v%1_myds]
   %endif
     or ax, ax
     jz .out
@@ -415,11 +446,22 @@ w16v%1_%2m:
 ; W16PM_PART sfx, dsload - a section's core and thunks, if it used W16SEG:
 ; emitted in that section after its last use (win16.asm's tail)
 %macro W16PM_PART 2
+  %ifnidni %2, cs
+w16v%1_myds: dw 0                   ; WIN16's data selector (w16_pmds)
+  %endif
   %ifdef w16vany_%1
     W16PM_SEL %1, %2
     W16PM_VOF %1, %2
     W16PM_THUNKS %1
   %endif
+%endmacro
+
+; W16PMDS sfx, sreg - the arm: part sfx, its data reachable through sreg,
+; told WIN16's data selector (DS = ours). Nothing in real mode.
+%macro W16PMDS 2
+%ifdef PKG_MEGA
+    mov [%2:w16v%1_myds], ds        ; XSEC-OK: the part's own word, written
+%endif                              ;   through its data selector
 %endmacro
 
 ; -----------------------------------------------------------------------------
@@ -719,6 +761,38 @@ w16_pspsel:
     mov cx, 16
     xor bl, bl
     call w16_psel
+    pop cx
+    pop bx
+    ret
+
+; w16_ssel - AX = one of the program's segments' paragraph, CL = 1 a code
+; segment or 0 a data one, BX = a data one's index * 2 -> AX = the selector
+; the program names it by (SPEC.md 124.31.4). A code segment's code half
+; reaches its claim's end, so the loader, a thunk and the stack scan ask for
+; the same one without the segment's length, which [w16_slen] has only while
+; that segment is being laid; a data one reaches [w16_slen + BX]. Keeps the rest.
+w16_ssel:
+    push bx
+    push cx
+    push dx
+    mov dl, cl
+    xor cx, cx
+    or dl, dl
+    jnz .go
+    mov cx, [w16_slen + bx]
+    add cx, 15
+    jc .all
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    jmp short .go
+.all:
+    xor cx, cx                      ; 64KB
+.go:
+    mov bl, dl
+    call w16_psel
+    pop dx
     pop cx
     pop bx
     ret

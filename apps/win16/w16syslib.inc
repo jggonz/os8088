@@ -1372,8 +1372,7 @@ w16c_shrun:
     inc di
     or al, al
     jnz .c
-    push cs
-    pop es
+    W16CSEG es
     mov si, w16c_toast              ; XSEC-OK: ES = CS
     xor cx, cx
     call OSAPI_TOAST
@@ -1509,8 +1508,7 @@ w16c_path:
     call w16v_join
     jc .fnf
     mov dx, w16v_path               ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     mov ax, 0x3D00
     ICALL w16_dcall
     jc .no
@@ -1673,8 +1671,7 @@ w16c_locate:
 ; CF=1 it has none. Keeps all but AX
 w16c_cwd:
     push es
-    push cs
-    pop es
+    W16CSEG es
     mov ah, 0x47
     ICALL w16_dcall
     pop es
@@ -1685,8 +1682,7 @@ w16c_cwd:
 w16c_cd:
     push ax
     push es
-    push cs
-    pop es
+    W16CSEG es
     mov ah, 0x3B
     ICALL w16_dcall
     pop es

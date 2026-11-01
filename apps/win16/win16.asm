@@ -693,6 +693,9 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_fpm, 1           ; W16FP_*: none, the emulator, the coprocessor
     W16BSS w16_nfix, 2          ; pass 0: OS fixups and __FPMATH imports
     W16BSS w16_fpseg, 2         ; the emulator part's segment, 0 = not here
+%ifdef PKG_MEGA
+    W16BSS w16x_fcs, 2          ; ...the arm: its copy's code selector
+%endif
     W16BSS w16x_new, 40         ; its ten vectors, int 34h..3Dh
     W16BSS w16x_old, 44         ; the machine's 34h..3Dh and 2
     W16BSS w16x_hand, 4         ; the runtime's handler (__FPMATH 3), native
@@ -1618,6 +1621,10 @@ w16_ldcall:
     call w16_pfetch
     jc .no
 %ifdef PKG_MEGA
+    push es
+    mov es, ax
+    W16PMDS l, es
+    pop es
     sub ax, 8                       ; a part claim's code half (124.31.5)
 %endif
     mov [w16_lkv + 2], ax
@@ -1654,6 +1661,10 @@ w16_dlgin:
     jc .out
     mov [w16_dseg], ax
 %ifdef PKG_MEGA
+    push es
+    mov es, ax
+    W16PMDS d, es
+    pop es
     sub ax, 8                       ; a part claim's code half (124.31.5)
 %endif
     mov [w16_pfv + 2], ax
@@ -1695,6 +1706,10 @@ w16_sysin:
     jc .out
     mov [w16_sseg], ax
 %ifdef PKG_MEGA
+    push es
+    W16SEG es, ax
+    W16PMDS s, es
+    pop es
     push bx                         ; the copy's code half (124.31.5)
     push cx
     xor cx, cx

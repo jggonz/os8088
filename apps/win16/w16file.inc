@@ -56,7 +56,7 @@ w16_dosup:
     call w16_kclaim                 ;   window (SPEC.md 124.25.1)
     jc .out
     mov [w16_dhtmp], dx
-    mov es, dx                      ; zero: the core's bss and the host's
+    W16SEG es, dx                      ; zero: the core's bss and the host's
     xor di, di
     xor ax, ax
     mov cx, W16DH_KB * 512
@@ -222,8 +222,7 @@ w16_i21dos:
     push bp
     push ds
     push es
-    push cs
-    pop ds
+    W16CSEG ds
     push word [w16_hflags]          ; interrupts as the host has them: a disk
     popf                            ;   is read
     cld

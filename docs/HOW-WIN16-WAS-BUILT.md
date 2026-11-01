@@ -3093,3 +3093,57 @@ MessageBox drawn in the os8088 window. Clicking OK resumes it into its exit,
 program's `int 21h` runs the keyboard ISR and returns as if the call were
 done. Routing it is a kernel change, and the owner's to make (SPEC.md
 124.31.2).
+
+## 2026-11-01 — S22: Minesweeper, Solitaire and a library in protected mode
+
+**What it is.** Batch 3 of S22: the rest of the loader. These were left after
+TINY16: code segments that are discarded and loaded again, libraries, and
+WIN16's own habit of reaching its data through CS. The test machine is a dev
+build of kern_mega carrying the owner-pending vector fix (SPEC.md 124.31.2,
+(d1)). That kernel is not committed.
+
+**Seen, QEMU 486, kern_mega, protected mode.**
+- Minesweeper 3.1 plays: two clicks open cells and the timer runs.
+- Clock draws its face and keeps time.
+- Solitaire deals. Its code is in eleven discardable segments, most loaded
+  on first call.
+- Notepad opens empty.
+- DLLUSE loads its two test libraries and says `DLLUSE OK`.
+
+Calculator and the FPU fixture stop at the x87 emulator's interrupt vectors,
+which are batch 4's. Paintbrush stops where WIN16's DOS host is far-called,
+which is batch 6's.
+
+**Discoveries, in the order they were met.**
+- *A flag cleared by a shift.* The loader's segment-selector helper tested a
+  segment's DATA flag, then shifted BX back before the jump. The shift
+  rewrote ZF, so every segment came out as a data selector. Solitaire's first
+  return into its own code faulted on a descriptor the LDT dump showed as
+  type 92h: data, with the segment's exact length as its limit.
+- *Every way of naming a code segment has to agree.* A discardable segment
+  is named by its thunks, by the frame `w16_segld` returns through, and by
+  the stack scan that decides whether it may be discarded. The scan compares
+  numbers. If it builds a different selector from the one the program is
+  running on, it discards a segment in use, and the fault comes later, on a
+  far return. The segment's length cannot be what makes them agree:
+  `w16_slen` holds it only while that module is being laid out. So a code
+  segment's selector reaches the end of its claim. kern_mega already
+  answers the same pair for the same base and limit (`mega_dfind`).
+- *`push cs / pop ds` is a write through a code selector.* There are 27 such
+  sites, and kern_mega completes each store by trap. `W16CSEG` gives the
+  pair's data half instead, and in real mode it is the same two
+  instructions.
+- *The machine's interrupt vectors are real-mode addresses.* AH=35h for a
+  vector the program never set read the IVT through selector 0. kern_mega
+  fixed that read up, but then loaded the BIOS's F000h into ES, and that
+  load faulted. The program now gets an `iret` of WIN16's instead.
+- *Two of WIN16's own far addresses used `ds`.* LibMain's trampoline and
+  `GetProcAddress`'s stub both did, so both were data selectors. A far call
+  through a data selector is a fault.
+- *A library's hInstance is the program's value.* It is now the block's
+  selector, as `GlobalLock` answers it. The free path converts it back
+  first.
+
+The shipped `build/win16.bin`, `win16.o88` and `kdos/DOS.O88` are
+byte-identical after every change. The arm has 1,495 bytes of room (65,024
+less image and bss), the real-mode build still 1,279.

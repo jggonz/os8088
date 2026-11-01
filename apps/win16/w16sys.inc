@@ -192,8 +192,7 @@ W16LIB w16k_freelib
     dec byte [si + W16L_COUNT]
     jnz .out
     inc byte [si + W16L_COUNT]      ; alive while its WEP runs
-    push cs
-    pop es
+    W16CSEG es
     mov di, w16_s_wep               ; XSEC-OK: ES = CS
     mov cl, 3
     ICALL w16_libproc               ; BL = the record -> DX:AX
@@ -539,7 +538,7 @@ w16l_lmcall:
     mov [w16_lmes], ax
     mov word [w16_lmsi], 0x80       ; the PSP's tail length: a 0, so ""
     push es
-    mov es, [bx + W16L_MREC]
+    W16SEG es, [bx + W16L_MREC]
     mov ax, [es:W16LM_IP]
     mov [w16_lmfar], ax
     mov bx, [es:W16LM_CS]
@@ -549,7 +548,7 @@ w16l_lmcall:
     mov [w16_lmfar + 2], ax
     pop es
     mov ax, w16_lmtramp
-    mov dx, ds
+    W16ICS dx
     ICALL w16_cbcall
     ret
 
@@ -572,7 +571,7 @@ w16l_drop:
     push si
     push es
     call w16l_recp
-    mov es, [bx + W16L_MREC]
+    W16SEG es, [bx + W16L_MREC]
     xor si, si
 .dep:
     mov al, [es:W16LM_LIBS + si]
@@ -598,6 +597,9 @@ w16l_drop:
     ICALL w16_gfreeh
 .nc:
     mov ax, [bx + W16L_HINST]
+%ifdef PKG_MEGA
+    ICALL w16_pin                   ; (the program's selector: 124.31.3)
+%endif
     cmp ax, [bx + W16L_MREC]
     je .nd
     ICALL w16_gfreeh
@@ -1111,6 +1113,16 @@ W16LIB w16_segld
     pop bx
     pop es
     jc .fail
+%ifdef PKG_MEGA
+    push ax                         ; its code selector (SPEC.md 124.31.4)
+    push cx
+    mov ax, dx
+    mov cl, 1
+    ICALL w16_ssel
+    mov dx, ax
+    pop cx
+    pop ax
+%endif
     mov [es:bx + W16F_IP], si
     mov [es:bx + W16F_CS], dx
     mov ax, [w16_thax]
@@ -1579,7 +1591,7 @@ W16LIB w16g_charwidth
     cld
 .c:
     push es
-    mov es, si
+    W16SEG es, si
     mov al, dl                      ; w16_glyph's lookup, here
     sub al, [es:W16F_FIRST]
     jb .def
@@ -2702,7 +2714,7 @@ W16LIB w16k_gnask
     or ax, ax
     jz .n                           ; discarded already
     dec ax
-    mov es, ax
+    W16SEG es, ax
     cmp byte [es:GH_LOCK], 0
     jne .n
     mov ax, [w16_ghage + si]
@@ -2748,7 +2760,7 @@ LCONT w16k_gnback
     or ax, ax
     jz .again                       ; it gave the block up itself
     dec ax
-    mov es, ax
+    W16SEG es, ax
     cmp byte [es:GH_LOCK], 0
     jne .kept
     ICALL w16_gfreeblk

@@ -230140,10 +230140,15 @@ what the numbers mean**:
 #### 124.31.4 The loader
 
 - A segment's place is laid out in virtual paragraphs, as today
-  (`w16_lay1`); its **selector** is made when its bytes are in: `SEG_SUBC`
-  for a code segment (its code half in `w16_ssel`, a table beside
-  `w16_sbase`), `SEG_SUB` for a data segment, each reaching the segment's
-  allocation.
+  (`w16_lay1`); its **selector** is made when its bytes are in:
+  `SEG_SUBC`'s code half for a code segment, `SEG_SUB` for a data segment
+  (`w16_ssel`, from the paragraph). A data segment's reaches its
+  allocation; a **code segment's reaches its claim's end**, so the loader's
+  fixups, a thunk, `w16_segld`'s frame and the discard's stack scan
+  (`w16l_inuse`) each derive the same selector from the paragraph alone -
+  `w16_slen` holds a segment's length only while that module is being laid,
+  and a stack scan that compares a different selector than the one the
+  program runs on discards a segment in use.
 - A fixup's segment is the target's selector - the code half for a code
   segment, the data selector for DGROUP and other data - and an import's is
   WIN16's own **code** selector (`mov dx, cs`, not `ds`), so a call into
@@ -230153,6 +230158,13 @@ what the numbers mean**:
   loaded and freed when it is discarded; its thunk's `jmp far` names the
   code selector. The thunks themselves are code in a module block: their
   `call far` is through the block's code half.
+- **A library** (§124.23) is laid in two global blocks as in real mode. Its
+  DGROUP, and its hInstance when it has none (the module block), are the
+  block's selector as `GlobalLock` answers it (`w16_pblk`), and its module
+  record's segment table (`W16LM_SEGS`) holds the selectors the program is
+  given, so `GetProcAddress`, an import's fixup and LibMain's far address
+  read it as they are. The record's blocks stay virtual (`W16L_MREC`,
+  `W16L_CODE`); freeing an hInstance converts it back first.
 - **`NEF_PMODE` is accepted**: a program or library marked protected mode
   only loads on this arm (`w16_r_pmode` stays the real-mode arm's refusal).
 
@@ -230164,12 +230176,20 @@ gates) hold a **code** selector: `op_cseg` (§20.12) for a part claim, and
 `SEG_SUBC`'s code half for a part copied into a heap block. A write through
 CS is left to the trap where it is cold; where it is on every call (the
 gate's `mov bp, cs / mov ds, bp`, the DOS host's `[cs:]` stack words) the
-arm loads its data selector instead.
+arm loads its data selector instead. A part that reaches its own data with
+`push cs / pop ds` (or `es`) says `W16CSEG ds` instead: the pair's data half
+in the arm, the same two instructions in real mode. A far address WIN16
+hands out for its own code - an import stub's (`w16_stubs`, `w16_proc`),
+LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
 
 #### 124.31.6 What the program is told
 
 - **`GetWinFlags`** answers `WF_PMODE | WF_STANDARD` and the CPU's bit
   (`WF_CPU286`, `WF_CPU386`, `WF_CPU486`), and `WF_80x87` when there is one.
+- **`int 21h` AH=35h** answers a vector the program set from WIN16's own
+  table, as in real mode; one it did not set is a real-mode address no
+  selector names, so it answers an `iret` of WIN16's (`w16_ivret`) - what a
+  C runtime saves to chain or restore stays callable.
 - **`__AHINCR` = 8, `__AHSHIFT` = 3.** A `GlobalAlloc` over 64 KB is tiled
   with `SEG_TILE`; under 64 KB it is one selector.
 - **The selector functions**, over `OSAPI_SEG`: `AllocSelector`,

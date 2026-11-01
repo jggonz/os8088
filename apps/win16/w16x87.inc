@@ -123,7 +123,22 @@ w16x_fpin:
     popf
     jc .out
     mov [w16_fpseg], ax
+%ifdef PKG_MEGA
+    push ax                         ; the copy's code half, for its vectors
+    push bx                         ;   and __FPMATH (SPEC.md 124.31.5)
+    push cx
+    xor cx, cx
+    mov bl, 1
+    call w16_psel
+    mov [w16x_fcs], ax
+    pop cx
+    pop bx
+    pop ax
+    W16SEG es, ax
+    W16PMDS f, es
+%else
     mov es, ax                      ; its end stub: the x87 row's gate stub
+%endif
     mov ax, W16_X87ROW * 6
     add ax, w16_stubs
     mov [es:W16FPH_ENDP], ax
@@ -133,7 +148,12 @@ w16x_fpin:
 .v:
     mov ax, [es:si]
     mov [w16x_new + di], ax
+%ifdef PKG_MEGA
+    push word [w16x_fcs]
+    pop word [w16x_new + di + 2]
+%else
     mov [w16x_new + di + 2], es
+%endif
     add si, 2
     add di, 4
     cmp di, 40
@@ -300,8 +320,7 @@ w16x_never:
 ; -----------------------------------------------------------------------------
 w16x_fpmath:
     push ds
-    push cs
-    pop ds
+    W16CSEG ds
     cmp bx, 12
     ja .bad
     push bx
@@ -477,8 +496,7 @@ w16x_code:
 w16x_n02:
     push ax
     push ds
-    push cs
-    pop ds
+    W16CSEG ds
     fnstsw [w16x_sw]
     fwait
     test byte [w16x_sw], 0x80       ; ES: the coprocessor's
@@ -504,8 +522,7 @@ w16x_n3d:
     fwait
     push ax
     push ds
-    push cs
-    pop ds
+    W16CSEG ds
     mov al, [w16x_q]
     or al, al
     jnz .have

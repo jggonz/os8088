@@ -169,7 +169,7 @@ w16_icpart:
     jc .out
     mov [w16_icseg], ax
 .have:
-    mov es, ax
+    W16SEG es, ax
     clc
 .out:
     pop ax

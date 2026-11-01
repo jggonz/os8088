@@ -129,8 +129,7 @@ w16_i21:
     push bx
     push si
     mov bx, ds                      ; the handler's segment is the caller's DS
-    push cs
-    pop ds
+    W16CSEG ds
     call w16_vecslot                ; SI = the row (DS = ours)
     jc .vfull
     mov [si], al
@@ -149,8 +148,7 @@ w16_i21:
 .getv:                              ; AL = the vector; out ES:BX
     push ds
     push si
-    push cs
-    pop ds
+    W16CSEG ds
     call w16_vecslot
     jc .real
     cmp word [si + 3], 0            ; a free row: not one the program set
@@ -163,6 +161,12 @@ w16_i21:
 .real:
     pop si
     pop ds
+%ifdef PKG_MEGA
+    push cs                         ; the machine's is a real-mode address,
+    pop es                          ;   which no selector names: an iret of
+    mov bx, w16_ivret               ;   ours stands in (SPEC.md 124.31.3)
+    jmp .done
+%else
     push ax                         ; not one of the program's: the machine's
     xor ah, ah
     shl ax, 1
@@ -173,6 +177,12 @@ w16_i21:
     les bx, [es:bx]
     pop ax
     jmp .done
+%endif
+
+%ifdef PKG_MEGA
+w16_ivret:
+    iret
+%endif
 
 ; w16_vecslot - SI -> AL's row in [w16_vecs], else the first free row (its
 ; number byte 0 and its pointer word 0); CF=1 = full. DS = ours.
@@ -209,8 +219,7 @@ w16_vecslot:
 w16_i21_exit:
     ; STKBALANCE-OK: AH=4Ch abandons the program's stack for the host's and
     ; returns from w16_resume through w16_tohost
-    push cs
-    pop ds
+    W16CSEG ds
     mov [w16_exit], al
     mov byte [w16_state], W16S_ENDED
     call w16_i21_off                ; IF = 0 (the int cleared it)

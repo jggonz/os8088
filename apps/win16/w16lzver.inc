@@ -235,8 +235,7 @@ W16SYS w16z_expname
     mov ah, 0x3F
     mov cx, 14
     mov dx, w16z_hdr                ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     ICALL w16_dcall
     pushf
     push ax
@@ -376,8 +375,7 @@ w16z_init:
     mov ah, 0x3F
     mov cx, 14
     mov dx, w16z_hdr                ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     ICALL w16_dcall
     mov dx, LZERROR_BADINHANDLE
     jc .ans
@@ -403,7 +401,7 @@ w16z_init:
     xor dx, dx
     xor cl, cl                      ; GMEM_FIXED
     ICALL w16_gnew                  ; AX = the handle, DX = the block
-    mov es, dx
+    W16SEG es, dx
     pop dx
     or ax, ax
     jz .ans
@@ -1341,8 +1339,7 @@ w16v_there:
     pop si
     jc .out
     mov dx, w16v_path               ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     mov ax, 0x3D00
     ICALL w16_dcall
     jc .out
@@ -1423,8 +1420,7 @@ w16v_sysdir:
     mov [cs:w16v_sys], al
     mov si, w16s_dir
     mov di, w16v_sys + 1            ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     mov cx, w16s_dirlen
     cld
     rep movsb                       ; the NUL with it
@@ -1451,8 +1447,7 @@ W16SYS w16v_install
     call w16v_join
     jc .noread
     mov dx, w16v_path               ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     mov ax, 0x3D00
     ICALL w16_dcall
     jc .noread
@@ -1475,8 +1470,7 @@ W16SYS w16v_install
     call w16v_join
     jc .nocreate
     mov dx, w16v_path2              ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     xor cx, cx
     mov ah, 0x3C
     ICALL w16_dcall
@@ -1494,8 +1488,7 @@ W16SYS w16v_install
     popf
     jnc .old
     mov dx, w16v_path2              ; a partial copy deleted; XSEC-OK: ES = CS
-    push cs
-    pop es
+    W16CSEG es
     push ax
     mov ah, 0x41
     ICALL w16_dcall
@@ -1533,8 +1526,7 @@ W16SYS w16v_install
     call w16v_join
     jc .nodel
     mov dx, w16v_path               ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     mov ah, 0x41
     ICALL w16_dcall
     jnc .ans
@@ -1817,8 +1809,7 @@ w16v_at:
     mov ax, [cs:w16v_h]
     call w16z_seek
     jc .out
-    push cs
-    pop es
+    W16CSEG es
     mov cx, si
     call w16z_read
     jc .out

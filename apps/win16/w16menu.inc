@@ -2336,7 +2336,7 @@ w16_mpsave:
     mov bx, [w16_mrec]
     mov [bx + MP_SH], ax
     mov [bx + MP_SS], dx
-    mov es, dx
+    W16SEG es, dx
     xor di, di
     mov ax, [w16_mx0]
     mov bx, [w16_my0]
@@ -2380,7 +2380,7 @@ w16_mpclose:
     call w16_mgon
     jc .free
     call w16_mprect
-    mov es, [bx + MP_SS]
+    W16SEG es, [bx + MP_SS]
     xor si, si
     mov ax, [w16_mx0]
     mov bx, [w16_my0]

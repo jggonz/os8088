@@ -1064,7 +1064,11 @@ w16_reloc1:
     jmp .ok
 .fpbind:
     xor ax, ax
-    mov dx, [w16_fpseg]             ; (a code selector in the arm: w16x87.inc)
+%ifdef PKG_MEGA
+    mov dx, [w16x_fcs]              ; the copy's code half (w16x87.inc)
+%else
+    mov dx, [w16_fpseg]
+%endif
     cmp byte [w16_fpm], W16FP_EMU
     je .apply
     mov ax, w16x_fpmath
@@ -1358,24 +1362,38 @@ section .w16ld
 ; the tables -> AX = SEG_SUBC's code half for a code segment, a data selector
 ; for a data one, each reaching [w16_slen + BX]. Keeps every other register.
 w16l_ssel:
-    push bx
     push cx
     push si
-    mov cx, [w16_slen + bx]
-    call w16l_preach                ; CX = paragraphs, 0 = 64KB
     mov si, [w16_ne]
     add si, [es:si + NE_SEGTAB]
     shl bx, 1
     shl bx, 1
+    mov cl, 1
     test word [es:si + bx + 4], NSF_DATA
-    mov bl, 1
     jz .code
-    xor bl, bl
+    xor cl, cl
 .code:
-    ICALL w16_psel
+    shr bx, 1
+    shr bx, 1
+    ICALL w16_ssel
     pop si
     pop cx
+    ret
+
+; w16l_thkcs - DX = the thunks' paragraph -> DX = the module block's code
+; half there, which a program far-calls a thunk through. Keeps the rest.
+w16l_thkcs:
+    push ax
+    push bx
+    push cx
+    mov ax, dx
+    xor cx, cx
+    mov bl, 1
+    ICALL w16_psel
+    mov dx, ax
+    pop cx
     pop bx
+    pop ax
     ret
 
 ; w16l_preach - CX = bytes (0 = 64KB) -> CX = paragraphs that reach them, 0
@@ -1978,8 +1996,7 @@ w16_bindinit:
     push si
     push di
     push es
-    push cs
-    pop es
+    W16CSEG es
     mov di, w16l_rowslot            ; XSEC-OK: written through ES = CS
     mov cx, W16_NX + W16_NMISS      ;   (w16l_missslot follows it)
     xor ax, ax
@@ -2414,6 +2431,9 @@ w16l_undo:
     xchg ax, [w16_dgroup]
     or ax, ax
     jz .d
+%ifdef PKG_MEGA
+    ICALL w16_pin                   ; (a selector by now, or still WIN16's)
+%endif
     ICALL w16_gfreeh
 .d:
     pop dx
@@ -2561,6 +2581,14 @@ w16l_laylib:
     inc bx
     jmp short .abs
 .done:
+%ifdef PKG_MEGA
+    mov ax, [w16_dgroup]            ; a library's DGROUP: its block's selector,
+    or ax, ax                       ;   as GlobalLock answers it (124.31.3)
+    jz .nodsel
+    ICALL w16_pblk
+    mov [w16_dgroup], ax
+.nodsel:
+%endif
     pop bp
     clc
     ret
@@ -2649,7 +2677,7 @@ w16l_mrec:
     jz .mem
     mov si, [w16l_rp]
     mov [si + W16L_MREC], dx
-    mov es, dx                      ; ES = the block from here
+    W16SEG es, dx                      ; ES = the block from here
     mov ax, [w16_nseg]
     mov [es:W16LM_NSEG], ax
     mov ax, [w16l_ip]
@@ -2677,7 +2705,40 @@ w16l_mrec:
     mov si, w16_sbase
     mov cx, [w16_nseg]
     cld
+%ifdef PKG_MEGA
+    push bx                         ; ...as the program names it: DGROUP's
+    mov bx, [w16_dgroup]            ;   selector, a code segment's code half
+    mov ax, bx                      ;   (SPEC.md 124.31.4)
+    or ax, ax
+    jz .sgo
+    ICALL w16_pvirt
+.sgo:
+    xchg ax, bx                     ; AX = the selector, BX = its paragraph
+.sone:
+    jcxz .sdone
+    cmp [si], bx
+    je .sput
+    push ax
+    push cx
+    mov ax, [si]
+    mov cl, 1
+    ICALL w16_ssel
+    stosw
+    pop cx
+    pop ax
+    jmp short .snext
+.sput:
+    stosw
+.snext:
+    inc si
+    inc si
+    dec cx
+    jmp short .sone
+.sdone:
+    pop bx
+%else
     rep movsw
+%endif
     mov [es:W16LM_ENT], di          ; the entry table
     mov ax, [w16l_entn]
     mov [es:W16LM_ENTN], ax
@@ -2730,6 +2791,9 @@ w16l_mrec:
     or ax, ax
     jnz .hi
     mov ax, [si + W16L_MREC]        ; no DGROUP: the module block is its handle
+%ifdef PKG_MEGA
+    ICALL w16_pblk                  ; (the program's: a selector, 124.31.3)
+%endif
 .hi:
     mov [si + W16L_HINST], ax
     mov ax, [w16l_code]
@@ -2963,6 +3027,9 @@ w16l_tothk:
     shl ax, 1
     shl ax, 1
     mov dx, [w16_cthk]
+%ifdef PKG_MEGA
+    call w16l_thkcs                 ; the thunks' code half (124.31.4)
+%endif
     stc
     ret
 .no:
@@ -3129,7 +3196,7 @@ w16l_cmake:
     add ax, dx
     mov [w16_cthk], ax
     push es                         ; the live table and the thunks, zeroed
-    mov es, dx
+    W16SEG es, dx
     mov cx, [w16_cnord]
     shl cx, 1
     shl cx, 1
@@ -3145,8 +3212,13 @@ w16l_cmake:
     push ds
     push es
     push es
+%ifdef PKG_MEGA
+    W16SEG es, dx                   ; (DS still ours for the thunk)
+%endif
     pop ds
+%ifndef PKG_MEGA
     mov es, dx
+%endif
     xor si, si
     xor di, di
     rep movsb
@@ -3241,7 +3313,14 @@ w16l_tinit:
     W16SEG es, [w16_cthk]
     mov byte [es:di], 0x9A          ; call far w16_thkhit
     mov word [es:di + 1], w16_thkhit
+%ifdef PKG_MEGA
+    push ax
+    W16ICS ax
+    mov [es:di + 3], ax             ; (the image's code half)
+    pop ax
+%else
     mov [es:di + 3], ds             ; (the image's segment)
+%endif
     mov [es:di + W16TK_SEG], dl
     mov [es:di + W16TK_OFF], ax
     pop es
@@ -3264,6 +3343,17 @@ w16l_thkset:
     push cx
     push di
     push es
+%ifdef PKG_MEGA
+    or dx, dx                       ; the segment's code selector, which each
+    jz .sel                         ;   thunk's jmp far names (124.31.4)
+    push ax
+    mov ax, dx
+    mov cl, 1
+    ICALL w16_ssel
+    mov dx, ax
+    pop ax
+.sel:
+%endif
     W16SEG es, [w16_cthk]
     xor di, di
     mov cx, [w16_cnord]
@@ -3283,7 +3373,14 @@ w16l_thkset:
 .gone:
     mov byte [es:di], 0x9A          ; call far w16_thkhit
     mov word [es:di + 1], w16_thkhit
+%ifdef PKG_MEGA
+    push ax
+    W16ICS ax
+    mov [es:di + 3], ax
+    pop ax
+%else
     mov [es:di + 3], ds
+%endif
 .next:
     add di, W16TK_SIZE
     loop .thunk
@@ -3338,7 +3435,7 @@ w16l_segalloc:
     jz .none
     mov [w16_sbase + bx], dx
     dec ax
-    mov es, ax                      ; its header: code, and which
+    W16SEG es, ax                      ; its header: code, and which
     or byte [es:GH_FLAGS], GHF_CODE
     mov [es:GH_OWNER], cx
     mov ax, [es:GH_SIZE]
@@ -3697,6 +3794,7 @@ w16l_segin:
     mov si, w16_r_code
     jmp short .back
 .cached:
+    W16TOSEL dx                     ; (w16_cseg holds a selector: 124.31.3)
     mov [w16_cseg], dx
     mov word [w16_clen], 0
     mov dx, bp
@@ -3714,6 +3812,7 @@ w16l_segin:
 .uncache:
     xor dx, dx
     xchg dx, [w16_cseg]
+    W16TOVIRT dx
     ICALL w16_kfree
 .back:
     pop bx                          ; the user's folder back
@@ -3764,7 +3863,7 @@ w16l_segdrop:
     or ax, ax
     jz .out
     dec ax                          ; its header
-    mov es, ax
+    W16SEG es, ax
     mov bx, [es:GH_SIZE]
     sub [w16_cused], bx
     ICALL w16_gfreeblk
@@ -3828,6 +3927,12 @@ w16l_codeold:
     cmp di, 0xFFFF
     je .none
     mov ax, [es:di + W16CL_BASE]
+%ifdef PKG_MEGA
+    push cx                         ; the stack names its code selector
+    mov cl, 1                       ;   (124.31.4)
+    ICALL w16_ssel
+    pop cx
+%endif
     call w16l_inuse
     jne .drop
     inc word [w16_gclock]           ; in use: new, and the next one
@@ -3900,7 +4005,7 @@ w16l_keep:
     mov ax, (w16l_end - w16l_base + 1023) / 1024
     ICALL w16_kclaim
     jc .mem
-    mov es, dx
+    W16SEG es, dx
     xor si, si
     xor di, di
     mov cx, (w16l_end - w16l_base + 1) / 2

@@ -19003,10 +19003,10 @@ win16: $(BUILD)/win16.o88
 # (-DDOS_MEGA) as its DOS part; the fonts and the icons are the shipped
 # build's. On kern_mega's WIN16 disks only, never on a shipped one.
 $(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
-                         apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc | $(BUILD)
+                         apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
-	        -DDOS_MEGA -DPKG_MEGA -o $@ apps/win16/win16.asm
+	        -DDOS_MEGA -DPKG_MEGA $(W16DEFS) -o $@ apps/win16/win16.asm
 	@echo "win16 (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc \
                            apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnet.inc \

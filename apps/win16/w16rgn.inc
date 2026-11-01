@@ -1630,7 +1630,7 @@ W16SYS w16g_crepal
     push es
     pop ds
     lea dx, [bx + 4]
-    mov es, ax
+    W16SEG es, ax
     xchg dx, si                     ; DS:SI = the entries, DX = the slot
     xor di, di
     mov ax, cx

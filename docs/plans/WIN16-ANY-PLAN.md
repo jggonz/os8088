@@ -1316,11 +1316,19 @@ its table goes in the diary, so the reach is measured, not claimed.
       **Seen 2026-11-01: TINY16 runs on kern_mega in protected mode** -
       InitTask, InitApp and its MessageBox, drawn - and stops at its exit's
       `int 21h` (item 4).
-    - [ ] *3: the loader.* Done for a program's own segments: selectors per
+    - [x] *3: the loader.* A program's own segments: selectors per
       segment, fixups, DGROUP and the PSP as selectors, the image's code
-      half for imports, part 3/5/9 vectors through code halves. Left:
-      libraries, discardable code (the module block and its thunks), the
-      x87 part's code selector (124.31.4, 124.31.5).
+      half for imports, part 3/5/9 vectors through code halves. Then
+      discardable code (the module block's thunks name code halves; a code
+      segment's selector reaches its claim's end so the thunk, the
+      `w16_segld` frame and the stack scan agree), libraries (DGROUP and
+      hInstance as `w16_pblk` selectors, `W16LM_SEGS` as the program's
+      selectors), `W16CSEG` for the 27 `push cs / pop ds` sites, and
+      AH=35h's stand-in for the machine's vectors (124.31.4-124.31.6).
+      **Seen 2026-11-01 on a dev kern_mega with 124.31.2's (d1): W31MINE
+      plays, CLOCK, SOL, NOTEPAD and DLLUSE (two libraries) run in
+      protected mode.** CALC and FPU stop at the x87 vectors (item 4);
+      PBRUSH at the DOS host's far call (item 6).
     - [ ] *4: the vectors.* Needs the owner's answer on 124.31.2 item 2,
       CORRECTED 2026-11-01: 21h is IRQ1's gate in protected mode.
     - [ ] *5: what the program is told.* `GetWinFlags`, `SEG_TILE` and

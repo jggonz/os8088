@@ -75,7 +75,9 @@ def assemble():
         out = os.path.join(td, "w16fp.bin")
         with open(wrap, "w") as f:
             # w16fp.inc's section FOLLOWS .w16dlg, the dialog part (124.18.7)
+            # W16CSEG is w16pm.inc's (SPEC.md 124.31): its real-mode form
             f.write('cpu 8086\nbits 16\nsection .text\n'
+                    '%%macro W16CSEG 1\npush cs\npop %%1\n%%endmacro\n'
                     'section .w16dlg vstart=0 align=1\n'
                     '%%include "%s"\n' % src)
         subprocess.run(["nasm", "-w+error", "-f", "bin", "-o", out, wrap], check=True)

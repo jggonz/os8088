@@ -1293,7 +1293,7 @@ W16LIB w16k_getproc
     add ax, dx
     shl ax, 1
     add ax, w16_stubs
-    mov dx, ds
+    W16ICS dx
     jmp short .out
 .null:
     xor ax, ax

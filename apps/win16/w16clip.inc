@@ -107,7 +107,7 @@ w16_clgetb:
     or ax, ax
     jz .zero
     mov bx, ax                      ; BX = the first block
-    mov es, dx
+    W16SEG es, dx
     xor di, di
     mov cx, si
     call OSAPI_CLIP_GET             ; CX = the bytes copied
@@ -146,7 +146,7 @@ w16_clgetb:
     push ds
     mov di, es                      ; DS = the first's data, ES = the second's
     mov ds, di
-    mov es, dx
+    W16SEG es, dx
     mov cx, si                      ; CX = the bytes
     xor si, si
     xor di, di

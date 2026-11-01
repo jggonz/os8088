@@ -1580,6 +1580,9 @@ w16k_linit:
 .tail:
     push ax                         ; the segment's size: a global block's, or
     push dx                         ;   DGROUP's
+%ifdef PKG_MEGA
+    call w16_pin                    ; (the program's selector: 124.31.3)
+%endif
     call w16_gfind
     pop dx
     jc .dg

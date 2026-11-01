@@ -748,7 +748,7 @@ w16pf_open:
     mov [w16pf_row], bx
     mov al, [w16pf_clock]
     mov [bx + WPF_LRU], al
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     mov ax, [bx + WPF_LEN]
     mov [w16pf_end], ax
     clc
@@ -785,7 +785,7 @@ w16pf_rd:
     push bx
     lea si, [bx + WPF_NAME]
     mov cx, [bx + WPF_CAP]
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     xor bx, bx
     xor dx, dx
     call OSAPI_FILE_READ
@@ -826,7 +826,7 @@ w16pf_flush:
     push bx
     lea si, [bx + WPF_NAME]
     mov cx, [bx + WPF_LEN]
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     xor bx, bx
     xor dx, dx
     call OSAPI_FILE_WRITE
@@ -896,7 +896,7 @@ w16pf_log:
     jc .over
     mov [bx + WPF_LOG], dx
 .have:
-    mov es, dx
+    W16SEG es, dx
     mov di, [bx + WPF_LLEN]
     add [bx + WPF_LLEN], cx
     mov al, [w16pf_noval]
@@ -964,7 +964,7 @@ w16pf_merge:
     jnz .cap
     dec cx
 .cap:
-    mov es, dx
+    W16SEG es, dx
     xor bx, bx
     push dx
     xor dx, dx
@@ -1044,7 +1044,7 @@ w16pf_replay:
     cmp si, [bx + WPF_LLEN]
     jae .done
     push ds
-    mov ds, [bx + WPF_LOG]          ; (DS: the log, until the copies are made)
+    W16SEG ds, [bx + WPF_LOG]       ; (DS: the log, until the copies are made)
     lodsb
     pop ds
     mov ah, al
@@ -1052,7 +1052,7 @@ w16pf_replay:
     mov [w16pf_nokey], al
     shr ah, 1
     mov [w16pf_noval], ah
-    mov es, [bx + WPF_LOG]
+    W16SEG es, [bx + WPF_LOG]
     mov di, w16pf_app
     call w16pf_lcpy
     mov di, w16pf_key
@@ -1148,9 +1148,9 @@ w16pf_splice:
     ICALL w16_kclaim                ; in the heap (SPEC.md 124.25.1)
     jc .full
     push ds
-    mov es, dx
+    W16SEG es, dx
     mov cx, [w16pf_end]
-    mov ds, [bx + WPF_SEG]
+    W16SEG ds, [bx + WPF_SEG]
     xor si, si
     xor di, di
     rep movsb
@@ -1167,7 +1167,7 @@ w16pf_splice:
     pop si
     pop ax
 .fits:
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
     push ax
     push si
     mov si, [w16pf_sp]              ; the tail: from sp + sd to the end
@@ -1211,7 +1211,7 @@ w16pf_splice:
 .full:
     pop si
     pop ax
-    mov es, [bx + WPF_SEG]
+    W16SEG es, [bx + WPF_SEG]
 .no:
     stc
     ret

@@ -78,7 +78,7 @@ w16_copyres:
     mov ax, [w16_rtab]
     push es
     pop ds                          ; DS:SI = the file's table
-    mov es, ax
+    W16SEG es, ax
     xor di, di
     cld
     rep movsb
@@ -570,7 +570,7 @@ w16_rread:
     jae .cx
     mov cx, [w16_rspanb]
 .cx:
-    mov es, bp
+    W16SEG es, bp
     xor bx, bx
     mov si, w16_name
     mov ax, [w16_roff]
@@ -605,7 +605,7 @@ w16_rread:
     W16SEG es, [w16_rdat]
     xor di, di
     push ds
-    mov ds, ax
+    W16SEG ds, ax
     cld
     rep movsb
     pop ds
