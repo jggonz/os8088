@@ -132,6 +132,8 @@ W16B_MISS    equ 0x7F           ; W16B_PART: an import WIN16 lacks, PROC its
 W16B_NORET   equ 0x80           ; ...ORed in: it never returns (the census)
 W16B_DCF     equ 0x40           ; ...ORed in: a text call, in the face of the
                                 ;   DC's font (SPEC.md 124.24.4)
+W16B_MDC     equ 0x20           ; ...ORed in: a call on a DC, which may be a
+                                ;   memory DC's (SPEC.md 124.25.3)
 W16_NARENA   equ 3              ; global heap arenas at once (w16mem.inc,
                                 ;   SPEC.md 124.25.1)
 W16_NGH      equ 64             ; moveable global handles
@@ -367,6 +369,8 @@ section .w16dlg
     W16BSS w16_dcon, 1          ; 1 = a DC is open (w16_dcdep more under it)
     W16BSS w16_dctook, 1        ; 1 = the DC took the gfx lock
     W16BSS w16_dcclip, 1        ; 1 = ...and armed the kernel's clip
+    W16BSS w16_dcpkd, 1         ; 1 = the open DC gave the lock and clip back
+    W16BSS w16_dcre, 1          ;   while the program waited (SPEC.md 124.25.5)
     W16BSS w16_dcdep, 1         ; DCs open UNDER the current one (SPEC.md
     W16BSS w16_gcol, 1          ;   124.20.4: a GetDC inside a GetDC)
     W16BSS w16_objk, W16_NOBJ   ; each made object's W16K_*, 0 = free
@@ -402,11 +406,57 @@ section .w16dlg
     W16BSS w16_worg, 4          ; SetWindowOrg's: w16_ox/w16_oy moved back by
     W16BSS w16_pfmode, 1        ; SetPolyFillMode's, kept (SPEC.md 124.23.9)
     W16BSS w16_sbmode, 1        ; SetStretchBltMode's, kept
+    W16BSS w16_bcl, 2           ; the clip as the DC was made, which
+    W16BSS w16_bct, 2           ;   SelectClipRgn cuts (SPEC.md 124.25.6)
+    W16BSS w16_bcr, 2
+    W16BSS w16_bcb, 2
                                 ;   it, as MM_TEXT's scale is 1 (124.22.16)
 W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_dcstk, W16_DCMAX * W16_DCSZ ; the DCs open under it, innermost
                                 ;   last
-W16_TRN equ 2048                   ; the trace ring's entries, a power of two
+    W16BSS w16m_st, W16_NMDC * W16_DCSZ ; each memory DC's state (SPEC.md
+                                ;   124.25.3)
+    W16BSS w16_mdsave, W16_DCSZ ; ...the open DC's, while a memory DC's is
+    W16BSS w16_mdslot, 2        ; ...that memory DC's slot
+    W16BSS w16_mdsvon, 1        ; ...and [w16_dcon] before it
+    W16BSS w16_mtgt, 1          ; 1 = drawing goes into its bitmap
+    W16BSS w16_mmono, 1         ; ...which is 1 = made 1bpp
+    W16BSS w16_mbm, 2           ; ...the bitmap's slot * 2
+    W16BSS w16_pgn, 2           ; Polygon's fill (w16sys.inc, SPEC.md
+    W16BSS w16_pgp, 4           ;   124.25.4): the points, how many and where
+    W16BSS w16_pgy, 2           ; ...the row, and the one after the last
+    W16BSS w16_pgy1, 2
+    W16BSS w16_pgxa, 2          ; ...the edge looked at
+    W16BSS w16_pgya, 2
+    W16BSS w16_pgxb, 2
+    W16BSS w16_pgyb, 2
+    W16BSS w16_pgdir, 1         ; ...its direction
+    W16BSS w16_pgs, 2           ; ...the run's first column
+    W16BSS w16_orgn, W16_NOBJ * 8 ; each region's rectangle (w16rgn.inc)
+    W16BSS w16_gdstart, 2       ; GetDIBits': the first scan, how many
+    W16BSS w16_gdnum, 2
+    W16BSS w16_gdbits, 4        ; ...where they go
+    W16BSS w16_gdslot, 2        ; ...the bitmap's slot * 2
+    W16BSS w16_gdstr, 2         ; ...a scan's bytes
+    W16BSS w16_gdbpp, 1         ; ...and bits a pixel
+    W16BSS w16_fmode, 1         ; ExtFloodFill's: its type, the colour it
+    W16BSS w16_fcol, 1          ;   reads, the brush's it paints
+    W16BSS w16_ffill, 1
+    W16BSS w16_fsp, 2           ; ...its stack's top, in w16_gbuf
+    W16BSS w16_fy, 2            ; ...the run being filled
+    W16BSS w16_fxl, 2
+    W16BSS w16_fxr, 2
+    W16BSS w16_fbm, 2           ; ...a memory DC's bitmap, slot * 2
+    W16BSS w16_fbx, 2           ; ...the window's read-back (w16r_snap): the
+    W16BSS w16_fby, 2           ;   device point at its 0, 0, its mask's
+    W16BSS w16_fmseg, 2         ;   segment and bytes a row
+    W16BSS w16_fstr, 2
+    W16BSS w16_fwin, 1          ; ...1: there is one
+    W16BSS w16m_x, 2            ; the bitmap primitives' scratch (w16bmp.inc)
+    W16BSS w16m_n, 2
+    W16BSS w16m_ink, 1
+    W16BSS w16m_pap, 1
+W16_TRN equ 1024                   ; the trace ring's entries, a power of two (2048 no longer fits the trace build, S19b)
 %ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate rows
     W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
     W16BSS w16_trc, 2 * W16_TRN ;   tools/w16trace.py reads (SPEC.md 124.17)
@@ -498,6 +548,8 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16_arenae, 2 * W16_NARENA
     W16BSS w16_ghseg, 2 * W16_NGH
     W16BSS w16_ghf, 2 * W16_NGH
+    W16BSS w16_ghage, 2 * W16_NGH ; a moveable handle's last use (w16_gtouch)
+    W16BSS w16_gclock, 2        ; ...counted in uses
     W16BSS w16_gflg, 1
     W16BSS w16_gdisc, 1
     W16BSS w16_gnp, 2
@@ -918,7 +970,6 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16b_mono, 2 * W16_NBMP      ; ...1 = made 1 plane, 1 bit a pixel
     W16BSS w16m_bmp, 2 * W16_NMDC       ; each memory DC's bitmap
     W16BSS w16m_on, W16_NMDC            ; ...1 = it exists
-    W16BSS w16m_brush, 2 * W16_NMDC     ; ...the brush selected into it
     W16BSS w16b_rec, 14         ; GetObject's BITMAP
     W16BSS w16b_bm, 2           ; the blit's: the bitmap's slot * 2
     W16BSS w16b_src, 2          ; ...the source DC
@@ -946,6 +997,10 @@ W16_TRN equ 2048                   ; the trace ring's entries, a power of two
     W16BSS w16b_dfc, 1          ; ...a fill's colour, or W16_XOR to invert
     W16BSS w16b_fpat, 1         ; ...and in both halves of a byte
     W16BSS w16b_mbr, 2          ; ...the memory DC's brush
+    W16BSS w16b_kl, 2           ; ...and its clip (SPEC.md 124.25.6)
+    W16BSS w16b_kt, 2
+    W16BSS w16b_kr, 2
+    W16BSS w16b_kb, 2
     W16BSS w16b_ropb, 1         ; ...a source ROP's index byte
     W16BSS w16_ropt, 256        ; ...its answer, source * 16 + screen
     W16BSS w16x_rec, 66         ; TRANSPARENT text: a chunk's ICON_DRAW
@@ -1097,6 +1152,7 @@ w16_wake:
     mov di, w16_l2
     call w16_strcpy
     call w16_repaint
+    call w16_tarm                   ; the tick, for the pointer (w16_hover)
     mov byte [w16_locked], 0        ; a wake holds no lock
     xor ax, ax
     xor dx, dx
@@ -1911,6 +1967,7 @@ w16_cputest:
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
+%include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's
@@ -1937,6 +1994,9 @@ w16_exports:
   %endif
   %ifdef w16dcf_%[w16x_p_%[k]]
     %assign w16pt w16pt | W16B_DCF
+  %endif
+  %ifdef w16mdc_%[w16x_p_%[k]]
+    %assign w16pt w16pt | W16B_MDC
   %endif
     db w16pt
     dw w16x_p_%[k]
@@ -1967,12 +2027,19 @@ w16_pnames:
     dw w16pn_o_%[j]
     db w16x_a_%[w16f]
   %ifdef w16lib_%[w16x_p_%[w16f]]
-    db W16P_LIB
+    %assign w16pt W16P_LIB
   %elifdef w16sys_%[w16x_p_%[w16f]]
-    db W16P_SYS
+    %assign w16pt W16P_SYS
   %else
-    db 0
+    %assign w16pt 0
   %endif
+  %ifdef w16dcf_%[w16x_p_%[w16f]]
+    %assign w16pt w16pt | W16B_DCF
+  %endif
+  %ifdef w16mdc_%[w16x_p_%[w16f]]
+    %assign w16pt w16pt | W16B_MDC
+  %endif
+    db w16pt
     dw w16x_p_%[w16f]
   %xdefine w16pns w16pn_s_%[j]
   %strlen w16pnl w16pns

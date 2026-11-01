@@ -753,6 +753,51 @@ its table goes in the diary, so the reach is measured, not claimed.
     - What it costs, against S19 batch 5: the image 34,353 bytes (+223),
       bss 24,708 (-12), 5,963 bytes of room; the library part 58,129 (+61),
       the loader part 12,227 (+13).
+  - [x] **Batch 2: drawing into a memory DC, and what Paintbrush needed
+    around it** (SPEC.md §124.25.3-§124.25.6, §124.8, §124.9).
+    - A memory DC's state is a record in the open DC's layout; a GDI row
+      flagged `W16B_MDC` swaps it in around the handler, and under the call
+      the primitives write the bitmap (`w16_mfill`, `w16_mband`,
+      `w16_mblit4`). `BitBlt`/`PatBlt` into one take its brush, origin and
+      clip; one as a SOURCE has its origin applied.
+    - `Polygon` fills its inside under `ALTERNATE`/`WINDING`.
+    - A DC open across a wait is parked - the gfx lock and clip go back and
+      are taken again when the program runs - or Paintbrush's stroke loop,
+      which holds `GetDC` through `PeekMessage`, waited forever.
+    - The nine imports: `SetBitmapBits`, `SetDIBits`, `GetDIBits`,
+      `ExtFloodFill`, `CreateRectRgn`, `CreatePolygonRgn`, `SelectClipRgn`,
+      `ExcludeClipRect`, `CreateHatchBrush` (a solid brush).
+    - **Found driving Paintbrush:**
+      - After a stroke no tool or colour could be picked: the canvas takes
+        the capture on a press and lets it go on a `WM_MOUSEMOVE` off the
+        canvas with no button down, and os8088 reports no such move. WIN16's
+        tick now reads the pointer while a move can be the program's and
+        posts them (`w16_hover`); consecutive moves to one window merge;
+        `GetCursorPos` reads the pointer.
+      - The roller is `ExtFloodFill` on the WINDOW's DC. It reads the
+        screen back into a one-bit mask in an os8088 claim of its own: a
+        4bpp copy of the canvas (50 KB) could not be had.
+      - The heap still ran out after a fill: Paintbrush keeps its picture
+        in `GMEM_DISCARDABLE` strips. WIN16 now discards those, least
+        recently used first - but not a `GMEM_NOTIFY` one: Paintbrush locks
+        a strip only its notify procedure would have told it was gone,
+        without a NULL check, and the first cut wrote a strip over the
+        interrupt vectors. Paintbrush handles a refused `GlobalAlloc`
+        itself, by paging a strip out.
+    - **Seen on QEMU's VGA:** strokes that stay through a repaint, a tool
+      and a colour picked after a stroke, a box, and the roller filling
+      inside it and across the whole canvas, three fills running; MEMDC.EXE
+      (`tests/win16/memdc.c`) says `MEMDC OK`.
+    - **Not yet:** wide pens (1 pixel, §124.8.1), the text tool, File Save
+      and Open, 3.1's Paintbrush.
+    - **Rows, for S25's pass:** `win16memdc` and `win16pbrush` (new), and
+      every `win16*` row, since every GDI call goes through the memory-DC
+      test and every wait parks its DC.
+    - What it costs, against batch 1: the image 35,565 bytes (+1,212), bss
+      25,480 (+772), 3,979 bytes of room; the library part 59,287 (+1,158),
+      the loader part 12,308 (+81, 9 export rows), part 9 12,725 (+2,392
+      against S19 batch 5). The trace build's ring is 1,024 rows now: 2,048
+      no longer fits.
 
 - [ ] **S20: Big programs in small memory (R6).**
   - *As a user, Write opens a document on a 640 KB machine.*

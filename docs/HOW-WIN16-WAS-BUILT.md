@@ -2497,3 +2497,72 @@ still pass.
 
 **What it cost.** The image grew 223 bytes, leaving 5,963. The library part
 grew 61 bytes and the loader 13.
+
+## 2026-10-31 — S19b, batch 2: Paintbrush draws, and needed three things that are not drawing
+
+**The drawing half went in as one mechanism.** Paintbrush draws every
+stroke into a memory bitmap and copies it to the screen. Rather than a
+second copy of every GDI call for memory DCs, a memory DC's state is kept
+as a record in the same layout as the window DC's. A call whose last
+argument is a memory DC has that record swapped in, runs the handler it
+always ran, and has the record swapped back out. Underneath, the few
+primitives that touch pixels (a fill, a text band, a row of a DIB) write
+the bitmap instead of the screen. Text colours, origins and current points
+then work for memory DCs without code of their own. A fixture, MEMDC.EXE,
+draws with every call Paintbrush draws with and reads each pixel back the
+way Windows defines it.
+
+**Then Paintbrush hung on its first stroke.** It takes the canvas's DC when
+a stroke starts and keeps it through a `PeekMessage` loop. WIN16's window
+DC holds os8088's drawing lock, so the pass that would deliver the mouse's
+next move never ran. A DC held across a wait is now *parked*: the lock goes
+back while the program waits and is taken again, with the window's clip as
+it is then, when it runs.
+
+**Strokes vanished on a repaint.** Paintbrush reads its picture back from
+band bitmaps, moving each band's DC with `SetWindowOrg`. A blit from a
+memory DC ignored that origin, so every repaint copied the first band's
+rows over the whole canvas. The source's origin is applied now.
+
+**After a stroke, nothing could be picked.** Every click on the toolbox or
+the palette became another dab of the brush. The disassembly showed why.
+The canvas takes the mouse capture on a press, and lets it go only when a
+`WM_MOUSEMOVE` arrives from off the canvas with no button down. Windows
+sends those all the time. os8088 reports movement only during a drag, so
+WIN16 never sent one, and the canvas kept the capture forever. WIN16's tick
+now reads the pointer whenever a move could be the program's, and posts the
+moves Windows would have. A press checks first, so a click that arrives
+before the tick has noticed the move still sees the capture released.
+
+**The roller fills on the screen, not in a bitmap.** It calls
+`ExtFloodFill` on the window's DC, where WIN16 had answered FALSE. The fill
+now reads the screen back first, but as a one-bit mask of where it may go,
+not a 4-bit copy. A copy of the canvas is 50 KB, and that much memory was
+not free. Painting a row clears it in the mask, so the fill never has to
+know what the brush's colour looks like on a black-and-white adapter.
+
+**The second fill failed, and the fix for that broke the machine.**
+Paintbrush keeps its picture in *discardable* memory strips, which Windows
+throws away under pressure, and WIN16 never did, so the heap filled up.
+The first cut discarded them, and the next fill wrote green over the
+interrupt vectors: the first 64 bytes of memory read `aaaa…`, the green of
+the pixels. Paintbrush had locked a discarded strip, got NULL, and copied a
+strip of picture through it. Its strips are allocated `GMEM_NOTIFY` as
+well, which on Windows meant Paintbrush's own procedure was told before
+any strip went, and it relies on that. WIN16 cannot call into the program
+in the middle of an allocation. So a strip marked notify is never
+discarded, which a Windows notify procedure was also allowed to choose.
+Paintbrush already copes when an allocation fails: it pages a strip out to
+its temporary file. Other discardable blocks go least recently used first,
+as Windows ordered them.
+
+**What was seen.** Strokes stay through a repaint. A tool and a colour can
+be picked after a stroke. A box, red rolled inside it, green rolled across
+the canvas around it, and yellow inside again, all on QEMU's VGA, with the
+interrupt vectors intact. MEMDC.EXE says `MEMDC OK`. Two rows run all this
+in S25's final pass: `win16memdc` and `win16pbrush`. Still to come: wide
+pens, the text tool, saving, and 3.1's Paintbrush.
+
+**What it cost.** The image grew 1,212 bytes and its bss 772, leaving
+3,979 bytes of room. The library part grew 1,158 bytes, and the system
+part, with the bitmap, region and fill calls, now stands at 12,725.

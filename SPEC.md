@@ -226416,7 +226416,8 @@ not yet authorised); each story pins its subsection here before its code:
   since S15 (§124.20);
 - DOS calls beyond the file and directory ones (R5): the file calls arrive in
   S16 (§124.21);
-- no segment moving or discarding (R6);
+- no segment moving or discarding (R6) - a `GMEM_DISCARDABLE` global block
+  is discarded since S19b (§124.9), but no code or data segment is;
 - no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
 - the clipboard carries text only, because §55's does (§124.16.1);
 - no WinHelp: `WinHelp` says so in a message box (§124.15.3), and answers
@@ -226645,8 +226646,23 @@ yielded to the other tasks; the Task Manager shows such a program near
 - The keyboard has no release edge, so `WM_KEYUP` follows `WM_KEYDOWN` at
   once. `TranslateMessage` posts `WM_CHAR` for a key-down that had an ASCII
   code.
-- os8088 reports no movement without a button, so `WM_MOUSEMOVE` arrives
-  only while dragging.
+- os8088 reports no movement without a button, so WIN16 LOOKS for it
+  (S19b): while the program has the capture, or its window is in front,
+  WIN16's tick reads the pointer (`OSAPI_MOUSE`) and a position that moved
+  with no button down is a `WM_MOUSEMOVE` (`wParam` 0) to the capture, or to
+  the window under the pointer when it is in the front window's content
+  (`w16_hover`). A press asks first, and when that posts a move the program
+  takes it before the press is routed, since the move can end a capture.
+  Windows sent every such move, and a program acts on them: Paintbrush's
+  canvas takes the capture on a press and lets it go only on a move off
+  the canvas - without these, every click after a stroke went to the canvas
+  and no tool or colour could be picked. The tick runs only while a move can
+  be the program's; it is re-armed by `SetCapture`, by a press and when the
+  program starts.
+- A `WM_MOUSEMOVE` posted behind another to the same window, with nothing
+  between them, takes its place, as Windows' queue kept one.
+- `GetCursorPos` reads the pointer where it is (`OSAPI_MOUSE`), not where
+  the last mouse message put it.
 - `SetCapture` and `ReleaseCapture` record the window and answer the
   previous one. os8088 already tracks a press until its release.
 
@@ -226796,7 +226812,9 @@ neighbours merged. Arenas are freed with the program.
 | `GlobalReAlloc` | in place when the next block is free; otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. `GMEM_MODIFY` changes the flags alone |
 | `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD` |
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
-| out of memory | unused resource blocks (§124.10) are discarded and the request is tried once more; then the answer is 0 |
+| out of memory | unused resource blocks (§124.10) are discarded and the request is tried again; then `GMEM_DISCARDABLE` blocks, one at a time, the least recently used first (S19b, `w16_gdold`); then the answer is 0 |
+| `GMEM_DISCARDABLE` | a moveable block's handle is marked so. Discarding frees the block and keeps the handle: `GlobalLock` answers NULL, `GlobalFlags` `GMEM_DISCARDED`, `GlobalSize` 0, and `GlobalReAlloc` gives it a block again. A block with a lock is never discarded. **Nor is one allocated `GMEM_NOTIFY` as well**: Windows called the program's `GlobalNotify` procedure first and the program counts on it - Paintbrush's strips, `GMEM_MOVEABLE \| GMEM_DISCARDABLE \| GMEM_NOTIFY`, are locked through a table only that procedure clears, without a NULL check, and one discarded under it was written through NULL over the interrupt vectors. That call would land inside the allocation that wants the room, where WIN16 cannot call the program; a notify procedure may refuse on Windows too, so the block is one it refused. `GlobalReAlloc` with `GMEM_MODIFY` sets or clears the mark by the same rule |
+| `GlobalLRUNewest`, `GlobalLRUOldest` | the block is the last, or the first, a shortage discards. `GlobalAlloc` and `GlobalLock` make it the newest; the order is a 16-bit count of uses |
 
 **The local heap** is the one in DGROUP, initialised by `InitTask` from the
 end of the stack to DGROUP's end - `ne_heap` bytes, or the rest of 64 KB
@@ -227205,7 +227223,7 @@ directory here.
 | `CreateDIBitmap(hdc, lpbih, fdwInit, lpbBits, lpbmi, fuUsage)` | a bitmap of the header's size. With `CBM_INIT` and `DIB_RGB_COLORS` its pixels are the DIB's, read the way §124.8.1's `SetDIBitsToDevice` reads one (1 or 4 bits a pixel, either header); without `CBM_INIT` they are black |
 | `LoadBitmap(hInstance, lpName)` | a bitmap resource (§124.10) made into a bitmap the same way |
 | `GetObject(hBitmap, cb, lp)` | the `BITMAP` record: type 0, width, height, width bytes, 1 plane, 4 bits a pixel (1 on a 1bpp display), no bits pointer. Other objects answer 0 |
-| `SelectObject(hMemDC, hBitmap)` | selects it and answers the one it replaced. A pen, brush or font selected into a memory DC is not kept: the answer is the stock object of its kind, and nothing changes. A bitmap selected into a window's DC answers 0 |
+| `SelectObject(hMemDC, hBitmap)` | selects it and answers the one it replaced. A pen, brush or font selected into a memory DC is kept in its record since S19b (§124.25.3), and the one it replaced is the answer. A bitmap selected into a window's DC answers 0 |
 | `DeleteObject(hBitmap)` | frees it. A bitmap still selected into a memory DC is not deleted: FALSE, as Windows answered |
 | `BitBlt(hdcDest, x, y, cx, cy, hdcSrc, xSrc, ySrc, dwRop)` | from a memory DC to a window's DC: `SRCCOPY` copies, the source cut to the bitmap and the destination to the DC's clip; the other source-and-destination ROPs (`SRCAND`, `NOTSRCCOPY`, ...) combine with the screen read back (see *The other source ROPs onto the screen*). `BLACKNESS`, `WHITENESS` and `PATCOPY` (the brush) fill the destination and need no source |
 | `StretchBlt(..., cxSrc, cySrc, dwRop)` | `BitBlt`'s pairs and ROPs, each destination pixel taken from the source pixel it falls on (Windows' `COLORONCOLOR`) |
@@ -227239,17 +227257,16 @@ card.
 edge is on a byte (an even column), and through WIN16's band otherwise.
 WinMine draws every cell that way, 16 x 16 from column 0.
 
-**Not provided** (R7, *USER and GDI breadth*): drawing into a memory DC
-with anything but `BitBlt` and `PatBlt` (§124.20.4 says what those two do
-there since S15; every other drawing call on one draws nothing and answers
-FALSE where the call answers anything); a stretch into one; every other
-raster operation (FALSE, nothing drawn); `GetDIBits`,
+**Not provided** (R7, *USER and GDI breadth*): a stretch into a memory DC;
+every other raster operation (FALSE, nothing drawn);
 `SetBkColor`/`SetTextColor` applied to a monochrome source
-(`CreateCompatibleBitmap` arrived in S15, §124.20.4).
+(`CreateCompatibleBitmap` arrived in S15, §124.20.4). Every other drawing
+call draws into a memory DC since S19b (§124.25.3), and `GetDIBits` arrived
+with it (§124.25.6).
 
-**Which DC a call draws on.** A drawing call draws only on the DC
-`GetDC`/`BeginPaint` gave the program. A memory DC, the desktop's DC and a
-handle that is not a DC draw nothing.
+**Which DC a call draws on.** A drawing call draws on the DC
+`GetDC`/`BeginPaint` gave the program, or into a memory DC's bitmap
+(§124.25.3). The desktop's DC and a handle that is not a DC draw nothing.
 
 #### 124.15.3 The other calls
 
@@ -228524,7 +228541,7 @@ programs here - renamed `.EXE`, since os8088 associates `.SCR` with nothing
 |---|---|
 | `CreateWindowEx(dwExStyle, ...)` | `CreateWindow` with the rest: its 30 bytes of arguments are the first 30 here, and an extended style changes nothing |
 | `SetWindowOrg(hDC, x, y)` | logical x, y is at the viewport origin; the old one is the answer. In `MM_TEXT` it moves the DC's client origin back by the difference, as `SetViewportOrg` (§124.22.13) moves it forward, and `GetDC`/`BeginPaint` reset it |
-| `Polygon(hDC, lpPoints, n)` | its edges in the pen, the last point joined to the first, the current point left where it was. **The inside is not filled** with the brush, as Windows' is: os8088 has no polygon fill |
+| `Polygon(hDC, lpPoints, n)` | its edges in the pen, the last point joined to the first, the current point left where it was. Its inside is filled with the brush since S19b, under the DC's fill mode (§124.25.4) |
 | `GetRasterizerCaps(lp, cb)` | no TrueType: `nSize` 6, `wFlags` 0 |
 | `AnimatePalette`, `GetNearestPaletteIndex` | 0 (the palettes of §124.22.13) |
 | `SetWindowsHook(type, lpfn)` | in front of its type's chain; the one it is in front of is the answer, the program's to call on with `DefHookProc` (0 none). At most `W16_HKMAX` (4) at once; past that it is not hooked and the answer is 0 |
@@ -228772,15 +228789,15 @@ state went in with S18, in the library part:
 
 | call | |
 |---|---|
-| `GlobalNotify` (KERNEL.154) | kept by nothing: WIN16 discards no block (§124.18), so there is no discard to be told of |
-| `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle: no block is discarded, so its age means nothing |
+| `GlobalNotify` (KERNEL.154) | kept by nothing: a block allocated `GMEM_NOTIFY` is never discarded (§124.9, S19b), so there is no discard to be told of |
+| `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle; the block becomes the last, or the first, a shortage discards (§124.9, S19b) |
 | `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less |
 | `GetTempDrive` (KERNEL.92) | the Windows directory's drive (§124.21.3): its letter in AL, `:` in AH, DX = 1, as Wine's `GetTempDrive16` |
 | `ClipCursor` (USER.16) | nothing: the pointer is os8088's and is not confined |
 | `SetRectEmpty`, `IsRectEmpty`, `UnionRect` (USER.73, 75, 80) | as Windows': a rectangle with no width or no height is empty, and `UnionRect` ignores an empty one, emptying the destination and answering FALSE when both are |
 | `GetPriorityClipboardFormat` (USER.402) | the first format of the list the clipboard holds (`CF_TEXT` or `CF_OEMTEXT`, §124.16); 0 when it holds nothing, -1 when it holds none of them |
 | `GetBkColor`, `GetROP2`, `GetWindowOrg`, `GetBrushOrg` (GDI.75, 85, 97, 149) | what `SetBkColor`, `SetROP2` and `SetWindowOrg` set; the brush origin is always 0, 0 |
-| `SetPolyFillMode`, `SetStretchBltMode` (GDI.6, 7) | kept, the old one answered; neither changes a pixel (no polygon is filled, §124.22.16, and `StretchBlt` drops or repeats whole pixels) |
+| `SetPolyFillMode`, `SetStretchBltMode` (GDI.6, 7) | kept, the old one answered. The fill mode decides a `Polygon`'s inside since S19b (§124.25.4); the stretch mode changes no pixel (`StretchBlt` drops or repeats whole pixels) |
 | `LPtoDP`, `DPtoLP` (GDI.99, 67) | each point moved by the window origin; the extents never scale a drawing here (§124.22.2) and do not scale these |
 | `Polyline` (GDI.37) | `Polygon`'s edges without the closing one; the current point neither used nor moved |
 | `SetBitmapDimension` (GDI.163) | 0, the old dimension; nothing kept |
@@ -229246,8 +229263,12 @@ of at most 32 KB, paging them to a temporary file. What stopped it was the
 eight claims an owner may hold (§50), and then the DLL's local heap.
 
 S19b lands in batches: batch 1 is the claims and the heap (§124.25.1,
-§124.25.2), so Paintbrush opens with its picture; the drawing calls on a
-memory DC follow.
+§124.25.2), so Paintbrush opens with its picture; batch 2 is the drawing:
+a memory DC drawn into (§124.25.3), a polygon's inside (§124.25.4), a DC
+held across a wait (§124.25.5), the calls Paintbrush draws and keeps its
+picture with (§124.25.6), and two things outside GDI it could not work
+without - the pointer's moves with no button down (§124.8) and discardable
+memory (§124.9).
 
 #### 124.25.1 WIN16 within its eight claims *(S19b batch 1)*
 
@@ -229315,3 +229336,94 @@ line widths, palette, scroll bars and a white canvas, and waits in
 `GetMessage`. WIN16 holds four claims: the program (172 KB), the library
 part (57 KB) and two arenas (32 KB and 64 KB). A stroke draws nothing yet:
 that is the memory DC's drawing, the next batch.
+
+#### 124.25.3 A memory DC is drawn into *(S19b batch 2)*
+
+Until S19b a memory DC was only ever a SOURCE (§124.15.2): `BitBlt` read
+its bitmap and every other call drew on the window. Paintbrush draws every
+stroke into one and copies it out, so now each drawing call is the memory
+DC's when its hDC is one.
+
+**Its state is a record** (`W16_DCSZ` bytes, `w16m_st`, one per memory DC
+slot) in the open DC's own layout: pen, brush, font, colours, modes, ROP,
+current point, origin, extents, clip and the base clip. A GDI row that takes
+an hDC last carries `W16B_MDC` (`%define w16mdc_<handler>` in
+`w16api.inc`): the dispatcher asks `w16_mdcin`, which, when that hDC is a
+memory DC, saves the window's state, copies the record in, puts `W16_HDC`
+on the program's stack in its place and sets `[w16_mtgt]`; the handler runs
+as it always did; `w16_mdcout` copies the state back to the record and the
+window's back. So the handler is one handler, and every call a DC's state
+answers (`SetTextColor`, `MoveTo`, `SetWindowOrg`, `LPtoDP`, `GetTextMetrics`,
+...) is right for a memory DC with no code of its own. `GetPixel` is not
+flagged: it reads a memory DC's bitmap itself.
+
+**Under the call, the primitives write the bitmap.** While `[w16_mtgt]`:
+`w16_gfill` is `w16_mfill` (a colour, an inversion, or `W16_GRAY` as the
+black-and-white checker the kernel's `FILL_GRAY` is, fixed to the bitmap);
+a pixel of a line is a one-pixel fill; text's band is `w16_mband` (set bits
+in the text colour, clear ones in the background unless `TRANSPARENT`);
+`SetDIBitsToDevice`'s rows are `w16_mblit4`; and no `OSAPI_SET_COLOR` is
+made. A bitmap made 1bpp (`CreateBitmap` with one plane and one bit) keeps
+each colour as white where text would be lit and black elsewhere
+(`w16_mcol`, `w16_monolit`). Coordinates are the bitmap's, and the clip is
+the bitmap's rectangle - empty while the 1 x 1 stock bitmap is selected -
+reset whenever a bitmap is selected, as Windows reset the clip region.
+
+**`BitBlt` and `PatBlt` into a memory DC** take the brush, the origin and
+the clip from its record (`w16_bltm`), and are cut to the clip. A memory DC
+that is a blit's SOURCE has its origin applied too (`w16_srcorg`): Paintbrush
+reads each band of its picture at the band's place with `SetWindowOrg` on
+the band's DC, and a repaint that ignored it copied the band's first rows
+over the whole canvas.
+
+#### 124.25.4 A polygon's inside *(S19b batch 2)*
+
+`Polygon` fills its inside with the brush before its edges are drawn in the
+pen, on the window or into a memory DC (`w16_pgfill`). A row takes each edge
+that holds it in [top, bottom) and crosses it at the row's centre, rounded
+to a column; the columns between crossings are inside under `ALTERNATE`
+when an odd number of crossings lie left of them, and under `WINDING` when
+the edges' directions do not sum to 0. A run is one `w16_gfill` from its
+first crossing to the column before its last, so a polygon's right and
+bottom edges are not filled, as Windows' are not. Rows outside the clip are
+not looked at; at most `W16_PGMAX` = 64 crossings a row are kept, in
+`w16_gbuf`.
+
+#### 124.25.5 A DC held across a wait *(S19b batch 2)*
+
+Paintbrush takes `GetDC` on its canvas when a stroke starts and holds it
+until the stroke ends, through a `PeekMessage` loop. WIN16's open window DC
+holds the gfx lock and arms the window's clip (§124.8), so the os8088 pass
+that would answer the `PeekMessage` - the mouse's next move - could never
+run: the program waited forever with the lock held. So when the program
+waits (`GetMessage`, `PeekMessage`, `Yield`, a dialog's loop) with a DC
+open, the DC is PARKED (`w16_dcpark`): the lock and the clip go back, and
+the DC's state stays. When the program runs again (`w16_resume`,
+`w16_resumecb`) it is unparked (`w16_dcunpark`): the lock and the clip are
+taken again, the window's clip as it is NOW - it may have moved or been
+covered while the program waited - and the rest of the state is as it was,
+an `IntersectClipRect`'s cut excepted.
+
+The window DC's origin is its client's corner plus the viewport origin less
+the window origin, and its base clip (`w16_bcl`..`w16_bcb`, what
+`SelectClipRgn` cuts from) is kept with it.
+
+#### 124.25.6 The calls Paintbrush draws and keeps its picture with *(S19b batch 2)*
+
+| call | |
+|---|---|
+| `SetBitmapBits` (GDI.106) | `GetBitmapBits` backwards: a bitmap made 1bpp takes Windows' monochrome bits (1 white, rows a whole number of words), any other its 4bpp rows, each padded to a word. At most `dwCount` bytes are read; the answer is how many were |
+| `SetDIBits` (GDI.440) | scans `nStartScan` on, counted from the bottom, into the bitmap as `CreateDIBitmap`'s `CBM_INIT` puts a DIB (§124.15.2): 1 or 4 bits a pixel, `DIB_RGB_COLORS`. The answer is `nNumScans` |
+| `GetDIBits` (GDI.441) | the header filled in - its size, one plane, `biBitCount` as asked (1, 4, 8 or 24) or, when 0, 4 (1 for a bitmap made 1bpp), `BI_RGB`, `biSizeImage` - and the colour table, os8088's sixteen (white and black for 1 bit); with `lpBits`, the scans in that format, every row a whole number of dwords, a pixel light grey or brighter a 1 at one bit. A huge `lpBits` is walked across segments. The answer is the scans written, or with no `lpBits` the height |
+| `ExtFloodFill` (GDI.372) | from the point, every pixel joined to it across its four sides that is not `crColor` (`FLOODFILLBORDER`) or that is (`FLOODFILLSURFACE`), painted in the brush a row at a time; `crColor` is the nearest of the sixteen. In a memory DC its bitmap is read. **On the window's DC** the clip's rectangle of the screen is read back first (`OSAPI_GFX_SAVE`, as `BitBlt` from the window reads it) into a MASK, a bit a pixel set where the fill may go (`w16r_snap`), and each row painted is cleared in it - so how the brush looks on the adapter is never asked, and a canvas costs an eighth of a 4bpp copy. The mask is an os8088 claim of its own, out of the room the global heap leaves (`W16_ARKEEP`, §124.25.1), never a global block: an allocation there could discard a block of the program's (§124.9), which Windows' GDI never did. The seeds wait in `w16_gbuf`; a seed past its room is dropped and that part is not filled. FALSE when the point is not one to fill, the brush is not one colour, or the screen cannot be read (a hidden DC, VESA) or the mask cannot be had |
+| `CreateRectRgn` (GDI.64), `CreatePolygonRgn` (GDI.63) | a region object (`W16K_RGN`), freed by `DeleteObject`, holding ONE rectangle: the polygon's bounding box, not the polygon |
+| `SelectClipRgn` (GDI.44) | the DC's base clip cut to the region, in device coordinates; hRgn 0 is the base clip. `SIMPLEREGION`, `NULLREGION` when nothing is left, `ERROR` for a DC or region that is not one |
+| `ExcludeClipRect` (GDI.21) | the rectangle taken out of the clip as far as a rectangle can say it: one that misses leaves it, one that covers it leaves nothing, one that crosses it from edge to edge moves that edge. A hole in the middle is not cut: the answer is `COMPLEXREGION` and drawing there is not stopped |
+| `CreateHatchBrush` (GDI.58) | a solid brush of its colour: no hatch is drawn |
+
+**Seen on QEMU's VGA (batch 2):** Paintbrush 3.0 draws brush strokes that
+stay through a repaint, picks a tool or a colour after a stroke, draws a
+box, and its roller fills inside the box and across the whole canvas around
+it, one fill after another (the `win16pbrush` row). MEMDC.EXE's checks all
+pass (the `win16memdc` row). Wide pens are still drawn 1 pixel wide
+(§124.8.1); the text tool and File Save are not looked at yet.

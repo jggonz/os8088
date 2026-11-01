@@ -26,11 +26,14 @@ W16_LHROOM  equ 4096            ; a library's local heap, past its ne_heap
 W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
                                 ;   largest free run (SPEC.md 124.25.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
+W16_GHDISC  equ 2               ; [w16_ghf]: GMEM_DISCARDABLE (1 = in use)
 
 GMEM_MOVEABLE equ 0x0002
 GMEM_ZEROINIT equ 0x0040
 GMEM_MODIFY   equ 0x0080
 GMEM_DISCARDED equ 0x4000       ; GlobalFlags' answer
+GMEM_DISCARDABLE_HI equ 0x01    ; GMEM_DISCARDABLE (0x0100), the high byte's
+GMEM_NOTIFY_HI      equ 0x40    ; GMEM_NOTIFY (0x4000), the same
 
 ; --- a global block's header, the paragraph before its data -----------------
 GH_SIZE   equ 0                 ; paragraphs, the header included
@@ -89,7 +92,16 @@ w16_gnew:
     call w16_garena                 ; a new arena for it
     jnc .fit2
     call w16_gdiscard               ; unused resources, then once more
-    jc .fail
+    jc .old
+    call w16_gfit
+    jnc .got
+.old:
+    call w16_gdold                  ; then a discardable block at a time,
+    jc .fail                        ;   the least recently used first
+    call w16_gfit
+    jnc .got
+    call w16_garena                 ; (an arena it emptied went back)
+    jc .old
 .fit2:
     call w16_gfit
     jc .fail
@@ -513,6 +525,74 @@ w16_gfreeh:
     ret
 
 ; -----------------------------------------------------------------------------
+; w16_gdold - discard the least recently used GMEM_DISCARDABLE block nobody
+; has locked (SPEC.md 124.9): the handle stays, with no block, as Windows left
+; it - GlobalLock answers NULL, GlobalFlags GMEM_DISCARDED, and GlobalReAlloc
+; gives it a block again. CF=1: there was none. Keeps all.
+; -----------------------------------------------------------------------------
+w16_gdold:
+    push ax
+    push dx
+    push si
+    push di
+    push es
+    mov di, 0xFFFF                  ; DI = the oldest so far, DX its use
+    xor si, si
+.h:
+    test byte [w16_ghf + si], W16_GHDISC
+    jz .n
+    mov ax, [w16_ghseg + si]
+    or ax, ax
+    jz .n                           ; discarded already
+    dec ax                          ; the header
+    mov es, ax
+    cmp byte [es:GH_LOCK], 0
+    jne .n
+    mov ax, [w16_ghage + si]
+    cmp di, 0xFFFF
+    je .take
+    cmp ax, dx
+    jae .n
+.take:
+    mov di, si
+    mov dx, ax
+.n:
+    inc si
+    inc si
+    cmp si, 2 * W16_NGH
+    jb .h
+    cmp di, 0xFFFF
+    je .none
+    mov ax, [w16_ghseg + di]
+    dec ax
+    call w16_gfreeblk
+    mov word [w16_ghseg + di], 0
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop ax
+    ret
+
+; w16_gtouch - SI = a moveable handle's entry (0xFFFF: a fixed block's, and
+; nothing is kept): it is the most recently used now. Keeps all.
+w16_gtouch:
+    cmp si, 0xFFFF
+    je .ret
+    push ax
+    inc word [w16_gclock]
+    mov ax, [w16_gclock]
+    mov [w16_ghage + si], ax
+    pop ax
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
 ; w16_gdiscard - free every loaded resource block nobody is using (SPEC.md
 ; 124.9's "out of memory" rule). CF=1 there was none. Keeps all.
 ; -----------------------------------------------------------------------------
@@ -596,13 +676,37 @@ w16_gfreeall:
 ; The global heap, as Windows exports it
 ; =============================================================================
 
-; GlobalAlloc (KERNEL.15) - args: +0 dwBytes (long), +4 wFlags
+; GlobalAlloc (KERNEL.15) - args: +0 dwBytes (long), +4 wFlags. A moveable
+; block asked for GMEM_DISCARDABLE is marked so on its handle: w16_gdold may
+; take it when the heap is short, and the handle stays, discarded (SPEC.md
+; 124.9). Not with GMEM_NOTIFY as well: Windows asked the program's
+; GlobalNotify procedure first, and the program counts on having been asked
+; - Paintbrush's strips lock a handle its procedure never cleared without
+; looking for NULL - but that call would land in the middle of the
+; allocation that wants the room, where WIN16 cannot call the program. The
+; procedure may refuse on Windows too, so the block is one it refused.
 w16k_galloc:
     call w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
     mov cl, [es:bx + 4]
-    jmp w16_gnew
+    mov ch, [es:bx + 5]
+    call w16_gnew
+    cmp ax, W16_GH0                 ; a moveable handle's entry: used now,
+    jb .out                         ;   and marked if it may be discarded
+    push si
+    mov si, ax
+    sub si, W16_GH0
+    call w16_gtouch
+    test ch, GMEM_NOTIFY_HI
+    jnz .nd
+    test ch, GMEM_DISCARDABLE_HI
+    jz .nd
+    or byte [w16_ghf + si], W16_GHDISC
+.nd:
+    pop si
+.out:
+    ret
 
 ; GlobalFree (KERNEL.17) - args: +0 hMem. AX = 0 freed, else the handle
 w16k_gfree:
@@ -626,6 +730,7 @@ w16k_glock:
     jnz .l
     dec byte [es:GH_LOCK]           ; it saturates rather than wraps
 .l:
+    call w16_gtouch                 ; (the order w16_gdold discards in)
     mov dx, es
     inc dx
     xor ax, ax
@@ -809,7 +914,19 @@ w16k_grealloc:
     mov di, [es:bx + 6]             ; DI = the handle
     test cl, GMEM_MODIFY
     jz .size
-    mov ax, di                      ; the flags alone: nothing to change here
+    mov ax, di                      ; the flags alone: whether it may be
+    cmp ax, W16_GH0                 ;   discarded is all that changes here
+    jb .out
+    cmp ax, W16_GH0 + 2 * W16_NGH
+    jae .out
+    mov si, ax
+    sub si, W16_GH0
+    and byte [w16_ghf + si], ~W16_GHDISC
+    test byte [es:bx + 1], GMEM_NOTIFY_HI
+    jnz .out
+    test byte [es:bx + 1], GMEM_DISCARDABLE_HI
+    jz .out
+    or byte [w16_ghf + si], W16_GHDISC
     jmp .out
 .size:
     add ax, 15

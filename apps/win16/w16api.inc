@@ -237,7 +237,7 @@ W16EXPORT W16M_USER,       54,      8,  w16u_enumwnd        ; EnumWindows(segptr
 W16EXPORT W16M_KERNEL,     111,     2,  w16k_glock          ; GlobalWire(word)
 W16EXPORT W16M_KERNEL,     112,     2,  w16k_gunlock        ; GlobalUnWire(word)
 W16EXPORT W16M_KERNEL,     154,     4,  w16k_gnotify        ; GlobalNotify(segptr)
-W16EXPORT W16M_KERNEL,     163,     2,  w16k_glru           ; GlobalLRUOldest(word)
+W16EXPORT W16M_KERNEL,     163,     2,  w16k_glruold        ; GlobalLRUOldest(word)
 W16EXPORT W16M_KERNEL,     164,     2,  w16k_glru           ; GlobalLRUNewest(word)
 W16EXPORT W16M_KERNEL,     169,     2,  w16k_gcompact       ; GetFreeSpace(word)
 W16EXPORT W16M_KERNEL,     92,      2,  w16k_tempdrv        ; GetTempDrive(byte)
@@ -371,6 +371,15 @@ W16EXPORT W16M_VER,        8,       30, w16v_findfile       ; VerFindFile(word s
 W16EXPORT W16M_VER,        9,       30, w16v_install        ; VerInstallFile(word str str str str str ptr ptr)
 W16EXPORT W16M_VER,        10,      8,  w16v_lang           ; VerLanguageName(word ptr word)
 W16EXPORT W16M_VER,        11,      16, w16v_query          ; VerQueryValue(segptr str ptr ptr)
+W16EXPORT W16M_GDI,        106,     10, w16g_setbmbits      ; SetBitmapBits(word long ptr)
+W16EXPORT W16M_GDI,        440,     18, w16g_setdibits      ; SetDIBits(word word word word ptr ptr word)
+W16EXPORT W16M_GDI,        441,     18, w16g_getdibits      ; GetDIBits(word word word word ptr ptr word)
+W16EXPORT W16M_GDI,        372,     12, w16g_xflood         ; ExtFloodFill(word s_word s_word long word)
+W16EXPORT W16M_GDI,        64,      8,  w16g_rectrgn        ; CreateRectRgn(s_word s_word s_word s_word)
+W16EXPORT W16M_GDI,        63,      8,  w16g_polyrgn        ; CreatePolygonRgn(ptr word word)
+W16EXPORT W16M_GDI,        44,      4,  w16g_selclip        ; SelectClipRgn(word word)
+W16EXPORT W16M_GDI,        21,      10, w16g_exclclip       ; ExcludeClipRect(word s_word s_word s_word s_word)
+W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(word long)
 ; the text calls that draw or measure in the face of the DC's font (SPEC.md
 ; 124.24.4): their rows carry W16B_DCF
 %define w16dcf_w16g_textout
@@ -382,6 +391,58 @@ W16EXPORT W16M_VER,        11,      16, w16v_query          ; VerQueryValue(segp
 %define w16dcf_w16u_drawtext
 %define w16dcf_w16u_tabtext
 %define w16dcf_w16u_tabext
+; the calls that draw on, or read or set the state of, the DC they are given:
+; their rows carry W16B_MDC, and one given a memory DC runs in that DC's state
+; and draws into its bitmap (SPEC.md 124.25.3). SelectObject, BitBlt, PatBlt
+; and StretchBlt find the memory DC themselves; SaveDC and RestoreDC answer
+; one as they answer any DC but the window's
+%define w16mdc_w16g_setrop2
+%define w16mdc_w16g_getrop2
+%define w16mdc_w16g_settextcol
+%define w16mdc_w16g_setbkcol
+%define w16mdc_w16g_getbkcol
+%define w16mdc_w16g_setbkmode
+%define w16mdc_w16g_settalign
+%define w16mdc_w16g_moveto
+%define w16mdc_w16g_lineto
+%define w16mdc_w16g_rect
+%define w16mdc_w16g_roundrect
+%define w16mdc_w16g_ellipse
+%define w16mdc_w16g_polygon
+%define w16mdc_w16g_polyline
+%define w16mdc_w16g_setpixel
+%define w16mdc_w16g_textout
+%define w16mdc_w16g_exttext
+%define w16mdc_w16g_textext
+%define w16mdc_w16g_textmet
+%define w16mdc_w16g_textface
+%define w16mdc_w16g_charwidth
+%define w16mdc_w16g_setdib
+%define w16mdc_w16g_setbrorg
+%define w16mdc_w16g_ptvisible
+%define w16mdc_w16g_setworg
+%define w16mdc_w16g_getworg
+%define w16mdc_w16g_setvorg
+%define w16mdc_w16g_setmapmode
+%define w16mdc_w16g_setwext
+%define w16mdc_w16g_setvext
+%define w16mdc_w16g_lptodp
+%define w16mdc_w16g_dptolp
+%define w16mdc_w16g_setpfmode
+%define w16mdc_w16g_setsbmode
+%define w16mdc_w16g_intclip
+%define w16mdc_w16g_rectvis
+%define w16mdc_w16g_getdcorg
+%define w16mdc_w16g_xflood
+%define w16mdc_w16g_selclip
+%define w16mdc_w16g_exclclip
+%define w16mdc_w16u_drawtext
+%define w16mdc_w16u_tabtext
+%define w16mdc_w16u_tabext
+%define w16mdc_w16u_fillrect
+%define w16mdc_w16u_framerect
+%define w16mdc_w16u_invrect
+%define w16mdc_w16u_drawfocus
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put

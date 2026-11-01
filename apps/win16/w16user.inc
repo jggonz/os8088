@@ -1469,24 +1469,38 @@ w16_post:
     push bx
     push cx
     push dx
-    cmp byte [w16_qcount], W16_QLEN
-    jae .full
     mov cl, [w16_qhead]
     or al, al
+    jnz .front
+    mov ch, [w16_qcount]
+    add cl, ch
+    cmp word [w16_sm_msg], WM_MOUSEMOVE ; a move behind a move to the same
+    jne .back                       ;   window takes its place: Windows'
+    or ch, ch                       ;   queue holds one (SPEC.md 124.8)
     jz .back
+    dec cl
+    call .slot
+    cmp word [bx + MSG_MSG], WM_MOUSEMOVE
+    jne .back1
+    mov ax, [w16_sm_hwnd]
+    cmp [bx + MSG_HWND], ax
+    je .fill
+.back1:
+    inc cl
+.back:
+    cmp byte [w16_qcount], W16_QLEN
+    jae .full
+    jmp short .at
+.front:
+    cmp byte [w16_qcount], W16_QLEN
+    jae .full
     dec cl                          ; the front: one before the head
     and cl, W16_QLEN - 1
     mov [w16_qhead], cl
-    jmp short .at
-.back:
-    add cl, [w16_qcount]
-    and cl, W16_QLEN - 1
 .at:
     inc byte [w16_qcount]
-    mov al, MSG_SIZE
-    mul cl
-    add ax, w16_q
-    mov bx, ax
+    call .slot
+.fill:
     mov ax, [w16_sm_hwnd]
     mov [bx + MSG_HWND], ax
     mov ax, [w16_sm_msg]
@@ -1506,6 +1520,13 @@ w16_post:
     pop dx
     pop cx
     pop bx
+    ret
+.slot:                              ; CL = a slot -> BX = its MSG
+    and cl, W16_QLEN - 1
+    mov al, MSG_SIZE
+    mul cl
+    add ax, w16_q
+    mov bx, ax
     ret
 
 ; w16_stamp - BX -> a MSG: its time and point, now
@@ -2533,6 +2554,14 @@ w16_tarm:
     jbe .noofn
     mov bx, 9
 .noofn:
+    push si
+    call w16_hvwant                 ; the pointer looked at each tick while
+    pop si                          ;   a move can be ours (w16_hover)
+    jc .nohv
+    cmp bx, 1
+    jbe .nohv
+    mov bx, 1
+.nohv:
     mov ax, bx
     inc bx
     jnz .arm
@@ -2577,6 +2606,7 @@ w16_ontimer:
     LCALL w16s_tick
 .nosnd:
     call w16_ofnpoll                ; a file dialog gone unanswered (124.24.2)
+    call w16_hover                  ; a move with no button down (124.8)
     call w16_tarm
     pop si
     jmp w16_input_kick
@@ -2685,6 +2715,15 @@ w16_onclick:
 .nt:
     call w16_onbar
     jc w16_barpress
+    call w16_tarm                   ; in front now: the tick looks again
+    call w16_hvmove                 ; the move to here, first - and taken,
+    jnc .nomv                       ;   since it can end a capture, before
+    push cx                         ;   the press is routed
+    push dx
+    call w16_input_kick
+    pop dx
+    pop cx
+.nomv:
     push di
     mov ax, WM_LBUTTONDOWN
     mov di, MK_LBUTTON
@@ -2807,6 +2846,111 @@ w16_input_kick:
     pop si
     ret
 
+; w16_hover - OSAPI_WM_ONTIMER's: the pointer's moves with no button down.
+; Windows sends every one, to the capture or else to the window under the
+; pointer, and a program acts on them - Paintbrush lets its capture go on
+; the first one off its canvas - but os8088 reports a move only in a drag,
+; so the tick looks (SPEC.md 124.8). Keeps every register.
+w16_hover:
+    push ax
+    push cx
+    push dx
+    call OSAPI_MOUSE                ; CX, DX; AL = the buttons
+    or al, al
+    jnz .out                        ; a drag's are W_ONDRAG's
+    call w16_hvmove
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16_hvmove - CX, DX = the pointer, no button down: a WM_MOUSEMOVE, if it
+; moved since the last mouse message and the move is ours - the capture's, or
+; the front window's when it is ours and the point is in its content. A press
+; asks first, so the move a tick has not looked for yet comes before it.
+; CF=1: one was posted. Keeps every other register.
+w16_hvmove:
+    cmp cx, [w16_mx]
+    jne .moved
+    cmp dx, [w16_my]
+    je .no
+.moved:
+    push ax
+    push bx
+    push si
+    push di
+    call w16_hvwant                 ; SI = the front window, if no capture
+    jc .out
+    cmp word [w16_capture], 0
+    jne .post
+    mov bx, si
+    push dx
+    call OSAPI_WM_CONTENT           ; AX, DX = the content's top left
+    mov di, dx
+    pop dx
+    cmp cx, ax
+    jl .out
+    cmp dx, di
+    jl .out
+    push es
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov ax, [es:si + W_X]
+    add ax, [es:si + W_W]
+    mov di, [es:si + W_Y]
+    add di, [es:si + W_H]
+    pop es
+    cmp cx, ax
+    jge .out
+    cmp dx, di
+    jge .out
+.post:
+    mov ax, WM_MOUSEMOVE
+    xor di, di
+    call w16_mouse
+    stc
+    jmp short .pop
+.out:
+    clc
+.pop:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+.no:
+    clc
+    ret
+
+; w16_hvwant - CF=0: a move with no button down can be ours - the program
+; runs and has the capture, or its window is in front (SI = that os8088
+; window). Keeps the rest.
+w16_hvwant:
+    push ax
+    push bx
+    cmp byte [w16_state], W16S_RUN
+    jne .no
+    cmp word [w16_capture], 0
+    jne .yes
+    call OSAPI_WM_TOP
+    or bx, bx
+    jz .no
+    mov si, bx
+    cmp bx, [w16_win]               ; WIN16's own, before the program has
+    je .yes                         ;   a window in it
+    call w16_osw2rec
+    jc .no
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bx
+    pop ax
+    ret
+
 ; W_ONKEY - AL = ASCII, AH = the scan code, SI = our window, the lock held.
 ; The keyboard has no release edge here, so the key-up follows at once.
 ; While the menu loop runs the key is its (w16menu.inc). Otherwise F10, and a
@@ -2926,13 +3070,14 @@ w16_keywnd:
     ret
 
 ; SetCapture (USER.18) - args: +0 hWnd. Recorded; os8088 already tracks a
-; press until its release (SPEC.md 13.7).
+; press until its release (SPEC.md 13.7), and the tick looks for the moves
+; with no button down that the capture is owed (w16_hover).
 w16u_setcapture:
     call w16_args
     mov dx, [es:bx]
     mov ax, [w16_capture]
     mov [w16_capture], dx
-    ret
+    jmp w16_tarm
 
 ; ReleaseCapture (USER.19)
 w16u_relcapture:

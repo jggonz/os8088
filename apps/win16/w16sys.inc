@@ -1551,13 +1551,16 @@ W16LIB w16u_msgpos
     ret
 
 ; GetCursorPos (USER.17) - args: +0 lpPoint: where the pointer is now
-W16LIB w16u_getcurpos
-    ICALL w16_args
+W16LIB w16u_getcurpos                 ; where the pointer IS, not where the
+    ICALL w16_args                      ;   last mouse message said
     les bx, [es:bx]
-    mov ax, [w16_mx]
-    mov [es:bx], ax
-    mov ax, [w16_my]
-    mov [es:bx + 2], ax
+    push cx
+    push dx
+    call OSAPI_MOUSE
+    mov [es:bx], cx
+    mov [es:bx + 2], dx
+    pop dx
+    pop cx
     mov ax, 1
     xor dx, dx
     ret
@@ -1684,36 +1687,12 @@ W16LIB w16u_drawfocus
 ; w16u_xorcut - AX..CX x BX..DX (screen, inclusive) inverted, cut to the
 ; DC's clip. Keeps every register.
 w16u_xorcut:
-    push ax
-    push bx
-    push cx
-    push dx
-    cmp ax, [w16_cl]
-    jge .l
-    mov ax, [w16_cl]
-.l:
-    cmp bx, [w16_ct]
-    jge .t
-    mov bx, [w16_ct]
-.t:
-    cmp cx, [w16_cr]
-    jle .r
-    mov cx, [w16_cr]
-.r:
-    cmp dx, [w16_cb]
-    jle .b
-    mov dx, [w16_cb]
-.b:
-    cmp ax, cx
-    jg .out
-    cmp bx, dx
-    jg .out
-    call OSAPI_GFX_XOR_FILL
-.out:
+    push dx                         ; w16_gfill cuts it and inverts, on the
+    mov dl, W16_XOR                 ;   screen or in a memory DC's bitmap
+    xchg dl, [w16_gcol]             ;   (SPEC.md 124.25.3)
+    ICALL w16_gfill
+    mov [w16_gcol], dl
     pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; VkKeyScan (KEYBOARD.129) - args: +0 cChar: the key that types it, and the
@@ -1994,10 +1973,10 @@ W16LIB w16g_setworg
     pop si
     ret
 
-; Polygon (GDI.36) - args: +0 nCount, +2 lpPoints, +6 hDC: its edges in the
-; pen, the last point joined to the first; the current point is left where
-; it was. The INSIDE is not filled with the brush, as Windows' is: os8088
-; has no polygon fill (SPEC.md 124.22.16)
+; Polygon (GDI.36) - args: +0 nCount, +2 lpPoints, +6 hDC: the inside in the
+; brush under the DC's polygon-fill mode (w16_pgfill, SPEC.md 124.25.4), then
+; the edges in the pen, the last point joined to the first; the current point
+; is left where it was
 W16LIB w16g_polygon
     push si
     push di
@@ -2008,6 +1987,18 @@ W16LIB w16g_polygon
     mov cx, [es:bx]
     cmp cx, 2
     jl .no
+    cmp byte [w16_dcon], 0
+    je .edges
+    mov ax, [w16_brush]
+    ICALL w16_brcol
+    ICALL w16_ropcol
+    cmp al, W16_NOCOL
+    je .edges
+    mov [w16_gcol], al
+    call w16_pgfill
+    ICALL w16_args
+    mov cx, [es:bx]
+.edges:
     push word [w16_curx]
     push word [w16_cury]
     mov si, cx                      ; the last point is the first edge's start
@@ -2047,6 +2038,216 @@ W16LIB w16g_polygon
     pop bp
     pop di
     pop si
+    ret
+
+; w16_pgfill - Polygon's inside (SPEC.md 124.25.4): ES:BX -> its arguments,
+; +0 the count (2 or more) and +2 the points, filled in [w16_gcol] a row at a
+; time. A row y takes each edge that has y in [top, bottom) and crosses it at
+; the row's centre, rounded to a column; the columns between crossings are
+; inside under ALTERNATE when an odd number lie left of them and under
+; WINDING when the edges' directions do not sum to 0, and a run of them is
+; one w16_gfill from its first crossing to the column before its last - so a
+; polygon's right and bottom edges are not filled, as Windows' are not. Rows
+; outside the DC's clip are not looked at; at most W16_PGMAX crossings a row
+; are kept. Clobbers AX, BX, CX, DX, SI, DI, BP, ES.
+W16_PGMAX   equ 64                  ; crossings in w16_gbuf: their columns,
+W16_PGDIR   equ W16_PGMAX * 2       ;   then each one's direction
+w16_pgfill:
+    mov cx, [es:bx]
+    mov [w16_pgn], cx
+    les si, [es:bx + 2]
+    mov [w16_pgp], si
+    mov [w16_pgp + 2], es
+    mov ax, [es:si + 2]             ; AX = the top point's y, DX the bottom's
+    mov dx, ax
+.mm:
+    mov di, [es:si + 2]
+    cmp di, ax
+    jge .mm1
+    mov ax, di
+.mm1:
+    cmp di, dx
+    jle .mm2
+    mov dx, di
+.mm2:
+    add si, 4
+    loop .mm
+    mov bx, [w16_ct]                ; cut to the clip, in the DC's own
+    sub bx, [w16_oy]                ;   coordinates
+    cmp ax, bx
+    jge .t
+    mov ax, bx
+.t:
+    mov bx, [w16_cb]
+    sub bx, [w16_oy]
+    inc bx
+    cmp dx, bx
+    jle .b
+    mov dx, bx
+.b:
+    mov [w16_pgy], ax
+    mov [w16_pgy1], dx              ; (the row after the last)
+.row:
+    mov ax, [w16_pgy]
+    cmp ax, [w16_pgy1]
+    jl .scan
+    ret
+.scan:
+    xor bp, bp                      ; BP = the crossings found
+    mov cx, [w16_pgn]
+    les bx, [w16_pgp]               ; ES:BX = the points
+    mov si, cx                      ; SI = the edge's start, the last point
+    dec si                          ;   first; DI = its end
+    shl si, 1
+    shl si, 1
+    xor di, di
+.edge:
+    mov ax, [es:bx + si]
+    mov [w16_pgxa], ax
+    mov ax, [es:bx + si + 2]
+    mov [w16_pgya], ax
+    mov ax, [es:bx + di]
+    mov [w16_pgxb], ax
+    mov ax, [es:bx + di + 2]
+    mov [w16_pgyb], ax
+    call w16_pgcross                ; AX = its column, DL its direction
+    jc .nx
+    cmp bp, W16_PGMAX
+    jae .nx
+    push si                         ; into the row's list, by column
+    push di
+    mov di, bp
+    shl di, 1
+.ins:
+    or di, di
+    jz .put
+    cmp ax, [w16_gbuf + di - 2]
+    jge .put
+    mov si, [w16_gbuf + di - 2]
+    mov [w16_gbuf + di], si
+    shr di, 1
+    mov dh, [w16_gbuf + W16_PGDIR + di - 1]
+    mov [w16_gbuf + W16_PGDIR + di], dh
+    shl di, 1
+    dec di
+    dec di
+    jmp short .ins
+.put:
+    mov [w16_gbuf + di], ax
+    shr di, 1
+    mov [w16_gbuf + W16_PGDIR + di], dl
+    inc bp
+    pop di
+    pop si
+.nx:
+    mov si, di
+    add di, 4
+    loop .edge
+    ; --- the runs inside ---
+    xor bx, bx                      ; BX = the crossing, DL the winding
+    xor dl, dl
+.walk:
+    cmp bx, bp
+    jae .done
+    mov dh, dl
+    cmp byte [w16_pfmode], WINDING
+    je .wind
+    xor dl, 1
+    jmp short .w1
+.wind:
+    add dl, [w16_gbuf + W16_PGDIR + bx]
+.w1:
+    push bx
+    shl bx, 1
+    mov ax, [w16_gbuf + bx]
+    pop bx
+    or dh, dh
+    jnz .was
+    or dl, dl
+    jz .wn
+    mov [w16_pgs], ax               ; the run starts
+    jmp short .wn
+.was:
+    or dl, dl
+    jnz .wn
+    dec ax                          ; ...and ends before this crossing
+    cmp ax, [w16_pgs]
+    jl .wn
+    push bx
+    push dx
+    mov cx, ax
+    add cx, [w16_ox]
+    mov ax, [w16_pgs]
+    add ax, [w16_ox]
+    mov bx, [w16_pgy]
+    add bx, [w16_oy]
+    mov dx, bx
+    ICALL w16_gfill
+    pop dx
+    pop bx
+.wn:
+    inc bx
+    jmp short .walk
+.done:
+    inc word [w16_pgy]
+    jmp .row
+
+; w16_pgcross - [w16_pgxa], [w16_pgya] to [w16_pgxb], [w16_pgyb]: where the
+; edge crosses row [w16_pgy]'s centre -> AX = the column, DL = 1 downward or
+; -1 upward. CF=1: it does not (level, or the row is not in [top, bottom)),
+; or it is longer than 16,383 rows. Keeps all but AX, DX.
+w16_pgcross:
+    push bx
+    push cx
+    mov cx, [w16_pgya]
+    mov dx, [w16_pgyb]
+    mov byte [w16_pgdir], 1
+    cmp cx, dx
+    je .none
+    jl .ord
+    xchg cx, dx                     ; upward: from its top end instead
+    mov ax, [w16_pgxa]
+    xchg ax, [w16_pgxb]
+    mov [w16_pgxa], ax
+    mov byte [w16_pgdir], -1
+.ord:                               ; CX = the top row, DX the bottom
+    mov ax, [w16_pgy]
+    cmp ax, cx
+    jl .none
+    cmp ax, dx
+    jge .none
+    sub dx, cx
+    cmp dx, 0x4000
+    jae .none
+    shl dx, 1
+    mov bx, dx                      ; BX = 2 dy
+    sub ax, cx
+    shl ax, 1
+    inc ax                          ; AX = 2 (y - top) + 1
+    mov cx, [w16_pgxb]
+    sub cx, [w16_pgxa]
+    imul cx                         ; DX:AX = that times dx
+    mov cx, bx
+    shr cx, 1                       ; rounded to the nearest column
+    or dx, dx
+    js .neg
+    add ax, cx
+    adc dx, 0
+    jmp short .div
+.neg:
+    sub ax, cx
+    sbb dx, 0
+.div:
+    idiv bx
+    add ax, [w16_pgxa]
+    mov dl, [w16_pgdir]
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop cx
+    pop bx
     ret
 
 ; Polyline (GDI.37) - args: +0 nCount, +2 lpPoints, +4 hDC: Polygon's
@@ -2240,17 +2441,50 @@ W16LIB w16u_defhook
 ; --- Paintbrush's (SPEC.md 124.23.9) ----------------------------------------
 
 ; GlobalNotify (KERNEL.154) - args: +0 lpNotifyProc. Kept nowhere: WIN16
-; discards no block (SPEC.md 124.18), so there is nothing to be told of.
+; discards a block without asking (SPEC.md 124.9), as Windows did for a
+; block allocated without GMEM_NOTIFY.
 ; ClipCursor (USER.16) - args: +0 lpRect. The pointer is os8088's and is not
 ; confined (SPEC.md 124.23.9)
 W16LIB w16k_gnotify
     ret
 
 ; GlobalLRUNewest (KERNEL.164), GlobalLRUOldest (KERNEL.163) - args: +0 the
-; handle, answered: no block is ever discarded, so its age is nothing
+; handle, answered. The block is the last a shortage discards (w16_gdold), or
+; the first.
 W16LIB w16k_glru
     ICALL w16_args
     mov ax, [es:bx]
+    push si
+    call w16r_gent
+    ICALL w16_gtouch
+    pop si
+    ret
+W16LIB w16k_glruold
+    ICALL w16_args
+    mov ax, [es:bx]
+    push si
+    call w16r_gent
+    cmp si, 0xFFFF
+    je .out
+    mov word [w16_ghage + si], 0
+.out:
+    pop si
+    ret
+; w16r_gent - AX = a global handle -> SI = its moveable entry, or 0xFFFF
+w16r_gent:
+    mov si, 0xFFFF
+    cmp ax, W16_GH0
+    jb .ret
+    cmp ax, W16_GH0 + 2 * W16_NGH
+    jae .ret
+    test al, 1
+    jnz .ret
+    mov si, ax
+    sub si, W16_GH0
+    cmp byte [w16_ghf + si], 0
+    jne .ret
+    mov si, 0xFFFF
+.ret:
     ret
 
 ; GetTempDrive (KERNEL.92) - args: +0 a byte, ignored. The Windows

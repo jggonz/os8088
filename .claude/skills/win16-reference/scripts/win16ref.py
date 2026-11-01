@@ -18,8 +18,9 @@ committed: the downloads are Microsoft's and Duff Software's.
     win16ref.py copy w30|w31 FILE...  copy host files into C:\\FIX on a STOPPED machine's
                                       disk (the WIN16 fixtures: `make win16fixtures`)
     win16ref.py samples               copy the programs WIN16's rows play into
-                                      <repo>/build/win16/ (git-ignored): CALC, CLOCK
-                                      and REVERSI from Windows 3.0, Windows 3.1's
+                                      <repo>/build/win16/ (git-ignored): CALC, CLOCK,
+                                      Paintbrush (PBRUSH.EXE and .DLL) and REVERSI
+                                      from Windows 3.0, Windows 3.1's
                                       CALC and WINMINE as W31CALC and W31MINE, and
                                       WinMine 2.9 as WINMINE
 
@@ -327,6 +328,8 @@ def copy(which, files):
 # play them (tests/win16*.py) SKIP where a name is missing.
 SAMPLES = [("CALC.EXE", "w3-archive/WINDOWS/CALC.EXE"),
            ("CLOCK.EXE", "w3-archive/WINDOWS/CLOCK.EXE"),
+           ("PBRUSH.EXE", "w3-archive/WINDOWS/PBRUSH.EXE"),
+           ("PBRUSH.DLL", "w3-archive/WINDOWS/PBRUSH.DLL"),
            ("REVERSI.EXE", "w3-archive/WINDOWS/REVERSI.EXE"),
            ("W31CALC.EXE", "w31/CALC.EXE"),
            ("W31MINE.EXE", "w31/WINMINE.EXE"),

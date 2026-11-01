@@ -28,10 +28,13 @@ W16_HFDLG   equ 0x3120          ; the dialog face, as a font (SPEC.md 124.24.4):
 W16_NOCOL   equ 0xFF            ; a NULL brush or pen, or R2_NOP: draw nothing
 W16_XOR     equ 0xFE            ; ...or invert what is there (w16_ropcol)
 W16_GRAY    equ 0xFD            ; ...or the 50% checker a pattern brush is
+ALTERNATE   equ 1               ; SetPolyFillMode's (SPEC.md 124.25.4)
+WINDING     equ 2
                                 ;   (w16g_patbrush): gfx_fill_gray's
 
 W16K_BRUSH  equ 1               ; [w16_objk]
 W16K_PEN    equ 2
+W16K_RGN    equ 3               ; a region (w16rgn.inc, SPEC.md 124.25.6)
 
 WHITE_BRUSH equ 0
 BLACK_PEN   equ 7
@@ -88,6 +91,8 @@ w16_dcopen:
     push cx
     push dx
     push si
+    cmp byte [w16_dcre], 0          ; w16_dcunpark's: the lock and the clip
+    jne .rearm                      ;   again, the state kept
     cmp byte [w16_dcon], 0
     je .first
     call w16_dcpush                 ; CF=1: too deep, a new clip on this one
@@ -101,35 +106,10 @@ w16_dcopen:
 .fresh:
     mov [w16_dcwnd], bx
     mov [w16_dcpaint], al
-    mov word [w16_brorg], 0
-    mov word [w16_brorg + 2], 0
-    mov word [w16_pen], W16_STOCK + BLACK_PEN
-    mov word [w16_brush], W16_STOCK + WHITE_BRUSH
-    mov word [w16_font], W16_STOCK + SYSTEM_FONT
-    mov byte [w16_rop], R2_COPYPEN
+    call w16_dcdef
+.rearm:
     xor ax, ax
-    mov [w16_tcol], al              ; black text, its COLORREF 0
-    mov byte [w16_tpap], CWHITE     ; ...on white paper (SPEC.md 124.13)
-    mov [w16_trgb], ax
-    mov [w16_trgb + 2], ax
-    mov [w16_tal], al               ; TA_TOP | TA_LEFT
-    mov byte [w16_bkmode], OPAQUE
-    mov word [w16_brgb], 0xFFFF     ; ...whose COLORREF is white
-    mov word [w16_brgb + 2], 0x00FF
-    mov [w16_curx], ax
-    mov [w16_cury], ax
     mov [w16_dchide], al
-    mov [w16_vorg], ax              ; MM_TEXT, its origins at 0 and its
-    mov [w16_vorg + 2], ax          ;   extents 1 (SPEC.md 124.22.13)
-    mov [w16_worg], ax
-    mov [w16_worg + 2], ax
-    inc ax
-    mov [w16_mm], ax
-    mov [w16_wext], ax
-    mov [w16_wext + 2], ax
-    mov [w16_vext], ax
-    mov [w16_vext + 2], ax
-    dec ax
     cmp byte [w16_dctook], 0        ; a DC under this one took it
     jne .held
     cmp byte [w16_locked], 0
@@ -254,15 +234,108 @@ w16_dcopen:
     mov word [w16_ct], 1
     mov word [w16_cb], 0
 .out:
+    mov ax, [w16_cl]                ; the clip as made, which SelectClipRgn
+    mov [w16_bcl], ax               ;   cuts afresh (SPEC.md 124.25.6)
+    mov ax, [w16_ct]
+    mov [w16_bct], ax
+    mov ax, [w16_cr]
+    mov [w16_bcr], ax
+    mov ax, [w16_cb]
+    mov [w16_bcb], ax
     mov ax, [w16_vorg]              ; the viewport's origin: logical 0, 0
-    add [w16_ox], ax                ;   is there (SetViewportOrg), after the
-    mov ax, [w16_vorg + 2]          ;   clip, which is the client's
+    sub ax, [w16_worg]              ;   is there (SetViewportOrg), moved
+    add [w16_ox], ax                ;   back by the window's (SetWindowOrg),
+    mov ax, [w16_vorg + 2]          ;   after the clip, which is the
+    sub ax, [w16_worg + 2]          ;   client's
     add [w16_oy], ax
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; w16_dcdef - the open DC's state as Windows' defaults: the stock pen, brush
+; and font, R2_COPYPEN, black text on white paper, OPAQUE, MM_TEXT with its
+; origins at 0. Keeps every register.
+w16_dcdef:
+    push ax
+    mov word [w16_brorg], 0
+    mov word [w16_brorg + 2], 0
+    mov word [w16_pen], W16_STOCK + BLACK_PEN
+    mov word [w16_brush], W16_STOCK + WHITE_BRUSH
+    mov word [w16_font], W16_STOCK + SYSTEM_FONT
+    mov byte [w16_rop], R2_COPYPEN
+    xor ax, ax
+    mov [w16_tcol], al              ; black text, its COLORREF 0
+    mov byte [w16_tpap], CWHITE     ; ...on white paper (SPEC.md 124.13)
+    mov [w16_trgb], ax
+    mov [w16_trgb + 2], ax
+    mov [w16_tal], al               ; TA_TOP | TA_LEFT
+    mov byte [w16_bkmode], OPAQUE
+    mov word [w16_brgb], 0xFFFF     ; ...whose COLORREF is white
+    mov word [w16_brgb + 2], 0x00FF
+    mov [w16_curx], ax
+    mov [w16_cury], ax
+    mov [w16_dchide], al
+    mov [w16_vorg], ax              ; MM_TEXT, its origins at 0 and its
+    mov [w16_vorg + 2], ax          ;   extents 1 (SPEC.md 124.22.13)
+    mov [w16_worg], ax
+    mov [w16_worg + 2], ax
+    inc ax
+    mov [w16_mm], ax
+    mov [w16_wext], ax
+    mov [w16_wext + 2], ax
+    mov [w16_vext], ax
+    mov [w16_vext + 2], ax
+    pop ax
+    ret
+
+; w16_dcpark - the program waits (in GetMessage, PeekMessage, a Yield) with a
+; DC open, as Paintbrush waits with its GetDC's held through a brush stroke:
+; the lock and the window's clip go back, so os8088 can run the pass that
+; answers the wait (SPEC.md 124.25.5). Keeps every register.
+w16_dcpark:
+    cmp byte [w16_dcon], 0
+    je .ret
+    mov byte [w16_dcpkd], 1
+    cmp byte [w16_dcclip], 0
+    je .lk
+    mov byte [w16_dcclip], 0
+    call OSAPI_WM_CLIP_CLEAR
+.lk:
+    cmp byte [w16_dctook], 0
+    je .ret
+    mov byte [w16_dctook], 0
+    call OSAPI_GFX_UNLOCK
+.ret:
+    ret
+
+; w16_dcunpark - the program runs again: its parked DC takes the lock (unless
+; a callback holds it) and the clip again, the window's as it is now - it may
+; have moved, or been covered, while the program waited. A BeginPaint DC's
+; clip is the whole client then. The rest of its state is kept, an
+; IntersectClipRect's cut excepted. Keeps every register.
+w16_dcunpark:
+    cmp byte [w16_dcpkd], 0
+    je .ret
+    mov byte [w16_dcpkd], 0
+    cmp byte [w16_dcon], 0
+    je .ret
+    push ax
+    push bx
+    mov al, [w16_dcpaint]
+    push ax
+    mov byte [w16_dcpaint], 0
+    mov bx, [w16_dcwnd]
+    mov byte [w16_dcre], 1
+    call w16_dcopen
+    mov byte [w16_dcre], 0
+    pop ax
+    mov [w16_dcpaint], al
+    pop bx
+    pop ax
+.ret:
     ret
 
 ; w16_dcclose - give back what w16_dcopen took. Keeps every register.
@@ -272,6 +345,7 @@ w16_dcclose:
     cmp byte [w16_dcdep], 0
     jne w16_dcpop                   ; a DC under it: that one again
     mov byte [w16_dcon], 0
+    mov byte [w16_dcpkd], 0
     cmp byte [w16_dcclip], 0
     je .lock
     mov byte [w16_dcclip], 0
@@ -334,12 +408,252 @@ w16_dcpop:
     jmp short w16_dcpush.copy
 
 ; -----------------------------------------------------------------------------
+; MEMORY DCs DRAWN INTO (SPEC.md 124.25.3). Each of the W16_NMDC memory DCs
+; keeps a whole DC's state, W16_DCSZ bytes from w16_dchide, in w16m_st. A
+; call whose row carries W16B_MDC and whose hDC - the last argument, the
+; first Windows names - is a memory DC runs with that record as the open
+; DC's state (w16_mdcin), the window's put by and back after (w16_mdcout):
+; the handler finds W16_HDC on the stack and draws as it always does, its
+; "screen" the bitmap's own coordinates and its clip the bitmap's, and the
+; primitives under it see [w16_mtgt] and write the bitmap [w16_mbm] instead
+; of calling the kernel (w16_gfill, w16_lplot, w16_bandblit, w16g_setdib).
+; -----------------------------------------------------------------------------
+W16DC_CL    equ w16_cl - w16_dchide     ; a record's fields, from its start
+W16DC_CT    equ w16_ct - w16_dchide
+W16DC_CR    equ w16_cr - w16_dchide
+W16DC_CB    equ w16_cb - w16_dchide
+W16DC_PRC   equ w16_prc - w16_dchide
+W16DC_BRUSH equ w16_brush - w16_dchide
+W16DC_BCL   equ w16_bcl - w16_dchide
+W16DC_OX    equ w16_ox - w16_dchide
+W16DC_OY    equ w16_oy - w16_dchide
+
+; w16_mdcin - CF=1: the call's hDC is a memory DC, and the open DC's state is
+; that DC's now, the handle on the stack W16_HDC. CF=0 with nothing changed
+; otherwise. Keeps every register.
+w16_mdcin:
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    call w16_args
+    add bx, [w16_nargb]
+    mov ax, [es:bx - 2]             ; the hDC
+    sub ax, W16_MDC0
+    jb .no
+    cmp ax, W16_NMDC
+    jae .no
+    mov si, ax
+    cmp byte [w16m_on + si], 0
+    je .no
+    mov word [es:bx - 2], W16_HDC
+    mov [w16_mdslot], ax
+    mov al, [w16_dcon]
+    mov [w16_mdsvon], al
+    mov byte [w16_dcon], 1
+    mov si, w16_dchide              ; the window's state put by
+    mov di, w16_mdsave
+    call w16_dccopy
+    mov bx, [w16_mdslot]
+    call w16_mdrec
+    mov si, bx                      ; ...and the DC's in its place
+    mov di, w16_dchide
+    call w16_dccopy
+    mov bx, [w16_mdslot]
+    shl bx, 1
+    mov ax, [w16m_bmp + bx]         ; the bitmap it draws into
+    sub ax, W16_BMP0
+    jb .stk
+    cmp ax, W16_NBMP
+    jae .stk
+    shl ax, 1
+    mov bx, ax
+    cmp word [w16b_seg + bx], 0
+    je .stk
+    mov [w16_mbm], ax
+    mov al, [w16b_mono + bx]
+    mov [w16_mmono], al
+    jmp short .on
+.stk:                               ; the stock 1 x 1: nothing to draw on
+    mov word [w16_cl], 1
+    mov word [w16_cr], 0
+    mov word [w16_ct], 1
+    mov word [w16_cb], 0
+.on:
+    mov byte [w16_mtgt], 1
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; w16_mdcout - w16_mdcin's undone after the call: the DC's state back in its
+; record, the window's back where it was. Keeps every register and flag.
+w16_mdcout:
+    pushf
+    push ax
+    push bx
+    push si
+    push di
+    mov bx, [w16_mdslot]
+    call w16_mdrec
+    mov si, w16_dchide
+    mov di, bx
+    call w16_dccopy
+    mov si, w16_mdsave
+    mov di, w16_dchide
+    call w16_dccopy
+    mov al, [w16_mdsvon]
+    mov [w16_dcon], al
+    mov byte [w16_mtgt], 0
+    pop di
+    pop si
+    pop bx
+    pop ax
+    popf
+    ret
+
+; w16_mdcinit - BX = a memory DC's slot, just made: its record as Windows'
+; defaults, holding the stock bitmap. Keeps every register.
+w16_mdcinit:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, w16_dchide
+    mov di, w16_mdsave
+    call w16_dccopy
+    call w16_dcdef
+    xor ax, ax
+    mov [w16_dcpaint], al
+    mov [w16_dcwnd], ax
+    mov [w16_ox], ax
+    mov [w16_oy], ax
+    inc ax
+    mov byte [w16_pfmode], ALTERNATE
+    mov [w16_sbmode], al            ; BLACKONWHITE
+    push bx
+    call w16_mdrec
+    mov si, w16_dchide
+    mov di, bx
+    call w16_dccopy
+    mov si, w16_mdsave
+    mov di, w16_dchide
+    call w16_dccopy
+    pop bx
+    mov ax, W16_BMSTK
+    call w16_mdclip
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; w16_mdclip - BX = a memory DC's slot, AX = the bitmap selected into it: its
+; record's clip is the bitmap, as Windows' selecting one resets the DC's clip
+; region, and empty for the stock 1 x 1. Keeps every register.
+w16_mdclip:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call w16_mdrec
+    mov si, ax
+    sub si, W16_BMP0
+    jb .empty
+    cmp si, W16_NBMP
+    jae .empty
+    shl si, 1
+    cmp word [w16b_seg + si], 0
+    je .empty
+    mov cx, [w16b_w + si]
+    mov dx, [w16b_h + si]
+    xor ax, ax
+    mov [bx + W16DC_CL], ax
+    mov [bx + W16DC_CT], ax
+    mov [bx + W16DC_PRC], ax
+    mov [bx + W16DC_PRC + 2], ax
+    mov [bx + W16DC_PRC + 4], cx
+    mov [bx + W16DC_PRC + 6], dx
+    dec cx
+    dec dx
+    mov [bx + W16DC_CR], cx
+    mov [bx + W16DC_CB], dx
+    jmp short .base
+.empty:
+    xor ax, ax
+    mov [bx + W16DC_PRC], ax
+    mov [bx + W16DC_PRC + 2], ax
+    mov [bx + W16DC_PRC + 4], ax
+    mov [bx + W16DC_PRC + 6], ax
+    mov [bx + W16DC_CR], ax
+    mov [bx + W16DC_CB], ax
+    inc ax
+    mov [bx + W16DC_CL], ax
+    mov [bx + W16DC_CT], ax
+.base:                              ; ...which is the clip as made, too
+    mov ax, [bx + W16DC_CL]         ;   (SelectClipRgn's, 124.25.6)
+    mov [bx + W16DC_BCL], ax
+    mov ax, [bx + W16DC_CT]
+    mov [bx + W16DC_BCL + 2], ax
+    mov ax, [bx + W16DC_CR]
+    mov [bx + W16DC_BCL + 4], ax
+    mov ax, [bx + W16DC_CB]
+    mov [bx + W16DC_BCL + 6], ax
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16_mdrec - BX = a memory DC's slot -> BX = its record. Keeps the rest.
+w16_mdrec:
+    push ax
+    push dx
+    mov ax, W16_DCSZ
+    mul bx
+    add ax, w16m_st
+    mov bx, ax
+    pop dx
+    pop ax
+    ret
+
+; w16_dccopy - W16_DCSZ bytes of DC state from DS:SI to DS:DI. Keeps every
+; register.
+w16_dccopy:
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov cx, W16_DCSZ
+    cld
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; w16_ink - AL = a colour: make it the kernel's ink. On a 1bpp display it is
 ; first put in one of the three classes Windows' own mono drivers drew it in
 ; (w16_monotab); the kernel then draws black, its 50% dither, or white
 ; (SPEC.md 39.4). Keeps every register.
 ; -----------------------------------------------------------------------------
 w16_ink:
+    cmp byte [w16_mtgt], 0          ; into a memory DC's bitmap: no kernel
+    jne .ret                        ;   ink (SPEC.md 124.25.3)
     push ax
     push bx
     cmp byte [w16_mono], 0
@@ -351,6 +665,7 @@ w16_ink:
     call OSAPI_SET_COLOR
     pop bx
     pop ax
+.ret:
     ret
 
 ; Each colour's class on a 1bpp display, by its luminance (0.30 R + 0.59 G +
@@ -399,6 +714,8 @@ w16_gfill:
     jg .out
     cmp bx, dx
     jg .out
+    cmp byte [w16_mtgt], 0
+    jne .mem
     cmp byte [w16_gcol], W16_XOR
     je .xor
     cmp byte [w16_gcol], W16_GRAY
@@ -414,6 +731,9 @@ w16_gfill:
     jmp short .out
 .gray:
     call OSAPI_GFX_FILL_GRAY
+    jmp short .out
+.mem:                               ; a memory DC's bitmap (SPEC.md 124.25.3)
+    LCALL w16_mfill
 .out:
     pop dx
     pop cx
@@ -830,6 +1150,17 @@ w16g_select:
     mov cx, [es:bx + 2]             ; a memory DC's (SPEC.md 124.15.2)
     cmp cx, W16_HDC
     je .win
+    cmp ax, W16_BMSTK
+    je .bm
+    push bx
+    LCALL w16_bmslot
+    pop bx
+    jnc .bm
+    call w16_mdcin                  ; a pen, brush or font: into the memory
+    jnc .no                         ;   DC's own state (SPEC.md 124.25.3)
+    call .win
+    jmp w16_mdcout
+.bm:
     push ax
     mov ax, cx
     LCALL w16_mdcslot                ; BX = its slot
@@ -1029,10 +1360,15 @@ w16_lplot:
     jl .out
     cmp dx, [w16_cb]
     jg .out
-    cmp byte [w16_gcol], W16_XOR
-    jne .buf
     mov bx, dx
     mov cx, ax
+    cmp byte [w16_mtgt], 0          ; a memory DC's bitmap: the one pixel
+    je .scr                         ;   now (SPEC.md 124.25.3)
+    call w16_gfill
+    jmp short .out
+.scr:
+    cmp byte [w16_gcol], W16_XOR
+    jne .buf
     call OSAPI_GFX_XOR_FILL
     jmp short .out
 .buf:
@@ -1778,6 +2114,8 @@ w16_txtdraw:
 .stop:
     pop cx
 .blit:
+    cmp byte [w16_mtgt], 0          ; a memory DC's bitmap: both modes there
+    jne w16_bandblit
     cmp byte [w16_bkmode], TRANSPARENT
     jne w16_bandblit
     LCALL w16_txtxpar               ; the ink alone (SPEC.md 124.17.1)
@@ -1828,6 +2166,11 @@ w16_bandhalf:
 ; rows [w16_r0]..[w16_r1] from screen x [w16_rl] to [w16_rr], row [w16_ty]
 ; + [w16_r0], in [w16_tcol] on [w16_tpap]. The caller pushed ES.
 w16_bandblit:
+    cmp byte [w16_mtgt], 0          ; a memory DC's bitmap (SPEC.md 124.25.3)
+    je .scr
+    LCALL w16_mband
+    jmp .out
+.scr:
     cmp byte [w16_thalf], 0         ; grey text on 1bpp: every other pixel
     je .full                        ;   of the ink, a checkerboard
     call w16_bandhalf
@@ -2214,13 +2557,19 @@ w16g_setdib:
     mov dx, cx
     add [w16_dres], cx
     mov cx, [w16_dvw]
+    cmp byte [w16_mtgt], 0
+    jne .mem
     call OSAPI_GFX_BLIT4
+.put:
     pop es
     pop dx
     jmp short .band
 .skip:
     inc dx                          ; a row lpBits has not: not drawn
     jmp short .band
+.mem:                               ; a memory DC's bitmap (SPEC.md 124.25.3)
+    LCALL w16_mblit4
+    jmp short .put
 .ret:
     mov ax, [w16_dres]
     pop bp

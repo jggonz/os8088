@@ -44,6 +44,7 @@ w16_resume:
     ; STKBALANCE-OK: a COROUTINE SWITCH (SPEC.md 124.2.1). It banks the host
     ; stack and leaves on the PROGRAM's through w16_epi's retf; the host frame
     ; it pushed is popped by w16_tohost when the program next waits or ends
+    call w16_dcunpark               ; a DC open across the wait (124.25.5)
     push bp
     push si
     push di
@@ -195,7 +196,7 @@ w16_gate:
     cmp byte [w16_state], W16S_ENDED
     je w16_tohost
     cmp byte [w16_pend], 0
-    jne w16_tohost
+    jne .wait
     cmp byte [w16_cbgo], 0          ; a call INTO the program (SPEC.md 124.2.2)
     jne w16_cbenter
     pushf                           ; back to the program, finished
@@ -207,6 +208,9 @@ w16_gate:
     push bx
     popf
     jmp w16_epi
+.wait:                              ; it waits: an open DC gives the lock back
+    call w16_dcpark                 ;   (SPEC.md 124.25.5)
+    jmp w16_tohost
 
 ; -----------------------------------------------------------------------------
 ; w16_dispatch - run slot BX's handler (SPEC.md 124.19.2), with AX = the
@@ -218,8 +222,17 @@ w16_gate:
 w16_dispatch:
     mov al, [bx + W16B_PART]
     and al, ~W16B_NORET & 0xFF
-    cmp al, W16B_MISS
+    cmp al, W16B_MISS               ; (before W16B_MDC: 7Fh has its bit)
     je .miss
+    test al, W16B_MDC
+    jz .plain
+    call w16_mdcin                  ; CF=1: a memory DC's, its state the open
+    jnc .plain                      ;   DC's for the call (SPEC.md 124.25.3)
+    call .plain
+    jmp w16_mdcout
+.plain:
+    mov al, [bx + W16B_PART]
+    and al, ~(W16B_NORET | W16B_MDC) & 0xFF
     test al, W16B_DCF
     jnz .dcf
 .go:
@@ -337,6 +350,7 @@ w16_cbenter:
 w16_resumecb:
     ; STKBALANCE-OK: w16_resume's switch, ending in w16_cbenter's retf into
     ; the callee instead of w16_epi's; w16_tohost pops the host frame
+    call w16_dcunpark
     push bp
     push si
     push di

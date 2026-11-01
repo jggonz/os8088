@@ -9,7 +9,9 @@
 ; the claim. Anything else (an odd column, StretchBlt) is built a row at a
 ; time into WIN16's band, w16_gbuf.
 ;
-; A memory DC is only ever a SOURCE here: nothing draws into one.
+; A memory DC is drawn into as well (SPEC.md 124.25.3): w16gdi.inc swaps its
+; state in, and w16_mfill, w16_mband and w16_mblit4 below are what the
+; primitives under the call write its bitmap with.
 ; =============================================================================
 
 W16_BMP0    equ 0x3300          ; a bitmap: W16_BMP0 + slot
@@ -134,6 +136,13 @@ w16_bmnew:
 ; w16_dibrow and the band. Keeps BX.
 ; -----------------------------------------------------------------------------
 w16_bmfill:
+    xor ax, ax
+    mov [w16_dstart], ax
+    mov ax, [w16_dhgt]
+    mov [w16_dlines], ax
+; w16_bmfills - w16_bmfill's with [w16_dstart], [w16_dlines] the scans at
+; [w16_dbits], counted from the DIB's bottom (SetDIBits, SPEC.md 124.25.6)
+w16_bmfills:
     push bx
     push si
     push di
@@ -143,9 +152,7 @@ w16_bmfill:
     mov [w16_dx0], ax               ;   at row and column 0
     mov [w16_dsx], ax
     mov [w16_dy0], ax
-    mov [w16_dstart], ax
     mov ax, [w16_dhgt]
-    mov [w16_dlines], ax
     dec ax
     mov [w16_dtop], ax
     mov ax, [w16_dwid]              ; the narrower of the DIB and the bitmap
@@ -210,7 +217,8 @@ W16LIB w16g_cmpdc
     mov ax, bx
     shl bx, 1
     mov word [w16m_bmp + bx], W16_BMSTK
-    mov word [w16m_brush + bx], W16_STOCK + WHITE_BRUSH
+    mov bx, ax
+    ICALL w16_mdcinit               ; Windows' defaults (SPEC.md 124.25.3)
     add ax, W16_MDC0
     ret
 
@@ -240,64 +248,25 @@ w16_bmsel0:
     pop bx
     ret
 
-; w16_bmselect - SelectObject into a memory DC: AX = the object, BX = the DC's
-; slot -> AX = the bitmap it replaced. A pen, brush or font is not used there:
-; it answers the stock object of its kind. Anything else 0.
+; w16_bmselect - SelectObject of a bitmap into a memory DC: AX = it, BX = the
+; DC's slot -> AX = the bitmap it replaced, the DC's clip the new one's
+; (SPEC.md 124.25.3). A pen, brush or font goes into the DC's own state
+; (w16g_select).
 w16_bmselect:
     push bx
     push si
     mov si, bx
     shl si, 1                       ; SI = the DC's slot * 2
-    cmp ax, W16_BMSTK
-    je .bm
-    call w16_bmslot
-    jnc .bm
-    mov dx, ax                      ; a made pen or brush?
-    sub dx, W16_OBJ0
-    jb .stock
-    cmp dx, W16_NOBJ
-    jae .none
-    mov bx, dx
-    mov dl, [w16_objk + bx]
-    cmp dl, W16K_BRUSH
-    je .brush
-    mov dx, W16_STOCK + BLACK_PEN
-    cmp dl, W16K_PEN
-    je .kind
-    jmp short .none
-.stock:                             ; a stock one: brushes 0-5, pens 6-8,
-    mov dx, ax                      ;   the rest fonts
-    sub dx, W16_STOCK
-    jb .none
-    cmp dx, STOCK_LAST
-    ja .none
-    cmp dx, 5
-    jbe .brush
-    mov ax, W16_STOCK + BLACK_PEN
-    cmp dx, 8
-    jbe .out
-    mov ax, W16_STOCK + SYSTEM_FONT
-    jmp short .out
-.kind:
-    mov ax, dx
-    jmp short .out
-.brush:                             ; a brush is kept: PatBlt into the bitmap
-    xchg ax, [w16m_brush + si]      ;   paints with it (SPEC.md 124.20.4)
-    jmp short .out
-.none:
-    xor ax, ax
-    jmp short .out
-.bm:
     xchg ax, [w16m_bmp + si]        ; AX = the one it replaced
     call w16_bmsel0
     push ax
     mov ax, [w16m_bmp + si]
+    ICALL w16_mdclip
     call w16_bmslot
     jc .sel
     mov byte [w16b_sel + bx], 1
 .sel:
     pop ax
-.out:
     pop si
     pop bx
     ret
@@ -663,6 +632,7 @@ w16_blt:
     push si
     push di
     push bp
+    call w16_srcorg
     cmp cx, W16_HDC                 ; the window's DC, or a memory DC's
     je .scr                         ;   bitmap (SPEC.md 124.20.4)
     call w16_bltm
@@ -1048,6 +1018,25 @@ w16_bmclamp_h:
 ; another, and two back out. A bitmap is 4 bits a pixel, high nibble left.
 ; =============================================================================
 
+; w16_srcorg - AX = a blit's source DC: a memory DC's origin (SetWindowOrg,
+; SetViewportOrg) takes [w16b_xs], [w16b_ys] to its bitmap's own pixels, as
+; Paintbrush's bands are read at their place in the picture (SPEC.md
+; 124.25.6). Keeps every register.
+w16_srcorg:
+    push ax
+    push bx
+    call w16_mdcslot
+    jc .out
+    ICALL w16_mdrec
+    mov ax, [bx + W16DC_OX]
+    add [w16b_xs], ax
+    mov ax, [bx + W16DC_OY]
+    add [w16b_ys], ax
+.out:
+    pop bx
+    pop ax
+    ret
+
 ; w16_bltm - w16_blt's when the destination is not the window's DC: AX = the
 ; source DC, CX = the destination, ES:BX -> dwRop, [w16b_*] the rectangles in
 ; the two DCs' own coordinates. AX = TRUE drawn (or wholly cut), FALSE not.
@@ -1057,9 +1046,24 @@ w16_bltm:
     mov ax, cx
     call w16_mdcslot
     jc .no
-    shl bx, 1
-    mov ax, [w16m_brush + bx]       ; its own brush, for the pattern ROPs
+    push bx
+    ICALL w16_mdrec
+    mov ax, [bx + W16DC_BRUSH]      ; its own brush, for the pattern ROPs
     mov [w16b_mbr], ax
+    mov ax, [bx + W16DC_OX]         ; its origin moves the destination, and
+    add [w16b_x], ax                ;   its clip cuts it (SPEC.md 124.25.6)
+    mov ax, [bx + W16DC_OY]
+    add [w16b_y], ax
+    mov ax, [bx + W16DC_CL]
+    mov [w16b_kl], ax
+    mov ax, [bx + W16DC_CT]
+    mov [w16b_kt], ax
+    mov ax, [bx + W16DC_CR]
+    mov [w16b_kr], ax
+    mov ax, [bx + W16DC_CB]
+    mov [w16b_kb], ax
+    pop bx
+    shl bx, 1
     mov ax, [w16m_bmp + bx]
     cmp ax, W16_BMSTK
     je .yes                         ; the stock 1 x 1: nothing to draw on
@@ -1072,36 +1076,40 @@ w16_bltm:
     mov ax, [w16b_cy]
     or ax, ax
     jle .no
-    mov ax, [w16b_x]                ; the destination, cut to the bitmap
-    mov [w16b_dx0], ax
-    or ax, ax
-    jns .l
-    xor ax, ax
+    mov ax, [w16b_x]                ; the destination, cut to the DC's
+    mov [w16b_dx0], ax              ;   clip - the bitmap, unless a clip
+    cmp ax, [w16b_kl]               ;   region cut it
+    jge .l
+    mov ax, [w16b_kl]
 .l:
     mov [w16_rl], ax
     mov ax, [w16b_y]
     mov [w16b_dy0], ax
-    or ax, ax
-    jns .t
-    xor ax, ax
+    cmp ax, [w16b_kt]
+    jge .t
+    mov ax, [w16b_kt]
 .t:
     mov [w16_rt], ax
     mov ax, [w16b_x]
     add ax, [w16b_cx]
-    cmp ax, [w16b_w + bx]
-    jle .r
-    mov ax, [w16b_w + bx]
-.r:
     dec ax
+    cmp ax, [w16b_kr]
+    jle .r
+    mov ax, [w16b_kr]
+.r:
     mov [w16_rr], ax
+    cmp ax, [w16_rl]
+    jl .yes                         ; wholly cut: nothing drawn
     mov ax, [w16b_y]
     add ax, [w16b_cy]
-    cmp ax, [w16b_h + bx]
-    jle .b
-    mov ax, [w16b_h + bx]
-.b:
     dec ax
+    cmp ax, [w16b_kb]
+    jle .b
+    mov ax, [w16b_kb]
+.b:
     mov [w16_rb], ax
+    cmp ax, [w16_rt]
+    jl .yes
     cmp dx, SRCCOPY_HI
     je .copy
     mov al, CBLACK
@@ -1250,6 +1258,9 @@ w16_bmfillr:
     or al, ah                       ; AL = the colour in both halves
 .go:
     mov [w16b_fpat], al
+; w16_bmfillp - w16_bmfillr's with [w16b_fpat] the two pixels each byte is
+; given already (a checker's row, w16_mfill)
+w16_bmfillp:
     mov dx, [w16_rt]
 .row:
     cmp dx, [w16_rb]
@@ -1309,6 +1320,240 @@ w16_nibput:
     ret
 .x:
     xor [es:di], al
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; DRAWING INTO A MEMORY DC'S BITMAP (SPEC.md 124.25.3): what w16_gfill,
+; w16_bandblit and w16g_setdib call instead of the kernel while [w16_mtgt]
+; is set - the bitmap [w16_mbm], in its own coordinates, cut already.
+; -----------------------------------------------------------------------------
+
+; w16_mcol - AL = a colour (0-15) -> AL as the bitmap keeps it: itself, or in
+; one made 1bpp ([w16_mmono]) white where text would be lit and black
+; elsewhere (w16_monolit). Keeps the rest.
+w16_mcol:
+    cmp byte [w16_mmono], 0
+    je .ret
+    push bx
+    mov bl, al
+    and bx, 15
+    mov al, [w16_monolit + bx]
+    neg al                          ; 1 -> FFh, 0 -> 0
+    and al, CWHITE
+    pop bx
+.ret:
+    ret
+
+; w16_mfill - AX, BX, CX, DX (inclusive) filled in [w16_gcol]: a colour, or
+; W16_XOR inverted, or W16_GRAY the checker of black and white the kernel's
+; FILL_GRAY is, fixed to the bitmap. Keeps every register.
+w16_mfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    push word [w16_rl]              ; the caller's rectangle may be in these
+    push word [w16_rt]
+    push word [w16_rr]
+    push word [w16_rb]
+    mov [w16_rl], ax
+    mov [w16_rt], bx
+    mov [w16_rr], cx
+    mov [w16_rb], dx
+    mov [w16m_n], dx
+    mov ax, [w16_mbm]
+    mov [w16b_dbm], ax
+    mov al, [w16_gcol]
+    cmp al, W16_GRAY
+    je .gray
+    cmp al, W16_XOR
+    je .go
+    call w16_mcol
+.go:
+    mov [w16b_dfc], al
+    call w16_bmfillr
+    jmp short .out
+.gray:
+    mov byte [w16b_dfc], CBLACK     ; (stored, not inverted)
+    mov dx, bx
+.grow:
+    mov [w16_rt], dx
+    mov [w16_rb], dx
+    mov al, 0x0F                    ; an even row: black on even columns
+    test dl, 1
+    jz .gp
+    mov al, 0xF0
+.gp:
+    mov [w16b_fpat], al
+    push dx
+    call w16_bmfillp
+    pop dx
+    inc dx
+    cmp dx, [w16m_n]
+    jle .grow
+.out:
+    pop word [w16_rb]
+    pop word [w16_rr]
+    pop word [w16_rt]
+    pop word [w16_rl]
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16_mband - w16_bandblit's band into the bitmap: rows [w16_r0]..[w16_r1] of
+; it ([w16_tb0] its bit 0's column) at bitmap row [w16_ty] + the band row,
+; columns [w16_rl]..[w16_rr]; a set bit in [w16_tcol], a clear one in
+; [w16_tpap] unless the DC's mode is TRANSPARENT. Clobbers AX, BX, CX, DX,
+; SI, DI, ES.
+w16_mband:
+    mov al, [w16_tcol]              ; the two colours, in both halves
+    call w16_mcol
+    mov ah, al
+    mov cl, 4
+    shl ah, cl
+    or al, ah
+    mov [w16m_ink], al
+    mov al, [w16_tpap]
+    call w16_mcol
+    mov ah, al
+    shl ah, cl
+    or al, ah
+    mov [w16m_pap], al
+    mov dx, [w16_r0]
+.row:
+    cmp dx, [w16_r1]
+    jg .out
+    push dx
+    mov ax, W16_BS                  ; SI = the band's row
+    mul dx
+    add ax, w16_gbuf
+    mov si, ax
+    pop dx
+    push dx
+    add dx, [w16_ty]                ; ES:DI = the bitmap's, BL = FFh when
+    mov ax, [w16_rl]                ;   its first pixel is a low nibble
+    mov bx, [w16_mbm]
+    call w16_bmaddr
+    sbb bl, bl
+    mov cx, [w16_rl]                ; the band's byte and bit for column L
+    sub cx, [w16_tb0]
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add si, ax
+    and cl, 7
+    mov ah, 0x80
+    shr ah, cl                      ; AH = the bit
+    mov cx, [w16_rr]
+    sub cx, [w16_rl]
+    inc cx                          ; CX = pixels
+.px:
+    mov al, [w16m_ink]
+    test [si], ah
+    jnz .put
+    cmp byte [w16_bkmode], TRANSPARENT
+    je .adv
+    mov al, [w16m_pap]
+.put:
+    or bl, bl
+    jnz .lo
+    and al, 0xF0
+    and byte [es:di], 0x0F
+    or [es:di], al
+    jmp short .adv
+.lo:
+    and al, 0x0F
+    and byte [es:di], 0xF0
+    or [es:di], al
+.adv:
+    or bl, bl
+    jz .nb
+    inc di                          ; past a low nibble: the next byte
+.nb:
+    not bl
+    ror ah, 1
+    jnc .same                       ; past the band byte's last bit
+    inc si
+.same:
+    loop .px
+    pop dx
+    inc dx
+    jmp short .row
+.out:
+    ret
+
+; w16_mblit4 - OSAPI_GFX_BLIT4's arguments put into the bitmap: DS:SI = rows
+; of 4bpp pixels, the first a high nibble, BP bytes apart; AX, BX = where the
+; first goes; CX pixels a row, DX rows. Keeps every register.
+w16_mblit4:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [w16m_x], ax
+    mov [w16m_n], cx
+.row:
+    push si
+    push bx
+    push dx
+    mov dx, bx
+    mov ax, [w16m_x]
+    mov bx, [w16_mbm]
+    call w16_bmaddr                 ; ES:DI, CF = a low nibble first
+    sbb bl, bl                      ; BL = FFh: the destination's low nibble
+    xor bh, bh                      ; BH = FFh: the source's
+    mov dx, [w16m_n]
+    mov cl, 4
+.px:
+    mov al, [si]
+    or bh, bh
+    jnz .slo
+    shr al, cl
+    jmp short .sv
+.slo:
+    and al, 0x0F
+    inc si
+.sv:
+    not bh
+    call w16_mcol
+    or bl, bl
+    jnz .dlo
+    shl al, cl
+    and byte [es:di], 0x0F
+    or [es:di], al
+    jmp short .dn
+.dlo:
+    and byte [es:di], 0xF0
+    or [es:di], al
+    inc di
+.dn:
+    not bl
+    dec dx
+    jnz .px
+    pop dx
+    pop bx
+    pop si
+    add si, bp
+    inc bx
+    dec dx
+    jnz .row
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -1511,7 +1756,13 @@ w16_scr2bm:
     jae .next
     push cx
     push dx
+    cmp byte [w16_fwin], 0          ; ExtFloodFill's mask, not a bitmap
+    jne .mrow
     call w16_scrrow
+    jmp short .rowd
+.mrow:
+    call w16_scrmrow
+.rowd:
     pop dx
     pop cx
     inc cx
@@ -1546,6 +1797,89 @@ w16_scrrow:
     sub cx, [w16_rl]
     inc cx
     call w16_scrpix
+    pop bp
+    ret
+
+; w16_scrmrow - the band's row CX into ExtFloodFill's mask's row DX on the
+; window's DC (w16r_snap, SPEC.md 124.25.6), a bit a pixel from column
+; [w16_rl] on: set where the fill may go - a pixel not [w16_fcol]
+; (FLOODFILLBORDER) or one that is (FLOODFILLSURFACE)
+w16_scrmrow:
+    push bp
+    push dx
+    mov ax, [w16b_bw]
+    mul cx
+    mov si, ax
+    add si, w16_gbuf                ; SI = plane 0's byte for this row
+    mov ax, [w16b_bw]
+    mul word [w16b_n]
+    mov bp, ax                      ; BP = one plane's bytes in the band
+    pop ax
+    mul word [w16_fstr]
+    mov di, ax
+    mov ax, [w16_rl]
+    mov cl, al
+    and cl, 7
+    mov bl, 0x80
+    shr bl, cl                      ; BL = the mask's bit
+    mov cl, 3
+    shr ax, cl
+    add di, ax                      ; ES:DI = its byte
+    mov es, [w16_fmseg]
+    mov cl, [w16b_sxs]
+    and cl, 7
+    mov ah, 0x80
+    shr ah, cl                      ; AH = the screen's
+    mov dl, [w16b_pl]
+    mov cx, [w16_rr]
+    sub cx, [w16_rl]
+    inc cx
+.px:
+    xor al, al
+    mov dh, dl
+    mov bh, 1
+    push si
+.pl:
+    test [si], ah
+    jz .z
+    or al, bh
+.z:
+    shl bh, 1
+    add si, bp
+    dec dh
+    jnz .pl
+    pop si
+    cmp dl, 1                       ; one plane: lit is white
+    jne .c
+    neg al
+    and al, 15
+.c:
+    cmp al, [w16_fcol]
+    mov al, [w16_fmode]             ; (FLOODFILLBORDER is 0)
+    je .eq
+    or al, al
+    jz .set
+    jmp short .clr
+.eq:
+    or al, al
+    jz .clr
+.set:
+    or [es:di], bl
+    jmp short .nb
+.clr:
+    mov bh, bl
+    not bh
+    and [es:di], bh
+.nb:
+    ror bl, 1
+    jnc .ns
+    inc di
+.ns:
+    ror ah, 1
+    jnc .same
+    inc si
+.same:
+    loop .px
     pop bp
     ret
 

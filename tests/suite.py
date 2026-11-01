@@ -16485,6 +16485,31 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16memdc", "soak", py("tests/win16memdc.py"), 60.0,
+        "SPEC.md 124.25.3-6, WIN16-ANY-PLAN S19b: MEMDC.EXE (`make "
+        "win16fixtures`, tests/win16/memdc.c) draws into a memory DC's bitmap "
+        "with every call Paintbrush draws with - PatBlt, FillRect, Rectangle, "
+        "LineTo, a filled Polygon, ExtFloodFill, TextOut, SetPixel - reads "
+        "each back through GetDIBits, sends the bits out and back by Get/"
+        "SetBitmapBits and Get/SetDIBits, cuts a fill by a clip region and "
+        "ExcludeClipRect, copies screen to bitmap and back through a moved "
+        "window origin, and flood-fills on the window's DC inside a frame "
+        "and across the client; its MessageBox must be MEMDC OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 150.0,
+        "SPEC.md 124.8, 124.9, 124.25, WIN16-ANY-PLAN S19b: Windows 3.0's "
+        "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "
+        "where the win16-reference skill put them) on VGA under QEMU: a brush "
+        "stroke, then the box tool - which the stroke's capture lets go of "
+        "only on a hover move off the canvas - a box, red rolled inside it "
+        "and green across the canvas around it, read back off the glass; and "
+        "the first sixteen interrupt vectors as they were, which a discarded "
+        "GMEM_NOTIFY strip locked unchecked would have written over",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "
