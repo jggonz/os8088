@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "a15a12329",
+  "stamped": "1a5a2882b",
   "strings": "793f7336919645af",
-  "why": "S23 batch 3: MCI waveaudio and cdaudio; first run from the tick on the arm"
+  "why": "S22: program selectors are fresh, recorded windows"
  },
  "WIN16_TXT": {
   "sources": [
