@@ -3147,3 +3147,30 @@ which is batch 6's.
 The shipped `build/win16.bin`, `win16.o88` and `kdos/DOS.O88` are
 byte-identical after every change. The arm has 1,495 bytes of room (65,024
 less image and bss), the real-mode build still 1,279.
+
+## 2026-11-01 — S22: Paintbrush, Write and Cardfile in protected mode
+
+**What it is.** S22's batch 6: the DOS that WIN16 hosts for a program's file
+calls (SPEC.md 124.31.7). The S22 survey had flagged it as the risky part.
+The core lays out its read window by paragraph arithmetic, keeps its state
+through CS, and has one byte of `CORE_MAX` to spare.
+
+**Decision.** The core is left alone. kern_mega's build of it
+(`-DDOS_MEGA`) is already the arm's. Of its paragraph arithmetic, only one
+result is ever loaded into a segment register: the read window,
+`dos_wseg`, which is loaded in eight places. So the host part's table gains
+one word in the arm, the address of that cell. After the core's init
+returns, WIN16 rewrites the cell with a selector for the same paragraph.
+
+The core's far entry is the block's code half, and the PSP is passed as the
+program's selector. The forward runs on the program's stack, where DS is
+the program's and `W16SEG` cannot run, so WIN16 keeps the block's data
+selector in its own variable.
+
+**Seen, QEMU 486, kern_mega with (d1), protected mode.**
+- Paintbrush starts with its library, and a line drawn with the line tool
+  is there.
+- Write, Cardfile and Calendar open.
+- Windows 3.1's Solitaire deals.
+
+The real-mode build is byte-identical.

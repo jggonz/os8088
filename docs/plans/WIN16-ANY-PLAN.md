@@ -1328,12 +1328,17 @@ its table goes in the diary, so the reach is measured, not claimed.
       **Seen 2026-11-01 on a dev kern_mega with 124.31.2's (d1): W31MINE
       plays, CLOCK, SOL, NOTEPAD and DLLUSE (two libraries) run in
       protected mode.** CALC and FPU stop at the x87 vectors (item 4);
-      PBRUSH at the DOS host's far call (item 6).
+      PBRUSH at the DOS host's far call (item 6, since done).
     - [ ] *4: the vectors.* Needs the owner's answer on 124.31.2 item 2,
       CORRECTED 2026-11-01: 21h is IRQ1's gate in protected mode.
     - [ ] *5: what the program is told.* `GetWinFlags`, `SEG_TILE` and
       `__AHINCR`, the selector functions, `int 31h` (124.31.6).
-    - [ ] *6: DOS* (124.31.7), then REGEDIT, SOL and WRITE.
+    - [x] *6: DOS* (124.31.7): the core unchanged; the block's code half,
+      the PSP's selector, the window's cell rewritten as a selector after
+      `W16DH_INIT`. **Seen 2026-11-01: PAINTBRUSH (with PBRUSH.DLL) draws
+      a line; WRITE, CARDFILE, CALENDAR and Windows 3.1 Solitaire run in
+      protected mode.** REGEDIT is not in the fixture set here; it is
+      S25's, with the win16ref programs.
     - [ ] *7: above 1 MB*, retiring WIN16's `tests/megahigh.txt` lines.
 
 - [ ] **S23: MMSYSTEM (R4).**

@@ -326,6 +326,10 @@ section .w16dlg
     ; --- S16: the DOS (SPEC.md 124.21) ---
     W16BSS w16_dhseg, 2         ; the DOS's block, 0 = not fetched yet
     W16BSS w16_dhtmp, 2         ; ...while it is being made
+%ifdef PKG_MEGA
+    W16BSS w16_dhsel, 2         ; ...the arm: its data selector, for the
+                                ;   forward on the program's stack
+%endif
     W16BSS w16_dhwkb, 2         ; ...and its read window's KB, in the same block
     W16BSS w16_dhent, 4         ; the far entry: W16DH_I21 (or _INIT)
     W16BSS w16_i21ss, 2         ; the program's stack, across a fetch

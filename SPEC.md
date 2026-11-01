@@ -230209,12 +230209,29 @@ LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
 
 #### 124.31.7 DOS
 
-The DOS core WIN16 hosts (§124.21.1) is the real-mode core: it keeps its
-state through CS and lays out its handle window by paragraph arithmetic.
-Which of its paths the forwarded file calls reach under protected mode is
-the open question of this section, and the core has one byte of `CORE_MAX`
-to spare, so the answer is not "change the core" unless it is the one the
-owner takes.
+The DOS core WIN16 hosts (§124.21.1) is kern_mega's own core,
+`$(MEGAAPPDIR)/doscore.bin` (`-DDOS_MEGA`), **unchanged**: the core has one
+byte of `CORE_MAX` to spare, and the forwarded file calls need none of it.
+What the arm does is all on WIN16's side of the door:
+
+- **The block's far entry** (`w16_dhent`) is the block's `SEG_SUBC` code
+  half. The core and the host keep their state through CS, which kern_mega
+  completes by trap (§20.18); the hot one is the host's two stack words at
+  every call.
+- **The PSP** handed to `W16DH_INIT` is the program's selector (`W16PSP`):
+  the core keeps the JFT at PSP:0018 and the DTA at PSP:0080 through it.
+- **The read window** is still laid out by the core's own arithmetic, from
+  a virtual paragraph. The window is only ever LOADED (`mov es, [dos_wseg]`,
+  eight places), so after `W16DH_INIT` returns the image rewrites that one
+  cell with a selector for the same paragraph. The host part tells it where
+  the cell is: `W16DH_WSEGP`, a word the arm's host table carries after
+  `W16DH_WKB` and the real-mode one does not.
+- **The forward on the program's stack** (`w16_i21dos`) loads the block
+  through `w16_dhsel`, its data selector, kept beside `w16_dhseg` because
+  `W16SEG` needs DS = ours there and it is the program's.
+
+The memory calls that would walk an arena are not forwarded (§124.21.2), so
+`dos_arena` is never loaded into a segment register.
 
 #### 124.31.8 Verification
 

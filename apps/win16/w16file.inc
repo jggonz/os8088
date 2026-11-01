@@ -86,8 +86,17 @@ w16_dosup:
     add cx, W16DH_KB * 64           ;   bytes, as the block is (w16_kclaim)
     mov ax, [w16_dhtmp]
     mov word [w16_dhent], W16DH_INIT
+%ifdef PKG_MEGA
+    push bx                         ; the block's code half (SPEC.md 124.31.5)
+    push cx
+    xor cx, cx
+    mov bl, 1
+    call w16_psel
+    pop cx
+    pop bx
+%endif
     mov [w16_dhent + 2], ax
-    mov ax, [w16_psp]               ; AX = the PSP, BL = the volume, DX = the
+    W16PSP                          ; AX = the PSP, BL = the volume, DX = the
     mov bl, [w16_vol]               ;   folder, CX:SI = the window, ES:DI =
     mov dx, [w16_dir]               ;   the program's name
     push ds
@@ -96,6 +105,22 @@ w16_dosup:
     call far [w16_dhent]
     mov word [w16_dhent], W16DH_I21
     jc .free
+%ifdef PKG_MEGA
+    W16SEG es, [w16_dhtmp]          ; the window the core computed, as a
+    mov bx, [es:W16DH_WSEGP]        ;   selector (SPEC.md 124.31.7)
+    mov ax, [es:bx]
+    xor cx, cx
+    push bx
+    xor bl, bl
+    call w16_psel
+    pop bx
+    mov [es:bx], ax
+    mov ax, [w16_dhtmp]
+    xor cx, cx
+    xor bl, bl
+    call w16_psel
+    mov [w16_dhsel], ax
+%endif
     mov ax, [w16_dhtmp]
     mov [w16_dhseg], ax             ; ready
     clc
@@ -248,7 +273,11 @@ w16_i21dos:
 .go:
     push es
     push ax
+%ifdef PKG_MEGA
+    mov es, [cs:w16_dhsel]
+%else
     mov es, [cs:w16_dhseg]
+%endif
     mov ax, [cs:w16_hss]
     mov [es:W16DH_HSS], ax
     mov ax, [cs:w16_hsp]
