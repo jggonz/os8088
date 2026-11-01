@@ -531,6 +531,12 @@ W16EXPORT W16M_USER,       456,     4,  w16i_ichandler      ; LoadIconHandler(wo
 W16EXPORT W16M_USER,       445,     12, w16i_defframe       ; DefFrameProc(word word word word long)
 W16EXPORT W16M_USER,       447,     10, w16i_defchild       ; DefMDIChildProc(word word word long)
 W16EXPORT W16M_USER,       451,     6,  w16i_mdiaccel       ; TranslateMDISysAccel(word ptr)
+W16EXPORT W16M_USER,       408,     14, w16i_cursorind      ; CreateCursorIconIndirect(word ptr ptr ptr)
+W16EXPORT W16M_USER,       459,     16, w16i_dumpicon       ; DumpIcon(segptr ptr ptr ptr)
+W16EXPORT W16M_USER,       460,     10, w16i_getiwp         ; GetInternalWindowPos(word ptr ptr)
+W16EXPORT W16M_USER,       461,     12, w16i_setiwp         ; SetInternalWindowPos(word word ptr ptr)
+W16EXPORT W16M_USER,       462,     4,  w16i_calcscroll     ; CalcChildScroll(word word)
+W16EXPORT W16M_USER,       463,     10, w16i_scrollkids     ; ScrollChildren(word word word long)
 W16EXPORT W16M_USER,       458,     2,  w16_ans1            ; DestroyCursor(word)
 W16EXPORT W16M_USER,       464,     12, w16_ans0            ; DragObject(word word word word word word)
 ; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by

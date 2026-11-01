@@ -1693,6 +1693,10 @@ w16_nextmsg:
     jmp short .up
 .top:
     mov bx, si
+    cmp byte [w16_mdion], 0         ; the MDI children above it are owed
+    je .nma                         ;   what it paints over (124.27.3)
+    SCALL w16i_above
+.nma:
     call w16_rec2hwnd
     mov bx, w16_msg
     mov [bx + MSG_HWND], ax

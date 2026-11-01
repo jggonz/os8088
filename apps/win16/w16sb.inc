@@ -564,6 +564,11 @@ w16_ncpaint:
     and byte [bx + W16W_F2], ~W16W2_NCDIRTY
     push ax
     push cx
+    cmp byte [w16_mdion], 0         ; the MDI children above it are owed
+    je .nab                         ;   what it draws over (124.27.3)
+    mov word [w16_sfn], w16i_above
+    ICALL w16_scall
+.nab:
     ICALL w16_bord                  ; a thick frame or a caption: an MDI
     cmp ax, 4                       ;   child's, drawn first by part 9
     je .mdi                         ;   (SPEC.md 124.27.3) - which is not

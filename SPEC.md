@@ -230122,6 +230122,17 @@ out a child that spans a side (124.20.4). So the client's `WM_PAINT`
 invalidates every child under it, frame and caption included, and they are
 drawn after it, as a parent that is not `WS_CLIPCHILDREN` does (124.22.6).
 
+**Overlapping children paint bottom to top** *(batch 3b)*. MDI children are
+`WS_CLIPSIBLINGS`, and Windows clipped a child's drawing to what its siblings
+above left of it. One rectangle cannot leave a sibling out, so WIN16 paints
+in the painter's order instead. When anything inside an MDI child is about
+to be painted - its frame, its client, or a window inside it - every child
+of the same client above it in the Z order that the painted rectangle
+overlaps is invalidated there, erased, and its frame owed (`w16i_above`).
+It is painted after, and ends on top. A child above paints nothing below
+it, so the chain ends. What it costs is the overlap drawn twice whenever a
+window under another changes.
+
 #### 124.27.4 The default procedures and the keys *(S20b batch 2)*
 
 | call | what it adds to `DefWindowProc` |
@@ -230188,3 +230199,29 @@ and so do `WM_MDIMAXIMIZE` and `WM_MDIRESTORE` to the client. `SC_MOVE` and
   which `RegisterClass` now keeps (`W16C_ICON`; a class record is 32 bytes);
   a class with none gets a white square. Its client is empty, so the
   program does not paint it.
+
+#### 124.27.6 Tile, cascade and arrange icons *(S20b batch 3b)*
+
+| message | what it does |
+|---|---|
+| `WM_MDITILE` | the children that are not minimized, side by side in as few columns as hold them squarely (the least C with C × C ≥ N): N / C to a column, the last column taking the rest, the top of the Z order first. `MDITILE_HORIZONTAL` lays rows instead, and `MDITILE_SKIPDISABLED` leaves a disabled child where it is. When any child is minimized, the tiles stop above the icons' row (Wine's `MDITile`) |
+| `WM_MDICASCADE` | the children that are not minimized, from the bottom of the Z order, each at the next place of the stagger a new child takes, so the top one is last and lowest |
+| `WM_MDIICONARRANGE` | the icons in a row along the client's bottom, in Z order, where `SC_MINIMIZE` puts a new one |
+
+Tile and cascade restore a maximized child first, as Windows did. All three
+answer TRUE, and each child placed has `WM_SIZE` posted (124.27.5). The
+stagger is one routine, `w16i_stagger`, shared with `CW_USEDEFAULT`
+(124.27.2). A tile or a cascade places at most 32 children.
+
+#### 124.27.7 The rest of what File Manager and Program Manager import *(S20b batch 3b)*
+
+| call | answer |
+|---|---|
+| `GetInternalWindowPos` | the show state (`SW_SHOWNORMAL`, `SW_SHOWMINIMIZED` or `SW_SHOWMAXIMIZED`), the rectangle the window is restored to in its parent's client, and a minimized child's place (-1, -1 for another). A top-level window answers its own size at 0, 0 |
+| `SetInternalWindowPos` | an MDI child minimized, maximized or made normal by the show command, and the rectangle, when there is one, kept as where it is restored to, or used as where it goes when it is normal. A top-level window is os8088's to place, and the call changes nothing there |
+| `CalcChildScroll`, `ScrollChildren` | nothing. The client's scroll bars are never shown, so a child moved past the client's edge is reached by moving it back, not by scrolling |
+| `CreateCursorIconIndirect` | 3300h, the one cursor `LoadCursor` hands out: the pointer is os8088's own |
+| `DumpIcon` | 0. WIN16's icons are not held in Windows' `CURSORICONINFO` layout, so there are no bits to hand out |
+
+File Manager and Program Manager now import nothing WIN16 lacks but
+`WinExec` (S21).

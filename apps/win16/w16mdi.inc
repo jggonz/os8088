@@ -458,6 +458,12 @@ w16i_mproc:
     je .mdimax
     cmp cx, WM_MDIRESTORE
     je .mdirest
+    cmp cx, WM_MDITILE
+    je .mditile
+    cmp cx, WM_MDICASCADE
+    je .mdicasc
+    cmp cx, WM_MDIICONARRANGE
+    je .mdiarr
 .zero:
     xor ax, ax
     cwd
@@ -537,6 +543,18 @@ w16i_mproc:
     jc .z2
     call w16i_restore
     jmp .zero
+.mditile:
+    call w16i_tile
+    jmp short .one
+.mdicasc:
+    call w16i_cascade
+    jmp short .one
+.mdiarr:
+    call w16i_arrange
+.one:
+    mov ax, 1
+    cwd
+    jmp .out
 
 ; w16i_box - AX/BX/CX/DX (screen, inclusive) filled in the COLOR_* SI, as the
 ; controls draw it. Keeps every register
@@ -1334,6 +1352,30 @@ w16i_mdicreate:
 ; places down as a third of the client's height holds, the size what the
 ; last place leaves. Keeps BX, DI, ES
 w16i_defpos:
+    mov ax, [bx + MC_N]
+    call w16i_stagger
+    cmp word [es:di + 12], CW_USEDEFAULT
+    jne .pos
+    mov [es:di + 12], cx
+    mov [es:di + 10], dx
+.pos:
+    cmp word [es:di + 16], CW_USEDEFAULT
+    jne .out
+    mov [es:di + 16], ax
+    mov [es:di + 14], ax
+.out:
+    ret
+
+; w16i_stagger - BX = a client, AX = a place's number: AX = its offset, the
+; same across and down, and CX/DX the size each place has - Windows' stagger
+; (MDI_CalcDefaultChildPos): a step of SM_CYCAPTION + SM_CYFRAME - 1, as many
+; places past the first as a third of the client's height holds, the number
+; taken modulo them, and the size what the last place leaves. Keeps BX, SI,
+; DI, ES
+w16i_stagger:
+    push si
+    push di
+    push ax
     ICALL w16_csize                 ; CX/DX = the client's size
     mov si, [w16_capn]
     add si, W16I_FRAME              ; SI = the step
@@ -1344,29 +1386,25 @@ w16i_defpos:
     add cx, si
     add cx, si
     xor dx, dx
-    div cx                          ; AX = the places past the first
-    mov cx, ax
+    div cx
+    mov di, ax                      ; DI = the places past the first
     mul si                          ; AX = the last place's offset
     pop dx
-    sub dx, ax                      ; DX/the width below: the default size
-    pop bp
-    sub bp, ax
-    cmp word [es:di + 12], CW_USEDEFAULT
-    jne .pos
-    mov [es:di + 12], bp
-    mov [es:di + 10], dx
-.pos:
-    cmp word [es:di + 16], CW_USEDEFAULT
-    jne .out
-    inc cx                          ; the place: N mod (places + 1)
-    mov ax, [bx + MC_N]
+    sub dx, ax
+    pop cx
+    sub cx, ax
+    pop ax
+    push cx
+    push dx
+    lea cx, [di + 1]
     xor dx, dx
     div cx
     mov ax, dx
     mul si
-    mov [es:di + 16], ax
-    mov [es:di + 14], ax
-.out:
+    pop dx
+    pop cx
+    pop di
+    pop si
     ret
 
 ; ...CreateWindow answered: AX = the child (0 refused), CX = the client
@@ -2902,6 +2940,672 @@ w16i_kl:  dw 0                      ;   the client's, on the screen
 w16i_kt:  dw 0
 w16i_kr:  dw 0
 w16i_kb:  dw 0
+
+; -----------------------------------------------------------------------------
+; w16i_above - BX = a window about to be painted, its frame or its client:
+; when it is in an MDI child, every child of that client above it in the Z
+; order that it overlaps is owed the overlap - invalid there, erased, its
+; frame owed too - so it is painted after and ends on top. WIN16's clip is
+; one rectangle and cannot leave a sibling out of it, so this is the
+; painter's order Windows' WS_CLIPSIBLINGS made unnecessary (SPEC.md
+; 124.27.3). A child above paints nothing below it, so it ends. Keeps every
+; register
+; -----------------------------------------------------------------------------
+w16i_above:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bx                         ; the painting window's rectangle on
+    call w16i_outer                 ;   the screen
+    pop di                          ; DI = it
+    jc .out
+    mov ax, [cs:w16i_x0]
+    mov [cs:w16i_al], ax
+    mov ax, [cs:w16i_y0]
+    mov [cs:w16i_at], ax
+    mov ax, [cs:w16i_x1]
+    mov [cs:w16i_ar], ax
+    mov ax, [cs:w16i_y1]
+    mov [cs:w16i_ab], ax
+    mov bx, di                      ; SI = the MDI child it is in, BX its
+.up:                                ;   client
+    mov si, bx
+    ICALL w16_parent
+    jc .out
+    cmp byte [bx + W16W_KIND], W16Q_MDI
+    jne .up
+    mov ax, [si + W16W_SEQ]
+    mov [cs:w16i_aseq], ax
+    ICALL w16_origin                ; the client's origin on the screen
+    jc .out
+    mov [cs:w16i_aox], ax
+    mov [cs:w16i_aoy], dx
+    ICALL w16_rec2hwnd
+    mov dx, ax                      ; DX = the client's HWND
+    mov si, w16_wnd
+    mov cx, W16_MAXWND
+.k:
+    mov al, [si + W16W_FLAGS]
+    and al, W16WF_USED | W16WF_VIS | W16WF_DYING
+    cmp al, W16WF_USED | W16WF_VIS
+    jne .n
+    call w16i_kidof
+    jc .n
+    mov ax, [si + W16W_SEQ]
+    cmp ax, [cs:w16i_aseq]
+    jbe .n
+    call w16i_owe
+.n:
+    add si, W16W_SIZE
+    loop .k
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_owe - SI = a child above, [cs:w16i_al].. the rectangle painted, and
+; [cs:w16i_aox]/[cs:w16i_aoy] its client's origin: what of SI it covers,
+; owed. Keeps every register
+w16i_owe:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ax, [si + W16W_X]           ; AX..DX = SI on the screen, inclusive,
+    add ax, [cs:w16i_aox]           ;   cut to the painted rectangle
+    cmp ax, [cs:w16i_al]
+    jge .l
+    mov ax, [cs:w16i_al]
+.l:
+    mov cx, [si + W16W_Y]
+    add cx, [cs:w16i_aoy]
+    cmp cx, [cs:w16i_at]
+    jge .t
+    mov cx, [cs:w16i_at]
+.t:
+    mov dx, [si + W16W_X]
+    add dx, [cs:w16i_aox]
+    add dx, [si + W16W_CX]
+    dec dx
+    cmp dx, [cs:w16i_ar]
+    jle .r
+    mov dx, [cs:w16i_ar]
+.r:
+    mov bx, [si + W16W_Y]
+    add bx, [cs:w16i_aoy]
+    add bx, [si + W16W_CY]
+    dec bx
+    cmp bx, [cs:w16i_ab]
+    jle .b
+    mov bx, [cs:w16i_ab]
+.b:
+    cmp ax, dx
+    jg .out
+    cmp cx, bx
+    jg .out
+    push bx
+    mov bx, si
+    ICALL w16_ncmark
+    push ax
+    push dx
+    ICALL w16_origin                ; AX/DX = SI's client on the screen
+    mov [cs:w16i_aqx], ax
+    mov [cs:w16i_aqy], dx
+    pop dx
+    pop ax
+    pop si                          ; SI = the bottom
+    jc .out
+    sub ax, [cs:w16i_aqx]           ; ...in its client, right and bottom
+    sub cx, [cs:w16i_aqy]           ;   exclusive
+    sub dx, [cs:w16i_aqx]
+    inc dx
+    sub si, [cs:w16i_aqy]
+    inc si
+    mov byte [w16_erase], 1
+    ICALL w16_invaltree
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+w16i_al:   dw 0                     ; w16i_above's: the painted rectangle,
+w16i_at:   dw 0
+w16i_ar:   dw 0
+w16i_ab:   dw 0
+w16i_aseq: dw 0                     ;   its MDI child's place in the Z order,
+w16i_aox:  dw 0                     ;   their client's origin,
+w16i_aoy:  dw 0
+w16i_aqx:  dw 0                     ;   and the child above's
+w16i_aqy:  dw 0
+
+; =============================================================================
+; Tile, cascade and arrange icons (SPEC.md 124.27.6)
+; =============================================================================
+
+MDITILE_HORIZONTAL  equ 1
+MDITILE_SKIPDISABLED equ 2
+WS_DISABLED_HI      equ 0x0800
+W16I_LMAX           equ 32          ; children a tile or a cascade places
+
+; w16i_collect - BX = a client, AL = 0 its children that are not minimized
+; (and not disabled, with AH = MDITILE_SKIPDISABLED) / 1 those that are: CX
+; of them in [cs:w16i_list], from the bottom of the Z order up. Keeps the
+; rest
+w16i_collect:
+    push ax
+    push dx
+    push si
+    push di
+    mov [cs:w16i_cm], ax
+    ICALL w16_rec2hwnd
+    mov dx, ax                      ; DX = the client's HWND
+    xor ax, ax                      ; AX = the SEQ to go above
+    xor di, di                      ; DI = the list's next
+.next:
+    call w16i_zafter
+    jc .done
+    test byte [si + W16W_FLAGS], W16WF_DYING
+    jnz .next
+    push ax
+    xor al, al
+    test word [si + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jz .m
+    inc al
+.m:
+    cmp al, [cs:w16i_cm]
+    pop ax
+    jne .next
+    test byte [cs:w16i_cm + 1], MDITILE_SKIPDISABLED
+    jz .take
+    test word [si + W16W_STYLE + 2], WS_DISABLED_HI
+    jnz .next
+.take:
+    cmp di, W16I_LMAX * 2
+    jae .done
+    mov [cs:w16i_list + di], si     ; XSEC-OK: read through cs:
+    inc di
+    inc di
+    jmp short .next
+.done:
+    mov cx, di
+    shr cx, 1
+    pop di
+    pop si
+    pop dx
+    pop ax
+    ret
+
+; w16i_zafter - DX = a client's HWND, AX = a SEQ: SI = the child with the
+; least SEQ above it, AX that SEQ. CF=1 none. Keeps BX, CX, DX, DI
+w16i_zafter:
+    push bx
+    push cx
+    push di
+    mov bx, ax                      ; BX = the floor
+    mov di, 0xFFFF                  ; DI = the least above it so far
+    xor ax, ax                      ; AX = its record
+    mov si, w16_wnd
+    mov cx, W16_MAXWND
+.k:
+    test byte [si + W16W_FLAGS], W16WF_USED
+    jz .n
+    call w16i_kidof
+    jc .n
+    cmp [si + W16W_SEQ], bx
+    jbe .n
+    cmp [si + W16W_SEQ], di
+    jae .n
+    mov di, [si + W16W_SEQ]
+    mov ax, si
+.n:
+    add si, W16W_SIZE
+    loop .k
+    mov si, ax
+    mov ax, di
+    or si, si
+    jnz .out
+    stc
+.out:
+    pop di
+    pop cx
+    pop bx
+    ret
+
+; w16i_unmax - BX = a client: its maximized child, if any, restored first,
+; as Windows' tile and cascade did. Keeps every register
+w16i_unmax:
+    push ax
+    push bx
+    mov ax, [bx + MC_MAX]
+    or ax, ax
+    jz .out
+    ICALL w16_hwnd2rec
+    jc .out
+    call w16i_restore
+.out:
+    pop bx
+    pop ax
+    ret
+
+; w16i_iconh - BX = a client -> AX = the height its icons' row takes from
+; its bottom, 0 when none is minimized. Keeps the rest
+w16i_iconh:
+    push cx
+    push ax
+    mov al, 1
+    call w16i_collect
+    pop ax
+    xor ax, ax
+    jcxz .out
+    mov ax, [w16_capn]
+    add ax, W16I_ICON + 6
+.out:
+    pop cx
+    ret
+
+; WM_MDITILE: BX = the client, AX = wParam. The children that are not
+; minimized side by side in as few columns as hold them squarely (the least
+; C with C * C >= N), N / C to a column and the last taking the rest, the
+; top of the Z order first; MDITILE_HORIZONTAL lays rows instead. Above the
+; icons' row, if there is one (Wine's MDITile)
+w16i_tile:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call w16i_unmax
+    mov ah, al
+    xor al, al
+    call w16i_collect               ; CX = N
+    or cx, cx
+    jnz .some
+    jmp .out
+.some:
+    mov [cs:w16i_tn], cx
+    mov [cs:w16i_th], ah
+    mov di, 1                       ; DI = C
+.c:
+    mov ax, di
+    mul di
+    cmp ax, cx
+    jae .cdone
+    inc di
+    jmp short .c
+.cdone:
+    mov [cs:w16i_tc], di
+    push cx
+    ICALL w16_csize                 ; CX/DX = the client
+    call w16i_iconh
+    sub dx, ax
+    test byte [cs:w16i_th], MDITILE_HORIZONTAL
+    jz .v
+    xchg cx, dx                     ; rows: across and down change places
+.v:
+    mov [cs:w16i_te], cx            ; the extent the columns divide
+    mov [cs:w16i_tf], dx            ; ...and the one each column divides
+    mov ax, cx
+    xor dx, dx
+    div di
+    mov [cs:w16i_tw], ax            ; a column's breadth
+    pop cx
+    mov word [cs:w16i_ti], 0        ; the column, and the child (from the
+    mov si, cx                      ;   top of the Z order: SI counts down)
+    mov word [cs:w16i_tx], 0
+.col:
+    mov ax, [cs:w16i_ti]
+    cmp ax, [cs:w16i_tc]
+    jae .out
+    mov ax, [cs:w16i_tn]            ; K = N / C, the last column the rest
+    xor dx, dx
+    div word [cs:w16i_tc]
+    mov cx, ax
+    mov ax, [cs:w16i_ti]
+    inc ax
+    cmp ax, [cs:w16i_tc]
+    jb .k
+    mov cx, si
+.k:
+    jcxz .nextc
+    mov ax, [cs:w16i_tf]
+    xor dx, dx
+    div cx
+    mov [cs:w16i_tk2], ax           ; a child's length down the column
+    mov word [cs:w16i_ty], 0
+.row:
+    dec si
+    push si
+    shl si, 1
+    mov bx, [cs:w16i_list + si]     ; XSEC-OK: read through cs:
+    pop si
+    push cx
+    push si
+    mov ax, [cs:w16i_tx]
+    mov dx, [cs:w16i_ty]
+    mov cx, [cs:w16i_tw]
+    mov si, [cs:w16i_tk2]
+    test byte [cs:w16i_th], MDITILE_HORIZONTAL
+    jz .put
+    xchg ax, dx
+    xchg cx, si
+.put:
+    call w16i_place
+    pop si
+    pop cx
+    mov ax, [cs:w16i_tk2]
+    add [cs:w16i_ty], ax
+    loop .row
+.nextc:
+    mov ax, [cs:w16i_tw]
+    add [cs:w16i_tx], ax
+    inc word [cs:w16i_ti]
+    jmp .col
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; WM_MDICASCADE: BX = the client. The children that are not minimized each
+; at the next place of the stagger new ones take (w16i_stagger), from the
+; bottom of the Z order, so the top one is last and lowest
+w16i_cascade:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call w16i_unmax
+    xor ax, ax
+    call w16i_collect
+    jcxz .out
+    xor di, di
+.c:
+    push cx
+    mov ax, di
+    shr ax, 1
+    call w16i_stagger               ; AX = the offset, CX/DX the size
+    mov si, dx
+    mov dx, ax
+    push bx
+    mov bx, [cs:w16i_list + di]     ; XSEC-OK: read through cs:
+    call w16i_place
+    pop bx
+    pop cx
+    inc di
+    inc di
+    loop .c
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; WM_MDIICONARRANGE: BX = the client. Its icons in a row along its bottom,
+; in Z order, as w16i_min places a new one
+w16i_arrange:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, 1
+    call w16i_collect
+    jcxz .out
+    push cx
+    ICALL w16_csize                 ; DX = the client's height
+    pop cx
+    sub dx, W16I_ICON + 4
+    sub dx, [w16_capn]
+    xor di, di
+    mov ax, W16I_TSIDE
+.i:
+    push ax
+    push cx
+    push bx
+    mov bx, [cs:w16i_list + di]     ; XSEC-OK: read through cs:
+    mov cx, W16I_ICON
+    mov si, cx
+    call w16i_place
+    pop bx
+    pop cx
+    pop ax
+    add ax, W16I_ISTEP
+    inc di
+    inc di
+    loop .i
+    mov si, bx
+    call w16i_allin
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+w16i_cm:  dw 0                      ; w16i_collect's mode,
+w16i_list: times W16I_LMAX dw 0     ;   and what it found
+w16i_tn:  dw 0                      ; w16i_tile's: N,
+w16i_tc:  dw 0                      ;   C,
+w16i_th:  db 0                      ;   wParam,
+w16i_te:  dw 0                      ;   the two extents,
+w16i_tf:  dw 0
+w16i_tw:  dw 0                      ;   a column's breadth,
+w16i_ti:  dw 0                      ;   which column,
+w16i_tx:  dw 0                      ;   where it is,
+w16i_ty:  dw 0                      ;   where the next child is in it,
+w16i_tk2: dw 0                      ;   and a child's length
+
+; =============================================================================
+; The calls Program Manager and File Manager make around it (SPEC.md
+; 124.27.7)
+; =============================================================================
+
+; GetInternalWindowPos (USER.460) - args: +0 lpptMin, +4 lprcWin, +8 hWnd.
+; The show state - SW_SHOWMINIMIZED, SW_SHOWMAXIMIZED or SW_SHOWNORMAL - the
+; rectangle it is restored to, in its parent's client, and a minimized one's
+; place (-1, -1 for another)
+W16SYS w16i_getiwp
+    push si
+    push di
+    ICALL w16_args
+    mov di, bx                      ; ES:DI = the arguments
+    mov ax, [es:di + 8]
+    ICALL w16_hwnd2rec
+    jc .no
+    mov cx, [bx + W16W_X]           ; AX/CX/DX/SI = the rectangle, and
+    mov dx, [bx + W16W_Y]           ;   where it is now
+    mov [cs:w16i_px], cx
+    mov [cs:w16i_py], dx
+    mov ax, 1
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jz .top
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI | WS_MAXIMIZE_HI
+    jz .now
+    mov cx, [bx + RS_X]
+    mov dx, [bx + RS_Y]
+    push word [bx + RS_CX]
+    push word [bx + RS_CY]
+    jmp short .size
+.top:
+    ICALL w16_csize                 ; a top-level: its own size, at 0, 0
+    push cx
+    push dx
+    xor cx, cx
+    xor dx, dx
+    jmp short .size
+.now:
+    push word [bx + W16W_CX]
+    push word [bx + W16W_CY]
+.size:
+    mov ax, 1
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    jz .nmx
+    mov ax, 3
+.nmx:
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jz .nmn
+    mov ax, 2
+.nmn:
+    pop si                          ; SI = the height, BX the width
+    pop bx
+    push ax
+    push es
+    push di
+    les di, [es:di + 4]
+    mov ax, es
+    or ax, di
+    jz .nr
+    mov [es:di], cx
+    mov [es:di + 2], dx
+    add cx, bx
+    mov [es:di + 4], cx
+    add dx, si
+    mov [es:di + 6], dx
+.nr:
+    pop di
+    pop es
+    pop ax
+    les di, [es:di]
+    mov cx, es
+    or cx, di
+    jz .out
+    mov cx, -1
+    mov dx, cx
+    cmp ax, 2
+    jne .pt
+    mov cx, [cs:w16i_px]
+    mov dx, [cs:w16i_py]
+.pt:
+    mov [es:di], cx
+    mov [es:di + 2], dx
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; SetInternalWindowPos (USER.461) - args: +0 lpptMin, +4 lprcWin, +8
+; showCmd, +10 hWnd. For an MDI child: minimized (SW_SHOWMINIMIZED,
+; SW_MINIMIZE, SW_SHOWMINNOACTIVE), maximized (SW_SHOWMAXIMIZED) or normal,
+; and the rectangle, when there is one, where it is restored to - or where
+; it is, when it is normal. A top-level window is os8088's to place
+W16SYS w16i_setiwp
+    push si
+    push di
+    ICALL w16_args
+    mov di, bx                      ; ES:DI = the arguments
+    mov ax, [es:di + 10]
+    ICALL w16_hwnd2rec
+    jc .out
+    call w16i_cli
+    jc .out
+    mov ax, [es:di + 8]
+    cmp ax, 2
+    je .min
+    cmp ax, 6
+    je .min
+    cmp ax, 7
+    je .min
+    cmp ax, 3
+    je .max
+    call w16i_restore               ; normal: where the rectangle says
+    call w16i_rect
+    jc .out
+    mov [bx + RS_X], ax
+    mov [bx + RS_Y], dx
+    mov [bx + RS_CX], cx
+    mov [bx + RS_CY], si
+    call w16i_place
+    jmp short .out
+.min:
+    call w16i_min
+    jmp short .keep
+.max:
+    call w16i_max
+.keep:
+    call w16i_rect                  ; ...and where it comes back to
+    jc .out
+    mov [bx + RS_X], ax
+    mov [bx + RS_Y], dx
+    mov [bx + RS_CX], cx
+    mov [bx + RS_CY], si
+.out:
+    xor ax, ax
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16i_rect - ES:DI = SetInternalWindowPos's arguments: its lprcWin as AX/DX
+; a place and CX/SI a size. CF=1 it is NULL. Keeps BX, DI, ES
+w16i_rect:
+    push es
+    push di
+    les di, [es:di + 4]
+    mov ax, es
+    or ax, di
+    stc
+    jz .out
+    mov ax, [es:di]
+    mov dx, [es:di + 2]
+    mov cx, [es:di + 4]
+    sub cx, ax
+    mov si, [es:di + 6]
+    sub si, dx
+    clc
+.out:
+    pop di
+    pop es
+    ret
+
+w16i_px:  dw 0                      ; w16i_getiwp's: where the window is
+w16i_py:  dw 0
+
+; CalcChildScroll (USER.462) - args: +0 wScroll, +2 hWnd. ScrollChildren
+; (USER.463) - args: +0 lParam, +4 wParam, +6 msg, +8 hWnd. The client's
+; scroll bars are never shown (SPEC.md 124.27.7): nothing to work out or
+; scroll. DumpIcon (USER.459) - args: +0 lplpAND, +4 lplpXOR, +8 lpcb,
+; +12 lpIcon: 0, no icon in Windows' own layout to hand out
+W16SYS w16i_calcscroll
+W16SYS w16i_scrollkids
+W16SYS w16i_dumpicon
+    xor ax, ax
+    cwd
+    ret
+
+; CreateCursorIconIndirect (USER.408) - args: +0 lpXORbits, +4 lpANDbits,
+; +8 lpCursorInfo, +12 hInst. The pointer is os8088's own, so the answer is
+; the one cursor handle LoadCursor gives
+W16SYS w16i_cursorind
+    mov ax, 0x3300
+    xor dx, dx
+    ret
 
 ; =============================================================================
 ; The frame's and a child's default procedures, and the keys (SPEC.md
