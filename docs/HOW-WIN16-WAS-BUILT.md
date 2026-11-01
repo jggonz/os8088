@@ -3378,3 +3378,41 @@ registered in `tests/megagrid.txt` with that reason.
 points into WIN16's image, so `GetSelectorBase` of it is the image's base.
 Run on the dev kern_mega, it reads `00F9D000`, near the top of a 16 MB
 machine, with 0 wrong. BIG, Minesweeper 3.1 and Paintbrush run as before.
+
+## 2026-11-01: S23 batch 1, MMSYSTEM's clock, devices and mmio
+
+**What the targets ask for.** `tools/os88ne.py` over the three titles names
+MMSYSTEM's users:
+- Arcade's `WAVEMIX.DLL`: `waveOut*`, `mmio*`, `sndPlaySound`,
+  `timeGetTime`.
+- Mozart's setup DLLs: the clock and `*GetNumDevs`.
+- Its `RTFCC.VBX`: buffered mmio, `mmioGetInfo` and `mmioAdvance`.
+- Both titles' `MCI.VBX`: `mciSendCommand`.
+
+**Decision: arm-only, in part 9.** Every importer is a protected-mode
+program, so the real-mode build has no MMSYSTEM at all and its image is
+unchanged. In the arm the module costs its name (9 bytes) and 32 bytes of
+bss for mmio's working words; the handlers are in the system-library part.
+
+**mmio's shape.** An HMMIO is a fixed block of the program's heap whose
+first 66 bytes ARE the MMIOINFO. `mmioGetInfo` is a copy, and the four
+buffer pointers are the program's own far pointers. A DOS file reads
+through an 8 KB buffer only when the program has used `mmioAdvance`;
+`mmioRead` and `mmioWrite` go straight to WIN16's DOS in pieces that never
+cross the program's 64 KB, stepping the selector by `__AHINCR`. A memory
+file is the program's buffer.
+
+**A discovery.** timeGetTime first used `apps/os88pit.inc`'s rule:
+IRQ0 pending with the count under half a tick in means the tick is owed.
+In MMTEST's eight steps it went backwards once. Under kern_mega the tick's
+IRQ can wait longer than half a tick, so the rule now owes the tick unless
+the count is in the period's last 3 ms, and the answer never falls below
+the last one.
+
+**Seen**, dev kern_mega, QEMU 486, no card: "mmtest: 0 wrong, waveOut 0,
+step 1 ms". The fixture wrote a RIFF WAVE with an odd data chunk (so a pad
+byte) and read it back three ways:
+- Descend, then Read;
+- GetInfo and Advance through the buffer;
+- as a memory file.
+Then it ran EXIST and DELETE.

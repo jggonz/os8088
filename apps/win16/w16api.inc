@@ -26,6 +26,7 @@ W16M_OLESVR   equ 9             ;   available" (124.24.7)
 W16M_LZEXPAND equ 10            ; an installer's two (124.24.8, 124.24.9)
 W16M_VER      equ 11
 W16M_SYSTEM   equ 12            ; SYSTEM.DRV's InquireSystem (124.27.1)
+W16M_MMSYSTEM equ 13            ; the kern_mega arm's alone (124.32)
 
 w16_modnames:                   ; pascal strings, then 0
     db 6, 'KERNEL'
@@ -41,6 +42,9 @@ w16_modnames:                   ; pascal strings, then 0
     db 8, 'LZEXPAND'
     db 3, 'VER'
     db 6, 'SYSTEM'
+%ifdef PKG_MEGA
+    db 8, 'MMSYSTEM'
+%endif
     db 0
 
 ; --- the export rows ----------------------------------------------------------
@@ -518,6 +522,34 @@ W16EXPORT W16M_KERNEL,     188,     2,  w16q_getlim         ; GetSelectorLimit(w
 W16EXPORT W16M_KERNEL,     189,     6,  w16q_setlim         ; SetSelectorLimit(word long)
 W16EXPORT W16M_KERNEL,     197,     2,  w16k_lockseg        ; GlobalFix(word)
 W16EXPORT W16M_KERNEL,     198,     2,  w16k_lockseg        ; GlobalUnfix(word)
+; MMSYSTEM (124.32), the arm's alone: the clock, the devices and mmio
+W16EXPORT W16M_MMSYSTEM,   5,       0,  w16mm_ver            ; mmsystemGetVersion()
+W16EXPORT W16M_MMSYSTEM,   601,     6,  w16mm_systime        ; timeGetSystemTime(ptr word)
+W16EXPORT W16M_MMSYSTEM,   604,     6,  w16mm_tcaps          ; timeGetDevCaps(ptr word)
+W16EXPORT W16M_MMSYSTEM,   605,     2,  w16mm_period         ; timeBeginPeriod(word)
+W16EXPORT W16M_MMSYSTEM,   606,     2,  w16mm_period         ; timeEndPeriod(word)
+W16EXPORT W16M_MMSYSTEM,   607,     0,  w16mm_time           ; timeGetTime()
+W16EXPORT W16M_MMSYSTEM,   201,     0,  w16_ans0            ; midiOutGetNumDevs()
+W16EXPORT W16M_MMSYSTEM,   301,     0,  w16_ans0            ; midiInGetNumDevs()
+W16EXPORT W16M_MMSYSTEM,   350,     0,  w16_ans0            ; auxGetNumDevs()
+W16EXPORT W16M_MMSYSTEM,   401,     0,  w16mm_wonum          ; waveOutGetNumDevs()
+W16EXPORT W16M_MMSYSTEM,   402,     8,  w16mm_wocaps         ; waveOutGetDevCaps(word ptr word)
+W16EXPORT W16M_MMSYSTEM,   501,     0,  w16mm_winum          ; waveInGetNumDevs()
+W16EXPORT W16M_MMSYSTEM,   502,     8,  w16mm_wicaps         ; waveInGetDevCaps(word ptr word)
+W16EXPORT W16M_MMSYSTEM,   706,     10, w16mm_mcierr         ; mciGetErrorString(long ptr word)
+W16EXPORT W16M_MMSYSTEM,   1210,    12, w16mm_open           ; mmioOpen(str ptr long)
+W16EXPORT W16M_MMSYSTEM,   1211,    4,  w16mm_close          ; mmioClose(word word)
+W16EXPORT W16M_MMSYSTEM,   1212,    10, w16mm_read           ; mmioRead(word ptr long)
+W16EXPORT W16M_MMSYSTEM,   1213,    10, w16mm_write          ; mmioWrite(word ptr long)
+W16EXPORT W16M_MMSYSTEM,   1214,    8,  w16mm_seek           ; mmioSeek(word long word)
+W16EXPORT W16M_MMSYSTEM,   1215,    8,  w16mm_ginfo          ; mmioGetInfo(word ptr word)
+W16EXPORT W16M_MMSYSTEM,   1216,    8,  w16mm_sinfo          ; mmioSetInfo(word ptr word)
+W16EXPORT W16M_MMSYSTEM,   1218,    4,  w16mm_flush          ; mmioFlush(word word)
+W16EXPORT W16M_MMSYSTEM,   1219,    8,  w16mm_adv            ; mmioAdvance(word ptr word)
+W16EXPORT W16M_MMSYSTEM,   1220,    6,  w16mm_fourcc         ; mmioStringToFOURCC(str word)
+W16EXPORT W16M_MMSYSTEM,   1223,    12, w16mm_desc           ; mmioDescend(word ptr ptr word)
+W16EXPORT W16M_MMSYSTEM,   1224,    8,  w16mm_asc            ; mmioAscend(word ptr word)
+W16EXPORT W16M_MMSYSTEM,   1225,    8,  w16mm_create         ; mmioCreateChunk(word ptr word)
 %endif
 ; File Manager 3.0 and Program Manager 3.0 (SPEC.md 124.27.1): the calls
 ; around MDI, in part 9. One program is one task until S21, nothing is ever

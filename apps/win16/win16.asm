@@ -342,6 +342,15 @@ section .w16dlg
     W16BSS w16_old31, 4         ; ...and int 31h, DPMI's (124.31.6)
     W16BSS w16_i31ss, 2         ; ...the program's stack while it runs on
     W16BSS w16_i31sp, 2         ;   the UI task's
+    W16BSS w16mm_bsel, 2         ; MMSYSTEM's mmio, one call at a time
+    W16BSS w16mm_boff, 2         ;   (124.32.2): the program's end of a move,
+    W16BSS w16mm_rem, 4          ;   what is left of it and what moved,
+    W16BSS w16mm_done, 4
+    W16BSS w16mm_ck4, 4          ;   the FOURCCs Descend looks for,
+    W16BSS w16mm_ckt, 4
+    W16BSS w16mm_lim, 4          ;   its parent's end (mmioOpen's name),
+    W16BSS w16mm_ock, 4          ;   and the program's MMCKINFO
+    W16BSS w16mm_last, 4        ; timeGetTime's last answer (124.32.1)
 %endif
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     ; --- S16: the DOS (SPEC.md 124.21) ---
@@ -2152,6 +2161,7 @@ w16_cputest:
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
 %ifdef PKG_MEGA
 %include "win16/w16sel.inc"     ; the selector functions: part 9 (124.31.6)
+%include "win16/w16mm.inc"      ; MMSYSTEM, part 9 too (124.32)
 %endif
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)

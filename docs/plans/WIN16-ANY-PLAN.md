@@ -1461,6 +1461,18 @@ its table goes in the diary, so the reach is measured, not claimed.
     SOUND.DRV has a MIDI device; `timeGetTime` and `timeSetEvent`.
   - **Targets:** SOUNDREC and MPLAYER 3.1, both protected mode only and
     386 code, so after S22.
+  - The module is the kern_mega arm's alone (SPEC.md 124.32): every
+    importer is a protected-mode program.
+    - [x] *Batch 1: the clock, the devices and mmio* (124.32.1-2), in
+      part 9 (`w16mm.inc`); new fixture `MMTEST.EXE`. **Seen 2026-11-01
+      on the dev kern_mega:** "mmtest: 0 wrong, waveOut 0, step 1 ms".
+      Its RIFF file went out through CreateChunk and Ascend and back in
+      three ways (Descend and Read; GetInfo and Advance; a memory file),
+      then EXIST and DELETE. Arm: 589 bytes of room.
+    - [ ] *Batch 2: `waveOut` and `sndPlaySound`* over SOUND.DRV's ring.
+    - [ ] *Batch 3: MCI*, `cdaudio` over CDROM.DRV and `waveaudio`.
+    - [ ] *Batch 4: `waveIn`, `timeSetEvent`, `midiOut`*; SOUNDREC and
+      MPLAYER.
   - **Verification:** `make test-snd`'s capture; 86Box `386-sound` and
     `386-mega-cdrom` to listen to.
 

@@ -230902,3 +230902,113 @@ The memory calls that would walk an arena are not forwarded (§124.21.2), so
   (protected mode only), SOL and WRITE, then `VBRUN300.DLL` under
   Mozart's and Sir Hangman's programs.
 - The rows are named per batch and run once, in S25's final pass.
+
+### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
+
+Windows 3.1's multimedia library: the calls a program uses to time things,
+to read and write RIFF files, to play and record WAV, and to drive a CD.
+O3's targets need it:
+
+- Arcade's `WAVEMIX.DLL`: `waveOut*`, `mmio*`, `sndPlaySound`, `timeGetTime`.
+- Mozart's setup DLLs: `timeGetTime`, `timeGetDevCaps`, `*GetNumDevs`.
+- Mozart's `RTFCC.VBX`: buffered `mmio`.
+- `MCI.VBX` (Mozart's and Sir Hangman's): `mciSendCommand`, `cdaudio`.
+
+Windows 3.1 itself has SOUNDREC and MPLAYER, both protected mode only. Every
+one of those is a protected-mode program, so the module is **the arm's
+alone**:
+- the real-mode build has no MMSYSTEM;
+- a real-mode import of it binds to "not there" as any missing import does,
+  and the real-mode image is byte for byte what it was.
+
+The handlers are in the system-library part (part 9, `w16mm.inc`), so the
+arm's image pays only for the module's name and for the turn that feeds a
+stream.
+
+#### 124.32.1 The module, the clock and the devices *(S23 batch 1)*
+
+- `MMSYSTEM` is module 13 (`W16M_MMSYSTEM`). `mmsystemGetVersion` answers
+  `030Ah`.
+- `timeGetTime` and `timeGetSystemTime` count milliseconds from the same
+  origin as `GetTickCount`: the BIOS tick times 55. The PIT's counter 0
+  adds the part of the tick that has passed (`apps/os88pit.inc`'s
+  reading), so two reads 1 ms apart differ.
+- Two changes from that reading, both because kern_mega can take IRQ0
+  later than half a tick after the reload:
+  - a pending IRQ0 owes the tick unless the count is in the period's last
+    3 ms, where the latch can have come just before the reload;
+  - the answer never goes below the previous one.
+  The first version, on os88pit's half-tick rule, went backwards in
+  MMTEST's eight steps under QEMU.
+- `timeGetDevCaps` answers 1 to 65535 ms. `timeBeginPeriod` and
+  `timeEndPeriod` answer 0 and change nothing; the PIT is the kernel's.
+- `waveOutGetNumDevs` answers 1 when `OSAPI_SND_CAPS` has
+  `SND_CAP_PCM_BG`, `waveInGetNumDevs` 1 with `SND_CAP_PCM_IN`, and 0
+  otherwise. `midiOutGetNumDevs`, `midiInGetNumDevs` and `auxGetNumDevs`
+  answer 0.
+- `waveOutGetDevCaps` and `waveInGetDevCaps` describe device 0:
+  - name: `os8088 Sound`;
+  - `dwFormats`: 8-bit mono at 11, 22 and (with `SND_CAP_PCM_HI`) 44 kHz;
+    stereo with `SND_CAP_STEREO`; 16-bit with `SND_CAP_PCM16`;
+  - one channel, or two with `SND_CAP_STEREO`;
+  - no `dwSupport` bits.
+  A bad device answers `MMSYSERR_BADDEVICEID` (2).
+- `mciGetErrorString` copies a sentence for the codes the arm answers, and a
+  general one for the rest.
+
+#### 124.32.2 `mmio`: RIFF files on WIN16's DOS *(S23 batch 1)*
+
+An `HMMIO` is a fixed global block of the program's heap:
+- 66 bytes of `MMIOINFO` at its start;
+- WIN16's own words after them: the DOS handle, the kind, the buffer's
+  handle.
+
+The handle is the block's handle, so `mmioGetInfo` copies the first 66
+bytes and `mmioSetInfo` takes back `pchNext`, `pchEndRead` and
+`pchEndWrite`.
+
+- **A DOS file** is opened through WIN16's DOS (`w16_dcall`, as LZEXPAND's
+  are). Its access comes from `MMIO_READ`, `MMIO_WRITE` and
+  `MMIO_READWRITE`, and it is created with `MMIO_CREATE`.
+  - Reads are buffered, 8 KB, in a fixed block whose selector is
+    `pchBuffer`. A file opened without `MMIO_ALLOCBUF` is read through the
+    same buffer and reported unbuffered (`cchBuffer` 0), which a program
+    cannot tell from Windows' own unbuffered read.
+  - A write goes straight to the file at the current position, after the
+    buffer is emptied, which is what `mmioWrite` does unbuffered on
+    Windows.
+- **A memory file** is `fccIOProc` = `FOURCC_MEM` with no name: the
+  program's `pchBuffer` and `cchBuffer` are the whole file, read and
+  written in place. It does not grow.
+- `mmioSeek`, `mmioDescend`, `mmioAscend`, `mmioCreateChunk`,
+  `mmioAdvance`, `mmioFlush` and `mmioStringToFOURCC` behave as the SDK
+  describes them, with these specifics:
+  - **Descend** finds a chunk by `MMIO_FINDCHUNK`, `MMIO_FINDRIFF` or
+    `MMIO_FINDLIST` inside the parent's data. It stops at the parent's end
+    with `MMIOERR_CHUNKNOTFOUND` (265).
+  - **Ascend** writes a created chunk's size back when it changed, and its
+    pad byte.
+  - **Advance** fills the buffer with the bytes after it (`MMIO_READ`), or
+    writes `pchBuffer`..`pchNext` at `lBufOffset` first (`MMIO_WRITE`).
+- Not provided: `mmioInstallIOProc` and custom IO procedures, `MMIO_PARSE`,
+  `MMIO_GETTEMP`, and a memory file that grows.
+  - `mmioOpen` answers NULL with `wErrorRet` = `MMIOERR_CANNOTOPEN` (259)
+    for those.
+  - With `MMIO_EXIST` it answers whether the file opens; with
+    `MMIO_DELETE`, whether it was deleted.
+
+#### 124.32.3 Planned *(S23 batches 2-4)*
+
+- **Batch 2: `waveOut` and `sndPlaySound`**, over `SOUND.DRV`'s stream verbs
+  (§34.5, a ring in a grant, WaveRack's shape, §123):
+  - `WAVEHDR` blocks are queued and copied into the ring on WIN16's turns.
+  - A finished block gets `WHDR_DONE`, and its notice goes to the window
+    (`MM_WOM_DONE`) or to the function; the function is called on the UI
+    task, not at interrupt time.
+  - A format the card cannot play answers `WAVERR_BADFORMAT` (32).
+  - With `WAVE_FORMAT_QUERY` the call opens nothing.
+- **Batch 3: MCI.** `mciSendCommand` and `mciSendString` for `cdaudio`,
+  over `CDROM.DRV`'s package door (§119.4), and `waveaudio` over batch 2.
+- **Batch 4:** `waveIn` over the record verbs (§34.6), `timeSetEvent`, and
+  `midiOut` where `SOUND.DRV` has an MPU-401 (§34.13). SOUNDREC and MPLAYER
+  are its look.
