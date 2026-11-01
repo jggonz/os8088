@@ -829,9 +829,66 @@ w16_pblk:
     mov cx, [es:GH_SIZE]
     inc ax
     dec cx
+    cmp cx, 0x1000
+    ja .huge
     xor bl, bl
     call w16_psel
+.out:
     pop es
+    pop cx
+    pop bx
+    ret
+.huge:
+    call w16_ptile
+    jmp short .out
+
+; w16_ptile - AX = a global block's data paragraph over 64 KB, CX = its
+; paragraphs, ES = its header -> AX = the first of its SEG_TILE selectors, a
+; huge pointer's __AHINCR = 8 apart (SPEC.md 124.31.6). Made once and kept in
+; the header (GH_TSEL, its count GH_TN, the paragraph it was made at GH_TVP):
+; a block that moved or changed its tile count is tiled again. Tiles go with
+; the arena's claim. AX kept on a refusal. Keeps every other register.
+w16_ptile:
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, cx
+    add bx, 0x0FFF
+    rcr bx, 1
+    mov cl, 11
+    shr bx, cl                      ; BX = the tiles
+    cmp word [es:GH_TSEL], 0
+    je .new
+    cmp [es:GH_TN], bx
+    jne .new
+    cmp [es:GH_TVP], ax
+    jne .new
+    mov ax, [es:GH_TSEL]
+    jmp short .out
+.new:
+    push ax
+    call w16_vfind                  ; SI = the row, DX = paragraphs in
+    jc .no
+    mov cx, bx
+    mov ax, dx
+    mov dx, [si + W16V_SEL]
+    push bx
+    mov bl, SEG_TILE
+    call OSAPI_SEG                  ; DX = the first tile
+    pop bx
+    jc .no
+    pop ax
+    mov [es:GH_TSEL], dx
+    mov [es:GH_TN], bx
+    mov [es:GH_TVP], ax
+    mov ax, dx
+    jmp short .out
+.no:
+    pop ax
+.out:
+    pop si
+    pop dx
     pop cx
     pop bx
     ret

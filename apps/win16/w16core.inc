@@ -119,6 +119,14 @@ w16_epi:
 .bank:
     mov bx, [w16_rbx]
     mov cx, [w16_rcx]
+%ifdef PKG_MEGA
+cpu 286                             ; a selector the call freed (GlobalFree,
+    verr word [w16_res]             ;   FreeSelector) comes back as 0, as
+cpu 8086                            ;   standard mode's KERNEL gave it
+    jz .esok
+    mov word [w16_res], 0
+.esok:
+%endif
     mov es, [w16_res]
     mov ax, [w16_rax]
     mov dx, [w16_rdx]
@@ -555,6 +563,14 @@ w16_i21_on:
     mov [w16_old21 + 2], ax
     mov word [es:0x21 * 4], w16_i21
     mov [es:0x21 * 4 + 2], cs
+%ifdef PKG_MEGA
+    mov ax, [es:0x31 * 4]           ; ...and DPMI's (SPEC.md 124.31.6)
+    mov [w16_old31], ax
+    mov ax, [es:0x31 * 4 + 2]
+    mov [w16_old31 + 2], ax
+    mov word [es:0x31 * 4], w16_i31
+    mov [es:0x31 * 4 + 2], cs
+%endif
     pop es
     pop ax
     jmp w16x_on                     ; and the x87's (SPEC.md 124.5)
@@ -568,6 +584,12 @@ w16_i21_off:
     mov [es:0x21 * 4], ax
     mov ax, [w16_old21 + 2]
     mov [es:0x21 * 4 + 2], ax
+%ifdef PKG_MEGA
+    mov ax, [w16_old31]
+    mov [es:0x31 * 4], ax
+    mov ax, [w16_old31 + 2]
+    mov [es:0x31 * 4 + 2], ax
+%endif
     pop es
     pop ax
     jmp w16x_off

@@ -502,6 +502,21 @@ W16EXPORT W16M_USER,       483,     10, w16u_spi            ; SystemParametersIn
 W16EXPORT W16M_USER,       279,     0,  w16_ans0            ; OldSetDeskPattern()
 W16EXPORT W16M_USER,       284,     2,  w16u_freesysres     ; GetFreeSystemResources(word)
 W16EXPORT W16M_USER,       285,     4,  w16_ans1            ; SetDeskWallPaper(str)
+%ifdef PKG_MEGA                     ; the selector functions (124.31.6, w16sel.inc)
+W16EXPORT W16M_KERNEL,     170,     2,  w16q_csds           ; AllocCStoDSAlias(word)
+W16EXPORT W16M_KERNEL,     171,     2,  w16q_dscs           ; AllocDStoCSAlias(word)
+W16EXPORT W16M_KERNEL,     175,     2,  w16q_alloc          ; AllocSelector(word)
+W16EXPORT W16M_KERNEL,     176,     2,  w16q_free           ; FreeSelector(word)
+W16EXPORT W16M_KERNEL,     177,     4,  w16q_presto         ; PrestoChangoSelector(word word)
+W16EXPORT W16M_KERNEL,     184,     4,  w16q_dosalloc       ; GlobalDOSAlloc(long)
+W16EXPORT W16M_KERNEL,     185,     2,  w16q_dosfree        ; GlobalDOSFree(word)
+W16EXPORT W16M_KERNEL,     186,     2,  w16q_getbase        ; GetSelectorBase(word)
+W16EXPORT W16M_KERNEL,     187,     6,  w16q_setbase        ; SetSelectorBase(word long)
+W16EXPORT W16M_KERNEL,     188,     2,  w16q_getlim         ; GetSelectorLimit(word)
+W16EXPORT W16M_KERNEL,     189,     6,  w16q_setlim         ; SetSelectorLimit(word long)
+W16EXPORT W16M_KERNEL,     197,     2,  w16k_lockseg        ; GlobalFix(word)
+W16EXPORT W16M_KERNEL,     198,     2,  w16k_lockseg        ; GlobalUnfix(word)
+%endif
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put
@@ -1392,8 +1407,12 @@ w16k_getversion:
     ret
 
 ; GetWinFlags (KERNEL.132): real mode, so never WF_PMODE; the CPU class the
-; loader measured, and the coprocessor when there is one
+; loader measured, and the coprocessor when there is one. The kern_mega arm is
+; standard mode's: WF_PMODE | WF_STANDARD and the 286 or 386 bit (124.31.6)
+WF_PMODE  equ 0x0001
 WF_CPU286 equ 0x0002
+WF_CPU386 equ 0x0004
+WF_STANDARD equ 0x0010
 WF_CPU086 equ 0x0040
 WF_CPU186 equ 0x0080
 WF_80x87  equ 0x0400
@@ -1402,6 +1421,13 @@ w16k_getwinflags:
     call OSAPI_CPU_INFO             ; AL = the tier, AH = CPU_F_*
 %ifdef W16_X87_EMU                  ; (the test build's machine has none:
     and ah, ~CPU_F_X87              ;   the runtime takes its no-8087 path)
+%endif
+%ifdef PKG_MEGA
+    mov dx, WF_PMODE | WF_STANDARD | WF_CPU286  ; (SPEC.md 124.31.6)
+    cmp al, CPU_286
+    jbe .fpu
+    mov dx, WF_PMODE | WF_STANDARD | WF_CPU386
+    jmp short .fpu
 %endif
     mov dx, WF_CPU286
     cmp al, CPU_8086

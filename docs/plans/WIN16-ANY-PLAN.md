@@ -1330,9 +1330,18 @@ its table goes in the diary, so the reach is measured, not claimed.
       protected mode.** CALC and FPU stop at the x87 vectors (item 4);
       PBRUSH at the DOS host's far call (item 6, since done).
     - [ ] *4: the vectors.* Needs the owner's answer on 124.31.2 item 2,
-      CORRECTED 2026-11-01: 21h is IRQ1's gate in protected mode.
-    - [ ] *5: what the program is told.* `GetWinFlags`, `SEG_TILE` and
-      `__AHINCR`, the selector functions, `int 31h` (124.31.6).
+      CORRECTED 2026-11-01: 21h is IRQ1's gate in protected mode, and a
+      package's IVT write never reaches `mega_ivt_sync`, so 2Fh, 31h and
+      34h-3Dh must be read at the int too (the prototype's `mega_swv`).
+    - [x] *5: what the program is told* (124.31.6). `GetWinFlags` answers
+      standard mode; `SEG_TILE` (kern_mega, O2(b)) tiles a block over
+      64 KB; the selector functions (`w16sel.inc`) and a DPMI 0.9 subset on
+      `int 31h` (`w16i31.inc`); a freed ES comes back 0. New fixture
+      `SELTEST.EXE` (`tests/win16/seltest.c`). **Seen 2026-11-01 on the dev
+      kern_mega with (d1): BIG's 128 KB huge block reads back with 0 wrong
+      at `__AHINCR` 8; SELTEST says 0 wrong, flags 0415; and with (d1)'s
+      software vectors read at the int, CALCULATOR computes (9 x 9, then
+      sqrt) and the FPU fixture answers.**
     - [x] *6: DOS* (124.31.7): the core unchanged; the block's code half,
       the PSP's selector, the window's cell rewritten as a selector after
       `W16DH_INIT`. **Seen 2026-11-01: PAINTBRUSH (with PBRUSH.DLL) draws

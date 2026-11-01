@@ -45,6 +45,9 @@ GH_HANDLE equ 4                 ; what GlobalAlloc answered for it
 GH_OWNER  equ 6                 ; a resource's entry offset (w16res.inc), or 0
 GH_MAGIC  equ 8
 GH_SIG    equ 0x4857            ; 'WH'
+GH_TSEL   equ 10                ; the kern_mega arm's: a block over 64 KB's
+GH_TN     equ 12                ;   first SEG_TILE selector (0 = none yet),
+GH_TVP    equ 14                ;   its count, and where it was made (124.31.6)
 
 GHF_USED  equ 1
 GHF_MOVE  equ 2
@@ -115,6 +118,9 @@ w16_gnew:
     W16SEG es, ax                      ; ES = the header
     mov byte [es:GH_LOCK], 0
     mov word [es:GH_OWNER], 0
+%ifdef PKG_MEGA
+    mov word [es:GH_TSEL], 0
+%endif
     inc ax
     mov dx, ax                      ; DX = the data
     test byte [w16_gflg], GMEM_ZEROINIT

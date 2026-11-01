@@ -3174,3 +3174,56 @@ selector in its own variable.
 - Windows 3.1's Solitaire deals.
 
 The real-mode build is byte-identical.
+
+## 2026-11-01 — S22: what a protected-mode program is told
+
+**What it is.** Batch 5 of S22 (SPEC.md 124.31.6) covers what a program
+learns about the machine and what it may build for itself:
+- `GetWinFlags` answers standard mode (`WF_PMODE | WF_STANDARD`).
+- A block over 64 KB is reached by huge pointers that step `__AHINCR` = 8.
+- The KERNEL selector functions are there.
+- A DPMI 0.9 subset answers on `int 31h`.
+
+The targets need all of it. Mozart's `VBRUN300.DLL`, InstallShield's
+`_INST16.EXE` and the Setup Toolkit's bootstrap import the selector calls,
+and between them they issue `int 31h` eleven times (`tools/os88ne.py`'s
+census).
+
+**Decisions.**
+- *The kernel lends consecutive selectors, and nothing else new.*
+  `SEG_TILE` (the owner's O2(b)) is 195 bytes of `.mega`. Everything else is
+  built from verbs kern_mega already had. A selector the program makes is a
+  window of WIN16's, which can be re-aimed but not rewritten, so its base
+  must sit on a paragraph below 1 MB and its reach is 64 KB at most. An
+  alias of a selector in a claim is that claim's own SUB or pair.
+- *The selector functions live in the system-library part*, so the image
+  pays only for the DPMI handler. An `int` cannot wait for a part to be
+  fetched, so that handler has to be resident.
+
+**Discoveries.**
+- *Freeing a selector is the program's business, and so is its ES.* BIG
+  frees its 128 KB block while ES still holds the block's selector. The
+  gate's return reloaded that ES and faulted. Standard mode's KERNEL gave
+  such a register back as 0, and so does the arm now: one `VERR` on the way
+  out.
+- *kern_mega reads its tables through SS.* The first DPMI test passed the
+  version, increment and base calls and failed allocate and alias with
+  CF = 1. The handler had made `OSAPI_SEG` calls on the program's stack,
+  where `[ss:mega_wtab]` is somewhere in the program's DGROUP. The handler
+  now moves to the UI task's stack, as the DOS forward always had.
+- *A package's IVT write never reaches `mega_ivt_sync`.* Owner-pending
+  prototype (d1) rebuilt gates 31h and 34h-3Dh from the IVT at each sync,
+  but WIN16's writes through segment 0 are completed without one. So
+  Calculator's x87 vectors and SELTEST's `int 31h` landed on "a software
+  interrupt nobody handles". The prototype now reads those vectors at the
+  int, as its 21h already did. This is recorded beside the owner's
+  question (SPEC.md 124.31.2), because either kernel shape needs it.
+
+**Seen, QEMU 486, the dev kern_mega with (d1), protected mode.**
+- `BIG.EXE`: 131,072 bytes through a huge pointer, 0 wrong, `__AHINCR`
+  0008.
+- `SELTEST.EXE`: 0 wrong, flags 0415.
+- Calculator 3.1: 9 x 9 = 81, then sqrt gives 9.
+- `FPU.EXE`'s three answers.
+
+The arm has 769 bytes of room. The real-mode build is byte-identical.

@@ -250,8 +250,15 @@ def rows(binfile, syms, where):
     names = []
     dcf = set()                 # the text calls' handlers (SPEC.md 124.24.4)
     mdc = set()                 # ...and a memory DC's (SPEC.md 124.25.3)
+    arm = False                 # the kern_mega arm's rows (SPEC.md 124.31.6):
     for line in open(os.path.join(ROOT, "apps", "win16", "w16api.inc")):
-        if line.startswith("W16EXPORT"):
+        if line.startswith("%ifdef PKG_MEGA"):
+            arm = True          #   not in the build this reads
+        elif arm and line.startswith("%endif"):
+            arm = False
+        elif arm:
+            continue
+        elif line.startswith("W16EXPORT"):
             f = [x.strip() for x in line.split(";")[0][len("W16EXPORT"):].split(",")]
             names.append(f[3])
         elif line.startswith("%define w16dcf_"):

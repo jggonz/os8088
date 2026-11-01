@@ -322,6 +322,11 @@ section .w16dlg
     W16BSS w16_nargb, 2         ; bytes the finishing call pops (-2: InitTask)
     W16BSS w16_idx, 2           ; the bind slot the gate is serving
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
+%ifdef PKG_MEGA
+    W16BSS w16_old31, 4         ; ...and int 31h, DPMI's (124.31.6)
+    W16BSS w16_i31ss, 2         ; ...the program's stack while it runs on
+    W16BSS w16_i31sp, 2         ;   the UI task's
+%endif
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     ; --- S16: the DOS (SPEC.md 124.21) ---
     W16BSS w16_dhseg, 2         ; the DOS's block, 0 = not fetched yet
@@ -2068,6 +2073,9 @@ w16_cputest:
 %include "win16/w16core.inc"
 %include "win16/w16load.inc"
 %include "win16/w16i21.inc"
+%ifdef PKG_MEGA
+%include "win16/w16i31.inc"     ; DPMI 0.9, a subset (SPEC.md 124.31.6)
+%endif
 %include "win16/w16api.inc"
 %include "win16/w16mem.inc"
 %include "win16/w16res.inc"
@@ -2097,6 +2105,9 @@ w16_cputest:
 %include "win16/w16combo.inc"   ; COMBOBOX, owner-drawn items (124.22.14)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
+%ifdef PKG_MEGA
+%include "win16/w16sel.inc"     ; the selector functions: part 9 (124.31.6)
+%endif
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)
 

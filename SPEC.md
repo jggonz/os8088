@@ -230087,6 +230087,13 @@ It needs two things it does not have:
    reflection path, which keeps the PIC at 20h across a reflection. Either
    is `.mega` alone, nothing on any other kernel. Until one is taken, no
    program runs on this arm past its first `int 21h`.
+   **Found while prototyping (d1), 2026-11-01**: a package's write to the
+   IVT is completed without passing `mega_ivt_sync`, so a gate REBUILT from
+   the IVT never sees WIN16's 31h or its x87 emulator's 34h-3Dh. Those
+   gates have to read the IVT at the int instead, as (d1)'s 21h does: the
+   prototype gives 2Fh, 31h and 34h-3Dh a stub each (`mega_swv`) that
+   enters a package's code selector found there, and otherwise the gate
+   `mega_ivt_sync` built (`mega_swsh`). Either shape needs that half.
 
 #### 124.31.3 Memory: virtual paragraphs inside, selectors at the edge
 
@@ -230204,9 +230211,32 @@ LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
 - **The selector functions**, over `OSAPI_SEG`: `AllocSelector`,
   `FreeSelector`, `AllocCStoDSAlias`, `AllocDStoCSAlias`,
   `PrestoChangoSelector`, `GetSelectorBase`, `SetSelectorBase`,
-  `GetSelectorLimit`, `SetSelectorLimit`, `SelectorAccessRights`,
-  `GlobalDOSAlloc` and `GlobalDOSFree` (a conventional claim), `GlobalFix`
-  and `GlobalUnfix` (nothing moves).
+  `GetSelectorLimit`, `SetSelectorLimit`, `GlobalDOSAlloc` and
+  `GlobalDOSFree` (a conventional claim), `GlobalFix` and `GlobalUnfix`
+  (nothing moves). They are the system-library part's
+  (`apps/win16/w16sel.inc`), export rows the arm alone has:
+  - a selector the program MAKES (`AllocSelector`) is a **window** of
+    WIN16's (`SEG_WIN`), so setting its base or limit re-aims it rather than
+    rewriting a descriptor. Its base must be on a paragraph below 1 MB, its
+    reach is 64 KB at most, and kern_mega frees every one at WIN16's end.
+    `PrestoChangoSelector` re-aims the destination over the source; the
+    code/data flip is kern_mega's to complete, as every far call through a
+    data selector is (§20.18);
+  - an **alias** of a selector in a claim is that claim's SUB or pair
+    (`SEG_SUB`, `SEG_SUBC`'s code half): the same one each time, and
+    `FreeSelector` on it does nothing;
+  - `GetSelectorLimit` is LSL, a 286 instruction: the arm runs on nothing
+    older;
+  - `GlobalDOSAlloc` is a fixed global block, which is conventional
+    memory on this arm (124.31.1), and its `SEG_REAL` paragraph.
+  `SelectorAccessRights` is not imported by any target and is not bound.
+- **A selector a call freed comes back as 0.** The gate's return reloads the
+  program's ES; when the call freed it (`GlobalFree`, `FreeSelector`), `VERR`
+  says so and ES is 0, as standard mode's KERNEL left it.
+- **A block over 64 KB** is tiled once (`w16_ptile`), its first tile, the
+  count and the paragraph it was made at kept in the header's last six
+  bytes (`GH_TSEL`, `GH_TN`, `GH_TVP`), so `GlobalLock` answers the same
+  selector each time and a block that moved is tiled again.
 - **A DPMI 0.9 subset on `int 31h`**, what Windows 3.x's standard mode gave
   a program: `0000h`/`0001h` (allocate and free descriptors), `0003h` (the
   selector increment, 8), `0006h`/`0007h`/`0008h` (base and limit),
@@ -230214,7 +230244,13 @@ LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
   version, 0.9), `0500h` (free memory), and `0600h`/`0601h` (lock and
   unlock: nothing pages). Anything else: CF = 1, AX = `8001h`
   (unsupported). `0300h` (simulate a real-mode interrupt) is S24's, for
-  MSCDEX.
+  MSCDEX. `apps/win16/w16i31.inc`, hooked with int 21h. The handler is
+  entered on the program's stack and **makes its kernel calls on the UI
+  task's** (`w16_hss`:`w16_hsp`, as the DOS forward does): kern_mega's own
+  code reads its tables through SS, and an `OSAPI_SEG` made on a program's
+  stack answers CF = 1. `0000h` makes one descriptor at a time (`8011h`
+  for more), a window as `AllocSelector`'s is; `000Bh` builds the 286's
+  eight bytes from `SEG_LIN`, LSL and LAR.
 
 #### 124.31.7 DOS
 
