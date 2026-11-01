@@ -56,11 +56,24 @@ w16_i21:
     je .close
     cmp ah, 0x44
     je .ioctl
+    cmp ah, 0x59
+    je .xerr
     cmp ah, 0x2A
     jb .file
     cmp ah, 0x2C
     ja .file
     jmp w16_i21clk                  ; 2Ah, 2Ch (and 2Bh, refused there)
+.xerr:                              ; the extended error: the last DOS call
+    mov ax, [cs:w16_xerr]           ;   that failed, its own or a KERNEL file
+    mov bx, 0x0D03                  ;   call's (SPEC.md 124.21.2). Class
+    cmp ax, 2                       ;   unknown, or "not found" for 2 and 3;
+    jb .xe                          ;   ask the user; a block device
+    cmp ax, 3
+    ja .xe
+    mov bh, 8
+.xe:
+    mov ch, 2
+    jmp short .done
 .file:                              ; the file calls are the DOS's (SPEC.md
     push si                         ;   124.21.2)
     mov si, w16_i21fwd

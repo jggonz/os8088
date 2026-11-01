@@ -1804,18 +1804,34 @@ w16u_getwtlen:
     pop si
     ret
 
-; SetWindowText (USER.37) - args: +0 lpString, +4 hWnd. A top-level window's
-; is its os8088 title too (WIN16's own window's through w16_wtitle); one of
-; WIN16's controls is SENT WM_SETTEXT, as Windows does it, and redraws.
-w16u_setwtext:
+section .w16dlg
+
+; SetWindowText (USER.37) - args: +0 lpString, +4 hWnd. The window is SENT
+; WM_SETTEXT, as Windows does it, and DefWindowProc keeps the text (w16_dptext):
+; a program's own control learns its name there - Windows Help's buttons load
+; their bitmaps by it. One of WIN16's controls answers in its own procedure,
+; and a dialog WIN16 runs keeps the text at once.
+W16LIB w16u_setwtext
     push si
-    call w16_args
+    ICALL w16_args
     mov si, [es:bx]
     mov dx, [es:bx + 2]
     mov ax, [es:bx + 4]
-    call w16_hwnd2rec
+    ICALL w16_hwnd2rec
     jc .no
-    call w16_wsettext
+    cmp byte [bx + W16W_KIND], W16Q_DIALOG
+    je .store
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_SETTEXT
+    mov word [w16_sm_wp], 0
+    mov [w16_sm_lp], si
+    mov [w16_sm_lp + 2], dx
+    mov si, w16_cont_one
+    ICALL w16_sendwnd
+    pop si
+    ret
+.store:
+    ICALL w16_wsettext
     mov ax, 1
     pop si
     ret
@@ -1823,6 +1839,44 @@ w16u_setwtext:
     xor ax, ax
     pop si
     ret
+
+; w16_dptext - DefWindowProc's WM_SETTEXT, WM_GETTEXT and WM_GETTEXTLENGTH:
+; CX = the message, AX = the HWND, [w16_sm_*] its arguments. The window's own
+; text kept, copied or measured (SPEC.md 124.8). Answers as a handler.
+w16_dptext:
+    ICALL w16_hwnd2rec
+    jc .zero
+    push si
+    push di
+    mov si, [w16_sm_lp]
+    mov dx, [w16_sm_lp + 2]
+    cmp cx, WM_GETTEXT
+    je .get
+    ja .len
+    ICALL w16_wsettext
+    mov ax, 1
+    jmp short .out
+.get:
+    mov di, si
+    mov cx, [w16_sm_wp]
+    ICALL w16_gettext
+    jmp short .out
+.len:
+    push es
+    ICALL w16_textptr
+    pop es
+    mov ax, cx
+.out:
+    pop di
+    pop si
+    xor dx, dx
+    ret
+.zero:
+    xor ax, ax
+    xor dx, dx
+    ret
+
+section .text
 
 ; -----------------------------------------------------------------------------
 ; w16_wsettext - BX = a window, DX:SI = its new text (DX = 0 none): store it

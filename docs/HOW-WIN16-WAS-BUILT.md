@@ -2900,3 +2900,50 @@ parts flagged the line that took the table's address, because a part's data
 read through the package's DS is the bug that check exists for. Every read
 already went through CS, so the line got the marker the other parts' tables
 carry.
+
+## 2026-11-01 — S20, batch 6: three answers the reference machine gave
+
+**The open questions from batch 4 went to the real Windows 3.0 first.** On
+the reference machine Windows Help opened with no bookmark error, and its
+five buttons were there: disabled, with grey icons and grey captions.
+Terminal opened its main window. So all three of our faults were ours, and
+the disassembly said where.
+
+**Windows Help's buttons are named, and the name is how they find their
+pictures.** The button's own window procedure loads two bitmaps when it is
+sent `WM_SETTEXT`. It builds the names from its text and the screen size,
+`INDEX640x480x1` and `INDEX640x480x2`, and keeps the handles in its window
+words. Windows sends `WM_SETTEXT` from `SetWindowText`. WIN16 stored the
+text and never told the window, so the words stayed 0, and the paint
+routine checked them, found nothing and drew nothing. Now `SetWindowText`
+sends the message, and `DefWindowProc` keeps the text, as on Windows.
+
+**Then the buttons were green.** Each picture is drawn on a green ground,
+and Windows Help swaps the green for the button face by a classic trick.
+It copies the picture into a black-and-white bitmap with green set as the
+background colour, so the copy is white wherever the picture was green.
+Then it paints the face colour through that mask. On Windows a colour to
+black-and-white copy works exactly that way; WIN16 copied the colours
+across. One table, filled for the copy, fixed it.
+
+**Terminal's "emulation not available" was a lookup we already had.**
+Windows 3.0 programs name some resources by string, and the linker turned
+every name into a number and wrote a table of the pairs into the program.
+WIN16 read that table for a string name since S10. Terminal asks with a
+string TYPE, `"CCTL"`, and a numbered name, and WIN16 never asked the table
+when the name was a number. Batch 4 thought Wine would not match this
+either. Wine does; we had read it wrong.
+
+**The bookmark file needed DOS to say "not found" properly.** Windows Help
+tries to open `WINHELP.BMK`. When that fails it asks DOS for the extended
+error, and it creates the file only if the error is "file not found". WIN16
+answered that question with "invalid function". The DOS core WIN16 shares
+with DOS.O88 has no answer for it either, and the core has one byte of room
+left. So WIN16 now remembers the last error from both of its ways into the
+core and answers the question itself. DOS.O88 is unchanged.
+
+**What is still different is colour.** Behind the logo, Windows Help shades
+from blue to black; Terminal's background is a pale yellow. Neither colour
+is one of the sixteen. Windows' display driver mixes such a colour from a
+pattern of two, and WIN16 picks the nearest of the sixteen. That is its own
+piece of work.

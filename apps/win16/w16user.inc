@@ -2326,6 +2326,13 @@ w16u_defproc:
     call w16_args
     call w16_smargs
     mov cx, [w16_sm_msg]
+    cmp cx, WM_SETTEXT              ; the window's text (SPEC.md 124.8)
+    jb .nottext
+    cmp cx, WM_GETTEXTLENGTH
+    ja .nottext
+    LCALL w16_dptext
+    ret
+.nottext:
     cmp cx, WM_CLOSE
     jne .notclose
     jmp w16_destroy

@@ -1084,6 +1084,50 @@ its table goes in the diary, so the reach is measured, not claimed.
       Control Panel earns a row.
     - Sizes: the image 36,407 and bss unchanged, **1,373 bytes of room**;
       part 9 14,727 (+149), the loader part 14,745 (one row).
+  - [x] **Batch 6: Windows Help and Terminal, held to the reference**
+    (SPEC.md §124.8, §124.10, §124.21.2, §124.25.12).
+    - Windows Help 3.0 and Terminal 3.0 were run on the reference machine
+      (`win16ref/ref/w30-winhelp.png`, `w30-terminal2.png`, taken this
+      batch). Real Windows Help shows no bookmark error, and five disabled
+      buttons with grey icons and captions.
+    - **`SetWindowText` sends `WM_SETTEXT`**, and `DefWindowProc` keeps and
+      answers the text (`WM_SETTEXT`, `WM_GETTEXT`,
+      `WM_GETTEXTLENGTH`). Windows Help's button procedure loads its two
+      bitmaps in `WM_SETTEXT`, named from the text, and stores them in its
+      window words 2 and 4. WIN16 stored the text without telling the
+      window, so both words stayed 0 and the paint drew nothing.
+    - **A colour bitmap copied into a monochrome one is a mask** by the
+      source DC's background colour. The buttons' bitmaps are drawn on
+      green, and Windows Help repaints the green the button face through
+      that mask and `DSPDxax`. Without it the faces were green.
+    - **The name table answers a string type with a numbered name.**
+      Terminal's `FindResource(1003, "CCTL")` is type F008h, number 1003, in
+      its `RT_NAMETABLE`. Batch 4's note that Wine would not match it was
+      wrong: Wine's `NE_FindNameTableId` does this, and WIN16 already did
+      it for a string name. It skipped the table whenever the name was a
+      number.
+    - **`int 21h` `59h` is answered**, from the last failed call into
+      WIN16's DOS. Windows Help `_lopen`s `WINHELP.BMK` and creates it only
+      when the extended error is 2. The core has no `59h` and one byte of
+      `CORE_MAX` left, so WIN16 keeps the code where both of its paths into
+      the core pass; DOS.O88 is unchanged.
+    - **Seen on QEMU's VGA:** Windows Help opens with no message, its
+      buttons as on the reference, `WINHELP.BMK` created in WIN16's Windows
+      directory and the Bookmark menu enabled. Terminal opens its main
+      window with no *Emulation selected is not available*. Notepad's and
+      Cardfile's titles still arrive, now through `WM_SETTEXT`.
+    - **Still differs from the reference:** the gradient behind Windows
+      Help's logo is a blue block and black, and Terminal's ground is white
+      where Windows' is a pale yellow. Both are colours outside the
+      sixteen, which Windows' display driver dithers in a solid brush and
+      WIN16 rounds to the nearest. That is a drawing story of its own.
+    - **Rows, for S25's pass:** every `win16*` row whose program sets a
+      window's text (all of them, through their titles); `win16cdlg` and
+      `win16file` (`SetDlgItemText`); `win16pbrush` and `win16memdc` (the
+      bitmap copy); `win16mines` and `win16calc` (the name table, CALC's
+      `"SC"`); and `w16xsec` in the fast tier.
+    - Sizes: the image 36,495 (+88), bss 27,246 (+2), **1,283 bytes of
+      room**; the library part 61,686 (+284).
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and

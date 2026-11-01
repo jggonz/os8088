@@ -330,6 +330,7 @@ section .w16dlg
     W16BSS w16f_num, 2          ; GetTempFileName: where the digits go
     W16BSS w16f_unq, 2          ; ...and the number
     W16BSS w16_dces, 2          ; the ES the DOS's last call answered
+    W16BSS w16_xerr, 2          ; the DOS's last error, for AH=59h
     W16BSS w16f_ddl, 2          ; DlgDirList's wFiletype
     W16BSS w16f_spec, 2         ; ...the file part it searches with
     W16BSS w16f_odta, 4         ; ...the program's DTA, while it uses its own

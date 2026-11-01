@@ -226643,6 +226643,15 @@ parent's client, and nothing in os8088 knows it exists:
   `IsWindowVisible`, `IsWindowEnabled`, `GetWindowRect`, `ScreenToClient`
   and `ClientToScreen` work on any window. A window's text is a block in the
   USER heap (§124.11).
+- **`SetWindowText` SENDS `WM_SETTEXT`** to the window's procedure, as
+  Windows does, and `DefWindowProc` keeps the text on `WM_SETTEXT` and
+  answers `WM_GETTEXT` and `WM_GETTEXTLENGTH` from it *(S20 batch 6)*. A
+  program's own control learns its name that way: Windows Help 3.0's buttons
+  load their bitmaps in their `WM_SETTEXT`, and drew blank without it.
+  `SetDlgItemText` and `GetDlgItemText`, which already sent the messages,
+  now reach a program's own control's text through `DefWindowProc` instead
+  of losing it. A dialog WIN16 runs keeps its text at once, as before.
+  `GetWindowText` still reads the text without sending `WM_GETTEXT`.
 - `DestroyWindow` takes its children with it, each told `WM_DESTROY`.
 
 **Coordinates.** Client coordinates are relative to the os8088 content
@@ -226948,6 +226957,14 @@ F006h, number 1, type name `DATA`. A numbered type matches an entry whose
 type word is that type and whose type name is empty; a string type matches
 the type name, case blind, and the entry's own type word is then the
 numbered type to look in. The table is loaded as any resource is.
+**A string type with a NUMBERED name is looked up there too** *(S20 batch
+6)*: Terminal 3.0 asks for `FindResource(h, 1003, "CCTL")`, and its table
+files type `CCTL` as F008h with numbers 1000, 1002 and 1003 and no resource
+name. A numbered name matches an entry whose number is that number and whose
+resource name is empty. The table is asked whenever the type or the name is
+a string and the resource table alone found nothing; two numbers never need
+it. Until this, any numbered name skipped the table, and Terminal said
+*Emulation selected is not available*.
 
 ### 124.11 Menus *(shipped in S5)*
 
@@ -228134,6 +228151,17 @@ and a Windows program has neither.
 
 A forwarded call runs on the UI task's stack, as every import's handler does
 (§124.2.1), with interrupts on, so the disk runs as it does for DOS.O88.
+
+**`59h`, the extended error, is WIN16's own** *(S20 batch 6)*: AX = the code
+of the last call into WIN16's DOS that failed, the program's own `int 21h`
+or a KERNEL file call's (§124.21.3); BH = 8 (not found) for codes 2 and 3
+and 0Dh (unknown) otherwise, BL = 3, CH = 2. The core has no `59h` and one
+byte of `CORE_MAX` to spare, so the answer is kept where both paths pass:
+`w16_dcall` records a failure, and a forwarded call enters the core's gate
+as an `int` (`pushf`, far call) and records CF before WIN16 `iret`s itself.
+Windows Help 3.0's runtime asks for it after `_lopen` fails on
+`WINHELP.BMK`, and creates the file only when the answer is 2; refused, it
+said *Cannot create bookmark file*.
 
 `57h` (a file's date) and `5Ah` (a unique temporary file) are not in the core
 (§96.7.3) and are not in this story: no target program issues them, and the
@@ -229677,6 +229705,27 @@ after `EndPaint`. A window destroyed gives its own DC back.
 armed again, `OSAPI_WM_CLIP_SET`, so a program that alternates between two
 own DCs call by call pays that on every call. Write draws a line of text
 through one DC at a time.
+
+#### 124.25.12 A colour bitmap copied into a monochrome one *(S20 batch 6)*
+
+On Windows a `BitBlt` or `StretchBlt` with `SRCCOPY` from a colour bitmap
+into a monochrome one makes a MASK: white where the source pixel is the
+source DC's background colour (`SetBkColor`), black everywhere else. WIN16
+holds a monochrome bitmap as nibbles of 0 and 15 (`w16b_mono`), and copied
+the colours across unchanged. The copy now runs through the source-ROP
+table (§124.25.7) filled for it, `w16_bmmask`: 15 for the source DC's
+background colour, 0 for every other.
+
+Windows Help 3.0 is the case. Its button bitmaps are drawn on green, and it
+repaints that ground the button face: the green is the background colour of
+a mask copied out of the bitmap, and a `BitBlt` with `0xE20746` (DSPDxax)
+puts the face brush where the mask is white. Without the mask the buttons
+were green.
+
+The other direction, a monochrome bitmap into a colour one, is still a plain
+copy: black stays black and white stays white, which is what Windows gives
+under the default text and background colours. A DC with other colours
+would get them on Windows and does not here yet.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

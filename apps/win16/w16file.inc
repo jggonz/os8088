@@ -193,6 +193,9 @@ w16_dcall:
     pushf                           ; ...and an int's frame
     call far [cs:w16_dhent]
     mov [cs:w16_dces], es           ; the ES it answers (2Fh's), banked
+    jnc .ok
+    mov [cs:w16_xerr], ax           ; AH=59h's answer (SPEC.md 124.21.2)
+.ok:
     pop es
     pop ds
     ret
@@ -253,7 +256,19 @@ w16_i21dos:
     mov [es:W16DH_HSP], ax
     pop ax
     pop es
-    jmp far [cs:w16_dhent]          ; the core's gate, which irets
+    pushf                           ; the core's gate, as an int, so its
+    call far [cs:w16_dhent]         ;   error is AH=59h's (SPEC.md 124.21.2)
+    push bp
+    mov bp, sp
+    jnc .fok
+    mov [cs:w16_xerr], ax
+    or byte [bp + W16_IRET_FL], 1
+    pop bp
+    iret
+.fok:
+    and byte [bp + W16_IRET_FL], 0xFE
+    pop bp
+    iret
 .nodos:
     push bp
     mov bp, sp

@@ -1185,6 +1185,7 @@ w16_bltm:
 .frommem:
     call w16_mdcslot
     jc .no
+    mov cx, bx                      ; CX = the source DC's slot
     shl bx, 1
     mov ax, [w16m_bmp + bx]
     cmp ax, W16_BMSTK
@@ -1192,6 +1193,17 @@ w16_bltm:
     call w16_bmslot
     jc .no
     mov [w16b_bm], bx
+    cmp byte [w16b_mono + bx], 0    ; colour into monochrome: by the
+    jne .plain                      ;   source's background colour
+    mov bx, [w16b_dbm]
+    cmp byte [w16b_mono + bx], 0
+    je .plain
+    call w16_bmmask
+    mov byte [w16b_brop], 1
+    call w16_bm2bm
+    mov byte [w16b_brop], 0
+    jmp short .yes
+.plain:
     call w16_bm2bm
 .yes:
     mov ax, 1
@@ -1237,6 +1249,42 @@ w16_bltm:
     call w16_bm2bm
     mov byte [w16b_brop], 0
     jmp short .yes
+
+;w16_bmmask - CX = a colour source DC's slot: w16_ropt makes a SRCCOPY into
+; a monochrome bitmap, as Windows makes it - white where the source is its DC's
+; background colour, black everywhere else (SPEC.md 124.25.12). Windows
+; Help's buttons find their ground this way and paint it the button face.
+w16_bmmask:
+    push ax
+    push bx
+    push cx
+    push di
+    push es
+    mov bx, cx
+    ICALL w16_mdrec
+    mov ah, [bx + W16DC_TPAP]       ; AH = its background colour
+    push ds
+    pop es
+    mov di, w16_ropt
+    xor bl, bl                      ; BL = the source colour
+    cld
+.s:
+    mov al, CBLACK
+    cmp bl, ah
+    jne .f
+    mov al, CWHITE
+.f:
+    mov cx, 16                      ; whatever is under it
+    rep stosb
+    inc bl
+    cmp bl, 16
+    jb .s
+    pop es
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; w16_bmcut - the source corner for the cut destination, cut again to the
 ; source's extent: [w16b_sx]/[w16b_sy] = the source's column and row for
