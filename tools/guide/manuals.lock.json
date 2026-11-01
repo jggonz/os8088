@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "6dafaed9c",
+  "stamped": "aa84fbd9d",
   "strings": "e64cf165a824584a",
-  "why": "S20b batch 3b: tile, cascade, MDI paint order"
+  "why": "S20b batch 4: Program Manager items, CreateCursorIconIndirect icons"
  },
  "WIN16_TXT": {
   "sources": [
