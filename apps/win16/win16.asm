@@ -61,6 +61,14 @@ W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16C_SIZE    equ 32             ; a class record
 W16W_SIZE    equ 102            ; a window record
+W16_MAXTASK  equ 4              ; Windows programs in one instance, its
+                                ;   tasks (SPEC.md 124.28.1)
+W16K_H       equ 0              ; a task: its handle (its DGROUP), the
+W16K_CTX     equ 2              ;   context block it is parked in (0 while
+W16K_ST      equ 4              ;   it is the current one), its W16KS_*
+W16K_SIZE    equ 6
+W16KS_FREE   equ 0
+W16KS_RUN    equ 1
 W16_MAXTOP   equ 4              ; top-level windows in os8088 windows of
                                 ;   their own (dialogs, SPEC.md 124.8)
 W16_TTLSZ    equ 50
@@ -1089,6 +1097,11 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     ; --- FindWindow (SPEC.md 124.15.3)
     W16BSS w16_fwt, 4           ; the title asked for, far
     W16BSS w16_fwcls, 1         ; 1 = a class was asked for
+    ; --- S21: tasks (w16task.inc, SPEC.md 124.28)
+    W16BSS w16_task, W16_MAXTASK * W16K_SIZE
+    W16BSS w16_cur, 1           ; the current task's index
+    W16BSS w16_wtask, W16_MAXWND ; each window's task, index + 1 (124.28.3)
+    W16BSS w16_ctask, W16_MAXCLS ; ...and each class's
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -2053,6 +2066,7 @@ w16_cputest:
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)
 %include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 9 (124.27)
+%include "win16/w16task.inc"    ; several programs in one instance: part 9 (124.28)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's

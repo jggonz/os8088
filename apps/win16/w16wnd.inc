@@ -1017,6 +1017,10 @@ w16_mkwnd:
     pop es
     pop cx
     mov byte [si + W16W_FLAGS], W16WF_USED | W16WF_INVAL | W16WF_ERASE
+    mov bx, cx                      ; its task's (SPEC.md 124.28.3)
+    mov al, [w16_cur]
+    inc ax
+    mov [w16_wtask + bx], al
     mov word [si + W16W_UR], 0x7FFF ; the whole client, erased
     mov word [si + W16W_UB], 0x7FFF
     mov al, [w16_cwkind]

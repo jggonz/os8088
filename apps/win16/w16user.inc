@@ -422,6 +422,12 @@ w16u_regclass:
     mov [di + W16C_MENU + 2], ax
     mov ax, di                      ; an atom-shaped non-zero answer
     sub ax, w16_cls
+    mov bx, ax                      ; ...and the class is its task's
+    mov cl, 5                       ;   (W16C_SIZE, SPEC.md 124.28.3)
+    shr bx, cl
+    mov cl, [w16_cur]
+    inc cx
+    mov [w16_ctask + bx], cl
     or ax, 0xC000
     jmp short .out
 .fail:

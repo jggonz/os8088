@@ -230335,14 +230335,14 @@ Every piece of WIN16's state that describes "the program" was one variable
 of the image's bss (§124.19), and code all over WIN16 addresses those
 variables directly. Making each of them a table indexed by task would cost
 bytes at every use, and the image has 898. So the **current** task's state
-stays where it is, and switching tasks swaps it:
+stays where it is, and every other task's is parked in its **context
+block**, a block of WIN16's in the global heap. Switching to a parked task
+**exchanges** the bss with its block, word for word: afterwards the bss
+holds the arriving task's state and the block the leaving one's, so the
+block passes to the task that left. The current task has no block, and a
+switch is one pass over the state, not two copies.
 
-1. the state of the task leaving is copied out of the bss into its
-   **context block**, a fixed block of WIN16's in the global heap
-   (`w16_kclaim`), one per task;
-2. the state of the task arriving is copied in from its block.
-
-The state copied is a list of ranges of the bss, `w16_ctxtab` in part 9,
+The state exchanged is a list of ranges of the bss, `w16_ctxtab` in part 9,
 the way the loader's `w16l_svtab` already saves one module's loader state
 (§124.23.5). The rule for what is on the list is the one that decides
 everything here: **state that lives across a wait** (`w16_tohost`) belongs
@@ -230422,9 +230422,10 @@ The turns stop when no task has work.
 
 **Input goes to a window's task.** A click, a key or a timer for a window
 is posted to the queue of the task that owns it; a paint marks the window
-as before. If that task is not the current one, its queue is written in its
-context block, at the place the queue has in the list (`w16_tqaddr`), so
-posting never needs a switch.
+as before. If that task is not the current one, its queue is posted to in
+its context block: the queue is the list's first range, so it is at the
+block's start, and only that range is exchanged around the post
+(`w16t_qpost`). Posting never needs a switch.
 
 #### 124.28.5 Starting a program: `WinExec` and `LoadModule`
 

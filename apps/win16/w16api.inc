@@ -511,7 +511,7 @@ W16EXPORT W16M_USER,       285,     4,  w16_ans1            ; SetDeskWallPaper(s
 W16EXPORT W16M_KERNEL,     136,     2,  w16i_drvtype        ; GetDriveType(word)
 W16EXPORT W16M_SYSTEM,     1,       4,  w16i_inqsys         ; InquireSystem(word word)
 W16EXPORT W16M_KERNEL,     138,     2,  w16i_heapsp         ; GetHeapSpaces(word)
-W16EXPORT W16M_KERNEL,     152,     0,  w16_ans1            ; GetNumTasks()
+W16EXPORT W16M_KERNEL,     152,     0,  w16t_ntasks         ; GetNumTasks()
 W16EXPORT W16M_KERNEL,     168,     6,  w16i_dresalloc      ; DirectResAlloc(word word word)
 W16EXPORT W16M_KERNEL,     130,     4,  w16_ans1            ; FileCDR(ptr)
 W16EXPORT W16M_KERNEL,     131,     0,  w16i_dosenv         ; GetDOSEnvironment()
@@ -542,6 +542,9 @@ W16EXPORT W16M_USER,       464,     12, w16_ans0            ; DragObject(word wo
 ; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
 ; the loader to their values, as __AHINCR is (w16l_segv, in that order)
 W16_SEGROW equ W16NX
+W16EXPORT W16M_KERNEL,     320,     2,  w16t_istask         ; IsTask(word)
+W16EXPORT W16M_USER,       224,     2,  w16t_wndtask        ; GetWindowTask(word)
+W16EXPORT W16M_USER,       116,     10, w16t_postapp        ; PostAppMessage(word word word long)
 %assign W16_SEGROWP W16NX
 W16EXPORT W16M_KERNEL,     173,     0,  w16x_never          ; __ROMBIOS
 W16EXPORT W16M_KERNEL,     183,     0,  w16x_never          ; __0000H

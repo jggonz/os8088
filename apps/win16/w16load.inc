@@ -278,6 +278,13 @@ w16_load:
     call OSAPI_MEM_FREE
     mov word [w16_fseg], 0
     mov byte [w16_cdo], 0
+    mov al, [w16_cur]               ; the task's record (SPEC.md 124.28.1)
+    mov ah, W16K_SIZE
+    mul ah
+    mov bx, ax
+    mov ax, [w16_dgroup]
+    mov [w16_task + bx + W16K_H], ax
+    mov byte [w16_task + bx + W16K_ST], W16KS_RUN
     clc
     jmp short .out
 
