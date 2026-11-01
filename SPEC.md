@@ -230041,7 +230041,7 @@ byte of it.
 | disks | kern_mega's own WIN16 disk, `build/megawin16.img` (1.44 MB) and `build/megawin16-120.img` (1.2 MB), the two geometries kern_mega ships in (KERN-MEGA-PLAN 14.1 answer 19): `WIN16\` with the mega arm, `SYSTEM\APPDATA\WIN16\`, and room for the user's programs, §124.18.1's shape. `make mega` builds them |
 | `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
 | the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
-| class byte | low, no `OS88_HIGH` or `OS88_HIGHMEM`, until 124.31.3's last step; `tests/megahigh.txt` keeps its two lines with the reason updated |
+| class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
 #### 124.31.2 What the kernel lends
@@ -230147,11 +230147,28 @@ what the numbers mean**:
   distinct paragraph `W16SEG` is handed costs an LDT entry until its arena
   goes. That is bounded for the first targets and is batch 7's to tighten
   (a freeable selector per block, over `SEG_TILE`).
-- **Above 1 MB** is the map's last step: an arena claimed with
-  `OS88_HIGHMEM` is entered in the map like any other, because nothing
-  outside `w16_vsel` reads a claim's address. That retires
-  `tests/megahigh.txt`'s two WIN16 lines; it is the batch after a program
-  runs low.
+- **Above 1 MB** (batch 7). The arm says `OS88_HIGH | OS88_HIGHMEM`:
+  - kern_mega loads WIN16's image above 1 MB. It is a code/data pair
+    there as below, and nothing in the arm does a sum on its own CS or DS
+    but the pair's own `- 8` (`W16ICS`, `W16CSDS`).
+  - WIN16's own plain claims (the cluster cache, the loader's file tables,
+    the region's mask) may also go above 1 MB. Nothing does a sum on them,
+    and the kernel's file layer and drawing take them wherever they are.
+  - **The map's claims stay conventional.** `w16_vclaim` claims through
+    the DMA door with no head (`OSAPI_MEM_CLAIM_DMA`, CX = 0). That covers
+    the program's image, its PSP and resources, and the arenas: everything
+    the program is handed a selector into.
+  - Two things need them low:
+    - a window `AllocSelector` and `SetSelectorBase` make is a `SEG_WIN`,
+      whose base is a physical paragraph;
+    - `GlobalDOSAlloc`'s block must have a real-mode paragraph.
+  - Moving the program's memory up as well would take a window verb with a
+    32-bit base and a choice of block for `GlobalDOSAlloc`. That is a kernel
+    question for later, not this arm's.
+  - What batch 7 buys is the image's room. Its code and its bss no longer
+    come out of the conventional memory the program is loaded into. The
+    parts are still fetched through the DMA door, as the parts standard
+    fetches every part.
 
 #### 124.31.4 The loader
 

@@ -469,11 +469,17 @@ w16v%1_myds: dw 0                   ; WIN16's data selector (w16_pmds)
 ; -----------------------------------------------------------------------------
 %macro W16PM_IMAGE 0
 
-; w16_vclaim - AX = KB: OSAPI_MEM_CLAIM, the claim entered in the map. out:
-; CF=0 DX = its virtual base; CF=1 none (no memory, or no room in the map).
-; Keeps every other register.
+; w16_vclaim - AX = KB: a claim entered in the map. out: CF=0 DX = its
+; virtual base; CF=1 none (no memory, or no room in the map). Keeps every
+; other register. It is the DMA door's, CX = 0: CONVENTIONAL whatever
+; OS88_HIGHMEM says, so every block the program sees is below 1 MB, where a
+; window (SEG_WIN, the selector functions') can be aimed at it and
+; GlobalDOSAlloc's block has a real-mode paragraph (SPEC.md 124.31.3)
 w16_vclaim:
-    call OSAPI_MEM_CLAIM
+    push cx
+    xor cx, cx
+    call OSAPI_MEM_CLAIM_DMA
+    pop cx
     jc .out
     push cx
     mov cx, ax

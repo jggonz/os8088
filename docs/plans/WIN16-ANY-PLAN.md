@@ -1348,7 +1348,15 @@ its table goes in the diary, so the reach is measured, not claimed.
       a line; WRITE, CARDFILE, CALENDAR and Windows 3.1 Solitaire run in
       protected mode.** REGEDIT is not in the fixture set here; it is
       S25's, with the win16ref programs.
-    - [ ] *7: above 1 MB*, retiring WIN16's `tests/megahigh.txt` lines.
+    - [x] *7: above 1 MB*, retiring WIN16's `tests/megahigh.txt` lines.
+      The arm says `OS88_HIGH | OS88_HIGHMEM`. Its image (37,877 bytes and
+      26,382 of bss) and its own plain claims go above 1 MB. The map's
+      claims, which hold everything the program is handed, stay
+      conventional through the DMA door, because `SEG_WIN` and
+      `GlobalDOSAlloc` need a paragraph (124.31.3). **Seen 2026-11-01 on
+      the dev kern_mega with (d1):** SELTEST reports WIN16's image at
+      linear `00F9D000` with 0 wrong. BIG, Minesweeper 3.1 and Paintbrush
+      run as they did below 1 MB.
 
 - [ ] **S23: MMSYSTEM (R4).**
   - *As a user, Sound Recorder plays a WAV through my Sound Blaster, and

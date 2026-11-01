@@ -26,7 +26,11 @@
 %include "doscall.inc"              ; where the DOS core goes (SPEC.md 124.21.1)
 %include "win16/w16dos.inc"         ; ...and WIN16's host above it
 
+%ifdef PKG_MEGA                     ; the arm's image and its own plain claims
+    OS88_HEADER 'WIN16', w16_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
+%else                               ;   may go above 1 MB (SPEC.md 124.31.3);
     OS88_HEADER 'WIN16', w16_entry, OS88_F_ICON | OS88_F_PARTS
+%endif                              ;   the program's memory stays below it
 
 ; --- the icon (SPEC.md 20.2, 124.18.3): a window with a title bar and the
 ; four-pane flag in it, 1bpp, the same on every adapter. It is the dock's tile

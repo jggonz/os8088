@@ -192,8 +192,11 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         }
     }
 
-    sprintf(res + strlen(res), "%sseltest: %d wrong, flags %04lX",
-            fails ? " - " : "", fails, flags);
+    /* where WIN16 runs: an import's far pointer is into its image, which
+     * kern_mega may load above 1 MB (SPEC.md 124.31.3) */
+    sprintf(res + strlen(res), "%sseltest: %d wrong, flags %04lX, WIN16 at %08lX",
+            fails ? " - " : "", fails, flags,
+            GetSelectorBase(FP_SEG((void (__far *)(void))GetWinFlags)));
     MessageBox(0, res, "WIN16 seltest", MB_OK);
     return 0;
 }

@@ -3227,3 +3227,40 @@ census).
 - `FPU.EXE`'s three answers.
 
 The arm has 769 bytes of room. The real-mode build is byte-identical.
+
+## 2026-11-01: S22 batch 7, WIN16 above 1 MB
+
+kern_mega lets a package's image go above 1 MB (`OS88_HIGH`), and its claims
+of 64 KB or less too (`OS88_HIGHMEM`). Every package either declares both
+bits or carries a line in `tests/megahigh.txt` saying what in its code
+breaks. WIN16 carried two lines, written when it refused protected mode
+outright.
+
+**Decision: the image goes up, the program's memory does not.**
+- In the arm, nothing does a sum on WIN16's own CS or DS except the pair's
+  `- 8`. Its plain claims (the cluster cache, the loader's tables) are only
+  ever loaded into a segment register. So both bits are honest for them.
+- A Windows program is another matter, though WIN16's own sums are not the
+  reason. The program can ask for a selector at a linear address of its
+  own: `AllocSelector`, then `SetSelectorBase`. The only window kern_mega
+  can aim on demand, `SEG_WIN`, takes a physical paragraph.
+  `GlobalDOSAlloc` likewise answers a real-mode paragraph.
+- So the claims the arm's map holds come through the DMA door, which is
+  conventional whatever the class byte says. Those are the program's
+  image, PSP and resources, and the global heap's arenas.
+- Lifting them too would need a window verb with a 32-bit base. That is a
+  kernel decision with no target asking for it yet.
+
+**What it buys.** 37,877 bytes of code and 26,382 of bss no longer come out
+of the memory a program loads into. That is about 63 KB of the 640.
+
+**A gate found the one sum.** `t_megagrid` flags a segment built off
+kern_mega's 8-paragraph grid in any `OS88_HIGH` package. It found
+`w16e_paste`'s `inc ax`, a header-skipping step. That sum is on a VIRTUAL
+paragraph, which `W16TOSEL` turns into a selector through the map. It is
+registered in `tests/megagrid.txt` with that reason.
+
+**Seen.** SELTEST now prints where WIN16 runs: an import's far pointer
+points into WIN16's image, so `GetSelectorBase` of it is the image's base.
+Run on the dev kern_mega, it reads `00F9D000`, near the top of a 16 MB
+machine, with 0 wrong. BIG, Minesweeper 3.1 and Paintbrush run as before.
