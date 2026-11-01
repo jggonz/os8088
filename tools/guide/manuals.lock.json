@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "1a5a2882b",
+  "stamped": "7921eee05",
   "strings": "793f7336919645af",
-  "why": "S22: program selectors are fresh, recorded windows"
+  "why": "S23 batch 4: waveIn (SPEC.md 124.32.5)"
  },
  "WIN16_TXT": {
   "sources": [
