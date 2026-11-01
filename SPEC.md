@@ -130852,9 +130852,20 @@ of it anyway.
 
 ### 75.2 `OSAPI_WM_CLOSE` — and it is DEFERRED (API 0x0368)
 
-`wm_close_req` (BX = a window of the caller's) records the window in one word;
-`wm_close_pass`, in the UI task's idle section beside `fdlg_reap`, spends it.
-One compare per pass when nothing is pending, which is nearly always.
+`wm_close_req` (BX = a window of the caller's) sets the window's SLOT's bit in
+one word, `wm_clreq`; `wm_close_pass`, in the UI task's idle section beside
+`fdlg_reap`, spends every bit set, the lowest slot first. One compare per pass
+when nothing is pending, which is nearly always.
+
+**Any number of closes can wait at once** (§75.2.1). The word held one window
+POINTER until WIN16's S21 (§124, docs/plans/WIN16-ANY-PLAN.md), so a second
+request before the UI's next pass replaced the first, and that window stayed
+open: S13 saw it when several
+Windows programs started in one autostart pass left DOS windows behind, and
+one WIN16 instance ending several programs closes windows in exactly such a
+burst. A bit per slot is the queue with no length to choose: `MAX_WIN` is 12
+on kern_big and 6 on kern_small, both under 16, which `wm.inc` asserts, and
+the word it lives in was already there.
 
 **The deferral is the contract, not an implementation detail.** The caller is
 a package's own callback — typically its answer to the alert its negotiator
@@ -130872,10 +130883,10 @@ would be a loop every application would have to break with a latch of its own,
 so "close me, no more questions" lives in one place rather than in every
 package.
 
-Two guards: the request is cleared **before** the close, so nothing it reaches
-can see one that has already been spent, and `wm_destroy` clears a request
-naming the window it is destroying, so a slot that died in between cannot be
-closed through a pointer that now means a different window. The pass tests
+Two guards: each bit is cleared **before** its close, so nothing it reaches
+can see a request that has already been spent, and `wm_destroy` clears the
+bit of the slot it is freeing, so a window that died in between cannot have
+its slot's next tenant closed in its place. The pass tests
 `W_FLAGS` bit 0 and not bit 1 — a minimized window is closable, which is what
 the dock's context menu already does.
 
@@ -130884,7 +130895,24 @@ guard is a write `wm_destroy` makes with the lock held, so a pass that took the
 request and then waited for the lock had already emptied the word the
 cancellation was going to be written into — the one interval that guard cannot
 reach. The lock-free part is the `cmp` alone, which is what keeps this one
-compare per idle pass.
+compare per idle pass. The lock is taken again for each bit, so a burst of
+closes does not hold it across all of them. A request sets its bit with one
+`or` into memory and `wm_destroy` clears one with one `and`, so neither can
+be torn by an interrupt between a read and a write.
+
+#### 75.2.1 Measured
+
+**Resident cost: 20 bytes of `.text` on both kernels and no byte of RAM**
+(`tools/kernsize.py`): the word is the one that held the pointer, and no rung
+is crossed, though kern_small's image rung has 1 byte left after it. The pass
+walks the records and their bits together, so it needs neither a division nor
+`wm_idx2ptr`, and its empty case is the compare `ui.inc` makes before calling
+it. `wm_destroy`'s clear is two bytes shorter than the pointer compare it
+replaced, which keeps `ui_task` and `wm_paint_all` where `t_hotpar` wants
+them.
+
+**Rows:** `dispclose`, `dispclose-small` and `deskclose` close one window at
+a time through it; `win16desk` and S21's `win16tasks` (§124) close several.
 
 ### 75.3 The standard alert — `os88ui_ask`, and it is NOT in the kernel
 
