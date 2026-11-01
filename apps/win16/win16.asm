@@ -359,6 +359,7 @@ section .w16dlg
     W16BSS w16mm_wo, 2          ; the HWAVEOUT open, 0 none (124.32.3),
     W16BSS w16mm_wq, 2          ;   and 1 while a block of it is queued
     W16BSS w16mm_mci, 2         ; MCI's block, 0 none yet (124.32.4)
+    W16BSS w16mm_wi, 2          ; the HWAVEIN open, 0 none (124.32.5)
 %endif
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     ; --- S16: the DOS (SPEC.md 124.21) ---
@@ -1392,7 +1393,9 @@ w16_freeprog:
     call w16_dlgout
 %ifdef PKG_MEGA
     cmp word [w16mm_wo], 0          ; waveOut's stream closed (124.32.3),
-    jne .wo                         ;   MCI's block forgotten (124.32.4)
+    jne .wo                         ;   MCI's block forgotten (124.32.4),
+    cmp word [w16mm_wi], 0          ;   waveIn's ring let go (124.32.5)
+    jne .wo
     cmp word [w16mm_mci], 0
     je .nowo
 .wo:

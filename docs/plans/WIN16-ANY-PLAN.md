@@ -1521,6 +1521,30 @@ its table goes in the diary, so the reach is measured, not claimed.
       callers one selector.
     - [ ] *Batch 4: `waveIn`, `timeSetEvent`, `midiOut`*; SOUNDREC and
       MPLAYER.
+      - [x] `waveIn` (124.32.5): one device over SOUND.DRV's external
+        record ring, 16 KB in a DMA claim of WIN16's own, filled into the
+        program's queue on WIN16's turns; half-duplex against `waveOut`,
+        `sndPlaySound` and MCI. New fixture `WITEST.EXE`. **Seen
+        2026-11-01 on a dev kern_mega with an SB16:** "witest: 0 wrong,
+        waveIn 1, start 0, captured 0, recorded 0". QEMU's SB16 sends no
+        capture interrupt, so both blocks come back from the reset empty,
+        as 124.32.5 says. Recording real sound is a 86Box `386-sound` (or
+        hardware) look. MMTEST and MCITEST still 0 wrong. Arm: 238 bytes
+        of room.
+      - **Found on the way, and not waveIn's:** on kern_mega with
+        `SOUND.DRV` loaded, any WIN16 program whose first MessageBox comes
+        two seconds after the last disk read dies. A probe that waits and
+        then calls MessageBox, and makes no MMSYSTEM call, shows it: at
+        500 ms it passes; at 2,000 and 4,000 ms it fails, with STACK
+        OVERFLOW TASK 00 on the smsw kernel and the sound tick's FAULT 0D
+        on the d1 one. Without SOUND.DRV it passes, and on kern_big it
+        passes with it. The library part is fetched from a floppy whose
+        motor has stopped. The BIOS fallback's spin-up wait takes IRQ0s,
+        and SOUND.DRV's tick runs on top of them on the UI task's
+        512-byte stack. A local prototype with a 1 KB `STK0_SIZE` on
+        kern_mega passes all four probes. There the stack's high-water
+        mark read 499 bytes. A kernel decision for the owner;
+        uncommitted.
   - **Verification:** `make test-snd`'s capture; 86Box `386-sound` and
     `386-mega-cdrom` to listen to.
 

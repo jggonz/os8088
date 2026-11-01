@@ -280,8 +280,11 @@ w16mm_caps:
     pop si
     cmp cx, 44                      ; dwFormats and wChannels
     jb .ok
+    cmp dl, SND_CAP_PCM_IN          ; waveIn: 8-bit mono at 11 kHz alone
+    mov ax, 1
+    mov dx, ax
+    je .f3
     mov ax, 0x0011                  ; 8-bit mono at 11 and 22 kHz
-    mov dx, 1
     test si, SND_CAP_PCM_HI
     jz .f1
     or ax, 0x0100                   ; ...and 44
@@ -1643,9 +1646,10 @@ W16SYS w16mm_woclose
 ; waveOutPrepareHeader (MMSYSTEM.406) - args: +0 wSize, +2 lpWaveHdr, +6
 ; hWaveOut: WHDR_PREPARED. 0
 W16SYS w16mm_woprep
+    call w16mm_wargh                ; DX:CX = the block
+w16mm_prep:
     push si
     push ds
-    call w16mm_wargh                ; DX:CX = the block
     jc .out
     mov ds, dx
     mov si, cx
@@ -1660,9 +1664,10 @@ W16SYS w16mm_woprep
 ; waveOutUnprepareHeader (MMSYSTEM.407) - args as Prepare's: WHDR_PREPARED
 ; cleared. 0, or WAVERR_STILLPLAYING for a queued block
 W16SYS w16mm_wounprep
+    call w16mm_wargh
+w16mm_unprep:
     push si
     push ds
-    call w16mm_wargh
     jc .out
     mov ds, dx
     mov si, cx
@@ -1760,6 +1765,17 @@ W16SYS w16mm_wopos
     mov cl, [es:WO_SH]
     mov bx, [es:WO_RATE]
     pop ds                          ; DS:SI = the MMTIME
+    call w16mm_tpos
+.out:
+    pop ds
+    pop si
+    xor dx, dx
+    ret
+
+; w16mm_tpos - DS:SI = an MMTIME, DX:AX = bytes, CL = a frame's shift, BX =
+; frames a second: the time written as TIME_BYTES, TIME_SAMPLES or TIME_MS,
+; any other kind as TIME_BYTES and wType saying so. AX = 0
+w16mm_tpos:
     cmp word [si], 2                ; TIME_SAMPLES
     je .smp
     cmp word [si], 1                ; TIME_MS
@@ -1776,10 +1792,6 @@ W16SYS w16mm_wopos
     mov [si + 2], ax
     mov [si + 4], dx
     xor ax, ax
-.out:
-    pop ds
-    pop si
-    xor dx, dx
     ret
 
 ; waveOutGetID (MMSYSTEM.420) - args: +0 lpuDeviceID, +4 hWaveOut: 0, the
@@ -1865,6 +1877,640 @@ w16mm_werrs:
     db 33, 'The sound is still playing.', 0
     db 34, 'The wave header was not prepared.', 0
     db 0xFF
+
+; =============================================================================
+; waveIn (124.32.5): one device over SOUND.DRV's external record ring
+; (§34.6.4). The HWAVEIN is a fixed block of the program's heap; the ring is a
+; DMA claim of WIN16's own, 16 KB and its two control words, that the card
+; writes in place. The queue is the program's WAVEHDRs, linked through
+; lpNext, filled from the ring on WIN16's turns.
+; =============================================================================
+
+WH_REC      equ 8                   ; WAVEHDR: dwBytesRecorded
+
+WI_SIG      equ 0                   ; W16MM_ISIG
+WI_SELF     equ 2                   ; the HWAVEIN (WO_SELF's place: w16mm_wnote)
+WI_HAND     equ 4                   ; the stream's handle
+WI_OPEN     equ 5                   ; 1 while the stream is open
+WI_FL       equ 6                   ; WIF_*
+WI_CBT      equ 7                   ; the callback's kind (WO_CBT's place)
+WI_RSEG     equ 8                   ; the ring's segment
+WI_CAP      equ 10                  ; the card's count, last read
+WI_RD       equ 12                  ; ...and how much of it is copied or lost
+WI_RATE     equ 14                  ; samples a second
+WI_HEAD     equ 16                  ; the queue: its first block
+WI_CB       equ 20                  ; dwCallback (WO_CB's place)
+WI_POS      equ 24                  ; bytes captured since the open or a reset
+WI_TAIL     equ 28                  ; the queue's last block
+WI_LEN      equ 32
+WIF_START   equ 1
+W16MM_ISIG  equ 0x4957
+W16MM_IRL   equ 16384               ; the ring, RL's code 2
+W16MM_ILAG  equ W16MM_IRL - 2048    ; more unread than this: overwritten
+MM_WIM_OPEN     equ 0x3BE
+MM_WIM_CLOSE    equ 0x3BF
+MM_WIM_DATA     equ 0x3C0
+MMSYSERR_ERROR  equ 1
+
+; waveInOpen (MMSYSTEM.504) - args: +0 dwFlags, +4 dwInstance, +8 dwCallback,
+; +12 lpFormat, +16 wDeviceID, +18 lphWaveIn: 0 and the HWAVEIN, or why not
+W16SYS w16mm_wiopen
+    push si
+    push di
+    call OSAPI_SND_CAPS             ; AX = the caps word (BX and DX its too)
+    mov si, ax
+    ICALL w16_args
+    mov ax, MMSYSERR_BADDEVICEID
+    test si, SND_CAP_PCM_IN
+    jz .out
+    mov cx, [es:bx + 16]
+    inc cx
+    cmp cx, 1                       ; 0, or WAVE_MAPPER (-1)
+    ja .out
+    push es
+    les di, [es:bx + 12]
+    call w16mm_wifmt                ; DX = the rate
+    pop es
+    mov cx, WAVERR_BADFORMAT
+    jc .err
+    test byte [es:bx], 1            ; WAVE_FORMAT_QUERY
+    jnz .ok
+    mov cx, MMSYSERR_ALLOCATED
+    cmp word [w16mm_wi], 0
+    jne .err
+    cmp word [w16mm_wo], 0          ; half-duplex: the output device open
+    jne .err
+    mov si, [es:bx + 8]             ; DI:SI = dwCallback
+    mov di, [es:bx + 10]
+    mov cl, [es:bx + 2]
+    and cl, 7
+    call w16mm_wimake               ; ES = the state, AX = the handle
+    jc .out
+    push es
+    push ax
+    ICALL w16_args
+    les di, [es:bx + 18]
+    mov cx, es
+    or cx, di
+    pop ax
+    jz .nop
+    mov [es:di], ax
+.nop:
+    pop es
+    mov ax, MM_WIM_OPEN
+    xor cx, cx
+    xor dx, dx
+    call w16mm_wnote
+.ok:
+    xor ax, ax
+    jmp short .out
+.err:
+    mov ax, cx
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; waveInClose (MMSYSTEM.505) - args: +0 hWaveIn: 0, or WAVERR_STILLPLAYING
+; while a block is queued
+W16SYS w16mm_wiclose
+    call w16mm_iarg1
+    jc .out
+    call w16mm_wipoll
+    mov ax, WAVERR_STILLPLAYING
+    cmp word [es:WI_HEAD + 2], 0
+    jne .out
+    mov ax, MM_WIM_CLOSE
+    xor cx, cx
+    xor dx, dx
+    call w16mm_wnote
+    call w16mm_wikill
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+
+; waveInPrepareHeader, waveInUnprepareHeader (MMSYSTEM.506, 507) - args +0
+; wSize, +2 lpWaveInHdr, +6 hWaveIn: waveOut's (w16mm_prep, w16mm_unprep)
+W16SYS w16mm_wiprep
+    call w16mm_iargh
+    jmp w16mm_prep
+W16SYS w16mm_wiunprep
+    call w16mm_iargh
+    jmp w16mm_unprep
+
+; waveInAddBuffer (MMSYSTEM.508) - args as Prepare's: the block queued, empty,
+; and what the card has captured copied. 0, or why not
+W16SYS w16mm_wiadd
+    push si
+    push ds
+    call w16mm_iargh                ; DX:CX = the block
+    jc .out
+    mov ds, dx
+    mov si, cx
+    mov ax, WAVERR_UNPREPARED
+    test byte [si + WH_FLAGS], WHDR_PREPARED
+    jz .out
+    mov ax, WAVERR_STILLPLAYING
+    test byte [si + WH_FLAGS], WHDR_INQUEUE
+    jnz .out
+    and byte [si + WH_FLAGS], ~WHDR_DONE & 0xFF
+    or byte [si + WH_FLAGS], WHDR_INQUEUE
+    xor ax, ax
+    mov [si + WH_REC], ax
+    mov [si + WH_REC + 2], ax
+    mov [si + WH_NEXT], ax
+    mov [si + WH_NEXT + 2], ax
+    lds si, [es:WI_TAIL]            ; after the last, or the first
+    mov ax, ds
+    or ax, ax
+    jz .first
+    mov [si + WH_NEXT], cx
+    mov [si + WH_NEXT + 2], dx
+    jmp short .tail
+.first:
+    mov [es:WI_HEAD], cx
+    mov [es:WI_HEAD + 2], dx
+.tail:
+    mov [es:WI_TAIL], cx
+    mov [es:WI_TAIL + 2], dx
+    pop ds
+    push ds
+    call w16mm_wipoll
+    xor ax, ax
+.out:
+    pop ds
+    pop si
+    xor dx, dx
+    ret
+
+; waveInStart (MMSYSTEM.509) - args: +0 hWaveIn: the stream opened, verb 4
+; with SND_OPENF_EXT into the ring, and the tick asked for. 0, or
+; MMSYSERR_ALLOCATED when the card is busy, MMSYSERR_ERROR when it cannot
+; capture in place
+W16SYS w16mm_wistart
+    call w16mm_iarg1
+    jc .ret
+    test byte [es:WI_FL], WIF_START
+    jnz .ok
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call OSAPI_SND_CAPS             ; AX = the caps word (BX and DX its too)
+    mov bx, ax
+    mov ah, (2 << SND_OPENF_RLSH) | SND_OPENF_RING | SND_OPENF_EXT
+    test bl, SND_CAP_EXTBLK
+    jz .o
+    or ah, 2 << SND_OPENF_BLKSH     ; 512-byte blocks
+.o:
+    mov al, 4
+    xor si, si
+    mov di, [es:WI_RSEG]
+    xor cx, cx
+    mov dx, [es:WI_RATE]
+    call w16mm_snd                  ; AL = 0 and AH = the handle, else why
+    or al, al
+    jnz .no
+    mov [es:WI_HAND], ah
+    mov byte [es:WI_OPEN], 1
+    or byte [es:WI_FL], WIF_START
+    xor ax, ax                      ; the card's count starts at 0
+    mov [es:WI_CAP], ax
+    mov [es:WI_RD], ax
+    mov byte [w16mm_wq], 1
+    ICALL w16_tarm
+    jmp short .out
+.no:
+    mov ah, al
+    mov al, MMSYSERR_ALLOCATED
+    cmp ah, 1                       ; busy
+    je .out
+    mov al, MMSYSERR_ERROR
+.out:
+    xor ah, ah
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    jmp short .ret
+.ok:
+    xor ax, ax
+.ret:
+    xor dx, dx
+    ret
+
+; waveInStop (MMSYSTEM.510) - args: +0 hWaveIn: what is captured copied, the
+; stream closed, the block being filled returned if it holds anything. 0
+W16SYS w16mm_wistop
+    call w16mm_iarg1
+    jc .out
+    call w16mm_wipoll
+    call w16mm_wiend
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+
+; waveInReset (MMSYSTEM.511) - args: +0 hWaveIn: stopped, every block
+; returned, the position 0. 0
+W16SYS w16mm_wireset
+    call w16mm_iarg1
+    jc .out
+    call w16mm_wipoll
+    call w16mm_wihalt
+.lp:
+    cmp word [es:WI_HEAD + 2], 0
+    je .z
+    call w16mm_wiret
+    jmp short .lp
+.z:
+    xor ax, ax
+    mov [es:WI_POS], ax
+    mov [es:WI_POS + 2], ax
+.out:
+    xor dx, dx
+    ret
+
+; waveInGetPosition (MMSYSTEM.512) - args: +0 wSize, +2 lpmmt, +6 hWaveIn:
+; the bytes captured while started, as waveOutGetPosition answers. 0
+W16SYS w16mm_wipos
+    push si
+    push ds
+    call w16mm_iargh                ; DX:CX = the MMTIME
+    jc .out
+    call w16mm_wipoll
+    mov si, cx
+    mov ds, dx
+    mov ax, [es:WI_POS]
+    mov dx, [es:WI_POS + 2]
+    xor cl, cl                      ; 8-bit mono: a sample is a byte
+    mov bx, [es:WI_RATE]
+    call w16mm_tpos
+.out:
+    pop ds
+    pop si
+    xor dx, dx
+    ret
+
+; waveInGetID (MMSYSTEM.513) - args: +0 lpuDeviceID, +4 hWaveIn: 0, the one
+; device
+W16SYS w16mm_wiid
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    push es
+    call w16mm_wist
+    pop es
+    mov ax, MMSYSERR_INVALHANDLE
+    jc .out
+    les di, [es:bx]
+    mov word [es:di], 0
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    ret
+
+; w16mm_wifmt - ES:DI = a PCMWAVEFORMAT: CF=0 DX = its rate when it is 8-bit
+; mono PCM at 4,000 to 15,000 Hz, the record verb's; CF=1 not. Keeps the rest
+w16mm_wifmt:
+    mov dx, es
+    or dx, di
+    jz .no
+    cmp word [es:di], 1             ; WAVE_FORMAT_PCM
+    jne .no
+    cmp word [es:di + 2], 1         ; nChannels
+    jne .no
+    cmp word [es:di + 14], 8        ; wBitsPerSample
+    jne .no
+    cmp word [es:di + 6], 0
+    jne .no
+    mov dx, [es:di + 4]             ; nSamplesPerSec
+    cmp dx, 4000
+    jb .no
+    cmp dx, 15000
+    ja .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; w16mm_wimake - DX = the rate, CL = the callback's kind, DI:SI = dwCallback:
+; the ring claimed and an HWAVEIN made. CF=0 ES = its state, AX = its handle,
+; and it is [w16mm_wi]; CF=1 AX = MMSYSERR_NOMEM. Keeps BX, CX, DX
+w16mm_wimake:
+    push bx
+    push cx
+    push dx
+    push bp
+    mov bp, dx                      ; BP = the rate
+    push cx
+    mov ax, W16MM_IRL / 1024 + 1    ; the ring and its words, all the head
+    mov cx, ax
+    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = its segment
+    pop cx
+    jc .nomem
+    push dx
+    push cx
+    mov ax, WI_LEN
+    xor dx, dx
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew                  ; AX = the handle, DX = the block
+    pop cx
+    pop bx                          ; BX = the ring
+    or ax, ax
+    jz .noblk
+    W16SEG es, dx
+    mov word [es:WI_SIG], W16MM_ISIG
+    mov [es:WI_SELF], ax
+    mov [es:WI_RSEG], bx
+    mov [es:WI_RATE], bp
+    mov [es:WI_CBT], cl
+    mov [es:WI_CB], si
+    mov [es:WI_CB + 2], di
+    mov [w16mm_wi], ax
+    clc
+    jmp short .out
+.noblk:
+    mov dx, bx
+    call OSAPI_MEM_FREE
+.nomem:
+    mov ax, MMSYSERR_NOMEM
+    stc
+.out:
+    pop bp
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16mm_wikill - ES = the state: the stream closed BEFORE the ring is let go,
+; the state freed. No notice. Keeps all but ES
+w16mm_wikill:
+    push ax
+    push dx
+    call w16mm_wihalt
+    mov dx, [es:WI_RSEG]
+    call OSAPI_MEM_FREE
+    mov word [es:WI_SIG], 0
+    mov ax, [es:WI_SELF]
+    ICALL w16_gfreeh
+    mov word [w16mm_wi], 0
+    pop dx
+    pop ax
+    ret
+
+; w16mm_wihalt - ES = the state: the stream closed if it is open; stopped.
+; Keeps all
+w16mm_wihalt:
+    and byte [es:WI_FL], ~WIF_START & 0xFF
+    cmp byte [es:WI_OPEN], 0
+    je .ret
+    push ax
+    mov al, 2
+    mov ah, [es:WI_HAND]
+    call w16mm_snd
+    mov byte [es:WI_OPEN], 0
+    pop ax
+.ret:
+    ret
+
+; w16mm_wiend - ES = the state: halted, and the block at the head returned if
+; it holds anything (waveInStop's). Keeps all
+w16mm_wiend:
+    call w16mm_wihalt
+    push ax
+    push si
+    push ds
+    lds si, [es:WI_HEAD]
+    mov ax, ds
+    or ax, ax
+    jz .out
+    mov ax, [si + WH_REC]
+    or ax, [si + WH_REC + 2]
+.out:
+    pop ds
+    jz .ret
+    call w16mm_wiret
+.ret:
+    pop si
+    pop ax
+    ret
+
+; w16mm_wiret - ES = the state, a block queued: the head returned, WHDR_DONE
+; and not WHDR_INQUEUE, and MM_WIM_DATA sent. Keeps all
+w16mm_wiret:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push ds
+    lds si, [es:WI_HEAD]
+    and byte [si + WH_FLAGS], ~WHDR_INQUEUE & 0xFF
+    or byte [si + WH_FLAGS], WHDR_DONE
+    mov cx, si
+    mov dx, ds
+    mov ax, [si + WH_NEXT]
+    mov bx, [si + WH_NEXT + 2]
+    pop ds
+    push ds
+    mov [es:WI_HEAD], ax
+    mov [es:WI_HEAD + 2], bx
+    or bx, bx
+    jnz .n
+    mov [es:WI_TAIL], bx
+    mov [es:WI_TAIL + 2], bx
+.n:
+    mov ax, MM_WIM_DATA
+    call w16mm_wnote                ; DX:CX = the block
+    pop ds
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16mm_wipoll - ES = the state: the card's count read and what it captured
+; copied into the queue; a stream the watchdog ended, or that is gone,
+; stopped as waveInStop stops it. Keeps all
+w16mm_wipoll:
+    cmp byte [es:WI_OPEN], 0
+    je .ret
+    push ax
+    mov al, 3
+    mov ah, [es:WI_HAND]
+    call w16mm_snd                  ; AX = the state
+    call w16mm_wigrab
+    cmp ax, SND_ST_ENDED
+    jb .out
+    cmp ax, SND_ST_STALE            ; gone: its handle is not ours to close
+    jne .end
+    mov byte [es:WI_OPEN], 0
+.end:
+    call w16mm_wiend
+.out:
+    pop ax
+.ret:
+    ret
+
+; w16mm_wigrab - ES = the state, the stream open: the card's count folded
+; into the position, and the ring copied into the blocks at the queue's head,
+; each one full returned. With no block queued what it captured is lost; past
+; W16MM_ILAG unread the oldest is. Keeps all
+w16mm_wigrab:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    mov ds, [es:WI_RSEG]
+    mov dx, [W16MM_IRL + SND_EXT_CONS]  ; DX = the card's count
+    pop ds
+    push ds
+    mov ax, dx
+    sub ax, [es:WI_CAP]
+    mov [es:WI_CAP], dx
+    add [es:WI_POS], ax
+    adc word [es:WI_POS + 2], 0
+    mov ax, dx
+    sub ax, [es:WI_RD]
+    cmp ax, W16MM_ILAG
+    jbe .lp
+    sub dx, W16MM_ILAG
+    mov [es:WI_RD], dx              ; overwritten: skipped
+.lp:
+    pop ds
+    push ds
+    mov ax, [es:WI_HEAD + 2]
+    or ax, ax
+    jz .lost
+    lds si, [es:WI_HEAD]
+    mov ax, [si + WH_LEN]           ; AX = the room left in it, 64 KB at most
+    mov bx, [si + WH_LEN + 2]
+    sub ax, [si + WH_REC]
+    sbb bx, [si + WH_REC + 2]
+    jc .full
+    or bx, bx
+    jz .rm
+    mov ax, 0xFFFF
+.rm:
+    or ax, ax
+    jz .full
+    mov cx, [es:WI_CAP]
+    sub cx, [es:WI_RD]              ; CX = unread
+    jz .out
+    cmp cx, ax
+    jbe .r1
+    mov cx, ax
+.r1:
+    mov di, [si + WH_DATA]          ; BX:DI = where it goes
+    mov bx, [si + WH_DATA + 2]
+    add di, [si + WH_REC]
+    mov ax, [si + WH_REC + 2]
+    adc ax, 0
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add bx, ax                      ; __AHINCR, 8, for each 64 KB
+    mov ax, di
+    neg ax                          ; ...to its 64 KB's end
+    jz .r2
+    cmp cx, ax
+    jbe .r2
+    mov cx, ax
+.r2:
+    mov ax, [es:WI_RD]
+    and ax, W16MM_IRL - 1           ; AX = the ring's place
+    mov dx, W16MM_IRL
+    sub dx, ax
+    cmp cx, dx                      ; ...to the ring's end
+    jbe .r3
+    mov cx, dx
+.r3:
+    add [si + WH_REC], cx
+    adc word [si + WH_REC + 2], 0
+    add [es:WI_RD], cx
+    push es
+    mov si, ax
+    mov ds, [es:WI_RSEG]
+    mov es, bx
+    cld
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
+    pop es
+    jmp .lp
+.full:
+    pop ds
+    push ds
+    call w16mm_wiret
+    jmp .lp
+.lost:
+    mov ax, [es:WI_CAP]
+    mov [es:WI_RD], ax
+.out:
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16mm_iarg1, w16mm_iargh - waveOut's w16mm_warg1 and w16mm_wargh, for an
+; HWAVEIN
+w16mm_iarg1:
+    push bx
+    ICALL w16_args
+    mov ax, [es:bx]
+    pop bx
+    jmp short w16mm_iargs
+w16mm_iargh:
+    push bx
+    ICALL w16_args
+    mov cx, [es:bx + 2]
+    mov dx, [es:bx + 4]
+    mov ax, [es:bx + 6]
+    pop bx
+    or dx, dx
+    jnz w16mm_iargs
+    mov ax, MMSYSERR_INVALPARAM
+    stc
+    ret
+w16mm_iargs:
+    call w16mm_wist
+    jnc .ret
+    mov ax, MMSYSERR_INVALHANDLE
+.ret:
+    ret
+
+; w16mm_wist - AX = an HWAVEIN -> ES = its state, CF=0; CF=1 it is not the
+; one open. Keeps all but ES
+w16mm_wist:
+    or ax, ax
+    jz .no
+    cmp ax, [w16mm_wi]
+    jne .no
+    W16SEG es, ax                   ; a fixed block: its handle is its place
+    cmp word [es:WI_SIG], W16MM_ISIG
+    jne .no
+    clc
+    ret
+.no:
+    stc
+    ret
 
 ; sndPlaySound (MMSYSTEM.2) - args: +0 wFlags, +2 lpszSound: the WAV played
 ; through waveOut's path, the device closing itself when it ends. TRUE, or
@@ -1983,22 +2629,36 @@ w16mm_wtick:
 .mci:
     call w16mm_mtick                ; AL = 1 while a device plays
     or [w16mm_wq], al
+    mov ax, [w16mm_wi]              ; waveIn's copy while it is started
+    call w16mm_wist
+    jc .out
+    call w16mm_wipoll
+    test byte [es:WI_FL], WIF_START
+    jz .out
+    mov byte [w16mm_wq], 1
+.out:
     pop es
     pop ax
     ret
 
-; w16mm_wend - the program's end (w16_freeprog): its device closed, with no
+; w16mm_wend - the program's end (w16_freeprog): its devices closed, with no
 ; notice, and MCI's forgotten. Keeps all
 w16mm_wend:
     push ax
     push es
     mov ax, [w16mm_wo]
     call w16mm_wst
-    jc .out
+    jc .in
     call w16mm_wkill
+.in:
+    mov ax, [w16mm_wi]
+    call w16mm_wist
+    jc .out
+    call w16mm_wikill               ; the card stopped, then the ring freed
 .out:
     xor ax, ax
     mov [w16mm_wo], ax
+    mov [w16mm_wi], ax
     mov [w16mm_wq], ax
     mov [w16mm_mci], ax             ; MCI's block goes with the arenas
     pop es
@@ -2119,6 +2779,12 @@ w16mm_wfmt:
 ; halved down to two halves. CF=0 ES = its state, AX = its handle, and it is
 ; [w16mm_wo]; CF=1 AX = why not. Keeps BX, CX, DX
 w16mm_wmake:
+    cmp word [w16mm_wi], 0          ; half-duplex: the input device open
+    je .go                          ;   (124.32.5)
+    mov ax, MMSYSERR_ALLOCATED
+    stc
+    ret
+.go:
     push bx
     push cx
     push dx

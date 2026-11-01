@@ -3637,3 +3637,73 @@ selector could be one of WIN16's own. Program selectors are now made by
 `SEG_AT`, which never matches, and recorded in a 16-row table. Only a
 recorded selector is re-aimed or freed (SPEC.md 124.31.6). BIG still reads
 its 128 KB huge block back with 0 wrong.
+
+## 2026-11-01: S23 batch 4, waveIn
+
+Sound Recorder is the target. Of the eleven imports the census says it
+lacks, eight are `waveIn`'s. They are 504 to 512; 513 and 514 come with
+them.
+
+**The ring.** `SOUND.DRV` offers two ways to record:
+- Verb 4 into a grant of its pool is linear and holds 20 KB at most, under
+  two seconds. Sound Recorder records for up to a minute.
+- Verb 4 with `SND_OPENF_EXT` captures into a ring of the caller's own, in
+  place, and writes a free-running count after it. WaveRack records that
+  way.
+
+WIN16 takes the second: 16 KB and the two control words, in one
+`OSAPI_MEM_CLAIM_DMA_HI` claim made at `waveInOpen`. On WIN16's tick, the
+copy moves whatever the count says is new into the program's `WAVEHDR`s,
+one after another. A full block is returned with `MM_WIM_DATA`. With no
+block queued, what the card captured is lost, as on Windows. A copy that
+falls more than the ring less one block behind skips to what the card has
+not yet overwritten. The card is half-duplex: each side refuses while the
+other is open.
+
+QEMU's SB16 never sends a capture interrupt, so the driver's watchdog ends
+the stream and nothing is recorded. The fixture is written to that:
+- both blocks must come back exactly once, from the stop or the reset;
+- neither may hold more than its length;
+- the second is begun only once the first is full;
+- the position is 0 after the reset.
+
+The box says how much was recorded, so the same fixture means something on a
+card that records.
+
+**What the look found instead.** WITEST died at its MessageBox every time,
+as a FAULT 0D at a nonsense address inside the dialog part, or as STACK
+OVERFLOW TASK 00. Cutting the fixture short sent the failure back and forth
+without settling on any one call. Under a debugger or an execution trace it
+passed, so it was about timing. The pattern was this:
+- a truncated copy passed when it reached its MessageBox quickly;
+- a copy that spent a few seconds first failed.
+
+A probe with no MMSYSTEM call at all shows it. It waits, then calls
+MessageBox:
+
+| wait | SOUND.DRV loaded | without it | kern_big, with it |
+|---|---|---|---|
+| 500 ms | passes | passes | - |
+| 2,000 ms | STACK OVERFLOW | passes | - |
+| 4,000 ms | STACK OVERFLOW | passes | passes |
+
+The MessageBox fetches the dialog part from the floppy. Two seconds after the
+last read, the BIOS has stopped the motor. On QEMU, kern_mega's native floppy
+code falls back to the BIOS, and the BIOS's spin-up wait takes IRQ0s with
+interrupts on. On kern_mega, `SOUND.DRV`'s IRQ0 tick then runs on top of all
+of that, on the UI task's 512-byte stack.
+
+A dump at the overflow shows nested kernel reflection frames below WIN16's
+own. A prototype kern_mega with a 1 KB `STK0_SIZE` passes all four probes:
+DL2000, DL4000, the truncated WITEST, and WITEST whole. Its stack's
+high-water mark read 499 bytes. So on that kernel, a 512-byte stack has no
+margin left.
+
+This is a kernel decision, so it is not committed. The waveIn look ran on
+that prototype: "witest: 0 wrong, waveIn 1, start 0, captured 0, recorded
+0". MMTEST and MCITEST still read 0 wrong.
+
+One mistake of my own also turned up. The half-duplex test went into
+`w16mm_wmake` ahead of the line that saves its format. That clobbered AL and
+AH and failed twelve of MMTEST's checks. Looking at the neighbouring
+fixtures, not only the new one, is what caught it.

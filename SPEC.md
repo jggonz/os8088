@@ -231313,8 +231313,75 @@ with no driver of its own:
     message box. It answers TRUE when the command was carried out.
 - `mciGetErrorString` copies Windows' sentence for each code above.
 
-#### 124.32.5 Planned *(S23 batch 4)*
+#### 124.32.5 `waveIn` *(S23 batch 4)*
 
-`waveIn` over the record verbs (§34.6), `timeSetEvent`, `CALLBACK_FUNCTION`'s
-call, and `midiOut` where `SOUND.DRV` has an MPU-401 (§34.13). SOUNDREC and
-MPLAYER are its look.
+One input device, device 0 (`WAVE_MAPPER` is the same one), over
+`SOUND.DRV`'s external record ring (§34.6.4), WaveRack's shape (§123.7). The
+grant pool's linear capture (§34.6) is not used: it holds 20 KB at most,
+under two seconds, and Sound Recorder records up to a minute.
+
+- **An `HWAVEIN` is a fixed global block of the program's heap**, as an
+  `HWAVEOUT` is: the stream's handle, the ring's segment, the counts, the
+  queue's ends and the callback. One is open at a time; a second
+  `waveInOpen` answers `MMSYSERR_ALLOCATED` (4).
+- **The card is half-duplex**: a `waveInOpen` while the output device is
+  open (by `waveOutOpen`, `sndPlaySound` or an MCI play) answers
+  `MMSYSERR_ALLOCATED`, and while the input device is open a
+  `waveOutOpen` answers it too, `sndPlaySound` answers FALSE and a
+  `waveaudio` play `MCIERR_WAVE_OUTPUTSINUSE`.
+- **`waveInOpen`** takes `WAVE_FORMAT_PCM`, one channel, 8 bits, 4,000 to
+  15,000 Hz, the record verb's range, and refuses anything else with
+  `WAVERR_BADFORMAT` (32). With `WAVE_FORMAT_QUERY` it answers that and
+  opens nothing. Without `SND_CAP_PCM_IN` it answers
+  `MMSYSERR_BADDEVICEID` (2), as `waveInGetNumDevs`' 0 says it would.
+  `waveInGetDevCaps` offers `WAVE_FORMAT_1M08` alone, 11,025 Hz.
+- **The ring** is 16 KB of WIN16's own, with its two control words, in one
+  `OSAPI_MEM_CLAIM_DMA_HI` claim taken by `waveInOpen` (`MMSYSERR_NOMEM`,
+  7, when there is no room) and freed by `waveInClose`. It is born pinned
+  and is never declared movable, because the card writes it in place. It is
+  1.1 s at 15,000 Hz.
+- **The stream** is opened by `waveInStart`: verb 4 with `SND_OPENF_EXT`,
+  the ring's size code, 512-byte blocks where the driver has
+  `SND_CAP_EXTBLK`, and CX = 0. A refusal answers `MMSYSERR_ALLOCATED`
+  when the card is busy and `MMSYSERR_ERROR` (1) otherwise, as on a
+  single-cycle DSP (a DSP 1.x), which cannot capture in place.
+  `waveInStop` and `waveInReset` close it.
+- **The queue is the program's own `WAVEHDR`s**, linked through `lpNext`.
+  `waveInAddBuffer` queues a prepared block (`WAVERR_UNPREPARED`, 34,
+  otherwise; `WAVERR_STILLPLAYING`, 33, for one already queued), with
+  `dwBytesRecorded` 0.
+- **The copy is made on WIN16's turns**: in `waveInAddBuffer`, in
+  `waveInGetPosition`, and on every tick while the device is started.
+  Whatever the card has captured since the last turn is copied from the
+  ring into the block at the head of the queue, then the next. A block
+  that is full gets `WHDR_DONE`, loses `WHDR_INQUEUE`, and its notice goes
+  out: `MM_WIM_DATA` (3C0h), `wParam` the `HWAVEIN`, `lParam` the
+  `WAVEHDR`, to the window or the task as for `waveOut`. `MM_WIM_OPEN`
+  (3BEh) and `MM_WIM_CLOSE` (3BFh) likewise.
+- **What the card captures with no block queued is lost**, as on Windows.
+  A program that does not return to its message loop for longer than
+  the ring less one 2 KB block loses the oldest of it: the copy skips to
+  what the card has not yet overwritten.
+- **`waveInStop`** copies what has been captured and closes the stream. The
+  block being filled is returned done with what it holds, if it holds
+  anything; empty blocks stay queued for the next `waveInStart`. A stream
+  the driver's watchdog ended, because no capture interrupt came, is
+  stopped the same way. QEMU's SB16 never sends one, so there a recording
+  stops after the watchdog's period with nothing recorded.
+- **`waveInReset`** stops, then returns every queued block done, each with
+  what it holds, and sets the position to 0.
+- **`waveInGetPosition`** answers the bytes the card has captured while
+  started since the open or the last reset, kept or not, in `TIME_BYTES`,
+  `TIME_SAMPLES` or `TIME_MS`; any other kind as `TIME_BYTES`.
+- `waveInPrepareHeader` and `waveInUnprepareHeader` are `waveOut`'s.
+  `waveInClose` with blocks queued answers `WAVERR_STILLPLAYING`.
+  `waveInGetErrorText` is `waveOutGetErrorText`. `waveInGetID` answers 0.
+  `waveInMessage` answers `MMSYSERR_NOTSUPPORTED`.
+- **At the program's end** the stream is closed before the ring's claim is
+  freed, so the card never writes into memory that is no longer the ring.
+- `waveaudio` still records nothing: its `record` is not a command here.
+
+#### 124.32.6 Planned *(S23 batch 4)*
+
+`timeSetEvent`, `CALLBACK_FUNCTION`'s call, and `midiOut` where `SOUND.DRV`
+has an MPU-401 (§34.13). SOUNDREC and MPLAYER are its look.

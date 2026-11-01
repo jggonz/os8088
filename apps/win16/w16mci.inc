@@ -2414,6 +2414,8 @@ w16mm_wvplay:
     mov ax, MCE_WINUSE
     cmp word [w16mm_wo], 0
     jne .ret
+    cmp word [w16mm_wi], 0          ; half-duplex (124.32.5)
+    jne .ret
     push si
     push es
     call OSAPI_SND_CAPS             ; AX = the caps word
