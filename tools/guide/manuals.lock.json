@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "14f85028f",
-  "strings": "9b482f039945275e",
-  "why": "S20b batch 2: MDI clients and children, frames and captions, FreeResource frees"
+  "stamped": "0b96f371f",
+  "strings": "e64cf165a824584a",
+  "why": "S20b batch 3a: MDI move, size, maximize, minimize"
  },
  "WIN16_TXT": {
   "sources": [
