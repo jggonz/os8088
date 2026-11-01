@@ -18,6 +18,9 @@
 ; offset used below.
 ; =============================================================================
 
+W16_NSEGV equ 10                    ; w16l_segv's words (w16api.inc checks
+%define W16_NSEGVP 10               ;   the segment equates' rows against it)
+
 NE_FLAGS   equ 0x0C             ; the NE header, as SPEC.md 124.3 lists it
 NE_AUTODATA equ 0x0E
 NE_HEAP    equ 0x10
@@ -1064,6 +1067,17 @@ w16_reloc1:
     ICALL w16k_getwinflags           ; AX (DX = 0)
     jmp .apply
 .ahinc:
+    mov dx, ax                      ; the segment equates: their paragraphs
+    sub dx, W16_SEGROW              ;   (SPEC.md 124.27.1)
+    cmp dx, W16_NSEGV
+    jae .ahi
+    push di
+    mov di, dx
+    shl di, 1
+    mov dx, [cs:w16l_segv + di]
+    pop di
+    jmp short .equate
+.ahi:
     mov dx, 0x1000                  ; __AHINCR and __AHSHIFT: their values
     cmp ax, W16_AHROW               ;   (SPEC.md 124.20.3)
     je .equate
@@ -1288,6 +1302,13 @@ w16_byname:
     pop cx
     pop bx
     ret
+
+; the segment equates' values, in their rows' order (W16_SEGROW, w16api.inc):
+; __ROMBIOS, __0000H, __0040H, __A000H, __B000H, __B800H, __C000H, __D000H,
+; __E000H, __F000H
+w16l_segv:                          ; (W16_NSEGV words, the file's head)
+    dw 0xF000, 0x0000, 0x0040, 0xA000, 0xB000, 0xB800, 0xC000, 0xD000
+    dw 0xE000, 0xF000
 
 section .text                       ; (w16_inrange is w16x87.inc's too)
 w16_bynm:                           ; module, ordinal, the name (pascal)

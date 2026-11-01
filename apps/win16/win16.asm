@@ -52,7 +52,8 @@ W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
 W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
-W16_MAXCLS   equ 8              ; classes (SPEC.md 124.8)
+W16_MAXCLS   equ 12             ; classes (SPEC.md 124.8; File Manager 3.0
+                                ;   registers 9, SPEC.md 124.27)
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
                                 ;   Editor's Advanced 54 beside 23 open)
@@ -2045,6 +2046,7 @@ w16_cputest:
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)
+%include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 9 (124.27)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's

@@ -226546,7 +226546,7 @@ as `?`.
 
 ### 124.8 USER: windows, the queue and the pump *(shipped in S3)*
 
-**Classes.** At most 8 (`W16_MAXCLS`). `RegisterClass` copies:
+**Classes.** At most 12 (`W16_MAXCLS`; 8 until File Manager's nine, 124.27.1). `RegisterClass` copies:
 
 - the name: at most 15 characters, compared without regard to case, as
   Windows does;
@@ -230008,3 +230008,50 @@ answer, its fields showed whatever its stack held: 3146 and 1036.
   the program runs; neither is discarded when memory runs short.
 - `GlobalCompact` and `GetFreeSpace` count discardable code but not
   discardable data or unused resources, which `GlobalAlloc` also discards.
+
+### 124.27 Windows inside a window: File Manager and Program Manager *(S20b, docs/plans/WIN16-ANY-PLAN.md)*
+
+*As a user, File Manager 3.0 opens its drive window, and Program Manager its
+groups.* Both are Multiple Document Interface programs. The frame is a
+top-level window with a menu. Its client holds one `MDICLIENT` window, and
+that holds the documents: File Manager's directory trees, Program Manager's
+groups. Each is an MDI CHILD, a child window with a caption, a frame, a
+system-menu box and minimize and maximize boxes, drawn and moved inside the
+client. WIN16's child windows had none of that.
+
+All of it is part 9's (124.24.1): the image had 1,279 bytes of room when it
+came. A part of its own, as the plan first said, would have spent a gate's
+bytes there. The image keeps what is in its paths already - a child's frame
+in the geometry, the press routing and the paint order - each a few bytes
+that call into the part.
+
+#### 124.27.1 The calls around it *(S20b batch 1)*
+
+Both programs import, besides MDI:
+
+| call | answer |
+|---|---|
+| `GetDriveType` | os8088's volume of that letter, through `OSAPI_VOL_KIND`: `DRIVE_REMOVABLE` (2) for a floppy, `DRIVE_FIXED` (3) for a hard disk, `DRIVE_REMOTE` (4) for a redirected volume (SPEC.md 62.9), 0 when there is none |
+| `InquireSystem` (SYSTEM.1) | 0: the timer's period, 54,925 µs. 1: the drive's type in both words, as Wine's `system.drv16` answers. File Manager lists the drives whose answer is not 0. SYSTEM joins the modules WIN16 knows by name |
+| `GetHeapSpaces` | DX the heap, 65,500, and AX its free part, scaled from `GetFreeSystemResources(0)`. Program Manager's About box shows the ratio |
+| `DirectResAlloc` | a moveable block of the size asked, as `GlobalAlloc` gives |
+| `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 9, kept until the program ends |
+| `LongPtrAdd` | real mode's answer: the pointer moved on by the count, normalised |
+| `GetNumTasks` | 1, until S21 |
+| `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE |
+| `GlobalFindAtom` | the atom `GlobalAddAtom` made of the name (124.25.10), or 0 |
+| `IsCharAlpha`, `IsCharAlphaNumeric`, `AnsiUpperBuff` | the ANSI letters: A-Z, a-z and C0h-FFh but D7h and F7h |
+| `GetIconID` | of an `RT_GROUP_ICON` block, the image `LoadIcon` would choose (124.18.4) |
+| `LoadIconHandler` | the `RT_ICON` resource itself, which is an icon here |
+| `FileCDR`, `DestroyCursor` | 1 |
+| `SetSysModalWindow`, `DragObject`, `AllocSelector`, `FreeSelector`, `GlobalDOSAlloc`, `GlobalDOSFree` | 0. Nothing is system-modal or dragged between windows. Real mode has no selectors and no DOS memory of its own to give; File Manager asks for both only when `GetWinFlags` says protected mode |
+
+**The segment equates are bound to their paragraphs.** `__ROMBIOS`,
+`__0000H`, `__0040H`, `__A000H`, `__B000H`, `__B800H`, `__C000H`,
+`__D000H`, `__E000H` and `__F000H` are constants a program loads, as
+`__AHINCR` is (124.20.3). In real mode each is its segment: File Manager
+reads `__ROMBIOS:00F8h` to look for a machine's ROM signature. They are rows
+of their own (`W16_SEGROW`), and the loader writes the value from
+`w16l_segv` in part 5.
+
+`W16_MAXCLS` is 12, up from 8: File Manager registers nine classes.

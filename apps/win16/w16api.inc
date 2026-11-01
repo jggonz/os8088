@@ -25,6 +25,7 @@ W16M_OLECLI   equ 8             ;   ...and OLE's two, which answer "not
 W16M_OLESVR   equ 9             ;   available" (124.24.7)
 W16M_LZEXPAND equ 10            ; an installer's two (124.24.8, 124.24.9)
 W16M_VER      equ 11
+W16M_SYSTEM   equ 12            ; SYSTEM.DRV's InquireSystem (124.27.1)
 
 w16_modnames:                   ; pascal strings, then 0
     db 6, 'KERNEL'
@@ -39,6 +40,7 @@ w16_modnames:                   ; pascal strings, then 0
     db 6, 'OLESVR'
     db 8, 'LZEXPAND'
     db 3, 'VER'
+    db 6, 'SYSTEM'
     db 0
 
 ; --- the export rows ----------------------------------------------------------
@@ -502,6 +504,49 @@ W16EXPORT W16M_USER,       483,     10, w16u_spi            ; SystemParametersIn
 W16EXPORT W16M_USER,       279,     0,  w16_ans0            ; OldSetDeskPattern()
 W16EXPORT W16M_USER,       284,     2,  w16u_freesysres     ; GetFreeSystemResources(word)
 W16EXPORT W16M_USER,       285,     4,  w16_ans1            ; SetDeskWallPaper(str)
+; File Manager 3.0 and Program Manager 3.0 (SPEC.md 124.27.1): the calls
+; around MDI, in part 9. One program is one task until S21, nothing is ever
+; dragged or system-modal, and real mode has no selectors and no DOS memory
+; of its own to hand out
+W16EXPORT W16M_KERNEL,     136,     2,  w16i_drvtype        ; GetDriveType(word)
+W16EXPORT W16M_SYSTEM,     1,       4,  w16i_inqsys         ; InquireSystem(word word)
+W16EXPORT W16M_KERNEL,     138,     2,  w16i_heapsp         ; GetHeapSpaces(word)
+W16EXPORT W16M_KERNEL,     152,     0,  w16_ans1            ; GetNumTasks()
+W16EXPORT W16M_KERNEL,     168,     6,  w16i_dresalloc      ; DirectResAlloc(word word word)
+W16EXPORT W16M_KERNEL,     130,     4,  w16_ans1            ; FileCDR(ptr)
+W16EXPORT W16M_KERNEL,     131,     0,  w16i_dosenv         ; GetDOSEnvironment()
+W16EXPORT W16M_KERNEL,     175,     2,  w16_ans0            ; AllocSelector(word)
+W16EXPORT W16M_KERNEL,     176,     2,  w16_ans0            ; FreeSelector(word)
+W16EXPORT W16M_KERNEL,     180,     8,  w16i_lpadd          ; LongPtrAdd(long long)
+W16EXPORT W16M_KERNEL,     184,     4,  w16_ans0            ; GlobalDOSAlloc(long)
+W16EXPORT W16M_KERNEL,     185,     2,  w16_ans0            ; GlobalDOSFree(word)
+W16EXPORT W16M_USER,       7,       6,  w16i_exitwin        ; ExitWindows(long word)
+W16EXPORT W16M_USER,       188,     2,  w16_ans0            ; SetSysModalWindow(word)
+W16EXPORT W16M_USER,       270,     4,  w16i_findatom       ; GlobalFindAtom(str)
+W16EXPORT W16M_USER,       433,     2,  w16i_isalpha        ; IsCharAlpha(word)
+W16EXPORT W16M_USER,       434,     2,  w16i_isalnum        ; IsCharAlphaNumeric(word)
+W16EXPORT W16M_USER,       437,     6,  w16i_upbuff         ; AnsiUpperBuff(str word)
+W16EXPORT W16M_USER,       455,     6,  w16i_iconid         ; GetIconID(word long)
+W16EXPORT W16M_USER,       456,     4,  w16i_ichandler      ; LoadIconHandler(word word)
+W16EXPORT W16M_USER,       458,     2,  w16_ans1            ; DestroyCursor(word)
+W16EXPORT W16M_USER,       464,     12, w16_ans0            ; DragObject(word word word word word word)
+; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
+; the loader to their values, as __AHINCR is (w16l_segv, in that order)
+W16_SEGROW equ W16NX
+%assign W16_SEGROWP W16NX
+W16EXPORT W16M_KERNEL,     173,     0,  w16x_never          ; __ROMBIOS
+W16EXPORT W16M_KERNEL,     183,     0,  w16x_never          ; __0000H
+W16EXPORT W16M_KERNEL,     193,     0,  w16x_never          ; __0040H
+W16EXPORT W16M_KERNEL,     174,     0,  w16x_never          ; __A000H
+W16EXPORT W16M_KERNEL,     181,     0,  w16x_never          ; __B000H
+W16EXPORT W16M_KERNEL,     182,     0,  w16x_never          ; __B800H
+W16EXPORT W16M_KERNEL,     195,     0,  w16x_never          ; __C000H
+W16EXPORT W16M_KERNEL,     179,     0,  w16x_never          ; __D000H
+W16EXPORT W16M_KERNEL,     190,     0,  w16x_never          ; __E000H
+W16EXPORT W16M_KERNEL,     194,     0,  w16x_never          ; __F000H
+%if W16NX - W16_SEGROWP != W16_NSEGVP
+  %error "w16l_segv and the segment equates' rows disagree"
+%endif
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put
