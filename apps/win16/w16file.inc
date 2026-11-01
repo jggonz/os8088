@@ -221,7 +221,11 @@ w16_i21dos:
     push word [w16_hflags]          ; interrupts as the host has them: a disk
     popf                            ;   is read
     cld
+    push word [w16_psp_]            ; the program's stack is where the int
+    mov ax, [w16_i21sp]             ;   left it: a discard's scan starts there
+    mov [w16_psp_], ax              ;   (SPEC.md 124.26.5)
     call w16_dosup
+    pop word [w16_psp_]
     cli
     pop es
     pop ds

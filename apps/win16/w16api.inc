@@ -692,7 +692,7 @@ W16EXPORT W16M_SHELL,      22,      12, w16sh_about         ; ShellAbout(word st
 W16_NX equ W16NX                  ; the rows, as a symbol: the loader part is
                                   ;   read before this file (SPEC.md 124.19.1)
 
-; The four slots the image names its stubs by (SPEC.md 124.19.1): rows of the
+; The six slots the image names its stubs by (SPEC.md 124.19.1): rows of the
 ; bind table no program's import table can reach, written by w16_bindinit
 ; before the first import is bound. Emitted with the rows (win16.asm's end).
 %macro W16FIXED 2               ; argument bytes, handler
@@ -706,6 +706,7 @@ W16FIXED 0,  w16_cbdone         ; W16_CBROW: the callee's way back
 W16FIXED 0,  w16x_lacks         ; W16_X87ROW: an x87 instruction it lacks
 W16FIXED 10, w16u_defdlgproc    ; W16_DDPROW: DefDlgProc (W16_XDDP's handler)
 W16FIXED 0,  w16_lmgo           ; W16_LMROW: the libraries' LibMain (124.23.4)
+W16FIXED 0,  w16_segld          ; W16_SLROW: a discarded segment's thunk (124.26.2)
 %if W16NF != W16_NFIXED
   %error "W16FIXED: one row a fixed slot"
 %endif
@@ -1708,25 +1709,13 @@ w16_lmtramp:
     jmp far [cs:w16_lmfar]
 
 ; w16_ldlibin - [w16_lname] loaded while the program runs (LoadLibrary,
-; SPEC.md 124.23.5): the loader part fetched, far-called and dropped, as
-; w16_ldin does. out: CF=0 AL = the record or 0FFh no such file; CF=1
-; refused. Clobbers AX
+; SPEC.md 124.23.5): in the loader part, as w16_ldin loads (w16_ldcall).
+; out: CF=0 AL = the record or 0FFh no such file; CF=1 refused. Clobbers AX
 w16_ldlibin:
-    mov al, W16P_LOAD
-    call w16_pfetch
-    jc .out
-    mov word [w16_pfv], w16l_rtlib
-    mov [w16_pfv + 2], ax
-    call far [w16_pfv]
-    pushf
-    push ax
-    mov ax, [w16_dseg]
-    mov [w16_pfv + 2], ax
-    mov al, W16P_LOAD
-    call op_drop
-    pop ax
-    popf
-.out:
+    push bx
+    mov bx, w16l_rtlib              ; XSEC-OK: part 5's, w16_ldcall calls it there
+    call w16_ldcall
+    pop bx
     ret
 
 ; =============================================================================

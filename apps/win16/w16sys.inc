@@ -1061,6 +1061,37 @@ W16LIB w16g_getbmbits
     stc
     ret
 
+; The W16_SLROW handler (SPEC.md 124.26.2): a discarded segment's thunk was
+; hit. The segment is loaded (w16l_segin, in the kept loader), the gate's
+; frame returns to the entry itself instead of the thunk, and the call answers
+; the AX and DX it came with. A segment that cannot be loaded ends the
+; program, its lines written, as a missing import does.
+W16LIB w16_segld
+    ICALL w16_args
+    sub bx, W16F_ARGS               ; ES:BX -> the frame
+    push es
+    push bx
+    les di, [es:bx + W16F_IP]       ; ES:DI -> the thunk + 5
+    mov al, [es:di]                 ; its segment
+    xor ah, ah
+    mov si, [es:di + 1]             ; its entry's offset
+    mov bx, w16l_segin              ; XSEC-OK: part 5's, w16_ldcall calls it there
+    ICALL w16_ldcall                ; DX = the segment; CF=1 lines written
+    pop bx
+    pop es
+    jc .fail
+    mov [es:bx + W16F_IP], si
+    mov [es:bx + W16F_CS], dx
+    mov ax, [w16_thax]
+    mov dx, [w16_thdx]
+    ret
+.fail:
+    mov byte [w16_endmsg], 1
+    mov byte [w16_state], W16S_ENDED
+    xor ax, ax
+    cwd
+    ret
+
 ; Catch (KERNEL.55) - args: +0 lpCatchBuf. Where the gate's frame is on the
 ; program's stack, and its six words (DI, SI, DS, BP and the return), into
 ; the buffer's first seven words; 0. Throw comes back here.

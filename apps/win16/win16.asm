@@ -97,12 +97,13 @@ W16_NBIND    equ 384            ; bind slots: the distinct imports a program
                                 ;   Paintbrush 3.1's 270 is the most measured
 W16_NCBF     equ 4              ; registered clipboard formats at most
 W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
-W16_NFIXED   equ 5              ; ...slots 0-4 are the image's own:
+W16_NFIXED   equ 6              ; ...slots 0-5 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
 W16_X87ROW   equ 2              ;   the emulator's missing instruction,
 W16_DDPROW   equ 3              ;   DefDlgProc, a dialog class's procedure,
-W16_LMROW    equ 4              ;   and the libraries' LibMain (124.23.4)
+W16_LMROW    equ 4              ;   the libraries' LibMain (124.23.4),
+W16_SLROW    equ 5              ;   and a discarded segment's thunk (124.26.2)
 W16_NLIB     equ 8              ; a program's own libraries loaded at once
 W16_LDEPTH   equ 4              ; ...and how deep one may import another
 W16L_NAME    equ 0              ; a library's record (SPEC.md 124.23.2): its
@@ -278,6 +279,24 @@ section .w16dlg
     W16BSS w16_lmds, 2
     W16BSS w16_lmfar, 4
     W16BSS w16_lname, 14        ; LoadLibrary's 8.3 name
+    W16BSS w16_cmb, 2           ; the module block (SPEC.md 124.26.4), 0 = none:
+                                ;   the NE tables at its 0, then the relocation
+    W16BSS w16_crel, 2          ;   room at this offset,
+    W16BSS w16_clive, 2         ;   the live table's paragraph,
+    W16BSS w16_cthk, 2          ;   the thunks' paragraph (one an ordinal)
+    W16BSS w16_cnseg, 2         ; ...the program's segments, and its ordinals,
+    W16BSS w16_cnord, 2         ;   kept apart from a library's load
+    W16BSS w16_cdo, 1           ; 1 = the program's own segments are being
+                                ;   laid out or loaded: discardable ones count
+    W16BSS w16_pone, 2          ; w16_prologs: only this segment's index * 2
+                                ;   + 1 (0 = all)
+    W16BSS w16_ldk, 2           ; part 5, kept for loading segments (124.26.3)
+    W16BSS w16_lkv, 4           ; ...far-called through this (w16_ldcall)
+    W16BSS w16_stop, 2          ; the top of the program's stack: the scan's end
+    W16BSS w16_cbud, 2          ; the code's budget and its use, paragraphs
+    W16BSS w16_cused, 2         ;   (SPEC.md 124.26.6)
+    W16BSS w16_thax, 2          ; AX and DX a thunk was entered with (124.26.2)
+    W16BSS w16_thdx, 2
     W16BSS w16_cbm, 2 * W16_MAXSEG      ; the census: each code segment's bitmap
     W16BSS w16_clast, 2 * W16_MAXSEG    ; ...and its last offset (w16cens.inc)
     ; --- the coroutine (w16core.inc) ---
@@ -466,7 +485,9 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16m_n, 2
     W16BSS w16m_ink, 1
     W16BSS w16m_pap, 1
-W16_TRN equ 1024                   ; the trace ring's entries, a power of two (2048 no longer fits the trace build, S19b)
+%ifndef W16_TRN                    ; the trace ring's entries, a power of two:
+W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
+%endif                             ;   S19b, 1024 at S20 (W16DEFS='-DW16_TRACE -DW16_TRN=256')
 %ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate rows
     W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
     W16BSS w16_trc, 2 * W16_TRN ;   tools/w16trace.py reads (SPEC.md 124.17)
@@ -1533,31 +1554,62 @@ w16_pfetch:
 
 ; -----------------------------------------------------------------------------
 ; w16_ldin - the load, from part 5 (SPEC.md 124.18.7): fetched, far-called,
-; and dropped whatever w16_load answered. Its contract is w16_load's: CF=1
+; and dropped whatever w16_load answered - a program with discardable code
+; keeps a copy of it (SPEC.md 124.26.3). Its contract is w16_load's: CF=1
 ; refused, with [w16_l1]/[w16_l2] saying why.
 ; -----------------------------------------------------------------------------
 w16_ldin:
-    mov al, W16P_LOAD
-    call w16_pfetch
-    jnc .have
-    mov si, w16_name
+    mov byte [w16_l1], 0
+    mov bx, w16_load                ; XSEC-OK: part 5's, w16_ldcall calls it there
+    call w16_ldcall
+    jnc .out
+    cmp byte [w16_l1], 0            ; refused, saying why
+    jne .no
+    mov si, w16_name                ; part 5 itself could not be read
     mov di, w16_l1
     call w16_strcpy
     mov si, w16_s_noload
     mov di, w16_l2
     call w16_strcpy
+.no:
     stc
+.out:
     ret
-.have:
-    mov word [w16_pfv], w16_loadf   ; DCALL's vector, idle at a load: no
-    mov [w16_pfv + 2], ax           ;   dialog is up before the program runs
-    call far [w16_pfv]
+
+; -----------------------------------------------------------------------------
+; w16_ldcall - near proc BX of part 5, the loader, far-called (SPEC.md
+; 124.26.3): in the copy the program keeps when it has one, else in part 5
+; fetched for the call and dropped after it. Registers and flags pass both
+; ways, as ICALL's; CF=1 with nothing called when part 5 could not be read.
+; -----------------------------------------------------------------------------
+w16_ldcall:
+    mov word [w16_lkv], w16l_far    ; XSEC-OK: a far vector into part 5
+    cmp word [w16_ldk], 0
+    je .fetch
+    push ax
+    mov ax, [w16_ldk]
+    mov [w16_lkv + 2], ax
+    pop ax
+    call far [w16_lkv]
+    ret
+.fetch:
+    push ax
+    mov al, W16P_LOAD
+    call w16_pfetch
+    jc .no
+    mov [w16_lkv + 2], ax
+    pop ax
+    call far [w16_lkv]
     pushf
-    mov ax, [w16_dseg]              ; the dialog part's segment back, for
-    mov [w16_pfv + 2], ax           ;   the next DCALL
+    push ax
     mov al, W16P_LOAD
     call op_drop
+    pop ax
     popf
+    ret
+.no:
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2078,6 +2130,7 @@ w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
 %endrep
 w16l_rowslot:  times W16NX dw 0     ; the bind slot each row has, 0 = none yet
 w16l_missslot: times W16_NMISS dw 0 ; ...and each missing name's
+w16l_end:                           ; part 5's size: the kept copy's (124.26.3)
 section .text
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"

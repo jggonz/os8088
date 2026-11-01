@@ -387,6 +387,16 @@ w16_cbret2:
     mov ax, W16_CBROW
     jmp w16_gate
 
+; w16_thkhit - where a discarded segment's thunk far-calls (SPEC.md 124.26.2):
+; an import of its own (W16_SLROW), whose frame returns to the thunk + 5. AX
+; and DX are the entry's, kept through CS because DS is the program's.
+w16_thkhit:
+    ; STKBALANCE-OK: reached by the thunk's far call, and left through the gate
+    mov [cs:w16_thax], ax
+    mov [cs:w16_thdx], dx
+    mov ax, W16_SLROW
+    jmp w16_gate
+
 ; -----------------------------------------------------------------------------
 ; w16_cbdone - the W16_CBROW handler: discard the stub's frame, the record
 ; and the extra bytes, make the served import current again, and run its

@@ -18909,10 +18909,19 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 # shipped image carries it yet and `all` does not build it.
 WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
 
+# W16DEFS="-DW16_CODEKB=40" builds WIN16 with a TEST define: SPEC.md
+# 124.26.6's code budget, W16_TRACE (124.17.4), W16_X87_EMU (124.5) - what a
+# row that needs one builds into a tree of its own (BUILD=). Stamped, so a
+# change rebuilds WIN16 and nothing else; a plain `make` is the shipped one.
+W16STAMP := $(BUILD)/.win16-$(or $(shell printf '%s' '$(W16DEFS)' | tr -c 'A-Za-z0-9' '_'),plain)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(W16STAMP) ] || { rm -f $(BUILD)/.win16-* $(BUILD)/win16.bin \
+                                      $(BUILD)/win16.o88; touch $(W16STAMP); })
+
 $(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
-                    apps/os88ui.inc apps/dos/doscall.inc | $(BUILD)
+                    apps/os88ui.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
-	        $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/win16/win16.asm
+	        $(if $(KERN_MEGA),-DDOS_MEGA) $(W16DEFS) -o $@ apps/win16/win16.asm
 	@echo "win16:  $(call FILESIZE,$@) bytes"
 
 # The System font, one part a display (SPEC.md 124.7.1): tools/w16font.py

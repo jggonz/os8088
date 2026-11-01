@@ -904,6 +904,60 @@ its table goes in the diary, so the reach is measured, not claimed.
     deliberately smaller than the program, checks that segments were
     discarded and reloaded, and checks that the document is intact; the XT's
     cost per reload on MartyPC.
+  - [x] **Batch 1: discardable code** (SPEC.md §124.26).
+    - A discardable code segment is left out of the program's claim. It is
+      loaded into a fixed block of the global heap, taken from the top of an
+      arena, at launch if it holds the entry point or is PRELOAD, and
+      otherwise when one of its entries is first called.
+    - **An 8-byte thunk an entry ordinal**: `jmp far` the entry while the
+      segment is loaded, `call far w16_thkhit` while it is not. Every
+      relocation to such an entry is given its thunk, so far calls,
+      callbacks and linked far pointers all reach the code through it. A
+      hit enters the gate as fixed slot 5, `w16_segld`, which loads the
+      segment and resumes the call at the entry with AX and DX intact.
+    - **The plan's `INC BP` walk was not built.** A discard scans the
+      program's stack instead, from the waiting frame to the SP it started
+      with, and keeps any segment whose paragraph is a word there. Nothing
+      is patched on the stack, and it finds what a walk cannot: the C
+      runtime's frames without the mark (9 of Write's 409 entries), the
+      gate's own frame, and a thunk's return while its segment loads.
+      `Catch` needs nothing (§124.26.5).
+    - **The plan's code-cache budget taken at launch was not built either.**
+      Code and data share the global heap's least-recently-used rule, as on
+      Windows. A test build sets one (`W16DEFS=-DW16_CODEKB=n`, a new
+      stamped Makefile knob), and that is how the row will make Write
+      discard.
+    - The loader part is **kept** after launch (14.4 KB, with its bind
+      table) by a program with discardable code, and `LoadLibrary` uses
+      that copy. A module block holds the NE tables, relocation room, a
+      live table and the thunks: Write's is 8.3 KB.
+    - **The bss move the room called for was not needed:** S20 took 31
+      bytes of bss.
+    - **Found:** `GetFreeSpace` answered the largest truly free run, and
+      with Paintbrush 3.0's 57 KB of loaded code in the arenas that was
+      9 KB: it stopped at *Insufficient memory to edit image*.
+      `GlobalCompact` and `GetFreeSpace` now count code that may be
+      discarded. Paintbrush 3.0 opens and draws again.
+    - **Found:** the trace build no longer fit in 64 KB. `W16_TRN` is now a
+      define, so a trace build is `-DW16_TRACE -DW16_TRN=256`.
+    - **Seen on QEMU's VGA:** Notepad 3.0 with a 16 KB and then a 4 KB code
+      budget: typing, the Save prompt, File Open, Find and About. Segments
+      were discarded, one in use was passed over, and segments 5 and 6 were
+      loaded again after being discarded, all drawn right. On the plain
+      build, CALC, both Solitaires, Cardfile, Reversi, Calendar, DLLUSE and
+      both Paintbrushes reach their windows; 3.1's Paintbrush runs with 144
+      thunks loaded and 101 discarded. Write still stops at *Needs GDI.10*,
+      which is batch 2.
+    - **Not seen:** the 8088 census path, where every discardable segment
+      loads at launch. Rows `win16cpuxt` and `win16fpu` run it in S25.
+    - **Rows, for S25's pass:** every `win16*` row, because every program
+      now loads through this path; `win16dll` (the kept loader under
+      `LoadLibrary`), `win16cpuxt` and `win16fpu` (the census),
+      `win16pbrush` (GetFreeSpace), and `w16xsec` and `w16cens` in the fast
+      tier.
+    - What it costs, against S19b: the image 36,193 bytes (+207), bss 27,238
+      (+31), **1,593 bytes of room**; the library part 59,941 (+75), the
+      loader part 14,412 (+2,023), part 9 unchanged.
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and

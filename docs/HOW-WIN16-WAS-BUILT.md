@@ -2675,3 +2675,67 @@ would free the room.
 
 **S19b is done.** Paintbrush 3.0 opens, draws, fills, types, saves and
 opens; 3.1's does the same at a picture size this machine can hold.
+
+## 2026-11-01 — S20, batch 1: code that comes and goes
+
+*As a user, Write opens a document on a 640 KB machine.* Write 3.0 has
+163 KB of code in 78 segments, and every one of them is marked
+DISCARDABLE. Until now WIN16 loaded all of a program's code at launch and
+kept it, which is why 3.1's Paintbrush could not find 141 KB for a
+full-screen save. Real-mode Windows loaded a discardable segment when it was
+first called and threw it away when memory ran short. This batch does that.
+
+**First we measured what the programs actually do.** Before designing, a
+small script walked every relocation in Write, Windows Help, Terminal, File
+Manager, Control Panel, Program Manager and both Paintbrushes. None of them
+ever names a discardable segment by its number. Every far reference goes
+through the entry table. So a segment can be reached only through its
+entries, and each entry can get a **thunk**: eight bytes that jump to the
+code while it is loaded, and call WIN16 while it is not. Windows 3.0 used
+the same trick, patching `INT 3Fh` into its own thunks.
+
+**The plan said to walk the stack, as Windows did. We scan it instead.**
+Windows found return addresses into a segment it wanted to discard by
+following the `INC BP` mark its compilers put on every far frame, and
+rewrote each one to reload the segment on return. Counting showed 9 of
+Write's 409 entries have no such mark: the C runtime's assembly. WIN16 also
+puts frames of its own on the program's stack: the gate's, and the return
+of a thunk whose segment is still loading. So before a segment goes, WIN16
+reads every word of the program's live stack. A segment whose paragraph
+appears there is in use and stays. Nothing on the stack is ever written. A
+word that only *looks* like a paragraph costs a little memory, never a
+crash.
+
+**Testing it needed a smaller machine than QEMU's.** With 640 KB, Notepad
+never runs short. A build-time budget (`make W16DEFS=-DW16_CODEKB=16`) caps
+the loaded code instead. At 16 KB, then 4 KB, Notepad typed text and opened
+its Save prompt, File Open, Find and About. Segments came and went, a
+segment found in use was skipped, and segments 5 and 6 were loaded,
+discarded and loaded again. Every dialog drew correctly.
+
+Two bugs appeared on the way, both from routines that clobbered a register
+the new code had assumed was safe. `w16_prologs` overwrote BX and
+`w16_reloc1` overwrote BP, so loaded segments' thunks kept pointing at the
+"not loaded" path. Notepad still worked, but loaded nothing it did not
+already have.
+
+**Then Paintbrush 3.0 said "Insufficient memory to edit image".** It had
+worked the day before. Its bitmap manager sizes its bands from
+`GetFreeSpace`, which WIN16 answers with the largest free run. Paintbrush's
+start-up now loads 57 KB of its code into the global heap's three arenas,
+next to the kept loader. That left a free run of 9 KB. Windows counted
+discardable memory as free, because `GlobalAlloc` would discard it to make
+room. WIN16 now does the same for code. Paintbrush opens and draws again. A
+stroke drawn with its brush matched the previous build's.
+
+**A tool broke quietly.** The trace build (`-DW16_TRACE`) no longer fit in
+64 KB, and it was the tool needed to find the Paintbrush problem. Its ring
+size is a define now. 256 entries were too few to reach Paintbrush's
+decision, so the arenas were read directly instead.
+
+**What it cost.** The image grew 207 bytes and bss 31, leaving 1,593 bytes
+of room. The plan had assumed S20 would first need to move tables out of
+the image's bss, and it did not. The loader part grew 2 KB, to 14.4 KB, and
+a program with discardable code now keeps it in memory, so a segment loaded
+later binds its imports the same way the launch did. Write still stops at
+*Needs GDI.10*. Its five missing calls are batch 2.

@@ -226036,8 +226036,11 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
 
 **Segments:**
 
-- every segment is loaded **fixed**, into ONE arena claim (§50.3);
-- MOVEABLE and DISCARDABLE are honoured as fixed;
+- every segment is loaded **fixed**, into ONE arena claim (§50.3), except
+  a DISCARDABLE code segment, which since S20 is a block of the global heap
+  loaded when it is first called and discarded when memory is short
+  (§124.26);
+- MOVEABLE alone is honoured as fixed;
 - a segment marked ITERATED is expanded.
 
 **Relocations:**
@@ -226842,7 +226845,7 @@ neighbours merged. Arenas are freed with the program.
 | `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`02FEh`, `W16_NGH` 256 entries since S19b batch 3, 64 before: Paintbrush's band cache keeps a handle for every band it has discarded, and 64 ran out on the first picture opened). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
 | `GlobalLock` | `DX:AX` = the block, the lock count raised; NULL for a discarded handle |
 | `GlobalReAlloc` | in place when the next block is free; otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. `GMEM_MODIFY` changes the flags alone |
-| `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD` |
+| `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD`; since S20 a run of an arena counts the code segments it may discard as free (§124.26.5) |
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
 | out of memory | unused resource blocks (§124.10) are discarded and the request is tried again; then `GMEM_DISCARDABLE` blocks, one at a time, the least recently used first (S19b, `w16_gdold`); then the answer is 0 |
 | `GMEM_DISCARDABLE` | a moveable block's handle is marked so. Discarding frees the block and keeps the handle: `GlobalLock` answers NULL, `GlobalFlags` `GMEM_DISCARDED`, `GlobalSize` 0, and `GlobalReAlloc` gives it a block again. A block with a lock is never discarded. **Nor is one allocated `GMEM_NOTIFY` as well** without its program being asked (§124.9.1). `GlobalReAlloc` with `GMEM_MODIFY` sets or clears either mark by the same rule |
@@ -227545,10 +227548,14 @@ change, they are the new anchor. The date's day of the week is computed
 
 #### 124.17.4 A debugging knob
 
-`-DW16_TRACE` builds WIN16 with a 128-entry ring of what the program asked
-for last: each export through the gate as its `w16api.inc` row, and each
-`int 21h` as 80h:AH. `tools/w16trace.py SOCK PROGRAM.EXE` reads it out of a
-running QEMU (with `W16_DEFINES=W16_TRACE` for the symbols). It is how
+`-DW16_TRACE` builds WIN16 with a `W16_TRN`-entry ring of what the program
+asked for last: each export through the gate as its `w16api.inc` row, and
+each `int 21h` as 80h:AH. `tools/w16trace.py SOCK PROGRAM.EXE` reads it out
+of a running QEMU (with `W16_DEFINES=W16_TRACE` for the symbols). `W16_TRN`
+is 1024 unless defined; the ring and the row table beside it no longer fit
+WIN16's 64 KB at that size since S20, so a trace build is now `make
+W16DEFS='-DW16_TRACE -DW16_TRN=256' win16`, read with
+`W16_DEFINES='W16_TRACE W16_TRN=256'`. It is how
 CLOCK's spin on 2Ch was found: a program that stops drawing and asks for
 nothing new is waiting for something WIN16 never changes.
 
@@ -227892,7 +227899,9 @@ number of segments, so segments do not spend `MEM_OWNER_MAX` (§50). The
 cost is that a heap with enough memory in total but no single run large
 enough refuses with *Not enough memory to load it.* Placing segments in
 several claims is worth doing when segments can move and be discarded,
-which is S20 (R6), not here.
+which is S20 (R6), not here. *S20 did it for discardable code segments
+(§124.26): each is a block of the global heap, and the claim holds the
+rest.*
 
 **A bitmap is a block of the global heap**, not a claim of its own. Until
 S15 each bitmap was its own `OSAPI_MEM_CLAIM`. Solitaire keeps three card
@@ -229400,7 +229409,8 @@ three for what is claimed for a moment: a part being fetched, and a
 its table, §124.23.5).
 
 **`GlobalCompact` and `GetFreeSpace`** count a new arena only while one of
-the three is free, so they say what `GlobalAlloc` can actually get.
+the three is free, so they say what `GlobalAlloc` can actually get. Since S20
+they count the code segments `GlobalAlloc` may discard as well (§124.26.5).
 
 **Not done, pinned:** `GetFreeSpace` still answers the largest free run
 (§124.23.9), where Windows answered the sum. Paintbrush sizes its bands from
@@ -229597,3 +229607,189 @@ moveable block the size of the whole picture, 141,440 bytes for its default
 have it. On a 640 KB machine the largest free run left beside its 150 KB of
 code is about 98 KB. Windows 3.1 never ran in real mode, so it always had
 more. S20's discardable code segments are what free that memory.
+
+### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
+
+Until S20 every segment of a program was loaded at launch into its one
+claim (§124.20.2), so a program's whole code sat in memory for as long as
+it ran. Almost all of a Windows program's code is marked DISCARDABLE:
+Write 3.0 has 163 KB of it in 78 segments and no fixed code at all,
+Windows Help 120 KB, Windows 3.1's Paintbrush 109 KB. Real-mode Windows
+loaded such a segment when it was first called and threw it away when
+memory ran short, reading it again from the file the next time. S20 does
+the same.
+
+#### 124.26.1 Which segments *(S20 batch 1)*
+
+A segment is **discardable** here when it is a code segment (`NSF_DATA`
+clear) marked `NSF_DISCARD` (1000h), with bytes in the file, and with a
+length and a `minalloc` both under 64 KB. Every other segment is laid out
+in the claim as before: data segments, DGROUP among them, moveable code
+that is not discardable, and fixed code. A program's own libraries keep
+their code fixed (§124.23.2).
+
+**A discardable segment is reached only through its entries.** Microsoft's
+linker routes every far reference into a moveable segment through the
+entry table (the moveable-entry relocation, `target1` = 0FFh), and none of
+the measured targets has a relocation that names a discardable segment by
+its number from elsewhere: not Write, Windows Help, Terminal, File Manager,
+Control Panel, Program Manager or either Paintbrush. Should a program have
+one, that segment is **kept**: loaded at launch and never discarded, since
+the reference holds its paragraph. A reference from the segment to itself
+is applied again each time it is loaded, so it does not keep it.
+
+#### 124.26.2 One thunk an entry *(S20 batch 1)*
+
+Each ordinal of the program's entry table has an 8-byte **thunk** in the
+module block (§124.26.4), used only by entries in discardable segments:
+
+| bytes | the segment loaded | the segment discarded |
+|---|---|---|
+| 0-4 | `jmp far` the entry (`EA` offset paragraph) | `call far w16_thkhit` (`9A`, WIN16's image) |
+| 5 | the segment's number | the same |
+| 6-7 | the entry's offset | the same |
+
+A relocation to a moveable entry in a discardable segment is given the
+thunk's address. So every far call, every callback a program hands to
+Windows (a window procedure, a dialog procedure, a timer, a hook) and every
+far pointer to such code that the program was linked with reaches it
+through its thunk. Real-mode Windows patched its own entry-table thunks the
+same way, to `INT 3Fh` when the segment was discarded.
+
+**A thunk that is hit** far-calls `w16_thkhit`, which keeps AX and DX and
+enters the gate (§124.2.1) as fixed bind slot `W16_SLROW` (5), with no
+argument bytes. Its handler, `w16_segld`, finds the thunk from the frame's
+return address (the thunk + 5), loads the segment (§124.26.3), rewrites the
+frame's return to the entry itself, and answers with the AX and DX the
+call came with. BX, CX and ES come back from the gate's bank and DS, SI, DI
+and BP from its frame, as from any call, so the entry runs as though it
+had been jumped to. The flags are not kept: no Windows convention passes a
+flag into a far call.
+
+A segment that cannot be loaded then ends the program, as a missing
+import does (§124.12): *Not enough memory for its code.* with its name.
+
+#### 124.26.3 Loading a segment *(S20 batch 1)*
+
+A segment is loaded into a **fixed block of the global heap** (§124.9),
+taken from the TOP of an arena, the last free run that holds it, where
+every other block is taken first fit from the bottom. So code and data
+gather at opposite ends of an arena, and code discarded leaves one run
+rather than holes between data. Its header is marked as code, with the
+segment's number. Then:
+
+1. its bytes are read from the file through a cluster cache (§124.20.1) and
+   the rest of it, up to `minalloc`, is zeroed;
+2. its relocation records are read into the module block and applied as at
+   launch (§124.3), the x87's OS fixups among them (§124.5);
+3. its exported prologs are patched (§124.3);
+4. its thunks are pointed at it.
+
+**When.** At launch: the segment holding the entry point, every segment
+marked PRELOAD (`NSF_PRELOAD`, 0040h), and every kept segment. On a CPU
+the census decides for (§124.4) every discardable segment is loaded at
+launch, since the census sweeps all the code at once; a program whose code
+does not fit then is refused, *Not enough memory to load it.* Every other
+segment is loaded when one of its thunks is first hit, which is how
+Windows 3.0 loaded them.
+
+**The loader part stays.** Loading a segment is the loader's work, part 5
+(§124.18.7). A program with a discardable segment keeps part 5 after its
+launch, copied into a block of the global heap with the bind table it built
+(§124.19.1), so a segment loaded later binds its imports to the slots the
+launch gave them. `LoadLibrary` (§124.23.5) calls the kept copy too instead
+of fetching part 5 again. A program with no discardable segment drops it as
+before.
+
+#### 124.26.4 The module block *(S20 batch 1)*
+
+A program with a discardable segment has one fixed block of WIN16's in the
+global heap (`w16_kclaim`), made at launch after the segments' relocation
+records are read:
+
+| | |
+|---|---|
+| the NE tables | as the loader read them (§124.20.1): the header to the farthest table, so a later load reads the segment table, the entry table, the module references and the imported names here and not from the file |
+| the relocation room | after the tables: the largest discardable segment's records, a count word and 8 bytes each |
+| the live table | 6 bytes a segment: its paragraph (0 = not loaded), its age, and its flags: discardable, kept |
+| the thunks | 8 bytes an entry ordinal (§124.26.2) |
+
+The tables are at the block's offset 0, so the loader reads them with the
+NE header at `ES:0`, as it reads the file's. Measured: Write 3.0's block is
+3,907 + 650 + 474 + 3,272 bytes; the largest tables of the targets are
+Windows Help's and Write's, 3.9 KB.
+
+#### 124.26.5 Discarding: the stack is scanned, not patched *(S20 batch 1)*
+
+A code segment is discarded on the same rule as a discardable data block:
+when the global heap cannot hold a request, at §124.9's *out of memory*
+step, the least recently used of the discardable data blocks and the
+loaded code segments goes first. A code segment's age is the heap's use
+count when it was loaded, renewed whenever a discard finds it in use. A
+kept segment is never discarded.
+
+**A segment is in use while any word of the program's live stack is its
+paragraph.** Before a code segment is discarded, the program's stack is
+scanned from the waiting call's frame (`[w16_psp_]`) to the top of the
+stack, the SP the program started with. A segment found there is in use:
+it is aged as new and passed over, and the next oldest is tried. One not
+found has its thunks pointed back at `w16_thkhit` and its block freed.
+
+Real-mode Windows walked the stack instead, along the BP chain by the
+`INC BP` mark its compilers put on every far frame, and PATCHED each return
+address into a discarded segment to a thunk that reloaded it. WIN16 never
+discards a segment that a return address names, so it writes nothing on
+the program's stack, and a scan that reads every word finds return
+addresses a walk cannot:
+
+- an assembly routine's far frame without the mark. 9 of Write 3.0's 409
+  entries do not begin with it, all of them the C runtime's;
+- the gate's own frame (§124.2.1), whose return is into the code that made
+  the call;
+- the far return a thunk was called with, which sits just above the gate's
+  frame while its segment loads.
+
+A word that only looks like a segment's paragraph keeps a segment in
+memory that could have gone. That costs memory, never correctness.
+
+**Where else a code address is held:**
+
+- A `CATCHBUF` holds the address `Catch` returns to (§124.22.11), and it
+  needs nothing: `Throw` can only be reached while the function that called
+  `Catch` is still running, so its segment is named on the stack all that
+  time.
+- The program's `int 21h` that first reaches WIN16's DOS (§124.21.1)
+  fetches it on the UI task's stack, outside any gate. The program's stack
+  position is put in `[w16_psp_]` for the fetch, so a discard during it
+  scans from the int's frame.
+
+**What a program is told is free.** `GlobalCompact` and `GetFreeSpace`
+(§124.25.1) answer the largest run of an arena made of free blocks and of
+loaded code segments that are not kept (`w16_gcan`), since `GlobalAlloc`
+discards those to make the room. One that is in use is counted too: the
+stack is scanned only when a segment is about to go, and Windows counted
+all of its discardable memory. Without this Paintbrush 3.0 stopped at
+*Insufficient memory to edit image* on QEMU's 640 KB: its start-up loads
+57 KB of its code into the three arenas, which with the loader and the
+module block left 9 KB in the largest free run, and its bitmap manager
+sizes its bands from `GetFreeSpace` (§124.25).
+
+#### 124.26.6 A budget for the code, for testing *(S20 batch 1)*
+
+By default the code has no budget of its own: code and data share the
+global heap and its least-recently-used rule, as on Windows. A build with
+`W16_CODEKB` defined (`make W16DEFS=-DW16_CODEKB=n win16`) keeps the loaded
+code under *n* KB: before a segment is loaded, the least recently used
+segment not in use is discarded until the new one fits under it, or none is
+left to discard. The `win16write` row uses it to make Write discard and load
+segments again on a machine that has the room not to.
+
+#### 124.26.7 Not done *(S20 batch 1)*
+
+- A program's own libraries keep their code fixed.
+- A discardable segment of 64 KB is laid out fixed.
+- The flags are not carried through a thunk that loads a segment.
+- The kept loader part, 14.4 KB, and the module block stay for as long as
+  the program runs; neither is discarded when memory runs short.
+- `GlobalCompact` and `GetFreeSpace` count discardable code but not
+  discardable data or unused resources, which `GlobalAlloc` also discards.

@@ -46,7 +46,19 @@ NEF_LIB    equ 0x8000
 
 NSF_DATA   equ 0x0001           ; segment flags
 NSF_ITER   equ 0x0008
+NSF_PRELOAD equ 0x0040
 NSF_RELOC  equ 0x0100
+NSF_DISCARD equ 0x1000
+
+W16CL_BASE equ 0                ; the live table (SPEC.md 124.26.4), a segment:
+W16CL_AGE  equ 2                ;   its paragraph (0 = not loaded), its age,
+W16CL_FL   equ 4                ;   and W16CLF_*
+W16CL_SIZE equ 6
+W16CLF_DISC equ 1               ; discardable (124.26.1)
+W16CLF_KEEP equ 2               ; ...but named by its number: never discarded
+W16TK_SIZE equ 8                ; a thunk (124.26.2): jmp/call far, the segment,
+W16TK_SEG  equ 5                ;   the entry's offset
+W16TK_OFF  equ 6
 
 ; =============================================================================
 ; PART 5, W16P_LOAD (SPEC.md 124.18.7): the loader and the census run once a
@@ -61,9 +73,10 @@ w16l_base:
     jmp short w16l_go               ; +0  tools/os88ovl.py: a short jump ...
     db 'W16LOADR'                   ; +2  ...before the cut mark
 w16l_go:
-; w16_loadf - w16_load, far-called by w16_ldin
-w16_loadf:
-    call w16_load
+; w16l_far - the image's one way in (w16_ldcall): near proc BX far-called.
+; Every register and the flags pass through both ways.
+w16l_far:
+    call bx
     retf
 
 ; -----------------------------------------------------------------------------
@@ -223,12 +236,15 @@ w16_load:
     call w16l_libs                  ;   and its own libraries, loaded first
     jc .refused                     ;   (SPEC.md 124.23.1): lines written
     mov es, [w16_fseg]
+    mov byte [w16_cdo], 1           ; the program's own: discardable code is
+                                    ;   not laid out here (SPEC.md 124.26.1)
     call w16_layout                 ; sizes and the claim; CF=1 SI = reason
     jc .refuse
     call w16_copysegs               ; CF=1 SI = reason; ES = the tables NOW
     jc .refuse                      ;   (they grew, and may have moved)
-    call w16l_cfree                 ; the cache's work is done
     ICALL w16_copyres                ; the resource table, kept (SPEC.md 124.10)
+    jc .refuse
+    call w16l_cmake                 ; the module block (124.26.4); CF=1 SI = reason
     jc .refuse
     mov word [w16_nfix], 0
     xor al, al
@@ -236,10 +252,13 @@ w16_load:
     jc .refused
     ICALL w16x_mode                  ; the x87: native, emulated, or neither
     jc .refuse
+    call w16l_segsup                ; the discardable ones loaded at launch
+    jc .refused                     ;   (124.26.3), CF=1 lines written
     mov al, 1
-    call w16_relocs                 ; pass 1: apply
+    call w16_relocs                 ; pass 1: apply, in the claim's segments
     jc .refused
     call w16_prologs
+    call w16l_cfree                 ; the cache's work is done
     call w16_mkpsp
     call w16_frame                  ; CF=1 SI = reason
     jc .refuse
@@ -250,9 +269,12 @@ w16_load:
     call w16_census                 ; CF=1: refused, lines written
     jc .refused
 .cpuok:
+    call w16l_keep                  ; part 5 kept for loading segments later
+    jc .refuse                      ;   (124.26.3); CF=1 SI = reason
     mov dx, [w16_fseg]              ; the file is no longer needed
     call OSAPI_MEM_FREE
     mov word [w16_fseg], 0
+    mov byte [w16_cdo], 0
     clc
     jmp short .out
 
@@ -264,6 +286,7 @@ w16_load:
     mov di, w16_l2
     ICALL w16_strcpy
 .refused:
+    mov byte [w16_cdo], 0
     call w16l_cfree
     mov dx, [w16_fseg]
     or dx, dx
@@ -380,6 +403,9 @@ w16_lay1:
     mov [w16_dgsize], ax            ; 0 = 64KB
 .notdg:
     mov [w16_slen + bx], ax         ; 0 = 64KB
+    mov word [w16_sbase + bx], 0
+    call w16l_isdisc                ; discardable code: a block of the global
+    jc .nextseg                     ;   heap when it is loaded (124.26.3)
     mov [w16_sbase + bx], bp        ; RELATIVE until the claim is made
     ; paragraphs = ceil(CX:AX / 16)
     add ax, 15
@@ -391,6 +417,7 @@ w16_lay1:
     shr ax, 1                       ; (CX is 0 after one shift)
     add bp, ax
     jc .huge                        ; a megabyte of segments
+.nextseg:
     add di, 8
     inc bx
     inc bx
@@ -455,7 +482,10 @@ w16_lay1:
     mov dx, [w16_pseg]
     xor bx, bx
 .abs:
+    call w16l_isdisc                ; (not loaded: 0 stays)
+    jc .absn
     add [w16_sbase + bx], dx
+.absn:
     inc bx
     inc bx
     mov ax, bx
@@ -494,6 +524,8 @@ w16_copysegs:
     mov [w16_soff], ax
     mov [w16_soff + 2], dx
     mov cx, [es:di + 2]             ; length, 0 = 64KB
+    call w16l_isdisc                ; discardable: its bytes are read when it
+    jc .recs                        ;   is loaded (124.26.3), its records now
     push es
     push di
     mov es, [w16_sbase + bx]
@@ -516,6 +548,7 @@ w16_copysegs:
     pop di
     pop es
     jc .trunc
+.recs:
     mov es, [w16_fseg]
     test word [es:di + 4], NSF_RELOC
     jz .next
@@ -906,6 +939,11 @@ w16_relocs:
 .seg:
     test word [es:di + 4], NSF_RELOC
     jz .nextseg
+    cmp byte [w16_rpass], 1         ; applying: a discardable segment's own are
+    jne .recs                       ;   applied as it is loaded (124.26.3)
+    call w16l_isdisc
+    jc .nextseg
+.recs:
     mov si, [w16_rtoff + bx]        ; read with the segment (SPEC.md 124.20.1)
     or si, si
     jz .nextseg
@@ -1106,11 +1144,14 @@ w16_reloc1:
     mov ax, [es:si + 6]             ; a movable entry: its ordinal
     call w16_entrypt                ; -> DX = segment number, AX = offset
     jc .bad
+    call w16l_tothk                 ; discardable: its thunk (124.26.2)
+    jc .apply
     jmp short .seg
 .fixed:
     xor ah, ah
     mov dx, ax
     mov ax, [es:si + 6]
+    call w16l_keepck                ; a discardable one named so: kept (124.26.1)
 .seg:
     or dx, dx
     jz .bad
@@ -1503,6 +1544,16 @@ w16_prolog1:
     pop es
     pop ax                          ; (pop keeps the flags)
     jnz .out
+    cmp word [w16_pone], 0          ; one segment's only (124.26.3): its
+    je .anyseg                      ;   index * 2 + 1
+    push bx
+    inc bx
+    cmp bx, [w16_pone]
+    pop bx
+    jne .out
+.anyseg:
+    cmp word [w16_sbase + bx], 0    ; not loaded
+    je .out
     mov si, [w16_ne]
     mov dx, [es:si + NE_FLAGS]
     mov es, [w16_sbase + bx]
@@ -1584,6 +1635,7 @@ w16_frame:
     jnz .sp2
     mov ax, 0xFFFE                  ; a full 64KB DGROUP
 .sp2:
+    mov [w16_stop], ax              ; the top of its stack (SPEC.md 124.26.5)
     sub ax, W16F_ARGS
     jb .bad
     mov di, ax
@@ -2208,7 +2260,7 @@ w16l_ldlib:
     ret
 
 ; w16l_rtlib - [w16_lname]'s library loaded while the program runs
-; (LoadLibrary, SPEC.md 124.23.5), far-called by w16_ldlibin: the program's
+; (LoadLibrary, SPEC.md 124.23.5), by w16_ldlibin's w16_ldcall: the program's
 ; folder made current and the cluster cache claimed for it, the user's folder
 ; put back after. out: as w16l_ldlib's
 w16l_rtlib:
@@ -2256,7 +2308,7 @@ w16l_rtlib:
     pop dx
     pop cx
     pop bx
-    retf
+    ret
 
 ; w16l_undo - a library refused part way: its tables, code and DGROUP given
 ; back. Keeps all.
@@ -2725,6 +2777,1038 @@ w16l_svtab:                         ; what one module's load holds, address
   %error "w16l_svtab holds more than W16_LSVSZ"
 %endif
 
+; =============================================================================
+; DISCARDABLE CODE (SPEC.md 124.26). A program's discardable code segments are
+; blocks of the global heap, reached through one thunk an entry, loaded at
+; launch or when a thunk is first hit, and discarded when memory is short
+; unless a word of the program's live stack names them. What a later load
+; needs is in the module block: the NE tables, room for one segment's
+; relocation records, the live table and the thunks.
+; =============================================================================
+
+; w16l_isdisc - BX = a segment's index * 2: CF=1 a discardable code segment
+; of the program being loaded (SPEC.md 124.26.1). ES = the tables. Keeps all.
+w16l_isdisc:
+    cmp byte [w16_cdo], 0           ; a library's are all fixed
+    je .no
+    push ax
+    push si
+    mov si, [w16_ne]
+    mov ax, [es:si + NE_SEGTAB]
+    add si, ax
+    add si, bx
+    add si, bx
+    add si, bx
+    add si, bx                      ; + index * 8
+    mov ax, [es:si + 4]
+    test ax, NSF_DATA | NSF_ITER
+    jnz .not
+    test ax, NSF_DISCARD
+    jz .not
+    cmp word [es:si], 0             ; bytes in the file
+    je .not
+    cmp word [es:si + 2], 0         ; under 64 KB, both
+    je .not
+    cmp word [es:si + 6], 0
+    je .not
+    pop si
+    pop ax
+    stc
+    ret
+.not:
+    pop si
+    pop ax
+.no:
+    clc
+    ret
+
+; w16l_lent - DX = a segment's number: ES:SI -> its live entry; CF=1 none (no
+; module block, or out of range). Keeps the rest.
+w16l_lent:
+    cmp word [w16_cmb], 0
+    je .none
+    or dx, dx
+    jz .none
+    cmp dx, [w16_cnseg]
+    ja .none
+    mov si, dx
+    dec si
+    shl si, 1
+    add si, dx
+    dec si                          ; (DX - 1) * 3 ...
+    shl si, 1                       ; ...* 2 = * W16CL_SIZE
+    mov es, [w16_clive]
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; w16l_isdlive - DX = a segment's number: CF=1 a discardable one, by the live
+; table. Keeps all.
+w16l_isdlive:
+    push si
+    push es
+    call w16l_lent
+    jc .no
+    test byte [es:si + W16CL_FL], W16CLF_DISC
+    jz .no
+    pop es
+    pop si
+    stc
+    ret
+.no:
+    pop es
+    pop si
+    clc
+    ret
+
+; w16l_tothk - in w16_reloc1: DX = the segment a moveable entry is in. One
+; that is discardable, while the program's relocations are applied, is reached
+; through its thunk (SPEC.md 124.26.2): CF=1 and DX:AX = the thunk. ES:SI ->
+; the record. Keeps the rest.
+w16l_tothk:
+    cmp byte [w16_cdo], 0
+    je .no
+    cmp byte [w16_rpass], 1
+    jne .no
+    call w16l_isdlive
+    jnc .no
+    mov ax, [es:si + 6]             ; the ordinal: thunk (ordinal - 1) * 8
+    dec ax
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    mov dx, [w16_cthk]
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; w16l_keepck - in w16_reloc1's check pass: DX = a segment named by its NUMBER
+; from segment [w16_rseg]. A discardable one named so from another segment is
+; kept: loaded at launch and never discarded (SPEC.md 124.26.1). Keeps all.
+w16l_keepck:
+    cmp byte [w16_cdo], 0
+    je .out
+    cmp byte [w16_rpass], 0
+    jne .out
+    call w16l_isdlive
+    jnc .out
+    push ax
+    mov ax, [w16_rseg]
+    shr ax, 1
+    inc ax
+    cmp ax, dx
+    pop ax
+    je .out                         ; itself: applied again at each load
+    push si
+    push es
+    call w16l_lent
+    or byte [es:si + W16CL_FL], W16CLF_KEEP
+    pop es
+    pop si
+.out:
+    ret
+
+; w16l_nord - ES = the tables: AX = how many ordinals the entry table has.
+; Keeps the rest.
+w16l_nord:
+    push cx
+    push si
+    mov si, [w16_ne]
+    add si, [es:si + NE_ENTTAB]
+    xor ax, ax
+.bundle:
+    xor cx, cx
+    mov cl, [es:si]
+    jcxz .done
+    add ax, cx
+    cmp byte [es:si + 1], 0         ; skipped ordinals: no entries
+    je .next
+    cmp byte [es:si + 1], 0xFF
+    jne .three
+    shl cx, 1                       ; moveable: 6 bytes an entry
+.three:
+    add si, cx                      ; fixed and constant: 3
+    add si, cx
+    add si, cx
+.next:
+    add si, 2
+    jmp short .bundle
+.done:
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_cmake - the module block (SPEC.md 124.26.4), when the program has a
+; discardable segment: the tables copied, the live table and the thunks
+; written. in: ES = the tables, every segment's records read (w16_copysegs);
+; out: CF=1 SI = reason. Keeps ES.
+; -----------------------------------------------------------------------------
+w16l_cmake:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    mov word [w16_cmb], 0
+    mov word [w16_cused], 0
+%ifdef W16_CODEKB
+    mov word [w16_cbud], W16_CODEKB * 64    ; a test's budget (124.26.6)
+%else
+    mov word [w16_cbud], 0xFFFF
+%endif
+    xor bx, bx                      ; BX = index * 2
+    xor bp, bp                      ; BP = the most records a discardable
+    xor dx, dx                      ;   segment has; DX = how many there are
+.count:
+    call w16l_isdisc
+    jnc .cnext
+    inc dx
+    mov si, [w16_rtoff + bx]
+    or si, si
+    jz .cnext
+    mov ax, [es:si]
+    cmp ax, bp
+    jbe .cnext
+    mov bp, ax
+.cnext:
+    inc bx
+    inc bx
+    mov ax, bx
+    shr ax, 1
+    cmp ax, [w16_nseg]
+    jb .count
+    or dx, dx
+    jnz .some
+    jmp .ok                         ; nothing discardable: no block
+.some:
+    call w16l_nord
+    mov [w16_cnord], ax
+    mov ax, [w16_nseg]
+    mov [w16_cnseg], ax
+    mov ax, [w16_fend]              ; the tables, word-aligned, then the room
+    inc ax
+    and al, 0xFE
+    mov [w16_crel], ax
+    mov cx, bp
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add ax, cx
+    jc .big
+    add ax, 2 + 15                  ; its count word; the live table on a
+    jc .big                         ;   paragraph
+    and al, 0xF0
+    mov bx, ax                      ; BX = the live table's offset
+    mov cx, [w16_nseg]
+    mov dx, cx
+    shl cx, 1
+    add cx, dx
+    shl cx, 1                       ; * W16CL_SIZE
+    add ax, cx
+    add ax, 15
+    jc .big
+    and al, 0xF0
+    mov di, ax                      ; DI = the thunks'
+    mov cx, [w16_cnord]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add ax, cx
+    jc .big
+    add ax, 1023                    ; KB (the carry is bit 16)
+    rcr ax, 1
+    mov cl, 9
+    shr ax, cl
+    ICALL w16_kclaim                ; DX = the block
+    jnc .have
+    mov si, w16_r_mem
+    jmp short .fail
+.big:
+    mov si, w16_r_tabs
+.fail:
+    stc
+    jmp short .out
+.have:
+    mov [w16_cmb], dx
+    mov cl, 4
+    mov ax, bx
+    shr ax, cl
+    add ax, dx
+    mov [w16_clive], ax
+    mov ax, di
+    shr ax, cl
+    add ax, dx
+    mov [w16_cthk], ax
+    push es                         ; the live table and the thunks, zeroed
+    mov es, dx
+    mov cx, [w16_cnord]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, di
+    sub cx, bx
+    mov di, bx
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    mov cx, [w16_fend]              ; the tables, as they were read
+    push ds
+    push es
+    push es
+    pop ds
+    mov es, dx
+    xor si, si
+    xor di, di
+    rep movsb
+    pop es
+    pop ds
+    call w16l_lfill
+    call w16l_tinit
+.ok:
+    clc
+.out:
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_lfill - the live table from the layout: each segment's paragraph in
+; the claim (0 for a discardable one) and whether it is discardable. ES = the
+; tables. Keeps all.
+w16l_lfill:
+    push ax
+    push bx
+    push dx
+    push di
+    xor bx, bx
+    xor di, di
+.seg:
+    mov ax, [w16_sbase + bx]
+    xor dl, dl
+    call w16l_isdisc
+    jnc .flags
+    mov dl, W16CLF_DISC
+.flags:
+    push es
+    mov es, [w16_clive]
+    mov [es:di + W16CL_BASE], ax
+    mov [es:di + W16CL_FL], dl
+    pop es
+    add di, W16CL_SIZE
+    inc bx
+    inc bx
+    mov ax, bx
+    shr ax, 1
+    cmp ax, [w16_nseg]
+    jb .seg
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16l_tinit - a thunk for every moveable entry in a discardable segment,
+; pointing at w16_thkhit (SPEC.md 124.26.2). ES = the tables. Keeps all.
+w16l_tinit:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov si, [w16_ne]
+    add si, [es:si + NE_ENTTAB]
+    xor di, di                      ; DI = the bundle's first thunk
+.bundle:
+    xor cx, cx
+    mov cl, [es:si]
+    jcxz .done
+    mov dl, [es:si + 1]
+    add si, 2
+    cmp dl, 0xFF
+    je .entry
+    or dl, dl                       ; skipped ordinals, then fixed and
+    jz .past                        ;   constant ones, 3 bytes each
+    add si, cx
+    add si, cx
+    add si, cx
+.past:
+    mov ax, cx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add di, ax
+    jmp short .bundle
+.entry:
+    mov dl, [es:si + 3]             ; its segment
+    xor dh, dh
+    call w16l_isdlive
+    jnc .next
+    mov ax, [es:si + 4]             ; its offset
+    push es
+    mov es, [w16_cthk]
+    mov byte [es:di], 0x9A          ; call far w16_thkhit
+    mov word [es:di + 1], w16_thkhit
+    mov [es:di + 3], ds             ; (the image's segment)
+    mov [es:di + W16TK_SEG], dl
+    mov [es:di + W16TK_OFF], ax
+    pop es
+.next:
+    add si, 6
+    add di, W16TK_SIZE
+    loop .entry
+    jmp short .bundle
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16l_thkset - AX = a segment's number, DX = its paragraph, or 0: each of its
+; thunks jumps to it, or calls w16_thkhit (SPEC.md 124.26.2). Keeps all.
+w16l_thkset:
+    push cx
+    push di
+    push es
+    mov es, [w16_cthk]
+    xor di, di
+    mov cx, [w16_cnord]
+    jcxz .out
+.thunk:
+    cmp byte [es:di], 0             ; no thunk at this ordinal
+    je .next
+    cmp [es:di + W16TK_SEG], al
+    jne .next
+    or dx, dx
+    jz .gone
+    mov byte [es:di], 0xEA          ; jmp far the entry
+    push word [es:di + W16TK_OFF]
+    pop word [es:di + 1]
+    mov [es:di + 3], dx
+    jmp short .next
+.gone:
+    mov byte [es:di], 0x9A          ; call far w16_thkhit
+    mov word [es:di + 1], w16_thkhit
+    mov [es:di + 3], ds
+.next:
+    add di, W16TK_SIZE
+    loop .thunk
+.out:
+    pop es
+    pop di
+    pop cx
+    ret
+
+; w16l_segtab - BX = a segment's index * 2: ES:DI -> its row of the segment
+; table, and AX = its size, the larger of its length and minalloc (both under
+; 64 KB for a discardable one). ES = the tables. Keeps the rest.
+w16l_segtab:
+    mov di, [w16_ne]
+    add di, [es:di + NE_SEGTAB]
+    add di, bx
+    add di, bx
+    add di, bx
+    add di, bx
+    mov ax, [es:di + 2]
+    cmp ax, [es:di + 6]
+    jae .ret
+    mov ax, [es:di + 6]
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_segalloc - a block for discardable segment DX, from the top of an arena
+; (SPEC.md 124.26.3): its paragraph in the live table and [w16_sbase], its
+; size in [w16_slen], its age new. ES = the tables. out: CF=1 no memory, and
+; nothing changed. Keeps all.
+; -----------------------------------------------------------------------------
+w16l_segalloc:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov bx, dx
+    dec bx
+    shl bx, 1
+    call w16l_segtab                ; AX = its size
+    mov [w16_slen + bx], ax
+    push dx
+    xor dx, dx
+    mov cl, W16G_HIGH
+    ICALL w16_gnew                  ; AX = the handle: its segment, as DX
+    pop cx                          ; CX = its number
+    or ax, ax
+    jz .none
+    mov [w16_sbase + bx], dx
+    dec ax
+    mov es, ax                      ; its header: code, and which
+    or byte [es:GH_FLAGS], GHF_CODE
+    mov [es:GH_OWNER], cx
+    mov ax, [es:GH_SIZE]
+    add [w16_cused], ax
+    xchg dx, cx                     ; DX = the number, CX = the paragraph
+    call w16l_lent
+    mov [es:si + W16CL_BASE], cx
+    inc word [w16_gclock]
+    mov ax, [w16_gclock]
+    mov [es:si + W16CL_AGE], ax
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_segfill - discardable segment DX's block filled (SPEC.md 124.26.3): its
+; bytes read and the rest zeroed, its relocation records read into the module
+; block and applied, its exported prologs patched and its thunks pointed at
+; it. [w16_sbase] must be every segment's paragraph. The cluster cache is
+; [w16_cseg]. out: CF=1 refused, [w16_l1]/[w16_l2] say why. Keeps all.
+; -----------------------------------------------------------------------------
+w16l_segfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov bp, dx                      ; BP = its number
+    mov bx, dx
+    dec bx
+    shl bx, 1                       ; BX = index * 2
+    mov es, [w16_cmb]
+    call w16l_segtab                ; ES:DI -> its row
+    mov ax, [es:di]
+    call w16l_secoff                ; DX:AX = its bytes in the file
+    mov cx, [es:di + 2]             ; its length
+    add ax, cx
+    adc dx, 0
+    mov [w16_soff], ax              ; ...and where its records are
+    mov [w16_soff + 2], dx
+    sub ax, cx
+    sbb dx, 0
+    push di
+    push es
+    mov es, [w16_sbase + bx]
+    xor di, di
+    call w16l_fread
+    mov cx, [w16_slen + bx]
+    pop es
+    pop si                          ; SI -> its row
+    jc .trunc
+    push es                         ; the rest of it zeroed
+    mov di, [es:si + 2]
+    sub cx, di
+    mov es, [w16_sbase + bx]
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    test word [es:si + 4], NSF_RELOC
+    jz .prolog
+    mov ax, [w16_soff]              ; the count, then the records
+    mov dx, [w16_soff + 2]
+    mov di, [w16_crel]
+    mov cx, 2
+    call w16l_fread
+    jc .trunc
+    mov cx, [es:di]
+    push cx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    jz .read
+    mov ax, di                      ; the room, sized at launch for the most
+    add ax, 2                       ;   a discardable segment has
+    add ax, cx
+    jc .toomany
+    mov dx, [w16_clive]
+    sub dx, [w16_cmb]
+    push cx
+    mov cl, 4
+    shl dx, cl
+    pop cx
+    cmp ax, dx
+    ja .toomany
+    mov ax, [w16_soff]
+    mov dx, [w16_soff + 2]
+    add ax, 2
+    adc dx, 0
+    add di, 2
+    call w16l_fread
+.read:
+    pop cx                          ; the count
+    jc .trunc
+    mov si, [w16_crel]
+    add si, 2
+    push word [w16_rpass]
+    mov byte [w16_rpass], 1
+.rec:
+    jcxz .applied
+    push cx
+    push bp
+    call w16_reloc1                 ; CF=1: a refusal, written (keeps no BP)
+    pop bp
+    pop cx
+    jc .rfail
+    add si, 8
+    loop .rec
+.applied:
+    pop word [w16_rpass]
+.prolog:
+    mov ax, bx                      ; its exported prologs only
+    inc ax
+    mov [w16_pone], ax
+    push bx
+    call w16_prologs                ; (which keeps no BX)
+    pop bx
+    mov word [w16_pone], 0
+    mov ax, bp                      ; its thunks, at it
+    mov dx, [w16_sbase + bx]
+    call w16l_thkset
+    clc
+    jmp short .out
+.rfail:
+    pop word [w16_rpass]
+    stc
+    jmp short .out
+.toomany:
+    pop cx
+.trunc:
+    mov si, w16_r_trunc
+    mov di, w16_l1
+    ICALL w16_strcpy
+    mov si, w16_name
+    mov di, w16_l2
+    ICALL w16_strcpy
+    stc
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_segsup - the discardable segments loaded at launch (SPEC.md 124.26.3):
+; the entry point's, every PRELOAD and every kept one - all of them on a CPU
+; the census decides for. A block for each first, then each filled, so a kept
+; segment's paragraph is there for every relocation that names it. A PRELOAD
+; one that does not fit waits for its first call. ES = the tables.
+; out: CF=1 refused, [w16_l1]/[w16_l2] written. Keeps ES.
+; -----------------------------------------------------------------------------
+w16l_segsup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp word [w16_cmb], 0
+    jne .some
+    jmp .ok
+.some:
+    mov cl, 1                       ; CL = 1: every one (the census)
+%ifndef W16_CENSUS_ALWAYS
+    cmp byte [w16_cpu186], 0
+    je .blocks
+    xor cl, cl
+%endif
+.blocks:
+    xor bx, bx
+.alloc:
+    mov dx, bx
+    shr dx, 1
+    inc dx                          ; DX = its number
+    call w16l_isdlive
+    jnc .anext
+    or cl, cl
+    jnz .must
+    push es
+    push si
+    call w16l_lent
+    test byte [es:si + W16CL_FL], W16CLF_KEEP
+    pop si
+    pop es
+    jnz .must
+    mov si, [w16_ne]
+    cmp dx, [es:si + NE_CS]         ; the entry point's
+    je .must
+    call w16l_segtab
+    test word [es:di + 4], NSF_PRELOAD
+    jz .anext
+    call w16l_segalloc              ; a PRELOAD one if it fits
+    jmp short .anext
+.must:
+    call w16l_segalloc
+    jc .nomem
+.anext:
+    inc bx
+    inc bx
+    mov ax, bx
+    shr ax, 1
+    cmp ax, [w16_nseg]
+    jb .alloc
+    xor bx, bx                      ; then each one that has a block, filled
+.fill:
+    mov dx, bx
+    shr dx, 1
+    inc dx
+    call w16l_isdlive
+    jnc .fnext
+    cmp word [w16_sbase + bx], 0
+    je .fnext
+    call w16l_segfill
+    jc .out
+.fnext:
+    inc bx
+    inc bx
+    mov ax, bx
+    shr ax, 1
+    cmp ax, [w16_nseg]
+    jb .fill
+.ok:
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.nomem:
+    mov si, w16_r_mem
+    mov di, w16_l1
+    ICALL w16_strcpy
+    mov si, w16_name
+    mov di, w16_l2
+    ICALL w16_strcpy
+    stc
+    jmp short .out
+
+; -----------------------------------------------------------------------------
+; w16l_segin - discardable segment AX loaded while the program runs (SPEC.md
+; 124.26.3), for w16_segld: the program's folder made current and a cluster
+; cache taken for it, the budget kept (124.26.6), a block, and it filled.
+; out: CF=0 DX = its paragraph; CF=1 not loaded, [w16_l1]/[w16_l2] say why.
+; Keeps all but DX.
+; -----------------------------------------------------------------------------
+w16l_segin:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    mov dx, ax
+    call w16l_lent                  ; ES:SI -> its live entry
+    jc .bad
+    mov ax, [es:si + W16CL_BASE]
+    or ax, ax
+    jz .load
+    mov dx, ax                      ; already here
+    clc
+    jmp .ret
+.bad:
+    mov si, w16_r_reloc
+    jmp .lines
+.load:
+    mov bp, dx                      ; BP = its number
+    mov byte [w16_cdo], 1
+    mov word [w16_ne], 0
+    mov cx, [w16_cnseg]             ; the program's, whatever a library's
+    mov [w16_nseg], cx              ;   load left in the loader's scratch
+    xor bx, bx
+    xor si, si
+.sbase:
+    mov ax, [es:si + W16CL_BASE]
+    mov [w16_sbase + bx], ax
+    add si, W16CL_SIZE
+    inc bx
+    inc bx
+    loop .sbase
+    call OSAPI_FILE_HERE            ; where the user is, to be put back
+    push dx
+    push bx
+    mov dx, [w16_dir]
+    mov bl, [w16_vol]
+    call OSAPI_FILE_GOTO_QM
+    mov si, w16_r_disk
+    jc .back
+    mov ax, [w16_csz]               ; the cluster cache, a block of WIN16's
+    add ax, 1023
+    rcr ax, 1
+    mov cl, 9
+    shr ax, cl
+    ICALL w16_kclaim
+    mov si, w16_r_code
+    jc .back
+    mov [w16_cseg], dx
+    mov word [w16_clen], 0
+    mov es, [w16_cmb]
+    mov bx, bp
+    dec bx
+    shl bx, 1
+    call w16l_segtab                ; AX = its size
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    inc ax                          ; AX = the paragraphs its block will take
+.budget:                            ; the least recently used ones not in
+    mov cx, [w16_cused]             ;   use, out until it fits (124.26.6)
+    add cx, ax
+    jc .over
+    cmp cx, [w16_cbud]
+    jbe .fits
+.over:
+    mov dx, 0xFFFF
+    call w16l_codeold
+    jnc .budget
+.fits:
+    mov dx, bp
+    call w16l_segalloc
+    mov si, w16_r_code
+    jc .uncache
+    call w16l_segfill
+    mov si, 1                       ; SI = 1: refused, the lines written
+    jc .drop
+    xor si, si                      ; SI = 0: loaded
+    jmp short .uncache
+.drop:
+    call w16l_segdrop
+.uncache:
+    xor dx, dx
+    xchg dx, [w16_cseg]
+    ICALL w16_kfree
+.back:
+    pop bx                          ; the user's folder back
+    pop dx
+    call OSAPI_FILE_GOTO_QM
+    mov byte [w16_cdo], 0
+    cmp si, 1
+    ja .lines                       ; SI = line 1
+    je .failed
+    mov dx, bp
+    call w16l_lent
+    mov dx, [es:si + W16CL_BASE]
+    clc
+    jmp short .ret
+.lines:                             ; SI = line 1, the program's name line 2
+    mov di, w16_l1
+    ICALL w16_strcpy
+    mov si, w16_name
+    mov di, w16_l2
+    ICALL w16_strcpy
+.failed:
+    stc
+.ret:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_segdrop - discardable segment DX's block given back and its thunks
+; pointed at w16_thkhit: it is not loaded. Keeps all.
+w16l_segdrop:
+    push ax
+    push bx
+    push si
+    push es
+    mov ax, dx
+    push dx
+    xor dx, dx
+    call w16l_thkset
+    pop dx
+    call w16l_lent
+    xor ax, ax
+    xchg ax, [es:si + W16CL_BASE]
+    or ax, ax
+    jz .out
+    dec ax                          ; its header
+    mov es, ax
+    mov bx, [es:GH_SIZE]
+    sub [w16_cused], bx
+    ICALL w16_gfreeblk
+.out:
+    pop es
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_codeold - DX = an age: the least recently used discardable code
+; segment older than it that no word of the program's live stack names,
+; discarded (SPEC.md 124.26.5). One that is named is in use: it is aged as
+; new and the next is tried. CF=1 none went. Keeps all.
+; -----------------------------------------------------------------------------
+w16l_codeold:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    mov cx, [w16_cnseg]             ; at most every one is found in use
+    inc cx
+.try:
+    mov es, [w16_clive]
+    xor si, si
+    mov bx, [w16_cnseg]
+    mov di, 0xFFFF                  ; DI = the oldest's entry, BP its age
+    mov bp, dx
+.seg:
+    mov al, [es:si + W16CL_FL]
+    and al, W16CLF_DISC | W16CLF_KEEP
+    cmp al, W16CLF_DISC
+    jne .next
+    cmp word [es:si + W16CL_BASE], 0
+    je .next
+    mov ax, [es:si + W16CL_AGE]
+    cmp ax, bp
+    jae .next
+    mov bp, ax
+    mov di, si
+.next:
+    add si, W16CL_SIZE
+    dec bx
+    jnz .seg
+    cmp di, 0xFFFF
+    je .none
+    mov ax, [es:di + W16CL_BASE]
+    call w16l_inuse
+    jne .drop
+    inc word [w16_gclock]           ; in use: new, and the next one
+    mov ax, [w16_gclock]
+    mov [es:di + W16CL_AGE], ax
+    loop .try
+.none:
+    stc
+    jmp short .out
+.drop:
+    push dx
+    mov ax, di                      ; its number: the entry / 6 + 1
+    xor dx, dx
+    mov bx, W16CL_SIZE
+    div bx
+    inc ax
+    mov dx, ax
+    call w16l_segdrop
+    pop dx
+    clc
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_inuse - AX = a paragraph: ZF=1 a word of the program's live stack is
+; it, from the waiting call's frame to the top (SPEC.md 124.26.5). Keeps all.
+w16l_inuse:
+    push cx
+    push di
+    push es
+    mov es, [w16_pss]
+    mov di, [w16_psp_]
+    mov cx, [w16_stop]
+    sub cx, di
+    jbe .no
+    shr cx, 1
+    jz .no
+    cld
+    repne scasw
+    jmp short .out
+.no:
+    xor cx, cx
+    inc cx                          ; ZF = 0
+.out:
+    pop es
+    pop di
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; w16l_keep - part 5 kept when the program has discardable code (SPEC.md
+; 124.26.3): copied into a block of the global heap with the bind table it
+; built, where w16_ldcall far-calls it from now on. out: CF=1 SI = reason
+; -----------------------------------------------------------------------------
+w16l_keep:
+    cmp word [w16_cmb], 0
+    je .ok
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    mov ax, (w16l_end - w16l_base + 1023) / 1024
+    ICALL w16_kclaim
+    jc .mem
+    mov es, dx
+    xor si, si
+    xor di, di
+    mov cx, (w16l_end - w16l_base + 1) / 2
+    push ds
+    push cs                         ; XSEC-OK: this part's own bytes, read
+    pop ds
+    cld
+    rep movsw
+    pop ds
+    mov [w16_ldk], dx
+    clc
+    jmp short .out
+.mem:
+    mov si, w16_r_mem
+    stc
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+.ok:
+    clc
+    ret
+
 section .text
 ; --- the loader's own bss, beside the package's -----------------------------
 ; (declared here, in the image, rather than in w16_* bss: they are scratch
@@ -2752,6 +3836,7 @@ w16_r_read:    db 'Cannot read the file.', 0
 w16_r_notwin:  db 'This is not a Windows program.', 0
 w16_r_tabs:    db 'Its tables are larger than WIN16 can read.', 0
 w16_r_mem:     db 'Not enough memory to load it.', 0
+w16_r_code:    db 'Not enough memory for its code.', 0
 w16_r_lib:     db 'A Windows library, not a program.', 0
 w16_r_self:    db 'It loads itself: not supported.', 0
 w16_r_linkerr: db 'Its linker reported errors.', 0
