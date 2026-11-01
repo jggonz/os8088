@@ -229475,7 +229475,7 @@ So WIN16 keeps three kinds of claim and no more:
 |---|---|
 | the program (§124.20.2) | one |
 | the library part (§124.19) | one, from its first call |
-| the global heap's arenas (§124.9) | at most `W16_NARENA` = 3: 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB; each one the size of a larger request instead, and the request's own size when the larger one cannot be had |
+| the global heap's arenas (§124.9) | at most `W16_NARENA` = 3: 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm, §124.31.1); each one the size of a larger request instead, and the request's own size when the larger one cannot be had |
 
 Everything else WIN16 keeps is a **block of its own in the global heap**
 (`w16_kclaim`), in the arenas beside the program's blocks: each profile
@@ -230639,6 +230639,7 @@ byte of it.
 | `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
 | the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
 | class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
+| the third arena | leaves `W16_ARKEEP` = **96 KB** of the largest free run, not 32 (§124.25.1): a part's fetch is a conventional claim on kern_mega whatever the class byte says (`op_fetch`'s DMA door), and the library part's is 62 KB. With 32 a program that made its third arena before its first library call could not fetch the part at all: MMTEST did, once S23 batch 2 took the system-library part from 33 to 34 KB, and its closing `MessageBox` ended it with *WIN16's library part could not be read* (seen 2026-11-01; 96 cured it). A constant, so no byte of either image |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
 #### 124.31.2 What the kernel lends
@@ -230997,18 +230998,92 @@ bytes and `mmioSetInfo` takes back `pchNext`, `pchEndRead` and
   - With `MMIO_EXIST` it answers whether the file opens; with
     `MMIO_DELETE`, whether it was deleted.
 
-#### 124.32.3 Planned *(S23 batches 2-4)*
+#### 124.32.3 `waveOut` and `sndPlaySound` *(S23 batch 2)*
 
-- **Batch 2: `waveOut` and `sndPlaySound`**, over `SOUND.DRV`'s stream verbs
-  (§34.5, a ring in a grant, WaveRack's shape, §123):
-  - `WAVEHDR` blocks are queued and copied into the ring on WIN16's turns.
-  - A finished block gets `WHDR_DONE`, and its notice goes to the window
-    (`MM_WOM_DONE`) or to the function; the function is called on the UI
-    task, not at interrupt time.
-  - A format the card cannot play answers `WAVERR_BADFORMAT` (32).
-  - With `WAVE_FORMAT_QUERY` the call opens nothing.
+One output device, device 0 (`WAVE_MAPPER` is the same one), over
+`SOUND.DRV`'s ring stream (§34.5) in a grant, WaveRack's shape (§123):
+
+- **An `HWAVEOUT` is a fixed global block of the program's heap**, as an
+  `HMMIO` is: the stream's handle, the grant, the counts, the queue's ends,
+  the callback, a 256-byte run of silence and `sndPlaySound`'s own
+  `WAVEHDR`. One is open at a time; a second `waveOutOpen` answers
+  `MMSYSERR_ALLOCATED` (4).
+- **The queue is the program's own `WAVEHDR`s**, linked through `lpNext`,
+  the field Windows reserves for the driver. `reserved` holds where the
+  block ends in the stream's bytes once it has all been copied. No count is
+  fixed, so no `waveOutWrite` is refused for room.
+- **`waveOutOpen`** takes `WAVE_FORMAT_PCM`, one or two channels, 8 or 16
+  bits, 4,000 to 44,100 Hz, and refuses with `WAVERR_BADFORMAT` (32)
+  whatever `OSAPI_SND_CAPS` says the card cannot play:
+  - above 22,222 Hz without `SND_CAP_PCM_HI`;
+  - stereo without `SND_CAP_STEREO`, and above 22,050 Hz without
+    `SND_CAP_PCM16` (an SB Pro);
+  - 16 bits without `SND_CAP_PCM16`.
+  With `WAVE_FORMAT_QUERY` it answers that and opens nothing. Without a
+  `SND_CAP_PCM_BG` stream it answers `MMSYSERR_BADDEVICEID` (2), as
+  `waveOutGetNumDevs`' 0 says it would.
+- **The ring** is a grant of 8 KB, 16 KB above 22,050 bytes a second and
+  32 KB above 44,100, halved down to two of the card's halves when the
+  pool has less (`MMSYSERR_NOMEM`, 7, below that). The stream is opened
+  when the first half is copied (verb 11 first for stereo or 16 bits), and
+  closed by `waveOutReset` and `waveOutClose`. A stream the watchdog ended
+  is closed and opened again by the next write.
+- **The copy is made on WIN16's turns**: in `waveOutWrite`, in
+  `waveOutGetPosition`, and on every tick while a block is queued (the
+  arm's `w16_tarm` keeps the timer at one tick then). As much is copied
+  as the ring has room for: 371 ms at 22,050 Hz in 8 KB. A program that
+  does not return to its message loop for longer than that underruns, and
+  the card waits for it.
+- **When the queue has been copied** the ring is padded with silence to
+  the card's next half, so the last block plays to its end and its
+  `WHDR_DONE` comes; a block written after that plays after the pad.
+- **A block is done** when verb 9 (verb 3 on a driver without it) says
+  the card has played past its end. It gets `WHDR_DONE`, loses
+  `WHDR_INQUEUE`, and its notice goes out:
+  - `CALLBACK_WINDOW`: `MM_WOM_DONE` (3BDh) posted to the window, `wParam`
+    the `HWAVEOUT`, `lParam` the `WAVEHDR`; `MM_WOM_OPEN` (3BBh) and
+    `MM_WOM_CLOSE` (3BCh) likewise;
+  - `CALLBACK_TASK`: the same messages posted to the task's queue with no
+    window;
+  - `CALLBACK_FUNCTION`: accepted, and nothing called until batch 4. The
+    block's flags still say when it is done.
+- **One block's loop**: a block with both `WHDR_BEGINLOOP` and
+  `WHDR_ENDLOOP` is copied `dwLoops` times; `waveOutBreakLoop` makes the
+  pass being copied its last. A loop over several blocks plays once.
+- **`waveOutPause`** stops the copy, so the card stops when the ring runs
+  out, and `waveOutRestart` starts it again. A grant ring cannot be paused
+  where it is (verb 10 is an external ring's), so up to the ring's length
+  plays after the pause.
+- **`waveOutGetPosition`** answers the bytes played since the open or the
+  last reset, in `TIME_BYTES`, `TIME_SAMPLES` or `TIME_MS`; any other kind
+  is answered as `TIME_BYTES`, with `wType` changed to say so.
+- `waveOutPrepareHeader` and `waveOutUnprepareHeader` set and clear
+  `WHDR_PREPARED`; a queued block is not unprepared
+  (`WAVERR_STILLPLAYING`, 33), an unprepared one not written
+  (`WAVERR_UNPREPARED`, 34). `waveOutClose` with blocks queued answers
+  `WAVERR_STILLPLAYING`.
+- `waveOutGetErrorText` copies the sentence for each of those codes.
+  `waveOutGetID` answers 0. Volume, pitch, playback rate and
+  `waveOutMessage` answer `MMSYSERR_NOTSUPPORTED` (8).
+- **`sndPlaySound`** reads the WAV whole into a block of the program's
+  heap (or plays it where it lies, `SND_MEMORY`), finds its `fmt ` and
+  `data` chunks, and plays it through the same path with no callback, the
+  device closing itself when it ends.
+  - `SND_ASYNC` returns at once; without it the call returns when the
+    sound has played, yielding the time slice between copies.
+  - `SND_LOOP` plays it until the next `sndPlaySound`.
+  - A sound already playing is stopped, unless `SND_NOSTOP`, which answers
+    FALSE. A NULL name stops it.
+  - With the device open by `waveOutOpen`, or a file that does not open or
+    is not a WAV the card can play, it answers FALSE. There is no default
+    sound and no `WIN.INI` `[sounds]` name.
+- **At the program's end** the stream is closed and the grant given back;
+  the blocks go with its heap.
+
+#### 124.32.4 Planned *(S23 batches 3-4)*
+
 - **Batch 3: MCI.** `mciSendCommand` and `mciSendString` for `cdaudio`,
   over `CDROM.DRV`'s package door (§119.4), and `waveaudio` over batch 2.
-- **Batch 4:** `waveIn` over the record verbs (§34.6), `timeSetEvent`, and
-  `midiOut` where `SOUND.DRV` has an MPU-401 (§34.13). SOUNDREC and MPLAYER
-  are its look.
+- **Batch 4:** `waveIn` over the record verbs (§34.6), `timeSetEvent`,
+  `CALLBACK_FUNCTION`'s call, and `midiOut` where `SOUND.DRV` has an MPU-401
+  (§34.13). SOUNDREC and MPLAYER are its look.

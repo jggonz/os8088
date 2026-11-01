@@ -2675,6 +2675,12 @@ w16_tarm:
     jbe .nohv
     mov bx, 1
 .nohv:
+%ifdef PKG_MEGA
+    cmp byte [w16mm_wq], 0          ; a waveOut block queued: every tick
+    je .nowo                        ;   (SPEC.md 124.32.3; BX is 1 at least)
+    mov bx, 1
+.nowo:
+%endif
     mov ax, bx
     inc bx
     jnz .arm
@@ -2718,6 +2724,12 @@ w16_ontimer:
     je .nosnd                       ;   the library part's
     LCALL w16s_tick
 .nosnd:
+%ifdef PKG_MEGA
+    cmp byte [w16mm_wq], 0          ; waveOut's copy (SPEC.md 124.32.3)
+    je .nowo
+    SCALL w16mm_wtick
+.nowo:
+%endif
     call w16_ofnpoll                ; a file dialog gone unanswered (124.24.2)
     call w16_hover                  ; a move with no button down (124.8)
     call w16_tarm

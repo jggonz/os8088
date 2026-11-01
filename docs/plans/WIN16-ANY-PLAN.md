@@ -1469,7 +1469,14 @@ its table goes in the diary, so the reach is measured, not claimed.
       Its RIFF file went out through CreateChunk and Ascend and back in
       three ways (Descend and Read; GetInfo and Advance; a memory file),
       then EXIST and DELETE. Arm: 589 bytes of room.
-    - [ ] *Batch 2: `waveOut` and `sndPlaySound`* over SOUND.DRV's ring.
+    - [x] *Batch 2: `waveOut` and `sndPlaySound`* over SOUND.DRV's ring
+      (124.32.3). **Seen 2026-11-01 on the dev kern_mega with an SB16:**
+      "mmtest: 0 wrong, waveOut 1, step 1 ms, played 486 ms". Three
+      blocks were done in order with their `MM_WOM_DONE`, the position
+      was right, and the capture holds the tone. With no card: "0 wrong,
+      waveOut 0". The arm's third arena now keeps 96 KB (124.31.1), so the
+      library part can still be fetched. Arm: 31 bytes of room (65,024 less
+      image and bss; the earlier "589" was against 65,536).
     - [ ] *Batch 3: MCI*, `cdaudio` over CDROM.DRV and `waveaudio`.
     - [ ] *Batch 4: `waveIn`, `timeSetEvent`, `midiOut`*; SOUNDREC and
       MPLAYER.

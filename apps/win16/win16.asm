@@ -351,6 +351,8 @@ section .w16dlg
     W16BSS w16mm_lim, 4          ;   its parent's end (mmioOpen's name),
     W16BSS w16mm_ock, 4          ;   and the program's MMCKINFO
     W16BSS w16mm_last, 4        ; timeGetTime's last answer (124.32.1)
+    W16BSS w16mm_wo, 2          ; the HWAVEOUT open, 0 none (124.32.3),
+    W16BSS w16mm_wq, 2          ;   and 1 while a block of it is queued
 %endif
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     ; --- S16: the DOS (SPEC.md 124.21) ---
@@ -1372,6 +1374,12 @@ w16_freeprog:
     pop es
     pop di
     call w16_dlgout
+%ifdef PKG_MEGA
+    cmp word [w16mm_wo], 0          ; waveOut's stream closed (124.32.3)
+    je .nowo
+    SCALL w16mm_wend
+.nowo:
+%endif
     call w16_sysout                 ; ...and the system-library part (124.24.1)
     call w16x_end                   ; its floating point (SPEC.md 124.5)
     call w16_dosend                 ; its files closed, the DOS freed (124.21)

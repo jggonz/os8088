@@ -23,8 +23,12 @@ W16_ARENAKB equ 32              ; the first arena's KB unless a request is
                                 ;   more; the second is twice it
 W16_LHROOM  equ 4096            ; a library's local heap, past its ne_heap
                                 ;   (SPEC.md 124.25.2)
+%ifndef PKG_MEGA
 W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
                                 ;   largest free run (SPEC.md 124.25.1)
+%else
+W16_ARKEEP  equ 96              ; ...on kern_mega the library part's 62 KB
+%endif                          ;   too: its fetch is conventional (124.31.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
 W16_GHDISC  equ 2               ; [w16_ghf]: GMEM_DISCARDABLE (1 = in use)
 W16_GHNOTE  equ 4               ;   ...and GMEM_NOTIFY: discarded only when

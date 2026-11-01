@@ -10,6 +10,10 @@
  *   - mmioDescend and mmioRead;
  *   - mmioGetInfo and mmioAdvance, through the buffer;
  *   - as a memory file over a copy of its bytes.
+ * - waveOut (batch 2): three blocks of a tone queued with CALLBACK_TASK, each
+ *   done in order with its MM_WOM_DONE, and the position at their end; the
+ *   refusals on the way. Then sndPlaySound: that RIFF file to its end, a
+ *   sound in memory looped and stopped, and the device free after.
  *   Then MMIO_EXIST and MMIO_DELETE.
  *
  * Every check that fails is named in the message box. In real mode it says
@@ -29,6 +33,13 @@ static unsigned char pat[NDATA];
 static unsigned char got[NDATA];
 static unsigned char file[NFILE];
 static PCMWAVEFORMAT fmt;
+
+#define NTONE 3000                  /* a block: 272 ms at 11,025 Hz */
+#define NWAV 1000                   /* the sound in memory: 91 ms */
+static unsigned char tone[NTONE];
+static WAVEHDR wh[3];
+static unsigned char wav[44 + NWAV];
+static DWORD played;
 
 static void check(int ok, const char *tag)
 {
@@ -69,6 +80,155 @@ static int readback(HMMIO h, const char *tag)
     sprintf(t, "%sasc", tag);
     check(mmioAscend(h, &ck, 0) == 0, t);
     return (int)ck.dwDataOffset;
+}
+
+static void put4(unsigned char *p, DWORD v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+/* the messages MM_WOM_OPEN..MM_WOM_DONE posted to this task, for up to ms */
+static int wompump(HWAVEOUT hw, int *opens, int *dones, int *closes,
+                   int want, DWORD ms)
+{
+    MSG msg;
+    DWORD t0 = timeGetTime();
+
+    while (*dones < want && timeGetTime() - t0 < ms) {
+        if (!PeekMessage(&msg, 0, MM_WOM_OPEN, MM_WOM_DONE, PM_REMOVE))
+            continue;
+        if (msg.message == MM_WOM_OPEN)
+            (*opens)++;
+        else if (msg.message == MM_WOM_CLOSE) {
+            (*closes)++;
+            return 1;
+        } else if (msg.message == MM_WOM_DONE) {
+            check(msg.wParam == (WPARAM)hw
+                  && (WAVEHDR FAR *)msg.lParam == (WAVEHDR FAR *)&wh[*dones],
+                  "donemsg");
+            (*dones)++;
+        }
+    }
+    return *dones >= want;
+}
+
+/* waveOut and sndPlaySound (SPEC.md 124.32.3) */
+static void waveout(UINT n)
+{
+    PCMWAVEFORMAT pf;
+    HWAVEOUT hw = 0, h2;
+    MMTIME mt;
+    MSG msg;
+    char s[80];
+    DWORD t0;
+    int i, k, opens = 0, dones = 0, closes = 0;
+    UINT r;
+
+    pf.wf.wFormatTag = WAVE_FORMAT_PCM;
+    pf.wf.nChannels = 1;
+    pf.wf.nSamplesPerSec = 11025;
+    pf.wf.nAvgBytesPerSec = 11025;
+    pf.wf.nBlockAlign = 1;
+    pf.wBitsPerSample = 8;
+    check(waveOutGetErrorText(WAVERR_BADFORMAT, s, sizeof s) == 0 && s[0],
+          "woerr");
+    if (!n) {
+        check(waveOutOpen(&hw, 0, (LPWAVEFORMAT)&pf, 0, 0, 0)
+              == MMSYSERR_BADDEVICEID, "wonone");
+        check(!sndPlaySound("MMTEST.WAV", SND_SYNC | SND_NODEFAULT),
+              "sndnone");
+        return;
+    }
+    check(waveOutOpen(NULL, 0, (LPWAVEFORMAT)&pf, 0, 0, WAVE_FORMAT_QUERY)
+          == 0, "query");
+    pf.wf.wFormatTag = 2;
+    check(waveOutOpen(&hw, 0, (LPWAVEFORMAT)&pf, 0, 0, 0) == WAVERR_BADFORMAT,
+          "badfmt");
+    pf.wf.wFormatTag = WAVE_FORMAT_PCM;
+    r = waveOutOpen(&hw, WAVE_MAPPER, (LPWAVEFORMAT)&pf,
+                    (DWORD)(UINT)GetCurrentTask(), 0, CALLBACK_TASK);
+    check(r == 0 && hw != 0, "woopen");
+    if (r != 0)
+        return;
+    check(waveOutOpen(&h2, 0, (LPWAVEFORMAT)&pf, 0, 0, 0)
+          == MMSYSERR_ALLOCATED, "alloc");
+    for (i = 0; i < NTONE; i++)         /* a 919 Hz square, three times */
+        tone[i] = (unsigned char)(((i / 6) & 1) ? 0xC0 : 0x40);
+    for (k = 0; k < 3; k++) {
+        memset(&wh[k], 0, sizeof wh[k]);
+        wh[k].lpData = (LPSTR)tone;
+        wh[k].dwBufferLength = NTONE;
+    }
+    check(waveOutWrite(hw, &wh[0], sizeof(WAVEHDR)) == WAVERR_UNPREPARED,
+          "unprep");
+    for (k = 0; k < 3; k++)
+        check(waveOutPrepareHeader(hw, &wh[k], sizeof(WAVEHDR)) == 0
+              && (wh[k].dwFlags & WHDR_PREPARED), "prep");
+    t0 = timeGetTime();
+    for (k = 0; k < 3; k++)
+        check(waveOutWrite(hw, &wh[k], sizeof(WAVEHDR)) == 0, "write");
+    check(!(wh[2].dwFlags & WHDR_DONE) && (wh[2].dwFlags & WHDR_INQUEUE),
+          "queued");
+    check(waveOutClose(hw) == WAVERR_STILLPLAYING, "stillplay");
+    check(waveOutUnprepareHeader(hw, &wh[2], sizeof(WAVEHDR))
+          == WAVERR_STILLPLAYING, "unprepq");
+    wompump(hw, &opens, &dones, &closes, 3, 5000);
+    played = timeGetTime() - t0;
+    check(opens == 1, "womopen");
+    check(dones == 3, "womdone");
+    for (k = 0; k < 3; k++)
+        check((wh[k].dwFlags & WHDR_DONE) && !(wh[k].dwFlags & WHDR_INQUEUE),
+              "done");
+    /* 816 ms of sound: QEMU's SB16 takes it in about 490 ms of guest time,
+     * so this asks only that a block is not done when it is written */
+    check(played >= 400, "quick");
+    mt.wType = TIME_BYTES;
+    check(waveOutGetPosition(hw, &mt, sizeof mt) == 0 && mt.wType == TIME_BYTES
+          && mt.u.cb >= 3L * NTONE, "posb");
+    mt.wType = TIME_MS;
+    check(waveOutGetPosition(hw, &mt, sizeof mt) == 0 && mt.u.ms >= 810
+          && mt.u.ms < 1300, "posms");
+    mt.wType = TIME_SMPTE;
+    check(waveOutGetPosition(hw, &mt, sizeof mt) == 0 && mt.wType == TIME_BYTES,
+          "possmpte");
+    for (k = 0; k < 3; k++)
+        check(waveOutUnprepareHeader(hw, &wh[k], sizeof(WAVEHDR)) == 0
+              && !(wh[k].dwFlags & WHDR_PREPARED), "unprepare");
+    check(waveOutClose(hw) == 0, "woclose");
+    wompump(hw, &opens, &dones, &closes, 4, 1000);
+    check(closes == 1, "womclose");
+
+    /* sndPlaySound: the RIFF file mmio wrote, played to its end */
+    t0 = timeGetTime();
+    check(sndPlaySound("MMTEST.WAV", SND_SYNC | SND_NODEFAULT), "sndfile");
+    check(timeGetTime() - t0 >= 80, "sndsync");     /* 91 ms of it */
+    check(!sndPlaySound("NOFILE.WAV", SND_SYNC | SND_NODEFAULT), "sndnofile");
+    /* ...one in memory, looped, not stopped by NOSTOP, then stopped */
+    memcpy(wav, "RIFF", 4);
+    put4(wav + 4, 36 + NWAV);
+    memcpy(wav + 8, "WAVEfmt ", 8);
+    put4(wav + 16, 16);
+    memcpy(wav + 20, &pf, 16);
+    memcpy(wav + 36, "data", 4);
+    put4(wav + 40, NWAV);
+    memcpy(wav + 44, tone, NWAV);
+    check(sndPlaySound((LPCSTR)wav, SND_MEMORY | SND_ASYNC | SND_LOOP),
+          "sndloop");
+    check(!sndPlaySound((LPCSTR)wav, SND_MEMORY | SND_ASYNC | SND_NOSTOP),
+          "sndnostop");
+    check(waveOutOpen(&h2, 0, (LPWAVEFORMAT)&pf, 0, 0, 0)
+          == MMSYSERR_ALLOCATED, "sndbusy");
+    t0 = timeGetTime();
+    while (timeGetTime() - t0 < 300)    /* three passes and a bit */
+        PeekMessage(&msg, 0, 0, 0, PM_NOREMOVE);
+    check(sndPlaySound(NULL, 0), "sndstop");
+    r = waveOutOpen(&h2, 0, (LPWAVEFORMAT)&pf, 0, 0, 0);
+    check(r == 0, "sndfree");
+    if (r == 0)
+        waveOutClose(h2);
 }
 
 int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
@@ -192,6 +352,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         mmioClose(h, 0);
     }
 
+    waveout(n);
+
     /* what a missing file says, and EXIST and DELETE */
     memset(&mi, 0, sizeof mi);
     check(mmioOpen("NOFILE.WAV", &mi, MMIO_READ) == 0
@@ -200,8 +362,9 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(mmioOpen("MMTEST.WAV", NULL, MMIO_DELETE) != 0, "delete");
     check(mmioOpen("MMTEST.WAV", NULL, MMIO_EXIST) == 0, "gone");
 
-    sprintf(res + strlen(res), "%smmtest: %d wrong, waveOut %u, step %lu ms",
-            fails ? " - " : "", fails, n, best);
+    sprintf(res + strlen(res),
+            "%smmtest: %d wrong, waveOut %u, step %lu ms, played %lu ms",
+            fails ? " - " : "", fails, n, best, played);
     MessageBox(0, res, "WIN16 mmtest", MB_OK);
     return 0;
 }

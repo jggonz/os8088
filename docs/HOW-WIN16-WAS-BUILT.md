@@ -3416,3 +3416,57 @@ byte) and read it back three ways:
 - GetInfo and Advance through the buffer;
 - as a memory file.
 Then it ran EXIST and DELETE.
+
+## 2026-11-01: S23 batch 2, waveOut and sndPlaySound
+
+**The shape.** One output device over `SOUND.DRV`'s ring stream, the way
+WaveRack plays: a grant of 8 KB (16 or 32 KB for a faster stream), the
+program's bytes staged into it with verb 6, the new total fed with verb 1,
+the card's place read exactly with verb 9.
+- An `HWAVEOUT` is a fixed block of the program's heap, as an `HMMIO` is.
+- **The queue is the program's own `WAVEHDR`s**, linked through `lpNext`,
+  the field Windows keeps for the driver. `reserved` holds where the block
+  ends in the stream. So there is no queue table and no count to run out of.
+- The copy happens on WIN16's turns: a write, a position asked, and the
+  tick while a block is queued. That needed two arm-only lines in WIN16's
+  timer (keep it at one tick, and call the copy) and one at the program's
+  end (close the stream). They cost 42 bytes of the arm's image; 31 are
+  left.
+- When the queue has all been copied, the ring is padded with silence to
+  the card's next half. Without it the last block's tail would sit in a
+  half the card never finishes, and that block would never be done.
+- `sndPlaySound` reads the WAV whole into a block, finds `fmt ` and `data`,
+  and plays it through the same path with its own `WAVEHDR` inside the
+  device's block. Without `SND_ASYNC` it sleeps a tick between copies until
+  the sound is done.
+
+**A discovery: the third arena.** With this batch the system-library part
+went from 33 to 34 KB, and MMTEST stopped at its closing `MessageBox` with
+*WIN16's library part could not be read*. Bisection:
+- HEAD's arm with a fixture free of waveOut: fine.
+- The new arm without the export rows: fine, but only because the program
+  never ran (a missing import is reported at load).
+- HEAD's arm with part 9 padded by 2,600 bytes (33 KB): fine; by 3,600
+  (34 KB): the same failure.
+
+So it was the size alone. Part 9 no longer fitted the second arena beside
+the program's blocks, WIN16 made its third, and the third takes the largest
+free run less 32 KB. On kern_mega a part's fetch is a conventional claim
+whatever the class byte says, and the library part's fetch is 62 KB, so
+after that third arena it could never be fetched. The arm now keeps 96 KB
+(`W16_ARKEEP`). It is a constant, so neither image changes. Real mode has
+the same rule and the same exposure for a program that allocates heavily
+before its first library call; that is noted for the lead.
+
+**Seen**, dev kern_mega, QEMU 486:
+- With an SB16 (SOUND.DRV wanted in SYSTEM.CFG): "mmtest: 0 wrong, waveOut
+  1, step 1 ms, played 486 ms".
+  - Three 3,000-byte blocks were queued with `CALLBACK_TASK`. Each was done
+    in order with its `MM_WOM_DONE`, after `MM_WOM_OPEN`. Close while
+    queued answered `WAVERR_STILLPLAYING`, and the position at the end was
+    between 810 and 1,300 ms.
+  - The capture holds the 919 Hz square.
+  - QEMU's card took the 816 ms of sound in about 490 ms of guest time. So
+    the fixture asks only that a block is not done as it is written.
+- With no card: "0 wrong, waveOut 0": `waveOutOpen` answered
+  `MMSYSERR_BADDEVICEID` and `sndPlaySound` answered FALSE.
