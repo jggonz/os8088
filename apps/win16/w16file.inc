@@ -88,8 +88,11 @@ w16_dosup:
     mov word [w16_dhent], W16DH_INIT
     mov [w16_dhent + 2], ax
     mov ax, [w16_psp]               ; AX = the PSP, BL = the volume, DX = the
-    mov bl, [w16_vol]               ;   folder, CX:SI = the window
-    mov dx, [w16_dir]
+    mov bl, [w16_vol]               ;   folder, CX:SI = the window, ES:DI =
+    mov dx, [w16_dir]               ;   the program's name
+    push ds
+    pop es
+    mov di, w16_name
     call far [w16_dhent]
     mov word [w16_dhent], W16DH_I21
     jc .free
@@ -311,6 +314,57 @@ w16f_rw:
     pop bx
     ICALL w16_dcall
     jmp short w16f_ax
+
+; AccessResource (KERNEL.64) - args: +0 hRsrc, +2 hInstance: a handle open
+; read-only on the program's own file, standing at the resource, for the
+; program to _lread and _lclose (SPEC.md 124.26.8); -1 when the file cannot
+; be had. The path is the one the DOS recorded where the program was found
+; (W16DH_PATH), because a bare name stops naming it after a folder change.
+; The program's own resources only, as SizeofResource answers them
+W16LIB w16k_accres
+    push si
+    ICALL w16_dosup
+    jc .no
+    mov es, [w16_dhseg]
+    cmp byte [es:W16DH_PATH], 0
+    je .no
+    ICALL w16_args
+    mov si, [es:bx]                 ; hRsrc: its entry in the kept table
+    or si, si
+    jz .no
+    mov es, [w16_rtab]
+    mov cl, [es:0]                  ; the alignment shift
+    mov ax, [es:si + RN_OFF]
+    xor dx, dx
+    xor ch, ch
+    jcxz .at
+.sh:
+    shl ax, 1
+    rcl dx, 1
+    loop .sh
+.at:
+    push dx
+    push ax
+    mov ax, 0x3D00                  ; OF_READ
+    mov dx, W16DH_PATH
+    mov es, [w16_dhseg]
+    ICALL w16_dcall
+    pop dx                          ; CX:DX = the resource's offset
+    pop cx
+    jc .no
+    mov bx, ax
+    push ax
+    mov ax, 0x4200
+    ICALL w16_dcall
+    pop ax
+    jnc .out
+    mov ah, 0x3E                    ; (BX = the handle still)
+    ICALL w16_dcall
+.no:
+    mov ax, -1
+.out:
+    pop si
+    ret
 
 ; _llseek (KERNEL.84) - args: +0 nOrigin, +2 lOffset, +6 hFile. DX:AX = the
 ; new position, or -1

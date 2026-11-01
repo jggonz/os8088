@@ -443,6 +443,12 @@ W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(w
 %define w16mdc_w16u_framerect
 %define w16mdc_w16u_invrect
 %define w16mdc_w16u_drawfocus
+%define w16mdc_w16g_gettextcol
+%define w16mdc_w16g_gettalign
+%define w16mdc_w16g_getcurpos
+%define w16mdc_w16g_clipbox
+%define w16mdc_w16g_fillrgn
+%define w16mdc_w16u_graystr
 ; Windows 3.1's Paintbrush (SPEC.md 124.25.10): atoms in the clipboard
 ; format table, and the answers a raster display and no metafile give
 W16EXPORT W16M_KERNEL,     70,      4,  w16k_addatom        ; AddAtom(str)
@@ -461,6 +467,40 @@ W16EXPORT W16M_GDI,        162,     2,  w16_ans0            ; GetBitmapDimension
 W16EXPORT W16M_USER,       120,     0,  w16u_msgtime        ; GetMessageTime()
 W16EXPORT W16M_USER,       192,     0,  w16_ans0            ; InSendMessage()
 W16EXPORT W16M_USER,       55,      10, w16u_enumchild      ; EnumChildWindows(word segptr long)
+; Windows Help, Terminal and Control Panel (SPEC.md 124.26.8): no window is
+; ever zoomed or iconic, no port is ever open, and what the Control Panel
+; sets for the desktop and the mouse is os8088's own Control Panel's
+W16EXPORT W16M_GDI,        345,     2,  w16g_gettalign      ; GetTextAlign(word)
+W16EXPORT W16M_GDI,        77,      6,  w16g_clipbox        ; GetClipBox(word ptr)
+W16EXPORT W16M_GDI,        78,      2,  w16g_getcurpos      ; GetCurrentPosition(word)
+W16EXPORT W16M_GDI,        90,      2,  w16g_gettextcol     ; GetTextColor(word)
+W16EXPORT W16M_KERNEL,     36,      0,  w16k_curtask        ; GetCurrentTask()
+W16EXPORT W16M_USER,       225,     10, w16u_enumwnd        ; EnumTaskWindows(word segptr long)
+W16EXPORT W16M_USER,       272,     2,  w16_ans0            ; IsZoomed(word)
+W16EXPORT W16M_USER,       44,      2,  w16_ans1            ; OpenIcon(word)
+W16EXPORT W16M_GDI,        65,      4,  w16g_rectrgni       ; CreateRectRgnIndirect(ptr)
+W16EXPORT W16M_KERNEL,     106,     2,  w16k_swaparea       ; SetSwapAreaSize(word)
+W16EXPORT W16M_KERNEL,     64,      4,  w16k_accres         ; AccessResource(word word)
+W16EXPORT W16M_USER,       185,     22, w16u_graystr        ; GrayString(word word segptr long s_word s_word s_word s_word s_word)
+W16EXPORT W16M_USER,       204,     8,  w16_ansm1           ; ReadComm(s_word ptr s_word)
+W16EXPORT W16M_USER,       208,     4,  w16_ans0            ; SetCommEventMask(s_word word)
+W16EXPORT W16M_USER,       210,     2,  w16_ansm1           ; SetCommBreak(s_word)
+W16EXPORT W16M_USER,       211,     2,  w16_ansm1           ; ClearCommBreak(s_word)
+W16EXPORT W16M_USER,       214,     4,  w16_ansm1           ; EscapeCommFunction(s_word s_word)
+W16EXPORT W16M_USER,       229,     2,  w16u_topwnd         ; GetTopWindow(word)
+W16EXPORT W16M_USER,       230,     4,  w16u_getwindow      ; GetNextWindow(word word)
+W16EXPORT W16M_GDI,        161,     6,  w16g_ptinrgn        ; PtInRegion(word s_word s_word)
+W16EXPORT W16M_GDI,        245,     6,  w16_ans0            ; GetSpoolJob(word long)
+W16EXPORT W16M_GDI,        40,      6,  w16g_fillrgn        ; FillRgn(word word word)
+W16EXPORT W16M_GDI,        47,      8,  w16g_combrgn        ; CombineRgn(word word word s_word)
+W16EXPORT W16M_USER,       181,     10, w16_ans0            ; SetSysColors(s_word ptr ptr)
+W16EXPORT W16M_USER,       186,     2,  w16_ans0            ; SwapMouseButton(word)
+W16EXPORT W16M_USER,       191,     6,  w16u_chwndpt        ; ChildWindowFromPoint(word long)
+W16EXPORT W16M_USER,       20,      2,  w16_ans0            ; SetDoubleClickTime(word)
+W16EXPORT W16M_USER,       273,     8,  w16_ans0            ; ControlPanelInfo(word word ptr)
+W16EXPORT W16M_USER,       279,     0,  w16_ans0            ; OldSetDeskPattern()
+W16EXPORT W16M_USER,       284,     2,  w16u_freesysres     ; GetFreeSystemResources(word)
+W16EXPORT W16M_USER,       285,     4,  w16_ans1            ; SetDeskWallPaper(str)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put

@@ -228088,7 +228088,13 @@ which puts the host stack the image hands it (**+9**, **+11**) in
 `dos_sv_ss`/`dos_dstk` and jumps to the core's `dos_int21`; **+6**
 `w16dh_done`, which closes every handle a program left open, as DOS's exit
 does; and **+13** `DOS_WKB`, the window's floor, read by the image before it
-claims the window, so no DOS constant is copied into WIN16.
+claims the window, so no DOS constant is copied into WIN16. `w16dh_init`
+takes the program's 8.3 name in `ES:DI` as well, and once the core stands
+in the program's folder it asks the core its own `47h` and writes
+`X:\FOLDER\NAME.EXE` at `W16DH_PATH`, the host part's last 96 bytes, which
+are zero until then and stay zero when the core will not say. That path is
+`AccessResource`'s (§124.26.8): it names the program's file after a folder
+change, which its bare name does not.
 
 **The core's gate is not on its jump table** - neither DOS.O88 nor `kern_dos`
 ever needed it by address - and a slot would cost more than it says: three
@@ -229876,7 +229882,33 @@ the text and Page Down's erase ran over the page number and the scroll bar.
 Own DCs (§124.25.11) are the answer. With them the page number is drawn
 white on black, as Windows 3.0 drew it, which the shared DC had lost.
 
-#### 124.26.8 Not done *(S20 batch 1)*
+#### 124.26.8 Windows Help's, Terminal's and Control Panel's calls *(S20 batch 4)*
+
+Windows 3.0's Windows Help, Terminal and Control Panel imported 31 calls
+WIN16 did not have. They are answered as follows:
+
+| call | |
+|---|---|
+| `GetTextColor` (GDI.90), `GetTextAlign` (GDI.345), `GetCurrentPosition` (GDI.78) | what `SetTextColor`, `SetTextAlign` and `MoveTo` set in the DC; the position in logical units, `DX:AX` = y:x |
+| `GetClipBox` (GDI.77) | the clip's rectangle in logical units, and `SIMPLEREGION`; an empty clip is 0, 0, 0, 0 and `NULLREGION`. A clip that `ExcludeClipRect` holed is still its rectangle (§124.25.6) |
+| `GetCurrentTask` (KERNEL.36) | the program's instance, which stands for its task here as it does for `WindowFromDC`'s (§124.22.12), and the same in `DX`, the head of the task list |
+| `EnumTaskWindows` (USER.225) | `EnumWindows`: every top-level window here is the one task's |
+| `GetTopWindow` (USER.229), `GetNextWindow` (USER.230) | `GetWindow`'s `GW_CHILD`, and `GetWindow` itself |
+| `ChildWindowFromPoint` (USER.191) | of the parent's own children, shown or not, the one whose rectangle holds the point; of two, the first in Z order, which here is the one made first (§124.22.12). The parent when only its client holds it, 0 outside it |
+| `IsZoomed` (USER.272), `OpenIcon` (USER.44) | `FALSE` and `TRUE`: os8088 neither maximizes nor minimizes a window |
+| `GrayString` (USER.185) | with no output function, the string drawn at X, Y in grey, its ink alone. Windows greys the text's cell through the brush instead. With one, the function is called `(hDC, lpData, nCount)` as a call into the program (§124.2.2), it draws in the DC's colours, and its answer is the answer |
+| `CreateRectRgnIndirect` (GDI.65) | `CreateRectRgn` of the `RECT` |
+| `PtInRegion` (GDI.161) | whether the region's rectangle holds the point, its right and bottom edges outside |
+| `FillRgn` (GDI.40) | `FillRect` of the region's rectangle |
+| `CombineRgn` (GDI.47) | on rectangles (§124.25.6). `RGN_COPY` the first; `RGN_AND` the intersection; `RGN_OR` the box holding both, `COMPLEXREGION` when that is more than either; `RGN_XOR` that box, `COMPLEXREGION`; `RGN_DIFF` nothing when the second covers the first, else the first, `COMPLEXREGION` when the second cuts into it. 0 (`ERROR`) for a handle that is not a region |
+| `GetFreeSystemResources` (USER.284) | the percentage free of the tables WIN16 keeps for what Windows' GDI and USER heaps hold: the made objects (`GFSR_GDIRESOURCES`), the window records (`GFSR_USERRESOURCES`), the lower of the two (`GFSR_SYSTEMRESOURCES`) |
+| `SetSwapAreaSize` (KERNEL.106) | the paragraphs asked for, and `FFFFh` in `DX`: code has no area of its own here, and shares the global heap with data (§124.26.6) |
+| `AccessResource` (KERNEL.64) | a handle opened read-only on the program's own file through WIN16's DOS, standing at the resource, for the program to `_lread` and `_lclose`. The file is named by the path the DOS records once, when it is first fetched and still stands in the program's folder (`W16DH_PATH`, from its own `47h`), because a bare name stops naming the file after the program changes folder. -1 (`HFILE_ERROR`) when the DOS or that path cannot be had. Terminal reads its emulations' tables this way. A library's `hInstance` still reads the program's file, as `SizeofResource` does |
+| `ReadComm` (USER.204), `SetCommBreak` (USER.210), `ClearCommBreak` (USER.211), `EscapeCommFunction` (USER.214) | -1, and `SetCommEventMask` (USER.208) a null pointer: `OpenComm` never opens a port (§124.22.11) |
+| `SetSysColors` (USER.181), `SwapMouseButton` (USER.186), `SetDoubleClickTime` (USER.20), `ControlPanelInfo` (USER.273), `OldSetDeskPattern` (USER.279), `GetSpoolJob` (GDI.245) | 0, and nothing changes. The desktop, the colours and the mouse are os8088's own Control Panel's |
+| `SetDeskWallPaper` (USER.285) | `TRUE`, and no wallpaper is drawn |
+
+#### 124.26.9 Not done *(S20 batch 1)*
 
 - A program's own libraries keep their code fixed.
 - A discardable segment of 64 KB is laid out fixed.

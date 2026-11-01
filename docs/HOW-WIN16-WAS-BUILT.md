@@ -2823,3 +2823,53 @@ shift state at that moment. Alt+F became a plain F. The ROM gives no
 character for Alt plus a letter, and every other combination does, so a
 letter that arrives without one must have had Alt held. That one test fixed
 it.
+
+## 2026-11-01 — S20, batch 4: the bug that moved
+
+**Windows Help stopped dead, and never in the same place twice.** The
+first runs showed its global heap broken: a free-block header in the middle
+of one of its code segments, and bitmap rows across another block's header.
+A checker that walked every heap header at each import found the break a
+little later each time, and in a different block. A build with a trace in
+it ran Windows Help to its window. A build with a heap check in it stopped
+somewhere else again. Each build moved the bug.
+
+**It ended in WIN16's own code.** We dumped WIN16 out of the stopped
+machine and compared it with the file on disk. Two bytes differed: the
+`jae` in the routine that cuts a heap block had become `pop ds`. From there
+the next cut ran with the wrong data segment and wrote a header into the
+program's code. That was the heap damage seen in the first runs.
+
+**Finding who wrote two bytes took a debugger and patience.** QEMU's gdb
+stub can single-step, but it holds back interrupts while it does, so the
+first attempt sat forever in the BIOS waiting for a disk. With interrupts
+allowed through, we ran free from one Windows call to the next, reading the
+two bytes at each, until the call where they changed. Then we restarted
+and stepped that one call, reading the bytes after every instruction. Step
+994 wrote them: `GlobalAlloc` stamping a block's last use, in a table of
+moveable handles, for a block that was not moveable. A fixed block's handle
+is its segment, and the test let any number above 100h through, so the
+table index was the segment less 100h, which lands inside WIN16. Which
+bytes it hit depended on where the block went. That is why every build
+moved it.
+
+**The fix is one comparison**, the same range test the handle lookup
+already made. Windows Help now opens its window with its menus, button bar
+and logo. It still says it cannot make its bookmark file, and its buttons
+have no captions, so it is not done.
+
+**The same batch gave Terminal `AccessResource`.** A program uses it to read
+a resource itself, from its own `.EXE`, by a file handle. WIN16's DOS now
+writes down the program's full path the first time it starts, by asking
+itself `47h` while it still stands in the program's folder. Terminal then
+turned out to be stopped by something else: it asks for its emulation
+tables by the type name `CCTL`, and its file holds that type as a number.
+What Windows does with that is a question for the reference machine.
+
+**What this cost in hours is worth saying.** Each of four attempts started
+from a picture that turned out to be a symptom: heap damage, a stack that
+looked overflowed (404 of 512 bytes; it was not), a jump into the bind
+table, a jump into WIN16's header. The one thing that settled it was the
+memory compare, which took a minute to write and was done last. The next
+crash that moves with the build should start there.
+

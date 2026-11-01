@@ -912,6 +912,19 @@ W16SYS w16g_polyrgn
     pop si
     ret
 
+; CreateRectRgnIndirect (GDI.65) - args: +0 lpRect: CreateRectRgn's, of the
+; RECT
+W16SYS w16g_rectrgni
+    push si
+    push di
+    ICALL w16_args
+    les bx, [es:bx]
+    mov cx, [es:bx]
+    mov dx, [es:bx + 2]
+    mov si, [es:bx + 4]
+    mov di, [es:bx + 6]
+    ; fall into w16_newrgn
+
 ; w16_newrgn - CX, DX, SI, DI = left, top, right, bottom, SI and DI pushed
 ; by the handler: a region made of them -> AX = its handle, 0 when W16_NOBJ
 ; objects are made already. The handler's tail: it pops them and returns.
@@ -932,6 +945,317 @@ w16_newrgn:
     mov [w16_orgn + bx + 6], di
 .out:
     pop bx
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; w16_rgnbx - AX = a handle -> BX = its rectangle's offset in w16_orgn. CF=1
+; it is not a region's. Keeps the rest.
+w16_rgnbx:
+    mov bx, ax
+    sub bx, W16_OBJ0
+    jb .no
+    cmp bx, W16_NOBJ
+    jae .no
+    cmp byte [w16_objk + bx], W16K_RGN
+    jne .no
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; w16_rgnnull - BX = a rectangle's offset in w16_orgn: CF=1 it is empty.
+; Keeps all but AX.
+w16_rgnnull:
+    mov ax, [w16_orgn + bx]
+    cmp ax, [w16_orgn + bx + 4]
+    jge .y
+    mov ax, [w16_orgn + bx + 2]
+    cmp ax, [w16_orgn + bx + 6]
+    jge .y
+    clc
+    ret
+.y:
+    stc
+    ret
+
+; w16_rgneq - SI = a rectangle's offset in w16_orgn: ZF=1 it is the one in
+; w16_scratch. Keeps every register.
+w16_rgneq:
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    add si, w16_orgn
+    mov di, w16_scratch
+    mov cx, 4
+    cld
+    repe cmpsw
+    pop es
+    pop di
+    pop si
+    pop cx
+    ret
+
+; w16_rgnget - BX = a rectangle's offset in w16_orgn: it into w16_scratch.
+; Keeps all but AX.
+w16_rgnget:
+    mov ax, [w16_orgn + bx]
+    mov [w16_scratch], ax
+    mov ax, [w16_orgn + bx + 2]
+    mov [w16_scratch + 2], ax
+    mov ax, [w16_orgn + bx + 4]
+    mov [w16_scratch + 4], ax
+    mov ax, [w16_orgn + bx + 6]
+    mov [w16_scratch + 6], ax
+    ret
+
+; one edge of two rectangles, at SI and BX in w16_orgn, into w16_scratch: %2
+; is the jump that keeps the first's - jge the larger, jle the smaller
+%macro W16RGNEDGE 2
+    mov ax, [w16_orgn + si + %1]
+    cmp ax, [w16_orgn + bx + %1]
+    %2 %%k
+    mov ax, [w16_orgn + bx + %1]
+%%k:
+    mov [w16_scratch + %1], ax
+%endmacro
+
+RGN_AND     equ 1
+RGN_OR      equ 2
+RGN_XOR     equ 3
+RGN_DIFF    equ 4
+RGN_COPY    equ 5
+
+; CombineRgn (GDI.47) - args: +0 nCombineMode, +2 hrgnSrc2, +4 hrgnSrc1, +6
+; hrgnDest. A region is a rectangle (SPEC.md 124.25.6), so: RGN_COPY the
+; first; RGN_AND the two's intersection; RGN_OR the box that holds both,
+; COMPLEXREGION when that is more than either is; RGN_XOR that box too,
+; COMPLEXREGION; RGN_DIFF nothing when the second covers the first, else the
+; first, COMPLEXREGION when the second cuts into it. AX = the type, 0
+; (ERROR) for a handle that is not a region's or a mode that is not one
+W16SYS w16g_combrgn
+    push si
+    push di
+    push bp
+    ICALL w16_args
+    mov bp, [es:bx]                 ; BP = the mode
+    mov cx, [es:bx + 2]
+    mov dx, [es:bx + 4]
+    mov ax, [es:bx + 6]
+    call w16_rgnbx
+    jc .err
+    mov di, bx                      ; DI = the destination's rectangle
+    mov ax, dx
+    call w16_rgnbx
+    jc .err
+    mov si, bx                      ; SI = the first source's
+    cmp bp, RGN_COPY
+    je .first
+    ja .err
+    mov ax, cx
+    call w16_rgnbx                  ; BX = the second's
+    jc .err
+    cmp bp, RGN_AND
+    je .and
+    jb .err
+    cmp bp, RGN_DIFF
+    je .diff
+    call w16_rgnnull                ; OR, XOR: one empty is the other
+    jc .first
+    xchg bx, si
+    call w16_rgnnull
+    xchg bx, si
+    jc .second
+    W16RGNEDGE 0, jle
+    W16RGNEDGE 2, jle
+    W16RGNEDGE 4, jge
+    W16RGNEDGE 6, jge
+    mov ax, COMPLEXREGION
+    cmp bp, RGN_XOR
+    je .store
+    call w16_rgneq
+    je .simple
+    xchg bx, si
+    call w16_rgneq
+    xchg bx, si
+    jne .store
+.simple:
+    mov ax, SIMPLEREGION
+    jmp short .store
+.diff:
+    call .meet
+    jc .first                       ; they do not meet: the first
+    call w16_rgneq
+    jne .cut
+    xor ax, ax                      ; covered: nothing
+    mov [w16_scratch], ax
+    mov [w16_scratch + 2], ax
+    mov [w16_scratch + 4], ax
+    mov [w16_scratch + 6], ax
+    mov al, NULLREGION
+    jmp short .store
+.cut:
+    mov bx, si
+    call w16_rgnget
+    mov ax, COMPLEXREGION
+    jmp short .store
+.and:
+    call .meet
+    jmp short .typed
+.first:
+    mov bx, si
+.second:
+    call w16_rgnget
+.typed:                             ; w16_scratch's own type
+    mov bx, w16_scratch - w16_orgn
+    call w16_rgnnull
+    mov ax, SIMPLEREGION
+    jnc .store
+    mov al, NULLREGION
+.store:                             ; w16_scratch is the destination's
+    mov dx, [w16_scratch]
+    mov [w16_orgn + di], dx
+    mov dx, [w16_scratch + 2]
+    mov [w16_orgn + di + 2], dx
+    mov dx, [w16_scratch + 4]
+    mov [w16_orgn + di + 4], dx
+    mov dx, [w16_scratch + 6]
+    mov [w16_orgn + di + 6], dx
+    jmp short .out
+.err:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop bp
+    pop di
+    pop si
+    ret
+.meet:                              ; the intersection into w16_scratch: CF=1
+    W16RGNEDGE 0, jge               ;   it is empty
+    W16RGNEDGE 2, jge
+    W16RGNEDGE 4, jle
+    W16RGNEDGE 6, jle
+    push bx
+    mov bx, w16_scratch - w16_orgn
+    call w16_rgnnull
+    pop bx
+    ret
+
+; PtInRegion (GDI.161) - args: +0 y, +2 x, +4 hRgn: TRUE when its rectangle
+; holds the point, the right and bottom edges outside it
+W16SYS w16g_ptinrgn
+    ICALL w16_args
+    mov cx, [es:bx + 2]
+    mov dx, [es:bx]
+    mov ax, [es:bx + 4]
+    call w16_rgnbx
+    jc .no
+    cmp cx, [w16_orgn + bx]
+    jl .no
+    cmp cx, [w16_orgn + bx + 4]
+    jge .no
+    cmp dx, [w16_orgn + bx + 2]
+    jl .no
+    cmp dx, [w16_orgn + bx + 6]
+    jge .no
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+
+; FillRgn (GDI.40) - args: +0 hBrush, +2 hRgn, +4 hDC: FillRect's, of the
+; region's rectangle in logical coordinates. TRUE, FALSE for a DC or region
+; that is not one
+W16SYS w16g_fillrgn
+    ICALL w16_args
+    cmp word [es:bx + 4], W16_HDC
+    jne .no
+    mov ax, [es:bx + 2]
+    push word [es:bx]
+    call w16_rgnbx
+    pop ax                          ; AX = hBrush
+    jc .no
+    push bx
+    ICALL w16_brcol
+    pop bx
+    cmp al, W16_NOCOL
+    je .yes
+    mov [w16_gcol], al
+    add bx, w16_orgn
+    push ds
+    pop es
+    ICALL w16_rcin
+    jc .yes
+    mov ax, [w16_rl]
+    mov bx, [w16_rt]
+    mov cx, [w16_rr]
+    mov dx, [w16_rb]
+    ICALL w16_gfill
+.yes:
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+
+; GetClipBox (GDI.77) - args: +0 lpRect, +4 hDC: the clip's rectangle,
+; logical - 0, 0, 0, 0 when it is empty - and its type, SIMPLEREGION or
+; NULLREGION; 0 (ERROR) for a DC that is not one
+W16SYS w16g_clipbox
+    push si
+    push di
+    ICALL w16_args
+    cmp word [es:bx + 4], W16_HDC
+    jne .err
+    cmp byte [w16_dcon], 0
+    je .err
+    call w16_cliptype               ; AX = the type
+    push ax
+    les di, [es:bx]
+    xor cx, cx
+    xor dx, dx
+    xor si, si
+    xor bx, bx
+    cmp ax, NULLREGION
+    je .put
+    mov cx, [w16_cl]
+    sub cx, [w16_ox]
+    mov dx, [w16_ct]
+    sub dx, [w16_oy]
+    mov si, [w16_cr]
+    sub si, [w16_ox]
+    inc si
+    mov bx, [w16_cb]
+    sub bx, [w16_oy]
+    inc bx
+.put:
+    cld
+    mov ax, cx
+    stosw
+    mov ax, dx
+    stosw
+    mov ax, si
+    stosw
+    mov ax, bx
+    stosw
+    pop ax
+    jmp short .out
+.err:
+    xor ax, ax
+.out:
     xor dx, dx
     pop di
     pop si
@@ -1595,6 +1919,57 @@ w16_nadd:
     xor ah, ah
     add bp, ax
     pop ax
+    ret
+
+; GetFreeSystemResources (USER.284) - args: +0 wFlags: the percentage free
+; of the tables WIN16 keeps for what Windows' GDI and USER heaps hold -
+; GFSR_GDIRESOURCES (1) the made objects' (W16_NOBJ), GFSR_USERRESOURCES (2)
+; the window records' (W16_MAXWND), GFSR_SYSTEMRESOURCES (0) the less
+W16SYS w16u_freesysres
+    push si
+    ICALL w16_args
+    mov si, [es:bx]                 ; SI = which
+    xor cx, cx                      ; CX = the free objects
+    xor bx, bx
+.o:
+    cmp byte [w16_objk + bx], 0
+    jne .o1
+    inc cx
+.o1:
+    inc bx
+    cmp bx, W16_NOBJ
+    jb .o
+    mov ax, 100
+    mul cx
+    mov cx, W16_NOBJ
+    div cx                          ; AX = GDI's
+    cmp si, 1
+    je .out
+    push ax
+    xor cx, cx                      ; CX = the free records
+    mov bx, w16_wnd
+    mov dx, W16_MAXWND
+.w:
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jnz .w1
+    inc cx
+.w1:
+    add bx, W16W_SIZE
+    dec dx
+    jnz .w
+    mov ax, 100
+    mul cx
+    mov cx, W16_MAXWND
+    div cx                          ; AX = USER's
+    pop dx
+    cmp si, 2
+    je .out
+    cmp ax, dx
+    jbe .out
+    mov ax, dx
+.out:
+    xor dx, dx
+    pop si
     ret
 
 section .text

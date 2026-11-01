@@ -81,9 +81,69 @@ w16dh_init:
     add ax, DOS_PSPP + 0x100
     mov [dos_apara], ax
     call dos_fh_setup               ; CF=1 AL = DER_MEM
+    jc .out
+    call w16dh_path
+    clc
+.out:
     pop ax
     pop ds
     retf
+
+; w16dh_path - W16DH_PATH = "X:\FOLDER\NAME.EXE", the program's own file,
+; asked of the core while it still stands where the program is: the
+; program's file is opened by it later, after a folder change that would
+; lose a bare name (AccessResource, SPEC.md 124.26.8). ES:DI = the name.
+; Empty when the core will not say. Keeps all but the flags.
+w16dh_path:
+    ; STKBALANCE-OK: the `pushf` / `push cs` / `call` is an int's frame,
+    ; which the core's gate takes back with its iret
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov si, W16DH_PATH
+    mov al, [dos_vol]
+    add al, 'A'
+    mov ah, ':'
+    mov [si], ax
+    mov byte [si + 2], '\'
+    add si, 3
+    mov [dos_sv_ss], ss             ; the gate runs it on the stack it is on
+    mov ah, 0x47                    ; the folder, as a program asks for it
+    xor dl, dl
+    pushf
+    push cs
+    call W16_DOSINT21
+    jc .none
+.end:
+    lodsb
+    or al, al
+    jnz .end
+    dec si
+    cmp si, W16DH_PATH + 3          ; the root: no separator
+    je .name
+    mov byte [si], '\'
+    inc si
+.name:
+    mov cx, 13
+.c:
+    mov al, [es:di]
+    inc di
+    mov [si], al
+    inc si
+    or al, al
+    jz .out
+    loop .c
+.none:
+    mov byte [W16DH_PATH], 0
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; w16dh_done - the program has ended: each handle it left open closed, which
@@ -113,6 +173,6 @@ w16dh_done:
     DOS_BETAB
 
 W16DH_LEN equ $ - $$
-%if W16DH_LEN > W16DH_MAX
+%if W16DH_LEN > W16DH_PATH - W16DH_ORG
   %error "WIN16's DOS host outgrew W16DH_MAX (apps/win16/w16dos.inc)"
 %endif

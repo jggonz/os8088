@@ -736,7 +736,9 @@ w16k_galloc:
     or ax, ax
     jz .short
     cmp ax, W16_GH0                 ; a moveable handle's entry: used now,
-    jb .out                         ;   and marked if it may be discarded
+    jb .out                         ;   and marked if it may be discarded.
+    cmp ax, W16_GH0 + 2 * W16_NGH   ;   A fixed one IS its segment, above
+    jae .out                        ;   every entry (SPEC.md 124.9)
     push si
     mov si, ax
     sub si, W16_GH0

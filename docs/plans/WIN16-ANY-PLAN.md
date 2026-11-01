@@ -1016,6 +1016,54 @@ its table goes in the diary, so the reach is measured, not claimed.
       `win16pbrush` above all.
     - Sizes: the image 36,387 (+191), bss 27,244 (+6), **1,393 bytes of
       room**; the library part 60,771 (+744).
+  - [x] **Batch 4: Windows Help's, Terminal's and Control Panel's calls**
+    (SPEC.md §124.26.8, §124.21.1, §124.9).
+    - 31 imports these three programs lacked, from `GetTextColor` to
+      `SetDeskWallPaper`. Regions are rectangles (`CombineRgn`,
+      `PtInRegion`, `FillRgn`, `GetClipBox`). `GrayString` calls the
+      program's output function when there is one, and `ChildWindowFromPoint`
+      walks the parent's children. The Control Panel's settings calls
+      answer and change nothing, because those settings belong to
+      os8088's own Control Panel.
+    - `AccessResource` opens the program's own file through WIN16's DOS
+      and seeks to the resource. The DOS host records the program's path
+      the first time it is fetched, from its own `47h`, because a bare name
+      stops naming the file once the program changes folder.
+    - **Found, and the batch's real fix:** `GlobalAlloc` treated every
+      handle at or above `W16_GH0` as a moveable entry. A fixed handle is
+      its segment, which is always above that value. So every fixed
+      `GlobalAlloc` wrote an age word at `w16_ghage` + (segment − 100h),
+      which lands inside WIN16's own image. Which byte it hit depended on
+      where the block landed. Windows Help lost the `jae` in `w16_gcut`,
+      and from there the heap and then the CPU: the free-block header
+      written into its live code, and the endless `#UD` at 4c3e:0b74 that
+      batch 1's notes saw. It took a gdb single-step with a watch on the
+      changed word, run from the import before the one that broke. The
+      range test is now the one `w16_gfind` makes.
+    - **Seen on QEMU's VGA:** Windows Help 3.0 opens its window with the
+      menus, the button bar and the logo bitmap. Terminal 3.0 opens with
+      its menus and its *Default Serial Port* dialog.
+    - **Still seen:**
+      - Windows Help says *Cannot create bookmark file*, and its buttons
+        have no captions.
+      - Terminal says *Emulation selected is not available*. That comes
+        from `FindResource(1003, "CCTL")`, a type named by string, while
+        Terminal's NE table holds the type as the integer `F008h`. Wine's
+        lookup would not match these either, so the reference machine
+        decides what Windows does here before WIN16 changes.
+      - Control Panel and File Manager are not yet looked at.
+    - **Open:** a 256-entry trace build no longer runs through DOS.O88's
+      hand-off: it overflows task 0's stack in a DOS-and-WIN16 recursion
+      when WIN16 cannot load. A trace build now uses `-DW16_TRN=128`.
+      Whether a low-memory machine can reach the same recursion is not
+      known. Task 0's deepest use while Windows Help starts is 404 of
+      512 bytes.
+    - **Rows, for S25's pass:** every `win16*` row, because `GlobalAlloc`
+      is on every program's path; `win16pbrush` and `win16write` above
+      all, as the heaviest allocators.
+    - Sizes: the image 36,407 (+20), bss unchanged, **1,373 bytes of
+      room**; the library part 61,402 (+631), part 9 14,578, the DOS host
+      514 of its 1,024.
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and

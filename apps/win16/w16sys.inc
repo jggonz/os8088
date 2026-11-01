@@ -1325,6 +1325,14 @@ W16LIB w16u_getwindow
     pop si
     ret
 
+; GetTopWindow (USER.229) - args: +0 hWnd: GetWindow's GW_CHILD. GetNextWindow
+; (USER.230) is GetWindow's own row: the same arguments, GW_HWNDNEXT or PREV
+W16LIB w16u_topwnd
+    push si
+    ICALL w16_args
+    mov ax, [es:bx]
+    jmp short w16u_getwindow.child
+
 ; WindowFromDC (USER.117) - args: +0 hDC: the window the open DC is on, the
 ; desktop for the desktop's DC. Windows 3.0's Task Manager calls ordinal 117
 ; with an HWND and hands the answer to IsWinOldApTask as a task: an HWND
@@ -1687,6 +1695,171 @@ W16LIB w16u_wndfrompt
     pop bp
     pop di
     pop si
+    ret
+
+; ChildWindowFromPoint (USER.191) - args: +0 x, +2 y (a POINT by value, in
+; hWndParent's client), +4 hWndParent: of its own children, shown or not, the
+; one whose rectangle holds the point - of two the first in Z order, which is
+; the one made first (GetWindow's, USER.262) - else hWndParent when its
+; client holds the point, else 0
+W16LIB w16u_chwndpt
+    push si
+    push di
+    ICALL w16_args
+    mov di, [es:bx]                 ; DI = x
+    mov ax, [es:bx + 4]
+    push word [es:bx + 2]
+    ICALL w16_hwnd2rec              ; keeps AX = hWndParent
+    pop dx                          ; DX = y
+    jc .zero
+    push ax
+    push dx
+    ICALL w16_origin                ; CX/SI = its client's size
+    pop dx
+    pop ax
+    jc .zero
+    cmp di, cx                      ; outside it (a negative too, unsigned)
+    jae .zero
+    cmp dx, si
+    jae .zero
+    push bp
+    xor bp, bp                      ; BP = the child found
+    mov bx, w16_wnd
+    mov cx, W16_MAXWND
+.w:
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .n
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz .n
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jz .n
+    cmp [bx + W16W_PARENT], ax
+    jne .n
+    mov si, di
+    sub si, [bx + W16W_X]
+    jl .n
+    cmp si, [bx + W16W_CX]
+    jge .n
+    mov si, dx
+    sub si, [bx + W16W_Y]
+    jl .n
+    cmp si, [bx + W16W_CY]
+    jge .n
+    or bp, bp
+    jz .take
+    mov si, [bx + W16W_SEQ]
+    cmp si, [ds:bp + W16W_SEQ]
+    jae .n
+.take:
+    mov bp, bx
+.n:
+    add bx, W16W_SIZE
+    loop .w
+    or bp, bp
+    jz .par                         ; AX = hWndParent
+    mov bx, bp
+    ICALL w16_rec2hwnd
+.par:
+    pop bp
+    jmp short .out
+.zero:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; GrayString (USER.185) - args: +0 nHeight, +2 nWidth, +4 Y, +6 X, +8
+; nCount, +10 lpData, +14 lpOutputFunc, +18 hBrush, +20 hDC. With no output
+; function the string at lpData, nCount characters (0: to its NUL), drawn at
+; X, Y in grey - its ink alone, as under TRANSPARENT, where Windows greys
+; the text's cell through hBrush. With one, (hDC, lpData, nCount) as a call
+; into the program, which draws in the DC's colours, and its answer is the
+; answer (SPEC.md 124.26.8)
+W16LIB w16u_graystr
+    push si
+    push di
+    push bp
+    cmp byte [w16_dcon], 0
+    je .no
+    ICALL w16_args
+    cmp word [es:bx + 20], W16_HDC
+    jne .no
+    mov ax, [es:bx + 14]
+    or ax, [es:bx + 16]
+    jnz .call
+    cmp word [es:bx + 8], 0
+    jne .n
+    push es
+    les di, [es:bx + 10]            ; nCount 0: the string's length
+    mov cx, W16_TXTMAX
+    xor al, al
+    cld
+    repne scasb
+    mov ax, W16_TXTMAX - 1
+    sub ax, cx
+    pop es
+    mov [es:bx + 8], ax             ; (the program's argument, popped by the
+.n:                                 ;   gate on the way out)
+    mov ax, [es:bx + 6]
+    add ax, [w16_ox]
+    mov [w16_tx], ax
+    mov ax, [es:bx + 4]
+    add ax, [w16_oy]
+    mov [w16_ty], ax
+    mov si, 10
+    mov di, 8
+    ICALL w16_txtcopy
+    mov [w16_tn], cx
+    call w16_talign
+    mov ax, 0x8080                  ; the grey of COLOR_GRAYTEXT
+    mov dl, 0x80
+    ICALL w16_rgb2col
+    xchg al, [w16_tcol]
+    mov ah, TRANSPARENT
+    xchg ah, [w16_bkmode]
+    push ax
+    ICALL w16_txtdraw
+    pop ax
+    mov [w16_tcol], al
+    mov [w16_bkmode], ah
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop bp
+    pop di
+    pop si
+    ret
+.call:
+    push word [es:bx + 16]          ; the function
+    push word [es:bx + 14]
+    push word [es:bx + 8]           ; nCount
+    push word [es:bx + 12]          ; lpData
+    push word [es:bx + 10]
+    mov si, w16u_gsnext_c
+    xor cx, cx
+    ICALL w16_cbopen
+    mov ax, W16_HDC                 ; pascal: hDC, lpData, nCount
+    ICALL w16_ppush
+    pop ax
+    pop dx
+    xchg ax, dx
+    ICALL w16_ppush                 ; lpData's segment, then its offset
+    mov ax, dx
+    ICALL w16_ppush
+    pop ax
+    ICALL w16_ppush
+    pop ax
+    pop dx
+    ICALL w16_cbcall
+    jmp short .out
+
+LCONT w16u_gsnext
+    xor dx, dx
     ret
 
 ; DrawFocusRect (USER.466) - args: +0 lprc, +4 hDC: the rectangle's four
@@ -2776,6 +2949,43 @@ W16LIB w16u_cbprio
 W16LIB w16g_getbkcol
     mov ax, [w16_brgb]
     mov dx, [w16_brgb + 2]
+    ret
+
+; GetTextColor (GDI.90) - args: +0 hDC: SetTextColor's COLORREF
+W16LIB w16g_gettextcol
+    mov ax, [w16_trgb]
+    mov dx, [w16_trgb + 2]
+    ret
+
+; GetTextAlign (GDI.345) - args: +0 hDC: SetTextAlign's flags
+W16LIB w16g_gettalign
+    mov al, [w16_tal]
+    xor ah, ah
+    cwd
+    ret
+
+; GetCurrentPosition (GDI.78) - args: +0 hDC: MoveTo's point, logical, DX:AX
+; = y:x
+W16LIB w16g_getcurpos
+    mov ax, [w16_curx]
+    mov dx, [w16_cury]
+    ret
+
+; GetCurrentTask (KERNEL.36): the program's task, which its instance stands
+; for (WindowFromDC's, USER.117), and in DX the first task of the list - it
+; again, the one task there is
+W16LIB w16k_curtask
+    mov ax, [w16_dgroup]
+    mov dx, ax
+    ret
+
+; SetSwapAreaSize (KERNEL.106) - args: +0 the paragraphs of code asked for:
+; granted, DX = FFFFh the most - the code has no area of its own, and shares
+; the global heap with the data (SPEC.md 124.26.6)
+W16LIB w16k_swaparea
+    ICALL w16_args
+    mov ax, [es:bx]
+    mov dx, 0xFFFF
     ret
 
 ; GetROP2 (GDI.85) - args: +0 hDC: SetROP2's mode
