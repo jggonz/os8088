@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "754004020",
-  "strings": "839a2abeff431927",
-  "why": "documents a program opens in another program open through os8088's associations (SPEC.md 124.24.10)"
+  "stamped": "a381bbca7",
+  "strings": "04c25748050d2819",
+  "why": "S19b batch 3: Paintbrush's wide lines, text tool, Save As and Open"
  },
  "WIN16_TXT": {
   "sources": [

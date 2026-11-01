@@ -178196,7 +178196,9 @@ model:
 Everything else **refuses with "access denied"**, and naming the two cases is
 better than a shim that pretends:
 
-- **A write anywhere but the end of the file.** The handler checks the
+- **A write anywhere but the end of the file.** ~~Refused~~ - **§96.11.6.4
+  makes it** for a created handle, by flushing first; what is below is what
+  this was before. The handler checks the
   position against the size and refuses when they differ, so a program that
   seeks back and writes is told no. Reporting success there would lose the
   program's data at the *next* flush, silently, which is the failure the
@@ -178230,9 +178232,11 @@ caller's `DI` is where the bytes are *going*.
 at all: it refused a write **past** the end exactly as it refused one
 **behind** it, and those are opposite cases.
 
-- **Behind** the end is §96.11.2's real refusal. A write into the middle of a
+- **Behind** the end was §96.11.2's real refusal. A write into the middle of a
   file this handle created is one the append path cannot make, and reporting
-  success for it would lose the program's data silently.
+  success for it would lose the program's data silently. **§96.11.6.4 makes
+  that write now**, by flushing first so the file exists, and then
+  overwriting it in place.
 - **At** the end is the ordinary append.
 - **Past** the end is a **gap**, which §96.11.6.1 already lays — and which
   that section's own first bullet names: *pre-allocating: create, seek to
@@ -178261,6 +178265,34 @@ knows it; `.iappend` no longer claims it.
 takes it for the length of a chunk and `.iappend` gives it back, and a created
 handle that kept it would flush through `WRITE_AT` onto a file that is not
 there.
+
+##### 96.11.6.4 …and a created handle may write BEHIND its end *(WIN16 S19b batch 3)*
+
+§96.11.6.3 still refused the third case, a write **behind** the end of a
+file the handle created. Paintbrush's File > Save makes exactly that write:
+it writes a bitmap's body, seeks to 0, and writes the header over the
+placeholder it left. Its answer was `Cannot write file`.
+
+The write is now made. It is §96.52's partial flush made on purpose:
+
+1. The accumulator goes out as the append it already is (`dos_fh_flush`).
+   The first flush creates the file, so after it the file is on the disk at
+   its full size.
+2. The handle takes `FHF_INPLC` and becomes a view of that file, as an
+   opened handle (§96.11.6) is.
+3. `dos_fh_wiloop` overwrites in place through `OSAPI_FILE_WRITE_AT`. When a
+   write runs past the end, the rest goes back to the accumulator through
+   `.iappend`, as §96.11.6.1's gap does.
+
+So all three cases are written: behind the end, at it and past it.
+§96.11.2's refusal no longer applies to a created handle. What it guarded
+against was success being reported for data that a later flush would lose,
+and here no data is lost: the flush comes first, and the overwrite is made
+on the file the flush wrote.
+
+`tests/dostrap/wrgap.asm`'s step H is the check (the `dosgap` row): create,
+write 200 `A`s, seek to 0, write 10 `B`s, close, reopen, and read 200 bytes
+back, the first ten `B`.
 
 #### 96.11.7 `CON` is not a file name, and answering as though it were costs a program its handles
 
@@ -226807,13 +226839,13 @@ neighbours merged. Arenas are freed with the program.
 | | |
 |---|---|
 | `GMEM_FIXED` | **the handle IS the segment** (`DX:0` is the block), as real-mode Windows answered. Programs that skip `GlobalLock` on a fixed block work |
-| `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`017Eh`, `W16_NGH` 64 entries). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
+| `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`02FEh`, `W16_NGH` 256 entries since S19b batch 3, 64 before: Paintbrush's band cache keeps a handle for every band it has discarded, and 64 ran out on the first picture opened). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
 | `GlobalLock` | `DX:AX` = the block, the lock count raised; NULL for a discarded handle |
 | `GlobalReAlloc` | in place when the next block is free; otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. `GMEM_MODIFY` changes the flags alone |
 | `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD` |
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
 | out of memory | unused resource blocks (§124.10) are discarded and the request is tried again; then `GMEM_DISCARDABLE` blocks, one at a time, the least recently used first (S19b, `w16_gdold`); then the answer is 0 |
-| `GMEM_DISCARDABLE` | a moveable block's handle is marked so. Discarding frees the block and keeps the handle: `GlobalLock` answers NULL, `GlobalFlags` `GMEM_DISCARDED`, `GlobalSize` 0, and `GlobalReAlloc` gives it a block again. A block with a lock is never discarded. **Nor is one allocated `GMEM_NOTIFY` as well**: Windows called the program's `GlobalNotify` procedure first and the program counts on it - Paintbrush's strips, `GMEM_MOVEABLE \| GMEM_DISCARDABLE \| GMEM_NOTIFY`, are locked through a table only that procedure clears, without a NULL check, and one discarded under it was written through NULL over the interrupt vectors. That call would land inside the allocation that wants the room, where WIN16 cannot call the program; a notify procedure may refuse on Windows too, so the block is one it refused. `GlobalReAlloc` with `GMEM_MODIFY` sets or clears the mark by the same rule |
+| `GMEM_DISCARDABLE` | a moveable block's handle is marked so. Discarding frees the block and keeps the handle: `GlobalLock` answers NULL, `GlobalFlags` `GMEM_DISCARDED`, `GlobalSize` 0, and `GlobalReAlloc` gives it a block again. A block with a lock is never discarded. **Nor is one allocated `GMEM_NOTIFY` as well** without its program being asked (§124.9.1). `GlobalReAlloc` with `GMEM_MODIFY` sets or clears either mark by the same rule |
 | `GlobalLRUNewest`, `GlobalLRUOldest` | the block is the last, or the first, a shortage discards. `GlobalAlloc` and `GlobalLock` make it the newest; the order is a 16-bit count of uses |
 
 **The local heap** is the one in DGROUP, initialised by `InitTask` from the
@@ -226829,6 +226861,43 @@ free.
 |---|---|
 | `LMEM_FIXED` | the near pointer |
 | `LMEM_MOVEABLE` | a pointer to a two-word handle entry whose first word is the block, so `*(char **)h` reads what `LocalLock` answers, which some programs rely on |
+
+#### 124.9.1 `GMEM_NOTIFY`: the program is asked first *(S19b batch 3)*
+
+**A block allocated `GMEM_MOVEABLE | GMEM_DISCARDABLE | GMEM_NOTIFY` is
+discarded only when its program says so**, as Windows did.
+`GlobalNotify(lpNotifyProc)` keeps the procedure, one for the program. When
+`GlobalAlloc` cannot find the room, after §124.9's resource and plain
+discardable passes have failed, WIN16 picks the least recently used of the
+program's notify blocks that is not locked and has not been discarded. It
+calls the procedure with that handle, as a call into the program
+(`w16k_gnask`, the same callback path a window procedure takes, §124.6), and
+the allocation waits for the answer:
+
+| the procedure answers | |
+|---|---|
+| nonzero | the block is freed and its handle kept, discarded, as §124.9's discard leaves it, unless the procedure locked it in the meantime. A procedure that discarded it itself (`GlobalDiscard`) is fine too |
+| 0 | the block is kept, and its mark is cleared, so it is never offered again |
+
+Then `GlobalAlloc` runs again with its own arguments. When it is still short
+it asks about the next block, and it answers 0 only when no procedure is
+kept or no block is left to offer. Each answer either frees a block or
+clears a mark, so the loop ends.
+
+**Paintbrush is why the procedure has to be called.** Its PBRUSH.DLL keeps
+the picture as bands, each one a notify block. Its `DISCARDBAND` (the DLL's
+entry 8) is the procedure: it writes the band to Paintbrush's swap file,
+records that the band is on the disk, and answers 1. A band it was not asked
+about is locked through a table that only `DISCARDBAND` updates, with no
+check for NULL, so before batch 3 such a band was written through NULL over
+the interrupt vectors. That is why notify blocks were never discarded before
+batch 3. A large picture now opens because Paintbrush's own swap file holds
+the bands the heap cannot (§124.25.9).
+
+`MEMDC.EXE` checks it (the `win16memdc` row): a procedure is asked when the
+heap is full, the block it is asked about is the oldest, it answers TRUE and
+the allocation that wanted the room succeeds, and 200 moveable handles can
+be held at once.
 
 ### 124.10 Resources, read from the file when loaded *(shipped in S5)*
 
@@ -229425,5 +229494,57 @@ the window origin, and its base clip (`w16_bcl`..`w16_bcb`, what
 stay through a repaint, picks a tool or a colour after a stroke, draws a
 box, and its roller fills inside the box and across the whole canvas around
 it, one fill after another (the `win16pbrush` row). MEMDC.EXE's checks all
-pass (the `win16memdc` row). Wide pens are still drawn 1 pixel wide
-(§124.8.1); the text tool and File Save are not looked at yet.
+pass (the `win16memdc` row). Wide pens were still drawn 1 pixel wide
+(§124.8.1), and the text tool and File Save had not been looked at yet:
+batch 3 below covers both.
+
+#### 124.25.7 Wide pens, pattern ROPs and the text tool *(S19b batch 3)*
+
+| | |
+|---|---|
+| a wide pen | `CreatePen` keeps the width, 1 to `W16_PENMAX` (64), and `PS_INSIDEFRAME`. A line under a pen wider than one pixel paints that many pixels across its major axis, centred on it, at every step, so no pixel is painted twice (`w16_lplotw`). A closed figure (`Rectangle`, `Ellipse`, `RoundRect`) puts its frame outside the box by half the width each way, as Windows centred a pen on the edge, unless the pen is `PS_INSIDEFRAME`. The frame is as wide as the pen and the brush fills inside it, no pixel twice. A round rectangle's frame is the band between its outer and inner outlines (`w16_rrwide`, a corner at most `W16_RRMAX` (127) pixels) |
+| a source ROP under a solid brush | `BitBlt` and `StretchBlt` from a memory DC take any ROP whose index byte has differing halves (the pattern plays a part) when the selected brush is one solid colour. For each plane the brush's bit picks a half of the index byte, and each source pixel and the pixel under it are combined through a table built once for the call (`w16_roptab`, then `w16_nibrop` a row at a time). Paintbrush's text tool and its colour eraser draw this way. A checkered or hatched brush still answers FALSE |
+| a uniform pattern brush | `CreatePatternBrush` on a bitmap whose top left 8 x 8 pixels are all one colour gives that colour's solid brush, so the solid-brush ROP above can draw with it. Paintbrush makes its text and fill brushes this way. Otherwise §124.17.1's rule applies |
+| memory DCs | `W16_NMDC` 8 at once, 4 before: the text tool holds five |
+| `WM_SIZE` | a `WM_SIZE` still in the queue for the window is made `WM_NULL` when a new one is sent or posted, so an older size never arrives after a newer one. Paintbrush's canvas posts itself 0 x 0 while it is being made, and that size arrived after the real one and emptied the canvas |
+
+#### 124.25.8 Logical palettes and `DIB_PAL_COLORS` *(S19b batch 3)*
+
+The display here has the colours it has, so a palette changes nothing on the
+screen. But a program can make a palette and name colours by index into it,
+and that it must be given:
+
+| call | |
+|---|---|
+| `CreatePalette` (GDI.360) | a fixed global block holding the entry count (a word) and the `PALETTEENTRY`s, at most 256; the handle is `W16_PAL0 + 2·slot`, `W16_NPAL` (4) at once. When all four are in use the answer is the stock `DEFAULT_PALETTE` |
+| `SelectPalette` (USER.282) | kept as the program's selected palette (one per program, not one per DC); the answer is the one before |
+| `RealizePalette`, `UnrealizeObject` | as before: nothing to change |
+| `GetPaletteEntries` (GDI.363) | the entries copied out of the block; the stock palette is os8088's sixteen |
+| `GetNearestPaletteIndex` (GDI.370) | the entry nearest the colour, by the sum of the three differences |
+| `GetObject` | a palette's entry count, a word |
+| `DeleteObject` | the block freed and the slot given back |
+| `DIB_PAL_COLORS` | accepted by `SetDIBits`, `SetDIBitsToDevice` and `CreateDIBitmap` (`w16_dibuse`). The DIB's colour table is then words, each an index into the selected palette, and each is looked up there to give the RGB the DIB code already maps to the sixteen. Before batch 3 this usage was refused, and that refusal was the first of Paintbrush's two `Insufficient memory` messages on File > Open |
+
+`MEMDC.EXE` checks making, reading, clipping, matching, a DIB through a
+palette and deleting (the `win16memdc` row).
+
+#### 124.25.9 Every DC and bitmap handle is even *(S19b batch 3)*
+
+**PBRUSH.DLL keeps virtual DCs and bitmaps of its own, and gives them ODD
+handles.** Its `VBITBLT` and `VDELETEOBJECT` test bit 0 of a handle to
+decide whether it is a real GDI object or one of its own. WIN16 numbered
+memory DCs and bitmaps by slot, so slot 1's `3011h` and `3305h` were taken
+for Paintbrush's virtual ones. A picture opened onto a blank canvas, and a
+save wrote a black one. Memory DCs are now `W16_MDC0 + 2·slot`, bitmaps
+`W16_BMP0 + 2·slot`, palettes `W16_PAL0 + 2·slot`, and the desktop's DC is
+`3004h`, 3003h before. A handle with bit 0 set is refused by
+`w16_mdcslot` and `w16_bmslot` as not one of these.
+
+**Not yet:** brushes, pens and stock objects are still numbered by slot, and
+some of them are odd. No program seen yet tests their bit 0. The rule is
+written here so that the next numbering does not undo it.
+
+**Seen on QEMU's VGA (batch 3):** Paintbrush 3.0 opens a 16-colour BMP
+(File > Open) with 0 of the 100,864 visible canvas pixels differing from the
+file, saves it again (File > Save As) to a file whose pixels match, and saves
+a picture drawn from new. Its text tool draws. The DOS half is §96.11.6.4.

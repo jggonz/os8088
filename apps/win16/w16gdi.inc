@@ -23,6 +23,7 @@
 W16_HDC     equ 0x3002          ; the one DC
 W16_STOCK   equ 0x3100          ; GetStockObject(i) = W16_STOCK + i
 W16_OBJ0    equ 0x3200          ; a made brush or pen, W16_OBJ0 + slot
+W16_PAL0    equ 0x3400          ; a made logical palette, W16_PAL0 + 2 * slot
 W16_HFDLG   equ 0x3120          ; the dialog face, as a font (SPEC.md 124.24.4):
                                 ;   one handle, shared like a stock object
 W16_NOCOL   equ 0xFF            ; a NULL brush or pen, or R2_NOP: draw nothing
@@ -43,6 +44,7 @@ SYSTEM_FONT equ 13
 DEFAULT_PALETTE equ 15          ; ...and the one stock object among them that is not
 STOCK_LAST  equ 16
 PS_NULL     equ 5
+PS_INSIDEFRAME equ 6
 
 R2_BLACK      equ 1
 R2_NOTCOPYPEN equ 4
@@ -442,6 +444,9 @@ w16_mdcin:
     mov ax, [es:bx - 2]             ; the hDC
     sub ax, W16_MDC0
     jb .no
+    test al, 1
+    jnz .no
+    shr ax, 1
     cmp ax, W16_NMDC
     jae .no
     mov si, ax
@@ -465,9 +470,10 @@ w16_mdcin:
     mov ax, [w16m_bmp + bx]         ; the bitmap it draws into
     sub ax, W16_BMP0
     jb .stk
-    cmp ax, W16_NBMP
+    cmp ax, 2 * W16_NBMP
     jae .stk
-    shl ax, 1
+    test al, 1
+    jnz .stk
     mov bx, ax
     cmp word [w16b_seg + bx], 0
     je .stk
@@ -569,9 +575,10 @@ w16_mdclip:
     mov si, ax
     sub si, W16_BMP0
     jb .empty
-    cmp si, W16_NBMP
+    cmp si, 2 * W16_NBMP
     jae .empty
-    shl si, 1
+    test si, 1
+    jnz .empty
     cmp word [w16b_seg + si], 0
     je .empty
     mov cx, [w16b_w + si]
@@ -1101,24 +1108,86 @@ w16g_solidbrush:
     jmp w16_newobj
 
 ; CreatePen (GDI.61) - args: +0 the COLORREF, +4 nWidth, +6 nPenStyle. Every
-; style but PS_NULL draws solid, and every width one pixel (SPEC.md 124.8.1).
+; style but PS_NULL draws solid; the width, 1 to W16_PENMAX, is kept, and
+; PS_INSIDEFRAME with it (SPEC.md 124.25.7).
+W16_PENMAX  equ 64
 w16g_createpen:
     call w16_args
     mov ax, [es:bx]
     mov dl, [es:bx + 2]
     call w16_rgb2col
-    cmp word [es:bx + 6], PS_NULL
+    mov cx, [es:bx + 4]
+    mov dx, [es:bx + 6]
+    cmp dx, PS_NULL
     jne .pen
     mov al, W16_NOCOL
 .pen:
     mov ah, W16K_PEN
-    jmp w16_newobj
+    call w16_newobj
+    or ax, ax
+    jz .out
+    cmp cx, 1
+    jge .w1
+    mov cx, 1
+.w1:
+    cmp cx, W16_PENMAX
+    jle .w2
+    mov cx, W16_PENMAX
+.w2:
+    cmp dx, PS_INSIDEFRAME
+    jne .w3
+    or cl, 80h
+.w3:
+    mov bx, ax
+    mov [w16_objw + bx - W16_OBJ0], cl
+.out:
+    ret
+
+; w16_penw - AL = the selected pen's width byte: 1 to W16_PENMAX, 80h set
+; for PS_INSIDEFRAME; a stock pen's is 1. Keeps the rest.
+w16_penw:
+    push bx
+    mov al, 1
+    mov bx, [w16_pen]
+    sub bx, W16_OBJ0
+    jb .out
+    cmp bx, W16_NOBJ
+    jae .out
+    cmp byte [w16_objk + bx], W16K_PEN
+    jne .out
+    mov al, [w16_objw + bx]
+.out:
+    pop bx
+    ret
+
+; w16_pwide - a closed figure's box [w16_rl]..[w16_rb] for the selected pen:
+; a pen over one pixel wide is centred on the edge, so the box grows by half
+; of it each way - unless it is PS_INSIDEFRAME. CX = the width. Clobbers AX.
+w16_pwide:
+    call w16_penw
+    mov cl, al
+    and cx, 7Fh
+    test al, 80h
+    jnz .out
+    mov ax, cx
+    shr ax, 1
+    sub [w16_rl], ax
+    sub [w16_rt], ax
+    mov ax, cx
+    dec ax
+    shr ax, 1
+    add [w16_rr], ax
+    add [w16_rb], ax
+.out:
+    ret
 
 ; DeleteObject (GDI.69) - args: +0 hObject. A stock object is never deleted.
 w16g_delobj:
     call w16_args
     mov ax, [es:bx]
     LCALL w16_bmdelete               ; a bitmap (SPEC.md 124.15.2): freed
+    jnc .ret
+    SCALL w16_paldel                ; a palette (SPEC.md 124.25.8): freed
     jnc .ret
     mov bx, ax
     sub bx, W16_OBJ0
@@ -1297,6 +1366,9 @@ w16_lineline:
     je .xor
     call w16_ink
 .xor:
+    call w16_penw
+    and al, 7Fh
+    mov [w16_lw], al
     mov word [w16_npts], 0
     mov ax, [w16_lx1]               ; dx = |x1 - x|, sx = its sign
     sub ax, si
@@ -1313,6 +1385,11 @@ w16_lineline:
     neg ax
     mov word [w16_lsy], -1
 .dyp:
+    mov byte [w16_lmaj], 1          ; x-major when dx >= |dy|
+    cmp [w16_ldx], ax
+    jge .maj
+    mov byte [w16_lmaj], 0
+.maj:
     neg ax
     mov [w16_ldy], ax
     mov bp, [w16_ldx]               ; BP = err = dx + dy
@@ -1323,7 +1400,7 @@ w16_lineline:
     cmp di, [w16_ly1]
     je .flush
 .plot:
-    call w16_lplot
+    call w16_lplotw
     mov ax, bp
     shl ax, 1                       ; e2 = 2 err
     cmp ax, [w16_ldy]
@@ -1339,6 +1416,40 @@ w16_lineline:
 .flush:
     call w16_lflush
 .done:
+    ret
+
+; w16_lplotw - SI, DI = a point of the line: w16_lplot's, or under a wide
+; pen [w16_lw] of them across the line's major axis, centred on it, so no
+; step paints a pixel another did (SPEC.md 124.25.7). Clobbers AX.
+w16_lplotw:
+    mov al, [w16_lw]
+    cmp al, 1
+    jbe w16_lplot
+    push si
+    push di
+    push cx
+    mov cl, al
+    xor ch, ch
+    shr al, 1
+    cbw
+    cmp byte [w16_lmaj], 0
+    je .ymaj
+    sub di, ax
+.xm:
+    call w16_lplot
+    inc di
+    loop .xm
+    jmp short .out
+.ymaj:
+    sub si, ax
+.ym:
+    call w16_lplot
+    inc si
+    loop .ym
+.out:
+    pop cx
+    pop di
+    pop si
     ret
 
 ; w16_lplot - SI, DI = a client point: into the buffer if inside the clip, or
@@ -1452,7 +1563,8 @@ w16_nullpen:
     ret
 
 ; Rectangle (GDI.27) - args: +0 bottom, +2 right, +4 top, +6 left, +8 hDC.
-; The pen's frame on the outside, the brush inside it, no pixel twice.
+; The pen's frame on the outside, as wide as the pen (w16_pwide), the brush
+; inside it, no pixel twice.
 w16g_rect:
     call w16_args
     call w16_rectin
@@ -1464,35 +1576,44 @@ w16g_rect:
     cmp al, W16_NOCOL
     je .inside
     mov [w16_gcol], al
-    mov ax, [w16_rl]                ; the top edge
-    mov bx, [w16_rt]
+    push si
+    call w16_pwide
+    mov si, cx                      ; SI = the frame's width
+    mov ax, [w16_rl]                ; AX..DX = the whole box, and the
+    mov bx, [w16_rt]                ;   w16_r* the inside of the frame
     mov cx, [w16_rr]
-    mov dx, bx
-    call w16_gfill
-    mov bx, [w16_rb]                ; the bottom one
-    cmp bx, [w16_rt]
-    je .sides
-    mov dx, bx
-    call w16_gfill
-.sides:
-    mov bx, [w16_rt]                ; the two sides, between them
-    inc bx
     mov dx, [w16_rb]
+    add [w16_rl], si
+    add [w16_rt], si
+    sub [w16_rr], si
+    sub [w16_rb], si
+    mov si, [w16_rl]
+    cmp si, [w16_rr]
+    jg .solid
+    mov si, [w16_rt]
+    cmp si, [w16_rb]
+    jg .solid
+    push dx                         ; the top band
+    mov dx, [w16_rt]
     dec dx
-    cmp bx, dx
-    jg .shrink
-    mov cx, ax
     call w16_gfill
+    pop dx
+    push bx                         ; the bottom band
+    mov bx, [w16_rb]
+    inc bx
+    call w16_gfill
+    pop bx
+    mov bx, [w16_rt]                ; the sides, between them
+    mov dx, [w16_rb]
+    push cx
+    mov cx, [w16_rl]
+    dec cx
+    call w16_gfill
+    pop cx
     mov ax, [w16_rr]
-    cmp ax, [w16_rl]
-    je .shrink
-    mov cx, ax
+    inc ax
     call w16_gfill
-.shrink:
-    inc word [w16_rl]               ; the brush's part is inside the frame
-    inc word [w16_rt]
-    dec word [w16_rr]
-    dec word [w16_rb]
+    pop si
 .inside:
     mov ax, [w16_brush]
     call w16_brcol
@@ -1508,6 +1629,10 @@ w16g_rect:
 .done:
     mov ax, 1
     ret
+.solid:                             ; the frame meets itself: all pen
+    call w16_gfill
+    pop si
+    jmp short .done
 
 ; -----------------------------------------------------------------------------
 ; RoundRect (GDI.28) - args: +0 ellipse height, +2 ellipse width, +4 bottom,
@@ -1545,6 +1670,14 @@ w16g_roundrect:
     call w16_ropcol
     call w16_nullpen
     mov [w16_rpen], al
+    mov byte [w16_rwide], 0
+    cmp al, W16_NOCOL
+    je .narrow
+    call w16_pwide                  ; a wide pen: the box for it, and the
+    cmp cx, 1                       ;   band drawn by w16_rrwide
+    jbe .narrow
+    mov [w16_rwide], cl
+.narrow:
     mov ax, [w16_rr]                ; the radii fit the box, and the table
     sub ax, [w16_rl]
     inc ax
@@ -1560,6 +1693,11 @@ w16g_roundrect:
     call w16_rrclamp
     mov [w16_rry], cx
     call w16_rrtable
+    cmp byte [w16_rwide], 0
+    je .pen
+    SCALL w16_rrwide
+    jmp .done
+.pen:
     ; --- the pen ---
     mov al, [w16_rpen]
     cmp al, W16_NOCOL
@@ -2470,8 +2608,9 @@ w16g_setdib:
     call w16_args
     cmp word [es:bx + 26], W16_HDC  ; another DC's: nothing drawn
     jne .ret
-    cmp word [es:bx], 0             ; DIB_PAL_COLORS: no palette here
-    jne .ret
+    mov ax, [es:bx]                 ; DIB_PAL_COLORS: through the selected
+    SCALL w16_dibuse                ;   palette (SPEC.md 124.25.8)
+    jc .ret
     push es
     push bx
     les si, [es:bx + 2]             ; the header
@@ -2580,7 +2719,9 @@ w16g_setdib:
 ; w16_dibhdr - ES:SI = a BITMAPINFO (or BITMAPCOREINFO) -> [w16_dwid],
 ; [w16_dhgt], [w16_dbpp], [w16_dpal], [w16_dstride], and [w16_dmap] its
 ; palette as os8088's colours (through the mono map on a 1bpp display).
-; CF=1: not 1 or 4 bits a pixel. Keeps all but AX, CX, DX.
+; CF=1: not 1 or 4 bits a pixel. With [w16_dpalc] set (w16_dibuse) the
+; palette is DIB_PAL_COLORS' words, each an index into that logical palette.
+; Keeps all but AX, CX, DX.
 w16_dibhdr:
     push bx
     push si
@@ -2595,6 +2736,10 @@ w16_dibhdr:
     mov cl, [es:si + 14]
     mov di, 4
 .core:
+    cmp word [w16_dpalc], 0         ; DIB_PAL_COLORS: a word an entry
+    je .cr
+    mov di, 2
+.cr:
     mov [w16_dwid], ax
     mov [w16_dhgt], dx
     mov [w16_dbpp], cl
@@ -2613,6 +2758,24 @@ w16_dibhdr:
     mov dl, [es:si]                 ; blue, green, red
     mov ah, [es:si + 1]
     mov al, [es:si + 2]
+    cmp word [w16_dpalc], 0         ; DIB_PAL_COLORS: an index into the
+    je .rgb                         ;   palette SelectPalette chose, its
+    push es                         ;   first entry past its end
+    push si
+    mov si, [es:si]
+    mov es, [w16_dpalc]
+    cmp si, [es:0]
+    jb .pin
+    xor si, si
+.pin:
+    shl si, 1
+    shl si, 1
+    mov al, [es:si + 2]
+    mov ah, [es:si + 3]
+    mov dl, [es:si + 4]
+    pop si
+    pop es
+.rgb:
     call w16_rgb2col
     cmp byte [w16_mono], 0          ; BLIT4 would put the kernel's own map
     je .pm                          ;   on it (SPEC.md 39.4): reduce it as
@@ -2642,6 +2805,7 @@ w16_dibhdr:
 .no:
     stc
 .out:
+    mov word [w16_dpalc], 0         ; (DIB_RGB_COLORS for the next)
     pop di
     pop si
     pop bx

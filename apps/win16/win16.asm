@@ -74,7 +74,9 @@ W16_TXTMAX   equ 80             ; TextOut's longest run
 W16_DTMAX    equ 255            ; DrawText's longest string (w16draw.inc)
 W16_NOBJ     equ 16             ; brushes and pens made at once
 W16_NBMP     equ 16             ; bitmaps at once (SPEC.md 124.15.2)
-W16_NMDC     equ 4              ; memory DCs at once
+W16_NPAL     equ 4              ; logical palettes made at once (124.25.8)
+W16_NMDC     equ 8              ; memory DCs at once: Paintbrush's text tool
+                                ;   holds five (SPEC.md 124.25.7)
 W16_DCMAX    equ 3              ; window DCs open under the current one
 W16_SVMAX    equ 2              ; SaveDC's states at once (SPEC.md 124.22.11)
 W16S_QN      equ 32             ; SOUND's queue, in notes (SPEC.md 124.15.1:
@@ -85,7 +87,8 @@ W16_GBUF     equ W16_BS * 20    ; the band (20 rows: a menu item is the
                                 ;   System font's rows + 2), and
                                 ;   SetDIBitsToDevice's 4bpp block, never
                                 ;   both at once
-W16_RRMAX    equ 64             ; RoundRect's largest corner radius
+W16_RRMAX    equ 127            ; RoundRect's largest corner radius: (2 r)^2
+                                ;   is a word in w16_rrtable
 W16_NMISS    equ 64             ; different imports WIN16 lacks a program may
                                 ;   import before the load refuses it
 W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
@@ -136,7 +139,7 @@ W16B_MDC     equ 0x20           ; ...ORed in: a call on a DC, which may be a
                                 ;   memory DC's (SPEC.md 124.25.3)
 W16_NARENA   equ 3              ; global heap arenas at once (w16mem.inc,
                                 ;   SPEC.md 124.25.1)
-W16_NGH      equ 64             ; moveable global handles
+W16_NGH      equ 256            ; moveable global handles
 W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)
 W16_MLAB     equ 64             ; ...a menu label's characters, and an
 W16_MACC     equ 24             ;   accelerator text's
@@ -375,6 +378,13 @@ section .w16dlg
     W16BSS w16_gcol, 1          ;   124.20.4: a GetDC inside a GetDC)
     W16BSS w16_objk, W16_NOBJ   ; each made object's W16K_*, 0 = free
     W16BSS w16_objc, W16_NOBJ   ; ...and its colour
+    W16BSS w16_objw, W16_NOBJ   ; ...and a pen's width, 80h = PS_INSIDEFRAME
+    W16BSS w16_lw, 1            ; the pen's width as a line is drawn
+    W16BSS w16_lmaj, 1          ; ...and 1 = the line is x-major
+    W16BSS w16_rwide, 1         ; RoundRect's pen width, when over one
+    W16BSS w16_rrin2, W16_RRMAX ; ...the outer shape's insets for it,
+    W16BSS w16_rro, 10          ;   its box (l, t, r, b) and ry, and the
+    W16BSS w16_rri, 10          ;   inner one's (SPEC.md 124.25.7)
     ; --- one DC's state, saved whole when another opens over it ---
     W16BSS w16_dchide, 1        ; 1 = nothing of the window is visible
     W16BSS w16_dcpaint, 1
@@ -524,6 +534,9 @@ W16_TRN equ 1024                   ; the trace ring's entries, a power of two (2
     W16BSS w16_dhgt, 2          ;   entry size and row stride
     W16BSS w16_dbpp, 1
     W16BSS w16_dpal, 2
+    W16BSS w16_dpalc, 2         ; ...DIB_PAL_COLORS: the palette's block, or 0
+    W16BSS w16_pals, 2 * W16_NPAL ; each made palette's fixed block, 0 = free
+    W16BSS w16_selpal, 2        ; the palette SelectPalette chose, or 0
     W16BSS w16_dstride, 2
     W16BSS w16_dx0, 2           ; ...the destination's top left, screen
     W16BSS w16_dy0, 2
@@ -550,6 +563,7 @@ W16_TRN equ 1024                   ; the trace ring's entries, a power of two (2
     W16BSS w16_ghf, 2 * W16_NGH
     W16BSS w16_ghage, 2 * W16_NGH ; a moveable handle's last use (w16_gtouch)
     W16BSS w16_gclock, 2        ; ...counted in uses
+    W16BSS w16_gnproc, 4        ; GlobalNotify's procedure, or 0 (w16sys.inc)
     W16BSS w16_gflg, 1
     W16BSS w16_gdisc, 1
     W16BSS w16_gnp, 2
@@ -1002,6 +1016,8 @@ W16_TRN equ 1024                   ; the trace ring's entries, a power of two (2
     W16BSS w16b_kr, 2
     W16BSS w16b_kb, 2
     W16BSS w16b_ropb, 1         ; ...a source ROP's index byte
+    W16BSS w16b_ropp, 1         ; ...and the solid brush it is under
+    W16BSS w16b_brop, 1         ; 1 = w16_bm2bm combines through w16_ropt
     W16BSS w16_ropt, 256        ; ...its answer, source * 16 + screen
     W16BSS w16x_rec, 66         ; TRANSPARENT text: a chunk's ICON_DRAW
     W16BSS w16x_sv, 8           ; ...a cut row read back (four planes of 2)

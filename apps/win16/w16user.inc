@@ -170,6 +170,7 @@ MSG_PT      equ 14
 
 WM_CREATE     equ 0x0001
 WM_DESTROY    equ 0x0002
+WM_NULL       equ 0x0000
 WM_SIZE       equ 0x0005
 WM_ACTIVATE   equ 0x0006
 WM_SETFOCUS   equ 0x0007
@@ -785,10 +786,34 @@ w16_sizeto:
     ret
 
 ; w16_sizemsg - [w16_sm_*] = WM_SIZE for the window BX (its HWND AX), with
-; the client's size now
+; the client's size now. One still queued for it is made WM_NULL: this one
+; is sent or posted next, and the older size must not arrive after it
+; (Paintbrush's canvas posts itself 0 x 0 while it is made, SPEC.md 124.8)
 w16_sizemsg:
     push cx
     push dx
+    push bx
+    mov cl, [w16_qcount]
+    xor ch, ch
+    mov dl, [w16_qhead]
+    jcxz .none
+.q:
+    push ax
+    mov al, MSG_SIZE
+    and dl, W16_QLEN - 1
+    mul dl
+    mov bx, ax
+    pop ax
+    cmp [w16_q + bx + MSG_HWND], ax
+    jne .qn
+    cmp word [w16_q + bx + MSG_MSG], WM_SIZE
+    jne .qn
+    mov word [w16_q + bx + MSG_MSG], WM_NULL
+.qn:
+    inc dl
+    loop .q
+.none:
+    pop bx
     mov [w16_sm_hwnd], ax
     mov word [w16_sm_msg], WM_SIZE
     mov word [w16_sm_wp], 0         ; SIZE_RESTORED

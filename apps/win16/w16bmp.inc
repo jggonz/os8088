@@ -14,10 +14,10 @@
 ; primitives under the call write its bitmap with.
 ; =============================================================================
 
-W16_BMP0    equ 0x3300          ; a bitmap: W16_BMP0 + slot
+W16_BMP0    equ 0x3300          ; a bitmap: W16_BMP0 + 2 * slot
 W16_BMSTK   equ 0x3180          ; the 1 x 1 stock bitmap a new memory DC holds
-W16_MDC0    equ 0x3010          ; a memory DC: W16_MDC0 + slot
-W16_HDESKDC equ 0x3003          ; the desktop's DC: read, never drawn on
+W16_MDC0    equ 0x3010          ; a memory DC: W16_MDC0 + 2 * slot
+W16_HDESKDC equ 0x3004          ; the desktop's DC: read, never drawn on
 W16_HDESK   equ 0x1FFC          ; the desktop window (no record of ours)
 W16_BMMAX   equ 64000           ; a bitmap's converted bytes, at most
 
@@ -41,9 +41,10 @@ w16_bmslot:
     mov bx, ax
     sub bx, W16_BMP0
     jb .no
-    cmp bx, W16_NBMP
+    cmp bx, 2 * W16_NBMP
     jae .no
-    shl bx, 1
+    test bl, 1                      ; (every GDI handle is even, 124.25.9)
+    jnz .no
     cmp word [w16b_seg + bx], 0
     je .no
     clc
@@ -58,6 +59,9 @@ w16_mdcslot:
     mov bx, ax
     sub bx, W16_MDC0
     jb .no
+    test bl, 1
+    jnz .no
+    shr bx, 1
     cmp bx, W16_NMDC
     jae .no
     cmp byte [w16m_on + bx], 0
@@ -115,9 +119,7 @@ w16_bmnew:
     xor al, al
     cld
     rep stosb
-    mov ax, bx
-    shr ax, 1
-    add ax, W16_BMP0
+    lea ax, [bx + W16_BMP0]
     clc
     jmp short .out
 .no:
@@ -219,6 +221,7 @@ W16LIB w16g_cmpdc
     mov word [w16m_bmp + bx], W16_BMSTK
     mov bx, ax
     ICALL w16_mdcinit               ; Windows' defaults (SPEC.md 124.25.3)
+    shl ax, 1                       ; even, as every GDI handle (124.25.9)
     add ax, W16_MDC0
     ret
 
@@ -339,8 +342,12 @@ W16LIB w16g_credib
     jc .out
     test byte [es:bx + 10], CBM_INIT
     jz .out
-    cmp word [es:bx], 0             ; DIB_RGB_COLORS
-    jne .out
+    push ax
+    mov ax, [es:bx]                 ; DIB_RGB_COLORS, or DIB_PAL_COLORS
+    mov word [w16_sfn], w16_dibuse  ;   through the selected palette
+    ICALL w16_scall
+    pop ax
+    jc .out
     push ax
     mov ax, [es:bx + 6]
     mov [w16_dbits], ax
@@ -484,7 +491,8 @@ w16_obm:
     ret
 
 ; GetObject (GDI.82) - args: +0 lpObject, +4 cbBuffer, +6 hObject. A bitmap's
-; BITMAP record (14 bytes), cut to cbBuffer; AX = the bytes written
+; BITMAP record (14 bytes), cut to cbBuffer, a font's LOGFONT or a palette's
+; entry count (a word); AX = the bytes written
 W16LIB w16g_getobj
     push si
     push di
@@ -493,6 +501,9 @@ W16LIB w16g_getobj
     mov cx, [es:bx + 4]
     les di, [es:bx]
     call w16g_fontobj               ; a font (SPEC.md 124.24.4)
+    jnc .out
+    mov word [w16_sfn], w16_palobj  ; a palette: its entries' count
+    ICALL w16_scall
     jnc .out
     push bx
     call w16_bmslot
@@ -737,17 +748,24 @@ w16_blt:
     pop di
     pop si
     ret
-.srcrop:                            ; a source ROP the pattern plays no part
-    mov dl, al                      ;   in: its index byte's two halves agree
-    and dl, 0x0F
+.srcrop:                            ; a source ROP: one the pattern plays
+    mov [w16b_ropb], al             ;   no part in (its index byte's halves
+    mov byte [w16b_ropp], 0         ;   agree), or one under a solid brush,
+    mov dl, al                      ;   each plane's half picked by the
+    and dl, 0x0F                    ;   brush's bit there (SPEC.md 124.25.7)
     mov dh, al
     shr dh, 1
     shr dh, 1
     shr dh, 1
     shr dh, 1
     cmp dl, dh
-    jne .no
-    mov [w16b_ropb], al
+    je .srcok
+    mov ax, [w16_brush]
+    ICALL w16_brcol
+    cmp al, W16_GRAY                ; a checker or none: not provided
+    jae .no
+    mov [w16b_ropp], al
+.srcok:
     mov ax, [w16b_src]
     call w16_mdcslot
     jc .no
@@ -1133,7 +1151,7 @@ w16_bltm:
     jmp short .fill
 .pat:
     cmp dx, PATCOPY_HI
-    jne .no
+    jne .srcrop
     mov ax, [w16b_mbr]
     ICALL w16_brcol
     cmp al, W16_NOCOL
@@ -1175,6 +1193,44 @@ w16_bltm:
 .no:
     xor ax, ax
     ret
+.srcrop:                            ; another source ROP from a bitmap, as
+    mov [w16b_ropb], dl             ;   onto the screen: under no pattern or
+    mov byte [w16b_ropp], 0         ;   a solid brush (SPEC.md 124.25.7) -
+    mov al, dl                      ;   Paintbrush's text is DSPDxax
+    and al, 0x0F
+    mov cl, 4
+    shr dl, cl
+    cmp al, dl
+    je .srok
+    mov ax, [w16b_mbr]
+    ICALL w16_brcol
+    cmp al, W16_GRAY
+    jae .no
+    mov [w16b_ropp], al
+.srok:
+    mov ax, [w16b_cx]
+    cmp ax, [w16b_cxs]
+    jne .no
+    mov ax, [w16b_cy]
+    cmp ax, [w16b_cys]
+    jne .no
+    mov ax, [w16b_src]
+    cmp ax, W16_HDC
+    je .no
+    call w16_mdcslot
+    jc .no
+    shl bx, 1
+    mov ax, [w16m_bmp + bx]
+    cmp ax, W16_BMSTK
+    je .yes
+    call w16_bmslot
+    jc .no
+    mov [w16b_bm], bx
+    call w16_roptab
+    mov byte [w16b_brop], 1
+    call w16_bm2bm
+    mov byte [w16b_brop], 0
+    jmp short .yes
 
 ; w16_bmcut - the source corner for the cut destination, cut again to the
 ; source's extent: [w16b_sx]/[w16b_sy] = the source's column and row for
@@ -1595,14 +1651,79 @@ w16_bm2bm:
     mov cx, [w16_rr]
     sub cx, [w16_rl]
     inc cx
+    cmp byte [w16b_brop], 0
+    jne .rop
     push ds
     mov ds, ax                      ; DS:SI = the source, ES:DI the destination
     call w16_nibrow
     pop ds
+.next:
     pop dx
     inc dx
     jmp short .row
+.rop:
+    call w16_nibrop
+    jmp short .next
 .out:
+    ret
+
+; w16_nibrop - w16_nibrow's row, AX the source's segment, through w16_ropt:
+; the source into w16_gbuf first, then each pixel there and the one under it
+; combined (SPEC.md 124.25.7). Takes AX, CX, SI, DI, BX.
+w16_nibrop:
+    push di
+    push es
+    push bx
+    push cx
+    push ds
+    pop es
+    mov di, w16_gbuf
+    xor bl, bl
+    push ds
+    mov ds, ax
+    call w16_nibrow
+    pop ds
+    pop cx
+    pop bx
+    pop es
+    pop di
+    mov si, w16_gbuf
+    xor bh, bh                      ; BH = 1: the source's next is low
+.p:
+    mov al, [si]
+    or bh, bh
+    jnz .slo
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    jmp short .sg
+.slo:
+    and al, 0x0F
+    inc si
+.sg:
+    xor bh, 1
+    mov ah, [es:di]                 ; the destination's pixel
+    or bl, bl
+    jnz .dlo
+    shr ah, 1
+    shr ah, 1
+    shr ah, 1
+    shr ah, 1
+.dlo:
+    and ah, 0x0F
+    push bx
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    shl al, 1
+    or al, ah
+    mov bl, al
+    xor bh, bh
+    mov al, [w16_ropt + bx]
+    pop bx
+    call w16_nibst
+    loop .p
     ret
 
 ; w16_nibrow - CX pixels (1 or more) from DS:SI to ES:DI, BH = 1 when the
@@ -1933,8 +2054,9 @@ w16_scrpix:
 W16_ROPROW  equ 400                 ; the combined row, in w16_gbuf past the
                                     ;   saved planes (4 x 92 bytes at 720 px)
 
-; w16_roptab - [w16b_ropb] (the ROP's index byte) -> w16_ropt: the answer
-; for each source colour * 16 + screen colour
+; w16_roptab - [w16b_ropb] (the ROP's index byte) under the solid brush
+; [w16b_ropp] -> w16_ropt: the answer for each source colour * 16 + screen
+; colour
 w16_roptab:
     push ds
     pop es
@@ -1961,6 +2083,13 @@ w16_roptab:
     inc cl
 .d0:
     mov ch, [w16b_ropb]
+    test [w16b_ropp], ah            ; the brush's bit set: the half where
+    jz .p0                          ;   the pattern is 1
+    shr ch, 1
+    shr ch, 1
+    shr ch, 1
+    shr ch, 1
+.p0:
     shr ch, cl
     test ch, 1
     jz .z

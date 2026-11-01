@@ -27,6 +27,8 @@ W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
                                 ;   largest free run (SPEC.md 124.25.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
 W16_GHDISC  equ 2               ; [w16_ghf]: GMEM_DISCARDABLE (1 = in use)
+W16_GHNOTE  equ 4               ;   ...and GMEM_NOTIFY: discarded only when
+                                ;   GlobalNotify's procedure says so
 
 GMEM_MOVEABLE equ 0x0002
 GMEM_ZEROINIT equ 0x0040
@@ -679,12 +681,13 @@ w16_gfreeall:
 ; GlobalAlloc (KERNEL.15) - args: +0 dwBytes (long), +4 wFlags. A moveable
 ; block asked for GMEM_DISCARDABLE is marked so on its handle: w16_gdold may
 ; take it when the heap is short, and the handle stays, discarded (SPEC.md
-; 124.9). Not with GMEM_NOTIFY as well: Windows asked the program's
-; GlobalNotify procedure first, and the program counts on having been asked
-; - Paintbrush's strips lock a handle its procedure never cleared without
-; looking for NULL - but that call would land in the middle of the
-; allocation that wants the room, where WIN16 cannot call the program. The
-; procedure may refuse on Windows too, so the block is one it refused.
+; 124.9). With GMEM_NOTIFY as well it is the program's to give up: when
+; the heap cannot hold a request, the GlobalNotify procedure is asked about
+; the least recently used of them, as Windows asked it, and the block goes
+; only if it answers nonzero - Paintbrush's DISCARDBAND writes a band of
+; the picture to its swap file first, and locks a band it has not been
+; asked about without looking for NULL (SPEC.md 124.9.1). Then the request
+; is tried again.
 w16k_galloc:
     call w16_args
     mov ax, [es:bx]
@@ -692,21 +695,29 @@ w16k_galloc:
     mov cl, [es:bx + 4]
     mov ch, [es:bx + 5]
     call w16_gnew
+    or ax, ax
+    jz .short
     cmp ax, W16_GH0                 ; a moveable handle's entry: used now,
     jb .out                         ;   and marked if it may be discarded
     push si
     mov si, ax
     sub si, W16_GH0
     call w16_gtouch
-    test ch, GMEM_NOTIFY_HI
-    jnz .nd
     test ch, GMEM_DISCARDABLE_HI
     jz .nd
-    or byte [w16_ghf + si], W16_GHDISC
+    mov cl, W16_GHDISC
+    test ch, GMEM_NOTIFY_HI
+    jz .mark
+    mov cl, W16_GHNOTE
+.mark:
+    or [w16_ghf + si], cl
 .nd:
     pop si
 .out:
     ret
+.short:
+    LCALL w16k_gnask                ; the procedure, asked: it runs, and the
+    ret                             ;   request is tried again after
 
 ; GlobalFree (KERNEL.17) - args: +0 hMem. AX = 0 freed, else the handle
 w16k_gfree:
@@ -921,12 +932,15 @@ w16k_grealloc:
     jae .out
     mov si, ax
     sub si, W16_GH0
-    and byte [w16_ghf + si], ~W16_GHDISC
-    test byte [es:bx + 1], GMEM_NOTIFY_HI
-    jnz .out
+    and byte [w16_ghf + si], ~(W16_GHDISC | W16_GHNOTE)
     test byte [es:bx + 1], GMEM_DISCARDABLE_HI
     jz .out
-    or byte [w16_ghf + si], W16_GHDISC
+    mov cl, W16_GHDISC              ; GlobalAlloc's marks
+    test byte [es:bx + 1], GMEM_NOTIFY_HI
+    jz .mk
+    mov cl, W16_GHNOTE
+.mk:
+    or [w16_ghf + si], cl
     jmp .out
 .size:
     add ax, 15

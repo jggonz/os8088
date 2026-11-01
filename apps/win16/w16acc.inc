@@ -710,8 +710,9 @@ W16LIB w16g_crebmp
 
 ; -----------------------------------------------------------------------------
 ; CreatePatternBrush (GDI.60) - args: +0 hBitmap. The brush keeps no copy of
-; the pattern: half its top left 8 x 8 bright (a bright pixel white, a dark
-; one black) is the kernel's 50% checker, which is REVERSI's board, and
+; the pattern: one colour throughout its top left 8 x 8 is that colour's
+; solid brush (SPEC.md 124.25.7), half of it bright (a bright pixel white, a
+; dark one black) is the kernel's 50% checker, which is REVERSI's board, and
 ; anything else is the colour of the sixteen nearest the grey it averages
 ; (SPEC.md 124.17.1). The bitmap may be deleted at once, as REVERSI does.
 ; -----------------------------------------------------------------------------
@@ -742,6 +743,7 @@ W16LIB w16g_patbrush
     mov [w16_scratch + 2], ax
     xor dx, dx                      ; DX = the bright ones
     xor bx, bx                      ; BX = the row's offset
+    mov di, -1                      ; DI = the one colour, -2 more than one
 .row:
     xor si, si
 .px:
@@ -758,6 +760,19 @@ W16LIB w16g_patbrush
     shr al, 1
     shr al, 1
 .lo:
+    and al, 15
+    cmp di, -1
+    jne .one
+    mov di, ax
+    and di, 15
+.one:
+    push ax
+    xor ah, ah
+    cmp ax, di
+    pop ax
+    je .same
+    mov di, -2
+.same:
     test al, 8                      ; IRGB's I, or white's
     jz .dark
     inc dx
@@ -767,6 +782,9 @@ W16LIB w16g_patbrush
 .nrow:
     add bx, [w16_scratch + 2]
     loop .row
+    mov ax, di                      ; one colour: that colour (Paintbrush's
+    cmp ax, 16                      ;   text and fill brushes)
+    jb .made
     mov ax, dx                      ; exactly half: Windows' 50% checker,
     shl ax, 1                       ;   which the kernel's dither fill is
     cmp ax, [w16_scratch]

@@ -57,9 +57,10 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(getcwd(path, sizeof path) != NULL && ends(path, "\\W16DIR"), "getcwd");
 
     /* _lcreat and _lwrite; then a rewrite in the middle through _lopen's
-     * read/write handle. (A handle that has GROWN its file writes only at
-     * the end - DOS.O88's core, SPEC.md 96.11.2 and 124.21.3 - so the patch
-     * is made the way the core can make it.) */
+     * read/write handle. (A handle that has GROWN its file wrote only at
+     * the end - DOS.O88's core, SPEC.md 96.11.2 and 124.21.3 - until
+     * 96.11.6.4; the patch is still made through a second handle, the way
+     * most programs make it.) */
     for (i = 0; i < 300; i++)
         buf[i] = (char)('a' + i % 26);
     h = _lcreat("A.TXT", 0);

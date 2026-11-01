@@ -61,7 +61,7 @@ def exprow(mod, ordinal):
 def waiting_in(p, row):
     st = p.pb("w16_state")
     return st in (W16S_REFUSED, W16S_ENDED) or \
-        (p.pb("w16_inprog") == 0 and p.pw("w16_idx") == row)
+        (p.pb("w16_inprog") == 0 and p.serves(row))
 
 
 def titled(ui, word):
@@ -134,7 +134,7 @@ def leg_notepad(d, ui, S, dw, bad):
     if p.pb("w16_state") != W16S_RUNNING:
         bad.append("Notepad: WIN16 is in state %d after the Cancel, not running"
                    % p.pb("w16_state"))
-    if p.pb("w16_inprog") == 0 and p.pw("w16_idx") == row:
+    if p.pb("w16_inprog") == 0 and p.serves(row):
         bad.append("Notepad: still waiting in GetOpenFileName after the Cancel")
     if p.pw("w16_cderr") != 0:
         bad.append("Notepad: CommDlgExtendedError is %04X after a Cancel, not 0"
@@ -177,7 +177,7 @@ def leg_marquee(d, ui, S, dw, bad):
     d.idle(3.0)
     if ended(p, bad, "Marquee"):
         return
-    if p.pb("w16_inprog") == 0 and p.pw("w16_idx") == row:
+    if p.pb("w16_inprog") == 0 and p.serves(row):
         bad.append("Marquee: still waiting in ChooseFont after its OK")
     print("Marquee: Font closed, the setup dialog carries on")
     d.key("esc")

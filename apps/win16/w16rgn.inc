@@ -160,13 +160,15 @@ W16SYS w16g_setbmbits
 ; +12 nStartScan, +14 hBitmap, +16 hDC. The DIB's scans nStartScan to
 ; nStartScan + nNumScans - 1 (counted from its bottom) into the bitmap, as
 ; CreateDIBitmap's CBM_INIT puts a whole DIB (SPEC.md 124.15.2): 1 or 4 bits
-; a pixel, DIB_RGB_COLORS. The answer is nNumScans; 0 for anything else.
+; a pixel, DIB_RGB_COLORS or DIB_PAL_COLORS (124.25.8). The answer is
+; nNumScans; 0 for anything else.
 W16SYS w16g_setdibits
     push si
     push di
     ICALL w16_args
-    cmp word [es:bx], 0             ; DIB_PAL_COLORS: no palette here
-    jne .no
+    mov ax, [es:bx]                 ; DIB_PAL_COLORS: through the selected
+    call w16_dibuse                 ;   palette (SPEC.md 124.25.8)
+    jc .no
     mov ax, [es:bx + 12]
     mov [w16_dstart], ax
     mov ax, [es:bx + 10]
@@ -1106,6 +1108,493 @@ W16SYS w16g_exclclip
 .out:
     pop di
     pop si
+    ret
+
+
+; w16_rrwide - RoundRect's and Ellipse's shape under a pen over one pixel
+; wide (SPEC.md 124.25.7), from w16g_roundrect with the box, the radii and
+; w16_rrin made for it, [w16_rpen] the pen's colour and [w16_rwide] its
+; width. The pen is the band between that shape and the same shape inside
+; it by the width, both radii less the width; the brush is the inner one.
+; Drawn as three batches of rows through w16_span, as RoundRect's own: the
+; band's left part (and its top and bottom rows whole), its right part, and
+; the brush. Clobbers AX, BX, CX, DX, SI, DI, BP.
+w16_rrwide:
+    push ds
+    pop es
+    mov si, w16_rrin                ; the outer shape's insets and box
+    mov di, w16_rrin2
+    mov cx, W16_RRMAX
+    cld
+    rep movsb
+    mov si, w16_rl
+    mov di, w16_rro
+    movsw
+    movsw
+    movsw
+    movsw
+    mov ax, [w16_rry]
+    stosw
+    mov al, [w16_rwide]             ; the inner one: the box less the width
+    xor ah, ah
+    add [w16_rl], ax
+    add [w16_rt], ax
+    sub [w16_rr], ax
+    sub [w16_rb], ax
+    sub [w16_rrx], ax
+    jnb .ix
+    mov word [w16_rrx], 0
+.ix:
+    sub [w16_rry], ax
+    jnb .iy
+    mov word [w16_rry], 0
+.iy:
+    mov ax, [w16_rl]                ; a box with no inside has no rows
+    cmp ax, [w16_rr]
+    jle .iok
+    mov word [w16_rt], 1
+    mov word [w16_rb], 0
+.iok:
+    ICALL w16_rrtable
+    mov si, w16_rl
+    mov di, w16_rri
+    movsw
+    movsw
+    movsw
+    movsw
+    mov ax, [w16_rry]
+    stosw
+    mov al, [w16_rpen]
+    mov [w16_gcol], al
+    mov dx, [w16_rro + 2]           ; the left part, every row of the shape
+.left:
+    call w16_rro_row                ; AX = the outer left, CX its right
+    mov bp, ax
+    call w16_rri_row                ; AX = the inner left, or CF: outside it
+    jc .lput
+    dec ax
+    mov cx, ax
+.lput:
+    mov ax, bp
+    ICALL w16_span
+    inc dx
+    cmp dx, [w16_rro + 6]
+    jle .left
+    ICALL w16_spflush
+    mov dx, [w16_rri + 2]           ; the right part, the inner shape's rows
+.right:
+    cmp dx, [w16_rri + 6]
+    jg .rdone
+    call w16_rro_row
+    push cx
+    call w16_rri_row
+    mov ax, cx
+    inc ax
+    pop cx
+    ICALL w16_span
+    inc dx
+    jmp short .right
+.rdone:
+    ICALL w16_spflush
+    mov ax, [w16_brush]             ; the brush, the inner shape
+    ICALL w16_brcol
+    ICALL w16_ropcol
+    cmp al, W16_NOCOL
+    je .out
+    mov [w16_gcol], al
+    mov dx, [w16_rri + 2]
+.fill:
+    cmp dx, [w16_rri + 6]
+    jg .fdone
+    call w16_rri_row
+    ICALL w16_span
+    inc dx
+    jmp short .fill
+.fdone:
+    ICALL w16_spflush
+.out:
+    ret
+
+; w16_rro_row, w16_rri_row - DX = a row: AX..CX the outer (inner) shape's
+; run on it, from its box and insets; CF=1 when the row is not in the box.
+; Keep DX, BP.
+w16_rro_row:
+    mov si, w16_rro
+    mov di, w16_rrin2
+    jmp short w16_rrk
+w16_rri_row:
+    mov si, w16_rri
+    mov di, w16_rrin
+w16_rrk:
+    mov ax, dx                      ; k = the rows to the nearer edge
+    sub ax, [si + 2]
+    jl .no
+    mov bx, [si + 6]
+    sub bx, dx
+    jl .no
+    cmp ax, bx
+    jbe .k
+    mov ax, bx
+.k:
+    xor bx, bx                      ; BX = that row's inset
+    cmp ax, [si + 8]
+    jae .in
+    mov bx, ax
+    mov bl, [bx + di]
+    xor bh, bh
+.in:
+    mov ax, [si]
+    add ax, bx
+    mov cx, [si + 4]
+    sub cx, bx
+    clc
+    ret
+.no:
+    stc
+    ret
+
+
+; =============================================================================
+; Logical palettes (SPEC.md 124.25.8). A display here has the colours it has,
+; so a palette changes nothing on the screen; what it holds is what the
+; program asks it back for - GetPaletteEntries, GetObject's count, the
+; nearest entry - and what DIB_PAL_COLORS indexes: a colour table of words,
+; each an entry of the palette SelectPalette chose, mapped to the nearest of
+; the sixteen as a DIB's RGB entries are. A made palette is a fixed global
+; block, its entry count and then its PALETTEENTRYs; W16_NPAL at once, and
+; past them CreatePalette answers the stock DEFAULT_PALETTE, as it did before
+; WIN16 kept any. One palette is selected for the program, not one a DC.
+; =============================================================================
+
+; CreatePalette (GDI.360) - args: +0 lpLogPalette: palVersion, palNumEntries
+; (at most 256 are kept) and the entries. AX = W16_PAL0 + 2 * its slot
+W16SYS w16g_crepal
+    push si
+    push di
+    xor si, si
+.slot:
+    cmp word [w16_pals + si], 0
+    je .free
+    inc si
+    inc si
+    cmp si, 2 * W16_NPAL
+    jb .slot
+    jmp short .stock
+.free:
+    ICALL w16_args
+    les bx, [es:bx]
+    mov cx, [es:bx + 2]
+    cmp cx, 256
+    jbe .n
+    mov cx, 256
+.n:
+    mov ax, cx                      ; 2 + 4 bytes an entry, fixed
+    shl ax, 1
+    shl ax, 1
+    add ax, 2
+    xor dx, dx
+    push cx
+    xor cx, cx
+    ICALL w16_gnew                  ; AX = the block's segment
+    pop cx
+    or ax, ax
+    jz .stock
+    mov [w16_pals + si], ax
+    push ds
+    push es
+    pop ds
+    lea dx, [bx + 4]
+    mov es, ax
+    xchg dx, si                     ; DS:SI = the entries, DX = the slot
+    xor di, di
+    mov ax, cx
+    cld
+    stosw
+    shl cx, 1
+    rep movsw
+    pop ds
+    mov ax, dx
+    add ax, W16_PAL0
+    jmp short .out
+.stock:
+    mov ax, W16_STOCK + DEFAULT_PALETTE
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; SelectPalette (USER.282) - args: +0 bForceBackground, +2 hPal, +4 hDC: a
+; made palette is the one DIB_PAL_COLORS reads from now on. Answers the one
+; it replaced, the stock palette when it was none of ours
+W16SYS w16g_selpal
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+    call w16_palseg
+    jnc .made
+    xor ax, ax
+.made:
+    xchg ax, [w16_selpal]
+    or ax, ax
+    jnz .out
+    mov ax, W16_STOCK + DEFAULT_PALETTE
+.out:
+    xor dx, dx
+    ret
+
+; w16_palseg - AX = a handle -> CF=0 a made palette: DX = its block, BX =
+; its slot * 2; CF=1 not one. Keeps AX
+w16_palseg:
+    mov bx, ax
+    sub bx, W16_PAL0
+    jb .no
+    cmp bx, 2 * W16_NPAL
+    jae .no
+    test bl, 1
+    jnz .no
+    mov dx, [w16_pals + bx]
+    or dx, dx
+    jz .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; w16_paldel - DeleteObject's: AX = a handle. A made palette's block is
+; freed, AX = 1, CF=0; CF=1 not one, AX kept
+w16_paldel:
+    push bx
+    push dx
+    call w16_palseg
+    jc .out
+    mov word [w16_pals + bx], 0
+    cmp ax, [w16_selpal]
+    jne .sel
+    mov word [w16_selpal], 0
+.sel:
+    mov ax, dx
+    ICALL w16_gfreeh
+    mov ax, 1
+    clc
+.out:
+    pop dx
+    pop bx
+    ret
+
+; w16_palobj - GetObject's: AX = a handle, CX = cbBuffer, ES:DI = the
+; buffer. A palette, made or the stock one: its entry count there as a word,
+; AX = 2 (0 when CX is short of one), CF=0; CF=1 not one, all kept
+w16_palobj:
+    push bx
+    push dx
+    push ax
+    call w16_palseg
+    jc .stock
+    push es
+    mov es, dx
+    mov dx, [es:0]
+    pop es
+    jmp short .put
+.stock:
+    cmp ax, W16_STOCK + DEFAULT_PALETTE
+    stc
+    jne .not
+    mov dx, 16
+.put:
+    pop ax
+    xor ax, ax
+    cmp cx, 2
+    jb .out
+    mov [es:di], dx
+    mov al, 2
+.out:
+    clc
+    pop dx
+    pop bx
+    ret
+.not:
+    pop ax
+    pop dx
+    pop bx
+    ret
+
+; w16_dibuse - AX = a DIB call's wUsage -> CF=0 it can be read: DIB_RGB_COLORS,
+; or DIB_PAL_COLORS with a made palette selected, which [w16_dpalc] names for
+; w16_dibhdr; CF=1 anything else. Keeps all
+w16_dibuse:
+    mov word [w16_dpalc], 0
+    cmp ax, 1
+    jb .ok
+    jne .no
+    push bx
+    push dx
+    push ax
+    mov ax, [w16_selpal]
+    call w16_palseg
+    pop ax
+    jc .none
+    mov [w16_dpalc], dx
+.none:
+    pop dx
+    pop bx
+    jc .no
+.ok:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; GetPaletteEntries (GDI.363) - args: +0 lppe, +4 wNum, +6 wStart, +8 hPal.
+; A made palette's own entries; any other handle is the display's sixteen,
+; in the order GetDIBits writes a colour table, so a BMP WIN16 saved reads
+; back as the colours it was drawn in, and past the sixteen black. The count
+; copied; with lppe NULL, the palette's entries
+W16SYS w16g_getpalent
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 8]
+    call w16_palseg
+    jnc .made
+    mov cx, [es:bx + 4]
+    mov ax, [es:bx + 6]
+    les di, [es:bx]
+    mov dx, es
+    or dx, di
+    jz .count
+    push cx
+    cld
+    jcxz .done
+.e:
+    xor dx, dx                      ; DX = R, G (B and the flags 0 below)
+    xor si, si
+    cmp ax, 16
+    jae .put
+    mov si, ax
+    shl si, 1
+    add si, ax
+    add si, w16_pal16
+    mov dx, [si]
+    mov si, [si + 2]
+    and si, 0xFF
+.put:
+    xchg ax, dx
+    stosw                           ; peRed, peGreen
+    xchg ax, dx
+    xchg ax, si
+    stosw                           ; peBlue, peFlags 0
+    xchg ax, si
+    inc ax
+    loop .e
+.done:
+    pop ax
+    jmp short .out
+.count:
+    mov ax, 16
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+.made:
+    ICALL w16_args                  ; (w16_palseg answered in BX)
+    mov cx, [es:bx + 4]
+    mov si, [es:bx + 6]
+    les di, [es:bx]
+    push ds
+    mov ds, dx
+    mov ax, [0]                     ; the entries it has
+    mov dx, es
+    or dx, di
+    jz .mout
+    sub ax, si
+    jbe .none
+    cmp cx, ax
+    jae .all
+    mov ax, cx
+.all:
+    mov cx, ax
+    shl si, 1
+    shl si, 1
+    inc si
+    inc si
+    shl cx, 1
+    cld
+    rep movsw
+    jmp short .mout
+.none:
+    xor ax, ax
+.mout:
+    pop ds
+    jmp short .out
+
+; GetNearestPaletteIndex (GDI.370) - args: +0 crColor, +4 hPal: a made
+; palette's entry nearest it, by the sum of the three distances; of any other
+; handle, the nearest of GetPaletteEntries' sixteen
+W16SYS w16g_nearpal
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    call w16_palseg
+    jnc .made
+    mov ax, [es:bx]
+    mov dl, [es:bx + 2]
+    ICALL w16_rgb2col
+    xor ah, ah
+    jmp short .out
+.made:
+    push si
+    push di
+    push bp
+    ICALL w16_args                  ; (w16_palseg answered in BX)
+    mov cx, [es:bx]                 ; CL = red, CH = green, AH = blue
+    mov ah, [es:bx + 2]
+    mov es, dx
+    mov bx, 0xFFFF                  ; BX = the best distance, DX its entry
+    xor dx, dx
+    xor di, di
+    mov si, 2
+.e:
+    cmp di, [es:0]
+    jae .done
+    xor bp, bp
+    mov al, [es:si]
+    sub al, cl
+    call w16_nadd
+    mov al, [es:si + 1]
+    sub al, ch
+    call w16_nadd
+    mov al, [es:si + 2]
+    sub al, ah
+    call w16_nadd
+    cmp bp, bx
+    jae .n
+    mov bx, bp
+    mov dx, di
+.n:
+    add si, 4
+    inc di
+    jmp short .e
+.done:
+    mov ax, dx
+    pop bp
+    pop di
+    pop si
+.out:
+    xor dx, dx
+    ret
+
+; w16_nadd - BP += |AL|, AL the difference a SUB just left (CF its borrow).
+; Keeps all but AL and the flags
+w16_nadd:
+    jnc .p
+    neg al
+.p:
+    push ax
+    xor ah, ah
+    add bp, ax
+    pop ax
     ret
 
 section .text

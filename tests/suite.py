@@ -16498,15 +16498,17 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
-    Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 150.0,
-        "SPEC.md 124.8, 124.9, 124.25, WIN16-ANY-PLAN S19b: Windows 3.0's "
+    Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 240.0,
+        "SPEC.md 124.8, 124.9, 124.25, 96.11.6.4, WIN16-ANY-PLAN S19b: Windows 3.0's "
         "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "
         "where the win16-reference skill put them) on VGA under QEMU: a brush "
         "stroke, then the box tool - which the stroke's capture lets go of "
         "only on a hover move off the canvas - a box, red rolled inside it "
         "and green across the canvas around it, read back off the glass; and "
         "the first sixteen interrupt vectors as they were, which a discarded "
-        "GMEM_NOTIFY strip locked unchecked would have written over",
+        "GMEM_NOTIFY strip locked unchecked would have written over; then "
+        "File > Save As NEW.BMP, read off B: on the host as a whole BMP with "
+        "red inside the box and green outside it",
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),

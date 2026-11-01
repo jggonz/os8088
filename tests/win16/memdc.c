@@ -14,6 +14,13 @@
  * window's DC as Paintbrush moves it when it scrolls; and ExtFloodFill fills
  * on the window's DC, inside a frame and then across the whole client.
  *
+ * Then what Paintbrush's File Open needs (SPEC.md 124.9.1, 124.25.8,
+ * 124.25.9): every DC and bitmap handle even, as PBRUSH.DLL marks its own
+ * virtual ones odd; a logical palette kept, read back, searched and indexed
+ * by a DIB_PAL_COLORS colour table; GMEM_NOTIFY blocks given up only when
+ * the GlobalNotify procedure says so, as a short heap makes room, which is
+ * PBRUSH.DLL's band cache; and two hundred moveable handles at once.
+ *
  * Every check that fails is named in the message box, which
  * tests/win16memdc.py reads; "MEMDC OK" when none does.
  */
@@ -30,6 +37,8 @@ static BYTE bits[STRIDE * H];
 static BYTE keep[STRIDE * H * 4];       /* GetBitmapBits', whatever its form */
 static HDC mem;
 static HBITMAP bm, old;
+static int notified;
+static HGLOBAL asked;
 
 static void check(int ok, const char *tag)
 {
@@ -72,6 +81,14 @@ static COLORREF pix(int x, int y)
 #define RED   RGB(255, 0, 0)
 #define GREEN RGB(0, 255, 0)
 #define BLUE  RGB(0, 0, 255)
+
+/* GlobalNotify's procedure: counts, remembers, and lets the block go */
+BOOL __export CALLBACK NotifyProc(HGLOBAL h)
+{
+    notified++;
+    asked = h;
+    return TRUE;
+}
 
 LRESULT __export CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -225,6 +242,96 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
           && GetPixel(dc, 40, 35) == GREEN && GetPixel(dc, 20, 20) == BLACK,
           "wfloodbig");
     SelectObject(dc, ob);
+
+    /* --- even handles: PBRUSH.DLL's own virtual DCs and bitmaps are odd --- */
+    check(!((UINT)mem & 1) && !((UINT)mem2 & 1) && !((UINT)bm & 1)
+          && !((UINT)bm2 & 1), "evenhandles");
+
+    /* --- a logical palette: kept, read back, searched, and indexed by a
+     * DIB_PAL_COLORS colour table through SelectPalette --- */
+    {
+        static struct { WORD ver, num; PALETTEENTRY e[16]; } lp;
+        static struct { BITMAPINFOHEADER h; WORD ix[16]; } pb;
+        static PALETTEENTRY got[16];
+        static const COLORREF cols[4] = { RED, GREEN, BLUE, WHITE };
+        HPALETTE hp, op;
+        WORD cnt = 0;
+
+        lp.ver = 0x300;
+        lp.num = 16;
+        for (k = 0; k < 16; k++) {          /* red, green, blue, white, ... */
+            lp.e[k].peRed = GetRValue(cols[k & 3]);
+            lp.e[k].peGreen = GetGValue(cols[k & 3]);
+            lp.e[k].peBlue = GetBValue(cols[k & 3]);
+        }
+        hp = CreatePalette((LOGPALETTE FAR *)&lp);
+        check(hp != NULL && !((UINT)hp & 1), "palmake");
+        check(GetObject(hp, sizeof(cnt), &cnt) == 2 && cnt == 16, "palobj");
+        check(GetPaletteEntries(hp, 0, 16, got) == 16 && got[0].peRed == 255
+              && got[0].peGreen == 0 && got[2].peBlue == 255
+              && got[5].peGreen == 255, "palget");
+        check(GetPaletteEntries(hp, 14, 16, got) == 2
+              && got[0].peBlue == 255, "palclip");
+        check(GetNearestPaletteIndex(hp, RGB(0, 0, 240)) == 2, "palnear");
+        op = SelectPalette(dc, hp, FALSE);
+        RealizePalette(dc);
+        memset(&pb, 0, sizeof(pb));
+        pb.h.biSize = sizeof(BITMAPINFOHEADER);
+        pb.h.biWidth = W;
+        pb.h.biHeight = H;
+        pb.h.biPlanes = 1;
+        pb.h.biBitCount = 4;
+        for (k = 0; k < 16; k++)            /* pixel k is palette entry 15 - k */
+            pb.ix[k] = 15 - k;
+        for (y = 0; y < H; y++)             /* left half 15 (red), right 13 (blue) */
+            for (x = 0; x < STRIDE; x++)
+                bits[y * STRIDE + x] = x < STRIDE / 2 ? 0xFF : 0xDD;
+        SelectObject(mem, old);
+        check(SetDIBits(dc, bm, 0, H, bits, (BITMAPINFO FAR *)&pb,
+                        DIB_PAL_COLORS) == H, "paldibret");
+        SelectObject(mem, bm);
+        snap(dc);
+        check(pix(5, 5) == RED && pix(50, 40) == BLUE, "paldib");
+        SelectPalette(dc, op, FALSE);
+        check(DeleteObject(hp), "paldel");
+    }
+
+    /* --- GMEM_NOTIFY blocks, as PBRUSH.DLL's band cache keeps them: the
+     * heap runs short, the procedure is asked, and what it lets go goes --- */
+    {
+        static HGLOBAL hb[48];
+        int nb;
+
+        GlobalNotify((GNOTIFYPROC)NotifyProc);
+        for (nb = 0; nb < 48; nb++) {
+            hb[nb] = GlobalAlloc(GMEM_MOVEABLE | GMEM_DISCARDABLE | GMEM_NOTIFY,
+                                 16000L);
+            if (hb[nb] == NULL)
+                break;
+        }
+        check(nb == 48, "notifyroom");
+        check(notified > 0 && asked != NULL
+              && (GlobalFlags(asked) & GMEM_DISCARDED), "notifyasked");
+        check(nb == 0 || GlobalLock(hb[nb - 1]) != NULL, "notifynewest");
+        if (nb > 0)
+            GlobalUnlock(hb[nb - 1]);
+        for (k = 0; k < nb; k++)
+            GlobalFree(hb[k]);
+        GlobalNotify(NULL);
+    }
+
+    /* --- two hundred moveable handles at once --- */
+    {
+        static HGLOBAL hs[200];
+        int nh;
+
+        for (nh = 0; nh < 200; nh++)
+            if ((hs[nh] = GlobalAlloc(GMEM_MOVEABLE, 16)) == NULL)
+                break;
+        check(nh == 200, "handles");
+        for (k = 0; k < nh; k++)
+            GlobalFree(hs[k]);
+    }
 
     SelectObject(mem2, old);
     DeleteDC(mem2);

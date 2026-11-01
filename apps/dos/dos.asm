@@ -3520,23 +3520,34 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; --- BEFORE the end, AT it, or PAST it - three answers (96.11.6.3) ------
     ; It was `jne .fhacc` twice, which is not an ordering test at all: it
     ; refused a write PAST the end exactly as it refused one BEHIND it, and
-    ; those are opposite cases. Behind is §96.11.2's real refusal - a write
+    ; those are opposite cases. Behind WAS §96.11.2's real refusal - a write
     ; into the middle of a file this handle created, which the append path
-    ; cannot make. PAST is a GAP, which 96.11.6.1 already lays, and Microsoft
+    ; cannot make - and is an overwrite after a flush now (.fwback,
+    ; 96.11.6.4). PAST is a GAP, which 96.11.6.1 already lays, and Microsoft
     ; Works reported it as `Cannot write file`: create, seek to 0x180 on the
     ; empty file, write there, which is that section's own first bullet -
     ; pre-allocating a header to patch later.
     mov ax, [si+FH_POS+2]           ; the HIGH words first, so this is an
     cmp ax, [si+FH_SIZE+2]          ; UNSIGNED 32-BIT compare and not two
     ja .fwgap                       ; equality tests wearing one
-    jb .fhacc1
+    jb .fwback
     mov ax, [si+FH_POS]
     cmp ax, [si+FH_SIZE]
     ja .fwgap
-    jb .fhacc1
+    jb .fwback
     call dos_fh_wrloop
     jc .fherr1
     jmp .fhok
+.fwback:
+    ; **BEHIND THE END IS AN OVERWRITE NOW** (SPEC.md 96.11.6.4), and it is
+    ; 96.52's partial flush made on purpose: the accumulator goes out as the
+    ; append it is - the first flush CREATES the file - and the handle becomes
+    ; a VIEW, so dos_fh_wiloop overwrites in place and hands the rest of a
+    ; write that runs past the end back to the accumulator at .iappend.
+    ; Paintbrush writes a bitmap's body and then seeks to 0 for its header.
+    call dos_fh_flush
+    jc .fherr1
+    or byte [si+FH_FLAGS], FHF_INPLC
 .fwgap:
     ; ...and the gap arm is dos_fh_wiloop's `.ihole`, which is chosen on the
     ; same compare and needs no flag: it lays [SIZE, POS), rewinds, and hands
@@ -13001,8 +13012,9 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
 ; OSAPI_FILE_APPEND refuses a file whose size is not a whole number of
 ; clusters, so the only append that can ever work is one onto a file this
 ; layer itself wrote in whole windows. A create-then-write-then-close is
-; therefore exact, and a write anywhere else REFUSES (SPEC.md 96.11.2) rather
-; than reporting a success it did not have.
+; therefore exact. A write anywhere else REFUSED (SPEC.md 96.11.2) rather
+; than reporting a success it did not have, until 96.11.6's in-place writes
+; and 96.11.6.4's flush-then-overwrite gave each case a write that is real.
 DOS_FH0     equ 5                   ; 0..4 are the five devices DOS opens for
 DOS_NFH     equ 8                   ; every process; files start after them
 FH_NAME     equ 0                   ; char[13], NUL-terminated

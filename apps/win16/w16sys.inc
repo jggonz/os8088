@@ -1434,14 +1434,6 @@ W16LIB w16g_rectvis
     xor dx, dx
     ret
 
-; CreatePalette (GDI.360), SelectPalette (USER.282): the stock
-; DEFAULT_PALETTE. A display here has the colours it has: a palette is
-; taken, selected and realized, and changes nothing
-W16LIB w16g_crepal
-    mov ax, W16_STOCK + 15
-    xor dx, dx
-    ret
-
 ; =============================================================================
 ; Character Map's calls (SPEC.md 124.22.15)
 ; =============================================================================
@@ -2440,12 +2432,88 @@ W16LIB w16u_defhook
 
 ; --- Paintbrush's (SPEC.md 124.23.9) ----------------------------------------
 
-; GlobalNotify (KERNEL.154) - args: +0 lpNotifyProc. Kept nowhere: WIN16
-; discards a block without asking (SPEC.md 124.9), as Windows did for a
-; block allocated without GMEM_NOTIFY.
-; ClipCursor (USER.16) - args: +0 lpRect. The pointer is os8088's and is not
-; confined (SPEC.md 124.23.9)
+; GlobalNotify (KERNEL.154) - args: +0 lpNotifyProc: kept, and asked about
+; a GMEM_NOTIFY block before a short heap takes it (w16k_gnask)
 W16LIB w16k_gnotify
+    ICALL w16_args
+    mov ax, [es:bx]
+    mov [w16_gnproc], ax
+    mov ax, [es:bx + 2]
+    mov [w16_gnproc + 2], ax
+    ret
+
+; w16k_gnask - GlobalAlloc could not find the room (SPEC.md 124.9.1): the
+; least recently used GMEM_NOTIFY block nobody has locked is offered to the
+; GlobalNotify procedure, as a call into the program, and w16k_gnback is
+; what it returns to. AX = 0 with nothing to offer or no procedure
+W16LIB w16k_gnask
+    mov ax, [w16_gnproc + 2]
+    or ax, ax
+    jz .none
+    mov di, 0xFFFF                  ; DI = the oldest so far, DX its use
+    xor si, si
+.h:
+    test byte [w16_ghf + si], W16_GHNOTE
+    jz .n
+    mov ax, [w16_ghseg + si]
+    or ax, ax
+    jz .n                           ; discarded already
+    dec ax
+    mov es, ax
+    cmp byte [es:GH_LOCK], 0
+    jne .n
+    mov ax, [w16_ghage + si]
+    cmp di, 0xFFFF
+    je .take
+    cmp ax, dx
+    jae .n
+.take:
+    mov di, si
+    mov dx, ax
+.n:
+    inc si
+    inc si
+    cmp si, 2 * W16_NGH
+    jb .h
+    cmp di, 0xFFFF
+    je .none
+    mov ax, di                      ; the continuation's word: the entry
+    lea bx, [di + W16_GH0]          ; (cbopen answers in DI)
+    mov si, w16k_gnback_c
+    xor cx, cx
+    ICALL w16_cbopen
+    mov ax, bx                      ; pascal: the handle
+    ICALL w16_ppush
+    mov ax, [w16_gnproc]
+    mov dx, [w16_gnproc + 2]
+    ICALL w16_cbcall
+    ret
+.none:
+    xor ax, ax
+    xor dx, dx
+    ret
+
+; the procedure's answer in AX, the entry in CX: nonzero, and the block is
+; discarded if nobody locked it meanwhile; 0, and it is never offered again.
+; Then GlobalAlloc once more, its arguments the frame's again
+LCONT w16k_gnback
+    mov si, cx
+    or ax, ax
+    jz .kept
+    mov ax, [w16_ghseg + si]
+    or ax, ax
+    jz .again                       ; it gave the block up itself
+    dec ax
+    mov es, ax
+    cmp byte [es:GH_LOCK], 0
+    jne .kept
+    ICALL w16_gfreeblk
+    mov word [w16_ghseg + si], 0
+    jmp short .again
+.kept:
+    and byte [w16_ghf + si], ~W16_GHNOTE
+.again:
+    ICALL w16k_galloc
     ret
 
 ; GlobalLRUNewest (KERNEL.164), GlobalLRUOldest (KERNEL.163) - args: +0 the

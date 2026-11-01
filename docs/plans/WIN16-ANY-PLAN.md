@@ -788,8 +788,8 @@ its table goes in the diary, so the reach is measured, not claimed.
       and a colour picked after a stroke, a box, and the roller filling
       inside it and across the whole canvas, three fills running; MEMDC.EXE
       (`tests/win16/memdc.c`) says `MEMDC OK`.
-    - **Not yet:** wide pens (1 pixel, §124.8.1), the text tool, File Save
-      and Open, 3.1's Paintbrush.
+    - **Not yet** (at batch 2): wide pens (1 pixel, §124.8.1), the text
+      tool, File Save and Open, 3.1's Paintbrush.
     - **Rows, for S25's pass:** `win16memdc` and `win16pbrush` (new), and
       every `win16*` row, since every GDI call goes through the memory-DC
       test and every wait parks its DC.
@@ -798,6 +798,62 @@ its table goes in the diary, so the reach is measured, not claimed.
       the loader part 12,308 (+81, 9 export rows), part 9 12,725 (+2,392
       against S19 batch 5). The trace build's ring is 1,024 rows now: 2,048
       no longer fits.
+  - [x] **Batch 3: wide pens, the text tool, File Save and File Open**
+    (SPEC.md §124.9.1, §124.25.7-§124.25.9, §96.11.6.4).
+    - **Wide pens:** a line paints the pen's width across its major axis;
+      a closed figure's frame sits outside the box, or inside it under
+      `PS_INSIDEFRAME`; a round rectangle's frame is the band between two
+      outlines.
+    - **The text tool:** `CreateCompatibleBitmap` refused Paintbrush's
+      canvas-sized bitmap, so it made no caret. Then it held five memory
+      DCs where WIN16 had four (now 8). Then it draws with source ROPs under
+      a solid brush (a table per call, each plane's half picked by the
+      brush's bit), and with pattern brushes made from one-colour bitmaps,
+      which are now that colour's solid brush. A queued `WM_SIZE` is now
+      superseded by a newer one: the canvas's own 0 x 0 arrived last and
+      emptied it.
+    - **File Save:** DOS.O88 refused a created handle's write behind its
+      end, and Paintbrush writes the bitmap's body and then its header at
+      0. The write is now made by flushing first and overwriting in place
+      (§96.11.6.4; WRGAP.COM's step H).
+    - **File Open** took four fixes, found one after another:
+      - the handle table: 64 moveable handles ran out on PBRUSH.DLL's
+        band cache, so it is now 256;
+      - `GMEM_NOTIFY`: the band cache asks its `GlobalNotify` procedure
+        (DISCARDBAND) to page a band out, and WIN16 now calls it when
+        `GlobalAlloc` is short, as Windows did (§124.9.1). The first cut
+        passed the wrong handle, because the callback setup clobbers DI, and
+        overwrote the interrupt table;
+      - `DIB_PAL_COLORS`: logical palettes, so `SetDIBits` can name
+        colours by palette index (§124.25.8). This was the second
+        `Insufficient memory`;
+      - odd handles: PBRUSH.DLL marks its own virtual DCs and bitmaps with
+        bit 0, so WIN16's slot 1 (`3011h`, `3305h`) was taken for one of
+        them. The picture opened blank and saved black. Every DC, bitmap
+        and palette handle is even now (§124.25.9).
+    - **Found in a test helper:** `Prog.waiting_msgbox` compared a BIND
+      SLOT with an export ROW, and has done since S14 (§124.19.1). It now
+      compares the slot's handler (`win16fpu.serves`), and `win16cdlg` and
+      `win16hiber` use the same helper.
+    - **Seen on QEMU's VGA:** typed text in green; File > Open of a
+      640 x 442 16-colour BMP with 0 of 100,864 visible canvas pixels
+      differing from the file; that picture saved again (Save As) with
+      every pixel the same; a picture drawn from new saved. MEMDC.EXE's new
+      checks (even handles, palettes, a notify procedure asked about the
+      oldest block, 200 handles) say `MEMDC OK`.
+    - **Not yet:** brushes, pens and stock objects are still numbered by
+      slot and can be odd (no program seen tests them); one selected
+      palette per program, not one per DC; 3.1's Paintbrush.
+    - **Rows, for S25's pass:** `win16pbrush` (now with Save As, the file
+      read back off B:), `win16memdc`, `dosgap` (step H), `win16cdlg`,
+      `win16hiber` and every row through `waiting_msgbox`, and the `dos*`
+      rows for `.fwback`.
+    - What it costs, against batch 2: the image 35,986 bytes (+421), bss
+      27,207 (+1,727: 192 more handles, 4 more memory DCs, the palettes),
+      **1,831 bytes of room**; the library part 59,821 (+534), the loader
+      part 12,308 (+0), part 9 13,671 (+946). The room is the next
+      constraint: S20's segment cache needs bss of its own, so S20 should
+      start by moving tables out of the image's bss.
 
 - [ ] **S20: Big programs in small memory (R6).**
   - *As a user, Write opens a document on a 640 KB machine.*

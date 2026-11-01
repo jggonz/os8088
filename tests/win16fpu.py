@@ -101,6 +101,32 @@ def msgrow():
     raise RuntimeError("no MessageBox row in w16api.inc")
 
 
+_HANDLER = {}
+
+
+def row_handler(row):
+    """the handler export row ROW names: its W16EXPORT line's fourth field"""
+    if not _HANDLER:
+        n = 0
+        for line in open(os.path.join(ROOT, "apps", "win16", "w16api.inc")):
+            if line.startswith("W16EXPORT"):
+                f = line.split(";")[0][len("W16EXPORT"):].split(",")
+                _HANDLER[n] = f[3].strip()
+                n += 1
+    return _HANDLER[row]
+
+
+def serves(read, base, S, row):
+    """True when the import WIN16 is serving ([w16_idx]) is export row ROW.
+    [w16_idx] is a BIND SLOT (SPEC.md 124.19.1), numbered in the order the
+    program first bound its imports, so it is matched by the handler its
+    w16_bind entry names, never by number. READ(addr, n) reads the guest;
+    BASE is the WIN16 instance's linear address."""
+    slot = u16(read(base + S["w16_idx"], 2))
+    proc = u16(read(base + S["w16_bind"] + 4 * slot + 2, 2))
+    return proc == S[row_handler(row)]
+
+
 def progs():
     out = []
     for p in ("FPU.EXE", "FPX.EXE"):
@@ -161,7 +187,10 @@ class Prog(object):
     def waiting_msgbox(self, row):
         st = self.pb("w16_state")
         return st in (W16S_REFUSED, W16S_ENDED) or \
-            (self.pb("w16_inprog") == 0 and self.pw("w16_idx") == row)
+            (self.pb("w16_inprog") == 0 and self.serves(row))
+
+    def serves(self, row):
+        return serves(self.d.read, self.seg << 4, self.S, row)
 
     def msgtext(self):
         """MessageBox(hwnd, text, caption, type), pascal: the last argument

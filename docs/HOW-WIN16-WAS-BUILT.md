@@ -2566,3 +2566,76 @@ pens, the text tool, saving, and 3.1's Paintbrush.
 **What it cost.** The image grew 1,212 bytes and its bss 772, leaving
 3,979 bytes of room. The library part grew 1,158 bytes, and the system
 part, with the bitmap, region and fill calls, now stands at 12,725.
+
+## 2026-10-31 — S19b, batch 3: Paintbrush saves and opens, and four things were in the way of Open
+
+**Wide pens came first because they were simple.** A line under a wide pen
+paints the pen's width across its major axis at each step, so no pixel is
+painted twice. A closed figure's frame goes outside the box by half the
+width each way, because Windows centres a pen on the edge, unless the pen
+is `PS_INSIDEFRAME`.
+
+**The text tool showed nothing, for three separate reasons.** Paintbrush
+only makes its caret when a canvas-sized `CreateCompatibleBitmap` succeeds,
+and WIN16 refused that bitmap. Then it holds five memory DCs while it sets
+up text, and WIN16 had four. Then it draws each character with source ROPs
+whose pattern half matters, under a brush it makes from a one-colour bitmap.
+A brush like that is now that colour's solid brush. A ROP under a solid
+brush is a lookup table built once per call: the brush's bit in each plane
+picks a half of the ROP's index byte. Typed text appeared in green.
+
+**Saving was a DOS problem, not a Windows one.** Paintbrush writes the
+bitmap's body, seeks back to 0, and writes the header over the space it
+left. DOS.O88 refused a write behind the end of a file the handle had
+created, because its append path could not make one. Batch 3 makes that
+write: it flushes what is pending, which creates the file, then overwrites
+in place, as an opened handle already did. WRGAP.COM, which runs under real
+DOS too, has a step H for this shape.
+
+**Opening a picture said `Insufficient memory`, and it was four things in a
+row.** Each fix uncovered the next.
+
+1. *The handle table.* PBRUSH.DLL keeps the picture as bands in
+   discardable memory, and it keeps the handle of every band it has given
+   up. The 64 moveable handles ran out on the first picture opened. There
+   are 256 now.
+2. *The notify procedure.* Batch 2 had found that Paintbrush locks a band
+   only its `GlobalNotify` procedure would have told it was gone, and had
+   made WIN16 never discard such a band. Batch 2 said WIN16 could not call
+   into the program in the middle of an allocation. It can: the allocation
+   becomes a callback with a continuation, the same path a window procedure
+   takes. When `GlobalAlloc` is short, WIN16 asks the procedure about the
+   least recently used band; Paintbrush's `DISCARDBAND` writes the band to
+   its swap file and answers 1; the band is freed and the allocation tried
+   again. The first cut overwrote the interrupt table: the callback setup
+   returns its block in DI, and the handle had been computed from DI after
+   it.
+3. *Palettes.* Paintbrush then passed `DIB_PAL_COLORS` to `SetDIBits`,
+   naming each colour by an index into a palette it had made. WIN16 had no
+   palettes beyond the stock one, so it refused, and Paintbrush called that
+   refusal `Insufficient memory` too. WIN16 now keeps up to four logical
+   palettes, and a DIB's colour table can be read through one.
+4. *Odd handles.* The picture now opened onto a blank canvas, and saving it
+   wrote a black one. PBRUSH.DLL has its own virtual DCs and bitmaps and
+   marks them by setting bit 0 of the handle. WIN16 numbered its memory DCs
+   and bitmaps by slot, so slot 1, `3011h` and `3305h`, looked like
+   Paintbrush's. Paintbrush drew the picture into its own empty bitmap.
+   Every DC, bitmap and palette handle is even now. Brushes and pens still
+   count by slot, and nothing yet tests their bit 0.
+
+With those four fixes, a 640 x 442 16-colour BMP opened with none of the
+100,864 visible canvas pixels differing from the file. Saved again under
+another name, it matched pixel for pixel.
+
+**A test helper had been wrong since S14.** `waiting_msgbox` compared a
+bind slot, which counts imports in the order they are first bound, with an
+export row, which counts the table. They agreed only by luck. It now
+compares the handler the slot points at.
+
+**What it cost, and what is left.** The image grew 421 bytes, but its bss
+grew 1,727, mostly the 192 extra handles and the extra memory DCs. That
+leaves 1,831 bytes of room, and S20's segment cache will need some.
+`win16pbrush` now ends with File > Save As and reads `NEW.BMP` back off the
+B: image on the host. It runs in S25's final pass with `win16memdc`,
+`dosgap` and the rows that wait for a MessageBox. 3.1's Paintbrush is not
+tried yet.
