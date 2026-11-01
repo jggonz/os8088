@@ -393,14 +393,19 @@ W16SYS w16t_turns
     mov al, bl
     add al, dl
     and al, W16_MAXTASK - 1
-    cmp al, [w16_cur]
-    je .next
     call w16t_rec
+    cmp al, [w16_cur]               ; the current task waited with nothing
+    jne .parked                     ;   to do - unless it has never run,
+    cmp byte [si + W16K_ST], W16KS_NEW ; which a task's end can leave
+    jne .next                       ;   current (w16t_end)
+    jmp short .serve
+.parked:
     cmp byte [si + W16K_ST], W16KS_FREE
     je .next
     mov es, [si + W16K_CTX]
     call w16t_work
     jnc .next
+.serve:
     call w16t_serve
     inc bh
     cmp byte [w16_state], W16S_ENDED
@@ -524,6 +529,335 @@ w16t_serve:
     pop dx
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; w16t_xsend - w16_sendwnd's, when several tasks run: BX = the window, SI =
+; the continuation, AX = its word, [w16_sm_*] the message. Inside a run, a
+; window of another task (SPEC.md 124.28.6): its procedure is run on its own
+; stack - the receiver made current, the send queued on it as a host send
+; is, and run, nested inside the sender's call, until the receiver waits
+; again - and the sender is made current again with the answer, and its
+; continuation run with it. CF=0 that was done, AX:DX as the continuation
+; answers. CF=1 the current task's window, or no run: every register kept
+; -----------------------------------------------------------------------------
+W16SYS w16t_xsend
+    cmp byte [w16_inprog], 0
+    je .mine
+    push ax
+    mov ax, bx
+    ICALL w16_rec2hwnd              ; AX = its HWND
+    call w16t_hwtask                ; AL = its task + 1
+    dec al
+    js .minep
+    cmp al, [w16_cur]
+    jne .other
+.minep:
+    pop ax
+.mine:
+    stc
+    ret
+.other:
+    pop cx                          ; CX = the continuation's word
+    push si
+    push cx
+    mov ah, [w16_cur]               ; AH = the sender, AL = the receiver
+    push ax
+    push word [w16_hss]             ; the sender's run's: a nested run sets
+    push word [w16_hsp]             ;   them, and the sender's own return
+    push word [w16_hflags]          ;   to the host needs them back
+    call w16t_to
+    mov al, [w16_pend]              ; the receiver waits in an import: its
+    push ax                         ;   own, as it was, after the run
+    mov si, w16_cont_xs             ; XSEC-OK: an image continuation
+    xor ax, ax
+    ICALL w16_sendwnd               ; queued on the receiver (it is current)
+    ICALL w16_resumecb              ; ...and run until it waits again
+    pop ax
+    mov [w16_pend], al
+    pop word [w16_hflags]
+    pop word [w16_hsp]
+    pop word [w16_hss]
+    pop ax
+    mov al, ah
+    call w16t_to                    ; the sender, whose call is still being
+    mov byte [w16_inprog], 1        ;   served
+    pop cx
+    pop si
+    mov ax, [w16_sm_lp]             ; the answer, which w16_cont_xs kept
+    mov dx, [w16_sm_lp + 2]
+    push es
+    push ax
+    mov ax, KERNEL_SEG              ; a continuation's ES, as the gate's
+    mov es, ax
+    pop ax
+    ICALL si
+    pop es
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; w16t_end - the current task has ended and others run (SPEC.md 124.28.7):
+; its windows, classes, timers and hooks go without a message, its DOS, its
+; floating point, its code and its blocks are given back, and the next task
+; in the table is made current, its context exchanged in over the dead one's
+; and the block freed. The instance's own window, if it was the dead task's,
+; is handed to a window of the rest (w16t_hand). Host code, no run under way
+; -----------------------------------------------------------------------------
+W16SYS w16t_end
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov al, [w16_cur]
+    inc ax
+    mov [cs:w16t_dead], al
+    xor cx, cx                      ; its windows
+.w:
+    mov bx, cx
+    mov al, [cs:w16t_dead]
+    cmp [w16_wtask + bx], al
+    jne .wn
+    mov byte [w16_wtask + bx], 0
+    ICALL w16_slot2rec
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .wn
+    push cx
+    ICALL w16_wndfree
+    pop cx
+.wn:
+    inc cx
+    cmp cx, W16_MAXWND
+    jb .w
+    mov bx, w16_cls                 ; its classes
+    xor si, si
+.c:
+    mov al, [cs:w16t_dead]
+    cmp [w16_ctask + si], al
+    jne .cn
+    mov byte [w16_ctask + si], 0
+    mov byte [bx + W16C_NAME], 0
+.cn:
+    add bx, W16C_SIZE
+    inc si
+    cmp si, W16_MAXCLS
+    jb .c
+    mov bx, w16_tmr                 ; its timers with no window
+    mov cx, W16_MAXTMR
+.t:
+    mov al, [cs:w16t_dead]
+    cmp [bx + W16T_USED], al
+    jne .tn
+    mov byte [bx + W16T_USED], 0
+.tn:
+    add bx, W16T_SIZE
+    loop .t
+    mov bx, w16_hooks               ; its hooks: a procedure in its segments
+    mov cx, W16_HKMAX
+.h:
+    mov ax, [bx + 4]
+    cmp ax, [w16_pseg]
+    jb .hn
+    cmp ax, [w16_ptop]
+    jae .hn
+    xor ax, ax
+    mov [bx], ax
+    mov [bx + 2], ax
+    mov [bx + 4], ax
+.hn:
+    add bx, 6
+    loop .h
+    ICALL w16_dosend                ; its files closed, its DOS freed
+    ICALL w16x_end                  ; its floating point
+    call w16t_codefree
+    mov al, [cs:w16t_dead]
+    call w16t_gfree
+    dec ax                          ; (AL = its index again)
+    call w16t_rec
+    mov dx, [w16_pseg]              ; its segments: a claim, or a block
+    or dx, dx
+    jz .seg
+    cmp byte [si + W16K_FL], 0
+    jne .blk
+    call OSAPI_MEM_FREE
+    jmp short .seg
+.blk:
+    ICALL w16_kfree
+.seg:
+    mov byte [si + W16K_ST], W16KS_FREE
+    dec byte [w16_ntk]
+    mov di, si                      ; DI = its record
+    mov al, [w16_cur]               ; the next in the table
+.nx:
+    inc al
+    and al, W16_MAXTASK - 1
+    call w16t_rec
+    cmp byte [si + W16K_ST], W16KS_FREE
+    je .nx
+    mov es, [si + W16K_CTX]         ; the next one's context in, the dead
+    call w16t_xchg                  ;   one's out, and its block freed
+    mov word [si + W16K_CTX], 0
+    mov word [di + W16K_CTX], 0
+    mov [w16_cur], al
+    mov ax, es
+    ICALL w16_gfreeh
+    cmp byte [w16_ntk], 1           ; the last left, its segments a block:
+    jne .hand                       ;   they go with the arenas when it ends
+    cmp byte [si + W16K_FL], 0      ;   (w16_freeprog frees only a claim)
+    je .hand
+    mov word [w16_pseg], 0
+.hand:
+    call w16t_hand
+    call w16t_turns                 ; (the count may be one now, and the one
+    pop es                          ;   left may never have run)
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16t_codefree - the current task's discardable code segments that are
+; loaded, and the module block that lists them (SPEC.md 124.26.4), freed.
+; Clobbers AX, BX, CX, ES
+w16t_codefree:
+    cmp word [w16_cmb], 0
+    je .out
+    mov es, [w16_clive]
+    xor bx, bx
+    mov cx, [w16_cnseg]
+    jcxz .blk
+.s:
+    test byte [es:bx + W16CL_FL], W16CLF_DISC
+    jz .n
+    mov ax, [es:bx + W16CL_BASE]
+    or ax, ax
+    jz .n
+    ICALL w16_gfreeh                ; (a fixed block: its handle is its base)
+.n:
+    add bx, W16CL_SIZE
+    loop .s
+.blk:
+    push dx
+    mov dx, [w16_cmb]
+    ICALL w16_kfree
+    pop dx
+    mov word [w16_cmb], 0
+.out:
+    ret
+
+; w16t_gfree - AL = a task's owner byte: every block of the global heap it
+; owns (GH_TASK) freed. Keeps every register
+w16t_gfree:
+    push bx
+    push dx
+    push si
+    push es
+    mov dl, al
+    xor si, si
+.arena:
+    cmp si, 2 * W16_NARENA
+    jae .done
+    mov bx, [w16_arena + si]
+    or bx, bx
+    jz .nexta
+.blk:
+    cmp bx, [w16_arenae + si]
+    jae .nexta
+    mov es, bx
+    test byte [es:GH_FLAGS], GHF_USED
+    jz .skip
+    cmp [es:GH_TASK], dl
+    jne .skip
+    push ax
+    mov ax, [es:GH_HANDLE]
+    ICALL w16_gfreeh
+    pop ax
+    jmp short .arena                ; (merged, and the arena may be gone)
+.skip:
+    add bx, [es:GH_SIZE]
+    jmp short .blk
+.nexta:
+    inc si
+    inc si
+    jmp short .arena
+.done:
+    pop es
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; w16t_hand - WIN16's own window, when it shows no top-level window now, takes
+; one of the current task's that has an os8088 window of its own (124.28.7):
+; that window closes, and WIN16's is titled, sized and painted as it. With
+; none, it shows the current program's name. Clobbers AX, BX, CX, DX, SI, DI
+w16t_hand:
+    cmp byte [w16_top], 0
+    jne .out
+    mov bx, w16_wnd
+    xor cx, cx
+.f:
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .n
+    mov ax, [bx + W16W_OSW]
+    or ax, ax
+    jz .n
+    cmp ax, [w16_win]
+    je .n
+    cmp byte [bx + W16W_KIND], 0    ; a window, not a dialog
+    jne .n
+    push bx
+    mov bx, cx
+    mov dl, [w16_wtask + bx]
+    pop bx
+    dec dl
+    cmp dl, [w16_cur]
+    je .take
+.n:
+    add bx, W16W_SIZE
+    inc cx
+    cmp cx, W16_MAXWND
+    jb .f
+    mov si, w16_name                ; none: the program's name on WIN16's
+    mov di, w16_l1                  ;   own lines, until its first top-level
+    ICALL w16_strcpy                ;   window takes the window (w16_mkwnd)
+    ICALL w16_repaint
+.out:
+    ret
+.take:
+    inc cx
+    mov [w16_top], cl
+    ICALL w16_ttlfree
+    mov dx, [w16_win]
+    mov [bx + W16W_OSW], dx
+    ICALL w16_lock
+    push bx
+    mov bx, ax
+    call OSAPI_WM_DESTROY           ; its own os8088 window
+    pop bx
+    mov di, w16_wtitle
+    ICALL w16_ttlcopy
+    mov word [w16_titleptr], w16_wtitle
+    push bx
+    mov bx, [w16_win]
+    mov al, 1                       ; W_PAINT paints every pixel
+    call OSAPI_WM_OWNBG
+    mov ax, w16_wtitle
+    call OSAPI_WM_TITLE
+    pop bx
+    ICALL w16_unlock
+    ICALL w16_oswshow               ; in front, fitted to its client
+    xor ax, ax
+    xor cx, cx
+    mov dx, 0x7FFF
+    mov si, dx
+    mov byte [w16_erase], 1
+    ICALL w16_invaltree
     ret
 
 ; -----------------------------------------------------------------------------
@@ -910,5 +1244,6 @@ w16t_new:   db 0                    ;   ...the new task's index
 w16t_old:   db 0                    ;   ...and the caller's
 w16t_blk:   dw 0                    ;   ...its context block
 w16t_busy:  db 0                    ; w16t_turns is running
+w16t_dead:  db 0                    ; w16t_end: the dead task's owner byte
 
 section .text

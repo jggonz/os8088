@@ -1305,8 +1305,27 @@ its table goes in the diary, so the reach is measured, not claimed.
       fixtures were written now rather than in batch 5, to see this
       batch.
     - 121 bytes of the image (632 left), the rest in part 9.
-  - [ ] Batch 3: messages between tasks, a task's end while others run,
+  - [x] Batch 3: messages between tasks, a task's end while others run,
     the instance window handed over.
+    - Cross-task `SendMessage` runs the receiver nested inside the
+      sender's call, so a send back the other way inside it works. A
+      task's end frees its windows, classes, timers, DOS, code and
+      `GlobalAlloc` blocks, then exchanges the next task in. WIN16's own
+      window passes to a survivor's top-level window. A class is found
+      only in its task (or `CS_GLOBALCLASS`), so two copies of a program
+      both register.
+    - Found on the way: DispatchMessage had sent a `WM_TIMER` with no
+      TimerProc to no window at all since S15 (AX held lParam where the
+      HWND belonged). Every program's own-window timers were dead, Clock's
+      included.
+    - Seen: TASKS OK through all of it. TASKS ends last-but-one and the
+      second TASKB, never yet run, is started by the turns and takes
+      WIN16's window. MDI OK and DLLUSE OK alone.
+    - Not done, and now SPEC: libraries stay until the instance ends;
+      `InSendMessage` answers 0; `ReplyMessage` is not bound; the
+      instance keeps its first program's name, because nothing renames
+      an instance. The trace knob needs `-DW16_NBIND=256` to fit.
+    - 113 bytes of the image (519 left).
   - [ ] Batch 4: `WinHelp` and WINHELP.EXE; Program Manager starting Clock
     and Notepad.
   - [ ] Batch 5: DDE, the `win16tasks` row (its fixtures came in batch 2).

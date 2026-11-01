@@ -3117,3 +3117,38 @@ row apart. That moved every one of the ten special segment values
 (`__0040H` and friends) along by three. A guard compared the wrong pair of
 numbers and passed. Batch 2 moved the rows and made the two markers one
 number, so it cannot happen again.
+
+## 2026-11-01 — S21, batch 3: talking across, and leaving
+
+**A message sent to another program has to run on that program's own
+stack.** Windows programs assume their stack and their data are the same
+segment, so calling TASKB's window procedure on TASKS's stack would hand it
+pointers into the wrong memory. Instead TASKS's call parks TASKS, makes
+TASKB current, and runs TASKB until its window procedure returns. Then it
+swaps TASKS back with the answer, all inside TASKS's one call. TASKB's
+procedure can send back to TASKS in the middle of that, and it does in the
+test: the answer is 7 × 6 + 100.
+
+**Ending one program means knowing what was its.** Windows, classes and
+timers already had their owner byte from batch 1. Memory was harder. Many
+parts of WIN16 allocate from the shared heap: menus, the clipboard,
+libraries, the program's code segments. Marking all of it with the program
+that happened to be running would free a library another program still
+uses. So ownership is opt-in: only what the program itself asked for
+(`GlobalAlloc`) carries its mark. The worst a missed mark can do is leak a
+block until WIN16 closes.
+
+**The test found a bug from two weeks earlier, and not in the new code.**
+After TASKB ended, TASKS waited for its timer and never heard it. A
+debugger breakpoint on `DispatchMessage` showed it called every time but
+never calling the window. The timer check had loaded the message's lParam
+into the register that names the window, and with no TimerProc that was
+zero. Since S15, a timer on a window had reached nobody, Clock's second
+hand included. It is one instruction.
+
+**The last surprise was a program nobody had started yet.** TASKS's
+final act is to start TASKB again and then quit. When TASKS ended, the
+only task left was one that had never run, and the turns only ever looked
+at the others. So the end of a task now runs the turns itself, and a task
+that has never run is the one current task they will start. That second
+TASKB takes over WIN16's own window: the title bar now says *Task B*.

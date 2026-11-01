@@ -227598,10 +227598,13 @@ change, they are the new anchor. The date's day of the week is computed
 asked for last: each export through the gate as its `w16api.inc` row, and
 each `int 21h` as 80h:AH. `tools/w16trace.py SOCK PROGRAM.EXE` reads it out
 of a running QEMU (with `W16_DEFINES=W16_TRACE` for the symbols). `W16_TRN`
-is 1024 unless defined; the ring and the row table beside it no longer fit
-WIN16's 64 KB at that size since S20, so a trace build is now `make
-W16DEFS='-DW16_TRACE -DW16_TRN=256' win16`, read with
-`W16_DEFINES='W16_TRACE W16_TRN=256'`. It is how
+is 1024 unless defined. The ring and the row table beside it (two bytes a
+bind slot) stopped fitting WIN16's 64 KB at that size at S20. From S21 the
+table must shrink too: `W16_NBIND` is 384 unless defined. So a trace build
+is now `make W16DEFS='-DW16_TRACE -DW16_TRN=256 -DW16_NBIND=256' win16`,
+read with `W16_DEFINES='W16_TRACE W16_TRN=256 W16_NBIND=256'`. Such a build
+runs a program that binds at most 256 distinct imports, which every
+fixture does. It is how
 CLOCK's spin on 2Ch was found: a program that stops drawing and asks for
 nothing new is waiting for something WIN16 never changes.
 
@@ -230388,14 +230391,33 @@ owner is kept beside them, a byte for each, with the task's index plus 1:
 |---|---|---|
 | windows | `w16_wtask`, a byte a window | which queue a window's input goes to; `GetWindowTask`; `EnumTaskWindows`; the windows a task's end destroys |
 | classes | `w16_ctask`, a byte a class | a class is its task's: `CreateWindow` finds the caller's class of that name, then a `CS_GLOBALCLASS` one, then WIN16's own; two programs can register one name |
-| global blocks | `GH_TASK`, the byte at +10 of the block's header | the blocks a task's end frees |
-| timers | the window's task, or for a timer with no window the task that set it (`W16T_TASK`) | which task hears `WM_TIMER` |
-| libraries | `LM_USERS`, a bit a task | a library stays while any task uses it; the last task's `FreeLibrary`, or its end, frees it |
+| global blocks | `GH_TASK`, the byte at +10 of the block's header: the owner's index + 1, 0 none | the blocks a task's end frees |
+| timers | the timer record's `USED` byte, which is the setting task's index + 1 rather than 1 | which task hears `WM_TIMER` |
 
-A block allocated `GMEM_DDESHARE` belongs to no task (`GH_TASK` = 0) and
-is not freed when the task that made it ends, so a DDE partner can still
-read it. WIN16's own blocks (the context blocks, the profiles, the parts)
-are not a task's either.
+**Ownership of a block is opt-in.** `w16_gnew` makes every block nobody's
+(`GH_TASK` = 0). Only `GlobalAlloc` marks its block as the calling task's
+(`w16_gmine`). A missed mark then only leaks a block until the instance
+ends; it never frees another task's memory.
+- **A block allocated `GMEM_DDESHARE` stays nobody's.** It is not freed
+  when the task that made it ends, so a DDE partner can still read it.
+- **WIN16's own blocks are nobody's:** the context blocks, the profiles,
+  the parts, a later program's segments (freed as such), the clipboard,
+  the USER heap and a library's segments.
+- **A task's discardable code segments are freed through its own code
+  cache** (§124.26.4) when it ends, with the module block that lists them,
+  rather than by a mark. A library's code goes through the same loader
+  path, so a mark there would free code another task still runs.
+
+**Libraries are the instance's.** A library loaded for any task stays until
+the instance ends or its count reaches 0 through `FreeLibrary`, as before.
+A task's end does not lower the count of the libraries it used. Neither do
+its GDI objects, bitmaps and menus go when it ends; they go when the
+instance ends.
+
+**A class is its task's** (`w16_findcls`). A name finds only the current
+task's class of that name, a `CS_GLOBALCLASS` class, or a class no task
+registered. So a second copy of a program registers its classes again, as
+its zero `hPrevInstance` tells it to, rather than being refused.
 
 `GetMessage`, `PeekMessage`, the paint scan and the timers look only at the
 current task's windows, queue and timers.
@@ -230517,37 +230539,57 @@ stays the first program's.
 
 - **`PostMessage` and `PostAppMessage`** put the message in the queue of
   the window's task, or of the task named (124.28.4).
-- **`SendMessage` to another task's window** makes the sender wait for
-  the answer. Then:
-  1. the receiver is switched in, and its window procedure is called on
-     its own stack through §124.2.2's callback;
-  2. when it returns, the sender is switched back in with the answer.
+- **`SendMessage` to another task's window** is answered inside the
+  sender's call (`w16t_xsend`, from `w16_sendwnd`):
+  1. the receiver is made current, the send is queued on it as a host
+     send is (§124.2.2), and it runs, nested inside the sender's call,
+     until its window procedure returns and it waits again in the import
+     it waited in;
+  2. the sender is made current again with the answer.
+  The receiver's `w16_pend` is put back as it was, and so are the run's
+  `w16_hss`/`w16_hsp`/`w16_hflags`, which the nested run reset. It is
+  taken only inside a run (`w16_inprog`), where a program called it. WIN16's
+  own sends made from host code go to the current task, which a callback
+  has made the window's own (124.28.4).
 - **A task waiting for an answer can itself be sent to.** Its procedure
-  runs, as Windows ran it, so two programs that send to each other do
-  not deadlock. `InSendMessage` is TRUE inside such a call. `ReplyMessage`
-  answers early: the sender gets the answer, but runs only when the
-  receiver next waits.
+  runs on its stack below the frame it waits in, so two programs that send
+  to each other do not deadlock. TASKS and TASKB do exactly that. Not yet:
+  `InSendMessage` still answers 0, and `ReplyMessage` is not bound.
 - **`SendMessage` to `HWND_BROADCAST`**, and `PostMessage` to it, reach the
   top-level windows of every task, which is how a DDE conversation starts
   (`WM_DDE_INITIATE`).
 
 #### 124.28.7 A task's end
 
-When one task ends (§124.18.2's ways), the rest go on:
+When one task ends (§124.18.2's ways), the rest go on (`w16t_end`, from
+`w16_after` while more than one task runs):
 
-- its windows are destroyed, without messages, since the program is gone;
-- its classes, timers and hooks go;
-- its blocks are freed, except `GMEM_DDESHARE` ones;
-- its libraries lose it as a user, and a library no task uses is freed;
-- its context block is freed.
+- its windows are freed without messages, since the program is gone; a
+  second os8088 window of one of them closes;
+- its classes and timers go;
+- a hook whose procedure is in its segments goes;
+- its DOS (§124.21) and floating point (§124.5) are given back;
+- its code cache, its blocks (124.28.3) and its segments are freed: the
+  segments as a claim, or as a block when they were one (`W16K_FL`);
+- the next task in the table is made current, its context exchanged in
+  over the dead task's, and that block is freed.
+
+Then the turns run (`w16t_turns`), even when one task is left. The task
+left may be one started by `WinExec` that has never run, and a task that
+has never run is the one current task the turns serve.
 
 **Every window it had on the glass closes**, usually several at once, which
 is why O2(a)'s queue behind `OSAPI_WM_CLOSE` (§75.2.1) came first.
 
-**If its main window was the instance's own window**, the next task's main
-window takes that window over: the os8088 window gets the next task's
-title and place, and the next task's own os8088 window closes. The instance
-is renamed for that task's program (§124.18.3).
+**If its main window was the instance's own window**, the current task's
+first top-level window that has an os8088 window of its own takes WIN16's
+over (`w16t_hand`). That os8088 window closes, and WIN16's is titled with
+the window's text, made to paint every pixel, fitted to its client and
+painted. With no such window, WIN16's window shows the program's name on
+its two lines until the program's first top-level window takes it
+(`w16_mkwnd`). **The instance keeps its first program's name**
+(§124.18.3): the kernel copies a package's name into the instance once, at
+launch, and no slot renames it.
 
 **When the last task ends, the instance ends**, as one program's end
 always ended it.

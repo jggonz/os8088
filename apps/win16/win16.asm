@@ -65,8 +65,9 @@ W16_MAXTASK  equ 4              ; Windows programs in one instance, its
                                 ;   tasks (SPEC.md 124.28.1)
 W16K_H       equ 0              ; a task: its handle (its DGROUP), the
 W16K_CTX     equ 2              ;   context block it is parked in (0 while
-W16K_ST      equ 4              ;   it is the current one), its W16KS_*
-W16K_SIZE    equ 6
+W16K_ST      equ 4              ;   it is the current one), its W16KS_*,
+W16K_FL      equ 5              ;   1 when its segments are a block of the
+W16K_SIZE    equ 6              ;   global heap rather than a claim
 W16KS_FREE   equ 0
 W16KS_RUN    equ 1
 W16KS_NEW    equ 2              ; loaded, its first run owed
@@ -102,9 +103,10 @@ W16_RRMAX    equ 127            ; RoundRect's largest corner radius: (2 r)^2
 W16_NMISS    equ 64             ; different imports WIN16 lacks a program may
                                 ;   import before the load refuses it
 W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
-W16_NBIND    equ 384            ; bind slots: the distinct imports a program
-                                ;   may bind, each a stub (SPEC.md 124.19.1).
-                                ;   Paintbrush 3.1's 270 is the most measured
+%ifndef W16_NBIND                  ; bind slots: the distinct imports a program
+W16_NBIND    equ 384            ;   may bind, each a stub (SPEC.md 124.19.1).
+%endif                          ;   Paintbrush 3.1's 270 is the most measured;
+                                ;   a trace build takes fewer (124.17.4)
 W16_NCBF     equ 4              ; registered clipboard formats at most
 W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
 W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
@@ -1242,6 +1244,11 @@ w16_wake:
 w16_after:
     cmp byte [w16_state], W16S_ENDED
     jne .trim
+    cmp byte [w16_ntk], 2           ; one of several: it alone ends, and
+    jb .last                        ;   the rest go on (SPEC.md 124.28.7)
+    SCALL w16t_end
+    jmp short .trim
+.last:
     cmp byte [w16_endmsg], 0
     jne w16_endshow
     call w16_freeprog               ; the program's memory, now: the close is
