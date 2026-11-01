@@ -331,6 +331,7 @@ SAMPLES = [("CALC.EXE", "w3-archive/WINDOWS/CALC.EXE"),
            ("PBRUSH.EXE", "w3-archive/WINDOWS/PBRUSH.EXE"),
            ("PBRUSH.DLL", "w3-archive/WINDOWS/PBRUSH.DLL"),
            ("REVERSI.EXE", "w3-archive/WINDOWS/REVERSI.EXE"),
+           ("WRITE.EXE", "w3-archive/WINDOWS/WRITE.EXE"),
            ("W31CALC.EXE", "w31/CALC.EXE"),
            ("W31MINE.EXE", "w31/WINMINE.EXE"),
            ("WINMINE.EXE", "winmine-2.9/WINMINE.EXE")]

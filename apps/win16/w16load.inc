@@ -3624,6 +3624,7 @@ w16l_segin:
     mov si, 1                       ; SI = 1: refused, the lines written
     jc .drop
     xor si, si                      ; SI = 0: loaded
+    inc word [w16_cnload]
     jmp short .uncache
 .drop:
     call w16l_segdrop
@@ -3762,6 +3763,7 @@ w16l_codeold:
     inc ax
     mov dx, ax
     call w16l_segdrop
+    inc word [w16_cndrop]
     pop dx
     clc
 .out:

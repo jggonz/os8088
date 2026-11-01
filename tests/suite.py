@@ -16512,6 +16512,17 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16write", "soak", py("tests/win16write.py"), 300.0,
+        "SPEC.md 124.26, WIN16-ANY-PLAN S20: Windows 3.0's Write (WRITE.EXE "
+        "- Microsoft's, in build/win16/ only where the win16-reference "
+        "skill put it) under QEMU, with WIN16 built W16DEFS=-DW16_CODEKB=40 "
+        "into a private tree so its code is discarded and loaded again as it "
+        "runs: a sentence typed, File > Save As ROW.WRI in Write's own "
+        "dialog, File > New, File > Open ROW.WRI, the window named for it "
+        "each time; ROW.WRI read off B: as a Write file holding the "
+        "sentence, and WIN16's load and discard counters both moved",
+        needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
+        wants=("build/os8088.img", "build/win16/DOS.O88")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

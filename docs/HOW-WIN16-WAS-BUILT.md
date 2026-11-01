@@ -2980,3 +2980,26 @@ memory (S22).
 windows-inside-a-window that File Manager and Program Manager are built
 from. WIN16 has none of it, and it is a story of its own, S20b, before
 Program Manager's.
+
+## 2026-11-01 — S20, batch 8: the row that says Write works in small memory
+
+**S20's promise was that Write opens a document on a 640 KB machine**, and
+a promise needs a test. The test machine has more memory than Write needs,
+so the row builds WIN16 with a rule for testing: Write's code may hold only
+40 KB at once, a quarter of it. Then every menu and dialog sends code out
+and brings other code back.
+
+**The row does what a user would.** It types a sentence, saves it as
+`ROW.WRI` through Write's own dialog, starts a new document, and opens
+`ROW.WRI` again, checking the window's title after each step. Then it reads
+the file off the floppy on the host: a real Write file, with the sentence
+in it.
+
+**Two counters say the rule bit.** WIN16 now counts the pieces of code it
+loads and throws away while a program runs. Driven by hand once, to write
+the row, Write loaded 265 pieces and threw away 261 doing those four
+things. The row only asks that both numbers moved.
+
+**S20 is done, as far as this machine can show.** What is left is what the
+final pass runs: the row itself, and how long one reload takes on a real
+4.77 MHz XT, which MartyPC measures.

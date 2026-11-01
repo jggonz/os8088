@@ -886,7 +886,7 @@ its table goes in the diary, so the reach is measured, not claimed.
       (+81, 9 export rows), part 9 13,694 (+23).
     - **S19b is complete.** Its rows run in S25's final pass.
 
-- [ ] **S20: Big programs in small memory (R6).**
+- [x] **S20: Big programs in small memory (R6).**
   - *As a user, Write opens a document on a 640 KB machine.*
   - Discardable code segments are loaded when first called and **discarded
     under memory pressure**. Real-mode Windows did this with a thunk per
@@ -1158,6 +1158,20 @@ its table goes in the diary, so the reach is measured, not claimed.
       discardable code.
     - Sizes: the image, bss and room unchanged (1,283); the loader part
       grows by the new order.
+  - [x] **Batch 8: the `win16write` row** (SPEC.md §124.26.6).
+    - `tests/win16write.py` builds WIN16 with `W16DEFS=-DW16_CODEKB=40` into
+      a private tree, types a sentence into Write 3.0, saves it as `ROW.WRI`
+      through Write's own dialog, starts a new document and opens `ROW.WRI`
+      again, the window named for it each time. It reads `ROW.WRI` off B: as
+      a Write file holding the sentence, and two new counters,
+      `w16_cnload` and `w16_cndrop`, must both have moved.
+    - Driven once by hand to write it: under the 40 KB budget Write loaded
+      265 segments and discarded 261 while it typed, saved, cleared and
+      opened, and the file was 31BEh with the sentence at 128.
+    - The win16-reference skill's `samples` now copies `WRITE.EXE` too.
+    - **Left for S25's pass:** the row itself, and the XT's cost per reload
+      on MartyPC, which the story's verification names.
+    - Sizes: bss 27,250 (+4), **1,279 bytes of room**.
 
 - [ ] **S20b: Windows inside a window, MDI (R6, R9).**
   - *As a user, File Manager 3.0 opens its drive window, and Program

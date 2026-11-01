@@ -229913,7 +229913,10 @@ global heap and its least-recently-used rule, as on Windows. A build with
 code under *n* KB: before a segment is loaded, the least recently used
 segment not in use is discarded until the new one fits under it, or none is
 left to discard. The `win16write` row uses it to make Write discard and load
-segments again on a machine that has the room not to.
+segments again on a machine that has the room not to. Every build counts what
+happens while the program runs, in two words of bss: `w16_cnload`, the
+segments loaded through a thunk, and `w16_cndrop`, the segments discarded to
+make room *(S20 batch 8)*. The row reads them to see that both happened.
 
 #### 124.26.7 Write 3.0's calls *(S20 batch 2)*
 

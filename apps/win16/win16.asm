@@ -295,6 +295,8 @@ section .w16dlg
     W16BSS w16_stop, 2          ; the top of the program's stack: the scan's end
     W16BSS w16_cbud, 2          ; the code's budget and its use, paragraphs
     W16BSS w16_cused, 2         ;   (SPEC.md 124.26.6)
+    W16BSS w16_cnload, 2        ; segments loaded and discarded while the
+    W16BSS w16_cndrop, 2        ;   program runs, counted (row win16write)
     W16BSS w16_thax, 2          ; AX and DX a thunk was entered with (124.26.2)
     W16BSS w16_thdx, 2
     W16BSS w16_cbm, 2 * W16_MAXSEG      ; the census: each code segment's bitmap
