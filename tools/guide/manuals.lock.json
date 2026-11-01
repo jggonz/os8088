@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "db871f1cb",
-  "strings": "b983c178120b2992",
-  "why": "Phase B/C merge of S21 batch 3: int 31h moved into part 9, arm segment conversions"
+  "stamped": "a15a12329",
+  "strings": "793f7336919645af",
+  "why": "S23 batch 3: MCI waveaudio and cdaudio; first run from the tick on the arm"
  },
  "WIN16_TXT": {
   "sources": [
