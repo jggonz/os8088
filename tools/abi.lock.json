@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "314fbbea973b777acbec4b427aa9d984a9de23ac420a0d6948320c7fe0c280ee",
+  "fingerprint": "9ae6ee9a1429a9d7cf3e4bb817396a0abbbca5c31c04353047c531b48dd8d60c",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "e5b83e4b3530f1221818d57fde8e92e3e77ed8bcc8afb116123f27ffe62bf057",
+  "fingerprint": "812bea7390d26981b067155963ed6cee7f15f736fd8135f9740516ee2d0ba558",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1253,6 +1253,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "os88drv.inc: FSCAP_SEL = 4, a DRVC_FILE driver's DSV_CAPS bit saying its transfer verbs take a selector as it is (SPEC.md 62.9.2.4); a constant added, nothing built before changes meaning",
+   "to": 11
+  },
+  {
+   "fingerprint": "812bea7390d26981b067155963ed6cee7f15f736fd8135f9740516ee2d0ba558",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG gains SEG_TILE (9), kern_mega's consecutive selectors (SPEC.md 124.31.2, O2(b)); a verb added, nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "9ae6ee9a1429a9d7cf3e4bb817396a0abbbca5c31c04353047c531b48dd8d60c",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG gains SEG_TILE (9), kern_mega's consecutive selectors (SPEC.md 124.31.2, O2(b)); a verb added, nothing built before changes",
    "to": 11
   }
  ]

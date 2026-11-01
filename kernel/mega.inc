@@ -10654,8 +10654,12 @@ mega_segf:
     je .aimj
     cmp bl, SEG_AT
     je .at
+    cmp bl, SEG_TILE
+    je .tilej
     stc
     retf
+.tilej:
+    jmp mega_segtile
 .aimj:
     jmp mega_segaim
 .at:                                ; SEG_AT: DX's base + AX paragraphs, a
@@ -11159,6 +11163,116 @@ mega_segbw:
 .none:
     mov ax, 1
 .no:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    add sp, 2                       ; the caller's AX: the reason instead
+    stc
+    retf
+
+; mega_segtile - SEG_TILE's body (mega_segf, SPEC.md 124.31.2): DX = a
+; selector of the caller's based in a claim or a pool block, AX = a paragraph
+; offset into it, CX = a count of 64KB tiles -> CF = 0, DX = the first of CX
+; data selectors, each 8 above the last and based 64KB further on, the last
+; cut at the block's end. Fresh entries, never a match; based in the block,
+; they move with it (mx_desc, mega_mpmovef) and go with it (mx_dfree,
+; mega_mpfreef), as a SUB does. It is what a Windows program's huge pointer,
+; __AHINCR = 8, steps through. CF = 1, AX = 1 no run of CX free entries (or
+; CX = 0), 2 the null selector, 3 a tile in no block; DX kept
+mega_segtile:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    push dx                         ; (the caller's, for a refusal)
+    mov bp, cx                      ; BP = the tiles
+    mov si, ax                      ; SI = the paragraph offset
+    mov ax, 1
+    or bp, bp
+    jz .no
+    mov ax, dx
+    call mega_selbase               ; DX:AX = the segment's base
+    jc .null
+    push si
+    shl si, 4
+    add ax, si
+    pop si
+    adc dl, 0
+    shr si, 12
+    add dx, si                      ; DX:AX = the first tile's base
+    push dx                         ; the last tile in a block too, or none
+    add dx, bp
+    dec dx
+    mov cx, 0xFFFF
+    call mega_bclip
+    pop dx
+    jc .nb
+    call mega_bclip
+    jc .nb
+    push ax
+    mov ax, MEGA_SEL_LDTD
+    mov es, ax
+    pop ax
+    pushf
+    cli                             ; the scan and the claim are one step
+    mov bx, MEGA_LDT_FREE0 * 8      ; BX = a run's first entry
+.scan:
+    mov di, bx
+    mov cx, bp
+.chk:
+    cmp di, [ss:mega_ldte]
+    jae .full
+    cmp byte [es:di+5], 0
+    jne .skip
+    add di, 8
+    loop .chk
+    mov di, bx                      ; a run of BP: each its 64KB, in order
+    mov cx, bp
+.put:
+    push cx
+    mov cx, 0xFFFF
+    call mega_bclip                 ; CX = this tile's limit
+    mov [es:di], cx
+    mov [es:di+2], ax
+    mov [es:di+4], dl
+    mov byte [es:di+5], 0x92
+    mov word [es:di+6], 0
+    pop cx
+    add di, 8
+    inc dx                          ; the next 64KB
+    loop .put
+    popf
+    lea dx, [bx+4]
+    add sp, 2
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    retf
+.skip:
+    lea bx, [di+8]
+    jmp short .scan
+.full:
+    popf
+    mov ax, 1
+    jmp short .no
+.null:
+    mov ax, 2
+    jmp short .no
+.nb:
+    mov ax, 3
+.no:
+    pop dx
+    pop es
+    pop bp
     pop di
     pop si
     pop cx

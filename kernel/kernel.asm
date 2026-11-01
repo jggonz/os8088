@@ -5902,6 +5902,7 @@ SEG_SUBC    equ 5
 SEG_BWIN    equ 6
 SEG_AIM     equ 7
 SEG_AT      equ 8               ; (refused below: protected mode's alone)
+SEG_TILE    equ 9               ; (refused below too: SPEC.md 124.31.2)
 section .cold
 osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
 %ifdef KERN_MEGA

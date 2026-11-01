@@ -97976,6 +97976,7 @@ verb:
 | `SEG_BWIN` 6 | DX = a selector of the caller's based in a claim or a pool block | DX = a new BOUND window over that block, aimed at that base |
 | `SEG_AIM` 7 | DX = a bound window, CX:AX = a BYTE offset into its block | DX = the same window re-aimed there, AX = 0; legal in an `FSXF_RATE` hook |
 | `SEG_AT` 8 | DX = a segment or selector, AX = a paragraph offset, CX = a window of the caller's to re-aim, or 0 | DX = that window aimed at DX's base + AX paragraphs, 64KB; DX = 0 (CF = 0) when no LDT entry is free |
+| `SEG_TILE` 9 | DX = a selector of the caller's based in a claim or a pool block, AX = a paragraph offset, CX = a count of 64KB tiles | DX = the first of CX data selectors, each 8 above the last and based 64KB further on, the last cut at the block's end (§124.31.2) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -97985,7 +97986,8 @@ costs nothing there but the call. `SEG_AIM` and `SEG_AT` are refused there
 (CF = 1, every register kept): `SEG_AIM`'s only callers are kern_mega
 package arms, whose real-mode path already does the sum, and `SEG_AT`'s
 caller does the sum ON the refusal - so neither's arithmetic is carried on
-every machine.
+every machine. `SEG_TILE` is refused there too, by the same `ja`: a
+real-mode caller's next 64KB is its segment + `1000h`, its own sum.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
 
@@ -98029,6 +98031,13 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   the whole instance, where a `SEG_SUB` per chunk would hold an entry per
   chunk until the carve is freed. A refusal is the null selector with CF =
   0, so CF = 1 means only "a real-mode kernel: the sum is yours".
+- **`SEG_TILE`** (`mega_segtile`) is the huge-pointer verb: a run of CX
+  FRESH data descriptors, consecutive in the LDT so a selector + 8 is the
+  next 64KB, never matched against another. Like a SUB they are based in
+  the block, so they move and go with it. Refusals 1 (no run of CX free
+  entries, or CX = 0), 2 (the null selector) and 3 (a tile in no block).
+  It is WIN16's (`__AHINCR` = 8, §124.31.6) and costs `.mega` 195 bytes
+  and every other kernel nothing.
 - **Freeing an entry clears any window row naming it** (`mega_ldt_free`), so
   a window that went with its block cannot be freed a second time at its
   owner's end, after the entry is somebody else's.

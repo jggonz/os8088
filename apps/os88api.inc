@@ -2244,6 +2244,7 @@ SEG_SUBC    equ 5
 SEG_BWIN    equ 6
 SEG_AIM     equ 7
 SEG_AT      equ 8
+SEG_TILE    equ 9
 
 ; OSAPI_IMG_NAME - WHICH driver or module an image is (KERN-MEGA-PLAN 14.70.3).
 ; A class names a driver only when it has one, and a module's header names
