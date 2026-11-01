@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "45b731f6d",
-  "strings": "79fb304ab66a9eb0",
-  "why": "S20 batch 8: load/discard counters"
+  "stamped": "8379200a0",
+  "strings": "3e7c399aa61832d3",
+  "why": "S22 batch 1: kern_mega arm build, PKG_MEGA refusal flip"
  },
  "WIN16_TXT": {
   "sources": [
