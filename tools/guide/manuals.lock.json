@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "cb45e7afd",
-  "strings": "e64cf165a824584a",
-  "why": "S20b batch 5: MDI fixture defects fixed"
+  "stamped": "ef6aeb494",
+  "strings": "17f273ce17c30db0",
+  "why": "S21 batch 1: task table"
  },
  "WIN16_TXT": {
   "sources": [
