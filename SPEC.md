@@ -227376,7 +227376,7 @@ with it (§124.25.6).
 | `FindWindow(lpClass, lpTitle)` (USER.50) | the program's own top-level window whose class and title match, case blind; NULL matches anything. Only the program's own: each program runs in a WIN16 of its own (S12), so `hPrevInstance` is always 0 |
 | `GetLastActivePopup(hWnd)` (USER.287) | the window itself. WinMine asks it only of the window `FindWindow` found, to front a previous instance, and there is never one (S12) |
 | `BringWindowToTop(hWnd)` (USER.45) | its os8088 window to the front |
-| `IsIconic(hWnd)` (USER.31) | FALSE: os8088 does not minimize |
+| `IsIconic(hWnd)` (USER.31) | a child's `WS_MINIMIZE`, an MDI child's (124.27.5); FALSE for a top-level window: os8088 does not minimize |
 | `SetClassWord(hWnd, nIndex, wNew)` (USER.130) | `GCW_HBRBACKGROUND` (-10): the old brush, the new one set in the class and in every window of it, so the next erase uses it (WinMine's Color switch). `GCW_STYLE` (-26): the old style, the new one set. Every other index - the icon and cursor among them, which are kept nowhere - answers 0 and changes nothing |
 | `ShellAbout(hWnd, lpApp, lpOther, hIcon)` (SHELL.22) | a WIN16 message box titled *About* and the application (up to a `#` when there is one), its lines the application (after the `#`), the other line, a blank line and *WIN16 on os8088*. Not Windows' own box: there is no Windows here to name |
 | `WinHelp(hWnd, lpFile, wCommand, dwData)` (USER.171) | `HELP_QUIT`: TRUE, silently. Every other command shows *Help is not available. WIN16 has no WinHelp, so FILE.HLP cannot be opened.* in a message box, then answers TRUE so a program does not add a second message of its own (§47: the refusal says why) |
@@ -229959,7 +229959,7 @@ WIN16 did not have. They are answered as follows:
 | `EnumTaskWindows` (USER.225) | `EnumWindows`: every top-level window here is the one task's |
 | `GetTopWindow` (USER.229), `GetNextWindow` (USER.230) | `GetWindow`'s `GW_CHILD`, and `GetWindow` itself |
 | `ChildWindowFromPoint` (USER.191) | of the parent's own children, shown or not, the one whose rectangle holds the point; of two, the first in Z order, which here is the one made first (§124.22.12). The parent when only its client holds it, 0 outside it |
-| `IsZoomed` (USER.272), `OpenIcon` (USER.44) | `FALSE` and `TRUE`: os8088 neither maximizes nor minimizes a window |
+| `IsZoomed` (USER.272), `OpenIcon` (USER.44) | a child's `WS_MAXIMIZE` (124.27.5) and `TRUE`: os8088 neither maximizes nor minimizes a top-level window, so `IsZoomed` answers `FALSE` for one |
 | `GrayString` (USER.185) | with no output function, the string drawn at X, Y in grey, its ink alone. Windows greys the text's cell through the brush instead. With one, the function is called `(hDC, lpData, nCount)` as a call into the program (§124.2.2), it draws in the DC's colours, and its answer is the answer |
 | `CreateRectRgnIndirect` (GDI.65) | `CreateRectRgn` of the `RECT` |
 | `PtInRegion` (GDI.161) | whether the region's rectangle holds the point, its right and bottom edges outside |
@@ -230080,8 +230080,8 @@ empty, as Windows' were until a child reached past the client.
 | `WM_MDICREATE` | `CreateWindow` with the `MDICREATESTRUCT`'s class, title, place, size and style, called back through the program's stack (124.2.2) with its 30 bytes of arguments, so the program's window procedure sees `WM_CREATE` as it would. The style adds `WS_CHILD`, `WS_CLIPSIBLINGS`, a caption, a thick frame, a system menu and both boxes. The ID is the next after the last child's. `CW_USEDEFAULT` is Windows' stagger (`MDI_CalcDefaultChildPos`). The new child is made the active one, and its `HWND` is the answer |
 | `WM_MDIDESTROY` | `DestroyWindow`, called back the same way. The IDs close up, the Window menu is made again, and the top child left becomes the active one |
 | `WM_MDIACTIVATE` | the child is raised, `WM_MDIACTIVATE` goes to the one leaving (wParam FALSE) and to it (TRUE) with lParam the new and the old, and it takes the focus. Both captions are repainted |
-| `WM_MDINEXT` | the top child below the active one, which goes to the bottom; with lParam not 0 the bottom one |
-| `WM_MDIGETACTIVE` | the active child |
+| `WM_MDINEXT` | the top child below the active one, which goes to the bottom, or the top one when none is below, round the Z order as Wine's `MDI_GetWindow` goes; with lParam not 0 the bottom one |
+| `WM_MDIGETACTIVE` | the active child, and in the high word 1 while a child is maximized, as Windows 3.0 answered |
 | `WM_MDISETMENU` | the frame's menu, the Window menu or both replaced, and the list put in the Window menu again; the old frame menu is the answer |
 
 **The Z order is `W16W_SEQ`.** A child raised gets the next sequence number.
@@ -230173,8 +230173,11 @@ on; Windows sent `WM_SIZE`, and a program that sizes its panes on it does
 so on the posted one.
 
 `DefMDIChildProc` carries out `SC_MAXIMIZE`, `SC_MINIMIZE` and `SC_RESTORE`,
-and so do `WM_MDIMAXIMIZE` and `WM_MDIRESTORE` to the client. `SC_MOVE` and
-`SC_SIZE`, Windows' moves from the keyboard, are not followed and answer 0.
+and so do `WM_MDIMAXIMIZE` and `WM_MDIRESTORE` to the client.
+`WM_MDIMAXIMIZE` activates the child first: Windows' maximized child is the
+active one. `IsIconic` and `IsZoomed` answer a child's `WS_MINIMIZE` and
+`WS_MAXIMIZE`. `SC_MOVE` and `SC_SIZE`, Windows' moves from the keyboard,
+are not followed and answer 0.
 
 - **Maximized**, a child covers the client, its frame and caption outside it,
   and `WS_MAXIMIZE` is in its style. Where it was is kept in its record's
@@ -230235,3 +230238,29 @@ stagger is one routine, `w16i_stagger`, shared with `CW_USEDEFAULT`
 
 File Manager and Program Manager now import nothing WIN16 lacks but
 `WinExec` (S21).
+
+#### 124.27.8 What checks it *(S20b batch 5)*
+
+The `win16mdi` row runs `MDI.EXE` (`tests/win16/mdi.c`, `make
+win16fixtures`): a frame with a Window menu, an `MDICLIENT` and three
+children made by `WM_MDICREATE`. It checks each message of 124.27.2 and
+124.27.6 by what a program can read back - `GetWindowRect`,
+`GetMenuItemCount`, `IsIconic`, `IsZoomed`, `WM_MDIGETACTIVE` and the
+`WM_SIZE` each child hears - and names what fails in its message box. Its
+first run found five defects the two Microsoft programs had not shown:
+
+- `WM_MDIGETACTIVE` never set the high word;
+- `IsIconic` and `IsZoomed` answered `FALSE` always, as they had before
+  there were child windows to minimize;
+- a tile measured the icons' row with the routine that fills the list the
+  tile was placing, so with an icon in the client it placed the icon;
+- `WM_MDINEXT` lost the child it had found and activated the active one
+  again;
+- `WM_MDIMAXIMIZE` did not activate the child it maximized.
+
+File Manager and Program Manager are Microsoft's and are never in the tree,
+so they have no row. Both were looked at under QEMU on VGA beside Windows
+3.0's own screenshots: File Manager's Directory Tree moved, sized,
+maximized with the bar merged, minimized and restored, tiled and cascaded
+with a directory window, and Program Manager's Main group with its six
+items and the Accessories and Games groups as icons.

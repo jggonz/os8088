@@ -478,7 +478,7 @@ W16EXPORT W16M_GDI,        78,      2,  w16g_getcurpos      ; GetCurrentPosition
 W16EXPORT W16M_GDI,        90,      2,  w16g_gettextcol     ; GetTextColor(word)
 W16EXPORT W16M_KERNEL,     36,      0,  w16k_curtask        ; GetCurrentTask()
 W16EXPORT W16M_USER,       225,     10, w16u_enumwnd        ; EnumTaskWindows(word segptr long)
-W16EXPORT W16M_USER,       272,     2,  w16_ans0            ; IsZoomed(word)
+W16EXPORT W16M_USER,       272,     2,  w16u_iszoomed       ; IsZoomed(word)
 W16EXPORT W16M_USER,       44,      2,  w16_ans1            ; OpenIcon(word)
 W16EXPORT W16M_GDI,        65,      4,  w16g_rectrgni       ; CreateRectRgnIndirect(ptr)
 W16EXPORT W16M_KERNEL,     106,     2,  w16k_swaparea       ; SetSwapAreaSize(word)
@@ -1254,9 +1254,26 @@ w16u_lastpopup:
     mov ax, [es:bx]
     ret
 
-; IsIconic (USER.31): os8088 does not minimize
+; IsIconic (USER.31), IsZoomed (USER.272) - +0 hWnd: a child's WS_MINIMIZE
+; or WS_MAXIMIZE, an MDI child's (SPEC.md 124.27.5). A top-level window is
+; os8088's, which minimizes and maximizes none: 0
+w16u_iszoomed:
+    mov dx, WS_MAXIMIZE_HI
+    jmp short w16u_isstyle
 w16u_isiconic:
-    xor ax, ax
+    mov dx, WS_MINIMIZE_HI
+w16u_isstyle:
+    call w16_args
+    mov ax, [es:bx]
+    call w16_hwnd2rec
+    mov ax, 0
+    jc .out
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jz .out
+    test [bx + W16W_STYLE + 2], dx
+    jz .out
+    inc ax
+.out:
     ret
 
 ; BringWindowToTop (USER.45) - +0 hWnd

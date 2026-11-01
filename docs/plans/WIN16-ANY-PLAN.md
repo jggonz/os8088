@@ -1193,6 +1193,65 @@ its table goes in the diary, so the reach is measured, not claimed.
     fixture that creates, tiles, cascades, maximizes and closes MDI
     children.
   - **Verification:** a `win16mdi` row on the fixture.
+  - **All of it is part 9's** (SPEC.md §124.27): a part of its own would
+    have spent a gate's bytes in an image with 1,279 to spare. The image
+    keeps only what is in its paths already - a child's frame in the
+    geometry, the press routing and the paint order.
+  - [x] **Batch 1: the calls around it** (SPEC.md §124.27.1).
+    - `GetDriveType`, `InquireSystem`, `GetHeapSpaces`, `DirectResAlloc`,
+      `LongPtrAdd`, `ExitWindows`, `GlobalFindAtom`, `IsCharAlpha`,
+      `AnsiUpperBuff`, `GetIconID`, `LoadIconHandler` and the ten segment
+      equates File and Program Manager import beside MDI.
+  - [x] **Batch 2: the client, the children, the frame and the caption**
+    (SPEC.md §124.27.2-.4).
+    - `MDICLIENT` is a WIN16 class; `WM_MDICREATE` and `WM_MDIDESTROY` call
+      `CreateWindow` and `DestroyWindow` back through the program's stack.
+      A child's frame and caption were measured off Windows 3.0's Program
+      Manager. `DefFrameProc`, `DefMDIChildProc`, `TranslateMDISysAccel`.
+    - **File Manager looped forever** recolouring a bitmap's blue in a
+      block it had freed and loaded again: a `FreeResource` that takes the
+      usage to 0 now discards the block, so the reload reads the file.
+  - [x] **Batch 3a: moving, sizing, maximizing and minimizing**
+    (SPEC.md §124.27.5).
+    - Windows 3.0's XOR outline over `OSAPI_GFX_XOR_RECT`; the bar merge
+      with the child's system menu and a restore box as `MF_BITMAP` items;
+      a minimized child as its class's icon with its title under it.
+  - [x] **Batch 3b: tile, cascade, arrange icons, and the paint order**
+    (SPEC.md §124.27.6-.7).
+    - WIN16's clip is one rectangle, so overlapping MDI children are
+      painted bottom to top: a child painted owes the ones above it the
+      overlap (`w16i_above`).
+  - [x] **Batch 4: Program Manager's items** (SPEC.md §124.27.5, .7).
+    - Each item is an iconic plain child that Program Manager places with
+      `SetInternalWindowPos` and paints itself, making its icon from the
+      `.GRP` file's bits with `CreateCursorIconIndirect` in every
+      `WM_PAINT`. That call now converts 4-plane, 4bpp and 1bpp bits to an
+      icon `DrawIcon` reads, and `DestroyIcon` frees it.
+    - **Two defects on the way:** the plane loop's counter was CX, whose
+      high byte held the column's bit, so every colour read 0; and a FIXED
+      block's handle is its segment, above `W16_HSYSICO` where WIN16's own
+      icons are numbered, so nothing drew and nothing was freed. The block
+      is moveable now.
+    - A posted `WM_SETFOCUS` is acted on only while the child still has
+      the focus, which ended a focus ping-pong between two items.
+  - [x] **Batch 5: the fixture and the row** (SPEC.md §124.27.8).
+    - `MDI.EXE` (`tests/win16/mdi.c`) checks every message by what a
+      program reads back. Its first run found five defects:
+      `WM_MDIGETACTIVE`'s high word, `IsIconic` and `IsZoomed` answering
+      `FALSE` always, a tile placing the icon (its icon-row measure refilled
+      the list being placed), `WM_MDINEXT` activating the active child
+      again (a clobbered DI), and `WM_MDIMAXIMIZE` not activating.
+    - **Seen on QEMU's VGA:** `MDI OK`; File Manager's tree window moved,
+      sized, maximized, minimized, tiled and cascaded; Program Manager's
+      Main group with its six item icons beside Windows 3.0's screenshot.
+      Program Manager's titles are cut where Windows' are not: WIN16 has
+      only the System font, wider than the small one Windows titled icons
+      in.
+    - **Rows, for S25's pass:** `win16mdi` (new); `win16mines`,
+      `win16sol`, `win16calc` and `win16desk`, whose windows pass through
+      the child geometry and the paint order; `w16xsec` in the fast tier.
+    - Sizes: the image 36,727, bss 27,399, **898 bytes of room**; part 9
+      24,437 bytes.
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and

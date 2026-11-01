@@ -386,7 +386,6 @@ W16I_NLIST    equ 9                 ; children the Window menu lists
 W16I_ICON     equ 32                ; a minimized child: an icon's side,
 W16I_TSIDE    equ 20                ;   the room its title has each side,
 W16I_ISTEP    equ 72                ;   and the step between two icons
-WS_MAXIMIZE_HI equ 0x0100
 WS_MINIMIZEBOX_HI equ 0x0002
 WS_MAXIMIZEBOX_HI equ 0x0001
 W16I_TRACK    equ 2                 ; w16_mdion: a move or a size is followed
@@ -513,8 +512,12 @@ w16i_mproc:
     ICALL w16_setfocus
     jmp .zero
 .getact:
-    mov ax, [bx + MC_ACT]
+    mov ax, [bx + MC_ACT]           ; DX: 1 while a child is maximized
     xor dx, dx
+    cmp [bx + MC_MAX], dx
+    je .ga
+    inc dx
+.ga:
     jmp .out
 .mdicreate:
     call w16i_mdicreate
@@ -533,6 +536,13 @@ w16i_mproc:
     call w16i_setmenu
     jmp .out
 .mdimax:
+    push bx                         ; Windows' maximized child is the active
+    push ax                         ;   one: activated first, which maximizes
+    call w16i_activate              ;   it itself when another one was
+    pop ax
+    pop bx
+    cmp ax, [bx + MC_MAX]
+    je .z2
     ICALL w16_hwnd2rec
     jc .z2
     call w16i_max
@@ -1820,10 +1830,19 @@ w16i_next:
     jnz .prev
     call w16i_below                 ; DI = the top one below it
     or di, di
-    jz .none
+    jnz .down
+    push si                         ; none: around to the top one, as
+    call w16i_kids                  ;   Wine's MDI_GetWindow goes (DI)
+    pop si
+    cmp di, si
+    je .none
+    jmp short .go
+.down:
     push si                         ; it goes to the bottom
+    push di
     call w16i_kids                  ; (SI = the bottom one)
     mov ax, [si + W16W_SEQ]
+    pop di
     pop si
     or ax, ax
     jz .z
@@ -3255,6 +3274,10 @@ w16i_tile:
     push si
     push di
     call w16i_unmax
+    push ax                         ; the icons' row first: w16i_iconh
+    call w16i_iconh                 ;   collects them, into the list this
+    mov [cs:w16i_tih], ax           ;   collect fills
+    pop ax
     mov ah, al
     xor al, al
     call w16i_collect               ; CX = N
@@ -3276,8 +3299,7 @@ w16i_tile:
     mov [cs:w16i_tc], di
     push cx
     ICALL w16_csize                 ; CX/DX = the client
-    call w16i_iconh
-    sub dx, ax
+    sub dx, [cs:w16i_tih]
     test byte [cs:w16i_th], MDITILE_HORIZONTAL
     jz .v
     xchg cx, dx                     ; rows: across and down change places
@@ -3435,7 +3457,8 @@ w16i_arrange:
 
 w16i_cm:  dw 0                      ; w16i_collect's mode,
 w16i_list: times W16I_LMAX dw 0     ;   and what it found
-w16i_tn:  dw 0                      ; w16i_tile's: N,
+w16i_tih: dw 0                      ; w16i_tile's: the icons' row,
+w16i_tn:  dw 0                      ;   N,
 w16i_tc:  dw 0                      ;   C,
 w16i_th:  db 0                      ;   wParam,
 w16i_te:  dw 0                      ;   the two extents,

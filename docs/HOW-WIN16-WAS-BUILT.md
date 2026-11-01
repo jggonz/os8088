@@ -3003,3 +3003,69 @@ things. The row only asks that both numbers moved.
 **S20 is done, as far as this machine can show.** What is left is what the
 final pass runs: the row itself, and how long one reload takes on a real
 4.77 MHz XT, which MartyPC measures.
+
+## 2026-11-01 — S20b: windows inside a window
+
+**File Manager and Program Manager are built the same way.** Each has one
+big window with a menu, and inside it smaller windows: File Manager's
+directory trees, Program Manager's groups. Microsoft called it the Multiple
+Document Interface, MDI. The small windows have their own title bars,
+frames and buttons, and you drag, size, maximize and minimize them inside
+the big one. WIN16 had never drawn a title bar inside a window. os8088
+draws every title bar, and WIN16's child windows had been plain
+rectangles.
+
+**There was no room in the main image, so MDI went in a part.** The image
+had 1,279 bytes left. Everything MDI does lives in part 9, the piece of
+WIN16 fetched from the package only when it is first needed. The image
+kept only a few bytes in the places every window goes through.
+
+**The look was measured, not remembered.** The frame is a black line, two
+lines of the border colour, and a black line. The buttons are bevelled
+squares with their arrows. All of it was read off Windows 3.0's Program
+Manager running in the reference machine, pixel by pixel. Dragging draws
+Windows 3.0's inverted outline, and nothing else is redrawn until the
+button comes up, which matters on an XT.
+
+**WIN16 can only clip to one rectangle, and overlapping windows need
+more.** Windows hides the part of a window that another window covers.
+WIN16 cannot leave a hole, so it paints in the old painter's order
+instead: when a window is drawn, every sibling above it that it overlaps
+is told to draw again afterwards, and the top one ends up on top.
+
+**File Manager found a bug that was not about MDI.** It loops over a
+picture looking for blue, recolours it, and gives it back. It then loads
+the picture again and expects the blue to be there. WIN16 had kept the
+recoloured copy, so the blue never came back and File Manager searched
+forever. Now a picture the program gives back is really thrown away, and
+the next load reads the file.
+
+**Program Manager's icons were the last piece.** Each item in a group is a
+tiny window that Program Manager draws itself. It builds the icon from the
+group file each time it draws, then throws it away. WIN16 had answered
+that call with "here is the mouse pointer". Now it turns the group file's
+picture into an icon WIN16 can draw. Two bugs hid the result. A loop
+counter shared a register with the bit it was testing, so every pixel came
+out black. And a block's number happened to fall where WIN16 numbers its
+own built-in icons, so WIN16 read each icon as one of its own and drew
+nothing. With both fixed, the Main group showed its six icons beside
+Windows 3.0's screenshot. The titles are cut shorter than Windows' because
+WIN16 has one font, wider than the small one Windows used for icon titles.
+
+**A test program found five more bugs in an afternoon.** `MDI.EXE` is
+written for this story. It makes three windows inside a frame, then tiles
+them, cascades them, minimizes one, maximizes one, moves to the next and
+closes them, and after each step checks what a program can read back. Its
+first run named six failures. `IsIconic` and `IsZoomed` had always
+answered "no", from before WIN16 could minimize anything. A tile with an
+icon in the window placed the icon, because measuring the icon row reused
+the list of windows being tiled. "Next window" found the next one and then
+lost it. Maximizing did not make the window the active one, which Windows
+always does. And asking which window is active never said whether it was
+maximized. Neither Microsoft program had shown any of these.
+
+**What a person sees is honest; what a row asserts waits for the final
+pass.** File Manager and Program Manager are Microsoft's, so no row can
+carry them. They were looked at, step by step, under QEMU. `MDI.EXE` is
+ours, and its `win16mdi` row runs once, with the other rows, at the end of
+phase A.
